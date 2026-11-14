@@ -78,6 +78,11 @@ pub fn set_thread_mode(mode: Option<Mode>) {
     THREAD_MODE.with(|m| m.set(mode));
 }
 
+/// This thread's own mode ([`set_thread_mode`]), `None` when it has none.
+pub fn thread_mode() -> Option<Mode> {
+    THREAD_MODE.with(Cell::get)
+}
+
 /// The run-wide mode ([`set_mode`]): 0 none (the variable's), 1 off, 2 on, 3 POISON.
 static SET_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 

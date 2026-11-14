@@ -7366,9 +7366,21 @@ fn shadow_setups_words(e: &mut Engine, c: &Case) -> Vec<u32> {
                 set(e, fog + at, 0x3e00_0000 + 0x10_0000 * k);
             }
             set(e, fog + 0x60, 0x4040_0000);
-            if kind == 2 {
-                set(e, fog + 0x2c, 0x4120_0000);
-                set(e, fog + 0x30, bits(c, 2));
+            // Kind 2 a near and the far, 3 the far with near 0.0, 4 a near with far 0.0 (1: both 0.0).
+            match kind {
+                2 => {
+                    set(e, fog + 0x2c, 0x4120_0000);
+                    set(e, fog + 0x30, bits(c, 2));
+                }
+                3 => set(e, fog + 0x30, bits(c, 2)),
+                4 => set(e, fog + 0x2c, 0x4120_0000),
+                _ => {}
+            }
+            if c.word(4) & 1 != 0 {
+                // Signalling NaNs in the colour and the power (the exe quiets each through the x87).
+                for (k, at) in (0u32..).zip([0x20u32, 0x24, 0x28, 0x60]) {
+                    set(e, fog + at, 0x7f80_0001 + k);
+                }
             }
             fog
         }
@@ -7393,6 +7405,13 @@ fn shadow_setups_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         set(e, light + at, 0x3e00_0000 + 0x8_0000 * k);
     }
     set(e, light + 0xc4, bits(c, 3));
+    if c.word(4) & 1 != 0 {
+        // Signalling NaNs in the ambient (+0xc8 to +0xd0) and the pass light's alpha (+0xd4), each quieted by the exe.
+        for (k, at) in (0u32..).zip([0xc8u32, 0xcc, 0xd0]) {
+            set(e, light + at, 0x7f80_0011 + k);
+        }
+        set(e, shadow + 0xd4, 0x7f80_0021);
+    }
     e.mem.set_u8(0x011f_941e, (c.word(1) & 1) as u8);
     e.mem.set_u8(0x011f_9427, (c.word(1) >> 1) as u8);
     set(e, 0x011f_9190, 0x3fa0_0000);
@@ -7407,13 +7426,16 @@ fn shadow_setups_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     vec![w.shader]
 }
 
-/// The shadow light set-ups' inputs: the fog (none, distances 0, a far and near), the HDR switch and the extra scale
-/// byte, the far distance, the light's strength.
+/// The shadow light set-ups' inputs: the fog (none, distances 0, a near and the far, the far with near 0, a near
+/// with far 0), the HDR switch and the extra scale byte, the far distance, the light's strength, and the extras: bit 0
+/// signalling NaNs in the copied floats (compared payload-exact: the exe quiets them through the x87), 2 a null
+/// property for the land values.
 const SHADOW_SETUPS: &[Input] = &[
-    Input::Of(&[0, 1, 2]),
+    Input::Of(&[0, 1, 2, 3, 4]),
     Input::Of(&[0, 1, 2, 3]),
     Input::F32,
     Input::F32,
+    Input::Of(&[0, 1, 2]),
 ];
 
 /// The shadow light shader's fog upload (`00b7c3a0`), pixel entries (`00b7c510`), ambient (`00b7c580`) and light
@@ -7458,7 +7480,8 @@ fn grass_fog_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     if !e.mem.is_mapped(0x0108_c000) {
         e.map(0x0108_c000, 0x1000);
     }
-    set(e, 0x0108_cb00, 0x4974_2400);
+    // The exe quiets it through the x87: a signalling NaN with the extras' bit 0.
+    set(e, 0x0108_cb00, if c.word(4) & 1 != 0 { 0x7f80_0041 } else { 0x4974_2400 });
     vec![words[0], 0x5555]
 }
 
@@ -7490,8 +7513,15 @@ fn land_values_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         for k in 0..0x18u32 {
             set(e, block + 4 * k, 0x3c00_0000 + 0x4_0000 * k);
         }
+        if c.word(4) & 1 != 0 {
+            // Signalling NaNs in the three floats the exe quiets (+0x4c to +0x54) and a word it copies plain (+0xc).
+            for (k, at) in (0u32..).zip([0x4cu32, 0x50, 0x54, 0xc]) {
+                set(e, block + at, 0x7f80_0031 + k);
+            }
+        }
         set(e, property + 0xdc, block);
     }
+    let property = if c.word(4) == 2 { 0 } else { property };
     vec![words[0], c.word(1) & 1, property]
 }
 
@@ -7517,7 +7547,7 @@ fn shadow_light_land_values_read_the_packet() {
         entry!(0x00b7_ad80, setups::land_values(Ptr<_>, u32, u32)).1,
         &cases_of(
             SHADOW_SETUPS,
-            &[&[2, 1, 0x4500_0000, HALF], &[1, 1, 0x4500_0000, TWO]],
+            &[&[2, 1, 0x4500_0000, HALF, 0], &[1, 1, 0x4500_0000, TWO, 0]],
         ),
         false,
         |e, c| {
@@ -7544,7 +7574,7 @@ fn shadow_light_setups_read_the_packet() {
         .1,
         &cases_of(
             SHADOW_SETUPS,
-            &[&[2, 0, 0x4500_0000, HALF], &[0, 3, 0x4500_0000, TWO]],
+            &[&[2, 0, 0x4500_0000, HALF, 0], &[0, 3, 0x4500_0000, TWO, 1]],
         ),
         false,
         |e, c| {
@@ -7574,7 +7604,7 @@ fn shadow_light_setups_read_the_packet() {
             f,
             &cases_of(
                 SHADOW_SETUPS,
-                &[&[2, 0, 0x4500_0000, HALF], &[1, 3, 0x4500_0000, TWO]],
+                &[&[2, 0, 0x4500_0000, HALF, 0], &[1, 3, 0x4500_0000, TWO, 1]],
             ),
             false,
             |e, c| {
@@ -10913,8 +10943,10 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
 /// (`cut::cut_for_thread`), the packet travels through a real thread, the drawing side adopts it (`cut::adopt`,
 /// scribbled with POISON), draws both halves without cutting or joining again, hands it back (`cut::hand_back`, the
 /// scribble put back) and main joins (`cut::join_handed`). The draw answers and leaves memory as with the switch off,
-/// with no miss and nothing written past the packet; POISON without stepped threads is refused; an adopt while a
-/// packet is held is given back; the run-wide mode overrides the variable and a thread's own mode wins.
+/// with no miss and nothing written past the packet. Under POISON the adopt scribbles the copied bytes in guest memory
+/// (and POISON without stepped threads is refused); with the packet on and no POISON guest memory is untouched from
+/// the adopt to the hand-back; with it off there is no cut, and no hand-back without an adopt. An adopt while a
+/// packet is held is given back. (The run-wide mode, E5, has a test binary of its own: `capture_run_mode`.)
 #[test]
 fn the_hand_off_draws_as_the_cut_on_one_thread() {
     let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
@@ -10936,15 +10968,26 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
     let mut plain = Engine::new();
     let a = setup(&mut plain);
     let answer = (first(&mut plain, &a), second(&mut plain, &a));
-    for forced in [false, true] {
+    // The camera's copied words (+0x68 to +0x114) in guest memory.
+    let camera_words = |e: &Engine, camera: u32| -> Vec<u32> {
+        (0x68..0x114)
+            .step_by(4)
+            .map(|at| e.mem.u32(camera + at))
+            .collect()
+    };
+    let poison = capture::Mode::Poison;
+    for (mode, forced) in [(poison, false), (poison, true), (capture::Mode::On, false)] {
         let mut handed = Engine::new();
         let b = setup(&mut handed);
+        let before = camera_words(&handed, b[0]);
         statics::set_forced(forced);
-        capture::set_thread_mode(Some(capture::Mode::Poison));
-        assert!(
-            cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), false).is_none(),
-            "POISON without stepped threads must be refused"
-        );
+        capture::set_thread_mode(Some(mode));
+        if mode == poison {
+            assert!(
+                cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), false).is_none(),
+                "POISON without stepped threads must be refused"
+            );
+        }
         let packet = cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true)
             .expect("the cut for the drawing thread");
         assert!(
@@ -10955,21 +10998,32 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
         let packet = std::thread::spawn(move || packet).join().expect("moved");
         assert!(cut::adopt(&mut handed, packet).is_ok());
         assert!(cut::adopted());
+        let adopted = camera_words(&handed, b[0]);
+        if mode == poison {
+            // Scribbled at the adopt: the copied words hold the pattern (one of the two, cut by cut).
+            let patterns = [0x6e6e_6e6eu32, 0x9191_9191];
+            assert!(
+                adopted.iter().all(|w| patterns.contains(w)),
+                "forced {forced}: the adopt did not scribble under POISON: {adopted:x?}"
+            );
+        } else {
+            assert_eq!(adopted, before, "the adopt touched guest memory without POISON");
+        }
         let handed_answer = (first(&mut handed, &b), second(&mut handed, &b));
         assert!(
             capture::is_open(&handed),
             "a half joined the adopted packet"
         );
+        if mode != poison {
+            assert_eq!(
+                camera_words(&handed, b[0]),
+                before,
+                "guest memory touched between the adopt and the hand-back without POISON"
+            );
+        }
         let back = cut::hand_back(&mut handed).expect("handed back");
         assert!(!cut::adopted());
-        // The scribble is put back at the hand-back, before main joins: the camera's copied words (+0x68 to +0x114)
-        // are main's again in guest memory.
-        let camera_words = |e: &Engine, camera: u32| -> Vec<u32> {
-            (0x68..0x114)
-                .step_by(4)
-                .map(|at| e.mem.u32(camera + at))
-                .collect()
-        };
+        // The scribble is put back at the hand-back, before main joins: the camera's copied words are main's again.
         assert_eq!(
             camera_words(&handed, b[0]),
             camera_words(&plain, a[0]),
@@ -11006,15 +11060,26 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
         let _ = capture::end(&mut e);
         assert!(capture::attach(back).is_ok());
         let _ = capture::end(&mut e);
+        // As at the serial cut: no camera, no cut (and no packet left open).
+        assert!(cut::cut_for_thread(&mut e, 0, Ptr::new(w[1]), true).is_none());
+        assert!(!capture::is_open(&e));
         capture::set_thread_mode(None);
     }
-    // The run-wide mode (E5) overrides the variable; a thread's own mode wins over it.
-    capture::set_mode(Some(capture::Mode::On));
-    assert_eq!(capture::mode(), capture::Mode::On);
-    capture::set_thread_mode(Some(capture::Mode::Off));
-    assert_eq!(capture::mode(), capture::Mode::Off);
-    capture::set_thread_mode(None);
-    capture::set_mode(None);
+    // With the packet off: no cut for the drawing thread, and no hand-back on a thread that adopted none.
+    {
+        let mut e = Engine::new();
+        let w = setup(&mut e);
+        capture::set_thread_mode(Some(capture::Mode::Off));
+        assert!(cut::cut_for_thread(&mut e, w[0], Ptr::new(w[1]), true).is_none());
+        assert!(!capture::is_open(&e));
+        assert!(cut::hand_back(&mut e).is_none());
+        // A frame drawn on main with the packet off (the host's mode for a run with the row on and no POISON check,
+        // as for every default run) makes no cut.
+        let _ = first(&mut e, &w);
+        assert!(!capture::is_open(&e), "a serial frame cut with the packet off");
+        let _ = second(&mut e, &w);
+        capture::set_thread_mode(None);
+    }
 }
 
 /// The alpha draw's next pass (`00b9af60`) reads the camera's direction and the passes' bounds through the packet:

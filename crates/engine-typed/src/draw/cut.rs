@@ -1,3 +1,6 @@
+    if camera == 0 || packet::scene_renderer(e) == 0 {
+        return None;
+    }
 //! The cut (step 2, piece 1: `measure/scope-1111/PLAN.md`): as the world draw's first half starts, what the draw
 //! will read that the frame's tail may change goes into the value packet ([`super::capture`]).
 //!
@@ -711,7 +714,8 @@ pub(crate) fn forget_adopted() {
 /// Main, at the post: the cut for the drawing thread. Any open packet is closed, a new one opened and filled
 /// ([`fill`], the own state taken when the passes allow it), not scribbled, and moved off main's thread. `None` with
 /// the switch off, when no packet opened, or for POISON without stepped threads (the scribble would be read by the
-/// threads that run beside it: the frame then draws on main).
+/// threads that run beside it: the frame then draws on main); and, as at the serial cut ([`super::drivers`]'s
+/// `world_draw_first`), without a camera or the scene renderer (the draw then starts nothing).
 pub fn cut_for_thread(
     e: &mut Engine,
     camera: u32,
@@ -720,6 +724,9 @@ pub fn cut_for_thread(
 ) -> Option<capture::Detached> {
     let mode = capture::mode();
     if mode == capture::Mode::Off || (mode == capture::Mode::Poison && !stepped) {
+        return None;
+    }
+    if camera == 0 || packet::scene_renderer(e) == 0 {
         return None;
     }
     join(e);

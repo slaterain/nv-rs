@@ -574,6 +574,9 @@ pub struct Choice {
     /// else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bShowFrameRate`; else
     /// [`PLAY_SHOW_FRAME_RATE`], off. Not part of any preset.
     pub show_frame_rate: bool,
+    /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,
+    /// for stepped threads; `crate::draw_thread::install` decides the draw family's capture mode from it).
+    pub draw_poison: bool,
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
     pub ini_note: Option<String>,
@@ -594,6 +597,7 @@ impl Choice {
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
             ini_note: None,
+            draw_poison: false,
         }
     }
 
@@ -748,6 +752,7 @@ impl Choice {
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
             ini_note: ini.bad_line(),
+            draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
         };
         for line in settings.unwrap_or("").lines() {
             let Some((key, value)) = line.split_once('=') else {

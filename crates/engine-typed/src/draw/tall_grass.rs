@@ -7,6 +7,7 @@ use super::{group_c, own, packet, thunks};
 use crate::anim_keys::narrow;
 use crate::shader::{self, accumulator, div_d, mul_d};
 use engine_core::ptr::Ptr;
+use engine_core::x87::x87_quiet_bits;
 use engine_core::{args, typed_call, Engine};
 
 /// Bits of 1.0.
@@ -534,20 +535,23 @@ pub fn setup_fog(e: &mut Engine, _this: Ptr, _unused: u32) {
         super::passes::fog_property(e, index)
     );
     let words: [u32; 8] = if fog != 0 {
-        let far = packet::fog_field(e, fog, 0x30);
+        // The far, the power and the colour each through an `FLD` and `FSTP` in the exe: a signalling NaN quieted.
+        let far = x87_quiet_bits(packet::fog_field(e, fog, 0x30));
         let span = f32::from_bits(far) - f32::from_bits(packet::fog_field(e, fog, 0x2c));
+        let quiet = |e: &Engine, at: u32| x87_quiet_bits(packet::fog_field(e, fog, at));
         [
             far,
             span.to_bits(),
-            packet::fog_field(e, fog, 0x60),
+            quiet(e, 0x60),
             0,
-            packet::fog_field(e, fog, 0x20),
-            packet::fog_field(e, fog, 0x24),
-            packet::fog_field(e, fog, 0x28),
+            quiet(e, 0x20),
+            quiet(e, 0x24),
+            quiet(e, 0x28),
             0,
         ]
     } else {
-        let distance = e.global::<u32>(NO_FOG_DISTANCE); // own: a constant of the exe
+        // Through an `FLD` and `FSTP` in the exe (a signalling NaN quieted); the colour words plain.
+        let distance = x87_quiet_bits(e.global::<u32>(NO_FOG_DISTANCE)); // own: a constant of the exe
         let colour = [0u32, 1, 2, 3].map(|k| packet::fog_colour_word(e, k));
         [
             distance, 0, 0, 0, colour[0], colour[1], colour[2], colour[3],

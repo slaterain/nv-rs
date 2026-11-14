@@ -647,7 +647,8 @@ pub fn light_ambient(e: &mut Engine, _this: Ptr) {
     let shadow = packet::rendering_first_light(e);
     let light = packet::pass_light_word(e, shadow, 0xf8);
     for k in 0..3u32 {
-        let word = packet::light_value_word(e, light, 0xc8 + 4 * k);
+        // Through an `FLD` and `FSTP` in the exe: a signalling NaN quieted.
+        let word = x87_quiet_bits(packet::light_value_word(e, light, 0xc8 + 4 * k));
         own::set_constant_word(e, AMBIENT_ROW + 4 * k, word);
     }
     own::set_constant_word(e, AMBIENT_ROW + 0xc, 1.0f32.to_bits());
@@ -682,7 +683,8 @@ pub fn light_colour(e: &mut Engine, _this: Ptr) {
     for (k, c) in (0u32..).zip(colour) {
         own::set_constant_word(e, LIGHT_ROW + 4 * k, c.to_bits());
     }
-    let alpha = packet::pass_light_word(e, shadow, 0xd4);
+    // Through an `FLD` and `FSTP` in the exe: a signalling NaN quieted.
+    let alpha = x87_quiet_bits(packet::pass_light_word(e, shadow, 0xd4));
     own::set_constant_word(e, LIGHT_ROW + 0xc, alpha);
 }
 
@@ -716,11 +718,12 @@ pub fn land_values(e: &mut Engine, _this: Ptr, enabled: u32, property: u32) {
             let word = e.global::<u32>(block.wrapping_add(0xc + 4 * k)); // own: main's object read in place (set at load)
             own::set_constant_word(e, LAND_WORDS + 4 * k, word);
         }
-        let word = e.global::<u32>(block.wrapping_add(0x4c)); // own: main's object read in place (set at load)
+        // The three floats through an `FLD` and `FSTP` in the exe (a signalling NaN quieted); the words above plain.
+        let word = x87_quiet_bits(e.global::<u32>(block.wrapping_add(0x4c))); // own: main's object read in place (set at load)
         own::set_constant_word(e, LAND_VALUE_A, word);
-        let word = e.global::<u32>(block.wrapping_add(0x50)); // own: main's object read in place (set at load)
+        let word = x87_quiet_bits(e.global::<u32>(block.wrapping_add(0x50))); // own: main's object read in place (set at load)
         own::set_constant_word(e, LAND_VALUE_B, word);
-        let word = e.global::<u32>(block.wrapping_add(0x54)); // own: main's object read in place (set at load)
+        let word = x87_quiet_bits(e.global::<u32>(block.wrapping_add(0x54))); // own: main's object read in place (set at load)
         own::set_constant_word(e, LAND_VALUE_C, word);
         own::set_constant_word(e, LAND_ONE, 1.0f32.to_bits());
     }
@@ -735,15 +738,16 @@ pub fn land_values(e: &mut Engine, _this: Ptr, enabled: u32, property: u32) {
     if fog == 0 {
         return;
     }
-    let near = packet::fog_field(e, fog, 0x2c);
-    let far = packet::fog_field(e, fog, 0x30);
-    let power = packet::fog_field(e, fog, 0x60);
+    // Each through an `FLD` and `FSTP` in the exe (a signalling NaN quieted), the colour too.
+    let near = x87_quiet_bits(packet::fog_field(e, fog, 0x2c));
+    let far = x87_quiet_bits(packet::fog_field(e, fog, 0x30));
+    let power = x87_quiet_bits(packet::fog_field(e, fog, 0x60));
     let (far_value, near_value) = (f32::from_bits(far), f32::from_bits(near));
     if far_value == 0.0 && near_value == 0.0 {
         return;
     }
     let range = far_value - near_value;
-    let colour = [0x20u32, 0x24, 0x28].map(|at| packet::fog_field(e, fog, at));
+    let colour = [0x20u32, 0x24, 0x28].map(|at| x87_quiet_bits(packet::fog_field(e, fog, at)));
     own::set_constant_word(e, LAND_FOG_FAR, far);
     own::set_constant_word(e, LAND_FOG_RANGE, range.to_bits());
     own::set_constant_word(e, LAND_FOG_POWER, power);

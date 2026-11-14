@@ -51,28 +51,35 @@ pub fn refusal(choice: &Choice) -> Option<&'static str> {
 /// Binds the row for `e`'s run (`crate::fixes::install`, the row on): the seam's hooks, or a log line saying why
 /// not.
 pub fn install(e: &mut Engine, choice: &Choice) {
-    use engine_typed::draw::capture::{mode, set_mode, Mode};
-    // The host's choice decides the draw family's packet (its export E5), not the variable alone.
+    // The host's choice decides the draw family's packet (its export E5), not the variable.
+    engine_typed::draw::capture::set_mode(Some(capture_mode(choice)));
     if let Some(why) = refusal(choice) {
-        set_mode(Some(Mode::Off));
         eprintln!("NV_DRAW_THREAD: refused, off: {why}");
         return;
     }
-    let real = engine::thread_host::Scheme::from_name(Some(&choice.threads)).is_ok_and(|s| s.real);
-    match mode() {
-        // POISON is a check for stepped threads: with real threads the packet is on, unscribbled.
-        Mode::Poison if real => {
-            set_mode(Some(Mode::On));
-            eprintln!(
-                "NV_DRAW_THREAD: poison is for stepped threads only: on without the scribble"
-            );
-        }
-        // The row on through `Fallout.ini`, with no variable.
-        Mode::Off => set_mode(Some(Mode::On)),
-        _ => {}
+    if choice.draw_poison && real_threads(choice) {
+        eprintln!("NV_DRAW_THREAD: poison is for stepped threads only: on without the scribble");
     }
     engine::draw_thread::turn_on(e, hooks());
     eprintln!("NV_DRAW_THREAD: on (experimental)");
+}
+
+/// Whether the run's threads are real (any spelling of real threads counts).
+fn real_threads(choice: &Choice) -> bool {
+    engine::thread_host::Scheme::from_name(Some(&choice.threads)).is_ok_and(|s| s.real)
+}
+
+/// The draw family's run-wide capture mode for a run with the row on (its export E5), from the host's choice: POISON
+/// for the variable's `poison` on stepped threads (the check form, whose serial frames cut and scribble too);
+/// otherwise off, a refused row included, so a frame drawn on main makes no cut and costs nothing: the hand-off takes
+/// the packet itself, only for a frame it posts ([`hand_off_cut`]).
+pub fn capture_mode(choice: &Choice) -> engine_typed::draw::capture::Mode {
+    use engine_typed::draw::capture::Mode;
+    if refusal(choice).is_none() && choice.draw_poison && !real_threads(choice) {
+        Mode::Poison
+    } else {
+        Mode::Off
+    }
 }
 
 /// The hooks of a run with the row on.
@@ -126,9 +133,24 @@ pub fn poison_reason(real: bool, mode: engine_typed::draw::capture::Mode) -> Opt
 
 use engine_typed::draw::{capture, cut};
 
-/// Export E1: main's cut, the packet boxed for the seam.
-fn hand_off_cut(e: &mut Engine, camera: u32, accumulator: u32, stepped: bool) -> Option<Packet> {
-    cut::cut_for_thread(e, camera, Ptr::new(accumulator), stepped).map(|p| Box::new(p) as Packet)
+/// Export E1: main's cut, the packet boxed for the seam. With the run-wide mode off ([`capture_mode`]: the row on
+/// without the POISON check) this post's cut runs with the packet on, as this thread's mode for the call only, so
+/// only a frame the seam posts is cut.
+pub fn hand_off_cut(e: &mut Engine, camera: u32, accumulator: u32, stepped: bool) -> Option<Packet> {
+    let before = capture::thread_mode();
+    capture::set_thread_mode(Some(post_mode(capture::mode())));
+    let packet = cut::cut_for_thread(e, camera, Ptr::new(accumulator), stepped);
+    capture::set_thread_mode(before);
+    packet.map(|p| Box::new(p) as Packet)
+}
+
+/// The mode a posted frame's cut runs in: the packet on where the run's mode is off; otherwise the run's (POISON's
+/// check, or a mode a check set).
+pub fn post_mode(run: capture::Mode) -> capture::Mode {
+    match run {
+        capture::Mode::Off => capture::Mode::On,
+        other => other,
+    }
 }
 
 /// Export E2: the drawing side adopts the packet; one the seam handed that is not the draw family's is a stop.
@@ -274,21 +296,62 @@ mod serial_tests {
         assert!(refusal(&choice).is_some());
     }
 
-    /// The host's choice decides the draw family's capture mode (export E5): NV_DRAW_THREAD=poison with real threads
-    /// does not scribble.
-    #[test]
-    fn the_hosts_choice_decides_the_capture_mode() {
-        let poison_real = crate::fixes::Choice::from_parts(None, |n: &str| match n {
-            "NV_DRAW_THREAD" => Some("poison".into()),
-            "NV_THREADS" => Some("real".into()),
-            "NV_RENDER_THREAD" => Some("1".into()),
+    /// A choice with the drawing thread's variable `draw` (`1` or `poison`), the threads `threads` and the render
+    /// thread `render`.
+    fn draw_choice(draw: &str, threads: &str, render: &str) -> crate::fixes::Choice {
+        let (draw, threads, render) = (draw.to_string(), threads.to_string(), render.to_string());
+        crate::fixes::Choice::from_parts(None, move |n: &str| match n {
+            "NV_DRAW_THREAD" => Some(draw.clone()),
+            "NV_THREADS" => Some(threads.clone()),
+            "NV_RENDER_THREAD" => Some(render.clone()),
             _ => None,
         })
-        .unwrap();
+        .unwrap()
+    }
+
+    /// The host's choice decides the draw family's capture mode (export E5), whatever the process environment says:
+    /// POISON only for `poison` on stepped threads; off for `poison` with real threads (no scribble beside the other
+    /// threads), for a refused row and for the row on without the check (`1`, as the `Fallout.ini` line), so a frame
+    /// drawn on main makes no cut. `install` sets exactly that, over whatever was set before.
+    #[test]
+    fn the_hosts_choice_decides_the_capture_mode() {
+        use engine_typed::draw::capture;
+        let cases = [
+            (draw_choice("poison", "stepped", "0"), Mode::Poison),
+            (draw_choice("poison", "real", "1"), Mode::Off),
+            (draw_choice("poison", "real", "0"), Mode::Off),
+            (draw_choice("1", "real", "1"), Mode::Off),
+            (draw_choice("1", "real", "0"), Mode::Off),
+            (draw_choice("1", "stepped", "0"), Mode::Off),
+        ];
+        for (choice, want) in &cases {
+            assert_eq!(capture_mode(choice), *want, "{choice:?}");
+            // What was set before (the stand-in for the variable) does not survive the install.
+            let before = if *want == Mode::Poison { Mode::Off } else { Mode::Poison };
+            capture::set_mode(Some(before));
+            install(&mut Engine::new(), choice);
+            let got = capture::mode();
+            capture::set_mode(None);
+            assert_eq!(got, *want, "{choice:?}");
+        }
+    }
+
+    /// A default play choice leaves the row off (no install, no packet); with the row on and no check, the hand-off's
+    /// own cut is the only cut, and it leaves this thread's mode as it found it (here: a frame with no camera, which
+    /// it does not cut at all).
+    #[test]
+    fn a_default_run_makes_no_cut() {
+        use engine_typed::draw::capture;
+        let default = crate::fixes::Choice::from_parts(None, |_: &str| None).unwrap();
+        assert!(!default.is_on(&crate::fixes::DRAW_THREAD));
+        assert_eq!(capture_mode(&draw_choice("1", "real", "1")), Mode::Off);
         let mut e = Engine::new();
-        install(&mut e, &poison_real);
-        let mode = engine_typed::draw::capture::mode();
-        engine_typed::draw::capture::set_mode(None);
-        assert_ne!(mode, Mode::Poison);
+        assert!(hand_off_cut(&mut e, 0, 0, false).is_none());
+        assert_eq!(capture::thread_mode(), None);
+        assert!(!capture::is_open(&e));
+        // A posted frame's cut: the packet on where the run's mode is off, POISON's check kept.
+        assert_eq!(post_mode(Mode::Off), Mode::On);
+        assert_eq!(post_mode(Mode::Poison), Mode::Poison);
+        assert_eq!(post_mode(Mode::On), Mode::On);
     }
 }
