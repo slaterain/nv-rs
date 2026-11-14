@@ -32,9 +32,15 @@
 //! - [`ai_hooks`]: JIP's actor AI hooks at their seams (step 3.5b: combat disabled or a forced target,
 //!   teammates' health resets, follow and wait orders, locked equipment, forced detection values,
 //!   a push's velocity, disabled scripts' events) and the ten commands that switch them.
+//! - [`world_hooks`]: JIP's world hooks at their seams (step 3.5c: descriptions, model paths and
+//!   reference names a script set, unique items, the dialogue topic, fast travel, cell, target,
+//!   note and quest stage events, activations and script events a script disabled, teammates at
+//!   locked doors, the weather's transition time, swapped LOD blocks, scripts that wait) and the
+//!   commands that switch them, with `PushActorNoRagdoll`.
 //!
 //! [`install`] runs once per engine, after `nvse::install` (JIP is xNVSE's plugin): in
-//! `host::Host::start_with`, never in the engine crates' own tests.
+//! `host::Host::start_with`; in the engine crates' own tests only through
+//! `test_support::install_into` (the `test-support` feature), for their end-to-end seam tests.
 
 pub mod actor_hooks;
 pub mod ai_hooks;
@@ -54,10 +60,14 @@ pub mod slots;
 #[cfg(test)]
 mod saveload_tests;
 pub mod table;
-#[cfg(test)]
-mod test_support;
+/// For the crate's tests and, through the `test-support` feature, the engine crates' end-to-end
+/// tests of JIP's seams.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod ui_hooks;
 pub mod utility;
+pub mod world_hooks;
+mod world_push;
 
 use engine_core::prelude::*;
 
@@ -102,6 +112,8 @@ pub struct Jip {
     pub actor_hooks: actor_hooks::State,
     /// JIP's actor AI hooks' maps and values.
     pub ai_hooks: ai_hooks::State,
+    /// JIP's world hooks' maps and values.
+    pub world_hooks: world_hooks::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -152,6 +164,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     ui_hooks::install(e, answers_installed);
     actor_hooks::install(e, answers_installed);
     ai_hooks::install(e, answers_installed);
+    world_hooks::install(e, answers_installed);
     nvse::plugins::register(e, plugin(answers_installed));
     // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.
     if answers_installed {

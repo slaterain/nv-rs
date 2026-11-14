@@ -294,14 +294,9 @@ fn set_actor_flags3(e: &mut Engine, actor: u32, flags: u8) {
     );
 }
 
+/// `TESForm::SetJIPFlag`: the flag set or cleared, and the byte kept by the form's id.
 fn set_form_flag6(e: &mut Engine, form: u32, flag: u8, on: bool) {
-    let flags = form_flags6(e, form);
-    let flags = if on { flags | flag } else { flags & !flag };
-    e.set(
-        Ptr::<JipFormFlags>::new(form),
-        JipFormFlags::jipFormFlags6,
-        flags,
-    );
+    crate::world_hooks::set_jip_flag(e, form, flag, on);
 }
 
 /// `EventCallbackScripts::InvokeEventsThis*`: each script of a copy of `scripts` called on

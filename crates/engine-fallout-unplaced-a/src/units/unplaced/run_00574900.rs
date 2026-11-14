@@ -225,7 +225,11 @@ pub fn fn_00574b30(
         );
     }
     let item_list = e.call(EXTRA_LIST, &args![item]).u32();
-    e.call(SET_ACTION_FLAG, &args![this, item_list, 1u32]);
+    {
+        // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+        let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+        e.call(SET_ACTION_FLAG, &args![this, item_list, 1u32]);
+    }
     let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
     let mut plain = true;
     if e.vcall(item.addr(), 0x224, &[]).bool() {
@@ -247,7 +251,14 @@ pub fn fn_00574b30(
                     let node = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, change));
                     let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
                     let first = e.mem.u32(slot);
-                    e.call(SET_ACTION_FLAG, &args![this, first, 1u32]);
+                    {
+                        // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                        let _caller = e.mark_caller_word(
+                            engine_core::extend::Hook::MarkScriptEvent,
+                            item.addr(),
+                        );
+                        e.call(SET_ACTION_FLAG, &args![this, first, 1u32]);
+                    }
                 }
             }
             e.call(0x004c_3380, &args![changes, change, 1u32]);
@@ -297,7 +308,14 @@ pub fn fn_00574b30(
                             e.vcall(temporary, 0x10, &args![1u32]);
                         }
                     }
-                    e.call(SET_ACTION_FLAG, &args![this, list, 1u32]);
+                    {
+                        // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                        let _caller = e.mark_caller_word(
+                            engine_core::extend::Hook::MarkScriptEvent,
+                            item.addr(),
+                        );
+                        e.call(SET_ACTION_FLAG, &args![this, list, 1u32]);
+                    }
                     e.call(CHANGES_4C29A0, &args![changes, ammo, list, 1u32]);
                 } else {
                     e.call(CHANGES_4C29A0, &args![changes, ammo, 0u32, 1u32]);
@@ -350,7 +368,11 @@ pub fn fn_00574fa0(e: &mut Engine, this: Ptr, item: Ptr, list: u32, count: u32) 
             &args![6u32, count, item, 0u32, 0u32, 0u32, 0u32],
         );
     }
-    e.call(SET_ACTION_FLAG, &args![this, list, 1u32]);
+    {
+        // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+        let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+        e.call(SET_ACTION_FLAG, &args![this, list, 1u32]);
+    }
     let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
     e.call(CHANGES_4C29A0, &args![changes, item, list, count]);
 }
@@ -409,7 +431,11 @@ pub fn fn_005750a0(
     {
         noted = e.call(REFERENCE_5656D0, &args![this]).u8();
     }
-    e.call(SET_ACTION_FLAG, &args![this, list, 4u32]);
+    {
+        // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+        let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+        e.call(SET_ACTION_FLAG, &args![this, list, 4u32]);
+    }
     let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
     let result = e
         .call(
@@ -562,7 +588,11 @@ pub fn fn_00574a80(
             );
         }
     }
-    e.call(SET_ACTION_FLAG, &args![this, third, 1u32]);
+    {
+        // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+        let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, first);
+        e.call(SET_ACTION_FLAG, &args![this, third, 1u32]);
+    }
     e.call(
         CHANGES_4BFFE0,
         &args![changes, first, second, this, third, 0u32, 0u32],
@@ -599,7 +629,12 @@ pub fn fn_00575380(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u3
             let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
             let game: u32 = e.global(SAVE_LOAD_GAME);
             if e.call(SAVE_LOAD_TEST_0047C850, &args![game]).u8() == 0 {
-                e.call(SET_ACTION_FLAG, &args![this, third, 8u32]);
+                {
+                    // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                    let _caller =
+                        e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, first);
+                    e.call(SET_ACTION_FLAG, &args![this, third, 8u32]);
+                }
             }
             e.call(
                 CHANGES_4C0CF0,
@@ -1066,6 +1101,106 @@ mod b027_tests {
         assert!(calls(&log, NOTIFY_5F5950).is_empty());
     }
 
+    /// JIP LN NVSE's MarkScriptEvent reads the caller's first stack word: with a user of the hook
+    /// the item is the caller word while `SetActionFlag` runs (and only then); with none, nothing.
+    #[test]
+    fn at_00574fa0_hands_mark_script_event_the_item() {
+        use engine_core::extend::Hook;
+        for users in [0u32, 1] {
+            let mut e = engine(&ADD_CALLEES);
+            let this = object(&mut e, 0x0f00_0000);
+            e.mem.set_u32(PLAYER, this);
+            e.register(HAS_CONTAINER, |_, _| ret(0x7000));
+            e.register(GET_INVENTORY_CHANGES, |_, _| ret(0x9000));
+            e.register(REFERENCE_8D6F30, |_, _| ret(0x6600));
+            e.register(GET_FORM_SCRIPT, |_, _| ret(0x5800));
+            let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+            let inside = seen.clone();
+            e.register_double(SET_ACTION_FLAG, move |e, _| {
+                inside.set(Some(e.caller_word()));
+                ret(0)
+            });
+            e.set_hook_users(Hook::MarkScriptEvent, users);
+            run(&mut e, 0x0057_4fa0, &[this, 0x5000, 0x5100, 4]);
+            let expected = if users == 0 { None } else { Some(0x5000) };
+            assert_eq!(seen.get(), Some(expected));
+            assert_eq!(e.caller_word(), None, "gone after the call");
+        }
+    }
+
+    /// With a user of MarkScriptEvent: the caller word each `SetActionFlag` call sees (None when
+    /// no word is set).
+    fn caller_words(e: &mut Engine) -> Rc<std::cell::RefCell<Vec<Option<u32>>>> {
+        let words = Rc::new(std::cell::RefCell::new(vec![]));
+        let sink = words.clone();
+        e.register_double(SET_ACTION_FLAG, move |e, _| {
+            sink.borrow_mut().push(e.caller_word());
+            ret(0)
+        });
+        e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+        words
+    }
+
+    /// `00574b30` hands MarkScriptEvent the item at each of its three `SetActionFlag` calls (the
+    /// plain add, the item change, the ammo script), and the word is gone afterwards.
+    #[test]
+    fn at_00574b30_hands_mark_script_event_the_item_on_every_branch() {
+        // The plain add: the first call only.
+        let (mut e, this, item) = add_setup();
+        let words = caller_words(&mut e);
+        run(&mut e, 0x0057_4b30, &[this, item, 3, 1, 2]);
+        assert_eq!(*words.borrow(), vec![Some(item)]);
+        assert_eq!(e.caller_word(), None);
+        // The item change: the first call and the change's.
+        let (mut e, this, item) = add_setup();
+        e.register(slot(0x0f20_0000, 0x224), |_, _| ret(1));
+        e.register(0x009d_9f00, |_, _| ret(0x5100));
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(0x004b_c650, |_, a| ret(a[0]));
+        e.register(0x0055_9450, |_, _| ret(0x5200));
+        let first = e.mem.alloc(4);
+        e.mem.set_u32(first, 0x5300);
+        e.register_double(NODE_ITEM, move |_, _| ret(first));
+        let words = caller_words(&mut e);
+        let (_, log) = run(&mut e, 0x0057_4b30, &[this, item, 3, 1, 2]);
+        assert_eq!(calls(&log, SET_ACTION_FLAG)[1], vec![this, 0x5300, 1]);
+        assert_eq!(*words.borrow(), vec![Some(item), Some(item)]);
+        assert_eq!(e.caller_word(), None);
+        // The ammo script: the first call and the ammo list's.
+        let (mut e, this, item) = add_setup();
+        e.register(slot(0x0f20_0000, 0x224), |_, _| ret(1));
+        e.register(0x0047_6c90, |_, _| ret(0x5400));
+        e.register(0x004c_0bf0, |_, _| ret(1));
+        e.register(GET_FORM_SCRIPT, |_, _| ret(0x5800));
+        e.register(ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(0x0041_0360, |_, a| ret(a[0]));
+        e.register(0x0041_8800, |_, _| ret(1));
+        let words = caller_words(&mut e);
+        let (_, log) = run(&mut e, 0x0057_4b30, &[this, item, 3, 1, 2]);
+        let list = calls(&log, 0x0041_0360)[0][0];
+        assert_eq!(calls(&log, SET_ACTION_FLAG)[1], vec![this, list, 1]);
+        assert_eq!(*words.borrow(), vec![Some(item), Some(item)]);
+        assert_eq!(e.caller_word(), None);
+    }
+
+    /// `005750a0` hands MarkScriptEvent the item at its `SetActionFlag` call.
+    #[test]
+    fn at_005750a0_hands_mark_script_event_the_item() {
+        let mut e = engine(&REMOVE_CALLEES);
+        let this = object(&mut e, 0x0f00_0000);
+        e.register(HAS_CONTAINER, |_, _| ret(0x7000));
+        e.register(GET_INVENTORY_CHANGES, |_, _| ret(0x9000));
+        let words = caller_words(&mut e);
+        let (_, log) = run(
+            &mut e,
+            0x0057_50a0,
+            &[this, 0x5000, 0x5100, 0, 0, 0, 0, 0, 0, 0, 0],
+        );
+        assert_eq!(calls(&log, SET_ACTION_FLAG), vec![vec![this, 0x5100, 4]]);
+        assert_eq!(*words.borrow(), vec![Some(0x5000)]);
+        assert_eq!(e.caller_word(), None);
+    }
+
     const REMOVE_CALLEES: [u32; 20] = [
         HAS_CONTAINER,
         REFERENCE_8D6F30,
@@ -1293,6 +1428,49 @@ mod n075_tests {
         assert!(!e
             .call(0x0057_4a80, &args![0x2000u32, 1u32, 2u32, 3u32, 4u32])
             .bool());
+    }
+
+    /// With a user of MarkScriptEvent: the caller word each `SetActionFlag` call sees.
+    fn caller_words(e: &mut Engine) -> std::rc::Rc<std::cell::RefCell<Vec<Option<u32>>>> {
+        let words = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let sink = words.clone();
+        e.register_double(SET_ACTION_FLAG, move |e, _| {
+            sink.borrow_mut().push(e.caller_word());
+            Ret::default()
+        });
+        e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+        words
+    }
+
+    /// `00574a80` hands MarkScriptEvent its first word (the item), not the second (the count)
+    /// or the third (the extra list `SetActionFlag` gets).
+    #[test]
+    fn fn_00574a80_hands_mark_script_event_the_first_word() {
+        let mut e = engine(true);
+        let words = caller_words(&mut e);
+        assert!(e
+            .call(
+                0x0057_4a80,
+                &args![0x1000u32, 0x11u32, 0x22u32, 0x33u32, 0x44u32]
+            )
+            .bool());
+        assert_eq!(*words.borrow(), vec![Some(0x11)]);
+        assert_eq!(e.caller_word(), None);
+    }
+
+    /// `00575380` hands MarkScriptEvent its first word (the item).
+    #[test]
+    fn fn_00575380_hands_mark_script_event_the_first_word() {
+        let mut e = engine(true);
+        e.register(SAVE_LOAD_TEST_0047C850, |_, _| 0u32.into_ret());
+        let words = caller_words(&mut e);
+        e.call(0x0057_5380, &args![0x1000u32, 0x11u32, 0x22u32, 0x33u32]);
+        assert_eq!(
+            calls(&e.call_log.take().unwrap(), SET_ACTION_FLAG),
+            vec![vec![0x1000, 0x33, 8]]
+        );
+        assert_eq!(*words.borrow(), vec![Some(0x11)]);
+        assert_eq!(e.caller_word(), None);
     }
 
     #[test]

@@ -232,6 +232,8 @@ dependencies = [
  "engine-havok",
  "engine-speedtree",
  "frame-model",
+ "jip",
+ "nvse",
 ]
 
 [[package]]
@@ -255,6 +257,8 @@ dependencies = [
  "engine-havok",
  "engine-speedtree",
  "frame-model",
+ "jip",
+ "nvse",
 ]
 
 [[package]]
@@ -277,6 +281,8 @@ dependencies = [
  "engine-gamebryo",
  "engine-havok",
  "engine-speedtree",
+ "jip",
+ "nvse",
 ]
 
 [[package]]
@@ -433,6 +439,7 @@ dependencies = [
  "engine-gamebryo",
  "engine-havok",
  "engine-speedtree",
+ "jip",
  "nvse",
 ]
 

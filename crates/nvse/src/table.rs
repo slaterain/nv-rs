@@ -249,16 +249,26 @@ fn default_parse(e: &mut Engine, words: &[u32]) -> Ret {
     e.call(EXE_DEFAULT_PARSE, &four)
 }
 
-/// `count` bytes of the built-ins' data, aligned to 4, mapped as needed.
+/// `count` bytes of the built-ins' data, aligned to 4, mapped as needed. The data is never
+/// freed and stops the port when full: for the built-ins' own records and fixed texts only. A
+/// caller whose size or text a script decides uses [`try_alloc`] or [`try_guest_str`].
 pub fn alloc(e: &mut Engine, count: u32) -> u32 {
+    try_alloc(e, count).expect("the built-ins' data is full")
+}
+
+/// [`alloc`], or `None` (nothing taken) when the rest of the built-ins' data is too small.
+pub fn try_alloc(e: &mut Engine, count: u32) -> Option<u32> {
     let state = &mut e.ext::<Nvse>().table;
     if state.top == 0 {
         state.top = DATA_AT;
         state.mapped = DATA_AT;
     }
     let at = state.top;
-    let end = at + count.next_multiple_of(4);
-    assert!(end <= BUILTIN_DATA.end, "the built-ins' data is full");
+    let end = u64::from(at) + u64::from(count).next_multiple_of(4);
+    if end > u64::from(BUILTIN_DATA.end) {
+        return None;
+    }
+    let end = end as u32;
     let mapped = state.mapped;
     state.top = end;
     if end > mapped {
@@ -266,21 +276,27 @@ pub fn alloc(e: &mut Engine, count: u32) -> u32 {
         e.ext::<Nvse>().table.mapped = to;
         e.map(mapped, to - mapped);
     }
-    at
+    Some(at)
 }
 
-/// A NUL-terminated copy of `text` in the built-ins' data, written once per text.
+/// A NUL-terminated copy of `text` in the built-ins' data, written once per text (never freed:
+/// see [`alloc`]).
 pub fn guest_str(e: &mut Engine, text: &[u8]) -> u32 {
+    try_guest_str(e, text).expect("the built-ins' data is full")
+}
+
+/// [`guest_str`], or `None` when the built-ins' data has no room left for the text.
+pub fn try_guest_str(e: &mut Engine, text: &[u8]) -> Option<u32> {
     if let Some(&at) = e.ext::<Nvse>().table.strings.get(text) {
-        return at;
+        return Some(at);
     }
-    let at = alloc(e, text.len() as u32 + 1);
+    let at = try_alloc(e, u32::try_from(text.len()).ok()?.checked_add(1)?)?;
     for (i, b) in text.iter().enumerate() {
         e.mem.set_u8(at + i as u32, *b);
     }
     e.mem.set_u8(at + text.len() as u32, 0);
     e.ext::<Nvse>().table.strings.insert(text.to_vec(), at);
-    at
+    Some(at)
 }
 
 /// A parameter list in the built-ins' data (12 bytes each: name, type, optional); 0 for none.
@@ -737,6 +753,27 @@ pub fn record_of(e: &Engine, opcode: u32) -> u32 {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A take larger than the rest of the built-ins' data answers `None` and takes nothing (no
+    /// stop), for a size or a text; the next take that fits still gets the same place.
+    #[test]
+    fn a_full_built_ins_data_answers_none() {
+        let mut e = Engine::new();
+        let first = alloc(&mut e, 8);
+        assert_eq!(first, DATA_AT);
+        let room = BUILTIN_DATA.end - (DATA_AT + 8);
+        assert_eq!(try_alloc(&mut e, room + 1), None);
+        assert_eq!(try_alloc(&mut e, u32::MAX), None, "no overflow");
+        let long = vec![b'a'; room as usize];
+        assert_eq!(
+            try_guest_str(&mut e, &long),
+            None,
+            "room for the text, not its 0"
+        );
+        assert_eq!(try_alloc(&mut e, 4), Some(DATA_AT + 8));
+        let text = try_guest_str(&mut e, b"hi").expect("fits");
+        assert_eq!(try_guest_str(&mut e, b"hi"), Some(text), "written once");
+    }
 
     /// An engine with a stand-in of the exe's script and console tables: record `i` named
     /// `V<i>` with its opcode and an execute word, console records named `C<i>`, `SetVel` at

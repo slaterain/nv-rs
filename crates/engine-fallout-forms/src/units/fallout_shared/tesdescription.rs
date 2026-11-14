@@ -109,6 +109,13 @@ pub fn tes_description_load_description(e: &mut Engine, this: Ptr, form: Ptr, ch
         return;
     }
     e.mem.set_u32(DESCRIPTION_OWNER, this.addr());
+    // The seam at `0x00482F7F` (JIP LN NVSE's GetDescription): an answer means the shared text
+    // was set from the description's own text and the load ends.
+    if e.hook_users(engine_core::extend::Hook::GetDescription) != 0
+        && e.site(0x0048_2f7f, &[this.addr()]).is_some()
+    {
+        return;
+    }
     e.call(STRING_SET, &args![DESCRIPTION_TEXT, 0u32, 0u32]);
     let file = e.call(FORM_GET_FILE, &args![form, 0xffff_ffffu32]).u32();
     if file == 0 || e.mem.u32(this.addr().wrapping_add(DESCRIPTION_OFFSET)) == 0 {
@@ -412,6 +419,47 @@ mod b014_tests {
         assert_eq!(calls(&e, FILE_SET_OFFSET), vec![vec![0x7000, 0x40]]);
         assert_eq!(calls(&e, FILE_GET_CHUNK_DATA).len(), 1);
         assert_eq!(calls(&e, FILE_NEXT_CHUNK).len(), 1);
+    }
+
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn description_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's GetDescription seam (`0x00482F7F`): with no user it is not asked; with one
+    /// it is asked with the description after the owner is stored; an answer ends the load
+    /// there (no emptying of the text, no file read), none goes on as the exe.
+    #[test]
+    fn load_description_get_description_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = file_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0048_2f7f), description_handler);
+        ANSWER.with(|c| c.set(Some(1)));
+        let this = e.mem.alloc(8);
+        e.mem.set_u32(this + 4, 0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x00482f40, &args![this, 0x9000u32, 2u32]);
+        assert!(SEEN.with(|s| s.borrow().is_empty()), "no user");
+        assert_eq!(calls(&e, STRING_SET).len(), 2);
+        e.add_hook_user(Hook::GetDescription, true);
+        e.mem.set_u32(DESCRIPTION_OWNER, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00482f40, &args![this, 0x9000u32, 2u32]);
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![this]]);
+        assert_eq!(e.mem.u32(DESCRIPTION_OWNER), this, "stored first");
+        assert!(calls(&e, STRING_SET).is_empty());
+        assert!(calls(&e, FORM_GET_FILE).is_empty());
+        ANSWER.with(|c| c.set(None));
+        e.mem.set_u32(DESCRIPTION_OWNER, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x00482f40, &args![this, 0x9000u32, 2u32]);
+        assert_eq!(SEEN.with(|s| s.take()).len(), 1);
+        assert_eq!(calls(&e, STRING_SET).len(), 2, "no answer: the exe's load");
     }
 
     #[test]

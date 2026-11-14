@@ -2056,6 +2056,13 @@ pub fn fn_0055d480(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
 // Translated from 0055d520 (decompiled, FalloutNV.exe 1.4.0.525)
 /// The reference's full name: `TESFullName::GetFullName` of the base object.
 pub fn fn_0055d520(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    // The seam at the entry `0x0055D520` (JIP LN NVSE's GetRefName replaces the function): an
+    // answer is the reference's own name.
+    if e.hook_users(engine_core::extend::Hook::GetRefName) != 0 {
+        if let Some(name) = e.site(0x0055_d520, &[this.addr()]) {
+            return name;
+        }
+    }
     let data = e.call(GET_DATA, &args![this]).u32();
     let base = e.mem.u32(data);
     e.call(0x0048_2720, &args![base]).u32()
@@ -9069,6 +9076,38 @@ mod tests {
         assert_eq!(e.call(0x0055_d520, &args![refr]).u32(), 0x0f11);
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, 0x0048_2720), vec![vec![0x5555]]);
+    }
+
+    thread_local! {
+        static NAME_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static NAME_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn name_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        NAME_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        NAME_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's GetRefName seam at the entry (`0x0055D520`): no user, not asked; with one,
+    /// asked with the reference; an answer is the name (no base object read), none the exe's.
+    #[test]
+    fn full_name_get_ref_name_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        returns(&mut e, 0x0048_2720, 0x0f11);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0055_d520), name_handler);
+        NAME_ANSWER.with(|c| c.set(Some(0x0abc)));
+        let refr = new_refr(&mut e);
+        assert_eq!(e.call(0x0055_d520, &args![refr]).u32(), 0x0f11);
+        assert!(NAME_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::GetRefName, true);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0055_d520, &args![refr]).u32(), 0x0abc);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, 0x0048_2720).is_empty());
+        assert_eq!(NAME_SEEN.with(|s| s.take()), vec![vec![refr.addr()]]);
+        NAME_ANSWER.with(|c| c.set(None));
+        assert_eq!(e.call(0x0055_d520, &args![refr]).u32(), 0x0f11);
     }
 
     // ---- 0055d540: GetFormDetailedString -------------------------------------------

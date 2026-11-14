@@ -311,6 +311,8 @@ layout! {
     /// `TESForm`, `// 06`): the exe's `TESForm::TESForm`, `00483370`, writes only the byte at `+4`
     /// (`cFormType`) of that word, and nothing of the game reads `+5` to `+7`.
     pub struct JipFormFlags: 0x18 {
+        /// `kHookFormFlag5_*` (`internal/hooks.h` (JIP LN NVSE); JIP's `jipFormFlags5`, `// 05`).
+        0x05 jipFormFlags5: u8,
         /// `kHookFormFlag6_*` (`internal/hooks.h` (JIP LN NVSE)).
         0x06 jipFormFlags6: u8,
     }
