@@ -6,11 +6,15 @@
 //!
 //! Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a): `Compiler/Lexer`, `Compiler/Parser`,
 //! `Compiler/AST`, `Compiler/Passes` (`MatchTransformer`, `VariableResolution`,
-//! `CallTransformer`, `TypeChecker`), `Compiler/Utils.cpp` (`HighlightSourceSpan`, the token to
+//! `CallTransformer`, `TypeChecker`, `LoopTransformer`, `LambdaTransformer`, `Compiler`),
+//! `Compiler/Utils.cpp` (`HighlightSourceSpan`, the token to
 //! operator map, `ResolveVanillaEum`, `DoesFormTypeMatchParamType`) and `SourceInfo.h`.
 //!
 //! The passes run in xNVSE's order (`CompileNVSEScript`): parse, match statements made `if`
-//! chains, variables resolved, calls of lambdas and user functions made `Call`s, types checked.
+//! chains, variables resolved, calls of lambdas and user functions made `Call`s, types checked,
+//! `for` loops made `while` loops, variables holding lambdas made mod-local data, then the code
+//! generation. The game's compile hands such a script here ([`crate::compile_hooks`]), and so does
+//! a call of a user function written in the language ([`user_function_params`]).
 //! What they need of the game (command records, forms by editor id, the script's variables, the
 //! event block records, the plugin list) comes through [`Env`]; [`engine_env`] reads it from the
 //! running game as xNVSE does.
@@ -20,10 +24,15 @@
 //! script", then the message) to the console. The type checker's and the variable resolution's
 //! messages carry the source lines with the faulty part between ANSI colour escapes, as xNVSE
 //! prints them; every error the type checker catches is followed by a second, empty message (its
-//! exception's empty text, printed where it is caught). The rest of xNVSE's output here goes to
-//! its debug console or `nvse.log` only (`DbgPrint`, `InfoPrint`, the tree printer, the
-//! "variable shadows a form" note): a release build shows none of it and the port writes no
-//! `nvse.log`, so none of it is built.
+//! exception's empty text, printed where it is caught). The rest of xNVSE's output here is not
+//! built: `DbgPrint` and the tree printer print only in a debug build, and `InfoPrint` (the
+//! "[Requirements]" list, the "variable shadows a form" note) goes to `nvse.log` in the run-time
+//! build, which the port does not write. One more thing a player of xNVSE sees is left out on
+//! purpose: every one of those prints, and every error, first calls `AllocateScriptConsole`,
+//! which in the run-time build too (its `#ifdef IS_EDITOR` is always true) opens a Windows console
+//! window on the first new-language compile, where xNVSE's "Script compiled successfully." then
+//! shows ([`crate::compile_hooks`]). The port opens no window: a stray console is not what a
+//! player wants, and nothing the game does depends on it.
 //!
 //! Deliberate differences, each where xNVSE stops the game (an exception nothing catches, a read
 //! through a null pointer, a format past its buffer): the port fails the compile instead, with no
@@ -31,7 +40,9 @@
 //! buffer (its `vsprintf_s` would stop the game past it). A message printed without its source
 //! lines goes to `vsprintf` as its format: a `%` in it (an operator's text) is a conversion
 //! `vsprintf_s` refuses, which stops the game; the port fails the compile there too
-//! ([`error_text`]).
+//! ([`error_text`]). Nesting past [`ast::MAX_DEPTH`] (parentheses, prefix operators, blocks,
+//! lambdas, chains of operators) fails the compile the same way: xNVSE's recursive parser and
+//! passes have no limit and overflow the game's stack there.
 
 pub mod ast;
 pub mod lexer;
@@ -83,6 +94,19 @@ pub trait Env {
     fn set_script_variables(&mut self, vars: &[(Vec<u8>, u8, u32)]);
     /// The compiling script's type (`engineScript->Type()`), `None` without a script.
     fn script_type(&mut self) -> Option<u16>;
+    /// `g_scriptCommands.GetByOpcode(opcode)`.
+    fn command_by_opcode(&mut self, opcode: u16) -> Option<CmdInfo>;
+    /// `Compiler::ResolveObjReference(name, add)`: the form `name` names (`player`: the player's
+    /// reference); a reference that is not persistent is a `std::runtime_error` nothing catches.
+    /// Its index among the compiling script's references (from 1), added at the end when new
+    /// and `add` (else 1); 0 for no form.
+    fn resolve_reference(&mut self, name: &[u8], add: bool) -> Result<u16, Fail>;
+    /// Whether the compiling script's reference `index` (from 1) is a global.
+    fn reference_is_global(&mut self, index: u16) -> bool;
+    /// The end of `Compiler::Visit`: the editor id set (`name`; none for a partial script), the
+    /// compiled flag, the data's length, the counts of references and variables, the unused
+    /// variable count (the variables less `used`), the data copied to the game's heap.
+    fn finish_script(&mut self, data: &[u8], name: Option<&[u8]>, used: usize);
 }
 
 pub mod engine_env;
@@ -265,5 +289,85 @@ pub fn analyze(env: &mut dyn Env, text: &[u8], has_script: bool) -> Result<Analy
     Ok(Analyzed { ast: Some(tree) })
 }
 
+/// What [`compile_with`] gives: the script's compiled data and how many names it read.
+pub struct Compiled {
+    pub data: Vec<u8>,
+    pub used_vars: usize,
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Utils.cpp: CompileNVSEScript.
+/// The whole compile: [`analyze`], the loop and lambda passes, the code generation, and the
+/// compiling script given its data (its editor id the script's name unless `partial`). `None`
+/// when a step reported an error.
+pub fn compile_with(
+    env: &mut dyn Env,
+    text: &[u8],
+    partial: bool,
+) -> Result<Option<Compiled>, Fail> {
+    let Some(mut tree) = analyze(env, text, true)?.ast else {
+        return Ok(None);
+    };
+    // The tree was held to `ast::MAX_DEPTH` after the parse and through the match pass. The
+    // passes after those deepen it by a few levels at most, wherever they are: the call pass not
+    // at all, the loop pass two (a loop's increment as a statement of its block), the lambda
+    // pass two (a read made a `GetModLocalData` call; a variable's declaration made a
+    // `SetModLocalData` call one, its lambda's own lambdas left as they are). So the code
+    // generation's walk stays within the limit's measure without another check.
+    passes::loops::LoopTransformer::new(&mut tree).run()?;
+    passes::lambdas::LambdaTransformer::new(&mut tree, env).run()?;
+    let mut c = passes::codegen::Compiler::new(&mut tree, env);
+    c.run()?;
+    let (data, used_vars) = (std::mem::take(&mut c.data), c.used_vars.len());
+    let name = tree.name.clone();
+    env.finish_script(&data, (!partial).then_some(name.as_slice()), used_vars);
+    Ok(Some(Compiled { data, used_vars }))
+}
+
+/// `Compiler::CompileNVSEScript(text, script, partial)` on the running game: whether `script`
+/// compiled.
+pub fn compile(
+    e: &mut engine_core::prelude::Engine,
+    text: &[u8],
+    script: u32,
+    partial: bool,
+) -> bool {
+    let mut env = engine_env::engine_env(e, script);
+    matches!(compile_with(&mut env, text, partial), Ok(Some(_)))
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Utils.cpp: PreProcessNVSEScript, and
+// ScriptUtils.cpp: ExpressionParser::ParseUserFunctionParameters (its part for the new
+// language).
+/// A function script's parameters (each one's variable index and type) from its text in the
+/// new language: the parse, the match pass and the variable resolution with no script, then the
+/// parameters of its one block when that is a function block (none for an event block). `None`
+/// when the text does not have exactly one block or a step reported an error (where xNVSE stops
+/// the game, too).
+pub fn user_function_params(env: &mut dyn Env, text: &[u8]) -> Option<Vec<(u32, u8)>> {
+    let parsed = parser::parse(env, text).ok()?;
+    let (Some(mut tree), false) = (parsed.ast, parsed.had_error) else {
+        return None;
+    };
+    passes::match_transform::MatchTransformer::new(&mut tree)
+        .run()
+        .ok()?;
+    let mut v = passes::variables::VariableResolution::new(&mut tree, env, false);
+    v.run().ok()?;
+    if v.had_error || tree.blocks.len() != 1 {
+        return None;
+    }
+    let mut out = Vec::new();
+    if let ast::StmtKind::Udf { args, .. } = &tree.stmt(tree.blocks[0]).kind {
+        for &a in args {
+            let var = tree.decls(a).first()?.info?;
+            out.push((tree.var(var).index, tree.var(var).ty));
+        }
+    }
+    Some(out)
+}
+
 #[cfg(test)]
 pub(crate) mod test_env;
+
+#[cfg(test)]
+mod compile_tests;

@@ -69,6 +69,11 @@ in `f64`; then `dispatch` (the transforms' and matrices' arithmetic, which every
 in `f64`, a single operation in `f32`); then `culling` (the bounds, the planes and the merge the visibility walk and
 the bound updates use, on the main thread and the helper threads: likewise).
 
+The built-in script extender (2026-11-14): xNVSE's 650 of 654 commands, its run-time compiler for the old
+script syntax and its new script language (scripts that start with `name`), compiled to the same bytes as xNVSE
+writes them (byte tests from its source's rules, read back by its decompiler); JIP LN NVSE's commands are in
+progress (README's system table has the counts).
+
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
 run on this PC; the maintainer decides on a release ([testers' checklist](PREVIEW_TESTERS.md)).

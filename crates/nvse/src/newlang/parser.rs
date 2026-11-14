@@ -29,6 +29,8 @@ pub struct Parser<'a> {
     had_error: bool,
     ast: Ast,
     plugin_versions: MsvcMap<u32>,
+    /// The recursion's depth ([`Parser::nested`]).
+    depth: usize,
 }
 
 type R<T> = Result<T, Fail>;
@@ -45,6 +47,7 @@ impl<'a> Parser<'a> {
             had_error: false,
             ast: Ast::default(),
             plugin_versions: MsvcMap::default(),
+            depth: 0,
         };
         p.advance()?;
         Ok(p)
@@ -67,6 +70,12 @@ impl<'a> Parser<'a> {
             Err(crash) => return Err(crash),
         }
         self.ast.lines = std::mem::take(&mut self.lexer.lines);
+        // A chain built in a loop (`a + b + ...`, `a[0][0]...`, `a.b.c...`, the parts of an
+        // interpolated string) nests the tree without nesting the parser: measured here, for the
+        // passes that walk it (none do after a parse error).
+        if !self.had_error {
+            check_depth(&self.ast)?;
+        }
         Ok(Parsed {
             ast: Some(self.ast),
             had_error: self.had_error,
@@ -226,8 +235,36 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Parser.cpp: Parser::Statement.
+    /// `f` one level deeper in the parser's recursion: past [`MAX_PARSE_DEPTH`] levels the
+    /// compile fails ([`TOO_DEEP`]) before the native stack runs out. Every cycle of the
+    /// recursion goes through one of the counted steps: a statement (a block's, a lambda's, a
+    /// loop's), an `else if`, an expression (an assignment's right side, and every parenthesis,
+    /// list, subscript, call argument or interpolation inside an expression) or an operand after
+    /// a prefix operator. The tree the parse makes is measured after it ([`check_depth`]).
+    fn nested<X>(&mut self, f: impl FnOnce(&mut Self) -> R<X>) -> R<X> {
+        if self.depth >= MAX_PARSE_DEPTH {
+            return Err(TOO_DEEP);
+        }
+        self.depth += 1;
+        let r = f(self);
+        self.depth -= 1;
+        r
+    }
+
     fn statement(&mut self) -> R<StmtId> {
+        self.nested(Self::statement_inner)
+    }
+
+    fn if_statement(&mut self) -> R<StmtId> {
+        self.nested(Self::if_statement_inner)
+    }
+
+    fn assignment(&mut self) -> R<ExprId> {
+        self.nested(Self::assignment_inner)
+    }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Parser.cpp: Parser::Statement.
+    fn statement_inner(&mut self) -> R<StmtId> {
         if self.peek(T::Identifier) && self.current.lexeme.eq_ignore_ascii_case(b"ShowMessage") {
             return self.show_message();
         }
@@ -543,7 +580,7 @@ impl<'a> Parser<'a> {
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Parser.cpp: Parser::IfStatement.
-    fn if_statement(&mut self) -> R<StmtId> {
+    fn if_statement_inner(&mut self) -> R<StmtId> {
         let start = self.expect(T::If)?;
         let cond = self.parenthesized_expression()?;
         let block = self.block_statement()?;
@@ -693,7 +730,7 @@ impl<'a> Parser<'a> {
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Parser.cpp: Parser::Assignment.
-    fn assignment(&mut self) -> R<ExprId> {
+    fn assignment_inner(&mut self) -> R<ExprId> {
         let left = self.slice()?;
         for t in [
             T::Eq,
@@ -872,7 +909,7 @@ impl<'a> Parser<'a> {
         ] {
             if self.matches(t)? {
                 let mut op = self.previous.clone();
-                let right = self.unary()?;
+                let right = self.nested(Self::unary)?;
                 op.ty = match op.ty {
                     T::BitwiseAnd => T::Box,
                     T::Star => T::Unbox,
@@ -1096,7 +1133,8 @@ impl<'a> Parser<'a> {
             return self.fn_expr();
         }
         self.error_at_current("Expected expression.")?;
-        unreachable!("an error always fails")
+        // The error above always fails the step.
+        Err(Fail::Caught)
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Parser.cpp: Parser::IdentExpr.

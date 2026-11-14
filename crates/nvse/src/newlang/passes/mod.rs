@@ -1,7 +1,11 @@
 //! The passes over the syntax tree (`Compiler/Passes` (xNVSE)), in the order
-//! `CompileNVSEScript` runs them: [`match_transform`], [`variables`], [`calls`], [`types`].
+//! `CompileNVSEScript` runs them: [`match_transform`], [`variables`], [`calls`], [`types`],
+//! [`loops`], [`lambdas`], then the code generation, [`codegen`].
 
 pub mod calls;
+pub mod codegen;
+pub mod lambdas;
+pub mod loops;
 pub mod match_transform;
 pub mod types;
 pub mod variables;

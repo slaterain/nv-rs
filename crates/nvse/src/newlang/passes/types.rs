@@ -786,12 +786,13 @@ impl<'a> TypeChecker<'a> {
         Ok(())
     }
 
-    fn call_parts(&self, id: ExprId) -> (Option<ExprId>, ExprId, Vec<ExprId>) {
+    /// A call's parts (only calls reach here; anything else fails the compile).
+    fn call_parts(&self, id: ExprId) -> Result<(Option<ExprId>, ExprId, Vec<ExprId>), Fail> {
         match &self.ast.expr(id).kind {
             ExprKind::Call {
                 left, ident, args, ..
-            } => (*left, *ident, args.clone()),
-            _ => unreachable!("a call"),
+            } => Ok((*left, *ident, args.clone())),
+            _ => Err(Fail::Crash("TypeChecker: not a call")),
         }
     }
 
@@ -804,7 +805,7 @@ impl<'a> TypeChecker<'a> {
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), TypeChecker.cpp:
     // TypeChecker::VisitCallExpr.
     fn visit_call(&mut self, id: ExprId) -> R {
-        let (left, ident, _) = self.call_parts(id);
+        let (left, ident, _) = self.call_parts(id)?;
         let name = self.ast.ident_name(ident).to_vec();
         let Some(cmd) = self.env.command(&name) else {
             return self.error_expr(ident, b"Not a valid command");
@@ -843,7 +844,7 @@ impl<'a> TypeChecker<'a> {
         let mut arg_idx = 0usize;
         let mut param_idx = 0usize;
         loop {
-            let args = self.call_parts(id).2;
+            let args = self.call_parts(id)?.2;
             if param_idx >= cmd.params.len() || arg_idx >= args.len() {
                 break;
             }
@@ -932,7 +933,7 @@ impl<'a> TypeChecker<'a> {
             param_idx += 1;
         }
         let required = cmd.params.iter().filter(|p| !p.optional).count();
-        let args = self.call_parts(id).2;
+        let args = self.call_parts(id)?.2;
         let enough = args.len() >= required;
         if !enough {
             let m = cat(&[
@@ -996,7 +997,7 @@ impl<'a> TypeChecker<'a> {
     /// count.
     fn check_lambda_args(&mut self, id: ExprId, ident: ExprId, var: VarId, start: usize) -> R {
         let params = self.ast.var(var).lambda_param_types.clone();
-        let args = self.call_parts(id).2;
+        let args = self.call_parts(id)?.2;
         for (i, &arg) in args.iter().enumerate().skip(start) {
             let n = i - start + 1;
             if i > params.len() {

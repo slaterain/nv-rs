@@ -9,18 +9,18 @@ use crate::Nvse;
 use std::cell::RefCell;
 
 /// The tests' own memory: a heap and stand-in forms.
-const AREA: u32 = 0x0500_0000;
+pub(crate) const AREA: u32 = 0x0500_0000;
 const HEAP_TOP: u32 = AREA;
 const HEAP: u32 = AREA + 0x1000;
-const QUEST: u32 = AREA + 0x8000;
-const REFR: u32 = AREA + 0x8100;
-const BASE: u32 = AREA + 0x8200;
+pub(crate) const QUEST: u32 = AREA + 0x8000;
+pub(crate) const REFR: u32 = AREA + 0x8100;
+pub(crate) const BASE: u32 = AREA + 0x8200;
 
 thread_local! {
-    static PRINTED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    pub(crate) static PRINTED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
 }
 
-fn engine() -> Engine {
+pub(crate) fn engine() -> Engine {
     let mut e = decompile_engine();
     e.map(AREA, 0x1_0000);
     e.register(0x00ec_a7f4, |_, a| Ret {

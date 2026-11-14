@@ -138,10 +138,12 @@ fn script_size_limit(e: &mut Engine, w: &[u32]) -> Option<u32> {
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Script.cpp: HandleBeginCompile,
 // Runtime::HandleBeginCompile_SetNotCompiled, Runtime::HookBeginScriptCompile.
 /// `005AEBB1`, words (the script, the script buffer): the compile starts. The script goes on the
-/// compile stack; its error code and compiled flag are cleared; the `#version` tags become
-/// comments (a plugin it names that is not built in fails the compile); the plugins hear
-/// `ScriptPrecompile`; the outermost script is preprocessed. Answers 1 to go on, 0 to fail, 2
-/// when a plugin compiled it.
+/// compile stack; its error code and compiled flag are cleared. A script in the new language
+/// (its text starting with `name`, any case) is compiled by [`crate::newlang`]; otherwise the
+/// `#version` tags become comments (a plugin it names that is not built in fails the compile)
+/// and the plugins hear `ScriptPrecompile`. A compiled script (the new language's, or a
+/// plugin's) is finished and answers 2; else the outermost script is preprocessed. Answers 1 to
+/// go on, 0 to fail.
 fn begin_compile(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let (script, buf) = (w[0], w[1]);
     let s = state(e);
@@ -152,28 +154,19 @@ fn begin_compile(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let text_at = e.mem.u32(buf + sb::TEXT);
     let text = opt_text(e, text_at).unwrap_or_default();
     if text.len() >= 4 && text[..4].eq_ignore_ascii_case(b"name") {
-        // The new script language (`Compiler::CompileNVSEScript`): that compiler is not built
-        // (plan step 3.8, deferred), so the script does not compile here.
-        return Some(0);
-    }
-    for (at, plugin) in version_tags(&text) {
-        e.mem.set_u8(text_at + at as u32, b';');
-        if let Some(r) = state(e).pound_restores.last_mut() {
-            r.push(at as u32);
-        }
-        if !plugin.eq_ignore_ascii_case(b"nvse") && crate::plugins::listed(e, &plugin).is_none() {
-            let name = plugin.to_ascii_lowercase();
-            let message = compiler::format(
-                "Script compilation failed: No plugin with name %s could be found.",
-                &[compiler::A::S(&name)],
-                0x800,
-            );
-            crate::errors::show(e, 0, &String::from_utf8_lossy(&message));
+        // The new script language (`Compiler::CompileNVSEScript`, [`crate::newlang`]). xNVSE
+        // prints "Script compiled successfully." to its standard output, which in the game is a
+        // Windows console window of its own: `AllocateScriptConsole` opens one on the first
+        // compile that prints anything (every success prints "[Requirements]", every error its
+        // message), in the run-time build too (its `#ifdef IS_EDITOR` is always true, the macro
+        // being defined as 0 or 1). A deliberate difference: the port opens no window and prints
+        // nothing there (the errors still go to the game's console as in xNVSE). A compiled
+        // script is finished below as a plugin's would be.
+        let partial = e.mem.u8(buf + sb::PARTIAL) != 0;
+        if !crate::newlang::compile(e, &text, script, partial) {
             return Some(0);
         }
-    }
-    dispatch_script_message(e, crate::plugins::msg::SCRIPT_PRECOMPILE, script, buf);
-    if e.mem.u32(buf + sb::ERROR) >= 1 {
+    } else if !old_syntax_precompile(e, script, buf, text_at, &text) {
         return Some(0);
     }
     if e.mem.u8(script + sc::COMPILED) != 0 {
@@ -187,6 +180,30 @@ fn begin_compile(e: &mut Engine, w: &[u32]) -> Option<u32> {
         return Some(0);
     }
     Some(1)
+}
+
+/// The old syntax's part of `HandleBeginCompile`: the `#version` tags made comments (a plugin
+/// one names that is not built in fails the compile), then the plugins hear `ScriptPrecompile`;
+/// false when the compile fails.
+fn old_syntax_precompile(e: &mut Engine, script: u32, buf: u32, text_at: u32, text: &[u8]) -> bool {
+    for (at, plugin) in version_tags(text) {
+        e.mem.set_u8(text_at + at as u32, b';');
+        if let Some(r) = state(e).pound_restores.last_mut() {
+            r.push(at as u32);
+        }
+        if !plugin.eq_ignore_ascii_case(b"nvse") && crate::plugins::listed(e, &plugin).is_none() {
+            let name = plugin.to_ascii_lowercase();
+            let message = compiler::format(
+                "Script compilation failed: No plugin with name %s could be found.",
+                &[compiler::A::S(&name)],
+                0x800,
+            );
+            crate::errors::show(e, 0, &String::from_utf8_lossy(&message));
+            return false;
+        }
+    }
+    dispatch_script_message(e, crate::plugins::msg::SCRIPT_PRECOMPILE, script, buf);
+    e.mem.u32(buf + sb::ERROR) < 1
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Script.cpp:
@@ -236,8 +253,9 @@ fn dispatch_script_message(e: &mut Engine, kind: u32, script: u32, buf: u32) {
 
 /// The `#version("plugin", major[, minor[, beta]])` tags of a text (`#` and `version` without
 /// case; at least one blank after the commas of the second and third numbers, any after the
-/// first's), each by the position of its `#` and its plugin's name. The numbers are only kept
-/// for the new script language, which is not built: they are not read here.
+/// first's), each by the position of its `#` and its plugin's name. xNVSE keeps the numbers
+/// in a map nothing of the old syntax reads (the new language's parser fills its own), so they
+/// are not read here.
 fn version_tags(text: &[u8]) -> Vec<(usize, Vec<u8>)> {
     let mut out = Vec::new();
     let mut i = 0;
