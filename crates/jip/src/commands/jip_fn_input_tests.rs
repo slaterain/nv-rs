@@ -27,6 +27,8 @@ fn setup() -> Engine {
     e.mem.set_u8(CONTROLS + 0x1b94 + 27, 0x20);
     e.mem.set_u8(CONTROLS + 0x1be8 + 27, 17);
     e.mem.set_u8(CONTROLS + 0x1be8 + 6, 19);
+    // Control 0's mouse button 3: byte 28 of the keyboard array, which a control of 28 would read.
+    e.mem.set_u8(CONTROLS + 0x1bb0, 3);
     e
 }
 
