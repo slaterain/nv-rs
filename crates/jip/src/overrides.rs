@@ -1219,6 +1219,25 @@ fn get_model_path(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- for the commands track (`ln_fn_game_data`: GetStringSetting, SetStringSetting, GetGameSettings) ----
+
+/// A setting of `s_gameSettingsMap` by its name (without case).
+pub fn game_setting(e: &mut Engine, name: &[u8]) -> Option<u32> {
+    find_setting(e, name)
+}
+
+/// Every setting of `s_gameSettingsMap`, once each (in no set order: the commands put them in a
+/// string map, which sorts them).
+pub fn game_settings(e: &mut Engine) -> Vec<u32> {
+    let _ = find_setting(e, b"");
+    e.ext::<Jip>()
+        .overrides
+        .settings
+        .as_ref()
+        .map(|m| m.values().copied().collect())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 #[path = "overrides_tests.rs"]
 mod tests;

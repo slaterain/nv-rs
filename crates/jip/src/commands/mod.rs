@@ -45,10 +45,12 @@ pub mod ln_fn_activator;
 pub mod ln_fn_casino;
 pub mod ln_fn_cell;
 pub mod ln_fn_challenge;
+pub mod ln_fn_game_data;
 pub mod ln_fn_leveled_list;
 pub mod ln_fn_load_screen;
 pub mod ln_fn_map_marker;
 pub mod ln_fn_math;
+pub mod ln_fn_misc_ref;
 pub mod ln_fn_perk;
 pub mod ln_fn_race;
 pub mod ln_fn_radio_ref;
@@ -73,7 +75,7 @@ pub type Handlers = &'static [(u32, AbiFn)];
 pub type Conditions = &'static [(u32, AbiFn, AbiFn)];
 
 /// Every module's conditions, one line per JIP source file that has any.
-pub const ALL_CONDITIONS: &[Conditions] = &[jip_fn_effect::CONDITIONS, ln_fn_math::CONDITIONS];
+pub const ALL_CONDITIONS: &[Conditions] = &[jip_fn_effect::CONDITIONS, ln_fn_math::CONDITIONS, ln_fn_misc_ref::CONDITIONS];
 
 /// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
 /// eval; no execute.
@@ -118,10 +120,12 @@ pub const ALL: &[Handlers] = &[
     ln_fn_casino::COMMANDS,
     ln_fn_cell::COMMANDS,
     ln_fn_challenge::COMMANDS,
+    ln_fn_game_data::COMMANDS,
     ln_fn_leveled_list::COMMANDS,
     ln_fn_load_screen::COMMANDS,
     ln_fn_map_marker::COMMANDS,
     ln_fn_math::COMMANDS,
+    ln_fn_misc_ref::COMMANDS,
     ln_fn_perk::COMMANDS,
     ln_fn_race::COMMANDS,
     ln_fn_radio_ref::COMMANDS,
@@ -654,10 +658,12 @@ mod tests {
             "ln_fn_casino",
             "ln_fn_cell",
             "ln_fn_challenge",
+            "ln_fn_game_data",
             "ln_fn_leveled_list",
             "ln_fn_load_screen",
             "ln_fn_map_marker",
             "ln_fn_math",
+            "ln_fn_misc_ref",
             "ln_fn_perk",
             "ln_fn_race",
             "ln_fn_radio_ref",
@@ -675,7 +681,7 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        for (list, file) in ALL_CONDITIONS.iter().zip(["jip_fn_effect", "ln_fn_math"]) {
+        for (list, file) in ALL_CONDITIONS.iter().zip(["jip_fn_effect", "ln_fn_math", "ln_fn_misc_ref"]) {
             for &(opcode, _, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
                 assert!(slot.file.ends_with(file), "{opcode:04x} {}", slot.name);
@@ -683,7 +689,7 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS.len(), 2);
+        assert_eq!(ALL_CONDITIONS.len(), 3);
         for (list, file) in ALL_CONDITIONS_ONLY.iter().zip(["jip_fn_aux_variable"]) {
             for &(opcode, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");

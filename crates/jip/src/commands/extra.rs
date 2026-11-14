@@ -36,6 +36,7 @@ pub mod kind {
     pub const CONTAINER_CHANGES: u32 = 0x15;
     pub const LOCK: u32 = 0x2a;
     pub const TELEPORT: u32 = 0x2b;
+    pub const MAP_MARKER: u32 = 0x2c;
     pub const NORTH_ROTATION: u32 = 0x43;
     pub const TERMINAL_STATE: u32 = 0x50;
     pub const ACTIVATE_REF: u32 = 0x53;
