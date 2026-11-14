@@ -46,10 +46,15 @@
 //! - I-14 [`compiler`], [`compile_hooks`]: xNVSE's run-time expression compiler (the old syntax:
 //!   `Let`, `eval`, `while`/`ForEach`, `Call`, `Begin Function`, lambdas, every expression
 //!   argument) as the parse routines the game's compiler calls, and its hooks in that compiler (the
-//!   command names, the preprocessor, `#version` tags, the growing script data).
+//!   command names, the preprocessor, `#version` tags, the growing script data, the fixes of the
+//!   game's own expression buffers); [`compile_script`]: the run-time compile entry
+//!   (`CompileScriptEx`, `CompileExpression`, `RunScriptLine`), the function files of
+//!   `data/nvse/user_defined_functions` compiled at the first frame, and `CompileScript`.
 //! - I-14 [`newlang`]: xNVSE's new script language (scripts starting with `name`): its lexer,
 //!   parser, syntax tree, passes and code generation, which the game's compile hands such a
 //!   script to (the console, function files, a plugin's compile).
+//! - [`docs`], [`log`]: the documentation dumps to `nvse.log` (`DumpDocs`,
+//!   `DumpCommandWikiDoc(s)`) and xNVSE's console `help` listing of script functions.
 //! - [`commands`]: the commands built so far, by xNVSE's `Commands_*.cpp` file.
 //!
 //! [`install`] runs once per engine, after the fix rows (`host::Host::start_with`); the engine
@@ -59,11 +64,13 @@ pub mod args;
 pub mod call_sites;
 pub mod cnum;
 pub mod commands;
+pub mod compile_script;
 pub mod compile_hooks;
 pub mod compiler;
 pub mod context;
 pub mod cosave;
 pub mod decompile;
+pub mod docs;
 pub mod errors;
 pub mod event_commands;
 pub mod events;
@@ -72,6 +79,7 @@ pub mod functions;
 pub mod input;
 pub mod invref;
 pub mod lambda;
+pub mod log;
 pub mod mt19937;
 pub mod names;
 pub mod newlang;
@@ -250,6 +258,10 @@ pub struct Nvse {
     pub controls: commands::controls::State,
     /// The run-time compiler's state between calls (I-14).
     pub compiler: compiler::State,
+    /// The compile entry's unnamed-script count and the cached function files (I-14).
+    pub compile_script: compile_script::State,
+    /// Whether this run made `nvse.log` yet.
+    pub log: log::State,
     /// The DirectInput hook's keys and the input commands' controls (I-11).
     pub input: input::State,
     /// The first frame recorded the main thread (`s_recordedMainThreadID`): xNVSE prints to the
@@ -289,6 +301,7 @@ pub fn install(e: &mut Engine) {
     commands::game::install(e);
     commands::controls::install(e);
     compile_hooks::install(e);
+    docs::install(e);
     e.ext::<Nvse>().installed = true;
     // The extender's state is the game's, not one engine's: real threads' engines share it
     // (engine-core's shared slot, one lock), so an event raised or a variable used on another

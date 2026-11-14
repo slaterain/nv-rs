@@ -1690,3 +1690,26 @@ fn deep_nesting_compiles() {
     assert_eq!(bytes, inner);
     assert!(state(&mut e).lambda_parents.is_empty());
 }
+
+/// `loop`, `continue` and `break` carry xNVSE's one unused optional integer
+/// (`kParams_OneOptionalInt`: "need at least one param for Parse() to be called"): the game's
+/// `CompileLine` calls a record's parse word only when the record has a parameter list, so
+/// without it `loop` never wrote its loop's jump past the end.
+#[test]
+fn loop_continue_and_break_have_a_parameter_list_for_their_parse_words() {
+    let e = crate::commands::test_support::engine_with_table();
+    for (opcode, parse) in [
+        (0x153c, crate::table::LOOP_PARSE),
+        (0x153e, crate::table::NULL_PARSE),
+        (0x153f, crate::table::NULL_PARSE),
+    ] {
+        let record = record_of(&e, opcode);
+        assert_eq!(e.mem.u32(record + 0x1c), parse, "{opcode:04x}");
+        assert_eq!(e.mem.u16(record + 0x12), 1, "{opcode:04x}");
+        let params = e.mem.u32(record + 0x14);
+        assert_ne!(params, 0, "{opcode:04x}");
+        assert_eq!(guest_text(&e, e.mem.u32(params)), b"int");
+        assert_eq!(e.mem.u32(params + 4), 1, "kParamType_Integer");
+        assert_eq!(e.mem.u32(params + 8), 1, "optional");
+    }
+}

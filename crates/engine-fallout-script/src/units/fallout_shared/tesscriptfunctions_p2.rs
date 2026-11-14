@@ -680,8 +680,12 @@ pub fn script_help_function(e: &mut Engine, a: ScriptArgs) -> bool {
         print_help_entry(e, COMMAND_TABLE + index * HELP_ENTRY_SIZE, filter);
     }
     console_print(e, &args![HEADER_SCRIPT_FUNCTIONS]);
-    for index in 0..HELP_FUNCTION_COUNT {
-        print_help_entry(e, FUNCTION_TABLE + index * HELP_ENTRY_SIZE, filter);
+    // 005bcbc2: a built-in script extender lists the script functions itself (xNVSE's
+    // `PatchHelpCommand`, which jumps past the loop to 005bcdb6).
+    if e.site(0x005b_cbc2, &[filter]).is_none() {
+        for index in 0..HELP_FUNCTION_COUNT {
+            print_help_entry(e, FUNCTION_TABLE + index * HELP_ENTRY_SIZE, filter);
+        }
     }
     if e.mem.u8(filter) != 0 {
         console_print(e, &args![HEADER_GAME_SETTINGS]);
@@ -6031,6 +6035,32 @@ mod tests {
         assert_eq!(prints.len(), 1 + 205 + 1 + 640);
         assert_eq!(prints[206], vec![HEADER_SCRIPT_FUNCTIONS]);
         assert!(!prints.iter().any(|p| p[0] == HEADER_GAME_SETTINGS));
+    }
+
+    /// A built-in script extender at 005bcbc2 (xNVSE's listing) takes the script functions'
+    /// loop: it gets the filter text and the game's loop is passed over; the console commands
+    /// and the headers stay.
+    #[test]
+    fn help_lets_a_built_in_list_the_script_functions() {
+        use engine_core::extend::{Owner, SiteSlot};
+        thread_local! {
+            static FILTER: Cell<u32> = const { Cell::new(u32::MAX) };
+        }
+        let mut e = help_engine();
+        parse_gives(&mut e, true, &[]);
+        e.on_site(SiteSlot::new(Owner::Nvse, 0x005b_cbc2), |e, w| {
+            FILTER.with(|f| f.set(u32::from(e.mem.u8(w[0]))));
+            Some(1)
+        });
+        set_entry(&mut e, FUNCTION_TABLE, 0, "Function", "", "");
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_c950, script(0)));
+        // The filter text (empty here) is the built-in's word.
+        assert_eq!(FILTER.with(Cell::get), 0);
+        let prints = printed(&e);
+        // 205 commands and their header, then the script functions' header and nothing more.
+        assert_eq!(prints.len(), 1 + 205 + 1);
+        assert_eq!(prints[206], vec![HEADER_SCRIPT_FUNCTIONS]);
     }
 
     #[test]

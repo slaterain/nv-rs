@@ -1056,6 +1056,11 @@ pub(crate) struct ExtendState {
     /// The caller marks set around the calls whose hooks read their return address
     /// ([`Engine::mark_caller`]), shared like the counts.
     pub(crate) marks: std::sync::Arc<CallerMarks>,
+    /// xNVSE's fixes of the game's own `set`/`if` expression code (`Hook_Script_Init`): the guest
+    /// address of its token buffer (`s_ExpressionParserAltBuffer`, 0x500 bytes) once installed,
+    /// 0 without it ([`Engine::expression_alt_buffer`]). Set before the threads start, copied to
+    /// each thread's engine.
+    pub(crate) expression_alt_buffer: u32,
 }
 
 /// JIP LN NVSE's on-demand hooks (`kHook_*`, `internal/hooks.h` (JIP LN NVSE)), in JIP's order.
@@ -1279,6 +1284,7 @@ impl ExtendState {
             controls_alt: Default::default(),
             hooks: Default::default(),
             marks: Default::default(),
+            expression_alt_buffer: 0,
         }
     }
 
@@ -1305,6 +1311,7 @@ impl ExtendState {
             controls_alt: self.controls_alt.clone(),
             hooks: self.hooks.clone(),
             marks: self.marks.clone(),
+            expression_alt_buffer: self.expression_alt_buffer,
         }
     }
 }
@@ -1763,6 +1770,25 @@ impl Engine {
         self.extend
             .controls_alt
             .store(flags, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// xNVSE's two fixes of the game's own expression code, when the built-in xNVSE installed
+    /// them (`Hook_Script_Init`), else 0: the address of the 0x500-byte token buffer
+    /// (`s_ExpressionParserAltBuffer`) that `CExpression`'s infix-to-postfix conversion
+    /// (`00593500`) reads its tokens into instead of its 0x44-byte stack buffer
+    /// (`ExpressionParserBufferOverflowHook_1/_2` at `005935D0` and `005937DE`). A non-zero
+    /// value also means `CExpression::Eval` (`00593db0`) has its token buffer moved 0x400 bytes
+    /// lower in a frame grown by 0x400 (`SafeWrite8(0x593DB6, 7)`, `SafeWrite16(0x593E5A,
+    /// 0xF8B4)`), clear of the copy of the expression's bytes. One load; 0 runs the exe's layout.
+    #[inline]
+    pub fn expression_alt_buffer(&self) -> u32 {
+        self.extend.expression_alt_buffer
+    }
+
+    /// Sets [`Engine::expression_alt_buffer`] (the built-in xNVSE's install, before the threads
+    /// start).
+    pub fn set_expression_alt_buffer(&mut self, buffer: u32) {
+        self.extend.expression_alt_buffer = buffer;
     }
 
     /// The owners with a handler at the seam `addr`, in the order they run.

@@ -803,8 +803,8 @@ pub(crate) mod tests {
         opcodes.dedup();
         assert_eq!(opcodes.len(), built.len(), "two commands at one opcode");
         let console = NAMES.iter().filter(|(n, _)| n.starts_with("con_")).count();
-        assert_eq!((built.len(), console), (630, 20));
-        assert_eq!(built.len() + console, 650);
+        assert_eq!((built.len(), console), (634, 20));
+        assert_eq!(built.len() + console, 654);
     }
 
     /// Every record of xNVSE's range carries xNVSE's parse word: each of the 109 commands of

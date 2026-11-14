@@ -75,16 +75,16 @@ const fn cmd(
     }
 }
 
-const HELP: &str = "Per-mod version with added args";
+const HELP: &str = "\"Per-mod version with added args\"";
 
 #[rustfmt::skip]
 pub static COMMANDS: &[Command] = &[
     cmd(0x1661, "DisablePlayerControlsAlt", "DPCAlt", HELP, SEVEN_INTS, disable_alt),
     cmd(0x1662, "EnablePlayerControlsAlt", "EPCAlt", HELP, SEVEN_INTS, enable_alt),
-    cmd(0x1663, "GetPlayerControlsDisabledAlt", "GPCDAlt", "", EIGHT_INTS, get_disabled_alt),
+    cmd(0x1663, "GetPlayerControlsDisabledAlt", "GPCDAlt", "\"\"", EIGHT_INTS, get_disabled_alt),
     cmd(0x1664, "DisablePlayerControlsAltEx", "DPCEx", HELP, ONE_INT, disable_alt_ex),
     cmd(0x1665, "EnablePlayerControlsAltEx", "EPCEx", HELP, ONE_INT, enable_alt_ex),
-    cmd(0x1666, "GetPlayerControlsDisabledAltEx", "GPCDEx", "", TWO_INTS, get_disabled_alt_ex),
+    cmd(0x1666, "GetPlayerControlsDisabledAltEx", "GPCDEx", "\"\"", TWO_INTS, get_disabled_alt_ex),
 ];
 
 /// `kVanillaDefaultDisableFlags`: what `DisablePlayerControls` with no arguments disables.

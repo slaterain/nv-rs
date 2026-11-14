@@ -117,8 +117,8 @@ pub static COMMANDS: &[Command] = &[
     cmd(0x15be, "SetVariable", "", "sets the value of a variable by name", SET_NUM_VARIABLE, set_variable, RD),
     cmd(0x15bf, "SetRefVariable", "", "sets the value of a variable by name", SET_REF_VARIABLE, set_ref_variable, RD),
     cmd(0x167c, "GetStringVariable", "", "looks up a string variable by name on the calling object or specified quest", GET_VARIABLE, get_string_variable, Returns::String),
-    cmd(0x1639, "TernaryUDF", "", "The ternary operator as a function, calling one of 2 UDFs.", TERNARY_UDF, ternary_udf, Returns::Ambiguous),
-    cmd(0x166e, "Ternary", "", "The ternary operator as a function, for real this time", TERNARY, ternary, Returns::Ambiguous),
+    cmd(0x1639, "TernaryUDF", "", "\"The ternary operator as a function, calling one of 2 UDFs.\"", TERNARY_UDF, ternary_udf, Returns::Ambiguous),
+    cmd(0x166e, "Ternary", "", "\"The ternary operator as a function, for real this time\"", TERNARY, ternary, Returns::Ambiguous),
     cmd(0x167d, "SetStringVariable", "", "sets the value of a variable by name", SET_STR_VARIABLE, set_string_variable, RD),
 ];
 

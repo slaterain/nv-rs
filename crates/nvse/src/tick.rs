@@ -15,10 +15,20 @@
 //!   "paused" when the start menu (`0x011DAAC0`) or the console is open.
 //! - **The plugins' messages** ([`crate::plugins`]): `DeferredInit` at the end of the first frame,
 //!   `MainGameLoop` every frame before the rest.
+//! - **The user function files** ([`crate::compile_script`]): after `DeferredInit`, every file of
+//!   `data/nvse/user_defined_functions` is compiled and cached for `CompileScript`.
 //!
-//! Not here yet: the first frame's `bWarnScriptErrors` choice (read from `nvse_config.ini` or
-//! `MyGECKMods.txt`; off, as without either file), the plugins' load errors, the user function
-//! files and the locale fix (with the run-time compiler, I-14).
+//! Not here: the first frame's `bWarnScriptErrors` choice (read from `nvse_config.ini` or
+//! `MyGECKMods.txt`; off, as without either file), the plugins' load errors (nv-rs loads no plugin
+//! DLL), the script unit tests (`ExecuteRuntimeUnitTests`: only with `nvse_config.ini`'s
+//! `EnableRuntimeTests`, off without the file), the compiled-script cache file (`ScriptDataCache`,
+//! a speed cache only: `compile_hooks.rs`), and the "locale fix" (`ApplyLocaleFixHook`: it sets the
+//! C runtime's `__locale_changed` word, `0x0126FDF4`, to 1, which sends the exe's C runtime
+//! character and comparison functions down their locale-aware path. The C runtime's own
+//! `setlocale` sets that word whenever a locale other than "C" is set, so while it is 0 the
+//! locale has only ever been "C", and with "C" the locale-aware path answers as the default one
+//! does, only more slowly; once a locale was set the word is 1 already. Either way nothing a
+//! player or a mod sees changes, so nv-rs leaves the word as it is).
 
 use crate::expr::{Eval, Tok};
 use crate::functions::{self, Caller};
@@ -177,6 +187,7 @@ fn first_frame(e: &mut Engine) {
     let thread = engine_core::thread_host::current_id(e);
     state(e).main_thread = thread;
     crate::plugins::dispatch(e, crate::plugins::msg::DEFERRED_INIT, 0, 0);
+    crate::compile_script::cache_all_scripts(e);
 }
 
 /// `IsGamePaused`: the start menu or the console is open.
@@ -584,7 +595,7 @@ pub static COMMANDS: &[Command] = &[
         0x1622,
         "CallAfterSeconds_OLD",
         "CallAfter_OLD",
-        "deprecated",
+        "\"deprecated\"",
         CALL_AFTER_OLD,
         call_after_old,
     ),
@@ -592,7 +603,7 @@ pub static COMMANDS: &[Command] = &[
         0x1623,
         "CallWhile_OLD",
         "",
-        "deprecated",
+        "\"deprecated\"",
         CALL_WHILE_OLD,
         call_while_old,
     ),
@@ -600,7 +611,7 @@ pub static COMMANDS: &[Command] = &[
         0x1624,
         "CallForSeconds_OLD",
         "CallFor_OLD",
-        "deprecated",
+        "\"deprecated\"",
         CALL_AFTER_OLD,
         call_for_old,
     ),
@@ -608,7 +619,7 @@ pub static COMMANDS: &[Command] = &[
         0x1637,
         "CallWhen_OLD",
         "",
-        "deprecated",
+        "\"deprecated\"",
         CALL_WHILE_OLD,
         call_when_old,
     ),
@@ -616,7 +627,7 @@ pub static COMMANDS: &[Command] = &[
         0x1641,
         "CallAfterSeconds",
         "CallAfter",
-        "calls UDF after argument number of seconds",
+        "\"calls UDF after argument number of seconds\"",
         CALL_AFTER,
         call_after,
     ),
@@ -624,7 +635,7 @@ pub static COMMANDS: &[Command] = &[
         0x1642,
         "CallForSeconds",
         "CallFor",
-        "calls UDF each frame for argument number of seconds",
+        "\"calls UDF each frame for argument number of seconds\"",
         CALL_AFTER,
         call_for,
     ),
@@ -632,7 +643,7 @@ pub static COMMANDS: &[Command] = &[
         0x1643,
         "CallWhile",
         "",
-        "calls UDF each frame while condition is met",
+        "\"calls UDF each frame while condition is met\"",
         CALL_WHILE,
         call_while,
     ),
@@ -640,7 +651,7 @@ pub static COMMANDS: &[Command] = &[
         0x1644,
         "CallWhen",
         "",
-        "calls UDF once when a condition is met which is polled each frame",
+        "\"calls UDF once when a condition is met which is polled each frame\"",
         CALL_WHILE,
         call_when,
     ),
@@ -648,7 +659,7 @@ pub static COMMANDS: &[Command] = &[
         0x164d,
         "CallWhilePerSeconds",
         "",
-        "calls UDF every couple of seconds, until the condition UDF returns false.",
+        "\"calls UDF every couple of seconds, until the condition UDF returns false.\"",
         DELAYED_CALL_WHILE,
         call_while_per_seconds,
     ),
@@ -656,7 +667,7 @@ pub static COMMANDS: &[Command] = &[
         0x164e,
         "CallAfterFrames",
         "",
-        "calls UDF after argument number of frame",
+        "\"calls UDF after argument number of frame\"",
         CALL_AFTER,
         call_after_frames,
     ),
