@@ -19,9 +19,14 @@ const NODES: u32 = FORMS + 0x4000;
 const SIZE: u32 = 0x50;
 const CONSOLE: u32 = 0x0200_f000;
 
+/// A console line: the format's text, the first six words of its arguments, and for a format
+/// that begins with `%s` the text of its first argument as it was at the print (the port passes
+/// it in a stack frame).
+type Line = (Vec<u8>, Vec<u32>, Vec<u8>);
+
 thread_local! {
-    /// The console lines: the format's text and the first six words of its arguments.
-    static LINES: std::cell::RefCell<Vec<(Vec<u8>, Vec<u32>)>> =
+    /// The console lines.
+    static LINES: std::cell::RefCell<Vec<Line>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -82,11 +87,14 @@ fn setup() -> Engine {
         ..Ret::default()
     });
     e.register(0x0071_d0a0, |e, a| {
-        let words = (0..6).map(|i| e.mem.u32(a[2] + 4 * i)).collect();
-        LINES.with(|l| {
-            l.borrow_mut()
-                .push((nvse::table::guest_text(e, a[1]), words))
-        });
+        let words: Vec<u32> = (0..6).map(|i| e.mem.u32(a[2] + 4 * i)).collect();
+        let format = nvse::table::guest_text(e, a[1]);
+        let first = if format.starts_with(b"%s") {
+            nvse::table::guest_text(e, words[0])
+        } else {
+            Vec::new()
+        };
+        LINES.with(|l| l.borrow_mut().push((format, words, first)));
         Ret::default()
     });
     CALLS.with(|c| c.borrow_mut().clear());
@@ -328,24 +336,20 @@ fn the_dump() {
     console(&mut e, true);
     call(&mut e, 0x222a, &[r(1)]);
     let lines = LINES.with(|l| l.borrow().clone());
-    let text = |w: u32| String::from_utf8(nvse::table::guest_text(&e, w)).unwrap();
+    let text = |t: &[u8]| String::from_utf8(t.to_vec()).unwrap();
     assert_eq!(lines.len(), 5);
     assert_eq!(lines[0].0, b"Dumping LeveledList [%08X]");
     assert_eq!(lines[0].1[0], 0x0c01);
     let row = b"%s [%08X] Level: %d Count: %d Health: %.2f".to_vec();
     let h = |v: f64| nvse::commands::double_words(v);
     assert_eq!(lines[1].0, row);
-    assert_eq!(text(lines[1].1[0]), "Wrench");
+    assert_eq!(text(&lines[1].2), "Wrench");
     assert_eq!(lines[1].1[1..], [0x0999, 1, 2, h(0.5)[0], h(0.5)[1]]);
-    assert_eq!(text(lines[2].1[0]), "", "no name");
+    assert_eq!(text(&lines[2].2), "", "no name");
     assert_eq!(lines[2].1[1..], [0x0a33, 5, 3, 0, 0], "no extra: health 0");
-    assert_eq!(text(lines[3].1[0]), "(LeveledList)");
+    assert_eq!(text(&lines[3].2), "(LeveledList)");
     assert_eq!(lines[3].1[1], 0x0c02);
-    assert_eq!(
-        text(lines[4].1[0]),
-        "   ",
-        "three spaces in, the name empty"
-    );
+    assert_eq!(text(&lines[4].2), "   ", "three spaces in, the name empty");
     assert_eq!(lines[4].1[1..3], [0x0e44, 2]);
     console(&mut e, false);
 }
@@ -456,13 +460,44 @@ fn the_dump_of_a_loop() {
     console(&mut e, true);
     call(&mut e, 0x222a, &[r(1)]);
     let lines = LINES.with(|l| l.borrow().clone());
-    let text = |w: u32| String::from_utf8(nvse::table::guest_text(&e, w)).unwrap();
+    let text = |t: &[u8]| String::from_utf8(t.to_vec()).unwrap();
     let ids: Vec<u32> = lines[1..].iter().map(|l| l.1[1]).collect();
     assert_eq!(ids, vec![0x0999, 0x0a33, 0x0c02, 0x0e44, 0x0c01]);
     assert_eq!(
-        text(lines[5].1[0]),
+        text(&lines[5].2),
         "   (LeveledList)",
         "LVLI's line, not gone into"
     );
+    console(&mut e, false);
+}
+
+/// The dump's lines hold the forms' names, which a script decides: they are passed in a stack
+/// frame, never in xNVSE's built-ins data. With that data full the dump still prints every line
+/// (its two fixed formats were stored by the first dump) and nothing stops.
+#[test]
+fn the_dump_with_the_built_ins_data_full() {
+    let mut e = setup();
+    e.mem.set_u32(LVLC + 0x34, entry(3));
+    e.mem.set_u32(LVLC + 0x38, 0);
+    for f in [MISC, AMMO, WEAP] {
+        e.mem.set_u32(f, FORMS + 0x7800);
+    }
+    let name = super::super::full_name(&e, MISC);
+    e.mem.write(FORMS + 0x7000, b"Wrench\0");
+    e.mem.set_u32(name + 4, FORMS + 0x7000);
+    e.mem.set_u16(name + 8, 6);
+    console(&mut e, true);
+    call(&mut e, 0x222a, &[r(1)]);
+    fill_builtins(&mut e);
+    LINES.with(|l| l.borrow_mut().clear());
+    e.mem.write(FORMS + 0x7000, b"Pipe Wrench\0");
+    e.mem.set_u16(name + 8, 11);
+    call(&mut e, 0x222a, &[r(1)]);
+    let lines = LINES.with(|l| l.borrow().clone());
+    assert_eq!(lines.len(), 5);
+    assert_eq!(lines[1].2, b"Pipe Wrench");
+    assert_eq!(lines[3].2, b"(LeveledList)");
+    assert_eq!(lines[4].2, b"   ");
+    assert_eq!(nvse::table::try_alloc(&mut e, 4), None, "nothing taken");
     console(&mut e, false);
 }

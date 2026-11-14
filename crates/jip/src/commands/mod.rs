@@ -35,6 +35,7 @@ pub mod jip_fn_perk;
 pub mod jip_fn_projectile;
 pub mod jip_fn_quest;
 pub mod jip_fn_ref_map;
+pub mod jip_fn_sound;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_utility;
 pub mod jip_fn_water;
@@ -42,10 +43,12 @@ pub mod jip_fn_weapon;
 pub mod jip_fn_weather;
 pub mod jip_fn_worldspace;
 pub mod ln_fn_activator;
+pub mod ln_fn_actor;
 pub mod ln_fn_casino;
 pub mod ln_fn_cell;
 pub mod ln_fn_challenge;
 pub mod ln_fn_game_data;
+pub mod ln_fn_inventory;
 pub mod ln_fn_leveled_list;
 pub mod ln_fn_load_screen;
 pub mod ln_fn_map_marker;
@@ -79,6 +82,7 @@ pub const ALL_CONDITIONS: &[Conditions] = &[
     jip_fn_effect::CONDITIONS,
     ln_fn_math::CONDITIONS,
     ln_fn_misc_ref::CONDITIONS,
+    ln_fn_actor::CONDITIONS,
 ];
 
 /// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
@@ -114,6 +118,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_projectile::COMMANDS,
     jip_fn_quest::COMMANDS,
     jip_fn_ref_map::COMMANDS,
+    jip_fn_sound::COMMANDS,
     jip_fn_texture_set::COMMANDS,
     jip_fn_utility::COMMANDS,
     jip_fn_water::COMMANDS,
@@ -121,10 +126,12 @@ pub const ALL: &[Handlers] = &[
     jip_fn_weather::COMMANDS,
     jip_fn_worldspace::COMMANDS,
     ln_fn_activator::COMMANDS,
+    ln_fn_actor::COMMANDS,
     ln_fn_casino::COMMANDS,
     ln_fn_cell::COMMANDS,
     ln_fn_challenge::COMMANDS,
     ln_fn_game_data::COMMANDS,
+    ln_fn_inventory::COMMANDS,
     ln_fn_leveled_list::COMMANDS,
     ln_fn_load_screen::COMMANDS,
     ln_fn_map_marker::COMMANDS,
@@ -486,6 +493,19 @@ pub fn assign_string(e: &mut Engine, a: &CommandArgs, text: Option<Vec<u8>>) {
     nvse::commands::string::assign_to_string_var(e, a, &text);
 }
 
+/// `text` with its 0 in a frame of the stack while `f` runs, which gets its address. For a text a
+/// script decides (a form's name in a console line): xNVSE's built-ins data
+/// (`nvse::table::guest_str`) is never freed and stops the port when full, so such texts never go
+/// there.
+pub fn with_guest_text<R>(e: &mut Engine, text: &[u8], f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    let size = (text.len() as u32 + 1).next_multiple_of(4);
+    e.with_stack(size, |e, at| {
+        e.mem.write(at.addr(), text);
+        e.mem.set_u8(at.addr() + text.len() as u32, 0);
+        f(e, at.addr())
+    })
+}
+
 /// String argument `i` as JIP's `size`-byte buffer on its stack holds it: its text up to the
 /// first 0. A text of `size` bytes or more runs past the buffer into JIP's frame: the rule
 /// xNVSE's buffers have (`nvse::commands::arg_in_buffer`; the identity's name buffer too): with
@@ -652,6 +672,7 @@ mod tests {
             "jip_fn_projectile",
             "jip_fn_quest",
             "jip_fn_ref_map",
+            "jip_fn_sound",
             "jip_fn_texture_set",
             "jip_fn_utility",
             "jip_fn_water",
@@ -659,10 +680,12 @@ mod tests {
             "jip_fn_weather",
             "jip_fn_worldspace",
             "ln_fn_activator",
+            "ln_fn_actor",
             "ln_fn_casino",
             "ln_fn_cell",
             "ln_fn_challenge",
             "ln_fn_game_data",
+            "ln_fn_inventory",
             "ln_fn_leveled_list",
             "ln_fn_load_screen",
             "ln_fn_map_marker",
@@ -685,11 +708,12 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        for (list, file) in
-            ALL_CONDITIONS
-                .iter()
-                .zip(["jip_fn_effect", "ln_fn_math", "ln_fn_misc_ref"])
-        {
+        for (list, file) in ALL_CONDITIONS.iter().zip([
+            "jip_fn_effect",
+            "ln_fn_math",
+            "ln_fn_misc_ref",
+            "ln_fn_actor",
+        ]) {
             for &(opcode, _, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
                 assert!(slot.file.ends_with(file), "{opcode:04x} {}", slot.name);
@@ -697,7 +721,7 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS.len(), 3);
+        assert_eq!(ALL_CONDITIONS.len(), 4);
         for (list, file) in ALL_CONDITIONS_ONLY.iter().zip(["jip_fn_aux_variable"]) {
             for &(opcode, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
