@@ -18,7 +18,7 @@ use crate::newlang::ast::*;
 use crate::newlang::lexer::{Span, TokenType};
 use crate::newlang::msvc::MsvcMap;
 use crate::newlang::passes::{cat, token_op};
-use crate::newlang::{highlight, script_type, Env, PACKED_NVSE_VERSION, RED};
+use crate::newlang::{error_text, script_type, Env, PACKED_NVSE_VERSION};
 use std::collections::{HashMap, HashSet};
 
 type R = Result<(), Fail>;
@@ -179,7 +179,7 @@ impl<'a> TypeChecker<'a> {
 
     fn fail(&mut self, span: Span, msg: &[u8]) -> R {
         self.had_error = true;
-        let text = highlight(&self.ast.lines, msg, span, RED)?;
+        let text = error_text(&self.ast.lines, msg, span)?;
         self.env.error(&text);
         Err(Fail::Caught)
     }

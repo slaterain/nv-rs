@@ -12,6 +12,7 @@
 
 use crate::newlang::ast::*;
 use crate::newlang::lexer::{Token, TokenType};
+use crate::newlang::CYAN;
 
 pub struct MatchTransformer<'a> {
     pub ast: &'a mut Ast,
@@ -149,6 +150,10 @@ impl<'a> MatchTransformer<'a> {
             if let StmtKind::Block(stmts) = &mut self.ast.stmt_mut(id).kind {
                 stmts[i + 1] = first;
             }
+            // xNVSE's note of the change goes to its debug output only, but its text is made in
+            // every build, and making it can throw (a place past its line).
+            let span = self.ast.stmt(line).span;
+            crate::newlang::highlight(&self.ast.lines, b"Transformed match statement", span, CYAN)?;
             i += 1;
         }
         Ok(())

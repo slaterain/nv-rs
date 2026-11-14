@@ -204,9 +204,11 @@ pub(crate) fn convert(from: Code, to: Code) -> bool {
     can_convert(TYPES[usize::from(from)], TYPES[usize::from(to)])
 }
 
-/// `TokenTypeToString`.
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptTokens.cpp: TokenTypeToString.
+/// `TokenTypeToString`: a lambda is "Anonymous Function"; the lambda's script data and the left and
+/// right token types, and any value past the empty type, have no case there ("Unknown").
 pub(crate) fn type_name(t: Code) -> &'static str {
-    const NAMES: [&str; 28] = [
+    const NAMES: [&str; 30] = [
         "Number",
         "Boolean",
         "String",
@@ -230,13 +232,15 @@ pub(crate) fn type_name(t: Code) -> &'static str {
         "Int",
         "Pair",
         "Assignable String",
-        "Lambda",
-        "LambdaScriptData",
-        "LeftToken",
-        "RightToken",
+        "Anonymous Function",
+        "Unknown",
+        "Unknown",
+        "Unknown",
         "OptionalEmpty",
+        "Invalid",
+        "Empty",
     ];
-    NAMES.get(usize::from(t)).copied().unwrap_or("Invalid")
+    NAMES.get(usize::from(t)).copied().unwrap_or("Unknown")
 }
 
 // ---- operators (`s_operators`, `kOpRule_*`) ----

@@ -700,3 +700,182 @@ fn places() {
         (2, 10, 4, 1)
     );
 }
+
+/// Every assignment operator, and every comparison, equality and shift operator at its level.
+#[test]
+fn every_operator_at_its_level() {
+    for op in ["=", "+=", "-=", "*=", "/=", "%=", "^=", "|=", "&="] {
+        assert_eq!(one(&format!("a {op} b;")), format!("({op} a b);"), "{op}");
+    }
+    assert_eq!(
+        one("x = a != b <= c >> d;"),
+        "(= x (!= a (<= b (>> c d))));"
+    );
+    assert_eq!(
+        one("x = a == b >= c << d;"),
+        "(= x (== a (>= b (<< c d))));"
+    );
+    assert_eq!(one("x = a < b > c;"), "(= x (> (< a b) c));");
+    assert_eq!(one("x = a >= b <= c;"), "(= x (<= (>= a b) c));");
+    assert_eq!(one("x = a != b == c;"), "(= x (== (!= a b) c));");
+    assert_eq!(one("x = a >> b << c;"), "(= x (<< (>> a b) c));");
+}
+
+/// The rest of the parser's messages, each at the token xNVSE reports.
+#[test]
+fn more_parser_messages() {
+    let cases: [(&str, &str, usize, &str); 22] = [
+        (
+            "name t; #version \"nvse\", 1)",
+            "\"nvse\"",
+            0,
+            "Expected '('.",
+        ),
+        ("name t; #version(\"nvse\" 1)", "1", 0, "Expected ','."),
+        (
+            "name t; #version(\"nvse\", x)",
+            "x",
+            0,
+            "Expected major version",
+        ),
+        (
+            "name t; #version(\"nvse\", 6, x)",
+            "x",
+            0,
+            "Expected minor version",
+        ),
+        (
+            "name t; #version(\"nvse\", 6, 4, x)",
+            "x",
+            0,
+            "Expected beta version",
+        ),
+        (
+            "name t; #version(\"jip ln nvse\", x)",
+            "x",
+            0,
+            "Expected plugin version",
+        ),
+        ("name t; #version(\"nvse\", 6]", "]", 0, "Expected ')'."),
+        (
+            "name t; GameMode { ShowMessage M); }",
+            "M)",
+            0,
+            "Expected '('",
+        ),
+        (
+            "name t; GameMode { ShowMessage(M, \"x\"); }",
+            "\"x\"",
+            0,
+            "Expected identifier.",
+        ),
+        (
+            "name t; GameMode { ShowMessage(M; }",
+            ";",
+            1,
+            "Expected ')'",
+        ),
+        (
+            "name t; GameMode { ShowMessage(M) x }",
+            "x",
+            0,
+            "Expected ';'",
+        ),
+        (
+            "name t; GameMode { for ([x] in a) {} }",
+            "x",
+            0,
+            "Expected type.",
+        ),
+        (
+            "name t; GameMode { for ([int k = 1] in a) {} }",
+            "=",
+            0,
+            "Variable definition is not allowed here.",
+        ),
+        (
+            "name t; GameMode { for ([int k] b) {} }",
+            "b",
+            0,
+            "Expected 'in'.",
+        ),
+        (
+            "name t; GameMode { for ([int k, int v, int w] in a) {} }",
+            ",",
+            1,
+            "Expected ']'.",
+        ),
+        (
+            "name t; GameMode { for ([int k] in a {} }",
+            "{",
+            1,
+            "Expected ')'.",
+        ),
+        (
+            "name t; GameMode { for (int i = 0 i < 3; i++) {} }",
+            "i",
+            2,
+            "Expected ';' after loop initializer.",
+        ),
+        (
+            "name t; GameMode { for (int x in a {} }",
+            "{",
+            1,
+            "Expected ')'.",
+        ),
+        (
+            "name t; GameMode { for (int i = 0; i < 3; i++ {} }",
+            "{",
+            1,
+            "Expected ')'.",
+        ),
+        (
+            "name t; GameMode { x = \"a${y z}\"; }",
+            "z",
+            0,
+            "Expected '}'",
+        ),
+        ("name t; fn (x) {}", "x", 0, "Expected type."),
+        ("name t; GameMode { a = (b; }", ";", 1, "Expected ')'"),
+    ];
+    for (t, needle, nth, msg) in cases {
+        assert_eq!(errors(t).first(), Some(&at(t, needle, nth, msg)), "{t}");
+    }
+}
+
+/// Recovery skips the token the error was at first: a `return` there is skipped with its
+/// statement, an `if` after it starts the next statement.
+#[test]
+fn recovery_after_a_statement() {
+    let t = "name t; GameMode { 1 = 2 return; x; }";
+    let (p, e) = run(t);
+    assert_eq!(e, [at(t, "=", 0, "Invalid assignment target.")]);
+    assert_eq!(dump(p.ast.as_ref().unwrap()), "name t\nGameMode {x;}\n");
+    let t = "name t; GameMode { 1 = 2 3 if (a) {} }";
+    let (p, e) = run(t);
+    assert_eq!(e, [at(t, "=", 0, "Invalid assignment target.")]);
+    assert_eq!(
+        dump(p.ast.as_ref().unwrap()),
+        "name t\nGameMode {if(a) {}}\n"
+    );
+}
+
+/// A failed argument skips to the call's own `)`, past nested parentheses.
+#[test]
+fn a_failed_argument_skips_nested_parentheses() {
+    let t = "name t; GameMode { f(1 2 (3)); g; }";
+    let (p, e) = run(t);
+    assert_eq!(e, [at(t, "2", 0, "Expected ',' or ')'.")]);
+    assert_eq!(
+        dump(p.ast.as_ref().unwrap()),
+        "name t\nGameMode {f(1); g;}\n"
+    );
+}
+
+/// A version's build part is twelve bits (`MAKE_NEW_VEGAS_VERSION`).
+#[test]
+fn a_version_with_a_large_build() {
+    let (p, e) = run("name t; #version(\"nvse\", 6, 4, 300)");
+    assert!(e.is_empty());
+    assert_eq!(p.plugin_versions.get(b"nvse"), Some(&0x0604_12c0));
+}

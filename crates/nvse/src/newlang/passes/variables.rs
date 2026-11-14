@@ -11,7 +11,7 @@
 //! keeps its place in the order and takes the type of a declaration of its name.
 
 use crate::newlang::ast::*;
-use crate::newlang::{highlight, script_type_of, variable_token_type, Env, RED};
+use crate::newlang::{error_text, script_type_of, variable_token_type, Env};
 use std::collections::BTreeMap;
 
 struct Scope {
@@ -138,10 +138,11 @@ impl<'a> VariableResolution<'a> {
                 if name.starts_with(b"__temp") {
                     continue;
                 }
-                // A second variable of the same name: xNVSE marks the null it gets back.
+                // Never refused: a second variable of the same name finds the first, still marked as
+                // the script's own, which takes the later type.
                 let added = self
                     .add_variable(&name, ty)
-                    .ok_or(Fail::Crash("VariableResolution: a script variable twice"))?;
+                    .expect("a script variable is never refused");
                 self.ast.var_mut(added).pre_existing = true;
             }
         }
@@ -214,11 +215,10 @@ impl Visitor for VariableResolution<'_> {
                         }
                         None => {
                             let span = self.ast.expr(d.name).span;
-                            let msg = highlight(
+                            let msg = error_text(
                                 &self.ast.lines,
                                 b"Variable with this name already exists in this scope",
                                 span,
-                                RED,
                             )?;
                             self.env.error(&msg);
                             self.had_error = true;

@@ -831,3 +831,239 @@ fn token_operators() {
     assert_eq!(token_op(T::MakePair), op::MAKE_PAIR);
     assert_eq!(token_op(T::Dot), op::DOT);
 }
+
+/// `TokenTypeToString` for every type, from `ScriptTokens.cpp`.
+#[test]
+fn token_type_names() {
+    let want = [
+        "Number",
+        "Boolean",
+        "String",
+        "Form",
+        "Ref",
+        "Global",
+        "Array",
+        "Array Element",
+        "Slice",
+        "Command",
+        "Variable",
+        "Numeric Variable",
+        "Reference Variable",
+        "String Variable",
+        "Array Variable",
+        "Ambiguous",
+        "Operator",
+        "ForEach Context",
+        "Byte",
+        "Short",
+        "Int",
+        "Pair",
+        "Assignable String",
+        "Anonymous Function",
+        "Unknown",
+        "Unknown",
+        "Unknown",
+        "OptionalEmpty",
+        "Invalid",
+        "Empty",
+        "Unknown",
+    ];
+    for (t, name) in want.iter().enumerate() {
+        assert_eq!(crate::compiler::type_name(t as u8), *name, "{t}");
+    }
+    assert_eq!(crate::compiler::type_name(255), "Unknown");
+    let line = "  int x = fn () {};";
+    assert_eq!(
+        block_errors(line),
+        [
+            hl(
+                "Cannot convert from Anonymous Function to Numeric Variable",
+                3,
+                line,
+                3,
+                18
+            ),
+            String::new()
+        ]
+    );
+}
+
+/// `tokenOpToNVSEOpType` (`Utils.cpp`), all 38 rows, with `kOpType_*`'s values from
+/// `ScriptTokens.h`; `operator[]` gives 0 for a token it lacks.
+#[test]
+fn every_token_operator() {
+    use crate::newlang::lexer::TokenType as T;
+    let table: [(T, u8); 38] = [
+        (T::EqEq, 4),
+        (T::LogicOr, 1),
+        (T::LogicAnd, 2),
+        (T::Greater, 6),
+        (T::GreaterEq, 8),
+        (T::Less, 7),
+        (T::LessEq, 9),
+        (T::Bang, 21),
+        (T::BangEq, 5),
+        (T::Plus, 14),
+        (T::Minus, 15),
+        (T::Star, 16),
+        (T::Slash, 17),
+        (T::Mod, 18),
+        (T::Pow, 19),
+        (T::Eq, 0),
+        (T::PlusEq, 28),
+        (T::MinusEq, 32),
+        (T::StarEq, 29),
+        (T::SlashEq, 30),
+        (T::ModEq, 43),
+        (T::PowEq, 31),
+        (T::MakePair, 36),
+        (T::Slice, 3),
+        (T::BitwiseAnd, 11),
+        (T::BitwiseOr, 10),
+        (T::BitwiseAndEquals, 42),
+        (T::BitwiseOrEquals, 41),
+        (T::LeftShift, 12),
+        (T::RightShift, 13),
+        (T::Negate, 20),
+        (T::Dollar, 27),
+        (T::Pound, 33),
+        (T::Box, 37),
+        (T::Unbox, 34),
+        (T::LeftBracket, 24),
+        (T::Dot, 40),
+        (T::BitwiseNot, 44),
+    ];
+    for (t, o) in table {
+        assert_eq!(token_op(t), o, "{t:?}");
+    }
+    assert_eq!(token_op(T::PlusPlus), 0);
+    assert_eq!(token_op(T::MinusMinus), 0);
+}
+
+/// A message without a place is a `vsprintf` format in xNVSE: an operator's `%` there is a
+/// conversion it refuses, which stops the game.
+#[test]
+fn a_percent_in_a_placeless_message_crashes() {
+    assert_eq!(
+        crash("name t;\nGameMode {\n  string s;\n  s %= 2;\n}"),
+        "vsprintf_s: invalid format in a message without a place"
+    );
+    assert_eq!(
+        crash("name t;\nGameMode {\n  int x = -1 % \"a\";\n}"),
+        "vsprintf_s: invalid format in a message without a place"
+    );
+}
+
+/// The type checker's other branches.
+#[test]
+fn more_type_checker_branches() {
+    // A calling reference given; a magic effect script needs none.
+    let mut env = TestEnv {
+        script: Some((script_type::QUEST, Vec::new())),
+        ..TestEnv::default()
+    };
+    assert_eq!(
+        check_with(
+            &mut env,
+            "name t;\nGameMode {\n  player.GetDisabled();\n}",
+            true
+        )
+        .1,
+        Vec::<String>::new()
+    );
+    let mut env = TestEnv {
+        script: Some((script_type::MAGIC, Vec::new())),
+        ..TestEnv::default()
+    };
+    assert_eq!(
+        check_with(&mut env, "name t;\nGameMode {\n  GetDisabled();\n}", true).1,
+        Vec::<String>::new()
+    );
+    // The ternary's condition (the ternary has no place).
+    assert_eq!(
+        block_errors("  int x = (1::2) ? 1 : 2;"),
+        [
+            bug("Invalid expression type 'Pair' for if statement."),
+            String::new()
+        ]
+    );
+    // A grouping catches its own error: the outer operator then sees an invalid type.
+    let line = "  int x = (1 - \"a\") + 1;";
+    assert_eq!(
+        block_errors(line),
+        [
+            hl(
+                "Invalid types 'Number' and 'String' for operator - (-).",
+                3,
+                line,
+                12,
+                18
+            ),
+            String::new(),
+            hl(
+                "Invalid types 'Invalid' and 'Number' for operator + (+).",
+                3,
+                line,
+                11,
+                23
+            ),
+            String::new()
+        ]
+    );
+    // An argument that failed to check is passed over: no parameter error after it.
+    let line = "  Print(nope);";
+    assert_eq!(
+        block_errors(line),
+        [
+            hl("Unable to resolve identifier 'nope'.", 3, line, 9, 12),
+            String::new()
+        ]
+    );
+    // A duplicate block over several lines: its middle lines red whole, the text after its
+    // closing brace not.
+    let (_, e) = check("name t;\nGameMode {}\nGameMode {\n  int a;\n} int b;");
+    let want = format!(
+        "\r    | Duplicate block declaration.\n  2 | GameMode {{{R}}}{X}\n  3 | {R}GameMode {{{X}\n  4 | {R}  int a;{X}\n  5 | {R}}}{X} int b;\n"
+    );
+    assert_eq!(e, [want, String::new()]);
+    // The for loop's condition.
+    let line = "  for (int i = 0; \"a\"::1; i++) {}";
+    assert_eq!(
+        block_errors(line),
+        [
+            hl(
+                "Invalid expression type ('Invalid') for loop condition.",
+                3,
+                line,
+                3,
+                33
+            ),
+            String::new()
+        ]
+    );
+}
+
+/// A script variable listed twice: one variable, of the later type.
+#[test]
+fn a_script_variable_listed_twice() {
+    let mut env = TestEnv {
+        script: Some((0, vec![(b"v".to_vec(), 0), (b"v".to_vec(), 1)])),
+        ..TestEnv::default()
+    };
+    check_with(&mut env, "name t;\nGameMode {}", true);
+    assert_eq!(env.written_vars.unwrap(), [(b"v".to_vec(), 1, 1)]);
+}
+
+/// The match and call passes make xNVSE's debug note's text in every build: a place past its
+/// line (after a string broke over a line, which the lexer does not count) throws there.
+#[test]
+fn the_passes_debug_notes_can_throw() {
+    assert_eq!(
+        crash("name t;\nGameMode {\n  int i;\"ab\n  MyUDF(1);\n}"),
+        "string_view::substr: out_of_range"
+    );
+    assert_eq!(
+        crash("name t;\nGameMode {\n  int i;\"ab\n  match (i) { 1 -> {} }\n}"),
+        "string_view::substr: out_of_range"
+    );
+}

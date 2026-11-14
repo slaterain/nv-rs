@@ -28,8 +28,10 @@
 //! Deliberate differences, each where xNVSE stops the game (an exception nothing catches, a read
 //! through a null pointer, a format past its buffer): the port fails the compile instead, with no
 //! further message ([`Fail::Crash`] names the place). Messages are held to xNVSE's 0x800-byte
-//! buffer (its `vsprintf_s` would stop the game past it). A `%` in a message printed without its
-//! source lines is printed as it is (xNVSE hands that text to `vsprintf` as a format).
+//! buffer (its `vsprintf_s` would stop the game past it). A message printed without its source
+//! lines goes to `vsprintf` as its format: a `%` in it (an operator's text) is a conversion
+//! `vsprintf_s` refuses, which stops the game; the port fails the compile there too
+//! ([`error_text`]).
 
 pub mod ast;
 pub mod lexer;
@@ -178,6 +180,20 @@ pub fn highlight(
         i += 1;
     }
     Ok(out)
+}
+
+/// The text an error prints ([`highlight`] in red), as `ErrPrint(text)` hands it to `vsprintf` as the
+/// format: with source lines every `%` was doubled and comes out as it was; without them (a span
+/// with no place) a `%` of the message (`%`, `%=` of an operator) starts a conversion `vsprintf_s`
+/// refuses: a crash in xNVSE.
+pub fn error_text(lines: &[Vec<u8>], msg: &[u8], span: lexer::Span) -> Result<Vec<u8>, Fail> {
+    let placeless = span.start.column == 0 || span.end.column == 0;
+    if placeless && msg.contains(&b'%') {
+        return Err(Fail::Crash(
+            "vsprintf_s: invalid format in a message without a place",
+        ));
+    }
+    highlight(lines, msg, span, RED)
 }
 
 /// xNVSE's `PACKED_NVSE_VERSION` (6.4.9: `MAKE_NEW_VEGAS_VERSION(6, 4, 9)`).

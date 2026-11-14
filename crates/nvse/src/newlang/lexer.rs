@@ -773,17 +773,13 @@ fn quoted(text: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `std::stoll(text, nullptr, base)`: the longest number at the start (an `0x` before
-/// hexadecimal digits allowed); no digits (`std::invalid_argument`) or a value past 64 bits
+/// `std::stoll(text, nullptr, base)`: the longest number at the start; for base 16 a leading `0x` is
+/// passed over whatever follows (the UCRT's `parse_integer` checks for no digit after it, so a bare
+/// `0x` reads no digit); no digits (`std::invalid_argument`) or a value past 64 bits
 /// (`std::out_of_range`) is an exception nothing catches.
 fn stoll(text: &[u8], base: u32) -> Result<i64, LexFail> {
     let mut digits = text;
-    if base == 16
-        && digits.len() > 2
-        && digits[0] == b'0'
-        && (digits[1] | 0x20) == b'x'
-        && (digits[2] as char).is_ascii_hexdigit()
-    {
+    if base == 16 && digits.len() >= 2 && digits[0] == b'0' && (digits[1] | 0x20) == b'x' {
         digits = &digits[2..];
     }
     let n = digits
@@ -799,14 +795,16 @@ fn stoll(text: &[u8], base: u32) -> Result<i64, LexFail> {
 }
 
 /// `std::stod(text)`: the longest decimal number at the start (digits, a point and digits, an
-/// exponent); a value past a double's range (`std::out_of_range`) is an exception nothing
-/// catches.
+/// exponent); a value past a double's range, or one that rounds to zero from a mantissa with a
+/// non-zero digit (the UCRT's underflow: `ERANGE`, `std::out_of_range`), is an exception nothing
+/// catches. A value that rounds to a denormal is kept.
 fn stod(text: &[u8]) -> Result<f64, LexFail> {
     let mut i = text.iter().take_while(|c| c.is_ascii_digit()).count();
     if text.get(i) == Some(&b'.') {
         i += 1;
         i += text[i..].iter().take_while(|c| c.is_ascii_digit()).count();
     }
+    let mantissa_end = i;
     if matches!(text.get(i), Some(b'e' | b'E')) {
         let mut j = i + 1;
         if matches!(text.get(j), Some(b'+' | b'-')) {
@@ -822,7 +820,9 @@ fn stod(text: &[u8]) -> Result<f64, LexFail> {
     }
     let s = std::str::from_utf8(&text[..i]).unwrap_or("0");
     let v: f64 = s.parse().unwrap_or(0.0);
-    if v.is_infinite() {
+    let mantissa = &text[..mantissa_end];
+    let underflow = v == 0.0 && mantissa.iter().any(|c| (b'1'..=b'9').contains(c));
+    if v.is_infinite() || underflow {
         return Err(LexFail::Crash(Fail::Crash("std::stod: out_of_range")));
     }
     Ok(v)

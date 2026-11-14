@@ -24,9 +24,9 @@ impl<'a> CallTransformer<'a> {
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), CallTransformer.cpp:
     // CallTransformer::TransformCall.
-    fn transform_call(&mut self, call: ExprId) {
+    fn transform_call(&mut self, call: ExprId) -> Result<(), Fail> {
         let ExprKind::Call { ident, .. } = self.ast.expr(call).kind else {
-            return;
+            return Ok(());
         };
         let span = self.ast.expr(ident).span;
         let new_ident = self.ast.add_expr(
@@ -41,6 +41,15 @@ impl<'a> CallTransformer<'a> {
             args.insert(0, *ident);
             *ident = new_ident;
         }
+        // xNVSE's debug note: its text is made in every build, and making it can throw.
+        let span = self.ast.expr(call).span;
+        crate::newlang::highlight(
+            &self.ast.lines,
+            b"Transformed call expression",
+            span,
+            crate::newlang::CYAN,
+        )?;
+        Ok(())
     }
 }
 
@@ -58,12 +67,12 @@ impl Visitor for CallTransformer<'_> {
         if left.is_none() {
             let var = self.ast.ident_var(ident);
             if var.is_some_and(|v| self.ast.var(v).ty == vt::REF) {
-                self.transform_call(id);
+                self.transform_call(id)?;
             } else {
                 let name = self.ast.ident_name(ident).to_vec();
                 let form = self.env.form_by_name(&name);
                 if form != 0 && self.env.script_form_type(form).is_some() {
-                    self.transform_call(id);
+                    self.transform_call(id)?;
                 }
             }
         }

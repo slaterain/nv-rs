@@ -352,3 +352,29 @@ fn token_texts() {
     assert_eq!(TokenType::Underscore.text(), "_");
     assert_eq!(TokenType::Box.text(), "Box");
 }
+
+/// A bare `0x`: the UCRT passes over the prefix whatever follows, then reads no digit, and
+/// `std::stoll` throws.
+#[test]
+fn a_bare_hex_prefix_throws() {
+    assert_eq!(lex("0x;").1, Some("std::stoll: invalid_argument"));
+    assert_eq!(lex("0x ").1, Some("std::stoll: invalid_argument"));
+    assert_eq!(lex("0x0 ").0[0].value, Value::Number(0.0));
+}
+
+/// A decimal that rounds to zero from non-zero digits is the UCRT's underflow (`std::stod`
+/// throws); one that rounds to a denormal is kept; a literal zero is zero.
+#[test]
+fn decimal_underflow() {
+    let tiny = format!("0.{}1 ", "0".repeat(400));
+    assert_eq!(lex(&tiny).1, Some("std::stod: out_of_range"));
+    let denormal = format!("0.{}5 ", "0".repeat(320));
+    let (toks, err) = lex(&denormal);
+    assert_eq!(err, None);
+    let Value::Number(v) = toks[0].value else {
+        panic!()
+    };
+    assert!(v > 0.0 && v < f64::MIN_POSITIVE);
+    let zero = format!("0.{} ", "0".repeat(400));
+    assert_eq!(lex(&zero).0[0].value, Value::Number(0.0));
+}
