@@ -336,6 +336,11 @@ fn ui_string_reads_a_trait_through_the_map() {
         "a tile, not a trait"
     );
     assert_eq!(get(&mut e, b"InventoryMenu"), b"", "a menu: no value");
+    // A path ending at a trait the tile has is no tile.
+    assert_eq!(
+        call(&mut e, 0x2608, &[s(b"InventoryMenu/Box/Item/string")]).1,
+        0.0
+    );
 }
 
 #[test]
@@ -572,6 +577,8 @@ fn cursor_and_top_menu() {
         e.mem.set_u8(0x011f_308f + id, 1);
         assert_eq!(top(&mut e), f64::from(want), "{id:x}");
     }
+    e.mem.set_u32(IM + 0xc, 0x0201);
+    assert_eq!(top(&mut e), 0.0, "the mode's low byte below 2");
     e.mem.set_u32(IM + 0xc, 1);
     assert_eq!(top(&mut e), 0.0);
 }

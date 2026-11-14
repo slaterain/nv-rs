@@ -5,7 +5,7 @@
 //! messages (disabled by script, their flags and display time), and the open menus' data (item
 //! filters, the barter caps and price multipliers, the recipe menu's selection, category and
 //! category count, the VATS targets, the font files, the level-up menu with skill points, the
-//! barter offers and a menu's item list as inventory references, a terminal's own model). 31 of
+//! barter offers and a menu's item list as inventory references, a terminal's own model). 32 of
 //! the file's 64 commands; its four menu event commands are the core track's (`ui_hooks`).
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
