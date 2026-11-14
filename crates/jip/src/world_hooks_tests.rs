@@ -410,10 +410,8 @@ fn many_names_keep_the_memory_bounded() {
 #[test]
 fn a_longer_text_moves_to_a_bigger_block() {
     let mut e = world();
-    assert!(
-        nvse::commands::array::fix_on(&e, nvse::commands::array::LIST_GUARD),
-        "the fixes preset"
-    );
+    // The fixes preset's list guard row (the host turns it on): a longer text is read whole.
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
     run(&mut e, SET_REF_NAME, REF, &[s(b"short")]);
     let small = site(&mut e, 0x0055_d520, &[REF]).expect("named");
     let long = vec![b'y'; 0x90];
@@ -875,19 +873,9 @@ fn message(e: &mut Engine, kind: u32, data: u32) {
 fn recorded_form_flags_come_back_after_a_load() {
     use nvse::plugins::msg;
     let mut e = world();
-    run(
-        &mut e,
-        SET_INTERACTION_DISABLED,
-        0,
-        &[int_arg(1), form_arg(R_REF)],
-    );
-    run(
-        &mut e,
-        SET_INTERACTION_DISABLED,
-        0,
-        &[int_arg(1), form_arg(R_ARMOR)],
-    );
-    let (ref_id, armor_id) = (0x0100_0001, 0x0100_000b);
+    run(&mut e, SET_INTERACTION_DISABLED, REF, &[int_arg(1)]);
+    run(&mut e, SET_INTERACTION_DISABLED, ITEM, &[int_arg(1)]);
+    let (ref_id, item_id) = (0x0100_0001, 0x0100_0003);
     assert_eq!(
         e.ext::<Jip>().world_hooks.form_flags.get(&ref_id),
         Some(&NO_PC_ACTIVATION)
@@ -899,19 +887,14 @@ fn recorded_form_flags_come_back_after_a_load() {
     assert_eq!(e.ext::<Jip>().world_hooks.form_flags.len(), 2);
     message(&mut e, msg::POST_LOAD_GAME, 1);
     assert_eq!(e.mem.u8(REF + 6), NO_PC_ACTIVATION);
-    // The armour is not in the game's form map: its record goes.
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&armor_id), None);
+    // The item is not in the game's form map: its record goes.
+    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&item_id), None);
     assert_eq!(e.ext::<Jip>().world_hooks.form_flags.len(), 1);
     e.mem.set_u8(REF + 6, 0);
     message(&mut e, msg::NEW_GAME, 0);
     assert_eq!(e.mem.u8(REF + 6), NO_PC_ACTIVATION, "a new game too");
     // A byte of 0 (every flag cleared) leaves the record.
-    run(
-        &mut e,
-        SET_INTERACTION_DISABLED,
-        0,
-        &[int_arg(0), form_arg(R_REF)],
-    );
+    run(&mut e, SET_INTERACTION_DISABLED, REF, &[int_arg(0)]);
     assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&ref_id), Some(&0));
     message(&mut e, msg::POST_LOAD_GAME, 1);
     assert!(e.ext::<Jip>().world_hooks.form_flags.is_empty());
