@@ -647,9 +647,9 @@ fn trigger_events_with_a_controller() {
 }
 
 /// JIP's InteractionDisabled hook has two sites; the activation one (`0x943279` in
-/// `PlayerCharacter::Update`) has no seam yet (step 3.5c). Until it has, no command that adds a
-/// user to the hook (`SetInteractionDisabled` 0x27C9, `SetInteractionDisabledType` 0x27CB) may
-/// be built: half the hook would run.
+/// `PlayerCharacter::Update`) came with step 3.5c. No command that adds a user to the hook
+/// (`SetInteractionDisabled` 0x27C9, `SetInteractionDisabledType` 0x27CB) may be built without it:
+/// half the hook would run.
 #[test]
 fn interaction_disabled_waits_for_its_activation_seam() {
     let e = world();

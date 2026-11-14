@@ -16441,6 +16441,14 @@ mod tests {
             let reference = zero_object(&mut e, 0x0274_0000, &[]);
             e.register_double(0x0070_3350, move |_, _| int(reference));
             e.register(0x00a2_4660, |_, a| int(u32::from(a[1] == 5 && a[2] == 1)));
+            // An empty list from the entry point (the list made empty), so the plain activation.
+            e.register(LIST_CONSTRUCT, |e, a| {
+                e.mem.set_u32(a[0], 0);
+                e.mem.set_u32(a[0] + 4, 0);
+                Ret::default()
+            });
+            // No attack class (`008a7570`: -1), which would block the button.
+            e.register(0x008a_7570, |_, _| int(u32::MAX));
             e.register(0x0057_3170, |_, _| int(0));
             e.on_site(SiteSlot::new(Owner::Jip, 0x0094_3279), activation_handler);
             e.set_hook_users(Hook::InteractionDisabled, users);

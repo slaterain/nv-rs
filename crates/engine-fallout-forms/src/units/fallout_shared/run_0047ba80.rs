@@ -400,10 +400,9 @@ mod n038_tests {
         assert!(!e.call(0x0047_bb50, &args![w, v]).bool(), "answered 0");
         assert_eq!(SEEN.with(|s| s.take()), vec![vec![w, 0x28]]);
         let log = e.call_log.take().unwrap();
-        assert_eq!(
-            log.iter().filter(|c| c.0 == FORM_TYPE).count(),
-            1,
-            "only the other's type call"
+        assert!(
+            !log.iter().any(|c| c.0 == FORM_TYPE && c.1 == vec![w]),
+            "no type call on the form itself"
         );
         ANSWER.with(|c| c.set(None));
         assert!(

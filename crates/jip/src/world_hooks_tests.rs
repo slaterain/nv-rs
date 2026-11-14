@@ -1140,3 +1140,110 @@ fn pre_load_leaves_the_events() {
     crate::world_hooks::pre_load(&mut e);
     assert_eq!(users(&e, Hook::AddNote), 1);
 }
+
+thread_local! {
+    /// The handler words `EvaluateLine`'s stand-in hands `ScriptWait`.
+    static WAIT_WORDS: std::cell::Cell<[u32; 8]> = const { std::cell::Cell::new([0; 8]) };
+    static WAIT_FROM_COMMAND: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `EvaluateLine`'s stand-in under xNVSE's wrap (which records the line): its command handler call
+/// (the seam xNVSE notes it at, unless told not to), then `ScriptWait` through its record.
+fn evaluate_line_stand_in(e: &mut Engine, _: &[u32]) -> Ret {
+    let record = nvse::table::record_of(e, SCRIPT_WAIT);
+    if WAIT_FROM_COMMAND.with(|c| c.get()) {
+        e.site(0x005e_2329, &[SCRIPT_WAIT, record, RESULT]);
+    }
+    let at = crate::test_support::execute_of(e, SCRIPT_WAIT);
+    let words = WAIT_WORDS.with(|c| c.get());
+    e.call(at, &words)
+}
+
+/// ScriptWait from a script's block: the line past the command, the wait (the block's offset,
+/// the line to resume at, the runner's `if` stack), the owner flagged, the hook on, and `Run`'s
+/// length word set to jump to the block's end. Not from the command call, a count of 0, or an
+/// effect script: nothing.
+#[test]
+fn script_wait_command() {
+    let mut e = world();
+    for addr in [0x005e_0d20u32, 0x005e_1160, 0x005e_13a0] {
+        e.register(addr, |_, _| Ret::default());
+    }
+    e.register(0x005e_1550, evaluate_line_stand_in);
+    nvse::context::install(&mut e);
+    // `scn`; Begin (0x10, size 6, type 0, block length 15 at +10); the ScriptWait line at 14
+    // (opcode, length 7, one argument: `n` 3); End (0x11) at 25.
+    let data = AREA + 0xc800;
+    e.mem.set_u32(data, 0x1d);
+    e.mem.set_u16(data + 4, 0x10);
+    e.mem.set_u16(data + 6, 6);
+    e.mem.set_u16(data + 8, 0);
+    e.mem.set_u16(data + 10, 15);
+    e.mem.set_u16(data + 14, SCRIPT_WAIT as u16);
+    e.mem.set_u16(data + 16, 7);
+    e.mem.set_u16(data + 18, 1);
+    e.mem.set_u8(data + 20, b'n');
+    e.mem.set_u32(data + 21, 3);
+    e.mem.set_u32(data + 25, 0x11);
+    e.mem.set_u32(CALLER + 0xc, 0x0100_0100);
+    for i in 0..12 {
+        e.mem.set_u32(RUNNER + 0x20 + 4 * i, 0x50 + i);
+    }
+    let go = |e: &mut Engine, count: i32| {
+        let mut words = line(e, SCRIPT_WAIT, &[int_arg(count)]);
+        words[1] = data;
+        words[2] = REF;
+        e.mem.set_u32(words[7], 18);
+        e.mem.set_u8(data + 20, b'n');
+        e.mem.set_u32(data + 21, count as u32);
+        WAIT_WORDS.with(|c| c.set(words));
+        e.mem.set_u32(LENGTH, 0x77);
+        // EvaluateLine's words: the runner, script, command, reference, length, position, skip,
+        // line, parse only, action list.
+        e.call(
+            0x005e_1550,
+            &[RUNNER, CALLER, SCRIPT_WAIT, REF, LENGTH, 18, 0, 1, 0, 0],
+        );
+        e.mem.u32(words[7])
+    };
+    WAIT_FROM_COMMAND.with(|c| c.set(false));
+    assert_eq!(go(&mut e, 3), 18, "not the command call: nothing");
+    WAIT_FROM_COMMAND.with(|c| c.set(true));
+    assert_eq!(go(&mut e, 0), 18, "a count of 0");
+    e.mem.set_u8(CALLER + 0x29, 1);
+    assert_eq!(go(&mut e, 3), 18, "an effect script");
+    e.mem.set_u8(CALLER + 0x29, 0);
+    assert!(e.ext::<Jip>().world_hooks.script_waits.is_empty());
+    assert_eq!(users(&e, Hook::ScriptWait), 0);
+    assert_eq!(go(&mut e, 3), 25, "past the command");
+    let wait = e.ext::<Jip>().world_hooks.script_waits[&REF];
+    assert_eq!(
+        (
+            wait.owner,
+            wait.ref_id,
+            wait.iterations,
+            wait.block_offset,
+            wait.saved_offset
+        ),
+        (REF, 0x0100_0001, 3, 14, 11)
+    );
+    assert_eq!(
+        wait.saved_if_stack,
+        std::array::from_fn(|i| 0x50 + i as u32)
+    );
+    assert_eq!(e.mem.u8(REF + 5), SCRIPT_ON_WAIT);
+    assert_eq!(users(&e, Hook::ScriptWait), 1);
+    assert_eq!(
+        e.mem.u32(LENGTH),
+        29 - 4 - 18,
+        "Run jumps to the block's end"
+    );
+    // A quest script waits for its quest.
+    e.mem.set_u8(CALLER + 0x28, 1);
+    e.mem.set_u32(CALLER + 0x40, QUEST_FORM);
+    go(&mut e, 2);
+    assert_eq!(
+        e.ext::<Jip>().world_hooks.script_waits[&QUEST_FORM].iterations,
+        2
+    );
+}

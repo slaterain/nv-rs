@@ -1101,6 +1101,33 @@ mod b027_tests {
         assert!(calls(&log, NOTIFY_5F5950).is_empty());
     }
 
+    /// JIP LN NVSE's MarkScriptEvent reads the caller's first stack word: with a user of the hook
+    /// the item is the caller word while `SetActionFlag` runs (and only then); with none, nothing.
+    #[test]
+    fn at_00574fa0_hands_mark_script_event_the_item() {
+        use engine_core::extend::Hook;
+        for users in [0u32, 1] {
+            let mut e = engine(&ADD_CALLEES);
+            let this = object(&mut e, 0x0f00_0000);
+            e.mem.set_u32(PLAYER, this);
+            e.register(HAS_CONTAINER, |_, _| ret(0x7000));
+            e.register(GET_INVENTORY_CHANGES, |_, _| ret(0x9000));
+            e.register(REFERENCE_8D6F30, |_, _| ret(0x6600));
+            e.register(GET_FORM_SCRIPT, |_, _| ret(0x5800));
+            let seen = std::rc::Rc::new(std::cell::Cell::new(None));
+            let inside = seen.clone();
+            e.register_double(SET_ACTION_FLAG, move |e, _| {
+                inside.set(Some(e.caller_word()));
+                ret(0)
+            });
+            e.set_hook_users(Hook::MarkScriptEvent, users);
+            run(&mut e, 0x0057_4fa0, &[this, 0x5000, 0x5100, 4]);
+            let expected = if users == 0 { None } else { Some(0x5000) };
+            assert_eq!(seen.get(), Some(expected));
+            assert_eq!(e.caller_word(), None, "gone after the call");
+        }
+    }
+
     const REMOVE_CALLEES: [u32; 20] = [
         HAS_CONTAINER,
         REFERENCE_8D6F30,

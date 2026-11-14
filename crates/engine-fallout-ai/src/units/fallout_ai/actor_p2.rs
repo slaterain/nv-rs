@@ -12953,6 +12953,26 @@ mod tests {
         );
     }
 
+    /// JIP LN NVSE's MarkScriptEvent reads `SetActionFlag`'s caller's first stack word: with a
+    /// user of the hook, both calls see the item as the caller word, and it is gone afterwards.
+    #[test]
+    fn equip_hands_mark_script_event_the_item() {
+        use engine_core::extend::Hook;
+        let mut e = engine3();
+        let (actor, item) = equip_world(&mut e, 0x29);
+        slot_at(&mut e, FORM_TABLE, FORM_VSLOT_0X94, eax(1));
+        let words: CallRecord = Default::default();
+        let sink = words.clone();
+        e.register_double(SET_ACTION_FLAG, move |e, _| {
+            sink.borrow_mut().push(vec![e.caller_word().unwrap_or(0)]);
+            Ret::default()
+        });
+        e.add_hook_user(Hook::MarkScriptEvent, true);
+        equip(&mut e, actor, item, 1, 0x1234, [0, 0, 0]);
+        assert_eq!(*words.borrow(), vec![vec![item.addr()], vec![item.addr()]]);
+        assert_eq!(e.caller_word(), None);
+    }
+
     #[test]
     fn power_armor_is_refused_for_the_player_unless_the_flag_byte_is_set() {
         let mut e = engine3();
