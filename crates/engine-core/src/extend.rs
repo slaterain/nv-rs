@@ -1877,6 +1877,24 @@ impl Engine {
         other.extend = self.extend.for_thread();
     }
 
+    /// For a translation crate's test of a seam whose row is not in the tables (yet): `f` answers
+    /// the seam at `addr`, with no owner (step 3.9's split rows: the group that owns the translation
+    /// adds the inert seam, the row's home group adds the row and the handler). Refused (a stop):
+    /// the address has a handler already.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn on_site_for_test(&mut self, addr: u32, f: SiteFn) {
+        let (_, handlers) = self
+            .extend
+            .sites
+            .entry(addr)
+            .or_insert_with(|| (&[][..], vec![None].into_boxed_slice()));
+        assert!(
+            handlers.len() == 1 && handlers[0].is_none(),
+            "{addr:08x}: a handler is registered at this seam already"
+        );
+        handlers[0] = Some(f);
+    }
+
     /// The extension slot of type `T` when it was made.
     pub fn ext_get<T: 'static>(&self) -> Option<&T> {
         match self.extend.slots.get(&std::any::TypeId::of::<T>())? {
@@ -2140,6 +2158,22 @@ impl Engine {
         self.extend
             .jip_patches
             .store(bits, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Turns `bits` of [`Engine::jip_patches`] on, in one atomic step (JIP's install, the host's row,
+    /// `SetOptionalPatch`); answers the word before.
+    pub fn jip_patches_or(&self, bits: u32) -> u32 {
+        self.extend
+            .jip_patches
+            .fetch_or(bits, std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Turns `bits` of [`Engine::jip_patches`] off, in one atomic step (`SetOptionalPatch`); answers
+    /// the word before.
+    pub fn jip_patches_and_not(&self, bits: u32) -> u32 {
+        self.extend
+            .jip_patches
+            .fetch_and(!bits, std::sync::atomic::Ordering::Relaxed)
     }
 
     /// xNVSE's two fixes of the game's own expression code, when the built-in xNVSE installed
@@ -2943,6 +2977,25 @@ mod tests {
         assert!(std::panic::catch_unwind(|| check_areas(&MAIN, &TWO_AREAS)).is_err());
     }
 
+    fn answer_seven(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(7)
+    }
+
+    /// A seam with no row on main yet builds and does nothing; a translation crate's test answers it
+    /// with `on_site_for_test` (no owner), once.
+    #[test]
+    fn a_seam_without_a_row_is_tested_with_a_raw_handler() {
+        let mut e = engine();
+        assert_eq!(e.site(0x0040_1234, &[1]), None);
+        e.on_site_for_test(0x0040_1234, answer_seven);
+        assert_eq!(e.site(0x0040_1234, &[1]), Some(7));
+        assert!(e.site_owners(0x0040_1234).is_empty());
+        let again = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.on_site_for_test(0x0040_1234, answer_seven)
+        }));
+        assert!(again.is_err());
+    }
+
     /// The word of JIP's game patches: 0 on a new engine, shared with a real thread's engine, and
     /// the switches' bits are JIP's `SetOptionalPatch` numbers.
     #[test]
@@ -2957,6 +3010,12 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             0b11
         );
+        assert_eq!(e.jip_patches_or(jip_patches::INSTALLED), 0b11);
+        assert_eq!(
+            e.jip_patches_and_not(jip_patches::IGNORE_DTDR_FIX),
+            0b11 | jip_patches::INSTALLED
+        );
+        assert_eq!(e.jip_patches(), jip_patches::FIXES | jip_patches::INSTALLED);
         assert_eq!(jip_patches::CREATURE_SPREAD_FIX, 1 << 19);
         assert_eq!(jip_patches::FO3_WPN_DEGRADATION, 1 << 11);
         assert!(std::panic::catch_unwind(|| jip_patches::optional(10)).is_err());

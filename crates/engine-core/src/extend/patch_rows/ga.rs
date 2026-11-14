@@ -1,6 +1,6 @@
 //! Group GA's seams and wraps (step 3.9: UI: HUD, messages, text, start-up INI). Only group GA's PR edits this file; rows by
-//! address, owner `super::JIP`, step "3.9-GA". A row lives in the file of the group that owns the
-//! translation holding the seam (a wrap: its home group's).
+//! address, owner `super::JIP`, step "3.9-GA". Rows of the patches this group
+//! writes the handlers of (its home rows), seams in other groups' files included.
 
 use super::super::Entry;
 

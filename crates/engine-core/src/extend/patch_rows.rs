@@ -8,8 +8,11 @@
 //! order, and also that no address is listed twice anywhere (in a file, in two files, or in a file
 //! and the main tables). A row here has the one owner `Jip`. A patch at an address that already has
 //! a row of the main tables (a seam xNVSE also uses, say) is not a row here: JIP joins that row as
-//! a second owner instead (as the result zeroing of step 3.9a does). A row lives in the file of the
-//! group that owns the translation file holding the seam; a wrap in its home group's file. A
+//! a second owner instead (as the result zeroing of step 3.9a does). A row lives in the file of its HOME
+//! group (the one that writes its handler), wraps too. A row split across groups' files: the other
+//! groups add only the inert seam in the translation they own, tested with
+//! `Engine::on_site_for_test` (no production `SiteSlot`), so it builds and does nothing before the
+//! row is on main. A
 //! vtable slot JIP writes needs no row (a JIP routine is written into the guest slot).
 //!
 //! [`super::SiteSlot::new`] and [`super::WrapSlot::new`] find a row in the main tables and in every

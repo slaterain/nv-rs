@@ -23,13 +23,13 @@
 //! **Thirteen groups at once** (`measure/jip/PLAN-3.9-groups.md`: GA GB GC GD GE GP GH1 GH2 GF GS GW
 //! GL GX; every translation file has one owning group). Each group has its own places, so their PRs
 //! never edit the same lines:
-//! 1. its rows: `crates/engine-core/src/extend/patch_rows/<group>.rs` (seams at addresses no main
-//!    row lists, in the file of the group that owns the translation; wraps in the home group's). At
-//!    an address a main row of `extend.rs` lists, `Owner::Jip` joins that row instead (rare);
+//! 1. its rows: `crates/engine-core/src/extend/patch_rows/<group>.rs`, for every row whose handler
+//!    it writes (its home rows), seams in other groups' files included. At an address a main row of
+//!    `extend.rs` lists, `Owner::Jip` joins that row instead (rare);
 //! 2. its seams in the translations it owns, each `if e.jip_patches() & jip_patches::FIXES != 0 {
 //!    e.site(..) }` (or `INSTALLED`, or a switch's bit), the words built inside; with no handler
 //!    yet a seam does nothing, so a group adds the inert seam of another group's row in its own file
-//!    (with a test handler in its test) and the row's home group writes the handler (3.5b's split);
+//!    (tested with `Engine::on_site_for_test`, no production `SiteSlot`) and the row's home group writes the handler (3.5b's split);
 //! 3. its handlers: `<group>.rs` here (its `AREA`: sites, wraps, installers) and its tests beside it;
 //!    `game_patches_tests.rs` holds every area to the word (nothing in while JIP is not installed,
 //!    nothing of a fix in vanilla, every fix in with the row) with no edit;
@@ -123,7 +123,7 @@ pub(crate) fn install(e: &mut Engine, answers_installed: bool) {
     if !answers_installed {
         return;
     }
-    e.set_jip_patches(e.jip_patches() | jip_patches::INSTALLED);
+    e.jip_patches_or(jip_patches::INSTALLED);
     for area in AREAS {
         (area.install_jip)(e);
     }
@@ -149,7 +149,7 @@ fn put_fixes_in(e: &mut Engine) {
         return;
     }
     let switches = settings::read(e);
-    e.set_jip_patches(e.jip_patches() | jip_patches::FIXES | switches.on);
+    e.jip_patches_or(jip_patches::FIXES | switches.on);
     e.ext::<Jip>().game_patches.settings = switches;
     e.ext::<Jip>().game_patches.fixes_in = true;
     for area in AREAS {

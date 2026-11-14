@@ -36,9 +36,15 @@ pub const ROUTINES: u32 = crate::identity::ROUTINES + 0x4000;
 /// Routine addresses per group (4 bytes apart).
 pub const PER_GROUP: u32 = 64;
 
-const _: () = assert!(
-    ROUTINES + (Group::GX as u32 + 1) * PER_GROUP * 4 <= engine_core::mem::EXTENDER_CODE.end
-);
+const _: () = assert!(END <= engine_core::mem::EXTENDER_CODE.end);
+
+/// Whether `address` is in the game patches' routine block.
+pub fn in_block(address: u32) -> bool {
+    (ROUTINES..END).contains(&address)
+}
+
+/// One past the block.
+pub const END: u32 = ROUTINES + (Group::GX as u32 + 1) * PER_GROUP * 4;
 
 /// Routine `index` (0 to 63) of `group`.
 pub const fn routine(group: Group, index: u32) -> u32 {
@@ -50,8 +56,16 @@ pub const fn routine(group: Group, index: u32) -> u32 {
 /// JIP's `SafeWrite32`); answers the word the slot held (the function JIP's routine may call on).
 /// Before the threads start, while JIP installs or the host's row is set.
 pub fn write_slot(e: &mut Engine, slot: u32, routine: u32, f: AbiFn) -> u32 {
-    e.register(routine, f);
+    debug_assert!(
+        in_block(routine) && routine % 4 == 0,
+        "{routine:08x}: not a game-patch routine address (slots::routine)"
+    );
     let held = e.mem.u32(slot);
+    debug_assert!(
+        !in_block(held),
+        "{slot:08x} holds the game-patch routine {held:08x} already: two patches on one slot"
+    );
+    e.register(routine, f);
     e.mem.set_u32(slot, routine);
     held
 }

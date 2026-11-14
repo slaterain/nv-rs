@@ -17,8 +17,14 @@
 //! `;` are left out (`#` is not a comment); a line with `=` comes back as its key and value each
 //! trimmed, joined by `=` (quotes kept); a line without `=` comes back trimmed; repeated keys come
 //! back each; a UTF-8 byte order mark spoils the first line (so a section heading there is not
-//! found), a UTF-16 one is read as text. The count is 0 for a missing file or section and for a
-//! section with only comments, so all three give JIP's defaults.
+//! found), a UTF-16 (little-endian) one is read as text; a heading is the text from its `[` up to
+//! the first `]` or the line's end, trimmed (`[GamePatches] x`, `[ GamePatches ]`,
+//! `[GamePatches`, `  [GamePatches]x=9` all open the section; the text after `]` is no line); a
+//! CR alone ends a line as CR LF and LF do; a section longer than the buffer is cut at 65,534
+//! bytes (the lines with their NULs). The count is 0 for a missing file or section and for a
+//! section with only comments, so all three give JIP's defaults. Not measured, so read as plain
+//! bytes (they find no section, JIP's defaults): a UTF-16 big-endian file. The weapon mod chances
+//! stay 0 without the file (JIP's code).
 
 use crate::containers::str_hash_ci;
 use crate::utility::str_to_int;
@@ -56,10 +62,6 @@ pub const KEYS: [(&str, u32); 21] = [
 /// JIP's switches on with no `[GamePatches]` lines.
 pub const DEFAULTS: [u32; 9] = [1, 4, 5, 6, 7, 8, 9, 13, 14];
 
-/// The weapon mod chances with no `[GamePatches]` lines: the published file's (the lead, 2026-11-14;
-/// JIP's code would leave 0, read only while `bNPCWeaponMods`, off by default, is on).
-pub const DEFAULT_WEAPON_MOD_CHANCE: [u32; 3] = [2, 10, 60];
-
 /// What the section said.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Switches {
@@ -80,49 +82,76 @@ pub fn read(e: &mut Engine) -> Switches {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches (the
 // GetPrivateProfileSection loop).
-/// The switches from the section's lines: none, JIP's [`DEFAULTS`] (and [`DEFAULT_WEAPON_MOD_CHANCE`]); else each line's key (up to
-/// its first `=`) by `StrHashCI` alone, as JIP's map finds it; 20-22 take the value's number
-/// (`StrToInt`), a switch is on unless its value starts with `0` (an empty value, or no `=`, turns
-/// it on, as JIP tests the character after the token), and `uNPCPerks` starting with `2` also adds
-/// the starting perks. A key twice: the later line's switch is added too (JIP never turns one off
-/// here).
+/// The switches from the section's lines as `GetPrivateProfileSectionA` returns them into JIP's
+/// 0x10000-byte buffer ([`section_buffer`]: the lines each ended by a NUL, cut to 0xFFFE bytes).
+/// None (a count of 0): JIP's [`DEFAULTS`]. Else JIP's walk: `GetNextToken(buffer, '=')` ends the
+/// token at the first `=` or NUL and clears the run of `=` there; the token is looked up by
+/// `StrHashCI` alone, as JIP's map finds it (20-22 take the value's number, `StrToInt`; a switch is
+/// on unless its value starts with `0`, so an empty value or no `=` turns it on; `uNPCPerks`
+/// starting with `2` also adds the starting perks); then the walk goes on at the byte after the
+/// token's end, so the value itself (and one empty token per extra `=`) is looked up next as a key.
+/// JIP never turns a switch off here.
 pub fn switches(lines: &[Vec<u8>]) -> Switches {
     let mut out = Switches::default();
-    if lines.is_empty() {
+    let mut buffer = section_buffer(lines);
+    let mut remaining = buffer.len();
+    if remaining == 0 {
         for n in DEFAULTS {
             out.on |= jip_patches::optional(n);
         }
-        out.weapon_mod_chance = DEFAULT_WEAPON_MOD_CHANCE;
         return out;
     }
-    for line in lines {
-        // `GetNextToken(buffer, '=')`: the key ends at the first `=`, the value starts after
-        // the run of `=` there.
-        let (key, value) = match line.iter().position(|&b| b == b'=') {
-            Some(at) => {
-                let rest = &line[at..];
-                let skip = rest.iter().take_while(|&&b| b == b'=').count();
-                (&line[..at], &rest[skip..])
-            }
-            None => (&line[..], &line[line.len()..]),
-        };
+    // The two NULs Windows writes after the data.
+    buffer.extend_from_slice(&[0, 0]);
+    let mut at = 0;
+    while remaining > 0 {
+        let end = at
+            + buffer[at..]
+                .iter()
+                .position(|&b| b == b'=' || b == 0)
+                .unwrap_or(buffer.len() - at);
+        let mut value = end;
+        while buffer[value] == b'=' {
+            buffer[value] = 0;
+            value += 1;
+        }
+        let value_end = value + buffer[value..].iter().position(|&b| b == 0).unwrap_or(0);
+        let (key, value) = (&buffer[at..end], &buffer[value..value_end]);
         let hash = str_hash_ci(key);
-        let Some(&(_, number)) = KEYS
+        if let Some(&(_, number)) = KEYS
             .iter()
             .find(|(name, _)| str_hash_ci(name.as_bytes()) == hash)
-        else {
-            continue;
-        };
-        if number >= 20 {
-            out.weapon_mod_chance[(number - 20) as usize] = str_to_int(value) as u32;
-        } else if value.first() != Some(&b'0') {
-            if number == 18 && value.first() == Some(&b'2') {
-                out.npc_perks_auto_add = true;
+        {
+            if number >= 20 {
+                out.weapon_mod_chance[(number - 20) as usize] = str_to_int(value) as u32;
+            } else if value.first() != Some(&b'0') {
+                if number == 18 && value.first() == Some(&b'2') {
+                    out.npc_perks_auto_add = true;
+                }
+                out.on |= jip_patches::optional(number);
             }
-            out.on |= jip_patches::optional(number);
         }
+        // `size = StrLen(buffer) + 1`: the token and its NUL.
+        let size = end - at + 1;
+        at += size;
+        remaining = remaining.saturating_sub(size);
     }
     out
+}
+
+/// The most `GetPrivateProfileSectionA` returns into JIP's 0x10000-byte buffer: `nSize - 2`
+/// (measured, 2026-11-14: a 84,000-byte section answers 65,534, the lines cut there).
+pub const SECTION_CAP: usize = 0xfffe;
+
+/// The section's lines as the call writes them: each ended by a NUL, cut to [`SECTION_CAP`] bytes.
+pub fn section_buffer(lines: &[Vec<u8>]) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    for line in lines {
+        buffer.extend_from_slice(line);
+        buffer.push(0);
+    }
+    buffer.truncate(SECTION_CAP);
+    buffer
 }
 
 // Measured from KERNEL32 GetPrivateProfileSectionA (scratch files, 2026-11-14).
@@ -142,7 +171,8 @@ pub fn section(file: &[u8], name: &[u8]) -> Vec<Vec<u8>> {
     };
     let mut out = Vec::new();
     let mut inside = false;
-    for line in text.split(|&b| b == b'\n') {
+    // A CR alone ends a line too (measured); CR LF leaves an empty line between, passed over.
+    for line in text.split(|&b| b == b'\n' || b == b'\r') {
         let line = trim(line);
         if let Some(rest) = line.strip_prefix(b"[") {
             if inside {

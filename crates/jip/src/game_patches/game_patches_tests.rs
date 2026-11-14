@@ -116,9 +116,9 @@ fn jip_in(e: &Engine, expected: bool) {
     }
 }
 
-/// No handler without its row: every site and wrap an area lists has a row with owner `Jip` (a seam
-/// row may come before its handler: a group adds the inert seam of another group's row), and every
-/// wrap row has its area (a wrap and its handler come in the same PR).
+/// Rows and handlers come together, in the row's home group: every site and wrap an area lists has a
+/// row with owner `Jip`, and every row of the game patches' tables is some area's (a seam another
+/// group adds before the row exists has no row: it is tested with `Engine::on_site_for_test`).
 #[test]
 fn every_area_row_has_an_area() {
     let mine: Vec<u32> = AREAS
@@ -131,6 +131,11 @@ fn every_area_row_has_an_area() {
         .flat_map(|a| a.fix_wraps.iter().chain(a.jip_wraps))
         .copied()
         .collect();
+    for table in engine_core::extend::PATCH_SITES {
+        for row in *table {
+            assert!(mine.contains(&row.addr), "{:08x}", row.addr);
+        }
+    }
     for table in engine_core::extend::PATCH_WRAPS {
         for row in *table {
             assert!(wraps.contains(&row.addr), "{:08x}", row.addr);
@@ -289,7 +294,11 @@ bEnableFO3Repair = 1  \r\nbEnableBigGunsSkill=\r\nbProjImpactDmgFix\r\nuNPCPerks
 #[test]
 fn jip_reads_each_line_as_its_loop_does() {
     assert_eq!(switches(&[]).on, defaults());
-    assert_eq!(switches(&[]).weapon_mod_chance, [2, 10, 60]);
+    assert_eq!(
+        switches(&[]).weapon_mod_chance,
+        [0, 0, 0],
+        "JIP's code: 0 without the file"
+    );
     // Lines, all off: nothing on (not the defaults).
     assert_eq!(switches(&lines(&["bIgnoreDTDRFix=0"])).on, 0);
     let read = switches(&lines(&[
@@ -433,4 +442,147 @@ fn a_slot_gets_a_routine_of_its_group() {
     );
     assert!(routine(Group::A39, 0) > crate::actor_hooks::CLEAR_HIT_DATA_ROUTINE + 4);
     assert!(std::panic::catch_unwind(|| routine(Group::GX, PER_GROUP)).is_err());
+    // A routine outside the block, and a second patch on the same slot, are refused.
+    let mut e = engine();
+    e.mem.set_u32(SLOT, 0x0040_1290);
+    let outside = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        write_slot(&mut e, SLOT, 0x0040_1000, |_, _| ret(0))
+    }));
+    assert!(outside.is_err());
+    write_slot(&mut e, SLOT, routine(Group::GA, 0), |_, _| ret(0));
+    let twice = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        write_slot(&mut e, SLOT, routine(Group::GB, 0), |_, _| ret(0))
+    }));
+    assert!(twice.is_err());
+}
+
+/// JIP's walk goes on at the token after a key: a value that names a switch turns it on (its own
+/// value is the empty rest), and an extra `=` is an empty token looked up too.
+#[test]
+fn jip_walks_every_token() {
+    assert_eq!(
+        switches(&lines(&["x=bIgnoreDTDRFix"])).on,
+        jip_patches::IGNORE_DTDR_FIX
+    );
+    assert_eq!(
+        switches(&lines(&["bLoadScreenFix=0=bCreatureSpreadFix"])).on,
+        jip_patches::CREATURE_SPREAD_FIX
+    );
+    assert_eq!(switches(&lines(&["bLoadScreenFix==0"])).on, 0);
+    let read = switches(&lines(&["uWMChanceMin=uWMChanceMax=7"]));
+    assert_eq!(read.weapon_mod_chance, [0, 0, 7]);
+}
+
+/// The section read stops at 65,534 bytes (the lines with their NULs, measured): a switch past it
+/// is not read.
+#[test]
+fn the_section_read_stops_at_the_buffer() {
+    let mut text: Vec<String> = (0..4369).map(|i| format!("key{i:06}=1234")).collect();
+    text.push("bCreatureSpreadFix=1".to_string());
+    let long: Vec<Vec<u8>> = text.iter().map(|l| l.as_bytes().to_vec()).collect();
+    assert_eq!(super::settings::section_buffer(&long).len(), 0xfffe);
+    assert_eq!(switches(&long).on, 0);
+    let mut short = long[..4000].to_vec();
+    short.push(b"bCreatureSpreadFix=1".to_vec());
+    assert_eq!(switches(&short).on, jip_patches::CREATURE_SPREAD_FIX);
+}
+
+/// The heading forms and line ends measured (2026-11-14), and the one form not measured (UTF-16
+/// big-endian: read as bytes, no section).
+#[test]
+fn headings_and_line_ends_as_measured() {
+    for file in [
+        &b"[GamePatches] trailing\r\na=1\r\n"[..],
+        b"[ GamePatches ]\r\na=1\r\n",
+        b"[GamePatches\r\na=1\r\n",
+        b"  [GamePatches]x=9\r\na=1\r\n",
+    ] {
+        assert_eq!(section(file, b"GamePatches"), lines(&["a=1"]), "{file:?}");
+    }
+    assert_eq!(
+        section(b"[GamePatches]\ra=1\rb=2\r", b"GamePatches"),
+        lines(&["a=1", "b=2"])
+    );
+    let utf16be: Vec<u8> = [0xfeffu16]
+        .into_iter()
+        .chain("[GamePatches]\r\nb=0\r\n".encode_utf16())
+        .flat_map(u16::to_be_bytes)
+        .collect();
+    assert!(section(&utf16be, b"GamePatches").is_empty());
+}
+
+/// Every owner at every seam and wrap of the tables, and every wrapped address's owners.
+fn snapshot(e: &Engine) -> std::collections::BTreeSet<(u32, &'static str, String)> {
+    let mut out = std::collections::BTreeSet::new();
+    for row in engine_core::extend::all_sites() {
+        for o in e.site_owners(row.addr) {
+            out.insert((row.addr, "site", format!("{o:?}")));
+        }
+    }
+    for row in engine_core::extend::all_wraps() {
+        for o in e.wraps_at(row.addr) {
+            out.insert((row.addr, "wrap", format!("{o:?}")));
+        }
+    }
+    for (addr, owners) in e.wrapped() {
+        for o in owners {
+            out.insert((addr, "wrapped", format!("{o:?}")));
+        }
+    }
+    out
+}
+
+fn expected(
+    sites: &[u32],
+    wraps: &[u32],
+) -> std::collections::BTreeSet<(u32, &'static str, String)> {
+    let jip = format!("{:?}", Owner::Jip);
+    let mut out = std::collections::BTreeSet::new();
+    for &a in sites {
+        out.insert((a, "site", jip.clone()));
+    }
+    for &a in wraps {
+        out.insert((a, "wrap", jip.clone()));
+        out.insert((a, "wrapped", jip.clone()));
+    }
+    out
+}
+
+/// What JIP's install and the row add, owner by owner over every table address: at the game
+/// patches' addresses JIP's install adds exactly the areas' `jip_*` lists; the row off adds
+/// nothing; the row on adds exactly the `fix_*` lists, the same whether the host sets it before or
+/// after JIP installs.
+#[test]
+fn the_row_adds_exactly_the_fix_lists() {
+    let jip_sites: Vec<u32> = AREAS.iter().flat_map(|a| a.jip_sites).copied().collect();
+    let jip_wraps: Vec<u32> = AREAS.iter().flat_map(|a| a.jip_wraps).copied().collect();
+    let fix_sites: Vec<u32> = AREAS.iter().flat_map(|a| a.fix_sites).copied().collect();
+    let fix_wraps: Vec<u32> = AREAS.iter().flat_map(|a| a.fix_wraps).copied().collect();
+    let patch_addresses: Vec<u32> = engine_core::extend::PATCH_SITES
+        .iter()
+        .chain(engine_core::extend::PATCH_WRAPS)
+        .flat_map(|t| t.iter().map(|r| r.addr))
+        .chain(fix_sites.iter().chain(&fix_wraps).copied())
+        .collect();
+    let mut e = base();
+    let bare = snapshot(&e);
+    crate::install_as(&mut e, true);
+    let installed: std::collections::BTreeSet<_> = snapshot(&e)
+        .difference(&bare)
+        .filter(|(a, _, _)| patch_addresses.contains(a))
+        .cloned()
+        .collect();
+    assert_eq!(installed, expected(&jip_sites, &jip_wraps));
+    let before = snapshot(&e);
+    set_row(&mut e, false);
+    assert_eq!(snapshot(&e), before, "the row off adds nothing");
+    set_row(&mut e, true);
+    let after = snapshot(&e);
+    assert!(before.is_subset(&after), "nothing taken out");
+    let added: std::collections::BTreeSet<_> = after.difference(&before).cloned().collect();
+    assert_eq!(added, expected(&fix_sites, &fix_wraps));
+    let mut first = base();
+    set_row(&mut first, true);
+    crate::install_as(&mut first, true);
+    assert_eq!(snapshot(&first), after, "the host's order");
 }
