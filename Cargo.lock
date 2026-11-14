@@ -505,6 +505,7 @@ dependencies = [
  "d3dx-tex",
  "engine-core",
  "mp3",
+ "nvse",
  "vorbis",
  "windows 0.58.0",
 ]
