@@ -4885,13 +4885,14 @@ mod tests_code_pages {
                 disk("\u{142}odz.txt"),
                 disk("\u{416}uk.txt"),
             ],
-            vec![run("\u{e9}t\u{e9}.txt"), run("Zeta")],
+            vec![run("\u{ff}.txt"), run("\u{e9}t\u{e9}.txt"), run("Zeta")],
         )
         .iter()
         .map(|f| ansi_bytes(f.name()))
         .collect();
-        // été (upper-cased ÉTÉ) comes before the player's Éu: NTFS folds é to É.
-        let want: [&[u8]; 8] = [
+        // été (upper-cased ÉTÉ) comes before the player's Éu: NTFS folds é to É. ÿ (Ÿ, U+0178)
+        // goes between łodz and Жuk by their host names, not their ANSI forms (`lodz`, `?uk`).
+        let want: [&[u8]; 9] = [
             b".",
             b"..",
             b"plain.txt",
@@ -4899,6 +4900,7 @@ mod tests_code_pages {
             b"\xe9t\xe9.txt",
             b"\xc9u.txt",
             b"lodz.txt",
+            b"\xff.txt",
             b"?uk.txt",
         ];
         assert_eq!(got, want);
