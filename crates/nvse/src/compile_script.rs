@@ -33,8 +33,8 @@
 //! ([`crate::log`]), as xNVSE's `_MESSAGE`/`_ERROR` write them there.
 //!
 //! Not here: xNVSE's compiled-script cache on disk (`ScriptDataCache`, `script_data_cache.bin`),
-//! a speed cache only (see `compile_hooks.rs`), and the new script language
-//! (`Compiler::CompileNVSEScript`: scripts starting with `name` do not compile; deferred).
+//! a speed cache only (see `compile_hooks.rs`). A function file in xNVSE's new script language (its text starting with `name`) compiles
+//! as in xNVSE: the game's compile hands it to [`crate::newlang`] at xNVSE's seam.
 
 use crate::compiler::{sb, sc, string_set};
 use crate::table::{Command, Param, Returns};

@@ -792,3 +792,103 @@ fn the_expression_buffer_is_made_at_install() {
     crate::compile_hooks::install(&mut e);
     assert_eq!(e.expression_alt_buffer(), 0x0600_8000);
 }
+
+/// The game's compile as far as xNVSE's seams take part in it: the begin seam (`005AEBB1`)
+/// compiles a script in the new language (answer 2: finished, the game's own compile passed
+/// over; 0: failed) and hands the old syntax on to the stand-in compiler; then the end seam
+/// (`005AEDA0`) with the result, whose answer the compile returns.
+fn compile_at_the_seams(e: &mut Engine, a: &[u32]) -> Ret {
+    let (script, buf) = (a[1], a[2]);
+    let result = match e.site(0x005a_ebb1, &[script, buf]) {
+        Some(2) => 1,
+        Some(0) => 0,
+        _ => compile_stand_in(e, a).eax,
+    };
+    eax(e.site(0x005a_eda0, &[result, buf]).unwrap_or(result))
+}
+
+/// A function file in xNVSE's new language (its text starting with `name`) compiles end to end:
+/// found by the first frame's walk, read in text mode, handed to the game's compile, compiled at
+/// xNVSE's seam by the new language's compiler, cached by its path, and answered from the cache
+/// by `CompileScript`. One nested past the new language's depth limit fails that file's compile
+/// (named on the console and in `nvse.log`) without stopping the walk: the file after it still
+/// compiles. Run on a thread with the game threads' 64 MB stack (the parse to the limit needs
+/// about 10 MB in a debug build).
+#[test]
+fn a_function_file_in_the_new_language_compiles_through_the_walk() {
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(|| {
+            let mut e = engine();
+            crate::compile_hooks::install(&mut e);
+            // The script's virtual functions the finish calls (InitItem, MarkForDeletion,
+            // SetAltered).
+            for (i, slot) in [0x88u32, 0xc4, 0xc8].into_iter().enumerate() {
+                let at = 0x7eff_c100 + 4 * i as u32;
+                e.register(at, |_, _| eax(1));
+                e.mem.set_u32(VTABLE + slot, at);
+            }
+            e.register(SCRIPT_COMPILE, compile_at_the_seams);
+            // The game behind the new compiler: no form by editor id; `IsStringInteger` digits
+            // only; `__RTDynamicCast` makes a script of the scripts made here, nothing else.
+            e.register(crate::compiler::FORM_BY_EDITOR_ID, |_, _| eax(0));
+            e.register(0x004b_1230, |e, a| {
+                let t = crate::table::guest_text(e, a[0]);
+                eax(u32::from(!t.is_empty() && t.iter().all(u8::is_ascii_digit)))
+            });
+            e.register(0x00ec_43fb, |e, a| {
+                let script = a[3] == crate::commands::rtti::SCRIPT && e.mem.u32(a[0]) == VTABLE;
+                eax(if script { a[0] } else { 0 })
+            });
+            put(BASE, None);
+            put(
+                &format!("{BASE}/Add.txt"),
+                Some(b"name Add;\r\nfn (int a, int b) {\r\n  return a + b;\r\n}\r\n"),
+            );
+            let deep = format!(
+                "name Deep;\nfn () {{\n  int x = {}1{};\n}}\n",
+                "(".repeat(600),
+                ")".repeat(600)
+            );
+            put(&format!("{BASE}/Deep.txt"), Some(deep.as_bytes()));
+            put(
+                &format!("{BASE}/Later.txt"),
+                Some(b"name Later;\nfn () {\n  int y = 2;\n}\n"),
+            );
+            // The same nesting within the limit compiles: Deep fails by its depth alone.
+            let shallow = deep.replace("Deep", "Shallow").replace(&"(".repeat(600), "(((((").replace(&")".repeat(600), ")))))");
+            put(&format!("{BASE}/Shallow.txt"), Some(shallow.as_bytes()));
+            cache_all_scripts(&mut e);
+            assert_ne!(cached(&mut e, b"shallow.txt"), 0);
+            assert!(
+                compiles().is_empty(),
+                "no file went to the old syntax's compile"
+            );
+            assert_eq!(
+                console(),
+                ["xNVSE: Failed to precompile script file at data/nvse/user_defined_functions/Deep.txt"]
+            );
+            let add = cached(&mut e, b"add.txt");
+            let later = cached(&mut e, b"LATER.txt");
+            assert_ne!(add, 0);
+            assert_ne!(later, 0);
+            assert_eq!(cached(&mut e, b"deep.txt"), 0);
+            for script in [add, later] {
+                assert_ne!(e.mem.u8(script + sc::COMPILED), 0, "compiled");
+                assert!(e.mem.u32(script + sc::DATA_LEN) > 0, "with its bytes");
+            }
+            assert_eq!(e.mem.u32(add + 0xc), NEXT_ID, "the first form id given");
+            assert_eq!(run(&mut e, &[string_token("Add.txt")]), NEXT_ID);
+            assert!(compiles().is_empty(), "the command answered from the cache");
+            assert_eq!(
+                written("nvse.log"),
+                "xNVSE: script file successfully precompiled at data/nvse/user_defined_functions/Add.txt\r\n\
+                 xNVSE: Failed to precompile script file at data/nvse/user_defined_functions/Deep.txt\r\n\
+                 xNVSE: script file successfully precompiled at data/nvse/user_defined_functions/Later.txt\r\n\
+                 xNVSE: script file successfully precompiled at data/nvse/user_defined_functions/Shallow.txt\r\n"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
