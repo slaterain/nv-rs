@@ -273,3 +273,12 @@ fn trigonometric_commands() {
     let r = call(&mut e, 0x2894, &[z(1.0), z(0.0)]).1;
     assert_eq!(r, f64::from(FLT_PI_D2) * DBL_180_D_PI);
 }
+
+/// The constants hold JIP's bits.
+#[test]
+fn constants_are_jips_bits() {
+    assert_eq!(FLT_PI_D2.to_bits(), 0x3fc9_0fdb);
+    assert_eq!(FLT_PI.to_bits(), 0x4049_0fdb);
+    assert_eq!(FLT_PI_X2.to_bits(), 0x40c9_0fdb);
+    assert_eq!(FLT_2_D_PI.to_bits(), 0x3f22_f983);
+}

@@ -375,10 +375,10 @@ fn clear_jip_saved_data(e: &mut Engine, w: &[u32]) -> Ret {
     if scr != 0 {
         saved.script_vars.retain(|_, vars| {
             vars.retain(|_, v| u32::from(v.mod_index) != modi);
-            vars.len() != 0
+            !vars.is_empty()
         });
     }
-    if links != 0 && saved.linked_refs.len() != 0 {
+    if links != 0 && !saved.linked_refs.is_empty() {
         saved
             .linked_refs
             .retain(|_, l| u32::from(l.mod_index) != modi);

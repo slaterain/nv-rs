@@ -46,10 +46,12 @@ const CELL_WORLD_SPACE: u32 = 0xc0;
 /// `ExtraPersistentCell::persistentCell` (+0xC).
 const PERSISTENT_CELL: u32 = 0x0c;
 
-/// JIP's float constants (`internal/utility.h`, `kPackedValues`), by their bits.
-const FLT_PI_D2: f32 = f32::from_bits(0x3fc9_0fdb);
-const FLT_PI: f32 = f32::from_bits(0x4049_0fdb);
-const FLT_PI_X2: f32 = f32::from_bits(0x40c9_0fdb);
+/// JIP's float constants (`internal/utility.h`, `kPackedValues`): the standard constants have
+/// exactly their bits (`0x3FC90FDB`, `0x40490FDB`, `0x40C90FDB`; `kFlt2dPI` `0x3F22F983`), pinned
+/// in the tests.
+const FLT_PI_D2: f32 = std::f32::consts::FRAC_PI_2;
+const FLT_PI: f32 = std::f32::consts::PI;
+const FLT_PI_X2: f32 = std::f32::consts::TAU;
 const FLT_EPSILON: f32 = f32::EPSILON;
 const SIGN: u32 = 0x8000_0000;
 
@@ -60,7 +62,7 @@ fn flip(v: f32, sign: u32) -> f32 {
 // ---- JIP's maths (`internal/utility.cpp`, `internal/Ni_types.cpp`) ----
 
 /// `kFlt2dPI` and `kCosConsts` of `Cos` and `Cos_V3`.
-const FLT_2_D_PI: f32 = f32::from_bits(0x3f22_f983);
+const FLT_2_D_PI: f32 = std::f32::consts::FRAC_2_PI;
 const COS_CONSTS: [u32; 5] = [
     0x37c2_3ab1,
     0x3ab5_9551,
