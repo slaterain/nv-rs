@@ -648,6 +648,10 @@ fn detection_values_and_actors() {
     detection(&mut e, PROC, PLAYER_REF, BLOCK + 0xc0, 1, false);
     let id = call_on(&mut e, 0x2745, PLAYER_REF, &[]).1;
     assert_eq!(forms_of(&e, id), vec![0x200]);
+    // A dead (or dying) actor is skipped before its detection is asked.
+    e.mem.set_u32(ACTOR + 0x108, 2);
+    assert_eq!(call_on(&mut e, 0x2745, PLAYER_REF, &[]).1, 0.0, "dead");
+    e.mem.set_u32(ACTOR + 0x108, 0);
     detection(&mut e, PROC2, OTHER, BLOCK + 0x100, 0, true);
     detection(&mut e, PROC2, ACTOR, BLOCK + 0x140, 0, false);
     let id = call_on(&mut e, 0x2744, PLAYER_REF, &[]).1;
