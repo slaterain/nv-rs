@@ -3098,12 +3098,12 @@ pub fn fn_00875110(
     overlay_node: u32,
     target_texture: u32,
 ) {
+    let this_addr = this.addr();
     // The drawing thread's job may still walk the world accumulator (+0x88): the screens' and the overlay's blocks
     // below accumulate into it. No earlier join covers every frame: the sun query's (`006426a0`) needs a sky, the
     // water pass's (`008746d0`, `00875e40`) water, and the refraction normals' (`00b63a90`, `00874920`) `005b9b00`
     // (`measure/draw-thread/PLAN-C.md`, "Latent race in #551"). Off, or with nothing posted, one load.
     engine_core::draw_thread::finish_at(e, 0x0087_5110);
-    let this_addr = this.addr();
     let root = e.call(GET_ROOT, &args![]).u32();
     let target = e.call(GET_SCENE_TARGET, &args![root]).u32();
     let node = player_node(e, 1);
@@ -7770,6 +7770,68 @@ mod tests {
         assert!(!addrs(&log).contains(&0x00b6_e110));
     }
 
+    /// `NV_STAGE_TIME`'s marks in a frame's draw (`008706b0` into `00870bd0` with the water pass and the refraction
+    /// normals, the world pass a double here): main's stages from the frame's points each close once, every step of
+    /// the sequence after the world pass is counted under its own column as often as the sequence calls it, and a
+    /// step's time is its own (a 2 ms `00875110` shows in its column and inside R).
+    #[test]
+    fn stage_marks_count_each_stage_once_and_each_step_by_its_calls() {
+        use engine_core::stage_time::{self, Point, NAMES};
+        let _here = stage_time::on_here();
+        let (mut r, this, _) = frame_rig(0);
+        let water = r.object(0x100);
+        r.e.mem.set_f32(water + 0x70, 2.0);
+        r.e.set_global(0x0101_2060, 1.0f64);
+        r.set(0x004e_bbc0, &[water]);
+        r.pointers(&[(this + MAIN_WORLD_ACCUM, 0x9000)]);
+        r.set(0x005b_9b00, &[1]);
+        r.set(0x00b6_3a90, &[3]);
+        r.e.set_global(0x011f_91a4, 1u8);
+        r.e.register_double(0x0087_5110, |_, _| {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            Ret::default()
+        });
+        stage_time::point(Point::Idle);
+        stage_time::point(Point::SwapIn);
+        r.run(0x008706b0, &args![this, 0u32, 0u32, 0u32]);
+        stage_time::point(Point::SwapOut);
+        stage_time::point(Point::WaitIn);
+        stage_time::point(Point::WaitOut);
+        stage_time::point(Point::Idle);
+        let v = stage_time::take();
+        let col = |name: &str| v[NAMES.iter().position(|n| *n == name).unwrap()];
+        for name in ["st_u", "st_s1", "st_r", "st_s2", "st_p1", "st_w", "st_p2"] {
+            assert_eq!(col(name).1, 1, "{name}");
+        }
+        // The world pass is a double: no cut, so nothing measured from it.
+        for name in [
+            "st_r_before_cut",
+            "st_cut_to_draw_end",
+            "st_cut_to_idle",
+            "st_after_pass",
+        ] {
+            assert_eq!(col(name).1, 0, "{name}");
+        }
+        for (name, calls) in [
+            ("first_person_node_008746d0", 1),
+            ("targets_00874b50", 2),
+            ("accumulator_check_00b63a90", 1),
+            ("refraction_normals_00874920", 1),
+            ("first_person_setup_00874c10", 1),
+            ("draw_rest_00875110", 1),
+            ("water_00875e40", 1),
+            ("interface_00875fd0", 1),
+            ("wind_down_00876850", 1),
+            ("world_pass_00873200", 0),
+            ("interface_target_00876830", 0),
+            ("light_update_00714c20", 0),
+        ] {
+            assert_eq!(col(name).1, calls, "{name}");
+        }
+        assert!(col("draw_rest_00875110").0 >= 2_000.0);
+        assert!(col("st_r").0 >= col("draw_rest_00875110").0);
+        assert!(col("st_u").0 < 2_000.0, "the step's time is not U's");
+    }
     // END TESTS
 }
 
@@ -10215,6 +10277,89 @@ mod tests_second {
         assert!(calls_to(&log, 0x0054_8230).is_empty());
         assert_eq!(calls_to(&log, 0x0056_5730), vec![vec![player]]);
     }
+
+    /// `NV_STAGE_TIME`'s cut and draw-end points bracket the world draw's two calls in the world pass: a sleep in
+    /// `00b6ba20` and one in `00b6b930` land in the cut-to-draw-end stage and in the halves' columns, not in the stage
+    /// before the cut or in the pass's tail; each stage closes once a frame; two frames of different lengths give two
+    /// different samples.
+    #[test]
+    fn stage_marks_bracket_the_world_draw_in_the_world_pass() {
+        use engine_core::stage_time::{self, Point, NAMES};
+        let _here = stage_time::on_here();
+        let (mut r, this) = scene_rig();
+        let sleep_ms = Rc::new(RefCell::new(0u64));
+        for addr in [0x00b6_ba20u32, 0x00b6_b930] {
+            let ms = sleep_ms.clone();
+            r.e.register_double(addr, move |_, _| {
+                std::thread::sleep(std::time::Duration::from_millis(*ms.borrow()));
+                Ret::default()
+            });
+        }
+        let mut frames = Vec::new();
+        for ms in [5u64, 15] {
+            *sleep_ms.borrow_mut() = ms;
+            stage_time::point(Point::Idle);
+            stage_time::point(Point::SwapIn);
+            stage_time::point(Point::DrawIn);
+            r.run(0x0087_3200, &args![this, 0u32, 0u32, 0u32, 0u32]);
+            stage_time::point(Point::DrawOut);
+            stage_time::point(Point::SwapOut);
+            stage_time::point(Point::WaitIn);
+            stage_time::point(Point::WaitOut);
+            frames.push(stage_time::take());
+        }
+        stage_time::point(Point::Idle);
+        let last = stage_time::take();
+        let col = |v: &[(f64, u64)], name: &str| v[NAMES.iter().position(|n| *n == name).unwrap()];
+        for (v, ms) in frames.iter().zip([5.0, 15.0]) {
+            for name in [
+                "st_u",
+                "st_s1",
+                "st_r",
+                "st_r_before_cut",
+                "st_cut_to_draw_end",
+                "st_pass_tail",
+                "st_after_pass",
+                "st_s2",
+                "st_p1",
+                "st_w",
+                "world_pass_00873200",
+                "world_draw_00b6ba20",
+                "world_draw_00b6b930",
+                "extra_pass_1",
+                "extra_pass_2",
+            ] {
+                assert_eq!(col(v, name).1, 1, "{name}");
+            }
+            let first = col(v, "world_draw_00b6ba20").0;
+            let second = col(v, "world_draw_00b6b930").0;
+            assert!(
+                first >= ms * 1000.0 && second >= ms * 1000.0,
+                "{first} {second}"
+            );
+            assert!(col(v, "st_cut_to_draw_end").0 >= first + second);
+            assert!(
+                col(v, "st_r_before_cut").0 < ms * 1000.0,
+                "the draw is after the cut"
+            );
+            assert!(
+                col(v, "st_pass_tail").0 < ms * 1000.0,
+                "the draw is before its end"
+            );
+            assert!(col(v, "world_pass_00873200").0 >= col(v, "st_cut_to_draw_end").0);
+        }
+        // The second frame's longer draw is a different, longer sample.
+        assert!(
+            col(&frames[1], "st_cut_to_draw_end").0
+                > col(&frames[0], "st_cut_to_draw_end").0 + 10_000.0
+        );
+        // The first frame's last stages closed at the second frame's start, the second's at the last OnIdle.
+        for name in ["st_p2", "st_cut_to_idle", "st_draw_end_to_idle"] {
+            assert_eq!(col(&frames[1], name).1, 1, "{name}");
+            assert_eq!(col(&last, name).1, 1, "{name}");
+        }
+        assert!(col(&last, "st_cut_to_idle").0 >= 30_000.0);
+    }
 }
 
 #[cfg(test)]
@@ -10877,6 +11022,8 @@ mod draw_thread_joins {
             0x0087_06b0,
             0x0087_1dc0,
             0x0087_6850,
+            // The rest of the frame's draw: the screens' and the overlay's accumulations into the world accumulator.
+            0x0087_5110,
         ] {
             assert!(
                 engine_core::draw_thread::testing::joins_first(&mut e, addr, &[0; 16]),

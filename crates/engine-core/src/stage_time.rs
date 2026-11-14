@@ -17,8 +17,9 @@
 //!
 //! The marks' places and what each stage covers are in `measure/draw-thread/P0-MEASURE.md`.
 
+use std::cell::Cell;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering::Relaxed};
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Instant;
 
 /// A moment in main's frame.
@@ -31,8 +32,7 @@ pub enum Point {
     SwapIn,
     /// The frame's draw (`008706b0`) starts.
     DrawIn,
-    /// The world pass (`00873200`) calls the world draw's first half (`00b6ba20`): the cut. Only the first of a
-    /// frame counts.
+    /// The world pass (`00873200`) calls the world draw's first half (`00b6ba20`): the cut.
     Cut,
     /// The world draw's second half (`00b6b930`) returned to the world pass (or was skipped: the job took it).
     DrawEnd,
@@ -218,6 +218,8 @@ pub struct Marks {
     calls: [AtomicU64; COLUMNS],
     /// When each point was passed this frame (nanoseconds since the clock's start plus 1), 0 not yet.
     at: [AtomicU64; POINTS],
+    /// How deep main is in the frame's draw (`008706b0` calls open now).
+    depth: AtomicU64,
 }
 
 #[allow(clippy::declare_interior_mutable_const)]
@@ -230,6 +232,7 @@ impl Marks {
             ns: [ZERO; COLUMNS],
             calls: [ZERO; COLUMNS],
             at: [ZERO; POINTS],
+            depth: AtomicU64::new(0),
         }
     }
 
@@ -240,10 +243,25 @@ impl Marks {
     }
 
     /// Point `p` passed at `now` (nanoseconds, never 0): the stages ending there closed, then the point noted.
-    /// [`Point::Idle`] forgets the frame's other points after closing its stages; only a frame's first
-    /// [`Point::Cut`] counts (a later one closes nothing and moves nothing).
+    /// [`Point::Idle`] forgets the frame's other points after closing its stages. Every other point counts once a
+    /// frame, the first time (a second draw sequence in the frame, a save's screenshot or a menu opened in the tail,
+    /// closes nothing and moves nothing; its steps still count, so a step's `_n` above 1 marks such a frame), and a
+    /// draw (`008706b0`) nested inside the frame's draw neither starts nor ends it.
     pub fn point(&self, p: Point, now: u64) {
-        if p == Point::Cut && self.at[p as usize].load(Relaxed) != 0 {
+        // Points are main's only: the depth's read and write need not be one step.
+        let depth = self.depth.load(Relaxed);
+        match p {
+            // A nested draw's start is not the frame's first: the once-a-frame rule below drops it.
+            Point::DrawIn => self.depth.store(depth + 1, Relaxed),
+            Point::DrawOut => {
+                self.depth.store(depth.saturating_sub(1), Relaxed);
+                if depth != 1 {
+                    return;
+                }
+            }
+            _ => {}
+        }
+        if p != Point::Idle && self.at[p as usize].load(Relaxed) != 0 {
             return;
         }
         for (column, from, to) in SEGMENTS {
@@ -258,6 +276,7 @@ impl Marks {
             for a in &self.at {
                 a.store(0, Relaxed);
             }
+            self.depth.store(0, Relaxed);
         }
         self.at[p as usize].store(now, Relaxed);
     }
@@ -270,6 +289,15 @@ impl Marks {
             .map_or(JOIN_OTHER, |i| Column::JoinFirst as usize + i);
         self.add(column, ns);
         self.add(Column::JoinWait as usize, ns);
+    }
+
+    /// No values and no points (a fresh window).
+    pub fn clear(&self) {
+        let _ = self.take();
+        for a in &self.at {
+            a.store(0, Relaxed);
+        }
+        self.depth.store(0, Relaxed);
     }
 
     /// The values since the last take, per column: (microseconds, calls). The points stay.
@@ -302,7 +330,9 @@ static START: OnceLock<Instant> = OnceLock::new();
 pub fn on() -> bool {
     match STATE.load(Relaxed) {
         0 => read_switch(),
-        s => s == 2,
+        2 => true,
+        3 => HERE.with(Cell::get),
+        _ => false,
     }
 }
 
@@ -318,6 +348,39 @@ fn read_switch() -> bool {
 #[doc(hidden)]
 pub fn set_on(on: bool) {
     STATE.store(if on { 2 } else { 1 }, Relaxed);
+}
+
+thread_local! {
+    /// The switch is on for this thread ([`on_here`]).
+    static HERE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Serialises the tests that switch the aid on for their own thread.
+static HERE_LOCK: Mutex<()> = Mutex::new(());
+
+/// The switch on for the calling thread only, until the guard drops (the engine crates' tests of the marks'
+/// places: other tests in the same process, on other threads, record nothing meanwhile). The values start empty.
+#[doc(hidden)]
+pub fn on_here() -> Here {
+    let lock = HERE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
+    HERE.with(|h| h.set(true));
+    STATE.store(3, Relaxed);
+    MARKS.clear();
+    Here { _lock: lock }
+}
+
+/// [`on_here`]'s guard: the switch back off when dropped.
+#[doc(hidden)]
+pub struct Here {
+    _lock: MutexGuard<'static, ()>,
+}
+
+impl Drop for Here {
+    fn drop(&mut self) {
+        HERE.with(|h| h.set(false));
+        STATE.store(1, Relaxed);
+        MARKS.clear();
+    }
 }
 
 /// Nanoseconds since the clock's start, plus 1 (so never 0).
@@ -407,10 +470,23 @@ mod tests {
         m.point(Point::DrawIn, 3_500);
         m.point(Point::Cut, 5_000);
         m.point(Point::Cut, 5_200); // a second cut in the frame: the first counts
+                                    // A draw nested inside the frame's draw neither starts nor ends it.
+        m.point(Point::DrawIn, 5_300);
+        m.point(Point::DrawOut, 5_400);
         m.point(Point::DrawEnd, 9_000);
         m.point(Point::PassEnd, 9_400);
         m.point(Point::DrawOut, 10_000);
         m.point(Point::SwapOut, 10_100);
+        // A second draw sequence in the tail (a save's screenshot): no stage moves.
+        for (p, at) in [
+            (Point::DrawIn, 10_200),
+            (Point::Cut, 10_300),
+            (Point::DrawEnd, 10_500),
+            (Point::PassEnd, 10_600),
+            (Point::DrawOut, 10_700),
+        ] {
+            m.point(p, at);
+        }
         m.point(Point::WaitIn, 12_000);
         m.point(Point::WaitOut, 12_000);
         let v = m.take();
@@ -492,6 +568,13 @@ mod tests {
         drop(scope(Column::DrawRest));
         join_wait(0x0087_5110, 1_000);
         job(2_000);
+        // A frame start clears the points (nothing ends there in this frame).
+        point(Point::Idle);
+        assert!(MARKS
+            .at
+            .iter()
+            .enumerate()
+            .all(|(i, a)| (i == Point::Idle as usize) == (a.load(Relaxed) != 0)));
         let v = take();
         set_on(false);
         // The seam's own tests may join or run a job meanwhile: only columns they never touch are exact.
@@ -502,7 +585,5 @@ mod tests {
         assert_eq!(v[j], (1.0, 1));
         assert!(v[Column::JoinWait as usize].1 >= 1);
         assert!(v[Column::Job as usize].1 >= 1);
-        point(Point::Idle);
-        let _ = take();
     }
 }

@@ -124,6 +124,8 @@ pub struct FrameLog {
 impl FrameLog {
     /// The log `NV_FRAME_LOG` names, if any. A file that can't be made is said once and no log.
     pub fn from_env() -> Option<FrameLog> {
+        // `NV_STAGE_TIME` read once here, before main's frames, so each mark after is one load.
+        engine::stage_time::on();
         let path = std::env::var_os("NV_FRAME_LOG")?;
         let file = match std::fs::File::create(&path) {
             Ok(file) => file,

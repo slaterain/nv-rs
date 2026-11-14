@@ -83,7 +83,10 @@ measuring aid for the drawing thread): the frame's stages on main (`st_u` to `st
 `st_draw_end_to_idle`), each step of the drawing sequence after the world pass by its exe function, the world
 draw's two halves wherever they run, and with the drawing thread on its job's own time and main's wait at each
 join by the join's exe function. Microseconds and calls per column; the stages that end at the next OnIdle land in
-the next frame's line. Off, each mark is one load.
+the next frame's line. Each point counts once a frame, the first time, and a draw nested in the frame's draw does
+not move it: a second draw sequence in a frame (a save's screenshot, a menu opened in the frame's tail) adds to the
+steps' columns but not to the stages, so in a frame whose step columns show `_n` above 1 the steps do not add up to
+the stages. Off, each mark is one load.
 
 `NV_PHYS_BLEND_LOG=FILE`, with the smooth physics drawing on (say `NV_PRESET=fixes`: the variable pins
 vanilla otherwise), writes per drawn frame each free body's node as the original draws it and as the
@@ -990,8 +993,9 @@ or 1, like every row): the thread with the value packet's POISON check, for test
   both halves are posted to the `nv-draw` helper (`engine::real_threads::post_draw`). Main goes on with the rest of
   the frame and joins the job at the next `Main::OnIdle` (`0086e650`), before the controls are read; the device then
   replays the drawing side's commands at the cut, in the serial order.
-- **Early joins**, at the entries of: `008746d0`, `00874920`, `00b63a90`, `00875e40`, `006426a0` (the world
-  accumulator's later users); a save (`008503b0`) and a load (`00847df0`); `MemoryLevelManager::FreeReleasedObjects`
+- **Early joins**, at the entries of: `008746d0`, `00874920`, `00b63a90`, `00875e40`, `006426a0`, `00875110` (the
+  world accumulator's later users; `00875110`'s screens and overlay accumulate into it, and indoors with no sky, no
+  water and no refraction step no earlier join comes before them); a save (`008503b0`) and a load (`00847df0`); `MemoryLevelManager::FreeReleasedObjects`
   (`00878250`: `PurgeCellBuffers` from a script or the console, fast travel, cell clearing), `00453dc0`,
   `PositionPlayer` (`0093c200`), `FastTravel` (`0093cdf0`), `ClearCellsIfTargetNotLoaded` (`0093d500`), and the light
   processing (`00b5fd60`, `00b5d300`) that rebuilds a light's object lists; a second draw sequence (the dispatcher
@@ -1014,6 +1018,8 @@ or 1, like every row): the thread with the value packet's POISON check, for test
 - **What it could gain as built: little.** The same draw sequence uses the world accumulator after the world draw
   (the sun's occlusion query `006426a0` in every exterior with a sky, the scope pass, shadows, the water redraw) and
   resets it at its end, so the join is never later than the end of the draw sequence and, outdoors, falls inside the
-  world pass: about nothing outdoors, up to the end of the draw sequence indoors. Every 600 posts the log prints the
-  posts, the joins by join point and the joins inside the same world pass. The corrected plan (the rest of the draw
+  world pass: about nothing outdoors, up to `00875110`'s entry indoors. Every 600 posts the log prints the posts,
+  the joins by join point and the joins inside the same world pass, then a line with main's waits at each join
+  point, the jobs' own run times and the packet's close at the joins (count, total and longest, in ms; a job counts
+  only when it drew to its end). The corrected plan (the rest of the draw
   sequence on the drawing side) is `measure/draw-thread/PLAN-B.md`.

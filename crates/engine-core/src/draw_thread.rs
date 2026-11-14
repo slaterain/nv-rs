@@ -90,8 +90,9 @@ pub struct Hooks {
 struct Slot {
     packet: Option<Packet>,
     back: Option<Packet>,
-    /// The job's own run time (nanoseconds, on the helper), set at its end.
-    job_ns: u64,
+    /// The job's own run time (nanoseconds, on the helper), set at its end; none for a job that never ran.
+    /// Counted only at a clean join (a stopped job's stop comes back at its join).
+    job_ns: Option<u64>,
 }
 
 type SharedSlot = Arc<Mutex<Slot>>;
@@ -389,7 +390,9 @@ fn finish_posted(e: &mut Engine, at: u32) {
                 r.by_point.push(j);
             }
         }
-        r.jobs.add(job_ns);
+        if let Some(ns) = job_ns.filter(|_| joined.is_ok()) {
+            r.jobs.add(ns);
+        }
         if let Some(ns) = close_ns {
             r.closes.add(ns);
         }
@@ -504,7 +507,7 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
     let slot: SharedSlot = Arc::new(Mutex::new(Slot {
         packet: Some(packet),
         back: None,
-        job_ns: 0,
+        job_ns: None,
     }));
     let job_slot = slot.clone();
     let job: real_threads::DrawJob = Box::new(move |w: &mut Engine| {
@@ -522,14 +525,17 @@ fn first_half_on(e: &mut Engine, camera: u32, accumulator: u32, third: u32, over
             call_second(w, camera, accumulator, third);
         }));
         let back = (hooks.hand_back)(w);
-        // The run time is in the slot before the device's close lets main's join through.
+        // The run time is in the slot before the device's close lets main's join through (counted there only when the
+        // join is clean: a stop comes back at it); the frame's column takes only a job that drew to its end.
         let ns = start.elapsed().as_nanos() as u64;
         {
             let mut s = lock_slot(&job_slot);
             s.back = back;
-            s.job_ns = ns;
+            s.job_ns = Some(ns);
         }
-        stage_time::job(ns);
+        if drawn.is_ok() {
+            stage_time::job(ns);
+        }
         (hooks.device_close)(w);
         if let Err(payload) = drawn {
             std::panic::resume_unwind(payload);
