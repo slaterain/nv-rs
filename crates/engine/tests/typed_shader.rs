@@ -10962,6 +10962,19 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
         );
         let back = cut::hand_back(&mut handed).expect("handed back");
         assert!(!cut::adopted());
+        // The scribble is put back at the hand-back, before main joins: the camera's copied words (+0x68 to +0x114)
+        // are main's again in guest memory.
+        let camera_words = |e: &Engine, camera: u32| -> Vec<u32> {
+            (0x68..0x114)
+                .step_by(4)
+                .map(|at| e.mem.u32(camera + at))
+                .collect()
+        };
+        assert_eq!(
+            camera_words(&handed, b[0]),
+            camera_words(&plain, a[0]),
+            "forced {forced}: POISON's scribble left in guest memory at the hand-back"
+        );
         cut::join_handed(&mut handed, back);
         capture::set_thread_mode(None);
         statics::set_forced(false);
@@ -11130,7 +11143,8 @@ fn light_setup_reads_the_pass_lights_through_the_packet() {
 }
 
 /// The geometry's lights (`00b78a90`, which runs the per-light set-up for each pass light) read the pass's
-/// light count, array and lights through the packet.
+/// light count, array and lights through the packet, and a point light the scene node's camera position (+0x1e4,
+/// the frame's values: the late gate's record difference in Doc's house, vertex register 26, was it read in place).
 #[test]
 fn lights_read_the_pass_lights_through_the_packet() {
     packet_same(
@@ -11144,7 +11158,10 @@ fn lights_read_the_pass_lights_through_the_packet() {
             words.extend([g.transform(), g.pass_type, g.skin]);
             (words, vec![g.rendering])
         },
-        |e, w| cut::take_pass_lights(e, w[0]),
+        |e, w| {
+            cut::take_pass_lights(e, w[0]);
+            cut::take_frame(e, 0, Ptr::new(0));
+        },
     );
 }
 
@@ -11216,6 +11233,7 @@ fn lights_read_the_first_active_light_through_the_packet() {
         |e, w| {
             cut::take_pass_lights(e, w[0]);
             cut::take_property_lights(e, w[1]);
+            cut::take_frame(e, 0, Ptr::new(0));
         },
     );
 }
@@ -12825,6 +12843,84 @@ fn fill_takes_a_particle_data_by_its_count_getter() {
     assert_eq!((count, report.misses), (3, 0), "{report:?}");
 }
 
+/// The cut (`cut::fill`) takes a particle system's arrays when its own render (slot 0xdc, which the batch renderer
+/// calls for the particle classes) is the particles' draw (`00a9b1f0`), as in the four particle classes' vtables (their
+/// slot 0xe0 the plain geometry's `00a80650`): the late gate's stop in Goodsprings, frame 3524, was such a system's
+/// point indices read by the points draw from a data the cut had taken only the count of.
+#[test]
+fn fill_takes_a_particle_systems_arrays_by_its_own_render() {
+    let mut e = Engine::new();
+    let d = draw_world(&mut e);
+    let geometry = e.mem.u32(d.w.passes[0]);
+    let vt = vtable(&mut e, &[(0xdc, 0x00a9_b1f0), (0xe0, 0x00a8_0650)]);
+    set(&mut e, geometry, vt);
+    let data_vt = vtable(&mut e, &[(0x90, 0x00a9_23a0)]);
+    let data = obj(&mut e, 0x70, data_vt);
+    e.mem.set_u16(data + 0x50, 2);
+    let positions = e.mem.alloc(0x18);
+    let indices = e.mem.alloc(4);
+    set(&mut e, data + 0x20, positions);
+    set(&mut e, data + 0x44, indices);
+    set(&mut e, geometry + 0xb8, data);
+    assert!(capture::begin(&e));
+    cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
+    let _ = capture::span(&e, positions, 0, 0x18);
+    let _ = capture::span(&e, indices, 0, 4);
+    let report = capture::end(&mut e);
+    assert_eq!(report.misses, 0, "{report:?}");
+}
+
+/// The toggles' colour (`UpdateTogglesConstant`, `00c02d90`) reads the geometry's property's second flags (+0x24) through
+/// the packet: with what the cut takes for the geometry scribbled in guest memory (POISON), it writes as without (the
+/// late gate's first record difference in Doc's house, the red of pixel register 27, was this read in place: the
+/// scribble's bit 5 set).
+#[test]
+fn tint_reads_the_property_flags_through_the_packet() {
+    packet_same_cases(
+        "set_tint",
+        entry!(0x00c0_2d90, acc::set_tint(u32, Ptr<_>, u32, u32)).1,
+        &word_cases(&[vec![0, 0], vec![0x20, 1], vec![0, 1]]),
+        true,
+        |e, c| {
+            let _ = world(e);
+            let vt = vtable(e, &[]);
+            let property = obj(e, 0x100, vt);
+            set(e, property + 0x24, c.word(0));
+            let geometry = group_c_geometry(e, 0, property, 0x010a_f2f8);
+            (vec![0x55, geometry, c.word(1), 0], vec![geometry])
+        },
+        |e, w| cut::take_geometry_values(e, w[0]),
+    );
+}
+
+/// The shaders' blend (slot 0x80, `00be1ff0`) reads the property's alpha and fade alpha (+0x28, +0x2c) through the
+/// packet: with what the cut takes for the geometry scribbled in guest memory (POISON), it blends as without (opaque,
+/// a fading alpha, a fading fade alpha).
+#[test]
+fn blend_reads_the_property_alphas_through_the_packet() {
+    packet_same_cases(
+        "set_blend_of",
+        entry!(0x00be_1ff0, acc::set_blend_of(u32, u32)).1,
+        &word_cases(&[vec![ONE, ONE], vec![HALF, ONE], vec![ONE, HALF]]),
+        true,
+        |e, c| {
+            let _ = world(e);
+            let vt = vtable(e, &[]);
+            let property = obj(e, 0x100, vt);
+            set(e, property + 0x28, c.word(0));
+            set(e, property + 0x2c, c.word(1));
+            let alpha = obj(e, 0x1c, vt);
+            e.mem.set_u16(alpha + 0x18, (5 << 1) | (9 << 5));
+            let block = e.mem.alloc(0x10);
+            set(e, block, alpha);
+            set(e, block + 0xc, property);
+            let geometry = group_c_geometry(e, 0, property, 0x010a_f2f8);
+            (vec![0x55, block], vec![geometry])
+        },
+        |e, w| cut::take_geometry_values(e, w[0]),
+    );
+}
+
 /// The cut (`cut::fill`) copies a no-lighting geometry's sub-texture array (its model data's +0x68, count +0x6c) only
 /// when the geometry is drawn in a sub-texture pass type (0x52 to 0x57, where `00bc9a50` calls `00bc6fa0`): another
 /// model data keeps other words there, which other readers use (the first-half stop the drawing thread's late gate
@@ -13083,11 +13179,14 @@ fn lights_write_the_draws_own_constants() {
             words.extend([g.transform(), g.pass_type, g.skin]);
             (words, e.mem.alloc(0x200))
         },
-        |e, _, _| cut::take_pass_lights(e, e.mem.u32(0x011f_91e0)),
+        |e, _, _| {
+            cut::take_pass_lights(e, e.mem.u32(0x011f_91e0));
+            cut::take_frame(e, 0, Ptr::new(0));
+        },
     );
 }
 
-/// The shader manager's mode (`00b4f450`, typed: `own::select_shader_mode`) sets the mode and its two function
+///The shader manager's mode (`00b4f450`, typed: `own::select_shader_mode`) sets the mode and its two function
 /// words in the packet: a mode with entries in both tables, one without (the tables' first entries), past them.
 #[test]
 fn select_shader_mode_keeps_the_draws_own_state() {

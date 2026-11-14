@@ -716,14 +716,12 @@ pub fn land_values(e: &mut Engine, _this: Ptr, enabled: u32, property: u32) {
             let word = e.global::<u32>(block.wrapping_add(0xc + 4 * k)); // own: main's object read in place (set at load)
             own::set_constant_word(e, LAND_WORDS + 4 * k, word);
         }
-        for (offset, target) in [
-            (0x4cu32, LAND_VALUE_A),
-            (0x50, LAND_VALUE_B),
-            (0x54, LAND_VALUE_C),
-        ] {
-            let word = e.global::<u32>(block.wrapping_add(offset)); // own: main's object read in place (set at load)
-            own::set_constant_word(e, target, word);
-        }
+        let word = e.global::<u32>(block.wrapping_add(0x4c)); // own: main's object read in place (set at load)
+        own::set_constant_word(e, LAND_VALUE_A, word);
+        let word = e.global::<u32>(block.wrapping_add(0x50)); // own: main's object read in place (set at load)
+        own::set_constant_word(e, LAND_VALUE_B, word);
+        let word = e.global::<u32>(block.wrapping_add(0x54)); // own: main's object read in place (set at load)
+        own::set_constant_word(e, LAND_VALUE_C, word);
         own::set_constant_word(e, LAND_ONE, 1.0f32.to_bits());
     }
     for k in 0..8u32 {
