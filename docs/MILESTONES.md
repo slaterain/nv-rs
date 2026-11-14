@@ -80,7 +80,7 @@ compiled to the same bytes as xNVSE writes them (byte tests from its source's ru
 compiled-script cache file is left out as a speed cache only. JIP LN NVSE's commands are in progress (README's
 system table has the counts; batch 10 of 2026-11-14 adds the maths, utility, load screen, terminal, cell,
 radio, reference and game data commands, batch 11 the actor base, equipped item, hotkey, base container and
-sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters); its engine hooks (step 3.5) are built in at their seams: the UI, actor
+sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters, lane B the LN miscellaneous commands and the first inventory commands); its engine hooks (step 3.5) are built in at their seams: the UI, actor
 and AI hooks, and since 2026-11-14 the world hooks (step 3.5c) and `CCCSetEquipped` with its always-on `GetCannotWear`
 patch (step 3.5d), switched on only by its commands and only once JIP answers "installed" (left for later:
 `ToggleImmortalMode` with its hit patches in step 3.9).

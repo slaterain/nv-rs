@@ -30,6 +30,7 @@ pub mod jip_fn_grass;
 pub mod jip_fn_imagespace;
 pub mod jip_fn_impact_data;
 pub mod jip_fn_input;
+pub mod jip_fn_inventory;
 pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_misc_ref;
@@ -59,6 +60,7 @@ pub mod ln_fn_load_screen;
 pub mod ln_fn_map_marker;
 pub mod ln_fn_math;
 pub mod ln_fn_misc_ref;
+pub mod ln_fn_miscellaneous;
 pub mod ln_fn_perk;
 pub mod ln_fn_race;
 pub mod ln_fn_radio_ref;
@@ -94,6 +96,7 @@ pub const ALL_CONDITIONS: &[Conditions] = &[
     ln_fn_gamepad::CONDITIONS,
     jip_fn_ccc::CONDITIONS,
     jip_fn_weapon::CONDITIONS,
+    ln_fn_miscellaneous::CONDITIONS,
 ];
 
 /// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
@@ -160,6 +163,8 @@ pub const ALL: &[Handlers] = &[
     ln_fn_gamepad::COMMANDS,
     jip_fn_input::COMMANDS,
     jip_fn_ccc::COMMANDS,
+    jip_fn_inventory::COMMANDS,
+    ln_fn_miscellaneous::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -728,6 +733,8 @@ mod tests {
             "ln_fn_gamepad",
             "jip_fn_input",
             "jip_fn_ccc",
+            "jip_fn_inventory",
+            "ln_fn_miscellaneous",
         ];
         let mut seen = std::collections::HashSet::new();
         for (list, file) in ALL.iter().zip(files) {
@@ -746,6 +753,7 @@ mod tests {
             "ln_fn_gamepad",
             "jip_fn_ccc",
             "jip_fn_weapon",
+            "ln_fn_miscellaneous",
         ]) {
             for &(opcode, _, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
@@ -754,7 +762,7 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS.len(), 7);
+        assert_eq!(ALL_CONDITIONS.len(), 8);
         for (list, file) in ALL_CONDITIONS_ONLY.iter().zip(["jip_fn_aux_variable"]) {
             for &(opcode, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
