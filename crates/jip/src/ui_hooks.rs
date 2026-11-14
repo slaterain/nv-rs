@@ -541,7 +541,9 @@ fn guest_text(e: &Engine, at: u32, limit: u32) -> Vec<u8> {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::GetComponentFullName.
 /// A tile's path from its menu tile down: each tile's name, with `:n` when `n` earlier siblings
-/// (counted back from it in its parent's children) have the same name, joined by `/`.
+/// (counted back from it in its parent's children) have the same name, joined by `/`. Empty when
+/// a tile is missing from its parent's children (JIP reads through the list's null end) or a
+/// child list runs back into itself (with the list guard row: `list_step`).
 pub fn component_full_name(e: &Engine, tile: u32) -> Vec<u8> {
     let mut parents = Vec::new();
     let mut t = tile;
@@ -562,15 +564,26 @@ pub fn component_full_name(e: &Engine, tile: u32) -> Vec<u8> {
         let parent = e.get(Ptr::<Tile>::new(t), Tile::pParent);
         let children = parent + Tile::xChildren.off;
         let mut node = e.mem.u32(children + 4);
-        while e.get(Ptr::<NiTListItem>::new(node), NiTListItem::m_element) != t {
+        let mut walked = 0usize;
+        loop {
+            if node == 0 || !crate::commands::list_step(e, &mut walked) {
+                return Vec::new();
+            }
+            if e.get(Ptr::<NiTListItem>::new(node), NiTListItem::m_element) == t {
+                break;
+            }
             node = e.get(Ptr::<NiTListItem>::new(node), NiTListItem::m_pkPrev);
         }
         let own = guest_text(e, name_ptr, 0x1000);
         let mut index = 0;
+        let mut walked = 0usize;
         loop {
             node = e.get(Ptr::<NiTListItem>::new(node), NiTListItem::m_pkPrev);
             if node == 0 {
                 break;
+            }
+            if !crate::commands::list_step(e, &mut walked) {
+                return Vec::new();
             }
             let sibling = e.get(Ptr::<NiTListItem>::new(node), NiTListItem::m_element);
             let sibling_name = guest_text(e, e.mem.u32(sibling + name_at), 0x1000);

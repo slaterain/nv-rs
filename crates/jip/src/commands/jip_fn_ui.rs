@@ -33,7 +33,13 @@
 //!   `TogglePipBoyLight`, `GetWorldMapPosMults`, `GetStringUIDimensions`.
 //!
 //! Where JIP reads through a null pointer (a menu's tile, a recipe menu without a category, a
-//! trait path without a trait), the command does nothing here: listed in the lane's audit.
+//! trait path without a trait), the command does nothing here: listed in the lane's audit. Also
+//! there, as deliberate differences: a tile's child list ends as the crate's other game list
+//! walks do (`list_step`), a trait map bucket and a tile's parents after `MAX_WALK` (kept as this
+//! module's own cap: "not there"); a name handed to the game is cut to JIP's buffer (`in_buffer`);
+//! the active tile's path is `""` where a child list is broken (`ui_hooks::component_full_name`);
+//! and with the fixes preset's size caps row `ClickMenuButton` stops once its menu is closed and
+//! after 65,536 clicks (vanilla makes every click, as JIP).
 
 use super::arrays::{create_array, create_map, set_element, Element, TempElements};
 use super::{
@@ -45,6 +51,7 @@ use crate::Jip;
 use engine_core::extend::Hook;
 use engine_core::prelude::*;
 use nvse::args::Arg;
+use nvse::commands::array::{fix_on, SIZE_CAPS};
 use nvse::commands::Read;
 use nvse::vars::Key;
 use nvse::{handled, CommandArgs, EvalArgs};
@@ -239,9 +246,18 @@ const SPECIAL_BOOK: u32 = 0x424;
 const ITEM_MOD: u32 = 0x425;
 const LOVE_TESTER: u32 = 0x432;
 const TRAIT_MENU: u32 = 0x43c;
-/// The most nodes a child list or a map bucket is walked through, and the most parents a tile
-/// path is followed up (a broken list ends there).
+/// The most items a trait map bucket is walked through, and the most parents a tile is followed
+/// up for its menu: past it the walk ends silently with "not there" (JIP would walk a broken
+/// chain for ever). A tile's child list is a game list and ends as the crate's other list walks
+/// do ([`super::list_step`]: with the list guard row, else the port stops).
 const MAX_WALK: u32 = 1 << 16;
+/// `Menu::pMenu` (+4, engine-bs `menu.rs`): the menu's `TileMenu`, the tile `Menu::~Menu`
+/// (`00A1C520`) deletes after clearing the menu's shown byte (`0x011F308F + id`) and its
+/// `g_tileMenuArray` entry (`00A1E130(id, 0)`: `00A1E680` on the array object `0x011F3508`,
+/// whose data word is `0x011F350C`).
+const MENU_TILE: u32 = 0x04;
+/// The most clicks `ClickMenuButton` makes with the fixes preset's size caps row on.
+const MAX_CLICKS: u32 = 1 << 16;
 /// JIP's `tilePath[0x100]`, `xmlPath[0x80]`, `modelPath[0x80]`, `AddTileFromTemplate`'s
 /// `buffer[0x100]` (`ExtractFormatStringArgs` into it).
 const PATH_BUFFER: usize = 0x100;
@@ -261,6 +277,15 @@ fn num_args(e: &Engine, a: &CommandArgs) -> u8 {
 }
 
 // ---- tiles and paths ----
+
+/// What of `text` JIP's `size`-byte buffer holds before its 0 (`size - 1` bytes at most): the
+/// part of a path, file name or template name a game function is given. With the list guard row
+/// [`buffer_arg`] reads a longer text whole (JIP's would run past its buffer); a text of about
+/// 1 MiB would not fit on the guest stack ([`with_guest_text`]), and no trait, file or template
+/// name is that long, so the lookup answers "not there" as it would with the whole text.
+fn in_buffer(text: &[u8], size: usize) -> &[u8] {
+    &text[..text.len().min(size - 1)]
+}
 
 /// `SlashPos` (JIP LN NVSE): the first `/` or `\`.
 fn slash_pos(path: &[u8]) -> Option<usize> {
@@ -319,10 +344,8 @@ fn child(e: &Engine, tile: u32, child: &[u8]) -> u32 {
     };
     let any = name.first() == Some(&b'*');
     let mut node = e.mem.u32(tile + TILE_CHILDREN);
-    for _ in 0..MAX_WALK {
-        if node == 0 {
-            break;
-        }
+    let mut walked = 0usize;
+    while node != 0 && super::list_step(e, &mut walked) {
         let candidate = e.mem.u32(node + 8);
         if candidate != 0 {
             // StrCompareCI with a null name answers "less": no match.
@@ -367,13 +390,14 @@ fn component<'a>(e: &Engine, tile: u32, path: &'a [u8]) -> Option<(u32, Option<&
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/Ni_types.h: NiTMap::Lookup (on the
 // game's trait names map, nvse/GameTiles.cpp: Tile::TraitNameToID).
 /// The trait id named `name`: the map's hash picks the bucket, its compare finds the key; 0 when
-/// it is not there.
+/// it is not there. The name is a part of JIP's `tilePath[0x100]`: at most its 255 bytes go to
+/// the game ([`in_buffer`]).
 fn trait_id(e: &mut Engine, name: &[u8]) -> u32 {
     let vtable = e.mem.u32(TRAIT_MAP);
     if vtable == 0 {
         return 0;
     }
-    with_guest_text(e, name, |e, key| {
+    with_guest_text(e, in_buffer(name, PATH_BUFFER), |e, key| {
         let (hash, equal) = (e.mem.u32(vtable + 4), e.mem.u32(vtable + 8));
         let bucket = e.call(hash, &args![TRAIT_MAP, key]).u32();
         let buckets = e.mem.u32(TRAIT_MAP + 8);
@@ -521,7 +545,8 @@ fn active_tile(e: &Engine) -> u32 {
 
 /// The active tile's path (`Tile::GetComponentFullName`, `ui_hooks::component_full_name`); `None`
 /// without an active tile, or when the tile is not under a menu tile within JIP's 24 levels (JIP
-/// runs past its array there).
+/// runs past its array there); empty when a tile on the way is missing from its parent's child
+/// list (JIP reads through the list's end).
 fn active_full_name(e: &Engine) -> Option<Vec<u8>> {
     let tile = active_tile(e);
     if tile == 0 {
@@ -640,7 +665,7 @@ fn inject_ui_xml(e: &mut Engine, w: &[u32]) -> Ret {
         let path = path_arg(e, &read, 0, "InjectUIXML");
         let xml = buffer_arg(e, &read, 1, XML_BUFFER, "InjectUIXML");
         if let Some((tile, _)) = target_component(e, &path, false) {
-            let made = with_guest_text(e, &xml, |e, at| {
+            let made = with_guest_text(e, in_buffer(&xml, XML_BUFFER), |e, at| {
                 e.call(TILE_READ_FILE, &args![tile, at]).u32()
             });
             if made != 0 {
@@ -802,7 +827,7 @@ fn add_tile_from_template(e: &mut Engine, w: &[u32]) -> Ret {
     if owner == 0 {
         return handled(true);
     }
-    let made = with_guest_text(e, template, |e, at| {
+    let made = with_guest_text(e, in_buffer(template, PATH_BUFFER), |e, at| {
         e.call(RENDER_TEMPLATE, &args![owner, tile, at, 0u32]).u32()
     });
     if made != 0 {
@@ -819,7 +844,10 @@ fn add_tile_from_template(e: &mut Engine, w: &[u32]) -> Ret {
 /// In menu mode, `times` clicks (0: none) on a menu's tile: `Menu#id` clicks tile id `id` (not
 /// below 0) of the menu named before the `#`; else the tile at the path, its own `id` trait's
 /// number (-1 without one), through its menu. Each click is the menu's click handler (its
-/// vtable's, so JIP's click events run too); result 1.
+/// vtable's, so JIP's click events run too); result 1. JIP makes all `times` clicks (a count of
+/// -1 is 4,294,967,295 of them, and they go on through a menu a click closed); with the fixes
+/// preset's size caps row on, the clicks also end once the menu is closed ([`menu_still_open`])
+/// and after [`MAX_CLICKS`] (a deliberate difference, in the lane's audit).
 fn click_menu_button(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
@@ -852,13 +880,29 @@ fn click_menu_button(e: &mut Engine, w: &[u32]) -> Ret {
         }
     }
     if menu != 0 {
-        for _ in 0..times {
+        let caps = fix_on(e, SIZE_CAPS);
+        // Read before the first click: a click may close the menu and free it.
+        let (id, menu_tile) = (e.mem.u32(menu + MENU_ID), e.mem.u32(menu + MENU_TILE));
+        let mut clicks = 0u32;
+        while clicks < times {
             let handler = e.mem.u32(e.mem.u32(menu) + HANDLE_CLICK_SLOT);
             e.call(handler, &args![menu, tile_id as u32, tile]);
+            clicks += 1;
+            if caps && (clicks == MAX_CLICKS || !menu_still_open(e, id, menu_tile)) {
+                break;
+            }
         }
         a.set_result(e, 1.0);
     }
     handled(true)
+}
+
+/// Whether menu `id`, whose `TileMenu` was `menu_tile`, is still open: `g_tileMenuArray[id]` is
+/// still that tile and its shown byte is set (`Menu::~Menu` clears both).
+fn menu_still_open(e: &Engine, id: u32, menu_tile: u32) -> bool {
+    menu_tile != 0
+        && menu_tile_by_id(e, id) == menu_tile
+        && e.mem.u8(MENU_SHOWN.wrapping_add(id)) != 0
 }
 
 // ---- the interface manager ----

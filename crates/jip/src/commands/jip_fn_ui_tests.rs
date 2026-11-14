@@ -125,6 +125,7 @@ fn menu(e: &mut Engine, n: u32, id: u32, name: &[u8]) -> (u32, u32) {
     e.mem.set_u32(mt, 0x0106_ed44);
     let m = MENUS + 0x200 * n;
     e.mem.set_u32(m, MENU_VT);
+    e.mem.set_u32(m + 4, mt);
     e.mem.set_u32(m + 0x20, id);
     e.mem.set_u32(mt + 0x3c, m);
     e.mem.set_u32(MENU_ARRAY + 4 * (id - 0x3e9), mt);
@@ -524,6 +525,11 @@ fn menu_buttons_click_through_the_vtable() {
         click(&mut e, &[s(b"InventoryMenu#5")]),
         (1.0, vec![vec![m, 5, 0]])
     );
+    assert_eq!(
+        click(&mut e, &[s(b"InventoryMenu#0")]),
+        (1.0, vec![vec![m, 0, 0]]),
+        "tile id 0"
+    );
     assert_eq!(click(&mut e, &[s(b"InventoryMenu#-1")]), (0.0, vec![]));
     assert_eq!(click(&mut e, &[s(b"InventoryMenu/Box#5")]), (0.0, vec![]));
     assert_eq!(click(&mut e, &[s(b"Nope/Box")]), (0.0, vec![]));
@@ -536,6 +542,219 @@ fn menu_buttons_click_through_the_vtable() {
         click(&mut e, &[s(b"InventoryMenu/Box/Item")]),
         (0.0, vec![])
     );
+}
+
+/// The click handler as a menu's own that closes the menu at the third click: the menu's
+/// `g_tileMenuArray` entry cleared (`by_tile`), else its shown byte (as `Menu::~Menu` does both).
+fn closing_click(e: &mut Engine, by_tile: bool) {
+    if by_tile {
+        e.register(CLICK_FN, |e, w| {
+            record(CLICK_FN, w);
+            if calls_to(CLICK_FN).len() == 3 {
+                e.mem.set_u32(MENU_ARRAY + 4, 0);
+            }
+            eax(0)
+        });
+    } else {
+        e.register(CLICK_FN, |e, w| {
+            record(CLICK_FN, w);
+            if calls_to(CLICK_FN).len() == 3 {
+                e.mem.set_u8(0x011f_308f + 0x3ea, 0);
+            }
+            eax(0)
+        });
+    }
+}
+
+#[test]
+fn menu_button_clicks_with_the_size_caps_row() {
+    let count = |e: &mut Engine, times: i32| {
+        CALLS.with(|c| c.borrow_mut().clear());
+        let res = call(e, 0x2687, &[s(b"InventoryMenu#1"), n(times)]).1;
+        (res, calls_to(CLICK_FN).len())
+    };
+    let mut e = setup();
+    tree(&mut e);
+    in_menu_mode(&mut e);
+    e.mem.set_u8(0x011f_308f + 0x3ea, 1);
+    // Vanilla (the row off): every click, as JIP, past the row's cap and through a closed menu.
+    assert_eq!(count(&mut e, 70_000), (1.0, 70_000));
+    closing_click(&mut e, true);
+    assert_eq!(
+        count(&mut e, 10),
+        (1.0, 10),
+        "vanilla clicks on after the close"
+    );
+    // The row on: -1 (4,294,967,295) and 2^31 stop at the cap.
+    let mut e = setup();
+    tree(&mut e);
+    in_menu_mode(&mut e);
+    e.mem.set_u8(0x011f_308f + 0x3ea, 1);
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::SIZE_CAPS, true);
+    assert_eq!(count(&mut e, -1), (1.0, 65_536));
+    assert_eq!(count(&mut e, i32::MIN), (1.0, 65_536));
+    assert_eq!(count(&mut e, 65_535), (1.0, 65_535));
+    assert_eq!(count(&mut e, 2), (1.0, 2));
+    // ... and once the menu is closed: its tile entry gone, or its shown byte cleared.
+    closing_click(&mut e, true);
+    assert_eq!(count(&mut e, -1), (1.0, 3));
+    e.mem.set_u32(MENU_ARRAY + 4, t(1));
+    closing_click(&mut e, false);
+    assert_eq!(count(&mut e, 10), (1.0, 3));
+    // Another menu tile in the entry is not this menu's.
+    e.mem.set_u8(0x011f_308f + 0x3ea, 1);
+    e.register(CLICK_FN, |e, w| {
+        record(CLICK_FN, w);
+        e.mem.set_u32(MENU_ARRAY + 4, t(7));
+        eax(0)
+    });
+    assert_eq!(count(&mut e, 10), (1.0, 1));
+}
+
+/// The tree with the list guard row on (the walks of lists that run back into themselves).
+fn guarded_tree() -> Engine {
+    let mut e = setup();
+    tree(&mut e);
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
+    e
+}
+
+#[test]
+fn child_list_running_back_ends() {
+    let mut e = guarded_tree();
+    // Box's last child node points back to its first: a name it lacks is not found.
+    e.mem.set_u32(t(4) + 0x80, t(3) + 0x80);
+    assert_eq!(
+        call(&mut e, 0x2608, &[s(b"InventoryMenu/Box/Nope/x")]).1,
+        0.0
+    );
+    assert_eq!(
+        call(&mut e, 0x2608, &[s(b"InventoryMenu/Box/Item")]).1,
+        1.0,
+        "found before the loop"
+    );
+}
+
+#[test]
+fn trait_bucket_running_back_ends() {
+    let mut e = guarded_tree();
+    values(&mut e, t(3), &[(0xfb4, 0.0, Some(b"Hello"))]);
+    // A map bucket whose item points to itself ("target" is bucket 0's only item; 'x' hashes there).
+    e.mem.set_u32(MAP_ITEMS + 0x10, MAP_ITEMS + 0x10);
+    let res = call(&mut e, 0x2639, &[s(b"InventoryMenu/Box/Item/xq")]).1;
+    assert_eq!(string_result(&e, res), b"");
+    let res = call(&mut e, 0x2639, &[s(b"InventoryMenu/Box/Item/string")]).1;
+    assert_eq!(string_result(&e, res), b"Hello", "another bucket");
+}
+
+#[test]
+fn parent_chain_running_back_ends() {
+    let mut e = guarded_tree();
+    // A parent chain that runs in a circle without a menu tile: no menu, no click.
+    in_menu_mode(&mut e);
+    e.mem.set_u32(t(2) + 0x28, t(3));
+    e.mem.set_u32(t(3) + 0x28, t(2));
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(call(&mut e, 0x2687, &[s(b"InventoryMenu/Box/Item")]).1, 0.0);
+    assert!(calls_to(CLICK_FN).is_empty());
+}
+
+#[test]
+fn trait_compare_reads_its_low_byte() {
+    let mut e = setup();
+    tree(&mut e);
+    e.register(EQUAL_FN, |e, w| {
+        let (a, b) = (
+            nvse::table::guest_text(e, w[1]),
+            nvse::table::guest_text(e, w[2]),
+        );
+        eax(if a == b { 0x1234_5601 } else { 0xffff_ff00 })
+    });
+    values(
+        &mut e,
+        t(3),
+        &[(0xfb4, 0.0, Some(b"S")), (0xfc7, 0.0, Some(b"C"))],
+    );
+    // Bucket 3 holds "string" (first) and "clicked": "clicked" is compared with "string" first.
+    let get = |e: &mut Engine, p: &[u8]| {
+        let res = call(e, 0x2639, &[s(p)]).1;
+        string_result(e, res)
+    };
+    assert_eq!(get(&mut e, b"InventoryMenu/Box/Item/clicked"), b"C");
+    assert_eq!(get(&mut e, b"InventoryMenu/Box/Item/string"), b"S");
+}
+
+/// `$name` as the script's string variable holding `text`: the script's variable list (`+0x4C`:
+/// an info with its id +0 and name +0x18) and the event list's (`+0xC`: a variable with its id +0
+/// and value +8).
+fn dollar(e: &mut Engine, text: &[u8]) -> Vec<u8> {
+    use crate::test_support::{LIST, SCRIPT};
+    let id = nvse::vars::add_string(e, 0, text, false);
+    let (info, name, node, local) = (0x0300_3000, 0x0300_3040, 0x0300_3080, 0x0300_30c0);
+    e.mem.write(name, b"big\0");
+    e.mem.set_u32(info, 1);
+    e.mem.set_u32(info + 0x18, name);
+    e.mem.set_u32(SCRIPT + 0x4c, info);
+    e.mem.set_u32(SCRIPT + 0x50, 0);
+    e.mem.set_u32(local, 1);
+    e.mem.set_f64(local + 8, f64::from(id));
+    e.mem.set_u32(node, local);
+    e.mem.set_u32(node + 4, 0);
+    e.mem.set_u32(LIST + 0xc, node);
+    s(b"$big")
+}
+
+/// A text over 1 MiB (more than the guest stack holds).
+fn big() -> Vec<u8> {
+    vec![b'x'; (1 << 20) + 16]
+}
+
+#[test]
+fn trait_name_over_a_mebibyte_goes_cut_to_jips_buffer() {
+    let mut e = guarded_tree();
+    // A trait name: the map's hash and compare get 255 bytes.
+    e.register(HASH_FN, |e, w| {
+        record(HASH_FN, &[nvse::table::guest_text(e, w[1]).len() as u32]);
+        eax(0)
+    });
+    let mut path = b"InventoryMenu/Box/Item/".to_vec();
+    path.extend_from_slice(&big());
+    let arg = dollar(&mut e, &path);
+    let res = call(&mut e, 0x2639, &[arg]).1;
+    assert_eq!(string_result(&e, res), b"");
+    assert_eq!(calls_to(HASH_FN), vec![vec![0xff]]);
+}
+
+#[test]
+fn xml_name_over_a_mebibyte_goes_cut_to_jips_buffer() {
+    let mut e = guarded_tree();
+    // An XML file name: 127 bytes.
+    e.register(READ_FILE_FN, |e, w| {
+        record(
+            READ_FILE_FN,
+            &[nvse::table::guest_text(e, w[1]).len() as u32],
+        );
+        eax(0)
+    });
+    let arg = dollar(&mut e, &big());
+    assert_eq!(call(&mut e, 0x2609, &[s(b"InventoryMenu/Box"), arg]).1, 0.0);
+    assert_eq!(calls_to(READ_FILE_FN), vec![vec![0x7f]]);
+}
+
+#[test]
+fn template_name_over_a_mebibyte_goes_cut_to_jips_buffer() {
+    let mut e = guarded_tree();
+    // A template's name: 255 bytes.
+    e.register(RENDER_FN, |e, w| {
+        record(RENDER_FN, &[nvse::table::guest_text(e, w[2]).len() as u32]);
+        eax(0)
+    });
+    let id = nvse::vars::add_string(&mut e, 0, &big(), false);
+    assert_eq!(
+        call(&mut e, 0x28c6, &[s(b"InventoryMenu|%z"), z(f64::from(id))]).1,
+        0.0
+    );
+    assert_eq!(calls_to(RENDER_FN), vec![vec![0xff]]);
 }
 
 // ---- the interface manager ----
@@ -617,6 +836,89 @@ fn active_tile_name_path_and_id() {
     let lone = tile(&mut e, 9, 0, b"Lone");
     e.mem.set_u32(IM + 0xcc, lone);
     assert_eq!(full(&mut e), b"");
+}
+
+#[test]
+fn menu_stack_full_reads_on_inside_the_manager() {
+    let mut e = setup();
+    e.mem.set_u32(IM + 0xc, 2);
+    // All ten entries set, the word after them 0: the tenth.
+    for i in 0..10 {
+        e.mem.set_u32(IM + 0x114 + 4 * i, 0x3f0 + i);
+    }
+    assert_eq!(call(&mut e, 0x2681, &[]).1, f64::from(0x3f9));
+    // Every word after them set too (and past the manager): the last word inside it.
+    for at in (0x13c..0x700).step_by(4) {
+        e.mem.set_u32(IM + at, 0x1_0000 + at);
+    }
+    assert_eq!(call(&mut e, 0x2681, &[]).1, f64::from(0x1_0578));
+}
+
+/// A chain of `count` tiles named `L`, each under the one before, under the menu tile.
+fn deep_chain(e: &mut Engine, count: u32) -> Vec<u32> {
+    let (mut parent, mut out) = (t(1), Vec::new());
+    for i in 0..count {
+        parent = tile(e, 100 + i, parent, b"L");
+        out.push(parent);
+    }
+    out
+}
+
+#[test]
+fn active_tile_path_within_jips_24_entries() {
+    let mut e = setup();
+    menu(&mut e, 1, 0x3ea, b"InventoryMenu");
+    let chain = deep_chain(&mut e, 24);
+    let full = |e: &mut Engine| {
+        let r = call(e, 0x2683, &[]).1;
+        string_result(e, r)
+    };
+    let path = |levels: usize| {
+        let mut p = b"InventoryMenu".to_vec();
+        for _ in 0..levels {
+            p.extend_from_slice(b"/L");
+        }
+        p
+    };
+    // JIP's `parents[24]` holds the tile and 23 above it: 22 and 23 levels under the menu tile
+    // give the path, 24 run past the array (empty here).
+    for (levels, want) in [(22, path(22)), (23, path(23)), (24, Vec::new())] {
+        e.mem.set_u32(IM + 0xcc, chain[levels - 1]);
+        assert_eq!(full(&mut e), want, "{levels} levels");
+    }
+    e.mem.set_u32(IM + 0xcc, chain[22]);
+    let r = call(&mut e, 0x2682, &[]).1;
+    assert_eq!(string_result(&e, r), b"L");
+}
+
+#[test]
+fn active_tile_missing_from_its_parents_children() {
+    let mut e = setup();
+    tree(&mut e);
+    let full = |e: &mut Engine| {
+        let r = call(e, 0x2683, &[]).1;
+        string_result(e, r)
+    };
+    let name = |e: &mut Engine| {
+        let r = call(e, 0x2682, &[]).1;
+        string_result(e, r)
+    };
+    // Box's child by its parent word only: JIP reads through the list's end; empty here.
+    let ghost = tile(&mut e, 9, 0, b"Ghost");
+    e.mem.set_u32(ghost + 0x28, t(2));
+    e.mem.set_u32(IM + 0xcc, ghost);
+    assert_eq!((full(&mut e), name(&mut e)), (vec![], vec![]));
+    // The list's back links run in a circle without it (the list guard row ends the walk).
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
+    e.mem.set_u32(t(3) + 0x80 + 4, t(4) + 0x80);
+    assert_eq!(full(&mut e), b"");
+    // Found, but its earlier siblings of the same name run in a circle: empty too.
+    e.mem.write(NAMES + 0x40 * 3, b"item");
+    e.mem.set_u32(IM + 0xcc, t(4));
+    assert_eq!(full(&mut e), b"");
+    // Without the circle: the sibling counted.
+    e.mem.set_u32(t(3) + 0x80 + 4, 0);
+    assert_eq!(full(&mut e), b"InventoryMenu/Box/item:1");
 }
 
 #[test]
