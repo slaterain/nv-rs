@@ -6151,8 +6151,9 @@ fn decal_pass() {
 /// A lighting property with a light list for the first active light's getters: `shape` 0 no list; 1..=8 a list of
 /// three lights where light 0 is (1) active, (2) of index 0xff, (3) app-culled (its light's +0x30 bit 0), (4) of
 /// byte +0xec 1 (skipped by the non-shadow form only), (5) a node without a light, (6) all three inactive; lights 0
-/// and 1 of index 0xff and the last one, checked after the loop, (7) app-culled or (8) of byte +0xec 1; `ec` marks
-/// light 1's +0xec too. Answers the property and an iterator word.
+/// and 1 of index 0xff and the last one, checked after the loop, (7) app-culled or (8) of byte +0xec 1; (9) light 0
+/// of index 0xff and node 1 without a light; `ec` is light 1's +0xec (0, 1, or 2: the count takes only 0, the
+/// non-shadow getters skip only 1). Answers the property and an iterator word.
 fn active_light_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     let _ = draw_world(e);
     let (shape, ec) = (c.word(0), c.word(1));
@@ -6187,6 +6188,12 @@ fn active_light_words(e: &mut Engine, c: &Case) -> Vec<u32> {
                 e.mem.set_u16(light + 0x110, 0xff);
             }
         }
+        9 => {
+            // The head inactive and the second node without a light: the walk stops there.
+            e.mem.set_u16(first + 0x110, 0xff);
+            let second_node = e.mem.u32(next);
+            set(e, second_node + 8, 0);
+        }
         7 | 8 => {
             e.mem.set_u16(first + 0x110, 0xff);
             e.mem.set_u16(second + 0x110, 0xff);
@@ -6199,7 +6206,7 @@ fn active_light_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         _ => {}
     }
     if ec != 0 {
-        e.mem.set_u8(second + 0xec, 1);
+        e.mem.set_u8(second + 0xec, ec as u8);
     }
     vec![property, iterator]
 }
@@ -6213,7 +6220,10 @@ fn first_active_light() {
         engine_typed::draw::lights::first_active_light(Ptr<_>, Ptr<_>)
     ))
     .draw_common_at(0x00b7_0590)
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]), Input::Of(TWO_WAYS)])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        Input::Of(&[0, 1, 2]),
+    ])
     .setup(active_light_words)
     .run()
     .assert_same();
@@ -6227,7 +6237,10 @@ fn first_active_non_shadow_light() {
         engine_typed::draw::lights::first_active_non_shadow_light(Ptr<_>, Ptr<_>)
     ))
     .draw_common_at(0x00b7_0600)
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]), Input::Of(TWO_WAYS)])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        Input::Of(&[0, 1, 2]),
+    ])
     .setup(active_light_words)
     .run()
     .assert_same();
@@ -6257,8 +6270,8 @@ fn next_active_light() {
     ))
     .draw_common_at(0x00b7_0680)
     .inputs(&[
-        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]),
-        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 1, 2, 3]),
     ])
     .setup(next_light_words)
@@ -6275,8 +6288,8 @@ fn next_active_non_shadow_light() {
     ))
     .draw_common_at(0x00b7_0700)
     .inputs(&[
-        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]),
-        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 1, 2, 3]),
     ])
     .setup(next_light_words)
@@ -6294,8 +6307,8 @@ fn active_non_shadow_light_count() {
     ))
     .draw_common_at(0x00b7_07d0)
     .inputs(&[
-        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]),
-        Input::Of(TWO_WAYS),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        Input::Of(&[0, 1, 2]),
         Input::Of(&[0, 1, 2]),
     ])
     .setup(|e, c| {
@@ -6319,7 +6332,10 @@ fn active_light_count() {
         engine_typed::draw::lights::active_light_count(Ptr<_>)
     ))
     .draw_common_at(0x00b7_0790)
-    .inputs(&[Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8]), Input::Of(TWO_WAYS)])
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        Input::Of(&[0, 1, 2]),
+    ])
     .setup(|e, c| vec![active_light_words(e, c)[0]])
     .run()
     .assert_same();
@@ -8230,7 +8246,7 @@ const TALL_GRASS_SWITCHES: u32 = RETS + 0x400;
 
 /// The tall grass set-up's inputs: the transform's scale and first entry; the property's kind (4 has
 /// the light work); a scene light or none; a shadow pass or not; the point lights on or off; the
-/// property's active lights (none or two).
+/// property's active lights (none, two, or 0x10000: the exe tests only the low 16 bits).
 const TALL_GRASS: &[Input] = &[
     Input::F32,
     Input::F32Swept(ONE),
@@ -8238,7 +8254,7 @@ const TALL_GRASS: &[Input] = &[
     Input::Of(TWO_WAYS),
     Input::Of(TWO_WAYS),
     Input::Of(TWO_WAYS),
-    Input::Of(&[0, 2]),
+    Input::Of(&[0, 2, 0x1_0000]),
 ];
 
 /// `D3DXMatrixInverse`'s import (`00fdf428`) stood in: the matrix's words in reverse order.
@@ -11399,6 +11415,37 @@ fn tall_grass_setup_geometry_reads_the_light_through_the_packet() {
         },
         |e, w| cut::take_shadow_nodes(e, w[0]),
     );
+    // The cut's frame values for a drawn accumulator other than the shader accumulator (`011f95ec`): the shader
+    // accumulator's +0x194, its node's light and that light's values are copied too (`cut::take_frame`).
+    packet_same_cases(
+        "tall_grass_setup_geometry (another drawn accumulator)",
+        entry!(
+            0x00ba_ac10,
+            engine_typed::draw::tall_grass::setup_geometry(
+                Ptr<_>,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+            ) -> u32
+        )
+        .1,
+        &cases_of(
+            TALL_GRASS,
+            &[&[ONE, ONE, 4, 1, 0, 0, 0], &[HALF, ONE, 4, 1, 1, 1, 2]],
+        ),
+        false,
+        |e, case| {
+            let words = tall_grass_words(e, case);
+            let drawn = e.mem.alloc(0x1a0);
+            (words, vec![drawn])
+        },
+        |e, w| cut::take_frame(e, 0, Ptr::new(w[0])),
+    );
 }
 
 /// The lighting 3.0 colour (`00bbecd0`): the material's colour through its pointer or its own; equal to
@@ -11564,7 +11611,8 @@ const LIGHTING30_LIGHTS: &[Input] = &[
     // The pass: two lights, none, a shadow type with two, one, as many as the limit (4), more (6).
     Input::Of(&[0, 1, 2, 3, 4, 5]),
     Input::Of(&[0, 1, 2, 3]),
-    Input::Flag,
+    // The active lights' count stood in: none, two, or 0x10000 (the exe tests only the low 16 bits).
+    Input::Of(&[0, 1, 0x8000]),
     Input::Of(&[0, 0x3f80_0000, 0x4000_0000, 0x3fc0_0000]),
     Input::Flag,
     Input::F32,
@@ -12009,6 +12057,21 @@ fn own_state_same_floats(
     setup: impl Fn(&mut Engine, &Case) -> (Vec<u32>, u32),
     fill: impl Fn(&mut Engine, u32, &[u32]),
 ) {
+    own_state_same_with(name, f, cases, floats, false, setup, fill);
+}
+
+/// [`own_state_same_floats`]; with `plain_open` the plain engine runs with the packet open, the own state taken and
+/// filled as well, only not scribbled: for a set-up that hands helpers images of the packet's copies, so both
+/// engines lay their stacks out alike.
+fn own_state_same_with(
+    name: &str,
+    f: AbiFn,
+    cases: &[Vec<u32>],
+    floats: &[usize],
+    plain_open: bool,
+    setup: impl Fn(&mut Engine, &Case) -> (Vec<u32>, u32),
+    fill: impl Fn(&mut Engine, u32, &[u32]),
+) {
     for words in cases {
         for scribble in [capture::SCRIBBLE, capture::SCRIBBLE_OTHER] {
             let case = Case(
@@ -12025,9 +12088,17 @@ fn own_state_same_floats(
             );
             let mut plain = Engine::new();
             plain.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
-            let (a, _) = setup(&mut plain, &case);
+            let (a, plain_acc) = setup(&mut plain, &case);
             plain.with_stack(4, |_, _| ());
+            if plain_open {
+                assert!(capture::begin(&plain), "{name}: a packet was left open");
+                statics::take(&plain, Ptr::new(plain_acc));
+                fill(&mut plain, plain_acc, &a);
+            }
             let answer = f(&mut plain, &a);
+            if plain_open {
+                let _ = capture::end(&mut plain);
+            }
             let mut owned = Engine::new();
             owned.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
             let (b, acc) = setup(&mut owned, &case);
@@ -12154,6 +12225,94 @@ fn cache_slots_keep_the_draws_own_state() {
         },
         |_, _, _| {},
     );
+}
+
+/// Lighting 3.0's set-up (`00bbef90`) in its shadow pass types (0x1c4, 0x1c7) reads the pass light's clip-plane cache
+/// from the draw's own state: the "made" byte clear (the planes computed and stored) or set (the stored planes handed
+/// to the device, its slot 0xdc noting what it is given), with the cache owned (`cut::own_clip_plane_cache`) and
+/// scribbled in guest memory.
+#[test]
+fn lighting30_shadow_passes_keep_the_clip_plane_cache_own() {
+    own_state_same_with(
+        "lighting30_setup_constants",
+        entry!(
+            0x00bb_ef90,
+            engine_typed::draw::lighting30::setup_constants(Ptr<_>, Ptr<_>)
+        )
+        .1,
+        &product(&[&[0x1c4, 0x1c7], &[0, 1]]),
+        &[],
+        true,
+        |e, c| {
+            let case = Case(vec![
+                Value::Word(c.word(0)),
+                Value::Word(0),
+                Value::Word(u32::MAX),
+                Value::Word(c.word(1)),
+                Value::Word(1),
+                Value::Word(0),
+                Value::F32(0x4561_2340),
+                Value::Word(3),
+                Value::Word(0),
+            ]);
+            let words = lighting30_constants_words(e, &case);
+            let pass = e.mem.u32(0x011f_91e0);
+            let geometry = e.mem.u32(pass);
+            as_drawn(e, geometry, words[1]);
+            let property = e.mem.u32(words[1] + 0xc);
+            with_distance_fade(e, property);
+            d3dx_content_stand_ins(e);
+            e.register(VT_FN + 0xdc, |e, a| {
+                let mut h = e.mem.u32(RETS + 0x7c8).wrapping_mul(31).wrapping_add(a[1]);
+                for k in 0..4u32 {
+                    h = h.wrapping_mul(17).wrapping_add(e.mem.u32(a[2] + 4 * k));
+                }
+                e.mem.set_u32(RETS + 0x7c8, h);
+                ret(0)
+            });
+            let acc = e.mem.u32(0x011f_95ec);
+            (words, acc)
+        },
+        |e, _, _| {
+            let pass = e.mem.u32(0x011f_91e0);
+            let geometry = e.mem.u32(pass);
+            cut::take_geometry_values(e, geometry);
+            cut::take_pass_lights(e, pass);
+            capture::take(e, 0x011f_940c, 0, 0x10);
+            for at in [0x011f_95ecu32, 0x011f_95f0] {
+                cut::take_frame(e, 0, Ptr::new(e.mem.u32(at)));
+            }
+            capture::take(e, 0x011f_94ac, 0, 4);
+            let light = e.mem.u32(e.mem.u32(pass + 0xc));
+            cut::own_clip_plane_cache(e, light);
+        },
+    );
+}
+
+/// The cut (`cut::fill`, with the own state forced) owns each listed pass's lights' clip-plane caches: a light of the
+/// world's first pass (in renderer 0's lists) has its cache in an own block after the cut, the planes before it not.
+#[test]
+fn fill_owns_the_pass_lights_clip_plane_caches() {
+    let mut e = Engine::new();
+    let d = draw_world(&mut e);
+    let pass = d.w.passes[0];
+    let lights = e.mem.alloc(8);
+    let shadow = e.mem.alloc(0x220);
+    set(&mut e, lights, shadow);
+    set(&mut e, pass + 0xc, lights);
+    e.mem.set_u8(pass + 9, 1);
+    statics::set_forced(true);
+    assert!(capture::begin(&e));
+    cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
+    let owned = capture::owns(&e, shadow + 0x1a8, 0x61);
+    let planes = capture::owns(&e, shadow + 0x144, 4);
+    let _ = capture::end(&mut e);
+    statics::set_forced(false);
+    assert!(
+        owned,
+        "the cut did not own the pass light's clip-plane cache"
+    );
+    assert!(!planes);
 }
 
 /// The simple shadow's clip planes (`00b7be00`) keep the pass light's clip-plane cache (+0x1a8, made +0x208) in the
