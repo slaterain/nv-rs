@@ -35,11 +35,11 @@
 //! and biped flags `+0x78` (`0x40` not playable); an inventory entry's extra lists `+0`, count
 //! `+4`, form `+8`; an extra list's worn bit (type `0x16`) at `+0xA`, bit `0x40`.
 
-use crate::Jip;
 use engine_core::extend::{Owner, WrapSlot};
 use engine_core::prelude::*;
 use nvse::{handled, CommandArgs};
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// The command's opcode.
 pub const CCC_SET_EQUIPPED: u32 = 0x2703;
@@ -95,16 +95,29 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
     if !answers_installed {
         return;
     }
+    // Made before the threads start, so every thread's engine shares it.
+    e.ext_free::<ForceEquipCall>();
     e.wrap(GET_CANNOT_WEAR, get_cannot_wear);
     crate::table::set_handlers(e, CCC_SET_EQUIPPED, Some(ccc_set_equipped), None);
 }
 
-fn force_equip_call(e: &mut Engine) -> bool {
-    e.ext::<Jip>().ai_hooks.force_equip_call
+/// JIP's `s_forceEquipCall`: raised by `CCCSetEquipped` around its equip call, read by the wrap
+/// and by `ai_hooks`' `EquipItemHook` handler. JIP's is a plain global byte, read on every
+/// `GetCanNotWear` call of every thread without a lock; here it is a lock-free slot
+/// ([`Engine::ext_free`]) made at install, before the threads start, so every thread's engine of
+/// the run reads the one flag and none takes JIP's shared state for it.
+#[derive(Default)]
+struct ForceEquipCall(AtomicBool);
+
+/// Whether `CCCSetEquipped`'s equip call is running (`s_forceEquipCall`).
+pub(crate) fn force_equip_call(e: &mut Engine) -> bool {
+    e.ext_free::<ForceEquipCall>().0.load(Ordering::Relaxed)
 }
 
-fn set_force_equip_call(e: &mut Engine, on: bool) {
-    e.ext::<Jip>().ai_hooks.force_equip_call = on;
+pub(crate) fn set_force_equip_call(e: &mut Engine, on: bool) {
+    e.ext_free::<ForceEquipCall>()
+        .0
+        .store(on, Ordering::Relaxed);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetCannotWearHook.

@@ -1568,6 +1568,13 @@ pub(crate) fn release_held() {
     });
 }
 
+/// [`release_held`] for a test outside the core: a real thread's release point, so a second
+/// engine on the test's thread ([`Engine::share_slots_for_test`]) can take a shared slot.
+#[cfg(any(test, feature = "test-support"))]
+pub fn release_held_for_test() {
+    release_held();
+}
+
 /// Whether this OS thread holds a shared slot (a cheap test before [`release_held`]).
 #[inline]
 pub(crate) fn holds_shared() -> bool {
@@ -1712,6 +1719,14 @@ impl Engine {
                 .unwrap_or_else(|| unreachable!("a slot holds the type it is keyed by")),
             _ => panic!("a slot of `ext` or `share_ext` is not lock-free"),
         }
+    }
+
+    /// For a test outside the core: `other` takes this engine's shared and lock-free slots, as a
+    /// real thread's engine made from this one does ([`ExtendState::for_thread`]), so a test can
+    /// hold a shared slot from a second engine and check that a path does not ask for it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn share_slots_for_test(&self, other: &mut Engine) {
+        other.extend = self.extend.for_thread();
     }
 
     /// The extension slot of type `T` when it was made.

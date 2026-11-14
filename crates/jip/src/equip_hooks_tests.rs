@@ -186,7 +186,7 @@ fn world_as(installed: bool) -> Engine {
         0x0075_c280,
     ] {
         e.register_double(f, move |e, w| {
-            let forced = e.ext::<Jip>().ai_hooks.force_equip_call;
+            let forced = force_equip_call(e);
             CALLS.with(|c| c.borrow_mut().push((f, w.to_vec(), forced)));
             Ret::default()
         });
@@ -195,7 +195,7 @@ fn world_as(installed: bool) -> Engine {
     // 0088d80d do), through the address.
     for f in [0x0088_c830u32, 0x0088_d7d0] {
         e.register_double(f, move |e, w| {
-            let forced = e.ext::<Jip>().ai_hooks.force_equip_call;
+            let forced = force_equip_call(e);
             CALLS.with(|c| c.borrow_mut().push((f, w.to_vec(), forced)));
             if w[3] != 0 {
                 let answer = e.call(0x0041_8b10, &args![w[3]]).eax & 0xff;
@@ -234,7 +234,7 @@ fn not_installed_nothing_is_put_in() {
     assert!(e.wraps_at(0x0041_8b10).is_empty());
     assert_eq!(crate::test_support::execute_of(&e, CCC_SET_EQUIPPED), 0);
     e.mem.set_u8(LISTS + 0xf, 0x40);
-    e.ext::<Jip>().ai_hooks.force_equip_call = true;
+    set_force_equip_call(&mut e, true);
     assert_eq!(cannot_wear(&mut e, LISTS), 1, "the flag means nothing");
 }
 
@@ -248,11 +248,35 @@ fn get_cannot_wear_is_false_only_while_the_command_equips() {
     e.mem.set_u8(LISTS + 0xf, 0x40);
     assert_eq!(cannot_wear(&mut e, LISTS), 1);
     assert_eq!(cannot_wear(&mut e, LISTS + 0x40), 0);
-    e.ext::<Jip>().ai_hooks.force_equip_call = true;
+    set_force_equip_call(&mut e, true);
     assert_eq!(cannot_wear(&mut e, LISTS), 0);
     assert_eq!(cannot_wear(&mut e, LISTS + 0x40), 0);
-    e.ext::<Jip>().ai_hooks.force_equip_call = false;
+    set_force_equip_call(&mut e, false);
     assert_eq!(cannot_wear(&mut e, LISTS), 1, "back to the game's answer");
+}
+
+/// The flag is read without JIP's shared state, as JIP's plain byte is: while a second engine of
+/// the run (a real thread's) holds JIP's slot, the wrap answers both ways on this one (asking for
+/// the slot here would be refused: two engines on one thread), and the second engine reads the
+/// same flag.
+#[test]
+fn the_wrap_answers_while_another_engine_holds_jips_state() {
+    let mut e = world();
+    e.mem.set_u8(LISTS + 0xf, 0x40);
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(
+        other.ext::<crate::Jip>().installed,
+        "the other engine holds it"
+    );
+    set_force_equip_call(&mut e, true);
+    assert_eq!(cannot_wear(&mut e, LISTS), 0);
+    assert!(force_equip_call(&mut other), "one flag for the run");
+    set_force_equip_call(&mut e, false);
+    assert_eq!(cannot_wear(&mut e, LISTS), 1);
+    assert!(!force_equip_call(&mut other));
+    engine_core::extend::release_held_for_test();
 }
 
 /// A reference that is not a `Character` does nothing (no game function is called), even with
@@ -549,6 +573,96 @@ fn weapons_of_the_first_pass_stay_in_the_armour_pass_as_in_jip() {
     assert_eq!(equipped, vec![hat]);
 }
 
+/// Only an armour (`TESObjectARMO`'s vtable) in a worn slot leaves the map and takes its slots: a
+/// weapon there (in the map from the weapon pass) whose word at `+0x74` shares a bit with a free
+/// armour's mask does not block that armour, and stays in the map for the armour pass.
+#[test]
+fn a_weapon_in_a_worn_slot_takes_no_slot_and_stays_in_the_map() {
+    let mut e = world();
+    // Playable: not equipped by the weapon pass, but in the map after it.
+    let w = weapon(&mut e, 1, 0, true);
+    let a = armor(&mut e, 2, 0x4, false);
+    e.mem.set_u32(w + 0x74, 0x4);
+    e.mem.set_u32(w + 0x78, 0);
+    set_container(&mut e, &[(1, a), (1, w)]);
+    set_changes(&mut e, &[]);
+    e.mem.set_u32(CHAR + 0x1b4, BIPED);
+    e.mem.set_u32(BIPED + 0x2c + 3 * 0x10, w);
+    run(&mut e, CHAR);
+    let equipped: Vec<u32> = called(0x0088_c650).into_iter().map(|x| x[1]).collect();
+    assert_eq!(equipped, vec![a], "the armour's slot is free");
+    // Read as "not playable" with a word sharing no bit with the armour: the armour pass equips
+    // the weapon too, so it was still in the map.
+    e.mem.set_u32(w + 0x74, 0x10);
+    e.mem.set_u32(w + 0x78, 0x40);
+    run(&mut e, CHAR);
+    let equipped: Vec<u32> = called(0x0088_c650).into_iter().map(|x| x[1]).collect();
+    assert_eq!(equipped, vec![w, a]);
+}
+
+/// An empty base container (its inline first node holds no entry): the changes entries' own items
+/// are still found, and the weapon and armour equipped.
+#[test]
+fn an_empty_base_container_still_finds_the_changes_items() {
+    let mut e = world();
+    let w = weapon(&mut e, 1, 0, false);
+    let a = armor(&mut e, 2, 0x4, false);
+    set_container(&mut e, &[]);
+    set_changes(&mut e, &[(w, 1, 0), (a, 1, 0)]);
+    e.mem.set_u32(CHAR + 0x1b4, BIPED);
+    run(&mut e, CHAR);
+    let equipped: Vec<u32> = called(0x0088_c650).into_iter().map(|x| x[1]).collect();
+    assert_eq!(equipped, vec![w, a]);
+}
+
+/// The inventory answers whether the map holds anything, not whether this call added to it: a
+/// companion with weapons only still gets its worn DT and DR summed after the weapon equip (the
+/// armour call finds nothing new but the map holds the weapon).
+#[test]
+fn a_companion_with_weapons_only_still_sums_its_dt_and_dr() {
+    let mut e = world();
+    let w = weapon(&mut e, 1, 0, false);
+    set_container(&mut e, &[(1, w)]);
+    set_changes(&mut e, &[]);
+    e.mem.set_u32(CHAR + 0x1b4, BIPED);
+    run(&mut e, CHAR);
+    assert_eq!(
+        calls()
+            .into_iter()
+            .map(|(f, x, _)| (f, x[..2.min(x.len())].to_vec()))
+            .collect::<Vec<_>>(),
+        vec![
+            (0x0088_c650, vec![CHAR, w]),
+            (0x008d_2110, vec![CHAR]),
+            (0x008d_22b0, vec![CHAR]),
+        ]
+    );
+    let mut items = Items::from([(w, (1, 0))]);
+    assert!(inventory_items(&mut e, CHAR, ARMOR, &mut items));
+    assert_eq!(items.len(), 1);
+}
+
+/// The worn-slot loop reaches the last of the twenty slots: an armour worn in slot 19 leaves the
+/// map (not equipped again) and its slots block a clashing armour; a free one is equipped.
+#[test]
+fn an_armour_worn_in_the_last_slot_counts() {
+    let mut e = world();
+    let worn = armor(&mut e, 1, 0x4, false);
+    let clash = armor(&mut e, 2, 0x6, false);
+    let hat = armor(&mut e, 3, 0x400, false);
+    set_container(&mut e, &[(1, hat), (1, clash), (1, worn)]);
+    set_changes(&mut e, &[]);
+    let held = ENTRIES + 0x400;
+    e.mem.set_u32(held + 8, item(9));
+    e.mem.set_u32(CHAR + 0x68, PROCESS);
+    e.mem.set_u32(PROCESS + 0x114, held);
+    e.mem.set_u32(CHAR + 0x1b4, BIPED);
+    e.mem.set_u32(BIPED + 0x2c + 19 * 0x10, worn);
+    run(&mut e, CHAR);
+    let equipped: Vec<u32> = called(0x0088_c650).into_iter().map(|x| x[1]).collect();
+    assert_eq!(equipped, vec![hat]);
+}
+
 // ---- the container menu ----
 
 /// A menu open on `CHAR` with `entry` selected, its list's tile selected and the cursor on the
@@ -605,7 +719,7 @@ fn the_menu_equips_an_armour_the_companion_cannot_wear() {
     );
     assert_eq!(asked(), vec![0], "the game's equip saw no cannot-wear");
     assert_eq!(cannot_wear(&mut e, list), 1, "after");
-    assert!(!e.ext::<Jip>().ai_hooks.force_equip_call);
+    assert!(!force_equip_call(&mut e));
 }
 
 /// A worn armour (its extra list's worn bit) is taken off: UnEquipObject, count 1, sound (0, 0).
@@ -780,12 +894,12 @@ fn the_flag_goes_down_when_the_equip_stops() {
     let entry = selection(&mut e, a, 1, 0);
     menu_world(&mut e, entry);
     e.register_double(0x0088_c830, |e, _| {
-        assert!(e.ext::<Jip>().ai_hooks.force_equip_call);
+        assert!(force_equip_call(e));
         panic!("a guest exception");
     });
     let at = crate::test_support::execute_of(&e, CCC_SET_EQUIPPED);
     let words = line(&mut e, CCC_SET_EQUIPPED, &[]);
     let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.call(at, &words)));
     assert!(stop.is_err());
-    assert!(!e.ext::<Jip>().ai_hooks.force_equip_call);
+    assert!(!force_equip_call(&mut e));
 }

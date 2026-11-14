@@ -145,8 +145,6 @@ pub struct State {
     pub force_detection_value: BTreeMap<u32, u32>,
     /// `s_healthRestoreRatio`.
     pub health_restore_ratio: f32,
-    /// `s_forceEquipCall`: set by `CCCSetEquipped` (`equip_hooks`) around its equip call.
-    pub force_equip_call: bool,
 }
 
 fn state(e: &mut Engine) -> &mut State {
@@ -431,7 +429,7 @@ fn apply_actor_velocity_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 fn equip_item_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let from_resolve = e.take_caller_mark(RESOLVE_EQUIP_CALL);
     let (item, actor) = (a[0], a[1]);
-    if form_type(e, item) != WEAPON || state(e).force_equip_call || from_resolve {
+    if form_type(e, item) != WEAPON || crate::equip_hooks::force_equip_call(e) || from_resolve {
         return None;
     }
     (flags1(e, actor) & LOCKED_EQUIPMENT != 0).then_some(0)
