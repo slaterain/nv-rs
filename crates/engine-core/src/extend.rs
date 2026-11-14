@@ -123,6 +123,13 @@ const JIP: &[Owner] = &[Owner::Jip];
 /// address; xNVSE detours its entry (`Hooks_Other.cpp`, `Hooks_Script.cpp` (xNVSE)). An import
 /// slot is registered by the platform layer, as Windows' loader fills it; xNVSE writes the slot.
 pub const WRAPS: &[Entry] = &[
+    // ExtraDataList::GetCanNotWear: JIP LN NVSE's GetCannotWearHook (always in once installed: a
+    // forced equip from CCCSetEquipped ignores "cannot wear"), called only by address.
+    Entry {
+        addr: 0x0041_8b10,
+        owners: JIP,
+        step: "3.5b",
+    },
     // ScriptEventList destructor: the string and array variables an event list holds are freed.
     Entry {
         addr: 0x0041_af70,
@@ -208,6 +215,19 @@ pub const WRAPS: &[Entry] = &[
 /// calls [`Engine::site`] there once the step named on the row has made it. xNVSE's own patch
 /// sites (xNVSE) and JIP LN NVSE's (JIP LN NVSE) are added by the step that needs them.
 pub const SITES: &[Entry] = &[
+    // The item test 0047bb50, its second form-type call: JIP LN NVSE's CheckUniqueItem.
+    Entry {
+        addr: 0x0047_bbec,
+        owners: JIP,
+        step: "3.5c",
+    },
+    // TESDescription::LoadDescription 00482f40, the shared text's owner stored: JIP LN NVSE's
+    // GetDescription.
+    Entry {
+        addr: 0x0048_2f7f,
+        owners: JIP,
+        step: "3.5c",
+    },
     // TESForm::~TESForm 00483630: the form extra data detour (FormExtraData; for now the cells
     // whose references all loaded).
     Entry {
@@ -227,6 +247,12 @@ pub const SITES: &[Entry] = &[
         addr: 0x004c_0032,
         owners: NVSE,
         step: "I-9",
+    },
+    // The reference's model 0050fe50, its model path call: JIP LN NVSE's GetModelPath.
+    Entry {
+        addr: 0x0050_fe8b,
+        owners: JIP,
+        step: "3.5c",
     },
     // ImageSpaceModifierInstanceForm::Trigger 005299a0 and ::Stop 00529c90: OnApplyIMOD,
     // OnRemoveIMOD.
@@ -252,6 +278,12 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-9",
     },
+    // The reference's name 0055d520, its entry: JIP LN NVSE's GetRefName (replaces it).
+    Entry {
+        addr: 0x0055_d520,
+        owners: JIP,
+        step: "3.5c",
+    },
     // TESObjectREFR::Set3DVerySimple 00571080: OnRefSet3D, OnRefUnset3D.
     Entry {
         addr: 0x0057_1090,
@@ -268,6 +300,18 @@ pub const SITES: &[Entry] = &[
         addr: 0x0057_318e,
         owners: NVSE,
         step: "I-9",
+    },
+    // TESObjectREFR::Activate 00573170, the activated test before the scripts run (DoActivate) and
+    // a door's teleport read (ActivateDoor): JIP LN NVSE's.
+    Entry {
+        addr: 0x0057_3512,
+        owners: JIP,
+        step: "3.5c",
+    },
+    Entry {
+        addr: 0x0057_3673,
+        owners: JIP,
+        step: "3.5c",
     },
     // The dropped reference made in 005750a0: OnDrop, OnDropItem (xNVSE's DroppedItemHook).
     Entry {
@@ -402,11 +446,25 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5b",
     },
+    // ScriptRunner::Run 005e0d20, the script header's read: JIP LN NVSE's ScriptWait (which wait
+    // this run is).
+    Entry {
+        addr: 0x005e_0ec9,
+        owners: JIP,
+        step: "3.5c",
+    },
     // ScriptRunner::EvaluateLine: the result zeroed before its first and second handler calls.
     Entry {
         addr: 0x005e_16c3,
         owners: NVSE,
         step: "I-4",
+    },
+    // ScriptRunner::EvaluateLine 005e1550, a block's test after its handler: JIP LN NVSE's
+    // ScriptWait (a waiting script resumes).
+    Entry {
+        addr: 0x005e_1716,
+        owners: JIP,
+        step: "3.5c",
     },
     Entry {
         addr: 0x005e_2329,
@@ -432,12 +490,36 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5b",
     },
+    // A quest stage set done 0060f4a0, its entry: JIP LN NVSE's SetQuestStage.
+    Entry {
+        addr: 0x0060_f4a9,
+        owners: JIP,
+        step: "3.5c",
+    },
+    // TESTopicInfo::RunResult 0061f170, after its reference test: JIP LN NVSE's RunResultScript.
+    Entry {
+        addr: 0x0061_f184,
+        owners: JIP,
+        step: "3.5c",
+    },
+    // Sky's weather update 0063d1d0, the transition's share: JIP LN NVSE's UpdateWeather.
+    Entry {
+        addr: 0x0063_d4f5,
+        owners: JIP,
+        step: "3.5c",
+    },
     // The actor value callback runner 0066ee50, before the call: JIP LN NVSE's DamageActorValue
     // (the health damage and crippled limb events).
     Entry {
         addr: 0x0066_ee72,
         owners: JIP,
         step: "3.5b",
+    },
+    // The LOD block load task 006f6d10, its file name: JIP LN NVSE's MakeObjLODPath.
+    Entry {
+        addr: 0x006f_6df1,
+        owners: JIP,
+        step: "3.5c",
     },
     // InterfaceManager::Idle 0070c4a0, the pointer's tile changed: JIP LN NVSE's MenuHandleMouseover.
     Entry {
@@ -480,9 +562,8 @@ pub const SITES: &[Entry] = &[
         step: "I-9",
     },
     // HUDMainMenu::SetInfoForRef 00775a00: JIP LN NVSE's InteractionDisabled (SetRolloverTextHook).
-    // This hook has TWO sites in JIP: the activation half (PCActivateRefHook, 0x943279 in
-    // PlayerCharacter::Update 0093e860) is still missing (step 3.5c); jip's test
-    // `interaction_disabled_waits_for_its_activation_seam` stops a command adding a user before it.
+    // This hook has TWO sites in JIP: the activation half is 0x943279 (PlayerCharacter::Update
+    // 0093e860, step 3.5c).
     Entry {
         addr: 0x0077_5b9b,
         owners: JIP,
@@ -724,11 +805,48 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5b",
     },
+    // The player's actor value change 0093b7a0, the health ratio: JIP LN NVSE's PlayerMinHealth.
+    Entry {
+        addr: 0x0093_b80a,
+        owners: JIP,
+        step: "3.5c",
+    },
+    // The player's fast travel 0093bea0, its move call: JIP LN NVSE's PCFastTravel.
+    Entry {
+        addr: 0x0093_bf22,
+        owners: JIP,
+        step: "3.5c",
+    },
     // New game through CenterOnCell 0093db60: the co-save cleared.
     Entry {
         addr: 0x0093_db69,
         owners: NVSE,
         step: "I-10",
+    },
+    // PlayerCharacter::Update 0093e860, the activation of the reference under the crosshair: JIP LN
+    // NVSE's InteractionDisabled (its activation half; 0x775B9B is the other).
+    Entry {
+        addr: 0x0094_3279,
+        owners: JIP,
+        step: "3.5c",
+    },
+    // The player's cell change 0094cae0, its test call: JIP LN NVSE's PCCellChange.
+    Entry {
+        addr: 0x0094_cb35,
+        owners: JIP,
+        step: "3.5c",
+    },
+    // The player's target pick 00964260, after the loop: JIP LN NVSE's SetPCTarget.
+    Entry {
+        addr: 0x0096_4675,
+        owners: JIP,
+        step: "3.5c",
+    },
+    // The player's note added 00966a70, after the list add: JIP LN NVSE's AddNote.
+    Entry {
+        addr: 0x0096_6af9,
+        owners: JIP,
+        step: "3.5c",
     },
     // The combat group's target choice 00986c60, after the empty test: JIP LN NVSE's
     // SetCombatTarget.
@@ -1056,6 +1174,8 @@ pub(crate) struct ExtendState {
     /// The caller marks set around the calls whose hooks read their return address
     /// ([`Engine::mark_caller`]), shared like the counts.
     pub(crate) marks: std::sync::Arc<CallerMarks>,
+    /// The caller words ([`Engine::mark_caller_word`]), shared like the marks.
+    pub(crate) words: std::sync::Arc<CallerWords>,
     /// xNVSE's fixes of the game's own `set`/`if` expression code (`Hook_Script_Init`): the guest
     /// address of its token buffer (`s_ExpressionParserAltBuffer`, 0x500 bytes) once installed,
     /// 0 without it ([`Engine::expression_alt_buffer`]). Set before the threads start, copied to
@@ -1095,9 +1215,7 @@ pub enum Hook {
     GetDetectionValue,
     SetPCTarget,
     /// Two sites in JIP: the HUD's rollover (`0x775B9B`, a seam here) and the player's activation
-    /// (`PCActivateRefHook`, `0x943279` in `PlayerCharacter::Update`, `0093e860`), which has NO
-    /// seam yet (step 3.5c). No command may add a user before it has one (jip's test
-    /// `interaction_disabled_waits_for_its_activation_seam`).
+    /// (`PCActivateRefHook`, `0x943279` in `PlayerCharacter::Update`, `0093e860`, step 3.5c).
     InteractionDisabled,
     MergeEventMask,
     MarkScriptEvent,
@@ -1231,6 +1349,75 @@ impl Engine {
         let key = (crate::thread_host::current_id(self), site);
         self.extend.marks.lock().contains(&key)
     }
+
+    /// Hands a callee's hook a word of its caller's frame (JIP's `MarkScriptEventHook` reads its
+    /// caller's first stack argument through the saved frame pointer, `[[ebp]+8]`, which the
+    /// port's frames do not have): `word` is this game thread's innermost caller word while the
+    /// guard lives and `hook` has users. With no user: one load, nothing kept. The guard pops it
+    /// also when a guest exception unwinds.
+    #[must_use]
+    #[inline]
+    pub fn mark_caller_word(&self, hook: Hook, word: u32) -> CallerWord {
+        if self.hook_users(hook) == 0 {
+            return CallerWord(None);
+        }
+        self.mark_caller_word_now(word)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn mark_caller_word_now(&self, word: u32) -> CallerWord {
+        let thread = crate::thread_host::current_id(self);
+        let mut words = self.extend.words.lock();
+        let stack = words.entry(thread).or_default();
+        stack.push(word);
+        let depth = stack.len();
+        drop(words);
+        CallerWord(Some((self.extend.words.clone(), thread, depth)))
+    }
+
+    /// This game thread's innermost caller word ([`Engine::mark_caller_word`]), if any.
+    pub fn caller_word(&self) -> Option<u32> {
+        let thread = crate::thread_host::current_id(self);
+        self.extend
+            .words
+            .lock()
+            .get(&thread)
+            .and_then(|s| s.last().copied())
+    }
+}
+
+/// The caller words, a stack per game thread.
+#[derive(Debug, Default)]
+pub(crate) struct CallerWords(std::sync::Mutex<std::collections::HashMap<u32, Vec<u32>>>);
+
+impl CallerWords {
+    fn lock(&self) -> std::sync::MutexGuard<'_, std::collections::HashMap<u32, Vec<u32>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// A caller word's guard ([`Engine::mark_caller_word`]): pops the word (and any pushed after it).
+#[derive(Debug)]
+pub struct CallerWord(Option<(std::sync::Arc<CallerWords>, u32, usize)>);
+
+impl Drop for CallerWord {
+    #[inline]
+    fn drop(&mut self) {
+        if let Some((words, thread, depth)) = self.0.take() {
+            drop_word(words, thread, depth);
+        }
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn drop_word(words: std::sync::Arc<CallerWords>, thread: u32, depth: usize) {
+    if let Some(stack) = words.lock().get_mut(&thread) {
+        stack.truncate(depth - 1);
+    }
 }
 
 /// The caller marks: (game thread, call site) pairs.
@@ -1284,6 +1471,7 @@ impl ExtendState {
             controls_alt: Default::default(),
             hooks: Default::default(),
             marks: Default::default(),
+            words: Default::default(),
             expression_alt_buffer: 0,
         }
     }
@@ -1311,6 +1499,7 @@ impl ExtendState {
             controls_alt: self.controls_alt.clone(),
             hooks: self.hooks.clone(),
             marks: self.marks.clone(),
+            words: self.words.clone(),
             expression_alt_buffer: self.expression_alt_buffer,
         }
     }
@@ -2352,6 +2541,31 @@ mod tests {
         assert!(!e.caller_marked(0x0100), "gone with the unwinding");
     }
 
+    /// A caller word: none without a user; with one, the innermost guard's word, back to the
+    /// outer one when it drops (also on an unwinding panic); per game thread.
+    #[test]
+    fn caller_words_follow_their_guards() {
+        let e = engine();
+        let guard = e.mark_caller_word(Hook::MarkScriptEvent, 7);
+        assert_eq!(e.caller_word(), None, "no user");
+        drop(guard);
+        e.add_hook_user(Hook::MarkScriptEvent, true);
+        let outer = e.mark_caller_word(Hook::MarkScriptEvent, 7);
+        assert_eq!(e.caller_word(), Some(7));
+        let inner = e.mark_caller_word(Hook::MarkScriptEvent, 9);
+        assert_eq!(e.caller_word(), Some(9));
+        drop(inner);
+        assert_eq!(e.caller_word(), Some(7), "the outer one again");
+        let thrown = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = e.mark_caller_word(Hook::MarkScriptEvent, 11);
+            panic!("a guest exception");
+        }));
+        assert!(thrown.is_err());
+        assert_eq!(e.caller_word(), Some(7), "gone with the unwinding");
+        drop(outer);
+        assert_eq!(e.caller_word(), None);
+    }
+
     /// `HOOK_SET`: on makes an off hook's count 1 and leaves an on one's; off makes any count 0.
     /// `SetCount` stores the count.
     #[test]
@@ -2385,7 +2599,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 94);
+        assert_eq!(SITES.len(), 112);
         // The run-time compiler's (I-14), xNVSE's.
         for a in [
             0x005a_ebb1,
@@ -2400,7 +2614,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        // JIP LN NVSE's UI hooks (step 3.5a) and actor hooks (step 3.5b), JIP's alone.
+        // JIP LN NVSE's UI (step 3.5a), actor (3.5b) and world (3.5c) hooks, JIP's alone.
         for a in [
             0x005b_46aa,
             0x0070_d642,
@@ -2442,6 +2656,25 @@ mod tests {
             0x009d_a8e3,
             0x00c6_d4e4,
             0x00c7_c151,
+            // The world hooks (step 3.5c).
+            0x0047_bbec,
+            0x0048_2f7f,
+            0x0050_fe8b,
+            0x0055_d520,
+            0x0057_3512,
+            0x0057_3673,
+            0x005e_0ec9,
+            0x005e_1716,
+            0x0060_f4a9,
+            0x0061_f184,
+            0x0063_d4f5,
+            0x006f_6df1,
+            0x0093_b80a,
+            0x0093_bf22,
+            0x0094_3279,
+            0x0094_cb35,
+            0x0096_4675,
+            0x0096_6af9,
         ] {
             assert!(find(SITES, Owner::Jip, a).is_some(), "{a:08x}");
             assert!(find(SITES, Owner::Nvse, a).is_none(), "{a:08x}");
