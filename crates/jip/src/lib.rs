@@ -115,6 +115,10 @@ pub struct Jip {
     pub ai_hooks: ai_hooks::State,
     /// JIP's world hooks' maps and values.
     pub world_hooks: world_hooks::State,
+    /// What JIP's script commands keep: the script blocks a script disabled.
+    pub script: commands::jip_fn_script::State,
+    /// What JIP's CC&C commands keep: the actor bases set to NCCS, the location grids.
+    pub ccc: commands::jip_fn_ccc::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,

@@ -1337,7 +1337,13 @@ fn has_script(e: &Engine, form: u32) -> bool {
 /// MarkScriptEvent and sets its flag), enabling clears it (all cleared: the entry, the flag and
 /// the user go); "OnActivate" sets or clears the activation flag, one DoActivate user more or
 /// less, when it changes.
-fn set_events_disabled(e: &mut Engine, form: u32, mask: u32, on_activate: bool, disable: bool) {
+pub(crate) fn set_events_disabled(
+    e: &mut Engine,
+    form: u32,
+    mask: u32,
+    on_activate: bool,
+    disable: bool,
+) {
     if mask != 0 {
         if disable {
             if let std::collections::btree_map::Entry::Vacant(v) =
@@ -1427,7 +1433,7 @@ fn set_script_event_disabled(e: &mut Engine, w: &[u32]) -> Ret {
 }
 
 /// `s_eventMasks->GetPtr(name)`: the mask of the first name with the same `StrHashCI`.
-fn event_mask(name: &[u8]) -> Option<u32> {
+pub(crate) fn event_mask(name: &[u8]) -> Option<u32> {
     let hash = crate::containers::str_hash_ci(name);
     EVENT_MASKS
         .iter()

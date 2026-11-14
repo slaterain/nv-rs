@@ -157,6 +157,9 @@ pub struct State {
     pub last_result: u32,
     /// `s_deadZoneLS`: the left stick's dead zone for a control's state.
     pub dead_zone_ls: i32,
+    /// `s_deadZoneRS` (`internal/xinput.cpp`, 8689): the right stick's, which the gamepad
+    /// commands read (`GetRightStickX`, `GetDeadZoneRS`).
+    pub dead_zone_rs: i32,
 }
 
 impl Default for State {
@@ -167,6 +170,7 @@ impl Default for State {
             mods: Mods::default(),
             last_result: NOT_CONNECTED,
             dead_zone_ls: 7849,
+            dead_zone_rs: 8689,
         }
     }
 }
@@ -452,6 +456,38 @@ pub fn tap_xi_control(e: &mut Engine, control: u32) -> bool {
         _ => return false,
     }
     true
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/dinput.cpp: DIHookControl::SetKeyHeldState.
+/// A key held down (or let go) by a script, below `kMaxMacros`.
+pub fn set_key_held_state(e: &mut Engine, key: u32, hold: bool) {
+    if key < MAX_MACROS {
+        keys(e)[key as usize].hold = hold;
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/xinput.cpp: SetXIControlHeld.
+/// A controller binding held down (or let go): a button's bit in the held buttons, a trigger's
+/// "held" bit (4 left, 8 right); a stick direction or no binding nothing.
+pub fn set_xi_control_held(e: &mut Engine, control: u32, hold: bool) {
+    let binding = controller_bind(e, control);
+    let mods = &mut state(e).mods;
+    if let Some(m) = button_mask(binding) {
+        mods.button_hold &= !m;
+        if hold {
+            mods.button_hold |= m;
+        }
+        return;
+    }
+    let bit = match binding {
+        ctrl::LT => 4,
+        ctrl::RT => 8,
+        _ => return,
+    };
+    mods.trigger_mods &= !bit;
+    if hold {
+        mods.trigger_mods |= bit;
+    }
 }
 
 // ---- a control, whatever device ----

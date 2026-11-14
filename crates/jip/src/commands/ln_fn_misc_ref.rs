@@ -96,16 +96,25 @@ fn get_inventory_weight(e: &mut Engine, w: &[u32]) -> Ret {
     if x != 0 {
         let data = e.mem.u32(x + EXTRA_WORD);
         if data != 0 {
-            e.mem.set_u32(data + 8, 0xbf80_0000);
-            let byte = e.mem.u8(e.mem.u32(PLAYER) + PLAYER_BYTE_7BC);
-            e.mem.set_u8(WEIGHT_FLAG, 1);
-            let weight = e.call(INVENTORY_WEIGHT, &args![data, u32::from(byte)]).st0;
-            e.mem.set_u8(WEIGHT_FLAG, 0);
+            let weight = inventory_weight(e, data);
             a.set_result(e, weight);
         }
     }
     crate::console::print_result(e, &a);
     handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
+// ExtraContainerChanges::Data::GetInventoryWeight (asm).
+/// The container changes data's weight (its cached weight +8 set to -1 first, the game's flag
+/// byte `0x11E0898` set around the game's `0x4D0900` with the player's byte +0x7BC).
+pub(crate) fn inventory_weight(e: &mut Engine, data: u32) -> f64 {
+    e.mem.set_u32(data + 8, 0xbf80_0000);
+    let byte = e.mem.u8(e.mem.u32(PLAYER) + PLAYER_BYTE_7BC);
+    e.mem.set_u8(WEIGHT_FLAG, 1);
+    let weight = e.call(INVENTORY_WEIGHT, &args![data, u32::from(byte)]).st0;
+    e.mem.set_u8(WEIGHT_FLAG, 0);
+    weight
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_misc_ref.h:

@@ -320,7 +320,7 @@ fn newton_sqrt(s: f32) -> f32 {
     s * u
 }
 
-fn position(e: &Engine, refr: u32) -> [f32; 3] {
+pub(crate) fn position(e: &Engine, refr: u32) -> [f32; 3] {
     [0, 4, 8].map(|o| e.mem.f32(refr + POSITION + o))
 }
 
@@ -341,7 +341,7 @@ pub fn point3_distance(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 /// A reference's cell for the test below: its parent cell, else its `ExtraPersistentCell`'s
 /// cell; `None` when it has neither.
-fn cell_or_persistent(e: &mut Engine, refr: u32) -> Option<u32> {
+pub(crate) fn cell_or_persistent(e: &mut Engine, refr: u32) -> Option<u32> {
     let cell = e.mem.u32(refr + PARENT_CELL);
     if cell != 0 {
         return Some(cell);

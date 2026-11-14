@@ -57,7 +57,7 @@ const HIDDEN: u8 = 4;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp:
 // TESObjectREFR::GetMapMarkerData.
 /// The marker data of `refr`, `None` for no base form, another base form or no extra.
-fn marker_data(e: &mut Engine, refr: u32) -> Option<Ptr<MapMarkerData>> {
+pub(crate) fn marker_data(e: &mut Engine, refr: u32) -> Option<Ptr<MapMarkerData>> {
     let r = Ptr::<TESObjectREFR>::new(refr);
     let base = e.get(r, TESObjectREFR::pObjectReference);
     if base == 0 || ref_id(e, base) != MAP_MARKER_ID {

@@ -833,16 +833,24 @@ fn set_script_disabled(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let disable = read.int(1, 0) != 0;
     for script in crate::actor_hooks::form_or_list(e, read.form(0)) {
-        if !is_script(e, script) || disable == (e.mem.u32(script + 0x20) == 0) {
-            continue;
-        }
-        let length = if disable { 0 } else { data_length(e, script) };
-        e.mem.set_u32(script + 0x20, length);
-        if e.mem.u8(script + 0x28) == 0 {
-            e.add_hook_user(Hook::MergeEventMask, disable);
+        if is_script(e, script) {
+            set_one_script_disabled(e, script, disable);
         }
     }
     handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_script.h: SetScriptDisabled.
+/// One script disabled or enabled when that changes (the CC&C commands' `SetNCCS` calls it too).
+pub(crate) fn set_one_script_disabled(e: &mut Engine, script: u32, disable: bool) {
+    if disable == (e.mem.u32(script + 0x20) == 0) {
+        return;
+    }
+    let length = if disable { 0 } else { data_length(e, script) };
+    e.mem.set_u32(script + 0x20, length);
+    if e.mem.u8(script + 0x28) == 0 {
+        e.add_hook_user(Hook::MergeEventMask, disable);
+    }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameScript.cpp: Script::GetDataLength.
