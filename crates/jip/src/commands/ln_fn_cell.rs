@@ -181,8 +181,10 @@ fn set_cell_flag(e: &mut Engine, w: &[u32]) -> Ret {
         } else {
             let f = e.mem.u32(c + INHERIT_FLAGS);
             let bit = 1u32 << (flag - 8);
-            e.mem
-                .set_u32(c + INHERIT_FLAGS, if value != 0 { f | bit } else { f & !bit });
+            e.mem.set_u32(
+                c + INHERIT_FLAGS,
+                if value != 0 { f | bit } else { f & !bit },
+            );
         }
     }
     handled(true)

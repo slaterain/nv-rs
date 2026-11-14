@@ -1,5 +1,5 @@
-//! `functions_ln/ln_fn_utility.h` (JIP LN NVSE): JIP's version, a form list as an array, sorting
-//! and counting forms by type, and the time of day as text. 5 of its 20 commands.
+//! `functions_ln/ln_fn_utility.h` (JIP LN NVSE): a form list as an array, sorting
+//! and counting forms by type, and the time of day as text. 4 of its 20 commands (`GetLNVersion` is the core track's, `identity.rs`).
 //!
 //! Left for later, each for its reason: `FileExists`, `GetINIFloat`, `SetINIFloat`,
 //! `GetINIString`, `SetINIString`, `GetINISection`, `SetINISection`, `GetINISectionNames`,
@@ -24,31 +24,18 @@ use nvse::{handled, CommandArgs};
 
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
-    (0x2200, get_ln_version),
     (0x2202, get_time_stamp),
     (0x2212, list_to_array),
     (0x22ff, sort_forms_by_type),
     (0x2300, get_form_count_type),
 ];
 
-/// `JIP_LN_VERSION` as the shipped DLL holds it: 57.30, the double `0x404CA66666666666`.
-pub const JIP_LN_VERSION: f64 = f64::from_bits(0x404c_a666_6666_6666);
 /// A form list's forms (`BGSListForm::list`, a `tList` at +0x18).
 const LIST_FORMS: u32 = 0x18;
 /// The game's import slot of `GetLocalTime` (`00FDF0D8`; the save code calls it there).
 const GET_LOCAL_TIME_IMPORT: u32 = 0x00fd_f0d8;
 /// `IS_REFERENCE`: the vtable answers true (`008D0360`) at +0xF0.
 const RETURN_TRUE: u32 = 0x008d_0360;
-
-// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h:
-// Cmd_GetLNVersion_Execute.
-/// 57.30, echoed in the console.
-fn get_ln_version(e: &mut Engine, w: &[u32]) -> Ret {
-    let a = CommandArgs::new(w);
-    a.set_result(e, JIP_LN_VERSION);
-    crate::console::print_result(e, &a);
-    handled(true)
-}
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h:
 // Cmd_GetTimeStamp_Execute; internal/utility.cpp: GetTimeStamp.
@@ -169,7 +156,8 @@ fn get_form_count_type(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let (id, kind) = (read.int(0, 0), read.int(1, 0));
-    let packed = nvse::vars::array(e, id).is_some_and(|v| matches!(v.elements, Container::Array(_)));
+    let packed =
+        nvse::vars::array(e, id).is_some_and(|v| matches!(v.elements, Container::Array(_)));
     let Some(values) = array_values(e, id).filter(|v| packed && !v.is_empty()) else {
         return handled(true);
     };

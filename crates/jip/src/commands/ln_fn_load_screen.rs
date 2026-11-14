@@ -7,7 +7,9 @@
 //! first font colour (`fontColor1`, three floats) is at +0x34 of the form.
 
 use super::arrays::{create_string_map, Element};
-use super::{assign_string, buffer_arg, set_form_result, string_set, string_text, type_of, Handlers};
+use super::{
+    assign_string, buffer_arg, set_form_result, string_set, string_text, type_of, Handlers,
+};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};

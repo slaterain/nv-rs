@@ -325,3 +325,51 @@ pub fn calls_to(addr: u32) -> Vec<Vec<u32>> {
         .map(|c| c.1)
         .collect()
 }
+
+/// The game's form map (`*011C54C0`: 16 buckets at +0x100, entries from +0x400) and the data
+/// handler (`*011C3F2C`) in test memory; the page of both globals mapped.
+pub const FORM_MAP: u32 = FORMS + 0xf_0000;
+pub const DATA_HANDLER_AT: u32 = FORMS + 0xf_8000;
+
+pub fn game_globals(e: &mut Engine) {
+    e.map(0x011c_3000, 0x3000);
+    e.mem.set_u32(0x011c_54c0, FORM_MAP);
+    e.mem.set_u32(FORM_MAP + 4, 16);
+    e.mem.set_u32(FORM_MAP + 8, FORM_MAP + 0x100);
+    e.mem.set_u32(0x011c_3f2c, DATA_HANDLER_AT);
+}
+
+/// Puts `form` in the form map under `id` (entry `n`, first in its bucket).
+pub fn in_form_map(e: &mut Engine, form: u32, id: u32, n: u32) {
+    let item = FORM_MAP + 0x400 + 0x10 * n;
+    let bucket = FORM_MAP + 0x100 + 4 * (id % 16);
+    e.mem.set_u32(item, e.mem.u32(bucket));
+    e.mem.set_u32(item + 4, id);
+    e.mem.set_u32(item + 8, form);
+    e.mem.set_u32(bucket, item);
+}
+
+/// A loaded file `info` at `index` of the data handler's slots (+0x21C), named `name` (+0x20),
+/// its own index at +0x40C; the loaded count (+0x218) raised to cover it.
+pub fn loaded_mod(e: &mut Engine, index: u32, info: u32, name: &[u8]) {
+    e.mem.set_u32(DATA_HANDLER_AT + 0x21c + 4 * index, info);
+    e.mem.write(info + 0x20, name);
+    e.mem.set_u8(info + 0x20 + name.len() as u32, 0);
+    e.mem.set_u8(info + 0x40c, index as u8);
+    let count = e.mem.u32(DATA_HANDLER_AT + 0x218).max(index + 1);
+    e.mem.set_u32(DATA_HANDLER_AT + 0x218, count);
+}
+
+/// A packed xNVSE array of `values`, owned by mod 0; its id.
+pub fn array_of(e: &mut Engine, values: Vec<nvse::vars::Value>) -> u32 {
+    let id = nvse::vars::create_array(e, nvse::vars::KEY_NUMBER, true, 0);
+    for (i, v) in values.into_iter().enumerate() {
+        nvse::vars::set_element(e, id, &nvse::vars::Key::Number(i as f64), v);
+    }
+    id
+}
+
+/// The values of array `id` in order.
+pub fn array_data(e: &Engine, id: f64) -> Vec<nvse::vars::Data> {
+    crate::commands::jip_fn_aux_variable::array_values(e, id as u32).expect("an array")
+}

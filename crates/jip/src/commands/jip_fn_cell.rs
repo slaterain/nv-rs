@@ -9,8 +9,10 @@
 //! `0101_424C`); `ExtraNorthRotation` (0x43) a float at +0xC.
 
 use super::extra::{self, kind, vtbl};
-use super::{assign_string, buffer_arg, set_form_result, string_set, string_text, type_of, Handlers};
 use super::DBL_180_D_PI;
+use super::{
+    assign_string, buffer_arg, set_form_result, string_set, string_text, type_of, Handlers,
+};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};

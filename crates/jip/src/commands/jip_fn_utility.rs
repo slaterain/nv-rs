@@ -364,7 +364,12 @@ fn clear_jip_saved_data(e: &mut Engine, w: &[u32]) -> Ret {
     if !read.ok {
         return handled(true);
     }
-    let (scr, links, aux, maps) = (read.int(0, 0), read.int(1, 0), read.int(2, 0), read.int(3, 0));
+    let (scr, links, aux, maps) = (
+        read.int(0, 0),
+        read.int(1, 0),
+        read.int(2, 0),
+        read.int(3, 0),
+    );
     let modi = overriding_mod(e, a.script);
     let saved = &mut e.ext::<Jip>().saved;
     if scr != 0 {

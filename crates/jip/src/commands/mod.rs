@@ -75,7 +75,11 @@ pub type Handlers = &'static [(u32, AbiFn)];
 pub type Conditions = &'static [(u32, AbiFn, AbiFn)];
 
 /// Every module's conditions, one line per JIP source file that has any.
-pub const ALL_CONDITIONS: &[Conditions] = &[jip_fn_effect::CONDITIONS, ln_fn_math::CONDITIONS, ln_fn_misc_ref::CONDITIONS];
+pub const ALL_CONDITIONS: &[Conditions] = &[
+    jip_fn_effect::CONDITIONS,
+    ln_fn_math::CONDITIONS,
+    ln_fn_misc_ref::CONDITIONS,
+];
 
 /// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
 /// eval; no execute.
@@ -681,7 +685,11 @@ mod tests {
             }
         }
         assert_eq!(ALL.len(), files.len());
-        for (list, file) in ALL_CONDITIONS.iter().zip(["jip_fn_effect", "ln_fn_math", "ln_fn_misc_ref"]) {
+        for (list, file) in
+            ALL_CONDITIONS
+                .iter()
+                .zip(["jip_fn_effect", "ln_fn_math", "ln_fn_misc_ref"])
+        {
             for &(opcode, _, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
                 assert!(slot.file.ends_with(file), "{opcode:04x} {}", slot.name);

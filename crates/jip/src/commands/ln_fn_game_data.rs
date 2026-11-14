@@ -269,8 +269,11 @@ pub fn sub_str_ci(text: &[u8], sub: &[u8]) -> bool {
     if text.is_empty() || sub.is_empty() || sub.len() > text.len() {
         return false;
     }
-    text.windows(sub.len())
-        .any(|w| w.iter().zip(sub).all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase()))
+    text.windows(sub.len()).any(|w| {
+        w.iter()
+            .zip(sub)
+            .all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+    })
 }
 
 /// A form's editor ID (the virtual function): its text and its guest pointer.

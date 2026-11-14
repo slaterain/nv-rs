@@ -26,8 +26,16 @@ fn close(a: f32, b: f64, abs: f64) -> bool {
 fn cosine_and_sine_follow_the_standard_ones() {
     for i in -2000..=2000 {
         let x = i as f32 * 0.01;
-        assert!(close(cos(x), f64::from(x).cos(), 2e-6), "cos {x}: {}", cos(x));
-        assert!(close(sin(x), f64::from(x).sin(), 2e-6), "sin {x}: {}", sin(x));
+        assert!(
+            close(cos(x), f64::from(x).cos(), 2e-6),
+            "cos {x}: {}",
+            cos(x)
+        );
+        assert!(
+            close(sin(x), f64::from(x).sin(), 2e-6),
+            "sin {x}: {}",
+            sin(x)
+        );
         assert!(close(cos_lane(x), f64::from(x).cos(), 2e-6), "lane {x}");
     }
 }
@@ -52,7 +60,11 @@ fn tangent_and_its_cut_off() {
     for i in -150..=150 {
         let x = i as f32 * 0.01;
         assert!(
-            close(tan(x), f64::from(x).tan(), 2e-5 * (1.0 + f64::from(x).tan().powi(2))),
+            close(
+                tan(x),
+                f64::from(x).tan(),
+                2e-5 * (1.0 + f64::from(x).tan().powi(2))
+            ),
             "tan {x}: {}",
             tan(x)
         );
@@ -69,12 +81,32 @@ fn tangent_and_its_cut_off() {
 fn inverse_functions_follow_the_standard_ones() {
     for i in -999..=999 {
         let x = i as f32 * 0.001;
-        assert!(close(asin(x), f64::from(x).asin(), 1e-5), "asin {x}: {}", asin(x));
-        assert!(close(acos(x), f64::from(x).acos(), 1e-5), "acos {x}: {}", acos(x));
-        assert!(close(atan(x * 9.0), f64::from(x * 9.0).atan(), 1e-5), "atan {x}");
+        assert!(
+            close(asin(x), f64::from(x).asin(), 1e-5),
+            "asin {x}: {}",
+            asin(x)
+        );
+        assert!(
+            close(acos(x), f64::from(x).acos(), 1e-5),
+            "acos {x}: {}",
+            acos(x)
+        );
+        assert!(
+            close(atan(x * 9.0), f64::from(x * 9.0).atan(), 1e-5),
+            "atan {x}"
+        );
     }
-    for (y, x) in [(1.0f32, 2.0f32), (-1.0, 2.0), (1.0, -2.0), (-3.0, -0.5), (5.0, 0.25)] {
-        assert!(close(atan2(y, x), f64::from(y).atan2(f64::from(x)), 1e-5), "atan2 {y} {x}");
+    for (y, x) in [
+        (1.0f32, 2.0f32),
+        (-1.0, 2.0),
+        (1.0, -2.0),
+        (-3.0, -0.5),
+        (5.0, 0.25),
+    ] {
+        assert!(
+            close(atan2(y, x), f64::from(y).atan2(f64::from(x)), 1e-5),
+            "atan2 {y} {x}"
+        );
     }
 }
 
@@ -204,18 +236,36 @@ fn square_root_command() {
 fn trigonometric_commands() {
     let mut e = engine();
     let one = |e: &mut Engine, op: u32, v: f64| call(e, op, &[z(v)]).1;
-    assert_eq!(one(&mut e, 0x22fd, 30.0), f64::from(sin(30.0 * FLT_PI_D_180)));
+    assert_eq!(
+        one(&mut e, 0x22fd, 30.0),
+        f64::from(sin(30.0 * FLT_PI_D_180))
+    );
     assert!((one(&mut e, 0x22fd, 30.0) - 0.5).abs() < 1e-6);
-    assert_eq!(one(&mut e, 0x22fe, 60.0), f64::from(cos(60.0 * FLT_PI_D_180)));
+    assert_eq!(
+        one(&mut e, 0x22fe, 60.0),
+        f64::from(cos(60.0 * FLT_PI_D_180))
+    );
     assert_eq!(one(&mut e, 0x22fe, 0.0), 1.0);
-    assert_eq!(one(&mut e, 0x2893, 45.0), f64::from(tan(45.0 * FLT_PI_D_180)));
+    assert_eq!(
+        one(&mut e, 0x2893, 45.0),
+        f64::from(tan(45.0 * FLT_PI_D_180))
+    );
     assert_eq!(one(&mut e, 0x2893, 90.0), 0.0, "the cosine cut off");
-    assert_eq!(one(&mut e, 0x230f, 0.5), f64::from(asin(0.5)) * DBL_180_D_PI);
+    assert_eq!(
+        one(&mut e, 0x230f, 0.5),
+        f64::from(asin(0.5)) * DBL_180_D_PI
+    );
     assert!((one(&mut e, 0x230f, 0.5) - 30.0).abs() < 1e-4);
     assert_eq!(one(&mut e, 0x2310, -1.0), f64::from(FLT_PI) * DBL_180_D_PI);
-    assert_eq!(one(&mut e, 0x230b, 1.0), f64::from(atan(1.0)) * DBL_180_D_PI);
+    assert_eq!(
+        one(&mut e, 0x230b, 1.0),
+        f64::from(atan(1.0)) * DBL_180_D_PI
+    );
     // The double argument read as a float: 0.1 rounds first.
-    assert_eq!(one(&mut e, 0x230f, 0.1), f64::from(asin(0.1f32)) * DBL_180_D_PI);
+    assert_eq!(
+        one(&mut e, 0x230f, 0.1),
+        f64::from(asin(0.1f32)) * DBL_180_D_PI
+    );
     let r = call(&mut e, 0x2894, &[z(-1.0), z(-1.0)]).1;
     assert_eq!(r, f64::from(atan2(-1.0, -1.0)) * DBL_180_D_PI);
     assert!((r + 135.0).abs() < 1e-3);
@@ -223,4 +273,3 @@ fn trigonometric_commands() {
     let r = call(&mut e, 0x2894, &[z(1.0), z(0.0)]).1;
     assert_eq!(r, f64::from(FLT_PI_D2) * DBL_180_D_PI);
 }
-

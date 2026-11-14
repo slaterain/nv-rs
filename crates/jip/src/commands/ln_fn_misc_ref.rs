@@ -141,8 +141,10 @@ fn set_reference_flag(e: &mut Engine, w: &[u32]) -> Ret {
     if read.ok {
         let (flag, on) = (read.int(0, 0), read.int(1, 0));
         let f = e.mem.u32(a.this_obj + FLAGS);
-        e.mem
-            .set_u32(a.this_obj + FLAGS, if on != 0 { f | flag } else { f & !flag });
+        e.mem.set_u32(
+            a.this_obj + FLAGS,
+            if on != 0 { f | flag } else { f & !flag },
+        );
     }
     handled(true)
 }

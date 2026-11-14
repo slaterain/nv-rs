@@ -61,7 +61,13 @@ fn flip(v: f32, sign: u32) -> f32 {
 
 /// `kFlt2dPI` and `kCosConsts` of `Cos` and `Cos_V3`.
 const FLT_2_D_PI: f32 = f32::from_bits(0x3f22_f983);
-const COS_CONSTS: [u32; 5] = [0x37c2_3ab1, 0x3ab5_9551, 0x3d2a_a76f, 0x3eff_ffe0, 0x3f7f_ffff];
+const COS_CONSTS: [u32; 5] = [
+    0x37c2_3ab1,
+    0x3ab5_9551,
+    0x3d2a_a76f,
+    0x3eff_ffe0,
+    0x3f7f_ffff,
+];
 
 /// The polynomial both `Cos` routines end with, on the reduced angle `x`, its sign flipped by
 /// `sign`.
@@ -228,7 +234,14 @@ pub fn acos(value: f32) -> f32 {
 }
 
 /// `kATanConsts` of `ATan2`.
-const ATAN_CONSTS: [u32; 6] = [0xbc5c_dd30, 0x3d6b_6d55, 0x3df8_4c31, 0x3e48_54c9, 0x3eaa_7e45, 0x3f7f_ffb7];
+const ATAN_CONSTS: [u32; 6] = [
+    0xbc5c_dd30,
+    0x3d6b_6d55,
+    0x3df8_4c31,
+    0x3e48_54c9,
+    0x3eaa_7e45,
+    0x3f7f_ffb7,
+];
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: ATan2 (asm).
 /// `ATan2(y, x)`: y of 0 or NaN answers y when x is 0 or more, else pi; x of 0 or NaN answers
