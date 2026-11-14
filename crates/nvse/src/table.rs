@@ -211,6 +211,8 @@ pub struct State {
     pub registrations: u32,
     /// [`name_map`] and the registration count it was made at.
     pub names: Option<(u32, HashMap<u32, Option<u32>>)>,
+    /// `ShowRouletteMenu`'s short name (a guest text), which its record no longer has ([`ROULETTE`]).
+    pub roulette_short: u32,
 }
 
 /// Vanilla commands xNVSE records as returning forms (`AddCommandsV1`, `CommandTable.cpp`
@@ -396,7 +398,21 @@ pub fn opcode_by_name(e: &Engine, name: &[u8]) -> Option<u32> {
     }
     let tables = e.script_tables();
     (ScriptTables::FIRST_OPCODE..tables.max_opcode)
-        .find(|&opcode| names(tables.record(opcode)).into_iter().any(matches))
+        .find(|&opcode| script_names(e, opcode).into_iter().any(matches))
+}
+
+/// `ShowRouletteMenu`, whose short name xNVSE clears in its record after building the table
+/// (`CommandTable::Init`: `rouletteCmd->shortName = nullptr`, opcode 4693).
+pub const ROULETTE: u32 = 0x1255;
+
+/// A script record's two name words as xNVSE's name map took them when the record came in:
+/// `ShowRouletteMenu`'s short name is still in the map after its record lost it.
+fn script_names(e: &Engine, opcode: u32) -> [u32; 2] {
+    let at = e.script_tables().record(opcode);
+    let short = e.mem.u32(at + 4);
+    let kept = e.ext_get::<Nvse>().map_or(0, |n| n.table.roulette_short);
+    let short = if opcode == ROULETTE && short == 0 { kept } else { short };
+    [e.mem.u32(at), short]
 }
 
 /// [`opcode_by_name`]'s answers all at once, as xNVSE's `g_cmdTableCache` holds them: each name's
@@ -420,8 +436,7 @@ pub fn name_map(e: &Engine) -> HashMap<u32, Option<u32>> {
     }
     let tables = e.script_tables();
     for opcode in ScriptTables::FIRST_OPCODE..tables.max_opcode {
-        let at = tables.record(opcode);
-        for ptr in [e.mem.u32(at), e.mem.u32(at + 4)] {
+        for ptr in script_names(e, opcode) {
             map.entry(hash(ptr)).or_insert(Some(opcode));
         }
     }
@@ -561,6 +576,10 @@ pub fn install(e: &mut Engine) {
         ..Record::default()
     }
     .write(e, TABLE_AT + count * RECORD);
+    // `CommandTable::Init`'s end: `ShowRouletteMenu` loses its short name (its name map kept it).
+    let roulette = TABLE_AT + (ROULETTE - ScriptTables::FIRST_OPCODE) * RECORD;
+    e.ext::<Nvse>().table.roulette_short = e.mem.u32(roulette + 4);
+    e.mem.set_u32(roulette + 4, 0);
     e.ext::<Nvse>().table.returns = returns;
     e.ext::<Nvse>().table.registrations += 1;
     e.set_script_tables(ScriptTables {

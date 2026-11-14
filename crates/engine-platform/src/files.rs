@@ -3788,3 +3788,239 @@ mod tests_changed_directories {
         listed(&mut e, &format!("{dir}\\*"));
     }
 }
+
+/// Names outside ASCII and links, as Windows' ANSI search answers them (measured on scratch files,
+/// `measure/xnvse-rest/findfile-ansi-2026-11-14.txt`, code page 1252), and the built-in xNVSE's
+/// function-file walk run through these calls.
+#[cfg(all(test, windows))]
+mod tests_ansi_names_and_links {
+    use super::*;
+
+    /// A scratch folder of the test's own under the system's temporary folder.
+    fn scratch(test: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nv-rs-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A junction at `link` to `target` (`mklink /J`, which needs no privilege).
+    fn junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+        std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    fn code_page_1252() -> bool {
+        extern "system" {
+            fn GetACP() -> u32;
+        }
+        // SAFETY: no arguments.
+        unsafe { GetACP() == 1252 }
+    }
+
+    /// Every entry a wildcard search answers: its name's bytes, attributes and `dwReserved0`.
+    fn search(e: &mut Engine, pattern: &[u8]) -> Vec<(Vec<u8>, u32, u32)> {
+        let name = e.mem.alloc(0x200);
+        e.mem.set_cstr(name, pattern);
+        let data = e.mem.alloc(0x140);
+        let h = find_first_file_a(e, Ptr::new(name), Ptr::new(data));
+        let mut out = Vec::new();
+        if h == INVALID_HANDLE_VALUE {
+            return out;
+        }
+        loop {
+            out.push((
+                e.mem.cstr(data + 0x2c),
+                e.mem.u32(data),
+                e.mem.u32(data + 0x24),
+            ));
+            if find_next_file_a(e, h, Ptr::new(data)) == 0 {
+                break;
+            }
+        }
+        find_close(e, h);
+        out
+    }
+
+    /// A name outside ASCII comes back in the ANSI code page (an e acute as `E9`, a character the
+    /// page cannot hold as `?`, best fit where it has a near one) and opens again by those bytes
+    /// (the `?` form does not); a junction comes back as the link it is (directory, reparse
+    /// point, its tag); a link whose target is gone is listed and found by name without a stop.
+    #[test]
+    fn names_outside_ascii_and_links_are_answered_as_windows_answers_them() {
+        if !code_page_1252() {
+            return;
+        }
+        let dir = scratch("ansi");
+        std::fs::write(dir.join("\u{e9}t\u{e9}.txt"), b"a").unwrap();
+        std::fs::write(dir.join("\u{416}uk.txt"), b"a").unwrap();
+        std::fs::write(dir.join("\u{142}odz.txt"), b"a").unwrap();
+        std::fs::create_dir(dir.join("target")).unwrap();
+        let joined = junction(&dir.join("junction"), &dir.join("target"));
+        std::fs::write(dir.join("gone.txt"), b"a").unwrap();
+        let linked =
+            std::os::windows::fs::symlink_file(dir.join("gone.txt"), dir.join("dangling.txt"))
+                .is_ok();
+        std::fs::remove_file(dir.join("gone.txt")).unwrap();
+        let mut e = Engine::new();
+        let shown = dir.to_string_lossy().into_owned();
+        let mut all = shown.clone().into_bytes();
+        all.extend_from_slice(b"\\*");
+        let found = search(&mut e, &all);
+        let names: Vec<&[u8]> = found.iter().map(|f| f.0.as_slice()).collect();
+        assert!(names.contains(&&b"\xe9t\xe9.txt"[..]), "{names:?}");
+        assert!(names.contains(&&b"?uk.txt"[..]));
+        assert!(names.contains(&&b"lodz.txt"[..]));
+        assert!(joined, "a junction needs no privilege");
+        let j = found.iter().find(|f| f.0 == b"junction").unwrap();
+        assert_eq!(j.1 & 0x410, 0x410);
+        assert_eq!(j.2, 0xa000_0003);
+        let plain = found.iter().find(|f| f.0 == b"target").unwrap();
+        assert_eq!(plain.2, 0, "no tag on an ordinary entry");
+        if linked {
+            let l = found.iter().find(|f| f.0 == b"dangling.txt").unwrap();
+            assert_ne!(l.1 & FILE_ATTRIBUTE_REPARSE_POINT, 0);
+            assert_eq!(l.2, 0xa000_000c);
+            let mut one = shown.clone().into_bytes();
+            one.extend_from_slice(b"\\dangling.txt");
+            assert_eq!(search(&mut e, &one).len(), 1);
+        }
+        // Opened by the bytes the search gave; the `?` form opens nothing.
+        let open = |e: &mut Engine, name: &[u8]| {
+            let at = e.mem.alloc(0x200);
+            let mut full = shown.clone().into_bytes();
+            full.push(b'\\');
+            full.extend_from_slice(name);
+            e.mem.set_cstr(at, &full);
+            let h = create_file_a(e, Ptr::new(at), GENERIC_READ, 3, 0, OPEN_EXISTING, 0x80, 0);
+            h != INVALID_HANDLE_VALUE
+        };
+        assert!(open(&mut e, b"\xe9t\xe9.txt"));
+        assert!(!open(&mut e, b"?uk.txt"));
+        // The single name, by its ANSI bytes (no wildcard).
+        let mut one = shown.clone().into_bytes();
+        one.extend_from_slice(b"\\\xe9t\xe9.txt");
+        let single = search(&mut e, &one);
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].0, b"\xe9t\xe9.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The built-in xNVSE's first-frame walk of `data/nvse/user_defined_functions` through these
+    /// calls: a name outside ASCII, a junction and (where links can be made) a link whose target is
+    /// gone stop nothing; the junction is not entered; the files are listed by their ANSI names.
+    /// The compile is a stand-in that fails (no console), so each file found is named in
+    /// `nvse.log`; the buffer constructor counts the files that were read.
+    #[test]
+    fn the_function_folder_walk_runs_on_the_real_file_calls() {
+        if !code_page_1252() {
+            return;
+        }
+        thread_local! {
+            static READ: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let dir = scratch("udf-walk");
+        let udf = dir.join("data").join("nvse").join("user_defined_functions");
+        std::fs::create_dir_all(&udf).unwrap();
+        std::fs::write(udf.join("plain.txt"), b"x").unwrap();
+        std::fs::write(udf.join("\u{e9}t\u{e9}.txt"), b"x").unwrap();
+        std::fs::write(udf.join("\u{416}uk.txt"), b"x").unwrap();
+        let outside = dir.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("in.txt"), b"x").unwrap();
+        assert!(junction(&udf.join("Junction"), &outside));
+        std::fs::write(dir.join("gone.txt"), b"x").unwrap();
+        let _ = std::os::windows::fs::symlink_file(dir.join("gone.txt"), udf.join("dangling.txt"));
+        std::fs::remove_file(dir.join("gone.txt")).unwrap();
+        crate::imports();
+        let mut e = Engine::new();
+        e.kernel.current_directory = dir.to_string_lossy().into_owned().into_bytes();
+        let slots = [
+            (0x00fd_f088, "CreateFileA"),
+            (0x00fd_f080, "ReadFile"),
+            (0x00fd_f07c, "CloseHandle"),
+            (0x00fd_f070, "FindFirstFileA"),
+            (0x00fd_f068, "FindNextFileA"),
+            (0x00fd_f064, "FindClose"),
+            (0x00fd_f240, "SetFilePointer"),
+            (0x00fd_f0dc, "WriteFile"),
+        ];
+        let imports: Vec<engine_core::exe::Import> = slots
+            .iter()
+            .map(|&(slot, name)| engine_core::exe::Import {
+                slot,
+                dll: "KERNEL32.dll".into(),
+                name: name.into(),
+            })
+            .collect();
+        assert_eq!(e.register_imports(&imports), slots.len());
+        let area = 0x0640_0000;
+        e.map(area, 0x1_0000);
+        e.mem.set_u32(area, area + 0x100);
+        e.register(0x0040_1000, |e, a| {
+            let at = e.mem.u32(0x0640_0000);
+            e.mem.set_u32(0x0640_0000, at + a[0].max(1).next_multiple_of(16));
+            Ret {
+                eax: at,
+                ..Ret::default()
+            }
+        });
+        e.register(0x0040_1030, |_, _| Ret::default());
+        // The script buffer's constructor: its data block, and one more file read.
+        e.register(0x005a_e490, |e, a| {
+            READ.with(|r| r.set(r.get() + 1));
+            let data = e.call(0x0040_1000, &[0x100]).u32();
+            e.mem.set_u32(a[0] + 0x20, data);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        for f in [0x005a_e5c0u32, 0x005a_a1a0, 0x0046_4d30] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.register(0x005a_a0f0, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.map(0x011c_3000, 0x1000);
+        // No console: no compile, so every file found fails and is named.
+        e.register(0x0071_b160, |_, _| Ret::default());
+        nvse::compile_script::cache_all_scripts(&mut e);
+        let log = read_whole(&e, &full_path(&e, b"nvse.log")).unwrap_or_default();
+        let lines: Vec<&[u8]> = log
+            .split(|&b| b == b'\n')
+            .filter(|l| !l.is_empty())
+            .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+            .collect();
+        let named = |name: &[u8]| {
+            let mut l =
+                b"xNVSE: Failed to precompile script file at data/nvse/user_defined_functions/"
+                    .to_vec();
+            l.extend_from_slice(name);
+            l
+        };
+        assert!(lines.contains(&named(b"plain.txt").as_slice()), "{log:?}");
+        assert!(lines.contains(&named(b"\xe9t\xe9.txt").as_slice()));
+        assert!(
+            lines.contains(&named(b"?uk.txt").as_slice()),
+            "listed, cannot be opened"
+        );
+        assert!(
+            !lines.iter().any(|l| l.ends_with(b"in.txt")),
+            "the junction not entered"
+        );
+        assert!(
+            !lines.iter().any(|l| l.ends_with(b"dangling.txt")),
+            "a broken link passed over"
+        );
+        assert_eq!(lines.len(), 3);
+        // Read: plain.txt and the e-acute name (the `?` name does not open).
+        assert_eq!(READ.with(std::cell::Cell::get), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

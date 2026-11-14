@@ -524,7 +524,7 @@ fn walk(e: &mut Engine, dir: &[u8], files: &mut Vec<Vec<u8>>) {
             && matches!(found.tag, IO_REPARSE_TAG_SYMLINK | IO_REPARSE_TAG_MOUNT_POINT);
         if found.attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
             if !link {
-                path.push(b'\');
+                path.push(b'\\');
                 walk(e, &path, files);
             }
         } else if !link || opens(e, &path) {

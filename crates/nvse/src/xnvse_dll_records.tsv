@@ -1,0 +1,632 @@
+1400	GetNVSEVersion	0	0	returns the installed version of NVSE
+1401	GetNVSERevision	0	0	returns the numbered revision of the installed version of NVSE
+1402	GetNVSEBeta	0	0	returns the numbered beta of the installed version of NVSE
+1403	GetBaseObject	1	0	returns the base object id of the reference
+1404	GetWeight	0	1	returns the weight of the specified base form
+1405	GetHealth	0	1	returns the base health of the object or calling reference
+1406	GetValue	0	1	returns the base value of the object or calling reference
+1407	SetWeight	0	2	sets the weight of the object
+1408	SetHealth	0	2	sets the base health of the specified base form
+1409	SetBaseItemValue	0	2	sets the monetary value of a base object
+140a	GetType	0	1	returns the type of the specified base form
+140b	GetRepairList	0	1	returns the repair list for the inventory object
+140c	GetEquipType	0	1	returns the equipment type of the inventory object
+140d	GetWeaponAmmo	0	1	returns the ammo of a weapon
+140e	GetWeaponClipRounds	0	1	returns the clip size for the weapon
+140f	GetAttackDamage	0	1	returns the attack damage for the weapon
+1410	GetWeaponType	0	1	returns the weapon type
+1411	GetWeaponMinSpread	0	1	returns the minimum spread of the weapon
+1412	GetWeaponSpread	0	1	returns the spread of the weapon
+1413	GetWeaponProjectile	0	1	returns the weapon projectile info
+1414	GetWeaponSightFOV	0	1	returns the zoom field of view for the weapon
+1415	GetWeaponMinRange	0	1	returns the min range of the weapon
+1416	GetWeaponMaxRange	0	1	returns the max range of the weapon
+1417	GetWeaponAmmoUse	0	1	returns the ammo used per shot of the weapon
+1418	GetWeaponActionPoints	0	1	returns the number of action points per shot of the weapon
+1419	GetWeaponCritDamage	0	1	returns the critical damage of the weapon
+141a	GetWeaponCritChance	0	1	returns the chance of a critical shot for the weapon
+141b	GetWeaponCritEffect	0	1	returns the spell for the critical effect for the weapon
+141c	GetWeaponFireRate	0	1	returns the fire rate of the weapon.
+141d	GetWeaponAnimAttackMult	0	1	returns the animation attack multiplier of the weapon.
+141e	GetWeaponRumbleLeftMotor	0	1	returns the rumble left motor of the weapon.
+141f	GetWeaponRumbleRightMotor	0	1	returns the rumble right motor of the weapon.
+1420	GetWeaponRumbleDuration	0	1	returns the rumble duration of the weapon.
+1421	GetWeaponRumbleWavelength	0	1	returns the rumble wavelegnth for the weapon.
+1422	GetWeaponAnimShotsPerSec	0	1	returns the animation shots per second of the weapon.
+1423	GetWeaponAnimReloadTime	0	1	retuns the animation reload time for the weapon.
+1424	GetWeaponAnimJamTime	0	1	returns the animation jam time of the weapon.
+1425	GetWeaponSkill	0	1	returns the skill for the weapon.
+1426	GetWeaponResistType	0	1	returns the resist type for the weapon.
+1427	GetWeaponFireDelayMin	0	1	returns the semi-auto min fire delay for the weapon.
+1428	GetWeaponFireDelayMax	0	1	returns the semi-auto max fire delay for the weapon.
+1429	GetWeaponAnimMult	0	1	returns the animation multiplier for the weapon
+142a	GetWeaponReach	0	1	returns the reach of the weapon
+142b	GetWeaponIsAutomatic	0	1	returns 1 if the weapon is an automatic weapon
+142c	GetWeaponHandGrip	0	1	returns the hand grip of the weapon
+142d	GetWeaponReloadAnim	0	1	returns the reload animation of the weapon
+142e	GetWeaponBaseVATSChance	0	1	returns the base VATS chance of the weapon
+142f	GetWeaponAttackAnimation	0	1	returns the attack animation of the weapon
+1430	GetWeaponNumProjectiles	0	1	returns the number of projectiles used in a single shot by the weapon.
+1431	GetWeaponAimArc	0	1	returns the aim arc of the weapon.
+1432	GetWeaponLimbDamageMult	0	1	returns the limb damage multiplier of the weapon.
+1433	GetWeaponSightUsage	0	1	returns the sight usage of the weapon.
+1434	GetWeaponHasScope	0	1	returns whether the weapon has a scope or not.
+143f	ListGetCount	0	1	"returns the count of items in the form list"
+1440	ListGetNthForm	0	2	returns the nth form in the form list
+1441	ListGetFormIndex	0	2	returns the index for the specified form
+1442	ListAddForm	0	4	adds the form to the list at the given index (or at the end if not provided)
+1443	ListAddReference	1	3	adds the calling reference at the given index (or at the end if not provided)
+1444	ListRemoveNthForm	0	2	removes the nth form from the list
+1445	ListRemoveForm	0	2	removes the specified from from the list.
+1446	ListReplaceNthForm	0	3	replaces the nth form of the list with the specified form
+1447	ListReplaceForm	0	3	replaces the specified from with another.
+1448	ListClear	0	1	removes all entries from the list
+1449	GetEquippedObject	1	1	returns the base object of the item in the specified slot
+144a	GetEquippedCurrentHealth	1	1	returns the current health of the object equipped in the specified slot
+144b	CompareNames	0	2	compares one name to another
+144c	SetName	0	2	sets the name of the object.
+144d	GetHotkeyItem	0	1	returns the item assigned to the specified hotkey from 1 to 8
+144e	GetNumItems	1	0	returns the number of items contained by the calling ref
+144f	GetInventoryObject	1	1	returns the base object of the specified index contained in the calling ref
+1450	SetEquippedCurrentHealth	1	2	sets the current health of the equipped object at the given slot.
+1451	GetCurrentHealth	1	0	returns the current health of the calling ref
+1452	SetCurrentHealth	1	1	sets the current health of the calling ref
+1453	IsKeyPressed	0	2	return if a dx scancode is down or up
+1454	TapKey	0	1	Fakes a key press for one frame
+1455	HoldKey	0	1	Fakes a key press indefinately
+1456	ReleaseKey	0	1	Releases a key held down by HoldKey
+1457	DisableKey	0	2	Prevents a player from using a key
+1458	EnableKey	0	2	Reenables a key previously disabled with DisableKey
+1459	GetNumKeysPressed	0	1	Returns how many keyboard keys are currently being held down
+145a	GetKeyPress	0	2	Returns the scancode of the nth key which is currently being held down
+145b	GetNumMouseButtonsPressed	0	0	Returns how many mouse buttons are currently being held down
+145c	GetMouseButtonPress	0	1	Returns the code of the nth mouse button which is currently being held down
+145d	GetControl	0	2	Returns the key assigned to a control
+145e	GetAltControl	0	1	Returns the mouse button assigned to a control
+145f	MenuTapKey	0	1	Fakes a key press for one frame in menu mode
+1460	MenuHoldKey	0	1	Fakes a key press indefinately in menu mode
+1461	MenuReleaseKey	0	1	Releases a key held down by MenuHoldKey
+1462	DisableControl	0	2	disables the key and button bound to a control
+1463	EnableControl	0	2	enables the key and button assigned to a control
+1464	TapControl	0	1	taps the key or mouse button assigned to control
+1465	SetControl	0	3	assigns a new keycode to the specified keyboard control
+1466	SetAltControl	0	2	assigns a new mouse button code to the specified mouse control
+1467	SetIsControl	0	2	sets a key as a custom control
+1468	IsControl	0	1	returns 1 if key is a game control or 2 if a custom control
+1469	IsKeyDisabled	0	1	returns 1 if the key has been disabled by a script
+146a	IsControlDisabled	0	1	returns 1 if the control has been disabled by a script
+146b	IsControlPressed	0	2	returns 1 if the control is pressed
+146c	IsPersistent	1	0	returns true if the calling reference is persistent
+146d	GetParentCell	1	0	returns the parent cell of the reference
+146e	GetParentWorldspace	1	0	returns the parent worldspace of the reference
+146f	GetTeleportCell	1	0	returns the cell to which the calling door reference teleports
+1470	GetLinkedDoor	1	0	returns the door to which the calling reference is linked
+1471	GetFirstRef	0	3	returns the first reference of the specified type in the current cell
+1472	GetNextRef	0	0	returns the next reference of a given type in the current cell
+1473	GetNumRefs	0	6	returns the number of references of a given type in the current cell
+1474	GetFirstRefInCell	0	4	returns the first reference of the specified type in the specified cell
+1475	GetNumRefsInCell	0	7	returns the number of references of a given type in the specified cell
+1476	GetRefCount	1	0	returns the count in a stacked reference
+1477	SetRefCount	1	1	sets the count on a stacked reference
+1478	GetArmorAR	0	1	returns the armor rating of the specified armor.
+1479	IsPowerArmor	0	1	returns whether the biped form is considered power armor.
+147a	SetIsPowerArmor	0	2	sets whether the armor is power armor or not.
+147b	SetRepairList	0	2	sets the repair list for the specified item.
+147c	IsQuestItem	0	1	returns 1 if the object or calling reference is a quest item
+147d	SetQuestItem	0	2	Sets whether the specified object or object reference is a quest item
+147e	GetObjectEffect	0	1	returns the object effect of the inventory object.
+147f	SetWeaponAmmo	0	2	sets the ammo of the weapon
+1480	SetWeaponClipRounds	0	2	sets the weapon clip size
+1481	SetAttackDamage	0	2	sets the attack damage of the form
+1482	SetWeaponType	0	2	sets the weapon type of the weapon.
+1483	SetWeaponMinSpread	0	2	sets the weapon min spread
+1484	SetWeaponSpread	0	2	sets the weapon spread
+1485	SetWeaponProjectile	0	2	sets the projectile of the weapon
+1486	SetWeaponSightFOV	0	2	sets the weapon xoom field of view
+1487	SetWeaponMinRange	0	2	sets the weapon min range
+1488	SetWeaponMaxRange	0	2	sets the weapon max range.
+1489	SetWeaponAmmoUse	0	2	sets the weapon ammo use
+148a	SetWeaponActionPoints	0	2	sets the weapon number of action pointer per shot
+148b	SetWeaponCritDamage	0	2	sets the weapon critical hit damage.
+148c	SetWeaponCritChance	0	2	sets the weapon critical hit chance
+148d	SetWeaponCritEffect	0	2	sets the weapon critical hit effect
+148e	SetWeaponAnimAttackMult	0	2	sets the anim attack multiplier.
+148f	SetWeaponAnimMult	0	2	sets the animiation multiple of the weapon.
+1490	SetWeaponReach	0	2	sets the reach of the weapon.
+1491	SetWeaponIsAutomatic	0	2	sets whether the weapon is an automatic weapon or not.
+1492	SetWeaponHandGrip	0	2	sets the hand grip of the weapon.
+1493	SetWeaponReloadAnim	0	2	sets the reload animation of the weapon.
+1494	SetWeaponBaseVATSChance	0	2	sets the base VATS chance for the weapon.
+1495	SetWeaponAttackAnimation	0	2	sets the attack animation for the weapon.
+1496	SetWeaponNumProjectiles	0	2	sets the number of projectiles the weapon fires each time it is shot.
+1497	SetWeaponAimArc	0	2	sets the aim arc of the weapon.
+1498	SetWeaponLimbDamageMult	0	2	sets the limb damage multiplier for the weapon.
+1499	SetWeaponSightUsage	0	2	sets the sight usage for the weapon.
+149a	GetNumericGameSetting	0	1	returns the value of a numeric game setting
+149b	SetNumericGameSetting	0	2	sets a numeric game setting
+149c	GetNumericIniSetting	0	1	returns the value of an ini setting
+149d	SetNumericIniSetting	0	2	sets an ini setting
+149e	Label	0	1	set a label
+149f	Goto	0	1	branch to a label
+14a1	DebugPrint	0	21	prints a formatted string to the console if debug mode is enabled for calling script
+14a2	SetDebugMode	0	2	toggles debug mode for all scripts belonging to a mod
+14a3	GetDebugMode	0	1	returns whether debug mode is set for the mod
+14a4	GetUIFloat	0	1	returns the value of a float UI trait
+14a5	SetUIFloat	0	2	sets the value of a float UI trait
+14a6	SetUIString	0	2	sets the value of a string UI trait
+14a7	GetCrosshairRef	0	0	returns the reference under the crosshair
+14a8	GetGameRestarted	0	0	returns 1 when the game is restarted
+14ac	GetGameLoaded	0	0	returns 1 after a game is loaded
+14ad	GetWeaponItemMod	0	2	returns the specified item mod of the weapon
+14ae	IsModLoaded	0	1	returns the whether the specified mod is loaded
+14af	GetModIndex	0	1	returns the index of the specified mod
+14b0	GetNumLoadedMods	0	0	returns the number of loaded mods
+14b1	GetSourceModIndex	0	1	returns the index of the mod associated with the form
+14b2	GetDebugSelection	0	0	returns the current selected object in the console
+14b3	GetArmorDT	0	1	returns the damage threshold of the armor.
+14b4	SetArmorAR	0	2	sets the armor rating of the armor.
+14b5	SetArmorDT	0	2	sets the damage threshold of the armor
+14b6	IsScripted	0	1	returns 1 if the object or reference has a script attached to it.
+14b7	GetScript	0	1	returns the script of the reference or passed object.
+14b8	RemoveScript	0	1	removes the script of the reference or passed object.
+14b9	SetScript	0	2	sets the script of the reference or passed object.
+14ba	IsFormValid	0	1	returns 1 if the reference or passed object is valid.
+14bb	IsReference	0	1	returns 1 if the passed refVar is a reference.
+14bc	GetWeaponRequiredStrength	0	1	returns the required strength for the weapon.
+14bd	GetWeaponRequiredSkill	0	1	returns the required strength for the weapon.
+14be	SetWeaponRequiredStrength	0	2	sets the required strength for the weapon
+14bf	SetWeaponRequiredSkill	0	2	sets the required skill for the weapon
+14c0	SetWeaponResistType	0	2	sets the weapon clip size
+14c1	SetWeaponSkill	0	2	sets the skill for the weapon
+14c2	GetAmmoSpeed	0	1	returns the speed of the specified ammo.
+14c3	GetAmmoConsumedPercent	0	1	returns the percentage of ammo consumed for the specified ammo.
+14c4	GetAmmoCasing	0	1	returns the casing of the specified ammo
+14c5	GetPlayerCurrentAmmoRounds	0	0	returns the current number of rounds in the clip of the player
+14c6	SetPlayerCurrentAmmoRounds	0	1	sets the current number of rounds in the clip of the player
+14c7	GetPlayerCurrentAmmo	0	0	returns the current ammo in the weapon held by the player
+14c8	GetOpenKey	1	0	returns the key associated with a lockable object
+14c9	Exp	0	1	calculates the exponential of a value
+14ca	Log10	0	1	calculates the base 10 log of a value
+14cb	Floor	0	1	Returns the nearest whole number that is less than a float
+14cc	Ceil	0	1	Returns the nearest whole number that is greater than a float
+14cd	LeftShift	0	2	Shifts a 32-bit integer left the specified number of bits
+14ce	RightShift	0	2	Shifts a 32-bit integer right the specified number of bits
+14cf	LogicalAnd	0	2	Performs a logical AND between two 32-bit integers.
+14d0	LogicalOr	0	2	Performs a logical OR between two 32-bit integers.
+14d1	LogicalXor	0	2	Performs a logical XOR between two 32-bit integers.
+14d2	LogicalNot	0	1	Performs a logical NOT on a 32-bit integer.
+14d3	Pow	0	2	Calculates one value raised to the power of another
+14d4	Fmod	0	3	returns the result of a floating point modulous of the passed floats
+14d5	Rand	0	2	Returns a float between min and max
+14d6	SortUIListBox	0	2	sorts the items in a UI list_box
+14d7	GetOwner	1	0	returns the owner of the calling reference
+14d8	GetLocalRefIndex	0	1	returns the index of the ref
+14d9	BuildRef	0	2	builds a reference from a mod and ref index
+14da	SetNameEx	0	22	sets the name of the object based on the format string
+14db	MessageEx	0	21	prints a formatted message
+14dc	MessageBoxEx	0	21	displays a formatted message box
+14dd	TempCloneForm	0	2	"clones the specified form and returns a new base form which will be saved in the save game."
+14de	IsClonedForm	0	1	returns whether the specified form is a created object or not.
+14df	GetParentCellOwner	1	0	returns the owner of the cell of the calling reference
+14e0	GetOwningFactionRequiredRank	1	0	returns the required rank for ownership of the calling reference
+14e1	GetParentCellOwningFactionRequiredRank	1	0	returns the required rank for ownership of the cell of the calling reference
+14e2	SetUIStringEx	0	22	sets the value of a string UI trait to a formatted string
+14e5	SetWeaponFireRate	0	2	sets the weapon fire rate
+14e6	GetWeaponLongBursts	0	1	returns if a weapon uses long bursts
+14e7	SetWeaponLongBursts	0	2	sets if a weapon uses long bursts
+14e8	GetWeaponFlags1	0	1	returns weapon flags bitfield 1
+14e9	GetWeaponFlags2	0	1	returns weapon flags bitfield 2
+14ea	SetWeaponFlags1	0	2	sets weapon flags bitfield 1
+14eb	SetWeaponFlags2	0	2	sets weapon flags bitfield 2
+14ec	GetActorBaseFlagsLow	0	1	returns a bitfield containing actor base flags
+14ed	SetActorBaseFlagsLow	0	2	sets actor base flags
+14ee	GetActorBaseFlagsHigh	0	1	returns a bitfield containing actor base flags
+14ef	SetActorBaseFlagsHigh	0	2	sets actor base flags
+14f0	ClearBit	0	2	Clear a single bit specified by lsb-first index
+14f1	SetBit	0	3	Sets a single bit specified by lsb-first index
+14f2	GetEquippedWeaponModFlags	1	0	returns equipped weapon mod flags
+14f3	SetEquippedWeaponModFlags	1	1	sets equipped weapon mod flags
+14f4	GetWeaponItemModEffect	0	2	returns the specified item mod effect id of the weapon
+14f5	GetWeaponItemModValue1	0	2	returns the specified item mod value1 of the weapon
+14f6	GetWeaponItemModValue2	0	2	returns the specified item mod value2 of the weapon
+14f7	HasOwnership	1	1	check if an NPC has direct or indirect ownership
+14f8	IsOwned	1	1	check if an object is directly or indirectly owned by an NPC
+14f9	SetOwningFactionRequiredRank	1	1	sets the required rank for ownership of the calling reference
+14fa	GetDialogueTarget	1	1	get the NPC talked to
+14fb	GetDialogueSubject	1	1	get the NPC who started the conversation
+14fc	GetDialogueSpeaker	1	1	get the NPC who is currently speaking in the conversation
+14fd	SetPackageLocationReference	0	2	sets package start location as a reference
+14fe	GetAgeClass	0	1	Return NPC age class. From 0=Child -default- to 3=OldAged. -1 for non NPC. Based on race fullname.
+14ff	RemoveMeIR	1	1	"removes an inventory reference from its container, optionally transferring it to a different container, in much the same way as the vanilla RemoveMe command. The inventory reference becomes invalid once this command is called and should no longer be used."
+1500	CopyIR	1	1	"copies an inventory reference to the specified container. The calling object needn't be in a container and remains valid after the command is called. If the calling object is equipped, the copy will not be equipped."
+1501	CreateTempRef	0	1	"creates a temporary reference to the specified form. This reference does not exist in the gameworld or in a container, and remains valid for only one frame. It is mostly useful for creating a stack of one or more items to be added to a container with CopyIR"
+1502	GetFirstRefForItem	1	1	returns the first entry in an array of temp refs to objects of the specified type in the calling container
+1503	GetNextRefForItem	1	1	returns the next entry in the array of temp refs to objects of the specified type in the calling container
+1504	AddItemOwnership	1	4	adds an item to a container with a specified ownership.
+1505	AddItemHealthPercentOwner	1	5	adds an item to a container at a specified health percentage and with an ownership.
+1506	GetTokenValue	0	1	get a token value.
+1507	SetTokenValue	1	2	set a token value or create a token with value.
+1508	GetTokenRef	0	1	get a token reference.
+1509	SetTokenRef	1	2	Add or modify a token reference.
+150a	SetTokenValueAndRef	1	3	Add or modify a token with value and reference.
+150b	GetPaired	1	2	Detects if ref and actor are crossreferencing each others
+150c	GetRespawn	0	1	Return if the respawn flag is set on a base form
+150d	SetRespawn	0	2	sets the respawn flag on a base form
+150e	GetPermanent	0	1	Return if the permanent flag is set on a base form
+150f	SetPermanent	0	2	sets the permanent flag on a base form
+1510	GetBaseForm	1	0	returns the permanent base object id of the reference
+1511	IsRefInList	0	2	returns the index for the specified form or base Form or permanent base Form
+1512	SetOpenKey	1	1	sets the key used to unlock the calling object
+1513	GetCurrentPackage	0	1	gets the current package from an actor
+1514	GetPackageLocation	0	1	gets package start location
+1515	GetPackageCount	0	1	gets the count of packages from an actor base form
+1516	GetNthPackage	0	2	gets the Nth package from an actor base form
+1517	SetNthPackage	0	3	sets and returns the Nth package to an actor base form
+1518	AddPackageAt	0	3	adds the Nth package to an actor base form : 0 at top -1 at end returns index
+1519	RemovePackageAt	0	2	removes and returns the Nth package from an actor base form
+151a	RemoveAllPackages	0	1	removes all packages from an actor base form returns count removed
+151b	ClearOpenKey	1	0	clears the key used to unlock the calling object
+151c	SetPackageTargetReference	0	2	sets package target as a reference
+151d	SetPackageTargetCount	0	2	sets package target count or distance
+151e	GetPackageTargetCount	0	1	gets package target count or distance
+151f	SetPackageLocationRadius	0	2	sets package start location radius
+1520	GetPackageLocationRadius	0	1	gets package start location radius
+1521	SetEyes	0	2	set an NPCs eyes
+1522	GetEyes	0	1	get an NPCs eyes
+1523	SetHair	0	2	set an NPCs hair
+1524	GetHair	0	1	set an NPCs hair
+1525	GetHairLength	0	1	get an NPCs hair length
+1526	SetHairLength	0	2	set an NPCs hair length
+1527	GetHairColor	0	2	get an NPCs hair color (code: 1=R, 2=G, 3=B)
+1528	SetHairColor	0	2	set an NPCs hair color (RGB bytes)
+1529	GetNPCWeight	0	1	get an NPCs weight
+152a	SetNPCWeight	0	2	set an NPCs weight
+152b	GetNPCHeight	0	1	get an NPCs height
+152c	SetNPCHeight	0	2	set an NPCs height
+152d	Update3D	1	0	updates the visual representation of the calling reference
+152e	GetVariable	0	2	looks up the value of a variable by name
+152f	HasVariable	0	2	returns true if the script has a variable with the specified name
+1530	GetRefVariable	0	2	looks up the value of a ref variable by name
+1531	GetArrayVariable	0	2	looks up an array variable by name on the calling object or specified quest
+1532	CompareScripts	0	2	returns true if the compiled scripts are identical
+1533	ResetAllVariables	0	0	sets all variables in a script to zero
+1534	GetNumExplicitRefs	0	1	returns the number of literal references in a script
+1535	GetNthExplicitRef	0	2	returns the nth literal reference in a script
+1536	RunScript	0	1	debug
+1537	GetCurrentScript	0	0	returns the calling script
+1538	GetCallingScript	0	0	returns the script that called the executing function script
+1539	Let	0	1	assigns the value of an expression to a variable
+153a	eval	0	1	evaluates an expression and returns a boolean result.
+153b	while	0	1	loops until the given condition evaluates to false
+153c	loop	0	1	marks the end of a While or ForEach loop
+153d	ForEach	0	1	iterates over the elements of an array
+153e	continue	0	1	returns control to the top of a loop
+153f	break	0	1	exits a loop
+1540	ToString	0	1	attempts to convert an expression to a string
+1541	Print	0	1	prints a string expression to the console
+1542	testexpr	0	1	returns false if errors occur while evaluating expression, true otherwise
+1543	TypeOf	0	1	returns a string representing the type of the expression
+1544	Function	0	1	defines a function
+1545	Call	0	1	calls a user-defined function
+1546	SetFunctionValue	0	1	returns a value from a user-defined function
+1547	GetUserTime	0	0	returns the users local time and date as a stringmap
+1548	GetModLocalData	0	1	gets a key-value pair for the mod
+1549	SetModLocalData	0	2	sets a key-value pair for the mod
+154a	ModLocalDataExists	0	1	returns true if mod local data exists for the specified key
+154b	RemoveModLocalData	0	1	removes the specified entry from the mod's local data
+154c	GetAllModLocalData	0	0	returns a StringMap containing all local data for the calling mod
+154d	@PushExecutionContext	0	0	internal command - pushes execution context for current script for use with ExtractArgsOverride
+154e	@PopExecutionContext	0	0	internal command - pops execution context for current script for use with ExtractArgsOverride
+154f	ar_Construct	0	1	creates a new array
+1550	ar_Size	0	1	returns the size of an array or -1 if the array does not exist
+1551	ar_Dump	0	1	dumps the contents of an array for debugging purposes.
+1552	ar_DumpID	0	1	dumps an array given an integer ID
+1553	ar_Erase	0	2	erases an element or range of elements from an array
+1554	ar_Sort	0	2	returns an array containing the source array elements in sorted order
+1555	ar_CustomSort	0	3	returns an array containing the source array elements sorted using the passed function script
+1556	ar_SortAlpha	0	2	returns an array containing the source array elements in alphabetical order
+1557	ar_Find	0	3	finds the first occurence of a value within an array
+1558	ar_First	0	1	returns the key of the first element in an array
+1559	ar_Last	0	1	returns the key of the last element in an array
+155a	ar_Next	0	2	returns the key of the element immediately following the specified key
+155b	ar_Prev	0	2	returns the key of the element immediately preceding the specified key
+155c	ar_Keys	0	1	returns an Array containing the keys of the specified array
+155d	ar_HasKey	0	2	returns 1 if the array contains an element with the specified key
+155e	ar_BadStringIndex	0	0	returns the return value of a bad string array index
+155f	ar_BadNumericIndex	0	0	returns the return value of a bad numeric array index
+1560	ar_Copy	0	1	returns a shallow copy of an array
+1561	ar_DeepCopy	0	1	returns a deep copy of an array copying any arrays contained in that array
+1562	ar_Null	0	0	makes an array variable refer to no array
+1563	ar_Resize	0	3	resizes an array padding additional elements with zero or a supplied value
+1564	ar_Insert	0	3	inserts a single element in an array
+1565	ar_InsertRange	0	3	inserts a range of elements into an array
+1566	ar_Append	0	2	appends an element to an Array
+1567	ar_List	0	20	creates an array given a list of elements
+1568	ar_Map	0	20	creates a Map or Stringmap given a list of key-value pairs
+1569	ar_Range	0	3	returns an array containing numbers beginning with 'start' up to and including 'end' in intervals 'step'
+156a	sv_Destruct	0	10	destroys one or more string variables
+156b	sv_Construct	0	21	returns a formatted string
+156c	sv_Set	0	22	sets the contents of a string variable
+156d	sv_Compare	0	23	compares two strings
+156e	sv_Length	0	1	returns the number of characters in a string
+156f	sv_Erase	0	3	erases a portion of a string variable
+1570	sv_SubString	0	3	returns a substring of a string variable
+1571	sv_ToNumeric	0	2	converts a string variable to a numeric type
+1572	sv_Insert	0	23	inserts a substring in a string variable
+1573	sv_Count	0	25	returns the number of occurences of a substring within a string variable
+1574	sv_Find	0	25	returns the position of a substring within a string variable or -1 if not found
+1575	sv_Replace	0	26	replaces 1 or more occurences of a substring within a string variable
+1576	sv_GetChar	0	2	returns the ASCII code of the character at the specified position in a string variable
+1577	sv_Split	0	3	"split a string into substrings returning an array"
+1578	sv_Percentify	0	1	converts all percent signs in a string to double percent signs
+1579	sv_ToUpper	0	1	converts all characters in the string to uppercase
+157a	sv_ToLower	0	1	converts all characters in the string to lowercase
+157b	IsLetter	0	1	returns 1 if the character is an alphabetic character
+157c	IsDigit	0	1	returns 1 if the character is a numeric character
+157d	IsPrintable	0	1	returns 1 if the character is a printable character
+157e	IsPunctuation	0	1	returns 1 if the character is a punctuation character
+157f	IsUpperCase	0	1	returns 1 if the character is an uppercase letter
+1580	CharToAscii	0	1	converts a single character to its equivalent ASCII code
+1581	ToUpper	0	1	converts a character to uppercase
+1582	ToLower	0	1	converts a character to lowercase
+1583	AsciiToChar	0	1	returns a single character string given an ASCII code
+1584	NumToHex_OLD	0	2	returns an int as a hex string of the specified width
+1585	ToNumber	0	3	translates a string to a number
+1586	GetNthModName	0	1	returns the name of the nth active mod
+1587	GetName	0	1	returns the name of an object
+1588	GetKeyName	0	1	returns the name of a key given a scan code
+1589	GetFormIDString	0	1	returns a formID of a form as a hex string
+158a	GetRawFormIDString	0	1	returns the form ID stored in an array element or ref variable as a string regardless of whether or not the formID is valid
+158b	GetFalloutDirectory	0	0	returns the path to the Fallout directory
+158c	ActorValueToString	0	1	returns the localized string corresponding to an actor value
+158d	ActorValueToStringC	0	2	returns the localized string corresponding to an actor value code
+158e	GetModelPath	0	1	returns the model path of an object
+158f	GetIconPath	0	1	returns the icon path of an object
+1590	GetBipedModelPath	0	2	returns a model path
+1591	GetBipedIconPath	0	2	returns an icon path
+1592	GetTexturePath	0	1	"returns the texture path of an object. This command is identical to GetIconPath, but also works for other object types such as skills, classes, and miscellaneous objects."
+1593	SetModelPathEX	0	22	sets a simple model path
+1594	SetIconPathEX	0	22	sets a simple icon path
+1595	SetBipedIconPathEX	0	23	sets a biped icon path
+1596	SetBipedModelPathEX	0	23	sets a biped model path
+1597	SetTexturePath	0	2	sets the texture path of an object. This command works for a broader set of objects than SetIconPathEX.
+1598	GetNthFactionRankName	0	3	returns the name of the faction rank
+1599	SetNthFactionRankNameEX	0	24	sets the name of the nth faction rank
+159a	GetStringGameSetting	0	1	returns the value of a string game setting
+159b	SetStringGameSettingEX_DEPRECATED	0	21	sets a string game setting
+159c	GetRace	0	1	Return NPC race
+159d	GetRaceName	0	1	Return the name of the NPC race
+159f	PickOneOf	1	1	Selects a random item present in the formList
+15a0	IsPlayerSwimming	0	0	check if the player is swimming
+15a1	GetTFC	0	0	returns TFC status
+15a3	V3Normalize	0	6	returns normalized vector3
+15a4	V3Crossproduct	0	9	returns crossproduct of two vectors
+15a5	QFromEuler	0	8	converts euler angles to quaternion. optional flag indicates if the angles came from an actor
+15a6	QFromAxisAngle	0	8	converts axis-angle rotation to quaternion
+15a7	QNormalize	0	8	returns normalized quaternion
+15a8	QMultQuatQuat	0	12	multiplies two quaternions
+15a9	QMultQuatVector3	0	10	multiplies vector3 by quaternion
+15aa	QToEuler	0	8	converts quaternion to euler angles. optional flag indicates the output will be used for rotating an actor
+15ab	QInterpolate	0	14	interpolates between two quaternions; default method is normalized linear interpolation. optional flag indicates spherical linear interpolation
+15ac	IsPlayable	0	1	returns whether the biped form is usable by the player.
+15ad	SetIsPlayable	0	2	sets whether the armor is usable by the player or not.
+15ae	GetEquipmentSlotsMask	0	1	returns the slots used by the biped form as a bitmask.
+15af	SetEquipmentSlotsMask	0	2	sets the slots used by the biped form from a bitmask.
+15b1	GetConsoleEcho	0	1	returns whether the engine echoes to the console
+15b2	SetConsoleEcho	0	1	toggles wether the engine echoes to the console and return previous state
+15b3	GetScopeModelPath	0	1	"Get the path to the scope model of a weapon"
+15b4	SetScopeModelPath	0	2	"Set the path to the scope model of a weapon"
+15b5	EndVATScam	0	0	"Remove all targets and close VATS mode"
+15b6	EquipItem2	1	3	equips and runs onequip block
+15b7	EquipMe	1	0	equips the calling object on its owner
+15b8	UnequipMe	1	0	unequips the calling object on its owner
+15b9	IsEquipped	1	0	returns 1 if the calling object is currently being worn
+15ba	GetInvRefsForItem	1	1	returns an array of temp refs to objects of the specified type in the calling container
+15bb	SetHotkeyItem	0	2	sets the item associated with a hotkey.
+15bc	ClearHotkey	0	1	"clears the item associated with the specified hotkey."
+15bd	PrintDebug	0	1	prints a string expression to the console in debug mode
+15be	SetVariable	0	3	sets the value of a variable by name
+15bf	SetRefVariable	0	3	sets the value of a variable by name
+15c1	GetStringIniSetting	0	1	returns the value of a string ini setting
+15c2	SetStringIniSetting_DEPRECATED	0	21	sets a string ini setting
+15c3	GetPerkRank	0	2	Return actor Perk rank or -1 if the perk is not applied
+15c4	GetAltPerkRank	0	2	Return actor alternate Perk rank or -1 if the perk is not applied
+15c5	GetEquipmentBipedMask	0	1	gets the flags used by the biped form as a bitmask.
+15c6	SetEquipmentBipedMask	0	2	sets the flags used by the biped form from a bitmask.
+15c7	GetRefs	0	6	returns an array of references of a given type in the current cell
+15c8	GetRefsInCell	0	7	returns an array of references of a given type in the specified cell
+15c9	GetBaseNumFactions	0	1	returns the number of factions to which an actor base form belongs
+15ca	GetBaseNthFaction	0	2	returns the nth faction to which an actor base form belongs
+15cb	GetBaseNthRank	0	2	returns the nth faction rank to which an actor base form belongs
+15cc	GetNumRanks	0	1	returns the number of rank of a faction
+15cd	GetRaceHairs	0	1	Return the array of hair for a race
+15ce	GetRaceEyes	0	1	Return the array of eyes for a race
+15cf	GetBaseSpellListSpells	0	1	Return the array of spells for a SpellList
+15d0	GetBaseSpellListLevSpells	0	1	Return the array of leveled spells for a SpellList
+15d1	GetBasePackages	0	1	returns an array of packages for an actor base form
+15d2	GetBaseFactions	0	1	returns an array of factions to which an actor base form belongs
+15d3	GetBaseRanks	0	1	returns an array of faction ranks to which an actor base form belongs
+15d4	GetActiveFactions	0	1	returns the active factions on an actor
+15d5	GetActiveRanks	0	1	returns the active faction ranks on an actor
+15d6	GetFactionRankNames	0	1	returns an array of name of faction ranks
+15d7	GetFactionRankFemaleNames	0	1	returns an array of the female name of faction ranks
+15d8	GetHeadParts	0	1	returns an array of head parts for a character
+15d9	GetLevCreatureRefs	0	1	returns an array of ref in a leveled creature leveled list
+15da	GetLevCharacterRefs	0	1	returns an array of ref in a leveled character leveled list
+15db	GetListForms	0	1	returns an array of forms in a form list
+15dc	GenericAddForm	0	4	adds a form to a list of form of an object at index
+15dd	GenericReplaceForm	0	4	change a form in a list of form of an object at index
+15de	GenericDeleteForm	0	3	delete a form from a list of form of an object at index
+15df	IsPluginInstalled	0	1	returns 1 if the specified plugin is installed, else 0
+15e0	GetPluginVersion	0	1	returns the version of the specified plugin, or -1 if the plugin is not installed
+15e1	GenericGetForm	0	3	returns a form from a list of form of an object at index
+15e3	GetNthDefaultForm	0	1	returns the Nth default form
+15e4	SetNthDefaultForm	0	2	sets the Nth default form
+15e5	GetDefaultForms	0	0	returns all default forms as an array
+15e6	GetGridsToLoad	0	0	returns the effective value of the uGridsToLoad ini setting
+15e7	OutputLocalMapPicturesOverride	0	0	"identical to the OutputLocalMapPictures console command, but overrides the uGridsToLoad ini setting"
+15e8	SetOutputLocalMapPicturesGrids	0	1	sets the value with which to override uGridsToLoad when generating local maps with OLMPOR
+15e9	SetEventHandler	0	5	"defines a function script to serve as a callback for game events"
+15ea	RemoveEventHandler	0	5	"removes event handlers matching the event, script, and optional filters specified"
+15eb	GetCurrentEventName	0	0	returns the name of the event currently being processed by an event handler
+15ec	DispatchEvent	0	3	dispatches a user - defined event to any registered listeners
+15ed	GetInGrid	0	3	returns if a specific reference is in the current cell
+15ee	GetInGridInCell	0	4	returns if a specific reference is in the grid centered on the specified cell
+15ef	AddSpellNS	0	1	identical to AddSpell but without the UI message
+15f0	GetFlagsLow	0	1	returns a bitfield containing object flags
+15f1	SetFlagsLow	0	2	sets actor flags
+15f2	GetFlagsHigh	0	1	returns a bitfield containing actor flags
+15f3	SetFlagsHigh	0	2	sets actor base flags
+15f4	HasConsoleOutputFilename	0	0	"return if there is a Console Output Filename active"
+15f5	GetConsoleOutputFilename	0	0	"returns the name of the Console Output Filename"
+15f6	PrintF	0	2	prints a string expression to a file
+15f7	PrintDebugF	0	2	prints a string expression to a file in debug mode
+15f9	IsLoadDoor	1	0	"returns 1 if the calling reference is a load door"
+15fa	GetDoorTeleportX	1	0	returns x-coord to which the door teleports
+15fb	GetDoorTeleportY	1	0	returns y-coord to which the door teleports
+15fc	GetDoorTeleportZ	1	0	returns z-coord to which the door teleports
+15fd	GetDoorTeleportRot	1	0	returns z rotation to which the door teleports
+15fe	SetDoorTeleport	0	5	sets the linked door and coordinates to which the door teleports
+15ff	GenericCheckForm	0	3	checks if a form is in a list of form of an object
+1600	GetEyesFlags	0	2	get the flags of eyes
+1601	SetEyesFlags	0	2	set the flags of eyes
+1602	GetHairFlags	0	2	get the flags of an hair
+1603	SetHairFlags	0	2	set the flags of an hair
+1604	ar_Packed	0	1	returns if the array is packed (array) or not (map)
+1605	GetActorFIKstatus	1	0	get an actor Foot IK status
+1606	SetActorFIKstatus	1	1	set an actor Foot IK status
+1607	GetBit	0	2	Gets a single bit specified by lsb-first index
+1608	HasEffectShader	1	1	returns 1 if the reference is playing the effect shader
+1609	GetCurrentQuestObjectiveTeleportLinks	0	0	returns an array of array of the path to the current objective targets
+160a	ATan2	0	2	"Calculates the arccos of two values in radians"
+160b	Sinh	0	1	"Calculates the hyperbolic sin of a value in radians"
+160c	Cosh	0	1	"Calculates the hyperbolic cos of a value in radians"
+160d	Tanh	0	1	"Calculates the hyperbolic tan of a value in radians"
+160e	dSin	0	1	"Calculates the sin of a value in degrees"
+160f	dCos	0	1	"Calculates the cos of a value in degrees"
+1610	dTan	0	1	"Calculates the tan of a value in degrees"
+1611	dASin	0	1	"Calculates the arcsin of a value in degrees"
+1612	dACos	0	1	"Calculates the arccos of a value in degrees"
+1613	dATan	0	1	"Calculates the arctan of a value in degrees"
+1614	dATan2	0	2	"Calculates the arctan of two values in degrees"
+1615	dSinh	0	1	"Calculates the hyperbolic sin of a value in degrees"
+1616	dCosh	0	1	"Calculates the hyperbolic cos of a value in degrees"
+1617	dTanh	0	1	"Calculates the hyperbolic tan of a value in degrees"
+1618	GetNthAnimation	0	2	returns the nth animation selected on an NPC or a creature
+1619	AddAnimation	0	2	Add an animation to an NPC or a creature
+161a	DelAnimation	0	2	Delete an animation from an NPC or a creature
+161b	DelAnimations	0	1	Delete all animation from an NPC or a creature
+161c	GetClass	0	1	Return NPC class
+161d	GetNameOfClass	0	1	Return the name of the NPC class
+161e	ShowLevelUpMenu	0	0	shows the LevelUp menu
+161f	GetUIFloatAlt	0	1	
+1620	SetUIFloatAlt	0	2	
+1621	SetUIStringAlt	0	22	
+1622	CallAfterSeconds_OLD	0	3	"deprecated"
+1623	CallWhile_OLD	0	2	"deprecated"
+1624	CallForSeconds_OLD	0	3	"deprecated"
+1625	ar_DumpF	0	3	dumps the contents of an array to a file
+1626	PrintVar	0	15	
+1627	ar_FindWhere	0	2	"finds first element in array which satisfies a condition"
+1628	ar_Filter	0	2	"filters an array on a condition"
+1629	ar_MapTo	0	2	"transforms an array into a new array from a script"
+162a	DecompileScript	0	2	decompiles a script to file
+162b	HasScriptCommand	0	3	returns 1 if script contains call to a command
+162c	GetCommandOpcode	0	1	gets opcode for command name
+162d	ar_Generate	0	3	"creates a new array from a function called each time for each element"
+162e	ar_Init	0	2	"creates a new array with x amount of elements, all set to a single value"
+162f	ar_DeepEquals	0	2	"checks if every element and sub-elements are identical between two arrays."
+1630	ar_ForEach	0	2	"calls a function on each element of array"
+1631	ar_Any	0	2	"checks if any of the elements in array satisfies a function script"
+1632	ar_All	0	2	"checks if all of the elements in array satisfy a function script"
+1633	GetWeaponRegenRate	0	1	""
+1634	SetWeaponRegenRate	0	2	""
+1635	ar_Unique	0	1	"returns a new array with no duplicate elements from the source array"
+1636	CallFunctionCond	0	2	"calls every UDF in a formlist and returns the result of the last one."
+1637	CallWhen_OLD	0	2	"deprecated"
+1638	ForEachInList	0	2	"invokes a UDF that is called on each form in a formlist."
+1639	TernaryUDF	0	3	"The ternary operator as a function, calling one of 2 UDFs."
+163a	ModUIFloat	0	2	
+163b	GetQuestObjectiveCount	0	1	returns the number of objectives for the specified quest
+163c	GetNthQuestObjective	0	2	returns the objectiveID of the Nth objective of the quest
+163d	GetCurrentObjective	0	0	returns the objectiveID of the current objective
+163e	PrintActiveTile	0	0	prints name of highlighted UI component for debug purposes
+163f	SetCurrentQuest	0	1	sets the current quest to the specified quest
+1640	sv_Trim	0	1	"Trims the beginning and the end of a string variable"
+1641	CallAfterSeconds	0	18	"calls UDF after argument number of seconds"
+1642	CallForSeconds	0	18	"calls UDF each frame for argument number of seconds"
+1643	CallWhile	0	18	"calls UDF each frame while condition is met"
+1644	CallWhen	0	18	"calls UDF once when a condition is met which is polled each frame"
+1645	SetEditorID	0	2	"sets editor id of form"
+1646	Assert	0	1	
+1647	DispatchEventAlt	0	16	dispatches a user - defined event to any registered listeners
+1648	DumpEventHandlers	0	18	"dumps event handlers, optionally filtered by eventName, script and args."
+1649	GetEventHandlers	0	18	"returns a multi-dimensional array of event handlers, optionally filtered by eventName, script and args."
+164a	GetSelfAlt_OLD	0	0	"Unlike GetSelf, will return ThisObj even if it isn't Persistent and is clutter."
+164b	SetEventHandlerAlt	0	19	"Uses the new event filtering system."
+164c	CreateFormList	0	2	"creates a formList, optionally set with an editorID and filled by an array."
+164d	CallWhilePerSeconds	0	19	"calls UDF every couple of seconds, until the condition UDF returns false."
+164e	CallAfterFrames	0	18	"calls UDF after argument number of frame"
+164f	GetSoldItemInvRef	0	0	Returns the invRef for the currently sold item(in OnSell event)
+1650	IsEventHandlerFirst	0	6	""
+1651	IsEventHandlerLast	0	6	""
+1652	GetHigherPriorityEventHandlers	0	6	""
+1653	GetLowerPriorityEventHandlers	0	6	""
+1654	ValidateRegex	0	2	"Returns 0 for no errors, otherwise returns int codes indicating the error cause."
+1655	IntToBin	0	3	returns an int as a binary string of the specified width
+1656	NumToHex	0	3	returns an int as a hex string of the specified width
+1657	HasAmmoEquipped	1	1	"returns if a specific ammo is equipped by the calling ref"
+1658	GetEquippedWeaponCanUseAmmo	1	1	"returns if the equipped weapon can use the specified ammo"
+1659	IsEquippedAmmoInList	1	1	"returns if any ammo in a list is currently equipped by the calling ref"
+165a	GetEquippedWeaponUsesAmmoList	1	1	"returns if the equipped weapon uses a specific list of ammo"
+165b	IsInventoryRef	1	0	""
+165c	DebugPrintVar	0	15	
+165d	SetStringIniSetting	0	2	sets a string ini setting
+165e	GetHeadingAngleX	1	1	"Gets the up/down angle the calling reference is relative to a target."
+165f	GetWeaponCanUseAmmo	0	2	"returns if the weapon can use the specified ammo"
+1660	SetAmmoConsumedPercent	0	2	""
+1661	DisablePlayerControlsAlt	0	7	"Per-mod version with added args"
+1662	EnablePlayerControlsAlt	0	7	"Per-mod version with added args"
+1663	GetPlayerControlsDisabledAlt	0	8	""
+1664	DisablePlayerControlsAltEx	0	1	"Per-mod version with added args"
+1665	EnablePlayerControlsAltEx	0	1	"Per-mod version with added args"
+1666	GetPlayerControlsDisabledAltEx	0	2	""
+1667	CopyIRAlt	1	1	"copies an inventory reference to the specified container. The calling object needn't be in a container and remains valid after the command is called. If the calling object is equipped, the copy will not be equipped."
+1668	CompileScript	0	2	"Returns a compiled script from a file, to call as a UDF."
+1669	GetSelfAlt	0	0	"Unlike GetSelf, will return ThisObj even if it isn't Persistent and is clutter."
+166a	DumpDocs	0	4	
+166b	DumpCommandWikiDoc	0	1	dumps wiki - style documentation for a command
+166c	DumpCommandWikiDocs	0	3	dumps wiki - style documentation for multiple commands
+166d	SetModelPath	0	2	sets the model path of an object
+166e	Ternary	0	3	"The ternary operator as a function, for real this time"
+166f	MatchesAnyOf	0	20	"Returns true/false if the first value matches any of the other values."
+1670	ForEachAlt	0	3	iterates over the elements of an array, passing values directly into variables
+1671	ar_Exists	0	3	"For packed arrays, check if value exists. Else (map), check if key exists."
+1672	ar_Count	0	2	"Count how many times a given value is found inside of an array."
+1673	ar_CountWhere	0	2	"Count how many times a value matches via a specified UDF."
+1674	EvaluateInventory	1	0	"Force the actor to re-evaluate their equipped items"
+1675	ar_GetNth	0	2	"Get the nth element of an array, if it exists"
+1676	PluginVersion	0	2	"Internal only - declares a nvse / plugin requirement for a script."
+1677	GetDoorSound	0	2	Get the open / close sound of a door
+1678	FireChallenge	0	6	Increment a challenge using specified params
+1679	GetDisabledKeys	0	0	returns an array of all disabled key scancodes
+167a	ReloadPluginConfig	0	1	sends kMessage_ReloadConfig to the specified plugin
+167b	GetPressedKeys	0	1	returns an array of all pressed key scancodes
+167c	GetStringVariable	0	2	looks up a string variable by name on the calling object or specified quest
+167d	SetStringVariable	0	3	sets the value of a variable by name
+167e	ar_Cat	0	3	"Concatenate two arrays"
+167f	Jmp_If_True	0	2	nullptr
+1680	Jmp_If_False	0	2	nullptr
+1681	Jmp	0	1	nullptr
+1682	V3NormalizeEx	0	6	Returns normalized vector3
+1683	V3CrossproductEx	0	9	Returns crossproduct of two vectors
+1684	QFromEulerEx	0	8	Converts euler angles to quaternion
+1685	QFromAxisAngleEx	0	8	Converts axis-angle rotation to quaternion
+1686	QNormalizeEx	0	8	Returns normalized quaternion
+1687	QMultQuatQuatEx	0	12	Multiplies two quaternions
+1688	QMultQuatVector3Ex	0	10	Multiplies vector3 by quaternion
+1689	QInterpolateEx	0	14	Interpolates between two quaternions
+168a	QToEulerEx	0	8	Converts quaternion to euler angles
+168b	GetUIFloatInherited	0	2	
+168c	ListGetSaveBakedObjectCount	0	1	"returns the count of savebaked items in the form list (Added with AddFormToFormList). The number is also the end range of said added forms"
+168d	GetNumLevSaveBakedItems	0	1	"returns the count of savebaked items in the leveled list (Added with AddItemToLeveledList or AddNPCToLeveledList)"

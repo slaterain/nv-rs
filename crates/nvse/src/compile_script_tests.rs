@@ -697,7 +697,7 @@ fn run_script_line_runs_a_temporary_script() {
 /// Lists an entry in its folder with no file or folder behind it (a link whose target is gone).
 fn put_entry(path: &str, attributes: u32, tag: u32) {
     let k = key(path.as_bytes());
-    let at = k.rfind('\').map_or(0, |at| at + 1);
+    let at = k.rfind('\\').map_or(0, |at| at + 1);
     let (dir, name) = (k[..at].to_string(), path[at..].to_string());
     with_log(|l| l.listings.get_mut(&dir).unwrap().push((name, attributes, tag)));
 }

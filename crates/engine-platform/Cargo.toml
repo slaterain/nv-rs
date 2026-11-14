@@ -30,3 +30,5 @@ windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Di
 # use the core's addresses and helpers behind this feature.
 [dev-dependencies]
 engine-core = { path = "../engine-core", features = ["test-support"] }
+# The built-in xNVSE's function-file walk run through this layer's file calls (files.rs tests).
+nvse = { path = "../nvse" }

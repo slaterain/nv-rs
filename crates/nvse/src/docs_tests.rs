@@ -4,7 +4,7 @@
 //! what they were given.
 
 use super::*;
-use crate::commands::test_support::{call, engine_with_table, n, s};
+use crate::commands::test_support::{call, n, s};
 use crate::plugins::BuiltIn;
 use std::cell::RefCell;
 
@@ -33,10 +33,19 @@ fn eax(v: u32) -> Ret {
 
 /// The table's engine, bounded to `max_opcode`, with `nvse.log` and the console recorded.
 fn engine(max_opcode: u32) -> Engine {
+    engine_with(max_opcode, |_| {})
+}
+
+/// [`engine`] with `before` run on the exe's tables before xNVSE's table is built from them.
+fn engine_with(max_opcode: u32, before: impl FnOnce(&mut Engine)) -> Engine {
     LOG.with(|l| l.borrow_mut().clear());
     CONSOLE.with(|c| c.borrow_mut().clear());
     MADE.with(|m| *m.borrow_mut() = 0);
-    let mut e = engine_with_table();
+    let mut e = crate::commands::test_support::engine();
+    e.map(0x0118_e000, 0x9000);
+    e.map(0x0300_0000, 0x10000);
+    before(&mut e);
+    table::install(&mut e);
     e.map(AREA, 0x1000);
     e.ext::<crate::Nvse>().main_thread_recorded = true;
     let t = e.script_tables();
@@ -517,12 +526,13 @@ fn the_help_listing() {
     assert!(lines.iter().any(|l| l.contains("ar_Resize")));
     assert_eq!(
         lines.len() as u32,
-        (0x1400 - 0x1280) + (0x2200 - (crate::names::FIRST_OPCODE + NAMES.len() as u32)) + 2 + 1
+        (0x1400 - 0x1280) + (0x2200 - (crate::names::FIRST_OPCODE + NAMES.len() as u32)) + 1 + 1
     );
     // No filter: every record, the game's unnamed ones as empty lines.
     let filter = table::guest_str(&mut e, b"");
     e.site(0x005b_cbc2, &[filter]);
-    assert_eq!(console().len() as u32, 0x2203 - 0x1000);
+    // xNVSE's table ends after the plugin's last registered record (0x2201).
+    assert_eq!(console().len() as u32, 0x2202 - 0x1000);
 }
 
 /// A help line's four shapes.
@@ -613,6 +623,7 @@ fn help_texts_match_the_shipped_dll() {
     let mut wrong = Vec::new();
     let mut made_at_load = Vec::new();
     let mut found = 0;
+    let mut dump = String::new();
     for c in crate::commands::all() {
         let names = strings.get(c.name.as_bytes()).cloned().unwrap_or_default();
         let record = names
@@ -636,6 +647,16 @@ fn help_texts_match_the_shipped_dll() {
         let help = text_at(u32_at(o + 12)).unwrap();
         let needs_ref = u16::from_le_bytes([dll[o + 0x10], dll[o + 0x11]]) != 0;
         let params = u16::from_le_bytes([dll[o + 0x12], dll[o + 0x13]]);
+        let help_text = String::from_utf8(help.clone()).expect("ASCII help");
+        assert!(!help_text.contains(['\t', '\n', '\r']), "{}", c.name);
+        dump.push_str(&format!(
+            "{:04x}\t{}\t{}\t{}\t{}\n",
+            c.opcode,
+            c.name,
+            u8::from(needs_ref),
+            params,
+            help_text
+        ));
         if help != c.help.as_bytes() {
             wrong.push(format!(
                 "{}: help {:?}, the DLL's {:?}",
@@ -662,6 +683,13 @@ fn help_texts_match_the_shipped_dll() {
     // Every command but the two whose record the DLL makes when it loads (V3Length,
     // PrintToConsole on 2026-11-14).
     assert!(made_at_load.len() <= 2, "{made_at_load:?}");
+    // `NV_XNVSE_DLL_DUMP`: the facts written as the checked-in table
+    // (`xnvse_dll_records.tsv`, read by [`the_records_match_the_dlls_table`]).
+    if let Some(out) = std::env::var_os("NV_XNVSE_DLL_DUMP") {
+        let mut lines: Vec<&str> = dump.lines().collect();
+        lines.sort_unstable();
+        std::fs::write(out, lines.join("\n") + "\n").expect("the table");
+    }
     assert_eq!(found + made_at_load.len(), crate::commands::all().len());
 }
 
@@ -741,4 +769,117 @@ fn an_array_argument_makes_an_array_function() {
     assert!(lines
         .contains(&" |returnType = Float [remove this arg if func returns nothing]".to_string()));
     assert!(lines.contains(&"[[Category:Array Functions]]".to_string()));
+}
+
+/// The shipped state: JIP LN grows the table to its last opcode but does not answer
+/// "installed", so xNVSE's own table (no plugin loaded) ends after xNVSE's last command: help
+/// lists nothing past it, the padding it lists is the game range's, the whole-table wiki dump
+/// stops there and a range past it is not found.
+#[test]
+fn an_unlisted_plugin_adds_nothing_to_the_listings() {
+    let mut e = engine(nvse_end());
+    crate::plugins::register(
+        &mut e,
+        BuiltIn {
+            file: "jip_nvse.dll",
+            name: "JIP LN NVSE",
+            version: 57,
+            opcode_base: 0x2200,
+            listed: false,
+            listener: None,
+            save: None,
+            load: None,
+            pre_load: None,
+            new_game: None,
+        },
+    );
+    table::grow_to(&mut e, 0x2943);
+    assert_eq!(table_end(&e), nvse_end());
+    install(&mut e);
+    let filter = table::guest_str(&mut e, b"");
+    e.site(0x005b_cbc2, &[filter]);
+    let lines = console();
+    assert_eq!(lines.len() as u32, nvse_end() - 0x1000);
+    let filter = table::guest_str(&mut e, b"padding");
+    e.site(0x005b_cbc2, &[filter]);
+    let lines = console();
+    let padding = lines.iter().filter(|l| l.ends_with("command used for padding")).count();
+    assert_eq!(padding, 0x1400 - 0x1280);
+    console_mode(&mut e);
+    call(&mut e, 0x166c, 0, &[n(0x1400), n(0x2000)]);
+    assert_eq!(console(), ["Unable to find commands."]);
+    let last = nvse_end() - 1;
+    call(&mut e, 0x166c, 0, &[n(last as i32), n(last as i32)]);
+    assert_eq!(console()[0], "Dumping wiki-style documentation for functions in opcode range.");
+    LOG.with(|l| l.borrow_mut().clear());
+    call(&mut e, 0x166c, 0, &[n(0), n(0)]);
+    // A page for each of xNVSE's named records (the stand-in game records have no names).
+    let pages = log_lines().iter().filter(|l| *l == "{{Function").count();
+    assert_eq!(pages as u32, nvse_end() - 0x1400);
+}
+
+/// `ShowRouletteMenu`'s short name: cleared in its record as xNVSE clears it, so `help` and the
+/// dumps show none, while the name map xNVSE built before still finds the command by it.
+#[test]
+fn show_roulette_menu_loses_its_short_name() {
+    const NAMES: u32 = 0x0200_8000;
+    let mut e = engine_with(0x166d, |e| {
+        e.mem.write(NAMES, b"ShowRouletteMenu\0SRMenu\0");
+        let record = ScriptTables::EXE.start + (table::ROULETTE - 0x1000) * table::RECORD;
+        e.mem.set_u32(record, NAMES);
+        e.mem.set_u32(record + 4, NAMES + 17);
+        e.mem.set_u32(record + 8, table::ROULETTE);
+        e.mem.set_u32(record + 0x18, 0x7e00_0100);
+    });
+    let record = e.script_tables().record(table::ROULETTE);
+    assert_eq!(e.mem.u32(record + 4), 0);
+    assert_eq!(table::opcode_by_name(&e, b"srmenu"), Some(table::ROULETTE));
+    assert_eq!(table::name_map(&e).get(&crate::events::hash_name(b"SRMenu")), Some(&Some(table::ROULETTE)));
+    let c = info(&e, table::ROULETTE);
+    assert!(c.short.is_empty());
+    assert_eq!(help_line(&c, b""), Some(b"ShowRouletteMenu".to_vec()));
+    call(&mut e, 0x166c, 0, &[n(table::ROULETTE as i32), n(table::ROULETTE as i32)]);
+    let lines = log_lines();
+    assert!(lines.contains(&" |name = ShowRouletteMenu".to_string()));
+    assert!(!lines.iter().any(|l| l.contains("alias") || l.contains("redirect")), "{lines:?}");
+    LOG.with(|l| l.borrow_mut().clear());
+    dump_command_documentation(&mut e, false, 0, false, false);
+    let lines = log_lines();
+    let at = lines.iter().position(|l| l.contains("name=\"ShowRouletteMenu\"")).unwrap();
+    assert_eq!(lines[at + 1], "<br><b>Alias:</b> none<br><b>Parameters:</b>0");
+}
+
+/// Every built xNVSE command's help text, reference flag and parameter count as the shipped
+/// 6.4.9 DLL's `CommandInfo` holds them (`xnvse_dll_records.tsv`: opcode, name, needs a
+/// reference, parameter count, help; text read from the DLL by
+/// [`help_texts_match_the_shipped_dll`] with `NV_XNVSE_DLL_DUMP`; no code). The two commands
+/// whose record the DLL fills in when it loads are not in it.
+#[test]
+fn the_records_match_the_dlls_table() {
+    let table = include_str!("xnvse_dll_records.tsv");
+    let mut seen = 0;
+    for line in table.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        let [opcode, name, needs_ref, params, help] = f[..] else {
+            panic!("{line:?}");
+        };
+        let opcode = u32::from_str_radix(opcode, 16).unwrap();
+        let c = crate::commands::all()
+            .into_iter()
+            .find(|c| c.opcode == opcode)
+            .unwrap_or_else(|| panic!("{name}: not built"));
+        assert_eq!(c.name, name);
+        assert_eq!(c.help, help, "{name}");
+        assert_eq!(u8::from(c.needs_ref).to_string(), needs_ref, "{name}");
+        assert_eq!(c.params.len().to_string(), params, "{name}");
+        seen += 1;
+    }
+    let mut missing: Vec<&str> = crate::commands::all()
+        .into_iter()
+        .filter(|c| !table.lines().any(|l| l.split('\t').nth(1) == Some(c.name)))
+        .map(|c| c.name)
+        .collect();
+    missing.sort_unstable();
+    assert_eq!(missing, ["PrintToConsole", "V3Length"]);
+    assert_eq!(seen + missing.len(), crate::commands::all().len());
 }
