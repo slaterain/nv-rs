@@ -336,3 +336,26 @@ fn a_random_integer() {
         f64::from(((u32::MAX / 2) as i32).wrapping_add(i32::MIN))
     );
 }
+
+/// `refMaps == 2`: the shared ref maps (mod 0xFF) go, the mod's own stay; a second call with none
+/// left sets no flag.
+#[test]
+fn shared_ref_maps_cleared() {
+    let mut e = setup();
+    e.mem.set_u8(FILE_7 + 0x40c, 7);
+    e.mem.set_u32(SCRIPT + 0x10, FILE_7);
+    e.mem.set_u32(SCRIPT + 0x14, 0);
+    {
+        let saved = &mut e.ext::<crate::Jip>().saved;
+        saved.ref_maps.emplace(7);
+        saved.ref_maps.emplace(0xff);
+        saved.changed = 0;
+    }
+    call(&mut e, 0x26aa, &[n(0), n(0), n(0), n(2)]);
+    let saved = &mut e.ext::<crate::Jip>().saved;
+    assert!(saved.ref_maps.get(&0xff).is_none() && saved.ref_maps.get(&7).is_some());
+    assert_eq!(saved.changed, crate::cosave::changed::REF_MAPS);
+    saved.changed = 0;
+    call(&mut e, 0x26aa, &[n(0), n(0), n(0), n(2)]);
+    assert_eq!(e.ext::<crate::Jip>().saved.changed, 0);
+}

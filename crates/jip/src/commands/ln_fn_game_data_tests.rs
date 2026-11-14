@@ -317,3 +317,173 @@ fn search_prints_only_in_the_console() {
     assert_eq!(call(&mut e, 0x2246, &[s(b"weap")]).1, 0.0);
     assert!(calls().is_empty());
 }
+
+const SEARCH_VT: u32 = FORMS + 0x9000;
+const EDID_FN: u32 = 0x0090_0200;
+const PRINT_FN: u32 = 0x0071_d0a0;
+const TEXTS: u32 = FORMS + 0x9400;
+
+/// The searched forms: every form of the map gets a vtable whose `GetEditorID` (+0x130) answers
+/// the text at the form's +0xF8 (else `""`); WEAP1 is named "Varmint Rifle" (its full name, the
+/// component at +0x30 by `kBaseComponentOffsets`), WEAP2's editor ID is "DocsRifle"; the type
+/// signatures at `0101C2AC` (reversed by type) and the console's print as stand-ins.
+fn search_setup(e: &mut Engine) {
+    for f in [LIST, WEAP1, WEAP2, GLOB1, GLOB2, CELL1, WS, KEYF] {
+        e.mem.set_u32(f, SEARCH_VT);
+    }
+    e.mem.set_u32(SEARCH_VT + 0x130, EDID_FN);
+    e.register(EDID_FN, |e, w| {
+        let t = e.mem.u32(w[0] + 0xf8);
+        Ret {
+            eax: if t == 0 { EMPTY_TEXT } else { t },
+            ..Ret::default()
+        }
+    });
+    e.mem.write(TEXTS, b"Varmint Rifle\0DocsRifle\0");
+    e.mem.set_u32(WEAP1 + 0x34, TEXTS);
+    e.mem.set_u16(WEAP1 + 0x38, 13);
+    e.mem.set_u32(WEAP2 + 0xf8, TEXTS + 14);
+    for (t, sig) in [(0x28u32, b"WEAP"), (0x06, b"GLOB"), (0x38, b"KEYF")] {
+        e.mem.write(0x0101_c2ac + 8 * (120 - t), sig);
+    }
+    e.register(0x0071_b160, |_, _| Ret {
+        eax: 0x0300_f000,
+        ..Ret::default()
+    });
+    e.register(PRINT_FN, |e, w| {
+        let mut words = vec![w[0]];
+        words.push(w[1]);
+        for i in 0..4 {
+            words.push(e.mem.u32(w[2] + 4 * i));
+        }
+        CALLS.with(|c| c.borrow_mut().push((PRINT_FN, words)));
+        Ret::default()
+    });
+    console(e, true);
+}
+
+/// The printed lines: id, signature text, editor ID text, name text.
+fn printed(e: &Engine) -> Vec<(u32, Vec<u8>, Vec<u8>, Vec<u8>)> {
+    calls_to(PRINT_FN)
+        .into_iter()
+        .map(|w| {
+            assert_eq!(nvse::table::guest_text(e, w[1]), b"[%08X]  %s  %s  %s");
+            let sig = e.mem.bytes(w[3], 4);
+            (
+                w[2],
+                sig,
+                nvse::table::guest_text(e, w[4]),
+                nvse::table::guest_text(e, w[5]),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn search_in_the_console() {
+    let mut e = setup();
+    search_setup(&mut e);
+    // A name match, case blind.
+    call(&mut e, 0x2246, &[s(b"varmint")]);
+    assert_eq!(
+        printed(&e),
+        vec![(2, b"WEAP".to_vec(), b"".to_vec(), b"Varmint Rifle".to_vec())]
+    );
+    // An editor ID match; "rifle" matches both.
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2246, &[s(b"RIFLE")]);
+    let ids: Vec<u32> = printed(&e).iter().map(|p| p.0).collect();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.contains(&2) && ids.contains(&0x0100_0003));
+    // No match.
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2246, &[s(b"zzz")]);
+    assert!(printed(&e).is_empty());
+}
+
+#[test]
+fn search_type_filters() {
+    let mut e = setup();
+    search_setup(&mut e);
+    let lines = |e: &mut Engine, ty: &[u8]| {
+        CALLS.with(|c| c.borrow_mut().clear());
+        call(e, 0x2246, &[s(b"rifle"), s(ty)]);
+        printed(e).len()
+    };
+    assert_eq!(lines(&mut e, b"40"), 2, "by number: weapons");
+    assert_eq!(lines(&mut e, b"6"), 0, "globals: none named so");
+    assert_eq!(lines(&mut e, b"56"), 0, "an unsearchable type");
+    assert_eq!(lines(&mut e, b"121"), 0, "past 120");
+    assert_eq!(lines(&mut e, b"weap"), 2, "a signature, case folded");
+    assert_eq!(lines(&mut e, b"GLOB"), 0);
+    assert_eq!(lines(&mut e, b"ZZZZ"), 0, "an unknown signature");
+    assert_eq!(
+        lines(&mut e, b"KEYF"),
+        0,
+        "a known signature of an unsearchable type"
+    );
+}
+
+#[test]
+fn regions_radios_and_file_filters() {
+    let mut e = setup();
+    let dh = DATA_HANDLER_AT;
+    // Regions: the region list (+0x1D8) holds its tList at +4.
+    let (regs, r1, r2) = (FORMS + 0xa000, FORMS + 0xa100, FORMS + 0xa200);
+    form(&mut e, r1, 0x37, 0x0000_0020);
+    form(&mut e, r2, 0x37, 0x0100_0021);
+    e.mem.set_u32(dh + 0x1d8, regs);
+    node(&mut e, regs + 4, r1, NODES + 0x50);
+    node(&mut e, NODES + 0x50, r2, 0);
+    let (_, res) = call(&mut e, 0x224e, &[n(0x37)]);
+    assert_eq!(array_data(&e, res), forms(&[0x20, 0x0100_0021]));
+    let (_, res) = call(&mut e, 0x224e, &[n(0x37), n(1)]);
+    assert_eq!(array_data(&e, res), forms(&[0x0100_0021]));
+    // Radios (302): a reference in the interior cell with the radio data's presence bit; the
+    // map marker reference there is not one.
+    let (radio, marker) = (FORMS + 0xa300, FORMS + 0xa400);
+    form(&mut e, radio, 0x3a, 0x0000_0030);
+    form(&mut e, marker, 0x3a, 0x0100_0031);
+    e.mem.set_u8(radio + 0x44 + 8 + 13, 1);
+    e.mem.set_u8(marker + 0x44 + 8 + 5, 0x10);
+    node(&mut e, NODES + 8, REF2, NODES + 0x58);
+    node(&mut e, NODES + 0x58, radio, NODES + 0x60);
+    node(&mut e, NODES + 0x60, marker, 0);
+    let (_, res) = call(&mut e, 0x224e, &[n(302)]);
+    assert_eq!(array_data(&e, res), forms(&[0x30]));
+    let (_, res) = call(&mut e, 0x224e, &[n(302), n(1)]);
+    assert!(array_data(&e, res).is_empty(), "the radio is of file 0");
+    // The file filter on cells, bound objects, every form and map markers.
+    let (_, res) = call(&mut e, 0x224e, &[n(0x39), n(0)]);
+    assert!(array_data(&e, res).is_empty(), "the cell is of file 1");
+    let (_, res) = call(&mut e, 0x224e, &[n(0x28), n(1)]);
+    assert_eq!(array_data(&e, res), forms(&[0x0100_0003]));
+    let (_, res) = call(&mut e, 0x224e, &[n(0x38), n(1)]);
+    assert!(array_data(&e, res).is_empty());
+    let (_, res) = call(&mut e, 0x224e, &[n(0x38), n(0)]);
+    assert_eq!(array_data(&e, res), forms(&[0xc]));
+    let (_, res) = call(&mut e, 0x224e, &[n(301), n(0)]);
+    assert!(array_data(&e, res).is_empty());
+    let (_, res) = call(&mut e, 0x224e, &[n(301), n(1)]);
+    assert_eq!(array_data(&e, res), forms(&[0x0100_000b]));
+}
+
+#[test]
+fn not_overridden_without_files() {
+    let mut e = setup();
+    // WEAP1 with no file at all: its last file is 0xFF, never "after".
+    e.mem.set_u32(SCRIPT + 0xc, 0x0000_0f00);
+    assert_eq!(call(&mut e, 0x223a, &[r(2)]).1, 0.0);
+}
+
+#[test]
+fn a_negative_integer_setting() {
+    let mut e = setup();
+    let (_, _, s3) = settings_setup(&mut e);
+    setting(&mut e, s3, b"iLow", u32::MAX);
+    let (_, res) = call(&mut e, 0x2337, &[n(1)]);
+    assert_eq!(
+        array_data(&e, res),
+        vec![Data::Number(9.5), Data::Number(-1.0)]
+    );
+}

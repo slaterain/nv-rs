@@ -51,6 +51,27 @@ fn the_time_stamp() {
     });
     let (_, res) = call(&mut e, 0x2202, &[]);
     assert_eq!(string_result(&e, res), b"07-05-32");
+    assert!(
+        calls().iter().all(|c| c.0 != 0x0071_d0a0),
+        "console closed: no print"
+    );
+    // Console open: the text printed (as the format).
+    e.register(0x0071_b160, |_, _| Ret {
+        eax: 0x0300_f000,
+        ..Ret::default()
+    });
+    e.register(0x0071_d0a0, |e, w| {
+        let t = nvse::table::guest_text(e, w[1]);
+        CALLS.with(|c| {
+            c.borrow_mut()
+                .push((0x0071_d0a0, t.iter().map(|&b| u32::from(b)).collect()))
+        });
+        Ret::default()
+    });
+    console(&mut e, true);
+    call(&mut e, 0x2202, &[]);
+    let printed: Vec<u8> = calls_to(0x0071_d0a0)[0].iter().map(|&b| b as u8).collect();
+    assert_eq!(printed, b"07-05-32");
 }
 
 #[test]

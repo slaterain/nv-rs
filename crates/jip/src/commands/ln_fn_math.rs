@@ -513,3 +513,7 @@ fn f_atan2(e: &mut Engine, w: &[u32]) -> Ret {
 #[cfg(test)]
 #[path = "ln_fn_math_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ln_fn_math_asm.rs"]
+mod asm;

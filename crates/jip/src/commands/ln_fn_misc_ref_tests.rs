@@ -61,13 +61,43 @@ fn a_new_base_form() {
     call_on(&mut e, 0x2282, REFR, &[r(2)]);
     assert_eq!(e.mem.u32(REFR + 0x20), NEW_BASE);
     assert!(calls().is_empty());
-    // Inside an inventory (`containingObj`): nothing.
-    let mut words = crate::test_support::line(&mut e, 0x2282, &[r(1)]);
+    // Inside an inventory (`containingObj`): nothing, with a bound object given (so only the
+    // guard stops it).
+    e.mem.set_u32(REFR + 0x20, BASE);
+    let mut words = crate::test_support::line(&mut e, 0x2282, &[r(2)]);
     words[2] = REFR;
     words[3] = OTHER;
     let exec = crate::test_support::execute_of(&e, 0x2282);
     e.call(exec, &words);
+    assert_eq!(e.mem.u32(REFR + 0x20), BASE);
+}
+
+/// With 3D (loaded data +0x64, its 3D +0x14): the game's `Set3D(0, 1)` and the model loader's
+/// `QueueReference(ref, 1, 0)` (`*011C3B3C`), JIP's byte +0x5F marked.
+#[test]
+fn a_new_base_form_redoes_the_3d() {
+    let mut e = setup();
+    e.map(0x011c_3000, 0x1000);
+    e.mem.set_u32(0x011c_3b3c, FORMS + 0x8000);
+    let (loaded, node) = (FORMS + 0x8100, FORMS + 0x8200);
+    e.mem.set_u32(REFR + 0x64, loaded);
+    e.mem.set_u32(loaded + 0x14, node);
+    e.register(0x0057_02e0, |_, w| {
+        CALLS.with(|c| c.borrow_mut().push((0x0057_02e0, w.to_vec())));
+        Ret::default()
+    });
+    e.register(0x0044_4850, |_, w| {
+        CALLS.with(|c| c.borrow_mut().push((0x0044_4850, w.to_vec())));
+        Ret::default()
+    });
+    call_on(&mut e, 0x2282, REFR, &[r(2)]);
     assert_eq!(e.mem.u32(REFR + 0x20), NEW_BASE);
+    assert_eq!(calls_to(0x0057_02e0), vec![vec![REFR, 0, 1]]);
+    assert_eq!(
+        calls_to(0x0044_4850),
+        vec![vec![FORMS + 0x8000, REFR, 1, 0]]
+    );
+    assert_eq!(e.mem.u8(REFR + 0x5f) & 1, 1);
 }
 
 #[test]

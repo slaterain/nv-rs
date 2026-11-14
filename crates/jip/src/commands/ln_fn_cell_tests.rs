@@ -61,6 +61,11 @@ fn water_height() {
 #[test]
 fn water_form() {
     let mut e = setup();
+    // No cell given: the player's (CELL2) with its own water.
+    put_extra(&mut e, CELL2 + 0x28, XW + 0x80, 0x03, WATER);
+    call(&mut e, 0x22be, &[]);
+    assert_eq!(form_result(&e), 0x103);
+    e.mem.set_f64(RESULT, 0.0);
     call(&mut e, 0x22be, &[r(1)]);
     assert_eq!(form_result(&e), 0, "no extra, no worldspace");
     e.mem.set_u32(CELL + 0xc0, WS);

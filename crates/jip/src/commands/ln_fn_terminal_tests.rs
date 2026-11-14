@@ -125,6 +125,14 @@ fn locked_out_set_on_a_terminal() {
     assert_eq!(allocations().len(), 1);
     call(&mut e, 0x224c, &[n(3), r(4)]);
     assert_eq!(e.mem.u8(block + 0xc), 1);
+    // State 0 on an existing state: written, and marked again.
+    call(&mut e, 0x224c, &[n(0), r(4)]);
+    assert_eq!(e.mem.u8(block + 0xc), 0);
+    assert_eq!(calls_to(ADD_CHANGE_FN).len(), 3);
+    assert_eq!(
+        calls_to(ADD_CHANGE_FN)[2],
+        vec![SAVE_LOAD, T_REF, 0x8000_0000, 0]
+    );
 }
 
 #[test]
@@ -143,6 +151,11 @@ fn locked_out_set_on_locks_and_doors() {
     e.mem.set_u32(TELE_DATA, C_REF);
     call(&mut e, 0x224c, &[n(1), r(5)]);
     assert_eq!(e.mem.u32(LOCK_DATA + 0xc), 1);
+    assert_eq!(
+        calls_to(ADD_CHANGE_FN).last().unwrap(),
+        &vec![SAVE_LOAD, C_REF, 0x1000, 0],
+        "the linked door marked"
+    );
     // Linked to a door with no lock: a new lock on the LINKED door.
     e.mem.set_u32(TELE_DATA, D_OTHER);
     let block = heap_next(&e);
@@ -156,6 +169,14 @@ fn locked_out_set_on_locks_and_doors() {
     assert_eq!(e.mem.bytes(data, 0xc), vec![0; 0xc], "zeroed");
     assert_eq!(e.mem.u32(data + 0x10), 0);
     assert_eq!(calls_to(ADD_EXTRA_FN), vec![vec![D_OTHER + 0x44, block]]);
+    assert_eq!(
+        calls_to(ADD_CHANGE_FN).last().unwrap(),
+        &vec![SAVE_LOAD, D_OTHER, 0x1000, 0]
+    );
+    assert!(
+        calls_to(ADD_CHANGE_FN).iter().all(|c| c[1] != D_REF),
+        "the door never"
+    );
     // State 0 on a reference with nothing: no lock made.
     let fresh = FORMS + 0x6000;
     form(&mut e, fresh, 0x3a, 0x204);
