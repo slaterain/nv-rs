@@ -10200,6 +10200,7 @@ fn leaf_setup_geometry() {
         ) -> u32
     ))
     .shader_translated()
+    .goes_by_address(&[0x00bb_1960, 0x00bb_1a90])
     .main_thread(0)
     .inputs(LEAF_GEOMETRY)
     .float_sweep(FLOAT_SWEEP)
@@ -10326,7 +10327,7 @@ fn leaf_setup_constants() {
         engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
     ))
     .shader_translated()
-    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0])
+    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0, 0x00b7_1360])
     .main_thread(0)
     .inputs(LEAF_CONSTANTS)
     .float_sweep(FLOAT_SWEEP)
@@ -14268,7 +14269,7 @@ fn leaf_setup_constants_with_the_leaf_class() {
         engine_typed::draw::speedtree::setup_constants(Ptr<_>, Ptr<_>)
     ))
     .shader_translated()
-    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0])
+    .goes_by_address(&[0x00bb_25d0, 0x00ec_44d0, 0x00b7_1360])
     // The slots' targets run by address on the translation's side only: the typed set-up reads their fields.
     .ignore_calls(&[0x00bb_3c80, 0x00bb_3c90])
     .main_thread(0)

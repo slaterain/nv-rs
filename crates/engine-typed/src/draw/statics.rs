@@ -33,9 +33,11 @@ pub(crate) const RENDERING_PASS: (u32, u32) = (0x011f_91e0, 0x011f_91e8);
 pub(crate) const ACCUMULATORS: (u32, u32) = (0x011f_95ec, 0x011f_95f4);
 /// The shader statics' block.
 pub const SHADER_STATICS: (u32, u32) = (0x011f_a000, 0x011f_fe40);
-/// The Group C shaders' statics (`01200458` to `01202148`: the decal depth bias, the tall grass's, SpeedTree's,
-/// lighting 3.0's and the no-lighting shader's constants and their entry pointers, lighting 3.0's pass table).
-pub(crate) const GROUP_C_STATICS: (u32, u32) = (0x0120_0450, 0x0120_2150);
+/// The Group C shaders' statics (`01200458` to `01202168`: the decal depth bias, the tall grass's, SpeedTree's,
+/// lighting 3.0's and the no-lighting shader's constants and their entry pointers, lighting 3.0's pass table; the last,
+/// the no-lighting shader's fog constants, are eight words from `01202148`: a block ending before them cut their upload
+/// in two, the late gate's first record difference of this piece).
+pub(crate) const GROUP_C_STATICS: (u32, u32) = (0x0120_0450, 0x0120_2168);
 /// The current shader pass.
 pub(crate) const CURRENT_PASS: (u32, u32) = (0x0126_f74c, 0x0126_f750);
 /// The group zero flag (the texture stages' maximum anisotropy word).
@@ -206,6 +208,20 @@ mod tests {
             for b in &GLOBAL_BLOCKS[i + 1..] {
                 assert!(a.1 <= b.0 || b.1 <= a.0, "{a:x?} {b:x?}");
             }
+        }
+    }
+
+    /// A constant block the draw uploads in one call lies in one own block (the packet's image of it needs one): the
+    /// no-lighting shader's fog constants (`01202148`, eight words) at the end of Group C's.
+    #[test]
+    fn uploaded_constant_blocks_lie_in_one_own_block() {
+        for (at, len) in [(0x0120_2148u32, 0x20u32), (0x011f_a280, 0x20)] {
+            assert!(
+                GLOBAL_BLOCKS
+                    .iter()
+                    .any(|&(lo, hi)| lo <= at && at + len <= hi),
+                "{at:08x}+{len:#x} is not inside one own block"
+            );
         }
     }
 

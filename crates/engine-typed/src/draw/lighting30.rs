@@ -1340,7 +1340,11 @@ pub fn setup_stage_textures(e: &mut Engine, this: Ptr, state: Ptr) {
 /// +0x34.
 pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
     let base = this.addr();
-    let pass: u32 = typed_call!(super::FAMILY, 0x00c0_abd0, pass_for_type(e, this, pass_type));
+    let pass: u32 = typed_call!(
+        super::FAMILY,
+        0x00c0_abd0,
+        pass_for_type(e, this, pass_type)
+    );
     own::set_current_pass(e, pass);
     own::fog_ambient_inline(e);
     if pass_type == 0x1e0 || pass_type == 0x1e1 {
