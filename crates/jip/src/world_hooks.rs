@@ -221,6 +221,20 @@ pub struct ScriptWait {
     pub saved_if_stack: [u32; 12],
 }
 
+/// A reference's own name or model path: a NUL-terminated text at `at` in a block of the game's
+/// heap of `capacity` bytes (a power of two, at least 0x80, JIP's buffer). JIP copies each text
+/// and frees the old copy when a reference's text is replaced or removed and when the model
+/// paths are dropped before a load; the port keeps one block per reference instead, writes a
+/// new text that fits over the old one, and hands a block it no longer needs to the next text
+/// (never back to the heap). So the memory follows the references that have a text, however
+/// often a script renames them, and a pointer the game was handed earlier always reads a text:
+/// the reference's newer one, or another's, never memory the heap gave to something else.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextBlock {
+    pub at: u32,
+    pub capacity: u32,
+}
+
 /// JIP's world hook state.
 #[derive(Clone, Debug)]
 pub struct State {
@@ -247,16 +261,20 @@ pub struct State {
     pub weather_rate: f32,
     /// `s_swapObjLODMap`: by world space, the cells (`Coordinate`: x high, y low).
     pub swap_obj_lod: BTreeMap<u32, BTreeSet<u32>>,
-    /// `s_refNamesMap`, `s_refrModelPathMap`: a reference's name or model path (guest strings).
-    pub ref_names: BTreeMap<u32, u32>,
-    pub model_paths: BTreeMap<u32, u32>,
+    /// `s_refNamesMap`, `s_refrModelPathMap`: a reference's name or model path, each in a block
+    /// of the game's heap the reference keeps while it has one (see [`TextBlock`]).
+    pub ref_names: BTreeMap<u32, TextBlock>,
+    pub model_paths: BTreeMap<u32, TextBlock>,
+    /// The blocks a reference gave back (its text removed, or the model paths dropped before a
+    /// load), handed to the next text that fits: JIP frees its copy there.
+    pub free_texts: Vec<TextBlock>,
     /// `s_disabledEventsMap`: a form's disabled events.
     pub disabled_events: BTreeMap<u32, u32>,
     /// `s_scriptWaitInfoMap` by owner, and `s_scriptWaitInfo` (the owner whose wait this run is).
     pub script_waits: BTreeMap<u32, ScriptWait>,
     pub script_wait: Option<u32>,
     /// `s_jipFormFlagsMap`: the flag byte a form was last given (`TESForm::SetJIPFlag`), by id;
-    /// `RestoreJIPFormFlags` (step 3.3) puts them back after a load.
+    /// [`restore_form_flags`] puts them back after a load and at a new game.
     pub form_flags: BTreeMap<u32, u8>,
 }
 
@@ -278,6 +296,7 @@ impl Default for State {
             swap_obj_lod: BTreeMap::new(),
             ref_names: BTreeMap::new(),
             model_paths: BTreeMap::new(),
+            free_texts: Vec::new(),
             disabled_events: BTreeMap::new(),
             script_waits: BTreeMap::new(),
             script_wait: None,
@@ -424,7 +443,10 @@ pub fn pre_load(e: &mut Engine) {
         set_ref_flags(e, reference, flags | ALT_REF_NAME);
     }
     if !state(e).model_paths.is_empty() {
-        state(e).model_paths.clear();
+        // JIP frees each path here: the blocks go to the free list.
+        let s = state(e);
+        let paths = std::mem::take(&mut s.model_paths);
+        s.free_texts.extend(paths.into_values());
         e.set_hook(Hook::GetModelPath, false);
     }
 }
@@ -467,6 +489,34 @@ pub(crate) fn set_jip_flag(e: &mut Engine, form: u32, flag: u8, on: bool) {
     );
     let id = form_id(e, form);
     state(e).form_flags.insert(id, flags);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: RestoreJIPFormFlags
+// (called first in DoLoadGameHousekeeping after a load that succeeded, and at a new game:
+// jip_nvse.cpp NVSEMessageHandler).
+/// Each recorded form's `jipFormFlags6` written back from its byte (a load rebuilt the form from
+/// the plugins, flags cleared); an id no form has any more, or a byte of 0, leaves the record.
+pub fn restore_form_flags(e: &mut Engine) {
+    if state(e).form_flags.is_empty() {
+        return;
+    }
+    let records: Vec<(u32, u8)> = state(e)
+        .form_flags
+        .iter()
+        .map(|(&id, &flags)| (id, flags))
+        .collect();
+    for (id, flags) in records {
+        let form = crate::cosave::lookup_form(e, id);
+        if form != 0 && flags != 0 {
+            e.set(
+                Ptr::<JipFormFlags>::new(form),
+                JipFormFlags::jipFormFlags6,
+                flags,
+            );
+        } else {
+            state(e).form_flags.remove(&id);
+        }
+    }
 }
 
 fn ref_flags(e: &Engine, reference: u32) -> u8 {
@@ -548,7 +598,7 @@ fn get_model_path_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if reference == 0 || ref_flags(e, reference) & REFR_MODEL_PATH == 0 {
         return None;
     }
-    state(e).model_paths.get(&reference).copied()
+    state(e).model_paths.get(&reference).map(|b| b.at)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetRefNameHook.
@@ -559,7 +609,7 @@ fn get_ref_name_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if ref_flags(e, reference) & ALT_REF_NAME == 0 {
         return None;
     }
-    state(e).ref_names.get(&reference).copied()
+    state(e).ref_names.get(&reference).map(|b| b.at)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: DoActivateHook.
@@ -771,10 +821,19 @@ fn set_quest_stage_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: RunResultScriptHook.
 /// `TESTopicInfo::RunResult` after its reference test (`0x61F184`: the info, the index, the
 /// reference): for the first result script, the info's scripts are called on the reference with
-/// the info, then its topic's with the topic. JIP reads the topic from the word it adds to every
-/// info (the topic the load last linked it into); the port keeps the exe's `TESTopicInfo` (the
-/// plan's choice: its topic index instead of JIP's growth), so the topic is the exe's
-/// `TESTopic::GetOwnerTopic`, which JIP's patched exe also answers from that word.
+/// the info, then its topic's with the topic. The topic is `TESTopic::GetOwnerTopic`'s answer.
+/// JIP reads the word it adds to every info at `+0x50` (`parentTopic`), which its always-on game
+/// patch "Store parent TESTopic for every TESTopicInfo" (`internal/patches_game.h`: the load's
+/// link call `0x61E086` stores the topic, `0x61CD16` and `0x61D041` grow and read the info, and
+/// `GetOwnerTopic` at `0x61A310` is rewritten to answer that word) fills. That patch changes
+/// every caller of `GetOwnerTopic` in the game, not this hook alone, so it is one of JIP's
+/// game patches of step 3.9 (with the info's growth, where the port's plan keeps the exe's
+/// `TESTopicInfo` and a port-side record of the topic); until then the exe's `GetOwnerTopic`
+/// walks the topics and answers the first holding the info. The two differ only for an info a
+/// mod links under two topics (the walk: the first topic; JIP: the last linked), and the game's
+/// own callers see the same topic as this handler. Once that patch is built, `GetOwnerTopic`
+/// answers the recorded topic and this handler follows it unchanged. The walk runs only for a
+/// first result script while a script has a dialogue topic handler.
 fn run_result_script_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let (info, index, reference) = (a[0], a[1], a[2]);
     if index != 0 {
@@ -804,6 +863,11 @@ fn update_weather_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// A LOD block's file name (`0x6F6DF1`: the world space, the level, x, y, the buffer): a cell a
 /// script swapped (its 16-bit x and y) gets the `AltLOD` name, made from the world space's
 /// editor id, the level and the whole x and y words (JIP's `sprintf_s` into the 0x104 bytes).
+/// A name that does not fit stops the port here, as `sprintf_s`'s invalid-parameter handler
+/// ends the game with JIP; the exe's own block names (`0x6F55F0`, `0x6F5640`, `0x6F5690`, the
+/// same pattern into 0x104 bytes through `_vsprintf_s`) stop it the same way, at an editor id
+/// only about three characters longer (101 characters stop here: the name is 59 bytes and the
+/// editor id twice).
 fn make_obj_lod_path_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let (world_space, level, x, y, buffer) = (a[0], a[1], a[2], a[3], a[4]);
     let key = (x & 0xffff) << 16 | (y & 0xffff);
@@ -823,7 +887,8 @@ fn make_obj_lod_path_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     );
     assert!(
         name.len() < 0x104,
-        "MakeObjLODPath: a name of {} bytes does not fit JIP's 0x104-byte buffer",
+        "MakeObjLODPath: a LOD block name of {} bytes does not fit JIP's 0x104-byte buffer: \
+         sprintf_s ends the game there, the port stops here",
         name.len()
     );
     e.mem.write(buffer, name.as_bytes());
@@ -872,7 +937,13 @@ fn pc_activate_ref_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         return Some(1);
     }
     let kind = usize::from(form_type(e, base));
-    e.ext::<Jip>().ui_hooks.activation_disabled_types[kind].then_some(1)
+    e.ext::<Jip>()
+        .ui_hooks
+        .activation_disabled_types
+        .get(kind)
+        .copied()
+        .unwrap_or(false)
+        .then_some(1)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: PCCellChangeHook.
@@ -1064,11 +1135,7 @@ fn set_on_quest_stage(e: &mut Engine, w: &[u32]) -> Ret {
             set_jip_flag(e, quest, SET_STAGE_HANDLERS, true);
             e.add_hook_user(Hook::SetQuestStage, true);
         }
-        state(e)
-            .quest_stage
-            .get_mut(&quest)
-            .expect("made above")
-            .push(event);
+        state(e).quest_stage.entry(quest).or_default().push(event);
         crate::ln_events::capture(e, script);
         a.set_result(e, 1.0);
     } else if let Some(events) = state(e).quest_stage.get_mut(&quest) {
@@ -1236,9 +1303,16 @@ fn set_interaction_disabled_type(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let add = read.int(0, 0) != 0;
-    let types = &mut e.ext::<Jip>().ui_hooks.activation_disabled_types;
-    if add != types[kind] {
-        types[kind] = add;
+    let Some(slot) = e
+        .ext::<Jip>()
+        .ui_hooks
+        .activation_disabled_types
+        .get_mut(kind)
+    else {
+        return handled(true);
+    };
+    if add != *slot {
+        *slot = add;
         e.add_hook_user(Hook::InteractionDisabled, add);
     }
     handled(true)
@@ -1247,7 +1321,11 @@ fn set_interaction_disabled_type(e: &mut Engine, w: &[u32]) -> Ret {
 /// `TESForm::HasScript` (JIP LN NVSE): the form's `TESScriptableForm` (`kBaseComponentOffsets`
 /// byte 1) holds a script (`+4`).
 fn has_script(e: &Engine, form: u32) -> bool {
-    let entry = crate::commands::forms::BASE_COMPONENT_OFFSETS[usize::from(form_type(e, form))];
+    let Some(&entry) =
+        crate::commands::forms::BASE_COMPONENT_OFFSETS.get(usize::from(form_type(e, form)))
+    else {
+        return false;
+    };
     let words = (entry >> 8) as u8 as i8;
     words != 0
         && e.mem
@@ -1271,7 +1349,7 @@ fn set_events_disabled(e: &mut Engine, form: u32, mask: u32, on_activate: bool, 
                 set_jip_flag(e, form, EVENT_DISABLED, true);
                 e.add_hook_user(Hook::MarkScriptEvent, true);
             }
-            *state(e).disabled_events.get_mut(&form).expect("made above") |= mask;
+            *state(e).disabled_events.entry(form).or_insert(0) |= mask;
         } else if flags6(e, form) & EVENT_DISABLED != 0 {
             if let Some(events) = state(e).disabled_events.get_mut(&form) {
                 *events &= !mask;
@@ -1334,7 +1412,10 @@ fn set_script_event_disabled(e: &mut Engine, w: &[u32]) -> Ret {
         }
         if is_reference(e, form) {
             let base = base_of(e, form);
-            if crate::commands::forms::INVENTORY_TYPE[usize::from(form_type(e, base))]
+            if crate::commands::forms::INVENTORY_TYPE
+                .get(usize::from(form_type(e, base)))
+                .copied()
+                .unwrap_or(false)
                 || !has_script(e, base)
             {
                 continue;
@@ -1360,13 +1441,14 @@ fn event_mask(name: &[u8]) -> Option<u32> {
 // Cmd_SetRefName_Execute, Cmd_SetRefrModelPath_Execute.
 /// The calling reference's own name or model path (JIP's 0x80-byte buffer) set, or removed by
 /// an empty text: a reference's first is one user of the hook; the reference's flag follows.
+/// The text goes into the reference's block ([`TextBlock`]).
 fn set_ref_string(
     e: &mut Engine,
     w: &[u32],
     command: &str,
     hook: Hook,
     flag: u8,
-    map: fn(&mut State) -> &mut BTreeMap<u32, u32>,
+    map: fn(&mut State) -> &mut BTreeMap<u32, TextBlock>,
 ) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
@@ -1376,20 +1458,55 @@ fn set_ref_string(
     let reference = a.this_obj;
     let text = crate::commands::buffer_arg(e, &read, 0, 0x80, command);
     if !text.is_empty() {
-        let string = nvse::table::guest_str(e, &text);
-        if map(state(e)).insert(reference, string).is_none() {
+        let old = map(state(e)).get(&reference).copied();
+        let block = text_block(e, old, text.len() as u32 + 1);
+        e.mem.write(block.at, &text);
+        e.mem.set_u8(block.at + text.len() as u32, 0);
+        if map(state(e)).insert(reference, block).is_none() {
             e.add_hook_user(hook, true);
         }
         let flags = ref_flags(e, reference);
         set_ref_flags(e, reference, flags | flag);
     } else {
-        if map(state(e)).remove(&reference).is_some() {
+        if let Some(block) = map(state(e)).remove(&reference) {
+            state(e).free_texts.push(block);
             e.add_hook_user(hook, false);
         }
         let flags = ref_flags(e, reference);
         set_ref_flags(e, reference, flags & !flag);
     }
     handled(true)
+}
+
+/// A block for a text of `size` bytes (its NUL counted): the reference's own when it fits, else
+/// the smallest free one that does (the reference's own then freed), else a new one from the
+/// game's heap (JIP's `Game_HeapAlloc`).
+fn text_block(e: &mut Engine, old: Option<TextBlock>, size: u32) -> TextBlock {
+    if let Some(old) = old.filter(|b| b.capacity >= size) {
+        return old;
+    }
+    let s = state(e);
+    let reuse = s
+        .free_texts
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.capacity >= size)
+        .min_by_key(|(_, b)| b.capacity)
+        .map(|(i, _)| i);
+    let block = match reuse {
+        Some(i) => s.free_texts.swap_remove(i),
+        None => {
+            let capacity = size.next_power_of_two().max(0x80);
+            TextBlock {
+                at: crate::commands::heap_alloc(e, capacity),
+                capacity,
+            }
+        }
+    };
+    if let Some(old) = old {
+        state(e).free_texts.push(old);
+    }
+    block
 }
 
 fn set_ref_name(e: &mut Engine, w: &[u32]) -> Ret {
@@ -1611,23 +1728,24 @@ fn block_iterator(e: &Engine, data: u32, length: u32) -> Blocks {
         next_op: 0,
         next_block: 4,
     };
+    // Wrapping adds: the offsets come from a mod's compiled data (JIP's 32-bit sums wrap).
     let eval = |b: &mut Blocks| -> bool {
-        if e.mem.u16(data + b.next_block) != 0x10 {
+        if e.mem.u16(data.wrapping_add(b.next_block)) != 0x10 {
             return false;
         }
-        b.next_block += 2;
-        let size = u32::from(e.mem.u16(data + b.next_block));
-        b.next_block += 2;
-        b.type_at = data + b.next_block;
+        b.next_block = b.next_block.wrapping_add(2);
+        let size = u32::from(e.mem.u16(data.wrapping_add(b.next_block)));
+        b.next_block = b.next_block.wrapping_add(2);
+        b.type_at = data.wrapping_add(b.next_block);
         b.next_op = b.next_block.wrapping_add(size);
-        b.next_block += 2;
+        b.next_block = b.next_block.wrapping_add(2);
         b.next_block = b
             .next_block
-            .wrapping_add(u32::from(e.mem.u16(data + b.next_block)))
+            .wrapping_add(u32::from(e.mem.u16(data.wrapping_add(b.next_block))))
             .wrapping_add(size)
             .wrapping_sub(6);
         if e.mem.u32(data.wrapping_add(b.next_block)) == 0x11 {
-            b.next_block += 4;
+            b.next_block = b.next_block.wrapping_add(4);
             return true;
         }
         false

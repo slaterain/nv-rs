@@ -357,6 +357,90 @@ fn unique_items() {
     );
 }
 
+/// Many distinct names on one reference take one block of the game's heap, rewritten in place:
+/// the heap does not grow, and a pointer handed out before reads the newer name. A removed
+/// name's block, and the model paths' blocks dropped before a load, serve the next texts.
+#[test]
+fn many_names_keep_the_memory_bounded() {
+    let mut e = world();
+    let heap = e.mem.u32(HEAP);
+    run(&mut e, SET_REF_NAME, REF, &[s(b"start")]);
+    let first = site(&mut e, 0x0055_d520, &[REF]).expect("named");
+    assert_eq!(
+        e.mem.u32(HEAP),
+        heap + 0x80,
+        "one block of JIP's buffer size"
+    );
+    for i in 0..5000u32 {
+        let name = format!("Raider {i} hp {}", 5000 - i);
+        run(&mut e, SET_REF_NAME, REF, &[s(name.as_bytes())]);
+        assert_eq!(
+            site(&mut e, 0x0055_d520, &[REF]),
+            Some(first),
+            "the same block"
+        );
+    }
+    assert_eq!(e.mem.u32(HEAP), heap + 0x80, "no more of the heap taken");
+    assert_eq!(nvse::table::guest_text(&e, first), b"Raider 4999 hp 1");
+    let full = vec![b'x'; 0x7f];
+    run(&mut e, SET_REF_NAME, REF, &[s(&full)]);
+    assert_eq!(
+        site(&mut e, 0x0055_d520, &[REF]),
+        Some(first),
+        "0x7F and its 0 fit"
+    );
+    assert_eq!(nvse::table::guest_text(&e, first), full);
+    // Removed: the block waits; the next reference's text takes it.
+    run(&mut e, SET_REF_NAME, REF, &[s(b"")]);
+    assert!(e.ext::<Jip>().world_hooks.ref_names.is_empty());
+    run(&mut e, SET_REFR_MODEL_PATH, ITEM, &[s(b"b.nif")]);
+    assert_eq!(site(&mut e, 0x0050_fe8b, &[BASE, ITEM]), Some(first));
+    assert_eq!(e.mem.u32(HEAP), heap + 0x80);
+    // Before a load the paths' blocks go back; a name takes it again.
+    crate::world_hooks::pre_load(&mut e);
+    assert_eq!(e.ext::<Jip>().world_hooks.free_texts.len(), 1);
+    run(&mut e, SET_REF_NAME, REF, &[s(b"again")]);
+    assert_eq!(site(&mut e, 0x0055_d520, &[REF]), Some(first));
+    assert_eq!(e.mem.u32(HEAP), heap + 0x80);
+    assert!(e.ext::<Jip>().world_hooks.free_texts.is_empty());
+}
+
+/// A text longer than its block (read whole with the list guard row) moves to a block twice the
+/// size; the old block waits for the next text.
+#[test]
+fn a_longer_text_moves_to_a_bigger_block() {
+    let mut e = world();
+    assert!(
+        nvse::commands::array::fix_on(&e, nvse::commands::array::LIST_GUARD),
+        "the fixes preset"
+    );
+    run(&mut e, SET_REF_NAME, REF, &[s(b"short")]);
+    let small = site(&mut e, 0x0055_d520, &[REF]).expect("named");
+    let long = vec![b'y'; 0x90];
+    run(&mut e, SET_REF_NAME, REF, &[s(&long)]);
+    let big = site(&mut e, 0x0055_d520, &[REF]).expect("named");
+    assert_ne!(big, small);
+    assert_eq!(nvse::table::guest_text(&e, big), long);
+    assert_eq!(
+        e.ext::<Jip>().world_hooks.ref_names[&REF].capacity,
+        0x100,
+        "the next power of two"
+    );
+    assert_eq!(
+        e.ext::<Jip>().world_hooks.free_texts,
+        vec![TextBlock {
+            at: small,
+            capacity: 0x80
+        }]
+    );
+    run(&mut e, SET_REFR_MODEL_PATH, REF, &[s(b"c.nif")]);
+    assert_eq!(
+        site(&mut e, 0x0050_fe8b, &[BASE, REF]),
+        Some(small),
+        "reused"
+    );
+}
+
 /// SetRefName and SetRefrModelPath with their seams; the pre-load keeps the names (their flag
 /// set again) and drops the paths.
 #[test]
@@ -570,6 +654,49 @@ fn player_events() {
 }
 
 /// SetOnDialogTopicEventHandler and the RunResultScript seam.
+/// An info a mod links under two topics: the handler calls the scripts of the topic
+/// `GetOwnerTopic` answers (the exe's walk: the first topic holding it; with JIP's step 3.9
+/// patch, the last linked), never both. The stand-in walks two topics' info lists.
+#[test]
+fn an_info_under_two_topics_takes_get_owner_topics_answer() {
+    let mut e = world();
+    const SECOND_TOPIC: u32 = AREA + 0x4800;
+    form(&mut e, SECOND_TOPIC, TOPIC, 0x0100_0010, false);
+    // Each topic's info list (one info each; the same info in both).
+    const LISTS: u32 = AREA + 0x4900;
+    e.mem.set_u32(LISTS, INFO);
+    e.mem.set_u32(LISTS + 8, INFO);
+    e.register(GET_OWNER_TOPIC, |e, w| {
+        let topic = [(TOPIC_FORM, LISTS), (SECOND_TOPIC, LISTS + 8)]
+            .into_iter()
+            .find(|(_, list)| e.mem.u32(*list) == w[0])
+            .map_or(0, |(t, _)| t);
+        Ret {
+            eax: topic,
+            ..Ret::default()
+        }
+    });
+    run(
+        &mut e,
+        SET_ON_DIALOG_TOPIC,
+        0,
+        &[form_arg(R_S1), int_arg(1), form_arg(R_TOPIC)],
+    );
+    // The second topic's handler (no script argument index of its own here).
+    e.ext::<Jip>()
+        .world_hooks
+        .dialog_topic
+        .entry(SECOND_TOPIC)
+        .or_default()
+        .insert(SCRIPT_TWO);
+    crate::script_call::calls();
+    assert_eq!(site(&mut e, 0x0061_f184, &[INFO, 0, REF]), None);
+    assert_eq!(
+        crate::script_call::calls(),
+        vec![(SCRIPT_ONE, REF, vec![TOPIC_FORM])]
+    );
+}
+
 #[test]
 fn dialogue_topic_events() {
     let mut e = world();
@@ -735,6 +862,130 @@ fn weather_transition_rate() {
     );
     assert_eq!(users(&e, Hook::UpdateWeather), 0);
     assert_eq!(ask(&mut e), -6.0, "the rate kept");
+}
+
+fn message(e: &mut Engine, kind: u32, data: u32) {
+    crate::cosave::listen(e, &nvse::plugins::Message { kind, data, len: 0 });
+}
+
+/// The flag bytes SetJIPFlag recorded come back after a load that succeeded and at a new game
+/// (`RestoreJIPFormFlags`), onto the form the load rebuilt with its bytes cleared; a failed load
+/// leaves them; an id no form has any more leaves the record, as does a byte of 0.
+#[test]
+fn recorded_form_flags_come_back_after_a_load() {
+    use nvse::plugins::msg;
+    let mut e = world();
+    run(
+        &mut e,
+        SET_INTERACTION_DISABLED,
+        0,
+        &[int_arg(1), form_arg(R_REF)],
+    );
+    run(
+        &mut e,
+        SET_INTERACTION_DISABLED,
+        0,
+        &[int_arg(1), form_arg(R_ARMOR)],
+    );
+    let (ref_id, armor_id) = (0x0100_0001, 0x0100_000b);
+    assert_eq!(
+        e.ext::<Jip>().world_hooks.form_flags.get(&ref_id),
+        Some(&NO_PC_ACTIVATION)
+    );
+    // The load rebuilds the forms: their bytes are 0 again.
+    e.mem.set_u8(REF + 6, 0);
+    message(&mut e, msg::POST_LOAD_GAME, 0);
+    assert_eq!(e.mem.u8(REF + 6), 0, "a failed load restores nothing");
+    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.len(), 2);
+    message(&mut e, msg::POST_LOAD_GAME, 1);
+    assert_eq!(e.mem.u8(REF + 6), NO_PC_ACTIVATION);
+    // The armour is not in the game's form map: its record goes.
+    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&armor_id), None);
+    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.len(), 1);
+    e.mem.set_u8(REF + 6, 0);
+    message(&mut e, msg::NEW_GAME, 0);
+    assert_eq!(e.mem.u8(REF + 6), NO_PC_ACTIVATION, "a new game too");
+    // A byte of 0 (every flag cleared) leaves the record.
+    run(
+        &mut e,
+        SET_INTERACTION_DISABLED,
+        0,
+        &[int_arg(0), form_arg(R_REF)],
+    );
+    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&ref_id), Some(&0));
+    message(&mut e, msg::POST_LOAD_GAME, 1);
+    assert!(e.ext::<Jip>().world_hooks.form_flags.is_empty());
+}
+
+/// A form type byte past the game's 121 types (bad mod data) answers "not disabled", "no script"
+/// and "not an inventory item" instead of stopping: the activation seam, SetScriptEventDisabled
+/// on a reference with such a base and on such a form.
+#[test]
+fn a_form_type_past_the_tables_stops_nothing() {
+    let mut e = world();
+    e.mem.set_u8(BASE + 4, 0xff);
+    assert_eq!(site(&mut e, 0x0094_3279, &[REF]), None);
+    run(
+        &mut e,
+        SET_SCRIPT_EVENT_DISABLED,
+        0,
+        &[form_arg(R_REF), s(b"OnAdd"), int_arg(1)],
+    );
+    run(
+        &mut e,
+        SET_SCRIPT_EVENT_DISABLED,
+        0,
+        &[form_arg(R_BASE), s(b"OnAdd"), int_arg(1)],
+    );
+    assert!(e.ext::<Jip>().world_hooks.disabled_events.is_empty());
+    assert_eq!(users(&e, Hook::MarkScriptEvent), 0);
+    // SetInteractionDisabledType's own check passes only the filter types.
+    run(
+        &mut e,
+        SET_INTERACTION_DISABLED_TYPE,
+        0,
+        &[int_arg(1), int_arg(0xff)],
+    );
+    assert_eq!(users(&e, Hook::InteractionDisabled), 0);
+}
+
+/// A swapped cell of a world space with an editor id of `len` characters: the seam's answer and
+/// the buffer.
+fn lod_name_with_editor_id(len: usize) -> (Option<u32>, Vec<u8>) {
+    let mut e = world();
+    e.mem.set_u32(FORM_VT + 0x130, 0x00de_0130);
+    e.register_double(0x00de_0130, |_, _| Ret {
+        eax: STRINGS,
+        ..Ret::default()
+    });
+    let mut edid = vec![b'W'; len];
+    edid.push(0);
+    e.mem.write(STRINGS, &edid);
+    run(
+        &mut e,
+        SWAP_OBJECT_LOD,
+        0,
+        &[form_arg(R_WORLD), int_arg(-2), int_arg(3)],
+    );
+    let answer = site(&mut e, 0x006f_6df1, &[WORLD, 8, 0xffff_fffe, 3, BUFFER]);
+    (answer, nvse::table::guest_text(&e, BUFFER))
+}
+
+/// The longest editor id whose AltLOD name fits JIP's 0x104 bytes (100 characters: 259 bytes and
+/// the 0) is written whole.
+#[test]
+fn a_long_editor_id_that_fits() {
+    let (answer, name) = lod_name_with_editor_id(100);
+    assert_eq!(answer, Some(1));
+    assert_eq!(name.len(), 259);
+    assert!(name.ends_with(b".Level8.X-2.Y3.AltLOD.nif"));
+}
+
+/// One character more: JIP's `sprintf_s` ends the game; the port stops at the same place.
+#[test]
+#[should_panic(expected = "a LOD block name of 261 bytes does not fit JIP's 0x104-byte buffer")]
+fn a_too_long_editor_id_stops_as_jip_does() {
+    lod_name_with_editor_id(101);
 }
 
 /// SwapObjectLOD and the MakeObjLODPath seam (and the pre-load).

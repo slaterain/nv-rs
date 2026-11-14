@@ -1503,7 +1503,11 @@ pub fn fn_0093b7a0(
         let current = e.vcall(owner, 0xc, &args![0x10u32]).f32();
         let maximum = e.vcall(owner, 0x20, &args![0x10u32]).f32();
         // The seam at `0x0093B80A` (JIP LN NVSE's PlayerMinHealth): words the health and the
-        // change (`f32` bits); an answer is the change to make instead.
+        // change (`f32` bits); an answer is the change to make instead. JIP patches at that
+        // address, before the exe's two health reads; the seam sits after them because JIP's
+        // hook makes the same two reads (the current health, then the maximum: it calls the
+        // player's own `0x93ACB0` and `0x93AD60`, what these two virtual calls reach for the
+        // player: slots `+0xC` and `+0x20` of its actor value vtable `0x0108A974`), so the calls and their order are the same either way.
         if e.hook_users(engine_core::extend::Hook::PlayerMinHealth) != 0 {
             if let Some(bits) = e.site(0x0093_b80a, &[current.to_bits(), amount.to_bits()]) {
                 amount = f32::from_bits(bits);

@@ -2517,9 +2517,16 @@ fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32) {
         if extra != 0 {
             let vendor = e.get(this, BarterMenu::pVendorRef);
             {
-                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word. This function
-                // takes none (`thiscall`, no stack words): JIP reads `DoClick`'s saved ESI there, a word with
-                // no meaning, so 0 (JIP's "no item" path) is handed on.
+                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word. This
+                // function takes none (`thiscall`), so JIP reads the word above its return address:
+                // `DoClick`'s saved ESI (its only push before the call, 0072d776; the call 0072d920).
+                // `DoClick` runs only through the menu's click slot (+0xc), from the interface
+                // manager's mouse clicks (0070d36c, 0070e3ce), gamepad (0070f6e0) and focus step
+                // (00715860). Up that chain ESI is written only with the rendered menu or the Pip-Boy
+                // manager (the manager's +0x16c / +0x174: 0070d69d, and the main loop 0086e71b) or
+                // is the caller's own. A menu object (vtables 0107841c, 010780ac) fails JIP's
+                // IsValidReference and is no form in its disabled-events map, so JIP takes the plain
+                // path, as it does for 0: 0 is handed on.
                 let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, 0);
                 e.call(SET_ACTION_FLAG, &args![vendor, extra, 0x4000u32]);
             }
@@ -2546,9 +2553,8 @@ fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32) {
         if extra != 0 {
             let player = e.global::<u32>(PLAYER);
             {
-                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word. This function
-                // takes none (`thiscall`, no stack words): JIP reads `DoClick`'s saved ESI there, a word with
-                // no meaning, so 0 (JIP's "no item" path) is handed on.
+                // JIP LN NVSE's MarkScriptEvent reads `DoClick`'s saved ESI here too, a menu object
+                // or the caller's own word, never a reference (see the buying loop): 0 is handed on.
                 let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, 0);
                 e.call(SET_ACTION_FLAG, &args![player, extra, 0x4000u32]);
             }
@@ -4508,6 +4514,49 @@ mod n051_tests {
             vec![vec![0x8800, player, 7, 0x9000]]
         );
         assert_eq!(calls_to(&e, AUDIO_SOUND_BY_NAME)[0][2], CAPS_DOWN_SOUND);
+    }
+
+    /// Both `SetActionFlag` calls of `CompleteTransaction` (an item bought, an item sold) hand
+    /// MarkScriptEvent the word 0 (JIP reads `DoClick`'s saved ESI there, never a reference),
+    /// and the word is gone afterwards.
+    #[test]
+    fn completing_hands_mark_script_event_the_word_0() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        e.set(this, BarterMenu::pVendorRef, 0x9000);
+        e.set_global(SECURITY_COOKIE, 0x1234_5678u32);
+        let process = object(&mut e);
+        answer(&mut e, ACTOR_PROCESS, process);
+        let bought_extras = e.mem.alloc(8);
+        e.mem.set_u32(bought_extras, 0x7100);
+        let bought = item(&mut e, bought_extras, 2, 0x8000);
+        e.mem.set_u32(this.addr() + ITEMS_TO_BUY, bought);
+        let player = object(&mut e);
+        e.set_global(PLAYER, player);
+        let sold_extras = e.mem.alloc(8);
+        e.mem.set_u32(sold_extras, 0x7200);
+        let sold = item(&mut e, sold_extras, 1, 0x8100);
+        e.mem.set_u32(this.addr() + ITEMS_TO_SELL, sold);
+        e.register(VALUE_00406CE0, |_, a| st0(f64::from(f32::from_bits(a[0]))));
+        e.register(FLOAT_TO_INT_00406D90, |_, a| {
+            (f32::from_bits(a[0]) as i32).into_ret()
+        });
+        let words = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let sink = words.clone();
+        e.register_double(SET_ACTION_FLAG, move |e, a| {
+            sink.borrow_mut().push((a[..3].to_vec(), e.caller_word()));
+            Ret::default()
+        });
+        e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+        e.call(0x0072_fd10, &args![this]);
+        assert_eq!(
+            *words.borrow(),
+            vec![
+                (vec![0x9000, 0x7100, 0x4000], Some(0)),
+                (vec![player, 0x7200, 0x4000], Some(0))
+            ]
+        );
+        assert_eq!(e.caller_word(), None);
     }
 
     #[test]

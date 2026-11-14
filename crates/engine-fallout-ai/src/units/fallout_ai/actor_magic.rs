@@ -2700,6 +2700,28 @@ mod tests {
         assert!(calls(&e, ADD_EAT_DRINK_ITEM).is_empty());
     }
 
+    /// `Actor::Eat` hands MarkScriptEvent the item at both `SetActionFlag` calls, and the word is
+    /// gone afterwards.
+    #[test]
+    fn eat_hands_mark_script_event_the_item() {
+        let (mut e, w) = setup();
+        let actor = Ptr::new(w.actor);
+        let item = object(&mut e);
+        let words = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let sink = words.clone();
+        e.register_double(SET_ACTION_FLAG, move |e, a| {
+            sink.borrow_mut().push((a[0], e.caller_word()));
+            Ret::default()
+        });
+        e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+        actor_eat(&mut e, actor, Ptr::new(item), Ptr::new(0x4444), false);
+        assert_eq!(
+            *words.borrow(),
+            vec![(w.actor, Some(item)), (item, Some(item))]
+        );
+        assert_eq!(e.caller_word(), None);
+    }
+
     #[test]
     fn drink_potion_reports_whether_it_drank() {
         let (mut e, w) = setup();

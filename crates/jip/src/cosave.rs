@@ -1329,12 +1329,15 @@ pub fn listen(e: &mut Engine, m: &Message) {
         msg::POST_LOAD_GAME => {
             // `DoLoadGameHousekeeping` after a load that succeeded: its saved data's part.
             if m.data & 0xff != 0 {
+                crate::world_hooks::restore_form_flags(e);
                 saved(e).changed = 0;
             }
         }
         msg::NEW_GAME => {
             let s = saved(e);
             s.serialized = SerializedVars::default();
+            crate::world_hooks::restore_form_flags(e);
+            let s = saved(e);
             // nv-rs's own: nothing of the last co-save loaded goes into a new game's.
             s.carried.clear();
             s.serialized_tail.clear();

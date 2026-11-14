@@ -12973,6 +12973,75 @@ mod tests {
         assert_eq!(e.caller_word(), None);
     }
 
+    /// With a user of MarkScriptEvent: the caller word each `SetActionFlag` call sees, one
+    /// record per call (empty when no word is set).
+    fn caller_words(e: &mut Engine) -> CallRecord {
+        let words: CallRecord = Default::default();
+        let sink = words.clone();
+        e.register_double(SET_ACTION_FLAG, move |e, _| {
+            sink.borrow_mut()
+                .push(e.caller_word().into_iter().collect());
+            Ret::default()
+        });
+        e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+        words
+    }
+
+    /// EquipObject's food branch hands MarkScriptEvent the item at its `SetActionFlag` call.
+    #[test]
+    fn equip_food_hands_mark_script_event_the_item() {
+        let mut e = engine3();
+        let (actor, item) = equip_world(&mut e, 0x1d);
+        let eaten = record(&mut e, ACTOR_EAT, Ret::default());
+        let words = caller_words(&mut e);
+        equip(&mut e, actor, item, 1, 0x1234, [0, 0, 0]);
+        assert_eq!(eaten.borrow().len(), 1);
+        assert_eq!(*words.borrow(), vec![vec![item.addr()]]);
+        assert_eq!(e.caller_word(), None);
+    }
+
+    /// EquipObject's potion branch hands MarkScriptEvent the item at its `SetActionFlag` call.
+    #[test]
+    fn equip_potion_hands_mark_script_event_the_item() {
+        let mut e = engine3();
+        let (actor, item) = equip_world(&mut e, 0x2f);
+        let drunk = record(&mut e, ACTOR_DRINK_POTION, eax(1));
+        let words = caller_words(&mut e);
+        equip(&mut e, actor, item, 1, 0x1234, [0, 0, 0]);
+        assert_eq!(drunk.borrow().len(), 1);
+        assert_eq!(*words.borrow(), vec![vec![item.addr()]]);
+        assert_eq!(e.caller_word(), None);
+    }
+
+    /// EquipObject's closing calls (after the combat controller test) hand MarkScriptEvent the
+    /// item at both `SetActionFlag` calls: a book that cannot be read falls through to them.
+    #[test]
+    fn equip_closing_flags_hand_mark_script_event_the_item() {
+        let mut e = engine3();
+        let (actor, item) = equip_world(&mut e, 0x19);
+        double(&mut e, BOOK_SKILL_NUMBER, eax(0xffff_ffff));
+        let words = caller_words(&mut e);
+        equip(&mut e, actor, item, 1, 0x1234, [0, 0, 0]);
+        assert_eq!(*words.borrow(), vec![vec![item.addr()], vec![item.addr()]]);
+        assert_eq!(e.caller_word(), None);
+    }
+
+    /// `0088e110` hands MarkScriptEvent the item at both `SetActionFlag` calls.
+    #[test]
+    fn removal_hands_mark_script_event_the_item() {
+        let mut e = engine3();
+        let (actor, item) = equip_world(&mut e, 0x28);
+        double(&mut e, EXTRA_LIST_GET_CONTAINER_CHANGES, eax(0x5050));
+        double(&mut e, INVENTORY_REMOVE, eax(1));
+        let words = caller_words(&mut e);
+        assert_eq!(
+            fn_0088e110(&mut e, actor, item, 4, Ptr::new(0x1234), 1, 0),
+            1
+        );
+        assert_eq!(*words.borrow(), vec![vec![item.addr()], vec![item.addr()]]);
+        assert_eq!(e.caller_word(), None);
+    }
+
     #[test]
     fn power_armor_is_refused_for_the_player_unless_the_flag_byte_is_set() {
         let mut e = engine3();

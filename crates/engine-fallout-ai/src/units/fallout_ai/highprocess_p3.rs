@@ -23594,6 +23594,50 @@ mod tests {
         assert_eq!(e.mem.u32(p.addr() + LOW_ACQUIRE_OBJECT), 0);
     }
 
+    /// `ProcessBuyObject` hands MarkScriptEvent the buying actor (not the seller) at the
+    /// `SetActionFlag` call of both branches: a seller that is an actor, and a reference owned by
+    /// an NPC whose seller comes from the process lists.
+    #[test]
+    fn test_high_process_process_buy_object_hands_mark_script_event_the_actor() {
+        for actor_seller in [true, false] {
+            let mut e = Engine::new();
+            let (p, actor, seller, entry, _package) = buy_world(&mut e);
+            let seller = if actor_seller {
+                seller
+            } else {
+                let reference = object_with_slots(&mut e, 0x7400_0000, &[(ACTOR_SLOT_IS_ACTOR, 0)]);
+                e.mem.set_u32(entry, reference);
+                for callee in [
+                    REFERENCE_EXTRA_DATA,
+                    EXTRA_LEV_CREA_ORIGINAL_BASE,
+                    EXTRA_SET_BASE_FORM,
+                    REFERENCE_ACTIVATE,
+                    0x007a_f430,
+                ] {
+                    returning(&mut e, callee, 0);
+                }
+                returning(&mut e, REFERENCE_GET_OWNER, 0x6500);
+                returning(&mut e, FORM_TYPE_BYTE, 0x2a);
+                returning(&mut e, PROCESS_LISTS_GET_ACTOR_REF_IN_HIGH, 0x6600);
+                0x6600
+            };
+            let words = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let sink = words.clone();
+            e.register_double(SCRIPT_SET_ACTION_FLAG, move |e, a| {
+                sink.borrow_mut().push((a[0], e.caller_word()));
+                Ret::default()
+            });
+            e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+            e.call(0x008e59c0, &args![p, actor]);
+            assert_eq!(
+                *words.borrow(),
+                vec![(seller, Some(actor))],
+                "{actor_seller}"
+            );
+            assert_eq!(e.caller_word(), None);
+        }
+    }
+
     #[test]
     fn test_high_process_process_buy_object_other_cases() {
         let mut e = Engine::new();

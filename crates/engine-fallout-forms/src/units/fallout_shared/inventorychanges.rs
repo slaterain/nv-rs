@@ -15588,6 +15588,41 @@ mod tests {
         assert_eq!(calls(&e, EXTRA_COPY_FOR_REFERENCE).len(), 1);
     }
 
+    /// `004c37d0` hands MarkScriptEvent the actor (not the form or the changes) at both
+    /// `SetActionFlag` calls: part of a stack (the split-off list is flagged) and a whole stack
+    /// (the stack itself is flagged). The word is gone afterwards.
+    #[test]
+    fn removal_from_a_stack_hands_mark_script_event_the_actor() {
+        for (taken, whole) in [(2, false), (3, true)] {
+            let mut e = tx2();
+            let owner = object(&mut e);
+            let this = inventory(&mut e, &[], owner);
+            let target = object(&mut e);
+            let item = form(&mut e, 0x1f, 5, 0);
+            let stack = extra(&mut e);
+            set(&mut e, stack, 4, 1);
+            set(&mut e, stack, X_COUNT, 3);
+            set(&mut e, stack, X_ITEMS_IN_LIST, 1);
+            let change = entry(&mut e, item, &[stack], 3);
+            put_entry(&mut e, this, change);
+            let words = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let sink = words.clone();
+            e.register_double(SET_ACTION_FLAG, move |e, a| {
+                sink.borrow_mut().push((a[0], a[1], a[2], e.caller_word()));
+                Ret::default()
+            });
+            e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+            remove_items(&mut e, this, owner, item, 0, taken, stack, 0, target);
+            let words = words.borrow();
+            assert_eq!(words.len(), 1, "{taken}");
+            let (form, list, flag, word) = words[0];
+            assert_eq!((form, flag, word), (owner, 4, Some(owner)), "{taken}");
+            // The whole stack flags the stack; part of it flags the copy split off.
+            assert_eq!(list == stack, whole, "{taken}");
+            assert_eq!(e.caller_word(), None, "{taken}");
+        }
+    }
+
     #[test]
     fn removal_with_the_drop_flag_places_the_items_in_the_world() {
         let mut e = tx2();

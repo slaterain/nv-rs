@@ -14242,6 +14242,41 @@ mod tests {
         assert_eq!(calls(&e, PROCESS_SLOTS + 0x12c), vec![vec![p.addr(), 0]]);
     }
 
+    /// The purchase hands MarkScriptEvent the buying actor (not the seller the owner gives) at
+    /// its `SetActionFlag` call, and the word is gone afterwards.
+    #[test]
+    fn process_buy_object_hands_mark_script_event_the_actor() {
+        let mut e = engine();
+        let p = process(&mut e);
+        let a = actor(&mut e);
+        let package = thing(&mut e);
+        let reference = thing(&mut e);
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry, reference);
+        e.mem.set_u32(entry + 4, 0x66);
+        e.mem.set_u32(entry + 0x14, 0x88);
+        e.mem.set_u32(p.addr() + 0x40, 0x1000);
+        e.mem.set_u32(p.addr() + 0x64, entry);
+        e.register_double(PROCESS_SLOTS + 0x22c, move |_, _| ret(package));
+        e.register(OBJECT_SLOTS + 0x144, |_, _| ret(1));
+        e.register(REFERENCE_BASE, |_, _| ret(0x77));
+        // The reference's owner is an NPC with a reference in high: the seller.
+        e.register_double(DYNAMIC_CAST, |_, _| ret(0x6500));
+        e.register_double(GET_ACTOR_REF_IN_HIGH, |_, _| ret(0x6600));
+        e.register_double(FORM_VALUE, |_, _| ret(0));
+        e.register_double(ACTOR_PAY_GOLD_TO_ACTOR, |_, _| ret(0));
+        let words = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let sink = words.clone();
+        e.register_double(SCRIPT_SET_ACTION_FLAG, move |e, a| {
+            sink.borrow_mut().push((a[0], e.caller_word()));
+            Ret::default()
+        });
+        e.set_hook_users(engine_core::extend::Hook::MarkScriptEvent, 1);
+        middle_high_process_process_buy_object(&mut e, p, a);
+        assert_eq!(*words.borrow(), vec![(0x6600, Some(a))]);
+        assert_eq!(e.caller_word(), None);
+    }
+
     #[test]
     fn process_dialogue_activate_other_package_ends_it() {
         let mut e = engine();
