@@ -555,6 +555,22 @@ mod equipped {
         e.mem.set_f32(TIMES + 8, 0.9);
         let want = f64::from((1.25f32 * 0.8f32) / 0.3f32);
         assert_eq!(run(&mut e, 0x2940, ACTOR, &[r(1)]), want);
+        // Two keys (the `>= 2` edge): `keyTimes[0]`.
+        e.mem.set_u32(GROUP + 0x14, 2);
+        assert_eq!(
+            run(&mut e, 0x2940, ACTOR, &[r(1)]),
+            f64::from((1.25f32 * 0.8f32) / 0.1f32),
+            "two keys"
+        );
+        // A mod's key count that wraps JIP's pointer maths: `4 * (0x4000_0002 - 2)` is 0 in
+        // 32 bits, so `keyTimes[0]` again (no overflow stop).
+        e.mem.set_u32(GROUP + 0x14, 0x4000_0002);
+        assert_eq!(
+            run(&mut e, 0x2940, ACTOR, &[r(1)]),
+            f64::from((1.25f32 * 0.8f32) / 0.1f32),
+            "the address wraps"
+        );
+        e.mem.set_u32(GROUP + 0x14, 3);
         e.mem.set_u8(WEAP + 0x11d, 0x21);
         e.mem.set_u32(ANIM + 0x104, 0x0421);
         assert_eq!(run(&mut e, 0x2940, ACTOR, &[r(1)]), want, "its own attack");

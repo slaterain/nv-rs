@@ -396,7 +396,8 @@ const SOUND_LEVEL: u32 = 0x364;
 /// `kXData_ExtraItemDropper` (its reference +0xC), `kXData_ExtraWeaponModFlags` (its byte +0xC).
 const EXTRA_ITEM_DROPPER: u32 = 0x39;
 const EXTRA_WEAPON_MOD_FLAGS: u32 = 0x8d;
-/// The game's attack-queued byte (`0x11E07AC`).
+/// The game's attack-queued byte (`0x11E07AC`). In the exe it is a dword holding 0 to 2, so
+/// reading its low byte answers the same.
 const ATTACK_QUEUED: u32 = 0x011e_07ac;
 /// `PickBestAnimation` (`00495740`, `thiscall`: the anim data, the group id, 0) and
 /// `GetTESAnimGroup` (`00496500`, `thiscall`: the anim data, the group id); the weapon types'
@@ -696,7 +697,10 @@ fn calculate_shots_per_sec(e: &mut Engine, w: &[u32]) -> Ret {
                 let keys = e.mem.u32(group + GROUP_NUM_KEYS);
                 if keys >= 2 {
                     let times = e.mem.u32(group + GROUP_KEY_TIMES);
-                    let t = e.mem.f32(times + 4 * (keys - 2));
+                    // `keyTimes[numKeys - 2]`: a mod's key count wraps as JIP's pointer maths.
+                    let t = e
+                        .mem
+                        .f32(times.wrapping_add(keys.wrapping_sub(2).wrapping_mul(4)));
                     a.set_result(e, f64::from((mult * anim_mult) / t));
                 }
             }

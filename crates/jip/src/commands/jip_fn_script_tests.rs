@@ -442,6 +442,21 @@ fn script_blocks_edges() {
     run(&mut e, 0x2815, 0, &[r(2), n(0), n(0x0e)]);
     assert_eq!(e.mem.u8(at[0]), 0x0e, "JIP writes the 0x0E it kept");
     assert!(blocks(&mut e, SCRIPT_A).is_empty());
+    // Enabling all (no type, then -1) with the two entries sharing one type address: given back
+    // in the order disabled, so the 0x0E kept last is the byte left, and the entry goes.
+    for all in [vec![r(2), n(0)], vec![r(2), n(0), n(-1)]] {
+        e.mem.set_u8(at[0], 0x25);
+        run(&mut e, 0x2815, 0, &[r(2), n(1), n(0x25)]);
+        run(&mut e, 0x2815, 0, &[r(2), n(1), n(0x0e)]);
+        assert_eq!(blocks(&mut e, SCRIPT_A).len(), 2);
+        run(&mut e, 0x2815, 0, &all);
+        assert_eq!(e.mem.u8(at[0]), 0x0e, "{all:?}: the order disabled");
+        assert!(!e
+            .ext::<Jip>()
+            .script
+            .disabled_blocks
+            .contains_key(&SCRIPT_A));
+    }
 }
 
 /// A walk that stops: data not starting with `ScriptName`, a block whose `End` is not where its

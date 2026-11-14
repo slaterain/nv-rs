@@ -225,6 +225,25 @@ fn in_faction() {
     assert_eq!(ask(&mut e, ACTOR, &[r(3)]), 0.0, "no list");
 }
 
+/// A faction list from a bad save that runs back into itself (the reference's own changes, and
+/// its base's list), the faction not in it: with the list guard row the walks end, not in.
+#[test]
+fn in_faction_with_a_list_that_loops_back() {
+    let mut e = setup();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
+    let ask = |e: &mut Engine, a: &[Vec<u8>]| run(e, 0x2704, ACTOR, a);
+    e.mem.set_u32(DATA, FACTION2);
+    e.mem.set_u8(DATA + 4, 1);
+    put_extra(&mut e, ACTOR + 0x44, X1, 0x5e, NODES);
+    node(&mut e, NODES, 0, NODES + 8);
+    node(&mut e, NODES + 8, DATA, NODES);
+    assert_eq!(ask(&mut e, &[r(2)]), 0.0, "own changes loop");
+    node(&mut e, NPC + 0x5c, DATA, NODES + 0x10);
+    node(&mut e, NODES + 0x10, 0, NPC + 0x5c);
+    assert_eq!(ask(&mut e, &[r(2), n(1)]), 0.0, "the base's list loops too");
+    assert_eq!(ask(&mut e, &[r(3)]), 1.0, "a faction in it is still found");
+}
+
 fn script_with_data(e: &mut Engine, script: u32, data: u32) {
     // ScriptName, one block (Begin 6: type 0, length 4), End: 4 + 10 + 4 bytes.
     let d: [u8; 18] = [
@@ -583,6 +602,41 @@ fn location_directions() {
         b"NE of Here"
     };
     assert_eq!(at(&mut e, 4850.0, 1215.6), want);
+}
+
+/// Two named markers in the same ring (radius 2 around the reference's cell 0,0) at different
+/// distances. JIP's ring walk starts at (-2,-2) going +y, then +x along y=2, -y along x=2, -x
+/// along y=-2: cell (2,0) is checked 11th, (0,-2) 15th; every hit nearer than the best so far
+/// replaces it, so the nearer one wins whichever is met first.
+#[test]
+fn location_two_markers_in_one_ring() {
+    let mut e = setup();
+    e.mem.set_u32(PLAIN + 0x40, CELL);
+    e.mem.set_u32(CELL + 0xc0, WORLD);
+    e.mem.set_u32(WORLD + 0x34, PCELL);
+    e.mem.set_u32(WORLD + 0x70, WORLD);
+    for (m, md, x) in [(M1, MD1, X2), (M2, MD2, X3)] {
+        e.mem.set_u32(m + 0x20, MARKER_STATIC);
+        put_extra(&mut e, m + 0x44, x, 0x2c, md);
+    }
+    text(&mut e, MD1 + 4, TEXT, b"Goodsprings");
+    text(&mut e, MD2 + 4, TEXT + 0x40, b"Primm");
+    node(&mut e, PCELL + 0xac, M1, NODES);
+    node(&mut e, NODES, M2, 0);
+    place(&mut e, PLAIN, 2048.0, 2048.0, 0.0);
+    // Goodsprings in cell (2,0), 8144 east; Primm in cell (0,-2), 7240 south: Primm, met
+    // second, is nearer. x/d = 0 (within 0.26) and y - y' = 7240 > 0: "North of".
+    place(&mut e, M1, 10192.0, 2048.0, 0.0);
+    place(&mut e, M2, 2048.0, -5192.0, 0.0);
+    let name = |e: &mut Engine| {
+        let v = run(e, 0x2709, PLAIN, &[]);
+        string_result(e, v)
+    };
+    assert_eq!(name(&mut e), b"North of Primm");
+    // Goodsprings moved to 6244 east (still cell 2,0): now nearer and met first; x/d = -1:
+    // "West of".
+    place(&mut e, M1, 8292.0, 2048.0, 0.0);
+    assert_eq!(name(&mut e), b"West of Goodsprings");
 }
 
 /// The grid cell: truncation, then an arithmetic shift by 12 (so -1 is cell -1), x high, y low.

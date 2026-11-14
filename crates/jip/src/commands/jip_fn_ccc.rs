@@ -136,7 +136,8 @@ fn extra_faction_rank(e: &mut Engine, refr: u32, faction: u32) -> i8 {
         return -1;
     }
     let mut node = e.mem.u32(x + EXTRA_WORD);
-    while node != 0 {
+    let mut walked = 0usize;
+    while node != 0 && super::list_step(e, &mut walked) {
         let data = e.mem.u32(node);
         node = e.mem.u32(node + 4);
         if data != 0 && e.mem.u32(data) == faction {
