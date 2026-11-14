@@ -47,6 +47,15 @@ fn prepare(e: &mut Engine) {
         eax: 0x48f,
         ..Ret::default()
     });
+    // `ExtraDataList::GetCanNotWear` (`00418b10`, JIP's wrap there), when the test engine has no
+    // translation of it: the exe's test, `BaseExtraList::HasExtra(0x3E)` (`0040fe80`), the bit of
+    // type 0x3E in the presence bits at `+8` (byte `+0xF`, bit `0x40`).
+    if !e.is_registered(0x0041_8b10) {
+        e.register(0x0041_8b10, |e, a| Ret {
+            eax: u32::from(e.mem.u8(a[0] + 0xf) & 0x40 != 0),
+            ..Ret::default()
+        });
+    }
 }
 
 /// Opens or closes the console as the echo sees it.

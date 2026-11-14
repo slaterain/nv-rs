@@ -123,6 +123,13 @@ const JIP: &[Owner] = &[Owner::Jip];
 /// address; xNVSE detours its entry (`Hooks_Other.cpp`, `Hooks_Script.cpp` (xNVSE)). An import
 /// slot is registered by the platform layer, as Windows' loader fills it; xNVSE writes the slot.
 pub const WRAPS: &[Entry] = &[
+    // ExtraDataList::GetCanNotWear: false while JIP LN NVSE's CCCSetEquipped equips (its
+    // GetCannotWearHook replaces the function as JIP starts; reached only by address).
+    Entry {
+        addr: 0x0041_8b10,
+        owners: JIP,
+        step: "3.5d",
+    },
     // ScriptEventList destructor: the string and array variables an event list holds are freed.
     Entry {
         addr: 0x0041_af70,
