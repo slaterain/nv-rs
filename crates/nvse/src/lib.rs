@@ -47,9 +47,9 @@
 //!   `Let`, `eval`, `while`/`ForEach`, `Call`, `Begin Function`, lambdas, every expression
 //!   argument) as the parse routines the game's compiler calls, and its hooks in that compiler (the
 //!   command names, the preprocessor, `#version` tags, the growing script data).
-//! - I-14 (part) [`newlang`]: xNVSE's new script language (scripts starting with `name`): its lexer,
-//!   parser, syntax tree and the passes up to the type checker, with its error messages; not yet
-//!   called by the compile (its code generation comes next).
+//! - I-14 [`newlang`]: xNVSE's new script language (scripts starting with `name`): its lexer,
+//!   parser, syntax tree, passes and code generation, which the game's compile hands such a
+//!   script to (the console, function files, a plugin's compile).
 //! - [`commands`]: the commands built so far, by xNVSE's `Commands_*.cpp` file.
 //!
 //! [`install`] runs once per engine, after the fix rows (`host::Host::start_with`); the engine

@@ -1096,7 +1096,8 @@ impl<'a> Parser<'a> {
             return self.fn_expr();
         }
         self.error_at_current("Expected expression.")?;
-        unreachable!("an error always fails")
+        // The error above always fails the step.
+        Err(Fail::Caught)
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Parser.cpp: Parser::IdentExpr.

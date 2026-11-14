@@ -8,7 +8,7 @@
 //! variable and reference lists made again), `Utilities.cpp` (`vShowRuntimeError`).
 
 use super::ast::{BlockInfo, CmdInfo, ParamInfo, Parse};
-use super::Env;
+use super::{Env, Fail};
 use crate::commands::{dynamic_cast, rtti};
 use crate::compiler::{self, sc, tt, Code};
 use crate::table::{self, guest_text, record_of, Record, Returns};
@@ -222,6 +222,42 @@ fn is_inventory_type(t: u8) -> bool {
 }
 
 impl EngineEnv<'_> {
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), CommandTable.cpp:
+    // CommandTable::GetParentPlugin; Utils.cpp: IsDefaultParse.
+    /// The record of `opcode` at `at` as the passes read it.
+    fn cmd_info(&mut self, opcode: u32, at: u32) -> CmdInfo {
+        let r = Record::read(self.e, at);
+        let parse = if GAME_PARSERS.contains(&r.parse) || r.parse == table::DEFAULT_PARSE {
+            Parse::Default
+        } else if r.parse == table::CALL_PARSE {
+            Parse::Call
+        } else {
+            Parse::Other
+        };
+        // xNVSE's own commands belong to its own plugin info ("NVSE", version 6); a built-in
+        // plugin's to the plugin that registered from the greatest base at or below the opcode.
+        let plugin = if r.opcode == 0 || r.opcode < NVSE_OPCODE_START {
+            None
+        } else if r.opcode < NVSE_OPCODE_TEST {
+            Some((b"NVSE".to_vec(), crate::VERSION.0))
+        } else {
+            crate::plugins::built_ins(self.e)
+                .into_iter()
+                .filter(|p| p.opcode_base <= r.opcode)
+                .max_by_key(|p| p.opcode_base)
+                .map(|p| (p.name.as_bytes().to_vec(), p.version))
+        };
+        CmdInfo {
+            opcode: r.opcode as u16,
+            long_name: guest_text(self.e, r.long_name),
+            needs_parent: r.needs_ref != 0,
+            params: params_of(self.e, r.params, r.param_count),
+            parse,
+            return_type: return_token_type(table::return_type(self.e, opcode)),
+            plugin,
+        }
+    }
+
     /// The index of the first of `count` names (pointers from `table`, `stride` apart) equal to
     /// `text`, or `count`.
     fn name_index(&mut self, table: u32, stride: u32, count: u32, text: &[u8]) -> u32 {
@@ -262,44 +298,14 @@ impl Env for EngineEnv<'_> {
         crate::plugins::listed(self.e, name).is_some()
     }
 
-    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), CommandTable.cpp:
-    // CommandTable::GetParentPlugin; Utils.cpp: IsDefaultParse.
     fn command(&mut self, name: &[u8]) -> Option<CmdInfo> {
         let opcode = compiler::command_by_name(self.e, name)?;
-        let at = record_of(self.e, opcode);
-        if at == 0 {
-            return None;
-        }
-        let r = Record::read(self.e, at);
-        let parse = if GAME_PARSERS.contains(&r.parse) || r.parse == table::DEFAULT_PARSE {
-            Parse::Default
-        } else if r.parse == table::CALL_PARSE {
-            Parse::Call
-        } else {
-            Parse::Other
-        };
-        // xNVSE's own commands belong to its own plugin info ("NVSE", version 6); a built-in
-        // plugin's to the plugin that registered from the greatest base at or below the opcode.
-        let plugin = if r.opcode == 0 || r.opcode < NVSE_OPCODE_START {
-            None
-        } else if r.opcode < NVSE_OPCODE_TEST {
-            Some((b"NVSE".to_vec(), crate::VERSION.0))
-        } else {
-            crate::plugins::built_ins(self.e)
-                .into_iter()
-                .filter(|p| p.opcode_base <= r.opcode)
-                .max_by_key(|p| p.opcode_base)
-                .map(|p| (p.name.as_bytes().to_vec(), p.version))
-        };
-        Some(CmdInfo {
-            opcode: r.opcode as u16,
-            long_name: guest_text(self.e, r.long_name),
-            needs_parent: r.needs_ref != 0,
-            params: params_of(self.e, r.params, r.param_count),
-            parse,
-            return_type: return_token_type(table::return_type(self.e, opcode)),
-            plugin,
-        })
+        self.command_by_opcode(opcode as u16)
+    }
+
+    fn command_by_opcode(&mut self, opcode: u16) -> Option<CmdInfo> {
+        let at = record_of(self.e, u32::from(opcode));
+        (at != 0).then(|| self.cmd_info(u32::from(opcode), at))
     }
 
     fn form_by_name(&mut self, name: &[u8]) -> u32 {
@@ -572,10 +578,127 @@ impl Env for EngineEnv<'_> {
     fn script_type(&mut self) -> Option<u16> {
         (self.script != 0).then(|| self.e.mem.u16(self.script + SCRIPT_TYPE))
     }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Compiler.h:
+    // Compiler::ResolveObjReference.
+    fn resolve_reference(&mut self, name: &[u8], add: bool) -> Result<u16, Fail> {
+        let form = if name.eq_ignore_ascii_case(b"player") {
+            self.form_by_id(0x14)
+        } else {
+            self.form_by_name(name)
+        };
+        if form == 0 {
+            return Ok(0);
+        }
+        let r = dynamic_cast(self.e, form, RTTI_TES_FORM, RTTI_TES_OBJECT_REFR);
+        if r != 0 && self.e.mem.u32(r + FORM_FLAGS) & PERSISTENT == 0 {
+            return Err(Fail::Crash("Object reference must be persistent"));
+        }
+        let head = self.script + sc::REFS;
+        // `tList::Iterator`, from the head to a node with no item and no next.
+        let mut node = head;
+        let mut i: u16 = 1;
+        for _ in 0..0x10_0000 {
+            if node == 0 {
+                break;
+            }
+            let (item, next) = (self.e.mem.u32(node), self.e.mem.u32(node + 4));
+            if item == 0 && next == 0 {
+                break;
+            }
+            if item != 0 && self.e.mem.u32(item + REF_FORM) == form {
+                return Ok(i);
+            }
+            i = i.wrapping_add(1);
+            node = next;
+        }
+        if !add {
+            return Ok(1);
+        }
+        let v = self
+            .e
+            .call(compiler::FORM_HEAP_ALLOCATE, &args![0x10u32])
+            .u32();
+        self.e.mem.write(v, &[0; 0x10]);
+        compiler::string_set(self.e, v, name);
+        self.e.mem.set_u32(v + REF_FORM, form);
+        compiler::list_append(self.e, head, v);
+        Ok(list_count(self.e, head) as u16)
+    }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Compiler.cpp:
+    // Compiler::VisitIdentExpr (`refList.GetNthItem(refIdx - 1)->form->typeID`).
+    fn reference_is_global(&mut self, index: u16) -> bool {
+        let mut node = self.script + sc::REFS;
+        for _ in 1..index {
+            if node == 0 {
+                break;
+            }
+            node = self.e.mem.u32(node + 4);
+        }
+        let item = if node == 0 { 0 } else { self.e.mem.u32(node) };
+        let form = if item == 0 {
+            0
+        } else {
+            self.e.mem.u32(item + REF_FORM)
+        };
+        form != 0 && self.e.mem.u8(form + 4) == crate::newlang::passes::types::FORM_GLOBAL
+    }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Compiler.cpp: Compiler::Visit (its
+    // end).
+    fn finish_script(&mut self, data: &[u8], name: Option<&[u8]>, used: usize) {
+        let s = self.script;
+        if let Some(name) = name {
+            let size = (name.len() as u32 + 1).next_multiple_of(4);
+            self.e.with_stack(size, |e, at| {
+                e.mem.write(at.addr(), name);
+                e.mem.set_u8(at.addr() + name.len() as u32, 0);
+                e.vcall(s, SET_EDITOR_ID, &args![at.addr()]);
+            });
+        }
+        let e = &mut *self.e;
+        e.mem.set_u8(s + sc::COMPILED, 1);
+        e.mem.set_u32(s + sc::DATA_LEN, data.len() as u32);
+        let refs = list_count(e, s + sc::REFS);
+        let vars = list_count(e, s + sc::VARS);
+        e.mem.set_u32(s + sc::NUM_REFS, refs);
+        e.mem.set_u32(s + sc::VAR_COUNT, vars);
+        e.mem
+            .set_u32(s + sc::UNUSED_VARS, vars.wrapping_sub(used as u32));
+        let at = e
+            .call(compiler::FORM_HEAP_ALLOCATE, &args![data.len() as u32])
+            .u32();
+        e.mem.write(at, data);
+        e.mem.set_u32(s + sc::DATA, at);
+    }
 }
 
 /// `Script::info.type`.
 const SCRIPT_TYPE: u32 = 0x28;
+/// `TESForm::flags` and its persistent bit (`kFormFlags_QuestItem`).
+const FORM_FLAGS: u32 = 8;
+const PERSISTENT: u32 = 0x400;
+/// `Script::RefVariable::form`.
+const REF_FORM: u32 = 8;
+/// `TESForm::SetEditorID_AtRuntime`, the virtual after `GetName` (the run-time `Script`'s answers
+/// true and keeps nothing: vtable `01037094`, `+0x134` holds `00401290`).
+const SET_EDITOR_ID: u32 = 0x134;
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameTypes.h: tList::Count.
+/// `tList::Count`: 0 for an empty head, else every node from the head.
+fn list_count(e: &Engine, head: u32) -> u32 {
+    if e.mem.u32(head) == 0 {
+        return 0;
+    }
+    let mut n = 1;
+    let mut node = e.mem.u32(head + 4);
+    while node != 0 && n < 0x10_0000 {
+        n += 1;
+        node = e.mem.u32(node + 4);
+    }
+    n
+}
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameTypes.h: tList::DeleteAll.
 /// `tList::DeleteAll`: the head's item freed (its destructor not run), then each later item's
@@ -605,4 +728,4 @@ fn delete_all(e: &mut Engine, head: u32, variables: bool) {
 
 #[cfg(test)]
 #[path = "engine_env_tests.rs"]
-mod tests;
+pub(crate) mod tests;

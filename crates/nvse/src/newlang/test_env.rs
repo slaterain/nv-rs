@@ -2,12 +2,15 @@
 //! names, the errors printed collected.
 
 use super::ast::{BlockInfo, CmdInfo, ParamInfo, Parse};
-use super::Env;
+use super::{Env, Fail};
 use crate::compiler::{tt, vt, NVSE_ARRAY, NVSE_FORM, NVSE_NUMBER, NVSE_STRING};
 use crate::newlang::passes::types::{FORM_GLOBAL, FORM_QUEST, FORM_REFR};
 
 /// A script's variables: name and type.
 pub type Vars = Vec<(Vec<u8>, u8)>;
+
+/// What the code generation left: the data, the editor id set, the names read.
+pub type Finished = (Vec<u8>, Option<Vec<u8>>, usize);
 
 /// A stand-in form.
 #[derive(Clone, Debug)]
@@ -32,6 +35,12 @@ pub struct TestEnv {
     pub enums: Vec<(u32, &'static [u8], u32, u32)>,
     pub script: Option<(u16, Vars)>,
     pub written_vars: Option<Vec<(Vec<u8>, u8, u32)>>,
+    /// The forms that are references not persistent.
+    pub loose: Vec<u32>,
+    /// The compiling script's references (name, form).
+    pub refs: Vec<(Vec<u8>, u32)>,
+    /// What the code generation left: the data, the editor id set, the names read.
+    pub finished: Option<Finished>,
 }
 
 fn p(name: &str, kind: u32, optional: bool) -> ParamInfo {
@@ -196,6 +205,31 @@ impl Default for TestEnv {
                     Default,
                     tt::INVALID,
                 ),
+                // The commands the code generation writes.
+                cmd(
+                    "Let",
+                    0x1539,
+                    vec![p("expression", 0, false)],
+                    Other,
+                    tt::INVALID,
+                ),
+                cmd(
+                    "eval",
+                    0x153a,
+                    vec![p("expression", 0, false)],
+                    Other,
+                    tt::INVALID,
+                ),
+                cmd("PluginVersion", 0x1676, vec![], Other, tt::INVALID),
+                cmd("Jmp_If_False", 0x1680, vec![], Other, tt::INVALID),
+                cmd("Jmp", 0x1681, vec![], Other, tt::INVALID),
+                cmd("Ternary", 0x166e, vec![], Other, tt::AMBIGUOUS),
+                cmd("MatchesAnyOf", 0x166f, vec![], Other, tt::NUMBER),
+                cmd("ar_Exists", 0x1671, vec![], Other, tt::NUMBER),
+                cmd("ar_List", 0x1567, vec![], Other, tt::ARRAY),
+                cmd("ar_Map", 0x1568, vec![], Other, tt::ARRAY),
+                cmd("SetModLocalData", 0x1549, vec![], Other, tt::INVALID),
+                cmd("GetModLocalData", 0x1548, vec![], Other, tt::AMBIGUOUS),
             ],
             forms: vec![
                 Form {
@@ -262,11 +296,31 @@ impl Default for TestEnv {
                     script_vars: None,
                     fits: vec![],
                 },
+                Form {
+                    id: 0x107,
+                    name: b"MyMessage",
+                    ty: 0x62,
+                    script_type: None,
+                    script_vars: None,
+                    fits: vec![0x31],
+                },
+                // A reference that is not persistent.
+                Form {
+                    id: 0x108,
+                    name: b"LooseRef",
+                    ty: FORM_REFR,
+                    script_type: None,
+                    script_vars: None,
+                    fits: vec![4],
+                },
             ],
             plugins: vec![b"JIP LN NVSE"],
             enums: vec![(5, b"Health", 16, 2), (8, b"X", b'X' as u32, 1)],
             script: None,
             written_vars: None,
+            loose: vec![0x108],
+            refs: Vec::new(),
+            finished: None,
         }
     }
 }
@@ -347,5 +401,36 @@ impl Env for TestEnv {
     }
     fn script_type(&mut self) -> Option<u16> {
         self.script.as_ref().map(|(t, _)| *t)
+    }
+    fn command_by_opcode(&mut self, opcode: u16) -> Option<CmdInfo> {
+        self.commands.iter().find(|c| c.opcode == opcode).cloned()
+    }
+    fn resolve_reference(&mut self, name: &[u8], add: bool) -> Result<u16, Fail> {
+        let form = if name.eq_ignore_ascii_case(b"player") {
+            self.form_by_id(0x14)
+        } else {
+            self.form_by_name(name)
+        };
+        if form == 0 {
+            return Ok(0);
+        }
+        if self.form_type(form) == FORM_REFR && self.loose.contains(&form) {
+            return Err(Fail::Crash("Object reference must be persistent"));
+        }
+        if let Some(i) = self.refs.iter().position(|(_, f)| *f == form) {
+            return Ok(i as u16 + 1);
+        }
+        if !add {
+            return Ok(1);
+        }
+        self.refs.push((name.to_vec(), form));
+        Ok(self.refs.len() as u16)
+    }
+    fn reference_is_global(&mut self, index: u16) -> bool {
+        let form = self.refs.get(usize::from(index) - 1).map_or(0, |r| r.1);
+        self.form_type(form) == FORM_GLOBAL
+    }
+    fn finish_script(&mut self, data: &[u8], name: Option<&[u8]>, used: usize) {
+        self.finished = Some((data.to_vec(), name.map(<[u8]>::to_vec), used));
     }
 }

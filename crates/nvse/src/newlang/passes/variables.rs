@@ -48,7 +48,8 @@ impl<'a> VariableResolution<'a> {
     }
 
     fn current(&self) -> usize {
-        *self.stack.last().expect("a scope is always open")
+        // The root scope (0) is open for the whole pass.
+        self.stack.last().copied().unwrap_or(0)
     }
 
     fn enter_scope(&mut self) {
@@ -139,10 +140,11 @@ impl<'a> VariableResolution<'a> {
                     continue;
                 }
                 // Never refused: a second variable of the same name finds the first, still marked as
-                // the script's own, which takes the later type.
-                let added = self
-                    .add_variable(&name, ty)
-                    .expect("a script variable is never refused");
+                // the script's own, which takes the later type. Script text must never stop the
+                // game, so were it refused the compile would fail here, silently.
+                let Some(added) = self.add_variable(&name, ty) else {
+                    return Err(Fail::Crash("VariableResolution: a script variable refused"));
+                };
                 self.ast.var_mut(added).pre_existing = true;
             }
         }

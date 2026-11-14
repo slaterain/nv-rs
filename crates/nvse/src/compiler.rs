@@ -24,8 +24,9 @@
 //! data, not its address, so a loop over the data's growth gets the bytes xNVSE meant to write
 //! ([`begin_loop_parse`]).
 //!
-//! Not here: the new script language (`Compiler/`, scripts starting with `name`; deferred), and
-//! `ExpressionParser::ParseParentheses` (the GECK's inline expressions; editor only).
+//! Not here: the new script language (`Compiler/`, scripts starting with `name`:
+//! [`crate::newlang`]), and `ExpressionParser::ParseParentheses` (the GECK's inline
+//! expressions; editor only).
 
 use crate::expr::{can_convert, op, op_symbol, operand_count, Ty};
 use crate::table::{guest_text, opcode_by_name, record_of, return_type, Returns};
@@ -2166,9 +2167,10 @@ impl Parser {
         script: u32,
     ) -> Option<Vec<(u32, u8)>> {
         if text.starts_with(b"name") {
-            // The new script language's function header (`Compiler::PreProcessNVSEScript`):
-            // that compiler is not built (plan step 3.8, deferred), so it does not parse here.
-            return None;
+            // The new script language's function (`Compiler::PreProcessNVSEScript`): no message
+            // when it has none.
+            let mut env = crate::newlang::engine_env::engine_env(e, 0);
+            return crate::newlang::user_function_params(&mut env, text);
         }
         let names = crate::compile_hooks::user_function_param_names(text);
         let params = names.and_then(|n| {
