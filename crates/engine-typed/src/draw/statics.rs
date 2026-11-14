@@ -97,12 +97,6 @@ pub(crate) const CLASSES: &[(u32, u32)] = &[
 
 /// A geometry's shader (+0xc0).
 const GEOMETRY_SHADER: u32 = 0xc0;
-/// The render-state cache's slots 0xf8 and 0x2c (`NiDX9RenderState`, vtable `010f088c`), still translations.
-const CACHE_SLOT_F8: u32 = 0x00e8_8ad0;
-const CACHE_SLOT_2C: u32 = 0x00e8_8690;
-/// A geometry's immediate draw (slot 0xe0) and the particles' (`NiParticles::RenderImmediate`).
-const SLOT_RENDER_IMMEDIATE: u32 = 0xe0;
-const PARTICLES_RENDER_IMMEDIATE: u32 = 0x00a9_b1f0;
 
 /// The first reason the passes' shader classes keep own state in guest memory: the blocking translation of a
 /// listed class, or the vtable of a class not listed. `None` when every pass's class is clean.
@@ -113,14 +107,8 @@ pub fn ownable(e: &Engine, passes: &[u32]) -> Option<u32> {
         if geometry == 0 {
             continue;
         }
-        // The render-state cache's slots the geometry draws still reach as translations: a skinned geometry's
-        // bone matrices end with slot 0xf8 (`00e88ad0`), particles' quads start with slot 0x2c (`00e88690`).
-        if super::packet::skin_instance(e, geometry) != 0 {
-            return Some(CACHE_SLOT_F8);
-        }
-        if crate::slot_target(e, geometry, SLOT_RENDER_IMMEDIATE) == PARTICLES_RENDER_IMMEDIATE {
-            return Some(CACHE_SLOT_2C);
-        }
+        // The render-state cache's slots a skinned geometry's bone matrices (slot 0xf8, `00e88ad0`) and the
+        // particles' quads (slot 0x2c, `00e88690`) reach are typed in the shader family, through the own accessors.
         let shader = e.global::<u32>(geometry.wrapping_add(GEOMETRY_SHADER));
         if shader == 0 {
             continue;
@@ -269,7 +257,9 @@ mod tests {
             "own_set",
             // Helpers whose accesses to the own blocks go through the accessors. The constant entries, switch objects
             // and pass stages some of them reach through an owned slot (an entry's +8 and +0x20, a stage's +8) are
-            // heap objects the cut does not own yet: piece 4 (PLAN.md step 2).
+            // heap objects the cut does not own: in the drawing thread's plan every draw of the frame after the cut runs
+            // on the drawing side, so main's tail runs none of the set-ups that write them (the census of main's tail is
+            // to confirm it).
             "counted",
             "apply_mask",
             "enable_entries",

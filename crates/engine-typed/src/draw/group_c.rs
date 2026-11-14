@@ -6,7 +6,7 @@
 
 use super::capture;
 use super::{own, packet};
-use crate::shader::{self, state};
+use crate::shader::{self, lighting, state};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
@@ -281,6 +281,43 @@ pub fn set_light_entry(
     }
 }
 
+// Typed from 00bb95b0
+/// A light table entry's first half set, `cdecl(index, four words)`: entry `index` of the table at `01201c80` takes
+/// the words at +0 to +0xc.
+pub fn set_light_half(
+    e: &mut Engine,
+    index: u32,
+    word_0: u32,
+    word_1: u32,
+    word_2: u32,
+    word_3: u32,
+) {
+    let entry = LIGHT_TABLE.wrapping_add(index.wrapping_shl(5)); // own: an address, written through set_constant_word
+    for (offset, word) in (0u32..).zip([word_0, word_1, word_2, word_3]) {
+        own::set_constant_word(e, entry.wrapping_add(4 * offset), word);
+    }
+}
+
+/// The lighting shaders' ambient constant (`01201b30`, four words), its entry (the pointer at `012010c4`, made at load)
+/// and the byte that says the ambient is set (`01200bf4`).
+const AMBIENT: u32 = 0x0120_1b30;
+const AMBIENT_ENTRY: u32 = 0x0120_10c4;
+const AMBIENT_SET: u32 = 0x0120_0bf4;
+
+// Typed from 00bbb790
+/// The ambient set, `cdecl(colour, byte)`: the four words at `colour` into the ambient constant; the ambient's entry
+/// switched off when the byte and the set byte are both clear, else on; the set byte takes the byte.
+pub fn set_ambient(e: &mut Engine, colour: Ptr, byte: u8) {
+    for k in 0..4u32 {
+        let word = e.global::<u32>(colour.addr().wrapping_add(4 * k)); // own: the caller's colour, a local
+        own::set_constant_word(e, AMBIENT + 4 * k, word);
+    }
+    let entry = capture::own_at::<u32>(e, AMBIENT_ENTRY);
+    let on = byte != 0 || own::constant_byte(e, AMBIENT_SET) != 0;
+    own::set_entry_enabled(e, entry, on);
+    own::set_constant_byte(e, AMBIENT_SET, byte);
+}
+
 /// The flag byte the pass end clears (`01200863`) and the entry it switches off (the pointer at
 /// `012010bc`, made at load).
 const PASS_END_FLAG: u32 = 0x0120_0863;
@@ -375,4 +412,149 @@ pub(crate) fn property_distance_fade(e: &mut Engine, property: u32) -> f64 {
     } else {
         e.vcall(property, SLOT_DISTANCE_FADE, &[]).f64()
     }
+}
+/// The zero colour's four words (a constant of the exe).
+fn zero_colour(e: &Engine) -> [u32; 4] {
+    std::array::from_fn(|i| e.global::<u32>(lighting::ZERO_COLOUR + 4 * lighting::idx(i)))
+    // own: a constant of the exe
+}
+
+/// Three floats of a pass light's light from `offset` times `strength`, in the exe's operand order (the first two
+/// loaded and multiplied, the third the memory operand).
+fn scaled_colour(e: &Engine, data: u32, offset: u32, strength: f32) -> [f32; 3] {
+    [
+        lighting::light_value(e, data, offset) * strength,
+        lighting::light_value(e, data, offset + 4) * strength,
+        strength * lighting::light_value(e, data, offset + 8),
+    ]
+}
+
+/// The light table's first half (`00bb95b0`, the draw family's) set to the zero colour for light `index`.
+fn zero_light(e: &mut Engine, index: u32) {
+    let zero = zero_colour(e);
+    typed_call!(
+        super::FAMILY,
+        0x00bb_95b0,
+        set_light_half(e, index, zero[0], zero[1], zero[2], zero[3])
+    );
+}
+
+/// A light table entry (`00bb95e0`, the draw family's): the first four words in its second half, the second four
+/// in its first.
+fn light_entry(e: &mut Engine, index: u32, first: [u32; 4], second: [u32; 4]) {
+    typed_call!(
+        super::FAMILY,
+        0x00bb_95e0,
+        set_light_entry(
+            e, index, first[0], first[1], first[2], first[3], second[0], second[1], second[2],
+            second[3]
+        )
+    );
+}
+
+// Typed from 00b70de0
+/// Sets the lighting shader's light `index` from a light with a direction (unnamed in the engine map; `cdecl (index,
+/// light, scale)`): without a light, the light table's first half (`00bb95b0`) the zero colour. Otherwise its light's
+/// direction (+0xf0, w the shader property's vtable +0x10c or 1.0) and colour go to the light table (`00bb95e0`): the
+/// colour is the light's +0xd4 times its capped strength, times `scale`, times the pass light's +0xd0 (and times
+/// `011f9190` with the HDR switch and not `011f9427`), w the pass light's +0xd4. On the way the light's +0xc8 colour
+/// times the capped strength, brightened and times `scale` (w 1.0), goes to the ambient (`00bbb790`) with whether
+/// `scale` is below 1.0. The pass light and its light are read through the packet. Main thread only: `f32` maths.
+pub fn direction_light(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
+    let light = light.addr();
+    if light == 0 {
+        zero_light(e, index);
+        return;
+    }
+    let object = lighting::shader_object(e);
+    let data = packet::pass_light_word(e, light, 0xf8);
+    let direction: [u32; 3] =
+        std::array::from_fn(|i| packet::light_value_word(e, data, 0xf0 + 4 * lighting::idx(i)));
+    let w = if object != 0 {
+        crate::anim_keys::narrow(e.vcall(object, 0x10c, &args![]).f64())
+    } else {
+        1.0
+    };
+    let threshold = e.global::<f32>(lighting::THRESHOLD); // own: main's frame value, value packet B
+    let strength = lighting::capped_strength(e, data);
+    let mut colour = scaled_colour(e, data, 0xc8, strength);
+    if let Some(bright) = lighting::brighten(e, colour, threshold) {
+        colour = bright;
+    }
+    let scaled = colour.map(|component| component * scale);
+    let below_full = u8::from(1.0 > scale);
+    e.with_stack(0x10, |e, adjusted| {
+        let adjusted = adjusted.addr();
+        for (i, component) in scaled.iter().enumerate() {
+            capture::set_own_at::<f32>(e, adjusted + 4 * lighting::idx(i), *component);
+        }
+        capture::set_own_at::<f32>(e, adjusted + 0xc, 1.0);
+        typed_call!(
+            super::FAMILY,
+            0x00bb_b790,
+            set_ambient(e, Ptr::new(adjusted), below_full)
+        );
+    });
+    let mut strength = strength * scale * f32::from_bits(packet::pass_light_word(e, light, 0xd0));
+    if e.global::<u8>(lighting::HDR) != 0 && e.global::<u8>(lighting::NO_EXTRA_SCALE) == 0 {
+        // own: main's frame value, value packet B
+        strength *= e.global::<f32>(lighting::EXTRA_SCALE); // own: main's frame value, value packet B
+    }
+    let colour = scaled_colour(e, data, 0xd4, strength);
+    let alpha = packet::pass_light_word(e, light, 0xd4);
+    light_entry(
+        e,
+        index,
+        [direction[0], direction[1], direction[2], w.to_bits()],
+        [
+            colour[0].to_bits(),
+            colour[1].to_bits(),
+            colour[2].to_bits(),
+            alpha,
+        ],
+    );
+}
+
+// Typed from 00b71130
+/// Sets the lighting shader's light `index` (below 20) of its other set (unnamed in the engine map; `cdecl (index,
+/// light, scale)`): without a light, the light table's first half (`00bb95b0`) the zero colour; otherwise the light
+/// table (`00bb95e0`) gets its light's position (+0x8c, w its radius +0xe0) and, for `scale` below 1.0, the zero
+/// colour, else the light's +0xd4 colour times its strength (held to 1.0 unless the HDR switch: `0040ebd0`), `scale`
+/// and the pass light's +0xd0; w the pass light's +0xd4. The pass light and its light are read through the packet.
+/// Main thread only: `f32` maths.
+pub fn other_light(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
+    if index >= 0x14 {
+        return;
+    }
+    let light = light.addr();
+    if light == 0 {
+        zero_light(e, index);
+        return;
+    }
+    let data = packet::pass_light_word(e, light, 0xf8);
+    let first: [u32; 4] =
+        [0x8cu32, 0x90, 0x94, 0xe0].map(|at| packet::light_value_word(e, data, at));
+    // The exe also reads +0xe4 and +0xe8 into locals it never uses.
+    let _ = (
+        packet::light_value_word(e, data, 0xe4),
+        packet::light_value_word(e, data, 0xe8),
+    );
+    let colour = if 1.0 > scale {
+        let zero = zero_colour(e);
+        [zero[0], zero[1], zero[2]]
+    } else {
+        let mut strength = lighting::light_value(e, data, 0xc4);
+        if e.global::<u8>(lighting::HDR) == 0 {
+            // own: main's frame value, value packet B
+            strength = typed_call!(
+                crate::draw_f::FAMILY,
+                0x0040_ebd0,
+                crate::draw_f::helpers::float_min(e, 1.0, strength)
+            );
+        }
+        let strength = strength * scale * f32::from_bits(packet::pass_light_word(e, light, 0xd0));
+        scaled_colour(e, data, 0xd4, strength).map(f32::to_bits)
+    };
+    let alpha = packet::pass_light_word(e, light, 0xd4);
+    light_entry(e, index, first, [colour[0], colour[1], colour[2], alpha]);
 }

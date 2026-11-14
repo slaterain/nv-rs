@@ -864,11 +864,11 @@ pub(crate) fn transform_word(e: &Engine, transform: u32, offset: u32) -> u32 {
     e.global::<u32>(transform.wrapping_add(offset))
 }
 
-/// The light of an accumulator's shadow scene node (+0x194, read in place: open, piece 4): the node's +0xe0, the
-/// packet's (the cut copies the scene's node 0's).
+/// The light of an accumulator's shadow scene node (+0x194, then the node's +0xe0), the packet's (the cut copies both
+/// for the drawn accumulator and the shader accumulator).
 #[inline(always)]
 pub(crate) fn accumulator_lights(e: &Engine, accumulator: u32) -> u32 {
-    let node = e.global::<u32>(accumulator.wrapping_add(0x194));
+    let node = accumulator_shadow_node(e, accumulator);
     scene_node_light(e, node)
 }
 
@@ -878,10 +878,10 @@ pub(crate) fn first_light(e: &Engine, lights: u32) -> u32 {
     pass_light_word(e, lights, 0xf8)
 }
 
-/// A light's word at `offset` (+0xc8 and +0xd4 its two colours, +0xf0 to +0xf8 its direction).
+/// An accumulator's shadow scene node (+0x194), the packet's.
 #[inline(always)]
-pub(crate) fn light_word(e: &Engine, light: u32, offset: u32) -> u32 {
-    e.global::<u32>(light.wrapping_add(offset))
+pub(crate) fn accumulator_shadow_node(e: &Engine, accumulator: u32) -> u32 {
+    capture::word(e, accumulator, 0x194)
 }
 
 /// The byte that turns the point lights on (`011f9ef0`).
@@ -1183,18 +1183,23 @@ pub(crate) fn water_byte(e: &Engine, property: u32, offset: u32) -> u8 {
     e.global::<u8>(property.wrapping_add(offset))
 }
 
-/// A water property's light list (+0x128, the first node), a node's light (+8) and the next node (+0).
+/// A water property's light list (+0x128, the first node), its light count (+0x130), a node's light (+8) and the next
+/// node (+0): the packet's (the cut copies the list, its nodes and lights).
 #[inline(always)]
 pub(crate) fn water_lights(e: &Engine, property: u32) -> u32 {
-    e.global::<u32>(property.wrapping_add(0x128))
+    capture::word(e, property, 0x128)
+}
+#[inline(always)]
+pub(crate) fn water_light_count(e: &Engine, property: u32) -> u32 {
+    capture::word(e, property, 0x130)
 }
 #[inline(always)]
 pub(crate) fn light_node_light(e: &Engine, node: u32) -> u32 {
-    e.global::<u32>(node.wrapping_add(8))
+    capture::word(e, node, 8)
 }
 #[inline(always)]
 pub(crate) fn light_node_next(e: &Engine, node: u32) -> u32 {
-    e.global::<u32>(node)
+    capture::word(e, node, 0)
 }
 
 /// The default texture (`011f9510`), the water's second rendered texture (`011f943c`), the water
@@ -1288,14 +1293,14 @@ pub(crate) fn material_default_word(e: &Engine, index: u32) -> u32 {
 
 /// The scene's shadow node 0 (`011f91c8`), its camera position (+0x1e4, word `index`) and its sun's
 /// colour (its light +0xe0, that light's light +0xf8, the light's colour +0xd4, word `index`: the cut copies the
-/// three, so they are the packet's; the node itself, the scene's, is set at load and read in place).
+/// four, so they are the packet's; the node itself, the scene's, is set at load and read in place).
 #[inline(always)]
 pub(crate) fn scene_shadow_node(e: &Engine) -> u32 {
     e.global::<u32>(0x011f_91c8)
 }
 #[inline(always)]
 pub(crate) fn scene_camera_position(e: &Engine, index: u32) -> u32 {
-    e.global::<u32>(scene_shadow_node(e).wrapping_add(0x1e4 + 4 * index))
+    capture::word(e, scene_shadow_node(e), 0x1e4 + 4 * index)
 }
 #[inline(always)]
 pub(crate) fn sun_light_colour_word(e: &Engine, index: u32) -> u32 {
@@ -1304,10 +1309,15 @@ pub(crate) fn sun_light_colour_word(e: &Engine, index: u32) -> u32 {
     light_value_word(e, light, 0xd4 + 4 * index)
 }
 
-/// A light's byte at `offset` (+0x208, the clip-plane cache's: piece 4's, in place).
+/// A pass light's byte that says its clip-plane cache is made (+0x208): the draw's own state (the cut owns the cache
+/// per pass light).
 #[inline(always)]
-pub(crate) fn light_byte(e: &Engine, light: u32, offset: u32) -> u8 {
-    e.global::<u8>(light.wrapping_add(offset))
+pub(crate) fn clip_planes_made(e: &Engine, light: u32) -> u8 {
+    let cache = light.wrapping_add(crate::shader::geometry::CLIP_PLANE_CACHE);
+    capture::own_at::<u8>(
+        e,
+        cache.wrapping_add(crate::shader::geometry::CLIP_PLANES_MADE),
+    ) // own: a pass light's clip-plane cache, owned at the cut
 }
 
 /// A renderer's view and light matrices' word at `offset` (+0x940, +0x980, +0x9c0, sixteen words each).

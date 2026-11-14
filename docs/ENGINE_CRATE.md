@@ -499,7 +499,8 @@ with the sixteen constant set-ups it calls, each registered; plain Rust calls in
 `shader::constants` and `shader::geometry`, tested in the same file against one shared world.
 And it holds the shadow light shader's per-geometry textures (`shader::textures`: the set-up the batch renderer
 runs just before the constants, about 600 times a frame there, with the seven stage set-ups it calls, each
-registered) and the lighting shaders' per-light set-up (`shader::lighting`, about 600 a frame); `render` holds the
+registered) and the lighting shaders' per-light set-up (`shader::lighting`, about 600 a frame); since 2026-11-14 also the render-state cache's slots
+0x2c and 0xf8 (`00e88690`, `00e88ad0`) the skinned and particle draws reach; `render` holds the
 renderer's packed-geometry draw (`render::draw`: the Direct3D draw calls, about 1,150 a frame, with its skinned
 test and the shader's "is a pass set" slot). The batch renderer now calls the per-geometry textures, constants
 and state restore directly when the shader's slots hold the shadow light shader's own (another shader's go
@@ -556,7 +557,12 @@ slots 0x78 `00bbe650`, 0x7c `00bbef90` and 0xfc `00bbe120`, the helpers its slot
 lights `00bbc050`, the view `00bbe6b0` and world `00bbba00` matrices, the eye `00bbbcf0` and light `00bbb890`
 positions, the emittance `00bbbda0`, the material `00bbe9c0`, the colour `00bbecd0`, the glow `00bbbdf0`, the alpha
 `00bbbe30`, the fog `00bbbe80`), the `010bb980` shader's slot 0x78 (`00bd02e0`), the light table entry (`00bb95e0`)
-and the pass end's flags (`00bb96d0`). Each reads the frame only through
+and its first half (`00bb95b0`), the two light setters that fill it (`00b70de0`, `00b71130`), the lighting shaders'
+ambient (`00bbb790`) and the pass end's flags (`00bb96d0`); the tall
+grass's point lights (`00baa720`) and shadow set-up (`00baa850`); the lighting property's light list walks (its first
+and next active lights with and without the shadow lights, `00b70590`, `00b70600`, `00b70680`, `00b70700`, and the two
+counts, `00b70790`, `00b707d0`), a pass light's clip-plane store (`00b71ad0`) and the shadow scene node's camera
+position (`00b71b40`). Each reads the frame only through
 `draw::packet` and writes its constants, render states and counters through `draw::own` (each file's "Group C"
 section), with what is filled at load read in place (the shaders' own words, the passes' contents, the exe's
 constants).

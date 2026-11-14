@@ -40,6 +40,11 @@ its draws reach and the shader passes' begin and end, the first step towards dra
 is on after its gate: the recorded street run byte-identical with it off; no speed claim of its own. Its group C,
 the shader set-ups the world draw still reached as translations (the tall grass, no-lighting, sky, water, SpeedTree leaf and lighting 3.0 shaders),
 is typed with native maths and reads the frame only through the draw's packet accessors.
+Since 2026-11-14 every light list the world draw walks reads the frame's copy too (the lighting properties' lists,
+their walks and counts, the tall grass's and lighting 3.0's light set-ups, the water's lights, the accumulators'
+shadow scene nodes), the pass lights' clip-plane caches are the draw's own state, and the render-state cache's last
+two slots the skinned and particle draws reached as translations are typed: groundwork for the drawing thread, no
+change a player sees.
 The update half (what main runs besides drawing) began on 2026-11-10 with `scene`: the scene graph's
 downward update pass across geometries, fade nodes and particle systems, and the skinned bound, on once proven
 identical (differential tests, the recorded run byte-identical with it off); not a speed change by itself.

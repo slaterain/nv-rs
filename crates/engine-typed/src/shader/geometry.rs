@@ -621,8 +621,8 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
         0x00b4_f5c0,
         crate::render::passes::shader_accumulator(e)
     );
-    if e.global::<u32>(accumulator + 0x194) == 0 {
-        // own: main's object read in place (value packet B, piece 4)
+    // The accumulator's shadow scene node, the packet's (the cut copies it).
+    if crate::draw::capture::word(e, accumulator, 0x194) == 0 {
         return;
     }
     let mut matrix = [0u32; 16];
@@ -765,10 +765,14 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
         return;
     }
     let light = rendering_object(e);
-    // The light's clip-plane cache (+0x1a8, made +0x208) is draw-written in main's light: piece 4.
-    if e.global::<u8>(light + 0x208) != 0 {
-        // own: the light's clip-plane cache, piece 4
-        set_clip_planes(e, light + 0x1a8);
+    // The light's clip-plane cache (+0x1a8, made +0x208), draw-written in main's light: the draw's own state (the cut
+    // owns it per pass light), the device handed an image of the planes.
+    let cache = light.wrapping_add(CLIP_PLANE_CACHE);
+    let made = capture::own_at::<u8>(e, cache + CLIP_PLANES_MADE); // own: a pass light's clip-plane cache, owned at the cut
+    if made != 0 {
+        capture::own_image(e, cache, CLIP_PLANES_SIZE, |e, planes| {
+            set_clip_planes(e, planes)
+        });
         return;
     }
     let renderer = e.global::<u32>(this.addr() + 0x18); // own: main's object read in place (value packet B, piece 4)
@@ -817,10 +821,18 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
             }
         }
         set_clip_planes(e, planes);
-        e.call(MEMCPY, &args![light + 0x1a8, planes, 0x60u32]);
+        capture::own_image(e, cache, CLIP_PLANES_SIZE, |e, at| {
+            e.call(MEMCPY, &args![at, planes, CLIP_PLANES_SIZE]);
+        });
     });
-    e.set_global::<u8>(light + 0x208, 1); // own: the light's clip-plane cache, piece 4
+    capture::set_own_at::<u8>(e, cache + CLIP_PLANES_MADE, 1); // own: a pass light's clip-plane cache, owned at the cut
 }
+
+/// A pass light's clip-plane cache (+0x1a8: six planes, 0x60 bytes) and the byte that says they are made (+0x208,
+/// +0x60 from the cache): the draw's own state, owned at the cut per pass light (`draw::cut`).
+pub(crate) const CLIP_PLANE_CACHE: u32 = 0x1a8;
+pub(crate) const CLIP_PLANES_SIZE: u32 = 0x60;
+pub(crate) const CLIP_PLANES_MADE: u32 = 0x60;
 
 /// The shader mode the shaders switch on (`011f91b8`), the shader manager's object `00b4f5d0`
 /// answers (unnamed, no arguments; its colour at +0x154), the per-light set-up `00b70820`

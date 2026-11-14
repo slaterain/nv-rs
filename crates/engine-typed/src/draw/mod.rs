@@ -147,6 +147,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00b4_f450, own::select_shader_mode(u32)),
         entry!(0x00b7_0590, lights::first_active_light(Ptr<_>, Ptr<_>)),
         entry!(0x00b7_0600, lights::first_active_non_shadow_light(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_0680, lights::next_active_light(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_0700, lights::next_active_non_shadow_light(Ptr<_>, Ptr<_>)),
+        entry!(0x00b7_07d0, lights::active_non_shadow_light_count(Ptr<_>)),
+        entry!(0x00b7_0790, lights::active_light_count(Ptr<_>)),
         entry!(0x00bb_b840, own::fog_ambient()),
         // The camera handed to the scene renderer, with the camera getters it reads (game-wide).
         entry!(0x004e_9bb0, packet::hand_camera(u32, u32)),
@@ -273,6 +277,14 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bb_e120, lighting30::setup_switches(Ptr<()>, u32)),
         entry!(0x00bd_02e0, lighting30::setup_stage_textures(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_95e0, group_c::set_light_entry(u32, u32, u32, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00ba_a720, tall_grass::update_point_lights(Ptr<_>, u32, u32, f32, u32)),
+        entry!(0x00ba_a850, tall_grass::shadow_setup(Ptr<_>, u32, u32)),
+        entry!(0x00b7_0de0, group_c::direction_light(u32, Ptr<_>, f32)),
+        entry!(0x00b7_1130, group_c::other_light(u32, Ptr<_>, f32)),
+        entry!(0x00bb_95b0, group_c::set_light_half(u32, u32, u32, u32, u32)),
+        entry!(0x00bb_b790, group_c::set_ambient(Ptr<()>, u8)),
+        entry!(0x00b7_1ad0, lights::store_clip_planes(Ptr<_>, u32)),
+        entry!(0x00b7_1b40, lights::camera_position(Ptr<_>, Ptr<_>)),
         entry!(0x00bb_96d0, group_c::pass_end_flags(Ptr<()>, u32)),
     ]
 }

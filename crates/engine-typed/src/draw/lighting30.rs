@@ -587,19 +587,25 @@ pub fn lights(
 }
 
 /// The light setters (`00b70de0` for the first light, `00b71130` for the others; `cdecl(index, light,
-/// value)`, by address), the light colour (`011fa0d0`, four floats), the light data (`01201c70`: the
+/// value)`, this family's), the light colour (`011fa0d0`, four floats), the light data (`01201c70`: the
 /// directional and point counts, the material's word, the fourth; then the 0x20-byte entries from
 /// `01201c90`) and its entry (`012010e8`, its count word +0x20), the exe's limit on the light count
-/// (`011ae60c`) and 0.5 (`01016248`), `GetNumberofActiveLights` (`00b70790`, by address).
-const FIRST_LIGHT: u32 = 0x00b7_0de0;
-const OTHER_LIGHT: u32 = 0x00b7_1130;
+/// (`011ae60c`) and 0.5 (`01016248`), `GetNumberofActiveLights` (`00b70790`, the draw family's).
 const LIGHT_COLOUR_ROW: u32 = 0x011f_a0d0;
 const LIGHT_DATA: u32 = 0x0120_1c70;
 const LIGHT_ENTRIES: u32 = 0x0120_1c90;
 const LIGHT_DATA_ENTRY: u32 = 0x0120_10e8;
 const LIGHT_LIMIT: u32 = 0x011a_e60c;
 const HALF: u32 = 0x0101_6248;
-const ACTIVE_LIGHTS: u32 = 0x00b7_0790;
+
+/// The setter of the other lights (`00b71130`), `value` a float's bits.
+fn other_light(e: &mut Engine, index: u32, light: u32, value: u32) {
+    typed_call!(
+        super::FAMILY,
+        0x00b7_1130,
+        super::group_c::other_light(e, index, Ptr::new(light), f32::from_bits(value))
+    );
+}
 
 /// The lights' set-up after the mode test (the exe's `00bbc0a4`, entered by `00bbc050`'s jump only):
 /// the pass's lights to the setters; the light colour scaled by the light scale (HDR and the property's
@@ -624,16 +630,20 @@ fn light_set_up(
     let count = u32::from(packet::rendering_pass_byte9(e, pass));
     if (0x1c4..=0x1cb).contains(&kind) {
         let light = packet::rendering_light(e, pass, 0);
-        e.call(OTHER_LIGHT, &args![0u32, light, value]);
+        other_light(e, 0, light, value);
     } else {
         if count > 0 {
             let light = packet::rendering_light(e, pass, 0);
-            e.call(FIRST_LIGHT, &args![0u32, light, value]);
+            typed_call!(
+                super::FAMILY,
+                0x00b7_0de0,
+                super::group_c::direction_light(e, 0, Ptr::new(light), f32::from_bits(value))
+            );
         }
         let mut index = 1u32;
         while index < count {
             let light = packet::rendering_light(e, pass, index);
-            e.call(OTHER_LIGHT, &args![index, light, value]);
+            other_light(e, index, light, value);
             index += 1;
         }
     }
@@ -681,8 +691,13 @@ fn light_set_up(
         own::set_constant_word(e, LIGHT_DATA + 0xc, fourth);
         own::set_entry_word(e, entry, 0x20, u32::from(limited) * 2 + 3);
     } else if pass_type == 0x1c3 {
-        #[allow(clippy::cast_possible_truncation)]
-        let active = e.call(ACTIVE_LIGHTS, &args![property]).u32() as u16;
+        let active: u32 = typed_call!(
+            super::FAMILY,
+            0x00b7_0790,
+            super::lights::active_light_count(e, Ptr::new(property))
+        );
+        // The exe tests the count's low 16 bits.
+        let active = active & 0xffff;
         if active == 0 {
             if packet::shader_mode(e) == 0xa {
                 let half = e.global::<u32>(HALF);
@@ -789,12 +804,10 @@ fn ftol(e: &mut Engine, word: u32) -> u32 {
 
 /// What the geometry set-up calls by address: the model matrix (`00c4c2d0`, the dispatch family's), the
 /// special set-ups of the pass types 0xe and 0xf (`00bbdda0`) and 0x1e0 and 0x1e1 (`00bbdcd0`,
-/// `00bbde20`), the camera's position (`00b71b40`), the light's plane store (`00b71ad0`).
+/// `00bbde20`); the camera's position (`00b71b40`) and the light's plane store (`00b71ad0`) are this family's.
 const SET_UP_DDA0: u32 = 0x00bb_dda0;
 const SET_UP_DCD0: u32 = 0x00bb_dcd0;
 const SET_UP_DE20: u32 = 0x00bb_de20;
-const CAMERA_POSITION: u32 = 0x00b7_1b40;
-const STORE_PLANES: u32 = 0x00b7_1ad0;
 /// The refraction constant (`01201350`) and its entry (`012010ac`); the parallax constants (`01201ba0`,
 /// two floats) and their entry (`012010dc`); the exe's 3600.0 and the cycle (`double`s, `01012640`,
 /// `0104eea0`).
@@ -828,7 +841,11 @@ fn shadow_clip_planes(e: &mut Engine, shader: u32, light: u32) {
             e.set_global(light_matrix + 4 * k, word);
         }
         let camera = packet::scene_shadow_node(e);
-        e.call(CAMERA_POSITION, &args![camera, position]);
+        typed_call!(
+            super::FAMILY,
+            0x00b7_1b40,
+            super::lights::camera_position(e, Ptr::new(camera), Ptr::new(position))
+        );
         let sums = [0u32, 1, 2].map(|k| {
             let value = f32::from_bits(e.global::<u32>(position + 4 * k));
             (value + f32::from_bits(packet::origin_word(e, k))).to_bits()
@@ -883,17 +900,30 @@ fn shadow_clip_planes(e: &mut Engine, shader: u32, light: u32) {
             let device = packet::scene_renderer_device(e);
             own::device_clip_plane(e, device, index, planes + 0x10 * index);
         }
-        e.call(STORE_PLANES, &args![light, planes]);
+        typed_call!(
+            super::FAMILY,
+            0x00b7_1ad0,
+            super::lights::store_clip_planes(e, Ptr::new(light), planes)
+        );
     });
 }
 
 /// The light's stored planes set on the device (when the light or the shader accumulator refuses the
 /// computed ones): the six planes at +0x1a8.
 fn stored_clip_planes(e: &mut Engine, light: u32) {
-    for index in 0..6u32 {
-        let device = packet::scene_renderer_device(e);
-        own::device_clip_plane(e, device, index, light.wrapping_add(0x1a8 + 0x10 * index));
-    }
+    // The cache is the draw's own state (owned at the cut per pass light): the device is handed an image of it.
+    let cache = light.wrapping_add(crate::shader::geometry::CLIP_PLANE_CACHE);
+    capture::own_image(
+        e,
+        cache,
+        crate::shader::geometry::CLIP_PLANES_SIZE,
+        |e, planes| {
+            for index in 0..6u32 {
+                let device = packet::scene_renderer_device(e);
+                own::device_clip_plane(e, device, index, planes.wrapping_add(0x10 * index));
+            }
+        },
+    );
 }
 
 // Typed from 00bbef90
@@ -1066,8 +1096,7 @@ fn constants_with(
         typed_call!(super::FAMILY, 0x00bb_be80, fog(e, this));
         if pass_type.wrapping_sub(0x1c4) <= 3 {
             let light = packet::rendering_light(e, packet::rendering_pass(e), 0);
-            // own: the pass light's clip-plane cache byte (+0x208, written by the draw), piece 4; in place.
-            let refused = packet::light_byte(e, light, 0x208) != 0 || {
+            let refused = packet::clip_planes_made(e, light) != 0 || {
                 let held = packet::shader_accumulator(e);
                 packet::skips_type13(e, held) != 0 || {
                     let held = packet::shader_accumulator(e);
