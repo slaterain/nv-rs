@@ -14670,7 +14670,10 @@ mod tests {
             vec![(0x0096_4675, vec![player.addr()])]
         );
         assert_eq!(
-            world.e.get(player, PlayerCharacter::pPlayersTargetActor).addr(),
+            world
+                .e
+                .get(player, PlayerCharacter::pPlayersTargetActor)
+                .addr(),
             actor
         );
         assert_eq!(calls_to(&log, FUNCTION_0062A190).len(), 1, "goes on");

@@ -167,7 +167,11 @@ mod tests {
         e.call_log = Some(vec![]);
         fn_0060f4a0(&mut e, stage, Ptr::new(0x9000), 0);
         assert_eq!(SEEN.with(|s| s.take()), vec![vec![stage.addr(), 0x9000]]);
-        assert_eq!(set_done_calls(&e), vec![vec![0x100, 0]], "answered: goes on");
+        assert_eq!(
+            set_done_calls(&e),
+            vec![vec![0x100, 0]],
+            "answered: goes on"
+        );
         let (mut e, stage) = world(0, false, &[0x100]);
         e.on_site(SiteSlot::new(Owner::Jip, 0x0060_f4a9), stage_handler);
         e.add_hook_user(Hook::SetQuestStage, true);
@@ -179,6 +183,10 @@ mod tests {
         e.call_log = Some(vec![]);
         fn_0060f4a0(&mut e, stage, Ptr::new(0x9000), 0);
         assert_eq!(SEEN.with(|s| s.take()).len(), 2);
-        assert_eq!(set_done_calls(&e), vec![vec![0x100, 0]], "no answer: the exe's");
+        assert_eq!(
+            set_done_calls(&e),
+            vec![vec![0x100, 0]],
+            "no answer: the exe's"
+        );
     }
 }

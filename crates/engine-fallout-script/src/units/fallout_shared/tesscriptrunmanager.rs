@@ -2289,7 +2289,10 @@ mod tests {
         assert!(WAIT_SEEN.with(|s| s.borrow().is_empty()), "no user");
         e.add_hook_user(Hook::ScriptWait, true);
         let log = go(&mut e);
-        assert_eq!(WAIT_SEEN.with(|s| s.take()), vec![vec![script.addr(), 0x3333]]);
+        assert_eq!(
+            WAIT_SEEN.with(|s| s.take()),
+            vec![vec![script.addr(), 0x3333]]
+        );
         assert!(log.iter().any(|c| c.0 == 0x00500940), "the header is read");
         assert!(log.iter().any(|c| c.0 == 0x005e1550), "the run goes on");
     }

@@ -8669,7 +8669,10 @@ mod tests {
         s.e.add_hook_user(Hook::DoActivate, true);
         let log = go(&mut s.e);
         assert_eq!(SEEN.with(|v| v.take()), vec![vec![refr]]);
-        assert!(calls_to(&log, 0x0041_b3a0).is_empty(), "the exe's test not made");
+        assert!(
+            calls_to(&log, 0x0041_b3a0).is_empty(),
+            "the exe's test not made"
+        );
         assert!(calls_to(&log, 0x0056_5870).is_empty(), "no scripts");
         assert_eq!(calls_to(&log, 0x0056_a290).len(), 1, "the base object runs");
         ANSWER.with(|c| c.set(None));
@@ -8706,7 +8709,10 @@ mod tests {
         let (done, log) = go(&mut s.e);
         assert!(done);
         assert_eq!(SEEN.with(|v| v.take()), vec![vec![refr, activator, 0]]);
-        assert!(calls_to(&log, 0x0056_a290).is_empty(), "the base object does not run");
+        assert!(
+            calls_to(&log, 0x0056_a290).is_empty(),
+            "the base object does not run"
+        );
         assert_eq!(s.e.global::<u8>(0x011c_a428), 0, "no activation record");
         ANSWER.with(|c| c.set(None));
         let (_, log) = go(&mut s.e);

@@ -253,7 +253,10 @@ pub fn fn_00574b30(
                     let first = e.mem.u32(slot);
                     {
                         // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-                        let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                        let _caller = e.mark_caller_word(
+                            engine_core::extend::Hook::MarkScriptEvent,
+                            item.addr(),
+                        );
                         e.call(SET_ACTION_FLAG, &args![this, first, 1u32]);
                     }
                 }
@@ -307,7 +310,10 @@ pub fn fn_00574b30(
                     }
                     {
                         // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-                        let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                        let _caller = e.mark_caller_word(
+                            engine_core::extend::Hook::MarkScriptEvent,
+                            item.addr(),
+                        );
                         e.call(SET_ACTION_FLAG, &args![this, list, 1u32]);
                     }
                     e.call(CHANGES_4C29A0, &args![changes, ammo, list, 1u32]);
@@ -625,7 +631,8 @@ pub fn fn_00575380(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u3
             if e.call(SAVE_LOAD_TEST_0047C850, &args![game]).u8() == 0 {
                 {
                     // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-                    let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, first);
+                    let _caller =
+                        e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, first);
                     e.call(SET_ACTION_FLAG, &args![this, third, 8u32]);
                 }
             }

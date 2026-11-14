@@ -42,7 +42,7 @@ const VALID_KEY_CODE: [bool; 266] = [
 ];
 
 /// `kValidFilterForm` (`internal/lutana.h` (JIP LN NVSE)), copied by script: 121 entries.
-const VALID_FILTER_FORM: [bool; 121] = [
+pub(crate) const VALID_FILTER_FORM: [bool; 121] = [
     false, false, false, false, false, false, false, false, false, false, false, false, false,
     false, false, false, false, false, false, false, false, true, true, true, true, true, false,
     true, true, false, true, true, true, true, true, true, true, true, true, true, true, true,

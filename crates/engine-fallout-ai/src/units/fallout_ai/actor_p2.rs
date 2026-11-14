@@ -5905,13 +5905,15 @@ pub fn actor_equip_object(
     {
         {
             // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            let _caller =
+                e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
             e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
         }
         let list = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
         {
             // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            let _caller =
+                e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
             e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_USED]);
         }
         return;
@@ -6049,7 +6051,8 @@ pub fn actor_equip_object(
         FORM_TYPE_FOOD => {
             {
                 // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                let _caller =
+                    e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
                 e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
             }
             if !e.vcall(item.addr(), FORM_VSLOT_0X94, &args![]).bool() {
@@ -6103,7 +6106,10 @@ pub fn actor_equip_object(
                     }
                     {
                         // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-                        let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                        let _caller = e.mark_caller_word(
+                            engine_core::extend::Hook::MarkScriptEvent,
+                            item.addr(),
+                        );
                         e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
                     }
                     if e.call(ACTOR_DRINK_POTION, &args![this, item, extra, !is_player])
@@ -6160,13 +6166,15 @@ pub fn actor_equip_object(
     if !e.call(COMBAT_CONTROLLER_TEST, &args![combat_object]).bool() && action_flag_pending {
         {
             // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            let _caller =
+                e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
             e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
         }
         let list = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
         {
             // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            let _caller =
+                e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
             e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_USED]);
         }
     }
@@ -6839,13 +6847,15 @@ pub fn fn_0088e110(
         if !e.call(COMBAT_CONTROLLER_TEST, &args![combat_object]).bool() {
             {
                 // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                let _caller =
+                    e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
                 e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_REMOVED]);
             }
             let list = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
             {
                 // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
-                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                let _caller =
+                    e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
                 e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_REMOVED]);
             }
         }

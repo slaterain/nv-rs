@@ -406,7 +406,10 @@ mod n038_tests {
             "only the other's type call"
         );
         ANSWER.with(|c| c.set(None));
-        assert!(e.call(0x0047_bb50, &args![w, v]).bool(), "no answer: the exe");
+        assert!(
+            e.call(0x0047_bb50, &args![w, v]).bool(),
+            "no answer: the exe"
+        );
         assert_eq!(SEEN.with(|s| s.take()).len(), 1);
     }
 }

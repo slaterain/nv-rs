@@ -8242,9 +8242,9 @@ fn make_purchase(e: &mut Engine, p: u32, actor: u32) {
         // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
         let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, actor);
         e.call(
-        SCRIPT_SET_ACTION_FLAG,
-        &args![seller, flag_source, 0x4000u32],
-    );
+            SCRIPT_SET_ACTION_FLAG,
+            &args![seller, flag_source, 0x4000u32],
+        );
     }
 }
 

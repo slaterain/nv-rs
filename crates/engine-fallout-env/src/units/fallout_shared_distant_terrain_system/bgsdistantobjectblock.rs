@@ -910,7 +910,8 @@ pub fn bgs_distant_object_block_load_task_construct(
         let swapped = stinger == 0
             && high_priority == 0
             && e.hook_users(engine_core::extend::Hook::MakeObjLODPath) != 0
-            && e.site(0x006f_6df1, &[world_space, level, x, y, name]).is_some();
+            && e.site(0x006f_6df1, &[world_space, level, x, y, name])
+                .is_some();
         if swapped {
             if e.call(FILE_EXISTS, &args![name, 0u32, 0u32, 0xffff_ffffu32])
                 .u32()
@@ -2092,7 +2093,10 @@ mod tests {
         e.add_hook_user(Hook::MakeObjLODPath, true);
         construct(&mut e, 1, 0);
         construct(&mut e, 0, 1);
-        assert!(LOD_SEEN.with(|s| s.borrow().is_empty()), "high priority, stinger");
+        assert!(
+            LOD_SEEN.with(|s| s.borrow().is_empty()),
+            "high priority, stinger"
+        );
         construct(&mut e, 0, 0);
         let seen = LOD_SEEN.with(|s| s.take());
         assert_eq!(seen.len(), 1);
@@ -2105,10 +2109,17 @@ mod tests {
         assert_eq!(calls(&e, PRINT_FORMATTED)[0][2], BLOCK_FILE_FORMAT);
         e.register(FILE_EXISTS, |_, _| ret(1));
         construct(&mut e, 0, 0);
-        assert!(calls(&e, PRINT_FORMATTED).is_empty(), "the handler's file exists");
+        assert!(
+            calls(&e, PRINT_FORMATTED).is_empty(),
+            "the handler's file exists"
+        );
         LOD_ANSWER.with(|c| c.set(None));
         construct(&mut e, 0, 0);
-        assert_eq!(calls(&e, BUILD_BLOCK_FILE_NAME_PA).len(), 1, "no answer: the exe");
+        assert_eq!(
+            calls(&e, BUILD_BLOCK_FILE_NAME_PA).len(),
+            1,
+            "no answer: the exe"
+        );
     }
 
     #[test]
