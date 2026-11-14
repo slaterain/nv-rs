@@ -537,6 +537,9 @@ fn precedence() {
     assert_eq!(one("a = b ? c : d;"), "(= a (? b c d));");
     assert_eq!(one("a = b ?: d;"), "(= a (? b b d));");
     assert_eq!(one("a += b = c;"), "(+= a (= b c));");
+    // A subscript and a member are assignment targets too.
+    assert_eq!(one("a[1] = 2;"), "(= a[1] 2);");
+    assert_eq!(one("q.v ^= 2;"), "(^= q.v 2);");
     assert_eq!(one("x = a : b;"), "(= x (: a b));");
     assert_eq!(one("x = a || b && c;"), "(= x (|| a (&& b c)));");
     assert_eq!(one("x = a && b == c;"), "(= x (&& a (== b c)));");
