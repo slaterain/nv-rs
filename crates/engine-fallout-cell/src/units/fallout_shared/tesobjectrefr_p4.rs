@@ -8720,6 +8720,59 @@ mod tests {
         assert_eq!(calls_to(&log, 0x0056_a290).len(), 1, "no answer: the exe");
     }
 
+    /// JIP LN NVSE's ActivateDoor end to end (`0x00573673`, JIP's real handler): with JIP
+    /// installed answering "installed", a teammate activating a locked door that leads nowhere
+    /// (the door's base refuses: the activation fails) gets true at once after a script's
+    /// `ToggleIgnoreLockedDoors 1` (through its record), with no activation recorded; before
+    /// it, after `ToggleIgnoreLockedDoors 0`, for an unlocked door or an activator that is no
+    /// teammate, the base object runs and the activation fails.
+    #[test]
+    fn activate_lets_a_teammate_pass_a_locked_door_with_jip() {
+        use jip::test_support::{call, install_into, int_arg};
+        use jip::world_hooks::TOGGLE_IGNORE_LOCKED_DOORS;
+        let mut s = activate_setup();
+        install_into(&mut s.e);
+        let (base, refr, activator) = (s.base, s.refr, s.activator);
+        s.e.mem.set_u8(base + 4, 0x1c);
+        set_slot(&mut s.e, base, 0x124, 0);
+        // The door's lock (`ExtraLock`, type 0x2A, its data's flag byte `+8`), found by
+        // `BaseExtraList::GetByType` (`00410220`, stand-in) on the door's extra list.
+        let lock = s.e.mem.alloc(0x10);
+        let lock_data = s.e.mem.alloc(0x10);
+        s.e.mem.set_u32(lock + 0xc, lock_data);
+        s.e.mem.set_u8(lock_data + 8, 1);
+        s.e.register_double(0x0041_0220, move |_, a| {
+            ret(if a == [refr + 0x44, 0x2a] { lock } else { 0 })
+        });
+        // The activator is the player's teammate (`Actor` byte `+0x18D`).
+        s.e.mem.set_u8(activator + 0x18d, 1);
+        let go = |e: &mut Engine| {
+            e.set_global::<u8>(0x011c_a428, 0);
+            let mut done = false;
+            let log = logged(e, |e| {
+                done = e
+                    .call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32])
+                    .bool();
+            });
+            (done, calls_to(&log, 0x0056_a290).len())
+        };
+        assert_eq!(go(&mut s.e), (false, 1), "before the command: the exe");
+        let toggle = |e: &mut Engine, on: i32| {
+            assert_eq!(call(e, TOGGLE_IGNORE_LOCKED_DOORS, &[int_arg(on)]).0, 1);
+        };
+        toggle(&mut s.e, 1);
+        assert_eq!(go(&mut s.e), (true, 0), "the teammate passes");
+        assert_eq!(s.e.global::<u8>(0x011c_a428), 0, "no activation record");
+        s.e.mem.set_u8(lock_data + 8, 0);
+        assert_eq!(go(&mut s.e), (false, 1), "unlocked: the exe");
+        s.e.mem.set_u8(lock_data + 8, 1);
+        s.e.mem.set_u8(activator + 0x18d, 0);
+        assert_eq!(go(&mut s.e), (false, 1), "no teammate: the exe");
+        s.e.mem.set_u8(activator + 0x18d, 1);
+        toggle(&mut s.e, 0);
+        assert_eq!(go(&mut s.e), (false, 1), "switched off: the exe");
+    }
+
     #[test]
     fn the_player_and_a_flagged_reference_skip_the_script_path() {
         let mut s = activate_setup();

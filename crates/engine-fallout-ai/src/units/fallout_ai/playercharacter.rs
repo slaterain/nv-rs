@@ -13405,6 +13405,44 @@ mod tests {
         assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "not health");
     }
 
+    /// JIP LN NVSE's PlayerMinHealth end to end (`0x0093B80A`, JIP's real handler): with JIP
+    /// installed answering "installed" and one user of the hook, a loss that would leave the
+    /// player below 1 health (90 health, -95) is passed on as `1 - health` (-89), so the player
+    /// keeps 1; a smaller loss (-5) and a gain (+4) pass unchanged, as does any change with no
+    /// user. The hook's only user, `ToggleImmortalMode`, is not built yet (its mode 2 needs
+    /// JIP's always-on hit patches of step 3.9), so the user is added directly
+    /// (`add_hook_user`, as that command does) instead of through a command.
+    #[test]
+    fn fn_0093b7a0_keeps_the_player_at_1_health_with_jip() {
+        use engine_core::extend::Hook;
+        let changes = |users: bool, amounts: &[f32]| -> Vec<f32> {
+            amounts
+                .iter()
+                .map(|&amount| {
+                    let mut e = engine();
+                    jip::test_support::install_into(&mut e);
+                    let this = health_world(&mut e, 0.9, 0.9, 0.8, 0.4);
+                    if users {
+                        e.add_hook_user(Hook::PlayerMinHealth, true);
+                    }
+                    e.call_log = Some(vec![]);
+                    e.call(0x0093_b7a0, &args![this, 0x10u32, amount, 0x6000u32]);
+                    f(&called(&e, 0x0088_0890)[0], 2)
+                })
+                .collect()
+        };
+        assert_eq!(
+            changes(true, &[-95.0, -5.0, 4.0]),
+            vec![-89.0, -5.0, 4.0],
+            "kept at 1 health"
+        );
+        assert_eq!(
+            changes(false, &[-95.0]),
+            vec![-95.0],
+            "no user: the change as given"
+        );
+    }
+
     /// The globals of the cell-grid functions: the `TES` singleton pointer
     /// (pointing at 0x5000), the water search constants and the cell size.
     fn grid_globals(e: &mut Engine) {

@@ -19,20 +19,34 @@ const CONSOLE_OPEN: u32 = 0x011d_ea2e;
 /// tables, and room for a call's data; JIP not yet installed.
 pub fn engine() -> Engine {
     let mut e = Engine::new();
+    prepare(&mut e);
+    e
+}
+
+/// xNVSE's table and JIP answering "installed" put into an engine a test already made (an
+/// engine crate's, with its own stand-ins and mappings): what [`engine`] does (a page mapped
+/// twice keeps its bytes), then [`crate::install_as`]. A command is then called through its
+/// record with [`call`]; the call's data is at [`DATA`] (64 KB).
+pub fn install_into(e: &mut Engine) {
+    prepare(e);
+    crate::install_as(e, true);
+}
+
+/// What [`engine`] does to a new engine.
+fn prepare(e: &mut Engine) {
     e.map(0x0118_e000, 0x9000);
     e.map(CONSOLE_OPEN & !0xfff, 0x1000);
     e.map(DATA, 0x1_0000);
     // The processes' vtables (HighProcess 0x01087864, MiddleHighProcess 0x0108904C), where JIP
     // writes its hit-data routines once installed.
     e.map(0x0108_7000, 0x3000);
-    nvse::table::install(&mut e);
+    nvse::table::install(e);
     // The platform's XInputGetState at its import slot, as the host registers it (no controller:
     // ERROR_DEVICE_NOT_CONNECTED), for JIP's wrap there.
     e.register(0x00fd_f394, |_, _| Ret {
         eax: 0x48f,
         ..Ret::default()
     });
-    e
 }
 
 /// Opens or closes the console as the echo sees it.

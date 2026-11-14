@@ -2297,6 +2297,78 @@ mod tests {
         assert!(log.iter().any(|c| c.0 == 0x005e1550), "the run goes on");
     }
 
+    thread_local! {
+        /// The lines of the marker command that ran (its data offset).
+        static MARKS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// JIP LN NVSE's ScriptWait end to end (`0x005E0EC9` and `0x005E1716`, JIP's real handlers
+    /// and its real `ScriptWait` command, called by the translated `EvaluateLine` from the
+    /// translated `Run`, with xNVSE's line records): an object script
+    /// `Begin GameMode / Mark / ScriptWait 2 / Mark / End` on a reference. Its first run marks
+    /// the first line, waits and jumps to the block's end (the second mark does not run); the
+    /// next run skips the block, counting one pass; the run after resumes right after
+    /// `ScriptWait` (only the second mark runs); the next one runs the block from its start.
+    #[test]
+    fn run_waits_and_resumes_with_jip_script_wait() {
+        use jip::world_hooks::SCRIPT_WAIT;
+        // `scn` (0x1D, no data); Begin (0x10, 6 bytes: type 0 GameMode, the block's span 23 to
+        // the end of its End); the marker (0x1021, no data) at 14; ScriptWait (7 bytes: one
+        // argument, `n` 2) at 18; the marker at 29; End (0x11) at 33.
+        const MARK: u16 = 0x1021;
+        let mut bytes = vec![0x1d, 0, 0, 0, 0x10, 0, 6, 0, 0, 0];
+        bytes.extend(23u32.to_le_bytes());
+        bytes.extend(MARK.to_le_bytes());
+        bytes.extend([0, 0]);
+        bytes.extend((SCRIPT_WAIT as u16).to_le_bytes());
+        bytes.extend([7, 0, 1, 0, b'n']);
+        bytes.extend(2u32.to_le_bytes());
+        bytes.extend(MARK.to_le_bytes());
+        bytes.extend([0, 0, 0x11, 0, 0, 0]);
+        assert_eq!(bytes.len(), 37);
+        let mut e = Engine::new();
+        jip::test_support::install_into(&mut e);
+        nvse::context::install(&mut e);
+        let (runner, script, _) = run_fixture(&mut e, &bytes, false);
+        // The script: an object script with an id.
+        e.mem.set_u32(script.addr() + 0xc, 0x0100_0100);
+        // The reference running it (its id; JIP's wait flag in byte `+5`).
+        let reference = e.mem.alloc(0x100);
+        e.mem.set_u32(reference + 0xc, 0x0100_0001);
+        // GameMode's block handler (stand-in): the block applies (its result 1).
+        let entry = 0x0118_e300;
+        e.mem.set_u8(entry, 0);
+        e.mem.set_u32(entry + 4, 0);
+        e.mem.set_u32(entry + 8, 0x1234_0001);
+        e.register_double(0x1234_0001, |e, a| {
+            e.mem.set_f64(a[6], 1.0);
+            1u32.into_ret()
+        });
+        // The marker command (a vanilla record of xNVSE's table, stand-in handler): notes its
+        // line's data offset.
+        let record = nvse::table::record_of(&e, u32::from(MARK));
+        e.mem.set_u32(record + 0x18, 0x1234_0002);
+        e.register_double(0x1234_0002, |e, a| {
+            let at = e.mem.u32(a[7]);
+            MARKS.with(|m| m.borrow_mut().push(at));
+            1u32.into_ret()
+        });
+        let run = |e: &mut Engine| -> Vec<u32> {
+            e.call(
+                0x005e0d20,
+                &args![runner, script, reference, 0x5555u32, 0x4444u32, false, 0u8, 0u8, 0.0f32],
+            );
+            MARKS.with(|m| m.take())
+        };
+        assert_eq!(run(&mut e), vec![18], "the first mark, then the wait");
+        assert_eq!(e.hook_users(engine_core::extend::Hook::ScriptWait), 1);
+        assert_ne!(e.mem.u8(reference + 5) & 8, 0, "the reference waits");
+        assert_eq!(run(&mut e), vec![], "waiting: the block is skipped");
+        assert_eq!(run(&mut e), vec![33], "resumed after ScriptWait");
+        assert_eq!(e.mem.u8(reference + 5) & 8, 0, "no longer waiting");
+        assert_eq!(run(&mut e), vec![18], "the block from its start");
+    }
+
     #[test]
     fn evaluator_begin_invalid_kind_and_required_reference_have_distinct_errors() {
         for kind in [-1, 38, 3] {

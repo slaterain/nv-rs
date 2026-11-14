@@ -13,3 +13,8 @@ nvse = { path = "../nvse" }
 [dev-dependencies]
 # Every command test checks that each argument is read as its parameter type stores it; lambda helpers.
 nvse = { path = "../nvse", features = ["test-support"] }
+
+[features]
+# For the engine crates' tests: `test_support` (xNVSE's table and JIP put into a test's engine, a
+# command called through its record), with xNVSE's checked argument reads.
+test-support = ["nvse/test-support"]

@@ -39,7 +39,8 @@
 //!   commands that switch them, with `PushActorNoRagdoll`.
 //!
 //! [`install`] runs once per engine, after `nvse::install` (JIP is xNVSE's plugin): in
-//! `host::Host::start_with`, never in the engine crates' own tests.
+//! `host::Host::start_with`; in the engine crates' own tests only through
+//! `test_support::install_into` (the `test-support` feature), for their end-to-end seam tests.
 
 pub mod actor_hooks;
 pub mod ai_hooks;
@@ -59,8 +60,10 @@ pub mod slots;
 #[cfg(test)]
 mod saveload_tests;
 pub mod table;
-#[cfg(test)]
-mod test_support;
+/// For the crate's tests and, through the `test-support` feature, the engine crates' end-to-end
+/// tests of JIP's seams.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 pub mod ui_hooks;
 pub mod utility;
 pub mod world_hooks;

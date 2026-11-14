@@ -31,5 +31,8 @@ engine-fallout-unplaced-a = { path = "../engine-fallout-unplaced-a" }
 engine-fallout-unplaced-b = { path = "../engine-fallout-unplaced-b" }
 engine-fallout-misc = { path = "../engine-fallout-misc" }
 # xNVSE built in (its compiler hooks), for the test that the game's own lines compile the same
-# with them.
-nvse = { path = "../nvse" }
+# with them; with JIP LN NVSE put into a test engine (`jip::test_support`), for the end-to-end
+# test of JIP's ScriptWait seams: the wait set through JIP's command, the translated script run
+# called, the lines the script runs checked.
+nvse = { path = "../nvse", features = ["test-support"] }
+jip = { path = "../jip", features = ["test-support"] }

@@ -30,3 +30,8 @@ engine-fallout-ai = { path = "../engine-fallout-ai" }
 engine-fallout-unplaced-a = { path = "../engine-fallout-unplaced-a" }
 engine-fallout-unplaced-b = { path = "../engine-fallout-unplaced-b" }
 engine-fallout-misc = { path = "../engine-fallout-misc" }
+# JIP LN NVSE and xNVSE put into a test engine (`jip::test_support`), for the end-to-end tests of
+# JIP's seams in this crate's translations: the state set through JIP's command, the translated
+# function called, what the game uses checked.
+jip = { path = "../jip", features = ["test-support"] }
+nvse = { path = "../nvse", features = ["test-support"] }
