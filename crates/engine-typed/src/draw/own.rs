@@ -790,16 +790,18 @@ pub(crate) fn constant_map(e: &Engine, shader: u32, offset: u32) -> u32 {
 }
 
 /// `size` bytes of constants from `from` copied into an entry's own buffer at `to` (`_memcpy`, the CRT
-/// family's) (condition 2). A target in the draw's own state is copied into through [`capture::own_image`], so
-/// the packet's copy takes the bytes while it owns them.
+/// family's) (condition 2). A source or target in the draw's own state goes through [`capture::own_image`]: the bytes
+/// come from and go to the packet's copy while it owns them.
 #[inline(always)]
 pub(crate) fn copy_constants(e: &mut Engine, to: u32, from: u32, size: u32) {
-    capture::own_image(e, to, size, |e, to| {
-        let _: u32 = typed_call!(
-            crate::crt::FAMILY,
-            0x00ec_44d0,
-            crate::crt::mem::memcpy(e, to, from, size)
-        );
+    capture::own_image(e, from, size, |e, from| {
+        capture::own_image(e, to, size, |e, to| {
+            let _: u32 = typed_call!(
+                crate::crt::FAMILY,
+                0x00ec_44d0,
+                crate::crt::mem::memcpy(e, to, from, size)
+            );
+        });
     });
 }
 
