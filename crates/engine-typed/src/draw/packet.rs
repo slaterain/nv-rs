@@ -308,6 +308,13 @@ pub(crate) fn note_camera(e: &mut Engine, camera: u32) {
     e.set_global(LAST_CAMERA, camera);
 }
 
+/// The camera the draw last started with (`011f917c`): written by the draw itself as it starts ([`note_camera`]),
+/// so on the drawing side it is the drawn camera.
+#[inline(always)]
+pub(crate) fn last_camera(e: &Engine) -> u32 {
+    e.global::<u32>(LAST_CAMERA)
+}
+
 /// Clears the scene renderer's word +0xc as the second half ends.
 #[inline(always)]
 pub(crate) fn clear_scene_word(e: &mut Engine) {

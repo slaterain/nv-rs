@@ -240,6 +240,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ba_c950, tall_grass::setup_textures(Ptr<()>, Ptr<()>)),
         entry!(0x00ba_af40, tall_grass::copy_instances(Ptr<()>, u32, Ptr<()>)),
         entry!(0x00ba_c9c0, tall_grass::setup_constants(Ptr<()>, Ptr<()>)),
+        entry!(0x00ba_a3f0, tall_grass::select_pass(Ptr<()>, u32)),
+        entry!(0x00ba_c8d0, tall_grass::pair_textures(Ptr<()>, u32)),
         // Group C: the no-lighting shader.
         entry!(0x00bc_6970, no_lighting::select_pass(Ptr<()>, u32)),
         entry!(0x00bc_6de0, no_lighting::setup_fog(Ptr<()>, u32)),
@@ -249,16 +251,34 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bc_8e00, no_lighting::texture_matrix(Ptr<()>, Ptr<()>)),
         entry!(0x00bc_8d40, no_lighting::setup_textures(Ptr<()>, Ptr<()>)),
         entry!(0x00bc_9a50, no_lighting::setup_constants(Ptr<()>, Ptr<()>)),
+        entry!(0x00bc_8f20, no_lighting::bone_setup(Ptr<()>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
+        entry!(0x00bc_8ed0, no_lighting::blending(Ptr<()>, Ptr<()>)),
+        entry!(0x00bc_8d90, no_lighting::geometry_done(Ptr<()>, Ptr<()>)),
         // Group C: the sky shader.
         entry!(0x00b8_9cc0, sky::setup_textures(Ptr<()>, Ptr<()>)),
         entry!(0x00b8_9d80, sky::setup_constants(Ptr<()>, Ptr<()>)),
+        entry!(0x00b8_84e0, sky::select_pass(Ptr<()>, u32)),
+        entry!(0x00b8_a1a0, sky::geometry_done(Ptr<()>, Ptr<()>)),
         // Group C: the water shader, the SpeedTree leaf shader, the pass flags, a material's colour.
         entry!(0x00b8_63a0, water::setup_textures(Ptr<()>, Ptr<()>)),
         entry!(0x00b8_64d0, water::setup_constants(Ptr<()>, Ptr<()>)),
+        entry!(0x00b8_1760, water::select_pass(Ptr<()>, u32)),
+        entry!(0x00b8_1d60, water::pass_constants(Ptr<()>, u32)),
+        entry!(0x00b8_6b80, water::geometry_done(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_25d0, speedtree::setup_geometry(Ptr<()>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00bb_2760, speedtree::setup_constants(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_1b50, speedtree::setup_fog(Ptr<()>, u32)),
-        // The SpeedTree branch shader's slot 0x7c and its fog slot.
+        entry!(0x00bb_1b20, speedtree::select_pass(Ptr<()>, u32)),
+        entry!(0x00bb_26d0, speedtree::setup_textures(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_1960, speedtree::light_setup(Ptr<()>, Ptr<()>, u32, f32)),
+        entry!(0x00bb_1a90, speedtree::camera_rows()),
+        entry!(0x00b7_1360, speedtree::scene_light(u32, Ptr<()>, f32)),
+        // The SpeedTree branch shader's pass choice, slots 0x78 and 0x7c and its fog slot.
+        entry!(0x00bd_4030, speedtree::branch_select_pass(Ptr<()>, u32)),
+        entry!(
+            0x00bd_4890,
+            speedtree::branch_setup_textures(Ptr<()>, Ptr<()>)
+        ),
         entry!(
             0x00bd_4ba0,
             speedtree::branch_setup_constants(Ptr<()>, Ptr<()>)
@@ -284,6 +304,10 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bb_c050, lighting30::lights(Ptr<()>, Ptr<()>, Ptr<()>, u32, Ptr<()>, u32, u32, Ptr<()>)),
         entry!(0x00bb_ef90, lighting30::setup_constants(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_e120, lighting30::setup_switches(Ptr<()>, u32)),
+        entry!(0x00bb_e020, lighting30::select_pass(Ptr<()>, u32)),
+        entry!(0x00bb_c5c0, lighting30::blending(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_eef0, lighting30::geometry_done(Ptr<()>, Ptr<()>)),
+        entry!(0x00bb_d000, lighting30::bone_setup(Ptr<()>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00bd_02e0, lighting30::setup_stage_textures(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_95e0, group_c::set_light_entry(u32, u32, u32, u32, u32, u32, u32, u32, u32)),
         entry!(0x00ba_a430, tall_grass::setup_fog(Ptr<_>, u32)),

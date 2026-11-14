@@ -1330,3 +1330,156 @@ pub fn setup_stage_textures(e: &mut Engine, this: Ptr, state: Ptr) {
     }
     e.vcall(base, 0x108, &[]);
 }
+
+/// What lighting 3.0's pass choice asks for a pass type's pass (`00c0abd0`, `thiscall(shader, pass type)`: the
+/// shader's declaration for the type into its counted pointer +0x28 and the type's pass word answered; it reads no
+/// own state, so by address).
+const PASS_FOR_TYPE: u32 = 0x00c0_abd0;
+
+// Typed from 00bbe020
+/// Lighting 3.0's pass choice (slot 0xf0), `thiscall(shader, pass type)` (not a Ghidra function: typed from its
+/// bytes): the pass `00c0abd0` answers for the type becomes the current pass; the fog-coloured ambient
+/// ([`own::fog_ambient`], which the exe has inlined here); then for the types 0x1e0 and 0x1e1 the counted pointers
+/// +0x30 and +0x34 take the shader's maps +0x6c and +0x70 (the exe's inlined assignment, the new one read again
+/// after the old one's count went down), for every other type `00c663d0` copies +0x74 into +0x30 and +0x78 into
+/// +0x34.
+pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    let base = this.addr();
+    let pass = e.call(PASS_FOR_TYPE, &args![base, pass_type]).u32();
+    own::set_current_pass(e, pass);
+    typed_call!(super::FAMILY, 0x00bb_b840, own::fog_ambient(e));
+    if pass_type == 0x1e0 || pass_type == 0x1e1 {
+        own::assign_counted(e, base.wrapping_add(0x30), base.wrapping_add(0x6c), true);
+        own::assign_counted(e, base.wrapping_add(0x34), base.wrapping_add(0x70), true);
+    } else {
+        own::copy_counted(e, base.wrapping_add(0x30), base.wrapping_add(0x74));
+        own::copy_counted(e, base.wrapping_add(0x34), base.wrapping_add(0x78));
+    }
+}
+
+// Typed from 00bbc5c0
+/// Lighting 3.0's blending (slot 0x80), `thiscall(shader, state)` (not a Ghidra function): nothing in the pass
+/// types 0x1bd to 0x1c3, 0x1cc to 0x1dc, 0x1e0, 0x1e1 and 0x2d8 to 0x2ef; otherwise the shared blending of the state
+/// (`00be1ff0`, the shader family's: the exe's tail jump). The batch renderer reads no answer.
+pub fn blending(e: &mut Engine, this: Ptr, state: Ptr) {
+    let pass_type = packet::rendering_pass_type(e);
+    let none = (0x1cc..=0x1dc).contains(&pass_type)
+        || (0x1bd..=0x1c3).contains(&pass_type)
+        || (0x1e0..=0x1e1).contains(&pass_type)
+        || (0x2d8..=0x2ef).contains(&pass_type);
+    if none {
+        return;
+    }
+    typed_call!(
+        shader::FAMILY,
+        0x00be_1ff0,
+        accumulator::set_blend_of(e, this.addr(), state.addr())
+    );
+}
+
+/// The depth-write lock counter (`011ff9dc`, the lock counters' second word) that lighting 3.0's geometry end
+/// lowers by hand.
+const Z_WRITE_COUNTER: u32 = 0x011f_f9dc;
+
+// Typed from 00bbeef0
+/// Lighting 3.0's geometry end (slot 0x8c), `thiscall(shader, state)` (the shader not read; not a Ghidra function):
+/// in the pass types 0x1e0 and 0x1e1 the depth function put back (`00b97e80(3, 0)`); the stencil test off
+/// (`00b98070(0, 0)`) when the state's property 4 has bit 0 of its flags; in the types 0x1d3 to 0x1d6, when the
+/// state's alpha property (no null check, as the exe) has bit 0 of its flags, the depth-write lock counter lowered
+/// and depth writes on (`SetZWriteEnable(1, 0)`).
+pub fn geometry_done(e: &mut Engine, _this: Ptr, state: Ptr) {
+    let pass_type = packet::rendering_pass_type(e);
+    if pass_type == 0x1e0 || pass_type == 0x1e1 {
+        typed_call!(shader::FAMILY, 0x00b9_7e80, crate::shader::state::set_z_function(e, 3, 0));
+    }
+    let block = state.addr();
+    let other = packet::state_property(e, block, 4);
+    if other != 0 && packet::ni_property_flags(e, other) & 1 != 0 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_8070,
+            crate::shader::state::set_stencil_enable(e, 0u8, 0)
+        );
+    }
+    if pass_type.wrapping_sub(0x1d3) <= 3 {
+        let alpha = packet::state_property(e, block, 0);
+        if packet::ni_property_flags(e, alpha) & 1 != 0 {
+            let count = capture::own_at::<u32>(e, Z_WRITE_COUNTER).wrapping_sub(1);
+            capture::set_own_at(e, Z_WRITE_COUNTER, count);
+            typed_call!(
+                shader::FAMILY,
+                0x00b9_7e30,
+                crate::shader::state::set_z_write_enable(e, 1u8, 0)
+            );
+        }
+    }
+}
+
+/// The bone constants' switch object lighting 3.0 uploads under (`01201090`: with its byte +8 set, a shader
+/// without its own bone constants still uploads them) and `"BoneMatrix3"` (`010a1cac`).
+const BONE_SWITCH: u32 = 0x0120_1090;
+const BONE_MATRIX_NAME: u32 = 0x010a_1cac;
+
+// Typed from 00bbd000
+/// Lighting 3.0's partition set-up (slot 0x64), `thiscall(shader, eight words: an unread word, the skin instance,
+/// the partition, three unread words, the world transform, an unread word)`: only with a partition, no +0x38 and
+/// either the switch object (`01201090`) present with its byte +8 set or the shader's +0x34 its own bone constants
+/// (+0x70): the renderer's bone matrices for the skin with the world transform (3 registers a bone, the world left
+/// out), then the current pass's constants (+0x5c) get the partition's bones through their slot 0x78: under the
+/// shader's "BoneMatrix3" handle (slot 0x70 of +0x70) when they are its own, else under the switch, the skin's
+/// buffer (+0x28), the partition's 16-bit count (+0x20), the skin's word +0x20 and the partition's bone indices
+/// (+4). Answers 0.
+#[allow(clippy::too_many_arguments)]
+pub fn bone_setup(
+    e: &mut Engine,
+    this: Ptr,
+    _unused_0: u32,
+    skin: u32,
+    partition: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    world: u32,
+    _unused_7: u32,
+) -> u32 {
+    let t = this.addr();
+    if partition == 0 || e.global::<u32>(t.wrapping_add(0x38)) != 0 {
+        return 0;
+    }
+    let switch = capture::own_at::<u32>(e, BONE_SWITCH);
+    let switched = switch != 0 && e.global::<u8>(switch.wrapping_add(8)) != 0;
+    if !switched && e.global::<u32>(t.wrapping_add(0x34)) != e.global::<u32>(t.wrapping_add(0x70)) {
+        return 0;
+    }
+    let renderer = e.global::<u32>(packet::RENDERER);
+    typed_call!(
+        super::FAMILY,
+        0x00e6_fe30,
+        super::skin::bone_matrices(
+            e,
+            Ptr::new(renderer),
+            Ptr::new(skin),
+            Ptr::new(world),
+            0u8,
+            3u32,
+            1u8
+        )
+    );
+    let map = e.global::<u32>(t.wrapping_add(0x70));
+    let matrices = e.global::<u32>(skin.wrapping_add(0x28));
+    let rows = e.global::<u32>(skin.wrapping_add(0x20));
+    let indices = e.global::<u32>(partition.wrapping_add(4));
+    let count = u32::from(e.global::<u16>(partition.wrapping_add(0x20)));
+    let constants = e.global::<u32>(packet::current_pass(e).wrapping_add(0x5c));
+    let entry = if e.global::<u32>(t.wrapping_add(0x34)) == map {
+        e.vcall(map, 0x70, &args![BONE_MATRIX_NAME]).u32()
+    } else {
+        capture::own_at::<u32>(e, BONE_SWITCH)
+    };
+    e.vcall(
+        constants,
+        0x78,
+        &args![entry, matrices, count, rows, indices],
+    );
+    0
+}

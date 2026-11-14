@@ -34,6 +34,8 @@ const INDEX_ALPHA_FUNCTION: u32 = 0x011f_fa94;
 const INDEX_ALPHA_BLEND: u32 = 0x011f_fa9c;
 const INDEX_COLOR_WRITE: u32 = 0x011f_fcd0;
 const INDEX_STENCIL_ENABLE: u32 = 0x011f_fb00;
+/// The fill mode's state index (`D3DRS_FILLMODE`, 8).
+const INDEX_FILL_MODE: u32 = 0x011f_fa50;
 const INDEX_CLIP_PLANES: u32 = 0x011f_fc90;
 const INDEX_DEPTH_BIAS: u32 = 0x011f_fd3c;
 /// The counter index of each render state (`011ffa30`, by state).
@@ -254,6 +256,12 @@ pub fn set_color_write(e: &mut Engine, mask: u32, lock: u32) {
 /// `cdecl(enable, lock)`: `D3DRS_STENCILENABLE` (0x34).
 pub fn set_stencil_enable(e: &mut Engine, enable: u8, lock: u32) {
     counted(e, INDEX_STENCIL_ENABLE, 0x34, u32::from(enable), lock);
+}
+
+// Typed from 00b98480
+/// `cdecl(wireframe, lock)`: `D3DRS_FILLMODE` (8): wireframe (2) when the byte is set, else solid (3).
+pub fn set_fill_mode(e: &mut Engine, wireframe: u8, lock: u32) {
+    counted(e, INDEX_FILL_MODE, 8, if wireframe == 0 { 3 } else { 2 }, lock);
 }
 
 // Typed from 00b98280

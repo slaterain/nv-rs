@@ -197,3 +197,54 @@ fn constants_with(e: &mut Engine, this: Ptr, state: Ptr, geometry: u32, world: u
         e.vcall(target, 0x24, &args![other]);
     }
 }
+
+/// Where the sky shader's pass choice finds a pass type's pass in the shader: type 9 its +0x6c, 0x239 its +0x88,
+/// and the types 0x23a to 0x2d5 with a case in the exe's jump table (`00b885a8` with the bytes `00b885d0`).
+fn sky_pass_offset(pass_type: u32) -> Option<u32> {
+    Some(match pass_type {
+        9 => 0x6c,
+        0x239 => 0x88,
+        0x23a => 0x74,
+        0x23b => 0x78,
+        0x23c => 0x84,
+        0x23d => 0x7c,
+        0x23e => 0x80,
+        0x2d2 => 0x70,
+        0x2d3 => 0x90,
+        0x2d4 => 0x94,
+        0x2d5 => 0x8c,
+        _ => return None,
+    })
+}
+
+// Typed from 00b884e0
+/// The sky shader's pass choice (slot 0xf0), `thiscall(shader, pass type)` (not a Ghidra function: typed from its
+/// bytes): for its pass types the shader's pass for the type ([`sky_pass_offset`]) becomes the current pass;
+/// other types: nothing.
+pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    if let Some(offset) = sky_pass_offset(pass_type) {
+        let pass = e.global::<u32>(this.addr().wrapping_add(offset));
+        own::set_current_pass(e, pass);
+    }
+}
+
+// Typed from 00b8a1a0
+/// The sky shader's geometry end (slot 0x8c), `thiscall(shader, state)` (the shader not read): for a sky property
+/// of kind 0 or 6 the blend put back (`00b97ff0(6, 7, 0)`, the shader family's); when the state's property 4 has
+/// bit 0 of its flags, the stencil test off (`00b98070(0, 0)`).
+pub fn geometry_done(e: &mut Engine, _this: Ptr, state: Ptr) {
+    let block = state.addr();
+    let property = packet::state_property(e, block, 3);
+    let kind = packet::sky_kind(e, property);
+    if kind == 0 || kind == 6 {
+        typed_call!(shader::FAMILY, 0x00b9_7ff0, state::set_blend(e, 6, 7, 0));
+    }
+    let other = packet::state_property(e, block, 4);
+    if other != 0 && packet::ni_property_flags(e, other) & 1 != 0 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_8070,
+            state::set_stencil_enable(e, 0u8, 0)
+        );
+    }
+}

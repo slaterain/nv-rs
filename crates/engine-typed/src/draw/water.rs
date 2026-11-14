@@ -259,3 +259,208 @@ fn constants_with(e: &mut Engine, this: Ptr, state: Ptr, geometry: u32, world: u
         [geometry, skin, 0, buffers, block, 0, world, bound, 0, 1],
     );
 }
+
+/// Where the water shader's pass choice finds a pass type's pass in the shader (+0x6c to +0x190): the types 0x23f
+/// to 0x2ce with a case in the exe's jump table (`00b81ba4` with the bytes `00b81ccc`).
+fn water_pass_offset(pass_type: u32) -> Option<u32> {
+    Some(match pass_type {
+        0x23f => 0xf0,
+        0x240 => 0xf4,
+        0x288 => 0xf8,
+        0x289 => 0x188,
+        0x28a => 0xb0,
+        0x28b => 0xbc,
+        0x28c => 0xb8,
+        0x28d => 0xb4,
+        0x28e => 0xc0,
+        0x28f => 0xcc,
+        0x290 => 0xc8,
+        0x291 => 0xc4,
+        0x292 => 0xd0,
+        0x293 => 0xdc,
+        0x294 => 0xd8,
+        0x295 => 0xd4,
+        0x296 => 0xe0,
+        0x297 => 0xec,
+        0x298 => 0xe8,
+        0x299 => 0xe4,
+        0x29a => 0x100,
+        0x29b => 0x148,
+        0x29c => 0x14c,
+        0x29d => 0x150,
+        0x29e => 0x154,
+        0x29f => 0x158,
+        0x2a0 => 0x15c,
+        0x2a1 => 0x160,
+        0x2a2 => 0x164,
+        0x2a3 => 0x168,
+        0x2a4 => 0x16c,
+        0x2a5 => 0x170,
+        0x2a6 => 0x174,
+        0x2a7 => 0x178,
+        0x2a8 => 0x17c,
+        0x2a9 => 0x180,
+        0x2aa => 0x184,
+        0x2ab => 0x190,
+        0x2ac => 0x6c,
+        0x2ad => 0x78,
+        0x2ae => 0x74,
+        0x2af => 0x70,
+        0x2b0 => 0x8c,
+        0x2b1 => 0x98,
+        0x2b2 => 0x94,
+        0x2b3 => 0x90,
+        0x2b4 => 0x7c,
+        0x2b5 => 0x80,
+        0x2b6 => 0x84,
+        0x2b7 => 0x88,
+        0x2b8 => 0x9c,
+        0x2b9 => 0xa8,
+        0x2ba => 0xa4,
+        0x2bb => 0xa0,
+        0x2bc => 0xfc,
+        0x2bd => 0xac,
+        0x2be => 0x104,
+        0x2bf => 0x110,
+        0x2c0 => 0x10c,
+        0x2c1 => 0x108,
+        0x2c2 => 0x124,
+        0x2c3 => 0x130,
+        0x2c4 => 0x12c,
+        0x2c5 => 0x128,
+        0x2c6 => 0x114,
+        0x2c7 => 0x118,
+        0x2c8 => 0x11c,
+        0x2c9 => 0x120,
+        0x2ca => 0x134,
+        0x2cb => 0x140,
+        0x2cc => 0x13c,
+        0x2cd => 0x138,
+        0x2ce => 0x18c,
+        _ => return None,
+    })
+}
+
+// Typed from 00b81760
+/// The water shader's pass choice (slot 0xf0), `thiscall(shader, pass type)` (not a Ghidra function: typed from
+/// its bytes): for its pass types the shader's pass for the type ([`water_pass_offset`]) becomes the current pass;
+/// other types: nothing.
+pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    if let Some(offset) = water_pass_offset(pass_type) {
+        let pass = e.global::<u32>(this.addr().wrapping_add(offset));
+        own::set_current_pass(e, pass);
+    }
+}
+
+/// The pass index the water shader's pass constants hand to the pass flags (`00b815e0`): 1 to 0x48 for the types
+/// 0x23f to 0x2ce with a case in the exe's jump table (`00b822f0` with the bytes `00b82418`), else 0.
+fn water_pass_index(pass_type: u32) -> u32 {
+    match pass_type {
+        0x23f => 0x21,
+        0x240 => 0x22,
+        0x288 => 0x23,
+        0x289 => 0x47,
+        0x28a => 0x11,
+        0x28b => 0x14,
+        0x28c => 0x13,
+        0x28d => 0x12,
+        0x28e => 0x15,
+        0x28f => 0x18,
+        0x290 => 0x17,
+        0x291 => 0x16,
+        0x292 => 0x19,
+        0x293 => 0x1c,
+        0x294 => 0x1b,
+        0x295 => 0x1a,
+        0x296 => 0x1d,
+        0x297 => 0x20,
+        0x298 => 0x1f,
+        0x299 => 0x1e,
+        0x29a => 0x25,
+        0x29b => 0x37,
+        0x29c => 0x38,
+        0x29d => 0x39,
+        0x29e => 0x3a,
+        0x29f => 0x3b,
+        0x2a0 => 0x3c,
+        0x2a1 => 0x3d,
+        0x2a2 => 0x3e,
+        0x2a3 => 0x3f,
+        0x2a4 => 0x40,
+        0x2a5 => 0x41,
+        0x2a6 => 0x42,
+        0x2a7 => 0x43,
+        0x2a8 => 0x44,
+        0x2a9 => 0x45,
+        0x2aa => 0x46,
+        0x2ab => 0x49,
+        0x2ad => 0x3,
+        0x2ae => 0x2,
+        0x2af => 0x1,
+        0x2b0 => 0x8,
+        0x2b1 => 0xb,
+        0x2b2 => 0xa,
+        0x2b3 => 0x9,
+        0x2b4 => 0x4,
+        0x2b5 => 0x5,
+        0x2b6 => 0x6,
+        0x2b7 => 0x7,
+        0x2b8 => 0xc,
+        0x2b9 => 0xf,
+        0x2ba => 0xe,
+        0x2bb => 0xd,
+        0x2bc => 0x24,
+        0x2bd => 0x10,
+        0x2be => 0x26,
+        0x2bf => 0x29,
+        0x2c0 => 0x28,
+        0x2c1 => 0x27,
+        0x2c2 => 0x2e,
+        0x2c3 => 0x31,
+        0x2c4 => 0x30,
+        0x2c5 => 0x2f,
+        0x2c6 => 0x2a,
+        0x2c7 => 0x2b,
+        0x2c8 => 0x2c,
+        0x2c9 => 0x2d,
+        0x2ca => 0x32,
+        0x2cb => 0x35,
+        0x2cc => 0x34,
+        0x2cd => 0x33,
+        0x2ce => 0x48,
+        _ => 0,
+    }
+}
+
+// Typed from 00b81d60
+/// The water shader's pass constants (slot 0xfc), `thiscall(shader, pass type)` (the shader not read; not a Ghidra
+/// function: typed from its bytes): the pass flags (`00b815e0`, this family's) of the type's pass index
+/// ([`water_pass_index`]).
+pub fn pass_constants(e: &mut Engine, _this: Ptr, pass_type: u32) {
+    let index = water_pass_index(pass_type);
+    typed_call!(super::FAMILY, 0x00b8_15e0, group_c::pass_flags(e, index));
+}
+
+// Typed from 00b86b80
+/// The water shader's geometry end (slot 0x8c), `thiscall(shader, state)` (the shader not read; not a Ghidra
+/// function): wireframe off (`00b98480(0, 0)`) when the state's water property is set and has bit 0x10000 of its
+/// flags +0x24; the stencil test off (`00b98070(0, 0)`) outside the pass types 0x288 and 0x289 when the property's
+/// byte +0x60 is set (read with no null check, as the exe).
+pub fn geometry_done(e: &mut Engine, _this: Ptr, state: Ptr) {
+    let property = packet::state_property(e, state.addr(), 3);
+    let pass_type = packet::rendering_pass_type(e);
+    if property != 0 && packet::property_flags_24(e, property) & 0x1_0000 != 0 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_8480,
+            crate::shader::state::set_fill_mode(e, 0u8, 0)
+        );
+    }
+    if pass_type != 0x288 && pass_type != 0x289 && e.global::<u8>(property.wrapping_add(0x60)) != 0 {
+        typed_call!(
+            shader::FAMILY,
+            0x00b9_8070,
+            crate::shader::state::set_stencil_enable(e, 0u8, 0)
+        );
+    }
+}

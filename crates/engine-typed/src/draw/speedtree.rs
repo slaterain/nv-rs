@@ -5,19 +5,13 @@
 //! shader's own words (its renderer +0x18, its constant maps, made at load), the passes' contents and
 //! the exe's constants.
 
-use super::{group_c, own, packet, thunks};
+use super::{capture, group_c, own, packet, thunks};
 use crate::shader::{self, accumulator};
 use engine_core::ptr::Ptr;
 use engine_core::{args, typed_call, Engine};
 
 /// Bits of 1.0.
 const ONE: u32 = 0x3f80_0000;
-/// What these call by address: the leaf lights' set-up (`00bb1960`, `thiscall(shader, property,
-/// inverse, scale)`), the camera rows (`00bb1a90`, no words) and a scene light's constants (`00b71360`,
-/// `cdecl(index, light, value)`).
-const LIGHT_SETUP: u32 = 0x00bb_1960;
-const CAMERA_ROWS: u32 = 0x00bb_1a90;
-const SCENE_LIGHT: u32 = 0x00b7_1360;
 /// The shader's `SetupGeometry` slot (+0x60, [`setup_geometry`] in the exe's vtable); a leaf
 /// property's data (slot 0xfc) and leaves (slot 0x100) through [`packet::leaf_data`] and [`packet::copy_leaves`].
 const SLOT_SETUP_GEOMETRY: u32 = 0x60;
@@ -92,9 +86,13 @@ pub fn setup_geometry(
             0
         };
         let scale = packet::transform_word(e, transform, 0x30);
-        e.call(LIGHT_SETUP, &args![base, property, inverse, scale]);
+        typed_call!(
+            super::FAMILY,
+            0x00bb_1960,
+            light_setup(e, this, Ptr::new(property), inverse, f32::from_bits(scale))
+        );
     });
-    e.call(CAMERA_ROWS, &[]);
+    typed_call!(super::FAMILY, 0x00bb_1a90, camera_rows(e));
     0
 }
 
@@ -149,7 +147,11 @@ fn constants_with(
     let mut index = 0u8;
     while index < packet::rendering_pass_byte9(e, record) {
         let light = packet::rendering_light(e, record, u32::from(index));
-        e.call(SCENE_LIGHT, &args![u32::from(index), light, light_value]);
+        typed_call!(
+            super::FAMILY,
+            0x00b7_1360,
+            scene_light(e, u32::from(index), Ptr::new(light), f32::from_bits(light_value))
+        );
         index = index.wrapping_add(1);
     }
     if crate::slot_target(e, base, SLOT_SETUP_GEOMETRY) == SETUP_GEOMETRY {
@@ -205,6 +207,175 @@ fn constants_with(
     let words = [geometry, skin, 0, buffers, block, 0, transform, bound, 0, 1];
     group_c::map_constants(e, base, 0x34, 0x5c, words);
     group_c::map_constants(e, base, 0x30, 0x44, words);
+}
+
+/// What [`light_setup`] reads (the light rows the per-light set-up left: the direction `011fa1f0`, the position
+/// `011fa180`, the range `011fa200`) and fills (the leaves' direction `01200618` with 0.0, position `01200628`,
+/// range over the scale `01200634`).
+const LIGHT_DIRECTION: u32 = 0x011f_a1f0;
+const LIGHT_POSITION: u32 = 0x011f_a180;
+const LIGHT_RANGE: u32 = 0x011f_a200;
+const LEAF_DIRECTION: u32 = 0x0120_0618;
+const LEAF_POSITION: u32 = 0x0120_0628;
+const LEAF_RANGE: u32 = 0x0120_0634;
+
+// Typed from 00bb1960
+/// The leaf lights' set-up, `thiscall(shader, property, matrix, scale)` (the shader not read): in a 0x38-byte
+/// frame laid out as the exe's, the light direction negated (each word through `FLD`/`FCHS`/`FSTP`, so quieted)
+/// transformed by the matrix (`D3DXVec3TransformNormal` into +0x2c) and normalized back into +4, stored with 0.0;
+/// when the property has active lights (`GetNumberofActiveLights`, its low 16 bits), the light position
+/// transformed (`D3DXVec3TransformCoord`, +0x10 into +0x1c) and stored, and the range over the scale.
+pub fn light_setup(e: &mut Engine, _this: Ptr, property: Ptr, matrix: u32, scale: f32) {
+    e.with_stack(0x38, |e, frame| {
+        let frame = frame.addr();
+        let vector = frame + 4;
+        let transformed = frame + 0x2c;
+        for k in 0..3u32 {
+            let word = engine_core::x87::x87_quiet_bits(own::constant_word(e, LIGHT_DIRECTION + 4 * k));
+            e.set_global(vector + 4 * k, word ^ 0x8000_0000);
+        }
+        thunks::call_vec3_transform_normal(e, transformed, vector, matrix);
+        thunks::call_vec3_normalize(e, vector, transformed);
+        for k in 0..3u32 {
+            let word = engine_core::x87::x87_quiet_bits(e.global::<u32>(vector + 4 * k));
+            own::set_constant_word(e, LEAF_DIRECTION + 4 * k, word);
+        }
+        own::set_constant_word(e, LEAF_DIRECTION + 0xc, 0);
+        let active: u32 = typed_call!(
+            super::FAMILY,
+            0x00b7_0790,
+            super::lights::active_light_count(e, property)
+        );
+        if active & 0xffff == 0 {
+            return;
+        }
+        let position = frame + 0x10;
+        let moved = frame + 0x1c;
+        for k in 0..3u32 {
+            let word = engine_core::x87::x87_quiet_bits(own::constant_word(e, LIGHT_POSITION + 4 * k));
+            e.set_global(position + 4 * k, word);
+        }
+        thunks::call_vec3_transform_coord(e, moved, position, matrix);
+        for k in 0..3u32 {
+            let word = engine_core::x87::x87_quiet_bits(e.global::<u32>(moved + 4 * k));
+            own::set_constant_word(e, LEAF_POSITION + 4 * k, word);
+        }
+        let range = f32::from_bits(own::constant_word(e, LIGHT_RANGE)) / scale;
+        own::set_constant_word(e, LEAF_RANGE, range.to_bits());
+    });
+}
+
+/// The camera rows [`camera_rows`] fills (`01200648` and `01200638`, each three words and 0.0).
+const CAMERA_ROW_A: u32 = 0x0120_0648;
+const CAMERA_ROW_B: u32 = 0x0120_0638;
+
+// Typed from 00bb1a90
+/// The leaf shader's camera rows, no words: from the camera the draw started with (`011f917c`) its words +0x6c,
+/// +0x78, +0x84 into the first row and +0x70, +0x7c, +0x88 into the second, each with 0.0 (through `FLD`/`FSTP`,
+/// so quieted; read through the packet, which holds the camera).
+pub fn camera_rows(e: &mut Engine) {
+    let camera = packet::last_camera(e);
+    let first = [0x6cu32, 0x78, 0x84]
+        .map(|offset| engine_core::x87::x87_quiet_bits(capture::word(e, camera, offset)));
+    let second = [0x70u32, 0x7c, 0x88]
+        .map(|offset| engine_core::x87::x87_quiet_bits(capture::word(e, camera, offset)));
+    for (k, word) in (0u32..).zip(first) {
+        own::set_constant_word(e, CAMERA_ROW_A + 4 * k, word);
+    }
+    own::set_constant_word(e, CAMERA_ROW_A + 0xc, 0);
+    for (k, word) in (0u32..).zip(second) {
+        own::set_constant_word(e, CAMERA_ROW_B + 4 * k, word);
+    }
+    own::set_constant_word(e, CAMERA_ROW_B + 0xc, 0);
+}
+
+/// The light kind [`scene_light`] hands to the general per-light set-up (`00b70820`) for a rendered geometry's
+/// shader whose word +0x68 is not lighting 3.0's (0x11), else to lighting 3.0's setters.
+const LIGHTING30_KIND: u32 = 0x11;
+
+// Typed from 00b71360
+/// A scene light's constants, `cdecl(index, light, value)` (the value a float, through `FLD`/`FSTP`, so
+/// quieted): when the rendered geometry's shader (+0xc0) has a word +0x68 other than 0x11 the per-light set-up
+/// (`00b70820`, the shader family's); else lighting 3.0's setter for a light with its byte +0xf4 set (`00b71130`)
+/// or the direction light's (`00b70de0`), each with the three words.
+pub fn scene_light(e: &mut Engine, index: u32, light: Ptr, value: f32) {
+    let geometry = packet::rendering_geometry(e);
+    let shader = e.global::<u32>(geometry.wrapping_add(0xc0));
+    let value = f32::from_bits(engine_core::x87::x87_quiet_bits(value.to_bits()));
+    if e.global::<u32>(shader.wrapping_add(0x68)) != LIGHTING30_KIND {
+        typed_call!(
+            shader::FAMILY,
+            0x00b7_0820,
+            shader::lighting::light_setup(e, index, light, value)
+        );
+    } else if packet::pass_light_byte(e, light.addr(), 0xf4) != 0 {
+        typed_call!(
+            super::FAMILY,
+            0x00b7_1130,
+            group_c::other_light(e, index, light, value)
+        );
+    } else {
+        typed_call!(
+            super::FAMILY,
+            0x00b7_0de0,
+            group_c::direction_light(e, index, light, value)
+        );
+    }
+}
+
+/// A pass stage's reference count (+0x60) and `00e7ecd0` (`thiscall(stage)`), which deletes one whose count fell
+/// to 0; a shader property's texture (its slot 0xb4).
+const STAGE_COUNT: u32 = 0x60;
+const STAGE_DELETE: u32 = 0x00e7_ecd0;
+const SLOT_PROPERTY_TEXTURE: u32 = 0xb4;
+
+// Typed from 00bb1b20
+/// The leaf shader's pass choice (slot 0xf0), `thiscall(shader, pass type)`: for type 0x3e the shader's +0x384
+/// becomes the current pass, for 0x3f its +0x388; other types leave it.
+pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    let offset = match pass_type {
+        0x3e => 0x384u32,
+        0x3f => 0x388,
+        _ => return,
+    };
+    let pass = e.global::<u32>(this.addr().wrapping_add(offset));
+    own::set_current_pass(e, pass);
+}
+
+// Typed from 00bb26d0
+/// The leaf shader's slot 0x78, `thiscall(shader, state)`: the current pass's stage 0 held (its count +0x60 up
+/// when there is one) while it takes the texture of the state's shader property (its slot 0xb4) and the shader's
+/// slot 0x108 runs; then its count goes down (no null check, as the exe) and at 0 it is deleted (`00e7ecd0`).
+pub fn setup_textures(e: &mut Engine, this: Ptr, state: Ptr) {
+    let property = packet::state_property(e, state.addr(), 3);
+    let stage = group_c::pass_stage(e, 0);
+    if stage != 0 {
+        let count = e.global::<u32>(stage.wrapping_add(STAGE_COUNT));
+        e.set_global(stage.wrapping_add(STAGE_COUNT), count.wrapping_add(1));
+    }
+    let texture = e.vcall(property, SLOT_PROPERTY_TEXTURE, &[]).u32();
+    own::set_stage_texture(e, stage, texture);
+    after_textures(e, this.addr());
+    let left = e
+        .global::<u32>(stage.wrapping_add(STAGE_COUNT))
+        .wrapping_sub(1);
+    e.set_global(stage.wrapping_add(STAGE_COUNT), left);
+    if left == 0 {
+        e.call(STAGE_DELETE, &args![stage]);
+    }
+}
+
+/// The shader's slot 0x108 (the render family's `00be2170` direct when the slot holds it).
+fn after_textures(e: &mut Engine, base: u32) {
+    if crate::slot_target(e, base, SLOT_AFTER_TEXTURES) == BIND_PASS_STAGES {
+        typed_call!(
+            crate::render::FAMILY,
+            0x00be_2170,
+            crate::render::pass::bind_pass_stages(e); words base
+        );
+    } else {
+        e.vcall(base, SLOT_AFTER_TEXTURES, &[]);
+    }
 }
 
 /// The fog constants the leaf shader fills (`011fa280`: the far distance, the range, the power, 0.0;
@@ -311,6 +482,170 @@ fn branch_constants_with(
     }
     group_c::map_constants(e, base, 0x30, 0x44, words);
     group_c::map_constants(e, base, 0x34, 0x5c, words);
+}
+
+/// The branch shader's counted pointer (+0x28) and the declaration its pass choice puts there (+0x6c); the slot
+/// after the textures (+0x108, `00be2170` in the exe's vtable: the render family's).
+const BRANCH_DECLARATION_SLOT: u32 = 0x28;
+const BRANCH_DECLARATION: u32 = 0x6c;
+const SLOT_AFTER_TEXTURES: u32 = 0x108;
+const BIND_PASS_STAGES: u32 = 0x00be_2170;
+/// `BSRenderedTexture::GetTexture` (`004bc320`, `thiscall(texture, 0)`), by address; the pair of textures the
+/// branch's pass types put into two stages (`011f95e4`, `011f95e8`: main's, set before the draw).
+const RENDERED_TEXTURE: u32 = 0x004b_c320;
+const PAIR_TEXTURES: [u32; 2] = [0x011f_95e4, 0x011f_95e8];
+
+/// Where the branch shader's pass choice finds a pass type's pass: the exe's word `01202350` to `012023c4` (the
+/// jump tables `00bd4254` with the bytes `00bd42b4` for 0x60 to 0x159, and `00bd43b0` with `00bd43cc` for 0x165 to
+/// 0x256; 0x15f its own case).
+fn branch_pass_word(pass_type: u32) -> Option<u32> {
+    Some(match pass_type {
+        0x60 => 0x0120_2350,
+        0x7a => 0x0120_2354,
+        0x7b => 0x0120_2358,
+        0x7e => 0x0120_235c,
+        0x130 => 0x0120_2360,
+        0x131 => 0x0120_2364,
+        0x151 => 0x0120_2368,
+        0x158 => 0x0120_236c,
+        0x159 => 0x0120_2370,
+        0x256 => 0x0120_2374,
+        0xdf => 0x0120_2378,
+        0xe8 => 0x0120_237c,
+        0xf1 => 0x0120_2380,
+        0xfa => 0x0120_2384,
+        0x108 => 0x0120_2388,
+        0x114 => 0x0120_238c,
+        0x11f => 0x0120_2390,
+        0x12a => 0x0120_2394,
+        0x9f => 0x0120_2398,
+        0xaa => 0x0120_239c,
+        0xb5 => 0x0120_23a0,
+        0xc0 => 0x0120_23a4,
+        0x137 => 0x0120_23a8,
+        0x143 => 0x0120_23ac,
+        0x15f => 0x0120_23b0,
+        0x165 => 0x0120_23b4,
+        0x16b => 0x0120_23b8,
+        0x171 => 0x0120_23bc,
+        0x177 => 0x0120_23c0,
+        0x234 => 0x0120_23c4,
+        _ => return None,
+    })
+}
+
+// Typed from 00bd4030
+/// The SpeedTree branch shader's pass choice (slot 0xf0), `thiscall(shader, pass type)`: for its pass types the
+/// exe's pass word for the type ([`branch_pass_word`]) becomes the current pass; then, for every type, the
+/// counted pointer +0x28 takes the shader's +0x6c (the exe's inlined assignment: nothing when equal, the old
+/// one's count down, deleted at 0, the new one stored as first read and counted).
+pub fn branch_select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    if let Some(word) = branch_pass_word(pass_type) {
+        let pass = e.global::<u32>(word);
+        own::set_current_pass(e, pass);
+    }
+    let base = this.addr();
+    own::assign_counted(
+        e,
+        base.wrapping_add(BRANCH_DECLARATION_SLOT),
+        base.wrapping_add(BRANCH_DECLARATION),
+        false,
+    );
+}
+
+/// What [`branch_setup_textures`] puts into the stages from the state's shader property, by the rendered pass's
+/// type (the exe's first switch, the bytes `00bd49c8` into `00bd49b8`): stage 0 the word at the property's
+/// `[+0xac]` and stage 1 its texture 0; stage 0 its texture 0; stage 0 the `[+0xac]` word.
+enum BranchTextures {
+    SourceAndFirst,
+    First,
+    Source,
+}
+
+fn branch_textures(pass_type: u32) -> Option<BranchTextures> {
+    Some(match pass_type {
+        0x7a | 0x7b | 0x9f | 0xaa | 0xb5 | 0xc0 | 0xdf | 0xe8 | 0xf1 | 0xfa | 0x108 | 0x114
+        | 0x11f | 0x12a => BranchTextures::SourceAndFirst,
+        0x7e | 0x130 | 0x131 | 0x137 | 0x143 | 0x158 | 0x159 | 0x15f | 0x165 | 0x16b | 0x171
+        | 0x177 => BranchTextures::First,
+        0x151 | 0x234 => BranchTextures::Source,
+        _ => return None,
+    })
+}
+
+/// The stages the pair of textures (`011f95e4`, `011f95e8`) go to, by type (the exe's second switch, the bytes
+/// `00bd4ad8` into `00bd4ac8`).
+fn branch_pair_stages(pass_type: u32) -> Option<(u32, u32)> {
+    match pass_type {
+        0xaa | 0xc0 | 0x114 | 0x12a => Some((6, 7)),
+        0xe8 | 0xfa => Some((5, 6)),
+        0x165 => Some((1, 2)),
+        _ => None,
+    }
+}
+
+// Typed from 00bd4890
+/// The SpeedTree branch shader's slot 0x78, `thiscall(shader, state)` (not a Ghidra function: typed from its
+/// bytes). With the current pass (read once) and the rendered pass's type: the stages from the state's shader
+/// property ([`branch_textures`]; texture 0 through `00c03230`, the shader family's); the pair of textures into
+/// two stages ([`branch_pair_stages`]); for type 0x234 stage 6 the shadow map of the rendered pass's first scene
+/// light (`BSRenderedTexture::GetTexture(0)` of its +0x10c); last the shader's slot 0x108 (direct when it holds
+/// the render family's).
+pub fn branch_setup_textures(e: &mut Engine, this: Ptr, state: Ptr) {
+    let property = packet::state_property(e, state.addr(), 3);
+    let pass = packet::current_pass(e);
+    let pass_type = packet::rendering_pass_type(e);
+    let stage = |e: &Engine, index: u32| {
+        let stages = e.global::<u32>(pass.wrapping_add(0x24));
+        e.global::<u32>(stages.wrapping_add(index.wrapping_mul(4)))
+    };
+    let source = |e: &Engine| {
+        let holder = e.global::<u32>(property.wrapping_add(0xac));
+        e.global::<u32>(holder)
+    };
+    let first = |e: &mut Engine| -> u32 {
+        typed_call!(
+            shader::FAMILY,
+            0x00c0_3230,
+            accumulator::texture_by_index(e, Ptr::new(property), 0u32)
+        )
+    };
+    match branch_textures(pass_type) {
+        Some(BranchTextures::SourceAndFirst) => {
+            let texture = source(e);
+            let stage0 = stage(e, 0);
+            own::set_stage_texture(e, stage0, texture);
+            let stage1 = stage(e, 1);
+            let texture = first(e);
+            own::set_stage_texture(e, stage1, texture);
+        }
+        Some(BranchTextures::First) => {
+            let stage0 = stage(e, 0);
+            let texture = first(e);
+            own::set_stage_texture(e, stage0, texture);
+        }
+        Some(BranchTextures::Source) => {
+            let texture = source(e);
+            let stage0 = stage(e, 0);
+            own::set_stage_texture(e, stage0, texture);
+        }
+        None => {}
+    }
+    if let Some(stages) = branch_pair_stages(pass_type) {
+        for (index, texture) in [stages.0, stages.1].into_iter().zip(PAIR_TEXTURES) {
+            let at = stage(e, index);
+            let texture = e.global::<u32>(texture);
+            own::set_stage_texture(e, at, texture);
+        }
+    }
+    if pass_type == 0x234 {
+        let light = packet::rendering_first_light(e);
+        let at = stage(e, 6);
+        let shadow_map = packet::scene_light_word(e, light, 0x10c);
+        let texture = e.call(RENDERED_TEXTURE, &args![shadow_map, 0u32]).u32();
+        own::set_stage_texture(e, at, texture);
+    }
+    after_textures(e, this.addr());
 }
 
 // Typed from 00c1a310
