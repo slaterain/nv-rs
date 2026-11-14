@@ -8,9 +8,9 @@
 //! the handlers here answer them as JIP's patched code does, reading JIP's actor flag bytes
 //! (`+0x105`, `+0x106`) and maps. Nothing here runs while JIP answers "not installed".
 //!
-//! Not here yet: `PushActorNoRagdoll` (the only user of the ApplyActorVelocity hook: its push
-//! force and push are JIP's own SSE routines, a later batch) and `CCCSetEquipped` (with JIP's
-//! always-on `GetCannotWear` patch at `0x418B10`, which reads the same `s_forceEquipCall`).
+//! `PushActorNoRagdoll` (the only user of the ApplyActorVelocity hook) is in `world_push`;
+//! `CCCSetEquipped`, which sets `s_forceEquipCall` around its equip call, and JIP's always-on
+//! `GetCannotWear` patch at `0x418B10`, which reads it too, are in `equip_hooks`.
 
 use crate::game::{Actor, JipActorFlags, TESForm, TESObjectREFR};
 use crate::Jip;
@@ -145,8 +145,6 @@ pub struct State {
     pub force_detection_value: BTreeMap<u32, u32>,
     /// `s_healthRestoreRatio`.
     pub health_restore_ratio: f32,
-    /// `s_forceEquipCall` (set by `CCCSetEquipped`, not built yet).
-    pub force_equip_call: bool,
 }
 
 fn state(e: &mut Engine) -> &mut State {
@@ -431,7 +429,7 @@ fn apply_actor_velocity_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 fn equip_item_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let from_resolve = e.take_caller_mark(RESOLVE_EQUIP_CALL);
     let (item, actor) = (a[0], a[1]);
-    if form_type(e, item) != WEAPON || state(e).force_equip_call || from_resolve {
+    if form_type(e, item) != WEAPON || crate::equip_hooks::force_equip_call(e) || from_resolve {
         return None;
     }
     (flags1(e, actor) & LOCKED_EQUIPMENT != 0).then_some(0)

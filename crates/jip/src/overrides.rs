@@ -321,7 +321,7 @@ fn vtable_says(e: &Engine, object: u32, slot: u32) -> bool {
     e.mem.u32(e.mem.u32(object) + slot) == RETURN_TRUE
 }
 
-fn base_form(e: &Engine, refr: u32) -> u32 {
+pub(crate) fn base_form(e: &Engine, refr: u32) -> u32 {
     e.get(
         Ptr::<TESObjectREFR>::new(refr),
         TESObjectREFR::pObjectReference,
@@ -543,7 +543,7 @@ fn menu_mode_eval(e: &mut Engine, w: &[u32]) -> Ret {
 // ---- GetItemCount (0x102F) ----
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESForm::GetContainer.
-fn base_container(e: &Engine, base: u32) -> u32 {
+pub(crate) fn base_container(e: &Engine, base: u32) -> u32 {
     if base == 0 {
         0
     } else if form_type(e, base) == CONTAINER {
@@ -577,7 +577,7 @@ pub(crate) fn changes_list(e: &mut Engine, refr: u32) -> u32 {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
 // ContChangesEntry::HasExtraLeveledItem.
-fn has_extra_leveled_item(e: &Engine, entry: u32) -> bool {
+pub(crate) fn has_extra_leveled_item(e: &Engine, entry: u32) -> bool {
     let lists = e.get(
         Ptr::<ContChangesEntry>::new(entry),
         ContChangesEntry::extendData,

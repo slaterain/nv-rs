@@ -48,6 +48,7 @@ pub mod commands;
 pub mod console;
 pub mod containers;
 pub mod cosave;
+pub mod equip_hooks;
 pub mod game;
 pub mod identity;
 pub mod input;
@@ -164,6 +165,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     ui_hooks::install(e, answers_installed);
     actor_hooks::install(e, answers_installed);
     ai_hooks::install(e, answers_installed);
+    equip_hooks::install(e, answers_installed);
     world_hooks::install(e, answers_installed);
     nvse::plugins::register(e, plugin(answers_installed));
     // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.

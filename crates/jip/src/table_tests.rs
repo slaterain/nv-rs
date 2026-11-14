@@ -239,7 +239,8 @@ fn installed_records(installed: bool) {
                 || crate::ui_hooks::COMMANDS.contains(&o)
                 || crate::actor_hooks::COMMANDS.contains(&o)
                 || crate::ai_hooks::COMMANDS.contains(&o)
-                || crate::world_hooks::COMMANDS.contains(&o))
+                || crate::world_hooks::COMMANDS.contains(&o)
+                || crate::equip_hooks::COMMANDS.contains(&o))
         {
             // The built commands, the identity, SetGameMainLoopCallback and the UI and actor
             // hooks' event commands, once installed.

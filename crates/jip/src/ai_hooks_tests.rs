@@ -476,9 +476,14 @@ fn locked_equipment() {
         let _mark = e.mark_caller(Hook::LockEquipment, 0x0091_559d);
         assert_eq!(site(&mut e, 0x0088_c87a, &[WEAPON, ACTOR]), None);
     }
-    state(&mut e).force_equip_call = true;
+    crate::equip_hooks::set_force_equip_call(&mut e, true);
     assert_eq!(site(&mut e, 0x0088_c87a, &[WEAPON, ACTOR]), None);
-    state(&mut e).force_equip_call = false;
+    crate::equip_hooks::set_force_equip_call(&mut e, false);
+    assert_eq!(
+        site(&mut e, 0x0088_c87a, &[WEAPON, ACTOR]),
+        Some(0),
+        "lowered"
+    );
     // The switch procedure's unequip, and the preferred weapon.
     assert_eq!(site(&mut e, 0x009d_a8e3, &[ACTOR]), Some(0));
     assert_eq!(site(&mut e, 0x009d_a8e3, &[OTHER]), None);

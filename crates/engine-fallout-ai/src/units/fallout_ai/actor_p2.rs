@@ -13103,6 +13103,74 @@ mod tests {
         assert_eq!(applied.borrow().len(), 1);
     }
 
+    /// JIP LN NVSE's `CCCSetEquipped` and its `GetCannotWear` patch end to end (step 3.5d): with
+    /// JIP installed answering "installed" (its wrap over the real `GetCanNotWear` translation of
+    /// `00418b10`), the game's own equip of an armour whose extra list holds the "cannot wear"
+    /// extra is still refused; the same armour selected in the container menu's list of a
+    /// companion (a `Character`) is equipped through this function by the command, then refused
+    /// again by a plain equip.
+    #[test]
+    fn ccc_set_equipped_equips_what_cannot_be_worn_with_jip() {
+        let mut e = engine3();
+        let (actor, item) = equip_world(&mut e, 0x18);
+        e.register(EXTRA_LIST_CAN_NOT_WEAR, |e, a| {
+            eax(u32::from(
+                engine_fallout_cell::units::fallout_shared::extradatalist::extra_data_list_get_can_not_wear(
+                    e,
+                    Ptr::new(a[0]),
+                ),
+            ))
+        });
+        jip::test_support::install_into(&mut e);
+        // A `Character`: its vtable's slots are the test table's.
+        const CHARACTER_VTABLE: u32 = 0x0108_6a6c;
+        map_pages(
+            &mut e,
+            &[0x0108_6000, 0x0108_7000, 0x011d_8000, 0x011d_9000],
+        );
+        let slots = e.mem.bytes(ACTOR_TABLE, 0x600);
+        e.mem.write(CHARACTER_VTABLE, &slots);
+        e.mem.set_u32(actor.addr(), CHARACTER_VTABLE);
+        let list = e.mem.alloc(0x20);
+        e.mem.set_u8(list + 0xf, 0x40);
+        let applied = record(&mut e, INVENTORY_APPLY_EQUIP, Ret::default());
+        equip(&mut e, actor, item, 1, list, [1, 0, 0]);
+        assert!(applied.borrow().is_empty(), "the game refuses it");
+        // The container menu on the companion, the armour selected in its list, the cursor on the
+        // list (tile id 20).
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, list);
+        let entry = e.mem.alloc(0xc);
+        e.mem.set_u32(entry, node);
+        e.mem.set_u32(entry + 4, 1);
+        e.mem.set_u32(entry + 8, item.addr());
+        let menu = e.mem.alloc(0x10c);
+        e.mem.set_u32(menu + 0x74, actor.addr());
+        e.mem.set_u32(menu + 0xd8, 0x5150);
+        e.mem.set_u32(0x011d_93f8, menu);
+        e.mem.set_u32(0x011d_93fc, entry);
+        let manager = e.mem.alloc(0x580);
+        let tile = e.mem.alloc(0x38);
+        let values = e.mem.alloc(4);
+        let value = e.mem.alloc(0x14);
+        e.mem.set_u32(0x011d_8a80, manager);
+        e.mem.set_u32(manager + 0xcc, tile);
+        e.mem.set_u32(tile + 0x14, values);
+        e.mem.set_u32(tile + 0x18, 1);
+        e.mem.set_u32(values, value);
+        e.mem.set_u32(value, 0xfaa);
+        e.mem.set_f32(value + 8, 20.0);
+        let sound = record(&mut e, 0x008a_ded0, Ret::default());
+        let refresh = record(&mut e, 0x0075_c280, Ret::default());
+        let (ok, result) = jip::test_support::call(&mut e, 0x2703, &[]);
+        assert_eq!((ok, result), (1, 0.0));
+        assert_eq!(applied.borrow().len(), 1, "CCCSetEquipped equips it");
+        assert_eq!(*sound.borrow(), vec![vec![0, item.addr(), 1, 1]]);
+        assert_eq!(*refresh.borrow(), vec![vec![menu, item.addr()]]);
+        equip(&mut e, actor, item, 1, list, [1, 0, 0]);
+        assert_eq!(applied.borrow().len(), 1, "refused again after the command");
+    }
+
     #[test]
     fn worn_items_and_missing_stock_stop_the_equip() {
         let mut e = engine3();
