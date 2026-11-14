@@ -82,7 +82,7 @@ system table has the counts; batch 10 of 2026-11-14 adds the maths, utility, loa
 radio, reference and game data commands, batch 11 the actor base, equipped item, hotkey, base container and
 sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters,
 lane A1 the first half of the actor commands: processes, combat and detection lists, leveling data, creature
-models); its engine hooks (step 3.5) are built in at their seams: the UI, actor
+models, lane D the game state commands of `jip_fn_miscellaneous`); its engine hooks (step 3.5) are built in at their seams: the UI, actor
 and AI hooks, and since 2026-11-14 the world hooks (step 3.5c) and `CCCSetEquipped` with its always-on `GetCannotWear`
 patch (step 3.5d), switched on only by its commands and only once JIP answers "installed" (left for later:
 `ToggleImmortalMode` with its hit patches in step 3.9).

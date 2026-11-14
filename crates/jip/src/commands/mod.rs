@@ -35,6 +35,7 @@ pub mod jip_fn_input;
 pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_misc_ref;
+pub mod jip_fn_miscellaneous;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
 pub mod jip_fn_projectile;
@@ -100,6 +101,7 @@ pub const ALL_CONDITIONS: &[Conditions] = &[
     jip_fn_weapon::CONDITIONS,
     jip_fn_ui::CONDITIONS,
     jip_fn_actor::CONDITIONS,
+    jip_fn_miscellaneous::CONDITIONS,
 ];
 
 /// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
@@ -107,7 +109,10 @@ pub const ALL_CONDITIONS: &[Conditions] = &[
 pub type ConditionsOnly = &'static [(u32, AbiFn)];
 
 /// Every module's condition-only commands.
-pub const ALL_CONDITIONS_ONLY: &[ConditionsOnly] = &[jip_fn_aux_variable::CONDITIONS_ONLY];
+pub const ALL_CONDITIONS_ONLY: &[ConditionsOnly] = &[
+    jip_fn_aux_variable::CONDITIONS_ONLY,
+    jip_fn_miscellaneous::CONDITIONS_ONLY,
+];
 
 /// Every module's list, one line per JIP source file.
 pub const ALL: &[Handlers] = &[
@@ -131,6 +136,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_impact_data::COMMANDS,
     jip_fn_land_texture::COMMANDS,
     jip_fn_light::COMMANDS,
+    jip_fn_miscellaneous::COMMANDS,
     jip_fn_package::COMMANDS,
     jip_fn_perk::COMMANDS,
     jip_fn_projectile::COMMANDS,
@@ -712,6 +718,7 @@ mod tests {
             "jip_fn_impact_data",
             "jip_fn_land_texture",
             "jip_fn_light",
+            "jip_fn_miscellaneous",
             "jip_fn_package",
             "jip_fn_perk",
             "jip_fn_projectile",
@@ -771,6 +778,7 @@ mod tests {
             "jip_fn_weapon",
             "jip_fn_ui",
             "jip_fn_actor",
+            "jip_fn_miscellaneous",
         ]) {
             for &(opcode, _, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
@@ -779,8 +787,11 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS.len(), 10);
-        for (list, file) in ALL_CONDITIONS_ONLY.iter().zip(["jip_fn_aux_variable"]) {
+        assert_eq!(ALL_CONDITIONS.len(), 11);
+        for (list, file) in ALL_CONDITIONS_ONLY
+            .iter()
+            .zip(["jip_fn_aux_variable", "jip_fn_miscellaneous"])
+        {
             for &(opcode, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
                 assert!(slot.file.ends_with(file), "{opcode:04x} {}", slot.name);
@@ -791,7 +802,7 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS_ONLY.len(), 1);
+        assert_eq!(ALL_CONDITIONS_ONLY.len(), 2);
         // README's JIP LN count is checked in one place, against the table's every handled JIP
         // opcode: `ui_hooks::tests::the_readme_counts_the_built_commands`.
     }
