@@ -694,9 +694,13 @@ pub fn attach(packet: Detached) -> Result<(), Detached> {
 }
 
 /// The `N` bytes at `object + offset` as the open packet holds them: `None` with no packet open for `e`'s run,
-/// and `None` counted as a miss when the packet holds no range of the object that covers them.
+/// and `None` counted as a miss when the packet holds no range of the object that covers them. A null object is not
+/// a miss (as for [`span`]): the cut never copies one, and its read is of the zero page, which nothing on main changes.
 #[inline(always)]
 fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N]> {
+    if object == 0 {
+        return None;
+    }
     PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;

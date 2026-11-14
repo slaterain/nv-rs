@@ -13138,10 +13138,22 @@ fn decal_pass_keeps_the_draws_own_state() {
             set(e, 0x0120_0458, c.word(3));
             set(e, 0x011f_f9dc, c.word(4) + 1);
             set(e, 0x011f_f9e4, c.word(4) + 1);
-            (vec![d.w.acc], d.w.acc)
+            // For the fill: the accumulator, then the world's passes.
+            let list = e.mem.alloc(4 * 5);
+            set(e, list, d.w.acc);
+            for (k, pass) in (1u32..).zip(d.w.passes) {
+                set(e, list + 4 * k, pass);
+            }
+            (vec![d.w.acc], list)
         },
-        // The accumulator's settings (the decal flag, the render mode) as the cut copies them.
-        |e, acc, _| cut::take_frame(e, 0, Ptr::new(acc)),
+        // The accumulator's settings (the decal flag, the render mode) as the cut copies them, and each pass's lights
+        // (the stage light texture reads the pass's first light through the packet).
+        |e, list, _| {
+            cut::take_frame(e, 0, Ptr::new(e.mem.u32(list)));
+            for k in 1..5u32 {
+                cut::take_pass_lights(e, e.mem.u32(list + 4 * k));
+            }
+        },
     );
 }
 
