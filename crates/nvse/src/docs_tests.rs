@@ -921,3 +921,30 @@ fn the_table_ends_past_the_last_registered_record() {
     e.mem.set_u32(empty + 0x18, 0x7e00_3000);
     assert_eq!(table_end(&e), 0x2203);
 }
+
+/// A named record at a plugin opcode that no installed plugin registered (its built-in does not
+/// answer "installed") does not lengthen xNVSE's table.
+#[test]
+fn an_unlisted_plugins_record_does_not_lengthen_the_table() {
+    let mut e = engine(nvse_end());
+    crate::plugins::register(
+        &mut e,
+        BuiltIn {
+            file: "silent.dll",
+            name: "Silent",
+            version: 1,
+            opcode_base: 0x2200,
+            listed: false,
+            listener: None,
+            save: None,
+            load: None,
+            pre_load: None,
+            new_game: None,
+        },
+    );
+    table::grow_to(&mut e, 0x2202);
+    let record = e.script_tables().record(0x2201);
+    let name = table::guest_str(&mut e, b"Named");
+    e.mem.set_u32(record, name);
+    assert_eq!(table_end(&e), nvse_end());
+}
