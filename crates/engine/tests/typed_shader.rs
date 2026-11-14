@@ -7481,7 +7481,15 @@ fn grass_fog_words(e: &mut Engine, c: &Case) -> Vec<u32> {
         e.map(0x0108_c000, 0x1000);
     }
     // The exe quiets it through the x87: a signalling NaN with the extras' bit 0.
-    set(e, 0x0108_cb00, if c.word(4) & 1 != 0 { 0x7f80_0041 } else { 0x4974_2400 });
+    set(
+        e,
+        0x0108_cb00,
+        if c.word(4) & 1 != 0 {
+            0x7f80_0041
+        } else {
+            0x4974_2400
+        },
+    );
     vec![words[0], 0x5555]
 }
 
@@ -11007,7 +11015,10 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
                 "forced {forced}: the adopt did not scribble under POISON: {adopted:x?}"
             );
         } else {
-            assert_eq!(adopted, before, "the adopt touched guest memory without POISON");
+            assert_eq!(
+                adopted, before,
+                "the adopt touched guest memory without POISON"
+            );
         }
         let handed_answer = (first(&mut handed, &b), second(&mut handed, &b));
         assert!(
@@ -11076,7 +11087,10 @@ fn the_hand_off_draws_as_the_cut_on_one_thread() {
         // A frame drawn on main with the packet off (the host's mode for a run with the row on and no POISON check,
         // as for every default run) makes no cut.
         let _ = first(&mut e, &w);
-        assert!(!capture::is_open(&e), "a serial frame cut with the packet off");
+        assert!(
+            !capture::is_open(&e),
+            "a serial frame cut with the packet off"
+        );
         let _ = second(&mut e, &w);
         capture::set_thread_mode(None);
     }

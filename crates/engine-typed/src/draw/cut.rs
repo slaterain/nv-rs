@@ -1,6 +1,3 @@
-    if camera == 0 || packet::scene_renderer(e) == 0 {
-        return None;
-    }
 //! The cut (step 2, piece 1: `measure/scope-1111/PLAN.md`): as the world draw's first half starts, what the draw
 //! will read that the frame's tail may change goes into the value packet ([`super::capture`]).
 //!

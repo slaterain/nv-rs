@@ -136,7 +136,12 @@ use engine_typed::draw::{capture, cut};
 /// Export E1: main's cut, the packet boxed for the seam. With the run-wide mode off ([`capture_mode`]: the row on
 /// without the POISON check) this post's cut runs with the packet on, as this thread's mode for the call only, so
 /// only a frame the seam posts is cut.
-pub fn hand_off_cut(e: &mut Engine, camera: u32, accumulator: u32, stepped: bool) -> Option<Packet> {
+pub fn hand_off_cut(
+    e: &mut Engine,
+    camera: u32,
+    accumulator: u32,
+    stepped: bool,
+) -> Option<Packet> {
     let before = capture::thread_mode();
     capture::set_thread_mode(Some(post_mode(capture::mode())));
     let packet = cut::cut_for_thread(e, camera, Ptr::new(accumulator), stepped);
@@ -327,7 +332,11 @@ mod serial_tests {
         for (choice, want) in &cases {
             assert_eq!(capture_mode(choice), *want, "{choice:?}");
             // What was set before (the stand-in for the variable) does not survive the install.
-            let before = if *want == Mode::Poison { Mode::Off } else { Mode::Poison };
+            let before = if *want == Mode::Poison {
+                Mode::Off
+            } else {
+                Mode::Poison
+            };
             capture::set_mode(Some(before));
             install(&mut Engine::new(), choice);
             let got = capture::mode();
