@@ -9148,7 +9148,11 @@ fn tall_grass_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     set(e, 0x011f_91c0, c.word(7));
     let shadows = c.word(8);
     e.mem.set_u8(0x011f_9427, u8::from(shadows == 1));
-    set(e, 0x011f_95e4, u32::from(shadows != 2));
+    // The pair's first texture: a counted object (the cut holds it), or none.
+    let shadow_vt = vtable(e, &[]);
+    let shadow_map = obj(e, 0x10, shadow_vt);
+    set(e, shadow_map + 4, 2);
+    set(e, 0x011f_95e4, if shadows != 2 { shadow_map } else { 0 });
     e.mem
         .set_u8(0x011f_91d8, if shadows == 3 { 0x1f } else { 0x3f });
     set(e, 0x011f_d890, c.word(9));
