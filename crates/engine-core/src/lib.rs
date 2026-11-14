@@ -76,6 +76,7 @@ pub mod queue_check;
 pub mod race_census;
 pub mod real_threads;
 pub mod sse;
+pub mod stage_time;
 pub mod static_exit;
 pub mod static_init;
 pub mod thread_host;

@@ -2663,6 +2663,8 @@ pub fn fn_0086e630(e: &mut Engine, value: u32) {
 /// player, the controls, the process lists, the cells, the menus, the renderer and the audio, in
 /// the order the game does, and counts the frames. `this` is the `Main` object.
 pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
+    // A frame starts (`NV_STAGE_TIME`; before the join, so a wait there counts in the frame it holds up).
+    engine_core::stage_time::point(engine_core::stage_time::Point::Idle);
     engine_core::draw_thread::idle(e);
     let frame_budget = e.global::<u32>(0x011a_3010);
     fn_0086a830(e, this.addr(), frame_budget);
@@ -2869,7 +2871,9 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
     let player = e.global::<u32>(PLAYER_OBJECT);
     let karma = e.vcall(player + 0xa4, 8, &args![KARMA_ACTOR_VALUE]).i32();
     e.call(0x0047_e040, &args![karma as f32]);
+    engine_core::stage_time::point(engine_core::stage_time::Point::SwapIn);
     fn_0086ff70(e, this);
+    engine_core::stage_time::point(engine_core::stage_time::Point::SwapOut);
     e.call(0x0087_05d0, &args![this]);
     if byte_flag(e, 0x011c_6fbb) {
         e.call(0x004d_c360, &args![]);
@@ -2878,7 +2882,9 @@ pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
     if world_steps_allowed(e, this) {
         if processor_count(e) > 1 {
             let object = e.call(0x0071_3d80, &args![]).u32();
+            engine_core::stage_time::point(engine_core::stage_time::Point::WaitIn);
             e.call(0x008c_7990, &args![object]);
+            engine_core::stage_time::point(engine_core::stage_time::Point::WaitOut);
         } else {
             e.call(0x008c_a300, &args![0x011e_0fe0u32]);
         }
