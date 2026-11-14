@@ -359,3 +359,10 @@ fn shared_ref_maps_cleared() {
     call(&mut e, 0x26aa, &[n(0), n(0), n(0), n(2)]);
     assert_eq!(e.ext::<crate::Jip>().saved.changed, 0);
 }
+
+/// GetIsLAA: 2, the answer JIP gives a patched game that reaches memory above 2 GB.
+#[test]
+fn large_address_aware() {
+    let mut e = setup();
+    assert_eq!(call(&mut e, 0x2892, &[]).1, 2.0);
+}

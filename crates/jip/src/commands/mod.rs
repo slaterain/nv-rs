@@ -35,6 +35,7 @@ pub mod jip_fn_perk;
 pub mod jip_fn_projectile;
 pub mod jip_fn_quest;
 pub mod jip_fn_ref_map;
+pub mod jip_fn_sound;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_utility;
 pub mod jip_fn_water;
@@ -117,6 +118,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_projectile::COMMANDS,
     jip_fn_quest::COMMANDS,
     jip_fn_ref_map::COMMANDS,
+    jip_fn_sound::COMMANDS,
     jip_fn_texture_set::COMMANDS,
     jip_fn_utility::COMMANDS,
     jip_fn_water::COMMANDS,
@@ -657,6 +659,7 @@ mod tests {
             "jip_fn_projectile",
             "jip_fn_quest",
             "jip_fn_ref_map",
+            "jip_fn_sound",
             "jip_fn_texture_set",
             "jip_fn_utility",
             "jip_fn_water",

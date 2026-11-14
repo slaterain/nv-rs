@@ -124,8 +124,14 @@ fn set_sound_flag(e: &mut Engine, w: &[u32]) -> Ret {
         let at = read.form(0) + FLAGS;
         let v = e.mem.u32(at);
         let bit = 1u32 << flag;
-        e.mem
-            .set_u32(at, if read.int(2, 0) != 0 { v | bit } else { v & !bit });
+        e.mem.set_u32(
+            at,
+            if read.int(2, 0) != 0 {
+                v | bit
+            } else {
+                v & !bit
+            },
+        );
     }
     handled(true)
 }

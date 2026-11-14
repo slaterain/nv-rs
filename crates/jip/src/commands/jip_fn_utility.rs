@@ -1,14 +1,14 @@
 //! `functions_jip/jip_fn_utility.h` (JIP LN NVSE): form ids to text and back, the smallest and
 //! largest of up to five numbers, the load order checks, clearing a mod's JIP data, a plugin's
-//! header version, an array element as a number, and a random integer. 10 of its 19 commands.
+//! header version, an array element as a number, a random integer, and whether the game has the
+//! large address space. 11 of its 19 commands.
 //!
 //! Left for later, each for its reason: `ReadArrayFromFile`, `WriteArrayToFile`,
 //! `ReadStringFromFile`, `WriteStringToFile` and `ModLogPrint` read or write the player's files
 //! (the platform keeps every file the game writes in memory, so a file a mod writes would not be
 //! there next session; built together with JIP's INI commands once there is a file seam that
 //! keeps them); `GetOptionalPatch`/`SetOptionalPatch` read and switch JIP's patches (the core
-//! track's hooks); `GetIsLAA` asks about the process's address space (the 64-bit port's own
-//! answer is the lead's to decide); `GetSessionTime` needs `s_initialTickCount`, which JIP takes
+//! track's hooks); `GetSessionTime` needs `s_initialTickCount`, which JIP takes
 //! in its deferred start (not built yet).
 
 use super::jip_fn_aux_variable::overriding_mod;
@@ -35,6 +35,7 @@ pub static COMMANDS: Handlers = &[
     (0x287f, get_plugin_header_version),
     (0x28c8, get_array_value),
     (0x28de, get_random_in_range),
+    (0x2892, get_is_laa),
 ];
 
 /// `g_dataHandler` (`*011C3F2C`): its loaded file count (`modList.loadedModCount`, +0x218) and
@@ -452,6 +453,25 @@ fn get_random_in_range(e: &mut Engine, w: &[u32]) -> Ret {
             .u32() as i32;
         a.set_result(e, f64::from(r.wrapping_add(lo)));
     }
+    handled(true)
+}
+
+/// What JIP's `GetIsLAA` answers for a large-address-aware game whose process reaches memory above
+/// 2 GB: 2. JIP's answers: 0 when the exe's header has no large-address flag (`IMAGE_FILE_LARGE_
+/// ADDRESS_AWARE`, 0x20 at +0x16 of the file header), 1 when it has the flag but a test allocation
+/// of 256 MB, growing by 256 MB to 2 GB, never ends above 0x80000000 (a 32-bit Windows without
+/// the 3 GB switch), 2 when one does. The port's memory goes past what the patched game gets, so it
+/// answers the most JIP tells apart (the lead's decision, 2026-11-15); mods use it to warn about an
+/// unpatched game or to size their caches.
+pub const IS_LAA: f64 = 2.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_utility.h: Cmd_GetIsLAA_Execute;
+// internal/jip_core.cpp: GetIsLAA.
+/// [`IS_LAA`], echoed in the console.
+fn get_is_laa(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, IS_LAA);
+    crate::console::print_result(e, &a);
     handled(true)
 }
 
