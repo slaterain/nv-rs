@@ -119,6 +119,10 @@ pub struct Jip {
     pub script: commands::jip_fn_script::State,
     /// What JIP's CC&C commands keep: the actor bases set to NCCS, the location grids.
     pub ccc: commands::jip_fn_ccc::State,
+    /// JIP's temporary position marker (`s_tempPosMarker`).
+    pub pos_marker: commands::pos_marker::State,
+    /// The live variables JIP added to scripts, and the names it added this session.
+    pub script_vars: commands::jip_fn_script_vars::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
