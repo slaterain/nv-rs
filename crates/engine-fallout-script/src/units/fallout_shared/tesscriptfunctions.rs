@@ -11631,6 +11631,49 @@ mod tests {
         assert!(!e.call(0x005b_bf70, &args![script(actor)]).bool());
     }
 
+    /// The console's `tai` typed twice with the same NPC selected (the
+    /// console runs the line with the picked reference as the reference,
+    /// `0071b210` -> `005ac400`): the first call turns its processing off, the
+    /// second turns it back on, and all-AI processing is never touched
+    /// (play report 2026-11-14: "can't use it again to turn processing back on").
+    #[test]
+    fn toggle_ai_twice_on_the_selected_actor_turns_it_back_on() {
+        let mut e = engine_d();
+        actor_cast_double(&mut e);
+        accept(
+            &mut e,
+            &[
+                CONSOLE_PRINT,
+                ACTOR_END_MOVEMENT,
+                PROCESS_LISTS_TURN_OFF_MOVEMENT_IN_HIGH,
+            ],
+        );
+        set_echo(&mut e, true);
+        let actor = reference(&mut e, &[], true);
+        // A loaded actor is processed (`Actor::Actor` sets `bProcessMe`).
+        e.mem.set_u8(actor + 0xbc, 1);
+        e.set_global(ALL_AI_FLAG, 1u8);
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_bf70, &args![script(actor)]).bool());
+        assert_eq!(e.mem.u8(actor + 0xbc), 0);
+        assert!(e.call(0x005b_bf70, &args![script(actor)]).bool());
+        assert_eq!(e.mem.u8(actor + 0xbc), 1);
+        assert_eq!(
+            printed(&e),
+            vec![
+                vec![MSG_PROCESSING_IS, actor + 0x1000, TEXT_OFF_CAPITAL],
+                vec![MSG_PROCESSING_IS, actor + 0x1000, TEXT_ON_CAPITAL],
+            ]
+        );
+        assert_eq!(
+            calls(&e, ACTOR_END_MOVEMENT),
+            vec![vec![actor], vec![actor]]
+        );
+        assert_eq!(e.global::<u8>(ALL_AI_FLAG), 1);
+        assert!(calls(&e, PROCESS_LISTS_TURN_OFF_MOVEMENT_IN_HIGH).is_empty());
+    }
+
     #[test]
     fn combat_ai_and_high_process_toggles() {
         let mut e = engine_d();
