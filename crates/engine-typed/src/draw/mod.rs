@@ -277,6 +277,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bb_e120, lighting30::setup_switches(Ptr<()>, u32)),
         entry!(0x00bd_02e0, lighting30::setup_stage_textures(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_95e0, group_c::set_light_entry(u32, u32, u32, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00ba_a720, tall_grass::update_point_lights(Ptr<_>, u32, u32, f32, u32)),
+        entry!(0x00ba_a850, tall_grass::shadow_setup(Ptr<_>, u32, u32)),
         entry!(0x00b7_0de0, group_c::direction_light(u32, Ptr<_>, f32)),
         entry!(0x00b7_1130, group_c::other_light(u32, Ptr<_>, f32)),
         entry!(0x00bb_95b0, group_c::set_light_half(u32, u32, u32, u32, u32)),

@@ -5113,19 +5113,14 @@ fn light_setup() {
 /// table and the ambient they fill (`01201c80`, `01201b30`) compare with the rest of memory.
 #[test]
 fn lighting_light_setters() {
-    for (name, f) in [
-        (
-            "direction_light",
-            entry!(0x00b7_0de0, group_c::direction_light(u32, Ptr<_>, f32)),
-        ),
-        (
-            "other_light",
-            entry!(0x00b7_1130, group_c::other_light(u32, Ptr<_>, f32)),
-        ),
+    for d in [
+        Diff::new(entry!(
+            0x00b7_0de0,
+            group_c::direction_light(u32, Ptr<_>, f32)
+        )),
+        Diff::new(entry!(0x00b7_1130, group_c::other_light(u32, Ptr<_>, f32))),
     ] {
-        eprintln!("{name}");
-        Diff::new(f)
-            .set_ups()
+        d.set_ups()
             // The light table's writers and the ambient (the draw family's, their own tests): by address on both sides.
             .goes_by_address(&[0x00bb_95e0, 0x00bb_95b0, 0x00bb_b790])
             .inputs(&[
@@ -13744,11 +13739,15 @@ fn acceptance_setup_pass(e: &mut Engine, d: &DrawW, which: AcceptanceSetup) -> u
         AcceptanceSetup::TallGrass => 0x010b_8980,
         AcceptanceSetup::NoLighting => 0x010b_b230,
         AcceptanceSetup::Leaves => 0x010b_9190,
+        AcceptanceSetup::Water => 0x010a_f9e0,
         _ => 0,
     };
     if class != 0 {
         if !e.mem.is_mapped(0x010b_8000) {
             e.map(0x010b_8000, 0x4000);
+        }
+        if !e.mem.is_mapped(0x010a_f000) {
+            e.map(0x010a_f000, 0x1000);
         }
         for k in 0..0x200 / 4 {
             let word = e.mem.u32(vt + 4 * k);
