@@ -154,7 +154,12 @@ fn delete(e: &mut Engine, object: u32, destructor: u32) {
 /// when it does not compile. The text is the script's source (up to its first NUL); the compile
 /// reads it from a copy in guest memory, which xNVSE's compile hooks may write into while they
 /// work (the `#version` tags), as they write into xNVSE's caller's string.
-pub fn compile_script_ex(e: &mut Engine, text: &[u8], name: Option<&[u8]>, assign_form_id: bool) -> u32 {
+pub fn compile_script_ex(
+    e: &mut Engine,
+    text: &[u8],
+    name: Option<&[u8]>,
+    assign_form_id: bool,
+) -> u32 {
     let buffer = e.call(FORM_HEAP_ALLOCATE, &args![sb::SIZE]).u32();
     e.call(BUFFER_CONSTRUCTOR, &args![buffer]);
     let handler = e.mem.u32(DATA_HANDLER);
@@ -468,22 +473,22 @@ fn list_folder(e: &mut Engine, dir: &[u8]) -> Vec<Found> {
     out
 }
 
-/// The regular files below `dir` in `std::filesystem::recursive_directory_iterator`'s order: each
+/// The files below `dir` in `std::filesystem::recursive_directory_iterator`'s order: each
 /// folder's entries in the order the search answers them, a sub-folder's entries right after the
-/// sub-folder (directory links are not followed). A file's path is the folder's and its name
-/// (a sub-folder's children after a `\`).
+/// sub-folder. A link to a folder (a folder entry that is a reparse point) is neither entered
+/// (the iterator's default options do not follow directory links) nor a file; a link to a file
+/// is a file, as `is_regular_file` follows it (one whose target is gone is still listed, and
+/// then fails to read, where xNVSE would pass it over). A file's path is the folder's and its
+/// name (a sub-folder's children after a `\`).
 fn walk(e: &mut Engine, dir: &[u8], files: &mut Vec<Vec<u8>>) {
     for found in list_folder(e, dir) {
         let mut path = dir.to_vec();
         path.extend_from_slice(&found.name);
-        if found.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-            continue;
-        }
-        if found.attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        if found.attributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            files.push(path);
+        } else if found.attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
             path.push(b'\\');
             walk(e, &path, files);
-        } else {
-            files.push(path);
         }
     }
 }

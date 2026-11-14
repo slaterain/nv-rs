@@ -4497,14 +4497,11 @@ mod n045_tests {
             e.mem.set_u32(CONSOLE, 0x0118_0f80);
             e.register(0x0071_b160, |_, _| ret(CONSOLE));
             e.register(0x005a_e5c0, |e, a| {
-                let bytes = e
-                    .mem
-                    .bytes(e.mem.u32(a[0] + 0x20), e.mem.u32(a[0] + 0x24));
+                let bytes = e.mem.bytes(e.mem.u32(a[0] + 0x20), e.mem.u32(a[0] + 0x24));
                 GOT.with(|g| *g.borrow_mut() = bytes);
                 Ret::default()
             });
-            let script =
-                nvse::compile_script::compile_script_ex(&mut e, input, Some(b"T"), false);
+            let script = nvse::compile_script::compile_script_ex(&mut e, input, Some(b"T"), false);
             assert_eq!(script != 0, compiles);
             if compiles {
                 assert_eq!(GOT.with(|g| g.borrow().clone()), want);

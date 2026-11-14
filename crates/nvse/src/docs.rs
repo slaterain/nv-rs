@@ -276,7 +276,9 @@ impl Info {
     // CommandInfo::IsDeprecated.
     /// `EmptyCommand`, or a name ending in `OLD` or `BROKEN` (JIP's, ShowOff's and JG's way).
     fn deprecated(&self) -> bool {
-        self.long == b"EmptyCommand" || self.long.ends_with(b"OLD") || self.long.ends_with(b"BROKEN")
+        self.long == b"EmptyCommand"
+            || self.long.ends_with(b"OLD")
+            || self.long.ends_with(b"BROKEN")
     }
 
     // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), CommandTable.cpp:
@@ -428,7 +430,11 @@ fn dump_docs_of(e: &mut Engine, c: &Info) {
         e,
         &cat(&[b"<p><a name=\"", &c.long, b"\"></a><b>", &c.long, b"</b> "]),
     );
-    let alias: &[u8] = if c.short.is_empty() { b"none" } else { &c.short };
+    let alias: &[u8] = if c.short.is_empty() {
+        b"none"
+    } else {
+        &c.short
+    };
     crate::log::message(
         e,
         &cat(&[
@@ -566,7 +572,8 @@ fn dump_wiki_docs(e: &mut Engine, c: &Info, version: &[u8]) {
         let upper = crate::vars::upper_table(e);
         for (i, (name, kind, optional)) in c.params.iter().enumerate() {
             let arg_type = c.arg_type(*kind).as_bytes();
-            let same = crate::vars::str_compare(&upper, arg_type, name) == std::cmp::Ordering::Equal;
+            let same =
+                crate::vars::str_compare(&upper, arg_type, name) == std::cmp::Ordering::Equal;
             let arg_name: &[u8] = if !name.is_empty() && !same {
                 name
             } else {
@@ -589,7 +596,10 @@ fn dump_wiki_docs(e: &mut Engine, c: &Info, version: &[u8]) {
         }
     }
     msg(e, &[b"}}"]);
-    msg(e, &[b"[[Category:Functions (", &c.wiki_origin(false), b")]]"]);
+    msg(
+        e,
+        &[b"[[Category:Functions (", &c.wiki_origin(false), b")]]"],
+    );
     msg(e, &[b"[[Category:? [Add other relevant categories] ]]"]);
     if c.deprecated() {
         msg(e, &[b"[[Category:Deprecated Functions]]"]);
@@ -615,7 +625,11 @@ fn dump_wiki_docs(e: &mut Engine, c: &Info, version: &[u8]) {
         );
         msg(
             e,
-            &[b"#redirect [[", &c.long, b"]]\n[[Category:Function Alias]]\n"],
+            &[
+                b"#redirect [[",
+                &c.long,
+                b"]]\n[[Category:Function Alias]]\n",
+            ],
         );
     }
 }
@@ -776,7 +790,10 @@ fn dump_command_wiki_docs(e: &mut Engine, w: &[u32]) -> Ret {
     if start == 0 && end == 0 {
         console_line(e, "Dumping wiki-style documentation for all functions.");
         dump_all_wiki_docs(e);
-        console_line(e, "Finished dumping wiki-style documentation for all functions.");
+        console_line(
+            e,
+            "Finished dumping wiki-style documentation for all functions.",
+        );
         return handled(true);
     }
     let opcodes = opcode_range(e, start, end);
@@ -784,12 +801,18 @@ fn dump_command_wiki_docs(e: &mut Engine, w: &[u32]) -> Ret {
         console_line(e, "Unable to find commands.");
         return handled(true);
     }
-    console_line(e, "Dumping wiki-style documentation for functions in opcode range.");
+    console_line(
+        e,
+        "Dumping wiki-style documentation for functions in opcode range.",
+    );
     for opcode in opcodes {
         let c = info(e, opcode);
         dump_wiki_docs(e, &c, &version);
     }
-    console_line(e, "Finished dumping wiki-style documentation for functions.");
+    console_line(
+        e,
+        "Finished dumping wiki-style documentation for functions.",
+    );
     handled(true)
 }
 
@@ -802,7 +825,7 @@ fn contains_ci(src: &[u8], sub: &[u8]) -> bool {
         return false;
     }
     src.windows(sub.len())
-        .any(|w| w.iter().zip(sub).all(|(a, b)| a.to_ascii_lowercase() == b.to_ascii_lowercase()))
+        .any(|w| w.iter().zip(sub).all(|(a, b)| a.eq_ignore_ascii_case(b)))
 }
 
 /// `CommandTable::GetParentPlugin`: none below xNVSE's range, xNVSE (`NVSE`, version 6) in it up to

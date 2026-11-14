@@ -71,7 +71,10 @@ fn engine(max_opcode: u32) -> Engine {
         } else {
             format
         };
-        CONSOLE.with(|c| c.borrow_mut().push(String::from_utf8_lossy(&text).into_owned()));
+        CONSOLE.with(|c| {
+            c.borrow_mut()
+                .push(String::from_utf8_lossy(&text).into_owned())
+        });
         Ret::default()
     });
     e
@@ -124,7 +127,10 @@ fn dump_docs_in_detail() {
     assert!(console().is_empty());
     console_mode(&mut e);
     call(&mut e, 0x166a, 0, &[n(1), n(0x166c)]);
-    assert_eq!(console(), ["Dumping Command Docs", "Done Dumping Command Docs"]);
+    assert_eq!(
+        console(),
+        ["Dumping Command Docs", "Done Dumping Command Docs"]
+    );
 }
 
 /// The quick list: `(Type) name` linked, each parameter its own line; no name, no line; with no
@@ -148,10 +154,11 @@ fn dump_docs_quick_list_and_default_start() {
     let lines = log_lines();
     assert_eq!(lines[6], "NVSE Commands starting from opcode 0x1400:");
     // CompileScript (an expression command: xNVSE's types; a form result).
-    assert!(lines.contains(
-        &"<br>(Form) <a href=\"#CompileScript\">CompileScript</a> ".to_string()
-    ));
-    let at = lines.iter().position(|l| l.contains("#CompileScript\"")).unwrap();
+    assert!(lines.contains(&"<br>(Form) <a href=\"#CompileScript\">CompileScript</a> ".to_string()));
+    let at = lines
+        .iter()
+        .position(|l| l.contains("#CompileScript\""))
+        .unwrap();
     assert_eq!(lines[at + 1], "string:String ");
     assert_eq!(lines[at + 2], "<i>bool:Bool</i> ");
     assert_eq!(MADE.with(|m| *m.borrow()), 1);
@@ -360,7 +367,10 @@ fn opcode_ranges() {
     assert_eq!(opcode_range(&e, 0x100f, 0x100f), [0x100f]);
     assert!(opcode_range(&e, 0x1004, 0x1002).is_empty());
     assert!(opcode_range(&e, 0x1000, 0x1010).is_empty(), "past the end");
-    assert!(opcode_range(&e, 0x0fff, 0x1002).is_empty(), "below the table");
+    assert!(
+        opcode_range(&e, 0x0fff, 0x1002).is_empty(),
+        "below the table"
+    );
     assert_eq!(opcode_range(&e, 0x1000, 0x100f).len(), 16);
 }
 
@@ -428,7 +438,11 @@ fn wiki_origin_names() {
         ("ShowOff NVSE Plugin", "ShowOff", "ShowOff NVSE"),
         ("JohnnyGuitarNVSE", "JohnnyGuitar", "JohnnyGuitar NVSE"),
         ("ppNVSE", "pp", "ppNVSE"),
-        ("lStewieAl's Tweaks", "lStewieAl's Tweaks", "lStewieAl's Tweaks"),
+        (
+            "lStewieAl's Tweaks",
+            "lStewieAl's Tweaks",
+            "lStewieAl's Tweaks",
+        ),
     ];
     for (plugin, origin, category) in cases {
         let mut c = info_named("X", "");
@@ -601,10 +615,13 @@ fn help_texts_match_the_shipped_dll() {
     let mut found = 0;
     for c in crate::commands::all() {
         let names = strings.get(c.name.as_bytes()).cloned().unwrap_or_default();
-        let record = names.iter().flat_map(|va| words.get(va).cloned().unwrap_or_default()).find(|&o| {
-            text_at(u32_at(o + 4)).is_some_and(|s| s == c.short.as_bytes())
-                && text_at(u32_at(o + 12)).is_some()
-        });
+        let record = names
+            .iter()
+            .flat_map(|va| words.get(va).cloned().unwrap_or_default())
+            .find(|&o| {
+                text_at(u32_at(o + 4)).is_some_and(|s| s == c.short.as_bytes())
+                    && text_at(u32_at(o + 12)).is_some()
+            });
         let Some(o) = record else {
             // A record no word of the file points to by its name is one the DLL fills in when it
             // loads (a dynamic initializer): nothing to compare in the file.
@@ -636,9 +653,79 @@ fn help_texts_match_the_shipped_dll() {
             ));
         }
     }
-    assert!(wrong.is_empty(), "{found} found; {} differ:\n{}", wrong.len(), wrong.join("\n"));
+    assert!(
+        wrong.is_empty(),
+        "{found} found; {} differ:\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
     // Every command but the two whose record the DLL makes when it loads (V3Length,
     // PrintToConsole on 2026-11-14).
     assert!(made_at_load.len() <= 2, "{made_at_load:?}");
     assert_eq!(found + made_at_load.len(), crate::commands::all().len());
+}
+
+/// A plugin record belongs to the built-in that answers "installed" with the highest opcode
+/// base at or below it: one that does not answer "installed" owns nothing (xNVSE loads no such
+/// plugin), and xNVSE's range up to 0x2000 is xNVSE's.
+#[test]
+fn records_belong_to_the_installed_plugins() {
+    let mut e = engine(nvse_end());
+    plugin(&mut e);
+    crate::plugins::register(
+        &mut e,
+        BuiltIn {
+            file: "zz_silent.dll",
+            name: "Silent",
+            version: 3,
+            opcode_base: 0x2201,
+            listed: false,
+            listener: None,
+            save: None,
+            load: None,
+            pre_load: None,
+            new_game: None,
+        },
+    );
+    assert_eq!(info(&e, 0x2201).plugin, Some(("JIP LN NVSE", 57)));
+    assert_eq!(info(&e, 0x2201).origin(), b"JIP LN NVSE");
+    install(&mut e);
+    let filter = table::guest_str(&mut e, b"padding");
+    e.site(0x005b_cbc2, &[filter]);
+    let nvse = console()
+        .iter()
+        .filter(|l| l.starts_with("[NVSE 6.4.9]  -> command used for padding"))
+        .count() as u32;
+    assert_eq!(nvse, PLUGIN_OPCODES - nvse_end());
+}
+
+/// xNVSE's help texts as its DLL holds them: a description given as a string is stringified
+/// with its quotes (`#description`), so the text keeps them; `Jmp`'s is the word `nullptr`.
+#[test]
+fn help_texts_keep_xnvses_quotes() {
+    let help = |name: &str| {
+        crate::commands::all()
+            .into_iter()
+            .find(|c| c.name == name)
+            .unwrap()
+            .help
+    };
+    assert_eq!(help("ar_Filter"), "\"filters an array on a condition\"");
+    assert_eq!(help("IsInventoryRef"), "\"\"");
+    assert_eq!(help("Jmp"), "nullptr");
+    assert_eq!(help("GetSelfAlt"), help("GetSelfAlt_OLD"));
+    assert!(help("GetSelfAlt").starts_with("\"Unlike GetSelf"));
+    assert_eq!(
+        help("DumpCommandWikiDoc"),
+        "dumps wiki - style documentation for a command"
+    );
+    let params = |name: &str| {
+        crate::commands::all()
+            .into_iter()
+            .find(|c| c.name == name)
+            .unwrap()
+            .params
+            .len()
+    };
+    assert_eq!(params("MatchesAnyOf"), 20);
 }

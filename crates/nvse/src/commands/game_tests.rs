@@ -331,7 +331,8 @@ fn the_records_match_the_dll() {
         "prints a formatted message",
         "displays a formatted message box",
         "returns the effective value of the uGridsToLoad ini setting",
-        "identical to the OutputLocalMapPictures console command, but overrides the uGridsToLoad ini setting",
+        // `DEFINE_COMMAND_EXP` with a quoted description: the DLL keeps the quotes.
+        "\"identical to the OutputLocalMapPictures console command, but overrides the uGridsToLoad ini setting\"",
         "sets the value with which to override uGridsToLoad when generating local maps with OLMPOR",
         "identical to AddSpell but without the UI message",
     ];

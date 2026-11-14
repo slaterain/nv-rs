@@ -2315,6 +2315,19 @@ mod tests {
         assert_eq!(e.hook_users(Hook::GetModelPath), 1);
     }
 
+    /// xNVSE's expression token buffer: 0 until a built-in sets it, then the same on a real
+    /// thread's engine.
+    #[test]
+    fn the_expression_buffer_reaches_the_threads() {
+        let mut e = engine();
+        assert_eq!(e.expression_alt_buffer(), 0);
+        e.set_expression_alt_buffer(0x7f10_0000);
+        assert_eq!(e.expression_alt_buffer(), 0x7f10_0000);
+        let mut t = engine();
+        t.extend = e.extend.for_thread();
+        assert_eq!(t.expression_alt_buffer(), 0x7f10_0000);
+    }
+
     /// A caller mark: none without a user; with one, set until its guard drops (also on an
     /// unwinding panic, as a guest exception unwinds), per game thread and site; taken once.
     #[test]

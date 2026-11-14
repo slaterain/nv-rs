@@ -46,12 +46,12 @@ struct Log {
     calls: Vec<String>,
     console: Vec<String>,
     /// The fake folder: files by path (lower case, `\`), and the names a search answers in each
-    /// folder, in order, with whether each is a folder.
+    /// folder, in order, with their attributes.
     files: BTreeMap<String, Vec<u8>>,
-    listings: BTreeMap<String, Vec<(String, bool)>>,
+    listings: BTreeMap<String, Vec<(String, u32)>>,
     /// Open handles: their path and read position; open searches: what is left to answer.
     handles: BTreeMap<u32, (String, usize)>,
-    searches: BTreeMap<u32, Vec<(String, bool)>>,
+    searches: BTreeMap<u32, Vec<(String, u32)>>,
     next_handle: u32,
     /// Bytes written to files (`nvse.log`).
     written: BTreeMap<String, Vec<u8>>,
@@ -232,12 +232,15 @@ fn file_calls(e: &mut Engine) {
     });
     e.register(FIND_FIRST_FILE_A, |e, a| {
         let pattern = key(&crate::table::guest_text(e, a[0]));
-        let dir = pattern.strip_suffix('*').expect("a folder search").to_string();
+        let dir = pattern
+            .strip_suffix('*')
+            .expect("a folder search")
+            .to_string();
         let Some(mut entries) = with_log(|l| l.listings.get(&dir).cloned()) else {
             return eax(INVALID_HANDLE_VALUE);
         };
-        entries.insert(0, ("..".into(), true));
-        entries.insert(0, (".".into(), true));
+        entries.insert(0, ("..".into(), FILE_ATTRIBUTE_DIRECTORY));
+        entries.insert(0, (".".into(), FILE_ATTRIBUTE_DIRECTORY));
         let first = entries.remove(0);
         write_found(e, a[1], &first);
         with_log(|l| {
@@ -266,29 +269,32 @@ fn file_calls(e: &mut Engine) {
     });
 }
 
-fn write_found(e: &mut Engine, data: u32, (name, folder): &(String, bool)) {
-    e.mem.set_u32(
-        data,
-        if *folder {
-            FILE_ATTRIBUTE_DIRECTORY
-        } else {
-            0x20
-        },
-    );
+fn write_found(e: &mut Engine, data: u32, (name, attributes): &(String, u32)) {
+    e.mem.set_u32(data, *attributes);
     e.mem.write(data + FIND_DATA_NAME, name.as_bytes());
-    e.mem
-        .set_u8(data + FIND_DATA_NAME + name.len() as u32, 0);
+    e.mem.set_u8(data + FIND_DATA_NAME + name.len() as u32, 0);
 }
 
 /// Puts a file (or, with `None`, a folder) at `path` below the game's folder (no separator at
 /// its end), listed in its folder after the ones put there before when that folder was put.
 fn put(path: &str, bytes: Option<&[u8]>) {
+    put_as(path, bytes, 0);
+}
+
+/// [`put`] with more attributes (a link: `FILE_ATTRIBUTE_REPARSE_POINT`).
+fn put_as(path: &str, bytes: Option<&[u8]>, more: u32) {
+    let attributes = more
+        | if bytes.is_none() {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            0x20
+        };
     let k = key(path.as_bytes());
     let at = k.rfind('\\').map_or(0, |at| at + 1);
     let (dir, name) = (k[..at].to_string(), path[at..].to_string());
     with_log(|l| {
         if let Some(listing) = l.listings.get_mut(&dir) {
-            listing.push((name, bytes.is_none()));
+            listing.push((name, attributes));
         }
         match bytes {
             Some(b) => {
@@ -325,7 +331,12 @@ fn written(path: &str) -> String {
 #[test]
 fn compile_script_ex_sets_up_the_buffer() {
     let mut e = engine();
-    let script = compile_script_ex(&mut e, b"Begin Function {}\nEnd\0ignored", Some(b"MyUdf"), true);
+    let script = compile_script_ex(
+        &mut e,
+        b"Begin Function {}\nEnd\0ignored",
+        Some(b"MyUdf"),
+        true,
+    );
     assert_ne!(script, 0);
     assert_eq!(
         compiles(),
@@ -351,7 +362,10 @@ fn compile_script_ex_sets_up_the_buffer() {
             "assign-off 0".into()
         ]
     );
-    let ref_id = c.iter().position(|s| s == &format!("ref-id {NEXT_ID:x} 1")).unwrap();
+    let ref_id = c
+        .iter()
+        .position(|s| s == &format!("ref-id {NEXT_ID:x} 1"))
+        .unwrap();
     assert!(ref_id < buffer_dtor, "{c:?}");
     assert!(!c.iter().any(|s| s.starts_with("dtor-script")), "{c:?}");
     assert_eq!(e.mem.u32(script + 0xc), NEXT_ID);
@@ -440,7 +454,10 @@ fn stems_and_extensions() {
     for (name, stem, extension) in cases {
         assert_eq!(stem_and_extension(name), (stem, extension), "{name:?}");
     }
-    assert_eq!(file_name(b"data/nvse/user_defined_functions/sub\\x.txt"), b"x.txt");
+    assert_eq!(
+        file_name(b"data/nvse/user_defined_functions/sub\\x.txt"),
+        b"x.txt"
+    );
     assert_eq!(file_name(b"x"), b"x");
 }
 
@@ -453,7 +470,10 @@ fn stems_and_extensions() {
 fn the_function_files_compile_at_the_first_frame() {
     let mut e = engine();
     put(BASE, None);
-    put(&format!("{BASE}/First.txt"), Some(b"Begin Function {}\r\nEnd\r\n"));
+    put(
+        &format!("{BASE}/First.txt"),
+        Some(b"Begin Function {}\r\nEnd\r\n"),
+    );
     put(&format!("{BASE}/noext"), Some(b"Begin Function {}\nEnd\n"));
     put(&format!("{BASE}/Sub"), None);
     put(&format!("{BASE}/Sub/inner.gek"), Some(b"inner"));
@@ -464,7 +484,10 @@ fn the_function_files_compile_at_the_first_frame() {
     assert_eq!(
         seen,
         [
-            ("nvseRuntimeScript0First".to_string(), "Begin Function {}\nEnd\n".to_string()),
+            (
+                "nvseRuntimeScript0First".to_string(),
+                "Begin Function {}\nEnd\n".to_string()
+            ),
             ("nvseRuntimeScript1inner".into(), "inner".into()),
             ("nvseRuntimeScript2bad".into(), "bad".into()),
             ("nvseRuntimeScript2last".into(), "last".into()),
@@ -490,10 +513,21 @@ fn the_function_files_compile_at_the_first_frame() {
         .map(|(k, _)| k.clone())
         .collect();
     keys.sort();
-    assert_eq!(keys, [b"First.txt".to_vec(), b"Sub\\inner.gek".to_vec(), b"last.txt".to_vec()]);
+    assert_eq!(
+        keys,
+        [
+            b"First.txt".to_vec(),
+            b"Sub\\inner.gek".to_vec(),
+            b"last.txt".to_vec()
+        ]
+    );
     assert_ne!(cached(&mut e, b"first.TXT"), 0, "found without case");
     assert_ne!(cached(&mut e, b"sub\\INNER.gek"), 0);
-    assert_eq!(cached(&mut e, b"Sub/inner.gek"), 0, "the command makes '/' a '\\' first");
+    assert_eq!(
+        cached(&mut e, b"Sub/inner.gek"),
+        0,
+        "the command makes '/' a '\\' first"
+    );
     assert_eq!(
         console(),
         ["xNVSE: Failed to precompile script file at data/nvse/user_defined_functions/bad.txt"]
@@ -560,7 +594,11 @@ fn run(e: &mut Engine, tokens: &[Vec<u8>]) -> u32 {
         .call(execute, &[params, DATA, 0, 0, SCRIPT, LIST, RESULT, OFFSET])
         .eax;
     assert_eq!(ok & 0xff, 1);
-    assert_eq!(e.mem.u32(RESULT + 4), 0, "the result's high word is cleared first");
+    assert_eq!(
+        e.mem.u32(RESULT + 4),
+        0,
+        "the result's high word is cleared first"
+    );
     e.mem.u32(RESULT)
 }
 
@@ -644,4 +682,43 @@ fn run_script_line_runs_a_temporary_script() {
     e.register(CONSOLE_MANAGER, |_, _| eax(0));
     assert!(!run_script_line2(&mut e, b"x", 0, true));
     assert!(calls().is_empty());
+}
+
+/// Links in the folder, as `recursive_directory_iterator` and `is_regular_file` take them: a
+/// link to a folder is not entered and is no file; a link to a file is a file.
+#[test]
+fn links_in_the_function_folder() {
+    let mut e = engine();
+    put(BASE, None);
+    put_as(
+        &format!("{BASE}/Linked"),
+        None,
+        FILE_ATTRIBUTE_REPARSE_POINT,
+    );
+    put(&format!("{BASE}/Linked/inside.txt"), Some(b"inside"));
+    put_as(
+        &format!("{BASE}/link.txt"),
+        Some(b"link"),
+        FILE_ATTRIBUTE_REPARSE_POINT,
+    );
+    cache_all_scripts(&mut e);
+    let names: Vec<String> = compiles().into_iter().map(|s| s.name).collect();
+    assert_eq!(names, ["nvseRuntimeScript0link"]);
+}
+
+/// xNVSE's buffer for the game's expression code is made at install (0x500 zeroed bytes),
+/// once, and handed to the translation.
+#[test]
+fn the_expression_buffer_is_made_at_install() {
+    let mut e = engine();
+    assert_eq!(e.expression_alt_buffer(), 0);
+    crate::compile_hooks::install(&mut e);
+    let buffer = e.expression_alt_buffer();
+    assert_ne!(buffer, 0);
+    assert!(e.mem.bytes(buffer, 0x500).iter().all(|&b| b == 0));
+    // One set already (by an earlier install) is kept.
+    let mut e = engine();
+    e.set_expression_alt_buffer(0x0600_8000);
+    crate::compile_hooks::install(&mut e);
+    assert_eq!(e.expression_alt_buffer(), 0x0600_8000);
 }
