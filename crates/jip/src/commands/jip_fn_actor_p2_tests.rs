@@ -577,7 +577,8 @@ fn kill_xp_through_the_game() {
     e.mem.set_u32(PLAYER + 0x7b8, 3);
     e.register(0x0047_ded0, |_, w| {
         CALLED.with(|c| c.borrow_mut().push((0x47ded0, w.to_vec())));
-        eax(0xffff_fffe)
+        // A 16-bit answer (`ushort`): the high half of eax is not part of it.
+        eax(0x1234_fffe)
     });
     e.register(0x0067_05b0, |_, w| {
         CALLED.with(|c| c.borrow_mut().push((0x6705b0, w.to_vec())));
