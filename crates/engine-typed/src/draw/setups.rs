@@ -760,17 +760,15 @@ pub fn land_values(e: &mut Engine, _this: Ptr, enabled: u32, property: u32) {
 
 // ---- The shadow light shader's subclasses' own slots (vtables `010bb7a8` and `010bb980`). ----
 
-/// The pair of textures the stage setters `00b7c150`/`00b7c170` put into a stage (`011f95e4`, `011f95e8`: main's,
-/// set before the draw) and the word a stage takes when a property answers no texture (`011f951c`).
-const PAIR_FIRST: u32 = 0x011f_95e4;
-const PAIR_SECOND: u32 = 0x011f_95e8;
+/// The word a stage takes when a property answers no texture (`011f951c`); the pair of textures the stage setters
+/// `00b7c150`/`00b7c170` put into a stage is the packet's ([`packet::pair_texture`]).
 const NO_TEXTURE: u32 = 0x011f_951c;
 
 // Typed from 00b7c150
 /// `thiscall(shader, stage)` (the shader not read): the current pass's stage takes the pair's first texture.
 pub fn stage_pair_first(e: &mut Engine, _this: Ptr, stage: u32) {
     let at = pass_stage(e, stage);
-    let texture = e.global::<u32>(PAIR_FIRST);
+    let texture = packet::pair_texture(e, 0);
     own::set_stage_texture(e, at, texture);
 }
 
@@ -778,7 +776,7 @@ pub fn stage_pair_first(e: &mut Engine, _this: Ptr, stage: u32) {
 /// `thiscall(shader, stage)` (the shader not read): the current pass's stage takes the pair's second texture.
 pub fn stage_pair_second(e: &mut Engine, _this: Ptr, stage: u32) {
     let at = pass_stage(e, stage);
-    let texture = e.global::<u32>(PAIR_SECOND);
+    let texture = packet::pair_texture(e, 1);
     own::set_stage_texture(e, at, texture);
 }
 

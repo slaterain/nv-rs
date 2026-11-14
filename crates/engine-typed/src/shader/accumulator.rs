@@ -838,9 +838,6 @@ pub fn light_at(e: &mut Engine, this: Ptr<ShadowSceneNode>, index: u32) -> u32 {
     item
 }
 
-/// The pair of textures `00b7cfb0` puts into two stages (`011f95e4`, `011f95e8`).
-const PAIR_TEXTURES: [u32; 2] = [0x011f_95e4, 0x011f_95e8];
-
 // Typed from 00b7cfb0
 /// `thiscall(shader, type)`: for the pass types that sample the pair, its two textures go into the
 /// current pass's stages `first` and `first + 1` (stage +8): 2 for 0x94 and 0x1f3, 6, 5 and 4 for their
@@ -864,8 +861,9 @@ pub fn set_pair_textures(e: &mut Engine, _this: u32, pass_type: u32) {
         0x1f8..=0x22c if (pass_type - 0x1f8) & 3 == 0 => 14,
         _ => return,
     };
-    for (i, texture) in (0u32..).zip(PAIR_TEXTURES) {
-        let texture = e.global::<u32>(texture);
+    // The pair (`011f95e4`, `011f95e8`) is the packet's: the cut takes it.
+    for i in 0..2u32 {
+        let texture = crate::draw::packet::pair_texture(e, i);
         let pass = capture::own_at::<u32>(e, CURRENT_PASS);
         let stages = e.global::<u32>(pass.wrapping_add(0x24));
         let stage = e.global::<u32>(stages.wrapping_add((first + i).wrapping_mul(4)));

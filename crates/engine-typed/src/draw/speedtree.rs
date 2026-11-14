@@ -497,10 +497,9 @@ const BRANCH_DECLARATION_SLOT: u32 = 0x28;
 const BRANCH_DECLARATION: u32 = 0x6c;
 const SLOT_AFTER_TEXTURES: u32 = 0x108;
 const BIND_PASS_STAGES: u32 = 0x00be_2170;
-/// `BSRenderedTexture::GetTexture` (`004bc320`, `thiscall(texture, 0)`), by address; the pair of textures the
-/// branch's pass types put into two stages (`011f95e4`, `011f95e8`: main's, set before the draw).
+/// `BSRenderedTexture::GetTexture` (`004bc320`, `thiscall(texture, 0)`), by address (the pair of textures the branch's
+/// pass types put into two stages is the packet's, [`packet::pair_texture`]).
 const RENDERED_TEXTURE: u32 = 0x004b_c320;
-const PAIR_TEXTURES: [u32; 2] = [0x011f_95e4, 0x011f_95e8];
 
 /// Where the branch shader's pass choice finds a pass type's pass: the exe's word `01202350` to `012023c4` (the
 /// jump tables `00bd4254` with the bytes `00bd42b4` for 0x60 to 0x159, and `00bd43b0` with `00bd43cc` for 0x165 to
@@ -639,9 +638,9 @@ pub fn branch_setup_textures(e: &mut Engine, this: Ptr, state: Ptr) {
         None => {}
     }
     if let Some(stages) = branch_pair_stages(pass_type) {
-        for (index, texture) in [stages.0, stages.1].into_iter().zip(PAIR_TEXTURES) {
+        for (k, index) in (0u32..).zip([stages.0, stages.1]) {
             let at = stage(e, index);
-            let texture = e.global::<u32>(texture);
+            let texture = packet::pair_texture(e, k);
             own::set_stage_texture(e, at, texture);
         }
     }

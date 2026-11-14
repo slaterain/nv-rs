@@ -330,6 +330,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00c0_cd80, lighting30::stage_textures(Ptr<()>, u32, u32)),
         entry!(0x00c0_cf10, lighting30::stage_constants(Ptr<()>, u32, u32)),
         entry!(0x00c0_bc90, lighting30::emittance_stage(Ptr<()>, u32, u32)),
+        entry!(0x00c0_bbd0, lighting30::pair_stages(Ptr<()>, u32)),
         entry!(0x00bb_c5c0, lighting30::blending(Ptr<()>, Ptr<()>) -> u32),
         entry!(0x00bb_eef0, lighting30::geometry_done(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_d000, lighting30::bone_setup(Ptr<()>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),

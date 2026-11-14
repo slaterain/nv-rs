@@ -116,6 +116,12 @@ const LIGHT_DIRECTION: (u32, u32) = (0xf0, 0xfc);
 /// view ([`detach`]).
 pub fn fill(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     take_frame(e, camera, acc);
+    for k in 0..2u32 {
+        let texture = e.global::<u32>(packet::PAIR_TEXTURES + 4 * k);
+        if texture != 0 {
+            capture::hold(e, texture);
+        }
+    }
     let mut passes = Vec::new();
     let mut renderers = AddrSet::default();
     for i in 0..packet::renderer_count(e, acc) {
@@ -190,6 +196,9 @@ pub fn take_frame(e: &Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     }
     capture::take(e, GAME_TIMES, 0, 0x10);
     capture::take(e, START_TIME, 0, 4);
+    // The pair of textures the shadow passes sample: main sets them, and the frame's tail may set others before a posted
+    // draw runs ([`fill`] holds the two).
+    capture::take(e, packet::PAIR_TEXTURES, 0, 8);
 }
 
 /// A shadow scene node's light (+0xe0) and that light's values ([`take_light`]).

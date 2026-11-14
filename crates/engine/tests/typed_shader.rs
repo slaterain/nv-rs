@@ -17000,7 +17000,6 @@ fn lighting30_stage_constants() {
                 0x00c0_bb20,
                 0x00c0_bb50,
                 0x00c0_bba0,
-                0x00c0_bbd0,
                 0x00c0_bc00,
                 0x00c0_bcf0,
                 0x00bb_dda0,
@@ -17507,5 +17506,62 @@ fn lighting30_pass_for_type_reads_the_draws_own_state() {
             (vec![shader, c.word(0)], acc)
         },
         |_, _, _| {},
+    );
+}
+
+/// Lighting 3.0's pair stages (`00c0bbd0`): the pass's stages 2 and 3 take the pair (each set or not).
+#[test]
+fn lighting30_pair_stages() {
+    Diff::new(entry!(0x00c0_bbd0, l30::pair_stages(Ptr<_>, u32)))
+        .pass_common()
+        .inputs(&[Input::Of(&[0, 0x0f00_95e4]), Input::Of(&[0, 0x0f00_95e8])])
+        .setup(|e, c| {
+            let p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            set(e, 0x011f_95e4, c.word(0));
+            set(e, 0x011f_95e8, c.word(1));
+            vec![p.d.w.shader, p.pass]
+        })
+        .run()
+        .assert_same();
+}
+
+/// The pair of textures the shadow passes sample (`011f95e4`, `011f95e8`) is the packet's: the frame's tail may set
+/// others before a posted draw runs (the late gate's difference in Goodsprings: samplers 8 and 9 took the tail's
+/// pair). With what the cut takes for the frame scribbled in guest memory, the pair's setters write as without.
+#[test]
+fn the_pair_textures_are_read_through_the_packet() {
+    packet_same(
+        "lighting30_pair_stages",
+        entry!(0x00c0_bbd0, l30::pair_stages(Ptr<_>, u32)).1,
+        &[vec![0]],
+        |e, _| {
+            let p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            (vec![p.d.w.shader, p.pass], vec![])
+        },
+        |e, _| cut::take_frame(e, 0, Ptr::new(0)),
+    );
+    packet_same(
+        "pair_textures",
+        entry!(0x00b7_cfb0, acc::set_pair_textures(u32, u32)).1,
+        &[vec![0x94], vec![0xa0], vec![0x1f8]],
+        |e, c| {
+            let _p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            (vec![0x0bad_0001, c.word(0)], vec![])
+        },
+        |e, _| cut::take_frame(e, 0, Ptr::new(0)),
+    );
+    packet_same(
+        "stage_pair_first",
+        entry!(0x00b7_c150, setups::stage_pair_first(Ptr<_>, u32)).1,
+        &[vec![3]],
+        |e, c| {
+            let _p = pass_world(e, &[], 0, 0);
+            let _ = stage_property(e, true, 0, 0);
+            (vec![0x0bad_0001, c.word(0)], vec![])
+        },
+        |e, _| cut::take_frame(e, 0, Ptr::new(0)),
     );
 }

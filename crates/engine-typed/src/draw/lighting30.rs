@@ -1492,7 +1492,7 @@ pub fn bone_setup(
 /// What lighting 3.0's stage set-ups call by address (none reads or writes the draw's own state; each works on the
 /// pass handed to it): a stage's set-up after its texture (`00bb9640`, `thiscall(shader, stage, property)`), the
 /// rendered texture's `GetTexture` (`004bc320`), the pass constants' setters (`00c0bae0`, `00c0bb20`, `00c0bb50`,
-/// `00c0bba0`, `00c0bbd0`, `00c0bc00`, `00c0bcf0`, `thiscall(shader, pass, ...)`) and the two set-ups of their own
+/// `00c0bba0`, `00c0bc00`, `00c0bcf0`, `thiscall(shader, pass, ...)`; the pair stages `00c0bbd0` are typed: [`pair_stages`]) and the two set-ups of their own
 /// (`00bbdda0`, `00bbdcd0`, `thiscall(shader, property, pass)`).
 const STAGE_SETUP: u32 = 0x00bb_9640;
 const RENDERED_TEXTURE: u32 = 0x004b_c320;
@@ -1500,7 +1500,6 @@ const CONSTANTS_BAE0: u32 = 0x00c0_bae0;
 const CONSTANTS_BB20: u32 = 0x00c0_bb20;
 const CONSTANTS_BB50: u32 = 0x00c0_bb50;
 const CONSTANTS_BBA0: u32 = 0x00c0_bba0;
-const CONSTANTS_BBD0: u32 = 0x00c0_bbd0;
 const CONSTANTS_BC00: u32 = 0x00c0_bc00;
 const CONSTANTS_BCF0: u32 = 0x00c0_bcf0;
 const SETUP_DDA0: u32 = 0x00bb_dda0;
@@ -1705,7 +1704,7 @@ pub fn stage_constants(e: &mut Engine, this: Ptr, pass_type: u32, property: u32)
                 e.call(CONSTANTS_BB50, &args![base, pass, property, 1u32]);
             }
             ConstantStep::Bbd0 => {
-                e.call(CONSTANTS_BBD0, &args![base, pass]);
+                typed_call!(super::FAMILY, 0x00c0_bbd0, pair_stages(e, this, pass));
             }
             ConstantStep::Mapped => {
                 let first = source_word(e, property, 0xac, 4);
@@ -1895,5 +1894,16 @@ pub fn pass_for_type(e: &mut Engine, this: Ptr, pass_type: u32) -> u32 {
         capture::own_at::<u32>(e, PASS_TABLE + place)
     } else {
         before
+    }
+}
+
+// Typed from 00c0bbd0
+/// Lighting 3.0's pair stages, `thiscall(shader, pass)` (the shader not read): the pass's stages 2 and 3 take the pair
+/// of textures (the packet's: the cut takes them).
+pub fn pair_stages(e: &mut Engine, _this: Ptr, pass: u32) {
+    for k in 0..2u32 {
+        let stage = stage_of(e, pass, 2 + k);
+        let texture = packet::pair_texture(e, k);
+        own::set_stage_texture(e, stage, texture);
     }
 }

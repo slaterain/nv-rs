@@ -579,10 +579,6 @@ pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
     own::set_current_pass(e, pass);
 }
 
-/// The pair of textures [`pair_textures`] puts into two stages (`011f95e4`, `011f95e8`: main's, set before the
-/// draw).
-const PAIR_TEXTURES: [u32; 2] = [0x011f_95e4, 0x011f_95e8];
-
 // Typed from 00bac8d0
 /// The tall grass shader's pair textures (slot 0xf8), `thiscall(shader, pass type)` (the shader not read; not a
 /// Ghidra function: typed from its bytes): with the current pass read once, for the types 0x1c to 0x25 and 0x262 to
@@ -590,10 +586,10 @@ const PAIR_TEXTURES: [u32; 2] = [0x011f_95e4, 0x011f_95e8];
 pub fn pair_textures(e: &mut Engine, _this: Ptr, pass_type: u32) {
     let pass = packet::current_pass(e);
     let set = |e: &mut Engine, first: u32| {
-        for (k, texture) in (0u32..).zip(PAIR_TEXTURES) {
+        for k in 0..2u32 {
             let stages = e.global::<u32>(pass.wrapping_add(0x24));
             let stage = e.global::<u32>(stages.wrapping_add(4 * (first + k)));
-            let texture = e.global::<u32>(texture);
+            let texture = packet::pair_texture(e, k);
             own::set_stage_texture(e, stage, texture);
         }
     };

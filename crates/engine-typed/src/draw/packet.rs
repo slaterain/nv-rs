@@ -991,9 +991,20 @@ pub(crate) fn shader_level(e: &Engine) -> i32 {
 pub(crate) fn shadows_skipped(e: &Engine) -> u8 {
     e.global::<u8>(0x011f_9427)
 }
+/// The pair of textures the shadow passes sample (`011f95e4`, `011f95e8`: counted pointers main sets; the cut takes
+/// them, and holds their textures, since the frame's tail may set others before a posted draw runs).
+pub(crate) const PAIR_TEXTURES: u32 = 0x011f_95e4;
+
+/// Texture `k` (0 or 1) of the pair, the packet's.
+#[inline(always)]
+pub(crate) fn pair_texture(e: &Engine, k: u32) -> u32 {
+    capture::word(e, PAIR_TEXTURES, 4 * k)
+}
+
+/// The pair's first texture (whether the shadow maps are there), the packet's.
 #[inline(always)]
 pub(crate) fn shadow_textures(e: &Engine) -> u32 {
-    e.global::<u32>(0x011f_95e4)
+    pair_texture(e, 0)
 }
 #[inline(always)]
 pub(crate) fn shader_flags_byte(e: &Engine) -> u8 {
