@@ -447,13 +447,28 @@ struct Found {
     tag: u32,
 }
 
+/// `ERROR_MORE_DATA`: `FindNextFileA`'s answer for a name whose ANSI form does not fit
+/// `cFileName` (the search goes on with the next entry).
+const ERROR_MORE_DATA: u32 = 234;
+
 /// The entries of the folder `dir` (a path ending in a separator), as a search of `dir*` lists
 /// them through the game's `FindFirstFileA`/`FindNextFileA`, without `.` and `..`; none when
 /// the folder is missing.
+///
+/// A deliberate difference: xNVSE reads the folder with `std::filesystem`, whose calls are the
+/// wide ones, so it finds and opens every name; here the names come through the ANSI calls, in
+/// the system's code page. A name the code page cannot hold is passed over, never read in
+/// place of another file: one with a `?` (the code page's mark for a character it lacks; no
+/// file name can hold one), one the code page turned into a name already listed in this folder
+/// (a near character for one it lacks, `łodz.txt` as `lodz.txt` beside a real `lodz.txt`, which
+/// NTFS lists first), and one too long for `cFileName` (`FindNextFileA` FALSE with
+/// `ERROR_MORE_DATA`, the search going on). A near-character name with no twin opens nothing and
+/// fails its compile as an unreadable file does ("Failed to precompile"). On a code page that
+/// holds the name (every ASCII name, an `é` on 1252) nothing differs.
 fn list_folder(e: &mut Engine, dir: &[u8]) -> Vec<Found> {
     let mut pattern = dir.to_vec();
     pattern.push(b'*');
-    let mut out = Vec::new();
+    let mut out: Vec<Found> = Vec::new();
     e.with_stack(FIND_DATA_SIZE, |e, data| {
         let data = data.addr();
         let handle = crate::events::with_guest_text(e, &pattern, |e, p| {
@@ -462,16 +477,25 @@ fn list_folder(e: &mut Engine, dir: &[u8]) -> Vec<Found> {
         if handle == INVALID_HANDLE_VALUE {
             return;
         }
+        let mut entry = true;
         loop {
-            let name = crate::table::guest_text(e, data + FIND_DATA_NAME);
-            if name != b"." && name != b".." {
-                out.push(Found {
-                    name,
-                    attributes: e.mem.u32(data),
-                    tag: e.mem.u32(data + FIND_DATA_RESERVED0),
-                });
+            if entry {
+                let name = crate::table::guest_text(e, data + FIND_DATA_NAME);
+                let lossy =
+                    name.contains(&b'?') || out.iter().any(|f| f.name.eq_ignore_ascii_case(&name));
+                if name != b"." && name != b".." && !lossy {
+                    out.push(Found {
+                        name,
+                        attributes: e.mem.u32(data),
+                        tag: e.mem.u32(data + FIND_DATA_RESERVED0),
+                    });
+                }
             }
-            if e.call(FIND_NEXT_FILE_A, &args![handle, data]).u32() == 0 {
+            if e.call(FIND_NEXT_FILE_A, &args![handle, data]).u32() != 0 {
+                entry = true;
+            } else if e.kernel.last_error == ERROR_MORE_DATA {
+                entry = false;
+            } else {
                 break;
             }
         }

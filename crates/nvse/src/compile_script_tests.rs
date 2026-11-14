@@ -261,11 +261,19 @@ fn file_calls(e: &mut Engine) {
             (!rest.is_empty()).then(|| rest.remove(0))
         });
         match next {
+            // A name too long for cFileName: FALSE with ERROR_MORE_DATA, the search goes on.
+            Some(found) if found.0.starts_with("<long>") => {
+                e.kernel.last_error = 234;
+                eax(0)
+            }
             Some(found) => {
                 write_found(e, a[1], &found);
                 eax(1)
             }
-            None => eax(0),
+            None => {
+                e.kernel.last_error = 18;
+                eax(0)
+            }
         }
     });
     e.register(FIND_CLOSE, |_, a| {
@@ -891,4 +899,32 @@ fn a_function_file_in_the_new_language_compiles_through_the_walk() {
         .unwrap()
         .join()
         .unwrap();
+}
+
+/// Names the system's code page cannot hold, as the ANSI search answers them, are passed over and
+/// never read in place of another file: a `?` name, a near-character name that repeats one
+/// already listed in the folder (`łodz.txt` as `lodz.txt` after the real `lodz.txt`), and one too
+/// long for `cFileName` (`FindNextFileA` FALSE with `ERROR_MORE_DATA`): the walk goes on after
+/// each, nothing stops, and the files around them compile.
+#[test]
+fn names_the_code_page_cannot_hold_are_passed_over() {
+    let mut e = engine();
+    put(BASE, None);
+    put(&format!("{BASE}/a.txt"), Some(b"a"));
+    put(&format!("{BASE}/lodz.txt"), Some(b"real"));
+    put(&format!("{BASE}/<long>.txt"), Some(b"long"));
+    put(&format!("{BASE}/LODZ.txt"), Some(b"real"));
+    put(&format!("{BASE}/?uk.txt"), Some(b"q"));
+    put(&format!("{BASE}/z.txt"), Some(b"z"));
+    cache_all_scripts(&mut e);
+    let seen: Vec<(String, String)> = compiles().into_iter().map(|s| (s.name, s.text)).collect();
+    assert_eq!(
+        seen,
+        [
+            ("nvseRuntimeScript0a".to_string(), "a".to_string()),
+            ("nvseRuntimeScript1lodz".into(), "real".into()),
+            ("nvseRuntimeScript2z".into(), "z".into()),
+        ]
+    );
+    assert!(console().is_empty());
 }
