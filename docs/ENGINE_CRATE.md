@@ -564,7 +564,20 @@ and next active lights with and without the shadow lights, `00b70590`, `00b70600
 counts, `00b70790`, `00b707d0`), a pass light's clip-plane store (`00b71ad0`) and the shadow scene node's camera
 position (`00b71b40`); the shadow light shader's fog upload (`00b7c3a0`), pixel entries (`00b7c510`), light ambient
 (`00b7c580`) and colour (`00b7c600`) and land values (`00b7ad80`); the tall grass's fog (`00baa430`); the SpeedTree
-branch shader (its slot 0x7c `00bd4ba0` and its fog slot `00c1a310`). Each reads the frame only through
+branch shader (its pass choice `00bd4030`, its slots 0x78 `00bd4890` and 0x7c `00bd4ba0` and its fog slot `00c1a310`).
+Then every slot the batch renderer calls on the shader classes the world draw meets: the pass choices (slot 0xf0: the
+SpeedTree leaves `00bb1b20`, the tall grass `00baa3f0`, the sky `00b884e0`, the water `00b81760`, lighting 3.0 `00bbe020`,
+the shadow light shader's two subclasses `00bcce40` and `00bcfd20`), the textures (slot 0x78: the leaves `00bb26d0`, the
+first subclass `00bce500`; slot 0xf8: the tall grass `00bac8d0`, the subclasses `00bcc590` and `00bce800`, with the stage
+setters they reach `00b7c150`, `00b7c170`, `00b7c1f0`, `00b7c230`), the partitions (slot 0x64: no-lighting `00bc8f20`,
+lighting 3.0 `00bbd000`), the blending (slot 0x80: no-lighting `00bc8ed0`, lighting 3.0 `00bbc5c0`), the geometry ends
+(slot 0x8c: no-lighting `00bc8d90`, sky `00b8a1a0`, water `00b86b80`, lighting 3.0 `00bbeef0`), the water's pass constants
+(`00b81d60`), lighting 3.0's stage slots (`00c0cd80`, `00c0cf10`, `00c0bc90`), the leaves' lights `00bb1960`, camera rows
+`00bb1a90` and scene lights `00b71360`, a shader's slot 0x94 (`00e80590`), the other lock releases the passes' restore
+calls (`00714a80`, `00714ac0`, `00714b00`, `00714b20`, `00714b50`, `00714b80`, `00714bf0`, `004eb510`, `004ecb40`,
+`00b985f0`) and the setters they reach (fill mode `00b98480`, stencil operations `00b980c0`, function `00b98180` and write
+mask `00b98230`, colour writes 1 to 3 `00b983d0`). With these every listed shader class is clean (`draw::statics::CLASSES`),
+so in play the cut takes the draw's own state into the frame's copy. Each reads the frame only through
 `draw::packet` and writes its constants, render states and counters through `draw::own` (each file's "Group C"
 section), with what is filled at load read in place (the shaders' own words, the passes' contents, the exe's
 constants).

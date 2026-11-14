@@ -284,3 +284,15 @@ pub fn begin_done(e: &mut Engine, _this: u32, _unused: u32) {
 pub fn fog_property(e: &mut Engine, index: u32) -> u32 {
     packet::scene_fog_property(e, index)
 }
+
+// Typed from 00e80590
+/// A shader's slot 0x94 (`NiD3DShader`'s, the points draw asks it), `thiscall(shader)`: with a current pass, the
+/// pass's slot 0xc with the shader's word +0x38. Answers 0.
+pub fn pass_hand_word(e: &mut Engine, this: u32) -> u32 {
+    let pass = packet::current_pass(e);
+    if pass != 0 {
+        let word = e.global::<u32>(this.wrapping_add(0x38));
+        e.vcall(pass, 0xc, &args![word]);
+    }
+    0
+}

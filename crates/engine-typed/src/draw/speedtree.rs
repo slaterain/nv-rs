@@ -150,7 +150,12 @@ fn constants_with(
         typed_call!(
             super::FAMILY,
             0x00b7_1360,
-            scene_light(e, u32::from(index), Ptr::new(light), f32::from_bits(light_value))
+            scene_light(
+                e,
+                u32::from(index),
+                Ptr::new(light),
+                f32::from_bits(light_value)
+            )
         );
         index = index.wrapping_add(1);
     }
@@ -231,7 +236,8 @@ pub fn light_setup(e: &mut Engine, _this: Ptr, property: Ptr, matrix: u32, scale
         let vector = frame + 4;
         let transformed = frame + 0x2c;
         for k in 0..3u32 {
-            let word = engine_core::x87::x87_quiet_bits(own::constant_word(e, LIGHT_DIRECTION + 4 * k));
+            let word =
+                engine_core::x87::x87_quiet_bits(own::constant_word(e, LIGHT_DIRECTION + 4 * k));
             e.set_global(vector + 4 * k, word ^ 0x8000_0000);
         }
         thunks::call_vec3_transform_normal(e, transformed, vector, matrix);
@@ -252,7 +258,8 @@ pub fn light_setup(e: &mut Engine, _this: Ptr, property: Ptr, matrix: u32, scale
         let position = frame + 0x10;
         let moved = frame + 0x1c;
         for k in 0..3u32 {
-            let word = engine_core::x87::x87_quiet_bits(own::constant_word(e, LIGHT_POSITION + 4 * k));
+            let word =
+                engine_core::x87::x87_quiet_bits(own::constant_word(e, LIGHT_POSITION + 4 * k));
             e.set_global(position + 4 * k, word);
         }
         thunks::call_vec3_transform_coord(e, moved, position, matrix);
@@ -366,7 +373,7 @@ pub fn setup_textures(e: &mut Engine, this: Ptr, state: Ptr) {
 }
 
 /// The shader's slot 0x108 (the render family's `00be2170` direct when the slot holds it).
-fn after_textures(e: &mut Engine, base: u32) {
+pub(super) fn after_textures(e: &mut Engine, base: u32) {
     if crate::slot_target(e, base, SLOT_AFTER_TEXTURES) == BIND_PASS_STAGES {
         typed_call!(
             crate::render::FAMILY,

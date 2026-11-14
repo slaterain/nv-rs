@@ -34,8 +34,14 @@ pub(crate) const ACCUMULATORS: (u32, u32) = (0x011f_95ec, 0x011f_95f4);
 /// The shader statics' block.
 pub const SHADER_STATICS: (u32, u32) = (0x011f_a000, 0x011f_fe40);
 /// The Group C shaders' statics (`01200458` to `01202148`: the decal depth bias, the tall grass's, SpeedTree's,
-/// lighting 3.0's and the no-lighting shader's constants and their entry pointers).
-pub(crate) const GROUP_C_STATICS: (u32, u32) = (0x0120_0450, 0x0120_2150);
+/// lighting 3.0's and the no-lighting shader's constants and their entry pointers), in two blocks around lighting
+/// 3.0's pass table ([`LIGHTING30_PASSES`]).
+pub(crate) const GROUP_C_STATICS: (u32, u32) = (0x0120_0450, LIGHTING30_PASSES.0);
+pub(crate) const GROUP_C_STATICS_AFTER: (u32, u32) = (LIGHTING30_PASSES.1, 0x0120_2150);
+/// Lighting 3.0's pass table (`01200ec0` to `0120107c`, a pass a word): made when the shaders load (`00c072c0`) and
+/// given back when they go (`00bbc9c0`, `00bbce70`), only read while the game draws (`00c0abd0` picks a pass from
+/// it): not the draw's own state, so it stays in guest memory for both sides (POISON leaves it alone).
+pub(crate) const LIGHTING30_PASSES: (u32, u32) = (0x0120_0ec0, 0x0120_1080);
 /// The current shader pass.
 pub(crate) const CURRENT_PASS: (u32, u32) = (0x0126_f74c, 0x0126_f750);
 /// The group zero flag (the texture stages' maximum anisotropy word).
@@ -54,11 +60,12 @@ pub(crate) const RENDER_STATE_SIZE: u32 = 0x1114;
 pub(crate) const ACC_CAMERA: (u32, u32) = (8, 0xc);
 
 /// The global blocks, in one list (what [`take`] owns besides the render-state cache and the camera).
-pub const GLOBAL_BLOCKS: [(u32, u32); 10] = [
+pub const GLOBAL_BLOCKS: [(u32, u32); 11] = [
     RENDERING_PASS,
     ACCUMULATORS,
     SHADER_STATICS,
     GROUP_C_STATICS,
+    GROUP_C_STATICS_AFTER,
     CURRENT_PASS,
     GROUP_ZERO_FLAG,
     LIGHT_FLAG,
@@ -78,21 +85,30 @@ pub fn is_own_global(addr: u32) -> bool {
 /// that reads or writes own state (0: none, the class is clean). A class not listed is not clean either. A class
 /// is listed clean only once every slot the draw calls on it is typed and none of them reaches such a translation.
 pub(crate) const CLASSES: &[(u32, u32)] = &[
-    // `ShadowLightShader` and its three subclasses sharing its pass constants (slot 0xfc, `00b7b450`): the fog
-    // constants (`00b7c3a0`), the light rows (`00b7c510`, `00b7c580`, `00b7c600`) by address.
-    (0x010a_f2f8, 0x00b7_c3a0),
-    (0x010b_b7a8, 0x00b7_c3a0),
-    (0x010b_b980, 0x00b7_c3a0),
-    (0x010b_bb50, 0x00b7_c3a0),
-    // Group C part 1 (#507): the SpeedTree leaves' shadow set-up (`00bb26d0`) and the no-lighting shader's
-    // `00bcce40` by address; the tall grass, sky and water reach callees not yet checked (their slot 0x7c).
-    (0x010b_9190, 0x00bb_26d0),
-    (0x010b_b230, 0x00bc_ce40),
-    (0x010b_8980, 0x00ba_c9c0),
-    (0x010a_fe18, 0x00b8_9d80),
-    (0x010a_f9e0, 0x00b8_64d0),
-    // Lighting 3.0 (Group C part 2): its slot 0x7c.
-    (0x010b_a0f8, 0x00bb_ef90),
+    // `ShadowLightShader` and its three subclasses sharing its pass constants (slot 0xfc, `00b7b450`): every slot the
+    // batch renderer calls is typed (the subclasses' own 0x78, 0xf0 and 0xf8 too, `00bce500`, `00bcce40`, `00bcc590`,
+    // `00bcfd20`, `00bce800`, and the stage setters they reach); what they still call by address reads no own state
+    // (`00a5f860` and `00c663d0` the counted pointers, `00b55560` the shader table).
+    (0x010a_f2f8, 0),
+    (0x010b_b7a8, 0),
+    (0x010b_b980, 0),
+    (0x010b_bb50, 0),
+    // Group C: the SpeedTree leaves (0x78 `00bb26d0`, 0xf0 `00bb1b20`, with their lights `00bb1960`, camera rows
+    // `00bb1a90` and scene lights `00b71360`), the no-lighting shader (0x64 `00bc8f20`, 0x80 `00bc8ed0`, 0x8c
+    // `00bc8d90`), the tall grass (0xf0 `00baa3f0`, 0xf8 `00bac8d0`), the sky (0x8c `00b8a1a0`, 0xf0 `00b884e0`),
+    // the water (0x8c `00b86b80`, 0xf0 `00b81760`, 0xfc `00b81d60`), lighting 3.0 (0x64 `00bbd000`, 0x80 `00bbc5c0`,
+    // 0x8c `00bbeef0`, 0xf0 `00bbe020`, its stage slots `00c0cd80`, `00c0cf10` and `00c0bc90`; `00c0abd0` by address
+    // reads only its pass table, [`LIGHTING30_PASSES`], not own state; the pass constants' setters it calls by
+    // address work on the pass handed to them).
+    (0x010b_9190, 0),
+    (0x010b_b230, 0),
+    (0x010b_8980, 0),
+    (0x010a_fe18, 0),
+    (0x010a_f9e0, 0),
+    (0x010b_a0f8, 0),
+    // The SpeedTree branch shader: 0x78 `00bd4890`, 0xf0 `00bd4030` typed with 0x7c and its fog slot; 0xfc is a
+    // thunk to the shadow light shader's `00b7b450`.
+    (0x010b_c070, 0),
 ];
 
 /// A geometry's shader (+0xc0).
@@ -272,6 +288,7 @@ mod tests {
             "copy_constants",
             "entry_on",
             "release_state_locks",
+            "unlocked",
         ];
         // Files routed through and through: every guest access of theirs goes through the accessors, or is a plain
         // guest access that says why (`// own:` a local, a constant of the exe, main's frame value left to value

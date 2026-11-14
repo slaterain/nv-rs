@@ -258,10 +258,80 @@ pub fn set_stencil_enable(e: &mut Engine, enable: u8, lock: u32) {
     counted(e, INDEX_STENCIL_ENABLE, 0x34, u32::from(enable), lock);
 }
 
+/// The stencil states' indices (`D3DRS_STENCILFAIL` to `D3DRS_STENCILPASS`, `STENCILFUNC` to `STENCILMASK`,
+/// `STENCILWRITEMASK`) and the colour-write enables 1 to 3's, and the exe's maps from the game's stencil operation to
+/// Direct3D's (`011ad8d4`, a constant of the exe; the compare functions' map is [`COMPARE_FUNCTIONS`]).
+const INDEX_STENCIL_FAIL: u32 = 0x011f_fb04;
+const INDEX_STENCIL_Z_FAIL: u32 = 0x011f_fb08;
+const INDEX_STENCIL_PASS: u32 = 0x011f_fb0c;
+const INDEX_STENCIL_FUNCTION: u32 = 0x011f_fb10;
+const INDEX_STENCIL_REFERENCE: u32 = 0x011f_fb14;
+const INDEX_STENCIL_MASK: u32 = 0x011f_fb18;
+const INDEX_STENCIL_WRITE_MASK: u32 = 0x011f_fb1c;
+const INDEX_COLOR_WRITE_1: u32 = 0x011f_fd28;
+const INDEX_COLOR_WRITE_2: u32 = 0x011f_fd2c;
+const INDEX_COLOR_WRITE_3: u32 = 0x011f_fd30;
+const STENCIL_OPERATIONS: u32 = 0x011a_d8d4;
+
+/// The cache gets `state = value` while the counter at `index_at`'s index is 0; the counter is left as it is (the
+/// multi-state setters' first states).
+#[inline(always)]
+fn unlocked(e: &mut Engine, index_at: u32, state: u32, value: u32) {
+    let counter = LOCK_COUNTERS.wrapping_add(capture::own_at::<u32>(e, index_at).wrapping_mul(4));
+    if capture::own_at::<u32>(e, counter) == 0 {
+        let cache = render_state(e);
+        cache_render_state(e, cache.addr(), state, value, 0, 0);
+    }
+}
+
+// Typed from 00b980c0
+/// `cdecl(fail, z fail, pass, lock)`: the stencil operations (`D3DRS_STENCILFAIL` 0x35, `STENCILZFAIL` 0x36 while
+/// unlocked, `STENCILPASS` 0x37 lock-counted), each the exe's map's word for the game's operation.
+pub fn set_stencil_operations(e: &mut Engine, fail: u32, z_fail: u32, pass: u32, lock: u32) {
+    let op =
+        |e: &Engine, o: u32| e.global::<u32>(STENCIL_OPERATIONS.wrapping_add(o.wrapping_mul(4)));
+    let value = op(e, fail);
+    unlocked(e, INDEX_STENCIL_FAIL, 0x35, value);
+    let value = op(e, z_fail);
+    unlocked(e, INDEX_STENCIL_Z_FAIL, 0x36, value);
+    let value = op(e, pass);
+    counted(e, INDEX_STENCIL_PASS, 0x37, value, lock);
+}
+
+// Typed from 00b98180
+/// `cdecl(function, reference, mask, lock)`: the stencil test (`D3DRS_STENCILFUNC` 0x38, the exe's map's word for the
+/// game's compare function, and `STENCILREF` 0x39 while unlocked; `STENCILMASK` 0x3a lock-counted).
+pub fn set_stencil_function(e: &mut Engine, function: u32, reference: u32, mask: u32, lock: u32) {
+    let value = e.global::<u32>(COMPARE_FUNCTIONS.wrapping_add(function.wrapping_mul(4)));
+    unlocked(e, INDEX_STENCIL_FUNCTION, 0x38, value);
+    unlocked(e, INDEX_STENCIL_REFERENCE, 0x39, reference);
+    counted(e, INDEX_STENCIL_MASK, 0x3a, mask, lock);
+}
+
+// Typed from 00b98230
+/// `cdecl(mask, lock)`: `D3DRS_STENCILWRITEMASK` (0x3b).
+pub fn set_stencil_write_mask(e: &mut Engine, mask: u32, lock: u32) {
+    counted(e, INDEX_STENCIL_WRITE_MASK, 0x3b, mask, lock);
+}
+
+// Typed from 00b983d0
+/// `cdecl(first, second, third, lock)`: `D3DRS_COLORWRITEENABLE1` to `3` (0xbe to 0xc0), each lock-counted.
+pub fn set_color_writes(e: &mut Engine, first: u32, second: u32, third: u32, lock: u32) {
+    counted(e, INDEX_COLOR_WRITE_1, 0xbe, first, lock);
+    counted(e, INDEX_COLOR_WRITE_2, 0xbf, second, lock);
+    counted(e, INDEX_COLOR_WRITE_3, 0xc0, third, lock);
+}
+
 // Typed from 00b98480
 /// `cdecl(wireframe, lock)`: `D3DRS_FILLMODE` (8): wireframe (2) when the byte is set, else solid (3).
 pub fn set_fill_mode(e: &mut Engine, wireframe: u8, lock: u32) {
-    counted(e, INDEX_FILL_MODE, 8, if wireframe == 0 { 3 } else { 2 }, lock);
+    counted(
+        e,
+        INDEX_FILL_MODE,
+        8,
+        if wireframe == 0 { 3 } else { 2 },
+        lock,
+    );
 }
 
 // Typed from 00b98280

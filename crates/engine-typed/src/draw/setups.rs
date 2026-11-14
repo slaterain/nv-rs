@@ -757,3 +757,352 @@ pub fn land_values(e: &mut Engine, _this: Ptr, enabled: u32, property: u32) {
     }
     own::set_constant_word(e, LAND_FOG_COLOUR + 0xc, 0);
 }
+
+// ---- The shadow light shader's subclasses' own slots (vtables `010bb7a8` and `010bb980`). ----
+
+/// The pair of textures the stage setters `00b7c150`/`00b7c170` put into a stage (`011f95e4`, `011f95e8`: main's,
+/// set before the draw) and the word a stage takes when a property answers no texture (`011f951c`).
+const PAIR_FIRST: u32 = 0x011f_95e4;
+const PAIR_SECOND: u32 = 0x011f_95e8;
+const NO_TEXTURE: u32 = 0x011f_951c;
+
+// Typed from 00b7c150
+/// `thiscall(shader, stage)` (the shader not read): the current pass's stage takes the pair's first texture.
+pub fn stage_pair_first(e: &mut Engine, _this: Ptr, stage: u32) {
+    let at = pass_stage(e, stage);
+    let texture = e.global::<u32>(PAIR_FIRST);
+    own::set_stage_texture(e, at, texture);
+}
+
+// Typed from 00b7c170
+/// `thiscall(shader, stage)` (the shader not read): the current pass's stage takes the pair's second texture.
+pub fn stage_pair_second(e: &mut Engine, _this: Ptr, stage: u32) {
+    let at = pass_stage(e, stage);
+    let texture = e.global::<u32>(PAIR_SECOND);
+    own::set_stage_texture(e, at, texture);
+}
+
+/// A stage's fallback: the exe's `011f951c` with the flag, else none.
+fn no_texture(e: &Engine, fallback: bool) -> u32 {
+    if fallback {
+        e.global::<u32>(NO_TEXTURE)
+    } else {
+        0
+    }
+}
+
+// Typed from 00b7c1f0
+/// `stdcall(property, stage, index, flag)`: the current pass's stage takes the property's texture `index` (its
+/// array +0xb4), or without one the fallback ([`no_texture`]).
+pub fn stage_indexed_texture(
+    e: &mut Engine,
+    property: Ptr,
+    stage: u32,
+    index: u32,
+    fallback: bool,
+) {
+    let at = pass_stage(e, stage);
+    let textures = e.global::<u32>(property.addr().wrapping_add(0xb4));
+    let texture = e.global::<u32>(textures.wrapping_add(index.wrapping_mul(4)));
+    let texture = if texture != 0 {
+        texture
+    } else {
+        no_texture(e, fallback)
+    };
+    own::set_stage_texture(e, at, texture);
+}
+
+// Typed from 00b7c230
+/// `stdcall(property, stage, word, flag)`: the current pass's stage takes what the property's slot 0xf4 answers
+/// for (3, word), asked a second time for the store when it is not null; else the fallback ([`no_texture`]).
+pub fn stage_slot_texture(e: &mut Engine, property: Ptr, stage: u32, word: u32, fallback: bool) {
+    let at = pass_stage(e, stage);
+    let object = property.addr();
+    let texture = if e.vcall(object, 0xf4, &args![3u32, word]).u32() != 0 {
+        e.vcall(object, 0xf4, &args![3u32, word]).u32()
+    } else {
+        no_texture(e, fallback)
+    };
+    own::set_stage_texture(e, at, texture);
+}
+
+/// One stage setter call of the first subclass's textures ([`subclass_textures`]): `00b7c0a0(property, stage,
+/// texture)`, `00b7c0e0(property, stage, word)`, `00b7c1f0(property, stage, index, flag)`, `00b7c230(property,
+/// stage, word, flag)`, `00b7c120(stage)`. The exe also calls an empty function (`00d3dd00`) in three lists: left
+/// out.
+#[derive(Clone, Copy)]
+enum StageCall {
+    A(u32, u32),
+    B(u32, u32),
+    F(u32, u32, bool),
+    T(u32, u32, bool),
+    R(u32),
+}
+
+/// The first subclass's stage lists by pass type: 0x231 to 0x233, and the types 0x99 to 0x174 through the exe's
+/// jump table (`00bce6c0` with the bytes `00bce6e8`, read from the exe). `None`: the shadow light shader's own.
+fn subclass_stage_calls(pass_type: u32) -> Option<&'static [StageCall]> {
+    use StageCall::{A, B, F, R, T};
+    if (0x231..=0x233).contains(&pass_type) {
+        return Some(&[A(0, 0), R(6)]);
+    }
+    Some(match pass_type {
+        0xda | 0xe3 | 0xec | 0xf5 => &[F(3, 0, true), A(0, 0), B(1, 0), T(2, 0, true)],
+        0xd9 | 0xe2 | 0xeb | 0xf4 => &[A(0, 0), B(1, 0), T(2, 0, true)],
+        0x103 | 0x10f | 0x11a | 0x125 => &[F(4, 0, true), A(0, 0), B(1, 0), T(3, 0, true)],
+        0x101 | 0x10e | 0x119 | 0x124 => &[A(0, 0), B(1, 0), T(3, 0, true)],
+        0x9a | 0xa5 | 0xb0 | 0xbb => &[F(4, 0, true), A(0, 0), B(1, 0), T(3, 0, true)],
+        0x99 | 0xa4 | 0xaf | 0xba => &[A(0, 0), B(1, 0), T(3, 0, true)],
+        0x134 | 0x140 => &[A(1, 0), B(0, 0), T(2, 0, true)],
+        0x153 => &[A(0, 0), T(2, 0, true)],
+        0x15c | 0x162 | 0x168 | 0x16e | 0x174 => &[A(1, 0), B(0, 0), T(2, 0, true)],
+        _ => return None,
+    })
+}
+
+// Typed from 00bce500
+/// The first subclass's `SetupGeometryTextures` (vtable `010bb7a8` slot 0x78), `thiscall(shader, state)` (not a
+/// Ghidra function: typed from its bytes): for the pass types with a stage list ([`subclass_stage_calls`]) its
+/// setters with the state's shader property, then the shader's slot 0x108; every other type the shadow light
+/// shader's own (`00b7d200`, the shader family's) with the state.
+pub fn subclass_textures(e: &mut Engine, this: Ptr, state: Ptr) {
+    let pass_type = packet::rendering_pass_type(e);
+    let property = packet::state_property(e, state.addr(), 3);
+    let Some(calls) = subclass_stage_calls(pass_type) else {
+        typed_call!(
+            shader::FAMILY,
+            0x00b7_d200,
+            shader::textures::setup_geometry_textures(e, this, state)
+        );
+        return;
+    };
+    for call in calls {
+        match *call {
+            StageCall::A(stage, texture) => typed_call!(
+                shader::FAMILY,
+                0x00b7_c0a0,
+                shader::textures::stage_texture(e, Ptr::new(property), stage, texture)
+            ),
+            StageCall::B(stage, word) => typed_call!(
+                shader::FAMILY,
+                0x00b7_c0e0,
+                shader::textures::stage_second_texture(e, Ptr::new(property), stage, word)
+            ),
+            StageCall::F(stage, index, fallback) => typed_call!(
+                FAMILY,
+                0x00b7_c1f0,
+                stage_indexed_texture(e, Ptr::new(property), stage, index, fallback)
+            ),
+            StageCall::T(stage, word, fallback) => typed_call!(
+                FAMILY,
+                0x00b7_c230,
+                stage_slot_texture(e, Ptr::new(property), stage, word, fallback)
+            ),
+            StageCall::R(stage) => typed_call!(
+                shader::FAMILY,
+                0x00b7_c120,
+                shader::textures::stage_light_texture(e, stage)
+            ),
+        }
+    }
+    super::speedtree::after_textures(e, this.addr());
+}
+
+/// The pair textures' stages of the subclasses' slot 0xf8 ([`subclass_pair_textures`]): `None` for the types that
+/// set none, `Some(None)` for the shadow light shader's own (`00b7cfb0`), else the two stages.
+type PairStages = Option<Option<(u32, u32)>>;
+
+/// The first subclass's (`00bcc590`, the exe's jump table `00bcc600` with the bytes `00bcc614`).
+fn first_pair_stages(pass_type: u32) -> PairStages {
+    match pass_type {
+        0x99 | 0x9a | 0xaf | 0xb0 | 0xda | 0xec | 0x101 | 0x103 | 0x119 | 0x11a | 0x134 | 0x140
+        | 0x153 | 0x15c | 0x168 | 0x16e | 0x174 => None,
+        0xa4 | 0xa5 | 0xba | 0xbb | 0x10e | 0x10f | 0x124 | 0x125 => Some(Some((6, 7))),
+        0xe2 | 0xe3 | 0xf4 | 0xf5 => Some(Some((5, 6))),
+        0x162 => Some(Some((4, 5))),
+        _ => Some(None),
+    }
+}
+
+/// The second subclass's (`00bce800`, the exe's jump table `00bce858` with the bytes `00bce868`).
+fn second_pair_stages(pass_type: u32) -> PairStages {
+    match pass_type {
+        0xc5 | 0xc8 | 0xcc | 0xcf | 0xd3 | 0xd6 | 0xdb | 0xde | 0xed | 0xf0 | 0x100 | 0x107
+        | 0x118 | 0x11e | 0x133 | 0x136 | 0x13f | 0x142 => None,
+        0xe4 | 0xe7 | 0xf6 | 0xf9 => Some(Some((5, 6))),
+        0x10d | 0x113 | 0x123 | 0x129 => Some(Some((6, 7))),
+        _ => Some(None),
+    }
+}
+
+/// The subclasses' pair textures by their stages ([`PairStages`]).
+fn pair_textures_by(e: &mut Engine, this: Ptr, pass_type: u32, stages: PairStages) {
+    match stages {
+        None => {}
+        Some(Some((first, second))) => {
+            typed_call!(FAMILY, 0x00b7_c150, stage_pair_first(e, this, first));
+            typed_call!(FAMILY, 0x00b7_c170, stage_pair_second(e, this, second));
+        }
+        Some(None) => typed_call!(
+            shader::FAMILY,
+            0x00b7_cfb0,
+            accumulator::set_pair_textures(e, this.addr(), pass_type)
+        ),
+    }
+}
+
+// Typed from 00bcc590
+/// The first subclass's pair textures (slot 0xf8), `thiscall(shader, pass type)`: by [`first_pair_stages`].
+pub fn subclass_pair_textures(e: &mut Engine, this: Ptr, pass_type: u32) {
+    pair_textures_by(e, this, pass_type, first_pair_stages(pass_type));
+}
+
+// Typed from 00bce800
+/// The second subclass's pair textures (slot 0xf8), `thiscall(shader, pass type)`: by [`second_pair_stages`].
+pub fn second_subclass_pair_textures(e: &mut Engine, this: Ptr, pass_type: u32) {
+    pair_textures_by(e, this, pass_type, second_pair_stages(pass_type));
+}
+
+/// `BSShaderManager::GetShader` (`00b55560`, by address: it reads the shader table, made at load).
+const GET_SHADER: u32 = 0x00b5_5560;
+
+/// The fallback both subclasses' pass choices share: the shadow light shader's (`00b7af80`) with the type, then
+/// shader table entry 1's slot 0xf0 with it.
+fn other_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    typed_call!(FAMILY, 0x00b7_af80, select_pass(e, this, pass_type));
+    let shader = e.call(GET_SHADER, &args![1u32]).u32();
+    e.vcall(shader, 0xf0, &args![pass_type]);
+}
+
+/// The first subclass's pass words (`01202230` to `012022b0`), by pass type (the exe's jump tables `00bcd184` with
+/// the bytes `00bcd1cc` for 1 to 0xf5 and `00bcd2c4` with `00bcd308` for 0x102 to 0x174, and its own case 0x101).
+fn first_pass_word(pass_type: u32) -> Option<u32> {
+    Some(match pass_type {
+        0xd9 => 0x0120_2230,
+        0xda => 0x0120_2234,
+        0xe2 => 0x0120_2238,
+        0xe3 => 0x0120_223c,
+        0xeb => 0x0120_2240,
+        0xec => 0x0120_2244,
+        0xf4 => 0x0120_2248,
+        0xf5 => 0x0120_224c,
+        0x101 => 0x0120_2250,
+        0x102 => 0x0120_2254,
+        0x103 => 0x0120_2258,
+        0x10e => 0x0120_225c,
+        0x10f => 0x0120_2260,
+        0x119 => 0x0120_2264,
+        0x11a => 0x0120_2268,
+        0x124 => 0x0120_226c,
+        0x125 => 0x0120_2270,
+        0x99 => 0x0120_2274,
+        0x9a => 0x0120_2278,
+        0xa4 => 0x0120_227c,
+        0xa5 => 0x0120_2280,
+        0xaf => 0x0120_2284,
+        0xb0 => 0x0120_2288,
+        0xba => 0x0120_228c,
+        0xbb => 0x0120_2290,
+        0x134 => 0x0120_2294,
+        0x140 => 0x0120_2298,
+        0x153 => 0x0120_229c,
+        0x15c => 0x0120_22a0,
+        0x162 => 0x0120_22a4,
+        0x168 => 0x0120_22a8,
+        0x16e => 0x0120_22ac,
+        0x174 => 0x0120_22b0,
+        _ => return None,
+    })
+}
+
+// Typed from 00bcce40
+/// The first subclass's pass choice (slot 0xf0), `thiscall(shader, pass type)`: the counted pointer +0x28 takes
+/// the declaration +0x6c (the exe's inlined assignment, the new one as first read); a type of its table
+/// ([`first_pass_word`]) makes that pass current; types 1 and 2 run the fallback ([`other_pass`]) and set +0x28 from
+/// +0x6c again (`00a5f860`); any other type runs the fallback.
+pub fn first_subclass_select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    let base = this.addr();
+    own::assign_counted(e, base + 0x28, base + 0x6c, false);
+    if let Some(word) = first_pass_word(pass_type) {
+        let pass = e.global::<u32>(word);
+        own::set_current_pass(e, pass);
+        return;
+    }
+    other_pass(e, this, pass_type);
+    if pass_type == 1 || pass_type == 2 {
+        let declaration = e.global::<u32>(base + 0x6c);
+        own::set_counted(e, base + 0x28, declaration);
+    }
+}
+
+/// The second subclass's pass words (`012022c0` to `01202324`) and whether the declaration after it is the second
+/// (+0x70) rather than the first (+0x6c), by pass type (the exe's jump tables `00bd0128` with the bytes `00bd016c`
+/// for 1 to 0xf9 and `00bd0268` with `00bd0298` for 0x107 to 0x142, and its own case 0x100).
+fn second_pass_word(pass_type: u32) -> Option<(u32, bool)> {
+    Some(match pass_type {
+        0xdb => (0x0120_22c0, false),
+        0xde => (0x0120_22c4, true),
+        0xe4 => (0x0120_22c8, false),
+        0xe7 => (0x0120_22cc, true),
+        0xed => (0x0120_22d0, false),
+        0xf0 => (0x0120_22d4, true),
+        0xf6 => (0x0120_22d8, false),
+        0xf9 => (0x0120_22dc, true),
+        0x100 => (0x0120_22e0, false),
+        0x107 => (0x0120_22e4, true),
+        0x10d => (0x0120_22e8, false),
+        0x113 => (0x0120_22ec, true),
+        0x118 => (0x0120_22f0, false),
+        0x11e => (0x0120_22f4, true),
+        0x123 => (0x0120_22f8, false),
+        0x129 => (0x0120_22fc, true),
+        0x133 => (0x0120_2300, false),
+        0x136 => (0x0120_2304, true),
+        0x13f => (0x0120_2308, false),
+        0x142 => (0x0120_230c, true),
+        0xc5 => (0x0120_2310, false),
+        0xc8 => (0x0120_2314, true),
+        0xcc => (0x0120_2318, false),
+        0xcf => (0x0120_231c, true),
+        0xd3 => (0x0120_2320, false),
+        0xd6 => (0x0120_2324, true),
+        _ => return None,
+    })
+}
+
+// Typed from 00bcfd20
+/// The second subclass's pass choice (slot 0xf0), `thiscall(shader, pass type)`: a type of its table
+/// ([`second_pass_word`]) makes that pass current and sets the counted pointer +0x28 from its declaration (+0x6c or
+/// +0x70, `00a5f860`); types 1 and 2 run the fallback ([`other_pass`]) then set it from +0x6c, type 3 from +0x70;
+/// any other type runs the fallback only. Then for 0x250 and 0x251 the counted pointers +0x30 and +0x34 take +0x7c
+/// and +0x80 (the exe's inlined assignment, the source read again after the old one's count went down), for every
+/// other type `00c663d0` copies +0x84 into +0x30 and +0x88 into +0x34.
+pub fn second_subclass_select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
+    let base = this.addr();
+    let declaration = match second_pass_word(pass_type) {
+        Some((word, second)) => {
+            let pass = e.global::<u32>(word);
+            own::set_current_pass(e, pass);
+            Some(second)
+        }
+        None => {
+            other_pass(e, this, pass_type);
+            match pass_type {
+                1 | 2 => Some(false),
+                3 => Some(true),
+                _ => None,
+            }
+        }
+    };
+    if let Some(second) = declaration {
+        let object = e.global::<u32>(base + if second { 0x70 } else { 0x6c });
+        own::set_counted(e, base + 0x28, object);
+    }
+    if pass_type == 0x250 || pass_type == 0x251 {
+        own::assign_counted(e, base + 0x30, base + 0x7c, true);
+        own::assign_counted(e, base + 0x34, base + 0x80, true);
+    } else {
+        own::copy_counted(e, base + 0x30, base + 0x84);
+        own::copy_counted(e, base + 0x34, base + 0x88);
+    }
+}

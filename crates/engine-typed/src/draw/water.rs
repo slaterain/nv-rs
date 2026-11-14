@@ -456,7 +456,8 @@ pub fn geometry_done(e: &mut Engine, _this: Ptr, state: Ptr) {
             crate::shader::state::set_fill_mode(e, 0u8, 0)
         );
     }
-    if pass_type != 0x288 && pass_type != 0x289 && e.global::<u8>(property.wrapping_add(0x60)) != 0 {
+    if pass_type != 0x288 && pass_type != 0x289 && e.global::<u8>(property.wrapping_add(0x60)) != 0
+    {
         typed_call!(
             shader::FAMILY,
             0x00b9_8070,

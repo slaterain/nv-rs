@@ -890,6 +890,20 @@ pub(crate) const ALPHA_TEST_LOCKS: u32 = 0x011f_f9e8;
 pub(crate) const ALPHA_BLEND_LOCKS: u32 = 0x011f_f9f0;
 /// The colour writes' locks (`011ffa18`).
 pub(crate) const COLOR_WRITE_LOCKS: u32 = 0x011f_fa18;
+/// The other restorable states' locks: the z function's (`011ff9e0`), the depth bias's (`011ff9e4`), the alpha
+/// function's (`011ff9ec`), the blend's (`011ff9f4`), the stencil test's (`011ff9fc`), operations' (`011ffa00`),
+/// function's (`011ffa04`) and write mask's (`011ffa08`), the clip planes' (`011ffa14`) and the colour-write enables
+/// 1 to 3's (`011ffa1c`).
+pub(crate) const Z_FUNCTION_LOCKS: u32 = 0x011f_f9e0;
+pub(crate) const DEPTH_BIAS_LOCKS: u32 = 0x011f_f9e4;
+pub(crate) const ALPHA_FUNCTION_LOCKS: u32 = 0x011f_f9ec;
+pub(crate) const BLEND_LOCKS: u32 = 0x011f_f9f4;
+pub(crate) const STENCIL_LOCKS: u32 = 0x011f_f9fc;
+pub(crate) const STENCIL_OPERATION_LOCKS: u32 = 0x011f_fa00;
+pub(crate) const STENCIL_FUNCTION_LOCKS: u32 = 0x011f_fa04;
+pub(crate) const STENCIL_WRITE_LOCKS: u32 = 0x011f_fa08;
+pub(crate) const CLIP_PLANE_LOCKS: u32 = 0x011f_fa14;
+pub(crate) const COLOR_WRITES_LOCKS: u32 = 0x011f_fa1c;
 
 /// `count` locks given back on the render state whose counter is at `counter` (wrapping, as the exe
 /// subtracts).
