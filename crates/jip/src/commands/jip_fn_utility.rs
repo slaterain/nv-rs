@@ -72,7 +72,7 @@ const VT_IS_REFERENCE: u32 = 0xf0;
 pub struct StrRefs(pub HashMap<u32, u32>);
 
 /// `NUM_ARGS` (JIP LN NVSE): the argument count byte at the start of the arguments.
-fn num_args(e: &Engine, a: &CommandArgs) -> u8 {
+pub(crate) fn num_args(e: &Engine, a: &CommandArgs) -> u8 {
     e.mem.u8(a.data.wrapping_add(e.mem.u32(a.opcode_offset)))
 }
 

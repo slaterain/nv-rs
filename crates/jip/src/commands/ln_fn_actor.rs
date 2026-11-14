@@ -370,7 +370,7 @@ fn base_or_this_base(e: &Engine, form: u32, this: u32) -> Option<u32> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp:
 // TESActorBaseData::GetFactionRank.
 /// The rank (a signed byte) of the first entry of the faction, -1 for none.
-fn faction_rank(e: &Engine, base: u32, faction: u32) -> i8 {
+pub(crate) fn faction_rank(e: &Engine, base: u32, faction: u32) -> i8 {
     for d in super::list_items(e, Ptr::<ListNode>::new(base + FACTIONS)) {
         if d != 0 && e.mem.u32(d) == faction {
             return e.mem.u8(d + 4) as i8;

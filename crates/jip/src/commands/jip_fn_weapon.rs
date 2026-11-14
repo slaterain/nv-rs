@@ -1,11 +1,13 @@
 //! `functions_jip/jip_fn_weapon.h` (JIP LN NVSE): a weapon form's sounds, mods, reload animation,
-//! models, embedded weapon data, on-hit setting and semi-automatic delays. 19 of its 26 commands.
-//! The weapon is read as an inventory object (`kParamType_ObjectID`) or any form; each command
-//! checks `IS_ID(weapon, TESObjectWEAP)` (type 0x28).
+//! models, embedded weapon data, on-hit setting and semi-automatic delays; the equipped weapon's
+//! silencer, scope and mods, a weapon's mod slots, shots a second and the attack queue. 25 of its
+//! 26 commands. The weapon is read as an inventory object (`kParamType_ObjectID`) or any form;
+//! each command checks `IS_ID(weapon, TESObjectWEAP)` (type 0x28).
 //!
-//! Not built (they read the actor's process or equipped data, or are conditions): IsEquippedWeaponSilenced,
-//! IsEquippedWeaponScoped, EquippedWeaponHasModType, WeaponHasModType, GetCalculatedWeaponDamage,
-//! CalculateShotsPerSec, IsAttackQueued.
+//! Left for later: `GetCalculatedWeaponDamage` reads `s_patchInstallState.NPCPerks` (whether
+//! JIP's NPC perks patch is on, `internal/patches_game.h`: the core track's step 3.9) inside its
+//! damage chain (`ContChangesEntry::CalculateWeaponDamage`: the game's `0x644CE0`, the ammo
+//! effects and the perk entry point), so it comes with the patches.
 //!
 //! The weapon loader (`0051F630`) reads `DNAM` (0xCC bytes) at +0xF4 (the embedded weapon actor
 //! value byte +0x11F, on-hit +0x128, the semi-automatic delays +0x174/+0x178 (defaulted there),
@@ -24,7 +26,7 @@ use super::{
 };
 use engine_core::prelude::*;
 use nvse::commands::Read;
-use nvse::{handled, CommandArgs};
+use nvse::{handled, CommandArgs, EvalArgs};
 
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
@@ -47,6 +49,16 @@ pub static COMMANDS: Handlers = &[
     (0x289c, set_weapon_semi_auto_fire_delay),
     (0x28a9, get_weapon_model),
     (0x28aa, set_weapon_model),
+    (0x2924, weapon_has_mod_type),
+    (0x2940, calculate_shots_per_sec),
+];
+
+#[rustfmt::skip]
+pub static CONDITIONS: super::Conditions = &[
+    (0x264c, is_equipped_weapon_silenced, is_equipped_weapon_silenced_eval),
+    (0x264d, is_equipped_weapon_scoped, is_equipped_weapon_scoped_eval),
+    (0x28f7, equipped_weapon_has_mod_type, equipped_weapon_has_mod_type_eval),
+    (0x2941, is_attack_queued, is_attack_queued_eval),
 ];
 
 /// JIP's path buffers (`char path[0x80]`) and the node name's (`char nodeName[0x40]`).
@@ -352,6 +364,369 @@ fn set_weapon_model(e: &mut Engine, w: &[u32]) -> Ret {
     let path = buffer_arg(e, &read, 2, PATH_BUFFER, "SetWeaponModel");
     if let Some(wp) = weapon_arg(e, &read).filter(|_| flags <= 7) {
         set_model_path(e, weapon_model(wp, flags), &path);
+    }
+    handled(true)
+}
+
+// ---- the equipped weapon, its mods, the attack queue (batch 12) ----
+
+/// `Actor::baseProcess` (+0x68), its process level (byte +0x28), `MiddleHighProcess::weaponInfo`
+/// (+0x114): JIP's `Actor::GetWeaponInfo` asm.
+const PROCESS: u32 = 0x68;
+const PROCESS_LEVEL: u32 = 0x28;
+const WEAPON_INFO: u32 = 0x114;
+/// A changes entry: its extra data lists (+0), its item (+8).
+const ENTRY_LISTS: u32 = 0x00;
+const ENTRY_ITEM: u32 = 0x08;
+/// `TESObjectWEAP`: `eWeaponType` +0xF4, `animMult` +0xF8, `weaponFlags1` +0x100 (2 automatic, 4
+/// has a scope), `attackAnim` +0x11D, `weaponFlags2` +0x12C (0x2000: the scope is a mod),
+/// `animAttackMult` +0x130, `fireRate` +0x134 (all inside the loader's `DNAM` at +0xF4),
+/// `effectMods[3]` +0x180 and `value1Mod[3]` +0x18C, `itemMod[3]` +0x350, `soundLevel` +0x364.
+const WEAPON_TYPE: u32 = 0xf4;
+const ANIM_MULT: u32 = 0xf8;
+const FLAGS1: u32 = 0x100;
+const ATTACK_ANIM: u32 = 0x11d;
+const FLAGS2: u32 = 0x12c;
+const ANIM_ATTACK_MULT: u32 = 0x130;
+const FIRE_RATE: u32 = 0x134;
+const EFFECT_MODS: u32 = 0x180;
+const VALUE1_MODS: u32 = 0x18c;
+const ITEM_MODS: u32 = 0x350;
+const SOUND_LEVEL: u32 = 0x364;
+/// `kXData_ExtraItemDropper` (its reference +0xC), `kXData_ExtraWeaponModFlags` (its byte +0xC).
+const EXTRA_ITEM_DROPPER: u32 = 0x39;
+const EXTRA_WEAPON_MOD_FLAGS: u32 = 0x8d;
+/// The game's attack-queued byte (`0x11E07AC`). In the exe it is a dword holding 0 to 2, so
+/// reading its low byte answers the same.
+const ATTACK_QUEUED: u32 = 0x011e_07ac;
+/// `PickBestAnimation` (`00495740`, `thiscall`: the anim data, the group id, 0) and
+/// `GetTESAnimGroup` (`00496500`, `thiscall`: the anim data, the group id); the weapon types'
+/// group bases (`0x118A838`, a word each); `TESAnimGroup::numKeys` +0x14 and `keyTimes` +0x18.
+const PICK_BEST_ANIMATION: u32 = 0x0049_5740;
+const GET_ANIM_GROUP: u32 = 0x0049_6500;
+const WEAPON_TYPE_GROUPS: u32 = 0x0118_a838;
+const GROUP_NUM_KEYS: u32 = 0x14;
+const GROUP_KEY_TIMES: u32 = 0x18;
+/// `TESObjectREFR::GetAnimData` (vtable +0x1E4).
+const GET_ANIM_DATA: u32 = 0x1e4;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::GetWeaponInfo (asm).
+/// The actor's equipped weapon's changes entry: its process's when the process is high or
+/// middle-high (level 0 or 1); else none.
+fn weapon_info(e: &Engine, actor: u32) -> u32 {
+    let process = e.mem.u32(actor + PROCESS);
+    if process == 0 || e.mem.u8(process + PROCESS_LEVEL) > 1 {
+        return 0;
+    }
+    e.mem.u32(process + WEAPON_INFO)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetEntryDataModFlagsHook
+// (asm).
+/// A weapon entry's mod flags: its first extra data list's `ExtraWeaponModFlags` byte, or, when
+/// that list has an `ExtraItemDropper` with a reference, the dropper's own list's. 0 for no
+/// entry, not a weapon, no list or no flags. (JIP's always-on replacement of the game's
+/// `0x4BD820`, which it calls directly here.)
+pub fn entry_mod_flags(e: &mut Engine, entry: u32) -> u8 {
+    if entry == 0 {
+        return 0;
+    }
+    let item = e.mem.u32(entry + ENTRY_ITEM);
+    if type_of(e, item) != form_type_ln::TES_OBJECT_WEAP {
+        return 0;
+    }
+    let lists = e.mem.u32(entry + ENTRY_LISTS);
+    if lists == 0 {
+        return 0;
+    }
+    let mut list = e.mem.u32(lists);
+    if list == 0 {
+        return 0;
+    }
+    let dropper = super::extra::get_by_type(e, list, EXTRA_ITEM_DROPPER);
+    if dropper != 0 {
+        let refr = e.mem.u32(dropper + 0xc);
+        if refr != 0 {
+            list = refr + super::extra::REFR_EXTRA_LIST;
+        }
+    }
+    let flags = super::extra::get_by_type(e, list, EXTRA_WEAPON_MOD_FLAGS);
+    if flags == 0 {
+        return 0;
+    }
+    e.mem.u8(flags + 0xc)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetEntryDataHasModHook
+// (asm).
+/// Whether a mod slot the entry has (flag bits 1, 2, 4, in that order) carries the effect
+/// `mod_type` (the low byte of the weapon's `effectMods` word against the byte).
+pub fn entry_has_mod(e: &mut Engine, entry: u32, mod_type: u8) -> bool {
+    let flags = entry_mod_flags(e, entry);
+    if flags == 0 {
+        return false;
+    }
+    let weapon = e.mem.u32(entry + ENTRY_ITEM);
+    (0..3).any(|i| flags & (1 << i) != 0 && e.mem.u8(weapon + EFFECT_MODS + 4 * i) == mod_type)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
+// ContChangesEntry::GetWeaponModEffectValue (asm).
+/// The value of the first mod slot the entry's first list's flags hold whose effect (the whole
+/// word) is `effect`, from the weapon's `value1Mod`; 0 for none, no list or no flags.
+fn weapon_mod_effect_value(e: &mut Engine, entry: u32, effect: u32) -> f32 {
+    let lists = e.mem.u32(entry + ENTRY_LISTS);
+    if lists == 0 {
+        return 0.0;
+    }
+    let weapon = e.mem.u32(entry + ENTRY_ITEM);
+    let list = e.mem.u32(lists);
+    if list == 0 {
+        return 0.0;
+    }
+    let x = super::extra::get_by_type(e, list, EXTRA_WEAPON_MOD_FLAGS);
+    if x == 0 {
+        return 0.0;
+    }
+    let flags = e.mem.u8(x + 0xc);
+    for i in 0..3 {
+        if flags & (1 << i) != 0 && e.mem.u32(weapon + EFFECT_MODS + 4 * i) == effect {
+            return e.mem.f32(weapon + VALUE1_MODS + 4 * i);
+        }
+    }
+    0.0
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::EquippedWeaponSilenced.
+/// 1 for an equipped weapon of sound level 2 (silent), 2 for one with a silencer mod (effect 11),
+/// else 0.
+fn equipped_weapon_silenced(e: &mut Engine, actor: u32) -> u8 {
+    let info = weapon_info(e, actor);
+    if info == 0 {
+        return 0;
+    }
+    let weapon = e.mem.u32(info + ENTRY_ITEM);
+    if e.mem.u32(weapon + SOUND_LEVEL) == 2 {
+        1
+    } else if entry_has_mod(e, info, 11) {
+        2
+    } else {
+        0
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::EquippedWeaponHasScope.
+/// For an equipped weapon with a scope (flags1 bit 4): 1 when it is not a mod's (flags2 bit
+/// 0x2000 clear), 2 when the scope mod (effect 14) is on; else 0.
+fn equipped_weapon_has_scope(e: &mut Engine, actor: u32) -> u8 {
+    let info = weapon_info(e, actor);
+    if info == 0 {
+        return 0;
+    }
+    let weapon = e.mem.u32(info + ENTRY_ITEM);
+    if e.mem.u8(weapon + FLAGS1) & 4 == 0 {
+        return 0;
+    }
+    if e.mem.u32(weapon + FLAGS2) & 0x2000 == 0 {
+        1
+    } else if entry_has_mod(e, info, 14) {
+        2
+    } else {
+        0
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
+// Cmd_IsEquippedWeaponSilenced_Execute/_Eval.
+fn is_equipped_weapon_silenced(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if super::is_actor(e, a.this_obj) {
+        let v = equipped_weapon_silenced(e, a.this_obj);
+        a.set_result(e, f64::from(v));
+    }
+    handled(true)
+}
+
+fn is_equipped_weapon_silenced_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    if super::is_actor(e, a.this_obj) {
+        let v = equipped_weapon_silenced(e, a.this_obj);
+        e.mem.set_f64(a.result, f64::from(v));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
+// Cmd_IsEquippedWeaponScoped_Execute/_Eval.
+fn is_equipped_weapon_scoped(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if super::is_actor(e, a.this_obj) {
+        let v = equipped_weapon_has_scope(e, a.this_obj);
+        a.set_result(e, f64::from(v));
+    }
+    handled(true)
+}
+
+fn is_equipped_weapon_scoped_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    if super::is_actor(e, a.this_obj) {
+        let v = equipped_weapon_has_scope(e, a.this_obj);
+        e.mem.set_f64(a.result, f64::from(v));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
+// Cmd_EquippedWeaponHasModType_Execute/_Eval; nvse/GameObjects.cpp: Actor::EquippedWeaponHasMod.
+/// 1 when the actor's equipped weapon has a mod of the effect type (the argument's low byte, as
+/// the hook's `UInt8` takes it).
+fn equipped_weapon_has_mod_type(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !super::is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if read.ok {
+        let info = weapon_info(e, a.this_obj);
+        if info != 0 && entry_has_mod(e, info, read.int(0, 0) as u8) {
+            a.set_result(e, 1.0);
+        }
+    }
+    handled(true)
+}
+
+fn equipped_weapon_has_mod_type_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    if super::is_actor(e, a.this_obj) {
+        let info = weapon_info(e, a.this_obj);
+        if info != 0 && entry_has_mod(e, info, a.arg1 as u8) {
+            e.mem.set_f64(a.result, 1.0);
+        }
+    }
+    handled(true)
+}
+
+/// `IS_REFERENCE(form)` (JIP LN NVSE): its vtable answers true (`008D0360`) at +0xF0.
+fn is_reference(e: &Engine, form: u32) -> bool {
+    e.mem.u32(e.mem.u32(form) + 0xf0) == 0x008d_0360
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
+// Cmd_WeaponHasModType_Execute.
+/// The slot (1 to 3) of the weapon's (or a reference's base weapon's) first item mod whose effect
+/// is the type (the whole word); 0 for none. The result is written on every path, a failed read
+/// included.
+fn weapon_has_mod_type(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let mut slot = 0u32;
+    let mut form = read.form(0);
+    if read.ok && form != 0 {
+        if is_reference(e, form) {
+            form = e.mem.u32(form + 0x20);
+        }
+        if form != 0 && type_of(e, form) == form_type_ln::TES_OBJECT_WEAP {
+            let kind = read.int(1, 0);
+            for i in 0..3 {
+                if e.mem.u32(form + ITEM_MODS + 4 * i) == 0
+                    || e.mem.u32(form + EFFECT_MODS + 4 * i) != kind
+                {
+                    continue;
+                }
+                slot = i + 1;
+                break;
+            }
+        }
+    }
+    a.set_result(e, f64::from(slot));
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
+// Cmd_CalculateShotsPerSec_Execute.
+/// The actor's shots a second with the weapon (or an inventory reference's weapon, its stack's
+/// attack speed mod (effect 8) added to the attack multiplier): for a non-automatic weapon with
+/// anim data, `attack mult * anim mult / the attack group's next-to-last key time` when the
+/// best attack animation is the weapon's (0xFF: 0x20) and its group has two keys or more; else
+/// (automatic, or no anim data) `attack mult * attack mult * fire rate * anim mult`. Floats.
+fn calculate_shots_per_sec(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !super::is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    let mut form = read.form(0);
+    if !read.ok || form == 0 {
+        return handled(true);
+    }
+    let mut info = 0;
+    if is_reference(e, form) {
+        let id = super::ref_id(e, form);
+        if nvse::invref::for_ref_id(e, id) {
+            if let Some(r) = nvse::invref::get(e, id) {
+                info = r.data.entry;
+                form = r.data.item;
+            }
+        }
+    }
+    if form == 0 || type_of(e, form) != form_type_ln::TES_OBJECT_WEAP {
+        return handled(true);
+    }
+    let weapon = form;
+    let anim_data = e.vcall(a.this_obj, GET_ANIM_DATA, &[]).u32();
+    let mut mult = e.mem.f32(weapon + ANIM_ATTACK_MULT);
+    if info != 0 {
+        mult += weapon_mod_effect_value(e, info, 8);
+    }
+    let anim_mult = e.mem.f32(weapon + ANIM_MULT);
+    if anim_data != 0 && e.mem.u8(weapon + FLAGS1) & 2 == 0 {
+        let mut attack = u32::from(e.mem.u8(weapon + ATTACK_ANIM));
+        if attack == 0xff {
+            attack = 0x20;
+        }
+        let kind = u32::from(e.mem.u8(weapon + WEAPON_TYPE));
+        let base = e.mem.u32(WEAPON_TYPE_GROUPS + 4 * kind);
+        let group_id = (base << 8) | attack;
+        let anim = e
+            .call(PICK_BEST_ANIMATION, &args![anim_data, group_id, 0u32])
+            .u32()
+            & 0xffff;
+        if anim & 0xff == attack {
+            let group = e.call(GET_ANIM_GROUP, &args![anim_data, anim]).u32();
+            if group != 0 {
+                let keys = e.mem.u32(group + GROUP_NUM_KEYS);
+                if keys >= 2 {
+                    let times = e.mem.u32(group + GROUP_KEY_TIMES);
+                    // `keyTimes[numKeys - 2]`: a mod's key count wraps as JIP's pointer maths.
+                    let t = e
+                        .mem
+                        .f32(times.wrapping_add(keys.wrapping_sub(2).wrapping_mul(4)));
+                    a.set_result(e, f64::from((mult * anim_mult) / t));
+                }
+            }
+        }
+    } else {
+        let rate = e.mem.f32(weapon + FIRE_RATE);
+        a.set_result(e, f64::from(mult * mult * rate * anim_mult));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
+// Cmd_IsAttackQueued_Execute/_Eval.
+/// 1 while the game's attack-queued byte (`0x11E07AC`) is set.
+fn is_attack_queued(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if e.mem.u8(ATTACK_QUEUED) != 0 {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+fn is_attack_queued_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    if e.mem.u8(ATTACK_QUEUED) != 0 {
+        e.mem.set_f64(a.result, 1.0);
     }
     handled(true)
 }
