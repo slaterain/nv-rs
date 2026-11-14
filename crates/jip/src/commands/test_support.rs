@@ -245,3 +245,83 @@ pub fn call_on(e: &mut Engine, opcode: u32, this: u32, args: &[Vec<u8>]) -> (u32
     let ok = e.call(execute, &words).eax & 0xff;
     (ok, e.mem.f64(RESULT))
 }
+
+/// `BaseExtraList::GetByType` (`00410220`), `AddExtra` (`0040FF60`), `RemoveByType` (`00410140`)
+/// and `BGSSaveLoadGame::AddChange` (`0084A690`) as stand-ins written from the exe's functions:
+/// the walk from the list's +4 (each extra's type at +4, next at +8), the append at the chain's
+/// end with the presence bit set (+8 bits), the unlink of the first extra of the type with its
+/// bit cleared (its delete through the vtable left out: recorded instead), and the change call
+/// recorded. `g_BGSSaveLoadGame` points at [`SAVE_LOAD`].
+pub const GET_BY_TYPE_FN: u32 = 0x0041_0220;
+pub const ADD_EXTRA_FN: u32 = 0x0040_ff60;
+pub const REMOVE_BY_TYPE_FN: u32 = 0x0041_0140;
+pub const ADD_CHANGE_FN: u32 = 0x0084_a690;
+pub const SAVE_LOAD: u32 = FORMS + 0xf_f000;
+
+pub fn extra_stand_ins(e: &mut Engine) {
+    e.map(0x011d_d000, 0x1000);
+    e.mem.set_u32(0x011d_df38, SAVE_LOAD);
+    e.register(GET_BY_TYPE_FN, |e, w| {
+        let mut x = e.mem.u32(w[0] + 4);
+        while x != 0 && u32::from(e.mem.u8(x + 4)) != w[1] {
+            x = e.mem.u32(x + 8);
+        }
+        eax(x)
+    });
+    e.register(ADD_EXTRA_FN, |e, w| {
+        record(ADD_EXTRA_FN, w);
+        let (list, extra) = (w[0], w[1]);
+        let mut at = list + 4;
+        while e.mem.u32(at) != 0 {
+            at = e.mem.u32(at) + 8;
+        }
+        e.mem.set_u32(at, extra);
+        let kind = u32::from(e.mem.u8(extra + 4));
+        let bits = list + 8 + (kind >> 3);
+        e.mem.set_u8(bits, e.mem.u8(bits) | (1 << (kind & 7)));
+        eax(extra)
+    });
+    e.register(REMOVE_BY_TYPE_FN, |e, w| {
+        record(REMOVE_BY_TYPE_FN, w);
+        let (list, kind) = (w[0], w[1]);
+        let mut at = list + 4;
+        loop {
+            let x = e.mem.u32(at);
+            if x == 0 {
+                break;
+            }
+            if u32::from(e.mem.u8(x + 4)) == kind {
+                e.mem.set_u32(at, e.mem.u32(x + 8));
+                break;
+            }
+            at = x + 8;
+        }
+        let bits = list + 8 + (kind >> 3);
+        e.mem.set_u8(bits, e.mem.u8(bits) & !(1 << (kind & 7)));
+        eax(0)
+    });
+    e.register(ADD_CHANGE_FN, |_, w| {
+        record(ADD_CHANGE_FN, w);
+        eax(0)
+    });
+}
+
+/// An extra of `kind` at `at` holding `word` at +0xC, put first in the list at `list` (presence
+/// bit set).
+pub fn put_extra(e: &mut Engine, list: u32, at: u32, kind: u32, word: u32) {
+    e.mem.set_u8(at + 4, kind as u8);
+    e.mem.set_u32(at + 8, e.mem.u32(list + 4));
+    e.mem.set_u32(at + 0xc, word);
+    e.mem.set_u32(list + 4, at);
+    let bits = list + 8 + (kind >> 3);
+    e.mem.set_u8(bits, e.mem.u8(bits) | (1 << (kind & 7)));
+}
+
+/// The calls made to `addr`, their words.
+pub fn calls_to(addr: u32) -> Vec<Vec<u32>> {
+    calls()
+        .into_iter()
+        .filter(|c| c.0 == addr)
+        .map(|c| c.1)
+        .collect()
+}
