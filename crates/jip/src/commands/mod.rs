@@ -41,6 +41,7 @@ pub mod jip_fn_ref_map;
 pub mod jip_fn_script;
 pub mod jip_fn_sound;
 pub mod jip_fn_texture_set;
+pub mod jip_fn_ui;
 pub mod jip_fn_utility;
 pub mod jip_fn_water;
 pub mod jip_fn_weapon;
@@ -94,6 +95,7 @@ pub const ALL_CONDITIONS: &[Conditions] = &[
     ln_fn_gamepad::CONDITIONS,
     jip_fn_ccc::CONDITIONS,
     jip_fn_weapon::CONDITIONS,
+    jip_fn_ui::CONDITIONS,
 ];
 
 /// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
@@ -131,6 +133,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ref_map::COMMANDS,
     jip_fn_sound::COMMANDS,
     jip_fn_texture_set::COMMANDS,
+    jip_fn_ui::COMMANDS,
     jip_fn_utility::COMMANDS,
     jip_fn_water::COMMANDS,
     jip_fn_weapon::COMMANDS,
@@ -699,6 +702,7 @@ mod tests {
             "jip_fn_ref_map",
             "jip_fn_sound",
             "jip_fn_texture_set",
+            "jip_fn_ui",
             "jip_fn_utility",
             "jip_fn_water",
             "jip_fn_weapon",
@@ -746,6 +750,7 @@ mod tests {
             "ln_fn_gamepad",
             "jip_fn_ccc",
             "jip_fn_weapon",
+            "jip_fn_ui",
         ]) {
             for &(opcode, _, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
@@ -754,7 +759,7 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS.len(), 7);
+        assert_eq!(ALL_CONDITIONS.len(), 8);
         for (list, file) in ALL_CONDITIONS_ONLY.iter().zip(["jip_fn_aux_variable"]) {
             for &(opcode, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");

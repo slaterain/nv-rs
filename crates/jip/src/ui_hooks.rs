@@ -83,7 +83,7 @@ const HANDLE_CLICK_SLOT: u32 = 0xc;
 /// The menus' names a click path starts with, and their ids (`s_menuNameToID`, filled in
 /// `jip_nvse.cpp`'s `InitGameHooks` (JIP LN NVSE)); looked up by `StrHashCI` alone, as JIP's
 /// `UnorderedMap<const char*>` keeps only the hash.
-const MENU_NAMES: [(&str, u32); 36] = [
+pub(crate) const MENU_NAMES: [(&str, u32); 36] = [
     ("MessageMenu", 0x3e9),
     ("InventoryMenu", 0x3ea),
     ("StatsMenu", 0x3eb),
