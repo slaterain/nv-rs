@@ -1,0 +1,279 @@
+//! Tests of `ln_fn_inventory`: the player's inventory changes built by hand (entries: lists at
+//! +0, form at +8; lists' extras walked from +4 with presence bits at +8), the new lists' and
+//! hotkeys' exact blocks, and base forms' containers (a container's at +0x30, an actor base's at
+//! +0x64; items `{count, form, extra}`).
+
+use super::*;
+use crate::commands::test_support::*;
+use nvse::vars::{Data, Value as V};
+
+const PC: u32 = FORMS + 0x1000;
+const WEAP: u32 = FORMS + 0x1100;
+const ARMO: u32 = FORMS + 0x1200;
+const ALCH: u32 = FORMS + 0x1300;
+const MISC: u32 = FORMS + 0x1400;
+const CONT: u32 = FORMS + 0x1500;
+const NPC: u32 = FORMS + 0x1600;
+const ACTOR: u32 = FORMS + 0x1700;
+const ACTOR_VT: u32 = FORMS + 0x1800;
+const BASE_VT: u32 = FORMS + 0x1900;
+const XC: u32 = FORMS + 0x2000;
+const DATA: u32 = FORMS + 0x2100;
+const NODES: u32 = FORMS + 0x3000;
+const E_W: u32 = FORMS + 0x4000;
+const E_A: u32 = FORMS + 0x4100;
+const E_L: u32 = FORMS + 0x4200;
+const L1: u32 = FORMS + 0x5000;
+const L2: u32 = FORMS + 0x5100;
+const L3: u32 = FORMS + 0x5200;
+const XHK: u32 = FORMS + 0x6000;
+const XH: u32 = FORMS + 0x6100;
+const XM: u32 = FORMS + 0x6200;
+const XHK2: u32 = FORMS + 0x6300;
+const FC1: u32 = FORMS + 0x7000;
+
+fn node(e: &mut Engine, at: u32, data: u32, next: u32) {
+    e.mem.set_u32(at, data);
+    e.mem.set_u32(at + 4, next);
+}
+
+/// The player with a weapon entry (two lists: L1 health 0.5 flags 3, L2 plain), an armour entry
+/// (one list L3 holding hotkey 4) and an aid item entry with no lists.
+fn setup() -> Engine {
+    let mut e = engine();
+    extra_stand_ins(&mut e);
+    game_globals(&mut e);
+    form(&mut e, PC, 0x3b, 0x14);
+    form(&mut e, WEAP, 0x28, 0x201);
+    form(&mut e, ARMO, 0x18, 0x202);
+    form(&mut e, ALCH, 0x2f, 0x203);
+    form(&mut e, MISC, 0x1f, 0x204);
+    form(&mut e, CONT, 0x1b, 0x205);
+    form(&mut e, NPC, 0x2a, 0x206);
+    for (i, (f, id)) in [(WEAP, 0x201), (ARMO, 0x202), (ALCH, 0x203)]
+        .iter()
+        .enumerate()
+    {
+        in_form_map(&mut e, *f, *id, i as u32);
+    }
+    e.mem.set_u32(0x011d_ea3c, PC);
+    put_extra(&mut e, PC + 0x44, XC, 0x15, DATA);
+    e.mem.set_u32(DATA, NODES);
+    node(&mut e, NODES, E_W, NODES + 8);
+    node(&mut e, NODES + 8, E_A, NODES + 0x10);
+    node(&mut e, NODES + 0x10, E_L, 0);
+    e.mem.set_u32(E_W, NODES + 0x20);
+    e.mem.set_u32(E_W + 8, WEAP);
+    node(&mut e, NODES + 0x20, L1, NODES + 0x28);
+    node(&mut e, NODES + 0x28, L2, 0);
+    put_extra(&mut e, L1, XH, 0x25, 0.5f32.to_bits());
+    put_extra(&mut e, L1, XM, 0x8d, 3);
+    put_extra(&mut e, L2, XHK2 + 0x80, 0x25, 1.0f32.to_bits());
+    e.mem.set_u32(E_A, NODES + 0x30);
+    e.mem.set_u32(E_A + 8, ARMO);
+    node(&mut e, NODES + 0x30, L3, 0);
+    put_extra(&mut e, L3, XHK, 0x4a, 4);
+    e.mem.set_u32(E_L + 8, ALCH);
+    // Base forms and an actor.
+    e.mem.set_u32(NPC, BASE_VT);
+    e.mem.set_u32(MISC, BASE_VT + 0x200);
+    e.mem.set_u32(BASE_VT + 0xf8, 0x008d_0360);
+    e.mem.set_u32(ACTOR_VT + 0x100, 0x008d_0360);
+    form(&mut e, ACTOR, 0x3b, 0x207);
+    e.mem.set_u32(ACTOR, ACTOR_VT);
+    e.mem.set_u32(ACTOR + 0x20, NPC);
+    for (i, f) in [WEAP, ARMO, ALCH, MISC, CONT, NPC].iter().enumerate() {
+        set_ref(&mut e, i as u16 + 1, *f);
+    }
+    e
+}
+
+fn hotkey_of(e: &Engine, xdl: u32) -> Option<u8> {
+    let mut x = e.mem.u32(xdl + 4);
+    while x != 0 {
+        if e.mem.u8(x + 4) == 0x4a {
+            return Some(e.mem.u8(x + 0xc));
+        }
+        x = e.mem.u32(x + 8);
+    }
+    None
+}
+
+#[test]
+fn a_hotkey_on_the_matching_list() {
+    let mut e = setup();
+    let block = heap_next(&e);
+    // Hotkey 1 (index 0) on the weapon with health 0.5 and flags 3: L1.
+    call(&mut e, 0x2319, &[n(1), r(1), z(0.5), n(3)]);
+    assert_eq!(hotkey_of(&e, L1), Some(0));
+    assert_eq!(hotkey_of(&e, L2), None);
+    assert_eq!(allocations(), vec![0x10]);
+    assert_eq!(
+        [0, 4, 8, 0xc].map(|o| e.mem.u32(block + o)),
+        [0x0101_592c, 0x4a, 0, 0]
+    );
+    // Health -2 (any) and flags -1 (any): L1 matches first and keeps the hotkey.
+    call(&mut e, 0x2319, &[n(1), r(1)]);
+    assert_eq!((hotkey_of(&e, L1), hotkey_of(&e, L2)), (Some(0), None));
+    // Health 1.0, no flags (0): L2 gets it, L1 loses it.
+    call(&mut e, 0x2319, &[n(1), r(1), z(1.0), n(0)]);
+    assert_eq!((hotkey_of(&e, L1), hotkey_of(&e, L2)), (None, Some(0)));
+    // Index 0 and above 8: nothing.
+    call(&mut e, 0x2319, &[n(9), r(1)]);
+    call(&mut e, 0x2319, &[n(0), r(1)]);
+    assert_eq!(hotkey_of(&e, L2), Some(0));
+}
+
+#[test]
+fn a_hotkey_moved_from_another_item() {
+    let mut e = setup();
+    // Hotkey 5 (index 4) set on the weapon: the armour's first list loses it, and that list,
+    // left empty, is freed and taken out.
+    call(&mut e, 0x2319, &[n(5), r(1), z(0.5), n(3)]);
+    assert_eq!(hotkey_of(&e, L1), Some(4));
+    assert_eq!(e.mem.u32(NODES + 0x30), 0, "the armour's only node emptied");
+    assert_eq!(freed(), vec![L3]);
+    assert_eq!(calls_to(REMOVE_BY_TYPE_FN), vec![vec![L3, 0x4a]]);
+}
+
+#[test]
+fn an_aid_item_gets_a_new_list() {
+    let mut e = setup();
+    let first = heap_next(&e);
+    call(&mut e, 0x2319, &[n(2), r(3), z(-1.0), n(0)]);
+    // A list (0x20, zeroed, its vtable), its hotkey (0x10), and the 8-byte node.
+    assert_eq!(allocations(), vec![0x20, 0x10, 8]);
+    assert_eq!(e.mem.u32(first), 0x0101_43e8);
+    assert_eq!(hotkey_of(&e, first), Some(1));
+    let nd = e.mem.u32(E_L);
+    assert_eq!((e.mem.u32(nd), e.mem.u32(nd + 4)), (first, 0));
+    // With a health asked: no new list.
+    e.mem.set_u32(E_L, 0);
+    call(&mut e, 0x2319, &[n(3), r(3), z(0.5)]);
+    assert_eq!(e.mem.u32(E_L), 0);
+}
+
+#[test]
+fn no_form_clears_the_index() {
+    let mut e = setup();
+    // ClearAllHotkeys: the armour's list loses its hotkey and goes.
+    call(&mut e, 0x222c, &[]);
+    assert_eq!(freed(), vec![L3]);
+    assert!(hotkey_of(&e, L1).is_none() && hotkey_of(&e, L2).is_none());
+}
+
+#[test]
+fn a_form_not_carried_still_takes_the_index() {
+    let mut e = setup();
+    // A misc item the player does not carry: the armour's first list still loses index 4.
+    call(&mut e, 0x2319, &[n(5), r(4)]);
+    assert_eq!(freed(), vec![L3]);
+    assert!(allocations().is_empty());
+}
+
+#[test]
+fn hotkeys_saved_and_restored() {
+    let mut e = setup();
+    put_extra(&mut e, L1, XHK2, 0x4a, 0);
+    let (_, res) = call(&mut e, 0x2216, &[]);
+    let outer = array_data(&e, res);
+    assert_eq!(outer.len(), 8);
+    let Data::Array(first) = outer[0] else {
+        panic!()
+    };
+    assert_eq!(
+        array_data(&e, f64::from(first)),
+        vec![Data::Form(0x201), Data::Number(0.5), Data::Number(3.0)]
+    );
+    let Data::Array(fifth) = outer[4] else {
+        panic!()
+    };
+    assert_eq!(
+        array_data(&e, f64::from(fifth)),
+        vec![Data::Form(0x202), Data::Number(-1.0), Data::Number(0.0)]
+    );
+    let Data::Array(empty) = outer[1] else {
+        panic!()
+    };
+    assert_eq!(
+        array_data(&e, f64::from(empty)),
+        vec![Data::Form(0), Data::Number(-1.0), Data::Number(0.0)]
+    );
+    // Moved, then restored from the saved ones.
+    call(&mut e, 0x2319, &[n(1), r(1), z(1.0), n(0)]);
+    assert_eq!(hotkey_of(&e, L2), Some(0));
+    call(&mut e, 0x2217, &[]);
+    assert_eq!((hotkey_of(&e, L1), hotkey_of(&e, L2)), (Some(0), None));
+    // From an array of eight: index 2 to the plain weapon list.
+    let mut vals = Vec::new();
+    for i in 0..8 {
+        let inner = if i == 2 {
+            array_of(&mut e, vec![V::Form(0x201), V::Number(1.0), V::Number(0.0)])
+        } else {
+            array_of(&mut e, vec![V::Number(0.0)])
+        };
+        vals.push(V::Array(inner));
+    }
+    let id = array_of(&mut e, vals);
+    call(&mut e, 0x2217, &[n(id as i32)]);
+    assert_eq!(hotkey_of(&e, L2), Some(2));
+    // Not eight: nothing.
+    let short = array_of(&mut e, vec![V::Number(0.0)]);
+    call(&mut e, 0x2217, &[n(short as i32)]);
+}
+
+#[test]
+fn base_container_items() {
+    let mut e = setup();
+    // The container's items at +0x30 + 4: WEAP x2.
+    node(&mut e, CONT + 0x34, FC1, 0);
+    e.mem.set_u32(FC1, 2);
+    e.mem.set_u32(FC1 + 4, WEAP);
+    assert_eq!(call(&mut e, 0x22f7, &[r(1), r(5)]).1, 2.0);
+    call(&mut e, 0x22f8, &[r(1), n(3), r(5)]);
+    assert_eq!(e.mem.u32(FC1), 5);
+    // A new item: 0xC for it and 0xC for its extra, put first.
+    let fc = heap_next(&e);
+    call(&mut e, 0x22fb, &[r(2), n(1), z(0.25), r(5)]);
+    assert_eq!(
+        allocations(),
+        vec![0xc, 0xc, 8],
+        "the item, its extra, the node"
+    );
+    assert_eq!(e.mem.u32(CONT + 0x34), fc);
+    assert_eq!((e.mem.u32(fc), e.mem.u32(fc + 4)), (1, ARMO));
+    let ce = e.mem.u32(fc + 8);
+    assert_eq!(
+        (e.mem.u32(ce), e.mem.u32(ce + 4), e.mem.f32(ce + 8)),
+        (0, 0, 0.25)
+    );
+    // An actor base's container (+0x64), by the calling actor's base form.
+    call_on(&mut e, 0x22f8, ACTOR, &[r(3), n(4)]);
+    assert_eq!(call(&mut e, 0x22f7, &[r(3), r(6)]).1, 4.0);
+    // A misc item has no container.
+    assert_eq!(call(&mut e, 0x22f7, &[r(1), r(4)]).1, 0.0);
+}
+
+#[test]
+fn base_items_removed() {
+    let mut e = setup();
+    node(&mut e, CONT + 0x34, FC1, 0);
+    e.mem.set_u32(FC1, 2);
+    e.mem.set_u32(FC1 + 4, WEAP);
+    call(&mut e, 0x22f9, &[r(1), n(1), r(5)]);
+    assert_eq!(e.mem.u32(FC1), 1);
+    call(&mut e, 0x22f9, &[r(1), n(1), r(5)]);
+    assert_eq!(e.mem.u32(CONT + 0x34), 0, "below 1: the node emptied");
+    assert!(freed().is_empty(), "the item itself is not freed");
+    // On an actor: the form unequipped first.
+    e.register(0x0088_c790, |_, w| {
+        CALLS.with(|c| c.borrow_mut().push((0x0088_c790, w.to_vec())));
+        Ret::default()
+    });
+    call_on(&mut e, 0x22f8, ACTOR, &[r(1), n(1)]);
+    call_on(&mut e, 0x22f9, ACTOR, &[r(1), n(5)]);
+    assert_eq!(
+        calls_to(0x0088_c790),
+        vec![vec![ACTOR, WEAP, 1, 0, 1, 0, 1]]
+    );
+}
