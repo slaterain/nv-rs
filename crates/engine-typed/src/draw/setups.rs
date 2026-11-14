@@ -23,13 +23,9 @@ const DEFAULT_STAGE_3: u32 = 0x011f_951c;
 /// The point the passes transform (`011fa2a0`) and 1.0 (a double, `01012070`).
 const ORIGIN_POINT: u32 = 0x011f_a2a0;
 const ONE_DOUBLE: u32 = 0x0101_2070;
-/// The shader's own set-ups these call by address: `00b7c3a0`, `00b7c510`, `00b7c580`, `00b7c600`
-/// (`thiscall(shader)`), `00b7c850` (`stdcall(matrix, scale)`), `00b7cb00` (`stdcall(matrix, scale,
+/// The shader's own set-ups these call: the fog upload, the pixel entries, the ambient and the light colour
+/// (`00b7c3a0`, `00b7c510`, `00b7c580`, `00b7c600`, `thiscall(shader)`: this file's) and by address `00b7c850` (`stdcall(matrix, scale)`), `00b7cb00` (`stdcall(matrix, scale,
 /// word)`); `D3DXVec3TransformCoord` (`00ee6df8`) and `D3DXMatrixTranspose` (`00ee6dd4`) are [`super::thunks`].
-const FOG_CONSTANTS: u32 = 0x00b7_c3a0;
-const SETUP_C510: u32 = 0x00b7_c510;
-const SETUP_C580: u32 = 0x00b7_c580;
-const SETUP_C600: u32 = 0x00b7_c600;
 const SCALED_LIGHT: u32 = 0x00b7_c850;
 const SCALED_LIGHT_WORD: u32 = 0x00b7_cb00;
 
@@ -143,14 +139,12 @@ fn light_constant(e: &mut Engine, vector: u32) {
 pub fn begin_types_fc(e: &mut Engine, this: Ptr) {
     let shader = this.addr();
     bind_stage(e, 5);
-    e.call(FOG_CONSTANTS, &args![shader]);
+    fog_upload_call(e, shader);
     let first = capture::own_at::<u32>(e, SWITCH_A);
     own::set_switch_word(e, first, 1);
     let second = capture::own_at::<u32>(e, SWITCH_B);
     own::set_switch_word(e, second, 1);
-    e.call(SETUP_C510, &args![shader]);
-    e.call(SETUP_C580, &args![shader]);
-    e.call(SETUP_C600, &args![shader]);
+    light_setups_call(e, shader);
     e.with_stack(0x44, |e, frame| {
         let frame = frame.addr();
         upload_last(e, shader, frame + 0x10, frame);
@@ -162,10 +156,8 @@ pub fn begin_types_fc(e: &mut Engine, this: Ptr) {
 /// after them.
 pub fn begin_types_ca(e: &mut Engine, this: Ptr) {
     let shader = this.addr();
-    e.call(FOG_CONSTANTS, &args![shader]);
-    e.call(SETUP_C510, &args![shader]);
-    e.call(SETUP_C580, &args![shader]);
-    e.call(SETUP_C600, &args![shader]);
+    fog_upload_call(e, shader);
+    light_setups_call(e, shader);
 }
 
 // Typed from 00b7ded0
@@ -602,4 +594,94 @@ pub fn property_fade(e: &mut Engine, this: Ptr) -> f32 {
     }
     let near = e.global::<u32>(FADE_NEAR);
     fade_between(packet::property_distance(e, base), near, far)
+}
+
+/// The fog upload ([`fog_upload`], `00b7c3a0`) as the type groups' begins call it.
+fn fog_upload_call(e: &mut Engine, shader: u32) {
+    typed_call!(FAMILY, 0x00b7_c3a0, fog_upload(e, Ptr::new(shader)));
+}
+
+/// The three set-ups after the fog ([`pixel_entries`], [`light_ambient`], [`light_colour`]) as the type groups'
+/// begins call them, in the exe's order.
+fn light_setups_call(e: &mut Engine, shader: u32) {
+    let _: u32 = typed_call!(FAMILY, 0x00b7_c510, pixel_entries(e, Ptr::new(shader)));
+    typed_call!(FAMILY, 0x00b7_c580, light_ambient(e, Ptr::new(shader)));
+    typed_call!(FAMILY, 0x00b7_c600, light_colour(e, Ptr::new(shader)));
+}
+
+// Typed from 00b7c3a0
+/// The shadow light shader's fog upload, `thiscall(shader)` (the shader not read): the fog constants (`011fa280`, as
+/// [`fog_constants`] makes them from the fog property of the fog index, both through the packet), then the current
+/// pass's device (its constants holder +0x5c, that holder's +0x20) gets the eight floats as vertex constants 0xe and
+/// 0xf (its slot 0x178; an image of the draw's own copy while the packet owns them).
+pub fn fog_upload(e: &mut Engine, _this: Ptr) {
+    fog_constants(e);
+    let device = packet::pass_device(e);
+    own::device_vertex_constants(e, device, 0xe, FOG, 2); // own: uploaded through own_image
+}
+
+// Typed from 00b7c510
+/// The shadow light shader's pixel entries, `thiscall(shader)`: each of the 22 pixel entries (`011fec30`) that is
+/// set is switched on when its bit (entry k: bit k + 1) is set in the rendered pass type's word of `011fc0a0` (read
+/// for each), then the pixel constant map (+0x30) is sorted (its slot 0x24, a tail call: its answer is this one's).
+pub fn pixel_entries(e: &mut Engine, this: Ptr) -> u32 {
+    let pass_type = packet::rendering_pass_type(e);
+    enable_entries(e, PIXEL_ENTRIES, PIXEL_FLAGS, pass_type);
+    let map = own::constant_map(e, this.addr(), 0x30);
+    e.vcall(map, 0x24, &args![]).u32()
+}
+
+/// The ambient row (`011fa0c0`) and the light colour row (`011fa0d0`), four floats each.
+const AMBIENT_ROW: u32 = 0x011f_a0c0;
+const LIGHT_ROW: u32 = 0x011f_a0d0;
+/// The HDR switch (`011f941e`), the byte that keeps the extra scale off (`011f9427`) and the extra scale
+/// (`011f9190`).
+const HDR_ON: u32 = 0x011f_941e;
+const NO_EXTRA_SCALE: u32 = 0x011f_9427;
+const EXTRA_SCALE: u32 = 0x011f_9190;
+
+// Typed from 00b7c580
+/// The shadow light shader's ambient, `thiscall(shader)` (the shader not read): the rendered pass's first light's
+/// light (+0xf8) gives its ambient colour (+0xc8, three floats) with 1.0 to `011fa0c0`, through the packet.
+pub fn light_ambient(e: &mut Engine, _this: Ptr) {
+    let shadow = packet::rendering_first_light(e);
+    let light = packet::pass_light_word(e, shadow, 0xf8);
+    for k in 0..3u32 {
+        let word = packet::light_value_word(e, light, 0xc8 + 4 * k);
+        own::set_constant_word(e, AMBIENT_ROW + 4 * k, word);
+    }
+    own::set_constant_word(e, AMBIENT_ROW + 0xc, 1.0f32.to_bits());
+}
+
+// Typed from 00b7c600
+/// The shadow light shader's light colour, `thiscall(shader)` (the shader not read): the rendered pass's first light
+/// (its weight +0xd0, its alpha +0xd4) and that light's light (+0xf8: its strength +0xc4, held to 1.0 unless HDR, and
+/// colour +0xd4): each component the colour times the strength, then times the weight (the exe's order), times the extra scale with HDR on and `011f9427` clear, to `011fa0d0` with the alpha; through
+/// the packet. Main thread only: `f32` maths.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: held only when above 1.0.
+pub fn light_colour(e: &mut Engine, _this: Ptr) {
+    let shadow = packet::rendering_first_light(e);
+    let light = packet::pass_light_word(e, shadow, 0xf8);
+    let value = |e: &Engine, at: u32| f32::from_bits(packet::light_value_word(e, light, at));
+    let mut strength = value(e, 0xc4);
+    let hdr = e.global::<u8>(HDR_ON) != 0; // own: main's frame value, value packet B
+    if !hdr && 1.0 < strength {
+        strength = 1.0;
+    }
+    let weight = f32::from_bits(packet::pass_light_word(e, shadow, 0xd0));
+    let mut colour = [
+        value(e, 0xd4) * strength * weight,
+        weight * (value(e, 0xd8) * strength),
+        weight * (strength * value(e, 0xdc)),
+    ];
+    if hdr && e.global::<u8>(NO_EXTRA_SCALE) == 0 {
+        // own: main's frame value, value packet B
+        let extra = e.global::<f32>(EXTRA_SCALE); // own: main's frame value, value packet B
+        colour = colour.map(|c| extra * c);
+    }
+    for (k, c) in (0u32..).zip(colour) {
+        own::set_constant_word(e, LIGHT_ROW + 4 * k, c.to_bits());
+    }
+    let alpha = packet::pass_light_word(e, shadow, 0xd4);
+    own::set_constant_word(e, LIGHT_ROW + 0xc, alpha);
 }

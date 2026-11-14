@@ -69,6 +69,9 @@ pub(crate) const ACC_SETTINGS: [(u32, u32); 5] = [
 pub(crate) const ACC_SHADOW_NODE: (u32, u32) = (0x194, 0x198);
 const SHADER_ACCUMULATOR: u32 = 0x011f_95ec;
 pub(crate) const SCENE_CAMERA: (u32, u32) = (0x1e4, 0x1f0);
+/// The pass types whose no-lighting set-up copies the model data's sub-textures (`00bc9a50` calls `00bc6fa0` for
+/// 0x52 to 0x57).
+const SUBTEXTURE_PASSES: std::ops::RangeInclusive<u32> = 0x52..=0x57;
 /// `NiAVObject`'s empty bound (`011f4288`).
 const NULL_BOUND: u32 = 0x011f_4288;
 /// The fog index byte (`011f91c4`), the shadow scene nodes (`011f91c8`) and a node's fog property (+0x134);
@@ -126,13 +129,21 @@ pub fn fill(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
             own_clip_plane_caches(e, pass);
         }
     }
+    // The geometries drawn in a pass type the no-lighting shader copies sub-textures in (0x52 to 0x57, `00bc9a50`):
+    // only their model data's +0x68 is a sub-texture array (another data keeps something else there).
+    let mut subtextured = AddrSet::default();
+    for &pass in &passes {
+        if SUBTEXTURE_PASSES.contains(&packet::pass_type(e, pass)) {
+            subtextured.insert(packet::pass_geometry(e, pass));
+        }
+    }
     let mut geometries = AddrSet::default();
     let mut nodes = AddrSet::default();
     for pass in passes {
         take_lights(e, pass, &mut nodes);
         let geometry = packet::pass_geometry(e, pass);
         if geometry != 0 && geometries.insert(geometry) {
-            take_geometry(e, geometry, &mut nodes);
+            take_geometry(e, geometry, &mut nodes, subtextured.contains(&geometry));
             capture::hold(e, geometry);
         }
     }
@@ -208,7 +219,7 @@ pub fn take_camera(e: &Engine, camera: u32) {
 
 /// What the cut takes for one geometry ([`take_geometry`]), not held: for the checks of the paths that draw one.
 pub fn take_geometry_values(e: &mut Engine, geometry: u32) {
-    take_geometry(e, geometry, &mut AddrSet::default());
+    take_geometry(e, geometry, &mut AddrSet::default(), true);
 }
 
 /// What the cut takes for one pass's lights ([`take_lights`]): for the checks of the paths that set them.
@@ -296,7 +307,7 @@ fn walk_list(e: &Engine, list: u32, passes: &mut Vec<u32>) {
 
 /// A geometry's values: its world transform, its bound, its skin's root and bones, its shader property's values,
 /// its particles.
-fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
+fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>, subtextures: bool) {
     capture::take(e, geometry, WORLD.0, WORLD.1);
     let bound = e.global::<u32>(geometry.wrapping_add(0x20));
     capture::take(e, bound, BOUND.0, BOUND.1);
@@ -312,7 +323,7 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
     {
         take_particles(e, data);
     }
-    take_group_c_arrays(e, geometry, property, data);
+    take_group_c_arrays(e, geometry, property, data, subtextures);
 }
 
 /// The tall grass shader (`010b8980`), the no-lighting shader (`010bb230`) and the SpeedTree leaf shader
@@ -339,12 +350,14 @@ fn leaf_slots(e: &Engine, property: u32) -> bool {
 /// The arrays Group C's set-ups copy into their constants whole (`_memcpy`), by the geometry's shader:
 /// - tall grass (`00baaf40`): the property's instance data (+0x7c): its counts (`u16` +0x10, +0x12), its array
 ///   (+0x14) and that array's count x 0x10 bytes;
-/// - no-lighting (`00bc6fa0`): the model data's sub-texture array (+0x68) and count (`u8` +0x6c), count x 0x10 bytes;
+/// - no-lighting (`00bc6fa0`): the model data's sub-texture array (+0x68) and count (`u8` +0x6c), count x 0x10 bytes,
+///   only with `subtextures` (the geometry drawn in a sub-texture pass: another model data keeps other words there,
+///   which other readers use);
 /// - SpeedTree leaves (`00bb2760`): the leaf property's slot 0x100 answer (`00bb3c90`: its leaf data +0x88, then
 ///   that data's +8, null without data), 0x300 bytes; read here without the call, for that class only.
 ///
 /// Read without a stop at an unmapped word, as the light walk.
-fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32) {
+fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32, subtextures: bool) {
     let Some(shader) = peek(e, geometry.wrapping_add(GEOMETRY_SHADER)) else {
         return;
     };
@@ -369,7 +382,7 @@ fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32) {
             };
             capture::take(e, array, 0, (counts & 0xffff) << 4);
         }
-        Some(NO_LIGHTING_SHADER) if data != 0 => {
+        Some(NO_LIGHTING_SHADER) if data != 0 && subtextures => {
             capture::take(e, data, 0x68, 0x6d);
             let (Some(array), Some(count)) = (
                 peek(e, data.wrapping_add(0x68)),

@@ -4983,6 +4983,23 @@ fn stage_light_texture() {
         .assert_same();
 }
 
+/// The stage's light texture (`00b7c120`) reads the rendering pass's light array and first light through the packet
+/// (the cut copies them): with them scribbled (POISON) it sets the same texture. The first-half stop the drawing
+/// thread's late gate found in Doc's house (frame 2201) was this read in place.
+#[test]
+fn stage_light_texture_reads_the_pass_lights_through_the_packet() {
+    packet_same(
+        "stage_light_texture",
+        entry!(0x00b7_c120, textures::stage_light_texture(u32)).1,
+        &product(&[&[0, 1, 6], &[0, 1, 7]]),
+        |e, c| {
+            let g = geometry_shape(e, &texture_shape(0, c.word(1), 0, true));
+            (vec![c.word(0)], vec![g.rendering])
+        },
+        |e, w| cut::take_pass_lights(e, w[0]),
+    );
+}
+
 #[test]
 fn stage_shared_texture() {
     Diff::new(entry!(0x00b7_c190, textures::stage_shared_texture(u32)))
@@ -7263,17 +7280,9 @@ fn fog_property() {
 }
 
 /// The shader's own set-ups the pass set-ups call by address and the D3DX imports behind the thunks they
-/// call (`D3DXVec3TransformCoord`, `D3DXMatrixTranspose`), stood in.
-const SETUP_CALLEES: &[u32] = &[
-    0x00b7_c3a0,
-    0x00b7_c510,
-    0x00b7_c580,
-    0x00b7_c600,
-    0x00b7_c850,
-    0x00b7_cb00,
-    0x00fd_f414,
-    0x00fd_f42c,
-];
+/// call (`D3DXVec3TransformCoord`, `D3DXMatrixTranspose`), stood in. (The fog upload, the pixel entries, the
+/// ambient and the light colour, `00b7c3a0` to `00b7c600`, are typed: they run on both sides.)
+const SETUP_CALLEES: &[u32] = &[0x00b7_c850, 0x00b7_cb00, 0x00fd_f414, 0x00fd_f42c];
 
 /// A geometry's state block whose shader property (+0xc) is the world's, with a texture word at its
 /// +0xac and its slot 0xf4 answering `fourth` (stage 3's texture).
@@ -7292,8 +7301,9 @@ fn setup_state(e: &mut Engine, p: &PassW, fourth: u32) -> u32 {
     state
 }
 
-/// A begin of a type group (0xfc to 0x102, or 0xca to 0xd1): the shader's object +0x30 and the pass's
-/// object +0x44 there or not.
+/// A begin of a type group (0xfc to 0x102, or 0xca to 0xd1): the shader's pixel constant map (+0x30, which the pixel
+/// entries `00b7c510` sort, always there in the exe) given its own object or the world's; the pass's object +0x44
+/// there or not.
 fn begin_types_setup(e: &mut Engine, c: &Case) -> Vec<u32> {
     let p = pass_world(e, &[], 0, 0);
     setup_state(e, &p, 0);
@@ -7303,7 +7313,8 @@ fn begin_types_setup(e: &mut Engine, c: &Case) -> Vec<u32> {
         set(e, at, switch);
     }
     if c.word(0) == 0 {
-        set(e, p.d.w.shader + 0x30, 0);
+        let map = obj(e, 0x40, vt);
+        set(e, p.d.w.shader + 0x30, map);
     }
     if c.word(1) == 0 {
         set(e, p.pass + 0x44, 0);
@@ -7331,6 +7342,155 @@ fn begin_types_ca() {
         .setup(begin_types_setup)
         .run()
         .assert_same();
+}
+
+/// The shadow light set-ups' world: [`pass_world`]; scene node `index` (`011f91c8`) with a fog property (none, both
+/// distances 0, or a far and a near) and the fog index byte; the rendered pass's (`011f91e0`) first light with a
+/// weight (+0xd0), an alpha (+0xd4) and its light (+0xf8) with an ambient (+0xc8), a strength (+0xc4) and a colour
+/// (+0xd4); the HDR switch and the extra scale's byte; the pixel entries (`011fec30`, every other one set) and the
+/// pass types' words (`011fc0a0`); the shader's pixel constant map (+0x30). Answers the shader.
+fn shadow_setups_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let p = pass_world(e, &[], 0, 0);
+    // The far distance with no fog distances (`010ad6e0`, the exe's 500000.0).
+    if !e.mem.is_mapped(0x010a_d000) {
+        e.map(0x010a_d000, 0x1000);
+    }
+    set(e, 0x010a_d6e0, 0x48f4_2400);
+    let w = p.d.w;
+    let vt = vtable(e, &[]);
+    let fog = match c.word(0) {
+        0 => 0,
+        kind => {
+            let fog = obj(e, 0x80, vt);
+            for (k, at) in (0u32..).zip([0x20u32, 0x24, 0x28]) {
+                set(e, fog + at, 0x3e00_0000 + 0x10_0000 * k);
+            }
+            set(e, fog + 0x60, 0x4040_0000);
+            if kind == 2 {
+                set(e, fog + 0x2c, 0x4120_0000);
+                set(e, fog + 0x30, bits(c, 2));
+            }
+            fog
+        }
+    };
+    let node = e.mem.alloc(0x140);
+    set(e, node + 0x134, fog);
+    set(e, 0x011f_91c8 + 4, node);
+    e.mem.set_u8(0x011f_91c4, 1);
+    for k in 0..4u32 {
+        set(e, 0x011a_9bd0 + 4 * k, 0x3d00_0000 + k);
+    }
+    let pass = e.mem.u32(0x011f_91e0);
+    let lights = e.mem.alloc(8);
+    let shadow = e.mem.alloc(0x220);
+    let light = e.mem.alloc(0x100);
+    set(e, lights, shadow);
+    set(e, pass + 0xc, lights);
+    set(e, shadow + 0xf8, light);
+    set(e, shadow + 0xd0, 0x3f40_0000);
+    set(e, shadow + 0xd4, 0x3e80_0000);
+    for (k, at) in (0u32..).zip([0xc8u32, 0xcc, 0xd0, 0xd4, 0xd8, 0xdc]) {
+        set(e, light + at, 0x3e00_0000 + 0x8_0000 * k);
+    }
+    set(e, light + 0xc4, bits(c, 3));
+    e.mem.set_u8(0x011f_941e, (c.word(1) & 1) as u8);
+    e.mem.set_u8(0x011f_9427, (c.word(1) >> 1) as u8);
+    set(e, 0x011f_9190, 0x3fa0_0000);
+    for k in 0..22u32 {
+        let entry = if k % 2 == 0 { obj(e, 0x30, vt) } else { 0 };
+        set(e, 0x011f_ec30 + 4 * k, entry);
+    }
+    let pass_type = e.mem.u32(0x011f_91e4);
+    set(e, 0x011f_c0a0 + 4 * pass_type, 0x5555_aaaa);
+    let map = obj(e, 0x40, vt);
+    set(e, w.shader + 0x30, map);
+    vec![w.shader]
+}
+
+/// The shadow light set-ups' inputs: the fog (none, distances 0, a far and near), the HDR switch and the extra scale
+/// byte, the far distance, the light's strength.
+const SHADOW_SETUPS: &[Input] = &[
+    Input::Of(&[0, 1, 2]),
+    Input::Of(&[0, 1, 2, 3]),
+    Input::F32,
+    Input::F32,
+];
+
+/// The shadow light shader's fog upload (`00b7c3a0`), pixel entries (`00b7c510`), ambient (`00b7c580`) and light
+/// colour (`00b7c600`): main-thread code on the main thread's word, bit for bit (NaN payloads aside).
+#[test]
+fn shadow_light_setups() {
+    Diff::new(entry!(0x00b7_c3a0, setups::fog_upload(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .main_thread(0)
+        .inputs(SHADOW_SETUPS)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_c510, setups::pixel_entries(Ptr<_>) -> u32))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .inputs(SHADOW_SETUPS)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_c580, setups::light_ambient(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .inputs(SHADOW_SETUPS)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_c600, setups::light_colour(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .main_thread(0)
+        .inputs(SHADOW_SETUPS)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+}
+
+/// The fog upload, the ambient and the light colour read the fog index, the fog property and the rendered pass's
+/// first light and its light through the packet (the cut copies them): scribbled (POISON), they upload and set the
+/// same. The fog upload's reading of the fog index in place was the drawing thread's late-gate stop in Goodsprings.
+#[test]
+fn shadow_light_setups_read_the_packet() {
+    for (name, f) in [
+        (
+            "fog_upload",
+            entry!(0x00b7_c3a0, setups::fog_upload(Ptr<_>)).1,
+        ),
+        (
+            "light_ambient",
+            entry!(0x00b7_c580, setups::light_ambient(Ptr<_>)).1,
+        ),
+        (
+            "light_colour",
+            entry!(0x00b7_c600, setups::light_colour(Ptr<_>)).1,
+        ),
+    ] {
+        packet_same_cases(
+            name,
+            f,
+            &cases_of(
+                SHADOW_SETUPS,
+                &[&[2, 0, 0x4500_0000, HALF], &[1, 3, 0x4500_0000, TWO]],
+            ),
+            false,
+            |e, c| {
+                let words = shadow_setups_words(e, c);
+                let pass = e.mem.u32(0x011f_91e0);
+                let acc = e.mem.alloc(0x1a0);
+                (words, vec![pass, acc])
+            },
+            |e, w| {
+                cut::take_pass_lights(e, w[0]);
+                cut::take_frame(e, 0, Ptr::new(w[1]));
+            },
+        );
+    }
 }
 
 /// A per-geometry set-up of the types 0xca, 0xd1 or 0x102: stage 3's texture answered or not, the
@@ -12289,6 +12449,42 @@ fn lighting30_shadow_passes_keep_the_clip_plane_cache_own() {
     );
 }
 
+/// The cut (`cut::fill`) copies a no-lighting geometry's sub-texture array (its model data's +0x68, count +0x6c) only
+/// when the geometry is drawn in a sub-texture pass type (0x52 to 0x57, where `00bc9a50` calls `00bc6fa0`): another
+/// model data keeps other words there, which other readers use (the first-half stop the drawing thread's late gate
+/// found in Doc's house, frame 2200, was such an array scribbled).
+#[test]
+fn fill_copies_the_subtextures_only_in_subtexture_passes() {
+    for (pass_type, taken) in [(0x51u32, false), (0x52, true), (0x57, true), (0x58, false)] {
+        let mut e = Engine::new();
+        let d = draw_world(&mut e);
+        let pass = d.w.passes[0];
+        let geometry = e.mem.u32(pass);
+        let shader = e.mem.alloc(0x10);
+        if !e.mem.is_mapped(0x010b_b000) {
+            e.map(0x010b_b000, 0x1000);
+        }
+        set(&mut e, shader, 0x010b_b230);
+        set(&mut e, geometry + 0xc0, shader);
+        let data = e.mem.alloc(0x80);
+        let array = e.mem.alloc(0x20);
+        set(&mut e, array, 0x1234_5678);
+        set(&mut e, data + 0x68, array);
+        e.mem.set_u8(data + 0x6c, 2);
+        set(&mut e, geometry + 0xb8, data);
+        e.mem.set_u16(pass + 4, pass_type as u16);
+        assert!(capture::begin(&e));
+        cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
+        let _ = capture::word(&e, array, 0);
+        let report = capture::end(&mut e);
+        assert_eq!(
+            report.misses == 0,
+            taken,
+            "pass type {pass_type:#x}: {report:?}"
+        );
+    }
+}
+
 /// The cut (`cut::fill`, with the own state forced) owns each listed pass's lights' clip-plane caches: a light of the
 /// world's first pass (in renderer 0's lists) has its cache in an own block after the cut, the planes before it not.
 #[test]
@@ -14193,7 +14389,7 @@ fn acceptance_run(on: bool, setups: &[AcceptanceSetup]) -> CensusRun {
     }
     e.call_log = Some(Vec::new());
     if on {
-        statics::set_forced(true);
+        statics::set_forced(acceptance_forced());
         capture::set_thread_mode(Some(capture::Mode::On));
     } else {
         capture::set_thread_mode(Some(capture::Mode::Off));
@@ -14365,7 +14561,7 @@ fn poison_trail(setups: Vec<AcceptanceSetup>) -> String {
         let mut e = Engine::new();
         let (_, words, _) = acceptance_world(&mut e, &setups);
         e.call_log = Some(Vec::new());
-        statics::set_forced(true);
+        statics::set_forced(acceptance_forced());
         capture::set_thread_mode(Some(capture::Mode::Poison));
         let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             (first(&mut e, &words), second(&mut e, &words))
@@ -14421,7 +14617,7 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
     HELD_FOUND.with(|f| f.borrow_mut().clear());
     HELD_SCRIBBLE.with(|s| s.set(None));
     poisoned.register(VT_FN + 0x6c, held_probe);
-    statics::set_forced(true);
+    statics::set_forced(acceptance_forced());
     capture::set_thread_mode(Some(capture::Mode::Poison));
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         (first(&mut poisoned, &words), second(&mut poisoned, &words))
@@ -14458,6 +14654,13 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
             held,
         },
     }
+}
+
+/// Whether the acceptance runs take the own state whatever the passes' shader classes (`statics::set_forced`): yes,
+/// unless `NV_ACCEPTANCE_KEPT` is set, which runs them as play does today (the classes keep the own state in guest
+/// memory: only the value packet is scribbled).
+fn acceptance_forced() -> bool {
+    std::env::var_os("NV_ACCEPTANCE_KEPT").is_none()
 }
 
 /// The typed draw paths the acceptance world should reach, by the function that enters each.
