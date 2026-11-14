@@ -300,9 +300,16 @@ fn a_companion_with_no_weapon_equips_its_first_allowed_non_playable_one() {
     e.mem.set_u8(BASE_STYLE + 0x40, 2);
     run(&mut e, CHAR);
     assert_eq!(called(0x0088_c650), vec![vec![CHAR, ranged, 1, 0, 1, 0, 0]]);
-    // An extra combat style with no style falls back to the base's too; no style allows all.
+    // An extra combat style with no style falls back to the base's (melee only here).
     set_extra(CHAR + 0x44, 0x69, XSTYLE);
     e.mem.set_u32(XSTYLE + 0xc, 0);
+    e.mem.set_u8(BASE_STYLE + 0x40, 1);
+    run(&mut e, CHAR);
+    assert_eq!(
+        called(0x0088_c650),
+        vec![vec![CHAR, melee, 1, list, 1, 0, 0]]
+    );
+    // No style at all allows anything.
     e.mem.set_u32(BASE + 0x1d4, 0);
     run(&mut e, CHAR);
     assert_eq!(called(0x0088_c650), vec![vec![CHAR, ranged, 1, 0, 1, 0, 0]]);
@@ -433,9 +440,12 @@ fn a_companion_equips_its_non_playable_armour_in_free_slots() {
     let hat = armor(&mut e, 4, 0x400, false);
     let second_hat = armor(&mut e, 5, 0x400, false);
     let gloves = armor(&mut e, 6, 0x8, false);
+    // Worn, with no slot bits: only its leaving the map keeps it from being equipped again.
+    let worn_ring = armor(&mut e, 7, 0, false);
     set_container(
         &mut e,
         &[
+            (1, worn_ring),
             (1, gloves),
             (1, second_hat),
             (1, hat),
@@ -453,6 +463,7 @@ fn a_companion_equips_its_non_playable_armour_in_free_slots() {
     e.mem.set_u32(PROCESS + 0x114, held);
     e.mem.set_u32(CHAR + 0x1b4, BIPED);
     e.mem.set_u32(BIPED + 0x2c + 2 * 0x10, worn);
+    e.mem.set_u32(BIPED + 0x2c + 8 * 0x10, worn_ring);
     // A slot holding a form that is not an armour (a race, say) is passed over.
     e.mem.set_u32(BIPED + 0x2c + 5 * 0x10, item(9));
     e.mem.set_f32(CHAR + 0x1b8, 30.0);
@@ -706,6 +717,7 @@ fn the_menu_needs_its_list_selected_and_the_cursor_on_it() {
         &|e| tile_values(e, TILE, &[(0xfa1, 20.0), (0xfaa, 19.0)]),
         false,
     );
+    check(&mut e, &|e| tile_values(e, TILE, &[(0xfaa, 21.0)]), false);
     check(
         &mut e,
         &|e| tile_values(e, TILE, &[(0xfa1, 20.0), (0xfb0, 20.0)]),
