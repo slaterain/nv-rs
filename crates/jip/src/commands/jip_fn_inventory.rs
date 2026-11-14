@@ -262,11 +262,7 @@ fn get_equipped_weapon_poison(e: &mut Engine, w: &[u32]) -> Ret {
     let xdata = first_extra_list(e, entry);
     if xdata != 0 {
         let x = extra::get_by_type(e, xdata, EXTRA_POISON);
-        let poison = if x == 0 {
-            0
-        } else {
-            e.mem.u32(x + EXTRA_WORD)
-        };
+        let poison = if x == 0 { 0 } else { e.mem.u32(x + EXTRA_WORD) };
         if poison != 0 {
             super::set_form_result(e, &a, poison);
         }

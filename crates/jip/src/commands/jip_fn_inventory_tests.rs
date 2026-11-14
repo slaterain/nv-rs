@@ -140,14 +140,22 @@ fn values() {
     e.mem.set_u32(ALCH + 0xb8, 0xffff_fff6);
     assert_eq!(call(&mut e, 0x2607, &[rf(WEAP)]).1, 250.0);
     assert_eq!(call(&mut e, 0x2607, &[rf(ALCH)]).1, -10.0, "an int");
-    assert_eq!(call(&mut e, 0x2607, &[rf(MISC)]).1, 0.0, "no value component");
+    assert_eq!(
+        call(&mut e, 0x2607, &[rf(MISC)]).1,
+        0.0,
+        "no value component"
+    );
     // The calling reference's base when it is an inventory item.
     e.mem.set_u32(CONT_REF + 0x20, WEAP);
     assert_eq!(call_on(&mut e, 0x2607, CONT_REF, &[]).1, 250.0);
     e.mem.set_u32(CONT_REF + 0x20, CONT);
     // The stand-in cast gives the container a value too: as the base it is still no item.
     e.mem.set_u32(CONT + 0x98 + 4, 77);
-    assert_eq!(call_on(&mut e, 0x2607, CONT_REF, &[]).1, 0.0, "a container is no item");
+    assert_eq!(
+        call_on(&mut e, 0x2607, CONT_REF, &[]).1,
+        0.0,
+        "a container is no item"
+    );
     call(&mut e, 0x26ab, &[rf(ARMO), n(99)]);
     assert_eq!(e.mem.u32(ARMO + 0x98 + 4), 99);
     call(&mut e, 0x26ab, &[rf(ALCH), n(5)]);
@@ -180,7 +188,11 @@ fn base_items() {
     assert_eq!(array_data(&e, res), vec![Form(0x205), Form(0)], "the base");
     put_list(&mut e, CONT + 0x34, NODES, &[]);
     e.mem.set_f64(RESULT, 0.0);
-    assert_eq!(call(&mut e, 0x28a7, &[rf(CONT)]).1, 0.0, "no entries: no array");
+    assert_eq!(
+        call(&mut e, 0x28a7, &[rf(CONT)]).1,
+        0.0,
+        "no entries: no array"
+    );
     assert_eq!(call(&mut e, 0x28a7, &[rf(WEAP)]).1, 0.0, "no container");
 }
 
@@ -212,12 +224,20 @@ fn weapon_mod_flags_of_an_inventory_reference_or_a_reference() {
     let mut e = setup();
     put_extra(&mut e, CONT_REF + 0x44, X1, 0x8d, 0);
     e.mem.set_u8(X1 + 0xc, 5);
-    assert_eq!(call_on(&mut e, 0x270c, CONT_REF, &[]).1, 5.0, "its own extra data");
+    assert_eq!(
+        call_on(&mut e, 0x270c, CONT_REF, &[]).1,
+        5.0,
+        "its own extra data"
+    );
     let x2 = FORMS + 0x4380;
     put_extra(&mut e, XDL, x2, 0x8d, 0);
     e.mem.set_u8(x2 + 0xc, 3);
     let refr = inv_ref(&mut e, WEAP, XDL);
-    assert_eq!(call_on(&mut e, 0x270c, refr, &[]).1, 3.0, "the stack's list");
+    assert_eq!(
+        call_on(&mut e, 0x270c, refr, &[]).1,
+        3.0,
+        "the stack's list"
+    );
 }
 
 #[test]
@@ -235,10 +255,7 @@ fn no_unequip_marks() {
     assert!(extra::has_type(&e, XDL, 0x3e));
     assert_eq!(allocations(), vec![0xc]);
     let made = calls_to(ADD_EXTRA_FN)[0][1];
-    assert_eq!(
-        (e.mem.u32(made), e.mem.u32(made + 4)),
-        (0x0101_5bf4, 0x3e)
-    );
+    assert_eq!((e.mem.u32(made), e.mem.u32(made + 4)), (0x0101_5bf4, 0x3e));
     assert_eq!(call_on(&mut e, 0x2864, refr, &[]).1, 1.0);
     // Already marked: nothing added.
     call_on(&mut e, 0x2865, refr, &[n(1)]);
@@ -290,7 +307,11 @@ fn all_items_in_address_order_with_filters() {
     e.mem.set_u8(ARMO + 0x78, 0x40);
     e.mem.set_u8(WEAP + 0x100, 0x80);
     let (_, res) = call_on(&mut e, 0x2766, ACTOR, &[n(0), n(1)]);
-    assert_eq!(array_data(&e, res), vec![Form(0x208), Form(0x20c)], "playable");
+    assert_eq!(
+        array_data(&e, res),
+        vec![Form(0x208), Form(0x20c)],
+        "playable"
+    );
     let (_, res) = call_on(&mut e, 0x2766, ACTOR, &[n(0), n(0), n(1)]);
     assert_eq!(
         array_data(&e, res),
@@ -314,7 +335,11 @@ fn all_items_in_address_order_with_filters() {
     e.mem.set_f64(RESULT, 0.0);
     assert_eq!(call_on(&mut e, 0x2766, ACTOR, &[n(0x39)]).1, 0.0);
     assert_eq!(call_on(&mut e, 0x2766, ACTOR, &[n(500)]).1, 0.0);
-    assert_eq!(call_on(&mut e, 0x2766, ACTOR, &[n(0x2f)]).1, 0.0, "none of it");
+    assert_eq!(
+        call_on(&mut e, 0x2766, ACTOR, &[n(0x2f)]).1,
+        0.0,
+        "none of it"
+    );
 }
 
 #[test]

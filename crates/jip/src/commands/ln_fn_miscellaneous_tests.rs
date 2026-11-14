@@ -165,7 +165,11 @@ fn character(e: &mut Engine, biped: u32, is_char: bool) {
 fn armor_class_of_an_armor_and_of_a_character() {
     let mut e = setup();
     e.mem.set_u32(ARMO + 0x78, 0x80 | 8);
-    assert_eq!(call(&mut e, 0x2264, &[rf(ARMO)]).1, 3.0, "power armour first");
+    assert_eq!(
+        call(&mut e, 0x2264, &[rf(ARMO)]).1,
+        3.0,
+        "power armour first"
+    );
     e.mem.set_u32(ARMO + 0x78, 8);
     assert_eq!(call(&mut e, 0x2264, &[rf(ARMO)]).1, 2.0);
     e.mem.set_u32(ARMO + 0x78, 0x40);
@@ -188,7 +192,11 @@ fn armor_class_of_an_armor_and_of_a_character() {
     e.mem.set_u32(BIPED + 0x2c + 0x10 * 19, 0);
     assert_eq!(call_on(&mut e, 0x2264, CHAR, &[]).1, 0.0, "none covers it");
     character(&mut e, 0, true);
-    assert_eq!(call_on(&mut e, 0x2264, CHAR, &[]).1, 1.0, "no biped data: true");
+    assert_eq!(
+        call_on(&mut e, 0x2264, CHAR, &[]).1,
+        1.0,
+        "no biped data: true"
+    );
     character(&mut e, BIPED, false);
     assert_eq!(call_on(&mut e, 0x2264, CHAR, &[]).1, 0.0, "not a character");
     // The eval reads the reference.
@@ -467,7 +475,11 @@ fn skill_magazines() {
     e.mem.set_u32(COND + 8, 0x1c1);
     e.mem.set_u32(COND + 0xc, 0);
     assert_eq!(call(&mut e, 0x22e4, &[rf(ALCH)]).1, 0.0, "no parameter");
-    assert_eq!(call(&mut e, 0x22e4, &[rf(SPELL)]).1, 0.0, "not an ingestible");
+    assert_eq!(
+        call(&mut e, 0x22e4, &[rf(SPELL)]).1,
+        0.0,
+        "not an ingestible"
+    );
 }
 
 #[test]
@@ -553,7 +565,11 @@ fn container_sounds() {
     assert_eq!(e.mem.u32(CONT + 0x8c), SOUND);
     e.mem.set_u32(REFR + 0x20, CONT);
     call_on(&mut e, 0x2308, REFR, &[rf(SOUND2)]);
-    assert_eq!(e.mem.u32(CONT + 0x90), SOUND2, "the calling reference's base");
+    assert_eq!(
+        e.mem.u32(CONT + 0x90),
+        SOUND2,
+        "the calling reference's base"
+    );
     call(&mut e, 0x2305, &[rf(CONT)]);
     assert_eq!(form_result(&e), 0x10d);
     call_on(&mut e, 0x2307, REFR, &[]);
@@ -634,10 +650,16 @@ fn playable_flags_by_type() {
         let playable = |e: &mut Engine| call(e, 0x231c, &[rf(at)]).1;
         assert_eq!(playable(&mut e), if negative { 1.0 } else { 0.0 }, "{at:x}");
         call(&mut e, 0x231d, &[n(1), rf(at)]);
-        assert_eq!(e.mem.u8(at + field), if negative { 0x10 } else { 0x10 | bit });
+        assert_eq!(
+            e.mem.u8(at + field),
+            if negative { 0x10 } else { 0x10 | bit }
+        );
         assert_eq!(playable(&mut e), 1.0);
         call(&mut e, 0x231d, &[n(0), rf(at)]);
-        assert_eq!(e.mem.u8(at + field), if negative { 0x10 | bit } else { 0x10 });
+        assert_eq!(
+            e.mem.u8(at + field),
+            if negative { 0x10 | bit } else { 0x10 }
+        );
         assert_eq!(playable(&mut e), 0.0);
     }
     // A perk's byte.
@@ -659,7 +681,11 @@ fn playable_flags_by_type() {
 fn notes_added_once() {
     let mut e = setup();
     call(&mut e, 0x22bd, &[rf(NOTE)]);
-    assert_eq!(e.mem.u32(PLAYER_AT + 0x5e4), NOTE, "an empty list's first node");
+    assert_eq!(
+        e.mem.u32(PLAYER_AT + 0x5e4),
+        NOTE,
+        "an empty list's first node"
+    );
     assert!(allocations().is_empty());
     call(&mut e, 0x22bd, &[rf(NOTE2)]);
     assert_eq!(e.mem.u32(PLAYER_AT + 0x5e4), NOTE2, "put first");
@@ -674,10 +700,18 @@ fn notes_added_once() {
 fn crosshair_reference_in_a_list() {
     let mut e = setup();
     put_list(&mut e, LIST + 0x18, &[SOUND, REFR, WEAP]);
-    assert_eq!(call(&mut e, 0x2336, &[rf(LIST)]).1, 0.0, "nothing under the crosshair");
+    assert_eq!(
+        call(&mut e, 0x2336, &[rf(LIST)]).1,
+        0.0,
+        "nothing under the crosshair"
+    );
     e.mem.set_u32(MANAGER + 0xfc, REFR);
     e.mem.set_u32(REFR + 0x20, WEAP);
-    assert_eq!(call(&mut e, 0x2336, &[rf(LIST)]).1, 1.0, "the reference first");
+    assert_eq!(
+        call(&mut e, 0x2336, &[rf(LIST)]).1,
+        1.0,
+        "the reference first"
+    );
     put_list(&mut e, LIST + 0x18, &[WEAP, REFR]);
     assert_eq!(call(&mut e, 0x2336, &[rf(LIST)]).1, 2.0, "its base first");
     put_list(&mut e, LIST + 0x18, &[SOUND]);

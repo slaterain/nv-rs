@@ -31,9 +31,9 @@
 
 use super::extra;
 use super::{
-    assign_string, buffer_arg, cvttsd2si, full_name, list_items, list_prepend,
-    model_path, rgb_dec_to_hex, rgb_hex_to_dec, set_form_result, set_model_path, string_set,
-    the_name, type_of, Handlers,
+    assign_string, buffer_arg, cvttsd2si, full_name, list_items, list_prepend, model_path,
+    rgb_dec_to_hex, rgb_hex_to_dec, set_form_result, set_model_path, string_set, the_name, type_of,
+    Handlers,
 };
 use crate::game::ListNode;
 use engine_core::prelude::*;
@@ -604,7 +604,8 @@ fn get_form_flag(e: &mut Engine, w: &[u32]) -> Ret {
 /// Sets (`on` not 0) or clears `bits` in the word at `at`.
 fn set_bits_u32(e: &mut Engine, at: u32, bits: u32, on: u32) {
     let v = e.mem.u32(at);
-    e.mem.set_u32(at, if on != 0 { v | bits } else { v & !bits });
+    e.mem
+        .set_u32(at, if on != 0 { v | bits } else { v & !bits });
 }
 
 /// The same on a byte (JIP's `UInt8` field, the bits' low byte).
@@ -1028,7 +1029,8 @@ fn ln_set_is_playable(e: &mut Engine, w: &[u32]) -> Ret {
     } else if let Some((field, bit, negative)) = playable_bit(kind) {
         let v = e.mem.u8(form + field);
         let set = on != negative;
-        e.mem.set_u8(form + field, if set { v | bit } else { v & !bit });
+        e.mem
+            .set_u8(form + field, if set { v | bit } else { v & !bit });
     }
     handled(true)
 }
