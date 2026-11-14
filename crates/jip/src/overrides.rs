@@ -600,7 +600,7 @@ pub(crate) fn has_extra_leveled_item(e: &Engine, entry: u32) -> bool {
 /// A form's count: the base container's entries summed, then the reference's changes entry,
 /// added to it (none below 0) unless the entry holds a leveled item or the base has none, when it
 /// is the entry's alone (none below 0).
-fn form_count(e: &Engine, container_list: u32, changes: u32, form: u32) -> i32 {
+pub(crate) fn form_count(e: &Engine, container_list: u32, changes: u32, form: u32) -> i32 {
     let mut count: i32 = 0;
     let mut node = container_list;
     while node != 0 {
