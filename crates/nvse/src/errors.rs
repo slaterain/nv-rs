@@ -102,10 +102,16 @@ pub fn text(e: &mut Engine, script: u32, message: &str) -> String {
 /// `ShowRuntimeError(script, ...)`: the header and the message to the console, then the
 /// message (without the header) to the `RuntimeScriptError` event.
 pub fn show(e: &mut Engine, script: u32, message: &str) {
+    show_bytes(e, script, message.as_bytes());
+}
+
+/// [`show`] of a message of bytes (a script's own text in it, as xNVSE's `char` buffers hold it).
+pub fn show_bytes(e: &mut Engine, script: u32, message: &[u8]) {
     // Made only for the console, which takes nothing before the first frame.
     if e.ext::<Nvse>().main_thread_recorded {
-        let text = text(e, script, message);
-        print_long(e, text.as_bytes());
+        let mut text = text(e, script, "").into_bytes();
+        text.extend_from_slice(message);
+        print_long(e, &text);
     }
     if e.ext::<Nvse>().events.infos.is_empty() {
         return;
@@ -126,17 +132,8 @@ pub fn show(e: &mut Engine, script: u32, message: &str) {
     // A dispatch that panics (a stop on the way) still takes this thread's entry out, so later
     // errors of the thread reach the handlers; the panic goes on.
     let dispatched = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        crate::events::message_text(
-            e,
-            crate::events::id::RUNTIME_SCRIPT_ERROR,
-            message.as_bytes(),
-        );
-        crate::plugins::dispatch_text_as(
-            e,
-            crate::plugins::msg::RUNTIME_SCRIPT_ERROR,
-            message.as_bytes(),
-            4,
-        );
+        crate::events::message_text(e, crate::events::id::RUNTIME_SCRIPT_ERROR, message);
+        crate::plugins::dispatch_text_as(e, crate::plugins::msg::RUNTIME_SCRIPT_ERROR, message, 4);
     }));
     if !inside {
         e.ext::<Nvse>()
