@@ -238,3 +238,98 @@ pub fn setup_fog(e: &mut Engine, _this: Ptr, _unused: u32) {
         own::set_constant_word(e, FOG_COLOUR + 4 * k, word);
     }
 }
+
+/// The SpeedTree branch shader (vtable `010bc070`): its fog slot (0x154, `00c1a310` in the exe's vtable), the
+/// shader table's entry 1 (`GetShader`, `00b55560`, read by address) whose two constant maps it sets first, and
+/// the land toggles its fog slot fills (`011fa2d0`: four words).
+const SLOT_BRANCH_FOG: u32 = 0x154;
+const BRANCH_FOG: u32 = 0x00c1_a310;
+const GET_SHADER: u32 = 0x00b5_5560;
+const LAND_TOGGLES: u32 = 0x011f_a2d0;
+/// The exe's constants the fog slot reads: 0.0 (`011a9bd4`), 1.0 (`011a9bdc`) and 30.0 (`01018f5c`).
+const ZERO_WORD: u32 = 0x011a_9bd4;
+const ONE_WORD: u32 = 0x011a_9bdc;
+const THIRTY: u32 = 0x0101_8f5c;
+
+// Typed from 00bd4ba0
+/// The SpeedTree branch shader's slot 0x7c, `thiscall(shader, state)`. With the rendered pass's geometry, its
+/// bound (or the empty bound), its data's buffers, its skin and the state's material (property 2):
+/// `SetupGeometryConstants` (`00b7dab0`, the shader family's); the shader's fog slot (0x154: the geometry, the
+/// scene's fog property, the material; direct when it holds the typed one); then with the ten words a set-up
+/// hands on (the geometry, its skin, 0, the buffers, the state, 0, its transform, its bound, 0, 1) the shader table
+/// entry 1's vertex map (+0x30) for the current pass's vertex program (+0x44) and its pixel map (+0x34) for the
+/// pixel program (+0x5c), each without a check; last this shader's own two maps, each only when it and its
+/// program are set.
+pub fn branch_setup_constants(e: &mut Engine, this: Ptr, state: Ptr) {
+    let geometry = packet::rendering_geometry(e);
+    // The geometry's world transform and bound as the value packet holds them (value packet B).
+    packet::with_drawn(e, geometry, |e, transform, bound| {
+        branch_constants_with(e, this, state, geometry, transform, bound);
+    });
+}
+
+/// [`branch_setup_constants`] with the transform and the bound (the geometry's, or the packet's images of them).
+fn branch_constants_with(
+    e: &mut Engine,
+    this: Ptr,
+    state: Ptr,
+    geometry: u32,
+    transform: u32,
+    bound: u32,
+) {
+    let base = this.addr();
+    let block = state.addr();
+    let buffers = packet::buffer_data(e, packet::model_data(e, geometry));
+    let skin = packet::skin_instance(e, geometry);
+    let material = packet::state_property(e, block, 2);
+    typed_call!(
+        shader::FAMILY,
+        0x00b7_dab0,
+        shader::geometry::setup_geometry_constants(e, this, state)
+    );
+    let index = u32::from(packet::fog_index(e));
+    let fog: u32 = typed_call!(
+        super::FAMILY,
+        0x00b5_5520,
+        super::passes::fog_property(e, index)
+    );
+    if crate::slot_target(e, base, SLOT_BRANCH_FOG) == BRANCH_FOG {
+        typed_call!(
+            super::FAMILY,
+            0x00c1_a310,
+            branch_fog(e, this, geometry, fog, material)
+        );
+    } else {
+        e.vcall(base, SLOT_BRANCH_FOG, &args![geometry, fog, material]);
+    }
+    let table = e.call(GET_SHADER, &args![1u32]).u32();
+    let words = [geometry, skin, 0, buffers, block, 0, transform, bound, 0, 1];
+    for (map_offset, program_offset) in [(0x30u32, 0x44u32), (0x34, 0x5c)] {
+        let map = own::constant_map(e, table, map_offset);
+        let program = e.global::<u32>(packet::current_pass(e).wrapping_add(program_offset));
+        group_c::set_constants_of(e, map, program, words);
+    }
+    group_c::map_constants(e, base, 0x30, 0x44, words);
+    group_c::map_constants(e, base, 0x34, 0x5c, words);
+}
+
+// Typed from 00c1a310
+/// The SpeedTree branch shader's fog slot (0x154), `thiscall(shader, geometry, fog, material)` (the shader and
+/// the geometry not read): the land toggles 1.0; 1.0 with a fog property, else the exe's 0.0; the material's
+/// +0x38 (through an `FLD` and `FSTP`, so quieted), or the exe's 30.0 without one; the exe's 1.0.
+pub fn branch_fog(e: &mut Engine, _this: Ptr, _geometry: u32, fog: u32, material: u32) {
+    let second = if fog != 0 {
+        ONE
+    } else {
+        e.global::<u32>(ZERO_WORD)
+    };
+    let third = engine_core::x87::x87_quiet_bits(if material != 0 {
+        packet::material_word(e, material, 0x38)
+    } else {
+        e.global::<u32>(THIRTY)
+    });
+    let last = e.global::<u32>(ONE_WORD);
+    for (k, word) in (0u32..).zip([ONE, second, third, last]) {
+        own::set_constant_word(e, LAND_TOGGLES + 4 * k, word);
+    }
+}

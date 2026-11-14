@@ -4983,6 +4983,23 @@ fn stage_light_texture() {
         .assert_same();
 }
 
+/// The stage's light texture (`00b7c120`) reads the rendering pass's light array and first light through the packet
+/// (the cut copies them): with them scribbled (POISON) it sets the same texture. The first-half stop the drawing
+/// thread's late gate found in Doc's house (frame 2201) was this read in place.
+#[test]
+fn stage_light_texture_reads_the_pass_lights_through_the_packet() {
+    packet_same(
+        "stage_light_texture",
+        entry!(0x00b7_c120, textures::stage_light_texture(u32)).1,
+        &product(&[&[0, 1, 6], &[0, 1, 7]]),
+        |e, c| {
+            let g = geometry_shape(e, &texture_shape(0, c.word(1), 0, true));
+            (vec![c.word(0)], vec![g.rendering])
+        },
+        |e, w| cut::take_pass_lights(e, w[0]),
+    );
+}
+
 #[test]
 fn stage_shared_texture() {
     Diff::new(entry!(0x00b7_c190, textures::stage_shared_texture(u32)))
@@ -7263,17 +7280,9 @@ fn fog_property() {
 }
 
 /// The shader's own set-ups the pass set-ups call by address and the D3DX imports behind the thunks they
-/// call (`D3DXVec3TransformCoord`, `D3DXMatrixTranspose`), stood in.
-const SETUP_CALLEES: &[u32] = &[
-    0x00b7_c3a0,
-    0x00b7_c510,
-    0x00b7_c580,
-    0x00b7_c600,
-    0x00b7_c850,
-    0x00b7_cb00,
-    0x00fd_f414,
-    0x00fd_f42c,
-];
+/// call (`D3DXVec3TransformCoord`, `D3DXMatrixTranspose`), stood in. (The fog upload, the pixel entries, the
+/// ambient and the light colour, `00b7c3a0` to `00b7c600`, are typed: they run on both sides.)
+const SETUP_CALLEES: &[u32] = &[0x00b7_c850, 0x00b7_cb00, 0x00fd_f414, 0x00fd_f42c];
 
 /// A geometry's state block whose shader property (+0xc) is the world's, with a texture word at its
 /// +0xac and its slot 0xf4 answering `fourth` (stage 3's texture).
@@ -7292,8 +7301,9 @@ fn setup_state(e: &mut Engine, p: &PassW, fourth: u32) -> u32 {
     state
 }
 
-/// A begin of a type group (0xfc to 0x102, or 0xca to 0xd1): the shader's object +0x30 and the pass's
-/// object +0x44 there or not.
+/// A begin of a type group (0xfc to 0x102, or 0xca to 0xd1): the shader's pixel constant map (+0x30, which the pixel
+/// entries `00b7c510` sort, always there in the exe) given its own object or the world's; the pass's object +0x44
+/// there or not.
 fn begin_types_setup(e: &mut Engine, c: &Case) -> Vec<u32> {
     let p = pass_world(e, &[], 0, 0);
     setup_state(e, &p, 0);
@@ -7303,7 +7313,8 @@ fn begin_types_setup(e: &mut Engine, c: &Case) -> Vec<u32> {
         set(e, at, switch);
     }
     if c.word(0) == 0 {
-        set(e, p.d.w.shader + 0x30, 0);
+        let map = obj(e, 0x40, vt);
+        set(e, p.d.w.shader + 0x30, map);
     }
     if c.word(1) == 0 {
         set(e, p.pass + 0x44, 0);
@@ -7331,6 +7342,343 @@ fn begin_types_ca() {
         .setup(begin_types_setup)
         .run()
         .assert_same();
+}
+
+/// The shadow light set-ups' world: [`pass_world`]; scene node `index` (`011f91c8`) with a fog property (none, both
+/// distances 0, or a far and a near) and the fog index byte; the rendered pass's (`011f91e0`) first light with a
+/// weight (+0xd0), an alpha (+0xd4) and its light (+0xf8) with an ambient (+0xc8), a strength (+0xc4) and a colour
+/// (+0xd4); the HDR switch and the extra scale's byte; the pixel entries (`011fec30`, every other one set) and the
+/// pass types' words (`011fc0a0`); the shader's pixel constant map (+0x30). Answers the shader.
+fn shadow_setups_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let p = pass_world(e, &[], 0, 0);
+    // The far distance with no fog distances (`010ad6e0`, the exe's 500000.0).
+    if !e.mem.is_mapped(0x010a_d000) {
+        e.map(0x010a_d000, 0x1000);
+    }
+    set(e, 0x010a_d6e0, 0x48f4_2400);
+    let w = p.d.w;
+    let vt = vtable(e, &[]);
+    let fog = match c.word(0) {
+        0 => 0,
+        kind => {
+            let fog = obj(e, 0x80, vt);
+            for (k, at) in (0u32..).zip([0x20u32, 0x24, 0x28]) {
+                set(e, fog + at, 0x3e00_0000 + 0x10_0000 * k);
+            }
+            set(e, fog + 0x60, 0x4040_0000);
+            // Kind 2 a near and the far, 3 the far with near 0.0, 4 a near with far 0.0 (1: both 0.0).
+            match kind {
+                2 => {
+                    set(e, fog + 0x2c, 0x4120_0000);
+                    set(e, fog + 0x30, bits(c, 2));
+                }
+                3 => set(e, fog + 0x30, bits(c, 2)),
+                4 => set(e, fog + 0x2c, 0x4120_0000),
+                _ => {}
+            }
+            if c.word(4) & 1 != 0 {
+                // Signalling NaNs in the colour and the power (the exe quiets each through the x87).
+                for (k, at) in (0u32..).zip([0x20u32, 0x24, 0x28, 0x60]) {
+                    set(e, fog + at, 0x7f80_0001 + k);
+                }
+            }
+            fog
+        }
+    };
+    let node = e.mem.alloc(0x140);
+    set(e, node + 0x134, fog);
+    set(e, 0x011f_91c8 + 4, node);
+    e.mem.set_u8(0x011f_91c4, 1);
+    for k in 0..4u32 {
+        set(e, 0x011a_9bd0 + 4 * k, 0x3d00_0000 + k);
+    }
+    let pass = e.mem.u32(0x011f_91e0);
+    let lights = e.mem.alloc(8);
+    let shadow = e.mem.alloc(0x220);
+    let light = e.mem.alloc(0x100);
+    set(e, lights, shadow);
+    set(e, pass + 0xc, lights);
+    set(e, shadow + 0xf8, light);
+    set(e, shadow + 0xd0, 0x3f40_0000);
+    set(e, shadow + 0xd4, 0x3e80_0000);
+    for (k, at) in (0u32..).zip([0xc8u32, 0xcc, 0xd0, 0xd4, 0xd8, 0xdc]) {
+        set(e, light + at, 0x3e00_0000 + 0x8_0000 * k);
+    }
+    set(e, light + 0xc4, bits(c, 3));
+    if c.word(4) & 1 != 0 {
+        // Signalling NaNs in the ambient (+0xc8 to +0xd0) and the pass light's alpha (+0xd4), each quieted by the exe.
+        for (k, at) in (0u32..).zip([0xc8u32, 0xcc, 0xd0]) {
+            set(e, light + at, 0x7f80_0011 + k);
+        }
+        set(e, shadow + 0xd4, 0x7f80_0021);
+    }
+    e.mem.set_u8(0x011f_941e, (c.word(1) & 1) as u8);
+    e.mem.set_u8(0x011f_9427, (c.word(1) >> 1) as u8);
+    set(e, 0x011f_9190, 0x3fa0_0000);
+    for k in 0..22u32 {
+        let entry = if k % 2 == 0 { obj(e, 0x30, vt) } else { 0 };
+        set(e, 0x011f_ec30 + 4 * k, entry);
+    }
+    let pass_type = e.mem.u32(0x011f_91e4);
+    set(e, 0x011f_c0a0 + 4 * pass_type, 0x5555_aaaa);
+    let map = obj(e, 0x40, vt);
+    set(e, w.shader + 0x30, map);
+    vec![w.shader]
+}
+
+/// The shadow light set-ups' inputs: the fog (none, distances 0, a near and the far, the far with near 0, a near
+/// with far 0), the HDR switch and the extra scale byte, the far distance, the light's strength, and the extras: bit 0
+/// signalling NaNs in the copied floats (compared payload-exact: the exe quiets them through the x87), 2 a null
+/// property for the land values.
+const SHADOW_SETUPS: &[Input] = &[
+    Input::Of(&[0, 1, 2, 3, 4]),
+    Input::Of(&[0, 1, 2, 3]),
+    Input::F32,
+    Input::F32,
+    Input::Of(&[0, 1, 2]),
+];
+
+/// The shadow light shader's fog upload (`00b7c3a0`), pixel entries (`00b7c510`), ambient (`00b7c580`) and light
+/// colour (`00b7c600`): main-thread code on the main thread's word, bit for bit (NaN payloads aside).
+#[test]
+fn shadow_light_setups() {
+    Diff::new(entry!(0x00b7_c3a0, setups::fog_upload(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .main_thread(0)
+        .inputs(SHADOW_SETUPS)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_c510, setups::pixel_entries(Ptr<_>) -> u32))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .inputs(SHADOW_SETUPS)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_c580, setups::light_ambient(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .inputs(SHADOW_SETUPS)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_c600, setups::light_colour(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .main_thread(0)
+        .inputs(SHADOW_SETUPS)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+}
+
+/// [`shadow_setups_words`] with the far distance without a fog property (`0108cb00`) the tall grass's fog reads.
+fn grass_fog_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let words = shadow_setups_words(e, c);
+    if !e.mem.is_mapped(0x0108_c000) {
+        e.map(0x0108_c000, 0x1000);
+    }
+    // The exe quiets it through the x87: a signalling NaN with the extras' bit 0.
+    set(
+        e,
+        0x0108_cb00,
+        if c.word(4) & 1 != 0 {
+            0x7f80_0041
+        } else {
+            0x4974_2400
+        },
+    );
+    vec![words[0], 0x5555]
+}
+
+/// The tall grass shader's fog constants (`00baa430`, its slot 0xfc): no fog property, distances 0, a far and near;
+/// main-thread code on the main thread's word, bit for bit (NaN payloads aside).
+#[test]
+fn tall_grass_setup_fog() {
+    Diff::new(entry!(
+        0x00ba_a430,
+        engine_typed::draw::tall_grass::setup_fog(Ptr<_>, u32)
+    ))
+    .pass_common()
+    .goes_by_address(&[0x00e7_eb00])
+    .main_thread(0)
+    .inputs(SHADOW_SETUPS)
+    .setup(grass_fog_words)
+    .run()
+    .assert_same();
+}
+
+/// [`shadow_setups_words`] with a shader property whose +0xdc block holds land values (or none), for the land values
+/// (`00b7ad80`): the shader, the word (the case's HDR input's low bit), the property.
+fn land_values_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let words = shadow_setups_words(e, c);
+    let vt = vtable(e, &[]);
+    let property = obj(e, 0x100, vt);
+    if c.word(1) & 2 == 0 {
+        let block = e.mem.alloc(0x60);
+        for k in 0..0x18u32 {
+            set(e, block + 4 * k, 0x3c00_0000 + 0x4_0000 * k);
+        }
+        if c.word(4) & 1 != 0 {
+            // Signalling NaNs in the three floats the exe quiets (+0x4c to +0x54) and a word it copies plain (+0xc).
+            for (k, at) in (0u32..).zip([0x4cu32, 0x50, 0x54, 0xc]) {
+                set(e, block + at, 0x7f80_0031 + k);
+            }
+        }
+        set(e, property + 0xdc, block);
+    }
+    let property = if c.word(4) == 2 { 0 } else { property };
+    vec![words[0], c.word(1) & 1, property]
+}
+
+/// [`SHADOW_SETUPS`] with its floats fixed (no NaN of their own) and the extras' signalling NaNs planted: every fog
+/// kind, every HDR switch.
+const SHADOW_SETUPS_SNAN: &[Input] = &[
+    Input::Of(&[0, 1, 2, 3, 4]),
+    Input::Of(&[0, 1, 2, 3]),
+    Input::F32Swept(0x4500_0000),
+    Input::F32Swept(0x3f00_0000),
+    Input::Of(&[1]),
+];
+
+/// The set-ups that move floats through the x87 (`FLD`/`FSTP`) quiet a signalling NaN as the exe does: the ambient,
+/// the light colour's alpha, the land values' three floats and fog, the tall grass's fog and no-fog distance. With
+/// only the planted NaNs, compared payload-exact on the main thread's word.
+#[test]
+fn shadow_light_set_ups_quiet_signalling_nans() {
+    Diff::new(entry!(0x00b7_c580, setups::light_ambient(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .control_words(&[MAIN_THREAD])
+        .inputs(SHADOW_SETUPS_SNAN)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_c600, setups::light_colour(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .control_words(&[MAIN_THREAD])
+        .inputs(SHADOW_SETUPS_SNAN)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_ad80, setups::land_values(Ptr<_>, u32, u32)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .control_words(&[MAIN_THREAD])
+        .inputs(SHADOW_SETUPS_SNAN)
+        .setup(land_values_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x00ba_a430,
+        engine_typed::draw::tall_grass::setup_fog(Ptr<_>, u32)
+    ))
+    .pass_common()
+    .goes_by_address(&[0x00e7_eb00])
+    .control_words(&[MAIN_THREAD])
+    .inputs(SHADOW_SETUPS_SNAN)
+    .setup(grass_fog_words)
+    .run()
+    .assert_same();
+}
+
+/// The shadow light shader's land values (`00b7ad80`): a block or none, the word set or clear, no fog property,
+/// distances 0, a far and near; main-thread code on the main thread's word, bit for bit (NaN payloads aside).
+#[test]
+fn shadow_light_land_values() {
+    Diff::new(entry!(0x00b7_ad80, setups::land_values(Ptr<_>, u32, u32)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .main_thread(0)
+        .inputs(SHADOW_SETUPS)
+        .setup(land_values_words)
+        .run()
+        .assert_same();
+}
+
+/// The land values read the fog index and the fog property through the packet: scribbled (POISON), the same.
+#[test]
+fn shadow_light_land_values_read_the_packet() {
+    packet_same_cases(
+        "land_values",
+        entry!(0x00b7_ad80, setups::land_values(Ptr<_>, u32, u32)).1,
+        &cases_of(
+            SHADOW_SETUPS,
+            &[&[2, 1, 0x4500_0000, HALF, 0], &[1, 1, 0x4500_0000, TWO, 0]],
+        ),
+        false,
+        |e, c| {
+            let words = land_values_words(e, c);
+            let acc = e.mem.alloc(0x1a0);
+            (words, vec![acc])
+        },
+        |e, w| cut::take_frame(e, 0, Ptr::new(w[0])),
+    );
+}
+
+/// The fog upload, the ambient and the light colour read the fog index, the fog property and the rendered pass's
+/// first light and its light through the packet (the cut copies them): scribbled (POISON), they upload and set the
+/// same. The fog upload's reading of the fog index in place was the drawing thread's late-gate stop in Goodsprings;
+/// the tall grass's fog (`00baa430`) the next one.
+#[test]
+fn shadow_light_setups_read_the_packet() {
+    packet_same_cases(
+        "tall_grass_setup_fog",
+        entry!(
+            0x00ba_a430,
+            engine_typed::draw::tall_grass::setup_fog(Ptr<_>, u32)
+        )
+        .1,
+        &cases_of(
+            SHADOW_SETUPS,
+            &[&[2, 0, 0x4500_0000, HALF, 0], &[0, 3, 0x4500_0000, TWO, 1]],
+        ),
+        false,
+        |e, c| {
+            let words = grass_fog_words(e, c);
+            let pass = e.mem.u32(0x011f_91e0);
+            let acc = e.mem.alloc(0x1a0);
+            (words, vec![pass, acc])
+        },
+        |e, w| cut::take_frame(e, 0, Ptr::new(w[1])),
+    );
+    for (name, f) in [
+        (
+            "fog_upload",
+            entry!(0x00b7_c3a0, setups::fog_upload(Ptr<_>)).1,
+        ),
+        (
+            "light_ambient",
+            entry!(0x00b7_c580, setups::light_ambient(Ptr<_>)).1,
+        ),
+        (
+            "light_colour",
+            entry!(0x00b7_c600, setups::light_colour(Ptr<_>)).1,
+        ),
+    ] {
+        packet_same_cases(
+            name,
+            f,
+            &cases_of(
+                SHADOW_SETUPS,
+                &[&[2, 0, 0x4500_0000, HALF, 0], &[1, 3, 0x4500_0000, TWO, 1]],
+            ),
+            false,
+            |e, c| {
+                let words = shadow_setups_words(e, c);
+                let pass = e.mem.u32(0x011f_91e0);
+                let acc = e.mem.alloc(0x1a0);
+                (words, vec![pass, acc])
+            },
+            |e, w| {
+                cut::take_pass_lights(e, w[0]);
+                cut::take_frame(e, 0, Ptr::new(w[1]));
+            },
+        );
+    }
 }
 
 /// A per-geometry set-up of the types 0xca, 0xd1 or 0x102: stage 3's texture answered or not, the
@@ -10016,6 +10364,168 @@ fn leaf_setup_fog() {
     .assert_same();
 }
 
+/// The SpeedTree branch slot 0x7c's inputs: its fog slot the real one (`00c1a310`) or a stand-in; a fog property
+/// or none; a material or none, its +0x38 play's float; the shader's own constant maps (none, stand-ins).
+const BRANCH_CONSTANTS: &[Input] = &[
+    Input::Flag,
+    Input::Flag,
+    Input::Flag,
+    Input::F32,
+    Input::Flag,
+];
+
+/// The SpeedTree branch slot 0x7c's words: the world's renderer as the shader's; the rendered pass and its geometry
+/// (a world transform, a bound, a skin, its data's buffers); the fog index 1 and its scene node's fog property; the
+/// state's material (property 2); the exe's 0.0, 1.0 and 30.0; shader table entry 1 (the `GetShader` stand-in's
+/// answer) with two constant maps and the current pass's programs; `SetupGeometryConstants` (`00b7dab0`) and the
+/// fog slot's stand-in marked.
+fn branch_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0120_0000, 0x1000);
+    e.register(0x00b7_dab0, marked);
+    e.register(VT_FN + 0x154, marked);
+    let shader_vt = if c.word(0) != 0 {
+        vtable(e, &[(0x154, 0x00c1_a310)])
+    } else {
+        vtable(e, &[])
+    };
+    let this = obj(e, 0x100, shader_vt);
+    set(e, this + 0x18, w.renderer);
+    let geometry = e.mem.alloc(0xc0);
+    for i in 0..13u32 {
+        set(e, geometry + 0x68 + 4 * i, ONE + (i << 16));
+    }
+    let bound = e.mem.alloc(0x10);
+    for k in 0..4u32 {
+        set(e, bound + 4 * k, 0x4000_0000 + (k << 16));
+    }
+    set(e, geometry + 0x20, bound);
+    set(e, geometry + 0xbc, 0x5c1d_0000);
+    let data = e.mem.alloc(0x40);
+    set(e, data + 0x34, 0x0bbf_0000);
+    set(e, geometry + 0xb8, data);
+    let record = e.mem.alloc(0x10);
+    set(e, record, geometry);
+    set(e, 0x011f_91e0, record);
+    let node = e.mem.alloc(0x140);
+    if c.word(1) != 0 {
+        let fog = e.mem.alloc(0x80);
+        set(e, node + 0x134, fog);
+    }
+    set(e, 0x011f_91c8 + 4, node);
+    e.mem.set_u8(0x011f_91c4, 1);
+    let state = e.mem.alloc(0x18);
+    if c.word(2) != 0 {
+        let material = e.mem.alloc(0x40);
+        set(e, material + 0x38, play_bits(c, 3));
+        set(e, state + 8, material);
+    }
+    set(e, 0x011a_9bd4, 0);
+    set(e, 0x011a_9bdc, ONE);
+    set(e, 0x0101_8f5c, 0x41f0_0000);
+    let vt = vtable(e, &[]);
+    let table = obj(e, 0x40, vt);
+    for at in [0x30u32, 0x34] {
+        let map = obj(e, 0x40, vt);
+        set(e, table + at, map);
+    }
+    set(e, RETS + 0x1f0, table);
+    let pass = e.mem.alloc(0x60);
+    set(e, 0x0126_f74c, pass);
+    set(e, pass + 0x44, 0x0b0b_0044);
+    set(e, pass + 0x5c, 0x0b0b_005c);
+    if c.word(4) != 0 {
+        for at in [0x30u32, 0x34] {
+            let map = obj(e, 0x40, vt);
+            set(e, this + at, map);
+        }
+    }
+    vec![this, state]
+}
+
+/// The SpeedTree branch shader's slot 0x7c (`00bd4ba0`): main-thread code on the main thread's word, bit for bit
+/// (NaN payloads aside), with play's floats. `SetupGeometryConstants` is stood in (its own tests).
+#[test]
+fn branch_setup_constants() {
+    Diff::new(entry!(
+        0x00bd_4ba0,
+        engine_typed::draw::speedtree::branch_setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .goes_by_address(&[0x00b7_dab0, 0x00c1_a310])
+    .main_thread(0)
+    .inputs(BRANCH_CONSTANTS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(branch_constants_words)
+    .run()
+    .assert_same();
+}
+
+/// The SpeedTree branch shader's fog slot (`00c1a310`): a fog property or none, a material (its +0x38 play's float,
+/// NaNs among them) or none; bit for bit (NaN payloads aside).
+#[test]
+fn branch_fog() {
+    Diff::new(entry!(
+        0x00c1_a310,
+        engine_typed::draw::speedtree::branch_fog(Ptr<_>, u32, u32, u32)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[Input::Flag, Input::Flag, Input::F32])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let _ = world(e);
+        set(e, 0x011a_9bd4, 0);
+        set(e, 0x011a_9bdc, ONE);
+        set(e, 0x0101_8f5c, 0x41f0_0000);
+        let material = if c.word(1) != 0 {
+            let material = e.mem.alloc(0x40);
+            set(e, material + 0x38, play_bits(c, 2));
+            material
+        } else {
+            0
+        };
+        vec![0x0bad_0001, 0x0bad_0002, c.word(0) * 0x0f0f_0000, material]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The SpeedTree branch shader's slot 0x7c reads the fog index, the geometry's transform and bound through the
+/// packet: with what the cut takes for the rendered geometry and the frame scribbled in guest memory (POISON), it
+/// writes as without (the late gate's stop in Goodsprings, frame 5025, was its fog index read in place).
+#[test]
+fn branch_setup_constants_reads_the_packet() {
+    packet_same_cases(
+        "branch_setup_constants",
+        entry!(
+            0x00bd_4ba0,
+            engine_typed::draw::speedtree::branch_setup_constants(Ptr<_>, Ptr<_>)
+        )
+        .1,
+        &cases_of(
+            BRANCH_CONSTANTS,
+            &[&[1, 1, 1, ONE, 1], &[0, 0, 0, HALF, 0], &[1, 1, 0, HALF, 0]],
+        ),
+        true,
+        |e, case| {
+            let words = branch_constants_words(e, case);
+            let record = e.mem.u32(0x011f_91e0);
+            let from = e.mem.u32(record);
+            // The drawn size, no skin (the cut walks a skin's bones), a property and a shader of the branch class.
+            let vt = vtable(e, &[]);
+            let property = obj(e, 0x100, vt);
+            let geometry = group_c_geometry(e, from, property, 0x010b_c070);
+            set(e, record, geometry);
+            (words, vec![geometry])
+        },
+        |e, w| {
+            cut::take_geometry_values(e, w[0]);
+            cut::take_frame(e, 0, Ptr::new(0));
+        },
+    );
+}
+
 // ---- Group C: what the set-ups share (the draw family's `group_c`) ----
 
 /// The pass types' flag bits (`00b815e0`): a pass type whose words have every pattern of the bits read;
@@ -10489,6 +10999,155 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
     assert!(reads > 0, "the draw read nothing through the packet");
 }
 
+/// The drawing thread's hand-off (the draw family's exports E1 to E5): main cuts the packet off its thread
+/// (`cut::cut_for_thread`), the packet travels through a real thread, the drawing side adopts it (`cut::adopt`,
+/// scribbled with POISON), draws both halves without cutting or joining again, hands it back (`cut::hand_back`, the
+/// scribble put back) and main joins (`cut::join_handed`). The draw answers and leaves memory as with the switch off,
+/// with no miss and nothing written past the packet. Under POISON the adopt scribbles the copied bytes in guest memory
+/// (and POISON without stepped threads is refused); with the packet on and no POISON guest memory is untouched from
+/// the adopt to the hand-back; with it off there is no cut, and no hand-back without an adopt. An adopt while a
+/// packet is held is given back. (The run-wide mode, E5, has a test binary of its own: `capture_run_mode`.)
+#[test]
+fn the_hand_off_draws_as_the_cut_on_one_thread() {
+    let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
+    let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
+    let setup = |e: &mut Engine| {
+        let d = draw_world(e);
+        acc_slots(e, d.w.acc, true);
+        set(e, d.w.acc + 0x19c, 0);
+        held(e, d.w.acc, 1);
+        for g in [d.w.geometry, d.w.skinned] {
+            set(e, g + 4, 1);
+        }
+        set(e, d.w.acc + 0x18c, 2);
+        active_lists(e, &d, 1);
+        let camera = full_camera(e, &d.w);
+        e.with_stack(4, |_, _| ());
+        vec![camera, d.w.acc, 1]
+    };
+    let mut plain = Engine::new();
+    let a = setup(&mut plain);
+    let answer = (first(&mut plain, &a), second(&mut plain, &a));
+    // The camera's copied words (+0x68 to +0x114) in guest memory.
+    let camera_words = |e: &Engine, camera: u32| -> Vec<u32> {
+        (0x68..0x114)
+            .step_by(4)
+            .map(|at| e.mem.u32(camera + at))
+            .collect()
+    };
+    let poison = capture::Mode::Poison;
+    for (mode, forced) in [(poison, false), (poison, true), (capture::Mode::On, false)] {
+        let mut handed = Engine::new();
+        let b = setup(&mut handed);
+        let before = camera_words(&handed, b[0]);
+        statics::set_forced(forced);
+        capture::set_thread_mode(Some(mode));
+        if mode == poison {
+            assert!(
+                cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), false).is_none(),
+                "POISON without stepped threads must be refused"
+            );
+        }
+        let packet = cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true)
+            .expect("the cut for the drawing thread");
+        assert!(
+            !capture::is_open(&handed),
+            "the cut left the packet on main's thread"
+        );
+        // Through a real thread and back, as the seam moves it.
+        let packet = std::thread::spawn(move || packet).join().expect("moved");
+        assert!(cut::adopt(&mut handed, packet).is_ok());
+        assert!(cut::adopted());
+        let adopted = camera_words(&handed, b[0]);
+        if mode == poison {
+            // Scribbled at the adopt: the copied words hold the pattern (one of the two, cut by cut).
+            let patterns = [0x6e6e_6e6eu32, 0x9191_9191];
+            assert!(
+                adopted.iter().all(|w| patterns.contains(w)),
+                "forced {forced}: the adopt did not scribble under POISON: {adopted:x?}"
+            );
+        } else {
+            assert_eq!(
+                adopted, before,
+                "the adopt touched guest memory without POISON"
+            );
+        }
+        let handed_answer = (first(&mut handed, &b), second(&mut handed, &b));
+        assert!(
+            capture::is_open(&handed),
+            "a half joined the adopted packet"
+        );
+        if mode != poison {
+            assert_eq!(
+                camera_words(&handed, b[0]),
+                before,
+                "guest memory touched between the adopt and the hand-back without POISON"
+            );
+        }
+        let back = cut::hand_back(&mut handed).expect("handed back");
+        assert!(!cut::adopted());
+        // The scribble is put back at the hand-back, before main joins: the camera's copied words are main's again.
+        assert_eq!(
+            camera_words(&handed, b[0]),
+            camera_words(&plain, a[0]),
+            "forced {forced}: POISON's scribble left in guest memory at the hand-back"
+        );
+        cut::join_handed(&mut handed, back);
+        capture::set_thread_mode(None);
+        statics::set_forced(false);
+        let report = cut::last_report().expect("the join closed the packet");
+        assert_eq!(answer, handed_answer, "forced {forced}: the answers differ");
+        assert_eq!(
+            memory_digest_beside_stack(&plain),
+            memory_digest_beside_stack(&handed),
+            "forced {forced}: the memory differs"
+        );
+        assert_eq!(
+            (report.misses, report.written),
+            (0, 0),
+            "forced {forced}: {report:?}"
+        );
+        assert!(
+            report.reads > 0 && report.held > 0,
+            "forced {forced}: {report:?}"
+        );
+    }
+    // An adopt while this thread holds a packet is given back.
+    {
+        let mut e = Engine::new();
+        let w = setup(&mut e);
+        capture::set_thread_mode(Some(capture::Mode::On));
+        let one = cut::cut_for_thread(&mut e, w[0], Ptr::new(w[1]), true).expect("one");
+        assert!(capture::begin(&e), "an open packet on this thread");
+        let back = cut::adopt(&mut e, one).expect_err("a second packet on this thread");
+        let _ = capture::end(&mut e);
+        assert!(capture::attach(back).is_ok());
+        let _ = capture::end(&mut e);
+        // As at the serial cut: no camera, no cut (and no packet left open).
+        assert!(cut::cut_for_thread(&mut e, 0, Ptr::new(w[1]), true).is_none());
+        assert!(!capture::is_open(&e));
+        capture::set_thread_mode(None);
+    }
+    // With the packet off: no cut for the drawing thread, and no hand-back on a thread that adopted none.
+    {
+        let mut e = Engine::new();
+        let w = setup(&mut e);
+        capture::set_thread_mode(Some(capture::Mode::Off));
+        assert!(cut::cut_for_thread(&mut e, w[0], Ptr::new(w[1]), true).is_none());
+        assert!(!capture::is_open(&e));
+        assert!(cut::hand_back(&mut e).is_none());
+        // A frame drawn on main with the packet off (the host's mode for a run with the row on and no POISON check,
+        // as for every default run) makes no cut.
+        let _ = first(&mut e, &w);
+        assert!(
+            !capture::is_open(&e),
+            "a serial frame cut with the packet off"
+        );
+        let _ = second(&mut e, &w);
+        capture::set_thread_mode(None);
+    }
+}
+
 /// The alpha draw's next pass (`00b9af60`) reads the camera's direction and the passes' bounds through the packet:
 /// scribbled, either would change the order of the sorted groups or which are within the limit.
 #[test]
@@ -10615,7 +11274,8 @@ fn light_setup_reads_the_pass_lights_through_the_packet() {
 }
 
 /// The geometry's lights (`00b78a90`, which runs the per-light set-up for each pass light) read the pass's
-/// light count, array and lights through the packet.
+/// light count, array and lights through the packet, and a point light the scene node's camera position (+0x1e4,
+/// the frame's values: the late gate's record difference in Doc's house, vertex register 26, was it read in place).
 #[test]
 fn lights_read_the_pass_lights_through_the_packet() {
     packet_same(
@@ -10629,7 +11289,10 @@ fn lights_read_the_pass_lights_through_the_packet() {
             words.extend([g.transform(), g.pass_type, g.skin]);
             (words, vec![g.rendering])
         },
-        |e, w| cut::take_pass_lights(e, w[0]),
+        |e, w| {
+            cut::take_pass_lights(e, w[0]);
+            cut::take_frame(e, 0, Ptr::new(0));
+        },
     );
 }
 
@@ -10701,6 +11364,7 @@ fn lights_read_the_first_active_light_through_the_packet() {
         |e, w| {
             cut::take_pass_lights(e, w[0]);
             cut::take_property_lights(e, w[1]);
+            cut::take_frame(e, 0, Ptr::new(0));
         },
     );
 }
@@ -12289,6 +12953,141 @@ fn lighting30_shadow_passes_keep_the_clip_plane_cache_own() {
     );
 }
 
+#[test]
+fn fill_takes_a_particle_data_by_its_count_getter() {
+    // The draw asks any geometry data its active vertex count (its slot 0x90): a particle data's getter (`00a923a0`)
+    // reads +0x50, so the cut takes it whatever the geometry's immediate draw (the late gate's stop in Goodsprings,
+    // frame 3520, was such a particle system's count read from a data the cut had not taken).
+    let mut e = Engine::new();
+    let d = draw_world(&mut e);
+    let geometry = e.mem.u32(d.w.passes[0]);
+    let data = e.mem.alloc(0x80);
+    let vt = e.mem.alloc(0x100);
+    set(&mut e, vt + 0x90, 0x00a9_23a0);
+    set(&mut e, data, vt);
+    e.mem.set_u16(data + 0x50, 3);
+    set(&mut e, geometry + 0xb8, data);
+    assert!(capture::begin(&e));
+    cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
+    let count = capture::half(&e, data, 0x50);
+    let report = capture::end(&mut e);
+    assert_eq!((count, report.misses), (3, 0), "{report:?}");
+}
+
+/// The cut (`cut::fill`) takes a particle system's arrays when its own render (slot 0xdc, which the batch renderer
+/// calls for the particle classes) is the particles' draw (`00a9b1f0`), as in the four particle classes' vtables (their
+/// slot 0xe0 the plain geometry's `00a80650`): the late gate's stop in Goodsprings, frame 3524, was such a system's
+/// point indices read by the points draw from a data the cut had taken only the count of.
+#[test]
+fn fill_takes_a_particle_systems_arrays_by_its_own_render() {
+    let mut e = Engine::new();
+    let d = draw_world(&mut e);
+    let geometry = e.mem.u32(d.w.passes[0]);
+    let vt = vtable(&mut e, &[(0xdc, 0x00a9_b1f0), (0xe0, 0x00a8_0650)]);
+    set(&mut e, geometry, vt);
+    let data_vt = vtable(&mut e, &[(0x90, 0x00a9_23a0)]);
+    let data = obj(&mut e, 0x70, data_vt);
+    e.mem.set_u16(data + 0x50, 2);
+    let positions = e.mem.alloc(0x18);
+    let indices = e.mem.alloc(4);
+    set(&mut e, data + 0x20, positions);
+    set(&mut e, data + 0x44, indices);
+    set(&mut e, geometry + 0xb8, data);
+    assert!(capture::begin(&e));
+    cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
+    let _ = capture::span(&e, positions, 0, 0x18);
+    let _ = capture::span(&e, indices, 0, 4);
+    let report = capture::end(&mut e);
+    assert_eq!(report.misses, 0, "{report:?}");
+}
+
+/// The toggles' colour (`UpdateTogglesConstant`, `00c02d90`) reads the geometry's property's second flags (+0x24) through
+/// the packet: with what the cut takes for the geometry scribbled in guest memory (POISON), it writes as without (the
+/// late gate's first record difference in Doc's house, the red of pixel register 27, was this read in place: the
+/// scribble's bit 5 set).
+#[test]
+fn tint_reads_the_property_flags_through_the_packet() {
+    packet_same_cases(
+        "set_tint",
+        entry!(0x00c0_2d90, acc::set_tint(u32, Ptr<_>, u32, u32)).1,
+        &word_cases(&[vec![0, 0], vec![0x20, 1], vec![0, 1]]),
+        true,
+        |e, c| {
+            let _ = world(e);
+            let vt = vtable(e, &[]);
+            let property = obj(e, 0x100, vt);
+            set(e, property + 0x24, c.word(0));
+            let geometry = group_c_geometry(e, 0, property, 0x010a_f2f8);
+            (vec![0x55, geometry, c.word(1), 0], vec![geometry])
+        },
+        |e, w| cut::take_geometry_values(e, w[0]),
+    );
+}
+
+/// The shaders' blend (slot 0x80, `00be1ff0`) reads the property's alpha and fade alpha (+0x28, +0x2c) through the
+/// packet: with what the cut takes for the geometry scribbled in guest memory (POISON), it blends as without (opaque,
+/// a fading alpha, a fading fade alpha).
+#[test]
+fn blend_reads_the_property_alphas_through_the_packet() {
+    packet_same_cases(
+        "set_blend_of",
+        entry!(0x00be_1ff0, acc::set_blend_of(u32, u32)).1,
+        &word_cases(&[vec![ONE, ONE], vec![HALF, ONE], vec![ONE, HALF]]),
+        true,
+        |e, c| {
+            let _ = world(e);
+            let vt = vtable(e, &[]);
+            let property = obj(e, 0x100, vt);
+            set(e, property + 0x28, c.word(0));
+            set(e, property + 0x2c, c.word(1));
+            let alpha = obj(e, 0x1c, vt);
+            e.mem.set_u16(alpha + 0x18, (5 << 1) | (9 << 5));
+            let block = e.mem.alloc(0x10);
+            set(e, block, alpha);
+            set(e, block + 0xc, property);
+            let geometry = group_c_geometry(e, 0, property, 0x010a_f2f8);
+            (vec![0x55, block], vec![geometry])
+        },
+        |e, w| cut::take_geometry_values(e, w[0]),
+    );
+}
+
+/// The cut (`cut::fill`) copies a no-lighting geometry's sub-texture array (its model data's +0x68, count +0x6c) only
+/// when the geometry is drawn in a sub-texture pass type (0x52 to 0x57, where `00bc9a50` calls `00bc6fa0`): another
+/// model data keeps other words there, which other readers use (the first-half stop the drawing thread's late gate
+/// found in Doc's house, frame 2200, was such an array scribbled).
+#[test]
+fn fill_copies_the_subtextures_only_in_subtexture_passes() {
+    for (pass_type, taken) in [(0x51u32, false), (0x52, true), (0x57, true), (0x58, false)] {
+        let mut e = Engine::new();
+        let d = draw_world(&mut e);
+        let pass = d.w.passes[0];
+        let geometry = e.mem.u32(pass);
+        let shader = e.mem.alloc(0x10);
+        if !e.mem.is_mapped(0x010b_b000) {
+            e.map(0x010b_b000, 0x1000);
+        }
+        set(&mut e, shader, 0x010b_b230);
+        set(&mut e, geometry + 0xc0, shader);
+        let data = e.mem.alloc(0x80);
+        let array = e.mem.alloc(0x20);
+        set(&mut e, array, 0x1234_5678);
+        set(&mut e, data + 0x68, array);
+        e.mem.set_u8(data + 0x6c, 2);
+        set(&mut e, geometry + 0xb8, data);
+        e.mem.set_u16(pass + 4, pass_type as u16);
+        assert!(capture::begin(&e));
+        cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
+        let _ = capture::word(&e, array, 0);
+        let report = capture::end(&mut e);
+        assert_eq!(
+            report.misses == 0,
+            taken,
+            "pass type {pass_type:#x}: {report:?}"
+        );
+    }
+}
+
 /// The cut (`cut::fill`, with the own state forced) owns each listed pass's lights' clip-plane caches: a light of the
 /// world's first pass (in renderer 0's lists) has its cache in an own block after the cut, the planes before it not.
 #[test]
@@ -12470,10 +13269,22 @@ fn decal_pass_keeps_the_draws_own_state() {
             set(e, 0x0120_0458, c.word(3));
             set(e, 0x011f_f9dc, c.word(4) + 1);
             set(e, 0x011f_f9e4, c.word(4) + 1);
-            (vec![d.w.acc], d.w.acc)
+            // For the fill: the accumulator, then the world's passes.
+            let list = e.mem.alloc(4 * 5);
+            set(e, list, d.w.acc);
+            for (k, pass) in (1u32..).zip(d.w.passes) {
+                set(e, list + 4 * k, pass);
+            }
+            (vec![d.w.acc], list)
         },
-        // The accumulator's settings (the decal flag, the render mode) as the cut copies them.
-        |e, acc, _| cut::take_frame(e, 0, Ptr::new(acc)),
+        // The accumulator's settings (the decal flag, the render mode) as the cut copies them, and each pass's lights
+        // (the stage light texture reads the pass's first light through the packet).
+        |e, list, _| {
+            cut::take_frame(e, 0, Ptr::new(e.mem.u32(list)));
+            for k in 1..5u32 {
+                cut::take_pass_lights(e, e.mem.u32(list + 4 * k));
+            }
+        },
     );
 }
 
@@ -12511,11 +13322,14 @@ fn lights_write_the_draws_own_constants() {
             words.extend([g.transform(), g.pass_type, g.skin]);
             (words, e.mem.alloc(0x200))
         },
-        |e, _, _| cut::take_pass_lights(e, e.mem.u32(0x011f_91e0)),
+        |e, _, _| {
+            cut::take_pass_lights(e, e.mem.u32(0x011f_91e0));
+            cut::take_frame(e, 0, Ptr::new(0));
+        },
     );
 }
 
-/// The shader manager's mode (`00b4f450`, typed: `own::select_shader_mode`) sets the mode and its two function
+///The shader manager's mode (`00b4f450`, typed: `own::select_shader_mode`) sets the mode and its two function
 /// words in the packet: a mode with entries in both tables, one without (the tables' first entries), past them.
 #[test]
 fn select_shader_mode_keeps_the_draws_own_state() {
@@ -13711,7 +14525,7 @@ enum AcceptanceSetup {
     Water,
     Leaves,
     Lighting30,
-    /// Not a shader set-up: a particle geometry (its slot 0xe0 the particles' immediate draw, `00a9b1f0`) on the
+    /// Not a shader set-up: a particle geometry (its slot 0x30 answering itself, so the batch renderer calls its own render, slot 0xdc: the particles' `00a9b1f0`) on the
     /// world's shader.
     Particles,
 }
@@ -13727,11 +14541,11 @@ const ACCEPTANCE_SETUPS: &[AcceptanceSetup] = &[
     AcceptanceSetup::Particles,
 ];
 
-/// A particle geometry's pass in the acceptance world: the world geometry's words, its slot 0xe0 the particles'
-/// immediate draw, its model data a particle data block (the count slot 0x90 the particles' `00a923a0`, two
+/// A particle geometry's pass in the acceptance world: the world geometry's words, its slot 0x30 the object itself (`00e68810`)
+/// and its own render (slot 0xdc) the particles' `00a9b1f0`, its model data a particle data block (the count slot 0x90 the particles' `00a923a0`, two
 /// particles with positions, sizes and scales), a bound of its own; a pass like the first pass.
 fn acceptance_particle_pass(e: &mut Engine, d: &DrawW) -> u32 {
-    let vt = vtable(e, &[(0xe0, 0x00a9_b1f0)]);
+    let vt = vtable(e, &[(0x30, 0x00e6_8810), (0xdc, 0x00a9_b1f0)]);
     let geometry = obj(e, 0xc4, vt);
     for off in (4..0xc4).step_by(4) {
         let word = e.mem.u32(d.w.geometry + off);
@@ -14193,7 +15007,7 @@ fn acceptance_run(on: bool, setups: &[AcceptanceSetup]) -> CensusRun {
     }
     e.call_log = Some(Vec::new());
     if on {
-        statics::set_forced(true);
+        statics::set_forced(acceptance_forced());
         capture::set_thread_mode(Some(capture::Mode::On));
     } else {
         capture::set_thread_mode(Some(capture::Mode::Off));
@@ -14365,7 +15179,7 @@ fn poison_trail(setups: Vec<AcceptanceSetup>) -> String {
         let mut e = Engine::new();
         let (_, words, _) = acceptance_world(&mut e, &setups);
         e.call_log = Some(Vec::new());
-        statics::set_forced(true);
+        statics::set_forced(acceptance_forced());
         capture::set_thread_mode(Some(capture::Mode::Poison));
         let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             (first(&mut e, &words), second(&mut e, &words))
@@ -14421,7 +15235,7 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
     HELD_FOUND.with(|f| f.borrow_mut().clear());
     HELD_SCRIBBLE.with(|s| s.set(None));
     poisoned.register(VT_FN + 0x6c, held_probe);
-    statics::set_forced(true);
+    statics::set_forced(acceptance_forced());
     capture::set_thread_mode(Some(capture::Mode::Poison));
     let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         (first(&mut poisoned, &words), second(&mut poisoned, &words))
@@ -14458,6 +15272,13 @@ fn acceptance_poison(setups: &[AcceptanceSetup]) -> PoisonRun {
             held,
         },
     }
+}
+
+/// Whether the acceptance runs take the own state whatever the passes' shader classes (`statics::set_forced`): yes,
+/// unless `NV_ACCEPTANCE_KEPT` is set, which runs them as play does today (the classes keep the own state in guest
+/// memory: only the value packet is scribbled).
+fn acceptance_forced() -> bool {
+    std::env::var_os("NV_ACCEPTANCE_KEPT").is_none()
 }
 
 /// The typed draw paths the acceptance world should reach, by the function that enters each.

@@ -44,7 +44,11 @@ Since 2026-11-14 every light list the world draw walks reads the frame's copy to
 their walks and counts, the tall grass's and lighting 3.0's light set-ups, the water's lights, the accumulators'
 shadow scene nodes), the pass lights' clip-plane caches are the draw's own state, and the render-state cache's last
 two slots the skinned and particle draws reached as translations are typed: groundwork for the drawing thread, no
-change a player sees.
+change a player sees. Then the drawing thread's hand-off itself (the frame's copy cut on main, handed to another
+thread, drawn there and joined back) is in, and on the recorded route (Doc's house and the Goodsprings street) the
+world draw's first half reads the frame only through its copy: the particle systems' arrays, the SpeedTree branches'
+set-up, the shadow light shader's fog and light rows and the toggles' colour were still reading it in place. Every frame
+still draws on main by default.
 The update half (what main runs besides drawing) began on 2026-11-10 with `scene`: the scene graph's
 downward update pass across geometries, fade nodes and particle systems, and the skinned bound, on once proven
 identical (differential tests, the recorded run byte-identical with it off); not a speed change by itself.

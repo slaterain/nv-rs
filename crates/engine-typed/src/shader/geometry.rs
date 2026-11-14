@@ -961,9 +961,10 @@ pub fn lights(
                             let value = copy_float(e, position + 4 * word);
                             capture::set_own_at::<u32>(e, vector + 4 * word, value);
                         }
-                        let camera = e.global::<u32>(CAMERA_OBJECT); // own: main's frame value, value packet B
+                        // The scene node's camera position (+0x1e4) through the packet: the cut copies it (the late
+                        // gate's record difference in Doc's house, vertex register 26, was this read in place).
                         for word in 0..3u32 {
-                            let offset = e.global::<f32>(camera + 0x1e4 + 4 * word); // own: main's object read in place (value packet B, piece 4)
+                            let offset = f32::from_bits(packet::scene_camera_position(e, word));
                             let value = offset + float_at(e, vector + 4 * word);
                             capture::set_own_at::<f32>(e, vector + 4 * word, value);
                         }

@@ -87,8 +87,9 @@ const RENDERED_TEXTURE_GET_TEXTURE: u32 = 0x004b_c320;
 pub fn stage_light_texture(e: &mut Engine, stage: u32) {
     let stage = pass_stage(e, stage);
     let rendering = capture::own_at::<u32>(e, RENDERING_PASS);
-    let lights = e.mem.u32(rendering.wrapping_add(0xc));
-    let light = e.mem.u32(lights);
+    // The pass's light array and first light, the packet's (the cut copies them); the light's shadow map (+0x10c, a
+    // rendered texture the light keeps) read in place.
+    let light = crate::draw::packet::rendering_light(e, rendering, 0);
     let rendered = e.mem.u32(light.wrapping_add(0x10c));
     let texture = e
         .call(RENDERED_TEXTURE_GET_TEXTURE, &args![rendered, 0u32])

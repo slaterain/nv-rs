@@ -23,13 +23,9 @@ const DEFAULT_STAGE_3: u32 = 0x011f_951c;
 /// The point the passes transform (`011fa2a0`) and 1.0 (a double, `01012070`).
 const ORIGIN_POINT: u32 = 0x011f_a2a0;
 const ONE_DOUBLE: u32 = 0x0101_2070;
-/// The shader's own set-ups these call by address: `00b7c3a0`, `00b7c510`, `00b7c580`, `00b7c600`
-/// (`thiscall(shader)`), `00b7c850` (`stdcall(matrix, scale)`), `00b7cb00` (`stdcall(matrix, scale,
+/// The shader's own set-ups these call: the fog upload, the pixel entries, the ambient and the light colour
+/// (`00b7c3a0`, `00b7c510`, `00b7c580`, `00b7c600`, `thiscall(shader)`: this file's) and by address `00b7c850` (`stdcall(matrix, scale)`), `00b7cb00` (`stdcall(matrix, scale,
 /// word)`); `D3DXVec3TransformCoord` (`00ee6df8`) and `D3DXMatrixTranspose` (`00ee6dd4`) are [`super::thunks`].
-const FOG_CONSTANTS: u32 = 0x00b7_c3a0;
-const SETUP_C510: u32 = 0x00b7_c510;
-const SETUP_C580: u32 = 0x00b7_c580;
-const SETUP_C600: u32 = 0x00b7_c600;
 const SCALED_LIGHT: u32 = 0x00b7_c850;
 const SCALED_LIGHT_WORD: u32 = 0x00b7_cb00;
 
@@ -143,14 +139,12 @@ fn light_constant(e: &mut Engine, vector: u32) {
 pub fn begin_types_fc(e: &mut Engine, this: Ptr) {
     let shader = this.addr();
     bind_stage(e, 5);
-    e.call(FOG_CONSTANTS, &args![shader]);
+    fog_upload_call(e, shader);
     let first = capture::own_at::<u32>(e, SWITCH_A);
     own::set_switch_word(e, first, 1);
     let second = capture::own_at::<u32>(e, SWITCH_B);
     own::set_switch_word(e, second, 1);
-    e.call(SETUP_C510, &args![shader]);
-    e.call(SETUP_C580, &args![shader]);
-    e.call(SETUP_C600, &args![shader]);
+    light_setups_call(e, shader);
     e.with_stack(0x44, |e, frame| {
         let frame = frame.addr();
         upload_last(e, shader, frame + 0x10, frame);
@@ -162,10 +156,8 @@ pub fn begin_types_fc(e: &mut Engine, this: Ptr) {
 /// after them.
 pub fn begin_types_ca(e: &mut Engine, this: Ptr) {
     let shader = this.addr();
-    e.call(FOG_CONSTANTS, &args![shader]);
-    e.call(SETUP_C510, &args![shader]);
-    e.call(SETUP_C580, &args![shader]);
-    e.call(SETUP_C600, &args![shader]);
+    fog_upload_call(e, shader);
+    light_setups_call(e, shader);
 }
 
 // Typed from 00b7ded0
@@ -602,4 +594,166 @@ pub fn property_fade(e: &mut Engine, this: Ptr) -> f32 {
     }
     let near = e.global::<u32>(FADE_NEAR);
     fade_between(packet::property_distance(e, base), near, far)
+}
+
+/// The fog upload ([`fog_upload`], `00b7c3a0`) as the type groups' begins call it.
+fn fog_upload_call(e: &mut Engine, shader: u32) {
+    typed_call!(FAMILY, 0x00b7_c3a0, fog_upload(e, Ptr::new(shader)));
+}
+
+/// The three set-ups after the fog ([`pixel_entries`], [`light_ambient`], [`light_colour`]) as the type groups'
+/// begins call them, in the exe's order.
+fn light_setups_call(e: &mut Engine, shader: u32) {
+    let _: u32 = typed_call!(FAMILY, 0x00b7_c510, pixel_entries(e, Ptr::new(shader)));
+    typed_call!(FAMILY, 0x00b7_c580, light_ambient(e, Ptr::new(shader)));
+    typed_call!(FAMILY, 0x00b7_c600, light_colour(e, Ptr::new(shader)));
+}
+
+// Typed from 00b7c3a0
+/// The shadow light shader's fog upload, `thiscall(shader)` (the shader not read): the fog constants (`011fa280`, as
+/// [`fog_constants`] makes them from the fog property of the fog index, both through the packet), then the current
+/// pass's device (its constants holder +0x5c, that holder's +0x20) gets the eight floats as vertex constants 0xe and
+/// 0xf (its slot 0x178; an image of the draw's own copy while the packet owns them).
+pub fn fog_upload(e: &mut Engine, _this: Ptr) {
+    fog_constants(e);
+    let device = packet::pass_device(e);
+    own::device_vertex_constants(e, device, 0xe, FOG, 2); // own: uploaded through own_image
+}
+
+// Typed from 00b7c510
+/// The shadow light shader's pixel entries, `thiscall(shader)`: each of the 22 pixel entries (`011fec30`) that is
+/// set is switched on when its bit (entry k: bit k + 1) is set in the rendered pass type's word of `011fc0a0` (read
+/// for each), then the pixel constant map (+0x30) is sorted (its slot 0x24, a tail call: its answer is this one's).
+pub fn pixel_entries(e: &mut Engine, this: Ptr) -> u32 {
+    let pass_type = packet::rendering_pass_type(e);
+    enable_entries(e, PIXEL_ENTRIES, PIXEL_FLAGS, pass_type);
+    let map = own::constant_map(e, this.addr(), 0x30);
+    e.vcall(map, 0x24, &args![]).u32()
+}
+
+/// The ambient row (`011fa0c0`) and the light colour row (`011fa0d0`), four floats each.
+const AMBIENT_ROW: u32 = 0x011f_a0c0;
+const LIGHT_ROW: u32 = 0x011f_a0d0;
+/// The HDR switch (`011f941e`), the byte that keeps the extra scale off (`011f9427`) and the extra scale
+/// (`011f9190`).
+const HDR_ON: u32 = 0x011f_941e;
+const NO_EXTRA_SCALE: u32 = 0x011f_9427;
+const EXTRA_SCALE: u32 = 0x011f_9190;
+
+// Typed from 00b7c580
+/// The shadow light shader's ambient, `thiscall(shader)` (the shader not read): the rendered pass's first light's
+/// light (+0xf8) gives its ambient colour (+0xc8, three floats) with 1.0 to `011fa0c0`, through the packet.
+pub fn light_ambient(e: &mut Engine, _this: Ptr) {
+    let shadow = packet::rendering_first_light(e);
+    let light = packet::pass_light_word(e, shadow, 0xf8);
+    for k in 0..3u32 {
+        // Through an `FLD` and `FSTP` in the exe: a signalling NaN quieted.
+        let word = x87_quiet_bits(packet::light_value_word(e, light, 0xc8 + 4 * k));
+        own::set_constant_word(e, AMBIENT_ROW + 4 * k, word);
+    }
+    own::set_constant_word(e, AMBIENT_ROW + 0xc, 1.0f32.to_bits());
+}
+
+// Typed from 00b7c600
+/// The shadow light shader's light colour, `thiscall(shader)` (the shader not read): the rendered pass's first light
+/// (its weight +0xd0, its alpha +0xd4) and that light's light (+0xf8: its strength +0xc4, held to 1.0 unless HDR, and
+/// colour +0xd4): each component the colour times the strength, then times the weight (the exe's order), times the extra scale with HDR on and `011f9427` clear, to `011fa0d0` with the alpha; through
+/// the packet. Main thread only: `f32` maths.
+#[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: held only when above 1.0.
+pub fn light_colour(e: &mut Engine, _this: Ptr) {
+    let shadow = packet::rendering_first_light(e);
+    let light = packet::pass_light_word(e, shadow, 0xf8);
+    let value = |e: &Engine, at: u32| f32::from_bits(packet::light_value_word(e, light, at));
+    let mut strength = value(e, 0xc4);
+    let hdr = e.global::<u8>(HDR_ON) != 0; // own: main's frame value, value packet B
+    if !hdr && 1.0 < strength {
+        strength = 1.0;
+    }
+    let weight = f32::from_bits(packet::pass_light_word(e, shadow, 0xd0));
+    let mut colour = [
+        value(e, 0xd4) * strength * weight,
+        weight * (value(e, 0xd8) * strength),
+        weight * (strength * value(e, 0xdc)),
+    ];
+    if hdr && e.global::<u8>(NO_EXTRA_SCALE) == 0 {
+        // own: main's frame value, value packet B
+        let extra = e.global::<f32>(EXTRA_SCALE); // own: main's frame value, value packet B
+        colour = colour.map(|c| extra * c);
+    }
+    for (k, c) in (0u32..).zip(colour) {
+        own::set_constant_word(e, LIGHT_ROW + 4 * k, c.to_bits());
+    }
+    // Through an `FLD` and `FSTP` in the exe: a signalling NaN quieted.
+    let alpha = x87_quiet_bits(packet::pass_light_word(e, shadow, 0xd4));
+    own::set_constant_word(e, LIGHT_ROW + 0xc, alpha);
+}
+
+/// The land values `00b7ad80` fills from a shader property's +0xdc block (`011fd8f4` to `011fd910`, `011fd85c`,
+/// `011fd860`, `011fd914`, 1.0 at `011fd918`) and the fog values (`011fd924` to `011fd940`).
+const LAND_WORDS: u32 = 0x011f_d8f4;
+const LAND_VALUE_A: u32 = 0x011f_d85c;
+const LAND_VALUE_B: u32 = 0x011f_d860;
+const LAND_VALUE_C: u32 = 0x011f_d914;
+const LAND_ONE: u32 = 0x011f_d918;
+const LAND_FOG_COLOUR: u32 = 0x011f_d924;
+const LAND_FOG_FAR: u32 = 0x011f_d934;
+const LAND_FOG_RANGE: u32 = 0x011f_d938;
+const LAND_FOG_POWER: u32 = 0x011f_d93c;
+const LAND_FOG_LAST: u32 = 0x011f_d940;
+
+// Typed from 00b7ad80
+/// The shadow light shader's land values, `thiscall(shader, word, property)` (the shader not read): with a property,
+/// its +0xdc block (when set) gives the words +0xc to +0x28 to `011fd8f4`, the floats +0x4c, +0x50 and +0x54 to
+/// `011fd85c`, `011fd860` and `011fd914`, and 1.0 to `011fd918`; the fog values `011fd924` to `011fd940` are cleared;
+/// with the word set and the fog property of the fog index (both through the packet) whose far (+0x30) or near (+0x2c)
+/// distance is not 0.0 (a NaN counts as not equal), they become its colour (+0x20 to +0x28, then 0.0), the far
+/// distance, far less near, its +0x60 and 0.0. Main thread only: `f32` maths.
+pub fn land_values(e: &mut Engine, _this: Ptr, enabled: u32, property: u32) {
+    if property == 0 {
+        return;
+    }
+    let block = e.global::<u32>(property.wrapping_add(0xdc)); // own: main's object read in place (set at load)
+    if block != 0 {
+        for k in 0..8u32 {
+            let word = e.global::<u32>(block.wrapping_add(0xc + 4 * k)); // own: main's object read in place (set at load)
+            own::set_constant_word(e, LAND_WORDS + 4 * k, word);
+        }
+        // The three floats through an `FLD` and `FSTP` in the exe (a signalling NaN quieted); the words above plain.
+        let word = x87_quiet_bits(e.global::<u32>(block.wrapping_add(0x4c))); // own: main's object read in place (set at load)
+        own::set_constant_word(e, LAND_VALUE_A, word);
+        let word = x87_quiet_bits(e.global::<u32>(block.wrapping_add(0x50))); // own: main's object read in place (set at load)
+        own::set_constant_word(e, LAND_VALUE_B, word);
+        let word = x87_quiet_bits(e.global::<u32>(block.wrapping_add(0x54))); // own: main's object read in place (set at load)
+        own::set_constant_word(e, LAND_VALUE_C, word);
+        own::set_constant_word(e, LAND_ONE, 1.0f32.to_bits());
+    }
+    for k in 0..8u32 {
+        own::set_constant_word(e, LAND_FOG_COLOUR + 4 * k, 0);
+    }
+    if enabled == 0 {
+        return;
+    }
+    let index = u32::from(packet::fog_index(e));
+    let fog: u32 = typed_call!(FAMILY, 0x00b5_5520, passes::fog_property(e, index));
+    if fog == 0 {
+        return;
+    }
+    // Each through an `FLD` and `FSTP` in the exe (a signalling NaN quieted), the colour too.
+    let near = x87_quiet_bits(packet::fog_field(e, fog, 0x2c));
+    let far = x87_quiet_bits(packet::fog_field(e, fog, 0x30));
+    let power = x87_quiet_bits(packet::fog_field(e, fog, 0x60));
+    let (far_value, near_value) = (f32::from_bits(far), f32::from_bits(near));
+    if far_value == 0.0 && near_value == 0.0 {
+        return;
+    }
+    let range = far_value - near_value;
+    let colour = [0x20u32, 0x24, 0x28].map(|at| x87_quiet_bits(packet::fog_field(e, fog, at)));
+    own::set_constant_word(e, LAND_FOG_FAR, far);
+    own::set_constant_word(e, LAND_FOG_RANGE, range.to_bits());
+    own::set_constant_word(e, LAND_FOG_POWER, power);
+    own::set_constant_word(e, LAND_FOG_LAST, 0);
+    for (k, word) in (0u32..).zip(colour) {
+        own::set_constant_word(e, LAND_FOG_COLOUR + 4 * k, word);
+    }
+    own::set_constant_word(e, LAND_FOG_COLOUR + 0xc, 0);
 }

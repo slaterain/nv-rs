@@ -48,11 +48,18 @@ pub enum Mode {
     Poison,
 }
 
-/// `NV_DRAW_THREAD`, read once; a thread's own mode instead while one is set ([`set_thread_mode`]).
+/// `NV_DRAW_THREAD`, read once; a thread's own mode instead while one is set ([`set_thread_mode`]), else the run-wide
+/// mode when one is set ([`set_mode`]: the host's choice, so the game's `Fallout.ini` line turns the packet on too).
 pub fn mode() -> Mode {
     static MODE: OnceLock<Mode> = OnceLock::new();
     if let Some(mode) = THREAD_MODE.with(Cell::get) {
         return mode;
+    }
+    match SET_MODE.load(Relaxed) {
+        1 => return Mode::Off,
+        2 => return Mode::On,
+        3 => return Mode::Poison,
+        _ => {}
     }
     *MODE.get_or_init(|| match std::env::var("NV_DRAW_THREAD").as_deref() {
         Ok("1") | Ok("on") => Mode::On,
@@ -69,6 +76,27 @@ thread_local! {
 /// engines each run on a thread of their own.
 pub fn set_thread_mode(mode: Option<Mode>) {
     THREAD_MODE.with(|m| m.set(mode));
+}
+
+/// This thread's own mode ([`set_thread_mode`]), `None` when it has none.
+pub fn thread_mode() -> Option<Mode> {
+    THREAD_MODE.with(Cell::get)
+}
+
+/// The run-wide mode ([`set_mode`]): 0 none (the variable's), 1 off, 2 on, 3 POISON.
+static SET_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+// Export E5 of the drawing thread's seam.
+/// Sets the mode for every thread of the process in place of `NV_DRAW_THREAD` (`None`: the variable's again); a
+/// thread's own mode ([`set_thread_mode`]) still wins.
+pub fn set_mode(mode: Option<Mode>) {
+    let value = match mode {
+        None => 0,
+        Some(Mode::Off) => 1,
+        Some(Mode::On) => 2,
+        Some(Mode::Poison) => 3,
+    };
+    SET_MODE.store(value, Relaxed);
 }
 
 /// The byte POISON fills the packet's guest bytes with (0x6e: a word of them is a float of about 1.8e28 and an
@@ -491,6 +519,19 @@ pub fn pause(e: &mut Engine) {
     });
 }
 
+/// POISON's scribble put back for good (the bytes written meanwhile counted, as [`end`] counts them): the drawing
+/// thread gives the packet back to main while main still waits, so main never reads the scribble. Nothing without an
+/// open packet or a scribble.
+pub fn unpoison(e: &mut Engine) {
+    with_packet(e, |e, p| {
+        if let Some(scribble) = p.scribble.take() {
+            if !p.paused {
+                p.written += unscribble_all(e, p, scribble);
+            }
+        }
+    });
+}
+
 /// The world draw's second half starts: the packet is read again ([`pause`]), and with POISON scribbled again.
 pub fn resume(e: &mut Engine) {
     with_packet(e, |e, p| {
@@ -658,9 +699,13 @@ pub fn attach(packet: Detached) -> Result<(), Detached> {
 }
 
 /// The `N` bytes at `object + offset` as the open packet holds them: `None` with no packet open for `e`'s run,
-/// and `None` counted as a miss when the packet holds no range of the object that covers them.
+/// and `None` counted as a miss when the packet holds no range of the object that covers them. A null object is not
+/// a miss (as for [`span`]): the cut never copies one, and its read is of the zero page, which nothing on main changes.
 #[inline(always)]
 fn copied<const N: usize>(e: &Engine, object: u32, offset: u32) -> Option<[u8; N]> {
+    if object == 0 {
+        return None;
+    }
     PACKET.with(|p| {
         let p = p.borrow();
         let p = p.as_ref()?;

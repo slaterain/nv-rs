@@ -474,9 +474,11 @@ pub fn set_blend_of(e: &mut Engine, _this: u32, block: u32) {
         object = Ptr::new(0);
     }
     let blends = !alpha.is_null() && e.get(alpha, NiProperty::m_usFlags) & 1 != 0;
-    let opaque = !(1.0 > e.get(object, BSShaderProperty::fAlpha))
-        && !(1.0 > e.get(object, BSShaderProperty::fFadeAlpha))
-        && !blends;
+    // The alpha (+0x28) and the fade alpha (+0x2c) through the packet: the cut copies them and the frame's tail may
+    // change them (a fading object's), or POISON scribble them meanwhile.
+    let property_float =
+        |e: &Engine, offset: u32| f32::from_bits(packet::property_word(e, object.addr(), offset));
+    let opaque = !(1.0 > property_float(e, 0x28)) && !(1.0 > property_float(e, 0x2c)) && !blends;
     if opaque {
         typed_call!(
             FAMILY,
@@ -763,7 +765,9 @@ pub fn set_tint(e: &mut Engine, _this: u32, owner: Ptr<NiGeometry>, green: u32, 
     let default_green = e.global::<u32>(DEFAULT_COLOR + 4);
     let alpha = e.global::<u32>(DEFAULT_COLOR + 0xc);
     let property = e.get(owner, NiGeometry::pShaderProperty);
-    let flags = e.get(property, BSShaderProperty::ulFlags2);
+    // The second flags (+0x24) through the packet: the cut copies them and POISON scribbles them meanwhile (the late
+    // gate's first record difference in Doc's house, the toggles' red in pixel register 27, was this read in place).
+    let flags = packet::property_word(e, property.addr(), 0x24);
     let red = if flags & 0x20 != 0 { 0x3f80_0000 } else { 0 };
     let green = if green != 0 {
         0x3f80_0000

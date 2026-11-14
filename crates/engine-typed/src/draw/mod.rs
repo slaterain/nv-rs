@@ -258,6 +258,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bb_25d0, speedtree::setup_geometry(Ptr<()>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00bb_2760, speedtree::setup_constants(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_1b50, speedtree::setup_fog(Ptr<()>, u32)),
+        // The SpeedTree branch shader's slot 0x7c and its fog slot.
+        entry!(
+            0x00bd_4ba0,
+            speedtree::branch_setup_constants(Ptr<()>, Ptr<()>)
+        ),
+        entry!(
+            0x00c1_a310,
+            speedtree::branch_fog(Ptr<()>, u32, u32, u32)
+        ),
         entry!(0x00b8_15e0, group_c::pass_flags(u32)),
         entry!(0x00c0_3180, group_c::material_colour_constant(u32)),
         // Group C: the lighting 3.0 shader and the shared leftovers.
@@ -277,12 +286,18 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bb_e120, lighting30::setup_switches(Ptr<()>, u32)),
         entry!(0x00bd_02e0, lighting30::setup_stage_textures(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_95e0, group_c::set_light_entry(u32, u32, u32, u32, u32, u32, u32, u32, u32)),
+        entry!(0x00ba_a430, tall_grass::setup_fog(Ptr<_>, u32)),
         entry!(0x00ba_a720, tall_grass::update_point_lights(Ptr<_>, u32, u32, f32, u32)),
         entry!(0x00ba_a850, tall_grass::shadow_setup(Ptr<_>, u32, u32)),
         entry!(0x00b7_0de0, group_c::direction_light(u32, Ptr<_>, f32)),
         entry!(0x00b7_1130, group_c::other_light(u32, Ptr<_>, f32)),
         entry!(0x00bb_95b0, group_c::set_light_half(u32, u32, u32, u32, u32)),
         entry!(0x00bb_b790, group_c::set_ambient(Ptr<()>, u8)),
+        entry!(0x00b7_ad80, setups::land_values(Ptr<_>, u32, u32)),
+        entry!(0x00b7_c3a0, setups::fog_upload(Ptr<_>)),
+        entry!(0x00b7_c510, setups::pixel_entries(Ptr<_>) -> u32),
+        entry!(0x00b7_c580, setups::light_ambient(Ptr<_>)),
+        entry!(0x00b7_c600, setups::light_colour(Ptr<_>)),
         entry!(0x00b7_1ad0, lights::store_clip_planes(Ptr<_>, u32)),
         entry!(0x00b7_1b40, lights::camera_position(Ptr<_>, Ptr<_>)),
         entry!(0x00bb_96d0, group_c::pass_end_flags(Ptr<()>, u32)),

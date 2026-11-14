@@ -400,12 +400,13 @@ fn install_script_ui_sort_paths(e: &mut Engine) {
 /// frame's start, before the controls are read, or earlier where the frame's tail reaches what the draw uses
 /// (`engine::draw_thread`, [`crate::draw_thread`]). It needs real threads with the render thread; stepped threads
 /// are its check form. `NV_DRAW_THREAD=poison` (the environment only, for checks) is on with the packet's
-/// POISON check. Until the draw family's packet hand-off is in, every frame still draws on main.
+/// POISON check (stepped threads only). The draw family's packet hand-off is wired; until the geometry family is on, every
+/// frame still draws on main.
 pub const DRAW_THREAD: Fix = Fix {
     name: "world drawn on a second thread (experimental)",
     env: "NV_DRAW_THREAD",
     addresses: &[],
-    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; for now every frame still draws on main (the draw family's hand-off is not in), and the draw family reads NV_DRAW_THREAD itself for its packet, so the variable also turns its packet on whatever this row says",
+    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; for now every frame still draws on main by default (the geometry family it needs is off until its gate; NV_TYPED=geometry)",
     install: install_nothing,
 };
 
@@ -573,6 +574,9 @@ pub struct Choice {
     /// else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bShowFrameRate`; else
     /// [`PLAY_SHOW_FRAME_RATE`], off. Not part of any preset.
     pub show_frame_rate: bool,
+    /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,
+    /// for stepped threads; `crate::draw_thread::install` decides the draw family's capture mode from it).
+    pub draw_poison: bool,
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
     pub ini_note: Option<String>,
@@ -593,6 +597,7 @@ impl Choice {
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
             ini_note: None,
+            draw_poison: false,
         }
     }
 
@@ -747,6 +752,7 @@ impl Choice {
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
             ini_note: ini.bad_line(),
+            draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
         };
         for line in settings.unwrap_or("").lines() {
             let Some((key, value)) = line.split_once('=') else {

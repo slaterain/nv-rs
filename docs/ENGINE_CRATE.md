@@ -562,7 +562,9 @@ ambient (`00bbb790`) and the pass end's flags (`00bb96d0`); the tall
 grass's point lights (`00baa720`) and shadow set-up (`00baa850`); the lighting property's light list walks (its first
 and next active lights with and without the shadow lights, `00b70590`, `00b70600`, `00b70680`, `00b70700`, and the two
 counts, `00b70790`, `00b707d0`), a pass light's clip-plane store (`00b71ad0`) and the shadow scene node's camera
-position (`00b71b40`). Each reads the frame only through
+position (`00b71b40`); the shadow light shader's fog upload (`00b7c3a0`), pixel entries (`00b7c510`), light ambient
+(`00b7c580`) and colour (`00b7c600`) and land values (`00b7ad80`); the tall grass's fog (`00baa430`); the SpeedTree
+branch shader (its slot 0x7c `00bd4ba0` and its fog slot `00c1a310`). Each reads the frame only through
 `draw::packet` and writes its constants, render states and counters through `draw::own` (each file's "Group C"
 section), with what is filled at load read in place (the shaders' own words, the passes' contents, the exe's
 constants).

@@ -2457,7 +2457,7 @@ fn product(values: &[&[u32]]) -> Vec<Vec<u32>> {
 
 /// The points draw reads its geometry's world transform and bound, the particles' count and every array through
 /// the packet: with the packet's guest bytes scribbled it draws what it draws without the packet. The data's
-/// count slot is the particles' (`00a923a0`) and the geometry's immediate draw the particles' (`00a9b1f0`), as the
+/// count slot is the particles' (`00a923a0`) and the geometry's own render (slot 0xdc) the particles' (`00a9b1f0`), as the
 /// cut finds particles.
 #[test]
 fn draw_points_reads_the_packet() {
@@ -2478,7 +2478,7 @@ fn draw_points_reads_the_packet() {
         ]),
         |e, c| {
             let (renderer, geometry) = points_world(e, c.word(0), c.word(1), c.word(2), c.word(3));
-            let vt = vtable(e, &[(0xe0, 0x00a9_b1f0)]);
+            let vt = vtable(e, &[(0xdc, 0x00a9_b1f0)]);
             set(e, geometry, vt);
             vec![renderer, geometry]
         },

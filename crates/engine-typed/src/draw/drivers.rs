@@ -56,7 +56,10 @@ pub fn world_draw_first(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulato
     if camera != 0 && packet::scene_renderer(e) != 0 {
         // The drawing thread's cut (step 2): with `NV_DRAW_THREAD` set, what the draw reads that the frame's tail
         // may change is copied into the value packet before the draw reads any of it.
-        super::cut::cut(e, camera, acc);
+        // On the drawing thread the packet was cut on main and adopted here (`cut::adopt`): no second cut.
+        if !super::cut::adopted() {
+            super::cut::cut(e, camera, acc);
+        }
     }
     if !start(e, camera, acc.addr()) {
         return;
@@ -85,6 +88,7 @@ fn with_packet_guard(e: &mut Engine, f: impl FnOnce(&mut Engine)) {
         return;
     }
     if let Err(stop) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(e))) {
+        super::cut::forget_adopted();
         super::cut::join(e);
         std::panic::resume_unwind(stop);
     }
@@ -101,8 +105,11 @@ pub fn world_draw_second(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulat
     });
     // Step 1 of the drawing thread: the view's words back to guest memory as the draw ends.
     super::detach::close(e);
-    // Step 2's join: the value packet closed.
-    super::cut::join(e);
+    // Step 2's join: the value packet closed (on the drawing thread it goes back to main, which closes it: `cut::
+    // hand_back`, `cut::join_handed`).
+    if !super::cut::adopted() {
+        super::cut::join(e);
+    }
 }
 
 // Typed from 00b6c0d0

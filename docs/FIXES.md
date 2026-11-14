@@ -999,10 +999,10 @@ or 1, like every row): the thread with the value packet's POISON check, for test
   waits for it, after the frame's tail, so a stepped run with it on must give the serial command stream byte for
   byte (the late gate, `measure/draw-thread/late-gate.sh`).
 - **Off**, the world pass's two calls and each join point cost one load and a branch; nothing is registered.
-- **For now every frame still draws on main**: the draw family's packet hand-off is not in yet. And the draw family
-  reads `NV_DRAW_THREAD` itself for its value packet (`capture::mode`): the variable turns that packet on (and
-  `poison` its scribble) whatever this row, its refusal or the threads say, and the `Fallout.ini` line does not; the
-  host's choice decides it once the draw family's `capture::set_mode` is in.
+- **For now every frame still draws on main by default**: the draw family's packet hand-off is in, but the geometry
+  family, which the draw runs in, stays off until its gate (`NV_TYPED=geometry` turns it on). The host's choice
+  decides the draw family's value packet (`capture::set_mode`): a refused row turns it off, the `Fallout.ini` line
+  turns it on, and `poison` with real threads is on without the scribble.
 - **What it could gain as built: little.** The same draw sequence uses the world accumulator after the world draw
   (the sun's occlusion query `006426a0` in every exterior with a sky, the scope pass, shadows, the water redraw) and
   resets it at its end, so the join is never later than the end of the draw sequence and, outdoors, falls inside the

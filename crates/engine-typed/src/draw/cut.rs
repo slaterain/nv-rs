@@ -69,6 +69,9 @@ pub(crate) const ACC_SETTINGS: [(u32, u32); 5] = [
 pub(crate) const ACC_SHADOW_NODE: (u32, u32) = (0x194, 0x198);
 const SHADER_ACCUMULATOR: u32 = 0x011f_95ec;
 pub(crate) const SCENE_CAMERA: (u32, u32) = (0x1e4, 0x1f0);
+/// The pass types whose no-lighting set-up copies the model data's sub-textures (`00bc9a50` calls `00bc6fa0` for
+/// 0x52 to 0x57).
+const SUBTEXTURE_PASSES: std::ops::RangeInclusive<u32> = 0x52..=0x57;
 /// `NiAVObject`'s empty bound (`011f4288`).
 const NULL_BOUND: u32 = 0x011f_4288;
 /// The fog index byte (`011f91c4`), the shadow scene nodes (`011f91c8`) and a node's fog property (+0x134);
@@ -80,10 +83,16 @@ const FOG_POWER: (u32, u32) = (0x60, 0x64);
 /// The shaders' time values: four floats (`011f940c`) and the start time (`011f94ac`).
 const GAME_TIMES: u32 = 0x011f_940c;
 const START_TIME: u32 = 0x011f_94ac;
-/// A geometry's immediate draw (its slot 0xe0): the particles' (`NiParticles::RenderImmediate`, `00a9b1f0`, the four
-/// particle classes' vtables) reaches the points draw, which builds quads from the particle arrays.
-const SLOT_RENDER_IMMEDIATE: u32 = 0xe0;
+/// A geometry's own render (its slot 0xdc, `RenderImmediate`), which the batch renderer calls for a geometry whose slot
+/// 0x30 or 0x34 answers non-zero: the four particle classes (`NiParticles`, `NiParticleSystem`, `NiMeshParticleSystem`,
+/// `NiParticleMeshes`; their slot 0x30 answers the object itself) hold the particles' (`00a9b1f0`) there, which reaches
+/// the points draw, which builds quads from the particle arrays. Their slot 0xe0 is the plain geometry's (`00a80650`).
+const SLOT_RENDER_IMMEDIATE: u32 = 0xdc;
 const PARTICLES_RENDER_IMMEDIATE: u32 = 0x00a9_b1f0;
+/// The particle data's active vertex count getter (`NiParticlesData::GetActiveVertexCount`, its slot 0x90).
+const PARTICLES_VERTEX_COUNT: u32 = 0x00a9_23a0;
+/// A particle data's active count (+0x50, a 16-bit word).
+const PARTICLE_COUNT: (u32, u32) = (0x50, 0x52);
 /// A light (`ShadowSceneLight`): its weight (+0xd0) and +0xd4, its flags (+0xf4, +0xf5) and its light (+0xf8, set
 /// once); the light's dimmer, ambient and diffuse colours and radius (+0xc4 to +0xe4), +0xe4 and +0xe8 (the light
 /// set-up `00b70820` reads all of these) and its direction (+0xf0).
@@ -126,13 +135,21 @@ pub fn fill(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
             own_clip_plane_caches(e, pass);
         }
     }
+    // The geometries drawn in a pass type the no-lighting shader copies sub-textures in (0x52 to 0x57, `00bc9a50`):
+    // only their model data's +0x68 is a sub-texture array (another data keeps something else there).
+    let mut subtextured = AddrSet::default();
+    for &pass in &passes {
+        if SUBTEXTURE_PASSES.contains(&packet::pass_type(e, pass)) {
+            subtextured.insert(packet::pass_geometry(e, pass));
+        }
+    }
     let mut geometries = AddrSet::default();
     let mut nodes = AddrSet::default();
     for pass in passes {
         take_lights(e, pass, &mut nodes);
         let geometry = packet::pass_geometry(e, pass);
         if geometry != 0 && geometries.insert(geometry) {
-            take_geometry(e, geometry, &mut nodes);
+            take_geometry(e, geometry, &mut nodes, subtextured.contains(&geometry));
             capture::hold(e, geometry);
         }
     }
@@ -208,7 +225,7 @@ pub fn take_camera(e: &Engine, camera: u32) {
 
 /// What the cut takes for one geometry ([`take_geometry`]), not held: for the checks of the paths that draw one.
 pub fn take_geometry_values(e: &mut Engine, geometry: u32) {
-    take_geometry(e, geometry, &mut AddrSet::default());
+    take_geometry(e, geometry, &mut AddrSet::default(), true);
 }
 
 /// What the cut takes for one pass's lights ([`take_lights`]): for the checks of the paths that set them.
@@ -296,7 +313,7 @@ fn walk_list(e: &Engine, list: u32, passes: &mut Vec<u32>) {
 
 /// A geometry's values: its world transform, its bound, its skin's root and bones, its shader property's values,
 /// its particles.
-fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
+fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>, subtextures: bool) {
     capture::take(e, geometry, WORLD.0, WORLD.1);
     let bound = e.global::<u32>(geometry.wrapping_add(0x20));
     capture::take(e, bound, BOUND.0, BOUND.1);
@@ -311,8 +328,15 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
         && crate::slot_target(e, geometry, SLOT_RENDER_IMMEDIATE) == PARTICLES_RENDER_IMMEDIATE
     {
         take_particles(e, data);
+    } else if data != 0
+        && peek(e, data).and_then(|vt| peek(e, vt.wrapping_add(shapes::SLOT_VERTEX_COUNT)))
+            == Some(PARTICLES_VERTEX_COUNT)
+    {
+        // Another geometry on a particle data (the tall grass's instances among them): the draws ask its active vertex
+        // count (the particles' getter `00a923a0` reads +0x50), but only the particles' own draw reads its arrays.
+        capture::take(e, data, PARTICLE_COUNT.0, PARTICLE_COUNT.1);
     }
-    take_group_c_arrays(e, geometry, property, data);
+    take_group_c_arrays(e, geometry, property, data, subtextures);
 }
 
 /// The tall grass shader (`010b8980`), the no-lighting shader (`010bb230`) and the SpeedTree leaf shader
@@ -339,12 +363,14 @@ fn leaf_slots(e: &Engine, property: u32) -> bool {
 /// The arrays Group C's set-ups copy into their constants whole (`_memcpy`), by the geometry's shader:
 /// - tall grass (`00baaf40`): the property's instance data (+0x7c): its counts (`u16` +0x10, +0x12), its array
 ///   (+0x14) and that array's count x 0x10 bytes;
-/// - no-lighting (`00bc6fa0`): the model data's sub-texture array (+0x68) and count (`u8` +0x6c), count x 0x10 bytes;
+/// - no-lighting (`00bc6fa0`): the model data's sub-texture array (+0x68) and count (`u8` +0x6c), count x 0x10 bytes,
+///   only with `subtextures` (the geometry drawn in a sub-texture pass: another model data keeps other words there,
+///   which other readers use);
 /// - SpeedTree leaves (`00bb2760`): the leaf property's slot 0x100 answer (`00bb3c90`: its leaf data +0x88, then
 ///   that data's +8, null without data), 0x300 bytes; read here without the call, for that class only.
 ///
 /// Read without a stop at an unmapped word, as the light walk.
-fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32) {
+fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32, subtextures: bool) {
     let Some(shader) = peek(e, geometry.wrapping_add(GEOMETRY_SHADER)) else {
         return;
     };
@@ -369,7 +395,7 @@ fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32) {
             };
             capture::take(e, array, 0, (counts & 0xffff) << 4);
         }
-        Some(NO_LIGHTING_SHADER) if data != 0 => {
+        Some(NO_LIGHTING_SHADER) if data != 0 && subtextures => {
             capture::take(e, data, 0x68, 0x6d);
             let (Some(array), Some(count)) = (
                 peek(e, data.wrapping_add(0x68)),
@@ -649,15 +675,101 @@ pub fn cut(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     }
     fill(e, camera, acc);
     if mode == capture::Mode::Poison {
-        // The two scribbles take turns, cut by cut: a byte the draw writes with one is caught by the other.
-        let cuts = CUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let scribble = if cuts % 2 == 0 {
-            capture::SCRIBBLE
-        } else {
-            capture::SCRIBBLE_OTHER
-        };
-        capture::poison(e, scribble);
+        poison_in_turn(e);
     }
+}
+
+/// POISON's scribble, the two taking turns cut by cut (a byte the draw writes with one is caught by the other).
+fn poison_in_turn(e: &mut Engine) {
+    let cuts = CUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let scribble = if cuts % 2 == 0 {
+        capture::SCRIBBLE
+    } else {
+        capture::SCRIBBLE_OTHER
+    };
+    capture::poison(e, scribble);
+}
+
+// ---- The drawing thread's hand-off (exports E1 to E4 of the seam, `engine_core::draw_thread`). ----
+
+thread_local! {
+    /// This thread draws with a packet cut on main and adopted here ([`adopt`]): the halves neither cut nor join.
+    static ADOPTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether this thread holds an adopted packet ([`adopt`]): the world draw's halves then skip their own cut and join.
+pub fn adopted() -> bool {
+    ADOPTED.with(std::cell::Cell::get)
+}
+
+/// The adopted mark dropped (a stop unwinding out of a half: the half closes the packet where it is).
+pub(crate) fn forget_adopted() {
+    ADOPTED.with(|a| a.set(false));
+}
+
+// Export E1.
+/// Main, at the post: the cut for the drawing thread. Any open packet is closed, a new one opened and filled
+/// ([`fill`], the own state taken when the passes allow it), not scribbled, and moved off main's thread. `None` with
+/// the switch off, when no packet opened, or for POISON without stepped threads (the scribble would be read by the
+/// threads that run beside it: the frame then draws on main); and, as at the serial cut ([`super::drivers`]'s
+/// `world_draw_first`), without a camera or the scene renderer (the draw then starts nothing).
+pub fn cut_for_thread(
+    e: &mut Engine,
+    camera: u32,
+    acc: Ptr<BSShaderAccumulator>,
+    stepped: bool,
+) -> Option<capture::Detached> {
+    let mode = capture::mode();
+    if mode == capture::Mode::Off || (mode == capture::Mode::Poison && !stepped) {
+        return None;
+    }
+    if camera == 0 || packet::scene_renderer(e) == 0 {
+        return None;
+    }
+    join(e);
+    if !capture::begin(e) {
+        return None;
+    }
+    fill(e, camera, acc);
+    capture::detach(e)
+}
+
+// Export E2.
+/// The drawing thread, before the halves: the packet installed on this thread and marked adopted; with POISON,
+/// scribbled here (main waits meanwhile: stepped threads only, [`cut_for_thread`]). `Err` gives it back when this
+/// thread holds a packet already.
+pub fn adopt(e: &mut Engine, packet: capture::Detached) -> Result<(), capture::Detached> {
+    capture::attach(packet)?;
+    ADOPTED.with(|a| a.set(true));
+    if capture::mode() == capture::Mode::Poison {
+        poison_in_turn(e);
+    }
+    Ok(())
+}
+
+// Export E4, the drawing side.
+/// The drawing thread, after the halves: POISON's scribble put back (main still waits), the adopted mark cleared and
+/// the packet moved off this thread for main. `None` when this thread adopted none.
+pub fn hand_back(e: &mut Engine) -> Option<capture::Detached> {
+    if !adopted() {
+        return None;
+    }
+    capture::unpoison(e);
+    forget_adopted();
+    capture::detach(e)
+}
+
+// Export E4, main's side.
+/// Main, at the join: the handed-back packet installed and closed ([`join`]: the own state's merge, the holds given
+/// back, the report and the run's totals). A packet main still holds is closed first; one of another run on this
+/// thread still there after that is a bug of the seam: a stop, as for an adopt the drawing side refuses.
+pub fn join_handed(e: &mut Engine, packet: capture::Detached) {
+    join(e);
+    assert!(
+        capture::attach(packet).is_ok(),
+        "the join was handed a packet while this thread holds one"
+    );
+    join(e);
 }
 
 /// The cuts made with POISON, for the scribbles' turns.
