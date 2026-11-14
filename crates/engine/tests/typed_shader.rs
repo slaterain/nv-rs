@@ -7533,6 +7533,58 @@ fn land_values_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     vec![words[0], c.word(1) & 1, property]
 }
 
+/// [`SHADOW_SETUPS`] with its floats fixed (no NaN of their own) and the extras' signalling NaNs planted: every fog
+/// kind, every HDR switch.
+const SHADOW_SETUPS_SNAN: &[Input] = &[
+    Input::Of(&[0, 1, 2, 3, 4]),
+    Input::Of(&[0, 1, 2, 3]),
+    Input::F32Swept(0x4500_0000),
+    Input::F32Swept(0x3f00_0000),
+    Input::Of(&[1]),
+];
+
+/// The set-ups that move floats through the x87 (`FLD`/`FSTP`) quiet a signalling NaN as the exe does: the ambient,
+/// the light colour's alpha, the land values' three floats and fog, the tall grass's fog and no-fog distance. With
+/// only the planted NaNs, compared payload-exact on the main thread's word.
+#[test]
+fn shadow_light_set_ups_quiet_signalling_nans() {
+    Diff::new(entry!(0x00b7_c580, setups::light_ambient(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .control_words(&[MAIN_THREAD])
+        .inputs(SHADOW_SETUPS_SNAN)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_c600, setups::light_colour(Ptr<_>)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .control_words(&[MAIN_THREAD])
+        .inputs(SHADOW_SETUPS_SNAN)
+        .setup(shadow_setups_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(0x00b7_ad80, setups::land_values(Ptr<_>, u32, u32)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .control_words(&[MAIN_THREAD])
+        .inputs(SHADOW_SETUPS_SNAN)
+        .setup(land_values_words)
+        .run()
+        .assert_same();
+    Diff::new(entry!(
+        0x00ba_a430,
+        engine_typed::draw::tall_grass::setup_fog(Ptr<_>, u32)
+    ))
+    .pass_common()
+    .goes_by_address(&[0x00e7_eb00])
+    .control_words(&[MAIN_THREAD])
+    .inputs(SHADOW_SETUPS_SNAN)
+    .setup(grass_fog_words)
+    .run()
+    .assert_same();
+}
+
 /// The shadow light shader's land values (`00b7ad80`): a block or none, the word set or clear, no fog property,
 /// distances 0, a far and near; main-thread code on the main thread's word, bit for bit (NaN payloads aside).
 #[test]
