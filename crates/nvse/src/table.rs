@@ -411,7 +411,11 @@ fn script_names(e: &Engine, opcode: u32) -> [u32; 2] {
     let at = e.script_tables().record(opcode);
     let short = e.mem.u32(at + 4);
     let kept = e.ext_get::<Nvse>().map_or(0, |n| n.table.roulette_short);
-    let short = if opcode == ROULETTE && short == 0 { kept } else { short };
+    let short = if opcode == ROULETTE && short == 0 {
+        kept
+    } else {
+        short
+    };
     [e.mem.u32(at), short]
 }
 

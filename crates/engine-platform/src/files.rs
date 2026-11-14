@@ -3795,6 +3795,7 @@ mod tests_changed_directories {
 #[cfg(all(test, windows))]
 mod tests_ansi_names_and_links {
     use super::*;
+    use engine_core::Ret;
 
     /// A scratch folder of the test's own under the system's temporary folder.
     fn scratch(test: &str) -> std::path::PathBuf {
@@ -3963,7 +3964,8 @@ mod tests_ansi_names_and_links {
         e.mem.set_u32(area, area + 0x100);
         e.register(0x0040_1000, |e, a| {
             let at = e.mem.u32(0x0640_0000);
-            e.mem.set_u32(0x0640_0000, at + a[0].max(1).next_multiple_of(16));
+            e.mem
+                .set_u32(0x0640_0000, at + a[0].max(1).next_multiple_of(16));
             Ret {
                 eax: at,
                 ..Ret::default()
@@ -4011,8 +4013,11 @@ mod tests_ansi_names_and_links {
             "listed, cannot be opened"
         );
         assert!(
-            !lines.iter().any(|l| l.ends_with(b"in.txt")),
-            "the junction not entered"
+            !lines
+                .iter()
+                .any(|l| l.ends_with(b"/in.txt") || l.ends_with(b"\\in.txt")),
+            "the junction not entered: {}",
+            String::from_utf8_lossy(&log)
         );
         assert!(
             !lines.iter().any(|l| l.ends_with(b"dangling.txt")),

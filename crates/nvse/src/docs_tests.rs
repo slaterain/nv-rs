@@ -803,14 +803,20 @@ fn an_unlisted_plugin_adds_nothing_to_the_listings() {
     let filter = table::guest_str(&mut e, b"padding");
     e.site(0x005b_cbc2, &[filter]);
     let lines = console();
-    let padding = lines.iter().filter(|l| l.ends_with("command used for padding")).count();
+    let padding = lines
+        .iter()
+        .filter(|l| l.ends_with("command used for padding"))
+        .count();
     assert_eq!(padding, 0x1400 - 0x1280);
     console_mode(&mut e);
     call(&mut e, 0x166c, 0, &[n(0x1400), n(0x2000)]);
     assert_eq!(console(), ["Unable to find commands."]);
     let last = nvse_end() - 1;
     call(&mut e, 0x166c, 0, &[n(last as i32), n(last as i32)]);
-    assert_eq!(console()[0], "Dumping wiki-style documentation for functions in opcode range.");
+    assert_eq!(
+        console()[0],
+        "Dumping wiki-style documentation for functions in opcode range."
+    );
     LOG.with(|l| l.borrow_mut().clear());
     call(&mut e, 0x166c, 0, &[n(0), n(0)]);
     // A page for each of xNVSE's named records (the stand-in game records have no names).
@@ -834,19 +840,38 @@ fn show_roulette_menu_loses_its_short_name() {
     let record = e.script_tables().record(table::ROULETTE);
     assert_eq!(e.mem.u32(record + 4), 0);
     assert_eq!(table::opcode_by_name(&e, b"srmenu"), Some(table::ROULETTE));
-    assert_eq!(table::name_map(&e).get(&crate::events::hash_name(b"SRMenu")), Some(&Some(table::ROULETTE)));
+    assert_eq!(
+        table::name_map(&e).get(&crate::events::hash_name(b"SRMenu")),
+        Some(&Some(table::ROULETTE))
+    );
     let c = info(&e, table::ROULETTE);
     assert!(c.short.is_empty());
     assert_eq!(help_line(&c, b""), Some(b"ShowRouletteMenu".to_vec()));
-    call(&mut e, 0x166c, 0, &[n(table::ROULETTE as i32), n(table::ROULETTE as i32)]);
+    call(
+        &mut e,
+        0x166c,
+        0,
+        &[n(table::ROULETTE as i32), n(table::ROULETTE as i32)],
+    );
     let lines = log_lines();
     assert!(lines.contains(&" |name = ShowRouletteMenu".to_string()));
-    assert!(!lines.iter().any(|l| l.contains("alias") || l.contains("redirect")), "{lines:?}");
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains("alias") || l.contains("redirect")),
+        "{lines:?}"
+    );
     LOG.with(|l| l.borrow_mut().clear());
     dump_command_documentation(&mut e, false, 0, false, false);
     let lines = log_lines();
-    let at = lines.iter().position(|l| l.contains("name=\"ShowRouletteMenu\"")).unwrap();
-    assert_eq!(lines[at + 1], "<br><b>Alias:</b> none<br><b>Parameters:</b>0");
+    let at = lines
+        .iter()
+        .position(|l| l.contains("name=\"ShowRouletteMenu\""))
+        .unwrap();
+    assert_eq!(
+        lines[at + 1],
+        "<br><b>Alias:</b> none<br><b>Parameters:</b>0"
+    );
 }
 
 /// Every built xNVSE command's help text, reference flag and parameter count as the shipped
@@ -882,4 +907,17 @@ fn the_records_match_the_dlls_table() {
     missing.sort_unstable();
     assert_eq!(missing, ["PrintToConsole", "V3Length"]);
     assert_eq!(seen + missing.len(), crate::commands::all().len());
+}
+
+/// xNVSE's table ends past the last record an installed plugin registered: a named one, or one
+/// of its empty commands (no name, an execute); without such a plugin, past xNVSE's commands.
+#[test]
+fn the_table_ends_past_the_last_registered_record() {
+    let mut e = engine(nvse_end());
+    assert_eq!(table_end(&e), nvse_end());
+    plugin(&mut e);
+    assert_eq!(table_end(&e), 0x2202);
+    let empty = e.script_tables().record(0x2202);
+    e.mem.set_u32(empty + 0x18, 0x7e00_3000);
+    assert_eq!(table_end(&e), 0x2203);
 }

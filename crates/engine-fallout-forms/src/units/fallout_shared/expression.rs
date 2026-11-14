@@ -1282,7 +1282,8 @@ mod tests {
         let (operand, token) = SEEN.with(std::cell::Cell::get);
         let copy = operand - 8 - 0x208;
         assert_eq!(copy - token, 0x4fc);
-        assert_eq!(e.mem.bytes(token, 6), bytes[1..7]);
+        // The token went there (its first byte is overwritten by the end of the reading).
+        assert_eq!(e.mem.bytes(token + 1, 5), bytes[2..7]);
     }
 
     /// The infix-to-postfix conversion with xNVSE's buffer reads its tokens into that buffer:

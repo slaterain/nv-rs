@@ -699,7 +699,12 @@ fn put_entry(path: &str, attributes: u32, tag: u32) {
     let k = key(path.as_bytes());
     let at = k.rfind('\\').map_or(0, |at| at + 1);
     let (dir, name) = (k[..at].to_string(), path[at..].to_string());
-    with_log(|l| l.listings.get_mut(&dir).unwrap().push((name, attributes, tag)));
+    with_log(|l| {
+        l.listings
+            .get_mut(&dir)
+            .unwrap()
+            .push((name, attributes, tag))
+    });
 }
 
 /// Reparse points as MSVC's `recursive_directory_iterator` and `is_regular_file` take them: a
@@ -712,20 +717,48 @@ fn reparse_points_in_the_function_folder() {
     let mut e = engine();
     put(BASE, None);
     let reparse = FILE_ATTRIBUTE_REPARSE_POINT;
-    put_as(&format!("{BASE}/Junction"), None, reparse, IO_REPARSE_TAG_MOUNT_POINT);
+    put_as(
+        &format!("{BASE}/Junction"),
+        None,
+        reparse,
+        IO_REPARSE_TAG_MOUNT_POINT,
+    );
     put(&format!("{BASE}/Junction/a.txt"), Some(b"a"));
-    put_as(&format!("{BASE}/DirLink"), None, reparse, IO_REPARSE_TAG_SYMLINK);
+    put_as(
+        &format!("{BASE}/DirLink"),
+        None,
+        reparse,
+        IO_REPARSE_TAG_SYMLINK,
+    );
     put(&format!("{BASE}/DirLink/b.txt"), Some(b"b"));
     put_as(&format!("{BASE}/Cloud"), None, reparse, 0x9000_001a);
     put(&format!("{BASE}/Cloud/c.txt"), Some(b"c"));
-    put_as(&format!("{BASE}/link.txt"), Some(b"link"), reparse, IO_REPARSE_TAG_SYMLINK);
-    put_entry(&format!("{BASE}/broken.txt"), 0x20 | reparse, IO_REPARSE_TAG_SYMLINK);
-    put_as(&format!("{BASE}/dedup.txt"), Some(b"dedup"), reparse, 0x8000_0013);
+    put_as(
+        &format!("{BASE}/link.txt"),
+        Some(b"link"),
+        reparse,
+        IO_REPARSE_TAG_SYMLINK,
+    );
+    put_entry(
+        &format!("{BASE}/broken.txt"),
+        0x20 | reparse,
+        IO_REPARSE_TAG_SYMLINK,
+    );
+    put_as(
+        &format!("{BASE}/dedup.txt"),
+        Some(b"dedup"),
+        reparse,
+        0x8000_0013,
+    );
     cache_all_scripts(&mut e);
     let names: Vec<String> = compiles().into_iter().map(|s| s.name).collect();
     assert_eq!(
         names,
-        ["nvseRuntimeScript0c", "nvseRuntimeScript1link", "nvseRuntimeScript2dedup"]
+        [
+            "nvseRuntimeScript0c",
+            "nvseRuntimeScript1link",
+            "nvseRuntimeScript2dedup"
+        ]
     );
     assert!(console().is_empty(), "no line for the broken link");
 }

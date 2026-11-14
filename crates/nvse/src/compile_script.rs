@@ -521,7 +521,10 @@ fn walk(e: &mut Engine, dir: &[u8], files: &mut Vec<Vec<u8>>) {
         let mut path = dir.to_vec();
         path.extend_from_slice(&found.name);
         let link = found.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0
-            && matches!(found.tag, IO_REPARSE_TAG_SYMLINK | IO_REPARSE_TAG_MOUNT_POINT);
+            && matches!(
+                found.tag,
+                IO_REPARSE_TAG_SYMLINK | IO_REPARSE_TAG_MOUNT_POINT
+            );
         if found.attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
             if !link {
                 path.push(b'\\');
