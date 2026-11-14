@@ -626,7 +626,10 @@ fn days_passed() {
     // A date given: 2280-12-31 to 2281-01-02.
     date(&mut e, 2281.0, 0.0, 2.0, 0.0);
     assert_eq!(call(&mut e, 0x282f, &[n(2280), n(12), n(31)]).1, 1.0);
-    // Month 13: nothing; month 0 or below: deliberately nothing either.
+    // Month 13: nothing; month 0 or below: deliberately nothing either (on a date where any count
+    // would not be 0: 2281-01-10).
+    date(&mut e, 2281.0, 0.0, 10.0, 0.0);
+    assert_eq!(call(&mut e, 0x282f, &[n(2280), n(12), n(31)]).1, 9.0);
     assert_eq!(call(&mut e, 0x282f, &[n(2280), n(13), n(1)]).1, 0.0);
     assert_eq!(call(&mut e, 0x282f, &[n(2280), n(0), n(1)]).1, 0.0);
     assert_eq!(call(&mut e, 0x282f, &[n(2280), n(-3), n(1)]).1, 0.0);
