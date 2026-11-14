@@ -1360,21 +1360,23 @@ pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
 // Typed from 00bbc5c0
 /// Lighting 3.0's blending (slot 0x80), `thiscall(shader, state)` (not a Ghidra function): nothing in the pass
 /// types 0x1bd to 0x1c3, 0x1cc to 0x1dc, 0x1e0, 0x1e1 and 0x2d8 to 0x2ef; otherwise the shared blending of the state
-/// (`00be1ff0`, the shader family's: the exe's tail jump). The batch renderer reads no answer.
-pub fn blending(e: &mut Engine, this: Ptr, state: Ptr) {
+/// (`00be1ff0`, the shader family's: the exe's tail jump). Answers what the exe leaves in `EAX`: the pass type when it does
+/// nothing, else 0 (the batch renderer reads no answer).
+pub fn blending(e: &mut Engine, this: Ptr, state: Ptr) -> u32 {
     let pass_type = packet::rendering_pass_type(e);
     let none = (0x1cc..=0x1dc).contains(&pass_type)
         || (0x1bd..=0x1c3).contains(&pass_type)
         || (0x1e0..=0x1e1).contains(&pass_type)
         || (0x2d8..=0x2ef).contains(&pass_type);
     if none {
-        return;
+        return pass_type;
     }
     typed_call!(
         shader::FAMILY,
         0x00be_1ff0,
         accumulator::set_blend_of(e, this.addr(), state.addr())
     );
+    0
 }
 
 /// The depth-write lock counter (`011ff9dc`, the lock counters' second word) that lighting 3.0's geometry end
@@ -1510,6 +1512,8 @@ const DEFAULT_TEXTURE: u32 = 0x011f_9510;
 const FILTER_SETTING: u32 = 0x011f_91b0;
 const ENTRY_181_WORD: u32 = 0x011f_9530;
 const SHADOW_FLAG: u32 = 0x0120_1c7c;
+/// A lighting property's light count getter (`00b704b0`, `fastcall(property)`: its 16 bits at +0x68), by address.
+const LIGHT_COUNT: u32 = 0x00b7_04b0;
 
 /// Stage `index` of `pass` (its stages +0x24: the pass's contents, read in place).
 fn stage_of(e: &Engine, pass: u32, index: u32) -> u32 {
@@ -1560,7 +1564,7 @@ pub fn stage_textures(e: &mut Engine, this: Ptr, pass_type: u32, property: u32) 
 }
 
 /// [`stage_textures`]'s third stage: when the rendered pass's type is 0x1c4 to 0x1c7, the property's light count
-/// (16 bits at +0x68, the exe's getter `00b704b0` inlined) is not 0, the rendered pass's first scene light has its
+/// (`00b704b0`, by address: its 16 bits at +0x68) is not 0, the rendered pass's first scene light has its
 /// byte +0xec and a shadow map (+0x10c) and the rendered pass its byte 9: stage 2 takes the shadow map's texture
 /// (`GetTexture(0)`), filter mode 1 when the filter setting (`011f91b0`) is 3 else 0, address mode 0, and the shadow
 /// flag constant (`01201c7c`) becomes 1.0 or 0.0 by the property's flag 8 (`004a2020`; `FILD`/`FSTP`).
@@ -1568,7 +1572,7 @@ fn shadow_stage(e: &mut Engine, pass: u32, property: u32) {
     if packet::rendering_pass_type(e).wrapping_sub(0x1c4) > 3 {
         return;
     }
-    if e.global::<u16>(property.wrapping_add(0x68)) == 0 {
+    if e.call(LIGHT_COUNT, &args![property]).u16() == 0 {
         return;
     }
     let rendering = packet::rendering_pass(e);

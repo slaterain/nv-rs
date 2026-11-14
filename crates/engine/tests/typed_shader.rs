@@ -16244,10 +16244,15 @@ fn pass_choice_world(e: &mut Engine, size: u32, words: (u32, u32)) -> u32 {
     let vt = vtable(e, &[]);
     let shader = obj(e, size, vt);
     for at in (0x6c..size).step_by(4) {
-        set(e, shader + at, 0x0a55_0000 + at);
+        // Counted objects (the declarations and maps the choices assign), each its own pass word too.
+        let o = obj(e, 0x10, vt);
+        set(e, o + 4, 3);
+        set(e, shader + at, o);
     }
     for (k, at) in (0u32..).zip((words.0..words.1).step_by(4)) {
-        set(e, at, 0x0b55_0000 + k);
+        let o = obj(e, 0x10, vt);
+        set(e, o + 4, 3 + k);
+        set(e, at, o);
     }
     set(e, 0x0126_f74c, 0x5eed_0000);
     shader
@@ -16509,7 +16514,7 @@ fn stage_light(e: &mut Engine, ed: u32, shadow: bool, lit: u32) -> u32 {
 
 /// A geometry's state block whose property 3 is `property`, property 0 an alpha property with flags `alpha` (none
 /// for `u32::MAX`) and property 4 one with flags `fourth` (none for `u32::MAX`).
-fn stage_state(e: &mut Engine, property: u32, alpha: u32, fourth: u32) -> u32 {
+fn set_up_state(e: &mut Engine, property: u32, alpha: u32, fourth: u32) -> u32 {
     let state = e.mem.alloc(0x18);
     let vt = vtable(e, &[]);
     for (at, flags) in [(0u32, alpha), (0x10, fourth)] {
@@ -16545,7 +16550,7 @@ fn branch_setup_textures() {
         let p = pass_world(e, &[], 0, c.word(0));
         let property = stage_property(e, c.word(1) != 0, c.word(2), 0);
         stage_light(e, 1, true, 1);
-        let state = stage_state(e, property, u32::MAX, u32::MAX);
+        let state = set_up_state(e, property, u32::MAX, u32::MAX);
         vec![p.d.w.shader, state]
     })
     .run()
@@ -16569,7 +16574,7 @@ fn leaf_setup_textures() {
             // A count of 0 here reaches 0 again after the hold: the stage is deleted.
             set(e, stage + 0x60, c.word(0).wrapping_sub(1).min(3));
             let property = stage_property(e, true, 0, 0);
-            let state = stage_state(e, property, u32::MAX, u32::MAX);
+            let state = set_up_state(e, property, u32::MAX, u32::MAX);
             vec![p.d.w.shader, state]
         })
         .run()
@@ -16710,7 +16715,8 @@ fn subclass_textures() {
         0x00bc_e500,
         setups::subclass_textures(Ptr<_>, Ptr<_>)
     ))
-    .pass_common()
+    .shader_translated()
+    .float_sweep(0)
     .goes_by_address(&[0x00b7_d200])
     .inputs(&[
         Input::Of(&[
@@ -16727,7 +16733,7 @@ fn subclass_textures() {
         set(e, RETS + 0xf4, 0x7c00_00f4);
         let property = stage_property(e, c.word(1) != 0, 0, 0);
         stage_light(e, 1, true, 1);
-        let state = stage_state(e, property, u32::MAX, u32::MAX);
+        let state = set_up_state(e, property, u32::MAX, u32::MAX);
         vec![p.d.w.shader, state]
     })
     .run()
@@ -16752,7 +16758,7 @@ fn geometry_done_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     set(e, property + 0x24, c.word(1));
     set(e, property + 0x8c, c.word(1) & 6);
     e.mem.set_u8(property + 0x60, (c.word(1) & 1) as u8);
-    let state = stage_state(e, property, c.word(3), c.word(4));
+    let state = set_up_state(e, property, c.word(3), c.word(4));
     vec![p.d.w.shader, state]
 }
 
@@ -16817,7 +16823,7 @@ const BLENDING: &[Input] = &[
 fn blending_words(e: &mut Engine, c: &Case) -> Vec<u32> {
     let p = pass_world(e, &[], 0, c.word(0));
     let property = stage_property(e, true, 0, 0);
-    let state = stage_state(e, property, c.word(1), u32::MAX);
+    let state = set_up_state(e, property, c.word(1), u32::MAX);
     vec![p.d.w.shader, state]
 }
 
@@ -16891,7 +16897,8 @@ fn no_lighting_bone_setup() {
         0x00bc_8f20,
         nl::bone_setup(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
     ))
-    .pass_common()
+    .common()
+    .float_sweep(0)
     .goes_by_address(&[0x00e6_fe30])
     .inputs(PARTITION)
     .setup(|e, c| partition_words(e, c, 0x0120_1090))
@@ -16905,7 +16912,8 @@ fn lighting30_bone_setup() {
         0x00bb_d000,
         l30::bone_setup(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
     ))
-    .pass_common()
+    .common()
+    .float_sweep(0)
     .goes_by_address(&[0x00e6_fe30])
     .inputs(PARTITION)
     .setup(|e, c| partition_words(e, c, 0x0120_1090))
@@ -16936,7 +16944,7 @@ fn pass_hand_word() {
 /// fallback, the shadow stage's conditions each way (the rendered pass's type, the light count, the light's byte
 /// +0xec, a shadow map, the rendered pass's byte 9, the filter setting, the property's flag 8).
 #[test]
-fn lighting30_stage_textures() {
+fn lighting30_stage_textures_slot() {
     Diff::new(entry!(0x00c0_cd80, l30::stage_textures(Ptr<_>, u32, u32)))
         .pass_common()
         .inputs(&[
@@ -17034,24 +17042,42 @@ const LEAF_LIGHTS: &[Input] = &[
 ];
 
 /// The leaf lights' set-up's words: the light rows (the direction `011fa1f0`, the position `011fa180`, the range
-/// `011fa200`) from the case, the active-light count stood in (`00b70790`), a matrix on the heap.
-fn leaf_lights_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+/// `011fa200`: each row's words `direction`, `position` with a different bit each), the active-light count stood in
+/// (`00b70790`, answering `active`), a matrix on the heap, the scale's bits; the D3DX imports behind the thunks marked.
+fn leaf_lights_world(
+    e: &mut Engine,
+    direction: u32,
+    position: u32,
+    range: u32,
+    scale: u32,
+    active: u32,
+) -> Vec<u32> {
     let _w = world(e);
     e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
     e.register(0x00b7_0790, slot_answer::<0x790>);
-    set(e, RETS + 0x790, c.word(4));
+    e.register(0x00fd_f414, |e, a| {
+        e.mem.set_u32(a[0], 0x3f80_0003);
+        ret(a[0])
+    });
+    set(e, RETS + 0x790, active);
     for k in 0..3u32 {
-        set(e, 0x011f_a1f0 + 4 * k, play_bits(c, 0) ^ (k << 12));
-        set(e, 0x011f_a180 + 4 * k, play_bits(c, 1) ^ (k << 12));
+        set(e, 0x011f_a1f0 + 4 * k, direction ^ (k << 12));
+        set(e, 0x011f_a180 + 4 * k, position ^ (k << 12));
     }
-    set(e, 0x011f_a200, play_bits(c, 2));
+    set(e, 0x011f_a200, range);
     let matrix = e.mem.alloc(0x40);
     for k in 0..16u32 {
         set(e, matrix + 4 * k, ONE + (k << 16));
     }
     let vt = vtable(e, &[]);
     let property = obj(e, 0x80, vt);
-    vec![0x0bad_0001, property, matrix, play_bits(c, 3)]
+    vec![0x0bad_0001, property, matrix, scale]
+}
+
+/// [`leaf_lights_world`] from a case of [`LEAF_LIGHTS`].
+fn leaf_lights_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let (d, p, r, s) = (play_bits(c, 0), play_bits(c, 1), play_bits(c, 2), play_bits(c, 3));
+    leaf_lights_world(e, d, p, r, s, c.word(4))
 }
 
 /// The SpeedTree leaves' lights (`00bb1960`): main-thread code on the main thread's word, bit for bit (NaN payloads
@@ -17062,8 +17088,7 @@ fn leaf_light_setup() {
         0x00bb_1960,
         st::light_setup(Ptr<_>, Ptr<_>, u32, f32)
     ))
-    .pass_common()
-    .goes_by_address(&[0x00b7_0790])
+    .common()
     .main_thread(0)
     .inputs(LEAF_LIGHTS)
     .float_sweep(FLOAT_SWEEP)
@@ -17080,26 +17105,16 @@ fn leaf_light_setup_quiets_signalling_nans() {
         0x00bb_1960,
         st::light_setup(Ptr<_>, Ptr<_>, u32, f32)
     ))
-    .pass_common()
-    .goes_by_address(&[0x00b7_0790])
+    .common()
     .control_words(&[MAIN_THREAD])
+    .float_sweep(0)
     .inputs(&[
         Input::Of(&[0x7f80_0001, 0xff81_2345, ONE]),
         Input::Of(&[0x7fa0_0000, HALF]),
         Input::Of(&[0x7f80_0007, TWO]),
-        Input::Of(&[ONE, TWO]),
         Input::Of(&[2]),
     ])
-    .setup(|e, c| {
-        let words = leaf_lights_words(e, c);
-        // The rows as given (no play folding), so the signalling patterns arrive unchanged.
-        for k in 0..3u32 {
-            set(e, 0x011f_a1f0 + 4 * k, c.word(0));
-            set(e, 0x011f_a180 + 4 * k, c.word(1));
-        }
-        set(e, 0x011f_a200, c.word(2));
-        vec![words[0], words[1], words[2], c.word(3)]
-    })
+    .setup(|e, c| leaf_lights_world(e, c.word(0), c.word(1), c.word(2), TWO, c.word(3)))
     .run()
     .assert_same();
 }
@@ -17120,7 +17135,8 @@ fn camera_rows_words(e: &mut Engine, word: impl Fn(u32) -> u32) -> Vec<u32> {
 #[test]
 fn leaf_camera_rows() {
     Diff::new(entry!(0x00bb_1a90, st::camera_rows()))
-        .pass_common()
+        .common()
+        .float_sweep(0)
         .inputs(&[Input::Of(&[0, ONE, 0x7f80_0001, 0xff80_1234, 0x7fc0_0000])])
         .setup(|e, c| camera_rows_words(e, |k| c.word(0) ^ (k << 13)))
         .run()
@@ -17133,7 +17149,8 @@ fn leaf_camera_rows() {
 #[test]
 fn scene_light() {
     Diff::new(entry!(0x00b7_1360, st::scene_light(u32, Ptr<_>, f32)))
-        .pass_common()
+        .shader_translated()
+        .float_sweep(0)
         .goes_by_address(&[0x00b7_0820, 0x00b7_1130, 0x00b7_0de0])
         .inputs(&[
             Input::Of(&[0x10, 0x11]),
@@ -17196,7 +17213,7 @@ fn the_new_set_ups_keep_the_draws_own_state() {
         |e, c| {
             let p = pass_world(e, &[], 0, c.word(0));
             let property = stage_property(e, true, 0, 0);
-            let state = stage_state(e, property, c.word(1), c.word(1));
+            let state = set_up_state(e, property, c.word(1), c.word(1));
             set(e, 0x011f_f9dc, 2);
             (vec![p.d.w.shader, state], p.d.w.acc)
         },
@@ -17312,7 +17329,7 @@ fn lighting30_stages_read_the_packet() {
             let p = pass_world(e, &[], 0, c.word(0));
             let property = stage_property(e, true, 0, 0);
             let light = stage_light(e, 1, true, 1);
-            let state = stage_state(e, property, u32::MAX, u32::MAX);
+            let state = set_up_state(e, property, u32::MAX, u32::MAX);
             let rendering = e.mem.u32(0x011f_91e0);
             (vec![p.d.w.shader, state], vec![rendering, light])
         },
@@ -17353,60 +17370,92 @@ fn the_cut_takes_the_own_state_in_play() {
         0x010b_a0f8,
         0x010b_c070,
     ];
-    for (unlisted, expect_taken) in [(None, true), (Some(0x0bad_7ab1u32), false)] {
+    let cases: Vec<(u32, bool)> = LISTED
+        .iter()
+        .map(|&class| (class, true))
+        .chain([(0x0bad_7ab1u32, false)])
+        .collect();
+    for (class, expect_taken) in cases {
         let mut e = Engine::new();
         e.map(GROUP_C_PAGES.0, GROUP_C_PAGES.1);
-        let w = world(&mut e);
-        // Each world pass's geometry gets a shader of a listed class (one of them the unlisted class).
-        let mut classes = LISTED.to_vec();
-        if let Some(vt) = unlisted {
-            classes.push(vt);
-        }
-        let mut passes = Vec::new();
-        for (k, class) in classes.iter().enumerate() {
-            let pass = w.passes[k % 4];
-            let geometry = e.mem.alloc(0xc4);
-            let shader = e.mem.alloc(0x40);
-            set(&mut e, shader, *class);
-            set(&mut e, geometry + 0xc0, shader);
-            let fresh = e.mem.alloc(0x40);
-            for o in (0..0x40).step_by(4) {
-                let word = e.mem.u32(pass + o);
-                set(&mut e, fresh + o, word);
-            }
-            set(&mut e, fresh, geometry);
-            passes.push(fresh);
-        }
-        let reason = statics::ownable(&e, &passes);
-        assert_eq!(reason, unlisted, "the first reason");
-        statics::set_forced(false);
-        assert!(capture::begin(&e));
-        // `fill` walks the accumulator's lists; the decision on the passes is the one checked above, made again here
-        // on the world's own lists with each of its passes' shaders given the classes.
-        for (k, pass) in w.passes.iter().enumerate() {
-            let geometry = e.mem.u32(*pass);
+        let d = draw_world(&mut e);
+        // Every pass's geometry draws with a shader of the class (the draw world's passes share geometries).
+        let shader = e.mem.alloc(0x40);
+        set(&mut e, shader, class);
+        let mut passes = d.w.passes.to_vec();
+        passes.push(d.w.skin_pass);
+        for &pass in &passes {
+            let geometry = e.mem.u32(pass);
             if geometry != 0 {
-                let shader = e.mem.alloc(0x40);
-                let class = unlisted.unwrap_or(LISTED[k % LISTED.len()]);
-                set(&mut e, shader, class);
                 set(&mut e, geometry + 0xc0, shader);
             }
         }
+        let reason = statics::ownable(&e, &passes);
+        assert_eq!(
+            reason,
+            (!expect_taken).then_some(class),
+            "the first reason for {class:08x}"
+        );
+        statics::set_forced(false);
+        assert!(capture::begin(&e));
         let before = statics::report();
-        cut::fill(&mut e, w.camera, Ptr::new(w.acc));
+        cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
         let after = statics::report();
         let taken = statics::GLOBAL_BLOCKS
             .iter()
             .all(|&(lo, hi)| capture::owns(&e, lo, hi - lo));
         let _ = capture::end(&mut e);
-        assert_eq!(
-            taken, expect_taken,
-            "the own blocks taken (unlisted {unlisted:x?})"
-        );
+        assert_eq!(taken, expect_taken, "the own blocks taken for {class:08x}");
         if expect_taken {
             assert!(after.0 > before.0, "the cut was not counted as taking it");
         } else {
             assert!(after.1 > before.1, "the cut was not counted as keeping it");
         }
     }
+}
+
+/// The vertex constant setters read the device through the render-state cache (in play the vertex shader's renderer
+/// +0x28 is the cache, whose device word the cut takes with it): with the cache's own bytes scribbled in guest
+/// memory, they reach the device as without.
+#[test]
+fn constant_setters_read_the_device_through_the_packet() {
+    own_state_same(
+        "set_vertex_constant",
+        entry!(
+            0x00e8_9ba0,
+            dconstants::set_constant(Ptr<_>, Ptr<_>, u32, u32) -> bool
+        )
+        .1,
+        &product(&[&[0, 1, 3], &[0, 1]]),
+        |e, c| {
+            let (shader, entry) = constant_entry(e, c.word(0), c.word(1), 1);
+            let renderer = e.mem.u32(0x011f_9508);
+            let cache = e.mem.u32(renderer + 0x8b8);
+            set(e, shader + 0x28, cache);
+            let acc = e.mem.alloc(0x200);
+            (vec![shader, entry, 0, 1], acc)
+        },
+        |_, _, _| {},
+    );
+    own_state_same(
+        "set_vertex_constant_array",
+        entry!(
+            0x00e8_9c70,
+            dconstants::set_constant_array(Ptr<_>, Ptr<_>, u32, u32, u32, u32) -> bool
+        )
+        .1,
+        &[vec![3], vec![4]],
+        |e, c| {
+            let (shader, entry) = constant_entry(e, c.word(0), 0, 0);
+            let renderer = e.mem.u32(0x011f_9508);
+            let cache = e.mem.u32(renderer + 0x8b8);
+            set(e, shader + 0x28, cache);
+            let data = e.mem.alloc(0x400);
+            let indices = e.mem.alloc(8);
+            e.mem.set_u16(indices, 2);
+            let acc = e.mem.alloc(0x200);
+            (vec![shader, entry, data, 1, 4, indices], acc)
+        },
+        |_, _, _| {},
+    );
 }

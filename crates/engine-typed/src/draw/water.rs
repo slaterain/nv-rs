@@ -432,13 +432,17 @@ fn water_pass_index(pass_type: u32) -> u32 {
     }
 }
 
+/// The pass types' flag bits (`00b815e0`, this family's `group_c::pass_flags`).
+const PASS_FLAGS: u32 = 0x00b8_15e0;
+
 // Typed from 00b81d60
 /// The water shader's pass constants (slot 0xfc), `thiscall(shader, pass type)` (the shader not read; not a Ghidra
 /// function: typed from its bytes): the pass flags (`00b815e0`, this family's) of the type's pass index
 /// ([`water_pass_index`]).
 pub fn pass_constants(e: &mut Engine, _this: Ptr, pass_type: u32) {
     let index = water_pass_index(pass_type);
-    typed_call!(super::FAMILY, 0x00b8_15e0, group_c::pass_flags(e, index));
+    // By address as the exe pushes it: the index and a second word (0) the pass flags do not read.
+    e.call(PASS_FLAGS, &args![index, 0u32]);
 }
 
 // Typed from 00b86b80
