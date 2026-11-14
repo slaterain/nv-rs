@@ -317,7 +317,8 @@ fn a_companion_holding_a_weapon_keeps_it() {
     set_container(&mut e, &[(1, w)]);
     set_changes(&mut e, &[]);
     let held = ENTRIES + 0x400;
-    e.mem.set_u32(held + 8, weapon(&mut e, 2, 0, true));
+    let in_hand = weapon(&mut e, 2, 0, true);
+    e.mem.set_u32(held + 8, in_hand);
     e.mem.set_u32(CHAR + 0x68, PROCESS);
     e.mem.set_u32(PROCESS + 0x114, held);
     e.mem.set_u8(PROCESS + 0x28, 1);

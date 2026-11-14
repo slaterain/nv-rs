@@ -13124,7 +13124,10 @@ mod tests {
         jip::test_support::install_into(&mut e);
         // A `Character`: its vtable's slots are the test table's.
         const CHARACTER_VTABLE: u32 = 0x0108_6a6c;
-        map_pages(&mut e, &[0x0108_6000, 0x0108_7000, 0x011d_8000, 0x011d_9000]);
+        map_pages(
+            &mut e,
+            &[0x0108_6000, 0x0108_7000, 0x011d_8000, 0x011d_9000],
+        );
         let slots = e.mem.bytes(ACTOR_TABLE, 0x600);
         e.mem.write(CHARACTER_VTABLE, &slots);
         e.mem.set_u32(actor.addr(), CHARACTER_VTABLE);
