@@ -228,7 +228,7 @@ fn constants_with(e: &mut Engine, this: Ptr, state: Ptr, geometry: u32, world: u
     // The count as an unsigned integer (`FILD` and 2^32 added to a negative one): one rounding to a
     // float.
     #[allow(clippy::cast_precision_loss)]
-    let count = packet::water_word(e, property, 0x130) as f32;
+    let count = packet::water_light_count(e, property) as f32;
     own::set_constant_word(e, LIGHT_COUNT, count.to_bits());
     let mut node = packet::water_lights(e, property);
     let mut cursor = LIGHT_COLOURS; // own: written through set_constant_word
@@ -239,13 +239,13 @@ fn constants_with(e: &mut Engine, this: Ptr, state: Ptr, geometry: u32, world: u
             continue;
         }
         for (k, offset) in (0u32..).zip([0x8cu32, 0x90, 0x94, 0xe0]) {
-            let word = packet::light_word(e, light, offset);
+            let word = packet::light_value_word(e, light, offset);
             own::set_constant_word(e, cursor - 0x80 + 4 * k, word);
         }
-        let scale = f32::from_bits(packet::light_word(e, light, 0xc4));
-        let red = f32::from_bits(packet::light_word(e, light, 0xd4)) * scale;
-        let green = f32::from_bits(packet::light_word(e, light, 0xd8)) * scale;
-        let blue = scale * f32::from_bits(packet::light_word(e, light, 0xdc));
+        let scale = f32::from_bits(packet::light_value_word(e, light, 0xc4));
+        let red = f32::from_bits(packet::light_value_word(e, light, 0xd4)) * scale;
+        let green = f32::from_bits(packet::light_value_word(e, light, 0xd8)) * scale;
+        let blue = scale * f32::from_bits(packet::light_value_word(e, light, 0xdc));
         let factor = f32::from_bits(packet::water_word(e, property, 0xd4));
         for (k, value) in (0u32..).zip([red * factor, factor * green, factor * blue]) {
             own::set_constant_word(e, cursor + 4 * k, value.to_bits());

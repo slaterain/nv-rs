@@ -17,14 +17,10 @@ const UP: u32 = 0x0120_0550;
 const LIGHT_DIRECTION: u32 = 0x0120_0510;
 const LIGHT_AMBIENT: u32 = 0x0120_0520;
 const LIGHT_COLOUR: u32 = 0x0120_0570;
-/// What it calls by address: whether a pass is a shadow pass (`00b630f0`, `cdecl(pass)`), a property's
-/// active non-shadow lights (`00b707d0`, `thiscall(property)`, a count in AX), the point lights' set-up
-/// (`00baa720`, `thiscall(shader, property, inverse, scale, pass)`), the shadow pass's
-/// (`00baa850`, `thiscall(shader, word, transform)`) and the base `SetupGeometry` (`00e807d0`).
+/// What it calls by address: whether a pass is a shadow pass (`00b630f0`, `cdecl(pass)`) and the base
+/// `SetupGeometry` (`00e807d0`). A property's active non-shadow lights (`00b707d0`), the point lights' set-up
+/// (`00baa720`) and the shadow pass's (`00baa850`) are this family's.
 const IS_SHADOW_PASS: u32 = 0x00b6_30f0;
-const ACTIVE_NON_SHADOW_LIGHTS: u32 = 0x00b7_07d0;
-const UPDATE_POINT_LIGHTS: u32 = 0x00ba_a720;
-const SHADOW_SETUP: u32 = 0x00ba_a850;
 const BASE_SETUP_GEOMETRY: u32 = 0x00e8_07d0;
 
 /// The rotation's entries and where the matrix keeps each scaled one (the first entry is stored first,
@@ -115,8 +111,8 @@ pub fn setup_geometry(
         }
         // `BSShaderManager::GetAccumulator` (`00b4f5c0`): a read of `011f95ec`.
         let accumulator = packet::shader_accumulator(e);
-        // The accumulator's shadow scene node (+0x194, read in place: open, piece 4), its light (+0xe0), that light's
-        // light (+0xf8) and its direction and colours: the cut copies the last three for the scene's node 0.
+        // The accumulator's shadow scene node (+0x194), its light (+0xe0), that light's light (+0xf8) and its direction
+        // and colours: the cut copies them all.
         let light = packet::first_light(e, packet::accumulator_lights(e, accumulator));
         if light != 0 {
             let direction = frame + 0x28;
@@ -145,14 +141,17 @@ pub fn setup_geometry(
         }
         let pass = e.global::<u32>(frame + 0x40);
         if e.call(IS_SHADOW_PASS, &args![pass]).bool() {
-            e.call(SHADOW_SETUP, &args![this, word_2, transform]);
-        } else if packet::point_lights_on(e) != 0
-            && e.call(ACTIVE_NON_SHADOW_LIGHTS, &args![property]).u16() != 0
-        {
-            let scale = packet::transform_word(e, transform, 0x30);
-            e.call(
-                UPDATE_POINT_LIGHTS,
-                &args![this, property, inverse, scale, pass],
+            typed_call!(
+                super::FAMILY,
+                0x00ba_a850,
+                shadow_setup(e, Ptr::new(this), word_2, transform)
+            );
+        } else if packet::point_lights_on(e) != 0 && active_lights(e, property) {
+            let scale = f32::from_bits(packet::transform_word(e, transform, 0x30));
+            typed_call!(
+                super::FAMILY,
+                0x00ba_a720,
+                update_point_lights(e, Ptr::new(this), property, inverse, scale, pass)
             );
         }
     });
@@ -161,6 +160,150 @@ pub fn setup_geometry(
         &args![this, geometry, word_2, word_3, word_4, state, word_6, transform, bound],
     )
     .u32()
+}
+
+/// Whether the property has active non-shadow lights (`00b707d0`'s count, of which the exe tests the low 16 bits).
+fn active_lights(e: &mut Engine, property: u32) -> bool {
+    let count: u32 = typed_call!(
+        super::FAMILY,
+        0x00b7_07d0,
+        super::lights::active_non_shadow_light_count(e, Ptr::new(property))
+    );
+    count & 0xffff != 0
+}
+
+/// The point light's constant (`01200540`: the light's position in the grass's space and its range) and the
+/// shader's own light colour (+0x1b0) and position and range (+0x1c0).
+const POINT_LIGHT: u32 = 0x0120_0540;
+const LIGHT_ROW: u32 = 0x1b0;
+const LIGHT_POSITION: u32 = 0x1c0;
+/// The four constant rows the shadow pass's matrix goes to, row by row.
+const SHADOW_ROWS: [u32; 4] = [0x0120_0510, 0x0120_0520, 0x0120_0540, 0x0120_0570];
+/// The camera offset added to the shadow matrix's translation (`011f474c`, three floats; set at load).
+const CAMERA_OFFSET: u32 = 0x011f_474c;
+
+// Typed from 00baa720
+/// `TallGrassShader::UpdatePointLights` (engine map), `thiscall(shader, property, matrix, scale, pass)`: the
+/// property's first active non-shadow light (`00b70600`, the iterator a local) gives, through its light (+0xf8), its
+/// colour (+0xd4, three floats) with 1.0 at the shader's +0x1b0, and its position (+0x8c) through `matrix`
+/// (`D3DXVec3TransformCoord`) with its range (+0xe0; over `scale` unless the pass is a shadow pass) at `01200540`. The
+/// light and its light are read through the packet (the cut copies the lighting property's list and its lights). The
+/// frame is the translation's (0x20 bytes: the iterator +0, the position +4, its image +0x10). Main thread only: `f32`
+/// maths.
+pub fn update_point_lights(
+    e: &mut Engine,
+    this: Ptr,
+    property: u32,
+    matrix: u32,
+    scale: f32,
+    pass: u32,
+) {
+    let base = this.addr();
+    e.with_stack(0x20, |e, frame| {
+        let iterator = frame.addr();
+        let position = iterator + 4;
+        let transformed = iterator + 0x10;
+        e.set_global(iterator, 0u32);
+        let shadow: u32 = typed_call!(
+            super::FAMILY,
+            0x00b7_0600,
+            super::lights::first_active_non_shadow_light(e, Ptr::new(property), Ptr::new(iterator))
+        );
+        let light = packet::pass_light_word(e, shadow, 0xf8);
+        for k in 0..3u32 {
+            let word = packet::light_value_word(e, light, 0xd4 + 4 * k);
+            own::set_shader_global(e, base.wrapping_add(LIGHT_ROW + 4 * k), word);
+        }
+        own::set_shader_global(e, base.wrapping_add(LIGHT_ROW + 0xc), ONE);
+        for k in 0..3u32 {
+            let word = packet::light_value_word(e, light, 0x8c + 4 * k);
+            e.set_global(position + 4 * k, word);
+        }
+        thunks::call_vec3_transform_coord(e, transformed, position, matrix);
+        let mut range = f32::from_bits(packet::light_value_word(e, light, 0xe0));
+        if !e.call(IS_SHADOW_PASS, &args![pass]).bool() {
+            range /= scale;
+        }
+        // own: the targets are written through set_shader_global
+        for k in 0..3u32 {
+            let word = e.global::<u32>(transformed + 4 * k);
+            own::set_shader_global(e, POINT_LIGHT + 4 * k, word);
+        }
+        own::set_shader_global(e, POINT_LIGHT + 0xc, range.to_bits());
+    });
+}
+
+// Typed from 00baa850
+/// The tall grass's shadow pass set-up, `thiscall(shader, word, transform)`: two identity matrices in the frame;
+/// without `word` the first built from `transform` (`00b71a40`: its rotation, translation +0x24 and scale +0x30), its
+/// translation row then plus the camera offset (`011f474c`); times (`D3DXMatrixMultiply`) the rendering pass's first
+/// light's matrix (+0x10, 16 floats), the product transposed (`D3DXMatrixTranspose`) and stored row by row at
+/// `01200510`, `01200520`, `01200540` and `01200570`; that light's light (+0xf8) gives its colour (+0xd4) with 1.0 at
+/// the shader's +0x1b0, its position (+0x8c) and range (+0xe0) at +0x1c0. The pass light and its light are read
+/// through the packet. The frame is the translation's (0x118 bytes: the second matrix +0, the first +0x58, the
+/// light's matrix +0x98, the product +0xd8). Main thread only: `f32` maths.
+pub fn shadow_setup(e: &mut Engine, this: Ptr, word: u32, transform: u32) {
+    let base = this.addr();
+    e.with_stack(0x118, |e, frame| {
+        let second = frame.addr();
+        let first = second + 0x58;
+        let light_matrix = second + 0x98;
+        let product = second + 0xd8;
+        for matrix in [second, first] {
+            for k in 0..16u32 {
+                e.set_global(matrix + 4 * k, if k % 5 == 0 { ONE } else { 0 });
+            }
+        }
+        if word == 0 {
+            let scale = f32::from_bits(packet::transform_word(e, transform, 0x30));
+            typed_call!(
+                shader::FAMILY,
+                0x00b7_1a40,
+                accumulator::make_matrix(
+                    e,
+                    first,
+                    Ptr::new(transform),
+                    Ptr::new(transform.wrapping_add(0x24)),
+                    scale
+                )
+            );
+        }
+        for k in 0..3u32 {
+            let cell = first + 0x30 + 4 * k;
+            let sum = f32::from_bits(e.global::<u32>(CAMERA_OFFSET + 4 * k))
+                + f32::from_bits(e.global::<u32>(cell));
+            e.set_global(cell, sum.to_bits());
+        }
+        let shadow = packet::rendering_first_light(e);
+        for k in 0..16u32 {
+            let word = packet::pass_light_word(e, shadow, 0x10 + 4 * k);
+            e.set_global(light_matrix + 4 * k, word);
+        }
+        thunks::call_matrix_multiply(e, product, first, light_matrix);
+        for k in 0..16u32 {
+            let word = e.global::<u32>(product + 4 * k);
+            e.set_global(second + 4 * k, word);
+        }
+        thunks::call_matrix_transpose(e, second, second);
+        for (row, target) in (0u32..).zip(SHADOW_ROWS) {
+            // own: the targets are written through set_shader_global
+            for column in 0..4u32 {
+                let word = e.global::<u32>(second + 0x10 * row + 4 * column);
+                own::set_shader_global(e, target + 4 * column, word);
+            }
+        }
+        let shadow = packet::rendering_first_light(e);
+        let light = packet::pass_light_word(e, shadow, 0xf8);
+        for k in 0..3u32 {
+            let word = packet::light_value_word(e, light, 0xd4 + 4 * k);
+            own::set_shader_global(e, base.wrapping_add(LIGHT_ROW + 4 * k), word);
+        }
+        own::set_shader_global(e, base.wrapping_add(LIGHT_ROW + 0xc), ONE);
+        for (k, at) in (0u32..).zip([0x8cu32, 0x90, 0x94, 0xe0]) {
+            let word = packet::light_value_word(e, light, at);
+            own::set_shader_global(e, base.wrapping_add(LIGHT_POSITION + 4 * k), word);
+        }
+    });
 }
 
 /// The shader's slots these reach: its `SetupGeometry` (+0x60, [`setup_geometry`] in the exe's

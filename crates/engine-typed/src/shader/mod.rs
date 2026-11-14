@@ -146,6 +146,8 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e8_79e0, state::set_alpha_test_of(Ptr<_>, u32)),
         entry!(0x00e8_8730, state::set_range(Ptr<_>, f32, f32)),
         entry!(0x00e8_8750, state::cull_side_set(Ptr<_>) -> bool),
+        entry!(0x00e8_8690, state::set_vertex_blend(Ptr<_>, u32)),
+        entry!(0x00e8_8ad0, state::set_byte_10f5(Ptr<_>, u8)),
         // The texture stage caches.
         entry!(
             0x00e8_9060,

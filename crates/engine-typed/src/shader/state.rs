@@ -576,6 +576,31 @@ pub fn set_range(e: &mut Engine, this: Ptr<NiDX9RenderState>, first: f32, second
     capture::own_set(e, this, NiDX9RenderState::fRangeDifference, difference);
 }
 
+/// The render state the cache's slot 0x2c sets: `D3DRS_VERTEXBLEND`.
+const VERTEX_BLEND: u32 = 0x97;
+
+// Typed from 00e88690
+/// The cache's slot 0x2c, `thiscall(cache, index)` (a 16-bit index): render state 0x97 (the vertex blend) set through
+/// the cache's own slot 0x68 to the cache's word `index + 3` (from +0xc), unlocked. The skinned and particle draws
+/// call it; the word is the draw's own state with the rest of the cache.
+pub fn set_vertex_blend(e: &mut Engine, this: Ptr<NiDX9RenderState>, index: u32) {
+    let at = elem_addr(
+        this,
+        NiDX9RenderState::unknown_0004,
+        (index & 0xffff) + 2,
+        4,
+    );
+    let value = capture::own_at::<u32>(e, at);
+    cache_render_state(e, this.addr(), VERTEX_BLEND, value, 0, 0);
+}
+
+// Typed from 00e88ad0
+/// The cache's slot 0xf8, `thiscall(cache, value)`: its byte +0x10f5 set to the low byte of `value` (the skinned
+/// draw's bone matrices end with it).
+pub fn set_byte_10f5(e: &mut Engine, this: Ptr<NiDX9RenderState>, value: u8) {
+    capture::own_set(e, this, NiDX9RenderState::ucForceAlphaTestB, value);
+}
+
 // Typed from 00e88750
 /// `thiscall(cache)`: whether the cull side (+0xf4) is set.
 pub fn cull_side_set(e: &mut Engine, this: Ptr<NiDX9RenderState>) -> bool {

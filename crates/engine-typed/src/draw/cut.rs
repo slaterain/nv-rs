@@ -25,6 +25,12 @@
 //! (+0x20 to +0x34, +0x60), and the time values the shaders animate with (`011f940c`, four floats, written before
 //! the next frame's input; `011f94ac`). The lights and the time values are read by the shader family (value
 //! packet B routes those reads).
+//!
+//! The light lists the set-ups walk are copied too: each drawn lighting property's list (+0x60, its nodes and their
+//! lights: the light getters `draw::lights` walk it), the water property's own list (+0x128, its count +0x130), the
+//! scene node's and each accumulator's shadow scene node's light (the accumulator's +0x194, the node's +0xe0) and the
+//! scene node's camera position (+0x1e4). With the own state, each pass light's clip-plane cache (+0x1a8 to +0x208)
+//! is taken as the draw's own: the shadow clip planes' set-ups write it in main's light.
 
 use super::{capture, detach, packet, shapes};
 use crate::shader::layout::BSShaderAccumulator;
@@ -47,11 +53,22 @@ pub(crate) const ACC_DEPTH_PASSES: (u32, u32) = (0x3a, 0x3b);
 /// The accumulator's draw-time settings the draw reads and never writes (set before the cut by whoever set the
 /// accumulator up; copied so that main may change them meanwhile): the radius byte (+0x31), the split, shadow-group
 /// and late-alpha bytes and the decal flag (+0x164 to +0x16c), the batch renderers, the cursor arrays' pointers and
-/// the renderer count (+0x174 to +0x18c), the render mode (+0x19c). The cursor arrays themselves (what +0x17c to
+/// the renderer count (+0x174 to +0x18c), the shadow scene node (+0x194: the tall grass's light and the shadow projection's
+/// test read it), the render mode (+0x19c). The cursor arrays themselves (what +0x17c to
 /// +0x188 point to) are written and read by the world draw alone: they stay in guest memory (the depth-of-field
 /// re-render `00875e40`, their only other user, waits for the draw: piece 8).
-pub(crate) const ACC_SETTINGS: [(u32, u32); 4] =
-    [(0x31, 0x32), (0x164, 0x16d), (0x174, 0x190), (0x19c, 0x1a0)];
+pub(crate) const ACC_SETTINGS: [(u32, u32); 5] = [
+    (0x31, 0x32),
+    (0x164, 0x16d),
+    (0x174, 0x190),
+    (0x194, 0x198),
+    (0x19c, 0x1a0),
+];
+/// An accumulator's shadow scene node (+0x194, in [`ACC_SETTINGS`]); the shader accumulator (`011f95ec`); a shadow scene
+/// node's camera position (+0x1e4, three floats).
+pub(crate) const ACC_SHADOW_NODE: (u32, u32) = (0x194, 0x198);
+const SHADER_ACCUMULATOR: u32 = 0x011f_95ec;
+pub(crate) const SCENE_CAMERA: (u32, u32) = (0x1e4, 0x1f0);
 /// `NiAVObject`'s empty bound (`011f4288`).
 const NULL_BOUND: u32 = 0x011f_4288;
 /// The fog index byte (`011f91c4`), the shadow scene nodes (`011f91c8`) and a node's fog property (+0x134);
@@ -105,6 +122,9 @@ pub fn fill(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     super::statics::count(reason);
     if reason.is_none() {
         super::statics::take(e, acc);
+        for &pass in &passes {
+            own_clip_plane_caches(e, pass);
+        }
     }
     let mut geometries = AddrSet::default();
     let mut nodes = AddrSet::default();
@@ -132,10 +152,17 @@ pub fn take_frame(e: &Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     // The first scene node's light (+0xe0), the camera light the set-ups read (the node itself, the scene's, is set at
     // load: read in place).
     if let Some(scene) = peek(e, SHADOW_SCENE_NODES).filter(|&n| n != 0) {
-        capture::take(e, scene, 0xe0, 0xe4);
-        if let Some(light) = peek(e, scene.wrapping_add(0xe0)) {
-            take_light(e, light, &mut AddrSet::default());
-        }
+        take_node_light(e, scene);
+        // Its camera position (+0x1e4, three floats), which lighting 3.0's set-ups read.
+        capture::take(e, scene, SCENE_CAMERA.0, SCENE_CAMERA.1);
+    }
+    // Each accumulator's shadow scene node's light (+0x194, then the node's +0xe0), as the tall grass's light set-up
+    // reads it: the drawn accumulator's, and the shader accumulator's (`011f95ec`, the set-ups' `GetAccumulator`)
+    // with its +0x194 when it is another.
+    take_shadow_node(e, acc.addr());
+    if let Some(held) = peek(e, SHADER_ACCUMULATOR).filter(|&a| a != 0 && a != acc.addr()) {
+        capture::take(e, held, ACC_SHADOW_NODE.0, ACC_SHADOW_NODE.1);
+        take_shadow_node(e, held);
     }
     let index = u32::from(e.global::<u8>(FOG_INDEX));
     let node = e.global::<u32>(SHADOW_SCENE_NODES.wrapping_add(index.wrapping_mul(4)));
@@ -146,6 +173,32 @@ pub fn take_frame(e: &Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     }
     capture::take(e, GAME_TIMES, 0, 0x10);
     capture::take(e, START_TIME, 0, 4);
+}
+
+/// A shadow scene node's light (+0xe0) and that light's values ([`take_light`]).
+fn take_node_light(e: &Engine, node: u32) {
+    capture::take(e, node, 0xe0, 0xe4);
+    if let Some(light) = peek(e, node.wrapping_add(0xe0)) {
+        take_light(e, light, &mut AddrSet::default());
+    }
+}
+
+/// The light of accumulator `acc`'s shadow scene node (+0x194), when it has one.
+fn take_shadow_node(e: &Engine, acc: u32) {
+    if let Some(node) = peek(e, acc.wrapping_add(ACC_SHADOW_NODE.0)).filter(|&n| n != 0) {
+        take_node_light(e, node);
+    }
+}
+
+/// What the cut takes for the accumulators' shadow scene nodes and the scene's ([`take_frame`]'s part): for the
+/// checks of the set-ups that read them.
+pub fn take_shadow_nodes(e: &Engine, acc: u32) {
+    capture::take(e, acc, ACC_SHADOW_NODE.0, ACC_SHADOW_NODE.1);
+    take_shadow_node(e, acc);
+    if let Some(scene) = peek(e, SHADOW_SCENE_NODES).filter(|&n| n != 0) {
+        take_node_light(e, scene);
+        capture::take(e, scene, SCENE_CAMERA.0, SCENE_CAMERA.1);
+    }
 }
 
 /// What the cut takes for the camera: for the checks of the paths that read it.
@@ -268,6 +321,8 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>) {
 const TALL_GRASS_SHADER: u32 = 0x010b_8980;
 const NO_LIGHTING_SHADER: u32 = 0x010b_b230;
 const LEAF_SHADER: u32 = 0x010b_9190;
+/// The water shader (`010af9e0`, its slot 0x7c `00b864d0`), whose set-up walks the water property's own light list.
+const WATER_SHADER: u32 = 0x010a_f9e0;
 /// A geometry's shader.
 const GEOMETRY_SHADER: u32 = 0xc0;
 
@@ -324,6 +379,7 @@ fn take_group_c_arrays(e: &Engine, geometry: u32, property: u32, data: u32) {
             };
             capture::take(e, array, 0, u32::from(count) << 4);
         }
+        Some(WATER_SHADER) if property != 0 => take_water_lights(e, property),
         Some(LEAF_SHADER) if property != 0 && leaf_slots(e, property) => {
             capture::take(e, property, 0x88, 0x8c);
             let Some(leaf_data) = peek(e, property.wrapping_add(0x88)) else {
@@ -417,6 +473,40 @@ fn take_lights(e: &Engine, pass: u32, nodes: &mut AddrSet<u32>) {
     }
 }
 
+/// The clip-plane caches of a pass's lights (as many as [`take_lights`] reads), taken as the draw's own state: a pass
+/// light's six transformed planes and the byte that says they are made (+0x1a8 to +0x208), which the shadow clip
+/// planes' set-ups (`00b7be00`; lighting 3.0's `00bbef90` through `00b71ad0`) write in main's light and read back.
+/// Only with the rest of the own state (the cut's decision, [`super::statics`]).
+pub fn own_clip_plane_caches(e: &Engine, pass: u32) {
+    let (Some(count), Some(lights)) = (
+        peek_u8(e, pass.wrapping_add(9)),
+        peek(e, pass.wrapping_add(0xc)),
+    ) else {
+        return;
+    };
+    if lights == 0 {
+        return;
+    }
+    for i in 0..u32::from(count).max(2) {
+        match peek(e, lights.wrapping_add(i * 4)) {
+            Some(0) => {}
+            Some(shadow) => own_clip_plane_cache(e, shadow),
+            None => return,
+        }
+    }
+}
+
+/// One pass light's clip-plane cache as the draw's own state ([`own_clip_plane_caches`]): for the checks.
+pub fn own_clip_plane_cache(e: &Engine, shadow: u32) {
+    capture::own(e, shadow, CLIP_PLANE_CACHE.0, CLIP_PLANE_CACHE.1);
+}
+
+/// A pass light's clip-plane cache: six planes (+0x1a8) and the byte that says they are made (+0x208).
+const CLIP_PLANE_CACHE: (u32, u32) = (
+    crate::shader::geometry::CLIP_PLANE_CACHE,
+    crate::shader::geometry::CLIP_PLANE_CACHE + crate::shader::geometry::CLIP_PLANES_MADE + 1,
+);
+
 /// A pass light's (`ShadowSceneLight`) values and its light's, once a light (a null light takes nothing).
 fn take_light(e: &Engine, shadow: u32, nodes: &mut AddrSet<u32>) {
     if shadow == 0 || !nodes.insert(shadow) {
@@ -493,6 +583,30 @@ fn take_light_list(e: &Engine, property: u32, nodes: &mut AddrSet<u32>) {
         node = peek(e, node).unwrap_or(0);
     }
 }
+
+/// The water property's light list (`00b864d0` reads it): its first node (+0x128) and count (+0x130), each node's next
+/// and light words (+0, +8) and each light's world transform and values (its position +0x8c, dimmer +0xc4, colour
+/// +0xd4 and radius +0xe0: the lights are `NiLight`s, not pass lights).
+pub fn take_water_lights(e: &Engine, property: u32) {
+    capture::take(e, property, WATER_LIGHTS.0, WATER_LIGHTS.1);
+    capture::take(e, property, WATER_LIGHT_COUNT.0, WATER_LIGHT_COUNT.1);
+    let mut node = peek(e, property.wrapping_add(WATER_LIGHTS.0)).unwrap_or(0);
+    for _ in 0..LIGHT_LIST_LIMIT {
+        if node == 0 {
+            return;
+        }
+        capture::take(e, node, 0, 0xc);
+        if let Some(light) = peek(e, node.wrapping_add(8)).filter(|&l| l != 0) {
+            capture::take(e, light, WORLD.0, WORLD.1);
+            capture::take(e, light, LIGHT_VALUES.0, LIGHT_VALUES.1);
+        }
+        node = peek(e, node).unwrap_or(0);
+    }
+}
+
+/// The water property's light list head (+0x128) and light count (+0x130).
+const WATER_LIGHTS: (u32, u32) = (0x128, 0x12c);
+const WATER_LIGHT_COUNT: (u32, u32) = (0x130, 0x134);
 
 /// The word at `addr`, `None` when it is not mapped.
 fn peek(e: &Engine, addr: u32) -> Option<u32> {

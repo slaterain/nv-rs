@@ -13,18 +13,18 @@ use crate::draw::{capture, packet};
 use engine_core::prelude::*;
 
 /// The zero colour (4 words, `011a9bd0`).
-const ZERO_COLOUR: u32 = 0x011a_9bd0;
+pub(crate) const ZERO_COLOUR: u32 = 0x011a_9bd0;
 /// The rendering object (`011f91e0`; the first word its geometry, whose +0xa8 is the shader property:
 /// used when its word at +0x1c is 8 to 12).
 const RENDERING_PASS: u32 = 0x011f_91e0;
 /// What the set-up reads: three bytes (the HDR switch `011f941e`, `011f91de`, `011f9427`), the
 /// brightness threshold (`011f947c`), the extra scale (`011f9190`) and the 16-bit pass type
 /// (`011f91e4`).
-const HDR: u32 = 0x011f_941e;
+pub(crate) const HDR: u32 = 0x011f_941e;
 const SKIP_AMBIENT: u32 = 0x011f_91de;
-const NO_EXTRA_SCALE: u32 = 0x011f_9427;
-const THRESHOLD: u32 = 0x011f_947c;
-const EXTRA_SCALE: u32 = 0x011f_9190;
+pub(crate) const NO_EXTRA_SCALE: u32 = 0x011f_9427;
+pub(crate) const THRESHOLD: u32 = 0x011f_947c;
+pub(crate) const EXTRA_SCALE: u32 = 0x011f_9190;
 const PASS_TYPE: u32 = 0x011f_91e4;
 /// The `double`s: two luminance weights (`010784d0` on green, `01026998` on red and added once more
 /// as it is), the brightness offset (`0101ffa0`) and 1.0 (`01012070`).
@@ -45,13 +45,13 @@ const DIMMED_COLOUR: u32 = 0x011f_4998;
 
 /// A float of a pass light's light (its values, the packet's).
 #[inline(always)]
-fn light_value(e: &Engine, data: u32, offset: u32) -> f32 {
+pub(crate) fn light_value(e: &Engine, data: u32, offset: u32) -> f32 {
     f32::from_bits(packet::light_value_word(e, data, offset))
 }
 
 /// The rendering geometry's shader property (`[[011f91e0]] + 0xa8`) when its word at +0x1c is 8 to 12
 /// (signed), else null.
-fn shader_object(e: &Engine) -> u32 {
+pub(crate) fn shader_object(e: &Engine) -> u32 {
     let geometry = packet::pass_geometry(e, capture::own_at::<u32>(e, RENDERING_PASS));
     let object = packet::shader_property(e, geometry);
     if object == 0 {
@@ -70,7 +70,7 @@ fn shader_object(e: &Engine) -> u32 {
 /// component plus the offset is scaled by threshold / luminance (1.0 when the luminance is above the
 /// threshold), each step in the exe's order.
 #[allow(clippy::neg_cmp_op_on_partial_ord)] // NaN-aware as the exe: not above, including unordered.
-fn brighten(e: &Engine, colour: [f32; 3], threshold: f32) -> Option<[f32; 3]> {
+pub(crate) fn brighten(e: &Engine, colour: [f32; 3], threshold: f32) -> Option<[f32; 3]> {
     if !(threshold > 0.0) {
         return None;
     }
@@ -97,7 +97,7 @@ fn brighten(e: &Engine, colour: [f32; 3], threshold: f32) -> Option<[f32; 3]> {
 
 /// The light's strength (the float at +0xc4 of its data), made 1.0 when above 1.0 unless the HDR
 /// switch is set.
-fn capped_strength(e: &Engine, data: u32) -> f32 {
+pub(crate) fn capped_strength(e: &Engine, data: u32) -> f32 {
     let strength = light_value(e, data, 0xc4);
     if e.global::<u8>(HDR) == 0 && f64::from(strength) > e.global::<f64>(ONE) {
         // own: main's frame value, value packet B
@@ -281,6 +281,6 @@ pub fn light_setup(e: &mut Engine, index: u32, light: Ptr, scale: f32) {
 
 /// A loop's small index as a word.
 #[allow(clippy::cast_possible_truncation)]
-fn idx(i: usize) -> u32 {
+pub(crate) fn idx(i: usize) -> u32 {
     i as u32
 }
