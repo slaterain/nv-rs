@@ -29,6 +29,12 @@
 //! attack damage +0x110 (the component at +0x10C, `0047FF50` stores +4 of it; `005FA200` calls it
 //! on +0x10C), the model list +0x114 (`TESCreature::Save` `005F7C20`, its names a list at +4 of
 //! it), the hand reach `RNAM` +0x130 (same save).
+//!
+//! Array walks sized by indexes or a count read from the game's memory (the process lists, a
+//! combat group's targets and members, an actor's target and ally arrays) go through at most the
+//! crate's list bound ([`list_step`]: [`nvse::invref::MAX_LIST_NODES`] entries, where real arrays
+//! hold a few hundred): a count word a bad save or mod made huge ends the walk there with the
+//! list guard row, as a list that runs back into itself does. The element addresses wrap.
 
 use super::arrays::{create_array, Element};
 use super::extra;
@@ -39,7 +45,7 @@ use super::ln_fn_actor::actor_base;
 use super::ln_fn_inventory::container_of;
 use super::{
     buffer_arg, cvttss2si, full_name, heap_alloc, heap_free, is_actor, list_items, list_prepend,
-    list_unlink, ref_id, set_form_result, string_set, type_of, Conditions, Handlers,
+    list_step, list_unlink, ref_id, set_form_result, string_set, type_of, Conditions, Handlers,
 };
 use crate::utility::str_compare_ci;
 use engine_core::prelude::*;
@@ -578,10 +584,18 @@ fn pick_from_list(e: &mut Engine, w: &[u32]) -> Ret {
 /// removed (its text freed, its node unlinked) for a negative `action`; the answer is then
 /// `action <= 0`. No match: false for `action <= 0`, else a copy of the path (the game's heap,
 /// its length plus one) put first, true.
+///
+/// A list that runs back into itself takes the crate's bound ([`list_step`]): with the list
+/// guard row the walk ends there as at the list's end, but with nothing added (false); JIP would
+/// walk it for ever.
 fn model_list_action(e: &mut Engine, creature: u32, path: &[u8], action: i8) -> bool {
     let head = Ptr::<ListNode>::new(creature + CREATURE_MODELS);
     let (mut node, mut prev) = (head, Ptr::<ListNode>::NULL);
+    let mut walked = 0usize;
     loop {
+        if !list_step(e, &mut walked) {
+            return false;
+        }
         let text = e.get(node, ListNode::data);
         if text != 0 && str_compare_ci(&nvse::table::guest_text(e, text), path).0 == 0 {
             if action < 0 {
@@ -736,12 +750,15 @@ fn get_actors_by_processing_level(e: &mut Engine, w: &[u32]) -> Ret {
     );
     let first = e
         .mem
-        .u32(PROCESS_MANAGER + ProcessManager::beginOffsets.off + 4 * lvl);
+        .u32(PROCESS_MANAGER + ProcessManager::beginOffsets.off + lvl.wrapping_mul(4));
     let past = e
         .mem
-        .u32(PROCESS_MANAGER + ProcessManager::endOffsets.off + 4 * lvl);
+        .u32(PROCESS_MANAGER + ProcessManager::endOffsets.off + lvl.wrapping_mul(4));
+    // Indexes read from the game's memory: at most the crate's list bound (the module's notes).
+    let mut walked = 0usize;
     let actors: Vec<u32> = (first..past)
-        .map(|i| e.mem.u32(data.wrapping_add(4 * i)))
+        .take_while(|_| list_step(e, &mut walked))
+        .map(|i| e.mem.u32(data.wrapping_add(i.wrapping_mul(4))))
         .filter(|&actor| is_actor(e, actor))
         .collect();
     array_result(e, &a, &actors);
@@ -834,7 +851,11 @@ fn combat_actors(e: &mut Engine, a: &CommandArgs, allies: bool) {
             (GROUP_TARGETS, GROUP_TARGET_COUNT, TARGET_SIZE)
         };
         let (data, count) = (e.mem.u32(group + data), e.mem.u32(group + count));
+        let mut walked = 0usize;
         for i in 0..count {
+            if !list_step(e, &mut walked) {
+                break;
+            }
             let actor = e.mem.u32(data.wrapping_add(i.wrapping_mul(size)));
             if actor != 0 && (!allies || actor != this) {
                 found.push(actor);
@@ -858,8 +879,12 @@ fn combat_actors(e: &mut Engine, a: &CommandArgs, allies: bool) {
         if data == 0 {
             return;
         }
+        let mut walked = 0usize;
         for i in 0..count {
-            let actor = e.mem.u32(data.wrapping_add(4 * i));
+            if !list_step(e, &mut walked) {
+                break;
+            }
+            let actor = e.mem.u32(data.wrapping_add(i.wrapping_mul(4)));
             if actor != 0 && actor != this {
                 found.push(actor);
             }
@@ -903,8 +928,12 @@ fn detection_actors(e: &mut Engine, a: &CommandArgs, detecting: bool) {
             .mem
             .u32(PROCESS_MANAGER + ProcessManager::beginOffsets.off);
         let past = e.mem.u32(PROCESS_MANAGER + ProcessManager::endOffsets.off);
+        let mut walked = 0usize;
         for i in first..past {
-            let target = e.mem.u32(data.wrapping_add(4 * i));
+            if !list_step(e, &mut walked) {
+                break;
+            }
+            let target = e.mem.u32(data.wrapping_add(i.wrapping_mul(4)));
             if target == 0 || !is_actor(e, target) || dead(e, target) {
                 continue;
             }
@@ -1004,18 +1033,23 @@ fn is_in_combat_with(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let target = read.form(0);
+    let mut walked = 0usize;
     let yes = if !is_player(e, a.this_obj) {
         let arr = e.mem.u32(a.this_obj + COMBAT_TARGETS);
         arr != 0 && {
             let (data, count) = (e.mem.u32(arr + 4), e.mem.u32(arr + 8));
-            (0..count).any(|i| e.mem.u32(data.wrapping_add(4 * i)) == target)
+            (0..count)
+                .take_while(|_| list_step(e, &mut walked))
+                .any(|i| e.mem.u32(data.wrapping_add(i.wrapping_mul(4))) == target)
         }
     } else {
         let group = e.mem.u32(e.mem.u32(PLAYER) + PLAYER_COMBAT_GROUP);
         group != 0 && {
             let data = e.mem.u32(group + GROUP_TARGETS);
             let count = e.mem.u32(group + GROUP_TARGET_COUNT);
-            (0..count).any(|i| e.mem.u32(data.wrapping_add(i.wrapping_mul(TARGET_SIZE))) == target)
+            (0..count)
+                .take_while(|_| list_step(e, &mut walked))
+                .any(|i| e.mem.u32(data.wrapping_add(i.wrapping_mul(TARGET_SIZE))) == target)
         }
     };
     if yes {
@@ -1450,7 +1484,9 @@ fn get_perk_modifier(e: &mut Engine, w: &[u32]) -> Ret {
 // AdjustDmgByDifficulty (asm).
 /// A middle-high or high process's last hit: its health damage times the difficulty's
 /// multiplier (the player's row when the player was hit, else the other row), as the x87 does it
-/// (`fld`, `fmul` of two floats: exact in a double).
+/// (`fld`, `fmul` of two floats) at the running thread's precision, as `flt_to_str` follows it:
+/// on the game's main thread (24-bit precision) the product rounded to a float, the exact double
+/// under 53- or 64-bit precision.
 fn get_hit_health_damage(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let p = process(e, a.this_obj);
@@ -1469,7 +1505,8 @@ fn get_hit_health_damage(e: &mut Engine, w: &[u32]) -> Ret {
         let setting = e.mem.u32(row.wrapping_add(difficulty.wrapping_mul(4)));
         let mult = e.mem.f32(setting + 4);
         let damage = e.mem.f32(hit + HIT_HEALTH);
-        a.set_result(e, f64::from(damage) * f64::from(mult));
+        let value = engine_core::x87::x87_mul(f64::from(damage), f64::from(mult));
+        a.set_result(e, value);
     }
     handled(true)
 }

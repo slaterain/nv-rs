@@ -421,6 +421,68 @@ fn creature_models() {
     );
 }
 
+/// `ModelListAction` removing the first model (no node before it: `RemoveMe`) and the only one,
+/// and adding a path whose block is not a node's size.
+#[test]
+fn creature_models_first_and_only() {
+    let mut e = setup();
+    models(&mut e, &[b"first.nif", b"Second.nif", b"third.nif"]);
+    // The first: its text freed, the second node's item and link moved into the first node and
+    // the second node freed.
+    assert_eq!(call(&mut e, 0x26ea, &[s(b"FIRST.nif"), n(0), r(2)]).1, 1.0);
+    assert_eq!(freed(), vec![TEXTS, NODES + 0x800]);
+    assert_eq!(e.mem.u32(CREA + 0x118), TEXTS + 0x100);
+    assert_eq!(e.mem.u32(CREA + 0x11c), NODES + 0x808);
+    let id = call(&mut e, 0x26ec, &[r(2)]).1;
+    assert_eq!(
+        array_data(&e, id),
+        vec![
+            Data::Str(b"Second.nif".to_vec()),
+            Data::Str(b"third.nif".to_vec())
+        ]
+    );
+    // A one-entry list: the text freed, the first node emptied, no node freed.
+    let mut e = setup();
+    models(&mut e, &[b"only.nif"]);
+    assert_eq!(call(&mut e, 0x26ea, &[s(b"only.nif"), n(0), r(2)]).1, 1.0);
+    assert_eq!(freed(), vec![TEXTS]);
+    assert_eq!((e.mem.u32(CREA + 0x118), e.mem.u32(CREA + 0x11c)), (0, 0));
+    assert_eq!(call(&mut e, 0x26ec, &[r(2)]).1, 0.0, "empty");
+    // Adding to the emptied list fills the first node: the copy alone (its length plus one).
+    let copy = heap_next(&e);
+    assert_eq!(call(&mut e, 0x26ea, &[s(b"Longer.nif"), n(1), r(2)]).1, 1.0);
+    assert_eq!(allocations(), vec![11]);
+    assert_eq!(e.mem.u32(CREA + 0x118), copy);
+    assert_eq!(text_at(&e, CREA + 0x118), b"Longer.nif");
+    // Adding again: the copy (11 bytes) and a node (8) for the old first.
+    assert_eq!(call(&mut e, 0x26ea, &[s(b"abc.nif2"), n(1), r(2)]).1, 1.0);
+    assert_eq!(allocations(), vec![11, 9, 8]);
+    assert_eq!(
+        e.mem.u32(e.mem.u32(CREA + 0x11c)),
+        copy,
+        "the old first moved"
+    );
+}
+
+/// A model list from a bad save that runs back into itself: with the list guard row the walk
+/// ends as at the list's end, but nothing is added (false).
+#[test]
+fn creature_models_with_a_list_that_loops_back() {
+    let mut e = setup();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
+    models(&mut e, &[b"a.nif", b"b.nif"]);
+    e.mem.set_u32(NODES + 0x800 + 4, CREA + 0x118);
+    assert_eq!(call(&mut e, 0x26eb, &[s(b"c.nif"), r(2)]).1, 0.0);
+    assert_eq!(call(&mut e, 0x26ea, &[s(b"c.nif"), n(1), r(2)]).1, 0.0);
+    assert_eq!(call(&mut e, 0x26ea, &[s(b"c.nif"), n(0), r(2)]).1, 0.0);
+    assert!(allocations().is_empty() && freed().is_empty());
+    assert_eq!(
+        call(&mut e, 0x26eb, &[s(b"B.nif"), r(2)]).1,
+        1.0,
+        "still found"
+    );
+}
+
 #[test]
 fn base_actor_values() {
     let mut e = setup();
@@ -458,6 +520,11 @@ fn processes() {
     e.mem.set_f32(PROC + 0x3c4, 0.375);
     assert_eq!(call_on(&mut e, 0x273b, ACTOR, &[]).1, 0.0, "level 3");
     assert_eq!(eval(&mut e, 0x273b, ACTOR), 0.0);
+    for lvl in [1, 2] {
+        e.mem.set_u32(PROC + 0x28, lvl);
+        assert_eq!(call_on(&mut e, 0x273b, ACTOR, &[]).1, 0.0, "level {lvl}");
+        assert_eq!(eval(&mut e, 0x273b, ACTOR), 0.0, "level {lvl}");
+    }
     e.mem.set_u32(PROC + 0x28, 0);
     assert_eq!(call_on(&mut e, 0x273b, ACTOR, &[]).1, 0.375);
     assert_eq!(eval(&mut e, 0x273b, ACTOR), 0.375);
@@ -531,6 +598,11 @@ fn actors_by_processing_level() {
     let id = call(&mut e, 0x2735, &[n(1)]).1;
     assert_eq!(forms_of(&e, id), vec![0x200, 0x202]);
     assert_eq!(call(&mut e, 0x2735, &[n(2)]).1, 0.0, "none: no array");
+    // Level 3 (the last one): its begin (+0x20) and end (+0x30) slots, 3..4.
+    e.mem.set_u32(PM + 0x14 + 12, 3);
+    e.mem.set_u32(PM + 0x24 + 12, 4);
+    let id = call(&mut e, 0x2735, &[n(3)]).1;
+    assert_eq!(forms_of(&e, id), vec![0x202]);
     e.mem.set_u32(PM + 0x14 + 16, 0);
     e.mem.set_u32(PM + 0x24 + 16, 4);
     assert_eq!(call(&mut e, 0x2735, &[n(4)]).1, 0.0, "above 3");
@@ -995,10 +1067,24 @@ fn hit_health_damage() {
     e.mem.set_u32(PROC + 0x240, BLOCK);
     e.mem.set_f32(BLOCK + 0x14, 10.1);
     e.mem.set_u32(BLOCK + 4, OTHER);
-    assert_eq!(
-        call_on(&mut e, 0x2802, ACTOR, &[]).1,
-        f64::from(10.1f32) * 1.75
-    );
+    // The x87 `fmul` at the running precision: the exact double under 53-bit (every thread's
+    // start) and 64-bit precision, the product rounded to a float under 24-bit (the main thread).
+    let exact = f64::from(10.1f32) * 1.75;
+    let single = f64::from(10.1f32 * 1.75f32);
+    assert_ne!(exact, single, "the two precisions differ here");
+    assert_eq!(call_on(&mut e, 0x2802, ACTOR, &[]).1, exact);
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            engine_core::x87::set_control_word(engine_core::x87::DEFAULT_CONTROL_WORD);
+        }
+    }
+    let _restore = Restore;
+    engine_core::x87::set_control_word(0x007f);
+    assert_eq!(call_on(&mut e, 0x2802, ACTOR, &[]).1, single, "24-bit");
+    engine_core::x87::set_control_word(0x037f);
+    assert_eq!(call_on(&mut e, 0x2802, ACTOR, &[]).1, exact, "64-bit");
+    engine_core::x87::set_control_word(engine_core::x87::DEFAULT_CONTROL_WORD);
     e.mem.set_u32(BLOCK + 4, PLAYER_REF);
     assert_eq!(
         call_on(&mut e, 0x2802, ACTOR, &[]).1,
@@ -1060,4 +1146,104 @@ fn pick_from_a_list() {
     call_on(&mut e, 0x26d9, ACTOR, &[r(4)]);
     call_on(&mut e, 0x26d9, 0, &[r(4)]);
     assert_eq!(form_result(&e), 0);
+}
+
+/// Container lists from a bad save that run back into themselves (the base container's, the
+/// reference's changes and an entry's extra data lists): with the list guard row each walk of
+/// `GetFormCount` and `HasExtraLeveledItem` ends as at the list's end.
+#[test]
+fn pick_from_a_list_with_lists_that_loop_back() {
+    let mut e = setup();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
+    node(&mut e, LIST + 0x18, MISC, 0);
+    e.mem.set_u32(NPC, BASE_VT);
+    e.mem.set_u32(BASE_VT + 0xf8, 0x008d_0360);
+    let (o1, o2) = (BLOCK, BLOCK + 0x10);
+    e.mem.set_u32(o1, 2);
+    e.mem.set_u32(o1 + 4, MISC);
+    e.mem.set_u32(o2, 5);
+    e.mem.set_u32(o2 + 4, ITEM1);
+    // The base container: [MISC x2, ITEM1 x5]. The changes: one entry, for MISC (-1), whose
+    // extra data lists loop and hold no leveled item: 2 - 1 = 1, picked.
+    node(&mut e, NPC + 0x68, o1, NODES + 0x20);
+    node(&mut e, NODES + 0x20, o2, 0);
+    let (data, en) = (BLOCK + 0x100, BLOCK + 0x140);
+    put_extra(&mut e, ACTOR + 0x44, X1, 0x15, data);
+    e.mem.set_u32(data, NODES + 0x40);
+    node(&mut e, NODES + 0x40, en, 0);
+    e.mem.set_u32(en, NODES + 0x60);
+    e.mem.set_u32(en + 4, (-1i32) as u32);
+    e.mem.set_u32(en + 8, MISC);
+    node(&mut e, NODES + 0x60, 0, NODES + 0x68);
+    node(&mut e, NODES + 0x68, 0, NODES + 0x60);
+    call_on(&mut e, 0x26d9, ACTOR, &[r(4)]);
+    assert_eq!(form_result(&e), 0x10b, "the extra data lists loop");
+    // The changes list loops without an entry for MISC: the base container's 2.
+    e.mem.set_u32(en + 8, ITEM1);
+    node(&mut e, NODES + 0x40, en, NODES + 0x48);
+    node(&mut e, NODES + 0x48, 0, NODES + 0x40);
+    e.mem.set_u32(RESULT, 0);
+    call_on(&mut e, 0x26d9, ACTOR, &[r(4)]);
+    assert_eq!(form_result(&e), 0x10b, "the changes list loops");
+    // The base container's list loops without MISC: 0, nothing picked.
+    node(&mut e, NPC + 0x68, o2, NODES + 0x20);
+    node(&mut e, NODES + 0x20, 0, NPC + 0x68);
+    e.mem.set_u32(RESULT, 0);
+    call_on(&mut e, 0x26d9, ACTOR, &[r(4)]);
+    assert_eq!(form_result(&e), 0, "the base container's list loops");
+}
+
+/// Arrays sized by a count word a bad save made huge (the process lists, an actor's target and
+/// ally arrays, the player's combat group): with the list guard row each walk ends after the
+/// crate's list bound, `MAX_LIST_NODES` entries; the entry just past it is not reached.
+#[test]
+fn array_walks_with_a_huge_count() {
+    let mut e = setup();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
+    const BIG: u32 = 0x2000_0000;
+    let max = nvse::invref::MAX_LIST_NODES as u32;
+    e.map(BIG, 0x0690_0000);
+    // Words: ACTOR as the last entry within the bound, OTHER just past it.
+    e.mem.set_u32(BIG + 4 * (max - 1), ACTOR);
+    e.mem.set_u32(BIG + 4 * max, OTHER);
+    // The process lists: level 0 from 0 to the top.
+    e.mem.set_u32(PM + 8, BIG);
+    e.mem.set_u32(PM + 0x14, 0);
+    e.mem.set_u32(PM + 0x24, u32::MAX);
+    let id = call(&mut e, 0x2735, &[n(0)]).1;
+    assert_eq!(forms_of(&e, id), vec![0x200]);
+    // The player's detecting walk of the process lists.
+    detection(&mut e, PROC, PLAYER_REF, BLOCK + 0xc0, 1, false);
+    let id = call_on(&mut e, 0x2745, PLAYER_REF, &[]).1;
+    assert_eq!(forms_of(&e, id), vec![0x200]);
+    // An actor's target and ally arrays.
+    e.mem.set_u32(BLOCK + 4, BIG);
+    e.mem.set_u32(BLOCK + 8, u32::MAX);
+    e.mem.set_u32(CR_ACTOR + 0x12c, BLOCK);
+    e.mem.set_u32(CR_ACTOR + 0x130, BLOCK);
+    let id = call_on(&mut e, 0x2742, CR_ACTOR, &[]).1;
+    assert_eq!(forms_of(&e, id), vec![0x200]);
+    let id = call_on(&mut e, 0x2743, CR_ACTOR, &[]).1;
+    assert_eq!(forms_of(&e, id), vec![0x200]);
+    set_ref(&mut e, 12, ACTOR);
+    assert_eq!(call_on(&mut e, 0x2761, CR_ACTOR, &[r(12)]).1, 1.0);
+    assert_eq!(call_on(&mut e, 0x2761, CR_ACTOR, &[r(6)]).1, 0.0, "past");
+    // The player's combat group: targets 0x68 bytes each, members 0x14 bytes each (the member
+    // walk also meets ACTOR's word above, at 0x14 * 209715).
+    e.mem.set_u32(BIG + 0x68 * (max - 1), OTHER2);
+    e.mem.set_u32(BIG + 0x68 * max, OTHER);
+    e.mem.set_u32(BIG + 0x14 * (max - 1), OTHER);
+    e.mem.set_u32(BIG + 0x14 * max, PLAIN_REF);
+    e.mem.set_u32(PLAYER_REF + 0xd64, GROUP);
+    for at in [0xc, 0x1c] {
+        e.mem.set_u32(GROUP + at, BIG);
+        e.mem.set_u32(GROUP + at + 4, u32::MAX);
+    }
+    let id = call_on(&mut e, 0x2742, PLAYER_REF, &[]).1;
+    assert_eq!(forms_of(&e, id), vec![0x203]);
+    let id = call_on(&mut e, 0x2743, PLAYER_REF, &[]).1;
+    assert_eq!(forms_of(&e, id), vec![0x200, 0x202]);
+    set_ref(&mut e, 13, OTHER2);
+    assert_eq!(call_on(&mut e, 0x2761, PLAYER_REF, &[r(13)]).1, 1.0);
+    assert_eq!(call_on(&mut e, 0x2761, PLAYER_REF, &[r(6)]).1, 0.0, "past");
 }

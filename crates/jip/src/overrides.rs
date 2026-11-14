@@ -583,9 +583,11 @@ pub(crate) fn has_extra_leveled_item(e: &Engine, entry: u32) -> bool {
         ContChangesEntry::extendData,
     );
     // `extendData` is the list's first node itself (`tList<ExtraDataList>*`: data at +0, next at
-    // +4): JIP's asm loads it (`mov eax, [ecx]`) and walks from there.
+    // +4): JIP's asm loads it (`mov eax, [ecx]`) and walks from there. A list that runs back into
+    // itself ends at the crate's bound (`list_step`, the list guard row) as at its end: false.
     let mut node = lists;
-    while node != 0 {
+    let mut walked = 0usize;
+    while node != 0 && nvse::invref::list_step(e, &mut walked) {
         let n = Ptr::<ListNode>::new(node);
         let list = e.get(n, ListNode::data);
         node = e.get(n, ListNode::next);
@@ -599,11 +601,13 @@ pub(crate) fn has_extra_leveled_item(e: &Engine, entry: u32) -> bool {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: GetFormCount.
 /// A form's count: the base container's entries summed, then the reference's changes entry,
 /// added to it (none below 0) unless the entry holds a leveled item or the base has none, when it
-/// is the entry's alone (none below 0).
+/// is the entry's alone (none below 0). A list that runs back into itself ends at the crate's
+/// bound (`list_step`, the list guard row) as at its end.
 pub(crate) fn form_count(e: &Engine, container_list: u32, changes: u32, form: u32) -> i32 {
     let mut count: i32 = 0;
     let mut node = container_list;
-    while node != 0 {
+    let mut walked = 0usize;
+    while node != 0 && nvse::invref::list_step(e, &mut walked) {
         let n = Ptr::<ListNode>::new(node);
         let object = e.get(n, ListNode::data);
         node = e.get(n, ListNode::next);
@@ -615,7 +619,8 @@ pub(crate) fn form_count(e: &Engine, container_list: u32, changes: u32, form: u3
         }
     }
     let mut node = changes;
-    while node != 0 {
+    let mut walked = 0usize;
+    while node != 0 && nvse::invref::list_step(e, &mut walked) {
         let n = Ptr::<ListNode>::new(node);
         let entry = e.get(n, ListNode::data);
         node = e.get(n, ListNode::next);
