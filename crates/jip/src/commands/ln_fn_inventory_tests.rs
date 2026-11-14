@@ -382,10 +382,7 @@ fn the_items_first_two_lists_left_empty() {
     put_extra(&mut e, L4, XH4, 0x4a, 4);
     call(&mut e, 0x2319, &[n(5), r(2), z(0.5)]);
     assert_eq!(freed(), vec![L3, NODES + 0x50, L4]);
-    assert_eq!(
-        (e.mem.u32(NODES + 0x30), e.mem.u32(NODES + 0x34)),
-        (0, 0)
-    );
+    assert_eq!((e.mem.u32(NODES + 0x30), e.mem.u32(NODES + 0x34)), (0, 0));
     assert!(allocations().is_empty());
 }
 
