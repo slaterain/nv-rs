@@ -9,8 +9,8 @@
 //! `CCCSMS` read the forms and the mod index `CCCOnLoad` sets, so they come with it.
 //! `MoveToPosStr` moves the reference through JIP's own position marker (`s_tempPosMarker`, a
 //! reference JIP creates at its start, and the game's `MoveToMarker`): JIP's start-up objects are
-//! not built. `CCCSetEquipped` is the core track's (step 3.5d: the container menu, the combat
-//! style's restrictions and JIP's always-on `GetCannotWear` patch).
+//! not built. `CCCSetEquipped` is the core track's, built in `equip_hooks.rs` (step 3.5d: the
+//! container menu, the combat style's restrictions and JIP's always-on `GetCannotWear` patch).
 
 use super::{assign_string, extra, Handlers};
 use crate::Jip;
