@@ -455,7 +455,7 @@ fn mask_for_slot(slot: u32) -> u32 {
 }
 
 /// The reference's container changes data's entry list (`data->objList`), 0 for none.
-fn changes_list(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn changes_list(e: &mut Engine, refr: u32) -> u32 {
     match extra::refr_extra(e, refr, kind::CONTAINER_CHANGES) {
         0 => 0,
         x => match e.mem.u32(x + EXTRA_WORD) {
@@ -477,7 +477,7 @@ fn items_at(e: &Engine, list: u32) -> Vec<u32> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
 // ContChangesEntry::GetEquippedExtra (asm).
 /// The entry's first extra data list with the `ExtraWorn` presence bit, 0 for none.
-fn equipped_extra(e: &Engine, entry: u32) -> u32 {
+pub(crate) fn equipped_extra(e: &Engine, entry: u32) -> u32 {
     items_at(e, e.mem.u32(entry + ENTRY_EXTEND))
         .into_iter()
         .find(|&x| x != 0 && extra::has_type(e, x, EXTRA_WORN))

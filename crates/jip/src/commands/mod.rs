@@ -11,6 +11,7 @@
 pub mod arrays;
 pub mod extra;
 pub mod forms;
+pub mod jip_fn_actor_p2;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
 pub mod jip_fn_armor;
@@ -88,6 +89,7 @@ pub type Conditions = &'static [(u32, AbiFn, AbiFn)];
 
 /// Every module's conditions, one line per JIP source file that has any.
 pub const ALL_CONDITIONS: &[Conditions] = &[
+    jip_fn_actor_p2::CONDITIONS,
     jip_fn_effect::CONDITIONS,
     ln_fn_math::CONDITIONS,
     ln_fn_misc_ref::CONDITIONS,
@@ -107,6 +109,7 @@ pub const ALL_CONDITIONS_ONLY: &[ConditionsOnly] = &[jip_fn_aux_variable::CONDIT
 
 /// Every module's list, one line per JIP source file.
 pub const ALL: &[Handlers] = &[
+    jip_fn_actor_p2::COMMANDS,
     jip_fn_ammo::COMMANDS,
     jip_fn_aux_variable::COMMANDS,
     jip_fn_ammo_effect::COMMANDS,
