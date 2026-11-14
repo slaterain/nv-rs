@@ -4881,6 +4881,7 @@ mod tests_code_pages {
                 disk("."),
                 disk(".."),
                 disk("plain.txt"),
+                disk("\u{c9}u.txt"),
                 disk("\u{142}odz.txt"),
                 disk("\u{416}uk.txt"),
             ],
@@ -4889,12 +4890,14 @@ mod tests_code_pages {
         .iter()
         .map(|f| ansi_bytes(f.name()))
         .collect();
-        let want: [&[u8]; 7] = [
+        // été (upper-cased ÉTÉ) comes before the player's Éu: NTFS folds é to É.
+        let want: [&[u8]; 8] = [
             b".",
             b"..",
             b"plain.txt",
             b"Zeta",
             b"\xe9t\xe9.txt",
+            b"\xc9u.txt",
             b"lodz.txt",
             b"?uk.txt",
         ];
@@ -5172,6 +5175,17 @@ mod tests_code_pages {
                 state!(e).disk.files.is_empty(),
                 "not taken into the run empty"
             );
+            // CopyFileA and MoveFileA of it answer the same (Windows' own fail with 32 too: the
+            // source cannot be opened, or renamed while held).
+            let mut to = folder_bytes(&dir);
+            to.extend_from_slice(b"\\moved.txt");
+            let target = e.mem.alloc(0x400);
+            e.mem.set_cstr(target, &to);
+            assert_eq!(copy_file_a(&mut e, Ptr::new(at), Ptr::new(target), 0), 0);
+            assert_eq!(e.kernel.last_error, ERROR_SHARING_VIOLATION);
+            assert_eq!(move_file_a(&mut e, Ptr::new(at), Ptr::new(target)), 0);
+            assert_eq!(e.kernel.last_error, ERROR_SHARING_VIOLATION);
+            assert!(state!(e).disk.files.is_empty() && state!(e).disk.deleted.is_empty());
             drop(holder);
             assert_eq!(read_named(&mut e, &dir, b"held.txt"), Ok(b"held".to_vec()));
         }
