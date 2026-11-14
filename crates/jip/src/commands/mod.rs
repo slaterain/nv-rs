@@ -90,6 +90,7 @@ pub const ALL_CONDITIONS: &[Conditions] = &[
     ln_fn_actor::CONDITIONS,
     ln_fn_gamepad::CONDITIONS,
     jip_fn_ccc::CONDITIONS,
+    jip_fn_weapon::CONDITIONS,
 ];
 
 /// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
@@ -732,6 +733,7 @@ mod tests {
             "ln_fn_actor",
             "ln_fn_gamepad",
             "jip_fn_ccc",
+            "jip_fn_weapon",
         ]) {
             for &(opcode, _, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
@@ -740,7 +742,7 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS.len(), 6);
+        assert_eq!(ALL_CONDITIONS.len(), 7);
         for (list, file) in ALL_CONDITIONS_ONLY.iter().zip(["jip_fn_aux_variable"]) {
             for &(opcode, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
