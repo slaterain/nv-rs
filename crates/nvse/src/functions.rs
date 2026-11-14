@@ -1011,7 +1011,7 @@ pub static COMMANDS: &[Command] = &[
         opcode: OP_CALL_FUNCTION_COND,
         name: "CallFunctionCond",
         short: "",
-        help: "calls every UDF in a formlist and returns the result of the last one.",
+        help: "\"calls every UDF in a formlist and returns the result of the last one.\"",
         needs_ref: false,
         params: CALL_FUNCTION_COND,
         execute: call_function_cond_execute,

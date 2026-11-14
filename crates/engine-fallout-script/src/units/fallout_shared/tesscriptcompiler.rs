@@ -4443,4 +4443,69 @@ mod n045_tests {
         assert_eq!(plain[1].2, vec![TEXT_COMMAND_NOT_FOUND]);
         assert_eq!(run(true), plain);
     }
+
+    /// xNVSE's `CompileScriptEx` (the `nvse` crate's) hands this compiler a buffer it compiles as
+    /// a partial script after the fake `scn` (`1D 00 00 00`): the bytes are the ones the same
+    /// buffer set up by hand gives; a text that fails answers no script.
+    #[test]
+    fn compile_script_ex_compiles_through_the_game_compiler() {
+        const CONSOLE: u32 = 0x0118_0f00;
+        thread_local! {
+            static GOT: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        fn setup() -> Engine {
+            let mut e = rig();
+            e.register(0x00aa_44c0, |_, _| ret(0x4000));
+            nvse::compile_hooks::install(&mut e);
+            script(&mut e);
+            command(&mut e, b"GetV", 0x1000);
+            let p = parameters(&mut e, &[(1, 1)]);
+            e.mem.set_u16(SCRIPT_COMMANDS + 0x12, 1);
+            e.mem.set_u32(SCRIPT_COMMANDS + 0x14, p);
+            e.mem.set_u32(SCRIPT_COMMANDS + 0x1c, 0x005b_1ba0);
+            e.mem.set_u8(PARAMETER_TYPES + 8, 1);
+            e.register(IS_AN_INTEGER, |_, _| ret(1));
+            e.register(TEXT_TO_INTEGER, |_, _| ret(7));
+            e
+        }
+        let source = b"GetV 7\r\nGetV\r\n";
+        // By hand, as CompileScriptEx sets the buffer up.
+        let mut e = setup();
+        let s = e.mem.alloc(0x60);
+        let d = data(&mut e);
+        e.mem.set_u8(d + 0x18, 1);
+        let block = e.mem.u32(d + 0x20);
+        e.mem.set_u8(block, 0x1d);
+        e.mem.set_u32(d + 0x24, 4);
+        e.mem.set_u32(d + 8, 1);
+        e.mem.set_u32(d + 0x4c, s);
+        let t = text(&mut e, source);
+        e.mem.set_u32(d, t);
+        e.mem.set_u32(s + 0x2c, t);
+        assert!(e.call(0x005a_eb90, &[0, s, d]).bool());
+        let want = e.mem.bytes(e.mem.u32(d + 0x20), e.mem.u32(d + 0x24));
+        assert_eq!(want[..4], [0x1d, 0, 0, 0]);
+        assert!(want.len() > 4);
+        // Through CompileScriptEx, the buffer's bytes taken when it is destroyed.
+        for (input, compiles) in [(&source[..], true), (&b"zzz\r\n"[..], false)] {
+            let mut e = setup();
+            e.register(0x0040_1000, |e, a| ret(e.mem.alloc(a[0].max(1))));
+            e.register(0x0040_1030, ok);
+            e.register(0x005a_a0f0, |_, a| ret(a[0]));
+            e.register(0x005a_a1a0, ok);
+            e.register(0x0046_4d30, ok);
+            e.mem.set_u32(CONSOLE, 0x0118_0f80);
+            e.register(0x0071_b160, |_, _| ret(CONSOLE));
+            e.register(0x005a_e5c0, |e, a| {
+                let bytes = e.mem.bytes(e.mem.u32(a[0] + 0x20), e.mem.u32(a[0] + 0x24));
+                GOT.with(|g| *g.borrow_mut() = bytes);
+                Ret::default()
+            });
+            let script = nvse::compile_script::compile_script_ex(&mut e, input, Some(b"T"), false);
+            assert_eq!(script != 0, compiles);
+            if compiles {
+                assert_eq!(GOT.with(|g| g.borrow().clone()), want);
+            }
+        }
+    }
 }

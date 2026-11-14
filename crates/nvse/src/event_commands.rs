@@ -152,7 +152,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x15e9,
         "SetEventHandler",
-        "defines a function script to serve as a callback for game events",
+        "\"defines a function script to serve as a callback for game events\"",
         SET_EVENT_HANDLER,
         set_event_handler,
         Returns::Default,
@@ -160,7 +160,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x15ea,
         "RemoveEventHandler",
-        "removes event handlers matching the event, script, and optional filters specified",
+        "\"removes event handlers matching the event, script, and optional filters specified\"",
         SET_EVENT_HANDLER,
         remove_event_handler,
         Returns::Default,
@@ -192,7 +192,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x1648,
         "DumpEventHandlers",
-        "dumps event handlers, optionally filtered by eventName, script and args.",
+        "\"dumps event handlers, optionally filtered by eventName, script and args.\"",
         DUMP_EVENT_HANDLERS,
         dump_event_handlers,
         Returns::Default,
@@ -200,7 +200,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x1649,
         "GetEventHandlers",
-        "returns a multi-dimensional array of event handlers, optionally filtered by eventName, script and args.",
+        "\"returns a multi-dimensional array of event handlers, optionally filtered by eventName, script and args.\"",
         DUMP_EVENT_HANDLERS,
         get_event_handlers,
         Returns::Array,
@@ -208,7 +208,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x164b,
         "SetEventHandlerAlt",
-        "Uses the new event filtering system.",
+        "\"Uses the new event filtering system.\"",
         SET_EVENT_HANDLER_ALT,
         set_event_handler_alt,
         Returns::Default,
@@ -216,7 +216,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x1650,
         "IsEventHandlerFirst",
-        "",
+        "\"\"",
         HIGHER_OR_LOWER,
         is_event_handler_first,
         Returns::Default,
@@ -224,7 +224,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x1651,
         "IsEventHandlerLast",
-        "",
+        "\"\"",
         HIGHER_OR_LOWER,
         is_event_handler_last,
         Returns::Default,
@@ -232,7 +232,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x1652,
         "GetHigherPriorityEventHandlers",
-        "",
+        "\"\"",
         HIGHER_OR_LOWER,
         get_higher_priority_event_handlers,
         Returns::Array,
@@ -240,7 +240,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(
         0x1653,
         "GetLowerPriorityEventHandlers",
-        "",
+        "\"\"",
         HIGHER_OR_LOWER,
         get_lower_priority_event_handlers,
         Returns::Array,

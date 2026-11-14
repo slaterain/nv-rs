@@ -102,7 +102,7 @@ pub static COMMANDS: &[Command] = &[
         0x153c,
         "loop",
         "marks the end of a While or ForEach loop",
-        &[],
+        ONE_INT,
         loop_execute,
     ),
     cmd(
@@ -116,10 +116,10 @@ pub static COMMANDS: &[Command] = &[
         0x153e,
         "continue",
         "returns control to the top of a loop",
-        &[],
+        ONE_INT,
         continue_execute,
     ),
-    cmd(0x153f, "break", "exits a loop", &[], break_execute),
+    cmd(0x153f, "break", "exits a loop", ONE_INT, break_execute),
     cmd(
         0x1542,
         "testexpr",
@@ -148,9 +148,9 @@ pub static COMMANDS: &[Command] = &[
         &[],
         pop_execution_context,
     ),
-    cmd(0x167f, "Jmp_If_True", "", JMP_IF, jmp_if_true),
-    cmd(0x1680, "Jmp_If_False", "", JMP_IF, jmp_if_false),
-    cmd(0x1681, "Jmp", "", ONE_REQUIRED_INT, jmp_execute),
+    cmd(0x167f, "Jmp_If_True", "nullptr", JMP_IF, jmp_if_true),
+    cmd(0x1680, "Jmp_If_False", "nullptr", JMP_IF, jmp_if_false),
+    cmd(0x1681, "Jmp", "nullptr", ONE_REQUIRED_INT, jmp_execute),
 ];
 
 /// `kNVSEParams_Jmp_If_True` (a boolean, then a number: `kNVSEParamType_Number`) and

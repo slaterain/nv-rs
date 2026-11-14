@@ -126,7 +126,7 @@ pub static COMMANDS: &[Command] = &[
     cmd(0x14db, "MessageEx", "", "prints a formatted message", &FORMAT_STRING, message_ex, RD),
     cmd(0x14dc, "MessageBoxEx", "", "displays a formatted message box", &FORMAT_STRING, message_box_ex, RD),
     cmd(0x15e6, "GetGridsToLoad", "", "returns the effective value of the uGridsToLoad ini setting", &[], get_grids_to_load, RD),
-    cmd(0x15e7, "OutputLocalMapPicturesOverride", "OLMPOR", "identical to the OutputLocalMapPictures console command, but overrides the uGridsToLoad ini setting", &[], output_local_map_pictures_override, RD),
+    cmd(0x15e7, "OutputLocalMapPicturesOverride", "OLMPOR", "\"identical to the OutputLocalMapPictures console command, but overrides the uGridsToLoad ini setting\"", &[], output_local_map_pictures_override, RD),
     cmd(0x15e8, "SetOutputLocalMapPicturesGrids", "SetOLMPGrids", "sets the value with which to override uGridsToLoad when generating local maps with OLMPOR", ONE_INT, set_output_local_map_pictures_grids, RD),
     cmd(0x15ef, "AddSpellNS", "", "identical to AddSpell but without the UI message", ONE_SPELL_ITEM, add_spell_ns, RD),
 ];

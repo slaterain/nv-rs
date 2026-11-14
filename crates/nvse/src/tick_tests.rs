@@ -82,6 +82,11 @@ fn setup() -> Engine {
     e.register(functions::SCRIPT_EXECUTE, execute);
     e.register(functions::CREATE_EVENT_LIST, create_event_list);
     e.register(functions::EVENT_LIST_DESTROY, nothing);
+    // No function folder (`FindFirstFileA` finds nothing): the first frame compiles no file.
+    e.register(0x00fd_f070, |_, _| Ret {
+        eax: u32::MAX,
+        ..Ret::default()
+    });
     // A function script taking one float (local 1), `CallAfterSeconds 2 fn 0 7`.
     let mut d = vec![
         0x1d, 0, 0, 0, 0x10, 0, 11, 0, 0x0d, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0,
@@ -404,4 +409,39 @@ fn the_plugins_messages_each_frame() {
     frame(&mut e, 1.0);
     frame(&mut e, 1.0);
     assert_eq!(heard(), [(DEFERRED_INIT, false, 0.0)]);
+}
+
+/// At the first frame, after `DeferredInit`, the function files of
+/// `data/nvse/user_defined_functions` are compiled (here the folder is missing: one search, no
+/// file); not again at later frames.
+#[test]
+fn the_first_frame_compiles_the_function_files_after_deferred_init() {
+    use crate::plugins::msg::DEFERRED_INIT;
+    thread_local! {
+        static SEARCHES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn search(e: &mut Engine, a: &[u32]) -> Ret {
+        let pattern = crate::table::guest_text(e, a[0]);
+        let deferred = heard().iter().any(|h| h.0 == DEFERRED_INIT);
+        SEARCHES.with(|s| {
+            s.borrow_mut().push(format!(
+                "{} after DeferredInit: {deferred}",
+                String::from_utf8_lossy(&pattern)
+            ))
+        });
+        Ret {
+            eax: u32::MAX,
+            ..Ret::default()
+        }
+    }
+    heard();
+    let mut e = setup();
+    listening(&mut e);
+    e.register(0x00fd_f070, search);
+    frame(&mut e, 1.0);
+    frame(&mut e, 1.0);
+    assert_eq!(
+        SEARCHES.with(|s| s.borrow().clone()),
+        ["data/nvse/user_defined_functions/* after DeferredInit: true"]
+    );
 }

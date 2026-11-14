@@ -197,34 +197,42 @@ fn handle_size(e: &mut Engine, handle: u32, k: &[u8]) -> u64 {
 
 /// Up to `count` bytes of the file at `k` from `start` (fewer at the end, none past it): the
 /// run's copy, else the player's file opened for reading only (read from disk through `handle`'s
-/// kept host file, [`Kept`]).
-fn read_range(e: &mut Engine, handle: u32, k: &[u8], start: u64, count: u32) -> Vec<u8> {
+/// kept host file, [`Kept`]). A host file that cannot be opened or read answers the Windows
+/// error it stands for ([`host_error`]) instead of stopping the run.
+fn read_range(
+    e: &mut Engine,
+    handle: u32,
+    k: &[u8],
+    start: u64,
+    count: u32,
+) -> Result<Vec<u8>, u32> {
     if let Some(data) = state_ref!(e).disk.files.get(k) {
         let start = (start as usize).min(data.len());
         let end = start.saturating_add(count as usize).min(data.len());
-        return data[start..end].to_vec();
+        return Ok(data[start..end].to_vec());
     }
     let Some(path) = state_ref!(e).disk.player.get(k).cloned() else {
-        return vec![];
+        return Ok(vec![]);
     };
     let kept = open_file(e, handle).and_then(|file| file.kept.0.clone());
     let file = match kept {
         Some(file) => file,
         None => {
-            let file = std::sync::Arc::new(std::fs::File::open(&path).unwrap_or_else(|err| {
-                panic!("ReadFile: the player's file {path:?} can no longer be read: {err}")
-            }));
+            let file =
+                std::sync::Arc::new(std::fs::File::open(&path).map_err(|err| host_error(&err))?);
             if let Some(open) = open_file(e, handle) {
                 open.kept = Kept(Some(file.clone()));
             }
             file
         }
     };
-    read_at(&file, &path, start, count)
+    read_at(&file, start, count)
 }
 
-/// A read-only handle's host file for the player's file it reads ([`OpenFile::kept`]): opened at
-/// the handle's first `ReadFile` and kept until the handle is closed, as the handle Windows gives
+/// A read-only handle's host file for the player's file it reads ([`OpenFile::kept`]): opened by
+/// the handle's `CreateFileA` (since 2026-11-14: a file that cannot be opened fails there with
+/// Windows' answer, as it does on Windows; before, it was opened at the first `ReadFile`, whose
+/// failure stopped the run) and kept until the handle is closed, as the handle Windows gives
 /// the game is one open file. Before (to 2026-11-09) every `ReadFile` opened the file by its path
 /// again, read and closed it. The Goodsprings load makes about 12,300 reads through OEI's file
 /// thread; with the file kept open that load fell from 2.2-2.4 s to about 1.5 s (A/B under one
@@ -236,9 +244,8 @@ fn read_range(e: &mut Engine, handle: u32, k: &[u8], start: u64, count: u32) -> 
 /// Each read is at the handle's position, of the same count, in the same order, so a file nobody
 /// changes reads byte for byte as before. A file another program replaces or deletes on disk
 /// while the handle is open goes on reading, once it has read, as the file the handle opened,
-/// its bytes and its size ([`handle_size`]), until the handle is closed (the host file is opened
-/// at the first read: until then the handle still follows the path); a handle opened after the
-/// change sees the new file. (Before, every read saw whatever the path named then: the new file's bytes at the
+/// its bytes and its size ([`handle_size`]), until the handle is closed; a handle opened after
+/// the change sees the new file. (Before, every read saw whatever the path named then: the new file's bytes at the
 /// old position, or a stop when it was gone. The original refuses such a change: its opens
 /// never share delete, `00afeac0` sharing read and the C runtime's `__tsopen_nolock` at most
 /// read and write. The host file here shares read, write and delete on purpose, so a mod manager
@@ -258,9 +265,9 @@ impl Eq for Kept {}
 /// count far past the end does not make a buffer that large; smaller reads need no size.
 const READ_SIZE_CHECK: u32 = 1 << 20;
 
-/// Up to `count` bytes of the open player's file `file` (at `path`, for messages) from `start`:
-/// fewer at the end, none past it.
-fn read_at(file: &std::fs::File, path: &std::path::Path, start: u64, count: u32) -> Vec<u8> {
+/// Up to `count` bytes of the open player's file `file` from `start`: fewer at the end, none
+/// past it; a read the host refuses answers its Windows error ([`host_error`]).
+fn read_at(file: &std::fs::File, start: u64, count: u32) -> Result<Vec<u8>, u32> {
     let mut take = u64::from(count);
     if count > READ_SIZE_CHECK {
         let size = file.metadata().map_or(0, |m| m.len());
@@ -278,11 +285,11 @@ fn read_at(file: &std::fs::File, path: &std::path::Path, start: u64, count: u32)
             Ok(0) => break,
             Ok(n) => got += n,
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(err) => panic!("ReadFile: reading {path:?}: {err}"),
+            Err(err) => return Err(host_error(&err)),
         }
     }
     out.truncate(got);
-    out
+    Ok(out)
 }
 
 /// Files the game deleted in this run (the player's own files stay where they are) and the
@@ -312,21 +319,350 @@ pub fn full_path(e: &Engine, name: &[u8]) -> Vec<u8> {
     path
 }
 
+/// The host path of a path as the game's ANSI calls carry it. Each part between separators that
+/// reads as UTF-8 is taken as it is (the install folder's name, which the host gives as UTF-8,
+/// and every ASCII name), and any other part as bytes of the ANSI code page, turned to Unicode
+/// as Windows' `...A` calls turn it ([`code_page::to_wide`], `MultiByteToWideChar(CP_ACP)`: a
+/// name `FindFirstFileA` answered in that code page, such as `E9 74 E9 2E 74 78 74` for
+/// `été.txt`, opens; measured, `measure/xnvse-rest/findfile-ansi-2026-11-14.txt`). A part that
+/// is both valid UTF-8 and meant as code page bytes is read as UTF-8. The separators are found
+/// character by character ([`separators`]), so a double-byte character whose second byte is
+/// `0x5C` stays one character.
 fn real_path(path: &[u8]) -> std::path::PathBuf {
-    std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned())
+    if path.is_ascii() {
+        return std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned());
+    }
+    let mut wide: Vec<u16> = Vec::with_capacity(path.len());
+    let mut start = 0;
+    let cuts = separators(path);
+    for end in cuts.iter().map(|&at| at + 1).chain([path.len()]) {
+        let part = &path[start..end];
+        match std::str::from_utf8(part) {
+            Ok(text) => wide.extend(text.encode_utf16()),
+            Err(_) => wide.extend(code_page::to_wide(part)),
+        }
+        start = end;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        std::path::PathBuf::from(std::ffi::OsString::from_wide(&wide))
+    }
+    #[cfg(not(windows))]
+    {
+        std::path::PathBuf::from(String::from_utf16_lossy(&wide))
+    }
+}
+
+/// The ANSI code page the game's `...A` calls turn names with: on Windows the system's
+/// (`CP_ACP`: `MultiByteToWideChar`, `WideCharToMultiByte`, `IsDBCSLeadByte`); elsewhere a
+/// page that holds ASCII only (a name's other characters become `?`, as a page answers a
+/// character it cannot hold; bytes above 0x7F read as UTF-8). Tests put a stand-in page of their
+/// own on their thread (`StandIn`: 1252, 932 and 65001 tables), so the name, order, overflow and
+/// alias rules run on every platform; the game never does.
+mod code_page {
+    /// A stand-in code page for tests: its conversions and the length of the character a byte
+    /// starts.
+    #[cfg(test)]
+    pub struct StandIn {
+        pub to_wide: fn(&[u8]) -> Vec<u16>,
+        pub to_ansi: fn(&[u16]) -> Vec<u8>,
+        pub char_len: fn(&[u8]) -> usize,
+    }
+
+    #[cfg(test)]
+    thread_local! {
+        static STAND_IN: std::cell::Cell<Option<&'static StandIn>> =
+            const { std::cell::Cell::new(None) };
+    }
+
+    /// Puts `page` in place of the system's code page on this thread (`None`: the system's).
+    #[cfg(test)]
+    pub fn stand_in(page: Option<&'static StandIn>) {
+        STAND_IN.with(|s| s.set(page));
+    }
+
+    #[cfg(test)]
+    fn current() -> Option<&'static StandIn> {
+        STAND_IN.with(std::cell::Cell::get)
+    }
+
+    /// Bytes of the code page as UTF-16 (`MultiByteToWideChar(CP_ACP, 0, ...)`).
+    pub fn to_wide(bytes: &[u8]) -> Vec<u16> {
+        #[cfg(test)]
+        if let Some(page) = current() {
+            return (page.to_wide)(bytes);
+        }
+        if bytes.is_ascii() {
+            return bytes.iter().map(|&b| u16::from(b)).collect();
+        }
+        system::to_wide(bytes)
+    }
+
+    /// UTF-16 as the code page's bytes, as Windows' `...A` calls hand a name back
+    /// (`WideCharToMultiByte(CP_ACP, 0, ...)`: best fit where the page has a near character,
+    /// `?` where it has none; measured: `łodz.txt` is `lodz.txt`, `Жuk.txt` `?uk.txt`,
+    /// `日本.txt` `??.txt` on code page 1252). Every byte is given: a caller that has a field
+    /// of fixed size cuts it ([`super::write_names`]).
+    pub fn to_ansi(units: &[u16]) -> Vec<u8> {
+        #[cfg(test)]
+        if let Some(page) = current() {
+            return (page.to_ansi)(units);
+        }
+        if units.iter().all(|&u| u < 0x80) {
+            return units.iter().map(|&u| u as u8).collect();
+        }
+        system::to_ansi(units)
+    }
+
+    /// The length in bytes of the character `bytes` starts with: 2 for a lead byte of a
+    /// double-byte page followed by a byte, a UTF-8 sequence's length on the UTF-8 page, else 1.
+    pub fn char_len(bytes: &[u8]) -> usize {
+        #[cfg(test)]
+        if let Some(page) = current() {
+            return (page.char_len)(bytes).clamp(1, bytes.len().max(1));
+        }
+        match bytes.first() {
+            Some(&b) if b >= 0x80 => system::char_len(bytes).clamp(1, bytes.len()),
+            _ => 1,
+        }
+    }
+
+    #[cfg(windows)]
+    mod system {
+        extern "system" {
+            fn MultiByteToWideChar(
+                page: u32,
+                flags: u32,
+                text: *const u8,
+                len: i32,
+                out: *mut u16,
+                cap: i32,
+            ) -> i32;
+            fn WideCharToMultiByte(
+                page: u32,
+                flags: u32,
+                text: *const u16,
+                len: i32,
+                out: *mut u8,
+                cap: i32,
+                default: *const u8,
+                used: *mut i32,
+            ) -> i32;
+            fn IsDBCSLeadByte(byte: u8) -> i32;
+            fn GetACP() -> u32;
+        }
+
+        pub fn to_wide(bytes: &[u8]) -> Vec<u16> {
+            if bytes.is_empty() {
+                return Vec::new();
+            }
+            let mut out = vec![0u16; bytes.len() * 2];
+            // SAFETY: `bytes` is read for its length; `out` has room for `cap` units (a code
+            // page byte is at most one UTF-16 unit, two for a UTF-8 sequence's surrogates).
+            let n = unsafe {
+                MultiByteToWideChar(
+                    0,
+                    0,
+                    bytes.as_ptr(),
+                    bytes.len() as i32,
+                    out.as_mut_ptr(),
+                    out.len() as i32,
+                )
+            };
+            out.truncate(n.max(0) as usize);
+            out
+        }
+
+        pub fn to_ansi(units: &[u16]) -> Vec<u8> {
+            if units.is_empty() {
+                return Vec::new();
+            }
+            let mut out = vec![0u8; units.len() * 4];
+            // SAFETY: `units` is read for its length; `out` has room for `cap` bytes (a UTF-16
+            // unit is at most three code page bytes, UTF-8's); no default character or flag.
+            let n = unsafe {
+                WideCharToMultiByte(
+                    0,
+                    0,
+                    units.as_ptr(),
+                    units.len() as i32,
+                    out.as_mut_ptr(),
+                    out.len() as i32,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                )
+            };
+            out.truncate(n.max(0) as usize);
+            out
+        }
+
+        /// What the system's code page is, read once: UTF-8, or which bytes lead a double-byte
+        /// character (none on a single-byte page such as 1252).
+        fn lead_bytes() -> &'static (bool, [bool; 256]) {
+            static LEAD: std::sync::OnceLock<(bool, [bool; 256])> = std::sync::OnceLock::new();
+            LEAD.get_or_init(|| {
+                // SAFETY: no arguments.
+                let utf8 = unsafe { GetACP() } == 65001;
+                let mut lead = [false; 256];
+                for (b, l) in lead.iter_mut().enumerate() {
+                    // SAFETY: one byte, by value.
+                    *l = !utf8 && unsafe { IsDBCSLeadByte(b as u8) } != 0;
+                }
+                (utf8, lead)
+            })
+        }
+
+        pub fn char_len(bytes: &[u8]) -> usize {
+            let (utf8, lead) = lead_bytes();
+            if *utf8 {
+                super::utf8_len(bytes[0])
+            } else if lead[usize::from(bytes[0])] {
+                2
+            } else {
+                1
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    mod system {
+        pub fn to_wide(bytes: &[u8]) -> Vec<u16> {
+            String::from_utf8_lossy(bytes).encode_utf16().collect()
+        }
+
+        pub fn to_ansi(units: &[u16]) -> Vec<u8> {
+            char::decode_utf16(units.iter().copied())
+                .map(|c| match c {
+                    Ok(c) if c.is_ascii() => c as u8,
+                    _ => b'?',
+                })
+                .collect()
+        }
+
+        pub fn char_len(bytes: &[u8]) -> usize {
+            super::utf8_len(bytes[0])
+        }
+    }
+
+    /// The length of the UTF-8 sequence a byte starts (1 for a byte that starts none).
+    pub fn utf8_len(b: u8) -> usize {
+        match b {
+            0xc0..=0xdf => 2,
+            0xe0..=0xef => 3,
+            0xf0..=0xf7 => 4,
+            _ => 1,
+        }
+    }
+}
+
+/// Where the separators (`\` and `/`) of `path` are, found character by character
+/// ([`code_page::char_len`]): a double-byte character whose second byte is `0x5C` holds none.
+fn separators(path: &[u8]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < path.len() {
+        let b = path[at];
+        if b == b'\\' || b == b'/' {
+            out.push(at);
+        }
+        at += if b < 0x80 {
+            1
+        } else {
+            code_page::char_len(&path[at..])
+        };
+    }
+    out
+}
+
+/// The position of the last separator of `path` ([`separators`]).
+fn last_separator(path: &[u8]) -> Option<usize> {
+    if path.is_ascii() {
+        return path.iter().rposition(|&b| b == b'\\' || b == b'/');
+    }
+    separators(path).last().copied()
+}
+
+/// A name of the ANSI calls held as text: one character per byte (U+0000 to U+00FF), so an
+/// ASCII name is itself and a byte above 0x7F keeps its value ([`ansi_bytes`] gives the bytes
+/// back). Entry names ([`Entry::name`], [`Found`]) are held so.
+fn ansi_text(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| char::from(b)).collect()
+}
+
+/// The bytes of a name held by [`ansi_text`].
+fn ansi_bytes(text: &str) -> Vec<u8> {
+    text.chars().map(|c| u32::from(c).min(0xff) as u8).collect()
+}
+
+/// UTF-16 as the ANSI code page's bytes ([`code_page::to_ansi`]), held as [`ansi_text`].
+fn wide_to_ansi(units: &[u16]) -> String {
+    ansi_text(&code_page::to_ansi(units))
+}
+
+/// The key NTFS orders a folder's names by (its index's collation): the UTF-16 name with each
+/// unit upper-cased, compared unit by unit. Upper-casing here is Unicode's simple mapping where
+/// it gives one unit (NTFS's upcase table; ASCII `a`..`z` to `A`..`Z` as in every table); a
+/// unit without one stays. For an ASCII name this is the ASCII upper-case byte order the search
+/// always had.
+fn ntfs_key(units: &[u16]) -> Vec<u16> {
+    units
+        .iter()
+        .map(|&u| match u {
+            0x61..=0x7a => u - 0x20,
+            0..=0x7f => u,
+            _ => char::from_u32(u32::from(u))
+                .and_then(|c| {
+                    let mut up = c.to_uppercase();
+                    match (up.next(), up.next()) {
+                        (Some(one), None) if (one as u32) < 0x1_0000 => Some(one as u16),
+                        _ => None,
+                    }
+                })
+                .unwrap_or(u),
+        })
+        .collect()
 }
 
 /// The bytes of the file at the full path `path`: as the game made it in this run, else the
 /// player's file (read only); `None` when the game deleted it or there is none.
 pub fn read_whole(e: &Engine, path: &[u8]) -> Option<Vec<u8>> {
+    read_whole_or_error(e, path).ok()
+}
+
+/// [`read_whole`] with the Windows error of a file that cannot be read: `ERROR_FILE_NOT_FOUND`
+/// when there is none, else the host's answer ([`host_error`]: `ERROR_ACCESS_DENIED` for a file
+/// the player may not read, `ERROR_SHARING_VIOLATION` for one another program holds without
+/// sharing; measured, `measure/xnvse-rest/findfile-overflow-2026-11-14.txt`).
+fn read_whole_or_error(e: &Engine, path: &[u8]) -> Result<Vec<u8>, u32> {
     let k = key(path);
     if let Some(data) = state_ref!(e).disk.files.get(&k) {
-        return Some(data.clone());
+        return Ok(data.clone());
     }
     if state_ref!(e).disk.deleted.contains(&k) {
-        return None;
+        return Err(ERROR_FILE_NOT_FOUND);
     }
-    std::fs::read(real_path(path)).ok()
+    std::fs::read(real_path(path)).map_err(|err| host_error(&err))
+}
+
+/// `ERROR_SHARING_VIOLATION`, `ERROR_READ_FAULT` and `ERROR_MORE_DATA` (winerror.h).
+pub const ERROR_SHARING_VIOLATION: u32 = 32;
+pub const ERROR_READ_FAULT: u32 = 30;
+pub const ERROR_MORE_DATA: u32 = 234;
+
+/// The Windows error a host file call's failure stands for: on Windows the host's own code
+/// (the same calls' answer); elsewhere by kind (permission: `ERROR_ACCESS_DENIED`, missing:
+/// `ERROR_FILE_NOT_FOUND`, anything else `ERROR_READ_FAULT`).
+fn host_error(err: &std::io::Error) -> u32 {
+    #[cfg(windows)]
+    if let Some(code) = err.raw_os_error() {
+        return code as u32;
+    }
+    match err.kind() {
+        std::io::ErrorKind::PermissionDenied => ERROR_ACCESS_DENIED,
+        std::io::ErrorKind::NotFound => ERROR_FILE_NOT_FOUND,
+        _ => ERROR_READ_FAULT,
+    }
 }
 
 /// The attributes of the full path `path` as Windows reports them: a file or directory the game
@@ -436,9 +772,12 @@ pub fn delete_file_a(e: &mut Engine, name: Ptr) -> u32 {
 pub fn copy_file_a(e: &mut Engine, source: Ptr, target: Ptr, fail_if_exists: u32) -> u32 {
     let from = full_path(e, &e.mem.cstr(source.addr()));
     let to = full_path(e, &e.mem.cstr(target.addr()));
-    let Some(data) = read_whole(e, &from) else {
-        e.kernel.last_error = ERROR_FILE_NOT_FOUND;
-        return 0;
+    let data = match read_whole_or_error(e, &from) {
+        Ok(data) => data,
+        Err(code) => {
+            e.kernel.last_error = code;
+            return 0;
+        }
     };
     if fail_if_exists != 0 && attributes(e, &to).is_some() {
         e.kernel.last_error = ERROR_FILE_EXISTS;
@@ -483,10 +822,7 @@ pub fn move_file_a(e: &mut Engine, existing: Ptr, new: Ptr) -> u32 {
     if kf == kt {
         return 1;
     }
-    let parent = to
-        .iter()
-        .rposition(|&b| b == b'\\')
-        .map(|i| to[..i].to_vec());
+    let parent = last_separator(&to).map(|i| to[..i].to_vec());
     if let Some(parent) = parent {
         let is_root = parent.len() == 2 && parent[1] == b':';
         if !is_root
@@ -500,8 +836,14 @@ pub fn move_file_a(e: &mut Engine, existing: Ptr, new: Ptr) -> u32 {
         e.kernel.last_error = ERROR_ALREADY_EXISTS;
         return 0;
     }
+    let data = match read_whole_or_error(e, &from) {
+        Ok(data) => data,
+        Err(code) => {
+            e.kernel.last_error = code;
+            return 0;
+        }
+    };
     let entry = entry_of(e, &from);
-    let data = read_whole(e, &from).expect("the source file's bytes");
     state!(e).disk.deleted.remove(&kt);
     state!(e).disk.files.insert(kt.clone(), data);
     state!(e).disk.changed(&kt);
@@ -571,16 +913,52 @@ pub struct OpenFile {
     pub kept: Kept,
 }
 
+/// The [`Disk`] key of a full path: ASCII lower case, `/` as `\`. Only the bytes that start a
+/// character are changed ([`code_page::char_len`]): the second byte of a double-byte character
+/// (an ASCII capital or `0x5C` in code page 932, say) stays as it is.
 fn key(path: &[u8]) -> Vec<u8> {
-    path.iter()
-        .map(|&b| {
-            if b == b'/' {
-                b'\\'
-            } else {
-                b.to_ascii_lowercase()
-            }
-        })
-        .collect()
+    let fold = |b: u8| {
+        if b == b'/' {
+            b'\\'
+        } else {
+            b.to_ascii_lowercase()
+        }
+    };
+    if path.is_ascii() {
+        return path.iter().map(|&b| fold(b)).collect();
+    }
+    let mut out = Vec::with_capacity(path.len());
+    let mut at = 0;
+    while at < path.len() {
+        let len = if path[at] < 0x80 {
+            1
+        } else {
+            code_page::char_len(&path[at..])
+        };
+        out.push(fold(path[at]));
+        out.extend_from_slice(&path[at + 1..at + len]);
+        at += len;
+    }
+    out
+}
+
+/// Whether the last part of the full path `path` holds a character no file name can: `?`, `*`,
+/// `<`, `>`, `|` or `"` (found character by character, as [`separators`]).
+fn invalid_last_part(path: &[u8]) -> bool {
+    let start = last_separator(path).map_or(0, |at| at + 1);
+    let part = &path[start..];
+    let mut at = 0;
+    while at < part.len() {
+        if b"?*<>|\"".contains(&part[at]) {
+            return true;
+        }
+        at += if part[at] < 0x80 {
+            1
+        } else {
+            code_page::char_len(&part[at..])
+        };
+    }
+    false
 }
 
 fn open_file(e: &mut Engine, handle: u32) -> Option<&mut OpenFile> {
@@ -597,7 +975,7 @@ pub const ERROR_PATH_NOT_FOUND: u32 = 3;
 /// else the player's (and not deleted).
 fn directory_exists(e: &Engine, path: &[u8]) -> bool {
     let trimmed = path.strip_suffix(b"\\").unwrap_or(path);
-    let Some(cut) = trimmed.iter().rposition(|&b| b == b'\\' || b == b'/') else {
+    let Some(cut) = last_separator(trimmed) else {
         return false;
     };
     let parent = &trimmed[..cut];
@@ -627,8 +1005,10 @@ fn directory_exists(e: &Engine, path: &[u8]) -> bool {
 /// directory, `...\Data` and `...\Data\`, with the buffer filled with 0xAA first): as above;
 /// the last error stayed what it was (203) on success. Not provided here: `cAlternateFileName`
 /// of the player's entries (Windows wrote the 8.3 name `FALLOU~1.BSA` for the archive, nothing
-/// for `Data`) is left empty (one zero byte); directories the game made in this run, a
-/// trailing separator on a missing name, and non-ASCII names stop the run.
+/// for `Data`) is left empty (one zero byte); directories the game made in this run and a
+/// trailing separator on a missing name stop the run. On Windows the entry is described by the
+/// host's own search of the name: a link as the link (its own attributes and reparse tag; one
+/// whose target is gone is found), a name outside ASCII in the ANSI code page ([`wide_to_ansi`]).
 ///
 /// A file the game made or changed in this run is described by its [`Entry`] (the name in the
 /// case it was made or renamed in, its short name, attributes, size and times; [`write_entry`]),
@@ -644,7 +1024,10 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
     let shown = String::from_utf8_lossy(&path).into_owned();
     if state!(e).disk.files.contains_key(&k) {
         let entry = run_entry(e, &k, &shown);
-        write_entry(e, data, &entry, &shown);
+        if let Err(code) = write_entry(e, data, &entry, &shown) {
+            e.kernel.last_error = code;
+            return INVALID_HANDLE_VALUE;
+        }
         return e
             .kernel
             .insert(KernelObject::FindFile(Opaque::new(Search::default())));
@@ -663,15 +1046,18 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
     }
     let real = real_path(&path);
     let trailing = path.ends_with(b"\\") || path.ends_with(b"/");
-    let meta = match std::fs::metadata(&real) {
+    // The entry's own metadata: a link whose target is gone is still an entry of its folder.
+    let own = std::fs::symlink_metadata(&real);
+    match std::fs::metadata(&real) {
         Ok(meta) if trailing && meta.is_dir() => return fail(e, ERROR_FILE_NOT_FOUND),
         Ok(_) if trailing => {
             panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided")
         }
-        Ok(meta) => meta,
+        Ok(_) => {}
         Err(_) if trailing => {
             panic!("FindFirstFileA(\"{shown}\"): a trailing separator is not provided")
         }
+        Err(_) if own.is_ok() => {}
         Err(_) => {
             let parent_exists = real.parent().is_some_and(|p| p.is_dir());
             return fail(
@@ -683,35 +1069,75 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
                 },
             );
         }
+    }
+    // On Windows the host's own search of the name describes the entry itself (a link with its
+    // own attributes and reparse tag, the name in the ANSI code page); the 8.3 name is left
+    // empty, as documented above.
+    #[cfg(windows)]
+    if let Some(mut entry) = host_search(&real, &shown)
+        .ok()
+        .and_then(|found| found.into_iter().next())
+    {
+        entry.short = String::new();
+        if let Err(code) = write_host_entry(e, data, &entry) {
+            return fail(e, code);
+        }
+        return e
+            .kernel
+            .insert(KernelObject::FindFile(Opaque::new(Search::default())));
+    }
+    let Ok(meta) = own else {
+        return fail(e, ERROR_FILE_NOT_FOUND);
     };
-    let wanted = real
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let wanted = real.file_name().map(host_name_text).unwrap_or_default();
     let stored = real
         .parent()
         .and_then(|p| std::fs::read_dir(p).ok())
         .and_then(|entries| {
             entries
                 .filter_map(Result::ok)
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .map(|entry| host_name_text(&entry.file_name()))
                 .find(|n| n.eq_ignore_ascii_case(&wanted))
         })
         .unwrap_or(wanted);
-    assert!(
-        stored.is_ascii(),
-        "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
-    );
-    write_find_data(e, data, &meta, &stored, &shown);
+    if let Err(code) = write_find_data(e, data, &meta, &stored, &shown) {
+        return fail(e, code);
+    }
     e.kernel
         .insert(KernelObject::FindFile(Opaque::new(Search::default())))
+}
+
+/// The UTF-16 units of a host name.
+fn host_units(name: &std::ffi::OsStr) -> Vec<u16> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        name.encode_wide().collect()
+    }
+    #[cfg(not(windows))]
+    {
+        name.to_string_lossy().encode_utf16().collect()
+    }
+}
+
+/// A host name as the ANSI calls answer it ([`wide_to_ansi`]; elsewhere than on Windows each
+/// character outside ASCII becomes `?`, as an ANSI call answers a character its code page cannot
+/// hold).
+fn host_name_text(name: &std::ffi::OsStr) -> String {
+    wide_to_ansi(&host_units(name))
 }
 
 /// Writes the `WIN32_FIND_DATAA` at `data` for an entry: attributes, creation, last-access and
 /// last-write times, the size (high word, then low), the two reserved words 0, `cFileName` (the
 /// name as stored, then one zero byte) and an empty `cAlternateFileName` (one zero byte at
 /// +0x130); the rest of the buffer is left as it was.
-fn write_find_data(e: &mut Engine, data: Ptr, meta: &std::fs::Metadata, stored: &str, shown: &str) {
+fn write_find_data(
+    e: &mut Engine,
+    data: Ptr,
+    meta: &std::fs::Metadata,
+    stored: &str,
+    shown: &str,
+) -> Result<(), u32> {
     #[cfg(windows)]
     let _ = shown;
     #[cfg(windows)]
@@ -740,9 +1166,49 @@ fn write_find_data(e: &mut Engine, data: Ptr, meta: &std::fs::Metadata, stored: 
     e.mem.set_u32(d + 0x20, size as u32);
     e.mem.set_u32(d + 0x24, 0);
     e.mem.set_u32(d + 0x28, 0);
-    e.mem.write(d + 0x2c, stored.as_bytes());
-    e.mem.set_u8(d + 0x2c + stored.len() as u32, 0);
-    e.mem.set_u8(d + 0x130, 0);
+    write_names(e, d, &ansi_bytes(stored), b"")
+}
+
+/// `cFileName` (+0x2c) and `cAlternateFileName` (+0x130) of a `WIN32_FIND_DATAA`.
+const NAME_FIELD: usize = 260;
+const SHORT_FIELD: usize = 14;
+
+/// Writes an entry's name and 8.3 name into `cFileName` (260 bytes) and `cAlternateFileName`
+/// (14 bytes) of the `WIN32_FIND_DATAA` at `d`, each followed by one zero byte. Nothing is ever
+/// written past either field. A name whose ANSI form does not fit with its zero is answered as
+/// Windows answers it (measured with the UTF-8 code page, where a name of 255 UTF-16 units can
+/// take up to 765 bytes; `measure/xnvse-rest/findfile-overflow-2026-11-14.txt`): as many whole
+/// characters as fit in 259 bytes and a zero, `cAlternateFileName` left as it was, and the call
+/// fails with `ERROR_MORE_DATA` (234): `FindFirstFileA` answers `INVALID_HANDLE_VALUE` (no
+/// search handle, also when it is a wildcard search's first entry), `FindNextFileA` FALSE, and
+/// the next `FindNextFileA` goes on with the entry after it. An 8.3 name that does not fit (not
+/// seen: 8.3 names are at most 12 characters) fails the same way after the name.
+fn write_names(e: &mut Engine, d: u32, name: &[u8], short: &[u8]) -> Result<(), u32> {
+    if name.len() >= NAME_FIELD {
+        let mut cut = 0;
+        while cut < name.len() {
+            let len = if name[cut] < 0x80 {
+                1
+            } else {
+                code_page::char_len(&name[cut..])
+            };
+            if cut + len >= NAME_FIELD {
+                break;
+            }
+            cut += len;
+        }
+        e.mem.write(d + 0x2c, &name[..cut]);
+        e.mem.set_u8(d + 0x2c + cut as u32, 0);
+        return Err(ERROR_MORE_DATA);
+    }
+    e.mem.write(d + 0x2c, name);
+    e.mem.set_u8(d + 0x2c + name.len() as u32, 0);
+    if short.len() >= SHORT_FIELD {
+        return Err(ERROR_MORE_DATA);
+    }
+    e.mem.write(d + 0x130, short);
+    e.mem.set_u8(d + 0x130 + short.len() as u32, 0);
+    Ok(())
 }
 
 /// Writes the `WIN32_FIND_DATAA` at `data` for an entry of this run as [`write_find_data`] writes
@@ -750,7 +1216,7 @@ fn write_find_data(e: &mut Engine, data: Ptr, meta: &std::fs::Metadata, stored: 
 /// buffer is left as it was (measured: the bytes after the name's terminator stayed 0xAA,
 /// `findfile-changed/findfile-2026-11-03.txt` 8). A short name that could not be made as Windows
 /// makes it ([`short_name`]) stops the run.
-fn write_entry(e: &mut Engine, data: Ptr, entry: &Entry, shown: &str) {
+fn write_entry(e: &mut Engine, data: Ptr, entry: &Entry, shown: &str) -> Result<(), u32> {
     let Some(short) = &entry.short else {
         panic!(
             "FindFirstFileA(\"{shown}\"): the 8.3 short name of \"{}\", made in this run, is not \
@@ -772,10 +1238,7 @@ fn write_entry(e: &mut Engine, data: Ptr, entry: &Entry, shown: &str) {
     e.mem.set_u32(d + 0x20, entry.size as u32);
     e.mem.set_u32(d + 0x24, 0);
     e.mem.set_u32(d + 0x28, 0);
-    e.mem.write(d + 0x2c, entry.name.as_bytes());
-    e.mem.set_u8(d + 0x2c + entry.name.len() as u32, 0);
-    e.mem.write(d + 0x130, short.as_bytes());
-    e.mem.set_u8(d + 0x130 + short.len() as u32, 0);
+    write_names(e, d, &ansi_bytes(&entry.name), &ansi_bytes(short))
 }
 
 /// `ERROR_NO_MORE_FILES`.
@@ -817,7 +1280,7 @@ fn in_folder(k: &[u8], folder: &[u8]) -> bool {
     k.len() > folder.len() + 1
         && k.starts_with(folder)
         && k[folder.len()] == b'\\'
-        && !k[folder.len() + 1..].contains(&b'\\')
+        && last_separator(&k[folder.len() + 1..]).is_none()
 }
 
 /// The keys of the [`Disk`] records directly in the folder with key `folder` (`below`: at any
@@ -838,19 +1301,11 @@ fn changed_keys<'a>(disk: &'a Disk, folder: &'a [u8], below: bool) -> Vec<&'a Ve
         .collect()
 }
 
-/// The last part of the full path `path` (after its last separator), as text (ASCII; another
-/// character stops the run).
+/// The last part of the full path `path` (after its last separator), held as [`ansi_text`] (the
+/// game's bytes, a code page character each).
 fn last_part(path: &[u8]) -> String {
-    let at = path
-        .iter()
-        .rposition(|&b| b == b'\\' || b == b'/')
-        .map_or(0, |i| i + 1);
-    let name = String::from_utf8_lossy(&path[at..]).into_owned();
-    assert!(
-        name.is_ascii(),
-        "the non-ASCII file name \"{name}\" is not provided"
-    );
-    name
+    let at = last_separator(path).map_or(0, |i| i + 1);
+    ansi_text(&path[at..])
 }
 
 /// The [`Entry`] of the file at key `k`, made or changed in this run; a file of the run without
@@ -914,18 +1369,37 @@ fn tunnelled(e: &mut Engine, k: &[u8]) -> Option<Tunnelled> {
 /// Whether `name` matches the wildcard `pattern` as Windows' file search matches a long name
 /// (both compared without case): `*` any run of characters, `?` one character or, at the end
 /// of the name or before a dot, none (`*.ES?` finds `e.es`, measured).
+///
+/// Both are the ANSI calls' bytes, matched on their Unicode form ([`code_page::to_wide`]) as
+/// Windows matches a pattern: `?` takes one character (a double-byte character is one), and
+/// case is folded as NTFS folds it ([`ntfs_key`]). For ASCII this is the byte match it was.
 fn wild_match(pattern: &[u8], name: &[u8]) -> bool {
+    let wide = |b: &[u8]| -> Vec<u16> {
+        if b.is_ascii() {
+            b.iter().map(|&c| u16::from(c)).collect()
+        } else {
+            code_page::to_wide(b)
+        }
+    };
+    wild_units(&ntfs_key(&wide(pattern)), &ntfs_key(&wide(name)))
+}
+
+/// [`wild_match`] on upper-cased UTF-16 units.
+fn wild_units(pattern: &[u16], name: &[u16]) -> bool {
+    const STAR: u16 = b'*' as u16;
+    const ANY: u16 = b'?' as u16;
+    const DOT: u16 = b'.' as u16;
     match (pattern.first(), name.first()) {
         (None, None) => true,
-        (Some(b'*'), _) => {
-            wild_match(&pattern[1..], name) || (!name.is_empty() && wild_match(pattern, &name[1..]))
+        (Some(&STAR), _) => {
+            wild_units(&pattern[1..], name) || (!name.is_empty() && wild_units(pattern, &name[1..]))
         }
-        (Some(b'?'), None) => wild_match(&pattern[1..], name),
-        (Some(b'?'), Some(b'.')) => {
-            wild_match(&pattern[1..], name) || wild_match(&pattern[1..], &name[1..])
+        (Some(&ANY), None) => wild_units(&pattern[1..], name),
+        (Some(&ANY), Some(&DOT)) => {
+            wild_units(&pattern[1..], name) || wild_units(&pattern[1..], &name[1..])
         }
-        (Some(b'?'), Some(_)) => wild_match(&pattern[1..], &name[1..]),
-        (Some(p), Some(n)) => p.eq_ignore_ascii_case(n) && wild_match(&pattern[1..], &name[1..]),
+        (Some(&ANY), Some(_)) => wild_units(&pattern[1..], &name[1..]),
+        (Some(p), Some(n)) => p == n && wild_units(&pattern[1..], &name[1..]),
         _ => false,
     }
 }
@@ -964,7 +1438,7 @@ fn short_extension(name: &str) -> Option<String> {
 /// rest may be a hash Windows makes: `D6104~1`). A pattern the known parts cannot decide stops the
 /// run as not provided.
 fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
-    if wild_match(pattern, name.as_bytes()) {
+    if wild_match(pattern, &ansi_bytes(name)) {
         return true;
     }
     if name == "." || name == ".." {
@@ -1008,7 +1482,9 @@ fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
 /// the pattern finds, in Windows' order, the first written as [`find_first_file_a`] writes one
 /// with its short name; the last error stays as it was (measured). Nothing found:
 /// `INVALID_HANDLE_VALUE` with `ERROR_FILE_NOT_FOUND`, `ERROR_PATH_NOT_FOUND` for a missing
-/// directory. Wildcards before the last part and non-ASCII names stop the run.
+/// directory; a first entry whose name does not fit `cFileName` answers `INVALID_HANDLE_VALUE`
+/// with `ERROR_MORE_DATA` ([`write_names`], measured). Wildcards before the last part stop the
+/// run.
 ///
 /// The entries are the directory as Windows would list it after the game's own calls in this
 /// run (measured on scratch files, `build43-scratch/measure/findfile-changed/
@@ -1016,16 +1492,16 @@ fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
 /// as well as files) less the files the game deleted, renamed away or took into the run, and
 /// the files of the run in that directory with their [`Entry`] (as made, written, renamed,
 /// emptied), matched against their long and short names with the measured matcher
-/// ([`wild_match`]), all in upper-case byte order with `.` and `..` first (5). Not provided (the
+/// ([`wild_match`]), in Windows' order ([`in_order`]: `.` and `..` first, then the player's
+/// entries in the order the host's own search answers them, NTFS's order of the upper-cased
+/// UTF-16 names, with the run's files merged in by that key; 5). Not provided (the
 /// run stops): `.` of a directory the game changed, `..` of one whose parent it changed (their
 /// times move with the changes, 7), the entry of a subdirectory whose contents it changed (not
 /// measured), a directory the game made in this run, a file of the run without an [`Entry`].
 fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
     let path = full_path(e, text);
     let shown = String::from_utf8_lossy(&path).into_owned();
-    let cut = path
-        .iter()
-        .rposition(|&b| b == b'\\' || b == b'/')
+    let cut = last_separator(&path)
         .unwrap_or_else(|| panic!("FindFirstFileA(\"{shown}\"): a name without a directory"));
     let (directory, pattern) = (&path[..cut], &path[cut + 1..]);
     assert!(
@@ -1047,7 +1523,7 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
     };
     let disk = &state_ref!(e).disk;
     let changed_here = !changed_keys(disk, &folder, false).is_empty();
-    let parent = folder[..folder.iter().rposition(|&b| b == b'\\').unwrap_or(0)].to_vec();
+    let parent = folder[..last_separator(&folder).unwrap_or(0)].to_vec();
     let mut found: Vec<Found> = Vec::new();
     for item in players {
         let Found::Disk {
@@ -1056,7 +1532,7 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
         else {
             unreachable!("a listing answers the player's entries")
         };
-        let k = key(&[folder.as_slice(), b"\\", name.as_bytes()].concat());
+        let k = key(&[folder.as_slice(), b"\\", &ansi_bytes(name)].concat());
         let why = match name.as_str() {
             "." if changed_here => {
                 Some("\".\" of a directory the game changed in this run (its times)".to_string())
@@ -1096,8 +1572,8 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
         let entry = run_entry(e, k, &shown);
         let finds = match &entry.short {
             Some(short) => {
-                wild_match(pattern, entry.name.as_bytes())
-                    || (!short.is_empty() && wild_match(pattern, short.as_bytes()))
+                wild_match(pattern, &ansi_bytes(&entry.name))
+                    || (!short.is_empty() && wild_match(pattern, &ansi_bytes(short)))
             }
             None => search_finds(pattern, &entry.name, &shown),
         };
@@ -1105,21 +1581,18 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
             found.push(Found::Run(entry));
         }
     }
-    found.sort_by_cached_key(|item| {
-        let name = item.name();
-        let rank = match name {
-            "." => 0,
-            ".." => 1,
-            _ => 2,
-        };
-        (rank, name.to_ascii_uppercase())
-    });
-    let mut rest: std::collections::VecDeque<_> = found.into();
+    let (players, run): (Vec<Found>, Vec<Found>) = found
+        .into_iter()
+        .partition(|item| matches!(item, Found::Disk { .. }));
+    let mut rest: std::collections::VecDeque<_> = in_order(players, run).into();
     let Some(first) = rest.pop_front() else {
         e.kernel.last_error = ERROR_FILE_NOT_FOUND;
         return INVALID_HANDLE_VALUE;
     };
-    write_found(e, data, &first, &shown);
+    if let Err(code) = write_found(e, data, &first, &shown) {
+        e.kernel.last_error = code;
+        return INVALID_HANDLE_VALUE;
+    }
     let seen = folder_state(&state!(e).disk, &folder);
     e.kernel.insert(KernelObject::FindFile(Opaque::new(Search {
         rest,
@@ -1127,20 +1600,84 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
     })))
 }
 
+/// The key a search's entries are ordered by: `.` first, `..` second, then every other entry by
+/// NTFS's key of its UTF-16 name ([`ntfs_key`]; a player's entry by its host name, a file of
+/// the run by its ANSI name turned to Unicode).
+fn order_key(item: &Found) -> (u8, Vec<u16>) {
+    let rank = match item.name() {
+        "." => 0,
+        ".." => 1,
+        _ => 2,
+    };
+    if rank < 2 {
+        return (rank, Vec::new());
+    }
+    let units = match item {
+        Found::Disk { path, name, .. } => path
+            .file_name()
+            .map_or_else(|| code_page::to_wide(&ansi_bytes(name)), host_units),
+        Found::Run(entry) => code_page::to_wide(&ansi_bytes(&entry.name)),
+    };
+    (rank, ntfs_key(&units))
+}
+
+/// A search's entries in Windows' order: the player's entries (`players`) in the order the
+/// host's search answered them (on NTFS its index's order, which is [`order_key`]'s; elsewhere
+/// than on Windows they come sorted by that key, [`listing`]), with the files of the run
+/// (`run`) merged in by [`order_key`]: each before the first player's entry whose key is
+/// greater. For ASCII names this is the order the search always answered (upper-case byte
+/// order with `.` and `..` first), and on an NTFS folder Windows' own, names outside ASCII
+/// included (measured, `measure/xnvse-rest/findfile-ansi-2026-11-14.txt`). On a FAT or exFAT
+/// folder the host answers its entries in the folder's own order, which is kept (before
+/// 2026-11-14 they were sorted).
+fn in_order(players: Vec<Found>, run: Vec<Found>) -> Vec<Found> {
+    let mut run: Vec<((u8, Vec<u16>), Found)> = run
+        .into_iter()
+        .map(|item| (order_key(&item), item))
+        .collect();
+    run.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut run = run.into_iter().peekable();
+    let mut out = Vec::with_capacity(players.len() + run.len());
+    for item in players {
+        let at = order_key(&item);
+        while let Some((_, earlier)) = run.next_if(|(k, _)| *k < at) {
+            out.push(earlier);
+        }
+        out.push(item);
+    }
+    out.extend(run.map(|(_, item)| item));
+    out
+}
+
 /// One entry a search found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
-    /// An entry of the player's directory: its full path, its name and its 8.3 short name as
-    /// the directory stores them (the short name empty when it has none), and whether it is a
-    /// directory; described from the disk when it is answered.
+    /// An entry of the player's directory: its full path (the host's own name), its name and
+    /// its 8.3 short name as the ANSI calls answer them (held as [`ansi_text`]; the short name
+    /// empty when it has none), whether it is a directory (followed, a link to one too), and on
+    /// Windows the entry as the directory lists it ([`Listed`]).
     Disk {
         path: std::path::PathBuf,
         name: String,
         short: String,
         directory: bool,
+        listed: Option<Listed>,
     },
     /// A file of this run, as its [`Entry`] was when the search began.
     Run(Entry),
+}
+
+/// A player's entry as the host's search listed it: its own attributes (a link's, with
+/// `FILE_ATTRIBUTE_REPARSE_POINT`, not its target's), size, times and reparse tag
+/// (`dwReserved0`, 0 for an entry that is no reparse point).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listed {
+    pub attributes: u32,
+    pub size: u64,
+    pub created: u64,
+    pub accessed: u64,
+    pub written: u64,
+    pub tag: u32,
 }
 
 impl Found {
@@ -1153,41 +1690,92 @@ impl Found {
     }
 }
 
+/// `FILE_ATTRIBUTE_REPARSE_POINT`.
+pub const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+
+/// Writes a listed entry's `WIN32_FIND_DATAA` at `data`: its own attributes, times and size,
+/// `dwReserved0` its reparse tag for a reparse point (measured: a junction's is `A0000003`,
+/// another entry's 0; `measure/xnvse-rest/findfile-ansi-2026-11-14.txt`), `dwReserved1` 0, its
+/// name and its 8.3 name in the ANSI code page, each followed by one zero byte; the rest of the
+/// buffer as it was.
+fn write_listed(
+    e: &mut Engine,
+    data: Ptr,
+    listed: &Listed,
+    name: &str,
+    short: &str,
+) -> Result<(), u32> {
+    let d = data.addr();
+    e.mem.set_u32(d, listed.attributes);
+    for (offset, time) in [
+        (4u32, listed.created),
+        (0xc, listed.accessed),
+        (0x14, listed.written),
+    ] {
+        e.mem.set_u32(d + offset, time as u32);
+        e.mem.set_u32(d + offset + 4, (time >> 32) as u32);
+    }
+    e.mem.set_u32(d + 0x1c, (listed.size >> 32) as u32);
+    e.mem.set_u32(d + 0x20, listed.size as u32);
+    let tag = if listed.attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        listed.tag
+    } else {
+        0
+    };
+    e.mem.set_u32(d + 0x24, tag);
+    e.mem.set_u32(d + 0x28, 0);
+    write_names(e, d, &ansi_bytes(name), &ansi_bytes(short))
+}
+
 /// Writes a found entry as `FindFirstFileA` does, `cAlternateFileName` (+0x130, 14 bytes) its
-/// short name and a zero byte.
-fn write_found(e: &mut Engine, data: Ptr, found: &Found, shown: &str) {
+/// short name and a zero byte. A player's entry is written as the directory listed it (no look
+/// at the file behind it: a link whose target is gone is described as the link it is);
+/// elsewhere than on Windows from its own metadata (`symlink_metadata`), which stops the run
+/// there for the times ([`write_find_data`]); one that went away since it was listed answers
+/// `ERROR_FILE_NOT_FOUND`. A name that does not fit answers `ERROR_MORE_DATA` ([`write_names`]).
+fn write_found(e: &mut Engine, data: Ptr, found: &Found, shown: &str) -> Result<(), u32> {
     match found {
+        Found::Disk {
+            listed: Some(listed),
+            name,
+            short,
+            ..
+        } => write_listed(e, data, listed, name, short),
         Found::Disk {
             path, name, short, ..
         } => {
-            let meta = std::fs::metadata(path).expect("the found entry's metadata");
-            write_find_data(e, data, &meta, name, shown);
-            let alternate = data.addr() + 0x130;
-            e.mem.write(alternate, short.as_bytes());
-            e.mem.set_u8(alternate + short.len() as u32, 0);
+            let meta = std::fs::symlink_metadata(path).map_err(|_| ERROR_FILE_NOT_FOUND)?;
+            write_find_data(e, data, &meta, name, shown)?;
+            write_names(e, data.addr(), &ansi_bytes(name), &ansi_bytes(short))
         }
         Found::Run(entry) => write_entry(e, data, entry, shown),
     }
 }
 
-/// One entry of the host's own search of a directory on Windows (`WIN32_FIND_DATAW`).
+/// One entry of the host's own search of a directory on Windows (`WIN32_FIND_DATAW`): its name
+/// and 8.3 name as the ANSI calls answer them ([`wide_to_ansi`]), its host name, and what the
+/// directory lists for it.
 #[cfg(windows)]
 struct HostEntry {
     name: String,
     short: String,
-    attributes: u32,
-    size: u64,
-    created: u64,
-    accessed: u64,
-    written: u64,
+    real: std::ffi::OsString,
+    listed: Listed,
+}
+
+/// Writes a host entry as `FindFirstFileA` describes it ([`write_listed`]).
+#[cfg(windows)]
+fn write_host_entry(e: &mut Engine, data: Ptr, h: &HostEntry) -> Result<(), u32> {
+    write_listed(e, data, &h.listed, &h.name, &h.short)
 }
 
 /// The host's own `FindFirstFileW` / `FindNextFileW` of `query` (a directory and a pattern, or
 /// a full name), read only: every entry in the order they answer, or the error of a search that
 /// finds nothing. It opens nothing for writing and changes no attribute (a search handle only
-/// lists, as `std::fs::read_dir` does).
+/// lists, as `std::fs::read_dir` does). Each entry is what the directory holds for it: a link's
+/// own attributes and reparse tag; its names in the ANSI code page as `FindFirstFileA` gives them.
 #[cfg(windows)]
-fn host_search(query: &std::path::Path, shown: &str) -> Result<Vec<HostEntry>, u32> {
+fn host_search(query: &std::path::Path, _shown: &str) -> Result<Vec<HostEntry>, u32> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     #[repr(C)]
     struct FindDataW {
@@ -1203,16 +1791,9 @@ fn host_search(query: &std::path::Path, shown: &str) -> Result<Vec<HostEntry>, u
         fn FindNextFileW(handle: isize, data: *mut FindDataW) -> i32;
         fn FindClose(handle: isize) -> i32;
     }
-    let text = |units: &[u16]| {
+    let units = |units: &[u16]| {
         let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
-        let name = std::ffi::OsString::from_wide(&units[..end])
-            .to_string_lossy()
-            .into_owned();
-        assert!(
-            name.is_ascii(),
-            "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
-        );
-        name
+        units[..end].to_vec()
     };
     let mut wide: Vec<u16> = query.as_os_str().encode_wide().collect();
     wide.push(0);
@@ -1226,14 +1807,19 @@ fn host_search(query: &std::path::Path, shown: &str) -> Result<Vec<HostEntry>, u
     let time = |t: &[u32]| u64::from(t[0]) | (u64::from(t[1]) << 32);
     let mut found = Vec::new();
     loop {
+        let name = units(&data.name);
         found.push(HostEntry {
-            name: text(&data.name),
-            short: text(&data.alternate),
-            attributes: data.attributes,
-            size: (u64::from(data.size[0]) << 32) | u64::from(data.size[1]),
-            created: time(&data.times[0..2]),
-            accessed: time(&data.times[2..4]),
-            written: time(&data.times[4..6]),
+            name: wide_to_ansi(&name),
+            short: wide_to_ansi(&units(&data.alternate)),
+            real: std::ffi::OsString::from_wide(&name),
+            listed: Listed {
+                attributes: data.attributes,
+                size: (u64::from(data.size[0]) << 32) | u64::from(data.size[1]),
+                created: time(&data.times[0..2]),
+                accessed: time(&data.times[2..4]),
+                written: time(&data.times[4..6]),
+                tag: data.reserved[0],
+            },
         });
         if unsafe { FindNextFileW(handle, &mut data) } == 0 {
             break;
@@ -1253,20 +1839,29 @@ fn host_search(query: &std::path::Path, shown: &str) -> Result<Vec<HostEntry>, u
 /// on short names it cannot decide.
 #[cfg(windows)]
 fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
-    let query = directory.join(String::from_utf8_lossy(pattern).as_ref());
+    let query = directory.join(real_path(pattern));
     Ok(host_search(&query, shown)?
         .into_iter()
-        .map(|h| Found::Disk {
-            path: directory.join(&h.name),
-            directory: h.attributes & FILE_ATTRIBUTE_DIRECTORY != 0,
-            name: h.name,
-            short: h.short,
+        .map(|h| {
+            let path = directory.join(&h.real);
+            // A link to a directory counts as one for the run's checks (its contents are the
+            // target's), as a reparse point's own attributes say for a junction.
+            let directory = h.listed.attributes & FILE_ATTRIBUTE_DIRECTORY != 0;
+            Found::Disk {
+                path,
+                directory,
+                name: h.name,
+                short: h.short,
+                listed: Some(h.listed),
+            }
         })
         .collect())
 }
 
 /// The entries of `directory` that `pattern` finds, elsewhere than on Windows: matched with
-/// [`search_finds`] and ordered by upper-case name as measured; no short names.
+/// [`search_finds`] and ordered as NTFS orders a folder ([`order_key`]: for ASCII the measured
+/// upper-case order); no short names; names in the code page ([`host_name_text`]: outside tests a
+/// character outside ASCII as `?`).
 #[cfg(not(windows))]
 fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
     let Ok(entries) = std::fs::read_dir(directory) else {
@@ -1284,29 +1879,23 @@ fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<V
                 name: special.to_string(),
                 short: String::new(),
                 directory: true,
+                listed: None,
             });
         }
     }
     for entry in entries.filter_map(Result::ok) {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        assert!(
-            name.is_ascii(),
-            "FindFirstFileA(\"{shown}\"): a non-ASCII name is not provided"
-        );
+        let name = host_name_text(&entry.file_name());
         if search_finds(pattern, &name, shown) {
             found.push(Found::Disk {
                 path: entry.path(),
                 directory: entry.file_type().is_ok_and(|t| t.is_dir()),
                 name,
                 short: String::new(),
+                listed: None,
             });
         }
     }
-    found.sort_by(|a, b| {
-        a.name()
-            .to_ascii_uppercase()
-            .cmp(&b.name().to_ascii_uppercase())
-    });
+    found.sort_by_cached_key(order_key);
     Ok(found)
 }
 
@@ -1323,11 +1912,11 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
         Some(Entry {
             name: h.name,
             short: Some(h.short),
-            attributes: h.attributes,
-            size: h.size,
-            created: h.created,
-            accessed: h.accessed,
-            written: h.written,
+            attributes: h.listed.attributes,
+            size: h.listed.size,
+            created: h.listed.created,
+            accessed: h.listed.accessed,
+            written: h.listed.written,
         })
     }
     #[cfg(not(windows))]
@@ -1358,7 +1947,7 @@ fn short_name(e: &Engine, path: &[u8]) -> Option<String> {
     }
     #[cfg(windows)]
     {
-        let cut = path.iter().rposition(|&b| b == b'\\' || b == b'/')?;
+        let cut = last_separator(path)?;
         let taken = names_in(e, &path[..cut]);
         let mut generator = ntdll::Generator::new(&name);
         (0..1000)
@@ -1388,7 +1977,7 @@ fn names_in(e: &Engine, directory: &[u8]) -> std::collections::HashSet<String> {
         }
     };
     for h in host_search(&real_path(directory).join("*"), &shown).unwrap_or_default() {
-        let k = key(&[folder.as_slice(), b"\\", h.name.as_bytes()].concat());
+        let k = key(&[folder.as_slice(), b"\\", &ansi_bytes(&h.name)].concat());
         if !disk.deleted.contains(&k) && !disk.files.contains_key(&k) {
             add(&h.name, &h.short);
         }
@@ -1503,7 +2092,12 @@ pub fn find_next_file_a(e: &mut Engine, handle: u32, data: Ptr) -> u32 {
         return 0;
     };
     let shown = found.name().to_string();
-    write_found(e, data, &found, &shown);
+    // A name that does not fit: FALSE with ERROR_MORE_DATA, the entry passed (the next call
+    // answers the one after it; measured, [`write_names`]).
+    if let Err(code) = write_found(e, data, &found, &shown) {
+        e.kernel.last_error = code;
+        return 0;
+    }
     1
 }
 // Platform: replaces KERNEL32.DLL CompareFileTime (import)
@@ -1573,6 +2167,14 @@ pub fn create_file_a(
     _template: u32,
 ) -> u32 {
     let name = full_path(e, &e.mem.cstr(path.addr()));
+    // A name whose last part holds a character no file name can (`?`, `*`, `<`, `>`, `|`, `"`:
+    // the `?` a search answers for a character the code page cannot hold, say) opens nothing:
+    // `ERROR_INVALID_NAME` (measured, `measure/xnvse-rest/findfile-ansi-2026-11-14.txt`: the
+    // `?uk.txt` and `??.txt` forms answered 123).
+    if invalid_last_part(&name) {
+        e.kernel.last_error = ERROR_INVALID_NAME;
+        return INVALID_HANDLE_VALUE;
+    }
     let path = key(&name);
     // A sound file (music among them) opened: named in the sound recording's log, when
     // there is one (`super::dsound::note`).
@@ -1592,6 +2194,17 @@ pub fn create_file_a(
     {
         let real = real_path(&name);
         if std::fs::metadata(&real).is_ok_and(|m| m.is_file()) {
+            // The host file is opened now, as Windows opens it at this call: one the player may
+            // not read, or another program holds without sharing, fails here with Windows'
+            // answer (5, 32; measured) instead of at the first read. The handle keeps it
+            // ([`Kept`]).
+            let host = match std::fs::File::open(&real) {
+                Ok(file) => file,
+                Err(err) => {
+                    e.kernel.last_error = host_error(&err);
+                    return INVALID_HANDLE_VALUE;
+                }
+            };
             state!(e).disk.player.insert(path.clone(), real);
             e.kernel.last_error = if disposition == OPEN_ALWAYS {
                 ERROR_ALREADY_EXISTS
@@ -1604,7 +2217,7 @@ pub fn create_file_a(
                 read: access & GENERIC_READ != 0,
                 write: false,
                 wrote: None,
-                kept: Kept::default(),
+                kept: Kept(Some(std::sync::Arc::new(host))),
             })));
         }
     }
@@ -1626,7 +2239,7 @@ pub fn create_file_a(
         CREATE_ALWAYS => {
             if exists {
                 error = ERROR_ALREADY_EXISTS;
-                adopt(e, &name, &path, false);
+                let _ = adopt(e, &name, &path, false);
                 emptied(e, &path);
             } else {
                 made(e, &name, &path);
@@ -1647,18 +2260,24 @@ pub fn create_file_a(
             };
             return fail(e, code);
         }
-        OPEN_EXISTING => adopt(e, &name, &path, true),
+        OPEN_EXISTING => {
+            if let Err(code) = adopt(e, &name, &path, true) {
+                return fail(e, code);
+            }
+        }
         TRUNCATE_EXISTING => {
             if access & GENERIC_WRITE == 0 {
                 return fail(e, ERROR_INVALID_PARAMETER);
             }
-            adopt(e, &name, &path, false);
+            let _ = adopt(e, &name, &path, false);
             emptied(e, &path);
         }
         OPEN_ALWAYS => {
             if exists {
+                if let Err(code) = adopt(e, &name, &path, true) {
+                    return fail(e, code);
+                }
                 error = ERROR_ALREADY_EXISTS;
-                adopt(e, &name, &path, true);
             } else {
                 made(e, &name, &path);
             }
@@ -1678,22 +2297,25 @@ pub fn create_file_a(
 
 /// A file of the player's at the full path `name` (key `k`) that a write open takes into the run:
 /// its bytes (when `read`; a disposition that empties it needs none) and its directory entry as
-/// the disk keeps it ([`entry_of`]). Nothing for a file already in the run.
-fn adopt(e: &mut Engine, name: &[u8], k: &[u8], read: bool) {
+/// the disk keeps it ([`entry_of`]). Nothing for a file already in the run. A file whose bytes
+/// cannot be read answers the Windows error ([`read_whole_or_error`]) and is not taken (before,
+/// it was taken empty).
+fn adopt(e: &mut Engine, name: &[u8], k: &[u8], read: bool) -> Result<(), u32> {
     if state!(e).disk.files.contains_key(k) {
-        return;
+        return Ok(());
     }
-    let entry = entry_of(e, name);
     let data = if read {
-        read_whole(e, name).unwrap_or_default()
+        read_whole_or_error(e, name)?
     } else {
         vec![]
     };
+    let entry = entry_of(e, name);
     state!(e).disk.files.insert(k.to_vec(), data);
     state!(e).disk.changed(k);
     if let Some(entry) = entry {
         state!(e).disk.entries.insert(k.to_vec(), entry);
     }
+    Ok(())
 }
 
 /// The file at key `k` emptied by `CREATE_ALWAYS` or `TRUNCATE_EXISTING`: size 0, last access
@@ -1902,7 +2524,13 @@ pub fn read_file(
             return 0;
         }
     };
-    let bytes = read_range(e, handle, &path, position, count);
+    let bytes = match read_range(e, handle, &path, position, count) {
+        Ok(bytes) => bytes,
+        Err(code) => {
+            e.kernel.last_error = code;
+            return 0;
+        }
+    };
     e.mem.write(buffer.addr(), &bytes);
     let got = bytes.len() as u32;
     if let Some(file) = open_file(e, handle) {
@@ -1921,8 +2549,8 @@ pub fn read_file(
 /// `build43-scratch/measure/platform5`): for an existing file, a missing one and one in a
 /// missing directory, each of the four accesses (read, write, both, none) and the
 /// dispositions 0..=6, `CreateFileW` and `CreateFileA` gave the same answer, the same last
-/// error and the same file afterwards (84 cases). A path with a character outside ASCII is not
-/// provided (the files are kept by their ANSI names; stops the run).
+/// error and the same file afterwards (84 cases). A path with a character outside ASCII goes as its
+/// ANSI code page form (the files are kept by their ANSI names).
 #[allow(clippy::too_many_arguments)]
 pub fn create_file_w(
     e: &mut Engine,
@@ -1934,20 +2562,20 @@ pub fn create_file_w(
     attributes: u32,
     template: u32,
 ) -> u32 {
-    let mut name = Vec::new();
+    let mut units = Vec::new();
     let mut at = path.addr();
     loop {
         let unit = e.mem.u16(at);
         if unit == 0 {
             break;
         }
-        assert!(
-            unit < 0x80,
-            "CreateFileW: the non-ASCII character {unit:#x} in a path is not provided"
-        );
-        name.push(unit as u8);
+        units.push(unit);
         at = at.wrapping_add(2);
     }
+    // The files are kept by their ANSI names: a path outside ASCII goes as the ANSI code page's
+    // form of it (best fit, `?` for a character the page cannot hold, which then opens nothing
+    // where `CreateFileW` could open the Unicode name).
+    let name = code_page::to_ansi(&units);
     let narrow = e.mem.alloc(name.len() as u32 + 1);
     e.mem.set_cstr(narrow, &name);
     let handle = create_file_a(
@@ -2083,8 +2711,15 @@ pub fn get_full_path_name_a(
         joined.extend_from_slice(&text);
         (drive.clone(), joined)
     };
-    let ends_with_separator = text.last() == Some(&SEPARATOR);
-    let parts: Vec<&[u8]> = rest.split(|&c| c == SEPARATOR).collect();
+    // Separators found character by character ([`separators`]): a double-byte character whose
+    // second byte is `0x5C` is no separator.
+    let ends_with_separator = !text.is_empty() && last_separator(&text) == Some(text.len() - 1);
+    let mut parts: Vec<&[u8]> = Vec::new();
+    let mut start = 0;
+    for at in separators(&rest).into_iter().chain([rest.len()]) {
+        parts.push(&rest[start..at]);
+        start = at + 1;
+    }
     let resolved = resolve_parts(parts).unwrap_or_else(|| {
         panic!(
             "GetFullPathNameA({}): a part ending in a dot or space is not provided",
@@ -2986,7 +3621,7 @@ mod tests_kept_files {
         })
     }
 
-    /// Two handles on one file: each keeps a host file from its first read to its close and reads
+    /// Two handles on one file: each keeps a host file from its open to its close and reads
     /// at its own position, in the counts asked (short at the end, nothing past it).
     #[test]
     fn a_read_only_handle_keeps_its_file_and_reads_the_same_bytes() {
@@ -3000,10 +3635,18 @@ mod tests_kept_files {
             open(&mut e, &path, GENERIC_READ),
             open(&mut e, &path, GENERIC_READ),
         );
-        // No host file before the first read: the open itself holds nothing on disk.
-        assert!(open_file(&mut e, a).unwrap().kept.0.is_none());
+        // The host file is opened by the open itself, as Windows' handle is (an open that fails
+        // fails there, not at the first read): held from `CreateFileA` on.
+        assert!(open_file(&mut e, a).unwrap().kept.0.is_some());
         #[cfg(windows)]
-        assert!(opens_alone(&path));
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let alone = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&path);
+            assert_eq!(alone.unwrap_err().raw_os_error(), Some(32));
+        }
         assert_eq!(size(&mut e, a), bytes.len() as u64);
         // Handle a in reads of 1000 (the last one short), b at its own position in between.
         let mut got = Vec::new();
@@ -3277,10 +3920,10 @@ mod tests_changed_directories {
         let h = &host_search(std::path::Path::new(path), path).unwrap()[0];
         (
             h.short.clone(),
-            h.attributes,
-            h.created,
-            h.accessed,
-            h.written,
+            h.listed.attributes,
+            h.listed.created,
+            h.listed.accessed,
+            h.listed.written,
         )
     }
 
@@ -3567,5 +4210,1002 @@ mod tests_changed_directories {
         let mut e = Engine::new();
         save(&mut e, &dir, "nvfix", &[0x10]);
         listed(&mut e, &format!("{dir}\\*"));
+    }
+}
+
+/// Names outside ASCII and links, as Windows' ANSI search answers them (measured on scratch files,
+/// `measure/xnvse-rest/findfile-ansi-2026-11-14.txt`, code page 1252), and the built-in xNVSE's
+/// function-file walk run through these calls.
+#[cfg(all(test, windows))]
+mod tests_ansi_names_and_links {
+    use super::*;
+    use engine_core::Ret;
+
+    /// A scratch folder of the test's own under the system's temporary folder.
+    fn scratch(test: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nv-rs-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A junction at `link` to `target` (`mklink /J`, which needs no privilege).
+    fn junction(link: &std::path::Path, target: &std::path::Path) -> bool {
+        std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
+    /// The measurement's code page, 1252, in place of the system's on this thread (so the tests
+    /// run the same on a machine of any code page).
+    fn code_page_1252() -> super::tests_code_pages::Page {
+        super::tests_code_pages::Page::new(&super::tests_code_pages::CP1252)
+    }
+
+    /// Every entry a wildcard search answers: its name's bytes, attributes and `dwReserved0`.
+    fn search(e: &mut Engine, pattern: &[u8]) -> Vec<(Vec<u8>, u32, u32)> {
+        let name = e.mem.alloc(0x200);
+        e.mem.set_cstr(name, pattern);
+        let data = e.mem.alloc(0x140);
+        let h = find_first_file_a(e, Ptr::new(name), Ptr::new(data));
+        let mut out = Vec::new();
+        if h == INVALID_HANDLE_VALUE {
+            return out;
+        }
+        loop {
+            out.push((
+                e.mem.cstr(data + 0x2c),
+                e.mem.u32(data),
+                e.mem.u32(data + 0x24),
+            ));
+            if find_next_file_a(e, h, Ptr::new(data)) == 0 {
+                break;
+            }
+        }
+        find_close(e, h);
+        out
+    }
+
+    /// A name outside ASCII comes back in the ANSI code page (an e acute as `E9`, a character the
+    /// page cannot hold as `?`, best fit where it has a near one) and opens again by those bytes
+    /// (the `?` form does not); a junction comes back as the link it is (directory, reparse
+    /// point, its tag); a link whose target is gone is listed and found by name without a stop.
+    #[test]
+    fn names_outside_ascii_and_links_are_answered_as_windows_answers_them() {
+        let _page = code_page_1252();
+        let dir = scratch("ansi");
+        std::fs::write(dir.join("\u{e9}t\u{e9}.txt"), b"a").unwrap();
+        std::fs::write(dir.join("\u{416}uk.txt"), b"a").unwrap();
+        std::fs::write(dir.join("\u{142}odz.txt"), b"a").unwrap();
+        std::fs::create_dir(dir.join("target")).unwrap();
+        let joined = junction(&dir.join("junction"), &dir.join("target"));
+        std::fs::write(dir.join("gone.txt"), b"a").unwrap();
+        let linked =
+            std::os::windows::fs::symlink_file(dir.join("gone.txt"), dir.join("dangling.txt"))
+                .is_ok();
+        if !linked {
+            eprintln!("SKIPPED (not a pass): no symbolic link could be made here (no Developer Mode or privilege): the dangling-link half did not run");
+        }
+        std::fs::remove_file(dir.join("gone.txt")).unwrap();
+        let mut e = Engine::new();
+        let shown = dir.to_string_lossy().into_owned();
+        let mut all = shown.clone().into_bytes();
+        all.extend_from_slice(b"\\*");
+        let found = search(&mut e, &all);
+        let names: Vec<&[u8]> = found.iter().map(|f| f.0.as_slice()).collect();
+        assert!(names.contains(&&b"\xe9t\xe9.txt"[..]), "{names:?}");
+        assert!(names.contains(&&b"?uk.txt"[..]));
+        assert!(names.contains(&&b"lodz.txt"[..]));
+        assert!(joined, "a junction needs no privilege");
+        let j = found.iter().find(|f| f.0 == b"junction").unwrap();
+        assert_eq!(j.1 & 0x410, 0x410);
+        assert_eq!(j.2, 0xa000_0003);
+        let plain = found.iter().find(|f| f.0 == b"target").unwrap();
+        assert_eq!(plain.2, 0, "no tag on an ordinary entry");
+        if linked {
+            let l = found.iter().find(|f| f.0 == b"dangling.txt").unwrap();
+            assert_ne!(l.1 & FILE_ATTRIBUTE_REPARSE_POINT, 0);
+            assert_eq!(l.2, 0xa000_000c);
+            let mut one = shown.clone().into_bytes();
+            one.extend_from_slice(b"\\dangling.txt");
+            assert_eq!(search(&mut e, &one).len(), 1);
+        }
+        // Opened by the bytes the search gave; the `?` form opens nothing.
+        let open = |e: &mut Engine, name: &[u8]| {
+            let at = e.mem.alloc(0x200);
+            let mut full = shown.clone().into_bytes();
+            full.push(b'\\');
+            full.extend_from_slice(name);
+            e.mem.set_cstr(at, &full);
+            let h = create_file_a(e, Ptr::new(at), GENERIC_READ, 3, 0, OPEN_EXISTING, 0x80, 0);
+            h != INVALID_HANDLE_VALUE
+        };
+        assert!(open(&mut e, b"\xe9t\xe9.txt"));
+        assert!(!open(&mut e, b"?uk.txt"));
+        assert_eq!(
+            e.kernel.last_error, ERROR_INVALID_NAME,
+            "the ? form: an invalid name"
+        );
+        // The single name, by its ANSI bytes (no wildcard).
+        let mut one = shown.clone().into_bytes();
+        one.extend_from_slice(b"\\\xe9t\xe9.txt");
+        let single = search(&mut e, &one);
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].0, b"\xe9t\xe9.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The built-in xNVSE's first-frame walk of `data/nvse/user_defined_functions` through these
+    /// calls: a name outside ASCII, a junction and (where links can be made) a link whose target is
+    /// gone stop nothing; the junction is not entered; the files are listed by their ANSI names.
+    /// The compile is a stand-in that fails (no console), so each file found is named in
+    /// `nvse.log`; the buffer constructor counts the files that were read.
+    #[test]
+    fn the_function_folder_walk_runs_on_the_real_file_calls() {
+        let _page = code_page_1252();
+        thread_local! {
+            static READ: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let dir = scratch("udf-walk");
+        let udf = dir.join("data").join("nvse").join("user_defined_functions");
+        std::fs::create_dir_all(&udf).unwrap();
+        std::fs::write(udf.join("plain.txt"), b"x").unwrap();
+        std::fs::write(udf.join("\u{e9}t\u{e9}.txt"), b"x").unwrap();
+        std::fs::write(udf.join("\u{416}uk.txt"), b"x").unwrap();
+        let outside = dir.join("outside");
+        std::fs::create_dir(&outside).unwrap();
+        std::fs::write(outside.join("in.txt"), b"x").unwrap();
+        assert!(junction(&udf.join("Junction"), &outside));
+        std::fs::write(dir.join("gone.txt"), b"x").unwrap();
+        let linked =
+            std::os::windows::fs::symlink_file(dir.join("gone.txt"), udf.join("dangling.txt"))
+                .is_ok();
+        if !linked {
+            eprintln!("SKIPPED (not a pass): no symbolic link could be made here: the walk ran without the dangling link");
+        }
+        std::fs::remove_file(dir.join("gone.txt")).unwrap();
+        crate::imports();
+        let mut e = Engine::new();
+        e.kernel.current_directory = dir.to_string_lossy().into_owned().into_bytes();
+        let slots = [
+            (0x00fd_f088, "CreateFileA"),
+            (0x00fd_f080, "ReadFile"),
+            (0x00fd_f07c, "CloseHandle"),
+            (0x00fd_f070, "FindFirstFileA"),
+            (0x00fd_f068, "FindNextFileA"),
+            (0x00fd_f064, "FindClose"),
+            (0x00fd_f240, "SetFilePointer"),
+            (0x00fd_f0dc, "WriteFile"),
+        ];
+        let imports: Vec<engine_core::exe::Import> = slots
+            .iter()
+            .map(|&(slot, name)| engine_core::exe::Import {
+                slot,
+                dll: "KERNEL32.dll".into(),
+                name: name.into(),
+            })
+            .collect();
+        assert_eq!(e.register_imports(&imports), slots.len());
+        let area = 0x0640_0000;
+        e.map(area, 0x1_0000);
+        e.mem.set_u32(area, area + 0x100);
+        e.register(0x0040_1000, |e, a| {
+            let at = e.mem.u32(0x0640_0000);
+            e.mem
+                .set_u32(0x0640_0000, at + a[0].max(1).next_multiple_of(16));
+            Ret {
+                eax: at,
+                ..Ret::default()
+            }
+        });
+        e.register(0x0040_1030, |_, _| Ret::default());
+        // The script buffer's constructor: its data block, and one more file read.
+        e.register(0x005a_e490, |e, a| {
+            READ.with(|r| r.set(r.get() + 1));
+            let data = e.call(0x0040_1000, &[0x100]).u32();
+            e.mem.set_u32(a[0] + 0x20, data);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        for f in [0x005a_e5c0u32, 0x005a_a1a0, 0x0046_4d30] {
+            e.register(f, |_, _| Ret::default());
+        }
+        e.register(0x005a_a0f0, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.map(0x011c_3000, 0x1000);
+        // No console: no compile, so every file found fails and is named.
+        e.register(0x0071_b160, |_, _| Ret::default());
+        nvse::compile_script::cache_all_scripts(&mut e);
+        let log = read_whole(&e, &full_path(&e, b"nvse.log")).unwrap_or_default();
+        let lines: Vec<&[u8]> = log
+            .split(|&b| b == b'\n')
+            .filter(|l| !l.is_empty())
+            .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
+            .collect();
+        let named = |name: &[u8]| {
+            let mut l =
+                b"xNVSE: Failed to precompile script file at data/nvse/user_defined_functions/"
+                    .to_vec();
+            l.extend_from_slice(name);
+            l
+        };
+        assert!(lines.contains(&named(b"plain.txt").as_slice()), "{log:?}");
+        assert!(lines.contains(&named(b"\xe9t\xe9.txt").as_slice()));
+        assert!(
+            !lines.contains(&named(b"?uk.txt").as_slice()),
+            "a name the code page cannot hold is passed over"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.ends_with(b"/in.txt") || l.ends_with(b"\\in.txt")),
+            "the junction not entered: {}",
+            String::from_utf8_lossy(&log)
+        );
+        assert!(
+            !lines.iter().any(|l| l.ends_with(b"dangling.txt")),
+            "a broken link passed over"
+        );
+        assert_eq!(lines.len(), 2);
+        // Read: plain.txt and the e-acute name (the `?` name is passed over).
+        assert_eq!(READ.with(std::cell::Cell::get), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The ANSI code page's rules on every platform, with stand-in code pages (1252, 932 with its
+/// lead bytes, 65001): names, Windows' order, names too long for `cFileName`, two host names
+/// with one ANSI name, double-byte names whose second byte is a `\` or an ASCII capital, the
+/// errors of files that cannot be read, a link whose target is gone. Measured behaviour:
+/// `measure/xnvse-rest/findfile-ansi-2026-11-14.txt` (order, names, `?` opens) and
+/// `findfile-overflow-2026-11-14.txt` (long names, locked and denied files).
+#[cfg(test)]
+mod tests_code_pages {
+    use super::code_page::StandIn;
+    use super::*;
+
+    /// A stand-in code page on this thread while it lives.
+    pub(super) struct Page;
+
+    impl Page {
+        pub(super) fn new(page: &'static StandIn) -> Page {
+            code_page::stand_in(Some(page));
+            Page
+        }
+    }
+
+    impl Drop for Page {
+        fn drop(&mut self) {
+            code_page::stand_in(None);
+        }
+    }
+
+    fn one(_: &[u8]) -> usize {
+        1
+    }
+
+    // 1252: bytes A0..FF are U+00A0..U+00FF; best fit for the measured `ł`; `?` otherwise.
+    fn cp1252_to_wide(b: &[u8]) -> Vec<u16> {
+        b.iter()
+            .map(|&c| {
+                if (0x80..0xa0).contains(&c) {
+                    0xfffd
+                } else {
+                    u16::from(c)
+                }
+            })
+            .collect()
+    }
+    fn cp1252_to_ansi(u: &[u16]) -> Vec<u8> {
+        char::decode_utf16(u.iter().copied())
+            .map(|c| match c.map(u32::from) {
+                Ok(c) if c < 0x80 || (0xa0..=0xff).contains(&c) => c as u8,
+                Ok(0x142) => b'l',
+                Ok(0x141) => b'L',
+                _ => b'?',
+            })
+            .collect()
+    }
+    pub(super) static CP1252: StandIn = StandIn {
+        to_wide: cp1252_to_wide,
+        to_ansi: cp1252_to_ansi,
+        char_len: one,
+    };
+
+    // 932 (Shift-JIS): a few double-byte characters, among them two whose second byte is `\`
+    // (ソ 83 5C, 表 95 5C) and one whose second byte is `A` (ア 83 41); half-width katakana single.
+    const SJIS: [(u16, [u8; 2]); 5] = [
+        (0x30bd, [0x83, 0x5c]),
+        (0x8868, [0x95, 0x5c]),
+        (0x65e5, [0x93, 0xfa]),
+        (0x672c, [0x96, 0x7b]),
+        (0x30a2, [0x83, 0x41]),
+    ];
+    fn sjis_lead(b: u8) -> bool {
+        matches!(b, 0x81..=0x9f | 0xe0..=0xfc)
+    }
+    fn cp932_char_len(b: &[u8]) -> usize {
+        if sjis_lead(b[0]) && b.len() > 1 {
+            2
+        } else {
+            1
+        }
+    }
+    fn cp932_to_wide(b: &[u8]) -> Vec<u16> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at < b.len() {
+            if cp932_char_len(&b[at..]) == 2 {
+                let pair = [b[at], b[at + 1]];
+                out.push(SJIS.iter().find(|s| s.1 == pair).map_or(0xfffd, |s| s.0));
+                at += 2;
+            } else {
+                out.push(match b[at] {
+                    c @ 0..=0x7f => u16::from(c),
+                    c @ 0xa1..=0xdf => 0xff61 + u16::from(c - 0xa1),
+                    _ => 0xfffd,
+                });
+                at += 1;
+            }
+        }
+        out
+    }
+    fn cp932_to_ansi(u: &[u16]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for &c in u {
+            match c {
+                0..=0x7f => out.push(c as u8),
+                0xff61..=0xff9f => out.push((c - 0xff61) as u8 + 0xa1),
+                _ => match SJIS.iter().find(|s| s.0 == c) {
+                    Some(s) => out.extend_from_slice(&s.1),
+                    None => out.push(b'?'),
+                },
+            }
+        }
+        out
+    }
+    pub(super) static CP932: StandIn = StandIn {
+        to_wide: cp932_to_wide,
+        to_ansi: cp932_to_ansi,
+        char_len: cp932_char_len,
+    };
+
+    // 65001: UTF-8.
+    fn utf8_to_wide(b: &[u8]) -> Vec<u16> {
+        String::from_utf8_lossy(b).encode_utf16().collect()
+    }
+    fn utf8_to_ansi(u: &[u16]) -> Vec<u8> {
+        String::from_utf16_lossy(u).into_bytes()
+    }
+    fn utf8_char_len(b: &[u8]) -> usize {
+        code_page::utf8_len(b[0])
+    }
+    pub(super) static CP65001: StandIn = StandIn {
+        to_wide: utf8_to_wide,
+        to_ansi: utf8_to_ansi,
+        char_len: utf8_char_len,
+    };
+
+    /// The bytes the current page gives a Unicode name.
+    fn ansi(name: &str) -> Vec<u8> {
+        code_page::to_ansi(&name.encode_utf16().collect::<Vec<u16>>())
+    }
+
+    /// A scratch folder of the test's own under the system's temporary folder.
+    fn scratch(test: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nv-rs-cp-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn folder_bytes(dir: &std::path::Path) -> Vec<u8> {
+        dir.to_string_lossy().into_owned().into_bytes()
+    }
+
+    /// A `WIN32_FIND_DATAA` in guest memory with 0xAA after it, filled with 0xAA.
+    fn find_data(e: &mut Engine) -> u32 {
+        let at = e.mem.alloc(0x200);
+        e.mem.write(at, &[0xaa; 0x200]);
+        at
+    }
+
+    fn listed() -> Listed {
+        Listed {
+            attributes: FILE_ATTRIBUTE_ARCHIVE,
+            size: 1,
+            created: 2,
+            accessed: 3,
+            written: 4,
+            tag: 0,
+        }
+    }
+
+    /// A name whose ANSI form does not fit `cFileName` is cut to whole characters within 259
+    /// bytes and a zero, `cAlternateFileName` and everything after the structure are left as
+    /// they were, and the answer is `ERROR_MORE_DATA` (measured with the UTF-8 code page: the
+    /// 260-byte name gave 259 bytes, the 264- and 304-byte names 258). One that fits with its
+    /// zero is written whole.
+    #[test]
+    fn a_name_too_long_for_cfilename_is_never_written_past_it() {
+        let mut e = Engine::new();
+        let check = |e: &mut Engine, name: &[u8], want: Result<(), u32>, kept: usize| {
+            let d = find_data(e);
+            let got = write_listed(e, Ptr::new(d), &listed(), &ansi_text(name), "SHORT~1.TXT");
+            assert_eq!(got, want);
+            assert_eq!(
+                e.mem.u32(d),
+                FILE_ATTRIBUTE_ARCHIVE,
+                "the fields before are written"
+            );
+            assert_eq!(e.mem.cstr(d + 0x2c), name[..kept].to_vec());
+            assert!(kept < NAME_FIELD);
+            let after = e.mem.bytes(d + 0x140, 0xc0);
+            assert!(
+                after.iter().all(|&b| b == 0xaa),
+                "nothing past the structure"
+            );
+            let alternate = e.mem.bytes(d + 0x130, 14);
+            if want.is_ok() {
+                assert_eq!(e.mem.cstr(d + 0x130), b"SHORT~1.TXT");
+            } else {
+                assert!(
+                    alternate.iter().all(|&b| b == 0xaa),
+                    "cAlternateFileName kept"
+                );
+            }
+        };
+        {
+            let _page = Page::new(&CP65001);
+            let zh = "\u{416}";
+            let fits = ansi(&format!("{}a", zh.repeat(129)));
+            assert_eq!(fits.len(), 259);
+            check(&mut e, &fits, Ok(()), 259);
+            let exact = ansi(&format!("{}ab", zh.repeat(129)));
+            check(&mut e, &exact, Err(ERROR_MORE_DATA), 259);
+            let over = ansi(&format!("{}.txt", zh.repeat(130)));
+            check(&mut e, &over, Err(ERROR_MORE_DATA), 258);
+            let cjk = ansi(&format!("{}.txt", "\u{65e5}".repeat(100)));
+            assert_eq!(cjk.len(), 304);
+            check(&mut e, &cjk, Err(ERROR_MORE_DATA), 258);
+        }
+        {
+            // 932: a pair is never split, its second byte `\` or not.
+            let _page = Page::new(&CP932);
+            let so = "\u{30bd}";
+            let fits = ansi(&format!("\u{ff71}{}", so.repeat(129)));
+            assert_eq!(fits.len(), 259);
+            check(&mut e, &fits, Ok(()), 259);
+            let over = ansi(&format!("\u{ff71}\u{ff71}{}", so.repeat(129)));
+            assert_eq!(over.len(), 260);
+            check(&mut e, &over, Err(ERROR_MORE_DATA), 258);
+            assert_eq!(over[257], 0x5c, "the last pair kept whole ends in 0x5C");
+        }
+        // The other two writers cut the same way.
+        let _page = Page::new(&CP65001);
+        let over = ansi(&format!("{}.txt", "\u{416}".repeat(130)));
+        let d = find_data(&mut e);
+        let entry = Entry {
+            name: ansi_text(&over),
+            short: Some(String::new()),
+            attributes: FILE_ATTRIBUTE_ARCHIVE,
+            size: 0,
+            created: 0,
+            accessed: 0,
+            written: 0,
+        };
+        assert_eq!(
+            write_entry(&mut e, Ptr::new(d), &entry, "x"),
+            Err(ERROR_MORE_DATA)
+        );
+        assert_eq!(e.mem.cstr(d + 0x2c).len(), 258);
+        assert!(e.mem.bytes(d + 0x130, 0xd0).iter().all(|&b| b == 0xaa));
+        // An 8.3 name too long for its field (not seen on Windows) fails after the name.
+        let d = find_data(&mut e);
+        assert_eq!(
+            write_names(&mut e, d, b"a.txt", b"0123456789ABCD"),
+            Err(ERROR_MORE_DATA)
+        );
+        assert!(e.mem.bytes(d + 0x130, 0xd0).iter().all(|&b| b == 0xaa));
+    }
+
+    /// Files the game made in this run whose names do not fit `cFileName`, found by a wildcard
+    /// search on every platform: `FindNextFileA` answers FALSE with `ERROR_MORE_DATA` and the next
+    /// call goes on with the entry after it; a search whose first entry does not fit answers
+    /// `INVALID_HANDLE_VALUE` with `ERROR_MORE_DATA` and no handle (measured).
+    #[test]
+    fn a_search_passes_a_name_too_long_with_more_data() {
+        let _page = Page::new(&CP65001);
+        let dir = scratch("long-run");
+        let mut e = Engine::new();
+        let folder = folder_bytes(&dir);
+        let run = |e: &mut Engine, name: &str| {
+            let mut full = folder.clone();
+            full.push(b'\\');
+            full.extend_from_slice(&ansi(name));
+            let k = key(&full);
+            state!(e).disk.files.insert(k.clone(), vec![1]);
+            state!(e).disk.entries.insert(
+                k,
+                Entry {
+                    name: ansi_text(&ansi(name)),
+                    short: Some(String::new()),
+                    attributes: FILE_ATTRIBUTE_ARCHIVE,
+                    size: 1,
+                    created: 0,
+                    accessed: 0,
+                    written: 0,
+                },
+            );
+        };
+        let day = "\u{65e5}";
+        run(&mut e, &format!("{day}.txt"));
+        run(&mut e, &format!("{day}{day}.txt"));
+        run(&mut e, &format!("{}.txt", day.repeat(100)));
+        run(&mut e, &format!("{}\u{672c}.txt", day.repeat(2)));
+        let mut pattern = folder.clone();
+        pattern.push(b'\\');
+        pattern.extend_from_slice(&ansi(&format!("{day}*")));
+        let name = e.mem.alloc(0x400);
+        e.mem.set_cstr(name, &pattern);
+        let d = find_data(&mut e);
+        let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(d));
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.mem.cstr(d + 0x2c), ansi(&format!("{day}.txt")));
+        let mut answers = Vec::new();
+        loop {
+            let ok = find_next_file_a(&mut e, h, Ptr::new(d));
+            let err = e.kernel.last_error;
+            answers.push((
+                ok,
+                if ok == 0 { err } else { 0 },
+                e.mem.cstr(d + 0x2c).len(),
+            ));
+            if ok == 0 && err == ERROR_NO_MORE_FILES {
+                break;
+            }
+        }
+        // 日日.txt (10 bytes), then the 100-character name (passed: 234), then 日日本.txt.
+        assert_eq!(
+            answers,
+            [
+                (1, 0, 10),
+                (0, ERROR_MORE_DATA, 258),
+                (1, 0, 13),
+                (0, ERROR_NO_MORE_FILES, 13)
+            ]
+        );
+        find_close(&mut e, h);
+        // Only the long name found: no handle.
+        let mut only = folder.clone();
+        only.push(b'\\');
+        only.extend_from_slice(&ansi(&format!("{}*", day.repeat(50))));
+        e.mem.set_cstr(name, &only);
+        e.kernel.last_error = 0;
+        let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(d));
+        assert_eq!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_MORE_DATA);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The merge of the run's files into the player's entries: for ASCII names exactly the order
+    /// every search answered before (all entries by upper-case bytes, `.` and `..` first), and
+    /// names outside ASCII by NTFS's upper-cased UTF-16 key (`é` after `Z`, `ł` after `é`).
+    #[test]
+    fn the_run_s_files_merge_into_the_player_s_order() {
+        let _page = Page::new(&CP1252);
+        let disk = |name: &str| Found::Disk {
+            path: std::path::PathBuf::from("C:\\d").join(name),
+            name: wide_to_ansi(&name.encode_utf16().collect::<Vec<u16>>()),
+            short: String::new(),
+            directory: false,
+            listed: None,
+        };
+        let run = |name: &str| {
+            Found::Run(Entry {
+                name: ansi_text(&ansi(name)),
+                short: Some(String::new()),
+                attributes: 0,
+                size: 0,
+                created: 0,
+                accessed: 0,
+                written: 0,
+            })
+        };
+        // ASCII: every split of a mixed set between player and run gives the old order.
+        let names = [
+            ".",
+            "..",
+            "a.esm",
+            "A_B.esp",
+            "aB.esp",
+            "Data",
+            "fallout - meshes.bsa",
+            "FalloutNV.esm",
+            "nvse",
+            "Save 1.fos",
+            "save 10.fos",
+            "SAVE 2.fos",
+            "z~1.txt",
+            "_x",
+            "1.txt",
+            "~tmp",
+            "[a]",
+            "a.b.c",
+        ];
+        let mut old: Vec<&str> = names.to_vec();
+        old.sort_by_key(|n| {
+            let rank = match *n {
+                "." => 0,
+                ".." => 1,
+                _ => 2,
+            };
+            (rank, n.to_ascii_uppercase())
+        });
+        for mask in [
+            0u32,
+            0b10_1010_1010_1010_1010,
+            0x3_ffff,
+            0b01_0101_0101_0101_0101,
+            0x2_4924,
+        ] {
+            let mut players: Vec<&str> = Vec::new();
+            let mut runs: Vec<&str> = Vec::new();
+            for (i, n) in old.iter().enumerate() {
+                if *n == "." || *n == ".." || mask & (1 << i) == 0 {
+                    players.push(n);
+                } else {
+                    runs.push(n);
+                }
+            }
+            runs.reverse();
+            let got: Vec<String> = in_order(
+                players.iter().map(|n| disk(n)).collect(),
+                runs.iter().map(|n| run(n)).collect(),
+            )
+            .iter()
+            .map(|f| f.name().to_string())
+            .collect();
+            assert_eq!(got, old, "mask {mask:#x}");
+        }
+        // Outside ASCII: the run's été and Zeta merge between the player's entries by NTFS's key.
+        let got: Vec<Vec<u8>> = in_order(
+            vec![
+                disk("."),
+                disk(".."),
+                disk("plain.txt"),
+                disk("\u{c9}u.txt"),
+                disk("\u{142}odz.txt"),
+                disk("\u{416}uk.txt"),
+            ],
+            vec![run("\u{ff}.txt"), run("\u{e9}t\u{e9}.txt"), run("Zeta")],
+        )
+        .iter()
+        .map(|f| ansi_bytes(f.name()))
+        .collect();
+        // été (upper-cased ÉTÉ) comes before the player's Éu: NTFS folds é to É. ÿ (Ÿ, U+0178)
+        // goes between łodz and Жuk by their host names, not their ANSI forms (`lodz`, `?uk`).
+        let want: [&[u8]; 9] = [
+            b".",
+            b"..",
+            b"plain.txt",
+            b"Zeta",
+            b"\xe9t\xe9.txt",
+            b"\xc9u.txt",
+            b"lodz.txt",
+            b"\xff.txt",
+            b"?uk.txt",
+        ];
+        assert_eq!(got, want);
+    }
+
+    /// The measured folder (`findfile-ansi-2026-11-14.txt`, without its junction and the link
+    /// whose target is gone): listed in Windows' order with its names in the code page
+    /// (`é` as E9, `ł` best fit to `l`, `Ж` and `日本` as `?`). On Windows also through
+    /// `FindFirstFileA`/`FindNextFileA`; elsewhere through the listing (file times are only
+    /// provided on Windows), and with the system's page there each character outside ASCII is `?`
+    /// in the same order.
+    #[test]
+    fn the_measured_folder_lists_in_windows_order() {
+        let dir = scratch("order");
+        for name in [
+            "plain.txt",
+            "\u{e9}t\u{e9}.txt",
+            "\u{142}odz.txt",
+            "\u{416}uk.txt",
+            "\u{65e5}\u{672c}.txt",
+        ] {
+            std::fs::write(dir.join(name), b"a").unwrap();
+        }
+        std::fs::create_dir(dir.join("target")).unwrap();
+        let want: [&[u8]; 8] = [
+            b".",
+            b"..",
+            b"plain.txt",
+            b"target",
+            b"\xe9t\xe9.txt",
+            b"lodz.txt",
+            b"?uk.txt",
+            b"??.txt",
+        ];
+        {
+            let _page = Page::new(&CP1252);
+            let names: Vec<Vec<u8>> = listing(&dir, b"*", "test")
+                .unwrap()
+                .iter()
+                .map(|f| ansi_bytes(f.name()))
+                .collect();
+            assert_eq!(names, want);
+            #[cfg(windows)]
+            {
+                let mut e = Engine::new();
+                let mut all = folder_bytes(&dir);
+                all.extend_from_slice(b"\\*");
+                let name = e.mem.alloc(0x400);
+                e.mem.set_cstr(name, &all);
+                let d = find_data(&mut e);
+                let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(d));
+                let mut got = vec![e.mem.cstr(d + 0x2c)];
+                while find_next_file_a(&mut e, h, Ptr::new(d)) != 0 {
+                    got.push(e.mem.cstr(d + 0x2c));
+                }
+                assert_eq!(got, want);
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let names: Vec<Vec<u8>> = listing(&dir, b"*", "test")
+                .unwrap()
+                .iter()
+                .map(|f| ansi_bytes(f.name()))
+                .collect();
+            let system: [&[u8]; 8] = [
+                b".",
+                b"..",
+                b"plain.txt",
+                b"target",
+                b"?t?.txt",
+                b"?odz.txt",
+                b"?uk.txt",
+                b"??.txt",
+            ];
+            assert_eq!(names, system);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two host names with one ANSI name (`lodz.txt`, and `łodz.txt` best fit to it): both are
+    /// listed, the real one first (NTFS's order), and the name opens the real file; the `?` form
+    /// of a name opens nothing, with `ERROR_INVALID_NAME` (measured).
+    #[test]
+    fn two_host_names_with_one_ansi_name() {
+        let _page = Page::new(&CP1252);
+        let dir = scratch("alias");
+        std::fs::write(dir.join("lodz.txt"), b"real").unwrap();
+        std::fs::write(dir.join("\u{142}odz.txt"), b"other").unwrap();
+        std::fs::write(dir.join("\u{416}uk.txt"), b"q").unwrap();
+        let names: Vec<String> = listing(&dir, b"*.txt", "test")
+            .unwrap()
+            .iter()
+            .map(|f| f.name().to_string())
+            .collect();
+        assert_eq!(names, ["lodz.txt", "lodz.txt", "?uk.txt"]);
+        let mut e = Engine::new();
+        assert_eq!(read_named(&mut e, &dir, b"lodz.txt"), Ok(b"real".to_vec()));
+        assert_eq!(
+            read_named(&mut e, &dir, b"?uk.txt"),
+            Err(ERROR_INVALID_NAME)
+        );
+        for bad in [&b"a*b"[..], b"a<b", b"a>b", b"a|b", b"a\"b"] {
+            assert_eq!(read_named(&mut e, &dir, bad), Err(ERROR_INVALID_NAME));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `CreateFileA` of `dir\name` for reading and one `ReadFile` of up to 64 bytes: the bytes, or
+    /// the last error of the call that failed.
+    fn read_named(e: &mut Engine, dir: &std::path::Path, name: &[u8]) -> Result<Vec<u8>, u32> {
+        let mut full = folder_bytes(dir);
+        full.push(b'\\');
+        full.extend_from_slice(name);
+        let at = e.mem.alloc(0x400);
+        e.mem.set_cstr(at, &full);
+        let h = create_file_a(e, Ptr::new(at), GENERIC_READ, 3, 0, OPEN_EXISTING, 0x80, 0);
+        if h == INVALID_HANDLE_VALUE {
+            return Err(e.kernel.last_error);
+        }
+        let buf = e.mem.alloc(64);
+        let got = e.mem.alloc(4);
+        let ok = read_file(e, h, Ptr::new(buf), 64, Ptr::new(got), 0);
+        let out = if ok == 0 {
+            Err(e.kernel.last_error)
+        } else {
+            Ok(e.mem.bytes(buf, e.mem.u32(got)))
+        };
+        super::super::close_handle(e, h);
+        out
+    }
+
+    /// Double-byte names whose second byte is `\` (ソ 83 5C) or an ASCII capital (ア 83 41) under
+    /// code page 932: the separators, the last part, the key, the host path, the matcher, the name
+    /// check and `GetFullPathNameA` read them character by character; such a file opens and reads.
+    #[test]
+    fn double_byte_names_keep_their_second_byte() {
+        let _page = Page::new(&CP932);
+        let so = b"\x83\x5c.txt";
+        assert_eq!(last_part(b"C:\\d\\\x83\x5c.txt"), ansi_text(so));
+        assert_eq!(separators(b"C:\\d\\\x83\x5c\\x"), [2, 4, 7]);
+        assert_eq!(
+            key(b"C:\\D\\\x83\x41B/\x83\x5c"),
+            b"c:\\d\\\x83\x41b\\\x83\x5c"
+        );
+        assert_eq!(
+            real_path(b"C:\\d\\\x83\x5c.txt").file_name().unwrap(),
+            "\u{30bd}.txt"
+        );
+        assert!(wild_match(b"?.TXT", so));
+        assert!(!wild_match(b"\x83\x41.txt", so));
+        assert!(wild_match(b"\x83\x5c*", so));
+        assert!(
+            !invalid_last_part(b"C:\\d\\\x83\x7c"),
+            "a second byte `|` is no `|`"
+        );
+        assert!(invalid_last_part(b"C:\\d\\a|b"));
+        assert!(in_folder(b"c:\\d\\\x83\x5c", b"c:\\d"));
+        // GetFullPathNameA: the name ends in ソ, not in a separator; its file part is the name.
+        let mut e = Engine::new();
+        e.kernel.current_directory = b"C:\\cur".to_vec();
+        let name = e.mem.alloc(0x40);
+        e.mem.set_cstr(name, b"\x95\x5c");
+        let buffer = e.mem.alloc(0x100);
+        let part = e.mem.alloc(4);
+        let n = get_full_path_name_a(
+            &mut e,
+            Ptr::new(name),
+            0x100,
+            Ptr::new(buffer),
+            Ptr::new(part),
+        );
+        assert_eq!(e.mem.cstr(buffer), b"C:\\cur\\\x95\x5c");
+        assert_eq!(n, 9);
+        assert_eq!(e.mem.u32(part), buffer + 7);
+        // A real file named ソ.txt opens by its 932 bytes and reads.
+        let dir = scratch("dbcs");
+        std::fs::write(dir.join("\u{30bd}.txt"), b"so").unwrap();
+        assert_eq!(read_named(&mut e, &dir, so), Ok(b"so".to_vec()));
+        let names: Vec<Vec<u8>> = listing(&dir, b"*.txt", "test")
+            .unwrap()
+            .iter()
+            .map(|f| ansi_bytes(f.name()))
+            .collect();
+        assert_eq!(names, [so.to_vec()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A link whose target is gone is listed by the search (and, on Windows, found by name), on
+    /// every host that can make one; where none can be made the test says so (not a pass).
+    #[test]
+    fn a_link_whose_target_is_gone_is_listed() {
+        let dir = scratch("dangling");
+        std::fs::write(dir.join("gone.txt"), b"a").unwrap();
+        #[cfg(windows)]
+        let linked =
+            std::os::windows::fs::symlink_file(dir.join("gone.txt"), dir.join("dangling.txt"))
+                .is_ok();
+        #[cfg(unix)]
+        let linked =
+            std::os::unix::fs::symlink(dir.join("gone.txt"), dir.join("dangling.txt")).is_ok();
+        #[cfg(not(any(windows, unix)))]
+        let linked = false;
+        std::fs::remove_file(dir.join("gone.txt")).unwrap();
+        if !linked {
+            eprintln!("SKIPPED (not a pass): no symbolic link could be made on this host");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let names: Vec<String> = listing(&dir, b"*", "test")
+            .unwrap()
+            .iter()
+            .map(|f| f.name().to_string())
+            .collect();
+        assert_eq!(names, [".", "..", "dangling.txt"]);
+        #[cfg(windows)]
+        {
+            let mut e = Engine::new();
+            let mut one = folder_bytes(&dir);
+            one.extend_from_slice(b"\\dangling.txt");
+            let name = e.mem.alloc(0x400);
+            e.mem.set_cstr(name, &one);
+            let d = find_data(&mut e);
+            let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(d));
+            assert_ne!(h, INVALID_HANDLE_VALUE);
+            assert_ne!(e.mem.u32(d) & FILE_ATTRIBUTE_REPARSE_POINT, 0);
+            assert_eq!(e.mem.u32(d + 0x24), 0xa000_000c);
+            // Opening it follows the link: nothing there.
+            assert_eq!(
+                read_named(&mut e, &dir, b"dangling.txt"),
+                Err(ERROR_FILE_NOT_FOUND)
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A player's file another program holds without sharing, or that the player may not read,
+    /// fails its open with Windows' answer (32, 5; measured) for reading and for a write open that
+    /// reads it into the run, instead of stopping the run at the first read.
+    #[test]
+    fn a_file_that_cannot_be_read_answers_windows_errors() {
+        let dir = scratch("unreadable");
+        std::fs::write(dir.join("held.txt"), b"held").unwrap();
+        let mut e = Engine::new();
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            let holder = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(dir.join("held.txt"))
+                .unwrap();
+            assert_eq!(
+                read_named(&mut e, &dir, b"held.txt"),
+                Err(ERROR_SHARING_VIOLATION)
+            );
+            let mut full = folder_bytes(&dir);
+            full.extend_from_slice(b"\\held.txt");
+            let at = e.mem.alloc(0x400);
+            e.mem.set_cstr(at, &full);
+            let h = create_file_a(
+                &mut e,
+                Ptr::new(at),
+                GENERIC_WRITE,
+                0,
+                0,
+                OPEN_EXISTING,
+                0x80,
+                0,
+            );
+            assert_eq!(h, INVALID_HANDLE_VALUE);
+            assert_eq!(e.kernel.last_error, ERROR_SHARING_VIOLATION);
+            assert!(
+                state!(e).disk.files.is_empty(),
+                "not taken into the run empty"
+            );
+            // CopyFileA and MoveFileA of it answer the same (Windows' own fail with 32 too: the
+            // source cannot be opened, or renamed while held).
+            let mut to = folder_bytes(&dir);
+            to.extend_from_slice(b"\\moved.txt");
+            let target = e.mem.alloc(0x400);
+            e.mem.set_cstr(target, &to);
+            assert_eq!(copy_file_a(&mut e, Ptr::new(at), Ptr::new(target), 0), 0);
+            assert_eq!(e.kernel.last_error, ERROR_SHARING_VIOLATION);
+            assert_eq!(move_file_a(&mut e, Ptr::new(at), Ptr::new(target)), 0);
+            assert_eq!(e.kernel.last_error, ERROR_SHARING_VIOLATION);
+            assert!(state!(e).disk.files.is_empty() && state!(e).disk.deleted.is_empty());
+            drop(holder);
+            assert_eq!(read_named(&mut e, &dir, b"held.txt"), Ok(b"held".to_vec()));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let path = dir.join("held.txt");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+            if std::fs::File::open(&path).is_ok() {
+                eprintln!("SKIPPED (not a pass): this user reads a file of mode 000 (root)");
+            } else {
+                assert_eq!(
+                    read_named(&mut e, &dir, b"held.txt"),
+                    Err(ERROR_ACCESS_DENIED)
+                );
+            }
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

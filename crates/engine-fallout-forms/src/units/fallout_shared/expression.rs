@@ -176,8 +176,12 @@ pub fn expression_to_postfix(
     e.mem.set_u8(write, b')');
     e.mem.set_u8(write + 1, 0);
     let operators = Ptr::new(base + OPERATORS);
+    // xNVSE's fix (`ExpressionParserBufferOverflowHook_1/_2`, `005935D0` and `005937DE`): the
+    // token is read into and copied from its 0x500-byte buffer, so a token longer than the stack
+    // buffer no longer overwrites the cursor and the kind after it.
+    let alt = e.expression_alt_buffer();
     e.with_stack(0x44 + 12, |e, work| {
-        let token = work;
+        let token = if alt != 0 { Ptr::new(alt) } else { work };
         let cursor = work.byte_add(0x44);
         let kind = work.byte_add(0x48);
         e.mem.set_u32(cursor.addr(), base + INFIX);
@@ -467,10 +471,18 @@ pub fn expression_eval(
     // 0x47 is the "skip push" flag at EBP-0x251) directly before the copy
     // of the bytes (EBP-0x250); then the current operand (EBP-0x10), the
     // copy cursor, the source position, the kind and the operand offset.
-    e.with_stack(0x48 + 0x208 + 16 + 16, |e, frame| {
+    // With xNVSE's fix (`SafeWrite8(0x593DB6, 7)`, `SafeWrite16(0x593E5A, 0xF8B4)`: a frame
+    // 0x400 bytes larger and the token buffer at EBP-0x74C) the token buffer starts 0x4B4 bytes
+    // further down, 0x4FC bytes before the copy, so no token reaches the flag or the copy.
+    let moved = if e.expression_alt_buffer() != 0 {
+        0x4b4
+    } else {
+        0
+    };
+    e.with_stack(moved + 0x48 + 0x208 + 16 + 16, |e, frame| {
         let token = frame.addr();
-        let skip_push = token + 0x47;
-        let copy = token + 0x48;
+        let skip_push = token + moved + 0x47;
+        let copy = token + moved + 0x48;
         let current = copy + 0x208;
         let cursor = current + 16;
         let position = cursor + 4;
@@ -1221,6 +1233,96 @@ mod tests {
         let words = args![this, data, 0u32, 0u32, 0u32, 1u32, bytes.len() as i32, 0u8];
         assert_eq!(e.call(0x00593db0, &words).f64(), 0.0);
         assert_eq!(e.get(this, CExpression::m_ExpressionError), 5);
+    }
+
+    /// With xNVSE's fix (a built-in extender set the token buffer: `SafeWrite8(0x593DB6, 7)`,
+    /// `SafeWrite16(0x593E5A, 0xF8B4)`) the token buffer lies 0x4B4 bytes further from the copy
+    /// of the bytes, so the same 72-byte token is pushed and its value read; tokens up to the
+    /// new room (0x4FB bytes before the flag) leave the flag alone.
+    #[test]
+    fn eval_a_long_token_with_xnvses_buffer_is_pushed() {
+        let mut e = Engine::new();
+        table_fixture(&mut e);
+        let this = expression(&mut e);
+        let alt = e.mem.alloc(0x500);
+        e.set_expression_alt_buffer(alt);
+        let mut bytes = vec![b' ', b'X', 0x00, 0x10, 67, 0];
+        bytes.extend([7u8; 67]);
+        let data = e.mem.alloc(bytes.len() as u32);
+        e.mem.write(data, &bytes);
+        e.register_double(0x005ac7a0, |e, a| {
+            e.mem.set_f64(a[0], 2.5);
+            1u32.into_ret()
+        });
+        let words = args![this, data, 0u32, 0u32, 0u32, 1u32, bytes.len() as i32, 0u8];
+        assert_eq!(e.call(0x00593db0, &words).f64(), 2.5);
+        assert_eq!(e.get(this, CExpression::m_ExpressionError), 0);
+        // Eval's token buffer is its own frame's, not the conversion's buffer.
+        assert!(e.mem.bytes(alt, 0x500).iter().all(|&b| b == 0));
+        // A token as long as the bytes allow (0x1FF bytes of a 0x200-byte expression) is
+        // pushed too, and the token buffer lies exactly 0x4FC bytes before the copy (its
+        // operand slot is 0x208 bytes after the copy): xNVSE's token buffer at EBP-0x74C
+        // against the copy at EBP-0x250.
+        thread_local! {
+            static SEEN: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+        }
+        let mut bytes = vec![b' ', b'X', 0x00, 0x10, 0xfa, 0x01];
+        bytes.extend([7u8; 0x1fa]);
+        assert_eq!(bytes.len(), 0x200);
+        let data = e.mem.alloc(bytes.len() as u32);
+        e.mem.write(data, &bytes);
+        e.register_double(0x005ac7a0, |e, a| {
+            SEEN.with(|s| s.set((a[0], a[1])));
+            e.mem.set_f64(a[0], 4.5);
+            1u32.into_ret()
+        });
+        let words = args![this, data, 0u32, 0u32, 0u32, 1u32, bytes.len() as i32, 0u8];
+        assert_eq!(e.call(0x00593db0, &words).f64(), 4.5);
+        assert_eq!(e.get(this, CExpression::m_ExpressionError), 0);
+        let (operand, token) = SEEN.with(std::cell::Cell::get);
+        let copy = operand - 8 - 0x208;
+        assert_eq!(copy - token, 0x4fc);
+        // The token went there (its first byte is overwritten by the end of the reading).
+        assert_eq!(e.mem.bytes(token + 1, 5), bytes[2..7]);
+    }
+
+    /// The infix-to-postfix conversion with xNVSE's buffer reads its tokens into that buffer:
+    /// a quoted string of 0x50 bytes (past the 0x44-byte stack buffer, whose overflow reaches the
+    /// cursor) is copied through whole and the conversion ends normally.
+    #[test]
+    fn postfix_reads_tokens_into_xnvses_buffer() {
+        let run = |fix: bool, infix: &[u8]| {
+            let mut e = Engine::new();
+            table_fixture(&mut e);
+            let this = expression(&mut e);
+            let alt = e.mem.alloc(0x500);
+            if fix {
+                e.set_expression_alt_buffer(alt);
+            }
+            let text = e.mem.alloc(infix.len() as u32 + 1);
+            e.mem.write(text, infix);
+            let length = e.mem.alloc(4);
+            e.mem.set_u32(length, infix.len() as u32);
+            let out = e.call(0x00593500, &args![this, text, length]).u32();
+            let postfix = e.mem.bytes(out, e.mem.u32(length));
+            (out, postfix, e.mem.bytes(alt, 0x51))
+        };
+        let mut infix = b"\"".to_vec();
+        infix.extend([b'a'; 0x4e]);
+        infix.extend(b"\"+1");
+        let (out, postfix, token) = run(true, &infix);
+        assert_ne!(out, 0);
+        let mut want = b" ".to_vec();
+        want.extend_from_slice(&infix[..0x50]);
+        want.extend(b" 1 +");
+        assert_eq!(postfix, want);
+        // The string went through the buffer: its bytes past the later, shorter tokens remain.
+        assert_eq!(&token[2..0x50], &infix[2..0x50]);
+        // Without the fix the buffer is not used (a short expression: a long token would overrun
+        // the stack buffer into the cursor, as on PC).
+        let (_, postfix, token) = run(false, b"1+2");
+        assert_eq!(postfix, b" 1 2 +");
+        assert!(token.iter().all(|&b| b == 0));
     }
 
     #[test]

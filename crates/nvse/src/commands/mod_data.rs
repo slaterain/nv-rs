@@ -63,7 +63,6 @@ const MATCHES_ANY_OF: &[Param] = &[
     p("value", BASIC_TYPE, true),
     p("value", BASIC_TYPE, true),
     p("value", BASIC_TYPE, true),
-    p("value", BASIC_TYPE, true),
 ];
 
 const fn cmd(
@@ -90,7 +89,7 @@ const fn cmd(
 
 const RD: Returns = Returns::Default;
 const SELF_HELP: &str =
-    "Unlike GetSelf, will return ThisObj even if it isn't Persistent and is clutter.";
+    "\"Unlike GetSelf, will return ThisObj even if it isn't Persistent and is clutter.\"";
 
 #[rustfmt::skip]
 pub static COMMANDS: &[Command] = &[
@@ -102,9 +101,9 @@ pub static COMMANDS: &[Command] = &[
     cmd(0x154c, "GetAllModLocalData", "", "returns a StringMap containing all local data for the calling mod", &[], get_all_mod_local_data, Returns::Array),
     cmd(0x162c, "GetCommandOpcode", "", "gets opcode for command name", ONE_STRING, get_command_opcode, RD),
     cmd(0x164a, "GetSelfAlt_OLD", "ThisAlt_OLD", SELF_HELP, &[], get_self_alt, Returns::Form),
-    cmd(0x166f, "MatchesAnyOf", "", "Returns true/false if the first value matches any of the other values.", MATCHES_ANY_OF, matches_any_of, RD),
+    cmd(0x166f, "MatchesAnyOf", "", "\"Returns true/false if the first value matches any of the other values.\"", MATCHES_ANY_OF, matches_any_of, RD),
     cmd(0x1669, "GetSelfAlt", "ThisAlt", SELF_HELP, &[], get_self_alt, Returns::Form),
-    cmd(0x1676, "PluginVersion", "", "Internal only - declares a nvse / plugin requirement for a script.", PLUGIN_VERSION, plugin_version, RD),
+    cmd(0x1676, "PluginVersion", "", "\"Internal only - declares a nvse / plugin requirement for a script.\"", PLUGIN_VERSION, plugin_version, RD),
     cmd(0x167a, "ReloadPluginConfig", "", "sends kMessage_ReloadConfig to the specified plugin", ONE_STRING, reload_plugin_config, RD),
 ];
 

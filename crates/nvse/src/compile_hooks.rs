@@ -27,11 +27,20 @@
 //!   table lets a double parameter be a variable.
 //! - `005B3A8D` (`StandardCompile`'s end-of-line check): off while a nested command parses.
 //!
-//! Not here: xNVSE's compiled script cache on disk (`ScriptDataCache`, a file of compiled data
-//! keyed by the text's hash, only a speed-up: plan 3.8's next part), and its two fixes of the
-//! game's own expression reader's buffers (`ExpressionParserBufferOverflowHook_1/_2`, the
-//! 0x400-byte string buffer at `00593DB6`), which are fixes of the game's `set`/`if` compiler
-//! rather than xNVSE's compiler.
+//! Also from `Hook_Script_Init`: xNVSE's two fixes of the game's own `set`/`if` expression code,
+//! a 0x500-byte token buffer for the infix-to-postfix conversion (`ExpressionParserBufferOverflow
+//! Hook_1/_2`, `005935D0`/`005937DE`) and `CExpression::Eval`'s token buffer moved clear of the
+//! expression's bytes (`00593DB6`, `00593E5A`): the buffer is made here and handed to the
+//! translation through `Engine::set_expression_alt_buffer` (engine-forms' `expression.rs` reads
+//! it).
+//!
+//! Not here: xNVSE's compiled script cache on disk (`ScriptDataCache`, `script_data_cache.bin`).
+//! It is a speed cache only: a hit loads the bytes, variables and references a compile of the
+//! same text made in an earlier run, in place of compiling (the plugins then hear no
+//! `ScriptPrecompile`), and it is read and written only around the first frame (loaded before
+//! `DeferredInit`, saved after the function files compile; once saved it is off for the run).
+//! A script compiled from the cache is the one the compile would make, so nothing a mod or a
+//! script can see changes without it; nv-rs compiles every time.
 
 use crate::compiler::{self, is_space, ln, opt_text, sb, sc, show_error, state, str_equal, vt};
 
@@ -77,7 +86,15 @@ pub fn install(e: &mut Engine) {
     if e.mem.is_mapped(DOUBLE_PARAMETER_TYPE) {
         e.mem.set_u16(DOUBLE_PARAMETER_TYPE, 1);
     }
+    // `s_ExpressionParserAltBuffer` (`char[0x500]`, zeroed) and the hooks that use it.
+    if e.expression_alt_buffer() == 0 {
+        let buffer = crate::table::alloc(e, EXPRESSION_ALT_BUFFER_SIZE);
+        e.set_expression_alt_buffer(buffer);
+    }
 }
+
+/// The size of xNVSE's token buffer for the game's expression code.
+pub const EXPRESSION_ALT_BUFFER_SIZE: u32 = 0x500;
 
 // ---- the seams ----
 
