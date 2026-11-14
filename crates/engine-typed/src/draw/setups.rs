@@ -828,8 +828,8 @@ pub fn stage_slot_texture(e: &mut Engine, property: Ptr, stage: u32, word: u32, 
 
 /// One stage setter call of the first subclass's textures ([`subclass_textures`]): `00b7c0a0(property, stage,
 /// texture)`, `00b7c0e0(property, stage, word)`, `00b7c1f0(property, stage, index, flag)`, `00b7c230(property,
-/// stage, word, flag)`, `00b7c120(stage)`. The exe also calls an empty function (`00d3dd00`) in three lists: left
-/// out.
+/// stage, word, flag)`, `00b7c120(stage)`, and the empty function the exe calls in three lists (`00d3dd00`, `thiscall(shader,
+/// property, three words)`, by address).
 #[derive(Clone, Copy)]
 enum StageCall {
     A(u32, u32),
@@ -837,12 +837,13 @@ enum StageCall {
     F(u32, u32, bool),
     T(u32, u32, bool),
     R(u32),
+    N(u32, u32, u32),
 }
 
 /// The first subclass's stage lists by pass type: 0x231 to 0x233, and the types 0x99 to 0x174 through the exe's
 /// jump table (`00bce6c0` with the bytes `00bce6e8`, read from the exe). `None`: the shadow light shader's own.
 fn subclass_stage_calls(pass_type: u32) -> Option<&'static [StageCall]> {
-    use StageCall::{A, B, F, R, T};
+    use StageCall::{A, B, F, N, R, T};
     if (0x231..=0x233).contains(&pass_type) {
         return Some(&[A(0, 0), R(6)]);
     }
@@ -851,14 +852,17 @@ fn subclass_stage_calls(pass_type: u32) -> Option<&'static [StageCall]> {
         0xd9 | 0xe2 | 0xeb | 0xf4 => &[A(0, 0), B(1, 0), T(2, 0, true)],
         0x103 | 0x10f | 0x11a | 0x125 => &[F(4, 0, true), A(0, 0), B(1, 0), T(3, 0, true)],
         0x101 | 0x10e | 0x119 | 0x124 => &[A(0, 0), B(1, 0), T(3, 0, true)],
-        0x9a | 0xa5 | 0xb0 | 0xbb => &[F(4, 0, true), A(0, 0), B(1, 0), T(3, 0, true)],
-        0x99 | 0xa4 | 0xaf | 0xba => &[A(0, 0), B(1, 0), T(3, 0, true)],
+        0x9a | 0xa5 | 0xb0 | 0xbb => &[F(4, 0, true), A(0, 0), B(1, 0), T(3, 0, true), N(2, 0, 1)],
+        0x99 | 0xa4 | 0xaf | 0xba => &[A(0, 0), B(1, 0), T(3, 0, true), N(2, 0, 1)],
         0x134 | 0x140 => &[A(1, 0), B(0, 0), T(2, 0, true)],
         0x153 => &[A(0, 0), T(2, 0, true)],
-        0x15c | 0x162 | 0x168 | 0x16e | 0x174 => &[A(1, 0), B(0, 0), T(2, 0, true)],
+        0x15c | 0x162 | 0x168 | 0x16e | 0x174 => &[A(1, 0), B(0, 0), T(2, 0, true), N(6, 0, 1)],
         _ => return None,
     })
 }
+
+/// The empty function three of the first subclass's lists call (`00d3dd00`).
+const EMPTY_SETTER: u32 = 0x00d3_dd00;
 
 // Typed from 00bce500
 /// The first subclass's `SetupGeometryTextures` (vtable `010bb7a8` slot 0x78), `thiscall(shader, state)` (not a
@@ -903,6 +907,9 @@ pub fn subclass_textures(e: &mut Engine, this: Ptr, state: Ptr) {
                 0x00b7_c120,
                 shader::textures::stage_light_texture(e, stage)
             ),
+            StageCall::N(a, b, c) => {
+                e.call(EMPTY_SETTER, &args![this.addr(), property, a, b, c]);
+            }
         }
     }
     super::speedtree::after_textures(e, this.addr());

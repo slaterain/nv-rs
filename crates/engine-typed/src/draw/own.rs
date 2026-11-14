@@ -308,6 +308,11 @@ pub(crate) fn decal_state_off(e: &mut Engine) {
 /// (`01201b30`), the ambient's enable flag (`012010c4`, +8) and the bytes `01200bf4` and `01200bf5` set
 /// (condition 2: shader-state globals).
 pub fn fog_ambient(e: &mut Engine) {
+    fog_ambient_inline(e);
+}
+
+/// [`fog_ambient`]'s body, for a caller where the exe has it inlined (lighting 3.0's pass choice).
+pub(crate) fn fog_ambient_inline(e: &mut Engine) {
     for index in 0..4u32 {
         let word = e.global::<u32>(FOG_COLOUR.wrapping_add(4 * index));
         capture::set_own_at(e, AMBIENT.wrapping_add(4 * index), word);

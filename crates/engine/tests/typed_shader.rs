@@ -16498,7 +16498,7 @@ fn stage_light(e: &mut Engine, ed: u32, shadow: bool, lit: u32) -> u32 {
     let rendering = e.mem.u32(0x011f_91e0);
     let lights = e.mem.alloc(8);
     let vt = vtable(e, &[]);
-    let light = obj(e, 0x120, vt);
+    let light = obj(e, 0x220, vt);
     e.mem.set_u8(light + 0xec, ed as u8);
     if shadow {
         let map = obj(e, 0x40, vt);
@@ -16717,7 +16717,14 @@ fn subclass_textures() {
     ))
     .shader_translated()
     .float_sweep(0)
-    .goes_by_address(&[0x00b7_d200])
+    .goes_by_address(&[
+        0x00b7_d200,
+        0x00b7_c0a0,
+        0x00b7_c0e0,
+        0x00b7_c230,
+        0x00b7_c1f0,
+        0x00b7_c120,
+    ])
     .inputs(&[
         Input::Of(&[
             0, 0x98, 0x99, 0x9a, 0x9b, 0xd9, 0xda, 0x101, 0x103, 0x134, 0x153, 0x15c, 0x174, 0x175,
@@ -16947,6 +16954,7 @@ fn pass_hand_word() {
 fn lighting30_stage_textures_slot() {
     Diff::new(entry!(0x00c0_cd80, l30::stage_textures(Ptr<_>, u32, u32)))
         .pass_common()
+        .goes_by_address(&[0x004a_2020])
         .inputs(&[
             Input::Of(&[
                 0, 0x1bc, 0x1bd, 0x1c3, 0x1c4, 0x1c7, 0x1c8, 0x1cb, 0x1cc, 0x1d3, 0x1e1, 0x1e2,
@@ -17076,7 +17084,12 @@ fn leaf_lights_world(
 
 /// [`leaf_lights_world`] from a case of [`LEAF_LIGHTS`].
 fn leaf_lights_words(e: &mut Engine, c: &Case) -> Vec<u32> {
-    let (d, p, r, s) = (play_bits(c, 0), play_bits(c, 1), play_bits(c, 2), play_bits(c, 3));
+    let (d, p, r, s) = (
+        play_bits(c, 0),
+        play_bits(c, 1),
+        play_bits(c, 2),
+        play_bits(c, 3),
+    );
     leaf_lights_world(e, d, p, r, s, c.word(4))
 }
 
@@ -17089,6 +17102,7 @@ fn leaf_light_setup() {
         st::light_setup(Ptr<_>, Ptr<_>, u32, f32)
     ))
     .common()
+    .goes_by_address(&[0x00b7_0790])
     .main_thread(0)
     .inputs(LEAF_LIGHTS)
     .float_sweep(FLOAT_SWEEP)
@@ -17106,6 +17120,7 @@ fn leaf_light_setup_quiets_signalling_nans() {
         st::light_setup(Ptr<_>, Ptr<_>, u32, f32)
     ))
     .common()
+    .goes_by_address(&[0x00b7_0790])
     .control_words(&[MAIN_THREAD])
     .float_sweep(0)
     .inputs(&[
@@ -17255,7 +17270,7 @@ fn the_new_set_ups_keep_the_draws_own_state() {
             state::set_stencil_operations(u32, u32, u32, u32)
         )
         .1,
-        &product(&[&[1], LOCKS, TWO_WAYS, TWO_WAYS]),
+        &product(&[&[1], LOCKS, TWO_WAYS, TWO_WAYS, TWO_WAYS]),
         |e, c| {
             let w = world(e);
             e.map(CONSTANT_UPLOAD_COPY, 0x2000);

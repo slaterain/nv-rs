@@ -1347,7 +1347,7 @@ pub fn select_pass(e: &mut Engine, this: Ptr, pass_type: u32) {
     let base = this.addr();
     let pass = e.call(PASS_FOR_TYPE, &args![base, pass_type]).u32();
     own::set_current_pass(e, pass);
-    typed_call!(super::FAMILY, 0x00bb_b840, own::fog_ambient(e));
+    own::fog_ambient_inline(e);
     if pass_type == 0x1e0 || pass_type == 0x1e1 {
         own::assign_counted(e, base.wrapping_add(0x30), base.wrapping_add(0x6c), true);
         own::assign_counted(e, base.wrapping_add(0x34), base.wrapping_add(0x70), true);
