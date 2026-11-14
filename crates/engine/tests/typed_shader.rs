@@ -17132,7 +17132,19 @@ fn leaf_light_setup_quiets_signalling_nans() {
         Input::Of(&[0x7f80_0007, TWO]),
         Input::Of(&[2]),
     ])
-    .setup(|e, c| leaf_lights_world(e, c.word(0), c.word(1), c.word(2), TWO, c.word(3)))
+    .setup(|e, c| {
+        let words = leaf_lights_world(e, c.word(0), c.word(1), c.word(2), TWO, c.word(3));
+        // The D3DX results signalling NaNs too, so the quieting of what comes back shows.
+        for addr in [0x00fd_f410u32, 0x00fd_f414, 0x00fd_f41c, 0x00fd_f420] {
+            e.register(addr, |e, a| {
+                for k in 0..3u32 {
+                    e.mem.set_u32(a[0] + 4 * k, 0x7f80_0005 + k);
+                }
+                ret(a[0])
+            });
+        }
+        words
+    })
     .run()
     .assert_same();
 }
