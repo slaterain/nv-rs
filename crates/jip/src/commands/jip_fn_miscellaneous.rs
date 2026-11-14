@@ -922,7 +922,7 @@ fn get_game_days_passed(e: &mut Engine, w: &[u32]) -> Ret {
     let year = read.int(0, 2281) as i32;
     let month = read.int(1, 10) as i32;
     let day = read.int(2, 13) as i32;
-    if read.ok && month <= 12 && month >= 1 {
+    if read.ok && (1..=12).contains(&month) {
         let days = days_passed(e, year, month - 1, day);
         a.set_result(e, f64::from(days));
     }
