@@ -371,13 +371,13 @@ fn click_menu_tile_pokes_clicked_when_targetable() {
     let v = values(&mut e, t(3), &[(0xfaf, 1.0, None), (0xfc7, 0.0, None)]);
     let path = s(b"InventoryMenu/Box/Item");
     assert_eq!(
-        call(&mut e, 0x28a4, &[path.clone()]).1,
+        call(&mut e, 0x28a4, std::slice::from_ref(&path)).1,
         0.0,
         "not in menu mode"
     );
     assert!(calls().is_empty());
     in_menu_mode(&mut e);
-    assert_eq!(call(&mut e, 0x28a4, &[path.clone()]).1, 1.0);
+    assert_eq!(call(&mut e, 0x28a4, std::slice::from_ref(&path)).1, 1.0);
     assert_eq!(
         calls_to(REFRESH_FN),
         vec![vec![v[1], 1], vec![v[1], 1]],
@@ -387,9 +387,9 @@ fn click_menu_tile_pokes_clicked_when_targetable() {
     // Target 0 (or none): no click.
     CALLS.with(|c| c.borrow_mut().clear());
     e.mem.set_f32(v[0] + 8, 0.0);
-    assert_eq!(call(&mut e, 0x28a4, &[path.clone()]).1, 0.0);
+    assert_eq!(call(&mut e, 0x28a4, std::slice::from_ref(&path)).1, 0.0);
     e.mem.set_f32(v[0] + 8, f32::NAN);
-    assert_eq!(call(&mut e, 0x28a4, &[path.clone()]).1, 0.0);
+    assert_eq!(call(&mut e, 0x28a4, std::slice::from_ref(&path)).1, 0.0);
     assert!(calls().is_empty());
     // A target but no clicked value: 1, nothing poked.
     e.mem.set_f32(v[0] + 8, 2.0);
