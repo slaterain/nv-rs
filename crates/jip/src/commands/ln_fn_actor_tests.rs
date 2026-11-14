@@ -378,3 +378,36 @@ fn equip_by_data() {
     call_on(&mut e, 0x2324, ACTOR, &[n(short as i32)]);
     assert_eq!(calls_to(0x0088_c650).len(), 3, "not three elements");
 }
+
+/// The equip match: a health that differs from the list's (even with matching flags) equips
+/// nothing; with no health and no flags the first list WITHOUT mod flags is taken, even when a
+/// modded list comes first.
+#[test]
+fn equip_match_rules() {
+    let mut e = setup();
+    inventory(&mut e);
+    e.register(0x0088_c650, |_, w| {
+        CALLS.with(|c| c.borrow_mut().push((0x0088_c650, w.to_vec())));
+        Ret::default()
+    });
+    call_on(&mut e, 0x2325, ACTOR, &[r(9), z(0.75), n(3)]);
+    assert!(calls_to(0x0088_c650).is_empty(), "health bits differ");
+    // The modded list first, then the plain one.
+    node(&mut e, NODES + 0x30, XDL1, NODES + 0x38);
+    node(&mut e, NODES + 0x38, XDL2, 0);
+    call_on(&mut e, 0x2325, ACTOR, &[r(9)]);
+    assert_eq!(
+        calls_to(0x0088_c650),
+        vec![vec![ACTOR, WEAP, 1, XDL2, 1, 0, 0]]
+    );
+}
+
+/// Rank 0 on an existing entry is a rank, not a removal.
+#[test]
+fn faction_rank_zero_kept() {
+    let mut e = setup();
+    call(&mut e, 0x2315, &[r(3), n(4), r(1)]);
+    call(&mut e, 0x2315, &[r(3), n(0), r(1)]);
+    assert_eq!(call(&mut e, 0x2314, &[r(3), r(1)]).1, 0.0);
+    assert!(freed().is_empty());
+}

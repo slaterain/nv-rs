@@ -277,3 +277,56 @@ fn base_items_removed() {
         vec![vec![ACTOR, WEAP, 1, 0, 1, 0, 1]]
     );
 }
+
+/// The plain rule for a new list: flags above 0 make none.
+#[test]
+fn no_new_list_with_flags() {
+    let mut e = setup();
+    call(&mut e, 0x2319, &[n(2), r(3), z(-1.0), n(3)]);
+    assert_eq!(e.mem.u32(E_L), 0);
+    assert!(allocations().is_empty());
+}
+
+/// The match on weapons: a health no list has, or flags no list has (a list without mod flags
+/// matches only flags 0), gives nobody the hotkey.
+#[test]
+fn no_list_matches() {
+    let mut e = setup();
+    call(&mut e, 0x2319, &[n(1), r(1), z(0.75)]);
+    assert_eq!((hotkey_of(&e, L1), hotkey_of(&e, L2)), (None, None));
+    call(&mut e, 0x2319, &[n(1), r(1), z(-2.0), n(5)]);
+    assert_eq!((hotkey_of(&e, L1), hotkey_of(&e, L2)), (None, None));
+}
+
+/// A list with the item's hotkey that matches keeps it under the new index.
+#[test]
+fn a_hotkey_reindexed() {
+    let mut e = setup();
+    call(&mut e, 0x2319, &[n(2), r(2)]);
+    assert_eq!(hotkey_of(&e, L3), Some(1));
+    assert!(allocations().is_empty(), "the same extra");
+}
+
+/// A list of the item left empty by losing the index is freed and taken out.
+#[test]
+fn an_emptied_list_cleaned() {
+    let mut e = setup();
+    let l5 = FORMS + 0x5300;
+    node(&mut e, NODES + 0x28, L2, NODES + 0x48);
+    node(&mut e, NODES + 0x48, l5, 0);
+    put_extra(&mut e, l5, XHK + 0x80, 0x4a, 6);
+    call(&mut e, 0x2319, &[n(7), r(1), z(0.5), n(3)]);
+    assert_eq!(hotkey_of(&e, L1), Some(6));
+    assert_eq!(freed(), vec![l5, NODES + 0x48]);
+    assert_eq!(e.mem.u32(NODES + 0x2c), 0, "L2's node is the last");
+}
+
+/// An actor base's container is the one at +0x64 (its items at +0x68).
+#[test]
+fn an_actor_base_container_offset() {
+    let mut e = setup();
+    node(&mut e, NPC + 0x68, FC1, 0);
+    e.mem.set_u32(FC1, 6);
+    e.mem.set_u32(FC1 + 4, WEAP);
+    assert_eq!(call(&mut e, 0x22f7, &[r(1), r(6)]).1, 6.0);
+}
