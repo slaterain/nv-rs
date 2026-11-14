@@ -43,7 +43,7 @@ pub fn print_result(e: &mut Engine, a: &CommandArgs) {
 
 /// The console's print with `line` as its format (it holds no `%` JIP would expand: JIP passes
 /// its buffer as both the format and the argument).
-fn console_print_line(e: &mut Engine, line: &[u8]) {
+pub fn console_print_line(e: &mut Engine, line: &[u8]) {
     let console = e.call(CONSOLE_INSTANCE, &args![1u32]).u32();
     if console == 0 {
         return;

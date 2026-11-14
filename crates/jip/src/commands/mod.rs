@@ -16,6 +16,7 @@ pub mod jip_fn_ammo_effect;
 pub mod jip_fn_armor;
 pub mod jip_fn_aux_variable;
 pub mod jip_fn_body_part_data;
+pub mod jip_fn_cell;
 pub mod jip_fn_class;
 pub mod jip_fn_climate;
 pub mod jip_fn_combat_style;
@@ -35,19 +36,25 @@ pub mod jip_fn_projectile;
 pub mod jip_fn_quest;
 pub mod jip_fn_ref_map;
 pub mod jip_fn_texture_set;
+pub mod jip_fn_utility;
 pub mod jip_fn_water;
 pub mod jip_fn_weapon;
 pub mod jip_fn_weather;
 pub mod jip_fn_worldspace;
 pub mod ln_fn_activator;
 pub mod ln_fn_casino;
+pub mod ln_fn_cell;
 pub mod ln_fn_challenge;
 pub mod ln_fn_leveled_list;
+pub mod ln_fn_load_screen;
 pub mod ln_fn_map_marker;
 pub mod ln_fn_math;
 pub mod ln_fn_perk;
 pub mod ln_fn_race;
+pub mod ln_fn_radio_ref;
 pub mod ln_fn_recipe;
+pub mod ln_fn_terminal;
+pub mod ln_fn_utility;
 pub mod ln_fn_weapon;
 
 use engine_core::prelude::*;
@@ -82,6 +89,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ammo_effect::COMMANDS,
     jip_fn_armor::COMMANDS,
     jip_fn_body_part_data::COMMANDS,
+    jip_fn_cell::COMMANDS,
     jip_fn_class::COMMANDS,
     jip_fn_climate::COMMANDS,
     jip_fn_combat_style::COMMANDS,
@@ -101,19 +109,25 @@ pub const ALL: &[Handlers] = &[
     jip_fn_quest::COMMANDS,
     jip_fn_ref_map::COMMANDS,
     jip_fn_texture_set::COMMANDS,
+    jip_fn_utility::COMMANDS,
     jip_fn_water::COMMANDS,
     jip_fn_weapon::COMMANDS,
     jip_fn_weather::COMMANDS,
     jip_fn_worldspace::COMMANDS,
     ln_fn_activator::COMMANDS,
     ln_fn_casino::COMMANDS,
+    ln_fn_cell::COMMANDS,
     ln_fn_challenge::COMMANDS,
     ln_fn_leveled_list::COMMANDS,
+    ln_fn_load_screen::COMMANDS,
     ln_fn_map_marker::COMMANDS,
     ln_fn_math::COMMANDS,
     ln_fn_perk::COMMANDS,
     ln_fn_race::COMMANDS,
+    ln_fn_radio_ref::COMMANDS,
     ln_fn_recipe::COMMANDS,
+    ln_fn_terminal::COMMANDS,
+    ln_fn_utility::COMMANDS,
     ln_fn_weapon::COMMANDS,
 ];
 
@@ -611,6 +625,7 @@ mod tests {
             "jip_fn_ammo_effect",
             "jip_fn_armor",
             "jip_fn_body_part_data",
+            "jip_fn_cell",
             "jip_fn_class",
             "jip_fn_climate",
             "jip_fn_combat_style",
@@ -630,19 +645,25 @@ mod tests {
             "jip_fn_quest",
             "jip_fn_ref_map",
             "jip_fn_texture_set",
+            "jip_fn_utility",
             "jip_fn_water",
             "jip_fn_weapon",
             "jip_fn_weather",
             "jip_fn_worldspace",
             "ln_fn_activator",
             "ln_fn_casino",
+            "ln_fn_cell",
             "ln_fn_challenge",
             "ln_fn_leveled_list",
+            "ln_fn_load_screen",
             "ln_fn_map_marker",
             "ln_fn_math",
             "ln_fn_perk",
             "ln_fn_race",
+            "ln_fn_radio_ref",
             "ln_fn_recipe",
+            "ln_fn_terminal",
+            "ln_fn_utility",
             "ln_fn_weapon",
         ];
         let mut seen = std::collections::HashSet::new();
