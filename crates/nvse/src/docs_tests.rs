@@ -729,3 +729,16 @@ fn help_texts_keep_xnvses_quotes() {
     };
     assert_eq!(params("MatchesAnyOf"), 20);
 }
+
+/// An argument whose type names an array puts a command that returns a number among the array
+/// functions (`ar_Size`: an `Array` argument, a number result).
+#[test]
+fn an_array_argument_makes_an_array_function() {
+    let mut e = engine(0x166d);
+    call(&mut e, 0x166c, 0, &[n(0x1550), n(0x1550)]);
+    let lines = log_lines();
+    assert!(lines.contains(&"   |Type = Array".to_string()), "{lines:?}");
+    assert!(lines
+        .contains(&" |returnType = Float [remove this arg if func returns nothing]".to_string()));
+    assert!(lines.contains(&"[[Category:Array Functions]]".to_string()));
+}
