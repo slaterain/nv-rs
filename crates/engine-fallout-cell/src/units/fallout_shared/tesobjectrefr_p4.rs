@@ -2999,7 +2999,13 @@ pub fn tes_object_refr_activate(
                 e.call(0x0070_3c00, &args![text]);
             });
         }
-        if me != player(e) && !fn_00572d30(e, this, 1) {
+        // The seam at `0x00573512` (JIP LN NVSE's DoActivate), in place of the "activated" test:
+        // an answer counts as already activated (no scripts run here).
+        if me != player(e)
+            && !(e.hook_users(engine_core::extend::Hook::DoActivate) != 0
+                && e.site(0x0057_3512, &[me]).is_some())
+            && !fn_00572d30(e, this, 1)
+        {
             fn_00572d50(e, this, 2);
             fn_00572e10(e, this, activator);
             if e.global::<i32>(0x011c_a424) < 5 {
@@ -3029,6 +3035,13 @@ pub fn tes_object_refr_activate(
         0x30 => return true,
         0x1c => {
             let door = e.call(0x0056_8e50, &args![me]).u32();
+            // The seam at `0x00573673` (JIP LN NVSE's ActivateDoor), after the teleport read: an
+            // answer is true at once (a teammate passing a locked door that leads nowhere).
+            if e.hook_users(engine_core::extend::Hook::ActivateDoor) != 0
+                && e.site(0x0057_3673, &[me, activator, door]).is_some()
+            {
+                return true;
+            }
             if door != 0 && activator == player(e) {
                 let current = player(e);
                 let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, current));
@@ -8621,6 +8634,84 @@ mod tests {
                 .bool());
         });
         assert!(calls_to(&log, 0x008b_c980).is_empty());
+    }
+
+    thread_local! {
+        static SEEN: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn jip_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's DoActivate seam (`0x00573512`): no user, not asked; with one, asked with
+    /// the reference in place of the "activated" test; an answer counts as activated (no
+    /// scripts, the exe's test not made), none makes the exe's test.
+    #[test]
+    fn activate_do_activate_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut s = activate_setup();
+        returns(&mut s.e, 0x0041_b3a0, 0);
+        s.e.register_double(0x0056_5870, |_, _| ret(0));
+        s.e.on_site(SiteSlot::new(Owner::Jip, 0x0057_3512), jip_handler);
+        ANSWER.with(|c| c.set(Some(1)));
+        let (refr, activator) = (s.refr, s.activator);
+        let go = |e: &mut Engine| {
+            logged(e, |e| {
+                e.call(0x0057_3170, &args![refr, activator, 3u8, 0u32, 0u32]);
+            })
+        };
+        let log = go(&mut s.e);
+        assert!(SEEN.with(|v| v.borrow().is_empty()), "no user");
+        assert_eq!(calls_to(&log, 0x0056_5870).len(), 1);
+        s.e.add_hook_user(Hook::DoActivate, true);
+        let log = go(&mut s.e);
+        assert_eq!(SEEN.with(|v| v.take()), vec![vec![refr]]);
+        assert!(calls_to(&log, 0x0041_b3a0).is_empty(), "the exe's test not made");
+        assert!(calls_to(&log, 0x0056_5870).is_empty(), "no scripts");
+        assert_eq!(calls_to(&log, 0x0056_a290).len(), 1, "the base object runs");
+        ANSWER.with(|c| c.set(None));
+        let log = go(&mut s.e);
+        assert_eq!(SEEN.with(|v| v.take()).len(), 1);
+        assert_eq!(calls_to(&log, 0x0056_5870).len(), 1, "no answer: the exe");
+    }
+
+    /// JIP LN NVSE's ActivateDoor seam (`0x00573673`): no user, not asked; with one, asked with
+    /// the door, the activator and the teleport read; an answer is true at once (the base object
+    /// does not run), none goes on.
+    #[test]
+    fn activate_activate_door_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut s = activate_setup();
+        let (base, refr, activator) = (s.base, s.refr, s.activator);
+        s.e.mem.set_u8(base + 4, 0x1c);
+        s.e.on_site(SiteSlot::new(Owner::Jip, 0x0057_3673), jip_handler);
+        ANSWER.with(|c| c.set(Some(1)));
+        let go = |e: &mut Engine| {
+            let mut done = false;
+            let log = logged(e, |e| {
+                done = e
+                    .call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32])
+                    .bool();
+            });
+            (done, log)
+        };
+        let (_, log) = go(&mut s.e);
+        assert!(SEEN.with(|v| v.borrow().is_empty()), "no user");
+        assert_eq!(calls_to(&log, 0x0056_a290).len(), 1);
+        s.e.add_hook_user(Hook::ActivateDoor, true);
+        s.e.set_global::<u8>(0x011c_a428, 0);
+        let (done, log) = go(&mut s.e);
+        assert!(done);
+        assert_eq!(SEEN.with(|v| v.take()), vec![vec![refr, activator, 0]]);
+        assert!(calls_to(&log, 0x0056_a290).is_empty(), "the base object does not run");
+        assert_eq!(s.e.global::<u8>(0x011c_a428), 0, "no activation record");
+        ANSWER.with(|c| c.set(None));
+        let (_, log) = go(&mut s.e);
+        assert_eq!(SEEN.with(|v| v.take()).len(), 1);
+        assert_eq!(calls_to(&log, 0x0056_a290).len(), 1, "no answer: the exe");
     }
 
     #[test]

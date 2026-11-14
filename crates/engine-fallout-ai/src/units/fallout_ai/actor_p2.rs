@@ -5903,9 +5903,17 @@ pub fn actor_equip_object(
     if e.call(FORM_TYPE, &args![item]).u32() == FORM_TYPE_AMMO
         && e.vcall(item.addr(), FORM_VSLOT_0X94, &args![]).bool()
     {
-        e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
+        {
+            // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
+        }
         let list = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
-        e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_USED]);
+        {
+            // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_USED]);
+        }
         return;
     }
     if is_player
@@ -6039,7 +6047,11 @@ pub fn actor_equip_object(
             );
         }
         FORM_TYPE_FOOD => {
-            e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
+            {
+                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
+            }
             if !e.vcall(item.addr(), FORM_VSLOT_0X94, &args![]).bool() {
                 e.call(ACTOR_EAT, &args![this, item, extra, !is_player]);
                 notify_flag = 1;
@@ -6089,7 +6101,11 @@ pub fn actor_equip_object(
                             &args![notification, 1u32, item, 0u32, 0u32, 0u32, 0u32],
                         );
                     }
-                    e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
+                    {
+                        // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                        let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                        e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
+                    }
                     if e.call(ACTOR_DRINK_POTION, &args![this, item, extra, !is_player])
                         .bool()
                     {
@@ -6142,9 +6158,17 @@ pub fn actor_equip_object(
     }
     let combat_object = e.mem.u32(COMBAT_OBJECT_POINTER);
     if !e.call(COMBAT_CONTROLLER_TEST, &args![combat_object]).bool() && action_flag_pending {
-        e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
+        {
+            // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_USED]);
+        }
         let list = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
-        e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_USED]);
+        {
+            // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+            let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+            e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_USED]);
+        }
     }
 }
 
@@ -6813,9 +6837,17 @@ pub fn fn_0088e110(
     if changes != 0 {
         let combat_object = e.mem.u32(COMBAT_OBJECT_POINTER);
         if !e.call(COMBAT_CONTROLLER_TEST, &args![combat_object]).bool() {
-            e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_REMOVED]);
+            {
+                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                e.call(SET_ACTION_FLAG, &args![this, extra, ACTION_FLAG_REMOVED]);
+            }
             let list = e.call(GET_EXTRA_DATA_LIST_ADDRESS, &args![this]).u32();
-            e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_REMOVED]);
+            {
+                // JIP LN NVSE's MarkScriptEvent reads this call's caller's first stack word.
+                let _caller = e.mark_caller_word(engine_core::extend::Hook::MarkScriptEvent, item.addr());
+                e.call(SET_ACTION_FLAG, &args![item, list, ACTION_FLAG_REMOVED]);
+            }
         }
         result = e.with_stack(4, |e, local| {
             e.mem.set_u8(local.addr(), 1);

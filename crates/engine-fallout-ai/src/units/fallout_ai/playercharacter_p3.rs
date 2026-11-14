@@ -5530,6 +5530,11 @@ pub fn player_character_add_note(e: &mut Engine, this: Ptr<PlayerCharacter>, not
             e.mem.set_u32(cell.addr(), note);
             if !e.call(LIST_CONTAINS, &args![list, cell]).bool() {
                 e.call(LIST_APPEND, &args![list, cell]);
+                // The seam at `0x00966AF9` (JIP LN NVSE's AddNote), a new note: words the note;
+                // the answer is not used.
+                if e.hook_users(engine_core::extend::Hook::AddNote) != 0 {
+                    e.site(0x0096_6af9, &[note]);
+                }
                 let name = e.call(GET_LOCATION_NAME, &args![note + 0x48]).u32();
                 let format = e.call(SETTING_STRING, &args![NOTE_FORMAT_SETTING]).u32();
                 e.call(STRING_FORMAT, &args![string, format, name]);
@@ -6761,6 +6766,11 @@ fn update_auto_aim_actor_in_frame(e: &mut Engine, f: Frame, this: Ptr<PlayerChar
         let actor = e.call(PICK_RESULT_GET, &args![array, index]).u32();
         auto_aim_candidate(e, f, this, camera, actor, &mut best, &mut range);
         index += 1;
+    }
+    // The seam at `0x00964675` (JIP LN NVSE's SetPCTarget), after the scan: words the player;
+    // the answer is not used.
+    if e.hook_users(engine_core::extend::Hook::SetPCTarget) != 0 {
+        e.site(0x0096_4675, &[this.addr()]);
     }
     e.call(FUNCTION_004A3C20, &args![f.at(0xffff_fea0)]);
     e.call(FUNCTION_0062A190, &args![f.at(0xffff_fe20), 0x25u32, best]);
@@ -13197,6 +13207,44 @@ mod tests {
         assert_eq!(calls_to(&log, FUNCTION_007052F0).len(), 1);
     }
 
+    thread_local! {
+        static JIP_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn note_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0096_6af9, a.to_vec())));
+        Some(1)
+    }
+
+    fn target_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0096_4675, a.to_vec())));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's AddNote seam (`0x00966AF9`): no user, not asked; with one, asked with a
+    /// new note after it is listed (not for a known one), and the note is still named and
+    /// announced whatever it answers.
+    #[test]
+    fn a_new_note_add_note_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine(CALLEES_00966A70);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0096_6af9), note_handler);
+        let player = e.new_object::<PlayerCharacter>();
+        let note = 0x7000_0000u32;
+        e.call(0x0096_6a70, &args![player, note, 1u8]);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        e.add_hook_user(Hook::AddNote, true);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6a70, &args![player, note, 1u8]);
+        });
+        assert_eq!(JIP_SEEN.with(|s| s.take()), vec![(0x0096_6af9, vec![note])]);
+        assert_eq!(calls_to(&log, GET_LOCATION_NAME), [[note + 0x48]]);
+        assert_eq!(calls_to(&log, FUNCTION_007052F0).len(), 1);
+        answer(&mut e, LIST_CONTAINS, 1);
+        e.call(0x0096_6a70, &args![player, note, 1u8]);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "a known note");
+    }
+
     #[test]
     fn a_known_note_is_only_announced_and_a_null_note_only_logged() {
         let mut e = engine(CALLEES_00966A70);
@@ -14599,6 +14647,33 @@ mod tests {
             [[calls_to(&log, FUNCTION_004A3C20)[0][0], query[0]]]
         );
         assert_eq!(calls_to(&log, FUNCTION_0059CEE0), [[query[0]]]);
+    }
+
+    /// JIP LN NVSE's SetPCTarget seam (`0x00964675`): no user, not asked; with one, asked with
+    /// the player after the scan (the target actor already set), and the pick goes on.
+    #[test]
+    fn auto_aim_set_pc_target_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut world = auto_aim_world(1, 100.0);
+        let (player, actor) = (world.player, world.actor);
+        world
+            .e
+            .on_site(SiteSlot::new(Owner::Jip, 0x0096_4675), target_handler);
+        world.e.call(0x0096_4260, &args![player]);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        world.e.add_hook_user(Hook::SetPCTarget, true);
+        let log = logged(&mut world.e, |e| {
+            e.call(0x0096_4260, &args![player]);
+        });
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            vec![(0x0096_4675, vec![player.addr()])]
+        );
+        assert_eq!(
+            world.e.get(player, PlayerCharacter::pPlayersTargetActor).addr(),
+            actor
+        );
+        assert_eq!(calls_to(&log, FUNCTION_0062A190).len(), 1, "goes on");
     }
 
     #[test]

@@ -2406,39 +2406,67 @@ pub fn fn_0063d1d0(e: &mut Engine, this: Ptr<Sky>) {
         e.set(this, Sky::fCurrentWeatherPct, 1.0);
     } else {
         let elapsed = hours_since_last_update(e, this);
-        let low_slot: Ptr = e
-            .call(SETTING_FLOAT_VALUE, &args![TRANSITION_LOW_SETTING])
-            .ptr();
-        let low = e.mem.f32(low_slot.addr());
-        let high_slot: Ptr = e
-            .call(SETTING_FLOAT_VALUE, &args![TRANSITION_HIGH_SETTING])
-            .ptr();
-        let high = e.mem.f32(high_slot.addr());
-        let current = e.get(this, Sky::pCurrentWeather);
-        let length = e
-            .call(WEATHER_BYTE_FRACTION, &args![current, 3u32, high, low])
-            .f32();
-        e.set(
-            this,
-            Sky::fCurrentWeatherPct,
-            (elapsed / length as f64) as f32,
-        );
+        // The seam at `0x0063D4F5` (JIP LN NVSE's UpdateWeather): words the hours since the
+        // last update (an `f64`, low word first); an answer is the blend (`f32` bits) in place
+        // of the transition length's division.
+        let answer = if e.hook_users(engine_core::extend::Hook::UpdateWeather) != 0 {
+            let bits = elapsed.to_bits();
+            e.site(0x0063_d4f5, &[bits as u32, (bits >> 32) as u32])
+        } else {
+            None
+        };
+        if let Some(pct) = answer {
+            e.set(this, Sky::fCurrentWeatherPct, f32::from_bits(pct));
+        } else {
+            update_blend(e, this, elapsed);
+        }
     }
     if e.get(this, Sky::uiFlags) & 8 != 0 {
-        let pct = e.get(this, Sky::fCurrentWeatherPct);
-        let begin = e.get(this, Sky::fAccelBeginPct);
-        let diff = pct as f64 - begin as f64;
-        let slot: Ptr = e
-            .call(SETTING_FLOAT_VALUE, &args![TRANSITION_ACCELERATION_SETTING])
-            .ptr();
-        let acceleration = e.mem.f32(slot.addr());
-        let begin = e.get(this, Sky::fAccelBeginPct);
-        e.set(
-            this,
-            Sky::fCurrentWeatherPct,
-            ((acceleration as f64 + 1.0) * diff + begin as f64) as f32,
-        );
+        accelerate_blend(e, this);
     }
+    finish_transition(e, this);
+}
+
+/// The blend from the transition length (`fn_0063d1d0`'s exe path).
+fn update_blend(e: &mut Engine, this: Ptr<Sky>, elapsed: f64) {
+    let low_slot: Ptr = e
+        .call(SETTING_FLOAT_VALUE, &args![TRANSITION_LOW_SETTING])
+        .ptr();
+    let low = e.mem.f32(low_slot.addr());
+    let high_slot: Ptr = e
+        .call(SETTING_FLOAT_VALUE, &args![TRANSITION_HIGH_SETTING])
+        .ptr();
+    let high = e.mem.f32(high_slot.addr());
+    let current = e.get(this, Sky::pCurrentWeather);
+    let length = e
+        .call(WEATHER_BYTE_FRACTION, &args![current, 3u32, high, low])
+        .f32();
+    e.set(
+        this,
+        Sky::fCurrentWeatherPct,
+        (elapsed / length as f64) as f32,
+    );
+}
+
+/// The blend re-scaled by the acceleration setting (flag 8).
+fn accelerate_blend(e: &mut Engine, this: Ptr<Sky>) {
+    let pct = e.get(this, Sky::fCurrentWeatherPct);
+    let begin = e.get(this, Sky::fAccelBeginPct);
+    let diff = pct as f64 - begin as f64;
+    let slot: Ptr = e
+        .call(SETTING_FLOAT_VALUE, &args![TRANSITION_ACCELERATION_SETTING])
+        .ptr();
+    let acceleration = e.mem.f32(slot.addr());
+    let begin = e.get(this, Sky::fAccelBeginPct);
+    e.set(
+        this,
+        Sky::fCurrentWeatherPct,
+        ((acceleration as f64 + 1.0) * diff + begin as f64) as f32,
+    );
+}
+
+/// A blend above 1 ends the transition; then `Sky::UpdateHDRValues`.
+fn finish_transition(e: &mut Engine, this: Ptr<Sky>) {
     let one: f64 = e.global(DOUBLE_ONE);
     if e.get(this, Sky::fCurrentWeatherPct) as f64 > one {
         e.set(this, Sky::pLastWeather, Ptr::NULL);
@@ -5732,6 +5760,63 @@ mod tests {
         e.call(0x0063_d1d0, &args![sky]);
         assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 1.0);
         assert!(e.get(sky, Sky::pLastWeather).is_null());
+    }
+
+    thread_local! {
+        static WEATHER_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static WEATHER_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn weather_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        WEATHER_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        WEATHER_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's UpdateWeather seam (`0x0063D4F5`): no user, not asked; with one, asked with
+    /// the hours since the last update (the `f64`'s two words); an answer is the blend (no
+    /// transition length asked), the acceleration and the end of the transition still follow;
+    /// none, the exe's division.
+    #[test]
+    fn weather_update_update_weather_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = weather_engine();
+        e.set_global(0x011c_cc88, 1.0f32);
+        e.register(WEATHER_BYTE_FRACTION, |_, _| ret_float(4.0));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0063_d4f5), weather_handler);
+        WEATHER_ANSWER.with(|c| c.set(Some(0.25f32.to_bits())));
+        let sky = sky_with_instances(&mut e);
+        e.set(sky, Sky::pCurrentClimate, Ptr::new(0x1000));
+        e.set(sky, Sky::pDefaultWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pCurrentWeather, Ptr::new(0x4000));
+        e.set(sky, Sky::pLastWeather, Ptr::new(0x4100));
+        e.set(sky, Sky::uiFlags, 1 << 20);
+        e.set(sky, Sky::fCurrentGameHour, 10.0);
+        e.set(sky, Sky::fLastWeatherUpdate, 8.0);
+        e.call(0x0063_d1d0, &args![sky]);
+        assert!(WEATHER_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 0.5);
+        e.add_hook_user(Hook::UpdateWeather, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0063_d1d0, &args![sky]);
+        let log = e.call_log.take().unwrap();
+        let bits = 2.0f64.to_bits();
+        assert_eq!(
+            WEATHER_SEEN.with(|s| s.take()),
+            vec![vec![bits as u32, (bits >> 32) as u32]]
+        );
+        assert!(!addresses(&log).contains(&WEATHER_BYTE_FRACTION));
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 0.25);
+        // The acceleration still re-scales the answer; above 1 the transition ends.
+        e.set_global(0x011c_cc28, 1.0f32);
+        e.set(sky, Sky::uiFlags, 8);
+        e.set(sky, Sky::fAccelBeginPct, 0.0);
+        e.call(0x0063_d1d0, &args![sky]);
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 0.5);
+        WEATHER_ANSWER.with(|c| c.set(Some(1.5f32.to_bits())));
+        e.set(sky, Sky::uiFlags, 0);
+        e.call(0x0063_d1d0, &args![sky]);
+        assert!(e.get(sky, Sky::pLastWeather).is_null());
+        assert_eq!(e.get(sky, Sky::fCurrentWeatherPct), 1.0);
     }
 
     #[test]

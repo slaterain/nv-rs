@@ -1497,8 +1497,19 @@ pub fn fn_0093b7a0(
     if e.call(0x0040_6d70, &args![actor_value, 0x100u32]).bool() {
         return;
     }
+    let mut amount = amount;
     let before = if actor_value == 0x10 {
-        health_ratio(e, this) as f32
+        let owner = this.addr().wrapping_add(ACTOR_VALUE_OWNER_BASE);
+        let current = e.vcall(owner, 0xc, &args![0x10u32]).f32();
+        let maximum = e.vcall(owner, 0x20, &args![0x10u32]).f32();
+        // The seam at `0x0093B80A` (JIP LN NVSE's PlayerMinHealth): words the health and the
+        // change (`f32` bits); an answer is the change to make instead.
+        if e.hook_users(engine_core::extend::Hook::PlayerMinHealth) != 0 {
+            if let Some(bits) = e.site(0x0093_b80a, &[current.to_bits(), amount.to_bits()]) {
+                amount = f32::from_bits(bits);
+            }
+        }
+        (current as f64 / maximum as f64) as f32
     } else {
         1.0
     };
@@ -1783,6 +1794,11 @@ pub fn player_character_handle_position_player_request(
                 target = e
                     .get(request, PositionPlayerRequest::fast_travel_target)
                     .addr();
+            }
+            // The seam at `0x0093BF22` (JIP LN NVSE's PCFastTravel), before the move: words the
+            // target; the answer is not used.
+            if e.hook_users(engine_core::extend::Hook::PCFastTravel) != 0 {
+                e.site(0x0093_bf22, &[target]);
             }
             let player = e.global::<u32>(PLAYER_SINGLETON);
             player_character_fast_travel(e, Ptr::new(player), Ptr::new(target));
@@ -5452,11 +5468,19 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                                 }
                             } else {
                                 let activator = e.call(0x0077_8930, &args![reference]).u32();
-                                if e.call(
-                                    0x0057_3170,
-                                    &args![reference, this, 0u32, 0u32, activator],
-                                )
-                                .bool()
+                                // The seam at `0x00943279` (JIP LN NVSE's InteractionDisabled,
+                                // the activation half): an answer skips the activation, as if
+                                // it had failed.
+                                let skipped = e
+                                    .hook_users(engine_core::extend::Hook::InteractionDisabled)
+                                    != 0
+                                    && e.site(0x0094_3279, &[reference]).is_some();
+                                if !skipped
+                                    && e.call(
+                                        0x0057_3170,
+                                        &args![reference, this, 0u32, 0u32, activator],
+                                    )
+                                    .bool()
                                 {
                                     allow = false;
                                 } else {
@@ -13341,6 +13365,46 @@ mod tests {
         assert!(called(&e, 0x0088_0890).is_empty());
     }
 
+    thread_local! {
+        static JIP_SEEN: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn min_health_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0093_b80a, a.to_vec())));
+        Some((-1.0f32).to_bits())
+    }
+
+    fn fast_travel_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0093_bf22, a.to_vec())));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's PlayerMinHealth seam (`0x0093B80A`): no user, not asked; with one, asked
+    /// for a health change with the health and the change, and the answer is the change made;
+    /// other values are not asked about.
+    #[test]
+    fn fn_0093b7a0_player_min_health_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        let mut e = engine();
+        let this = health_world(&mut e, 0.9, 0.3, 0.8, 0.4);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0093_b80a), min_health_handler);
+        e.call(0x0093_b7a0, &args![this, 0x10u32, 4.0f32, 0x6000u32]);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "no user");
+        let mut e = engine();
+        let this = health_world(&mut e, 0.9, 0.3, 0.8, 0.4);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0093_b80a), min_health_handler);
+        e.add_hook_user(Hook::PlayerMinHealth, true);
+        e.call(0x0093_b7a0, &args![this, 0x10u32, 4.0f32, 0x6000u32]);
+        assert_eq!(
+            JIP_SEEN.with(|s| s.take()),
+            vec![(0x0093_b80a, vec![90.0f32.to_bits(), 4.0f32.to_bits()])]
+        );
+        let delta = &called(&e, 0x0088_0890)[0];
+        assert_eq!(f(delta, 2), -1.0, "the answer is the change made");
+        e.call(0x0093_b7a0, &args![this, 0x11u32, 4.0f32, 0x6000u32]);
+        assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "not health");
+    }
+
     /// The globals of the cell-grid functions: the `TES` singleton pointer
     /// (pointing at 0x5000), the water search constants and the cell size.
     fn grid_globals(e: &mut Engine) {
@@ -14786,6 +14850,36 @@ mod tests {
         assert_eq!(*deleted.borrow(), vec![request.addr()]);
         // The follow-up on the player.
         assert_eq!(called(&e, 0x005d_14d0), vec![vec![this.addr(), 1]]);
+    }
+
+    /// JIP LN NVSE's PCFastTravel seam (`0x0093BF22`): no user, not asked; with one, asked with
+    /// the travel's target before the move, and the travel still happens.
+    #[test]
+    fn handling_a_fast_travel_request_pc_fast_travel_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for users in [0, 1] {
+            let mut e = engine();
+            let (world, _) = handler_world(&mut e);
+            let this = world.this;
+            e.register(0x0056_9b80, |_, _| int(0));
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0093_bf22), fast_travel_handler);
+            e.set_hook_users(Hook::PCFastTravel, users);
+            queue_request(&mut e, this, |e, r| {
+                e.set(
+                    r,
+                    PositionPlayerRequest::fast_travel_target,
+                    Ptr::new(0x7000),
+                );
+            });
+            assert!(e.call(0x0093_bea0, &args![this]).bool());
+            let seen = JIP_SEEN.with(|s| s.take());
+            if users == 0 {
+                assert!(seen.is_empty(), "no user");
+            } else {
+                assert_eq!(seen, vec![(0x0093_bf22, vec![0x7000])]);
+            }
+            assert_eq!(called(&e, 0x005e_58f0)[0][0], 0x33, "the travel ran");
+        }
     }
 
     #[test]
@@ -16327,6 +16421,44 @@ mod tests {
         let n = log.len();
         assert_eq!(&log[n - 2..], &[SOUND_HANDLE_DESTRUCT, 0x0040_4ee0]);
         assert!(called(&e, 0x0095_f6c0).is_empty());
+    }
+
+    fn activation_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0094_3279, a.to_vec())));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's InteractionDisabled seam in the activate button's path (`0x00943279`): no
+    /// user, not asked and the reference under the crosshair is activated; with one, asked with
+    /// the reference, and an answer skips the activation (the owner test after a failed one
+    /// still runs).
+    #[test]
+    fn update_interaction_disabled_seam() {
+        use engine_core::extend::{Hook, Owner, SiteSlot};
+        for users in [0, 1] {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            let reference = zero_object(&mut e, 0x0274_0000, &[]);
+            e.register_double(0x0070_3350, move |_, _| int(reference));
+            e.register(0x00a2_4660, |_, a| int(u32::from(a[1] == 5 && a[2] == 1)));
+            e.register(0x0057_3170, |_, _| int(0));
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0094_3279), activation_handler);
+            e.set_hook_users(Hook::InteractionDisabled, users);
+            player_character_update(&mut e, this, 0.5);
+            let activations = called(&e, 0x0057_3170)
+                .iter()
+                .filter(|c| c[0] == reference)
+                .count();
+            let seen = JIP_SEEN.with(|s| s.take());
+            if users == 0 {
+                assert!(seen.is_empty(), "no user");
+                assert_eq!(activations, 1);
+            } else {
+                assert_eq!(seen, vec![(0x0094_3279, vec![reference])]);
+                assert_eq!(activations, 0, "skipped");
+            }
+            assert_eq!(called(&e, 0x0056_9160), vec![vec![reference]]);
+        }
     }
 
     #[test]
