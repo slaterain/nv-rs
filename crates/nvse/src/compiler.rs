@@ -373,7 +373,7 @@ const RIGHT_BRACE: u8 = 39;
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptTokens.cpp: Operator::GetResult.
 /// The type an operator gives its operands' types at compile time (`GetResult`), `INVALID` for
 /// none: the first rule that fits, either way round unless it is asymmetric.
-fn result_type(o: u8, lhs: Code, rhs: Code) -> Code {
+pub(crate) fn result_type(o: u8, lhs: Code, rhs: Code) -> Code {
     for rule in rules(o) {
         let mut result = IV;
         if convert(lhs, rule.0) && convert(rhs, rule.1) {
@@ -1017,10 +1017,10 @@ impl Params {
 /// `kNVSEParamType_NoTypeCheck`.
 const NO_TYPE_CHECK: u32 = 0;
 /// `kNVSEParamType_Number`, `_String`, `_Array`, `_Form`.
-const NVSE_NUMBER: u32 = (1 << tt::NUMBER) | (1 << tt::AMBIGUOUS);
-const NVSE_STRING: u32 = (1 << tt::STRING) | (1 << tt::AMBIGUOUS);
-const NVSE_ARRAY: u32 = (1 << tt::ARRAY) | (1 << tt::AMBIGUOUS);
-const NVSE_FORM: u32 = (1 << tt::FORM) | (1 << tt::AMBIGUOUS);
+pub(crate) const NVSE_NUMBER: u32 = (1 << tt::NUMBER) | (1 << tt::AMBIGUOUS);
+pub(crate) const NVSE_STRING: u32 = (1 << tt::STRING) | (1 << tt::AMBIGUOUS);
+pub(crate) const NVSE_ARRAY: u32 = (1 << tt::ARRAY) | (1 << tt::AMBIGUOUS);
+pub(crate) const NVSE_FORM: u32 = (1 << tt::FORM) | (1 << tt::AMBIGUOUS);
 
 /// `kParams_DefaultUserFunctionParams`: ten unchecked optional arguments.
 fn default_user_function_params() -> Vec<Param> {

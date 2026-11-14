@@ -52,7 +52,7 @@ const EXTRA_GET_BY_TYPE: u32 = 0x0041_0220;
 const EXTRA_SCRIPT: u32 = 0x0d;
 
 /// Form types (`kFormType_*` (xNVSE)), the byte at `TESForm +4`.
-mod form_type {
+pub(crate) mod form_type {
     pub const BGS_MENU_ICON: u8 = 0x05;
     pub const TES_GLOBAL: u8 = 0x06;
     pub const TES_CLASS: u8 = 0x07;
@@ -109,7 +109,7 @@ const INVENTORY_TYPE: [u8; 121] = [
     0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0,
 ];
 
-fn is_inventory_type(kind: u8) -> bool {
+pub(crate) fn is_inventory_type(kind: u8) -> bool {
     INVENTORY_TYPE.get(usize::from(kind)).copied().unwrap_or(0) != 0
 }
 
