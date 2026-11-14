@@ -51,15 +51,28 @@ pub fn refusal(choice: &Choice) -> Option<&'static str> {
 /// Binds the row for `e`'s run (`crate::fixes::install`, the row on): the seam's hooks, or a log line saying why
 /// not.
 pub fn install(e: &mut Engine, choice: &Choice) {
+    use engine_typed::draw::capture::{mode, set_mode, Mode};
+    // The host's choice decides the draw family's packet (its export E5), not the variable alone.
     if let Some(why) = refusal(choice) {
+        set_mode(Some(Mode::Off));
         eprintln!("NV_DRAW_THREAD: refused, off: {why}");
         return;
     }
+    let real = engine::thread_host::Scheme::from_name(Some(&choice.threads)).is_ok_and(|s| s.real);
+    match mode() {
+        // POISON is a check for stepped threads: with real threads the packet is on, unscribbled.
+        Mode::Poison if real => {
+            set_mode(Some(Mode::On));
+            eprintln!(
+                "NV_DRAW_THREAD: poison is for stepped threads only: on without the scribble"
+            );
+        }
+        // The row on through `Fallout.ini`, with no variable.
+        Mode::Off => set_mode(Some(Mode::On)),
+        _ => {}
+    }
     engine::draw_thread::turn_on(e, hooks());
-    eprintln!(
-        "NV_DRAW_THREAD: on (experimental): the seam is on, but every frame still draws on main until the \
-         draw family's packet hand-off is in"
-    );
+    eprintln!("NV_DRAW_THREAD: on (experimental)");
 }
 
 /// The hooks of a run with the row on.
@@ -76,18 +89,11 @@ pub fn hooks() -> Hooks {
     }
 }
 
-/// The serial conditions the host sees. The first one stands until the draw family's hand-off is in (PR B: its
-/// `cut::cut_for_thread`, `adopt`, `hand_back`, `join_handed`): without it the job would cut on the helper, after the
-/// frame's tail, so every frame draws on main.
+/// The serial conditions the host sees ([`serial_families_and_hooks`]); the draw family's hand-off (its
+/// `cut::cut_for_thread`, `adopt`, `hand_back`, `join_handed`) is wired below.
 pub fn serial(e: &Engine) -> Option<&'static str> {
-    if !HAND_OFF_BUILT {
-        return Some("the draw family's packet hand-off is not built yet");
-    }
     serial_families_and_hooks(e)
 }
-
-/// Whether the hand-off is wired (PR B flips it with the draw family's exports).
-const HAND_OFF_BUILT: bool = false;
 
 /// The families and hooks part of [`serial`] (the tests reach it directly).
 pub fn serial_families_and_hooks(e: &Engine) -> Option<&'static str> {
@@ -118,19 +124,33 @@ pub fn poison_reason(real: bool, mode: engine_typed::draw::capture::Mode) -> Opt
         .then_some("NV_DRAW_THREAD=poison is a check for stepped threads only")
 }
 
-fn hand_off_cut(_: &mut Engine, _camera: u32, _accumulator: u32, _stepped: bool) -> Option<Packet> {
-    None
+use engine_typed::draw::{capture, cut};
+
+/// Export E1: main's cut, the packet boxed for the seam.
+fn hand_off_cut(e: &mut Engine, camera: u32, accumulator: u32, stepped: bool) -> Option<Packet> {
+    cut::cut_for_thread(e, camera, Ptr::new(accumulator), stepped).map(|p| Box::new(p) as Packet)
 }
 
-fn hand_off_adopt(_: &mut Engine, packet: Packet) -> Result<(), Packet> {
-    Err(packet)
+/// Export E2: the drawing side adopts the packet; one the seam handed that is not the draw family's is a stop.
+fn hand_off_adopt(e: &mut Engine, packet: Packet) -> Result<(), Packet> {
+    let packet = packet.downcast::<capture::Detached>().unwrap_or_else(|_| {
+        panic!("NV_DRAW_THREAD: the seam handed the drawing side a packet of another kind")
+    });
+    cut::adopt(e, *packet).map_err(|p| Box::new(p) as Packet)
 }
 
-fn hand_off_back(_: &mut Engine) -> Option<Packet> {
-    None
+/// Export E4, the drawing side: the packet handed back.
+fn hand_off_back(e: &mut Engine) -> Option<Packet> {
+    cut::hand_back(e).map(|p| Box::new(p) as Packet)
 }
 
-fn hand_off_join(_: &mut Engine, _: Packet) {}
+/// Export E4, main's side: the join.
+fn hand_off_join(e: &mut Engine, packet: Packet) {
+    let packet = packet.downcast::<capture::Detached>().unwrap_or_else(|_| {
+        panic!("NV_DRAW_THREAD: the seam handed main a packet of another kind")
+    });
+    cut::join_handed(e, *packet);
+}
 
 fn device_cut(e: &mut Engine, device: u32) -> bool {
     engine_platform::d3d9draw::draw_cut(e, device)
@@ -148,13 +168,14 @@ fn device_finish(e: &mut Engine) {
 mod tests {
     use super::*;
 
-    /// Until the hand-off is in, every frame draws on main whatever else holds.
+    /// With the hand-off in, the default families decide: the geometry family is off until its gate, so every frame
+    /// still draws on main.
     #[test]
-    fn every_frame_draws_on_main_until_the_hand_off_is_in() {
+    fn the_default_families_keep_the_draw_on_main() {
         let e = Engine::new();
         assert_eq!(
             serial(&e),
-            Some("the draw family's packet hand-off is not built yet")
+            Some("a family the world draw runs in is not direct (switched off, or a hook or a fix row on it)")
         );
     }
 
@@ -253,11 +274,9 @@ mod serial_tests {
         assert!(refusal(&choice).is_some());
     }
 
-    /// The host's choice must decide the draw family's capture mode (export E5, PR B): today the draw family reads
-    /// NV_DRAW_THREAD itself, so NV_DRAW_THREAD=poison with real threads still scribbles on main, a refused row still
-    /// captures, and the Fallout.ini line never turns capture on. PR B turns this test on.
+    /// The host's choice decides the draw family's capture mode (export E5): NV_DRAW_THREAD=poison with real threads
+    /// does not scribble.
     #[test]
-    #[ignore = "needs the draw family's capture::set_mode (E5, PR B)"]
     fn the_hosts_choice_decides_the_capture_mode() {
         let poison_real = crate::fixes::Choice::from_parts(None, |n: &str| match n {
             "NV_DRAW_THREAD" => Some("poison".into()),
@@ -268,6 +287,8 @@ mod serial_tests {
         .unwrap();
         let mut e = Engine::new();
         install(&mut e, &poison_real);
-        assert_ne!(engine_typed::draw::capture::mode(), Mode::Poison);
+        let mode = engine_typed::draw::capture::mode();
+        engine_typed::draw::capture::set_mode(None);
+        assert_ne!(mode, Mode::Poison);
     }
 }

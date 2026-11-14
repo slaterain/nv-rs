@@ -685,3 +685,73 @@ pub fn light_colour(e: &mut Engine, _this: Ptr) {
     let alpha = packet::pass_light_word(e, shadow, 0xd4);
     own::set_constant_word(e, LIGHT_ROW + 0xc, alpha);
 }
+
+/// The land values `00b7ad80` fills from a shader property's +0xdc block (`011fd8f4` to `011fd910`, `011fd85c`,
+/// `011fd860`, `011fd914`, 1.0 at `011fd918`) and the fog values (`011fd924` to `011fd940`).
+const LAND_WORDS: u32 = 0x011f_d8f4;
+const LAND_VALUE_A: u32 = 0x011f_d85c;
+const LAND_VALUE_B: u32 = 0x011f_d860;
+const LAND_VALUE_C: u32 = 0x011f_d914;
+const LAND_ONE: u32 = 0x011f_d918;
+const LAND_FOG_COLOUR: u32 = 0x011f_d924;
+const LAND_FOG_FAR: u32 = 0x011f_d934;
+const LAND_FOG_RANGE: u32 = 0x011f_d938;
+const LAND_FOG_POWER: u32 = 0x011f_d93c;
+const LAND_FOG_LAST: u32 = 0x011f_d940;
+
+// Typed from 00b7ad80
+/// The shadow light shader's land values, `thiscall(shader, word, property)` (the shader not read): with a property,
+/// its +0xdc block (when set) gives the words +0xc to +0x28 to `011fd8f4`, the floats +0x4c, +0x50 and +0x54 to
+/// `011fd85c`, `011fd860` and `011fd914`, and 1.0 to `011fd918`; the fog values `011fd924` to `011fd940` are cleared;
+/// with the word set and the fog property of the fog index (both through the packet) whose far (+0x30) or near (+0x2c)
+/// distance is not 0.0 (a NaN counts as not equal), they become its colour (+0x20 to +0x28, then 0.0), the far
+/// distance, far less near, its +0x60 and 0.0. Main thread only: `f32` maths.
+pub fn land_values(e: &mut Engine, _this: Ptr, enabled: u32, property: u32) {
+    if property == 0 {
+        return;
+    }
+    let block = e.global::<u32>(property.wrapping_add(0xdc)); // own: main's object read in place (set at load)
+    if block != 0 {
+        for k in 0..8u32 {
+            let word = e.global::<u32>(block.wrapping_add(0xc + 4 * k)); // own: main's object read in place (set at load)
+            own::set_constant_word(e, LAND_WORDS + 4 * k, word);
+        }
+        for (offset, target) in [
+            (0x4cu32, LAND_VALUE_A),
+            (0x50, LAND_VALUE_B),
+            (0x54, LAND_VALUE_C),
+        ] {
+            let word = e.global::<u32>(block.wrapping_add(offset)); // own: main's object read in place (set at load)
+            own::set_constant_word(e, target, word);
+        }
+        own::set_constant_word(e, LAND_ONE, 1.0f32.to_bits());
+    }
+    for k in 0..8u32 {
+        own::set_constant_word(e, LAND_FOG_COLOUR + 4 * k, 0);
+    }
+    if enabled == 0 {
+        return;
+    }
+    let index = u32::from(packet::fog_index(e));
+    let fog: u32 = typed_call!(FAMILY, 0x00b5_5520, passes::fog_property(e, index));
+    if fog == 0 {
+        return;
+    }
+    let near = packet::fog_field(e, fog, 0x2c);
+    let far = packet::fog_field(e, fog, 0x30);
+    let power = packet::fog_field(e, fog, 0x60);
+    let (far_value, near_value) = (f32::from_bits(far), f32::from_bits(near));
+    if far_value == 0.0 && near_value == 0.0 {
+        return;
+    }
+    let range = far_value - near_value;
+    let colour = [0x20u32, 0x24, 0x28].map(|at| packet::fog_field(e, fog, at));
+    own::set_constant_word(e, LAND_FOG_FAR, far);
+    own::set_constant_word(e, LAND_FOG_RANGE, range.to_bits());
+    own::set_constant_word(e, LAND_FOG_POWER, power);
+    own::set_constant_word(e, LAND_FOG_LAST, 0);
+    for (k, word) in (0u32..).zip(colour) {
+        own::set_constant_word(e, LAND_FOG_COLOUR + 4 * k, word);
+    }
+    own::set_constant_word(e, LAND_FOG_COLOUR + 0xc, 0);
+}

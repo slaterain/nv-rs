@@ -87,6 +87,10 @@ const START_TIME: u32 = 0x011f_94ac;
 /// particle classes' vtables) reaches the points draw, which builds quads from the particle arrays.
 const SLOT_RENDER_IMMEDIATE: u32 = 0xe0;
 const PARTICLES_RENDER_IMMEDIATE: u32 = 0x00a9_b1f0;
+/// The particle data's active vertex count getter (`NiParticlesData::GetActiveVertexCount`, its slot 0x90).
+const PARTICLES_VERTEX_COUNT: u32 = 0x00a9_23a0;
+/// A particle data's active count (+0x50, a 16-bit word).
+const PARTICLE_COUNT: (u32, u32) = (0x50, 0x52);
 /// A light (`ShadowSceneLight`): its weight (+0xd0) and +0xd4, its flags (+0xf4, +0xf5) and its light (+0xf8, set
 /// once); the light's dimmer, ambient and diffuse colours and radius (+0xc4 to +0xe4), +0xe4 and +0xe8 (the light
 /// set-up `00b70820` reads all of these) and its direction (+0xf0).
@@ -322,6 +326,13 @@ fn take_geometry(e: &mut Engine, geometry: u32, nodes: &mut AddrSet<u32>, subtex
         && crate::slot_target(e, geometry, SLOT_RENDER_IMMEDIATE) == PARTICLES_RENDER_IMMEDIATE
     {
         take_particles(e, data);
+    } else if data != 0
+        && peek(e, data).and_then(|vt| peek(e, vt.wrapping_add(shapes::SLOT_VERTEX_COUNT)))
+            == Some(PARTICLES_VERTEX_COUNT)
+    {
+        // Another geometry on a particle data (the tall grass's instances among them): the draws ask its active vertex
+        // count (the particles' getter `00a923a0` reads +0x50), but only the particles' own draw reads its arrays.
+        capture::take(e, data, PARTICLE_COUNT.0, PARTICLE_COUNT.1);
     }
     take_group_c_arrays(e, geometry, property, data, subtextures);
 }
@@ -662,15 +673,97 @@ pub fn cut(e: &mut Engine, camera: u32, acc: Ptr<BSShaderAccumulator>) {
     }
     fill(e, camera, acc);
     if mode == capture::Mode::Poison {
-        // The two scribbles take turns, cut by cut: a byte the draw writes with one is caught by the other.
-        let cuts = CUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let scribble = if cuts % 2 == 0 {
-            capture::SCRIBBLE
-        } else {
-            capture::SCRIBBLE_OTHER
-        };
-        capture::poison(e, scribble);
+        poison_in_turn(e);
     }
+}
+
+/// POISON's scribble, the two taking turns cut by cut (a byte the draw writes with one is caught by the other).
+fn poison_in_turn(e: &mut Engine) {
+    let cuts = CUTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let scribble = if cuts % 2 == 0 {
+        capture::SCRIBBLE
+    } else {
+        capture::SCRIBBLE_OTHER
+    };
+    capture::poison(e, scribble);
+}
+
+// ---- The drawing thread's hand-off (exports E1 to E4 of the seam, `engine_core::draw_thread`). ----
+
+thread_local! {
+    /// This thread draws with a packet cut on main and adopted here ([`adopt`]): the halves neither cut nor join.
+    static ADOPTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether this thread holds an adopted packet ([`adopt`]): the world draw's halves then skip their own cut and join.
+pub fn adopted() -> bool {
+    ADOPTED.with(std::cell::Cell::get)
+}
+
+/// The adopted mark dropped (a stop unwinding out of a half: the half closes the packet where it is).
+pub(crate) fn forget_adopted() {
+    ADOPTED.with(|a| a.set(false));
+}
+
+// Export E1.
+/// Main, at the post: the cut for the drawing thread. Any open packet is closed, a new one opened and filled
+/// ([`fill`], the own state taken when the passes allow it), not scribbled, and moved off main's thread. `None` with
+/// the switch off, when no packet opened, or for POISON without stepped threads (the scribble would be read by the
+/// threads that run beside it: the frame then draws on main).
+pub fn cut_for_thread(
+    e: &mut Engine,
+    camera: u32,
+    acc: Ptr<BSShaderAccumulator>,
+    stepped: bool,
+) -> Option<capture::Detached> {
+    let mode = capture::mode();
+    if mode == capture::Mode::Off || (mode == capture::Mode::Poison && !stepped) {
+        return None;
+    }
+    join(e);
+    if !capture::begin(e) {
+        return None;
+    }
+    fill(e, camera, acc);
+    capture::detach(e)
+}
+
+// Export E2.
+/// The drawing thread, before the halves: the packet installed on this thread and marked adopted; with POISON,
+/// scribbled here (main waits meanwhile: stepped threads only, [`cut_for_thread`]). `Err` gives it back when this
+/// thread holds a packet already.
+pub fn adopt(e: &mut Engine, packet: capture::Detached) -> Result<(), capture::Detached> {
+    capture::attach(packet)?;
+    ADOPTED.with(|a| a.set(true));
+    if capture::mode() == capture::Mode::Poison {
+        poison_in_turn(e);
+    }
+    Ok(())
+}
+
+// Export E4, the drawing side.
+/// The drawing thread, after the halves: POISON's scribble put back (main still waits), the adopted mark cleared and
+/// the packet moved off this thread for main. `None` when this thread adopted none.
+pub fn hand_back(e: &mut Engine) -> Option<capture::Detached> {
+    if !adopted() {
+        return None;
+    }
+    capture::unpoison(e);
+    forget_adopted();
+    capture::detach(e)
+}
+
+// Export E4, main's side.
+/// Main, at the join: the handed-back packet installed and closed ([`join`]: the own state's merge, the holds given
+/// back, the report and the run's totals). A packet main still holds is closed first; one of another run on this
+/// thread still there after that is a bug of the seam: a stop, as for an adopt the drawing side refuses.
+pub fn join_handed(e: &mut Engine, packet: capture::Detached) {
+    join(e);
+    assert!(
+        capture::attach(packet).is_ok(),
+        "the join was handed a packet while this thread holds one"
+    );
+    join(e);
 }
 
 /// The cuts made with POISON, for the scribbles' turns.

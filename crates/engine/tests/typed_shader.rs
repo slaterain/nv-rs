@@ -7452,11 +7452,109 @@ fn shadow_light_setups() {
         .assert_same();
 }
 
+/// [`shadow_setups_words`] with the far distance without a fog property (`0108cb00`) the tall grass's fog reads.
+fn grass_fog_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let words = shadow_setups_words(e, c);
+    if !e.mem.is_mapped(0x0108_c000) {
+        e.map(0x0108_c000, 0x1000);
+    }
+    set(e, 0x0108_cb00, 0x4974_2400);
+    vec![words[0], 0x5555]
+}
+
+/// The tall grass shader's fog constants (`00baa430`, its slot 0xfc): no fog property, distances 0, a far and near;
+/// main-thread code on the main thread's word, bit for bit (NaN payloads aside).
+#[test]
+fn tall_grass_setup_fog() {
+    Diff::new(entry!(
+        0x00ba_a430,
+        engine_typed::draw::tall_grass::setup_fog(Ptr<_>, u32)
+    ))
+    .pass_common()
+    .goes_by_address(&[0x00e7_eb00])
+    .main_thread(0)
+    .inputs(SHADOW_SETUPS)
+    .setup(grass_fog_words)
+    .run()
+    .assert_same();
+}
+
+/// [`shadow_setups_words`] with a shader property whose +0xdc block holds land values (or none), for the land values
+/// (`00b7ad80`): the shader, the word (the case's HDR input's low bit), the property.
+fn land_values_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let words = shadow_setups_words(e, c);
+    let vt = vtable(e, &[]);
+    let property = obj(e, 0x100, vt);
+    if c.word(1) & 2 == 0 {
+        let block = e.mem.alloc(0x60);
+        for k in 0..0x18u32 {
+            set(e, block + 4 * k, 0x3c00_0000 + 0x4_0000 * k);
+        }
+        set(e, property + 0xdc, block);
+    }
+    vec![words[0], c.word(1) & 1, property]
+}
+
+/// The shadow light shader's land values (`00b7ad80`): a block or none, the word set or clear, no fog property,
+/// distances 0, a far and near; main-thread code on the main thread's word, bit for bit (NaN payloads aside).
+#[test]
+fn shadow_light_land_values() {
+    Diff::new(entry!(0x00b7_ad80, setups::land_values(Ptr<_>, u32, u32)))
+        .pass_common()
+        .goes_by_address(&[0x00e7_eb00])
+        .main_thread(0)
+        .inputs(SHADOW_SETUPS)
+        .setup(land_values_words)
+        .run()
+        .assert_same();
+}
+
+/// The land values read the fog index and the fog property through the packet: scribbled (POISON), the same.
+#[test]
+fn shadow_light_land_values_read_the_packet() {
+    packet_same_cases(
+        "land_values",
+        entry!(0x00b7_ad80, setups::land_values(Ptr<_>, u32, u32)).1,
+        &cases_of(
+            SHADOW_SETUPS,
+            &[&[2, 1, 0x4500_0000, HALF], &[1, 1, 0x4500_0000, TWO]],
+        ),
+        false,
+        |e, c| {
+            let words = land_values_words(e, c);
+            let acc = e.mem.alloc(0x1a0);
+            (words, vec![acc])
+        },
+        |e, w| cut::take_frame(e, 0, Ptr::new(w[0])),
+    );
+}
+
 /// The fog upload, the ambient and the light colour read the fog index, the fog property and the rendered pass's
 /// first light and its light through the packet (the cut copies them): scribbled (POISON), they upload and set the
-/// same. The fog upload's reading of the fog index in place was the drawing thread's late-gate stop in Goodsprings.
+/// same. The fog upload's reading of the fog index in place was the drawing thread's late-gate stop in Goodsprings;
+/// the tall grass's fog (`00baa430`) the next one.
 #[test]
 fn shadow_light_setups_read_the_packet() {
+    packet_same_cases(
+        "tall_grass_setup_fog",
+        entry!(
+            0x00ba_a430,
+            engine_typed::draw::tall_grass::setup_fog(Ptr<_>, u32)
+        )
+        .1,
+        &cases_of(
+            SHADOW_SETUPS,
+            &[&[2, 0, 0x4500_0000, HALF], &[0, 3, 0x4500_0000, TWO]],
+        ),
+        false,
+        |e, c| {
+            let words = grass_fog_words(e, c);
+            let pass = e.mem.u32(0x011f_91e0);
+            let acc = e.mem.alloc(0x1a0);
+            (words, vec![pass, acc])
+        },
+        |e, w| cut::take_frame(e, 0, Ptr::new(w[1])),
+    );
     for (name, f) in [
         (
             "fog_upload",
@@ -10649,6 +10747,101 @@ fn the_whole_draw_reads_the_packet_the_cut_fills() {
     assert!(reads > 0, "the draw read nothing through the packet");
 }
 
+/// The drawing thread's hand-off (the draw family's exports E1 to E5): main cuts the packet off its thread
+/// (`cut::cut_for_thread`), the packet travels through a real thread, the drawing side adopts it (`cut::adopt`,
+/// scribbled with POISON), draws both halves without cutting or joining again, hands it back (`cut::hand_back`, the
+/// scribble put back) and main joins (`cut::join_handed`). The draw answers and leaves memory as with the switch off,
+/// with no miss and nothing written past the packet; POISON without stepped threads is refused; an adopt while a
+/// packet is held is given back; the run-wide mode overrides the variable and a thread's own mode wins.
+#[test]
+fn the_hand_off_draws_as_the_cut_on_one_thread() {
+    let first = entry!(0x00b6_ba20, drivers::world_draw_first(u32, Ptr<_>, u32)).1;
+    let second = entry!(0x00b6_b930, drivers::world_draw_second(u32, Ptr<_>, u32)).1;
+    let setup = |e: &mut Engine| {
+        let d = draw_world(e);
+        acc_slots(e, d.w.acc, true);
+        set(e, d.w.acc + 0x19c, 0);
+        held(e, d.w.acc, 1);
+        for g in [d.w.geometry, d.w.skinned] {
+            set(e, g + 4, 1);
+        }
+        set(e, d.w.acc + 0x18c, 2);
+        active_lists(e, &d, 1);
+        let camera = full_camera(e, &d.w);
+        e.with_stack(4, |_, _| ());
+        vec![camera, d.w.acc, 1]
+    };
+    let mut plain = Engine::new();
+    let a = setup(&mut plain);
+    let answer = (first(&mut plain, &a), second(&mut plain, &a));
+    for forced in [false, true] {
+        let mut handed = Engine::new();
+        let b = setup(&mut handed);
+        statics::set_forced(forced);
+        capture::set_thread_mode(Some(capture::Mode::Poison));
+        assert!(
+            cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), false).is_none(),
+            "POISON without stepped threads must be refused"
+        );
+        let packet = cut::cut_for_thread(&mut handed, b[0], Ptr::new(b[1]), true)
+            .expect("the cut for the drawing thread");
+        assert!(
+            !capture::is_open(&handed),
+            "the cut left the packet on main's thread"
+        );
+        // Through a real thread and back, as the seam moves it.
+        let packet = std::thread::spawn(move || packet).join().expect("moved");
+        assert!(cut::adopt(&mut handed, packet).is_ok());
+        assert!(cut::adopted());
+        let handed_answer = (first(&mut handed, &b), second(&mut handed, &b));
+        assert!(
+            capture::is_open(&handed),
+            "a half joined the adopted packet"
+        );
+        let back = cut::hand_back(&mut handed).expect("handed back");
+        assert!(!cut::adopted());
+        cut::join_handed(&mut handed, back);
+        capture::set_thread_mode(None);
+        statics::set_forced(false);
+        let report = cut::last_report().expect("the join closed the packet");
+        assert_eq!(answer, handed_answer, "forced {forced}: the answers differ");
+        assert_eq!(
+            memory_digest_beside_stack(&plain),
+            memory_digest_beside_stack(&handed),
+            "forced {forced}: the memory differs"
+        );
+        assert_eq!(
+            (report.misses, report.written),
+            (0, 0),
+            "forced {forced}: {report:?}"
+        );
+        assert!(
+            report.reads > 0 && report.held > 0,
+            "forced {forced}: {report:?}"
+        );
+    }
+    // An adopt while this thread holds a packet is given back.
+    {
+        let mut e = Engine::new();
+        let w = setup(&mut e);
+        capture::set_thread_mode(Some(capture::Mode::On));
+        let one = cut::cut_for_thread(&mut e, w[0], Ptr::new(w[1]), true).expect("one");
+        assert!(capture::begin(&e), "an open packet on this thread");
+        let back = cut::adopt(&mut e, one).expect_err("a second packet on this thread");
+        let _ = capture::end(&mut e);
+        assert!(capture::attach(back).is_ok());
+        let _ = capture::end(&mut e);
+        capture::set_thread_mode(None);
+    }
+    // The run-wide mode (E5) overrides the variable; a thread's own mode wins over it.
+    capture::set_mode(Some(capture::Mode::On));
+    assert_eq!(capture::mode(), capture::Mode::On);
+    capture::set_thread_mode(Some(capture::Mode::Off));
+    assert_eq!(capture::mode(), capture::Mode::Off);
+    capture::set_thread_mode(None);
+    capture::set_mode(None);
+}
+
 /// The alpha draw's next pass (`00b9af60`) reads the camera's direction and the passes' bounds through the packet:
 /// scribbled, either would change the order of the sorted groups or which are within the limit.
 #[test]
@@ -12447,6 +12640,27 @@ fn lighting30_shadow_passes_keep_the_clip_plane_cache_own() {
             cut::own_clip_plane_cache(e, light);
         },
     );
+}
+
+#[test]
+fn fill_takes_a_particle_data_by_its_count_getter() {
+    // The draw asks any geometry data its active vertex count (its slot 0x90): a particle data's getter (`00a923a0`)
+    // reads +0x50, so the cut takes it whatever the geometry's immediate draw (the late gate's stop in Goodsprings,
+    // frame 3520, was such a particle system's count read from a data the cut had not taken).
+    let mut e = Engine::new();
+    let d = draw_world(&mut e);
+    let geometry = e.mem.u32(d.w.passes[0]);
+    let data = e.mem.alloc(0x80);
+    let vt = e.mem.alloc(0x100);
+    set(&mut e, vt + 0x90, 0x00a9_23a0);
+    set(&mut e, data, vt);
+    e.mem.set_u16(data + 0x50, 3);
+    set(&mut e, geometry + 0xb8, data);
+    assert!(capture::begin(&e));
+    cut::fill(&mut e, d.w.camera, Ptr::new(d.w.acc));
+    let count = capture::half(&e, data, 0x50);
+    let report = capture::end(&mut e);
+    assert_eq!((count, report.misses), (3, 0), "{report:?}");
 }
 
 /// The cut (`cut::fill`) copies a no-lighting geometry's sub-texture array (its model data's +0x68, count +0x6c) only

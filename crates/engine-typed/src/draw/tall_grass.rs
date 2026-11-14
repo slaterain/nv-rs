@@ -516,3 +516,44 @@ fn constants_with(
         [geometry, skin, 0, buffers, state, 0, transform, bound, 0, 1],
     );
 }
+
+/// The fog constants (`011fa280`, eight words) and the far distance with no fog property (`0108cb00`, the exe's).
+const FOG: u32 = 0x011f_a280;
+const NO_FOG_DISTANCE: u32 = 0x0108_cb00;
+
+// Typed from 00baa430
+/// The tall grass shader's fog constants (its slot 0xfc), `thiscall(shader, word)` (neither read): with the fog
+/// property of the fog index (`GetFogProperty`, both through the packet), its far distance (+0x30), far less near
+/// (+0x2c), its power (+0x60), 0.0, its colour (+0x20 to +0x28) and 0.0; without one the far distance `0108cb00`,
+/// three 0.0 and the fog colour (`011a9bd0`). Main thread only: `f32` maths.
+pub fn setup_fog(e: &mut Engine, _this: Ptr, _unused: u32) {
+    let index = u32::from(packet::fog_index(e));
+    let fog: u32 = typed_call!(
+        super::FAMILY,
+        0x00b5_5520,
+        super::passes::fog_property(e, index)
+    );
+    let words: [u32; 8] = if fog != 0 {
+        let far = packet::fog_field(e, fog, 0x30);
+        let span = f32::from_bits(far) - f32::from_bits(packet::fog_field(e, fog, 0x2c));
+        [
+            far,
+            span.to_bits(),
+            packet::fog_field(e, fog, 0x60),
+            0,
+            packet::fog_field(e, fog, 0x20),
+            packet::fog_field(e, fog, 0x24),
+            packet::fog_field(e, fog, 0x28),
+            0,
+        ]
+    } else {
+        let distance = e.global::<u32>(NO_FOG_DISTANCE); // own: a constant of the exe
+        let colour = [0u32, 1, 2, 3].map(|k| packet::fog_colour_word(e, k));
+        [
+            distance, 0, 0, 0, colour[0], colour[1], colour[2], colour[3],
+        ]
+    };
+    for (k, word) in (0u32..).zip(words) {
+        own::set_constant_word(e, FOG + 4 * k, word);
+    }
+}
