@@ -363,7 +363,10 @@ fn search_setup(e: &mut Engine) {
 }
 
 /// The printed lines: id, signature text, editor ID text, name text.
-fn printed(e: &Engine) -> Vec<(u32, Vec<u8>, Vec<u8>, Vec<u8>)> {
+/// A printed line: id, signature, editor ID, name.
+type Line = (u32, Vec<u8>, Vec<u8>, Vec<u8>);
+
+fn printed(e: &Engine) -> Vec<Line> {
     calls_to(PRINT_FN)
         .into_iter()
         .map(|w| {

@@ -4,6 +4,10 @@
 //! (four 32-bit lanes each, the flags of `comiss`), with JIP's constants written out again here
 //! from its source. Each answer is compared with the port's routine bit for bit, and a few are
 //! pinned to recorded bit patterns.
+//
+//! JIP's float literals are written as its source writes them, and the lanes are indexed as the asm
+//! names them: two lints are allowed for that.
+#![allow(clippy::excessive_precision, clippy::needless_range_loop)]
 
 use super::*;
 
