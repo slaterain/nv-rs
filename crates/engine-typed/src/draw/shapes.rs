@@ -2,8 +2,10 @@
 //!
 //! The batch renderer's standard draw hands each plain geometry to its vtable slot 0xe0
 //! (`OnlyRenderImmediate`, Xbox PDB): the triangle shape's ([`tri_shape_render_immediate`]), the
-//! segmented shape's, which first merges its enabled segments ([`segmented_render_immediate`]), and
-//! the particles' ([`particles_render_immediate`]); the triangle strips' is the dispatch family's. Each
+//! segmented shape's, which first merges its enabled segments ([`segmented_render_immediate`]); the
+//! triangle strips' is the dispatch family's. The four particle classes' slot 0x30 answers non-zero, so
+//! the batch renderer calls their own render (slot 0xdc) instead: the particles'
+//! ([`particles_render_immediate`]; their slot 0xe0 is the plain geometry's `00a80650`). Each
 //! is `NiGeometry::RenderImmediate` (the dispatch family's `00a80610`) and, while the renderer draws
 //! immediately, the renderer's draw for the geometry's kind: slot 0x1b4 the shape draw with its partial
 //! records, 0x1bc the camera-facing points ([`super::packed`]).

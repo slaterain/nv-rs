@@ -258,6 +258,15 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00bb_25d0, speedtree::setup_geometry(Ptr<()>, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00bb_2760, speedtree::setup_constants(Ptr<()>, Ptr<()>)),
         entry!(0x00bb_1b50, speedtree::setup_fog(Ptr<()>, u32)),
+        // The SpeedTree branch shader's slot 0x7c and its fog slot.
+        entry!(
+            0x00bd_4ba0,
+            speedtree::branch_setup_constants(Ptr<()>, Ptr<()>)
+        ),
+        entry!(
+            0x00c1_a310,
+            speedtree::branch_fog(Ptr<()>, u32, u32, u32)
+        ),
         entry!(0x00b8_15e0, group_c::pass_flags(u32)),
         entry!(0x00c0_3180, group_c::material_colour_constant(u32)),
         // Group C: the lighting 3.0 shader and the shared leftovers.

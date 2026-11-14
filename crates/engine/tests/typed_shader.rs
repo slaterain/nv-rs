@@ -10274,6 +10274,168 @@ fn leaf_setup_fog() {
     .assert_same();
 }
 
+/// The SpeedTree branch slot 0x7c's inputs: its fog slot the real one (`00c1a310`) or a stand-in; a fog property
+/// or none; a material or none, its +0x38 play's float; the shader's own constant maps (none, stand-ins).
+const BRANCH_CONSTANTS: &[Input] = &[
+    Input::Flag,
+    Input::Flag,
+    Input::Flag,
+    Input::F32,
+    Input::Flag,
+];
+
+/// The SpeedTree branch slot 0x7c's words: the world's renderer as the shader's; the rendered pass and its geometry
+/// (a world transform, a bound, a skin, its data's buffers); the fog index 1 and its scene node's fog property; the
+/// state's material (property 2); the exe's 0.0, 1.0 and 30.0; shader table entry 1 (the `GetShader` stand-in's
+/// answer) with two constant maps and the current pass's programs; `SetupGeometryConstants` (`00b7dab0`) and the
+/// fog slot's stand-in marked.
+fn branch_constants_words(e: &mut Engine, c: &Case) -> Vec<u32> {
+    let w = world(e);
+    e.map(0x0120_0000, 0x1000);
+    e.register(0x00b7_dab0, marked);
+    e.register(VT_FN + 0x154, marked);
+    let shader_vt = if c.word(0) != 0 {
+        vtable(e, &[(0x154, 0x00c1_a310)])
+    } else {
+        vtable(e, &[])
+    };
+    let this = obj(e, 0x100, shader_vt);
+    set(e, this + 0x18, w.renderer);
+    let geometry = e.mem.alloc(0xc0);
+    for i in 0..13u32 {
+        set(e, geometry + 0x68 + 4 * i, ONE + (i << 16));
+    }
+    let bound = e.mem.alloc(0x10);
+    for k in 0..4u32 {
+        set(e, bound + 4 * k, 0x4000_0000 + (k << 16));
+    }
+    set(e, geometry + 0x20, bound);
+    set(e, geometry + 0xbc, 0x5c1d_0000);
+    let data = e.mem.alloc(0x40);
+    set(e, data + 0x34, 0x0bbf_0000);
+    set(e, geometry + 0xb8, data);
+    let record = e.mem.alloc(0x10);
+    set(e, record, geometry);
+    set(e, 0x011f_91e0, record);
+    let node = e.mem.alloc(0x140);
+    if c.word(1) != 0 {
+        let fog = e.mem.alloc(0x80);
+        set(e, node + 0x134, fog);
+    }
+    set(e, 0x011f_91c8 + 4, node);
+    e.mem.set_u8(0x011f_91c4, 1);
+    let state = e.mem.alloc(0x18);
+    if c.word(2) != 0 {
+        let material = e.mem.alloc(0x40);
+        set(e, material + 0x38, play_bits(c, 3));
+        set(e, state + 8, material);
+    }
+    set(e, 0x011a_9bd4, 0);
+    set(e, 0x011a_9bdc, ONE);
+    set(e, 0x0101_8f5c, 0x41f0_0000);
+    let vt = vtable(e, &[]);
+    let table = obj(e, 0x40, vt);
+    for at in [0x30u32, 0x34] {
+        let map = obj(e, 0x40, vt);
+        set(e, table + at, map);
+    }
+    set(e, RETS + 0x1f0, table);
+    let pass = e.mem.alloc(0x60);
+    set(e, 0x0126_f74c, pass);
+    set(e, pass + 0x44, 0x0b0b_0044);
+    set(e, pass + 0x5c, 0x0b0b_005c);
+    if c.word(4) != 0 {
+        for at in [0x30u32, 0x34] {
+            let map = obj(e, 0x40, vt);
+            set(e, this + at, map);
+        }
+    }
+    vec![this, state]
+}
+
+/// The SpeedTree branch shader's slot 0x7c (`00bd4ba0`): main-thread code on the main thread's word, bit for bit
+/// (NaN payloads aside), with play's floats. `SetupGeometryConstants` is stood in (its own tests).
+#[test]
+fn branch_setup_constants() {
+    Diff::new(entry!(
+        0x00bd_4ba0,
+        engine_typed::draw::speedtree::branch_setup_constants(Ptr<_>, Ptr<_>)
+    ))
+    .shader_translated()
+    .goes_by_address(&[0x00b7_dab0, 0x00c1_a310])
+    .main_thread(0)
+    .inputs(BRANCH_CONSTANTS)
+    .float_sweep(FLOAT_SWEEP)
+    .setup(branch_constants_words)
+    .run()
+    .assert_same();
+}
+
+/// The SpeedTree branch shader's fog slot (`00c1a310`): a fog property or none, a material (its +0x38 play's float,
+/// NaNs among them) or none; bit for bit (NaN payloads aside).
+#[test]
+fn branch_fog() {
+    Diff::new(entry!(
+        0x00c1_a310,
+        engine_typed::draw::speedtree::branch_fog(Ptr<_>, u32, u32, u32)
+    ))
+    .common()
+    .main_thread(0)
+    .inputs(&[Input::Flag, Input::Flag, Input::F32])
+    .float_sweep(FLOAT_SWEEP)
+    .setup(|e, c| {
+        let _ = world(e);
+        set(e, 0x011a_9bd4, 0);
+        set(e, 0x011a_9bdc, ONE);
+        set(e, 0x0101_8f5c, 0x41f0_0000);
+        let material = if c.word(1) != 0 {
+            let material = e.mem.alloc(0x40);
+            set(e, material + 0x38, play_bits(c, 2));
+            material
+        } else {
+            0
+        };
+        vec![0x0bad_0001, 0x0bad_0002, c.word(0) * 0x0f0f_0000, material]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The SpeedTree branch shader's slot 0x7c reads the fog index, the geometry's transform and bound through the
+/// packet: with what the cut takes for the rendered geometry and the frame scribbled in guest memory (POISON), it
+/// writes as without (the late gate's stop in Goodsprings, frame 5025, was its fog index read in place).
+#[test]
+fn branch_setup_constants_reads_the_packet() {
+    packet_same_cases(
+        "branch_setup_constants",
+        entry!(
+            0x00bd_4ba0,
+            engine_typed::draw::speedtree::branch_setup_constants(Ptr<_>, Ptr<_>)
+        )
+        .1,
+        &cases_of(
+            BRANCH_CONSTANTS,
+            &[&[1, 1, 1, ONE, 1], &[0, 0, 0, HALF, 0], &[1, 1, 0, HALF, 0]],
+        ),
+        true,
+        |e, case| {
+            let words = branch_constants_words(e, case);
+            let record = e.mem.u32(0x011f_91e0);
+            let from = e.mem.u32(record);
+            // The drawn size, no skin (the cut walks a skin's bones), a property and a shader of the branch class.
+            let vt = vtable(e, &[]);
+            let property = obj(e, 0x100, vt);
+            let geometry = group_c_geometry(e, from, property, 0x010b_c070);
+            set(e, record, geometry);
+            (words, vec![geometry])
+        },
+        |e, w| {
+            cut::take_geometry_values(e, w[0]);
+            cut::take_frame(e, 0, Ptr::new(0));
+        },
+    );
+}
+
 // ---- Group C: what the set-ups share (the draw family's `group_c`) ----
 
 /// The pass types' flag bits (`00b815e0`): a pass type whose words have every pattern of the bits read;
@@ -14121,7 +14283,7 @@ enum AcceptanceSetup {
     Water,
     Leaves,
     Lighting30,
-    /// Not a shader set-up: a particle geometry (its slot 0xe0 the particles' immediate draw, `00a9b1f0`) on the
+    /// Not a shader set-up: a particle geometry (its slot 0x30 answering itself, so the batch renderer calls its own render, slot 0xdc: the particles' `00a9b1f0`) on the
     /// world's shader.
     Particles,
 }
@@ -14137,11 +14299,11 @@ const ACCEPTANCE_SETUPS: &[AcceptanceSetup] = &[
     AcceptanceSetup::Particles,
 ];
 
-/// A particle geometry's pass in the acceptance world: the world geometry's words, its slot 0xe0 the particles'
-/// immediate draw, its model data a particle data block (the count slot 0x90 the particles' `00a923a0`, two
+/// A particle geometry's pass in the acceptance world: the world geometry's words, its slot 0x30 the object itself (`00e68810`)
+/// and its own render (slot 0xdc) the particles' `00a9b1f0`, its model data a particle data block (the count slot 0x90 the particles' `00a923a0`, two
 /// particles with positions, sizes and scales), a bound of its own; a pass like the first pass.
 fn acceptance_particle_pass(e: &mut Engine, d: &DrawW) -> u32 {
-    let vt = vtable(e, &[(0xe0, 0x00a9_b1f0)]);
+    let vt = vtable(e, &[(0x30, 0x00e6_8810), (0xdc, 0x00a9_b1f0)]);
     let geometry = obj(e, 0xc4, vt);
     for off in (4..0xc4).step_by(4) {
         let word = e.mem.u32(d.w.geometry + off);

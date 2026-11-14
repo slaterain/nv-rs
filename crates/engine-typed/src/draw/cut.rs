@@ -83,9 +83,11 @@ const FOG_POWER: (u32, u32) = (0x60, 0x64);
 /// The shaders' time values: four floats (`011f940c`) and the start time (`011f94ac`).
 const GAME_TIMES: u32 = 0x011f_940c;
 const START_TIME: u32 = 0x011f_94ac;
-/// A geometry's immediate draw (its slot 0xe0): the particles' (`NiParticles::RenderImmediate`, `00a9b1f0`, the four
-/// particle classes' vtables) reaches the points draw, which builds quads from the particle arrays.
-const SLOT_RENDER_IMMEDIATE: u32 = 0xe0;
+/// A geometry's own render (its slot 0xdc, `RenderImmediate`), which the batch renderer calls for a geometry whose slot
+/// 0x30 or 0x34 answers non-zero: the four particle classes (`NiParticles`, `NiParticleSystem`, `NiMeshParticleSystem`,
+/// `NiParticleMeshes`; their slot 0x30 answers the object itself) hold the particles' (`00a9b1f0`) there, which reaches
+/// the points draw, which builds quads from the particle arrays. Their slot 0xe0 is the plain geometry's (`00a80650`).
+const SLOT_RENDER_IMMEDIATE: u32 = 0xdc;
 const PARTICLES_RENDER_IMMEDIATE: u32 = 0x00a9_b1f0;
 /// The particle data's active vertex count getter (`NiParticlesData::GetActiveVertexCount`, its slot 0x90).
 const PARTICLES_VERTEX_COUNT: u32 = 0x00a9_23a0;
