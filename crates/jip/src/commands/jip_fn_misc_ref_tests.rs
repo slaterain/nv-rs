@@ -578,21 +578,50 @@ mod lane_e {
             "a box: 0x4C bytes"
         );
         assert_eq!(add(&mut e, 2), 0.0, "already has one");
-        // A sphere and a plane on base 0x21.
+        // A sphere and a plane on base 0x21: the free heap filled with a sentinel first, so the
+        // zeroing is seen to cover exactly the 0x34-byte block. The stand-in allocator fills the
+        // block it hands out with 0xCD up to the next 8 bytes, so p+0x34 (the first word past
+        // the block) keeps 0xCDCDCDCD and the words after it keep the sentinel.
+        const SENTINEL: u32 = 0xa5a5_a5a5;
+        let fill = |e: &mut Engine| {
+            let at = heap_next(e);
+            for i in (0..0x100).step_by(4) {
+                e.mem.set_u32(at + i, SENTINEL);
+            }
+        };
+        let zeroed_block = |e: &Engine, p: u32, what: &str| {
+            for off in (0x8..0x18).chain(0x24..0x34).step_by(4) {
+                assert_eq!(e.mem.u32(p + off), 0, "{what}: zeroed at {off:#x}");
+            }
+            assert_eq!(e.mem.u32(p + 0x34), 0xcdcd_cdcd, "{what}: p+0x34 untouched");
+            for off in (0x38..0x50).step_by(4) {
+                assert_eq!(e.mem.u32(p + off), SENTINEL, "{what}: untouched at {off:#x}");
+            }
+        };
         form(&mut e, MISC, 0x1f, 0x21);
         e.mem.set_u32(REFR + 0x20, MISC);
         clear_extras(&mut e);
+        fill(&mut e);
         assert_eq!(add(&mut e, 2), 1.0);
         let p = e.mem.u32(added() + 0xc);
         assert_eq!((e.mem.u32(p), e.mem.u32(p + 4)), (0x0101_ea64, 2));
         assert_eq!(get3(&e, p + 0x18), [1.0, 1.0, 1.0]);
         assert_eq!(allocations().last().copied(), Some(0x34));
+        zeroed_block(&e, p, "a sphere");
         clear_extras(&mut e);
+        fill(&mut e);
         assert_eq!(add(&mut e, 3), 1.0);
         let p = e.mem.u32(added() + 0xc);
         assert_eq!((e.mem.u32(p), e.mem.u32(p + 4)), (0x0101_e75c, 3));
         assert_eq!(get3(&e, p + 0x18), [1.0, 1.0, 3.0], "a plane's middle is 1");
         assert_eq!(allocations().last().copied(), Some(0x34));
+        zeroed_block(&e, p, "a plane");
+        // A sphere on an activator: only the plane is refused there.
+        e.mem.set_u32(REFR + 0x20, ACTI);
+        clear_extras(&mut e);
+        assert_eq!(add(&mut e, 2), 1.0, "an activator's sphere");
+        let p = e.mem.u32(added() + 0xc);
+        assert_eq!((e.mem.u32(p), e.mem.u32(p + 4)), (0x0101_ea64, 2));
         e.mem.set_u32(REFR + 0x20, 0);
         clear_extras(&mut e);
         assert_eq!(add(&mut e, 1), 0.0, "no base");
@@ -721,6 +750,12 @@ mod lane_e {
         assert_eq!(calls_to(DESTROY_FN), vec![vec![REFR, 1]]);
         assert!(calls_to(REMOVE_BY_TYPE_FN).is_empty());
         assert!(calls_to(HUD_INFO_FN).is_empty());
+        let order = || calls().into_iter().map(|c| c.0).collect::<Vec<_>>();
+        assert_eq!(
+            order(),
+            vec![PICKED_UP_FN, CONT_ADD_FN, FLAGS_TEST_FN, DESTROY_FN],
+            "picked up, added, the flags test, destroyed: in that order"
+        );
         e.mem.set_u32(FLAGS_ANSWER, 0x100);
         mv(&mut e, &[r(1)]);
         assert_eq!(calls_to(DESTROY_FN).len(), 1, "only the low byte answers");
@@ -748,6 +783,13 @@ mod lane_e {
         mv(&mut e, &[r(1), n(1)]);
         assert_eq!(calls_to(HUD_INFO_FN), vec![vec![0, 0, 0]]);
         assert_eq!(calls_to(REMOVE_BY_TYPE_FN), vec![vec![REFR + 0x44, 0x21]]);
+        assert_eq!(calls_to(PICKED_UP_FN).len(), 1);
+        let at = |addr: u32| order().iter().position(|&a| a == addr).unwrap_or(usize::MAX);
+        assert!(
+            at(HUD_INFO_FN) < at(REMOVE_BY_TYPE_FN) && at(REMOVE_BY_TYPE_FN) < at(PICKED_UP_FN),
+            "the crosshair cleared, then the owner removed, then picked up: {:x?}",
+            order()
+        );
         // Into the player.
         form(&mut e, DEST, 0x3b, 0x14);
         mv(&mut e, &[r(1)]);
@@ -794,12 +836,12 @@ mod lane_e {
         );
     }
 
-    /// JIP's FromEulerPRY from its asm's lanes: sines are `Cos_V3` of pi/2 less the angle.
+    /// JIP's FromEulerPRY from its asm's lanes: sines are `Cos_V3` of pi/2 less the angles.
     fn jip_matrix(p: f32, r: f32, y: f32) -> [f32; 9] {
-        use crate::commands::ln_fn_math::cos_lane;
+        use crate::commands::ln_fn_math::cos_v3;
         let h = std::f32::consts::FRAC_PI_2;
-        let (s0, s1, s2) = (cos_lane(h - p), cos_lane(h - r), cos_lane(h - y));
-        let (c0, c1, c2) = (cos_lane(p), cos_lane(r), cos_lane(y));
+        let [s0, s1, s2] = cos_v3([h - p, h - r, h - y]);
+        let [c0, c1, c2] = cos_v3([p, r, y]);
         [
             c1 * c2,
             c1 * s2,

@@ -55,6 +55,50 @@ fn cosine_at_zero_and_nan() {
     assert!(ulps(cos(1.0 + 2.0 * FLT_PI_X2), cos(1.0)) < 64);
 }
 
+fn same_lanes(got: [f32; 3], want: [f32; 3], what: &str) {
+    assert_eq!(got.map(f32::to_bits), want.map(f32::to_bits), "{what}");
+}
+
+/// `Cos_V3`'s one test for all lanes, worked by hand from its asm: lane 1's 7.0 is quadrant
+/// trunc(7 * 2/pi) = 4 > 3, so EVERY lane is masked by 3 and loses `q >> 2` turns. Lane 0's
+/// `0x4F490FDC` (2pi * 2^29 plus one ulp of 256) is past `cvttps2dq`'s range: the indefinite
+/// 0x80000000, quadrant 0 after the mask, less 0x20000000 turns (`0x4F490FDB`, exact): 256.0
+/// left, no offset. Lane 1: one turn off, quadrant 0. Lane 2: 0.
+#[test]
+fn cos_v3_reduces_every_lane_when_one_wraps() {
+    let huge = f32::from_bits(0x4f49_0fdc);
+    same_lanes(
+        cos_v3([huge, 7.0, 0.0]),
+        [
+            cos_poly(256.0, 0),
+            cos_poly(7.0 - FLT_PI_X2, 0),
+            cos_poly(0.0, 0),
+        ],
+        "an indefinite lane beside a wrapping one",
+    );
+    // Lane 0: 5.0 is quadrant 3 (3.18): no turns (3 >> 2 = 0), less 2pi. Lane 1: 13.0 is
+    // quadrant 8: two turns off (2.0 * 2pi in floats), quadrant 0. Lane 2: |-1e10| is past the
+    // range: the indefinite, quadrant 0, less 2^29 turns.
+    same_lanes(
+        cos_v3([5.0, 13.0, -1e10]),
+        [
+            cos_poly(5.0 - FLT_PI_X2, 0),
+            cos_poly(13.0 - 2.0 * FLT_PI_X2, 0),
+            cos_poly(1e10 - 536_870_912.0 * FLT_PI_X2, 0),
+        ],
+        "quadrant 3, a wrap of two turns, a negative indefinite",
+    );
+    // No lane above 3 (the indefinite is negative as an integer): nothing reduced. Lane 0 keeps
+    // 1e10 whole, NaN stays NaN, lane 2's 3.0 (quadrant 1) is less pi with the sign flipped.
+    let got = cos_v3([1e10, f32::NAN, 3.0]);
+    assert_eq!(got[0].to_bits(), cos_poly(1e10, 0).to_bits(), "unreduced");
+    assert!(got[1].is_nan());
+    assert_eq!(got[2].to_bits(), cos_poly(3.0 - FLT_PI, SIGN).to_bits());
+    // One angle alone: `cos_lane` is lane 0 beside zeros.
+    assert_eq!(cos_lane(huge).to_bits(), cos_poly(huge, 0).to_bits());
+    assert_eq!(cos_lane(7.0).to_bits(), cos_poly(7.0 - FLT_PI_X2, 0).to_bits());
+}
+
 #[test]
 fn tangent_and_its_cut_off() {
     for i in -150..=150 {
