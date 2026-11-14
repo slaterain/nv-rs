@@ -96,7 +96,10 @@ fn cos_v3_reduces_every_lane_when_one_wraps() {
     assert_eq!(got[2].to_bits(), cos_poly(3.0 - FLT_PI, SIGN).to_bits());
     // One angle alone: `cos_lane` is lane 0 beside zeros.
     assert_eq!(cos_lane(huge).to_bits(), cos_poly(huge, 0).to_bits());
-    assert_eq!(cos_lane(7.0).to_bits(), cos_poly(7.0 - FLT_PI_X2, 0).to_bits());
+    assert_eq!(
+        cos_lane(7.0).to_bits(),
+        cos_poly(7.0 - FLT_PI_X2, 0).to_bits()
+    );
 }
 
 #[test]

@@ -595,7 +595,11 @@ mod lane_e {
             }
             assert_eq!(e.mem.u32(p + 0x34), 0xcdcd_cdcd, "{what}: p+0x34 untouched");
             for off in (0x38..0x50).step_by(4) {
-                assert_eq!(e.mem.u32(p + off), SENTINEL, "{what}: untouched at {off:#x}");
+                assert_eq!(
+                    e.mem.u32(p + off),
+                    SENTINEL,
+                    "{what}: untouched at {off:#x}"
+                );
             }
         };
         form(&mut e, MISC, 0x1f, 0x21);
@@ -784,7 +788,12 @@ mod lane_e {
         assert_eq!(calls_to(HUD_INFO_FN), vec![vec![0, 0, 0]]);
         assert_eq!(calls_to(REMOVE_BY_TYPE_FN), vec![vec![REFR + 0x44, 0x21]]);
         assert_eq!(calls_to(PICKED_UP_FN).len(), 1);
-        let at = |addr: u32| order().iter().position(|&a| a == addr).unwrap_or(usize::MAX);
+        let at = |addr: u32| {
+            order()
+                .iter()
+                .position(|&a| a == addr)
+                .unwrap_or(usize::MAX)
+        };
         assert!(
             at(HUD_INFO_FN) < at(REMOVE_BY_TYPE_FN) && at(REMOVE_BY_TYPE_FN) < at(PICKED_UP_FN),
             "the crosshair cleared, then the owner removed, then picked up: {:x?}",
@@ -881,6 +890,21 @@ mod lane_e {
                 assert!((f64::from(*a) - b).abs() < 1e-5, "{m:?}");
             }
         }
+        // A pitch past `cvttps2dq`'s range beside a roll of 7 (quadrant 4): the roll's wrap also
+        // reduces the pitch's cosine lane (`Cos_V3`'s one test for all lanes), so the pitch's
+        // cosine is not the one of the angle alone.
+        use crate::commands::ln_fn_math::cos_lane;
+        let huge = f32::from_bits(0x4f49_0fdc);
+        let m = from_euler_pry([huge, 7.0, 0.0]);
+        assert_eq!(
+            m.map(f32::to_bits),
+            jip_matrix(huge, 7.0, 0.0).map(f32::to_bits)
+        );
+        assert_ne!(
+            m[8].to_bits(),
+            (cos_lane(7.0) * cos_lane(huge)).to_bits(),
+            "the lanes share the reduction"
+        );
     }
 
     /// Rows times the vector, ((a0 + a1) + (a2 + a3)) with a3 the next float times 0: an
