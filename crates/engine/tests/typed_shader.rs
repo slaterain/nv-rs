@@ -5113,14 +5113,27 @@ fn light_setup() {
 /// table and the ambient they fill (`01201c80`, `01201b30`) compare with the rest of memory.
 #[test]
 fn lighting_light_setters() {
-    for d in [
-        Diff::new(entry!(
-            0x00b7_0de0,
-            group_c::direction_light(u32, Ptr<_>, f32)
-        )),
-        Diff::new(entry!(0x00b7_1130, group_c::other_light(u32, Ptr<_>, f32))),
-    ] {
-        d.set_ups()
+    Diff::new(entry!(
+        0x00b7_0de0,
+        group_c::direction_light(u32, Ptr<_>, f32)
+    ))
+    .light_setters()
+    .run()
+    .assert_same();
+    Diff::new(entry!(0x00b7_1130, group_c::other_light(u32, Ptr<_>, f32)))
+        .light_setters()
+        .run()
+        .assert_same();
+}
+
+/// [`lighting_light_setters`]' settings: [`light_setup`]'s world with the light table's pages.
+trait LightSetters {
+    fn light_setters(self) -> Diff;
+}
+
+impl LightSetters for Diff {
+    fn light_setters(self) -> Diff {
+        self.set_ups()
             // The light table's writers and the ambient (the draw family's, their own tests): by address on both sides.
             .goes_by_address(&[0x00bb_95e0, 0x00bb_95b0, 0x00bb_b790])
             .inputs(&[
@@ -5163,8 +5176,6 @@ fn lighting_light_setters() {
                 let light = if c.word(1) == 0 { 0 } else { g.light };
                 vec![c.word(0), light, play_bits(c, 4)]
             })
-            .run()
-            .assert_same();
     }
 }
 
