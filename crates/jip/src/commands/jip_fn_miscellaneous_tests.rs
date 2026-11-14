@@ -752,6 +752,9 @@ fn hardcore_stages() {
     assert_eq!(call(&mut e, 0x28b6, &[r(R_MISC)]).1, 0.0);
     e.mem.set_u8(MISC + 4, 0x78);
     assert_eq!(call(&mut e, 0x28b6, &[r(R_MISC)]).1, 9.0);
+    // The dehydration stage itself (0x76) is one.
+    e.mem.set_u8(MISC + 4, 0x76);
+    assert_eq!(call(&mut e, 0x28b6, &[r(R_MISC)]).1, 9.0);
     // Effects.
     assert_eq!(call(&mut e, 0x28b8, &[r(R_RADS)]).1, 0.0);
     call(&mut e, 0x28b9, &[r(R_RADS), r(R_SPEL)]);
