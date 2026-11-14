@@ -62,16 +62,19 @@ fn tangent_and_its_cut_off() {
     assert_eq!(tan(f32::NAN), 0.0);
 }
 
+/// JIP's inverse routines are coarser than the forward ones: up to about 8e-6 from the true
+/// value (ASin's cubic and its 128 corrections; ATan2's polynomial, whose last constant is
+/// 0x3F7FFFB7, a little under 1: atan2(-1, -1) is -2.356198 against -2.3561945).
 #[test]
 fn inverse_functions_follow_the_standard_ones() {
     for i in -999..=999 {
         let x = i as f32 * 0.001;
-        assert!(close(asin(x), f64::from(x).asin(), 2e-6), "asin {x}: {}", asin(x));
-        assert!(close(acos(x), f64::from(x).acos(), 2e-6), "acos {x}: {}", acos(x));
-        assert!(close(atan(x * 9.0), f64::from(x * 9.0).atan(), 2e-6), "atan {x}");
+        assert!(close(asin(x), f64::from(x).asin(), 1e-5), "asin {x}: {}", asin(x));
+        assert!(close(acos(x), f64::from(x).acos(), 1e-5), "acos {x}: {}", acos(x));
+        assert!(close(atan(x * 9.0), f64::from(x * 9.0).atan(), 1e-5), "atan {x}");
     }
     for (y, x) in [(1.0f32, 2.0f32), (-1.0, 2.0), (1.0, -2.0), (-3.0, -0.5), (5.0, 0.25)] {
-        assert!(close(atan2(y, x), f64::from(y).atan2(f64::from(x)), 3e-6), "atan2 {y} {x}");
+        assert!(close(atan2(y, x), f64::from(y).atan2(f64::from(x)), 1e-5), "atan2 {y} {x}");
     }
 }
 
@@ -215,8 +218,9 @@ fn trigonometric_commands() {
     assert_eq!(one(&mut e, 0x230f, 0.1), f64::from(asin(0.1f32)) * DBL_180_D_PI);
     let r = call(&mut e, 0x2894, &[z(-1.0), z(-1.0)]).1;
     assert_eq!(r, f64::from(atan2(-1.0, -1.0)) * DBL_180_D_PI);
-    assert!((r + 135.0).abs() < 1e-4);
+    assert!((r + 135.0).abs() < 1e-3);
     // y first, then x.
     let r = call(&mut e, 0x2894, &[z(1.0), z(0.0)]).1;
     assert_eq!(r, f64::from(FLT_PI_D2) * DBL_180_D_PI);
 }
+
