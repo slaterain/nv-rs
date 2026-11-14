@@ -391,6 +391,203 @@ pub fn need<T>(x: Option<T>) -> Result<T, Fail> {
     x.ok_or(Fail::Crash("null expression"))
 }
 
+/// The deepest tree the port compiles: statements and expressions nested along one path (each
+/// `(`, `!`, block, operator of a chain like `a + b + ...`, call in a call counts one; an `if`,
+/// an `else if`, a match arm after the match pass two; a lambda three, four after the lambda
+/// pass). Every pass and the code generation walk the tree recursively, as xNVSE's do, so each
+/// level costs native stack; xNVSE has no limit and overflows its stack there, which stops the
+/// game. Past this the compile fails silently instead ([`TOO_DEEP`], a deliberate difference
+/// like xNVSE's other crashes).
+///
+/// Measured on the debug test build (the biggest frames), as the smallest thread stack each
+/// shape compiles on (2026-11-14): the walks after the parse take about 4.3 KB of stack a level
+/// (a chain of 2044 `+` needs 8.5 MB), so this limit uses under 9 MB of the 64 MB stack each
+/// game thread has (`engine_core::thread_host`): a seventh of it, the rest left to the game's own
+/// frames below the compile. It still compiles any real script (an `else if` chain of 500, a
+/// `match` of 900 arms; `codegen_tests` compiles both on a 16 MB thread).
+pub const MAX_DEPTH: usize = 2048;
+
+/// The deepest the parser recurses ([`MAX_DEPTH`]'s twin for the parse, and for strings lexed
+/// inside interpolations): every statement, `else if`, expression (each parenthesis, call
+/// argument, list, subscript, interpolation, an assignment's right side) and operand after a
+/// prefix operator one level. An expression goes down the whole precedence ladder (about thirty
+/// frames), so a level of parentheses costs about 19 KB in the debug build (2000 of them need
+/// 36 MB): this limit keeps the parse under 10 MB, the same share of a game thread's stack.
+/// xNVSE's parser has no limit: past what its thread's stack holds, the game stops.
+pub const MAX_PARSE_DEPTH: usize = 512;
+
+/// The failure past [`MAX_DEPTH`] or [`MAX_PARSE_DEPTH`].
+pub const TOO_DEEP: Fail = Fail::Crash("nesting past the depth limit (xNVSE overflows its stack)");
+
+/// A node of the tree, for [`Ast::deeper_than`].
+#[derive(Clone, Copy)]
+enum Node {
+    S(StmtId),
+    E(ExprId),
+}
+
+impl Ast {
+    /// The children a walk of `n` reaches (every statement and expression slot, as
+    /// [`walk_stmt`] and [`walk_expr`] and the code generation visit them).
+    fn children(&self, n: Node, out: &mut Vec<Node>) {
+        let e = |out: &mut Vec<Node>, x: &Option<ExprId>| {
+            if let Some(x) = x {
+                out.push(Node::E(*x));
+            }
+        };
+        match n {
+            Node::S(id) => match &self.stmt(id).kind {
+                StmtKind::Begin { block, .. } => out.push(Node::S(*block)),
+                StmtKind::Udf { args, body, .. } => {
+                    out.extend(args.iter().map(|a| Node::S(*a)));
+                    out.push(Node::S(*body));
+                }
+                StmtKind::VarDecl { decls, .. } => {
+                    for d in decls {
+                        out.push(Node::E(d.name));
+                        e(out, &d.value);
+                    }
+                }
+                StmtKind::Expr(x) | StmtKind::Return(x) => e(out, x),
+                StmtKind::For {
+                    init,
+                    cond,
+                    post,
+                    block,
+                } => {
+                    if let Some(i) = init {
+                        out.push(Node::S(*i));
+                    }
+                    e(out, cond);
+                    e(out, post);
+                    out.push(Node::S(*block));
+                }
+                StmtKind::ForEach {
+                    decls, rhs, block, ..
+                } => {
+                    out.extend(decls.iter().flatten().map(|d| Node::S(*d)));
+                    out.push(Node::E(*rhs));
+                    out.push(Node::S(*block));
+                }
+                StmtKind::If {
+                    cond,
+                    block,
+                    else_block,
+                } => {
+                    e(out, cond);
+                    out.push(Node::S(*block));
+                    if let Some(b) = else_block {
+                        out.push(Node::S(*b));
+                    }
+                }
+                StmtKind::While { cond, block } => {
+                    e(out, cond);
+                    out.push(Node::S(*block));
+                }
+                StmtKind::Block(stmts) => out.extend(stmts.iter().map(|s| Node::S(*s))),
+                StmtKind::ShowMessage { message, args, .. } => {
+                    out.push(Node::E(*message));
+                    out.extend(args.iter().map(|a| Node::E(*a)));
+                }
+                StmtKind::Match {
+                    expr,
+                    arms,
+                    default,
+                } => {
+                    e(out, expr);
+                    for arm in arms {
+                        e(out, &arm.binding);
+                        out.push(Node::E(arm.expr));
+                        out.push(Node::S(arm.block));
+                    }
+                    if let Some(d) = default {
+                        out.push(Node::S(*d));
+                    }
+                }
+                StmtKind::Continue | StmtKind::Break => {}
+            },
+            Node::E(id) => match &self.expr(id).kind {
+                ExprKind::Assign { left, value, .. } => {
+                    out.extend([Node::E(*left), Node::E(*value)]);
+                }
+                ExprKind::Ternary {
+                    cond, left, right, ..
+                } => out.extend([Node::E(*cond), Node::E(*left), Node::E(*right)]),
+                ExprKind::In {
+                    lhs,
+                    values,
+                    expression,
+                    ..
+                } => {
+                    out.push(Node::E(*lhs));
+                    out.extend(values.iter().map(|v| Node::E(*v)));
+                    e(out, expression);
+                }
+                ExprKind::Binary { left, right, .. }
+                | ExprKind::Subscript {
+                    left, index: right, ..
+                } => out.extend([Node::E(*left), Node::E(*right)]),
+                ExprKind::Unary { expr, .. } => out.push(Node::E(*expr)),
+                ExprKind::Call {
+                    left, ident, args, ..
+                } => {
+                    e(out, left);
+                    out.push(Node::E(*ident));
+                    out.extend(args.iter().map(|a| Node::E(*a)));
+                }
+                ExprKind::Get { left, ident, .. } => {
+                    out.extend([Node::E(*left), Node::E(*ident)]);
+                }
+                ExprKind::ArrayLit(values) | ExprKind::MapLit(values) => {
+                    out.extend(values.iter().map(|v| Node::E(*v)));
+                }
+                ExprKind::Grouping(x) => e(out, x),
+                ExprKind::Lambda { args, body, .. } => {
+                    out.extend(args.iter().map(|a| Node::S(*a)));
+                    out.push(Node::S(*body));
+                }
+                ExprKind::Bool(_)
+                | ExprKind::Number { .. }
+                | ExprKind::Str(_)
+                | ExprKind::Ident { .. } => {}
+            },
+        }
+    }
+
+    /// Whether some path from a global or block nests more than `limit` nodes (counting both
+    /// ends). Walked with a stack of its own, so any tree is measured without recursion; it stops
+    /// at the first path past the limit.
+    pub fn deeper_than(&self, limit: usize) -> bool {
+        let mut todo: Vec<(Node, usize)> = self
+            .globals
+            .iter()
+            .chain(&self.blocks)
+            .map(|s| (Node::S(*s), 1))
+            .collect();
+        let mut kids = Vec::new();
+        while let Some((n, depth)) = todo.pop() {
+            if depth > limit {
+                return true;
+            }
+            kids.clear();
+            self.children(n, &mut kids);
+            todo.extend(kids.iter().map(|k| (*k, depth + 1)));
+        }
+        false
+    }
+}
+
+/// [`TOO_DEEP`] when the tree nests past [`MAX_DEPTH`]: checked after the parse, after the match
+/// pass (which nests without bound) and before the code generation, so no recursive walk goes
+/// much deeper than the limit (`compile_with`).
+pub fn check_depth(ast: &Ast) -> Result<(), Fail> {
+    if ast.deeper_than(MAX_DEPTH) {
+        Err(TOO_DEEP)
+    } else {
+        Ok(())
+    }
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Visitor.cpp: the Visitor::Visit*Stmt
 // methods.
 /// The base visitor's walk of a statement.

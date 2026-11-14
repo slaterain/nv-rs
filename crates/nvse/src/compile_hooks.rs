@@ -154,9 +154,14 @@ fn begin_compile(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let text_at = e.mem.u32(buf + sb::TEXT);
     let text = opt_text(e, text_at).unwrap_or_default();
     if text.len() >= 4 && text[..4].eq_ignore_ascii_case(b"name") {
-        // The new script language (`Compiler::CompileNVSEScript`, [`crate::newlang`]); xNVSE's
-        // "Script compiled successfully." goes to its process's standard output, which nothing
-        // shows. A compiled script is finished below as a plugin's would be.
+        // The new script language (`Compiler::CompileNVSEScript`, [`crate::newlang`]). xNVSE
+        // prints "Script compiled successfully." to its standard output, which in the game is a
+        // Windows console window of its own: `AllocateScriptConsole` opens one on the first
+        // compile that prints anything (every success prints "[Requirements]", every error its
+        // message), in the run-time build too (its `#ifdef IS_EDITOR` is always true, the macro
+        // being defined as 0 or 1). A deliberate difference: the port opens no window and prints
+        // nothing there (the errors still go to the game's console as in xNVSE). A compiled
+        // script is finished below as a plugin's would be.
         let partial = e.mem.u8(buf + sb::PARTIAL) != 0;
         if !crate::newlang::compile(e, &text, script, partial) {
             return Some(0);

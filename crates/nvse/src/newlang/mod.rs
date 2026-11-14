@@ -24,10 +24,15 @@
 //! script", then the message) to the console. The type checker's and the variable resolution's
 //! messages carry the source lines with the faulty part between ANSI colour escapes, as xNVSE
 //! prints them; every error the type checker catches is followed by a second, empty message (its
-//! exception's empty text, printed where it is caught). The rest of xNVSE's output here goes to
-//! its debug console or `nvse.log` only (`DbgPrint`, `InfoPrint`, the tree printer, the
-//! "variable shadows a form" note): a release build shows none of it and the port writes no
-//! `nvse.log`, so none of it is built.
+//! exception's empty text, printed where it is caught). The rest of xNVSE's output here is not
+//! built: `DbgPrint` and the tree printer print only in a debug build, and `InfoPrint` (the
+//! "[Requirements]" list, the "variable shadows a form" note) goes to `nvse.log` in the run-time
+//! build, which the port does not write. One more thing a player of xNVSE sees is left out on
+//! purpose: every one of those prints, and every error, first calls `AllocateScriptConsole`,
+//! which in the run-time build too (its `#ifdef IS_EDITOR` is always true) opens a Windows console
+//! window on the first new-language compile, where xNVSE's "Script compiled successfully." then
+//! shows ([`crate::compile_hooks`]). The port opens no window: a stray console is not what a
+//! player wants, and nothing the game does depends on it.
 //!
 //! Deliberate differences, each where xNVSE stops the game (an exception nothing catches, a read
 //! through a null pointer, a format past its buffer): the port fails the compile instead, with no
@@ -35,7 +40,9 @@
 //! buffer (its `vsprintf_s` would stop the game past it). A message printed without its source
 //! lines goes to `vsprintf` as its format: a `%` in it (an operator's text) is a conversion
 //! `vsprintf_s` refuses, which stops the game; the port fails the compile there too
-//! ([`error_text`]).
+//! ([`error_text`]). Nesting past [`ast::MAX_DEPTH`] (parentheses, prefix operators, blocks,
+//! lambdas, chains of operators) fails the compile the same way: xNVSE's recursive parser and
+//! passes have no limit and overflow the game's stack there.
 
 pub mod ast;
 pub mod lexer;
@@ -300,6 +307,12 @@ pub fn compile_with(
     let Some(mut tree) = analyze(env, text, true)?.ast else {
         return Ok(None);
     };
+    // The tree was held to `ast::MAX_DEPTH` after the parse and through the match pass. The
+    // passes after those deepen it by a few levels at most, wherever they are: the call pass not
+    // at all, the loop pass two (a loop's increment as a statement of its block), the lambda
+    // pass two (a read made a `GetModLocalData` call; a variable's declaration made a
+    // `SetModLocalData` call one, its lambda's own lambdas left as they are). So the code
+    // generation's walk stays within the limit's measure without another check.
     passes::loops::LoopTransformer::new(&mut tree).run()?;
     passes::lambdas::LambdaTransformer::new(&mut tree, env).run()?;
     let mut c = passes::codegen::Compiler::new(&mut tree, env);

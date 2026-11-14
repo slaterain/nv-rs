@@ -349,3 +349,23 @@ fn a_reference_that_is_not_persistent_fails_the_compile() {
         Some(2)
     );
 }
+
+/// A script named with a 2 MB identifier (an identifier is as long as the text makes it): the
+/// name goes to the game (`GetFormByID` as the compile looks the name up, then `SetEditorID`) on
+/// the heap instead of the 1 MB guest stack, and the script compiles, as in xNVSE, whose long
+/// `std::string` keeps such a name on the heap too.
+#[test]
+fn a_huge_identifier_compiles() {
+    const LONG_TEXT: u32 = 0x0600_0000;
+    let mut e = engine();
+    e.map(LONG_TEXT, 4 << 20);
+    let name = "n".repeat(2 << 20);
+    let text = format!("name {name};\nGameMode {{\n}}");
+    e.mem.write(BUF, &[0; sb::SIZE as usize]);
+    e.mem.write(LONG_TEXT, text.as_bytes());
+    e.mem.set_u8(LONG_TEXT + text.len() as u32, 0);
+    e.mem.set_u32(BUF + sb::TEXT, LONG_TEXT);
+    assert_eq!(e.site(0x005a_ebb1, &[SCRIPT, BUF]), Some(2));
+    let set = calls().into_iter().find(|(slot, _)| *slot == 0x134);
+    assert_eq!(set.map(|(_, n)| n.len()), Some(name.len()));
+}

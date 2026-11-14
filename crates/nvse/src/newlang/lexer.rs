@@ -335,6 +335,8 @@ pub struct Lexer {
     pub column: usize,
     pub line: usize,
     pub lines: Vec<Vec<u8>>,
+    /// Strings being lexed inside each other's interpolations.
+    string_depth: usize,
 }
 
 fn replace_all(text: &[u8], from: &[u8], to: &[u8]) -> Vec<u8> {
@@ -366,6 +368,7 @@ impl Lexer {
             column: 1,
             line: 1,
             lines,
+            string_depth: 0,
         }
     }
 
@@ -510,33 +513,39 @@ impl Lexer {
                 return Ok(tok);
             }
         }
-        // Blanks.
-        while is_space(self.at(self.pos)) {
-            if self.input[self.pos] == b'\n' {
-                self.column = 1;
-                self.line += 1;
-            } else {
-                self.column += 1;
-            }
-            self.pos += 1;
-            if self.pos >= self.input.len() {
-                break;
-            }
-        }
-        // A `//` comment, to the end of its line.
-        if self.matches(b"//") {
-            while self.pos < self.input.len() {
+        // xNVSE calls itself again after each comment line (with the token stack already found
+        // empty, so the same as starting over here): a loop, so a text of many comment lines
+        // cannot use up the native stack.
+        'comments: loop {
+            // Blanks.
+            while is_space(self.at(self.pos)) {
                 if self.input[self.pos] == b'\n' {
                     self.column = 1;
                     self.line += 1;
-                    self.pos += 1;
-                    return self.next_token(use_stack);
+                } else {
+                    self.column += 1;
                 }
                 self.pos += 1;
                 if self.pos >= self.input.len() {
                     break;
                 }
             }
+            // A `//` comment, to the end of its line.
+            if self.matches(b"//") {
+                while self.pos < self.input.len() {
+                    if self.input[self.pos] == b'\n' {
+                        self.column = 1;
+                        self.line += 1;
+                        self.pos += 1;
+                        continue 'comments;
+                    }
+                    self.pos += 1;
+                    if self.pos >= self.input.len() {
+                        break;
+                    }
+                }
+            }
+            break;
         }
         if self.pos >= self.input.len() {
             return Ok(Token::bare(TokenType::Eof, b""));
@@ -567,7 +576,15 @@ impl Lexer {
         }
         if current == b'"' {
             self.advance_char();
-            let mut results = self.lex_string()?;
+            // A string inside an interpolation lexes inside this one: past the depth limit the
+            // compile fails before the native stack runs out (xNVSE overflows it).
+            if self.string_depth >= super::ast::MAX_PARSE_DEPTH {
+                return Err(LexFail::Crash(super::ast::TOO_DEEP));
+            }
+            self.string_depth += 1;
+            let results = self.lex_string();
+            self.string_depth -= 1;
+            let mut results = results?;
             let tok = results.remove(0);
             self.stack.extend(results);
             return Ok(tok);

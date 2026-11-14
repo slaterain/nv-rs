@@ -95,14 +95,9 @@ fn str_equal_at(e: &mut Engine, at: u32, text: &[u8]) -> bool {
     compiler::str_equal(e, l.as_deref(), Some(text))
 }
 
-/// A text on the guest stack for a `cdecl` call taking it.
+/// A text in guest memory for a `cdecl` call taking it ([`compiler::with_guest_text`]).
 fn call_with_text(e: &mut Engine, f: u32, text: &[u8]) -> u32 {
-    let size = (text.len() as u32 + 1).next_multiple_of(4);
-    e.with_stack(size, |e, at| {
-        e.mem.write(at.addr(), text);
-        e.mem.set_u8(at.addr() + text.len() as u32, 0);
-        e.call(f, &args![at.addr()]).u32()
-    })
+    compiler::with_guest_text(e, text, |e, at| e.call(f, &args![at]).u32())
 }
 
 /// `atoi` (MSVC's: blanks, a sign, digits, held to the `long` range).
@@ -650,11 +645,8 @@ impl Env for EngineEnv<'_> {
     fn finish_script(&mut self, data: &[u8], name: Option<&[u8]>, used: usize) {
         let s = self.script;
         if let Some(name) = name {
-            let size = (name.len() as u32 + 1).next_multiple_of(4);
-            self.e.with_stack(size, |e, at| {
-                e.mem.write(at.addr(), name);
-                e.mem.set_u8(at.addr() + name.len() as u32, 0);
-                e.vcall(s, SET_EDITOR_ID, &args![at.addr()]);
+            compiler::with_guest_text(self.e, name, |e, at| {
+                e.vcall(s, SET_EDITOR_ID, &args![at]);
             });
         }
         let e = &mut *self.e;

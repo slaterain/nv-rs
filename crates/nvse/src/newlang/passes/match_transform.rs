@@ -150,6 +150,9 @@ impl<'a> MatchTransformer<'a> {
             if let StmtKind::Block(stmts) = &mut self.ast.stmt_mut(id).kind {
                 stmts[i + 1] = first;
             }
+            // Each arm nests the chain a level deeper, without bound, and the walk below goes down
+            // it: measured first, so neither this walk nor a later pass goes past the limit.
+            check_depth(self.ast)?;
             // xNVSE's note of the change goes to its debug output only, but its text is made in
             // every build, and making it can throw (a place past its line).
             let span = self.ast.stmt(line).span;

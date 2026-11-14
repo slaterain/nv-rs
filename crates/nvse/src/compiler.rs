@@ -623,12 +623,39 @@ fn is_reference(e: &mut Engine, form: u32) -> bool {
 
 /// `GetFormByID(editorID)`.
 pub(crate) fn form_by_editor_id(e: &mut Engine, name: &[u8]) -> u32 {
-    let size = (name.len() as u32 + 1).next_multiple_of(4);
-    e.with_stack(size, |e, at| {
-        e.mem.write(at.addr(), name);
-        e.mem.set_u8(at.addr() + name.len() as u32, 0);
-        e.call(FORM_BY_EDITOR_ID, &args![at.addr()]).u32()
-    })
+    with_guest_text(e, name, |e, at| e.call(FORM_BY_EDITOR_ID, &args![at]).u32())
+}
+
+/// The longest text [`with_guest_text`] puts on the guest stack.
+const STACK_TEXT_MAX: usize = 0x1000;
+
+/// `f` given the guest address of `text` with its NUL, for a call of the game's that reads it.
+/// A short text goes on the guest stack; a longer one (a new-language identifier is as long as
+/// the script's text makes it, megabytes even) on the heap, where xNVSE's own long `std::string`
+/// keeps it, and is freed after: the guest stack is 1 MB. The game's functions handed such a
+/// name only compare and hash it (`GetFormByID`, the actor value and stat lookups,
+/// `IsStringInteger`), and the run-time `Script`'s `SetEditorID` keeps nothing, so any length
+/// works as in xNVSE.
+pub(crate) fn with_guest_text<R>(
+    e: &mut Engine,
+    text: &[u8],
+    f: impl FnOnce(&mut Engine, u32) -> R,
+) -> R {
+    let len = text.len() as u32;
+    if text.len() <= STACK_TEXT_MAX {
+        e.with_stack((len + 1).next_multiple_of(4), |e, at| {
+            e.mem.write(at.addr(), text);
+            e.mem.set_u8(at.addr() + len, 0);
+            f(e, at.addr())
+        })
+    } else {
+        let at = e.mem.alloc(len + 1);
+        e.mem.write(at, text);
+        e.mem.set_u8(at + len, 0);
+        let r = f(e, at);
+        e.mem.free(at);
+        r
+    }
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), GameScript.cpp: GetScriptFromForm.
