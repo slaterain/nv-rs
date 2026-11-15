@@ -1131,7 +1131,11 @@ fn set_on_dialog_topic(e: &mut Engine, w: &[u32]) -> Ret {
             let Some(scripts) = s.dialog_topic.get_mut(&form) else {
                 return handled(true);
             };
-            scripts.remove(&script).then(|| scripts.is_empty())
+            if scripts.remove(&script) {
+                Some(scripts.is_empty())
+            } else {
+                None
+            }
         };
         if let Some(empty) = removed {
             crate::ln_events::release(e, script);
