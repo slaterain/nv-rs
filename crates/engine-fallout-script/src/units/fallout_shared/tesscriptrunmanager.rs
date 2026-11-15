@@ -746,7 +746,6 @@ struct Line {
     parse_only: bool,
 }
 
-/// The address of if-stack level `depth` (runner +0x24, one word each).
 /// JIP LN NVSE's `bNoFailedScriptLocks` (O7, `SetOptionalPatch(7)`, step 3.9): its three
 /// `SafeWrite16` jumps (`0x5E0FBE` in `Run`, `0x5E1A23` and `0x5E1F0B` in `EvaluateLine`) skip the
 /// header read and the clear of the script's data length that a failed line does (with the
@@ -757,6 +756,7 @@ fn jip_keeps_failed_script(e: &mut Engine, site: u32) -> bool {
         && e.site(site, &[]).is_some()
 }
 
+/// The address of if-stack level `depth` (runner +0x24, one word each).
 fn if_level(this: Ptr<ScriptRunner>, depth: u32) -> u32 {
     this.addr()
         .wrapping_add(0x24)
