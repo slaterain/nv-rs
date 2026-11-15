@@ -1010,12 +1010,10 @@ fn has_perk_command() {
             format!("player {perk:x} 0")
         ]
     );
-    e.ext::<Jip>().saved.npc_perks_patch = true;
-    crate::cosave::publish_npc_perks_patch(&mut e);
+    crate::cosave::set_npc_perks_patch(&mut e, true);
     assert_eq!(perk_rank(&mut e, npc, perk, false), 1);
     assert_eq!(calls(), [format!("own {perk:x} 0")]);
-    e.ext::<Jip>().saved.npc_perks_patch = false;
-    crate::cosave::publish_npc_perks_patch(&mut e);
+    crate::cosave::set_npc_perks_patch(&mut e, false);
     e.map(0x0103_5000, 0x1000);
     e.mem.write(0x0103_5f1c, b"Perk Rank >> %d\0");
     set_script_ref(&mut e, 1, perk);
@@ -1414,8 +1412,7 @@ fn has_perk_eval_answers_while_another_engine_holds_jips_state() {
         "a teammate: the player's"
     );
     engine_core::extend::release_held_for_test();
-    e.ext::<Jip>().saved.npc_perks_patch = true;
-    crate::cosave::publish_npc_perks_patch(&mut e);
+    crate::cosave::set_npc_perks_patch(&mut e, true);
     e.share_slots_for_test(&mut other);
     engine_core::extend::release_held_for_test();
     assert!(other.ext::<Jip>().installed);

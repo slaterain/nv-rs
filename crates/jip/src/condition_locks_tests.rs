@@ -10,10 +10,13 @@
 //! which the guard catches.
 //!
 //! What it covers: each eval on a small scene: no reference, and a form whose every vtable entry
-//! answers true (`ADDR_ReturnTrue`), so the "is it an actor / a reference" tests pass, each with
-//! the parameters 0, 1 and that form. A path the scene does not reach (an eval that stops at a
-//! game call the test engine does not have, which panics otherwise) is not checked by this
-//! guard; the sweep's table in `measure/jip-cmds/CONDITION-LOCKS.md` follows every path by hand.
+//! answers true (`ADDR_ReturnTrue`, which also answers 1 when called), so the "is it an actor / a
+//! reference" tests pass; that form is the player, its own base, and a quest whose event list
+//! names an xNVSE string variable (so `AuxVarGetFltCond` reaches both its lookups); each eval
+//! with the parameters 0, 1 and that form. Each eval must run to its end at least once (the
+//! listed exceptions none today). A path the scene does not reach (a branch its values do not
+//! take) is not checked by this guard; the sweep's table in `measure/jip-cmds/CONDITION-LOCKS.md`
+//! follows every path by hand.
 
 use crate::commands::test_support::{engine, FORMS};
 use crate::test_support::RESULT;
@@ -28,11 +31,16 @@ const RETURN_TRUE: u32 = 0x008d_0360;
 /// A form whose vtable answers true everywhere, and its vtable.
 const ANY: u32 = FORMS + 0x8_0000;
 const ANY_VT: u32 = FORMS + 0x8_1000;
+/// [`ANY`]'s event list as a quest's.
+const EVENT_LIST: u32 = FORMS + 0x8_2000;
 
 /// An eval that asks for a shared slot it must not: xNVSE's string map, which
 /// `AuxVarGetFltCond` reads for the variable's name (listed in the sweep, not made lock-free:
 /// xNVSE's string variables change on every string write of every mod).
 const TAKES_NVSE: &[u32] = &[0x27b1];
+
+/// The evals that never run to their end on the guard's scene (see the test).
+const NEVER_FINISH: &[u32] = &[];
 
 /// An engine with JIP installed answering "installed", the vanilla overrides' row on, and the
 /// scene.
@@ -47,6 +55,27 @@ fn guard_engine() -> Engine {
         e.mem.set_u32(ANY_VT + 4 * slot, RETURN_TRUE);
     }
     e.mem.set_u32(ANY, ANY_VT);
+    // The vtable's entry answers true when called; ANY is the player too; the game's extra-data
+    // lookups as the command tests stand them in.
+    if !e.is_registered(RETURN_TRUE) {
+        e.register(RETURN_TRUE, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+    }
+    e.mem.set_u32(0x011d_ea3c, ANY);
+    // Its own base form (a reference's base at +0x20).
+    e.mem.set_u32(ANY + 0x20, ANY);
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    // As a quest (`AuxVarGetFltCond`'s first parameter): its event list (+0x5C) holds variable
+    // 1, naming an xNVSE string variable, so that eval reaches both its lookups.
+    let name = nvse::vars::add_string(&mut e, 0xff, b"guard", false);
+    e.mem.set_u32(ANY + 0x5c, EVENT_LIST);
+    e.mem.set_u32(EVENT_LIST + 0xc, EVENT_LIST + 0x10);
+    e.mem.set_u32(EVENT_LIST + 0x10, EVENT_LIST + 0x20);
+    e.mem.set_u32(EVENT_LIST + 0x14, 0);
+    e.mem.set_u32(EVENT_LIST + 0x20, 1);
+    e.mem.set_f64(EVENT_LIST + 0x28, f64::from(name));
     engine_core::extend::release_held_for_test();
     e
 }
@@ -152,15 +181,20 @@ fn no_condition_eval_takes_a_shared_slot() {
         assert!(evals.iter().any(|&(o, _)| o == op), "{op:04x} walked");
     }
     let mut found = Vec::new();
-    let mut finished = 0;
+    let mut never = Vec::new();
     for &(opcode, at) in &evals {
-        let (f, n) = sweep(opcode, at, false);
+        let (f, mut n) = sweep(opcode, at, false);
         found.extend(f);
-        finished += n;
-        if !TAKES_NVSE.contains(&opcode) {
-            let (f, n) = sweep(opcode, at, true);
+        let (f, m) = sweep(opcode, at, true);
+        if TAKES_NVSE.contains(&opcode) {
+            // The listed one does reach xNVSE's slot on the scene (the guard sees it).
+            assert!(!f.is_empty(), "{opcode:04x} reaches xNVSE's slot");
+        } else {
             found.extend(f);
-            finished += n;
+        }
+        n += m;
+        if n == 0 {
+            never.push(opcode);
         }
     }
     assert!(
@@ -168,8 +202,10 @@ fn no_condition_eval_takes_a_shared_slot() {
         "evals that take a shared slot:\n{}",
         found.join("\n")
     );
-    // Most of the runs finish on the scene (the guard is not passing for want of reaching code).
-    assert!(finished * 2 > evals.len() * 12, "{finished} runs finished");
+    // The evals that never run to their end on the scene (each stops at a game call the test
+    // engine lacks): for these the guard checks only the part before that call; the sweep's
+    // table follows the rest by hand. Any other eval ran to its end at least once.
+    assert_eq!(never, NEVER_FINISH, "evals that never finish on the scene");
 }
 
 /// The guard catches an eval that takes JIP's shared slot, and one that takes xNVSE's.
