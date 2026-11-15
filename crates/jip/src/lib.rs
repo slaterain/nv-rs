@@ -112,6 +112,8 @@ pub struct Jip {
     pub ui_hooks: ui_hooks::State,
     /// What JIP's quest commands keep between calls.
     pub quest: commands::jip_fn_quest::State,
+    /// What `jip_fn_miscellaneous`'s commands keep between calls (keywords, actor value names).
+    pub misc: commands::jip_fn_miscellaneous::State,
     /// JIP's actor hooks and their events.
     pub actor_hooks: actor_hooks::State,
     /// JIP's actor AI hooks' maps and values.
