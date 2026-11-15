@@ -9,12 +9,16 @@
 //! `mov ecx, [ebp-0xAC]` (the actor); `mov word [ecx+0x105], 0` (JIP's flag bytes
 //! `jipActorFlags1`/`jipActorFlags2`: combat disabled, forced detection values and the rest its
 //! commands set); `and byte [ecx+0x143], 0xBF` (bit 0x40000000 only); `nop`. So the essential bit a
-//! save holds survives the load, and JIP's per-actor flags start clear on every load.
+//! save holds survives the load for an NPC, and JIP's per-actor flags start clear on every load.
+//! Not for a creature: the creature's load `008d4ff0` sets the whole flag word to 0 right after
+//! this routine (with JIP and without) until G04 (`0x8D5003`) skips that.
 //!
 //! Two kinds in one patch: the reset of JIP's own bytes answers JIP's commands (in whenever JIP
 //! answers "installed", every preset; nothing of the game reads those bytes), while keeping the
 //! essential bit changes the game, so it is a fix (with the row `NV_JIP_GAME_PATCHES` on). With
-//! the row off the handler clears JIP's bytes and lets the exe's two calls run.
+//! the row off the handler clears JIP's bytes and lets the exe's two calls run: a script's
+//! essential flag is still lost on load, a mix real JIP never produces (its bytes always replace
+//! the calls), kept so the row off leaves the game's own behaviour as on main.
 
 use super::Area;
 use crate::game::JipActorFlags;

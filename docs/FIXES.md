@@ -1001,7 +1001,7 @@ Nothing built yet.
 
 | JIP's comment | Exe places | What a player with JIP gets | Built |
 |---|---|---|---|
-| (none; 26 bytes in `InitGamePatches`) | `008ab3a0` (`0x8AB6D9`: the actor's save-game load, its two calls that clear bits of the flag word `+0x140`) | An actor a script made essential (the reference's own essential bit, set by the exe's `SetActorRefEssential`, `005dfdab`) stays essential across a save and load (the original clears that bit on every load), with the fixes row on; JIP's own per-actor flags (combat disabled, forced detection values and the others its commands set) start clear on every load whenever JIP is installed. With the row off the original's two calls run as before | 3.9-GE |
+| (none; 26 bytes in `InitGamePatches`) | `008ab3a0` (`0x8AB6D9`: the actor's save-game load, its two calls that clear bits of the flag word `+0x140`) | An NPC (not a creature) a script made essential (the reference's own essential bit, set by the exe's `SetActorRefEssential`, `005dfdab`) stays essential across a save and load (the original clears that bit on every load), with the fixes row on. A creature still loses it: the creature's load (`008d4ff0`) clears the whole flag word right after this routine, with JIP and without, until G04 (`0x8D5003`) is built. JIP's own per-actor flags (combat disabled, forced detection values and the others its commands set) start clear on every load whenever JIP is installed. With JIP installed and the row off a player gets both: JIP's two flag bytes cleared AND the original's two calls run, so a script's essential flag is still lost on load; real JIP never produces this mix (its 26 bytes always replace the calls) | 3.9-GE |
 
 #### GP: Player character
 

@@ -11075,16 +11075,12 @@ mod tests {
         G63_ANSWER.with(Cell::get)
     }
 
-    /// A version 9 load (the block of the two flag calls) with JIP's word `word` and a seam
-    /// handler answering `answer`: what the seam was asked and the calls.
-    fn load_v9_with_jip(
-        word: u32,
-        answer: Option<u32>,
-    ) -> (Ptr<Actor>, Vec<(Vec<u32>, usize)>, Vec<(u32, Vec<u32>)>) {
-        use engine_core::extend::{Owner, SiteSlot};
+    /// An engine ready for a load of save version `version` (everything `008ab3a0` calls answered
+    /// plainly, the two flag calls included): the engine, the actor and the buffer.
+    fn load_engine(version: u32) -> (Engine, Ptr<Actor>, u32) {
         let mut e = engine2();
         let (actor, _) = actor2(&mut e);
-        let (buffer, _) = load_buffer(&mut e, 9, 0);
+        let (buffer, _) = load_buffer(&mut e, version, 0);
         for addr in [0x004f_8960u32, 0x0093_2a00, 0x0088_4f80, 0x0096_d490] {
             e.register(addr, |_, _| Ret::default());
         }
@@ -11096,6 +11092,26 @@ mod tests {
         e.register(0x0043_fcd0, |_, _| 0.into_ret());
         let mover = object2(&mut e, 0x40);
         e.mem.set_u32(actor.addr() + 0x190, mover.addr());
+        (e, actor, buffer)
+    }
+
+    /// A version 9 load (the block of the two flag calls) with JIP's word `word` and a seam
+    /// handler answering `answer`: what the seam was asked and the calls.
+    fn load_v9_with_jip(
+        word: u32,
+        answer: Option<u32>,
+    ) -> (Ptr<Actor>, Vec<(Vec<u32>, usize)>, Vec<(u32, Vec<u32>)>) {
+        load_with_jip(9, word, answer)
+    }
+
+    /// [`load_v9_with_jip`] for save version `version`.
+    fn load_with_jip(
+        version: u32,
+        word: u32,
+        answer: Option<u32>,
+    ) -> (Ptr<Actor>, Vec<(Vec<u32>, usize)>, Vec<(u32, Vec<u32>)>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, actor, buffer) = load_engine(version);
         e.on_site(
             SiteSlot::new(Owner::Jip, 0x008a_b6d9),
             at_actor_flags_loaded,
@@ -11145,6 +11161,53 @@ mod tests {
             load_v9_with_jip(jip_patches::INSTALLED | jip_patches::FIXES, Some(0));
         assert_eq!(asked.len(), 1);
         assert_eq!(asked[0].0, vec![actor.addr()]);
+        assert!(called(&log, 0x008c_1ac0).is_empty());
+        assert!(called(&log, 0x008c_1b50).is_empty());
+    }
+
+    /// JIP installed with the fixes, a version 8 save (no version 9 block): the seam is not asked
+    /// and neither flag call runs, as in the exe.
+    #[test]
+    fn buffer_load_jip_flag_seam_version_8() {
+        use engine_core::extend::jip_patches;
+        let (_, asked, log) =
+            load_with_jip(8, jip_patches::INSTALLED | jip_patches::FIXES, Some(0));
+        assert!(asked.is_empty());
+        assert!(called(&log, 0x008c_1ac0).is_empty());
+        assert!(called(&log, 0x008c_1b50).is_empty());
+    }
+
+    /// `008ab3a0` with JIP's real G63 handler (JIP installed, the row on): the save's flag word
+    /// keeps the essential bit 0x80000000 (only 0x40000000 cleared), JIP's flag bytes
+    /// `+0x105`/`+0x106` are cleared (`+0x104` and `+0x107` kept), the two calls replaced.
+    #[test]
+    fn buffer_load_jip_flag_real_handler_row_on() {
+        use engine_core::extend::jip_patches;
+        let (mut e, actor, buffer) = load_engine(9);
+        // `CreateFileA`'s import slot (the settings file): "no file", so JIP's defaults.
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        // `TESTopic::GetOwnerTopic`, which 3.9a's fix wraps with the row on.
+        e.register(0x0061_a310, |_, _| Ret::default());
+        jip::test_support::install_into(&mut e);
+        jip::game_patches::set_row(&mut e, true);
+        assert_ne!(e.jip_patches() & jip_patches::FIXES, 0);
+        // The save's flag word: both bits and bit 0; nothing else read changes the actor.
+        let flags_at = actor.addr() + 0x140;
+        e.register_double(BUFFER_READ, move |e, a| {
+            if a[1] == flags_at {
+                e.mem.set_u32(a[1], 0xc000_0001);
+            }
+            Ret::default()
+        });
+        e.mem.set_u32(actor.addr() + 0x104, 0xabff_ff01);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_b3a0, &args![actor, buffer]);
+        let log = calls(&mut e);
+        assert_eq!(e.mem.u32(flags_at), 0x8000_0001);
+        assert_eq!(e.mem.u32(actor.addr() + 0x104), 0xab00_0001);
         assert!(called(&log, 0x008c_1ac0).is_empty());
         assert!(called(&log, 0x008c_1b50).is_empty());
     }
