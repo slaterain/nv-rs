@@ -774,6 +774,7 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_script",
             "jip_fn_misc_ref",
+            "jip_fn_misc_ref",
         ];
         let mut seen = std::collections::HashSet::new();
         for (list, file) in ALL.iter().zip(files) {
