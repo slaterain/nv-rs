@@ -305,6 +305,11 @@ fn the_conditions_answer_while_another_engine_holds_jips_state() {
     assert_eq!(eval(&mut e, 0x220a, 0), trigger(0x33), "GetRightTrigger");
     assert_eq!(eval(&mut e, 0x2296, 0x2000), 1.0, "IsButtonDisabled");
     assert_eq!(eval(&mut e, 0x2299, 0x4000), 1.0, "IsButtonHeld");
+    assert_eq!(
+        eval(&mut e, 0x2299, 0x0001),
+        0.0,
+        "IsButtonHeld: a button that passes but is not held"
+    );
     assert_eq!(eval(&mut e, 0x22a6, 1), 1.0, "IsTriggerDisabled");
     assert_eq!(eval(&mut e, 0x22a9, 0), 1.0, "IsTriggerHeld");
     assert_eq!(eval(&mut e, 0x289d, 1), 1.0, "IsStickDisabled");

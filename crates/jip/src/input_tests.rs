@@ -414,6 +414,13 @@ fn the_evals_answer_while_another_engine_holds_jips_and_xnvses_state() {
         0.0,
         "A not down in the pad's own"
     );
+    // Control 6 (left stick up) past the left stick's dead zone (7849), inside the right's (8689).
+    state(&mut e).pad.thumb_ly = 8000;
+    assert_eq!(
+        answer(&mut e, [0x146b, 6, 2]),
+        1.0,
+        "the left stick's dead zone"
+    );
     assert!(ready(&mut other), "one state for the run");
     engine_core::extend::release_held_for_test();
 }
