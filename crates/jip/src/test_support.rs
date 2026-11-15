@@ -49,6 +49,9 @@ fn prepare(e: &mut Engine) {
     // `ExtraTimeLeft`'s vtable (0x010158FC), whose two slots JIP's ExtraJIP framework writes
     // (step 3.9 GH1).
     e.map(0x0101_5000, 0x1000);
+    // The queued references' vtables (0x01016BA4 to 0x01016D7C), where JIP writes its attaches
+    // (game_patches::gp).
+    e.map(0x0101_6000, 0x1000);
     nvse::table::install(e);
     // The platform's XInputGetState at its import slot, as the host registers it (no controller:
     // ERROR_DEVICE_NOT_CONNECTED), for JIP's wrap there.

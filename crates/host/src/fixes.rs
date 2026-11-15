@@ -42,6 +42,7 @@ pub static FIXES: &[Fix] = &[
     JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
+    UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
     INVENTORY_REFERENCE_CHECKS,
@@ -429,12 +430,30 @@ pub const DRAW_THREAD: Fix = Fix {
     install: install_nothing,
 };
 
+/// UI Organizer built in (`crates/uio`, part 1): its lists (`Data\uio\supported.txt` and
+/// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
+/// is read through UIO's reader. It changes how every menu file is read, so it is a row; off in
+/// every preset ([`OFF_IN_EVERY_PRESET`]) until it is proven in the game with a UI mod, then on in
+/// `fixes`. The row sets a flag; `uio::install` (after JIP, in [`crate::Host::start_with`]) puts
+/// its seams in.
+pub const UIO: Fix = Fix {
+    name: "UI Organizer built in",
+    env: "NV_UIO",
+    addresses: &[],
+    summary: "UI Organizer built in: UI mods' HUD and menu additions (their Data\\uio lists) are put into the menus, as with the UIO plugin",
+    install: install_uio,
+};
+
+fn install_uio(e: &mut Engine) {
+    uio::set_on(e, true);
+}
+
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, UIO.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -445,6 +464,7 @@ const NO_ADDRESS: &[&str] = &[
     JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
+    UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
     INVENTORY_REFERENCE_CHECKS.name,
