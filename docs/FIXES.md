@@ -1003,7 +1003,14 @@ Nothing built yet.
 
 #### GP: Player character
 
-Nothing built yet.
+No fix rows yet. Built as part of JIP (every preset, while JIP answers "installed"; not fix rows):
+G38 and H09, JIP's "update 3D" on the player and on queued references. The player's first-person
+model is copied from the model loader's cached load (`0094e1d0` at `0x94E4A1`; the eye height is no
+longer read there, `0x94E5F6`), and JIP's own attach goes into the `Attach` slot of four queued
+reference vtables (`0x1016BE0`, `0x1016D28`, `0x1016D70`, `0x1016DB8`): it reads the mark JIP's
+`Update3D` sets, so `Update3D` on the player rebuilds both views, the weapon and the head, and on
+another reference resets its fade. JIP's inserted nodes, models, point lights and turned-off
+collision in that attach come with their commands.
 
 #### GH1: Extra data and inventory stacks
 
