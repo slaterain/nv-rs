@@ -1414,17 +1414,23 @@ fn update_health_heartbeat(e: &mut Engine, this: Ptr<PlayerCharacter>, before: f
 }
 
 /// The part shared by `0093b3a0` and `0093b7a0`: `before` is the health
-/// fraction before the change (1.0 for other actor values).
+/// fraction before the change (1.0 for other actor values); `old`, when
+/// given, is the value before the change already read (`0093b7a0` with JIP's G105).
+#[allow(clippy::too_many_arguments)]
 fn apply_health_change(
     e: &mut Engine,
     this: Ptr<PlayerCharacter>,
     actor_value: u32,
     before: f32,
+    old: Option<f32>,
     delta: f32,
     lost: bool,
     source: Ptr,
 ) {
-    let old = owner_actor_value_or_zero(e, this, actor_value);
+    let old = match old {
+        Some(old) => old,
+        None => owner_actor_value_or_zero(e, this, actor_value),
+    };
     let flagged = e.call(0x0040_6d70, &args![actor_value, 0x200u32]).bool() as u32;
     e.call(0x0094_c4f0, &args![this, 2u32, actor_value, delta, flagged]);
     e.call(0x0070_4e10, &args![actor_value]);
@@ -1473,6 +1479,7 @@ pub fn fn_0093b3a0(
         this,
         actor_value,
         before,
+        None,
         delta as f32,
         delta < 0,
         source,
@@ -1517,19 +1524,54 @@ pub fn fn_0093b7a0(
     } else {
         1.0
     };
-    let delta = e
+    let mut delta = e
         .call(0x0088_0890, &args![this, actor_value, amount, source])
         .f32();
+    // JIP LN NVSE's G105 at `0x0093B87F` (`DamagePCFatigueMinFixHook`, a fix row): the value
+    // read before the change, then the seam with the actor value, that value and the change
+    // (`f32` bits); an answer is the change to make instead (fatigue stopped at
+    // `fMinFatigue`). JIP's hook makes the exe's read itself, so the seam sits after it. One
+    // load while the row is off: the read stays in `apply_health_change`.
+    let old = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        Some(read_then_fatigue_floor(e, this, actor_value, &mut delta))
+    } else {
+        None
+    };
     let zero: f64 = e.global(ZERO_DOUBLE);
     apply_health_change(
         e,
         this,
         actor_value,
         before,
+        old,
         delta,
         (delta as f64) < zero,
         source,
     );
+}
+
+/// [`owner_actor_value_or_zero`] with JIP's G105 seam (`0x0093B87F`) after the read, inside the
+/// branch that reads (JIP's jump is there): an answer replaces `delta`.
+fn read_then_fatigue_floor(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor_value: u32,
+    delta: &mut f32,
+) -> f32 {
+    if !e.call(0x0066_ee10, &args![actor_value]).bool() {
+        return 0.0;
+    }
+    let old = e
+        .vcall(
+            this.addr() + ACTOR_VALUE_OWNER_BASE,
+            0xc,
+            &args![actor_value],
+        )
+        .f32();
+    if let Some(bits) = e.site(0x0093_b87f, &[actor_value, old.to_bits(), delta.to_bits()]) {
+        *delta = f32::from_bits(bits);
+    }
+    old
 }
 
 /// `TESDataHandler` singleton pointer (`011c3f2c`).
@@ -7581,7 +7623,14 @@ pub fn fn_00947d80(e: &mut Engine, this: Ptr<PlayerCharacter>) {
         }
         list
     };
-    let mut node = list;
+    // JIP LN NVSE's G72 at `0x00947DD2` (`BuildMusicMarkerListHook`, a fix row), in the world
+    // space's branch only: the seam with the world space and its list; an answer means JIP's
+    // cache filled the player's list and the loop is skipped (JIP goes on at `0x947E79`, the
+    // list's release). One load while the row is off.
+    let jip_filled = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && world_space != 0
+        && e.site(0x0094_7dd2, &[world_space, list]).is_some();
+    let mut node = if jip_filled { 0 } else { list };
     while node != 0 {
         let slot = typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, node));
         let reference = e.mem.u32(slot);
@@ -9246,11 +9295,25 @@ const UFO_MOVE: u32 = 0x6c;
 const UFO_SCRATCH: u32 = 0x78;
 const UFO_ORIGIN: u32 = 0x84;
 
+/// The exe's dead zone double (7849.0).
+const DEAD_ZONE_DOUBLE: u32 = 0x0107_18f0;
+
 /// Zeroes `value` when `|value|` (`00408820`, taking the integer as a float)
 /// is not above the dead zone 7849.0 (the double at `010718f0`).
-fn ufo_dead_zone(e: &mut Engine, value: i32) -> i32 {
+///
+/// JIP LN NVSE's D04 (group GB's rows and handlers): `site` is the patched `FCOMP`'s operand
+/// (`0x94A93C`, `0x94A95F` the look axes, `0x94AB59`, `0x94AB88` the move axes); with
+/// `INSTALLED` (all four, GB's rows) the seam (no arguments) may answer the guest address of
+/// the double to compare with (JIP's dead zones), else the exe's. One load while JIP is not
+/// installed.
+fn ufo_dead_zone(e: &mut Engine, value: i32, site: u32) -> i32 {
     let size = e.call(0x0040_8820, &args![value as f32]).f64();
-    if size <= e.global::<f64>(0x0107_18f0) {
+    let at = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(site, &[]).unwrap_or(DEAD_ZONE_DOUBLE)
+    } else {
+        DEAD_ZONE_DOUBLE
+    };
+    if size <= e.global::<f64>(at) {
         0
     } else {
         value
@@ -9291,8 +9354,8 @@ fn ufo_camera_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: u32) {
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         look_x = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
         look_y = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-        look_x = ufo_dead_zone(e, look_x);
-        look_y = ufo_dead_zone(e, look_y);
+        look_x = ufo_dead_zone(e, look_x, 0x0094_a93c);
+        look_y = ufo_dead_zone(e, look_y, 0x0094_a95f);
     } else {
         look_x = e.call(0x00a2_39e0, &args![input, 1u32]).i32();
         look_y = e.call(0x00a2_39e0, &args![input, 2u32]).i32();
@@ -9352,10 +9415,10 @@ fn ufo_camera_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: u32) {
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         let mut stick_x = e.call(0x00a2_3390, &args![input, 0u32, 7u32]).i32();
         let mut stick_y = e.call(0x00a2_3390, &args![input, 0u32, 8u32]).i32();
-        stick_x = ufo_dead_zone(e, stick_x);
+        stick_x = ufo_dead_zone(e, stick_x, 0x0094_ab59);
         let range = e.global::<f64>(0x0102_9790);
         let move_x = (stick_x as f64 / range) as f32;
-        stick_y = ufo_dead_zone(e, stick_y);
+        stick_y = ufo_dead_zone(e, stick_y, 0x0094_ab88);
         let move_y = (stick_y as f64 / range) as f32;
         let speed = e.global::<f64>(0x0101_5a38);
         let x = (move_x as f64 * speed + e.mem.f32(movement) as f64) as f32;
@@ -13409,13 +13472,58 @@ mod tests {
         assert!(JIP_SEEN.with(|s| s.borrow().is_empty()), "not health");
     }
 
+    fn fatigue_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((0x0093_b87f, a.to_vec())));
+        Some((-1.0f32).to_bits())
+    }
+
+    /// JIP LN NVSE's G105 seam (`0x0093B87F`, a fix row): with the word 0 or `INSTALLED` alone it
+    /// is not asked and the change is the exe's; with `FIXES` it is asked after the value's one
+    /// read, with the actor value, the value and the change, and its answer is the change
+    /// recorded; when `0066ee10` says the value is not read, not asked (JIP's jump is in the
+    /// reading branch).
+    #[test]
+    fn fn_0093b7a0_jip_fatigue_floor_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32, readable: bool| {
+            let mut e = engine();
+            let this = damage_world(&mut e, false, false, true);
+            e.register_double(0x0066_ee10, move |_, _| int(u32::from(readable)));
+            e.register_double(0x00b0_000c, |_, _| float(30.0));
+            give_owner(&mut e, this, 0x0201_0000, &[(0xc, 0x00b0_000c)]);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0093_b87f), fatigue_handler);
+            e.set_jip_patches(word);
+            e.call(0x0093_b7a0, &args![this, 0x16u32, 4.0f32, 0x6000u32]);
+            let seen = JIP_SEEN.with(|s| s.take());
+            let record = f(&called(&e, 0x0094_c4f0)[0], 3);
+            let reads = called(&e, 0x00b0_000c).len();
+            (seen, record, reads)
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (seen, record, reads) = run(word, true);
+            assert!(seen.is_empty(), "{word:#x}");
+            assert_eq!((record, reads), (-2.5, 1));
+        }
+        let (seen, record, reads) = run(jip_patches::FIXES, true);
+        assert_eq!(
+            seen,
+            vec![(
+                0x0093_b87f,
+                vec![0x16, 30.0f32.to_bits(), (-2.5f32).to_bits()]
+            )]
+        );
+        assert_eq!((record, reads), (-1.0, 1), "one read; the answer recorded");
+        let (seen, record, reads) = run(jip_patches::FIXES, false);
+        assert!(seen.is_empty());
+        assert_eq!((record, reads), (-2.5, 0));
+    }
+
     /// JIP LN NVSE's PlayerMinHealth end to end (`0x0093B80A`, JIP's real handler): with JIP
     /// installed answering "installed" and one user of the hook, a loss that would leave the
     /// player below 1 health (90 health, -95) is passed on as `1 - health` (-89), so the player
     /// keeps 1; a smaller loss (-5) and a gain (+4) pass unchanged, as does any change with no
-    /// user. The hook's only user, `ToggleImmortalMode`, is not built yet (its mode 2 needs
-    /// JIP's always-on hit patches of step 3.9), so the user is added directly
-    /// (`add_hook_user`, as that command does) instead of through a command.
+    /// user. The hook's only user is `ToggleImmortalMode 1` (`jip::game_patches::gp`); the user
+    /// is added directly here (`add_hook_user`), the command's own tests are in that module.
     #[test]
     fn fn_0093b7a0_keeps_the_player_at_1_health_with_jip() {
         use engine_core::extend::Hook;
@@ -17375,6 +17483,64 @@ mod tests {
         assert!(called(&e, 0x0058_83c0).is_empty());
     }
 
+    thread_local! {
+        static MARKER_LIST_SEEN: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn marker_list_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        MARKER_LIST_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's G72 seam (`0x00947DD2`, a fix row): with the word 0 or `INSTALLED` alone it
+    /// is not asked and the loop runs; with `FIXES` it is asked with the world space and its
+    /// list, and its answer skips the loop (no entry made) while the list is still released; in
+    /// the cell's branch (no world space) never asked.
+    #[test]
+    fn rebuilding_the_audio_markers_jip_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32, world: u32| {
+            let mut e = engine();
+            list_world(&mut e);
+            stub(
+                &mut e,
+                &[
+                    0x0054_b8c0,
+                    0x0057_5d70,
+                    0x0058_83c0,
+                    0x005a_e3d0,
+                    0x008d_6f30,
+                ],
+            );
+            let this = player(&mut e);
+            let references = node_chain(&mut e, &[0x100, 0x200]);
+            e.register_double(0x0057_5d70, move |_, _| int(world));
+            e.register_double(0x0058_83c0, move |_, _| int(references));
+            e.register(0x008d_6f30, |_, _| int(0x4000));
+            e.register(0x0056_9080, |_, _| int(9));
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0094_7dd2), marker_list_handler);
+            e.set_jip_patches(word);
+            e.call(0x0094_7d80, &args![this]);
+            let seen = MARKER_LIST_SEEN.with(|s| s.take());
+            (
+                seen,
+                called(&e, 0x005a_e3d0).len(),
+                called(&e, LIST_DELETING_DESTRUCT).len(),
+                references,
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (seen, appended, released, _) = run(word, 0x7000);
+            assert!(seen.is_empty(), "{word:#x}");
+            assert_eq!((appended, released), (2, 1));
+        }
+        let (seen, appended, released, references) = run(jip_patches::FIXES, 0x7000);
+        assert_eq!(seen, vec![vec![0x7000, references]]);
+        assert_eq!((appended, released), (0, 1), "loop skipped, list released");
+        let (seen, _, _, _) = run(jip_patches::FIXES, 0);
+        assert!(seen.is_empty(), "the cell's branch");
+    }
+
     #[test]
     fn resetting_the_map_markers_rebuilds_them_when_the_world_space_changed() {
         let mut e = engine();
@@ -18906,6 +19072,61 @@ mod tests {
         let this = player(&mut e);
         e.call_log = Some(vec![]);
         (e, this)
+    }
+
+    thread_local! {
+        static DEAD_ZONE_AT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn dead_zone_answer(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        assert!(a.is_empty(), "no arguments");
+        Some(DEAD_ZONE_AT.with(|c| c.get()))
+    }
+
+    fn dead_zone_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("a D04 seam asked with its bit clear");
+    }
+
+    /// JIP LN NVSE's D04 seams in the free camera (group GB's rows and handlers; the format of
+    /// GROUP-GB-NOTES "D04 seam format for GP"): the look axes `0x94A93C`, `0x94A95F` and the move
+    /// axes `0x94AB59`, `0x94AB88`, all under `INSTALLED`. With it set the answer is the address
+    /// of the double compared with (20000: 10000 zeroed; 0: kept); with the word 0 or only
+    /// `FIXES` the seam is not asked and the exe's 7849 decides
+    /// (10000 kept, 5000 zeroed); no handler (the row not on main yet): the exe's.
+    #[test]
+    fn ufo_dead_zone_jip_seams() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        for site in [0x0094_a93cu32, 0x0094_a95f, 0x0094_ab59, 0x0094_ab88] {
+            let mut e = engine();
+            map_exe_data(&mut e);
+            e.set_global(DEAD_ZONE_DOUBLE, 7849.0f64);
+            e.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+            let double = e.mem.alloc(8);
+            DEAD_ZONE_AT.with(|c| c.set(double));
+            // No handler: the exe's double.
+            e.set_jip_patches(INSTALLED);
+            assert_eq!(ufo_dead_zone(&mut e, 10000, site), 10000);
+            assert_eq!(ufo_dead_zone(&mut e, -5000, site), 0);
+            e.on_site_for_test(site, dead_zone_never);
+            for word in [0, FIXES] {
+                e.set_jip_patches(word);
+                assert_eq!(ufo_dead_zone(&mut e, 10000, site), 10000, "{site:#x}");
+                assert_eq!(ufo_dead_zone(&mut e, 5000, site), 0);
+            }
+            let mut e2 = engine();
+            map_exe_data(&mut e2);
+            e2.set_global(DEAD_ZONE_DOUBLE, 7849.0f64);
+            e2.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+            let double = e2.mem.alloc(8);
+            DEAD_ZONE_AT.with(|c| c.set(double));
+            e2.on_site_for_test(site, dead_zone_answer);
+            e2.set_jip_patches(INSTALLED);
+            e2.mem.set_f64(double, 20000.0);
+            assert_eq!(ufo_dead_zone(&mut e2, 10000, site), 0, "{site:#x}");
+            assert_eq!(ufo_dead_zone(&mut e2, -10000, site), 0);
+            e2.mem.set_f64(double, 0.0);
+            assert_eq!(ufo_dead_zone(&mut e2, 5000, site), 5000);
+        }
     }
 
     #[test]

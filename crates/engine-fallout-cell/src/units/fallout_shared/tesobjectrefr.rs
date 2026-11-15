@@ -95,6 +95,53 @@ pub(crate) const LIST_REMOVE: u32 = 0x0090_5330;
 /// `*(u32 *)this`: the first dword of a pointer wrapper or `BSStringT`.
 #[cfg(test)]
 pub(crate) const READ_FIRST_DWORD: u32 = 0x0055_9450;
+
+/// A stand-in handler for JIP's seams in these files' tests (step 3.9): records the words it is
+/// asked with and answers what the test set.
+#[cfg(test)]
+pub(crate) mod jip_seam {
+    use engine_core::prelude::*;
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        static ONLY: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+    /// The handler at `addr` (owner JIP), answering `answer`; nothing seen yet.
+    pub(crate) fn put(e: &mut Engine, addr: u32, answer: Option<u32>) {
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, addr),
+            handler,
+        );
+        answer_with(answer);
+        only_for(None);
+        seen();
+    }
+    /// The same at a seam whose row another group writes (`Engine::on_site_for_test`).
+    pub(crate) fn put_unlisted(e: &mut Engine, addr: u32, answer: Option<u32>) {
+        e.on_site_for_test(addr, handler);
+        answer_with(answer);
+        only_for(None);
+        seen();
+    }
+    pub(crate) fn answer_with(answer: Option<u32>) {
+        ANSWER.with(|c| c.set(answer));
+    }
+    /// The words it was asked with since the last look.
+    pub(crate) fn seen() -> Vec<Vec<u32>> {
+        SEEN.with(|s| s.take())
+    }
+    /// From now on, answer only when the first word is `word` (no answer for any other).
+    pub(crate) fn only_for(word: Option<u32>) {
+        ONLY.with(|c| c.set(word));
+    }
+    fn handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        match ONLY.with(|c| c.get()) {
+            Some(word) if a[0] != word => None,
+            _ => ANSWER.with(|c| c.get()),
+        }
+    }
+}
 /// `TESForm` accessors.
 pub(crate) const FORM_TYPE: u32 = 0x0040_1170; // cFormType (byte at +4)
 #[cfg(test)]
@@ -355,6 +402,19 @@ pub(crate) fn save_parent_cell(e: &mut Engine, refr: Ptr<TESObjectREFR>) -> u32 
 
 pub(crate) fn global_ptr(e: &Engine, addr: u32) -> u32 {
     e.global::<u32>(addr)
+}
+
+/// JIP LN NVSE's ash pile test (step 3.9 G06, JIP's own: "Recognize custom ashpile
+/// activators") at `site`, the start of one of the exe's two compares of `refr`'s base form with
+/// the ash pile forms (`011ca27c`, `011ca280`): JIP's 14 bytes there test the base's ash pile
+/// bit instead. `Some(true)`: an ash pile (the compares' "equal" path), `Some(false)`: not one;
+/// `None` (the bit clear, or no handler): the exe's compares run. One load while JIP is not
+/// installed; the words are built after it.
+pub(crate) fn jip_ash_pile_test(e: &mut Engine, site: u32, refr: u32) -> Option<bool> {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED == 0 {
+        return None;
+    }
+    e.site(site, &[refr]).map(|answer| answer & 0xff != 0)
 }
 
 /// `BGSSaveLoadReferencesMap::Lookup(old, &new)` (`00853130`, on the map):
