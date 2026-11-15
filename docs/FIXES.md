@@ -992,7 +992,11 @@ Nothing built yet.
 
 #### GC: Hit damage, detection, combat formulas
 
-Nothing built yet.
+No fix built yet. Built as part of JIP (in every preset once JIP answers "installed", not under the row:
+it answers as the original until a JIP command asks): JIP's detection patch (`008a0d10` at `0x8A0DAB`,
+`0x8A1291`, `0x8A131D`, `0x8A147C`), so an actor given a forced detection value
+(`ForceActorDetectionValue`) or the detection fix (`ToggleDetectionFix`) is no longer treated as the
+player's teammate when others detect it, and with the detection fix its level word is the player's.
 
 #### GD: Projectiles, explosions, combat AI, packages
 
@@ -1000,11 +1004,38 @@ Nothing built yet.
 
 #### GE: Actors: movement, life, NPC perks
 
-Nothing built yet.
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; 26 bytes in `InitGamePatches`) | `008ab3a0` (`0x8AB6D9`: the actor's save-game load, its two calls that clear bits of the flag word `+0x140`) | An NPC (not a creature) a script made essential (the reference's own essential bit, set by the exe's `SetActorRefEssential`, `005dfdab`) stays essential across a save and load (the original clears that bit on every load), with the fixes row on. A creature still loses it: the creature's load (`008d4ff0`) clears the whole flag word right after this routine, with JIP and without, until G04 (`0x8D5003`) is built. JIP's own per-actor flags (combat disabled, forced detection values and the others its commands set) start clear on every load whenever JIP is installed. With JIP installed and the row off a player gets both: JIP's two flag bytes cleared AND the original's two calls run, so a script's essential flag is still lost on load; real JIP never produces this mix (its 26 bytes always replace the calls) | 3.9-GE |
 
 #### GP: Player character
 
-Nothing built yet.
+No fix rows yet. Built as part of JIP (every preset, while JIP answers "installed"; not fix rows):
+G38 and H09, JIP's "update 3D" on the player and on queued references. The player's first-person
+model is copied from the model loader's cached load (`0094e1d0` at `0x94E4A1`; the eye height is no
+longer read there, `0x94E5F6`), and JIP's own attach goes into the `Attach` slot of four queued
+reference vtables (`0x1016BE0`, `0x1016D28`, `0x1016D70`, `0x1016DB8`): it reads the mark JIP's
+`Update3D` sets, so `Update3D` on the player rebuilds both views, the weapon and the head, and on
+another reference resets its fade.
+
+A player with JIP installed gets these whatever `NV_JIP_GAME_PATCHES` says (they are JIP's own, not
+fixes), also when no script ever calls `Update3D`: for the three references' and the player's queued
+loads, a cell counts as loaded when its state byte (`+0x26`) is 2 or more, where the exe asks
+`TES::IsCellLoaded`; the load's "critical" count is lowered unless the reference's vtable slot
+`+0x100` is the game's shared `return true` (the exe calls that slot); and the player's eye height
+(`+0x698`) is no longer read from the first-person camera node when his 3D loads, for every player.
+The port differs from JIP on purpose in three places, each where JIP would stop the game or break a
+lock: a first-person model missing from the loader's cache is loaded as the exe does (JIP reads a
+null model), and the cell lock JIP's attach takes is let go exactly once and only by the reference
+that took it, the cell it took (JIP also lets go a lock it never took for a reference flagged
+`0x800`/`0x20`, and lets go the lock of the cell read again after the load).
+
+Three steps of JIP's attach are not built yet, because nothing can set what they test:
+- collision turned off for a reference marked by `ToggleObjectCollision`: waits for that command
+  (with JIP's `TESObjectREFR::ToggleCollision` and `NiNode::ToggleCollision`);
+- nodes and models JIP inserts into a reloaded 3D: waits for the `InsertNode` and `AttachModel`
+  commands (their maps);
+- JIP's point lights added to the 3D: waits for group GL's light hooks, which flag the nodes.
 
 #### GH1: Extra data and inventory stacks
 
