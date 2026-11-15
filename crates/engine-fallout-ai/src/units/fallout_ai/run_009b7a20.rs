@@ -173,6 +173,15 @@ pub fn fn_009b7cc0(e: &mut Engine, this: Ptr) {
         (0x2000, second as u32),
     ];
     for (mask, value) in flags {
+        // 009b7e14: JIP's O4 (`bProjImpactDmgFix`) replaces the 0x8000 call: the seam sets
+        // the flag only for a flagged projectile base and never clears it (words: the
+        // projectile, the value). One load while JIP is not installed.
+        if mask == 0x8000
+            && e.jip_patches() & engine_core::extend::jip_patches::PROJ_IMPACT_DMG_FIX != 0
+            && e.site(0x009b_7e14, &[this.addr(), value]).is_some()
+        {
+            continue;
+        }
         e.call(SET_FLAG, &args![this, mask, value]);
     }
     e.call(AFTER_FLAGS, &args![this]);
@@ -490,6 +499,58 @@ mod tests {
             .into_iter()
             .map(|words| (words[1], words[2]))
             .collect()
+    }
+
+    thread_local! {
+        static O4_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static O4_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_o4(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O4_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        O4_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's O4 seam at `0x9B7E14` (`bProjImpactDmgFix`): not asked without its switch bit
+    /// (FIXES alone included); asked with the projectile and the 0x8000 value, an answer
+    /// replaces only that flag call, no answer leaves it.
+    #[test]
+    fn o4_seam_replaces_the_impact_damage_flag_call() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let switch = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::PROJ_IMPACT_DMG_FIX;
+        for (word, answer, asked, set) in [
+            (0, Some(0), false, true),
+            (
+                jip_patches::INSTALLED | jip_patches::FIXES,
+                Some(0),
+                false,
+                true,
+            ),
+            (switch, Some(0), true, false),
+            (switch, None, true, true),
+        ] {
+            let mut e = Engine::new();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009b_7e14), at_o4);
+            e.map(ZERO_DOUBLE & !0xfff, 0x1000);
+            e.register_double(GLOBAL_STATE, |_, _| 4u32.into_ret());
+            e.register(BASE_OBJECT, |_, _| 0x5000u32.into_ret());
+            e.register_double(FIRST_TEST, |_, _| 0u32.into_ret());
+            e.register_double(SECOND_TEST, |_, _| 0u32.into_ret());
+            e.register_double(AMOUNT, |_, _| 1.0f64.into_ret());
+            e.register(SET_FLAG, |_, _| Ret::default());
+            e.register(AFTER_FLAGS, |_, _| Ret::default());
+            e.set_jip_patches(word);
+            O4_ASKED.with(|s| s.borrow_mut().clear());
+            O4_ANSWER.with(|c| c.set(answer));
+            e.call_log = Some(vec![]);
+            e.call(0x009b_7cc0, &args![0x7000u32]);
+            let log = e.call_log.take().unwrap();
+            let masks: Vec<u32> = calls_to(&log, SET_FLAG).iter().map(|w| w[1]).collect();
+            assert_eq!(masks.contains(&0x8000), set, "{word:x} {answer:?}");
+            assert_eq!(masks.len(), if set { 9 } else { 8 });
+            let seen = O4_ASKED.with(|s| s.take());
+            assert_eq!(seen, if asked { vec![vec![0x7000, 1]] } else { vec![] });
+        }
     }
 
     #[test]

@@ -1211,11 +1211,26 @@ pub fn fn_009f5070(e: &mut Engine, reference: Ptr, functor: Ptr) -> bool {
         return false;
     }
     // No reference skips like a flagged one (009f50bf).
-    if reference == 0
-        || typed_call!(leaf::FAMILY, 0x0044_0d80, leaf::form_flag_20(e, reference))
-        || e.call(REFERENCE_FLAG_0X4000, &args![reference]).bool()
-        || typed_call!(leaf::FAMILY, 0x0044_0da0, leaf::form_flag_800(e, reference))
-    {
+    if reference == 0 {
+        return false;
+    }
+    // 009f50c4..009f50e7: JIP's G92 (a fix) replaces the three flag tests with one that also
+    // skips a disabled reference; the seam answers the skip byte (words: the reference). One
+    // load while JIP is not installed.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x009f_50c4, &[reference])
+    } else {
+        None
+    };
+    let skip = match jip {
+        Some(skip) => skip & 0xff != 0,
+        None => {
+            typed_call!(leaf::FAMILY, 0x0044_0d80, leaf::form_flag_20(e, reference))
+                || e.call(REFERENCE_FLAG_0X4000, &args![reference]).bool()
+                || typed_call!(leaf::FAMILY, 0x0044_0da0, leaf::form_flag_800(e, reference))
+        }
+    };
+    if skip {
         return false;
     }
     if e.vcall(actor, 0x1a0, &args![0u32]).bool()
@@ -3032,6 +3047,45 @@ mod sandbox_tests {
         e.call_log = Some(vec![]);
         assert!(!e.call(0x009f_5070, &args![0u32, functor]).bool());
         assert!(calls_to(&e, MOBILE_OBJECT_GET_CURRENT_PACKAGE).is_empty());
+    }
+
+    thread_local! {
+        static G92_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G92_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g92(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G92_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G92_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's G92 seam at `0x9F50C4` (a fix), for a food reference whose flag 0x4000 test answers
+    /// set: not asked without the FIXES bit (the exe skips it); asked with the reference, the
+    /// answer's low byte decides the skip, no answer runs the exe's tests.
+    #[test]
+    fn g92_seam_decides_the_skip() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        for (word, reply, asked, added) in [
+            (0, Some(0), false, false),
+            (jip_patches::INSTALLED, Some(0), false, false),
+            (fixes, Some(0), true, true),
+            (fixes, Some(0x100), true, true),
+            (fixes, Some(1), true, false),
+            (fixes, None, true, false),
+        ] {
+            let mut e = Engine::new();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009f_50c4), at_g92);
+            let (functor, data, reference, _) = callback_setup(&mut e, 0x2f);
+            answer(&mut e, REFERENCE_FLAG_0X4000, 1);
+            e.set_jip_patches(word);
+            G92_ASKED.with(|s| s.borrow_mut().clear());
+            G92_ANSWER.with(|c| c.set(reply));
+            assert!(!e.call(0x009f_5070, &args![reference, functor]).bool());
+            assert_eq!(e.mem.u8(data + FOOD), u8::from(added), "{word:x} {reply:?}");
+            let seen = G92_ASKED.with(|s| s.take());
+            assert_eq!(seen, if asked { vec![vec![reference]] } else { vec![] });
+        }
     }
 
     #[test]

@@ -848,11 +848,25 @@ pub fn high_process_calculate_move_mode(
     if e.call(0x0043_7bf0, &args![actor]).bool() || e.call(0x0043_7bd0, &args![actor]).bool() {
         return 0;
     }
-    if e.call(0x008d_8220, &args![actor]).bool()
-        || (package != 0 && e.call(0x0067_a480, &args![package]).bool())
-        || e.call(0x0049_3bb0, &args![actor]).bool()
-    {
-        return 0x201;
+    // 008daa6f: JIP's G62 (a fix) replaces the three run tests: the seam answers the move mode
+    // to return, or 0 to go on (words: the actor, the running package). One load while JIP is
+    // not installed.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x008d_aa6f, &[actor.addr(), package])
+    } else {
+        None
+    };
+    match jip {
+        Some(0) => {}
+        Some(mode) => return mode,
+        None => {
+            if e.call(0x008d_8220, &args![actor]).bool()
+                || (package != 0 && e.call(0x0067_a480, &args![package]).bool())
+                || e.call(0x0049_3bb0, &args![actor]).bool()
+            {
+                return 0x201;
+            }
+        }
     }
     if run_flag != 0 {
         return 0x201;
@@ -18206,6 +18220,56 @@ mod tests {
         // The two flags: run wins.
         assert_eq!(move_mode(&mut e, p, [1.0, 2.0, 3.0], 1, 1), 0x201);
         assert_eq!(move_mode(&mut e, p, [1.0, 2.0, 3.0], 0, 1), 0x101);
+    }
+
+    thread_local! {
+        static G62_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G62_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g62(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G62_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G62_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's G62 seam at `0x8DAA6F` (a fix): not asked without the FIXES bit (the exe's run
+    /// tests: the grenade test answers run); asked with the actor and the package, a non-zero
+    /// answer is returned, 0 goes on past the three tests (the walk flag then answers walk), no
+    /// answer runs them.
+    #[test]
+    fn g62_seam_replaces_the_run_tests() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let mut e = Engine::new();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008d_aa6f), at_g62);
+        let p = move_mode_world(&mut e, 0x500);
+        returning(&mut e, 0x008d_8220, 1);
+        for (word, answer, asked, mode) in [
+            (0, Some(0x101), false, 0x201),
+            (jip_patches::INSTALLED, Some(0x101), false, 0x201),
+            (fixes, Some(0x101), true, 0x101),
+            (fixes, Some(0x201), true, 0x201),
+            (fixes, Some(0), true, 0x101),
+            (fixes, None, true, 0x201),
+        ] {
+            e.set_jip_patches(word);
+            G62_ASKED.with(|s| s.borrow_mut().clear());
+            G62_ANSWER.with(|c| c.set(answer));
+            assert_eq!(
+                move_mode(&mut e, p, [1.0, 2.0, 3.0], 0, 1),
+                mode,
+                "{word:x} {answer:?}"
+            );
+            let seen = G62_ASKED.with(|s| s.take());
+            assert_eq!(
+                seen,
+                if asked {
+                    vec![vec![0x00a0_0000, 0x500]]
+                } else {
+                    vec![]
+                }
+            );
+        }
     }
 
     #[test]

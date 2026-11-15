@@ -1,4 +1,5 @@
-//! Group GD's game patches: G117 (a projectile's ammo, count and split beams), case by case from
+//! Group GD's game patches: G117 (a projectile's ammo, count and split beams) and part 2 (G27, G30,
+//! G62, G91, G92, G102, O4), case by case from
 //! JIP's `InitProjectileSetAmmoHook`, `TESObjectWEAP::GetEquippedAmmo` and `GetAmmo`.
 
 use super::*;
@@ -265,4 +266,280 @@ fn weapon_ammo_walks_a_form_list_as_jip() {
     assert_eq!(weapon_ammo(&e, weapon), list);
     e.mem.set_u32(weapon + 0xa8, 0);
     assert_eq!(weapon_ammo(&e, weapon), 0);
+}
+
+/// Part 2's seams.
+const PART2: [SiteSlot; 8] = [
+    EXPLOSION_SOURCE[0],
+    EXPLOSION_SOURCE[1],
+    EXPLOSION_PERK,
+    MOVE_MODE,
+    REACTION_COOLDOWN,
+    AI_TARGET,
+    SPEAKER_DONE,
+    MISSILE_FLAGS,
+];
+
+/// Not installed (row on) and installed with the row off: none of part 2's seams has a handler,
+/// and asking them answers nothing; installed with the row: each has JIP's.
+#[test]
+fn part2_registered_only_with_the_fixes() {
+    for (installed, row) in [(false, true), (true, false)] {
+        let mut e = jip(installed, row);
+        for slot in PART2 {
+            assert!(e.site_owners(slot.addr()).is_empty(), "{:x}", slot.addr());
+            assert_eq!(e.site(slot.addr(), &[0x0300_0000, 0]), None);
+        }
+    }
+    let e = jip(true, true);
+    for slot in PART2 {
+        assert_eq!(
+            e.site_owners(slot.addr()),
+            [Owner::Jip],
+            "{:x}",
+            slot.addr()
+        );
+    }
+}
+
+/// G27: the reference itself, whatever it is.
+#[test]
+fn explosion_source_is_the_reference() {
+    let mut e = jip(true, true);
+    for slot in EXPLOSION_SOURCE {
+        for reference in [0x0300_1000u32, 0, 0xffff_fff0] {
+            assert_eq!(e.site(slot.addr(), &[reference]), Some(reference));
+        }
+    }
+}
+
+thread_local! {
+    static ENTRY_CALLS: std::cell::RefCell<Vec<(Vec<u32>, f32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// G30: no shooter or a shooter that is not an actor keeps the multiplier (no entry point); an
+/// actor shooter runs entry point 0x48 with the projectile's weapon on the multiplier.
+#[test]
+fn explosion_perk_runs_the_entry_point_for_actor_shooters() {
+    let mut e = jip(true, true);
+    e.register(APPLY_PERK_MODIFIERS, |e, a| {
+        let before = e.mem.f32(a[3]);
+        ENTRY_CALLS.with(|s| s.borrow_mut().push((a[..3].to_vec(), before)));
+        e.mem.set_f32(a[3], before * 2.0);
+        Ret::default()
+    });
+    let actor_vtable = e.mem.alloc(0x400);
+    e.mem.set_u32(actor_vtable + 0x100, ACTOR_IS_ACTOR);
+    let other_vtable = e.mem.alloc(0x400);
+    e.mem.set_u32(other_vtable + 0x100, ACTOR_IS_ACTOR + 0x10);
+    let actor = e.mem.alloc(0x1b4);
+    e.mem.set_u32(actor, actor_vtable);
+    let other = e.mem.alloc(0x1b4);
+    e.mem.set_u32(other, other_vtable);
+    let source = e.mem.alloc(0x150);
+    e.mem.set_u32(source + 0xf8, 0x0100_0abc);
+    // (shooter, the answer)
+    for (shooter, answer) in [(0, 1.5f32), (other, 1.5), (actor, 3.0)] {
+        e.mem.set_u32(source + 0xfc, shooter);
+        ENTRY_CALLS.with(|s| s.borrow_mut().clear());
+        let got = e.site(EXPLOSION_PERK.addr(), &[source, 1.5f32.to_bits()]);
+        assert_eq!(got, Some(answer.to_bits()), "{shooter:x}");
+        let calls = ENTRY_CALLS.with(|s| s.take());
+        if shooter == actor {
+            assert_eq!(calls, vec![(vec![0x48, actor, 0x0100_0abc], 1.5)]);
+        } else {
+            assert!(calls.is_empty());
+        }
+    }
+}
+
+/// G62: Always Walk first (walk even for a running actor), then Always Run, then the actor's
+/// bytes `+0x124` and `+0x104` (run), else 0; no package skips the flags.
+#[test]
+fn move_mode_honours_always_walk() {
+    let mut e = jip(true, true);
+    let actor = e.mem.alloc(0x200);
+    let package = e.mem.alloc(0x80);
+    let none = u32::MAX;
+    // (package flags or none, byte +0x124, byte +0x104, the answer)
+    for (flags, b124, b104, mode) in [
+        (ALWAYS_WALK, 1u8, 1u8, 0x101u32),
+        (ALWAYS_WALK | ALWAYS_RUN, 0, 0, 0x101),
+        (ALWAYS_RUN, 0, 0, 0x201),
+        (0, 1, 0, 0x201),
+        (0, 0, 1, 0x201),
+        (0, 0, 0, 0),
+        (!(ALWAYS_WALK | ALWAYS_RUN), 0, 0, 0),
+        (none, 1, 0, 0x201),
+        (none, 0, 0, 0),
+    ] {
+        e.mem.set_u8(actor + 0x124, b124);
+        e.mem.set_u8(actor + 0x104, b104);
+        let pkg = if flags == none {
+            0
+        } else {
+            e.mem.set_u32(package + 0x1c, flags);
+            package
+        };
+        assert_eq!(
+            e.site(MOVE_MODE.addr(), &[actor, pkg]),
+            Some(mode),
+            "{flags:x} {b124} {b104}"
+        );
+    }
+}
+
+thread_local! {
+    static TICK: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// An engine for G91: the tick wrapper answers [`TICK`], the setting is 2 s.
+fn tick_engine(e: &mut Engine) {
+    e.register(TICK_COUNT, |_, _| TICK.with(|t| t.get()).into_ret());
+    e.map(REACTION_COOLDOWN_SETTING & !0xfff, 0x1000);
+    e.mem.set_f32(REACTION_COOLDOWN_SETTING, 2.0);
+}
+
+/// G91: more than the setting's seconds of ticks since the last line passes and keeps the tick;
+/// exactly the setting, less, or a tick before the last does not; the difference wraps as a
+/// signed int.
+#[test]
+fn reaction_cooldown_in_real_milliseconds() {
+    let mut e = jip(true, true);
+    tick_engine(&mut e);
+    // (now, the answer, the kept tick after)
+    for (now, ready, kept) in [
+        (1000u32, 0u32, 0u32),
+        (2001, 1, 2001),
+        (4001, 0, 2001),
+        (4002, 1, 4002),
+        (1000, 0, 4002),
+        (0x8000_0000, 1, 0x8000_0000),
+        (0x8000_07d0, 0, 0x8000_0000),
+    ] {
+        TICK.with(|t| t.set(now));
+        assert_eq!(e.site(REACTION_COOLDOWN.addr(), &[0]), Some(ready), "{now}");
+        assert_eq!(e.ext_free::<ReactionTick>().0.load(Ordering::Relaxed), kept);
+    }
+    // Across the tick counter's wrap: 0xFFFFF000 then 0x00000800 is 6.144 s.
+    e.ext_free::<ReactionTick>()
+        .0
+        .store(0xffff_f000, Ordering::Relaxed);
+    TICK.with(|t| t.set(0x0000_0800));
+    assert_eq!(e.site(REACTION_COOLDOWN.addr(), &[0]), Some(1));
+}
+
+/// G91's tick is one for the run: an engine sharing the slots (a real thread's) reads and
+/// writes the same word.
+#[test]
+fn reaction_cooldown_tick_is_run_wide() {
+    let mut e = jip(true, true);
+    tick_engine(&mut e);
+    let mut other = engine();
+    e.share_slots_for_test(&mut other);
+    tick_engine(&mut other);
+    TICK.with(|t| t.set(5000));
+    assert_eq!(reaction_cooldown(&mut other, &[0]), Some(1));
+    assert_eq!(e.ext_free::<ReactionTick>().0.load(Ordering::Relaxed), 5000);
+    TICK.with(|t| t.set(6000));
+    assert_eq!(e.site(REACTION_COOLDOWN.addr(), &[0]), Some(0));
+}
+
+thread_local! {
+    /// The pending lists' answers (enabled, disabled) and their calls (enabled + 0x100 x
+    /// disabled).
+    static PENDING: std::cell::Cell<(u32, u32, u32)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+/// G92: a reference with any flag of 0x4820 is skipped without asking the script's pending
+/// lists; else it is skipped when pending disabled.
+#[test]
+fn ai_target_skips_flagged_and_disabled_references() {
+    let mut e = jip(true, true);
+    e.register(PENDING_ENABLED, |_, _| {
+        PENDING.with(|p| {
+            let (en, dis, n) = p.get();
+            p.set((en, dis, n + 1));
+            en.into_ret()
+        })
+    });
+    e.register(PENDING_DISABLED, |_, _| {
+        PENDING.with(|p| {
+            let (en, dis, n) = p.get();
+            p.set((en, dis, n + 0x100));
+            dis.into_ret()
+        })
+    });
+    let reference = e.mem.alloc(0x100);
+    // (flags, pending enabled, pending disabled, the answer, the calls)
+    for (flags, en, dis, skip, calls) in [
+        (0x20u32, 0u32, 1u32, 1u32, 0u32),
+        (0x800, 0, 1, 1, 0),
+        (0x4000, 0, 1, 1, 0),
+        (0x4820, 0, 1, 1, 0),
+        (0, 0, 1, 1, 0x100),
+        (0, 1, 0, 0, 0x100),
+        (0x400, 0, 0, 0, 0x100),
+    ] {
+        e.mem.set_u32(reference + 8, flags);
+        PENDING.with(|p| p.set((en, dis, 0)));
+        assert_eq!(
+            e.site(AI_TARGET.addr(), &[reference]),
+            Some(skip),
+            "{flags:x}"
+        );
+        assert_eq!(PENDING.with(|p| p.get().2), calls, "{flags:x}");
+    }
+    // JIP's GetDisabled with the disabled flag: disabled unless pending enabled.
+    e.mem.set_u32(reference + 8, 0x800);
+    for (en, dis, disabled) in [(0, 0, true), (1, 0, false), (1, 1, true)] {
+        PENDING.with(|p| p.set((en, dis, 0)));
+        assert_eq!(get_disabled(&mut e, reference), disabled, "{en} {dis}");
+    }
+}
+
+/// G102: only life state 2 (dead) as a whole word; dying (1) and state 6 are not.
+#[test]
+fn speaker_done_only_when_dead() {
+    let mut e = jip(true, true);
+    let actor = e.mem.alloc(0x1b4);
+    for (state, dead) in [(2u32, 1u32), (0, 0), (1, 0), (6, 0), (0x102, 0), (3, 0)] {
+        e.mem.set_u32(actor + 0x108, state);
+        assert_eq!(
+            e.site(SPEAKER_DONE.addr(), &[actor]),
+            Some(dead),
+            "{state:x}"
+        );
+    }
+}
+
+/// O4: the flag 0x8000 (byte `+0xC9` bit 0x80) only with the value's low byte set and the base's
+/// byte `+0x61` bit 1; the other bits kept; never cleared.
+#[test]
+fn missile_flags_set_only_for_flagged_bases() {
+    let mut e = jip(true, true);
+    let projectile = e.mem.alloc(0x150);
+    let base = e.mem.alloc(0xd0);
+    e.mem.set_u32(projectile + 0x20, base);
+    // (value, base byte, flag byte before, after)
+    for (value, base_byte, before, after) in [
+        (1u32, 0x01u8, 0x01u8, 0x81u8),
+        (1, 0xff, 0x00, 0x80),
+        (1, 0xfe, 0x00, 0x00),
+        (0, 0x01, 0x00, 0x00),
+        (0x100, 0x01, 0x00, 0x00),
+        (0, 0x01, 0x80, 0x80),
+        (1, 0x00, 0x80, 0x80),
+    ] {
+        e.mem.set_u8(base + 0x61, base_byte);
+        e.mem.set_u8(projectile + 0xc9, before);
+        e.mem.set_u8(projectile + 0xc8, 0x5a);
+        assert_eq!(e.site(MISSILE_FLAGS.addr(), &[projectile, value]), Some(0));
+        assert_eq!(
+            e.mem.u8(projectile + 0xc9),
+            after,
+            "{value:x} {base_byte:x}"
+        );
+        assert_eq!(e.mem.u8(projectile + 0xc8), 0x5a);
+    }
 }

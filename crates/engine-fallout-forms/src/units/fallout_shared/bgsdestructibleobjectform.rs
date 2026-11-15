@@ -1538,7 +1538,17 @@ fn create_explosion_near_bound(e: &mut Engine, reference: Ptr, holder: u32, expl
     let word = e.call(GET_REFERENCE_WORD, &args![reference]).u32();
     let is_projectile_like = e.vcall(reference.addr(), 0x224, &args![]).bool();
     if is_projectile_like {
-        let extra = e.call(0x0087_4480, &args![reference]).u32();
+        // 0047667d: JIP's G27 (a fix) puts `mov eax, ecx` in place of the shooter call: the
+        // explosion's source is the projectile itself. One load while JIP is not installed.
+        let source = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+            e.site(0x0047_667d, &[reference.addr()])
+        } else {
+            None
+        };
+        let extra = match source {
+            Some(source) => source,
+            None => e.call(0x0087_4480, &args![reference]).u32(),
+        };
         words.extend_from_slice(&[extra, 0, word]);
     } else {
         words.extend_from_slice(&[reference.addr(), reference.addr(), word]);
@@ -4614,6 +4624,49 @@ mod tests {
         assert_eq!(created.len(), 1);
         assert_eq!(created[0][..4], [0x7000, 0x9999, 0, 0x1234]);
         assert_eq!(e.mem.u32(spawned.get() + 0xe0), 0xcafe);
+
+        // JIP's G27 seam (0x47667D, a fix): not asked without the FIXES bit (the shooter
+        // call's answer is the source); with it, the handler's answer replaces the call, and
+        // no answer leaves the call.
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static G27: std::cell::RefCell<(Vec<u32>, Option<u32>)> =
+                const { std::cell::RefCell::new((Vec::new(), None)) };
+        }
+        fn at_g27(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            G27.with(|s| {
+                let mut s = s.borrow_mut();
+                s.0.push(a[0]);
+                s.1
+            })
+        }
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0047_667d), at_g27);
+        for (word, answer, source) in [
+            (jip_patches::INSTALLED, Some(reference), 0x9999),
+            (
+                jip_patches::INSTALLED | jip_patches::FIXES,
+                Some(reference),
+                reference,
+            ),
+            (jip_patches::INSTALLED | jip_patches::FIXES, None, 0x9999),
+        ] {
+            e.set_jip_patches(word);
+            e.mem.set_f32(reference + 0x180, 100.0);
+            e.mem.set_u32(reference + 0x158, 1);
+            G27.with(|s| *s.borrow_mut() = (Vec::new(), answer));
+            e.call_log = Some(vec![]);
+            damage(&mut e, this, reference, 30.0);
+            let log = e.call_log.take().unwrap();
+            let asked = G27.with(|s| s.borrow().0.clone());
+            let fixes = word & jip_patches::FIXES != 0;
+            assert_eq!(asked, if fixes { vec![reference] } else { vec![] });
+            let created = calls_to(&log, CREATE_EXPLOSION);
+            assert_eq!(created[0][..4], [0x7000, source, 0, 0x1234], "{word:x}");
+            assert_eq!(
+                calls_to(&log, 0x0087_4480).len(),
+                usize::from(source == 0x9999)
+            );
+        }
     }
 
     #[test]

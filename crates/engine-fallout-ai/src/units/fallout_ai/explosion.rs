@@ -342,9 +342,24 @@ pub fn fn_009ac9c0(
         let mut constructor_owner = owner;
         if !owner.is_null() {
             if e.vcall(owner.addr(), 0x224, &args![]).bool() {
-                let shooter = e.call(0x0087_4480, &args![owner]).ptr::<()>();
+                // 009aca23..009aca58: JIP's G30 (a fix) reads the shooter at +0xFC and runs the
+                // entry point for any actor shooter with the projectile's weapon; the seam
+                // answers the multiplier (words: the projectile, the multiplier's bits). One
+                // load while JIP is not installed.
+                let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                    e.site(0x009a_ca23, &[owner.addr(), damage_multiplier.to_bits()])
+                } else {
+                    None
+                };
+                let shooter = match jip {
+                    Some(multiplier) => {
+                        damage_multiplier = f32::from_bits(multiplier);
+                        Ptr::new(e.mem.u32(owner.addr() + 0xfc))
+                    }
+                    None => e.call(0x0087_4480, &args![owner]).ptr::<()>(),
+                };
                 constructor_owner = shooter;
-                if shooter == player {
+                if jip.is_none() && shooter == player {
                     let entry_value = e.call(0x0047_6c90, &args![owner]).u32();
                     e.with_stack(4, |e, output| {
                         e.mem.set_f32(output.addr(), damage_multiplier);
@@ -8213,6 +8228,70 @@ mod tests {
         );
         // The shooter is not the player: no perk entry.
         assert!(!log.iter().any(|call| call.0 == 0x005e_58f0));
+    }
+
+    thread_local! {
+        static G30_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G30_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g30(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G30_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G30_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's G30 seam at `0x9ACA23` (a fix), for a projectile source: not asked without the
+    /// FIXES bit; asked with the projectile and the multiplier's bits (1.0), its answer is the
+    /// multiplier (the damage 8 scaled by it) and the constructor's owner is the word at the
+    /// projectile's +0xFC (no shooter call); no answer leaves the exe's path.
+    #[test]
+    fn g30_seam_answers_the_multiplier_and_reads_the_shooter() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let one = 1.0f32.to_bits();
+        for (word, answer, asked, owner, damage) in [
+            (0, Some(1.5f32.to_bits()), false, 0x2800, 8.0f32),
+            (
+                jip_patches::INSTALLED,
+                Some(1.5f32.to_bits()),
+                false,
+                0x2800,
+                8.0,
+            ),
+            (fixes, Some(1.5f32.to_bits()), true, 0x2900, 12.0),
+            (fixes, None, true, 0x2800, 8.0),
+        ] {
+            let mut e = list_engine();
+            e.map(0x011d_e000, 0x1000);
+            e.set_global(0x011d_ea3c, 0x3000u32);
+            e.mem.set_u32(0x2000, 0x4000);
+            e.mem.set_u32(0x20fc, 0x2900);
+            e.mem.set_u32(0x4224, 0x6000_0224);
+            e.register(0x6000_0224, |_, _| true.into_ret());
+            e.register(0x0087_4480, |_, _| 0x2800u32.into_ret());
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009a_ca23), at_g30);
+            G30_ASKED.with(|s| s.borrow_mut().clear());
+            G30_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            let log = factory_with_stubbed_constructor(&mut e, 0x2000);
+            let seen = G30_ASKED.with(|s| s.take());
+            assert_eq!(
+                seen,
+                if asked {
+                    vec![vec![0x2000, one]]
+                } else {
+                    vec![]
+                }
+            );
+            let constructed = log.iter().find(|call| call.0 == 0x009a_c200).unwrap();
+            assert_eq!(constructed.1[2], owner, "{word:x}");
+            assert_eq!(
+                log.iter().filter(|call| call.0 == 0x0087_4480).count(),
+                usize::from(owner == 0x2800)
+            );
+            let scaled = log.iter().find(|call| call.0 == 0x0040_7880).unwrap();
+            assert_eq!(scaled.1[1], damage.to_bits(), "{word:x}");
+        }
     }
 
     #[test]
