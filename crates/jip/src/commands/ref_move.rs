@@ -102,7 +102,7 @@ pub const UPDATE_DOWNWARD_PASS: u32 = 0x00a5_dd70;
 pub const MOVE_TO_MARKER: u32 = 0x005c_cb20;
 /// `MarkModified`'s flag in `SetAngle` (`kChangeFlag_Refr_Move`'s bit as JIP passes it: 2).
 const CHANGED_MOVE: u32 = 2;
-/// The most nodes one collision reset visits (JIP's recursion has no bound).
+/// The most nodes one collision reset visits or holds waiting (JIP's recursion has no bound).
 const MAX_NODES: usize = 0x1_0000;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiNode::ResetCollision
@@ -110,12 +110,18 @@ const MAX_NODES: usize = 0x1_0000;
 /// Bit 0x40 in the flags of the collision object of `node` and, depth first, of every node
 /// below it (empty slots and children that are not nodes skipped).
 pub(crate) fn reset_collision(e: &mut Engine, node: u32) {
+    reset_walk(e, node);
+}
+
+/// [`reset_collision`]'s walk; answers the most nodes it held waiting at once.
+fn reset_walk(e: &mut Engine, node: u32) -> usize {
     let mut stack = vec![node];
     let mut visited = 0;
+    let mut peak = 1;
     while let Some(n) = stack.pop() {
         visited += 1;
         if visited > MAX_NODES {
-            return;
+            return peak;
         }
         let object = e.mem.u32(n + COLLISION_OBJECT);
         if object != 0 {
@@ -129,6 +135,11 @@ pub(crate) fn reset_collision(e: &mut Engine, node: u32) {
         }
         // Pushed backwards so the first child is walked first, as JIP's recursion does.
         for i in (0..count).rev() {
+            // nv-rs's own: visits plus waiting nodes stay within the bound (a damaged or cyclic
+            // graph cannot grow the stack without end).
+            if visited + stack.len() >= MAX_NODES {
+                return peak;
+            }
             let child = e.mem.u32(children + 4 * i);
             if child == 0 {
                 continue;
@@ -136,9 +147,11 @@ pub(crate) fn reset_collision(e: &mut Engine, node: u32) {
             let vtbl = e.mem.u32(child);
             if vtbl != 0 && e.mem.u32(vtbl + GET_AS_NI_NODE) == RETURN_THIS {
                 stack.push(child);
+                peak = peak.max(stack.len());
             }
         }
     }
+    peak
 }
 
 /// `node->UpdateDownwardPass(kNiUpdateData, 0)` as JIP calls it (`00A5DD70` directly), the

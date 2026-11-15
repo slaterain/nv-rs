@@ -391,3 +391,65 @@ fn reset_collision_ends_on_a_cycle() {
     reset_collision(&mut e, NODE);
     assert_eq!(e.mem.u8(COL_ROOT + 0xc), 0x40);
 }
+
+/// A node listing itself in all 0xFFFF slots: visits plus waiting nodes stay within the bound,
+/// so the walk ends without the stack growing past it (it grew by 0xFFFF a visit before).
+#[test]
+fn reset_collision_bounds_the_waiting_nodes() {
+    let mut e = engine();
+    let array = FORMS + 0x4_0000;
+    e.mem.set_u32(NODE, VTBL_NODE);
+    e.mem.set_u32(NODE + 0x1c, COL_ROOT);
+    e.mem.set_u32(NODE + 0xa0, array);
+    e.mem.set_u16(NODE + 0xa6, 0xffff);
+    for i in 0..0xffff {
+        e.mem.set_u32(array + 4 * i, NODE);
+    }
+    let peak = reset_walk(&mut e, NODE);
+    assert!(peak < MAX_NODES, "peak {peak}");
+    assert_eq!(e.mem.u8(COL_ROOT + 0xc), 0x40);
+}
+
+/// The root's translation is the reference's position after the game's call (+0x30), not the
+/// argument: a stand-in that moves the reference elsewhere shows which is read.
+#[test]
+fn set_pos_root_takes_the_position_the_game_set() {
+    let mut e = engine();
+    give_3d(&mut e);
+    e.register(SET_LOCATION, |e, w| {
+        CALLS.with(|c| c.borrow_mut().push((SET_LOCATION, w.to_vec())));
+        for (i, v) in [11.0f32, 22.0, 33.0].into_iter().enumerate() {
+            e.mem.set_f32(w[0] + 0x30 + 4 * i as u32, v);
+        }
+        Ret::default()
+    });
+    set_pos_to(&mut e, REFR, [1.0, 2.0, 3.0]);
+    let t = [0, 1, 2].map(|i| e.mem.f32(NODE + 0x58 + 4 * i));
+    assert_eq!(t, [11.0, 22.0, 33.0]);
+}
+
+/// nv-rs's own null checks: no proxy (controller +8): its velocity untouched, no `setPosition`;
+/// a proxy without a phantom (+0x30): velocity cleared first, no `setPosition`, nothing written
+/// at a phantom's +0xE0. The node's update runs once in both.
+#[test]
+fn set_pos_actor_without_proxy_or_phantom() {
+    for no_proxy in [true, false] {
+        let mut e = engine();
+        give_3d(&mut e);
+        make_actor(&mut e);
+        if no_proxy {
+            e.mem.set_u32(CTRL + 8, 0);
+        } else {
+            e.mem.set_u32(PROXY + 0x30, 0);
+        }
+        set_pos_to(&mut e, REFR, [700.0, -1400.0, 35.0]);
+        assert!(calls_to(PHANTOM_SET_POSITION).is_empty());
+        let vel = [0, 1, 2, 3].map(|i| e.mem.f32(PROXY + 0x20 + 4 * i));
+        assert_eq!(vel, if no_proxy { [9.0; 4] } else { [0.0; 4] });
+        assert_eq!(
+            [0, 1, 2, 3].map(|i| e.mem.u32(PHANTOM + 0xe0 + 4 * i)),
+            [0; 4]
+        );
+        assert_eq!(calls_to(UPDATE_DOWNWARD_PASS).len(), 1);
+    }
+}
