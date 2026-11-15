@@ -130,6 +130,10 @@ pub struct Jip {
     pub script_vars: commands::jip_fn_script_vars::State,
     /// JIP's game patches (step 3.9): the host's row and the switches read.
     pub game_patches: game_patches::State,
+    /// The temporary aux variables (`s_auxVariables[1]`): one map for the game, as JIP's global,
+    /// whichever thread's engine writes or clears it (the reference destructor runs on the AI
+    /// threads too, for the conditions' temporary references).
+    pub temp_aux_vars: commands::jip_fn_aux_variable::AuxMods,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -189,6 +193,8 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
         nvse::plugins::listen_per_frame(e);
     }
     e.ext::<Jip>().installed = true;
+    // Made before the threads start: the aux maps' lock-free "may hold" flag.
+    e.ext_free::<commands::jip_fn_aux_variable::AuxVarsHeld>();
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Jip>();
 }

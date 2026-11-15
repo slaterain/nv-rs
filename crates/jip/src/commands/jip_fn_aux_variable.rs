@@ -6,7 +6,7 @@
 //! ([`crate::cosave::Saved::aux_vars`], read and written there as JIP's `JPAV` record, byte for
 //! byte); a command changing them sets JIP's changed flag for them (`kChangedFlag_AuxVars`), so a
 //! load of the same save reads them again. A name beginning `*` is temporary
-//! (`s_auxVariables[1]`): never saved, kept for the session ([`Temp`]). A name whose first
+//! (`s_auxVariables[1]`): never saved, kept for the session ([`Jip::temp_aux_vars`]). A name whose first
 //! character after an optional `*` is `_` is shared by every mod (mod index 0xFF); any other
 //! belongs to the calling script's mod (`GetOverridingModIdx`: the last file of the script form's
 //! files). The owner is the form argument (a reference's base form, as JIP's `GetSubjectID`), or
@@ -73,19 +73,56 @@ pub type AuxMods = UnorderedMap<u32, UnorderedMap<u32, Vars>>;
 /// JIP's `RefMapModsMap`: by mod, by name, by reference id.
 pub type RefMods = UnorderedMap<u32, UnorderedMap<Name, UnorderedMap<u32, Value>>>;
 
-/// The temporary data JIP keeps for the session (`s_auxVariables[1]`, `s_refMapArrays[1]`,
-/// both made with 8 buckets) and its ref map walk (`s_refMapIterator`).
+/// The temporary data JIP keeps for the session (`s_refMapArrays[1]`, made with 8 buckets) and its
+/// ref map walk (`s_refMapIterator`). The temporary aux variables (`s_auxVariables[1]`) are
+/// [`Jip::temp_aux_vars`]: one map for every thread's engine.
 #[derive(Default)]
 pub struct Temp {
-    pub aux_vars: AuxMods,
     pub ref_maps: RefMods,
     pub ref_map_walk: Option<super::jip_fn_ref_map::Walk>,
 }
 
-/// The aux variables: the saved ones or the temporary ones.
+/// Whether either aux map may hold a variable: set on every reach of the maps ([`aux_maps`], a
+/// co-save load), cleared only by a reader that found both empty while holding JIP's slot
+/// ([`maps_found_empty`]). Lock-free ([`Engine::ext_free`]), so a path every thread runs often
+/// (the reference destructor) tests it without JIP's slot.
+#[derive(Default)]
+pub struct AuxVarsHeld(pub std::sync::atomic::AtomicBool);
+
+/// Whether either aux map may hold a variable (no lock).
+pub fn maps_may_hold(e: &mut Engine) -> bool {
+    e.ext_free::<AuxVarsHeld>()
+        .0
+        .load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Marks the maps as possibly holding variables, holding JIP's slot (a writer that bypasses
+/// [`aux_maps`] calls it too). The slot is taken FIRST, then the flag stored: a store made
+/// before taking it could land while a destructor on another thread holds the slot, finds both
+/// maps empty and clears the flag; this writer would then insert with the flag saying "empty"
+/// and later destructors would keep a temporary reference's variables. Set and cleared only by
+/// a holder, the flag is exact whenever the slot is free.
+pub fn maps_reached(e: &mut Engine) {
+    // Taking the slot is the point (held until this engine's next release point).
+    let _ = e.ext::<Jip>();
+    e.ext_free::<AuxVarsHeld>()
+        .0
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// Both maps were found empty by a holder of JIP's slot (every writer holds it too).
+pub fn maps_found_empty(e: &mut Engine) {
+    e.ext_free::<AuxVarsHeld>()
+        .0
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// The aux variables: the saved ones or the temporary ones (both in JIP's shared slot).
 pub fn aux_maps(e: &mut Engine, temp: bool) -> &mut AuxMods {
+    // The slot first, then the flag ([`maps_reached`]).
+    maps_reached(e);
     if temp {
-        &mut e.ext::<Temp>().aux_vars
+        &mut e.ext::<Jip>().temp_aux_vars
     } else {
         &mut e.ext::<Jip>().saved.aux_vars
     }

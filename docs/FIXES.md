@@ -1043,7 +1043,10 @@ Nothing built yet.
 
 #### GH2: References, models, cells, ash piles
 
-Nothing built yet.
+No fix row built yet. Part of JIP in every preset (not this row): `DestroyRefrHook` (`0055a430`,
+`0x55A488`): a destroyed reference lets go of its `SetRefName` name and `SetRefrModelPath` model
+(with their hooks' users) and, when it was made in the game and the save holds nothing of it, its
+aux variables.
 
 #### GF: Forms and records
 
