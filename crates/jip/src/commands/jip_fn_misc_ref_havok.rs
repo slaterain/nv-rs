@@ -103,7 +103,7 @@ fn var_args(read: &Read, first: usize) -> Option<[u32; 3]> {
 /// `ResultVars::Set`: each value as a double into its script variable (`ScriptLocal::data`, +8).
 fn set_vars(e: &mut Engine, vars: [u32; 3], values: [f32; 3]) {
     for (var, v) in vars.into_iter().zip(values) {
-        e.mem.set_f64(var + 8, f64::from(v));
+        e.mem.set_f64(var.wrapping_add(8), f64::from(v));
     }
 }
 
@@ -129,9 +129,9 @@ fn rotate(cols: [[f32; 4]; 3], v: [f32; 4]) -> [f32; 3] {
 /// The body's rotation columns (+0xF0, +0x100, +0x110).
 fn rotation(e: &Engine, body: u32) -> Option<[[f32; 4]; 3]> {
     Some([
-        h::vec4(e, body + h::ROTATION)?,
-        h::vec4(e, body + h::ROTATION + 0x10)?,
-        h::vec4(e, body + h::ROTATION + 0x20)?,
+        h::vec4(e, body.wrapping_add(h::ROTATION))?,
+        h::vec4(e, body.wrapping_add(h::ROTATION + 0x10))?,
+        h::vec4(e, body.wrapping_add(h::ROTATION + 0x20))?,
     ])
 }
 
@@ -143,8 +143,8 @@ fn form_set(e: &Engine, form: u32) -> Vec<u32> {
     if form == 0 {
         return Vec::new();
     }
-    if h::rd8(e, form + TYPE_ID) == Some(LIST_FORM_TYPE) {
-        super::list_items(e, Ptr::<ListNode>::new(form + LIST_FORMS))
+    if h::rd8(e, form.wrapping_add(TYPE_ID)) == Some(LIST_FORM_TYPE) {
+        super::list_items(e, Ptr::<ListNode>::new(form.wrapping_add(LIST_FORMS)))
     } else {
         vec![form]
     }
@@ -152,22 +152,24 @@ fn form_set(e: &Engine, form: u32) -> Vec<u32> {
 
 /// The base form of a reference (+0x20), 0 when unreadable.
 fn base_of(e: &Engine, refr: u32) -> u32 {
-    h::rd32(e, refr + BASE_FORM).unwrap_or(0)
+    h::rd32(e, refr.wrapping_add(BASE_FORM)).unwrap_or(0)
 }
 
 /// Whether any touched object's reference (the body under an actor's feet first) passes `test`.
+/// One budget ([`h::Walk`]) covers the whole command: the contact lists and every parent lookup.
 fn any_contact(e: &Engine, refr: u32, test: impl Fn(u32) -> bool) -> bool {
-    let Some(c) = h::contacts(e, refr) else {
+    let mut walk = h::Walk::new();
+    let Some(c) = h::contacts(e, refr, &mut walk) else {
         return false;
     };
     if c.under_feet != 0 {
-        let r = h::object_parent_ref(e, c.under_feet);
+        let r = h::object_parent_ref(e, c.under_feet, &mut walk);
         if r != 0 && test(r) {
             return true;
         }
     }
     c.bodies.into_iter().any(|body| {
-        let r = h::object_parent_ref(e, body);
+        let r = h::object_parent_ref(e, body, &mut walk);
         r != 0 && test(r)
     })
 }
@@ -210,7 +212,7 @@ fn get_has_contact_base(e: &mut Engine, w: &[u32]) -> Ret {
 fn has_contact_type(e: &Engine, refr: u32, type_id: u32) -> bool {
     any_contact(e, refr, |r| {
         let base = base_of(e, r);
-        base != 0 && h::rd8(e, base + TYPE_ID).map(u32::from) == Some(type_id)
+        base != 0 && h::rd8(e, base.wrapping_add(TYPE_ID)).map(u32::from) == Some(type_id)
     })
 }
 
@@ -245,18 +247,19 @@ fn get_contact_refs(e: &mut Engine, w: &[u32]) -> Ret {
     if a.this_obj == 0 {
         return handled(true);
     }
-    let Some(c) = h::contacts(e, a.this_obj) else {
+    let mut walk = h::Walk::new();
+    let Some(c) = h::contacts(e, a.this_obj, &mut walk) else {
         return handled(true);
     };
     let mut elements = TempElements::new();
     if c.under_feet != 0 {
-        let r = h::object_parent_ref(e, c.under_feet);
+        let r = h::object_parent_ref(e, c.under_feet, &mut walk);
         if r != 0 {
             elements.append(Element::Form(r));
         }
     }
     for body in c.bodies {
-        let r = h::object_parent_ref(e, body);
+        let r = h::object_parent_ref(e, body, &mut walk);
         if r != 0 {
             elements.insert_unique(Element::Form(r));
         }
@@ -278,13 +281,13 @@ fn get_has_phantom(e: &mut Engine, w: &[u32]) -> Ret {
     if refr == 0 {
         return handled(true);
     }
-    let Some(loaded) = h::ptr(e, refr + h::LOADED_DATA) else {
+    let Some(loaded) = h::ptr(e, refr.wrapping_add(h::LOADED_DATA)) else {
         return handled(true);
     };
-    let Some(root) = h::ptr(e, loaded + h::ROOT_NODE) else {
+    let Some(root) = h::ptr(e, loaded.wrapping_add(h::ROOT_NODE)) else {
         return handled(true);
     };
-    let phantom = h::ptr(e, loaded + h::PHANTOM)
+    let phantom = h::ptr(e, loaded.wrapping_add(h::PHANTOM))
         .is_some_and(|p| h::rd32(e, p) == Some(h::BHK_SIMPLE_SHAPE_PHANTOM_VTBL));
     if h::is_actor(e, refr) || phantom || h::has_phantom(e, root) {
         a.set_result(e, 1.0);
@@ -326,7 +329,7 @@ fn get_object_velocity(e: &mut Engine, w: &[u32]) -> Ret {
     let axis = axis_arg(&read, 0);
     let body = mobile_body(e, a.this_obj, b"");
     let Some(v) = (body != 0)
-        .then(|| h::vec4(e, body + LIN_VELOCITY))
+        .then(|| h::vec4(e, body.wrapping_add(LIN_VELOCITY)))
         .flatten()
     else {
         return handled(true);
@@ -357,7 +360,7 @@ fn get_angular_velocity(e: &mut Engine, w: &[u32]) -> Ret {
     if body == 0 {
         return handled(true);
     }
-    let Some(v) = h::vec4(e, body + ANG_VELOCITY) else {
+    let Some(v) = h::vec4(e, body.wrapping_add(ANG_VELOCITY)) else {
         return handled(true);
     };
     let v = [v[0], v[1], v[2], 0.0];
@@ -365,7 +368,7 @@ fn get_angular_velocity(e: &mut Engine, w: &[u32]) -> Ret {
     let value = if index < 0 {
         ((v[0] * v[0] + v[1] * v[1]) + (v[2] * v[2] + v[3] * v[3])).sqrt()
     } else if index < 3 {
-        let Some(c) = h::vec4(e, body + h::ROTATION + 0x10 * index as u32) else {
+        let Some(c) = h::vec4(e, body.wrapping_add(h::ROTATION + 0x10 * index as u32)) else {
             return handled(true);
         };
         (v[0] * c[0] + v[1] * c[1]) + (v[2] * c[2] + v[3] * c[3])
@@ -394,7 +397,7 @@ fn get_linear_velocity_alt(e: &mut Engine, w: &[u32]) -> Ret {
     if body == 0 {
         return handled(true);
     }
-    let Some(v) = h::vec4(e, body + LIN_VELOCITY) else {
+    let Some(v) = h::vec4(e, body.wrapping_add(LIN_VELOCITY)) else {
         return handled(true);
     };
     let out = if read.int(4, 0) == 0 {
@@ -428,7 +431,7 @@ fn get_angular_velocity_alt(e: &mut Engine, w: &[u32]) -> Ret {
     if body == 0 {
         return handled(true);
     }
-    let Some(v) = h::vec4(e, body + ANG_VELOCITY) else {
+    let Some(v) = h::vec4(e, body.wrapping_add(ANG_VELOCITY)) else {
         return handled(true);
     };
     let out = if read.int(4, 0) == 0 {
@@ -464,18 +467,18 @@ fn get_collision_obj_property(e: &mut Engine, w: &[u32]) -> Ret {
     if body == 0 {
         return handled(true);
     }
-    let float = |at: u32| h::rdf32(e, body + at).map(f64::from);
+    let float = |at: u32| h::rdf32(e, body.wrapping_add(at)).map(f64::from);
     let value = match prop {
         0 => float(FRICTION),
         1 => float(RESTITUTION),
         2 => float(LINEAR_DAMPING),
         3 => float(ANGULAR_DAMPING),
         4..=6 => float(INERTIA + 4 * (prop - 4)),
-        7 => match h::rdf32(e, body + h::MASS_INV) {
+        7 => match h::rdf32(e, body.wrapping_add(h::MASS_INV)) {
             Some(inv) if inv > 0.0 => Some(1.0 / f64::from(inv)),
             _ => None,
         },
-        _ => h::rd8(e, body + h::MOTION_TYPE).map(f64::from),
+        _ => h::rd8(e, body.wrapping_add(h::MOTION_TYPE)).map(f64::from),
     };
     if let Some(v) = value {
         a.set_result(e, v);
@@ -498,7 +501,9 @@ fn get_collision_obj_layer_type(e: &mut Engine, w: &[u32]) -> Ret {
     if node == 0 {
         return handled(true);
     }
-    if let Some(layer) = h::havok_object(e, node).and_then(|o| h::rd8(e, o + h::FILTER_INFO)) {
+    if let Some(layer) =
+        h::havok_object(e, node).and_then(|o| h::rd8(e, o.wrapping_add(h::FILTER_INFO)))
+    {
         a.set_result(e, f64::from(layer));
     }
     handled(true)
@@ -543,10 +548,10 @@ const PROXIMITY_TRIGGERED_SLOT: u32 = 0x318;
 fn ref_is_grabbable(e: &mut Engine, refr: u32) -> bool {
     if h::is_actor(e, refr) {
         return h::rd32(e, GRAB_THE_LIVING).is_some_and(|v| v != 0)
-            || matches!(h::rd32(e, refr + LIFE_STATE), Some(1 | 2));
+            || matches!(h::rd32(e, refr.wrapping_add(LIFE_STATE)), Some(1 | 2));
     }
     if h::is_projectile(e, refr) {
-        return h::rd32(e, refr + PROJ_FLAGS).is_some_and(|f| f & 0x200 != 0)
+        return h::rd32(e, refr.wrapping_add(PROJ_FLAGS)).is_some_and(|f| f & 0x200 != 0)
             && e.vcall(refr, PROJECTILE_TYPE_SLOT, &[]).u32() == 3
             && e.vcall(refr, PROXIMITY_TRIGGERED_SLOT, &[]).bool();
     }
@@ -568,10 +573,10 @@ fn is_grabbable(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// The node's world translation and the word after it (16 bytes) and world rotation.
 fn node_transform(e: &Engine, node: u32) -> Option<([f32; 4], [f32; 9])> {
-    let pos = h::vec4(e, node + h::WORLD_TRANSLATE)?;
+    let pos = h::vec4(e, node.wrapping_add(h::WORLD_TRANSLATE))?;
     let mut rot = [0f32; 9];
     for (i, r) in rot.iter_mut().enumerate() {
-        *r = h::rdf32(e, node + h::WORLD_ROTATE + 4 * i as u32)?;
+        *r = h::rdf32(e, node.wrapping_add(h::WORLD_ROTATE + 4 * i as u32))?;
     }
     Some((pos, rot))
 }
@@ -606,7 +611,7 @@ fn get_ray_cast_pos(e: &mut Engine, w: &[u32]) -> Ret {
     let (coords, found) = h::hit_coords(e, &cast);
     if found || num_args >= 7 {
         for (g, v) in globals.into_iter().zip(coords) {
-            e.mem.set_f32(g + GLOBAL_DATA, v);
+            e.mem.set_f32(g.wrapping_add(GLOBAL_DATA), v);
         }
         a.set_result(e, 1.0);
     }
@@ -629,7 +634,7 @@ fn get_ray_cast_ref(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     };
     if let Some(cast) = h::ray_cast(e, pos, rot, 50000.0, layer) {
-        let refr = h::block_parent_ref(e, cast.object);
+        let refr = h::block_parent_ref(e, cast.object, &mut h::Walk::new());
         if refr != 0 {
             super::set_form_result(e, &a, refr);
         }
@@ -662,19 +667,19 @@ fn crosshair_pick(e: &mut Engine) -> u32 {
     let Some(player) = h::ptr(e, h::PLAYER) else {
         return 0;
     };
-    let Some(mut start) = h::vec4(e, player + CAMERA_POS) else {
+    let Some(mut start) = h::vec4(e, player.wrapping_add(CAMERA_POS)) else {
         return 0;
     };
-    if h::rd8(e, player + ACTUALLY_3RD_PERSON).is_some_and(|b| b != 0) {
-        let Some(offset) = h::vec4(e, player + SHOULDER_OFFSET) else {
+    if h::rd8(e, player.wrapping_add(ACTUALLY_3RD_PERSON)).is_some_and(|b| b != 0) {
+        let Some(offset) = h::vec4(e, player.wrapping_add(SHOULDER_OFFSET)) else {
             return 0;
         };
         start = std::array::from_fn(|i| start[i] + offset[i]);
     }
     let root = h::ref_ni_node(e, player);
-    let dir = [0x6c, 0x78, 0x84].map(|o| h::rd32(e, root + o));
+    let dir = [0x6c, 0x78, 0x84].map(|o| h::rd32(e, root.wrapping_add(o)));
     let (Some(caster), true, [Some(d0), Some(d1), Some(d2)]) = (
-        h::ptr(e, INTERFACE_MANAGER).and_then(|m| h::ptr(e, m + VIEW_CASTER)),
+        h::ptr(e, INTERFACE_MANAGER).and_then(|m| h::ptr(e, m.wrapping_add(VIEW_CASTER))),
         root != 0,
         dir,
     ) else {
@@ -703,7 +708,7 @@ fn crosshair_pick(e: &mut Engine) -> u32 {
 fn get_crosshair_ref_ex(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let mut refr = h::ptr(e, INTERFACE_MANAGER)
-        .and_then(|m| h::rd32(e, m + CROSSHAIR_REF))
+        .and_then(|m| h::rd32(e, m.wrapping_add(CROSSHAIR_REF)))
         .unwrap_or(0);
     if refr == 0 {
         refr = crosshair_pick(e);

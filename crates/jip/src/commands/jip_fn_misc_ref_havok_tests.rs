@@ -274,6 +274,27 @@ fn object_velocity_axis_and_length_of_four_lanes() {
 }
 
 #[test]
+fn rcp_estimate_is_the_processors_estimate_not_the_quotient() {
+    // Processors' estimates differ (this one gives 0.1 exactly 10): each within the documented
+    // bound, and 3.0's not the rounded quotient (a 12-bit table estimate; checked on this one).
+    for x in [0.1f32, 3.0, 7.0, 0.3] {
+        let est = h::rcp_estimate(x);
+        let rel = ((f64::from(est) - 1.0 / f64::from(x)) * f64::from(x)).abs();
+        assert!(rel <= 1.5 * 2f64.powi(-12), "{x}: {rel}");
+    }
+    assert_ne!(h::rcp_estimate(3.0), 1.0 / 3.0f32);
+}
+
+#[test]
+fn object_velocity_length_is_the_newton_step_not_the_exact_root() {
+    let mut e = setup();
+    let (refr, _) = moving(&mut e, 2, [3.0, 4.0, 12.0, 0.0], [0.0; 4]);
+    let got = run(&mut e, 0x285a, refr, &[]);
+    assert_ne!(got, f64::from(169f32.sqrt()));
+    assert!((got - 13.0).abs() <= 13.0 * 2f64.powi(-20), "{got}");
+}
+
+#[test]
 fn velocities_need_a_mobile_rigid_body() {
     let mut e = setup();
     // Motion type 4 (keyframed) and 5 (fixed) lack bit 1.
@@ -731,21 +752,27 @@ fn parent_ref_walks_up_to_a_fade_node_with_a_reference() {
     let fade_empty = block(&mut e, h::BS_FADE_NODE_VTBL, b"F1", &[leaf]);
     let top = block(&mut e, h::BS_FADE_NODE_VTBL, b"F2", &[fade_empty]);
     e.mem.set_u32(top + 0xcc, 0x0500_9990);
-    assert_eq!(h::block_parent_ref(&e, leaf), 0x0500_9990);
+    assert_eq!(
+        h::block_parent_ref(&e, leaf, &mut h::Walk::new()),
+        0x0500_9990
+    );
     e.mem.set_u32(fade_empty + 0xcc, 0x0500_9980);
-    assert_eq!(h::block_parent_ref(&e, leaf), 0x0500_9980);
+    assert_eq!(
+        h::block_parent_ref(&e, leaf, &mut h::Walk::new()),
+        0x0500_9980
+    );
     // A collision-object property with a null object answers none.
     let o = havok(&mut e, 1);
     property(&mut e, o, h::KEY_COLLISION_OBJECT, 0);
-    assert_eq!(h::object_parent_ref(&e, o), 0);
+    assert_eq!(h::object_parent_ref(&e, o, &mut h::Walk::new()), 0);
     // A damaged properties array answers none.
     e.mem.set_u32(o + 0x78, BAD);
-    assert_eq!(h::object_parent_ref(&e, o), 0);
+    assert_eq!(h::object_parent_ref(&e, o, &mut h::Walk::new()), 0);
     // Parents running in a loop end at the bound.
     e.mem.set_u32(top + 0x18, leaf);
     e.mem.set_u32(top + 0xcc, 0);
     e.mem.set_u32(fade_empty + 0xcc, 0);
-    assert_eq!(h::block_parent_ref(&e, leaf), 0);
+    assert_eq!(h::block_parent_ref(&e, leaf, &mut h::Walk::new()), 0);
 }
 
 #[test]
@@ -764,6 +791,117 @@ fn walks_end_on_a_child_loop() {
     assert_eq!(run(&mut e, 0x2843, refr, &[]), 0.0);
     assert_eq!(run(&mut e, 0x285b, refr, &[s(b"Missing")]), 0.0);
     assert_eq!(run(&mut e, 0x27b7, refr, &[]), 0.0);
+}
+
+/// A node whose 0xFFFF children slots all hold the node itself.
+fn self_loop(e: &mut Engine) -> u32 {
+    let n = node(e, b"Loop", &[]);
+    let data = alloc(e, 4 * 0xffff);
+    for i in 0..0xffffu32 {
+        e.mem.set_u32(data + 4 * i, n);
+    }
+    e.mem.set_u32(n + 0xa0, data);
+    e.mem.set_u16(n + 0xa6, 0xffff);
+    n
+}
+
+#[test]
+fn walk_budget_charges_each_child_slot_of_a_self_loop() {
+    let mut e = setup();
+    let root = self_loop(&mut e);
+    let refr = reference(&mut e, REF_VTBL, 0x0100_0001, 0, root);
+    // Every command returns, finding nothing.
+    let cases: [(u32, Vec<Vec<u8>>); 8] = [
+        (0x2876, vec![]),
+        (0x2877, vec![]),
+        (0x27bb, vec![]),
+        (0x2843, vec![]),
+        (0x285b, vec![s(b"Missing")]),
+        (0x27b7, vec![]),
+        (0x2913, vec![s(b"Missing"), n(0)]),
+        (0x2915, vec![s(b"Missing")]),
+    ];
+    for (op, args) in cases {
+        assert_eq!(run(&mut e, op, refr, &args), 0.0, "{op:x}");
+    }
+    set_ref(&mut e, 1, refr);
+    assert_eq!(run(&mut e, 0x27b6, refr, &[r(1)]), 0.0);
+    assert_eq!(run(&mut e, 0x27b9, refr, &[n(0x3a)]), 0.0);
+    // The budget is charged per slot examined: with 10 units left, 10 slots are read.
+    let mut walk = h::Walk::new();
+    for _ in 0..h::MAX_WORK - 10 {
+        assert!(walk.charge());
+    }
+    assert_eq!(h::children(&e, root, &mut walk).len(), 10);
+    assert!(walk.spent());
+    assert!(h::children(&e, root, &mut walk).is_empty());
+    assert_eq!(h::children(&e, root, &mut h::Walk::new()).len(), 0xffff);
+}
+
+#[test]
+fn contact_list_stops_at_the_item_cap_with_masters_of_0xffff() {
+    const MASTERS_AREA: u32 = 0x0600_0000;
+    let mut e = setup();
+    let bb = base(&mut e, 0x28, 0x0200_0002);
+    let b = placed(&mut e, 0x0100_0022, bb);
+    e.map(MASTERS_AREA, 0x30_0000);
+    for i in 0..0xffffu32 {
+        e.mem.set_u32(MASTERS_AREA + 0x30 * i + 8, b.body);
+    }
+    let masters_body = |e: &mut Engine| {
+        let x = body(e, 1);
+        e.mem.set_u32(x + 0xac, MASTERS_AREA);
+        e.mem.set_u16(x + 0xb0, 0xffff);
+        x
+    };
+    let child = node(&mut e, b"Child", &[]);
+    let root = node(&mut e, b"Root", &[child]);
+    let (b1, b2) = (masters_body(&mut e), masters_body(&mut e));
+    attach(&mut e, root, b1);
+    attach(&mut e, child, b2);
+    let refr = reference(&mut e, REF_VTBL, 0x0100_0010, 0, root);
+    // 2 * 0xFFFF bodies listed, the list stops at the cap.
+    let got = h::ref_contacts(&e, refr, &mut h::Walk::new());
+    assert_eq!(got.len(), h::MAX_ITEMS as usize);
+    assert!(got.iter().all(|&x| x == b.body));
+    // Every command returns, each body's reference found.
+    let id = run(&mut e, 0x27b7, refr, &[]);
+    assert_eq!(array_data(&e, id), vec![Data::Form(ref_id(&e, b.refr))]);
+    set_ref(&mut e, 1, b.refr);
+    assert_eq!(run(&mut e, 0x27b6, refr, &[r(1)]), 1.0);
+    set_ref(&mut e, 1, bb);
+    assert_eq!(run(&mut e, 0x27b8, refr, &[r(1)]), 1.0);
+    assert_eq!(run(&mut e, 0x27b9, refr, &[n(0x28)]), 1.0);
+    assert_eq!(eval(&mut e, 0x27b9, refr, 0x28), 1.0);
+    // Each master entry read is charged: with 5 units left, 5 bodies.
+    assert_eq!(h::ref_contacts(&e, refr, &mut nearly_spent(5)).len(), 5);
+}
+
+/// A walk with only `left` units of its budget left.
+fn nearly_spent(left: u32) -> h::Walk {
+    let mut walk = h::Walk::new();
+    for _ in 0..h::MAX_WORK - left {
+        walk.charge();
+    }
+    walk
+}
+
+#[test]
+fn walk_budget_charges_array_items_properties_and_parents() {
+    let mut e = setup();
+    let bb = base(&mut e, 0x28, 0x0200_0002);
+    let b = placed(&mut e, 0x0100_0022, bb);
+    // An actor's touched objects: one unit per item.
+    let actor = actor_with(&mut e, 1, 1, 0, &[b.body, b.body, b.body]);
+    let got = h::contacts(&e, actor, &mut nearly_spent(2)).map(|c| c.bodies);
+    assert_eq!(got, Some(vec![b.body, b.body]));
+    // The parent lookup: two property entries, then the part and the root (the fade node with
+    // the reference): four units; three are not enough.
+    assert_eq!(
+        h::object_parent_ref(&e, b.body, &mut nearly_spent(4)),
+        b.refr
+    );
+    assert_eq!(h::object_parent_ref(&e, b.body, &mut nearly_spent(3)), 0);
 }
 
 // ---- ray casts ----

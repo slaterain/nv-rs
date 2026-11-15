@@ -61,15 +61,22 @@
 //! Safety: JIP reads every pointer as it finds it and walks children and lists without bounds, so
 //! a damaged model or a body without its Havok object stops the game. Here every guest word is
 //! read checked (an unreadable or null one counts as none), every walk is bounded ([`MAX_DEPTH`]
-//! levels, [`MAX_VISITS`] blocks, [`MAX_ITEMS`] list items), and what lies past a bound counts as
-//! nothing: a reference without 3D, without a collision object or in a half-loaded cell answers
-//! as JIP answers for "nothing".
+//! levels, [`MAX_ITEMS`] items from one list), one command's whole walk shares one budget
+//! ([`Walk`]: [`MAX_WORK`] units, one per child slot examined and per Havok array item, property
+//! or parent read, so damaged lists inside damaged lists cannot multiply the work), a contact list
+//! holds at most [`MAX_ITEMS`] bodies in total, and what lies past a bound counts as nothing: a
+//! reference without 3D, without a collision object or in a half-loaded cell answers as JIP
+//! answers for "nothing".
 //!
 //! Threads: the script commands run on the main thread (`ProcessLists::RunActorScripts` and the
 //! quest scripts in the frame's world step), while the Havok step runs between `StartThreads` and
 //! `WaitForThreads` on an AI thread under `TES::LockHavokUpdateMT` (`00453860`;
-//! docs/FRAME_SKELETON.md "The Havok step"). JIP takes no lock for these reads and neither do the
-//! game's own script commands; the port takes none either.
+//! docs/FRAME_SKELETON.md "The Havok step"). The condition path is the exception: the game
+//! evaluates conditions (`GetHasContactType`'s eval) from AI code too, which can run on another
+//! thread while the Havok step changes the lists read here. JIP takes no lock on either path and
+//! neither do the game's own script commands and conditions, so the port takes none: every read
+//! here is checked and bounded, so a list changing under a read gives at worst a wrong answer for
+//! that one call, never a stop.
 
 use engine_core::prelude::*;
 
@@ -127,9 +134,10 @@ pub(crate) const PHANTOM_BODIES: u32 = 0x160;
 
 /// The deepest a walk goes below its start node.
 pub(crate) const MAX_DEPTH: u32 = 512;
-/// The most blocks one walk looks at.
-pub(crate) const MAX_VISITS: u32 = 1 << 16;
-/// The most items read from one Havok array (or properties walked).
+/// The most work one command's walk does ([`Walk`]).
+pub(crate) const MAX_WORK: u32 = 1 << 20;
+/// The most items read from one Havok array (or properties walked), and the most bodies one
+/// contact list holds.
 pub(crate) const MAX_ITEMS: u32 = 1 << 16;
 /// The longest name read.
 const MAX_NAME: u32 = 0x1000;
@@ -202,26 +210,35 @@ pub(crate) fn is_node(e: &Engine, object: u32) -> bool {
 
 // ---- blocks ----
 
-/// A walk's budget: blocks looked at so far.
+/// One command's walk budget: units of work done so far, one per child slot examined and per
+/// Havok array item, property entry or parent read. Shared by everything one command walks.
 pub(crate) struct Walk {
-    visits: u32,
+    work: u32,
 }
 
 impl Walk {
     pub(crate) fn new() -> Walk {
-        Walk { visits: 0 }
+        Walk { work: 0 }
     }
 
-    /// One more block; false past [`MAX_VISITS`].
-    pub(crate) fn step(&mut self) -> bool {
-        self.visits += 1;
-        self.visits <= MAX_VISITS
+    /// One more unit of work; false (and nothing charged) once [`MAX_WORK`] are done.
+    pub(crate) fn charge(&mut self) -> bool {
+        if self.work >= MAX_WORK {
+            return false;
+        }
+        self.work += 1;
+        true
+    }
+
+    /// Whether the budget is used up.
+    pub(crate) fn spent(&self) -> bool {
+        self.work >= MAX_WORK
     }
 }
 
 /// The node's children slots in order (up to its size), empty ones left out as JIP's walks skip
-/// them; an unreadable slot ends the list.
-pub(crate) fn children(e: &Engine, node: u32) -> Vec<u32> {
+/// them; an unreadable slot or a spent budget ends the list.
+pub(crate) fn children(e: &Engine, node: u32, walk: &mut Walk) -> Vec<u32> {
     let (Some(data), Some(size)) = (
         rd32(e, node.wrapping_add(CHILDREN)),
         rd16(e, node.wrapping_add(CHILDREN_SIZE)),
@@ -230,6 +247,9 @@ pub(crate) fn children(e: &Engine, node: u32) -> Vec<u32> {
     };
     let mut out = Vec::new();
     for i in 0..u32::from(size) {
+        if !walk.charge() {
+            break;
+        }
         match rd32(e, data.wrapping_add(4 * i)) {
             Some(0) => {}
             Some(child) => out.push(child),
@@ -240,8 +260,8 @@ pub(crate) fn children(e: &Engine, node: u32) -> Vec<u32> {
 }
 
 /// The node children that are nodes (`IS_NODE`), in order: what JIP's recursive walks enter.
-pub(crate) fn child_nodes(e: &Engine, node: u32) -> Vec<u32> {
-    children(e, node)
+pub(crate) fn child_nodes(e: &Engine, node: u32, walk: &mut Walk) -> Vec<u32> {
+    children(e, node, walk)
         .into_iter()
         .filter(|&c| is_node(e, c))
         .collect()
@@ -275,14 +295,14 @@ fn block_by_name(e: &Engine, node: u32, name: &[u8], depth: u32, walk: &mut Walk
     if depth >= MAX_DEPTH {
         return 0;
     }
-    for child in children(e, node) {
-        if !walk.step() {
+    for child in children(e, node, walk) {
+        if walk.spent() {
             return 0;
         }
         if name_is(e, child, name) {
             return child;
         }
-        if is_node(e, child) {
+        if is_node(e, child) && !walk.spent() {
             let found = block_by_name(e, child, name, depth + 1, walk);
             if found != 0 {
                 return found;
@@ -428,11 +448,11 @@ pub(crate) fn character_controller(e: &Engine, refr: u32) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiAVObject::GetParentRef
 // (asm).
 /// The reference of a scene block: the block and then each parent in turn, the first that is a
-/// `BSFadeNode` with a reference (+0xCC). 0 for none.
-pub(crate) fn block_parent_ref(e: &Engine, block: u32) -> u32 {
+/// `BSFadeNode` with a reference (+0xCC). 0 for none (or a spent budget).
+pub(crate) fn block_parent_ref(e: &Engine, block: u32, walk: &mut Walk) -> u32 {
     let mut object = block;
     for _ in 0..MAX_DEPTH * 2 {
-        if object == 0 {
+        if object == 0 || !walk.charge() {
             return 0;
         }
         let next = rd32(e, object.wrapping_add(PARENT)).unwrap_or(0);
@@ -451,7 +471,7 @@ pub(crate) fn block_parent_ref(e: &Engine, block: u32) -> u32 {
 /// The scene object of a Havok object: the first property whose key is `bhkNiCollisionObject`'s
 /// (its collision object's node, +8; none when the collision object is null) or `NiAVObject`'s
 /// (the object itself).
-fn parent_node(e: &Engine, object: u32) -> u32 {
+fn parent_node(e: &Engine, object: u32, walk: &mut Walk) -> u32 {
     let (Some(data), Some(size)) = (
         rd32(e, object.wrapping_add(PROPERTIES)),
         rd32(e, object.wrapping_add(PROPERTIES + 4)),
@@ -460,6 +480,9 @@ fn parent_node(e: &Engine, object: u32) -> u32 {
     };
     let size = (size as i32).max(0) as u32;
     for i in 0..size.min(MAX_ITEMS) {
+        if !walk.charge() {
+            return 0;
+        }
         let entry = data.wrapping_add(0x10 * i);
         match rd32(e, entry) {
             Some(KEY_COLLISION_OBJECT) => {
@@ -479,21 +502,25 @@ fn parent_node(e: &Engine, object: u32) -> u32 {
 // (asm).
 /// The reference a Havok object belongs to: [`block_parent_ref`] from its scene object. 0 for a
 /// null object or none.
-pub(crate) fn object_parent_ref(e: &Engine, object: u32) -> u32 {
+pub(crate) fn object_parent_ref(e: &Engine, object: u32, walk: &mut Walk) -> u32 {
     if object == 0 {
         return 0;
     }
-    block_parent_ref(e, parent_node(e, object))
+    let node = parent_node(e, object, walk);
+    block_parent_ref(e, node, walk)
 }
 
 /// The pointers of an `hkArray` (data at `at`, size at `at + 4`), at most [`MAX_ITEMS`]; an
-/// unreadable item ends them.
-fn array_items(e: &Engine, at: u32) -> Vec<u32> {
+/// unreadable item or a spent budget ends them.
+fn array_items(e: &Engine, at: u32, walk: &mut Walk) -> Vec<u32> {
     let (Some(data), Some(size)) = (rd32(e, at), rd32(e, at.wrapping_add(4))) else {
         return Vec::new();
     };
     let mut out = Vec::new();
     for i in 0..((size as i32).max(0) as u32).min(MAX_ITEMS) {
+        if !walk.charge() {
+            break;
+        }
         match rd32(e, data.wrapping_add(4 * i)) {
             Some(p) => out.push(p),
             None => break,
@@ -504,11 +531,20 @@ fn array_items(e: &Engine, at: u32) -> Vec<u32> {
 
 /// The world objects of the bodies a simple shape phantom overlaps: each `hkCdBody*` less 0x10
 /// (JIP's `hkCdBody::GetWorldObj`).
-fn phantom_bodies(e: &Engine, phantom: u32) -> Vec<u32> {
-    array_items(e, phantom.wrapping_add(PHANTOM_BODIES))
+fn phantom_bodies(e: &Engine, phantom: u32, walk: &mut Walk) -> Vec<u32> {
+    array_items(e, phantom.wrapping_add(PHANTOM_BODIES), walk)
         .into_iter()
         .map(|cd| cd.wrapping_sub(0x10))
         .collect()
+}
+
+/// Appends `body` to a contact list unless it already holds [`MAX_ITEMS`]; false when full.
+fn push_contact(out: &mut Vec<u32>, body: u32) -> bool {
+    if out.len() >= MAX_ITEMS as usize {
+        return false;
+    }
+    out.push(body);
+    true
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiNode::GetContactObjects.
@@ -516,7 +552,7 @@ fn phantom_bodies(e: &Engine, phantom: u32) -> Vec<u32> {
 /// constraints' other bodies (+8 of each 0x30-byte entry) and, when the slave list's data is not
 /// null, each slave constraint's body (+0x14); a simple shape phantom's overlapped bodies.
 fn node_contacts(e: &Engine, node: u32, depth: u32, walk: &mut Walk, out: &mut Vec<u32>) {
-    if depth >= MAX_DEPTH || !walk.step() {
+    if depth >= MAX_DEPTH || walk.spent() || out.len() >= MAX_ITEMS as usize {
         return;
     }
     if let Some(object) = havok_object(e, node) {
@@ -524,22 +560,34 @@ fn node_contacts(e: &Engine, node: u32, depth: u32, walk: &mut Walk, out: &mut V
             if let Some(masters) = ptr(e, object.wrapping_add(MASTERS)) {
                 let count = rd16(e, object.wrapping_add(MASTERS_COUNT)).unwrap_or(0);
                 for i in 0..u32::from(count) {
+                    if !walk.charge() {
+                        return;
+                    }
                     match rd32(e, masters.wrapping_add(0x30 * i + 8)) {
-                        Some(body) => out.push(body),
-                        None => break,
+                        Some(body) if push_contact(out, body) => {}
+                        _ => break,
                     }
                 }
             }
             if ptr(e, object.wrapping_add(SLAVES)).is_some() {
-                for instance in array_items(e, object.wrapping_add(SLAVES)) {
-                    out.push(rd32(e, instance.wrapping_add(0x14)).unwrap_or(0));
+                for instance in array_items(e, object.wrapping_add(SLAVES), walk) {
+                    if !push_contact(out, rd32(e, instance.wrapping_add(0x14)).unwrap_or(0)) {
+                        return;
+                    }
                 }
             }
         } else if rd32(e, object) == Some(HKP_SIMPLE_SHAPE_PHANTOM_VTBL) {
-            out.extend(phantom_bodies(e, object));
+            for body in phantom_bodies(e, object, walk) {
+                if !push_contact(out, body) {
+                    return;
+                }
+            }
         }
     }
-    for child in child_nodes(e, node) {
+    for child in child_nodes(e, node, walk) {
+        if walk.spent() || out.len() >= MAX_ITEMS as usize {
+            return;
+        }
         node_contacts(e, child, depth + 1, walk, out);
     }
 }
@@ -548,7 +596,7 @@ fn node_contacts(e: &Engine, node: u32, depth: u32, walk: &mut Walk, out: &mut V
 // GetRefrContactObjects.
 /// What a reference with 3D touches: its trigger phantom's (`spPhantom` +0x18, when it is a
 /// `bhkSimpleShapePhantom`) overlapped bodies, then its root node's contacts. Empty without 3D.
-pub(crate) fn ref_contacts(e: &Engine, refr: u32) -> Vec<u32> {
+pub(crate) fn ref_contacts(e: &Engine, refr: u32, walk: &mut Walk) -> Vec<u32> {
     let mut out = Vec::new();
     let Some(loaded) = ptr(e, refr.wrapping_add(LOADED_DATA)) else {
         return out;
@@ -559,11 +607,12 @@ pub(crate) fn ref_contacts(e: &Engine, refr: u32) -> Vec<u32> {
     if let Some(phantom) = ptr(e, loaded.wrapping_add(PHANTOM)) {
         if rd32(e, phantom) == Some(BHK_SIMPLE_SHAPE_PHANTOM_VTBL) {
             if let Some(object) = ptr(e, phantom.wrapping_add(HAVOK_OBJECT)) {
-                out.extend(phantom_bodies(e, object));
+                // One array: at most MAX_ITEMS, so the list cannot be full yet.
+                out.extend(phantom_bodies(e, object, walk));
             }
         }
     }
-    node_contacts(e, root, 0, &mut Walk::new(), &mut out);
+    node_contacts(e, root, 0, walk, &mut out);
     out
 }
 
@@ -575,7 +624,7 @@ pub(crate) struct Contacts {
     pub(crate) bodies: Vec<u32>,
 }
 
-pub(crate) fn contacts(e: &Engine, refr: u32) -> Option<Contacts> {
+pub(crate) fn contacts(e: &Engine, refr: u32, walk: &mut Walk) -> Option<Contacts> {
     if is_actor(e, refr) {
         let ctrl = character_controller(e, refr);
         if ctrl == 0 {
@@ -588,12 +637,12 @@ pub(crate) fn contacts(e: &Engine, refr: u32) -> Option<Contacts> {
         };
         Some(Contacts {
             under_feet,
-            bodies: array_items(e, ctrl.wrapping_add(CONTACT_BODIES)),
+            bodies: array_items(e, ctrl.wrapping_add(CONTACT_BODIES), walk),
         })
     } else {
         Some(Contacts {
             under_feet: 0,
-            bodies: ref_contacts(e, refr),
+            bodies: ref_contacts(e, refr, walk),
         })
     }
 }
@@ -603,15 +652,15 @@ pub(crate) fn contacts(e: &Engine, refr: u32) -> Option<Contacts> {
 /// child node is movable.
 pub(crate) fn is_movable(e: &Engine, node: u32) -> bool {
     fn walk_node(e: &Engine, node: u32, depth: u32, walk: &mut Walk) -> bool {
-        if depth >= MAX_DEPTH || !walk.step() {
+        if depth >= MAX_DEPTH || walk.spent() {
             return false;
         }
         if havok_object(e, node).is_some_and(|o| body_is_mobile(e, o)) {
             return true;
         }
-        child_nodes(e, node)
+        child_nodes(e, node, walk)
             .into_iter()
-            .any(|c| walk_node(e, c, depth + 1, walk))
+            .any(|c| !walk.spent() && walk_node(e, c, depth + 1, walk))
     }
     walk_node(e, node, 0, &mut Walk::new())
 }
@@ -620,15 +669,15 @@ pub(crate) fn is_movable(e: &Engine, node: u32) -> bool {
 /// Whether the node's Havok object is a phantom (type 2), or any child node has one.
 pub(crate) fn has_phantom(e: &Engine, node: u32) -> bool {
     fn walk_node(e: &Engine, node: u32, depth: u32, walk: &mut Walk) -> bool {
-        if depth >= MAX_DEPTH || !walk.step() {
+        if depth >= MAX_DEPTH || walk.spent() {
             return false;
         }
         if havok_object(e, node).is_some_and(|o| collision_type(e, o) == Some(2)) {
             return true;
         }
-        child_nodes(e, node)
+        child_nodes(e, node, walk)
             .into_iter()
-            .any(|c| walk_node(e, c, depth + 1, walk))
+            .any(|c| !walk.spent() && walk_node(e, c, depth + 1, walk))
     }
     walk_node(e, node, 0, &mut Walk::new())
 }
@@ -658,7 +707,7 @@ pub(crate) fn rcp_estimate(v: f32) -> f32 {
 /// when its bits are not 0), then each child node's, depth first, summed in floats.
 pub(crate) fn body_mass(e: &Engine, node: u32) -> f32 {
     fn walk_node(e: &Engine, node: u32, total: f32, depth: u32, walk: &mut Walk) -> f32 {
-        if depth >= MAX_DEPTH || !walk.step() {
+        if depth >= MAX_DEPTH || walk.spent() {
             return total;
         }
         let mut total = total;
@@ -669,7 +718,10 @@ pub(crate) fn body_mass(e: &Engine, node: u32) -> f32 {
                 }
             }
         }
-        for child in child_nodes(e, node) {
+        for child in child_nodes(e, node, walk) {
+            if walk.spent() {
+                break;
+            }
             total = walk_node(e, child, total, depth + 1, walk);
         }
         total
