@@ -256,13 +256,14 @@ fn a_model_not_in_the_map_leaves_the_exes_load() {
     assert_eq!(first_person_node(&mut e), 0);
 }
 
-/// A find that misses and writes nothing: the out word is zeroed before the find (JIP pushes a
-/// 0), so stale stack contents never pass for a model: no answer, the exe's load.
+/// A find that misses and writes nothing: the out word is 0 when the find runs (JIP pushes a
+/// 0; the port stores it, and `Engine::with_stack` zeroes every frame as well, so stale stack
+/// contents can never pass for a model): no answer, the exe's load.
 #[test]
 fn a_miss_that_writes_nothing_reads_the_zeroed_out_word() {
     let mut e = world();
     cached_model(&mut e, 1);
-    // Leave a non-zero word where the out word will sit.
+    // A non-zero word left in the stack area the out word takes: wiped before the find.
     e.with_stack(4, |e, out| e.mem.set_u32(out.addr(), 0x00de_ad00));
     e.register(MODEL_MAP_FIND, |e, a| {
         assert_eq!(e.mem.u32(a[2]), 0, "zeroed before the find");
