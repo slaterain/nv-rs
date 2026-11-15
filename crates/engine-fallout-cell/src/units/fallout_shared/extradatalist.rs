@@ -1963,15 +1963,30 @@ pub fn extra_data_list_copy_list_for_reference(
                     advance = false;
                 }
             }
+            // JIP LN NVSE's hotkey fix (step 3.9 GH1, G76: `SafeWrite8(0x412675, 1)`, the byte table's
+            // entry of type 0x4A): a hotkey is copied (and moved) with the list. One load while off.
             0x16 | 0x1c | 0x21 | 0x22 | 0x23 | 0x25 | 0x26 | 0x27 | 0x28 | 0x2f | 0x30 | 0x3f
             | 0x8d => {
-                // The call returning to `0x412523`.
-                add_extra_copy_from(e, this, current, 0x0041_2523, remove_from_source as u32);
-                if remove_from_source {
-                    base_extra_list_remove_extra(e, source.cast(), current, true);
-                    current = e.get(source, ExtraDataList::pHead).cast();
-                }
-                advance = !remove_from_source;
+                copy_for_reference(
+                    e,
+                    this,
+                    source,
+                    &mut current,
+                    remove_from_source,
+                    &mut advance,
+                );
+            }
+            0x4a if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+                && e.site(0x0041_2675, &[]).is_some() =>
+            {
+                copy_for_reference(
+                    e,
+                    this,
+                    source,
+                    &mut current,
+                    remove_from_source,
+                    &mut advance,
+                );
             }
             _ => {}
         }
@@ -1980,6 +1995,25 @@ pub fn extra_data_list_copy_list_for_reference(
         }
     }
     unlock(e);
+}
+
+/// `CopyListForReference`'s general arm (table entry 1): the extra data copied (the call
+/// returning to `0x412523`); with `remove_from_source` deleted from `source` and the walk
+/// restarted from its head.
+fn copy_for_reference(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    source: Ptr<ExtraDataList>,
+    current: &mut Ptr<BSExtraData>,
+    remove_from_source: bool,
+    advance: &mut bool,
+) {
+    add_extra_copy_from(e, this, *current, 0x0041_2523, remove_from_source as u32);
+    if remove_from_source {
+        base_extra_list_remove_extra(e, source.cast(), *current, true);
+        *current = e.get(source, ExtraDataList::pHead).cast();
+    }
+    *advance = !remove_from_source;
 }
 
 /// True when `list` has no extra data of the type of `extra`, or has one whose
@@ -2021,7 +2055,13 @@ pub fn extra_data_list_compare_list_for_container(
                 differs = true;
                 break;
             }
-            if get_type(e, current) == 0x21 {
+            // JIP LN NVSE's invisible stack fix (step 3.9 GH1, G46: `SafeWrite8(0x41271E, 0xEB)`, the `jnz`
+            // becomes `jmp`): an owner extra is no difference at once, the general test follows. One load
+            // while off.
+            if get_type(e, current) == 0x21
+                && !(e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+                    && e.site(0x0041_271e, &[]).is_some())
+            {
                 differs = true;
                 break;
             }
@@ -12318,5 +12358,75 @@ mod tests {
         let other = extra_of_type(&mut e, 0x30);
         e.call(0x0041_03d0, &args![target, other]);
         assert!(JIP_ASKED.with(|s| s.take()).is_empty());
+    }
+
+    thread_local! {
+        /// The GH1 fix seams asked (address, words) and what their handlers answer.
+        static GH1_ASKED: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+        static GH1_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_41271e(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        GH1_ASKED.with(|s| s.borrow_mut().push((0x0041_271e, a.to_vec())));
+        GH1_ANSWER.with(|v| v.get())
+    }
+
+    fn at_412675(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        GH1_ASKED.with(|s| s.borrow_mut().push((0x0041_2675, a.to_vec())));
+        GH1_ANSWER.with(|v| v.get())
+    }
+
+    /// JIP LN NVSE's invisible stack fix (step 3.9 GH1, G46) in `CompareListForContainer`: off
+    /// (the word clear, JIP's own bit alone) an owner extra is a difference at once, the seam not
+    /// asked; with the fix row the seam is asked at the owner extra and an answer sends it to the
+    /// general test (an equal owner: no difference); no answer: the exe's difference.
+    #[test]
+    fn jip_gh1_compare_owner_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = compare_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_271e), at_41271e);
+        let (this, _) = list_with_payloads(&mut e, &[(0x21, 9)]);
+        let (other, _) = list_with_payloads(&mut e, &[(0x21, 9)]);
+        let differs = |e: &mut Engine| {
+            e.call(0x0041_26c0, &args![this, other, false, false])
+                .bool()
+        };
+        GH1_ANSWER.with(|v| v.set(Some(1)));
+        for word in [0, jip_patches::INSTALLED] {
+            e.set_jip_patches(word);
+            assert!(differs(&mut e), "{word:x}");
+            assert!(GH1_ASKED.with(|s| s.take()).is_empty());
+        }
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        assert!(!differs(&mut e));
+        assert_eq!(GH1_ASKED.with(|s| s.take()), vec![(0x0041_271e, vec![])]);
+        GH1_ANSWER.with(|v| v.set(None));
+        assert!(differs(&mut e));
+    }
+
+    /// JIP's hotkey fix (G76) in `CopyListForReference`: off a hotkey (type 0x4A) stays in the
+    /// source, the seam not asked; with the fix row the seam is asked at the hotkey and an answer
+    /// copies it with the general arm (moved: deleted from the source); no answer: it stays.
+    #[test]
+    fn jip_gh1_copy_hotkey_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = list_engine();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0041_2675), at_412675);
+            e.set_jip_patches(word);
+            GH1_ANSWER.with(|v| v.set(answer));
+            let (source, _) = list_with(&mut e, &[0x4a, 0x20]);
+            let target: Ptr<ExtraDataList> = e.new_object();
+            e.call(0x0041_2490, &args![target, source, true]);
+            chain_types(&e, source.cast())
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, Some(1)), vec![0x4a, 0x20], "{word:x}");
+            assert!(GH1_ASKED.with(|s| s.take()).is_empty());
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(on, Some(1)), vec![0x20]);
+        assert_eq!(GH1_ASKED.with(|s| s.take()), vec![(0x0041_2675, vec![])]);
+        assert_eq!(run(on, None), vec![0x4a, 0x20]);
     }
 }
