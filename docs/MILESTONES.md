@@ -100,8 +100,9 @@ now checks each call to a constant address against the translation it reaches.
 
 UI Organizer (UIO 2.30, which UI mods and then Stewie's tweaks need; maintainer, 2026-11-14) is being built
 in as `crates/uio` (docs/FIXES.md, "UI Organizer"): part 1 (its lists and conditions, the menus patched in
-memory, its reader at `Tile::ReadFile`) is a row, off in every preset until proven in the game with a UI
-mod; part 2 is its XML parser and `UIOInjectComponent`, part 3 its tile operators and text patches.
+memory, its reader at `Tile::ReadFile`) and part 2 (its XML parser and parse cache, `UIOInjectComponent`
+for JIP's `InjectUIComponent`) are a row, off in every preset until proven in the game with a UI mod;
+part 3 is its tile operators and text patches.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
