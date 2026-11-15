@@ -184,6 +184,8 @@ pub struct LinkedRef {
 /// damage cap (`SetDamageToArmorMaxPercent`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SerializedVars {
+    /// Conditions read a lock-free copy: whatever changes it calls
+    /// `jip_fn_miscellaneous::publish_serialized_flags` after.
     pub flags: u32,
     /// The cap's `float`, as its bits.
     pub dmg_armor_max_percent: u32,
@@ -518,6 +520,8 @@ pub fn process_changed_flags(e: &mut Engine, flags: u8) {
     s.script_vars.clear();
     s.linked_refs_temp.clear();
     s.serialized = SerializedVars::default();
+    crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
+    let s = saved(e);
     // The NPCs' perk info leaves the actors with it (step 3.3); the map empties.
     if flags & changed::NPC_PERKS != 0 {
         s.npc_perks.clear();
@@ -554,6 +558,7 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
     // where it breaks, with what was read kept; xNVSE then goes on at the section's end, so the
     // rest of the co-save still loads.
     let _ = read_records(e, r, flags);
+    crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
     Ok(())
 }
 
@@ -1355,6 +1360,7 @@ pub fn listen(e: &mut Engine, m: &Message) {
         msg::NEW_GAME => {
             let s = saved(e);
             s.serialized = SerializedVars::default();
+            crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
             crate::world_hooks::restore_form_flags(e);
             let s = saved(e);
             // nv-rs's own: nothing of the last co-save loaded goes into a new game's.
