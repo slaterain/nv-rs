@@ -302,7 +302,7 @@ pub fn atan(x: f32) -> f32 {
 }
 
 /// `rsqrtss`: the processor's estimate of 1/sqrt, as JIP's code gets it.
-fn rsqrt_estimate(v: f32) -> f32 {
+pub(crate) fn rsqrt_estimate(v: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
         use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};

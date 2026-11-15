@@ -1192,3 +1192,7 @@ fn crosshair_ref_ex_interface_ref_or_the_pick() {
     assert_eq!(form_result(&e), 0);
     assert_eq!(e.mem.u32(VIEW_LOG), 0);
 }
+
+// The write commands' tests (jip_fn_misc_ref_havok_w.rs) share this file's scenes.
+#[path = "jip_fn_misc_ref_havok_w_tests.rs"]
+mod write;
