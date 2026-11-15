@@ -688,8 +688,12 @@ pub(crate) const PICK: u32 = 0x0045_8440;
 pub(crate) const TES_GRID: u32 = 0x08;
 pub(crate) const TES_INTERIOR: u32 = 0x34;
 /// `kUnitConv` (game units to Havok's, 0.142874...) and `PS_HKUnitCnvrt` (back, 6.9991...).
-pub(crate) const TO_HAVOK: f32 = f32::from_bits(0x3e12_4dd2);
-pub(crate) const FROM_HAVOK: f32 = f32::from_bits(0x40df_f8d6);
+pub(crate) fn to_havok() -> f32 {
+    f32::from_bits(0x3e12_4dd2)
+}
+pub(crate) fn from_havok() -> f32 {
+    f32::from_bits(0x40df_f8d6)
+}
 /// The record's size (JIP's `RayCastData`) and its fields JIP sets or reads.
 const RECORD_SIZE: u32 = 0xb0;
 const RECORD_FROM: u32 = 0x00;
@@ -735,7 +739,7 @@ pub(crate) fn ray_cast(
         .and_then(|h| rd32(e, h.wrapping_add(FILTER_INFO)))?;
     let layer = if layer < 0 { 6 } else { layer as u32 };
     let filter = (filter & 0xffff_0000) | (layer & 0x7f);
-    let k = [TO_HAVOK, TO_HAVOK, TO_HAVOK, 0.0];
+    let k = [to_havok(), to_havok(), to_havok(), 0.0];
     let from: [f32; 4] = std::array::from_fn(|i| pos[i] * k[i]);
     let dir = [rot[1], rot[4], rot[7], 0.0];
     let r = [range, range, range, 0.0];
@@ -772,7 +776,7 @@ pub(crate) fn ray_cast(
 /// and y truncated, shifted right 12, then JIP's index into the grid: `y' + x' + (x' << half)`
 /// with `x' = x - centreX + half`, `y' = y - centreY + half`, each below the dimension).
 pub(crate) fn hit_coords(e: &Engine, cast: &Cast) -> ([f32; 4], bool) {
-    let k = [FROM_HAVOK, FROM_HAVOK, FROM_HAVOK, 0.0];
+    let k = [from_havok(), from_havok(), from_havok(), 0.0];
     let coords: [f32; 4] = std::array::from_fn(|i| {
         (cast.from[i] + (cast.to[i] - cast.from[i]) * cast.fraction) * k[i]
     });

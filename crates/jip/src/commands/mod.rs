@@ -732,6 +732,7 @@ mod tests {
             "ln_fn_gamepad",
             "jip_fn_input",
             "jip_fn_ccc",
+            "jip_fn_misc_ref",
         ];
         let mut seen = std::collections::HashSet::new();
         for (list, file) in ALL.iter().zip(files) {
@@ -750,6 +751,7 @@ mod tests {
             "ln_fn_gamepad",
             "jip_fn_ccc",
             "jip_fn_weapon",
+            "jip_fn_misc_ref",
         ]) {
             for &(opcode, _, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");

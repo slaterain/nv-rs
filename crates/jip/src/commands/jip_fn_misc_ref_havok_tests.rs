@@ -563,7 +563,7 @@ fn contact_refs_of_a_plain_reference() {
     let lone = body(&mut e, 1);
     let refr = touching(&mut e, &[0, viac, lone], &[a.body]);
     let id = run(&mut e, 0x27b7, refr, &[]);
-    let mut want = vec![a.refr, b.refr];
+    let mut want = [a.refr, b.refr];
     want.sort();
     assert_eq!(
         array_data(&e, id),
@@ -649,7 +649,7 @@ fn contacts_of_a_trigger_phantom_and_a_phantom_node() {
     e.mem.set_u32(ph + 0x164, 1);
     attach(&mut e, root, ph);
     let id = run(&mut e, 0x27b7, refr, &[]);
-    let mut want = vec![b.refr, c.refr];
+    let mut want = [b.refr, c.refr];
     want.sort();
     let got = array_data(&e, id);
     assert_eq!(
@@ -846,7 +846,7 @@ fn ray_cast_ref_builds_jips_record_and_answers_the_hit_ref() {
     assert_eq!(form_result(&e), 0x0100_0070);
     assert_eq!(e.mem.u32(PICK_LOG), tes);
     assert_eq!(e.mem.u32(PICK_LOG + 4), 1);
-    let k = h::TO_HAVOK;
+    let k = h::to_havok();
     assert_eq!(
         [0, 4, 8, 12].map(|o| logged_f32(&e, o)),
         [70.0 * k, -140.0 * k, 7.0 * k, 0.0]
@@ -920,7 +920,7 @@ fn ray_cast_pos_hit_interior_grid_and_seven_arguments() {
     e.mem.set_f32(PICK_FRACTION, 0.25);
     let args = vec![r(1), r(2), r(3), z(9.0), n(6), s(b""), z(1000.0)];
     assert_eq!(run(&mut e, 0x285e, refr, &args[..6]), 1.0);
-    let k = h::TO_HAVOK;
+    let k = h::to_havok();
     let from = [70.0 * k, -140.0 * k, 7.0 * k];
     let to = [
         (2.0 * 50000.0) * k + from[0],
@@ -928,7 +928,7 @@ fn ray_cast_pos_hit_interior_grid_and_seven_arguments() {
         (8.0 * 50000.0) * k + from[2],
     ];
     let want: [f32; 3] =
-        std::array::from_fn(|i| (from[i] + (to[i] - from[i]) * 0.25) * h::FROM_HAVOK);
+        std::array::from_fn(|i| (from[i] + (to[i] - from[i]) * 0.25) * h::from_havok());
     assert_eq!(gvals(&e, g), want);
     // No hit in an exterior without a grid cell there: nothing; seven arguments write anyway.
     e.mem.set_u32(PICK_ANSWER, 0);
@@ -970,7 +970,7 @@ fn hit_coords_grid_index_follows_jips_shift() {
     e.mem.set_u32(grid + 0x10, cells);
     e.mem.set_u32(tes + 8, grid);
     let at = |x: f32, y: f32| h::Cast {
-        from: [x / h::FROM_HAVOK, y / h::FROM_HAVOK, 0.0, 0.0],
+        from: [x / h::from_havok(), y / h::from_havok(), 0.0, 0.0],
         to: [0.0; 4],
         fraction: 0.0,
         object: 0,
