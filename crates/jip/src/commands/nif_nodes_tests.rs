@@ -3,8 +3,69 @@
 //! expectations from JIP's asm (`netimmerse.cpp`, `GameObjects.cpp`, `GetNifBlock`). The builder
 //! is shared with `jip_fn_misc_ref_nodes_tests.rs`.
 
-use super::*;
+// The code's functions only: every layout number the scenes are built with is written below as
+// the exe has it (a literal, with the function it was read from), so a wrong constant in the code
+// is caught instead of being built into the scene too.
+use super::{
+    bounding_box, extra_data_of_class, floats3, get_block, get_node, matrix, name_text, ni_block,
+    ni_node, nif_block, ref_ni_node, to_euler_pry, to_euler_pry_inv, FLT_180_D_PI,
+};
 use crate::commands::test_support::engine;
+use engine_core::prelude::*;
+
+/// `GetAsNiNode` (vtable +0xC) of `NiNode` `0109B5AC` and `BSFadeNode` `010A8F90`: `006815C0`
+/// (returns `this`).
+pub(crate) const RETURN_THIS: u32 = 0x0068_15c0;
+/// Vtable slot +0x18 of `NiTriShape` `0109D454` (and the other geometry classes): `00E68810`
+/// (returns `this`).
+pub(crate) const RETURN_THIS2: u32 = 0x00e6_8810;
+/// Vtable +0xFC of `Actor` `01084254` (`Character`, `Creature`, `PlayerCharacter` too): `008D0360`
+/// (returns true; `TESObjectREFR` `0102F55C` has `0047C850`).
+pub(crate) const RETURN_TRUE: u32 = 0x008d_0360;
+/// `m_blockName` +8: `NiAVObject::GetObjectByName` `00A59E20` compares `[this+8]`.
+pub(crate) const NAME: u32 = 0x08;
+/// Extra data array +0x10, its count (u16) +0x14: `NiObjectNET::GetExtraData` `00A5BDD0`.
+pub(crate) const EXTRA_LIST: u32 = 0x10;
+pub(crate) const EXTRA_COUNT: u32 = 0x14;
+/// Parent +0x18: `00A68BF0` takes the parent's world transform from `[this+0x18]`.
+pub(crate) const PARENT: u32 = 0x18;
+/// Collision object +0x1C: `NiAVObject::UpdateWorldData` `00A68C60` calls `[this+0x1C]`.
+pub(crate) const COLLISION_OBJECT: u32 = 0x1c;
+/// Flags +0x30: `00A68BF0` tests bit 9 of `[this+0x30]`.
+pub(crate) const FLAGS: u32 = 0x30;
+/// Local transform +0x34 (rotation, translation +0x58, scale +0x64) copied to the world transform
+/// +0x68 (translation +0x8C) by `00A68BF0` (13 words); `NiTransform::operator*` `0062C250`:
+/// rotation +0, translation +0x24, scale +0x30.
+pub(crate) const LOCAL_ROTATE: u32 = 0x34;
+pub(crate) const LOCAL_TRANSLATE: u32 = 0x58;
+pub(crate) const LOCAL_SCALE: u32 = 0x64;
+pub(crate) const WORLD_ROTATE: u32 = 0x68;
+pub(crate) const WORLD_TRANSLATE: u32 = 0x8c;
+/// Children data +0xA0, size (u16) +0xA6: `NiNode::GetObjectByName` `00A5E560`.
+pub(crate) const CHILDREN: u32 = 0xa0;
+pub(crate) const CHILDREN_SIZE: u32 = 0xa6;
+/// A form's `refID` +0xC (JIP's `IsPlayer`: 0x14).
+pub(crate) const REF_ID: u32 = 0x0c;
+pub(crate) const PLAYER_ID: u32 = 0x14;
+/// Loaded data +0x64, its root node +0x14: `TESObjectREFR::Get3D` `0043FCD0`.
+pub(crate) const LOADED_DATA: u32 = 0x64;
+pub(crate) const ROOT_NODE: u32 = 0x14;
+/// First person node +0x694, third person flag (byte) +0x64A: `PlayerCharacter::Get3D`
+/// `00950B60`.
+pub(crate) const NODE_1ST_PERSON: u32 = 0x694;
+pub(crate) const IS_3RD_PERSON: u32 = 0x64a;
+/// An actor's process +0x68, its level (byte) +0x28, `MiddleHighProcess`' bound +0x224
+/// (`GetBSBound` `009EE020`).
+pub(crate) const PROCESS: u32 = 0x68;
+pub(crate) const PROCESS_LEVEL: u32 = 0x28;
+pub(crate) const PROCESS_BOUND: u32 = 0x224;
+/// `BSBound`'s vtable (`010C2B64`, +0x4C `BSBound::LoadBinary` `00C54E30`: centre +0xC, half
+/// extents +0x18).
+pub(crate) const BS_BOUND_VTBL: u32 = 0x010c_2b64;
+pub(crate) const BOUND_CENTRE: u32 = 0x0c;
+pub(crate) const BOUND_DIMENSIONS: u32 = 0x18;
+/// `TESObjectREFR::GetScale` `00567400`.
+pub(crate) const GET_SCALE: u32 = 0x0056_7400;
 
 /// The test's scene memory.
 pub(crate) const AREA: u32 = 0x0500_0000;
@@ -138,8 +199,9 @@ pub(crate) fn bound(e: &mut Engine, vtbl: u32, centre: [f32; 3], dims: [f32; 3])
     let b = alloc(e, 0x24);
     e.mem.set_u32(b, vtbl);
     for i in 0..3 {
-        e.mem.set_f32(b + 0xc + 4 * i, centre[i as usize]);
-        e.mem.set_f32(b + 0x18 + 4 * i, dims[i as usize]);
+        e.mem.set_f32(b + BOUND_CENTRE + 4 * i, centre[i as usize]);
+        e.mem
+            .set_f32(b + BOUND_DIMENSIONS + 4 * i, dims[i as usize]);
     }
     b
 }
@@ -246,31 +308,122 @@ fn block_damaged_models() {
     assert_eq!(get_block(&e, root4, b"Missing"), 0, "bounded");
     // A deep chain past the depth bound.
     let mut below = shape(&mut e, b"Bottom");
-    for _ in 0..MAX_DEPTH + 2 {
+    for _ in 0..514 {
         below = node(&mut e, b"Link", &[below]);
     }
     assert_eq!(get_block(&e, below, b"Bottom"), 0, "below the depth bound");
 }
 
-/// The walk stops after [`MAX_VISITS`] blocks: a block past it is not found.
+/// A chain of `levels` nodes above a geometry block named `T`: the top node.
+fn chain(e: &mut Engine, levels: u32) -> u32 {
+    let mut below = shape(e, b"T");
+    for _ in 0..levels {
+        below = node(e, b"Link", &[below]);
+    }
+    below
+}
+
+/// The depth bound at its edge: a block 511 levels below the start (its children are level 1) is
+/// found, one 512 levels below is not.
+#[test]
+fn block_depth_edge() {
+    let mut e = scene_engine();
+    let top = chain(&mut e, 511);
+    assert_ne!(get_block(&e, top, b"T"), 0, "511 levels below");
+    let mut e = scene_engine();
+    let top = chain(&mut e, 512);
+    assert_eq!(get_block(&e, top, b"T"), 0, "512 levels below");
+}
+
+/// `Root [A, Target]` with node A holding `fillers` geometry blocks: the walk reads A's slot,
+/// A's `fillers` slots, then Target's. The root and Target.
+fn wide(e: &mut Engine, fillers: usize) -> (u32, u32) {
+    let filler = shape(e, b"F");
+    let target = shape(e, b"Target");
+    let a = node(e, b"A", &vec![filler; fillers]);
+    (node(e, b"Root", &[a, target]), target)
+}
+
+/// The visit bound at its edge: Target as the 65,536th slot read is found, as the 65,537th not.
 #[test]
 fn block_visit_bound() {
     let mut e = scene_engine();
-    let filler = shape(&mut e, b"F");
-    let target = shape(&mut e, b"Target");
-    let mut slots = vec![filler; MAX_VISITS as usize];
-    let early = node(&mut e, b"Early", &[target]);
-    let mut slots2 = vec![early];
-    slots2.extend(std::iter::repeat_n(filler, 10));
-    let root2 = node(&mut e, b"R2", &slots2);
-    assert_eq!(get_block(&e, root2, b"Target"), target);
-    slots.push(target);
-    // 65536 + 1 slots do not fit the 16-bit size: two nodes of half each.
-    let half = MAX_VISITS as usize / 2;
-    let n1 = node(&mut e, b"N1", &slots[..half]);
-    let n2 = node(&mut e, b"N2", &slots[half..]);
-    let root = node(&mut e, b"Root", &[n1, n2]);
-    assert_eq!(get_block(&e, root, b"Target"), 0, "past the bound");
+    let (root, target) = wide(&mut e, 65_534);
+    assert_eq!(
+        get_block(&e, root, b"Target"),
+        target,
+        "read 1 + 65,534 + 1"
+    );
+    let mut e = scene_engine();
+    let (root, _) = wide(&mut e, 65_535);
+    assert_eq!(get_block(&e, root, b"Target"), 0, "read 1 + 65,535 + 1");
+}
+
+/// Every slot read is charged to the walk, empty ones too: a damaged node whose count word is
+/// 0xFFFFFFFF (size 0xFFFF) of empty slots spends the walk, so its later sibling is not found;
+/// with one slot fewer it is. A slot near its end holding itself (a loop of 65,534 empty slots a
+/// level) still ends.
+#[test]
+fn block_empty_slots_charged() {
+    for (count, found) in [(0xffff_ffff_u32, false), (0xfffe_fffe, true)] {
+        let mut e = scene_engine();
+        let target = shape(&mut e, b"Target");
+        let damaged = node(&mut e, b"Damaged", &[]);
+        let data = alloc(&mut e, 4 * 0xffff);
+        e.mem.write(data, &vec![0u8; 4 * 0xffff]);
+        e.mem.set_u32(damaged + CHILDREN, data);
+        // The array's capacity +0xA4 and size +0xA6 (the size is what the walks read).
+        e.mem.set_u32(damaged + 0xa4, count);
+        let root = node(&mut e, b"Root", &[damaged, target]);
+        let want = if found { target } else { 0 };
+        assert_eq!(get_block(&e, root, b"Target"), want, "count {count:#x}");
+        e.mem.set_u32(data + 4 * 0xfffd, damaged);
+        assert_eq!(get_block(&e, root, b"Missing"), 0);
+        assert_eq!(get_block(&e, root, b"Target"), 0, "spent below the loop");
+    }
+}
+
+/// `GetName` as JIP's array elements take it: the text `NULL` for a block without a name (JIP's
+/// `NiFixedString::Get`); an empty text only for a name that cannot be read.
+#[test]
+fn name_texts() {
+    let mut e = scene_engine();
+    let named = shape(&mut e, b"Head");
+    assert_eq!(name_text(&e, named), b"Head");
+    let unnamed = object(&mut e, NI_TRI_SHAPE, None);
+    assert_eq!(name_text(&e, unnamed), b"NULL");
+    let bad = object(&mut e, NI_TRI_SHAPE, None);
+    e.mem.set_u32(bad + NAME, BAD);
+    assert_eq!(name_text(&e, bad), b"", "the text unreadable");
+    assert_eq!(name_text(&e, BAD), b"", "the name pointer unreadable");
+}
+
+/// A script asking for `NULL`: JIP compares the text's fixed string (never 0 for a text) with each
+/// block's name pointer, so a block without a name never matches; one really named `NULL` does.
+#[test]
+fn block_named_null() {
+    let mut e = scene_engine();
+    let unnamed = object(&mut e, NI_TRI_SHAPE, None);
+    let root = node(&mut e, b"Root", &[unnamed]);
+    assert_eq!(get_block(&e, root, b"NULL"), 0);
+    let real = shape(&mut e, b"NULL");
+    set_children(&mut e, root, &[unnamed, real]);
+    assert_eq!(get_block(&e, root, b"NULL"), real);
+    let start = object(&mut e, NI_NODE, None);
+    set_children(&mut e, start, &[]);
+    assert_eq!(get_block(&e, start, b"NULL"), 0, "the start without a name");
+}
+
+/// Reads near the top of the address space wrap instead of overflowing (nothing there is mapped).
+#[test]
+fn reads_near_the_top_wrap() {
+    let e = scene_engine();
+    assert_eq!(floats3(&e, 0xffff_fffc), None);
+    assert_eq!(matrix(&e, 0xffff_fff0), None);
+    assert_eq!(get_block(&e, 0xffff_fff0, b"S"), 0);
+    assert_eq!(name_text(&e, 0xffff_fffc), b"");
+    assert_eq!(ref_ni_node(&e, 0xffff_fff0), 0);
+    assert_eq!(bounding_box(&e, 0xffff_fff0), 0);
 }
 
 /// `GetNode`: the block only when it is a node.
@@ -394,16 +547,16 @@ fn bounding_boxes() {
     assert_eq!(bounding_box(&e, a), node_bound, "no process");
     let process = alloc(&mut e, 0x300);
     let process_bound = bound(&mut e, BS_BOUND_VTBL, [5.0; 3], [5.0; 3]);
-    e.mem.set_u32(process + 0x224, process_bound);
+    e.mem.set_u32(process + PROCESS_BOUND, process_bound);
     e.mem.set_u32(a + PROCESS, process);
     for (level, want) in [(0, process_bound), (1, process_bound), (2, node_bound)] {
-        e.mem.set_u32(process + 0x28, level);
+        e.mem.set_u32(process + PROCESS_LEVEL, level);
         assert_eq!(bounding_box(&e, a), want, "level {level}");
     }
-    e.mem.set_u32(process + 0x28, 0x100);
+    e.mem.set_u32(process + PROCESS_LEVEL, 0x100);
     assert_eq!(bounding_box(&e, a), process_bound, "the level's byte");
-    e.mem.set_u32(process + 0x28, 1);
-    e.mem.set_u32(process + 0x224, 0);
+    e.mem.set_u32(process + PROCESS_LEVEL, 1);
+    e.mem.set_u32(process + PROCESS_BOUND, 0);
     assert_eq!(bounding_box(&e, a), 0, "the process has none: none");
     e.mem.set_u32(r, ACTOR_VTBL - 0x400 + 0x200);
     assert_eq!(

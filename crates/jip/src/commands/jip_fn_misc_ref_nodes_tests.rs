@@ -2,10 +2,6 @@
 //! expectation from JIP's command bodies (functions_jip/jip_fn_misc_ref.h).
 
 use super::super::nif_nodes::tests::*;
-use super::super::nif_nodes::{
-    BS_BOUND_VTBL, COLLISION_OBJECT, FLAGS, GET_SCALE, LOCAL_ROTATE, LOCAL_SCALE, LOCAL_TRANSLATE,
-    WORLD_ROTATE, WORLD_TRANSLATE,
-};
 use crate::commands::test_support::*;
 use crate::test_support::LIST;
 use engine_core::prelude::*;
@@ -483,20 +479,23 @@ fn parent_nodes() {
         "GetBlock: no name"
     );
     assert_eq!(run(&mut e, 0x2871, sc.refr, &[s(b"Leg")]), 0.0);
-    // A parent without a name: an empty text.
+    // A parent without a name: the text NULL (JIP's NiFixedString::Get); one whose name cannot
+    // be read: an empty text.
+    e.mem.set_u32(sc.root + 8, 0x7ff0_0000);
     e.mem.set_u32(sc.body + 8, 0);
     let id = run(&mut e, 0x2871, sc.refr, &[s(b"Head")]);
-    assert_eq!(texts(&e, id), vec![t(""), t("Root")]);
+    assert_eq!(texts(&e, id), vec![t("NULL"), t("")]);
     // A broken parent chain ends the list.
     e.mem.set_u32(sc.body + 0x18, 0);
     let id = run(&mut e, 0x2871, sc.refr, &[s(b"Head")]);
-    assert_eq!(texts(&e, id), vec![t("")]);
+    assert_eq!(texts(&e, id), vec![t("NULL")]);
     // A parent chain that loops (never reaching the root) is bounded.
     e.mem.set_u32(sc.body + 0x18, sc.head);
     let id = run(&mut e, 0x2871, sc.refr, &[s(b"Head")]);
     assert_eq!(
         texts(&e, id).len(),
-        super::super::nif_nodes::MAX_VISITS as usize
+        65_536,
+        "the parent walk's 65,536 steps"
     );
     // The player: first person unless the argument is odd or the camera third person.
     let fp_head = shape(&mut e, b"Head");
@@ -556,15 +555,20 @@ fn child_blocks() {
         run(&mut e, 0x28f3, sc.refr, &[s(b"Empty"), n(0), n(1)]),
         0.0
     );
-    // Empty slots are skipped; unnamed blocks give empty texts.
+    // Empty slots are skipped; unnamed blocks give the text NULL (a node's own name too), in
+    // both modes.
     let unnamed = object(&mut e, 0x0109_d454, None);
-    set_children(&mut e, empty, &[0, unnamed]);
+    let unnamed_node = object(&mut e, 0x0109_b5ac, None);
+    set_children(&mut e, unnamed_node, &[sc.head]);
+    set_children(&mut e, empty, &[0, unnamed, unnamed_node]);
     let id = run(&mut e, 0x28f3, sc.refr, &[s(b"Empty")]);
-    assert_eq!(texts(&e, id), vec![t("")]);
+    assert_eq!(texts(&e, id), vec![t("NULL"), t("NULL"), t("Head")]);
+    let id = run(&mut e, 0x28f3, sc.refr, &[s(b"Empty"), n(0), n(1)]);
+    assert_eq!(texts(&e, id), vec![t("NULL"), t("NULL")]);
     // A cycle is bounded.
     set_children(&mut e, empty, &[sc.root]);
     let id = run(&mut e, 0x28f3, sc.refr, &[s(b"Empty")]);
-    assert!(texts(&e, id).len() <= super::super::nif_nodes::MAX_VISITS as usize + 1);
+    assert!(texts(&e, id).len() <= 65_537);
     set_root(&mut e, sc.refr, 0);
     assert_eq!(run(&mut e, 0x28f3, sc.refr, &[]), 0.0, "no 3D");
 }
@@ -596,8 +600,75 @@ fn collision_nodes() {
     let p = player(&mut e, sc.root, fp, false);
     let id = run(&mut e, 0x28f2, p, &[]);
     assert_eq!(texts(&e, id), vec![t("Body")]);
+    // A node without a name: the text NULL (JIP's NiFixedString::Get).
+    e.mem.set_u32(sc.body + 8, 0);
+    let id = run(&mut e, 0x28f2, sc.refr, &[]);
+    assert_eq!(texts(&e, id), vec![t("NULL")]);
     set_root(&mut e, sc.refr, 0);
     assert_eq!(run(&mut e, 0x28f2, sc.refr, &[]), 0.0);
+}
+
+/// `GetChildBlocks` and `GetCollisionNodes` at the depth bound: under a chain of nodes, every
+/// node with collision, the last block listed is the one 511 levels below the root.
+#[test]
+fn walks_depth_edge() {
+    let mut e = setup();
+    let coll = AREA + 0xe_3000;
+    e.mem.set_u32(coll + 0x10, AREA + 0xe_3200);
+    let mut below = node(&mut e, b"L513", &[]);
+    e.mem.set_u32(below + COLLISION_OBJECT, coll);
+    for level in (0..513).rev() {
+        let name = format!("L{level}");
+        below = node(&mut e, name.as_bytes(), &[below]);
+        e.mem.set_u32(below + COLLISION_OBJECT, coll);
+    }
+    let r = reference(&mut e, 0x1234, false, below);
+    // GetChildBlocks leaves out the root's own name: L1 to L511.
+    let id = run(&mut e, 0x28f3, r, &[]);
+    let names = texts(&e, id);
+    assert_eq!(names.len(), 511);
+    assert_eq!(names.last(), Some(&t("L511")));
+    // GetCollisionNodes: L0 (the root) to L511.
+    let id = run(&mut e, 0x28f2, r, &[]);
+    let names = texts(&e, id);
+    assert_eq!(names.len(), 512);
+    assert_eq!(names.last(), Some(&t("L511")));
+}
+
+/// Every guest address sum wraps: blocks, shaders, materials, collision objects and parents near
+/// the top of the address space answer nothing instead of overflowing.
+#[test]
+fn addresses_near_the_top_wrap() {
+    let mut e = setup();
+    let sc = scene(&mut e);
+    let top = 0xffff_fff0;
+    let r = reference(&mut e, 0x1234, false, top);
+    for (op, args) in [
+        (0x284b, vec![s(b"")]),
+        (0x284d, vec![s(b"")]),
+        (0x284f, vec![s(b"")]),
+        (0x2851, vec![s(b""), n(1)]),
+        (0x28f3, vec![]),
+        (0x28f2, vec![]),
+    ] {
+        assert_eq!(run(&mut e, op, r, &args), 0.0, "opcode {op:#x}");
+    }
+    e.mem.set_u32(sc.head + 0xa4, top);
+    assert_eq!(run(&mut e, 0x278c, sc.refr, &[s(b"Head"), n(8)]), 0.0);
+    e.mem.set_u32(sc.head + 0xa8, top);
+    assert_eq!(run(&mut e, 0x28f4, sc.refr, &[s(b"Head")]), 0.0);
+    e.mem.set_u32(sc.root + COLLISION_OBJECT, 0xffff_fff8);
+    assert_eq!(run(&mut e, 0x28f2, sc.refr, &[]), 0.0);
+    e.mem.set_u32(sc.body + PARENT, top);
+    let id = run(&mut e, 0x2871, sc.refr, &[s(b"Head")]);
+    assert_eq!(texts(&e, id), vec![t("Body"), t("")]);
+    e.mem.set_u32(sc.refr + 0x20, top);
+    assert_eq!(run(&mut e, 0x262c, sc.refr, &[axis(b'X')]), 0.0);
+    assert_eq!(
+        run(&mut e, 0x262c, top, &[axis(b'X')]),
+        0.0,
+        "the reference"
+    );
 }
 
 /// A name argument of 0x40 bytes or more runs past JIP's buffer: with the list guard row it is
@@ -664,6 +735,12 @@ fn block_texture_set() {
             t(r"data\texturesX\d.dds")
         ]
     );
+    // String::CStr: a buffer whose length (u16 +4, the game's String::Set 004037F0) is 0 is "".
+    e.mem.set_u16(set + 8 + 4, 0);
+    e.mem.set_u16(set + 8 + 8 + 4, 0x100);
+    let id = run(&mut e, 0x28f4, sc.refr, &[s(b"Head")]);
+    assert_eq!(texts(&e, id)[0], t(""), "length 0");
+    assert_eq!(texts(&e, id)[1], t(r"textures\c.dds"), "any length not 0");
     e.mem.set_u32(shader + 0xa4, 0);
     assert_eq!(
         run(&mut e, 0x28f4, sc.refr, &[s(b"Head")]),

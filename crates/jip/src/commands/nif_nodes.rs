@@ -40,9 +40,10 @@
 //! Safety: JIP walks the children recursively without a bound and reads every pointer as it is,
 //! so a model whose children run back into themselves overflows its stack and a damaged pointer
 //! stops the game. Here every guest word is read checked (an unreadable one counts as none),
-//! every walk is bounded ([`MAX_DEPTH`] levels, [`MAX_VISITS`] blocks, [`MAX_NAME`] bytes of a
-//! name), and what lies past a bound counts as not found: a half-loaded reference or a damaged
-//! model answers nothing rather than stopping the game.
+//! every walk is bounded ([`MAX_DEPTH`] levels, [`MAX_VISITS`] child slots read, empty ones
+//! included, [`MAX_NAME`] bytes of a name), every guest address sum wraps, and what lies past a
+//! bound counts as not found: a half-loaded reference or a damaged model answers nothing rather
+//! than stopping the game.
 
 use engine_core::prelude::*;
 
@@ -83,9 +84,10 @@ pub(crate) const BS_BOUND_VTBL: u32 = 0x010c_2b64;
 /// The game's `TESObjectREFR::GetScale` (`00567400`, thiscall, the scale in `ST0`).
 pub(crate) const GET_SCALE: u32 = 0x0056_7400;
 
-/// The deepest a walk goes below its start node.
+/// The first level below a walk's start node that is not looked at (the start is level 0, its
+/// children level 1): a block 511 levels below is found, one 512 below is not.
 pub(crate) const MAX_DEPTH: u32 = 512;
-/// The most blocks one walk looks at.
+/// The most child slots one walk reads (empty and unreadable ones included).
 pub(crate) const MAX_VISITS: u32 = 1 << 16;
 /// The longest name read (a fixed string longer than this, or with no end in readable memory,
 /// counts as unreadable).
@@ -129,14 +131,18 @@ pub(crate) fn ptr(e: &Engine, at: u32) -> Option<u32> {
 
 /// Three floats from `at`.
 pub(crate) fn floats3(e: &Engine, at: u32) -> Option<[f32; 3]> {
-    Some([rdf32(e, at)?, rdf32(e, at + 4)?, rdf32(e, at + 8)?])
+    Some([
+        rdf32(e, at)?,
+        rdf32(e, at.wrapping_add(4))?,
+        rdf32(e, at.wrapping_add(8))?,
+    ])
 }
 
 /// Nine floats (a rotation by rows) from `at`.
 pub(crate) fn matrix(e: &Engine, at: u32) -> Option<[f32; 9]> {
     let mut m = [0f32; 9];
     for (i, v) in m.iter_mut().enumerate() {
-        *v = rdf32(e, at + 4 * i as u32)?;
+        *v = rdf32(e, at.wrapping_add(4 * i as u32))?;
     }
     Some(m)
 }
@@ -177,18 +183,23 @@ fn name_ptr(e: &Engine, object: u32) -> u32 {
     rd32(e, object.wrapping_add(NAME)).unwrap_or(0)
 }
 
-/// `NiObjectNET::GetName` (JIP LN NVSE) as an array element takes it: the name's text, empty for
-/// a block without one (xNVSE's `SetStr` stores a null text as no text, `ArrayData::SetStr`) or
-/// whose text is unreadable.
+/// `NiObjectNET::GetName` (JIP LN NVSE, `netimmerse.h`: `m_blockName.Get()`, an inline of JIP's
+/// own, no game function) as an array element takes it: the name's text, the text `NULL` for a
+/// block without one (JIP's `NiFixedString::Get`: `str ? str : "NULL"`), empty only for a name
+/// whose text cannot be read (where JIP would read garbage).
 pub(crate) fn name_text(e: &Engine, object: u32) -> Vec<u8> {
-    match name_ptr(e, object) {
-        0 => Vec::new(),
-        p => c_text(e, p).unwrap_or_default(),
+    match rd32(e, object.wrapping_add(NAME)) {
+        Some(0) => b"NULL".to_vec(),
+        Some(p) => c_text(e, p).unwrap_or_default(),
+        None => Vec::new(),
     }
 }
 
-/// Whether the block's name is the fixed string of `name` (the text, byte for byte; a block
-/// without a name or with an unreadable one has none).
+/// Whether the block's name is the fixed string of `name` (the text, byte for byte). A block
+/// without a name (pointer 0) or with an unreadable one has none: JIP compares the block's
+/// pointer with the text's fixed string, which is never 0 for a text (its `GetNiFixedString`;
+/// the game's `00A5B690` answers 0 only for no text), so a script asking for `NULL` finds only a
+/// block really named `NULL`, never one without a name.
 fn name_is(e: &Engine, object: u32, name: &[u8]) -> bool {
     match name_ptr(e, object) {
         0 => false,
@@ -196,27 +207,13 @@ fn name_is(e: &Engine, object: u32, name: &[u8]) -> bool {
     }
 }
 
-/// The node's children slots in order (`m_children`, up to its size), empty ones left out, as
-/// JIP's walks skip them.
-pub(crate) fn children(e: &Engine, node: u32) -> Vec<u32> {
-    let (Some(data), Some(size)) = (
-        rd32(e, node.wrapping_add(CHILDREN)),
-        rd16(e, node.wrapping_add(CHILDREN_SIZE)),
-    ) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for i in 0..u32::from(size) {
-        match rd32(e, data.wrapping_add(4 * i)) {
-            Some(0) => {}
-            Some(child) => out.push(child),
-            None => break,
-        }
-    }
-    out
+/// Whether blocks `depth` levels below a walk's start (its children are level 1) lie past
+/// [`MAX_DEPTH`] and are not looked at.
+pub(crate) fn too_deep(depth: u32) -> bool {
+    depth >= MAX_DEPTH
 }
 
-/// A walk's budget: blocks looked at so far.
+/// A walk's budget: child slots read so far (empty and unreadable ones too).
 pub(crate) struct Walk {
     visits: u32,
 }
@@ -226,36 +223,75 @@ impl Walk {
         Walk { visits: 0 }
     }
 
-    /// One more block; false past [`MAX_VISITS`].
+    /// One more read; false past [`MAX_VISITS`].
     pub(crate) fn step(&mut self) -> bool {
-        self.visits += 1;
+        self.visits = self.visits.saturating_add(1);
         self.visits <= MAX_VISITS
     }
+}
+
+/// Each child of `node` in order (`m_children`, up to its size), empty slots passed over as JIP's
+/// walks pass them: `f` gets the walk and the child, and answers whether to go on. Every slot
+/// read is charged to `walk` (an empty or unreadable one too, so a damaged node's huge count
+/// cannot make a walk read without end); the walk spent, or a slot unreadable, ends the node.
+pub(crate) fn each_child(
+    e: &Engine,
+    node: u32,
+    walk: &mut Walk,
+    mut f: impl FnMut(&mut Walk, u32) -> bool,
+) {
+    let (Some(data), Some(size)) = (
+        rd32(e, node.wrapping_add(CHILDREN)),
+        rd16(e, node.wrapping_add(CHILDREN_SIZE)),
+    ) else {
+        return;
+    };
+    for i in 0..u32::from(size) {
+        if !walk.step() {
+            return;
+        }
+        match rd32(e, data.wrapping_add(4 * i)) {
+            Some(0) => {}
+            Some(child) => {
+                if !f(walk, child) {
+                    return;
+                }
+            }
+            None => return,
+        }
+    }
+}
+
+/// The node's children in order, empty slots left out ([`each_child`] on a walk of its own: a
+/// 16-bit size never spends it).
+pub(crate) fn children(e: &Engine, node: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    each_child(e, node, &mut Walk::new(), |_, child| {
+        out.push(child);
+        true
+    });
+    out
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiNode::GetBlockByName
 // (asm).
 /// The first block under `node` named `name`, depth first: each child in order is compared, then
-/// (a node) searched below before the next child. 0 for none.
+/// (a node) searched below before the next child. `depth` is the level of `node`'s children below
+/// the walk's start. 0 for none.
 fn block_by_name(e: &Engine, node: u32, name: &[u8], depth: u32, walk: &mut Walk) -> u32 {
-    if depth >= MAX_DEPTH {
+    if too_deep(depth) {
         return 0;
     }
-    for child in children(e, node) {
-        if !walk.step() {
-            return 0;
-        }
+    let mut found = 0;
+    each_child(e, node, walk, |walk, child| {
         if name_is(e, child, name) {
-            return child;
+            found = child;
+        } else if is_node(e, child) {
+            found = block_by_name(e, child, name, depth + 1, walk);
         }
-        if is_node(e, child) {
-            let found = block_by_name(e, child, name, depth + 1, walk);
-            if found != 0 {
-                return found;
-            }
-        }
-    }
-    0
+        found == 0
+    });
+    found
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiNode::GetBlock (asm).
@@ -268,7 +304,7 @@ pub(crate) fn get_block(e: &Engine, node: u32, name: &[u8]) -> u32 {
     if name_is(e, node, name) {
         return node;
     }
-    block_by_name(e, node, name, 0, &mut Walk::new())
+    block_by_name(e, node, name, 1, &mut Walk::new())
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiNode::GetNode (asm).

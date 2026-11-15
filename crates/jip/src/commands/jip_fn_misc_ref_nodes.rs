@@ -90,7 +90,7 @@ fn axis_of(read: &Read, i: usize) -> Option<u32> {
 /// `ResultVars::Set`: each value as a double into its script variable (`ScriptVar::data`, +8).
 fn set_vars(e: &mut Engine, vars: [u32; 3], values: [f32; 3]) {
     for (var, v) in vars.into_iter().zip(values) {
-        e.mem.set_f64(var + 8, f64::from(v));
+        e.mem.set_f64(var.wrapping_add(8), f64::from(v));
     }
 }
 
@@ -144,14 +144,14 @@ fn get_object_dimensions(e: &mut Engine, w: &[u32]) -> Ret {
         scale = nif::scale(e, a.this_obj);
         let bounds = nif::bounding_box(e, a.this_obj);
         if bounds != 0 {
-            let centre = nif::rdf32(e, bounds + BOUND_CENTRE + 4 * axis);
-            let size = nif::rdf32(e, bounds + BOUND_DIMENSIONS + 4 * axis);
+            let centre = nif::rdf32(e, bounds.wrapping_add(BOUND_CENTRE + 4 * axis));
+            let size = nif::rdf32(e, bounds.wrapping_add(BOUND_DIMENSIONS + 4 * axis));
             if let (Some(c), Some(d)) = (centre, size) {
                 a.set_result(e, f64::from((c + d) * scale));
             }
             return handled(true);
         }
-        object = nif::rd32(e, a.this_obj + BASE).unwrap_or(0);
+        object = nif::rd32(e, a.this_obj.wrapping_add(BASE)).unwrap_or(0);
         if object == 0 {
             return handled(true);
         }
@@ -191,9 +191,9 @@ fn get_center_pos(e: &mut Engine, w: &[u32]) -> Ret {
     let bounds = nif::bounding_box(e, refr);
     let mut centre = 0.0f32;
     if bounds != 0 {
-        centre = nif::rdf32(e, bounds + BOUND_CENTRE + 4 * axis).unwrap_or(0.0);
+        centre = nif::rdf32(e, bounds.wrapping_add(BOUND_CENTRE + 4 * axis)).unwrap_or(0.0);
     } else {
-        let object = nif::rd32(e, refr + BASE).unwrap_or(0);
+        let object = nif::rd32(e, refr.wrapping_add(BASE)).unwrap_or(0);
         if object != 0 && is_bound_object(e, object) {
             if let (Some(min), Some(max)) = (bound(e, object, axis), bound(e, object, axis + 3)) {
                 centre = (min + max) as f32 * 0.5;
@@ -228,7 +228,7 @@ fn get_material_property_value(e: &mut Engine, w: &[u32]) -> Ret {
     if block == 0 || !nif::is_geometry(e, block) {
         return handled(true);
     }
-    let Some(material) = nif::ptr(e, block + MATERIAL_PROPERTY) else {
+    let Some(material) = nif::ptr(e, block.wrapping_add(MATERIAL_PROPERTY)) else {
         return handled(true);
     };
     let at = match trait_id {
@@ -238,7 +238,7 @@ fn get_material_property_value(e: &mut Engine, w: &[u32]) -> Ret {
         7 => ALPHA,
         _ => EMIT_MULT,
     };
-    if let Some(v) = nif::rdf32(e, material + at) {
+    if let Some(v) = nif::rdf32(e, material.wrapping_add(at)) {
         a.set_result(e, f64::from(v));
     }
     handled(true)
@@ -264,12 +264,19 @@ const DDS_PATH: u32 = 0x30;
 /// The folder JIP strips from the paths.
 const TEXTURES_FOLDER: &[u8] = b"data\\textures\\";
 
-/// `String::CStr` (JIP LN NVSE) of the game string at `at`: its text, `""` without a buffer; an
-/// unreadable one counts as `""`.
+/// The game string's text length (u16, +4: the game's `String::Set` `004037F0` stores it through
+/// `004039C0`; the buffer's size +6 through `00403A00`).
+const STRING_LENGTH: u32 = 0x04;
+
+/// `String::CStr` (JIP LN NVSE: `(m_data && m_dataLen) ? m_data : ""`) of the game string at
+/// `at`: its text, `""` without a buffer or with length 0; an unreadable one counts as `""`.
 fn string_text(e: &Engine, at: u32) -> Vec<u8> {
-    match nif::rd32(e, at) {
-        Some(0) | None => Vec::new(),
-        Some(p) => nif::c_text(e, p).unwrap_or_default(),
+    match (
+        nif::rd32(e, at),
+        nif::rd16(e, at.wrapping_add(STRING_LENGTH)),
+    ) {
+        (Some(p), Some(length)) if p != 0 && length != 0 => nif::c_text(e, p).unwrap_or_default(),
+        _ => Vec::new(),
     }
 }
 
@@ -299,26 +306,26 @@ fn get_block_texture_set(e: &mut Engine, w: &[u32]) -> Ret {
     if block == 0 || !nif::is_geometry(e, block) {
         return handled(true);
     }
-    let Some(shader) = nif::ptr(e, block + SHADER_PROPERTY) else {
+    let Some(shader) = nif::ptr(e, block.wrapping_add(SHADER_PROPERTY)) else {
         return handled(true);
     };
-    let paths: Vec<Vec<u8>> = match nif::rd32(e, shader + SHADER_TYPE) {
+    let paths: Vec<Vec<u8>> = match nif::rd32(e, shader.wrapping_add(SHADER_TYPE)) {
         Some(PP_LIGHTING) => {
-            let Some(set) = nif::ptr(e, shader + TEXTURE_SET) else {
+            let Some(set) = nif::ptr(e, shader.wrapping_add(TEXTURE_SET)) else {
                 return handled(true);
             };
             (0..6)
-                .map(|i| strip_textures(string_text(e, set + TEXTURES + 8 * i)))
+                .map(|i| strip_textures(string_text(e, set.wrapping_add(TEXTURES + 8 * i))))
                 .collect()
         }
         Some(NO_LIGHTING) => {
-            let Some(texture) = nif::ptr(e, shader + SRC_TEXTURE) else {
+            let Some(texture) = nif::ptr(e, shader.wrapping_add(SRC_TEXTURE)) else {
                 return handled(true);
             };
             if nif::rd32(e, texture) != Some(NI_SOURCE_TEXTURE_VTBL) {
                 return handled(true);
             }
-            let Some(path) = nif::ptr(e, texture + DDS_PATH) else {
+            let Some(path) = nif::ptr(e, texture.wrapping_add(DDS_PATH)) else {
                 return handled(true);
             };
             let mut paths = vec![strip_textures(nif::c_text(e, path).unwrap_or_default())];
@@ -349,7 +356,7 @@ fn translation(e: &Engine, block: u32, world: bool) -> Option<[f32; 3]> {
     } else {
         nif::LOCAL_TRANSLATE
     };
-    nif::floats3(e, block + at)
+    nif::floats3(e, block.wrapping_add(at))
 }
 
 /// The block's angles in degrees (each float times `Flt180dPI`): `mode` bit 1 the world rotation
@@ -360,7 +367,7 @@ fn rotation(e: &Engine, block: u32, mode: u32) -> Option<[f32; 3]> {
     } else {
         nif::LOCAL_ROTATE
     };
-    let m = nif::matrix(e, block + at)?;
+    let m = nif::matrix(e, block.wrapping_add(at))?;
     let angles = if mode & 2 != 0 {
         nif::to_euler_pry_inv(&m)
     } else {
@@ -416,7 +423,7 @@ fn get_nif_block_scale(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let block = named_block(e, &a, &read, 1, "GetNifBlockScale");
     if block != 0 {
-        if let Some(v) = nif::rdf32(e, block + nif::LOCAL_SCALE) {
+        if let Some(v) = nif::rdf32(e, block.wrapping_add(nif::LOCAL_SCALE)) {
             a.set_result(e, f64::from(v));
         }
     }
@@ -437,7 +444,9 @@ fn get_nif_block_flag(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let block = named_block(e, &a, &read, 2, "GetNifBlockFlag");
-    if block != 0 && nif::rd32(e, block + nif::FLAGS).is_some_and(|f| f & (1 << flag) != 0) {
+    if block != 0
+        && nif::rd32(e, block.wrapping_add(nif::FLAGS)).is_some_and(|f| f & (1 << flag) != 0)
+    {
         a.set_result(e, 1.0);
     }
     handled(true)
@@ -492,8 +501,9 @@ fn get_nif_block_rotation_alt(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
 // Cmd_GetNifBlockParentNodes_Execute.
 /// The names of the block's parents, nearest first, up to and including the root, as an array
-/// (an empty one for the root itself). The root: the loaded one, but for the player in first
-/// person (flag clear) without the odd second argument its first person node.
+/// (an empty one for the root itself; `NULL` for a parent without a name, as JIP's `GetName`).
+/// The root: the loaded one, but for the player in first person (flag clear) without the odd
+/// second argument its first person node.
 fn get_nif_block_parent_nodes(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
@@ -516,7 +526,7 @@ fn get_nif_block_parent_nodes(e: &mut Engine, w: &[u32]) -> Ret {
     let mut names = Vec::new();
     let mut walk = nif::Walk::new();
     while block != root && walk.step() {
-        block = nif::rd32(e, block + nif::PARENT).unwrap_or(0);
+        block = nif::rd32(e, block.wrapping_add(nif::PARENT)).unwrap_or(0);
         if block == 0 {
             break;
         }
@@ -528,29 +538,28 @@ fn get_nif_block_parent_nodes(e: &mut Engine, w: &[u32]) -> Ret {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h: GetChildBlocks.
-/// The node's name, then each child in order: a node's own walk, another block's name.
+/// The node's name, then each child in order: a node's own walk, another block's name. `depth`
+/// is the level of `node`'s children below the walk's start.
 fn child_blocks(e: &Engine, node: u32, out: &mut Vec<Element>, depth: u32, walk: &mut nif::Walk) {
     out.push(Element::Str(nif::name_text(e, node)));
-    if depth >= nif::MAX_DEPTH {
+    if nif::too_deep(depth) {
         return;
     }
-    for child in nif::children(e, node) {
-        if !walk.step() {
-            return;
-        }
+    nif::each_child(e, node, walk, |walk, child| {
         if nif::is_node(e, child) {
             child_blocks(e, child, out, depth + 1, walk);
         } else {
             out.push(Element::Str(nif::name_text(e, child)));
         }
-    }
+        true
+    });
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
 // Cmd_GetChildBlocks_Execute.
 /// The names below a node (the root for no name), as an array: every block below it in walk
-/// order, or with the third argument only its children's names. No array when there are none,
-/// or when the block is not a node.
+/// order (`NULL` for one without a name), or with the third argument only its children's names.
+/// No array when there are none, or when the block is not a node.
 fn get_child_blocks(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
@@ -568,7 +577,7 @@ fn get_child_blocks(e: &mut Engine, w: &[u32]) -> Ret {
             names.push(Element::Str(nif::name_text(e, child)));
         }
     } else {
-        child_blocks(e, node, &mut names, 0, &mut nif::Walk::new());
+        child_blocks(e, node, &mut names, 1, &mut nif::Walk::new());
     }
     if names.len() > 1 {
         let id = create_array(e, a.script, &names[1..]);
@@ -580,7 +589,7 @@ fn get_child_blocks(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
 // GetCollisionNodes.
 /// The node's name when it has a collision object with a world object, then each child node's
-/// walk in order.
+/// walk in order. `depth` is the level of `node`'s children below the walk's start.
 fn collision_nodes(
     e: &Engine,
     node: u32,
@@ -588,23 +597,21 @@ fn collision_nodes(
     depth: u32,
     walk: &mut nif::Walk,
 ) {
-    if nif::ptr(e, node + nif::COLLISION_OBJECT)
-        .and_then(|c| nif::ptr(e, c + WORLD_OBJECT))
+    if nif::ptr(e, node.wrapping_add(nif::COLLISION_OBJECT))
+        .and_then(|c| nif::ptr(e, c.wrapping_add(WORLD_OBJECT)))
         .is_some()
     {
         out.push(Element::Str(nif::name_text(e, node)));
     }
-    if depth >= nif::MAX_DEPTH {
+    if nif::too_deep(depth) {
         return;
     }
-    for child in nif::children(e, node) {
-        if !walk.step() {
-            return;
-        }
+    nif::each_child(e, node, walk, |walk, child| {
         if nif::is_node(e, child) {
             collision_nodes(e, child, out, depth + 1, walk);
         }
-    }
+        true
+    });
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
@@ -621,7 +628,7 @@ fn get_collision_nodes(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let mut names = Vec::new();
-    collision_nodes(e, root, &mut names, 0, &mut nif::Walk::new());
+    collision_nodes(e, root, &mut names, 1, &mut nif::Walk::new());
     if !names.is_empty() {
         let id = create_array(e, a.script, &names);
         a.set_result(e, f64::from(id));
