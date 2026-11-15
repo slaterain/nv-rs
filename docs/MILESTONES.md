@@ -83,7 +83,7 @@ radio, reference and game data commands, batch 11 the actor base, equipped item,
 sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters,
 lane A1 the first half of the actor commands: processes, combat and detection lists, leveling data, creature
 models, lane D the game state commands of `jip_fn_miscellaneous`, lane H JIP's position marker with `PlaceAtCell` and
-the added script variables with their co-save record applied at a load, then JIP's own position, angle and cell moves with `MoveToCell`, `MoveToEditorPosition`, `MoveToPosStr`, `MoveToNode` and `SetPosEx`, lane B the LN miscellaneous commands and the
+the added script variables with their co-save record applied at a load, then JIP's own position, angle and cell moves with `MoveToCell`, `MoveToEditorPosition`, `MoveToPosStr`, `MoveToNode` and `SetPosEx`, then the turns (`SetAngleEx`, `RotateAroundPoint`), `MoveToReticle` and `SetLinkedReference` with the linked references' co-save record applied, lane B the LN miscellaneous commands and the
 first inventory commands with the inventory references, item health, armour DT and DR, lane G the references' physics getters, ray casts and crosshair pick); its engine hooks (step 3.5) are built in at
 their seams: the UI, actor
 and AI hooks, and since 2026-11-14 the world hooks (step 3.5c) and `CCCSetEquipped` with its always-on `GetCannotWear`

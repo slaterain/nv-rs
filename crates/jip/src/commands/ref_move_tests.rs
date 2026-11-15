@@ -453,3 +453,214 @@ fn set_pos_actor_without_proxy_or_phantom() {
         assert_eq!(calls_to(UPDATE_DOWNWARD_PASS).len(), 1);
     }
 }
+
+// ---- lane H3: SetAngle modes 1 and 2, Rotate, RotateAroundPoint ----
+// The matrices' own lanes are checked against JIP's asm in `ni_matrix_tests`; these check what
+// each function does with them, as GameObjects.cpp's asm does it.
+
+use super::super::ni_matrix::{
+    from_2_points, from_euler_pry_inv, from_euler_ypr, get_rotated_pos, multiply_matrices,
+    rotate_origin, to_euler_pry_lane3,
+};
+use super::super::nif_nodes::to_euler_pry;
+
+fn rot_bits(e: &Engine) -> [u32; 3] {
+    [0, 1, 2].map(|i| e.mem.u32(REFR + 0x24 + 4 * i))
+}
+
+fn node_rot(e: &Engine) -> [u32; 9] {
+    std::array::from_fn(|i| e.mem.u32(NODE + 0x34 + 4 * i as u32))
+}
+
+fn put_node_rot(e: &mut Engine, m: &[f32; 9]) {
+    for (i, v) in m.iter().enumerate() {
+        e.mem.set_f32(NODE + 0x34 + 4 * i as u32, *v);
+    }
+}
+
+fn b9(m: &[f32; 9]) -> [u32; 9] {
+    m.map(f32::to_bits)
+}
+
+fn b3(v: [f32; 3]) -> [u32; 3] {
+    v.map(f32::to_bits)
+}
+
+const TURN: [f32; 3] = [0.4, -0.9, 2.2];
+const M: [f32; 9] = [0.0, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+
+#[test]
+fn set_angle_mode_1_uses_the_inverse_matrix() {
+    let mut e = engine();
+    give_3d(&mut e);
+    set_angle_mode(&mut e, REFR, TURN, 1);
+    let m = from_euler_pry_inv(TURN);
+    assert_eq!(node_rot(&e), b9(&m));
+    assert_eq!(rot_bits(&e), b3(to_euler_pry(&m)));
+    assert_eq!(reset_bits(&e), [0x0141, 0x0141, 0x0141, 0x0101]);
+    assert_eq!(calls_to(UPDATE_DOWNWARD_PASS).len(), 1);
+    assert_eq!(calls_to(ts::ADD_CHANGE_FN).len(), 1);
+}
+
+/// Mode 2 points from the given point to the position: straight down here (no square roots), so
+/// by hand: rows [1, -0, -0], [0, 0, 1], [0, -1, 0]; pitch `ATan2(1, 0)` = `FltPId2`, yaw
+/// `ATan2(-0, 1)` = -0.
+#[test]
+fn set_angle_mode_2_points_at_the_position() {
+    for mode in [2u8, 7] {
+        let mut e = engine();
+        give_3d(&mut e);
+        for (i, v) in [5.0f32, -1.0, 2.0].into_iter().enumerate() {
+            e.mem.set_f32(REFR + 0x30 + 4 * i as u32, v);
+        }
+        set_angle_mode(&mut e, REFR, [5.0, -1.0, -6.0], mode);
+        assert_eq!(
+            node_rot(&e),
+            [
+                0x3f80_0000,
+                0x8000_0000,
+                0x8000_0000,
+                0,
+                0,
+                0x3f80_0000,
+                0,
+                0xbf80_0000,
+                0
+            ]
+        );
+        let r = rot_bits(&e);
+        assert_eq!(r[0], 0x3fc9_0fdb, "mode {mode}");
+        assert_eq!(f32::from_bits(r[1]), 0.0);
+        assert_eq!(r[2], 0x8000_0000);
+        let _ = from_2_points;
+    }
+}
+
+#[test]
+fn set_angle_mode_1_actor_stores_angles_only() {
+    let mut e = engine();
+    give_3d(&mut e);
+    make_actor(&mut e);
+    put_node_rot(&mut e, &M);
+    set_angle_mode(&mut e, REFR, TURN, 1);
+    assert_eq!(rot_bits(&e), b3(to_euler_pry(&from_euler_pry_inv(TURN))));
+    assert_eq!(node_rot(&e), b9(&M));
+    assert!(calls_to(UPDATE_DOWNWARD_PASS).is_empty());
+    assert_eq!(calls_to(ts::ADD_CHANGE_FN).len(), 1);
+}
+
+#[test]
+fn rotate_turns_the_node_and_reads_its_angles() {
+    let mut e = engine();
+    give_3d(&mut e);
+    put_node_rot(&mut e, &M);
+    rotate(&mut e, REFR, TURN);
+    let m = multiply_matrices(&M, &from_euler_pry_inv(TURN));
+    assert_eq!(node_rot(&e), b9(&m));
+    assert_eq!(rot_bits(&e), b3(to_euler_pry(&m)));
+    assert_eq!(reset_bits(&e), [0x0141, 0x0141, 0x0141, 0x0101]);
+    assert_eq!(calls_to(UPDATE_DOWNWARD_PASS).len(), 1);
+    assert_eq!(calls_to(ts::ADD_CHANGE_FN).len(), 1);
+}
+
+#[test]
+fn rotate_actor_turns_the_node_without_reset() {
+    let mut e = engine();
+    give_3d(&mut e);
+    make_actor(&mut e);
+    put_node_rot(&mut e, &M);
+    rotate(&mut e, REFR, TURN);
+    assert_eq!(
+        node_rot(&e),
+        b9(&multiply_matrices(&M, &from_euler_pry_inv(TURN)))
+    );
+    assert_eq!(reset_bits(&e), [0x0101; 4]);
+    assert!(calls_to(UPDATE_DOWNWARD_PASS).is_empty());
+}
+
+/// The player (`refID` 0x14), or no 3D: the angles' own matrix turned; the node untouched.
+#[test]
+fn rotate_player_or_without_3d_turns_the_angles() {
+    for player in [true, false] {
+        let mut e = engine();
+        if player {
+            give_3d(&mut e);
+            e.mem.set_u32(REFR + 0xc, 0x14);
+            put_node_rot(&mut e, &M);
+        }
+        let angles = [0.25f32, 0.5, -1.0];
+        for (i, v) in angles.into_iter().enumerate() {
+            e.mem.set_f32(REFR + 0x24 + 4 * i as u32, v);
+        }
+        rotate(&mut e, REFR, TURN);
+        let m = multiply_matrices(
+            &super::super::jip_fn_misc_ref::from_euler_pry(angles),
+            &from_euler_pry_inv(TURN),
+        );
+        assert_eq!(rot_bits(&e), b3(to_euler_pry(&m)));
+        if player {
+            assert_eq!(node_rot(&e), b9(&M));
+        }
+        assert!(calls_to(UPDATE_DOWNWARD_PASS).is_empty());
+        assert_eq!(calls_to(ts::ADD_CHANGE_FN).len(), 1);
+    }
+}
+
+#[test]
+fn rotate_around_point_needs_3d_unless_skipping_angles() {
+    let mut e = engine();
+    rotate_around_point(&mut e, REFR, TURN, [1.0, 2.0, 3.0], 0);
+    assert!(calls_to(SET_LOCATION).is_empty());
+    assert_eq!(rot_bits(&e), [0; 3]);
+}
+
+/// With 3D: the node's transform turned about the origin; the angles and, over the position's x,
+/// the fourth lane written before `SetLocationOnReference`, which gets the node's translation.
+#[test]
+fn rotate_around_point_turns_the_node_about_the_origin() {
+    let mut e = engine();
+    give_3d(&mut e);
+    put_node_rot(&mut e, &M);
+    let t = [10.5f32, -4.25, 3.75];
+    for (i, v) in t.into_iter().enumerate() {
+        e.mem.set_f32(NODE + 0x58 + 4 * i as u32, v);
+    }
+    // Note the position's x as the game's function finds it.
+    e.register(SET_LOCATION, |e, w| {
+        CALLS.with(|c| {
+            c.borrow_mut()
+                .push((SET_LOCATION, vec![w[0], w[1], e.mem.u32(w[0] + 0x30)]))
+        });
+        for i in 0..3 {
+            let v = e.mem.u32(w[1] + 4 * i);
+            e.mem.set_u32(w[0] + 0x30 + 4 * i, v);
+        }
+        Ret::default()
+    });
+    let origin = [2.5f32, 1.25, -0.75];
+    rotate_around_point(&mut e, REFR, TURN, origin, 0);
+    let (rot, trans) = rotate_origin(&M, t, &from_euler_ypr(TURN), origin);
+    assert_eq!(node_rot(&e), b9(&rot));
+    assert_eq!(rot_bits(&e), b3(to_euler_pry(&rot)));
+    assert_eq!(
+        calls_to(SET_LOCATION),
+        [vec![REFR, NODE + 0x58, to_euler_pry_lane3(&rot).to_bits()]]
+    );
+    assert_eq!(pos(&e).map(f32::to_bits), b3(trans));
+    assert_eq!(calls_to(UPDATE_DOWNWARD_PASS).len(), 1);
+}
+
+#[test]
+fn rotate_around_point_skipping_angles_moves_only() {
+    let mut e = engine();
+    let p = [10.5f32, -4.25, 3.75];
+    for (i, v) in p.into_iter().enumerate() {
+        e.mem.set_f32(REFR + 0x30 + 4 * i as u32, v);
+    }
+    let origin = [2.5f32, 1.25, -0.75];
+    rotate_around_point(&mut e, REFR, TURN, origin, 3);
+    let want = get_rotated_pos(&from_euler_ypr(TURN), p, origin);
+    assert_eq!(pos(&e).map(f32::to_bits), b3(want));
+    assert_eq!(rot_bits(&e), [0; 3]);
+    assert_eq!(calls_to(SET_LOCATION).len(), 1);
+}
