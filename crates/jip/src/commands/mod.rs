@@ -11,6 +11,7 @@
 pub mod arrays;
 pub mod extra;
 pub mod forms;
+pub mod jip_fn_actor_p2;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
 pub mod jip_fn_armor;
@@ -88,6 +89,7 @@ pub type Conditions = &'static [(u32, AbiFn, AbiFn)];
 
 /// Every module's conditions, one line per JIP source file that has any.
 pub const ALL_CONDITIONS: &[Conditions] = &[
+    jip_fn_actor_p2::CONDITIONS,
     jip_fn_effect::CONDITIONS,
     ln_fn_math::CONDITIONS,
     ln_fn_misc_ref::CONDITIONS,
@@ -107,6 +109,7 @@ pub const ALL_CONDITIONS_ONLY: &[ConditionsOnly] = &[jip_fn_aux_variable::CONDIT
 
 /// Every module's list, one line per JIP source file.
 pub const ALL: &[Handlers] = &[
+    jip_fn_actor_p2::COMMANDS,
     jip_fn_ammo::COMMANDS,
     jip_fn_aux_variable::COMMANDS,
     jip_fn_ammo_effect::COMMANDS,
@@ -319,10 +322,15 @@ pub fn nth_item(e: &Engine, head: Ptr<ListNode>, index: i32) -> u32 {
     e.get(node, ListNode::data)
 }
 
-/// `tList::IsInList`: some node holds `item` (an empty first node holds 0).
+/// `tList::IsInList`: some node holds `item` (an empty first node holds 0). A list that runs
+/// back into itself ends as [`list_items`] does ([`list_step`]): not found.
 pub fn list_contains(e: &Engine, head: Ptr<ListNode>, item: u32) -> bool {
     let mut node = head;
+    let mut walked = 0usize;
     loop {
+        if !list_step(e, &mut walked) {
+            return false;
+        }
         if e.get(node, ListNode::data) == item {
             return true;
         }
@@ -393,10 +401,15 @@ pub fn list_remove_all(e: &mut Engine, head: Ptr<ListNode>) {
 }
 
 /// `tList::Remove`: the first node holding `item` taken out ([`list_unlink`]); whether there was
-/// one.
+/// one. A list that runs back into itself ends as [`list_items`] does ([`list_step`]): nothing
+/// removed.
 pub fn list_remove(e: &mut Engine, head: Ptr<ListNode>, item: u32) -> bool {
     let (mut node, mut prev) = (head, Ptr::<ListNode>::NULL);
+    let mut walked = 0usize;
     loop {
+        if !list_step(e, &mut walked) {
+            return false;
+        }
         if e.get(node, ListNode::data) == item {
             list_unlink(e, node, prev);
             return true;
@@ -676,6 +689,7 @@ mod tests {
     #[test]
     fn each_module_holds_its_own_file() {
         let files = [
+            "jip_fn_actor",
             "jip_fn_ammo",
             "jip_fn_aux_variable",
             "jip_fn_ammo_effect",
@@ -743,6 +757,7 @@ mod tests {
         }
         assert_eq!(ALL.len(), files.len());
         for (list, file) in ALL_CONDITIONS.iter().zip([
+            "jip_fn_actor",
             "jip_fn_effect",
             "ln_fn_math",
             "ln_fn_misc_ref",
@@ -759,7 +774,7 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS.len(), 8);
+        assert_eq!(ALL_CONDITIONS.len(), 9);
         for (list, file) in ALL_CONDITIONS_ONLY.iter().zip(["jip_fn_aux_variable"]) {
             for &(opcode, _) in list.iter() {
                 let slot = crate::table::slot(opcode).expect("a JIP slot");
