@@ -771,7 +771,7 @@ pub(crate) fn ref_ni_node(e: &Engine, refr: u32) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: GetSinCos_V3 (asm).
 /// The sines (one three-lane `Cos_V3` of pi/2 less each angle, in floats) and the cosines (one
 /// three-lane `Cos_V3` of the angles): the lanes of each call share its whole-turn reduction.
-fn sin_cos(angles: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+pub(crate) fn sin_cos(angles: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     use super::ln_fn_math::cos_v3;
     let pid2 = std::f32::consts::FRAC_PI_2;
     (cos_v3(angles.map(|x| pid2 - x)), cos_v3(angles))
