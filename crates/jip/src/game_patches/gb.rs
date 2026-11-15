@@ -19,11 +19,11 @@
 //!
 //! JIP's `SetDeadZoneLS/RS` (not built) write `s_deadZoneLSg`/`s_deadZoneRSg` with the new
 //! integer and 19 immediates in the exe each: when they are built they must write the two doubles
-//! these seams answer ([`doubles`]: `e.mem.set_f64`) as well as the input state and the
+//! these seams answer ([`doubles`]: `e.mem.set_f64`) as well as the input state (the dead-zone
+//! atomics of [`crate::input::State`], the lock-free slot the gamepad conditions read) and the
 //! immediates.
 
 use super::Area;
-use crate::Jip;
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -103,10 +103,7 @@ pub fn doubles(e: &mut Engine) -> (u32, u32) {
         return (left, zones.right.load(Ordering::Relaxed));
     }
     let at = nvse::table::alloc(e, 16);
-    let (ls, rs) = {
-        let input = &e.ext::<Jip>().input;
-        (input.dead_zone_ls, input.dead_zone_rs)
-    };
+    let (ls, rs) = (crate::input::dead_zone_ls(e), crate::input::dead_zone_rs(e));
     e.mem.set_f64(at, f64::from(ls));
     e.mem.set_f64(at + 8, f64::from(rs));
     let zones = e.ext_free::<DeadZones>();

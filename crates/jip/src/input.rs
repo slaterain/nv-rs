@@ -18,10 +18,11 @@
 //! slot and the game reads the pad as without the DLL.
 
 use crate::game::OSInputGlobals;
-use crate::Jip;
 use engine_core::extend::{Owner, WrapSlot};
 use engine_core::prelude::*;
 use engine_core::ptr::Field;
+use std::sync::atomic::Ordering::Relaxed;
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64};
 
 /// The import slot of `XInputGetState` (`00fdf394`), which the game's thunk `009f996e` jumps
 /// through (`jmp [00fdf394]`, its only use): JIP's hook site, as the port registers the
@@ -144,44 +145,210 @@ impl Default for Mods {
     }
 }
 
-/// JIP's input state on the engine.
-#[derive(Clone, Debug)]
+/// JIP's input state (`s_controllerReady`, `s_gamePad`, `s_XIStateMods`, the dead zones, the
+/// hook's last answer), in a lock-free slot ([`Engine::ext_free`]) made at install, before the
+/// threads start: the gamepad conditions (`IsButtonPressed`, `GetLeftStickX`, ...) and
+/// `IsControlPressed` read it from whatever thread evaluates them (AI threads: package and idle
+/// conditions), which must not take JIP's shared slot. It is the ONLY copy: the hook, the
+/// commands and the conditions all read and write it here, each value an atomic word (the pad's
+/// 16 bytes in two words, the mods' 8 in one), so a reader never waits. A change to the mods
+/// (a script's, or the hook's clearing of the taps) is one compare-and-swap of the whole word
+/// ([`update_mods`]), so two writers never lose each other's bits. JIP keeps these as plain
+/// statics that every thread reads without a lock; a reader here sees each word whole (JIP's
+/// could see a half-written pad, the port's one of the two pad words newer than the other).
+#[derive(Debug)]
 pub struct State {
-    /// `s_controllerReady`.
-    pub ready: bool,
-    /// `s_gamePad`: the last state read from the pad, before JIP's changes.
-    pub pad: Pad,
-    /// `s_XIStateMods`.
-    pub mods: Mods,
-    /// The hook's last answer (its `static result`).
-    pub last_result: u32,
-    /// `s_deadZoneLS`: the left stick's dead zone for a control's state.
-    pub dead_zone_ls: i32,
-    /// `s_deadZoneRS` (`internal/xinput.cpp`, 8689): the right stick's, which the gamepad
-    /// commands read (`GetRightStickX`, `GetDeadZoneRS`).
-    pub dead_zone_rs: i32,
+    ready: AtomicBool,
+    /// [`Pad`]: packet, buttons, triggers (word 0); the four stick axes (word 1).
+    pad: [AtomicU64; 2],
+    /// [`Mods`]: skip, hold, tap (16 bits each), trigger mods, stick skip (8 each).
+    mods: AtomicU64,
+    last_result: AtomicU32,
+    dead_zone_ls: AtomicI32,
+    dead_zone_rs: AtomicI32,
 }
 
 impl Default for State {
     fn default() -> Self {
         State {
-            ready: false,
-            pad: Pad::default(),
-            mods: Mods::default(),
-            last_result: NOT_CONNECTED,
-            dead_zone_ls: 7849,
-            dead_zone_rs: 8689,
+            ready: AtomicBool::new(false),
+            pad: [AtomicU64::new(0), AtomicU64::new(0)],
+            mods: AtomicU64::new(Mods::default().word()),
+            last_result: AtomicU32::new(NOT_CONNECTED),
+            // `s_deadZoneLS`: the left stick's dead zone for a control's state; `s_deadZoneRS`
+            // (`internal/xinput.cpp`, 8689): the right stick's, which the gamepad commands read
+            // (`GetRightStickX`, `GetDeadZoneRS`).
+            dead_zone_ls: AtomicI32::new(7849),
+            dead_zone_rs: AtomicI32::new(8689),
         }
     }
 }
 
-fn state(e: &mut Engine) -> &mut State {
-    &mut e.ext::<Jip>().input
+impl Pad {
+    fn words(self) -> [u64; 2] {
+        [
+            u64::from(self.packet)
+                | u64::from(self.buttons) << 32
+                | u64::from(self.left_trigger) << 48
+                | u64::from(self.right_trigger) << 56,
+            u64::from(self.thumb_lx as u16)
+                | u64::from(self.thumb_ly as u16) << 16
+                | u64::from(self.thumb_rx as u16) << 32
+                | u64::from(self.thumb_ry as u16) << 48,
+        ]
+    }
+
+    fn of_words(w: [u64; 2]) -> Pad {
+        Pad {
+            packet: w[0] as u32,
+            buttons: (w[0] >> 32) as u16,
+            left_trigger: (w[0] >> 48) as u8,
+            right_trigger: (w[0] >> 56) as u8,
+            thumb_lx: w[1] as u16 as i16,
+            thumb_ly: (w[1] >> 16) as u16 as i16,
+            thumb_rx: (w[1] >> 32) as u16 as i16,
+            thumb_ry: (w[1] >> 48) as u16 as i16,
+        }
+    }
+}
+
+impl Mods {
+    fn word(self) -> u64 {
+        u64::from(self.button_skip)
+            | u64::from(self.button_hold) << 16
+            | u64::from(self.button_tap) << 32
+            | u64::from(self.trigger_mods) << 48
+            | u64::from(self.stick_skip) << 56
+    }
+
+    fn of_word(w: u64) -> Mods {
+        Mods {
+            button_skip: w as u16,
+            button_hold: (w >> 16) as u16,
+            button_tap: (w >> 32) as u16,
+            trigger_mods: (w >> 48) as u8,
+            stick_skip: (w >> 56) as u8,
+        }
+    }
+}
+
+fn slot(e: &mut Engine) -> &State {
+    e.ext_free::<State>()
+}
+
+/// `s_controllerReady`.
+pub fn ready(e: &mut Engine) -> bool {
+    slot(e).ready.load(Relaxed)
+}
+
+/// `s_gamePad`: the last state read from the pad, before JIP's changes.
+pub fn pad(e: &mut Engine) -> Pad {
+    let s = slot(e);
+    Pad::of_words([s.pad[0].load(Relaxed), s.pad[1].load(Relaxed)])
+}
+
+/// `s_XIStateMods`.
+pub fn mods(e: &mut Engine) -> Mods {
+    Mods::of_word(slot(e).mods.load(Relaxed))
+}
+
+/// Changes the mods with `f` in one compare-and-swap of the whole word; the mods before.
+pub fn update_mods(e: &mut Engine, f: impl Fn(&mut Mods)) -> Mods {
+    let word = &slot(e).mods;
+    let mut old = word.load(Relaxed);
+    loop {
+        let mut m = Mods::of_word(old);
+        f(&mut m);
+        match word.compare_exchange_weak(old, m.word(), Relaxed, Relaxed) {
+            Ok(_) => return Mods::of_word(old),
+            Err(now) => old = now,
+        }
+    }
+}
+
+/// `s_deadZoneLS`.
+pub fn dead_zone_ls(e: &mut Engine) -> i32 {
+    slot(e).dead_zone_ls.load(Relaxed)
+}
+
+/// `s_deadZoneRS`.
+pub fn dead_zone_rs(e: &mut Engine) -> i32 {
+    slot(e).dead_zone_rs.load(Relaxed)
+}
+
+/// A plain copy of the state, for the tests: [`state`] gives one that is written back whole when
+/// it goes (`state(&mut e).mods.button_skip = 0;`).
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Plain {
+    pub ready: bool,
+    pub pad: Pad,
+    pub mods: Mods,
+    pub last_result: u32,
+    pub dead_zone_ls: i32,
+    pub dead_zone_rs: i32,
+}
+
+/// The state's plain copy, written back when dropped (tests only: the game's code changes the
+/// words one at a time).
+#[cfg(any(test, feature = "test-support"))]
+pub struct Edit<'a> {
+    slot: &'a State,
+    plain: Plain,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl std::ops::Deref for Edit<'_> {
+    type Target = Plain;
+    fn deref(&self) -> &Plain {
+        &self.plain
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl std::ops::DerefMut for Edit<'_> {
+    fn deref_mut(&mut self) -> &mut Plain {
+        &mut self.plain
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+impl Drop for Edit<'_> {
+    fn drop(&mut self) {
+        let (s, p) = (self.slot, self.plain);
+        s.ready.store(p.ready, Relaxed);
+        let w = p.pad.words();
+        s.pad[0].store(w[0], Relaxed);
+        s.pad[1].store(w[1], Relaxed);
+        s.mods.store(p.mods.word(), Relaxed);
+        s.last_result.store(p.last_result, Relaxed);
+        s.dead_zone_ls.store(p.dead_zone_ls, Relaxed);
+        s.dead_zone_rs.store(p.dead_zone_rs, Relaxed);
+    }
+}
+
+/// The state as a plain copy that is written back when it goes (tests only).
+#[cfg(any(test, feature = "test-support"))]
+pub fn state(e: &mut Engine) -> Edit<'_> {
+    let plain = Plain {
+        ready: ready(e),
+        pad: pad(e),
+        mods: mods(e),
+        last_result: slot(e).last_result.load(Relaxed),
+        dead_zone_ls: dead_zone_ls(e),
+        dead_zone_rs: dead_zone_rs(e),
+    };
+    Edit {
+        slot: slot(e),
+        plain,
+    }
 }
 
 /// Puts JIP's hook in front of the thunk, when JIP answers "installed" (`HookXInput`, at its
 /// start).
 pub fn install(e: &mut Engine, answers_installed: bool) {
+    // The lock-free state, before the threads start (made whether or not JIP answers).
+    e.ext_free::<State>();
     if answers_installed {
         e.wrap(XINPUT_SLOT, hook_xinput_get_state);
     }
@@ -201,19 +368,21 @@ fn hook_xinput_get_state(e: &mut Engine, a: &[u32]) -> Ret {
     if out != GAME_PAD_STATE {
         let bytes = e.mem.bytes(GAME_PAD_STATE, 16);
         e.mem.write(out, &bytes);
-        let result = state(e).last_result;
+        let result = slot(e).last_result.load(Relaxed);
         return Ret {
             eax: result,
             ..Ret::default()
         };
     }
     let result = e.call_next(XINPUT_SLOT.addr(), &args![0u32, out]).u32();
-    state(e).last_result = result;
+    slot(e).last_result.store(result, Relaxed);
     let ready = (result | u32::from(e.mem.u8(CONTROLLER_OFF))) == 0;
-    state(e).ready = ready;
+    slot(e).ready.store(ready, Relaxed);
     if ready {
-        let pad = Pad::read(e, out);
-        state(e).pad = pad;
+        let w = Pad::read(e, out).words();
+        let s = slot(e);
+        s.pad[0].store(w[0], Relaxed);
+        s.pad[1].store(w[1], Relaxed);
         apply_mods(e, out);
     }
     Ret {
@@ -224,14 +393,19 @@ fn hook_xinput_get_state(e: &mut Engine, a: &[u32]) -> Ret {
 
 /// The mods' part of the hook, on the state at `at`.
 fn apply_mods(e: &mut Engine, at: u32) {
-    let mut mods = state(e).mods;
+    // The taps used up (and the trigger taps cleared) in the same swap that reads the mods.
+    let mods = update_mods(e, |m| {
+        m.button_tap = 0;
+        if m.trigger_mods != 0 {
+            m.trigger_mods &= 0xf;
+        }
+    });
     let mut buttons = e.mem.u16(at + 4);
     if buttons & mask::GUIDE != 0 {
         buttons = 0;
     }
     buttons = ((buttons | mods.button_hold) & mods.button_skip) | mods.button_tap;
     e.mem.set_u16(at + 4, buttons);
-    mods.button_tap = 0;
     let t = mods.trigger_mods;
     if t != 0 {
         let (mut left, mut right) = (e.mem.u8(at + 6), e.mem.u8(at + 7));
@@ -247,7 +421,6 @@ fn apply_mods(e: &mut Engine, at: u32) {
         }
         e.mem.set_u8(at + 6, left);
         e.mem.set_u8(at + 7, right);
-        mods.trigger_mods = t & 0xf;
     }
     let s = mods.stick_skip;
     if s & 0xf != 0 {
@@ -263,7 +436,6 @@ fn apply_mods(e: &mut Engine, at: u32) {
     if s & 0xf0 != 0 {
         e.mem.set_u32(at + 0xc, 0);
     }
-    state(e).mods = mods;
 }
 
 // ---- the game's bindings ----
@@ -295,22 +467,24 @@ fn keys(e: &mut Engine) -> &mut [nvse::input::KeyInfo] {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/dinput.cpp: DIHookControl::IsKeyPressed.
 /// A key down in the sources `flags & 7` names (0 and 1: the game's state, 2: the player's raw
-/// one, 4: a script's; their sums), disabled or not: JIP reads xNVSE's key record itself.
+/// one, 4: a script's; their sums), disabled or not: JIP reads xNVSE's key record itself. Read
+/// from xNVSE's lock-free copy of the three states (`nvse::input::key_states`, written after each
+/// device read), not xNVSE's shared state: `IsKeyPressed` and `IsControlPressed` are conditions
+/// too, evaluated on any thread.
 pub fn is_key_pressed(e: &mut Engine, key: u32, flags: u32) -> bool {
     if key >= MAX_MACROS {
         return false;
     }
-    let k = keys(e)[key as usize];
+    let k = nvse::input::key_states(e, key);
     let sources = flags & 7;
     let game = sources & 1 != 0 || sources == 0;
-    (game && k.game_state)
-        || (sources & 2 != 0 && k.raw_state)
-        || (sources & 4 != 0 && k.inserted_state)
+    (game && k & 1 != 0) || (sources & 2 != 0 && k & 2 != 0) || (sources & 4 != 0 && k & 4 != 0)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/dinput.cpp: DIHookControl::IsKeyPressedRaw.
+/// From the lock-free copy, as [`is_key_pressed`].
 pub fn is_key_pressed_raw(e: &mut Engine, key: u32) -> bool {
-    key < MAX_MACROS && keys(e)[key as usize].raw_state
+    key < MAX_MACROS && nvse::input::key_states(e, key) & 2 != 0
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/dinput.cpp: DIHookControl::IsKeyDisabled.
@@ -398,7 +572,7 @@ fn button_mask(binding: u8) -> Option<u16> {
 /// direction's "disabled" bit.
 pub fn xi_control_disabled(e: &mut Engine, control: u32) -> bool {
     let binding = controller_bind(e, control);
-    let mods = state(e).mods;
+    let mods = mods(e);
     if let Some(m) = button_mask(binding) {
         return mods.button_skip & m != 0;
     }
@@ -418,43 +592,51 @@ pub fn xi_control_disabled(e: &mut Engine, control: u32) -> bool {
 /// buttons that pass, a trigger's or a left-stick direction's "disabled" bit set or cleared.
 pub fn set_xi_control_disabled(e: &mut Engine, control: u32, disable: bool) {
     let binding = controller_bind(e, control);
-    let mods = &mut state(e).mods;
     if let Some(m) = button_mask(binding) {
-        mods.button_skip |= m;
-        if disable {
-            mods.button_skip ^= m;
-        }
+        update_mods(e, |mods| {
+            mods.button_skip |= m;
+            if disable {
+                mods.button_skip ^= m;
+            }
+        });
         return;
     }
-    let (field, bit) = match binding {
-        ctrl::LT => (&mut mods.trigger_mods, 1),
-        ctrl::RT => (&mut mods.trigger_mods, 2),
-        ctrl::LS_UP => (&mut mods.stick_skip, 1),
-        ctrl::LS_DOWN => (&mut mods.stick_skip, 2),
-        ctrl::LS_RIGHT => (&mut mods.stick_skip, 4),
-        ctrl::LS_LEFT => (&mut mods.stick_skip, 8),
+    let (trigger, bit) = match binding {
+        ctrl::LT => (true, 1),
+        ctrl::RT => (true, 2),
+        ctrl::LS_UP => (false, 1),
+        ctrl::LS_DOWN => (false, 2),
+        ctrl::LS_RIGHT => (false, 4),
+        ctrl::LS_LEFT => (false, 8),
         _ => return,
     };
-    *field &= !bit;
-    if disable {
-        *field |= bit;
-    }
+    update_mods(e, |mods| {
+        let field = if trigger {
+            &mut mods.trigger_mods
+        } else {
+            &mut mods.stick_skip
+        };
+        *field &= !bit;
+        if disable {
+            *field |= bit;
+        }
+    });
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/xinput.cpp: TapXIControl.
 /// A controller binding tapped at the next read: a button or a trigger; not a stick direction.
 pub fn tap_xi_control(e: &mut Engine, control: u32) -> bool {
     let binding = controller_bind(e, control);
-    let mods = &mut state(e).mods;
     if let Some(m) = button_mask(binding) {
-        mods.button_tap |= m;
+        update_mods(e, |mods| mods.button_tap |= m);
         return true;
     }
-    match binding {
-        ctrl::LT => mods.trigger_mods |= 0x10,
-        ctrl::RT => mods.trigger_mods |= 0x20,
+    let bit = match binding {
+        ctrl::LT => 0x10,
+        ctrl::RT => 0x20,
         _ => return false,
-    }
+    };
+    update_mods(e, |mods| mods.trigger_mods |= bit);
     true
 }
 
@@ -471,12 +653,13 @@ pub fn set_key_held_state(e: &mut Engine, key: u32, hold: bool) {
 /// "held" bit (4 left, 8 right); a stick direction or no binding nothing.
 pub fn set_xi_control_held(e: &mut Engine, control: u32, hold: bool) {
     let binding = controller_bind(e, control);
-    let mods = &mut state(e).mods;
     if let Some(m) = button_mask(binding) {
-        mods.button_hold &= !m;
-        if hold {
-            mods.button_hold |= m;
-        }
+        update_mods(e, |mods| {
+            mods.button_hold &= !m;
+            if hold {
+                mods.button_hold |= m;
+            }
+        });
         return;
     }
     let bit = match binding {
@@ -484,10 +667,12 @@ pub fn set_xi_control_held(e: &mut Engine, control: u32, hold: bool) {
         ctrl::RT => 8,
         _ => return,
     };
-    mods.trigger_mods &= !bit;
-    if hold {
-        mods.trigger_mods |= bit;
-    }
+    update_mods(e, |mods| {
+        mods.trigger_mods &= !bit;
+        if hold {
+            mods.trigger_mods |= bit;
+        }
+    });
 }
 
 // ---- a control, whatever device ----
@@ -502,7 +687,7 @@ fn game_pad(e: &Engine) -> Pad {
 /// [`is_key_pressed`]'s); with one, its controller binding down in the pad's own state (`flags`
 /// bit 2) or in the game's (after JIP's changes).
 pub fn is_control_pressed(e: &mut Engine, control: u32, flags: u32) -> bool {
-    if !state(e).ready {
+    if !ready(e) {
         let key = keyboard_bind(e, control);
         if key != 0xff && is_key_pressed(e, u32::from(key), flags) {
             return true;
@@ -510,19 +695,15 @@ pub fn is_control_pressed(e: &mut Engine, control: u32, flags: u32) -> bool {
         let button = mouse_bind(e, control);
         return button != 0xff && is_key_pressed(e, u32::from(button) + MOUSE_BUTTON_OFFSET, flags);
     }
-    let pad = if flags & 2 != 0 {
-        state(e).pad
-    } else {
-        game_pad(e)
-    };
-    let dead_zone = state(e).dead_zone_ls;
+    let pad = if flags & 2 != 0 { pad(e) } else { game_pad(e) };
+    let dead_zone = dead_zone_ls(e);
     xi_control_pressed(e, &pad, control, dead_zone)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h: IsControlPressedRaw.
 /// As [`is_control_pressed`] with the player's raw key states and the pad's own state.
 pub fn is_control_pressed_raw(e: &mut Engine, control: u32) -> bool {
-    if !state(e).ready {
+    if !ready(e) {
         let key = keyboard_bind(e, control);
         if key != 0xff && is_key_pressed_raw(e, u32::from(key)) {
             return true;
@@ -530,8 +711,8 @@ pub fn is_control_pressed_raw(e: &mut Engine, control: u32) -> bool {
         let button = mouse_bind(e, control);
         return button != 0xff && is_key_pressed_raw(e, u32::from(button) + MOUSE_BUTTON_OFFSET);
     }
-    let pad = state(e).pad;
-    let dead_zone = state(e).dead_zone_ls;
+    let pad = pad(e);
+    let dead_zone = dead_zone_ls(e);
     xi_control_pressed(e, &pad, control, dead_zone)
 }
 
@@ -539,7 +720,7 @@ pub fn is_control_pressed_raw(e: &mut Engine, control: u32) -> bool {
 /// Without a ready controller, the control's keyboard key and mouse button disabled or enabled;
 /// with one, its controller binding.
 pub fn set_control_disabled(e: &mut Engine, control: u32, disable: bool) {
-    if !state(e).ready {
+    if !ready(e) {
         let key = keyboard_bind(e, control);
         if key != 0xff {
             set_key_disable_state(e, u32::from(key), disable);
@@ -555,7 +736,7 @@ pub fn set_control_disabled(e: &mut Engine, control: u32, disable: bool) {
 
 /// Whether the controller is ready (`s_controllerReady`).
 pub fn controller_ready(e: &mut Engine) -> bool {
-    state(e).ready
+    ready(e)
 }
 
 /// The keyboard and mouse binding of a control (`KEYBOARD_BIND`, `MOUSE_BIND`), for the commands.

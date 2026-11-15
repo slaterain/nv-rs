@@ -911,7 +911,7 @@ fn npc_perks() {
         [chunk(kind::NPC_PERKS, 10, data.clone())],
         "no patch: carried as it was"
     );
-    s(&mut w.e).npc_perks_patch = true;
+    set_npc_perks_patch(&mut w.e, true);
     s(&mut w.e).changed = changed::ALL;
     load_file(&mut w.e, &cosave(&[chunk(kind::NPC_PERKS, 10, data)]));
     let expect = Out::default()

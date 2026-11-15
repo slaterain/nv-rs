@@ -1004,7 +1004,9 @@ player's teammate when others detect it, and with the detection fix its level wo
 
 #### GD: Projectiles, explosions, combat AI, packages
 
-Nothing built yet.
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; `InitProjectileSetAmmoHook` in `InitGamePatches`) | `009bbef0` (`0x9BC241`: the projectile's launch constructor, its projectile count, damage division and split-beam scale) | With the fixes row on, a weapon's damage is split by JIP's own projectile count: the loaded ammo's projectiles per shot times the weapon's ammo use when the ammo sets one, else the weapon's count, plus the split-beam mod's value when that mod is on (the original counts through `GetNumProjectiles`), and split-beam damage is scaled by 1.3 before the division instead of after. The ammo, the split-beam flag and the count are kept in the projectile (in its own unused bytes, as JIP keeps them) for JIP's hit-damage formula and ammo impact scripts (group GC's O1, G119). With JIP installed and the row off, the original's count and damage, nothing recorded. Differences from JIP: a projectile loaded from a save reads "no ammo" (the port's memory starts zeroed; on the original's heap JIP reads leftover bytes there); JIP's Rock-It Launcher check (`InitRockItLauncher`, not built) never matches | 3.9-GD |
 
 #### GE: Actors: movement, life, NPC perks
 
@@ -1060,10 +1062,27 @@ list in records of its own.
 
 #### GH2: References, models, cells, ash piles
 
-No fix row built yet. Part of JIP in every preset (not this row): `DestroyRefrHook` (`0055a430`,
-`0x55A488`): a destroyed reference lets go of its `SetRefName` name and `SetRefrModelPath` model
-(with their hooks' users) and, when it was made in the game and the save holds nothing of it, its
-aux variables.
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; `SafeWrite16(0x54E421, 0x1EEB)` and `WriteRelJump(0x54E4E1, ClearAshPilesHook)` in `InitGamePatches`, no INI setting) | the cell's reset walk `0054df30` (run when a cell is attached; it is the game's respawn of a cell whose reset time has passed): `0x54E421` (a deleted actor's ash pile) and `0x54E4E1` (the type branches for references that are neither actors nor containers) | GAINS: an ash pile (the two vanilla piles and any activator `MarkActivatorAshPile` marked) is deleted when the reset walk reaches it, unless the actor it came from has flag `0x400` on its base; the actor loses its link to the pile. A dead actor deleted by the reset no longer takes its ash pile with it there (the pile goes when the walk reaches it, if it is in the walked cell). JIP's jump also passes over the exe's two other branches there: a reference whose base is a `FLOR` record (form type 0x26) made harvestable again, and a picked-up placed `INGR` reference (type 0x1D, not persistent) brought back. The game's own data has none: `FalloutNV.esm`, the four story add-ons, Gun Runners' Arsenal and the four packs hold 0 `FLOR` records and 0 placed references to an `INGR` (New Vegas's plants are activators with scripts), so nothing in the game changes; only a mod that adds `FLOR` records or places `INGR` references sees those stop respawning, the same as with real JIP. Containers still refill and actors still respawn. With JIP installed and the row off, the exe's walk runs unchanged | 3.9 GH2-2 |
+
+Part of JIP in every preset (not the row above), while JIP answers "installed":
+- `DestroyRefrHook` (`0055a430`, `0x55A488`): a destroyed reference lets go of its `SetRefName`
+  name and `SetRefrModelPath` model (with their hooks' users) and, when it was made in the game and
+  the save holds nothing of it, its aux variables.
+- "Recognize custom ashpile activators" (G06, eight places: `0x56A30A`, `0x573194`, `0x573FE8`,
+  `0x57445B`, `0x576AF0`, `0x624958`, and groups GA's `0x77765A` and GP's `0x95F7FE`): where the
+  exe compares a reference's base with the ash and goo pile forms it tests JIP's ash pile bit on the
+  base instead; the two vanilla piles get the bit when the game starts (`DeferredInit`), so with no
+  script marking anything nothing changes for a player. A reference with no base answers "not a
+  pile" (JIP would read a bad address). Built so far in six of the eight places: the HUD's
+  (`0x77765A`, group GA builds that seam) and the crosshair's (`0x95F7FE`, group GP) are not asked
+  yet and still compare with the two vanilla forms, so until those seams land an activator marked
+  as an ash pile (for example its bit restored from a co-save) is an ash pile in six places only.
+- `AttachAshPileHook` (G73, the death ash pile command `005db870`, its seam at `0x5DBCFD`): the
+  pile a death leaves is `AttachAshPileEx`'s form once when a script set one, else the exe's
+  choice. It changes nothing yet: the command `AttachAshPileEx` is not built, so no script can set
+  a form.
 
 #### GF: Forms and records
 
@@ -1074,6 +1093,7 @@ Nothing built yet.
 | JIP's comment | Exe places | What a player with JIP gets | Built |
 |---|---|---|---|
 | (`DeferredInit`: `eventCmdInfos[1].execute = Hook_MenuMode_Execute; eventCmdInfos[0xE].execute = 0x5D4A40`) | the block-type records `0x0118E2F0` [1] (`MenuMode`, the exe's `MenuModeFunction` `005c4240`) and [0xE] ("Unused2", no handler), read by `005e1550` | `Begin MenuMode N` takes JIP's modes 0 to 4 (menu mode, the Pip-Boy, a menu open, the console, the loading screens) and any menu's id, as JIP's `MenuMode` command; a block of type 0xE no longer fails its line (its handler answers true and its body is skipped). Under `NV_JIP_VANILLA_CMDS` (the same switch and handler as the `MenuMode` command), not the game-patch row. Deliberate difference: both block handlers clear the block's result first. JIP's `MenuMode` handler sets the result only when the mode is up and JIP's 0xE handler (the exe's `005d4a40`, `mov al, 1`) never sets it; in JIP the "result = 0" patch above always clears it first, but here the game-patch row can be off, where the exe leaves whatever the stack held and the block would run or not by chance. With that row on nothing differs from JIP | 3.9 GS-1 |
+| `bNoFailedScriptLocks` (`SetOptionalPatch(7)`: three `SafeWrite16` jumps) | `005e0d20` (`0x5E0FBE`, a line that fails), `005e1550` (`0x5E1A23`, a set with an expression error; `0x5E1F0B`, a condition with an expression error) | A script whose line fails (the error is still reported) keeps running on later frames; the game sets its data length to 0 there, so it never runs again until the game is restarted. On with the row and JIP's default switch | 3.9 GS-2 |
 
 #### GW: World, sky, sound, saves, start-up
 
