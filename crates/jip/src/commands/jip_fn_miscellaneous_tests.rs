@@ -786,7 +786,11 @@ fn hardcore_tracking() {
     let mut e = setup();
     assert_eq!(both(&mut e, 0x28ad), 0.0);
     e.ext::<Jip>().saved.serialized.flags = 3;
-    assert_eq!(both(&mut e, 0x28ad), 0.0, "the copy changes when the flags are published");
+    assert_eq!(
+        both(&mut e, 0x28ad),
+        0.0,
+        "the copy changes when the flags are published"
+    );
     publish_serialized_flags(&mut e);
     assert_eq!(both(&mut e, 0x28ad), 1.0);
     e.ext::<Jip>().saved.serialized.flags = 2;
@@ -1022,10 +1026,7 @@ fn the_conditions_answer_while_another_engine_holds_jips_state() {
     let mut other = Engine::new_untyped_for_test();
     e.share_slots_for_test(&mut other);
     engine_core::extend::release_held_for_test();
-    assert!(
-        other.ext::<Jip>().installed,
-        "the other engine holds it"
-    );
+    assert!(other.ext::<Jip>().installed, "the other engine holds it");
     let hash = str_hash_ci(b"metal");
     assert_eq!(eval(&mut e, 0x293e, ACTOR, hash), 1.0, "ACTOR's base");
     assert_eq!(eval(&mut e, 0x293e, ACTOR, hash ^ 1), 0.0);

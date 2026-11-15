@@ -1216,12 +1216,16 @@ fn assign_keyword(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// Whether the keyword `hash` has `form` (the lock-free map: any thread).
 fn keyword_has(e: &mut Engine, hash: u32, form: u32) -> bool {
-    with_keywords(e, |map| map.get(&hash).is_some_and(|set| set.contains(&form)))
+    with_keywords(e, |map| {
+        map.get(&hash).is_some_and(|set| set.contains(&form))
+    })
 }
 
 /// The keyword `hash`'s forms in their set's order, or `None` when it has no set.
 fn keyword_forms(e: &mut Engine, hash: u32) -> Option<Vec<u32>> {
-    with_keywords(e, |map| map.get(&hash).map(|set| set.iter().copied().collect()))
+    with_keywords(e, |map| {
+        map.get(&hash).map(|set| set.iter().copied().collect())
+    })
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:

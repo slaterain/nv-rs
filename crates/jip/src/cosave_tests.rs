@@ -680,8 +680,12 @@ fn the_conditions_copy_of_the_flags_follows_every_change() {
     };
     load_file(&mut w.e, &one());
     assert_eq!(serialized_flags(&mut w.e), 1, "a load's record");
-    load_file(&mut w.e, &cosave(&[]));
-    assert_eq!(serialized_flags(&mut w.e), 0, "a load without it: the reset");
+    // A record of no bytes reads nothing over the load's reset.
+    load_file(
+        &mut w.e,
+        &cosave(&[chunk(kind::SERIALIZED_VARS, 1, Vec::new())]),
+    );
+    assert_eq!(serialized_flags(&mut w.e), 0, "the load's reset");
     load_file(&mut w.e, &one());
     to(&mut w.e, msg::NEW_GAME);
     assert_eq!(serialized_flags(&mut w.e), 0, "a new game");
