@@ -34,6 +34,7 @@ pub mod jip_fn_impact_data;
 pub mod jip_fn_input;
 pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
+pub mod jip_fn_marker_cmds;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_miscellaneous;
 pub mod jip_fn_package;
@@ -42,6 +43,7 @@ pub mod jip_fn_projectile;
 pub mod jip_fn_quest;
 pub mod jip_fn_ref_map;
 pub mod jip_fn_script;
+pub mod jip_fn_script_vars;
 pub mod jip_fn_sound;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
@@ -70,6 +72,7 @@ pub mod ln_fn_recipe;
 pub mod ln_fn_terminal;
 pub mod ln_fn_utility;
 pub mod ln_fn_weapon;
+pub mod pos_marker;
 
 use engine_core::prelude::*;
 use engine_core::ptr::Layout;
@@ -175,6 +178,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_input::COMMANDS,
     jip_fn_ccc::COMMANDS,
     jip_fn_actor::COMMANDS,
+    jip_fn_marker_cmds::COMMANDS,
+    jip_fn_script_vars::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -759,6 +764,8 @@ mod tests {
             "jip_fn_input",
             "jip_fn_ccc",
             "jip_fn_actor",
+            "jip_fn_misc_ref",
+            "jip_fn_script",
         ];
         let mut seen = std::collections::HashSet::new();
         for (list, file) in ALL.iter().zip(files) {
