@@ -498,3 +498,34 @@ fn a_once_file_served_is_no_longer_held() {
     assert_eq!(p.serve(str_hash(hud)), None);
     assert_eq!(p.held(), 6);
 }
+
+/// A leaf too large for the room left ends the read: no later include anywhere above it is
+/// fetched (else every remaining include would read down to a leaf that no longer fits).
+#[test]
+fn a_leaf_too_large_for_the_room_left_ends_every_later_include() {
+    let leaf = (1 << 20) + 1;
+    let mut files: Vec<(String, String)> = (0..40)
+        .map(|i| {
+            (
+                format!("data\\menus\\prefabs\\k{i:02}.xml"),
+                format!(
+                    r#"<include src="k{:02}.xml"/><include src="k{:02}.xml"/>"#,
+                    i + 1,
+                    i + 1
+                ),
+            )
+        })
+        .collect();
+    files.push(("data\\menus\\prefabs\\k40.xml".into(), "x".repeat(leaf)));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let disk = Disk::new(&refs);
+    let mut p = Patched::default();
+    let t = read_bytes(&mut p, &disk, b"data\\menus\\prefabs\\k00.xml").unwrap();
+    // 63 leaves fit; the 64th is refused (the room left is 63 bytes short of it).
+    assert_eq!(t.len(), 63 * leaf);
+    // k00..k33 down the first includes, then the 127 files of k34's tree, the 64th leaf last.
+    assert_eq!(disk.reads.borrow().len(), 34 + 127);
+}
