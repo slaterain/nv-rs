@@ -841,3 +841,416 @@ fn a_marked_player_with_missing_parts() {
         assert_eq!(e.mem.u8(p.first + 0x30), 0x41, "no view set");
     }
 }
+
+// ==== Part 2: G26, G72, G105 (fix rows), G114 + O6, G122 and their commands ====
+
+/// Not installed: nothing of part 2 (no seam handler, the G122 slot keeps the exe's word).
+/// Installed with the row off: G114's seam and G122's slot (JIP's own), none of the three fix
+/// seams; the area's fix installer puts those in (`game_patches_tests` runs it with the row).
+#[test]
+fn part_two_goes_in_as_jip_and_the_row_say() {
+    let fixes = [FATIGUE_FLOOR, MUSIC_MARKER_LIST, MUSIC_MARKER];
+    let mut e = engine();
+    e.mem.set_u32(CANNOT_BE_HIT_SLOT, 0x0095_2720);
+    crate::install_as(&mut e, false);
+    super::super::set_row(&mut e, true);
+    assert!(e.site_owners(HARDCORE_NEEDS.addr()).is_empty());
+    for slot in fixes {
+        assert!(e.site_owners(slot.addr()).is_empty());
+    }
+    assert_eq!(e.mem.u32(CANNOT_BE_HIT_SLOT), 0x0095_2720);
+
+    let mut e = engine();
+    e.mem.set_u32(CANNOT_BE_HIT_SLOT, 0x0095_2720);
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site_owners(HARDCORE_NEEDS.addr()), [Owner::Jip]);
+    assert_eq!(e.mem.u32(CANNOT_BE_HIT_SLOT), CANNOT_BE_HIT_ROUTINE);
+    assert!(e.is_registered(CANNOT_BE_HIT_ROUTINE));
+    for slot in fixes {
+        assert!(e.site_owners(slot.addr()).is_empty(), "row off");
+    }
+    // The row on puts the area's fixes in (the settings file read is game_patches_tests').
+    install_fixes(&mut e);
+    for slot in fixes {
+        assert_eq!(e.site_owners(slot.addr()), [Owner::Jip], "row on");
+    }
+}
+
+// ---- G105 ----
+
+fn fatigue_engine(floor: f32) -> Engine {
+    let mut e = engine();
+    e.map(0x011d_2000, 0x1000);
+    e.mem.set_f32(MIN_FATIGUE, floor);
+    e
+}
+
+fn floor_of(e: &mut Engine, av: u32, value: f32, change: f32) -> Option<f32> {
+    fatigue_floor(e, &[av, value.to_bits(), change.to_bits()]).map(f32::from_bits)
+}
+
+/// Fatigue: a change that would take the value below `fMinFatigue` becomes `floor - value`;
+/// one that keeps it at or above stays (also a gain); a NaN sum keeps the change (`minss`
+/// gives 0).
+#[test]
+fn fatigue_stops_at_the_minimum() {
+    let mut e = fatigue_engine(-50.0);
+    assert_eq!(floor_of(&mut e, FATIGUE, 10.0, -100.0), Some(-60.0));
+    assert_eq!(
+        floor_of(&mut e, FATIGUE, 10.0, -60.0),
+        Some(-60.0),
+        "exactly at"
+    );
+    assert_eq!(floor_of(&mut e, FATIGUE, 10.0, -20.0), Some(-20.0));
+    assert_eq!(floor_of(&mut e, FATIGUE, 10.0, 5.0), Some(5.0));
+    assert_eq!(
+        floor_of(&mut e, FATIGUE, -70.0, 5.0),
+        Some(20.0),
+        "below already: raised to the minimum"
+    );
+    assert_eq!(floor_of(&mut e, FATIGUE, f32::NAN, -5.0), Some(-5.0));
+    // Single precision, as JIP's addss and subss.
+    let mut e = fatigue_engine(0.1);
+    let over = (0.3f32 + -5.0f32) - 0.1f32;
+    let want = -5.0f32 - over;
+    assert_eq!(
+        floor_of(&mut e, FATIGUE, 0.3, -5.0).unwrap().to_bits(),
+        want.to_bits()
+    );
+}
+
+/// Another actor value (health 0x10, 0x15, 0x17, 0): no answer, the change kept.
+#[test]
+fn only_fatigue_is_floored() {
+    let mut e = fatigue_engine(0.0);
+    for av in [0x10u32, 0x15, 0x17, 0] {
+        assert_eq!(floor_of(&mut e, av, 10.0, -100.0), None, "{av:#x}");
+    }
+}
+
+// ---- G26 ----
+
+/// A disabled reference (form flag 0x800, with other flags) answers 0; another answers its
+/// position's address (+0x30).
+#[test]
+fn a_disabled_music_marker_is_passed_over() {
+    let mut e = engine();
+    let refr = e.mem.alloc(0x100);
+    for flags in [0x800u32, 0x0800_0801, 0xffff_ffff] {
+        e.mem.set_u32(refr + 8, flags);
+        assert_eq!(music_marker(&mut e, &[refr]), Some(0), "{flags:#x}");
+    }
+    for flags in [0u32, 0x7ff, !0x800] {
+        e.mem.set_u32(refr + 8, flags);
+        assert_eq!(
+            music_marker(&mut e, &[refr]),
+            Some(refr + 0x30),
+            "{flags:#x}"
+        );
+    }
+}
+
+// ---- G72 ----
+
+struct Markers {
+    list: u32,
+    refs: Vec<u32>,
+    data: Vec<u32>,
+    player: u32,
+}
+
+/// A marker list (list nodes) of references with audio marker data of the given ids (`None`:
+/// no extra; `Some(None)`: an extra with no data), and the player with an empty marker list.
+fn markers(e: &mut Engine, ids: &[Option<Option<u32>>]) -> Markers {
+    use crate::commands::test_support::put_extra;
+    let mut refs = Vec::new();
+    let mut data = Vec::new();
+    for id in ids {
+        let refr = e.mem.alloc(0x100);
+        let word = match id {
+            Some(Some(id)) => {
+                let d = e.mem.alloc(0x40);
+                e.mem.set_u32(d + 0x24, *id);
+                d
+            }
+            _ => 0,
+        };
+        data.push(word);
+        if id.is_some() {
+            let extra = e.mem.alloc(0x10);
+            put_extra(e, refr + 0x44, extra, EXTRA_AUDIO_MARKER, word);
+        }
+        refs.push(refr);
+    }
+    let mut next = 0u32;
+    for refr in refs.iter().rev() {
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, *refr);
+        e.mem.set_u32(node + 4, next);
+        next = node;
+    }
+    let player = e.mem.alloc(0x1000);
+    e.mem.set_u32(PLAYER, player);
+    Markers {
+        list: next,
+        refs,
+        data,
+        player,
+    }
+}
+
+fn marker_engine() -> Engine {
+    let mut e = crate::commands::test_support::engine();
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    e.map(0x011d_e000, 0x1000);
+    e
+}
+
+/// The player's list as (reference, data) pairs, head first.
+fn player_markers(e: &Engine, player: u32) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    let mut node = player + PLAYER_MUSIC_MARKERS;
+    while node != 0 {
+        let item = e.mem.u32(node);
+        if item != 0 {
+            out.push((e.mem.u32(item), e.mem.u32(item + 4)));
+        }
+        node = e.mem.u32(node + 4);
+    }
+    out
+}
+
+fn empty_player_list(e: &mut Engine, player: u32) {
+    e.mem.set_u32(player + PLAYER_MUSIC_MARKERS, 0);
+    e.mem.set_u32(player + PLAYER_MUSIC_MARKERS + 4, 0);
+}
+
+/// The cache: references with audio marker data sorted by id (equal ids in list order); those
+/// with no extra, an extra with no data, or a null reference left out; each put at the front of
+/// the player's list as a fresh copy, so the list is in the reverse order; answers 1.
+#[test]
+fn the_music_markers_come_sorted_from_the_cache() {
+    let mut e = marker_engine();
+    let m = markers(
+        &mut e,
+        &[
+            Some(Some(5)),
+            None,
+            Some(Some(2)),
+            Some(None),
+            Some(Some(5)),
+            Some(Some(1)),
+        ],
+    );
+    let null_node = e.mem.alloc(8);
+    e.mem.set_u32(null_node + 4, m.list);
+    assert_eq!(
+        music_marker_list(&mut e, &[0x00f0_0001, null_node]),
+        Some(1)
+    );
+    // Sorted 1 (5), 2 (2), 5 (0), 5 (4); put at the front one by one: reversed.
+    let want: Vec<(u32, u32)> = [4usize, 0, 2, 5]
+        .iter()
+        .map(|&i| (m.refs[i], m.data[i]))
+        .collect();
+    assert_eq!(player_markers(&e, m.player), want);
+    let entries: Vec<u32> = {
+        let mut v = vec![e.mem.u32(m.player + PLAYER_MUSIC_MARKERS)];
+        let mut node = e.mem.u32(m.player + PLAYER_MUSIC_MARKERS + 4);
+        while node != 0 {
+            v.push(e.mem.u32(node));
+            node = e.mem.u32(node + 4);
+        }
+        v
+    };
+    let mut distinct = entries.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 4, "four separate copies");
+}
+
+/// The same world space again: the cache is not built again (a different list is not read: no
+/// extra looked up), and its copies go in again. Another world space builds it anew.
+#[test]
+fn the_cache_is_kept_for_the_same_world_space() {
+    use crate::commands::test_support::calls_to;
+    let mut e = marker_engine();
+    let m = markers(&mut e, &[Some(Some(3)), Some(Some(1))]);
+    music_marker_list(&mut e, &[0x00f0_0001, m.list]);
+    let other = markers(&mut e, &[Some(Some(0))]);
+    e.mem.set_u32(PLAYER, m.player);
+    empty_player_list(&mut e, m.player);
+    let lookups = calls_to(GET_BY_TYPE).len();
+    music_marker_list(&mut e, &[0x00f0_0001, other.list]);
+    assert_eq!(calls_to(GET_BY_TYPE).len(), lookups, "not read again");
+    assert_eq!(
+        player_markers(&e, m.player),
+        vec![(m.refs[0], m.data[0]), (m.refs[1], m.data[1])]
+    );
+    empty_player_list(&mut e, m.player);
+    music_marker_list(&mut e, &[0x00f0_0002, other.list]);
+    assert_eq!(
+        player_markers(&e, m.player),
+        vec![(other.refs[0], other.data[0])]
+    );
+}
+
+/// JIP's Prepend: an empty list takes the item in its head node; else the head's item and next
+/// move to a new node after it; a null item: nothing.
+#[test]
+fn prepend_is_jips() {
+    let mut e = marker_engine();
+    let head = e.mem.alloc(8);
+    prepend(&mut e, head, 0);
+    assert_eq!(e.mem.u32(head), 0);
+    prepend(&mut e, head, 0x11);
+    assert_eq!((e.mem.u32(head), e.mem.u32(head + 4)), (0x11, 0));
+    prepend(&mut e, head, 0x22);
+    let node = e.mem.u32(head + 4);
+    assert_eq!(e.mem.u32(head), 0x22);
+    assert_eq!((e.mem.u32(node), e.mem.u32(node + 4)), (0x11, 0));
+    prepend(&mut e, head, 0x33);
+    let second = e.mem.u32(head + 4);
+    assert_eq!((e.mem.u32(second), e.mem.u32(second + 4)), (0x22, node));
+}
+
+// ---- G114 + O6 ----
+
+fn needs_player(e: &mut Engine) -> u32 {
+    let p = e.mem.alloc(0x1000);
+    let words = [(10.0f32, 5.0f32), (3.0, -7.0), (0.0, f32::NAN)];
+    for (i, (need, pending)) in words.iter().enumerate() {
+        e.mem.set_f32(p + 0x5d4 + 4 * i as u32, *need);
+        e.mem.set_f32(p + 0x49c + 4 * i as u32, *pending);
+    }
+    e.mem.set_f32(p + 0x5e0, 99.0);
+    e.mem.set_f32(p + 0x4a8, 98.0);
+    p
+}
+
+/// With O6: each need takes its pending change, never below 0 (a NaN gives 0), the pending
+/// changes zeroed, the fourth words untouched. Without O6: both untouched.
+#[test]
+fn hardcore_needs_take_their_pending_changes_with_o6() {
+    let mut e = engine();
+    let p = needs_player(&mut e);
+    e.set_jip_patches(
+        jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::HARDCORE_NEEDS_FIX,
+    );
+    hardcore_needs(&mut e, &[p]);
+    let needs: Vec<f32> = (0..3).map(|i| e.mem.f32(p + 0x5d4 + 4 * i)).collect();
+    assert_eq!(needs, [15.0, 0.0, 0.0]);
+    for i in 0..3 {
+        assert_eq!(e.mem.u32(p + 0x49c + 4 * i), 0);
+    }
+    assert_eq!(e.mem.f32(p + 0x5e0), 99.0);
+    assert_eq!(e.mem.f32(p + 0x4a8), 98.0);
+
+    let mut e = engine();
+    let p = needs_player(&mut e);
+    e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+    hardcore_needs(&mut e, &[p]);
+    assert_eq!(e.mem.f32(p + 0x5d4), 10.0);
+    assert_eq!(e.mem.f32(p + 0x49c), 5.0);
+}
+
+/// The answer is the exe's test (`+0x680` bit 2); JIP's co-save flag NoHardcoreTracking sets
+/// the reset byte's bit 0 (the others kept); without it the byte is left.
+#[test]
+fn hardcore_tracking_off_resets_the_timers() {
+    use crate::commands::test_support::{call_on, n};
+    let mut e = crate::commands::test_support::engine();
+    let p = e.mem.alloc(0x1000);
+    for (byte, want) in [(4u8, 1u32), (0xfb, 0), (0, 0), (0xff, 1)] {
+        e.mem.set_u8(p + 0x680, byte);
+        assert_eq!(hardcore_needs(&mut e, &[p]), Some(want), "{byte:#x}");
+    }
+    e.mem.set_u8(p + 0xe39, 0x10);
+    hardcore_needs(&mut e, &[p]);
+    assert_eq!(e.mem.u8(p + 0xe39), 0x10, "tracking on: kept");
+    call_on(&mut e, TOGGLE_HARDCORE_TRACKING, 0, &[n(0)]);
+    hardcore_needs(&mut e, &[p]);
+    assert_eq!(e.mem.u8(p + 0xe39), 0x11);
+    e.mem.set_u8(p + 0xe39, 0x10);
+    call_on(&mut e, TOGGLE_HARDCORE_TRACKING, 0, &[n(7)]);
+    hardcore_needs(&mut e, &[p]);
+    assert_eq!(e.mem.u8(p + 0xe39), 0x10, "tracking on again");
+}
+
+/// ToggleHardcoreTracking: 0 sets the co-save flag (bit 0, other bits kept), any other value
+/// clears it; the lock-free copy GetHardcoreTracking reads follows.
+#[test]
+fn toggle_hardcore_tracking_sets_the_co_save_flag() {
+    use crate::commands::jip_fn_miscellaneous::serialized_flags;
+    use crate::commands::test_support::{call_on, n};
+    let mut e = crate::commands::test_support::engine();
+    e.ext::<Jip>().saved.serialized.flags = 4;
+    call_on(&mut e, TOGGLE_HARDCORE_TRACKING, 0, &[n(0)]);
+    assert_eq!(e.ext::<Jip>().saved.serialized.flags, 5);
+    assert_eq!(serialized_flags(&mut e), 5);
+    call_on(&mut e, TOGGLE_HARDCORE_TRACKING, 0, &[n(-1)]);
+    assert_eq!(e.ext::<Jip>().saved.serialized.flags, 4);
+    assert_eq!(serialized_flags(&mut e), 4);
+}
+
+// ---- G122 + ToggleImmortalMode ----
+
+fn hit_engine() -> Engine {
+    let mut e = crate::commands::test_support::engine();
+    e.map(0x011e_0000, 0x1000);
+    e
+}
+
+fn cannot_be_hit(e: &mut Engine) -> u32 {
+    cannot_be_hit_routine(e, &[0x5000]).eax
+}
+
+/// The setting's byte when not 0 (the byte itself), else 1 in mode 2, else the god mode byte.
+#[test]
+fn the_player_cannot_be_hit_in_god_or_immortal_mode_two() {
+    use crate::commands::test_support::{call_on, n};
+    let mut e = hit_engine();
+    assert_eq!(cannot_be_hit(&mut e), 0);
+    e.mem.set_u8(GOD_MODE_BYTE, 1);
+    assert_eq!(cannot_be_hit(&mut e), 1);
+    e.mem.set_u8(GOD_MODE_BYTE, 0);
+    e.mem.set_u8(GOD_MODE_SETTING_VALUE, 2);
+    assert_eq!(cannot_be_hit(&mut e), 2, "the setting's byte itself");
+    e.mem.set_u8(GOD_MODE_SETTING_VALUE, 0);
+    call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[n(2)]);
+    assert_eq!(cannot_be_hit(&mut e), 1);
+    call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[n(1)]);
+    assert_eq!(cannot_be_hit(&mut e), 0, "mode 1 is not unhittable");
+    e.mem.set_u8(GOD_MODE_BYTE, 3);
+    assert_eq!(cannot_be_hit(&mut e), 3);
+}
+
+/// ToggleImmortalMode: answers the mode before; the hook PlayerMinHealth only in mode 1; bit 2
+/// of the hit effects word in mode 2, cleared otherwise (bit 1 kept); no argument: nothing
+/// changes; the mode is a byte, the tests use the whole argument.
+#[test]
+fn toggle_immortal_mode_switches_the_hook_and_the_hit_effects() {
+    use crate::commands::test_support::{call_on, n};
+    let mut e = hit_engine();
+    assert_eq!(call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[]).1, 0.0);
+    assert_eq!(call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[n(1)]).1, 0.0);
+    assert_eq!(immortal_mode(&mut e), 1);
+    assert_eq!(e.hook_users(Hook::PlayerMinHealth), 1);
+    assert_eq!(disable_hit_effects(&mut e), 0);
+    assert_eq!(call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[]).1, 1.0);
+    assert_eq!(immortal_mode(&mut e), 1, "no argument: kept");
+    assert_eq!(call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[n(2)]).1, 1.0);
+    assert_eq!(e.hook_users(Hook::PlayerMinHealth), 0);
+    assert_eq!(disable_hit_effects(&mut e), 2);
+    e.ext_free::<Immortal>()
+        .hit_effects
+        .fetch_or(1, Ordering::Relaxed);
+    call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[n(0)]);
+    assert_eq!(disable_hit_effects(&mut e), 1, "bit 1 kept, bit 2 cleared");
+    assert_eq!(immortal_mode(&mut e), 0);
+    // 257: the mode byte is 1, but the hook's test uses 257 (off).
+    call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[n(257)]);
+    assert_eq!(immortal_mode(&mut e), 1);
+    assert_eq!(e.hook_users(Hook::PlayerMinHealth), 0);
+    assert_eq!(call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[]).1, 1.0);
+}

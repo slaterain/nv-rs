@@ -1,8 +1,9 @@
 //! UIO end to end on an engine: the game's Windows calls and its two menu functions stood in by
 //! doubles over a game folder in memory.
 
-use crate::game::{COMPRESS_AND_STORE_XML, TILE_PARSE_FILE};
+use crate::game::{COMPRESS_AND_STORE_XML, TILE_PARSE_FILE, TILE_READ_FILE};
 use crate::lists::Files;
+use crate::test_game::{self, item, items, Item};
 use crate::*;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -18,8 +19,10 @@ struct World {
     /// Open handles: the file's bytes and the read position.
     open: Vec<(Vec<u8>, usize)>,
     find_at: usize,
-    /// The texts `Tile::ParseFile` was given: the path and the text.
-    parsed: Vec<(Vec<u8>, Vec<u8>)>,
+    /// Each `Tile::ParseFile` call (none should come: UIO parses itself).
+    parsed: Vec<Vec<u8>>,
+    /// What `Tile::ReadFile` was asked: the path, the storage the seam answered, the keep byte.
+    reads: Vec<(Vec<u8>, Option<u32>, bool)>,
     freed: Vec<u32>,
     /// At each read of the game's text: a release point, then the second engine ([`OTHER`])
     /// takes UIO's slot and counts the patched files it finds.
@@ -41,18 +44,13 @@ fn text(e: &Engine, at: u32) -> Vec<u8> {
     nvse::table::guest_text(e, at).to_ascii_lowercase()
 }
 
-fn ret(v: u32) -> Ret {
-    Ret {
-        eax: v,
-        ..Ret::default()
-    }
-}
+use test_game::ret;
 
 const PLUGINS_FOLDER: u32 = 0x0120_2e98;
 
 fn engine() -> Engine {
     world(|w| *w = World::default());
-    let mut e = Engine::new();
+    let mut e = test_game::engine();
     e.map(PLUGINS_FOLDER & !0xfff, 0x1000);
     e.mem.write(PLUGINS_FOLDER, b"Local\\\0");
     // GetFileAttributesA
@@ -117,15 +115,13 @@ fn engine() -> Engine {
         }
     });
     e.register(0x00fd_f064, |_, _| ret(1));
-    // The game's heap.
-    e.register(0x00aa_3e40, |e, a| ret(e.mem.alloc(a[1].max(1))));
+    // The game's heap: the doubles' heap, each free written down.
     e.register(0x00aa_4060, |_, a| {
         world(|w| w.freed.push(a[1]));
         ret(0)
     });
-    // Menu::CompressAndStoreXML(path, NULL): the game's text, or null.
+    // Menu::CompressAndStoreXML(path, text): the given text, else the game's text, or null.
     e.register(COMPRESS_AND_STORE_XML, |e, a| {
-        assert_eq!(a[1], 0);
         if world(|w| w.other_reads) {
             engine_core::extend::release_held_for_test();
             let n = OTHER.with(|o| {
@@ -136,8 +132,13 @@ fn engine() -> Engine {
             engine_core::extend::release_held_for_test();
             world(|w| w.seen.extend(n));
         }
-        let p = text(e, a[0]);
-        match world(|w| w.game.get(&p).cloned()) {
+        let t = if a[1] != 0 {
+            Some(nvse::table::guest_text(e, a[1]))
+        } else {
+            let p = text(e, a[0]);
+            world(|w| w.game.get(&p).cloned())
+        };
+        match t {
             Some(t) => {
                 let data = e.mem.alloc(t.len() as u32 + 1);
                 e.mem.write(data, &[t.as_slice(), b"\0"].concat());
@@ -149,13 +150,21 @@ fn engine() -> Engine {
             None => ret(0),
         }
     });
-    // Tile::ParseFile(path, buffer, length): the text it was given.
+    // Tile::ParseFile: never called with UIO on.
     e.register(TILE_PARSE_FILE, |e, a| {
-        let path = nvse::table::guest_text(e, a[0]);
-        let t = e.mem.bytes(a[1], a[2]);
-        assert_eq!(e.mem.u8(a[1] + a[2]), 0, "the buffer ends in a 0");
-        world(|w| w.parsed.push((path, t)));
-        ret(0x5150)
+        world(|w| w.parsed.push(nvse::table::guest_text(e, a[0])));
+        ret(0)
+    });
+    // Tile::ReadFile(parent, path) as the translation reaches the seam (its keep byte on the
+    // stack): what the seam answered written down; a tile when it answered a storage.
+    e.register(TILE_READ_FILE, |e, a| {
+        let path = nvse::table::guest_text(e, a[1]);
+        let (storage, keep) = e.with_stack(4, |e, k| {
+            let s = e.site(0x00a0_1b87, &[a[1], k.addr()]);
+            (s, e.mem.u8(k.addr()) != 0)
+        });
+        world(|w| w.reads.push((path, storage, keep)));
+        ret(if storage.is_some() { 0x7117 } else { 0 })
     });
     e
 }
@@ -178,26 +187,50 @@ fn game(path: &str, t: &str) {
     });
 }
 
-/// `Tile::ReadFile` reaching UIO's seam with `path`: the storage answered, and the text parsed.
-fn read_file(e: &mut Engine, path: &str) -> (Option<u32>, Option<String>) {
+type Shape = (u32, u32, Option<String>);
+
+/// An item's type and id, and its text for a tile start (6): the tree the items make.
+fn shape(items: &[Item]) -> Vec<Shape> {
+    items
+        .iter()
+        .map(|i| {
+            let name = if i.kind == 6 { i.text.clone() } else { None };
+            (i.kind, i.id, name)
+        })
+        .collect()
+}
+
+fn start(id: u32, name: &str) -> Shape {
+    (6, id, Some(name.to_string()))
+}
+
+fn end(id: u32) -> Shape {
+    (7, id, None)
+}
+
+/// `Tile::ReadFile` reaching UIO's seam with `path`: the storage answered, the keep byte, and the
+/// storage's main items.
+fn read_file(e: &mut Engine, path: &str) -> (Option<u32>, bool, Vec<Item>) {
     let at = e.mem.alloc(path.len() as u32 + 1);
     e.mem.write(at, &[path.as_bytes(), b"\0"].concat());
-    world(|w| w.parsed.clear());
-    let storage = if e.uio() {
-        e.site(0x00a0_1b87, &[at])
+    let (storage, keep) = if e.uio() {
+        e.with_stack(4, |e, k| {
+            let s = e.site(0x00a0_1b87, &[at, k.addr()]);
+            (s, e.mem.u8(k.addr()) != 0)
+        })
     } else {
-        None
+        (None, false)
     };
-    let parsed = world(|w| {
-        w.parsed
-            .last()
-            .map(|(_, t)| String::from_utf8(t.clone()).unwrap())
-    });
-    (storage, parsed)
+    let got = storage.map(|s| items(e, e.mem.u32(s))).unwrap_or_default();
+    (storage, keep, got)
 }
 
 const HUD: &str = "Data\\Menus\\Main\\hud_main_menu.xml";
 const HUD_TEXT: &str = r#"<menu name="HUDMainMenu"><rect name="JHUD"></rect></menu>"#;
+const MENU: u32 = 0x38c;
+const RECT: u32 = 0x385;
+const IMAGE: u32 = 0x386;
+const TEXT: u32 = 0x387;
 
 fn a_mod_installed() {
     loose("Local\\plugins.txt", "FalloutNV.esm\r\nRadar.esp\r\n");
@@ -211,8 +244,14 @@ fn a_mod_installed() {
     );
     world(|w| w.listing = vec![b"mine.txt".to_vec()]);
     game(HUD, HUD_TEXT);
-    game("data\\menus\\prefabs\\radar\\radarhud.xml", "<radar/>");
-    game("data\\menus\\prefabs\\mine\\a b.xml", "<mine/>");
+    game(
+        "data\\menus\\prefabs\\radar\\radarhud.xml",
+        r#"<image name="radar"></image>"#,
+    );
+    game(
+        "data\\menus\\prefabs\\mine\\a b.xml",
+        r#"<text name="mine"></text>"#,
+    );
 }
 
 #[test]
@@ -226,7 +265,7 @@ fn off_nothing_is_installed() {
 }
 
 #[test]
-fn on_the_lists_patch_the_hud_and_readfile_parses_uios_text() {
+fn on_the_lists_patch_the_hud_and_uio_parses_it() {
     let mut e = engine();
     a_mod_installed();
     set_on(&mut e, true);
@@ -241,18 +280,77 @@ fn on_the_lists_patch_the_hud_and_readfile_parses_uios_text() {
     assert_eq!(e.site(0x0070_a049, &[0]), None);
     assert!(e.ext::<Uio>().loaded);
     // The HUD file (read from the game, patched): Radar's HUD into the menu, the public list's
-    // into JHUD; the includes expanded by UIO's reader; Stimpak Counter not loaded: not added.
-    let (storage, parsed) = read_file(&mut e, HUD);
-    assert_eq!(storage, Some(0x5150));
+    // into JHUD; the includes expanded by UIO's reader; Stimpak Counter not loaded: not added;
+    // the text parsed by UIO's reader.
+    let (storage, keep, got) = read_file(&mut e, HUD);
+    assert!(storage.is_some());
     assert_eq!(
-        parsed.unwrap(),
-        r#"<menu name="HUDMainMenu"><rect name="JHUD"><mine/></rect><radar/></menu>"#
+        shape(&got),
+        vec![
+            start(MENU, "HUDMainMenu"),
+            start(RECT, "JHUD"),
+            start(TEXT, "mine"),
+            end(TEXT),
+            end(RECT),
+            start(IMAGE, "radar"),
+            end(IMAGE),
+            end(MENU),
+        ]
     );
-    // The HUD is one of the seven menus UIO reads again from the file after its first read.
-    let (_, parsed) = read_file(&mut e, HUD);
-    assert_eq!(parsed.unwrap(), HUD_TEXT);
-    // The parse buffer and the game's texts were freed on the game's heap.
+    // The HUD is one of the seven menus whose parse UIO does not keep: no keep byte, and a later
+    // read takes the file again (unpatched, as UIO reads it).
+    assert!(!keep);
+    let (again, keep, got) = read_file(&mut e, HUD);
+    assert_ne!(again, storage);
+    assert!(!keep);
+    assert_eq!(
+        shape(&got),
+        vec![
+            start(MENU, "HUDMainMenu"),
+            start(RECT, "JHUD"),
+            end(RECT),
+            end(MENU)
+        ]
+    );
+    // The game's own parser never ran; the game's texts were freed on the game's heap.
+    assert!(world(|w| w.parsed.is_empty()));
     assert!(world(|w| w.freed.len()) >= 3);
+}
+
+#[test]
+fn a_kept_parse_is_answered_again_with_the_keep_byte() {
+    let mut e = engine();
+    set_on(&mut e, true);
+    install(&mut e);
+    e.site(0x0070_a049, &[0]);
+    game(
+        "Data\\Menus\\x.xml",
+        r#"<rect name="a"><include src="in.xml"/></rect>"#,
+    );
+    game("data\\menus\\prefabs\\in.xml", r#"<x>1</x>"#);
+    let (storage, keep, got) = read_file(&mut e, "Data\\Menus\\x.xml");
+    assert!(keep);
+    assert_eq!(
+        got,
+        vec![
+            item(6, 901.0, Some("a"), RECT),
+            item(8, 1.0, None, 0xfa1),
+            item(7, 901.0, None, RECT),
+        ]
+    );
+    // Read again (in any case): the same storage, kept; the file not read again.
+    game("Data\\Menus\\x.xml", "<rect></rect>");
+    let (again, keep, _) = read_file(&mut e, "DATA\\menus\\X.XML");
+    assert_eq!((again, keep), (storage, true));
+    assert_eq!(
+        e.ext::<Uio>()
+            .parsed
+            .get(&crate::hash::str_hash(b"data\\menus\\x.xml")),
+        Some(&Parsed {
+            storage: storage.unwrap(),
+            cached: true
+        })
+    );
 }
 
 #[test]
@@ -261,13 +359,117 @@ fn a_file_the_game_cannot_find_goes_to_the_exes_parse() {
     set_on(&mut e, true);
     install(&mut e);
     e.site(0x0070_a049, &[0]);
-    assert_eq!(read_file(&mut e, "Data\\Menus\\nothing.xml"), (None, None));
-    // An ordinary file still goes through UIO's reader.
-    game("Data\\Menus\\x.xml", r#"<a><include src="in.xml"/></a>"#);
-    game("data\\menus\\prefabs\\in.xml", "IN");
     assert_eq!(
-        read_file(&mut e, "Data\\Menus\\x.xml"),
-        (Some(0x5150), Some("<a>IN</a>".to_string()))
+        read_file(&mut e, "Data\\Menus\\nothing.xml"),
+        (None, false, vec![])
+    );
+    // Found later (UIO's entry holds no storage): parsed then.
+    game("Data\\Menus\\nothing.xml", "<x>2</x>");
+    let (storage, keep, got) = read_file(&mut e, "Data\\Menus\\nothing.xml");
+    assert!(storage.is_some() && keep);
+    assert_eq!(got, vec![item(8, 2.0, None, 0xfa1)]);
+}
+
+#[test]
+fn the_parse_cache_entries_uioload_makes() {
+    let mut e = engine();
+    set_on(&mut e, true);
+    install(&mut e);
+    e.site(0x0070_a049, &[0]);
+    let parsed = &e.ext::<Uio>().parsed;
+    assert_eq!(parsed.len(), 8);
+    for path in [
+        &b"Data\\Menus\\globals.xml"[..],
+        b"data\\menus\\main\\STATS_MENU.xml",
+        b"jip_temp.xml",
+    ] {
+        assert_eq!(
+            parsed.get(&crate::hash::str_hash(path)),
+            Some(&Parsed {
+                storage: 0,
+                cached: false
+            })
+        );
+    }
+}
+
+#[test]
+fn an_injected_component_is_read_from_memory_under_jip_temp() {
+    let mut e = engine();
+    set_on(&mut e, true);
+    install(&mut e);
+    e.site(0x0070_a049, &[0]);
+    game("data\\menus\\prefabs\\in.xml", r#"<x>3</x>"#);
+    let text = br#"<rect name="J"><include src="in.xml"/></rect>"#;
+    assert_eq!(inject_component(&mut e, 0x4000, text), 0x7117);
+    let reads = world(|w| w.reads.clone());
+    assert_eq!(reads.len(), 1);
+    let (path, storage, keep) = &reads[0];
+    assert_eq!(path, b"jip_temp.xml");
+    // Never kept (UIOLoad's entry): ReadFile deletes it.
+    assert!(!keep);
+    let got = items(&e, e.mem.u32(storage.unwrap()));
+    assert_eq!(
+        got,
+        vec![
+            item(6, 901.0, Some("J"), RECT),
+            item(8, 3.0, None, 0xfa1),
+            item(7, 901.0, None, RECT),
+        ]
+    );
+    // Nothing is left for a later read, and no file was read for it.
+    assert_eq!(e.ext::<Uio>().extern_text, None);
+    // An empty text: nothing read, 0.
+    world(|w| w.reads.clear());
+    assert_eq!(inject_component(&mut e, 0x4000, b""), 0);
+    assert_eq!(inject_component(&mut e, 0x4000, b"\0<x>1</x>"), 0);
+    assert!(world(|w| w.reads.is_empty()));
+    // Too long: nothing.
+    let long = vec![b' '; game::MAX_INJECTED + 1];
+    assert_eq!(inject_component(&mut e, 0x4000, &long), 0);
+    assert!(world(|w| w.reads.is_empty()));
+    // Exactly the cap: read.
+    let mut capped = br#"<rect name="K"></rect>"#.to_vec();
+    capped.resize(game::MAX_INJECTED, b' ');
+    assert_eq!(inject_component(&mut e, 0x4000, &capped), 0x7117);
+    let reads = world(|w| w.reads.clone());
+    assert_eq!(reads.len(), 1);
+    let got = items(&e, e.mem.u32(reads[0].1.unwrap()));
+    assert_eq!(
+        got,
+        vec![
+            item(6, 901.0, Some("K"), RECT),
+            // From the pool: the name's item, "K" still in its text.
+            item(7, 901.0, Some("K"), RECT)
+        ]
+    );
+}
+
+/// A tag name or `&entity` filling the whole injected text (the cap, 1 MiB) is read without
+/// stopping the game.
+#[test]
+fn an_injected_text_of_one_long_name_never_stops_the_game() {
+    let mut e = engine();
+    set_on(&mut e, true);
+    install(&mut e);
+    e.site(0x0070_a049, &[0]);
+    let mut tag = vec![b'<'];
+    tag.resize(game::MAX_INJECTED - 1, b'a');
+    tag.push(b'>');
+    assert_eq!(inject_component(&mut e, 0x4000, &tag), 0x7117);
+    let mut entity = b"<x>&".to_vec();
+    entity.resize(game::MAX_INJECTED - 4, b'a');
+    entity.extend(b"</x>");
+    assert_eq!(entity.len(), game::MAX_INJECTED);
+    assert_eq!(inject_component(&mut e, 0x4000, &entity), 0x7117);
+    let reads = world(|w| w.reads.clone());
+    assert_eq!(reads.len(), 2);
+    assert_eq!(items(&e, e.mem.u32(reads[0].1.unwrap())), vec![]);
+    let got = items(&e, e.mem.u32(reads[1].1.unwrap()));
+    assert_eq!(got.len(), 1);
+    assert_eq!(
+        got[0].text.as_ref().map(String::len),
+        Some(game::MAX_INJECTED - 7)
     );
 }
 
@@ -296,8 +498,8 @@ fn a_public_list_folder_entry_that_is_a_folder_or_too_long_is_passed_over() {
     set_on(&mut e, true);
     install(&mut e);
     e.site(0x0070_a049, &[0]);
-    let (_, parsed) = read_file(&mut e, HUD);
-    assert!(parsed.unwrap().contains("<mine/>"));
+    let (_, _, got) = read_file(&mut e, HUD);
+    assert!(shape(&got).contains(&start(TEXT, "mine")));
 }
 
 /// Paths of about 1 MiB (a list's path line and `#file` token, an include's src, the path
@@ -325,18 +527,18 @@ fn paths_of_a_megabyte_never_stop_the_game() {
     });
     game(
         "data\\menus\\prefabs\\mine\\a b.xml",
-        &format!(r#"<mine/><include src="{huge}"/>"#),
+        &format!(r#"<text name="mine"></text><include src="{huge}"/>"#),
     );
     set_on(&mut e, true);
     install(&mut e);
     e.site(0x0070_a049, &[0]);
-    let (_, parsed) = read_file(&mut e, HUD);
-    let parsed = parsed.unwrap();
-    assert!(parsed.contains("<mine/>"));
-    assert!(!parsed.contains("hhhh"));
+    let (_, _, got) = read_file(&mut e, HUD);
+    let mine = vec![start(TEXT, "mine"), end(TEXT)];
+    assert!(shape(&got).windows(2).any(|w| w == mine.as_slice()));
+    assert!(got.iter().all(|i| !format!("{i:?}").contains("hhhh")));
     assert_eq!(
         read_file(&mut e, &format!("Data\\Menus\\{huge}")),
-        (None, None)
+        (None, false, Vec::new())
     );
 }
 
@@ -376,8 +578,8 @@ fn a_read_leaves_the_patched_files_in_the_shared_slot_across_the_games_calls() {
     e.share_slots_for_test(&mut other);
     OTHER.with(|o| *o.borrow_mut() = Some(other));
     world(|w| w.other_reads = true);
-    let (_, parsed) = read_file(&mut e, HUD);
-    assert!(parsed.unwrap().contains("<radar/>"));
+    let (_, _, got) = read_file(&mut e, HUD);
+    assert!(shape(&got).contains(&start(IMAGE, "radar")));
     let seen = world(|w| std::mem::take(&mut w.seen));
     assert!(!seen.is_empty(), "the includes were read from the game");
     assert!(seen.iter().all(|&n| n == count), "{seen:?}");

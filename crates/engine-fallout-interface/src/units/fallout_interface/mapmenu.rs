@@ -4999,7 +4999,10 @@ fn gamepad_sticks(e: &mut Engine, this: Ptr<MapMenu>) -> bool {
     e.call(OBJECT_00877720, &args![owner]);
     if e.get(this, MapMenu::iCurrentPage) == 0x20 || e.get(this, MapMenu::iCurrentPage) == 0x21 {
         let mut zoom = input_axis(e, 8);
-        if !axis_beyond(e, zoom, ZOOM_DEAD_ZONE_DOUBLE) {
+        // JIP LN NVSE's D04 seam (step 3.9): the operand's double.
+        let dead_zone =
+            super::caravanmenu::left_stick_dead_zone(e, 0x0079_9861, ZOOM_DEAD_ZONE_DOUBLE);
+        if !axis_beyond(e, zoom, dead_zone) {
             zoom = 0;
         }
         if zoom != 0 {
@@ -13012,6 +13015,44 @@ mod n056_tests {
         );
         // The position is shown (`00799dc0` reads the map tile).
         assert!(!calls_to(&e, TILE_GET_FLOAT).is_empty());
+    }
+
+    /// JIP's D04 seam (`0x799861`, the zoom axis), asked only with JIP installed, and its answer
+    /// used: a zoom axis of 20000 (above the exe's 7849) zooms (its 20000 / 32767 measured for the
+    /// zoom amount) with the exe's double; with the answered 1e9 it is inside the dead zone and
+    /// nothing zooms. (No map tile: the zoom itself returns at once.)
+    #[test]
+    fn do_gamepad_asks_jips_zoom_dead_zone_seam() {
+        use crate::units::fallout_interface::caravanmenu::d04_test::{handlers, seen};
+        use engine_core::extend::jip_patches::INSTALLED;
+        for (word, expected) in [(0, &[][..]), (INSTALLED, &[0x0079_9861][..])] {
+            let mut e = engine();
+            let menu = open_menu(&mut e, 0x100);
+            handlers(&mut e, word, &[0x0079_9861]);
+            gamepad_ready(&mut e);
+            returns(&mut e, FLAG_00709D40, 1);
+            e.set(menu, MapMenu::iCurrentPage, 0x21);
+            e.set(menu, MapMenu::pMapTile, 0);
+            e.set_global::<f64>(ZOOM_DEAD_ZONE_DOUBLE, 7849.0);
+            e.set_global::<f64>(PAN_DEAD_ZONE_DOUBLE, 8689.0);
+            e.set_global::<f64>(AXIS_RANGE_DOUBLE, 32767.0);
+            e.register(INPUT_AXIS_00A23390, |_, a| Ret {
+                eax: if a[2] == 8 { 20000 } else { 0 },
+                ..Ret::default()
+            });
+            e.register(MAGNITUDE_00408820, |_, a| Ret {
+                st0: f64::from(f32::from_bits(a[0])).abs(),
+                ..Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0079_9790, &args![menu, 0i32, 0u32]);
+            assert_eq!(seen(), expected, "word {word:x}");
+            let scaled = ((20000.0f64 / 32767.0) as f32).to_bits();
+            let zoomed = calls_to(&e, MAGNITUDE_00408820)
+                .iter()
+                .any(|c| c[0] == scaled);
+            assert_eq!(zoomed, word == 0, "word {word:x}");
+        }
     }
 
     #[test]

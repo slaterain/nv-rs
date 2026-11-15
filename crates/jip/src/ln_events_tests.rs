@@ -248,8 +248,8 @@ fn input_handlers() {
     assert!(state(&mut e).keys.contains_key(&0x1e));
 }
 
-fn key(e: &mut Engine, k: u32) -> &mut nvse::input::KeyInfo {
-    &mut e.ext::<nvse::Nvse>().input.keys[k as usize]
+fn key(e: &mut Engine, k: u32) -> crate::test_support::KeyEdit<'_> {
+    crate::test_support::key(e, k)
 }
 
 /// One frame's checks: keys and controls by their raw states; the cell left and entered; the
@@ -331,22 +331,22 @@ fn the_pad() {
     state(&mut e).triggers[1].insert(S1);
     state(&mut e).triggers[2].insert(S2);
     state(&mut e).flags |= ON_TRIGGER;
-    e.ext::<Jip>().input.ready = true;
-    e.ext::<Jip>().input.pad.buttons = 0x3000;
-    e.ext::<Jip>().input.pad.left_trigger = 9;
+    crate::input::state(&mut e).ready = true;
+    crate::input::state(&mut e).pad.buttons = 0x3000;
+    crate::input::state(&mut e).pad.left_trigger = 9;
     e.mem.set_u32(PLAYER_REF + 0x40, CELL_A);
     process(&mut e);
     assert_eq!(calls(), [(S1, 0, vec![0x3000]), (S1, 0, vec![0])]);
-    e.ext::<Jip>().input.pad.buttons = 0x1000;
-    e.ext::<Jip>().input.pad.left_trigger = 0;
-    e.ext::<Jip>().input.pad.right_trigger = 1;
+    crate::input::state(&mut e).pad.buttons = 0x1000;
+    crate::input::state(&mut e).pad.left_trigger = 0;
+    crate::input::state(&mut e).pad.right_trigger = 1;
     process(&mut e);
     assert_eq!(
         calls(),
         [(S2, 0, vec![0x2000])],
         "B went up; the triggers' other sets empty"
     );
-    e.ext::<Jip>().input.pad.right_trigger = 0;
+    crate::input::state(&mut e).pad.right_trigger = 0;
     process(&mut e);
     assert_eq!(calls(), [(S2, 0, vec![1])], "the right trigger up");
 }

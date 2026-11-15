@@ -28,8 +28,14 @@ pub fn engine() -> Engine {
 /// twice keeps its bytes), then [`crate::install_as`]. A command is then called through its
 /// record with [`call`]; the call's data is at [`DATA`] (64 KB).
 pub fn install_into(e: &mut Engine) {
+    install_into_as(e, true);
+}
+
+/// [`install_into`] with JIP answering "installed" or not (`answers_installed`): the engine
+/// crates' tests of a translation with JIP present but not installed.
+pub fn install_into_as(e: &mut Engine, answers_installed: bool) {
     prepare(e);
-    crate::install_as(e, true);
+    crate::install_as(e, answers_installed);
 }
 
 /// What [`engine`] does to a new engine.
@@ -38,8 +44,12 @@ fn prepare(e: &mut Engine) {
     e.map(CONSOLE_OPEN & !0xfff, 0x1000);
     e.map(DATA, 0x1_0000);
     // The processes' vtables (HighProcess 0x01087864, MiddleHighProcess 0x0108904C), where JIP
-    // writes its hit-data routines once installed.
-    e.map(0x0108_7000, 0x3000);
+    // writes its hit-data routines once installed, and the player's MagicTarget vtable slot
+    // 0x0108A9B4 (game_patches::gp, G122).
+    e.map(0x0108_7000, 0x4000);
+    // `ExtraTimeLeft`'s vtable (0x010158FC), whose two slots JIP's ExtraJIP framework writes
+    // (step 3.9 GH1).
+    e.map(0x0101_5000, 0x1000);
     // The queued references' vtables (0x01016BA4 to 0x01016D7C), where JIP writes its attaches
     // (game_patches::gp).
     e.map(0x0101_6000, 0x1000);
@@ -190,4 +200,41 @@ pub fn int_arg(v: i32) -> Vec<u8> {
 /// two bytes alone, no type byte.
 pub fn short_arg(v: u16) -> Vec<u8> {
     v.to_le_bytes().to_vec()
+}
+
+/// xNVSE's record of key `k`, for a test to change; the keys' lock-free copy
+/// (`nvse::input::publish_key_states`, which a device read writes) is written when it goes, so
+/// JIP's key reads (which read that copy) see the change.
+pub fn key(e: &mut Engine, k: u32) -> KeyEdit<'_> {
+    KeyEdit { e, k: k as usize }
+}
+
+/// [`key`]'s guard.
+pub struct KeyEdit<'a> {
+    e: &'a mut Engine,
+    k: usize,
+}
+
+impl std::ops::Deref for KeyEdit<'_> {
+    type Target = nvse::input::KeyInfo;
+    fn deref(&self) -> &nvse::input::KeyInfo {
+        &self
+            .e
+            .ext_get::<nvse::Nvse>()
+            .expect("xNVSE is installed")
+            .input
+            .keys[self.k]
+    }
+}
+
+impl std::ops::DerefMut for KeyEdit<'_> {
+    fn deref_mut(&mut self) -> &mut nvse::input::KeyInfo {
+        &mut self.e.ext::<nvse::Nvse>().input.keys[self.k]
+    }
+}
+
+impl Drop for KeyEdit<'_> {
+    fn drop(&mut self) {
+        nvse::input::publish_key_states(self.e);
+    }
 }

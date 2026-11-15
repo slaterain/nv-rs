@@ -1420,3 +1420,61 @@ fn helpers() {
     assert_eq!(slash_pos(b"ab\\c/d"), Some(2));
     assert_eq!(slash_pos(b"abc"), None);
 }
+
+const COMPRESS_FN: u32 = 0x00a1_ce70;
+
+thread_local! {
+    /// The text the built-in UIO handed to each `Tile::ReadFile` of `jip_temp.xml`.
+    static INJECTED: std::cell::RefCell<Vec<Vec<u8>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[test]
+fn inject_component_goes_through_the_built_in_uio_only() {
+    let mut e = setup();
+    tree(&mut e);
+    let inject = |e: &mut Engine, path: &[u8], xml: &[u8]| call(e, 0x260a, &[s(path), s(xml)]).1;
+    // `Menu::CompressAndStoreXML(name, text)`: the text as the game's storage.
+    e.register(COMPRESS_FN, |e, w| {
+        record(COMPRESS_FN, w);
+        let text = nvse::table::guest_text(e, w[1]);
+        let data = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.write(data, &[text.as_slice(), b"\0"].concat());
+        let storage = e.mem.alloc(8);
+        e.mem.set_u32(storage, text.len() as u32);
+        e.mem.set_u32(storage + 4, data);
+        eax(storage)
+    });
+    e.register(READ_FILE_FN, |e, w| {
+        record(READ_FILE_FN, w);
+        let path = nvse::table::guest_text(e, w[1]);
+        if path != b"jip_temp.xml" {
+            return eax(0);
+        }
+        let text = e.ext::<uio::Uio>().extern_text.clone().unwrap_or_default();
+        INJECTED.with(|i| i.borrow_mut().push(text));
+        eax(t(62))
+    });
+    // UIO off: JIP would write `jip_temp.xml` into the game's folder; here nothing is done.
+    assert_eq!(inject(&mut e, b"InventoryMenu/Box", b"<rect/>"), 0.0);
+    assert!(calls_to(READ_FILE_FN).is_empty());
+    assert!(calls_to(COMPRESS_FN).is_empty());
+    // On: the text read into the tile through UIO, under `jip_temp.xml`.
+    uio::set_on(&mut e, true);
+    uio::install(&mut e);
+    assert_eq!(
+        inject(&mut e, b"InventoryMenu/Box", br#"<rect name="x"/>"#),
+        1.0
+    );
+    assert_eq!(calls_to(READ_FILE_FN)[0][0], t(2));
+    assert_eq!(
+        INJECTED.with(|i| i.borrow().clone()),
+        vec![br#"<rect name="x"/>"#.to_vec()]
+    );
+    assert!(e.ext::<uio::Uio>().extern_text.is_none());
+    // A path ending at a trait, an unknown tile, an empty text: nothing read.
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(inject(&mut e, b"InventoryMenu/Box/id", b"<rect/>"), 0.0);
+    assert_eq!(inject(&mut e, b"InventoryMenu/No", b"<rect/>"), 0.0);
+    assert_eq!(inject(&mut e, b"InventoryMenu/Box", b""), 0.0);
+    assert!(calls_to(READ_FILE_FN).is_empty());
+}

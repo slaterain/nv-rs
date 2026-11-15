@@ -21,8 +21,8 @@ fn setup() -> Engine {
     e
 }
 
-fn input(e: &mut Engine) -> &mut crate::input::State {
-    &mut e.ext::<Jip>().input
+fn input(e: &mut Engine) -> crate::input::Edit<'_> {
+    crate::input::state(e)
 }
 
 fn eval(e: &mut Engine, opcode: u32, arg1: u32) -> f64 {
@@ -257,4 +257,66 @@ fn stick_mods() {
     assert_eq!(run(&mut e, 0x289d, &[n(0)]), 1.0, "one direction is enough");
     run(&mut e, 0x289e, &[n(1), n(0)]);
     assert_eq!(input(&mut e).mods.stick_skip, 0x04, "the right's bits only");
+}
+
+/// The twelve conditions read the lock-free pad state: while a second engine of the run (a real
+/// thread's) holds JIP's shared slot, each eval answers on this engine (asking for the slot here
+/// would be refused: two engines on one thread), with the values a script set before, and the
+/// second engine sees the same state (one for the run).
+#[test]
+fn the_conditions_answer_while_another_engine_holds_jips_state() {
+    let mut e = setup();
+    input(&mut e).pad = Pad {
+        buttons: 0x1010,
+        left_trigger: 0xff,
+        right_trigger: 0x33,
+        thumb_lx: 32767,
+        thumb_ly: -32768,
+        thumb_rx: 9000,
+        thumb_ry: -9000,
+        ..Pad::default()
+    };
+    run(&mut e, 0x2295, &[n(0x2000)]);
+    run(&mut e, 0x2297, &[n(0x4000)]);
+    run(&mut e, 0x22a5, &[n(1)]);
+    run(&mut e, 0x22a7, &[n(0)]);
+    run(&mut e, 0x289e, &[n(1), n(1)]);
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(
+        other.ext::<crate::Jip>().installed,
+        "the other engine holds it"
+    );
+    assert_eq!(eval(&mut e, 0x2204, 0x0010), 1.0, "IsButtonPressed");
+    assert_eq!(eval(&mut e, 0x2205, 0), stick(32767, 7849), "GetLeftStickX");
+    assert_eq!(
+        eval(&mut e, 0x2206, 0),
+        stick(-32768, 7849),
+        "GetLeftStickY"
+    );
+    assert_eq!(eval(&mut e, 0x2207, 0), stick(9000, 8689), "GetRightStickX");
+    assert_eq!(
+        eval(&mut e, 0x2208, 0),
+        stick(-9000, 8689),
+        "GetRightStickY"
+    );
+    assert_eq!(eval(&mut e, 0x2209, 0), 1.0, "GetLeftTrigger");
+    assert_eq!(eval(&mut e, 0x220a, 0), trigger(0x33), "GetRightTrigger");
+    assert_eq!(eval(&mut e, 0x2296, 0x2000), 1.0, "IsButtonDisabled");
+    assert_eq!(eval(&mut e, 0x2299, 0x4000), 1.0, "IsButtonHeld");
+    assert_eq!(
+        eval(&mut e, 0x2299, 0x0001),
+        0.0,
+        "IsButtonHeld: a button that passes but is not held"
+    );
+    assert_eq!(eval(&mut e, 0x22a6, 1), 1.0, "IsTriggerDisabled");
+    assert_eq!(eval(&mut e, 0x22a9, 0), 1.0, "IsTriggerHeld");
+    assert_eq!(eval(&mut e, 0x289d, 1), 1.0, "IsStickDisabled");
+    assert_eq!(
+        crate::input::mods(&mut other).button_hold,
+        0x4000,
+        "one state for the run"
+    );
+    engine_core::extend::release_held_for_test();
 }
