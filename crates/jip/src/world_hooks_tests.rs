@@ -695,6 +695,45 @@ fn an_info_under_two_topics_takes_get_owner_topics_answer() {
     );
 }
 
+/// With JIP's game patch "Store parent TESTopic" on (step 3.9a: the host's row), the handler reads
+/// the info's recorded topic, the last its load linked (here the second topic, where the exe's
+/// walk answers the first), as JIP reads its word: no call of `GetOwnerTopic`.
+#[test]
+fn an_info_under_two_topics_takes_the_last_linked_with_jips_patch() {
+    let mut e = world();
+    const SECOND_TOPIC: u32 = AREA + 0x4800;
+    form(&mut e, SECOND_TOPIC, TOPIC, 0x0100_0010, false);
+    // No jip_nvse.ini (`CreateFileA` finds none): JIP's defaults.
+    e.register(0x00fd_f088, |_, _| Ret {
+        eax: 0xffff_ffff,
+        ..Ret::default()
+    });
+    crate::game_patches::set_row(&mut e, true);
+    e.site(0x0061_e086, &[TOPIC_FORM, INFO]);
+    e.site(0x0061_e086, &[SECOND_TOPIC, INFO]);
+    run(
+        &mut e,
+        SET_ON_DIALOG_TOPIC,
+        0,
+        &[form_arg(R_S1), int_arg(1), form_arg(R_TOPIC)],
+    );
+    e.ext::<Jip>()
+        .world_hooks
+        .dialog_topic
+        .entry(SECOND_TOPIC)
+        .or_default()
+        .insert(SCRIPT_TWO);
+    crate::script_call::calls();
+    e.call_log = Some(vec![]);
+    assert_eq!(site(&mut e, 0x0061_f184, &[INFO, 0, REF]), None);
+    let log = e.call_log.take().unwrap();
+    assert_eq!(
+        crate::script_call::calls(),
+        vec![(SCRIPT_TWO, REF, vec![SECOND_TOPIC])]
+    );
+    assert!(log.iter().all(|c| c.0 != GET_OWNER_TOPIC), "no call");
+}
+
 #[test]
 fn dialogue_topic_events() {
     let mut e = world();

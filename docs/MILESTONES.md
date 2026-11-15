@@ -80,10 +80,19 @@ compiled to the same bytes as xNVSE writes them (byte tests from its source's ru
 compiled-script cache file is left out as a speed cache only. JIP LN NVSE's commands are in progress (README's
 system table has the counts; batch 10 of 2026-11-14 adds the maths, utility, load screen, terminal, cell,
 radio, reference and game data commands, batch 11 the actor base, equipped item, hotkey, base container and
-sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters, lane G the references' physics getters, ray casts and crosshair pick); its engine hooks (step 3.5) are built in at their seams: the UI, actor
+sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters,
+lane A1 the first half of the actor commands: processes, combat and detection lists, leveling data, creature
+models, lane D the game state commands of `jip_fn_miscellaneous`, lane H JIP's position marker with `PlaceAtCell` and
+the added script variables with their co-save record applied at a load, lane G the references' physics getters, ray casts and crosshair pick); its engine hooks (step 3.5) are built in at
+their seams: the UI, actor
 and AI hooks, and since 2026-11-14 the world hooks (step 3.5c) and `CCCSetEquipped` with its always-on `GetCannotWear`
 patch (step 3.5d), switched on only by its commands and only once JIP answers "installed" (left for later:
 `ToggleImmortalMode` with its hit patches in step 3.9).
+JIP's game patches (step 3.9, its changes to the game's own code) are fix rows behind one switch,
+`NV_JIP_GAME_PATCHES` (on in the fixes preset), read from the player's `jip_nvse.ini` as JIP reads it
+(`crates/jip/src/game_patches`; per-area seam tables in `engine-core/src/extend/patch_rows`, so several
+can be built at once); the first (3.9a) remembers each dialogue line's topic as JIP does and starts
+every command's result at 0. Like the rest of JIP, they act only once JIP answers "installed".
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
