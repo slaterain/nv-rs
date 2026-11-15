@@ -1062,7 +1062,15 @@ fn remove_item_target_cmd(e: &mut Engine, w: &[u32]) -> Ret {
     let (quantity, clr_owner) = (read.int(2, 0) as i32, read.int(3, 0));
     let base = base_of(e, a.this_obj);
     if base != 0 && super::ln_fn_inventory::container_of(e, base) != 0 {
-        remove_item_target(e, a.this_obj, form, target, quantity, clr_owner == 0, &mut Vec::new());
+        remove_item_target(
+            e,
+            a.this_obj,
+            form,
+            target,
+            quantity,
+            clr_owner == 0,
+            &mut Vec::new(),
+        );
     }
     handled(true)
 }

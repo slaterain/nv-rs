@@ -582,7 +582,11 @@ fn equipped_armor_refs_per_slot() {
         "the armour in two slots; the weapon and the quest item are no armour"
     );
     let r0 = by_id(&mut e, ids[0]);
-    assert_eq!(ir(&mut e, r0), (ACTOR, ARMO, 3, XDL), "its worn stack, the entry's count");
+    assert_eq!(
+        ir(&mut e, r0),
+        (ACTOR, ARMO, 3, XDL),
+        "its worn stack, the entry's count"
+    );
     // Not worn: an empty array still.
     e.mem.set_u8(XDL + 8 + 2, 0);
     let (_, res) = call_on(&mut e, 0x28d1, ACTOR, &[]);
@@ -923,7 +927,12 @@ fn equipped_item_ref_first_covering_slot_weapon_and_null_forms() {
     e.mem.set_u32(null_entry, lists);
     e.mem.set_u32(null_entry + 4, 1);
     e.mem.set_u32(null_entry + 8, 0);
-    put_list(&mut e, FORMS + 0x8200, NODES + 0x100, &[null_entry, ENTRY_A, ENTRY_W]);
+    put_list(
+        &mut e,
+        FORMS + 0x8200,
+        NODES + 0x100,
+        &[null_entry, ENTRY_A, ENTRY_W],
+    );
     e.mem.set_u32(RESULT, 0);
     call_on(&mut e, 0x2839, ACTOR, &[n(2)]);
     let id = form_result(&e);
