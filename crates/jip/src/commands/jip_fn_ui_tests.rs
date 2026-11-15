@@ -550,7 +550,7 @@ fn closing_click(e: &mut Engine, by_tile: bool) {
     if by_tile {
         e.register(CLICK_FN, |e, w| {
             record(CLICK_FN, w);
-            if calls_to(CLICK_FN).len() == 3 {
+            if CALLS.with(|c| c.borrow().len()) == 3 {
                 e.mem.set_u32(MENU_ARRAY + 4, 0);
             }
             eax(0)
@@ -558,7 +558,7 @@ fn closing_click(e: &mut Engine, by_tile: bool) {
     } else {
         e.register(CLICK_FN, |e, w| {
             record(CLICK_FN, w);
-            if calls_to(CLICK_FN).len() == 3 {
+            if CALLS.with(|c| c.borrow().len()) == 3 {
                 e.mem.set_u8(0x011f_308f + 0x3ea, 0);
             }
             eax(0)
@@ -657,6 +657,35 @@ fn parent_chain_running_back_ends() {
     CALLS.with(|c| c.borrow_mut().clear());
     assert_eq!(call(&mut e, 0x2687, &[s(b"InventoryMenu/Box/Item")]).1, 0.0);
     assert!(calls_to(CLICK_FN).is_empty());
+}
+
+#[test]
+fn parent_menu_found_within_65536_steps() {
+    // Item's parents: a chain of plain tiles with a menu tile at the end. The walk looks at
+    // Item and 65,535 parents: a menu tile as the 65,535th parent is found, as the 65,536th not.
+    const CHAIN: u32 = 0x0500_0000;
+    let at = |i: u32| CHAIN + 0x40 * i;
+    let mut e = setup();
+    let (_, m) = tree(&mut e);
+    e.map(CHAIN, 0x41_0000);
+    in_menu_mode(&mut e);
+    for i in 0..65_536 {
+        e.mem.set_u32(at(i), TILE_VT);
+        e.mem.set_u32(at(i) + 0x28, at(i + 1));
+    }
+    e.mem.set_u32(t(3) + 0x28, at(0));
+    let click = |e: &mut Engine| {
+        CALLS.with(|c| c.borrow_mut().clear());
+        let res = call(e, 0x2687, &[s(b"InventoryMenu/Box/Item")]).1;
+        (res, calls_to(CLICK_FN).len())
+    };
+    for (last, found) in [(65_534u32, true), (65_535, false)] {
+        e.mem.set_u32(at(last), 0x0106_ed44);
+        e.mem.set_u32(at(last) + 0x3c, m);
+        let want = if found { (1.0, 1) } else { (0.0, 0) };
+        assert_eq!(click(&mut e), want, "menu tile as parent {}", last + 1);
+        e.mem.set_u32(at(last), TILE_VT);
+    }
 }
 
 #[test]
