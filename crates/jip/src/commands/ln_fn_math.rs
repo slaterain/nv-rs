@@ -310,7 +310,7 @@ fn rsqrt_estimate(v: f32) -> f32 {
 
 /// The square root both distance routines take of a sum of squares `s`: 0 (and NaN) answer
 /// themselves; else `s * ((3 - s * r * r) * r * 0.5)` with `r` the estimate.
-fn newton_sqrt(s: f32) -> f32 {
+pub(crate) fn newton_sqrt(s: f32) -> f32 {
     if s == 0.0 || s.is_nan() {
         return s;
     }

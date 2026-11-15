@@ -11,6 +11,7 @@
 pub mod arrays;
 pub mod extra;
 pub mod forms;
+pub(crate) mod havok_refs;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
 pub mod jip_fn_armor;
@@ -33,6 +34,7 @@ pub mod jip_fn_input;
 pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_misc_ref;
+pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
 pub mod jip_fn_projectile;
@@ -94,6 +96,7 @@ pub const ALL_CONDITIONS: &[Conditions] = &[
     ln_fn_gamepad::CONDITIONS,
     jip_fn_ccc::CONDITIONS,
     jip_fn_weapon::CONDITIONS,
+    jip_fn_misc_ref_havok::CONDITIONS,
 ];
 
 /// A module's condition-only commands (`DEFINE_CMD_COND_ONLY` (JIP LN NVSE)): each opcode with its
@@ -160,6 +163,7 @@ pub const ALL: &[Handlers] = &[
     ln_fn_gamepad::COMMANDS,
     jip_fn_input::COMMANDS,
     jip_fn_ccc::COMMANDS,
+    jip_fn_misc_ref_havok::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
