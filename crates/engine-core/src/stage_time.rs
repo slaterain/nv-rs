@@ -353,6 +353,9 @@ pub fn set_on(on: bool) {
 thread_local! {
     /// The switch is on for this thread ([`on_here`]).
     static HERE: Cell<bool> = const { Cell::new(false) };
+    /// [`on_here`]'s clock for this thread (nanoseconds plus 1), moved only by [`advance`]; `None`: the real
+    /// clock.
+    static CLOCK: Cell<Option<u64>> = const { Cell::new(None) };
 }
 
 /// Serialises the tests that switch the aid on for their own thread.
@@ -360,10 +363,13 @@ static HERE_LOCK: Mutex<()> = Mutex::new(());
 
 /// The switch on for the calling thread only, until the guard drops (the engine crates' tests of the marks'
 /// places: other tests in the same process, on other threads, record nothing meanwhile). The values start empty.
+/// The thread's marks read a test clock that stands still until [`advance`] moves it, so the tests' times are
+/// exact (a real sleep rounds up to the timer tick and oversleeps on a loaded machine).
 #[doc(hidden)]
 pub fn on_here() -> Here {
     let lock = HERE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
     HERE.with(|h| h.set(true));
+    CLOCK.with(|c| c.set(Some(1)));
     STATE.store(3, Relaxed);
     MARKS.clear();
     Here { _lock: lock }
@@ -375,16 +381,27 @@ pub struct Here {
     _lock: MutexGuard<'static, ()>,
 }
 
+/// Moves the calling thread's [`on_here`] test clock on by `ns` (no test clock: nothing).
+#[doc(hidden)]
+pub fn advance(ns: u64) {
+    CLOCK.with(|c| c.set(c.get().map(|t| t + ns)));
+}
+
 impl Drop for Here {
     fn drop(&mut self) {
         HERE.with(|h| h.set(false));
+        CLOCK.with(|c| c.set(None));
         STATE.store(1, Relaxed);
         MARKS.clear();
     }
 }
 
-/// Nanoseconds since the clock's start, plus 1 (so never 0).
+/// Nanoseconds since the clock's start, plus 1 (so never 0); [`on_here`]'s test clock on its thread. Read only
+/// while the aid is on.
 fn now_ns() -> u64 {
+    if let Some(t) = CLOCK.with(Cell::get) {
+        return t;
+    }
     START.get_or_init(Instant::now).elapsed().as_nanos() as u64 + 1
 }
 
@@ -415,7 +432,8 @@ pub fn job(ns: u64) {
 /// A step's body: timed into its column until dropped.
 pub struct Scope {
     column: Column,
-    start: Option<Instant>,
+    /// [`now_ns`] at the start; `None` while off.
+    start: Option<u64>,
 }
 
 /// Starts timing `column` (a step). Off: a guard that does nothing.
@@ -423,7 +441,7 @@ pub struct Scope {
 pub fn scope(column: Column) -> Scope {
     Scope {
         column,
-        start: on().then(Instant::now),
+        start: on().then(now_ns),
     }
 }
 
@@ -431,7 +449,7 @@ impl Drop for Scope {
     #[inline]
     fn drop(&mut self) {
         if let Some(start) = self.start {
-            MARKS.add(self.column as usize, start.elapsed().as_nanos() as u64);
+            MARKS.add(self.column as usize, now_ns().saturating_sub(start));
         }
     }
 }
@@ -545,6 +563,8 @@ mod tests {
     /// join or job leaves a value, and a scope reads no clock; on, they do.
     #[test]
     fn switch_off_marks_nothing_and_on_marks() {
+        // Not while `on_here_reads_its_test_clock` holds the switch.
+        let _lock = HERE_LOCK.lock().unwrap_or_else(PoisonError::into_inner);
         set_on(false);
         let _ = take();
         point(Point::Idle);
@@ -585,5 +605,32 @@ mod tests {
         assert_eq!(v[j], (1.0, 1));
         assert!(v[Column::JoinWait as usize].1 >= 1);
         assert!(v[Column::Job as usize].1 >= 1);
+    }
+
+    /// [`on_here`]'s marks read its test clock: points and scopes measure exactly what [`advance`] moved,
+    /// nothing while it stands still; the guard's drop gives the real clock back.
+    #[test]
+    fn on_here_reads_its_test_clock() {
+        {
+            let _here = on_here();
+            point(Point::Idle);
+            point(Point::SwapIn);
+            {
+                let _s = scope(Column::DrawRest);
+                advance(7_000);
+            }
+            advance(1_500);
+            point(Point::DrawIn);
+            point(Point::Idle);
+            let v = take();
+            assert_eq!(v[Column::U as usize], (0.0, 1));
+            assert_eq!(v[Column::DrawRest as usize], (7.0, 1));
+            assert_eq!(v[Column::S1 as usize], (8.5, 1));
+            assert_eq!(v[Column::P2 as usize], (0.0, 0));
+        }
+        assert!(CLOCK.with(Cell::get).is_none(), "the real clock again");
+        let a = now_ns();
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        assert!(now_ns() > a);
     }
 }
