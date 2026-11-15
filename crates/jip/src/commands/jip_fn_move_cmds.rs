@@ -1,29 +1,27 @@
-//! JIP LN NVSE's commands that move a reference through its own `TESObjectREFR::SetPos`,
-//! `SetAngle` and `MoveToCell` ([`super::ref_move`]): `MoveToCell`, `MoveToEditorPosition`,
-//! `SetPosEx`, `MoveToNode` (`functions_jip/jip_fn_misc_ref.h`) and `MoveToPosStr`
+//! JIP LN NVSE's commands that move or turn a reference through its own `TESObjectREFR::SetPos`,
+//! `SetAngle`, `Rotate`, `RotateAroundPoint` and `MoveToCell` ([`super::ref_move`]): `MoveToCell`,
+//! `MoveToEditorPosition`, `SetPosEx`, `MoveToNode`, `SetAngleEx`, `RotateAroundPoint`,
+//! `MoveToReticle` (`functions_jip/jip_fn_misc_ref.h`) and `MoveToPosStr`
 //! (`functions_jip/jip_fn_ccc.h`, in its own list for the table's file check).
 //!
-//! Left for later, with what each waits for:
-//! - `SetAngleEx` (`jip_fn_misc_ref.h`): its modes 1 to 4 need JIP's `SetAngle` modes 1 and 2
-//!   and `TESObjectREFR::Rotate`, with JIP's matrix maths `NiMatrix33::FromEulerPRYInv`,
-//!   `ToEulerPRY`, `From2Points` and `MultiplyMatrices` (`internal/Ni_types.cpp`), not yet
-//!   translated; only mode 0 would be possible today, so the command waits whole.
-//! - `RotateAroundPoint` (`jip_fn_misc_ref.h`): JIP's `TESObjectREFR::RotateAroundPoint` needs
-//!   `NiMatrix33::FromEulerYPR`, `NiTransform::RotateOrigin`, `ToEulerPRY` and
-//!   `NiVector3::GetRotatedPos` (the same maths batch).
-//!
-//! `MoveToNode` (`jip_fn_misc_ref.h`) moves to a node of another reference found by lane G's
-//! `TESObjectREFR::GetNode` (`havok_refs::node`).
+//! `MoveToNode` moves to a node of another reference found by lane G's `TESObjectREFR::GetNode`
+//! (`havok_refs::node`); `MoveToReticle` to the point lane G's ray cast finds from the main
+//! camera (`havok_refs::ray_cast`, `hit_coords`).
 
-use super::havok_refs::node as ref_node;
+use super::havok_refs::{self as h, node as ref_node};
 use super::jip_fn_misc_ref::{
     floats3, from_euler_pry, matrix_at, multiply_vector, ref_ni_node, ACTOR_START_CELL,
     ACTOR_START_POS, ACTOR_START_Z_ROT, CELL, EXTRA_STARTING_POSITION,
     EXTRA_STARTING_WORLD_OR_CELL, EXTRA_WORD, FLT_180_D_PI, STARTING_ROTATION, WORLD_CELL,
     WORLD_ROTATE, WORLD_SPACE, WORLD_TRANSLATE,
 };
+use super::jip_fn_misc_ref_havok::node_transform;
 use super::ln_fn_math::cell_or_persistent;
-use super::ref_move::{move_to_cell, move_to_cell_at, set_angle, set_pos_to};
+use super::nif_nodes::{is_player, to_euler_pry_inv};
+use super::ref_move::{
+    move_to_cell, move_to_cell_at, rotate, rotate_around_point, set_angle, set_angle_mode,
+    set_pos_to, CELL_WORLD_SPACE, PARENT_CELL,
+};
 use super::{buffer_arg, extra, is_actor, type_of, Handlers, FLT_PI_D_180};
 use engine_core::prelude::*;
 use nvse::commands::Read;
@@ -35,6 +33,9 @@ pub static COMMANDS: Handlers = &[
     (0x2759, move_to_editor_position),
     (0x27f0, set_pos_ex),
     (0x2867, move_to_node),
+    (0x27f8, set_angle_ex),
+    (0x2926, rotate_around_point_cmd),
+    (0x27f3, move_to_reticle),
 ];
 
 #[rustfmt::skip]
@@ -49,6 +50,11 @@ const POSITION: u32 = 0x30;
 /// (`char nodeName[0x40]`).
 const POS_STR_SIZE: usize = 0x40;
 const NODE_NAME_SIZE: usize = 0x40;
+/// The world scene graph (`*011DEB7C`, read by `0045C670`) and its camera (`SceneGraph::camera`
+/// +0xAC, read by `006629F0`); `MoveToReticle`'s cast layer (JIP's 6).
+const SCENE_GRAPH: u32 = 0x011d_eb7c;
+const SCENE_GRAPH_CAMERA: u32 = 0xac;
+const RETICLE_LAYER: i32 = 6;
 
 /// `NOT_ID(cell, TESObjectCELL)` then `NOT_ID(cell, TESWorldSpace)`: the cell itself, a
 /// worldspace's persistent cell (+0x34), or `None` for another type. nv-rs's own: a
@@ -256,6 +262,115 @@ fn move_to_pos_str(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let z = crate::utility::str_to_int(rest) as f32;
     move_to_cell_at(e, a.this_obj, cell, [x, y, z]);
+    a.set_result(e, 1.0);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_SetAngleEx_Execute.
+/// `ref.SetAngleEx x y z [transform]` (degrees, each times `FltPId180` as `GET_PS(8)`'s lanes):
+/// 2 JIP's `Rotate`; 3 `SetAngle` mode 1 of the angles plus the `ToEulerPRYInv` of the root's
+/// world rotation (the player, or without 3D: of the reference's angles' matrix); 4 `SetAngle`
+/// mode 2 toward the point `x y z` (no conversion); any other value `SetAngle` with its low byte
+/// as the mode (JIP passes the `UInt32` as a `UInt8`: 0 the angles, 1 `FromEulerPRYInv`, from 2 up
+/// the point mode, of the converted values). No result.
+fn set_angle_ex(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok || a.this_obj == 0 {
+        return handled(true);
+    }
+    let refr = a.this_obj;
+    let v = [read.float(0, 0.0), read.float(1, 0.0), read.float(2, 0.0)];
+    let rad = v.map(|x| x * FLT_PI_D_180);
+    match read.int(3, 0) {
+        2 => rotate(e, refr, rad),
+        3 => {
+            let node = ref_ni_node(e, refr);
+            let m = if node != 0 && !is_player(e, refr) {
+                matrix_at(e, node + WORLD_ROTATE)
+            } else {
+                from_euler_pry(floats3(e, refr + ROTATION))
+            };
+            let inv = to_euler_pry_inv(&m);
+            let sum = [rad[0] + inv[0], rad[1] + inv[1], rad[2] + inv[2]];
+            set_angle_mode(e, refr, sum, 1);
+        }
+        4 => set_angle_mode(e, refr, v, 2),
+        t => set_angle_mode(e, refr, rad, t as u8),
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_RotateAroundPoint_Execute.
+/// `ref.RotateAroundPoint ox oy oz x y z [skipAngles]`: JIP's `RotateAroundPoint` about the point
+/// by the angles (degrees, times `FltPId180`). No result.
+fn rotate_around_point_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok || a.this_obj == 0 {
+        return handled(true);
+    }
+    let origin = [read.float(0, 0.0), read.float(1, 0.0), read.float(2, 0.0)];
+    let rad = [read.float(3, 0.0), read.float(4, 0.0), read.float(5, 0.0)];
+    let rad = rad.map(|x| x * FLT_PI_D_180);
+    rotate_around_point(e, a.this_obj, rad, origin, read.int(6, 0));
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_MoveToReticle_Execute.
+/// `ref.MoveToReticle [range x y z translate]`: when the player is in a cell, the point the main
+/// camera looks at (JIP's `RayCastCoords`: lane G's cast from the camera's world translation along
+/// its world rotation's column 1, up to `range` (50000) on layer 6) plus the offsets, moved to by
+/// JIP's `MoveToCell` in the player's cell (in a worldspace: its persistent cell); result 1. Only
+/// when the cast counts as found or `translate` is not 0.
+///
+/// The main camera is the world scene graph's (`*011DEB7C` +0xAC: the call JIP's start hooks at
+/// `0086B0F4`, `006629F0`, reads it there), read when the command runs where JIP keeps the one it
+/// saw at the start.
+fn move_to_reticle(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok || a.this_obj == 0 {
+        return handled(true);
+    }
+    let range = read.float(0, 50000.0);
+    let mods = [read.float(1, 0.0), read.float(2, 0.0), read.float(3, 0.0)];
+    let translate = read.int(4, 0);
+    let Some(cell) = h::ptr(e, h::PLAYER).and_then(|p| h::ptr(e, p + PARENT_CELL)) else {
+        return handled(true);
+    };
+    // nv-rs's own: no scene graph, camera, player controller or `TES` casts nothing (JIP reads
+    // through them unchecked).
+    let camera = h::ptr(e, SCENE_GRAPH).and_then(|g| h::ptr(e, g + SCENE_GRAPH_CAMERA));
+    let Some((pos, rot)) = camera.and_then(|c| node_transform(e, c)) else {
+        return handled(true);
+    };
+    let Some(cast) = h::ray_cast(e, pos, rot, range, RETICLE_LAYER) else {
+        return handled(true);
+    };
+    let (coords, found) = h::hit_coords(e, &cast);
+    if !found && translate == 0 {
+        return handled(true);
+    }
+    let world = e.mem.u32(cell + CELL_WORLD_SPACE);
+    let cell = if world != 0 {
+        e.mem.u32(world + WORLD_CELL)
+    } else {
+        cell
+    };
+    // nv-rs's own: a worldspace without a persistent cell moves nowhere (JIP: a null cell).
+    if cell == 0 {
+        return handled(true);
+    }
+    let pos = [
+        coords[0] + mods[0],
+        coords[1] + mods[1],
+        coords[2] + mods[2],
+    ];
+    move_to_cell_at(e, a.this_obj, cell, pos);
     a.set_result(e, 1.0);
     handled(true)
 }

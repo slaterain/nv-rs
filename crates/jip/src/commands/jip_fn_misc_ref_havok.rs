@@ -572,7 +572,7 @@ fn is_grabbable(e: &mut Engine, w: &[u32]) -> Ret {
 // ---- game calls ----
 
 /// The node's world translation and the word after it (16 bytes) and world rotation.
-fn node_transform(e: &Engine, node: u32) -> Option<([f32; 4], [f32; 9])> {
+pub(crate) fn node_transform(e: &Engine, node: u32) -> Option<([f32; 4], [f32; 9])> {
     let pos = h::vec4(e, node.wrapping_add(h::WORLD_TRANSLATE))?;
     let mut rot = [0f32; 9];
     for (i, r) in rot.iter_mut().enumerate() {

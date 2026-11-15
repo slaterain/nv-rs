@@ -1,7 +1,9 @@
 //! JIP LN NVSE's own moves of a reference (`nvse/GameObjects.cpp`): `TESObjectREFR::SetPos`,
-//! `TESObjectREFR::SetAngle` (its absolute mode, `setMode` 0), `TESObjectREFR::MoveToCell`, and
-//! the helper they share, `NiNode::ResetCollision` (`internal/netimmerse.cpp`), built once here
-//! for the commands that move references (`jip_fn_move_cmds`).
+//! `TESObjectREFR::SetAngle` (every `setMode`), `TESObjectREFR::Rotate`,
+//! `TESObjectREFR::RotateAroundPoint`, `TESObjectREFR::MoveToCell`, and the helper they share,
+//! `NiNode::ResetCollision` (`internal/netimmerse.cpp`), built once here for the commands that
+//! move references (`jip_fn_move_cmds`). Their matrices are JIP's (`ni_matrix`, lane E's
+//! `FromEulerPRY`, lane F's `ToEulerPRY`).
 //!
 //! What each writes, as JIP writes it:
 //! - `SetPos`: the game's `SetLocationOnReference` (`00575830`, `thiscall` (reference, position);
@@ -24,7 +26,12 @@
 //!   is an actor, with 3D: the matrix of the angles (JIP's `NiMatrix33::FromEulerPRY`,
 //!   `jip_fn_misc_ref`) into the root's local rotation (+0x34, 0x24 bytes), the collision reset
 //!   and the update as above; then always `MarkModified(2)` (`BGSSaveLoadGame::AddChange`,
-//!   `0084A690`).
+//!   `0084A690`). Modes 1 (`FromEulerPRYInv`) and 2 and up (`From2Points` toward the point)
+//!   store the matrix's `ToEulerPRY` as the angles instead.
+//! - `Rotate`: the root's local rotation (or, for the player or without 3D, the angles' matrix)
+//!   times `FromEulerPRYInv` of the turn; `RotateAroundPoint`: the root's local transform turned
+//!   about a point (`RotateOrigin`), or with `skipAngles` only the position (`GetRotatedPos`),
+//!   then `SetPos`.
 //! - `MoveToCell`: a reference with 3D whose cell (+0x40) is the destination, or shares its
 //!   non-null worldspace (+0xC0), is moved by `SetPos`; any other goes through JIP's temporary
 //!   position marker (`pos_marker`): the marker's cell, the reference's rotation and the position
@@ -42,17 +49,22 @@
 //! call their base function directly. JIP calls the functions above directly on the script's
 //! thread, with no lock and no task; so does the port.
 
-use super::jip_fn_misc_ref::{from_euler_pry, ref_ni_node as root_node};
+use super::jip_fn_misc_ref::{floats3, from_euler_pry, matrix_at, ref_ni_node as root_node};
+use super::ni_matrix::{
+    from_2_points, from_euler_pry_inv, from_euler_ypr, get_rotated_pos, multiply_matrices,
+    rotate_origin, to_euler_pry_lane3,
+};
+use super::nif_nodes::{is_player, to_euler_pry};
 use super::{extra, is_actor, pos_marker};
 use engine_core::prelude::*;
 
 /// `TESObjectREFR` (Xbox PDB): `rotation` +0x24, `position` +0x30, `pParentCell` +0x40 (the 3D root through `jip_fn_misc_ref`'s `GetRefNiNode`).
 const ROTATION: u32 = 0x24;
 const POSITION: u32 = 0x30;
-const PARENT_CELL: u32 = 0x40;
+pub(crate) const PARENT_CELL: u32 = 0x40;
 /// `TESObjectCELL::worldSpace` (JIP LN NVSE, `// C0`; the exe's `GetWorldSpace` 00575D70 reads
 /// the reference's cell's +0xC0).
-const CELL_WORLD_SPACE: u32 = 0xc0;
+pub(crate) const CELL_WORLD_SPACE: u32 = 0xc0;
 /// `NiAVObject::m_kLocal` (+0x34: rotation, 0x24 bytes; translation +0x58),
 /// `m_spCollisionObject` +0x1C; `NiNode::m_kChildren` (+0xA0 the array, +0xA6 the slots in use).
 const LOCAL_ROTATE: u32 = 0x34;
@@ -254,27 +266,129 @@ pub(crate) fn set_pos_to(e: &mut Engine, refr: u32, pos: [f32; 3]) {
     });
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: TESObjectREFR::SetAngle
-// (asm), setMode 0.
-/// The reference turned to the angles `pry` (radians; the fourth lane JIP masks off): see the
-/// module's list. JIP's modes 1 and 2 (`FromEulerPRYInv`/`From2Points` then `ToEulerPRY`) come
-/// with `SetAngleEx`.
+/// [`set_angle_mode`] in JIP's mode 0: the reference turned to the angles `pry` (radians).
 pub(crate) fn set_angle(e: &mut Engine, refr: u32, pry: [f32; 3]) {
-    for (i, v) in pry.into_iter().enumerate() {
-        e.mem.set_f32(refr + ROTATION + 4 * i as u32, v);
-    }
-    let m = from_euler_pry(pry);
+    set_angle_mode(e, refr, pry, 0);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: TESObjectREFR::SetAngle
+// (asm), every `setMode`.
+/// The reference turned by `v` in JIP's mode `mode` (its `dl`): 0 the angles themselves (stored,
+/// then their `FromEulerPRY` matrix); 1 the matrix `FromEulerPRYInv(v)`; 2 and up the matrix
+/// pointing from the point `v` to the reference's position (`From2Points(position, v)`); for 1
+/// and up the angles stored are the matrix's `ToEulerPRY`. Then, unless an actor, with 3D: that
+/// matrix into the root's local rotation (+0x34, 0x24 bytes), the collision reset and the update;
+/// always `MarkModified(2)`.
+pub(crate) fn set_angle_mode(e: &mut Engine, refr: u32, v: [f32; 3], mode: u8) {
+    let m = match mode {
+        0 => {
+            for (i, x) in v.into_iter().enumerate() {
+                e.mem.set_f32(refr + ROTATION + 4 * i as u32, x);
+            }
+            from_euler_pry(v)
+        }
+        _ => {
+            let m = if mode == 1 {
+                from_euler_pry_inv(v)
+            } else {
+                from_2_points(floats3(e, refr + POSITION), v)
+            };
+            // `movlps [esi+0x24], xmm0` (pitch, roll) and `movss [esi+0x2C], xmm6` (the yaw).
+            for (i, x) in to_euler_pry(&m).into_iter().enumerate() {
+                e.mem.set_f32(refr + ROTATION + 4 * i as u32, x);
+            }
+            m
+        }
+    };
     if !is_actor(e, refr) {
         let node = root_node(e, refr);
         if node != 0 {
-            for (i, v) in m.into_iter().enumerate() {
-                e.mem.set_f32(node + LOCAL_ROTATE + 4 * i as u32, v);
-            }
+            write_matrix(e, node + LOCAL_ROTATE, &m);
             reset_collision(e, node);
             update_node(e, node);
         }
     }
     extra::mark_modified(e, refr, CHANGED_MOVE);
+}
+
+fn write_matrix(e: &mut Engine, at: u32, m: &[f32; 9]) {
+    for (i, x) in m.iter().enumerate() {
+        e.mem.set_f32(at + 4 * i as u32, *x);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: TESObjectREFR::Rotate (asm).
+/// The reference turned further by `pry` (radians): `MarkModified(2)` first; then, unless it is
+/// the player (`refID` 0x14) or has no 3D, the root's local rotation times `FromEulerPRYInv(pry)`
+/// written back, its `ToEulerPRY` stored as the angles, and unless an actor the collision reset
+/// and the update; the player or a reference without 3D: the angles' own matrix times it, its
+/// `ToEulerPRY` stored, nothing else.
+pub(crate) fn rotate(e: &mut Engine, refr: u32, pry: [f32; 3]) {
+    let turn = from_euler_pry_inv(pry);
+    extra::mark_modified(e, refr, CHANGED_MOVE);
+    let node = if is_player(e, refr) {
+        0
+    } else {
+        root_node(e, refr)
+    };
+    let m = if node != 0 {
+        let m = multiply_matrices(&matrix_at(e, node + LOCAL_ROTATE), &turn);
+        write_matrix(e, node + LOCAL_ROTATE, &m);
+        m
+    } else {
+        multiply_matrices(&from_euler_pry(floats3(e, refr + ROTATION)), &turn)
+    };
+    for (i, x) in to_euler_pry(&m).into_iter().enumerate() {
+        e.mem.set_f32(refr + ROTATION + 4 * i as u32, x);
+    }
+    if node != 0 && !is_actor(e, refr) {
+        reset_collision(e, node);
+        update_node(e, node);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp:
+// TESObjectREFR::RotateAroundPoint (asm).
+/// The reference turned about `origin` by the yaw, pitch and roll angles `pry` (radians).
+/// `skip_angles` 0: needs 3D (else nothing): the root's local transform turned about the origin
+/// (`RotateOrigin` with `FromEulerYPR(pry)`), the angles stored as the new rotation's
+/// `ToEulerPRY` with its fourth lane over the position's x (`movups [ecx+0x24]`: 16 bytes; the
+/// game's `SetLocationOnReference` then writes the position), then `SetPos` to the root's new
+/// translation. Otherwise only the position, turned about the origin (`GetRotatedPos`), by
+/// `SetPos`.
+pub(crate) fn rotate_around_point(
+    e: &mut Engine,
+    refr: u32,
+    pry: [f32; 3],
+    origin: [f32; 3],
+    skip_angles: u32,
+) {
+    let m = from_euler_ypr(pry);
+    if skip_angles != 0 {
+        let pos = get_rotated_pos(&m, floats3(e, refr + POSITION), origin);
+        set_pos_to(e, refr, pos);
+        return;
+    }
+    let node = root_node(e, refr);
+    if node == 0 {
+        return;
+    }
+    let (rot, trans) = rotate_origin(
+        &matrix_at(e, node + LOCAL_ROTATE),
+        floats3(e, node + LOCAL_TRANSLATE),
+        &m,
+        origin,
+    );
+    write_matrix(e, node + LOCAL_ROTATE, &rot);
+    for (i, x) in trans.into_iter().enumerate() {
+        e.mem.set_f32(node + LOCAL_TRANSLATE + 4 * i as u32, x);
+    }
+    let angles = to_euler_pry(&rot);
+    for (i, x) in angles.into_iter().enumerate() {
+        e.mem.set_f32(refr + ROTATION + 4 * i as u32, x);
+    }
+    e.mem.set_f32(refr + POSITION, to_euler_pry_lane3(&rot));
+    set_pos(e, refr, node + LOCAL_TRANSLATE);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: TESObjectREFR::MoveToCell
