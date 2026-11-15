@@ -361,6 +361,9 @@ fn the_may_hold_flag_follows_writes_and_destroys_on_two_engines() {
     assert!(maps_may_hold(&mut e));
     e.mem.set_u32(REF + 0xc, TEMP_ID);
     destroy(&mut e, REF);
-    assert!(holds(&mut e) && maps_may_hold(&mut e), "mod 3 keeps its owner");
+    assert!(
+        holds(&mut e) && maps_may_hold(&mut e),
+        "mod 3 keeps its owner"
+    );
     release();
 }
