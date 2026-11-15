@@ -9283,6 +9283,39 @@ const DETECTION_FORMULA: u32 = 0x0064_2ed0;
 /// perception.
 const ACTOR_VALUE_PERCEPTION: u32 = 6;
 
+/// The detected actor's teammate test in [`detection_level_against_actor`] (`0056_6950`, the
+/// byte `+0x18D`), called at `0x8A0DAB`, `0x8A1291` and `0x8A131D`. JIP LN NVSE's
+/// `DetectionTeammateHook` (its patch G53, part of JIP once it answers "installed") replaces the
+/// three calls: the seam is asked with the actor and its answer's low byte is the test's result
+/// (the call not made). With the word's `INSTALLED` bit clear: one load, then the exe's call.
+#[inline]
+fn detection_teammate(e: &mut Engine, site: u32, actor: Ptr<Actor>) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        if let Some(teammate) = e.site(site, &[actor.addr()]) {
+            return teammate as u8 != 0;
+        }
+    }
+    e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![actor]).bool()
+}
+
+/// The detected actor's level word in [`detection_level_against_actor`]: its actor value owner's
+/// (`+0xA4`) virtual `+0x28`, called at `0x8A147C`. JIP LN NVSE's `DetectionGetLevelHook` (G53)
+/// replaces that call: the seam is asked with the actor and an answer is the owner the function
+/// read from the actor's own table is called on instead (JIP: the player's, for an actor with its
+/// detection fix flag). With the word's `INSTALLED` bit clear: one load, then the exe's call.
+#[inline]
+fn detection_level_source(e: &mut Engine, actor: Ptr<Actor>) -> u32 {
+    let owner = actor.addr() + 0xa4;
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        if let Some(source) = e.site(0x008a_147c, &[actor.addr()]) {
+            let vtable = e.mem.u32(owner);
+            let function = e.mem.u32(vtable.wrapping_add(0x28));
+            return e.call(function, &[source]).u32();
+        }
+    }
+    e.vcall(owner, 0x28, &args![]).u32()
+}
+
 // Translated from 008a0d10 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Actor::GetDetectionLevelAgainstActor` (Xbox PDB): how well `this` detects
 /// `other`; returns the level (`-100` when nothing can be detected, `0` when
@@ -9365,7 +9398,7 @@ fn detection_level_against_actor(
     if second >= limit {
         return -100;
     }
-    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool()
+    if detection_teammate(e, 0x008a_0dab, other)
         && !e.call(ACTOR_IN_COMBAT, &args![other]).bool()
         && e.call(ACTOR_IS_MOVING, &args![player_addr]).bool()
         && !e.call(ACTOR_IN_COMBAT, &args![player_addr]).bool()
@@ -9540,7 +9573,7 @@ fn detection_level_against_actor(
         )
         .f64();
     let mut other_stealth = e.call(FTOL, &args![other_stealth]).i32();
-    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool() {
+    if detection_teammate(e, 0x008a_1291, other) {
         let player_stealth = e
             .call(
                 GET_CLAMPED_ACTOR_FLOAT_VALUE,
@@ -9557,7 +9590,7 @@ fn detection_level_against_actor(
     if value > zero || e.vcall(other.addr() + 0xa4, 0x08, &args![0x31u32]).i32() > 0 {
         stealth_flag = 1;
     }
-    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool() {
+    if detection_teammate(e, 0x008a_131d, other) {
         let value = e.vcall(player_addr + 0xa4, 0x0c, &args![0x30u32]).f64();
         if value > zero || e.vcall(player_addr + 0xa4, 0x08, &args![0x31u32]).i32() > 0 {
             stealth_flag = 1;
@@ -9588,7 +9621,7 @@ fn detection_level_against_actor(
         byte_4938e0 = 0;
     }
     let this_word = e.vcall(this.addr() + 0xa4, 0x28, &args![]).u32() & 0xffff;
-    let other_word = e.vcall(other.addr() + 0xa4, 0x28, &args![]).u32() & 0xffff;
+    let other_word = detection_level_source(e, other) & 0xffff;
     let entry_result = e.mem.f32(scratch);
     let mut line_flag = line;
     if (entry_result as f64) > zero {
@@ -20650,6 +20683,201 @@ mod tests {
         e.call_log = Some(vec![]);
         assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 45);
         assert_eq!(calls_to(&e, DETECTION_FORMULA).len(), 1, "added");
+    }
+
+    thread_local! {
+        /// The G53 seams asked (site, words) and the answers the test handlers give, by site.
+        static G53_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G53_ANSWER: std::cell::RefCell<Vec<(u32, Option<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g53_at(site: u32, a: &[u32]) -> Option<u32> {
+        G53_SEEN.with(|s| s.borrow_mut().push((site, a.to_vec())));
+        G53_ANSWER.with(|c| {
+            c.borrow()
+                .iter()
+                .find(|(s, _)| *s == site)
+                .and_then(|(_, answer)| *answer)
+        })
+    }
+
+    fn g53_answers(answers: &[(u32, Option<u32>)]) {
+        G53_ANSWER.with(|c| *c.borrow_mut() = answers.to_vec());
+    }
+
+    /// The four seams of JIP LN NVSE's detection patch (G53, step 3.9-GC) with test handlers.
+    fn g53_seams(e: &mut Engine) {
+        use engine_core::extend::{Owner, SiteSlot};
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_0dab), |_, a| {
+            g53_at(0x008a_0dab, a)
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_1291), |_, a| {
+            g53_at(0x008a_1291, a)
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_131d), |_, a| {
+            g53_at(0x008a_131d, a)
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_147c), |_, a| {
+            g53_at(0x008a_147c, a)
+        });
+    }
+
+    /// JIP LN NVSE's detection patch seams (G53: `0x8A0DAB`, `0x8A1291`, `0x8A131D`, `0x8A147C`):
+    /// with the game patch word clear (JIP not installed) or holding only other bits (JIP's row
+    /// off sets nothing else here: the seams test `INSTALLED`), none is asked even with handlers
+    /// registered, the three teammate tests call `0x566950` and the level word comes from the
+    /// detected actor's own owner, exactly as before.
+    #[test]
+    fn g53_seams_do_nothing_while_jip_is_not_installed() {
+        use engine_core::extend::jip_patches;
+        let (mut e, actor, other, _, seen, seen_line) = formula_world();
+        g53_seams(&mut e);
+        g53_answers(&[
+            (0x008a_0dab, Some(1)),
+            (0x008a_1291, Some(1)),
+            (0x008a_131d, Some(1)),
+            (0x008a_147c, Some(0x0bad_0000)),
+        ]);
+        G53_SEEN.with(|s| s.take());
+        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
+            assert!(G53_SEEN.with(|s| s.borrow().is_empty()), "{word:08x}");
+            assert_eq!(
+                calls_to(&e, PROCESS_GET_FORCE_NEXT_UPDATE),
+                vec![vec![other.addr()]; 3]
+            );
+            let formula = calls_to(&e, DETECTION_FORMULA);
+            assert_eq!(formula[0][22..24], [0x2345, 7], "both level words");
+            let level = slot_target(&e, Ptr::new(other.addr() + 0xa4), 0x28);
+            assert_eq!(calls_to(&e, level), vec![vec![other.addr() + 0xa4]]);
+        }
+    }
+
+    /// With `INSTALLED`: each seam asked once with the detected actor at its place; a teammate
+    /// answer is the test's result (no call of `0x566950`), its low byte only (`0x100` is false);
+    /// no answer keeps the exe's call. The level seam's answer is the owner the function read from
+    /// the detected actor's table is called on; no answer keeps the actor's own.
+    #[test]
+    fn g53_seams_take_jips_answers_once_installed() {
+        use engine_core::extend::jip_patches;
+        let (mut e, actor, other, _, seen, seen_line) = formula_world();
+        g53_seams(&mut e);
+        e.set_jip_patches(jip_patches::INSTALLED);
+        let level_fn = slot_target(&e, Ptr::new(other.addr() + 0xa4), 0x28);
+        let source = e.mem.alloc(8);
+        let player_stealth = vec![actor.addr() + 0xa4, 0x2a];
+
+        // Teammate answers 1 at the first seam (the actor is in combat there, so -100 is not
+        // reached), at the stealth seam (the player's stealth asked) and at the flag seam.
+        g53_answers(&[
+            (0x008a_0dab, Some(1)),
+            (0x008a_1291, Some(1)),
+            (0x008a_131d, Some(1)),
+            (0x008a_147c, Some(source)),
+        ]);
+        G53_SEEN.with(|s| s.take());
+        e.call_log = Some(vec![]);
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
+        assert_eq!(
+            G53_SEEN.with(|s| s.take()),
+            vec![
+                (0x008a_0dab, vec![other.addr()]),
+                (0x008a_1291, vec![other.addr()]),
+                (0x008a_131d, vec![other.addr()]),
+                (0x008a_147c, vec![other.addr()]),
+            ]
+        );
+        assert!(calls_to(&e, PROCESS_GET_FORCE_NEXT_UPDATE).is_empty());
+        assert!(calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE).contains(&player_stealth));
+        assert_eq!(calls_to(&e, level_fn), vec![vec![source]], "on the answer");
+        assert_eq!(calls_to(&e, DETECTION_FORMULA)[0][23], 7);
+
+        // 0 and 0x100 (a low byte of 0): not a teammate, the player's stealth not asked.
+        for answer in [0, 0x100] {
+            g53_answers(&[
+                (0x008a_0dab, Some(answer)),
+                (0x008a_1291, Some(answer)),
+                (0x008a_131d, Some(answer)),
+            ]);
+            e.call_log = Some(vec![]);
+            assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
+            assert!(calls_to(&e, PROCESS_GET_FORCE_NEXT_UPDATE).is_empty());
+            assert!(!calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE).contains(&player_stealth));
+            assert_eq!(calls_to(&e, level_fn), vec![vec![other.addr() + 0xa4]]);
+        }
+
+        // No answers: the exe's calls at every seam.
+        g53_answers(&[]);
+        G53_SEEN.with(|s| s.take());
+        e.call_log = Some(vec![]);
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
+        assert_eq!(G53_SEEN.with(|s| s.take()).len(), 4);
+        assert_eq!(
+            calls_to(&e, PROCESS_GET_FORCE_NEXT_UPDATE),
+            vec![vec![other.addr()]; 3]
+        );
+        assert_eq!(calls_to(&e, level_fn), vec![vec![other.addr() + 0xa4]]);
+    }
+
+    /// The first teammate seam (`0x8A0DAB`) decides the early -100 (a teammate out of combat while
+    /// the player moves out of combat): JIP's 0 there lets the detection go on.
+    #[test]
+    fn g53_first_seam_decides_the_early_exit() {
+        use engine_core::extend::jip_patches;
+        let (mut e, actor, other, _, seen, seen_line) = formula_world();
+        g53_seams(&mut e);
+        stub(&mut e, ACTOR_IN_COMBAT, 0);
+        stub(&mut e, ACTOR_IS_MOVING, 1);
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 1);
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), -100);
+        e.set_jip_patches(jip_patches::INSTALLED);
+        g53_answers(&[(0x008a_0dab, Some(0))]);
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
+        g53_answers(&[(0x008a_0dab, Some(1))]);
+        assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), -100);
+    }
+
+    /// The third teammate seam (`0x8A131D`) decides whether the player's Chameleon or
+    /// Invisibility (the player's `+0xA4` slots `0x0C` and `0x08`) sets the formula's stealth
+    /// flag (its eighth word; the detected actor's own values are 0). Not installed: the exe's
+    /// teammate test decides. Installed: the answer's low byte (`0x80` and `0x1FE` are teammates,
+    /// `0x100` is not). The stealth seam (`0x8A1291`) with `0x80` asks the player's stealth.
+    #[test]
+    fn g53_third_seam_decides_the_players_stealth_flag() {
+        use engine_core::extend::jip_patches;
+        let (mut e, actor, other, _, seen, seen_line) = formula_world();
+        embedded_table(
+            &mut e,
+            actor.addr() + 0xa4,
+            &[
+                (0x0c, float_ret(0.0)),
+                (0x08, ret(1)),
+                (0x28, ret(0x1_2345)),
+            ],
+        );
+        g53_seams(&mut e);
+        let flag = |e: &mut Engine| {
+            e.call_log = Some(vec![]);
+            formula_level(e, actor, other, seen, seen_line);
+            calls_to(e, DETECTION_FORMULA)[0][7]
+        };
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 1);
+        assert_eq!(flag(&mut e), 1, "not installed, a teammate");
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 0);
+        assert_eq!(flag(&mut e), 0, "not installed, not a teammate");
+        e.set_jip_patches(jip_patches::INSTALLED);
+        for (answer, expected) in [(1, 1), (0x80, 1), (0x1fe, 1), (0, 0), (0x100, 0)] {
+            g53_answers(&[(0x008a_131d, Some(answer))]);
+            assert_eq!(flag(&mut e), expected, "{answer:#x}");
+        }
+        g53_answers(&[(0x008a_1291, Some(0x80))]);
+        e.call_log = Some(vec![]);
+        formula_level(&mut e, actor, other, seen, seen_line);
+        assert!(
+            calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE).contains(&vec![actor.addr() + 0xa4, 0x2a])
+        );
     }
 
     #[test]
