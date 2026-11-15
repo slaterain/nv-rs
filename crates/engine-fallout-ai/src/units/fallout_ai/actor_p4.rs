@@ -3437,8 +3437,16 @@ pub fn fn_008ab3a0(e: &mut Engine, this: Ptr<Actor>, buffer: u32) {
         for (offset, size) in FORMAT_FIELDS_V9 {
             e.call(BUFFER_READ, &args![buffer, this.addr() + offset, size]);
         }
-        e.call(0x008c_1ac0, &args![this, 0u32]);
-        e.call(0x008c_1b50, &args![this, 0u32]);
+        // JIP LN NVSE's game patch at `0x8AB6D9` (step 3.9-GE, PLAN-3.9 G63) replaces these two
+        // calls (which clear bits 0x80000000 and 0x40000000 of the flag word `+0x140` just read):
+        // JIP clears its own flag bytes `+0x105`/`+0x106` and only bit 0x40000000. The seam
+        // answers whether the calls are replaced. One load while JIP is not installed.
+        if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED == 0
+            || e.site(0x008a_b6d9, &[this.addr()]).is_none()
+        {
+            e.call(0x008c_1ac0, &args![this, 0u32]);
+            e.call(0x008c_1b50, &args![this, 0u32]);
+        }
     }
     if version(e) >= 0xd {
         let (offset, size) = FORMAT_FIELD_V13;
@@ -11052,6 +11060,156 @@ mod tests {
             called(&log, target(OBJECT2_VT, 0x28)),
             vec![vec![mover.addr(), buffer]]
         );
+    }
+
+    thread_local! {
+        /// What JIP's seam at `0x8AB6D9` was asked (its words and the calls logged before), and
+        /// what it answers.
+        static G63_ASKED: RefCell<Vec<(Vec<u32>, usize)>> = const { RefCell::new(Vec::new()) };
+        static G63_ANSWER: Cell<Option<u32>> = const { Cell::new(None) };
+    }
+
+    fn at_actor_flags_loaded(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let logged = e.call_log.as_ref().map_or(0, Vec::len);
+        G63_ASKED.with(|s| s.borrow_mut().push((a.to_vec(), logged)));
+        G63_ANSWER.with(Cell::get)
+    }
+
+    /// An engine ready for a load of save version `version` (everything `008ab3a0` calls answered
+    /// plainly, the two flag calls included): the engine, the actor and the buffer.
+    fn load_engine(version: u32) -> (Engine, Ptr<Actor>, u32) {
+        let mut e = engine2();
+        let (actor, _) = actor2(&mut e);
+        let (buffer, _) = load_buffer(&mut e, version, 0);
+        for addr in [0x004f_8960u32, 0x0093_2a00, 0x0088_4f80, 0x0096_d490] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(0x008c_1ac0, |_, _| Ret::default());
+        e.register(0x008c_1b50, |_, _| Ret::default());
+        e.register(LOOKUP_FORM, |_, _| 0.into_ret());
+        e.register(DYNAMIC_CAST, |_, _| 0.into_ret());
+        e.register(0x0093_7c60, |_, _| Ret::default());
+        e.register(0x0043_fcd0, |_, _| 0.into_ret());
+        let mover = object2(&mut e, 0x40);
+        e.mem.set_u32(actor.addr() + 0x190, mover.addr());
+        (e, actor, buffer)
+    }
+
+    /// A version 9 load (the block of the two flag calls) with JIP's word `word` and a seam
+    /// handler answering `answer`: what the seam was asked and the calls.
+    fn load_v9_with_jip(
+        word: u32,
+        answer: Option<u32>,
+    ) -> (Ptr<Actor>, Vec<(Vec<u32>, usize)>, Vec<(u32, Vec<u32>)>) {
+        load_with_jip(9, word, answer)
+    }
+
+    /// [`load_v9_with_jip`] for save version `version`.
+    fn load_with_jip(
+        version: u32,
+        word: u32,
+        answer: Option<u32>,
+    ) -> (Ptr<Actor>, Vec<(Vec<u32>, usize)>, Vec<(u32, Vec<u32>)>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, actor, buffer) = load_engine(version);
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x008a_b6d9),
+            at_actor_flags_loaded,
+        );
+        G63_ASKED.with(|s| s.borrow_mut().clear());
+        G63_ANSWER.with(|c| c.set(answer));
+        e.set_jip_patches(word);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_b3a0, &args![actor, buffer]);
+        let log = calls(&mut e);
+        (actor, G63_ASKED.with(|s| s.take()), log)
+    }
+
+    /// JIP's seam at `0x8AB6D9` (G63): not asked while JIP is not installed (the word 0, or any
+    /// bit but `INSTALLED`), and the two flag calls run as in the exe.
+    #[test]
+    fn buffer_load_jip_flag_seam_off() {
+        use engine_core::extend::jip_patches;
+        for word in [
+            0,
+            jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX | jip_patches::NPC_PERKS,
+        ] {
+            let (actor, asked, log) = load_v9_with_jip(word, Some(0));
+            assert!(asked.is_empty(), "{word:x}");
+            assert_eq!(called(&log, 0x008c_1ac0), vec![vec![actor.addr(), 0]]);
+            assert_eq!(called(&log, 0x008c_1b50), vec![vec![actor.addr(), 0]]);
+        }
+    }
+
+    /// JIP installed: the seam is asked with the actor right after the version 9 fields; it
+    /// answering nothing leaves the two calls, an answer replaces them.
+    #[test]
+    fn buffer_load_jip_flag_seam_on() {
+        use engine_core::extend::jip_patches;
+        let (actor, asked, log) = load_v9_with_jip(jip_patches::INSTALLED, None);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].0, vec![actor.addr()]);
+        let last_read = log
+            .iter()
+            .rposition(|(addr, a)| *addr == BUFFER_READ && a[1] == actor.addr() + 0x140)
+            .expect("the flag word was read");
+        assert!(asked[0].1 > last_read, "after the flag word is read");
+        assert_eq!(log[asked[0].1].0, 0x008c_1ac0, "the calls run on");
+        assert_eq!(called(&log, 0x008c_1ac0), vec![vec![actor.addr(), 0]]);
+        assert_eq!(called(&log, 0x008c_1b50), vec![vec![actor.addr(), 0]]);
+        let (actor, asked, log) =
+            load_v9_with_jip(jip_patches::INSTALLED | jip_patches::FIXES, Some(0));
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0].0, vec![actor.addr()]);
+        assert!(called(&log, 0x008c_1ac0).is_empty());
+        assert!(called(&log, 0x008c_1b50).is_empty());
+    }
+
+    /// JIP installed with the fixes, a version 8 save (no version 9 block): the seam is not asked
+    /// and neither flag call runs, as in the exe.
+    #[test]
+    fn buffer_load_jip_flag_seam_version_8() {
+        use engine_core::extend::jip_patches;
+        let (_, asked, log) =
+            load_with_jip(8, jip_patches::INSTALLED | jip_patches::FIXES, Some(0));
+        assert!(asked.is_empty());
+        assert!(called(&log, 0x008c_1ac0).is_empty());
+        assert!(called(&log, 0x008c_1b50).is_empty());
+    }
+
+    /// `008ab3a0` with JIP's real G63 handler (JIP installed, the row on): the save's flag word
+    /// keeps the essential bit 0x80000000 (only 0x40000000 cleared), JIP's flag bytes
+    /// `+0x105`/`+0x106` are cleared (`+0x104` and `+0x107` kept), the two calls replaced.
+    #[test]
+    fn buffer_load_jip_flag_real_handler_row_on() {
+        use engine_core::extend::jip_patches;
+        let (mut e, actor, buffer) = load_engine(9);
+        // `CreateFileA`'s import slot (the settings file): "no file", so JIP's defaults.
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        // `TESTopic::GetOwnerTopic`, which 3.9a's fix wraps with the row on.
+        e.register(0x0061_a310, |_, _| Ret::default());
+        jip::test_support::install_into(&mut e);
+        jip::game_patches::set_row(&mut e, true);
+        assert_ne!(e.jip_patches() & jip_patches::FIXES, 0);
+        // The save's flag word: both bits and bit 0; nothing else read changes the actor.
+        let flags_at = actor.addr() + 0x140;
+        e.register_double(BUFFER_READ, move |e, a| {
+            if a[1] == flags_at {
+                e.mem.set_u32(a[1], 0xc000_0001);
+            }
+            Ret::default()
+        });
+        e.mem.set_u32(actor.addr() + 0x104, 0xabff_ff01);
+        e.call_log = Some(vec![]);
+        e.call(0x008a_b3a0, &args![actor, buffer]);
+        let log = calls(&mut e);
+        assert_eq!(e.mem.u32(flags_at), 0x8000_0001);
+        assert_eq!(e.mem.u32(actor.addr() + 0x104), 0xab00_0001);
+        assert!(called(&log, 0x008c_1ac0).is_empty());
+        assert!(called(&log, 0x008c_1b50).is_empty());
     }
 
     /// A buffer that reads from a queue: `864980` fills its target, `864a60`

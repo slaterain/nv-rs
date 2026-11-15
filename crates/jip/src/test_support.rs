@@ -40,6 +40,9 @@ fn prepare(e: &mut Engine) {
     // The processes' vtables (HighProcess 0x01087864, MiddleHighProcess 0x0108904C), where JIP
     // writes its hit-data routines once installed.
     e.map(0x0108_7000, 0x3000);
+    // The queued references' vtables (0x01016BA4 to 0x01016D7C), where JIP writes its attaches
+    // (game_patches::gp).
+    e.map(0x0101_6000, 0x1000);
     nvse::table::install(e);
     // The platform's XInputGetState at its import slot, as the host registers it (no controller:
     // ERROR_DEVICE_NOT_CONNECTED), for JIP's wrap there.
