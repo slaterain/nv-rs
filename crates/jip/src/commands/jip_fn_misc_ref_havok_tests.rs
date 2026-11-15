@@ -813,6 +813,16 @@ fn walk_budget_charges_each_child_slot_of_a_self_loop() {
     let mut e = setup();
     let root = self_loop(&mut e);
     let refr = reference(&mut e, REF_VTBL, 0x0100_0001, 0, root);
+    // The budget is charged per slot examined: with 10 units left, 10 slots are read. Checked
+    // first, so a walk that stops charging fails here instead of looping in the commands below.
+    let mut walk = h::Walk::new();
+    for _ in 0..h::MAX_WORK - 10 {
+        assert!(walk.charge());
+    }
+    assert_eq!(h::children(&e, root, &mut walk).len(), 10);
+    assert!(walk.spent());
+    assert!(h::children(&e, root, &mut walk).is_empty());
+    assert_eq!(h::children(&e, root, &mut h::Walk::new()).len(), 0xffff);
     // Every command returns, finding nothing.
     let cases: [(u32, Vec<Vec<u8>>); 8] = [
         (0x2876, vec![]),
@@ -830,15 +840,6 @@ fn walk_budget_charges_each_child_slot_of_a_self_loop() {
     set_ref(&mut e, 1, refr);
     assert_eq!(run(&mut e, 0x27b6, refr, &[r(1)]), 0.0);
     assert_eq!(run(&mut e, 0x27b9, refr, &[n(0x3a)]), 0.0);
-    // The budget is charged per slot examined: with 10 units left, 10 slots are read.
-    let mut walk = h::Walk::new();
-    for _ in 0..h::MAX_WORK - 10 {
-        assert!(walk.charge());
-    }
-    assert_eq!(h::children(&e, root, &mut walk).len(), 10);
-    assert!(walk.spent());
-    assert!(h::children(&e, root, &mut walk).is_empty());
-    assert_eq!(h::children(&e, root, &mut h::Walk::new()).len(), 0xffff);
 }
 
 #[test]
@@ -1195,3 +1196,7 @@ fn crosshair_ref_ex_interface_ref_or_the_pick() {
     assert_eq!(form_result(&e), 0);
     assert_eq!(e.mem.u32(VIEW_LOG), 0);
 }
+
+// The write commands' tests (jip_fn_misc_ref_havok_w.rs) share this file's scenes.
+#[path = "jip_fn_misc_ref_havok_w_tests.rs"]
+mod write;

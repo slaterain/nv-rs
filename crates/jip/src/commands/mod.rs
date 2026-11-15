@@ -36,9 +36,11 @@ pub mod jip_fn_input;
 pub mod jip_fn_inventory;
 pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
+pub mod jip_fn_linked_ref;
 pub mod jip_fn_marker_cmds;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
+pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_miscellaneous;
 pub mod jip_fn_move_cmds;
@@ -78,6 +80,7 @@ pub mod ln_fn_recipe;
 pub mod ln_fn_terminal;
 pub mod ln_fn_utility;
 pub mod ln_fn_weapon;
+pub mod ni_matrix;
 pub mod nif_nodes;
 pub mod pos_marker;
 pub mod ref_move;
@@ -196,6 +199,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_havok::COMMANDS,
     jip_fn_move_cmds::COMMANDS,
     jip_fn_move_cmds::CCC_COMMANDS,
+    jip_fn_linked_ref::COMMANDS,
+    jip_fn_misc_ref_havok_w::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -788,7 +793,10 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_misc_ref",
             "jip_fn_ccc",
+            "jip_fn_misc_ref",
+            "jip_fn_misc_ref",
         ];
+        assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
         for (list, file) in ALL.iter().zip(files) {
             for &(opcode, _) in list.iter() {

@@ -3924,7 +3924,22 @@ pub fn fn_004c1c90(
         let base = reference_base_form(e, reference);
         let entry = inventory_changes_get_object_in_list(e, this, base, 1, 0);
         let list = reference_extra_list(e, reference);
-        e.call(EXTRA_REMOVE_COUNT, &args![list]);
+        // JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44: `WriteRelCall(0x4C21EB,
+        // SetPickedCountHook)`) replaces the call while JIP answers "installed": the seam answers
+        // the count to go on with (the reference's count extra's, which it removes). One load
+        // while JIP is not installed.
+        let picked = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            e.site(0x004c_21eb, &[list, count as u32])
+        } else {
+            None
+        };
+        let count = match picked {
+            Some(picked) => picked as i32,
+            None => {
+                e.call(EXTRA_REMOVE_COUNT, &args![list]);
+                count
+            }
+        };
         let mut created = new_extra_list(e);
         let mut special_weapon = false;
         let list = reference_extra_list(e, reference);
@@ -3936,6 +3951,11 @@ pub fn fn_004c1c90(
                 special_weapon = fn_004c0bf0(e, Ptr::new(weapon));
             }
             let list = reference_extra_list(e, reference);
+            // JIP's CopyExtraListHook (G44, `WriteRelCall(0x4C2291, ...)`) runs before the call:
+            // the seam gives the new list a count extra when the count is above 1.
+            if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                e.site(0x004c_2291, &[created, count as u32]);
+            }
             e.call(EXTRA_COPY_LIST_FOR_CONTAINER, &args![created, list, 0u32]);
             let base = reference_base_form(e, reference);
             if form_type_of(e, base) != 0x29 && (weapon == 0 || !fn_004c0bf0(e, Ptr::new(weapon))) {
@@ -18519,5 +18539,83 @@ mod tests {
         assert_eq!(e.mem.u32(copied[0] + 4), 2);
         assert_eq!(items(&e, e.mem.u32(copied[0])), vec![scripted]);
         assert_eq!(e.mem.u32(scripted + X_OWNER_SET), 0xcc00);
+    }
+
+    thread_local! {
+        /// The JIP seams asked (address, words) and what the pick-up count seam answers.
+        static JIP_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static JIP_PICKED: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(Some(5)) };
+    }
+
+    fn at_picked_count(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_ASKED.with(|s| s.borrow_mut().push((0x004c_21eb, a.to_vec())));
+        JIP_PICKED.with(|v| v.get())
+    }
+
+    fn at_copy_count(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        // Asked before the copy: no copy logged yet.
+        let copies = calls(e, EXTRA_COPY_LIST_FOR_CONTAINER).len() as u32;
+        JIP_ASKED.with(|s| s.borrow_mut().push((0x004c_2291, vec![a[0], a[1], copies])));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44) in `004c1c90`: with the word clear
+    /// or only the fix bits neither seam is asked (the count extra removed by the exe's call,
+    /// the count as passed); with `INSTALLED` the pick-up seam is asked with the reference's
+    /// list and the count in place of the call, and its answer is the count from there on (the
+    /// entry's number); the copy seam is asked with the new list and that count right before
+    /// the list is copied. No answer at the pick-up seam: the exe's call and count.
+    #[test]
+    fn jip_extra_jip_pick_up_seams() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32| {
+            let mut e = tx();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004c_21eb), at_picked_count);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004c_2291), at_copy_count);
+            e.set_jip_patches(word);
+            let owner = object(&mut e);
+            let this = inventory(&mut e, &[], owner);
+            let base = form(&mut e, 0x18, 0, 100);
+            casts(&mut e, 0, 0, base);
+            let reference = world_reference(&mut e, base, 0x15);
+            // A list that is not plain, so it is copied.
+            set(&mut e, reference, 0x44, 1);
+            e.call(0x004c1c90, &args![this, reference, 2i32, 0u32, 0u32]);
+            let changes = inventory_list(&e, this);
+            let number = e.get(Ptr::<ItemChange>::new(changes[0]), ItemChange::iNumber);
+            let removes = calls(&e, EXTRA_REMOVE_COUNT);
+            let copies = calls(&e, EXTRA_COPY_LIST_FOR_CONTAINER);
+            (
+                reference,
+                number,
+                removes,
+                copies,
+                JIP_ASKED.with(|s| s.take()),
+            )
+        };
+        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
+            let (reference, number, removes, copies, asked) = run(word);
+            assert_eq!(number, 2);
+            assert_eq!(removes, vec![vec![reference + 0x40]]);
+            assert_eq!(copies.len(), 1);
+            assert!(asked.is_empty(), "{word:x}");
+        }
+        let (reference, number, removes, copies, asked) = run(jip_patches::INSTALLED);
+        assert_eq!(number, 5);
+        assert!(removes.is_empty());
+        assert_eq!(
+            asked,
+            vec![
+                (0x004c_21eb, vec![reference + 0x40, 2]),
+                (0x004c_2291, vec![copies[0][0], 5, 0]),
+            ]
+        );
+        JIP_PICKED.with(|v| v.set(None));
+        let (reference, number, removes, copies, asked) = run(jip_patches::INSTALLED);
+        JIP_PICKED.with(|v| v.set(Some(5)));
+        assert_eq!(number, 2);
+        assert_eq!(removes, vec![vec![reference + 0x40]]);
+        assert_eq!(asked[1], (0x004c_2291, vec![copies[0][0], 2, 0]));
     }
 }

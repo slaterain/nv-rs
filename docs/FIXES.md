@@ -1039,11 +1039,27 @@ Three steps of JIP's attach are not built yet, because nothing can set what they
 
 #### GH1: Extra data and inventory stacks
 
-Nothing built yet.
+No fix built yet. Part of JIP in every preset (not a fix, so not in the row): the ExtraJIP framework
+(PLAN-3.9 G44, "For ExtraJIP framework"), the place JIP keeps `SetRefExtraData`'s data. JIP takes the extra
+data type `0x27` (`ExtraTimeLeft`, which the game never makes) for a key into its own data (the co-save's
+`JPED` record): such an extra goes to the head of its list (`0040f980`), keeps its item out of the
+container's default stack (`0041d030`, `IsExtraDefaultforContainer`), is compared by its data and, when
+destroyed, drops its data unless the data names a reference that is no longer loaded while the save holds
+changes of it (JIP's condition; the two slots of its vtable `010158FC`), is copied or moved with its stack (`AddExtraCopy`)
+and saved and loaded as its key (`SaveGame_ov2`, `LoadGame_ov2`). What a player with JIP installed gets,
+whatever the fix row says (JIP's own patch, kept as JIP does it): the pick-up function (`004c1c90`) takes
+an item's count from its own count extra, and a picked-up stack of two or more gets a count extra on its new
+list, so a merged stack of two or more keeps a list holding only its count (the game alone drops that empty
+list). With JIP not installed nothing of this is in.
+JIP's G41 (three more bytes cleared in a new extra data list) is not built: the port keeps JIP's word of a
+list in records of its own.
 
 #### GH2: References, models, cells, ash piles
 
-Nothing built yet.
+No fix row built yet. Part of JIP in every preset (not this row): `DestroyRefrHook` (`0055a430`,
+`0x55A488`): a destroyed reference lets go of its `SetRefName` name and `SetRefrModelPath` model
+(with their hooks' users) and, when it was made in the game and the save holds nothing of it, its
+aux variables.
 
 #### GF: Forms and records
 
