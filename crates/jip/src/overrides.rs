@@ -9,7 +9,8 @@
 //! gets no JIP behaviour early. The seven at the game's own opcodes (`MenuMode`, `GetItemCount`,
 //! `GetContainer`, `IsInList`, `GetHitLocation`, `HasPerk`, `GetNVSEVersionFull` at `0x127D`)
 //! change vanilla commands, so they are also a fixes row (ADR-0016 §5): on in fixes, off under
-//! vanilla ([`set_vanilla_commands`]).
+//! vanilla ([`set_vanilla_commands`]). The same row puts JIP's handler in the `MenuMode` script
+//! block's record and gives block type 0xE one (JIP's `DeferredInit`, PLAN-3.9 D03: `put_blocks`).
 //!
 //! Two of them have their full effect only with JIP's hook sites (steps 3.5 and 3.9):
 //! `Update3D` marks the reference for JIP's hook in the model loader's attach, which this does
@@ -213,7 +214,65 @@ fn put_vanilla(e: &mut Engine) {
     for (i, o) in VANILLA.iter().enumerate() {
         put(e, (XNVSE.len() + i) as u32, o);
     }
+    put_blocks(e);
     e.ext::<Jip>().overrides.vanilla_in = true;
+}
+
+/// `g_eventBlockCommandInfos` (`0x0118E2F0`, 0x26 records of 0x28 bytes): the block types
+/// `ScriptRunner::EvaluateLine` (`005e1550`) reads each `Begin` line's handler from (`+0x18`,
+/// `CALL [EBP-0x1C]` at `0x5E16DC`).
+const BLOCK_RECORDS: u32 = 0x0118_e2f0;
+const BLOCK_RECORD_SIZE: u32 = 0x28;
+const RECORD_EXECUTE: u32 = 0x18;
+/// Block type 1, `MenuMode` (the exe's handler `MenuModeFunction`, `005c4240`), and block type
+/// 0xE, "Unused2" (no handler in the exe: a `Begin` of that type fails its line).
+const BLOCK_MENU_MODE: u32 = 1;
+const BLOCK_UNUSED_2: u32 = 0xe;
+/// The routines for the `MenuMode` block and block type 0xE: after the overrides' execute and
+/// eval words.
+const BLOCK_ROUTINE: u32 = ROUTINES + 8 * 32;
+const UNUSED_BLOCK_ROUTINE: u32 = BLOCK_ROUTINE + 4;
+const _: () = assert!(UNUSED_BLOCK_ROUTINE + 4 <= engine_core::mem::EXTENDER_CODE.end);
+const _: () = assert!(XNVSE.len() + VANILLA.len() <= 32);
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit
+// (`eventCmdInfos[1].execute = Hook_MenuMode_Execute; eventCmdInfos[0xE].execute = 0x5D4A40`).
+/// PLAN-3.9 D03, under the row of JIP's versions of the game's commands (the same switch and
+/// handler as the `MenuMode` command): `Begin MenuMode N` blocks take JIP's modes 0 to 4 and its
+/// menu ids, and a block of type 0xE has a handler that answers true (its line no longer fails).
+/// JIP's 0xE handler is the exe's `005d4a40` (`mov al, 1`), which leaves the result as it was: with
+/// JIP's "result = 0" patch (G02) always on, the block never runs. Deliberate difference: the
+/// port's 0xE handler is a routine that clears the result and answers true ([`unused_block`]),
+/// the same as JIP whenever G02 is on, and the block never runs also with the game patches row off
+/// (where `005d4a40` would leave whatever the stack held, so the block would run or not by chance).
+fn put_blocks(e: &mut Engine) {
+    e.register(BLOCK_ROUTINE, menu_mode_block);
+    e.register(UNUSED_BLOCK_ROUTINE, unused_block);
+    let menu_mode = BLOCK_RECORDS + BLOCK_MENU_MODE * BLOCK_RECORD_SIZE;
+    e.mem.set_u32(menu_mode + RECORD_EXECUTE, BLOCK_ROUTINE);
+    let unused = BLOCK_RECORDS + BLOCK_UNUSED_2 * BLOCK_RECORD_SIZE;
+    e.mem.set_u32(unused + RECORD_EXECUTE, UNUSED_BLOCK_ROUTINE);
+}
+
+/// Block type 0xE's handler: `005d4a40`'s answer (true), with the result cleared first (see
+/// [`put_blocks`]).
+fn unused_block(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    handled(true)
+}
+
+/// The `MenuMode` block's handler: JIP's `Hook_MenuMode_Execute` (the command's), which sets the
+/// result only when the mode is up. The exe's block call (`0x5E16DC`) gives it a result it never
+/// cleared (a local of `EvaluateLine`); in JIP the "result = 0 by default" patch (G02,
+/// [`crate::game_patches`], at `0x5E16C3`) always cleared it first. The port's rows let this row
+/// be on with the game patches row off, so the result is cleared here first (with G02 on it is
+/// already 0: nothing changes; a deliberate difference only in that mix, where JIP's handler
+/// would read what the stack held).
+fn menu_mode_block(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    menu_mode(e, w)
 }
 
 /// The fixes preset's row: JIP's versions of the game's commands, once JIP answers "installed".

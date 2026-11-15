@@ -295,7 +295,7 @@ fn slash_pos(path: &[u8]) -> Option<usize> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: GetNextToken (one delimiter).
 /// The text up to the first `delim` (the token), and what follows the run of `delim`s after it
 /// (empty when there is no `delim`).
-fn next_token(text: &[u8], delim: u8) -> (&[u8], &[u8]) {
+pub(crate) fn next_token(text: &[u8], delim: u8) -> (&[u8], &[u8]) {
     match text.iter().position(|&b| b == delim) {
         None => (text, &[]),
         Some(at) => {
