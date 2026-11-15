@@ -182,6 +182,8 @@ fn destroy_refr(e: &mut Engine, a: &[u32]) -> Option<u32> {
                 mark_changed(e, changed::AUX_VARS);
             }
             clear_ref_aux_vars(aux_maps(e, true), id);
+            // The lock-free copy AuxVarGetFltCond reads loses the owner too.
+            crate::commands::jip_fn_aux_variable::forget_owner(e, id);
         }
     }
     let kind = e.mem.u8(e.mem.u32(reference + BASE) + FORM_TYPE);

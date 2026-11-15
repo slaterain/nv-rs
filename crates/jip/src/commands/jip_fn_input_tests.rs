@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::commands::test_support::*;
-use crate::Jip;
 
 const CONTROLS: u32 = FORMS + 0x1_0000;
 
@@ -63,7 +62,7 @@ fn controls_held_by_keys() {
     call(&mut e, 0x2805, &[n(28)]);
     call(&mut e, 0x2805, &[n(-1)]);
     assert_eq!(held(&mut e), vec![0x20, 0x102], "28 and up: nothing");
-    let mods = e.ext::<Jip>().input.mods;
+    let mods = crate::input::state(&mut e).mods;
     assert_eq!((mods.button_hold, mods.trigger_mods), (0, 0));
 }
 
@@ -72,13 +71,13 @@ fn controls_held_by_keys() {
 #[test]
 fn controls_held_on_the_pad() {
     let mut e = setup();
-    e.ext::<Jip>().input.ready = true;
-    e.ext::<Jip>().input.mods.trigger_mods = 0x03;
+    crate::input::state(&mut e).ready = true;
+    crate::input::state(&mut e).mods.trigger_mods = 0x03;
     call(&mut e, 0x2805, &[n(4)]);
     call(&mut e, 0x2805, &[n(5)]);
     call(&mut e, 0x2805, &[n(27)]);
     call(&mut e, 0x2805, &[n(6)]);
-    let mods = e.ext::<Jip>().input.mods;
+    let mods = crate::input::state(&mut e).mods;
     assert_eq!(mods.button_hold, 0x1000, "A");
     assert_eq!(
         mods.trigger_mods, 0x0f,
@@ -87,10 +86,10 @@ fn controls_held_on_the_pad() {
     assert!(held(&mut e).is_empty());
     call(&mut e, 0x2806, &[n(5)]);
     call(&mut e, 0x2806, &[n(4)]);
-    let mods = e.ext::<Jip>().input.mods;
+    let mods = crate::input::state(&mut e).mods;
     assert_eq!((mods.button_hold, mods.trigger_mods), (0, 0x0b));
     call(&mut e, 0x2806, &[n(6)]);
-    assert_eq!(e.ext::<Jip>().input.mods.trigger_mods, 0x0b);
+    assert_eq!(crate::input::state(&mut e).mods.trigger_mods, 0x0b);
 }
 
 /// The value added to the wheel word, wrapping; with no argument nothing (see the doc).
