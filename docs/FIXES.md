@@ -1062,7 +1062,20 @@ Three steps of JIP's attach are not built yet, because nothing can set what they
 
 #### GH1: Extra data and inventory stacks
 
-No fix built yet. Part of JIP in every preset (not a fix, so not in the row): the ExtraJIP framework
+Fixes (in with the row `NV_JIP_GAME_PATCHES` while JIP is installed; PLAN-3.9 G46, G79, G50, G61, G75, G76):
+
+| Fix | What a player gets | Where |
+|---|---|---|
+| G46 invisible stacks | Items no stack showed appear in the inventory: an owner extra no longer splits a stack off at once, and JIP's one iterator hands out, after the game's passes, the count left of each form | `CompareListForContainer` (`0x41271E`), the fast iteration's start (`0x4CA200`), next (`0x4CAFA3`) and destructor (`0x4BF630`) |
+| G79 weapon mods | A weapon's mods are read null-safely, from the list of the reference that dropped it when there is one | `GetModSlots` (`0x4BD820`), `HasModEffectActive_ov2` (`0x4BDA70`) |
+| G50 items' health | A container's items get the health JIP's way: clamped below 1, only armour and weapons below type 10 keep one | `00482090` (rewritten) |
+| G61 temporary forms | A temporary reference (mod index 0xFF) is never taken as persistent when picked up or pointed at | the three calls of `GetRefPersists` (`0x41C833`, `0x4C232C`, `0x4C273A`) |
+| G75, G76 hotkeys | A hotkeyed item given to the player, or picked up, loses its hotkey when the player already uses that key; a hotkey moves with its stack | `004c37d0` (`0x4C3976`), `00953ff0` (`0x95400F`, group GP's translation), `CopyListForReference` (`0x412675`) |
+
+Deliberate differences: the iterator's destructor answers `this` (JIP leaves EAX as it was); an owner whose
+base form has no container gives the iterator no container copy (JIP would copy from a null container).
+
+Part of JIP in every preset (not a fix, so not in the row): the ExtraJIP framework
 (PLAN-3.9 G44, "For ExtraJIP framework"), the place JIP keeps `SetRefExtraData`'s data. JIP takes the extra
 data type `0x27` (`ExtraTimeLeft`, which the game never makes) for a key into its own data (the co-save's
 `JPED` record): such an extra goes to the head of its list (`0040f980`), keeps its item out of the

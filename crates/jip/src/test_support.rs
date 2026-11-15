@@ -63,6 +63,11 @@ fn prepare(e: &mut Engine) {
     // `ExtraDataList::GetCanNotWear` (`00418b10`, JIP's wrap there), when the test engine has no
     // translation of it: the exe's test, `BaseExtraList::HasExtra(0x3E)` (`0040fe80`), the bit of
     // type 0x3E in the presence bits at `+8` (byte `+0xF`, bit `0x40`).
+    // `00482090` (a container's items' health, JIP's wrap there: group GH1, G50), when the test
+    // engine has no translation of it: a stand-in that does nothing (JIP's wrap replaces it).
+    if !e.is_registered(0x0048_2090) {
+        e.register(0x0048_2090, |_, _| Ret::default());
+    }
     if !e.is_registered(0x0041_8b10) {
         e.register(0x0041_8b10, |e, a| Ret {
             eax: u32::from(e.mem.u8(a[0] + 0xf) & 0x40 != 0),
