@@ -313,6 +313,23 @@ fn hit_3d_data_by_type() {
     assert_eq!(call_on(&mut e, 0x28a8, ACTOR, &[n(0)]).1, 0.0);
     e.mem.set_u32(A_HIT, HIT);
     assert_eq!(call_on(&mut e, 0x28a8, PLAIN_REF, &[n(0)]).1, 0.0);
+    e.mem.set_u32(ACTOR + 0x68, 0);
+    assert_eq!(call_on(&mut e, 0x28a8, ACTOR, &[n(0)]).1, 0.0, "no process");
+}
+
+#[test]
+fn the_last_hit_without_an_attacker_or_projectile() {
+    let mut e = setup();
+    hit_setup(&mut e);
+    e.mem.set_u32(HIT, 0);
+    e.mem.set_u32(HIT + 8, 0);
+    call_on(&mut e, 0x282c, ACTOR, &[]);
+    assert_eq!(form_result(&e), 0, "no attacker");
+    call_on(&mut e, 0x282d, ACTOR, &[]);
+    assert_eq!(form_result(&e), 0, "no projectile");
+    // The weapon is still read.
+    call_on(&mut e, 0x282e, ACTOR, &[]);
+    assert_eq!(form_result(&e), 0x10d);
 }
 
 #[test]
@@ -344,6 +361,46 @@ fn base_spell_list() {
         (e.mem.u32(CREA + 0x80), e.mem.u32(CREA2 + 0x80)),
         (SPELL, 0)
     );
+}
+
+/// A spell list from a bad save or mod that runs back into itself (first node -> NODES -> first):
+/// with the list guard row the shared walks (`list_contains`, `list_remove`) end as `list_items`
+/// does; JIP would walk it for ever.
+#[test]
+fn base_spell_list_that_loops_back() {
+    let mut e = setup();
+    nvse::commands::array::set_fix(&mut e, nvse::commands::array::LIST_GUARD, true);
+    let list = NPC + 0x80;
+    node(&mut e, list, SPELL, NODES);
+    node(&mut e, NODES, MISC, list);
+    // In the loop: found, nothing added.
+    call(&mut e, 0x2823, &[r(5), r(1)]);
+    assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (SPELL, NODES));
+    // Removing an item not in it: the walk ends, nothing removed.
+    call(&mut e, 0x2824, &[r(6), r(1)]);
+    assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (SPELL, NODES));
+    assert_eq!((e.mem.u32(NODES), e.mem.u32(NODES + 4)), (MISC, list));
+    // Adding one not in it: the walk ends (not found), so JIP's Prepend follows.
+    call(&mut e, 0x2823, &[r(6), r(1)]);
+    assert_eq!(e.mem.u32(list), SPELL2, "prepended after the bounded walk");
+    let added = e.mem.u32(list + 4);
+    assert_eq!((e.mem.u32(added), e.mem.u32(added + 4)), (SPELL, NODES));
+    // An item in it still goes: SPELL's node unlinked.
+    call(&mut e, 0x2824, &[r(5), r(1)]);
+    assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (SPELL2, NODES));
+}
+
+/// Without the list guard row the same walk stops the port (as `list_items` does).
+#[test]
+fn base_spell_list_that_loops_back_stops_without_the_list_guard() {
+    let mut e = setup();
+    let list = NPC + 0x80;
+    node(&mut e, list, SPELL, NODES);
+    node(&mut e, NODES, MISC, list);
+    let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        call(&mut e, 0x2824, &[r(6), r(1)]);
+    }));
+    assert!(stopped.is_err());
 }
 
 #[test]
@@ -533,9 +590,14 @@ fn factions_and_faction_lists() {
         array_data(&e, res),
         vec![Data::Form(0x105), Data::Form(0x106)]
     );
-    // A base given: its own list only.
+    // A base given (the actor's own NPC): its own list only, the actor's changes ignored
+    // (FACTION3 kept, FACTION2 not added).
     let res = call_on(&mut e, 0x28a6, ACTOR, &[r(1)]).1;
-    assert_eq!(array_data(&e, res).len(), 2);
+    assert_eq!(
+        array_data(&e, res),
+        vec![Data::Form(0x105), Data::Form(0x107)],
+        "the changes are not read for a base given"
+    );
     assert_eq!(call(&mut e, 0x28a6, &[r(2)]).1, 0.0, "none: no array");
     assert_eq!(call_on(&mut e, 0x28a6, PLAIN_REF, &[]).1, 0.0);
     // In a list: the faction list's items against the set.
@@ -594,7 +656,7 @@ fn kill_xp_through_the_game() {
     e.register(0x0040_6ce0, |_, w| {
         CALLED.with(|c| c.borrow_mut().push((0x406ce0, w.to_vec())));
         Ret {
-            st0: f64::from(f32::from_bits(w[1]).floor()),
+            st0: f64::from(f32::from_bits(w[0]).floor()),
             ..Ret::default()
         }
     });
@@ -604,7 +666,8 @@ fn kill_xp_through_the_game() {
     assert_eq!(called(0x6705b0)[0], vec![1, (-2i32) as u32]);
     let xp = 25f32.to_bits();
     assert_eq!(called(0x648c80)[0], vec![xp, 3]);
-    assert_eq!(called(0x406ce0)[0], vec![xp, 37.75f32.to_bits()]);
+    // One stack word, the scaled XP (00406CE0 is cdecl with one float): 37, not 25.
+    assert_eq!(called(0x406ce0)[0], vec![37.75f32.to_bits()]);
     call_on(&mut e, 0x2809, ACTOR2, &[]);
     assert_eq!(called(0x6705b0)[1][0], 0, "a creature reference");
     assert_eq!(call_on(&mut e, 0x2809, PLAIN_REF, &[]).1, 0.0);
@@ -770,6 +833,11 @@ fn fleeing_by_package() {
     assert_eq!(eval(&mut e, 0x283c, ACTOR, 0), 0.0, "al only");
     assert_eq!(eval(&mut e, 0x283c, PLAIN_REF, 0), 0.0);
     assert_eq!(eval(&mut e, 0x283c, 0, 0), 0.0);
+    // No process: not fleeing, even with a flee package where the process would be.
+    e.mem.set_u8(PACKAGE + 0x20, 0x0a);
+    e.mem.set_u32(ACTOR + 0x68, 0);
+    assert_eq!(call_on(&mut e, 0x283c, ACTOR, &[]).1, 0.0, "no process");
+    assert_eq!(eval(&mut e, 0x283c, ACTOR, 0), 0.0, "no process");
 }
 
 #[test]
@@ -793,6 +861,11 @@ fn current_ammo_rounds() {
     assert_eq!(e.mem.u32(ENTRY + 4), 9);
     e.mem.set_u32(PROCESS + 0x118, 0);
     call_on(&mut e, 0x283e, ACTOR, &[n(5)]);
+    // No process: nothing (the entry where the process would be is not touched).
+    e.mem.set_u32(PROCESS + 0x118, ENTRY);
+    e.mem.set_u32(ACTOR + 0x68, 0);
+    call_on(&mut e, 0x283e, ACTOR, &[n(5)]);
+    assert_eq!(e.mem.u32(ENTRY + 4), 9, "no process");
 }
 
 #[test]

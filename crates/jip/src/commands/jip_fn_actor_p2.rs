@@ -792,8 +792,8 @@ fn get_kill_xp(e: &mut Engine, w: &[u32]) -> Ret {
         let difficulty = e.mem.u32(player + PLAYER_DIFFICULTY);
         let xp_bits = (xp as f32).to_bits();
         let scaled = e.call(DIFFICULTY_MULT, &args![xp_bits, difficulty]).st0 as f32;
-        // `ecx` holds what JIP popped there: the XP's float bits (`floor` does not read it).
-        let r = e.call(FLOOR_FLOAT, &args![xp_bits, scaled.to_bits()]).st0;
+        // 00406CE0 is cdecl with one stack float: the scaled XP JIP leaves on the stack.
+        let r = e.call(FLOOR_FLOAT, &args![scaled.to_bits()]).st0;
         a.set_result(e, r);
     }
     print_result(e, &a);

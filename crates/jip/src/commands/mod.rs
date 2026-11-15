@@ -322,10 +322,15 @@ pub fn nth_item(e: &Engine, head: Ptr<ListNode>, index: i32) -> u32 {
     e.get(node, ListNode::data)
 }
 
-/// `tList::IsInList`: some node holds `item` (an empty first node holds 0).
+/// `tList::IsInList`: some node holds `item` (an empty first node holds 0). A list that runs
+/// back into itself ends as [`list_items`] does ([`list_step`]): not found.
 pub fn list_contains(e: &Engine, head: Ptr<ListNode>, item: u32) -> bool {
     let mut node = head;
+    let mut walked = 0usize;
     loop {
+        if !list_step(e, &mut walked) {
+            return false;
+        }
         if e.get(node, ListNode::data) == item {
             return true;
         }
@@ -396,10 +401,15 @@ pub fn list_remove_all(e: &mut Engine, head: Ptr<ListNode>) {
 }
 
 /// `tList::Remove`: the first node holding `item` taken out ([`list_unlink`]); whether there was
-/// one.
+/// one. A list that runs back into itself ends as [`list_items`] does ([`list_step`]): nothing
+/// removed.
 pub fn list_remove(e: &mut Engine, head: Ptr<ListNode>, item: u32) -> bool {
     let (mut node, mut prev) = (head, Ptr::<ListNode>::NULL);
+    let mut walked = 0usize;
     loop {
+        if !list_step(e, &mut walked) {
+            return false;
+        }
         if e.get(node, ListNode::data) == item {
             list_unlink(e, node, prev);
             return true;
