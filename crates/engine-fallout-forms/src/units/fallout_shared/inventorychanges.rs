@@ -18852,20 +18852,28 @@ mod tests {
             let reference = world_reference(&mut e, base, 0x15);
             e.call_log = Some(vec![]);
             e.call(0x004c1c90, &args![this, reference, 2i32, 0u32, 0u32]);
-            (reference, calls(&e, REFERENCE_PERSISTS).len())
+            (
+                reference,
+                calls(&e, REFERENCE_PERSISTS).len(),
+                calls(&e, EXTRA_SET_REFERENCE).len(),
+            )
         };
         for with_entry in [true, false] {
             for word in GH1_OFF {
-                let (_, persists) = run(word, with_entry, Some(0));
+                let (_, persists, _) = run(word, with_entry, Some(0));
                 assert_eq!(persists, 1, "{word:x}");
                 assert!(gh1_take().is_empty());
             }
             let site = if with_entry { 0x004c_232c } else { 0x004c_273a };
-            let (reference, persists) = run(GH1_ON, with_entry, Some(0));
-            assert_eq!(persists, 0);
+            let (reference, persists, set) = run(GH1_ON, with_entry, Some(0));
+            assert_eq!((persists, set), (0, 0));
             assert_eq!(gh1_take(), vec![(site, vec![reference])]);
-            let (_, persists) = run(GH1_ON, with_entry, None);
+            let (_, persists, _) = run(GH1_ON, with_entry, None);
             assert_eq!(persists, 1);
+            assert_eq!(gh1_take().len(), 1);
+            // An answer of true stands for the call too: the reference is set on the new list.
+            let (_, persists, set) = run(GH1_ON, with_entry, Some(1));
+            assert_eq!((persists, set), (0, 1));
             assert_eq!(gh1_take().len(), 1);
         }
     }
