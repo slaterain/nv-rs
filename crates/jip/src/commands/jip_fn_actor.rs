@@ -3,7 +3,7 @@
 //! values, a creature's damage, reach and model list, an actor's process (level, light, alpha,
 //! dive breath, idle, weapon, ammo, package, knocked state, last hit), its combat targets and
 //! allies, what it detects, its followers and dropped items, its active effects' modifiers and
-//! its perk modifiers, the turn calls, a name set on a base form or a cell. 47 built here.
+//! its perk modifiers, the turn calls, a name set on a base form or a cell. 48 built here (`ToggleDetectionFix` with its patch).
 //!
 //! Built by the core track inside its hook files (not again here): `GetCombatDisabled`,
 //! `SetCombatDisabled`, `ToggleNoHealthReset`, `GetTeammateUsingAmmo`, `SetTeammateUsingAmmo`,
@@ -11,9 +11,10 @@
 //! five `SetOn...EventHandler` commands (`actor_hooks`).
 //!
 //! Left for later, with what each waits for:
-//! - `ToggleDetectionFix` (JIP's actor flag 0x10, read only by its detection patch, stage 3.9 row
-//!   G53) and `GetWheelDisabled`/`SetWheelDisabled` (flag 0x80, read only by the companion-wheel
-//!   patch, row G54): the flag alone changes nothing in the game until those patches exist.
+//! - `GetWheelDisabled`/`SetWheelDisabled` (flag 0x80, read only by the companion-wheel patch,
+//!   row G54): the flag alone changes nothing in the game until that patch exists.
+//!   (`ToggleDetectionFix` is listed here; its handler is with its patch, G53, in
+//!   `game_patches::gc`.)
 //! - `GetFallTimeElapsed`, `GetFallTimeRemaining`, `ResetFallTime`, `GetActorVelocity`, `IsInAir`,
 //!   `GetObjectUnderFeet`: fields of the actor's Havok character controller (the process's +0x138)
 //!   and, for the last, its body's parent reference: the physics work.
@@ -80,6 +81,7 @@ pub static COMMANDS: Handlers = &[
     (0x2744, get_detected_actors),
     (0x2745, get_detecting_actors),
     (0x2757, get_current_stable_package),
+    (0x275c, crate::game_patches::gc::toggle_detection_fix),
     (0x2761, is_in_combat_with),
     (0x2741, stop_idle),
     (0x276b, holster_weapon),

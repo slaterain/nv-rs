@@ -992,7 +992,11 @@ Nothing built yet.
 
 #### GC: Hit damage, detection, combat formulas
 
-Nothing built yet.
+No fix built yet. Built as part of JIP (in every preset once JIP answers "installed", not under the row:
+it answers as the original until a JIP command asks): JIP's detection patch (`008a0d10` at `0x8A0DAB`,
+`0x8A1291`, `0x8A131D`, `0x8A147C`), so an actor given a forced detection value
+(`ForceActorDetectionValue`) or the detection fix (`ToggleDetectionFix`) is no longer treated as the
+player's teammate when others detect it, and with the detection fix its level word is the player's.
 
 #### GD: Projectiles, explosions, combat AI, packages
 
@@ -1052,7 +1056,10 @@ list in records of its own.
 
 #### GH2: References, models, cells, ash piles
 
-Nothing built yet.
+No fix row built yet. Part of JIP in every preset (not this row): `DestroyRefrHook` (`0055a430`,
+`0x55A488`): a destroyed reference lets go of its `SetRefName` name and `SetRefrModelPath` model
+(with their hooks' users) and, when it was made in the game and the save holds nothing of it, its
+aux variables.
 
 #### GF: Forms and records
 

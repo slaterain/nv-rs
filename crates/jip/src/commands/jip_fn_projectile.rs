@@ -58,7 +58,7 @@ const PATH_BUFFER: usize = 0x80;
 /// `kMaterialConvert` (JIP LN NVSE, internal/jip_core.cpp): the impact's material (0-31) as the
 /// script's material number (stone 0, dirt 1, grass 2, glass 3, metal 4, wood 5, organic 6,
 /// cloth 7, water 8, hollow metal 9).
-const MATERIAL_CONVERT: [u8; 32] = [
+pub(crate) const MATERIAL_CONVERT: [u8; 32] = [
     0, 7, 1, 3, 2, 4, 6, 6, 8, 5, 0, 4, 5, 4, 4, 4, 9, 9, 1, 0, 4, 4, 9, 9, 3, 9, 4, 4, 9, 9, 5, 5,
 ];
 

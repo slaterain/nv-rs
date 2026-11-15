@@ -820,6 +820,13 @@ pub(crate) fn ray_cast(
     })
 }
 
+/// The cast's hit point in game units, `(from + (to - from) * fraction) * PS_HKUnitCnvrt` (the
+/// fourth lane times 0), as `RayCastCoords` and `GetRayCastMaterial` compute it.
+pub(crate) fn hit_point(cast: &Cast) -> [f32; 4] {
+    let k = [from_havok(), from_havok(), from_havok(), 0.0];
+    std::array::from_fn(|i| (cast.from[i] + (cast.to[i] - cast.from[i]) * cast.fraction) * k[i])
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: NiVector4::RayCastCoords
 // (asm) and nvse/GameData.cpp: GridCellArray::GetCellAtCoord (asm).
 /// The cast's hit point in game units, `(from + (to - from) * fraction) * PS_HKUnitCnvrt` (the
@@ -828,10 +835,7 @@ pub(crate) fn ray_cast(
 /// and y truncated, shifted right 12, then JIP's index into the grid: `y' + x' + (x' << half)`
 /// with `x' = x - centreX + half`, `y' = y - centreY + half`, each below the dimension).
 pub(crate) fn hit_coords(e: &Engine, cast: &Cast) -> ([f32; 4], bool) {
-    let k = [from_havok(), from_havok(), from_havok(), 0.0];
-    let coords: [f32; 4] = std::array::from_fn(|i| {
-        (cast.from[i] + (cast.to[i] - cast.from[i]) * cast.fraction) * k[i]
-    });
+    let coords = hit_point(cast);
     if cast.object != 0 {
         return (coords, true);
     }

@@ -77,12 +77,12 @@ const GLOBAL_DATA: u32 = 0x24;
 const NAME_BUFFER: usize = 0x40;
 
 /// A string argument as JIP's 0x40-byte name buffer holds it.
-fn name_arg(e: &Engine, read: &Read, i: usize, command: &str) -> Vec<u8> {
+pub(crate) fn name_arg(e: &Engine, read: &Read, i: usize, command: &str) -> Vec<u8> {
     super::buffer_arg(e, read, i, NAME_BUFFER, command)
 }
 
 /// The axis byte argument `i` (`kParamType_Axis`), 0 when not given.
-fn axis_arg(read: &Read, i: usize) -> u8 {
+pub(crate) fn axis_arg(read: &Read, i: usize) -> u8 {
     match read.args.get(i) {
         Some(Arg::Byte(b)) => *b,
         _ => 0,
@@ -109,7 +109,7 @@ fn set_vars(e: &mut Engine, vars: [u32; 3], values: [f32; 3]) {
 
 /// The rigid body of the named block when it is mobile (`GetRigidBody(name)` and `IsMobile`), 0
 /// otherwise.
-fn mobile_body(e: &Engine, refr: u32, name: &[u8]) -> u32 {
+pub(crate) fn mobile_body(e: &Engine, refr: u32, name: &[u8]) -> u32 {
     let body = h::rigid_body(e, refr, name);
     if body != 0 && h::body_is_mobile(e, body) {
         body
@@ -127,7 +127,7 @@ fn rotate(cols: [[f32; 4]; 3], v: [f32; 4]) -> [f32; 3] {
 }
 
 /// The body's rotation columns (+0xF0, +0x100, +0x110).
-fn rotation(e: &Engine, body: u32) -> Option<[[f32; 4]; 3]> {
+pub(crate) fn rotation(e: &Engine, body: u32) -> Option<[[f32; 4]; 3]> {
     Some([
         h::vec4(e, body.wrapping_add(h::ROTATION))?,
         h::vec4(e, body.wrapping_add(h::ROTATION + 0x10))?,
@@ -572,7 +572,7 @@ fn is_grabbable(e: &mut Engine, w: &[u32]) -> Ret {
 // ---- game calls ----
 
 /// The node's world translation and the word after it (16 bytes) and world rotation.
-fn node_transform(e: &Engine, node: u32) -> Option<([f32; 4], [f32; 9])> {
+pub(crate) fn node_transform(e: &Engine, node: u32) -> Option<([f32; 4], [f32; 9])> {
     let pos = h::vec4(e, node.wrapping_add(h::WORLD_TRANSLATE))?;
     let mut rot = [0f32; 9];
     for (i, r) in rot.iter_mut().enumerate() {
