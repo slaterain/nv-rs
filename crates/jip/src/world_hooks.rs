@@ -819,19 +819,15 @@ fn set_quest_stage_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: RunResultScriptHook.
 /// `TESTopicInfo::RunResult` after its reference test (`0x61F184`: the info, the index, the
 /// reference): for the first result script, the info's scripts are called on the reference with
-/// the info, then its topic's with the topic. The topic is `TESTopic::GetOwnerTopic`'s answer.
-/// JIP reads the word it adds to every info at `+0x50` (`parentTopic`), which its always-on game
-/// patch "Store parent TESTopic for every TESTopicInfo" (`internal/patches_game.h`: the load's
-/// link call `0x61E086` stores the topic, `0x61CD16` and `0x61D041` grow and read the info, and
-/// `GetOwnerTopic` at `0x61A310` is rewritten to answer that word) fills. That patch changes
-/// every caller of `GetOwnerTopic` in the game, not this hook alone, so it is one of JIP's
-/// game patches of step 3.9 (with the info's growth, where the port's plan keeps the exe's
-/// `TESTopicInfo` and a port-side record of the topic); until then the exe's `GetOwnerTopic`
-/// walks the topics and answers the first holding the info. The two differ only for an info a
-/// mod links under two topics (the walk: the first topic; JIP: the last linked), and the game's
-/// own callers see the same topic as this handler. Once that patch is built, `GetOwnerTopic`
-/// answers the recorded topic and this handler follows it unchanged. The walk runs only for a
-/// first result script while a script has a dialogue topic handler.
+/// the info, then its topic's with the topic. JIP reads the word it adds to every info at `+0x50`
+/// (`parentTopic`), which its always-on game patch "Store parent TESTopic for every TESTopicInfo"
+/// fills (step 3.9a, `game_patches::dialogue`): with that patch on (JIP installed and the
+/// host's row `NV_JIP_GAME_PATCHES`), the port's record of it, read here with no call as JIP
+/// reads its word; without it (the vanilla preset), `TESTopic::GetOwnerTopic`'s answer, the
+/// exe's walk (the first topic holding the info, where JIP's word is the last linked: they
+/// differ only for an info a mod links under two topics), so this handler and the game's own
+/// callers always see the same topic. The walk runs only for a first result script while a
+/// script has a dialogue topic handler.
 fn run_result_script_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let (info, index, reference) = (a[0], a[1], a[2]);
     if index != 0 {
@@ -840,7 +836,11 @@ fn run_result_script_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if let Some(scripts) = state(e).dialog_topic.get(&info).cloned() {
         invoke(e, &scripts, reference, &[info]);
     }
-    let topic = e.call(GET_OWNER_TOPIC, &args![info]).u32();
+    let topic = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        crate::game_patches::dialogue::parent_topic(e, info)
+    } else {
+        e.call(GET_OWNER_TOPIC, &args![info]).u32()
+    };
     if let Some(scripts) = state(e).dialog_topic.get(&topic).cloned() {
         invoke(e, &scripts, reference, &[topic]);
     }

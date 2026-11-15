@@ -41,6 +41,7 @@ pub static FIXES: &[Fix] = &[
     KEEP_COSAVE_PLUGINS,
     JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
+    JIP_GAME_PATCHES,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
     INVENTORY_REFERENCE_CHECKS,
@@ -270,6 +271,24 @@ fn install_jip_vanilla_commands(e: &mut Engine) {
     jip::overrides::set_vanilla_commands(e, true);
 }
 
+/// JIP LN NVSE's game patches (its changes to the game's own code: `InitGamePatches`, the
+/// `[GamePatches]` switches of the player's `jip_nvse.ini`, step 3.9), a flag `crates/jip` reads:
+/// they change the game for every player, so they are a row (ADR-0016 §5). They take effect only
+/// once JIP answers "installed" (`jip::ANSWERS_INSTALLED`, step 3.10); JIP's own wraps then go
+/// over the rows installed here (the dialogue topic index at `0061a310`).
+pub const JIP_GAME_PATCHES: Fix = Fix {
+    name: "JIP game patches",
+    env: "NV_JIP_GAME_PATCHES",
+    addresses: &[],
+    summary:
+        "JIP LN NVSE's fixes of the game's own code (each dialogue line's topic remembered, results that start at 0, ...), once JIP is built in",
+    install: install_jip_game_patches,
+};
+
+fn install_jip_game_patches(e: &mut Engine) {
+    jip::game_patches::set_row(e, true);
+}
+
 /// The driver compiles a Direct3D 9 shader at its first draw: the first shot's frame took 25-46 ms
 /// (7 shaders the game made at start-up, first drawn with at the shot), and the NVIDIA driver
 /// compiles a pixel shader again for a multisampled target. With the row the real backend draws
@@ -425,6 +444,7 @@ const NO_ADDRESS: &[&str] = &[
     KEEP_COSAVE_PLUGINS.name,
     JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
+    JIP_GAME_PATCHES.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
     INVENTORY_REFERENCE_CHECKS.name,
