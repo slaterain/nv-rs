@@ -1004,7 +1004,9 @@ player's teammate when others detect it, and with the detection fix its level wo
 
 #### GD: Projectiles, explosions, combat AI, packages
 
-Nothing built yet.
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; `InitProjectileSetAmmoHook` in `InitGamePatches`) | `009bbef0` (`0x9BC241`: the projectile's launch constructor, its projectile count, damage division and split-beam scale) | With the fixes row on, a weapon's damage is split by JIP's own projectile count: the loaded ammo's projectiles per shot times the weapon's ammo use when the ammo sets one, else the weapon's count, plus the split-beam mod's value when that mod is on (the original counts through `GetNumProjectiles`), and split-beam damage is scaled by 1.3 before the division instead of after. The ammo, the split-beam flag and the count are kept in the projectile (in its own unused bytes, as JIP keeps them) for JIP's hit-damage formula and ammo impact scripts (group GC's O1, G119). With JIP installed and the row off, the original's count and damage, nothing recorded. Differences from JIP: a projectile loaded from a save reads "no ammo" (the port's memory starts zeroed; on the original's heap JIP reads leftover bytes there); JIP's Rock-It Launcher check (`InitRockItLauncher`, not built) never matches | 3.9-GD |
 
 #### GE: Actors: movement, life, NPC perks
 
