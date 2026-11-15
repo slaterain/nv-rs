@@ -212,13 +212,18 @@ fn pr2_fixes_only_with_the_row() {
     for addr in AREA.fix_sites {
         assert_eq!(e.site(*addr, &[HIT, 0]), None, "{addr:08x}");
     }
-    super::super::set_row(&mut e, true);
+    // The group's installer (what the row puts in; the framework's tests hold every area to the
+    // row): every fix seam then has JIP's handler and both wraps are in.
+    install_fixes(&mut e);
     for addr in AREA.fix_sites {
         assert_eq!(
             e.site_owners(*addr).to_vec(),
             vec![Owner::Jip],
             "{addr:08x}"
         );
+    }
+    for addr in AREA.fix_wraps {
+        assert!(e.wraps_at(*addr).contains(&Owner::Jip), "{addr:08x}");
     }
 }
 
