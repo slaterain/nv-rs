@@ -987,7 +987,9 @@ Nothing built yet.
 
 #### GB: UI: item lists, repair, pad dead zones
 
-Nothing built yet.
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (`DeferredInit`, when its XInput hook is in: `SafeWrite32` of `&s_deadZoneLSg` / `&s_deadZoneRSg` over the operand of eleven `FCOMP double ptr [0x010718F0]`) | left stick, nine: `00741500` (`0x7416D6`, `0x741705`), `007908f0` (`0x790966`), `00799790` (`0x799861`, the map's zoom), `007bd2a0` (`0x7BD47D`, `0x7BD4A0`, `0x7BD4DD`), `0094a8c0` (`0x94AB59`, `0x94AB88`, the free camera's move axes); right stick, two: `0094a8c0` (`0x94A93C`, `0x94A95F`, the free camera's look axes) | The caravan, lockpick, map-zoom and roulette menus and the free camera's movement test the left stick against JIP's left dead zone (7849, the game's own value, until `SetDeadZoneLS` is built): JIP's own, in whenever JIP is installed, the same as the game. With this row on, the free camera's look axes use JIP's right dead zone, 8689 where the game uses 7849, so a slightly larger right-stick movement is needed before the free camera turns. The free camera's four seams are group GP's to add (inert until then) | 3.9 GB-1 |
 
 #### GC: Hit damage, detection, combat formulas
 

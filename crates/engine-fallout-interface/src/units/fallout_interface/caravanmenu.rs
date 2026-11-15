@@ -6325,6 +6325,65 @@ const TICKS_PER_SECOND: u32 = 0x0101_7b70;
 /// `01029790`).
 const STICK_DEAD_ZONE: u32 = 0x0107_18f0;
 const STICK_RANGE: u32 = 0x0102_9790;
+
+/// The double a left-stick dead zone test compares with (`FCOMP double ptr [operand]`): the exe's
+/// 7849.0 at `010718f0` (`exe`, each file's name for it), or, with JIP LN NVSE installed, what the seam at `site` (the `FCOMP`'s
+/// operand, which JIP's `DeferredInit` points at its `s_deadZoneLSg`; step 3.9 D04) answers. The
+/// word is tested first; with JIP not installed nothing else runs. The four menus' nine seams
+/// (caravan, lockpick, map, roulette) all ask here.
+pub(crate) fn left_stick_dead_zone(e: &mut Engine, site: u32, exe: u32) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(site, &[]).unwrap_or(exe)
+    } else {
+        exe
+    }
+}
+
+/// The D04 seams' tests (step 3.9; the rows and handlers are group GB's in `crates/jip`): test
+/// handlers that note their seam and answer [`d04_test::FAR`], a double far above any stick value.
+#[cfg(test)]
+pub(crate) mod d04_test {
+    use crate::prelude::*;
+    use std::cell::RefCell;
+
+    /// A test double (1.0e9) in mapped memory.
+    pub const FAR: u32 = 0x0390_0000;
+
+    thread_local! {
+        static SEEN: RefCell<Vec<u32>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn noted<const SITE: u32>(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(SITE));
+        Some(FAR)
+    }
+
+    /// Handlers at `sites` (each a const-generic copy of [`noted`]), the word set to `word`.
+    pub fn handlers(e: &mut Engine, word: u32, sites: &[u32]) {
+        SEEN.with(|s| s.borrow_mut().clear());
+        e.map(FAR, 0x1000);
+        e.mem.set_f64(FAR, 1.0e9);
+        e.set_jip_patches(word);
+        for &site in sites {
+            let f: engine_core::extend::SiteFn = match site {
+                0x0074_16d6 => noted::<0x0074_16d6>,
+                0x0074_1705 => noted::<0x0074_1705>,
+                0x0079_0966 => noted::<0x0079_0966>,
+                0x0079_9861 => noted::<0x0079_9861>,
+                0x007b_d47d => noted::<0x007b_d47d>,
+                0x007b_d4a0 => noted::<0x007b_d4a0>,
+                0x007b_d4dd => noted::<0x007b_d4dd>,
+                _ => panic!("{site:08x}: not a D04 seam of this crate"),
+            };
+            e.on_site_for_test(site, f);
+        }
+    }
+
+    /// The seams asked since [`handlers`], in order.
+    pub fn seen() -> Vec<u32> {
+        SEEN.with(|s| s.borrow().clone())
+    }
+}
 /// `double` 1.0 (`01012070`).
 const ONE_DOUBLE: u32 = 0x0101_2070;
 /// The repeat delay of the pad and key selection (`double` 0.25 at
@@ -6798,14 +6857,16 @@ fn do_idle_frame(e: &mut Engine, this: Ptr<CaravanMenu>, ebp: u32) {
             .i32();
         let x_float = x87_store32(f64::from(input.x));
         let magnitude = e.call(FLOAT_MAGNITUDE_00408820, &args![x_float]).f64();
-        if magnitude <= e.global::<f64>(STICK_DEAD_ZONE) {
+        let dead_zone = left_stick_dead_zone(e, 0x0074_16d6, STICK_DEAD_ZONE);
+        if magnitude <= e.global::<f64>(dead_zone) {
             input.x = 0;
         }
         let range = e.global::<f64>(STICK_RANGE);
         input.x_bits = x87_store32(x87_div(f64::from(input.x), range));
         let y_float = x87_store32(f64::from(input.y));
         let magnitude = e.call(FLOAT_MAGNITUDE_00408820, &args![y_float]).f64();
-        if magnitude <= e.global::<f64>(STICK_DEAD_ZONE) {
+        let dead_zone = left_stick_dead_zone(e, 0x0074_1705, STICK_DEAD_ZONE);
+        if magnitude <= e.global::<f64>(dead_zone) {
             input.y = 0;
         }
         let range = e.global::<f64>(STICK_RANGE);
@@ -11264,6 +11325,62 @@ mod n052_tests {
         assert_eq!(e.mem.u32(menu + SELECTION_DELAY), 0.5f32.to_bits());
         assert_eq!(e.mem.u32(menu + PENDING_KEY), KEY_UP);
         assert_eq!(e.get(this, CaravanMenu::eGameState), 0);
+    }
+
+    /// JIP's D04 seam helper: the exe's double unless JIP is installed (the `INSTALLED` bit, not
+    /// `FIXES`) and a handler answers; then the answer.
+    #[test]
+    fn left_stick_dead_zone_asks_only_with_jip_installed() {
+        use super::d04_test::{handlers, seen, FAR};
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        let mut e = engine();
+        handlers(&mut e, 0, &[0x0074_16d6]);
+        assert_eq!(
+            left_stick_dead_zone(&mut e, 0x0074_16d6, STICK_DEAD_ZONE),
+            STICK_DEAD_ZONE
+        );
+        e.set_jip_patches(FIXES);
+        assert_eq!(left_stick_dead_zone(&mut e, 0x0074_16d6, 0x1234), 0x1234);
+        assert!(seen().is_empty(), "not asked while not installed");
+        e.set_jip_patches(INSTALLED);
+        assert_eq!(
+            left_stick_dead_zone(&mut e, 0x0074_16d6, STICK_DEAD_ZONE),
+            FAR
+        );
+        assert_eq!(seen(), [0x0074_16d6]);
+        // Installed, no handler at that seam: the exe's double.
+        assert_eq!(left_stick_dead_zone(&mut e, 0x0074_1705, 0x1234), 0x1234);
+        assert_eq!(STICK_DEAD_ZONE, 0x0107_18f0);
+    }
+
+    /// `DoIdle`'s two seams, x then y (JIP's operands `0x7416D6`, `0x741705`), only with JIP
+    /// installed (the deck-input run of `do_idle_deck_input_in_gamepad_mode_skips_the_rest`).
+    #[test]
+    fn do_idle_asks_jips_two_dead_zone_seams() {
+        use super::d04_test::{handlers, seen};
+        use engine_core::extend::jip_patches::INSTALLED;
+        let sites = [0x0074_16d6, 0x0074_1705];
+        for (word, expected) in [(0, &[][..]), (INSTALLED, &sites[..])] {
+            let (mut e, this) = idle_engine();
+            handlers(&mut e, word, &sites);
+            e.set(this, CaravanMenu::eActiveMenu, 1);
+            idle_at(&mut e, this, 0, 0.0);
+            e.register(KEYS_BLOCKED_004B71D0, |_, _| ret(1));
+            e.register(CONTROLS_AXIS_00A23390, |_, a| {
+                ret(if a[2] == 8 { 20000 } else { 0 })
+            });
+            e.register(FLOAT_MAGNITUDE_00408820, |_, a| {
+                ret_f(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.register(GET_FLOAT_TRAIT, |_, _| ret_f(7.0));
+            let menu = this.addr();
+            let deck: Vec<u32> = (0..13).map(|_| card(&mut e, 1, 1, 0)).collect();
+            fill_array(&mut e, menu + DECK_ARRAY, &deck);
+            e.mem.set_u32(menu + SELECTION_DELAY, 0.5f32.to_bits());
+            e.mem.set_u32(menu + PENDING_KEY, KEY_UP);
+            do_idle(&mut e, this);
+            assert_eq!(seen(), expected, "word {word:x}");
+        }
     }
 
     #[test]
