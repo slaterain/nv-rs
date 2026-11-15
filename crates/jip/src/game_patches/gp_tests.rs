@@ -256,6 +256,23 @@ fn a_model_not_in_the_map_leaves_the_exes_load() {
     assert_eq!(first_person_node(&mut e), 0);
 }
 
+/// A find that misses and writes nothing: the out word is zeroed before the find (JIP pushes a
+/// 0), so stale stack contents never pass for a model: no answer, the exe's load.
+#[test]
+fn a_miss_that_writes_nothing_reads_the_zeroed_out_word() {
+    let mut e = world();
+    cached_model(&mut e, 1);
+    // Leave a non-zero word where the out word will sit.
+    e.with_stack(4, |e, out| e.mem.set_u32(out.addr(), 0x00de_ad00));
+    e.register(MODEL_MAP_FIND, |e, a| {
+        assert_eq!(e.mem.u32(a[2]), 0, "zeroed before the find");
+        ret(0)
+    });
+    assert_eq!(first_person_model(&mut e, &[0]), None);
+    assert!(calls(&e, CLONING_CONSTRUCT).is_empty());
+    assert_eq!(first_person_node(&mut e), 0);
+}
+
 /// The eye height's seam always answers (JIP's jump has no condition).
 #[test]
 fn the_eye_height_is_always_skipped() {
@@ -451,6 +468,36 @@ fn only_a_cell_in_state_two_or_more_loads() {
         assert_eq!(calls(&e, LOCK_ENTER).len(), 1);
         assert_eq!(calls(&e, LOCK_LEAVE).len(), 1);
     }
+}
+
+/// The lock let go is the one taken, also when TES's load moves the reference to another cell
+/// (the counts go to the new cell, read again as JIP does) or to none (the lock still let go;
+/// JIP and the exe let go the re-read cell's lock: a deliberate difference).
+#[test]
+fn the_lock_let_go_is_the_one_taken() {
+    let mut e = world();
+    let t = task(&mut e);
+    let other = e.mem.alloc(0x100);
+    e.mem.set_u32(0x011e_0f08, other);
+    e.register(TES_LOAD_REFERENCE, |e, a| {
+        let other = e.mem.u32(0x011e_0f08);
+        e.mem.set_u32(a[1] + 0x40, other);
+        Ret::default()
+    });
+    queued_reference(&mut e, t.task);
+    assert_eq!(calls(&e, LOCK_ENTER), vec![vec![t.cell + 0x80, 0]]);
+    assert_eq!(calls(&e, LOCK_LEAVE), vec![vec![t.cell + 0x80]]);
+    assert_eq!(calls(&e, QUEUED_COUNT_DOWN), vec![vec![other]]);
+
+    let mut e = world();
+    let t = task(&mut e);
+    e.register(TES_LOAD_REFERENCE, |e, a| {
+        e.mem.set_u32(a[1] + 0x40, 0);
+        Ret::default()
+    });
+    queued_reference(&mut e, t.task);
+    assert!(calls(&e, QUEUED_COUNT_DOWN).is_empty());
+    assert_eq!(calls(&e, LOCK_LEAVE), vec![vec![t.cell + 0x80]]);
 }
 
 /// No model: TES's load without the addon nodes.
@@ -677,6 +724,35 @@ fn a_marked_player_rebuilds_his_models() {
             vec![p.process, 0, 0x00d0_0011, 0x00d0_0012, me],
         ]
     );
+}
+
+/// The deleted first-person biped and animation words are cleared before the load runs; and
+/// when nothing is loaded (the cell in state 1) they stay 0, never pointing at freed memory.
+#[test]
+fn the_deleted_biped_and_animation_are_cleared() {
+    let mut e = world();
+    let p = player(&mut e);
+    e.register(TES_LOAD_REFERENCE, |e, a| {
+        assert_eq!(e.mem.u32(a[1] + 0x68c), 0, "biped cleared before the load");
+        assert_eq!(
+            e.mem.u32(a[1] + 0x690),
+            0,
+            "animation cleared before the load"
+        );
+        Ret::default()
+    });
+    queued_player(&mut e, p.t.task);
+    assert_eq!(calls(&e, TES_LOAD_REFERENCE).len(), 1);
+
+    let mut e = world();
+    let p = player(&mut e);
+    e.mem.set_u8(p.t.cell + 0x26, 1);
+    queued_player(&mut e, p.t.task);
+    assert!(calls(&e, TES_LOAD_REFERENCE).is_empty());
+    assert_eq!(calls(&e, BIPED_DELETE), vec![vec![p.biped, 1]]);
+    assert_eq!(calls(&e, ANIMATION_DELETE), vec![vec![p.animation, 1]]);
+    assert_eq!(e.mem.u32(p.t.refr + 0x68c), 0);
+    assert_eq!(e.mem.u32(p.t.refr + 0x690), 0);
 }
 
 /// In third person the other way round.

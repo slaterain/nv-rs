@@ -212,9 +212,17 @@ fn first_person_model(e: &mut Engine, _: &[u32]) -> Option<u32> {
     if model == 0 {
         return None;
     }
+    // JIP: `cmp [eax+8], 0` (a plain read), then `lock inc [eax+8]`: the increment is atomic
+    // (the loader's other threads count the same model); the plain write only where the word
+    // has no atomic view (unaligned or unmapped).
     let refs = e.mem.u32(model + off::MODEL_REFS);
     if refs as i32 <= 0 {
-        e.mem.set_u32(model + off::MODEL_REFS, refs.wrapping_add(1));
+        match e.mem.atomic_u32(model + off::MODEL_REFS) {
+            Some(count) => {
+                count.fetch_add(1, Ordering::SeqCst);
+            }
+            None => e.mem.set_u32(model + off::MODEL_REFS, refs.wrapping_add(1)),
+        }
     }
     let node = e.mem.u32(model + off::MODEL_NODE);
     let copy = create_copy(e, node);
@@ -256,9 +264,12 @@ fn queued_player_routine(e: &mut Engine, w: &[u32]) -> Ret {
 /// one) and is loaded by `TES`; then the loader is told, the cell's queued count goes down (its
 /// critical count too unless the reference's slot `+0x100` is the shared `return true`), a
 /// reference with 3D and JIP's `Update3D` mark loses the mark and a fade node's fade is set to
-/// 1, and the lock is let go. JIP lets the lock go whenever there is a cell, also when it did
-/// not take it (a flagged reference): the port lets it go only when taken (a count of another
-/// holder lowered is a broken lock).
+/// 1, and the lock is let go. Two deliberate differences, both keeping the lock's enter and
+/// leave an exact pair: JIP lets the lock go whenever there is a cell, also when it did not
+/// take it (a flagged reference), and the port lets it go only when taken (a count of another
+/// holder lowered is a broken lock); and JIP (as the exe) lets go the lock of the parent cell
+/// read again after the load (none when that read is 0), while the port lets go the lock of
+/// the cell it took (the same cell unless the load moved the reference to another).
 pub fn queued_reference(e: &mut Engine, queued: u32) {
     if e.mem.u32(queued + off::TASK_STATE) == 6 {
         return;
@@ -268,12 +279,15 @@ pub fn queued_reference(e: &mut Engine, queued: u32) {
     let saved = e.mem.u32(context);
     let own = e.mem.u32(queued + off::TASK_CONTEXT);
     e.mem.set_u32(context, own);
-    let mut locked = false;
+    // The cell whose lock was taken (0: none).
+    let mut locked = 0u32;
     if e.mem.u32(refr + off::FORM_FLAGS) & 0x820 == 0 {
         let cell = e.mem.u32(refr + off::PARENT_CELL);
         if cell != 0 {
+            // The exe's recursive lock enter (`0x40FBF0`) takes the lock and a label word
+            // (0: none); JIP's `LightCS::Enter` takes no label.
             e.call(LOCK_ENTER, &args![cell + off::CELL_LOCK, 0u32]);
-            locked = true;
+            locked = cell;
             let cell = e.mem.u32(refr + off::PARENT_CELL);
             if e.mem.u8(cell + off::CELL_STATE) >= 2 {
                 let model = e.mem.u32(queued + off::TASK_MODEL);
@@ -316,10 +330,11 @@ pub fn queued_reference(e: &mut Engine, queued: u32) {
                 }
             }
         }
-        if locked {
-            let cell = e.mem.u32(refr + off::PARENT_CELL);
-            e.call(LOCK_LEAVE, &args![cell + off::CELL_LOCK]);
-        }
+    }
+    // Last, as JIP's leave (which comes after the counts and the fade); also when the load
+    // left the reference with no cell (JIP then leaves nothing: a lock held for good).
+    if locked != 0 {
+        e.call(LOCK_LEAVE, &args![locked + off::CELL_LOCK]);
     }
     e.mem.set_u32(context, saved);
 }

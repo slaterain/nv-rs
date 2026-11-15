@@ -1009,8 +1009,26 @@ model is copied from the model loader's cached load (`0094e1d0` at `0x94E4A1`; t
 longer read there, `0x94E5F6`), and JIP's own attach goes into the `Attach` slot of four queued
 reference vtables (`0x1016BE0`, `0x1016D28`, `0x1016D70`, `0x1016DB8`): it reads the mark JIP's
 `Update3D` sets, so `Update3D` on the player rebuilds both views, the weapon and the head, and on
-another reference resets its fade. JIP's inserted nodes, models, point lights and turned-off
-collision in that attach come with their commands.
+another reference resets its fade.
+
+A player with JIP installed gets these whatever `NV_JIP_GAME_PATCHES` says (they are JIP's own, not
+fixes), also when no script ever calls `Update3D`: for the three references' and the player's queued
+loads, a cell counts as loaded when its state byte (`+0x26`) is 2 or more, where the exe asks
+`TES::IsCellLoaded`; the load's "critical" count is lowered unless the reference's vtable slot
+`+0x100` is the game's shared `return true` (the exe calls that slot); and the player's eye height
+(`+0x698`) is no longer read from the first-person camera node when his 3D loads, for every player.
+The port differs from JIP on purpose in three places, each where JIP would stop the game or break a
+lock: a first-person model missing from the loader's cache is loaded as the exe does (JIP reads a
+null model), and the cell lock JIP's attach takes is let go exactly once and only by the reference
+that took it, the cell it took (JIP also lets go a lock it never took for a reference flagged
+`0x800`/`0x20`, and lets go the lock of the cell read again after the load).
+
+Three steps of JIP's attach are not built yet, because nothing can set what they test:
+- collision turned off for a reference marked by `ToggleObjectCollision`: waits for that command
+  (with JIP's `TESObjectREFR::ToggleCollision` and `NiNode::ToggleCollision`);
+- nodes and models JIP inserts into a reloaded 3D: waits for the `InsertNode` and `AttachModel`
+  commands (their maps);
+- JIP's point lights added to the 3D: waits for group GL's light hooks, which flag the nodes.
 
 #### GH1: Extra data and inventory stacks
 
