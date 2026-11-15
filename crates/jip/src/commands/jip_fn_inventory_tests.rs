@@ -1685,3 +1685,404 @@ fn unequip_item_alt_no_message_is_the_whole_word() {
     );
     assert!(shown().is_empty(), "0x100 is not 0: no message");
 }
+
+// ---- lane B4: setting an inventory reference's mod flags, health and hotkey ----
+
+const COPY_FN: u32 = 0x0041_2490;
+const WL1: u32 = FORMS + 0xc000;
+const WX: u32 = FORMS + 0xc100;
+const WLISTS: u32 = FORMS + 0xc200;
+const WNODES: u32 = FORMS + 0xc300;
+const IMOD: u32 = FORMS + 0xc400;
+const COPIES: u32 = FORMS + 0xc800;
+
+/// The inventory and the reference heap; the weapon with mods in slots 0 and 2; the second entry
+/// as the weapon with one stack, `WL1`; the game's copy of an extra data list for a reference as
+/// a stand-in that asserts its three words (the new list, the source, 0) and copies every extra.
+fn b4_setup() -> Engine {
+    let mut e = setup();
+    inventory(&mut e);
+    ref_heap(&mut e);
+    b3_clear();
+    e.mem.set_u32(WEAP + 0x350, IMOD);
+    e.mem.set_u32(WEAP + 0x354, 0);
+    e.mem.set_u32(WEAP + 0x358, IMOD);
+    e.mem.set_u32(ENTRY_W + 8, WEAP);
+    e.mem.set_u32(ENTRY_W, WLISTS);
+    put_list(&mut e, WLISTS, WNODES, &[WL1]);
+    e.mem.set_u32(COPIES - 4, COPIES);
+    e.register(COPY_FN, |e, w| {
+        assert_eq!(w.len(), 3, "this, the source, the byte");
+        assert_eq!(w[2], 0, "a copy, not a move");
+        b3_log(COPY_FN, w);
+        let mut x = e.mem.u32(w[1] + 4);
+        let mut tail = w[0] + 4;
+        while x != 0 {
+            let copy = e.mem.u32(COPIES - 4);
+            e.mem.set_u32(COPIES - 4, copy + 0x10);
+            for i in 0..3 {
+                e.mem.set_u32(copy + 4 * i, e.mem.u32(x + 4 * i));
+            }
+            e.mem.set_u32(copy + 0xc, e.mem.u32(x + 0xc));
+            e.mem.set_u32(copy + 8, 0);
+            e.mem.set_u32(tail, copy);
+            tail = copy + 8;
+            let kind = u32::from(e.mem.u8(x + 4));
+            let bits = w[0] + 8 + (kind >> 3);
+            e.mem.set_u8(bits, e.mem.u8(bits) | (1 << (kind & 7)));
+            x = e.mem.u32(x + 8);
+        }
+        Ret::default()
+    });
+    e
+}
+
+/// The kinds of the extras in a list, in order.
+fn kinds(e: &Engine, list: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut x = e.mem.u32(list + 4);
+    while x != 0 && out.len() < 16 {
+        out.push(e.mem.u8(x + 4));
+        x = e.mem.u32(x + 8);
+    }
+    out
+}
+
+/// The list's extra of `kind`: (vtable, kind word, word at +0xC).
+fn extra_of(e: &Engine, list: u32, kind: u8) -> (u32, u32, u32) {
+    let mut x = e.mem.u32(list + 4);
+    while x != 0 && e.mem.u8(x + 4) != kind {
+        x = e.mem.u32(x + 8);
+    }
+    assert_ne!(x, 0, "an extra of the kind");
+    (e.mem.u32(x), e.mem.u32(x + 4), e.mem.u32(x + 0xc))
+}
+
+/// The inventory reference's stack (`xData`).
+fn stack_of(e: &mut Engine, refr: u32) -> u32 {
+    ir(e, refr).3
+}
+
+#[test]
+fn set_weapon_ref_mod_flags_changes_and_removes() {
+    let mut e = b4_setup();
+    put_extra(&mut e, WL1, WX, 0x8d, 1);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, WL1);
+    // 7: slot 1 has no mod, so 5.
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(7)]).1, 1.0);
+    assert_eq!(e.mem.u8(WX + 0xc), 5);
+    // The same again: nothing (no result).
+    e.mem.set_f64(RESULT, 0.0);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(5)]).1, 0.0);
+    // Above 7: nothing.
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(8)]).1, 0.0);
+    assert_eq!(e.mem.u8(WX + 0xc), 5);
+    // 2 is only slot 1: 0, so the extra goes; the list is then empty: out of the entry, freed,
+    // the reference's stack 0.
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(2)]).1, 1.0);
+    assert_eq!(calls_to(REMOVE_BY_TYPE_FN), vec![vec![WL1, 0x8d]]);
+    assert_eq!(e.mem.u32(WLISTS), 0, "the only list taken out");
+    assert!(freed().contains(&WL1));
+    assert_eq!(stack_of(&mut e, refr), 0);
+}
+
+#[test]
+fn set_weapon_ref_mod_flags_zero_keeps_a_list_with_more() {
+    let mut e = b4_setup();
+    put_extra(&mut e, WL1, WX + 0x10, 0x25, 0);
+    put_extra(&mut e, WL1, WX, 0x8d, 4);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, WL1);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(0)]).1, 1.0);
+    assert_eq!(kinds(&e, WL1), vec![0x25], "the health stays");
+    assert_eq!(e.mem.u32(WLISTS), WL1);
+    assert!(!freed().contains(&WL1));
+    // A list left empty whose item the container has no entry for (or an entry without lists):
+    // removed from the list only, nothing freed, no result.
+    let mut e = b4_setup();
+    put_extra(&mut e, WL1, WX, 0x8d, 4);
+    e.mem.set_u32(ENTRY_W, 0);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, WL1);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(0)]).1, 0.0);
+    assert_eq!(kinds(&e, WL1), Vec::<u8>::new());
+    assert!(!freed().contains(&WL1));
+    assert_eq!(stack_of(&mut e, refr), WL1);
+}
+
+#[test]
+fn set_weapon_ref_mod_flags_new_on_a_single_stack() {
+    let mut e = b4_setup();
+    // The reference's entry holds 1; the stack has no count.
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, WL1);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(1)]).1, 1.0);
+    assert!(b3_calls(COPY_FN).is_empty(), "no split");
+    assert_eq!(extra_of(&e, WL1, 0x8d), (0x0101_59a4, 0x8d, 1));
+    assert_eq!(calls_to(ADD_EXTRA_FN).len(), 1);
+    // 0 asked of a stack without flags: 1, nothing changed.
+    let mut e = b4_setup();
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, WL1);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(0)]).1, 1.0);
+    assert!(calls_to(ADD_EXTRA_FN).is_empty());
+}
+
+#[test]
+fn set_weapon_ref_mod_flags_splits_one_off_a_stack() {
+    let mut e = b4_setup();
+    // The stack holds 3 (ExtraCount) and is worn and hotkeyed; the reference's entry says 2 (a
+    // count other than the stack's): the split is by the stack's count.
+    put_extra(&mut e, WL1, WX + 0x20, 0x4a, 2);
+    put_extra(&mut e, WL1, WX + 0x10, 0x16, 0);
+    put_extra(&mut e, WL1, WX, 0x24, 0);
+    e.mem.set_u16(WX + 0xc, 3);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 2, WL1);
+    let out = heap_next(&e);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(4)]).1, 1.0);
+    assert_eq!(b3_calls(COPY_FN), vec![vec![out, WL1, 0]]);
+    assert_eq!(e.mem.u32(out), 0x0101_43e8, "a new extra data list");
+    assert_eq!(
+        list_items(&e, Ptr::new(WLISTS)),
+        vec![out, WL1],
+        "the copy first in the entry"
+    );
+    assert_eq!(
+        calls_to(REMOVE_BY_TYPE_FN),
+        vec![vec![out, 0x16], vec![out, 0x4a], vec![out, 0x24]],
+        "the copy loses worn, hotkey and count"
+    );
+    assert_eq!(e.mem.u16(WX + 0xc), 2, "the old stack keeps 2");
+    assert_eq!(kinds(&e, WL1), vec![0x24, 0x16, 0x4a]);
+    assert_eq!(kinds(&e, out), vec![0x8d]);
+    assert_eq!(extra_of(&e, out, 0x8d), (0x0101_59a4, 0x8d, 4));
+    assert_eq!(stack_of(&mut e, refr), out, "the copy is the reference's");
+}
+
+#[test]
+fn set_weapon_ref_mod_flags_split_of_two_frees_an_emptied_stack() {
+    let mut e = b4_setup();
+    // A stack of 2 holding only its count: the old stack loses its count, is empty, goes.
+    put_extra(&mut e, WL1, WX, 0x24, 0);
+    e.mem.set_u16(WX + 0xc, 2);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 2, WL1);
+    let out = heap_next(&e);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(1)]).1, 1.0);
+    assert_eq!(
+        calls_to(REMOVE_BY_TYPE_FN),
+        vec![
+            vec![out, 0x16],
+            vec![out, 0x4a],
+            vec![WL1, 0x24],
+            vec![out, 0x24]
+        ]
+    );
+    assert_eq!(list_items(&e, Ptr::new(WLISTS)), vec![out]);
+    assert!(freed().contains(&WL1));
+    assert_eq!(stack_of(&mut e, refr), out);
+    // A stack of 1 by its count (the entry says 3): no split.
+    let mut e = b4_setup();
+    put_extra(&mut e, WL1, WX, 0x24, 0);
+    e.mem.set_u16(WX + 0xc, 1);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 3, WL1);
+    call_on(&mut e, 0x270d, refr, &[n(1)]);
+    assert!(b3_calls(COPY_FN).is_empty());
+    assert_eq!(kinds(&e, WL1), vec![0x24, 0x8d]);
+    // No entry for the item in the container: no split, the flags on the stack.
+    let mut e = b4_setup();
+    put_extra(&mut e, WL1, WX, 0x24, 0);
+    e.mem.set_u16(WX + 0xc, 3);
+    e.mem.set_u32(ENTRY_W + 8, MISC);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 3, WL1);
+    call_on(&mut e, 0x270d, refr, &[n(1)]);
+    assert!(b3_calls(COPY_FN).is_empty());
+    assert_eq!(kinds(&e, WL1), vec![0x24, 0x8d]);
+}
+
+#[test]
+fn set_weapon_ref_mod_flags_without_a_stack_makes_one() {
+    let mut e = b4_setup();
+    // The container has no entry for the weapon: a new one (count 0) first in its changes.
+    e.mem.set_u32(ENTRY_W + 8, MISC);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, 0);
+    let entry = heap_next(&e);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(5)]).1, 1.0);
+    let entries = FORMS + 0x8200;
+    assert_eq!(list_items(&e, Ptr::new(entries))[0], entry);
+    assert_eq!((e.mem.u32(entry + 4), e.mem.u32(entry + 8)), (0, WEAP));
+    let stack = stack_of(&mut e, refr);
+    assert_eq!(list_items(&e, Ptr::new(e.mem.u32(entry))), vec![stack]);
+    assert_eq!(e.mem.u32(stack), 0x0101_43e8);
+    assert_eq!(extra_of(&e, stack, 0x8d), (0x0101_59a4, 0x8d, 5));
+    assert_eq!(
+        calls_to(ADD_CHANGE_FN),
+        vec![vec![SAVE_LOAD, ACTOR, 0x20, 0]]
+    );
+    // The entry is there without lists: a new list of lists holding the new stack.
+    let mut e = b4_setup();
+    e.mem.set_u32(ENTRY_W, 0);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, 0);
+    call_on(&mut e, 0x270d, refr, &[n(1)]);
+    let stack = stack_of(&mut e, refr);
+    assert_ne!(stack, 0);
+    assert_eq!(list_items(&e, Ptr::new(e.mem.u32(ENTRY_W))), vec![stack]);
+    // The entry has lists: the new stack first; 0 asked: nothing made.
+    let mut e = b4_setup();
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, 0);
+    call_on(&mut e, 0x270d, refr, &[n(0)]);
+    assert_eq!(stack_of(&mut e, refr), 0);
+    call_on(&mut e, 0x270d, refr, &[n(1)]);
+    let stack = stack_of(&mut e, refr);
+    assert_eq!(list_items(&e, Ptr::new(WLISTS)), vec![stack, WL1]);
+    // A container without changes: nothing, no result.
+    let mut e = b4_setup();
+    let refr = nvse::invref::create_entry(&mut e, CONT_REF, WEAP, 1, 0);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(1)]).1, 0.0);
+    // Not a weapon; not an inventory reference.
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, XDL2);
+    call_on(&mut e, 0x270d, refr, &[n(1)]);
+    call_on(&mut e, 0x270d, ACTOR, &[n(1)]);
+    assert!(calls_to(ADD_EXTRA_FN).is_empty());
+}
+
+#[test]
+fn set_item_ref_current_health_capped_and_by_part() {
+    let mut e = b4_setup();
+    e.mem.set_u32(ARMO + 0x6c, 200);
+    put_extra(&mut e, XDL2, X1, 0x25, 0);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 3, XDL2);
+    assert_eq!(call_on(&mut e, 0x2710, refr, &[z(50.0)]).1, 1.0);
+    assert_eq!(e.mem.f32(X1 + 0xc), 50.0);
+    call_on(&mut e, 0x2710, refr, &[z(500.0)]);
+    assert_eq!(e.mem.f32(X1 + 0xc), 200.0, "at most the full health");
+    call_on(&mut e, 0x2710, refr, &[z(0.25), n(1)]);
+    assert_eq!(e.mem.f32(X1 + 0xc), 50.0, "a part of 200");
+    call_on(&mut e, 0x2710, refr, &[z(2.0), n(1)]);
+    assert_eq!(e.mem.f32(X1 + 0xc), 200.0);
+    // A weapon's full health includes its health mod (by the entry's first stack's flags).
+    let mut e = b4_setup();
+    e.mem.set_u32(WEAP + 0x98, 100);
+    e.mem.set_u32(WEAP + 0x180, 10);
+    e.mem.set_f32(WEAP + 0x18c, 50.0);
+    put_extra(&mut e, WL1, WX, 0x8d, 1);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, WL1);
+    call_on(&mut e, 0x2710, refr, &[z(1.0), n(1)]);
+    assert_eq!(
+        extra_of(&e, WL1, 0x25),
+        (0x0101_58e4, 0x25, 150.0f32.to_bits())
+    );
+}
+
+#[test]
+fn set_item_ref_current_health_new_extra_or_stack() {
+    let mut e = b4_setup();
+    e.mem.set_u32(ARMO + 0x6c, 100);
+    // A stack without health: a new ExtraHealth.
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, XDL);
+    assert_eq!(call_on(&mut e, 0x2710, refr, &[z(40.0)]).1, 1.0);
+    assert_eq!(
+        extra_of(&e, XDL, 0x25),
+        (0x0101_58e4, 0x25, 40.0f32.to_bits())
+    );
+    // No stack: a new list first in the armour's entry.
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, 0);
+    assert_eq!(call_on(&mut e, 0x2710, refr, &[z(30.0)]).1, 1.0);
+    let stack = stack_of(&mut e, refr);
+    assert_eq!(
+        list_items(&e, Ptr::new(FORMS + 0x8300)),
+        vec![stack, XDL2, XDL]
+    );
+    assert_eq!(
+        extra_of(&e, stack, 0x25),
+        (0x0101_58e4, 0x25, 30.0f32.to_bits())
+    );
+    assert_eq!(
+        calls_to(ADD_CHANGE_FN),
+        vec![vec![SAVE_LOAD, ACTOR, 0x20, 0]]
+    );
+    // No full health (aid), no changes, not an inventory reference: nothing.
+    let mut e = b4_setup();
+    let alch = nvse::invref::create_entry(&mut e, ACTOR, ALCH, 1, XDL);
+    let none = nvse::invref::create_entry(&mut e, CONT_REF, ARMO, 1, 0);
+    e.mem.set_u32(ARMO + 0x6c, 100);
+    assert_eq!(call_on(&mut e, 0x2710, alch, &[z(10.0)]).1, 0.0);
+    assert_eq!(call_on(&mut e, 0x2710, none, &[z(10.0)]).1, 0.0);
+    assert_eq!(call_on(&mut e, 0x2710, ACTOR, &[z(10.0)]).1, 0.0);
+    assert!(calls_to(ADD_EXTRA_FN).is_empty());
+}
+
+#[test]
+fn set_item_ref_current_health_full_health_from_the_entry() {
+    // The full health is read through the reference's entry: its item (here the armour, while the
+    // reference's own item is the weapon) and its first stack.
+    let mut e = b4_setup();
+    e.mem.set_u32(ARMO + 0x6c, 80);
+    e.mem.set_u32(WEAP + 0x98, 300);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, WL1);
+    let id = crate::commands::ref_id(&e, refr);
+    let entry = nvse::invref::get(&mut e, id)
+        .map(|r| r.data.entry)
+        .unwrap_or(0);
+    e.mem.set_u32(entry + 8, ARMO);
+    call_on(&mut e, 0x2710, refr, &[z(1.0), n(1)]);
+    assert_eq!(extra_of(&e, WL1, 0x25).2, 80.0f32.to_bits());
+}
+
+#[test]
+fn set_hotkey_item_ref_takes_the_key() {
+    let mut e = b4_setup();
+    e.mem.set_u32(0x011d_ea3c, ACTOR);
+    // The stack XDL2 has hotkey index 3 and nothing else; the reference is the worn XDL.
+    put_extra(&mut e, XDL2, X1, 0x4a, 3);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, XDL);
+    assert_eq!(call_on(&mut e, 0x2716, refr, &[n(4)]).1, 1.0);
+    assert_eq!(
+        list_items(&e, Ptr::new(FORMS + 0x8300)),
+        vec![XDL],
+        "the emptied list out of the entry"
+    );
+    assert!(freed().contains(&XDL2));
+    assert_eq!(extra_of(&e, XDL, 0x4a), (0x0101_592c, 0x4a, 3));
+    // The same key again: nothing. A key no item has: nothing (JIP sets only a key in use).
+    e.mem.set_f64(RESULT, 0.0);
+    assert_eq!(call_on(&mut e, 0x2716, refr, &[n(4)]).1, 0.0);
+    assert_eq!(call_on(&mut e, 0x2716, refr, &[n(2)]).1, 0.0);
+    assert_eq!(extra_of(&e, XDL, 0x4a).2, 3);
+}
+
+#[test]
+fn set_hotkey_item_ref_moves_a_key_and_makes_a_stack() {
+    let mut e = b4_setup();
+    e.mem.set_u32(0x011d_ea3c, ACTOR);
+    // XDL (worn) has hotkey 3, XDL2 hotkey 5 and a health extra (kept after it loses the key).
+    put_extra(&mut e, XDL, X1, 0x4a, 3);
+    put_extra(&mut e, XDL2, FORMS + 0x4380, 0x25, 0);
+    put_extra(&mut e, XDL2, FORMS + 0x43a0, 0x4a, 5);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, XDL);
+    assert_eq!(call_on(&mut e, 0x2716, refr, &[n(6)]).1, 1.0);
+    assert_eq!(e.mem.u8(X1 + 0xc), 5, "the index changed");
+    assert_eq!(kinds(&e, XDL2), vec![0x25]);
+    assert!(!freed().contains(&XDL2));
+    // A weapon without a stack (the container has no entry for it): XDL's key 6 (index 5) moves
+    // to a new list on a new entry.
+    e.mem.set_u32(ENTRY_W + 8, MISC);
+    let weapon = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, 0);
+    assert_eq!(call_on(&mut e, 0x2716, weapon, &[n(6)]).1, 1.0);
+    let stack = stack_of(&mut e, weapon);
+    assert_eq!(extra_of(&e, stack, 0x4a), (0x0101_592c, 0x4a, 5));
+    // XDL held only the hotkey: out of the armour's entry and freed.
+    assert_eq!(list_items(&e, Ptr::new(FORMS + 0x8300)), vec![XDL2]);
+    assert!(freed().contains(&XDL));
+    // Without a key in use the weapon gets no stack.
+    let other = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, 0);
+    e.mem.set_f64(RESULT, 0.0);
+    assert_eq!(call_on(&mut e, 0x2716, other, &[n(1)]).1, 0.0);
+    assert_eq!(stack_of(&mut e, other), 0);
+    // Not the player's; a misc item; keys 0 and 9: nothing.
+    let mut e = b4_setup();
+    e.mem.set_u32(0x011d_ea3c, ACTOR);
+    put_extra(&mut e, XDL2, X1, 0x4a, 0);
+    let theirs = nvse::invref::create_entry(&mut e, CONT_REF, ARMO, 1, XDL);
+    let misc = nvse::invref::create_entry(&mut e, ACTOR, MISC, 1, XDL);
+    let armour = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, XDL);
+    for (refr, key) in [(theirs, 1), (misc, 1), (armour, 0), (armour, 9)] {
+        assert_eq!(call_on(&mut e, 0x2716, refr, &[n(key)]).1, 0.0);
+    }
+    assert!(calls_to(REMOVE_BY_TYPE_FN).is_empty());
+}
