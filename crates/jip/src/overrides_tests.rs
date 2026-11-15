@@ -1198,7 +1198,7 @@ fn records_untouched_when_off() {
 /// from `0x0118E318` and `0x0118E520`): names, opcodes, the parameter list, `MenuModeFunction`
 /// (`005c4240`) and no handler, the parse routine `005b1ba0`.
 fn block_records(e: &mut Engine) {
-    let menu = BLOCK_RECORDS + BLOCK_MENU_MODE * BLOCK_RECORD_SIZE;
+    let menu = 0x0118_e318;
     for (i, word) in [
         0x0104_45c0u32,
         0x0101_1584,
@@ -1216,7 +1216,7 @@ fn block_records(e: &mut Engine) {
     {
         e.mem.set_u32(menu + 4 * i as u32, *word);
     }
-    let unused = BLOCK_RECORDS + BLOCK_UNUSED_2 * BLOCK_RECORD_SIZE;
+    let unused = 0x0118_e520;
     for (i, word) in [
         0x0104_4540u32,
         0x0101_1584,
@@ -1236,15 +1236,22 @@ fn block_records(e: &mut Engine) {
     }
 }
 
-/// The whole block table (0x26 records).
+/// The whole block table (0x26 records of 0x28 bytes from `0x0118E2F0`).
 fn block_table(e: &Engine) -> Vec<u8> {
-    e.mem.bytes(BLOCK_RECORDS, 0x26 * BLOCK_RECORD_SIZE)
+    e.mem.bytes(0x0118_e2f0, 0x26 * 0x28)
+}
+
+/// Block type `kind`'s handler word, read as the translated runner reads it
+/// (`runner_evaluate_line`: `0x0118E300 + kind * 0x28 + 8`; the exe's `[kind*0x28 + 0x118E308]`).
+fn block_handler(e: &Engine, kind: u32) -> u32 {
+    e.mem.u32(0x0118_e300 + kind * 0x28 + 8)
 }
 
 /// D03: the two block records change only while JIP answers "installed" with the row on (given
-/// before or after JIP's start): record 1's handler is JIP's routine, record 0xE's the exe's
-/// return-true function; every other byte of the table as before. Not installed (row on or off),
-/// and installed with the row off: the whole table untouched.
+/// before or after JIP's start): record 1's handler is JIP's routine, record 0xE's the port's
+/// clearing return-true routine (at the literal addresses the runner reads); every other byte of
+/// the table as before. Not installed (row on or off), and installed with the row off: the whole
+/// table untouched.
 #[test]
 fn block_records_only_with_the_row() {
     let mut plain = engine();
@@ -1270,11 +1277,15 @@ fn block_records_only_with_the_row() {
         }
         crate::install_as(&mut e, true);
         set_vanilla_commands(&mut e, true);
+        // The handler words at `0x0118E330` (record 1 + 0x18) and `0x0118E538` (record 0xE +
+        // 0x18), offsets 0x40 and 0x248 in the table; nothing else.
+        assert_eq!(e.mem.u32(0x0118_e330), BLOCK_ROUTINE);
+        assert_eq!(e.mem.u32(0x0118_e538), UNUSED_BLOCK_ROUTINE);
+        assert_eq!(block_handler(&e, 1), BLOCK_ROUTINE);
+        assert_eq!(block_handler(&e, 0xe), UNUSED_BLOCK_ROUTINE);
         let mut changed = want.clone();
-        let menu = (BLOCK_MENU_MODE * BLOCK_RECORD_SIZE + RECORD_EXECUTE) as usize;
-        changed[menu..menu + 4].copy_from_slice(&BLOCK_ROUTINE.to_le_bytes());
-        let unused = (BLOCK_UNUSED_2 * BLOCK_RECORD_SIZE + RECORD_EXECUTE) as usize;
-        changed[unused..unused + 4].copy_from_slice(&0x005d_4a40u32.to_le_bytes());
+        changed[0x40..0x44].copy_from_slice(&BLOCK_ROUTINE.to_le_bytes());
+        changed[0x248..0x24c].copy_from_slice(&UNUSED_BLOCK_ROUTINE.to_le_bytes());
         assert_eq!(block_table(&e), changed, "row first {row_first}");
         // Once: a second time changes nothing.
         set_vanilla_commands(&mut e, true);
@@ -1285,11 +1296,21 @@ fn block_records_only_with_the_row() {
 /// Runs the `MenuMode` block's handler from its record as `EvaluateLine` calls it (the words of a
 /// `Begin MenuMode` line, the result holding `start`): the handler's `al` and the result.
 fn run_block(e: &mut Engine, args: &[Vec<u8>], console: bool, start: f64) -> (u32, f64) {
+    run_block_type(e, 1, args, console, start)
+}
+
+/// [`run_block`] for block type `kind`, its handler read as the translated runner reads it.
+fn run_block_type(
+    e: &mut Engine,
+    kind: u32,
+    args: &[Vec<u8>],
+    console: bool,
+    start: f64,
+) -> (u32, f64) {
     crate::test_support::console(e, console);
     let words = crate::test_support::line(e, 0x1024, args);
     e.mem.set_f64(crate::test_support::RESULT, start);
-    let menu = BLOCK_RECORDS + BLOCK_MENU_MODE * BLOCK_RECORD_SIZE;
-    let execute = e.mem.u32(menu + RECORD_EXECUTE);
+    let execute = block_handler(e, kind);
     let mut w = vec![execute];
     w.extend_from_slice(&words);
     let ok = e.call(0x005e_1550, &w).eax & 0xff;
@@ -1347,4 +1368,20 @@ fn menu_mode_block_as_jip() {
         (1, 0.0)
     );
     assert_eq!(run_block(&mut e, &[int_arg(-1)], false, 0.5), (1, 0.0));
+}
+
+/// D03, block type 0xE: its handler (read as the runner reads it) answers true and leaves the
+/// result 0 whatever it held (non-zero high word included), so the block is skipped; the exe's
+/// `005d4a40` would leave the stale value (with G02 on, JIP's result is 0 too).
+#[test]
+fn unused_block_answers_true_and_is_skipped() {
+    let mut e = commands_world();
+    for start in [1.0, -0.5, f64::from_bits(0x4000_0000_0000_0000)] {
+        assert_eq!(
+            run_block_type(&mut e, 0xe, &[], false, start),
+            (1, 0.0),
+            "{start}"
+        );
+    }
+    assert!(lines().is_empty(), "no console line");
 }

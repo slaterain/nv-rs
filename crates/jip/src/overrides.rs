@@ -228,25 +228,38 @@ const RECORD_EXECUTE: u32 = 0x18;
 /// 0xE, "Unused2" (no handler in the exe: a `Begin` of that type fails its line).
 const BLOCK_MENU_MODE: u32 = 1;
 const BLOCK_UNUSED_2: u32 = 0xe;
-/// The exe's function that answers true and does nothing else (`005d4a40`: `mov al, 1`).
-const RETURN_TRUE_FN: u32 = 0x005d_4a40;
-/// The routine for the `MenuMode` block: after the overrides' execute and eval words.
+/// The routines for the `MenuMode` block and block type 0xE: after the overrides' execute and
+/// eval words.
 const BLOCK_ROUTINE: u32 = ROUTINES + 8 * 32;
-const _: () = assert!(BLOCK_ROUTINE + 4 <= engine_core::mem::EXTENDER_CODE.end);
+const UNUSED_BLOCK_ROUTINE: u32 = BLOCK_ROUTINE + 4;
+const _: () = assert!(UNUSED_BLOCK_ROUTINE + 4 <= engine_core::mem::EXTENDER_CODE.end);
 const _: () = assert!(XNVSE.len() + VANILLA.len() <= 32);
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit
 // (`eventCmdInfos[1].execute = Hook_MenuMode_Execute; eventCmdInfos[0xE].execute = 0x5D4A40`).
 /// PLAN-3.9 D03, under the row of JIP's versions of the game's commands (the same switch and
 /// handler as the `MenuMode` command): `Begin MenuMode N` blocks take JIP's modes 0 to 4 and its
-/// menu ids, and a block of type 0xE has a handler that answers true (its line no longer fails; the
-/// block never runs, its result staying 0).
+/// menu ids, and a block of type 0xE has a handler that answers true (its line no longer fails).
+/// JIP's 0xE handler is the exe's `005d4a40` (`mov al, 1`), which leaves the result as it was: with
+/// JIP's "result = 0" patch (G02) always on, the block never runs. Deliberate difference: the
+/// port's 0xE handler is a routine that clears the result and answers true ([`unused_block`]),
+/// the same as JIP whenever G02 is on, and the block never runs also with the game patches row off
+/// (where `005d4a40` would leave whatever the stack held, so the block would run or not by chance).
 fn put_blocks(e: &mut Engine) {
     e.register(BLOCK_ROUTINE, menu_mode_block);
+    e.register(UNUSED_BLOCK_ROUTINE, unused_block);
     let menu_mode = BLOCK_RECORDS + BLOCK_MENU_MODE * BLOCK_RECORD_SIZE;
     e.mem.set_u32(menu_mode + RECORD_EXECUTE, BLOCK_ROUTINE);
     let unused = BLOCK_RECORDS + BLOCK_UNUSED_2 * BLOCK_RECORD_SIZE;
-    e.mem.set_u32(unused + RECORD_EXECUTE, RETURN_TRUE_FN);
+    e.mem.set_u32(unused + RECORD_EXECUTE, UNUSED_BLOCK_ROUTINE);
+}
+
+/// Block type 0xE's handler: `005d4a40`'s answer (true), with the result cleared first (see
+/// [`put_blocks`]).
+fn unused_block(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    handled(true)
 }
 
 /// The `MenuMode` block's handler: JIP's `Hook_MenuMode_Execute` (the command's), which sets the
