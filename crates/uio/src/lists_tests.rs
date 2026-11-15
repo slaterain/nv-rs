@@ -49,10 +49,12 @@ fn lines_are_runs_between_line_breaks_ending_at_the_mark() {
     assert_eq!(lines(b"\r\n\r\nfirst\r\n"), vec![&b"first"[..]]);
     // A 0 in the file splits a line too.
     assert_eq!(lines(b"a\0b"), vec![&b"a"[..], b"b"]);
-    // A line starting with byte 3 ends the walk; the first line is taken whatever it starts with.
+    // A line starting with byte 3 ends the walk; a first line starting with it gives no line at
+    // all (UIO's `if (!lineIter)`: the whole file is passed over).
     assert_eq!(lines(b"a\n\x03b\nc"), vec![&b"a"[..]]);
-    assert_eq!(lines(b"\x03a\nb"), vec![&b"\x03a"[..], b"b"]);
-    // No line at all: nothing (UIO reads past its mark there).
+    assert!(lines(b"\x03a\nb").is_empty());
+    assert!(lines(b"\r\n\0\x03a\nb").is_empty());
+    // No line at all: nothing (UIO's walk lands on its end mark).
     assert!(lines(b"").is_empty());
     assert!(lines(b"\r\n\n").is_empty());
 }
@@ -104,6 +106,28 @@ fn ctx() -> Context {
 
 fn eval(line: &str, files: &mut Fake) -> bool {
     evaluate(line.as_bytes(), &ctx(), files)
+}
+
+/// `vui+` and `ohud` each read their own UI mod.
+#[test]
+fn vui_and_ohud_read_their_own_mod() {
+    let mut f = Fake::default();
+    let vui = Context {
+        darn_ui: false,
+        vui_plus: true,
+        one_hud: false,
+        loaded_mods: Set::with_buckets(0x100),
+    };
+    assert!(evaluate(b"vui+", &vui, &mut f));
+    assert!(!evaluate(b"ohud", &vui, &mut f));
+    assert!(!evaluate(b"darn", &vui, &mut f));
+    let ohud = Context {
+        vui_plus: false,
+        one_hud: true,
+        ..vui
+    };
+    assert!(!evaluate(b"vui+", &ohud, &mut f));
+    assert!(evaluate(b"ohud", &ohud, &mut f));
 }
 
 #[test]
@@ -182,6 +206,18 @@ fn ui_mods_and_plugins_are_found_as_uio_finds_them() {
     f.file("Data\\menus\\prefabs\\duinvsettings.xml", "");
     let c = context(&mut f);
     assert!(c.darn_ui && !c.vui_plus);
+    // VUI+'s settings file, and no oHUD in plugins.txt.
+    f.file("Data\\menus\\prefabs\\VUI+\\settings.xml", "");
+    f.file("C:\\Local\\FalloutNV\\plugins.txt", "FalloutNV.esm\r\n");
+    let c = context(&mut f);
+    assert!(c.vui_plus && !c.one_hud && c.darn_ui);
+    // A plugins.txt whose first line starts with byte 3: UIO reads none of it.
+    f.file(
+        "C:\\Local\\FalloutNV\\plugins.txt",
+        "\x03oHUD.esm\r\noHUD.esm\r\n",
+    );
+    let c = context(&mut f);
+    assert!(!c.one_hud && c.loaded_mods.is_empty());
 }
 
 fn order(lists: &InjectLists, file: &str, tile: &str) -> Vec<String> {
@@ -300,10 +336,94 @@ fn a_list_too_big_for_uios_buffer_or_unreadable_is_passed_over() {
     let mut fits = "one.xml:HUDMainMenu\r\ntrue\r\n".to_string();
     let pad = LINE_BUFFER - 2 - fits.len();
     fits.push_str(&";".repeat(pad));
-    f.files.insert(key(SUPPORTED), fits.into_bytes());
+    f.files.insert(key(SUPPORTED), fits.clone().into_bytes());
     assert_eq!(scan(&mut f).len(), 1);
+    // One byte more (LINE_BUFFER - 1 bytes) overruns UIO's buffer: passed over.
+    let mut over = fits;
+    over.push(';');
+    assert_eq!(over.len(), LINE_BUFFER - 1);
+    f.files.insert(key(SUPPORTED), over.into_bytes());
+    assert!(scan(&mut f).is_empty());
     f.unreadable.push(key(SUPPORTED));
     assert!(scan(&mut f).is_empty());
+}
+
+/// A list file whose first line starts with byte 3 is passed over whole, as UIO passes it.
+#[test]
+fn a_list_whose_first_line_starts_with_3_is_passed_over() {
+    let mut f = Fake::default();
+    f.file("Data\\menus\\prefabs\\one.xml", "").file(
+        "Data\\uio\\supported.txt",
+        "\x03\r\none.xml:HUDMainMenu\r\ntrue\r\n",
+    );
+    assert!(scan(&mut f).is_empty());
+    f.file(
+        "Data\\uio\\supported.txt",
+        "\r\none.xml:HUDMainMenu\r\ntrue\r\n",
+    );
+    assert_eq!(scan(&mut f).len(), 1);
+}
+
+/// UIO copies a list's path into `prefabsPath[0x80]` (also for `#file`) and an `@` target into
+/// `menusPath[0x80]`: a path that fits with its 0 is read, a longer one (up to about 1 MiB in a
+/// list) names no file and is never asked for.
+#[test]
+fn list_paths_longer_than_uios_buffers_name_no_file() {
+    /// Counts what is asked of the folder.
+    struct Counting(Fake, Vec<usize>);
+    impl Files for Counting {
+        fn exists(&mut self, path: &[u8]) -> bool {
+            self.1.push(path.len());
+            self.0.exists(path)
+        }
+        fn read(&mut self, path: &[u8], limit: usize) -> Option<Vec<u8>> {
+            self.0.read(path, limit)
+        }
+        fn list(&mut self, pattern: &[u8]) -> Vec<Vec<u8>> {
+            self.0.list(pattern)
+        }
+        fn plugins_folder(&mut self) -> Vec<u8> {
+            self.0.plugins_folder()
+        }
+    }
+    let name = |n: usize, c: &str| format!("{}.xml", c.repeat(n - 4));
+    let room = UIO_PATH - PREFABS.len();
+    let (fits, over) = (name(room, "f"), name(room + 1, "o"));
+    let huge = name(1_000_000, "h");
+    let mut f = Fake::default();
+    for p in [&fits, &over, &huge] {
+        f.file(&format!("Data\\menus\\prefabs\\{p}"), "");
+    }
+    let target_room = UIO_PATH - MENUS.len();
+    let (t_fits, t_over) = (name(target_room, "t"), name(target_room + 1, "u"));
+    let text = format!(
+        "{fits}:HUDMainMenu\ntrue\n{over}:HUDMainMenu\ntrue\n{huge}:HUDMainMenu\ntrue\n\
+         {fits}:@{t_fits}:T\ntrue\n{fits}:@{t_over}:T\ntrue\n\
+         {fits}:StatsMenu\n#{fits}\n{fits}:MapMenu\n#{over}\n{fits}:LevelUpMenu\n#{huge}\n"
+    );
+    let mut c = Counting(f, Vec::new());
+    let mut lists = InjectLists::default();
+    read_list(&lines(text.as_bytes()), false, &ctx(), &mut c, &mut lists);
+    let hud = "Data\\Menus\\Main\\hud_main_menu.xml";
+    assert_eq!(order(&lists, hud, "HUDMainMenu"), vec![fits.clone()]);
+    assert_eq!(
+        order(&lists, &format!("Data\\menus\\{t_fits}"), "T"),
+        vec![fits.clone()]
+    );
+    assert!(lists
+        .get(format!("Data\\menus\\{t_over}").as_bytes())
+        .is_none());
+    assert_eq!(
+        order(&lists, "Data\\Menus\\Main\\stats_menu.xml", "StatsMenu"),
+        vec![fits.clone()]
+    );
+    assert!(lists.get(b"Data\\Menus\\Main\\map_menu.xml").is_none());
+    assert!(lists.get(b"Data\\Menus\\levelup_menu.xml").is_none());
+    assert_eq!(lists.len(), 3);
+    assert!(
+        c.1.iter().all(|&n| n <= UIO_PATH),
+        "nothing longer asked for"
+    );
 }
 
 #[test]

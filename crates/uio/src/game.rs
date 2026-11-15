@@ -6,7 +6,7 @@
 
 use crate::lists::{self, Files};
 use crate::patch;
-use crate::reader::Reader;
+use crate::reader::{Fetch, Reader, Served, Source, MAX_TEXT};
 use crate::Uio;
 use engine_core::prelude::*;
 
@@ -40,11 +40,23 @@ const GAME_HEAP: u32 = 0x011f_6238;
 const HEAP_ALLOCATE: u32 = 0x00aa_3e40;
 const HEAP_FREE: u32 = 0x00aa_4060;
 
+/// The longest path handed to the game (Windows' `MAX_PATH` less its ending 0): a longer one,
+/// which no Windows call opens, is refused before any call, as the text is put on the game's
+/// stack for the call. UIO's own buffers hold less ([`crate::reader::UIO_PATH`]).
+pub const MAX_PATH_LEN: usize = 259;
+
+fn too_long(path: &[u8]) -> bool {
+    path.len() > MAX_PATH_LEN
+}
+
 /// The file system as UIO sees it, through the game's Windows calls.
 pub struct GameFiles<'a>(pub &'a mut Engine);
 
 impl Files for GameFiles<'_> {
     fn exists(&mut self, path: &[u8]) -> bool {
+        if too_long(path) {
+            return false;
+        }
         let attributes = nvse::events::with_guest_text(self.0, path, |e, p| {
             e.call(GET_FILE_ATTRIBUTES_A, &args![p]).u32()
         });
@@ -52,6 +64,9 @@ impl Files for GameFiles<'_> {
     }
 
     fn read(&mut self, path: &[u8], limit: usize) -> Option<Vec<u8>> {
+        if too_long(path) {
+            return None;
+        }
         let e = &mut *self.0;
         let handle = nvse::events::with_guest_text(e, path, |e, p| {
             e.call(
@@ -98,6 +113,9 @@ impl Files for GameFiles<'_> {
     fn list(&mut self, pattern: &[u8]) -> Vec<Vec<u8>> {
         let e = &mut *self.0;
         let mut out = Vec::new();
+        if too_long(pattern) {
+            return out;
+        }
         e.with_stack(FIND_DATA_SIZE, |e, data| {
             let data = data.addr();
             let handle = nvse::events::with_guest_text(e, pattern, |e, p| {
@@ -124,24 +142,49 @@ impl Files for GameFiles<'_> {
 
 /// `XMLFileData::Get(path)` (UIO): the game's text of a menu file (`CompressAndStoreXML(path,
 /// NULL)`: the file from the archives or loose, its insignificant characters removed), freed as
-/// UIO frees it (`XMLFileData::Destroy`: the text, then the record, on the game's heap); `None`
-/// when the game finds no file.
-pub fn game_text(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
+/// UIO frees it (`XMLFileData::Destroy`: the text, then the record, on the game's heap);
+/// [`Fetch::Missing`] when the game finds no file (or the path is longer than [`MAX_PATH_LEN`]),
+/// [`Fetch::TooLarge`] (not copied out) when the text is longer than `room` bytes.
+pub fn game_text(e: &mut Engine, path: &[u8], room: usize) -> Fetch {
+    if too_long(path) {
+        return Fetch::Missing;
+    }
     let storage = nvse::events::with_guest_text(e, path, |e, p| {
         e.call(COMPRESS_AND_STORE_XML, &args![p, 0u32]).u32()
     });
     if storage == 0 {
-        return None;
+        return Fetch::Missing;
     }
     let (length, data) = (e.mem.u32(storage), e.mem.u32(storage + 4));
     let text = if data == 0 {
-        Vec::new()
+        Some(Vec::new())
+    } else if length as usize > room {
+        None
     } else {
-        e.mem.bytes(data, length)
+        Some(e.mem.bytes(data, length))
     };
     e.call(HEAP_FREE, &args![GAME_HEAP, data]);
     e.call(HEAP_FREE, &args![GAME_HEAP, storage]);
-    Some(text)
+    text.map_or(Fetch::TooLarge, Fetch::Text)
+}
+
+/// The reader's source on the engine: the patched files in UIO's shared slot, looked at only for
+/// the moment of each call (never held across a call of the game, where another thread may read
+/// them), and the game's own read.
+struct GameSource<'a>(&'a mut Engine);
+
+impl Source for GameSource<'_> {
+    fn serve(&mut self, hash: u32) -> Option<Served> {
+        self.0.ext::<Uio>().patched.serve(hash)
+    }
+
+    fn keep(&mut self, hash: u32, text: Vec<u8>) {
+        self.0.ext::<Uio>().patched.keep(hash, text);
+    }
+
+    fn raw(&mut self, path: &[u8], room: usize) -> Fetch {
+        game_text(self.0, path, room)
+    }
 }
 
 // Translated from UIO 2.30 (426d963), ui_organizer.h: UIOLoad (its lists and patching; the trait
@@ -151,13 +194,12 @@ pub fn game_text(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
 /// is passed over. Nothing is written to a file. The exe's path goes on.
 pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
     let lists = lists::scan(&mut GameFiles(e));
-    let mut patched = std::mem::take(&mut e.ext::<Uio>().patched);
     for (file, tiles) in lists.iter() {
-        if let Some(text) = game_text(e, file) {
-            patched.insert(file, patch::patch(&text, tiles.clone()));
+        if let Fetch::Text(text) = game_text(e, file, MAX_TEXT) {
+            let text = patch::patch(&text, tiles.clone());
+            e.ext::<Uio>().patched.insert(file, text);
         }
     }
-    e.ext::<Uio>().patched = patched;
     e.ext::<Uio>().loaded = true;
     None
 }
@@ -171,13 +213,7 @@ pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
 pub fn read_file(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let path_at = a[0];
     let path = nvse::table::guest_text(e, path_at);
-    let mut patched = std::mem::take(&mut e.ext::<Uio>().patched);
-    let text = {
-        let mut raw = |p: &[u8]| game_text(e, p);
-        Reader::new(&mut patched, &mut raw).file(&path)
-    };
-    e.ext::<Uio>().patched = patched;
-    let text = text?;
+    let text = Reader::new(&mut GameSource(e)).file(&path)?;
     let length = u32::try_from(text.len()).ok()?;
     let buffer = e
         .call(HEAP_ALLOCATE, &args![GAME_HEAP, length.checked_add(1)?])

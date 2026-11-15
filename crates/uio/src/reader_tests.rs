@@ -19,17 +19,40 @@ impl Disk {
         }
     }
 
-    fn read(&self, path: &[u8]) -> Option<Vec<u8>> {
+    fn read(&self, path: &[u8], room: usize) -> Fetch {
         self.reads.borrow_mut().push(path.to_vec());
-        self.files.get(&str_hash(path)).cloned()
+        match self.files.get(&str_hash(path)) {
+            None => Fetch::Missing,
+            Some(t) if t.len() > room => Fetch::TooLarge,
+            Some(t) => Fetch::Text(t.clone()),
+        }
     }
 }
 
+/// The reader's source over the patched files and a disk.
+struct Test<'a> {
+    patched: &'a mut Patched,
+    disk: &'a Disk,
+}
+
+impl Source for Test<'_> {
+    fn serve(&mut self, hash: u32) -> Option<Served> {
+        self.patched.serve(hash)
+    }
+    fn keep(&mut self, hash: u32, text: Vec<u8>) {
+        self.patched.keep(hash, text);
+    }
+    fn raw(&mut self, path: &[u8], room: usize) -> Fetch {
+        self.disk.read(path, room)
+    }
+}
+
+fn read_bytes(patched: &mut Patched, disk: &Disk, path: &[u8]) -> Option<Vec<u8>> {
+    Reader::new(&mut Test { patched, disk }).file(path)
+}
+
 fn read(patched: &mut Patched, disk: &Disk, path: &str) -> Option<String> {
-    let mut raw = |p: &[u8]| disk.read(p);
-    Reader::new(patched, &mut raw)
-        .file(path.as_bytes())
-        .map(|t| String::from_utf8(t).unwrap())
+    read_bytes(patched, disk, path.as_bytes()).map(|t| String::from_utf8(t).unwrap())
 }
 
 #[test]
@@ -205,12 +228,152 @@ fn an_include_bomb_stops_at_the_text_limit() {
         .collect();
     let disk = Disk::new(&refs);
     let mut p = Patched::default();
-    let mut raw = |q: &[u8]| disk.read(q);
-    let t = Reader::new(&mut p, &mut raw)
-        .file(b"data\\menus\\prefabs\\l00.xml")
-        .unwrap();
+    let t = read_bytes(&mut p, &disk, b"data\\menus\\prefabs\\l00.xml").unwrap();
     assert!(t.len() <= MAX_TEXT);
-    assert!(!t.is_empty());
+    assert_eq!(t.len(), 64 << 20, "64 copies of 1 MiB fill it");
+    // Once full, the read fetches no further include: about 64 leaves and the levels above
+    // them, not MAX_READS reads.
+    let reads = disk.reads.borrow().len();
+    assert!(reads < 300, "{reads} reads");
+}
+
+/// Files that fill the text limit exactly: every copy goes in (the limit is "at most").
+#[test]
+fn a_bomb_landing_exactly_on_the_text_limit_keeps_every_copy() {
+    let mut files: Vec<(String, String)> = (0..6)
+        .map(|i| {
+            (
+                format!("data\\menus\\prefabs\\b{i:02}.xml"),
+                format!(
+                    r#"<include src="b{:02}.xml"/><include src="b{:02}.xml"/>"#,
+                    i + 1,
+                    i + 1
+                ),
+            )
+        })
+        .collect();
+    files.push(("data\\menus\\prefabs\\b06.xml".into(), "x".repeat(1 << 20)));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let disk = Disk::new(&refs);
+    let mut p = Patched::default();
+    let t = read_bytes(&mut p, &disk, b"data\\menus\\prefabs\\b00.xml").unwrap();
+    assert_eq!(t.len(), MAX_TEXT);
+    assert_eq!(disk.reads.borrow().len(), 127, "1 + 2 + 4 + ... + 64 reads");
+}
+
+/// Exactly MAX_READS includes are read; the next one gives nothing.
+#[test]
+fn a_read_reads_exactly_max_reads_files_for_its_includes() {
+    let top = r#"<include src="zzzzz.xml"/>"#.repeat(MAX_READS as usize + 1);
+    let disk = Disk::new(&[("m.xml", &top), ("data\\menus\\prefabs\\zzzzz.xml", "Z")]);
+    let mut p = Patched::default();
+    let t = read(&mut p, &disk, "m.xml").unwrap();
+    assert_eq!(t, "Z".repeat(MAX_READS as usize));
+    assert_eq!(disk.reads.borrow().len(), MAX_READS as usize + 1);
+}
+
+/// The search for each `<include` goes forward from the last one and stops at the first match:
+/// the work is about the text's length, not the includes times the length.
+#[test]
+fn includes_are_found_in_one_pass_over_the_text() {
+    let top = r#"<x/><include src="aaaaa.xml"/>"#.repeat(2000);
+    let disk = Disk::new(&[("m.xml", &top), ("data\\menus\\prefabs\\aaaaa.xml", "A")]);
+    let mut p = Patched::default();
+    FIND_WORK.with(|w| w.set(0));
+    let t = read(&mut p, &disk, "m.xml").unwrap();
+    assert_eq!(t, "<x/>A".repeat(2000));
+    let work = FIND_WORK.with(std::cell::Cell::get);
+    assert!(
+        work <= top.len(),
+        "{work} bytes looked at for {}",
+        top.len()
+    );
+}
+
+/// UIO copies an include's path into `kPrefabsPath[0x80]`: a path that fits (with its 0) is read;
+/// a longer one, up to a 1 MiB one, gives nothing and is never read.
+#[test]
+fn an_include_path_longer_than_uios_buffer_gives_nothing() {
+    let fits = format!("{}.xml", "f".repeat(UIO_PATH - PREFABS.len() - 4));
+    let over = format!("{}.xml", "o".repeat(UIO_PATH - PREFABS.len() - 3));
+    let huge = format!("{}.xml", "h".repeat(1 << 20));
+    let top = format!(r#"<include src="{fits}"/>|<include src="{over}"/>|<include src="{huge}"/>"#);
+    let fits_path = format!("data\\menus\\prefabs\\{fits}");
+    let over_path = format!("data\\menus\\prefabs\\{over}");
+    assert_eq!(fits_path.len(), UIO_PATH);
+    let disk = Disk::new(&[("m.xml", &top), (&fits_path, "FITS"), (&over_path, "OVER")]);
+    let mut p = Patched::default();
+    assert_eq!(read(&mut p, &disk, "m.xml").unwrap(), "FITS||");
+    assert_eq!(
+        disk.reads.borrow().len(),
+        2,
+        "the top file and the one that fits"
+    );
+}
+
+/// A patched file expanded while a limit refused one of its includes (here the depth limit, deep
+/// in a chain) is not kept so: the next read expands it whole, and that is kept.
+#[test]
+fn a_patched_file_expanded_under_a_limit_is_not_kept_cut_short() {
+    let mut files: Vec<(String, String)> = (0..MAX_DEPTH)
+        .map(|i| {
+            let next = if i + 1 == MAX_DEPTH {
+                "ppppp.xml".to_string()
+            } else {
+                format!("c{:03}x.xml", i + 1)
+            };
+            (
+                format!("data\\menus\\prefabs\\c{i:03}x.xml"),
+                format!(r#"<include src="{next}"/>"#),
+            )
+        })
+        .collect();
+    files.push(("data\\menus\\prefabs\\inner.xml".into(), "IN".into()));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let disk = Disk::new(&refs);
+    let mut p = Patched::default();
+    let pp = b"data\\menus\\prefabs\\ppppp.xml";
+    p.insert(pp, br#"<p><include src="inner.xml"/></p>"#.to_vec());
+    // At depth 64 the patched file's own include is refused.
+    assert_eq!(
+        read(&mut p, &disk, "data\\menus\\prefabs\\c000x.xml").unwrap(),
+        "<p></p>"
+    );
+    assert!(!p.expanded(pp), "cut short: not kept");
+    assert_eq!(
+        read(&mut p, &disk, "data\\menus\\prefabs\\ppppp.xml").unwrap(),
+        "<p>IN</p>"
+    );
+    assert!(p.expanded(pp));
+}
+
+/// The expanded texts kept stay under the limit: past it a file keeps its patched text and is
+/// expanded again at each read (the same text).
+#[test]
+fn expanded_texts_past_the_limit_are_expanded_again_at_each_read() {
+    let inner = "x".repeat(100);
+    let disk = Disk::new(&[("data\\menus\\prefabs\\inner.xml", &inner)]);
+    let pp = b"data\\menus\\prefabs\\ppppp.xml";
+    let patched = br#"<include src="inner.xml"/>"#.to_vec();
+    let mut small = Patched::with_limit(99);
+    small.insert(pp, patched.clone());
+    for _ in 0..2 {
+        assert_eq!(read_bytes(&mut small, &disk, pp).unwrap(), inner.as_bytes());
+    }
+    assert!(!small.expanded(pp));
+    assert_eq!(small.held(), patched.len());
+    assert_eq!(disk.reads.borrow().len(), 2, "expanded at each read");
+    let mut big = Patched::with_limit(100);
+    big.insert(pp, patched);
+    assert_eq!(read_bytes(&mut big, &disk, pp).unwrap(), inner.as_bytes());
+    assert!(big.expanded(pp));
+    assert_eq!(big.held(), 100);
 }
 
 #[test]

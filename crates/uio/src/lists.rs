@@ -6,6 +6,7 @@
 //! files in the game's folder, never the archives.
 
 use crate::hash::{begins_ci, Map, Set};
+use crate::reader::UIO_PATH;
 
 /// What UIO asks of the file system (the game's folder; paths relative to it, as UIO gives them).
 pub trait Files {
@@ -95,11 +96,11 @@ pub type InjectLists = Map<Map<Set>>;
 
 // Translated from UIO 2.30 (426d963), utility.h/.cpp: LineIterator.
 /// The lines of a file as UIO's `LineIterator` gives them: the bytes with each CR and LF made a
-/// 0 and the two bytes 0, 3 put after; a line is a run of non-zero bytes; the walk ends when the
-/// next line starts with byte 3 (the end mark, or a line of the file that starts with it). The
-/// first line is taken even when it starts with 3. A file with no line (empty, or only line
-/// breaks) gives none: UIO's walk would read past its end mark there, into whatever its buffer
-/// held before (a deliberate difference).
+/// 0 and the two bytes 0, 3 put after; the walk starts at the first non-zero byte (`Init`) and a
+/// line is a run of non-zero bytes; the walk ends when the next line starts with byte 3 (the end
+/// mark, or a line of the file that starts with it). So a file whose first line starts with 3,
+/// or with no line at all (empty, or only line breaks: the walk lands on the end mark), gives
+/// none.
 pub fn lines(file: &[u8]) -> Vec<&[u8]> {
     let mut starts = Vec::new();
     let is_break = |c: u8| c == b'\r' || c == b'\n' || c == 0;
@@ -108,7 +109,7 @@ pub fn lines(file: &[u8]) -> Vec<&[u8]> {
     while i < n && is_break(file[i]) {
         i += 1;
     }
-    if i == n {
+    if i == n || file[i] == 3 {
         return Vec::new();
     }
     loop {
@@ -263,7 +264,7 @@ pub fn evaluate(line: &[u8], ctx: &Context, files: &mut dyn Files) -> bool {
                 Some(w) if &w == b"vui+" => ctx.vui_plus,
                 Some(w) if &w == b"ohud" => ctx.one_hud,
                 _ => match t.first() {
-                    Some(b'#') => files.exists(&[PREFABS, &t[1..]].concat()),
+                    Some(b'#') => prefab_exists(files, &t[1..]),
                     Some(b'?') => ctx.loaded_mods.contains(&t[1..]),
                     _ => false,
                 },
@@ -273,6 +274,12 @@ pub fn evaluate(line: &[u8], ctx: &Context, files: &mut dyn Files) -> bool {
         expect_and_or = !expect_and_or;
     }
     stack[0]
+}
+
+/// `FileExists` of `Data\menus\prefabs\<path>` (UIO copies the path into `prefabsPath[0x80]`): a
+/// path too long for that buffer ([`UIO_PATH`]) names no file, before any call.
+fn prefab_exists(files: &mut dyn Files, path: &[u8]) -> bool {
+    PREFABS.len() + path.len() <= UIO_PATH && files.exists(&[PREFABS, path].concat())
 }
 
 /// The lines of a file UIO reads with `LineIterator`, or `None` when it does not open (or does
@@ -348,7 +355,7 @@ pub fn read_list(
             }
             cond_line = true;
             pending = None;
-            if !files.exists(&[PREFABS, path].concat()) {
+            if !prefab_exists(files, path) {
                 continue;
             }
             let (menu, tile) = next_token(target, b':');
@@ -356,7 +363,12 @@ pub fn read_list(
                 if tile.is_empty() && !begins_ci(&menu[1..], b"prefabs\\") {
                     continue;
                 }
-                ([MENUS, &menu[1..]].concat(), tile)
+                let file = [MENUS, &menu[1..]].concat();
+                // UIO copies it into `menusPath[0x80]`.
+                if file.len() > UIO_PATH {
+                    continue;
+                }
+                (file, tile)
             } else {
                 let tile = if tile.is_empty() { menu } else { tile };
                 match menu_file(menu) {

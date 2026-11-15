@@ -9,3 +9,7 @@ rust-version.workspace = true
 [dependencies]
 engine-core = { path = "../engine-core" }
 nvse = { path = "../nvse" }
+
+[dev-dependencies]
+# A second engine sharing a test engine's slots (the reader holds no part of them across a call).
+engine-core = { path = "../engine-core", features = ["test-support"] }

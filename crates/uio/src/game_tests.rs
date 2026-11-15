@@ -2,6 +2,7 @@
 //! doubles over a game folder in memory.
 
 use crate::game::{COMPRESS_AND_STORE_XML, TILE_PARSE_FILE};
+use crate::lists::Files;
 use crate::*;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -20,10 +21,16 @@ struct World {
     /// The texts `Tile::ParseFile` was given: the path and the text.
     parsed: Vec<(Vec<u8>, Vec<u8>)>,
     freed: Vec<u32>,
+    /// At each read of the game's text: a release point, then the second engine ([`OTHER`])
+    /// takes UIO's slot and counts the patched files it finds.
+    other_reads: bool,
+    seen: Vec<usize>,
 }
 
 thread_local! {
     static WORLD: RefCell<World> = RefCell::new(World::default());
+    /// A second engine of the run (a real thread's), sharing the test engine's slots.
+    static OTHER: RefCell<Option<Engine>> = const { RefCell::new(None) };
 }
 
 fn world<T>(f: impl FnOnce(&mut World) -> T) -> T {
@@ -119,6 +126,16 @@ fn engine() -> Engine {
     // Menu::CompressAndStoreXML(path, NULL): the game's text, or null.
     e.register(COMPRESS_AND_STORE_XML, |e, a| {
         assert_eq!(a[1], 0);
+        if world(|w| w.other_reads) {
+            engine_core::extend::release_held_for_test();
+            let n = OTHER.with(|o| {
+                o.borrow_mut()
+                    .as_mut()
+                    .map(|o| o.ext::<Uio>().patched.len())
+            });
+            engine_core::extend::release_held_for_test();
+            world(|w| w.seen.extend(n));
+        }
         let p = text(e, a[0]);
         match world(|w| w.game.get(&p).cloned()) {
             Some(t) => {
@@ -281,4 +298,89 @@ fn a_public_list_folder_entry_that_is_a_folder_or_too_long_is_passed_over() {
     e.site(0x0070_a049, &[0]);
     let (_, parsed) = read_file(&mut e, HUD);
     assert!(parsed.unwrap().contains("<mine/>"));
+}
+
+/// Paths of about 1 MiB (a list's path line and `#file` token, an include's src, the path
+/// `Tile::ReadFile` is given) never reach the game's stack: the lists and reads go on.
+#[test]
+fn paths_of_a_megabyte_never_stop_the_game() {
+    let mut e = engine();
+    a_mod_installed();
+    let huge = format!("{}.xml", "h".repeat(1_000_000));
+    loose(&format!("Data\\menus\\prefabs\\{huge}"), "");
+    loose(
+        "Data\\uio\\public\\long1.txt",
+        &format!("{huge}:HUDMainMenu\r\ntrue\r\n"),
+    );
+    loose(
+        "Data\\uio\\public\\long2.txt",
+        &format!("mine\\a b.xml:HUDMainMenu\r\n#{huge}\t||\ttrue\r\n"),
+    );
+    world(|w| {
+        w.listing = vec![
+            b"long1.txt".to_vec(),
+            b"long2.txt".to_vec(),
+            b"mine.txt".to_vec(),
+        ]
+    });
+    game(
+        "data\\menus\\prefabs\\mine\\a b.xml",
+        &format!(r#"<mine/><include src="{huge}"/>"#),
+    );
+    set_on(&mut e, true);
+    install(&mut e);
+    e.site(0x0070_a049, &[0]);
+    let (_, parsed) = read_file(&mut e, HUD);
+    let parsed = parsed.unwrap();
+    assert!(parsed.contains("<mine/>"));
+    assert!(!parsed.contains("hhhh"));
+    assert_eq!(
+        read_file(&mut e, &format!("Data\\Menus\\{huge}")),
+        (None, None)
+    );
+}
+
+/// The game's Windows calls get no path longer than `MAX_PATH` less its 0, and a file read
+/// stops at the caller's limit: a file of exactly the limit is read, one byte more is not.
+#[test]
+fn the_folder_is_asked_for_paths_up_to_max_path_and_reads_up_to_the_limit() {
+    let mut e = engine();
+    let at = |n: usize| format!("{}.txt", "p".repeat(n - 4));
+    let (fits, over) = (at(game::MAX_PATH_LEN), at(game::MAX_PATH_LEN + 1));
+    let body = "b".repeat(0x1800);
+    loose(&fits, &body);
+    loose(&over, &body);
+    let mut files = game::GameFiles(&mut e);
+    assert!(files.exists(fits.as_bytes()));
+    assert!(!files.exists(over.as_bytes()));
+    assert_eq!(
+        files.read(fits.as_bytes(), 0x1800),
+        Some(body.clone().into_bytes())
+    );
+    assert_eq!(files.read(fits.as_bytes(), 0x17ff), None);
+    assert_eq!(files.read(over.as_bytes(), 0x1800), None);
+}
+
+/// Another engine of the run (a real thread's) that takes UIO's shared slot while a read is in
+/// the game's calls finds every patched file there: the read holds no part of them across a call.
+#[test]
+fn a_read_leaves_the_patched_files_in_the_shared_slot_across_the_games_calls() {
+    let mut e = engine();
+    a_mod_installed();
+    set_on(&mut e, true);
+    install(&mut e);
+    e.site(0x0070_a049, &[0]);
+    let count = e.ext::<Uio>().patched.len();
+    assert!(count > 0);
+    let mut other = Engine::new();
+    e.share_slots_for_test(&mut other);
+    OTHER.with(|o| *o.borrow_mut() = Some(other));
+    world(|w| w.other_reads = true);
+    let (_, parsed) = read_file(&mut e, HUD);
+    assert!(parsed.unwrap().contains("<radar/>"));
+    let seen = world(|w| std::mem::take(&mut w.seen));
+    assert!(!seen.is_empty(), "the includes were read from the game");
+    assert!(seen.iter().all(|&n| n == count), "{seen:?}");
+    OTHER.with(|o| o.borrow_mut().take());
+    assert_eq!(e.ext::<Uio>().patched.len(), count);
 }

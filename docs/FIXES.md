@@ -984,10 +984,15 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Part 1 i
   replaced by UIO's own rules (the tag ends at the first `>` 20 bytes in, a path under 5 bytes is
   dropped, a missing prefab inserts nothing), then parsed by the game's own parser. A file the game
   cannot find goes to the game's own read (UIO passes no storage on there, and the game then fails).
-- **Where it differs from UIO on purpose.** Include loops end at 64 levels and an expansion at 64 MiB
-  (UIO runs out of stack or memory); an empty list file has no lines (UIO reads past its end there);
-  bracket nesting is not limited to UIO's 16 levels (UIO overruns its array); UIO's log files and its
-  developer settings (`Data\uio\settings.ini`: `bDebugMode`, `sDoNotCache`) are left out.
+- **Where it differs from UIO on purpose.** Include loops end at 64 levels, an expansion at 64 MiB
+  (after which that read fetches no further include) and at 10,000 files read for one read's
+  includes (UIO runs out of stack or memory, or reads on without end); a path longer than UIO's
+  128-byte buffers hold (a list's path, an `@` target or `#file`, an include's `src`: over 127
+  bytes with the folder in front) names no file, where UIO overruns the buffer, and nothing longer
+  than Windows' `MAX_PATH` is handed to the game; bracket nesting is not limited to UIO's 16 levels
+  (UIO overruns its array); expanded texts are kept up to 64 MiB in all, the rest expanded again at
+  each read (the same text); UIO's log files and its developer settings (`Data\uio\settings.ini`:
+  `bDebugMode`, `sDoNotCache`) are left out.
 - **Not yet** (parts 2 and 3): UIO's own XML parser (game setting values `&-sName;`, user traits,
   its parse cache), `UIOInjectComponent` for JIP's `InjectUIComponent`, its 17 new tile operators and
   three aliases, the text `<zoom>` patch and the HUD's hardcore texts.

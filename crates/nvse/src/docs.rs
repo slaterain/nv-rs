@@ -56,14 +56,9 @@ fn nvse_end() -> u32 {
     NVSE_FIRST + NAMES.len() as u32
 }
 
-/// The listed built-in a plugin opcode was registered under. A plugin with no opcode base (UI
-/// Organizer's) has no commands (`GetInfoFromBase` (xNVSE) refuses base 0).
+/// The listed built-in a plugin opcode was registered under ([`crate::plugins::parent_of`]).
 fn plugin_of(e: &Engine, opcode: u32) -> Option<(&'static str, u32)> {
-    crate::plugins::built_ins(e)
-        .into_iter()
-        .filter(|p| p.listed && p.opcode_base != 0 && p.opcode_base <= opcode)
-        .max_by_key(|p| p.opcode_base)
-        .map(|p| (p.name, p.version))
+    crate::plugins::parent_of(e, opcode, true).map(|p| (p.name, p.version))
 }
 
 fn info(e: &Engine, opcode: u32) -> Info {
