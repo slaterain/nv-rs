@@ -21,12 +21,13 @@
 //! variables, ref maps, extra data, linked references and NPC perks only where a command changed
 //! them since (`s_dataChangedFlags`); the commands come later (step 3.6).
 //!
-//! What a load does to the game besides keeping the data comes with JIP's saved data (step 3.3):
-//! a script variable is kept but not yet made in its script and event list (`Script::AddVariable`,
-//! which also refuses a name the script already has unless JIP added it this session: until then
-//! such a variable is kept and written back where JIP would leave it out),
-//! a linked reference is kept but not set on its reference (`SetLinkedRefID`), NPC perks are not
-//! given to the actors, and the appearance undo is not applied. Until then a save holds what the
+//! What a load does to the game besides keeping the data comes with JIP's saved data (step 3.3).
+//! While JIP answers "installed", a script variable is made in its script and event list
+//! (`Script::AddVariable`, `commands::jip_fn_script_vars`, which refuses a name the script
+//! already has unless JIP added it this session) and given its value, and a save writes each
+//! variable's value as it is then; until then it is only kept and written back.
+//! Not yet: a linked reference is kept but not set on its reference (`SetLinkedRefID`), NPC
+//! perks are not given to the actors, and the appearance undo is not applied. Until then a save holds what the
 //! co-save loaded held. What JIP would pass over unread (another record type, a version it does
 //! not read, the NPC perks without its NPC perks patch, `JPGF`'s bytes past its 8) is carried byte
 //! for byte to the next save, so a co-save from a real JIP installation loses nothing in nv-rs.
@@ -183,6 +184,8 @@ pub struct LinkedRef {
 /// damage cap (`SetDamageToArmorMaxPercent`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SerializedVars {
+    /// Conditions read a lock-free copy: whatever changes it calls
+    /// `jip_fn_miscellaneous::publish_serialized_flags` after.
     pub flags: u32,
     /// The cap's `float`, as its bits.
     pub dmg_armor_max_percent: u32,
@@ -375,7 +378,7 @@ fn vtable_says(e: &Engine, form: u32, slot: u32) -> bool {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp:
 // TESForm::GetScriptAndEventList.
 /// A reference's script and event list (its `ExtraScript`), or a quest's; both there or `None`.
-fn script_and_event_list(e: &mut Engine, form: u32) -> Option<(u32, u32)> {
+pub(crate) fn script_and_event_list(e: &mut Engine, form: u32) -> Option<(u32, u32)> {
     let (script, events) = if vtable_says(e, form, VT_IS_REFERENCE) {
         let extra = e
             .call(EXTRA_GET_BY_TYPE, &args![extra_list(form), EXTRA_SCRIPT])
@@ -517,6 +520,8 @@ pub fn process_changed_flags(e: &mut Engine, flags: u8) {
     s.script_vars.clear();
     s.linked_refs_temp.clear();
     s.serialized = SerializedVars::default();
+    crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
+    let s = saved(e);
     // The NPCs' perk info leaves the actors with it (step 3.3); the map empties.
     if flags & changed::NPC_PERKS != 0 {
         s.npc_perks.clear();
@@ -553,6 +558,7 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
     // where it breaks, with what was read kept; xNVSE then goes on at the section's end, so the
     // rest of the co-save still loads.
     let _ = read_records(e, r, flags);
+    crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
     Ok(())
 }
 
@@ -640,7 +646,12 @@ fn load_script_vars(e: &mut Engine, b: &mut Bytes, jg: bool) -> Option<()> {
         let id = resolved_ref_id(e, b.u32()?);
         let mut vars = b.u16()?;
         let form = if id != 0 { lookup_form(e, id) } else { 0 };
-        if form != 0 && script_and_event_list(e, form).is_some() {
+        let lists = if form != 0 {
+            script_and_event_list(e, form)
+        } else {
+            None
+        };
+        if let Some((script, events)) = lists {
             while vars != 0 {
                 vars -= 1;
                 let mod_index = b.u8()?;
@@ -654,8 +665,19 @@ fn load_script_vars(e: &mut Engine, b: &mut Bytes, jg: bool) -> Option<()> {
                 if value as u32 != 0 && value >> 32 == 0 {
                     value = u64::from(resolved_ref_id(e, value as u32));
                 }
-                // `Script::AddVariable` keeps every variable but a temporary one.
-                if name.first() != Some(&b'*') {
+                use crate::commands::jip_fn_script_vars as vars_cmds;
+                if e.ext::<Jip>().answers_installed {
+                    // `Script::AddVariable` makes it in the script and the event list (a name the
+                    // script has that JIP did not add this session: none) and keeps it (not a
+                    // temporary one), then the value goes into the variable.
+                    if let Some(var) =
+                        vars_cmds::add_variable(e, script, events, id, &name, mod_index)
+                    {
+                        vars_cmds::set_loaded_value(e, id, &name, var, value);
+                    }
+                } else if name.first() != Some(&b'*') {
+                    // JIP "not installed" (until step 3.10) changes no script: the variable is
+                    // only kept, to be written back.
                     // `s_scriptVariablesBuffer()[ownerID]`: a map of 4 buckets (`ScriptVariablesMap`).
                     let owner = saved(e)
                         .script_vars
@@ -1138,6 +1160,8 @@ fn holds_nothing(e: &mut Engine) -> bool {
 fn save_own(e: &mut Engine, r: &mut Records) {
     let player = player_base(e);
     let jg = saved(e).jg_fixes;
+    // `WriteRecord64(&svVarIt().value->data)`: each added variable's value as it is now.
+    crate::commands::jip_fn_script_vars::refresh_saved_values(e);
     let s = e.ext::<Jip>().saved.clone();
     if !s.script_vars.is_empty() {
         r.record(
@@ -1336,6 +1360,7 @@ pub fn listen(e: &mut Engine, m: &Message) {
         msg::NEW_GAME => {
             let s = saved(e);
             s.serialized = SerializedVars::default();
+            crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
             crate::world_hooks::restore_form_flags(e);
             let s = saved(e);
             // nv-rs's own: nothing of the last co-save loaded goes into a new game's.
@@ -1343,6 +1368,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.serialized_tail.clear();
             s.had_section = false;
         }
+        // `DeferredInit` (once per run): its temporary position marker.
+        msg::DEFERRED_INIT => crate::commands::pos_marker::create(e),
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
             // when there is nothing to do. Sent only once JIP answers "installed" (it asks for it,
