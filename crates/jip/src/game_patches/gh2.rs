@@ -16,7 +16,10 @@
 //! activators", JIP's own): the eight places the exe compares a reference's base form with the
 //! two ash pile forms test the base's ash pile bit instead (the two vanilla piles get it in
 //! `DeferredInit`, `MarkActivatorAshPile` gives it to others). G73 (`AttachAshPileHook`, JIP's
-//! own): the ash pile a death leaves can be `AttachAshPileEx`'s form. G103 (`ClearAshPilesHook`,
+//! own): the ash pile a death leaves can be `AttachAshPileEx`'s form. Not asked yet: G06's
+//! `0x77765A` (group GA's seam) and `0x95F7FE` (group GP's), so a marked activator is an ash pile
+//! in six of the eight places until those land; G73's `0x5DBCFD` (group GS's seam), which does
+//! nothing until that seam and the `AttachAshPileEx` command exist. G103 (`ClearAshPilesHook`,
 //! a fix row): the cell's reset walk deletes ash piles itself and no longer with their actor;
 //! JIP's jump there also passes over the exe's branches for form types 0x1D and 0x26 (`FLOR`
 //! and placed `INGR` references, of which the game's own plugins have none).
