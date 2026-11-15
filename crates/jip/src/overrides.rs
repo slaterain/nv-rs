@@ -13,8 +13,9 @@
 //! block's record and gives block type 0xE one (JIP's `DeferredInit`, PLAN-3.9 D03: `put_blocks`).
 //!
 //! Two of them have their full effect only with JIP's hook sites (steps 3.5 and 3.9):
-//! `Update3D` marks the reference for JIP's hook in the model loader's attach, which this does
-//! not have yet, and `GetHitLocation` reads the place in the hit data where JIP's
+//! `Update3D` marks the reference for JIP's attach in the queued references' vtables, which
+//! reads the mark (`game_patches::gp`, step 3.9 G38 and H09), and `GetHitLocation` reads the
+//! place in the hit data where JIP's
 //! `CopyHitDataHook` stores the location. `GetModelPath`'s per-reference paths come with
 //! `SetRefrModelPath` (step 3.6); until then a reference answers its base form's path, as in JIP
 //! for a reference that has none.
@@ -363,8 +364,8 @@ const HAS_PERK_FORMAT: u32 = 0x0103_5f1c;
 /// in its order.
 const GAME_SETTINGS: u32 = 0x011c_8048;
 const INI_COLLECTIONS: [u32; 4] = [0x011f_96a0, 0x011f_35a0, 0x011c_c694, 0x011f_35a4];
-/// `kHookRefFlag5F_Update3D` (`internal/hooks.h`).
-const REF_FLAG_UPDATE_3D: u8 = 1;
+/// `kHookRefFlag5F_Update3D` (`internal/hooks.h`), read by JIP's attach.
+const REF_FLAG_UPDATE_3D: u8 = crate::game_patches::gp::REF_FLAG_UPDATE_3D;
 /// The player's id.
 const PLAYER_ID: u32 = 0x14;
 
@@ -517,8 +518,8 @@ pub fn ref_update_3d(e: &mut Engine, refr: u32) {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h: Hook_Update3D_Execute.
 /// The player through the game's own update of its 3D, another reference through
 /// [`ref_update_3d`]. The result is left as it was (0: xNVSE zeroes it), where xNVSE's own
-/// version answers 1. What a player sees of it comes with JIP's hook in the model loader's attach
-/// (steps 3.5 and 3.9), which reads the mark this sets.
+/// version answers 1. What a player sees of it comes from JIP's attach in the queued references'
+/// vtables (`game_patches::gp`), which reads the mark this sets.
 fn update_3d(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     // The command needs a reference: the game calls it only with one.
