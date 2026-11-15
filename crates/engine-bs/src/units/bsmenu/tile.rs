@@ -14249,7 +14249,7 @@ mod tests {
 
     /// The list, string and item doubles `AddPair` needs, the constants it
     /// compares with, and a template owned by a storage.
-    fn pair_engine() -> (Engine, Ptr<TileTemplate>, Ptr<BuildStorage>) {
+    pub(super) fn pair_engine() -> (Engine, Ptr<TileTemplate>, Ptr<BuildStorage>) {
         let mut e = tile_engine();
         install_strcmp(&mut e);
         for page in [0x0101_1000, 0x0107_3000, 0x0109_b000] {
@@ -16563,3 +16563,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tile_uio_diff_tests.rs"]
+mod uio_diff_tests;

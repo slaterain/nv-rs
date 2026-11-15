@@ -71,6 +71,30 @@ fn free(e: &mut Engine, block: u32) {
     e.call(HEAP_FREE, &args![GAME_HEAP, block]);
 }
 
+/// The longest name put on the game's stack for a call ([`with_text`]); a longer one goes on the
+/// game's heap.
+const STACK_TEXT: usize = 0x1000;
+
+/// `f` given `text` with its ending zero in the game's memory: on the game's stack for a short
+/// text, else in a block of the game's heap freed after the call. UIO hands the game a pointer
+/// into its own buffer and copies nothing, so a name of any length a file holds (a text is up to
+/// 64 MiB) must reach the game: on the stack (1 MiB for locals) a long one would stop the game.
+/// `R::default()` (not found, no template) when the heap gives no block.
+fn with_text<R: Default>(e: &mut Engine, text: &[u8], f: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    if text.len() <= STACK_TEXT {
+        return nvse::events::with_guest_text(e, text, f);
+    }
+    let block = allocate(e, text.len() as u32 + 1);
+    if block == 0 {
+        return R::default();
+    }
+    e.mem.write(block, text);
+    e.mem.set_u8(block + text.len() as u32, 0);
+    let r = f(e, block);
+    free(e, block);
+    r
+}
+
 fn f32_at(e: &Engine, at: u32) -> f32 {
     f32::from_bits(e.mem.u32(at))
 }
@@ -98,7 +122,7 @@ pub fn map_lookup(e: &mut Engine, map: u32, key: &[u8]) -> u32 {
     if vtable == 0 {
         return 0;
     }
-    nvse::events::with_guest_text(e, key, |e, k| lookup_at(e, map, vtable, k))
+    with_text(e, key, |e, k| lookup_at(e, map, vtable, k))
 }
 
 fn lookup_at(e: &mut Engine, map: u32, vtable: u32, key: u32) -> u32 {
@@ -130,7 +154,7 @@ fn map_insert(e: &mut Engine, map: u32, key: u32) -> (u32, bool) {
     let buckets = e.mem.u32(map + 8);
     let slot = buckets.wrapping_add(bucket.wrapping_mul(4));
     let mut entry = e.mem.u32(slot);
-    for _ in 0..MAX_WALK {
+    for _step in 0..MAX_WALK {
         if entry == 0 {
             break;
         }
@@ -212,8 +236,9 @@ pub fn string_set(e: &mut Engine, string: u32, text: Option<&[u8]>) {
 pub struct GameBuilder<'a> {
     pub e: &'a mut Engine,
     pub storage: u32,
-    /// Items made so far ([`MAX_ITEMS`]).
+    /// Items made so far, and the most one parse makes ([`MAX_ITEMS`]; smaller in the tests).
     items: u32,
+    max_items: u32,
 }
 
 impl<'a> GameBuilder<'a> {
@@ -222,6 +247,7 @@ impl<'a> GameBuilder<'a> {
             e,
             storage,
             items: 0,
+            max_items: MAX_ITEMS,
         }
     }
 
@@ -285,8 +311,7 @@ impl Builder for GameBuilder<'_> {
         if e.mem.u32(TRAIT_MAP) == 0 {
             return None;
         }
-        let (entry, new) =
-            nvse::events::with_guest_text(e, name, |e, k| map_insert(e, TRAIT_MAP, k));
+        let (entry, new) = with_text(e, name, |e, k| map_insert(e, TRAIT_MAP, k));
         if entry == 0 {
             return None;
         }
@@ -341,7 +366,7 @@ impl Builder for GameBuilder<'_> {
 
     // Translated from UIO 2.30 (426d963), ui_organizer.h: ResolveTrait.
     fn resolve_trait(&mut self, value_type: u32, value: Value) -> bool {
-        if self.items >= MAX_ITEMS {
+        if self.items >= self.max_items {
             return false;
         }
         self.items += 1;
@@ -428,7 +453,7 @@ impl Builder for GameBuilder<'_> {
                             Value::Str(s) => s.clone(),
                             _ => Vec::new(),
                         };
-                        let found = nvse::events::with_guest_text(e, &name, |e, n| {
+                        let found = with_text(e, &name, |e, n| {
                             let t = e.call(FIND_TEMPLATE, &args![owner, n]).u32();
                             if t != 0 {
                                 t
@@ -550,6 +575,11 @@ impl Builder for GameBuilder<'_> {
 /// UIO's parse of `text` into a new storage (`ResolveXMLFileHook` from `notDebug`): the storage
 /// made on the game's heap and constructed, then the scan; 0 when no storage can be made.
 pub fn parse(e: &mut Engine, text: &[u8]) -> u32 {
+    parse_capped(e, text, MAX_ITEMS)
+}
+
+/// [`parse`] making at most `max_items` items.
+fn parse_capped(e: &mut Engine, text: &[u8], max_items: u32) -> u32 {
     let block = allocate(e, 0x14);
     if block == 0 {
         return 0;
@@ -558,7 +588,9 @@ pub fn parse(e: &mut Engine, text: &[u8]) -> u32 {
     if storage == 0 || e.mem.u32(storage) == 0 {
         return storage;
     }
-    crate::parse::scan(text, &mut GameBuilder::new(e, storage));
+    let mut b = GameBuilder::new(e, storage);
+    b.max_items = max_items;
+    crate::parse::scan(text, &mut b);
     storage
 }
 

@@ -428,6 +428,49 @@ fn an_injected_component_is_read_from_memory_under_jip_temp() {
     let long = vec![b' '; game::MAX_INJECTED + 1];
     assert_eq!(inject_component(&mut e, 0x4000, &long), 0);
     assert!(world(|w| w.reads.is_empty()));
+    // Exactly the cap: read.
+    let mut capped = br#"<rect name="K"></rect>"#.to_vec();
+    capped.resize(game::MAX_INJECTED, b' ');
+    assert_eq!(inject_component(&mut e, 0x4000, &capped), 0x7117);
+    let reads = world(|w| w.reads.clone());
+    assert_eq!(reads.len(), 1);
+    let got = items(&e, e.mem.u32(reads[0].1.unwrap()));
+    assert_eq!(
+        got,
+        vec![
+            item(6, 901.0, Some("K"), RECT),
+            // From the pool: the name's item, "K" still in its text.
+            item(7, 901.0, Some("K"), RECT)
+        ]
+    );
+}
+
+/// A tag name or `&entity` filling the whole injected text (the cap, 1 MiB) is read without
+/// stopping the game.
+#[test]
+fn an_injected_text_of_one_long_name_never_stops_the_game() {
+    let mut e = engine();
+    set_on(&mut e, true);
+    install(&mut e);
+    e.site(0x0070_a049, &[0]);
+    let mut tag = vec![b'<'];
+    tag.resize(game::MAX_INJECTED - 1, b'a');
+    tag.push(b'>');
+    assert_eq!(inject_component(&mut e, 0x4000, &tag), 0x7117);
+    let mut entity = b"<x>&".to_vec();
+    entity.resize(game::MAX_INJECTED - 4, b'a');
+    entity.extend(b"</x>");
+    assert_eq!(entity.len(), game::MAX_INJECTED);
+    assert_eq!(inject_component(&mut e, 0x4000, &entity), 0x7117);
+    let reads = world(|w| w.reads.clone());
+    assert_eq!(reads.len(), 2);
+    assert_eq!(items(&e, e.mem.u32(reads[0].1.unwrap())), vec![]);
+    let got = items(&e, e.mem.u32(reads[1].1.unwrap()));
+    assert_eq!(got.len(), 1);
+    assert_eq!(
+        got[0].text.as_ref().map(String::len),
+        Some(game::MAX_INJECTED - 7)
+    );
 }
 
 #[test]

@@ -284,19 +284,238 @@ fn no_trait_map_or_settings_gives_nothing_and_no_storage_memory_gives_none() {
 
 #[test]
 fn malformed_text_never_stops_the_game() {
-    // Random texts from XML's own characters: the scan ends, whatever comes.
+    // Random texts of up to 4 KiB: half of the bytes from XML's own characters and names, half
+    // any byte 0x00-0xFF: the scan ends, whatever comes.
     let alphabet = b"<>/= \"&-_.;0123456789rectnamsrixy\t";
     let mut seed: u32 = 0x1234_5678;
-    let mut e = engine();
-    for _ in 0..400 {
-        let mut t = Vec::new();
-        for _ in 0..(seed % 97) {
-            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
-            t.push(alphabet[(seed >> 16) as usize % alphabet.len()]);
-        }
+    let mut next = || {
         seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        seed >> 8
+    };
+    let mut e = engine();
+    let mut seen = [false; 256];
+    for round in 0..600 {
+        let len = if round % 4 == 0 {
+            next() % 4097
+        } else {
+            next() % 97
+        };
+        let mut t = Vec::new();
+        for _ in 0..len {
+            let r = next();
+            let c = if r & 1 == 0 {
+                alphabet[(r >> 1) as usize % alphabet.len()]
+            } else {
+                (r >> 1) as u8
+            };
+            seen[c as usize] = true;
+            t.push(c);
+        }
         let storage = parse(&mut e, &t);
         assert_ne!(storage, 0);
-        items(&e, e.mem.u32(storage));
+        items_any(&e, e.mem.u32(storage));
     }
+    assert!(seen.iter().all(|&s| s), "every byte value drawn");
+    // Fixed cases: a 2 MiB token, a 70,000-byte value (beyond the text's 16-bit length) and a
+    // text reaching the item cap.
+    let mut e = engine();
+    for t in [
+        "a".repeat(HUGE),
+        format!("<{}", "a".repeat(HUGE)),
+        format!("<x name=\"{}\">", "a".repeat(HUGE)),
+        format!("<x>{}</x>", "v".repeat(70_000)),
+    ] {
+        let storage = parse(&mut e, t.as_bytes());
+        assert_ne!(storage, 0);
+        items_any(&e, e.mem.u32(storage));
+    }
+    let mut e = engine();
+    let got = parsed(&mut e, &format!("<x>{}</x>", "v".repeat(70_000)));
+    assert_eq!(got[0].text.as_ref().map(String::len), Some(70_000));
+    let mut e = engine();
+    let storage = parse(&mut e, "<x>".repeat(MAX_ITEMS as usize + 5).as_bytes());
+    assert_eq!(e.mem.u32(e.mem.u32(storage) + 0x10), MAX_ITEMS);
+}
+
+/// The items' count walked (any bytes in their texts).
+fn items_any(e: &Engine, template: u32) -> usize {
+    let mut n = 0;
+    let mut node = e.mem.u32(template + 8);
+    while node != 0 {
+        n += 1;
+        node = e.mem.u32(node);
+    }
+    assert_eq!(e.mem.u32(template + 0x10) as usize, n, "the count");
+    n
+}
+
+/// 2 MiB: twice the game's whole stack for locals.
+const HUGE: usize = 2 << 20;
+
+/// A tag name, an `&entity`, an `&-setting` name and a `<template name>` of 2 MiB each (a file's
+/// text may be 64 MiB) reach the game's maps and template calls without stopping the game, and a
+/// long name is still found as UIO finds it (its text in the game's memory, not cut).
+#[test]
+fn names_of_two_megabytes_never_stop_the_game() {
+    let a = "a".repeat(HUGE);
+    let mut e = engine();
+    // An unknown tag name: no item.
+    assert_eq!(parsed(&mut e, &format!("<{a}>")), vec![]);
+    // An unknown `&name`: its text kept whole.
+    let got = parsed(&mut e, &format!("<x>&{a}</x>"));
+    assert_eq!(got.len(), 1);
+    assert_eq!((got[0].kind, got[0].id), (8, 0xfa1));
+    assert_eq!(got[0].text.as_ref().map(String::len), Some(HUGE + 1));
+    // An unknown setting: no value (each case on a fresh engine: no pool items carried over).
+    let mut e = engine();
+    assert_eq!(
+        parsed(&mut e, &format!("<x>&-s{a};</x>")),
+        vec![item(4, 4001.0, None, 0xfa1), item(5, 4001.0, None, 0xfa1)]
+    );
+    // A template named so: made, with the whole name.
+    let mut e = engine();
+    let storage = parse(
+        &mut e,
+        format!(r#"<template name="{a}"><x>1</x></template>"#).as_bytes(),
+    );
+    let t = e.mem.u32(storage + 4);
+    assert_eq!(nvse::table::guest_text(&e, e.mem.u32(t)).len(), HUGE);
+    assert_eq!(items(&e, t), vec![item(8, 1.0, None, 0xfa1)]);
+    // Long names that are there: a user trait registered and met again, a setting found.
+    let mut e = engine();
+    let user = format!("_{a}");
+    let text = format!("<{user}>1</{user}><{user}>2</{user}>");
+    assert_eq!(
+        parsed(&mut e, &text),
+        vec![item(8, 1.0, None, 10000), item(8, 2.0, None, 10000)]
+    );
+    let mut e = engine();
+    let name = format!("f{a}");
+    setting(&mut e, &name, 0.25f32.to_bits());
+    assert_eq!(
+        parsed(&mut e, &format!("<x>&-{name};</x>")),
+        vec![item(8, 0.25, None, 0xfa1)]
+    );
+    let mut e = engine();
+    let key = format!("&{a}");
+    map_put(&mut e, TRAIT_MAP, &key, 2);
+    assert_eq!(
+        parsed(&mut e, &format!("<x>{key}</x>")),
+        vec![item(8, 2.0, None, 0xfa1)]
+    );
+}
+
+/// The heap blocks a long name is put in are freed after each call; no heap block: not found.
+#[test]
+fn a_long_names_heap_block_is_freed_and_none_means_not_found() {
+    let mut e = engine();
+    let name = vec![b'_'; STACK_TEXT + 1];
+    let before = e.mem.u32(TRAIT_MAP + 0xc);
+    let storage = parse(&mut e, b"");
+    let mut b = GameBuilder::new(&mut e, storage);
+    assert_eq!(b.add_trait_name(&name), Some(10000));
+    assert_eq!(b.e.mem.u32(TRAIT_MAP + 0xc), before + 1);
+    // A name of exactly the stack's bound goes on the stack (no heap call); one byte more on the heap.
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = calls.clone();
+    b.e.register_double(0x00aa_3e40, move |e, a| {
+        c.set(c.get() + 1);
+        ret(e.mem.alloc(a[1].max(1)))
+    });
+    assert_eq!(b.lookup_trait(&vec![b'q'; STACK_TEXT]), None);
+    assert_eq!(calls.get(), 0);
+    assert_eq!(b.lookup_trait(&name), Some(10000));
+    assert_eq!(calls.get(), 1);
+    b.e.register(0x00aa_3e40, |_, _| ret(0));
+    assert_eq!(b.lookup_trait(&name), None);
+    assert_eq!(b.add_trait_name(&[name.as_slice(), b"x"].concat()), None);
+}
+
+/// A parse stops at its item cap: the items before it are kept.
+#[test]
+fn a_parse_stops_at_its_item_cap() {
+    let mut e = engine();
+    let storage = parse_capped(&mut e, b"<x>1</x><y>2</y><x>3</x>", 3);
+    // `<x>`, `1`, `</x>` (folded into one), then `<y>` is the fourth: refused, the scan ends.
+    assert_eq!(
+        items(&e, e.mem.u32(storage)),
+        vec![item(8, 1.0, None, 0xfa1)]
+    );
+    let storage = parse_capped(&mut e, b"<x>1</x><y>2</y><x>3</x>", 4);
+    assert_eq!(
+        items(&e, e.mem.u32(storage)),
+        vec![item(8, 1.0, None, 0xfa1), item(4, 4002.0, None, 0xfa2)]
+    );
+}
+
+/// A map bucket whose entry points to itself: lookup and insert end.
+#[test]
+fn a_looped_map_bucket_ends_lookup_and_insert() {
+    let mut e = engine();
+    map_put(&mut e, TRAIT_MAP, "loopy", 5);
+    let bucket = crate::hash::str_hash(b"loopy") % 37;
+    let entry = e.mem.u32(e.mem.u32(TRAIT_MAP + 8) + bucket * 4);
+    e.mem.set_u32(entry, entry);
+    // Another name in the same bucket.
+    let other = (0..)
+        .map(|i| format!("_k{i}"))
+        .find(|n| crate::hash::str_hash(n.as_bytes()) % 37 == bucket)
+        .unwrap();
+    // The map's compare counted: a walk past its bound fails the test instead of hanging it.
+    let equal = e.mem.u32(e.mem.u32(TRAIT_MAP) + 8);
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let c = calls.clone();
+    e.register_double(equal, move |e, a| {
+        c.set(c.get() + 1);
+        assert!(c.get() <= MAX_WALK, "the walk passed its bound");
+        let same = nvse::table::guest_text(e, a[1])
+            .eq_ignore_ascii_case(&nvse::table::guest_text(e, a[2]));
+        ret(same as u32)
+    });
+    assert_eq!(map_lookup(&mut e, TRAIT_MAP, other.as_bytes()), 0);
+    assert_eq!(calls.get(), MAX_WALK);
+    calls.set(0);
+    // Still found when it is the looped entry itself.
+    assert_ne!(map_lookup(&mut e, TRAIT_MAP, b"loopy"), 0);
+    let storage = parse(&mut e, b"");
+    let mut b = GameBuilder::new(&mut e, storage);
+    // The insert walks the loop to its bound, then puts the new name first in the bucket.
+    calls.set(0);
+    assert_eq!(b.add_trait_name(other.as_bytes()), Some(10000));
+    assert_eq!(calls.get(), MAX_WALK);
+}
+
+/// A text over 65,535 bytes on a string whose size field is full: a new buffer of the text's
+/// length and its end (the old one freed); the 16-bit fields keep the low bits.
+#[test]
+fn string_set_of_seventy_thousand_bytes() {
+    let mut e = engine();
+    let s = e.mem.alloc(8);
+    let old = e.mem.alloc(0x1_0000);
+    e.mem.set_u32(s, old);
+    e.mem.set_u16(s + 4, 0xffff);
+    e.mem.set_u16(s + 6, 0xffff);
+    let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let k = asked.clone();
+    e.register_double(0x00aa_3e40, move |e, a| {
+        k.set(a[1]);
+        ret(e.mem.alloc(a[1].max(1)))
+    });
+    let freed = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let g = freed.clone();
+    e.register_double(0x00aa_4060, move |e, a| {
+        g.set(a[1]);
+        e.mem.free(a[1]);
+        ret(0)
+    });
+    let long = vec![b'v'; 70_000];
+    string_set(&mut e, s, Some(&long));
+    // The old buffer freed first (the new one may take its place), then the new one asked for.
+    assert_eq!((freed.get(), asked.get()), (old, 70_001));
+    let data = e.mem.u32(s);
+    assert_eq!(e.mem.bytes(data, 70_001)[69_999..], *b"v\0");
+    assert_eq!(
+        (e.mem.u16(s + 4), e.mem.u16(s + 6)),
+        ((70_000 & 0xffff) as u16, (70_000 & 0xffff) as u16)
+    );
 }
