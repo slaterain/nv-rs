@@ -6019,7 +6019,7 @@ mod tests_accessors {
     }
 
     thread_local! {
-        static H18_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+        static H18_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
         static H18_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
     }
 
@@ -6043,7 +6043,10 @@ mod tests_accessors {
         e.set_global(PLAYER_POINTER, 0x7777u32);
         e.register(0x0056_6950, |_, _| ret(1));
         e.register_double(0x004d_1360, move |_, _| ret(hardcore));
-        e.on_site(SiteSlot::new(Owner::Jip, 0x0087_f427), at_teammate_essential);
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x0087_f427),
+            at_teammate_essential,
+        );
         H18_ASKED.with(|s| s.borrow_mut().clear());
         H18_ANSWER.with(|c| c.set(answer));
         e.set_jip_patches(word);

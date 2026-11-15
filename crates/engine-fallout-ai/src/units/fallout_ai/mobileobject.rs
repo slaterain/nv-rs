@@ -3331,7 +3331,8 @@ pub fn fn_009344d0(
                 // JIP LN NVSE's `bVoiceModulationFix` (switch 13; step 3.9-GE, PLAN-3.9 O13) at
                 // `0x934AC8`: the seam answers the flags (0x80000 added unless the base form's
                 // flag 0x2000 is set). One load while the switch is off.
-                let jip = if e.jip_patches() & engine_core::extend::jip_patches::VOICE_MODULATION_FIX
+                let jip = if e.jip_patches()
+                    & engine_core::extend::jip_patches::VOICE_MODULATION_FIX
                     != 0
                 {
                     e.site(0x0093_4ac8, &[this.addr()])
@@ -5608,10 +5609,7 @@ mod tests {
     /// word `word` and seam handlers answering `answer` at `0x931384` (H11, this group's row) and
     /// `0x9313EC` (G29, group GX's: a test handler): the actor, the calls of `0087e130` and
     /// `004181e0`, and what the seams were asked.
-    fn havok_with_jip(
-        word: u32,
-        answer: Option<u32>,
-    ) -> (u32, usize, usize, Vec<(u32, Vec<u32>)>) {
+    fn havok_with_jip(word: u32, answer: Option<u32>) -> (u32, usize, usize, Vec<(u32, Vec<u32>)>) {
         use engine_core::extend::{Owner, SiteSlot};
         let (mut e, this) = havok_special_actor_world();
         stub(&mut e, 0x8130, 0);
@@ -7804,20 +7802,20 @@ mod tests {
         fn_009344d0(
             e,
             this,
-                Ptr::new(0x4000),
-                Ptr::new(0x4100),
-                11,
-                22,
-                5,
-                Ptr::NULL,
-                Ptr::NULL,
-                Ptr::NULL,
-                0,
-                0,
-                0,
-                0,
-                0,
-            )
+            Ptr::new(0x4000),
+            Ptr::new(0x4100),
+            11,
+            22,
+            5,
+            Ptr::NULL,
+            Ptr::NULL,
+            Ptr::NULL,
+            0,
+            0,
+            0,
+            0,
+            0,
+        )
     }
 
     #[test]
@@ -7856,7 +7854,7 @@ mod tests {
     }
 
     /// JIP's voice modulation fix at `0x934AC8` (O13): not asked without its switch (the fixes
-    /// alone, other switches), the exe's 0x104 (+ 2, not played directly); asked with the
+    /// alone, other switches), the exe's 0x104 (+ 1, played directly); asked with the
     /// object, its answer is the flags word, no answer keeps 0x104.
     #[test]
     fn dialogue_audio_jip_voice_flags_seam() {
@@ -7867,13 +7865,13 @@ mod tests {
         ] {
             let (flags, asked, _) = voice_flags_with_jip(word, Some(0x8_0104));
             assert!(asked.is_empty(), "{word:x}");
-            assert_eq!(flags, 0x106);
+            assert_eq!(flags, 0x105);
         }
         let on = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::VOICE_MODULATION_FIX;
         let (flags, asked, this) = voice_flags_with_jip(on, None);
-        assert_eq!((flags, asked), (0x106, vec![vec![this]]));
+        assert_eq!((flags, asked), (0x105, vec![vec![this]]));
         let (flags, asked, this) = voice_flags_with_jip(on, Some(0x8_0104));
-        assert_eq!((flags, asked), (0x8_0106, vec![vec![this]]));
+        assert_eq!((flags, asked), (0x8_0105, vec![vec![this]]));
     }
 
     #[test]

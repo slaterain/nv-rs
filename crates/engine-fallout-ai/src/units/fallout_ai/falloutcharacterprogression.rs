@@ -573,6 +573,9 @@ mod n026_tests {
         }
         let on = jip_patches::INSTALLED | jip_patches::FIXES;
         assert_eq!(force_level_with_jip(on, None), (vec![6, 8], vec![vec![7]]));
-        assert_eq!(force_level_with_jip(on, Some(7)), (vec![7, 8], vec![vec![7]]));
+        assert_eq!(
+            force_level_with_jip(on, Some(7)),
+            (vec![7, 8], vec![vec![7]])
+        );
     }
 }

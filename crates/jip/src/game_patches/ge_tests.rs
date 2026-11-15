@@ -91,7 +91,11 @@ fn actor_flags_installed_row_on_keeps_the_essential_bit() {
 /// with the row on.
 #[test]
 fn the_fixes_need_the_row() {
-    for (installed, row, expected) in [(false, true, false), (true, false, false), (true, true, true)] {
+    for (installed, row, expected) in [
+        (false, true, false),
+        (true, false, false),
+        (true, true, true),
+    ] {
         let e = jip(installed, row);
         for &addr in AREA.fix_sites {
             assert_eq!(
@@ -130,7 +134,12 @@ fn removed_stores_are_answered() {
         MOVE_HEIGHT,
         AVOID_HEIGHT,
     ] {
-        assert_eq!(e.site(site.addr(), &[ACTOR]), Some(0), "{:08x}", site.addr());
+        assert_eq!(
+            e.site(site.addr(), &[ACTOR]),
+            Some(0),
+            "{:08x}",
+            site.addr()
+        );
         assert_eq!(e.site(site.addr(), &[0]), Some(0), "{:08x}", site.addr());
     }
 }
@@ -151,7 +160,7 @@ fn agility_is_the_clamped_value() {
     let mut e = jip(true, true);
     let asked = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
     let seen = asked.clone();
-    e.register(GET_CLAMPED_ACTOR_VALUE, move |_, a| {
+    e.register_double(GET_CLAMPED_ACTOR_VALUE, move |_, a| {
         seen.borrow_mut().push(a.to_vec());
         Ret {
             st0: 10.0,
@@ -185,7 +194,11 @@ fn the_players_ragdoll_is_not_built_twice_on_one_node() {
     assert_eq!(build(&mut e, 0x14, 0x5000, 0), None, "no controller");
     assert_eq!(build(&mut e, 0x14, 0x6000, 1), None, "a new node");
     assert_eq!(build(&mut e, 0x0001_0000, 0x5000, 1), None);
-    assert_eq!(build(&mut e, 0x14, 0x6000, 1), Some(0), "kept over the other actor");
+    assert_eq!(
+        build(&mut e, 0x14, 0x6000, 1),
+        Some(0),
+        "kept over the other actor"
+    );
 }
 
 /// O13: the dialogue sound's flags by the base form's flag 0x2000; a reference with no base form
@@ -193,7 +206,11 @@ fn the_players_ragdoll_is_not_built_twice_on_one_node() {
 #[test]
 fn voice_modulation_flags() {
     let mut e = jip(true, true);
-    assert_ne!(e.jip_patches() & jip_patches::VOICE_MODULATION_FIX, 0, "on by default");
+    assert_ne!(
+        e.jip_patches() & jip_patches::VOICE_MODULATION_FIX,
+        0,
+        "on by default"
+    );
     let base = ACTOR + 0x200;
     e.mem.set_u32(ACTOR + 0x20, base);
     for (flags, answer) in [
@@ -203,7 +220,11 @@ fn voice_modulation_flags() {
         (0xffff_dfff, 0x8_0104),
     ] {
         e.mem.set_u32(base + 8, flags);
-        assert_eq!(e.site(VOICE_FLAGS.addr(), &[ACTOR]), Some(answer), "{flags:x}");
+        assert_eq!(
+            e.site(VOICE_FLAGS.addr(), &[ACTOR]),
+            Some(answer),
+            "{flags:x}"
+        );
     }
     e.mem.set_u32(ACTOR + 0x20, 0);
     assert_eq!(e.site(VOICE_FLAGS.addr(), &[ACTOR]), None);

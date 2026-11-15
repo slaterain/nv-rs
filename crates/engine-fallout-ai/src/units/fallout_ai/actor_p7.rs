@@ -4080,10 +4080,16 @@ mod tests {
         }
         let on = jip_patches::INSTALLED | jip_patches::FIXES;
         let (owner, speeds, asked) = speeds_with_jip(on, None);
-        assert_eq!(asked, vec![vec![0x008c_17d9, owner], vec![0x008c_1959, owner]]);
+        assert_eq!(
+            asked,
+            vec![vec![0x008c_17d9, owner], vec![0x008c_1959, owner]]
+        );
         assert_eq!(speeds, [13.5, 13.5]);
         let (owner, speeds, asked) = speeds_with_jip(on, Some(10.0f32.to_bits()));
-        assert_eq!(asked, vec![vec![0x008c_17d9, owner], vec![0x008c_1959, owner]]);
+        assert_eq!(
+            asked,
+            vec![vec![0x008c_17d9, owner], vec![0x008c_1959, owner]]
+        );
         assert_eq!(speeds, [-1.5, -1.5]);
     }
 

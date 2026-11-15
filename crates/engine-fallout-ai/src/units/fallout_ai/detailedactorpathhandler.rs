@@ -7901,9 +7901,8 @@ mod tests {
         G22_ASKED.with(|s| s.borrow_mut().clear());
         G22_ANSWER.with(|c| c.set(answer));
         w.e.set_jip_patches(word);
-        let hit = w
-            .e
-            .call(
+        let hit =
+            w.e.call(
                 0x009e_6900,
                 &args![w.actor, w.this, other, position, direction, 100.0f32, 0.5f32, value, true],
             )

@@ -114,7 +114,6 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(MAP_SOUND_FLAGS, voice_flag_added);
 }
 
-
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
 // (SAFE_WRITE_BUF(0x8AB6D9, "\x8B\x8D\x54\xFF\xFF\xFF\x66\xC7\x81\x05\x01...")).
 /// The load routine's flag calls (`0x8AB6D9`: the actor, the routine's `this`, never 0): JIP's two
@@ -201,11 +200,17 @@ fn ragdoll_build(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if id != PLAYER_REF_ID {
         return None;
     }
-    let last = e.ext_free::<LastPlayerRoot>().0.swap(root, Ordering::Relaxed);
+    let last = e
+        .ext_free::<LastPlayerRoot>()
+        .0
+        .swap(root, Ordering::Relaxed);
     if last != root {
         return None;
     }
-    let controller = e.get(Ptr::<RagdollOwner>::new(actor), RagdollOwner::pRagdollController);
+    let controller = e.get(
+        Ptr::<RagdollOwner>::new(actor),
+        RagdollOwner::pRagdollController,
+    );
     (controller != 0).then_some(0)
 }
 
