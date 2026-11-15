@@ -458,6 +458,22 @@ fn cosine_and_sine_bit_for_bit() {
         let lane = emu_cos_v3([a, 0.0, 0.0, 0.0])[0];
         same(cos_lane(a), lane, &format!("lane {a}"));
     }
+    // Three lanes at once: one lane's wrap reduces the others, an indefinite lane included.
+    for lanes in [
+        [f(0x4f49_0fdc), 7.0, 0.0],
+        [5.0, 13.0, -1e10],
+        [1e10, f32::NAN, 3.0],
+        [f32::NAN, 7.0, -2.2],
+        [0.3, 1.9, 3.5],
+        [1e9, -7.9, 12.0],
+        [f32::INFINITY, 100.7, 0.0],
+    ] {
+        let want = emu_cos_v3([lanes[0], lanes[1], lanes[2], 0.0]);
+        let got = cos_v3(lanes);
+        for i in 0..3 {
+            same(got[i], want[i], &format!("lane {i} of {lanes:?}"));
+        }
+    }
 }
 
 fn pid2_f() -> f32 {

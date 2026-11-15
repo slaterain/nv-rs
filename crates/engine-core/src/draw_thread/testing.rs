@@ -65,7 +65,8 @@ pub fn mark_posted(e: &Engine) {
 
 /// Whether calling `addr` with `args` joins the drawing job before anything else it does: the run turned on with a
 /// join that stops, a job marked posted, then the call, which must stop with that join's text (a function that read
-/// or called anything first would stop otherwise, or return). The run is turned off after.
+/// or called anything first would stop otherwise, or return), and the join must be counted under `addr` itself (a
+/// join named with another address fails). The run is turned off after.
 pub fn joins_first(e: &mut Engine, addr: u32, args: &[u32]) -> bool {
     turn_on(e, hooks_finishing_with(stop_at_join));
     mark_posted(e);
@@ -73,6 +74,7 @@ pub fn joins_first(e: &mut Engine, addr: u32, args: &[u32]) -> bool {
         e.call(addr, args);
     }));
     e.call_stack.clear();
+    let named = joins_by_point(e) == [(addr, 1)];
     // A join that never ran leaves the mark: taken away here.
     if with_run(e.kernel.id(), |r| r.pending.take())
         .flatten()
@@ -83,9 +85,12 @@ pub fn joins_first(e: &mut Engine, addr: u32, args: &[u32]) -> bool {
     turn_off(e);
     match out {
         Ok(()) => false,
-        Err(payload) => payload
-            .downcast_ref::<String>()
-            .is_some_and(|s| s == JOINED),
+        Err(payload) => {
+            named
+                && payload
+                    .downcast_ref::<String>()
+                    .is_some_and(|s| s == JOINED)
+        }
     }
 }
 

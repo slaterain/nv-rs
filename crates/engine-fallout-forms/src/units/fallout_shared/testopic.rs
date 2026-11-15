@@ -1575,7 +1575,9 @@ pub fn fn_00619430(e: &mut Engine, this: Ptr, form: u32) -> u8 {
         if info == 0 {
             return 0;
         }
-        let owner = tes_topic_get_owner_topic(e, Ptr::new(info)).addr();
+        // By address, as the exe calls it: a fix row (the topic index) or JIP's game patch (step
+        // 3.9a, its parent topic) may be registered there.
+        let owner = e.call(0x0061_a310, &args![info]).u32();
         if owner == 0 {
             return 0;
         }
@@ -2591,6 +2593,31 @@ mod n045_tests {
         assert!(e.call(0x0061_9430, &[this, form]).bool());
         let log = e.call_log.take().unwrap();
         assert_eq!(only(&log, FORM_ANSWER_484020), vec![vec![this, form]]);
+    }
+
+    thread_local! {
+        static LAST_LINKED: std::cell::Cell<(u32, u32)> = const { std::cell::Cell::new((0, 0)) };
+    }
+
+    fn jip_owner_topic(_: &mut Engine, w: &[u32]) -> Ret {
+        let (info, topic) = LAST_LINKED.with(std::cell::Cell::get);
+        ret(if w[0] == info { topic } else { 0 })
+    }
+
+    /// `00619430` asks `GetOwnerTopic` by address, as the exe does: with JIP's wrap there (step 3.9a: the
+    /// topic an info's load linked it into last; a stand-in answering it), topic B owns an info last
+    /// linked into B, and topic A does not.
+    #[test]
+    fn fn_00619430_asks_the_owner_topic_by_address() {
+        use engine_core::extend::{Owner, WrapSlot};
+        let mut e = rig();
+        let (a, b) = (topic(&mut e, 10), topic(&mut e, 20));
+        let info = e.mem.alloc(0x20);
+        e.mem.set_u8(info + 4, 0x46);
+        LAST_LINKED.with(|l| l.set((info, b)));
+        e.wrap(WrapSlot::new(Owner::Jip, 0x0061_a310), jip_owner_topic);
+        assert!(e.call(0x0061_9430, &[b, info]).bool());
+        assert!(!e.call(0x0061_9430, &[a, info]).bool());
     }
 
     #[test]

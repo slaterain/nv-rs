@@ -300,10 +300,18 @@ fn a_job_that_stopped_stops_the_join_point() {
     turn_off(&mut e);
 }
 
-/// The helper the engine crates' join tests use: true only when the call joins first.
+/// The helper the engine crates' join tests use: true only when the call joins first, under its own address.
 #[test]
 fn joins_first_tells_a_joining_entry_from_one_that_does_not() {
     fn joins(e: &mut Engine, _: &[u32]) -> Ret {
+        finish_at(e, 0x0040_1000);
+        panic!("went on past the join")
+    }
+    fn joins_named_elsewhere(e: &mut Engine, _: &[u32]) -> Ret {
+        finish_at(e, 0x0040_1000);
+        panic!("went on past the join")
+    }
+    fn joins_unnamed(e: &mut Engine, _: &[u32]) -> Ret {
         finish(e);
         panic!("went on past the join")
     }
@@ -318,9 +326,19 @@ fn joins_first_tells_a_joining_entry_from_one_that_does_not() {
     e.register(0x0040_1000, joins);
     e.register(0x0040_2000, reads_first);
     e.register(0x0040_3000, returns);
+    e.register(0x0040_4000, joins_named_elsewhere);
+    e.register(0x0040_5000, joins_unnamed);
     assert!(testing::joins_first(&mut e, 0x0040_1000, &[]));
     assert!(!testing::joins_first(&mut e, 0x0040_2000, &[]));
     assert!(!testing::joins_first(&mut e, 0x0040_3000, &[]));
+    assert!(
+        !testing::joins_first(&mut e, 0x0040_4000, &[]),
+        "a join named with another address"
+    );
+    assert!(
+        !testing::joins_first(&mut e, 0x0040_5000, &[]),
+        "a join named with none"
+    );
     assert!(!is_on(&e));
 }
 
