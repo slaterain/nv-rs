@@ -10440,16 +10440,27 @@ mod tests {
         panic!("G06's seam asked without INSTALLED");
     }
 
-    fn ash_pile_yes(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        Some(1)
+    thread_local! {
+        /// The words G06's INSTALLED handlers were asked with, one list per ask.
+        static ASH_PILE_WORDS: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
     }
 
-    fn ash_pile_no(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        Some(0)
+    fn ash_pile_asked(a: &[u32], answer: u32) -> Option<u32> {
+        ASH_PILE_WORDS.with(|w| w.borrow_mut().push(a.to_vec()));
+        Some(answer)
     }
 
-    fn ash_pile_high(_: &mut Engine, _: &[u32]) -> Option<u32> {
-        Some(0x100)
+    fn ash_pile_yes(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_asked(a, 1)
+    }
+
+    fn ash_pile_no(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_asked(a, 0)
+    }
+
+    fn ash_pile_high(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_asked(a, 0x100)
     }
 
     /// JIP LN NVSE's G06 seam (`0x0095F7FE`, group GH2's row and handler; JIP's own): with the
@@ -10499,9 +10510,17 @@ mod tests {
                 e.on_site_for_test(0x0095_f7fe, handler);
             }
             e.set_jip_patches(word);
+            ASH_PILE_WORDS.with(|w| w.borrow_mut().clear());
             let log = logged(&mut e, |e| {
                 e.call(0x0095_f6c0, &args![player, 0.016f32]);
             });
+            // An INSTALLED handler is asked once, with one word: the target (`[target]`).
+            let asked = ASH_PILE_WORDS.with(|w| w.borrow_mut().split_off(0));
+            if word & jip_patches::INSTALLED != 0 && handler.is_some() {
+                assert_eq!(asked, vec![vec![target]], "G06 asked with [target]");
+            } else {
+                assert!(asked.is_empty());
+            }
             usize::from(!calls_to(&log, SLOT_A).is_empty())
         };
         for word in [0, jip_patches::FIXES] {
