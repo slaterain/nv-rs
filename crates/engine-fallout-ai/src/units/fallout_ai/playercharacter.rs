@@ -13508,7 +13508,7 @@ mod tests {
         let run = |word: u32, readable: bool| {
             let mut e = engine();
             let this = damage_world(&mut e, false, false, true);
-            e.register(0x0066_ee10, move |_, _| int(u32::from(readable)));
+            e.register_double(0x0066_ee10, move |_, _| int(u32::from(readable)));
             e.register_double(0x00b0_000c, |_, _| float(30.0));
             give_owner(&mut e, this, 0x0201_0000, &[(0xc, 0x00b0_000c)]);
             e.on_site(SiteSlot::new(Owner::Jip, 0x0093_b87f), fatigue_handler);
@@ -17534,7 +17534,7 @@ mod tests {
             );
             let this = player(&mut e);
             let references = node_chain(&mut e, &[0x100, 0x200]);
-            e.register(0x0057_5d70, move |_, _| int(world));
+            e.register_double(0x0057_5d70, move |_, _| int(world));
             e.register_double(0x0058_83c0, move |_, _| int(references));
             e.register(0x008d_6f30, |_, _| int(0x4000));
             e.register(0x0056_9080, |_, _| int(9));

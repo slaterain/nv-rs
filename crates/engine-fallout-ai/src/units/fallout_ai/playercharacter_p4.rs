@@ -1661,7 +1661,7 @@ pub fn player_character_update_hardcore_mode(e: &mut Engine, this: Ptr<PlayerCha
     // the seam with the player answers the state test instead of the call (and adds the
     // pending needs, keeps tracking off as JIP does). One load while JIP is not installed.
     let jip_answer = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
-        e.site(0x0096_9c41, &[the_player])
+        e.site(0x0096_9c41, &[the_player.addr()])
     } else {
         None
     };
@@ -3819,6 +3819,47 @@ mod tests {
         assert!(calls(&e, modify).is_empty());
         assert_eq!(calls(&e, PLAYER_IS_IN_STATE), vec![vec![player.addr(), 4]]);
         assert_eq!(e.global::<f32>(LAST_VALUE_49), 90.0);
+    }
+
+    thread_local! {
+        static HARDCORE_SEEN: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static HARDCORE_ANSWER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn hardcore_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        HARDCORE_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(HARDCORE_ANSWER.with(|c| c.get()))
+    }
+
+    /// JIP LN NVSE's G114 seam (`0x00969C41`, JIP's own): with the word 0 or `FIXES` alone it is
+    /// not asked and the exe's state test runs; with `INSTALLED` it is asked with the player
+    /// instead of the test, and its answer's low byte decides (1 or 0x101: the update stops; 0
+    /// or 0x100: it runs).
+    #[test]
+    fn the_hardcore_update_jip_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [0, jip_patches::FIXES] {
+            let (mut e, player, modify) = hardcore_setup();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0096_9c41), hardcore_handler);
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            e.call(0x00969c30, &args![player]);
+            assert!(HARDCORE_SEEN.with(|s| s.take()).is_empty(), "{word:#x}");
+            assert_eq!(calls(&e, PLAYER_IS_IN_STATE).len(), 1);
+            assert_eq!(calls(&e, modify).len(), 2);
+        }
+        for (answer, stops) in [(1u32, true), (0x101, true), (0, false), (0x100, false)] {
+            let (mut e, player, modify) = hardcore_setup();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0096_9c41), hardcore_handler);
+            HARDCORE_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(jip_patches::INSTALLED);
+            e.call_log = Some(vec![]);
+            e.call(0x00969c30, &args![player]);
+            assert_eq!(HARDCORE_SEEN.with(|s| s.take()), vec![vec![player.addr()]]);
+            assert!(calls(&e, PLAYER_IS_IN_STATE).is_empty());
+            assert_eq!(calls(&e, modify).is_empty(), stops, "{answer:#x}");
+        }
     }
 
     #[test]

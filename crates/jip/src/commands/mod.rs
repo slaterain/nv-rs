@@ -796,6 +796,8 @@ mod tests {
             "jip_fn_ccc",
             "jip_fn_misc_ref",
             "jip_fn_misc_ref",
+            // game_patches::gp::COMMANDS (its commands are in this file).
+            "jip_fn_miscellaneous",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();

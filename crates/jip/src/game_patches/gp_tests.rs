@@ -846,7 +846,7 @@ fn a_marked_player_with_missing_parts() {
 
 /// Not installed: nothing of part 2 (no seam handler, the G122 slot keeps the exe's word).
 /// Installed with the row off: G114's seam and G122's slot (JIP's own), none of the three fix
-/// seams; the row on puts those in.
+/// seams; the area's fix installer puts those in (`game_patches_tests` runs it with the row).
 #[test]
 fn part_two_goes_in_as_jip_and_the_row_say() {
     let fixes = [FATIGUE_FLOOR, MUSIC_MARKER_LIST, MUSIC_MARKER];
@@ -869,7 +869,8 @@ fn part_two_goes_in_as_jip_and_the_row_say() {
     for slot in fixes {
         assert!(e.site_owners(slot.addr()).is_empty(), "row off");
     }
-    super::super::set_row(&mut e, true);
+    // The row on puts the area's fixes in (the settings file read is game_patches_tests').
+    install_fixes(&mut e);
     for slot in fixes {
         assert_eq!(e.site_owners(slot.addr()), [Owner::Jip], "row on");
     }
