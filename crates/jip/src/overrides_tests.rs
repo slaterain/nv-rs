@@ -1305,7 +1305,11 @@ fn menu_mode_block_as_jip() {
     // JIP answering "installed" with the row on: the record holds JIP's routine.
     let mut e = commands_world();
     e.mem.set_u32(MANAGER + 0xc, 2);
-    assert_eq!(run_block(&mut e, &[], false, 0.0), (1, 1.0), "no argument: 0");
+    assert_eq!(
+        run_block(&mut e, &[], false, 0.0),
+        (1, 1.0),
+        "no argument: 0"
+    );
     e.mem.set_u32(MANAGER + 0xc, 1);
     assert_eq!(
         run_block(&mut e, &[], false, 0.5),
@@ -1313,7 +1317,12 @@ fn menu_mode_block_as_jip() {
         "false: cleared, not left"
     );
     assert_eq!(
-        run_block(&mut e, &[int_arg(0)], false, f64::from_bits(0x4000_0000_0000_0000)),
+        run_block(
+            &mut e,
+            &[int_arg(0)],
+            false,
+            f64::from_bits(0x4000_0000_0000_0000)
+        ),
         (1, 0.0),
         "a stale high word cleared"
     );
@@ -1322,9 +1331,15 @@ fn menu_mode_block_as_jip() {
     assert_eq!(lines(), [("MenuMode %d >> %d".to_string(), vec![3, 1])]);
     // A menu id: up or not.
     e.mem.set_u8(MENU_VISIBILITY + MENU_MAP, 1);
-    assert_eq!(run_block(&mut e, &[int_arg(MENU_MAP as i32)], false, 0.5), (1, 1.0));
+    assert_eq!(
+        run_block(&mut e, &[int_arg(MENU_MAP as i32)], false, 0.5),
+        (1, 1.0)
+    );
     e.mem.set_u8(MENU_VISIBILITY + MENU_MAP, 0);
-    assert_eq!(run_block(&mut e, &[int_arg(MENU_MAP as i32)], false, 0.5), (1, 0.0));
+    assert_eq!(
+        run_block(&mut e, &[int_arg(MENU_MAP as i32)], false, 0.5),
+        (1, 0.0)
+    );
     // Past the last menu id (and negative): false, even with the byte there set.
     e.mem.set_u8(MENU_VISIBILITY + MENU_MAX + 1, 1);
     assert_eq!(
