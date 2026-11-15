@@ -42,6 +42,7 @@ pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_nodes;
+pub mod jip_fn_misc_ref_nodes_w;
 pub mod jip_fn_miscellaneous;
 pub mod jip_fn_move_cmds;
 pub mod jip_fn_package;
@@ -194,6 +195,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_marker_cmds::COMMANDS,
     jip_fn_script_vars::COMMANDS,
     jip_fn_misc_ref_nodes::COMMANDS,
+    jip_fn_misc_ref_nodes_w::COMMANDS,
     jip_fn_inventory::COMMANDS,
     ln_fn_miscellaneous::COMMANDS,
     jip_fn_misc_ref_havok::COMMANDS,
@@ -788,6 +790,7 @@ mod tests {
             "jip_fn_actor",
             "jip_fn_misc_ref",
             "jip_fn_script",
+            "jip_fn_misc_ref",
             "jip_fn_misc_ref",
             "jip_fn_inventory",
             "ln_fn_miscellaneous",
