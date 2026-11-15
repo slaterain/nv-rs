@@ -20810,6 +20810,7 @@ mod tests {
 
         // No answers: the exe's calls at every seam.
         g53_answers(&[]);
+        G53_SEEN.with(|s| s.take());
         e.call_log = Some(vec![]);
         assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), 55);
         assert_eq!(G53_SEEN.with(|s| s.take()).len(), 4);
