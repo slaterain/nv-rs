@@ -5648,10 +5648,46 @@ mod tests {
         assert_eq!((ragdolls, tests), (1, 1));
         assert_eq!(asked.len(), 2);
         assert_eq!(asked[0], (0x0093_1384, vec![this, 0x6100]));
-        assert_eq!((asked[1].0, asked[1].1[0]), (0x0093_13ec, this));
+        assert_eq!(asked[1], (0x0093_13ec, vec![this, 0x5000]));
         let (_, ragdolls, tests, asked) = havok_with_jip(on, Some(0));
         assert_eq!((ragdolls, tests), (0, 0));
         assert_eq!(asked.len(), 2);
+    }
+
+    /// H11's skip keeps the rest of the exe's block (JIP's hook returns to `0x931389`, after the
+    /// call): for the player with a ragdoll controller the reset (`0087ea60`, then its byte
+    /// `+0x241` set) runs whether the build was skipped or not.
+    #[test]
+    fn init_havok_jip_ragdoll_skip_keeps_the_player_block() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for (answer, builds) in [(Some(0), 0), (None, 1)] {
+            let (mut e, this) = havok_special_actor_world();
+            stub(&mut e, 0x8130, 0);
+            stub(&mut e, 0x0087_e130, 0);
+            stub(&mut e, 0x0087_ea60, 0);
+            e.mem.set_u32(0x011d_ea3c, this.addr());
+            e.mem.set_u32(this.addr() + 0xac, 0x4700);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0093_1384), at_ragdoll_init);
+            HAVOK_ASKED.with(|s| s.borrow_mut().clear());
+            HAVOK_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+            e.call_log = Some(vec![]);
+            mobile_object_init_havok(&mut e, this);
+            let log = e.call_log.take().unwrap();
+            let calls = |address: u32| -> Vec<Vec<u32>> {
+                log.iter()
+                    .filter(|call| call.0 == address)
+                    .map(|call| call.1.clone())
+                    .collect()
+            };
+            assert_eq!(calls(0x0087_e130).len(), builds, "{answer:?}");
+            assert_eq!(calls(0x0087_ea60), vec![vec![0x4700, 0]], "{answer:?}");
+            assert_eq!(e.mem.u8(0x4700 + 0x241), 1, "{answer:?}");
+            assert_eq!(
+                HAVOK_ASKED.with(|s| s.take()),
+                vec![(0x0093_1384, vec![this.addr(), 0x6100])]
+            );
+        }
     }
 
     #[test]
