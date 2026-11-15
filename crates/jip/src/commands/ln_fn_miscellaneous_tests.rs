@@ -197,7 +197,9 @@ fn armor_class_of_an_armor_and_of_a_character() {
         1.0,
         "no biped data: true"
     );
+    // Not a character (only the answer's low byte counts): 0 though it wears the armour.
     character(&mut e, BIPED, false);
+    e.mem.set_u32(BIPED + 0x2c + 0x10 * 19, ARMO2);
     assert_eq!(call_on(&mut e, 0x2264, CHAR, &[]).1, 0.0, "not a character");
     // The eval reads the reference.
     character(&mut e, BIPED, true);
@@ -739,6 +741,8 @@ fn water_traits() {
     assert_eq!(get(&mut e, 1), 2.0);
     assert_eq!(get(&mut e, 2), 0.25);
     assert_eq!(get(&mut e, 12), 1_002_003.0);
+    e.mem.set_u32(WATER + 0x84 + 4 * 12, 0x0001_0203);
+    assert_eq!(get(&mut e, 14), 3_002_001.0, "the last colour");
     assert_eq!(get(&mut e, 50), 9.5);
     e.mem.set_f64(RESULT, 0.0);
     assert_eq!(get(&mut e, 51), 0.0, "past 50");

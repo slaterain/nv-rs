@@ -324,6 +324,15 @@ fn all_items_in_address_order_with_filters() {
         vec![Form(0x205), Form(0x208), Form(0x20c)],
         "the worn armour left out"
     );
+    // Its stacks without the worn mark: not equipped.
+    e.mem.set_u8(XDL + 8 + 2, 0);
+    let (_, res) = call_on(&mut e, 0x2766, ACTOR, &[n(0), n(0), n(0), n(1)]);
+    assert_eq!(
+        array_data(&e, res),
+        vec![Form(0x205), Form(0x206), Form(0x208), Form(0x20c)],
+        "stacks, none worn"
+    );
+    e.mem.set_u8(XDL + 8 + 2, 0x40);
     // The held weapon counts as equipped.
     e.mem.set_u32(ACTOR + 0x68, PROCESS);
     let held = FORMS + 0x8400;
@@ -340,6 +349,18 @@ fn all_items_in_address_order_with_filters() {
         0.0,
         "none of it"
     );
+    // A changes entry of a type that is no inventory item (an NPC form): asked for by that type,
+    // still nothing (the type test comes first).
+    let entry_n = FORMS + 0x4180;
+    e.mem.set_u32(entry_n + 4, 1);
+    e.mem.set_u32(entry_n + 8, NPC);
+    put_list(
+        &mut e,
+        FORMS + 0x8200,
+        NODES + 0x100,
+        &[ENTRY_A, ENTRY_W, entry_n],
+    );
+    assert_eq!(call_on(&mut e, 0x2766, ACTOR, &[n(0x2a)]).1, 0.0);
 }
 
 #[test]
