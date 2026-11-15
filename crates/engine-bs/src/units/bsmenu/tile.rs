@@ -300,6 +300,12 @@ const MENU_GET_XML: u32 = 0x00a1_c9b0;
 /// UI Organizer's patch in [`tile_read_file`] (`00A01B87`, the call of `Tile::ParseFile`): a seam
 /// of `crates/uio`, read only while [`Engine::uio`] is on.
 pub const UIO_READ_FILE_SITE: u32 = 0x00a0_1b87;
+/// UI Organizer's patch in [`tile_final_post_parse`] (`00A03923`, a text tile's trait test): a
+/// seam of `crates/uio`, read only while [`Engine::uio`] is on.
+pub const UIO_FINAL_POST_PARSE_SITE: u32 = 0x00a0_3923;
+/// UI Organizer's patch in [`value_calculate_value`] (`00A0968C`, the operation's dispatch
+/// through its own jump table): a seam of `crates/uio`, read only while [`Engine::uio`] is on.
+pub const UIO_OPERATOR_SITE: u32 = 0x00a0_968c;
 /// `Menu::GetMaxDepth()` (Xbox PDB).
 const MENU_GET_MAX_DEPTH: u32 = 0x00a1_dfb0;
 /// `(menu, template)` (no PDB name, `BSMenu/menu.cpp`): adds the template
@@ -2806,7 +2812,7 @@ pub fn tile_final_post_parse(
 
     let kind = tile_type(e, this);
     if kind == TYPE_TEXT
-        && matches!(
+        && (matches!(
             trait_id,
             TRAIT_WRAP_WIDTH
                 | TRAIT_WRAP_LIMIT
@@ -2816,7 +2822,9 @@ pub fn tile_final_post_parse(
                 | TRAIT_IS_HTML
                 | TRAIT_FONT
                 | TRAIT_JUSTIFY
-        )
+        ) || (e.uio()
+            // UI Organizer's trait test (its patch at 00a03923) also takes the zoom.
+            && e.site(UIO_FINAL_POST_PARSE_SITE, &[trait_id as u32]).is_some()))
     {
         queue(e, UPDATE_CREATE);
         return this;
@@ -5403,6 +5411,21 @@ fn run_action(e: &mut Engine, this: Ptr<TileValue>, action: u32, stack: Ptr, cha
         e.set(this, TileValue::fValue, top);
         if size != 0 {
             e.mem.set_u32(stack.addr() + 8, size - 1);
+        }
+    }
+    // UI Organizer's jump table (its patch at 00a0968c) runs the operation in place of the
+    // switch below; its answer is the "string changed" flag afterwards.
+    if e.uio() {
+        let at = [
+            this.addr(),
+            kind as u32,
+            operand.to_bits(),
+            text,
+            *changed as u32,
+        ];
+        if let Some(flag) = e.site(UIO_OPERATOR_SITE, &at) {
+            *changed = flag != 0;
+            return;
         }
     }
     let current = e.get(this, TileValue::fValue);
@@ -10224,6 +10247,44 @@ mod tests {
 
     fn no_setup(_: &mut Engine, _: Ptr<Tile>) {}
 
+    /// UI Organizer's handler at `00A03923` for the tests: the zoom is in its range.
+    fn uio_zoom_rebuilds(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        (a[0] == TRAIT_ZOOM as u32).then_some(1)
+    }
+
+    fn with_uio(on: bool) -> impl FnOnce(&mut Engine, Ptr<Tile>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_FINAL_POST_PARSE_SITE);
+        move |e, _| {
+            e.on_site(AT, uio_zoom_rebuilds);
+            e.set_uio(on);
+        }
+    }
+
+    #[test]
+    fn uio_takes_the_zoom_into_a_text_tiles_rebuild_only_while_its_word_is_on() {
+        // Off (the handler registered): the zoom of a text goes on as in the game (no rebuild).
+        let game = post_parse(TYPE_TEXT, TRAIT_ZOOM, no_setup);
+        assert!(!game.0.contains(&UPDATE_CREATE));
+        assert_eq!(post_parse(TYPE_TEXT, TRAIT_ZOOM, with_uio(false)), game);
+        // On: the rebuild, the tile answered.
+        assert_eq!(
+            post_parse(TYPE_TEXT, TRAIT_ZOOM, with_uio(true)),
+            (vec![UPDATE_CREATE], true)
+        );
+        // The game's own traits are unchanged either way; another tile type is not asked.
+        for on in [false, true] {
+            assert_eq!(
+                post_parse(TYPE_TEXT, TRAIT_FONT, with_uio(on)),
+                (vec![UPDATE_CREATE], true)
+            );
+            assert_eq!(
+                post_parse(TYPE_IMAGE, TRAIT_ZOOM, with_uio(on)).0,
+                post_parse(TYPE_IMAGE, TRAIT_ZOOM, no_setup).0
+            );
+        }
+    }
+
     fn with_clip_window(e: &mut Engine, tile: Ptr<Tile>) {
         give_trait(e, tile, TRAIT_CLIP_WINDOW, 1.0);
     }
@@ -13858,6 +13919,76 @@ mod tests {
             calculate(&[(VA_ADD, 5.0), (VA_MULT, 2.0), (VA_SUB, 6.0)], 10.0),
             24.0
         );
+    }
+
+    thread_local! {
+        /// The words UI Organizer's handler at `00A0968C` was given, per call.
+        static UIO_OPERATIONS: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// UI Organizer's operator handler for the tests: records its words, writes 77 and answers
+    /// "changed".
+    fn uio_operation(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
+        e.mem.set_f32(a[0] + 8, 77.0);
+        Some(1)
+    }
+
+    /// The same, answering "not changed".
+    fn uio_operation_unchanged(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
+        e.mem.set_f32(a[0] + 8, 77.0);
+        Some(0)
+    }
+
+    fn uio_no_operation(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    #[test]
+    fn uio_runs_the_operation_in_place_of_the_switch_only_while_its_word_is_on() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE);
+        // (the float, the handler's words, the value, the change events)
+        let calculate = |on: bool, handler: engine_core::extend::SiteFn, text: bool| {
+            let mut e = tile_engine();
+            provide_constants(&mut e);
+            install_float_stack(&mut e);
+            install_double_math(&mut e);
+            let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+            e.on_site(AT, handler);
+            e.set_uio(on);
+            let value = value_with(&mut e, tile, TRAIT_X, 10.0, &[(VA_ADD, 5.0)]);
+            if text {
+                let s = cstring(&mut e, "kept");
+                e.set(value, TileValue::strValue, Ptr::new(s));
+            }
+            UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            value_calculate_value(&mut e, value, false);
+            let seen = UIO_OPERATIONS.with(|s| s.borrow().clone());
+            let events = calls_to(&e, VALUE_CHANGE_EVENT).len();
+            (e.get(value, TileValue::fValue), seen, value.addr(), events)
+        };
+        // Off (the handler registered, the word not set): the game's add, never asked.
+        let (float, seen, _, _) = calculate(false, uio_operation, false);
+        assert_eq!(float, 15.0);
+        assert!(seen.is_empty());
+        // On: the handler alone, given (value, kind, operand, string, changed).
+        let (float, seen, value, _) = calculate(true, uio_operation, false);
+        assert_eq!(float, 77.0);
+        assert_eq!(
+            seen,
+            vec![vec![value, VA_ADD as u32, 5.0f32.to_bits(), 0, 0]]
+        );
+        // Its answer is the "string changed" flag (read when the value keeps a string).
+        assert_eq!(calculate(true, uio_operation, true).3, 1);
+        assert_eq!(calculate(true, uio_operation_unchanged, true).3, 0);
+        // On, the handler answering nothing: the game's add.
+        let (float, seen, _, _) = calculate(true, uio_no_operation, false);
+        assert_eq!(float, 15.0);
+        assert_eq!(seen.len(), 1);
     }
 
     #[test]

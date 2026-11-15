@@ -28,6 +28,9 @@ struct World {
     /// takes UIO's slot and counts the patched files it finds.
     other_reads: bool,
     seen: Vec<usize>,
+    /// UIOLoad's `RegTraitID` calls (name, id) and its static `BSRandom` constructions.
+    names: Vec<(Vec<u8>, u32)>,
+    randoms: u32,
 }
 
 thread_local! {
@@ -119,6 +122,16 @@ fn engine() -> Engine {
     e.register(0x00aa_4060, |_, a| {
         world(|w| w.freed.push(a[1]));
         ret(0)
+    });
+    // RegTraitID(name, id) and the static BSRandom (UIOLoad's start).
+    e.register(0x009f_f8a0, |e, a| {
+        let name = nvse::table::guest_text(e, a[0]);
+        world(|w| w.names.push((name, a[1])));
+        ret(0)
+    });
+    e.register(0x0047_6c00, |_, _| {
+        world(|w| w.randoms += 1);
+        ret(0x011c_4180)
     });
     // Menu::CompressAndStoreXML(path, text): the given text, else the game's text, or null.
     e.register(COMPRESS_AND_STORE_XML, |e, a| {
@@ -262,6 +275,65 @@ fn off_nothing_is_installed() {
     assert!(!e.uio());
     assert!(e.site_owners(0x00a0_1b87).is_empty());
     assert!(nvse::plugins::listed(&e, NAME.as_bytes()).is_none());
+    // Part 3's seams: none has a handler.
+    let part3 = [OPERATOR_SITE, FINAL_POST_PARSE_SITE, TEXT_SCALE_SITE];
+    for slot in part3.iter().chain(HUD_ZOOM_SITES.iter()) {
+        assert!(e.site_owners(slot.addr()).is_empty(), "{:08x}", slot.addr());
+    }
+}
+
+#[test]
+fn on_every_part_3_seam_has_uios_handler_and_uioload_registers_the_operators() {
+    let mut e = engine();
+    set_on(&mut e, true);
+    install(&mut e);
+    let part3 = [OPERATOR_SITE, FINAL_POST_PARSE_SITE, TEXT_SCALE_SITE];
+    for slot in part3.iter().chain(HUD_ZOOM_SITES.iter()) {
+        assert_eq!(
+            e.site_owners(slot.addr()),
+            vec![Owner::Uio],
+            "{:08x}",
+            slot.addr()
+        );
+    }
+    // The patches made in UIOLoad answer nothing before it ran (the exe's code).
+    assert_eq!(e.site(0x00a0_3923, &[0xfb8]), None);
+    assert_eq!(e.site(0x0076_f688, &[0x164]), None);
+    assert_eq!(e.site(0x0070_a049, &[0]), None);
+    // UIOLoad: the 20 names in UIO's order, each a text of its own, then the static BSRandom.
+    let names = world(|w| w.names.clone());
+    let expected: Vec<(Vec<u8>, u32)> = [
+        ("ge", 0x7dd),
+        ("ne", 0x7df),
+        ("le", 0x7e1),
+        ("neg", 0x7ea),
+        ("recipr", 0x7eb),
+        ("land", 0x7ec),
+        ("lor", 0x7ed),
+        ("shl", 0x7ee),
+        ("shr", 0x7ef),
+        ("bt", 0x7f0),
+        ("sqrt", 0x7f1),
+        ("pow", 0x7f2),
+        ("sin", 0x7f3),
+        ("cos", 0x7f4),
+        ("tan", 0x7f5),
+        ("asin", 0x7f6),
+        ("acos", 0x7f7),
+        ("atan", 0x7f8),
+        ("log", 0x7f9),
+        ("rand", 0x7fa),
+    ]
+    .iter()
+    .map(|(n, id)| (n.as_bytes().to_vec(), *id))
+    .collect();
+    assert_eq!(names, expected);
+    assert_eq!(world(|w| w.randoms), 1);
+    // After it: the zoom joins FinalPostParse's test; the HUD's zooms are skipped.
+    assert_eq!(e.site(0x00a0_3923, &[0xfb8]), Some(1));
+    for slot in HUD_ZOOM_SITES {
+        assert_eq!(e.site(slot.addr(), &[0]), Some(1));
+    }
 }
 
 #[test]

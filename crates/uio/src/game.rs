@@ -198,6 +198,7 @@ impl Source for GameSource<'_> {
 /// six menus the game keeps open and `jip_temp.xml`; an entry already there stays). The exe's
 /// path goes on.
 pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    crate::operators::on_load(e);
     for path in NOT_KEPT.iter().copied().chain([INJECTED_FILE]) {
         e.ext::<Uio>()
             .parsed

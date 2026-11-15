@@ -51,6 +51,10 @@ const TILE_EXTRA_CONSTRUCTOR: u32 = 0x00a1_f610;
 /// `Font::CreateText` (`00a12880`) and `FontManager::CreateText`
 /// (`00a18f00`) (Xbox PDB names).
 const FONT_CREATE_TEXT: u32 = 0x00a1_2880;
+/// UI Organizer's patch in [`tile_text_make_node`] (`00A221F8`, the jump to its
+/// `TileTextApplyScaleHook` in place of the `Font::CreateText` call): a seam of `crates/uio`,
+/// read only while [`Engine::uio`] is on.
+pub const UIO_TEXT_SCALE_SITE: u32 = 0x00a2_21f8;
 const FONT_MANAGER_CREATE_TEXT: u32 = 0x00a1_8f00;
 /// `FontManager`'s instance (`011f33f8`).
 const FONT_MANAGER: u32 = 0x011f_33f8;
@@ -375,22 +379,41 @@ pub fn tile_text_make_node(e: &mut Engine, this: Ptr<TileText>) -> Ptr {
                 e.call(NI_NODE_CONSTRUCTOR, &args![node_block, 0u32]).u32()
             };
             e.call(NI_POINTER_ASSIGN, &args![this.byte_add(0x2c), node]);
-            e.call(
-                FONT_CREATE_TEXT,
-                &args![
-                    font_object,
+            // UI Organizer's TileTextApplyScaleHook (its jump at 00a221f8) makes this call
+            // itself, the text's zoom applied around it.
+            let uio = e.uio() && {
+                let at = [
+                    this.addr(),
+                    font_object.addr(),
                     text,
                     width_at,
                     limit_at,
-                    0u32,
-                    wrap_lines,
-                    justify,
-                    LINE_SEPARATOR,
+                    wrap_lines as u32,
+                    justify as u32,
                     color_at,
                     shape_at,
-                    icons_at
-                ],
-            );
+                    icons_at,
+                ];
+                e.site(UIO_TEXT_SCALE_SITE, &at).is_some()
+            };
+            if !uio {
+                e.call(
+                    FONT_CREATE_TEXT,
+                    &args![
+                        font_object,
+                        text,
+                        width_at,
+                        limit_at,
+                        0u32,
+                        wrap_lines,
+                        justify,
+                        LINE_SEPARATOR,
+                        color_at,
+                        shape_at,
+                        icons_at
+                    ],
+                );
+            }
             let shape = e.mem.u32(shape_at);
             for i in 0..3 {
                 let word = e.mem.u32(shape + 0x58 + 4 * i);
@@ -727,6 +750,77 @@ mod tests {
             calls_to(&e, BS_STRING_SET),
             vec![vec![create[1], 0x6000, 0], vec![create[1], 0, 0]]
         );
+    }
+
+    thread_local! {
+        /// The words UI Organizer's handler at `00A221F8` was given, per call.
+        static UIO_SEEN: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// UI Organizer's handler for the tests: records its words and makes the call itself.
+    fn uio_scale(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        e.call(
+            FONT_CREATE_TEXT,
+            &args![
+                a[1],
+                a[2],
+                a[3],
+                a[4],
+                0u32,
+                a[5],
+                a[6],
+                LINE_SEPARATOR,
+                a[7],
+                a[8],
+                a[9]
+            ],
+        );
+        Some(1)
+    }
+
+    fn uio_nothing(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    #[test]
+    fn uio_makes_the_create_text_call_only_while_its_word_is_on() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_TEXT_SCALE_SITE);
+        let run = |on: bool, handler: fn(&mut Engine, &[u32]) -> Option<u32>| {
+            let Setup { mut e, this, .. } = make_node_engine(0.0, false, 2.0);
+            e.register_double(FONT_CREATE_TEXT, move |e, a| {
+                let shape = e.mem.alloc(0x70);
+                e.mem.set_u32(a[9], shape);
+                Ret::default()
+            });
+            e.on_site(AT, handler);
+            e.set_uio(on);
+            UIO_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            e.call(0x00a2_1af0, &args![this]);
+            let seen = UIO_SEEN.with(|s| s.borrow().clone());
+            (calls_to(&e, FONT_CREATE_TEXT), seen, this.addr())
+        };
+        // Off (the handler registered, the word not set): the exe's call, the handler never asked.
+        let (calls, seen, _) = run(false, uio_scale);
+        assert_eq!(calls.len(), 1);
+        assert!(seen.is_empty());
+        // On: the handler alone makes the call, given the tile and the call's own words.
+        let (calls, seen, this) = run(true, uio_scale);
+        assert_eq!(calls.len(), 1);
+        let c = &calls[0];
+        assert_eq!(
+            seen,
+            vec![vec![
+                this, c[0], c[1], c[2], c[3], c[5], c[6], c[8], c[9], c[10]
+            ]]
+        );
+        // On, the handler answering nothing: the exe's call.
+        let (calls, seen, _) = run(true, uio_nothing);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(seen.len(), 1);
     }
 
     #[test]
