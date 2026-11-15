@@ -507,7 +507,7 @@ fn rotation_player_actor_empty() {
         &mut e,
         0x284e,
         p,
-        &[s(b"Spine"), z(0.0), z(90.0), z(0.0), n(2), n(2)],
+        &[s(b"Spine"), z(0.0), z(90.0), z(0.0), n(2), n(4)],
     );
     assert_eq!(
         bits9(get9(&e, first + LOCAL_ROTATE)),
@@ -922,6 +922,9 @@ fn remove_nif_block() {
     assert_eq!(run(&mut e, 0x2901, sc.refr, &[s(b"Nope")]), 0.0);
     // A parent that is not a node: nothing (JIP would call through it).
     let cam = object(&mut e, NI_CAMERA, Some(b"Cam"));
+    // A callable word in its +0xE8 (the camera's real slot holds something else), so only the
+    // node test stops the call.
+    e.mem.set_u32(NI_CAMERA + 0xe8, REMOVE_OBJECT);
     e.mem.set_u32(sc.arm + PARENT, cam);
     assert_eq!(run(&mut e, 0x2901, sc.refr, &[s(b"Arm")]), 0.0);
     assert_eq!(calls_to(REMOVE_OBJECT).len(), 1);
