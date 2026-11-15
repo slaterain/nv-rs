@@ -94,6 +94,9 @@ JIP's game patches (step 3.9, its changes to the game's own code) are fix rows b
 (`crates/jip/src/game_patches`; per-area seam tables in `engine-core/src/extend/patch_rows`, so several
 can be built at once); the first (3.9a) remembers each dialogue line's topic as JIP does and starts
 every command's result at 0. Like the rest of JIP, they act only once JIP answers "installed".
+Before JIP is switched on, every call from `crates/jip` into the game's functions was checked for its
+argument word count (2026-11-15: 188 calls, one wrong and fixed); `crates/engine/tests/jip_call_arity.rs`
+now checks each call to a constant address against the translation it reaches.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
