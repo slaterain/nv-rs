@@ -6329,8 +6329,9 @@ const STICK_RANGE: u32 = 0x0102_9790;
 /// The double a left-stick dead zone test compares with (`FCOMP double ptr [operand]`): the exe's
 /// 7849.0 at `010718f0` (`exe`, each file's name for it), or, with JIP LN NVSE installed, what the seam at `site` (the `FCOMP`'s
 /// operand, which JIP's `DeferredInit` points at its `s_deadZoneLSg`; step 3.9 D04) answers. The
-/// word is tested first; with JIP not installed nothing else runs. The four menus' nine seams
-/// (caravan, lockpick, map, roulette) all ask here.
+/// word is tested first; with JIP not installed nothing else runs. The four menus' seven seams
+/// (caravan, lockpick, map, roulette) ask here; the free camera's (group GP, engine-fallout-ai)
+/// test the word in their own file.
 pub(crate) fn left_stick_dead_zone(e: &mut Engine, site: u32, exe: u32) -> u32 {
     if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
         e.site(site, &[]).unwrap_or(exe)
@@ -11354,7 +11355,9 @@ mod n052_tests {
     }
 
     /// `DoIdle`'s two seams, x then y (JIP's operands `0x7416D6`, `0x741705`), only with JIP
-    /// installed (the deck-input run of `do_idle_deck_input_in_gamepad_mode_skips_the_rest`).
+    /// installed, and the x seam's answer used: in the deck input a stick x of 20000 (above the
+    /// exe's 7849) reaches the meter step as 20000 / 32767; with the answered 1e9 it is inside the
+    /// dead zone and nothing steps.
     #[test]
     fn do_idle_asks_jips_two_dead_zone_seams() {
         use super::d04_test::{handlers, seen};
@@ -11367,9 +11370,12 @@ mod n052_tests {
             idle_at(&mut e, this, 0, 0.0);
             e.register(KEYS_BLOCKED_004B71D0, |_, _| ret(1));
             e.register(CONTROLS_AXIS_00A23390, |_, a| {
-                ret(if a[2] == 8 { 20000 } else { 0 })
+                ret(if a[2] == 7 { 20000 } else { 0 })
             });
             e.register(FLOAT_MAGNITUDE_00408820, |_, a| {
+                ret_f(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.register(FLOAT_MAGNITUDE_00408840, |_, a| {
                 ret_f(f64::from(f32::from_bits(a[0]).abs()))
             });
             e.register(GET_FLOAT_TRAIT, |_, _| ret_f(7.0));
@@ -11380,6 +11386,50 @@ mod n052_tests {
             e.mem.set_u32(menu + PENDING_KEY, KEY_UP);
             do_idle(&mut e, this);
             assert_eq!(seen(), expected, "word {word:x}");
+            let x_bits = ((20000.0f64 / 32767.0) as f32).to_bits();
+            let stepped = calls_to(&e, FLOAT_MAGNITUDE_00408840)
+                .iter()
+                .any(|c| c[0] == x_bits);
+            assert_eq!(stepped, word == 0, "word {word:x}");
+        }
+    }
+
+    /// The y seam's answer used (`0x741705`): in the game input a stick y of 20000 starts a
+    /// selection step (the delay restarts at the idle time, 1.0) with the exe's 7849; with the
+    /// answered 1e9 it is inside the dead zone and the delay stays.
+    #[test]
+    fn do_idle_uses_jips_y_dead_zone() {
+        use super::d04_test::{handlers, seen};
+        use engine_core::extend::jip_patches::INSTALLED;
+        let sites = [0x0074_16d6, 0x0074_1705];
+        for (word, delay) in [(0, 1.0f32), (INSTALLED, -1.0)] {
+            let (mut e, this) = idle_engine();
+            let menu = this.addr();
+            handlers(&mut e, word, &sites);
+            e.set(this, CaravanMenu::eActiveMenu, 2);
+            idle_at(&mut e, this, 0, 1.0);
+            e.mem.set_u32(menu + SELECTION_DELAY, (-1.0f32).to_bits());
+            e.register(KEYS_BLOCKED_004B71D0, |_, _| ret(1));
+            e.register(CONTROLS_AXIS_00A23390, |_, a| {
+                ret(if a[2] == 8 { 20000 } else { 0 })
+            });
+            e.register(FLOAT_MAGNITUDE_00408820, |_, a| {
+                ret_f(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.register(FLOAT_MAGNITUDE_00408840, |_, a| {
+                ret_f(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            let cards: Vec<u32> = (0..3).map(|_| card(&mut e, 2, 1, 0)).collect();
+            fill_array(&mut e, menu + PLAYER_HAND, &cards);
+            let object = e.mem.alloc(0x100);
+            e.register_double(OBJECT_BY_NAME, move |_, _| ret(object));
+            do_idle(&mut e, this);
+            assert_eq!(seen().len(), if word == 0 { 0 } else { 2 });
+            assert_eq!(
+                e.mem.u32(menu + SELECTION_DELAY),
+                delay.to_bits(),
+                "word {word:x}"
+            );
         }
     }
 

@@ -11,11 +11,16 @@
 //! seam answers the guest address of the double to compare with; the doubles live in the
 //! built-ins' data, made as JIP installs from [`crate::input::State`]'s dead zones.
 //!
-//! The nine left-stick seams are JIP's own (`INSTALLED`: with JIP's default 7849 they answer as
-//! the exe); the two right-stick seams change the free camera for every pad player (8689 where the
-//! exe uses 7849), so they are a fix (`FIXES`: the game-patch row; off in vanilla). The free
-//! camera's four seams sit in group GP's `playercharacter.rs` (GP adds them); the rows and these
-//! handlers are GB's.
+//! All eleven are JIP's own (`INSTALLED`, the lead's call): JIP points them whenever its XInput hook
+//! is in, whatever the game-patch row says. With JIP's 7849 the left-stick seams answer as the
+//! exe; the right-stick seams change the free camera's look for every pad player with JIP
+//! installed (8689 where the exe uses 7849). The free camera's four seams sit in group GP's
+//! `playercharacter.rs` (GP adds them); the rows and these handlers are GB's.
+//!
+//! JIP's `SetDeadZoneLS/RS` (not built) write `s_deadZoneLSg`/`s_deadZoneRSg` with the new
+//! integer and 19 immediates in the exe each: when they are built they must write the two doubles
+//! these seams answer ([`doubles`]: `e.mem.set_f64`) as well as the input state and the
+//! immediates.
 
 use super::Area;
 use crate::Jip;
@@ -57,14 +62,26 @@ const fn addrs<const N: usize>(slots: [SiteSlot; N]) -> [u32; N] {
 }
 const LEFT_ADDRS: [u32; 9] = addrs(LEFT_STICK);
 const RIGHT_ADDRS: [u32; 2] = addrs(RIGHT_STICK);
+/// All eleven, left then right.
+const ALL_ADDRS: [u32; 11] = {
+    let mut out = [0; 11];
+    let mut i = 0;
+    while i < 9 {
+        out[i] = LEFT_ADDRS[i];
+        i += 1;
+    }
+    out[9] = RIGHT_ADDRS[0];
+    out[10] = RIGHT_ADDRS[1];
+    out
+};
 
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GB",
-    fix_sites: &RIGHT_ADDRS,
+    fix_sites: &[],
     fix_wraps: &[],
-    install_fixes,
-    jip_sites: &LEFT_ADDRS,
+    install_fixes: super::nothing,
+    jip_sites: &ALL_ADDRS,
     jip_wraps: &[],
     install_jip,
 };
@@ -103,10 +120,6 @@ fn install_jip(e: &mut Engine) {
     for slot in LEFT_STICK {
         e.on_site(slot, left_stick);
     }
-}
-
-fn install_fixes(e: &mut Engine) {
-    doubles(e);
     for slot in RIGHT_STICK {
         e.on_site(slot, right_stick);
     }

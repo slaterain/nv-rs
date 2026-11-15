@@ -29,6 +29,9 @@ fn compared(e: &mut Engine, site: u32) -> Option<f64> {
 fn the_seams_are_jips_operands() {
     assert_eq!(LEFT_ADDRS, LEFT);
     assert_eq!(RIGHT_ADDRS, RIGHT);
+    assert_eq!(ALL_ADDRS[..9], LEFT);
+    assert_eq!(ALL_ADDRS[9..], RIGHT);
+    assert!(AREA.fix_sites.is_empty(), "all JIP's own (INSTALLED)");
     assert_eq!(EXE_DEAD_ZONE, 0x0107_18f0);
 }
 
@@ -45,42 +48,25 @@ fn not_installed_every_seam_answers_nothing() {
     }
 }
 
-/// Installed with the row off (vanilla): the nine left-stick seams answer JIP's `s_deadZoneLSg`,
-/// 7849.0 (the exe's value); the two right-stick seams answer nothing (the exe's 7849.0).
+/// Installed with the row off (vanilla), as JIP whatever the row says: the nine left-stick seams
+/// answer JIP's `s_deadZoneLSg`, 7849.0 (the exe's value), the two right-stick seams JIP's
+/// `s_deadZoneRSg`, 8689.0; the doubles are made once, at JIP's install.
 #[test]
-fn installed_row_off_left_stick_only() {
+fn installed_every_seam_answers_jips_double() {
     let mut e = engine();
     crate::install_as(&mut e, true);
     set_row(&mut e, false);
-    let (left, _) = doubles(&mut e);
+    let (left, right) = doubles(&mut e);
+    assert_eq!(right, left + 8);
     for site in LEFT {
         assert_eq!(e.site(site, &[]), Some(left), "{site:08x}");
         assert_eq!(compared(&mut e, site), Some(7849.0));
     }
     for site in RIGHT {
-        assert_eq!(e.site(site, &[]), None, "{site:08x}");
-    }
-}
-
-/// Installed with the row on (this area's fixes put in, as `put_fixes_in` does; the whole-table test
-/// `installed_with_the_row_on_puts_every_fix_in_once` covers the row itself): the right-stick seams
-/// answer JIP's `s_deadZoneRSg`, 8689.0; the left-stick ones still 7849.0; the doubles are made once.
-#[test]
-fn installed_row_on_right_stick_8689() {
-    let mut e = engine();
-    crate::install_as(&mut e, true);
-    let made = doubles(&mut e);
-    install_fixes(&mut e);
-    let (left, right) = doubles(&mut e);
-    assert_eq!(right, left + 8);
-    for site in RIGHT {
         assert_eq!(e.site(site, &[]), Some(right), "{site:08x}");
         assert_eq!(compared(&mut e, site), Some(8689.0));
     }
-    for site in LEFT {
-        assert_eq!(compared(&mut e, site), Some(7849.0), "{site:08x}");
-    }
-    assert_eq!(made, (left, right), "made once, at JIP's install");
+    assert_eq!(doubles(&mut e), (left, right), "made once");
 }
 
 /// The doubles come from the input state's dead zones (JIP's `SetDeadZoneLS/RS` would change
