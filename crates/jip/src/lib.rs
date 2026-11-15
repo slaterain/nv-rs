@@ -112,6 +112,8 @@ pub struct Jip {
     pub ui_hooks: ui_hooks::State,
     /// What JIP's quest commands keep between calls.
     pub quest: commands::jip_fn_quest::State,
+    /// What `jip_fn_miscellaneous`'s commands keep between calls (keywords, actor value names).
+    pub misc: commands::jip_fn_miscellaneous::State,
     /// JIP's actor hooks and their events.
     pub actor_hooks: actor_hooks::State,
     /// JIP's actor AI hooks' maps and values.
@@ -122,6 +124,10 @@ pub struct Jip {
     pub script: commands::jip_fn_script::State,
     /// What JIP's CC&C commands keep: the actor bases set to NCCS, the location grids.
     pub ccc: commands::jip_fn_ccc::State,
+    /// JIP's temporary position marker (`s_tempPosMarker`).
+    pub pos_marker: commands::pos_marker::State,
+    /// The live variables JIP added to scripts, and the names it added this session.
+    pub script_vars: commands::jip_fn_script_vars::State,
     /// JIP's game patches (step 3.9): the host's row and the switches read.
     pub game_patches: game_patches::State,
 }
