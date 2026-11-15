@@ -122,7 +122,7 @@ const SET_STAGE_HANDLERS: u8 = 1 << 0;
 const NO_PC_ACTIVATION: u8 = 1 << 1;
 const EVENT_DISABLED: u8 = 1 << 2;
 const ACTIVATE_DISABLED: u8 = 1 << 3;
-const UNIQUE_ITEM: u8 = 1 << 4;
+pub(crate) const UNIQUE_ITEM: u8 = 1 << 4;
 const FAST_TRAVEL_INFORMED: u8 = 1 << 0;
 const CELL_CHANGE_INFORMED: u8 = 1 << 1;
 const SCRIPT_INFORMED: u8 = 0x07;
@@ -303,7 +303,7 @@ impl Default for State {
     }
 }
 
-fn state(e: &mut Engine) -> &mut State {
+pub(crate) fn state(e: &mut Engine) -> &mut State {
     &mut e.ext::<Jip>().world_hooks
 }
 
@@ -471,7 +471,7 @@ fn set_flags5(e: &mut Engine, form: u32, flags: u8) {
     );
 }
 
-fn flags6(e: &Engine, form: u32) -> u8 {
+pub(crate) fn flags6(e: &Engine, form: u32) -> u8 {
     e.get(Ptr::<JipFormFlags>::new(form), JipFormFlags::jipFormFlags6)
 }
 
