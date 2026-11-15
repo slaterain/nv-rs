@@ -124,6 +124,9 @@ impl Host {
         // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, with no command built
         // yet, and answering "not installed" until the commands mods call are in (`crates/jip`).
         jip::install(&mut engine);
+        // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
+        // jip_nvse.dll (`crates/uio`).
+        uio::install(&mut engine);
         eprintln!("{}", choice.describe());
         if let Some(note) = &choice.ini_note {
             eprintln!("{note}");

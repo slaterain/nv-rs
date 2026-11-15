@@ -297,6 +297,9 @@ const NI_OBJECT_GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
 const TILE_EXTRA_DATA_KEY: u32 = 0x011f_34cc;
 /// `Menu::GetXML(path, flag)` (Xbox PDB, `cdecl`).
 const MENU_GET_XML: u32 = 0x00a1_c9b0;
+/// UI Organizer's patch in [`tile_read_file`] (`00A01B87`, the call of `Tile::ParseFile`): a seam
+/// of `crates/uio`, read only while [`Engine::uio`] is on.
+pub const UIO_READ_FILE_SITE: u32 = 0x00a0_1b87;
 /// `Menu::GetMaxDepth()` (Xbox PDB).
 const MENU_GET_MAX_DEPTH: u32 = 0x00a1_dfb0;
 /// `(menu, template)` (no PDB name, `BSMenu/menu.cpp`): adds the template
@@ -2332,7 +2335,17 @@ pub fn tile_read_file(e: &mut Engine, this: Ptr<Tile>, path: Ptr) -> Ptr<Tile> {
     e.mem.set_u32(line_word, 0xd);
     e.set_global(XML_ERROR_FLAG, 0u8);
 
-    let storage = tile_parse_file(e, path, Ptr::NULL, 0);
+    // UI Organizer's ResolveXMLFileHook replaces this call (00a01b87): its handler answers the
+    // parse storage, or nothing (the exe's call).
+    let uio = if e.uio() {
+        e.site(UIO_READ_FILE_SITE, &[path.addr()])
+    } else {
+        None
+    };
+    let storage = match uio {
+        Some(storage) => Ptr::new(storage),
+        None => tile_parse_file(e, path, Ptr::NULL, 0),
+    };
     let failed = |e: &mut Engine| {
         let failed = e.global::<u8>(XML_ERROR_FLAG) != 0;
         if failed {
@@ -10622,6 +10635,53 @@ mod tests {
         // The error flag was cleared before and after; the line word is back.
         assert_eq!(e.global::<u8>(XML_ERROR_FLAG), 0);
         assert_eq!(e.mem.u32(line_word), 0x77);
+    }
+
+    /// UI Organizer's handler at `00A01B87` for the tests: the path is the reader's, and the
+    /// storage is a new one (whatever the file holds).
+    fn uio_storage(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        assert_eq!(e.mem.bytes(a[0], 9), b"menu.xml\0");
+        let block = e.mem.alloc(0x14);
+        Some(e.call(BUILD_STORAGE_CONSTRUCT, &args![block]).u32())
+    }
+
+    fn uio_nothing(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        None
+    }
+
+    #[test]
+    fn uio_answers_the_storage_only_while_its_word_is_on() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_READ_FILE_SITE);
+        // Off (the handler registered, the word not set): the exe's parse, which fails on "<>".
+        let mut e = tile_engine();
+        let setup = read_setup(&mut e, "<>");
+        e.on_site(AT, uio_storage);
+        let read = |e: &mut Engine, s: &ReadSetup| {
+            e.call(0x00a0_1b00, &args![s.parent, Ptr::<()>::new(s.path)])
+                .u32()
+        };
+        assert_eq!(read(&mut e, &setup), 0);
+        assert_eq!(e.global::<u8>(XML_ERROR_FLAG), 1);
+        // On: the handler's storage is built, the file never parsed.
+        let mut e = tile_engine();
+        let setup = read_setup(&mut e, "<>");
+        e.on_site(AT, uio_storage);
+        e.set_uio(true);
+        e.call_log = Some(vec![]);
+        assert_ne!(read(&mut e, &setup), 0);
+        assert_eq!(e.global::<u8>(XML_ERROR_FLAG), 0);
+        assert_eq!(
+            calls_to(&e, BUILD_STORAGE_DESTROY),
+            vec![vec![setup.storage.get()]]
+        );
+        // On, the handler answering nothing: the exe's parse again.
+        let mut e = tile_engine();
+        let setup = read_setup(&mut e, "<>");
+        e.on_site(AT, uio_nothing);
+        e.set_uio(true);
+        assert_eq!(read(&mut e, &setup), 0);
+        assert_eq!(e.global::<u8>(XML_ERROR_FLAG), 1);
     }
 
     #[test]

@@ -423,3 +423,64 @@ pub fn echoed(e: &mut Engine, opcode: u32, this: u32, args: &[Vec<u8>]) -> (f64,
     let lines = ECHOES.with(|l| std::mem::take(&mut *l.borrow_mut()));
     (e.mem.f64(crate::test_support::RESULT), lines)
 }
+
+/// The largest relative error the x86 specification allows `rsqrtss` and `rcpss`
+/// (`|relative error| <= 1.5 * 2^-12`); processors' tables differ within it.
+pub const ESTIMATE_BOUND: f64 = 1.5 / 4096.0;
+
+/// Every single-precision value an x86 processor may return for `rsqrtss(s)` (`s > 0`, finite):
+/// the floats whose relative error from the true `1/sqrt(s)` is within [`ESTIMATE_BOUND`].
+pub fn allowed_rsqrt_estimates(s: f32) -> Vec<f32> {
+    let q = 1.0 / f64::from(s).sqrt();
+    let lo = ((q * (1.0 - ESTIMATE_BOUND)) as f32).to_bits() - 1;
+    let hi = ((q * (1.0 + ESTIMATE_BOUND)) as f32).to_bits() + 1;
+    (lo..=hi)
+        .map(f32::from_bits)
+        .filter(|r| (f64::from(*r) / q - 1.0).abs() <= ESTIMATE_BOUND)
+        .collect()
+}
+
+/// JIP's Newton step after `rsqrtss` (`Point2Distance`/`Point3Distance`), written out
+/// independently of the port: `s * ((3 - s*r*r) * r * 0.5)` in single precision, in the asm's
+/// order, for the estimate `r`.
+pub fn newton_step(s: f32, r: f32) -> f32 {
+    let t = (s * r) * r;
+    let u = ((3.0 - t) * r) * 0.5;
+    s * u
+}
+
+/// This processor's `rsqrtss(s)`, read with the instruction itself (inline asm, not the port's
+/// intrinsic); elsewhere the rounded `1/sqrt(s)`, an allowed estimate.
+pub fn processor_rsqrt(s: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let mut x = s;
+        // SAFETY: SSE is part of every x86_64 processor; the asm touches only its register.
+        unsafe {
+            std::arch::asm!("rsqrtss {0}, {0}", inout(xmm_reg) x, options(pure, nomem, nostack))
+        };
+        x
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        (1.0 / f64::from(s).sqrt()) as f32
+    }
+}
+
+/// This processor's `rcpss(v)`, read with the instruction itself (inline asm, not the port's
+/// intrinsic); elsewhere the rounded `1/v`, an allowed estimate.
+pub fn processor_rcp(v: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let mut x = v;
+        // SAFETY: SSE is part of every x86_64 processor; the asm touches only its register.
+        unsafe {
+            std::arch::asm!("rcpss {0}, {0}", inout(xmm_reg) x, options(pure, nomem, nostack))
+        };
+        x
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        1.0 / v
+    }
+}
