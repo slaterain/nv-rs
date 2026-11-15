@@ -1875,7 +1875,14 @@ struct Overridable {
 /// The rows of the table, or what is wrong with it.
 fn parse_overridable(text: &str) -> Result<Vec<Overridable>, String> {
     let mut rows: Vec<Overridable> = Vec::new();
+    // A line `#> ...` starts a block (one per group of JIP's game patches, step 3.9): addresses rise
+    // within a block, and no address is listed twice in the whole table.
+    let mut block_start = 0;
     for (i, line) in text.lines().enumerate() {
+        if line.starts_with("#>") {
+            block_start = rows.len();
+            continue;
+        }
         if line.starts_with('#') || line.trim().is_empty() {
             continue;
         }
@@ -1891,8 +1898,14 @@ fn parse_overridable(text: &str) -> Result<Vec<Overridable>, String> {
         let direct_calls = direct_calls
             .parse()
             .map_err(|e| format!("line {}: bad count: {e}", i + 1))?;
-        if rows.last().is_some_and(|r| r.address >= address) {
+        if rows[block_start..]
+            .last()
+            .is_some_and(|r| r.address >= address)
+        {
             return Err(format!("line {}: addresses must rise", i + 1));
+        }
+        if rows.iter().any(|r| r.address == address) {
+            return Err(format!("line {}: {address:08x} listed twice", i + 1));
         }
         rows.push(Overridable {
             line: i + 1,
@@ -5016,9 +5029,15 @@ mod typed_rules {
             "0012345z\t0\tJIP",
             "00123460\t0\tJIP\n00123450\t0\tJIP",
             "00123450\t0\tJIP\n00123450\t0\tJIP",
+            "00123460\t0\tJIP\n#> 3.9 GA\n00123460\t0\tJIP",
         ] {
             assert!(parse_overridable(bad).is_err(), "{bad}");
         }
+        // A block starts the rise again.
+        assert_eq!(
+            parse_overridable("00123460\t0\tJIP\n#> 3.9 GA\n00123450\t1\tJIP\n").map(|r| r.len()),
+            Ok(2)
+        );
     }
 
     #[test]

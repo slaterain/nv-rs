@@ -169,6 +169,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
 | `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
 | `NV_NVSE_INVREF_CHECK` | Script reference checks | `host/fixes.rs` |
