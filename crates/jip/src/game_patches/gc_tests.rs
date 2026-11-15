@@ -242,11 +242,11 @@ fn byte_patches_answer_jips_bytes() {
 #[test]
 fn g77_marks_the_hit_armor_penetrated() {
     let mut e = fixes_world();
-    e.mem.set_u32(HIT + 0x58, 0x0012_3405);
+    e.mem.set_u32(HIT + 0x58, 0x4512_3405);
     armor_penetrated(&mut e, &[HIT]);
-    assert_eq!(e.mem.u32(HIT + 0x58), 0x8012_3405);
+    assert_eq!(e.mem.u32(HIT + 0x58), 0xc512_3405);
     armor_penetrated(&mut e, &[HIT]);
-    assert_eq!(e.mem.u32(HIT + 0x58), 0x8012_3405);
+    assert_eq!(e.mem.u32(HIT + 0x58), 0xc512_3405);
 }
 
 /// G98: a teammate, an actor with `+0x143` bit 7, an essential base: 1; else 0; no base: 0.
