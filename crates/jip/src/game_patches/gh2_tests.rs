@@ -325,6 +325,227 @@ fn temporary_variables_written_on_one_engine_go_on_another() {
     engine_core::extend::release_held_for_test();
 }
 
+// ---- PR 2: G06, G73, G103 ----
+
+/// A reference at `REF` of the base `BASE_FORM`, the base's ash pile bit as `ash`.
+fn pile(ash: bool) -> Engine {
+    let e = world(0x15, 0x0100_0001);
+    if ash {
+        e.mem.set_u8(BASE_FORM + 6, IS_ASH_PILE);
+    }
+    e
+}
+
+/// Not installed: none of G06's eight seams, G73's or G103's two has a handler; installed with the
+/// row off: G06's and G73's in (JIP's own), G103's not; the row on: G103's in too.
+#[test]
+fn ash_piles_not_installed_installed_and_the_row() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    for site in ASH_PILE_TESTS {
+        assert!(!e.site_owners(site.addr()).contains(&Owner::Jip));
+        assert_eq!(e.site(site.addr(), &[REF]), None);
+    }
+    for site in [ATTACH_ASH_PILE, DELETED_ACTOR_ASH_PILE, CLEAR_ASH_PILES] {
+        assert!(!e.site_owners(site.addr()).contains(&Owner::Jip));
+    }
+    let mut e = pile(true);
+    super::super::set_row(&mut e, false);
+    for site in ASH_PILE_TESTS {
+        assert_eq!(e.site(site.addr(), &[REF]), Some(1), "{:#x}", site.addr());
+    }
+    assert!(e.site_owners(ATTACH_ASH_PILE.addr()).contains(&Owner::Jip));
+    assert_eq!(e.site(DELETED_ACTOR_ASH_PILE.addr(), &[REF]), None);
+    assert_eq!(e.site(CLEAR_ASH_PILES.addr(), &[REF, BASE_FORM]), None);
+    // No `jip_nvse.ini` (JIP's defaults); the 3.9a fix's wrapped `GetOwnerTopic` stood in.
+    e.register(0x00fd_f088, |_, _| Ret {
+        eax: 0xffff_ffff,
+        ..Ret::default()
+    });
+    e.register(0x0061_a310, |_, _| Ret::default());
+    super::super::set_row(&mut e, true);
+    assert_eq!(e.site(DELETED_ACTOR_ASH_PILE.addr(), &[REF]), Some(1));
+    // Not a pile: G103's routine answers (the exe's type branches passed over), nothing deleted.
+    e.mem.set_u8(BASE_FORM + 6, 0);
+    assert_eq!(e.site(CLEAR_ASH_PILES.addr(), &[REF, BASE_FORM]), Some(0));
+}
+
+/// G06: the base's bit 0x20 of `jipFormFlags6` alone answers 1; other bits, a clear byte and a
+/// reference with no base answer 0.
+#[test]
+fn the_ash_pile_test_is_the_bases_bit() {
+    let mut e = pile(true);
+    assert_eq!(is_ash_pile(&mut e, &[REF]), Some(1));
+    e.mem.set_u8(BASE_FORM + 6, 0xff);
+    assert_eq!(is_ash_pile(&mut e, &[REF]), Some(1));
+    e.mem.set_u8(BASE_FORM + 6, !IS_ASH_PILE);
+    assert_eq!(is_ash_pile(&mut e, &[REF]), Some(0));
+    e.mem.set_u8(BASE_FORM + 6, 0);
+    assert_eq!(is_ash_pile(&mut e, &[REF]), Some(0));
+    e.mem.set_u32(REF + 0x20, 0);
+    assert_eq!(is_ash_pile(&mut e, &[REF]), Some(0), "no base");
+}
+
+/// JIP's `DeferredInit`: the two vanilla piles (`0x11CA27C`, `0x11CA280`) get the bit, kept by
+/// their ids for the restore after a load; other bits stay; a missing form is passed over; with
+/// JIP not installed nothing is written.
+#[test]
+fn deferred_init_marks_the_two_vanilla_piles() {
+    let ash = AREA_AT + 0x900;
+    let goo = AREA_AT + 0x980;
+    let setup = |e: &mut Engine| {
+        e.map(0x011c_a000, 0x1000);
+        e.mem.set_u32(0x011c_a27c, ash);
+        e.mem.set_u32(0x011c_a280, goo);
+        e.mem.set_u32(ash + 0xc, 0x0001_0001);
+        e.mem.set_u32(goo + 0xc, 0x0001_0002);
+        e.mem.set_u8(goo + 6, 1);
+    };
+    let mut e = world(0x15, 0x0100_0001);
+    setup(&mut e);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.u8(ash + 6), IS_ASH_PILE);
+    assert_eq!(e.mem.u8(goo + 6), IS_ASH_PILE | 1);
+    let kept = &e.ext::<Jip>().world_hooks.form_flags;
+    assert_eq!(kept.get(&0x0001_0001), Some(&IS_ASH_PILE));
+    assert_eq!(kept.get(&0x0001_0002), Some(&(IS_ASH_PILE | 1)));
+    // the cosave listener's case
+    let mut e = world(0x15, 0x0100_0001);
+    setup(&mut e);
+    e.mem.set_u32(0x011c_a280, 0);
+    e.ext::<Jip>().pos_marker.marker = 1;
+    crate::cosave::listen(
+        &mut e,
+        &nvse::plugins::Message {
+            kind: nvse::plugins::msg::DEFERRED_INIT,
+            data: 0,
+            len: 0,
+        },
+    );
+    assert_eq!(e.mem.u8(ash + 6), IS_ASH_PILE, "through the listener");
+    assert_eq!(e.mem.u8(goo + 6), 1, "a missing form is passed over");
+    // not installed
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    e.map(AREA_AT, 0x1000);
+    setup(&mut e);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.u8(ash + 6), 0);
+    assert_eq!(e.mem.u8(goo + 6), 1);
+}
+
+/// G73: `AttachAshPileEx`'s form once (then the exe's choice again); mode 2 the goo pile, any
+/// other the ash pile.
+#[test]
+fn a_deaths_ash_pile_is_the_alternative_once_else_the_exes() {
+    let mut e = world(0x15, 0x0100_0001);
+    e.map(0x011c_a000, 0x1000);
+    e.mem.set_u32(0x011c_a27c, 0x0aaa_0000);
+    e.mem.set_u32(0x011c_a280, 0x0bbb_0000);
+    let pick = |e: &mut Engine, mode: u32| e.site(ATTACH_ASH_PILE.addr(), &[mode]);
+    for (mode, form) in [
+        (2, 0x0bbb_0000),
+        (0, 0x0aaa_0000),
+        (1, 0x0aaa_0000),
+        (3, 0x0aaa_0000),
+    ] {
+        assert_eq!(pick(&mut e, mode), Some(form), "mode {mode}");
+    }
+    e.ext_free::<AltAshPile>()
+        .0
+        .store(0x0ccc_0000, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(pick(&mut e, 2), Some(0x0ccc_0000));
+    assert_eq!(pick(&mut e, 2), Some(0x0bbb_0000), "taken once");
+}
+
+/// G103's references: the pile at `REF` (base `BASE_FORM`, ash pile bit), the actor it came
+/// from at `OTHER` (base at `AREA_AT + 0xa00`), `ExtraAshPileRef` stand-ins, `MarkAsDeleted`
+/// logged.
+fn cleanup_world(source: u32) -> Engine {
+    let mut e = crate::commands::test_support::engine();
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    e.map(AREA_AT, 0x1000);
+    e.mem.set_u32(REF + 0x20, BASE_FORM);
+    e.mem.set_u8(BASE_FORM + 6, IS_ASH_PILE);
+    e.mem.set_u32(OTHER + 0x20, AREA_AT + 0xa00);
+    e.register(0x0057_2270, |_, _| Ret::default());
+    let pile_list = REF + 0x44;
+    crate::commands::test_support::put_extra(&mut e, pile_list, AREA_AT + 0xb00, 0x89, source);
+    crate::commands::test_support::put_extra(&mut e, OTHER + 0x44, AREA_AT + 0xb40, 0x89, REF);
+    e.call_log = Some(vec![]);
+    e
+}
+
+fn deleted(e: &Engine) -> Vec<Vec<u32>> {
+    e.call_log
+        .as_ref()
+        .unwrap()
+        .iter()
+        .filter(|c| c.0 == 0x0057_2270)
+        .map(|c| c.1.clone())
+        .collect()
+}
+
+fn has_ash_ref(e: &Engine, reference: u32) -> bool {
+    crate::commands::extra::has_type(e, reference + 0x44, 0x89)
+}
+
+/// G103 `ClearAshPilesHook`: an ash pile from an actor loses its `ExtraAshPileRef`, the actor
+/// its own, and the pile is deleted; the routine always answers (the exe's type branches are
+/// passed over).
+#[test]
+fn a_cleaned_ash_pile_is_deleted_and_its_actor_forgets_it() {
+    let mut e = cleanup_world(OTHER);
+    assert_eq!(clear_ash_piles(&mut e, &[REF, BASE_FORM]), Some(0));
+    assert!(!has_ash_ref(&e, REF));
+    assert!(!has_ash_ref(&e, OTHER));
+    assert_eq!(deleted(&e), vec![vec![REF]]);
+}
+
+/// The source's base form flagged `0x400` (quest item): the pile stays, both keep their extras.
+#[test]
+fn a_quest_items_ash_pile_stays() {
+    let mut e = cleanup_world(OTHER);
+    e.mem.set_u8(AREA_AT + 0xa00 + 9, 4);
+    assert_eq!(clear_ash_piles(&mut e, &[REF, BASE_FORM]), Some(0));
+    assert!(has_ash_ref(&e, REF));
+    assert!(has_ash_ref(&e, OTHER));
+    assert!(deleted(&e).is_empty());
+    // another bit of the flags byte does not keep it
+    let mut e = cleanup_world(OTHER);
+    e.mem.set_u8(AREA_AT + 0xa00 + 9, !4);
+    clear_ash_piles(&mut e, &[REF, BASE_FORM]);
+    assert_eq!(deleted(&e), vec![vec![REF]]);
+    // a source with no base: taken as the flag clear (JIP would read address 9)
+    let mut e = cleanup_world(OTHER);
+    e.mem.set_u32(OTHER + 0x20, 0);
+    clear_ash_piles(&mut e, &[REF, BASE_FORM]);
+    assert_eq!(deleted(&e), vec![vec![REF]]);
+    assert!(!has_ash_ref(&e, OTHER));
+}
+
+/// An `ExtraAshPileRef` with no source: the pile loses it and is deleted; no extra at all: just
+/// deleted; a base without the bit: nothing at all.
+#[test]
+fn a_pile_with_no_source_or_no_extra_is_deleted_and_others_are_left() {
+    let mut e = cleanup_world(0);
+    clear_ash_piles(&mut e, &[REF, BASE_FORM]);
+    assert!(!has_ash_ref(&e, REF));
+    assert!(has_ash_ref(&e, OTHER), "nobody else touched");
+    assert_eq!(deleted(&e), vec![vec![REF]]);
+    let mut e = cleanup_world(OTHER);
+    crate::commands::extra::remove_by_type(&mut e, REF + 0x44, 0x89);
+    e.call_log = Some(vec![]);
+    clear_ash_piles(&mut e, &[REF, BASE_FORM]);
+    assert_eq!(deleted(&e), vec![vec![REF]]);
+    assert!(has_ash_ref(&e, OTHER));
+    let mut e = cleanup_world(OTHER);
+    e.mem.set_u8(BASE_FORM + 6, !IS_ASH_PILE);
+    assert_eq!(clear_ash_piles(&mut e, &[REF, BASE_FORM]), Some(0));
+    assert!(deleted(&e).is_empty());
+    assert!(has_ash_ref(&e, REF) && has_ash_ref(&e, OTHER));
+}
+
 /// The flag is exact whenever JIP's slot is free: through writes on one engine and destroys on
 /// another (each holding the slot in turn), it is true whenever either map holds a variable and
 /// false only after a destroy found both empty.
