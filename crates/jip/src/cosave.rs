@@ -708,6 +708,7 @@ fn present(e: &Engine, id: u32) -> bool {
 /// an empty name ends its owner's variables. A mod's map is made at its first owner kept, with
 /// room for the owners left (`AlignBucketCount`), an owner's map with room for its variables.
 fn load_aux_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
+    crate::commands::jip_fn_aux_variable::maps_reached(e);
     let mut mods = b.u16()?;
     while mods != 0 {
         mods -= 1;

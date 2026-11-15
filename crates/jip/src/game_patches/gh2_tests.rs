@@ -271,3 +271,56 @@ fn clearing_an_empty_map_answers_no() {
     assert!(clear_ref_aux_vars(&mut mods, TEMP_ID));
     assert!(!clear_ref_aux_vars(&mut mods, TEMP_ID), "already gone");
 }
+
+/// Only the temporary map holds variables (the saved one empty): the temporary reference's go
+/// from it (emptied mods removed) and nothing is marked changed (JIP tests both maps' sizes).
+#[test]
+fn only_temporary_variables_go_without_a_change() {
+    let mut e = world(0x15, TEMP_ID);
+    *aux_maps(&mut e, true) = three_mods();
+    destroy(&mut e, REF);
+    assert_eq!(
+        mods_of(aux_maps(&mut e, true)),
+        vec![(2, vec![0x0100_0001]), (3, vec![0x0100_0001])]
+    );
+    assert!(aux_maps(&mut e, false).is_empty());
+    assert_eq!(e.ext::<Jip>().saved.changed, 0);
+}
+
+/// With both aux maps empty and nothing named, the routine takes no lock: it answers on this
+/// engine while a second engine of the run (a real thread's) holds JIP's shared slot (asking for
+/// the slot here would be refused: two engines on one thread), and the lock-free flag says the
+/// maps may hold nothing.
+#[test]
+fn a_temporary_reference_goes_while_another_engine_holds_jips_slot() {
+    let mut e = world(FURNITURE, TEMP_ID);
+    // A first destroy with the maps empty clears the flag the set-up may have left.
+    *aux_maps(&mut e, true) = AuxMods::new(8);
+    assert_eq!(destroy(&mut e, REF), Some(1));
+    assert!(!maps_may_hold(&mut e));
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(other.ext::<Jip>().installed, "the other engine holds it");
+    assert_eq!(destroy(&mut e, REF), Some(1), "no lock taken");
+    engine_core::extend::release_held_for_test();
+}
+
+/// One temporary map for the run: variables written on another engine (a real thread's) are
+/// cleared when the temporary reference is destroyed on this one.
+#[test]
+fn temporary_variables_written_on_one_engine_go_on_another() {
+    let mut e = world(0x15, TEMP_ID);
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    *aux_maps(&mut other, true) = three_mods();
+    engine_core::extend::release_held_for_test();
+    destroy(&mut e, REF);
+    engine_core::extend::release_held_for_test();
+    assert_eq!(
+        mods_of(aux_maps(&mut other, true)),
+        vec![(2, vec![0x0100_0001]), (3, vec![0x0100_0001])]
+    );
+    engine_core::extend::release_held_for_test();
+}

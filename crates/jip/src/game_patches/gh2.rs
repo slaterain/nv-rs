@@ -13,7 +13,9 @@
 //! model.
 
 use super::Area;
-use crate::commands::jip_fn_aux_variable::{aux_maps, mark_changed, AuxMods};
+use crate::commands::jip_fn_aux_variable::{
+    aux_maps, maps_found_empty, maps_may_hold, mark_changed, AuxMods,
+};
 use crate::cosave::{changed, has_change_data};
 use crate::world_hooks::TextBlock;
 use crate::Jip;
@@ -62,6 +64,19 @@ fn install_jip(e: &mut Engine) {
 /// reference (mod index 0xFF) the save holds no changes of loses its aux variables, saved
 /// (marking them changed when one went) and temporary, when either map has any; then the base's
 /// type answers whether it is furniture, as `IsFurniture` would.
+///
+/// Threads: the destructor body `0055a430` is reached from the references' deleting destructor
+/// (`0055a3d0`, any thread that deletes a reference), `~MobileObject` (`0092ed43`),
+/// `RemoveStolenItems` (`0072ec3f`) and `CheckConditionFilters` (`005ea1b2`, `005ea1fe`: a
+/// temporary reference on the stack, on whichever thread evaluates the conditions: the AI
+/// threads too, with real threads on). So it runs off the main thread. What the routine reads
+/// without a lock: the reference's and base's bytes, the save's changes map (game memory) and
+/// the aux maps' lock-free "may hold" flag ([`maps_may_hold`]): with nothing named and both
+/// aux maps empty it takes no lock at all. Otherwise it takes JIP's shared slot, where both aux
+/// maps live (one map each for the game, as JIP's globals, whichever engine wrote them); an
+/// engine that holds the slot already (a script command destroying a reference on the main
+/// thread) takes it again at no cost: the slot's holder is the engine (`Engine::ext`), so the
+/// routine never waits on itself.
 fn destroy_refr(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let reference = a[0];
     let base = e.mem.u32(reference + BASE);
@@ -82,14 +97,17 @@ fn destroy_refr(e: &mut Engine, a: &[u32]) -> Option<u32> {
         }
     }
     let id = e.mem.u32(reference + REF_ID);
-    if e.mem.u8(reference + MOD_INDEX) == 0xff
-        && !has_change_data(e, id)
-        && !(aux_maps(e, false).is_empty() && aux_maps(e, true).is_empty())
-    {
-        if clear_ref_aux_vars(aux_maps(e, false), id) {
-            mark_changed(e, changed::AUX_VARS);
+    if e.mem.u8(reference + MOD_INDEX) == 0xff && !has_change_data(e, id) && maps_may_hold(e) {
+        let jip = e.ext::<Jip>();
+        let empty = jip.saved.aux_vars.is_empty() && jip.temp_aux_vars.is_empty();
+        if empty {
+            maps_found_empty(e);
+        } else {
+            if clear_ref_aux_vars(aux_maps(e, false), id) {
+                mark_changed(e, changed::AUX_VARS);
+            }
+            clear_ref_aux_vars(aux_maps(e, true), id);
         }
-        clear_ref_aux_vars(aux_maps(e, true), id);
     }
     let kind = e.mem.u8(e.mem.u32(reference + BASE) + FORM_TYPE);
     Some(u32::from(kind == FURNITURE))
