@@ -775,11 +775,14 @@ fn bad_float() -> Vec<u8> {
     vec![b'G', 9, 0]
 }
 
+/// An opcode, arguments that read, arguments whose read fails.
+type Case = (u32, Vec<Vec<u8>>, Vec<Vec<u8>>);
+
 /// The three new commands without a calling reference, and with a read that fails: no game
 /// call, no change, result 0.
 #[test]
 fn new_commands_without_reference_or_with_a_failed_read_do_nothing() {
-    let cases: [(u32, Vec<Vec<u8>>, Vec<Vec<u8>>); 3] = [
+    let cases: [Case; 3] = [
         (
             0x27f8,
             vec![z(10.0), z(20.0), z(30.0), n(1)],
