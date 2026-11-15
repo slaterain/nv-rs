@@ -6,8 +6,10 @@
 //! filters, the barter caps and price multipliers, the recipe menu's selection, category and
 //! category count, the VATS targets, the font files, the level-up menu with skill points, the
 //! barter offers and a menu's item list as inventory references, a terminal's own model), and
-//! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`). 33 of the
-//! file's 64 commands; its four menu event commands are the core track's (`ui_hooks`).
+//! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
+//! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
+//! a text's size in a font. 38 of the file's 64 commands; its four menu event commands are the
+//! core track's (`ui_hooks`).
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
 //! LN NVSE)): a path's first part names a menu (looked up as JIP's `s_menuNameToID` looks it up,
@@ -28,9 +30,15 @@
 //! - files and fonts: `SetFontFile` (a font file read from the folder, JIP's font map);
 //! - 3D and drawing: `AttachUIXML`, `AttachUIComponent` (a tile's node under a reference's node),
 //!   `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene node);
-//! - not yet built here (plain, for the next batch): `GetMenuTargetRef`, `GetSelectedItemRef`,
-//!   `RefreshItemsList`, `MessageExAlt`, `SetSystemColor`, `ClearMessageQueue`,
-//!   `TogglePipBoyLight`, `GetWorldMapPosMults`, `GetStringUIDimensions`.
+//! - `RefreshItemsList`: in the map menu JIP sets `s_mapMenuSkipSetXY`, read only by its map
+//!   menu patch (G87, `0x79DF73`, not built), and in the recipe menu it runs JIP's own
+//!   `RefreshRecipeMenu`;
+//! - not yet built here (plain, for the next batch): `GetMenuTargetRef` (18 menus' targets),
+//!   `GetSelectedItemRef` (the top menu's selected list item), `GetWorldMapPosMults` (JIP's
+//!   `WorldDimensions` maths and its cached worldspaces).
+//!
+//! `MessageExAlt` calls the game's `QueueUIMessage` with its own seconds: JIP's G09 hook there
+//! changes only the exe's own callers' time (return addresses up to `0x96A262`).
 //!
 //! Where JIP reads through a null pointer (a menu's tile, a recipe menu without a category, a
 //! trait path without a trait), the command does nothing here: listed in the lane's audit. Also
@@ -74,6 +82,7 @@ pub static COMMANDS: Handlers = &[
     (0x2712, get_recipe_menu_selection),
     (0x2713, get_recipe_menu_category),
     (0x2715, get_recipe_menu_num_subcategories),
+    (0x2738, message_ex_alt),
     (0x274b, get_font_file),
     (0x2784, set_message_disabled),
     (0x2785, get_message_disabled),
@@ -85,10 +94,14 @@ pub static COMMANDS: Handlers = &[
     (0x2822, set_terminal_ui_model),
     (0x2827, get_vats_targets),
     (0x286c, unload_ui_component),
+    (0x2872, clear_message_queue),
+    (0x2881, set_system_color),
     (0x28a4, click_menu_tile),
+    (0x28ac, toggle_pipboy_light_cmd),
     (0x28c6, add_tile_from_template),
     (0x28cb, set_ui_float_gradual),
     (0x28e1, show_level_up_menu_ex),
+    (0x2927, get_string_ui_dimensions),
     (0x2935, get_menu_item_list_refs),
 ];
 
@@ -1479,6 +1492,334 @@ fn set_terminal_ui_model(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let any = !e.ext::<Jip>().ui_hooks.terminal_models.is_empty();
     e.set_hook(Hook::SetTerminalModel, any);
+    handled(true)
+}
+
+// ---- package C2: the message queue, system colours, the Pip-Boy light, text sizes ----
+
+/// `HUDMainMenu` (`*011D96C0`): the queued messages (`tList` +0x18C), the shown message's start
+/// time (+0x194) and the message tiles (icon +0x8C, text +0x90, bracket +0x94): the menu's own
+/// queue code (`hudmainmenu.rs` `00775920`, `0077xxxx`) reads them there; `kTileValue_alpha`.
+const HUD_MAIN_MENU: u32 = 0x011d_96c0;
+const HUD_QUEUED_MESSAGES: u32 = 0x18c;
+const HUD_MESSAGE_START: u32 = 0x194;
+const HUD_MESSAGE_TILES: [u32; 3] = [0x8c, 0x90, 0x94];
+const TRAIT_ALPHA: u32 = 0xfa9;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameUI.h: HUDMainMenu::ClearMessageQueue,
+// nvse/GameTypes.h: tList::DeleteAll, nvse/GameTiles.cpp: Tile::SetFloat.
+/// When the HUD's message queue is not empty (its first item is set): every node after the first
+/// freed with its message, then the first node's message, the queue left empty; the start time
+/// 0; the three message tiles' alpha 0 (each tile that has the value). No result.
+///
+/// nv-rs's own: the walk ends as the crate's other list walks do (`list_step`), and a missing
+/// tile is passed over (JIP reads through it).
+fn clear_message_queue(e: &mut Engine, _: &[u32]) -> Ret {
+    let hud = e.mem.u32(HUD_MAIN_MENU);
+    if hud == 0 {
+        return handled(true);
+    }
+    let head = hud + HUD_QUEUED_MESSAGES;
+    if e.get(Ptr::<ListNode>::new(head), ListNode::data) == 0 {
+        return handled(true);
+    }
+    let mut walked = 0usize;
+    loop {
+        let node = e.get(Ptr::<ListNode>::new(head), ListNode::next);
+        if node == 0 || !super::list_step(e, &mut walked) {
+            break;
+        }
+        let message = e.get(Ptr::<ListNode>::new(node), ListNode::data);
+        heap_free(e, message);
+        let next = e.get(Ptr::<ListNode>::new(node), ListNode::next);
+        e.set(Ptr::<ListNode>::new(head), ListNode::next, next);
+        heap_free(e, node);
+    }
+    let first = e.get(Ptr::<ListNode>::new(head), ListNode::data);
+    heap_free(e, first);
+    e.set(Ptr::<ListNode>::new(head), ListNode::data, 0);
+    e.mem.set_u32(hud + HUD_MESSAGE_START, 0);
+    for at in HUD_MESSAGE_TILES {
+        let tile = e.mem.u32(hud + at);
+        if tile != 0 {
+            let value = value_of(e, tile, TRAIT_ALPHA);
+            if value != 0 {
+                value_set_float(e, value, 0.0);
+            }
+        }
+    }
+    handled(true)
+}
+
+/// `SystemColorManager` (`*011D8A88`): its colours (`DList`: first +0; a node's next +0, colour
+/// +8), as the game's own `SystemColorManager::Find` (`00718FB0`) walks them; a colour's
+/// `SetColor` (vtable +8, one word: the game's setter `00719120` calls it so). The interface
+/// manager's menus root (+0x9C, `00586150`) and the colour refresh `00A0B350` (`thiscall (tile,
+/// type, 0)`, `RET 8`: the start menu calls it so after a colour change).
+const SYSTEM_COLOR_MANAGER: u32 = 0x011d_8a88;
+const SET_COLOR_SLOT: u32 = 0x08;
+const IM_MENUS_ROOT: u32 = 0x9c;
+const REFRESH_COLOR: u32 = 0x00a0_b350;
+/// JIP's colour types: 1 to 5.
+const SYSTEM_COLOR_TYPES: u32 = 5;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_SetSystemColor_Execute, nvse/GameUI.cpp: SystemColor::SetColorRGB.
+/// `SetSystemColor type r g b`: for a type of 1 to 5, the manager's colour number `type`
+/// (counted from 1) set to `r g b` with alpha 255 (`(r << 24) | (g << 16) | (b << 8) | 0xFF`,
+/// each the argument's low byte), then the menus' colours refreshed. No result.
+fn set_system_color(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let kind = read.int(0, 0);
+    if !read.ok || kind == 0 || kind > SYSTEM_COLOR_TYPES {
+        return handled(true);
+    }
+    let manager = e.mem.u32(SYSTEM_COLOR_MANAGER);
+    if manager == 0 {
+        return handled(true);
+    }
+    // `DList::GetNthItem(type - 1)`: from the first node, `next` taken type - 1 times, stopping
+    // at a null one.
+    let mut node = e.mem.u32(manager);
+    for _ in 1..kind {
+        if node == 0 {
+            break;
+        }
+        node = e.mem.u32(node);
+    }
+    if node == 0 {
+        return handled(true);
+    }
+    let color_obj = e.mem.u32(node + 8);
+    if color_obj == 0 {
+        return handled(true);
+    }
+    let [r, g, b] = [1, 2, 3].map(|i| read.int(i, 0) & 0xff);
+    let color = (r << 24) | (g << 16) | (b << 8) | 0xff;
+    e.vcall(color_obj, SET_COLOR_SLOT, &args![color]);
+    let im = interface_manager(e);
+    if im != 0 {
+        let root = e.mem.u32(im + IM_MENUS_ROOT);
+        e.call(REFRESH_COLOR, &args![root, kind, 0u32]);
+    }
+    handled(true)
+}
+
+/// The Pip-Boy light spell (`*011C358C`: the magic system's form 0x147), its `MagicItem` (+0x18);
+/// the player's `MagicCaster` (+0x88, vtable slot 0 `CastAbility(spell, 0)`, `RET 8`: `0094C870`)
+/// and `MagicTarget` (+0x94); `MagicTarget::IsSpellTarget` (`00822B90`, `(item, 1)`, `RET 8`) and
+/// `MagicTarget::Dispel` (`00824400`, `(item, 0, 0)`, `RET 0xC`); the interface manager's
+/// `FOPipboyManager` (+0x174) and its `ShowPipboyLightEffect` (`007FA310`, three bytes, `RET 0xC`).
+const PIPBOY_LIGHT: u32 = 0x011c_358c;
+const MAGIC_ITEM: u32 = 0x18;
+const PC_MAGIC_CASTER: u32 = 0x88;
+const PC_MAGIC_TARGET: u32 = 0x94;
+const IS_SPELL_TARGET: u32 = 0x0082_2b90;
+const DISPEL: u32 = 0x0082_4400;
+const IM_PIPBOY_MANAGER: u32 = 0x174;
+const SHOW_PIPBOY_LIGHT: u32 = 0x007f_a310;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: TogglePipBoyLight (asm).
+/// On: the player casts the light (`CastAbility`); off: its effect dispelled from the player. Then
+/// the Pip-Boy manager's light effect shown twice: `(1, on, 1)` and `(0, on, 1)`.
+fn toggle_pipboy_light(e: &mut Engine, player: u32, spell: u32, on: u32) {
+    if on != 0 {
+        let caster = player + PC_MAGIC_CASTER;
+        e.vcall(caster, 0, &args![spell, 0u32]);
+    } else {
+        e.call(
+            DISPEL,
+            &args![player + PC_MAGIC_TARGET, spell + MAGIC_ITEM, 0u32, 0u32],
+        );
+    }
+    let im = interface_manager(e);
+    let manager = if im == 0 {
+        0
+    } else {
+        e.mem.u32(im + IM_PIPBOY_MANAGER)
+    };
+    // nv-rs's own: without the manager no effect is shown (JIP calls through a null one).
+    if manager != 0 {
+        e.call(SHOW_PIPBOY_LIGHT, &args![manager, 1u32, on, 1u32]);
+        e.call(SHOW_PIPBOY_LIGHT, &args![manager, 0u32, on, 1u32]);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_TogglePipBoyLight_Execute.
+/// `TogglePipBoyLight [on]`: 1 when the player has the Pip-Boy light's effect; with an argument
+/// that differs from that (compared whole: 2 differs from 1), the light turned on or off.
+///
+/// nv-rs's own: without the player or the spell nothing is done (JIP reads through them).
+fn toggle_pipboy_light_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let (player, spell) = (e.mem.u32(PLAYER), e.mem.u32(PIPBOY_LIGHT));
+    if player == 0 || spell == 0 {
+        return handled(true);
+    }
+    let state = e
+        .call(
+            IS_SPELL_TARGET,
+            &args![player + PC_MAGIC_TARGET, spell + MAGIC_ITEM, 1u32],
+        )
+        .u32()
+        & 0xff;
+    let state = u32::from(state != 0);
+    a.set_result(e, f64::from(state));
+    if num_args(e, &a) != 0 {
+        let read = Read::of(e, &a);
+        let on = read.int(0, 0);
+        if read.ok && on != state {
+            toggle_pipboy_light(e, player, spell, on);
+        }
+    }
+    handled(true)
+}
+
+/// `FontManager::CalculateStringDimensions` (`00A1B020`, `thiscall (out, text, font, wrap
+/// width, start)`, `RET 0x14`: a `NiVector3` out) on [`FONT_MANAGER`].
+const STRING_DIMENSIONS: u32 = 0x00a1_b020;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_GetStringUIDimensions_Execute.
+/// `GetStringUIDimensions text font wrapWidth outW outH outLines`: the game's size of the text in
+/// the font (a wrap width of 0 or less: `FLT_MAX`) into the three variables. No result.
+fn get_string_ui_dimensions(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let text = buffer_arg(e, &read, 0, STR_ARG_BUFFER, "GetStringUIDimensions");
+    let font = read.int(1, 0);
+    let mut wrap = read.float(2, 0.0);
+    let vars = [read.local(3), read.local(4), read.local(5)];
+    if wrap <= 0.0 {
+        wrap = f32::MAX;
+    }
+    let manager = e.mem.u32(FONT_MANAGER);
+    if manager == 0 {
+        return handled(true);
+    }
+    let dims = with_guest_text(e, &text, |e, text| {
+        e.with_stack(0x10, |e, out| {
+            let out = out.addr();
+            for i in 0..4 {
+                e.mem.set_u32(out + 4 * i, 0);
+            }
+            e.call(
+                STRING_DIMENSIONS,
+                &args![manager, out, text, font, wrap, 0u32],
+            );
+            [0, 4, 8].map(|o| e.mem.f32(out + o))
+        })
+    });
+    for (var, v) in vars.into_iter().zip(dims) {
+        if var != 0 {
+            e.mem.set_f64(var + 8, f64::from(v));
+        }
+    }
+    handled(true)
+}
+
+/// `QueueUIMessage` (`007052F0`, `cdecl (text, icon type, icon path, sound, seconds, byte)`).
+const QUEUE_UI_MESSAGE: u32 = 0x0070_52f0;
+/// JIP's `kMsgIconsPathAddr`: the exe's message icon paths `#0` to `#6`.
+const MESSAGE_ICONS: [u32; 7] = [
+    0x0102_08a0,
+    0x0102_08e0,
+    0x0102_5cdc,
+    0x0103_0e78,
+    0x0103_a830,
+    0x0104_9638,
+    0x0104_bfe8,
+];
+/// `buffer[0x203] = 0`: the most of the message JIP hands on.
+const MESSAGE_MAX: usize = 0x203;
+/// `kCommandInfo_MessageExAlt.numParams`: the seconds and xNVSE's 21 format parameters.
+const MESSAGE_PARAMS: u32 = 22;
+
+/// What `MessageExAlt` hands `QueueUIMessage`: the message, an icon (the exe's path or a token of
+/// the text) and a sound.
+#[derive(Debug, PartialEq)]
+enum Icon {
+    None,
+    Exe(u32),
+    Text(Vec<u8>),
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: Cmd_MessageExAlt_Execute.
+/// The text split at `|` runs: while a token has text after it, a token `$name` is the sound,
+/// `#n` (`n` 0 to 6) the exe's icon `n` (another `#` token changes nothing), any other the icon's
+/// path; the last token is the message, cut to 0x203 bytes.
+fn split_message(text: &[u8]) -> (Vec<u8>, Icon, Option<Vec<u8>>) {
+    let (mut icon, mut sound) = (Icon::None, None);
+    let mut rest = text;
+    loop {
+        let (token, after) = next_token(rest, b'|');
+        if after.is_empty() {
+            let message = &token[..token.len().min(MESSAGE_MAX)];
+            return (message.to_vec(), icon, sound);
+        }
+        match token.first() {
+            Some(b'$') => sound = Some(token[1..].to_vec()),
+            Some(b'#') => {
+                // `buffer[1] - '0'` as a signed char: 0 to 6 only.
+                let index = token
+                    .get(1)
+                    .map_or(-(b'0' as i32), |&c| i32::from(c as i8) - i32::from(b'0'));
+                if let Some(&path) = usize::try_from(index)
+                    .ok()
+                    .and_then(|i| MESSAGE_ICONS.get(i))
+                {
+                    icon = Icon::Exe(path);
+                }
+            }
+            _ => icon = Icon::Text(token.to_vec()),
+        }
+        rest = after;
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_MessageExAlt_Execute.
+/// `MessageExAlt seconds format ...`: the formatted text ([`split_message`]) queued as a HUD
+/// message for the seconds, with its icon and sound. No result.
+fn message_ex_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let f = nvse::commands::string::format_string_args_at(e, &a, 1, MESSAGE_PARAMS);
+    if !f.ok {
+        return handled(true);
+    }
+    let seconds = f.leading.first().and_then(Arg::float).unwrap_or(0.0);
+    let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "MessageExAlt");
+    let (message, icon, sound) = split_message(&text);
+    // One block on the guest stack: the message, then the icon's and the sound's texts, each
+    // with its 0.
+    let mut block = message.clone();
+    block.push(0);
+    let icon_at = block.len() as u32;
+    if let Icon::Text(t) = &icon {
+        block.extend_from_slice(t);
+        block.push(0);
+    }
+    let sound_at = block.len() as u32;
+    if let Some(s) = &sound {
+        block.extend_from_slice(s);
+    }
+    with_guest_text(e, &block, |e, at| {
+        let icon_ptr = match icon {
+            Icon::None => 0,
+            Icon::Exe(path) => path,
+            Icon::Text(_) => at + icon_at,
+        };
+        let sound_ptr = if sound.is_some() { at + sound_at } else { 0 };
+        e.call(
+            QUEUE_UI_MESSAGE,
+            &args![at, 0u32, icon_ptr, sound_ptr, seconds, 0u32],
+        );
+    });
     handled(true)
 }
 

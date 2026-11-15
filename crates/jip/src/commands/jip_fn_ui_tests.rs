@@ -1478,3 +1478,410 @@ fn inject_component_goes_through_the_built_in_uio_only() {
     assert_eq!(inject(&mut e, b"InventoryMenu/Box", b""), 0.0);
     assert!(calls_to(READ_FILE_FN).is_empty());
 }
+
+// ---- package C2 ----
+
+const HUD: u32 = FORMS + 0xa_0000;
+const QUEUE_NODES: u32 = FORMS + 0xa_1000;
+const SCM: u32 = FORMS + 0xa_2000;
+const COLOR_VT: u32 = FORMS + 0xa_3000;
+const SET_COLOR_FN: u32 = 0x0dea_0110;
+const REFRESH_COLOR_FN: u32 = 0x00a0_b350;
+const SPELL: u32 = FORMS + 0xa_4000;
+const PIPBOY: u32 = FORMS + 0xa_5000;
+const CASTER_VT: u32 = FORMS + 0xa_6000;
+const CAST_FN: u32 = 0x0dea_0120;
+const IS_TARGET_FN: u32 = 0x0082_2b90;
+const DISPEL_FN: u32 = 0x0082_4400;
+const SHOW_LIGHT_FN: u32 = 0x007f_a310;
+const FONTS: u32 = FORMS + 0xa_7000;
+const DIMS_FN: u32 = 0x00a1_b020;
+const QUEUE_FN: u32 = 0x0070_52f0;
+const C2_LOCALS: u32 = crate::test_support::LIST + 0x100;
+
+/// The HUD with three queued messages (nodes chained from the inline head) and its message
+/// tiles 5, 6, 7 with an alpha value of 1 each (tile 7's alpha already 0).
+fn queue(e: &mut Engine) -> [u32; 3] {
+    e.mem.set_u32(0x011d_96c0, HUD);
+    let messages = [
+        QUEUE_NODES + 0x100,
+        QUEUE_NODES + 0x200,
+        QUEUE_NODES + 0x300,
+    ];
+    let (n1, n2) = (QUEUE_NODES, QUEUE_NODES + 8);
+    e.mem.set_u32(HUD + 0x18c, messages[0]);
+    e.mem.set_u32(HUD + 0x190, n1);
+    e.mem.set_u32(n1, messages[1]);
+    e.mem.set_u32(n1 + 4, n2);
+    e.mem.set_u32(n2, messages[2]);
+    e.mem.set_u32(n2 + 4, 0);
+    e.mem.set_u32(HUD + 0x194, 1234);
+    for (i, at) in [0x8c, 0x90, 0x94].iter().enumerate() {
+        let tl = tile(e, 5 + i as u32, 0, b"msg");
+        e.mem.set_u32(HUD + at, tl);
+        values(e, tl, &[(0xfa9, if i == 2 { 0.0 } else { 1.0 }, None)]);
+    }
+    messages
+}
+
+#[test]
+fn clear_message_queue_cmd() {
+    let mut e = setup();
+    let messages = queue(&mut e);
+    assert_eq!(call(&mut e, 0x2872, &[]).1, 0.0, "no result");
+    // Each later node's message then the node, then the first message; the head emptied.
+    assert_eq!(
+        freed(),
+        vec![
+            messages[1],
+            QUEUE_NODES,
+            messages[2],
+            QUEUE_NODES + 8,
+            messages[0]
+        ]
+    );
+    assert_eq!((e.mem.u32(HUD + 0x18c), e.mem.u32(HUD + 0x190)), (0, 0));
+    assert_eq!(e.mem.u32(HUD + 0x194), 0);
+    // The alpha values 0, refreshed where they changed (tiles 5 and 6, not 7).
+    for n in [5, 6, 7] {
+        assert_eq!(value_float(&e, t(n), 0xfa9), 0.0);
+    }
+    assert_eq!(calls_to(REFRESH_FN).len(), 2);
+    // An empty queue (no first message): nothing at all.
+    let messages = queue(&mut e);
+    e.mem.set_u32(HUD + 0x18c, 0);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2872, &[]);
+    assert!(freed().is_empty());
+    assert_eq!(e.mem.u32(HUD + 0x194), 1234);
+    assert_eq!(value_float(&e, t(5), 0xfa9), 1.0);
+    // One message: just it.
+    let _ = messages;
+    let messages = queue(&mut e);
+    e.mem.set_u32(HUD + 0x190, 0);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2872, &[]);
+    assert_eq!(freed(), vec![messages[0]]);
+    // No HUD: nothing.
+    e.mem.set_u32(0x011d_96c0, 0);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2872, &[]);
+    assert!(calls().is_empty());
+}
+
+/// The system colour manager with `n` colours (nodes at `SCM + 0x100 * (i + 1)`, colour objects
+/// at `+0x40` of each, their vtable's `SetColor` recording `(this, colour)`).
+fn colors(e: &mut Engine, n: u32) -> Vec<u32> {
+    e.mem.set_u32(0x011d_8a88, SCM);
+    e.mem.set_u32(COLOR_VT + 8, SET_COLOR_FN);
+    e.register(SET_COLOR_FN, |_, w| {
+        record(SET_COLOR_FN, w);
+        eax(0)
+    });
+    e.register(REFRESH_COLOR_FN, |_, w| {
+        record(REFRESH_COLOR_FN, w);
+        eax(0)
+    });
+    e.mem.set_u32(IM + 0x9c, t(0));
+    let mut objects = Vec::new();
+    for i in 0..n {
+        let node = SCM + 0x100 * (i + 1);
+        let next = if i + 1 < n { node + 0x100 } else { 0 };
+        e.mem.set_u32(node, next);
+        e.mem.set_u32(node + 8, node + 0x40);
+        e.mem.set_u32(node + 0x40, COLOR_VT);
+        objects.push(node + 0x40);
+    }
+    e.mem.set_u32(SCM, if n > 0 { SCM + 0x100 } else { 0 });
+    objects
+}
+
+#[test]
+fn set_system_color_cmd() {
+    let mut e = setup();
+    let objects = colors(&mut e, 5);
+    // Type 3: the third colour; r g b's low bytes, alpha 255; then the menus refreshed.
+    assert_eq!(
+        call(&mut e, 0x2881, &[n(3), n(0x112), n(0x34), n(0x5678)]).1,
+        0.0
+    );
+    assert_eq!(calls_to(SET_COLOR_FN), vec![vec![objects[2], 0x1234_78ff]]);
+    assert_eq!(calls_to(REFRESH_COLOR_FN), vec![vec![t(0), 3, 0]]);
+    // Each argument in its place: type 1 and 5 are the first and the last.
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2881, &[n(1), n(1), n(2), n(3)]);
+    call(&mut e, 0x2881, &[n(5), n(0xff), n(0), n(0x80)]);
+    assert_eq!(
+        calls_to(SET_COLOR_FN),
+        vec![vec![objects[0], 0x0102_03ff], vec![objects[4], 0xff00_80ff]]
+    );
+    // Type 0 or above 5 (6, and -1 as unsigned): nothing.
+    CALLS.with(|c| c.borrow_mut().clear());
+    for kind in [0, 6, -1] {
+        call(&mut e, 0x2881, &[n(kind), n(1), n(2), n(3)]);
+    }
+    assert!(calls().is_empty());
+    // Fewer colours than the type: nothing.
+    colors(&mut e, 2);
+    call(&mut e, 0x2881, &[n(3), n(1), n(2), n(3)]);
+    assert!(calls().is_empty());
+    // No manager: nothing.
+    e.mem.set_u32(0x011d_8a88, 0);
+    call(&mut e, 0x2881, &[n(1), n(1), n(2), n(3)]);
+    assert!(calls().is_empty());
+}
+
+/// The player's light: `IsSpellTarget` answers the byte at `SPELL + 0x80`.
+fn pipboy(e: &mut Engine) {
+    e.map(0x011c_3000, 0x1000);
+    e.mem.set_u32(0x011c_358c, SPELL);
+    e.mem.set_u32(IM + 0x174, PIPBOY);
+    e.mem.set_u32(PC + 0x88, CASTER_VT);
+    e.mem.set_u32(CASTER_VT, CAST_FN);
+    e.register(IS_TARGET_FN, |e, w| {
+        record(IS_TARGET_FN, w);
+        eax(0xabcd_ef00 | u32::from(e.mem.u8(SPELL + 0x80)))
+    });
+    e.register(CAST_FN, |_, w| {
+        record(CAST_FN, w);
+        eax(0)
+    });
+    e.register(DISPEL_FN, |_, w| {
+        record(DISPEL_FN, w);
+        eax(0)
+    });
+    e.register(SHOW_LIGHT_FN, |_, w| {
+        record(SHOW_LIGHT_FN, w);
+        eax(0)
+    });
+}
+
+#[test]
+fn toggle_pipboy_light_cmd_toggles() {
+    let mut e = setup();
+    pipboy(&mut e);
+    // Off: 0; asked of the player's MagicTarget with the spell's MagicItem.
+    assert_eq!(call(&mut e, 0x28ac, &[]).1, 0.0);
+    assert_eq!(
+        calls_to(IS_TARGET_FN),
+        vec![vec![PC + 0x94, SPELL + 0x18, 1]]
+    );
+    // On (the low byte only): 1; no argument: no change.
+    e.mem.set_u8(SPELL + 0x80, 1);
+    assert_eq!(call(&mut e, 0x28ac, &[]).1, 1.0);
+    // The same state asked: nothing done.
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(call(&mut e, 0x28ac, &[n(1)]).1, 1.0);
+    assert_eq!(ids(), vec![IS_TARGET_FN]);
+    // Off asked while on: dispelled, then the effect shown (1, 0, 1) and (0, 0, 1).
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x28ac, &[n(0)]);
+    assert_eq!(
+        calls_to(DISPEL_FN),
+        vec![vec![PC + 0x94, SPELL + 0x18, 0, 0]]
+    );
+    assert_eq!(
+        calls_to(SHOW_LIGHT_FN),
+        vec![vec![PIPBOY, 1, 0, 1], vec![PIPBOY, 0, 0, 1]]
+    );
+    assert!(calls_to(CAST_FN).is_empty());
+    assert_eq!(
+        ids(),
+        vec![IS_TARGET_FN, DISPEL_FN, SHOW_LIGHT_FN, SHOW_LIGHT_FN]
+    );
+    // 2 while on differs (compared whole): cast (the spell, 0), then shown with 2.
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x28ac, &[n(2)]);
+    assert_eq!(calls_to(CAST_FN), vec![vec![PC + 0x88, SPELL, 0]]);
+    assert_eq!(
+        calls_to(SHOW_LIGHT_FN),
+        vec![vec![PIPBOY, 1, 2, 1], vec![PIPBOY, 0, 2, 1]]
+    );
+    assert!(calls_to(DISPEL_FN).is_empty());
+    // On asked while off: cast.
+    e.mem.set_u8(SPELL + 0x80, 0);
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(call(&mut e, 0x28ac, &[n(1)]).1, 0.0);
+    assert_eq!(calls_to(CAST_FN).len(), 1);
+    // No Pip-Boy manager: cast, no effect shown.
+    e.mem.set_u32(IM + 0x174, 0);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x28ac, &[n(1)]);
+    assert_eq!(ids(), vec![IS_TARGET_FN, CAST_FN]);
+    // No spell: nothing.
+    e.mem.set_u32(0x011c_358c, 0);
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(call(&mut e, 0x28ac, &[n(1)]).1, 0.0);
+    assert!(calls().is_empty());
+}
+
+fn c2_locals(e: &mut Engine, n: u32) {
+    for i in 0..n {
+        let local = C2_LOCALS + 0x100 + i * 0x10;
+        e.mem.set_u32(local, i + 1);
+        e.mem.set_f64(local + 8, -1.0);
+        let node = C2_LOCALS + i * 8;
+        e.mem.set_u32(node, local);
+        e.mem
+            .set_u32(node + 4, if i + 1 < n { node + 8 } else { 0 });
+    }
+    e.mem.set_u32(crate::test_support::LIST + 0xc, C2_LOCALS);
+}
+
+fn local_value(e: &Engine, id: u32) -> f64 {
+    e.mem.f64(C2_LOCALS + 0x100 + (id - 1) * 0x10 + 8)
+}
+
+/// A script local variable argument (`f` and its id).
+fn var(id: u16) -> Vec<u8> {
+    let mut b = vec![b'f'];
+    b.extend_from_slice(&id.to_le_bytes());
+    b
+}
+
+#[test]
+fn string_ui_dimensions() {
+    let mut e = setup();
+    c2_locals(&mut e, 3);
+    e.mem.set_u32(0x011f_33f8, FONTS);
+    e.register(DIMS_FN, |e, w| {
+        record(DIMS_FN, w);
+        let text = nvse::table::guest_text(e, w[2]);
+        assert_eq!(text, b"Hello");
+        e.mem.set_f32(w[1], 30.5);
+        e.mem.set_f32(w[1] + 4, 12.0);
+        e.mem.set_f32(w[1] + 8, 2.0);
+        eax(w[1])
+    });
+    let args = |wrap: f64| [s(b"Hello"), n(3), z(wrap), var(1), var(2), var(3)];
+    assert_eq!(call(&mut e, 0x2927, &args(100.0)).1, 0.0, "no result");
+    let w = &calls_to(DIMS_FN)[0];
+    assert_eq!(
+        (w[0], w[3], f32::from_bits(w[4]), w[5]),
+        (FONTS, 3, 100.0, 0)
+    );
+    assert_eq!([1, 2, 3].map(|i| local_value(&e, i)), [30.5, 12.0, 2.0]);
+    // A wrap width of 0 or below: FLT_MAX.
+    for wrap in [0.0, -5.0] {
+        CALLS.with(|c| c.borrow_mut().clear());
+        call(&mut e, 0x2927, &args(wrap));
+        assert_eq!(f32::from_bits(calls_to(DIMS_FN)[0][4]), f32::MAX);
+    }
+    // The variables in their order.
+    call(
+        &mut e,
+        0x2927,
+        &[s(b"Hello"), n(3), z(1.0), var(3), var(1), var(2)],
+    );
+    assert_eq!([3, 1, 2].map(|i| local_value(&e, i)), [30.5, 12.0, 2.0]);
+    // No font manager: nothing.
+    e.mem.set_u32(0x011f_33f8, 0);
+    c2_locals(&mut e, 3);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2927, &args(1.0));
+    assert!(calls_to(DIMS_FN).is_empty());
+    assert_eq!(local_value(&e, 1), -1.0);
+}
+
+#[test]
+fn message_tokens() {
+    // No bar: all of it is the message.
+    assert_eq!(
+        split_message(b"Hello"),
+        (b"Hello".to_vec(), Icon::None, None)
+    );
+    // An icon path, a sound, then the message.
+    assert_eq!(
+        split_message(b"icons\\a.dds|$UIPopUp|Hi there"),
+        (
+            b"Hi there".to_vec(),
+            Icon::Text(b"icons\\a.dds".to_vec()),
+            Some(b"UIPopUp".to_vec())
+        )
+    );
+    // `#n`: the exe's icons 0 to 6; another `#` token leaves the icon as it was.
+    assert_eq!(split_message(b"#0|m").1, Icon::Exe(0x0102_08a0));
+    assert_eq!(split_message(b"#6|m").1, Icon::Exe(0x0104_bfe8));
+    assert_eq!(split_message(b"#3x|m").1, Icon::Exe(0x0103_0e78));
+    assert_eq!(split_message(b"#7|m").1, Icon::None);
+    assert_eq!(split_message(b"#|m").1, Icon::None);
+    assert_eq!(split_message(b"#/|m").1, Icon::None);
+    assert_eq!(split_message(b"a|#9|m").1, Icon::Text(b"a".to_vec()));
+    // A later icon replaces an earlier one; runs of bars are one.
+    assert_eq!(
+        split_message(b"#1||b|||m"),
+        (b"m".to_vec(), Icon::Text(b"b".to_vec()), None)
+    );
+    // A trailing bar: the token before it is the message (nothing after it).
+    assert_eq!(
+        split_message(b"$s|msg|"),
+        (b"msg".to_vec(), Icon::None, Some(b"s".to_vec()))
+    );
+    // An empty token is an empty icon path.
+    assert_eq!(split_message(b"|m").1, Icon::Text(Vec::new()));
+    // The message cut to 0x203 bytes.
+    let long = vec![b'x'; 0x300];
+    assert_eq!(split_message(&long).0.len(), 0x203);
+}
+
+#[test]
+fn message_ex_alt_queues() {
+    let mut e = setup();
+    e.register(QUEUE_FN, |e, w| {
+        record(QUEUE_FN, w);
+        // The texts on the stack: the message, a text icon (not the exe's), the sound.
+        let texts: Vec<Vec<u8>> = [w[0], w[2], w[3]]
+            .iter()
+            .map(|&p| {
+                if p == 0 || MESSAGE_ICONS.contains(&p) {
+                    b"(none)".to_vec()
+                } else {
+                    nvse::table::guest_text(e, p)
+                }
+            })
+            .collect();
+        CALLS.with(|c| {
+            for t in texts {
+                let mut words = vec![t.len() as u32];
+                words.extend(t.iter().map(|&b| u32::from(b)));
+                c.borrow_mut().push((0xfeed, words));
+            }
+        });
+        eax(1)
+    });
+    let texts = || -> Vec<Vec<u8>> {
+        calls_to(0xfeed)
+            .into_iter()
+            .map(|w| w[1..].iter().map(|&b| b as u8).collect())
+            .collect()
+    };
+    // The seconds (argument 0) as a float; icon type 0, last byte 0. No result.
+    assert_eq!(
+        call(&mut e, 0x2738, &[z(3.5), s(b"#2|$snd|Hello %g"), z(5.0)]).1,
+        0.0
+    );
+    let w = &calls_to(QUEUE_FN)[0];
+    assert_eq!(
+        (w[1], w[2], f32::from_bits(w[4]), w[5]),
+        (0, 0x0102_5cdc, 3.5, 0)
+    );
+    assert_eq!(
+        texts(),
+        vec![b"Hello 5".to_vec(), b"(none)".to_vec(), b"snd".to_vec()]
+    );
+    // A text icon, no sound.
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2738, &[z(1.0), s(b"my.dds|msg")]);
+    let w = &calls_to(QUEUE_FN)[0];
+    assert_eq!((w[3], f32::from_bits(w[4])), (0, 1.0), "no sound");
+    assert_eq!(
+        texts(),
+        vec![b"msg".to_vec(), b"my.dds".to_vec(), b"(none)".to_vec()]
+    );
+    // Only a message: no icon, no sound.
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2738, &[z(1.0), s(b"plain")]);
+    let w = &calls_to(QUEUE_FN)[0];
+    assert_eq!((w[2], w[3]), (0, 0));
+    assert_eq!(texts()[0], b"plain");
+}

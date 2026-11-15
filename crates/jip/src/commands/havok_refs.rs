@@ -268,7 +268,7 @@ pub(crate) fn child_nodes(e: &Engine, node: u32, walk: &mut Walk) -> Vec<u32> {
 }
 
 /// The C text at `text`, `None` without an end within [`MAX_NAME`] readable bytes.
-fn c_text(e: &Engine, text: u32) -> Option<Vec<u8>> {
+pub(crate) fn c_text(e: &Engine, text: u32) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for i in 0..MAX_NAME {
         match rd8(e, text.wrapping_add(i))? {
