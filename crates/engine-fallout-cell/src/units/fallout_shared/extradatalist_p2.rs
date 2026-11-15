@@ -1537,6 +1537,18 @@ pub fn fn_0041c7c0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
     }
 }
 
+/// `TESObjectREFR::GetRefPersists` (`005653d0`) of `reference`, called at `site`. JIP LN NVSE's
+/// fix for temporary forms (step 3.9 GH1, G61: `WriteRelCall(site, IsPersistentHook)`) answers
+/// false for one while its row is on. One load while off.
+fn ref_persists(e: &mut Engine, site: u32, reference: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(persists) = e.site(site, &[reference]) {
+            return persists != 0;
+        }
+    }
+    e.call(GET_REF_PERSISTS, &args![reference]).bool()
+}
+
 // Translated from 0041c7f0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Sets the `pRef` (+0x0C) of the type `0x1C` extra data
 /// (`ExtraReferencePointer`, `0x10` bytes, built by `004327e0`). Acts only
@@ -1548,7 +1560,7 @@ pub fn fn_0041c7c0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
 pub fn fn_0041c7f0(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
     let save_load_game = e.global::<u32>(SAVE_LOAD_GAME);
     let stub = e.call(SAVE_LOAD_GAME_STUB, &args![save_load_game]).bool();
-    if !stub && reference != 0 && !e.call(GET_REF_PERSISTS, &args![reference]).bool() {
+    if !stub && reference != 0 && !ref_persists(e, 0x0041_c833, reference) {
         return;
     }
     let extra = find_extra(e, this, EXTRA_REFERENCE_POINTER);
@@ -5053,5 +5065,48 @@ mod tests {
         assert_eq!(seen.len(), 4);
         assert_eq!(answers(&seen), vec![1, 1, 1]);
         ANSWER.with(|v| v.set(Some(1)));
+    }
+
+    thread_local! {
+        static GH1_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static GH1_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_41c833(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        GH1_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        GH1_ANSWER.with(|v| v.get())
+    }
+
+    /// JIP LN NVSE's fix for temporary forms (step 3.9 GH1, G61) at `0041c7f0`'s call of
+    /// `GetRefPersists`: off (the word clear, JIP's own bit alone) the exe's call (a persisting
+    /// reference gets its extra); with the fix row the seam is asked with the reference and an
+    /// answer of false stands for the call (nothing built); no answer: the exe's call.
+    #[test]
+    fn jip_gh1_persists_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = engine();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0041_c833), at_41c833);
+            e.set_jip_patches(word);
+            GH1_ANSWER.with(|v| v.set(answer));
+            e.set_global::<u32>(SAVE_LOAD_GAME, 0x5000);
+            e.register(GET_REF_PERSISTS, |_, a| returns((a[0] == 0x7000) as u32));
+            let (list, _) = list_with(&mut e, &[]);
+            let log = logged(&mut e, |e| {
+                e.call(0x0041_c7f0, &args![list, 0x7000u32]);
+            });
+            (
+                calls_to(&log, GET_REF_PERSISTS).len(),
+                sorted_types(&e, list).len(),
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, Some(0)), (1, 1), "{word:x}");
+            assert!(GH1_ASKED.with(|s| s.take()).is_empty());
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(on, Some(0)), (0, 0));
+        assert_eq!(GH1_ASKED.with(|s| s.take()), vec![vec![0x7000]]);
+        assert_eq!(run(on, None), (1, 1));
     }
 }
