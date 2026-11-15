@@ -9302,13 +9302,13 @@ const DEAD_ZONE_DOUBLE: u32 = 0x0107_18f0;
 /// is not above the dead zone 7849.0 (the double at `010718f0`).
 ///
 /// JIP LN NVSE's D04 (group GB's rows and handlers): `site` is the patched `FCOMP`'s operand
-/// (`0x94A93C`, `0x94A95F` the look axes under `FIXES`; `0x94AB59`, `0x94AB88` the move axes
-/// under `INSTALLED`, `bit`); with the bit set the seam (no arguments) may answer the guest
-/// address of the double to compare with (JIP's dead zones), else the exe's. One load while
-/// JIP is not installed.
-fn ufo_dead_zone(e: &mut Engine, value: i32, site: u32, bit: u32) -> i32 {
+/// (`0x94A93C`, `0x94A95F` the look axes, `0x94AB59`, `0x94AB88` the move axes); with
+/// `INSTALLED` (all four, GB's rows) the seam (no arguments) may answer the guest address of
+/// the double to compare with (JIP's dead zones), else the exe's. One load while JIP is not
+/// installed.
+fn ufo_dead_zone(e: &mut Engine, value: i32, site: u32) -> i32 {
     let size = e.call(0x0040_8820, &args![value as f32]).f64();
-    let at = if e.jip_patches() & bit != 0 {
+    let at = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
         e.site(site, &[]).unwrap_or(DEAD_ZONE_DOUBLE)
     } else {
         DEAD_ZONE_DOUBLE
@@ -9354,18 +9354,8 @@ fn ufo_camera_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: u32) {
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         look_x = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
         look_y = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
-        look_x = ufo_dead_zone(
-            e,
-            look_x,
-            0x0094_a93c,
-            engine_core::extend::jip_patches::FIXES,
-        );
-        look_y = ufo_dead_zone(
-            e,
-            look_y,
-            0x0094_a95f,
-            engine_core::extend::jip_patches::FIXES,
-        );
+        look_x = ufo_dead_zone(e, look_x, 0x0094_a93c);
+        look_y = ufo_dead_zone(e, look_y, 0x0094_a95f);
     } else {
         look_x = e.call(0x00a2_39e0, &args![input, 1u32]).i32();
         look_y = e.call(0x00a2_39e0, &args![input, 2u32]).i32();
@@ -9425,20 +9415,10 @@ fn ufo_camera_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: u32) {
     if e.call(0x004b_71d0, &args![]).u8() != 0 {
         let mut stick_x = e.call(0x00a2_3390, &args![input, 0u32, 7u32]).i32();
         let mut stick_y = e.call(0x00a2_3390, &args![input, 0u32, 8u32]).i32();
-        stick_x = ufo_dead_zone(
-            e,
-            stick_x,
-            0x0094_ab59,
-            engine_core::extend::jip_patches::INSTALLED,
-        );
+        stick_x = ufo_dead_zone(e, stick_x, 0x0094_ab59);
         let range = e.global::<f64>(0x0102_9790);
         let move_x = (stick_x as f64 / range) as f32;
-        stick_y = ufo_dead_zone(
-            e,
-            stick_y,
-            0x0094_ab88,
-            engine_core::extend::jip_patches::INSTALLED,
-        );
+        stick_y = ufo_dead_zone(e, stick_y, 0x0094_ab88);
         let move_y = (stick_y as f64 / range) as f32;
         let speed = e.global::<f64>(0x0101_5a38);
         let x = (move_x as f64 * speed + e.mem.f32(movement) as f64) as f32;
@@ -19108,21 +19088,15 @@ mod tests {
     }
 
     /// JIP LN NVSE's D04 seams in the free camera (group GB's rows and handlers; the format of
-    /// GROUP-GB-NOTES "D04 seam format for GP"): the look axes `0x94A93C`, `0x94A95F` under
-    /// `FIXES`, the move axes `0x94AB59`, `0x94AB88` under `INSTALLED`. With the bit set the
-    /// answer is the address of the double compared with (20000: 10000 zeroed; 0: kept); with
-    /// the word 0 or only the other bit the seam is not asked and the exe's 7849 decides
+    /// GROUP-GB-NOTES "D04 seam format for GP"): the look axes `0x94A93C`, `0x94A95F` and the move
+    /// axes `0x94AB59`, `0x94AB88`, all under `INSTALLED`. With it set the answer is the address
+    /// of the double compared with (20000: 10000 zeroed; 0: kept); with the word 0 or only
+    /// `FIXES` the seam is not asked and the exe's 7849 decides
     /// (10000 kept, 5000 zeroed); no handler (the row not on main yet): the exe's.
     #[test]
     fn ufo_dead_zone_jip_seams() {
         use engine_core::extend::jip_patches::{FIXES, INSTALLED};
-        let sites = [
-            (0x0094_a93cu32, FIXES, INSTALLED),
-            (0x0094_a95f, FIXES, INSTALLED),
-            (0x0094_ab59, INSTALLED, FIXES),
-            (0x0094_ab88, INSTALLED, FIXES),
-        ];
-        for (site, bit, other) in sites {
+        for site in [0x0094_a93cu32, 0x0094_a95f, 0x0094_ab59, 0x0094_ab88] {
             let mut e = engine();
             map_exe_data(&mut e);
             e.set_global(DEAD_ZONE_DOUBLE, 7849.0f64);
@@ -19130,14 +19104,14 @@ mod tests {
             let double = e.mem.alloc(8);
             DEAD_ZONE_AT.with(|c| c.set(double));
             // No handler: the exe's double.
-            e.set_jip_patches(bit);
-            assert_eq!(ufo_dead_zone(&mut e, 10000, site, bit), 10000);
-            assert_eq!(ufo_dead_zone(&mut e, -5000, site, bit), 0);
+            e.set_jip_patches(INSTALLED);
+            assert_eq!(ufo_dead_zone(&mut e, 10000, site), 10000);
+            assert_eq!(ufo_dead_zone(&mut e, -5000, site), 0);
             e.on_site_for_test(site, dead_zone_never);
-            for word in [0, other] {
+            for word in [0, FIXES] {
                 e.set_jip_patches(word);
-                assert_eq!(ufo_dead_zone(&mut e, 10000, site, bit), 10000, "{site:#x}");
-                assert_eq!(ufo_dead_zone(&mut e, 5000, site, bit), 0);
+                assert_eq!(ufo_dead_zone(&mut e, 10000, site), 10000, "{site:#x}");
+                assert_eq!(ufo_dead_zone(&mut e, 5000, site), 0);
             }
             let mut e2 = engine();
             map_exe_data(&mut e2);
@@ -19146,12 +19120,12 @@ mod tests {
             let double = e2.mem.alloc(8);
             DEAD_ZONE_AT.with(|c| c.set(double));
             e2.on_site_for_test(site, dead_zone_answer);
-            e2.set_jip_patches(bit);
+            e2.set_jip_patches(INSTALLED);
             e2.mem.set_f64(double, 20000.0);
-            assert_eq!(ufo_dead_zone(&mut e2, 10000, site, bit), 0, "{site:#x}");
-            assert_eq!(ufo_dead_zone(&mut e2, -10000, site, bit), 0);
+            assert_eq!(ufo_dead_zone(&mut e2, 10000, site), 0, "{site:#x}");
+            assert_eq!(ufo_dead_zone(&mut e2, -10000, site), 0);
             e2.mem.set_f64(double, 0.0);
-            assert_eq!(ufo_dead_zone(&mut e2, 5000, site, bit), 5000);
+            assert_eq!(ufo_dead_zone(&mut e2, 5000, site), 5000);
         }
     }
 

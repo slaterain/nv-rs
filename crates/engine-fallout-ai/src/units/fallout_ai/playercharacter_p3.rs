@@ -1699,7 +1699,8 @@ pub fn fn_0095f6c0(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32) {
     }
     // JIP LN NVSE's G06 at `0x0095F7FE` (group GH2's row and handler; JIP's own): the seam
     // with the target answers whether its base is an ash pile (JIP's form flag), in place of
-    // the exe's two compares with the ash and goo pile activators: 1 stops here, 0 goes on.
+    // the exe's two compares with the ash and goo pile activators: a low byte of 1 (an ash pile)
+    // stops here, 0 goes on (GH2's format).
     // One load while JIP is not installed.
     let jip_ash_pile = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
         e.site(0x0095_f7fe, &[target])
@@ -1707,8 +1708,8 @@ pub fn fn_0095f6c0(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32) {
         None
     };
     match jip_ash_pile {
-        Some(0) => {}
-        Some(_) => return,
+        Some(answer) if answer & 0xff != 0 => return,
+        Some(_) => {}
         None => {
             let target_kind = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, target));
             if target_kind == e.global::<u32>(POINTER_011CA27C) {
@@ -10447,10 +10448,15 @@ mod tests {
         Some(0)
     }
 
+    fn ash_pile_high(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(0x100)
+    }
+
     /// JIP LN NVSE's G06 seam (`0x0095F7FE`, group GH2's row and handler; JIP's own): with the
     /// word 0 or `FIXES` alone it is not asked and the exe's two compares decide (an ash or goo
     /// pile activator stops the grab before the 3D is asked: slot `+0x1D0`); with `INSTALLED`
-    /// its answer decides instead (0: an ash pile base goes on; 1: another base stops); no
+    /// its answer's low byte decides instead (0 or 0x100: an ash pile base goes on; 1: another
+    /// base stops); no
     /// handler (the row not on main yet): the exe's compares.
     #[test]
     fn grab_update_jip_ash_pile_seam() {
@@ -10508,6 +10514,7 @@ mod tests {
         assert_eq!(run(installed, 0x3333, None), 1);
         assert_eq!(run(installed, 0x1111, Some(ash_pile_no)), 1);
         assert_eq!(run(installed, 0x3333, Some(ash_pile_yes)), 0);
+        assert_eq!(run(installed, 0x1111, Some(ash_pile_high)), 1, "the low byte decides");
     }
 
     /// A grabbed object (an object with vtable slots 0x100, 0x224, 0x1d0,
