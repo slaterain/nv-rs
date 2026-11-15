@@ -681,7 +681,16 @@ pub fn fn_0040f900(e: &mut Engine) {
 /// True for the extra data types that `AddExtra` puts at the head of the
 /// chain instead of the end: `0x0C`, `0x0D`, `0x0E`, `0x15` and `0x2B`
 /// (a jump table in the exe).
-pub fn fn_0040f980(_e: &mut Engine, extra_type: u32) -> bool {
+///
+/// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44: `SafeWrite8(0x40F9D7, 0)`) adds `0x27`,
+/// its keyed data's type, while JIP answers "installed": the seam answers in place of the table's
+/// entry. One load while JIP is not installed.
+pub fn fn_0040f980(e: &mut Engine, extra_type: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 && extra_type == 0x27 {
+        if let Some(head) = e.site(0x0040_f9d7, &[extra_type]) {
+            return head != 0;
+        }
+    }
     matches!(extra_type, 0x0c | 0x0d | 0x0e | 0x15 | 0x2b)
 }
 
@@ -1147,11 +1156,36 @@ pub fn extra_data_list_add_extra_copy(
     this: Ptr<ExtraDataList>,
     extra: Ptr<BSExtraData>,
 ) {
+    add_extra_copy_from(e, this, extra, 0, 0);
+}
+
+/// `AddExtraCopy` as called from `caller` (the exe's return address of the call, 0 for any call
+/// JIP does not tell apart) with that caller's second argument `caller_flag`: the two words JIP
+/// LN NVSE's ExtraJIPCreateCopyHook reads from the frame (`[ebp+4]`, `[[ebp]+0xC]`) to decide
+/// whether an ExtraJIP's keyed data is moved or copied (step 3.9 GH1, G44). Only
+/// `CopyListForContainer` (`0x412250`) and `CopyListForReference` (`0x412523`) pass theirs.
+pub(crate) fn add_extra_copy_from(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    extra: Ptr<BSExtraData>,
+    caller: u32,
+    caller_flag: u32,
+) {
     if extra.is_null() || !e.call(0x0041_1f20, &args![this, extra]).bool() {
         return;
     }
     let extra_type = get_type(e, extra);
     let list = this.addr();
+    // JIP's ExtraJIP framework writes its own arm into the jump table word of type 0x27
+    // (`SafeWrite32(0x411978, ExtraJIPCreateCopyHook)`) while JIP answers "installed": the seam
+    // does the arm. One load while JIP is not installed.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && extra_type == 0x27
+        && e.site(0x0041_1978, &[list, extra.addr(), caller, caller_flag])
+            .is_some()
+    {
+        return;
+    }
 
     if let Some(&(_, setter)) = COPY_WORD.iter().find(|entry| entry.0 == extra_type) {
         let word = payload(e, extra, 0x0c);
@@ -1828,7 +1862,8 @@ pub fn extra_data_list_copy_list_for_container(
             }
             0x16 | 0x17 | 0x1c | 0x21 | 0x22 | 0x23 | 0x25 | 0x26 | 0x27 | 0x28 | 0x2f | 0x30
             | 0x3f | 0x47 | 0x4a | 0x8d => {
-                extra_data_list_add_extra_copy(e, this, current);
+                // The call returning to `0x412250`.
+                add_extra_copy_from(e, this, current, 0x0041_2250, copy_only as u32);
                 if get_type(e, current) != 0x30 && !copy_only {
                     base_extra_list_remove_extra(e, source.cast(), current, true);
                     current = e.get(source, ExtraDataList::pHead).cast();
@@ -1930,7 +1965,8 @@ pub fn extra_data_list_copy_list_for_reference(
             }
             0x16 | 0x1c | 0x21 | 0x22 | 0x23 | 0x25 | 0x26 | 0x27 | 0x28 | 0x2f | 0x30 | 0x3f
             | 0x8d => {
-                extra_data_list_add_extra_copy(e, this, current);
+                // The call returning to `0x412523`.
+                add_extra_copy_from(e, this, current, 0x0041_2523, remove_from_source as u32);
                 if remove_from_source {
                     base_extra_list_remove_extra(e, source.cast(), current, true);
                     current = e.get(source, ExtraDataList::pHead).cast();
@@ -12169,5 +12205,118 @@ mod tests {
     #[test]
     fn weapon_attack_sound_setter() {
         check_sound_setter(0x0041_a540, 0x86, EXTRA_WEAPON_ATTACK_SOUND_INIT);
+    }
+
+    thread_local! {
+        /// The JIP seams asked (address, words) and what their handler answers.
+        static JIP_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static JIP_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(Some(1)) };
+    }
+
+    fn at_head(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_ASKED.with(|s| s.borrow_mut().push((0x0040_f9d7, a.to_vec())));
+        JIP_ANSWER.with(|v| v.get())
+    }
+
+    fn at_copy(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_ASKED.with(|s| s.borrow_mut().push((0x0041_1978, a.to_vec())));
+        JIP_ANSWER.with(|v| v.get())
+    }
+
+    /// The type 0x27 setter of `AddExtraCopy` (`ExtraTimeLeft`'s, `COPY_FLOAT`).
+    const TIME_LEFT_SETTER: u32 = 0x0041_9bb0;
+
+    /// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44), the head-of-chain entry
+    /// (`0x40F9D7`): with the word clear or only the fix bits, type 0x27 is not asked and goes
+    /// at the end; with `INSTALLED` it is asked with the type and its answer decides (no answer:
+    /// the table's); the other types are never asked.
+    #[test]
+    fn jip_extra_jip_head_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = extra_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0040_f9d7), at_head);
+        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
+            e.set_jip_patches(word);
+            assert!(!fn_0040f980(&mut e, 0x27));
+            assert!(fn_0040f980(&mut e, 0x0c));
+        }
+        assert!(JIP_ASKED.with(|s| s.take()).is_empty());
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert!(fn_0040f980(&mut e, 0x27));
+        assert!(fn_0040f980(&mut e, 0x2b));
+        assert!(!fn_0040f980(&mut e, 0x24));
+        assert!(!fn_0040f980(&mut e, 0x28));
+        assert_eq!(
+            JIP_ASKED.with(|s| s.take()),
+            vec![(0x0040_f9d7, vec![0x27])]
+        );
+        JIP_ANSWER.with(|v| v.set(Some(0)));
+        assert!(!fn_0040f980(&mut e, 0x27));
+        JIP_ANSWER.with(|v| v.set(None));
+        assert!(!fn_0040f980(&mut e, 0x27));
+        JIP_ANSWER.with(|v| v.set(Some(1)));
+        JIP_ASKED.with(|s| s.take());
+    }
+
+    /// The copy arm (`0x411978`): with the word clear or only the fix bits a type 0x27 copy is the
+    /// exe's (its setter, no seam); with `INSTALLED` the seam is asked with the list, the extra,
+    /// and the caller's return address and second argument: 0 and 0 for a call by address,
+    /// `0x412250` and `copy_only` from `CopyListForContainer`, `0x412523` and
+    /// `remove_from_source` from `CopyListForReference`; an answer replaces the setter, none
+    /// leaves it; another type is not asked.
+    #[test]
+    fn jip_extra_jip_copy_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = list_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_1978), at_copy);
+        let target = copy_list(&mut e);
+        let extra = extra_of_type(&mut e, 0x27);
+        e.mem.set_u32(extra.addr() + 0x0c, 2.5f32.to_bits());
+        let setter_calls = |e: &mut Engine, run: &dyn Fn(&mut Engine)| {
+            e.call_log = Some(vec![]);
+            run(e);
+            calls_to(&e.call_log.take().unwrap(), TIME_LEFT_SETTER).len()
+        };
+        let direct = |e: &mut Engine| {
+            e.call(0x0041_03d0, &args![target, extra]);
+        };
+        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
+            e.set_jip_patches(word);
+            assert_eq!(setter_calls(&mut e, &direct), 1);
+        }
+        assert!(JIP_ASKED.with(|s| s.take()).is_empty());
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert_eq!(setter_calls(&mut e, &direct), 0);
+        assert_eq!(
+            JIP_ASKED.with(|s| s.take()),
+            vec![(0x0041_1978, vec![target.addr(), extra.addr(), 0, 0])]
+        );
+        for (function, flag, caller) in [
+            (0x0041_21e0u32, 1u32, 0x0041_2250u32),
+            (0x0041_21e0, 0, 0x0041_2250),
+            (0x0041_2490, 0, 0x0041_2523),
+            (0x0041_2490, 1, 0x0041_2523),
+        ] {
+            let (source, extras) = list_with(&mut e, &[0x27]);
+            e.call(function, &args![target, source, flag]);
+            assert_eq!(
+                JIP_ASKED.with(|s| s.take()),
+                vec![(
+                    0x0041_1978,
+                    vec![target.addr(), extras[0].addr(), caller, flag]
+                )],
+                "{function:08x} {flag}"
+            );
+        }
+        JIP_ANSWER.with(|v| v.set(None));
+        assert_eq!(setter_calls(&mut e, &direct), 1);
+        JIP_ANSWER.with(|v| v.set(Some(0)));
+        assert_eq!(setter_calls(&mut e, &direct), 0, "any answer");
+        JIP_ANSWER.with(|v| v.set(Some(1)));
+        JIP_ASKED.with(|s| s.take());
+        let other = extra_of_type(&mut e, 0x30);
+        e.call(0x0041_03d0, &args![target, other]);
+        assert!(JIP_ASKED.with(|s| s.take()).is_empty());
     }
 }
