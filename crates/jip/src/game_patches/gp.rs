@@ -30,12 +30,37 @@
 //! lights (`AddPointLights`, for a node JIP's light hooks flagged `0x20000000`): none of those
 //! commands or hooks is built, so nothing sets what they test. The first-person node JIP keeps
 //! (`s_pc1stPersonNode`) is kept here ([`first_person_node`]) for `AttachLine` and kin.
+//!
+//! **Fix rows** (`InitGamePatches`; in with the row `NV_JIP_GAME_PATCHES`, `jip_patches::FIXES`):
+//! - G26 "Ignore disabled MusicMarkers" (`0x9699C5`): the closest music marker passes a
+//!   disabled marker over, and reads a marker's position at `+0x30`;
+//! - G72 (`0x947DD2`, `BuildMusicMarkerListHook`): the player's music markers come from JIP's
+//!   cache of the world space's markers, sorted by their media location controller;
+//! - G105 (`0x93B87F`, `DamagePCFatigueMinFixHook`): fatigue damage to the player stops at
+//!   `fMinFatigue`.
+//!
+//! **JIP's own** (in whenever JIP answers "installed"):
+//! - G114 (`0x969C41`, `ModHardcoreNeedsHook`): with the switch `bHardcoreNeedsFix` (O6) the
+//!   hardcore needs take their pending changes, never below 0; `ToggleHardcoreTracking 0` keeps
+//!   the hardcore timers resetting (no needs build up);
+//! - G122 (slot `0x108A9B4`, `PlayerCannotBeHitHook`): immortal mode 2 (`ToggleImmortalMode 2`)
+//!   makes the player unhittable as god mode does; mode 1 keeps him at 1 health (the
+//!   PlayerMinHealth hook, `crate::world_hooks`). The hit effects JIP turns off in mode 2 are
+//!   the hit effect patches' (G123 to G125): [`disable_hit_effects`] keeps the word they read.
+//!
+//! Seams in GP's translations for other groups' rows (no handler here): D04's four dead zones
+//! in the free camera (GB), G06's ash pile test in the grab (GH2), G75's hotkey clear in the
+//! player's pick-up (GH1).
 
 use super::slots::{self, Group};
 use super::Area;
-use engine_core::extend::{Owner, SiteSlot};
+use crate::Jip;
+use engine_core::extend::{jip_patches, Hook, Owner, SiteSlot};
 use engine_core::prelude::*;
+use nvse::commands::Read;
+use nvse::{handled, CommandArgs};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 
 /// G38's seams in `PlayerCharacter::Load3D`: the first-person model's load, the eye height.
 pub const FIRST_PERSON_MODEL: SiteSlot = SiteSlot::new(Owner::Jip, 0x0094_e4a1);
@@ -48,13 +73,47 @@ pub const QUEUED_PLAYER_SLOT: u32 = 0x0101_6db8;
 pub const QUEUED_REFERENCE_ROUTINE: u32 = slots::routine(Group::GP, 0);
 pub const QUEUED_PLAYER_ROUTINE: u32 = slots::routine(Group::GP, 1);
 
+/// G105's seam in the player's float actor value change (`0093b7a0` at `0x93B87F`): the actor
+/// value, the value read before the change and the change (`f32` bits).
+pub const FATIGUE_FLOOR: SiteSlot = SiteSlot::new(Owner::Jip, 0x0093_b87f);
+/// G72's seam in the music marker list's rebuild (`00947d80` at `0x947DD2`): the world space
+/// and its marker list.
+pub const MUSIC_MARKER_LIST: SiteSlot = SiteSlot::new(Owner::Jip, 0x0094_7dd2);
+/// G26's seam in the closest music marker's search (`00969930` at `0x9699C5`): the marker's
+/// reference.
+pub const MUSIC_MARKER: SiteSlot = SiteSlot::new(Owner::Jip, 0x0096_99c5);
+/// G114's seam in `PlayerCharacter::UpdateHardcoreMode` (`00969c30` at `0x969C41`): the player.
+pub const HARDCORE_NEEDS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0096_9c41);
+/// G122: the player's `MagicTarget` vtable slot JIP writes `PlayerCannotBeHitHook` into (it
+/// held `0x952720`, reached only through this slot: `get_xrefs_to`), and the routine written
+/// there.
+pub const CANNOT_BE_HIT_SLOT: u32 = 0x0108_a9b4;
+pub const CANNOT_BE_HIT_ROUTINE: u32 = slots::routine(Group::GP, 2);
+
+/// The commands GP builds with its patches (`functions_jip/jip_fn_miscellaneous.h`).
+pub const TOGGLE_HARDCORE_TRACKING: u32 = 0x2837;
+pub const TOGGLE_IMMORTAL_MODE: u32 = 0x28ce;
+#[rustfmt::skip]
+pub static COMMANDS: crate::commands::Handlers = &[
+    (TOGGLE_HARDCORE_TRACKING, toggle_hardcore_tracking),
+    (TOGGLE_IMMORTAL_MODE, toggle_immortal_mode),
+];
+
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GP",
-    fix_sites: &[],
+    fix_sites: &[
+        FATIGUE_FLOOR.addr(),
+        MUSIC_MARKER_LIST.addr(),
+        MUSIC_MARKER.addr(),
+    ],
     fix_wraps: &[],
-    install_fixes: super::nothing,
-    jip_sites: &[FIRST_PERSON_MODEL.addr(), EYE_HEIGHT.addr()],
+    install_fixes,
+    jip_sites: &[
+        FIRST_PERSON_MODEL.addr(),
+        EYE_HEIGHT.addr(),
+        HARDCORE_NEEDS.addr(),
+    ],
     jip_wraps: &[],
     install_jip,
 };
@@ -99,6 +158,23 @@ const CLONING_BUCKETS: u32 = 0x97;
 const CLONING_SIZE: u32 = 0x1c;
 /// The thread's memory context word (`0x404F50` reads it).
 const TLS_MEMORY_CONTEXT: u32 = 0x2b4;
+/// `fMinFatigue`'s value (the setting at `0x011D2664`; its value at +4, what `0x403E20`
+/// answers).
+const MIN_FATIGUE: u32 = 0x011d_2668;
+/// `kAVCode_Fatigue`.
+const FATIGUE: u32 = 0x16;
+/// `kXData_ExtraAudioMarker`, the exe's `BaseExtraList::GetByType`.
+const EXTRA_AUDIO_MARKER: u32 = 0x5a;
+const GET_BY_TYPE: u32 = 0x0041_0220;
+/// The player singleton (`*011DEA3C`) and its music marker list (`tList<MusicMarker>`, +0x7D4).
+const PLAYER: u32 = 0x011d_ea3c;
+const PLAYER_MUSIC_MARKERS: u32 = 0x7d4;
+/// The god mode setting's value byte (the setting at `0x011E0894`, its value at +4) and the god
+/// mode byte.
+const GOD_MODE_SETTING_VALUE: u32 = 0x011e_0898;
+const GOD_MODE_BYTE: u32 = 0x011e_07ba;
+/// `kSerializedFlag_NoHardcoreTracking` (JIP's co-save flags).
+const NO_HARDCORE_TRACKING: u32 = 1;
 
 /// The offsets JIP reads (`QueuedReference`, `TESObjectREFR`, `TESObjectCELL`, `NiAVObject`,
 /// `Model`, `PlayerCharacter`, `MiddleHighProcess`; JIP LN NVSE's names).
@@ -160,6 +236,14 @@ fn install_jip(e: &mut Engine) {
         QUEUED_PLAYER_SLOT,
         QUEUED_PLAYER_ROUTINE,
         queued_player_routine,
+    );
+    e.ext_free::<Immortal>();
+    e.on_site(HARDCORE_NEEDS, hardcore_needs);
+    slots::write_slot(
+        e,
+        CANNOT_BE_HIT_SLOT,
+        CANNOT_BE_HIT_ROUTINE,
+        cannot_be_hit_routine,
     );
 }
 
@@ -427,6 +511,245 @@ pub fn queued_player(e: &mut Engine, queued: u32) {
             &args![process, byte, biped, animation, player],
         );
     }
+}
+
+/// Group GP's fix rows (G26, G72, G105): their three seams, and JIP's music marker cache.
+fn install_fixes(e: &mut Engine) {
+    e.ext_free::<MusicMarkers>();
+    e.on_site(FATIGUE_FLOOR, fatigue_floor);
+    e.on_site(MUSIC_MARKER_LIST, music_marker_list);
+    e.on_site(MUSIC_MARKER, music_marker);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DamagePCFatigueMinFixHook.
+/// G105 (`0x93B87F`: the actor value, the value before the change, the change, `f32` bits): for
+/// fatigue the change is cut so the value stops at `fMinFatigue`
+/// (`change -= min(value + change - fMinFatigue, 0)`, in single precision as JIP's `addss`,
+/// `subss`, `minss`); another actor value keeps its change. JIP's hook makes the exe's value
+/// read there itself (the seam sits after it).
+fn fatigue_floor(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    if a[0] != FATIGUE {
+        return None;
+    }
+    let (value, change) = (f32::from_bits(a[1]), f32::from_bits(a[2]));
+    let floor = e.mem.f32(MIN_FATIGUE);
+    let over = (value + change) - floor;
+    // `minss xmm1, xmm2` with xmm2 = 0: the first when it is below, else 0 (a NaN gives 0).
+    let over = if over < 0.0 { over } else { 0.0 };
+    Some((change - over).to_bits())
+}
+
+/// A cached marker: the reference, its `ExtraAudioMarker` data, the data's `mediaLocCtrlID`.
+type MusicMarker = (u32, u32, u32);
+/// The world space the cache was built for, and its markers.
+type MarkerCache = (u32, Vec<MusicMarker>);
+
+/// JIP's music marker cache (`s_audioMarkerLastWorld`, `s_musicMarkerList`): the world space it
+/// was built for and its markers (reference, `ExtraAudioMarker` data, the data's
+/// `mediaLocCtrlID`), sorted by that id. JIP never empties it except for another world space.
+#[derive(Default)]
+pub struct MusicMarkers(Mutex<MarkerCache>);
+
+fn music_markers(e: &mut Engine) -> std::sync::MutexGuard<'_, MarkerCache> {
+    e.ext_free::<MusicMarkers>()
+        .0
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: BuildMusicMarkerList,
+// BuildMusicMarkerListHook.
+/// G72 (`0x947DD2`: the world space, its marker list): for a world space other than the last
+/// one the cache is built again from the list (each reference whose `ExtraAudioMarker` has
+/// data, inserted after every marker of a lower or equal `mediaLocCtrlID`); then each cached
+/// marker is copied (8 bytes of the game's heap) and put at the front of the player's music
+/// marker list, which so ends in the reverse order. Answers 1: the exe's loop is skipped (JIP
+/// goes on at `0x947E79`, where the marker list is freed).
+fn music_marker_list(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (world, list) = (a[0], a[1]);
+    let last = music_markers(e).0;
+    if last != world {
+        let mut markers: Vec<MusicMarker> = Vec::new();
+        let mut node = list;
+        while node != 0 {
+            let refr = e.mem.u32(node);
+            node = e.mem.u32(node + 4);
+            if refr == 0 {
+                continue;
+            }
+            let extra = e
+                .call(GET_BY_TYPE, &args![refr + 0x44, EXTRA_AUDIO_MARKER])
+                .u32();
+            if extra == 0 {
+                continue;
+            }
+            let data = e.mem.u32(extra + 0xc);
+            if data == 0 {
+                continue;
+            }
+            let id = e.mem.u32(data + 0x24);
+            // JIP's `InsertSorted` (`item < array[index]`): after every marker not above it.
+            let at = markers.partition_point(|&(_, _, other)| other <= id);
+            markers.insert(at, (refr, data, id));
+        }
+        *music_markers(e) = (world, markers);
+    }
+    let markers = music_markers(e).1.clone();
+    let head = e.mem.u32(PLAYER) + PLAYER_MUSIC_MARKERS;
+    for (refr, data, _) in markers {
+        let marker = crate::commands::heap_alloc(e, 8);
+        e.mem.set_u32(marker, refr);
+        e.mem.set_u32(marker + 4, data);
+        prepend(e, head, marker);
+    }
+    Some(1)
+}
+
+/// JIP's `tList::Prepend` on the list whose head node is at `head`: an empty list takes the
+/// item in its head node; else a new node (8 bytes of the game's heap) takes the head node's
+/// item and next, and the head node the item.
+fn prepend(e: &mut Engine, head: u32, item: u32) {
+    if item == 0 {
+        return;
+    }
+    let first = e.mem.u32(head);
+    if first == 0 {
+        e.mem.set_u32(head, item);
+        return;
+    }
+    let node = crate::commands::heap_alloc(e, 8);
+    e.mem.set_u32(node, first);
+    e.mem.set_u32(head, item);
+    let next = e.mem.u32(head + 4);
+    e.mem.set_u32(node + 4, next);
+    e.mem.set_u32(head + 4, node);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// ("Ignore disabled MusicMarkers": the 20 bytes at 0x9699C5).
+/// G26 (`0x9699C5`: the marker's reference): a disabled reference (form flag `0x800`) answers 0
+/// (the marker is passed over); another answers the address of its position (`+0x30`, read
+/// where the exe calls the reference's position slot `+0x1F4`).
+fn music_marker(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let refr = a[0];
+    if e.mem.u32(refr + off::FORM_FLAGS) & 0x800 != 0 {
+        return Some(0);
+    }
+    Some(refr + 0x30)
+}
+
+/// JIP's immortal mode (`s_playerMinHPMode`) and hit effects word (`s_disableHitEffects`): kept
+/// lock-free, made at install before the threads start.
+#[derive(Default)]
+pub struct Immortal {
+    mode: AtomicU32,
+    hit_effects: AtomicU32,
+}
+
+/// `s_playerMinHPMode`: 0 off, 1 the player kept at 1 health, 2 the player cannot be hit.
+pub fn immortal_mode(e: &mut Engine) -> u32 {
+    e.ext_free::<Immortal>().mode.load(Ordering::Relaxed)
+}
+
+/// `s_disableHitEffects`'s bit 2 (immortal mode 2), for the hit effect patches (G123 to G125,
+/// whose `ToggleHitEffects` keeps bit 1).
+pub fn disable_hit_effects(e: &mut Engine) -> u32 {
+    e.ext_free::<Immortal>().hit_effects.load(Ordering::Relaxed)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ModHardcoreNeedsHook.
+/// G114 + O6 (`0x969C41`: the player, where the exe calls `IsInState(4)`): with the switch
+/// `bHardcoreNeedsFix` (O6) each of the three needs (`+0x5D4`) takes its pending change
+/// (`+0x49C`) and stops at 0 (`addps`, then `maxps` with 0: a NaN gives 0), and the pending
+/// changes are zeroed; then with JIP's co-save flag `NoHardcoreTracking` (`ToggleHardcoreTracking
+/// 0`) the reset byte (`+0xE39`) gets bit 0 (so the timers start again each update); answers the
+/// exe's test (`+0x680` bit 2).
+fn hardcore_needs(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let needs = a[0] + 0x5d4;
+    let pending = a[0] + 0x49c;
+    if e.jip_patches() & jip_patches::HARDCORE_NEEDS_FIX != 0 {
+        for i in 0..3 {
+            let sum = e.mem.f32(needs + 4 * i) + e.mem.f32(pending + 4 * i);
+            e.mem
+                .set_f32(needs + 4 * i, if sum > 0.0 { sum } else { 0.0 });
+        }
+        for i in 0..3 {
+            e.mem.set_u32(pending + 4 * i, 0);
+        }
+    }
+    if crate::commands::jip_fn_miscellaneous::serialized_flags(e) & NO_HARDCORE_TRACKING != 0 {
+        let byte = e.mem.u8(needs + 0x865);
+        e.mem.set_u8(needs + 0x865, byte | 1);
+    }
+    Some(u32::from(e.mem.u8(needs + 0xac) & 4 != 0))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PlayerCannotBeHitHook.
+/// G122, in the player's `MagicTarget` slot (`0x108A9B4`, the exe's `0x952720`, god mode): the
+/// god mode setting's value byte when it is not 0 (the byte itself, where the exe answers 1),
+/// else 1 in immortal mode 2, else the god mode byte.
+fn cannot_be_hit_routine(e: &mut Engine, _: &[u32]) -> Ret {
+    let setting = e.mem.u8(GOD_MODE_SETTING_VALUE);
+    let answer = if setting != 0 {
+        setting
+    } else if immortal_mode(e) == 2 {
+        1
+    } else {
+        e.mem.u8(GOD_MODE_BYTE)
+    };
+    Ret {
+        eax: u32::from(answer),
+        ..Ret::default()
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_ToggleHardcoreTracking_Execute.
+/// `ToggleHardcoreTracking on`: 0 sets JIP's co-save flag `NoHardcoreTracking`, anything else
+/// clears it (an argument that does not read: nothing).
+fn toggle_hardcore_tracking(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let on = read.int(0, 0);
+    if read.ok {
+        let flags = &mut e.ext::<Jip>().saved.serialized.flags;
+        if on != 0 {
+            *flags &= !NO_HARDCORE_TRACKING;
+        } else {
+            *flags |= NO_HARDCORE_TRACKING;
+        }
+        crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_ToggleImmortalMode_Execute.
+/// `ToggleImmortalMode [mode]`: answers the mode before; with an argument the mode becomes it,
+/// the PlayerMinHealth hook is on only for mode 1, and the hit effects word gets bit 2 for mode
+/// 2 (else keeps only bit 1).
+fn toggle_immortal_mode(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let before = immortal_mode(e);
+    a.set_result(e, f64::from(before as u8));
+    if crate::commands::jip_fn_utility::num_args(e, &a) != 0 {
+        let read = Read::of(e, &a);
+        let mode = read.int(0, 0);
+        if read.ok {
+            // `s_playerMinHPMode` is a byte; the two tests use the whole argument.
+            e.ext_free::<Immortal>()
+                .mode
+                .store(mode & 0xff, Ordering::Relaxed);
+            e.set_hook(Hook::PlayerMinHealth, mode == 1);
+            let state = e.ext_free::<Immortal>();
+            if mode == 2 {
+                state.hit_effects.fetch_or(2, Ordering::Relaxed);
+            } else {
+                state.hit_effects.fetch_and(1, Ordering::Relaxed);
+            }
+        }
+    }
+    handled(true)
 }
 
 #[cfg(test)]

@@ -1697,14 +1697,30 @@ pub fn fn_0095f6c0(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32) {
     if target == 0 {
         return;
     }
-    let target_kind = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, target));
-    if target_kind == e.global::<u32>(POINTER_011CA27C) {
-        return;
-    }
-    if typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, target))
-        == e.global::<u32>(POINTER_011CA280)
-    {
-        return;
+    // JIP LN NVSE's G06 at `0x0095F7FE` (group GH2's row and handler; JIP's own): the seam
+    // with the target answers whether its base is an ash pile (JIP's form flag), in place of
+    // the exe's two compares with the ash and goo pile activators: a low byte of 1 (an ash pile)
+    // stops here, 0 goes on (GH2's format).
+    // One load while JIP is not installed.
+    let jip_ash_pile = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0095_f7fe, &[target])
+    } else {
+        None
+    };
+    match jip_ash_pile {
+        Some(answer) if answer & 0xff != 0 => return,
+        Some(_) => {}
+        None => {
+            let target_kind = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, target));
+            if target_kind == e.global::<u32>(POINTER_011CA27C) {
+                return;
+            }
+            if typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, target))
+                == e.global::<u32>(POINTER_011CA280)
+            {
+                return;
+            }
+        }
     }
     let node = e.vcall(target, 0x1d0, &args![]).u32();
     let collision = if node != 0 {
@@ -10418,6 +10434,91 @@ mod tests {
         e.mem.set_u8(FLAG_011E0D5C, 0);
         e.call(0x0095_f6c0, &args![player, 0.016f32]);
         assert_eq!(e.mem.u8(FLAG_011E0D5C), 0);
+    }
+
+    fn ash_pile_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G06's seam asked without INSTALLED");
+    }
+
+    fn ash_pile_yes(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(1)
+    }
+
+    fn ash_pile_no(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(0)
+    }
+
+    fn ash_pile_high(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(0x100)
+    }
+
+    /// JIP LN NVSE's G06 seam (`0x0095F7FE`, group GH2's row and handler; JIP's own): with the
+    /// word 0 or `FIXES` alone it is not asked and the exe's two compares decide (an ash or goo
+    /// pile activator stops the grab before the 3D is asked: slot `+0x1D0`); with `INSTALLED`
+    /// its answer's low byte decides instead (0 or 0x100: an ash pile base goes on; 1: another
+    /// base stops); no
+    /// handler (the row not on main yet): the exe's compares.
+    #[test]
+    fn grab_update_jip_ash_pile_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, base: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let mut e = engine(CALLEES_0095F6C0);
+            let player = grab_input_world(&mut e);
+            e.register_double(READ_DWORD_AT_0, |e, a| int(e.mem.u32(a[0])));
+            answer(&mut e, CONTROL_QUERY, 1);
+            e.set_global(POINTER_011CA27C, 0x1111);
+            e.set_global(POINTER_011CA280, 0x2222);
+            e.set_global(F32_CONSTANT_01013974, 1000.0f32);
+            let option = e.mem.alloc(4);
+            answer(&mut e, SETTING_BOOL_POINTER, option);
+            answer(&mut e, SLOT_D, 0);
+            let target = object_with_slots(
+                &mut e,
+                &[
+                    (0x1d0, SLOT_A),
+                    (0x48, SLOT_B),
+                    (0x100, SLOT_D),
+                    (0x224, SLOT_B),
+                ],
+            );
+            e.mem.set_u32(target + 0x40, 0x8200_0000);
+            e.register_double(READ_DWORD_AT_40, |e, a| int(e.mem.u32(a[0] + 0x40)));
+            answer(&mut e, FUNCTION_004B52F0, 0);
+            let body = object_with_slots(&mut e, &[(0x94, SLOT_C)]);
+            answer(&mut e, SLOT_A, 0x8000_0000);
+            answer(&mut e, SLOT_B, 0);
+            answer(&mut e, SLOT_C, 1);
+            answer(&mut e, FUNCTION_00703350, target);
+            answer(&mut e, READ_DWORD_AT_20, base);
+            answer(&mut e, FIND_FIRST_COLLISION_OBJECT, 0x8100_0000);
+            answer(&mut e, FUNCTION_006FA820, body);
+            answer_float(&mut e, BODY_VALUE_004B5400, 5.0);
+            float_settings(&mut e, &[(SETTING_011D1230, 10.0)]);
+            e.register_double(ADD_44_TO_ADDRESS, |_, a| int(a[0] + 0x44));
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0095_f7fe, handler);
+            }
+            e.set_jip_patches(word);
+            let log = logged(&mut e, |e| {
+                e.call(0x0095_f6c0, &args![player, 0.016f32]);
+            });
+            usize::from(!calls_to(&log, SLOT_A).is_empty())
+        };
+        for word in [0, jip_patches::FIXES] {
+            assert_eq!(run(word, 0x1111, Some(ash_pile_never)), 0, "{word:#x}");
+            assert_eq!(run(word, 0x2222, Some(ash_pile_never)), 0);
+            assert_eq!(run(word, 0x3333, Some(ash_pile_never)), 1);
+        }
+        let installed = jip_patches::INSTALLED;
+        assert_eq!(run(installed, 0x1111, None), 0, "no handler: the exe's");
+        assert_eq!(run(installed, 0x3333, None), 1);
+        assert_eq!(run(installed, 0x1111, Some(ash_pile_no)), 1);
+        assert_eq!(run(installed, 0x3333, Some(ash_pile_yes)), 0);
+        assert_eq!(
+            run(installed, 0x1111, Some(ash_pile_high)),
+            1,
+            "the low byte decides"
+        );
     }
 
     /// A grabbed object (an object with vtable slots 0x100, 0x224, 0x1d0,

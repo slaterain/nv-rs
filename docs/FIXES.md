@@ -1016,7 +1016,24 @@ player's teammate when others detect it, and with the detection fix its level wo
 
 #### GP: Player character
 
-No fix rows yet. Built as part of JIP (every preset, while JIP answers "installed"; not fix rows):
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| "Ignore disabled MusicMarkers" | `00969930` (`0x9699C5`) | A disabled music marker no longer chooses the music played near it; a marker's position is read from the reference itself (`+0x30`) instead of through its position call | 3.9 GP |
+| (G72, `BuildMusicMarkerListHook`) | `00947d80` (`0x947DD2`) | The player's music markers in a world space come from one list built when he enters that world space (JIP's cache, rebuilt only for another world space), sorted by their media location controller, instead of the world space's markers walked every time | 3.9 GP |
+| (G105, `DamagePCFatigueMinFixHook`) | `0093b7a0` (`0x93B87F`) | Fatigue damage to the player stops at `fMinFatigue` (the change is cut so the value lands on it) | 3.9 GP |
+
+Built as part of JIP (every preset, while JIP answers "installed"; not fix rows): G114 with O6
+and the `ToggleHardcoreTracking` command (`00969c30` at `0x969C41`): with `bHardcoreNeedsFix` (on
+by JIP's defaults, read only with the row on) the hardcore needs take their pending changes each
+update and never go below 0; `ToggleHardcoreTracking 0` (kept in JIP's co-save) makes the hardcore
+timers start again every update, so no needs build up. With JIP installed and the row off, the
+update's state test is JIP's (the same answer) and only the co-save flag acts. G122 with the
+`ToggleImmortalMode` command (the player's `MagicTarget` slot `0x108A9B4`): mode 2 makes the player
+unhittable as god mode does (mode 1 keeps him at 1 health through JIP's PlayerMinHealth hook); with
+JIP installed and no mode set, the god mode test reads the setting's byte itself (the exe answers 1
+for any non-zero byte). The hit effects JIP also turns off in mode 2 are the hit effect patches'
+(G123 to G125, not built yet).
+
 G38 and H09, JIP's "update 3D" on the player and on queued references. The player's first-person
 model is copied from the model loader's cached load (`0094e1d0` at `0x94E4A1`; the eye height is no
 longer read there, `0x94E5F6`), and JIP's own attach goes into the `Attach` slot of four queued
@@ -1075,10 +1092,10 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
   exe compares a reference's base with the ash and goo pile forms it tests JIP's ash pile bit on the
   base instead; the two vanilla piles get the bit when the game starts (`DeferredInit`), so with no
   script marking anything nothing changes for a player. A reference with no base answers "not a
-  pile" (JIP would read a bad address). Built so far in six of the eight places: the HUD's
-  (`0x77765A`, group GA builds that seam) and the crosshair's (`0x95F7FE`, group GP) are not asked
-  yet and still compare with the two vanilla forms, so until those seams land an activator marked
-  as an ash pile (for example its bit restored from a co-save) is an ash pile in six places only.
+  pile" (JIP would read a bad address). Built so far in seven of the eight places: the HUD's
+  (`0x77765A`, group GA builds that seam) is not asked yet and still compares with the two vanilla
+  forms, so until that seam lands an activator marked as an ash pile (for example its bit restored
+  from a co-save) is an ash pile in seven places only.
 - `AttachAshPileHook` (G73, the death ash pile command `005db870`, its seam at `0x5DBCFD`): the
   pile a death leaves is `AttachAshPileEx`'s form once when a script set one, else the exe's
   choice. It changes nothing yet: the command `AttachAshPileEx` is not built, so no script can set

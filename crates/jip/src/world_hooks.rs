@@ -11,8 +11,7 @@
 //! "installed".
 //!
 //! Not here: `ToggleImmortalMode`, the only user of the PlayerMinHealth hook (its handler is
-//! here): its mode 2 also needs JIP's always-on `PlayerCannotBeHit` and hit-effect patches
-//! (`internal/patches_game.h`), JIP's fixes of step 3.9. `CCCSetEquipped` and JIP's always-on
+//! here): it is built with JIP's `PlayerCannotBeHit` patch in `crate::game_patches::gp` (step 3.9). `CCCSetEquipped` and JIP's always-on
 //! `GetCannotWear` patch (`0x418B10`) are in `equip_hooks` (step 3.5d). The getters that only read what these
 //! commands set (`GetInteractionDisabled`, `GetInteractionDisabledType`,
 //! `GetScriptEventDisabled`, `IsScriptWaiting`) are the commands track's (step 3.6), over
