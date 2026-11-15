@@ -718,7 +718,7 @@ fn the_owner_argument() {
 /// for the slot here would be refused: two engines on one thread), for a saved and a temporary
 /// variable; the copy follows every change (a value erased, the variable erased, the owner's
 /// variables erased, the saved ones cleared before a load) and is one for the run (the second
-/// engine reads the temporary variable this engine set, which its own `Temp` does not hold).
+/// engine reads the temporary variable this engine set).
 #[test]
 fn the_condition_reads_the_lock_free_copy() {
     let mut e = setup();
@@ -771,4 +771,19 @@ fn the_condition_reads_the_lock_free_copy() {
     crate::cosave::process_changed_flags(&mut e, crate::cosave::changed::AUX_VARS);
     assert_eq!(eval(&mut e, 5), 0.5, "the saved ones cleared before a load");
     assert_eq!(eval(&mut e, 6), 2.5, "the temporary ones kept");
+}
+
+/// `forget_owner` drops an owner's first values, temporary and saved, and no other owner's.
+#[test]
+fn forgetting_an_owner() {
+    let mut e = setup();
+    set_flt(&mut e, REF, b"Cond", 4.25, &[]);
+    set_flt(&mut e, REF, b"*Tmp", 2.5, &[]);
+    set_flt(&mut e, ACTOR, b"Cond", 1.0, &[]);
+    let m = overriding_mod(&e, SCRIPT);
+    let (id, other) = (e.mem.u32(REF + 0xc), e.mem.u32(ACTOR + 0xc));
+    forget_owner(&mut e, id);
+    assert_eq!(first_value(&mut e, false, m, id, b"cond"), None);
+    assert_eq!(first_value(&mut e, true, m, id, b"*tmp"), None);
+    assert_eq!(first_value(&mut e, false, m, other, b"cond"), Some(1.0));
 }

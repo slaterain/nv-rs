@@ -190,6 +190,20 @@ pub(crate) fn publish_saved(e: &mut Engine) {
     map.extend(saved);
 }
 
+/// Drops every first value of `owner` (temporary and saved, every mod) from the lock-free slot:
+/// for a writer that erases an owner from the maps outside the commands here. JIP's reference
+/// destruction patch (`game_patches::gh2`, `ClearRefAuxVars`) erases a destroyed temporary
+/// reference's variables and must call this after (left to that group's owner); until then a
+/// later reference given the same id reads the old first values until a command sets one of its
+/// variables.
+pub fn forget_owner(e: &mut Engine, owner: u32) {
+    e.ext_free::<Unlocked>()
+        .firsts
+        .write()
+        .unwrap_or_else(|p| p.into_inner())
+        .retain(|k, _| k.2 != owner);
+}
+
 /// The first value's number of the variable `name` of `owner` (temporary or saved, of one mod),
 /// from the lock-free slot; `None` when it has no value.
 fn first_value(e: &mut Engine, temp: bool, mod_index: u32, owner: u32, name: &[u8]) -> Option<f64> {
