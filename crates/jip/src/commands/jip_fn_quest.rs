@@ -143,12 +143,17 @@ fn live_targets(e: &mut Engine, o: u32) -> Vec<u32> {
 }
 
 /// `StdCall(0x952D60, target->target, &target->data, 1)`: the target's path worked out again.
+/// The exe's function is `PlayerCharacter::BuildPathToTarget` (Xbox PDB), a `thiscall` (`RET 0xC`)
+/// whose `this` (ECX) is stored and never read (it builds the path from the player global
+/// `011DEA3C`); JIP's `StdCall` leaves ECX as it was. Its translation takes `this` and the three
+/// words, so the player goes first, as the game's own callers pass him (`005EC4D0`).
 fn refresh_path(e: &mut Engine, t: u32) {
     let r = target_ref(e, t);
     let data = Ptr::<ObjectiveTarget>::new(t)
         .at(ObjectiveTarget::data)
         .addr();
-    e.call(REFRESH_PATH, &args![r, data, 1u32]);
+    let player = the_player(e).addr();
+    e.call(REFRESH_PATH, &args![player, r, data, 1u32]);
 }
 
 /// `ThisCall(0x60F110, quest, &player->questTargetList, &player->questObjectiveList)`.
