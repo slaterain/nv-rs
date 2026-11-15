@@ -28,8 +28,14 @@ pub fn engine() -> Engine {
 /// twice keeps its bytes), then [`crate::install_as`]. A command is then called through its
 /// record with [`call`]; the call's data is at [`DATA`] (64 KB).
 pub fn install_into(e: &mut Engine) {
+    install_into_as(e, true);
+}
+
+/// [`install_into`] with JIP answering "installed" or not (`answers_installed`): the engine
+/// crates' tests of a translation with JIP present but not installed.
+pub fn install_into_as(e: &mut Engine, answers_installed: bool) {
     prepare(e);
-    crate::install_as(e, true);
+    crate::install_as(e, answers_installed);
 }
 
 /// What [`engine`] does to a new engine.
@@ -40,6 +46,9 @@ fn prepare(e: &mut Engine) {
     // The processes' vtables (HighProcess 0x01087864, MiddleHighProcess 0x0108904C), where JIP
     // writes its hit-data routines once installed.
     e.map(0x0108_7000, 0x3000);
+    // `ExtraTimeLeft`'s vtable (0x010158FC), whose two slots JIP's ExtraJIP framework writes
+    // (step 3.9 GH1).
+    e.map(0x0101_5000, 0x1000);
     // The queued references' vtables (0x01016BA4 to 0x01016D7C), where JIP writes its attaches
     // (game_patches::gp).
     e.map(0x0101_6000, 0x1000);
