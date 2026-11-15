@@ -18,6 +18,10 @@ const ENTRIES: u32 = 0x0520_0000;
 /// Where a stand-in form keeps its `ExtraScript` and `ExtraLinkedRef` for the extra list stub.
 const XSCRIPT: u32 = 0x80;
 const XLINKED: u32 = 0x84;
+/// The script and the event list every `scripted` form shares (the event list's variable list
+/// at `+0x200`), and the heap stand-in's next block.
+const SCRIPTS: u32 = 0x0700_0000;
+const HEAP_TOP: u32 = SCRIPTS + 0xfff0;
 
 struct World {
     e: Engine,
@@ -63,6 +67,18 @@ impl World {
         e.mem.set_u32(REF_VT + VT_IS_REFERENCE, RETURN_TRUE);
         e.mem.set_u32(REF_VT + VT_IS_ACTOR, RETURN_TRUE);
         e.register(EXTRA_GET_BY_TYPE, get_by_type);
+        // The scripts and event lists of `scripted`, and the game's heap (a bump stand-in) for
+        // the variables a load makes in them (`Script::AddVariable`).
+        e.map(SCRIPTS, 0x0001_0000);
+        e.mem.set_u32(HEAP_TOP, SCRIPTS + 0x8000);
+        e.register(0x00aa_3e40, |e, w| {
+            let at = e.mem.u32(HEAP_TOP);
+            e.mem.set_u32(HEAP_TOP, at + w[1].next_multiple_of(8));
+            Ret {
+                eax: at,
+                ..Ret::default()
+            }
+        });
         World {
             e,
             next_form: FORM_AT,
@@ -96,8 +112,9 @@ impl World {
     fn scripted(&mut self, id: u32) -> u32 {
         let form = self.form(id, 0x3a, true);
         let extra = form + 0x40;
-        self.e.mem.set_u32(extra + 0xc, 0x0700_0000);
-        self.e.mem.set_u32(extra + 0x10, 0x0700_0100);
+        self.e.mem.set_u32(extra + 0xc, SCRIPTS);
+        self.e.mem.set_u32(extra + 0x10, SCRIPTS + 0x100);
+        self.e.mem.set_u32(SCRIPTS + 0x10c, SCRIPTS + 0x200);
         self.e.mem.set_u32(form + XSCRIPT, extra);
         form
     }
@@ -305,12 +322,140 @@ fn script_variables() {
         .name(b"Foo")
         .u64(2.5f64.to_bits());
     assert_eq!(written(&mut w.e), [chunk(kind::SCRIPT_VARS, 9, expect.0)]);
+    // JIP answering "not installed": no script was changed (only kept, written back).
+    assert_eq!(script_items(&w.e), (vec![], vec![]));
     // JIP's own skip, one byte short: the third owner is read from the wrong place.
     let mut w = World::new();
     let data = record(&mut w);
     load_file(&mut w.e, &cosave(&[chunk(kind::SCRIPT_VARS, 9, data)]));
     assert!(s(&mut w.e).script_vars.get(&0x0100_0def).is_none());
     assert!(s(&mut w.e).script_vars.get(&0x0100_0abc).is_some());
+}
+
+/// The script's variable list (`+0x4C`) and the event list's (`+0xC`): each item's id (a
+/// `VariableInfo`'s name too), from the first node.
+type ScriptItems = (Vec<(u32, Vec<u8>)>, Vec<(u32, u64)>);
+fn script_items(e: &Engine) -> ScriptItems {
+    let walk = |mut node: u32| {
+        let mut items = Vec::new();
+        while node != 0 {
+            if e.mem.u32(node) != 0 {
+                items.push(e.mem.u32(node));
+            }
+            node = e.mem.u32(node + 4);
+        }
+        items
+    };
+    let infos = walk(SCRIPTS + 0x4c)
+        .into_iter()
+        .map(|i| {
+            (
+                e.mem.u32(i),
+                nvse::table::guest_text(e, e.mem.u32(i + 0x18)),
+            )
+        })
+        .collect();
+    let vars = walk(e.mem.u32(SCRIPTS + 0x10c))
+        .into_iter()
+        .map(|v| (e.mem.u32(v), e.mem.u64(v + 8)))
+        .collect();
+    (infos, vars)
+}
+
+/// `JPSV`'s application (step 3.3): each variable of a loaded owner is made in the script (a new
+/// `VariableInfo`, the script's next id, first in its list) and in the event list (a
+/// `ScriptVar`) with its value (a form's id resolved); a temporary one too, but not kept; a save
+/// then writes the values the variables hold.
+#[test]
+fn script_variables_are_made_in_the_script_and_saved_live() {
+    let mut w = World::new();
+    w.e.ext::<Jip>().answers_installed = true;
+    w.scripted(0x0100_0abc);
+    w.file(2, 3);
+    w.e.mem.set_u32(SCRIPTS + 0x24, 6);
+    let data = Out::default()
+        .u16(1)
+        .u32(0x0100_0abc)
+        .u16(3)
+        .u8(1)
+        .name(b"Foo")
+        .u64(2.5f64.to_bits())
+        .u8(1)
+        .name(b"*tmp")
+        .u64(1)
+        .u8(2)
+        .name(b"Bar")
+        .u64(0x0200_0123)
+        .0;
+    load_file(&mut w.e, &cosave(&[chunk(kind::SCRIPT_VARS, 9, data)]));
+    let (infos, vars) = script_items(&w.e);
+    assert_eq!(
+        infos,
+        [
+            (9, b"Bar".to_vec()),
+            (8, b"*tmp".to_vec()),
+            (7, b"Foo".to_vec())
+        ]
+    );
+    assert_eq!(w.e.mem.u32(SCRIPTS + 0x24), 9);
+    assert_eq!(vars, [(9, 0x0300_0123), (8, 1), (7, 2.5f64.to_bits())]);
+    let owner = s(&mut w.e).script_vars.get(&0x0100_0abc).unwrap().clone();
+    assert_eq!(owner.len(), 2, "the temporary one not kept");
+    // The variables change; the save writes them as they are.
+    let first_var = w.e.mem.u32(w.e.mem.u32(SCRIPTS + 0x10c));
+    assert_eq!(w.e.mem.u32(first_var), 9);
+    w.e.mem.set_f64(first_var + 8, -4.0);
+    let expect = Out::default()
+        .u16(1)
+        .u32(0x0100_0abc)
+        .u16(2)
+        .u8(3)
+        .name(b"Bar")
+        .u64((-4.0f64).to_bits())
+        .u8(1)
+        .name(b"Foo")
+        .u64(2.5f64.to_bits());
+    assert_eq!(written(&mut w.e), [chunk(kind::SCRIPT_VARS, 9, expect.0)]);
+}
+
+/// A name the script already has: made only when JIP added it to the script this session
+/// (`GetVariableAdded`), else the variable is neither given its value nor kept.
+#[test]
+fn script_variables_the_script_has_need_jip_to_have_added_them() {
+    let load_foo = |added: bool| {
+        let mut w = World::new();
+        w.e.ext::<Jip>().answers_installed = true;
+        w.scripted(0x0100_0abc);
+        // The script's own "foo" (id 3) and its event list's variable.
+        let (info, var) = (SCRIPTS + 0x400, SCRIPTS + 0x500);
+        w.e.mem.set_u32(info, 3);
+        w.e.mem.set_u32(info + 0x18, SCRIPTS + 0x600);
+        w.e.mem.write(SCRIPTS + 0x600, b"foo\0");
+        w.e.mem.set_u32(SCRIPTS + 0x4c, info);
+        w.e.mem.set_u32(var, 3);
+        w.e.mem.set_f64(var + 8, 11.0);
+        w.e.mem.set_u32(SCRIPTS + 0x200, var);
+        if added {
+            w.e.ext::<Jip>()
+                .script_vars
+                .added
+                .emplace(0)
+                .emplace(Name(b"FOO".to_vec()));
+        }
+        let data = Out::default()
+            .u16(1)
+            .u32(0x0100_0abc)
+            .u16(1)
+            .u8(1)
+            .name(b"Foo")
+            .u64(2.5f64.to_bits())
+            .0;
+        load_file(&mut w.e, &cosave(&[chunk(kind::SCRIPT_VARS, 9, data)]));
+        let kept = s(&mut w.e).script_vars.get(&0x0100_0abc).is_some();
+        (kept, w.e.mem.f64(var + 8), script_items(&w.e).0.len())
+    };
+    assert_eq!(load_foo(false), (false, 11.0, 1));
+    assert_eq!(load_foo(true), (true, 2.5, 1));
 }
 
 /// `JPAV`: mods from 6 up and loaded, owners loaded or changed in the save; values of each type,
