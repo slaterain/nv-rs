@@ -1792,13 +1792,27 @@ pub fn fn_008c1740(e: &mut Engine, this: Ptr, variable: u32) -> f64 {
 /// (actor value `0xa` minus a setting) times another setting, passed through
 /// the perk entry point `entry_point`, and handed to `setter` for the animation
 /// objects (the player's two, or the one slot `0x1e4` of the actor gives).
+///
+/// JIP LN NVSE's "Cap Agility for calculating reload & equip speeds" (step 3.9-GE, PLAN-3.9
+/// G28) replaces the Agility read at `agility_site` (`0x8C17D9`, `0x8C1959`) with a call of
+/// `GetClampedActorFloatValue` (`0066ef50`): the seam answers the value (its `f32` bits).
 fn apply_animation_speed(
     e: &mut Engine,
     this: Ptr<Actor>,
     entry_point: u32,
+    agility_site: u32,
     setter: fn(&mut Engine, Ptr, f32),
 ) {
-    let skill = e.vcall(this.addr() + 0xa4, 0xc, &args![10u32]).f32();
+    // One load while the patches are off.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(agility_site, &[this.addr() + 0xa4])
+    } else {
+        None
+    };
+    let skill = match jip {
+        Some(bits) => f32::from_bits(bits),
+        None => e.vcall(this.addr() + 0xa4, 0xc, &args![10u32]).f32(),
+    };
     let base = setting_float(e, SETTING_SPEED_BASE);
     let difference = (skill as f64 - base as f64) as f32;
     let factor = setting_float(e, SETTING_SPEED_FACTOR);
@@ -1839,7 +1853,7 @@ fn apply_animation_speed(
 /// entry point `0x25` (see [`apply_animation_speed`]); the value goes to
 /// `+0x118` of each object.
 pub fn fn_008c17c0(e: &mut Engine, this: Ptr<Actor>) {
-    apply_animation_speed(e, this, 0x25, fn_008c1920);
+    apply_animation_speed(e, this, 0x25, 0x008c_17d9, fn_008c1920);
 }
 
 // Translated from 008c1920 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1852,7 +1866,7 @@ pub fn fn_008c1920(e: &mut Engine, this: Ptr, value: f32) {
 /// The same as [`fn_008c17c0`] for the perk entry point `0x26`; the value goes
 /// to `+0x11c` of each object (through `008c1aa0`).
 pub fn fn_008c1940(e: &mut Engine, this: Ptr<Actor>) {
-    apply_animation_speed(e, this, 0x26, fn_008c1aa0);
+    apply_animation_speed(e, this, 0x26, 0x008c_1959, fn_008c1aa0);
 }
 
 // Translated from 008c1aa0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4012,6 +4026,65 @@ mod tests {
         assert_eq!(calls_to(&e, HANDLE_ENTRY_POINT)[1][0], 0x26);
         assert_eq!(e.mem.f32(near + 0x11c), 27.0);
         assert_eq!(e.mem.f32(far + 0x11c), 27.0);
+    }
+
+    thread_local! {
+        static G28_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G28_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_agility(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G28_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G28_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// An actor's reload and equip speeds (Agility 40 read through the vtable) with JIP's word
+    /// `word` and seam handlers answering `answer`: the actor's value owner, the two speeds and
+    /// what the seams were asked.
+    fn speeds_with_jip(word: u32, answer: Option<u32>) -> (u32, [f32; 2], Vec<Vec<u32>>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        new_player(&mut e);
+        let actor = new_actor(&mut e);
+        speed_rig(&mut e, actor);
+        let animation = e.mem.alloc(0x200);
+        slot(&mut e, actor.addr(), 0x1e4, eax(animation));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008c_17d9), |e, a| {
+            at_agility(e, &[0x008c_17d9, a[0]])
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008c_1959), |e, a| {
+            at_agility(e, &[0x008c_1959, a[0]])
+        });
+        G28_ASKED.with(|s| s.borrow_mut().clear());
+        G28_ANSWER.with(|c| c.set(answer));
+        e.set_jip_patches(word);
+        fn_008c17c0(&mut e, actor);
+        fn_008c1940(&mut e, actor);
+        (
+            actor.addr() + 0xa4,
+            [e.mem.f32(animation + 0x118), e.mem.f32(animation + 0x11c)],
+            G28_ASKED.with(|s| s.take()),
+        )
+    }
+
+    /// JIP's Agility cap at `0x8C17D9` and `0x8C1959` (G28): not asked without the fixes bit
+    /// (1 + (40 - 15) x 0.5 = 13.5); asked with the value owner, each at its own place; an
+    /// answer (the capped value, 10) is the Agility used (1 + (10 - 15) x 0.5 = -1.5).
+    #[test]
+    fn animation_speed_jip_agility_seams() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED | jip_patches::NPC_PERKS] {
+            let (_, speeds, asked) = speeds_with_jip(word, Some(10.0f32.to_bits()));
+            assert!(asked.is_empty(), "{word:x}");
+            assert_eq!(speeds, [13.5, 13.5]);
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (owner, speeds, asked) = speeds_with_jip(on, None);
+        assert_eq!(asked, vec![vec![0x008c_17d9, owner], vec![0x008c_1959, owner]]);
+        assert_eq!(speeds, [13.5, 13.5]);
+        let (owner, speeds, asked) = speeds_with_jip(on, Some(10.0f32.to_bits()));
+        assert_eq!(asked, vec![vec![0x008c_17d9, owner], vec![0x008c_1959, owner]]);
+        assert_eq!(speeds, [-1.5, -1.5]);
     }
 
     #[test]

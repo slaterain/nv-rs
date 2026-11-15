@@ -1253,11 +1253,23 @@ pub fn actor_get_essential(e: &mut Engine, this: Ptr<Actor>) -> bool {
         return false;
     }
     let player = e.global::<u32>(PLAYER_POINTER);
-    if player != 0
-        && e.call(0x0056_6950, &args![this]).bool()
-        && !e.call(0x004d_1360, &args![player]).bool()
-    {
-        return true;
+    if player != 0 && e.call(0x0056_6950, &args![this]).bool() {
+        // JIP LN NVSE's IsActorEssentialHook (step 3.9-GE, PLAN-3.9 H18) at `0x87F427`: a
+        // teammate JIP's `ToggleTeammateKillable` marked answers as if the player's test
+        // (`004d1360`, hardcore) were true. The seam answers that test; with no answer it is
+        // asked as in the exe. One load while JIP is not installed.
+        let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            e.site(0x0087_f427, &[this.addr()])
+        } else {
+            None
+        };
+        let tested = match jip {
+            Some(answer) => answer != 0,
+            None => e.call(0x004d_1360, &args![player]).bool(),
+        };
+        if !tested {
+            return true;
+        }
     }
     fn_0087f480(e, base.byte_add(0x30)) || e.call(0x008c_1b30, &args![this]).bool()
 }
@@ -3080,7 +3092,14 @@ pub fn fn_00881860(e: &mut Engine, this: Ptr<Actor>, force: bool) -> bool {
                     POINT_SUBTRACT,
                     &args![target, direction, path_point_position],
                 );
-                e.mem.set_f32(direction + 8, 0.0);
+                // JIP LN NVSE's "AI Z fix" (credits Stewie; step 3.9-GE, PLAN-3.9 G22) at
+                // `0x881A9C` removes this flattening (`fldz; fstp`): the seam answers whether the
+                // height is kept. One load while the patches are off.
+                if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0
+                    || e.site(0x0088_1a9c, &[direction]).is_none()
+                {
+                    e.mem.set_f32(direction + 8, 0.0);
+                }
                 let length = e.call(POINT_LENGTH_2D, &args![direction]).f32();
                 let radius = e.call(ACTOR_GET_RADIUS, &args![this]).f64();
                 if (length as f64) < radius {
@@ -5999,6 +6018,63 @@ mod tests_accessors {
         assert!(!e.call(0x0087_f3d0, &args![actor]).bool());
     }
 
+    thread_local! {
+        static H18_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+        static H18_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_teammate_essential(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H18_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        H18_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// Whether a teammate (not essential by its base) is essential with the player's test
+    /// answering `hardcore`, JIP's word `word` and a seam handler answering `answer`: the
+    /// answer, the player's tests made and what the seam was asked.
+    fn teammate_essential_with_jip(
+        hardcore: u32,
+        word: u32,
+        answer: Option<u32>,
+    ) -> (bool, usize, Vec<Vec<u32>>, u32) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, actor) = essential_engine(0);
+        let base = e.mem.alloc(0x80);
+        e.register_double(GET_BASE_FORM, move |_, _| ret(base));
+        e.set_global(PLAYER_POINTER, 0x7777u32);
+        e.register(0x0056_6950, |_, _| ret(1));
+        e.register_double(0x004d_1360, move |_, _| ret(hardcore));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0087_f427), at_teammate_essential);
+        H18_ASKED.with(|s| s.borrow_mut().clear());
+        H18_ANSWER.with(|c| c.set(answer));
+        e.set_jip_patches(word);
+        e.call_log = Some(vec![]);
+        let essential = e.call(0x0087_f3d0, &args![actor]).bool();
+        let tests = called(&e).iter().filter(|&&a| a == 0x004d_1360).count();
+        (essential, tests, H18_ASKED.with(|s| s.take()), actor.addr())
+    }
+
+    /// JIP's IsActorEssentialHook at `0x87F427` (H18): not asked while JIP is not installed (the
+    /// word 0, the fixes without `INSTALLED`); asked with the actor; an answer stands for the
+    /// player's test (1: not essential; 0: essential), none asks the player's test as the exe.
+    #[test]
+    fn essential_jip_teammate_seam() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::FIXES | jip_patches::NPC_PERKS] {
+            let (essential, tests, asked, _) = teammate_essential_with_jip(0, word, Some(1));
+            assert!(asked.is_empty(), "{word:x}");
+            assert_eq!((essential, tests), (true, 1));
+        }
+        let on = jip_patches::INSTALLED;
+        let (essential, tests, asked, actor) = teammate_essential_with_jip(0, on, None);
+        assert_eq!((essential, tests, asked), (true, 1, vec![vec![actor]]));
+        let (essential, tests, _, _) = teammate_essential_with_jip(1, on, None);
+        assert_eq!((essential, tests), (false, 1));
+        let (essential, tests, asked, actor) = teammate_essential_with_jip(0, on, Some(1));
+        assert_eq!((essential, tests, asked), (false, 0, vec![vec![actor]]));
+        let (essential, tests, _, _) = teammate_essential_with_jip(1, on, Some(0));
+        assert_eq!((essential, tests), (true, 0));
+    }
+
     #[test]
     fn fn_0087f260_checks_creature_state_settings_idle_and_base_virtuals() {
         // Plain actor: nothing blocks.
@@ -7731,6 +7807,68 @@ mod tests_block3 {
         assert_eq!(r.calls(PATHING_LOCATION_DESTRUCTOR).len(), 1);
         assert!(r.calls(REQUEST_CONSTRUCTOR).is_empty());
         assert!(r.calls(PATHING_ORDER_MOVE).is_empty());
+    }
+
+    thread_local! {
+        static G22_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+        static G22_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_move_height(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G22_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G22_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// The direction (its address and z) `POINT_LENGTH_2D` is given in `fn_00881860` with JIP's
+    /// word `word` and a seam handler answering `answer`, and what the seam was asked.
+    fn move_height_with_jip(word: u32, answer: Option<u32>) -> (Vec<(u32, f32)>, Vec<Vec<u32>>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut r = Rig::new();
+        let a = r.actor;
+        mobile_rig(&mut r);
+        r.stub(FIND_CLOSEST_POINT_ON_NAVMESH, ret(1));
+        r.stub(PATHING_FIND_POINT, ret(1));
+        r.stub(POINT_LENGTH_SQUARED, float_ret(100.0));
+        r.e.register_double(POINT_SUBTRACT, |e, args| {
+            for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+                e.mem.set_f32(args[1] + 4 * i as u32, *v);
+            }
+            Ret::default()
+        });
+        let seen = Rc::new(RefCell::new(vec![]));
+        let seen_in = seen.clone();
+        r.e.register_double(POINT_LENGTH_2D, move |e, args| {
+            seen_in.borrow_mut().push((args[0], e.mem.f32(args[0] + 8)));
+            let _ = e;
+            float_ret(5.0)
+        });
+        r.e.on_site(SiteSlot::new(Owner::Jip, 0x0088_1a9c), at_move_height);
+        G22_ASKED.with(|s| s.borrow_mut().clear());
+        G22_ANSWER.with(|c| c.set(answer));
+        r.e.set_jip_patches(word);
+        assert!(fn_00881860(&mut r.e, a, false));
+        let seen = seen.borrow().clone();
+        (seen, G22_ASKED.with(|s| s.take()))
+    }
+
+    /// JIP's AI Z fix at `0x881A9C` (G22): not asked without the fixes bit, the direction
+    /// flattened as in the exe; asked with the direction, an answer keeps its height.
+    #[test]
+    fn fn_00881860_jip_height_seam() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED | jip_patches::NPC_PERKS] {
+            let (seen, asked) = move_height_with_jip(word, Some(0));
+            assert!(asked.is_empty(), "{word:x}");
+            assert_eq!(seen.len(), 1);
+            assert_eq!(seen[0].1, 0.0);
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (seen, asked) = move_height_with_jip(on, None);
+        assert_eq!(asked, vec![vec![seen[0].0]]);
+        assert_eq!(seen[0].1, 0.0);
+        let (seen, asked) = move_height_with_jip(on, Some(0));
+        assert_eq!(asked, vec![vec![seen[0].0]]);
+        assert_eq!(seen[0].1, 3.0);
     }
 
     #[test]
