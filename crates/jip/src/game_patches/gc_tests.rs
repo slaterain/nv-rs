@@ -417,3 +417,115 @@ fn g33_pre_load_clears_the_players_killer() {
     pre_load(&mut e);
     assert_eq!(e.mem.u32(PLAYER + 0xc0), 0);
 }
+
+// ---- Review round of PR 2 (#605).
+
+/// A page past the area: `HIT2 * 4` wraps to `0x40`, so a handler that took the hit's address as
+/// the material would read `SET + 0x5C` (mapped, a decoy) instead of crashing.
+const HIGH: u32 = 0x4000_0000;
+const HIT2: u32 = HIGH + 0x10;
+
+/// G120: the material is the seam's second word, pinned by value: material 2 and 5 answer their
+/// own slots, never the decoy a material taken from the hit's address would read, and never the
+/// set of the aggressor's (`hit+0`) current weapon.
+#[test]
+fn g120_material_is_the_seams_second_word() {
+    let mut e = fixes_world();
+    e.map(HIGH, 0x1000);
+    e.mem.set_u32(HIT2 + 0x30, WEAPON);
+    e.mem.set_u32(WEAPON + 0x24c, SET);
+    e.mem.set_u32(SET + 0x1c + 2 * 4, 0x0d22);
+    e.mem.set_u32(SET + 0x1c + 5 * 4, 0x0d55);
+    e.mem.set_u32(SET + 0x5c, 0x0bad);
+    // The aggressor at `hit+0` with another weapon and set, whose data must never be answered.
+    let other_weapon = AREA_BASE + 0x6000;
+    let other_set = AREA_BASE + 0x6400;
+    e.mem.set_u32(HIT2, OTHER);
+    e.mem.set_u32(other_weapon + 0x24c, other_set);
+    e.mem.set_u32(other_set + 0x1c + 2 * 4, 0x0a22);
+    e.mem.set_u32(other_set + 0x1c + 5 * 4, 0x0a55);
+    e.register_double(0x008a_1710, move |_, _| other_weapon.into_ret());
+    assert_eq!(hit_blood_impact(&mut e, &[HIT2, 2]), Some(0x0d22));
+    assert_eq!(hit_blood_impact(&mut e, &[HIT2, 5]), Some(0x0d55));
+}
+
+/// G120 uses JIP's impact data rule (`GetImpactDataHook`) for the hit's set: with the fallback
+/// set, the lookup's answer for (fallback, material, slot), the slot when it answers none; an
+/// empty material answers none and the lookup is not asked.
+#[test]
+fn g120_takes_jips_impact_data_rule() {
+    let mut e = fixes_world();
+    e.mem.set_u32(HIT + 0x30, WEAPON);
+    e.mem.set_u32(WEAPON + 0x24c, SET);
+    e.mem.set_u32(SET + 0x1c + 2 * 4, 0x0d22);
+    e.mem.set_u32(SET + 0x1c + 5 * 4, 0x0d55);
+    e.mem.set_u32(IMPACT_FALLBACK, 0x0f00);
+    e.register(IMPACT_LOOKUP, |e, w| {
+        e.mem.set_u32(LOG, e.mem.u32(LOG) + 1);
+        let found = if w[..3] == [0x0f00, 2, 0x0d22] {
+            0x0e44
+        } else {
+            0
+        };
+        found.into_ret()
+    });
+    assert_eq!(hit_blood_impact(&mut e, &[HIT, 2]), Some(0x0e44));
+    assert_eq!(e.mem.u32(LOG), 1);
+    assert_eq!(
+        hit_blood_impact(&mut e, &[HIT, 5]),
+        Some(0x0d55),
+        "none: slot"
+    );
+    assert_eq!(e.mem.u32(LOG), 2);
+    assert_eq!(
+        hit_blood_impact(&mut e, &[HIT, 3]),
+        Some(0),
+        "empty material"
+    );
+    assert_eq!(e.mem.u32(LOG), 2, "empty material: lookup not asked");
+}
+
+/// G111: the high process (level 0: the player and nearby actors) takes the weapon path like
+/// level 1; a weapon entry with no form answers the setting (the port's deliberate difference).
+#[test]
+fn g111_high_process_and_no_weapon_form() {
+    let mut e = fixes_world();
+    e.mem.set_f32(DAMAGE_TO_WEAPON_VALUE, 1.5);
+    e.mem.set_u32(OTHER + 0x68, PROCESS_AT);
+    e.mem.set_u32(PROCESS_AT + 0x114, ENTRY);
+    e.mem.set_u32(ENTRY + 8, WEAPON);
+    e.mem.set_u8(WEAPON + 0x12c, 0x80);
+    e.mem.set_f32(WEAPON + 0x148, 4.0);
+    e.mem.set_u8(PROCESS_AT + 0x28, 0);
+    assert_eq!(weapon_damage(&mut e), 4.0, "high process: own value");
+    e.mem.set_u32(ENTRY + 8, 0);
+    assert_eq!(weapon_damage(&mut e), 1.5, "no weapon form: the setting");
+}
+
+/// O11: Explosives (0.3) and Melee (0.25) with an own value that is not a power of two and the
+/// word `+0xA0` = 9, multiplied in JIP's order (`mulss` by the rate, then by the word).
+#[test]
+fn o11_explosives_and_melee_in_jips_order() {
+    let mut e = fixes_world();
+    e.mem.set_f32(DAMAGE_TO_WEAPON_VALUE, 1.5);
+    e.mem.set_u32(OTHER + 0x68, PROCESS_AT);
+    e.mem.set_u32(PROCESS_AT + 0x114, ENTRY);
+    e.mem.set_u32(ENTRY + 8, WEAPON);
+    e.mem.set_u8(PROCESS_AT + 0x28, 1);
+    e.mem.set_u8(WEAPON + 0x12c, 0x80);
+    e.mem.set_f32(WEAPON + 0x148, 1.7);
+    e.mem.set_u16(WEAPON + 0xa0, 9);
+    e.set_jip_patches(e.jip_patches() | jip_patches::FO3_WPN_DEGRADATION);
+    let explosives = 1.7f32 * f32::from_bits(0x3e99_999a) * 9.0;
+    // The other order rounds differently here, so the test shows JIP's order.
+    assert_ne!(explosives, 1.7f32 * 9.0 * f32::from_bits(0x3e99_999a));
+    e.mem.set_u8(WEAPON + 0x15c, 0x23);
+    assert_eq!(
+        weapon_damage(&mut e),
+        f64::from(explosives),
+        "Explosives 0.3"
+    );
+    e.mem.set_u8(WEAPON + 0x15c, 0x26);
+    let melee = 1.7f32 * f32::from_bits(0x3e80_0000) * 9.0;
+    assert_eq!(weapon_damage(&mut e), f64::from(melee), "Melee 0.25");
+}

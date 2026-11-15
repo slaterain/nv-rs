@@ -4272,6 +4272,54 @@ mod tests {
         assert!(fn_008c51c0(&mut e, actor));
         assert_eq!(calls(&e, FN_00422820), vec![vec![w.actor + 0x44]]);
     }
+    /// JIP LN NVSE's G118 (group GC, step 3.9) at `0x8C227F`: with the row on, the projectile's
+    /// own weapon (`source`'s `0x476C90`) gives the effect source even when the item gave a weapon;
+    /// with the word clear the item's weapon is kept (the exe's `jnz`).
+    #[test]
+    fn g118_projectile_weapon_replaces_the_items_when_on() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [0, jip_patches::FIXES] {
+            let (mut e, w) = setup();
+            let actor = Ptr::new(w.actor);
+            let out = e.mem.alloc(8);
+            let target = e.mem.alloc(0x100);
+            let source = e.mem.alloc(0x100);
+            e.mem.set_u32(source, OTHER_VT);
+            e.register(slot_fn(OTHER_VT, 0x304), |_, _| Ret::default());
+            let change = e.mem.alloc(0x40);
+            let item_weapon = e.mem.alloc(0x100);
+            let item_effects = e.mem.alloc(0x100);
+            e.mem.set_u32(change + 8, item_weapon);
+            e.mem.set_u8(item_weapon + 4, 0x28);
+            e.mem.set_u32(item_weapon + 0x78, item_effects);
+            let projectile_weapon = e.mem.alloc(0x100);
+            let projectile_effects = e.mem.alloc(0x100);
+            e.mem.set_u8(projectile_weapon + 4, 0x28);
+            e.mem.set_u32(projectile_weapon + 0x78, projectile_effects);
+            e.mem.set_u32(source + 0xf8, projectile_weapon);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x008c_227f), |_, _| Some(0));
+            start_log(&mut e);
+            assert!(fn_008c2190(
+                &mut e,
+                actor,
+                Ptr::new(change),
+                Ptr::new(target),
+                Ptr::new(source),
+                Ptr::new(out)
+            ));
+            let expected = if word == 0 {
+                item_effects
+            } else {
+                projectile_effects
+            };
+            assert_eq!(
+                calls(&e, caster_slot(0x40))[0],
+                vec![w.caster, expected + 0x18],
+                "{word:08x}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]

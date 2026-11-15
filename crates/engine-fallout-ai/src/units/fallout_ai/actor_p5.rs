@@ -11668,6 +11668,31 @@ mod tests {
             .collect();
         assert_eq!(destroyed, vec![frame + 0x9c, frame + 0x90]);
     }
+    /// JIP LN NVSE's O19 (group GC, step 3.9) at `0x8B0FBF`: with `bCreatureSpreadFix` on, the
+    /// seam's answer is the iron sights word `00646910` gets, in place of `008bbc10` (not called).
+    #[test]
+    fn o19_answer_is_the_gun_skills_iron_sights_word() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let (mut e, actor, _) = cached_value_engine();
+        e.set(actor, Actor::fGunSkillHUD, -1.0);
+        let iron_sights = Rc::new(Cell::new(u32::MAX));
+        let seen = iron_sights.clone();
+        e.register_double(0x0064_6910, move |_, a| {
+            seen.set(a[3]);
+            float(f32::from_bits(a[2]) as f64 * 2.0)
+        });
+        let exe_calls = Rc::new(Cell::new(0));
+        let calls = exe_calls.clone();
+        e.register_double(0x008b_bc10, move |_, _| {
+            calls.set(calls.get() + 1);
+            int(0)
+        });
+        e.set_jip_patches(jip_patches::FIXES | jip_patches::CREATURE_SPREAD_FIX);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008b_0fbf), |_, _| Some(1));
+        assert_eq!(e.call(0x008b_0dd0, &args![actor, 0u32]).f32(), 21.0);
+        assert_eq!(iron_sights.get(), 1);
+        assert_eq!(exe_calls.get(), 0);
+    }
 }
 
 #[cfg(test)]

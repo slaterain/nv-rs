@@ -1272,3 +1272,22 @@ fn linked_references_set_when_installed() {
     );
     assert!(s(&mut w.e).linked_ref_defaults.is_empty());
 }
+
+/// G33's part of the housekeeping: a load's start and leaving to the main menu clear the player's
+/// killer (`+0xC0`) through the messages, as `DoPreLoadGameHousekeeping` does.
+#[test]
+fn a_load_and_the_main_menu_clear_the_players_killer() {
+    let mut w = World::new();
+    for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
+        w.e.mem.set_u32(PLAYER_REF + 0xc0, 0x0500_8800);
+        listen(
+            &mut w.e,
+            &Message {
+                kind,
+                data: 0,
+                len: 0,
+            },
+        );
+        assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0, "{kind}");
+    }
+}

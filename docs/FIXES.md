@@ -1000,11 +1000,15 @@ Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): equipping no lo
 worn item it replaces (`0x88DCDC`); a change of life state is saved with the actor, so the dead do not load
 standing in their bind pose (`0x8A19CF`); kill challenges no longer count teammates, actors JIP flags
 (`+0x143` bit 7) or essential ones (`0x89DC0E`); a hit's weapon effects come from the projectile's own
-weapon (`0x8C227F`); a hit that takes the minimum damage is marked armour-penetrated (`0x9B6335`); impact
-data use JIP's fallback rule (`0058e9d0`) and the hit blood comes from the hit's own weapon (`0x88EBAA`);
-the damage a shot does to the weapon is the weapon's own value when it has one, through its ammo's effects
-(`00646260`), and with `bFO3WpnDegradation` scaled by the weapon's skill and its word `+0xA0` as in
-Fallout 3; with `bCreatureSpreadFix` creatures' gun spread is computed as for creatures (`0x8B0FBF`).
+weapon (`0x8C227F`); a hit that takes the minimum damage is marked armour-penetrated (`0x9B6335`); while
+the game's impact data replacements are in use, a weapon's impact effect they do not replace is kept
+instead of being dropped (no impact effect at all) (`0058e9d0`); the blood
+on a hit comes from the weapon that made the hit, not the attacker's current weapon (`0x88EBAA`); the wear
+a shot puts on a weapon is the weapon's own value when it has one, and the ammo's effects on that wear come
+from the ammo the actor has equipped (`00646260`); with `bFO3WpnDegradation` weapons wear as in Fallout 3,
+scaled by the weapon's skill (Guns 0.15, Energy Weapons 0.2, Melee and Unarmed 0.25, Big Guns and
+Explosives 0.3) and by its attack damage; with `bCreatureSpreadFix` creatures shoot with the aimed (iron
+sights) spread, and other actors count as aiming only while in high process (`0x8B0FBF`).
 
 Built as part of JIP (in every preset once JIP answers "installed", not under the row): the player's
 killer is kept when the player dies (`0x89E790`, `0x89F351`; read by `GetKiller`) and cleared before a

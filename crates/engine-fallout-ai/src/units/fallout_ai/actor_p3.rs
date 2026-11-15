@@ -23250,6 +23250,170 @@ mod tests {
             vec![vec![frame + 0xf4]]
         );
     }
+    // ---- JIP LN NVSE's game patches of group GC (step 3.9): G98, G33 and G18 run in their
+    // translated functions with the seams on.
+
+    /// A page the GC call-site handlers write what they were asked with to and read their answer
+    /// from (site handlers are plain functions).
+    const GC_PAGE: u32 = 0x0535_0000;
+    /// G98: the actor asked, the answer.
+    const GC_G98_ASKED: u32 = GC_PAGE;
+    const GC_G98_ANSWER: u32 = GC_PAGE + 4;
+    /// G33: how often and with whom each of its two seams was asked.
+    const GC_STORE_COUNT: u32 = GC_PAGE + 0x10;
+    const GC_STORE_ASKED: u32 = GC_PAGE + 0x14;
+    const GC_KEPT_COUNT: u32 = GC_PAGE + 0x18;
+    const GC_KEPT_ASKED: u32 = GC_PAGE + 0x1c;
+    /// G18: how often it was asked.
+    const GC_MARK_COUNT: u32 = GC_PAGE + 0x20;
+
+    fn gc_seams(e: &mut Engine, word: u32) {
+        use engine_core::extend::{Owner, SiteSlot};
+        if !e.mem.is_mapped(GC_PAGE) {
+            e.map(GC_PAGE, 0x1000);
+        }
+        e.set_jip_patches(word);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0089_dc0e), |e, a| {
+            e.mem.set_u32(GC_G98_ASKED, a[0]);
+            Some(e.mem.u32(GC_G98_ANSWER))
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0089_e790), |e, a| {
+            e.mem.set_u32(GC_STORE_COUNT, e.mem.u32(GC_STORE_COUNT) + 1);
+            e.mem.set_u32(GC_STORE_ASKED, a[0]);
+            Some(0)
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0089_f351), |e, a| {
+            e.mem.set_u32(GC_KEPT_COUNT, e.mem.u32(GC_KEPT_COUNT) + 1);
+            e.mem.set_u32(GC_KEPT_ASKED, a[0]);
+            Some(0)
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008a_19cf), |e, _| {
+            e.mem.set_u32(GC_MARK_COUNT, e.mem.u32(GC_MARK_COUNT) + 1);
+            Some(0x404)
+        });
+    }
+
+    /// The player kills an NPC as in [`actor_kill_by_the_player_records_the_statistics_and_karma`]
+    /// with the row on, G98 answering `answer` and the exe's teammate test answering
+    /// `exe_teammate`; returns the kill challenge statistics calls made.
+    fn g98_kill(answer: u32, exe_teammate: u32) -> (Engine, Ptr<Actor>, usize) {
+        let mut e = engine();
+        let (victim, _, player, cells) = kill_setup(&mut e);
+        let player_360 = slot_target(&e, player.cast(), ACTOR_SLOT_360);
+        e.register_double(player_360, |_, _| ret(1));
+        e.mem
+            .set_f32(cells[&KARMA_REWARD_ALIGNMENT_SETTINGS[0]], 5.0);
+        stub(&mut e, GET_ALIGNMENT_FOR_KARMA, 0);
+        stub(&mut e, ACTOR_HAS_FACTION_THAT_CARES_ABOUT_CRIME, 1);
+        stub(&mut e, PLAYER_TEST_4997B0, 1);
+        stub(&mut e, REFR_BASE_FORM, 0x9300);
+        let karma_owner = e.mem.alloc(0x200);
+        embedded_table(&mut e, karma_owner + 0x100, &[(0x0c, float_ret(10.0))]);
+        stub(&mut e, ACTOR_BASE_FORM, karma_owner);
+        stub_with(&mut e, FTOL, |_, a| {
+            ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+        });
+        stub(&mut e, CREATURE_GETTER_59F3A0, 0);
+        stub(&mut e, RTTI_DYNAMIC_CAST, 0x9400);
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, exe_teammate);
+        gc_seams(
+            &mut e,
+            engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
+        );
+        e.mem.set_u32(GC_G98_ANSWER, answer);
+        actor_kill(&mut e, victim, player, 1.0);
+        let stats = call_count(&e, STATISTICS_WORKER_5F5950);
+        (e, victim, stats)
+    }
+
+    /// G98 at `0x89DC0E` in `Actor::Kill`: the seam, asked with the killed actor (not the
+    /// killer), decides by its answer's low byte whether the kill challenges are counted, in place
+    /// of the exe's teammate test. An NPC's death asks neither G33 seam.
+    #[test]
+    fn g98_kill_challenges_follow_the_seams_answer() {
+        let (e, victim, stats) = g98_kill(1, 0);
+        assert_eq!(e.mem.u32(GC_G98_ASKED), victim.addr());
+        assert_eq!(stats, 0, "skipped: no challenge counted");
+        let (e, victim, stats) = g98_kill(0x100, 1);
+        assert_eq!(e.mem.u32(GC_G98_ASKED), victim.addr());
+        assert_eq!(stats, 3, "counted: the answer's low byte is 0");
+        assert_eq!(
+            (e.mem.u32(GC_STORE_COUNT), e.mem.u32(GC_KEPT_COUNT)),
+            (0, 0),
+            "an NPC's death: G33 not asked"
+        );
+    }
+
+    /// The player killed as in [`actor_kill_of_the_player_ends_the_world_around_it`] with JIP
+    /// installed (G33 is JIP's own) and the progress export answering `export`.
+    fn g33_player_death(export: u32) -> (Engine, Ptr<Actor>, Ptr<Actor>) {
+        let mut e = engine();
+        let (_, _, player, _) = kill_setup(&mut e);
+        stub(&mut e, INTERFACE_IS_TOP_MENU_ID, 1);
+        stub(&mut e, AUDIO_INSTANCE, 0x9c00);
+        stub(&mut e, AUDIO_GET_SOUND_HANDLE_BY_NAME, 0x9d00);
+        stub(&mut e, SETTING_TEST_454AF0, export);
+        let attacker = big_actor(&mut e, &npc_slots());
+        e.mem.set_u32(player.addr() + 0x68, 0);
+        let process = object(&mut e, 0x800, &process_slots());
+        e.set(player, Actor::pCurrentProcess, process);
+        embedded_table(
+            &mut e,
+            player.addr() + ACTOR_VALUE_OWNER_OFFSET,
+            &[(0x00, ret(100)), (0x0c, float_ret(30.0))],
+        );
+        gc_seams(&mut e, engine_core::extend::jip_patches::INSTALLED);
+        actor_kill(&mut e, player, attacker, 1.0);
+        (e, player, attacker)
+    }
+
+    /// G33 at `0x89E790` and `0x89F351`: the player's killer is stored (the exe's jump past the
+    /// store taken away; `0087eef0` still not called for the player) and kept after the progress
+    /// export (the exe clears it).
+    #[test]
+    fn g33_the_players_killer_is_stored_and_kept() {
+        let (e, player, attacker) = g33_player_death(0);
+        assert_eq!(e.get(player, Actor::pMyKiller).addr(), attacker.addr());
+        assert_eq!(
+            (e.mem.u32(GC_STORE_COUNT), e.mem.u32(GC_STORE_ASKED)),
+            (1, player.addr())
+        );
+        assert_eq!(e.mem.u32(GC_KEPT_COUNT), 0, "no export: not asked");
+        assert!(!calls_to(&e, ACTOR_WORKER_87EEF0).contains(&vec![player.addr()]));
+        let (e, player, attacker) = g33_player_death(1);
+        assert_eq!(
+            calls_to(&e, PLAYER_EXPORT_PROGRESS_DATA),
+            vec![vec![player.addr(), 1]]
+        );
+        assert_eq!(e.get(player, Actor::pMyKiller).addr(), attacker.addr());
+        assert_eq!(
+            (e.mem.u32(GC_KEPT_COUNT), e.mem.u32(GC_KEPT_ASKED)),
+            (1, player.addr())
+        );
+        assert!(!calls_to(&e, ACTOR_WORKER_87EEF0).contains(&vec![player.addr()]));
+    }
+
+    /// G18 at `0x8A19CF`: the seam's mark is the slot `0x48` call's word on a change of state; an
+    /// unchanged state does not ask it.
+    #[test]
+    fn g18_mark_reaches_the_slot_0x48_call() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_48, ret(0))], None);
+        stub_bool_settings(&mut e, &[(SETTING_ESSENTIAL_PROTECTION, 1)]);
+        stub(&mut e, ACTOR_GET_ESSENTIAL, 1);
+        stub(&mut e, ACTOR_CAN_KNOCK_DOWN, 1);
+        gc_seams(&mut e, engine_core::extend::jip_patches::FIXES);
+        actor_set_life_state(&mut e, actor, 2);
+        assert_eq!(e.get(actor, Actor::eLifeState), 6);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, actor.cast(), ACTOR_SLOT_48)),
+            vec![vec![actor.addr(), 0x404]]
+        );
+        assert_eq!(e.mem.u32(GC_MARK_COUNT), 1);
+        actor_set_life_state(&mut e, actor, 6);
+        assert_eq!(e.get(actor, Actor::eLifeState), 6);
+        assert_eq!(e.mem.u32(GC_MARK_COUNT), 1, "same state: not asked");
+    }
 }
 
 #[cfg(test)]
