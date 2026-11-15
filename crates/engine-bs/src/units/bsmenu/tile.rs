@@ -2336,11 +2336,17 @@ pub fn tile_read_file(e: &mut Engine, this: Ptr<Tile>, path: Ptr) -> Ptr<Tile> {
     e.set_global(XML_ERROR_FLAG, 0u8);
 
     // UI Organizer's ResolveXMLFileHook replaces this call (00a01b87): its handler answers the
-    // parse storage, or nothing (the exe's call).
-    let uio = if e.uio() {
-        e.site(UIO_READ_FILE_SITE, &[path.addr()])
+    // parse storage, or nothing (the exe's call). For a storage it keeps in its parse cache UIO
+    // also sets the frame's "keep" byte (`[ebp-0x11]`, cleared at 00a01b7b and never set by the
+    // exe): the handler's second argument points at it.
+    let (uio, keep) = if e.uio() {
+        e.with_stack(4, |e, keep| {
+            e.mem.set_u8(keep.addr(), 0);
+            let storage = e.site(UIO_READ_FILE_SITE, &[path.addr(), keep.addr()]);
+            (storage, storage.is_some() && e.mem.u8(keep.addr()) != 0)
+        })
     } else {
-        None
+        (None, false)
     };
     let storage = match uio {
         Some(storage) => Ptr::new(storage),
@@ -2372,18 +2378,19 @@ pub fn tile_read_file(e: &mut Engine, this: Ptr<Tile>, path: Ptr) -> Ptr<Tile> {
         while node != 0 && e.mem.u32(node) != 0 {
             let sub_template = e.mem.u32(node);
             e.call(MENU_ADD_TEMPLATE, &args![menu, sub_template]);
-            // `bDeleteTemplates` of the menu is set; the storage's own flag
-            // (a local that is never set in this function) is cleared.
-            e.mem.set_u8(menu.addr() + 0x1d, 1);
-            e.set(storage, BuildStorage::bDeleteTemplates, false);
+            // `bDeleteTemplates` of the menu is the "keep" byte's opposite and the storage's
+            // own flag the byte (00a01cdc): with the exe's byte (never set) the menu deletes
+            // the templates and the storage does not.
+            e.mem.set_u8(menu.addr() + 0x1d, (!keep) as u8);
+            e.set(storage, BuildStorage::bDeleteTemplates, keep);
             if failed(e) {
                 return Ptr::NULL;
             }
             node = e.mem.u32(node + 4);
         }
     }
-    // The parse storage is deleted (the "keep" flag is never set).
-    if !storage.is_null() {
+    // The parse storage is deleted unless the "keep" byte is set (00a01d44; only UIO sets it).
+    if !keep && !storage.is_null() {
         e.call(BUILD_STORAGE_DESTROY, &args![storage]);
         deallocate(e, storage.addr());
     }
@@ -10649,6 +10656,63 @@ mod tests {
         None
     }
 
+    /// The handler keeping its storage (UIO's parse cache): the "keep" byte set.
+    fn uio_kept(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        assert_eq!(e.mem.u8(a[1]), 0, "the byte starts cleared");
+        e.mem.set_u8(a[1], 1);
+        uio_storage(e, a)
+    }
+
+    /// The handler setting the byte but answering nothing: the byte is not read.
+    fn uio_kept_nothing(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        e.mem.set_u8(a[1], 1);
+        None
+    }
+
+    #[test]
+    fn a_storage_uio_keeps_is_not_deleted_and_its_menu_keeps_the_templates() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_READ_FILE_SITE);
+        let mut e = tile_engine();
+        let setup = read_setup(&mut e, "");
+        e.on_site(AT, uio_kept);
+        e.set_uio(true);
+        e.call_log = Some(vec![]);
+        let tile = e
+            .call(
+                0x00a0_1b00,
+                &args![setup.parent, Ptr::<()>::new(setup.path)],
+            )
+            .u32();
+        assert_ne!(tile, 0);
+        assert_eq!(
+            calls_to(&e, MENU_ADD_TEMPLATE),
+            vec![vec![setup.menu, 0xcafe]]
+        );
+        // The menu does not delete the templates; the storage's flag is set; it is not freed.
+        assert_eq!(e.mem.u8(setup.menu + 0x1d), 0);
+        assert_eq!(e.mem.u8(setup.storage.get() + 0x10), 1);
+        assert!(calls_to(&e, BUILD_STORAGE_DESTROY).is_empty());
+        assert!(e.mem.block_size(setup.storage.get()).is_some());
+        assert_eq!(calls_to(&e, TILE_UPDATE_CHILDREN), vec![vec![tile, 0]]);
+        // Answering nothing: the exe's parse, and its storage deleted as always.
+        let mut e = tile_engine();
+        let setup = read_setup(&mut e, "");
+        e.on_site(AT, uio_kept_nothing);
+        e.set_uio(true);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x00a0_1b00,
+            &args![setup.parent, Ptr::<()>::new(setup.path)],
+        );
+        assert_eq!(e.mem.u8(setup.menu + 0x1d), 1);
+        assert_eq!(e.mem.u8(setup.storage.get() + 0x10), 0);
+        assert_eq!(
+            calls_to(&e, BUILD_STORAGE_DESTROY),
+            vec![vec![setup.storage.get()]]
+        );
+    }
+
     #[test]
     fn uio_answers_the_storage_only_while_its_word_is_on() {
         use engine_core::extend::{Owner, SiteSlot};
@@ -14185,7 +14249,7 @@ mod tests {
 
     /// The list, string and item doubles `AddPair` needs, the constants it
     /// compares with, and a template owned by a storage.
-    fn pair_engine() -> (Engine, Ptr<TileTemplate>, Ptr<BuildStorage>) {
+    pub(super) fn pair_engine() -> (Engine, Ptr<TileTemplate>, Ptr<BuildStorage>) {
         let mut e = tile_engine();
         install_strcmp(&mut e);
         for page in [0x0101_1000, 0x0107_3000, 0x0109_b000] {
@@ -16499,3 +16563,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tile_uio_diff_tests.rs"]
+mod uio_diff_tests;

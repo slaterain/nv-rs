@@ -84,7 +84,7 @@ sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon co
 lane A1 the first half of the actor commands: processes, combat and detection lists, leveling data, creature
 models, lane D the game state commands of `jip_fn_miscellaneous`, lane H JIP's position marker with `PlaceAtCell` and
 the added script variables with their co-save record applied at a load, then JIP's own position, angle and cell moves with `MoveToCell`, `MoveToEditorPosition`, `MoveToPosStr`, `MoveToNode` and `SetPosEx`, then the turns (`SetAngleEx`, `RotateAroundPoint`), `MoveToReticle` and `SetLinkedReference` with the linked references' co-save record applied, lane B the LN miscellaneous commands and the
-first inventory commands with the inventory references, item health, armour DT and DR, lane G the references' physics getters and setters, ray casts, hit material and crosshair pick); its engine hooks (step 3.5) are built in at
+first inventory commands with the inventory references, item health, armour DT and DR and the items added, equipped, unequipped and dropped, lane G the references' physics getters and setters, ray casts, hit material and crosshair pick); its engine hooks (step 3.5) are built in at
 their seams: the UI, actor
 and AI hooks, and since 2026-11-14 the world hooks (step 3.5c) and `CCCSetEquipped` with its always-on `GetCannotWear`
 patch (step 3.5d), switched on only by its commands and only once JIP answers "installed" (left for later:
@@ -100,8 +100,9 @@ now checks each call to a constant address against the translation it reaches.
 
 UI Organizer (UIO 2.30, which UI mods and then Stewie's tweaks need; maintainer, 2026-11-14) is being built
 in as `crates/uio` (docs/FIXES.md, "UI Organizer"): part 1 (its lists and conditions, the menus patched in
-memory, its reader at `Tile::ReadFile`) is a row, off in every preset until proven in the game with a UI
-mod; part 2 is its XML parser and `UIOInjectComponent`, part 3 its tile operators and text patches.
+memory, its reader at `Tile::ReadFile`) and part 2 (its XML parser and parse cache, `UIOInjectComponent`
+for JIP's `InjectUIComponent`) are a row, off in every preset until proven in the game with a UI mod;
+part 3 is its tile operators and text patches.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only
