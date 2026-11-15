@@ -2566,6 +2566,15 @@ pub fn extra_data_list_save_game_ov2(e: &mut Engine, this: Ptr<ExtraDataList>, b
 fn save_extra_ov2(e: &mut Engine, buffer: u32, extra: u32, extra_type: u8, flag: u32) {
     let at = |offset: u32| extra + offset;
     let word = |e: &Engine, offset: u32| e.mem.u32(extra + offset);
+    // JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44) writes its own arm into the jump table
+    // word of type 0x27 (`SafeWrite32(0x427F30, ExtraJIPSaveGameHook)`) while JIP answers
+    // "installed": the seam saves the extra data's key. One load while JIP is not installed.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && extra_type == 0x27
+        && e.site(0x0042_7f30, &[buffer, extra]).is_some()
+    {
+        return;
+    }
     match extra_type {
         // No payload.
         0x16 | 0x3e | 0x90 | 0x91 | 0x1f => {}
@@ -3203,6 +3212,16 @@ fn load_extra_ov2(
     present: &[u8; 0x93],
     extra_type: u8,
 ) {
+    // JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44) writes its own arm into the jump table
+    // word of type 0x27 (`SafeWrite32(0x42C328, ExtraJIPLoadGameHook)`) while JIP answers
+    // "installed": the seam loads the extra data's key into the list. One load while JIP is not
+    // installed.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && extra_type == 0x27
+        && e.site(0x0042_c328, &[this.addr(), buffer]).is_some()
+    {
+        return;
+    }
     match extra_type {
         // EXTRA_WORN
         0x16 => {
@@ -9696,5 +9715,101 @@ mod tests {
         assert_eq!(e.mem.u32(nodes[0]), 0x30);
         assert_eq!(e.mem.u32(nodes[0] + 4), 0);
         assert_eq!(calls_to(&log, LIST_REMOVE_HEAD), vec![vec![nodes[0]]]);
+    }
+
+    thread_local! {
+        /// The JIP seams asked (address, words) and what their handler answers.
+        static JIP_ASKED: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+        static JIP_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(Some(0)) };
+    }
+
+    fn at_save(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let extra = a[1];
+        JIP_ASKED.with(|s| {
+            s.borrow_mut().push((
+                0x0042_7f30,
+                vec![a[0], e.mem.u8(extra + 4) as u32, e.mem.u32(extra + 0x0c)],
+            ))
+        });
+        JIP_ANSWER.with(|v| v.get())
+    }
+
+    fn at_load(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_ASKED.with(|s| s.borrow_mut().push((0x0042_c328, a.to_vec())));
+        JIP_ANSWER.with(|v| v.get())
+    }
+
+    /// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44), the save arm of type 0x27
+    /// (`0x427F30`): with the word clear or only the fix bits it is the exe's (4 bytes), no seam;
+    /// with `INSTALLED` the seam is asked with the buffer and the extra data after the type byte,
+    /// and its answer replaces the arm (no answer: the exe's arm); another type is not asked.
+    #[test]
+    fn jip_extra_jip_save_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let (mut e, events, buffer) = buffer_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0042_7f30), at_save);
+        let save = |e: &mut Engine, extra_type: u8| {
+            e.mem.set_u32(buffer + 0x34, 1);
+            save_ov2(e, &events, buffer, &[(extra_type, 0x1234_5678)]);
+            inner_events(&events)
+        };
+        let exe = vec![("bytes", vec![1, 0x27]), ("bytes", vec![4, 0x1234_5678])];
+        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
+            e.set_jip_patches(word);
+            assert_eq!(save(&mut e, 0x27), exe);
+        }
+        assert!(JIP_ASKED.with(|s| s.take()).is_empty());
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert_eq!(save(&mut e, 0x27), vec![("bytes", vec![1, 0x27])]);
+        assert_eq!(
+            JIP_ASKED.with(|s| s.take()),
+            vec![(0x0042_7f30, vec![buffer, 0x27, 0x1234_5678])]
+        );
+        JIP_ANSWER.with(|v| v.set(None));
+        assert_eq!(save(&mut e, 0x27), exe);
+        JIP_ANSWER.with(|v| v.set(Some(0)));
+        JIP_ASKED.with(|s| s.take());
+        save(&mut e, 0x25);
+        assert!(JIP_ASKED.with(|s| s.take()).is_empty());
+    }
+
+    /// The load arm of type 0x27 (`0x42C328`): with the word clear or only the fix bits it is the
+    /// exe's (an extra data built, 4 bytes read), no seam; with `INSTALLED` the seam is asked with
+    /// the list and the buffer after the type byte and its answer replaces the arm (nothing
+    /// built); no answer leaves the exe's arm; another type is not asked.
+    #[test]
+    fn jip_extra_jip_load_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let (mut e, buffer) = load_ov2_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0042_c328), at_load);
+        let list = new_list(&mut e);
+        // `payload`: the arm's 4 bytes follow the type byte (an answered seam reads none of them).
+        let load = |e: &mut Engine, extra_type: u8, payload: bool| {
+            let mut stream = Bytes::new().w(1).b(extra_type);
+            if payload {
+                stream = stream.b(0xa0).b(0xa1).b(0xa2).b(0xa3);
+            }
+            let log = logged(e, |e| load_ov2(e, buffer, list, stream));
+            calls_to(&log, OPERATOR_NEW).len()
+        };
+        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
+            e.set_jip_patches(word);
+            assert_eq!(load(&mut e, 0x27, true), 1);
+            assert_eq!(word_of(&mut e, list, 0x27), 0xa3a2_a1a0);
+            remove_extra(&mut e, list, 0x27);
+        }
+        assert!(JIP_ASKED.with(|s| s.take()).is_empty());
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert_eq!(load(&mut e, 0x27, false), 0);
+        assert_eq!(
+            JIP_ASKED.with(|s| s.take()),
+            vec![(0x0042_c328, vec![list.addr(), buffer])]
+        );
+        JIP_ANSWER.with(|v| v.set(None));
+        assert_eq!(load(&mut e, 0x27, true), 1);
+        JIP_ANSWER.with(|v| v.set(Some(0)));
+        JIP_ASKED.with(|s| s.take());
+        load(&mut e, 0x25, true);
+        assert!(JIP_ASKED.with(|s| s.take()).is_empty());
     }
 }
