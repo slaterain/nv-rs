@@ -265,6 +265,12 @@ fn has_variable_added_needs_all_four() {
     assert_eq!(on(&mut e, HAS, 0, &[s(b"Speed"), r(1)]), 0.0, "not added");
     on(&mut e, ADD, 0, &[s(b"Speed"), r(1)]);
     assert_eq!(on(&mut e, HAS, 0, &[s(b"SPEED"), r(1)]), 1.0);
+    // The saved entry removed, the script's and the event list's variables still there: 0.
+    on(&mut e, REMOVE, 0, &[s(b"Speed"), r(1)]);
+    assert_eq!(vars(&e, EVENTS_A_LIST), [(5, 0.0)]);
+    assert_eq!(on(&mut e, HAS, 0, &[s(b"Speed"), r(1)]), 0.0);
+    on(&mut e, ADD, 0, &[s(b"Speed"), r(1)]);
+    assert_eq!(on(&mut e, HAS, 0, &[s(b"Speed"), r(1)]), 1.0);
     // The second quest shares the script but has no saved entry.
     assert_eq!(on(&mut e, HAS, 0, &[s(b"Speed"), r(2)]), 0.0);
     // Saved for the second quest, then its event list loses the variable.
