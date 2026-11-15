@@ -62,6 +62,8 @@ pub mod script_call;
 #[rustfmt::skip]
 pub mod slots;
 #[cfg(test)]
+mod condition_locks_tests;
+#[cfg(test)]
 mod saveload_tests;
 pub mod table;
 /// For the crate's tests and, through the `test-support` feature, the engine crates' end-to-end
@@ -102,8 +104,6 @@ pub struct Jip {
     pub saved: cosave::Saved,
     /// JIP's versions of xNVSE's and the game's commands.
     pub overrides: overrides::State,
-    /// JIP's gamepad state and its changes to what the game reads.
-    pub input: input::State,
     /// JIP's main-loop callbacks.
     pub main_loop: main_loop::State,
     /// JIP's LN events.
@@ -178,6 +178,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     // Built commands answer only while JIP answers "installed": `table::set_handlers` writes
     // nothing until then, so every JIP opcode is as without the DLL (no handler, no name).
     commands::install(e);
+    cosave::install_unlocked(e);
     input::install(e, answers_installed);
     ln_events::install(e, answers_installed);
     main_loop::install(e);

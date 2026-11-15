@@ -74,12 +74,12 @@ fn installed_every_seam_answers_jips_double() {
 #[test]
 fn the_doubles_take_the_input_state() {
     let mut e = engine();
-    e.ext::<Jip>().input.dead_zone_ls = 4000;
-    e.ext::<Jip>().input.dead_zone_rs = -1;
+    crate::input::state(&mut e).dead_zone_ls = 4000;
+    crate::input::state(&mut e).dead_zone_rs = -1;
     let (left, right) = doubles(&mut e);
     assert_eq!(e.mem.f64(left), 4000.0);
     assert_eq!(e.mem.f64(right), -1.0);
-    e.ext::<Jip>().input.dead_zone_ls = 1;
+    crate::input::state(&mut e).dead_zone_ls = 1;
     assert_eq!(doubles(&mut e), (left, right), "made once");
     assert_eq!(e.mem.f64(left), 4000.0);
 }

@@ -4243,10 +4243,17 @@ pub fn fn_0056a290(e: &mut Engine, this: Ptr<TESObjectREFR>, activator: Ptr<TESO
         let timer = f64::from(e.mem.f32(record + 4));
         let zero: f64 = e.global(ZERO_DOUBLE);
         if timer <= zero {
-            let first = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me));
-            let by_activator = first == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_A) || {
-                let second = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me));
-                second == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_B)
+            // JIP's ash pile test replaces the two compares (`0x56A30A`, step 3.9 G06).
+            let by_activator = match jip_ash_pile_test(e, 0x0056_a30a, me) {
+                Some(ash_pile) => ash_pile,
+                None => {
+                    let first = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me));
+                    first == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_A) || {
+                        let second =
+                            typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me));
+                        second == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_B)
+                    }
+                }
             };
             let who = if by_activator { activator.addr() } else { me };
             e.call(ACTIVATE_REFERENCE, &args![child, who, 0u32, 0u32, 1u32]);
@@ -10260,6 +10267,54 @@ mod tests {
             vec![vec![due.addr(), activator.addr(), 0, 0, 1]]
         );
         assert!(calls_to(&log, CELL_ADD_ACTIVATING_REF).is_empty());
+    }
+
+    /// JIP's ash pile test at `0x56A30A` (step 3.9 G06): with the word clear (or only `FIXES`)
+    /// not asked and the exe's compares decide; with `INSTALLED` asked with this reference, its
+    /// low byte deciding who activates the child (1: the activator, 0x100: this reference), no
+    /// answer leaving the compares.
+    #[test]
+    fn jip_ash_pile_seam_chooses_the_activator() {
+        use engine_core::extend::jip_patches;
+        let mut e = activate_engine();
+        stub(&mut e, &[ACTIVATE_REFERENCE, CELL_ADD_ACTIVATING_REF]);
+        let refr = third_refr(&mut e, 0x40);
+        let activator = third_refr(&mut e, 0x40);
+        let due = third_refr(&mut e, 0x40);
+        let records = [record_of(&mut e, due.addr(), 0.0)];
+        e.register_double(EXTRA_GET_CHILD_TIMER, |_, _| Ret {
+            st0: -1.0,
+            ..Ret::default()
+        });
+        let special = form(&mut e, 0x40, 9, 0);
+        e.set_global(GLOBAL_ACTIVATOR_FORM_B, special);
+        super::jip_seam::put(&mut e, 0x0056_a30a, Some(1));
+        let plain = e.mem.u32(refr.addr() + 0x20);
+        let who = |e: &mut Engine| {
+            let children = list_of(e, &records);
+            set_list(e, refr, L_ACTIVATE_CHILDREN, children);
+            let log = logged(e, |e| {
+                e.call(0x0056_a290, &args![refr, activator]);
+            });
+            calls_to(&log, ACTIVATE_REFERENCE)[0][1]
+        };
+        assert_eq!(who(&mut e), refr.addr());
+        e.mem.set_u32(refr.addr() + 0x20, special);
+        assert_eq!(who(&mut e), activator.addr(), "the exe's compares");
+        e.set_jip_patches(jip_patches::FIXES);
+        assert_eq!(who(&mut e), activator.addr());
+        assert!(super::jip_seam::seen().is_empty(), "only INSTALLED asks");
+        e.set_jip_patches(jip_patches::INSTALLED);
+        super::jip_seam::answer_with(Some(0x100));
+        assert_eq!(who(&mut e), refr.addr(), "JIP: not an ash pile");
+        assert_eq!(super::jip_seam::seen(), vec![vec![refr.addr()]]);
+        e.mem.set_u32(refr.addr() + 0x20, 0);
+        super::jip_seam::answer_with(Some(1));
+        assert_eq!(who(&mut e), activator.addr(), "JIP: an ash pile");
+        e.mem.set_u32(refr.addr() + 0x20, plain);
+        super::jip_seam::answer_with(None);
+        assert_eq!(who(&mut e), refr.addr(), "no answer: the compares");
+        super::jip_seam::seen();
     }
 
     #[test]

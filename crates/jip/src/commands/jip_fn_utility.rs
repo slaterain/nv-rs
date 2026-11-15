@@ -391,6 +391,9 @@ fn clear_jip_saved_data(e: &mut Engine, w: &[u32]) -> Ret {
     if maps != 0 && saved.ref_maps.erase(&if maps == 2 { 0xff } else { modi }) {
         saved.changed |= changed::REF_MAPS;
     }
+    if aux != 0 {
+        super::jip_fn_aux_variable::publish_saved(e);
+    }
     handled(true)
 }
 
