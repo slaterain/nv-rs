@@ -42,6 +42,7 @@ pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_miscellaneous;
+pub mod jip_fn_move_cmds;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
 pub mod jip_fn_projectile;
@@ -80,6 +81,7 @@ pub mod ln_fn_utility;
 pub mod ln_fn_weapon;
 pub mod nif_nodes;
 pub mod pos_marker;
+pub mod ref_move;
 
 use engine_core::prelude::*;
 use engine_core::ptr::Layout;
@@ -193,6 +195,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_inventory::COMMANDS,
     ln_fn_miscellaneous::COMMANDS,
     jip_fn_misc_ref_havok::COMMANDS,
+    jip_fn_move_cmds::COMMANDS,
+    jip_fn_move_cmds::CCC_COMMANDS,
     jip_fn_misc_ref_havok_w::COMMANDS,
 ];
 
@@ -784,6 +788,8 @@ mod tests {
             "jip_fn_inventory",
             "ln_fn_miscellaneous",
             "jip_fn_misc_ref",
+            "jip_fn_misc_ref",
+            "jip_fn_ccc",
             "jip_fn_misc_ref",
         ];
         let mut seen = std::collections::HashSet::new();
