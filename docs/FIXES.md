@@ -1079,10 +1079,10 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
   (`0x77765A`, group GA builds that seam) and the crosshair's (`0x95F7FE`, group GP) are not asked
   yet and still compare with the two vanilla forms, so until those seams land an activator marked
   as an ash pile (for example its bit restored from a co-save) is an ash pile in six places only.
-- `AttachAshPileHook` (G73, the death ash pile command `005db870`): row and handler only. It does
-  nothing yet: the seam at `0x5DBCFD` is group GS's to build and the command `AttachAshPileEx` is
-  not built; once both exist, the pile a death leaves is `AttachAshPileEx`'s form once, else the
-  exe's choice.
+- `AttachAshPileHook` (G73, the death ash pile command `005db870`, its seam at `0x5DBCFD`): the
+  pile a death leaves is `AttachAshPileEx`'s form once when a script set one, else the exe's
+  choice. It changes nothing yet: the command `AttachAshPileEx` is not built, so no script can set
+  a form.
 
 #### GF: Forms and records
 
@@ -1093,6 +1093,7 @@ Nothing built yet.
 | JIP's comment | Exe places | What a player with JIP gets | Built |
 |---|---|---|---|
 | (`DeferredInit`: `eventCmdInfos[1].execute = Hook_MenuMode_Execute; eventCmdInfos[0xE].execute = 0x5D4A40`) | the block-type records `0x0118E2F0` [1] (`MenuMode`, the exe's `MenuModeFunction` `005c4240`) and [0xE] ("Unused2", no handler), read by `005e1550` | `Begin MenuMode N` takes JIP's modes 0 to 4 (menu mode, the Pip-Boy, a menu open, the console, the loading screens) and any menu's id, as JIP's `MenuMode` command; a block of type 0xE no longer fails its line (its handler answers true and its body is skipped). Under `NV_JIP_VANILLA_CMDS` (the same switch and handler as the `MenuMode` command), not the game-patch row. Deliberate difference: both block handlers clear the block's result first. JIP's `MenuMode` handler sets the result only when the mode is up and JIP's 0xE handler (the exe's `005d4a40`, `mov al, 1`) never sets it; in JIP the "result = 0" patch above always clears it first, but here the game-patch row can be off, where the exe leaves whatever the stack held and the block would run or not by chance. With that row on nothing differs from JIP | 3.9 GS-1 |
+| `bNoFailedScriptLocks` (`SetOptionalPatch(7)`: three `SafeWrite16` jumps) | `005e0d20` (`0x5E0FBE`, a line that fails), `005e1550` (`0x5E1A23`, a set with an expression error; `0x5E1F0B`, a condition with an expression error) | A script whose line fails (the error is still reported) keeps running on later frames; the game sets its data length to 0 there, so it never runs again until the game is restarted. On with the row and JIP's default switch | 3.9 GS-2 |
 
 #### GW: World, sky, sound, saves, start-up
 
