@@ -2,30 +2,29 @@
 //! line to its end, `GetHitLimbDamage` to `GetAllPerks`): the last hit's data, actor bases'
 //! spells, skeletons, death items, weapon lists, impact materials, sound templates, VATS targets
 //! and factions, and an actor's killer and kill XP, packages, fleeing, ammo, path, movement,
-//! equipped items, idles, water depth, weapon drawn and crippled limbs. 40 of its 71 commands;
-//! the first 70 lines are lane A1's module.
+//! equipped items, idles, water depth, weapon drawn and crippled limbs; and (lane C1) the
+//! character controller's tilt, gravity and velocity, the ground's material, the last hit's
+//! node, VATS targetability, `AttachAshPileEx`, the player's 3D, the push away from a point and
+//! a limb dismembered. 53 of its 71 commands; the first 70 lines are lane A1's module.
 //!
 //! Built elsewhere already (the core track's hook files): `SetOnHitEventHandler`,
 //! `SetOnReloadWeaponEventHandler`, `SetOnRagdollEventHandler` (`actor_hooks.rs`) and
 //! `PushActorNoRagdoll` (`world_hooks.rs`, `world_push.rs`).
 //!
 //! Left for later, each with what it waits for:
-//! - a game patch of stage 3.9 (`measure/jip/PLAN-3.9.md`): `AttachAshPileEx` (G06, G73: the ash
-//!   pile form flag and `s_altAshPile`), `MoveAwayFrom` (G42: the backup package reads
+//! - a game patch of stage 3.9 (`measure/jip/PLAN-3.9.md`): `MoveAwayFrom` (G42: the backup package reads
 //!   `s_moveAwayDistance`; H16: JIP's 0x8C package), `TravelToRef` (H16: `AddBackUpPackage`
 //!   allocates JIP's enlarged 0x8C package), `ToggleNoGunWobble` (H19), `ToggleTeammateKillable`
 //!   (the killable-teammates patch of 3.9o), `Get/SetExcludedCombatActions` (H16: the combat
 //!   controller's added mask and JIP's per-reference map), `RemoveAllPerks` and `GetAllPerks` (O18
 //!   NPC perks: their NPC half reads the patch's state and JIP's perk maps), `GetArmourPenetrated`
 //!   (hit flag 0x80000000 is set only by JIP's own hit-damage patch, `patches_game.h`, G77);
-//! - a hook: `SetVATSTargetable` (`HOOK_MOD(AddVATSTarget)`), `FireWeaponEx` (writes the exe's
-//!   code at `009BAD76` and `01087F1C` and queues a call);
+//! - a hook: `FireWeaponEx` (writes the exe's code at `009BAD76` and `01087F1C` and queues a
+//!   call);
 //! - the 3D scene and physics (not ported to this layer): `ReloadEquippedModels`,
-//!   `UpdatePlayer3D`, `RefreshAnimData`, `GetHitNode` (the rigid body's node),
-//!   `SetActorVelocity`, `Get/SetActorTiltAngle`, `ReloadCharController`, `GetGroundMaterial`,
-//!   `Get/SetActorGravityMult`, `GetActorVelocityAlt` (the character controller);
-//! - not reached in this batch (only game calls; the next agent): `DismemberLimb`, `PlayIdleEx`,
-//!   `PushActorAwayAlt`.
+//!   `RefreshAnimData`, `ReloadCharController`;
+//! - not reached by lane C1 (nothing missing; the next agent): `PlayIdleEx` (the idle directory's
+//!   pick `00600950`, `TESIdleForm::FindIdle`'s condition walk, `AnimData::PlayIdle` `00497F20`).
 //!
 //! Layouts (JIP's headers; the exe where the audit table says so): a reference's base form +0x20,
 //! position z +0x38, cell +0x40, extra data list +0x44; an actor's process +0x68, killer +0xC0,
@@ -46,6 +45,7 @@
 use super::arrays::{create_array, Element};
 use super::extra;
 use super::forms::{ListNode, TES_OBJECT_ARMO_VTBL};
+use super::havok_refs as h;
 use super::ln_fn_actor::{actor_base, changes_list, equipped_extra};
 use super::{
     heap_alloc, is_actor, is_type, list_contains, list_items, list_prepend, list_remove,
@@ -94,6 +94,18 @@ pub static COMMANDS: Handlers = &[
     (0x2908, get_actor_movement_flags),
     (0x290a, get_hit_base_weapon_damage),
     (0x290b, get_hit_fatigue_damage),
+    (0x28db, get_actor_tilt_angle),
+    (0x28dc, set_actor_tilt_angle),
+    (0x28e7, get_actor_gravity_mult),
+    (0x28e8, set_actor_gravity_mult),
+    (0x2842, set_actor_velocity),
+    (0x2912, get_actor_velocity_alt),
+    (0x28d2, get_hit_node),
+    (0x2854, set_vats_targetable),
+    (0x2840, attach_ash_pile_ex),
+    (0x28c7, update_player_3d),
+    (0x288a, push_actor_away_alt),
+    (0x2833, dismember_limb),
 ];
 
 #[rustfmt::skip]
@@ -103,6 +115,7 @@ pub static CONDITIONS: super::Conditions = &[
     (0x283c, is_fleeing, is_fleeing_eval),
     (0x2849, get_target_unreachable, get_target_unreachable_eval),
     (0x28d9, get_in_faction_list, get_in_faction_list_eval),
+    (0x28e0, get_ground_material, get_ground_material_eval),
 ];
 
 // ---- layouts ----
@@ -1178,6 +1191,527 @@ fn donner_reed_kuru_party(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- VATS, ash piles, the player's 3D (lane C1) ----
+
+/// `kHookActorFlag2_NonTargetable` in the actor's `jipActorFlags2` (+0x106): the bit
+/// `ui_hooks`' `AddVATSTarget` seam reads.
+const NON_TARGETABLE: u8 = 2;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_SetVATSTargetable_Execute.
+/// An actor made targetable in VATS or not: when the asked state differs from the flag's, the
+/// flag is flipped and the `AddVATSTarget` hook gains a user (not targetable) or loses one
+/// (`HOOK_MOD`). No result.
+fn set_vats_targetable(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let targetable = read.int(0, 0);
+    let actor = Ptr::<crate::game::JipActorFlags>::new(a.this_obj);
+    let flags = e.get(actor, crate::game::JipActorFlags::jipActorFlags2);
+    if (targetable == 0) == (flags & NON_TARGETABLE == 0) {
+        e.set(
+            actor,
+            crate::game::JipActorFlags::jipActorFlags2,
+            flags ^ NON_TARGETABLE,
+        );
+        e.add_hook_user(engine_core::extend::Hook::AddVATSTarget, targetable == 0);
+    }
+    handled(true)
+}
+
+/// The game's `AttachAshPile` command (`005DB870`: one parameter parsed with the caller's
+/// parameter list into its mode word, then the ash pile placed under the actor; the port's
+/// `tesscriptfunctions.rs`), which JIP's `AttachAshPileEx` jumps to with its own arguments.
+const ATTACH_ASH_PILE: u32 = 0x005d_b870;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_AttachAshPileEx_Execute (asm).
+/// For an actor and a form JIP marks as an ash pile (`kHookFormFlag6_IsAshPile`): the form kept
+/// for the next ash pile (`s_altAshPile`, which G73's seam in the game's command takes once), then
+/// the game's `AttachAshPile` run with this command's own words (JIP's `JMP 0x5DB870`), its
+/// answer this command's. Otherwise nothing (true).
+fn attach_ash_pile_ex(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    let form = read.form(0);
+    if !read.ok || form == 0 {
+        return handled(true);
+    }
+    if crate::world_hooks::flags6(e, form) & crate::game_patches::gh2::IS_ASH_PILE == 0 {
+        return handled(true);
+    }
+    e.ext_free::<crate::game_patches::gh2::AltAshPile>()
+        .0
+        .store(form, std::sync::atomic::Ordering::Relaxed);
+    e.call(ATTACH_ASH_PILE, w)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_UpdatePlayer3D_Execute.
+/// `g_thePlayer->Update3D()` (`overrides::ref_update_3d`: the player with 3D, not already marked,
+/// marked for JIP's model loader hook and queued to load again). Nothing without the player. No
+/// result.
+fn update_player_3d(e: &mut Engine, w: &[u32]) -> Ret {
+    let _ = CommandArgs::new(w);
+    let player = e.mem.u32(THE_PLAYER);
+    if player != 0 {
+        crate::overrides::ref_update_3d(e, player);
+    }
+    handled(true)
+}
+
+/// `BaseProcess::PushActorAway` (vtable +0x418: `HighProcess`' `01087864` holds `0091FEE0`,
+/// `RET 0x14`: the pushed actor, x, y, z, the force).
+const PUSH_ACTOR_AWAY: u32 = 0x418;
+/// A reference's position (+0x30).
+const REFR_POS: u32 = 0x30;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_PushActorAwayAlt_Execute.
+/// An actor with a high process (level 0) pushed away from the point (x, y, z; each 0 when not
+/// given), the point taken relative to the actor (its position added, in floats) unless the flag
+/// says absolute, with the force `Actor::AdjustPushForce` makes of the given one. No result.
+fn push_actor_away_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let force = read.float(0, 0.0);
+    let mut pos = [read.float(1, 0.0), read.float(2, 0.0), read.float(3, 0.0)];
+    let absolute = read.int(4, 0);
+    let p = process(e, a.this_obj);
+    if p == 0 || e.mem.u8(p + PROCESS_LEVEL) != 0 {
+        return handled(true);
+    }
+    if absolute == 0 {
+        for (i, v) in pos.iter_mut().enumerate() {
+            *v += e.mem.f32(a.this_obj + REFR_POS + 4 * i as u32);
+        }
+    }
+    let force = crate::world_push::adjust_push_force(e, a.this_obj, force);
+    e.vcall(
+        p,
+        PUSH_ACTOR_AWAY,
+        &args![a.this_obj, pos[0], pos[1], pos[2], force],
+    );
+    handled(true)
+}
+
+/// `Actor::DismemberLimb`'s game calls (JIP's asm, each confirmed in the exe with its `RET`):
+/// `TESObjectREFR::GetDismembered` (`00573090`, `(part)`, `RET 4`), `Actor::GetEssential`
+/// (`0087F3D0`, no words), the actor's vtable +0x1A0 (`(0)`; `Actor`'s `01084254` holds
+/// `008D0370`, which answers false), the base form's vtable +0x180 (its body part data), the
+/// limb word's flag test (`00456630`, `(1)`, `RET 4`: the flag word at +0x30), then
+/// `TESObjectREFR::SetDismembered` (`00572FC0`, `(part, 0, 1, part, explode)`, `RET 0x14`) and
+/// the loose piece (`008B52A0`, `(actor value, part, explode, 1, 1, 0)`, `RET 0x18`).
+const GET_DISMEMBERED: u32 = 0x0057_3090;
+const GET_ESSENTIAL: u32 = 0x0087_f3d0;
+const ACTOR_SLOT_1A0: u32 = 0x1a0;
+const BASE_BODY_PART_DATA: u32 = 0x180;
+const LIMB_FLAG_TEST: u32 = 0x0045_6630;
+const SET_DISMEMBERED: u32 = 0x0057_2fc0;
+const DISMEMBER_PIECE: u32 = 0x008b_52a0;
+/// `BGSBodyPartData::bodyParts` (+0x34, 15 words), a body part's flags (+0x60: 1 severable, 8
+/// explodable) and actor value (+0x63) (`commands::forms`); a high process's limb words from
+/// +0x1DC (`MiddleHighProcess`' constructor clears the 0x3C bytes there).
+const PART_FLAGS: u32 = 0x60;
+const PART_ACTOR_VALUE: u32 = 0x63;
+const PROCESS_LIMBS: u32 = 0x1dc;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_DismemberLimb_Execute, and nvse/GameObjects.cpp: Actor::DismemberLimb (asm).
+/// For an actor and a body part up to 13: when the part is not dismembered yet, the actor is not
+/// essential, its vtable +0x1A0 answers false, its base's body part data has the part with flag 1
+/// or 8, it has a high process whose limb word for the part is set and has no flag 1: the part
+/// set dismembered and its loose piece made (exploded when asked). No result.
+fn dismember_limb(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let actor = a.this_obj;
+    if !is_actor(e, actor) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let part = read.int(0, 0);
+    let explode = u32::from(read.int(1, 0) != 0);
+    if part > 0xd {
+        return handled(true);
+    }
+    if e.call(GET_DISMEMBERED, &args![actor, part]).u32() & 0xff != 0
+        || e.call(GET_ESSENTIAL, &args![actor]).u32() & 0xff != 0
+        || e.vcall(actor, ACTOR_SLOT_1A0, &args![0u32]).u32() & 0xff != 0
+    {
+        return handled(true);
+    }
+    let base = e.mem.u32(actor + REFR_BASE);
+    if base == 0 {
+        return handled(true);
+    }
+    let data = e.vcall(base, BASE_BODY_PART_DATA, &args![]).u32();
+    let Some(body_part) = (data != 0)
+        .then(|| h::ptr(e, data.wrapping_add(BODY_PARTS + 4 * part)))
+        .flatten()
+    else {
+        return handled(true);
+    };
+    let (Some(flags), Some(value)) = (
+        h::rd8(e, body_part.wrapping_add(PART_FLAGS)),
+        h::rd8(e, body_part.wrapping_add(PART_ACTOR_VALUE)),
+    ) else {
+        return handled(true);
+    };
+    if flags & 9 == 0 {
+        return handled(true);
+    }
+    let p = process(e, actor);
+    if p == 0 || e.mem.u8(p + PROCESS_LEVEL) != 0 {
+        return handled(true);
+    }
+    let limb = e.mem.u32(p + PROCESS_LIMBS + 4 * part);
+    if limb == 0 || e.call(LIMB_FLAG_TEST, &args![limb, 1u32]).u32() & 0xff != 0 {
+        return handled(true);
+    }
+    e.call(
+        SET_DISMEMBERED,
+        &args![actor, part, 0u32, 1u32, part, explode],
+    );
+    e.call(
+        DISMEMBER_PIECE,
+        &args![actor, u32::from(value), part, explode, 1u32, 1u32, 0u32],
+    );
+    handled(true)
+}
+
+/// `GetGroundMaterial`'s reads and calls (each confirmed in the exe): the controller's support
+/// material `eSupportMaterial` +0x434 (`00C6E980` compares it with 0xF and 0x24 and stores it),
+/// 0x24 meaning the land; the reference's cell (+0x40); `TESObjectCELL::GetLand` (`00546FB0`,
+/// no words); `TESObjectLAND::GetCoordData` (`0053B550`, `(out, position, 1)`, `RET 0xC`: the
+/// 0x50-byte record whose quadrant is at +0x18 and nearest vertex at +0x3C); the texture of a
+/// vertex (`0053A630`, `(quadrant byte, vertex word)`, `RET 8`), its material byte at +0x1C.
+const CC_SUPPORT_MATERIAL: u32 = 0x434;
+const MATERIAL_LAND: u32 = 0x24;
+const CELL_GET_LAND: u32 = 0x0054_6fb0;
+const LAND_COORD_DATA: u32 = 0x0053_b550;
+const LAND_TEXTURE_AT: u32 = 0x0053_a630;
+const COORD_QUADRANT: u32 = 0x18;
+const COORD_VERTEX: u32 = 0x3c;
+const TEXTURE_MATERIAL: u32 = 0x1c;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::GetGroundMaterial
+// (asm).
+/// The material under an actor that is not in the air: the controller's support material
+/// converted (`kMaterialConvert`, -1 past 31), or for the land (0x24) the texture under the
+/// actor's position in its cell's land. -1 for anything else.
+fn ground_material(e: &mut Engine, actor: u32) -> i32 {
+    let ctrl = super::jip_fn_actor::controller(e, actor);
+    if ctrl == 0
+        || h::rd32(e, ctrl.wrapping_add(super::jip_fn_actor::CC_STATE)).map_or(true, |s| s & 2 != 0)
+    {
+        return -1;
+    }
+    let Some(mut material) = h::rd32(e, ctrl.wrapping_add(CC_SUPPORT_MATERIAL)) else {
+        return -1;
+    };
+    if material == MATERIAL_LAND {
+        let cell = e.mem.u32(actor + REFR_CELL);
+        if cell == 0 {
+            return -1;
+        }
+        let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+        if land == 0 {
+            return -1;
+        }
+        let texture = e.with_stack(0x50, |e, frame| {
+            let out = frame.addr();
+            e.call(LAND_COORD_DATA, &args![land, out, actor + REFR_POS, 1u32]);
+            let quadrant = u32::from(e.mem.u8(out + COORD_QUADRANT));
+            let vertex = u32::from(e.mem.u16(out + COORD_VERTEX));
+            e.call(LAND_TEXTURE_AT, &args![land, quadrant, vertex])
+                .u32()
+        });
+        let Some(m) = (texture != 0)
+            .then(|| h::rd8(e, texture.wrapping_add(TEXTURE_MATERIAL)))
+            .flatten()
+        else {
+            return -1;
+        };
+        material = u32::from(m);
+    }
+    super::jip_fn_projectile::MATERIAL_CONVERT
+        .get(material as usize)
+        .map_or(-1, |&c| i32::from(c))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetGroundMaterial_Execute.
+fn get_ground_material(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let m = ground_material(e, a.this_obj);
+    a.set_result(e, f64::from(m));
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetGroundMaterial_Eval.
+fn get_ground_material_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    let m = ground_material(e, a.this_obj);
+    e.mem.set_f64(a.result, f64::from(m));
+    handled(true)
+}
+
+// ---- the character controller (lane C1) ----
+
+/// `bhkCharacterController` fields, confirmed in the exe: the gravity `fGravity` +0x54C
+/// (`00C73ED0` copies the construction info's +0x90 into it), the tilt angles `fPitchAngle`
+/// +0x550 and `fRollAngle` +0x554 (`ApplyPitchAndRoll` `00C6E420` reads both; JIP's
+/// `NiPoint2 tiltAngle`), the character proxy `phkObject` +8 (the `bhkRefObject`'s Havok object,
+/// `havok_refs::HAVOK_OBJECT`) whose velocity is at +0x10 (`hkpCharacterProxy::getLinearVelocity`
+/// `00CAC950`: `LEA EAX,[ECX+0x10]`). The state and velocity offsets are `jip_fn_actor`'s.
+const CC_GRAVITY: u32 = 0x54c;
+const CC_TILT: u32 = 0x550;
+const PROXY_VELOCITY: u32 = 0x10;
+
+/// The X or Y index of an axis byte (`axis - 'X'` where JIP accepts `axis < 'Z'`).
+fn tilt_index(axis: u8) -> Option<u32> {
+    axis.checked_sub(b'X').filter(|&i| i < 2).map(u32::from)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetActorTiltAngle_Execute.
+/// The controller's tilt angle about the axis (X: pitch +0x550, Y: roll +0x554) in degrees (the
+/// float times `Dbl180dPI`, in doubles); nothing for Z or without a controller.
+fn get_actor_tilt_angle(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let Some(i) = tilt_index(super::jip_fn_misc_ref_havok::axis_arg(&read, 0)) else {
+        return handled(true);
+    };
+    let ctrl = super::jip_fn_actor::controller(e, a.this_obj);
+    if let Some(v) = (ctrl != 0)
+        .then(|| h::rdf32(e, ctrl.wrapping_add(CC_TILT + 4 * i)))
+        .flatten()
+    {
+        a.set_result(e, f64::from(v) * super::DBL_180_D_PI);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_SetActorTiltAngle_Execute.
+/// The controller's tilt angle about the axis (X or Y) set to the degrees times `FltPId180` (in
+/// floats): a plain store the controller's `ApplyPitchAndRoll` reads. No result.
+fn set_actor_tilt_angle(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let axis = super::jip_fn_misc_ref_havok::axis_arg(&read, 0);
+    let angle = read.float(1, 0.0);
+    let Some(i) = tilt_index(axis) else {
+        return handled(true);
+    };
+    let ctrl = super::jip_fn_actor::controller(e, a.this_obj);
+    if ctrl != 0 {
+        let v = angle * super::FLT_PI_D_180;
+        let _ = e
+            .mem
+            .try_write(ctrl.wrapping_add(CC_TILT + 4 * i), &v.to_le_bytes());
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetActorGravityMult_Execute.
+/// The controller's gravity (+0x54C); nothing without a controller.
+fn get_actor_gravity_mult(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let ctrl = super::jip_fn_actor::controller(e, a.this_obj);
+    if let Some(v) = (ctrl != 0)
+        .then(|| h::rdf32(e, ctrl.wrapping_add(CC_GRAVITY)))
+        .flatten()
+    {
+        a.set_result(e, f64::from(v));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_SetActorGravityMult_Execute.
+/// The controller's gravity set (a plain store the in-air state reads each step). No result.
+fn set_actor_gravity_mult(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let mult = read.float(0, 0.0);
+    let ctrl = super::jip_fn_actor::controller(e, a.this_obj);
+    if ctrl != 0 {
+        let _ = e
+            .mem
+            .try_write(ctrl.wrapping_add(CC_GRAVITY), &mult.to_le_bytes());
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_SetActorVelocity_Execute.
+/// The controller's character proxy's (+8, when not null) velocity on the axis set (+0x10, a
+/// plain store; JIP wakes nothing). No result.
+fn set_actor_velocity(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let axis = super::jip_fn_misc_ref_havok::axis_arg(&read, 0);
+    let velocity = read.float(1, 0.0);
+    let ctrl = super::jip_fn_actor::controller(e, a.this_obj);
+    let Some(proxy) = (ctrl != 0)
+        .then(|| h::ptr(e, ctrl.wrapping_add(h::HAVOK_OBJECT)))
+        .flatten()
+    else {
+        return handled(true);
+    };
+    if let Some(i) = axis.checked_sub(b'X').filter(|&i| i < 3) {
+        let at = proxy.wrapping_add(PROXY_VELOCITY + 4 * u32::from(i));
+        let _ = e.mem.try_write(at, &velocity.to_le_bytes());
+    }
+    handled(true)
+}
+
+/// `Projectile::ImpactList` (+0x88, a `BSSimpleList` of `ImpactData*`) and an impact data's
+/// `pCollidee` (+0) and `pTargetWorldObject` (+0x1C): `009C3EE0` walks the list from +0x88
+/// comparing each item's +0; `ImpactData::SaveGame` `009BB970` hands +0x1C to the collidee's
+/// vtable +0x1D0.
+const PROJ_IMPACTS: u32 = 0x88;
+const IMPACT_REFR: u32 = 0x00;
+const IMPACT_BODY: u32 = 0x1c;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetHitNode_Execute.
+/// The name of the node of the body the last hit's projectile hit on this actor: the projectile
+/// (hit data +8, when it is a projectile) and its impact list, the first impact on this actor with
+/// a body (+0x1C) whose node (`hkpWorldObject::GetParentNode`) is found; the node's name, `"NULL"`
+/// for a null name. `"NULL"` when nothing is found.
+fn get_hit_node(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let name = hit_node_name(e, a.this_obj).unwrap_or_else(|| b"NULL".to_vec());
+    super::assign_string(e, &a, Some(name));
+    handled(true)
+}
+
+fn hit_node_name(e: &mut Engine, actor: u32) -> Option<Vec<u8>> {
+    let p = process(e, actor);
+    if p == 0 {
+        return None;
+    }
+    let hit = virtual_hit_data(e, p);
+    let projectile = (hit != 0)
+        .then(|| h::ptr(e, hit.wrapping_add(HIT_PROJECTILE)))
+        .flatten()?;
+    if !h::is_projectile(e, projectile) {
+        return None;
+    }
+    let mut walk = h::Walk::new();
+    let head = Ptr::<ListNode>::new(projectile.wrapping_add(PROJ_IMPACTS));
+    for impact in list_items(e, head) {
+        if impact == 0 || h::rd32(e, impact.wrapping_add(IMPACT_REFR)) != Some(actor) {
+            continue;
+        }
+        let Some(body) = h::ptr(e, impact.wrapping_add(IMPACT_BODY)) else {
+            continue;
+        };
+        let node = h::parent_node(e, body, &mut walk);
+        if node != 0 {
+            // A null name is JIP's "NULL" (`NiFixedString::Get`); an unreadable one too.
+            let text = h::ptr(e, node.wrapping_add(h::NAME))
+                .and_then(|p| super::nif_nodes::c_text(e, p))
+                .unwrap_or_else(|| b"NULL".to_vec());
+            return Some(text);
+        }
+    }
+    None
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/Ni_types.cpp:
+// NiMatrix33::MultiplyVectorInv (asm).
+/// The vector's x, y, z (its fourth lane cleared) times the matrix's rows (`NiMatrix33`, nine
+/// floats by rows), lane by lane: `(m[i]*x + m[3+i]*y) + m[6+i]*z` for the three lanes kept.
+fn multiply_vector_inv(m: &[f32; 9], v: [f32; 4]) -> [f32; 3] {
+    std::array::from_fn(|i| (m[i] * v[0] + m[3 + i] * v[1]) + m[6 + i] * v[2])
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetActorVelocityAlt_Execute.
+/// The controller's velocity into the three variables (each lane as a double), with the local
+/// flag turned by the root node's world rotation ([`multiply_vector_inv`]); 1 when written. A
+/// reference without 3D or a controller answers nothing.
+fn get_actor_velocity_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let vars = [read.local(0), read.local(1), read.local(2)];
+    if vars.contains(&0) {
+        return handled(true);
+    }
+    let local = read.int(3, 0);
+    let ctrl = super::jip_fn_actor::controller(e, a.this_obj);
+    if ctrl == 0 {
+        return handled(true);
+    }
+    let root = h::ref_ni_node(e, a.this_obj);
+    if root == 0 {
+        return handled(true);
+    }
+    let Some(v) = h::vec4(e, ctrl.wrapping_add(super::jip_fn_actor::CC_VELOCITY)) else {
+        return handled(true);
+    };
+    let out = if local == 0 {
+        [v[0], v[1], v[2]]
+    } else {
+        let mut m = [0f32; 9];
+        for (i, x) in m.iter_mut().enumerate() {
+            match h::rdf32(e, root.wrapping_add(h::WORLD_ROTATE + 4 * i as u32)) {
+                Some(f) => *x = f,
+                None => return handled(true),
+            }
+        }
+        multiply_vector_inv(&m, v)
+    };
+    for (var, x) in vars.into_iter().zip(out) {
+        e.mem.set_f64(var.wrapping_add(8), f64::from(x));
+    }
+    a.set_result(e, 1.0);
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_p2_c1_tests.rs"]
+mod c1_tests;
