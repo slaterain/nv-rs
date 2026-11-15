@@ -201,6 +201,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_move_cmds::CCC_COMMANDS,
     jip_fn_linked_ref::COMMANDS,
     jip_fn_misc_ref_havok_w::COMMANDS,
+    crate::game_patches::gp::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
