@@ -403,3 +403,98 @@ fn an_include_bomb_without_text_stops_at_the_read_limit() {
     );
     assert!(disk.reads.borrow().len() <= MAX_READS as usize + 1);
 }
+
+/// A patched file already kept expanded is served whole; when it is bigger than the room the read
+/// has left it is dropped, and the read fetches no further include.
+#[test]
+fn an_expanded_text_bigger_than_the_room_left_is_dropped_and_ends_the_includes() {
+    let pp = b"data\\menus\\prefabs\\ppppp.xml";
+    let big = "x".repeat(MAX_TEXT / 2 + 1);
+    let disk = Disk::new(&[
+        (
+            "m.xml",
+            r#"<include src="ppppp.xml"/>|<include src="ppppp.xml"/>|<include src="qqqqq.xml"/>"#,
+        ),
+        ("data\\menus\\prefabs\\qqqqq.xml", "Q"),
+    ]);
+    let mut p = Patched::default();
+    p.insert(pp, big.clone().into_bytes());
+    assert_eq!(read_bytes(&mut p, &disk, pp).unwrap().len(), big.len());
+    assert!(p.expanded(pp));
+    let t = read_bytes(&mut p, &disk, b"m.xml").unwrap();
+    assert_eq!(t.len(), big.len() + 2, "the first copy and the two bars");
+    assert!(t.ends_with(b"x||"));
+    assert_eq!(
+        *disk.reads.borrow(),
+        vec![b"m.xml".to_vec()],
+        "the include after the dropped one is never read"
+    );
+}
+
+/// Patched P includes patched Q, whose own include meets the depth limit, then patched R, which
+/// meets none: Q and P are not kept expanded (P carries Q's limit past R), R is.
+#[test]
+fn a_limit_deep_in_a_patched_include_keeps_neither_file_expanded() {
+    // c000x .. c062x at depths 0..62, P at 63, Q and R at 64 (where includes are refused).
+    let mut files: Vec<(String, String)> = (0..MAX_DEPTH - 1)
+        .map(|i| {
+            let next = if i + 2 == MAX_DEPTH {
+                "ppppp.xml".to_string()
+            } else {
+                format!("c{:03}x.xml", i + 1)
+            };
+            (
+                format!("data\\menus\\prefabs\\c{i:03}x.xml"),
+                format!(r#"<include src="{next}"/>"#),
+            )
+        })
+        .collect();
+    files.push(("data\\menus\\prefabs\\inner.xml".into(), "IN".into()));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    let disk = Disk::new(&refs);
+    let (pp, qq, rr) = (
+        b"data\\menus\\prefabs\\ppppp.xml",
+        b"data\\menus\\prefabs\\qqqqq.xml",
+        b"data\\menus\\prefabs\\rrrrr.xml",
+    );
+    let mut p = Patched::default();
+    p.insert(
+        pp,
+        br#"<p><include src="qqqqq.xml"/><include src="rrrrr.xml"/></p>"#.to_vec(),
+    );
+    p.insert(qq, br#"<q><include src="inner.xml"/></q>"#.to_vec());
+    p.insert(rr, b"R".to_vec());
+    assert_eq!(
+        read(&mut p, &disk, "data\\menus\\prefabs\\c000x.xml").unwrap(),
+        "<p><q></q>R</p>"
+    );
+    assert!(!p.expanded(qq), "Q met the limit");
+    assert!(!p.expanded(pp), "P holds Q cut short");
+    assert!(p.expanded(rr));
+    // Read from the top, nothing is refused and both are kept.
+    assert_eq!(
+        read(&mut p, &disk, "data\\menus\\prefabs\\ppppp.xml").unwrap(),
+        "<p><q>IN</q>R</p>"
+    );
+    assert!(p.expanded(pp) && p.expanded(qq));
+}
+
+/// A once file's text is handed over at its first read: what is held goes down by its length.
+#[test]
+fn a_once_file_served_is_no_longer_held() {
+    let hud = b"Data\\Menus\\Main\\hud_main_menu.xml";
+    let mut p = Patched::default();
+    p.insert(hud, b"HUDTEXT".to_vec());
+    p.insert(b"Data\\Menus\\dialog_menu.xml", b"DIALOG".to_vec());
+    assert_eq!(p.held(), 13);
+    assert_eq!(
+        p.serve(str_hash(hud)),
+        Some(Served::Unexpanded(b"HUDTEXT".to_vec()))
+    );
+    assert_eq!(p.held(), 6);
+    assert_eq!(p.serve(str_hash(hud)), None);
+    assert_eq!(p.held(), 6);
+}

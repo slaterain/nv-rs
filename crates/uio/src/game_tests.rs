@@ -384,3 +384,21 @@ fn a_read_leaves_the_patched_files_in_the_shared_slot_across_the_games_calls() {
     OTHER.with(|o| o.borrow_mut().take());
     assert_eq!(e.ext::<Uio>().patched.len(), count);
 }
+
+/// The game's text is copied out when it fits the room exactly and refused one byte short; the
+/// text and its record are freed on the game's heap either way.
+#[test]
+fn a_game_text_of_exactly_the_room_is_read_and_both_frees_happen_either_way() {
+    let mut e = engine();
+    game("Data\\Menus\\n.xml", "abcdef");
+    for (room, want) in [
+        (6, reader::Fetch::Text(b"abcdef".to_vec())),
+        (5, reader::Fetch::TooLarge),
+    ] {
+        world(|w| w.freed.clear());
+        assert_eq!(game::game_text(&mut e, b"Data\\Menus\\n.xml", room), want);
+        let freed = world(|w| w.freed.clone());
+        assert_eq!(freed.len(), 2, "room {room}: the text and its record");
+        assert!(freed.iter().all(|&a| a != 0) && freed[0] != freed[1]);
+    }
+}
