@@ -153,6 +153,14 @@ fn toggle_detection_fix_sets_the_flag() {
     );
     assert_eq!(e.mem.u8(NOT_ACTOR + 0x105), 0);
     assert_eq!(run(&mut e, TOGGLE_DETECTION_FIX, 0, &[int_arg(1)]), 1);
+    // A variable the script does not have: the read fails and the flag is left as it was (a
+    // read taken as 0 would clear it).
+    e.mem.set_u8(ACTOR + 0x105, 0x1f);
+    assert_eq!(
+        run(&mut e, TOGGLE_DETECTION_FIX, ACTOR, &[vec![b'f', 9, 0]]),
+        1
+    );
+    assert_eq!(e.mem.u8(ACTOR + 0x105), 0x1f, "failed read: unchanged");
     // The flag then reaches both G53 handlers.
     assert_eq!(run(&mut e, TOGGLE_DETECTION_FIX, ACTOR, &[int_arg(1)]), 1);
     e.mem.set_u8(ACTOR + 0x18d, 1);

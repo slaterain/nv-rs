@@ -20839,6 +20839,46 @@ mod tests {
         assert_eq!(formula_level(&mut e, actor, other, seen, seen_line), -100);
     }
 
+    /// The third teammate seam (`0x8A131D`) decides whether the player's Chameleon or
+    /// Invisibility (the player's `+0xA4` slots `0x0C` and `0x08`) sets the formula's stealth
+    /// flag (its eighth word; the detected actor's own values are 0). Not installed: the exe's
+    /// teammate test decides. Installed: the answer's low byte (`0x80` and `0x1FE` are teammates,
+    /// `0x100` is not). The stealth seam (`0x8A1291`) with `0x80` asks the player's stealth.
+    #[test]
+    fn g53_third_seam_decides_the_players_stealth_flag() {
+        use engine_core::extend::jip_patches;
+        let (mut e, actor, other, _, seen, seen_line) = formula_world();
+        embedded_table(
+            &mut e,
+            actor.addr() + 0xa4,
+            &[
+                (0x0c, float_ret(0.0)),
+                (0x08, ret(1)),
+                (0x28, ret(0x1_2345)),
+            ],
+        );
+        g53_seams(&mut e);
+        let flag = |e: &mut Engine| {
+            e.call_log = Some(vec![]);
+            formula_level(e, actor, other, seen, seen_line);
+            calls_to(e, DETECTION_FORMULA)[0][7]
+        };
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 1);
+        assert_eq!(flag(&mut e), 1, "not installed, a teammate");
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 0);
+        assert_eq!(flag(&mut e), 0, "not installed, not a teammate");
+        e.set_jip_patches(jip_patches::INSTALLED);
+        for (answer, expected) in [(1, 1), (0x80, 1), (0x1fe, 1), (0, 0), (0x100, 0)] {
+            g53_answers(&[(0x008a_131d, Some(answer))]);
+            assert_eq!(flag(&mut e), expected, "{answer:#x}");
+        }
+        g53_answers(&[(0x008a_1291, Some(0x80))]);
+        e.call_log = Some(vec![]);
+        formula_level(&mut e, actor, other, seen, seen_line);
+        assert!(calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE)
+            .contains(&vec![actor.addr() + 0xa4, 0x2a]));
+    }
+
     #[test]
     fn detection_level_uses_the_formula_and_reports_it() {
         let (mut e, actor, other, acquire, seen, seen_line) = formula_world();
