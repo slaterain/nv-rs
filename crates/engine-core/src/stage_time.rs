@@ -321,7 +321,7 @@ impl Default for Marks {
 
 /// The run's marks.
 static MARKS: Marks = Marks::new();
-/// 0: the variable not read yet; 1: off; 2: on.
+/// 0: the variable not read yet; 1: off; 2: on; 3: on for [`on_here`]'s thread only (tests).
 static STATE: AtomicU8 = AtomicU8::new(0);
 static START: OnceLock<Instant> = OnceLock::new();
 
@@ -397,10 +397,12 @@ impl Drop for Here {
 }
 
 /// Nanoseconds since the clock's start, plus 1 (so never 0); [`on_here`]'s test clock on its thread. Read only
-/// while the aid is on.
+/// while the aid is on. Only [`on_here`] stores state 3, so a run (state 1 or 2) never reads the test clock.
 fn now_ns() -> u64 {
-    if let Some(t) = CLOCK.with(Cell::get) {
-        return t;
+    if STATE.load(Relaxed) == 3 {
+        if let Some(t) = CLOCK.with(Cell::get) {
+            return t;
+        }
     }
     START.get_or_init(Instant::now).elapsed().as_nanos() as u64 + 1
 }

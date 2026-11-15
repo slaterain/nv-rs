@@ -10,6 +10,7 @@
 #![allow(clippy::excessive_precision, clippy::needless_range_loop)]
 
 use super::*;
+use crate::commands::test_support::{allowed_rsqrt_estimates, newton_step, processor_rsqrt};
 
 type X = [u32; 4];
 
@@ -561,16 +562,25 @@ fn recorded_bits() {
 
 #[test]
 fn distances_bit_for_bit() {
-    let sums = [2.0f32, 3.0, 1_000_001.0, 1e-3, 0.0, 7.0];
-    let mut differs = false;
+    let sums = [2.0f32, 3.0, 1_000_001.0, 1e-3, 0.0, 7.0, 169.0];
     for s in sums {
         same(newton_sqrt(s), emu_sqrt(s), &format!("sqrt {s}"));
-        differs |= newton_sqrt(s).to_bits() != s.sqrt().to_bits();
+        if s != 0.0 {
+            // The asm's arithmetic is the step written out on this processor's estimate.
+            same(
+                newton_step(s, processor_rsqrt(s)),
+                emu_sqrt(s),
+                &format!("step {s}"),
+            );
+        }
     }
-    assert!(
-        differs,
-        "the estimate and one step differ from sqrt somewhere"
-    );
+    // The estimate and one step differ from sqrt on every processor: for 169 no estimate the
+    // specification allows lands the step on 13 (whether the other sums land on their rounded
+    // roots depends on the processor's table).
+    let allowed = allowed_rsqrt_estimates(169.0);
+    assert!(allowed.contains(&processor_rsqrt(169.0)));
+    assert!(allowed.iter().all(|&r| newton_step(169.0, r) != 13.0));
+    assert_ne!(newton_sqrt(169.0), 169f32.sqrt());
     let a = [1.5f32, -2.25, 3.0];
     let c = [-4.0f32, 7.5, 0.125];
     let (dx, dy, dz) = (a[0] - c[0], a[1] - c[1], a[2] - c[2]);
