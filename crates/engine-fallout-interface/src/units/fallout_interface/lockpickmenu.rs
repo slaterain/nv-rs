@@ -1926,7 +1926,9 @@ pub fn lock_pick_menu_rotate_lockpick(e: &mut Engine, this: Ptr) {
         let magnitude = e
             .call(FLOAT_ABS, &args![x87_store32(f64::from(axis))])
             .f64();
-        if magnitude <= e.global::<f64>(DEAD_ZONE_718F0) {
+        // JIP LN NVSE's D04 seam (step 3.9): the operand's double.
+        let dead_zone = super::caravanmenu::left_stick_dead_zone(e, 0x0079_0966, DEAD_ZONE_718F0);
+        if magnitude <= e.global::<f64>(dead_zone) {
             axis = 0;
         }
         let ratio = x87_store32(x87_div(f64::from(axis), x87_m32(scale)));
@@ -3526,6 +3528,46 @@ mod tests {
         // (10 + 50 - 100) / (20 - 100) = 0.5, times 90.
         assert_eq!(e.mem.f32(this + MAX_LOCK_ANGLE), 45.0);
         assert!(sounds(&e).is_empty());
+    }
+
+    /// JIP's D04 seam (`0x790966`) on the pad's turn, asked only with JIP installed; with the
+    /// answered double (1e9) the stick's 20000 is inside the dead zone: the turn formula gets
+    /// 0 / 1 (with the exe's 7849 it gets 20000 / 1).
+    #[test]
+    fn rotate_lockpick_asks_jips_dead_zone_seam() {
+        use crate::units::fallout_interface::caravanmenu::d04_test::{handlers, seen};
+        use engine_core::extend::jip_patches::INSTALLED;
+        for (word, expected, ratio) in [
+            (0, &[][..], 20000.0f32),
+            (INSTALLED, &[0x0079_0966][..], 0.0),
+        ] {
+            let mut e = world();
+            let this = menu(&mut e);
+            handlers(&mut e, word, &[0x0079_0966]);
+            e.set_global(CONTROLLER_SCALE, 1.0f32);
+            e.register(USING_GAMEPAD, |_, _| ret(1));
+            e.register(CONTROL_AXIS, |_, a| ret(if a[2] == 7 { 20000 } else { 0 }));
+            e.register(TILE_GET_FLOAT, |_, a| {
+                float(if a[0] == 0x90e0 { 100.0 } else { 0.0 })
+            });
+            e.register(FLOAT_MAX, |_, a| float(f64::from(f32::from_bits(a[0]))));
+            e.register(FLOAT_MIN, |_, a| float(f64::from(f32::from_bits(a[0]))));
+            e.register(FLOAT_ABS, |_, a| {
+                float(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.mem.set_f32(this + SWEET_SPOT, 50.0);
+            e.mem.set_u32(this + SWEET_SPOT_RADIUS, 10);
+            e.set_global(SPOT_SCALE, 2.0f64);
+            e.set_global(OUTSIDE_SCALE, 90.0f64);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_08f0, &args![this]);
+            assert_eq!(seen(), expected, "word {word:x}");
+            assert_eq!(
+                calls(&e, TURN_FORMULA)[0][0],
+                ratio.to_bits(),
+                "word {word:x}"
+            );
+        }
     }
 
     #[test]

@@ -1318,7 +1318,7 @@ fn set_interaction_disabled_type(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// `TESForm::HasScript` (JIP LN NVSE): the form's `TESScriptableForm` (`kBaseComponentOffsets`
 /// byte 1) holds a script (`+4`).
-fn has_script(e: &Engine, form: u32) -> bool {
+pub(crate) fn has_script(e: &Engine, form: u32) -> bool {
     let Some(&entry) =
         crate::commands::forms::BASE_COMPONENT_OFFSETS.get(usize::from(form_type(e, form)))
     else {

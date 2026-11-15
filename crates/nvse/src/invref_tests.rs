@@ -597,3 +597,25 @@ fn cyclic_lists_stop_the_game_or_end_the_walk() {
     assert_eq!(list_nth(&e, list, u32::MAX), 0);
     assert_eq!(list_items(&e, list).len(), MAX_LIST_NODES);
 }
+
+/// `set_removed` (JIP LN NVSE's `invRef->removed = true`): the write-back then copies nothing to
+/// the stack's list; a reference not marked still copies; an unknown id changes nothing.
+#[test]
+fn a_reference_marked_removed_writes_nothing_back() {
+    let mut e = engine();
+    let refr = create_entry(&mut e, CONTAINER, ITEM_A, 1, X_A);
+    let id = id_of(&e, refr);
+    assert!(!get(&mut e, id).unwrap().removed);
+    set_removed(&mut e, id);
+    assert!(get(&mut e, id).unwrap().removed);
+    e.mem.set_u32(refr + REFR_EXTRA + 4, 0xdead);
+    assert!(write_ref_data_to_container(&mut e, id));
+    assert_eq!(e.mem.u32(X_A + 4), COUNT_A, "nothing copied back");
+    let other = create_entry(&mut e, CONTAINER, ITEM_A, 1, X_A);
+    let other_id = id_of(&e, other);
+    e.mem.set_u32(other + REFR_EXTRA + 4, 0xbeef);
+    assert!(write_ref_data_to_container(&mut e, other_id));
+    assert_eq!(e.mem.u32(X_A + 4), 0xbeef, "not marked: copied back");
+    set_removed(&mut e, 0x1234_5678);
+    assert!(!get(&mut e, other_id).unwrap().removed);
+}

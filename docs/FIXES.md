@@ -966,7 +966,9 @@ save) should get.
 The row `NV_JIP_GAME_PATCHES` (Fallout.ini `bJIPGamePatches`) holds every change JIP LN NVSE 57.30
 (jazzisparis) makes to the game's own code for every player, as step 3.9 builds them; each is put in
 only while JIP answers "installed" (step 3.10) and the row is on. Patches that only answer JIP's own
-commands are part of JIP in every preset and are not listed here. The switches are read as JIP reads
+commands are part of JIP in every preset and are not listed here. A few of JIP's own always-on
+patches do change what a player sees; those are in whenever JIP is installed, whatever the row says
+(as JIP itself does), and their entries below say so and what a player with JIP gets. The switches are read as JIP reads
 them: `GetPrivateProfileSectionA("GamePatches", ..., "Data\NVSE\plugins\jip_nvse.ini")` (a path in
 the game's folder), a switch on unless its value starts with `0`, and with no such section (or one
 with only notes) JIP's defaults: `bIgnoreDTDRFix`, `bProjImpactDmgFix`, `bGameDaysPassedFix`,
@@ -988,7 +990,9 @@ Nothing built yet.
 
 #### GB: UI: item lists, repair, pad dead zones
 
-Nothing built yet.
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (`DeferredInit`, when its XInput hook is in: `SafeWrite32` of `&s_deadZoneLSg` / `&s_deadZoneRSg` over the operand of eleven `FCOMP double ptr [0x010718F0]`) | left stick, nine: `00741500` (`0x7416D6`, `0x741705`), `007908f0` (`0x790966`), `00799790` (`0x799861`, the map's zoom), `007bd2a0` (`0x7BD47D`, `0x7BD4A0`, `0x7BD4DD`), `0094a8c0` (`0x94AB59`, `0x94AB88`, the free camera's move axes); right stick, two: `0094a8c0` (`0x94A93C`, `0x94A95F`, the free camera's look axes) | JIP's own: in whenever JIP is installed, whatever this row says (as JIP). The caravan, lockpick, map-zoom and roulette menus and the free camera's movement test the left stick against JIP's left dead zone, a double that starts at the game's own 7849 (no change until `SetDeadZoneLS` is built). The free camera's look axes use JIP's right dead zone, 8689 where the game uses 7849, so a slightly larger right-stick movement is needed before the free camera turns, once group GP's four free-camera seams are in (until then the free camera keeps the game's 7849) | 3.9 GB-1 |
 
 #### GC: Hit damage, detection, combat formulas
 
