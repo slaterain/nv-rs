@@ -20,7 +20,7 @@ const XCELL: u32 = FORMS + 0xb480;
 const START_CELL: u32 = FORMS + 0xb800;
 /// JIP's `Flt180dPI` and `FltPId180`.
 const K180: f32 = 57.295_78;
-const KPI: f32 = 0.017_453_292_38;
+const KPI: f32 = 0.017_453_292;
 
 /// The ref_move stand-ins, the cells as forms, the marker, `WORLD_1`'s persistent cell
 /// `CELL_A`, the reference in no cell and without 3D (so moves go through the marker).
