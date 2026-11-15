@@ -267,9 +267,9 @@ pub struct State {
     pub free_texts: Vec<TextBlock>,
     /// `s_disabledEventsMap`: a form's disabled events.
     pub disabled_events: BTreeMap<u32, u32>,
-    /// `s_scriptWaitInfoMap` by owner, and `s_scriptWaitInfo` (the owner whose wait this run is).
+    /// `s_scriptWaitInfoMap` by owner (`s_scriptWaitInfo`, the owner whose wait this run is, is
+    /// per thread: [`current_wait`]).
     pub script_waits: BTreeMap<u32, ScriptWait>,
-    pub script_wait: Option<u32>,
     /// `s_jipFormFlagsMap`: the flag byte a form was last given (`TESForm::SetJIPFlag`), by id;
     /// [`restore_form_flags`] puts them back after a load and at a new game.
     pub form_flags: BTreeMap<u32, u8>,
@@ -296,14 +296,61 @@ impl Default for State {
             free_texts: Vec::new(),
             disabled_events: BTreeMap::new(),
             script_waits: BTreeMap::new(),
-            script_wait: None,
             form_flags: BTreeMap::new(),
         }
     }
 }
 
-pub(crate) fn state(e: &mut Engine) -> &mut State {
-    &mut e.ext::<Jip>().world_hooks
+/// JIP's world hook state for every engine of the run (JIP's globals): a lock-free slot
+/// ([`Engine::ext_free`], made at install before the threads start) holding the one [`State`]
+/// behind a std `RwLock`. The model path and name seams run on the loader and AI threads, the
+/// script runner, block, event mask, quest stage and result script seams on the AI threads
+/// (package and result scripts), the reference destructor (game_patches::gh2) on any thread;
+/// each reads one value or a copy of a script list. The lock is a leaf: a guard borrows the
+/// engine, so no game call, script call or second slot access can happen while it is held (the
+/// compiler refuses them), and it never waits on JIP's or xNVSE's shared slot.
+#[derive(Default)]
+pub struct Unlocked(std::sync::RwLock<State>);
+
+/// Makes the slot (before the threads start).
+pub(crate) fn make_slot(e: &mut Engine) {
+    e.ext_free::<Unlocked>();
+}
+
+/// The state to change (the commands, the pre-load, the reference destructor).
+pub(crate) fn state(e: &mut Engine) -> std::sync::RwLockWriteGuard<'_, State> {
+    e.ext_free::<Unlocked>()
+        .0
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The state to read (the seams).
+fn read(e: &mut Engine) -> std::sync::RwLockReadGuard<'_, State> {
+    e.ext_free::<Unlocked>()
+        .0
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+thread_local! {
+    /// `s_scriptWaitInfo`: the owner whose wait this thread's script run is (set at each run's
+    /// start, [`script_runner_site`]), or none. One value per thread: on one thread exactly
+    /// JIP's one global (a nested run overwrites it, as JIP's does); JIP's one global for every
+    /// thread would let a run on an AI thread take another thread's wait and resume this script
+    /// at that script's saved line (a deliberate difference). Every guest thread is its own OS
+    /// thread, with stepped and real threads alike (as xNVSE's thread-locals in `nvse::events`).
+    static WAIT_INFO: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+}
+
+/// The owner whose wait this thread's script run is (`s_scriptWaitInfo`).
+pub(crate) fn current_wait() -> Option<u32> {
+    WAIT_INFO.with(std::cell::Cell::get)
+}
+
+/// Sets this thread's `s_scriptWaitInfo`.
+pub(crate) fn set_current_wait(owner: Option<u32>) {
+    WAIT_INFO.with(|w| w.set(owner));
 }
 
 /// Puts the handlers and the commands in, when JIP answers "installed".
@@ -428,7 +475,7 @@ pub fn pre_load(e: &mut Engine) {
             }
         }
         e.set_hook(Hook::ScriptWait, false);
-        state(e).script_wait = None;
+        set_current_wait(None);
     }
     if !state(e).swap_obj_lod.is_empty() {
         state(e).swap_obj_lod.clear();
@@ -441,9 +488,11 @@ pub fn pre_load(e: &mut Engine) {
     }
     if !state(e).model_paths.is_empty() {
         // JIP frees each path here: the blocks go to the free list.
-        let s = state(e);
-        let paths = std::mem::take(&mut s.model_paths);
-        s.free_texts.extend(paths.into_values());
+        {
+            let mut s = state(e);
+            let paths = std::mem::take(&mut s.model_paths);
+            s.free_texts.extend(paths.into_values());
+        }
         e.set_hook(Hook::GetModelPath, false);
     }
 }
@@ -595,7 +644,7 @@ fn get_model_path_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if reference == 0 || ref_flags(e, reference) & REFR_MODEL_PATH == 0 {
         return None;
     }
-    state(e).model_paths.get(&reference).map(|b| b.at)
+    read(e).model_paths.get(&reference).map(|b| b.at)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetRefNameHook.
@@ -606,7 +655,7 @@ fn get_ref_name_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if ref_flags(e, reference) & ALT_REF_NAME == 0 {
         return None;
     }
-    state(e).ref_names.get(&reference).map(|b| b.at)
+    read(e).ref_names.get(&reference).map(|b| b.at)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: DoActivateHook.
@@ -713,7 +762,7 @@ enum Check {
 }
 
 fn disabled_mask(e: &mut Engine, form: u32) -> u32 {
-    state(e).disabled_events.get(&form).copied().unwrap_or(0)
+    read(e).disabled_events.get(&form).copied().unwrap_or(0)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: ScriptRunnerHook.
@@ -732,12 +781,12 @@ fn script_runner_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         };
         if owner != 0
             && flags5(e, owner) & SCRIPT_ON_WAIT != 0
-            && state(e).script_waits.contains_key(&owner)
+            && read(e).script_waits.contains_key(&owner)
         {
             wait = Some(owner);
         }
     }
-    state(e).script_wait = wait;
+    set_current_wait(wait);
     None
 }
 
@@ -753,19 +802,32 @@ fn eval_event_block_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         (a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
     let applies = result_high != 0 && action_list == 0;
     let mut skip = !applies;
-    if let Some(owner) = state(e).script_wait {
-        let wait = state(e).script_waits.get(&owner).copied();
-        if let Some(mut wait) = wait.filter(|w| w.block_offset == cursor) {
-            if kind > 1 || applies {
-                wait.iterations = wait.iterations.wrapping_sub(1);
-                state(e).script_waits.insert(owner, wait);
+    if let Some(owner) = current_wait() {
+        // One write of the entry, as JIP's decrement through its pointer: the count-down and
+        // the copy read back under one lock.
+        let counted = {
+            let mut s = state(e);
+            match s.script_waits.get_mut(&owner) {
+                Some(w) if w.block_offset == cursor => {
+                    if kind > 1 || applies {
+                        w.iterations = w.iterations.wrapping_sub(1);
+                        Some(Some(*w))
+                    } else {
+                        Some(None)
+                    }
+                }
+                _ => None,
+            }
+        };
+        if let Some(counted) = counted {
+            if let Some(wait) = counted {
                 if wait.iterations == 0 {
                     let at = e.mem.u32(length).wrapping_add(wait.saved_offset);
                     e.mem.set_u32(length, at);
                     for (i, word) in wait.saved_if_stack.iter().enumerate() {
                         e.mem.set_u32(runner + 0x20 + 4 * i as u32, *word);
                     }
-                    state(e).script_wait = None;
+                    set_current_wait(None);
                     let flags = flags5(e, wait.owner);
                     set_flags5(e, wait.owner, flags & !SCRIPT_ON_WAIT);
                     return Some(1);
@@ -799,11 +861,7 @@ fn set_quest_stage_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         return Some(1);
     }
     let id = e.mem.u8(stage);
-    let events = state(e)
-        .quest_stage
-        .get(&quest)
-        .cloned()
-        .unwrap_or_default();
+    let events = read(e).quest_stage.get(&quest).cloned().unwrap_or_default();
     let mut skip = 0u8;
     for event in events {
         if event.stage != id {
@@ -832,7 +890,8 @@ fn run_result_script_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if index != 0 {
         return None;
     }
-    if let Some(scripts) = state(e).dialog_topic.get(&info).cloned() {
+    let scripts = read(e).dialog_topic.get(&info).cloned();
+    if let Some(scripts) = scripts {
         invoke(e, &scripts, reference, &[info]);
     }
     let topic = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
@@ -840,7 +899,8 @@ fn run_result_script_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     } else {
         e.call(GET_OWNER_TOPIC, &args![info]).u32()
     };
-    if let Some(scripts) = state(e).dialog_topic.get(&topic).cloned() {
+    let scripts = read(e).dialog_topic.get(&topic).cloned();
+    if let Some(scripts) = scripts {
         invoke(e, &scripts, reference, &[topic]);
     }
     None
@@ -987,7 +1047,7 @@ fn script_arg(e: &Engine, read: &Read) -> Option<u32> {
 /// A script's set event (`EventCallbackScripts`): added (its variables kept) or removed
 /// (released); whether the set changed.
 fn insert(e: &mut Engine, set: fn(&mut State) -> &mut BTreeSet<u32>, script: u32) -> bool {
-    let added = set(state(e)).insert(script);
+    let added = set(&mut state(e)).insert(script);
     if added {
         crate::ln_events::capture(e, script);
     }
@@ -995,7 +1055,7 @@ fn insert(e: &mut Engine, set: fn(&mut State) -> &mut BTreeSet<u32>, script: u32
 }
 
 fn erase(e: &mut Engine, set: fn(&mut State) -> &mut BTreeSet<u32>, script: u32) -> bool {
-    let removed = set(state(e)).remove(&script);
+    let removed = set(&mut state(e)).remove(&script);
     if removed {
         crate::ln_events::release(e, script);
     }
@@ -1054,9 +1114,11 @@ fn set_on_dialog_topic(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     if read.int(1, 0) != 0 {
-        let s = state(e);
-        let made = !s.dialog_topic.contains_key(&form);
-        let added = s.dialog_topic.entry(form).or_default().insert(script);
+        let (made, added) = {
+            let mut s = state(e);
+            let made = !s.dialog_topic.contains_key(&form);
+            (made, s.dialog_topic.entry(form).or_default().insert(script))
+        };
         if made {
             e.add_hook_user(Hook::RunResultScript, true);
         }
@@ -1064,12 +1126,14 @@ fn set_on_dialog_topic(e: &mut Engine, w: &[u32]) -> Ret {
             crate::ln_events::capture(e, script);
         }
     } else {
-        let s = state(e);
-        let Some(scripts) = s.dialog_topic.get_mut(&form) else {
-            return handled(true);
+        let removed = {
+            let mut s = state(e);
+            let Some(scripts) = s.dialog_topic.get_mut(&form) else {
+                return handled(true);
+            };
+            scripts.remove(&script).then(|| scripts.is_empty())
         };
-        if scripts.remove(&script) {
-            let empty = scripts.is_empty();
+        if let Some(empty) = removed {
             crate::ln_events::release(e, script);
             if empty {
                 state(e).dialog_topic.remove(&form);
@@ -1135,14 +1199,19 @@ fn set_on_quest_stage(e: &mut Engine, w: &[u32]) -> Ret {
         state(e).quest_stage.entry(quest).or_default().push(event);
         crate::ln_events::capture(e, script);
         a.set_result(e, 1.0);
-    } else if let Some(events) = state(e).quest_stage.get_mut(&quest) {
-        let before = events.len();
-        events.retain(|o| !same(o));
-        let removed = before - events.len();
+    } else {
+        let (removed, empty) = {
+            let mut s = state(e);
+            let Some(events) = s.quest_stage.get_mut(&quest) else {
+                return handled(true);
+            };
+            let before = events.len();
+            events.retain(|o| !same(o));
+            (before - events.len(), events.is_empty())
+        };
         if removed == 0 {
             return handled(true);
         }
-        let empty = events.is_empty();
         for _ in 0..removed {
             crate::ln_events::release(e, script);
         }
@@ -1189,10 +1258,10 @@ fn informed(
     if caller == 0 {
         return handled(true);
     }
-    if set(state(e)).is_empty() {
+    if set(&mut state(e)).is_empty() {
         first(e);
     }
-    if set(state(e)).insert(caller) {
+    if set(&mut state(e)).insert(caller) {
         let flags = flags5(e, caller);
         if flags & flag != 0 {
             a.set_result(e, 1.0);
@@ -1345,22 +1414,37 @@ pub(crate) fn set_events_disabled(
 ) {
     if mask != 0 {
         if disable {
-            if let std::collections::btree_map::Entry::Vacant(v) =
-                state(e).disabled_events.entry(form)
-            {
-                v.insert(0);
+            let made = {
+                let mut s = state(e);
+                let made = !s.disabled_events.contains_key(&form);
+                if made {
+                    s.disabled_events.insert(form, 0);
+                }
+                made
+            };
+            if made {
                 set_jip_flag(e, form, EVENT_DISABLED, true);
                 e.add_hook_user(Hook::MarkScriptEvent, true);
             }
             *state(e).disabled_events.entry(form).or_insert(0) |= mask;
         } else if flags6(e, form) & EVENT_DISABLED != 0 {
-            if let Some(events) = state(e).disabled_events.get_mut(&form) {
-                *events &= !mask;
-                if *events == 0 {
-                    state(e).disabled_events.remove(&form);
-                    set_jip_flag(e, form, EVENT_DISABLED, false);
-                    e.add_hook_user(Hook::MarkScriptEvent, false);
+            let gone = {
+                let mut s = state(e);
+                match s.disabled_events.get_mut(&form) {
+                    Some(events) => {
+                        *events &= !mask;
+                        let gone = *events == 0;
+                        if gone {
+                            s.disabled_events.remove(&form);
+                        }
+                        gone
+                    }
+                    None => false,
                 }
+            };
+            if gone {
+                set_jip_flag(e, form, EVENT_DISABLED, false);
+                e.add_hook_user(Hook::MarkScriptEvent, false);
             }
         }
     }
@@ -1461,18 +1545,25 @@ fn set_ref_string(
     let reference = a.this_obj;
     let text = crate::commands::buffer_arg(e, &read, 0, 0x80, command);
     if !text.is_empty() {
-        let old = map(state(e)).get(&reference).copied();
+        let old = map(&mut state(e)).get(&reference).copied();
         let block = text_block(e, old, text.len() as u32 + 1);
         e.mem.write(block.at, &text);
         e.mem.set_u8(block.at + text.len() as u32, 0);
-        if map(state(e)).insert(reference, block).is_none() {
+        if map(&mut state(e)).insert(reference, block).is_none() {
             e.add_hook_user(hook, true);
         }
         let flags = ref_flags(e, reference);
         set_ref_flags(e, reference, flags | flag);
     } else {
-        if let Some(block) = map(state(e)).remove(&reference) {
-            state(e).free_texts.push(block);
+        let found = {
+            let mut s = state(e);
+            let block = map(&mut s).remove(&reference);
+            if let Some(block) = block {
+                s.free_texts.push(block);
+            }
+            block.is_some()
+        };
+        if found {
             e.add_hook_user(hook, false);
         }
         let flags = ref_flags(e, reference);
@@ -1488,16 +1579,19 @@ fn text_block(e: &mut Engine, old: Option<TextBlock>, size: u32) -> TextBlock {
     if let Some(old) = old.filter(|b| b.capacity >= size) {
         return old;
     }
-    let s = state(e);
-    let reuse = s
-        .free_texts
-        .iter()
-        .enumerate()
-        .filter(|(_, b)| b.capacity >= size)
-        .min_by_key(|(_, b)| b.capacity)
-        .map(|(i, _)| i);
+    let reuse = {
+        let mut s = state(e);
+        let i = s
+            .free_texts
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.capacity >= size)
+            .min_by_key(|(_, b)| b.capacity)
+            .map(|(i, _)| i);
+        i.map(|i| s.free_texts.swap_remove(i))
+    };
     let block = match reuse {
-        Some(i) => s.free_texts.swap_remove(i),
+        Some(b) => b,
         None => {
             let capacity = size.next_power_of_two().max(0x80);
             TextBlock {

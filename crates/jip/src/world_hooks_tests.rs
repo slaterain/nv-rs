@@ -11,7 +11,8 @@
 
 use super::*;
 use crate::test_support::{
-    engine, form_arg, int_arg, line, s, script_ref, RESULT, SCRIPT as CALLER,
+    engine, form_arg, int_arg, line, s, script_ref, with_jips_slot_held as held, RESULT,
+    SCRIPT as CALLER,
 };
 
 const AREA: u32 = 0x0500_0000;
@@ -351,10 +352,7 @@ fn unique_items() {
     );
     assert_eq!(users(&e, Hook::CheckUniqueItem), 1);
     let id = e.mem.u32(WEAPON_FORM + 0xc);
-    assert_eq!(
-        e.ext::<Jip>().world_hooks.form_flags.get(&id),
-        Some(&UNIQUE_ITEM)
-    );
+    assert_eq!(state(&mut e).form_flags.get(&id), Some(&UNIQUE_ITEM));
 }
 
 /// Many distinct names on one reference take one block of the game's heap, rewritten in place:
@@ -392,17 +390,17 @@ fn many_names_keep_the_memory_bounded() {
     assert_eq!(nvse::table::guest_text(&e, first), full);
     // Removed: the block waits; the next reference's text takes it.
     run(&mut e, SET_REF_NAME, REF, &[s(b"")]);
-    assert!(e.ext::<Jip>().world_hooks.ref_names.is_empty());
+    assert!(state(&mut e).ref_names.is_empty());
     run(&mut e, SET_REFR_MODEL_PATH, ITEM, &[s(b"b.nif")]);
     assert_eq!(site(&mut e, 0x0050_fe8b, &[BASE, ITEM]), Some(first));
     assert_eq!(e.mem.u32(HEAP), heap + 0x80);
     // Before a load the paths' blocks go back; a name takes it again.
     crate::world_hooks::pre_load(&mut e);
-    assert_eq!(e.ext::<Jip>().world_hooks.free_texts.len(), 1);
+    assert_eq!(state(&mut e).free_texts.len(), 1);
     run(&mut e, SET_REF_NAME, REF, &[s(b"again")]);
     assert_eq!(site(&mut e, 0x0055_d520, &[REF]), Some(first));
     assert_eq!(e.mem.u32(HEAP), heap + 0x80);
-    assert!(e.ext::<Jip>().world_hooks.free_texts.is_empty());
+    assert!(state(&mut e).free_texts.is_empty());
 }
 
 /// A text longer than its block (read whole with the list guard row) moves to a block twice the
@@ -420,12 +418,12 @@ fn a_longer_text_moves_to_a_bigger_block() {
     assert_ne!(big, small);
     assert_eq!(nvse::table::guest_text(&e, big), long);
     assert_eq!(
-        e.ext::<Jip>().world_hooks.ref_names[&REF].capacity,
+        state(&mut e).ref_names[&REF].capacity,
         0x100,
         "the next power of two"
     );
     assert_eq!(
-        e.ext::<Jip>().world_hooks.free_texts,
+        state(&mut e).free_texts,
         vec![TextBlock {
             at: small,
             capacity: 0x80
@@ -450,9 +448,10 @@ fn reference_names_and_model_paths() {
     assert_eq!(users(&e, Hook::GetRefName), 1);
     assert_eq!(users(&e, Hook::GetModelPath), 1);
     assert_eq!(e.mem.u8(REF + 0x5f), ALT_REF_NAME | REFR_MODEL_PATH);
-    let name = site(&mut e, 0x0055_d520, &[REF]).expect("named");
+    // On the loader and AI threads: both answer while another engine holds JIP's shared slot.
+    let name = held(&mut e, |e| site(e, 0x0055_d520, &[REF])).expect("named");
     assert_eq!(nvse::table::guest_text(&e, name), b"Bob");
-    let path = site(&mut e, 0x0050_fe8b, &[BASE, REF]).expect("a path");
+    let path = held(&mut e, |e| site(e, 0x0050_fe8b, &[BASE, REF])).expect("a path");
     assert_eq!(nvse::table::guest_text(&e, path), b"a.nif");
     assert_eq!(site(&mut e, 0x0050_fe8b, &[BASE, 0]), None, "no reference");
     run(&mut e, SET_REF_NAME, REF, &[s(b"Al")]);
@@ -466,7 +465,7 @@ fn reference_names_and_model_paths() {
     assert_eq!(e.mem.u8(REF + 0x5f), ALT_REF_NAME);
     assert_eq!(users(&e, Hook::GetRefName), 1);
     assert_eq!(users(&e, Hook::GetModelPath), 0);
-    assert!(e.ext::<Jip>().world_hooks.model_paths.is_empty());
+    assert!(state(&mut e).model_paths.is_empty());
     e.mem.set_u8(REF + 0x5f, 0);
     crate::world_hooks::pre_load(&mut e);
     assert_eq!(e.mem.u8(REF + 0x5f), ALT_REF_NAME, "set again");
@@ -681,14 +680,17 @@ fn an_info_under_two_topics_takes_get_owner_topics_answer() {
         &[form_arg(R_S1), int_arg(1), form_arg(R_TOPIC)],
     );
     // The second topic's handler (no script argument index of its own here).
-    e.ext::<Jip>()
-        .world_hooks
+    state(&mut e)
         .dialog_topic
         .entry(SECOND_TOPIC)
         .or_default()
         .insert(SCRIPT_TWO);
     crate::script_call::calls();
-    assert_eq!(site(&mut e, 0x0061_f184, &[INFO, 0, REF]), None);
+    // On the AI threads (CreateConversation): it answers while another engine holds JIP's slot.
+    assert_eq!(
+        held(&mut e, |e| site(e, 0x0061_f184, &[INFO, 0, REF])),
+        None
+    );
     assert_eq!(
         crate::script_call::calls(),
         vec![(SCRIPT_ONE, REF, vec![TOPIC_FORM])]
@@ -717,8 +719,7 @@ fn an_info_under_two_topics_takes_the_last_linked_with_jips_patch() {
         0,
         &[form_arg(R_S1), int_arg(1), form_arg(R_TOPIC)],
     );
-    e.ext::<Jip>()
-        .world_hooks
+    state(&mut e)
         .dialog_topic
         .entry(SECOND_TOPIC)
         .or_default()
@@ -841,8 +842,9 @@ fn quest_stage_events() {
     e.mem.set_u8(QUEST_FORM + 0x3c, 8);
     assert_eq!(add(&mut e, R_S2, 10, 0), 1.0);
     assert_eq!(users(&e, Hook::SetQuestStage), 1, "one per quest");
+    // On an AI thread (a result script): it answers while another engine holds JIP's slot.
     assert_eq!(
-        site(&mut e, 0x0060_f4a9, &[STAGE, QUEST_FORM]),
+        held(&mut e, |e| site(e, 0x0060_f4a9, &[STAGE, QUEST_FORM])),
         Some(1),
         "1 | 2: set"
     );
@@ -916,27 +918,27 @@ fn recorded_form_flags_come_back_after_a_load() {
     run(&mut e, SET_INTERACTION_DISABLED, ITEM, &[int_arg(1)]);
     let (ref_id, item_id) = (0x0100_0001, 0x0100_0003);
     assert_eq!(
-        e.ext::<Jip>().world_hooks.form_flags.get(&ref_id),
+        state(&mut e).form_flags.get(&ref_id),
         Some(&NO_PC_ACTIVATION)
     );
     // The load rebuilds the forms: their bytes are 0 again.
     e.mem.set_u8(REF + 6, 0);
     message(&mut e, msg::POST_LOAD_GAME, 0);
     assert_eq!(e.mem.u8(REF + 6), 0, "a failed load restores nothing");
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.len(), 2);
+    assert_eq!(state(&mut e).form_flags.len(), 2);
     message(&mut e, msg::POST_LOAD_GAME, 1);
     assert_eq!(e.mem.u8(REF + 6), NO_PC_ACTIVATION);
     // The item is not in the game's form map: its record goes.
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&item_id), None);
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.len(), 1);
+    assert_eq!(state(&mut e).form_flags.get(&item_id), None);
+    assert_eq!(state(&mut e).form_flags.len(), 1);
     e.mem.set_u8(REF + 6, 0);
     message(&mut e, msg::NEW_GAME, 0);
     assert_eq!(e.mem.u8(REF + 6), NO_PC_ACTIVATION, "a new game too");
     // A byte of 0 (every flag cleared) leaves the record.
     run(&mut e, SET_INTERACTION_DISABLED, REF, &[int_arg(0)]);
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&ref_id), Some(&0));
+    assert_eq!(state(&mut e).form_flags.get(&ref_id), Some(&0));
     message(&mut e, msg::POST_LOAD_GAME, 1);
-    assert!(e.ext::<Jip>().world_hooks.form_flags.is_empty());
+    assert!(state(&mut e).form_flags.is_empty());
 }
 
 /// A form type byte past the game's 121 types (bad mod data) answers "not disabled", "no script"
@@ -959,7 +961,7 @@ fn a_form_type_past_the_tables_stops_nothing() {
         0,
         &[form_arg(R_BASE), s(b"OnAdd"), int_arg(1)],
     );
-    assert!(e.ext::<Jip>().world_hooks.disabled_events.is_empty());
+    assert!(state(&mut e).disabled_events.is_empty());
     assert_eq!(users(&e, Hook::MarkScriptEvent), 0);
     // SetInteractionDisabledType's own check passes only the filter types.
     run(
@@ -1174,7 +1176,7 @@ fn script_events_disabled() {
     assert_eq!(users(&e, Hook::MarkScriptEvent), 1);
     assert_eq!(users(&e, Hook::DoActivate), 1);
     assert_eq!(e.mem.u8(REF + 6), EVENT_DISABLED | ACTIVATE_DISABLED);
-    assert_eq!(e.ext::<Jip>().world_hooks.disabled_events[&REF], 0x1080);
+    assert_eq!(state(&mut e).disabled_events[&REF], 0x1080);
     assert_eq!(site(&mut e, 0x0057_3512, &[REF]), Some(1));
     // The seam: the list's extra script with an event list and a script with data.
     let list = REF + 0x44;
@@ -1182,8 +1184,9 @@ fn script_events_disabled() {
     e.mem.set_u32(XSCRIPT + 0xc, OBJ_SCRIPT);
     e.mem.set_u32(XSCRIPT + 0x10, 0x7700);
     e.mem.set_u32(OBJ_SCRIPT + 0x20, 20);
+    // On the AI threads: it answers while another engine holds JIP's shared slot.
     assert_eq!(
-        site(&mut e, 0x005a_c763, &[0, list, 0x80]),
+        held(&mut e, |e| site(e, 0x005a_c763, &[0, list, 0x80])),
         Some(1),
         "OnHit disabled"
     );
@@ -1204,10 +1207,7 @@ fn script_events_disabled() {
     );
     set_extra(&mut e, list, EXTRA_SCRIPT, XSCRIPT);
     // The base's events: OnDeath disabled for the base.
-    e.ext::<Jip>()
-        .world_hooks
-        .disabled_events
-        .insert(BASE, 0x10);
+    state(&mut e).disabled_events.insert(BASE, 0x10);
     e.mem.set_u8(BASE + 6, EVENT_DISABLED);
     assert_eq!(site(&mut e, 0x005a_c763, &[0, list, 0x10]), Some(1));
     // Item events (OnAdd, 1): the form is a reference, so the caller's word decides.
@@ -1216,10 +1216,7 @@ fn script_events_disabled() {
         None,
         "no caller word"
     );
-    e.ext::<Jip>()
-        .world_hooks
-        .disabled_events
-        .insert(ITEM_BASE, 1);
+    state(&mut e).disabled_events.insert(ITEM_BASE, 1);
     e.mem.set_u8(ITEM_BASE + 6, EVENT_DISABLED);
     {
         let _w = e.mark_caller_word(Hook::MarkScriptEvent, ITEM);
@@ -1234,10 +1231,7 @@ fn script_events_disabled() {
     {
         // OnEquip: the item word itself is the form tested.
         let _w = e.mark_caller_word(Hook::MarkScriptEvent, ITEM_BASE);
-        e.ext::<Jip>()
-            .world_hooks
-            .disabled_events
-            .insert(ITEM_BASE, 2);
+        state(&mut e).disabled_events.insert(ITEM_BASE, 2);
         assert_eq!(site(&mut e, 0x005a_c763, &[REF, list, 2]), Some(1));
         assert_eq!(
             site(&mut e, 0x005a_c763, &[REF, list, 8]),
@@ -1246,10 +1240,7 @@ fn script_events_disabled() {
         );
     }
     // OnFire: the form's own events, no caller word.
-    e.ext::<Jip>()
-        .world_hooks
-        .disabled_events
-        .insert(ITEM_BASE, 0x40_0000);
+    state(&mut e).disabled_events.insert(ITEM_BASE, 0x40_0000);
     assert_eq!(
         site(&mut e, 0x005a_c763, &[ITEM_BASE, list, 0x40_0000]),
         Some(1)
@@ -1309,37 +1300,38 @@ fn script_wait_seams() {
         saved_offset: 0x10,
         saved_if_stack: [7; 12],
     };
-    e.ext::<Jip>().world_hooks.script_waits.insert(REF, wait);
+    state(&mut e).script_waits.insert(REF, wait);
     e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
-    site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
-    assert_eq!(e.ext::<Jip>().world_hooks.script_wait, Some(REF));
+    // On the AI threads too (package scripts): the runner's and the block's seams answer while
+    // another engine holds JIP's shared slot.
+    held(&mut e, |e| site(e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]));
+    assert_eq!(current_wait(), Some(REF));
+    // Another thread's run start leaves this thread's wait (JIP's one global would not).
+    std::thread::spawn(|| crate::world_hooks::set_current_wait(None))
+        .join()
+        .expect("ran");
+    assert_eq!(current_wait(), Some(REF), "per thread");
     e.mem.set_u16(OBJ_SCRIPT + 0x28, 0x100);
     site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
-    assert_eq!(
-        e.ext::<Jip>().world_hooks.script_wait,
-        None,
-        "an effect script"
-    );
+    assert_eq!(current_wait(), None, "an effect script");
     e.mem.set_u16(OBJ_SCRIPT + 0x28, 1);
     e.mem.set_u32(OBJ_SCRIPT + 0x40, REF);
     site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, 0]);
-    assert_eq!(
-        e.ext::<Jip>().world_hooks.script_wait,
-        Some(REF),
-        "a quest script's quest"
-    );
+    assert_eq!(current_wait(), Some(REF), "a quest script's quest");
     e.mem.set_u8(REF + 5, 0);
     site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, 0]);
-    assert_eq!(e.ext::<Jip>().world_hooks.script_wait, None, "not flagged");
+    assert_eq!(current_wait(), None, "not flagged");
     e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
     site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, 0]);
     let eval = |e: &mut Engine, kind: u32, cursor: u32, high: u32, action: u32| {
         e.mem.set_u32(LENGTH, 100);
-        let r = site(
-            e,
-            0x005e_1716,
-            &[RUNNER, kind, cursor, high, action, LENGTH, 0x20],
-        );
+        let r = held(e, |e| {
+            site(
+                e,
+                0x005e_1716,
+                &[RUNNER, kind, cursor, high, action, LENGTH, 0x20],
+            )
+        });
         assert_eq!(r, Some(1));
         e.mem.u32(LENGTH)
     };
@@ -1353,22 +1345,22 @@ fn script_wait_seams() {
     );
     // The waiting block: a GameMode pass that does not apply skips without counting.
     assert_eq!(eval(&mut e, 0, 0x40, 0, 0), 0x84);
-    assert_eq!(e.ext::<Jip>().world_hooks.script_waits[&REF].iterations, 2);
+    assert_eq!(state(&mut e).script_waits[&REF].iterations, 2);
     // One that applies counts down and skips.
     assert_eq!(eval(&mut e, 0, 0x40, 0x3ff0_0000, 0), 0x84);
-    assert_eq!(e.ext::<Jip>().world_hooks.script_waits[&REF].iterations, 1);
+    assert_eq!(state(&mut e).script_waits[&REF].iterations, 1);
     // An event block (type above 1) counts even when it does not apply: resumes.
     assert_eq!(eval(&mut e, 2, 0x40, 0, 0), 100 + 0x10);
     for i in 0..12 {
         assert_eq!(e.mem.u32(RUNNER + 0x20 + 4 * i), 7);
     }
-    assert_eq!(e.ext::<Jip>().world_hooks.script_wait, None);
+    assert_eq!(current_wait(), None);
     assert_eq!(e.mem.u8(REF + 5), 0);
     // The pre-load: the waits go with the hook.
     e.set_hook(Hook::ScriptWait, true);
     crate::world_hooks::pre_load(&mut e);
     assert_eq!(users(&e, Hook::ScriptWait), 0);
-    assert!(e.ext::<Jip>().world_hooks.script_waits.is_empty());
+    assert!(state(&mut e).script_waits.is_empty());
 }
 
 /// The block iterator over a compiled script: `scn`, then blocks; the last block before the
@@ -1486,10 +1478,10 @@ fn script_wait_command() {
     e.mem.set_u8(CALLER + 0x29, 1);
     assert_eq!(go(&mut e, 3), 18, "an effect script");
     e.mem.set_u8(CALLER + 0x29, 0);
-    assert!(e.ext::<Jip>().world_hooks.script_waits.is_empty());
+    assert!(state(&mut e).script_waits.is_empty());
     assert_eq!(users(&e, Hook::ScriptWait), 0);
     assert_eq!(go(&mut e, 3), 25, "past the command");
-    let wait = e.ext::<Jip>().world_hooks.script_waits[&REF];
+    let wait = state(&mut e).script_waits[&REF];
     assert_eq!(
         (
             wait.owner,
@@ -1515,8 +1507,5 @@ fn script_wait_command() {
     e.mem.set_u8(CALLER + 0x28, 1);
     e.mem.set_u32(CALLER + 0x40, QUEST_FORM);
     go(&mut e, 2);
-    assert_eq!(
-        e.ext::<Jip>().world_hooks.script_waits[&QUEST_FORM].iterations,
-        2
-    );
+    assert_eq!(state(&mut e).script_waits[&QUEST_FORM].iterations, 2);
 }
