@@ -232,3 +232,20 @@ fn command_without_a_link_sets_the_default_back() {
     assert_eq!(result, 1.0);
     assert_eq!(e.mem.u32(XLINK + 0xc), LINK_A);
 }
+
+/// Without a calling reference, or with a link argument whose variable holds no form (the read
+/// fails): nothing changed, result 0.
+#[test]
+fn command_without_reference_or_with_a_failed_read_does_nothing() {
+    for (this, index) in [(0, 1u16), (REFR, 9)] {
+        let mut e = engine();
+        give_link(&mut e, LINK_A);
+        set_ref(&mut e, 1, LINK_B);
+        s(&mut e).changed = 0;
+        let (ok, result) = ts::call_on(&mut e, 0x2281, this, &[r(index)]);
+        assert_eq!((ok, result), (1, 0.0), "this {this:x}");
+        assert_eq!(e.mem.u32(XLINK + 0xc), LINK_A);
+        assert_eq!(s(&mut e).changed, 0);
+        assert_eq!(change_of(&mut e), None);
+    }
+}

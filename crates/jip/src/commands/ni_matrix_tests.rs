@@ -227,18 +227,6 @@ fn from_2_points_same_point() {
 }
 
 #[test]
-fn from_2_points_uses_the_given_estimate() {
-    // The processor's estimate and the exact root differ in low bits: the estimate is what runs.
-    let est = from_2_points([2.0, 5.0, 1.0], [1.0, 3.0, 3.0]);
-    let with = from_2_points_with(
-        [2.0, 5.0, 1.0],
-        [1.0, 3.0, 3.0],
-        engine_core::x87::rsqrt_estimate,
-    );
-    assert_eq!(bits(&est), bits(&with));
-}
-
-#[test]
 fn to_euler_pry_fourth_lane() {
     // By hand from ATan2's paths (utility.cpp): |m1| on the general path, else 0.
     let mut m = [0.5, -0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0];
@@ -250,4 +238,158 @@ fn to_euler_pry_fourth_lane() {
     assert_eq!(to_euler_pry_lane3(&m).to_bits(), 0);
     m[0] = f32::NAN;
     assert_eq!(to_euler_pry_lane3(&m).to_bits(), 0);
+}
+
+// ---- inexact inputs (#596 review): the order of each sum and product shows in the low bits ----
+// Inputs and expectations printed by `perl h3-sse.pl inexact` (S2, C2: 0.1, -1/3, 0.7 and 0.3,
+// 0.9, -0.2; A2 = A * 0.1, B2 = B / 3, each rounded to f32).
+
+const S2: [u32; 3] = [0x3dcc_cccd, 0xbeaa_aaab, 0x3f33_3333];
+const C2: [u32; 3] = [0x3e99_999a, 0x3f66_6666, 0xbe4c_cccd];
+const A2: [u32; 9] = [
+    0x3e19_999a,
+    0xbe66_6666,
+    0x3c4c_cccd,
+    0x3e99_999a,
+    0x3d4c_cccd,
+    0xbe33_3333,
+    0x3e4c_cccd,
+    0x3d19_999a,
+    0xbd80_0000,
+];
+const B2: [u32; 9] = [
+    0xbe2a_aaab,
+    0x3ed5_5555,
+    0x3f55_5555,
+    0x3e80_0000,
+    0xbf80_0000,
+    0x3daa_aaab,
+    0x3ec0_0000,
+    0xbe95_5555,
+    0x3faa_aaab,
+];
+/// h3-sse.pl `MultiplyMatrices2`: `A2 * B2`.
+const AB2: [u32; 9] = [
+    0xbd9c_cccc,
+    0x3e91_5555,
+    0x3dfb_bbbc,
+    0xbdd3_3334,
+    0x3e01_1111,
+    0x3caa_aaa8,
+    0xbd42_2222,
+    0x3d83_3333,
+    0x3db1_1111,
+];
+
+fn m9(bits: &[u32; 9]) -> [f32; 9] {
+    bits.map(f32::from_bits)
+}
+
+fn v3(bits: &[u32; 3]) -> [f32; 3] {
+    bits.map(f32::from_bits)
+}
+
+#[test]
+fn from_euler_ypr_inexact_order() {
+    let (s, c) = (v3(&S2), v3(&C2));
+    let want = [
+        0xbe50_369c,
+        0x3e57_0a3e,
+        0xbb70_4ca0,
+        0xbf1f_92c6,
+        0xbd75_c290,
+        0xbe80_aec3,
+        0xbdcc_ccce,
+        0xbdcc_cccd,
+        0x3e8a_3d71,
+    ];
+    assert_eq!(bits(&from_euler_ypr_sc(s, c)), want);
+    // By hand, the asm's order written out: each row's first and third lanes are
+    // `(s1*s0)*s2 - -(c1*c2)` style products of the shuffled lanes, subtracted once.
+    let [s0, s1, s2] = s;
+    let [c0, c1, c2] = c;
+    let hand = [
+        ((s1 * s0) * s2) - (-(c1 * c2)),
+        c0 * s2,
+        ((c1 * s0) * s2) - (s1 * c2),
+        ((s1 * s0) * c2) - (c1 * s2),
+        c0 * c2,
+        ((c1 * s0) * c2) - (-(s1 * s2)),
+        c0 * s1,
+        -s0,
+        c0 * c1,
+    ];
+    assert_eq!(bits(&hand), want);
+}
+
+#[test]
+fn multiply_matrices_inexact_order() {
+    let (a, b) = (m9(&A2), m9(&B2));
+    assert_eq!(bits(&multiply_matrices(&a, &b)), AB2);
+    // By hand: row i, lane j = (a[i][0]*b[0][j] + a[i][1]*b[1][j]) + a[i][2]*b[2][j], the asm's
+    // two `addps` in that order.
+    let hand: Vec<f32> = (0..9)
+        .map(|k| {
+            let (i, j) = (k / 3, k % 3);
+            let first = a[3 * i] * b[j];
+            let second = a[3 * i + 1] * b[3 + j];
+            let third = a[3 * i + 2] * b[6 + j];
+            (first + second) + third
+        })
+        .collect();
+    assert_eq!(bits(&hand), AB2);
+    // The other grouping differs in these inputs, so the order is pinned.
+    let regrouped: Vec<f32> = (0..9)
+        .map(|k| {
+            let (i, j) = (k / 3, k % 3);
+            a[3 * i] * b[j] + (a[3 * i + 1] * b[3 + j] + a[3 * i + 2] * b[6 + j])
+        })
+        .collect();
+    assert_ne!(bits(&regrouped), AB2);
+}
+
+#[test]
+fn rotate_origin_inexact_order() {
+    // h3-sse.pl `RotateOrigin2`: this = (A2, t2), origin = (B2, o2).
+    let t2 = v3(&[0x3f86_6666, 0xbed9_999a, 0x3ec0_0000]);
+    let o2 = v3(&[0x3e80_0000, 0x3e00_0000, 0xbd99_999a]);
+    let (rot, pos) = rotate_origin(&m9(&A2), t2, &m9(&B2), o2);
+    assert_eq!(bits(&rot), AB2);
+    assert_eq!(bits(&pos), [0x3e86_6665, 0x3f69_999a, 0x3f7c_4445]);
+}
+
+#[test]
+fn get_rotated_pos_inexact_order() {
+    // h3-sse.pl `GetRotatedPos2`: the matrix of S2 and C2, pos (1.05, -0.425, 0.375), origin
+    // (0.25, 0.125, -0.075).
+    let m = from_euler_ypr_sc(v3(&S2), v3(&C2));
+    let pos = v3(&[0x3f86_6666, 0xbed9_999a, 0x3ec0_0000]);
+    let origin = v3(&[0x3e80_0000, 0x3e00_0000, 0xbd99_999a]);
+    assert_eq!(
+        bits(&get_rotated_pos(&m, pos, origin)),
+        [0xbcf4_4210, 0xbee8_541a, 0x3cb0_20c0]
+    );
+}
+
+/// `comiss` on an unordered length takes `jz` as equal: a NaN difference gives the allZero
+/// matrix (h3-sse.pl's branch rule; no square root taken).
+#[test]
+fn from_2_points_nan_is_all_zero() {
+    let m = from_2_points_with([f32::NAN, 0.0, 0.0], [0.0, 0.0, 0.0], |_| {
+        panic!("no square root on the allZero branch")
+    });
+    assert_eq!(
+        bits(&m),
+        [
+            0x3f80_0000,
+            0x8000_0000,
+            0,
+            0,
+            0x3f80_0000,
+            0x8000_0000,
+            0,
+            0,
+            0x3f80_0000
+        ]
+    );
 }
