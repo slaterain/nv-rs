@@ -83,7 +83,7 @@ radio, reference and game data commands, batch 11 the actor base, equipped item,
 sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters,
 lane A1 the first half of the actor commands: processes, combat and detection lists, leveling data, creature
 models, lane D the game state commands of `jip_fn_miscellaneous`, lane H JIP's position marker with `PlaceAtCell` and
-the added script variables with their co-save record applied at a load, then JIP's own position, angle and cell moves with `MoveToCell`, `MoveToEditorPosition`, `MoveToPosStr`, `MoveToNode` and `SetPosEx`, lane B the LN miscellaneous commands and the
+the added script variables with their co-save record applied at a load, then JIP's own position, angle and cell moves with `MoveToCell`, `MoveToEditorPosition`, `MoveToPosStr`, `MoveToNode` and `SetPosEx`, then the turns (`SetAngleEx`, `RotateAroundPoint`), `MoveToReticle` and `SetLinkedReference` with the linked references' co-save record applied, lane B the LN miscellaneous commands and the
 first inventory commands with the inventory references, item health, armour DT and DR, lane G the references' physics getters, ray casts and crosshair pick); its engine hooks (step 3.5) are built in at
 their seams: the UI, actor
 and AI hooks, and since 2026-11-14 the world hooks (step 3.5c) and `CCCSetEquipped` with its always-on `GetCannotWear`
@@ -97,6 +97,11 @@ every command's result at 0. Like the rest of JIP, they act only once JIP answer
 Before JIP is switched on, every call from `crates/jip` into the game's functions was checked for its
 argument word count (2026-11-15: 188 calls, one wrong and fixed); `crates/engine/tests/jip_call_arity.rs`
 now checks each call to a constant address against the translation it reaches.
+
+UI Organizer (UIO 2.30, which UI mods and then Stewie's tweaks need; maintainer, 2026-11-14) is being built
+in as `crates/uio` (docs/FIXES.md, "UI Organizer"): part 1 (its lists and conditions, the menus patched in
+memory, its reader at `Tile::ReadFile`) is a row, off in every preset until proven in the game with a UI
+mod; part 2 is its XML parser and `UIOInjectComponent`, part 3 its tile operators and text patches.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only

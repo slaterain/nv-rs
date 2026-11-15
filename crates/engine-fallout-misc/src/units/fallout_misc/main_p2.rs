@@ -7787,8 +7787,9 @@ mod tests {
         r.set(0x005b_9b00, &[1]);
         r.set(0x00b6_3a90, &[3]);
         r.e.set_global(0x011f_91a4, 1u8);
+        // 2 ms on `on_here`'s test clock (exact; no real sleep).
         r.e.register_double(0x0087_5110, |_, _| {
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            stage_time::advance(2_000_000);
             Ret::default()
         });
         stage_time::point(Point::Idle);
@@ -7828,9 +7829,9 @@ mod tests {
         ] {
             assert_eq!(col(name).1, calls, "{name}");
         }
-        assert!(col("draw_rest_00875110").0 >= 2_000.0);
-        assert!(col("st_r").0 >= col("draw_rest_00875110").0);
-        assert!(col("st_u").0 < 2_000.0, "the step's time is not U's");
+        assert_eq!(col("draw_rest_00875110").0, 2_000.0);
+        assert_eq!(col("st_r").0, 2_000.0);
+        assert_eq!(col("st_u").0, 0.0, "the step's time is not U's");
     }
     // END TESTS
 }
@@ -10278,26 +10279,28 @@ mod tests_second {
         assert_eq!(calls_to(&log, 0x0056_5730), vec![vec![player]]);
     }
 
-    /// `NV_STAGE_TIME`'s cut and draw-end points bracket the world draw's two calls in the world pass: a sleep in
-    /// `00b6ba20` and one in `00b6b930` land in the cut-to-draw-end stage and in the halves' columns, not in the stage
+    /// `NV_STAGE_TIME`'s cut and draw-end points bracket the world draw's two calls in the world pass: time spent in
+    /// `00b6ba20` and in `00b6b930` lands in the cut-to-draw-end stage and in the halves' columns, not in the stage
     /// before the cut or in the pass's tail; each stage closes once a frame; two frames of different lengths give two
-    /// different samples.
+    /// different samples. The doubles move `on_here`'s test clock instead of sleeping, so every time is exact (real
+    /// sleeps round up to the timer tick and oversleep on a loaded machine: CI once measured the 5 ms frame about as
+    /// long as the 15 ms one).
     #[test]
     fn stage_marks_bracket_the_world_draw_in_the_world_pass() {
         use engine_core::stage_time::{self, Point, NAMES};
         let _here = stage_time::on_here();
         let (mut r, this) = scene_rig();
-        let sleep_ms = Rc::new(RefCell::new(0u64));
+        let draw_ms = Rc::new(RefCell::new(0u64));
         for addr in [0x00b6_ba20u32, 0x00b6_b930] {
-            let ms = sleep_ms.clone();
+            let ms = draw_ms.clone();
             r.e.register_double(addr, move |_, _| {
-                std::thread::sleep(std::time::Duration::from_millis(*ms.borrow()));
+                stage_time::advance(*ms.borrow() * 1_000_000);
                 Ret::default()
             });
         }
         let mut frames = Vec::new();
         for ms in [5u64, 15] {
-            *sleep_ms.borrow_mut() = ms;
+            *draw_ms.borrow_mut() = ms;
             stage_time::point(Point::Idle);
             stage_time::point(Point::SwapIn);
             stage_time::point(Point::DrawIn);
@@ -10331,34 +10334,30 @@ mod tests_second {
             ] {
                 assert_eq!(col(v, name).1, 1, "{name}");
             }
-            let first = col(v, "world_draw_00b6ba20").0;
-            let second = col(v, "world_draw_00b6b930").0;
-            assert!(
-                first >= ms * 1000.0 && second >= ms * 1000.0,
-                "{first} {second}"
-            );
-            assert!(col(v, "st_cut_to_draw_end").0 >= first + second);
-            assert!(
-                col(v, "st_r_before_cut").0 < ms * 1000.0,
+            let us = ms * 1000.0;
+            assert_eq!(col(v, "world_draw_00b6ba20").0, us);
+            assert_eq!(col(v, "world_draw_00b6b930").0, us);
+            assert_eq!(col(v, "st_cut_to_draw_end").0, 2.0 * us);
+            assert_eq!(
+                col(v, "st_r_before_cut").0,
+                0.0,
                 "the draw is after the cut"
             );
-            assert!(
-                col(v, "st_pass_tail").0 < ms * 1000.0,
-                "the draw is before its end"
-            );
-            assert!(col(v, "world_pass_00873200").0 >= col(v, "st_cut_to_draw_end").0);
+            assert_eq!(col(v, "st_pass_tail").0, 0.0, "the draw is before its end");
+            assert_eq!(col(v, "world_pass_00873200").0, 2.0 * us);
+            assert_eq!(col(v, "st_r").0, 2.0 * us);
         }
-        // The second frame's longer draw is a different, longer sample.
-        assert!(
-            col(&frames[1], "st_cut_to_draw_end").0
-                > col(&frames[0], "st_cut_to_draw_end").0 + 10_000.0
-        );
+        // Each frame's sample is its own draw's (10 ms, then 30 ms): the take emptied the first.
+        assert_eq!(col(&frames[0], "st_cut_to_draw_end").0, 10_000.0);
+        assert_eq!(col(&frames[1], "st_cut_to_draw_end").0, 30_000.0);
         // The first frame's last stages closed at the second frame's start, the second's at the last OnIdle.
         for name in ["st_p2", "st_cut_to_idle", "st_draw_end_to_idle"] {
             assert_eq!(col(&frames[1], name).1, 1, "{name}");
             assert_eq!(col(&last, name).1, 1, "{name}");
         }
-        assert!(col(&last, "st_cut_to_idle").0 >= 30_000.0);
+        assert_eq!(col(&frames[1], "st_cut_to_idle").0, 10_000.0);
+        assert_eq!(col(&last, "st_cut_to_idle").0, 30_000.0);
+        assert_eq!(col(&last, "st_draw_end_to_idle").0, 0.0);
     }
 }
 

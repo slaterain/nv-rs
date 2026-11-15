@@ -1211,3 +1211,64 @@ fn damaged_records_end_the_read() {
     load_file(&mut w.e, &full[..full.len() - 3]);
     assert_eq!(saved_chunks(&mut w.e), [flags], "truncated");
 }
+
+/// `JPLR` while JIP answers "installed": JIP's `SetLinkedRefID` sets each link (its old link
+/// noted as the default) and the temporary map notes it; a reference whose extra holds none is
+/// refused and not noted. After the load, with the linked references changed, a default the
+/// load did not set again comes back; the main menu gives every default back.
+#[test]
+fn linked_references_set_when_installed() {
+    let mut w = World::new();
+    w.e.ext::<Jip>().answers_installed = true;
+    let a = w.form(0x0600_0001, 0x3a, true);
+    let b = w.form(0x0600_0002, 0x3a, true);
+    let c = w.form(0x0600_0003, 0x3a, true);
+    let d = w.form(0x0600_0004, 0x3a, true);
+    // `a` and `d` link to `c`; `c` has an ExtraLinkedRef holding none.
+    for r in [a, c, d] {
+        w.e.mem.set_u32(r + XLINKED, r + 0x60);
+    }
+    w.e.mem.set_u32(a + 0x60 + 0xc, c);
+    w.e.mem.set_u32(c + 0x60 + 0xc, 0);
+    w.e.mem.set_u32(d + 0x60 + 0xc, c);
+    let data = Out::default()
+        .u16(2)
+        .u32(0x0600_0001)
+        .u32(0x0600_0002)
+        .u8(6)
+        .u32(0x0600_0003)
+        .u32(0x0600_0002)
+        .u8(6)
+        .0;
+    s(&mut w.e).changed = changed::ALL;
+    load_file(&mut w.e, &cosave(&[chunk(kind::LINKED_REFS, 9, data)]));
+    assert_eq!(w.e.mem.u32(a + 0x60 + 0xc), b);
+    assert_eq!(w.e.mem.u32(c + 0x60 + 0xc), 0);
+    let st = s(&mut w.e);
+    assert_eq!(st.linked_refs_temp.get(&0x0600_0001), Some(&0x0600_0002));
+    assert_eq!(st.linked_refs_temp.get(&0x0600_0003), None);
+    assert_eq!(st.linked_ref_defaults.get(&0x0600_0001), Some(&0x0600_0003));
+    assert_eq!(
+        st.linked_refs.get(&0x0600_0001),
+        Some(&LinkedRef {
+            link_id: 0x0600_0002,
+            mod_index: 6
+        })
+    );
+    // A command changed `d` this session (its default `c`); the load did not set it again.
+    assert!(crate::commands::jip_fn_linked_ref::set_linked_ref(
+        &mut w.e, d, b, 6
+    ));
+    s(&mut w.e).changed = changed::LINKED_REFS;
+    let to = |e: &mut Engine, kind: u32, data: u32| listen(e, &Message { kind, data, len: 0 });
+    to(&mut w.e, msg::POST_LOAD_GAME, 1);
+    assert_eq!(w.e.mem.u32(d + 0x60 + 0xc), c, "restored after the load");
+    assert_eq!(w.e.mem.u32(a + 0x60 + 0xc), b, "set by the load: kept");
+    to(&mut w.e, msg::EXIT_TO_MAIN_MENU, 0);
+    assert_eq!(
+        w.e.mem.u32(a + 0x60 + 0xc),
+        c,
+        "the main menu gives it back"
+    );
+    assert!(s(&mut w.e).linked_ref_defaults.is_empty());
+}

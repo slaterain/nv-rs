@@ -189,9 +189,27 @@ fn inverse_functions_edges() {
 fn distances_in_one_cell() {
     let a = [1.0, 2.0, 3.0];
     let b = [4.0, 6.0, 15.0];
-    // 3-4-5 in the plane; 3, 4, 12 gives 13 in space. The Newton step lands within an ulp.
-    assert!(ulps(point2_distance(a, b), 5.0) <= 1);
-    assert!(ulps(point3_distance(a, b), 13.0) <= 1);
+    // 3-4-5 in the plane; 3, 4, 12 gives 13 in space. The distance is `rsqrtss` and JIP's one
+    // Newton step: exactly that step on this processor's estimate (itself within the bound), and
+    // within 3 ulps of the root for every estimate the specification allows (processors' tables
+    // differ in their low bits, so the step may land a few ulps off on another processor).
+    for (d, s, root) in [
+        (point2_distance(a, b), 25.0f32, 5.0f32),
+        (point3_distance(a, b), 169.0, 13.0),
+    ] {
+        let r = processor_rsqrt(s);
+        assert!(
+            (f64::from(r) * f64::from(root) - 1.0).abs() <= ESTIMATE_BOUND,
+            "{s}: {r:e}"
+        );
+        assert_eq!(d.to_bits(), newton_step(s, r).to_bits(), "{s}");
+        let worst = allowed_rsqrt_estimates(s)
+            .into_iter()
+            .map(|r| ulps(newton_step(s, r), root))
+            .max();
+        // 9,831 allowed estimates of 1/5 and 7,562 of 1/13: the worst lands 3 ulps off.
+        assert!(worst.is_some_and(|w| w <= 3), "{s}: {worst:?}");
+    }
     assert_eq!(point2_distance(a, a).to_bits(), 0);
     assert!(point3_distance([f32::NAN, 0.0, 0.0], b).is_nan());
 }

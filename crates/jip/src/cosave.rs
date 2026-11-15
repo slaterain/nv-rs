@@ -26,8 +26,10 @@
 //! (`Script::AddVariable`, `commands::jip_fn_script_vars`, which refuses a name the script
 //! already has unless JIP added it this session) and given its value, and a save writes each
 //! variable's value as it is then; until then it is only kept and written back.
-//! Not yet: a linked reference is kept but not set on its reference (`SetLinkedRefID`), NPC
-//! perks are not given to the actors, and the appearance undo is not applied. Until then a save holds what the
+//! While JIP answers "installed", a linked reference is set on its reference (`SetLinkedRefID`,
+//! `commands::jip_fn_linked_ref`), and once the game has loaded the links a command changed but
+//! the load did not set again get their defaults back; until then it is only kept.
+//! Not yet: NPC perks are not given to the actors, and the appearance undo is not applied. Until then a save holds what the
 //! co-save loaded held. What JIP would pass over unread (another record type, a version it does
 //! not read, the NPC perks without its NPC perks patch, `JPGF`'s bytes past its 8) is carried byte
 //! for byte to the next save, so a co-save from a real JIP installation loses nothing in nv-rs.
@@ -243,6 +245,9 @@ pub struct Saved {
     /// `s_linkedRefModified` and `s_linkedRefsTemp`.
     pub linked_refs: UnorderedMap<u32, LinkedRef>,
     pub linked_refs_temp: UnorderedMap<u32, u32>,
+    /// `s_linkedRefDefault`: each changed reference's link before its first change this session
+    /// (0: it had none), by reference id (`commands::jip_fn_linked_ref`).
+    pub linked_ref_defaults: UnorderedMap<u32, u32>,
     /// `s_serializedVars`.
     pub serialized: SerializedVars,
     /// `s_appearanceUndoMap`, by NPC (form address).
@@ -272,6 +277,7 @@ impl Default for Saved {
             extra_data: UnorderedMap::new(0x20),
             linked_refs: UnorderedMap::new(8),
             linked_refs_temp: UnorderedMap::new(8),
+            linked_ref_defaults: UnorderedMap::new(8),
             serialized: SerializedVars::default(),
             appearance_undo: UnorderedMap::new(8),
             npc_perks: UnorderedMap::new(0x80),
@@ -957,8 +963,8 @@ fn resolve_extra_ids(e: &Engine, data: &mut ExtraJipData) {
 
 /// `JPLR`: each reference whose own and linked ids resolve to loaded references, from a loaded
 /// mod, is kept, and in the temporary links, as `SetLinkedRefID` keeps it: not a reference whose
-/// linked reference extra data holds none (`TESObjectREFR::SetLinkedRef` refuses it). The link
-/// itself is set on the reference, and its default kept, with step 3.3.
+/// linked reference extra data holds none (`TESObjectREFR::SetLinkedRef` refuses it). While JIP
+/// answers "installed" the link itself is set on the reference by JIP's `SetLinkedRefID`.
 fn load_linked_refs(e: &mut Engine, b: &mut Bytes) -> Option<()> {
     let count = b.u16()?;
     for _ in 0..count {
@@ -971,6 +977,14 @@ fn load_linked_refs(e: &mut Engine, b: &mut Bytes) -> Option<()> {
         let Some(mod_index) = resolved_mod_index(e, saved_index) else {
             continue;
         };
+        if e.ext::<Jip>().answers_installed {
+            // `SetLinkedRefID(refID, lnkID, modIdx)` sets the link (and notes the change and the
+            // default); on success `s_linkedRefsTemp[refID] = lnkID`.
+            if crate::commands::jip_fn_linked_ref::set_linked_ref_id(e, id, link, mod_index) {
+                *saved(e).linked_refs_temp.emplace(id) = link;
+            }
+            continue;
+        }
         let (this, other) = (lookup_form(e, id), lookup_form(e, link));
         let references = this != 0
             && vtable_says(e, this, VT_IS_REFERENCE)
@@ -1332,6 +1346,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
         msg::EXIT_TO_MAIN_MENU => {
             process_changed_flags(e, changed::ALL);
             pre_load_housekeeping(e);
+            // `RestoreLinkedRefs()`: every changed reference's default link back.
+            crate::commands::jip_fn_linked_ref::restore_linked_refs(e, false);
             saved(e).last_path.clear();
         }
         msg::SAVE_GAME => {
@@ -1354,6 +1370,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // `DoLoadGameHousekeeping` after a load that succeeded: its saved data's part.
             if m.data & 0xff != 0 {
                 crate::world_hooks::restore_form_flags(e);
+                // `RestoreLinkedRefs(s_linkedRefsTemp)` with the linked references changed.
+                crate::commands::jip_fn_linked_ref::after_load(e);
                 saved(e).changed = 0;
             }
         }

@@ -452,3 +452,361 @@ fn move_to_node_without_cell_or_node_does_nothing() {
         assert!(calls_to(MOVE_TO_MARKER).is_empty());
     }
 }
+
+// ---- lane H3: SetAngleEx, RotateAroundPoint, MoveToNode ----
+
+use crate::commands::ni_matrix::{from_euler_pry_inv, from_euler_ypr, get_rotated_pos};
+use crate::commands::nif_nodes::{to_euler_pry, to_euler_pry_inv};
+
+fn angles(e: &Engine) -> [u32; 3] {
+    [0, 1, 2].map(|i| e.mem.u32(REFR + 0x24 + 4 * i))
+}
+
+fn set_angle_ex(e: &mut Engine, v: [f64; 3], t: Option<i32>) -> (u32, f64) {
+    let mut args = vec![z(v[0]), z(v[1]), z(v[2])];
+    if let Some(t) = t {
+        args.push(n(t));
+    }
+    ts::call_on(e, 0x27f8, REFR, &args)
+}
+
+fn rad(v: [f32; 3]) -> [f32; 3] {
+    v.map(|x| x * KPI)
+}
+
+#[test]
+fn set_angle_ex_absolute_converts_degrees() {
+    for t in [None, Some(0), Some(256)] {
+        let mut e = engine();
+        let (ok, result) = set_angle_ex(&mut e, [90.0, -45.0, 10.0], t);
+        assert_eq!((ok, result), (1, 0.0));
+        assert_eq!(
+            angles(&e),
+            rad([90.0, -45.0, 10.0]).map(f32::to_bits),
+            "{t:?}"
+        );
+    }
+}
+
+#[test]
+fn set_angle_ex_mode_1_inverse() {
+    let mut e = engine();
+    set_angle_ex(&mut e, [30.0, 20.0, -100.0], Some(1));
+    let want = to_euler_pry(&from_euler_pry_inv(rad([30.0, 20.0, -100.0])));
+    assert_eq!(angles(&e), want.map(f32::to_bits));
+}
+
+/// Mode 2 is `Rotate`: without 3D the angles' matrix (all 0 here: the identity of `FromEulerPRY`)
+/// times the turn.
+#[test]
+fn set_angle_ex_mode_2_rotates() {
+    let mut e = engine();
+    set_angle_ex(&mut e, [30.0, 20.0, -100.0], Some(2));
+    let m = crate::commands::ni_matrix::multiply_matrices(
+        &from_euler_pry([0.0; 3]),
+        &from_euler_pry_inv(rad([30.0, 20.0, -100.0])),
+    );
+    assert_eq!(angles(&e), to_euler_pry(&m).map(f32::to_bits));
+}
+
+/// Mode 3 adds the current angles (`ToEulerPRYInv` of the root's world rotation with 3D, of the
+/// angles' matrix without, or for the player) and turns by mode 1.
+#[test]
+fn set_angle_ex_mode_3_adds_the_current_angles() {
+    for with_3d in [false, true] {
+        let mut e = engine();
+        let cur = [0.1f32, 0.2, 0.3];
+        for (i, v) in cur.into_iter().enumerate() {
+            e.mem.set_f32(REFR + 0x24 + 4 * i as u32, v);
+        }
+        let m = if with_3d {
+            give_3d(&mut e);
+            let w = [0.0f32, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+            for (i, v) in w.iter().enumerate() {
+                e.mem.set_f32(NODE + 0x68 + 4 * i as u32, *v);
+            }
+            w
+        } else {
+            from_euler_pry(cur)
+        };
+        set_angle_ex(&mut e, [30.0, 20.0, -100.0], Some(3));
+        let inv = to_euler_pry_inv(&m);
+        let r = rad([30.0, 20.0, -100.0]);
+        let sum = [r[0] + inv[0], r[1] + inv[1], r[2] + inv[2]];
+        let want = to_euler_pry(&from_euler_pry_inv(sum));
+        assert_eq!(angles(&e), want.map(f32::to_bits), "3d {with_3d}");
+    }
+}
+
+/// Mode 4 points at `x y z` itself (no conversion); a value past 4 is `SetAngle` of its low byte
+/// (258: the point mode, of the converted values).
+#[test]
+fn set_angle_ex_point_modes() {
+    let mut e = engine();
+    for (i, v) in [5.0f32, -1.0, 2.0].into_iter().enumerate() {
+        e.mem.set_f32(REFR + 0x30 + 4 * i as u32, v);
+    }
+    set_angle_ex(&mut e, [5.0, -1.0, -6.0], Some(4));
+    assert_eq!(angles(&e)[0], 0x3fc9_0fdb);
+    assert_eq!(angles(&e)[2], 0x8000_0000);
+    // 258 (low byte 2): the point is the converted values (not straight below the position):
+    // the same as mode 4 given those radians.
+    let mut e2 = engine();
+    let mut e3 = engine();
+    for e in [&mut e2, &mut e3] {
+        for (i, v) in [5.0f32, -1.0, 2.0].into_iter().enumerate() {
+            e.mem.set_f32(REFR + 0x30 + 4 * i as u32, v);
+        }
+    }
+    set_angle_ex(&mut e2, [5.0, -1.0, -6.0], Some(258));
+    let r = rad([5.0, -1.0, -6.0]);
+    set_angle_ex(&mut e3, [r[0].into(), r[1].into(), r[2].into()], Some(4));
+    assert_eq!(angles(&e2), angles(&e3));
+    assert_ne!(angles(&e2), angles(&e));
+}
+
+#[test]
+fn rotate_around_point_cmd_converts_and_skips() {
+    let mut e = engine();
+    let p = [10.5f32, -4.25, 3.75];
+    for (i, v) in p.into_iter().enumerate() {
+        e.mem.set_f32(REFR + 0x30 + 4 * i as u32, v);
+    }
+    let (ok, result) = ts::call_on(
+        &mut e,
+        0x2926,
+        REFR,
+        &[z(2.5), z(1.25), z(-0.75), z(30.0), z(-60.0), z(90.0), n(1)],
+    );
+    assert_eq!((ok, result), (1, 0.0));
+    let want = get_rotated_pos(
+        &from_euler_ypr(rad([30.0, -60.0, 90.0])),
+        p,
+        [2.5, 1.25, -0.75],
+    );
+    assert_eq!(calls_to(SET_LOCATION).len(), 1);
+    let got: [u32; 3] = [0, 1, 2].map(|i| e.mem.u32(REFR + 0x30 + 4 * i));
+    assert_eq!(got, want.map(f32::to_bits));
+    // skipAngles left out (0) without 3D: nothing.
+    let mut e = engine();
+    ts::call_on(
+        &mut e,
+        0x2926,
+        REFR,
+        &[z(2.5), z(1.25), z(-0.75), z(30.0), z(-60.0), z(90.0)],
+    );
+    assert!(calls_to(SET_LOCATION).is_empty());
+}
+
+// ---- MoveToReticle ----
+
+const R_TES: u32 = FORMS + 0xd000;
+const R_PLAYER: u32 = FORMS + 0xd100;
+const R_PROCESS: u32 = FORMS + 0xd300;
+const R_CTRL: u32 = FORMS + 0xd500;
+const R_SHAPE: u32 = FORMS + 0xdd00;
+const R_HAVOK: u32 = FORMS + 0xdd40;
+const R_GRAPH: u32 = FORMS + 0xde00;
+const R_CAMERA: u32 = FORMS + 0xdf00;
+const R_PICK_HIT: u32 = FORMS + 0xdfc0;
+const R_PICK_FRACTION: u32 = FORMS + 0xdfc4;
+const R_PICK_FILTER: u32 = FORMS + 0xdfc8;
+/// `PS_HKUnitCnvrt` and `kUnitConv`, as JIP's tables hold them.
+const FROM_HK: f32 = f32::from_bits(0x40df_f8d6);
+const TO_HK: f32 = f32::from_bits(0x3e12_4dd2);
+
+/// The player in `cell`, with the controller chain the cast reads its filter from; the TES (an
+/// interior when `interior`); the world scene graph's camera at (700, -1400, 70) looking along
+/// +y (identity rotation); the pick answers `hit` with the fraction `fraction`.
+fn reticle_world(e: &mut Engine, cell: u32, interior: bool, hit: u32, fraction: f32) {
+    e.mem.set_u32(0x011d_ea10, R_TES);
+    e.mem.set_u32(R_TES + 0x34, u32::from(interior));
+    e.mem.set_u32(0x011d_ea3c, R_PLAYER);
+    e.mem.set_u32(R_PLAYER + 0x40, cell);
+    e.mem.set_u32(R_PLAYER + 0x68, R_PROCESS);
+    e.mem.set_u32(R_PROCESS + 0x138, R_CTRL);
+    e.mem.set_u32(R_CTRL + 0x594, R_SHAPE);
+    e.mem.set_u32(R_SHAPE + 8, R_HAVOK);
+    e.mem.set_u32(R_HAVOK + 0x2c, 0x1234_5678);
+    e.mem.set_u32(0x011d_eb7c, R_GRAPH);
+    e.mem.set_u32(R_GRAPH + 0xac, R_CAMERA);
+    for (i, v) in [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        .into_iter()
+        .enumerate()
+    {
+        e.mem.set_f32(R_CAMERA + 0x68 + 4 * i as u32, v);
+    }
+    for (i, v) in [700.0f32, -1400.0, 70.0, 1.0].into_iter().enumerate() {
+        e.mem.set_f32(R_CAMERA + 0x8c + 4 * i as u32, v);
+    }
+    e.mem.set_u32(R_PICK_HIT, hit);
+    e.mem.set_f32(R_PICK_FRACTION, fraction);
+    e.register(0x0045_8440, |e, w| {
+        ts::CALLS.with(|c| c.borrow_mut().push((0x0045_8440, w.to_vec())));
+        let fraction = e.mem.f32(R_PICK_FRACTION);
+        let filter = e.mem.u32(w[1] + 0x24);
+        e.mem.set_u32(R_PICK_FILTER, filter);
+        e.mem.set_f32(w[1] + 0x40, fraction);
+        Ret {
+            eax: e.mem.u32(R_PICK_HIT),
+            ..Ret::default()
+        }
+    });
+}
+
+/// `RayCastCoords`' point for the camera above at `fraction` of `range`, as JIP computes it:
+/// `(from + (to - from) * fraction) * PS_HKUnitCnvrt`, `from` the camera times `kUnitConv`, `to`
+/// the column (0, 1, 0) times `range` times `kUnitConv` plus `from`.
+fn reticle_point(range: f32, fraction: f32) -> [f32; 3] {
+    let from = [700.0f32 * TO_HK, -1400.0 * TO_HK, 70.0 * TO_HK];
+    let dir = [0.0f32, 1.0, 0.0];
+    let to: [f32; 3] = std::array::from_fn(|i| (dir[i] * range) * TO_HK + from[i]);
+    std::array::from_fn(|i| (from[i] + (to[i] - from[i]) * fraction) * FROM_HK)
+}
+
+#[test]
+fn move_to_reticle_moves_to_the_hit_plus_offsets() {
+    let mut e = engine();
+    reticle_world(&mut e, CELL_B, false, FORMS + 0xe000, 0.25);
+    let (ok, result) = ts::call_on(&mut e, 0x27f3, REFR, &[z(1000.0), z(1.5), z(-2.0), z(3.0)]);
+    assert_eq!((ok, result), (1, 1.0));
+    let p = reticle_point(1000.0, 0.25);
+    assert_eq!(marker_pos(&e), [p[0] + 1.5, p[1] + -2.0, p[2] + 3.0]);
+    assert_eq!(e.mem.u32(MARKER + 0x40), CELL_B);
+    assert_eq!(calls_to(MOVE_TO_MARKER).len(), 1);
+    assert_eq!(calls_to(0x0045_8440).len(), 1);
+}
+
+/// No arguments: the range 50000, no offsets; an exterior cell gives its worldspace's
+/// persistent cell.
+#[test]
+fn move_to_reticle_defaults_and_the_persistent_cell() {
+    let mut e = engine();
+    e.mem.set_u32(CELL_B + 0xc0, WORLD_1);
+    reticle_world(&mut e, CELL_B, true, 0, 1.0);
+    let (_, result) = ts::call_on(&mut e, 0x27f3, REFR, &[]);
+    assert_eq!(result, 1.0);
+    assert_eq!(marker_pos(&e), reticle_point(50000.0, 1.0));
+    assert_eq!(e.mem.u32(MARKER + 0x40), CELL_A);
+}
+
+/// Nothing hit outside an interior (no grid): only `translate` moves it.
+#[test]
+fn move_to_reticle_without_a_hit_needs_translate() {
+    for translate in [0, 1] {
+        let mut e = engine();
+        reticle_world(&mut e, CELL_B, false, 0, 0.5);
+        let (_, result) = ts::call_on(
+            &mut e,
+            0x27f3,
+            REFR,
+            &[z(100.0), z(0.0), z(0.0), z(0.0), n(translate)],
+        );
+        assert_eq!(result, f64::from(translate), "translate {translate}");
+        assert_eq!(calls_to(MOVE_TO_MARKER).len(), translate as usize);
+        if translate == 1 {
+            assert_eq!(marker_pos(&e), reticle_point(100.0, 0.5));
+        }
+    }
+}
+
+/// The player in no cell: no cast, nothing; a worldspace without a persistent cell (nv-rs's
+/// own): nothing.
+#[test]
+fn move_to_reticle_without_a_cell_does_nothing() {
+    let mut e = engine();
+    reticle_world(&mut e, 0, true, 1, 0.5);
+    let (_, result) = ts::call_on(&mut e, 0x27f3, REFR, &[]);
+    assert_eq!(result, 0.0);
+    assert!(calls_to(0x0045_8440).is_empty());
+    let mut e = engine();
+    e.mem.set_u32(CELL_B + 0xc0, WORLD_1);
+    e.mem.set_u32(WORLD_1 + 0x34, 0);
+    reticle_world(&mut e, CELL_B, true, 1, 0.5);
+    let (_, result) = ts::call_on(&mut e, 0x27f3, REFR, &[]);
+    assert_eq!(result, 0.0);
+    assert!(calls_to(MOVE_TO_MARKER).is_empty());
+}
+
+/// The cast's filter word: the player's phantom's filter info with its low 16 bits replaced by
+/// JIP's layer 6 (`RayCastCoords(..., 6)`).
+#[test]
+fn move_to_reticle_casts_on_layer_6() {
+    let mut e = engine();
+    reticle_world(&mut e, CELL_B, true, 1, 0.5);
+    ts::call_on(&mut e, 0x27f3, REFR, &[]);
+    assert_eq!(e.mem.u32(R_PICK_FILTER), 0x1234_0006);
+}
+
+/// Mode 3 for the player with 3D: JIP uses the stored angles' matrix, not the root's world
+/// rotation (`rootNode && !thisObj->IsPlayer()`).
+#[test]
+fn set_angle_ex_mode_3_player_uses_the_stored_angles() {
+    let mut e = engine();
+    give_3d(&mut e);
+    e.mem.set_u32(REFR + 0xc, 0x14);
+    let cur = [0.1f32, 0.2, 0.3];
+    for (i, v) in cur.into_iter().enumerate() {
+        e.mem.set_f32(REFR + 0x24 + 4 * i as u32, v);
+    }
+    let w = [0.0f32, 1.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+    for (i, v) in w.iter().enumerate() {
+        e.mem.set_f32(NODE + 0x68 + 4 * i as u32, *v);
+    }
+    set_angle_ex(&mut e, [30.0, 20.0, -100.0], Some(3));
+    let inv = to_euler_pry_inv(&from_euler_pry(cur));
+    let r = rad([30.0, 20.0, -100.0]);
+    let sum = [r[0] + inv[0], r[1] + inv[1], r[2] + inv[2]];
+    assert_eq!(
+        angles(&e),
+        to_euler_pry(&from_euler_pry_inv(sum)).map(f32::to_bits)
+    );
+    // Not the world rotation's.
+    let winv = to_euler_pry_inv(&w);
+    let wsum = [r[0] + winv[0], r[1] + winv[1], r[2] + winv[2]];
+    assert_ne!(
+        angles(&e),
+        to_euler_pry(&from_euler_pry_inv(wsum)).map(f32::to_bits)
+    );
+}
+
+/// A global argument whose reference index holds no form: the read fails.
+fn bad_float() -> Vec<u8> {
+    vec![b'G', 9, 0]
+}
+
+/// An opcode, arguments that read, arguments whose read fails.
+type Case = (u32, Vec<Vec<u8>>, Vec<Vec<u8>>);
+
+/// The three new commands without a calling reference, and with a read that fails: no game
+/// call, no change, result 0.
+#[test]
+fn new_commands_without_reference_or_with_a_failed_read_do_nothing() {
+    let cases: [Case; 3] = [
+        (
+            0x27f8,
+            vec![z(10.0), z(20.0), z(30.0), n(1)],
+            vec![z(10.0), z(20.0), bad_float()],
+        ),
+        (
+            0x2926,
+            vec![z(1.0), z(2.0), z(3.0), z(10.0), z(20.0), z(30.0), n(1)],
+            vec![z(1.0), z(2.0), z(3.0), z(10.0), z(20.0), bad_float()],
+        ),
+        (0x27f3, vec![z(100.0)], vec![bad_float()]),
+    ];
+    for (opcode, good, bad) in cases {
+        for (this, args) in [(0, &good), (REFR, &bad)] {
+            let mut e = engine();
+            give_3d(&mut e);
+            reticle_world(&mut e, CELL_B, true, 1, 0.5);
+            let (ok, result) = ts::call_on(&mut e, opcode, this, args);
+            assert_eq!((ok, result), (1, 0.0), "{opcode:04x} this {this:x}");
+            assert_eq!(angles(&e), [0; 3], "{opcode:04x}");
+            assert!(calls_to(SET_LOCATION).is_empty(), "{opcode:04x}");
+            assert!(calls_to(MOVE_TO_MARKER).is_empty(), "{opcode:04x}");
+            assert!(calls_to(0x0045_8440).is_empty(), "{opcode:04x}");
+            assert!(calls_to(ts::ADD_CHANGE_FN).is_empty(), "{opcode:04x}");
+        }
+    }
+}

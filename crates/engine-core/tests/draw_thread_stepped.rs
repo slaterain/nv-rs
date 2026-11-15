@@ -334,7 +334,13 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     let job_ns = jobs.total_ns - jobs_before.total_ns;
     assert!(job_ns >= 25_000_000);
     assert!(job_ns <= at.waits.total_ns, "the jobs inside the waits");
-    assert!(jobs.max_ns >= 20_000_000 && jobs.max_ns < job_ns);
+    // The longest job so far: one of these two (then shorter than their sum) or an earlier one already the longest
+    // (the earlier jobs do not sleep, but a loaded machine may stall one, so no bound on them).
+    assert!(jobs.max_ns >= 20_000_000);
+    assert!(
+        jobs.max_ns < job_ns || jobs.max_ns == jobs_before.max_ns,
+        "{jobs:?}"
+    );
     let closes = draw_thread::close_times(&e);
     assert_eq!(closes.count, closes_before.count + 2);
     let v = stage_time::take();

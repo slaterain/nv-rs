@@ -1791,16 +1791,31 @@ pub fn player_character_load_3d(e: &mut Engine, this: Ptr<PlayerCharacter>, flag
             }
         }
 
-        let path = setting_text(e, MODEL_PATH_SETTING);
-        let path = e.call(IDENTITY, &args![path, 0u32]).u32();
-        let loader = e.global::<u32>(MODEL_LOADER_POINTER);
-        let model = e
-            .call(
-                0x0044_7080,
-                &args![loader, path, 3u32, 1u32, 0u32, 0u32, 0u32],
-            )
-            .u32();
-        e.call(0x0054_68b0, &args![model, 1u32]);
+        // JIP LN NVSE's game patch G38 (step 3.9 GP, `GeneratePlayerNodeHook` at `0x94E4A1`):
+        // the first-person model copied from the model loader's cached load, in place of the
+        // load and its flag call; the seam answers the copy (none: the exe's load). One load
+        // while JIP is not installed.
+        let copied = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            e.site(0x0094_e4a1, &[player])
+        } else {
+            None
+        };
+        let model = match copied {
+            Some(model) => model,
+            None => {
+                let path = setting_text(e, MODEL_PATH_SETTING);
+                let path = e.call(IDENTITY, &args![path, 0u32]).u32();
+                let loader = e.global::<u32>(MODEL_LOADER_POINTER);
+                let model = e
+                    .call(
+                        0x0044_7080,
+                        &args![loader, path, 3u32, 1u32, 0u32, 0u32, 0u32],
+                    )
+                    .u32();
+                e.call(0x0054_68b0, &args![model, 1u32]);
+                model
+            }
+        };
         e.call(SMART_POINTER_ASSIGN, &args![player + 0x694, model]);
         for (name, slot) in [
             (fn_0094ead0(e), NODE_BY_EAD0_SLOT),
@@ -1822,10 +1837,16 @@ pub fn player_character_load_3d(e: &mut Engine, this: Ptr<PlayerCharacter>, flag
         let zero = frame.addr() + 0x1c4;
         e.call(0x0043_d410, &args![zero, 0.0f32, 0u32, 0u32]);
         e.call(0x00a5_9c60, &args![model, zero]);
-        let camera = e.global::<u32>(NODE_CAMERA_1ST_SLOT);
-        let at = e.call(0x0045_bb80, &args![camera]).u32();
-        let height = e.mem.f32(at + 8);
-        e.set(this, PlayerCharacter::fEyeHeight, height);
+        // JIP LN NVSE's game patch G38 (step 3.9 GP, `SafeWrite16(0x94E5F6, 0x18EB)`): a jump over
+        // the eye height read from the first-person camera node; the seam answers to skip it.
+        let skip_eye_height = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && e.site(0x0094_e5f6, &[player]).is_some();
+        if !skip_eye_height {
+            let camera = e.global::<u32>(NODE_CAMERA_1ST_SLOT);
+            let at = e.call(0x0045_bb80, &args![camera]).u32();
+            let height = e.mem.f32(at + 8);
+            e.set(this, PlayerCharacter::fEyeHeight, height);
+        }
 
         let matrix_copy = frame.addr() + 0x1e0;
         let matrix_result = frame.addr() + 0x54;
@@ -10276,6 +10297,85 @@ mod tests {
         );
         // The biped bodies are updated.
         assert_eq!(calls_to(&e, 0x0093_80e0), vec![vec![0xc0], vec![0xc1]]);
+    }
+
+    thread_local! {
+        /// What the test handlers of JIP's G38 seams saw (address, words) and answer.
+        static G38_ASKED: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+        static G38_COPY: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        static G38_SKIP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn g38_node(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G38_ASKED.with(|s| s.borrow_mut().push((0x0094_e4a1, a.to_vec())));
+        G38_COPY.with(|c| c.get())
+    }
+
+    fn g38_eye(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G38_ASKED.with(|s| s.borrow_mut().push((0x0094_e5f6, a.to_vec())));
+        G38_SKIP.with(|c| c.get()).then_some(1)
+    }
+
+    /// JIP LN NVSE's G38 seams (step 3.9 GP: `0x94E4A1` the first-person model, `0x94E5F6` the
+    /// eye height): with the word clear (not installed) or only `FIXES` set, neither is asked even
+    /// with handlers in, and the load runs as the exe; with `INSTALLED` both are asked with the
+    /// player, a copy answered replaces the load and its flag call (the copy is stored as the
+    /// first-person model), no answer keeps the exe's load, and the eye height is skipped only
+    /// when the seam answers.
+    #[test]
+    fn jip_first_person_model_seams() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        let world = load_world(&mut e, vec![]);
+        let player = world.player;
+        e.set(player, PlayerCharacter::b3rdPerson, false);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0094_e4a1), g38_node);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0094_e5f6), g38_eye);
+        let copy = finder(&mut e, vec![]);
+        G38_COPY.with(|c| c.set(Some(copy)));
+        G38_SKIP.with(|c| c.set(true));
+        let run = |e: &mut Engine| {
+            e.set(player, PlayerCharacter::fEyeHeight, 9.5);
+            start_log(e);
+            player_character_load_3d(e, player, 5);
+            G38_ASKED.with(|s| s.take())
+        };
+        // Not installed, and FIXES alone: nothing asked, the exe's load and eye height.
+        for word in [0, jip_patches::FIXES] {
+            e.set_jip_patches(word);
+            assert!(run(&mut e).is_empty());
+            assert_eq!(calls_to(&e, 0x0044_7080).len(), 1);
+            assert_eq!(calls_to(&e, 0x0054_68b0), vec![vec![world.model, 1]]);
+            assert_eq!(
+                e.get(player, PlayerCharacter::sp1stPerson3D).addr(),
+                world.model
+            );
+            assert_eq!(e.get(player, PlayerCharacter::fEyeHeight), 1.75);
+        }
+        // Installed: the copy, no load, no flag call; the eye height left as it was.
+        e.set_jip_patches(jip_patches::INSTALLED);
+        let asked = run(&mut e);
+        assert_eq!(
+            asked,
+            vec![
+                (0x0094_e4a1, vec![player.addr()]),
+                (0x0094_e5f6, vec![player.addr()])
+            ]
+        );
+        assert!(calls_to(&e, 0x0044_7080).is_empty());
+        assert!(calls_to(&e, 0x0054_68b0).is_empty());
+        assert!(calls_to(&e, 0x0045_bb80).is_empty());
+        assert_eq!(e.get(player, PlayerCharacter::sp1stPerson3D).addr(), copy);
+        assert_eq!(e.get(player, PlayerCharacter::fEyeHeight), 9.5);
+        // The copy is positioned and the camera nodes are found in it, as the exe's model.
+        assert_eq!(calls_to(&e, 0x00a5_9c60)[0][0], copy);
+        // No answer at either: the exe's load and eye height.
+        G38_COPY.with(|c| c.set(None));
+        G38_SKIP.with(|c| c.set(false));
+        assert_eq!(run(&mut e).len(), 2);
+        assert_eq!(calls_to(&e, 0x0044_7080).len(), 1);
+        assert_eq!(calls_to(&e, 0x0054_68b0), vec![vec![world.model, 1]]);
+        assert_eq!(e.get(player, PlayerCharacter::fEyeHeight), 1.75);
     }
 
     #[test]
