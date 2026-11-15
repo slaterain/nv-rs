@@ -255,12 +255,13 @@ fn translation_set_resets_and_updates() {
     let col = collision(&mut e, sc.body);
     let below = collision(&mut e, sc.head);
     e.mem.set_u8(col + 0xc, 0x01);
-    run(
+    let r = run(
         &mut e,
         0x284c,
         sc.refr,
         &[s(b"Body"), z(1.5), z(-2.0), z(0.1)],
     );
+    assert_eq!(r, 0.0, "JIP sets no result");
     assert_eq!(
         get3(&e, sc.body + LOCAL_TRANSLATE).map(f32::to_bits),
         [1.5f32, -2.0, 0.1].map(f32::to_bits)
@@ -424,12 +425,13 @@ fn rotation_modes_0_to_3() {
     }
     let local = [0.1f32, 0.2, -0.3, 0.4, 0.5, 0.6, -0.7, 0.8, 0.9];
     set9(&mut e, sc.body + LOCAL_ROTATE, local);
-    run(
+    let r = run(
         &mut e,
         0x284e,
         sc.refr,
         &[s(b"Body"), z(30.0), z(-45.5), z(100.25), n(1)],
     );
+    assert_eq!(r, 0.0, "JIP sets no result");
     let want = multiply_matrices(&local, &from_euler_pry_inv(rad(deg)));
     assert_eq!(bits9(get9(&e, sc.body + LOCAL_ROTATE)), bits9(want));
     assert_ne!(
@@ -522,13 +524,16 @@ fn rotation_player_actor_empty() {
 
 // ---- SetNifBlockScale 0x2850 ----
 
-/// The local scale written; a node of a plain reference reset; the update.
+/// The local scale written (no result); a node of a plain reference reset; the update. The
+/// player: argument 2 odd the third person root, even the first person node, whatever the camera
+/// (JIP's `GetNifBlock`).
 #[test]
 fn scale_written() {
     let mut e = setup();
     let sc = scene(&mut e, false);
     let col = collision(&mut e, sc.root);
-    run(&mut e, 0x2850, sc.refr, &[s(b"Root"), z(0.3)]);
+    let r = run(&mut e, 0x2850, sc.refr, &[s(b"Root"), z(0.3)]);
+    assert_eq!(r, 0.0, "JIP sets no result");
     assert_eq!(e.mem.f32(sc.root + LOCAL_SCALE).to_bits(), 0.3f32.to_bits());
     assert_eq!(e.mem.u8(col + 0xc), 0x40);
     assert_eq!(updates().len(), 1);
@@ -542,17 +547,44 @@ fn scale_written() {
     set_children(&mut e, sc.root, &[sc.body, sc.arm, fade]);
     run(&mut e, 0x2850, sc.refr, &[s(b"Fade"), z(2.0)]);
     assert_eq!(updates()[1].0, FADE_UPDATE);
+
+    // The player in first person: pcNode 1 the third person root's block.
+    let third = node(&mut e, b"Spine", &[]);
+    let first = node(&mut e, b"Spine", &[]);
+    let p = player(&mut e, third, first, false);
+    e.mem.set_f32(third + LOCAL_SCALE, 1.0);
+    e.mem.set_f32(first + LOCAL_SCALE, 1.0);
+    run(&mut e, 0x2850, p, &[s(b"Spine"), z(0.5), n(1)]);
+    assert_eq!(
+        (
+            e.mem.f32(third + LOCAL_SCALE),
+            e.mem.f32(first + LOCAL_SCALE)
+        ),
+        (0.5, 1.0)
+    );
+    // In third person: pcNode 2 the first person node's block.
+    e.mem.set_u8(p + IS_3RD_PERSON, 1);
+    run(&mut e, 0x2850, p, &[s(b"Spine"), z(0.25), n(2)]);
+    assert_eq!(
+        (
+            e.mem.f32(third + LOCAL_SCALE),
+            e.mem.f32(first + LOCAL_SCALE)
+        ),
+        (0.5, 0.25)
+    );
 }
 
 // ---- SetNifBlockFlag 0x2852 ----
 
-/// Bit set or cleared (0-26; 27 rejected); the empty name is the root; no update call.
+/// Bit set or cleared (0-26; 27 rejected; no result); the empty name is the root; no update
+/// call. The player: argument 3 odd the third person root, even the first person node.
 #[test]
 fn flag_set_and_cleared() {
     let mut e = setup();
     let sc = scene(&mut e, false);
     e.mem.set_u32(sc.head + FLAGS, 0x8000_0001);
-    run(&mut e, 0x2852, sc.refr, &[s(b"Head"), n(26), n(1)]);
+    let r = run(&mut e, 0x2852, sc.refr, &[s(b"Head"), n(26), n(1)]);
+    assert_eq!(r, 0.0, "JIP sets no result");
     assert_eq!(e.mem.u32(sc.head + FLAGS), 0x8400_0001);
     run(&mut e, 0x2852, sc.refr, &[s(b"Head"), n(0), n(0)]);
     assert_eq!(e.mem.u32(sc.head + FLAGS), 0x8400_0000);
@@ -562,6 +594,23 @@ fn flag_set_and_cleared() {
     run(&mut e, 0x2852, sc.refr, &[s(b""), n(3), n(5)]);
     assert_eq!(e.mem.u32(sc.root + FLAGS), 8);
     assert!(updates().is_empty());
+
+    // The player in first person: pcNode 1 the third person root's block.
+    let third = node(&mut e, b"Spine", &[]);
+    let first = node(&mut e, b"Spine", &[]);
+    let p = player(&mut e, third, first, false);
+    run(&mut e, 0x2852, p, &[s(b"Spine"), n(4), n(1), n(1)]);
+    assert_eq!(
+        (e.mem.u32(third + FLAGS), e.mem.u32(first + FLAGS)),
+        (0x10, 0)
+    );
+    // In third person: pcNode 2 the first person node's block.
+    e.mem.set_u8(p + IS_3RD_PERSON, 1);
+    run(&mut e, 0x2852, p, &[s(b"Spine"), n(5), n(1), n(2)]);
+    assert_eq!(
+        (e.mem.u32(third + FLAGS), e.mem.u32(first + FLAGS)),
+        (0x10, 0x20)
+    );
 }
 
 // ---- SetMaterialPropertyValue 0x278D ----
@@ -583,12 +632,13 @@ fn material_traits() {
     let m = material(&mut e, sc.head);
     let at = [0x1c, 0x20, 0x24, 0x28, 0x2c, 0x30, 0x38, 0x3c, 0x40];
     for (t, &off) in at.iter().enumerate() {
-        run(
+        let r = run(
             &mut e,
             0x278d,
             sc.refr,
             &[s(b"Head"), n(t as i32), z(0.1 + t as f64)],
         );
+        assert_eq!(r, 0.0, "JIP sets no result");
         assert_eq!(
             e.mem.f32(m + off).to_bits(),
             ((0.1 + t as f64) as f32).to_bits(),
@@ -707,7 +757,8 @@ fn anim_sequence_frequency_set() {
     let walk = sequence(&mut e, Some(b"Walk"), 1.5);
     let open = sequence(&mut e, Some(b"Open"), 0.75);
     manager(&mut e, sc.root, &[walk, 0, open]);
-    run(&mut e, 0x2860, sc.refr, &[s(b"WALK"), z(0.3)]);
+    let r = run(&mut e, 0x2860, sc.refr, &[s(b"WALK"), z(0.3)]);
+    assert_eq!(r, 0.0, "JIP sets no result");
     assert_eq!(e.mem.f32(walk + 0x28).to_bits(), 0.3f32.to_bits());
     assert_eq!(e.mem.f32(open + 0x28), 0.75);
     run(&mut e, 0x2860, sc.refr, &[s(b"*"), z(2.0)]);
@@ -820,7 +871,8 @@ fn texture_transform_key_written() {
     let (c0, ..) = ttc(&mut e, 4);
     let (c1, _, _, keys) = ttc(&mut e, 4);
     texturing(&mut e, sc.head, &[c0, c1]);
-    run(&mut e, 0x28fb, sc.refr, &[s(b"Head"), n(1), n(2), z(0.3)]);
+    let r = run(&mut e, 0x28fb, sc.refr, &[s(b"Head"), n(1), n(2), z(0.3)]);
+    assert_eq!(r, 0.0, "JIP sets no result");
     assert_eq!(e.mem.f32(keys + 0x14).to_bits(), 0.3f32.to_bits());
     assert_eq!(e.mem.u32(keys + 0x10), 0, "the key's time is not touched");
     let up = calls_to(TTC_UPDATE);
@@ -906,6 +958,36 @@ fn rename_nif_block() {
     // No such block: no call, result 0.
     assert_eq!(run(&mut e, 0x2900, sc.refr, &[s(b"Nope"), s(b"X")]), 0.0);
     assert_eq!(calls_to(ADD_STRING).len(), 3);
+
+    // The player in first person: pcNode 1 the third person root's block is renamed.
+    let third = node(&mut e, b"", &[]);
+    let first = node(&mut e, b"", &[]);
+    let (third_name, first_name) = (counted(&mut e, b"Spine", 1), counted(&mut e, b"Spine", 1));
+    e.mem.set_u32(third + NAME, third_name);
+    e.mem.set_u32(first + NAME, first_name);
+    let p = player(&mut e, third, first, false);
+    let wing = counted(&mut e, b"Wing", 0);
+    e.mem.set_u32(STRING_ANSWER, wing);
+    assert_eq!(
+        run(&mut e, 0x2900, p, &[s(b"Spine"), s(b"Wing"), n(1)]),
+        1.0
+    );
+    assert_eq!(
+        (e.mem.u32(third + NAME), e.mem.u32(first + NAME)),
+        (wing, first_name)
+    );
+    // In third person: pcNode 2 the first person node's block.
+    e.mem.set_u8(p + IS_3RD_PERSON, 1);
+    let tail = counted(&mut e, b"Tail", 0);
+    e.mem.set_u32(STRING_ANSWER, tail);
+    assert_eq!(
+        run(&mut e, 0x2900, p, &[s(b"Spine"), s(b"Tail"), n(2)]),
+        1.0
+    );
+    assert_eq!(
+        (e.mem.u32(third + NAME), e.mem.u32(first + NAME)),
+        (wing, tail)
+    );
 }
 
 // ---- RemoveNifBlock 0x2901 ----
@@ -929,6 +1011,19 @@ fn remove_nif_block() {
     assert_eq!(run(&mut e, 0x2901, sc.refr, &[s(b"Arm")]), 0.0);
     assert_eq!(calls_to(REMOVE_OBJECT).len(), 1);
     let _ = sc.root;
+
+    // The player in first person: pcNode 1 takes the block from the third person root.
+    let spine3 = shape(&mut e, b"Spine");
+    let spine1 = shape(&mut e, b"Spine");
+    let third = node(&mut e, b"Root3", &[spine3]);
+    let first = node(&mut e, b"Root1", &[spine1]);
+    let p = player(&mut e, third, first, false);
+    assert_eq!(run(&mut e, 0x2901, p, &[s(b"Spine"), n(1)]), 1.0);
+    assert_eq!(calls_to(REMOVE_OBJECT)[1], vec![third, spine3]);
+    // In third person: pcNode 2 from the first person node.
+    e.mem.set_u8(p + IS_3RD_PERSON, 1);
+    assert_eq!(run(&mut e, 0x2901, p, &[s(b"Spine"), n(2)]), 1.0);
+    assert_eq!(calls_to(REMOVE_OBJECT)[2], vec![first, spine1]);
 }
 
 /// The `*` walk's depth bound at its edge (as `nif_nodes.rs`' walks): a geometry block 511 levels

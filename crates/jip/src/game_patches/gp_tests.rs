@@ -876,6 +876,42 @@ fn part_two_goes_in_as_jip_and_the_row_say() {
     }
 }
 
+/// G122's slot is JIP's `SafeWrite32(0x108A9B4, PlayerCannotBeHitHook)`
+/// (internal/patches_game.h), and the install writes that word alone: the exe's neighbours
+/// (`0x108A9B0` holds `0x8D0360`, `0x108A9B4` `0x952720`, `0x108A9B8` `0x8C4AB0`; read in the
+/// exe) are unchanged.
+#[test]
+fn g122_slot_is_jips_and_only_it_is_written() {
+    assert_eq!(CANNOT_BE_HIT_SLOT, 0x0108_a9b4);
+    let mut e = engine();
+    e.mem.set_u32(0x0108_a9b0, 0x008d_0360);
+    e.mem.set_u32(0x0108_a9b4, 0x0095_2720);
+    e.mem.set_u32(0x0108_a9b8, 0x008c_4ab0);
+    crate::install_as(&mut e, true);
+    assert_eq!(e.mem.u32(0x0108_a9b0), 0x008d_0360);
+    assert_eq!(e.mem.u32(0x0108_a9b4), CANNOT_BE_HIT_ROUTINE);
+    assert_eq!(e.mem.u32(0x0108_a9b8), 0x008c_4ab0);
+}
+
+/// G105's floor: JIP's `subss xmm1, ds:0x11D2668` (`fMinFatigue`, the setting `0x11D2664`'s
+/// value; internal/patches_game.h, settings_enum.h).
+#[test]
+fn g105_min_fatigue_is_jips() {
+    assert_eq!(MIN_FATIGUE, 0x011d_2668);
+}
+
+/// ToggleImmortalMode's god mode reads: JIP's `mov al, ds:0x11E0898` (the setting `0x11E0894`'s
+/// value) and `mov al, ds:0x11E07BA` (TGM; the byte the exe's `SetGodMode` writes).
+#[test]
+fn immortal_god_mode_setting_is_jips() {
+    assert_eq!(GOD_MODE_SETTING_VALUE, 0x011e_0898);
+}
+
+#[test]
+fn immortal_god_mode_byte_is_jips() {
+    assert_eq!(GOD_MODE_BYTE, 0x011e_07ba);
+}
+
 // ---- G105 ----
 
 fn fatigue_engine(floor: f32) -> Engine {

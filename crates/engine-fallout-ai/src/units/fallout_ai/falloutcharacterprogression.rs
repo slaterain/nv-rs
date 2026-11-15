@@ -205,9 +205,16 @@ pub fn character_progression_force_level(e: &mut Engine, this: Ptr, level: u32) 
     let data = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, holder));
     let player = e.global::<u32>(PLAYER_POINTER);
     let experience = e.vcall(player.wrapping_add(0xa4), 8, &args![0x18u32]).u32();
-    let required = e
-        .call(REQUIRED_EXPERIENCE, &args![level.wrapping_sub(1)])
-        .u32();
+    // JIP LN NVSE's "Fix SetLevel XP" (step 3.9-GE, PLAN-3.9 G23) at `0x8D535F` passes the
+    // level itself (`push eax` for `sub eax, 1; push eax`): the seam answers the level to ask.
+    // One load while the patches are off.
+    let asked = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x008d_535f, &[level])
+    } else {
+        None
+    };
+    let asked = asked.unwrap_or(level.wrapping_sub(1));
+    let required = e.call(REQUIRED_EXPERIENCE, &args![asked]).u32();
     let difference = required.wrapping_sub(experience);
     e.mem.set_u8(data.wrapping_add(8), 1);
     let player = e.global::<u32>(PLAYER_POINTER);
@@ -520,5 +527,55 @@ mod n026_tests {
         assert_eq!(calls(&log, DATA_TEST_008D55E0).len(), 1);
         assert_eq!(calls(&log, UPDATE_PLAYER_NAME).len(), 1);
         assert_eq!(calls(&log, UPDATE_PLAYER_TITLE).len(), 1);
+    }
+    thread_local! {
+        static G23_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G23_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_force_level_xp(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G23_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G23_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// The levels `SetLevel 7` asks the required experience of, with JIP's word `word` and a seam
+    /// handler answering `answer`, and what the seam was asked.
+    fn force_level_with_jip(word: u32, answer: Option<u32>) -> (Vec<u32>, Vec<Vec<u32>>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        let (_, data) = setup(&mut e, 4, 2500);
+        e.register(DATA_TEST_008D55E0, |_, _| 1u32.into_ret());
+        e.mem.set_u8(data, 1);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x008d_535f), at_force_level_xp);
+        G23_ASKED.with(|s| s.borrow_mut().clear());
+        G23_ANSWER.with(|c| c.set(answer));
+        e.set_jip_patches(word);
+        e.call_log = Some(vec![]);
+        e.call(0x008d_5300, &args![0x100u32, 7u32]);
+        let log = e.call_log.take().unwrap();
+        let levels = calls(&log, REQUIRED_EXPERIENCE)
+            .iter()
+            .map(|c| c[0])
+            .collect();
+        (levels, G23_ASKED.with(|s| s.take()))
+    }
+
+    /// JIP's SetLevel XP fix at `0x8D535F` (G23): not asked without the fixes bit (the exe asks
+    /// the level before, 6); asked with the level, its answer is the level asked (JIP's: 7); no
+    /// answer keeps the exe's. The next level's (8) is asked either way.
+    #[test]
+    fn force_level_jip_experience_seam() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED | jip_patches::NPC_PERKS] {
+            let (levels, asked) = force_level_with_jip(word, Some(7));
+            assert!(asked.is_empty(), "{word:x}");
+            assert_eq!(levels, vec![6, 8]);
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(force_level_with_jip(on, None), (vec![6, 8], vec![vec![7]]));
+        assert_eq!(
+            force_level_with_jip(on, Some(7)),
+            (vec![7, 8], vec![vec![7]])
+        );
     }
 }

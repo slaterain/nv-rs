@@ -2244,11 +2244,22 @@ enum Way {
     Done,
 }
 
+/// JIP LN NVSE's "AI Z fix" (credits Stewie; step 3.9-GE, PLAN-3.9 G22) at `0x6B10A3`: JIP
+/// removes the `fldz; fstp` that flattens the direction (`vector`, its z at `+8`) before its
+/// length is taken, so actors keep their height. Whether the seam keeps it (the z store skipped);
+/// one load while the patches are off.
+fn jip_keeps_height(e: &mut Engine, vector: u32) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x006b_10a3, &[vector]).is_some()
+}
+
 /// `006b0f40` from the start node inside the target circle: the two ways
 /// are the tangent points of the start's position on the target circle
 /// (both the flattened direction when the start is within half the radius).
 fn start_inside_target(e: &mut Engine, l: Frame, target: u32) {
-    e.mem.set_f32(l.at(0x78), 0.0);
+    if !jip_keeps_height(e, l.at(0x80)) {
+        e.mem.set_f32(l.at(0x78), 0.0);
+    }
     let length = e.call(0x0045_7910, &args![l.at(0x80)]).f64() as f32;
     typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, l.at(0x8c)));
     typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, l.at(0x98)));
@@ -6911,5 +6922,54 @@ mod tests {
         let mut e = bare(&[]);
         let a = check_constructed(&mut e, 0x006b_4670, VTABLE_ASTAR_NODE_ARRAY);
         assert_eq!(e.mem.u32(a + 8), 0);
+    }
+    thread_local! {
+        static G22_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G22_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_start_height(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G22_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G22_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// The direction's z after `start_inside_target` (the vector is unitized in place) with JIP's
+    /// word `word` and a seam handler answering `answer`, and what the seam was asked.
+    fn start_height_with_jip(word: u32, answer: Option<u32>) -> (u32, f32, Vec<Vec<u32>>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, _) = world();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x006b_10a3), at_start_height);
+        G22_ASKED.with(|s| s.borrow_mut().clear());
+        G22_ANSWER.with(|c| c.set(answer));
+        e.set_jip_patches(word);
+        let target = pov(&mut e, 4, [0.0; 3], 1000.0);
+        with_frame(&mut e, 0x200, |e, l| {
+            set_point(e, l.at(0x80), [3.0, 4.0, 12.0]);
+            start_inside_target(e, l, target);
+            (
+                l.at(0x80),
+                e.mem.f32(l.at(0x78)),
+                G22_ASKED.with(|s| s.take()),
+            )
+        })
+    }
+
+    /// JIP's AI Z fix at `0x6B10A3` (G22): not asked without the fixes bit, the direction
+    /// flattened as in the exe; asked with the direction, an answer keeps its height.
+    #[test]
+    fn start_inside_target_jip_height_seam() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED | jip_patches::NPC_PERKS] {
+            let (_, z, asked) = start_height_with_jip(word, Some(0));
+            assert!(asked.is_empty(), "{word:x}");
+            assert_eq!(z, 0.0);
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (vector, z, asked) = start_height_with_jip(on, None);
+        assert_eq!(asked, vec![vec![vector]]);
+        assert_eq!(z, 0.0);
+        let (vector, z, asked) = start_height_with_jip(on, Some(0));
+        assert_eq!(asked, vec![vec![vector]]);
+        assert!((z - 12.0 / 13.0).abs() < 1e-6, "{z}");
     }
 }
