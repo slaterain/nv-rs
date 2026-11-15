@@ -19129,6 +19129,87 @@ mod tests {
         }
     }
 
+    thread_local! {
+        /// The double each D04 site answers with, in the order look x `0x94A93C`, look y
+        /// `0x94A95F`, move x `0x94AB59`, move y `0x94AB88`.
+        static D04_AT: [std::cell::Cell<u32>; 4] = const {
+            [const { std::cell::Cell::new(0) }; 4]
+        };
+    }
+
+    fn d04_answer(i: usize, a: &[u32]) -> Option<u32> {
+        assert!(a.is_empty(), "no arguments");
+        Some(D04_AT.with(|c| c[i].get()))
+    }
+
+    fn d04_look_x(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        d04_answer(0, a)
+    }
+
+    fn d04_look_y(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        d04_answer(1, a)
+    }
+
+    fn d04_move_x(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        d04_answer(2, a)
+    }
+
+    fn d04_move_y(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        d04_answer(3, a)
+    }
+
+    /// D04 through the whole free camera (`0094a8c0`, analog input) with `INSTALLED`: each of the
+    /// four sites answers its own double (the exe's call sites: `0x94A93C`, `0x94A95F` look x
+    /// and y, `0x94AB59`, `0x94AB88` move x and y). In run k only site k's double is 20000 (its
+    /// axis, 10000, zeroed); each other site's is its index 0 to 3 (kept): exactly axis k is
+    /// zeroed.
+    #[test]
+    fn ufo_camera_jip_dead_zones_per_site() {
+        use engine_core::extend::jip_patches::INSTALLED;
+        let sites: [(u32, engine_core::extend::SiteFn); 4] = [
+            (0x0094_a93c, d04_look_x),
+            (0x0094_a95f, d04_look_y),
+            (0x0094_ab59, d04_move_x),
+            (0x0094_ab88, d04_move_y),
+        ];
+        for k in 0..4 {
+            let (mut e, this) = ufo_world();
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x00a2_3390, |_, _| int(10000));
+            e.register(0x0040_8820, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+            e.set_global(0x011e_0a6c, 0.1f32); // look speed
+            e.set_global(0x011e_090c, 2.0f32); // move speed
+            e.register(0x0045_7fe0, |_, _| int(5000));
+            e.set_global(0x011e_0bf8, 4000u32);
+            e.register(0x0040_ebd0, |_, a| {
+                float(f32::from_bits(a[0]).min(f32::from_bits(a[1])) as f64)
+            });
+            for (i, (site, handler)) in sites.iter().enumerate() {
+                let double = e.mem.alloc(8);
+                let limit = if i == k { 20000.0 } else { i as f64 };
+                e.mem.set_f64(double, limit);
+                D04_AT.with(|c| c[i].set(double));
+                e.on_site_for_test(*site, *handler);
+            }
+            e.set_jip_patches(INSTALLED);
+            e.call(0x0094_a8c0, &args![this]);
+            let heading = e.get(this, PlayerCharacter::fUFOCameraHeading);
+            let pitch = e.get(this, PlayerCharacter::fUFOCameraPitch);
+            let position = read_floats(&e, member(this, PlayerCharacter::UFOCameraPos));
+            let zeroed = [
+                heading == 0.0,
+                pitch == 0.0,
+                position[0] == 0.0,
+                position[1] == 0.0,
+            ];
+            let want: [bool; 4] = std::array::from_fn(|i| i == k);
+            assert_eq!(
+                zeroed, want,
+                "run {k}: heading {heading} pitch {pitch} {position:?}"
+            );
+        }
+    }
+
     #[test]
     fn the_ufo_camera_turns_with_the_look_axes_and_moves_with_the_keys() {
         let (mut e, this) = ufo_world();
