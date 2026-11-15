@@ -57,7 +57,7 @@
 006047c0	1	JIP
 006155f0	1	ITR
 00619820	1	nv-rs dialogue topic index
-0061a310	2	JIP, nv-rs dialogue topic index
+0061a310	1	JIP, nv-rs dialogue topic index
 0061a380	2	nv-rs dialogue topic index
 0061a5a0	1	nv-rs dialogue topic index
 00623cb0	0	ITR
@@ -210,3 +210,31 @@
 00eddd7d	0	HeapReplacer
 00ee1700	0	HeapReplacer
 00ee820a	0	JIP
+# Step 3.9 (JIP LN NVSE game patches): one block per group (measure/jip/PLAN-3.9-groups.md). A group adds
+# the addresses it wraps (with "JIP") in its own block only; addresses rise within a block and are never listed twice.
+#> 3.9 GA
+
+#> 3.9 GB
+
+#> 3.9 GC
+
+#> 3.9 GD
+
+#> 3.9 GE
+
+#> 3.9 GP
+
+#> 3.9 GH1
+
+#> 3.9 GH2
+
+#> 3.9 GF
+
+#> 3.9 GS
+
+#> 3.9 GW
+
+#> 3.9 GL
+
+#> 3.9 GX
+
