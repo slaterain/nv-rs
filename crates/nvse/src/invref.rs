@@ -561,6 +561,17 @@ pub fn write_ref_data_to_container(e: &mut Engine, id: u32) -> bool {
     true
 }
 
+/// Marks the inventory reference of temporary reference `id` removed, as JIP LN NVSE's
+/// `DropMeAlt` and `RemoveMeIRAlt` do (`invRef->removed = true` on the `InventoryReference` xNVSE
+/// hands them): its stack was taken by the command itself, so the write-back of the temporary
+/// reference's data ([`write_ref_data_to_container`]) leaves the stack's list alone. Nothing for
+/// an id that is no inventory reference.
+pub fn set_removed(e: &mut Engine, id: u32) {
+    if let Some(r) = state(e).refs.get_mut(&id) {
+        r.removed = true;
+    }
+}
+
 /// `GetCount`: the entry's count.
 pub fn count(e: &mut Engine, id: u32) -> i32 {
     let entry = state(e).refs.get(&id).map_or(0, |r| r.data.entry);

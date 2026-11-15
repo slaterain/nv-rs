@@ -4,19 +4,29 @@
 //! an actor's stacks, worn items and hotkeys and for a scripted item itself (made through the
 //! built-in xNVSE, `nvse::invref::create_entry`, as JIP's `InventoryRefCreate`), an item
 //! reference's health, an armour's effective DT and DR (the game's `004BE0B0` / `004BDF90`), and
-//! items moved to another reference. 18 of its 29 commands.
+//! items moved to another reference; items added (JIP's `AddItemAlt` through a temporary
+//! container), equipped (`EquipItemAlt`) and unequipped with JIP's corner message, and dropped
+//! or taken by count or by inventory reference (`DropAlt`, `DropMeAlt`, `RemoveMeIRAlt`, the
+//! last two marking the reference removed through `nvse::invref::set_removed`); an inventory
+//! reference's mod flags, health and hotkey set (`SetWeaponRefModFlags`,
+//! `SetItemRefCurrentHealth`, `SetHotkeyItemRef`, through JIP's own `InventoryRef::CreateExtraData`
+//! and `SplitFromStack`, translated here). All 27 of its 29 commands not built elsewhere.
 //!
 //! Built elsewhere: `ToggleItemUnique` (world_hooks.rs) and `SetOnUseAidItemEventHandler`
 //! (actor_hooks.rs), the core track's hook commands.
 //!
-//! Deferred, each with what it waits for: `DropMeAlt`, `RemoveMeIRAlt` (they set the inventory
-//! reference's `removed` mark, which the built-in xNVSE's `nvse::invref` keeps private with no
-//! setter); `SetWeaponRefModFlags`, `SetItemRefCurrentHealth`, `SetHotkeyItemRef` (xNVSE's
-//! `InventoryReference::CreateExtraData` and `SplitFromStack`, not in `nvse::invref` yet).
-//! Not built in this batch (no hook or patch needed; left for the next agent): `AddItemAlt`,
-//! `EquipItemAlt` (JIP's hand-written `TESObjectREFR::AddItemAlt` and `Actor::EquipItemAlt`),
-//! `UnequipItemAlt` (JIP's `ShowItemMessage`), `DropAlt` (JIP's `GetFormCount` and
-//! `TESForm::HasScript`).
+//! Calls confirmed in the exe for lane B4 (AUDIT-lane-B4.md): `ExtraDataList::CopyListForReference`
+//! `00412490` (`RET 8`: this, the source, the byte), the vtables of `ExtraDataList` `010143E8`
+//! (0x20 bytes), `ExtraHealth` `010158E4` (`00431D10`), `ExtraHotkey` `0101592C` (`00432380`),
+//! `ExtraWeaponModFlags` `010159A4` (`0042E450`), each value at +0xC; a changes entry 0xC bytes.
+//!
+//! Calls confirmed in the exe for lane B3 (AUDIT-lane-B3.md; the words passed are the callee's):
+//! the temporary `TESContainer`'s constructor `00481610` and destructor `00481680`, its `AddItem`
+//! `004818E0` (`RET 0xC`), `TESLeveledList`'s add `00487F70` (`RET 0x10`), the move into a
+//! reference `004821A0` (translated: container, reference, byte), `GetCalcLevel` `00567E10`
+//! (`RET 4`), `Actor::EquipItem` / `UnequipItem` `0088C650` / `0088C790` (`RET 0x18`),
+//! `QueueUIMessage` `007052F0` (six words; it copies the text), the icon path at `010208E0`, a
+//! `ContainerObject`'s `ContainerItemExtra` (0xC bytes, health +8: `00482090`).
 //!
 //! Layouts confirmed in the exe for these (AUDIT-lane-B2.md): `TESHealthForm` at armour +0x68 and
 //! weapon +0x94 (`GetFormAsHealthForm` `004872E0`, the health its +4), a weapon's mod effects
@@ -38,7 +48,9 @@
 
 use super::arrays::{create_array, Element};
 use super::forms::INVENTORY_TYPE;
-use super::{extra, heap_alloc, list_items, list_prepend, list_remove_all, type_of, Handlers};
+use super::{
+    extra, heap_alloc, heap_free, list_items, list_prepend, list_remove_all, type_of, Handlers,
+};
 use crate::game::ListNode;
 use engine_core::prelude::*;
 use nvse::commands::Read;
@@ -46,13 +58,22 @@ use nvse::{handled, CommandArgs};
 
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
+    (0x2606, add_item_alt_cmd),
     (0x2607, get_value_alt),
     (0x26ab, set_value_alt),
     (0x2688, remove_item_target_cmd),
     (0x270c, get_weapon_ref_mod_flags),
+    (0x270d, set_weapon_ref_mod_flags),
     (0x270f, get_item_ref_current_health),
+    (0x2710, set_item_ref_current_health),
+    (0x2716, set_hotkey_item_ref),
+    (0x2717, equip_item_alt_cmd),
+    (0x2718, unequip_item_alt),
+    (0x2719, drop_alt),
+    (0x271a, drop_me_alt),
     (0x2766, get_all_items),
     (0x2767, get_all_item_refs),
+    (0x27e2, remove_me_ir_alt),
     (0x2839, get_equipped_item_ref),
     (0x2864, get_no_unequip),
     (0x2865, set_no_unequip),
@@ -1072,6 +1093,883 @@ fn remove_item_target_cmd(e: &mut Engine, w: &[u32]) -> Ret {
             &mut Vec::new(),
         );
     }
+    handled(true)
+}
+
+// ---- adding, equipping and dropping (lane B3) ----
+
+/// `TESContainer`'s constructor and destructor, `AddItem(form, count, extra)`, `TESLeveledList`'s
+/// add to a container `(level, count, container, flag)` and the move of a container's items into a
+/// reference `(reference, noMessage)` (all `thiscall`); `TESObjectREFR::GetCalcLevel(flag)`.
+const CONTAINER_INIT: u32 = 0x0048_1610;
+const CONTAINER_DESTROY: u32 = 0x0048_1680;
+const CONTAINER_ADD: u32 = 0x0048_18e0;
+const LEVELED_ADD_TO_CONTAINER: u32 = 0x0048_7f70;
+const CONTAINER_MOVE_TO_REF: u32 = 0x0048_21a0;
+const REFR_GET_CALC_LEVEL: u32 = 0x0056_7e10;
+/// The `TESContainer` JIP keeps on its stack: a vtable and the item list's head node.
+const TEMP_CONTAINER_SIZE: u32 = 0x0c;
+/// A `TESContainer`'s item list (`+4`); an item's `ContainerObject`: count `+0`, form `+4`, its
+/// `ContainerItemExtra` `+8` (owner `+0`, health `+8`, 0xC bytes: `00482090`).
+const CONTAINER_LIST: u32 = 0x04;
+const OBJECT_FORM: u32 = 0x04;
+const OBJECT_EXTRA: u32 = 0x08;
+const ITEM_EXTRA_SIZE: u32 = 0x0c;
+const ITEM_EXTRA_HEALTH: u32 = 0x08;
+/// `TESLevItem`'s `TESLeveledList` (JIP's `add ecx, 0x30`).
+const LEVELED_LIST: u32 = 0x30;
+/// `kFormType_TESObjectBOOK`, `kFormType_TESLevItem`.
+const BOOK: u8 = 0x19;
+const LEVELED_ITEM: u8 = 0x34;
+/// `TESObjectWEAP::eWeaponType` (jip_fn_weapon.rs): 10 and above are thrown weapons and mines.
+const WEAPON_TYPE: u32 = 0xf4;
+const WEAPON_TYPE_THROWN: u8 = 0x0a;
+/// `kXData_ExtraCount`.
+const EXTRA_COUNT: u32 = 0x24;
+/// `Actor::EquipItem`, `Actor::UnequipItem` (`thiscall`, six words after the actor).
+const EQUIP_ITEM: u32 = 0x0088_c650;
+const UNEQUIP_ITEM: u32 = 0x0088_c790;
+/// The game's own message texts JIP shows after an item's name (pointers the game fills at
+/// start-up) when equipping and when unequipping.
+const MSG_EQUIPPED: u32 = 0x011d_2a10;
+const MSG_UNEQUIPPED: u32 = 0x011d_4250;
+/// `QueueUIMessage` (cdecl: the text, the emotion, the icon, the sound, the seconds as a float,
+/// a flag) and the icon path JIP passes (`"Interface\Icons\Message Icons\glow_..."`).
+const QUEUE_UI_MESSAGE: u32 = 0x0070_52f0;
+const MESSAGE_ICON: u32 = 0x0102_08e0;
+const TWO_SECONDS: u32 = 0x4000_0000;
+/// JIP's message buffer (`sub esp, 0x70`).
+const MESSAGE_BUFFER: usize = 0x70;
+/// `ContainerItemExtra`'s greatest health JIP sets (`kMaxHealth`, 0x3F7FBE77).
+const MAX_ITEM_HEALTH_BITS: u32 = 0x3f7f_be77;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: ShowItemMessage.
+/// The corner message "<name> <text>." for an item with a name (none without), shown 2 seconds.
+///
+/// JIP builds it in a 0x70-byte stack buffer without a bound; here it is cut to fit.
+fn show_item_message(e: &mut Engine, item: u32, text: u32) {
+    let name = super::the_name(e, item);
+    if name.is_empty() {
+        return;
+    }
+    let mut message = name;
+    message.push(b' ');
+    if text != 0 {
+        message.extend_from_slice(&nvse::table::guest_text(e, text));
+    }
+    message.push(b'.');
+    message.truncate(MESSAGE_BUFFER - 1);
+    let block = heap_alloc(e, MESSAGE_BUFFER as u32);
+    e.mem.write(block, &message);
+    e.mem.set_u8(block + message.len() as u32, 0);
+    e.call(
+        QUEUE_UI_MESSAGE,
+        &args![block, 0u32, MESSAGE_ICON, 0u32, TWO_SECONDS, 0u32],
+    );
+    heap_free(e, block);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::EquipItemAlt (asm).
+/// The entry's item equipped from its first stack: armour, books and aid one, ammunition the
+/// entry's count, a weapon one (a thrown weapon or mine the count); other items not. Then the
+/// item's "equipped" message unless `no_message` (its low byte) is set.
+fn equip_item_alt(e: &mut Engine, actor: u32, entry: u32, no_unequip: u32, no_message: u32) {
+    let item = e.mem.u32(entry + ENTRY_ITEM);
+    // JIP reads the type through a null item; such an entry is passed over.
+    if item == 0 {
+        return;
+    }
+    let all = e.mem.u32(entry + ENTRY_COUNT);
+    let count = match type_of(e, item) {
+        ARMOR | BOOK | ALCHEMY_ITEM => 1,
+        AMMO => all,
+        WEAPON if e.mem.u8(item + WEAPON_TYPE) < WEAPON_TYPE_THROWN => 1,
+        WEAPON => all,
+        _ => return,
+    };
+    let xdata = first_extra_list(e, entry);
+    e.call(
+        EQUIP_ITEM,
+        &args![actor, item, count, xdata, 1u32, no_unequip, 1u32],
+    );
+    if no_message as u8 == 0 {
+        let text = e.mem.u32(MSG_EQUIPPED);
+        show_item_message(e, item, text);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h:
+// SetContainerItemsHealthHook (called directly by AddItemAlt; its patch of 00482090 is not made).
+/// Each item of the container: armour and weapons other than thrown ones and mines get the health
+/// part `health` (kept in 0 to just under 1; a lower one already there stays); other items' extra
+/// data has its health reset to 1 and, without an owner, is freed.
+fn set_container_items_health(e: &mut Engine, container: u32, health: f32) {
+    // minss with kMaxHealth (a NaN gives it), then maxss with 0.
+    let max = f32::from_bits(MAX_ITEM_HEALTH_BITS);
+    let health = if health < max { health } else { max };
+    let health = if health > 0.0 { health } else { 0.0 };
+    for object in list_items(e, Ptr::new(container + CONTAINER_LIST)) {
+        if object == 0 {
+            continue;
+        }
+        let extra = e.mem.u32(object + OBJECT_EXTRA);
+        let item = e.mem.u32(object + OBJECT_FORM);
+        // JIP reads the type through a null form; none is added by the callers here.
+        if item == 0 {
+            continue;
+        }
+        let has_health = match type_of(e, item) {
+            ARMOR => true,
+            WEAPON => e.mem.u8(item + WEAPON_TYPE) < WEAPON_TYPE_THROWN,
+            _ => false,
+        };
+        if !has_health {
+            if extra != 0 {
+                e.mem.set_f32(extra + ITEM_EXTRA_HEALTH, 1.0);
+                if e.mem.u32(extra) == 0 {
+                    e.mem.set_u32(object + OBJECT_EXTRA, 0);
+                    heap_free(e, extra);
+                }
+            }
+        } else if extra == 0 {
+            let block = heap_alloc(e, ITEM_EXTRA_SIZE);
+            e.mem.set_u32(block, 0);
+            e.mem.set_u32(block + 4, 0);
+            e.mem.set_f32(block + ITEM_EXTRA_HEALTH, health);
+            e.mem.set_u32(object + OBJECT_EXTRA, block);
+        } else {
+            let old = e.mem.f32(extra + ITEM_EXTRA_HEALTH);
+            e.mem.set_f32(
+                extra + ITEM_EXTRA_HEALTH,
+                if health < old { health } else { old },
+            );
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: TESObjectREFR::AddItemAlt
+// (asm).
+/// `count` of an item, of each inventory item of a form list, or of what a leveled item gives at
+/// the reference's level, put in a temporary container, given the health part, moved into the
+/// reference (its message unless `no_message`), and with `do_equip` (its low byte) each equipped
+/// by an actor that has changes. Other forms add nothing.
+///
+/// JIP keeps the temporary container on its stack; here it is a block of the game's heap.
+fn add_item_alt(
+    e: &mut Engine,
+    refr: u32,
+    form: u32,
+    count: u32,
+    health: f32,
+    do_equip: u32,
+    no_message: u32,
+) {
+    let container = heap_alloc(e, TEMP_CONTAINER_SIZE);
+    e.call(CONTAINER_INIT, &args![container]);
+    let kind = type_of(e, form);
+    let added = if kind == LEVELED_ITEM {
+        let level = e.call(REFR_GET_CALC_LEVEL, &args![refr, 0u32]).u32();
+        e.call(
+            LEVELED_ADD_TO_CONTAINER,
+            &args![form + LEVELED_LIST, level, count, container, 0u32],
+        );
+        true
+    } else if kind == LIST_FORM {
+        for item in list_items(e, Ptr::new(form + LIST_FORM_LIST)) {
+            if item != 0 && is_inventory_type(u32::from(type_of(e, item))) {
+                e.call(CONTAINER_ADD, &args![container, item, count, 0u32]);
+            }
+        }
+        true
+    } else if is_inventory_type(u32::from(kind)) {
+        e.call(CONTAINER_ADD, &args![container, form, count, 0u32]);
+        true
+    } else {
+        false
+    };
+    if added {
+        set_container_items_health(e, container, health);
+        e.call(CONTAINER_MOVE_TO_REF, &args![container, refr, no_message]);
+        if do_equip as u8 != 0 && super::is_actor(e, refr) {
+            let entries = crate::overrides::changes_list(e, refr);
+            if entries != 0 {
+                for object in list_items(e, Ptr::new(container + CONTAINER_LIST)) {
+                    if object == 0 {
+                        continue;
+                    }
+                    let item = e.mem.u32(object + OBJECT_FORM);
+                    let entry = nvse::invref::find_for_item(e, entries, item);
+                    if entry != 0 {
+                        equip_item_alt(e, refr, entry, 0, no_message);
+                    }
+                }
+            }
+        }
+    }
+    e.call(CONTAINER_DESTROY, &args![container]);
+    heap_free(e, container);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_AddItemAlt_Execute.
+/// Adds `count` (default 1, none for 0) of an item, a form list's items or a leveled item to a
+/// reference with a container, at `condition` percent (default 100), optionally equipped, its
+/// message off by default.
+fn add_item_alt_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let form = read.form(0);
+    if !read.ok || form == 0 || a.this_obj == 0 {
+        return handled(true);
+    }
+    let count = read.int(1, 1);
+    let condition = read.float(2, 100.0);
+    let (do_equip, no_message) = (read.int(3, 0), read.int(4, 1));
+    let base = base_of(e, a.this_obj);
+    if count != 0 && base != 0 && super::ln_fn_inventory::container_of(e, base) != 0 {
+        add_item_alt(
+            e,
+            a.this_obj,
+            form,
+            count,
+            condition * 0.01,
+            do_equip,
+            no_message,
+        );
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_EquipItemAlt_Execute.
+/// An actor equips an item it holds (`EquipItemAlt`), optionally locked on, its message off by
+/// default.
+fn equip_item_alt_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let item = read.form(0);
+    if !read.ok || item == 0 || !super::is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let (no_unequip, no_message) = (read.int(1, 0), read.int(2, 1));
+    let entry = changes_entry(e, a.this_obj, item);
+    if entry != 0 {
+        equip_item_alt(e, a.this_obj, entry, no_unequip, no_message);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_UnequipItemAlt_Execute.
+/// An actor takes off a weapon or an armour it wears (its worn stack), optionally kept off, with
+/// the "unequipped" message unless it is off (by default).
+fn unequip_item_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let item = read.form(0);
+    if !read.ok || item == 0 || !super::is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    if type_of(e, item) != WEAPON && !super::is_type(e, item, VTBL_ARMOR) {
+        return handled(true);
+    }
+    let (no_equip, no_message) = (read.int(1, 0), read.int(2, 1));
+    let entry = changes_entry(e, a.this_obj, item);
+    let xdata = if entry == 0 {
+        0
+    } else {
+        equipped_extra(e, entry)
+    };
+    if xdata == 0 {
+        return handled(true);
+    }
+    // `UnequipItem`'s last three are `bool`s: the words become 0 or 1.
+    e.call(
+        UNEQUIP_ITEM,
+        &args![
+            a.this_obj,
+            item,
+            1u32,
+            xdata,
+            1u32,
+            u32::from(no_equip != 0),
+            u32::from(no_message != 0)
+        ],
+    );
+    if no_message == 0 {
+        let text = e.mem.u32(MSG_UNEQUIPPED);
+        show_item_message(e, item, text);
+    }
+    handled(true)
+}
+
+/// `TESObjectREFR::RemoveItem` (virtual `0x17C`) dropping `quantity` of `item` from the stack
+/// `xdata` into the world (no target); the last flag JIP passes as 1.
+fn drop_item(e: &mut Engine, refr: u32, item: u32, xdata: u32, quantity: i32, keep_owner: bool) {
+    e.vcall(
+        refr,
+        VT_REMOVE_ITEM,
+        &[
+            item,
+            xdata,
+            quantity as u32,
+            u32::from(keep_owner),
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+        ],
+    );
+}
+
+/// Whether an item is dropped as a stack: a weapon when thrown or a mine, else anything but
+/// armour (JIP's `stacked`).
+fn drops_stacked(e: &mut Engine, item: u32) -> bool {
+    if type_of(e, item) == WEAPON {
+        e.mem.u8(item + WEAPON_TYPE) > 9
+    } else {
+        !super::is_type(e, item, VTBL_ARMOR)
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_DropAlt_Execute.
+/// Drops an item, or each item of a form list, from a reference with a container: up to
+/// `drop_count` (all for 0 or less) of its count, the entry's stacks first (a scripted item's
+/// stack one at a time, its count dropped; armour and weapons other than thrown ones one by one),
+/// then the rest without extra data in drops of at most 0x7FFF; the owner kept unless cleared.
+fn drop_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let form = read.form(0);
+    if !read.ok || form == 0 || a.this_obj == 0 {
+        return handled(true);
+    }
+    let (drop_count, clr_owner) = (read.int(1, 0) as i32, read.int(2, 0));
+    let container = super::ln_fn_inventory::container_of(e, base_of(e, a.this_obj));
+    if container == 0 {
+        return handled(true);
+    }
+    let entries = crate::overrides::changes_list(e, a.this_obj);
+    if entries == 0 {
+        return handled(true);
+    }
+    let items = if type_of(e, form) == LIST_FORM {
+        list_items(e, Ptr::new(form + LIST_FORM_LIST))
+    } else {
+        vec![form]
+    };
+    let keep_owner = clr_owner == 0;
+    let refr = a.this_obj;
+    for item in items {
+        if item == 0 || !is_inventory_type(u32::from(type_of(e, item))) {
+            continue;
+        }
+        let mut total = crate::overrides::form_count(e, container + CONTAINER_LIST, entries, item);
+        if total < 1 {
+            continue;
+        }
+        if drop_count > 0 && drop_count < total {
+            total = drop_count;
+        }
+        let entry = nvse::invref::find_for_item(e, entries, item);
+        if entry != 0 && e.mem.u32(entry) != 0 {
+            let has_script = crate::world_hooks::has_script(e, item);
+            let stacked = drops_stacked(e, item);
+            while total > 0 {
+                let xdata = first_extra_list(e, entry);
+                if xdata == 0 {
+                    break;
+                }
+                let mut sub = nvse::invref::count_for_extra_list(e, xdata);
+                if sub < 1 {
+                    sub = 1;
+                } else if sub > 1 {
+                    if has_script && extra::has_type(e, xdata, EXTRA_SCRIPT) {
+                        extra::remove_by_type(e, xdata, EXTRA_COUNT);
+                        sub = 1;
+                    } else if sub > total {
+                        sub = total;
+                    }
+                }
+                total -= sub;
+                if stacked {
+                    drop_item(e, refr, item, xdata, sub, keep_owner);
+                } else {
+                    for _ in 0..sub {
+                        drop_item(e, refr, item, xdata, 1, keep_owner);
+                    }
+                }
+            }
+        }
+        while total > 0 {
+            let sub = total.min(0x7fff);
+            drop_item(e, refr, item, 0, sub, keep_owner);
+            total -= sub;
+        }
+    }
+    handled(true)
+}
+
+/// `InventoryRefGetForID(thisObj->refID)` with what `DropMeAlt` and `RemoveMeIRAlt` read: the
+/// temporary reference's id, its data, its container and its count (`entry->countDelta`).
+fn inv_ref_stack(e: &mut Engine, reference: u32) -> Option<(u32, nvse::invref::Data, u32, i32)> {
+    if reference == 0 {
+        return None;
+    }
+    let id = super::ref_id(e, reference);
+    if !nvse::invref::for_ref_id(e, id) {
+        return None;
+    }
+    let (data, container) = nvse::invref::get(e, id).map(|r| (r.data, r.container))?;
+    let count = nvse::invref::count(e, id);
+    Some((id, data, container, count))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_DropMeAlt_Execute.
+/// The inventory reference's stack dropped by its container: up to `drop_count` (all for 0 or
+/// less, or more than it has), as a stack or (armour and weapons other than thrown ones) one by
+/// one; then the reference is marked removed.
+///
+/// An inventory reference without a changes entry has no count here (JIP reads through the null
+/// entry); one without a container drops nothing (JIP calls through null).
+fn drop_me_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let (mut drop_count, clr_owner) = (read.int(0, 0) as i32, read.int(1, 0));
+    let Some((id, data, container, count)) = inv_ref_stack(e, a.this_obj) else {
+        return handled(true);
+    };
+    if count < 1 || container == 0 {
+        return handled(true);
+    }
+    if drop_count < 1 || drop_count > count {
+        drop_count = count;
+    }
+    let keep_owner = clr_owner == 0;
+    if drops_stacked(e, data.item) {
+        drop_item(e, container, data.item, data.xdata, drop_count, keep_owner);
+    } else {
+        for _ in 0..drop_count {
+            drop_item(e, container, data.item, data.xdata, 1, keep_owner);
+        }
+    }
+    nvse::invref::set_removed(e, id);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_RemoveMeIRAlt_Execute.
+/// Up to `quantity` (all for 0 or less, or more than it has) of the inventory reference's stack
+/// taken from its container, into `target` when given; then the reference is marked removed. The
+/// same guards as `DropMeAlt`.
+fn remove_me_ir_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let (mut quantity, clr_owner) = (read.int(0, 0) as i32, read.int(1, 0));
+    let target = read.form(2);
+    let Some((id, data, container, count)) = inv_ref_stack(e, a.this_obj) else {
+        return handled(true);
+    };
+    if count < 1 || container == 0 {
+        return handled(true);
+    }
+    if quantity < 1 || quantity > count {
+        quantity = count;
+    }
+    remove_item(
+        e,
+        container,
+        data.item,
+        data.xdata,
+        quantity,
+        clr_owner == 0,
+        target,
+    );
+    nvse::invref::set_removed(e, id);
+    handled(true)
+}
+
+// ---- lane B4: setting an inventory reference's mod flags, health and hotkey ----
+
+/// The extra data the setters create (JIP's `CreateExtraType` with `kVtbl_*`, each vtable the one
+/// the exe's constructor stores): `ExtraHealth` 0x25 (`00431D10`, its health at +0xC),
+/// `ExtraHotkey` 0x4A (`00432380`, its index byte at +0xC), `ExtraWeaponModFlags` 0x8D
+/// (`0042E450`, its flags byte at +0xC).
+const VTBL_EXTRA_HEALTH: u32 = 0x0101_58e4;
+const VTBL_EXTRA_HOTKEY: u32 = 0x0101_592c;
+const VTBL_EXTRA_WEAPON_MOD_FLAGS: u32 = 0x0101_59a4;
+/// `ExtraDataList` (0x20 bytes, the vtable its constructor `00410360` stores) and its first extra
+/// (`m_data`, +4).
+const VTBL_EXTRA_DATA_LIST: u32 = 0x0101_43e8;
+const EXTRA_DATA_LIST_SIZE: u32 = 0x20;
+const LIST_DATA: u32 = 0x04;
+/// `ExtraDataList::CopyListForReference` `00412490` (`thiscall`: the new list, the source, the
+/// "copy and remove" byte; `RET 8`), which JIP's `ExtraDataList::CreateCopy` calls.
+const EXTRA_COPY_FOR_REFERENCE: u32 = 0x0041_2490;
+/// A `ContChangesEntry` (extra lists +0, count +4, item +8) and a list node: their sizes.
+const ENTRY_SIZE: u32 = 0x0c;
+/// `TESObjectWEAP::itemMod[3]` (+0x350; AUDIT-batch12.md).
+const WEAPON_ITEM_MODS: u32 = 0x350;
+/// `MarkModified`'s flag for a changed inventory (JIP: `MarkModified(0x20)`).
+const CHANGED_INVENTORY: u32 = 0x20;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameBSExtraData.cpp: ExtraDataList::Create.
+/// A new extra data list: 0x20 zeroed bytes of the game's heap with its vtable.
+fn new_extra_list(e: &mut Engine) -> u32 {
+    let xdl = heap_alloc(e, EXTRA_DATA_LIST_SIZE);
+    e.mem.write(xdl, &[0; EXTRA_DATA_LIST_SIZE as usize]);
+    e.mem.set_u32(xdl, VTBL_EXTRA_DATA_LIST);
+    xdl
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp: ExtraHealth::Create,
+// ExtraHotkey::Create, ExtraWeaponModFlags::Create.
+/// `CreateExtraType(Type)` with `dataPtr[3]` (the whole word at +0xC) set to `word`.
+fn new_extra(e: &mut Engine, vtable: u32, kind: u32, word: u32) -> u32 {
+    let x = extra::create(e, vtable, kind);
+    e.mem.set_u32(x + EXTRA_WORD, word);
+    x
+}
+
+/// A new list node of the game's heap holding `item` (`tList::Init(item)` on a list JIP has just
+/// allocated: the item, no next node).
+fn new_list(e: &mut Engine, item: u32) -> u32 {
+    let node = heap_alloc(e, ListNode::SIZE);
+    e.mem.set_u32(node, item);
+    e.mem.set_u32(node + 4, 0);
+    node
+}
+
+/// The inventory reference behind `reference` (`InventoryRefGetForID(thisObj->refID)`): its id,
+/// its data and its container.
+fn inv_ref_of(e: &mut Engine, reference: u32) -> Option<(u32, nvse::invref::Data, u32)> {
+    if reference == 0 {
+        return None;
+    }
+    let id = super::ref_id(e, reference);
+    if !nvse::invref::for_ref_id(e, id) {
+        return None;
+    }
+    nvse::invref::get(e, id).map(|r| (id, r.data, r.container))
+}
+
+/// `invRef->xData = xdata`.
+fn set_inv_ref_xdata(e: &mut Engine, id: u32, xdata: u32) {
+    if let Some(r) = nvse::invref::get(e, id) {
+        r.data.xdata = xdata;
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp:
+// InventoryRef::CreateExtraData (with nvse/GameExtraData.cpp: ContChangesEntry::Create).
+/// A new extra data list for an inventory reference that has none: first in the container's
+/// changes entry for the item (a new entry of count 0 first in the changes when there is none;
+/// a new list of lists when the entry has none), the reference's stack from now on; the
+/// container marked as changed (0x20). 0 when the container has no changes.
+///
+/// A reference without a container makes none (JIP calls through the null container).
+fn inv_ref_create_extra_data(e: &mut Engine, id: u32, item: u32, container: u32) -> u32 {
+    if container == 0 {
+        return 0;
+    }
+    let entries = crate::overrides::changes_list(e, container);
+    if entries == 0 {
+        return 0;
+    }
+    let mut entry = nvse::invref::find_for_item(e, entries, item);
+    if entry == 0 {
+        entry = heap_alloc(e, ENTRY_SIZE);
+        e.mem.set_u32(entry, 0);
+        e.mem.set_u32(entry + ENTRY_COUNT, 0);
+        e.mem.set_u32(entry + ENTRY_ITEM, item);
+        list_prepend(e, Ptr::new(entries), entry);
+    }
+    let xdata = new_extra_list(e);
+    set_inv_ref_xdata(e, id, xdata);
+    let lists = e.mem.u32(entry);
+    if lists != 0 {
+        list_prepend(e, Ptr::new(lists), xdata);
+    } else {
+        let lists = new_list(e, xdata);
+        e.mem.set_u32(entry, lists);
+    }
+    extra::mark_modified(e, container, CHANGED_INVENTORY);
+    xdata
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp:
+// InventoryRef::SplitFromStack (the default maxStack 1, which every caller here passes; with
+// nvse/GameExtraData.cpp: ExtraDataList::CreateCopy).
+/// One item of the inventory reference's stack split off: a stack with an `ExtraCount` above 1
+/// is copied (the game's copy for a reference) first into the container's entry for the item,
+/// the copy losing its worn mark, hotkey and count; the old stack keeps the rest (its count gone
+/// when one is left, and the list freed when nothing else is in it). The copy is the reference's
+/// stack from now on. A stack without a count, of one, or whose item the container has no entry
+/// for stays as it is.
+///
+/// An entry without a list of lists keeps the stack too (JIP prepends to the null list).
+fn inv_ref_split_from_stack(
+    e: &mut Engine,
+    id: u32,
+    data: nvse::invref::Data,
+    container: u32,
+) -> u32 {
+    let xdata = data.xdata;
+    let count = extra::get_by_type(e, xdata, EXTRA_COUNT);
+    if count == 0 {
+        return xdata;
+    }
+    let delta = i32::from(e.mem.u16(count + EXTRA_WORD) as i16) - 1;
+    if delta <= 0 {
+        return xdata;
+    }
+    let entry = changes_entry(e, container, data.item);
+    if entry == 0 {
+        return xdata;
+    }
+    let lists = e.mem.u32(entry);
+    if lists == 0 {
+        return xdata;
+    }
+    let out = new_extra_list(e);
+    e.call(EXTRA_COPY_FOR_REFERENCE, &args![out, xdata, 0u32]);
+    list_prepend(e, Ptr::new(lists), out);
+    extra::remove_by_type(e, out, EXTRA_WORN);
+    extra::remove_by_type(e, out, EXTRA_HOTKEY);
+    if delta < 2 {
+        extra::remove_by_type(e, xdata, EXTRA_COUNT);
+        if e.mem.u32(xdata + LIST_DATA) == 0 {
+            super::list_remove(e, Ptr::new(lists), xdata);
+            heap_free(e, xdata);
+        }
+    } else {
+        e.mem.set_u16(count + EXTRA_WORD, delta as u16);
+    }
+    set_inv_ref_xdata(e, id, out);
+    extra::remove_by_type(e, out, EXTRA_COUNT);
+    out
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_SetWeaponRefModFlags_Execute.
+/// Sets the mod flags (0 to 7; a flag for a mod slot the weapon has no mod in is dropped) of a
+/// weapon inventory reference's stack: an `ExtraWeaponModFlags` changed, or removed for 0 (the
+/// stack's list taken out of the entry and freed when nothing is left in it); a new one on the
+/// stack (one item split off a stack of more) or on a new list for a reference without a stack.
+/// 1 when set (also when 0 asked of a stack without flags), nothing when they are the same.
+///
+/// A stack freed here is no longer the reference's (its list 0): JIP leaves the reference
+/// pointing at the freed list.
+fn set_weapon_ref_mod_flags(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let mut flags = read.int(0, 0);
+    if !read.ok || flags > 7 {
+        return handled(true);
+    }
+    let Some((id, data, container)) = inv_ref_of(e, a.this_obj) else {
+        return handled(true);
+    };
+    if type_of(e, data.item) != WEAPON {
+        return handled(true);
+    }
+    for slot in 0..3u32 {
+        if e.mem.u32(data.item + WEAPON_ITEM_MODS + 4 * slot) == 0 {
+            flags &= !(1 << slot);
+        }
+    }
+    let xdata = data.xdata;
+    if xdata != 0 {
+        let x = extra::get_by_type(e, xdata, EXTRA_WEAPON_MOD_FLAGS);
+        if x != 0 {
+            if u32::from(e.mem.u8(x + EXTRA_WORD)) == flags {
+                return handled(true);
+            }
+            if flags != 0 {
+                e.mem.set_u8(x + EXTRA_WORD, flags as u8);
+            } else {
+                extra::remove_by_type(e, xdata, EXTRA_WEAPON_MOD_FLAGS);
+                if e.mem.u32(xdata + LIST_DATA) == 0 {
+                    let entry = changes_entry(e, container, data.item);
+                    if entry == 0 || e.mem.u32(entry) == 0 {
+                        return handled(true);
+                    }
+                    super::list_remove(e, Ptr::new(e.mem.u32(entry)), xdata);
+                    heap_free(e, xdata);
+                    set_inv_ref_xdata(e, id, 0);
+                }
+            }
+        } else if flags != 0 {
+            let stack = if nvse::invref::count(e, id) > 1 {
+                inv_ref_split_from_stack(e, id, data, container)
+            } else {
+                xdata
+            };
+            let x = new_extra(
+                e,
+                VTBL_EXTRA_WEAPON_MOD_FLAGS,
+                EXTRA_WEAPON_MOD_FLAGS,
+                flags,
+            );
+            extra::add_extra(e, stack, x);
+        }
+    } else if flags != 0 {
+        let stack = inv_ref_create_extra_data(e, id, data.item, container);
+        if stack == 0 {
+            return handled(true);
+        }
+        let x = new_extra(
+            e,
+            VTBL_EXTRA_WEAPON_MOD_FLAGS,
+            EXTRA_WEAPON_MOD_FLAGS,
+            flags,
+        );
+        extra::add_extra(e, stack, x);
+    }
+    a.set_result(e, 1.0);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_SetItemRefCurrentHealth_Execute.
+/// Sets the health of an inventory reference's stack (`setPercent`: as a part of the full
+/// health), at most the full health: its `ExtraHealth` changed or a new one added (on a new list
+/// for a reference without a stack). Nothing for an item without full health. 1 when set.
+///
+/// A reference without a changes entry: the full health of its own item and stack (JIP reads
+/// through the null entry), as `GetItemRefCurrentHealth` does here.
+fn set_item_ref_current_health(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let mut health = read.float(0, 0.0);
+    let set_percent = read.int(1, 0);
+    if !read.ok {
+        return handled(true);
+    }
+    let Some((id, data, container)) = inv_ref_of(e, a.this_obj) else {
+        return handled(true);
+    };
+    let base = if data.entry != 0 {
+        let item = e.mem.u32(data.entry + ENTRY_ITEM);
+        let first = first_extra_list(e, data.entry);
+        base_health(e, item, first)
+    } else {
+        base_health(e, data.item, data.xdata)
+    };
+    if base == 0.0 {
+        return handled(true);
+    }
+    if set_percent != 0 {
+        health *= base;
+    }
+    if health > base {
+        health = base;
+    }
+    let xdata = data.xdata;
+    if xdata != 0 {
+        let x = extra::get_by_type(e, xdata, EXTRA_HEALTH);
+        if x != 0 {
+            e.mem.set_f32(x + EXTRA_WORD, health);
+        } else {
+            let x = new_extra(e, VTBL_EXTRA_HEALTH, EXTRA_HEALTH, health.to_bits());
+            extra::add_extra(e, xdata, x);
+        }
+    } else {
+        let stack = inv_ref_create_extra_data(e, id, data.item, container);
+        if stack == 0 {
+            return handled(true);
+        }
+        let x = new_extra(e, VTBL_EXTRA_HEALTH, EXTRA_HEALTH, health.to_bits());
+        extra::add_extra(e, stack, x);
+    }
+    a.set_result(e, 1.0);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: GetHotkeyItemEntry,
+// ClearHotkey.
+/// The first list (in the player's armour, weapons and aid items) with a hotkey of `index` loses
+/// it (the list taken out and freed when nothing is left in it); whether there was one.
+fn clear_hotkey(e: &mut Engine, index: u8) -> bool {
+    use super::ln_fn_inventory::{drop_hotkey, hotkey_type, player_entries};
+    for entry in player_entries(e) {
+        if entry == 0 || e.mem.u32(entry) == 0 || hotkey_type(e, entry).is_none() {
+            continue;
+        }
+        let lists = e.mem.u32(entry);
+        for xdl in list_items(e, Ptr::<ListNode>::new(lists)) {
+            if xdl == 0 {
+                continue;
+            }
+            let h = extra::get_by_type(e, xdl, EXTRA_HOTKEY);
+            if h != 0 && e.mem.u8(h + EXTRA_WORD) == index {
+                drop_hotkey(e, entry, xdl);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_inventory.h:
+// Cmd_SetHotkeyItemRef_Execute.
+/// Puts the player's armour, weapon or aid inventory reference on hotkey 1 to 8, taking the key
+/// from the item that has it. As in JIP, only when some item has that key now (`ClearHotkey`
+/// answers whether one lost it): a stack without a hotkey gets a new one; a stack with another
+/// key changes it; a reference without a stack gets a new list with the hotkey. 1 when set.
+fn set_hotkey_item_ref(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let key = read.int(0, 0);
+    if !read.ok || key == 0 || key > 8 {
+        return handled(true);
+    }
+    let Some((id, data, container)) = inv_ref_of(e, a.this_obj) else {
+        return handled(true);
+    };
+    if container != super::ln_fn_inventory::player(e) {
+        return handled(true);
+    }
+    if !matches!(type_of(e, data.item), ARMOR | WEAPON | ALCHEMY_ITEM) {
+        return handled(true);
+    }
+    let index = (key - 1) as u8;
+    let xdata = data.xdata;
+    if xdata != 0 {
+        let h = extra::get_by_type(e, xdata, EXTRA_HOTKEY);
+        if h == 0 {
+            if !clear_hotkey(e, index) {
+                return handled(true);
+            }
+            let x = new_extra(e, VTBL_EXTRA_HOTKEY, EXTRA_HOTKEY, u32::from(index));
+            extra::add_extra(e, xdata, x);
+        } else if e.mem.u8(h + EXTRA_WORD) == index || !clear_hotkey(e, index) {
+            return handled(true);
+        } else {
+            e.mem.set_u8(h + EXTRA_WORD, index);
+        }
+    } else {
+        if !clear_hotkey(e, index) {
+            return handled(true);
+        }
+        let stack = inv_ref_create_extra_data(e, id, data.item, container);
+        if stack == 0 {
+            return handled(true);
+        }
+        let x = new_extra(e, VTBL_EXTRA_HOTKEY, EXTRA_HOTKEY, u32::from(index));
+        extra::add_extra(e, stack, x);
+    }
+    a.set_result(e, 1.0);
     handled(true)
 }
 

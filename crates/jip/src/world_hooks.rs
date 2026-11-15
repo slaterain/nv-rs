@@ -11,8 +11,7 @@
 //! "installed".
 //!
 //! Not here: `ToggleImmortalMode`, the only user of the PlayerMinHealth hook (its handler is
-//! here): its mode 2 also needs JIP's always-on `PlayerCannotBeHit` and hit-effect patches
-//! (`internal/patches_game.h`), JIP's fixes of step 3.9. `CCCSetEquipped` and JIP's always-on
+//! here): it is built with JIP's `PlayerCannotBeHit` patch in `crate::game_patches::gp` (step 3.9). `CCCSetEquipped` and JIP's always-on
 //! `GetCannotWear` patch (`0x418B10`) are in `equip_hooks` (step 3.5d). The getters that only read what these
 //! commands set (`GetInteractionDisabled`, `GetInteractionDisabledType`,
 //! `GetScriptEventDisabled`, `IsScriptWaiting`) are the commands track's (step 3.6), over
@@ -1318,7 +1317,7 @@ fn set_interaction_disabled_type(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// `TESForm::HasScript` (JIP LN NVSE): the form's `TESScriptableForm` (`kBaseComponentOffsets`
 /// byte 1) holds a script (`+4`).
-fn has_script(e: &Engine, form: u32) -> bool {
+pub(crate) fn has_script(e: &Engine, form: u32) -> bool {
     let Some(&entry) =
         crate::commands::forms::BASE_COMPONENT_OFFSETS.get(usize::from(form_type(e, form)))
     else {
