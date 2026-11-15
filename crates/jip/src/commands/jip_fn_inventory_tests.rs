@@ -431,7 +431,6 @@ fn all_items_of_a_non_actor_ignore_equipped() {
 
 const ALLOC: u32 = FORMS + 0x9000;
 const ALLOC_AREA: u32 = FORMS + 0xa0000;
-const REFR_VT: u32 = FORMS + 0x6c00;
 const DT_FN: u32 = 0x004b_e0b0;
 const DR_FN: u32 = 0x004b_df90;
 const BIPED_AT: u32 = FORMS + 0x8800;
