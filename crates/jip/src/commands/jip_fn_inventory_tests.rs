@@ -1523,3 +1523,170 @@ fn drop_me_alt_and_remove_me_ir_alt_mark_the_reference() {
     call_on(&mut e, 0x27e2, CONT_REF, &[]);
     assert!(removes().is_empty());
 }
+
+// ---- lane B3, the review's test gaps (REVIEW-598) ----
+
+/// Aid: an entry of `count` whose one stack (XDL2) has an ExtraCount of `stack`.
+fn aid_stack(e: &mut Engine, count: u32, stack: u16) {
+    e.mem.set_u32(ENTRY_W + 8, ALCH);
+    e.mem.set_u32(ENTRY_W + 4, count);
+    let lists = FORMS + 0x8340;
+    e.mem.set_u32(ENTRY_W, lists);
+    put_list(e, lists, NODES + 0x280, &[XDL2]);
+    put_extra(e, XDL2, X1, 0x24, 0);
+    e.mem.set_u16(X1 + 0xc, stack);
+}
+
+#[test]
+fn drop_alt_caps_a_stack_at_the_count_asked() {
+    let mut e = setup();
+    inventory(&mut e);
+    b3_stand_ins(&mut e);
+    aid_stack(&mut e, 5, 5);
+    call_on(&mut e, 0x2719, ACTOR, &[rf(ALCH), n(2)]);
+    assert_eq!(
+        removes(),
+        vec![vec![ALCH, XDL2, 2, 1, 1, 0, 0, 0, 1, 0]],
+        "2 of the stack of 5, at once"
+    );
+}
+
+#[test]
+fn drop_alt_scripted_form_without_a_script_extra_drops_the_stack() {
+    let mut e = setup();
+    inventory(&mut e);
+    b3_stand_ins(&mut e);
+    aid_stack(&mut e, 3, 3);
+    e.mem.set_u32(ALCH + 0x8c, FORMS + 0x9f00);
+    call_on(&mut e, 0x2719, ACTOR, &[rf(ALCH)]);
+    assert!(calls_to(REMOVE_BY_TYPE_FN).is_empty(), "the count stays");
+    assert_eq!(removes(), vec![vec![ALCH, XDL2, 3, 1, 1, 0, 0, 0, 1, 0]]);
+}
+
+#[test]
+fn drop_alt_a_count_above_the_total_drops_the_total() {
+    let mut e = setup();
+    inventory(&mut e);
+    b3_stand_ins(&mut e);
+    // The armour: 4, a stack of 2 and the worn one; RemoveItem takes a stack's list out of the
+    // entry when it is first (stand-in).
+    e.register(REMOVE_FN, |e, w| {
+        b3_log(REMOVE_FN, w);
+        let lists = e.mem.u32(ENTRY_A);
+        if w[2] != 0 && e.mem.u32(lists) == w[2] {
+            let next = e.mem.u32(lists + 4);
+            e.mem
+                .set_u32(lists, if next == 0 { 0 } else { e.mem.u32(next) });
+            e.mem
+                .set_u32(lists + 4, if next == 0 { 0 } else { e.mem.u32(next + 4) });
+        }
+        Ret::default()
+    });
+    e.mem.set_u32(ENTRY_A + 4, 4);
+    put_extra(&mut e, XDL2, X1, 0x24, 0);
+    e.mem.set_u16(X1 + 0xc, 2);
+    call_on(&mut e, 0x2719, ACTOR, &[rf(ARMO), n(10)]);
+    assert_eq!(
+        removes(),
+        vec![
+            vec![ARMO, XDL2, 1, 1, 1, 0, 0, 0, 1, 0],
+            vec![ARMO, XDL2, 1, 1, 1, 0, 0, 0, 1, 0],
+            vec![ARMO, XDL, 1, 1, 1, 0, 0, 0, 1, 0],
+            vec![ARMO, 0, 1, 1, 1, 0, 0, 0, 1, 0],
+        ],
+        "4 removes in all, not 10"
+    );
+}
+
+#[test]
+fn drop_alt_and_drop_me_alt_weapons_by_type() {
+    let mut e = setup();
+    inventory(&mut e);
+    ref_heap(&mut e);
+    b3_stand_ins(&mut e);
+    // The second entry as the weapon: 1 in the base container + 2 in the changes, one stack of 2.
+    e.mem.set_u32(ENTRY_W + 8, WEAP);
+    e.mem.set_u32(ENTRY_W + 4, 2);
+    let lists = FORMS + 0x8340;
+    e.mem.set_u32(ENTRY_W, lists);
+    put_list(&mut e, lists, NODES + 0x280, &[XDL2]);
+    put_extra(&mut e, XDL2, X1, 0x24, 0);
+    e.mem.set_u16(X1 + 0xc, 2);
+    e.mem.set_u8(WEAP + 0xf4, 9);
+    call_on(&mut e, 0x2719, ACTOR, &[rf(WEAP), n(2)]);
+    assert_eq!(
+        removes(),
+        vec![vec![WEAP, XDL2, 1, 1, 1, 0, 0, 0, 1, 0]; 2],
+        "type 9: one by one"
+    );
+    b3_clear();
+    e.mem.set_u8(WEAP + 0xf4, 10);
+    call_on(&mut e, 0x2719, ACTOR, &[rf(WEAP), n(2)]);
+    assert_eq!(
+        removes(),
+        vec![vec![WEAP, XDL2, 2, 1, 1, 0, 0, 0, 1, 0]],
+        "type 10 (thrown): at once"
+    );
+    // DropMeAlt: an inventory reference of 2 on the stack.
+    b3_clear();
+    e.mem.set_u8(WEAP + 0xf4, 9);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 2, XDL2);
+    call_on(&mut e, 0x271a, refr, &[]);
+    assert_eq!(
+        removes(),
+        vec![vec![WEAP, XDL2, 1, 1, 1, 0, 0, 0, 1, 0]; 2],
+        "type 9: one by one"
+    );
+    b3_clear();
+    e.mem.set_u8(WEAP + 0xf4, 10);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 2, XDL2);
+    call_on(&mut e, 0x271a, refr, &[]);
+    assert_eq!(
+        removes(),
+        vec![vec![WEAP, XDL2, 2, 1, 1, 0, 0, 0, 1, 0]],
+        "type 10: at once"
+    );
+}
+
+#[test]
+fn add_item_alt_equips_only_on_an_actor() {
+    let mut e = setup();
+    inventory(&mut e);
+    b3_stand_ins(&mut e);
+    // The container reference shares the actor's changes (the armour's entry in them).
+    put_extra(&mut e, CONT_REF + 0x44, FORMS + 0x4480, 0x15, CHANGES_DATA);
+    assert_ne!(crate::overrides::changes_list(&mut e, CONT_REF), 0);
+    call_on(
+        &mut e,
+        0x2606,
+        CONT_REF,
+        &[rf(ARMO), n(1), z(100.0), n(1)],
+    );
+    assert_eq!(b3_calls(MOVE_FN).len(), 1, "added");
+    assert!(b3_calls(EQUIP_FN).is_empty(), "not an actor: no equip");
+}
+
+#[test]
+fn remove_me_ir_alt_caps_the_quantity_at_the_count() {
+    let mut e = setup();
+    inventory(&mut e);
+    ref_heap(&mut e);
+    b3_stand_ins(&mut e);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 3, XDL2);
+    call_on(&mut e, 0x27e2, refr, &[n(9)]);
+    assert_eq!(removes(), vec![vec![ARMO, XDL2, 3, 1, 0, 0, 0, 0, 1, 0]]);
+}
+
+#[test]
+fn unequip_item_alt_no_message_is_the_whole_word() {
+    let mut e = setup();
+    inventory(&mut e);
+    b3_stand_ins(&mut e);
+    name_items(&mut e);
+    call_on(&mut e, 0x2718, ACTOR, &[rf(ARMO), n(0), n(0x100)]);
+    assert_eq!(
+        b3_calls(UNEQUIP_FN),
+        vec![vec![ACTOR, ARMO, 1, XDL, 1, 0, 1]]
+    );
+    assert!(shown().is_empty(), "0x100 is not 0: no message");
+}
