@@ -612,7 +612,7 @@ fn key_and_control_removals_of_what_is_not_set() {
 fn trigger_events_with_a_controller() {
     use crate::ln_events::{id, mask};
     let mut e = world();
-    e.ext::<Jip>().input.ready = true;
+    crate::input::state(&mut e).ready = true;
     let trig = |e: &mut Engine, op: u32, script: u16, add: i32, right: i32| {
         run(e, op, &[form_arg(script), int_arg(add), int_arg(right)]);
     };

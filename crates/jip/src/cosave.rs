@@ -233,7 +233,7 @@ pub struct Saved {
     pub jg_fixes: bool,
     /// JIP's NPC perks patch is installed (`s_patchInstallState.NPCPerks`, the `uNPCPerks`
     /// switch): until it is built in, `JPNP` is neither read nor written.
-    pub npc_perks_patch: bool,
+    npc_perks_patch: bool,
     /// `s_scriptVariablesBuffer`: owner id, name.
     pub script_vars: UnorderedMap<u32, UnorderedMap<Name, ScriptVar>>,
     /// `s_auxVariables[0]` (the saved ones): mod index, owner id, name, values.
@@ -290,6 +290,35 @@ impl Default for Saved {
 
 fn saved(e: &mut Engine) -> &mut Saved {
     &mut e.ext::<Jip>().saved
+}
+
+/// A lock-free copy of [`Saved::npc_perks_patch`] ([`Engine::ext_free`], made at install before the
+/// threads start): JIP's `HasPerk` eval (`DoGetPerkRank`) reads it on whatever thread evaluates
+/// a perk or package condition, without JIP's shared slot. Written
+/// by [`set_npc_perks_patch`], the flag's only writer (nothing in the port sets it yet: the NPC
+/// perks patch is stage 3.9's).
+#[derive(Default)]
+pub(crate) struct NpcPerksPatch(std::sync::atomic::AtomicBool);
+
+/// Makes the lock-free copy (at install, before the threads start).
+pub(crate) fn install_unlocked(e: &mut Engine) {
+    e.ext_free::<NpcPerksPatch>();
+}
+
+/// Sets JIP's NPC perks patch flag ([`Saved::npc_perks_patch`], private: this is its one
+/// writer) and its lock-free copy [`NpcPerksPatch`] with it.
+pub fn set_npc_perks_patch(e: &mut Engine, on: bool) {
+    saved(e).npc_perks_patch = on;
+    e.ext_free::<NpcPerksPatch>()
+        .0
+        .store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether JIP's NPC perks patch is installed, from the lock-free copy.
+pub fn npc_perks_patch(e: &mut Engine) -> bool {
+    e.ext_free::<NpcPerksPatch>()
+        .0
+        .load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The fixes preset's row: JohnnyGuitar NVSE's corrections of JIP's co-save (above).
@@ -527,6 +556,7 @@ pub fn process_changed_flags(e: &mut Engine, flags: u8) {
     s.linked_refs_temp.clear();
     s.serialized = SerializedVars::default();
     crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
+    crate::commands::jip_fn_aux_variable::publish_saved(e);
     let s = saved(e);
     // The NPCs' perk info leaves the actors with it (step 3.3); the map empties.
     if flags & changed::NPC_PERKS != 0 {
@@ -565,6 +595,7 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
     // rest of the co-save still loads.
     let _ = read_records(e, r, flags);
     crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
+    crate::commands::jip_fn_aux_variable::publish_saved(e);
     Ok(())
 }
 
@@ -1387,8 +1418,12 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.serialized_tail.clear();
             s.had_section = false;
         }
-        // `DeferredInit` (once per run): its temporary position marker.
-        msg::DEFERRED_INIT => crate::commands::pos_marker::create(e),
+        // `DeferredInit` (once per run): its temporary position marker and the two vanilla ash
+        // piles marked (step 3.9 G06).
+        msg::DEFERRED_INIT => {
+            crate::commands::pos_marker::create(e);
+            crate::game_patches::gh2::deferred_init(e);
+        }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
             // when there is nothing to do. Sent only once JIP answers "installed" (it asks for it,

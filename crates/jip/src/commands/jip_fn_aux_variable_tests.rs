@@ -712,3 +712,177 @@ fn the_owner_argument() {
         "EraseAll: BASE's all gone"
     );
 }
+
+/// `AuxVarGetFltCond` reads the lock-free copy of the first values ([`Unlocked`]): while a second
+/// engine of the run (a real thread's) holds JIP's shared slot it answers on this engine (asking
+/// for the slot here would be refused: two engines on one thread), for a saved and a temporary
+/// variable; the copy follows every change (a value erased, the variable erased, the owner's
+/// variables erased, the saved ones cleared before a load) and is one for the run (the second
+/// engine reads the temporary variable this engine set).
+#[test]
+fn the_condition_reads_the_lock_free_copy() {
+    let mut e = setup();
+    set_flt(&mut e, REF, b"Cond", 4.25, &[]);
+    set_flt(&mut e, REF, b"Cond", 9.0, &[n(-1)]);
+    set_flt(&mut e, REF, b"*Tmp", 2.5, &[]);
+    let saved = vars::add_string(&mut e, 6, b"cond", false);
+    let temp = vars::add_string(&mut e, 6, b"*tmp", false);
+    e.mem.set_u32(QUEST + 0x5c, LOCALS);
+    e.mem.set_u32(QUEST + 0x1c, SCRIPT);
+    e.mem.set_u32(LOCALS + 0xc, LOCALS + 0x100);
+    e.mem.set_u32(LOCALS + 0x100, LOCALS + 0x200);
+    e.mem.set_u32(LOCALS + 0x104, LOCALS + 0x300);
+    e.mem.set_u32(LOCALS + 0x300, LOCALS + 0x400);
+    e.mem.set_u32(LOCALS + 0x304, 0);
+    e.mem.set_u32(LOCALS + 0x200, 5);
+    e.mem.set_f64(LOCALS + 0x208, f64::from(saved));
+    e.mem.set_u32(LOCALS + 0x400, 6);
+    e.mem.set_f64(LOCALS + 0x408, f64::from(temp));
+    let eval = |e: &mut Engine, var: u32| {
+        let at = e.mem.u32(nvse::table::record_of(e, 0x27b1) + 0x20);
+        e.mem.set_f64(RESULT, 0.5);
+        e.call(at, &[REF, QUEST, var, RESULT]);
+        e.mem.f64(RESULT)
+    };
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(other.ext::<Jip>().installed, "the other engine holds it");
+    assert_eq!(eval(&mut e, 5), 4.25, "the saved variable's value 0");
+    assert_eq!(eval(&mut e, 6), 2.5, "the temporary one's");
+    let m = overriding_mod(&e, SCRIPT);
+    let id = e.mem.u32(REF + 0xc);
+    assert_eq!(
+        first_value(&mut other, true, m, id, b"*TMP"),
+        Some(2.5),
+        "one copy for the run"
+    );
+    engine_core::extend::release_held_for_test();
+    call_on(&mut e, 0x269a, REF, &[s(b"Cond"), n(0)]);
+    assert_eq!(eval(&mut e, 5), 9.0, "value 0 erased: the next is first");
+    call_on(&mut e, 0x269a, REF, &[s(b"Cond")]);
+    assert_eq!(eval(&mut e, 5), 0.5, "the variable erased");
+    call_on(&mut e, 0x2694, REF, &[s(b"Cond"), z(1.5)]);
+    assert_eq!(eval(&mut e, 5), 1.5);
+    call_on(&mut e, 0x269b, REF, &[n(0)]);
+    assert_eq!(eval(&mut e, 5), 0.5, "the owner's saved variables erased");
+    assert_eq!(eval(&mut e, 6), 2.5, "not the temporary ones");
+    call_on(&mut e, 0x2694, REF, &[s(b"Cond"), z(7.0)]);
+    crate::cosave::process_changed_flags(&mut e, crate::cosave::changed::AUX_VARS);
+    assert_eq!(eval(&mut e, 5), 0.5, "the saved ones cleared before a load");
+    assert_eq!(eval(&mut e, 6), 2.5, "the temporary ones kept");
+}
+
+/// `forget_owner` drops an owner's first values, temporary and saved, and no other owner's.
+#[test]
+fn forgetting_an_owner() {
+    let mut e = setup();
+    set_flt(&mut e, REF, b"Cond", 4.25, &[]);
+    set_flt(&mut e, REF, b"*Tmp", 2.5, &[]);
+    set_flt(&mut e, ACTOR, b"Cond", 1.0, &[]);
+    let m = overriding_mod(&e, SCRIPT);
+    let (id, other) = (e.mem.u32(REF + 0xc), e.mem.u32(ACTOR + 0xc));
+    forget_owner(&mut e, id);
+    assert_eq!(first_value(&mut e, false, m, id, b"cond"), None);
+    assert_eq!(first_value(&mut e, true, m, id, b"*tmp"), None);
+    assert_eq!(first_value(&mut e, false, m, other, b"cond"), Some(1.0));
+}
+
+/// QUEST's event list holding variable `5 + i` naming each of `names` (xNVSE string
+/// variables), its script SCRIPT (mod 7): `AuxVarGetFltCond`'s quest for [`cond`].
+fn cond_quest(e: &mut Engine, names: &[&[u8]]) {
+    e.mem.set_u32(QUEST + 0x5c, LOCALS);
+    e.mem.set_u32(QUEST + 0x1c, SCRIPT);
+    let mut link = LOCALS + 0xc;
+    for (i, name) in names.iter().enumerate() {
+        let node = LOCALS + 0x100 + 0x20 * i as u32;
+        let var = LOCALS + 0x400 + 0x20 * i as u32;
+        let id = vars::add_string(e, 6, name, false);
+        e.mem.set_u32(link, node);
+        e.mem.set_u32(node, var);
+        e.mem.set_u32(node + 4, 0);
+        e.mem.set_u32(var, 5 + i as u32);
+        e.mem.set_f64(var + 8, f64::from(id));
+        link = node + 4;
+    }
+}
+
+/// `AuxVarGetFltCond` on `this` with [`cond_quest`]'s variable `var`; 0.5 is "left alone".
+fn cond(e: &mut Engine, this: u32, var: u32) -> f64 {
+    let at = e.mem.u32(nvse::table::record_of(e, 0x27b1) + 0x20);
+    e.mem.set_f64(RESULT, 0.5);
+    e.call(at, &[this, QUEST, var, RESULT]);
+    e.mem.f64(RESULT)
+}
+
+/// JIP's reference destruction patch (`DestroyRefrHook`, game_patches gh2) erases a destroyed
+/// temporary reference's variables, saved and temporary: the condition answers nothing for it
+/// afterwards (as JIP, whose maps it reads), not the copy's old first values.
+#[test]
+fn a_destroyed_reference_answers_nothing() {
+    let mut e = setup();
+    // The save's changes map: one empty bucket (REF has no changes, so its variables go).
+    let changes = FORMS + 0x7a00;
+    e.mem.set_u32(SL, changes);
+    e.mem.set_u32(changes + 4, 1);
+    e.mem.set_u32(changes + 8, changes + 0x10);
+    set_flt(&mut e, REF, b"Cond", 4.25, &[]);
+    set_flt(&mut e, REF, b"*Tmp", 2.5, &[]);
+    cond_quest(&mut e, &[b"cond", b"*tmp"]);
+    assert_eq!((cond(&mut e, REF, 5), cond(&mut e, REF, 6)), (4.25, 2.5));
+    e.site(0x0055_a488, &[REF]);
+    assert_eq!(cond(&mut e, REF, 5), 0.5, "the saved variable went");
+    assert_eq!(cond(&mut e, REF, 6), 0.5, "the temporary one went");
+}
+
+/// A co-save load: the saved variables read from `JPAV` answer the condition (the copy written
+/// after the records are read), after the reset before the load emptied it.
+#[test]
+fn a_load_publishes_the_saved_variables() {
+    let mut e = setup();
+    set_flt(&mut e, REF, b"Cond", 4.25, &[]);
+    cond_quest(&mut e, &[b"cond"]);
+    let mut r = Records::default();
+    crate::cosave::save(&mut e, &mut r);
+    let file = nvse::cosave::write(&[nvse::cosave::Plugin {
+        opcode_base: 0x2200,
+        chunks: r.chunks,
+    }]);
+    crate::cosave::process_changed_flags(&mut e, crate::cosave::changed::AUX_VARS);
+    assert_eq!(cond(&mut e, REF, 5), 0.5, "cleared");
+    // The save's file 7 is loaded as 7 today.
+    e.mem.set_u8(SL + crate::game::save_mod(7), 7);
+    saved(&mut e).changed = crate::cosave::changed::ALL;
+    let mut reader = nvse::cosave::Reader::open(&file).unwrap();
+    reader.next_plugin().unwrap().unwrap();
+    crate::cosave::load(&mut e, &mut reader).unwrap();
+    assert_eq!(cond(&mut e, REF, 5), 4.25, "loaded");
+}
+
+/// `ClearJIPSavedData`'s aux part: `1` clears the script's mod's saved variables, `2` the shared
+/// ones (mod 0xFF); the condition answers nothing for them afterwards, the other mod's stay.
+#[test]
+fn clear_jip_saved_data_clears_the_copy() {
+    let mut e = setup();
+    set_flt(&mut e, REF, b"Cond", 4.25, &[]);
+    set_flt(&mut e, REF, b"_Sh", 1.5, &[]);
+    cond_quest(&mut e, &[b"cond", b"_sh"]);
+    assert_eq!((cond(&mut e, REF, 5), cond(&mut e, REF, 6)), (4.25, 1.5));
+    call_on(&mut e, 0x26aa, REF, &[n(0), n(0), n(1), n(0)]);
+    assert_eq!(cond(&mut e, REF, 5), 0.5, "the script's mod's went");
+    assert_eq!(cond(&mut e, REF, 6), 1.5, "the shared ones stay");
+    call_on(&mut e, 0x26aa, REF, &[n(0), n(0), n(2), n(0)]);
+    assert_eq!(cond(&mut e, REF, 6), 0.5, "the shared ones went");
+}
+
+/// `AuxiliaryVariableSetFromArray`: the array's first value answers the condition.
+#[test]
+fn set_from_array_publishes_the_first_value() {
+    let mut e = setup();
+    cond_quest(&mut e, &[b"cond"]);
+    let arr = vars::create_array(&mut e, KEY_NUMBER, true, 6);
+    vars::set_element(&mut e, arr, &Key::Number(0.0), VarValue::Number(3.0));
+    vars::set_element(&mut e, arr, &Key::Number(1.0), VarValue::Number(4.0));
+    call_on(&mut e, 0x26be, REF, &[s(b"Cond"), n(arr as i32)]);
+    assert_eq!(cond(&mut e, REF, 5), 3.0);
+}

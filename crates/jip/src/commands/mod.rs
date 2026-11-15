@@ -229,6 +229,7 @@ pub fn is_built(opcode: u32) -> bool {
 pub fn install(e: &mut Engine) {
     // Lock-free slots conditions read: made before the threads start.
     jip_fn_miscellaneous::install(e);
+    jip_fn_aux_variable::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
