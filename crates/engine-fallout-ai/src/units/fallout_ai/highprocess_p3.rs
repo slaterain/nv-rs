@@ -823,8 +823,8 @@ pub fn high_process_end_move_message(e: &mut Engine, this: Ptr<HighProcess>, act
 
 // Translated from 008daa20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HighProcess::CalculateMoveMode` (Xbox PDB): returns the move mode word
-/// for `actor`. 0 when `00437bf0` or `00437bd0` hold; 0x201 when the current
-/// weapon is a grenade (`008d8220`), the running package passes `0067a480`
+/// for `actor`. 0 when `00437bf0` or `00437bd0` hold; 0x201 when the actor's
+/// forced-run byte `+0x124` is set (`008d8220`), the running package passes `0067a480`
 /// or `00493bb0` holds; otherwise 0x201 when `run_flag`, 0x101 when
 /// `walk_flag`, else it compares the three distances: with bit 0x200 of the
 /// actor's move mode set, 0x101 only if `walk_limit > distance`, else 0x201;
@@ -5653,7 +5653,9 @@ const PATHING_LOCATION_FROM_COORD: u32 = 0x006d_cee0;
 /// `TESPackage::GetPackageRadiusActorToLocation` (Xbox PDB, `00678670`):
 /// `(this, actor, flag)`, `ST0` result.
 const PACKAGE_RADIUS_ACTOR_TO_LOCATION: u32 = 0x0067_8670;
-/// `MiddleHighProcess::IsCurrentWeaponGrenade` (Xbox PDB, `008d8220`).
+/// `MiddleHighProcess::IsCurrentWeaponGrenade` (Xbox PDB, `008d8220`): a folded getter of the
+/// byte at `+0x124`; called here on the actor, where that byte is the forced-run byte
+/// (`SetForceRun`; JIP's `Actor::forceRun`), not a grenade test.
 const PROCESS_IS_CURRENT_WEAPON_GRENADE: u32 = 0x008d_8220;
 /// `0067a480`: package test used with the move flags (bit 0x?? of the
 /// package, kept as a call).
@@ -18233,7 +18235,7 @@ mod tests {
     }
 
     /// JIP's G62 seam at `0x8DAA6F` (a fix): not asked without the FIXES bit (the exe's run
-    /// tests: the grenade test answers run); asked with the actor and the package, a non-zero
+    /// tests: the forced-run test answers run); asked with the actor and the package, a non-zero
     /// answer is returned, 0 goes on past the three tests (the walk flag then answers walk), no
     /// answer runs them.
     #[test]

@@ -4642,6 +4642,7 @@ mod tests {
         }
         e.on_site(SiteSlot::new(Owner::Jip, 0x0047_667d), at_g27);
         for (word, answer, source) in [
+            (0, Some(reference), 0x9999),
             (jip_patches::INSTALLED, Some(reference), 0x9999),
             (
                 jip_patches::INSTALLED | jip_patches::FIXES,

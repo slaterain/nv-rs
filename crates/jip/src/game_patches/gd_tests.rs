@@ -302,6 +302,103 @@ fn part2_registered_only_with_the_fixes() {
     }
 }
 
+/// Each part-2 seam at the exe address JIP patches (internal/patches_game.h: 5233 and 5234
+/// G27, 5245 G30, 5337 G62, 5377 G91, 5378 G92, 5394 G102, 4803 O4), and each handler answers
+/// at its own literal address: two constants swapped would put each handler at the other's
+/// seam.
+#[test]
+fn part2_seams_at_jip_addresses() {
+    assert_eq!(
+        PART2.map(|slot| slot.addr()),
+        [
+            0x0047_667d,
+            0x009c_35f7,
+            0x009a_ca23,
+            0x008d_aa6f,
+            0x009d_10f3,
+            0x009f_50c4,
+            0x009e_e367,
+            0x009b_7e14,
+        ]
+    );
+    // The game addresses and values the handlers use, as JIP's code names them: G30's
+    // HandleEntryPoint (`call 0x5E58F0`), entry 0x48, `Actor::IsActor` 0x8D0360; G62's
+    // kPackageFlag_AlwaysWalk / AlwaysRun and the bytes +0x124 / +0x104; G91's 0x457FE0 and
+    // 0x11CE9B8; GetDisabled's 0x5AA680 / 0x5AA630; G102's +0x108 == 2.
+    assert_eq!(
+        [
+            APPLY_PERK_MODIFIERS,
+            ADJUST_EXPLOSION_RADIUS,
+            ACTOR_IS_ACTOR,
+            ALWAYS_WALK,
+            ALWAYS_RUN,
+            ACTOR_BYTE_124,
+            ACTOR_BYTE_104,
+            TICK_COUNT,
+            REACTION_COOLDOWN_SETTING,
+            PENDING_ENABLED,
+            PENDING_DISABLED,
+            LIFE_STATE,
+            DEAD,
+        ],
+        [
+            0x005e_58f0,
+            0x48,
+            0x008d_0360,
+            0x2000_0000,
+            0x2000,
+            0x124,
+            0x104,
+            0x0045_7fe0,
+            0x011c_e9b8,
+            0x005a_a680,
+            0x005a_a630,
+            0x108,
+            2,
+        ]
+    );
+    let mut e = jip(true, true);
+    e.register(PENDING_ENABLED, |_, _| 0u32.into_ret());
+    e.register(PENDING_DISABLED, |_, _| 0u32.into_ret());
+    // G92 at 0x9F50C4: a reference with flag 0x20 and life state 0 is skipped (G102 there
+    // would answer 0).
+    let reference = e.mem.alloc(0x200);
+    e.mem.set_u32(reference + 8, 0x20);
+    assert_eq!(e.site(0x009f_50c4, &[reference]), Some(1));
+    // G102 at 0x9EE367: a dead speaker with no flags is done (G92 there would answer 0).
+    let speaker = e.mem.alloc(0x200);
+    e.mem.set_u32(speaker + 0x108, DEAD);
+    assert_eq!(e.site(0x009e_e367, &[speaker]), Some(1));
+    // G27 at both: the reference itself.
+    for address in [0x0047_667d, 0x009c_35f7] {
+        assert_eq!(e.site(address, &[speaker]), Some(speaker));
+    }
+    // G30 at 0x9ACA23: no shooter keeps the multiplier.
+    assert_eq!(
+        e.site(0x009a_ca23, &[reference, 0x3fc0_0000]),
+        Some(0x3fc0_0000)
+    );
+    // G62 at 0x8DAA6F: Always Walk walks.
+    let package = e.mem.alloc(0x80);
+    e.mem.set_u32(package + 0x1c, ALWAYS_WALK);
+    assert_eq!(e.site(0x008d_aa6f, &[speaker, package]), Some(0x101));
+    // G91 at 0x9D10F3: the tick read, the cooldown passed.
+    tick_engine(&mut e);
+    TICK.with(|t| t.set(10_000));
+    assert_eq!(e.site(0x009d_10f3, &[reference]), Some(1));
+    assert_eq!(
+        e.ext_free::<ReactionTick>().0.load(Ordering::Relaxed),
+        10_000
+    );
+    // O4 at 0x9B7E14: the flag byte set for a flagged base.
+    let projectile = e.mem.alloc(0x150);
+    let base = e.mem.alloc(0xd0);
+    e.mem.set_u32(projectile + 0x20, base);
+    e.mem.set_u8(base + 0x61, 1);
+    assert_eq!(e.site(0x009b_7e14, &[projectile, 1]), Some(0));
+    assert_eq!(e.mem.u8(projectile + 0xc9), 0x80);
+}
+
 /// G27: the reference itself, whatever it is.
 #[test]
 fn explosion_source_is_the_reference() {
@@ -387,6 +484,18 @@ fn move_mode_honours_always_walk() {
             "{flags:x} {b124} {b104}"
         );
     }
+    // JIP compares single bytes (`cmp byte ptr [ecx+0x124]`, `[ecx+0x104]`): the neighbours
+    // (forceSneak +0x125, searchingForEnemies +0x127, jipActorFlags1-3 +0x105..+0x107, and the
+    // bytes before) set, the two bytes clear, give 0.
+    e.mem.set_u8(actor + 0x124, 0);
+    e.mem.set_u8(actor + 0x104, 0);
+    for offset in [0x103u32, 0x105, 0x106, 0x107, 0x123, 0x125, 0x126, 0x127] {
+        e.mem.set_u8(actor + offset, 0xff);
+    }
+    e.mem.set_u32(package + 0x1c, 0);
+    for pkg in [package, 0] {
+        assert_eq!(e.site(MOVE_MODE.addr(), &[actor, pkg]), Some(0), "{pkg:x}");
+    }
 }
 
 thread_local! {
@@ -449,6 +558,9 @@ thread_local! {
     /// The pending lists' answers (enabled, disabled) and their calls (enabled + 0x100 x
     /// disabled).
     static PENDING: std::cell::Cell<(u32, u32, u32)> = const { std::cell::Cell::new((0, 0, 0)) };
+    /// The words each pending-list call was given (JIP's GetDisabled pushes the reference:
+    /// one cdecl word for both).
+    static PENDING_WORDS: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// G92: a reference with any flag of 0x4820 is skipped without asking the script's pending
@@ -456,14 +568,16 @@ thread_local! {
 #[test]
 fn ai_target_skips_flagged_and_disabled_references() {
     let mut e = jip(true, true);
-    e.register(PENDING_ENABLED, |_, _| {
+    e.register(PENDING_ENABLED, |_, a| {
+        PENDING_WORDS.with(|s| s.borrow_mut().push(a.to_vec()));
         PENDING.with(|p| {
             let (en, dis, n) = p.get();
             p.set((en, dis, n + 1));
             en.into_ret()
         })
     });
-    e.register(PENDING_DISABLED, |_, _| {
+    e.register(PENDING_DISABLED, |_, a| {
+        PENDING_WORDS.with(|s| s.borrow_mut().push(a.to_vec()));
         PENDING.with(|p| {
             let (en, dis, n) = p.get();
             p.set((en, dis, n + 0x100));
@@ -483,18 +597,24 @@ fn ai_target_skips_flagged_and_disabled_references() {
     ] {
         e.mem.set_u32(reference + 8, flags);
         PENDING.with(|p| p.set((en, dis, 0)));
+        PENDING_WORDS.with(|s| s.borrow_mut().clear());
         assert_eq!(
             e.site(AI_TARGET.addr(), &[reference]),
             Some(skip),
             "{flags:x}"
         );
         assert_eq!(PENDING.with(|p| p.get().2), calls, "{flags:x}");
+        let words = PENDING_WORDS.with(|s| s.take());
+        assert_eq!(words, vec![vec![reference]; calls.count_ones() as usize]);
     }
     // JIP's GetDisabled with the disabled flag: disabled unless pending enabled.
     e.mem.set_u32(reference + 8, 0x800);
-    for (en, dis, disabled) in [(0, 0, true), (1, 0, false), (1, 1, true)] {
+    for (en, dis, disabled, calls) in [(0, 0, true, 1usize), (1, 0, false, 2), (1, 1, true, 2)] {
         PENDING.with(|p| p.set((en, dis, 0)));
+        PENDING_WORDS.with(|s| s.borrow_mut().clear());
         assert_eq!(get_disabled(&mut e, reference), disabled, "{en} {dis}");
+        let words = PENDING_WORDS.with(|s| s.take());
+        assert_eq!(words, vec![vec![reference]; calls], "{en} {dis}");
     }
 }
 

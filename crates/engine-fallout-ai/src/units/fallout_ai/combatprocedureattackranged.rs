@@ -1796,6 +1796,30 @@ mod tests {
         }
     }
 
+    /// G91 with no target: the exe tests the target first (`[ebp-0x48]`), so JIP's call at
+    /// `0x9D10F3` is never reached: the seam is not asked even with the FIXES bit (the
+    /// run-wide tick stays), and no combat line starts.
+    #[test]
+    fn g91_seam_not_asked_without_a_target() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut w = world();
+        w.rig
+            .e
+            .on_site(SiteSlot::new(Owner::Jip, 0x009d_10f3), at_g91);
+        w.rig.answer(GET_TARGET, 0);
+        w.rig.slot(SLOT_TEST_3F8, 1);
+        w.rig.answer(STATE_TEST_EE90, 1);
+        w.rig
+            .e
+            .set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        G91_ASKED.with(|s| s.borrow_mut().clear());
+        G91_ANSWER.with(|c| c.set(Some(1)));
+        w.rig.e.mem.set_u32(DIALOGUE_MANAGER, 0x6100);
+        let (_, log) = w.rig.run(0x009d_0a30, &args![w.t]);
+        assert_eq!(G91_ASKED.with(|s| s.take()), Vec::<Vec<u32>>::new());
+        assert!(calls_to(&log, START_DIALOGUE).is_empty());
+    }
+
     #[test]
     fn update_fires_once_aimed() {
         let mut w = world();

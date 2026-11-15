@@ -3088,6 +3088,27 @@ mod sandbox_tests {
         }
     }
 
+    /// G92 with no reference: the exe's null test (009f50bf) jumps past `0x9F50C4`, so the
+    /// seam is not asked even with the FIXES bit, and nothing is chosen.
+    #[test]
+    fn g92_seam_not_asked_for_no_reference() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for reply in [Some(1), Some(0)] {
+            let mut e = Engine::new();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009f_50c4), at_g92);
+            let (functor, data, _, _) = callback_setup(&mut e, 0x2f);
+            e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+            G92_ASKED.with(|s| s.borrow_mut().clear());
+            G92_ANSWER.with(|c| c.set(reply));
+            e.call_log = Some(vec![]);
+            assert!(!e.call(0x009f_5070, &args![0u32, functor]).bool());
+            let seen = G92_ASKED.with(|s| s.take());
+            assert_eq!(seen, Vec::<Vec<u32>>::new(), "{reply:?}");
+            assert_eq!(e.mem.u8(data + FOOD), 0);
+            assert!(calls_to(&e, MOBILE_OBJECT_GET_CURRENT_PACKAGE).is_empty());
+        }
+    }
+
     #[test]
     fn scan_callback_adds_food_dialogue_idle_and_furniture() {
         // Food (0x2F).

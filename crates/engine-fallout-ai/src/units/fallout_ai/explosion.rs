@@ -8294,6 +8294,62 @@ mod tests {
         }
     }
 
+    /// G30 with the player as the projectile's shooter. JIP's 53 bytes end with
+    /// `jmp 0x9ACB0D`, past the exe's player-only block (`0x476C90`, then `0x5E58F0` with
+    /// entry 0x48): with the seam's answer the multiplier is the answer alone (8 x 1.5),
+    /// neither call is made, and the constructor's owner is the word at +0xFC. With JIP not
+    /// installed the exe's block runs once (9aca4b..9aca73): `0x5E58F0(0x48, player,
+    /// 0x476C90(projectile), &multiplier)`.
+    #[test]
+    fn g30_player_shooter_skips_the_exe_player_block() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        // (word, the damage word, the exe block's calls)
+        for (word, damage, block_calls) in [(fixes, 12.0f32, 0usize), (0, 16.0, 1)] {
+            let mut e = list_engine();
+            e.map(0x011d_e000, 0x1000);
+            e.set_global(0x011d_ea3c, 0x3000u32);
+            e.mem.set_u32(0x2000, 0x4000);
+            e.mem.set_u32(0x20fc, 0x3000);
+            e.mem.set_u32(0x4224, 0x6000_0224);
+            e.register(0x6000_0224, |_, _| true.into_ret());
+            e.register(0x0087_4480, |_, _| 0x3000u32.into_ret());
+            e.register(0x0047_6c90, |_, a| {
+                assert_eq!(a, &[0x2000]);
+                0x7700u32.into_ret()
+            });
+            e.register(0x005e_58f0, |e, a| {
+                let before = e.mem.f32(a[3]);
+                e.mem.set_f32(a[3], before * 2.0);
+                Ret::default()
+            });
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009a_ca23), at_g30);
+            G30_ASKED.with(|s| s.borrow_mut().clear());
+            G30_ANSWER.with(|c| c.set(Some(1.5f32.to_bits())));
+            e.set_jip_patches(word);
+            let log = factory_with_stubbed_constructor(&mut e, 0x2000);
+            G30_ASKED.with(|s| s.borrow_mut().clear());
+            let constructed = log.iter().find(|call| call.0 == 0x009a_c200).unwrap();
+            assert_eq!(constructed.1[2], 0x3000, "{word:x}");
+            let perk: Vec<&Vec<u32>> = log
+                .iter()
+                .filter(|call| call.0 == 0x005e_58f0)
+                .map(|call| &call.1)
+                .collect();
+            assert_eq!(perk.len(), block_calls, "{word:x}");
+            for words in perk {
+                assert_eq!(words[..3], [0x48, 0x3000, 0x7700]);
+            }
+            assert_eq!(
+                log.iter().filter(|call| call.0 == 0x0047_6c90).count(),
+                block_calls,
+                "{word:x}"
+            );
+            let scaled = log.iter().find(|call| call.0 == 0x0040_7880).unwrap();
+            assert_eq!(scaled.1[1], damage.to_bits(), "{word:x}");
+        }
+    }
+
     #[test]
     fn explosion_factory_keeps_an_owner_that_is_not_a_projectile() {
         // 009ac9c0: 9ac9fd [EBP-0x18] = owner; 9aca1e JZ leaves it.

@@ -192,7 +192,8 @@ fn explosion_perk(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// A package's flag word (`+0x1C`): `kPackageFlag_AlwaysRun` and JIP's `kPackageFlag_AlwaysWalk`.
 const ALWAYS_RUN: u32 = 1 << 13;
 const ALWAYS_WALK: u32 = 1 << 29;
-/// The actor's bytes the exe's `008d8220` and `00493bb0` answer (`+0x124`, `+0x104`).
+/// The actor's bytes the exe's `008d8220` and `00493bb0` answer: `+0x124` (forced run, JIP's
+/// `Actor::forceRun`, set by `SetForceRun`) and `+0x104` (JIP's `Actor::isInCombat`).
 const ACTOR_BYTE_124: u32 = 0x124;
 const ACTOR_BYTE_104: u32 = 0x104;
 

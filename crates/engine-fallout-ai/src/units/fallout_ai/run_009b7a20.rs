@@ -553,6 +553,38 @@ mod tests {
         }
     }
 
+    /// O4's second word is the exe's 0x8000 value, `second == 0` (9b7dff..9b7e0b: `setz` on
+    /// the second test's byte, outside state 4): the second test answering 1 gives 0, 0 gives
+    /// 1. With the seam's answer the 0x8000 flag call is never made.
+    #[test]
+    fn o4_seam_gives_the_exe_value() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let switch = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::PROJ_IMPACT_DMG_FIX;
+        for (second, value) in [(1u32, 0u32), (0, 1)] {
+            let mut e = Engine::new();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009b_7e14), at_o4);
+            e.map(ZERO_DOUBLE & !0xfff, 0x1000);
+            e.register_double(GLOBAL_STATE, |_, _| 0u32.into_ret());
+            e.register(BASE_OBJECT, |_, _| 0x5000u32.into_ret());
+            e.register_double(FIRST_TEST, |_, _| 0u32.into_ret());
+            e.register_double(SECOND_TEST, move |_, _| second.into_ret());
+            e.register_double(AMOUNT, |_, _| 1.0f64.into_ret());
+            e.register(SET_FLAG, |_, _| Ret::default());
+            e.register(AFTER_FLAGS, |_, _| Ret::default());
+            e.set_jip_patches(switch);
+            O4_ASKED.with(|s| s.borrow_mut().clear());
+            O4_ANSWER.with(|c| c.set(Some(0)));
+            e.call_log = Some(vec![]);
+            e.call(0x009b_7cc0, &args![0x7000u32]);
+            let log = e.call_log.take().unwrap();
+            let seen = O4_ASKED.with(|s| s.take());
+            assert_eq!(seen, vec![vec![0x7000, value]], "second {second}");
+            let masks: Vec<u32> = calls_to(&log, SET_FLAG).iter().map(|w| w[1]).collect();
+            assert!(!masks.contains(&0x8000), "second {second}");
+            assert_eq!(masks.len(), 8);
+        }
+    }
+
     #[test]
     fn fn_009b7cc0_sets_the_nine_flags() {
         assert_eq!(
