@@ -341,6 +341,13 @@ fn nif_block_switch() {
         s1,
         "low byte 0: the camera's"
     );
+    e.mem.set_u8(p + IS_3RD_PERSON, 1);
+    assert_eq!(
+        nif_block(&e, p, 0x100, b"S"),
+        s3,
+        "low byte 0: the camera's (third), not the even first person"
+    );
+    e.mem.set_u8(p + IS_3RD_PERSON, 0);
     set_root(&mut e, p, 0);
     assert_eq!(
         nif_block(&e, p, 2, b"S"),
