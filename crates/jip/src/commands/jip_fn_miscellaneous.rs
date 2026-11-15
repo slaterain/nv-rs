@@ -23,11 +23,13 @@
 //! `*011DD42C` (its reference +0). Time globals `011DE7B8` (year, month, day, hour: globals with
 //! their value at +0x24). The audit table names the exe evidence of each.
 //!
+//! `ToggleHardcoreTracking` (G114) and `ToggleImmortalMode` (G122) are built with their game
+//! patches, in `crate::game_patches::gp`.
+//!
 //! Deferred (each waits for what is named; no stand-ins):
 //! - `MarkActivatorAshPile` (G06), `GetConditionDamagePenalty`/`SetConditionDamagePenalty` (G84),
 //!   `SetArmorConditionPenalty` (G85), `SetDamageToArmorMaxPercent` (G99),
-//!   `ToggleHardcoreTracking` (G114), `ToggleImmortalMode` (G122/G123), `ToggleHitEffects`
-//!   (G123-G125), `ToggleNoMovementCombat` (G126), `ToggleDepthClear` (G128),
+//!   `ToggleHitEffects` (G123-G125), `ToggleNoMovementCombat` (G126), `ToggleDepthClear` (G128),
 //!   `ToggleBipedSlotVisibility` (H15), `SetGameHour` (its flag is read by the time patch, O5/G37,
 //!   with G114's): the stage 3.9 game patches that read what they set.
 //! - `SetInternalMarker`: JIP's hook reading `s_internalMarkerIDs` (hooks.h; core track).

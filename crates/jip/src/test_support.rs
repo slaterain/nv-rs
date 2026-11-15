@@ -44,8 +44,9 @@ fn prepare(e: &mut Engine) {
     e.map(CONSOLE_OPEN & !0xfff, 0x1000);
     e.map(DATA, 0x1_0000);
     // The processes' vtables (HighProcess 0x01087864, MiddleHighProcess 0x0108904C), where JIP
-    // writes its hit-data routines once installed.
-    e.map(0x0108_7000, 0x3000);
+    // writes its hit-data routines once installed, and the player's MagicTarget vtable slot
+    // 0x0108A9B4 (game_patches::gp, G122).
+    e.map(0x0108_7000, 0x4000);
     // `ExtraTimeLeft`'s vtable (0x010158FC), whose two slots JIP's ExtraJIP framework writes
     // (step 3.9 GH1).
     e.map(0x0101_5000, 0x1000);

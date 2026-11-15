@@ -11,6 +11,25 @@
 //! named or re-modelled reference that is destroyed keeps its entry: the hook's user count never
 //! falls back, and a later reference built at the same address would answer the old name or
 //! model.
+//!
+//! **G06, G73, G103**: JIP's ash piles. G06 (`InitGamePatches`, "Recognize custom ashpile
+//! activators", JIP's own): the eight places the exe compares a reference's base form with the
+//! two ash pile forms test the base's ash pile bit instead (the two vanilla piles get it in
+//! `DeferredInit`, `MarkActivatorAshPile` gives it to others). G73 (`AttachAshPileHook`, JIP's
+//! own): the ash pile a death leaves can be `AttachAshPileEx`'s form. Not asked yet: G06's
+//! `0x77765A` (group GA's seam), so a marked activator is an ash pile in seven of the eight
+//! places until it lands (`0x95F7FE` is asked in group GP's `fn_0095f6c0`). G73's seam at
+//! `0x5DBCFD` (in group GS's `fn_005db870`) is asked; it changes nothing until the
+//! `AttachAshPileEx` command exists. G103
+//! (`ClearAshPilesHook`, a fix row): the cell's reset walk deletes ash piles itself and no longer
+//! with their actor; JIP's jump there also passes over the exe's branches for form types 0x1D and
+//! 0x26 (`FLOR` and placed `INGR` references, of which the game's own plugins have none).
+//!
+//! Threads: G06's test reads the base's flag byte only and G73's form is a lock-free atomic, so
+//! neither takes JIP's slot (Activate, Enable/Disable and the physics island callback may run off
+//! the main thread). G103's walk `0054df30` runs in the cell attach (`0054bcf0`, from the grid
+//! loads on the main thread) and its handlers take no slot either; only `deferred_init` (the
+//! start-up message, main thread) writes JIP's kept form flags under the slot.
 
 use super::Area;
 use crate::commands::jip_fn_aux_variable::{
@@ -26,13 +45,65 @@ use std::collections::BTreeMap;
 /// H24's seam: the destructor's call of `IsFurniture` (the reference).
 pub const DESTROY_REFR: SiteSlot = SiteSlot::new(Owner::Jip, 0x0055_a488);
 
+/// G06's seams (`InitGamePatches`, "Recognize custom ashpile activators"): the exe's two compares
+/// of a reference's base form with the ash pile forms, each starting with a `call 0x7AF430`
+/// (`TESObjectREFR::GetBaseForm`). Words: the reference (JIP's `ecx`); the answer's low byte is 1
+/// for an ash pile. Six are in this group's translations; `0x77765A` (group GA,
+/// `hud_main_menu_set_info_for_ref`) and `0x95F7FE` (group GP, `fn_0095f6c0`) are those groups'
+/// seams.
+pub const ASH_PILE_TESTS: [SiteSlot; 8] = [
+    SiteSlot::new(Owner::Jip, 0x0056_a30a),
+    SiteSlot::new(Owner::Jip, 0x0057_3194),
+    SiteSlot::new(Owner::Jip, 0x0057_3fe8),
+    SiteSlot::new(Owner::Jip, 0x0057_445b),
+    SiteSlot::new(Owner::Jip, 0x0057_6af0),
+    SiteSlot::new(Owner::Jip, 0x0062_4958),
+    SiteSlot::new(Owner::Jip, 0x0077_765a),
+    SiteSlot::new(Owner::Jip, 0x0095_f7fe),
+];
+/// G73's seam (group GS's, in `fn_005db870`): the ash pile form a death leaves. Words: the
+/// command's mode (`[ebp-0x18]`); the answer is the form.
+pub const ATTACH_ASH_PILE: SiteSlot = SiteSlot::new(Owner::Jip, 0x005d_bcfd);
+/// G103's seams in the cell's reset walk `fn_0054df30`: the deleted actor's ash pile (words: the
+/// actor; any answer skips it) and the other references' type branches (words: the reference,
+/// its base form; any answer means JIP's routine ran and the walk goes on at `0x54E5E6`).
+pub const DELETED_ACTOR_ASH_PILE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0054_e421);
+pub const CLEAR_ASH_PILES: SiteSlot = SiteSlot::new(Owner::Jip, 0x0054_e4e1);
+
+/// `kHookFormFlag6_IsAshPile` (the base form's `jipFormFlags6`).
+pub const IS_ASH_PILE: u8 = 1 << 5;
+/// `g_ashPileACTI` and `g_gooPileACTI`: the exe's words at `0x11CA27C` and `0x11CA280`.
+const ASH_PILE_FORM: u32 = 0x011c_a27c;
+const GOO_PILE_FORM: u32 = 0x011c_a280;
+/// `kXData_ExtraAshPileRef` (its source at `+0xC`); `TESObjectREFR::MarkAsDeleted` (`00572270`).
+const EXTRA_ASH_PILE_REF: u32 = 0x89;
+const MARK_AS_DELETED: u32 = 0x0057_2270;
+/// A form's flags (`+8`): byte `+9` bit 2 is `0x400` (`kFormFlag_QuestItem`).
+const FORM_FLAGS_BYTE_9: u32 = 9;
+
+/// JIP's `s_altAshPile`: the form `AttachAshPileEx` sets for the next death's ash pile, taken
+/// once. Lock-free ([`Engine::ext_free`]), made at install before the threads start.
+#[derive(Default)]
+pub struct AltAshPile(pub std::sync::atomic::AtomicU32);
+
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GH2",
-    fix_sites: &[],
+    fix_sites: &[DELETED_ACTOR_ASH_PILE.addr(), CLEAR_ASH_PILES.addr()],
     fix_wraps: &[],
-    install_fixes: super::nothing,
-    jip_sites: &[DESTROY_REFR.addr()],
+    install_fixes,
+    jip_sites: &[
+        DESTROY_REFR.addr(),
+        ASH_PILE_TESTS[0].addr(),
+        ASH_PILE_TESTS[1].addr(),
+        ASH_PILE_TESTS[2].addr(),
+        ASH_PILE_TESTS[3].addr(),
+        ASH_PILE_TESTS[4].addr(),
+        ASH_PILE_TESTS[5].addr(),
+        ASH_PILE_TESTS[6].addr(),
+        ASH_PILE_TESTS[7].addr(),
+        ATTACH_ASH_PILE.addr(),
+    ],
     jip_wraps: &[],
     install_jip,
 };
@@ -54,6 +125,11 @@ const FORM_TYPE: u32 = 4;
 
 fn install_jip(e: &mut Engine) {
     e.on_site(DESTROY_REFR, destroy_refr);
+    e.ext_free::<AltAshPile>();
+    for site in ASH_PILE_TESTS {
+        e.on_site(site, is_ash_pile);
+    }
+    e.on_site(ATTACH_ASH_PILE, attach_ash_pile);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: DestroyRefrHook.
@@ -151,6 +227,107 @@ fn clear_ref_aux_vars(mods: &mut AuxMods, id: u32) -> bool {
     erased
 }
 
+fn install_fixes(e: &mut Engine) {
+    e.on_site(DELETED_ACTOR_ASH_PILE, keep_deleted_actors_ash_pile);
+    e.on_site(CLEAR_ASH_PILES, clear_ash_piles);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches,
+// "Recognize custom ashpile activators" (the 14 bytes at each site).
+/// The ash pile test (`mov eax, [ecx+0x20]; test byte [eax+6], 0x20`): 1 when the reference's base
+/// form carries JIP's ash pile bit (the two vanilla piles get it at start-up, `MarkActivatorAshPile`
+/// gives it to others), else 0. A reference with no base answers 0, as the exe's compares do (JIP
+/// would read address 6).
+fn is_ash_pile(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let base = e.mem.u32(a[0] + BASE);
+    if base == 0 {
+        return Some(0);
+    }
+    Some(u32::from(
+        crate::world_hooks::flags6(e, base) & IS_ASH_PILE != 0,
+    ))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit.
+/// `g_ashPileACTI->SetJIPFlag(kHookFormFlag6_IsAshPile, true)` and the same for
+/// `g_gooPileACTI`: the two vanilla piles are ash piles to G06's test. Only while JIP answers
+/// "installed" (the word's bit), and not for a missing form.
+pub fn deferred_init(e: &mut Engine) {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED == 0 {
+        return;
+    }
+    for at in [ASH_PILE_FORM, GOO_PILE_FORM] {
+        // Always mapped in the game; a test engine without the exe's data has neither.
+        if !e.mem.is_mapped(at) {
+            continue;
+        }
+        let form = e.mem.u32(at);
+        if form != 0 {
+            crate::world_hooks::set_jip_flag(e, form, IS_ASH_PILE, true);
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: AttachAshPileHook.
+/// The form a death's ash pile is made of: `AttachAshPileEx`'s form once (then cleared), else
+/// the goo pile for mode 2 and the ash pile for any other, as the exe chooses.
+fn attach_ash_pile(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let alt = e
+        .ext_free::<AltAshPile>()
+        .0
+        .swap(0, std::sync::atomic::Ordering::Relaxed);
+    if alt != 0 {
+        return Some(alt);
+    }
+    let at = if a[0] == 2 {
+        GOO_PILE_FORM
+    } else {
+        ASH_PILE_FORM
+    };
+    Some(e.mem.u32(at))
+}
+
+/// `SafeWrite16(0x54E421, 0x1EEB)`: a deleted actor's ash pile is not deleted with it here
+/// ([`clear_ash_piles`] deletes it when the cell's walk reaches the pile).
+fn keep_deleted_actors_ash_pile(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ClearAshPilesHook.
+/// Every reference that is neither an actor nor a container: an ash pile (JIP's bit on its base)
+/// with no `ExtraAshPileRef` is deleted; with one whose source's base form carries flag `0x400`
+/// it stays; else the source loses its `ExtraAshPileRef` (when there is a source), the pile
+/// loses its own, and the pile is deleted. Anything else: nothing. Then the walk goes on at
+/// `0x54E5E6`, past the exe's branches for form types `0x1D` and `0x26`.
+fn clear_ash_piles(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (reference, base) = (a[0], a[1]);
+    if crate::world_hooks::flags6(e, base) & IS_ASH_PILE == 0 {
+        return Some(0);
+    }
+    let extra = crate::commands::extra::refr_extra(e, reference, EXTRA_ASH_PILE_REF);
+    if extra != 0 {
+        let source = e.mem.u32(extra + 0xc);
+        if source != 0 {
+            let source_base = e.mem.u32(source + BASE);
+            // A source with no base: JIP would read address 9; taken as the flag clear.
+            if source_base != 0 && e.mem.u8(source_base + FORM_FLAGS_BYTE_9) & 4 != 0 {
+                return Some(0);
+            }
+            crate::commands::extra::remove_by_type(
+                e,
+                source + crate::commands::extra::REFR_EXTRA_LIST,
+                EXTRA_ASH_PILE_REF,
+            );
+        }
+        crate::commands::extra::remove_by_type(
+            e,
+            reference + crate::commands::extra::REFR_EXTRA_LIST,
+            EXTRA_ASH_PILE_REF,
+        );
+    }
+    e.call(MARK_AS_DELETED, &args![reference]);
+    Some(0)
+}
 #[cfg(test)]
 #[path = "gh2_tests.rs"]
 mod tests;

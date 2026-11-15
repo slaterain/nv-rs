@@ -4906,6 +4906,13 @@ pub fn fn_00953ff0(e: &mut Engine, this: Ptr<PlayerCharacter>, item: u32, count:
     let mut touched_item = false;
     let base = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, item));
     let kind = e.call(FORM_TYPE_OF, &args![base]).u32();
+    // JIP LN NVSE's G75 at `0x0095400F` (`HotkeyFixPlayerActivateHook`; group GH1's row and
+    // handler, a fix row): after the type read, the seam with the picked-up reference (JIP's
+    // `ClearExtraHotkeyIfUsed` takes its extra list, `+0x44`); its answer is not used. One
+    // load while the row is off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0095_400f, &[item]);
+    }
     if kind == 0x28 {
         let base = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, item));
         if !e.call(0x0047_bcf0, &args![base]).bool() {
@@ -12777,6 +12784,53 @@ mod tests {
         double(&mut e, 0x004c_94d0, eax(0));
         fn_00953ff0(&mut e, player, item, 3, 0);
         assert!(calls_to(&e, 0x008a_ded0).is_empty());
+    }
+
+    thread_local! {
+        static HOTKEY_SEEN: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Records the words and that the type was read before; answers 1 (not used).
+    fn hotkey_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let typed = e
+            .call_log
+            .as_ref()
+            .is_some_and(|log| log.iter().any(|(addr, _)| *addr == FORM_TYPE_OF));
+        assert!(typed, "after the type read");
+        HOTKEY_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's G75 seam (`0x0095400F`, group GH1's row and handler, a fix row): with the
+    /// word 0 or `INSTALLED` alone it is not asked; with `FIXES` it is asked once with the
+    /// picked-up reference after the type read, and its answer changes nothing (an unwanted
+    /// ammunition form still stops at once).
+    #[test]
+    fn picking_up_jip_hotkey_seam() {
+        use engine_core::extend::jip_patches;
+        for (word, asked) in [
+            (0, false),
+            (jip_patches::INSTALLED, false),
+            (jip_patches::FIXES, true),
+        ] {
+            let mut e = engine();
+            let player = new_player(&mut e);
+            let item = e.mem.alloc(8);
+            double(&mut e, 0x007a_f430, eax(0x4000));
+            double(&mut e, FORM_TYPE_OF, eax(0x28));
+            double(&mut e, 0x0047_bcf0, eax(0));
+            e.on_site_for_test(0x0095_400f, hotkey_handler);
+            e.set_jip_patches(word);
+            start_log(&mut e);
+            fn_00953ff0(&mut e, player, item, 3, 0);
+            let seen = HOTKEY_SEEN.with(|s| s.take());
+            if asked {
+                assert_eq!(seen, vec![vec![item]]);
+            } else {
+                assert!(seen.is_empty(), "{word:#x}");
+            }
+            assert!(calls_to(&e, 0x008a_ded0).is_empty(), "still stops");
+        }
     }
 
     #[test]

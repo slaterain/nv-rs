@@ -1418,8 +1418,12 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.serialized_tail.clear();
             s.had_section = false;
         }
-        // `DeferredInit` (once per run): its temporary position marker.
-        msg::DEFERRED_INIT => crate::commands::pos_marker::create(e),
+        // `DeferredInit` (once per run): its temporary position marker and the two vanilla ash
+        // piles marked (step 3.9 G06).
+        msg::DEFERRED_INIT => {
+            crate::commands::pos_marker::create(e);
+            crate::game_patches::gh2::deferred_init(e);
+        }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
             // when there is nothing to do. Sent only once JIP answers "installed" (it asks for it,

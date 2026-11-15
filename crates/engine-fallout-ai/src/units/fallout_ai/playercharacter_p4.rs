@@ -1514,12 +1514,27 @@ pub fn fn_00969930(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
         if reference == 0 {
             continue;
         }
+        // JIP LN NVSE's G26 at `0x009699C5` (a fix row, 20 bytes there): the seam with the
+        // reference; 0 passes the marker over (a disabled reference), another answer is the
+        // address of its position, read there instead of the reference's slot `+0x1F4`. One load
+        // while the row is off.
+        let jip_position = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+            match e.site(0x0096_99c5, &[reference]) {
+                Some(0) => continue,
+                answer => answer,
+            }
+        } else {
+            None
+        };
         // The exe's frame (`SUB ESP,0x40` under `EBP`): the position copy at +0x1c (`EBP-0x24`),
         // the difference at +0x10 (`EBP-0x30`).
         let (distance, radius) = e.with_stack(0x40, |e, frame| {
             let work = frame.addr() + 0x1c;
             let difference = frame.addr() + 0x10;
-            let position = e.vcall(reference, 0x1f4, &args![]).u32();
+            let position = match jip_position {
+                Some(position) => position,
+                None => e.vcall(reference, 0x1f4, &args![]).u32(),
+            };
             for word in 0..3 {
                 let value = e.mem.u32(position + 4 * word);
                 e.mem.set_u32(work + 4 * word, value);
@@ -1642,7 +1657,19 @@ pub fn fn_00969bc0(e: &mut Engine, this: Ptr<PlayerCharacter>, card: u32) -> boo
 /// `00969e70` (`bResetHardcoreTimers`) says so.
 pub fn player_character_update_hardcore_mode(e: &mut Engine, this: Ptr<PlayerCharacter>) {
     let the_player = player(e);
-    if e.call(PLAYER_IS_IN_STATE, &args![the_player, 4u32]).bool() {
+    // JIP LN NVSE's G114 at `0x00969C41` (`ModHardcoreNeedsHook`, JIP's own with O6 inside):
+    // the seam with the player answers the state test instead of the call (and adds the
+    // pending needs, keeps tracking off as JIP does). One load while JIP is not installed.
+    let jip_answer = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0096_9c41, &[the_player.addr()])
+    } else {
+        None
+    };
+    let in_state = match jip_answer {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(PLAYER_IS_IN_STATE, &args![the_player, 4u32]).bool(),
+    };
+    if in_state {
         return;
     }
     let time_scale = e.call(CALENDAR_GET_TIME_SCALE, &args![CALENDAR]).f32();
@@ -3595,6 +3622,73 @@ mod tests {
         assert_eq!(e.call(0x00969930, &args![player]).u32(), 0);
     }
 
+    thread_local! {
+        static MARKER_SEEN: std::cell::RefCell<Vec<u32>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static MARKER_SKIPPED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Passes over the reference in `MARKER_SKIPPED`, answers `+0x30` for the others.
+    fn marker_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        MARKER_SEEN.with(|s| s.borrow_mut().push(a[0]));
+        if a[0] == MARKER_SKIPPED.with(|c| c.get()) {
+            Some(0)
+        } else {
+            Some(a[0] + 0x30)
+        }
+    }
+
+    /// JIP LN NVSE's G26 seam (`0x009699C5`, a fix row): with the word 0 or `INSTALLED` alone it
+    /// is not asked and the nearer marker wins; with `FIXES` it is asked with each marker's
+    /// reference, a 0 answer passes the (nearer) marker over, and the other marker's position
+    /// is read at the answered address (the reference's slot `+0x1F4` not called; the copy the
+    /// subtraction gets holds the words at `+0x30`).
+    #[test]
+    fn the_closest_marker_jip_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [0, jip_patches::INSTALLED] {
+            let mut e = engine();
+            let (player, markers) = marker_setup(&mut e, 2);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0096_99c5), marker_handler);
+            e.set_jip_patches(word);
+            sequence(&mut e, POINT_LENGTH_SQUARED, &[st0(25.0), st0(100.0)]);
+            sequence(&mut e, REFERENCE_RADIUS, &[st0(3.0), st0(3.0)]);
+            assert_eq!(e.call(0x00969930, &args![player]).u32(), markers[0]);
+            assert!(MARKER_SEEN.with(|s| s.take()).is_empty(), "{word:#x}");
+        }
+        let mut e = engine();
+        let (player, markers) = marker_setup(&mut e, 2);
+        let refs = [e.mem.u32(markers[0]), e.mem.u32(markers[1])];
+        let position_slots: Vec<u32> = refs
+            .iter()
+            .map(|&r| {
+                let table = e.mem.u32(r);
+                e.mem.u32(table + 0x1f4)
+            })
+            .collect();
+        for (i, r) in refs.iter().enumerate() {
+            e.mem.set_f32(r + 0x30, 1.0 + i as f32);
+            e.mem.set_f32(r + 0x34, 2.0);
+            e.mem.set_f32(r + 0x38, 3.0);
+        }
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0096_99c5), marker_handler);
+        MARKER_SKIPPED.with(|c| c.set(refs[0]));
+        e.set_jip_patches(jip_patches::FIXES);
+        sequence(&mut e, POINT_LENGTH_SQUARED, &[st0(100.0)]);
+        sequence(&mut e, REFERENCE_RADIUS, &[st0(3.0)]);
+        e.call_log = Some(vec![]);
+        e.register(POINT_SUBTRACT, |e, a| {
+            let copied: Vec<f32> = (0..3).map(|i| e.mem.f32(a[0] + 4 * i)).collect();
+            assert_eq!(copied, [2.0, 2.0, 3.0], "the words at +0x30");
+            eax(0)
+        });
+        assert_eq!(e.call(0x00969930, &args![player]).u32(), markers[1]);
+        assert_eq!(MARKER_SEEN.with(|s| s.take()), refs.to_vec());
+        for slot in position_slots {
+            assert!(calls(&e, slot).is_empty(), "no position call");
+        }
+    }
+
     #[test]
     fn the_timer_helpers_use_their_globals() {
         let mut e = engine();
@@ -3725,6 +3819,47 @@ mod tests {
         assert!(calls(&e, modify).is_empty());
         assert_eq!(calls(&e, PLAYER_IS_IN_STATE), vec![vec![player.addr(), 4]]);
         assert_eq!(e.global::<f32>(LAST_VALUE_49), 90.0);
+    }
+
+    thread_local! {
+        static HARDCORE_SEEN: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static HARDCORE_ANSWER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn hardcore_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        HARDCORE_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(HARDCORE_ANSWER.with(|c| c.get()))
+    }
+
+    /// JIP LN NVSE's G114 seam (`0x00969C41`, JIP's own): with the word 0 or `FIXES` alone it is
+    /// not asked and the exe's state test runs; with `INSTALLED` it is asked with the player
+    /// instead of the test, and its answer's low byte decides (1 or 0x101: the update stops; 0
+    /// or 0x100: it runs).
+    #[test]
+    fn the_hardcore_update_jip_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [0, jip_patches::FIXES] {
+            let (mut e, player, modify) = hardcore_setup();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0096_9c41), hardcore_handler);
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            e.call(0x00969c30, &args![player]);
+            assert!(HARDCORE_SEEN.with(|s| s.take()).is_empty(), "{word:#x}");
+            assert_eq!(calls(&e, PLAYER_IS_IN_STATE).len(), 1);
+            assert_eq!(calls(&e, modify).len(), 2);
+        }
+        for (answer, stops) in [(1u32, true), (0x101, true), (0, false), (0x100, false)] {
+            let (mut e, player, modify) = hardcore_setup();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0096_9c41), hardcore_handler);
+            HARDCORE_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(jip_patches::INSTALLED);
+            e.call_log = Some(vec![]);
+            e.call(0x00969c30, &args![player]);
+            assert_eq!(HARDCORE_SEEN.with(|s| s.take()), vec![vec![player.addr()]]);
+            assert!(calls(&e, PLAYER_IS_IN_STATE).is_empty());
+            assert_eq!(calls(&e, modify).is_empty(), stops, "{answer:#x}");
+        }
     }
 
     #[test]

@@ -5851,7 +5851,18 @@ pub fn fn_005db870(e: &mut Engine, args: ScriptArgs) -> bool {
             e.mem.set_u8(at(0x35), 1);
             e.call(N045_PICK_POINT, &args![at(0xf0), at(0x28)]);
         }
-        let form = if e.mem.u32(at(0x18)) == 2 {
+        // 005dbcfd: JIP LN NVSE's G73 seam (`AttachAshPileHook`, the row and handler are group
+        // GH2's): with JIP installed its answer is the form (`AttachAshPileEx`'s once, else the
+        // same choice); words: the mode `[ebp-0x18]`.
+        let jip_form = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            let mode = e.mem.u32(at(0x18));
+            e.site(0x005d_bcfd, &[mode])
+        } else {
+            None
+        };
+        let form = if let Some(form) = jip_form {
+            form
+        } else if e.mem.u32(at(0x18)) == 2 {
             e.global::<u32>(N045_FORM_MODE_2)
         } else {
             e.global::<u32>(N045_FORM_OTHER)
@@ -11896,6 +11907,10 @@ mod n045_tests {
     #[test]
     fn fn_005db870_places_a_marker_at_the_pick() {
         let mut e = base_engine();
+        // JIP's G73 seam (group GH2's handler): a test handler noting the mode, answering 0x7500;
+        // asked only with JIP installed (the runs below with the word 0 keep the exe's forms).
+        G73_MODES.with(|m| m.borrow_mut().clear());
+        e.on_site_for_test(0x005d_bcfd, g73_answer);
         let (a, _) = script_args(&mut e, 0);
         e.register(PARSE_PARAMETERS, |_, _| ret(0));
         assert!(!e.call(0x005d_b870, &words(a)).bool());
@@ -11995,6 +12010,34 @@ mod n045_tests {
         assert_eq!(only(&log, N045_INDEX_LIST_CONSTRUCT)[0][1..], [8, 0]);
         assert_eq!(only(&log, N045_PICK_NORMAL).len(), 1);
         assert!(only(&log, N045_LAYER_TEST).is_empty());
+        assert!(
+            G73_MODES.with(|m| m.borrow().is_empty()),
+            "not asked while not installed"
+        );
+        // JIP installed: the answer is the form placed (mode 1, then mode 2).
+        e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+        for mode in [1u32, 2] {
+            parse_writes(&mut e, vec![mode]);
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x005d_b870, &words(a)).bool());
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                only(&log, N045_PLACE_REFERENCE)[0][1],
+                0x7500,
+                "mode {mode}"
+            );
+        }
+        assert_eq!(G73_MODES.with(|m| m.borrow().clone()), [1, 2]);
+    }
+
+    thread_local! {
+        static G73_MODES: std::cell::RefCell<Vec<u32>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g73_answer(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G73_MODES.with(|m| m.borrow_mut().push(a[0]));
+        Some(0x7500)
     }
 
     /// Doubles for the player pick of `005df040` and `005df5d0`.

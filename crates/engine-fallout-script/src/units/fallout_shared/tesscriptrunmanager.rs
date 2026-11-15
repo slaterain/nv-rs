@@ -169,8 +169,11 @@ pub fn runner_run(
                         )
                         .bool()
                     {
-                        let header = e.call(0x0050_0940, &args![script]).u32();
-                        e.mem.set_u32(header + 8, 0);
+                        // 005e0fbe: JIP LN NVSE's O7 seam jumps past the clear.
+                        if !jip_keeps_failed_script(e, 0x005e_0fbe) {
+                            let header = e.call(0x0050_0940, &args![script]).u32();
+                            e.mem.set_u32(header + 8, 0);
+                        }
                         break;
                     }
                     let remaining = e.mem.u32(skip.addr());
@@ -743,6 +746,16 @@ struct Line {
     parse_only: bool,
 }
 
+/// JIP LN NVSE's `bNoFailedScriptLocks` (O7, `SetOptionalPatch(7)`, step 3.9): its three
+/// `SafeWrite16` jumps (`0x5E0FBE` in `Run`, `0x5E1A23` and `0x5E1F0B` in `EvaluateLine`) skip the
+/// header read and the clear of the script's data length that a failed line does (with the
+/// length 0 the script never runs again). The switch's bit is tested first; true when JIP's
+/// handler at `site` takes the call.
+fn jip_keeps_failed_script(e: &mut Engine, site: u32) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0
+        && e.site(site, &[]).is_some()
+}
+
 /// The address of if-stack level `depth` (runner +0x24, one word each).
 fn if_level(this: Ptr<ScriptRunner>, depth: u32) -> u32 {
     this.addr()
@@ -882,8 +895,11 @@ fn evaluate_set(e: &mut Engine, at: &Line) -> bool {
                     0x005b_5e40,
                     &args![0x0103_d770u32, name, at.line, error_name],
                 );
-                let header = e.call(0x0050_0940, &args![at.script]).u32();
-                e.mem.set_u32(header + 8, 0);
+                // 005e1a23: JIP LN NVSE's O7 seam jumps past the clear.
+                if !jip_keeps_failed_script(e, 0x005e_1a23) {
+                    let header = e.call(0x0050_0940, &args![at.script]).u32();
+                    e.mem.set_u32(header + 8, 0);
+                }
                 return false;
             }
             if at.parse_only {
@@ -1021,8 +1037,11 @@ fn evaluate_condition(e: &mut Engine, at: &Line) -> bool {
                 e.call(0x005e_24b0, &args![this, at.script, 6u32]);
                 let name = e.vcall(at.script.addr(), 0x130, &args![]).u32();
                 e.call(0x005b_5e40, &args![0x0103_d664u32, name, at.line]);
-                let header = e.call(0x0050_0940, &args![at.script]).u32();
-                e.mem.set_u32(header + 8, 0);
+                // 005e1f0b: JIP LN NVSE's O7 seam jumps past the clear.
+                if !jip_keeps_failed_script(e, 0x005e_1f0b) {
+                    let header = e.call(0x0050_0940, &args![at.script]).u32();
+                    e.mem.set_u32(header + 8, 0);
+                }
                 let code = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, expression));
                 e.mem.set_u32(this.addr() + 0x1c, code);
                 false
@@ -1930,6 +1949,119 @@ mod tests {
         assert_eq!(e.mem.u32(header + 8), 0);
         // The error leaves the line skipped (the value read was 0).
         assert_eq!(e.mem.u32(fixture.3.addr()), 3);
+    }
+
+    thread_local! {
+        static O7_SEEN: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn o7_kept<const SITE: u32>(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        O7_SEEN.with(|s| s.borrow_mut().push(SITE));
+        Some(1)
+    }
+
+    /// JIP's O7 handlers (test ones that note their seam and take the call) at the three seams,
+    /// the word set to `word`.
+    fn o7_handlers(e: &mut Engine, word: u32) {
+        O7_SEEN.with(|s| s.borrow_mut().clear());
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x005e_0fbe, o7_kept::<0x005e_0fbe>);
+        e.on_site_for_test(0x005e_1a23, o7_kept::<0x005e_1a23>);
+        e.on_site_for_test(0x005e_1f0b, o7_kept::<0x005e_1f0b>);
+    }
+
+    fn o7_seen() -> Vec<u32> {
+        O7_SEEN.with(|s| s.borrow().clone())
+    }
+
+    /// The words of the three O7 cases: not installed, installed with the fixes but the switch
+    /// off, the switch on (JIP's default).
+    const O7_WORDS: [u32; 3] = [
+        0,
+        engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
+        engine_core::extend::jip_patches::INSTALLED
+            | engine_core::extend::jip_patches::FIXES
+            | engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS,
+    ];
+
+    /// `Run`'s failed line (`0x5E0FBE`): with JIP's `bNoFailedScriptLocks` the data length stays
+    /// (the script runs again next time); otherwise it is cleared, the seam not asked.
+    #[test]
+    fn jip_o7_run_failure_keeps_the_script() {
+        for word in O7_WORDS {
+            let on = word & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0;
+            let mut e = Engine::new();
+            let (runner, script, header) = run_fixture(&mut e, &[0x11, 0, 0, 0], false);
+            o7_handlers(&mut e, word);
+            e.register_double(0x005e13a0, |_, _| 0u32.into_ret());
+            assert!(!e
+                .call(
+                    0x005e0d20,
+                    &args![runner, script, 0u32, 0x5555u32, 0u32, false, 0u8, 0u8, 0.0f32]
+                )
+                .bool());
+            assert_eq!(e.mem.u32(header + 8), if on { 4 } else { 0 }, "{word:x}");
+            assert_eq!(o7_seen(), if on { vec![0x005e_0fbe] } else { vec![] });
+        }
+    }
+
+    /// `EvaluateLine`'s set with an expression error (`0x5E1A23`): the error is still reported and
+    /// the line fails; only the data length's clear goes with the switch.
+    #[test]
+    fn jip_o7_set_expression_error_keeps_the_script() {
+        for word in O7_WORDS {
+            let on = word & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0;
+            let mut e = Engine::new();
+            let fixture = line_fixture(&mut e, &[b'f', 1, 0, 1, 0, b'1'], vec![Err(4)]);
+            o7_handlers(&mut e, word);
+            e.map(EXPRESSION_ERROR_NAMES, 0x18);
+            e.mem.set_u32(EXPRESSION_ERROR_NAMES + 16, 0xabcd);
+            e.register_double(0x005b5e40, |_, _| Ret::default());
+            let header = e.call(0x00500940, &[fixture.1.addr()]).u32();
+            let length = e.mem.u32(header + 8);
+            assert_ne!(length, 0);
+            e.call_log = Some(Vec::new());
+            assert!(!evaluate(&mut e, fixture, 0x15, 0, false));
+            let reports = e
+                .call_log
+                .take()
+                .unwrap()
+                .iter()
+                .filter(|c| c.0 == 0x005b5e40)
+                .count();
+            assert_eq!(reports, 1, "{word:x}");
+            assert_eq!(
+                e.mem.u32(header + 8),
+                if on { length } else { 0 },
+                "{word:x}"
+            );
+            assert_eq!(o7_seen(), if on { vec![0x005e_1a23] } else { vec![] });
+        }
+    }
+
+    /// `EvaluateLine`'s if with an expression error (`0x5E1F0B`): the error code and the skip
+    /// stay; only the data length's clear goes with the switch.
+    #[test]
+    fn jip_o7_condition_error_keeps_the_script() {
+        for word in O7_WORDS {
+            let on = word & engine_core::extend::jip_patches::NO_FAILED_SCRIPT_LOCKS != 0;
+            let mut e = Engine::new();
+            let fixture = line_fixture(&mut e, &[3, 0, 1, 0, b'1'], vec![Err(5)]);
+            o7_handlers(&mut e, word);
+            e.register_double(0x005b5e40, |_, _| Ret::default());
+            let header = e.call(0x00500940, &[fixture.1.addr()]).u32();
+            let length = e.mem.u32(header + 8);
+            assert_ne!(length, 0);
+            assert!(!evaluate(&mut e, fixture, 0x16, 0x3333, false));
+            assert_eq!(e.mem.u32(fixture.0.addr() + 0x1c), 5, "{word:x}");
+            assert_eq!(e.mem.u32(fixture.3.addr()), 3, "{word:x}");
+            assert_eq!(
+                e.mem.u32(header + 8),
+                if on { length } else { 0 },
+                "{word:x}"
+            );
+            assert_eq!(o7_seen(), if on { vec![0x005e_1f0b] } else { vec![] });
+        }
     }
 
     /// A command definition at its table address with the given handler.
