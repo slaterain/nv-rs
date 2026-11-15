@@ -256,6 +256,8 @@ fn no_unequip_marks() {
     assert_eq!(allocations(), vec![0xc]);
     let made = calls_to(ADD_EXTRA_FN)[0][1];
     assert_eq!((e.mem.u32(made), e.mem.u32(made + 4)), (0x0101_5bf4, 0x3e));
+    // The test heap fills a new block with 0xCD: the next word must be written 0.
+    assert_eq!(e.mem.u32(made + 8), 0, "next");
     assert_eq!(call_on(&mut e, 0x2864, refr, &[]).1, 1.0);
     // Already marked: nothing added.
     call_on(&mut e, 0x2865, refr, &[n(1)]);
@@ -368,6 +370,8 @@ fn all_items_into_a_form_list() {
     let mut e = setup();
     inventory(&mut e);
     put_list(&mut e, LIST + 0x18, NODES + 0x300, &[ALCH]);
+    // One form added by a script (BGSListForm::numAddedObjects): RemoveAll zeroes the count.
+    e.mem.set_u32(LIST + 0x20, 1);
     let (_, res) = call_on(&mut e, 0x2766, ACTOR, &[n(0), n(0), n(1), n(0), rf(LIST)]);
     assert_eq!(res, 3.0, "the count");
     // Emptied, then each put first: the reverse of the map's order.
@@ -375,6 +379,32 @@ fn all_items_into_a_form_list() {
         list_items(&e, Ptr::new(LIST + 0x18)),
         vec![AMMO, ARMO, WEAP]
     );
+    assert_eq!(e.mem.u32(LIST + 0x20), 0, "the script-added count");
+}
+
+#[test]
+fn all_items_of_a_creature_keep_its_worn_armor() {
+    // Actor::IsItemEquipped: an armour is never equipped on a creature reference (type 0x3C),
+    // worn or not.
+    let mut e = setup();
+    inventory(&mut e);
+    e.mem.set_u8(ACTOR + 4, 0x3c);
+    let (_, res) = call_on(&mut e, 0x2766, ACTOR, &[n(0), n(0), n(0), n(1)]);
+    assert_eq!(
+        array_data(&e, res),
+        vec![Form(0x205), Form(0x206), Form(0x208), Form(0x20c)]
+    );
+}
+
+#[test]
+fn weapon_mod_flags_of_an_inventory_reference_without_a_stack_list() {
+    // JIP takes the inventory reference's xData (null here) and never its own extra data.
+    let mut e = setup();
+    let refr = inv_ref(&mut e, WEAP, 0);
+    put_extra(&mut e, refr + 0x44, X1, 0x8d, 0);
+    e.mem.set_u8(X1 + 0xc, 7);
+    e.mem.set_f64(RESULT, 0.0);
+    assert_eq!(call_on(&mut e, 0x270c, refr, &[]).1, 0.0);
 }
 
 #[test]

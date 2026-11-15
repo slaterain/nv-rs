@@ -168,7 +168,7 @@ fn armor_class_of_an_armor_and_of_a_character() {
     assert_eq!(
         call(&mut e, 0x2264, &[rf(ARMO)]).1,
         3.0,
-        "power armour first"
+        "heavy (0x80) before medium (8)"
     );
     e.mem.set_u32(ARMO + 0x78, 8);
     assert_eq!(call(&mut e, 0x2264, &[rf(ARMO)]).1, 2.0);

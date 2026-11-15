@@ -73,6 +73,8 @@ const PROCESS_LEVEL: u32 = 0x28;
 const PROCESS_WEAPON_INFO: u32 = 0x114;
 const ENTRY_ITEM: u32 = 0x08;
 const LIST_FORM_LIST: u32 = 0x18;
+/// `BGSListForm::numAddedObjects`.
+const LIST_ADDED_COUNT: u32 = 0x20;
 const EXTRA_WORD: u32 = 0x0c;
 
 /// Extra data types and the one this file creates.
@@ -374,7 +376,11 @@ fn get_all_items(e: &mut Engine, w: &[u32]) -> Ret {
         0
     };
     if list != 0 {
+        // BGSListForm::RemoveAll: the nodes, and the count of script-added forms (the exe's
+        // `00590010` counts them at +0x20; the save `00590080` and the revert `0058FFD0` walk
+        // that many nodes).
         list_remove_all(e, Ptr::new(list + LIST_FORM_LIST));
+        e.mem.set_u32(list + LIST_ADDED_COUNT, 0);
     }
     let mut kept = Vec::new();
     let mut count = 0u32;

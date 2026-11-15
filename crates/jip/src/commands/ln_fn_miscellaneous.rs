@@ -243,7 +243,8 @@ fn in_list(e: &Engine, head: u32, item: u32) -> bool {
     list_items(e, Ptr::<ListNode>::new(head)).contains(&item)
 }
 
-/// The armour class of biped flags: 3 for power armour (0x80), 2 heavy (8), else 1.
+/// The armour class of biped flags: 3 heavy (JIP's `eBipedFlag_HeavyArmor` 0x80), 2 medium
+/// (`eBipedFlag_MediumArmor` 8), else 1 (light). Power armour is a different bit (0x20).
 fn class_of(flags: u32) -> f64 {
     if flags & 0x80 != 0 {
         3.0
