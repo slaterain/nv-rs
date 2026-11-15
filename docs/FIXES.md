@@ -1079,10 +1079,10 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
   (`0x77765A`, group GA builds that seam) and the crosshair's (`0x95F7FE`, group GP) are not asked
   yet and still compare with the two vanilla forms, so until those seams land an activator marked
   as an ash pile (for example its bit restored from a co-save) is an ash pile in six places only.
-- `AttachAshPileHook` (G73, the death ash pile command `005db870`): row and handler only. It does
-  nothing yet: the seam at `0x5DBCFD` is group GS's to build and the command `AttachAshPileEx` is
-  not built; once both exist, the pile a death leaves is `AttachAshPileEx`'s form once, else the
-  exe's choice.
+- `AttachAshPileHook` (G73, the death ash pile command `005db870`, its seam at `0x5DBCFD`): the
+  pile a death leaves is `AttachAshPileEx`'s form once when a script set one, else the exe's
+  choice. It changes nothing yet: the command `AttachAshPileEx` is not built, so no script can set
+  a form.
 
 #### GF: Forms and records
 
