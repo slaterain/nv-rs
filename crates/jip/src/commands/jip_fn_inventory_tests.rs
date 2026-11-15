@@ -870,6 +870,13 @@ fn remove_item_target_through_a_list_with_a_quantity() {
         REMOVES.with(|r| r.borrow().clone()),
         vec![vec![ARMO, XDL2, 1, 0, 0, CONT_REF, 0, 0, 1, 0]]
     );
+    // More than it holds (10 of 4): its 4, the stack of 2 twice (the stand-in leaves it first).
+    REMOVES.with(|r| r.borrow_mut().clear());
+    call_on(&mut e, 0x2688, ACTOR, &[rf(ARMO), rf(CONT_REF), n(10)]);
+    assert_eq!(
+        REMOVES.with(|r| r.borrow().clone()),
+        vec![vec![ARMO, XDL2, 2, 1, 0, CONT_REF, 0, 0, 1, 0]; 2]
+    );
 }
 
 #[test]
@@ -918,6 +925,10 @@ fn equipped_item_ref_first_covering_slot_weapon_and_null_forms() {
     // Without 3D, slot 5: the first weapon entry with a worn stack, the entry's count.
     e.mem.set_u32(ENTRY_W + 8, WEAP);
     e.mem.set_u32(ENTRY_W + 4, 6);
+    // Loaded data with no 3D root is "without 3D".
+    let loaded = FORMS + 0x8900;
+    e.mem.set_u32(ACTOR + 0x64, loaded);
+    e.mem.set_u32(loaded + 0x14, 0);
     call_on(&mut e, 0x2839, ACTOR, &[n(5)]);
     let id = form_result(&e);
     let made = by_id(&mut e, id);
@@ -940,7 +951,7 @@ fn equipped_item_ref_first_covering_slot_weapon_and_null_forms() {
     assert_eq!(ir(&mut e, made), (ACTOR, ARMO, 1, XDL));
     // With 3D: slot 2 holds the armour, covering part 2 but not worn; slot 3 another armour
     // covering it, worn. The first covering slot ends the search: nothing.
-    let loaded = FORMS + 0x8900;
+    // (the loaded data from above, now with a 3D root)
     e.mem.set_u32(ACTOR + 0x64, loaded);
     e.mem.set_u32(loaded + 0x14, FORMS + 0x8a00);
     e.mem.set_u8(XDL + 8 + 2, 0);
