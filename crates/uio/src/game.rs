@@ -1,13 +1,15 @@
 //! UI Organizer's two places in the game (its patches at `0070A049` and `00A01B87`) and the game's
 //! calls it makes: the files read through the game's own Windows calls (KERNEL32's import slots,
 //! the platform layer every file the game reads goes through, as the built-in xNVSE's file
-//! commands read them), a menu file's text through `Menu::CompressAndStoreXML`, the parse through
-//! `Tile::ParseFile`.
+//! commands read them), a menu file's text through `Menu::CompressAndStoreXML`, and UIO's own parse
+//! (its parse cache and `ReadFile`'s "keep" byte), and its export `UIOInjectComponent`.
 
+use crate::build;
+use crate::hash::str_hash;
 use crate::lists::{self, Files};
 use crate::patch;
-use crate::reader::{Fetch, Reader, Served, Source, MAX_TEXT};
-use crate::Uio;
+use crate::reader::{Fetch, Reader, Served, Source, MAX_TEXT, NOT_KEPT};
+use crate::{Parsed, Uio};
 use engine_core::prelude::*;
 
 /// KERNEL32's import slots the game's own file code calls.
@@ -191,8 +193,20 @@ impl Source for GameSource<'_> {
 // names and code patches it also makes are UIO's later parts, not built yet).
 /// The seam at `0070A049` (the new interface manager stored): UIO's lists read, and each file they
 /// target read (`Menu::CompressAndStoreXML`) and patched in memory; a target the game cannot read
-/// is passed over. Nothing is written to a file. The exe's path goes on.
+/// is passed over. Nothing is written to a file. Before that, the parse cache's entries for the
+/// files whose parse UIO does not keep (`s_cachedParsedData.Emplace(path, false)`: globals, the
+/// six menus the game keeps open and `jip_temp.xml`; an entry already there stays). The exe's
+/// path goes on.
 pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    for path in NOT_KEPT.iter().copied().chain([INJECTED_FILE]) {
+        e.ext::<Uio>()
+            .parsed
+            .entry(str_hash(path))
+            .or_insert(Parsed {
+                storage: 0,
+                cached: false,
+            });
+    }
     let lists = lists::scan(&mut GameFiles(e));
     for (file, tiles) in lists.iter() {
         if let Fetch::Text(text) = game_text(e, file, MAX_TEXT) {
@@ -204,28 +218,108 @@ pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
     None
 }
 
-// Translated from UIO 2.30 (426d963), ui_organizer.h: ResolveXMLFileHook (its reading; the parse
-// is the game's `Tile::ParseFile` on UIO's text until UIO's own parser is built).
-/// The seam at `00A01B87` (`Tile::ReadFile`'s call of `Tile::ParseFile`): the file's text from
-/// UIO's reader ([`Reader::file`]) parsed by `Tile::ParseFile` from a buffer on the game's heap
-/// (freed after). A file the game cannot find answers nothing, so the exe's call runs (UIO
-/// answers no storage there, which `ReadFile` then reads through: a deliberate difference).
+// Translated from UIO 2.30 (426d963), ui_organizer.h: ResolveXMLFileHook (the parse cache, the
+// text taken, the parse; the debug log of UIO's developer mode left out).
+/// The seam at `00A01B87` (`Tile::ReadFile`'s call of `Tile::ParseFile`; `a`: the path and the
+/// address of `ReadFile`'s "keep" byte): UIO's own parse, in place of the game's.
+///
+/// - A file whose parse UIO keeps ([`Uio::parsed`]) answers the kept storage and sets the byte
+///   (`ReadFile` then neither deletes it nor lets its menu delete the templates).
+/// - Else the text: the one [`inject_component`] handed over, or the file's from UIO's reader
+///   ([`Reader::file`]: the patched text, its includes expanded); parsed by UIO's reader
+///   ([`build::parse`]) into a new storage, kept (and the byte set) unless the file is one of
+///   those whose parse UIO does not keep.
+/// - A file the game cannot find answers nothing, so the exe's call runs (UIO answers no storage
+///   there, which `ReadFile` then reads through: a deliberate difference); likewise when the game
+///   can give no memory for the storage.
 pub fn read_file(e: &mut Engine, a: &[u32]) -> Option<u32> {
-    let path_at = a[0];
-    let path = nvse::table::guest_text(e, path_at);
-    let text = Reader::new(&mut GameSource(e)).file(&path)?;
-    let length = u32::try_from(text.len()).ok()?;
-    let buffer = e
-        .call(HEAP_ALLOCATE, &args![GAME_HEAP, length.checked_add(1)?])
-        .u32();
-    if buffer == 0 {
+    let path = nvse::table::guest_text(e, a[0]);
+    let keep_at = a.get(1).copied().unwrap_or(0);
+    let set_keep = |e: &mut Engine| {
+        if keep_at != 0 {
+            e.mem.set_u8(keep_at, 1);
+        }
+    };
+    let hash = str_hash(&path);
+    let entry = *e.ext::<Uio>().parsed.entry(hash).or_insert(Parsed {
+        storage: 0,
+        cached: true,
+    });
+    if entry.storage != 0 {
+        set_keep(e);
+        return Some(entry.storage);
+    }
+    let text = match e.ext::<Uio>().extern_text.take() {
+        Some(text) => Some(text),
+        None => Reader::new(&mut GameSource(e)).file(&path),
+    };
+    let storage = build::parse(e, &text?);
+    if storage == 0 {
         return None;
     }
-    e.mem.write(buffer, &text);
-    e.mem.set_u8(buffer + length, 0);
-    let storage = e
-        .call(TILE_PARSE_FILE, &args![path_at, buffer, length])
-        .u32();
-    e.call(HEAP_FREE, &args![GAME_HEAP, buffer]);
+    if entry.cached {
+        if let Some(p) = e.ext::<Uio>().parsed.get_mut(&hash) {
+            p.storage = storage;
+        }
+        set_keep(e);
+    }
     Some(storage)
+}
+
+/// `jip_temp.xml` (`kTempXMLFile`, UIO): the name the injected text is read under.
+pub const INJECTED_FILE: &[u8] = b"jip_temp.xml";
+/// `Tile::ReadFile` (`thiscall`, UIO's `ADDR_CreateTileFromXML`).
+pub const TILE_READ_FILE: u32 = 0x00a0_1b00;
+/// The longest text [`inject_component`] takes (1 MiB; JIP's own string buffer is far smaller);
+/// longer gives nothing.
+pub const MAX_INJECTED: usize = 1 << 20;
+
+// Translated from UIO 2.30 (426d963), ui_organizer.h: UIOInjectComponent (the export, ordinal 10).
+/// UIO's `UIOInjectComponent(parent, text)`: `text` (menu XML) made into tiles under `parent`:
+/// cleaned up by the game as a file named `jip_temp.xml` would be (`Menu::CompressAndStoreXML`
+/// with the text), its includes expanded by UIO's reader, then read with `Tile::ReadFile` under
+/// that name, which takes this text instead of a file ([`read_file`]; UIO never keeps that
+/// parse). The new tile, or 0 when the text comes out empty. Nothing is written to a file.
+pub fn inject_component(e: &mut Engine, parent: u32, text: &[u8]) -> u32 {
+    let text = &text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())];
+    if text.len() > MAX_INJECTED {
+        return 0;
+    }
+    let buffer = e
+        .call(HEAP_ALLOCATE, &args![GAME_HEAP, text.len() as u32 + 1])
+        .u32();
+    if buffer == 0 {
+        return 0;
+    }
+    e.mem.write(buffer, text);
+    e.mem.set_u8(buffer + text.len() as u32, 0);
+    let storage = nvse::events::with_guest_text(e, INJECTED_FILE, |e, p| {
+        e.call(COMPRESS_AND_STORE_XML, &args![p, buffer]).u32()
+    });
+    e.call(HEAP_FREE, &args![GAME_HEAP, buffer]);
+    if storage == 0 {
+        return 0;
+    }
+    let (length, data) = (e.mem.u32(storage), e.mem.u32(storage + 4));
+    let cleaned = if data == 0 || length == 0 {
+        Vec::new()
+    } else {
+        e.mem.bytes(data, length)
+    };
+    e.call(HEAP_FREE, &args![GAME_HEAP, data]);
+    e.call(HEAP_FREE, &args![GAME_HEAP, storage]);
+    if cleaned.is_empty() {
+        return 0;
+    }
+    let resolved = Reader::new(&mut GameSource(e)).resolve(cleaned, 0, MAX_TEXT);
+    if resolved.is_empty() {
+        return 0;
+    }
+    e.ext::<Uio>().extern_text = Some(resolved);
+    let tile = nvse::events::with_guest_text(e, INJECTED_FILE, |e, p| {
+        e.call(TILE_READ_FILE, &args![parent, p]).u32()
+    });
+    // `ReadFile` took it through the seam; nothing is left for a later read.
+    e.ext::<Uio>().extern_text = None;
+    tile
 }

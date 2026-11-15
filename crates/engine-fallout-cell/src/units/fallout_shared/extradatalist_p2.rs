@@ -1929,12 +1929,24 @@ pub fn fn_0041d000(e: &mut Engine, this: Ptr<ExtraDataList>) {
 /// (count), `0x27` (time left), `0x2F` (leveled item), `0x30` (scale) or
 /// `0x4A` (hot key). Any other type ends the scan with false. The engine map
 /// has no name for it.
+///
+/// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44: `SafeWrite8(0x41D0F6, 3)`) moves `0x27`,
+/// its keyed data's type, to the arm that ends the scan with false while JIP answers "installed"
+/// (the seam answers whether it does). One load a node while JIP is not installed.
 pub fn fn_0041d030(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
     lock(e, 0);
     let mut owned = false;
     let mut node: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
     while !node.is_null() {
-        match get_type(e, node) {
+        let extra_type = get_type(e, node);
+        if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && extra_type == 0x27
+            && e.site(0x0041_d0f6, &[this.addr()]).is_some()
+        {
+            unlock(e);
+            return false;
+        }
+        match extra_type {
             0x0d | 0x1c | 0x20 | 0x24 | 0x27 | 0x2f | 0x30 | 0x4a => {}
             0x21 => owned = true,
             _ => {
@@ -1954,6 +1966,11 @@ pub fn fn_0041d030(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
 /// types `0x0D`, `0x1C`, `0x20`, `0x21` (ownership), `0x24`, `0x27`, `0x2F`,
 /// `0x30` and `0x4A`; a non-zero `worn_allowed` also allows `0x16` (worn).
 /// Any other type ends the scan with false.
+///
+/// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44: `SafeWrite8(0x41D212, 1)` and
+/// `SafeWrite8(0x41D25A, 1)`, the entries of `0x27` in the exe's two tables, worn allowed and not)
+/// makes its keyed data's type end the scan with false while JIP answers "installed" (the seam of
+/// the table the flag picks answers whether it does). One load a node while JIP is not installed.
 pub fn extra_data_list_is_extra_defaultfor_container(
     e: &mut Engine,
     this: Ptr<ExtraDataList>,
@@ -1963,6 +1980,18 @@ pub fn extra_data_list_is_extra_defaultfor_container(
     let mut node: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
     while !node.is_null() {
         let extra_type = get_type(e, node);
+        if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 && extra_type == 0x27
+        {
+            let table = if worn_allowed != 0 {
+                0x0041_d212
+            } else {
+                0x0041_d25a
+            };
+            if e.site(table, &[this.addr()]).is_some() {
+                unlock(e);
+                return false;
+            }
+        }
         let allowed = matches!(
             extra_type,
             0x0d | 0x1c | 0x20 | 0x21 | 0x24 | 0x27 | 0x2f | 0x30 | 0x4a
@@ -4943,5 +4972,86 @@ mod tests {
         });
         assert_eq!(deleted(&log), vec![extra.addr()]);
         assert!(sorted_types(&e, list).is_empty());
+    }
+
+    thread_local! {
+        /// The JIP seams asked (address, words) and what their handler answers.
+        static ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(Some(1)) };
+    }
+
+    fn at_owned_only(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ASKED.with(|s| s.borrow_mut().push((0x0041_d0f6, a.to_vec())));
+        ANSWER.with(|v| v.get())
+    }
+
+    fn at_default_worn(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ASKED.with(|s| s.borrow_mut().push((0x0041_d212, a.to_vec())));
+        ANSWER.with(|v| v.get())
+    }
+
+    fn at_default_not_worn(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ASKED.with(|s| s.borrow_mut().push((0x0041_d25a, a.to_vec())));
+        ANSWER.with(|v| v.get())
+    }
+
+    /// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44: the type 0x27 entries `0x41D0F6`,
+    /// `0x41D212`, `0x41D25A`): with the game patch word clear, or holding only the fix bits, no
+    /// seam is asked even with a handler in, and both scans pass type 0x27 as the exe; with
+    /// `INSTALLED` the seam of the scan (and of the flag's table) is asked at the type 0x27 node
+    /// with the list, and its answer ends the scan with false under the lock; no answer, or no
+    /// type 0x27, leaves the exe's scan.
+    #[test]
+    fn jip_extra_jip_seams_end_the_scans() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_d0f6), at_owned_only);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_d212), at_default_worn);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0041_d25a), at_default_not_worn);
+        let (list, _) = list_with(&mut e, &[(0x21, 0), (0x27, 0)]);
+        let (plain, _) = list_with(&mut e, &[(0x21, 0), (0x24, 0)]);
+        let scans = |e: &mut Engine, list: Ptr<ExtraDataList>| {
+            let log = logged(e, |e| {
+                let owned = e.call(0x0041_d030, &args![list]).bool();
+                let worn = e.call(0x0041_d120, &args![list, 1u32]).bool();
+                let not_worn = e.call(0x0041_d120, &args![list, 0u32]).bool();
+                ASKED.with(|s| {
+                    s.borrow_mut()
+                        .push((0, vec![owned as u32, worn as u32, not_worn as u32]))
+                });
+            });
+            assert_eq!(calls_to(&log, LOCK).len(), 3);
+            assert_eq!(calls_to(&log, UNLOCK).len(), 3);
+            ASKED.with(|s| s.take())
+        };
+        let answers = |seen: &[(u32, Vec<u32>)]| seen.last().unwrap().1.clone();
+        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
+            e.set_jip_patches(word);
+            let seen = scans(&mut e, list);
+            assert_eq!(seen.len(), 1, "not asked with {word:x}");
+            assert_eq!(answers(&seen), vec![1, 1, 1]);
+        }
+        e.set_jip_patches(jip_patches::INSTALLED);
+        let seen = scans(&mut e, list);
+        assert_eq!(
+            seen[..3],
+            [
+                (0x0041_d0f6, vec![list.addr()]),
+                (0x0041_d212, vec![list.addr()]),
+                (0x0041_d25a, vec![list.addr()]),
+            ]
+        );
+        assert_eq!(answers(&seen), vec![0, 0, 0]);
+        // No type 0x27: not asked.
+        let seen = scans(&mut e, plain);
+        assert_eq!(seen.len(), 1);
+        assert_eq!(answers(&seen), vec![1, 1, 1]);
+        // No answer: the exe's scan.
+        ANSWER.with(|v| v.set(None));
+        let seen = scans(&mut e, list);
+        assert_eq!(seen.len(), 4);
+        assert_eq!(answers(&seen), vec![1, 1, 1]);
+        ANSWER.with(|v| v.set(Some(1)));
     }
 }
