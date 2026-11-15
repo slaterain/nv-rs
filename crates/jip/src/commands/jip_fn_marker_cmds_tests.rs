@@ -125,6 +125,47 @@ fn place_at_cell_before_the_marker_does_nothing() {
     assert_eq!(result, 0.0);
 }
 
+/// A reference index whose variable holds no form: the read fails there.
+const NO_FORM: u16 = 9;
+
+/// The cell argument a reference variable set to 0: `ExtractArgsEx` fails, JIP returns before
+/// anything: no `PlaceAtMe`, the marker's cell kept, result 0, handled.
+#[test]
+fn place_at_cell_failed_read_of_the_cell_does_nothing() {
+    let mut e = engine();
+    let (ok, result) = ts::call(
+        &mut e,
+        0x285d,
+        &[r(1), n(1), r(NO_FORM), z(1.0), z(2.0), z(3.0)],
+    );
+    assert_eq!(ok, 1);
+    assert!(calls_to(PLACE_AT_ME).is_empty());
+    assert_eq!(e.mem.u32(MARKER + PARENT_CELL), 0xdead_0000);
+    assert_eq!(result, 0.0);
+    assert_eq!(ts::form_result(&e), 0);
+}
+
+/// The read failing at the last float (a global of a reference index that holds nothing) after
+/// a good cell: the two floats read are in the marker (written as `ExtractArgsEx` reads them),
+/// but JIP returns on the failed read: no `PlaceAtMe`, the marker's cell kept, result 0.
+#[test]
+fn place_at_cell_failed_read_after_the_cell_places_nothing() {
+    let mut e = engine();
+    set_ref(&mut e, 2, CELL_FORM);
+    let bad_global = vec![b'G', NO_FORM as u8, 0];
+    let (ok, result) = ts::call(
+        &mut e,
+        0x285d,
+        &[r(1), n(1), r(2), z(5.0), z(6.0), bad_global],
+    );
+    assert_eq!(ok, 1);
+    assert_eq!(position(&e), [5.0, 6.0, -1.0]);
+    assert!(calls_to(PLACE_AT_ME).is_empty());
+    assert_eq!(e.mem.u32(MARKER + PARENT_CELL), 0xdead_0000);
+    assert_eq!(result, 0.0);
+    assert_eq!(ts::form_result(&e), 0);
+}
+
 /// A line with only two of the floats (the reader reads the arguments the line has): the third
 /// keeps the marker's last value, as `ExtractArgsEx` leaves the field it does not write, and the
 /// form is placed there.
