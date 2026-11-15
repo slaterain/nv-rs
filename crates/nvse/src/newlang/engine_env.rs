@@ -236,10 +236,7 @@ impl EngineEnv<'_> {
         } else if r.opcode < NVSE_OPCODE_TEST {
             Some((b"NVSE".to_vec(), crate::VERSION.0))
         } else {
-            crate::plugins::built_ins(self.e)
-                .into_iter()
-                .filter(|p| p.opcode_base <= r.opcode)
-                .max_by_key(|p| p.opcode_base)
+            crate::plugins::parent_of(self.e, r.opcode, false)
                 .map(|p| (p.name.as_bytes().to_vec(), p.version))
         };
         CmdInfo {

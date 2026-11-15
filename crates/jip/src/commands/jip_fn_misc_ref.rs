@@ -145,7 +145,7 @@ const EXTRA_TELEPORT: u32 = 0x2b;
 const EXTRA_ENABLE_CHILDREN: u32 = 0x38;
 const EXTRA_LINKED_CHILDREN: u32 = 0x52;
 const EXTRA_PRIMITIVE: u32 = 0x6b;
-const EXTRA_WORD: u32 = 0x0c;
+pub(crate) const EXTRA_WORD: u32 = 0x0c;
 /// `BGSPrimitive::bounds` (+0x18, three floats).
 const PRIMITIVE_BOUNDS: u32 = 0x18;
 /// `kFormType_TESObjectDOOR`, `kFormType_BGSPlaceableWater` (its water +0x4C).
@@ -741,10 +741,10 @@ const ROTATION: u32 = 0x24;
 const POSITION: u32 = 0x30;
 const LOADED_DATA: u32 = 0x64;
 const ROOT_NODE: u32 = 0x14;
-const WORLD_ROTATE: u32 = 0x68;
-const WORLD_TRANSLATE: u32 = 0x8c;
+pub(crate) const WORLD_ROTATE: u32 = 0x68;
+pub(crate) const WORLD_TRANSLATE: u32 = 0x8c;
 /// `Flt180dPI` (JIP's `57.29578018F`, `GET_PS(9)`'s lanes).
-const FLT_180_D_PI: f32 = 57.295_78;
+pub(crate) const FLT_180_D_PI: f32 = 57.295_78;
 
 /// `ResultVars::Set`: each value as a double into its script variable (`ScriptLocal::data`,
 /// +8), x, y, z in that order.
@@ -754,12 +754,12 @@ fn set_vars(e: &mut Engine, vars: [u32; 3], values: [f32; 3]) {
     }
 }
 
-fn floats3(e: &Engine, at: u32) -> [f32; 3] {
+pub(crate) fn floats3(e: &Engine, at: u32) -> [f32; 3] {
     [e.mem.f32(at), e.mem.f32(at + 4), e.mem.f32(at + 8)]
 }
 
 /// JIP's `GetRefNiNode`: the reference's root node, 0 without 3D.
-fn ref_ni_node(e: &Engine, refr: u32) -> u32 {
+pub(crate) fn ref_ni_node(e: &Engine, refr: u32) -> u32 {
     let loaded = e.mem.u32(refr + LOADED_DATA);
     if loaded == 0 {
         0
@@ -785,7 +785,7 @@ fn neg(v: f32) -> f32 {
 // (asm).
 /// The rotation matrix (by rows) of pitch, roll and yaw, each product in the order the asm's
 /// lanes multiply, the minus signs as its sign flips.
-fn from_euler_pry(pry: [f32; 3]) -> [f32; 9] {
+pub(crate) fn from_euler_pry(pry: [f32; 3]) -> [f32; 9] {
     let ([s0, s1, s2], [c0, c1, c2]) = sin_cos(pry);
     [
         c1 * c2,
@@ -805,7 +805,7 @@ fn from_euler_pry(pry: [f32; 3]) -> [f32; 9] {
 /// Each row times the vector, summed as `haddps` twice sums: (a0 + a1) + (a2 + a3), where a3 is
 /// the float after the row (the next row's first; after the last row `after`, the word past the
 /// matrix) times the vector's cleared fourth lane: 0, or NaN for an infinite or NaN word.
-fn multiply_vector(m: &[f32; 9], after: f32, v: [f32; 3]) -> [f32; 3] {
+pub(crate) fn multiply_vector(m: &[f32; 9], after: f32, v: [f32; 3]) -> [f32; 3] {
     let row = |i: usize| {
         let next = if i == 2 { after } else { m[3 * i + 3] };
         (m[3 * i] * v[0] + m[3 * i + 1] * v[1]) + (m[3 * i + 2] * v[2] + next * 0.0)
@@ -821,7 +821,7 @@ fn to_euler_pry_inv(m: &[f32; 9]) -> [f32; 3] {
     [atan2(m[7], m[8]), asin(neg(m[6])), atan2(m[3], m[0])]
 }
 
-fn matrix_at(e: &Engine, at: u32) -> [f32; 9] {
+pub(crate) fn matrix_at(e: &Engine, at: u32) -> [f32; 9] {
     std::array::from_fn(|i| e.mem.f32(at + 4 * i as u32))
 }
 
@@ -924,17 +924,17 @@ fn get_translated_pos(e: &mut Engine, w: &[u32]) -> Ret {
 /// +0x160, z angle +0x16C, world or cell +0x170. `ExtraStartingPosition` (type 0x0F: its
 /// constructor `00430780` copies the position to +0xC and the angles to +0x18) and
 /// `ExtraStartingWorldOrCell` (type 0x49, the form at +0xC: constructor `004308C0`).
-const ACTOR_START_POS: u32 = 0x160;
-const ACTOR_START_Z_ROT: u32 = 0x16c;
-const ACTOR_START_CELL: u32 = 0x170;
-const EXTRA_STARTING_POSITION: u32 = 0x0f;
-const EXTRA_STARTING_WORLD_OR_CELL: u32 = 0x49;
-const STARTING_ROTATION: u32 = 0x18;
+pub(crate) const ACTOR_START_POS: u32 = 0x160;
+pub(crate) const ACTOR_START_Z_ROT: u32 = 0x16c;
+pub(crate) const ACTOR_START_CELL: u32 = 0x170;
+pub(crate) const EXTRA_STARTING_POSITION: u32 = 0x0f;
+pub(crate) const EXTRA_STARTING_WORLD_OR_CELL: u32 = 0x49;
+pub(crate) const STARTING_ROTATION: u32 = 0x18;
 /// `kFormType_TESObjectCELL`, `kFormType_TESWorldSpace` and a worldspace's persistent cell
 /// (+0x34).
-const CELL: u8 = 0x39;
-const WORLD_SPACE: u8 = 0x41;
-const WORLD_CELL: u32 = 0x34;
+pub(crate) const CELL: u8 = 0x39;
+pub(crate) const WORLD_SPACE: u8 = 0x41;
+pub(crate) const WORLD_CELL: u32 = 0x34;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
 // Cmd_GetEditorPosition_Execute.

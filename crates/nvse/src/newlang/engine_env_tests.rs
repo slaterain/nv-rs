@@ -124,6 +124,35 @@ fn commands() {
     assert_eq!(env.command(b"NoSuchCommand"), None);
 }
 
+/// A built-in with no opcode base (UI Organizer's) registered no command: an opcode of the first
+/// plugin range has no parent plugin while it is the only built-in (`GetInfoFromBase` (xNVSE)
+/// refuses base 0).
+#[test]
+fn a_built_in_with_no_opcode_base_is_no_commands_parent() {
+    let mut e = engine();
+    crate::plugins::register(
+        &mut e,
+        crate::plugins::BuiltIn {
+            file: "ui_organizer.dll",
+            name: "UI Organizer Plugin",
+            version: 230,
+            opcode_base: 0,
+            listed: true,
+            listener: None,
+            save: None,
+            load: None,
+            pre_load: None,
+            new_game: None,
+        },
+    );
+    let at = record_of(&e, 0x1002);
+    for opcode in [0x2000, 0x2005, 0x21ff] {
+        e.mem.set_u32(at + 8, opcode);
+        let mut env = engine_env(&mut e, 0);
+        assert_eq!(env.cmd_info(0x1002, at).plugin, None, "{opcode:#x}");
+    }
+}
+
 #[test]
 fn vanilla_enums() {
     let mut e = engine();
