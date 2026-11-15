@@ -10514,7 +10514,11 @@ mod tests {
         assert_eq!(run(installed, 0x3333, None), 1);
         assert_eq!(run(installed, 0x1111, Some(ash_pile_no)), 1);
         assert_eq!(run(installed, 0x3333, Some(ash_pile_yes)), 0);
-        assert_eq!(run(installed, 0x1111, Some(ash_pile_high)), 1, "the low byte decides");
+        assert_eq!(
+            run(installed, 0x1111, Some(ash_pile_high)),
+            1,
+            "the low byte decides"
+        );
     }
 
     /// A grabbed object (an object with vtable slots 0x100, 0x224, 0x1d0,
