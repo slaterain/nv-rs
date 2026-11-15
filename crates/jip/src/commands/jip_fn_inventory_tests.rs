@@ -1656,12 +1656,7 @@ fn add_item_alt_equips_only_on_an_actor() {
     // The container reference shares the actor's changes (the armour's entry in them).
     put_extra(&mut e, CONT_REF + 0x44, FORMS + 0x4480, 0x15, CHANGES_DATA);
     assert_ne!(crate::overrides::changes_list(&mut e, CONT_REF), 0);
-    call_on(
-        &mut e,
-        0x2606,
-        CONT_REF,
-        &[rf(ARMO), n(1), z(100.0), n(1)],
-    );
+    call_on(&mut e, 0x2606, CONT_REF, &[rf(ARMO), n(1), z(100.0), n(1)]);
     assert_eq!(b3_calls(MOVE_FN).len(), 1, "added");
     assert!(b3_calls(EQUIP_FN).is_empty(), "not an actor: no equip");
 }
