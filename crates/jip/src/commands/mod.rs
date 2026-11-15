@@ -33,6 +33,7 @@ pub mod jip_fn_grass;
 pub mod jip_fn_imagespace;
 pub mod jip_fn_impact_data;
 pub mod jip_fn_input;
+pub mod jip_fn_inventory;
 pub mod jip_fn_land_texture;
 pub mod jip_fn_light;
 pub mod jip_fn_marker_cmds;
@@ -68,6 +69,7 @@ pub mod ln_fn_load_screen;
 pub mod ln_fn_map_marker;
 pub mod ln_fn_math;
 pub mod ln_fn_misc_ref;
+pub mod ln_fn_miscellaneous;
 pub mod ln_fn_perk;
 pub mod ln_fn_race;
 pub mod ln_fn_radio_ref;
@@ -109,6 +111,7 @@ pub const ALL_CONDITIONS: &[Conditions] = &[
     jip_fn_ui::CONDITIONS,
     jip_fn_actor::CONDITIONS,
     jip_fn_miscellaneous::CONDITIONS,
+    ln_fn_miscellaneous::CONDITIONS,
     jip_fn_misc_ref_havok::CONDITIONS,
 ];
 
@@ -186,6 +189,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_marker_cmds::COMMANDS,
     jip_fn_script_vars::COMMANDS,
     jip_fn_misc_ref_nodes::COMMANDS,
+    jip_fn_inventory::COMMANDS,
+    ln_fn_miscellaneous::COMMANDS,
     jip_fn_misc_ref_havok::COMMANDS,
 ];
 
@@ -774,6 +779,8 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_script",
             "jip_fn_misc_ref",
+            "jip_fn_inventory",
+            "ln_fn_miscellaneous",
             "jip_fn_misc_ref",
         ];
         let mut seen = std::collections::HashSet::new();
@@ -797,6 +804,7 @@ mod tests {
             "jip_fn_ui",
             "jip_fn_actor",
             "jip_fn_miscellaneous",
+            "ln_fn_miscellaneous",
             "jip_fn_misc_ref",
         ]) {
             for &(opcode, _, _) in list.iter() {
@@ -806,7 +814,7 @@ mod tests {
                 assert!(seen.insert(opcode), "{opcode:04x} listed twice");
             }
         }
-        assert_eq!(ALL_CONDITIONS.len(), 12);
+        assert_eq!(ALL_CONDITIONS.len(), 13);
         for (list, file) in ALL_CONDITIONS_ONLY
             .iter()
             .zip(["jip_fn_aux_variable", "jip_fn_miscellaneous"])
