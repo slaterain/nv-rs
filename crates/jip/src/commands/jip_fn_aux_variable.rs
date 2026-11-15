@@ -96,8 +96,15 @@ pub fn maps_may_hold(e: &mut Engine) -> bool {
         .load(std::sync::atomic::Ordering::SeqCst)
 }
 
-/// Marks the maps as possibly holding variables (a writer that bypasses [`aux_maps`]).
+/// Marks the maps as possibly holding variables, holding JIP's slot (a writer that bypasses
+/// [`aux_maps`] calls it too). The slot is taken FIRST, then the flag stored: a store made
+/// before taking it could land while a destructor on another thread holds the slot, finds both
+/// maps empty and clears the flag; this writer would then insert with the flag saying "empty"
+/// and later destructors would keep a temporary reference's variables. Set and cleared only by
+/// a holder, the flag is exact whenever the slot is free.
 pub fn maps_reached(e: &mut Engine) {
+    // Taking the slot is the point (held until this engine's next release point).
+    let _ = e.ext::<Jip>();
     e.ext_free::<AuxVarsHeld>()
         .0
         .store(true, std::sync::atomic::Ordering::SeqCst);
@@ -112,6 +119,7 @@ pub fn maps_found_empty(e: &mut Engine) {
 
 /// The aux variables: the saved ones or the temporary ones (both in JIP's shared slot).
 pub fn aux_maps(e: &mut Engine, temp: bool) -> &mut AuxMods {
+    // The slot first, then the flag ([`maps_reached`]).
     maps_reached(e);
     if temp {
         &mut e.ext::<Jip>().temp_aux_vars

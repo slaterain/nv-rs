@@ -324,3 +324,43 @@ fn temporary_variables_written_on_one_engine_go_on_another() {
     );
     engine_core::extend::release_held_for_test();
 }
+
+/// The flag is exact whenever JIP's slot is free: through writes on one engine and destroys on
+/// another (each holding the slot in turn), it is true whenever either map holds a variable and
+/// false only after a destroy found both empty.
+#[test]
+fn the_may_hold_flag_follows_writes_and_destroys_on_two_engines() {
+    let mut e = world(0x15, TEMP_ID);
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    let release = engine_core::extend::release_held_for_test;
+    let holds = |e: &mut Engine| {
+        let jip = e.ext::<Jip>();
+        !(jip.saved.aux_vars.is_empty() && jip.temp_aux_vars.is_empty())
+    };
+    release();
+    // Empty maps: a destroy clears the flag.
+    destroy(&mut e, REF);
+    assert!(!maps_may_hold(&mut e));
+    release();
+    // A write on the other engine sets it, a destroy of another id keeps it.
+    *aux_maps(&mut other, true) = three_mods();
+    release();
+    e.mem.set_u32(REF + 0xc, 0xff00_0999);
+    destroy(&mut e, REF);
+    assert!(holds(&mut e) && maps_may_hold(&mut e));
+    release();
+    // Emptied by a write: the next destroy clears the flag; a new write sets it again.
+    *aux_maps(&mut other, true) = AuxMods::new(8);
+    release();
+    destroy(&mut e, REF);
+    assert!(!holds(&mut e) && !maps_may_hold(&mut e));
+    release();
+    *aux_maps(&mut other, false) = three_mods();
+    release();
+    assert!(maps_may_hold(&mut e));
+    e.mem.set_u32(REF + 0xc, TEMP_ID);
+    destroy(&mut e, REF);
+    assert!(holds(&mut e) && maps_may_hold(&mut e), "mod 3 keeps its owner");
+    release();
+}
