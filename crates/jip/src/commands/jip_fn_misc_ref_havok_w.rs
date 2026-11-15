@@ -31,11 +31,14 @@
 //! the low byte does nothing (JIP adds them to the velocity's address and stores there); an axis
 //! byte other than X, Y or Z does nothing (JIP's 8-bit offset reads another field); a motion type
 //! outside the game's 1 to 7 is not passed on (the game's motion builder makes a fixed motion for
-//! it under a type byte that does not say fixed); a null wrapper, Havok object, shape or base form
-//! counts as none where JIP reads through it; `GetRayCastMaterial` returns normally where JIP's
-//! code returns with `retn 0x14` on its found paths (one stack word more than its four
-//! arguments; its compiled caller restores the stack from its frame pointer, assumed, not read in
-//! JIP's DLL).
+//! it under a type byte that does not say fixed; for example `SetCollisionObjProperty * 8 0`
+//! leaves every body as it is, where JIP passes type 0 to each one's `SetMotionType`); a null
+//! wrapper, Havok object, shape or base form counts as none where JIP reads through it;
+//! `GetRayCastMaterial` returns normally where JIP's helper returns with `retn 0x14` on its found
+//! paths, one stack word more than its four `__stdcall` arguments. Read in jip_nvse.dll 57.30:
+//! the command's own function keeps a frame pointer, so the stack comes back right, but its
+//! `pop esi` then reads the node-name buffer, so JIP returns to the script runner with ESI
+//! changed; the port changes no register.
 
 use super::havok_refs as h;
 use super::jip_fn_misc_ref_havok::{axis_arg, mobile_body, name_arg, node_transform, rotation};

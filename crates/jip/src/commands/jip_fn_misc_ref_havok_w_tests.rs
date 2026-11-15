@@ -164,6 +164,23 @@ fn linear_velocity_global_local_added_and_woken() {
     );
     assert_eq!(get4(&e, b + 0x1b0), [11.0, 22.0, 33.0, 40.0]);
     assert_eq!(calls_to(wm::ENTITY_ACTIVATE).len(), 4);
+    // Flags exactly 0xFF (the highest JIP keeps in its byte): flags ^ 1 clears bit 0, so turned,
+    // added (2) to the angular velocity (0x10): (1, -3, 2) + (1, 2, 3); the fourth lane NaN + 4.
+    set4(&mut e, b + 0x1c0, [1.0, 2.0, 3.0, 4.0]);
+    assert_eq!(
+        run(
+            &mut e,
+            0x28d0,
+            refr,
+            &vel_args(b"", [1.0, 2.0, 3.0], Some(0xff))
+        ),
+        1.0
+    );
+    let v = get4(&e, b + 0x1c0);
+    assert_eq!(&v[..3], &[2.0, -1.0, 5.0]);
+    assert!(v[3].is_nan());
+    assert_eq!(get4(&e, b + 0x1b0), [11.0, 22.0, 33.0, 40.0]);
+    assert_eq!(calls_to(wm::ENTITY_ACTIVATE).len(), 5);
 }
 
 #[test]
@@ -357,6 +374,49 @@ fn push_object_adds_the_direction_from_the_point_times_the_strength() {
 }
 
 #[test]
+fn push_object_walks_child_nodes_and_skips_phantoms() {
+    let mut e = wsetup();
+    // Root (mobile) > Child (keyframed) > Grand (mobile), and Root > Ph: a phantom whose motion
+    // byte +0xE8 has bit 1 set. JIP's NiNode::ApplyForce pushes a node's object only when it is
+    // a rigid body (type 1) with motion bit 1, then walks each child node, depth first.
+    let grand = node(&mut e, b"Grand", &[]);
+    let child = node(&mut e, b"Child", &[grand]);
+    let ph_node = node(&mut e, b"Ph", &[]);
+    let root = node(&mut e, b"Root", &[child, ph_node]);
+    let refr = reference(&mut e, REF_VTBL, 0x0100_0084, 0, root);
+    let (b_root, b_child, b_grand) = (body(&mut e, 2), body(&mut e, 4), body(&mut e, 2));
+    let ph = havok(&mut e, 2);
+    e.mem.set_u8(ph + 0xe8, 2);
+    for (blk, obj) in [
+        (root, b_root),
+        (child, b_child),
+        (grand, b_grand),
+        (ph_node, ph),
+    ] {
+        attach(&mut e, blk, obj);
+    }
+    let w_root = link(&mut e, root);
+    link(&mut e, child);
+    let w_grand = link(&mut e, grand);
+    link(&mut e, ph_node);
+    let k = h::from_havok();
+    set4(&mut e, CENTER, [103.0 / k, 204.0 / k, 300.0 / k, 0.0]);
+    run(&mut e, 0x2844, refr, &[z(0.0), z(0.0), z(0.0), z(10.0)]);
+    // The root's body, then the grandchild's: asked for their centres and woken, in walk order;
+    // the keyframed body and the phantom never.
+    let asked: Vec<u32> = calls_to(CENTER_FN).iter().map(|c| c[0]).collect();
+    assert_eq!(asked, vec![w_root, w_grand]);
+    assert_eq!(
+        calls_to(wm::ENTITY_ACTIVATE),
+        vec![vec![b_root], vec![b_grand]]
+    );
+    assert_eq!(get4(&e, b_grand + 0x1b0), get4(&e, b_root + 0x1b0));
+    assert!(get4(&e, b_grand + 0x1b0)[1] > 0.0);
+    assert_eq!(get4(&e, b_child + 0x1b0), [0.0; 4]);
+    assert_eq!(get4(&e, ph + 0x1b0), [0.0; 4]);
+}
+
+#[test]
 fn push_object_from_another_reference_and_not_for_actors() {
     let mut e = wsetup();
     let (refr, mobile, _, _) = pushable(&mut e);
@@ -427,9 +487,16 @@ fn collision_properties_zero_to_seven_are_stores() {
     assert_eq!(e.mem.f32(b + 0x1ac), 0.25);
     run(&mut e, 0x2914, refr, &[s(b""), n(7), z(-2.0)]);
     assert_eq!(e.mem.u32(b + 0x1ac), 0);
-    // Property 9: nothing.
+    // Property 9: nothing, not even as a motion type (a float whose bits are 4, which property
+    // 8's path would pass on as keyframed).
     e.mem.set_f32(b + 0x90, 7.0);
     run(&mut e, 0x2914, refr, &[s(b""), n(9), z(3.0)]);
+    run(
+        &mut e,
+        0x2914,
+        refr,
+        &[s(b""), n(9), z(f64::from(f32::from_bits(4)))],
+    );
     assert_eq!(e.mem.f32(b + 0x90), 7.0);
     assert!(calls_to(SET_MOTION_FN).is_empty());
 }
@@ -551,8 +618,9 @@ fn ray_cast_material_of_nothing_land_and_a_static() {
     let mut e = wsetup();
     let tes = world(&mut e, 0x0000_0000);
     let refr = looker(&mut e);
-    // Nothing hit: -1.
+    // Nothing hit: -1. The record's layer word: 6 without an argument.
     assert_eq!(run(&mut e, 0x28e3, refr, &[]), -1.0);
+    assert_eq!(e.mem.u32(PICK_LOG + 0x10 + 0x24), 6);
     // A block without a reference (the land): the hit point to the land lookup, its +0x1C byte
     // converted (2: dirt, 1).
     let land_block = node(&mut e, b"Land", &[]);
@@ -562,6 +630,7 @@ fn ray_cast_material_of_nothing_land_and_a_static() {
     e.mem.set_u8(texture + 0x1c, 2);
     e.mem.set_u32(LAND_ANSWER, texture);
     assert_eq!(run(&mut e, 0x28e3, refr, &[n(3)]), 1.0);
+    assert_eq!(e.mem.u32(PICK_LOG + 0x10 + 0x24), 3);
     let call = &calls_to(wm::LAND_AT)[0];
     assert_eq!(call[0], tes);
     let k = h::to_havok();
@@ -601,6 +670,25 @@ fn ray_cast_material_of_nothing_land_and_a_static() {
     e.mem.set_u32(target.body + 0x10, 0);
     assert_eq!(run(&mut e, 0x28e3, refr, &[]), -1.0);
     assert_eq!(calls_to(wm::LAND_AT).len(), 3);
+}
+
+#[test]
+fn material_convert_is_the_games_mapping() {
+    // The game's own 0058E8F0, read from the exe: a byte table at 0058E9A4 picks one of ten
+    // cases for materials 0-31; the cases' jump table (0058E97C) leads to stores of 0, 7, 1, 3,
+    // 2, 4, 6, 8, 5, 9 in that order.
+    const CASE: [u8; 32] = [
+        0, 1, 2, 3, 4, 5, 6, 6, 7, 8, 0, 5, 8, 5, 5, 5, 9, 9, 2, 0, 5, 5, 9, 9, 3, 9, 5, 5, 9, 9,
+        8, 8,
+    ];
+    const VALUE: [u8; 10] = [0, 7, 1, 3, 2, 4, 6, 8, 5, 9];
+    for (m, &c) in CASE.iter().enumerate() {
+        assert_eq!(
+            crate::commands::jip_fn_projectile::MATERIAL_CONVERT[m],
+            VALUE[c as usize],
+            "{m}"
+        );
+    }
 }
 
 #[test]
