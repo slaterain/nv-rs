@@ -9812,4 +9812,186 @@ mod tests {
         load(&mut e, 0x25, true);
         assert!(JIP_ASKED.with(|s| s.take()).is_empty());
     }
+
+    /// An engine for a save and a load through the game's own buffers: the translated
+    /// `BGSSaveGameBuffer` / `BGSLoadGameBuffer` functions run (the copy, the separators, the
+    /// variable-sized count), the save kind of types 0x24 and 0x27 is 2, the save-load mode
+    /// object says "not only sizing", a save-load warning fails the test, and no form is a file
+    /// form. JIP is put in answering "installed" (`Some(true)`), not answering it
+    /// (`Some(false)`), or not at all (`None`); the game heap JIP's ExtraJIP comes from is a
+    /// plain allocation.
+    fn round_trip_engine(jip: Option<bool>) -> Engine {
+        let mut e = engine();
+        e.map(SAVE_KIND_TABLE, 0x300);
+        for extra_type in [0x24u32, 0x27] {
+            e.mem.set_u32(SAVE_KIND_TABLE + extra_type * 4, 2);
+        }
+        let mode = e.mem.alloc(0x10);
+        e.mem.set_u8(mode + 0x0c, 0);
+        e.set_global::<u32>(0x011d_e134, mode);
+        e.register_double(FORM_ID_IS_FILE_FORM, |_, _| returns(0));
+        e.register_double(SAVE_GAME_WARNING, |_, a| -> Ret {
+            panic!("a save-load warning: {a:x?}")
+        });
+        if let Some(answers_installed) = jip {
+            jip::test_support::install_into_as(&mut e, answers_installed);
+        }
+        e.register_double(0x00aa_3e40, |e, a| returns(e.mem.alloc(a[1])));
+        e
+    }
+
+    /// A save buffer (`BGSSaveFormBuffer`: the buffer's words, the save kind at +0x17, the form
+    /// saved at +0x20) over 0x100 bytes; its virtual reference (+4) is that form, its flag (+8)
+    /// 0. Answers the buffer and its bytes.
+    fn real_save_buffer(e: &mut Engine, form: u32) -> (u32, u32) {
+        e.register(0x0200_7004, |e, a| returns(e.mem.u32(a[0] + 0x20)));
+        e.register(0x0200_7008, |_, _| returns(0));
+        let buffer = object_with_slots(e, &[(4, 0x0200_7004), (8, 0x0200_7008)]);
+        let bytes = e.mem.alloc(0x100);
+        e.mem.set_u32(buffer + 4, bytes);
+        e.mem.set_u32(buffer + 8, 0x100);
+        e.mem.set_u32(buffer + 0x0c, 0);
+        e.mem.set_u32(buffer + 0x10, 0);
+        e.mem.set_u32(buffer + 0x17, 2);
+        e.mem.set_u32(buffer + 0x20, form);
+        (buffer, bytes)
+    }
+
+    /// A load buffer over `size` saved bytes at `bytes`, read from the start; its virtual
+    /// reference (+8) and owner (+0xC) are 0, its save kind (+0x17) 2.
+    fn real_load_buffer(e: &mut Engine, bytes: u32, size: u32) -> u32 {
+        e.register(0x0200_7108, |_, _| returns(0));
+        e.register(0x0200_710c, |_, _| returns(0));
+        let buffer = object_with_slots(e, &[(8, 0x0200_7108), (0x0c, 0x0200_710c)]);
+        e.mem.set_u32(buffer + 4, bytes);
+        e.mem.set_u32(buffer + 8, size);
+        e.mem.set_u32(buffer + 0x0c, 0);
+        e.mem.set_u32(buffer + 0x17, 2);
+        buffer
+    }
+
+    /// Saves `list` with `SaveGame_ov2` into a fresh buffer of `form`; answers the bytes saved.
+    fn save_for_real(e: &mut Engine, list: Ptr<ExtraDataList>, form: u32) -> Vec<u8> {
+        let (buffer, bytes) = real_save_buffer(e, form);
+        e.call(0x0042_6a30, &args![list, buffer]);
+        let end = e.mem.u32(buffer + 0x0c);
+        e.mem.bytes(bytes, end).to_vec()
+    }
+
+    /// Loads `saved` with `LoadGame_ov2` into a new list; the stream must end exactly where the
+    /// save ended. Answers the list.
+    fn load_for_real(e: &mut Engine, saved: &[u8]) -> Ptr<ExtraDataList> {
+        let bytes = e.mem.alloc(saved.len() as u32 + 0x10);
+        e.mem.write(bytes, saved);
+        let buffer = real_load_buffer(e, bytes, saved.len() as u32);
+        let list = new_list(e);
+        e.call(0x0042_8150, &args![list, buffer]);
+        assert_eq!(
+            e.mem.u32(buffer + 0x0c),
+            saved.len() as u32,
+            "the stream ends where the save ended"
+        );
+        list
+    }
+
+    /// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44) through the game's own save and
+    /// load with JIP installed: a list with an ExtraJIP whose key has data and a count extra
+    /// is saved with `SaveGame_ov2` into a real buffer (the count of 2, the ExtraJIP's type, its
+    /// key and spacer `|` as JIP's arm writes them, the count's type and 2 bytes, each piece
+    /// with its separator), the key's data notes the buffer's form's id, and `LoadGame_ov2`
+    /// loads both extras back into a fresh list, the ExtraJIP with the same key (its data
+    /// kept), reading the stream to its end.
+    #[test]
+    fn jip_extra_jip_round_trip_through_save_and_load() {
+        use engine_core::extend::jip_patches;
+        use jip::containers::Uint;
+        use jip::cosave::{ExtraJipData, ExtraJipEntry};
+        let mut e = round_trip_engine(Some(true));
+        assert_ne!(e.jip_patches() & jip_patches::INSTALLED, 0);
+        let key = 0x7766_5544u32;
+        let mut values = [0; 18];
+        values[0] = 2.5f32.to_bits();
+        let entry = ExtraJipEntry {
+            ref_id: 0,
+            data: [(
+                3u32,
+                ExtraJipData {
+                    used: 1,
+                    forms: 0,
+                    values,
+                    strings: [b"abc".to_vec(), vec![]],
+                },
+            )]
+            .into(),
+        };
+        *e.ext::<jip::Jip>().saved.extra_data.emplace(Uint(key)) = entry.clone();
+        let list = new_list(&mut e);
+        jip::game_patches::gh1::add_extra_jip(&mut e, list.addr(), key);
+        add(&mut e, list, 0x24, 3);
+        assert_eq!(chain_types(&e, list), vec![0x27, 0x24]);
+        let form = e.mem.alloc(0x40);
+        e.mem.set_u32(form + 0x0c, 0x0001_0aaa);
+        let saved = save_for_real(&mut e, list, form);
+        let k = key.to_le_bytes();
+        assert_eq!(
+            saved,
+            vec![8, b'|', 0x27, b'|', k[0], k[1], k[2], k[3], b'|', 0x24, b'|', 3, 0, b'|']
+        );
+        let kept = e
+            .ext::<jip::Jip>()
+            .saved
+            .extra_data
+            .get(&Uint(key))
+            .cloned();
+        assert_eq!(
+            kept,
+            Some(ExtraJipEntry {
+                ref_id: 0x0001_0aaa,
+                ..entry.clone()
+            })
+        );
+        let loaded = load_for_real(&mut e, &saved);
+        assert_eq!(chain_types(&e, loaded), vec![0x27, 0x24]);
+        assert_eq!(word_of(&mut e, loaded, 0x27), key);
+        assert_eq!(word_of(&mut e, loaded, 0x24) & 0xffff, 3);
+        let kept = e
+            .ext::<jip::Jip>()
+            .saved
+            .extra_data
+            .get(&Uint(key))
+            .cloned();
+        assert_eq!(kept.map(|k| k.data), Some(entry.data));
+    }
+
+    /// The same save and load with JIP present but not installed, and with no JIP at all, for a
+    /// list without JIP's data (an `ExtraTimeLeft`, type 0x27, of 1.0 and a count extra): the
+    /// exe's bytes (the time's 4 bytes, the count's 2), the same in both engines, and both
+    /// extras loaded back to the end of the stream.
+    #[test]
+    fn save_and_load_without_jip_installed_are_the_exes() {
+        for jip in [None, Some(false)] {
+            let mut e = round_trip_engine(jip);
+            assert_eq!(e.jip_patches(), 0);
+            let list = new_list(&mut e);
+            add(&mut e, list, 0x24, 3);
+            add(&mut e, list, 0x27, 0x3f80_0000);
+            let types = chain_types(&e, list);
+            let form = e.mem.alloc(0x40);
+            e.mem.set_u32(form + 0x0c, 0x0001_0aaa);
+            let saved = save_for_real(&mut e, list, form);
+            let mut exe = vec![8, b'|'];
+            for &extra_type in &types {
+                exe.extend([extra_type, b'|']);
+                match extra_type {
+                    0x24 => exe.extend([3, 0, b'|']),
+                    _ => exe.extend([0, 0, 0x80, 0x3f, b'|']),
+                }
+            }
+            assert_eq!(saved, exe, "{jip:?}");
+            let loaded = load_for_real(&mut e, &saved);
+            assert_eq!(chain_types(&e, loaded), types, "{jip:?}");
+            assert_eq!(word_of(&mut e, loaded, 0x27), 0x3f80_0000);
+            assert_eq!(word_of(&mut e, loaded, 0x24) & 0xffff, 3);
+        }
+    }
 }

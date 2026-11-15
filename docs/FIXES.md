@@ -1011,8 +1011,9 @@ No fix built yet. Part of JIP in every preset (not a fix, so not in the row): th
 (PLAN-3.9 G44, "For ExtraJIP framework"), the place JIP keeps `SetRefExtraData`'s data. JIP takes the extra
 data type `0x27` (`ExtraTimeLeft`, which the game never makes) for a key into its own data (the co-save's
 `JPED` record): such an extra goes to the head of its list (`0040f980`), keeps its item out of the
-container's default stack (`0041d030`, `IsExtraDefaultforContainer`), is compared by its data and drops it
-when destroyed (the two slots of its vtable `010158FC`), is copied or moved with its stack (`AddExtraCopy`)
+container's default stack (`0041d030`, `IsExtraDefaultforContainer`), is compared by its data and, when
+destroyed, drops its data unless the data names a reference that is no longer loaded while the save holds
+changes of it (JIP's condition; the two slots of its vtable `010158FC`), is copied or moved with its stack (`AddExtraCopy`)
 and saved and loaded as its key (`SaveGame_ov2`, `LoadGame_ov2`). What a player with JIP installed gets,
 whatever the fix row says (JIP's own patch, kept as JIP does it): the pick-up function (`004c1c90`) takes
 an item's count from its own count extra, and a picked-up stack of two or more gets a count extra on its new

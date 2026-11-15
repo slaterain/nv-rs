@@ -516,6 +516,28 @@ fn the_destructor_drops_the_data_unless_a_gone_reference_holds_it() {
     assert_eq!(changed_flag(&mut e), 0);
 }
 
+/// Each term of JIP's condition (`!refID || LookupFormByRefID(refID) || !HasChangeData(refID)`)
+/// drops the data alone: a reference that still exists (a form in the all-forms table) although
+/// the save holds changes of it, and a reference id of 0 although the changes map has an entry
+/// for id 0; the record is marked changed both times.
+#[test]
+fn the_destructor_drops_the_data_of_a_reference_that_exists_or_of_id_0() {
+    let mut e = world(true);
+    let x = extra_of(&mut e, 0x27, 0x77);
+    insert(&mut e, FORMS, 0x0002_0004, FORM);
+    insert(&mut e, CHANGES, 0x0002_0004, 1);
+    insert(&mut e, CHANGES, 0, 1);
+    assert_eq!(cosave::lookup_form(&e, 0), 0);
+    for ref_id in [0x0002_0004, 0] {
+        assert!(cosave::has_change_data(&e, ref_id), "{ref_id:08x}");
+        put(&mut e, 0x77, entry(ref_id, &[]));
+        e.ext::<Jip>().saved.changed = 0;
+        e.call(DESTROY_ROUTINE, &[x, 0]);
+        assert!(get(&mut e, 0x77).is_none(), "{ref_id:08x}");
+        assert_eq!(changed_flag(&mut e), changed::EXTRA_DATA, "{ref_id:08x}");
+    }
+}
+
 /// `Compare`: another type, or a key with no data, differs; the same mods with the same data are
 /// equal whatever their references; any field or mod changed differs; strings compare by length
 /// and text up to a zero byte.

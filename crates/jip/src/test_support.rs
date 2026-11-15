@@ -28,8 +28,14 @@ pub fn engine() -> Engine {
 /// twice keeps its bytes), then [`crate::install_as`]. A command is then called through its
 /// record with [`call`]; the call's data is at [`DATA`] (64 KB).
 pub fn install_into(e: &mut Engine) {
+    install_into_as(e, true);
+}
+
+/// [`install_into`] with JIP answering "installed" or not (`answers_installed`): the engine
+/// crates' tests of a translation with JIP present but not installed.
+pub fn install_into_as(e: &mut Engine, answers_installed: bool) {
     prepare(e);
-    crate::install_as(e, true);
+    crate::install_as(e, answers_installed);
 }
 
 /// What [`engine`] does to a new engine.
