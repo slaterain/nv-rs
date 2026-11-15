@@ -560,6 +560,7 @@ fn biped(e: &mut Engine) -> u32 {
     e.mem.set_u32(equipment + 0x2c + 0x10 * 2, ARMO);
     e.mem.set_u32(equipment + 0x2c + 0x10 * 3, ARMO);
     e.mem.set_u32(equipment + 0x2c + 0x10 * 5, WEAP);
+    e.mem.set_u32(equipment + 0x2c + 0x10 * 6, MISC);
     e.mem.set_u32(ARMO + 0x74, 4);
     equipment
 }
@@ -570,12 +571,14 @@ fn equipped_armor_refs_per_slot() {
     ref_heap(&mut e);
     inventory(&mut e);
     biped(&mut e);
+    // The quest item (no armour) in slot 6 with a worn stack too: passed over.
+    e.mem.set_u32(ENTRY_W, FORMS + 0x8300);
     let (_, res) = call_on(&mut e, 0x28d1, ACTOR, &[]);
     let ids = ref_ids(&e, res);
     assert_eq!(
         ids.len(),
         2,
-        "the armour in two slots, the weapon not armour"
+        "the armour in two slots; the weapon and the quest item are no armour"
     );
     let r0 = by_id(&mut e, ids[0]);
     assert_eq!(ir(&mut e, r0), (ACTOR, ARMO, 1, XDL), "its worn stack");
