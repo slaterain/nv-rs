@@ -661,6 +661,35 @@ fn saved_flags() {
     );
 }
 
+/// The lock-free copy of the flags conditions read (`jip_fn_miscellaneous`) follows each change:
+/// a load's record, the reset at a load's start, a new game, the main menu.
+#[test]
+fn the_conditions_copy_of_the_flags_follows_every_change() {
+    use crate::commands::jip_fn_miscellaneous::serialized_flags;
+    let mut w = World::new();
+    let one = || cosave(&[chunk(kind::SERIALIZED_VARS, 1, 1u32.to_le_bytes().to_vec())]);
+    let to = |e: &mut Engine, kind: u32| {
+        listen(
+            e,
+            &Message {
+                kind,
+                data: 0,
+                len: 0,
+            },
+        )
+    };
+    load_file(&mut w.e, &one());
+    assert_eq!(serialized_flags(&mut w.e), 1, "a load's record");
+    load_file(&mut w.e, &cosave(&[]));
+    assert_eq!(serialized_flags(&mut w.e), 0, "a load without it: the reset");
+    load_file(&mut w.e, &one());
+    to(&mut w.e, msg::NEW_GAME);
+    assert_eq!(serialized_flags(&mut w.e), 0, "a new game");
+    load_file(&mut w.e, &one());
+    to(&mut w.e, msg::EXIT_TO_MAIN_MENU);
+    assert_eq!(serialized_flags(&mut w.e), 0, "the main menu");
+}
+
 /// `JPUA`: the player's appearance undo, its forms resolved and a gone race, hair or eyes
 /// replaced by the defaults (the female hair for flag 1), a gone head part left out; gone at the
 /// next load's start.

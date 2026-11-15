@@ -49,6 +49,8 @@ use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs, EvalArgs};
 use std::collections::{BTreeSet, HashMap};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::RwLock;
 
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
@@ -102,15 +104,62 @@ pub static CONDITIONS_ONLY: super::ConditionsOnly = &[
     (0x293e, has_keyword_cond_eval),
 ];
 
-/// What the file's commands keep between calls (`TempObject`s: never saved, never cleared).
+/// What the file's commands keep between calls in JIP's shared state (`TempObject`s: never
+/// saved, never cleared). The keywords are not here: see [`Unlocked`].
 #[derive(Default)]
 pub struct State {
-    /// `s_keywordFormsMap`: each keyword's `StrHashCI` and its forms (JIP's `Set<TESForm*>`, a
-    /// sorted array: in address order).
-    pub keywords: HashMap<u32, BTreeSet<u32>>,
     /// `s_actorValueIDsMap`, built at the first `StringToActorValue`: each actor value's name by
     /// its `StrHashCI` (JIP's `const char*` keys compare by the hash alone), its code.
     pub actor_value_ids: HashMap<u32, u32>,
+}
+
+/// What the file's conditions read on any thread, without JIP's shared state: a lock-free slot
+/// ([`Engine::ext_free`]) made at install, before the threads start, so every thread's engine of
+/// the run reads the same one. AI threads evaluate package and idle conditions; taking JIP's
+/// shared slot there would hold every JIP command's state until that thread's next safe point.
+#[derive(Default)]
+pub(crate) struct Unlocked {
+    /// `s_keywordFormsMap`: each keyword's `StrHashCI` and its forms (JIP's `Set<TESForm*>`, a
+    /// sorted array: in address order). The ONLY copy: the commands and the condition all read
+    /// and write it here. A reader holds the read lock for one lookup, a writer the write lock
+    /// for one insert (never across a game call), so nobody waits past that. JIP never clears it.
+    keywords: RwLock<HashMap<u32, BTreeSet<u32>>>,
+    /// A copy of JIP's co-save flags word (`s_serializedVars.flags`, kept in
+    /// [`crate::cosave::Saved`]): the co-save's copy is the one saved and loaded; this one is
+    /// written from it by [`publish_serialized_flags`] after every change there (each load, the
+    /// reset of a load, a new game or the main menu: the co-save code calls it in
+    /// `process_changed_flags`, at the end of `load` and on `NEW_GAME`). JIP's commands that set
+    /// flags are not built
+    /// yet (stage 3.9); each must call it too. The command and the condition both read this copy,
+    /// so they always agree.
+    serialized_flags: AtomicU32,
+}
+
+/// Makes the lock-free slot (at install, before the threads start).
+pub fn install(e: &mut Engine) {
+    e.ext_free::<Unlocked>();
+}
+
+/// Copies JIP's co-save flags word into the lock-free slot (see [`Unlocked::serialized_flags`]).
+pub(crate) fn publish_serialized_flags(e: &mut Engine) {
+    let flags = e.ext::<Jip>().saved.serialized.flags;
+    e.ext_free::<Unlocked>()
+        .serialized_flags
+        .store(flags, Ordering::Relaxed);
+}
+
+/// JIP's co-save flags word, from the lock-free copy.
+pub(crate) fn serialized_flags(e: &mut Engine) -> u32 {
+    e.ext_free::<Unlocked>()
+        .serialized_flags
+        .load(Ordering::Relaxed)
+}
+
+/// Runs `f` on the keyword map under its read lock (a poisoned lock is still read: a panic in
+/// another reader leaves the map whole).
+fn with_keywords<R>(e: &mut Engine, f: impl FnOnce(&HashMap<u32, BTreeSet<u32>>) -> R) -> R {
+    let map = e.ext_free::<Unlocked>().keywords.read();
+    f(&map.unwrap_or_else(|p| p.into_inner()))
 }
 
 // ---- the game's objects ----
@@ -418,7 +467,7 @@ fn get_exterior_cell(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// A `TES` cell buffer and its slot count: the exteriors' (or the interiors').
+/// A `TES` cell buffer and the setting's slot count now: the exteriors' (or the interiors').
 fn cell_buffer(e: &Engine, exteriors: bool) -> (u32, u32) {
     let tes = e.mem.u32(TES);
     if tes == 0 {
@@ -437,19 +486,28 @@ fn cell_buffer(e: &Engine, exteriors: bool) -> (u32, u32) {
     }
 }
 
-/// The cells of a buffer, from its first slot to the first empty one, at most `slots`.
+/// The cells of a buffer, from its first slot to the first empty one, at most the setting's
+/// slot count (JIP's bound). `TES::TES` (`0044FF70`, at `004500B7`-`00450116`) allocates each
+/// buffer once, `setting * 4` bytes of the game's heap, and keeps no count; a script can raise
+/// the setting later, so the walk also stops at the heap block's end (its size, rounded up to
+/// the heap's size class) and keeps only words that are cells (`TESObjectCELL`): JIP would read
+/// past the block. Not a heap block: no slots.
 fn buffered_cells(e: &Engine, exteriors: bool) -> Vec<u32> {
-    let (mut at, mut slots) = cell_buffer(e, exteriors);
+    let (mut at, setting) = cell_buffer(e, exteriors);
     let mut cells = Vec::new();
     if at == 0 {
         return cells;
     }
+    let made = e.mem.block_size(at).unwrap_or(0) / 4;
+    let mut slots = setting.min(made);
     while slots != 0 {
         let cell = e.mem.u32(at);
         if cell == 0 {
             break;
         }
-        cells.push(cell);
+        if type_of(e, cell) == TES_OBJECT_CELL {
+            cells.push(cell);
+        }
         at = at.wrapping_add(4);
         slots -= 1;
     }
@@ -954,11 +1012,14 @@ fn string_to_actor_value(e: &mut Engine, w: &[u32]) -> Ret {
             if info == 0 {
                 continue;
             }
+            // `StrHashCI(nullptr)` is 0 (its `test ecx, ecx; jz nullStr`): a null name is kept
+            // under 0, as JIP keeps it.
             let text = e.mem.u32(info + AV_INFO_NAME);
-            if text == 0 {
-                continue;
-            }
-            let hash = str_hash_ci(&nvse::table::guest_text(e, text));
+            let hash = if text == 0 {
+                0
+            } else {
+                str_hash_ci(&nvse::table::guest_text(e, text))
+            };
             ids.insert(hash, code);
         }
         e.ext::<Jip>().misc.actor_value_ids = ids;
@@ -1042,16 +1103,17 @@ fn set_hardcore_stage_effect(e: &mut Engine, w: &[u32]) -> Ret {
 /// 1 while hardcore tracking is off (`kSerializedFlag_NoHardcoreTracking`, JIP's co-save flags).
 fn get_hardcore_tracking(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
-    let off = e.ext::<Jip>().saved.serialized.flags & 1 != 0;
+    let off = serialized_flags(e) & 1 != 0;
     one_if(e, a.result, off);
     handled(true)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
 // Cmd_GetHardcoreTracking_Eval.
+/// As the command, from the lock-free copy of the flags (any thread, no shared state).
 fn get_hardcore_tracking_eval(e: &mut Engine, w: &[u32]) -> Ret {
     let a = EvalArgs::new(w);
-    let off = e.ext::<Jip>().saved.serialized.flags & 1 != 0;
+    let off = serialized_flags(e) & 1 != 0;
     one_if(e, a.result, off);
     handled(true)
 }
@@ -1082,24 +1144,39 @@ fn get_note_read_eval(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
 // AssignKeywordRecourse.
 /// Every form of a form list (base forms for references), form lists inside it walked the same
-/// way. A list already being walked is skipped (JIP recurses into it until its stack runs out).
-fn assign_list(e: &mut Engine, set: &mut BTreeSet<u32>, list: u32, walking: &mut Vec<u32>) {
-    if walking.contains(&list) {
-        return;
-    }
-    walking.push(list);
-    for form in list_items(e, Ptr::new(list + LIST_FORM_LIST)) {
-        if form == 0 {
-            continue;
+/// way. JIP recurses into each inner list every time it meets it; here each list is read once
+/// (a set of the lists met, never emptied) from a work stack, not the Rust stack: the forms are
+/// the same on every list JIP finishes (a set's insert does not depend on order or repeats),
+/// and lists that share inner lists (JIP: exponential) or hold themselves (JIP: until its stack
+/// runs out) or nest tens of thousands deep (JIP: its stack) cannot stop the game.
+fn assign_list(e: &mut Engine, set: &mut BTreeSet<u32>, list: u32) {
+    assign_list_reading(e, set, list, &mut |e, l| {
+        list_items(e, Ptr::new(l + LIST_FORM_LIST))
+    });
+}
+
+/// [`assign_list`] with the read of a list's items given (the tests count the reads).
+fn assign_list_reading(
+    e: &mut Engine,
+    set: &mut BTreeSet<u32>,
+    list: u32,
+    items_of: &mut dyn FnMut(&Engine, u32) -> Vec<u32>,
+) {
+    let mut met = BTreeSet::from([list]);
+    let mut stack = vec![list];
+    while let Some(list) = stack.pop() {
+        for form in items_of(e, list) {
+            if form == 0 {
+                continue;
+            }
+            if type_of(e, form) != BGS_LIST_FORM {
+                let base = base_if_ref(e, form);
+                set.insert(base);
+            } else if met.insert(form) {
+                stack.push(form);
+            }
         }
-        if type_of(e, form) != BGS_LIST_FORM {
-            let base = base_if_ref(e, form);
-            set.insert(base);
-        } else {
-            assign_list(e, set, form, walking);
-        }
     }
-    walking.pop();
 }
 
 /// A keyword argument (`char keyword[0x80]`) and its `StrHashCI`.
@@ -1110,7 +1187,9 @@ fn keyword_hash(e: &Engine, read: &Read, i: usize, command: &str) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
 // Cmd_AssignKeyword_Execute.
 /// The form (its base form for a reference; each form of a form list) given the keyword; the
-/// keyword's set is made even when nothing goes in.
+/// keyword's set is made even when nothing goes in. The forms are found first, then added to the
+/// keyword's set in one insert under the map's write lock (a set's union: the same as JIP's
+/// inserts one by one).
 fn assign_keyword(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
@@ -1119,29 +1198,30 @@ fn assign_keyword(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let hash = keyword_hash(e, &read, 1, "AssignKeyword");
-    let mut set = e
-        .ext::<Jip>()
-        .misc
-        .keywords
-        .remove(&hash)
-        .unwrap_or_default();
+    let mut set = BTreeSet::new();
     if type_of(e, form) != BGS_LIST_FORM {
         let base = base_if_ref(e, form);
         set.insert(base);
     } else {
-        assign_list(e, &mut set, form, &mut Vec::new());
+        assign_list(e, &mut set, form);
     }
-    e.ext::<Jip>().misc.keywords.insert(hash, set);
+    let mut map = e.ext_free::<Unlocked>().keywords.write();
+    map.as_mut()
+        .unwrap_or_else(|p| p.get_mut())
+        .entry(hash)
+        .or_default()
+        .extend(set);
     handled(true)
 }
 
-/// Whether the keyword `hash` has `form`.
+/// Whether the keyword `hash` has `form` (the lock-free map: any thread).
 fn keyword_has(e: &mut Engine, hash: u32, form: u32) -> bool {
-    e.ext::<Jip>()
-        .misc
-        .keywords
-        .get(&hash)
-        .is_some_and(|set| set.contains(&form))
+    with_keywords(e, |map| map.get(&hash).is_some_and(|set| set.contains(&form)))
+}
+
+/// The keyword `hash`'s forms in their set's order, or `None` when it has no set.
+fn keyword_forms(e: &mut Engine, hash: u32) -> Option<Vec<u32>> {
+    with_keywords(e, |map| map.get(&hash).map(|set| set.iter().copied().collect()))
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
@@ -1170,13 +1250,7 @@ fn get_keyword_forms(e: &mut Engine, w: &[u32]) -> Ret {
     let read = Read::of(e, &a);
     if read.ok {
         let hash = keyword_hash(e, &read, 0, "GetKeywordForms");
-        let forms: Vec<u32> = e
-            .ext::<Jip>()
-            .misc
-            .keywords
-            .get(&hash)
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default();
+        let forms = keyword_forms(e, hash).unwrap_or_default();
         for form in forms {
             arrays::append_element(e, id, &Element::Form(form));
         }
@@ -1187,7 +1261,7 @@ fn get_keyword_forms(e: &mut Engine, w: &[u32]) -> Ret {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
 // Cmd_HasKeywordCond_Eval.
 /// The condition's first parameter is the keyword's hash; 1 when its set has the subject's base
-/// form (no subject: no).
+/// form (no subject: no). The lock-free keyword map: any thread, no shared state.
 fn has_keyword_cond_eval(e: &mut Engine, w: &[u32]) -> Ret {
     let a = EvalArgs::new(w);
     if a.this_obj != 0 {

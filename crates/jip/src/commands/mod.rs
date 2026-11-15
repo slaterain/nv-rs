@@ -201,6 +201,8 @@ pub fn is_built(opcode: u32) -> bool {
 
 /// Gives every built command its handler (a condition its eval too).
 pub fn install(e: &mut Engine) {
+    // Lock-free slots conditions read: made before the threads start.
+    jip_fn_miscellaneous::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);

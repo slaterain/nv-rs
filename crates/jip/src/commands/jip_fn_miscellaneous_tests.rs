@@ -5,6 +5,7 @@
 use super::*;
 use crate::commands::test_support::*;
 use nvse::vars::Data;
+use std::collections::BTreeMap;
 
 const PC: u32 = FORMS + 0x1_0000;
 const PROCESS: u32 = FORMS + 0x1_1000;
@@ -15,8 +16,6 @@ const MOON: u32 = FORMS + 0x1_4400;
 const OSG: u32 = FORMS + 0x1_5000;
 const RADIO: u32 = FORMS + 0x1_5100;
 const GLOBALS: u32 = FORMS + 0x1_5200;
-const BUF_IN: u32 = FORMS + 0x1_6000;
-const BUF_EX: u32 = FORMS + 0x1_6100;
 const MAP: u32 = FORMS + 0x1_7000;
 const AV_INFOS: u32 = FORMS + 0x1_8000;
 /// A plain form's vtable (+0xF0 not `ReturnTrue`) and a reference's.
@@ -302,32 +301,36 @@ fn exterior_cells() {
     assert_eq!(call(&mut e, 0x2736, &[r(R_WRLD), n(3), n(-2)]).1, 0.0);
 }
 
-fn buffers(e: &mut Engine) {
-    e.mem.set_u32(TES_AT + 0x38, BUF_IN);
-    e.mem.set_u32(TES_AT + 0x3c, BUF_EX);
+/// The buffers as `TES::TES` makes them: blocks of the game's heap, `setting * 4` bytes (the
+/// heap rounds a block up to its size class). Answers (interiors, exteriors).
+fn buffers(e: &mut Engine) -> (u32, u32) {
+    let (buf_in, buf_ex) = (e.mem.alloc(2 * 4), e.mem.alloc(3 * 4));
+    e.mem.set_u32(TES_AT + 0x38, buf_in);
+    e.mem.set_u32(TES_AT + 0x3c, buf_ex);
     e.mem.set_u32(0x011c_3e38 + 4, 2);
     e.mem.set_u32(0x011c_3c90 + 4, 3);
-    // Interiors: CELL_IN, then CELL_X past the 2 slots.
+    // Interiors: CELL_IN, MISC (not a cell: left out), then CELL_X past the 2 slots.
     for (i, c) in [CELL_IN, MISC, CELL_X].iter().enumerate() {
-        e.mem.set_u32(BUF_IN + 4 * i as u32, *c);
+        e.mem.set_u32(buf_in + 4 * i as u32, *c);
     }
     // Exteriors: CELL_EX, an empty slot, CELL_X after it.
     for (i, c) in [CELL_EX, 0, CELL_X].iter().enumerate() {
-        e.mem.set_u32(BUF_EX + 4 * i as u32, *c);
+        e.mem.set_u32(buf_ex + 4 * i as u32, *c);
     }
+    (buf_in, buf_ex)
 }
 
 #[test]
 fn buffered_cells() {
     let mut e = setup();
-    buffers(&mut e);
+    let (_, buf_ex) = buffers(&mut e);
     assert_eq!(call(&mut e, 0x2737, &[r(R_CELL_EX)]).1, 1.0);
     assert_eq!(call(&mut e, 0x2737, &[r(R_CELL_IN)]).1, 1.0);
     // Past the setting's slot count, after an empty slot, in the other buffer: no.
     assert_eq!(call(&mut e, 0x2737, &[r(R_CELL_X)]).1, 0.0);
     e.mem.set_u32(CELL_X + 0xc0, WRLD);
     assert_eq!(call(&mut e, 0x2737, &[r(R_CELL_X)]).1, 0.0);
-    e.mem.set_u32(BUF_EX + 4, CELL_IN);
+    e.mem.set_u32(buf_ex + 4, CELL_IN);
     assert_eq!(
         call(&mut e, 0x2737, &[r(R_CELL_X)]).1,
         1.0,
@@ -342,10 +345,7 @@ fn buffered_cells() {
     assert_eq!(call(&mut e, 0x2737, &[]).1, 0.0);
     // The arrays.
     let id = call(&mut e, 0x2853, &[n(1)]).1;
-    assert_eq!(
-        array_data(&e, id),
-        vec![Data::Form(0x107), Data::Form(0x103)]
-    );
+    assert_eq!(array_data(&e, id), vec![Data::Form(0x107)], "MISC left out");
     let id = call(&mut e, 0x2853, &[n(0)]).1;
     assert_eq!(
         array_data(&e, id),
@@ -735,6 +735,19 @@ fn actor_values_built_lazily() {
     assert_eq!(call(&mut e, 0x28a5, &[s(b"CONFIDENCE")]).1, 5.0);
 }
 
+/// An info with no name: JIP's `StrHashCI(nullptr)` is 0, so it is kept under 0 (an empty
+/// name hashes to the seed, not 0: not found).
+#[test]
+fn an_actor_value_without_a_name_is_kept_under_0() {
+    let mut e = setup();
+    av_infos(&mut e);
+    let info = AV_INFOS + 0x100 * 6;
+    e.mem.set_u32(info + 0x38, 0);
+    e.mem.set_u32(0x011d_61c8 + 4 * 6, info);
+    assert_eq!(call(&mut e, 0x28a5, &[s(b"")]).1, -1.0);
+    assert_eq!(e.ext::<Jip>().misc.actor_value_ids.get(&0), Some(&6));
+}
+
 #[test]
 fn hardcore_stages() {
     let mut e = setup();
@@ -773,8 +786,11 @@ fn hardcore_tracking() {
     let mut e = setup();
     assert_eq!(both(&mut e, 0x28ad), 0.0);
     e.ext::<Jip>().saved.serialized.flags = 3;
+    assert_eq!(both(&mut e, 0x28ad), 0.0, "the copy changes when the flags are published");
+    publish_serialized_flags(&mut e);
     assert_eq!(both(&mut e, 0x28ad), 1.0);
     e.ext::<Jip>().saved.serialized.flags = 2;
+    publish_serialized_flags(&mut e);
     assert_eq!(both(&mut e, 0x28ad), 0.0, "bit 0 only");
 }
 
@@ -804,7 +820,9 @@ fn keywords() {
     assert_eq!(has(&mut e, R_ACTOR, b"metal"), 1.0);
     call(&mut e, 0x293a, &[r(R_REFR), s(b"metal")]);
     assert_eq!(has(&mut e, R_CONT, b"metal"), 1.0);
-    assert!(!e.ext::<Jip>().misc.keywords[&str_hash_ci(b"metal")].contains(&REFR));
+    assert!(!keyword_forms(&mut e, str_hash_ci(b"metal"))
+        .unwrap()
+        .contains(&REFR));
     // In address order.
     let id = call(&mut e, 0x293c, &[s(b"metal")]).1;
     assert_eq!(
@@ -849,10 +867,7 @@ fn keywords_from_form_lists() {
     e.mem.set_u32(n4, LIST);
     e.mem.set_u32(n4 + 4, 0);
     call(&mut e, 0x293a, &[r(R_LIST), s(b"loot")]);
-    let set: Vec<u32> = e.ext::<Jip>().misc.keywords[&str_hash_ci(b"loot")]
-        .iter()
-        .copied()
-        .collect();
+    let set = keyword_forms(&mut e, str_hash_ci(b"loot")).unwrap();
     assert_eq!(
         set,
         vec![IDLE, CONT, MISC],
@@ -863,7 +878,8 @@ fn keywords_from_form_lists() {
     e.mem.set_u32(LIST2 + 0x18, 0);
     e.mem.set_u32(LIST2 + 0x1c, 0);
     call(&mut e, 0x293a, &[r(R_LIST2), s(b"none")]);
-    assert!(e.ext::<Jip>().misc.keywords[&str_hash_ci(b"none")].is_empty());
+    assert_eq!(keyword_forms(&mut e, str_hash_ci(b"none")), Some(vec![]));
+    assert_eq!(keyword_forms(&mut e, str_hash_ci(b"never")), None);
 }
 
 /// A keyword of 0x80 bytes runs past JIP's buffer: the port stops without the list guard row.
@@ -918,4 +934,202 @@ fn an_exterior_cell_entry_without_a_cell() {
     // The walk goes on past it to the key only: (3, -2) is still found.
     call(&mut e, 0x2736, &[r(R_WRLD), n(3), n(-2)]);
     assert_eq!(form_result(&e), 0x106);
+}
+
+/// A cell map of 701 buckets, the count `TESWorldSpace::Load` (`00583560`, at `00583FF5`) gives
+/// a worldspace that is not large (7001 for a large one): odd, so `key % count` and a
+/// power-of-two mask (`key & (count - 1)`) pick different buckets. (-3, 5) has a negative x
+/// (key 0xFFFD0005), (2, -1) a negative y whose high half must not reach x's (0x0002FFFF).
+#[test]
+fn an_odd_bucket_cell_map() {
+    let mut e = setup();
+    let map = FORMS + 0x4_0000;
+    let buckets = map + 0x100;
+    e.mem.set_u32(WRLD + 0x30, map);
+    e.mem.set_u32(map + 4, 701);
+    e.mem.set_u32(map + 8, buckets);
+    for (i, (key, cell)) in [(0xfffd_0005u32, CELL_EX), (0x0002_ffff, CELL_X)]
+        .into_iter()
+        .enumerate()
+    {
+        assert_ne!(key % 701, key & 700, "{key:08x}: the buckets differ");
+        let entry = map + 0x1000 + 0x10 * i as u32;
+        e.mem.set_u32(buckets + 4 * (key % 701), entry);
+        e.mem.set_u32(entry, 0);
+        e.mem.set_u32(entry + 4, key);
+        e.mem.set_u32(entry + 8, cell);
+    }
+    call(&mut e, 0x2736, &[r(R_WRLD), n(-3), n(5)]);
+    assert_eq!(form_result(&e), 0x106);
+    call(&mut e, 0x2736, &[r(R_WRLD), n(2), n(-1)]);
+    assert_eq!(form_result(&e), 0x108);
+    // x and y swapped: other keys, nothing.
+    assert_eq!(call(&mut e, 0x2736, &[r(R_WRLD), n(5), n(-3)]).1, 0.0);
+    assert_eq!(call(&mut e, 0x2736, &[r(R_WRLD), n(-1), n(2)]).1, 0.0);
+}
+
+/// A script raises `uExterior Cell Buffer` past the slots `TES::TES` made: the walk stops at the
+/// heap block's end (non-zero words after it are not read) and leaves out the words in the
+/// block's rounding that are not cells.
+#[test]
+fn buffered_cells_stop_at_the_block_the_game_made() {
+    let mut e = setup();
+    let (_, buf_ex) = buffers(&mut e);
+    let far = plain(&mut e, FORMS + 0x2100, 0x39, 0x120);
+    let words = e.mem.block_size(buf_ex).unwrap() / 4;
+    assert!(words >= 3);
+    for (i, c) in [CELL_EX, CELL_IN, CELL_X].iter().enumerate() {
+        e.mem.set_u32(buf_ex + 4 * i as u32, *c);
+    }
+    for i in 3..words {
+        e.mem.set_u32(buf_ex + 4 * i, MISC);
+    }
+    let after = buf_ex + 4 * words;
+    let kept = (e.mem.u32(after), e.mem.u32(after + 4));
+    e.mem.set_u32(after, far);
+    e.mem.set_u32(after + 4, far);
+    e.mem.set_u32(0x011c_3c90 + 4, 1000);
+    let id = call(&mut e, 0x2853, &[n(0)]).1;
+    assert_eq!(
+        array_data(&e, id),
+        vec![Data::Form(0x106), Data::Form(0x107), Data::Form(0x108)]
+    );
+    e.mem.set_u32(far + 0xc0, WRLD);
+    set_ref(&mut e, 19, far);
+    assert_eq!(call(&mut e, 0x2737, &[r(19)]).1, 0.0, "after the block");
+    // A lowered setting still bounds the walk (JIP's bound).
+    e.mem.set_u32(0x011c_3c90 + 4, 1);
+    let id = call(&mut e, 0x2853, &[n(0)]).1;
+    assert_eq!(array_data(&e, id), vec![Data::Form(0x106)]);
+    e.mem.set_u32(after, kept.0);
+    e.mem.set_u32(after + 4, kept.1);
+    // A buffer that is not a heap block: no slots known, no cells.
+    e.mem.set_u32(TES_AT + 0x3c, FORMS + 0x4_0000);
+    e.mem.set_u32(FORMS + 0x4_0000, CELL_EX);
+    e.mem.set_u32(0x011c_3c90 + 4, 3);
+    assert_eq!(call(&mut e, 0x2737, &[r(R_CELL_EX)]).1, 0.0);
+}
+
+/// The conditions read the lock-free copies: while a second engine of the run (a real thread's)
+/// holds JIP's shared slot, both answer on this one (asking for the slot here would be refused:
+/// two engines on one thread), and the second engine reads the same keyword map and flags.
+#[test]
+fn the_conditions_answer_while_another_engine_holds_jips_state() {
+    let mut e = setup();
+    call(&mut e, 0x293a, &[r(R_MISC), s(b"metal")]);
+    e.ext::<Jip>().saved.serialized.flags = 1;
+    publish_serialized_flags(&mut e);
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(
+        other.ext::<Jip>().installed,
+        "the other engine holds it"
+    );
+    let hash = str_hash_ci(b"metal");
+    assert_eq!(eval(&mut e, 0x293e, ACTOR, hash), 1.0, "ACTOR's base");
+    assert_eq!(eval(&mut e, 0x293e, ACTOR, hash ^ 1), 0.0);
+    assert_eq!(eval(&mut e, 0x28ad, 0, 0), 1.0);
+    assert!(keyword_has(&mut other, hash, MISC), "one map for the run");
+    assert_eq!(serialized_flags(&mut other), 1, "one copy for the run");
+    engine_core::extend::release_held_for_test();
+}
+
+/// A form list at `at` holding `items`: its first node inline (+0x18), the others from +0x20 (8
+/// bytes each).
+fn form_list(e: &mut Engine, at: u32, items: &[u32]) -> u32 {
+    plain(e, at, 0x55, 0);
+    let mut node = at + 0x18;
+    for (i, &item) in items.iter().enumerate() {
+        let next = if i + 1 < items.len() {
+            at + 0x20 + 8 * i as u32
+        } else {
+            0
+        };
+        e.mem.set_u32(node, item);
+        e.mem.set_u32(node + 4, next);
+        node = next;
+    }
+    at
+}
+
+/// The keyword walk of `list` with each list's reads counted.
+fn walk_counted(e: &mut Engine, list: u32) -> (BTreeSet<u32>, BTreeMap<u32, u32>) {
+    let mut set = BTreeSet::new();
+    let mut reads = BTreeMap::new();
+    assign_list_reading(e, &mut set, list, &mut |e, l| {
+        *reads.entry(l).or_insert(0) += 1;
+        list_items(e, Ptr::new(l + 0x18))
+    });
+    (set, reads)
+}
+
+/// A diamond: TOP holds LEFT and RIGHT, both hold SHARED (MISC, REFR): SHARED's items are read
+/// once; the forms as JIP's walk gives them (REFR as its base CONT).
+#[test]
+fn a_form_list_diamond_reads_each_list_once() {
+    let mut e = setup();
+    let lists = FORMS + 0x5_0000;
+    let shared = form_list(&mut e, lists, &[MISC, REFR]);
+    let left = form_list(&mut e, lists + 0x40, &[shared, IDLE]);
+    let right = form_list(&mut e, lists + 0x80, &[shared]);
+    let top = form_list(&mut e, lists + 0xc0, &[left, right]);
+    let (set, reads) = walk_counted(&mut e, top);
+    assert_eq!(set, BTreeSet::from([IDLE, CONT, MISC]));
+    assert_eq!(
+        reads,
+        BTreeMap::from([(top, 1), (left, 1), (right, 1), (shared, 1)])
+    );
+    // A list that holds itself: read once too, the first list included.
+    let own = form_list(&mut e, lists + 0x100, &[lists + 0x100, MISC]);
+    let (set, reads) = walk_counted(&mut e, own);
+    assert_eq!(set, BTreeSet::from([MISC]));
+    assert_eq!(reads, BTreeMap::from([(own, 1)]));
+    // Through the command: the same set.
+    set_ref(&mut e, 18, top);
+    call(&mut e, 0x293a, &[r(18), s(b"diamond")]);
+    assert_eq!(
+        keyword_forms(&mut e, str_hash_ci(b"diamond")),
+        Some(vec![IDLE, CONT, MISC])
+    );
+}
+
+/// 40 diamonds in a row (81 lists; JIP walks 2^40 paths): each list read once, at once.
+#[test]
+fn a_chain_of_40_diamonds_finishes() {
+    let mut e = setup();
+    let lists = FORMS + 0x5_0000;
+    let mut below = form_list(&mut e, lists, &[MISC]);
+    let mut all = vec![below];
+    for level in 0..40u32 {
+        let a = form_list(&mut e, lists + 0x40 + 0x80 * level, &[below, IDLE]);
+        let b = form_list(&mut e, lists + 0x80 + 0x80 * level, &[below]);
+        below = form_list(&mut e, lists + 0x4000 + 0x40 * level, &[a, b]);
+        all.extend([a, b, below]);
+    }
+    let (set, reads) = walk_counted(&mut e, below);
+    assert_eq!(set, BTreeSet::from([IDLE, MISC]));
+    assert_eq!(reads.len(), all.len());
+    assert!(reads.values().all(|&n| n == 1));
+}
+
+/// A plain chain of 50,000 nested lists (each holding the next, the last MISC): no recursion on
+/// the Rust stack (a test thread's 2 MB would run out), no search along the path per level.
+#[test]
+fn a_chain_of_50000_nested_lists() {
+    let mut e = setup();
+    const DEEP: u32 = 50_000;
+    let lists = 0x0a00_0000;
+    e.map(lists, 0x20 * DEEP + 0x1000);
+    for i in 0..DEEP {
+        let item = if i + 1 < DEEP {
+            lists + 0x20 * (i + 1)
+        } else {
+            MISC
+        };
+        form_list(&mut e, lists + 0x20 * i, &[item]);
+    }
+    let mut set = BTreeSet::new();
+    assign_list(&mut e, &mut set, lists);
+    assert_eq!(set, BTreeSet::from([MISC]));
 }
