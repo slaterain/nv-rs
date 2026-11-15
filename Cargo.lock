@@ -637,6 +637,7 @@ dependencies = [
  "jip",
  "nvse",
  "play-patch",
+ "uio",
  "zlib-rs",
 ]
 
@@ -1098,6 +1099,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
  "pin-project-lite",
+]
+
+[[package]]
+name = "uio"
+version = "0.1.0"
+dependencies = [
+ "engine-core",
+ "nvse",
 ]
 
 [[package]]

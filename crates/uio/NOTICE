@@ -1,0 +1,34 @@
+This crate translates UI Organizer (UIO), the NVSE plugin that manages the UI and HUD additions of
+other mods, into Rust, with its author's permission (the maintainer, 2026-11-03: every mod author
+gave it). Source: UI Organizer 2.30, https://github.com/jazzisparis/UIO-User-Interface-Organizer,
+commit 426d963 (the source of the shipped ui_organizer.dll 2.30). No C++ is included.
+
+Credits: UI Organizer is written by jazzisparis (Jef).
+
+UI Organizer is distributed under the MIT License, whose text follows; this translation keeps
+its notice.
+
+MIT License
+
+Copyright (c) 2020 Jef
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+A few entries of UIO's shipped Data\uio\supported.txt (2.30) appear in the tests as facts; no file
+of the package is included.
