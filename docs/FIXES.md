@@ -1182,7 +1182,10 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
   at the value only). The new operators reach a menu with part 2's parser (the game's own refuses them).
 - **Text zoom** (part 3). A text tile's `<zoom>` scales its text (`TileText::MakeNode`, `00a221f8`): laid
   out at its wrap width and limit divided by zoom/100, the text drawn at zoom/100, its size multiplied
-  back; a zoom change rebuilds the text (`Tile::FinalPostParse`, `00a03923`). The HUD's five hardcore
+  back. As in UIO, only a text whose wrap width is under 2,048 pixels is laid out narrower: a wider
+  one (or one without a wrap width on a screen 2,048 or more wide, where the screen's width is used)
+  keeps its full width and line breaks, is drawn at zoom/100 all the same, and its size is still
+  multiplied back. A zoom change rebuilds the text (`Tile::FinalPostParse`, `00a03923`). The HUD's five hardcore
   texts no longer set a zoom (`HUDMainMenu::Create`, `0076f688` and four more), so they keep their size.
 - **Where part 3 differs from UIO on purpose.** `mod` of -2147483648 by -1 gives 0 (UIO's division
   faults there and the game stops).

@@ -788,9 +788,14 @@ mod tests {
     fn uio_makes_the_create_text_call_only_while_its_word_is_on() {
         use engine_core::extend::{Owner, SiteSlot};
         const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_TEXT_SCALE_SITE);
+        // (the Font::CreateText calls, the handler's words, the tile, the wrap width and limit
+        // the call found behind its two pointers)
         let run = |on: bool, handler: fn(&mut Engine, &[u32]) -> Option<u32>| {
             let Setup { mut e, this, .. } = make_node_engine(0.0, false, 2.0);
+            let sizes = Rc::new(RefCell::new(vec![]));
+            let found = sizes.clone();
             e.register_double(FONT_CREATE_TEXT, move |e, a| {
+                found.borrow_mut().push((e.mem.i32(a[2]), e.mem.i32(a[3])));
                 let shape = e.mem.alloc(0x70);
                 e.mem.set_u32(a[9], shape);
                 Ret::default()
@@ -801,14 +806,27 @@ mod tests {
             e.call_log = Some(vec![]);
             e.call(0x00a2_1af0, &args![this]);
             let seen = UIO_SEEN.with(|s| s.borrow().clone());
-            (calls_to(&e, FONT_CREATE_TEXT), seen, this.addr())
+            let sizes = sizes.borrow().clone();
+            (calls_to(&e, FONT_CREATE_TEXT), seen, this.addr(), sizes)
         };
+        // The call UIO makes is the exe's own (00a221d5 .. 00a22211: text, &width, &limit, 0,
+        // wrap lines, justify, '\n', &colour, &shape, &icons): word for word the same with the
+        // seam's words as with the word off. The traits give distinct values to the words a swap
+        // could confuse: wrap lines 0x7FFFFFFF and justify 2; width 1280 (the screen's) and
+        // limit 50, each behind its own pointer.
+        let (off, _, _, off_sizes) = run(false, uio_scale);
+        let (on, _, _, on_sizes) = run(true, uio_scale);
+        assert_eq!(on, off);
+        assert_eq!(off[0][5..7], [0x7fff_ffff, 2]);
+        assert_ne!(off[0][2], off[0][3]);
+        assert_eq!(on_sizes, off_sizes);
+        assert_eq!(off_sizes, vec![(1280, 50)]);
         // Off (the handler registered, the word not set): the exe's call, the handler never asked.
-        let (calls, seen, _) = run(false, uio_scale);
+        let (calls, seen, _, _) = run(false, uio_scale);
         assert_eq!(calls.len(), 1);
         assert!(seen.is_empty());
         // On: the handler alone makes the call, given the tile and the call's own words.
-        let (calls, seen, this) = run(true, uio_scale);
+        let (calls, seen, this, _) = run(true, uio_scale);
         assert_eq!(calls.len(), 1);
         let c = &calls[0];
         assert_eq!(
@@ -818,7 +836,7 @@ mod tests {
             ]]
         );
         // On, the handler answering nothing: the exe's call.
-        let (calls, seen, _) = run(true, uio_nothing);
+        let (calls, seen, _, _) = run(true, uio_nothing);
         assert_eq!(calls.len(), 1);
         assert_eq!(seen.len(), 1);
     }

@@ -166,6 +166,8 @@ fn floor_ceil_abs_take_the_sum_and_floor_ceil_go_through_an_integer() {
     assert_eq!(op(FLOOR, -0.5, 0.0), Some(-1.0));
     assert_eq!(op(CEIL, 1.25, 1.0), Some(3.0));
     assert_eq!(op(CEIL, -2.5, 0.0), Some(-2.0));
+    // FLOOR's MXCSR 0x3FA0 rounds down, never to nearest: 2.7 gives 2 (to nearest: 3).
+    assert_eq!(op(FLOOR, 2.0, 0.7), Some(2.0));
     // Out of the integer range or NaN: the indefinite integer, as a float.
     assert_eq!(op(FLOOR, 3e9, 0.0), Some(MIN_INT));
     assert_eq!(op(CEIL, f32::NAN, 0.0), Some(MIN_INT));
@@ -181,8 +183,12 @@ fn round_is_to_a_multiple_of_a_positive_operand_with_uios_hundredth() {
     assert_eq!(op(ROUND, 6.9, 2.0), Some(6.0));
     assert_eq!(op(ROUND, 5.0, 2.0), Some(6.0));
     assert_eq!(op(ROUND, -5.0, 2.0), Some(-4.0));
-    // value / operand + 0.01 rounded to even: 4.97 / 2 + 0.01 = 2.495 -> 2.
+    // value / operand + 0.01 rounded to nearest: 4.97 / 2 + 0.01 = 2.495 -> 2.
     assert_eq!(op(ROUND, 4.97, 2.0), Some(4.0));
+    // A tie: 4.98f32 / 2 + 0.01f32 is exactly 2.5 in single precision, and `cvtps2dq` takes it
+    // to the even 2 (half away from zero would give 3, so 6).
+    assert_eq!(sse::add(sse::div(4.98, 2.0), HUNDREDTH), 2.5);
+    assert_eq!(op(ROUND, 4.98, 2.0), Some(4.0));
     // A value of +0, an operand not above +0: nothing.
     assert_eq!(op(ROUND, 0.0, 2.0), None);
     assert_eq!(op(ROUND, 7.0, 0.0), None);
@@ -223,6 +229,8 @@ fn logic_operators_test_bits_and_the_string() {
     assert_eq!(bits(OR, f(3.0), 0, false), one);
     assert_eq!(bits(OR, 0, f(2.0), true), Some(0));
     assert_eq!(bits(OR, NEG_ZERO, 0, false), one);
+    // `or ecx, [ebp-0x38]`: the operand's bits, so a -0 operand is "true".
+    assert_eq!(bits(OR, 0, NEG_ZERO, false), one);
     // not: 0 with a string; -0 is not +0.
     assert_eq!(bits(NOT, f(9.0), 0, false), one);
     assert_eq!(bits(NOT, f(9.0), f(5.0), false), Some(0));
@@ -236,6 +244,8 @@ fn logic_operators_test_bits_and_the_string() {
     assert_eq!(bits(ONLYIFNOT, f(9.0), f(1.0), false), Some(0));
     assert_eq!(bits(ONLYIFNOT, f(9.0), 0, false), None);
     assert_eq!(bits(ONLYIFNOT, f(9.0), 0, true), Some(0));
+    // `mov ecx,[ebp-0x38]; or ecx,[ebp-0x34]; jz`: bits, so a -0 operand zeroes the value.
+    assert_eq!(bits(ONLYIFNOT, f(9.0), NEG_ZERO, false), Some(0));
 }
 
 #[test]
@@ -253,16 +263,39 @@ fn neg_and_recipr_take_the_operand() {
     assert_eq!(bits(NEG, 1, NEG_ZERO, false), Some(0));
     assert_eq!(bits(NEG, 1, QNAN, false), Some(QNAN_NEG));
     assert_eq!(op(NEG, 9.0, f32::INFINITY), Some(f32::NEG_INFINITY));
-    // recipr: +0 gives 0; else the processor's estimate (within 1.5 * 2^-12 of the quotient).
+    // recipr: +0 gives 0; else what the `rcpss` instruction gives. UIO executes `rcpss`, whose
+    // exact bits differ between processor makers (Intel's and AMD's estimate tables), so no
+    // table of one machine's values can pin it. Instead: the answer is the instruction itself,
+    // run here directly; it is an estimate, not the correctly rounded 1 / x (for 1/3 and the
+    // others below at least one differs on any x86_64); and it is within the instruction's
+    // documented relative error, 1.5 * 2^-12.
     assert_eq!(bits(RECIPR, 7, 0, false), Some(0));
-    for x in [4.0f32, -3.0, 0.1, 1e30, 7.5] {
+    #[cfg(target_arch = "x86_64")]
+    let instruction = |x: f32| {
+        use std::arch::x86_64::{_mm_cvtss_f32, _mm_rcp_ss, _mm_set_ss};
+        // SAFETY: SSE is part of the x86_64 baseline.
+        #[allow(unused_unsafe)]
+        unsafe {
+            _mm_cvtss_f32(_mm_rcp_ss(_mm_set_ss(x)))
+        }
+    };
+    let inputs = [4.0f32, -3.0, 0.1, 1e30, 7.5, 3.0, 7.0, 11.0];
+    for x in inputs {
         let r = op(RECIPR, 9.0, x).unwrap();
         assert!(
             ((r - 1.0 / x) / (1.0 / x)).abs() <= 1.5 / 4096.0,
             "{x}: {r}"
         );
-        assert_eq!(r, rcpss(x));
+        #[cfg(target_arch = "x86_64")]
+        assert_eq!(r.to_bits(), instruction(x).to_bits(), "{x}");
     }
+    #[cfg(target_arch = "x86_64")]
+    assert!(
+        inputs
+            .iter()
+            .any(|&x| op(RECIPR, 9.0, x).unwrap() != 1.0 / x),
+        "an estimate, not the quotient"
+    );
     assert_eq!(op(RECIPR, 9.0, -0.0), Some(f32::NEG_INFINITY));
     assert_eq!(op(RECIPR, 9.0, f32::INFINITY), Some(0.0));
     assert!(op(RECIPR, 9.0, f32::NAN).unwrap().is_nan());
@@ -286,6 +319,13 @@ fn integer_operators_round_both_and_shifts_count_from_the_quadword() {
     assert_eq!(op(SHR, -16.0, 40.0), Some(-1.0));
     assert_eq!(op(SHR, 16.0, 40.0), Some(0.0));
     assert_eq!(op(SHR, -16.0, -1.0), Some(-1.0));
+    // Both operands through `cvtps2dq` (to nearest), not truncated: 2.7 is 3, a count of 1.6 is 2.
+    assert_eq!(op(LOR, 2.7, 0.0), Some(3.0));
+    assert_eq!(op(SHL, 1.0, 1.6), Some(4.0));
+    // `psrad`'s count is the whole low quadword, not masked to 5 bits: 33 shifts everything out
+    // (33 & 31 would be 1).
+    assert_eq!(op(SHR, 65536.0, 33.0), Some(0.0));
+    assert_eq!(op(SHR, -65536.0, 33.0), Some(-1.0));
     // bt: truncated, the bit number masked to 0..31.
     assert_eq!(op(BT, 5.0, 0.0), Some(1.0));
     assert_eq!(op(BT, 5.0, 1.0), Some(0.0));
@@ -313,6 +353,9 @@ fn sqrt_and_log_skip_operands_with_the_sign_or_not_above_zero() {
     assert_eq!(op(LOG, 9.0, 0.0), None);
     assert_eq!(op(LOG, 9.0, -1.0), None);
     assert_eq!(op(LOG, 9.0, f32::INFINITY), Some(f32::INFINITY));
+    // `test ecx,ecx; jle` on the bits: a positive NaN runs (its log is a NaN), a negative one not.
+    assert!(f32::from_bits(bits(LOG, 1, QNAN, false).unwrap()).is_nan());
+    assert_eq!(bits(LOG, 1, QNAN_NEG, false), None);
 }
 
 #[test]
@@ -379,7 +422,14 @@ fn engine() -> Engine {
     FREED.with(|f| f.borrow_mut().clear());
     DRAWS.with(|d| d.borrow_mut().clear());
     let mut e = Engine::new();
-    e.register(HEAP_ALLOCATE, |e, a| ret(e.mem.alloc(a[1].max(1))));
+    // The game's heap hands out used blocks: filled with 0xCD here, so a copy must write its own
+    // terminator (UIO's memcpy of StrLen + 1 bytes).
+    e.register(HEAP_ALLOCATE, |e, a| {
+        let size = a[1].max(1);
+        let at = e.mem.alloc(size);
+        e.mem.write(at, &vec![0xcd; size as usize]);
+        ret(at)
+    });
     e.register(HEAP_FREE, |_, a| {
         FREED.with(|f| f.borrow_mut().push(a[1]));
         ret(0)

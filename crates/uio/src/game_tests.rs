@@ -31,6 +31,8 @@ struct World {
     /// UIOLoad's `RegTraitID` calls (name, id) and its static `BSRandom` constructions.
     names: Vec<(Vec<u8>, u32)>,
     randoms: u32,
+    /// `Font::CreateText` calls (`00A12880`).
+    creates: u32,
 }
 
 thread_local! {
@@ -334,6 +336,34 @@ fn on_every_part_3_seam_has_uios_handler_and_uioload_registers_the_operators() {
     for slot in HUD_ZOOM_SITES {
         assert_eq!(e.site(slot.addr(), &[0]), Some(1));
     }
+    // Each handler at its own site (the owner alone does not tell which function sits there).
+    // FinalPostParse: a trait outside UIO's range (x, 0xFA1) is not taken in.
+    assert_eq!(e.site(FINAL_POST_PARSE_SITE.addr(), &[0xfa1]), None);
+    // The jump table: add runs on the value and the flag comes back.
+    let v = e.mem.alloc(0x14);
+    e.mem.set_f32(v + 8, 10.0);
+    assert_eq!(
+        e.site(OPERATOR_SITE.addr(), &[v, 0x7d1, 5f32.to_bits(), 0, 1]),
+        Some(1)
+    );
+    assert_eq!(e.mem.f32(v + 8), 15.0);
+    // MakeNode's text: UIO makes the one Font::CreateText call (a tile without a zoom value).
+    world(|w| w.creates = 0);
+    e.register(0x00a1_2880, |_, _| {
+        world(|w| w.creates += 1);
+        ret(0)
+    });
+    let tile = e.mem.alloc(0x40);
+    let frame = e.mem.alloc(0x20);
+    let (width_at, limit_at, colour_at, shape_at, icons_at) =
+        (frame, frame + 4, frame + 8, frame + 0x18, frame + 0x1c);
+    e.mem.set_i32(width_at, 400);
+    e.mem.set_i32(limit_at, 30);
+    let words = [
+        tile, 0x5000, 0x6000, width_at, limit_at, 3, 1, colour_at, shape_at, icons_at,
+    ];
+    assert_eq!(e.site(TEXT_SCALE_SITE.addr(), &words), Some(1));
+    assert_eq!(world(|w| w.creates), 1);
 }
 
 #[test]

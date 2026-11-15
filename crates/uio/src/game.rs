@@ -189,8 +189,10 @@ impl Source for GameSource<'_> {
     }
 }
 
-// Translated from UIO 2.30 (426d963), ui_organizer.h: UIOLoad (its lists and patching; the trait
-// names and code patches it also makes are UIO's later parts, not built yet).
+// Translated from UIO 2.30 (426d963), ui_organizer.h: UIOLoad (its trait names and static
+// BSRandom in `operators::on_load`, its parse cache entries, its lists and patching; the code
+// patches it makes are the handlers in post_parse and zoom, which act once `loaded` is set at the
+// end here).
 /// The seam at `0070A049` (the new interface manager stored): UIO's lists read, and each file they
 /// target read (`Menu::CompressAndStoreXML`) and patched in memory; a target the game cannot read
 /// is passed over. Nothing is written to a file. Before that, the parse cache's entries for the
