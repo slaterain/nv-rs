@@ -1934,11 +1934,46 @@ fn set_weapon_ref_mod_flags_without_a_stack_makes_one() {
     let mut e = b4_setup();
     let refr = nvse::invref::create_entry(&mut e, CONT_REF, WEAP, 1, 0);
     assert_eq!(call_on(&mut e, 0x270d, refr, &[n(1)]).1, 0.0);
-    // Not a weapon; not an inventory reference.
+    // Not a weapon: an armour whose words where a weapon's mods are all hold a form (so a
+    // missing type check would give it flags) gets no flags and no result. Not an inventory
+    // reference: no result.
+    let mut e = b4_setup();
+    for slot in 0..3 {
+        e.mem.set_u32(ARMO + 0x350 + 4 * slot, IMOD);
+    }
+    let before = kinds(&e, XDL2);
     let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, XDL2);
-    call_on(&mut e, 0x270d, refr, &[n(1)]);
-    call_on(&mut e, 0x270d, ACTOR, &[n(1)]);
+    e.mem.set_f64(RESULT, 0.0);
+    assert_eq!(call_on(&mut e, 0x270d, refr, &[n(1)]).1, 0.0);
+    assert_eq!(kinds(&e, XDL2), before);
+    e.mem.set_f64(RESULT, 0.0);
+    assert_eq!(call_on(&mut e, 0x270d, ACTOR, &[n(1)]).1, 0.0);
     assert!(calls_to(ADD_EXTRA_FN).is_empty());
+}
+
+/// Each mod slot masks its own flag: all three flags asked of a weapon keep only those whose
+/// slot holds a mod.
+#[test]
+fn set_weapon_ref_mod_flags_masks_each_empty_slot() {
+    for (mods, flags) in [
+        ([0, IMOD, IMOD], 6u32),
+        ([IMOD, 0, IMOD], 5),
+        ([IMOD, IMOD, 0], 3),
+        ([0, IMOD, 0], 2),
+        ([IMOD, IMOD, IMOD], 7),
+    ] {
+        let mut e = b4_setup();
+        for (slot, form) in mods.into_iter().enumerate() {
+            e.mem.set_u32(WEAP + 0x350 + 4 * slot as u32, form);
+        }
+        let refr = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, WL1);
+        assert_eq!(call_on(&mut e, 0x270d, refr, &[n(7)]).1, 1.0, "{mods:x?}");
+        assert_eq!(
+            extra_of(&e, WL1, 0x8d),
+            (0x0101_59a4, 0x8d, flags),
+            "{mods:x?}"
+        );
+    }
 }
 
 #[test]
@@ -2044,6 +2079,18 @@ fn set_hotkey_item_ref_takes_the_key() {
     assert_eq!(call_on(&mut e, 0x2716, refr, &[n(4)]).1, 0.0);
     assert_eq!(call_on(&mut e, 0x2716, refr, &[n(2)]).1, 0.0);
     assert_eq!(extra_of(&e, XDL, 0x4a).2, 3);
+    // A stack without a hotkey, and no item has the key asked: nothing made, no result; the
+    // item that has another key keeps it.
+    let mut e = b4_setup();
+    e.mem.set_u32(0x011d_ea3c, ACTOR);
+    put_extra(&mut e, XDL2, X1, 0x4a, 3);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, XDL);
+    let before = kinds(&e, XDL);
+    assert!(!before.contains(&0x4a));
+    e.mem.set_f64(RESULT, 0.0);
+    assert_eq!(call_on(&mut e, 0x2716, refr, &[n(2)]).1, 0.0);
+    assert_eq!(kinds(&e, XDL), before);
+    assert_eq!(extra_of(&e, XDL2, 0x4a).2, 3);
 }
 
 #[test]
