@@ -70,6 +70,9 @@ pub enum Owner {
     Nvse,
     /// JIP LN NVSE built in (`crates/jip`); it runs after xNVSE, as JIP is xNVSE's plugin.
     Jip,
+    /// UI Organizer built in (`crates/uio`): xNVSE loads its plugins by DLL name, so
+    /// `ui_organizer.dll` after `jip_nvse.dll`.
+    Uio,
 }
 
 impl Owner {
@@ -79,13 +82,16 @@ impl Owner {
             Owner::Row(_) => 0,
             Owner::Nvse => 1,
             Owner::Jip => 2,
+            Owner::Uio => 3,
         }
     }
 
     const fn same(self, other: Owner) -> bool {
         match (self, other) {
             (Owner::Row(a), Owner::Row(b)) => same_str(a, b),
-            (Owner::Nvse, Owner::Nvse) | (Owner::Jip, Owner::Jip) => true,
+            (Owner::Nvse, Owner::Nvse) | (Owner::Jip, Owner::Jip) | (Owner::Uio, Owner::Uio) => {
+                true
+            }
             _ => false,
         }
     }
@@ -117,6 +123,7 @@ pub struct Entry {
 
 const NVSE: &[Owner] = &[Owner::Nvse];
 const JIP: &[Owner] = &[Owner::Jip];
+const UIO: &[Owner] = &[Owner::Uio];
 
 /// Every exe address a built-in may wrap (ADR-0016 §3, "Wrappers"), by address. Each is a
 /// function entry registered by a translation (or a fix row's copy of it) and reached by
@@ -521,6 +528,13 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5c",
     },
+    // InterfaceManager::Initialize 00709fd0, the new manager stored: UI Organizer's UIOLoad (its
+    // lists read and the menus they name patched, once, before the first menu loads).
+    Entry {
+        addr: 0x0070_a049,
+        owners: UIO,
+        step: "UIO-1",
+    },
     // InterfaceManager::Idle 0070c4a0, the pointer's tile changed: JIP LN NVSE's MenuHandleMouseover.
     Entry {
         addr: 0x0070_d642,
@@ -875,6 +889,13 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5b",
     },
+    // Tile::ReadFile 00a01b00, its call of Tile::ParseFile: UI Organizer's ResolveXMLFileHook (the
+    // file read through UIO's reader, its patched menus and its include expansion).
+    Entry {
+        addr: 0x00a0_1b87,
+        owners: UIO,
+        step: "UIO-1",
+    },
     // Menu::~Menu 00a1c520 and TileMenu::PostParse 00a1f160, a menu's shown byte: JIP LN NVSE's MenuState.
     Entry {
         addr: 0x00a1_c573,
@@ -1181,6 +1202,9 @@ pub(crate) struct ExtendState {
     /// 0 without it ([`Engine::expression_alt_buffer`]). Set before the threads start, copied to
     /// each thread's engine.
     pub(crate) expression_alt_buffer: u32,
+    /// UI Organizer built in and switched on ([`Engine::uio`]). Set before the threads start,
+    /// copied to each thread's engine.
+    pub(crate) uio: bool,
 }
 
 /// JIP LN NVSE's on-demand hooks (`kHook_*`, `internal/hooks.h` (JIP LN NVSE)), in JIP's order.
@@ -1473,6 +1497,7 @@ impl ExtendState {
             marks: Default::default(),
             words: Default::default(),
             expression_alt_buffer: 0,
+            uio: false,
         }
     }
 
@@ -1501,6 +1526,7 @@ impl ExtendState {
             marks: self.marks.clone(),
             words: self.words.clone(),
             expression_alt_buffer: self.expression_alt_buffer,
+            uio: self.uio,
         }
     }
 }
@@ -1993,6 +2019,19 @@ impl Engine {
     /// start).
     pub fn set_expression_alt_buffer(&mut self, buffer: u32) {
         self.extend.expression_alt_buffer = buffer;
+    }
+
+    /// Whether UI Organizer is built in and switched on (`crates/uio`, its row): its seams in
+    /// `InterfaceManager::Initialize` and `Tile::ReadFile` read this first, one load, and with
+    /// false run the exe's path untouched.
+    #[inline]
+    pub fn uio(&self) -> bool {
+        self.extend.uio
+    }
+
+    /// Sets [`Engine::uio`] (UI Organizer's install, before the threads start).
+    pub fn set_uio(&mut self, on: bool) {
+        self.extend.uio = on;
     }
 
     /// The owners with a handler at the seam `addr`, in the order they run.
@@ -2614,7 +2653,12 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 112);
+        assert_eq!(SITES.len(), 114);
+        // UI Organizer's two (UIOLoad's place and ResolveXMLFileHook's), its alone.
+        for a in [0x0070_a049, 0x00a0_1b87] {
+            assert!(find(SITES, Owner::Uio, a).is_some(), "{a:08x}");
+            assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
+        }
         // The run-time compiler's (I-14), xNVSE's.
         for a in [
             0x005a_ebb1,
@@ -2773,5 +2817,15 @@ mod tests {
         assert_eq!(b.ext_get::<Counter>().map(|c| c.0), Some(5));
         assert_eq!(a.ext_get::<Other>().map(|o| o.0), Some(9));
         assert!(b.ext_get::<Other>().is_none());
+    }
+
+    #[test]
+    fn the_uio_word_is_off_until_set_and_reaches_threads() {
+        let mut e = Engine::new();
+        assert!(!e.uio());
+        assert!(!e.extend.for_thread().uio);
+        e.set_uio(true);
+        assert!(e.uio());
+        assert!(e.extend.for_thread().uio);
     }
 }

@@ -1,0 +1,11 @@
+[package]
+name = "uio"
+version = "0.1.0"
+description = "UI Organizer (the NVSE plugin that puts UI mods' additions into the menus) built in: its lists, its patching and its file reader"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+nvse = { path = "../nvse" }
