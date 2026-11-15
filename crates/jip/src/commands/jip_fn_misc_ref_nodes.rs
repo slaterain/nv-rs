@@ -58,20 +58,20 @@ const BOUND_CENTRE: u32 = 0x0c;
 const BOUND_DIMENSIONS: u32 = 0x18;
 /// `NiGeometry`'s property state (+0x9C, one per property type: `UpdatePropertiesDownward`
 /// `00A80820` stores type t at +0x9C + 4t): the material property (type 2) +0xA4.
-const MATERIAL_PROPERTY: u32 = 0xa4;
+pub(crate) const MATERIAL_PROPERTY: u32 = 0xa4;
 /// `NiMaterialProperty`: specular +0x1C, emissive +0x28 (three floats each), glossiness +0x38,
 /// alpha +0x3C, emit multiplier +0x40 (`NiMaterialProperty::LoadBinary` `00A75790`).
-const SPECULAR: u32 = 0x1c;
-const EMISSIVE: u32 = 0x28;
-const GLOSSINESS: u32 = 0x38;
-const ALPHA: u32 = 0x3c;
-const EMIT_MULT: u32 = 0x40;
+pub(crate) const SPECULAR: u32 = 0x1c;
+pub(crate) const EMISSIVE: u32 = 0x28;
+pub(crate) const GLOSSINESS: u32 = 0x38;
+pub(crate) const ALPHA: u32 = 0x3c;
+pub(crate) const EMIT_MULT: u32 = 0x40;
 /// `bhkNiCollisionObject::worldObj` (+0x10: the collision object's `UpdateWorldData`,
 /// `bhkCollisionObject`'s vtable `0103046C` +0x90 = `00C65890`, reads it first).
 const WORLD_OBJECT: u32 = 0x10;
 
 /// The block name argument, as JIP's 0x40-byte buffer holds it.
-fn block_name(e: &Engine, read: &Read, i: usize, command: &str) -> Vec<u8> {
+pub(crate) fn block_name(e: &Engine, read: &Read, i: usize, command: &str) -> Vec<u8> {
     super::buffer_arg(e, read, i, NAME_BUFFER, command)
 }
 

@@ -201,3 +201,40 @@ pub fn int_arg(v: i32) -> Vec<u8> {
 pub fn short_arg(v: u16) -> Vec<u8> {
     v.to_le_bytes().to_vec()
 }
+
+/// xNVSE's record of key `k`, for a test to change; the keys' lock-free copy
+/// (`nvse::input::publish_key_states`, which a device read writes) is written when it goes, so
+/// JIP's key reads (which read that copy) see the change.
+pub fn key(e: &mut Engine, k: u32) -> KeyEdit<'_> {
+    KeyEdit { e, k: k as usize }
+}
+
+/// [`key`]'s guard.
+pub struct KeyEdit<'a> {
+    e: &'a mut Engine,
+    k: usize,
+}
+
+impl std::ops::Deref for KeyEdit<'_> {
+    type Target = nvse::input::KeyInfo;
+    fn deref(&self) -> &nvse::input::KeyInfo {
+        &self
+            .e
+            .ext_get::<nvse::Nvse>()
+            .expect("xNVSE is installed")
+            .input
+            .keys[self.k]
+    }
+}
+
+impl std::ops::DerefMut for KeyEdit<'_> {
+    fn deref_mut(&mut self) -> &mut nvse::input::KeyInfo {
+        &mut self.e.ext::<nvse::Nvse>().input.keys[self.k]
+    }
+}
+
+impl Drop for KeyEdit<'_> {
+    fn drop(&mut self) {
+        nvse::input::publish_key_states(self.e);
+    }
+}

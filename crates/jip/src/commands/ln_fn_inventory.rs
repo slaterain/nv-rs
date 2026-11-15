@@ -130,7 +130,7 @@ fn new_hotkey_list(e: &mut Engine, index: u8) -> u32 {
 
 /// The hotkey's list emptied of its hotkey: removed from the entry's lists and freed when nothing
 /// is left in it (`m_data` 0).
-fn drop_hotkey(e: &mut Engine, entry: u32, xdl: u32) {
+pub(crate) fn drop_hotkey(e: &mut Engine, entry: u32, xdl: u32) {
     extra::remove_by_type(e, xdl, EXTRA_HOTKEY);
     if e.mem.u32(xdl + LIST_DATA) == 0 {
         let lists = e.mem.u32(entry + ENTRY_EXTEND);

@@ -832,7 +832,8 @@ fn perk_rank(e: &mut Engine, actor: u32, perk: u32, for_teammates: bool) -> u8 {
     if actor == 0 || !vtable_says(e, actor, VT_IS_ACTOR) {
         return 0;
     }
-    if e.ext::<Jip>().saved.npc_perks_patch {
+    // The lock-free copy: this is also the eval's path, run on any thread.
+    if crate::cosave::npc_perks_patch(e) {
         let rank = e
             .vcall(
                 actor,

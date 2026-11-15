@@ -2892,11 +2892,17 @@ pub fn tes_object_refr_activate(
     e.site(0x0057_318e, &[this.addr(), activator]);
     let me = this.addr();
     let mut busy = false;
-    if typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me))
-        == e.global::<u32>(0x011c_a27c)
-        || typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me))
-            == e.global::<u32>(0x011c_a280)
-    {
+    // JIP's ash pile test replaces the two compares (`0x573194`, step 3.9 G06).
+    let ash_pile = match jip_ash_pile_test(e, 0x0057_3194, me) {
+        Some(ash_pile) => ash_pile,
+        None => {
+            typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me))
+                == e.global::<u32>(0x011c_a27c)
+                || typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, me))
+                    == e.global::<u32>(0x011c_a280)
+        }
+    };
+    if ash_pile {
         let extra = extra_list(e, me);
         let ash_pile = e.call(0x0041_e310, &args![extra]).u32();
         if ash_pile != 0 {
@@ -3398,7 +3404,7 @@ pub fn fn_00573f40(e: &mut Engine, this: Ptr<TESObjectREFR>) {
     }
     let list = extra_list(e, me);
     let ash_pile = e.call(0x0041_e310, &args![list]).u32();
-    if ash_pile != 0 && !is_skipped_base(e, me) {
+    if ash_pile != 0 && !is_skipped_base(e, me, 0x0057_3fe8) {
         fn_00573f40(e, Ptr::new(ash_pile));
     }
     if is_actor(e, me) {
@@ -3509,8 +3515,13 @@ pub fn fn_00573f40(e: &mut Engine, this: Ptr<TESObjectREFR>) {
 
 /// True when the base object of `refr` is one of the two forms in
 /// [`SKIPPED_BASE_FORM_A`] and [`SKIPPED_BASE_FORM_B`] (the ash pile of such
-/// a reference is left alone).
-fn is_skipped_base(e: &mut Engine, refr: u32) -> bool {
+/// a reference is left alone). With JIP installed, JIP's ash pile test at
+/// `site` (`0x573FE8` in [`fn_00573f40`], `0x57445B` in
+/// [`tes_object_refr_disable`]; step 3.9 G06) answers instead.
+fn is_skipped_base(e: &mut Engine, refr: u32, site: u32) -> bool {
+    if let Some(ash_pile) = jip_ash_pile_test(e, site, refr) {
+        return ash_pile;
+    }
     let first = base_form(e, refr);
     if first == e.global::<u32>(SKIPPED_BASE_FORM_A) {
         return true;
@@ -3557,7 +3568,7 @@ pub fn tes_object_refr_disable(e: &mut Engine, this: Ptr<TESObjectREFR>) {
     e.vcall(me, 0x1cc, &args![0u32, 0u32]);
     let list = extra_list(e, me);
     let ash_pile = e.call(0x0041_e310, &args![list]).u32();
-    if ash_pile != 0 && !is_skipped_base(e, me) {
+    if ash_pile != 0 && !is_skipped_base(e, me, 0x0057_445b) {
         tes_object_refr_disable(e, Ptr::new(ash_pile));
     }
     tes_object_refr_clean_up_traps(e, this);
@@ -9359,6 +9370,84 @@ mod tests {
         });
         assert_eq!(calls_to(&log, 0x0054_5590), vec![vec![cell, refr]]);
         assert_eq!(calls_to(&log, slot(&e, refr, 0x208)), vec![vec![refr, 1]]);
+    }
+
+    /// JIP's ash pile test at `0x573194` (step 3.9 G06) in `Activate`: not asked with the word
+    /// clear or only `FIXES`; with `INSTALLED` asked with the reference, 1 hands the activation
+    /// to the pile's reference, 0x100 does not, no answer leaves the exe's compares.
+    #[test]
+    fn activate_jip_ash_pile_seam() {
+        use engine_core::extend::jip_patches;
+        let mut s = activate_setup();
+        let (refr, activator, base) = (s.refr, s.activator, s.base);
+        let ash_base = object(&mut s.e, 0x100, &[(0x124, 1)]);
+        s.e.mem.set_u8(ash_base + 4, 0x10);
+        let ash = reference(&mut s.e, false, &[]);
+        s.e.mem.set_u32(ash + 0x20, ash_base);
+        returns(&mut s.e, 0x0041_e310, ash);
+        super::jip_seam::put(&mut s.e, 0x0057_3194, Some(1));
+        super::jip_seam::only_for(Some(refr));
+        let handed = |e: &mut Engine| {
+            let log = logged(e, |e| {
+                e.call(0x0057_3170, &args![refr, activator, 0u8, 1u32, 2u32]);
+            });
+            calls_to(&log, 0x0056_a290)[0][0] == ash
+        };
+        assert!(!handed(&mut s.e));
+        s.e.set_jip_patches(jip_patches::FIXES);
+        assert!(!handed(&mut s.e));
+        assert!(super::jip_seam::seen().is_empty(), "only INSTALLED asks");
+        s.e.set_jip_patches(jip_patches::INSTALLED);
+        assert!(handed(&mut s.e), "JIP: an ash pile");
+        assert_eq!(super::jip_seam::seen()[0], vec![refr]);
+        super::jip_seam::answer_with(Some(0x100));
+        s.e.set_global(0x011c_a280, base);
+        assert!(!handed(&mut s.e), "JIP: not one, whatever the forms");
+        super::jip_seam::answer_with(None);
+        assert!(handed(&mut s.e), "no answer: the compares");
+        super::jip_seam::seen();
+    }
+
+    /// The same test at `0x573FE8` (`Enable`) and `0x57445B` (`Disable`): each seam asked with
+    /// the reference only with `INSTALLED`; 1 leaves the pile alone, 0x100 makes it follow, no
+    /// answer leaves the compares.
+    #[test]
+    fn enable_and_disable_jip_ash_pile_seams() {
+        use engine_core::extend::jip_patches;
+        for (site, func, enable) in [
+            (0x0057_3fe8, 0x0057_3f40, true),
+            (0x0057_445b, 0x0057_4400, false),
+        ] {
+            let mut e = engine();
+            constants(&mut e);
+            let refr = toggled_reference(&mut e, enable);
+            let ash = toggled_reference(&mut e, enable);
+            returns(&mut e, 0x0041_e310, ash);
+            let base = form(&mut e, 0x10, 0);
+            e.mem.set_u32(refr + 0x20, base);
+            super::jip_seam::put(&mut e, site, Some(1));
+            super::jip_seam::only_for(Some(refr));
+            let slot_of = if enable { 0xc8 } else { 0x1cc };
+            let follows = |e: &mut Engine| {
+                let log = logged(e, |e| {
+                    e.call(func, &args![refr]);
+                });
+                !calls_to(&log, slot(e, ash, slot_of)).is_empty()
+            };
+            assert!(follows(&mut e));
+            e.set_jip_patches(jip_patches::FIXES);
+            assert!(follows(&mut e));
+            assert!(super::jip_seam::seen().is_empty(), "only INSTALLED asks");
+            e.set_jip_patches(jip_patches::INSTALLED);
+            assert!(!follows(&mut e), "JIP: an ash pile");
+            assert_eq!(super::jip_seam::seen()[0], vec![refr]);
+            super::jip_seam::answer_with(Some(0x100));
+            e.set_global(SKIPPED_BASE_FORM_A, base);
+            assert!(follows(&mut e), "JIP: not one");
+            super::jip_seam::answer_with(None);
+            assert!(!follows(&mut e), "no answer: the compares");
+            super::jip_seam::seen();
+        }
     }
 
     #[test]

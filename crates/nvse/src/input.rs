@@ -312,6 +312,49 @@ pub(crate) fn state(e: &mut Engine) -> &mut State {
     &mut e.ext::<Nvse>().input
 }
 
+/// Each key's three states as the last device read left them ([`KeyInfo::game_state`] bit 1,
+/// [`KeyInfo::raw_state`] bit 2, [`KeyInfo::inserted_state`] bit 4), in a lock-free slot
+/// ([`Engine::ext_free`]) made at install: for the readers that run on any thread (a plugin's
+/// condition, evaluated on AI threads), which must not take xNVSE's shared state. Written by
+/// [`publish_key_states`] after each read processes the keys (the only writer of the three
+/// states: [`KeyInfo::process`]), so it always equals [`State::keys`]' states.
+pub struct KeyStates {
+    bits: Box<[std::sync::atomic::AtomicU8]>,
+}
+
+impl Default for KeyStates {
+    fn default() -> KeyStates {
+        KeyStates {
+            bits: (0..MAX_MACROS)
+                .map(|_| std::sync::atomic::AtomicU8::new(0))
+                .collect(),
+        }
+    }
+}
+
+/// Copies every key's three states into the lock-free [`KeyStates`].
+pub fn publish_key_states(e: &mut Engine) {
+    let bits: Vec<u8> = state(e)
+        .keys
+        .iter()
+        .map(|k| {
+            u8::from(k.game_state) | u8::from(k.raw_state) << 1 | u8::from(k.inserted_state) << 2
+        })
+        .collect();
+    let slot = e.ext_free::<KeyStates>();
+    for (at, b) in slot.bits.iter().zip(bits) {
+        at.store(b, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Key `keycode`'s three states from the lock-free copy ([`KeyStates`]' bits), 0 past the last key.
+pub fn key_states(e: &mut Engine, keycode: u32) -> u8 {
+    e.ext_free::<KeyStates>()
+        .bits
+        .get(keycode as usize)
+        .map_or(0, |b| b.load(std::sync::atomic::Ordering::Relaxed))
+}
+
 fn ret(eax: u32) -> Ret {
     Ret {
         eax,
@@ -442,6 +485,7 @@ fn device_get_device_state(e: &mut Engine, a: &[u32]) -> Ret {
             if hr == DI_OK {
                 let mut bytes = e.mem.bytes(raw.addr(), 256);
                 state(e).process_keyboard_data(&mut bytes);
+                publish_key_states(e);
                 e.mem.write(data, &bytes[..size.min(256) as usize]);
             }
             hr
@@ -464,6 +508,7 @@ fn device_get_device_state(e: &mut Engine, a: &[u32]) -> Ret {
     }
     let wheel = e.mem.i32(data + MOUSE_WHEEL);
     state(e).process_mouse_data(&mut buttons, wheel);
+    publish_key_states(e);
     e.mem.write(data + MOUSE_BUTTONS, &buttons);
     ret(hr)
 }
@@ -589,6 +634,8 @@ pub(crate) fn tick_count(e: &mut Engine) -> u32 {
 /// `Hook_DirectInput8Create_Init` and `Commands_Input_Init` (xNVSE): the fakes' code and vtables,
 /// and the wrap of the import slot.
 pub fn install(e: &mut Engine) {
+    // The lock-free copy of the keys' states, before the threads start.
+    e.ext_free::<KeyStates>();
     let direct_input_vtable = crate::table::alloc(e, 4 * DIRECT_INPUT_SLOTS.len() as u32);
     for (i, f) in DIRECT_INPUT_SLOTS.into_iter().enumerate() {
         let at = DIRECT_INPUT_CODE + 4 * i as u32;
