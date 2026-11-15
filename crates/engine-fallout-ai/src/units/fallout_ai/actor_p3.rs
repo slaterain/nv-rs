@@ -20875,8 +20875,9 @@ mod tests {
         g53_answers(&[(0x008a_1291, Some(0x80))]);
         e.call_log = Some(vec![]);
         formula_level(&mut e, actor, other, seen, seen_line);
-        assert!(calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE)
-            .contains(&vec![actor.addr() + 0xa4, 0x2a]));
+        assert!(
+            calls_to(&e, GET_CLAMPED_ACTOR_FLOAT_VALUE).contains(&vec![actor.addr() + 0xa4, 0x2a])
+        );
     }
 
     #[test]
