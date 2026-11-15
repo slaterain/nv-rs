@@ -39,6 +39,9 @@ pub(crate) const MENU_3D_ROOT_NAME: u32 = 0x0106_ef40;
 const CURSOR_NAME: u32 = 0x0106_f010;
 /// `"Data\Menus\globals.xml"`.
 const GLOBALS_XML_PATH: u32 = 0x0106_eff8;
+/// UI Organizer's patch in [`interface_manager_initialize`] (`0070A049`: the new manager stored,
+/// then `UIOLoad`): a seam of `crates/uio`, read only while [`Engine::uio`] is on.
+pub const UIO_LOAD_SITE: u32 = 0x0070_a049;
 /// `"_background_fill_alpha"` and `"_Has360Controller"`.
 const BACKGROUND_FILL_ALPHA_NAME: u32 = 0x0106_efe0;
 const HAS_360_CONTROLLER_NAME: u32 = 0x0106_efcc;
@@ -1343,6 +1346,10 @@ pub fn interface_manager_initialize(e: &mut Engine, phase: i32, flag: u8) {
             interface_manager_construct(e, block.cast()).cast()
         });
         e.set_global(MANAGER_SINGLETON, manager.addr());
+        // UI Organizer's UIOLoad, which its patch at 0070a049 runs right after the store.
+        if e.uio() {
+            e.site(UIO_LOAD_SITE, &[manager.addr()]);
+        }
     }
     let manager: Ptr<InterfaceManager> = Ptr::new(e.global(MANAGER_SINGLETON));
     if phase == 1 {
@@ -8521,6 +8528,45 @@ mod tests {
         assert_ne!(m, 0);
         assert_eq!(calls(&e, OPERATOR_NEW)[0], vec![0x580]);
         assert_eq!(e.mem.u32(m + 0xc), 1, "constructed: cMenuMode is 1");
+    }
+
+    thread_local! {
+        /// What UI Organizer's handler saw: its word and the singleton then, per call.
+        static UIO_SEEN: RefCell<Vec<(u32, u32)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn uio_load(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let singleton = e.global::<u32>(MANAGER_SINGLETON);
+        UIO_SEEN.with(|s| s.borrow_mut().push((a[0], singleton)));
+        None
+    }
+
+    #[test]
+    fn uio_loads_once_after_the_new_manager_is_stored_and_only_while_on() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_LOAD_SITE);
+        let build = |on: bool| {
+            let mut e = world();
+            allocator(&mut e, OPERATOR_NEW);
+            allocator(&mut e, NI_ALLOC);
+            echo(&mut e, NI_POINT3_CONSTRUCT);
+            e.on_site(AT, uio_load);
+            e.set_uio(on);
+            UIO_SEEN.with(|s| s.borrow_mut().clear());
+            interface_manager_initialize(&mut e, 3, 0);
+            e
+        };
+        // Off: never asked.
+        build(false);
+        assert!(UIO_SEEN.with(|s| s.borrow().is_empty()));
+        // On: once, with the new manager, already stored.
+        let mut e = build(true);
+        let m = e.global::<u32>(MANAGER_SINGLETON);
+        assert_ne!(m, 0);
+        assert_eq!(UIO_SEEN.with(|s| s.borrow().clone()), vec![(m, m)]);
+        // A manager there already: not again.
+        interface_manager_initialize(&mut e, 3, 0);
+        assert_eq!(UIO_SEEN.with(|s| s.borrow().len()), 1);
     }
 
     #[test]

@@ -274,15 +274,18 @@ fn object_velocity_axis_and_length_of_four_lanes() {
 }
 
 #[test]
-fn rcp_estimate_is_the_processors_estimate_not_the_quotient() {
-    // Processors' estimates differ (this one gives 0.1 exactly 10): each within the documented
-    // bound, and 3.0's not the rounded quotient (a 12-bit table estimate; checked on this one).
-    for x in [0.1f32, 3.0, 7.0, 0.3] {
+fn rcp_estimate_is_the_processors_estimate() {
+    // JIP's `rcpss`: the port's estimate is this processor's, bit for bit (read with the
+    // instruction itself), within the bound the specification allows. Processors' tables differ
+    // (this one gives 0.1 exactly 10), and the bound admits the rounded quotient too, so whether
+    // a value comes out as the quotient is the processor's to decide, as in JIP.
+    let xs = [0.1f32, 3.0, 7.0, 0.3].into_iter();
+    for x in xs.chain((1..=4096).map(|i| i as f32 * 0.37)) {
         let est = h::rcp_estimate(x);
+        assert_eq!(est.to_bits(), processor_rcp(x).to_bits(), "{x}");
         let rel = ((f64::from(est) - 1.0 / f64::from(x)) * f64::from(x)).abs();
-        assert!(rel <= 1.5 * 2f64.powi(-12), "{x}: {rel}");
+        assert!(rel <= ESTIMATE_BOUND, "{x}: {rel}");
     }
-    assert_ne!(h::rcp_estimate(3.0), 1.0 / 3.0f32);
 }
 
 #[test]

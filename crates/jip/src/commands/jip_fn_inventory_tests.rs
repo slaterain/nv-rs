@@ -426,3 +426,528 @@ fn all_items_of_a_non_actor_ignore_equipped() {
     let (_, res) = call_on(&mut e, 0x2766, CONT_REF, &[n(0), n(0), n(0), n(1)]);
     assert_eq!(array_data(&e, res), vec![Form(0x206)]);
 }
+
+// ---- lane B2: inventory references and the rest ----
+
+const ALLOC: u32 = FORMS + 0x9000;
+const ALLOC_AREA: u32 = FORMS + 0xa0000;
+const DT_FN: u32 = 0x004b_e0b0;
+const DR_FN: u32 = 0x004b_df90;
+const BIPED_AT: u32 = FORMS + 0x8800;
+
+fn on_entry(e: &Engine, entry: u32) -> f64 {
+    f64::from(e.mem.u32(entry + 4)) + f64::from(e.mem.u32(e.mem.u32(entry)) & 1)
+}
+
+/// The form heap as a bump allocator and fresh reference ids, so every inventory reference has
+/// its own temporary reference and changes entry; the free a no-op.
+fn ref_heap(e: &mut Engine) {
+    e.mem.set_u32(ALLOC, ALLOC_AREA);
+    e.register(0x0040_1000, |e, w| {
+        let at = e.mem.u32(ALLOC);
+        e.mem.set_u32(ALLOC, at + w[0].next_multiple_of(0x10));
+        Ret {
+            eax: at,
+            ..Ret::default()
+        }
+    });
+    e.register(0x0040_1030, |_, _| Ret::default());
+    e.register(0x0055_a2f0, |e, w| {
+        let n = e.mem.u32(ALLOC + 4) + 1;
+        e.mem.set_u32(ALLOC + 4, n);
+        e.mem.set_u32(w[0] + 0xc, 0xff00_0000 + n);
+        Ret {
+            eax: w[0],
+            ..Ret::default()
+        }
+    });
+}
+
+/// An inventory reference's (container, item, count, stack): its entry's count and item.
+fn ir(e: &mut Engine, refr: u32) -> (u32, u32, i32, u32) {
+    let id = crate::commands::ref_id(e, refr);
+    let r = nvse::invref::get(e, id).expect("an inventory reference");
+    let (container, d) = (r.container, r.data);
+    let count = e.mem.u32(d.entry + 4) as i32;
+    (container, e.mem.u32(d.entry + 8), count, d.xdata)
+}
+
+/// The array result's forms as addresses (the form ids of the temporary references).
+fn ref_ids(e: &Engine, res: f64) -> Vec<u32> {
+    array_data(e, res)
+        .into_iter()
+        .map(|d| match d {
+            Form(id) => id,
+            other => panic!("not a form: {other:?}"),
+        })
+        .collect()
+}
+
+/// The temporary reference of an id (the form id is 0xFF00_0000 + n, the n-th made).
+fn by_id(e: &mut Engine, id: u32) -> u32 {
+    nvse::invref::get_ref(e, id)
+}
+
+#[test]
+fn all_item_refs_one_per_stack() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    inventory(&mut e);
+    // The armour: 3 in all, a stack of 2 (ExtraCount) and the worn one; the rest without data.
+    e.mem.set_u32(ENTRY_A + 4, 3);
+    put_extra(&mut e, XDL2, X1, 0x24, 0);
+    e.mem.set_u16(X1 + 0xc, 2);
+    e.mem.set_u8(ARMO + 0x78, 0);
+    let (_, res) = call_on(&mut e, 0x2767, ACTOR, &[n(0x18)]);
+    let ids = ref_ids(&e, res);
+    assert_eq!(ids.len(), 2, "the two stacks cover the count");
+    let refs: Vec<_> = ids.iter().map(|&id| by_id(&mut e, id)).collect();
+    assert_eq!(ir(&mut e, refs[0]), (ACTOR, ARMO, 2, XDL2));
+    assert_eq!(ir(&mut e, refs[1]), (ACTOR, ARMO, 1, XDL));
+    // 4 in all: one more without extra data.
+    e.mem.set_u32(ENTRY_A + 4, 4);
+    let (_, res) = call_on(&mut e, 0x2767, ACTOR, &[n(0x18)]);
+    let ids = ref_ids(&e, res);
+    let last = by_id(&mut e, ids[2]);
+    assert_eq!(ir(&mut e, last), (ACTOR, ARMO, 1, 0), "the rest");
+    // No equipped: the worn stack passed over, its count still taken.
+    let (_, res) = call_on(&mut e, 0x2767, ACTOR, &[n(0x18), n(0), n(0), n(1)]);
+    let ids = ref_ids(&e, res);
+    assert_eq!(ids.len(), 2);
+    let second = by_id(&mut e, ids[1]);
+    assert_eq!(ir(&mut e, second), (ACTOR, ARMO, 1, 0));
+    // 1 in all: the first stack takes it (at most what is left), the worn one is not reached.
+    e.mem.set_u32(ENTRY_A + 4, 1);
+    let (_, res) = call_on(&mut e, 0x2767, ACTOR, &[n(0x18)]);
+    let ids = ref_ids(&e, res);
+    assert_eq!(ids.len(), 1);
+    let only = by_id(&mut e, ids[0]);
+    assert_eq!(ir(&mut e, only), (ACTOR, ARMO, 1, XDL2));
+}
+
+#[test]
+fn all_item_refs_into_a_form_list_and_filters() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    inventory(&mut e);
+    put_list(&mut e, LIST + 0x18, NODES + 0x300, &[ALCH]);
+    e.mem.set_u32(LIST + 0x20, 1);
+    let (_, res) = call_on(&mut e, 0x2767, ACTOR, &[n(0), n(0), n(1), n(0), rf(LIST)]);
+    // Weapon, armour (two stacks: XDL2 has no count of its own, so 1 each... the entry's count
+    // is 1, the first stack takes it), ammunition; the quest item left out.
+    assert_eq!(res, 3.0, "the count");
+    assert_eq!(e.mem.u32(LIST + 0x20), 0, "the script-added count");
+    let items: Vec<u32> = list_items(&e, Ptr::new(LIST + 0x18));
+    assert_eq!(items.len(), 3);
+    let kinds: Vec<u32> = items.iter().map(|&r| ir(&mut e, r).1).collect();
+    assert_eq!(kinds, vec![AMMO, ARMO, WEAP], "each put first");
+    // Unplayable left out.
+    e.mem.set_u8(WEAP + 0x100, 0x80);
+    e.mem.set_f64(RESULT, 0.0);
+    let (_, res) = call_on(&mut e, 0x2767, ACTOR, &[n(0x28), n(1)]);
+    assert_eq!(res, 0.0, "no array without references");
+}
+
+/// The actor's biped data: slot 2 the armour (upper body, part mask 4), slot 3 the same armour.
+fn biped(e: &mut Engine) -> u32 {
+    let equipment = BIPED_AT;
+    e.mem.set_u32(ACTOR_VT + 0x1e8, 0x0040_2000);
+    e.register(0x0040_2000, |_, _| Ret {
+        eax: BIPED_AT,
+        ..Ret::default()
+    });
+    e.mem.set_u32(equipment + 0x2c + 0x10 * 2, ARMO);
+    e.mem.set_u32(equipment + 0x2c + 0x10 * 3, ARMO);
+    e.mem.set_u32(equipment + 0x2c + 0x10 * 5, WEAP);
+    e.mem.set_u32(equipment + 0x2c + 0x10 * 6, MISC);
+    e.mem.set_u32(ARMO + 0x74, 4);
+    equipment
+}
+
+#[test]
+fn equipped_armor_refs_per_slot() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    inventory(&mut e);
+    biped(&mut e);
+    // The quest item (no armour) in slot 6 with a worn stack too: passed over.
+    e.mem.set_u32(ENTRY_W, FORMS + 0x8300);
+    // The entry holds 3, the worn stack no count of its own: the reference gets the entry's 3.
+    e.mem.set_u32(ENTRY_A + 4, 3);
+    let (_, res) = call_on(&mut e, 0x28d1, ACTOR, &[]);
+    let ids = ref_ids(&e, res);
+    assert_eq!(
+        ids.len(),
+        2,
+        "the armour in two slots; the weapon and the quest item are no armour"
+    );
+    let r0 = by_id(&mut e, ids[0]);
+    assert_eq!(
+        ir(&mut e, r0),
+        (ACTOR, ARMO, 3, XDL),
+        "its worn stack, the entry's count"
+    );
+    // Not worn: an empty array still.
+    e.mem.set_u8(XDL + 8 + 2, 0);
+    let (_, res) = call_on(&mut e, 0x28d1, ACTOR, &[]);
+    assert!(array_data(&e, res).is_empty());
+    e.mem.set_f64(RESULT, 0.0);
+    assert_eq!(
+        call_on(&mut e, 0x28d1, CONT_REF, &[]).1,
+        0.0,
+        "not an actor"
+    );
+}
+
+#[test]
+fn equipped_item_ref_with_and_without_3d() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    inventory(&mut e);
+    let equipment = biped(&mut e);
+    // Without 3D: the changes entries; slot 2 the worn armour, with the entry's count (3).
+    e.mem.set_u32(ENTRY_A + 4, 3);
+    call_on(&mut e, 0x2839, ACTOR, &[n(2)]);
+    let id = form_result(&e);
+    let made = by_id(&mut e, id);
+    assert_eq!(ir(&mut e, made), (ACTOR, ARMO, 3, XDL));
+    e.mem.set_u32(RESULT, 0);
+    call_on(&mut e, 0x2839, ACTOR, &[n(4)]);
+    assert_eq!(form_result(&e), 0, "the armour does not cover slot 4");
+    call_on(&mut e, 0x2839, ACTOR, &[n(20)]);
+    assert_eq!(form_result(&e), 0, "past slot 19");
+    // With 3D: the biped slots; the weapon slot reads the held weapon's entry.
+    let loaded = FORMS + 0x8900;
+    e.mem.set_u32(ACTOR + 0x64, loaded);
+    e.mem.set_u32(loaded + 0x14, FORMS + 0x8a00);
+    call_on(&mut e, 0x2839, ACTOR, &[n(2)]);
+    let id = form_result(&e);
+    let made = by_id(&mut e, id);
+    assert_eq!(ir(&mut e, made), (ACTOR, ARMO, 3, XDL));
+    e.mem.set_u32(RESULT, 0);
+    e.mem.set_u32(equipment + 0x2c + 0x10 * 2, 0);
+    e.mem.set_u32(equipment + 0x2c + 0x10 * 3, 0);
+    call_on(&mut e, 0x2839, ACTOR, &[n(2)]);
+    assert_eq!(form_result(&e), 0, "no armour in the biped slots");
+    e.mem.set_u32(ACTOR + 0x68, PROCESS);
+    let held = FORMS + 0x8400;
+    e.mem.set_u32(PROCESS + 0x114, held);
+    e.mem.set_u32(held + 4, 4);
+    e.mem.set_u32(held + 8, WEAP);
+    let lists = FORMS + 0x8b00;
+    e.mem.set_u32(held, lists);
+    put_list(&mut e, lists, NODES + 0x400, &[XDL2]);
+    call_on(&mut e, 0x2839, ACTOR, &[n(5)]);
+    let id = form_result(&e);
+    let made = by_id(&mut e, id);
+    assert_eq!(
+        ir(&mut e, made),
+        (ACTOR, WEAP, 4, XDL2),
+        "the held weapon's first stack, its entry's count"
+    );
+}
+
+#[test]
+fn hotkey_item_ref_of_the_player() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    inventory(&mut e);
+    e.mem.set_u32(0x011d_ea3c, ACTOR);
+    put_extra(&mut e, XDL2, X1, 0x4a, 3);
+    // The stack holds 2 (ExtraCount) of the entry's 3: the reference gets the stack's 2.
+    e.mem.set_u32(ENTRY_A + 4, 3);
+    put_extra(&mut e, XDL2, FORMS + 0x4380, 0x24, 0);
+    e.mem.set_u16(FORMS + 0x4380 + 0xc, 2);
+    call(&mut e, 0x28f1, &[n(4)]);
+    let id = form_result(&e);
+    let made = by_id(&mut e, id);
+    assert_eq!(
+        ir(&mut e, made),
+        (ACTOR, ARMO, 2, XDL2),
+        "hotkey 4 is index 3; the stack's count"
+    );
+    e.mem.set_u32(RESULT, 0);
+    call(&mut e, 0x28f1, &[n(3)]);
+    assert_eq!(form_result(&e), 0, "no stack on hotkey 3");
+    call(&mut e, 0x28f1, &[n(0)]);
+    assert_eq!(form_result(&e), 0);
+    call(&mut e, 0x28f1, &[n(9)]);
+    assert_eq!(form_result(&e), 0);
+}
+
+#[test]
+fn self_as_inventory_ref_by_the_running_locals() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    inventory(&mut e);
+    // The armour's two stacks: XDL2 has a script with other locals, XDL with the running ones.
+    let (x2, x3) = (FORMS + 0x4380, FORMS + 0x43c0);
+    put_extra(&mut e, XDL2, x2, 0x0d, 0);
+    e.mem.set_u32(x2 + 0x10, 0x7777);
+    put_extra(&mut e, XDL, x3, 0x0d, 0);
+    e.mem.set_u32(x3 + 0x10, EVENTS);
+    e.mem.set_u32(TEMP_REF + 0x20, ARMO);
+    // The running stack's count 0, then -1, in an entry of 3: at least 1, not the entry's.
+    e.mem.set_u32(ENTRY_A + 4, 3);
+    let count = FORMS + 0x43e0;
+    put_extra(&mut e, XDL, count, 0x24, 0);
+    for n in [0u16, 0xffff] {
+        e.mem.set_u16(count + 0xc, n);
+        call_in(&mut e, 0x2936, TEMP_REF, ACTOR, &[]);
+        let id = form_result(&e);
+        let made = by_id(&mut e, id);
+        assert_eq!(ir(&mut e, made), (ACTOR, ARMO, 1, XDL), "count {n}: 1");
+    }
+    // A count of 2: the stack's.
+    e.mem.set_u16(count + 0xc, 2);
+    call_in(&mut e, 0x2936, TEMP_REF, ACTOR, &[]);
+    let id = form_result(&e);
+    let made = by_id(&mut e, id);
+    assert_eq!(ir(&mut e, made), (ACTOR, ARMO, 2, XDL));
+    e.mem.set_u32(RESULT, 0);
+    call_in(&mut e, 0x2936, TEMP_REF, 0, &[]);
+    assert_eq!(form_result(&e), 0, "not inside a container");
+}
+
+const EVENTS: u32 = FORMS + 0x9100;
+
+/// A call from an item's script inside `containing` (the handler's `containingObj` and
+/// `eventList` words set too).
+fn call_in(e: &mut Engine, opcode: u32, this: u32, containing: u32, args: &[Vec<u8>]) {
+    let mut words = crate::test_support::line(e, opcode, args);
+    words[2] = this;
+    words[3] = containing;
+    words[5] = EVENTS;
+    let execute = crate::test_support::execute_of(e, opcode);
+    e.call(execute, &words);
+}
+
+#[test]
+fn item_ref_current_health() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    // A plain reference of a weapon: health 200, a health mod in slot 2 (+50) when attached.
+    e.mem.set_u32(CONT_REF + 0x20, WEAP);
+    e.mem.set_u32(WEAP + 0x98, 200);
+    e.mem.set_u32(WEAP + 0x184, 10);
+    e.mem.set_f32(WEAP + 0x190, 50.0);
+    assert_eq!(
+        call_on(&mut e, 0x270f, CONT_REF, &[]).1,
+        200.0,
+        "no ExtraHealth: full"
+    );
+    assert_eq!(call_on(&mut e, 0x270f, CONT_REF, &[n(1)]).1, 1.0);
+    put_extra(&mut e, CONT_REF + 0x44, X1, 0x25, 0);
+    e.mem.set_f32(X1 + 0xc, 125.0);
+    let x2 = FORMS + 0x4380;
+    put_extra(&mut e, CONT_REF + 0x44, x2, 0x8d, 0);
+    e.mem.set_u8(x2 + 0xc, 2);
+    assert_eq!(call_on(&mut e, 0x270f, CONT_REF, &[]).1, 125.0);
+    assert_eq!(call_on(&mut e, 0x270f, CONT_REF, &[n(1)]).1, 0.5, "of 250");
+    assert_eq!(
+        call_on(&mut e, 0x270f, CONT_REF, &[n(2)]).1,
+        250.0,
+        "the mod adds"
+    );
+    e.mem.set_u8(x2 + 0xc, 1);
+    assert_eq!(
+        call_on(&mut e, 0x270f, CONT_REF, &[n(2)]).1,
+        200.0,
+        "slot 1 has no health mod"
+    );
+    // An armour inventory reference: its entry's item and stack.
+    e.mem.set_u32(ARMO + 0x6c, 40);
+    put_extra(&mut e, XDL, FORMS + 0x43c0, 0x25, 0);
+    e.mem.set_f32(FORMS + 0x43c0 + 0xc, 10.0);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 1, XDL);
+    assert_eq!(call_on(&mut e, 0x270f, refr, &[n(1)]).1, 0.25);
+    assert_eq!(call_on(&mut e, 0x270f, refr, &[n(2)]).1, 40.0);
+    // Neither a weapon nor an armour: no full health.
+    e.mem.set_u32(CONT_REF + 0x20, MISC);
+    assert_eq!(call_on(&mut e, 0x270f, CONT_REF, &[n(2)]).1, 0.0);
+}
+
+#[test]
+fn armor_effective_dt_and_dr() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    // On the entry: its count and its first list (the low bit).
+    // Both take the entry and JIP's 0 (`RET 4`; the translations read two words).
+    e.register(DT_FN, |e, w| {
+        assert_eq!(w.len(), 2, "the entry and one word");
+        assert_eq!(w[1], 0);
+        Ret {
+            st0: 12.5 + on_entry(e, w[0]),
+            ..Ret::default()
+        }
+    });
+    e.register(DR_FN, |e, w| {
+        assert_eq!(w.len(), 2, "the entry and one word");
+        assert_eq!(w[1], 0);
+        Ret {
+            st0: 30.0 + on_entry(e, w[0]),
+            ..Ret::default()
+        }
+    });
+    e.mem.set_u32(CONT_REF + 0x20, ARMO);
+    assert_eq!(
+        call_on(&mut e, 0x28e5, CONT_REF, &[]).1,
+        13.5,
+        "a temporary entry, count 1"
+    );
+    assert_eq!(call_on(&mut e, 0x28e6, CONT_REF, &[]).1, 31.0);
+    let refr = nvse::invref::create_entry(&mut e, ACTOR, ARMO, 3, XDL);
+    e.mem.set_u32(refr + 0x20, ARMO);
+    assert_eq!(
+        call_on(&mut e, 0x28e5, refr, &[]).1,
+        15.5,
+        "the inventory reference's entry"
+    );
+    e.mem.set_u32(CONT_REF + 0x20, WEAP);
+    e.mem.set_f64(RESULT, 9.0);
+    assert_eq!(
+        call_on(&mut e, 0x28e5, CONT_REF, &[]).1,
+        0.0,
+        "not armour: 0"
+    );
+}
+
+thread_local! {
+    static REMOVES: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[test]
+fn remove_item_target_stacks_then_the_rest() {
+    let mut e = setup();
+    inventory(&mut e);
+    e.mem.set_u32(ACTOR_VT + 0x17c, 0x0040_3000);
+    e.register(0x0040_3000, |e, w| {
+        REMOVES.with(|r| r.borrow_mut().push(w[1..].to_vec()));
+        // RemoveItem: the stack's list leaves the entry when whole (stand-in).
+        let lists = e.mem.u32(ENTRY_A);
+        if w[2] != 0 && e.mem.u32(lists) == w[2] {
+            let next = e.mem.u32(lists + 4);
+            let after = if next == 0 { 0 } else { e.mem.u32(next) };
+            e.mem.set_u32(lists, after);
+            e.mem
+                .set_u32(lists + 4, if next == 0 { 0 } else { e.mem.u32(next + 4) });
+        }
+        Ret::default()
+    });
+    e.mem.set_u32(ENTRY_A + 4, 4);
+    put_extra(&mut e, XDL2, X1, 0x24, 0);
+    e.mem.set_u16(X1 + 0xc, 2);
+    REMOVES.with(|r| r.borrow_mut().clear());
+    call_on(&mut e, 0x2688, ACTOR, &[rf(ARMO), rf(CONT_REF)]);
+    let removes = REMOVES.with(|r| r.borrow().clone());
+    assert_eq!(
+        removes,
+        vec![
+            vec![ARMO, XDL2, 2, 1, 0, CONT_REF, 0, 0, 1, 0],
+            vec![ARMO, XDL, 1, 1, 0, CONT_REF, 0, 0, 1, 0],
+            vec![ARMO, 0, 1, 1, 0, CONT_REF, 0, 0, 1, 0],
+        ]
+    );
+}
+
+#[test]
+fn remove_item_target_through_a_list_with_a_quantity() {
+    let mut e = setup();
+    inventory(&mut e);
+    e.mem.set_u32(ACTOR_VT + 0x17c, 0x0040_3000);
+    e.register(0x0040_3000, |_, w| {
+        REMOVES.with(|r| r.borrow_mut().push(w[1..].to_vec()));
+        Ret::default()
+    });
+    REMOVES.with(|r| r.borrow_mut().clear());
+    e.mem.set_u32(ENTRY_A + 4, 4);
+    put_extra(&mut e, XDL2, X1, 0x24, 0);
+    e.mem.set_u16(X1 + 0xc, 2);
+    put_list(&mut e, LIST + 0x18, NODES + 0x300, &[0, ARMO]);
+    // A form list (its empty node passed over), 1 of the armour, the owner cleared.
+    call_on(&mut e, 0x2688, ACTOR, &[rf(LIST), rf(CONT_REF), n(1), n(1)]);
+    assert_eq!(
+        REMOVES.with(|r| r.borrow().clone()),
+        vec![vec![ARMO, XDL2, 1, 0, 0, CONT_REF, 0, 0, 1, 0]]
+    );
+}
+
+#[test]
+fn remove_item_target_a_stack_without_a_count_stays_first() {
+    let mut e = setup();
+    inventory(&mut e);
+    e.mem.set_u32(ACTOR_VT + 0x17c, 0x0040_3000);
+    e.register(0x0040_3000, |_, w| {
+        REMOVES.with(|r| r.borrow_mut().push(w[1..].to_vec()));
+        Ret::default()
+    });
+    REMOVES.with(|r| r.borrow_mut().clear());
+    // 3 of the armour; its first stack's ExtraCount is 0 and RemoveItem leaves it first: JIP
+    // removes 1 from it each time until the 3 are done.
+    e.mem.set_u32(ENTRY_A + 4, 3);
+    put_extra(&mut e, XDL2, X1, 0x24, 0);
+    e.mem.set_u16(X1 + 0xc, 0);
+    call_on(&mut e, 0x2688, ACTOR, &[rf(ARMO), rf(CONT_REF)]);
+    assert_eq!(
+        REMOVES.with(|r| r.borrow().clone()),
+        vec![vec![ARMO, XDL2, 1, 1, 0, CONT_REF, 0, 0, 1, 0]; 3]
+    );
+    // A form list holding itself and the armour: the list walked once, the armour once.
+    REMOVES.with(|r| r.borrow_mut().clear());
+    e.mem.set_u32(ENTRY_A + 4, 1);
+    put_list(&mut e, LIST + 0x18, NODES + 0x300, &[LIST, ARMO]);
+    call_on(&mut e, 0x2688, ACTOR, &[rf(LIST), rf(CONT_REF)]);
+    assert_eq!(
+        REMOVES.with(|r| r.borrow().clone()),
+        vec![vec![ARMO, XDL2, 1, 1, 0, CONT_REF, 0, 0, 1, 0]]
+    );
+}
+
+#[test]
+fn equipped_item_ref_first_covering_slot_weapon_and_null_forms() {
+    let mut e = setup();
+    ref_heap(&mut e);
+    inventory(&mut e);
+    let equipment = biped(&mut e);
+    // A third stack list, worn, for the second entry.
+    let xdl3 = FORMS + 0x4280;
+    e.mem.set_u8(xdl3 + 8 + 2, 0x40);
+    let lists = FORMS + 0x8340;
+    put_list(&mut e, lists, NODES + 0x280, &[xdl3]);
+    e.mem.set_u32(ENTRY_W, lists);
+    // Without 3D, slot 5: the first weapon entry with a worn stack, the entry's count.
+    e.mem.set_u32(ENTRY_W + 8, WEAP);
+    e.mem.set_u32(ENTRY_W + 4, 6);
+    call_on(&mut e, 0x2839, ACTOR, &[n(5)]);
+    let id = form_result(&e);
+    let made = by_id(&mut e, id);
+    assert_eq!(ir(&mut e, made), (ACTOR, WEAP, 6, xdl3));
+    // An entry with lists but no form first: passed over, the worn armour found after it.
+    let null_entry = FORMS + 0x4180;
+    e.mem.set_u32(null_entry, lists);
+    e.mem.set_u32(null_entry + 4, 1);
+    e.mem.set_u32(null_entry + 8, 0);
+    put_list(
+        &mut e,
+        FORMS + 0x8200,
+        NODES + 0x100,
+        &[null_entry, ENTRY_A, ENTRY_W],
+    );
+    e.mem.set_u32(RESULT, 0);
+    call_on(&mut e, 0x2839, ACTOR, &[n(2)]);
+    let id = form_result(&e);
+    let made = by_id(&mut e, id);
+    assert_eq!(ir(&mut e, made), (ACTOR, ARMO, 1, XDL));
+    // With 3D: slot 2 holds the armour, covering part 2 but not worn; slot 3 another armour
+    // covering it, worn. The first covering slot ends the search: nothing.
+    let loaded = FORMS + 0x8900;
+    e.mem.set_u32(ACTOR + 0x64, loaded);
+    e.mem.set_u32(loaded + 0x14, FORMS + 0x8a00);
+    e.mem.set_u8(XDL + 8 + 2, 0);
+    e.mem.set_u32(equipment + 0x2c + 0x10 * 3, ARMO2);
+    e.mem.set_u32(ARMO2 + 0x74, 4);
+    e.mem.set_u32(ENTRY_W + 8, ARMO2);
+    e.mem.set_u32(RESULT, 0);
+    call_on(&mut e, 0x2839, ACTOR, &[n(2)]);
+    assert_eq!(form_result(&e), 0, "stops at the first covering slot");
+}

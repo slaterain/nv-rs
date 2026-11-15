@@ -492,6 +492,14 @@ fn task_package_flags() {
 /// from the persistent cell's named markers (unnamed and other references left out; a later
 /// marker in a grid cell replaces an earlier), the nearest in the first ring with any, "at"
 /// within 4096 units, the direction words beyond, and the grid kept from the first call.
+///
+/// Off the axis, in these tests: the distance is `rsqrtss` and one Newton step, as JIP's
+/// `Point3Distance` runs it on the player's processor, and processors' `rsqrtss` tables differ
+/// in their low bits. Due east or west (the same y) the true x/d is exactly 1 or -1, and for
+/// about half the estimates the spec allows the step lands one ulp under the true distance,
+/// so x/d passes 1 and JIP says "SE"/"SW" instead: on such a set-up the word depends on the
+/// processor (CI failed once that way). An east or west set-up here sits 1000 units (500 in
+/// `location_directions`) off the axis, where every allowed estimate gives the same word.
 #[test]
 fn location_names() {
     let mut e = setup();
@@ -541,8 +549,9 @@ fn location_names() {
     );
     assert_eq!(grid[&grid_cell(100.0, 100.0)], M1);
     assert_eq!(grid[&grid_cell(9000.0, 100.0)], M2);
-    // Two cells east of Primm's: the ring at radius 2 finds it, east.
-    place(&mut e, PLAIN, 9000.0 + 8192.0, 100.0, 0.0);
+    // Two cells east of Primm's: the ring at radius 2 finds it, east. 1000 north of due east
+    // (x/d about 0.993): see the note on `location_names`.
+    place(&mut e, PLAIN, 9000.0 + 8192.0, 100.0 + 1000.0, 0.0);
     assert_eq!(name(&mut e), b"East of Primm");
     place(&mut e, PLAIN, 9000.0 - 8192.0 + 4096.0 * 0.0, 100.0, 0.0);
     // 808 east of Goodsprings' cell... the nearest in ring 0 is Goodsprings (cell 0,0).
@@ -566,7 +575,8 @@ fn location_names() {
 
 /// The direction words by the x component of the unit vector to the reference (`>= 0.97`
 /// east, `<= -0.97` west, within 0.26 north or south by y, else the quarter), from one marker
-/// at the origin with the reference 5000 units out at each angle.
+/// at the origin with the reference 5000 units out at each angle (east and west 500 units north
+/// of the axis: see the note on `location_names`).
 #[test]
 fn location_directions() {
     let mut e = setup();
@@ -584,8 +594,8 @@ fn location_directions() {
         let v = run(e, 0x2709, PLAIN, &[]);
         string_result(e, v)
     };
-    assert_eq!(at(&mut e, 5000.0, 0.0), b"East of Here");
-    assert_eq!(at(&mut e, -5000.0, 0.0), b"West of Here");
+    assert_eq!(at(&mut e, 5000.0, 500.0), b"East of Here");
+    assert_eq!(at(&mut e, -5000.0, 500.0), b"West of Here");
     assert_eq!(at(&mut e, 0.0, 5000.0), b"North of Here");
     assert_eq!(at(&mut e, 0.0, -5000.0), b"South of Here");
     assert_eq!(at(&mut e, 3536.0, 3536.0), b"NE of Here");
@@ -602,6 +612,16 @@ fn location_directions() {
         b"NE of Here"
     };
     assert_eq!(at(&mut e, 4850.0, 1215.6), want);
+    // Due east and west: x/d is 1 or -1 only when this processor's estimate lands the step on
+    // 5000 exactly; one ulp under, it passes 1 and the word is the quarter's (y - y' = 0: south).
+    let d = super::super::ln_fn_math::point3_distance([5000.0, 0.0, 0.0], [0.0; 3]);
+    let (east, west): (&[u8], &[u8]) = if 5000.0f32 / d <= 1.0 {
+        (b"East of Here", b"West of Here")
+    } else {
+        (b"SE of Here", b"SW of Here")
+    };
+    assert_eq!(at(&mut e, 5000.0, 0.0), east);
+    assert_eq!(at(&mut e, -5000.0, 0.0), west);
 }
 
 /// Two named markers in the same ring (radius 2 around the reference's cell 0,0) at different
@@ -633,9 +653,10 @@ fn location_two_markers_in_one_ring() {
         string_result(e, v)
     };
     assert_eq!(name(&mut e), b"North of Primm");
-    // Goodsprings moved to 6244 east (still cell 2,0): now nearer and met first; x/d = -1:
-    // "West of".
-    place(&mut e, M1, 8292.0, 2048.0, 0.0);
+    // Goodsprings moved to 6244 east and 1000 north (still cell 2,0; 6324 away): now nearer and
+    // met first; x/d about -0.987: "West of" (off the axis: see the note on
+    // `location_names`).
+    place(&mut e, M1, 8292.0, 3048.0, 0.0);
     assert_eq!(name(&mut e), b"West of Goodsprings");
 }
 
