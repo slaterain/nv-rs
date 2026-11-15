@@ -4626,6 +4626,16 @@ pub fn start_menu_confirm_new_game(e: &mut Engine) {
             )
             .u32();
     }
+    // JIP LN NVSE's G37 at `0x007D333B` (group GA's row and handler, a fix row:
+    // InvalidChargenQuestFixHook): the seam with the quest found (0 for none) answers the quest
+    // to start, the vanilla one (0x102037) when none was found. JIP then goes on at 0x7D3345 even
+    // with no quest; the exe's "not found" path below is kept for that (no quest to start). One
+    // load while JIP's fixes are not in.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(answer) = e.site(0x007d_333b, &[quest]) {
+            quest = answer;
+        }
+    }
     if quest == 0 {
         let text = e.call(SETTING_STRING, &args![SETTING_011DAC00]).u32();
         e.call(LOG_MESSAGE, &args![TEXT_QUEST_NOT_FOUND, text]);
@@ -10423,6 +10433,95 @@ mod tests {
             ]
         );
         assert!(r.calls_to(LOG_MESSAGE).is_empty());
+    }
+
+    thread_local! {
+        static G37_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g37_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G37's seam asked without FIXES");
+    }
+
+    /// JIP's answer with a vanilla quest at 0x6100: the quest found, else that one.
+    fn g37_jip(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G37_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(if a[0] != 0 { a[0] } else { 0x6100 })
+    }
+
+    /// JIP's answer when the game has no vanilla quest either.
+    fn g37_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G37_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// JIP LN NVSE's G37 seam (`0x007D333B`, group GA's row, a fix row). The INI's quest is
+    /// form 0x6000 of type `kind` (0x47 a quest, 0x46 not). With the word 0 or `INSTALLED` alone
+    /// it is not asked; with `FIXES` and no handler, the exe's; with a handler it is asked once
+    /// with exactly the quest found (0 for none), and its answer is the quest started
+    /// (`0x60C9C0` with it and 1, the rest of the start after it); an answer of 0 takes the
+    /// exe's "not found" path (logged, `ChooseBack`).
+    #[test]
+    fn confirm_new_game_jip_vanilla_quest_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, kind: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let mut r = rig();
+            let _ = r.menu();
+            let text = r.alloc(0x10);
+            r.with(SETTING_STRING, move |_, _| eax(text));
+            r.stub(STRTOL, 0x1a2b);
+            r.stub(LOOKUP_FORM, 0x6000);
+            r.stub(FN_00401170, kind);
+            r.with(RT_DYNAMIC_CAST, |_, a| eax(a[0]));
+            r.stub(GET_FORM, 0x9000);
+            r.stub(OPTION_TEXT, 0xa000);
+            r.stub(INTERFACE_MANAGER_GETTER, 0x100);
+            let player = r.alloc(0x100);
+            r.e.set_global(GLOBAL_OBJECT_011DEA3C, player);
+            let loading = r.alloc(0x100);
+            r.e.mem.set_u32(loading + 0x54, 0x5400);
+            r.e.set_global(LOADING_MENU, loading);
+            let dlc = r.alloc(0x100);
+            r.stub(DLC_GETTER, dlc);
+            r.e.map(0x011d_8000, 0x1000);
+            if let Some(handler) = handler {
+                r.e.on_site_for_test(0x007d_333b, handler);
+            }
+            r.e.set_jip_patches(word);
+            G37_SEEN.with(|s| s.borrow_mut().clear());
+            r.e.call(0x007d_32b0, &args![]);
+            let started = r.calls_to(FN_0060C9C0);
+            let logged = r.calls_to(LOG_MESSAGE).len();
+            if started.is_empty() {
+                assert_eq!(
+                    r.calls_to(OPTIONS_LIST_HAS_SELECTION).len(),
+                    1,
+                    "ChooseBack"
+                );
+            } else {
+                assert_eq!(r.calls_to(ARCHIVE_CLEANUP).len(), 1, "the start goes on");
+                assert_eq!(r.calls_to(FN_00788A90), vec![vec![1]]);
+            }
+            (started, logged, G37_SEEN.with(|s| s.take()))
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, 0x46, Some(g37_never)), (vec![], 1, vec![]));
+            assert_eq!(
+                run(word, 0x47, Some(g37_never)),
+                (vec![vec![0x6000, 1]], 0, vec![])
+            );
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, 0x46, None), (vec![], 1, vec![]), "no handler");
+        assert_eq!(
+            run(fixes, 0x46, Some(g37_jip)),
+            (vec![vec![0x6100, 1]], 0, vec![vec![0]])
+        );
+        assert_eq!(
+            run(fixes, 0x47, Some(g37_jip)),
+            (vec![vec![0x6000, 1]], 0, vec![vec![0x6000]])
+        );
+        assert_eq!(run(fixes, 0x46, Some(g37_none)), (vec![], 1, vec![vec![0]]));
     }
 
     // ----- 007d3470, 007d35c0, 007d3a30 -----

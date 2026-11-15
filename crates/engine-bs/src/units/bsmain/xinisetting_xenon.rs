@@ -287,9 +287,18 @@ pub fn ini_setting_collection_read_setting(e: &mut Engine, this: Ptr, setting: P
                     } else {
                         e.mem.u32(value_slot)
                     };
+                    // JIP LN NVSE's G08 at `0x00C44405` (group GA's row and handler, a fix row:
+                    // `SafeWrite8(0xC44405, 4)`, the `PUSH 0x100` at 0xC44403 becomes 0x400):
+                    // the seam answers the size. The buffer (`EBP-0x698`) has 0x500 bytes up to
+                    // the name at `EBP-0x198`. One load while JIP's fixes are not in.
+                    let size = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                        e.site(0x00c4_4405, &[0x100]).unwrap_or(0x100)
+                    } else {
+                        0x100
+                    };
                     e.call(
                         GET_PRIVATE_PROFILE_STRING,
-                        &args![section, name, current, string_text, 0x100u32, file],
+                        &args![section, name, current, string_text, size, file],
                     );
                     e.call(SET_STRING_VALUE, &args![setting, string_text]);
                 }
@@ -697,5 +706,57 @@ mod tests {
         assert_eq!(reads[1][2], 0x5000);
         let stored = calls_to(&e, SET_STRING_VALUE);
         assert_eq!(stored, vec![vec![string, reads[1][3]]]);
+    }
+
+    thread_local! {
+        static G08_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g08_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G08's seam asked without FIXES");
+    }
+
+    fn g08_size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G08_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x3f7)
+    }
+
+    /// JIP LN NVSE's G08 seam (`0x00C44405`, group GA's row, a fix row): with the word 0 or
+    /// `INSTALLED` alone it is not asked and the text setting is read with the exe's 0x100; with
+    /// `FIXES` and no handler, 0x100; with a handler it is asked once with exactly `[0x100]` and
+    /// its answer is the size passed to `GetPrivateProfileStringA` for the setting's text (the
+    /// language read before it keeps 0x100), and the text is still stored after.
+    #[test]
+    fn read_strings_jip_buffer_size_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let (mut e, collection) = ini_engine(false);
+            e.mem.write(LANGUAGE_SECTION, b"LANGUAGE\0");
+            e.register(GET_PRIVATE_PROFILE_STRING, |_, _| Ret::default());
+            e.register(SET_STRING_VALUE, |_, a| a[0].into_ret());
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x00c4_4405, handler);
+            }
+            e.set_jip_patches(word);
+            let string = setting(&mut e, "sText:LANGUAGE", 0x5000);
+            G08_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            e.call(0x00c4_4280, &args![collection, string]);
+            let sizes: Vec<u32> = calls_to(&e, GET_PRIVATE_PROFILE_STRING)
+                .iter()
+                .map(|w| w[4])
+                .collect();
+            let stored = calls_to(&e, SET_STRING_VALUE).len();
+            (sizes, stored, G08_SEEN.with(|s| s.take()))
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, Some(g08_never)), (vec![0x100, 0x100], 1, vec![]));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, None), (vec![0x100, 0x100], 1, vec![]));
+        assert_eq!(
+            run(fixes, Some(g08_size)),
+            (vec![0x100, 0x3f7], 1, vec![vec![0x100]])
+        );
     }
 }

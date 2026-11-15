@@ -986,7 +986,19 @@ like 3.9a's above (JIP's comment, exe places, what a player with JIP gets, built
 
 #### GA: UI: HUD, messages, text, start-up INI
 
-Nothing built yet.
+All fix rows (in with the row `NV_JIP_GAME_PATCHES`, off in vanilla); with JIP installed and the row
+off, each place runs the exe's code unchanged.
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| "Increase buffer size for GetPrivateProfileString" (`SafeWrite8(0xC44405, 4)`) | `INISettingCollection::ReadSetting` `00c44280`, `0xC44405` | A text setting in an INI file longer than 255 characters is read whole (up to 1,023); the game cuts it at 255 | 3.9 GA-2 |
+| "Increase max trait description length to 0x400 characters" (four writes from `0x7E6EA6`) | `TraitMenu::DoEnter` `007e6ea0`, `0x7E6F04` | A trait's description in the character creation trait menu shows up to 1,023 characters (the game cuts it at 511). JIP's own buffer address bytes put its buffer below its stack frame; the port gives the 0x400 bytes inside the frame | 3.9 GA-2 |
+| "TileMenu::DoDestroy fix for OnMenuClose" (`SafeWrite16(0xA1F035, 0x30EB)`) | the menu tile's destructor `00a1eff0`, `0xA1F035` | A menu that is destroyed keeps its "open" mark until it is gone, so what runs as it closes (the `OnMenuClose` events, `MenuMode` tests) still sees it open | 3.9 GA-2 |
+| (none; 11 bytes at `0x7AA80F`) | the activation choices `007aa720`, `0x7AA80F` | A perk's activation choice with no text is left out of the activation menu instead of crashing the game | 3.9 GA-2 |
+| (none; `SafeWrite16(0x71D0D2, 0x1BEB)`) | `MenuConsole::Print` `0071d0a0`, `0x71D0D2` | Console lines printed while a loading screen is up are kept (the game drops them) | 3.9 GA-2 |
+| (none; `InvalidChargenQuestFixHook` at `0x7D333B`) | `StartMenu::ConfirmNewGame` `007d32b0`, `0x7D333B` | A new game whose starting quest setting names something that is not a quest starts the vanilla one (`0x102037`) instead of going back to the menu. If even that quest is missing the game goes back to the menu (JIP would start a missing quest) | 3.9 GA-2 |
+| (none; `ToggleConsoleHook` at `0x70E5FE`) | `InterfaceManager::Idle` `0070c4a0`, `0x70E5FE` | The console opens or closes once per press of its key (only on the frame the key goes down) | 3.9 GA-2 |
+| (`InitJIPHooks`: `ClearHUDOrphanedTiles` at `0x7704AE`) | `HUDMainMenu::DoIdle` `00770430`, `0x7704AE` | HUD elements whose 3D was taken off the screen are destroyed each frame instead of being left behind | 3.9 GA-2 |
 
 #### GB: UI: item lists, repair, pad dead zones
 

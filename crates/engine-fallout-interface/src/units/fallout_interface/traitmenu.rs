@@ -547,11 +547,21 @@ pub fn trait_menu_do_enter(e: &mut Engine, this: Ptr, id: u32, tile: u32) {
     let name = e.call(STRING_C_STR, &args![perk.wrapping_add(0x2c)]).u32();
     let name_tile = tile_at(e, base, 2);
     e.call(TILE_SET_STRING, &args![name_tile, 0xfccu32, name, 1u32]);
-    e.with_stack(0x200, |e, buffer| {
+    // JIP LN NVSE's G11 at `0x007E6F04` (group GA's row and handler, a fix row: the frame
+    // `0x7E6EA6`, the size `0x7E6F04` and the two buffer addresses `0x7E6F09`, `0x7E6F2B`): the
+    // seam answers the description buffer's size (0x400 with JIP; JIP's buffer address bytes
+    // put it below its frame, here it is the frame's own block). One load while JIP's fixes are
+    // not in.
+    let size = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x007e_6f04, &[0x200]).unwrap_or(0x200)
+    } else {
+        0x200
+    };
+    e.with_stack(size, |e, buffer| {
         let perk = e
             .call(LIST_BOX_ITEM_OF_TILE, &args![base + PERKS_LIST, tile])
             .u32();
-        e.call(PERK_BUILD_DESCRIPTION, &args![perk, buffer, 0x200u32]);
+        e.call(PERK_BUILD_DESCRIPTION, &args![perk, buffer, size]);
         let text_tile = tile_at(e, base, 3);
         e.call(TILE_SET_STRING, &args![text_tile, 0xfc4u32, buffer, 1u32]);
     });
@@ -1419,6 +1429,81 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x007e_6ea0, &args![menu, 0x9u32, 0x8888u32]);
         assert!(calls(&e, TILE_SET_STRING).is_empty());
+    }
+
+    thread_local! {
+        static G11_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g11_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G11's seam asked without FIXES");
+    }
+
+    fn g11_size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G11_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x3f4)
+    }
+
+    /// JIP LN NVSE's G11 seam (`0x007E6F04`, group GA's row, a fix row): with the word 0 or
+    /// `INSTALLED` alone it is not asked and the description is built with the exe's 0x200; with
+    /// `FIXES` and no handler, 0x200; with a handler it is asked once with exactly `[0x200]`, its
+    /// answer is the size `0x5EBAC0` gets (the double fills that whole buffer), the same buffer
+    /// goes to the text tile, and the rest of `DoEnter` runs.
+    #[test]
+    fn do_enter_jip_trait_description_size_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let mut e = engine();
+            let menu = menu(&mut e);
+            quiet(
+                &mut e,
+                &[TILE_SET_VALUE, PLAY_MENU_SOUND, TILE_SET_FLOAT, TILE_POKE],
+            );
+            // The description fills the buffer it is given: size - 1 letters and the end.
+            e.register(PERK_BUILD_DESCRIPTION, |e, a| {
+                for i in 0..a[2] - 1 {
+                    e.mem.set_u8(a[1] + i, b'a');
+                }
+                e.mem.set_u8(a[1] + a[2] - 1, 0);
+                Ret::default()
+            });
+            e.register(TILE_SET_STRING, |e, a| {
+                if a[1] == 0xfc4 {
+                    let mut n = 0;
+                    while e.mem.u8(a[2] + n) != 0 {
+                        n += 1;
+                    }
+                    ret(n)
+                } else {
+                    Ret::default()
+                }
+            });
+            e.register(LIST_BOX_ITEM_OF_TILE, |_, _| ret(0x4000));
+            e.register(STRING_C_STR, |_, a| ret(a[0] + 0x100));
+            e.register(TILE_GET_STRING, |_, _| ret(0x5555));
+            e.register(STRING_LENGTH, |_, _| ret(2));
+            e.register(TILE_TEXT_TO_TRAIT, |_, a| ret(a[0] & 0xff));
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x007e_6f04, handler);
+            }
+            e.set_jip_patches(word);
+            G11_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            e.call(0x007e_6ea0, &args![menu, 0xau32, 0x8888u32]);
+            let built = calls(&e, PERK_BUILD_DESCRIPTION);
+            assert_eq!(built.len(), 1);
+            assert_eq!(built[0][0], 0x4000);
+            let strings = calls(&e, TILE_SET_STRING);
+            assert_eq!(strings[1], vec![0x9003, 0xfc4, built[0][1], 1]);
+            assert_eq!(calls(&e, PLAY_MENU_SOUND), vec![vec![4]]);
+            (built[0][2], G11_SEEN.with(|s| s.take()))
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, Some(g11_never)), (0x200, vec![]));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, None), (0x200, vec![]));
+        assert_eq!(run(fixes, Some(g11_size)), (0x3f4, vec![vec![0x200]]));
     }
 
     #[test]
