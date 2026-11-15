@@ -68,6 +68,21 @@ fn prepare(e: &mut Engine) {
             ..Ret::default()
         });
     }
+    // Group GC's wraps (G109 `0058e9d0`, G111 `00646260`), when the test engine has no
+    // translation of them: the impact data set's slot for the material (the exe's answer with no
+    // override set), and `fDamageToWeaponValue`'s value (`0x11CF154`, the exe's with no ammo).
+    if !e.is_registered(0x0058_e9d0) {
+        e.register(0x0058_e9d0, |e, a| Ret {
+            eax: e
+                .mem
+                .u32(a[0].wrapping_add(a[1].wrapping_mul(4)).wrapping_add(0x1c)),
+            ..Ret::default()
+        });
+    }
+    if !e.is_registered(0x0064_6260) {
+        e.map(0x011c_f000, 0x1000);
+        e.register(0x0064_6260, |e, _| f32::into_ret(e.mem.f32(0x011c_f154)));
+    }
 }
 
 /// Opens or closes the console as the echo sees it.

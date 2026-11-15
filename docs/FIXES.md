@@ -996,8 +996,20 @@ Nothing built yet.
 
 #### GC: Hit damage, detection, combat formulas
 
-No fix built yet. Built as part of JIP (in every preset once JIP answers "installed", not under the row:
-it answers as the original until a JIP command asks): JIP's detection patch (`008a0d10` at `0x8A0DAB`,
+Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): equipping no longer gives the un-equip notice (`0x8ADED0`) of the
+worn item it replaces (`0x88DCDC`); a change of life state is saved with the actor, so the dead do not load
+standing in their bind pose (`0x8A19CF`); kill challenges no longer count teammates, actors JIP flags
+(`+0x143` bit 7) or essential ones (`0x89DC0E`); a hit's weapon effects come from the projectile's own
+weapon (`0x8C227F`); a hit that takes the minimum damage is marked armour-penetrated (`0x9B6335`); impact
+data use JIP's fallback rule (`0058e9d0`) and the hit blood comes from the hit's own weapon (`0x88EBAA`);
+the damage a shot does to the weapon is the weapon's own value when it has one, through its ammo's effects
+(`00646260`), and with `bFO3WpnDegradation` scaled by the weapon's skill and its word `+0xA0` as in
+Fallout 3; with `bCreatureSpreadFix` creatures' gun spread is computed as for creatures (`0x8B0FBF`).
+
+Built as part of JIP (in every preset once JIP answers "installed", not under the row): the player's
+killer is kept when the player dies (`0x89E790`, `0x89F351`; read by `GetKiller`) and cleared before a
+load; with the row off a player with JIP installed gets that and nothing else of this group's fixes.
+JIP's detection patch (it answers as the original until a JIP command asks) (`008a0d10` at `0x8A0DAB`,
 `0x8A1291`, `0x8A131D`, `0x8A147C`), so an actor given a forced detection value
 (`ForceActorDetectionValue`) or the detection fix (`ToggleDetectionFix`) is no longer treated as the
 player's teammate when others detect it, and with the detection fix its level word is the player's.

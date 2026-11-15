@@ -8070,7 +8070,7 @@ fn record_kill_statistics(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>
         let kind = e.call(CREATURE_GETTER_59F3A0, &args![creature]).u8() as i8;
         (kind as i32 + 1) as u8
     };
-    if !e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
+    if !kill_challenge_teammate(e, this) {
         for (first, second) in [(1u32, 1u32), (0, 1)] {
             let number = weapon_number(e, weapon_form);
             let slot = weapon_slot(e, weapon_form);
@@ -8372,6 +8372,8 @@ fn kill_actor(
     release_furniture_marker(e, this);
     if this.addr() != player {
         e.call(ACTOR_WORKER_87EEF0, &args![this]);
+        e.set(this, Actor::pMyKiller, attacker.cast());
+    } else if player_killer_patched(e, 0x0089_e790, this) {
         e.set(this, Actor::pMyKiller, attacker.cast());
     }
     let group = e
@@ -8906,7 +8908,9 @@ pub fn actor_kill(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, damage
         if export && this.addr() == player_address {
             e.set(this, Actor::pMyKiller, attacker.cast());
             e.call(PLAYER_EXPORT_PROGRESS_DATA, &args![player_address, 1u32]);
-            e.set(this, Actor::pMyKiller, Ptr::NULL);
+            if !player_killer_patched(e, 0x0089_f351, this) {
+                e.set(this, Actor::pMyKiller, Ptr::NULL);
+            }
         }
         update_kill_counts(e, ebp, this, attacker, player_address);
         if fn_0089f500(e, Ptr::new(player_address)) != 0 {
@@ -9282,6 +9286,44 @@ const DETECTION_FORMULA: u32 = 0x0064_2ed0;
 /// Actor value number whose clamped value is the detecting actor's
 /// perception.
 const ACTOR_VALUE_PERCEPTION: u32 = 6;
+
+/// The killed actor's teammate test before the kill challenges in [`record_kill_statistics`]
+/// (`0056_6950` called at `0x89DC0E` in `Actor::Kill`). JIP LN NVSE's G98 (`KillChallengeFixHook`,
+/// a fix, the row `NV_JIP_GAME_PATCHES`) replaces the call: the seam is asked with the actor and
+/// its answer's low byte is the test's result. With the word's `FIXES` bit clear: one load, then the
+/// exe's call.
+#[inline]
+fn kill_challenge_teammate(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(skip) = e.site(0x0089_dc0e, &[this.addr()]) {
+            return skip as u8 != 0;
+        }
+    }
+    e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool()
+}
+
+/// JIP LN NVSE's G33 (JIP's own, `INSTALLED`; `GetKiller` reads it) in `Actor::Kill`: at `0x89E790`
+/// the player's killer is stored too (the jump lands on the store, past `0087eef0`), at `0x89F351`
+/// it is not cleared after the progress export. True when the seam `site` answers. With the word's
+/// `INSTALLED` bit clear: one load, false (the exe's jumps).
+#[inline]
+fn player_killer_patched(e: &mut Engine, site: u32, this: Ptr<Actor>) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(site, &[this.addr()]).is_some()
+}
+
+/// The mark [`actor_set_life_state`] gives a change of state (slot `0x48`, its `push 0x400` at
+/// `0x8A19CE`). JIP LN NVSE's G18 (a fix) writes `0x404` (the state saved with the actor): the
+/// seam at `0x8A19CF` answers the word. With the word's `FIXES` bit clear: one load, then `0x400`.
+#[inline]
+fn life_state_mark(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(mark) = e.site(0x008a_19cf, &[this.addr()]) {
+            return mark;
+        }
+    }
+    0x400
+}
 
 /// The detected actor's teammate test in [`detection_level_against_actor`] (`0056_6950`, the
 /// byte `+0x18D`), called at `0x8A0DAB`, `0x8A1291` and `0x8A131D`. JIP LN NVSE's
@@ -9928,7 +9970,8 @@ pub fn actor_set_life_state(e: &mut Engine, this: Ptr<Actor>, state: u32) {
         e.call(HIGH_PROCESS_FADE_IN, &args![process, this, 0u32]);
     }
     if e.get(this, Actor::eLifeState) != state {
-        e.vcall(this.addr(), ACTOR_SLOT_48, &args![0x400u32]);
+        let mark = life_state_mark(e, this);
+        e.vcall(this.addr(), ACTOR_SLOT_48, &args![mark]);
     }
     let old = e.get(this, Actor::eLifeState);
     e.set(this, Actor::eLifeState, state);
@@ -23208,3 +23251,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "actor_p3_gc_tests.rs"]
+mod gc_tests;

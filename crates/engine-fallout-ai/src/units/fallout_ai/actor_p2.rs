@@ -6598,6 +6598,20 @@ fn worn_entry_word(e: &mut Engine, worn: u32) -> u32 {
     e.mem.u32(pointer)
 }
 
+/// The last word of `UnEquipObject` for a worn item [`fn_0088db20`] takes off (its `push 1` at
+/// `0x88DCDB`). JIP LN NVSE's G14 (a fix, the row `NV_JIP_GAME_PATCHES`) writes 0 there (no un-equip
+/// notice): the seam at `0x88DCDC` answers the word. With the word's `FIXES` bit clear: one load,
+/// then 1.
+#[inline]
+fn worn_take_off_word(e: &mut Engine) -> u8 {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(word) = e.site(0x0088_dcdc, &[]) {
+            return word as u8;
+        }
+    }
+    1
+}
+
 // Translated from 0088db20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Takes off whatever occupies the biped slots of `item` (each removal
 /// through `UnEquipObject`), then updates the held items (weapons and the
@@ -6666,6 +6680,7 @@ pub fn fn_0088db20(
                     worn_extra = worn_entry_word(e, worn);
                 }
                 if !blocked {
+                    let sound_word = worn_take_off_word(e);
                     let _ = actor_un_equip_object(
                         e,
                         this,
@@ -6674,7 +6689,7 @@ pub fn fn_0088db20(
                         Ptr::new(worn_extra),
                         0,
                         0,
-                        1,
+                        sound_word,
                     );
                     for removed_slot in 0..BIPED_SLOT_COUNT {
                         if e.call(BIPED_FILLS_SLOT, &args![cast, removed_slot, 0u32, 0u32])
@@ -7987,6 +8002,19 @@ pub fn fn_0088e8d0(e: &mut Engine, this: Ptr<Actor>, damage: f32, hit: Ptr) {
     });
 }
 
+/// The hit blood's impact data in [`run_hit_effects`] (`0x88EBAA` to `0x88EC51`: the aggressor's
+/// current weapon, its impact data set, the set's data for the material, its texture set). JIP
+/// LN NVSE's G120 (`CreateHitBloodHook`, a fix) replaces that span: the seam is asked with the hit
+/// and the material and its answer is the impact data (the translation reads its `+0x48`). With
+/// the word's `FIXES` bit clear: one load, `None`, the exe's calls.
+#[inline]
+fn hit_blood_impact(e: &mut Engine, hit: u32, material: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return e.site(0x0088_ebaa, &[hit, material]);
+    }
+    None
+}
+
 fn run_hit_effects(e: &mut Engine, frame_pointer: u32, this: Ptr<Actor>, damage: f32, hit: u32) {
     let under = |distance: u32| frame_pointer - distance;
     let player = e.mem.u32(PLAYER_CHARACTER);
@@ -8042,25 +8070,38 @@ fn run_hit_effects(e: &mut Engine, frame_pointer: u32, this: Ptr<Actor>, damage:
         e.vcall(base + 0x30, BASE_FORM_PART_VSLOT_MATERIAL, &args![])
             .u32()
     };
-    let weapon = if target != 0 {
-        e.call(ACTOR_GET_CURRENT_WEAPON, &args![target]).u32()
-    } else {
-        0
-    };
-    let source = if weapon != 0 {
-        e.call(IMPACT_SOUND_SOURCE, &args![weapon]).u32()
-    } else {
-        0
-    };
-    let mut entry = if source != 0 {
-        e.call(SOUND_SET_ENTRY, &args![source, material]).u32()
-    } else {
-        0
-    };
-    let mut hit_sound = if entry != 0 {
-        e.call(SOUND_SET_ENTRY_SOUND, &args![entry]).u32()
-    } else {
-        0
+    let (mut entry, mut hit_sound) = match hit_blood_impact(e, hit, material) {
+        Some(entry) => (
+            entry,
+            if entry != 0 {
+                e.mem.u32(entry + 0x48)
+            } else {
+                0
+            },
+        ),
+        None => {
+            let weapon = if target != 0 {
+                e.call(ACTOR_GET_CURRENT_WEAPON, &args![target]).u32()
+            } else {
+                0
+            };
+            let source = if weapon != 0 {
+                e.call(IMPACT_SOUND_SOURCE, &args![weapon]).u32()
+            } else {
+                0
+            };
+            let entry = if source != 0 {
+                e.call(SOUND_SET_ENTRY, &args![source, material]).u32()
+            } else {
+                0
+            };
+            let hit_sound = if entry != 0 {
+                e.call(SOUND_SET_ENTRY_SOUND, &args![entry]).u32()
+            } else {
+                0
+            };
+            (entry, hit_sound)
+        }
     };
     let root = e.vcall(this.addr(), VSLOT_GET_3D, &args![]).u32();
     let direction_a = under(0xa4);
@@ -16505,3 +16546,7 @@ mod tests {
         assert_eq!(scaled.borrow()[0][1], 20.0f32.to_bits());
     }
 }
+
+#[cfg(test)]
+#[path = "actor_p2_gc_tests.rs"]
+mod gc_tests;

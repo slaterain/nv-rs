@@ -502,6 +502,20 @@ pub fn fn_008b0db0(e: &mut Engine, this: Ptr, modifier: u8) -> f32 {
         .f32()
 }
 
+/// The iron sights test in [`fn_008b0dd0`] (`008bbc10`, called at `0x8B0FBF`). JIP LN NVSE's O19
+/// (`bCreatureSpreadFix`, `CreatureSpreadFixHook`; its switch, only with the row
+/// `NV_JIP_GAME_PATCHES`) replaces the call: the seam is asked with the actor and its answer's low
+/// byte is the test's result. With the switch's bit clear: one load, then the exe's call.
+#[inline]
+fn gun_skill_iron_sights(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::CREATURE_SPREAD_FIX != 0 {
+        if let Some(aiming) = e.site(0x008b_0fbf, &[this.addr()]) {
+            return aiming as u8 != 0;
+        }
+    }
+    e.call(0x008b_bc10, &args![this]).bool()
+}
+
 // Translated from 008b0dd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// A cached value from the actor's entry-point calculation, by `selector`
 /// (1, 2, 0 or 3: `fGunSkillGun`, `fGunSkillActor`, `fGunSkillHUD`,
@@ -571,7 +585,7 @@ pub fn fn_008b0dd0(e: &mut Engine, this: Ptr<Actor>, selector: i32) -> f32 {
         .f32()
     } else {
         let flag_400 = e.call(0x0049_97b0, &args![this]).bool();
-        let iron_sights = e.call(0x008b_bc10, &args![this]).bool();
+        let iron_sights = gun_skill_iron_sights(e, this);
         e.call(
             0x0064_6910,
             &args![
@@ -11655,3 +11669,7 @@ mod tests {
         assert_eq!(destroyed, vec![frame + 0x9c, frame + 0x90]);
     }
 }
+
+#[cfg(test)]
+#[path = "actor_p5_gc_tests.rs"]
+mod gc_tests;
