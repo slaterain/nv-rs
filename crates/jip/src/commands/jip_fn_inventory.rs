@@ -131,7 +131,9 @@ const WEAPON_MOD_EFFECTS: u32 = 0x180;
 const WEAPON_MOD_VALUES: u32 = 0x18c;
 /// `kWeaponModEffect_IncreaseHealth`.
 const MOD_EFFECT_HEALTH: u32 = 10;
-/// The game's effective DT and DR of a changes entry (`thiscall`, a float on the FPU stack).
+/// The game's effective DT and DR of a changes entry (`thiscall`, the entry and one more word, which
+/// JIP passes as 0: `RET 4`, and the translations take `(Ptr<ItemChange>, u32)`; a float on the FPU
+/// stack).
 const ARMOR_EFFECTIVE_DT: u32 = 0x004b_e0b0;
 const ARMOR_EFFECTIVE_DR: u32 = 0x004b_df90;
 /// How deep `RemoveItemTarget` follows form lists inside form lists (JIP: without a bound).
@@ -922,12 +924,12 @@ fn armor_effective(e: &mut Engine, reference: u32, function: u32) -> f64 {
         return 0.0;
     }
     match inv_ref_data(e, reference) {
-        Some(d) if d.entry != 0 => e.call(function, &args![d.entry]).st0,
+        Some(d) if d.entry != 0 => e.call(function, &args![d.entry, 0u32]).st0,
         // JIP calls through the reference's null entry.
         Some(_) => 0.0,
         None => {
             let entry = nvse::invref::create_temp_entry(e, base, 1, reference + REFR_EXTRA);
-            let value = e.call(function, &args![entry]).st0;
+            let value = e.call(function, &args![entry, 0u32]).st0;
             nvse::invref::free_temp_entry(e, entry);
             value
         }
@@ -960,7 +962,13 @@ fn get_armor_effective_dr(e: &mut Engine, w: &[u32]) -> Ret {
 // TESObjectREFR::RemoveItemTarget.
 /// A form list's forms one by one (a list inside it in turn), else an inventory item: up to
 /// `quantity` (all for 0 or less) of the reference's count moved to `target` (0: removed), the
-/// entry's stacks first, each whole or what is left, then the rest without extra data.
+/// entry's stacks first, each whole or what is left (a stack without a count as 1: the loop ends
+/// as `total` falls by at least 1 each time), then the rest without extra data.
+///
+/// `walking` holds the form lists being walked: JIP recurses without a bound, so a list holding
+/// itself (or lists holding each other) overflows its stack; here a list already being walked is
+/// passed over, and lists go at most [`MAX_LIST_DEPTH`] deep. Lists without such a loop are as in
+/// JIP.
 fn remove_item_target(
     e: &mut Engine,
     refr: u32,
@@ -968,18 +976,19 @@ fn remove_item_target(
     target: u32,
     quantity: i32,
     keep_owner: bool,
-    depth: u32,
+    walking: &mut Vec<u32>,
 ) {
     if type_of(e, form) == LIST_FORM {
-        // JIP recurses without a bound; a list holding itself would overflow its stack.
-        if depth >= MAX_LIST_DEPTH {
+        if walking.contains(&form) || walking.len() >= MAX_LIST_DEPTH as usize {
             return;
         }
+        walking.push(form);
         for item in list_items(e, Ptr::new(form + LIST_FORM_LIST)) {
             if item != 0 {
-                remove_item_target(e, refr, item, target, quantity, keep_owner, depth + 1);
+                remove_item_target(e, refr, item, target, quantity, keep_owner, walking);
             }
         }
+        walking.pop();
         return;
     }
     if !is_inventory_type(u32::from(type_of(e, form))) {
@@ -1003,11 +1012,6 @@ fn remove_item_target(
             let sub = if count < 1 { 1 } else { count.min(total) };
             remove_item(e, refr, form, xdata, sub, keep_owner, target);
             total -= sub;
-            // The game takes a whole stack's list out of the entry; one still first after that
-            // would be removed again for ever.
-            if total > 0 && first_extra_list(e, entry) == xdata {
-                break;
-            }
         }
     }
     if total > 0 {
@@ -1058,7 +1062,7 @@ fn remove_item_target_cmd(e: &mut Engine, w: &[u32]) -> Ret {
     let (quantity, clr_owner) = (read.int(2, 0) as i32, read.int(3, 0));
     let base = base_of(e, a.this_obj);
     if base != 0 && super::ln_fn_inventory::container_of(e, base) != 0 {
-        remove_item_target(e, a.this_obj, form, target, quantity, clr_owner == 0, 0);
+        remove_item_target(e, a.this_obj, form, target, quantity, clr_owner == 0, &mut Vec::new());
     }
     handled(true)
 }
