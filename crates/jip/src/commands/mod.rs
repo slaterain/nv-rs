@@ -40,6 +40,7 @@ pub mod jip_fn_linked_ref;
 pub mod jip_fn_marker_cmds;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
+pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_miscellaneous;
 pub mod jip_fn_move_cmds;
@@ -199,6 +200,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_move_cmds::COMMANDS,
     jip_fn_move_cmds::CCC_COMMANDS,
     jip_fn_linked_ref::COMMANDS,
+    jip_fn_misc_ref_havok_w::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -792,7 +794,9 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_ccc",
             "jip_fn_misc_ref",
+            "jip_fn_misc_ref",
         ];
+        assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
         for (list, file) in ALL.iter().zip(files) {
             for &(opcode, _) in list.iter() {
