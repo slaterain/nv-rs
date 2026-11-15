@@ -1092,10 +1092,10 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
   exe compares a reference's base with the ash and goo pile forms it tests JIP's ash pile bit on the
   base instead; the two vanilla piles get the bit when the game starts (`DeferredInit`), so with no
   script marking anything nothing changes for a player. A reference with no base answers "not a
-  pile" (JIP would read a bad address). Built so far in six of the eight places: the HUD's
-  (`0x77765A`, group GA builds that seam) and the crosshair's (`0x95F7FE`, group GP) are not asked
-  yet and still compare with the two vanilla forms, so until those seams land an activator marked
-  as an ash pile (for example its bit restored from a co-save) is an ash pile in six places only.
+  pile" (JIP would read a bad address). Built so far in seven of the eight places: the HUD's
+  (`0x77765A`, group GA builds that seam) is not asked yet and still compares with the two vanilla
+  forms, so until that seam lands an activator marked as an ash pile (for example its bit restored
+  from a co-save) is an ash pile in seven places only.
 - `AttachAshPileHook` (G73, the death ash pile command `005db870`, its seam at `0x5DBCFD`): the
   pile a death leaves is `AttachAshPileEx`'s form once when a script set one, else the exe's
   choice. It changes nothing yet: the command `AttachAshPileEx` is not built, so no script can set
