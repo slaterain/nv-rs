@@ -1011,9 +1011,11 @@ fn has_perk_command() {
         ]
     );
     e.ext::<Jip>().saved.npc_perks_patch = true;
+    crate::cosave::publish_npc_perks_patch(&mut e);
     assert_eq!(perk_rank(&mut e, npc, perk, false), 1);
     assert_eq!(calls(), [format!("own {perk:x} 0")]);
     e.ext::<Jip>().saved.npc_perks_patch = false;
+    crate::cosave::publish_npc_perks_patch(&mut e);
     e.map(0x0103_5000, 0x1000);
     e.mem.write(0x0103_5f1c, b"Perk Rank >> %d\0");
     set_script_ref(&mut e, 1, perk);
@@ -1384,4 +1386,50 @@ fn unused_block_answers_true_and_is_skipped() {
         );
     }
     assert!(lines().is_empty(), "no console line");
+}
+
+/// `HasPerk`'s eval reads the NPC perks patch's lock-free copy: while a second engine of the run
+/// (a real thread's) holds JIP's shared slot, it answers on this engine (asking for the slot
+/// here would be refused: two engines on one thread), with the patch (the actor's own rank) and
+/// without (the player's, for a teammate).
+#[test]
+fn has_perk_eval_answers_while_another_engine_holds_jips_state() {
+    let mut e = commands_world();
+    let (_, npc) = perk_world(&mut e);
+    let perk = AREA + 0x9600;
+    form(&mut e, perk, 0x0100_0060, 0x56, VTABLES + 0xd00, &[]);
+    e.mem.set_u8(npc + 0x18d, 1);
+    let res = crate::test_support::RESULT;
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(other.ext::<Jip>().installed, "the other engine holds it");
+    calls();
+    e.mem.set_f64(res, 0.0);
+    has_perk_eval(&mut e, &[npc, perk, 0, res]);
+    assert_eq!(result(&e), 1.0);
+    assert_eq!(
+        calls(),
+        [format!("player {perk:x} 1")],
+        "a teammate: the player's"
+    );
+    engine_core::extend::release_held_for_test();
+    e.ext::<Jip>().saved.npc_perks_patch = true;
+    crate::cosave::publish_npc_perks_patch(&mut e);
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(other.ext::<Jip>().installed);
+    e.mem.set_f64(res, 0.0);
+    has_perk_eval(&mut e, &[npc, perk, 0, res]);
+    assert_eq!(result(&e), 1.0);
+    assert_eq!(
+        calls(),
+        [format!("own {perk:x} 0")],
+        "with the patch: its own"
+    );
+    assert!(
+        crate::cosave::npc_perks_patch(&mut other),
+        "one copy for the run"
+    );
+    engine_core::extend::release_held_for_test();
 }

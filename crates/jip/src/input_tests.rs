@@ -7,6 +7,7 @@
 
 use super::*;
 use crate::test_support::{engine, line, RESULT};
+use crate::Jip;
 use std::cell::RefCell;
 
 const CONTROLS_AT: u32 = 0x0500_0000;
@@ -190,8 +191,8 @@ fn pad_of(raw: &[u8; 16]) -> Pad {
     }
 }
 
-fn key(e: &mut Engine, k: u32) -> &mut nvse::input::KeyInfo {
-    &mut e.ext::<nvse::Nvse>().input.keys[k as usize]
+fn key(e: &mut Engine, k: u32) -> crate::test_support::KeyEdit<'_> {
+    crate::test_support::key(e, k)
 }
 
 /// JIP's reads of xNVSE's key records: the flags' sources (0 and 1 the game's state), disabled or
@@ -352,4 +353,67 @@ fn input_commands() {
 fn eval(e: &mut Engine, opcode: u32, words: &[u32]) {
     let at = e.mem.u32(e.script_tables().record(opcode) + 0x20);
     e.call(at, words);
+}
+
+/// `IsKeyPressed`'s and `IsControlPressed`'s evals read the lock-free copies (JIP's pad state,
+/// xNVSE's keys' states): while a second engine of the run (a real thread's) holds both JIP's
+/// and xNVSE's shared slots, each answers on this engine, without a controller (the key, the
+/// mouse button) and with one (the pad's own state and the game's copy).
+#[test]
+fn the_evals_answer_while_another_engine_holds_jips_and_xnvses_state() {
+    let mut e = world(true);
+    key(&mut e, 0x11).game_state = true;
+    key(&mut e, 0x102).raw_state = true;
+    // xNVSE's state shared as `nvse::install` shares it (the test engine has only its table).
+    e.share_ext::<nvse::Nvse>();
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(other.ext::<Jip>().installed, "the other engine holds JIP's");
+    assert!(other.ext_get::<nvse::Nvse>().is_some(), "and xNVSE's");
+    let r = RESULT;
+    let answer = |e: &mut Engine, words: [u32; 3]| {
+        e.mem.set_f64(r, 0.0);
+        eval(e, words[0], &[0, words[1], words[2], r]);
+        e.mem.f64(r)
+    };
+    assert_eq!(answer(&mut e, [0x1453, 0x11, 1]), 1.0, "the game's state");
+    assert_eq!(answer(&mut e, [0x1453, 0x11, 2]), 0.0, "not the raw one");
+    assert_eq!(
+        answer(&mut e, [0x1453, 0x102, 2]),
+        1.0,
+        "the mouse button's raw state"
+    );
+    assert_eq!(answer(&mut e, [0x146b, 4, 1]), 1.0, "control 4's key");
+    assert_eq!(
+        answer(&mut e, [0x146b, 5, 2]),
+        1.0,
+        "control 5's mouse button, raw"
+    );
+    assert_eq!(answer(&mut e, [0x146b, 6, 2]), 0.0, "control 6: neither");
+    // A ready controller, set while the other engine holds the slots (the state is lock-free):
+    // LT down in the pad's own state (flags 2), A in the game's copy.
+    {
+        let mut s = state(&mut e);
+        s.ready = true;
+        s.pad.left_trigger = 1;
+    }
+    e.mem.set_u16(PAD_STATE + 4, mask::BUTTON_A);
+    assert_eq!(
+        answer(&mut e, [0x146b, 5, 2]),
+        1.0,
+        "LT down in the pad's own state"
+    );
+    assert_eq!(
+        answer(&mut e, [0x146b, 4, 1]),
+        1.0,
+        "A down in the game's copy"
+    );
+    assert_eq!(
+        answer(&mut e, [0x146b, 4, 2]),
+        0.0,
+        "A not down in the pad's own"
+    );
+    assert!(ready(&mut other), "one state for the run");
+    engine_core::extend::release_held_for_test();
 }

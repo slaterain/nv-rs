@@ -712,3 +712,63 @@ fn the_owner_argument() {
         "EraseAll: BASE's all gone"
     );
 }
+
+/// `AuxVarGetFltCond` reads the lock-free copy of the first values ([`Unlocked`]): while a second
+/// engine of the run (a real thread's) holds JIP's shared slot it answers on this engine (asking
+/// for the slot here would be refused: two engines on one thread), for a saved and a temporary
+/// variable; the copy follows every change (a value erased, the variable erased, the owner's
+/// variables erased, the saved ones cleared before a load) and is one for the run (the second
+/// engine reads the temporary variable this engine set, which its own `Temp` does not hold).
+#[test]
+fn the_condition_reads_the_lock_free_copy() {
+    let mut e = setup();
+    set_flt(&mut e, REF, b"Cond", 4.25, &[]);
+    set_flt(&mut e, REF, b"Cond", 9.0, &[n(-1)]);
+    set_flt(&mut e, REF, b"*Tmp", 2.5, &[]);
+    let saved = vars::add_string(&mut e, 6, b"cond", false);
+    let temp = vars::add_string(&mut e, 6, b"*tmp", false);
+    e.mem.set_u32(QUEST + 0x5c, LOCALS);
+    e.mem.set_u32(QUEST + 0x1c, SCRIPT);
+    e.mem.set_u32(LOCALS + 0xc, LOCALS + 0x100);
+    e.mem.set_u32(LOCALS + 0x100, LOCALS + 0x200);
+    e.mem.set_u32(LOCALS + 0x104, LOCALS + 0x300);
+    e.mem.set_u32(LOCALS + 0x300, LOCALS + 0x400);
+    e.mem.set_u32(LOCALS + 0x304, 0);
+    e.mem.set_u32(LOCALS + 0x200, 5);
+    e.mem.set_f64(LOCALS + 0x208, f64::from(saved));
+    e.mem.set_u32(LOCALS + 0x400, 6);
+    e.mem.set_f64(LOCALS + 0x408, f64::from(temp));
+    let eval = |e: &mut Engine, var: u32| {
+        let at = e.mem.u32(nvse::table::record_of(e, 0x27b1) + 0x20);
+        e.mem.set_f64(RESULT, 0.5);
+        e.call(at, &[REF, QUEST, var, RESULT]);
+        e.mem.f64(RESULT)
+    };
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(other.ext::<Jip>().installed, "the other engine holds it");
+    assert_eq!(eval(&mut e, 5), 4.25, "the saved variable's value 0");
+    assert_eq!(eval(&mut e, 6), 2.5, "the temporary one's");
+    let m = overriding_mod(&e, SCRIPT);
+    let id = e.mem.u32(REF + 0xc);
+    assert_eq!(
+        first_value(&mut other, true, m, id, b"*TMP"),
+        Some(2.5),
+        "one copy for the run"
+    );
+    engine_core::extend::release_held_for_test();
+    call_on(&mut e, 0x269a, REF, &[s(b"Cond"), n(0)]);
+    assert_eq!(eval(&mut e, 5), 9.0, "value 0 erased: the next is first");
+    call_on(&mut e, 0x269a, REF, &[s(b"Cond")]);
+    assert_eq!(eval(&mut e, 5), 0.5, "the variable erased");
+    call_on(&mut e, 0x2694, REF, &[s(b"Cond"), z(1.5)]);
+    assert_eq!(eval(&mut e, 5), 1.5);
+    call_on(&mut e, 0x269b, REF, &[n(0)]);
+    assert_eq!(eval(&mut e, 5), 0.5, "the owner's saved variables erased");
+    assert_eq!(eval(&mut e, 6), 2.5, "not the temporary ones");
+    call_on(&mut e, 0x2694, REF, &[s(b"Cond"), z(7.0)]);
+    crate::cosave::process_changed_flags(&mut e, crate::cosave::changed::AUX_VARS);
+    assert_eq!(eval(&mut e, 5), 0.5, "the saved ones cleared before a load");
+    assert_eq!(eval(&mut e, 6), 2.5, "the temporary ones kept");
+}

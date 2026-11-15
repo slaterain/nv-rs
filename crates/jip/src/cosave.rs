@@ -292,6 +292,34 @@ fn saved(e: &mut Engine) -> &mut Saved {
     &mut e.ext::<Jip>().saved
 }
 
+/// A lock-free copy of [`Saved::npc_perks_patch`] ([`Engine::ext_free`], made at install before the
+/// threads start): JIP's `HasPerk` eval (`DoGetPerkRank`) reads it on whatever thread evaluates
+/// a perk or package condition, without JIP's shared slot. Written by [`publish_npc_perks_patch`]
+/// wherever the flag changes: nothing in the port sets it yet (the NPC perks patch is stage
+/// 3.9's); the switch that does must call it.
+#[derive(Default)]
+pub(crate) struct NpcPerksPatch(std::sync::atomic::AtomicBool);
+
+/// Makes the lock-free copy (at install, before the threads start).
+pub(crate) fn install_unlocked(e: &mut Engine) {
+    e.ext_free::<NpcPerksPatch>();
+}
+
+/// Copies [`Saved::npc_perks_patch`] into the lock-free [`NpcPerksPatch`].
+pub fn publish_npc_perks_patch(e: &mut Engine) {
+    let on = saved(e).npc_perks_patch;
+    e.ext_free::<NpcPerksPatch>()
+        .0
+        .store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Whether JIP's NPC perks patch is installed, from the lock-free copy.
+pub fn npc_perks_patch(e: &mut Engine) -> bool {
+    e.ext_free::<NpcPerksPatch>()
+        .0
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The fixes preset's row: JohnnyGuitar NVSE's corrections of JIP's co-save (above).
 pub fn set_johnny_guitar_fixes(e: &mut Engine, on: bool) {
     saved(e).jg_fixes = on;
@@ -527,6 +555,7 @@ pub fn process_changed_flags(e: &mut Engine, flags: u8) {
     s.linked_refs_temp.clear();
     s.serialized = SerializedVars::default();
     crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
+    crate::commands::jip_fn_aux_variable::publish_saved(e);
     let s = saved(e);
     // The NPCs' perk info leaves the actors with it (step 3.3); the map empties.
     if flags & changed::NPC_PERKS != 0 {
@@ -565,6 +594,7 @@ pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
     // rest of the co-save still loads.
     let _ = read_records(e, r, flags);
     crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
+    crate::commands::jip_fn_aux_variable::publish_saved(e);
     Ok(())
 }
 
@@ -1380,6 +1410,7 @@ pub fn listen(e: &mut Engine, m: &Message) {
             let s = saved(e);
             s.serialized = SerializedVars::default();
             crate::commands::jip_fn_miscellaneous::publish_serialized_flags(e);
+            crate::commands::jip_fn_aux_variable::publish_saved(e);
             crate::world_hooks::restore_form_flags(e);
             let s = saved(e);
             // nv-rs's own: nothing of the last co-save loaded goes into a new game's.

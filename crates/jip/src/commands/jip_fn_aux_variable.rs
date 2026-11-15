@@ -20,13 +20,15 @@
 
 use super::arrays::{create_array, create_string_map, set_element, Element};
 use super::{assign_string, buffer_arg, cvttsd2si, Handlers};
-use crate::containers::{Name, UnorderedMap};
+use crate::containers::{str_hash_ci, Name, UnorderedMap};
 use crate::cosave::{changed, lookup_form, Value};
 use crate::Jip;
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::vars::{self, Container, Data, Key};
 use nvse::{handled, CommandArgs, EvalArgs};
+use std::collections::HashMap;
+use std::sync::RwLock;
 
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
@@ -115,6 +117,89 @@ pub fn maps_found_empty(e: &mut Engine) {
     e.ext_free::<AuxVarsHeld>()
         .0
         .store(false, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// An owner's key in [`Unlocked`]: temporary, mod index, owner id.
+type OwnerKey = (bool, u32, u32);
+
+/// What `AuxVarGetFltCond` reads, without JIP's shared slot (which holds both aux maps): a
+/// lock-free slot ([`Engine::ext_free`]) made at install, before the threads start, so every
+/// thread's engine of the run reads the same one (an AI thread evaluating a package's condition
+/// would otherwise wait for the main thread's hold of JIP's state). For each owner of each mod (temporary or saved) it holds each variable's first value
+/// as a number ([`value_float`]), keyed by the name's `StrHashCI` (the maps' own key): the copy
+/// of the maps' first values, written by [`publish_owner`] after every command that changes an
+/// owner's variables and by [`publish_saved`] after every change to the saved maps as a whole
+/// (a load, the reset before one, `ClearJIPSavedData`). The lock is a leaf: held for one map
+/// operation, never across a game call or another lock, so a reader waits at most for one such
+/// operation (never for another thread's safe point).
+#[derive(Default)]
+pub(crate) struct Unlocked {
+    firsts: RwLock<HashMap<OwnerKey, HashMap<u32, f64>>>,
+}
+
+/// Makes the lock-free slot (at install, before the threads start).
+pub fn install(e: &mut Engine) {
+    e.ext_free::<Unlocked>();
+}
+
+/// An owner's variables' first values (name hash, number).
+fn firsts_of(vars: &Vars) -> HashMap<u32, f64> {
+    vars.iter()
+        .filter_map(|(n, vals)| vals.first().map(|v| (str_hash_ci(&n.0), value_float(v))))
+        .collect()
+}
+
+/// Copies the first values of one owner's variables (temporary or saved, of one mod) into the
+/// lock-free slot, after a command changed them.
+fn publish_owner(e: &mut Engine, temp: bool, mod_index: u32, owner: u32) {
+    let firsts = aux_maps(e, temp)
+        .get(&mod_index)
+        .and_then(|owners| owners.get(&owner))
+        .map(firsts_of)
+        .unwrap_or_default();
+    let mut map = e
+        .ext_free::<Unlocked>()
+        .firsts
+        .write()
+        .unwrap_or_else(|p| p.into_inner());
+    if firsts.is_empty() {
+        map.remove(&(temp, mod_index, owner));
+    } else {
+        map.insert((temp, mod_index, owner), firsts);
+    }
+}
+
+/// Copies the first values of every saved variable into the lock-free slot (the temporary ones
+/// kept), after the saved maps changed as a whole.
+pub(crate) fn publish_saved(e: &mut Engine) {
+    let mut saved = Vec::new();
+    for (mod_index, owners) in aux_maps(e, false).iter() {
+        for (owner, vars) in owners.iter() {
+            let firsts = firsts_of(vars);
+            if !firsts.is_empty() {
+                saved.push(((false, *mod_index, *owner), firsts));
+            }
+        }
+    }
+    let mut map = e
+        .ext_free::<Unlocked>()
+        .firsts
+        .write()
+        .unwrap_or_else(|p| p.into_inner());
+    map.retain(|k, _| k.0);
+    map.extend(saved);
+}
+
+/// The first value's number of the variable `name` of `owner` (temporary or saved, of one mod),
+/// from the lock-free slot; `None` when it has no value.
+fn first_value(e: &mut Engine, temp: bool, mod_index: u32, owner: u32, name: &[u8]) -> Option<f64> {
+    let hash = str_hash_ci(name);
+    let map = e
+        .ext_free::<Unlocked>()
+        .firsts
+        .read()
+        .unwrap_or_else(|p| p.into_inner());
+    map.get(&(temp, mod_index, owner))?.get(&hash).copied()
 }
 
 /// The aux variables: the saved ones or the temporary ones (both in JIP's shared slot).
@@ -519,6 +604,7 @@ fn aux_set(e: &mut Engine, a: &CommandArgs, info: Info, idx: i32, value: Value) 
         return;
     };
     *slot = value;
+    publish_owner(e, info.temp, info.mod_index, info.owner);
     if !info.temp {
         mark_changed(e, changed::AUX_VARS);
         mark_modified(e, a.this_obj);
@@ -595,6 +681,7 @@ fn aux_set_from_array(e: &mut Engine, w: &[u32]) -> Ret {
     if let Some(vals) = values_of(aux_maps(e, info.temp), &info, true) {
         *vals = values;
     }
+    publish_owner(e, info.temp, info.mod_index, info.owner);
     if !info.temp {
         mark_changed(e, changed::AUX_VARS);
         mark_modified(e, a.this_obj);
@@ -650,6 +737,7 @@ fn aux_erase(e: &mut Engine, w: &[u32]) -> Ret {
             maps.erase(&info.mod_index);
         }
     }
+    publish_owner(e, info.temp, info.mod_index, info.owner);
     if let Some(n) = left {
         a.set_result(e, n as f64);
     }
@@ -682,6 +770,7 @@ fn aux_erase_all(e: &mut Engine, w: &[u32]) -> Ret {
     if owners.is_empty() {
         maps.erase(&info.mod_index);
     }
+    publish_owner(e, info.temp, info.mod_index, info.owner);
     if !info.temp {
         mark_changed(e, changed::AUX_VARS);
     }
@@ -713,14 +802,10 @@ fn aux_get_flt_cond_eval(e: &mut Engine, w: &[u32]) -> Ret {
     };
     let script = e.mem.u32(a.arg1 + 0x1c);
     let (temp, mod_index) = name_scope(e, script, &name);
-    let info = Info {
-        owner: subject_id(e, 0, a.this_obj),
-        mod_index,
-        name,
-        temp,
-    };
-    if let Some(v) = value_at(aux_maps(e, temp), &info, 0, false) {
-        let f = value_float(v);
+    let owner = subject_id(e, 0, a.this_obj);
+    // The first value from the lock-free copy ([`Unlocked`]): the maps' value 0 (`GetValue(0)`),
+    // without JIP's shared slot and on any thread's engine.
+    if let Some(f) = first_value(e, temp, mod_index, owner, &name) {
         e.mem.set_f64(a.result, f);
     }
     handled(true)
