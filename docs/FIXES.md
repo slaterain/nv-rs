@@ -111,6 +111,7 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Co-save keeps other plugins | none (a flag the extender reads) | `NV_COSAVE_KEEP` | A co-save's sections of plugins that are not built in (JohnnyGuitar NVSE's, ShowOff's and the others not built in yet; JIP LN NVSE reads and writes its own) are kept as they were read and written back on each save while the files loaded are the ones that co-save lists, so a save brought from a real modded installation keeps them. xNVSE writes only the plugins it has loaded, so off (vanilla) they go at the next save, as with xNVSE. Below |
 | JIP co-save fixes | none (a flag JIP reads) | `NV_JIP_COSAVE_FIX` | JIP LN NVSE's extra data record (`SetRefExtraData`'s data, `JPED`) as JohnnyGuitar NVSE corrects it (`SerializationFixes`): JIP counts 5 bytes for each mod's part of a key where it writes 9, so a load that skips a key whose reference is gone lands in the middle of the next one; with the row the record is written with the right sizes as version 2 (what VNV's co-saves hold, since VNV installs JohnnyGuitar), JIP's own version 1 is not read, and the variables JIP added to a script whose owner is not loaded are skipped 10 bytes each (JIP skips 9, one short, and reads the next owner wrong). With the row a co-save written by JIP without JohnnyGuitar (version 1) is not read, as JohnnyGuitar gives up on it, but nv-rs does not destroy it: until JIP's saved data is applied to the game, the record is carried unchanged to the next save while the same files are loaded (as is a version 2 record with the row off), so the player can still take that save back to JIP. Off (vanilla), JIP's: version 1, only version 1 read, the 9-byte skip. Below |
 | JIP vanilla commands | none (a flag JIP reads) | `NV_JIP_VANILLA_CMDS` | JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`): `MenuMode` (adds JIP's modes 0 to 4: menu mode, the Pip-Boy, a menu open, the console, the loading screens), `GetItemCount` (also counts a form list's forms), `GetContainer` (also for an inventory reference), `IsInList` (a temporary actor by its leveled base), `GetHitLocation` (the location JIP's hit data hook keeps), `HasPerk` (a follower's perks count on followers) and `GetNVSEVersionFull` at the game's `0x127D`. They take effect only once JIP is built in and answers "installed" (the plan's step 3.10); until then, and off (vanilla), the game's own. Below |
+| JIP game patches | none (a flag JIP reads) | `NV_JIP_GAME_PATCHES` | JIP LN NVSE's changes to the game's own code (`InitGamePatches` and the `[GamePatches]` switches of the player's `Data\NVSE\plugins\jip_nvse.ini`, else JIP's defaults: switches 1, 4-9, 13 and 14 on), as they are built (step 3.9): so far each dialogue info remembers the topic its load linked it into last and `GetOwnerTopic` answers that topic, and a script handler's result starts at 0 for every command. They take effect only once JIP is built in and answers "installed" (the plan's step 3.10); until then, and off (vanilla), the game's own. With the dialogue topic index also on, JIP's answer wins (JIP's wrap goes over the index). Below |
 | UI Organizer built in | none (a flag the built-in reads; seams at `0070a049`, `00a01b87`) | `NV_UIO` | **Off in every preset** until proven in the game with a UI mod, then on in `fixes`. UI Organizer 2.30 (jazzisparis) built in, part 1: its lists (`Data\uio\supported.txt`, then each `Data\uio\public\*.txt`, with their conditions) put UI mods' `<include>` lines into the menu files they name, in memory, where and in the order UIO puts them, and every menu file `Tile::ReadFile` reads goes through UIO's reader (its patched texts and its own expansion of `<include>` tags), then the game's parser. Off (vanilla), nothing is installed and no menu file changes. Below |
 | Script error loop guard | none (a flag the extender reads) | `NV_NVSE_ERROR_GUARD` | An error raised while a script's `RuntimeScriptError` handler runs (in the handler itself, or at the call depth limit when handlers call functions that fail) is not sent to the handlers again. xNVSE sends it again, which recurses until the stack runs out and the game stops; off (vanilla), the port does the same. Below |
 | Image-space event form check | none (a flag the extender reads) | `NV_NVSE_IMOD_CHECK` | When an image-space modifier instance runs out, OnRemoveIMOD is raised only for an instance of a modifier form (the game's own `AsForm` test, as its `Stop` makes it), with that form. xNVSE reads a form at the same place in every instance, and a depth-of-field or radial blur instance (iron sights, V.A.T.S., `SetGlobalRadialBlur`) has a number there: a handler then reads garbage as a form. Off (vanilla), the word is read as xNVSE reads it, and a word that is not a readable form drops the event instead of stopping the game. Below |
@@ -883,6 +884,10 @@ save) should get.
   followers (the player's rank, as for teammates); `0x127D` (the game's `ClearTrackedCells`, which
   does nothing) becomes `GetNVSEVersionFull`. All inert until JIP answers "installed" (step 3.10);
   off, and before that, the game's own.
+- **JIP game patches** (the row above): JIP LN NVSE 57.30's always-on game patches and its
+  `[GamePatches]` switches (`internal/patches_game.h`, `InitGamePatches` and `SetOptionalPatch`),
+  ADR-0016 §5's fix rows; the list of what is built is in "JIP LN NVSE's game patches" below. All
+  inert until JIP answers "installed" (step 3.10); off, and before that, the game's own.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of
   #329). One error reaches the handlers once; the console still shows every error. Kept per game
   thread: an error another thread raises meanwhile is its own and reaches the handlers.
@@ -955,6 +960,79 @@ save) should get.
   row. xNVSE's DirectInput hook stops the game only on calls the game never makes (a buffered read
   that peeks with records, a mouse read of another size, a record size other than DirectInput 8's);
   every keyboard and mouse read the game makes goes through it as with xNVSE, in both presets.
+
+### JIP LN NVSE's game patches
+
+The row `NV_JIP_GAME_PATCHES` (Fallout.ini `bJIPGamePatches`) holds every change JIP LN NVSE 57.30
+(jazzisparis) makes to the game's own code for every player, as step 3.9 builds them; each is put in
+only while JIP answers "installed" (step 3.10) and the row is on. Patches that only answer JIP's own
+commands are part of JIP in every preset and are not listed here. The switches are read as JIP reads
+them: `GetPrivateProfileSectionA("GamePatches", ..., "Data\NVSE\plugins\jip_nvse.ini")` (a path in
+the game's folder), a switch on unless its value starts with `0`, and with no such section (or one
+with only notes) JIP's defaults: `bIgnoreDTDRFix`, `bProjImpactDmgFix`, `bGameDaysPassedFix`,
+`bHardcoreNeedsFix`, `bNoFailedScriptLocks`, `bDoublePrecision`, `bQttSelectShortKeys`,
+`bVoiceModulationFix` and `bSneakBoundingBoxFix`, the same as the settings file JIP's authors publish.
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| "Store parent TESTopic for every TESTopicInfo" | `0061ccd0` (`0x61CD16`), `0061ceb0` (`0x61CEEE`, the port's record dropped), `0061cff0` (`0x61D041`), `0061dbd0` (`0x61E086`), `0061a310` (rewritten) | `TESTopic::GetOwnerTopic` answers the topic an info's load linked it into last, kept in a record beside the info (JIP adds a word to the info; the port keeps its size), instead of walking every topic for the first holding it; `ClearData`, the dialogue's responses, the topic conditions and JIP's dialogue topic events see that topic. Differs from the original only for an info a plugin links under two topics | 3.9a |
+| "Cmd_Execute >> *result = 0 by default" | `005ac7a0` (`0x5ACB9D`), `005e1550` (`0x5E16C3`, `0x5E2329`) | A script command's result starts at 0 before its handler runs, for every command (the original leaves the previous command's value there; xNVSE zeroes it only for its own commands), so a command that sets nothing answers 0 | 3.9a |
+
+Each group of step 3.9 (`measure/jip/PLAN-3.9-groups.md`) lists its patches under its own heading, as a table
+like 3.9a's above (JIP's comment, exe places, what a player with JIP gets, built), with JIP's credits
+(Stewie, carxt, lStewieAl, TrueCourierSix) where JIP gives them.
+
+#### GA: UI: HUD, messages, text, start-up INI
+
+Nothing built yet.
+
+#### GB: UI: item lists, repair, pad dead zones
+
+Nothing built yet.
+
+#### GC: Hit damage, detection, combat formulas
+
+Nothing built yet.
+
+#### GD: Projectiles, explosions, combat AI, packages
+
+Nothing built yet.
+
+#### GE: Actors: movement, life, NPC perks
+
+Nothing built yet.
+
+#### GP: Player character
+
+Nothing built yet.
+
+#### GH1: Extra data and inventory stacks
+
+Nothing built yet.
+
+#### GH2: References, models, cells, ash piles
+
+Nothing built yet.
+
+#### GF: Forms and records
+
+Nothing built yet.
+
+#### GS: Script engine
+
+Nothing built yet.
+
+#### GW: World, sky, sound, saves, start-up
+
+Nothing built yet.
+
+#### GL: Lights and magic effects
+
+Nothing built yet.
+
+#### GX: Havok, pad rumble, mouse
+
+Nothing built yet.
 
 ### UI Organizer
 

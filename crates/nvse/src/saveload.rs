@@ -175,8 +175,10 @@ fn with_guest_str<T>(e: &mut Engine, text: &[u8], f: impl FnOnce(&mut Engine, u3
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Serialization.cpp: SerializationTask::Load.
-/// The whole file, or `None` when it cannot be opened or is empty.
-fn read_file(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
+/// The whole file, or `None` when it cannot be opened or is empty: through the game's own imports
+/// (`CreateFileA` with read sharing, `ReadFile` in 4 KB steps, `CloseHandle`), so a relative path
+/// is in the game's folder. Also what the built-in JIP reads its `jip_nvse.ini` with.
+pub fn read_file(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
     let handle = with_guest_str(e, path, |e, p| {
         e.call(
             CREATE_FILE_A,

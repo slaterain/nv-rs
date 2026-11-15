@@ -37,6 +37,8 @@
 //!   note and quest stage events, activations and script events a script disabled, teammates at
 //!   locked doors, the weather's transition time, swapped LOD blocks, scripts that wait) and the
 //!   commands that switch them, with `PushActorNoRagdoll`.
+//! - [`game_patches`]: JIP's changes to the game's own code (step 3.9: the parent topic of every
+//!   dialogue info, results that start at 0), fix rows behind the host's `NV_JIP_GAME_PATCHES`.
 //!
 //! [`install`] runs once per engine, after `nvse::install` (JIP is xNVSE's plugin): in
 //! `host::Host::start_with`; in the engine crates' own tests only through
@@ -50,6 +52,7 @@ pub mod containers;
 pub mod cosave;
 pub mod equip_hooks;
 pub mod game;
+pub mod game_patches;
 pub mod identity;
 pub mod input;
 pub mod ln_events;
@@ -109,6 +112,8 @@ pub struct Jip {
     pub ui_hooks: ui_hooks::State,
     /// What JIP's quest commands keep between calls.
     pub quest: commands::jip_fn_quest::State,
+    /// What `jip_fn_miscellaneous`'s commands keep between calls (keywords, actor value names).
+    pub misc: commands::jip_fn_miscellaneous::State,
     /// JIP's actor hooks and their events.
     pub actor_hooks: actor_hooks::State,
     /// JIP's actor AI hooks' maps and values.
@@ -119,6 +124,12 @@ pub struct Jip {
     pub script: commands::jip_fn_script::State,
     /// What JIP's CC&C commands keep: the actor bases set to NCCS, the location grids.
     pub ccc: commands::jip_fn_ccc::State,
+    /// JIP's temporary position marker (`s_tempPosMarker`).
+    pub pos_marker: commands::pos_marker::State,
+    /// The live variables JIP added to scripts, and the names it added this session.
+    pub script_vars: commands::jip_fn_script_vars::State,
+    /// JIP's game patches (step 3.9): the host's row and the switches read.
+    pub game_patches: game_patches::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -171,6 +182,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     ai_hooks::install(e, answers_installed);
     equip_hooks::install(e, answers_installed);
     world_hooks::install(e, answers_installed);
+    game_patches::install(e, answers_installed);
     nvse::plugins::register(e, plugin(answers_installed));
     // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.
     if answers_installed {
