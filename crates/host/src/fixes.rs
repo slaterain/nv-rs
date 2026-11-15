@@ -430,12 +430,12 @@ pub const DRAW_THREAD: Fix = Fix {
     install: install_nothing,
 };
 
-/// UI Organizer built in (`crates/uio`, part 1): its lists (`Data\uio\supported.txt` and
+/// UI Organizer built in (`crates/uio`, parts 1 and 2): its lists (`Data\uio\supported.txt` and
 /// `Data\uio\public\*.txt`) put UI mods' additions into the menus, in memory, and every menu file
-/// is read through UIO's reader. It changes how every menu file is read, so it is a row; off in
-/// every preset ([`OFF_IN_EVERY_PRESET`]) until it is proven in the game with a UI mod, then on in
-/// `fixes`. The row sets a flag; `uio::install` (after JIP, in [`crate::Host::start_with`]) puts
-/// its seams in.
+/// is read through UIO's reader and parsed by its own XML parser. It changes how every menu file
+/// is read, so it is a row; off in every preset ([`OFF_IN_EVERY_PRESET`]) until it is proven in the
+/// game with a UI mod, then on in `fixes`. The row sets a flag; `uio::install` (after JIP, in
+/// [`crate::Host::start_with`]) puts its seams in.
 pub const UIO: Fix = Fix {
     name: "UI Organizer built in",
     env: "NV_UIO",

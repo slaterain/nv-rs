@@ -5,8 +5,9 @@
 //! messages (disabled by script, their flags and display time), and the open menus' data (item
 //! filters, the barter caps and price multipliers, the recipe menu's selection, category and
 //! category count, the VATS targets, the font files, the level-up menu with skill points, the
-//! barter offers and a menu's item list as inventory references, a terminal's own model). 32 of
-//! the file's 64 commands; its four menu event commands are the core track's (`ui_hooks`).
+//! barter offers and a menu's item list as inventory references, a terminal's own model), and
+//! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`). 33 of the
+//! file's 64 commands; its four menu event commands are the core track's (`ui_hooks`).
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
 //! LN NVSE)): a path's first part names a menu (looked up as JIP's `s_menuNameToID` looks it up,
@@ -18,9 +19,8 @@
 //! back), so they are not used.
 //!
 //! The rest of the file waits (each named in the lane's audit):
-//! - a hook or a code patch of JIP's: `InjectUIComponent` (writes `jip_temp.xml`: file writes),
-//!   `UnlockRecipeMenuQuantity`, `ToggleCraftingMessages`, `EnableImprovedRecipeMenu`,
-//!   `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
+//! - a hook or a code patch of JIP's: `UnlockRecipeMenuQuantity`, `ToggleCraftingMessages`,
+//!   `EnableImprovedRecipeMenu`, `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
 //!   the exe), `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (the text
 //!   input hooks, `TextInputClose`), `ToggleHUDCursor` (the HUD cursor and its input hooks);
 //! - a routine of JIP's the game calls back: `ShowQuantityMenu`, `MessageBoxExAlt` (their
@@ -60,6 +60,7 @@ use nvse::{handled, CommandArgs, EvalArgs};
 pub static COMMANDS: Handlers = &[
     (0x2608, is_component_loaded),
     (0x2609, inject_ui_xml),
+    (0x260a, inject_ui_component),
     (0x2638, get_cursor_pos),
     (0x2639, get_ui_string),
     (0x2681, get_active_menu_mode),
@@ -264,6 +265,10 @@ const PATH_BUFFER: usize = 0x100;
 const XML_BUFFER: usize = 0x80;
 /// `kCommandInfo_AddTileFromTemplate.numParams`: xNVSE's 21 format parameters.
 const FORMAT_STRING_PARAMS: u32 = 21;
+/// `kCommandInfo_InjectUIComponent.numParams`: the path and xNVSE's 21 format parameters.
+const INJECT_PARAMS: u32 = 22;
+/// JIP's string argument buffer (`GetStrArgBuffer`), which takes `InjectUIComponent`'s text.
+const STR_ARG_BUFFER: usize = 0x4_0000;
 /// `Tile::Parents[24]` in `GetComponentFullName`: deeper tiles run past JIP's array.
 const FULL_NAME_DEPTH: u32 = 24;
 
@@ -671,6 +676,30 @@ fn inject_ui_xml(e: &mut Engine, w: &[u32]) -> Ret {
             if made != 0 {
                 a.set_result(e, 1.0);
             }
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_InjectUIComponent_Execute and InjectUIComponent.
+/// `Menu/tile...` and a formatted text of menu XML: the text made into tiles under the tile
+/// (none when the path ends at a trait) by the built-in UI Organizer's `UIOInjectComponent`
+/// ([`uio::inject_component`]); result 1 when a tile is made. Without UIO, JIP writes the text to
+/// `jip_temp.xml` in the game's folder and reads that file into the tile; nv-rs writes nothing
+/// into the game's folder, so without UIO (the row off) the command does nothing (a deliberate
+/// difference, as nothing is written into the game's folder).
+fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let f = nvse::commands::string::format_string_args_at(e, &a, 1, INJECT_PARAMS);
+    if !f.ok {
+        return handled(true);
+    }
+    let path = nvse::commands::args_in_buffer(e, &f.leading, 0, PATH_BUFFER, "InjectUIComponent");
+    let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "InjectUIComponent");
+    if let Some((tile, _)) = target_component(e, &path, false) {
+        if uio::on(e) && uio::inject_component(e, tile, &text) != 0 {
+            a.set_result(e, 1.0);
         }
     }
     handled(true)

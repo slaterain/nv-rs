@@ -29,7 +29,7 @@ struct PatchedFile {
 
 /// The menu files whose parse UIO does not keep (`UIOLoad`: `s_cachedParsedData` entries made
 /// with `cached = false`): globals and the six menus the game keeps open.
-const NOT_KEPT: [&[u8]; 7] = [
+pub(crate) const NOT_KEPT: [&[u8]; 7] = [
     b"Data\\Menus\\globals.xml",
     b"Data\\Menus\\Main\\hud_main_menu.xml",
     b"Data\\Menus\\Main\\inventory_menu.xml",
