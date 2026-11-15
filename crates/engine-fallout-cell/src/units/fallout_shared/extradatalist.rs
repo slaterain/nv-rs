@@ -12400,33 +12400,70 @@ mod tests {
         e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
         assert!(!differs(&mut e));
         assert_eq!(GH1_ASKED.with(|s| s.take()), vec![(0x0041_271e, vec![])]);
+        // The owner extra is still compared (JIP's `jmp` lands on the general test at
+        // `0x412729`, not past the extra): another owner is a difference, so a stolen stack
+        // and an owned one stay apart.
+        let (stolen, _) = list_with_payloads(&mut e, &[(0x21, 8)]);
+        assert!(e
+            .call(0x0041_26c0, &args![this, stolen, false, false])
+            .bool());
+        assert_eq!(GH1_ASKED.with(|s| s.take()), vec![(0x0041_271e, vec![])]);
         GH1_ANSWER.with(|v| v.set(None));
         assert!(differs(&mut e));
     }
 
     /// JIP's hotkey fix (G76) in `CopyListForReference`: off a hotkey (type 0x4A) stays in the
-    /// source, the seam not asked; with the fix row the seam is asked at the hotkey and an answer
-    /// copies it with the general arm (moved: deleted from the source); no answer: it stays.
+    /// source and is not copied, the seam not asked; with the fix row the seam is asked at the
+    /// hotkey and an answer copies it with the general arm (the target's setter `0042dde0` gets
+    /// its byte; moved: deleted from the source; not moved: both hold it); no answer: it stays.
     #[test]
     fn jip_gh1_copy_hotkey_seam() {
         use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        let run = |word: u32, answer: Option<u32>| {
+        const HOTKEY_SETTER: u32 = 0x0042_dde0;
+        // The source's chain after the run, and the hotkey copies made as (to the target, byte).
+        let run = |word: u32, answer: Option<u32>, moving: bool| {
             let mut e = list_engine();
             e.on_site(SiteSlot::new(Owner::Jip, 0x0041_2675), at_412675);
             e.set_jip_patches(word);
             GH1_ANSWER.with(|v| v.set(answer));
-            let (source, _) = list_with(&mut e, &[0x4a, 0x20]);
+            let (source, extras) = list_with(&mut e, &[0x4a, 0x20]);
+            e.mem.set_u8(extras[0].addr() + 0x0c, 5);
             let target: Ptr<ExtraDataList> = e.new_object();
-            e.call(0x0041_2490, &args![target, source, true]);
-            chain_types(&e, source.cast())
+            e.call_log = Some(vec![]);
+            e.call(0x0041_2490, &args![target, source, moving]);
+            let log = e.call_log.take().unwrap();
+            let copies: Vec<(bool, u32)> = calls_to(&log, HOTKEY_SETTER)
+                .iter()
+                .map(|a| (a[0] == target.addr(), a[1]))
+                .collect();
+            (chain_types(&e, source.cast()), copies)
         };
         for word in [0, jip_patches::INSTALLED] {
-            assert_eq!(run(word, Some(1)), vec![0x4a, 0x20], "{word:x}");
-            assert!(GH1_ASKED.with(|s| s.take()).is_empty());
+            for moving in [true, false] {
+                assert_eq!(
+                    run(word, Some(1), moving),
+                    (vec![0x4a, 0x20], vec![]),
+                    "{word:x} {moving}"
+                );
+                assert!(GH1_ASKED.with(|s| s.take()).is_empty());
+            }
         }
         let on = jip_patches::INSTALLED | jip_patches::FIXES;
-        assert_eq!(run(on, Some(1)), vec![0x20]);
+        assert_eq!(run(on, Some(1), true), (vec![0x20], vec![(true, 5)]));
         assert_eq!(GH1_ASKED.with(|s| s.take()), vec![(0x0041_2675, vec![])]);
-        assert_eq!(run(on, None), vec![0x4a, 0x20]);
+        assert_eq!(
+            run(on, Some(1), false),
+            (vec![0x4a, 0x20], vec![(true, 5)]),
+            "copied without moving: both hold the hotkey"
+        );
+        assert_eq!(GH1_ASKED.with(|s| s.take()), vec![(0x0041_2675, vec![])]);
+        for moving in [true, false] {
+            assert_eq!(
+                run(on, None, moving),
+                (vec![0x4a, 0x20], vec![]),
+                "{moving}"
+            );
+            assert_eq!(GH1_ASKED.with(|s| s.take()).len(), 1);
+        }
     }
 }

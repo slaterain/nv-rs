@@ -18828,6 +18828,36 @@ mod tests {
         assert_eq!(gh1_take().len(), 4);
     }
 
+    /// G46, the destructor as the fast iteration's callers run it (flags 1, "free it too"): with
+    /// the fix row and JIP's answer neither the destructor body nor `operator delete` runs (the
+    /// block is JIP's own and the next iteration uses it again); off, and with no answer, the
+    /// exe's destructor and free.
+    #[test]
+    fn jip_gh1_iterator_destructor_frees_nothing_of_jips() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = more();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004b_f630), at_4bf630);
+            e.set_jip_patches(word);
+            GH1_ANSWER.with(|v| v.set(answer));
+            let result = e.call(0x004bf630, &args![0x1111u32, 1u32]).u32();
+            (
+                result,
+                calls(&e, FAST_ITERATOR_DESTRUCT),
+                calls(&e, OPERATOR_DELETE),
+            )
+        };
+        let exe = (0x1111, vec![vec![0x1111]], vec![vec![0x1111]]);
+        for word in GH1_OFF {
+            assert_eq!(run(word, Some(0x55)), exe, "{word:x}");
+            assert!(gh1_take().is_empty());
+        }
+        assert_eq!(run(GH1_ON, Some(0x55)), (0x55, vec![], vec![]));
+        assert_eq!(gh1_take(), vec![(0x004b_f630, vec![0x1111, 1])]);
+        assert_eq!(run(GH1_ON, None), exe);
+        assert_eq!(gh1_take(), vec![(0x004b_f630, vec![0x1111, 1])]);
+    }
+
     /// JIP's fix for temporary forms (G61) at `004c1c90`'s two calls of `GetRefPersists`: off,
     /// the exe's call; with the fix row each is asked with the reference (`0x4C232C` when an
     /// entry of the form is there, `0x4C273A` for a new entry), and an answer stands for the call.
