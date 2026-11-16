@@ -268,7 +268,7 @@ pub(crate) fn child_nodes(e: &Engine, node: u32, walk: &mut Walk) -> Vec<u32> {
 }
 
 /// The C text at `text`, `None` without an end within [`MAX_NAME`] readable bytes.
-fn c_text(e: &Engine, text: u32) -> Option<Vec<u8>> {
+pub(crate) fn c_text(e: &Engine, text: u32) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for i in 0..MAX_NAME {
         match rd8(e, text.wrapping_add(i))? {
@@ -818,6 +818,18 @@ pub(crate) fn ray_cast(
             object,
         })
     })
+}
+
+/// The rotation as [`ray_cast`] reads it for a cast along the matrix's column 0: JIP hands a
+/// camera's `WorldRotate()` itself (`NiMatrix33`'s `float*`: words 0, 3, 6, the camera's view),
+/// where [`ray_cast`] takes words 1, 4, 7 (the `WorldRotate() + 1` of the node casts). For every
+/// cast from the main camera (`MoveToReticle`, `GetReticlePos` and the others).
+pub(crate) fn along_column_0(rot: [f32; 9]) -> [f32; 9] {
+    let mut out = [0f32; 9];
+    out[1] = rot[0];
+    out[4] = rot[3];
+    out[7] = rot[6];
+    out
 }
 
 /// The cast's hit point in game units, `(from + (to - from) * fraction) * PS_HKUnitCnvrt` (the
