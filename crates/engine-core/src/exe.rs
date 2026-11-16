@@ -169,6 +169,17 @@ pub fn game_view(host: &str) -> String {
     format!("{}:{}", HOST_DRIVE as char, host.replace('/', "\\"))
 }
 
+/// Why the game cannot be given the folder `host` of this system (Linux, macOS) as a Windows
+/// path, if it cannot: a `:` (a stream to Windows) or a `\` (a separator) in a name.
+pub fn game_view_refused(host: &str) -> Option<String> {
+    host.contains([':', '\\']).then(|| {
+        format!(
+            "the game's folder {host:?} holds a ':' or a '\\', which a Windows path cannot hold \
+             in a name: rename it (or move the game to a folder without them)"
+        )
+    })
+}
+
 /// The FalloutNV.exe of an installation, given its `Data` folder: the
 /// executable sits in the folder that contains `Data`.
 pub fn installed_exe(data_dir: &Path) -> std::path::PathBuf {
@@ -249,6 +260,15 @@ mod tests {
             r"Z:\home\me\Games\Fallout New Vegas"
         );
         assert_eq!(game_view("/"), r"Z:\");
+    }
+
+    /// A folder whose name holds a `:` or `\` cannot be the game's folder (Windows cannot hold
+    /// such a name); any other can.
+    #[test]
+    fn a_folder_with_a_colon_or_backslash_cannot_be_the_games() {
+        assert!(game_view_refused("/home/me/Games/Fallout: New Vegas").is_some());
+        assert!(game_view_refused(r"/home/me/a\b").is_some());
+        assert_eq!(game_view_refused("/home/me/Games/Fallout New Vegas"), None);
     }
 
     #[test]

@@ -17,15 +17,20 @@
 //!   not); one `.` at the end of a folder's name dropped (`sub.\y.txt` is `sub\y.txt`, `sub..\`
 //!   stays); the dots and spaces at the end of the last name dropped (`x.dds. ` is `x.dds`); a
 //!   separator at the end kept, so a file named with one is not opened (Windows answers
-//!   `ERROR_DIRECTORY`). A last name `NUL` (Windows' null device) and a `:` in a name (a file's
-//!   stream) are not provided: the run stops.
+//!   `ERROR_DIRECTORY`). A last name `NUL` (Windows' null device) is not provided: the run
+//!   stops. A `:` in a name (a file's stream) answers as missing.
+//! - A name of this system's that Windows cannot hold (a `:` or `\` in it, a dot or space at its
+//!   end, `NUL`: [`windows_cannot_hold`]) is not shown to the game by the listing, and the game
+//!   cannot open it (the rules above read its name as another one, or as a stream).
 //! - Each part is then looked up in its folder as Windows compares names: without case, by
 //!   NTFS's upper-casing (`super::files`' `ntfs_key`). A part whose name is there as written is
 //!   tried first; then the folder's other names that match it without case, in byte order. The
 //!   first that holds the rest of the path is taken ([`resolve`]): a folder that is two folders
 //!   here (`Data/Textures` and `Data/textures`, as two mods unpacked by hand leave them; one
 //!   folder to Windows) gives its files from either. When a folder holds more than one name for
-//!   the part, the log says which was taken, once per folder and name.
+//!   the part, the log says which was taken, once per folder and name. On a file system that
+//!   ignores case (macOS's by default) a name there in another case is that folder's entry, and
+//!   no other is tried.
 //! - When no such path holds every part, the one that holds the most is taken and the rest is
 //!   kept as written: the file is not there, and the call answers as for any missing file.
 //!
@@ -36,9 +41,11 @@
 //!
 //! The folders' names are kept between calls ([`Listings`]) while the folder's modification
 //! time stays the one read with them (a name added, removed or renamed changes it on these
-//! systems); a listing read within [`SETTLED`] of its folder's last change is not kept, so a
-//! change in the same tick of the file system's clock is never missed, and the port's own writes
-//! say which folder changed ([`forget`]).
+//! systems); a listing read within [`SETTLED`] after its folder's last change is not kept, so a
+//! change in the same tick of the file system's clock is never missed. That is what keeps them
+//! current, after anyone's writes; [`forget`] (the save copy-out's, once it runs off Windows) is
+//! a fallback for a file system whose clock does not. They are kept by folder, not by spelling
+//! ([`folder_key`]), at most [`MAX_FOLDERS`].
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -50,26 +57,36 @@ use std::time::{Duration, SystemTime};
 pub enum NotHere {
     /// A drive other than `Z:`: no folder of this system is on it.
     OtherDrive(char),
-    /// A drive with no `\` after it (`Z:x`, relative to that drive's current folder). Not reached
-    /// from the game's file calls: they make every name full first (`super::files::full_path`
-    /// puts `Z:x` in the current folder, where its `:` is a stream, [`NotHere::Stream`]); kept
-    /// for a direct caller of [`unix_text`].
+    /// A drive with a name but no `\` after it (`Z:x`, relative to that drive's current folder):
+    /// stops the run. The game's file calls do not give one: they make every name full first
+    /// (`super::files::full_path` puts `Z:x` in the current folder, where its `:` makes it a
+    /// stream, [`NotHere::Stream`]). A bare `Z:` is the drive's root ([`unix_text`]).
     DriveRelative,
-    /// A network or device path (`\\server\share`, `\\?\`, `\\.\`): not provided off Windows,
-    /// and never laid over this system's root.
+    /// A network or device path (`\\server\share`, `\\.\`, `\\?\` before anything but a drive's
+    /// path): not provided off Windows, and never laid over this system's root.
     Unc,
     /// The last name `NUL` (any case, dots and spaces after it): Windows' null device in every
     /// folder (measured: `D:\x\NUL` is `\\.\NUL`; `CON`, `AUX`, `COM1` and `nul.txt` are plain
     /// names on Windows 11). Not provided.
     Device,
-    /// A `:` in a name: a file's alternate stream to Windows (`x.dds:s`, `x.dds::$DATA`). Not
-    /// provided.
+    /// A `:` in a name: a file's alternate stream to Windows (`x.dds:s`, `x.dds::$DATA`). No
+    /// stream is provided: the path answers as a missing file ([`host_path`]), never as the file
+    /// of this system that holds a `:` in its name.
     Stream,
 }
 
 /// The game's path `game` (its text, `\` or `/` between parts) as this system's path, before the
-/// names are read as Windows reads them: `Z:` taken off, `\` as `/`.
+/// names are read as Windows reads them: `Z:` taken off, `\` as `/`. A bare `Z:` is the root,
+/// `/`: the folder the file calls cut a name at the root to (`Z:\nv.ini`'s folder when they
+/// look whether it is there, `Z:\*`'s when they list it). `\\?\Z:\x` is `Z:\x` (the long-path
+/// form of the same file to Windows).
 pub fn unix_text(game: &str) -> Result<String, NotHere> {
+    if let Some(rest) = game.strip_prefix(r"\\?\") {
+        let r = rest.as_bytes();
+        if r.len() >= 3 && r[0].is_ascii_alphabetic() && r[1] == b':' && r[2] == b'\\' {
+            return unix_text(rest);
+        }
+    }
     let b = game.as_bytes();
     if b.len() >= 2 && b[0] == b'\\' && matches!(b[1], b'\\' | b'/') {
         return Err(NotHere::Unc);
@@ -79,6 +96,9 @@ pub fn unix_text(game: &str) -> Result<String, NotHere> {
             return Err(NotHere::OtherDrive(b[0].to_ascii_uppercase() as char));
         }
         let rest = &game[2..];
+        if rest.is_empty() {
+            return Ok("/".to_string());
+        }
         if !rest.starts_with(['\\', '/']) {
             return Err(NotHere::DriveRelative);
         }
@@ -87,6 +107,39 @@ pub fn unix_text(game: &str) -> Result<String, NotHere> {
         game
     };
     Ok(rest.replace('\\', "/"))
+}
+
+/// Whether a name of this system's is one Windows cannot hold in a folder, so the game is never
+/// shown it ([`hidden_line`], the listing off Windows) and cannot open it: a `:` (a stream to
+/// Windows) or a `\` (a separator), a `.` or a space at its end (Windows drops them, so the
+/// name would open another file), or `NUL` (the null device).
+pub fn windows_cannot_hold(name: &str) -> bool {
+    name.contains([':', '\\']) || name.ends_with(['.', ' ']) || name.eq_ignore_ascii_case("NUL")
+}
+
+/// The most folders whose hidden names ([`windows_cannot_hold`]) the log names.
+pub const MAX_HIDDEN_SAID: usize = 16;
+
+/// The log line for a name the listing of `folder` does not show the game
+/// ([`windows_cannot_hold`]): once per folder, for the first [`MAX_HIDDEN_SAID`] folders; the
+/// line of the last of those says no more are named.
+pub fn hidden_line(folder: &Path, name: &str) -> Option<String> {
+    static SAID: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+    let mut said = SAID.lock().unwrap_or_else(|p| p.into_inner());
+    let said = said.get_or_insert_with(HashSet::new);
+    if said.len() >= MAX_HIDDEN_SAID || !said.insert(folder.to_path_buf()) {
+        return None;
+    }
+    let more = if said.len() == MAX_HIDDEN_SAID {
+        " (no more folders are named)"
+    } else {
+        ""
+    };
+    Some(format!(
+        "files: {} holds {name:?}, a name Windows cannot hold in a folder (':', '\\', a dot or \
+         space at its end, or NUL): the game is not shown it and cannot open it{more}",
+        folder.display()
+    ))
 }
 
 /// A name as Windows compares it: NTFS's upper-casing of its UTF-16 units.
@@ -190,6 +243,12 @@ impl<'a> Look<'a> {
         let Some(names) = (self.matches)(folder, part) else {
             return (vec![], None);
         };
+        // The name as written is there, yet the folder does not hold it so: a file system that
+        // ignores case (macOS's by default), where the folder's one name for it IS that entry.
+        // No other is tried (each would walk the same folder again).
+        if exact && !names.iter().any(|n| n == part) {
+            return (vec![], Some(names));
+        }
         let others = names
             .iter()
             .filter(|n| !(exact && *n == part))
@@ -296,19 +355,22 @@ pub fn folders(path: &str, look: &mut Look) -> Result<Vec<String>, NotHere> {
     Ok(all)
 }
 
-/// A listing read within this time of its folder's last change is not kept: a file system's
+/// A listing read within this time after its folder's last change is not kept: a file system's
 /// clock moves in ticks (1 to 10 ms on Linux, 1 s on HFS+, 2 s on FAT), so another change in the
-/// same tick would leave the time as it was and the kept names stale.
+/// same tick would leave the time as it was and the kept names stale. A folder whose time is
+/// after the reading (unpacked from an archive made in a time zone ahead, a share whose clock
+/// is ahead) is kept: any change to it now gives it the time of now, which is not its time.
 pub const SETTLED: Duration = Duration::from_secs(2);
 
-/// The most folders whose names are kept; past it the kept names are dropped and read again.
+/// The most folders whose names are kept; past it the one kept longest ago is dropped.
 pub const MAX_FOLDERS: usize = 4096;
 
 /// A folder's names, each group of names Windows takes as one ([`fold`]) in byte order, with the
-/// folder's modification time when read.
+/// folder's modification time when read and when it was kept (for the bound).
 struct Listing {
     modified: SystemTime,
     by_name: HashMap<Vec<u16>, Vec<String>>,
+    kept: u64,
 }
 
 impl Listing {
@@ -320,7 +382,11 @@ impl Listing {
         for group in by_name.values_mut() {
             group.sort();
         }
-        Self { modified, by_name }
+        Self {
+            modified,
+            by_name,
+            kept: 0,
+        }
     }
 
     fn matching(&self, key: &[u16]) -> Vec<String> {
@@ -328,10 +394,11 @@ impl Listing {
     }
 }
 
-/// The folders' names read so far ([`folder_matches`]).
+/// The folders' names read so far ([`folder_matches`]), by the folder's key ([`folder_key`]).
 #[derive(Default)]
 pub struct Listings {
     folders: HashMap<String, Listing>,
+    next: u64,
 }
 
 impl Listings {
@@ -342,31 +409,60 @@ impl Listings {
         (listing.modified == modified).then(|| listing.matching(key))
     }
 
-    /// Keeps `listing` for `folder` when it was read ([`SETTLED`]) after its last change, `now`
-    /// being when it was read; at most [`MAX_FOLDERS`] folders.
-    fn keep(&mut self, folder: &str, listing: Listing, now: SystemTime) {
-        if now.duration_since(listing.modified).unwrap_or_default() < SETTLED {
+    /// Keeps `listing` for `folder` unless it was read within [`SETTLED`] after its last change,
+    /// `now` being when it was read; at most [`MAX_FOLDERS`] folders, the one kept longest ago
+    /// dropped for a new one.
+    fn keep(&mut self, folder: &str, mut listing: Listing, now: SystemTime) {
+        if matches!(now.duration_since(listing.modified), Ok(age) if age < SETTLED) {
             self.folders.remove(folder);
             return;
         }
         if self.folders.len() >= MAX_FOLDERS && !self.folders.contains_key(folder) {
-            self.folders.clear();
+            let oldest = self
+                .folders
+                .iter()
+                .min_by_key(|(_, l)| l.kept)
+                .map(|(k, _)| k.clone());
+            if let Some(oldest) = oldest {
+                self.folders.remove(&oldest);
+            }
         }
+        listing.kept = self.next;
+        self.next += 1;
         self.folders.insert(folder.to_string(), listing);
     }
 }
 
 static LISTINGS: Mutex<Option<Listings>> = Mutex::new(None);
 
+/// The key a folder's names are kept under: on Linux and macOS the folder itself (its device
+/// and number), so every spelling of it (another case on macOS, a link, `..`) is one folder kept
+/// once and forgotten once; elsewhere (the tests on Windows) its path.
+fn folder_key(folder: &str, meta: &std::fs::Metadata) -> String {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let _ = folder;
+        format!("#{}:{}", meta.dev(), meta.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        folder.to_string()
+    }
+}
+
 /// The names of the folder `folder` on this system that match `part` without case, in byte order
 /// (`None` if there is no such folder), from [`LISTINGS`] while the folder's modification time is
 /// the one read with them. The lock is held only to look and to keep, not while reading.
 pub fn folder_matches(folder: &str, part: &str) -> Option<Vec<String>> {
     let key = fold(part);
-    let modified = std::fs::metadata(folder).ok()?.modified().ok();
+    let meta = std::fs::metadata(folder).ok()?;
+    let at = folder_key(folder, &meta);
+    let modified = meta.modified().ok();
     if let Some(modified) = modified {
         let kept = LISTINGS.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(found) = kept.as_ref().and_then(|l| l.get(folder, modified, &key)) {
+        if let Some(found) = kept.as_ref().and_then(|l| l.get(&at, modified, &key)) {
             return Some(found);
         }
     }
@@ -383,16 +479,22 @@ pub fn folder_matches(folder: &str, part: &str) -> Option<Vec<String>> {
     let found = listing.matching(&key);
     let mut kept = LISTINGS.lock().unwrap_or_else(|p| p.into_inner());
     kept.get_or_insert_with(Listings::default)
-        .keep(folder, listing, now);
+        .keep(&at, listing, now);
     Some(found)
 }
 
-/// The port wrote into or removed from the folder `folder` (this system's path): its kept names
-/// are read again at the next look, whatever its modification time says.
+/// The port wrote into or removed from the folder `folder` (this system's path, any spelling of
+/// it on Linux and macOS: [`folder_key`]): its kept names are read again at the next look,
+/// whatever its modification time says. The folder's time is what keeps the names current
+/// ([`SETTLED`]); this is for a file system whose clock does not.
 pub fn forget(folder: &Path) {
+    let Ok(meta) = std::fs::metadata(folder) else {
+        return;
+    };
+    let at = folder_key(&folder.to_string_lossy(), &meta);
     let mut kept = LISTINGS.lock().unwrap_or_else(|p| p.into_inner());
     if let Some(kept) = kept.as_mut() {
-        kept.folders.remove(&*folder.to_string_lossy());
+        kept.folders.remove(&at);
     }
 }
 
@@ -440,11 +542,28 @@ fn refused(game: &str, why: NotHere) -> ! {
         NotHere::Device => {
             panic!("the game's path {game:?}: Windows' null device (NUL) is not provided")
         }
-        NotHere::Stream => panic!(
-            "the game's path {game:?}: a name with a ':' (a file's stream to Windows) is not \
-             provided"
-        ),
+        NotHere::Stream => unreachable!("a stream answers as missing"),
     }
+}
+
+/// Where a path naming a file's stream lies ([`NotHere::Stream`]): a folder that is never there,
+/// so it answers as missing.
+pub const NO_STREAMS: &str = "/nonexistent/nv-rs streams";
+
+/// This system's path for `game`, whose names read as `text` were refused for `why`: a stream is
+/// missing ([`NO_STREAMS`], said once in the run); the others stop the run ([`refused`]).
+fn not_here(game: &str, text: &str, why: NotHere) -> PathBuf {
+    if why != NotHere::Stream {
+        refused(game, why);
+    }
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!(
+            "files: the game's path {game:?} names a file's stream (a ':' in a name): no stream \
+             is provided, it answers as missing (said once)"
+        );
+    }
+    PathBuf::from(format!("{NO_STREAMS}{text}"))
 }
 
 /// The game's path `game` as this system's text ([`unix_text`]), or the path it is when it is on
@@ -491,8 +610,8 @@ fn several_lines(several: Vec<Several>) -> Vec<String> {
 
 /// The game's path `game` as this system's path ([`unix_text`], then [`resolve`] against this
 /// system's folders, a folder holding two names for one part said once in the log). A drive
-/// other than `Z:` is absent ([`absent_drive_path`], said once per drive); the paths
-/// [`NotHere`] names otherwise stop the run, as calls not provided.
+/// other than `Z:` is absent ([`absent_drive_path`], said once per drive), a stream missing
+/// ([`NO_STREAMS`]); the other paths [`NotHere`] names stop the run, as calls not provided.
 pub fn host_path(game: &str) -> PathBuf {
     let text = match host_text(game) {
         Ok(text) => text,
@@ -503,8 +622,10 @@ pub fn host_path(game: &str) -> PathBuf {
     }
     let mut exists = |p: &str| std::fs::symlink_metadata(p).is_ok();
     let mut matches = folder_matches;
-    let (found, several) = resolve(&text, &mut Look::new(&mut exists, &mut matches))
-        .unwrap_or_else(|why| refused(game, why));
+    let (found, several) = match resolve(&text, &mut Look::new(&mut exists, &mut matches)) {
+        Ok(resolved) => resolved,
+        Err(why) => return not_here(game, &text, why),
+    };
     for line in several_lines(several) {
         eprintln!("{line}");
     }
@@ -524,8 +645,10 @@ pub fn host_folders(game: &str) -> Vec<PathBuf> {
     }
     let mut exists = |p: &str| std::fs::symlink_metadata(p).is_ok();
     let mut matches = folder_matches;
-    let all = folders(&text, &mut Look::new(&mut exists, &mut matches))
-        .unwrap_or_else(|why| refused(game, why));
+    let all = match folders(&text, &mut Look::new(&mut exists, &mut matches)) {
+        Ok(all) => all,
+        Err(why) => return vec![not_here(game, &text, why)],
+    };
     if all.is_empty() {
         return vec![host_path(game)];
     }
@@ -641,6 +764,12 @@ mod tests {
         );
         assert_eq!(unix_text(r"d:\x").unwrap_err(), NotHere::OtherDrive('D'));
         assert_eq!(unix_text(r"Z:Data\x").unwrap_err(), NotHere::DriveRelative);
+        // A bare `Z:` (the folder of `Z:\nv.ini` as the file calls cut it, of `Z:\*` listed) is
+        // the root.
+        assert_eq!(unix_text("Z:").unwrap(), "/");
+        assert_eq!(unix_text("z:").unwrap(), "/");
+        assert_eq!(unix_text("C:").unwrap_err(), NotHere::OtherDrive('C'));
+        assert_eq!(host_path("Z:"), PathBuf::from("/"));
         assert_eq!(
             unix_text(r"/tmp/scratch\a.txt").unwrap(),
             "/tmp/scratch/a.txt"
@@ -691,8 +820,13 @@ mod tests {
     #[test]
     fn network_and_device_paths_are_refused() {
         assert_eq!(unix_text(r"\\server\share\x"), Err(NotHere::Unc));
-        assert_eq!(unix_text(r"\\?\C:\x"), Err(NotHere::Unc));
+        assert_eq!(unix_text(r"\\?\UNC\server\share\x"), Err(NotHere::Unc));
+        assert_eq!(unix_text(r"\\?\Volume{x}\y"), Err(NotHere::Unc));
         assert_eq!(unix_text(r"\\.\PhysicalDrive0"), Err(NotHere::Unc));
+        assert_eq!(unix_text(r"\\.\Z:\x"), Err(NotHere::Unc));
+        // The long-path form of a drive's path is that path.
+        assert_eq!(unix_text(r"\\?\Z:\tmp\x").unwrap(), "/tmp/x");
+        assert_eq!(unix_text(r"\\?\C:\x"), Err(NotHere::OtherDrive('C')));
         assert_eq!(unix_text(r"\/x"), Err(NotHere::Unc));
         // A host path with a doubled `/` is still this system's.
         assert_eq!(unix_text("//tmp/x").unwrap(), "//tmp/x");
@@ -798,10 +932,63 @@ mod tests {
         host_path(r"Z:\tmp\NUL");
     }
 
+    /// A stream (also a `:` the current folder's name holds, `Z:x` made full) is missing, never
+    /// the file of this system named with a `:`.
     #[test]
-    #[should_panic(expected = "a file's stream")]
-    fn a_stream_stops_the_run() {
-        host_path(r"Z:\tmp\x.dds:s");
+    fn a_stream_answers_as_missing() {
+        assert_eq!(
+            host_path(r"Z:\tmp\x.dds:s"),
+            PathBuf::from("/nonexistent/nv-rs streams/tmp/x.dds:s")
+        );
+        assert_eq!(
+            host_folders(r"Z:\tmp\a:b"),
+            [PathBuf::from("/nonexistent/nv-rs streams/tmp/a:b")]
+        );
+        assert!(host_path(r"Z:\home\me\Z:x").starts_with(NO_STREAMS));
+    }
+
+    /// Names Windows cannot hold in a folder are kept from the game.
+    #[test]
+    fn names_windows_cannot_hold_are_known() {
+        for name in [
+            "Mod: Part 2.esp",
+            r"a\b.esp",
+            "readme.txt ",
+            "readme.txt.",
+            "...",
+            "NUL",
+            "nul",
+        ] {
+            assert!(windows_cannot_hold(name), "{name:?}");
+        }
+        for name in [
+            "readme.txt",
+            "nul.txt",
+            "CON",
+            ".hidden",
+            " x.esp",
+            "x .esp",
+        ] {
+            assert!(!windows_cannot_hold(name), "{name:?}");
+        }
+    }
+
+    /// A hidden name is said once per folder, for at most [`MAX_HIDDEN_SAID`] folders.
+    #[test]
+    fn hidden_names_are_said_once_per_folder_and_capped() {
+        let first = hidden_line(Path::new("/hidden-0"), "a:b").expect("said");
+        assert!(
+            first.contains("/hidden-0") && first.contains("\"a:b\""),
+            "{first}"
+        );
+        assert_eq!(hidden_line(Path::new("/hidden-0"), "c:d"), None);
+        let mut said = 1;
+        for i in 1..MAX_HIDDEN_SAID + 5 {
+            said += usize::from(hidden_line(Path::new(&format!("/hidden-{i}")), "x.").is_some());
+        }
+        // Other tests may have said some of the 16 already; never more than 16.
+        assert!(said <= MAX_HIDDEN_SAID, "{said}");
+        assert_eq!(hidden_line(Path::new("/hidden-last"), "x."), None);
     }
 
     #[test]
@@ -939,6 +1126,80 @@ mod tests {
         assert_eq!(path, "/a00/b00/c00/d00/e00/f");
     }
 
+    /// A file system that ignores case (macOS's by default): every spelling of a name is there.
+    /// A missing file under folders the game spells otherwise is looked for once per folder,
+    /// not again under each folder's stored spelling.
+    #[test]
+    fn a_file_system_that_ignores_case_walks_each_folder_once() {
+        let folders: HashMap<&str, Vec<&str>> = HashMap::from([
+            ("", vec!["Games"]),
+            ("/Games", vec!["Fallout New Vegas"]),
+            ("/Games/Fallout New Vegas", vec!["Data"]),
+            ("/Games/Fallout New Vegas/Data", vec!["Textures"]),
+            ("/Games/Fallout New Vegas/Data/Textures", vec!["Armor"]),
+            (
+                "/Games/Fallout New Vegas/Data/Textures/Armor",
+                vec!["x.dds"],
+            ),
+        ]);
+        // The stored path of `p` in any case.
+        let stored = |p: &str| -> Option<String> {
+            let mut at = String::new();
+            for part in p.split('/').filter(|s| !s.is_empty()) {
+                let name = folders
+                    .get(at.as_str())?
+                    .iter()
+                    .find(|n| same_name(n, part))?;
+                at = format!("{at}/{name}");
+            }
+            Some(at)
+        };
+        let (mut exists_calls, mut listings) = (0, 0);
+        let mut exists = |p: &str| {
+            exists_calls += 1;
+            stored(p).is_some()
+        };
+        let mut matches = |folder: &str, part: &str| {
+            listings += 1;
+            let at = stored(folder)?;
+            let held = folders.get(at.as_str())?;
+            Some(
+                held.iter()
+                    .filter(|n| same_name(n, part))
+                    .map(|n| n.to_string())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let (path, several) = resolve(
+            "/games/fallout new vegas/data/textures/armor/missing.dds",
+            &mut Look::new(&mut exists, &mut matches),
+        )
+        .unwrap();
+        assert_eq!(
+            path,
+            "/games/fallout new vegas/data/textures/armor/missing.dds"
+        );
+        assert!(several.is_empty());
+        // One look at each of the 6 names, one listing of each of the 6 folders.
+        assert_eq!((exists_calls, listings), (6, 6));
+        // A file that is there opens with no listing at all.
+        let (mut exists_calls, mut listings) = (0, 0);
+        let mut exists = |p: &str| {
+            exists_calls += 1;
+            stored(p).is_some()
+        };
+        let mut matches = |_: &str, _: &str| {
+            listings += 1;
+            None
+        };
+        resolve(
+            "/GAMES/fallout new vegas/DATA/textures/armor/X.DDS",
+            &mut Look::new(&mut exists, &mut matches),
+        )
+        .unwrap();
+        assert_eq!((exists_calls, listings), (6, 0));
+    }
+
     #[test]
     fn dots_go_by_the_text_of_the_path() {
         assert_eq!(
@@ -1002,12 +1263,13 @@ mod tests {
         kept.keep("/d", Listing::new(at(103), names(&["b"])), at(104));
         assert_eq!(kept.get("/d", at(100), &fold("a")), None);
         assert_eq!(kept.get("/d", at(103), &fold("b")), None);
-        // A time after the reading (a clock set back) is not kept either.
+        // A folder whose time is after the reading (unpacked with times ahead) is kept: a change
+        // now would give it the time of now.
         kept.keep("/d", Listing::new(at(110), names(&["b"])), at(104));
-        assert_eq!(kept.get("/d", at(110), &fold("b")), None);
+        assert_eq!(kept.get("/d", at(110), &fold("b")), Some(names(&["b"])));
     }
 
-    /// At most [`MAX_FOLDERS`] folders are kept.
+    /// At most [`MAX_FOLDERS`] folders are kept, the one kept longest ago dropped first.
     #[test]
     fn the_kept_folders_are_bounded() {
         let mut kept = Listings::default();
@@ -1015,10 +1277,17 @@ mod tests {
             kept.keep(&format!("/{i}"), Listing::new(at(1), names(&["a"])), at(10));
             assert!(kept.folders.len() <= MAX_FOLDERS);
         }
-        assert_eq!(
-            kept.get(&format!("/{}", MAX_FOLDERS + 9), at(1), &fold("A")),
-            Some(names(&["a"]))
-        );
+        assert_eq!(kept.folders.len(), MAX_FOLDERS);
+        for gone in 0..10 {
+            assert_eq!(kept.get(&format!("/{gone}"), at(1), &fold("a")), None);
+        }
+        for still in [10, 11, MAX_FOLDERS, MAX_FOLDERS + 9] {
+            assert_eq!(
+                kept.get(&format!("/{still}"), at(1), &fold("A")),
+                Some(names(&["a"])),
+                "{still}"
+            );
+        }
         // A folder kept again when full replaces itself, dropping nothing.
         let before = kept.folders.len();
         kept.keep(
@@ -1082,19 +1351,19 @@ mod tests {
             folder_matches(&folder, "BAZ.TXT"),
             Some(names(&["Baz.txt"]))
         );
-        // A folder whose last change is within [`SETTLED`] is read every time.
-        std::fs::write(dir.join("Qux.txt"), b"").unwrap();
-        let now = std::fs::metadata(&dir).unwrap().modified().unwrap();
-        assert_eq!(
-            folder_matches(&folder, "qux.TXT"),
-            Some(names(&["Qux.txt"]))
-        );
-        std::fs::write(dir.join("Quux.txt"), b"").unwrap();
-        set_folder_time(&dir, now);
-        assert_eq!(
-            folder_matches(&folder, "QUUX.txt"),
-            Some(names(&["Quux.txt"]))
-        );
+        // Linux and macOS: the folder is kept as itself, so another spelling of it is forgotten
+        // too. (The 2-second rule is tested with set times: a_listing_read_just_after_...)
+        #[cfg(unix)]
+        {
+            std::fs::write(dir.join("Qux.txt"), b"").unwrap();
+            set_folder_time(&dir, old);
+            assert_eq!(folder_matches(&folder, "QUX.TXT"), Some(vec![]));
+            forget(&dir.join("."));
+            assert_eq!(
+                folder_matches(&folder, "qux.TXT"),
+                Some(names(&["Qux.txt"]))
+            );
+        }
         assert_eq!(
             folder_matches(&dir.join("none").to_string_lossy(), "x"),
             None

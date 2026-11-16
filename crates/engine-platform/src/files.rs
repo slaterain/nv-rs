@@ -2005,7 +2005,8 @@ fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<V
 /// differ only in case: `host_paths::host_folders`, the first the one an open tries first), as
 /// Windows lists one folder: their entries together, `.` and `..` the first's, and a name in
 /// more than one (without case) the first folder's, the entry an open of that name takes. The
-/// log says which folders were listed as one, once per folder.
+/// log says which folders were listed as one, once per folder. A name Windows cannot hold in a
+/// folder (`host_paths::windows_cannot_hold`) is left out, said once per folder.
 #[cfg(not(windows))]
 fn listing_of(
     folders: &[std::path::PathBuf],
@@ -2046,6 +2047,15 @@ fn listing_of(
         }
         let mut names_here = Vec::new();
         for entry in entries.filter_map(Result::ok) {
+            // A name Windows cannot hold in a folder is not shown: the game could not open it.
+            let host = entry.file_name();
+            let text = host.to_string_lossy();
+            if super::host_paths::windows_cannot_hold(&text) {
+                if let Some(line) = super::host_paths::hidden_line(folder, &text) {
+                    eprintln!("{line}");
+                }
+                continue;
+            }
             let units = host_units(&entry.file_name());
             let key = ntfs_key(&units);
             if names_before.contains(&key) {
@@ -3631,9 +3641,96 @@ mod tests_player_files {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The names a wildcard search of `pattern` answers, in order (none when it finds nothing).
+    #[cfg(not(windows))]
+    fn listed(e: &mut Engine, pattern: &str) -> Vec<Vec<u8>> {
+        let name = e.mem.alloc(0x400);
+        e.mem.set_cstr(name, pattern.as_bytes());
+        let data = e.mem.alloc(0x140);
+        let found = find_first_file_a(e, Ptr::new(name), Ptr::new(data));
+        if found == INVALID_HANDLE_VALUE {
+            return vec![];
+        }
+        let mut names = vec![e.mem.cstr(data + 0x2c)];
+        while find_next_file_a(e, found, Ptr::new(data)) != 0 {
+            names.push(e.mem.cstr(data + 0x2c));
+        }
+        find_close(e, found);
+        names
+    }
+
+    /// Linux and macOS: the root of drive Z: (this system's `/`) is a folder like any other: a
+    /// missing file there answers file-not-found, and `Z:\*` lists it.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_root_of_drive_z_is_a_folder() {
+        let mut e = Engine::new();
+        let name = e.mem.alloc(0x400);
+        let missing = format!(r"Z:\nv-rs-missing-{}.ini", std::process::id());
+        e.mem.set_cstr(name, missing.as_bytes());
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            1,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
+        assert_eq!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
+        let names = listed(&mut e, r"Z:\*");
+        assert!(names.contains(&b"tmp".to_vec()), "{names:?}");
+    }
+
+    /// Linux and macOS: names Windows cannot hold in a folder (a `:`, a `\`, a dot or space at
+    /// the end, `NUL`) are not shown to the game, and naming them opens nothing else and stops
+    /// nothing.
+    #[cfg(not(windows))]
+    #[test]
+    fn names_windows_cannot_hold_are_not_shown_or_opened() {
+        let dir = std::env::temp_dir().join(format!("nv-rs-unholdable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for held in [
+            "Mod: Part 2.esp",
+            r"a\b.esp",
+            "c.esp.",
+            "d.esp ",
+            "NUL",
+            "g.esp",
+        ] {
+            std::fs::write(dir.join(held), held.as_bytes()).unwrap();
+        }
+        let game = engine_core::exe::game_view(&dir.to_string_lossy());
+        let mut e = Engine::new();
+        let names = listed(&mut e, &format!(r"{game}\*"));
+        assert_eq!(names, [b".".to_vec(), b"..".to_vec(), b"g.esp".to_vec()]);
+        let name = e.mem.alloc(0x400);
+        for spelled in ["Mod: Part 2.esp", "c.esp.", "d.esp "] {
+            e.mem
+                .set_cstr(name, format!(r"{game}\{spelled}").as_bytes());
+            let h = create_file_a(
+                &mut e,
+                Ptr::new(name),
+                GENERIC_READ,
+                1,
+                0,
+                OPEN_EXISTING,
+                0x80,
+                0,
+            );
+            assert_eq!(h, INVALID_HANDLE_VALUE, "{spelled:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Linux and macOS: two folders whose names differ only in case (`Textures` and `textures`,
     /// one folder to Windows) give their files from either, the listing shows them as one folder
-    /// with a name in both once, and the search of one name answers the file the open takes.
+    /// with a name in both once, and the search of one name answers the file the open takes. On a
+    /// file system that ignores case (macOS's by default, where there is one such folder), every
+    /// spelling of the folder is that one folder: listed once, its stored names answered.
     #[cfg(not(windows))]
     #[test]
     fn twin_folders_are_one_folder_to_the_game() {
@@ -3642,17 +3739,32 @@ mod tests_player_files {
         let upper = dir.join("Data").join("Textures");
         let lower = dir.join("Data").join("textures");
         std::fs::create_dir_all(&upper).unwrap();
+        let game = engine_core::exe::game_view(&dir.to_string_lossy());
+        let mut e = Engine::new();
         if std::fs::create_dir(&lower).is_err() {
-            // A file system that ignores case (macOS's default) holds one of them only.
-            eprintln!("SKIPPED (not a pass): this file system cannot hold two such folders");
+            // A file system that ignores case: `textures` is `Textures`.
+            std::fs::write(upper.join("a.dds"), b"upper a").unwrap();
+            let names = listed(&mut e, &format!(r"{game}\data\TEXTURES\*"));
+            assert_eq!(names, [b".".to_vec(), b"..".to_vec(), b"a.dds".to_vec()]);
+            let names = listed(&mut e, &format!(r"{game}\DATA\textures\A.DDS"));
+            assert_eq!(names, [b"a.dds".to_vec()]);
             let _ = std::fs::remove_dir_all(&dir);
             return;
         }
         std::fs::write(upper.join("a.dds"), b"upper a").unwrap();
         std::fs::write(lower.join("A.DDS"), b"lower a").unwrap();
         std::fs::write(lower.join("b.dds"), b"lower b").unwrap();
-        let game = engine_core::exe::game_view(&dir.to_string_lossy());
-        let mut e = Engine::new();
+        // `.` and `..` once, from the first folder.
+        let names = listed(&mut e, &format!(r"{game}\Data\Textures\*"));
+        assert_eq!(
+            names,
+            [
+                b".".to_vec(),
+                b"..".to_vec(),
+                b"a.dds".to_vec(),
+                b"b.dds".to_vec()
+            ]
+        );
         let name = e.mem.alloc(0x400);
         let read = |e: &mut Engine, path: String| -> Option<Vec<u8>> {
             e.mem.set_cstr(name, path.as_bytes());
