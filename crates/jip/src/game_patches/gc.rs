@@ -49,8 +49,16 @@ pub const AREA: Area = Area {
         CREATURE_SPREAD.addr(),
         PROJECTILE_WEAPON.addr(),
         ARMOR_PENETRATED.addr(),
+        damage::AMMO_IMPACT_SCRIPT.addr(),
+        damage::DEFER_OV3.addr(),
+        damage::DEFER_OV4.addr(),
+        damage::HIT_LOCATION.addr(),
     ],
-    fix_wraps: &[GET_IMPACT_DATA.addr(), GET_DAMAGE_TO_WEAPON.addr()],
+    fix_wraps: &[
+        GET_IMPACT_DATA.addr(),
+        GET_DAMAGE_TO_WEAPON.addr(),
+        damage::REDUCE_DAMAGE.addr(),
+    ],
     install_fixes,
     jip_sites: &[
         PLAYER_KILLER_SET.addr(),
@@ -181,6 +189,7 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(ARMOR_PENETRATED, armor_penetrated);
     e.wrap(GET_IMPACT_DATA, get_impact_data);
     e.wrap(GET_DAMAGE_TO_WEAPON, get_damage_to_weapon);
+    damage::install_fixes(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -420,6 +429,11 @@ pub(crate) fn pre_load(e: &mut Engine) {
         e.mem.set_u32(player + KILLER, 0);
     }
 }
+
+// ---- PR 3: O1 (JIP's hit damage) with O12, G116, G119.
+
+#[path = "gc_damage.rs"]
+pub mod damage;
 
 #[cfg(test)]
 #[path = "gc_tests.rs"]
