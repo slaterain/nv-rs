@@ -2127,6 +2127,8 @@ fn get_selected_item_ref(e: &mut Engine, w: &[u32]) -> Ret {
             }
             STATS => {
                 let rank = list_box_selected(e, menu + STATS_PERK_RANKS);
+                // JIP reads `GetSelected()->perk` with no null test (it would crash on a
+                // highlighted tile no rank has); here that gives none.
                 if rank != 0 {
                     target = e.mem.u32(rank);
                 }
@@ -2265,7 +2267,9 @@ fn get_world_map_pos_mults(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let (out_x, out_y) = (read.local(0), read.local(1));
-    let Some(cell) = super::ln_fn_math::cell_or_persistent(e, a.this_obj) else {
+    // JIP's `GetParentWorld` tests the persistent cell extra's cell for null too.
+    let Some(cell) = super::ln_fn_math::cell_or_persistent(e, a.this_obj).filter(|&cell| cell != 0)
+    else {
         return handled(true);
     };
     let world = e.mem.u32(cell + CELL_WORLD);

@@ -2051,15 +2051,26 @@ fn menu_target_dialog_hacking_level_up_trait_and_map() {
     let (_, dialog) = menu(&mut e, 20, 0x3f1, b"DialogMenu");
     assert_eq!(menu_target(&mut e, 0x3f1), 0);
     e.mem.set_u32(dialog + 0x80, partner);
-    assert_eq!(menu_target(&mut e, 0x3f1), 0x0000_6011, "no talking actor");
-    put_extra(&mut e, partner + 0x44, Q + 0x300, 0x55, actor);
     assert_eq!(
         menu_target(&mut e, 0x3f1),
         0x0000_6011,
         "not a talking activator"
     );
     e.mem.set_u8(base + 4, 0x16);
+    assert_eq!(
+        menu_target(&mut e, 0x3f1),
+        0x0000_6011,
+        "a talking activator with no talking actor"
+    );
+    put_extra(&mut e, partner + 0x44, Q + 0x300, 0x55, actor);
     assert_eq!(menu_target(&mut e, 0x3f1), 0x0000_6012);
+    e.mem.set_u8(base + 4, 0x2a);
+    assert_eq!(
+        menu_target(&mut e, 0x3f1),
+        0x0000_6011,
+        "a talking actor extra, not a talking activator"
+    );
+    e.mem.set_u8(base + 4, 0x16);
     // Hacking: the terminal once the guess tiles' count (its low byte) is set, else the
     // interface manager's activate reference.
     let terminal = form(&mut e, Q + 0x400, 0x3b, 0x0000_6020);
@@ -2123,10 +2134,13 @@ fn menu_target_items_as_inventory_references() {
     let chest = form(&mut e, Q + 0x100, 0x3a, 0x0000_6102);
     let merchant = form(&mut e, Q + 0x200, 0x3b, 0x0000_6103);
     let shop = form(&mut e, Q + 0x300, 0x3a, 0x0000_6104);
+    // Each selection global holds its own item, so a read of the wrong global shows.
+    let item_c = form(&mut e, Q + 0x900, 0x28, 0x0000_6105);
+    let item_b = form(&mut e, Q + 0xa00, 0x28, 0x0000_6106);
     let xd = Q + 0x400;
     let inv = entry(&mut e, Q + 0x500, item, 3, xd);
-    let cnt = entry(&mut e, Q + 0x600, item, 2, 0);
-    let brt = entry(&mut e, Q + 0x700, item, 1, 0);
+    let cnt = entry(&mut e, Q + 0x600, item_c, 2, 0);
+    let brt = entry(&mut e, Q + 0x700, item_b, 1, 0);
     let target = |e: &mut Engine, id: u32| {
         let r = menu_target(e, id);
         if r == 0 {
@@ -2137,7 +2151,6 @@ fn menu_target_items_as_inventory_references() {
     };
     menu(&mut e, 20, 0x3f8, b"QuantityMenu");
     e.mem.set_u32(0x011d_9ea8, inv);
-    e.mem.set_u32(0x011d_93fc, cnt);
     e.mem.set_u32(0x011d_8fa8, brt);
     // No inventory shown, no container or barter menu: none.
     assert_eq!(target(&mut e, 0x3f8), None);
@@ -2145,22 +2158,23 @@ fn menu_target_items_as_inventory_references() {
     // the current one (none for a merchant without one).
     let barter = Q + 0x2000;
     e.mem.set_u32(0x011d_8fa4, barter);
-    assert_eq!(target(&mut e, 0x3f8), Some((PC, item, 0)));
+    assert_eq!(target(&mut e, 0x3f8), Some((PC, item_b, 0)));
     e.mem.set_u32(barter + 0x80, merchant);
     e.mem.set_u32(barter + 0x108, barter + 0xd8);
     assert_eq!(target(&mut e, 0x3f8), None);
     put_extra(&mut e, merchant + 0x44, Q + 0x800, 0x3c, shop);
-    assert_eq!(target(&mut e, 0x3f8), Some((shop, item, 0)));
+    assert_eq!(target(&mut e, 0x3f8), Some((shop, item_b, 0)));
     e.mem.set_u32(barter + 0x108, barter + 0xa8);
-    assert_eq!(target(&mut e, 0x3f8), Some((PC, item, 0)));
+    assert_eq!(target(&mut e, 0x3f8), Some((PC, item_b, 0)));
     // The container menu before the barter menu: in the container when its right list is the
     // current one.
     let container = Q + 0x2200;
     e.mem.set_u32(0x011d_93f8, container);
+    e.mem.set_u32(0x011d_93fc, cnt);
     e.mem.set_u32(container + 0x74, chest);
-    assert_eq!(target(&mut e, 0x3f8), Some((PC, item, 0)));
+    assert_eq!(target(&mut e, 0x3f8), Some((PC, item_c, 0)));
     e.mem.set_u32(container + 0xf8, container + 0xc8);
-    assert_eq!(target(&mut e, 0x3f8), Some((chest, item, 0)));
+    assert_eq!(target(&mut e, 0x3f8), Some((chest, item_c, 0)));
     // The inventory shown before both: the inventory's item, the player's.
     e.mem.set_u8(0x011f_308f + 0x3ea, 1);
     assert_eq!(target(&mut e, 0x3f8), Some((PC, item, xd)));
@@ -2171,9 +2185,9 @@ fn menu_target_items_as_inventory_references() {
     assert_eq!(target(&mut e, 0x425), None);
     e.mem.set_u32(0x011d_a760, cnt);
     e.mem.set_u32(0x011d_9f58, brt);
-    assert_eq!(target(&mut e, 0x40b), Some((PC, item, 0)));
+    assert_eq!(target(&mut e, 0x40b), Some((PC, item_c, 0)));
     let r = menu_target(&mut e, 0x425);
-    assert_eq!(inv_ref(&mut e, r), (PC, item, 0));
+    assert_eq!(inv_ref(&mut e, r), (PC, item_b, 0));
     // Without a player: none.
     e.mem.set_u32(0x011d_ea3c, 0);
     assert_eq!(target(&mut e, 0x40b), None);
@@ -2194,6 +2208,12 @@ fn selected_item_of_the_menu_on_top() {
     );
     let sel = entry(&mut e, Q + 0x800, item, 2, 0);
     let listed = entry(&mut e, Q + 0x900, item, 5, 0);
+    // The container and barter selections hold their own items, so a read of the wrong global
+    // shows.
+    let item_c = form(&mut e, Q + 0xa00, 0x28, 0x0000_6209);
+    let item_b = form(&mut e, Q + 0xb00, 0x28, 0x0000_620a);
+    let sel_c = entry(&mut e, Q + 0xc00, item_c, 3, 0);
+    let sel_b = entry(&mut e, Q + 0xd00, item_b, 4, 0);
     let top = Q + 0x3000;
     let on_top = |e: &mut Engine, id: u32| {
         e.mem.set_u32(IM + 0xc, 2);
@@ -2237,26 +2257,27 @@ fn selected_item_of_the_menu_on_top() {
     let cnt = Q + 0x5000;
     e.mem.set_u32(0x011d_93f8, cnt);
     e.mem.set_u32(cnt + 0x74, chest);
-    e.mem.set_u32(0x011d_93fc, sel);
+    e.mem.set_u32(0x011d_93fc, sel_c);
     assert_eq!(selected_item(&mut e), 0);
     e.mem.set_u32(cnt + 0x98 + 0x10, t(82));
-    assert_eq!(selected(&mut e), Some((PC, item, 0)));
+    assert_eq!(selected(&mut e), Some((PC, item_c, 0)));
     e.mem.set_u32(cnt + 0x98 + 0x10, 0);
     e.mem.set_u32(cnt + 0xc8 + 0x10, t(82));
-    assert_eq!(selected(&mut e), Some((chest, item, 0)));
-    // Barter: likewise, in the merchant's container.
+    assert_eq!(selected(&mut e), Some((chest, item_c, 0)));
+    // Barter: likewise, in the merchant's container. Its selection is set only now, after the
+    // container steps.
     on_top(&mut e, 0x41d);
     let brt = Q + 0x5400;
     e.mem.set_u32(0x011d_8fa4, brt);
     e.mem.set_u32(brt + 0x80, merchant);
-    e.mem.set_u32(0x011d_8fa8, sel);
+    e.mem.set_u32(0x011d_8fa8, sel_b);
     assert_eq!(selected_item(&mut e), 0);
     e.mem.set_u32(brt + 0xa8 + 0x10, t(83));
-    assert_eq!(selected(&mut e), Some((PC, item, 0)));
+    assert_eq!(selected(&mut e), Some((PC, item_b, 0)));
     e.mem.set_u32(brt + 0xd8 + 0x10, t(83));
     assert_eq!(selected(&mut e), None, "a merchant without a container");
     put_extra(&mut e, merchant + 0x44, Q + 0x5800, 0x3c, shop);
-    assert_eq!(selected(&mut e), Some((shop, item, 0)));
+    assert_eq!(selected(&mut e), Some((shop, item_b, 0)));
     // Repair, repair services, item mod: the highlighted list item's entry, the player's.
     for (id, singleton, list) in [
         (0x40b, 0x011d_a75c, 0x5c),
@@ -2298,6 +2319,14 @@ fn selected_item_of_the_menu_on_top() {
     assert_eq!(selected_item(&mut e), 0x0000_6207);
     e.mem.set_f32(enabled[0] + 8, 1.0);
     assert_eq!(selected_item(&mut e), 0x0000_6206);
+    // A highlighted, enabled quest list ends the chain even when no item has its highlighted
+    // tile: the note list (highlighted and enabled too) is not looked at.
+    e.mem.set_u32(map + 0x130 + 0x10, t(96));
+    assert_eq!(
+        selected_item(&mut e),
+        0,
+        "the quest list highlighted on a tile no item has"
+    );
     e.mem.set_u32(map + 0x130 + 0x10, 0);
     assert_eq!(
         selected_item(&mut e),
@@ -2389,14 +2418,15 @@ fn world_map_pos_mults_of_a_reference() {
         cells: [0, 0, 1, -1],
         scale: 0.25,
         offset: [10.0, 20.0],
-        bounds: [-1000.0, -3000.0, 5000.0, 7000.0],
+        // x and y sums differ (4000 and 6000), so a swapped axis shows.
+        bounds: [-1000.0, -3000.0, 5000.0, 9000.0],
     };
     let child = world(&mut e, Q + 0x600, &child_map, root, true);
     e.mem.set_u32(cell + 0xc0, child);
     let half = 0.5f32 - 0.25 * 0.5;
     let moved = [
         12_345.5f32 * 0.25 + ((-1000.0f32 + 5000.0) * half + 10.0),
-        -6_789.25f32 * 0.25 + ((-3000.0f32 + 7000.0) * half + 20.0),
+        -6_789.25f32 * 0.25 + ((-3000.0f32 + 9000.0) * half + 20.0),
     ];
     assert_eq!(pos(&mut e), expected(root_map.cells, moved));
     // Two levels up: the grandparent's map when both pass it up; the first world that keeps its
@@ -2421,6 +2451,12 @@ fn world_map_pos_mults_of_a_reference() {
     e.mem.set_u32(persistent + 0xc0, root);
     put_extra(&mut e, refr + 0x44, Q + 0x1100, 0x0c, persistent);
     assert_eq!(pos(&mut e), want);
+    // A persistent cell extra that holds no cell: the variables stay (JIP's `GetParentWorld`
+    // tests it for null).
+    e.mem.set_f64(C2_LOCALS + 0x108, -1.0);
+    e.mem.set_f64(C2_LOCALS + 0x108 + 0x10, -1.0);
+    e.mem.set_u32(Q + 0x1100 + 0xc, 0);
+    assert_eq!(pos(&mut e), [-1.0, -1.0]);
     // Not on a reference: nothing.
     e.mem.set_f64(C2_LOCALS + 0x108, 7.0);
     call(&mut e, 0x2730, &[var(1), var(2)]);
