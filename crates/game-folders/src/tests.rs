@@ -819,3 +819,42 @@ fn every_byte_a_shell_reads_specially_is_escaped() {
         assert_eq!(escape(&[b]), (b as char).to_string());
     }
 }
+
+/// Review of #631: --find says in a record of its own when nv-rs's own folder may not be written
+/// (play.sh stops before its first write), checked at the deepest folder play.sh writes: a `..`
+/// in XDG_DATA_HOME, or a link at the own folder's `game` folder into Documents.
+#[test]
+fn a_refused_own_folder_gets_a_record_of_its_own() {
+    let s = Scratch::new("refused-record");
+    let h = s.0.join("home");
+    let plain = s.home(System::Linux);
+    assert!(!report(&plain).lines().any(|l| l.starts_with("refused\t")));
+    let dotted = Home::new(
+        h.clone(),
+        Some(h.join(".local/../data")),
+        None,
+        System::Linux,
+    )
+    .unwrap();
+    let report_text = report(&dotted);
+    let line = report_text
+        .lines()
+        .find(|l| l.starts_with("refused\t"))
+        .unwrap_or_else(|| panic!("{report_text}"));
+    assert!(line.contains("nv-rs%27s own folder"), "{line}");
+    assert!(!report_text
+        .lines()
+        .any(|l| l.starts_with("warning\t") && l.contains("cannot be written")));
+    #[cfg(unix)]
+    {
+        let documents = s.dir("home/Documents");
+        let own = own_folder(&plain);
+        std::fs::create_dir_all(&own).unwrap();
+        std::os::unix::fs::symlink(&documents, own.join("game")).unwrap();
+        assert!(
+            report(&plain).lines().any(|l| l.starts_with("refused\t")),
+            "{}",
+            report(&plain)
+        );
+    }
+}
