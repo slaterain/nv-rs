@@ -16,9 +16,36 @@
 //! around its reads and writes, before it reaches JIP's shared slot, in the order group GH1's
 //! seams use (the game holds the lock when they run and they take the slot).
 //!
-//! Deliberate differences (where JIP would read through null): no reference answers nothing; an
-//! inventory reference whose container has no entry for the item when its stack is emptied keeps
-//! the stack (as JIP); an entry without a list of stacks is left (JIP removes from the null list).
+//! Deliberate differences, where JIP (with xNVSE's inventory references) would read through null,
+//! read or write freed memory, or overrun its own buffers:
+//! - no reference answers nothing (JIP reads through it);
+//! - an inventory reference whose container has no entry for the item when its stack is emptied
+//!   keeps the stack (as JIP); an entry without a list of stacks is left (JIP removes from the null
+//!   list);
+//! - an emptied stack is freed only when it was really taken out of the entry's list of stacks
+//!   (JIP frees it even when the entry did not hold it, leaving it linked wherever it is), and
+//!   not while an inventory reference's deferred equip or removal is still to run on it (JIP's
+//!   would run on the freed list); it then stays, holding only its count;
+//! - when a stack is freed every inventory reference standing for it is made to stand for no
+//!   stack (`set_data` with no list, which also clears the temporary reference's copy of the
+//!   list's words): JIP leaves them pointing at the freed list, so a `ForEach` loop's write-back
+//!   writes into freed memory and a second command on the reference in the same frame walks it;
+//! - when the command adds to or takes from a stack, the copy of the stack's words each inventory
+//!   reference's temporary reference holds follows: after an addition, a copy that matched the
+//!   stack before is copied again; after the `ExtraJIP` is taken off (and freed), a copy whose
+//!   chain still led to it is unlinked from it as the stack was. With JIP a `ForEach` loop's
+//!   write-back puts the old copy back: an addition's extras are lost (a leak, the mod's data
+//!   gone) and a removal's freed `ExtraJIP` can come back as the stack's first extra. A copy the
+//!   script had already changed in the same step keeps JIP's outcome for an addition (the loop
+//!   writes it back over the stack);
+//! - a text is stored as JIP's `XString` holds it, up to its first zero byte and with JIP's 16-bit
+//!   length (so the co-save's 16-bit length always matches the bytes written), but never more
+//!   than that length: JIP copies one byte more and reads its text on to the next zero byte, and
+//!   for a length of 0xFFEF or more its buffer size wraps to 0 and the copy overruns it;
+//! - `GetRefExtraData` with no argument or more than two does nothing (xNVSE's `ExtractArgsV`
+//!   leaves JIP's index unset, or writes past JIP's two arguments), nor with an index that is no
+//!   number (JIP's index would be a pointer in an unset double); a mod index that is no number
+//!   is 0, the script's own, as JIP's zeroed double with a pointer in its low word reads.
 
 use super::extra;
 use super::jip_fn_aux_variable::overriding_mod;
@@ -50,6 +77,10 @@ const XJIP_KEY: u32 = 0x0c;
 const EXTRA_TYPE: u32 = 0x04;
 const EXTRA_NEXT: u32 = 0x08;
 const LIST_FIRST: u32 = 0x04;
+/// `BaseExtraList`'s presence bits (+8) and the bytes of its words xNVSE's inventory references
+/// copy (`m_data` and the presence bits, 0x1C from +4).
+const LIST_PRESENCE: u32 = 0x08;
+const LIST_WORDS: usize = 0x1c;
 /// `ContChangesEntry::extendData` (+0).
 const ENTRY_LISTS: u32 = 0x00;
 /// `ExtraDataList`'s vtable slot 0 (`00410380`, the deleting destructor: `(1)` frees it).
@@ -148,6 +179,28 @@ fn with_eval(
     nvse::expr::report(e, &ev);
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
+// ExpressionEvaluator::ExtractArgsV.
+/// Whether `ExtractArgsV` writes the argument as a double (`GetNumber`): a number, a boolean, a
+/// numeric variable or a global; a kind it does not name (an array element, a command's result)
+/// when it converts to a number. A text, form, reference, lambda, array or slice is written as a
+/// pointer.
+fn writes_number(e: &mut Engine, ev: &Eval, t: &Tok) -> bool {
+    match t.ty() {
+        Ty::Number | Ty::Boolean | Ty::NumericVar | Ty::Global => true,
+        Ty::String
+        | Ty::StringVar
+        | Ty::Form
+        | Ty::Ref
+        | Ty::Lambda
+        | Ty::RefVar
+        | Ty::Array
+        | Ty::ArrayVar
+        | Ty::Slice => false,
+        _ => ev.can_convert(e, t, Ty::Number),
+    }
+}
+
 /// `(int)value` as MSVC's `cvttsd2si` gives it, kept as JIP's `UInt32`.
 fn as_index(value: f64) -> u32 {
     cvttsd2si(value) as u32
@@ -160,15 +213,19 @@ fn as_index(value: f64) -> u32 {
 fn get_ref_extra_data(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     with_eval(e, &a, |e, ev, toks| {
-        // `ExtractArgsVA(nullptr, &fVarIdx, &fModIdx)`: one number and an optional one.
+        // `ExtractArgsVA(nullptr, &fVarIdx, &fModIdx)`: the index and an optional mod index
+        // (`fModIdx = 0`), each a double where xNVSE writes one (see the module's differences).
         let Some(toks) = toks.filter(|t| (1..=2).contains(&t.len())) else {
             return;
         };
-        if !toks.iter().all(|t| ev.can_convert(e, t, Ty::Number)) {
+        if !writes_number(e, ev, &toks[0]) {
             return;
         }
         let var = as_index(ev.get_number(e, &toks[0]));
-        let module = toks.get(1).map_or(0.0, |t| ev.get_number(e, t));
+        let module = match toks.get(1) {
+            Some(t) if writes_number(e, ev, t) => ev.get_number(e, t),
+            _ => 0.0,
+        };
         if var > LAST_INDEX || a.this_obj == 0 {
             return;
         }
@@ -227,9 +284,19 @@ fn store(data: &mut ExtraJipData, index: u32, value: Stored) {
                 data.forms &= data.used;
             }
         }
-        Stored::Text(t) => data.strings[(index - VALUES) as usize] = t,
+        Stored::Text(t) => data.strings[(index - VALUES) as usize] = jip_text(t),
         Stored::Nothing => {}
     }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: XString::operator=(const
+// char*), StrLen.
+/// The text as JIP's `XString` keeps it: up to its first zero byte (`StrLen`), its length cut to
+/// 16 bits (`UInt16 length`); the bytes kept are that many (see the module's differences).
+pub(crate) fn jip_text(mut t: Vec<u8>) -> Vec<u8> {
+    let len = t.iter().position(|&c| c == 0).unwrap_or(t.len());
+    t.truncate(len & 0xffff);
+    t
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
@@ -287,7 +354,8 @@ fn set_ref_extra_data(e: &mut Engine, w: &[u32]) -> Ret {
 /// else the reference's own; one added when there is none. With the reference to mark.
 fn xjip_for_set(e: &mut Engine, refr: u32) -> Option<(u32, u32)> {
     if let Some((id, data, container)) = super::jip_fn_inventory::inv_ref_of(e, refr) {
-        let xjip = if data.xdata == 0 {
+        let before = list_words(e, data.xdata);
+        let (xdata, xjip) = if data.xdata == 0 {
             let xdata =
                 super::jip_fn_inventory::inv_ref_create_extra_data(e, id, data.item, container);
             if xdata == 0 {
@@ -297,13 +365,14 @@ fn xjip_for_set(e: &mut Engine, refr: u32) -> Option<(u32, u32)> {
             if count > 1 {
                 gh1::add_extra_count(e, xdata, count);
             }
-            gh1::add_extra_jip(e, xdata, 0)
+            (xdata, gh1::add_extra_jip(e, xdata, 0))
         } else {
             match extra::get_by_type(e, data.xdata, gh1::EXTRA_JIP) {
-                0 => gh1::add_extra_jip(e, data.xdata, 0),
-                x => x,
+                0 => (data.xdata, gh1::add_extra_jip(e, data.xdata, 0)),
+                x => return Some((x, container)),
             }
         };
+        copy_again(e, xdata, &before);
         return Some((xjip, container));
     }
     let list = refr + extra::REFR_EXTRA_LIST;
@@ -312,6 +381,61 @@ fn xjip_for_set(e: &mut Engine, refr: u32) -> Option<(u32, u32)> {
         x => x,
     };
     Some((xjip, refr))
+}
+
+/// A list's words an inventory reference's temporary reference holds a copy of (`m_data` and
+/// the presence bits); zeros for no list.
+fn list_words(e: &Engine, list: u32) -> [u8; LIST_WORDS] {
+    let mut words = [0u8; LIST_WORDS];
+    if list != 0 {
+        e.mem.read(list + LIST_FIRST, &mut words);
+    }
+    words
+}
+
+/// After the command added to the stack `xdata`: each inventory reference standing for it whose
+/// temporary reference's copy of the words was `before` (the stack's before the addition) is
+/// given the stack's words again (`SetData`), so a loop's write-back keeps what was added (see
+/// the module's differences).
+fn copy_again(e: &mut Engine, xdata: u32, before: &[u8; LIST_WORDS]) {
+    for id in nvse::invref::refs_on_stack(e, xdata).0 {
+        let Some((temp, data)) = nvse::invref::get(e, id).map(|r| (r.temp_ref, r.data)) else {
+            continue;
+        };
+        if temp != 0 && list_words(e, temp + extra::REFR_EXTRA_LIST) == *before {
+            nvse::invref::set_data(e, id, data);
+        }
+    }
+}
+
+/// After the stack `xdata`'s `ExtraJIP` `xjip` (followed by `next`) was taken off and freed: in
+/// each inventory reference's copy of the stack's words, a chain still leading to it is unlinked
+/// from it as `RemoveExtra` unlinked the stack's (the first extra, or the one before it, given
+/// `next`; the walk bounded as xNVSE's lists), and its presence bit cleared.
+fn unlink_in_copies(e: &mut Engine, xdata: u32, xjip: u32, next: u32) {
+    for id in nvse::invref::refs_on_stack(e, xdata).0 {
+        let temp = nvse::invref::get(e, id).map_or(0, |r| r.temp_ref);
+        if temp == 0 {
+            continue;
+        }
+        let list = temp + extra::REFR_EXTRA_LIST;
+        let mut at = list + LIST_FIRST;
+        let mut walked = 0usize;
+        loop {
+            let x = e.mem.u32(at);
+            if x == 0 || !nvse::invref::list_step(e, &mut walked) {
+                break;
+            }
+            if x == xjip {
+                e.mem.set_u32(at, next);
+                break;
+            }
+            at = x + EXTRA_NEXT;
+        }
+        let bits = list + LIST_PRESENCE + (gh1::EXTRA_JIP >> 3);
+        let cleared = e.mem.u8(bits) & !(1u8 << (gh1::EXTRA_JIP & 7));
+        e.mem.set_u8(bits, cleared);
+    }
 }
 
 /// The value stored (see [`set_ref_extra_data`]).
@@ -336,30 +460,29 @@ fn set_value(e: &mut Engine, refr: u32, mod_index: u32, var: u32, value: Stored)
     s.changed |= changed::EXTRA_DATA;
 }
 
-/// The mod's data erased from the list's `ExtraJIP`; true when no mod has data left there (the
-/// entry's reference id cleared, the `ExtraJIP` taken off the list).
-fn erase_on(e: &mut Engine, list: u32, mod_index: u32) -> bool {
+/// The mod's data erased from the list's `ExtraJIP`; when no mod has data left there (the
+/// entry's reference id cleared, the `ExtraJIP` taken off the list and freed), the `ExtraJIP`
+/// taken off and the extra it was followed by.
+fn erase_on(e: &mut Engine, list: u32, mod_index: u32) -> Option<(u32, u32)> {
     let xjip = extra::get_by_type(e, list, gh1::EXTRA_JIP);
     if xjip == 0 {
-        return false;
+        return None;
     }
     let key = e.mem.u32(xjip + XJIP_KEY);
     let s = saved(e);
-    let Some(entry) = s.extra_data.get_mut(&Uint(key)) else {
-        return false;
-    };
-    if entry.data.remove(&mod_index).is_none() {
-        return false;
-    }
+    let entry = s.extra_data.get_mut(&Uint(key))?;
+    entry.data.remove(&mod_index)?;
     let emptied = entry.data.is_empty();
     if emptied {
         entry.ref_id = 0;
     }
     s.changed |= changed::EXTRA_DATA;
-    if emptied {
-        extra::remove_by_type(e, list, gh1::EXTRA_JIP);
+    if !emptied {
+        return None;
     }
-    emptied
+    let next = e.mem.u32(xjip + EXTRA_NEXT);
+    extra::remove_by_type(e, list, gh1::EXTRA_JIP);
+    Some((xjip, next))
 }
 
 /// The mod's data erased (see [`set_ref_extra_data`]).
@@ -369,9 +492,13 @@ fn erase(e: &mut Engine, refr: u32, mod_index: u32) {
         return;
     };
     let xdata = data.xdata;
-    if xdata == 0 || !erase_on(e, xdata, mod_index) {
+    if xdata == 0 {
         return;
     }
+    let Some((xjip, next)) = erase_on(e, xdata, mod_index) else {
+        return;
+    };
+    unlink_in_copies(e, xdata, xjip, next);
     let first = e.mem.u32(xdata + LIST_FIRST);
     let only_count = first == 0
         || (u32::from(e.mem.u8(first + EXTRA_TYPE)) == gh1::EXTRA_COUNT
@@ -389,10 +516,21 @@ fn erase(e: &mut Engine, refr: u32, mod_index: u32) {
         return;
     }
     let lists = e.mem.u32(entry + ENTRY_LISTS);
-    if lists != 0 {
-        super::list_remove(e, Ptr::new(lists), xdata);
-        e.vcall(xdata, LIST_DESTROY_SLOT, &args![1u32]);
+    if lists == 0 {
+        return;
     }
+    // Not while a deferred action is to run on the stack, and only once it is out of the list.
+    let (refs, deferred) = nvse::invref::refs_on_stack(e, xdata);
+    if deferred || !super::list_remove(e, Ptr::new(lists), xdata) {
+        return;
+    }
+    // Every inventory reference standing for the stack stands for none from now on.
+    for id in refs {
+        if let Some(data) = nvse::invref::get(e, id).map(|r| r.data) {
+            nvse::invref::set_data(e, id, nvse::invref::Data { xdata: 0, ..data });
+        }
+    }
+    e.vcall(xdata, LIST_DESTROY_SLOT, &args![1u32]);
 }
 
 #[cfg(test)]
