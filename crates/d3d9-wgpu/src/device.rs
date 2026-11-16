@@ -834,6 +834,9 @@ pub struct Device {
     scene_light_on: bool,
     scene_light: Option<Box<scene_light::Gpu>>,
     scene_light_ran: Option<u64>,
+    /// The parameters last said in the log, and `NV_AO_ALTERNATE=1` (diagnostic only).
+    scene_light_said: Option<scene_light::Params>,
+    scene_light_alternate: bool,
 }
 
 pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -1215,6 +1218,9 @@ impl Device {
             scene_light_on: scene_light::enabled(),
             scene_light: None,
             scene_light_ran: None,
+            scene_light_said: None,
+            scene_light_alternate: scene_light::enabled()
+                && std::env::var("NV_AO_ALTERNATE").is_ok_and(|v| v.trim() == "1"),
         };
         d.surface = shown_in;
         // The frame-rate counter can show (F11 is taken) while a device draws the game's window.
@@ -5302,6 +5308,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if !self.scene_light_on || self.scene_light_ran == Some(self.presents) {
             return;
         }
+        // `NV_AO_ALTERNATE=1` (diagnostic only): every other frame, so two frames of one run in a
+        // row show the scene with and without it.
+        if self.scene_light_alternate && self.presents % 2 == 0 {
+            return;
+        }
         let Some(params) = scene_light::Params::from_words(words) else {
             self.warn("new lighting: a camera it cannot use (skipped)");
             return;
@@ -5333,11 +5344,26 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         }
         self.scene_light_ran = Some(self.presents);
-        if !self.warned.contains("new lighting: on") {
-            self.warned.insert("new lighting: on".to_string());
+        // Said when it starts and whenever the sun term turns on or off or the sun moves (on the
+        // screen) by more than about 8 degrees: not every frame.
+        let changed = self.scene_light_said.is_none_or(|was: scene_light::Params| {
+            (was.shadow > 0.0) != (params.shadow > 0.0)
+                || (params.shadow > 0.0
+                    && was.sun.iter().zip(params.sun).map(|(a, b)| a * b).sum::<f32>() < 0.99)
+        });
+        if changed {
+            self.scene_light_said = Some(params);
+            let sun = if params.shadow > 0.0 {
+                format!(
+                    "sun toward ({:.2}, {:.2}, {:.2}) on screen (right, up, ahead), contact shadows {:.2}",
+                    params.sun[0], params.sun[1], params.sun[2], params.shadow
+                )
+            } else {
+                "no sun term (indoors, the sun down or dark)".to_string()
+            };
             eprintln!(
-                "NV_D3D9 wgpu: new lighting (ambient occlusion and sun contact shadows) on the {}x{} scene, {} samples: {params:?}",
-                rt.width, rt.height, rt.samples
+                "NV_D3D9 wgpu: new lighting at present {} on the {}x{} scene, {} samples: near {}, far {}, {sun}",
+                self.presents, rt.width, rt.height, rt.samples, params.near, params.far
             );
         }
         self.end_pass();

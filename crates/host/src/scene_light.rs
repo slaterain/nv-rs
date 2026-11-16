@@ -11,9 +11,12 @@
 //! - the camera (`NiCamera`): its world rotation at +0x68 (`NiAVObject::m_kWorld`, 3x3 floats row by
 //!   row), its frustum at +0xdc (left, right, top, bottom, near, far as floats, the orthographic
 //!   byte at +0xf4);
-//! - `TES` `*011dea10`: the sun light (`NiDirectionalLight`) at +0x1c, its direction at +0xf0; the
-//!   current interior cell at +0x34 (none outdoors);
-//! - `Sky` `*011dea20`: the sun light's colour (`sunDirectional`) at +0x6c.
+//! - `TES` `*011dea10`: the current interior cell at +0x34 (none outdoors);
+//! - `Sky` `*011dea20`: the sun light's colour (`sunDirectional`) at +0x6c; its `Sun` at +0x28, whose
+//!   root node (+0x04) the sun's update (`Sun::Update`, read against fnv_decomp's `sun.cpp`) places
+//!   at the sun's spot in the sky: its local translation (+0x58, after the 3x3 rotation at +0x34) is
+//!   the way toward the sun, the world's z up. (The sun light's own direction is not used: the
+//!   update builds its rotation from another vector, `(-x, y, setting)`, not the way to the sun.)
 
 use engine_platform::d3d9real::SceneView;
 use engine_platform::Engine;
@@ -25,8 +28,9 @@ const CAMERA: u32 = 0xac;
 const ROTATE: u32 = 0x68;
 const FRUSTUM: u32 = 0xdc;
 const ORTHO: u32 = 0xf4;
-const SUN_LIGHT: u32 = 0x1c;
-const LIGHT_DIRECTION: u32 = 0xf0;
+const SUN: u32 = 0x28;
+const SUN_ROOT: u32 = 0x04;
+const LOCAL_TRANSLATE: u32 = 0x58;
 const INTERIOR: u32 = 0x34;
 const SUN_COLOUR: u32 = 0x6c;
 
@@ -44,13 +48,17 @@ fn floats<const N: usize>(e: &Engine, at: u32) -> [f32; N] {
 pub fn read(e: &Engine) -> Option<SceneView> {
     let tes = object(e, TES)?;
     let camera = object(e, object(e, SCENE_GRAPH)? + CAMERA)?;
-    let sun_direction = object(e, tes + SUN_LIGHT).map(|l| floats(e, l + LIGHT_DIRECTION));
-    let sun_colour = object(e, SKY).map_or([0.0; 3], |s| floats(e, s + SUN_COLOUR));
+    let sky = object(e, SKY);
+    let to_sun = sky
+        .and_then(|s| object(e, s + SUN))
+        .and_then(|s| object(e, s + SUN_ROOT))
+        .map(|n| floats(e, n + LOCAL_TRANSLATE));
+    let sun_colour = sky.map_or([0.0; 3], |s| floats(e, s + SUN_COLOUR));
     Some(SceneView {
         frustum: floats(e, camera + FRUSTUM),
         ortho: e.mem.u8(camera + ORTHO) != 0,
         rotate: floats(e, camera + ROTATE),
-        sun_direction,
+        to_sun,
         sun_colour,
         interior: e.mem.u32(tes + INTERIOR) != 0,
     })
