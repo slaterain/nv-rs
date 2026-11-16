@@ -1911,6 +1911,29 @@ fn message_ex_alt_queues() {
         texts(),
         vec![vec![b'm'; 0x103], vec![b'i'; 0x103], vec![b's'; 0x103]]
     );
+
+    // JIP's G10 on (its fixes in, the queue's seam answering 0x204): a message of 0x203 bytes
+    // reaches the queue whole, one of 0x204 is cut to 0x203; the icon path and the sound stay
+    // at 0x103.
+    fn g10_on(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(0x204)
+    }
+    e.on_site(crate::game_patches::ga::CORNER_MESSAGE[1], g10_on);
+    e.set_jip_patches(e.jip_patches() | engine_core::extend::jip_patches::FIXES);
+    for (n, fit) in [(0x203usize, 0x203usize), (0x204, 0x203)] {
+        let mut text = vec![b'i'; 0x104];
+        text.extend(b"|$");
+        text.extend(vec![b's'; 0x104]);
+        text.push(b'|');
+        text.extend(vec![b'm'; n]);
+        CALLS.with(|c| c.borrow_mut().clear());
+        call(&mut e, 0x2738, &[z(1.0), s(&text)]);
+        assert_eq!(
+            texts(),
+            vec![vec![b'm'; fit], vec![b'i'; 0x103], vec![b's'; 0x103]],
+            "{n:#x}"
+        );
+    }
 }
 
 /// Arguments that do not read (a global argument with no global behind it, a variable with no

@@ -37,9 +37,10 @@
 //!   `GetSelectedItemRef` (the top menu's selected list item), `GetWorldMapPosMults` (JIP's
 //!   `WorldDimensions` maths and its cached worldspaces).
 //!
-//! `MessageExAlt` cuts its message to 0x103 bytes until JIP's corner message length patch
-//! (plan row G10, `InitGamePatches`, 16 bytes from `0x7753B8` to `0x77582B`: the HUD queue's
-//! message buffer 0x104 -> 0x204) is on; then to JIP's 0x203. Its icon path and sound are always
+//! `MessageExAlt` cuts its message to the HUD queue's text buffer less its end: 0x103 bytes in
+//! the game, JIP's 0x203 while its corner message length patch is on (G10, `InitGamePatches`,
+//! 16 bytes from `0x7753B8` to `0x77582B`, built in `crate::game_patches::ga`; the size comes from
+//! `ga::corner_message_text_size`, the queue's own answer). Its icon path and sound are always
 //! cut to 0x103 bytes (the game's queue copies each into 0x104 and a longer one ends the process,
 //! with JIP too). It calls the game's `QueueUIMessage` with its own seconds: JIP's G09 hook
 //! there changes only the exe's own callers' time (return addresses up to `0x96A262`).
@@ -1746,10 +1747,11 @@ const MESSAGE_MAX: usize = 0x203;
 /// the copy and the CRT's invalid parameter path ends the process. JIP's `InitGamePatches`
 /// raises the message's to 0x204 (its "corner message max text length" bytes at `0x7753B8`,
 /// `0x7753D2`, `0x7753EA`, `0x77540C`, `0x775443`, `0x775461`, `0x77547E`, `0x77549C`, `0x7754BC`,
-/// `0x7754D0`, `0x77553C`, `0x775600`, `0x7714DA`, `0x7757B1`, `0x7757D3`, `0x77582B`), which the
-/// port has not built yet (plan row G10): until it is on, the message is cut to 0x103 bytes
-/// (0x203 once it is). The icon path and the sound stay 0x104 bytes even with that patch: cut to
-/// 0x103 always (JIP would stop the game there).
+/// `0x7754D0`, `0x77553C`, `0x775600`, `0x7714DA`, `0x7757B1`, `0x7757D3`, `0x77582B`; plan row
+/// G10, built in `crate::game_patches::ga`): the message is cut to the queue's text buffer less
+/// its end, as [`crate::game_patches::ga::corner_message_text_size`] answers it (0x103 bytes in
+/// the game, 0x203 with G10 on). The icon path and the sound stay 0x104 bytes even with that
+/// patch: cut to 0x103 always (JIP would stop the game there).
 const HUD_TEXT_MAX: usize = 0x103;
 /// `kCommandInfo_MessageExAlt.numParams`: the seconds and xNVSE's 21 format parameters.
 const MESSAGE_PARAMS: u32 = 22;
@@ -1768,15 +1770,23 @@ enum Icon {
 /// `#n` (`n` 0 to 6) the exe's icon `n` (another `#` token changes nothing), any other the icon's
 /// path; the last token is the message, cut to 0x203 bytes. nv-rs's own: the message, the icon
 /// path and the sound then cut to [`HUD_TEXT_MAX`], what the game's queue copies safely.
+#[cfg(test)]
 fn split_message(text: &[u8]) -> (Vec<u8>, Icon, Option<Vec<u8>>) {
+    split_message_for(text, HUD_TEXT_MAX)
+}
+
+/// [`split_message`] with the message cut to `message_room` bytes (the queue's text buffer less
+/// its end: 0x103 in the game, 0x203 with JIP's G10 on); the icon path and the sound to
+/// [`HUD_TEXT_MAX`] always.
+fn split_message_for(text: &[u8], message_room: usize) -> (Vec<u8>, Icon, Option<Vec<u8>>) {
     let fit = |t: &[u8]| t[..t.len().min(HUD_TEXT_MAX)].to_vec();
     let (mut icon, mut sound) = (Icon::None, None);
     let mut rest = text;
     loop {
         let (token, after) = next_token(rest, b'|');
         if after.is_empty() {
-            let message = &token[..token.len().min(MESSAGE_MAX)];
-            return (fit(message), icon, sound);
+            let message = &token[..token.len().min(MESSAGE_MAX).min(message_room)];
+            return (message.to_vec(), icon, sound);
         }
         match token.first() {
             Some(b'$') => sound = Some(fit(&token[1..])),
@@ -1810,7 +1820,9 @@ fn message_ex_alt(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let seconds = f.leading.first().and_then(Arg::float).unwrap_or(0.0);
     let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "MessageExAlt");
-    let (message, icon, sound) = split_message(&text);
+    // The queue's text buffer as it will size it (G10's answer while JIP's fixes are in).
+    let room = crate::game_patches::ga::corner_message_text_size(e) as usize - 1;
+    let (message, icon, sound) = split_message_for(&text, room);
     // One block on the guest stack: the message, then the icon's and the sound's texts, each
     // with its 0.
     let mut block = message.clone();

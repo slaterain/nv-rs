@@ -3490,9 +3490,19 @@ impl CornerMessage {
     /// The layout at G10's seam `site` (one per function: `0x7753B8`, `0x7714DA`, `0x7757B1`):
     /// the exe's unless JIP's fixes are in and the seam answers the text buffer's size (words:
     /// the exe's 0x104). One load while JIP's fixes are not in.
+    ///
+    /// One layout for a record's whole life: JIP registers G10's handler before it sets `FIXES`
+    /// (`game_patches::put_fixes_in`) and an engine made for a thread copies the handlers, so
+    /// with `FIXES` set every seam answers; a seam with no answer then is a broken invariant
+    /// (checked in debug builds), and the exe's layout is the fallback.
     fn at(e: &mut Engine, site: u32) -> Self {
         let text = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
-            e.site(site, &[Self::EXE_TEXT]).unwrap_or(Self::EXE_TEXT)
+            let answer = e.site(site, &[Self::EXE_TEXT]);
+            debug_assert!(
+                answer.is_some(),
+                "{site:08x}: JIP's fixes are in but G10's seam has no handler"
+            );
+            answer.unwrap_or(Self::EXE_TEXT)
         } else {
             Self::EXE_TEXT
         };
@@ -11323,6 +11333,31 @@ mod tests {
 
     thread_local! {
         static G10_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G10_FAILED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// `0x406D30` as the exe's (`_strcpy_s`, `0xEC65A6`): the text and its end copied when they
+    /// fit the size; else the buffer emptied and the call failed (the game's invalid-parameter
+    /// path then ends the process; counted here in `G10_FAILED`).
+    fn g10_strcpy_s(e: &mut Engine) {
+        e.register_double(0x0040_6d30, |e, w| {
+            let (dst, size, src) = (w[0], w[1], w[2]);
+            let mut i = 0;
+            loop {
+                if i == size {
+                    e.mem.set_u8(dst, 0);
+                    G10_FAILED.with(|f| f.set(f.get() + 1));
+                    break;
+                }
+                let c = e.mem.u8(src + i);
+                e.mem.set_u8(dst + i, c);
+                if c == 0 {
+                    break;
+                }
+                i += 1;
+            }
+            Ret::default()
+        });
     }
 
     fn g10_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
@@ -11346,101 +11381,149 @@ mod tests {
             .collect()
     }
 
+    /// What one run of `fn_00775380` for G10's tests built: the engine, the record's block (0x450
+    /// bytes, 0xEE before the call) and the text, icon and sound passed (0 for none).
+    struct G10Queue {
+        e: Engine,
+        block: u32,
+        text: u32,
+        icon: u32,
+        sound: u32,
+        seen: Vec<Vec<u32>>,
+    }
+
+    /// The default icon paths of kinds 0 to 3 (`00775658`'s table), each given a short text here.
+    const G10_DEFAULT_ICONS: [(u32, &[u8]); 4] = [
+        (0x0102_08e0, b"D0\0"),
+        (0x0103_a830, b"D1\0"),
+        (0x0102_08a0, b"D2\0"),
+        (0x0104_bfe8, b"D3\0"),
+    ];
+
+    /// `fn_00775380` with a text of 0x203 letters, `icon_text` (a path, or none: the default of
+    /// `kind`), `sound_text` (a name or none), `0x406D30` as `strcpy_s`, and the record block
+    /// filled with 0xEE before the call.
+    fn g10_queue(
+        word: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+        icon_text: Option<&[u8]>,
+        kind: u32,
+        sound_text: Option<&[u8]>,
+    ) -> G10Queue {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        for page in [0x0102_0000, 0x0103_a000, 0x0104_b000] {
+            e.map(page, 0x1000);
+        }
+        for (at, path) in G10_DEFAULT_ICONS {
+            e.mem.write(at, path);
+        }
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(menu.addr() + 0x90, 0x9000);
+        e.mem.set_u32(menu.addr() + 0x8c, 0x9100);
+        let text = e.mem.alloc(0x204);
+        for i in 0..0x203 {
+            e.mem.set_u8(text + i, b'a');
+        }
+        let mut put = |t: Option<&[u8]>| match t {
+            Some(t) => {
+                let at = e.mem.alloc(0x20);
+                e.mem.write(at, t);
+                at
+            }
+            None => 0,
+        };
+        let icon = put(icon_text);
+        let sound = put(sound_text);
+        let block = e.mem.alloc(0x450);
+        for i in 0..0x450 {
+            e.mem.set_u8(block + i, 0xee);
+        }
+        e.register_double(0x0040_1000, move |_, _| Ret {
+            eax: block,
+            ..Ret::default()
+        });
+        g10_strcpy_s(&mut e);
+        e.register_double(0x0082_56d0, |_, _| Ret {
+            eax: 1,
+            ..Ret::default()
+        });
+        e.register_double(0x0090_5820, |e, words| {
+            e.mem.set_u32(words[0], e.mem.u32(words[1]));
+            Ret::default()
+        });
+        e.register_double(0x0068_15c0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        for address in [
+            0x00a0_1350,
+            0x0045_3a70,
+            0x00ad_7550,
+            0x00ad_8830,
+            0x0048_3710,
+        ] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x0077_53b8, handler);
+        }
+        e.set_jip_patches(word);
+        G10_SEEN.with(|s| s.borrow_mut().clear());
+        G10_FAILED.with(|f| f.set(0));
+        e.call_log = Some(vec![]);
+        assert!(fn_00775380(
+            &mut e,
+            menu,
+            Ptr::new(text),
+            kind,
+            Ptr::new(icon),
+            Ptr::new(sound),
+            2.5,
+            0,
+        ));
+        G10Queue {
+            e,
+            block,
+            text,
+            icon,
+            sound,
+            seen: G10_SEEN.with(|s| s.take()),
+        }
+    }
+
     /// JIP LN NVSE's G10 seam in `fn_00775380` (`0x007753B8`, group GA's row, a fix row) with a
-    /// text of 0x300 letters, an icon path and a sound name, the record allocated at the size
-    /// asked with 0x40 bytes of 0xEE after it: with the word 0 or `INSTALLED` alone it is not
-    /// asked and the record is the exe's (0x310, text cut at 0x103 letters, icon `+0x104`, sound
-    /// `+0x208`, time `+0x30C`); with `FIXES` and no handler, the same; with JIP's answer (asked
-    /// once with exactly `[0x104]`) it is 0x410 with the text cut at 0x203 letters, the icon at
+    /// text of 0x203 letters, an icon path and a sound name, `0x406D30` as the exe's `strcpy_s`
+    /// (a text that does not fit empties the buffer and fails: the game then ends), the record
+    /// allocated at the size asked with 0xEE bytes after it. With the word 0 or `INSTALLED` alone
+    /// the seam is not asked and the record is the exe's: 0x310, the text copied with size 0x104
+    /// (it fails), icon `+0x104`, sound `+0x208`, time `+0x30C`. With JIP's answer (asked once
+    /// with exactly `[0x104]`) it is 0x410: the whole text copied with size 0x204, the icon at
     /// `+0x204`, the sound at `+0x308`, the time at `+0x40C`, the icon and sound copies still
-    /// 0x104 long, and the icon tile given `+0x204`; nothing past the record is written.
+    /// 0x104 long, the icon tile given `+0x204`; nothing past the record is written.
     #[test]
     fn queue_corner_message_jip_text_length_seam() {
         use engine_core::extend::jip_patches;
-        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
-            let mut e = Engine::new();
-            e.map(0x011d_9000, 0x1000);
-            let menu = e.new_object::<HUDMainMenu>();
-            e.mem.set_u32(0x011d_96c0, menu.addr());
-            e.mem.set_u32(menu.addr() + 0x90, 0x9000);
-            e.mem.set_u32(menu.addr() + 0x8c, 0x9100);
-            let text = e.mem.alloc(0x301);
-            for i in 0..0x300 {
-                e.mem.set_u8(text + i, b'a');
-            }
-            let icon = e.mem.alloc(8);
-            e.mem.write(icon, b"icon\0");
-            let sound = e.mem.alloc(8);
-            e.mem.write(sound, b"bell\0");
-            let block = e.mem.alloc(0x450);
-            for i in 0..0x450 {
-                e.mem.set_u8(block + i, 0xee);
-            }
-            e.register_double(0x0040_1000, move |_, _| Ret {
-                eax: block,
-                ..Ret::default()
-            });
-            // strncpy-like: at most size - 1 letters and the end.
-            e.register_double(0x0040_6d30, |e, w| {
-                let mut i = 0;
-                while i + 1 < w[1] && e.mem.u8(w[2] + i) != 0 {
-                    e.mem.set_u8(w[0] + i, e.mem.u8(w[2] + i));
-                    i += 1;
-                }
-                e.mem.set_u8(w[0] + i, 0);
-                Ret::default()
-            });
-            e.register_double(0x0082_56d0, |_, _| Ret {
-                eax: 1,
-                ..Ret::default()
-            });
-            e.register_double(0x0090_5820, |e, words| {
-                e.mem.set_u32(words[0], e.mem.u32(words[1]));
-                Ret::default()
-            });
-            e.register_double(0x0068_15c0, |_, words| Ret {
-                eax: words[0],
-                ..Ret::default()
-            });
-            for address in [
-                0x00a0_1350,
-                0x0045_3a70,
-                0x00ad_7550,
-                0x00ad_8830,
-                0x0048_3710,
-            ] {
-                e.register_double(address, |_, _| Ret::default());
-            }
-            if let Some(handler) = handler {
-                e.on_site_for_test(0x0077_53b8, handler);
-            }
-            e.set_jip_patches(word);
-            G10_SEEN.with(|s| s.borrow_mut().clear());
-            e.call_log = Some(vec![]);
-            assert!(fn_00775380(
-                &mut e,
-                menu,
-                Ptr::new(text),
-                0,
-                Ptr::new(icon),
-                Ptr::new(sound),
-                2.5,
-                0,
-            ));
-            (e, block, text, icon, sound, G10_SEEN.with(|s| s.take()))
-        };
-        let check = |e: &Engine, block: u32, text: u32, icon: u32, sound: u32, t: u32| {
+        let check = |q: &G10Queue, t: u32| {
+            let (e, block) = (&q.e, q.block);
             assert_eq!(g10_calls(e, 0x0040_1000), vec![vec![t + 0x20c]], "the size");
             assert_eq!(
                 g10_calls(e, 0x0040_6d30),
                 vec![
-                    vec![block, t, text],
-                    vec![block + t, 0x104, icon],
-                    vec![block + t + 0x104, 0x104, sound]
+                    vec![block, t, q.text],
+                    vec![block + t, 0x104, q.icon],
+                    vec![block + t + 0x104, 0x104, q.sound]
                 ]
             );
-            assert_eq!(e.mem.cstr(block).len() as u32, t - 1, "the text cut");
-            assert_eq!(e.mem.cstr(block + t), b"icon");
+            let (len, failed) = if t == 0x204 { (0x203, 0) } else { (0, 1) };
+            assert_eq!(e.mem.cstr(block).len() as u32, len, "the text");
+            assert_eq!(
+                G10_FAILED.with(std::cell::Cell::get),
+                failed,
+                "strcpy_s failures"
+            );
+            assert_eq!(e.mem.cstr(block + t), b"icons\\x.dds");
             assert_eq!(e.mem.cstr(block + t + 0x104), b"bell");
             assert_eq!(e.mem.f32(block + t + 0x208), 2.5);
             for i in t + 0x20c..0x450 {
@@ -11448,17 +11531,64 @@ mod tests {
             }
             assert!(g10_calls(e, 0x00a0_1350).contains(&vec![0x9100, 0xfcc, block + t, 1]));
         };
+        let icon: Option<&[u8]> = Some(b"icons\\x.dds\0");
+        let sound: Option<&[u8]> = Some(b"bell\0");
         for word in [0, jip_patches::INSTALLED] {
-            let (e, block, text, icon, sound, seen) = run(word, Some(g10_never));
-            check(&e, block, text, icon, sound, 0x104);
-            assert!(seen.is_empty());
+            let q = g10_queue(word, Some(g10_never), icon, 0, sound);
+            check(&q, 0x104);
+            assert!(q.seen.is_empty());
         }
         let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        let (e, block, text, icon, sound, _) = run(fixes, None);
-        check(&e, block, text, icon, sound, 0x104);
-        let (e, block, text, icon, sound, seen) = run(fixes, Some(g10_jip));
-        check(&e, block, text, icon, sound, 0x204);
-        assert_eq!(seen, vec![vec![0x104]]);
+        let q = g10_queue(fixes, Some(g10_jip), icon, 0, sound);
+        check(&q, 0x204);
+        assert_eq!(q.seen, vec![vec![0x104]]);
+    }
+
+    /// G10 in `fn_00775380`'s other places: no icon path (each default icon, kinds 0 to 3:
+    /// `0x775443`, `0x775461`, `0x77547E`, `0x77549C`) and no sound (`0x7754D0`'s cleared byte).
+    /// JIP's layout: the default path copied to `+0x204` with 0x104, the text's letters at
+    /// `+0x104..+0x203` untouched, the sound byte `+0x308` cleared and `+0x208` (inside the icon
+    /// buffer, past the short default path) untouched. The exe's: the default at `+0x104`, the
+    /// byte `+0x208` cleared, `+0x308` untouched.
+    #[test]
+    fn queue_corner_message_jip_default_icon_and_no_sound() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        for (kind, (path, _)) in G10_DEFAULT_ICONS.iter().enumerate() {
+            let q = g10_queue(fixes, Some(g10_jip), None, kind as u32, None);
+            let (e, block) = (&q.e, q.block);
+            assert_eq!(
+                g10_calls(e, 0x0040_6d30),
+                vec![
+                    vec![block, 0x204, q.text],
+                    vec![block + 0x204, 0x104, *path]
+                ],
+                "kind {kind}"
+            );
+            for i in 0x104..0x203 {
+                assert_eq!(e.mem.u8(block + i), b'a', "text letter {i:#x}");
+            }
+            assert_eq!(e.mem.cstr(block + 0x204), format!("D{kind}").as_bytes());
+            assert_eq!(e.mem.u8(block + 0x308), 0, "no sound");
+            assert_eq!(
+                e.mem.u8(block + 0x208),
+                0xee,
+                "the exe's sound byte untouched"
+            );
+            assert_eq!(e.mem.f32(block + 0x40c), 2.5);
+
+            let q = g10_queue(0, Some(g10_never), None, kind as u32, None);
+            let (e, block) = (&q.e, q.block);
+            assert_eq!(
+                g10_calls(e, 0x0040_6d30),
+                vec![
+                    vec![block, 0x104, q.text],
+                    vec![block + 0x104, 0x104, *path]
+                ]
+            );
+            assert_eq!(e.mem.u8(block + 0x208), 0, "no sound");
+            assert_eq!(e.mem.u8(block + 0x308), 0xee);
+        }
     }
 
     /// G10's seam in `DoIdle`'s message part (`0x007714DA`): a 0x410 record holds 0.5 s at the
@@ -11509,74 +11639,94 @@ mod tests {
             assert_eq!((hides, seen), (vec![vec![menu]], vec![]));
         }
         let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        let (hides, _, menu) = ended(fixes, None);
-        assert_eq!(hides, vec![vec![menu]]);
         let (hides, seen, _) = ended(fixes, Some(g10_jip));
         assert!(hides.is_empty(), "5.0 s at JIP's place: still shown");
         assert_eq!(seen, vec![vec![0x104]]);
     }
 
+    /// `HideMessage` with a shown record and a 0x410 next one: the icon paths at both layouts'
+    /// places, the sound names where asked ("exe-bell" at `+0x208`, "jip-bell" at `+0x308`).
+    /// Answers the sounds played (their name's address), the tile calls, the next record, the
+    /// seam's words.
+    fn hide_message_g10(
+        word: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+        exe_sound: bool,
+        jip_sound: bool,
+    ) -> (Vec<u32>, Vec<Vec<u32>>, u32, Vec<Vec<u32>>) {
+        let mut e = Engine::new();
+        e.map(0x011d_9000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(0x011d_ea3c, 0x5050);
+        let shown = e.mem.alloc(0x410);
+        let next = e.mem.alloc(0x410);
+        // JIP's icon is short ("jip" at +0x204..+0x207), so the byte +0x208 is the exe's sound's
+        // own: 0 when it is not there.
+        e.mem.write(next + 0x104, b"exe-icon\0");
+        e.mem.write(next + 0x204, b"jip\0");
+        if exe_sound {
+            e.mem.write(next + 0x208, b"exe-bell\0");
+        }
+        if jip_sound {
+            e.mem.write(next + 0x308, b"jip-bell\0");
+        }
+        e.mem.set_u32(menu.addr() + 0x18c, shown);
+        for (offset, tile) in [(0x90, 0x10), (0x8c, 0x11), (0x94, 0x12)] {
+            e.mem.set_u32(menu.addr() + offset, tile);
+        }
+        e.register_double(0x0082_56d0, |e, words| Ret {
+            eax: u32::from(e.mem.u32(words[0]) == 0),
+            ..Ret::default()
+        });
+        e.register_double(0x0068_15c0, |_, words| Ret {
+            eax: words[0],
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_11f0, |_, _| Ret::default());
+        e.register_double(0x0040_8b20, |_, _| Ret::default());
+        e.register_double(0x0090_5330, move |e, words| {
+            e.mem.set_u32(words[0], next);
+            Ret::default()
+        });
+        e.register_double(0x0082_5c00, |_, _| Ret {
+            eax: 77,
+            ..Ret::default()
+        });
+        for address in [0x0040_1030, 0x0093_3270, 0x0048_3710, 0x00a0_1350] {
+            e.register_double(address, |_, _| Ret::default());
+        }
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x0077_57b1, handler);
+        }
+        e.set_jip_patches(word);
+        G10_SEEN.with(|s| s.borrow_mut().clear());
+        e.call_log = Some(vec![]);
+        hud_main_menu_hide_message(&mut e, menu);
+        assert_eq!(
+            e.mem.u32(menu.addr() + 0x194),
+            77,
+            "the next one's shown time"
+        );
+        let played: Vec<u32> = g10_calls(&e, 0x0093_3270).iter().map(|w| w[2]).collect();
+        let tiles = g10_calls(&e, 0x00a0_1350);
+        (played, tiles, next, G10_SEEN.with(|s| s.take()))
+    }
+
     /// G10's seam in `HideMessage` (`0x007757B1`): the shown record goes and the next one (0x410
     /// bytes) has a sound name and an icon path at both layouts' places ("exe" at `+0x208` and
-    /// `+0x104`, "jip" at `+0x308` and `+0x204`). Not installed, `INSTALLED` alone or no
-    /// handler: the exe's places are played and shown; with JIP's answer (asked once with exactly
-    /// `[0x104]`) JIP's; the rest (the text tile, the shown time) the same.
+    /// `+0x104`, "jip" at `+0x308` and `+0x204`). Not installed or `INSTALLED` alone: the exe's
+    /// places are played and shown; with JIP's answer (asked once with exactly `[0x104]`) JIP's;
+    /// the rest (the text tile, the shown time) the same. The sound's test (`0x7757B1`) and its
+    /// argument (`0x7757D3`) apart: with only one layout's sound name present, the sound plays
+    /// only when it is the layout's own. The duplicate test (`0x408B20`) compares the texts at
+    /// `+0`, which G10 does not move.
     #[test]
     fn hide_message_jip_next_record_places_seam() {
         use engine_core::extend::jip_patches;
         let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
-            let mut e = Engine::new();
-            e.map(0x011d_9000, 0x1000);
-            e.map(0x011d_e000, 0x1000);
-            let menu = e.new_object::<HUDMainMenu>();
-            e.mem.set_u32(0x011d_96c0, menu.addr());
-            e.mem.set_u32(0x011d_ea3c, 0x5050);
-            let shown = e.mem.alloc(0x410);
-            let next = e.mem.alloc(0x410);
-            e.mem.write(next + 0x104, b"exe-icon\0");
-            e.mem.write(next + 0x208, b"exe-bell\0");
-            e.mem.write(next + 0x204, b"jip-icon\0");
-            e.mem.write(next + 0x308, b"jip-bell\0");
-            e.mem.set_u32(menu.addr() + 0x18c, shown);
-            for (offset, tile) in [(0x90, 0x10), (0x8c, 0x11), (0x94, 0x12)] {
-                e.mem.set_u32(menu.addr() + offset, tile);
-            }
-            e.register_double(0x0082_56d0, |e, words| Ret {
-                eax: u32::from(e.mem.u32(words[0]) == 0),
-                ..Ret::default()
-            });
-            e.register_double(0x0068_15c0, |_, words| Ret {
-                eax: words[0],
-                ..Ret::default()
-            });
-            e.register_double(0x00a0_11f0, |_, _| Ret::default());
-            e.register_double(0x0040_8b20, |_, _| Ret::default());
-            e.register_double(0x0090_5330, move |e, words| {
-                e.mem.set_u32(words[0], next);
-                Ret::default()
-            });
-            e.register_double(0x0082_5c00, |_, _| Ret {
-                eax: 77,
-                ..Ret::default()
-            });
-            for address in [0x0040_1030, 0x0093_3270, 0x0048_3710, 0x00a0_1350] {
-                e.register_double(address, |_, _| Ret::default());
-            }
-            if let Some(handler) = handler {
-                e.on_site_for_test(0x0077_57b1, handler);
-            }
-            e.set_jip_patches(word);
-            G10_SEEN.with(|s| s.borrow_mut().clear());
-            e.call_log = Some(vec![]);
-            hud_main_menu_hide_message(&mut e, menu);
-            assert_eq!(
-                e.mem.u32(menu.addr() + 0x194),
-                77,
-                "the next one's shown time"
-            );
-            let played: Vec<u32> = g10_calls(&e, 0x0093_3270).iter().map(|w| w[2]).collect();
-            let tiles = g10_calls(&e, 0x00a0_1350);
-            (played, tiles, next, G10_SEEN.with(|s| s.take()))
+            hide_message_g10(word, handler, true, true)
         };
         for word in [0, jip_patches::INSTALLED] {
             let (played, tiles, next, seen) = run(word, Some(g10_never));
@@ -11591,8 +11741,6 @@ mod tests {
             assert!(seen.is_empty());
         }
         let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        let (played, _, next, _) = run(fixes, None);
-        assert_eq!(played, vec![next + 0x208], "no handler: the exe's");
         let (played, tiles, next, seen) = run(fixes, Some(g10_jip));
         assert_eq!(played, vec![next + 0x308]);
         assert_eq!(
@@ -11603,6 +11751,88 @@ mod tests {
             ]
         );
         assert_eq!(seen, vec![vec![0x104]]);
+
+        // Only one layout's sound name present: it plays only in its own layout.
+        let (played, _, next, _) = hide_message_g10(fixes, Some(g10_jip), false, true);
+        assert_eq!(
+            played,
+            vec![next + 0x308],
+            "JIP's sound alone, JIP's layout"
+        );
+        let (played, _, _, _) = hide_message_g10(fixes, Some(g10_jip), true, false);
+        assert!(played.is_empty(), "the exe's sound alone, JIP's layout");
+        let (played, _, next, _) = hide_message_g10(0, Some(g10_never), true, false);
+        assert_eq!(
+            played,
+            vec![next + 0x208],
+            "the exe's sound alone, the exe's layout"
+        );
+        let (played, _, _, _) = hide_message_g10(0, Some(g10_never), false, true);
+        assert!(played.is_empty(), "JIP's sound alone, the exe's layout");
+    }
+
+    /// G10 on the urgent path of `fn_00775380` (`0x775600`): a non-empty list, `urgent` 1, a
+    /// 0x410 current record with 9.0 at both layouts' time places. JIP's layout: 0.0 written at
+    /// `+0x40C`, `+0x30C` untouched, the incoming record's time at `+0x40C`; the exe's: 0.0 at
+    /// `+0x30C`, `+0x40C` untouched.
+    #[test]
+    fn urgent_corner_message_jip_time_place() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let mut e = Engine::new();
+            let menu = e.new_object::<HUDMainMenu>();
+            let current = e.mem.alloc(0x410);
+            let incoming = e.mem.alloc(0x410);
+            let text: Ptr = Ptr::new(e.mem.alloc(8));
+            e.mem.set_u32(menu.addr() + 0x18c, current);
+            e.mem.set_u32(menu.addr() + 0x190, 0);
+            e.mem.set_f32(current + 0x30c, 9.0);
+            e.mem.set_f32(current + 0x40c, 9.0);
+            e.register_double(0x0040_1000, move |_, _| Ret {
+                eax: incoming,
+                ..Ret::default()
+            });
+            e.register_double(0x0040_6d30, |_, _| Ret::default());
+            e.register_double(0x0082_56d0, |_, _| Ret::default());
+            e.register_double(0x0072_6070, |e, words| Ret {
+                eax: e.mem.u32(words[0] + 4),
+                ..Ret::default()
+            });
+            e.register_double(0x0068_15c0, |_, words| Ret {
+                eax: words[0],
+                ..Ret::default()
+            });
+            e.register_double(0x0040_8b20, |_, _| Ret {
+                eax: 1,
+                ..Ret::default()
+            });
+            e.register_double(0x005a_e3d0, |_, _| Ret::default());
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0077_53b8, handler);
+            }
+            e.set_jip_patches(word);
+            fn_00775380(&mut e, menu, text, 3, Ptr::new(0), Ptr::new(0), 4.0, 1);
+            (
+                e.mem.f32(current + 0x30c),
+                e.mem.f32(current + 0x40c),
+                e.mem.f32(incoming + 0x40c),
+            )
+        };
+        assert_eq!(run(0, Some(g10_never)), (0.0, 9.0, 0.0));
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, Some(g10_jip)), (9.0, 0.0, 4.0));
+    }
+
+    /// The invariant: with `FIXES` set, a G10 seam with no handler is a broken setup (JIP puts
+    /// the handlers in before it sets `FIXES`, and a thread's engine copies them); debug builds
+    /// stop there rather than build or read a record with the other layout.
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "G10's seam has no handler")]
+    fn corner_message_layout_wants_its_handler_with_the_fixes() {
+        let mut e = Engine::new();
+        e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+        let _ = CornerMessage::at(&mut e, 0x0077_14da);
     }
 
     /// The layout's places for both buffers.

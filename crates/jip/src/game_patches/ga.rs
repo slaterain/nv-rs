@@ -44,8 +44,13 @@
 //!   icon tile, `0x775600` the urgent path's time), `DoIdle` (`0x7714DA` time) and `HideMessage`
 //!   (`0x7757B1`, `0x7757D3` sound, `0x77582B` icon tile). One seam per function answers the text
 //!   buffer's size. One layout for a record's whole life: the fixes go in once, before the first
-//!   frame ([`super::set_row`] is read at start-up; nothing takes `FIXES` out of the word), so
-//!   every record is built and read with the same answer.
+//!   frame ([`super::set_row`] is read at start-up; nothing takes `FIXES` out of the word); their
+//!   handlers are registered before `FIXES` is set (`put_fixes_in`), and an engine made for a
+//!   thread copies them, so with `FIXES` set every G10 seam answers and every record is built
+//!   and read with the same layout (the HUD's layout code checks it in debug builds). In the
+//!   game a text too long for the buffer fails the copy (`strcpy_s`) and the game ends: above
+//!   259 characters without JIP, above 515 with it. [`corner_message_text_size`] answers the
+//!   same buffer size for `MessageExAlt`.
 //!
 //! Threads: every seam runs on the main thread (the UI, the INI reader); the handlers keep no
 //! state and take no slot.
@@ -248,6 +253,19 @@ fn clear_orphaned_tiles(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// G10: the corner message's text buffer, 0x204 bytes.
 fn corner_message_text(_: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(CORNER_MESSAGE_TEXT)
+}
+
+/// The HUD queue's text buffer as the queue (`fn_00775380`) will size it: the exe's 0x104, or
+/// what G10's seam at `0x7753B8` answers while JIP's fixes are in (0x204). The same bit and the
+/// same answer the queue reads, so a caller that fits its text to this never fails the copy.
+pub fn corner_message_text_size(e: &mut Engine) -> u32 {
+    const EXE_TEXT: u32 = 0x104;
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(CORNER_MESSAGE[1].addr(), &[EXE_TEXT])
+            .unwrap_or(EXE_TEXT)
+    } else {
+        EXE_TEXT
+    }
 }
 
 #[cfg(test)]
