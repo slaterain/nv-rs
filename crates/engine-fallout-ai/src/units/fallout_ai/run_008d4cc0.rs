@@ -188,6 +188,14 @@ pub fn fn_008d50a0(e: &mut Engine, this: u32) {
 /// Runs `008ab3a0` on `this` with `value`, then clears the word at +0x140.
 pub fn fn_008d4ff0(e: &mut Engine, this: u32, value: u32) {
     e.call(0x008a_b3a0, &args![this, value]);
+    // JIP LN NVSE's game patch at `0x8D5003` (step 3.9-GE, PLAN-3.9 G04) returns here
+    // (`leave; ret 4`): a creature keeps the flag word it loaded. The seam answers whether the
+    // clear is skipped. One load while the patches are off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x008d_5003, &[this]).is_some()
+    {
+        return;
+    }
     e.mem.set_u32(this + 0x140, 0);
 }
 
@@ -435,5 +443,56 @@ mod n028_tests {
         e.call(0x008d_4ff0, &[this, 7]);
         assert_eq!(e.mem.u32(this + 0x144), 7);
         assert_eq!(e.mem.u32(this + 0x140), 0);
+    }
+
+    thread_local! {
+        static G04_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G04_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_creature_flags_reset(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G04_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G04_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// The creature's flag word after the load with JIP's word `word` and a seam handler
+    /// answering `answer`, and what the seam was asked.
+    fn creature_load_with_jip(word: u32, answer: Option<u32>) -> (u32, u32, Vec<Vec<u32>>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        let this = e.mem.alloc(0x150);
+        e.register(0x008a_b3a0, |e, a| {
+            e.mem.set_u32(a[0] + 0x140, 0x8000_0009);
+            Ret::default()
+        });
+        e.on_site(
+            SiteSlot::new(Owner::Jip, 0x008d_5003),
+            at_creature_flags_reset,
+        );
+        G04_ASKED.with(|s| s.borrow_mut().clear());
+        G04_ANSWER.with(|c| c.set(answer));
+        e.set_jip_patches(word);
+        e.call(0x008d_4ff0, &[this, 7]);
+        (this, e.mem.u32(this + 0x140), G04_ASKED.with(|s| s.take()))
+    }
+
+    /// JIP's seam at `0x8D5003` (G04): not asked without the fixes bit (the word 0, JIP's own
+    /// patches only); asked with the creature after the load; an answer keeps the loaded word,
+    /// none clears it as the exe does.
+    #[test]
+    fn fn_008d4ff0_jip_seam() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED | jip_patches::NPC_PERKS] {
+            let (_, flags, asked) = creature_load_with_jip(word, Some(0));
+            assert!(asked.is_empty(), "{word:x}");
+            assert_eq!(flags, 0);
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (this, flags, asked) = creature_load_with_jip(on, None);
+        assert_eq!(asked, vec![vec![this]]);
+        assert_eq!(flags, 0);
+        let (this, flags, asked) = creature_load_with_jip(on, Some(0));
+        assert_eq!(asked, vec![vec![this]]);
+        assert_eq!(flags, 0x8000_0009);
     }
 }

@@ -1028,7 +1028,14 @@ player's teammate when others detect it, and with the detection fix its level wo
 
 | JIP's comment | Exe places | What a player with JIP gets | Built |
 |---|---|---|---|
-| (none; 26 bytes in `InitGamePatches`) | `008ab3a0` (`0x8AB6D9`: the actor's save-game load, its two calls that clear bits of the flag word `+0x140`) | An NPC (not a creature) a script made essential (the reference's own essential bit, set by the exe's `SetActorRefEssential`, `005dfdab`) stays essential across a save and load (the original clears that bit on every load), with the fixes row on. A creature still loses it: the creature's load (`008d4ff0`) clears the whole flag word right after this routine, with JIP and without, until G04 (`0x8D5003`) is built. JIP's own per-actor flags (combat disabled, forced detection values and the others its commands set) start clear on every load whenever JIP is installed. With JIP installed and the row off a player gets both: JIP's two flag bytes cleared AND the original's two calls run, so a script's essential flag is still lost on load; real JIP never produces this mix (its 26 bytes always replace the calls) | 3.9-GE |
+| (none; 26 bytes in `InitGamePatches`) | `008ab3a0` (`0x8AB6D9`: the actor's save-game load, its two calls that clear bits of the flag word `+0x140`) | An NPC (not a creature) a script made essential (the reference's own essential bit, set by the exe's `SetActorRefEssential`, `005dfdab`) stays essential across a save and load (the original clears that bit on every load), with the fixes row on. For a creature this needs G04 (next row): the creature's load (`008d4ff0`) clears the whole flag word right after this routine, and G04 skips that clear with the fixes row on. JIP's own per-actor flags (combat disabled, forced detection values and the others its commands set) start clear on every load whenever JIP is installed. With JIP installed and the row off a player gets both: JIP's two flag bytes cleared AND the original's two calls run, so a script's essential flag is still lost on load; real JIP never produces this mix (its 26 bytes always replace the calls) | 3.9-GE |
+| "Don't reset Actor::actorFlags for creatures, upon LoadGame" | `008d4ff0` (`0x8D5003`) | A creature keeps its loaded flag word after a save is loaded (the original clears it all after the actor's load), so a script's essential bit and the other flags survive on creatures too | 3.9-GE |
+| "AI Z fix" (credits Stewie) | `006b0f40` (`0x6B10A3`), `00881860` (`0x881A9C`), `009e6900` (`0x9E6A82`) | Three places where the AI flattened a direction to the ground plane before measuring it keep its height: path smoothing from inside a target circle, the move toward a navmesh point, and the "actor in the way" test of path avoidance, so actors keep their height while pathing | 3.9-GE |
+| "Fix SetLevel XP" | `008d5300` (`0x8D535F`) | `SetLevel` sets the player's experience from the experience table entry of the level given, where the original reads the entry of the level below it | 3.9-GE |
+| "Cap Agility for calculating reload & equip speeds" | `008c17c0` (`0x8C17D9`), `008c1940` (`0x8C1959`) | Reload and weapon-equip speeds use Agility as the game's actor value clamp caps it (`ClampActorValue`), so Agility raised past its limit by effects no longer speeds them up further | 3.9-GE |
+| (InitRagdollControllerHook) | `00930c70` (`0x931384`) | The player's ragdoll is not built again when Havok is set up again on the same body (the original builds it each time) | 3.9-GE |
+| (IsActorEssentialHook; JIP's own) | `0087f3d0` (`0x87F427`) | A teammate JIP's `ToggleTeammateKillable` marked can be killed outside hardcore mode (whenever JIP is installed; nothing changes until the command is used) | 3.9-GE |
+| `bVoiceModulationFix` (on by default) | `009344d0` (`0x934AC8`); `0x578E16` and `0x7974CC` (seams in groups GH2 and GB) | Helmeted characters' voice modulation follows the character: the dialogue sound is made with the sound flag 0x80000 unless the speaker's base form has its flag 0x2000 (the original never sets 0x80000), and the two other voice sound places always add it, as JIP's switch does. Not asked yet: the Pip-Boy's recorded-note playback (`0x7974CC`, group GB's seam in the map menu is still to be built), so those voices keep the original's flags until it is | 3.9-GE |
 
 #### GP: Player character
 
@@ -1078,7 +1085,20 @@ Three steps of JIP's attach are not built yet, because nothing can set what they
 
 #### GH1: Extra data and inventory stacks
 
-No fix built yet. Part of JIP in every preset (not a fix, so not in the row): the ExtraJIP framework
+Fixes (in with the row `NV_JIP_GAME_PATCHES` while JIP is installed; PLAN-3.9 G46, G79, G50, G61, G75, G76):
+
+| Fix | What a player gets | Where |
+|---|---|---|
+| G46 invisible stacks | Items no stack showed appear in the inventory: an owner extra no longer splits a stack off at once, and JIP's one iterator hands out, after the game's passes, the count left of each form | `CompareListForContainer` (`0x41271E`), the fast iteration's start (`0x4CA200`), next (`0x4CAFA3`) and destructor (`0x4BF630`) |
+| G79 weapon mods | A weapon's mods are read null-safely, from the list of the reference that dropped it when there is one | `GetModSlots` (`0x4BD820`), `HasModEffectActive_ov2` (`0x4BDA70`) |
+| G50 items' health | A container's items get the health JIP's way: clamped below 1, only armour and weapons below type 10 keep one | `00482090` (rewritten) |
+| G61 temporary forms | A temporary reference (mod index 0xFF) is never taken as persistent when picked up or pointed at | the three calls of `GetRefPersists` (`0x41C833`, `0x4C232C`, `0x4C273A`) |
+| G75, G76 hotkeys | A hotkeyed item given to the player, or picked up, loses its hotkey when the player already uses that key; a hotkey moves with its stack | `004c37d0` (`0x4C3976`), `00953ff0` (`0x95400F`, group GP's translation), `CopyListForReference` (`0x412675`) |
+
+Deliberate differences: the iterator's destructor answers `this` (JIP leaves EAX as it was); an owner whose
+base form has no container gives the iterator no container copy (JIP would copy from a null container).
+
+Part of JIP in every preset (not a fix, so not in the row): the ExtraJIP framework
 (PLAN-3.9 G44, "For ExtraJIP framework"), the place JIP keeps `SetRefExtraData`'s data. JIP takes the extra
 data type `0x27` (`ExtraTimeLeft`, which the game never makes) for a key into its own data (the co-save's
 `JPED` record): such an extra goes to the head of its list (`0040f980`), keeps its item out of the
