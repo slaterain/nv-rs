@@ -175,7 +175,8 @@ check "14 warning shown" 'printf "%s" "$out" | grep -q "WARNING: own folder insi
 
 # 15. A stray lower-case "data" (a mod's) beside the game's Data does not hide the game.
 stray="$T/stray/FNV"
-mkdir -p "$stray/Data" "$stray/data"
+# Both a lower- and an upper-case stray, so one sorts before Data in any ls order (C or a locale).
+mkdir -p "$stray/Data" "$stray/data" "$stray/DATA"
 echo x >"$stray/Data/FalloutNV.esm"
 rm -f "$own/game-folder.txt"
 out=$(run --game "$stray" </dev/null 2>&1); st=$?
