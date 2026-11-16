@@ -44,9 +44,13 @@ use std::collections::{HashMap, HashSet};
 use windows::core::PCSTR;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D9::*;
-use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::Graphics::Gdi::{
+    ClientToScreen, EnumDisplaySettingsW, GetMonitorInfoW, MonitorFromWindow, DEVMODEW,
+    ENUM_CURRENT_SETTINGS, MONITORINFOEXW, MONITOR_DEFAULTTOPRIMARY,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::HiDpi::{
+    GetAwarenessFromDpiAwarenessContext, GetThreadDpiAwarenessContext,
     SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::{
@@ -895,6 +899,237 @@ fn refit_borderless(window: HWND) {
     }
 }
 
+/// The game's top-level real window (0: none yet), whose placement the log reports
+/// ([`report_placement`]).
+static TOP_WINDOW: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+/// The placement lines printed so far and what the last one found (its monitor and [`Verdict`]):
+/// a line is printed when the window is made, after the game first places it, and again only when
+/// it is then on another monitor or found otherwise, [`MOST_PLACEMENT_LINES`] at most.
+static PLACEMENT_SAID: std::sync::Mutex<(u32, Option<Said>)> = std::sync::Mutex::new((0, None));
+/// What a placement line found: the monitor's rectangle and how the window lies on it.
+type Said = ([i32; 4], Verdict);
+const MOST_PLACEMENT_LINES: u32 = 4;
+
+/// One log line on where the game's top-level window `window` is ([`placement_line`]), when it is
+/// that window and the line would say something new ([`PLACEMENT_SAID`]). Only reads: no call
+/// here changes a window, the thread's DPI awareness, the activation or the messages, and a call
+/// that fails only leaves its part out.
+fn report_placement(window: HWND, borderless: bool, when: &str) {
+    if window.0 as isize != TOP_WINDOW.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    if let Some(placement) = next_placement(&PLACEMENT_SAID, || read_placement(window, borderless))
+    {
+        eprintln!("NV_D3D9={}: {when}: {}", tag(), placement_line(&placement));
+    }
+}
+
+/// The placement `read` gives when a line on it is to be printed, counted in `said`: none once
+/// [`MOST_PLACEMENT_LINES`] are out, and then `read` (the Win32 calls) is not made at all; none
+/// either when it would say what the last line said. The lock is held over `read`, whose calls
+/// send no message to any window.
+fn next_placement(
+    said: &std::sync::Mutex<(u32, Option<Said>)>,
+    read: impl FnOnce() -> Option<Placement>,
+) -> Option<Placement> {
+    let Ok(mut said) = said.lock() else {
+        return None;
+    };
+    if said.0 >= MOST_PLACEMENT_LINES {
+        return None;
+    }
+    let placement = read()?;
+    let key = (placement.judged().1, placement.verdict());
+    if said.1 == Some(key) {
+        return None;
+    }
+    *said = (said.0 + 1, Some(key));
+    Some(placement)
+}
+
+/// Where `window` is, as the calling thread reads it, and in physical pixels where that thread is
+/// not per-monitor aware: the window's visible frame from DWM's frame bounds (never scaled; they
+/// leave out a framed window's invisible resize border, which `GetWindowRect` includes), its
+/// monitor's from the display's current mode. `None` when the window or its monitor cannot be read.
+fn read_placement(window: HWND, borderless: bool) -> Option<Placement> {
+    let rect = |r: RECT| [r.left, r.top, r.right, r.bottom];
+    let mut at = RECT::default();
+    let mut info = MONITORINFOEXW::default();
+    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    // SAFETY: read-only queries of a window handle and the calling thread, into buffers sized
+    // for them.
+    unsafe {
+        let awareness = GetAwarenessFromDpiAwarenessContext(GetThreadDpiAwarenessContext()).0;
+        let monitor = MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY);
+        if GetWindowRect(window, &mut at).is_err()
+            || !GetMonitorInfoW(monitor, &mut info.monitorInfo).as_bool()
+        {
+            return None;
+        }
+        let physical = if awareness == 2 {
+            None
+        } else {
+            let mut frame = RECT::default();
+            let mut mode = DEVMODEW {
+                dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+                ..Default::default()
+            };
+            let framed = DwmGetWindowAttribute(
+                window.0 as isize,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut frame as *mut RECT as *mut std::ffi::c_void,
+                std::mem::size_of::<RECT>() as u32,
+            ) == 0;
+            let moded = EnumDisplaySettingsW(
+                windows::core::PCWSTR(info.szDevice.as_ptr()),
+                ENUM_CURRENT_SETTINGS,
+                &mut mode,
+            )
+            .as_bool();
+            (framed && moded).then(|| {
+                let at = mode.Anonymous1.Anonymous2.dmPosition;
+                let (w, h) = (mode.dmPelsWidth as i32, mode.dmPelsHeight as i32);
+                (rect(frame), [at.x, at.y, at.x + w, at.y + h])
+            })
+        };
+        Some(Placement {
+            borderless,
+            awareness,
+            window: rect(at),
+            monitor: rect(info.monitorInfo.rcMonitor),
+            physical,
+            primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+        })
+    }
+}
+
+/// `DWMWA_EXTENDED_FRAME_BOUNDS`: the window's visible frame on the screen (no invisible resize
+/// border, no shadow), in physical pixels whatever the caller's DPI awareness.
+const DWMWA_EXTENDED_FRAME_BOUNDS: u32 = 9;
+
+#[link(name = "dwmapi")]
+extern "system" {
+    fn DwmGetWindowAttribute(
+        hwnd: isize,
+        attribute: u32,
+        value: *mut std::ffi::c_void,
+        size: u32,
+    ) -> i32;
+}
+
+/// Where the game's top-level window is ([`read_placement`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Placement {
+    borderless: bool,
+    /// The reading thread's DPI awareness: 0 not aware (scaled pixels on a scaled monitor), 1
+    /// system aware, 2 per-monitor aware (physical pixels).
+    awareness: i32,
+    /// The window's rectangle and its monitor's, as that thread reads them.
+    window: [i32; 4],
+    monitor: [i32; 4],
+    /// The same two in physical pixels, read where the thread is not per-monitor aware: the
+    /// window's visible frame (without a framed window's invisible resize border) and the monitor.
+    physical: Option<([i32; 4], [i32; 4])>,
+    /// Whether the monitor is the primary one.
+    primary: bool,
+}
+
+/// How the window lies on its monitor: exactly over it, inside it, or reaching beyond its left,
+/// top, right and bottom edges by so many pixels (0 where it does not).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Verdict {
+    Covers,
+    Inside,
+    Beyond([i32; 4]),
+}
+
+impl Placement {
+    /// The pair judged ([`Placement::verdict`]): the physical one when there is one, and its unit.
+    fn judged(&self) -> ([i32; 4], [i32; 4], &'static str) {
+        match self.physical {
+            Some((window, monitor)) => (window, monitor, "physical pixels"),
+            None => (self.window, self.monitor, unit(self.awareness)),
+        }
+    }
+
+    fn verdict(&self) -> Verdict {
+        let (window, monitor, _) = self.judged();
+        if window == monitor {
+            return Verdict::Covers;
+        }
+        let over = [
+            (monitor[0] - window[0]).max(0),
+            (monitor[1] - window[1]).max(0),
+            (window[2] - monitor[2]).max(0),
+            (window[3] - monitor[3]).max(0),
+        ];
+        if over == [0; 4] {
+            Verdict::Inside
+        } else {
+            Verdict::Beyond(over)
+        }
+    }
+}
+
+/// The unit a thread of DPI awareness `awareness` reads rectangles in.
+fn unit(awareness: i32) -> &'static str {
+    match awareness {
+        0 => "scaled pixels: the thread is not DPI aware",
+        1 => "system-scaled pixels: the thread is system DPI aware",
+        2 => "physical pixels",
+        _ => "pixels of an unknown DPI awareness",
+    }
+}
+
+/// The placement line: borderless or framed (and why a window can be framed), the window's and its
+/// monitor's rectangles in the reading thread's unit and in physical pixels where read, and how the
+/// window lies on the monitor ([`Verdict`]), plainly when it reaches beyond it.
+fn placement_line(p: &Placement) -> String {
+    let kind = if p.borderless {
+        "borderless"
+    } else {
+        "framed, not borderless: bBorderless=0 or NV_BORDERLESS=0 without bFull Screen=1 (which gives the borderless window over either), \
+         a run no launcher started, or a launcher's play run that a test's or a fix's variable made a test (its own line says so)"
+    };
+    let which = if p.primary { "primary" } else { "other" };
+    let (window, monitor) = (p.window, p.monitor);
+    let (physical_window, physical_monitor) = match p.physical {
+        Some((w, m)) => (
+            format!(", visible frame, physical {w:?}"),
+            format!(", physical {m:?}"),
+        ),
+        None => (String::new(), String::new()),
+    };
+    let unit_read = unit(p.awareness);
+    let (_, _, judged_in) = p.judged();
+    let lies = match (p.verdict(), p.borderless) {
+        (Verdict::Covers, _) => "covers it exactly".to_string(),
+        (Verdict::Inside, true) => "does NOT cover it exactly (it lies inside it)".to_string(),
+        (Verdict::Inside, false) => "lies inside it".to_string(),
+        (Verdict::Beyond(over), borderless) => {
+            let edges: Vec<String> = ["left", "top", "right", "bottom"]
+                .iter()
+                .zip(over)
+                .filter(|(_, by)| *by > 0)
+                .map(|(edge, by)| format!("{by} past its {edge} edge"))
+                .collect();
+            format!(
+                "{}reaches BEYOND it onto what is next to it: {} ({judged_in})",
+                if borderless {
+                    "does NOT cover it exactly and "
+                } else {
+                    ""
+                },
+                edges.join(", ")
+            )
+        }
+    };
+    format!(
+        "the game's window ({kind}) is at {window:?} ({unit_read}){physical_window} on the {which} monitor {monitor:?}{physical_monitor}: it {lies}"
+    )
+}
+
 unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
     let module = GetModuleHandleA(None).unwrap_or_default();
     let class = WNDCLASSA {
@@ -956,6 +1191,14 @@ unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
                 Ok(w) => {
                     if !child {
                         register_raw_mouse(w);
+                        // The first top-level window is the game's.
+                        let _ = TOP_WINDOW.compare_exchange(
+                            0,
+                            w.0 as isize,
+                            std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+                        report_placement(w, borderless, "made");
                     }
                     if borderless {
                         BORDERLESS_WINDOW.store(w.0 as isize, std::sync::atomic::Ordering::Relaxed);
@@ -1087,6 +1330,12 @@ pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
             || unsafe { GetParent(HWND(window as *mut _)) }
                 .is_ok_and(|p| p.0 as isize == borderless))
     {
+        // Where the game's placing left it: where it was made, so a line only when that changed.
+        report_placement(
+            HWND(window as *mut _),
+            window == borderless,
+            "after the game placed it",
+        );
         return;
     }
     let [left, top, right, bottom] = rect;
@@ -1101,6 +1350,7 @@ pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
             SET_WINDOW_POS_FLAGS(flags & 3) | SWP_NOZORDER | SWP_NOACTIVATE,
         );
     }
+    report_placement(HWND(window as *mut _), false, "after the game placed it");
 }
 
 // The device.
@@ -3645,6 +3895,160 @@ pub(crate) fn real_texture(e: &mut Engine, texture: u32) -> Option<IDirect3DBase
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A placement as the per-monitor aware window thread reads it (physical pixels, nothing more).
+    fn aware(borderless: bool, window: [i32; 4], monitor: [i32; 4], primary: bool) -> Placement {
+        Placement {
+            borderless,
+            awareness: 2,
+            window,
+            monitor,
+            physical: None,
+            primary,
+        }
+    }
+
+    /// The placement line names the window's rectangle and its monitor's in the reading thread's
+    /// unit (and in physical pixels where that is another), and says how the window lies on the
+    /// monitor. The maintainer's desk of 2026-11-16 (physical pixels): the primary 2560x1440 at
+    /// 0,0 (2048x1152 scaled at 125%), another to its right at 2560,2 and the laptop's 1800x1125
+    /// panel at -2880,0. The borderless window over the primary covers it; one of the monitor's
+    /// size at another origin does not; tonight's framed window, 2576x1479 scaled pixels at 5,5
+    /// (about 3220x1849 physical from 6,6), reaches beyond it, read either way. Its physical
+    /// figures here are illustrative (the scaled rectangle times 1.25): DWM's visible frame leaves
+    /// out the invisible resize border, so the real line's overhang is a few pixels smaller.
+    #[test]
+    fn the_window_line_says_where_the_window_went() {
+        let primary = [0, 0, 2560, 1440];
+        let right = [2560, 2, 5120, 1442];
+        let laptop = [-2880, 0, -1080, 1125];
+        let line = placement_line(&aware(true, primary, primary, true));
+        assert_eq!(
+            line,
+            "the game's window (borderless) is at [0, 0, 2560, 1440] (physical pixels) on the primary monitor [0, 0, 2560, 1440]: it covers it exactly"
+        );
+        // Another monitor, also at negative coordinates: named as it is.
+        let other = placement_line(&aware(true, laptop, laptop, false));
+        assert!(
+            other.ends_with("on the other monitor [-2880, 0, -1080, 1125]: it covers it exactly"),
+            "{other}"
+        );
+        assert!(placement_line(&aware(true, right, right, false)).ends_with("covers it exactly"));
+        // The monitor's size at another origin (the right-hand monitor's, 2 pixels lower) is no
+        // cover, and neither is off by one on any side.
+        let shifted = placement_line(&aware(true, [0, 2, 2560, 1442], primary, true));
+        assert!(
+            shifted.ends_with("it does NOT cover it exactly and reaches BEYOND it onto what is next to it: 2 past its bottom edge (physical pixels)"),
+            "{shifted}"
+        );
+        for side in 0..4 {
+            let mut near = primary;
+            near[side] += 1;
+            let line = placement_line(&aware(true, near, primary, true));
+            assert!(line.contains("does NOT cover it exactly"), "{side}: {line}");
+        }
+        let inside = placement_line(&aware(true, [1, 1, 2559, 1439], primary, true));
+        assert!(
+            inside.ends_with("does NOT cover it exactly (it lies inside it)"),
+            "{inside}"
+        );
+
+        // Tonight's framed window, read on the game's thread (not DPI aware) with the physical
+        // rectangles beside: judged in physical pixels. The physical window is illustrative (the
+        // scaled one times 1.25, border included), not what DWM's visible frame would return.
+        let tonight = Placement {
+            borderless: false,
+            awareness: 0,
+            window: [5, 5, 2581, 1484],
+            monitor: [0, 0, 2048, 1152],
+            physical: Some(([6, 6, 3226, 1855], primary)),
+            primary: true,
+        };
+        assert_eq!(tonight.verdict(), Verdict::Beyond([0, 0, 666, 415]));
+        let line = placement_line(&tonight);
+        assert!(
+            line.starts_with("the game's window (framed, not borderless: bBorderless=0 or NV_BORDERLESS=0 without bFull Screen=1"),
+            "{line}"
+        );
+        assert!(
+            line.contains("a launcher's play run that a test's or a fix's variable made a test")
+        );
+        assert!(
+            line.ends_with(
+                "is at [5, 5, 2581, 1484] (scaled pixels: the thread is not DPI aware), visible frame, physical [6, 6, 3226, 1855] \
+                 on the primary monitor [0, 0, 2048, 1152], physical [0, 0, 2560, 1440]: \
+                 it reaches BEYOND it onto what is next to it: 666 past its right edge, 415 past its bottom edge (physical pixels)"
+            ),
+            "{line}"
+        );
+        // The same read without the physical pair: judged in scaled pixels, and the unit says so.
+        let scaled = Placement {
+            physical: None,
+            ..tonight
+        };
+        assert_eq!(scaled.verdict(), Verdict::Beyond([0, 0, 533, 332]));
+        assert!(
+            placement_line(&scaled).ends_with(
+                "533 past its right edge, 332 past its bottom edge (scaled pixels: the thread is not DPI aware)"
+            ),
+            "{}",
+            placement_line(&scaled)
+        );
+        // Made, before the game places it: inside the monitor, framed.
+        let made = Placement {
+            awareness: 0,
+            window: [0, 0, 320, 240],
+            monitor: [0, 0, 2048, 1152],
+            physical: None,
+            ..tonight
+        };
+        assert!(placement_line(&made).ends_with(": it lies inside it"));
+        // Above and left of the monitor too.
+        let up_left = aware(false, [-10, -20, 100, 100], primary, true);
+        assert_eq!(up_left.verdict(), Verdict::Beyond([10, 20, 0, 0]));
+        assert!(placement_line(&up_left)
+            .ends_with("10 past its left edge, 20 past its top edge (physical pixels)"));
+        assert_eq!(
+            unit(1),
+            "system-scaled pixels: the thread is system DPI aware"
+        );
+        assert_eq!(unit(7), "pixels of an unknown DPI awareness");
+    }
+
+    /// A placement line is printed when what it finds is new, [`MOST_PLACEMENT_LINES`] at most;
+    /// once they are out, the placement is not even read (its Win32 calls are not made), and a
+    /// read that fails prints nothing and counts nothing.
+    #[test]
+    fn placement_lines_stop_reading_at_the_cap() {
+        let said = std::sync::Mutex::new((0, None));
+        let reads = std::cell::Cell::new(0);
+        let primary = [0, 0, 2560, 1440];
+        let at = |window: [i32; 4]| {
+            let reads = &reads;
+            move || {
+                reads.set(reads.get() + 1);
+                Some(aware(true, window, primary, true))
+            }
+        };
+        assert!(next_placement(&said, at(primary)).is_some());
+        // The same finding again: read, not printed, not counted.
+        assert!(next_placement(&said, at(primary)).is_none());
+        assert_eq!((reads.get(), said.lock().unwrap().0), (2, 1));
+        // A failed read: nothing printed or counted.
+        assert!(next_placement(&said, || None).is_none());
+        assert_eq!(said.lock().unwrap().0, 1);
+        // Something new each time until the cap.
+        for k in 1..MOST_PLACEMENT_LINES as i32 {
+            assert!(
+                next_placement(&said, at([0, k, 2560, 1440 + k])).is_some(),
+                "{k}"
+            );
+        }
+        assert_eq!(said.lock().unwrap().0, MOST_PLACEMENT_LINES);
+        let before = reads.get();
+        assert!(next_placement(&said, at([0, 0, 1, 1])).is_none());
+        assert_eq!(reads.get(), before, "read after the cap");
+    }
 
     /// F11 is the port's frame-rate counter key: its press toggles the counter once, its repeats
     /// and release change nothing, and the game's keyboard never holds it (DIK_F11, 0x57), in the
