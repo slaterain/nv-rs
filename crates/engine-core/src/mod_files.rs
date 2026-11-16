@@ -5,28 +5,50 @@
 //! before the game's own Data.
 //!
 //! The platform installs its calls ([`install`]) with the layer; without it (an extender crate's
-//! own tests, a program without the platform) a read finds nothing and a write writes nothing.
-//! The profile text rules are here too, as plain functions every side can use: [`ini_value`]
-//! (`GetPrivateProfileStringA`'s reading) and [`written_profile`] (`WritePrivateProfileStringA`'s
-//! writing, measured on scratch files).
+//! own tests, a program without the platform) a read finds nothing and a write writes nothing
+//! ([`ERROR_NOT_SUPPORTED`]). The profile text rules are here too, as plain functions every side
+//! can use: [`ini_value`] (`GetPrivateProfileStringA`'s reading) and [`written_profile`]
+//! (`WritePrivateProfileStringA`'s writing), both measured on scratch files.
 //!
 //! A name is given as the game passes it to Windows: relative to the game's folder
-//! (`Data\Config\MCM.ini`), or a full path inside it.
+//! (`Data\Config\MCM.ini`), or a full path inside it. The game's own profile imports
+//! (`GetPrivateProfileStringA` and the others the exe calls) do not come here: only the
+//! extenders' commands look in the port's folder first.
+//!
+//! Locking: the calls reach the platform layer's state (`Kernel::platform`), which with real
+//! threads other threads change under the kernel lock; each wrapper here holds it
+//! ([`crate::real_threads::kernel_guard`]) for the call. The calls make no game call.
 
 use crate::Engine;
 
-/// The platform layer's calls ([`install`]).
+/// Windows' error codes the calls answer (winerror.h).
+pub const ERROR_FILE_NOT_FOUND: u32 = 2;
+pub const ERROR_PATH_NOT_FOUND: u32 = 3;
+pub const ERROR_ACCESS_DENIED: u32 = 5;
+pub const ERROR_NOT_SUPPORTED: u32 = 50;
+pub const ERROR_ALREADY_EXISTS: u32 = 183;
+
+/// The platform layer's calls ([`install`]). Errors are Windows' codes for what the same call
+/// would answer there.
 pub struct ModFileCalls {
     /// The file's bytes: written in this run, else the port's folder's copy, else the game's.
-    pub read: fn(&Engine, &[u8]) -> Option<Vec<u8>>,
-    /// Whether the file exists in one of [`ModFileCalls::read`]'s places.
+    /// `ERROR_FILE_NOT_FOUND` (or `_PATH_NOT_FOUND`) when there is none; any other error when a
+    /// copy is there but cannot be read (a later place is not looked at then).
+    pub read: fn(&Engine, &[u8]) -> Result<Vec<u8>, u32>,
+    /// Whether the file exists in one of [`ModFileCalls::read`]'s places (not a folder), from
+    /// the file system's attributes: its bytes are not read.
     pub exists: fn(&Engine, &[u8]) -> bool,
-    /// Whether the folder exists (made in this run, in the port's folder, or the game's).
+    /// Whether the folder exists (made in this run, in the port's folder, or the game's); one
+    /// trailing separator is allowed, as Windows allows it.
     pub directory_exists: fn(&Engine, &[u8]) -> bool,
-    /// `CreateDirectoryA` for a mod's folder; false for a name outside the game's folder.
-    pub create_directory: fn(&mut Engine, &[u8]) -> bool,
-    /// The file written whole (the run and the port's folder); false: nothing written.
-    pub write: fn(&mut Engine, &[u8], &[u8]) -> bool,
+    /// `CreateDirectoryA` for a mod's folder (one trailing separator allowed):
+    /// `ERROR_ALREADY_EXISTS` when it exists, `ERROR_PATH_NOT_FOUND` when its parent exists
+    /// nowhere, `ERROR_ACCESS_DENIED` for a name outside the game's folder.
+    pub create_directory: fn(&mut Engine, &[u8]) -> Result<(), u32>,
+    /// The file written whole (the port's folder and the run): `ERROR_PATH_NOT_FOUND` when its
+    /// folder exists nowhere, `ERROR_ACCESS_DENIED` for a folder, a name outside the game's
+    /// folder or a port folder that refused the write.
+    pub write: fn(&mut Engine, &[u8], &[u8]) -> Result<(), u32>,
 }
 
 static CALLS: std::sync::OnceLock<&'static ModFileCalls> = std::sync::OnceLock::new();
@@ -36,57 +58,88 @@ pub fn install(calls: &'static ModFileCalls) {
     let _ = CALLS.set(calls);
 }
 
-/// [`ModFileCalls::read`]; `None` without the platform layer.
+/// The installed calls, `None` without the platform layer.
+fn calls() -> Option<&'static ModFileCalls> {
+    CALLS.get().copied()
+}
+
+/// [`ModFileCalls::read`] under the kernel lock; `ERROR_NOT_SUPPORTED` without the platform.
+pub fn read_or_error(e: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().map_or(Err(ERROR_NOT_SUPPORTED), |c| (c.read)(e, name))
+}
+
+/// [`read_or_error`]'s bytes; `None` for any error.
 pub fn read(e: &Engine, name: &[u8]) -> Option<Vec<u8>> {
-    CALLS.get().and_then(|c| (c.read)(e, name))
+    read_or_error(e, name).ok()
 }
 
-/// [`ModFileCalls::exists`]; false without the platform layer.
+/// [`ModFileCalls::exists`] under the kernel lock; false without the platform layer.
 pub fn exists(e: &Engine, name: &[u8]) -> bool {
-    CALLS.get().is_some_and(|c| (c.exists)(e, name))
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().is_some_and(|c| (c.exists)(e, name))
 }
 
-/// [`ModFileCalls::directory_exists`]; false without the platform layer.
+/// [`ModFileCalls::directory_exists`] under the kernel lock; false without the platform layer.
 pub fn directory_exists(e: &Engine, name: &[u8]) -> bool {
-    CALLS.get().is_some_and(|c| (c.directory_exists)(e, name))
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().is_some_and(|c| (c.directory_exists)(e, name))
 }
 
-/// [`ModFileCalls::create_directory`]; false without the platform layer.
+/// [`ModFileCalls::create_directory`] under the kernel lock.
+pub fn create_directory_or_error(e: &mut Engine, name: &[u8]) -> Result<(), u32> {
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().map_or(Err(ERROR_NOT_SUPPORTED), |c| (c.create_directory)(e, name))
+}
+
+/// [`create_directory_or_error`] as `CreateDirectoryA`'s answer (true: made).
 pub fn create_directory(e: &mut Engine, name: &[u8]) -> bool {
-    CALLS.get().is_some_and(|c| (c.create_directory)(e, name))
+    create_directory_or_error(e, name).is_ok()
 }
 
-/// [`ModFileCalls::write`]; false without the platform layer.
+/// [`ModFileCalls::write`] under the kernel lock.
+pub fn write_or_error(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().map_or(Err(ERROR_NOT_SUPPORTED), |c| (c.write)(e, name, bytes))
+}
+
+/// [`write_or_error`]: true when written.
 pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> bool {
-    CALLS.get().is_some_and(|c| (c.write)(e, name, bytes))
+    write_or_error(e, name, bytes).is_ok()
 }
 
 /// `GetPrivateProfileStringA(section, key, ..., name)` over [`read`]: the value as Windows reads
-/// it ([`ini_value`]), `None` when the file, the section or the key is not there.
+/// it ([`ini_value`]), `None` when the file, the section or the key is not there (or the file
+/// cannot be read, when Windows also answers the default).
 pub fn profile_string(e: &Engine, name: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
     ini_value(&read(e, name)?, section, key)
 }
 
-/// `WritePrivateProfileStringA(section, key, value, name)` over [`read`] and [`write`]: the
-/// file as Windows rewrites it ([`written_profile`]). False, writing nothing, when the file's
-/// folder exists nowhere ([`directory_exists`]; Windows answers `ERROR_PATH_NOT_FOUND`), the
-/// name is outside the game's folder, or there is no platform layer.
+/// `WritePrivateProfileStringA(section, key, value, name)` over [`read_or_error`] and
+/// [`write_or_error`]: the file as Windows rewrites it ([`written_profile`]); a missing file
+/// starts empty. A file that is there but cannot be read is not written (so a kept file is never
+/// replaced by one made from nothing), with one line in the log; the error comes back, as it
+/// does when the folder exists nowhere or the write fails.
 pub fn write_profile_string(
     e: &mut Engine,
     name: &[u8],
     section: &[u8],
     key: &[u8],
     value: &[u8],
-) -> bool {
-    let folder_end = name.iter().rposition(|&b| b == b'\\' || b == b'/');
-    if let Some(at) = folder_end {
-        if !directory_exists(e, &name[..at]) {
-            return false;
+) -> Result<(), u32> {
+    let old = match read_or_error(e, name) {
+        Ok(bytes) => bytes,
+        Err(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => Vec::new(),
+        Err(code) => {
+            println!(
+                "mod files: {} could not be read (Windows error {code}); not written, so it stays as it is",
+                String::from_utf8_lossy(name)
+            );
+            return Err(code);
         }
-    }
-    let old = read(e, name).unwrap_or_default();
+    };
     let new = written_profile(&old, section, key, value);
-    write(e, name, &new)
+    write_or_error(e, name, &new)
 }
 
 /// ASCII white space taken off both ends.
@@ -103,7 +156,8 @@ pub fn trim_spaces(s: &[u8]) -> &[u8] {
 }
 
 /// The value of `key` in section `section` of the INI text `text` (names compared without case,
-/// spaces around names and values trimmed, one pair of surrounding quotes taken off), as
+/// spaces around names and values trimmed, one pair of the same surrounding quotes, single or
+/// double, taken off), as
 /// `GetPrivateProfileStringA` finds it: only in the first section of that name, as Windows reads
 /// a file with a repeated section name (measured on scratch files, 2026-11-09; the platform's
 /// `ini.rs` tests hold the answers). A comment after a value is part of it (`350\t;note` reads
@@ -130,8 +184,11 @@ pub fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
         };
         if trim_spaces(&line[..at]).eq_ignore_ascii_case(key) {
             let value = trim_spaces(&line[at + 1..]);
+            // One pair of the same quote, single or double, taken off (measured 2026-11-16,
+            // `ini3-2026-11-16.txt`): `"1"` and `'1'` read 1, `""` reads nothing, a lone `"` or
+            // `"1'` stays, `"a"b"` reads `a"b`, `"1" ;c` stays whole.
             let value = match value {
-                [b'"', middle @ .., b'"'] => middle,
+                [q @ (b'"' | b'\x27'), middle @ .., last] if q == last => middle,
                 _ => value,
             };
             return Some(value.to_vec());

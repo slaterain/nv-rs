@@ -303,7 +303,7 @@ fn file_archived(e: &mut Engine, path: &[u8]) -> bool {
 /// `GetFileAttributesA` of `path` (`/` made `\`) through the seam: 1 when it is there as asked (a
 /// folder or a file), 0 when it is there as the other; when it is not there, a file found in an
 /// opened archive ([`file_archived`]) answers 2.
-fn file_exists_ex(e: &mut Engine, path: &mut Vec<u8>, folder: bool) -> u32 {
+fn file_exists_ex(e: &mut Engine, path: &mut [u8], folder: bool) -> u32 {
     backslashes(path);
     if engine_core::mod_files::directory_exists(e, path) {
         return u32::from(folder);
@@ -496,7 +496,7 @@ fn set_ini_value(
     if !engine_core::mod_files::exists(e, path) {
         make_all_dirs(e, path);
     }
-    if engine_core::mod_files::write_profile_string(e, path, section, key, value) {
+    if engine_core::mod_files::write_profile_string(e, path, section, key, value).is_ok() {
         a.set_result(e, 1.0);
     }
 }
@@ -616,7 +616,7 @@ fn set_ini_section(e: &mut Engine, w: &[u32]) -> Ret {
     if !engine_core::mod_files::exists(e, &path) {
         make_all_dirs(e, &path);
     }
-    if engine_core::mod_files::write_profile_section(e, &path, &section, &lines) {
+    if engine_core::mod_files::write_profile_section(e, &path, &section, &lines).is_ok() {
         a.set_result(e, 1.0);
     }
     handled(true)
@@ -663,7 +663,7 @@ fn remove_ini_key(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     if let Some((section, key)) = split_value_name(&name) {
-        if engine_core::mod_files::remove_profile_key(e, &path, section, key) {
+        if engine_core::mod_files::remove_profile_key(e, &path, section, key).is_ok() {
             a.set_result(e, 1.0);
         }
     }
@@ -684,7 +684,7 @@ fn remove_ini_section(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     };
     if engine_core::mod_files::exists(e, &path)
-        && engine_core::mod_files::remove_profile_section(e, &path, &section)
+        && engine_core::mod_files::remove_profile_section(e, &path, &section).is_ok()
     {
         a.set_result(e, 1.0);
     }

@@ -823,6 +823,29 @@ Tested: `patch_data.rs`'s `the_table_reads_and_every_row_is_applied`, `the_strip
 `the_load_in_both_modes` (the record's flags as loaded in vanilla, 0x11 for the Strip with the row, nothing
 for another world space or another record type).
 
+### Mods' own files and the game's INI start-up
+
+Not a row; in every preset (2026-11-16):
+
+- **Mods' own files** (MCM's `Data\Config\<mod>.ini`, later JIP LN's INI and file commands) are
+  kept in a folder of nv-rs's own beside the saves (`NV_MOD_FILES_OUT`, else `nv-rs mod files`
+  beside `NV_SAVE_OUT`'s folder; docs/PLAYTESTING.md), never in the game's folder. The extenders'
+  commands read a mod's own copy there first, then the game's Data. Without either variable there
+  is no such folder: mods' settings last for the session only, and the start-up log says so in one
+  line. The game's own profile reads (`GetPrivateProfileStringA` and the others the exe calls) do
+  not look in that folder: only the extenders' commands do.
+- **Profile file names** are looked for as Windows looks for them (measured on scratch files): a
+  name with a folder part (`.\FALLOUT.INI`, `Data\Config\X.ini`) in the current directory, a bare
+  name in the Windows directory. Before, every name that was not a full path went to the Windows
+  directory.
+- **`[General] bUseMyGamesDirectory` always reads 1** (a deliberate difference). The game reads it
+  at start-up from `.\Custom.ini` and `.\FALLOUT.INI` in its own folder (`00876ad0`, call sites
+  `00876b13` and `00876b55`); 0 there makes it keep its INI files, `plugins.txt` and saves in the
+  game's folder, where nv-rs never writes. nv-rs keeps the My Games folders (as it did before, when
+  those names went to the Windows directory and found nothing), and says once in the log when a
+  file holds 0. Tested: `host::mod_files` `the_start_up_keeps_the_my_games_folders` (the translated
+  `00876ad0` through the platform's `GetPrivateProfileIntA`).
+
 ### The script extender
 
 The built-in xNVSE (ADR-0016) is the same in both presets, except for these rows and the

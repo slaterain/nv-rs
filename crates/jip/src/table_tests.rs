@@ -350,22 +350,22 @@ fn other_plugins_conditions_read_no_eval() {
 fn an_unbuilt_command_fails() {
     let mut e = engine();
     crate::install_as(&mut e, true);
-    let file_exists = Record::read(&e, record_of(&e, 0x2201));
-    assert_eq!(guest_text(&e, file_exists.long_name), b"FileExists");
-    assert_eq!((file_exists.execute, file_exists.eval), (0, 0));
+    let unbuilt = Record::read(&e, record_of(&e, 0x228a));
+    assert_eq!(guest_text(&e, unbuilt.long_name), b"GetFilesInFolder");
+    assert_eq!((unbuilt.execute, unbuilt.eval), (0, 0));
     let button = Record::read(&e, record_of(&e, 0x277c));
     assert_eq!(guest_text(&e, button.long_name), b"GetRadiationLevelAlt");
     assert_eq!((button.execute, button.eval, button.flags), (0, 0, 1));
-    let words = line(&mut e, 0x2201, &[]);
+    let words = line(&mut e, 0x228a, &[]);
     let a = nvse::CommandArgs::new(&words);
     // An `X` token: no calling reference, the opcode, its arguments' length.
     let at = DATA + 4;
-    for (i, b) in [b'X', 0, 0, 0x01, 0x22, 2, 0].iter().enumerate() {
+    for (i, b) in [b'X', 0, 0, 0x8a, 0x22, 2, 0].iter().enumerate() {
         e.mem.set_u8(at + i as u32, *b);
     }
     let mut ev = nvse::expr::Eval::new(&e, &a);
     assert!(ev.read_one_token(&mut e).is_none());
-    assert_eq!(ev.errors, ["Failed to resolve command with opcode 2201"]);
+    assert_eq!(ev.errors, ["Failed to resolve command with opcode 228A"]);
 }
 
 /// Answering "installed", an empty slot is `NONE` and runs `kEmptyCommand`'s execute, the exe's

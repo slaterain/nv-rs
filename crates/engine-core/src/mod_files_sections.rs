@@ -5,8 +5,8 @@
 //! whole (`WritePrivateProfileSectionA`), as Windows does them (measured on scratch files,
 //! 2026-11-16, `build43-scratch/measure/jip-cmds/files-measure`, `ini3-`, `ini4-` and
 //! `ini5-2026-11-16.txt`; the tests hold every case). The text rules are plain functions; the
-//! calls on a mod's file go through [`super::read`] and [`super::write`], so they keep its name
-//! rules and its places.
+//! calls on a mod's file go through [`super::read_or_error`] and [`super::write_or_error`] (under
+//! the kernel lock), so they keep its name rules, its places and Windows' error codes.
 //!
 //! What Windows does, as these calls see a file:
 //! - A line ends at CR LF, a lone CR or a lone LF (each one line end: `x=1\r\r\n` is the line
@@ -22,7 +22,10 @@
 //!   any other ends at its last entry's line end (for a section written whole: its last entry
 //!   with `=`), or at its heading's when it has none.
 
-use super::{read, trim_spaces, write, Engine};
+use super::{
+    read, read_or_error, trim_spaces, write_or_error, Engine, ERROR_FILE_NOT_FOUND,
+    ERROR_PATH_NOT_FOUND,
+};
 
 /// One line: where it starts, where its text ends (before the line end) and where the next
 /// starts.
@@ -277,12 +280,22 @@ pub fn written_section(old: &[u8], section: &[u8], new_lines: &[Vec<u8>]) -> Vec
     }
 }
 
-/// The folder part of `name` exists (Windows answers `ERROR_PATH_NOT_FOUND` for a file in a
-/// folder that does not), as [`super::write_profile_string`] asks it.
-fn folder_exists(e: &Engine, name: &[u8]) -> bool {
-    name.iter()
-        .rposition(|&b| b == b'\\' || b == b'/')
-        .map_or(true, |at| super::directory_exists(e, &name[..at]))
+/// The file's bytes before a change, as [`super::write_profile_string`] takes them: `None` when
+/// it is not there (`ERROR_FILE_NOT_FOUND` or `_PATH_NOT_FOUND`: Windows makes it, and the
+/// write then answers when its folder exists nowhere); any other error comes back, with one line
+/// in the log, and nothing is written (a kept file is never replaced by one made from nothing).
+fn before_change(e: &Engine, name: &[u8]) -> Result<Option<Vec<u8>>, u32> {
+    match read_or_error(e, name) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => Ok(None),
+        Err(code) => {
+            println!(
+                "mod files: {} could not be read (Windows error {code}); not written, so it stays as it is",
+                String::from_utf8_lossy(name)
+            );
+            Err(code)
+        }
+    }
 }
 
 /// `GetPrivateProfileSectionA(section, ..., name)` over [`read`]: [`section_lines`]; `None` when
@@ -297,53 +310,49 @@ pub fn profile_section_names(e: &Engine, name: &[u8]) -> Option<Vec<Vec<u8>>> {
     Some(section_names(&read(e, name)?))
 }
 
-/// `WritePrivateProfileStringA(section, key, NULL, name)` over [`read`] and [`write`]
-/// ([`removed_key`]). True, as Windows answers, also when the key is not there; a file not there
-/// is made empty (measured). False, writing nothing, when the folder does not exist or the write
-/// is refused.
-pub fn remove_profile_key(e: &mut Engine, name: &[u8], section: &[u8], key: &[u8]) -> bool {
-    if !folder_exists(e, name) {
-        return false;
-    }
-    match read(e, name) {
-        None => write(e, name, b""),
+/// `WritePrivateProfileStringA(section, key, NULL, name)` over [`read_or_error`] and
+/// [`write_or_error`] ([`removed_key`]). Ok, as Windows answers, also when the key is not there;
+/// a file not there is made empty (measured). The error, writing nothing, when the file is there
+/// but cannot be read, its folder exists nowhere, or the write is refused.
+pub fn remove_profile_key(
+    e: &mut Engine,
+    name: &[u8],
+    section: &[u8],
+    key: &[u8],
+) -> Result<(), u32> {
+    match before_change(e, name)? {
+        None => write_or_error(e, name, b""),
         Some(old) => match removed_key(&old, section, key) {
-            Some(new) => write(e, name, &new),
-            None => true,
+            Some(new) => write_or_error(e, name, &new),
+            None => Ok(()),
         },
     }
 }
 
-/// `WritePrivateProfileStructA(section, NULL, NULL, 0, name)` over [`read`] and [`write`]
-/// ([`removed_section`]): as [`remove_profile_key`] answers.
-pub fn remove_profile_section(e: &mut Engine, name: &[u8], section: &[u8]) -> bool {
-    if !folder_exists(e, name) {
-        return false;
-    }
-    match read(e, name) {
-        None => write(e, name, b""),
+/// `WritePrivateProfileStructA(section, NULL, NULL, 0, name)` over [`read_or_error`] and
+/// [`write_or_error`] ([`removed_section`]): as [`remove_profile_key`] answers.
+pub fn remove_profile_section(e: &mut Engine, name: &[u8], section: &[u8]) -> Result<(), u32> {
+    match before_change(e, name)? {
+        None => write_or_error(e, name, b""),
         Some(old) => match removed_section(&old, section) {
-            Some(new) => write(e, name, &new),
-            None => true,
+            Some(new) => write_or_error(e, name, &new),
+            None => Ok(()),
         },
     }
 }
 
-/// `WritePrivateProfileSectionA(section, lines, name)` over [`read`] and [`write`]
-/// ([`written_section`]; a file not there is made). False, writing nothing, when the folder does
-/// not exist or the write is refused.
+/// `WritePrivateProfileSectionA(section, lines, name)` over [`read_or_error`] and
+/// [`write_or_error`] ([`written_section`]; a file not there is made). The error, writing
+/// nothing, as [`remove_profile_key`].
 pub fn write_profile_section(
     e: &mut Engine,
     name: &[u8],
     section: &[u8],
     new_lines: &[Vec<u8>],
-) -> bool {
-    if !folder_exists(e, name) {
-        return false;
-    }
-    let old = read(e, name).unwrap_or_default();
+) -> Result<(), u32> {
+    let old = before_change(e, name)?.unwrap_or_default();
     let new = written_section(&old, section, new_lines);
-    write(e, name, &new)
+    write_or_error(e, name, &new)
 }
 
 #[cfg(test)]
