@@ -11,6 +11,10 @@ name: Preview packages (Linux, macOS)
 #
 # Each job uses runners from the account's shared limit (20 jobs at a time); one run is two jobs.
 on:
+  # TEMPORARY, removed before review ends: the one proving run on this branch (a workflow_dispatch
+  # workflow can only be started by hand once it is on the default branch).
+  push:
+    branches: [claude/linux-mac-pkgci]
   workflow_dispatch:
     inputs:
       version:
@@ -62,8 +66,8 @@ jobs:
       - name: Build and package
         shell: bash
         env:
-          VERSION: ${{ inputs.version }}
-          RELEASE: ${{ inputs.release }}
+          VERSION: ${{ inputs.version || 'ci-test' }}
+          RELEASE: ${{ inputs.release || false }}
         run: |
           flag=--test-build
           if [ "$RELEASE" = true ]; then flag=; fi
