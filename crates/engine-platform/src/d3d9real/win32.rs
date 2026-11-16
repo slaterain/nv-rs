@@ -921,16 +921,22 @@ mod tests {
         d3d9_wgpu::frame_rate::set_window_device(false);
         // Losing the focus (Alt+Tab away: WM_ACTIVATE with WA_INACTIVE, WM_KILLFOCUS) lets go of
         // every key and button held, so none stays down when the player comes back.
-        send(WM_KEYDOWN, 0x41, a);
-        send(WM_XBUTTONDOWN, 2 << 16, 0);
-        assert!(held_keys()[0x1e]);
-        assert!(input().lock().unwrap().buttons[4]);
-        release_input();
-        assert!(held_keys().iter().all(|k| !k), "focus lost: no key held");
-        assert!(
-            input().lock().unwrap().buttons.iter().all(|b| !b),
-            "focus lost: no button held"
-        );
+        // Both through the window procedure's own arms.
+        for (message, wparam) in [(WM_ACTIVATE, 0usize), (WM_KILLFOCUS, 0)] {
+            send(WM_KEYDOWN, 0x41, a);
+            send(WM_XBUTTONDOWN, 2 << 16, 0);
+            assert!(held_keys()[0x1e]);
+            assert!(input().lock().unwrap().buttons[4]);
+            window_procedure(window, message, WPARAM(wparam), LPARAM(0));
+            assert!(
+                held_keys().iter().all(|k| !k),
+                "{message:#x}: focus lost, no key held"
+            );
+            assert!(
+                input().lock().unwrap().buttons.iter().all(|b| !b),
+                "{message:#x}: focus lost, no button held"
+            );
+        }
     }
 
     /// Closing the game's window (WM_CLOSE: its close button, Alt+F4) ends the run through

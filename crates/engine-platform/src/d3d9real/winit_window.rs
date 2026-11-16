@@ -13,10 +13,19 @@
 //!   pixels (Windows: a popup window over the primary monitor). A framed window is sized and placed
 //!   in the system's scaled pixels, as the Win32 window thread, which is not DPI aware then, is; its
 //!   client area is the rectangle the game asks for less the frame the game added for it
-//!   (`input::inner_for_game_rect`), and its frame has the buttons and resizing the game's style
-//!   gives it on Windows (`input::frame_of_style`: none of either for the game's window). On a
-//!   Wayland desktop that draws no frames for programs (GNOME) the framed window has a plain frame
-//!   with no title: winit's own title bar is left out (it brings a font and a rasteriser).
+//!   (`input::inner_for_game_rect`). Of what the game's style gives its frame on Windows
+//!   (`input::frame_of_style`: for the game's window no resizing and no buttons) only the
+//!   resizing reaches a Linux window: winit 0.30 cannot take buttons off on X11 or Wayland. So on
+//!   X11 the framed window cannot be resized or maximised, and the window manager still draws its
+//!   close and minimise buttons. On a Wayland desktop that draws no frames for programs (GNOME)
+//!   the window has the plain frame winit draws itself (no title: winit's own title bar is left
+//!   out, it brings a font and a rasteriser), with close, and minimise and maximise where the
+//!   compositor offers them; a maximise the compositor grants fills the monitor and stretches the
+//!   game's picture to it (the Windows window has no such button). Closing ends the run as on
+//!   Windows. While the window cannot be resized, its smallest and largest sizes are set to each
+//!   size the game asks for, so a compositor that holds a window to them keeps the game's size.
+//!   Wayland sends no resize event for a size the program asked for (it applies it at once), so
+//!   that size is kept from the request itself ([`SizeKept`]).
 //! - The cursor is held (locked, else confined to the window, and hidden) when the window gets the
 //!   focus and on a click in it, and let go when it loses the focus: winit does not say whether the
 //!   focus came from the keyboard or from a click on the frame, which Windows' window tells apart.
@@ -76,7 +85,9 @@ const SERVE_EVERY: Duration = Duration::from_millis(10);
 struct Shown {
     window: Window,
     /// The client area's size in real pixels.
-    size: [AtomicU32; 2],
+    size: SizeKept,
+    /// Whether the player may resize the window (`input::frame_of_style`).
+    resizable: bool,
     /// Minimised (looked up on the window thread every [`SERVE_EVERY`] at most).
     minimised: AtomicBool,
     /// Hidden from view, as the system says (X11).
@@ -84,19 +95,59 @@ struct Shown {
 }
 
 impl Shown {
-    fn new(window: Window) -> Shown {
+    fn new(window: Window, resizable: bool) -> Shown {
         let size = window.inner_size();
         Shown {
             window,
-            size: [AtomicU32::new(size.width), AtomicU32::new(size.height)],
+            size: SizeKept::new(size),
+            resizable,
             minimised: AtomicBool::new(false),
             occluded: AtomicBool::new(false),
         }
     }
 
+    /// The client area asked to be `size` (the game's): while the window cannot be resized its
+    /// smallest and largest sizes become `size` first (winit's Wayland window keeps them at the
+    /// size it was made with otherwise; its X11 window moves them itself), and a size the system
+    /// applies at once (Wayland) is kept, as no resize event follows it.
+    fn ask_size(&self, size: LogicalSize<u32>) {
+        if !self.resizable {
+            self.window.set_min_inner_size(Some(size));
+            self.window.set_max_inner_size(Some(size));
+        }
+        self.size.asked(self.window.request_inner_size(size));
+    }
+}
+
+/// The client area's size as the drawing side reads it each frame, kept from the window's resize
+/// events ([`SizeKept::resized`]) and from the size the system applied at once when the program
+/// asked for one ([`SizeKept::asked`]: Wayland, which sends no resize event for it), so that a read
+/// asks nothing of the window system.
+struct SizeKept([AtomicU32; 2]);
+
+impl SizeKept {
+    fn new(size: PhysicalSize<u32>) -> SizeKept {
+        SizeKept([AtomicU32::new(size.width), AtomicU32::new(size.height)])
+    }
+
     fn resized(&self, size: PhysicalSize<u32>) {
-        self.size[0].store(size.width, Ordering::Relaxed);
-        self.size[1].store(size.height, Ordering::Relaxed);
+        self.0[0].store(size.width, Ordering::Relaxed);
+        self.0[1].store(size.height, Ordering::Relaxed);
+    }
+
+    /// `request_inner_size`'s answer: the size applied at once, or `None` when a resize event
+    /// will bring it (X11).
+    fn asked(&self, applied: Option<PhysicalSize<u32>>) {
+        if let Some(size) = applied {
+            self.resized(size);
+        }
+    }
+
+    fn get(&self) -> (u32, u32) {
+        (
+            self.0[0].load(Ordering::Relaxed),
+            self.0[1].load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -114,10 +165,7 @@ impl HasDisplayHandle for Shown {
 
 impl d3d9_wgpu::GameWindow for Shown {
     fn client_size(&self) -> Option<(u32, u32)> {
-        Some((
-            self.size[0].load(Ordering::Relaxed),
-            self.size[1].load(Ordering::Relaxed),
-        ))
+        Some(self.size.get())
     }
 
     fn minimised(&self) -> bool {
@@ -198,8 +246,9 @@ fn missing_keyboard_library() -> Option<&'static str> {
     if xkbcommon_dl::xkbcommon_option().is_none() {
         return Some("libxkbcommon.so.0");
     }
-    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
-        || std::env::var_os("WAYLAND_SOCKET").is_some();
+    // As winit chooses: a Wayland compositor named by a variable that is set and not empty.
+    let named = |name| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    let wayland = named("WAYLAND_DISPLAY") || named("WAYLAND_SOCKET");
     if !wayland && xkbcommon_dl::x11::xkbcommon_x11_option().is_none() {
         return Some("libxkbcommon-x11.so.0");
     }
@@ -308,15 +357,14 @@ impl Layer {
                 (Arc::clone(&parent.shown), parent.top)
             };
             if !borderless() {
-                let _ = shown
-                    .window
-                    .request_inner_size(LogicalSize::new(size.0, size.1));
+                shown.ask_size(LogicalSize::new(size.0, size.1));
             }
             let id = next_id();
             keep(id, &shown, top);
             return Some(id);
         }
         let borderless = borderless();
+        let frame = input::frame_of_style(request.style);
         let mut attributes = Window::default_attributes()
             .with_title(latin1(&request.title))
             .with_visible(false)
@@ -328,7 +376,6 @@ impl Layer {
                 .with_decorations(false)
                 .with_fullscreen(Some(Fullscreen::Borderless(None)));
         } else {
-            let frame = input::frame_of_style(request.style);
             let mut buttons = WindowButtons::empty();
             buttons.set(WindowButtons::CLOSE, frame.close);
             buttons.set(WindowButtons::MINIMIZE, frame.minimise);
@@ -339,16 +386,14 @@ impl Layer {
         }
         let window = match event_loop.create_window(attributes) {
             Ok(w) => w,
-            Err(e) => {
-                eprintln!("NV_D3D9={}: winit could not make the window: {e}", tag());
-                return None;
-            }
+            // The game cannot go on without its window: the run ends, with the line.
+            Err(e) => no_window(&format!("winit could not make the game's window ({e})")),
         };
         if request.visible() && request.show != Showing::Never {
             window.set_visible(true);
         }
         let winit_id = window.id();
-        let shown = Arc::new(Shown::new(window));
+        let shown = Arc::new(Shown::new(window, borderless || frame.resizable));
         let id = next_id();
         keep(id, &shown, id);
         self.tops.insert(winit_id, id);
@@ -447,10 +492,15 @@ impl ApplicationHandler for Layer {
                 input::focus_lost();
                 self.let_go();
             }
-            WindowEvent::ScaleFactorChanged { .. } => d3d9_wgpu::window_changed(),
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(e) = windows().get(&id) {
+                    e.shown.size.resized(e.shown.window.inner_size());
+                }
+                d3d9_wgpu::window_changed();
+            }
             WindowEvent::Resized(size) => {
                 if let Some(e) = windows().get(&id) {
-                    e.shown.resized(size);
+                    e.shown.size.resized(size);
                 }
             }
             WindowEvent::Occluded(hidden) => {
@@ -559,7 +609,7 @@ pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
                 right.wrapping_sub(left).max(1) as u32,
                 bottom.wrapping_sub(top).max(1) as u32,
             );
-            let _ = w.request_inner_size(LogicalSize::new(size.0, size.1));
+            shown.ask_size(LogicalSize::new(size.0, size.1));
         }
         return;
     }
@@ -569,7 +619,7 @@ pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
     if flags & input::NO_SIZE == 0 {
         let border = crate::window::game_frame(e, handle).unwrap_or([0; 4]);
         let (width, height) = input::inner_for_game_rect(rect, border);
-        let _ = w.request_inner_size(LogicalSize::new(width, height));
+        shown.ask_size(LogicalSize::new(width, height));
     }
 }
 
@@ -607,6 +657,22 @@ mod tests {
         }
         let unknown = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
         assert_eq!(key_name(unknown), None);
+    }
+
+    /// The size the drawing side reads follows the game's own resizes: on Wayland the size applied
+    /// at once (no resize event follows it), on X11 the resize event that follows the request.
+    #[test]
+    fn the_size_read_follows_the_programs_own_resizes() {
+        // Wayland: the request answers the size it applied.
+        let kept = SizeKept::new(PhysicalSize::new(336, 279));
+        kept.asked(Some(PhysicalSize::new(1280, 720)));
+        assert_eq!(kept.get(), (1280, 720));
+        // X11: the request answers nothing; the resize event brings the size.
+        let kept = SizeKept::new(PhysicalSize::new(336, 279));
+        kept.asked(None);
+        assert_eq!(kept.get(), (336, 279));
+        kept.resized(PhysicalSize::new(1280, 720));
+        assert_eq!(kept.get(), (1280, 720));
     }
 
     /// winit's buttons in DirectInput's order (Back is X1, Forward X2) and its wheel motion.

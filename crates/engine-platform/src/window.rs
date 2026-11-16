@@ -901,6 +901,43 @@ mod tests {
         assert_eq!(e.mem.u32(msg + 4), 0x12);
     }
 
+    /// The frame the game's renderer adds before it places its window (exe 0x004da951): the
+    /// table's `AdjustWindowRect` border for the window's own style, its class's menu (the game's
+    /// class has none) and no extended style, never one of another key; none for a window that
+    /// is not there.
+    #[test]
+    fn the_game_frame_is_the_tables_border_for_the_windows_style() {
+        let mut e = Engine::new();
+        crate::d3d9::load_adapter_table(
+            &mut e,
+            "AdjustWindowRectEx\t10000000 0 0\t1\tfffffff8 ffffffe1 8 8\n\
+             AdjustWindowRectEx\t10000000 1 0\t1\tfffffff8 ffffffce 8 8\n\
+             AdjustWindowRectEx\t10000000 0 200\t1\tfffffff6 ffffffdf a a\n\
+             AdjustWindowRectEx\t0 0 0\t1\t0 0 0 0\n",
+        );
+        let name = e.mem.alloc(32);
+        e.mem.set_cstr(name, b"Fallout: New Vegas");
+        let class = e.mem.alloc(40);
+        for at in (0..40).step_by(4) {
+            e.mem.set_u32(class + at, 0);
+        }
+        e.mem.set_u32(class + 36, name);
+        assert_eq!(register_class_a(&mut e, Ptr::new(class)), FIRST_ATOM);
+        state!(e).windows.windows.insert(
+            0x10,
+            Window {
+                class: FIRST_ATOM,
+                title: Vec::new(),
+                style: 0x1000_0000,
+                ex_style: 0,
+                parent: 0,
+                rect: [0, 0, 336, 279],
+            },
+        );
+        assert_eq!(game_frame(&mut e, 0x10), Some([-8, -31, 8, 8]));
+        assert_eq!(game_frame(&mut e, 0x99), None);
+    }
+
     #[test]
     #[should_panic(expected = "the game gave up")]
     fn a_message_box_stops_the_run_with_its_text() {
