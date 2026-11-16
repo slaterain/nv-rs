@@ -76,10 +76,43 @@ type WindowTitled = fn(&mut Engine, u32, &[u8]);
 /// The real window following the game's position and size ([`window_moved`]).
 type WindowMoved = fn(&mut Engine, u32, [i32; 4], u32);
 
+/// A real window as its window layer names it (never 0): on Windows its `HWND`, elsewhere the
+/// layer's own number for it, by which the drawing side knows it (`d3d9_wgpu::register_window`).
+/// This file only keeps it and hands it on (to the layer's functions and to the backend's
+/// `CreateDevice`); it never reads it as a Win32 handle.
+pub type RealWindow = isize;
+
 /// What a window layer gives this file, the same on every system: the thread that makes the real
-/// windows ([`Request`]s sent to it, each answered with the real window, 0 when it failed), and the
-/// real window following the game's title and position.
+/// windows ([`Request`]s sent to it, each answered with the [`RealWindow`], 0 when it failed), and
+/// the real window following the game's title and position.
+///
+/// What every layer gives the drawing side and calls here, so that nothing of one system's crosses
+/// to this file:
+/// - each window's surface handles (raw-window-handle), its client area's size in real pixels,
+///   whether it is minimised or hidden, and its monitor's refresh rate: `d3d9_wgpu::GameWindow`,
+///   made known by its [`RealWindow`] (on Windows `d3d9_wgpu` reads the same four from Windows on
+///   the `HWND`, in the window's own DPI awareness);
+/// - its keyboard and mouse by DirectInput's codes into [`Input`] (`input.rs`: `key`, `button`,
+///   `moved`; F11 the frame-rate counter's by `d3d9_wgpu::frame_rate::key`, F12 the report's),
+///   `input::focus_lost` when it loses the focus, [`window_closed`] when the player closes it, and
+///   `d3d9_wgpu::window_changed` when it is activated, shown again or its scale changes. The
+///   Win32 window keeps its own message handling for keys and the mouse (moved unchanged in PR 3a)
+///   into the same [`Input`].
 const _: (WindowThread, WindowTitled, WindowMoved) = (window_thread, window_titled, window_moved);
+
+/// The player closed the game's window (its close button, or the system's way to close a window):
+/// the run ends, as the original's does. What the host asked to finish first runs before (the
+/// copy-out of saves, `crate::on_exit`). The window runs on its own thread, so this covers only the
+/// jobs main has already handed on: a save written in the frame still running on main when the
+/// window closes can be lost.
+fn window_closed() -> ! {
+    eprintln!(
+        "NV_D3D9={}: the game's window was closed: the run ends",
+        tag()
+    );
+    crate::run_exit_hooks();
+    crate::end_process(0)
+}
 
 /// The real Direct3D 9 device a backend hands the layer's side channel (D3DX's texture loading,
 /// `super::d3dxreal`): Windows only; elsewhere there is none.
@@ -222,7 +255,7 @@ fn tag() -> &'static str {
 /// handle, the stream to the backend, and what was asked of it.
 #[derive(Default)]
 pub struct Real {
-    windows: HashMap<u32, isize>,
+    windows: HashMap<u32, RealWindow>,
     /// The stream to the backend, made with the first `IDirect3D9`.
     stream: Option<Stream>,
     /// The open cut's slot (`super::d3d9draw`): where the drawing side's calls record, until the
@@ -316,7 +349,7 @@ pub(crate) fn test_forwarded(e: &mut Engine, object: u32) {
 
 /// The real window of a modelled window handle, when it has one (under the device lock with real
 /// threads: the window functions make them, the device presents in them).
-pub fn real_window(e: &Engine, handle: u32) -> Option<isize> {
+pub fn real_window(e: &Engine, handle: u32) -> Option<RealWindow> {
     let _device = engine_core::real_threads::device_guard(e);
     device_ref!(e).real.windows.get(&handle).copied()
 }
@@ -542,15 +575,28 @@ pub fn take_input() -> Input {
 
 /// A window to make on the window thread: title, style, extended style, rectangle, the real
 /// parent (0 for a top-level window), how a top-level `WS_VISIBLE` one is shown, and where the
-/// handle goes (0 when it failed).
+/// handle goes (0 when it failed). The styles are the game's own (its `CreateWindowExA`
+/// arguments, the modelled window's), which the Win32 window hands Windows as they are; another
+/// window layer reads only what they ask for ([`Request::visible`]).
 struct Request {
     title: Vec<u8>,
     style: u32,
     ex_style: u32,
     rect: [i32; 4],
-    parent: isize,
+    parent: RealWindow,
     show: Showing,
-    reply: std::sync::mpsc::Sender<isize>,
+    reply: std::sync::mpsc::Sender<RealWindow>,
+}
+
+/// `WS_VISIBLE`: the game asks for its window shown.
+const WS_VISIBLE_STYLE: u32 = 0x1000_0000;
+
+impl Request {
+    /// Whether the game asks for the window shown (`WS_VISIBLE` in its style).
+    #[cfg_attr(windows, allow(dead_code))]
+    fn visible(&self) -> bool {
+        self.style & WS_VISIBLE_STYLE != 0
+    }
 }
 
 /// Whether the game's window is shown without taking the focus (`NV_D3D9_BACKGROUND`, for the
@@ -3272,6 +3318,27 @@ pub(crate) fn real_texture(e: &mut Engine, texture: u32) -> Option<IDirect3DBase
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window layer other than Win32's reads from the game's styles only whether the window is
+    /// to be shown: `WS_VISIBLE`, whatever else the style holds.
+    #[test]
+    fn a_request_is_visible_when_the_game_asks_for_it() {
+        let request = |style| Request {
+            title: Vec::new(),
+            style,
+            ex_style: 0,
+            rect: [0; 4],
+            parent: 0,
+            show: Showing::Activated,
+            reply: std::sync::mpsc::channel().0,
+        };
+        assert!(request(0x1000_0000).visible());
+        // WS_OVERLAPPEDWINDOW | WS_VISIBLE, the game's framed window.
+        assert!(request(0x10cf_0000).visible());
+        assert!(!request(0x00cf_0000).visible());
+        assert!(!request(0).visible());
+        assert!(!request(0xefff_ffff).visible());
+    }
 
     /// With real threads, a kernel-locked function that reaches the device's state takes the device
     /// lock first: `SetWindowPos` (an import, run under the kernel lock) moves the real window

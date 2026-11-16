@@ -86,14 +86,23 @@ const KEY_MESSAGES: [u32; 4] = [0x100, 0x101, 0x104, 0x105];
 /// While no wgpu device draws the game's window ([`window_device`]: the real Direct3D 9
 /// fallback has no counter) F11 is not taken: false, and it reaches the game.
 pub fn window_key(message: u32, wparam: usize, lparam: isize) -> bool {
-    if wparam != KEY
-        || !KEY_MESSAGES.contains(&message)
-        || WINDOW_DEVICES.load(Ordering::Relaxed) == 0
-    {
+    if wparam != KEY || !KEY_MESSAGES.contains(&message) {
         return false;
     }
     let down = message == 0x100 || message == 0x104;
-    if down && lparam & (1 << 30) == 0 {
+    key(down, lparam & (1 << 30) != 0)
+}
+
+/// The counter's key (F11) went down (`repeat`: again while held) or up, from any window layer
+/// (the Win32 window's messages through [`window_key`], another layer's key events by its own
+/// key codes): true when it is taken, and so goes no further. Its first press toggles the
+/// counter; repeats and the release change nothing. While no wgpu device draws the game's window
+/// ([`window_device`]) it is not taken: false, and it reaches the game.
+pub fn key(down: bool, repeat: bool) -> bool {
+    if WINDOW_DEVICES.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    if down && !repeat {
         SHOWN.fetch_xor(true, Ordering::Relaxed);
     }
     true
@@ -713,7 +722,16 @@ mod tests {
         // Not a key message.
         assert!(!window_key(0x102, KEY, 0));
         assert!(!shown());
+        // Another window layer's F11 (by its own key codes): the same rules.
+        assert!(key(true, false));
+        assert!(shown());
+        assert!(key(true, true) && key(false, true));
+        assert!(shown(), "held and let go: still on");
+        assert!(key(true, false));
+        assert!(!shown());
         set_window_device(false);
+        assert!(!key(true, false));
+        assert!(!shown(), "no wgpu device: the game's key");
     }
 
     /// The quads: a plate in the top-right corner, then each character right-aligned on its line,

@@ -38,15 +38,7 @@ extern "system" fn window_procedure(
     // Closing the game's window ends the run (the player's way out, also when the game has
     // stopped); the window itself is not destroyed first.
     if message == WM_CLOSE {
-        eprintln!(
-            "NV_D3D9={}: the game's window was closed: the run ends",
-            tag()
-        );
-        // What the host asked to finish first (the copy-out of saves, `crate::on_exit`). The window
-        // runs on its own thread, so this covers only the jobs main has already handed on: a save
-        // written in the frame still running on main when the window closes can be lost.
-        crate::run_exit_hooks();
-        crate::end_process(0);
+        window_closed();
     }
     // Activated (Alt+Tab back, a click, the screen unlocked), the display changed, or the machine
     // woke: wgpu asks its window for a frame at once rather than at the end of a rest
@@ -101,10 +93,7 @@ extern "system" fn window_procedure(
 }
 
 fn release_input() {
-    if let Ok(mut i) = input().lock() {
-        i.keys = [false; 256];
-        i.buttons = [false; 8];
-    }
+    input::focus_lost();
     let_go_of_cursor();
 }
 

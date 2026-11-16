@@ -508,7 +508,9 @@ impl Window {
 /// A window of a window layer other than Win32's (`engine-platform`'s winit window on Linux and
 /// macOS), as the drawing side needs it: its handles for the surface, its client area's size in
 /// real pixels, whether it is minimised (or hidden from view), and its monitor's refresh rate. On
-/// Windows the window is an `HWND` and these come from Windows itself.
+/// Windows the window is an `HWND` and these come from Windows itself. The size is in real
+/// (physical) pixels whatever the display's scale, so no DPI awareness is borrowed for it here
+/// ([`DpiScope`] is Windows' alone: there a thread's reads of a window depend on its awareness).
 #[cfg(not(windows))]
 pub trait GameWindow:
     raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle + Send + Sync

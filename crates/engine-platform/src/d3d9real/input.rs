@@ -5,7 +5,8 @@
 //! press the report, the buttons in DirectInput's order, the wheel 120 a notch, the motion in whole
 //! counts. Every system compiles this file, so its tables and counts are tested everywhere.
 
-// On Windows only the tests use it (the Win32 window puts its messages there itself).
+// On Windows the Win32 window calls only `focus_lost` (it puts its key and mouse messages into
+// `Input` itself, `win32.rs`); the rest is used there by the tests.
 #![cfg_attr(windows, allow(dead_code))]
 
 use super::{input, shot, Input};
@@ -13,10 +14,6 @@ use super::{input, shot, Input};
 /// `DIK_F11`, `DIK_F12`.
 const DIK_F11: u8 = 0x57;
 const DIK_F12: u8 = 0x58;
-
-/// `WM_KEYDOWN`, `WM_KEYUP`: the key messages `d3d9_wgpu::frame_rate::window_key` reads.
-const WM_KEYDOWN: u32 = 0x100;
-const WM_KEYUP: u32 = 0x101;
 
 /// The DirectInput key code of a key named by its UI Events `code` value (winit's `KeyCode`
 /// names: `KeyA`, `ArrowUp`, `NumpadEnter`): the code Windows' key messages give the game for the
@@ -167,20 +164,14 @@ pub(super) fn dik_of_code(code: &str) -> Option<u8> {
 }
 
 /// A key of the window went down or up (`repeat`: down again while held), by DirectInput code:
-/// as `win32.rs`'s `window_input` takes a key message. F11 goes to the frame-rate counter (asked
-/// with the message Windows would send, so the counter decides alike: its first press toggles,
+/// as `win32.rs`'s `window_input` takes a key message. F11 goes to the frame-rate counter, by the
+/// rules the Win32 window's F11 follows (`d3d9_wgpu::frame_rate::key`: its first press toggles,
 /// repeats and the release change nothing, and the game never sees it while wgpu draws the
 /// window); F12's first press asks for the report (the key still reaches the game); every other
 /// key is held or let go.
 pub(super) fn key(code: u8, down: bool, repeat: bool) {
     let Ok(mut i) = input().lock() else { return };
-    let message = if down { WM_KEYDOWN } else { WM_KEYUP };
-    let vk = if code == DIK_F11 {
-        d3d9_wgpu::frame_rate::KEY
-    } else {
-        0
-    };
-    if d3d9_wgpu::frame_rate::window_key(message, vk, if repeat { 1 << 30 } else { 0 }) {
+    if code == DIK_F11 && d3d9_wgpu::frame_rate::key(down, repeat) {
         return;
     }
     if down && !repeat && code == DIK_F12 {

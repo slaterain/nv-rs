@@ -25,7 +25,11 @@
 //! - macOS: winit's event loop must run on the program's main thread, which the port does not hand
 //!   to the window layer yet (the game's own main thread runs there). [`run`] is the loop, on
 //!   whatever thread calls it; until a host calls it on the main thread, macOS has no window, and
-//!   says so.
+//!   the run ends with a line saying so (as it does where there is no window system to show one
+//!   in: a run without its window would go on drawing nothing).
+//! - The contract with `super` and the drawing side (`super`'s `const _` check): only the
+//!   [`RealWindow`] number, the game's own window styles (read through [`Request::visible`]) and
+//!   portable calls cross; nothing of winit's or of Windows'.
 
 use super::*;
 use raw_window_handle::{
@@ -43,9 +47,6 @@ use winit::event::{
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{CursorGrabMode, Fullscreen, Window, WindowId};
-
-/// `WS_VISIBLE`: the game asks for its top-level window shown.
-const WS_VISIBLE: u32 = 0x1000_0000;
 
 /// How often the window thread looks for windows to make between the system's events (as the
 /// Win32 window thread waits for messages at most 10 ms before it looks).
@@ -88,11 +89,11 @@ impl d3d9_wgpu::GameWindow for Shown {
 /// own for a top-level window).
 struct Entry {
     shown: Arc<Shown>,
-    top: isize,
+    top: RealWindow,
 }
 
-fn windows() -> std::sync::MutexGuard<'static, HashMap<isize, Entry>> {
-    static WINDOWS: OnceLock<Mutex<HashMap<isize, Entry>>> = OnceLock::new();
+fn windows() -> std::sync::MutexGuard<'static, HashMap<RealWindow, Entry>> {
+    static WINDOWS: OnceLock<Mutex<HashMap<RealWindow, Entry>>> = OnceLock::new();
     WINDOWS
         .get_or_init(Default::default)
         .lock()
@@ -100,13 +101,13 @@ fn windows() -> std::sync::MutexGuard<'static, HashMap<isize, Entry>> {
 }
 
 /// The next window's id.
-fn next_id() -> isize {
+fn next_id() -> RealWindow {
     static NEXT: AtomicIsize = AtomicIsize::new(1);
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 /// `id`'s window as made known to `super` and to the drawing side.
-fn keep(id: isize, shown: &Arc<Shown>, top: isize) {
+fn keep(id: RealWindow, shown: &Arc<Shown>, top: RealWindow) {
     windows().insert(
         id,
         Entry {
@@ -123,26 +124,29 @@ pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Send
     THREAD.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<Request>();
         if cfg!(target_vendor = "apple") {
-            // The receiver goes: each request is refused (`super::window_created` says so).
             eprintln!(
-                "NV_D3D9={}: on macOS the game's window needs the program's main thread, which is not handed to the window layer yet: no window",
+                "NV_D3D9={}: on macOS the game's window needs the program's main thread, which is not handed to the window layer yet: no window, the run ends",
                 tag()
             );
-            drop(rx);
-        } else if let Err(e) = std::thread::Builder::new()
+            crate::end_process(1);
+        }
+        if let Err(e) = std::thread::Builder::new()
             .name("nv-d3d9-window".into())
             .spawn(move || run(rx))
         {
-            eprintln!("NV_D3D9={}: the window thread could not start: {e}", tag());
+            eprintln!(
+                "NV_D3D9={}: the window thread could not start ({e}): no window, the run ends",
+                tag()
+            );
+            crate::end_process(1);
         }
         Mutex::new(tx)
     })
 }
 
 /// The window layer's loop on the calling thread: the windows asked for in `requests` are made,
-/// the system's events pumped, until the run ends. Returns at once when there is no window system
-/// to show a window in (no X server or Wayland compositor), with a line saying so; the requests
-/// are refused then.
+/// the system's events pumped, until the run ends. Where there is no window system to show a
+/// window in (no X server or Wayland compositor) the run ends with a line saying so.
 pub(super) fn run(requests: Receiver<Request>) {
     let mut builder = EventLoop::builder();
     // The game's window has a thread of its own, not the program's main thread (X11 and Wayland
@@ -159,10 +163,10 @@ pub(super) fn run(requests: Receiver<Request>) {
         Ok(l) => l,
         Err(e) => {
             eprintln!(
-                "NV_D3D9={}: no window system to show the game's window in ({e}): no window",
+                "NV_D3D9={}: no window system to show the game's window in ({e}): no window, the run ends",
                 tag()
             );
-            return;
+            crate::end_process(1);
         }
     };
     let mut layer = Layer {
@@ -181,11 +185,11 @@ pub(super) fn run(requests: Receiver<Request>) {
 struct Layer {
     requests: Receiver<Request>,
     /// The top-level windows by winit's id: their ids.
-    tops: HashMap<WindowId, isize>,
+    tops: HashMap<WindowId, RealWindow>,
     /// Whether a window of the game's has the focus.
     focused: bool,
     /// The window holding the cursor, if one does.
-    held: Option<isize>,
+    held: Option<RealWindow>,
     /// The motion's fractions not given yet (x, y, the wheel in its 120ths).
     rest: [f64; 3],
 }
@@ -201,7 +205,7 @@ impl Layer {
     }
 
     /// The real window of `request`: its id, `None` when it could not be made.
-    fn make(&mut self, event_loop: &ActiveEventLoop, request: &Request) -> Option<isize> {
+    fn make(&mut self, event_loop: &ActiveEventLoop, request: &Request) -> Option<RealWindow> {
         let [left, top, right, bottom] = request.rect;
         let size = (
             right.wrapping_sub(left).max(1) as u32,
@@ -243,7 +247,7 @@ impl Layer {
                 return None;
             }
         };
-        if request.style & WS_VISIBLE != 0 && request.show != Showing::Never {
+        if request.visible() && request.show != Showing::Never {
             window.set_visible(true);
         }
         let winit_id = window.id();
@@ -260,7 +264,7 @@ impl Layer {
     /// Holds the cursor in the window `id` and hides it there, as Windows does for a program whose
     /// DirectInput mouse is exclusive and in the foreground: locked where the system can, else kept
     /// inside the window.
-    fn hold(&mut self, id: isize) {
+    fn hold(&mut self, id: RealWindow) {
         let Some(shown) = windows().get(&id).map(|e| Arc::clone(&e.shown)) else {
             return;
         };
@@ -306,14 +310,7 @@ impl ApplicationHandler for Layer {
         };
         match event {
             // Closing the game's window ends the run (the player's way out), as on Windows.
-            WindowEvent::CloseRequested => {
-                eprintln!(
-                    "NV_D3D9={}: the game's window was closed: the run ends",
-                    tag()
-                );
-                crate::run_exit_hooks();
-                crate::end_process(0);
-            }
+            WindowEvent::CloseRequested => window_closed(),
             // Activated, its display's scale changed, shown again: wgpu asks the window for a
             // frame at once rather than at the end of a rest (`d3d9_wgpu::window_changed`).
             WindowEvent::Focused(true) => {
