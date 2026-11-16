@@ -625,6 +625,33 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-9",
     },
+    // HUDMainMenu::Create 0076bfe0, the five hardcore texts' zoom: UI Organizer's short jumps over
+    // each SetFloat(zoom).
+    Entry {
+        addr: 0x0076_f688,
+        owners: UIO,
+        step: "UIO-3",
+    },
+    Entry {
+        addr: 0x0076_f742,
+        owners: UIO,
+        step: "UIO-3",
+    },
+    Entry {
+        addr: 0x0076_f824,
+        owners: UIO,
+        step: "UIO-3",
+    },
+    Entry {
+        addr: 0x0076_f92d,
+        owners: UIO,
+        step: "UIO-3",
+    },
+    Entry {
+        addr: 0x0076_fa5e,
+        owners: UIO,
+        step: "UIO-3",
+    },
     // HUDMainMenu::SetInfoForRef 00775a00: JIP LN NVSE's InteractionDisabled (SetRolloverTextHook).
     // This hook has TWO sites in JIP: the activation half is 0x943279 (PlayerCharacter::Update
     // 0093e860, step 3.5c).
@@ -946,6 +973,20 @@ pub const SITES: &[Entry] = &[
         owners: UIO,
         step: "UIO-1",
     },
+    // Tile::FinalPostParse 00a037e0, a text tile's trait test: UI Organizer's rewrite (the zoom
+    // also rebuilds the text).
+    Entry {
+        addr: 0x00a0_3923,
+        owners: UIO,
+        step: "UIO-3",
+    },
+    // Tile::Value::CalculateValue 00a09410, the operation's dispatch: UI Organizer's jump table
+    // (its own operators, 17 new ones among them).
+    Entry {
+        addr: 0x00a0_968c,
+        owners: UIO,
+        step: "UIO-3",
+    },
     // Menu::~Menu 00a1c520 and TileMenu::PostParse 00a1f160, a menu's shown byte: JIP LN NVSE's MenuState.
     Entry {
         addr: 0x00a1_c573,
@@ -957,6 +998,13 @@ pub const SITES: &[Entry] = &[
         addr: 0x00a1_f2f9,
         owners: JIP,
         step: "3.5a",
+    },
+    // TileText::MakeNode 00a21af0, the call of Font::CreateText: UI Organizer's
+    // TileTextApplyScaleHook (the text's zoom).
+    Entry {
+        addr: 0x00a2_21f8,
+        owners: UIO,
+        step: "UIO-3",
     },
     // bhkCharacterController::SetVelocityModifier 00c6d4d0, its entry: JIP LN NVSE's
     // ApplyActorVelocity.
@@ -2221,9 +2269,9 @@ impl Engine {
         self.extend.expression_alt_buffer = buffer;
     }
 
-    /// Whether UI Organizer is built in and switched on (`crates/uio`, its row): its seams in
-    /// `InterfaceManager::Initialize` and `Tile::ReadFile` read this first, one load, and with
-    /// false run the exe's path untouched.
+    /// Whether UI Organizer is built in and switched on (`crates/uio`, its row): its seams (the
+    /// `SITES` rows owned by `Owner::Uio`) read this first, one load, and with false run the
+    /// exe's path untouched.
     #[inline]
     pub fn uio(&self) -> bool {
         self.extend.uio
@@ -2853,9 +2901,21 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 114);
-        // UI Organizer's two (UIOLoad's place and ResolveXMLFileHook's), its alone.
-        for a in [0x0070_a049, 0x00a0_1b87] {
+        assert_eq!(SITES.len(), 122);
+        // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
+        // FinalPostParse, the operators' dispatch, the text scale), its alone.
+        for a in [
+            0x0070_a049,
+            0x0076_f688,
+            0x0076_f742,
+            0x0076_f824,
+            0x0076_f92d,
+            0x0076_fa5e,
+            0x00a0_1b87,
+            0x00a0_3923,
+            0x00a0_968c,
+            0x00a2_21f8,
+        ] {
             assert!(find(SITES, Owner::Uio, a).is_some(), "{a:08x}");
             assert!(find(SITES, Owner::Jip, a).is_none(), "{a:08x}");
         }
