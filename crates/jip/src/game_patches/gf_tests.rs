@@ -284,6 +284,8 @@ fn g110_answers_the_combat_reaction() {
         record(e, &[a[0], a[1]]);
         answer(2)
     });
+    // The exe's modifier walk (`0x48BF50`, what `0x5FD3B0` calls) answers otherwise.
+    e.register(0x0048_bf50, |_, _| answer(0x55));
     assert_eq!(e.site(FACTION_REACTION.addr(), &[FACTION, OTHER]), Some(2));
     assert_eq!(asked(&e), vec![FACTION + 0x24, OTHER]);
     assert_eq!(faction_reaction(&mut e, &[0, OTHER]), Some(2));
