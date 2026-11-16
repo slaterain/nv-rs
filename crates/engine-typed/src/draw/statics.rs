@@ -267,11 +267,11 @@ mod tests {
 
     /// The held accumulator is a counted pointer (`00b54b10`): the drawing side holds the world's accumulator while main's
     /// extra pass holds its own, both letting the cut's go. Its count goes down once, as in the serial order (the draw's
-    /// hold, then main's: the cut's object let go once, the world's held and let go); the second run's case, main
-    /// holding nothing new, leaves the drawing side's object held by the join.
+    /// hold, then main's: the cut's object let go once, the world's held and let go); main holding nothing leaves the drawing
+    /// side's object held by the join; main holding the cut's object again (already held in its eyes) keeps it held.
     #[test]
     fn the_held_accumulator_is_let_go_once() {
-        for main_holds in [true, false] {
+        for main_holds in [Some(2u32), None, Some(0)] {
             let mut e = Engine::new();
             if !e.mem.is_mapped(0x011f_4000) {
                 e.map(0x011f_4000, 0x6000);
@@ -299,20 +299,22 @@ mod tests {
             // The drawing side's hold.
             super::super::own::hold_accumulator(&mut e, world);
             let packet = capture::detach(&e).expect("the packet");
-            if main_holds {
-                super::super::own::hold_accumulator(&mut e, extra);
+            if let Some(k) = main_holds {
+                let object = [cut, world, extra][k as usize];
+                super::super::own::hold_accumulator(&mut e, object);
             }
             assert!(capture::attach(packet).is_ok());
             let _ = capture::end(&mut e);
             let counts = [cut, world, extra].map(|a| e.mem.u32(a + 4));
-            if main_holds {
+            let (want, held) = match main_holds {
                 // Serial: cut 2 -> 1, world 1 -> 2 -> 1, extra 1 -> 2; held: extra.
-                assert_eq!(counts, [1, 1, 2]);
-                assert_eq!(e.mem.u32(0x011f_95f0), extra);
-            } else {
-                assert_eq!(counts, [1, 2, 1]);
-                assert_eq!(e.mem.u32(0x011f_95f0), world);
-            }
+                Some(2) => ([1, 1, 2], extra),
+                // Serial: cut 2 -> 1 -> 2, world 1 -> 2 -> 1; held: the cut's.
+                Some(_) => ([2, 1, 1], cut),
+                None => ([1, 2, 1], world),
+            };
+            assert_eq!(counts, want, "{main_holds:?}");
+            assert_eq!(e.mem.u32(0x011f_95f0), held, "{main_holds:?}");
         }
     }
 

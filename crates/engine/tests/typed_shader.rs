@@ -17631,7 +17631,8 @@ fn set_camera_data() {
         constant_words(e, 0x0101_2054, &[0xbf80_0000]);
         constant_words(e, 0x0109_9378, &[0x4f80_0000]);
         // The render target group's size, the render state's handedness, the device's slots.
-        let group = obj(e, 0x10, vtable(e, &[]));
+        let group_vt = vtable(e, &[]);
+        let group = obj(e, 0x10, group_vt);
         set(e, r + 0x888, group);
         slots!(e; 0x48, 0x4c, 0x8c, 0x90, 0xb0, 0xbc);
         set(e, RETS + 0x4c, c.word(4));
