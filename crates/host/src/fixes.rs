@@ -43,6 +43,7 @@ pub static FIXES: &[Fix] = &[
     JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
+    MCM,
     UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
@@ -469,12 +470,30 @@ fn install_uio(e: &mut Engine) {
     uio::set_on(e, true);
 }
 
+/// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
+/// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
+/// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). Off in every preset ([`OFF_IN_EVERY_PRESET`])
+/// until the maintainer has seen it work; the intended rule after that is automatic (on when the
+/// load order has MCM), with no switch. The row sets a flag; `mcm::install` (after JIP, before
+/// UIO, in `install_rows_and_extenders`) registers the commands.
+pub const MCM: Fix = Fix {
+    name: "The Mod Configuration Menu's plugin built in",
+    env: "NV_MCM",
+    addresses: &[],
+    summary: "The Mod Configuration Menu's NVSE plugin (MCM.dll) built in: its script commands, which MCM's menu needs to show",
+    install: install_mcm,
+};
+
+fn install_mcm(e: &mut Engine) {
+    mcm::set_on(e, true);
+}
+
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, UIO.env, JIP_INSTALLED.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, MCM.env, UIO.env, JIP_INSTALLED.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -486,6 +505,7 @@ const NO_ADDRESS: &[&str] = &[
     JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
+    MCM.name,
     UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
