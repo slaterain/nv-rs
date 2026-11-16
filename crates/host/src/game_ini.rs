@@ -104,6 +104,8 @@ pub struct Keys {
     pub menu_frame_limit: Option<u32>,
     /// `bShowFrameRate`: the frame-rate counter shown from the start (`d3d9_wgpu::frame_rate`).
     pub show_frame_rate: Option<bool>,
+    /// `bAmbientOcclusion`: the new lighting (`d3d9_wgpu::scene_light`).
+    pub ambient_occlusion: Option<bool>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
     /// The fix rows the file turns on or off, by `crate::fixes::Fix::env`.
@@ -148,6 +150,10 @@ impl Keys {
                 "bShowFrameRate" => {
                     keys.show_frame_rate = flag(raw);
                     keys.show_frame_rate.is_some()
+                }
+                "bAmbientOcclusion" => {
+                    keys.ambient_occlusion = flag(raw);
+                    keys.ambient_occlusion.is_some()
                 }
                 "bSteppedThreads" => {
                     keys.stepped_threads = flag(raw);
@@ -295,6 +301,7 @@ mod tests {
                 "iFrameLimit",
                 "iMenuFrameLimit",
                 "bShowFrameRate",
+                "bAmbientOcclusion",
                 "bSteppedThreads",
                 "bRenderThread"
             ]
@@ -322,6 +329,10 @@ mod tests {
         assert_eq!(
             keys.show_frame_rate,
             Some(crate::fixes::PLAY_SHOW_FRAME_RATE)
+        );
+        assert_eq!(
+            keys.ambient_occlusion,
+            Some(crate::fixes::PLAY_AMBIENT_OCCLUSION)
         );
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());

@@ -539,6 +539,12 @@ pub const PLAY_RENDERER: Renderer = Renderer::Vulkan;
 /// test.
 pub const PLAY_SHOW_FRAME_RATE: bool = false;
 
+/// Whether the new lighting (ambient occlusion and sun contact shadows, port-added:
+/// `d3d9_wgpu::scene_light`, Vulkan only) is on when neither `NV_AO` nor `Fallout.ini`'s
+/// `bAmbientOcclusion` says ([`Choice::ambient_occlusion`]): off, in every preset (a new look, not
+/// a fix). `crates/host/data/game_ini.tsv`'s `bAmbientOcclusion` row is held to it by a test.
+pub const PLAY_AMBIENT_OCCLUSION: bool = false;
+
 /// Who draws the game ([`Choice::renderer`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Renderer {
@@ -636,6 +642,11 @@ pub struct Choice {
     /// else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bShowFrameRate`; else
     /// [`PLAY_SHOW_FRAME_RATE`], off. Not part of any preset.
     pub show_frame_rate: bool,
+    /// Whether the new lighting is on (ambient occlusion and sun contact shadows,
+    /// `d3d9_wgpu::scene_light`, Vulkan only): `NV_AO` when set (`1` on, else off); else, in a
+    /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
+    /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
+    pub ambient_occlusion: bool,
     /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,
     /// for stepped threads; `crate::draw_thread::install` decides the draw family's capture mode from it).
     pub draw_poison: bool,
@@ -658,6 +669,7 @@ impl Choice {
             borderless: None,
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
+            ambient_occlusion: PLAY_AMBIENT_OCCLUSION,
             ini_note: None,
             draw_poison: false,
         }
@@ -813,6 +825,7 @@ impl Choice {
             // The same: play's renderer, the file's choice over it; none for any other run.
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
+            ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
             ini_note: ini.bad_line(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
         };
@@ -876,6 +889,9 @@ impl Choice {
         }
         if let Some(value) = env("NV_SHOW_FPS").filter(|v| !v.trim().is_empty()) {
             choice.show_frame_rate = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_AO").filter(|v| !v.trim().is_empty()) {
+            choice.ambient_occlusion = value.trim() == "1";
         }
         if test {
             choice.preset = Preset::Vanilla;
@@ -1917,6 +1933,29 @@ mod tests {
         assert!(!with_ini(None, on, &[("NV_SHOW_FPS", "0")]).show_frame_rate);
         let asked = Choice::from_parts(None, env_of(&[("NV_SHOW_FPS", "1")])).unwrap();
         assert!(asked.show_frame_rate);
+    }
+
+    /// The new lighting is off in every run and preset unless asked for: `bAmbientOcclusion=1` in
+    /// a launcher's play run, or `NV_AO=1` anywhere, which wins.
+    #[test]
+    fn the_new_lighting_is_off_unless_asked_for() {
+        assert!(!Choice::vanilla().ambient_occlusion);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!("[nv-rs General]\nsPreset={preset}\n");
+            assert!(!with_ini(None, &file, &[]).ambient_occlusion, "{preset}");
+        }
+        assert!(!Choice::from_parts(None, no_env).unwrap().ambient_occlusion);
+        let on = "[nv-rs Display]\nbAmbientOcclusion=1\n";
+        assert!(with_ini(None, on, &[]).ambient_occlusion);
+        assert!(!with_ini(None, "[nv-rs Display]\nbAmbientOcclusion=0\n", &[]).ambient_occlusion);
+        let bad = with_ini(None, "[nv-rs Display]\nbAmbientOcclusion=yes\n", &[]);
+        assert!(!bad.ambient_occlusion);
+        assert!(bad.ini_note.unwrap().ends_with("bAmbientOcclusion=yes"));
+        // A test never reads the file; the variable decides there and over the file.
+        assert!(!with_ini(None, on, &[("NV_SHOT", "x")]).ambient_occlusion);
+        assert!(!with_ini(None, on, &[("NV_AO", "0")]).ambient_occlusion);
+        let asked = Choice::from_parts(None, env_of(&[("NV_AO", "1")])).unwrap();
+        assert!(asked.ambient_occlusion);
     }
 
     /// Lowest to highest: default, preset, settings.ini (the fallback), Fallout.ini, environment.

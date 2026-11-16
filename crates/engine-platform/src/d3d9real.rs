@@ -632,6 +632,23 @@ pub fn want_frame_rate(on: bool) {
     d3d9_wgpu::frame_rate::show(on);
 }
 
+/// What the new lighting reads of the game for a frame (`d3d9_wgpu::scene_light`).
+pub use d3d9_wgpu::scene_light::GameView as SceneView;
+
+/// The new lighting's reader of the game's camera and sun ([`want_scene_light`]); unset while off.
+static SCENE_LIGHT: std::sync::OnceLock<fn(&Engine) -> Option<SceneView>> =
+    std::sync::OnceLock::new();
+
+/// Turns the new lighting on (ambient occlusion and sun contact shadows, `d3d9_wgpu::scene_light`;
+/// the run's choice, `host::fixes::Choice::ambient_occlusion`), before the game makes its device:
+/// at each depth-only `Clear` (the game's, before its first-person arms) the frame's camera and
+/// sun, as `read` finds them in the game, are recorded for the backend. Never called while off:
+/// nothing is then read or recorded.
+pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>) {
+    d3d9_wgpu::scene_light::enable(true);
+    let _ = SCENE_LIGHT.set(read);
+}
+
 /// `CreateWindowExA` made the modelled window `handle` (a child of `parent` when that is not
 /// 0): a real window of the same title, styles and rectangle (a child of the parent's real
 /// window).
@@ -1092,6 +1109,27 @@ pub fn clear(
 ) {
     if stream_of(real(e), this).is_none() {
         return;
+    }
+    // `D3DCLEAR_ZBUFFER` alone: the game's depth-only clear of its scene before the first-person
+    // arms. With the new lighting on ([`want_scene_light`]), the frame's camera and sun first.
+    if flags == 2 {
+        if let Some(read) = SCENE_LIGHT.get() {
+            let params = read(e)
+                .as_ref()
+                .and_then(d3d9_wgpu::scene_light::Params::from_game);
+            if let Some(p) = params {
+                let m = p.to_words();
+                record(
+                    e,
+                    this,
+                    Cmd::SetTransform {
+                        device: this,
+                        state: d3d9_wgpu::scene_light::STATE,
+                        matrix: Data::from_words(&m),
+                    },
+                );
+            }
+        }
     }
     // The rectangles' words on the stack up to 16 rectangles (the game clears one or none).
     let mut inline = [0u32; 64];
