@@ -1262,7 +1262,7 @@ fn write_value(r: &mut Records, v: &Value) {
 /// The save callback: JIP's own records ([`save_own`]), each followed by the carried records of
 /// its type, then the carried records of other types, all in the order they were read.
 ///
-/// While JIP answers "not installed" ([`crate::ANSWERS_INSTALLED`]) it writes nothing when it
+/// While JIP answers "not installed" ([`crate::set_answers_installed`]) it writes nothing when it
 /// holds nothing (no section loaded, no data a command made, its flags as reset), so the co-save
 /// is the one xNVSE writes without JIP: xNVSE writes a plugin's section only when the plugin
 /// opens a record (`HandleSaveGame`, `if (s_pluginHeader.numChunks)` (xNVSE)), and JIP writes
