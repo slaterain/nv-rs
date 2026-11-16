@@ -8096,8 +8096,8 @@ mod tests {
         let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
         // (word, answer, the 0x4000 answer, triggered, asked for both, flag tests)
         for (word, answer, flag_4000, triggered, both, tests) in [
-            (0, Some(0), 0u32, true, false, 1usize),
-            (jip_patches::INSTALLED, Some(0), 0, true, false, 1),
+            (0, Some(0), 1u32, true, false, 1usize),
+            (jip_patches::INSTALLED, Some(0), 1, true, false, 1),
             (fixes, Some(1), 0, true, false, 0),
             (fixes, Some(0x101), 0, true, false, 0),
             (fixes, Some(0), 1, false, true, 1),
