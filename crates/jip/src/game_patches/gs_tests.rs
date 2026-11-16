@@ -92,9 +92,9 @@ fn each_handler_is_at_its_row_after_install() {
     // G71: a null process answers 0, another the exe's call.
     assert_eq!(e.site(FURNITURE_PROCESS.addr(), &[0]), Some(0));
     assert_eq!(e.site(FURNITURE_PROCESS.addr(), &[0x0600_0000]), None);
-    // G70: no reference: the terminal's flag.
-    e.mem.set_u8(TERMINAL + 0xa5, 2);
-    assert_eq!(e.site(TERMINAL_UNLOCKED.addr(), &[TERMINAL, 0]), Some(1));
+    // G70: no reference: the terminal's flag, here clear (only G70's handler answers 0).
+    e.mem.set_u8(TERMINAL + 0xa5, 0xfd);
+    assert_eq!(e.site(TERMINAL_UNLOCKED.addr(), &[TERMINAL, 0]), Some(0));
     // G34: the reference's root node.
     e.mem.set_u32(REF + 0x64, RENDER_STATE);
     e.mem.set_u32(RENDER_STATE + 0x14, 0x0700_0010);
@@ -201,6 +201,8 @@ fn o8_integers_use_integer_arithmetic() {
         int_result(i32::MIN)
     );
     assert_eq!(op(MUL, int(65_537), int(65_537)), int_result(131_073));
+    // `sub eax, ecx` wraps: 0x80000000 - 1 = 0x7FFFFFFF.
+    assert_eq!(op(SUB, int(i32::MIN), int(1)), int_result(i32::MAX));
 }
 
 /// Integer `/` and `%` by 0 keep the left; `0x80000000 / -1` and `% -1` (a trap in JIP) wrap.
@@ -353,6 +355,8 @@ fn o8_double_remainder_is_an_integer() {
     assert_eq!(op(MOD, flt(3.0e10), int(7)), int_result(-2));
     assert_eq!(op(MOD, flt(-3.0e10), int(7)), int_result(-2));
     assert_eq!(op(MOD, flt(2_147_483_647.9), int(10)), int_result(7));
+    // Exactly 2^31 is out of range: 0x80000000, whose remainder by 10 is -8.
+    assert_eq!(op(MOD, flt(2_147_483_648.0), int(10)), int_result(-8));
     assert_eq!(op(MOD, flt(-2_147_483_648.9), int(10)), int_result(-8));
     // A NaN divisor is 0x80000000: 9 % that = 9; 0x80000000 % -1 wraps to 0.
     assert_eq!(op(MOD, int(9), flt(f64::NAN)), int_result(9));

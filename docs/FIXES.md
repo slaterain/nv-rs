@@ -1158,7 +1158,7 @@ Nothing built yet.
 | (`InitGamePatches`: "PlaySound3D") | `005c22f0` (`PlaySound3D`, `0x5C240D`) | `PlaySound3D` sounds follow the reference's own model (for the player, the third-person body even in first person). Deliberate difference: a reference with no loaded model data keeps the game's choice, where JIP would crash | 3.9 GS-3 |
 | (`InitGamePatches`: `TerminalGetLockedHook`) | `0059d010` (`GetLocked`, `0x59D0B3`: the terminal's unlocked test) | `GetLocked` on a terminal also reads the reference's terminal state: a terminal marked locked-out with the value 0x80 answers unlocked | 3.9 GS-3 |
 | (`InitGamePatches`: 24 bytes at `0x59E034`) | `0059dfe0` (`IsCurrentFurnitureObj`, `0x59E034`) | `IsCurrentFurnitureObj` on an actor with no AI process answers 0 instead of crashing the game | 3.9 GS-3 |
-| (`InitJIPHooks`: `GetHitIMODHook`, JIP's own) | `005d2860` (`TESImageSpaceModifier::GetGetHit`, replaced) | The "get hit" screen effect is turned off while JIP's hit effects are off (`ToggleImmortalMode 2` today; `ToggleHitEffects` when it is built). With JIP installed and nothing turned off, the same effect as the game's (looked up by its form id each time, the game's cache not used) | 3.9 GS-3 |
+| (`InitGamePatches`: `WriteRelJump(0x5D2860, GetHitIMODHook)`; JIP's own: the same as the game until JIP's hit effects are off) | `005d2860` (`TESImageSpaceModifier::GetGetHit`, replaced) | The "get hit" screen effect is turned off while JIP's hit effects are off (`ToggleImmortalMode 2` today; `ToggleHitEffects` when it is built). With JIP installed and nothing turned off, the same effect as the game's (looked up by its form id each time, the game's cache not used) | 3.9 GS-3 |
 
 #### GW: World, sky, sound, saves, start-up
 

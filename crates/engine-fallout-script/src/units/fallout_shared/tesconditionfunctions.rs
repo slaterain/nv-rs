@@ -9846,6 +9846,10 @@ mod tests {
         jip_handlers(&mut e, JIP_FIXES, Some(0));
         assert_eq!(run(&mut e, 0x0059_dfe0, 0, furniture, 0), (true, 0.0));
         assert!(jip_seen().is_empty());
+        let (mut e, actor, _) = furniture_engine(true);
+        jip_handlers(&mut e, JIP_FIXES, Some(0));
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, 0, 0), (true, 0.0));
+        assert!(jip_seen().is_empty());
     }
 
     /// G71 with JIP's real handler: a null process gives 0.0 and the trace line after it still

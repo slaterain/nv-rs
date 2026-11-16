@@ -16,7 +16,9 @@
 //! **Always-on fixes** (`InitGamePatches`): G03 achievements after the console, G34
 //! `PlaySound3D`'s node, G70 `GetLocked` on a terminal, G71 `IsCurrentFurnitureObj`'s null
 //! process. **JIP's own** (in whenever JIP answers "installed"): G123, the "get hit" image space
-//! answered by JIP's hit effects word ([`get_hit_imod`]).
+//! answered by JIP's hit effects word ([`get_hit_imod`]). JIP installs it in `InitGamePatches`
+//! (`WriteRelJump(0x5D2860, GetHitIMODHook)`), but it is under `INSTALLED`, not the fixes row: it
+//! answers as the game does until JIP's own commands turn the hit effects off.
 //!
 //! **Threads.** Script expressions, script commands and condition functions run on the main thread
 //! and on the AI threads (their packages' conditions and scripts); `GetGetHit` on any thread that
