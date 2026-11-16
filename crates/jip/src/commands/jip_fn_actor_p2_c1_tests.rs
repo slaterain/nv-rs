@@ -212,6 +212,8 @@ fn actor_velocity_by_axis_and_its_length() {
     assert_eq!(run(&mut e, 0x27b4, ACTOR, &[]), f64::from(want));
     // Another byte than X, Y, Z: nothing (JIP would index past the vector).
     assert_eq!(run(&mut e, 0x27b4, ACTOR, &[axis(b'W')]), 0.0);
+    // Above Z too (JIP would read the fourth lane, set to 2 here).
+    assert_eq!(run(&mut e, 0x27b4, ACTOR, &[axis(b'[')]), 0.0);
     e.mem.set_u8(PROCESS + 0x28, 2);
     assert_eq!(run(&mut e, 0x27b4, ACTOR, &[axis(b'X')]), 0.0);
 }
@@ -339,6 +341,9 @@ fn actor_velocity_set_on_the_proxy() {
     for (i, want) in [-1.0f32, 7.0, 0.5, 4.0].into_iter().enumerate() {
         assert_eq!(e.mem.f32(PROXY + 0x10 + 4 * i as u32), want, "{i}");
     }
+    // An axis above Z writes nothing (JIP would write the fourth lane).
+    run(&mut e, 0x2842, ACTOR, &[axis(b'['), z(8.0)]);
+    assert_eq!(e.mem.f32(PROXY + 0x1c), 4.0);
     assert_eq!(
         e.mem.f32(CTRL + 0x4f4),
         5.0,
@@ -454,6 +459,8 @@ fn hit_node_needs_a_projectile_and_a_hit() {
     e.mem.set_u32(AREA + 0xf000, 0);
     assert_eq!(hit_node(&mut e, ACTOR), b"NULL");
     e.mem.set_u32(AREA + 0xf000, HIT);
+    // Not an actor, even with a process word where an actor has one.
+    e.mem.set_u32(PLAIN + 0x68, PROCESS);
     assert_eq!(hit_node(&mut e, PLAIN), b"NULL");
     // Another actor's impact is that actor's.
     e.mem.set_u32(ACTOR2 + 0x68, PROCESS);
@@ -523,6 +530,9 @@ fn attach_ash_pile_ex_needs_an_actor_and_an_ash_pile_form() {
     assert_eq!(run(&mut e, 0x2840, ACTOR, &[r(1)]), 0.0);
     e.mem.set_u8(pile + 6, 0x20);
     assert_eq!(run(&mut e, 0x2840, PLAIN, &[r(1)]), 0.0);
+    // A null form (JIP would test byte 6 of address 0).
+    set_ref(&mut e, 2, 0);
+    assert_eq!(run(&mut e, 0x2840, ACTOR, &[r(2)]), 0.0);
     assert!(called(ATTACH_ASH_PILE_FN).is_empty());
     assert_eq!(alt_ash_pile(&mut e), 0);
 }
@@ -666,6 +676,10 @@ fn dismember_scene(e: &mut Engine) {
     e.mem.set_u32(BPD + 0x34 + 4 * 3, PART);
     e.mem.set_u8(PART + 0x60, 8);
     e.mem.set_u8(PART + 0x63, 0x1b);
+    // The neighbours are not zero in real data: the actor value is one byte.
+    e.mem.set_u8(PART + 0x61, 0xff);
+    e.mem.set_u8(PART + 0x62, 0x64);
+    e.mem.set_u8(PART + 0x64, 0x50);
     e.mem.set_u32(PROCESS + 0x1dc + 4 * 3, LIMB);
 }
 
@@ -815,6 +829,8 @@ fn add_ref_map_marker_wants_a_reference_valid_for_hooks() {
     e.mem.set_u32(proj + 0x20, AREA + 0x6a00);
     e.mem.set_u8(AREA + 0x6a00 + 4, 0x15);
     run(&mut e, 0x27e9, proj, &[]);
+    // No reference.
+    run(&mut e, 0x27e9, 0, &[]);
     assert_eq!(listed(&e, list), vec![0]);
     assert_eq!(markers_users(&e), 0);
     assert_eq!(run(&mut e, 0x27eb, ACTOR, &[]), 0.0);
@@ -840,6 +856,17 @@ fn remove_ref_map_marker_unlinks_and_the_last_empties() {
     assert_eq!(freed().len(), 1);
     run(&mut e, 0x27ea, third, &[]);
     assert_eq!(listed(&e, list), vec![ACTOR, ACTOR2, AREA + 0x6900]);
+    // Index 0 (`RemoveMe`): the second node freed. Both freed blocks are the stand-in heap's, never
+    // the list head or the player's teammates node.
+    let gone = freed();
+    assert_eq!(gone.len(), 2);
+    for b in gone {
+        assert!(
+            (HEAP..heap_next(&e)).contains(&b),
+            "{b:08x} is a heap block"
+        );
+        assert!(b != list && b != PLAYER_REF + 0x5fc, "{b:08x}");
+    }
     assert_eq!(markers_users(&e), 1);
     assert_eq!(run(&mut e, 0x27eb, ACTOR, &[]), 1.0);
     run(&mut e, 0x27ea, ACTOR, &[]);
@@ -1004,6 +1031,10 @@ fn ground_scene(e: &mut Engine) {
     e.mem.set_u32(AREA + 0xf504, TEXTURE);
     standin!(e, TEXTURE_FN, AREA + 0xf504);
     e.mem.set_u8(TEXTURE + 0x1c, 5);
+    // The bytes after the material are not zero in real data (JIP reads one byte).
+    e.mem.set_u8(TEXTURE + 0x1d, 0x3c);
+    e.mem.set_u8(TEXTURE + 0x1e, 0x0a);
+    e.mem.set_u8(TEXTURE + 0x1f, 0x80);
 }
 
 fn ground(e: &mut Engine, this: u32) -> (f64, f64) {
@@ -1036,6 +1067,7 @@ fn ground_material_from_the_support_material() {
     assert_eq!(ground(&mut e, ACTOR).0, f64::from(table[9]));
     // No controller or not an actor: -1.
     assert_eq!(ground(&mut e, PLAIN), (-1.0, -1.0));
+    assert_eq!(ground(&mut e, 0), (-1.0, -1.0), "no reference");
     e.mem.set_u8(PROCESS + 0x28, 2);
     assert_eq!(ground(&mut e, ACTOR), (-1.0, -1.0));
 }
@@ -1141,10 +1173,97 @@ fn move_away_from_player_refusals() {
     e.mem.set_u8(running + 0x20, 0x1a);
     run(&mut e, 0x2781, ACTOR, &[]);
     run(&mut e, 0x2781, PLAIN, &[]);
+    // No player (and no cell, where JIP would read the player's position): nothing.
+    e.mem.set_u8(running + 0x20, 0x1b);
+    let player = e.mem.u32(THE_PLAYER_AT);
+    e.mem.set_u32(THE_PLAYER_AT, 0);
+    e.mem.set_u32(ACTOR + 0x40, 0);
+    assert_eq!(run(&mut e, 0x2781, ACTOR, &[]), 0.0);
+    assert!(called(BACKUP_INIT_FN).is_empty());
+    e.mem.set_u32(THE_PLAYER_AT, player);
+    e.mem.set_u8(running + 0x20, 0x1a);
     assert!(allocations().is_empty());
     assert!(called(SET_PACKAGE).is_empty());
     // Another running package type: it goes on.
     e.mem.set_u8(running + 0x20, 0x1b);
     run(&mut e, 0x2781, ACTOR, &[]);
     assert_eq!(called(SET_PACKAGE).len(), 1);
+}
+
+// ---- review fixes (#615) ----
+
+#[test]
+fn add_ref_map_marker_without_a_player_links_nothing() {
+    let mut e = setup();
+    let list = marker_scene(&mut e);
+    e.mem.set_u32(THE_PLAYER_AT, 0);
+    run(&mut e, 0x27e9, ACTOR, &[]);
+    assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (ACTOR, 0));
+    assert_eq!(markers_users(&e), 1);
+    assert_eq!(run(&mut e, 0x27eb, ACTOR, &[]), 1.0);
+}
+
+/// The markers' reset through the messages that run it: xNVSE's pre-load message and the exit to
+/// the main menu (JIP's `DoPreLoadGameHousekeeping` from both).
+#[test]
+fn map_markers_reset_by_the_pre_load_and_exit_messages() {
+    use nvse::plugins::{dispatch, msg};
+    for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
+        let mut e = setup();
+        let list = marker_scene(&mut e);
+        run(&mut e, 0x27e9, ACTOR, &[]);
+        run(&mut e, 0x27e9, PLAIN, &[]);
+        assert_eq!(markers_users(&e), 2);
+        let freed_before = freed().len();
+        dispatch(&mut e, kind, 0, 0);
+        assert_eq!((e.mem.u32(list), e.mem.u32(list + 4)), (0, 0), "{kind}");
+        assert_eq!(markers_users(&e), 0, "{kind}");
+        assert_eq!(
+            freed().len() - freed_before,
+            1,
+            "{kind}: one own node freed"
+        );
+        assert_eq!(run(&mut e, 0x27eb, ACTOR, &[]), 0.0, "{kind}");
+    }
+}
+
+/// The session clock taken at xNVSE's deferred-start message.
+#[test]
+fn session_time_starts_at_the_deferred_init_message() {
+    use nvse::plugins::{dispatch, msg};
+    let mut e = setup();
+    // The same message makes JIP's position marker: its two game calls as stand-ins.
+    e.register(super::super::pos_marker::REFR_CONSTRUCTOR, |_, w| eax(w[0]));
+    e.register(super::super::pos_marker::SET_TEMPORARY, |_, _| eax(0));
+    standin!(&mut e, TICKS_FN, A_TICKS);
+    e.mem.set_u32(A_TICKS, 5000);
+    dispatch(&mut e, msg::DEFERRED_INIT, 0, 0);
+    e.mem.set_u32(A_TICKS, 7500);
+    assert_eq!(run(&mut e, 0x272e, 0, &[]), 2500.0 * 0.001);
+}
+
+#[test]
+fn dismember_limb_takes_part_13() {
+    let mut e = setup();
+    dismember_scene(&mut e);
+    e.mem.set_u32(BPD + 0x34 + 4 * 13, PART);
+    e.mem.set_u32(PROCESS + 0x1dc + 4 * 13, LIMB);
+    run(&mut e, 0x2833, ACTOR, &[n(13)]);
+    assert_eq!(
+        called(SET_DISMEMBERED_FN),
+        vec![vec![ACTOR, 13, 0, 1, 13, 0]]
+    );
+    run(&mut e, 0x2833, ACTOR, &[n(14)]);
+    assert_eq!(called(SET_DISMEMBERED_FN).len(), 1);
+}
+
+#[test]
+fn play_sound_3d_node_needs_a_sound_form() {
+    let mut e = setup();
+    sound_scene(&mut e);
+    e.mem.set_u32(A_KEY, 5);
+    set_ref(&mut e, 2, 0);
+    assert_eq!(run(&mut e, 0x291e, PLAIN, &[r(2), s(b"Head")]), 0.0);
+    assert!(called(INIT_SOUND_FN).is_empty());
+    assert!(called(PLAY_FN).is_empty());
 }
