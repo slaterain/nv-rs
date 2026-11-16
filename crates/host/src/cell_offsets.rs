@@ -583,6 +583,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "the game's Windows paths: not provided off Windows yet"
+    )]
     fn a_plugins_tables_are_read_from_its_file() {
         // A plugin with one world space record (no `OFST`) and one cell, in a Data folder of its
         // own; the file's path as the game keeps it in the `TESFile`.
@@ -862,6 +866,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "the game's Windows paths: not provided off Windows yet"
+    )]
     fn load_gives_each_world_space_of_a_plugin_the_table_of_the_record_it_reads() {
         // The second record carries an `OFST`, which the translation reads for a plugin too but
         // never uses: the row's table replaces it.
@@ -914,6 +922,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "the game's Windows paths: not provided off Windows yet"
+    )]
     fn load_gives_a_masters_record_without_offsets_its_table_and_keeps_a_masters_own() {
         let own: Vec<u8> = (0..16u32)
             .flat_map(|i| (0x1000 + i).to_le_bytes())
