@@ -9,6 +9,8 @@ PLAY=${1:-$here/play.sh}
 PLAY=$(CDPATH='' cd -- "$(dirname -- "$PLAY")" && pwd -P)/$(basename -- "$PLAY")
 SH=${SH:-sh}
 T=$(mktemp -d "${TMPDIR:-/tmp}/nv-rs-test-play.XXXXXX") || exit 2
+# The real path (macOS: /var is a link to /private/var), as play.sh resolves the game folder.
+T=$(CDPATH='' cd -- "$T" && pwd -P) || exit 2
 trap 'rm -rf -- "$T"' EXIT
 fails=0
 check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
