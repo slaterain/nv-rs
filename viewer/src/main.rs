@@ -49,8 +49,9 @@ const FIND_USAGE: &str = "
 LINUX AND MACOS:
     nv-viewer --find   print nv-rs's own folder, the game folders found (Steam, Heroic, Lutris)
                        and the game's save folders found in Proton's and Wine's prefixes, one a
-                       line, fields split by tabs: own FOLDER / game STORE FOLDER / saves FROM
-                       FOLDER (only read; nothing is written)
+                       line, fields split by tabs: own FOLDER / warning TEXT / game STORE FOLDER /
+                       saves FROM FOLDER; in each field every byte but ASCII letters, digits and
+                       ` /._-+,:@=~()` is written %XX (only read; nothing is written)
 ";
 
 /// `--find` (Linux and macOS): [`FIND_USAGE`]'s lines (`game_folders::report`), from `HOME`.

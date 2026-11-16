@@ -104,6 +104,9 @@ impl Host {
         // Linux and macOS: the program builds there, but the game does not run yet.
         #[cfg(not(windows))]
         not_provided_here()?;
+        // Off Windows the save guard's look at the player's folders starts now, off the frames
+        // (nothing on Windows).
+        save_out::prepare();
         let mut engine = Box::new(Engine::with_exe(&exe)?);
         // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with
         // the same addresses.
