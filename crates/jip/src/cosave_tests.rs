@@ -1291,3 +1291,29 @@ fn a_load_and_the_main_menu_clear_the_players_killer() {
         assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0, "{kind}");
     }
 }
+
+/// H16's part of the housekeeping: a load's start and leaving to the main menu empty the excluded
+/// combat actions (`s_excludedCombatActionsMap->Clear()`) through the messages, with JIP installed.
+#[test]
+fn a_load_and_the_main_menu_clear_the_excluded_combat_actions() {
+    use crate::game_patches::gd::{excluded_combat_actions, ExcludedCombatActions};
+    let mut w = World::new();
+    w.e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+    for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
+        w.e.ext_free::<ExcludedCombatActions>()
+            .0
+            .write()
+            .unwrap()
+            .insert(PLAYER_REF, 3);
+        assert_eq!(excluded_combat_actions(&mut w.e, PLAYER_REF), 3);
+        listen(
+            &mut w.e,
+            &Message {
+                kind,
+                data: 0,
+                len: 0,
+            },
+        );
+        assert_eq!(excluded_combat_actions(&mut w.e, PLAYER_REF), 0, "{kind}");
+    }
+}
