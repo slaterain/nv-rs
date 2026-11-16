@@ -1316,9 +1316,18 @@ fn init_combat_controller_takes_the_attackers_entry() {
 }
 
 /// Before a load the map is emptied (JIP's housekeeping), with JIP installed; not installed, the
-/// housekeeping makes no map.
+/// housekeeping leaves it alone (it never makes or takes the map then: a load comes after the
+/// threads start, when a lock-free slot may no longer be made).
 #[test]
 fn excluded_actions_cleared_before_a_load() {
+    let mut off = jip(false, false);
+    off.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .insert(0x0300_0010, 1);
+    pre_load(&mut off);
+    assert_eq!(excluded_combat_actions(&mut off, 0x0300_0010), 1);
     let mut e = jip(true, false);
     e.ext_free::<ExcludedCombatActions>()
         .0
