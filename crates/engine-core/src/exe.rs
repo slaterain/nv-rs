@@ -159,6 +159,16 @@ pub fn imports(file: &[u8]) -> Result<Vec<Import>, String> {
     Ok(out)
 }
 
+/// The drive the game sees this system's folders on, off Windows (decision 3 of the Linux and
+/// macOS track, the Wine way): `/home/me/Games/FNV` is `Z:\home\me\Games\FNV` to the game.
+pub const HOST_DRIVE: u8 = b'Z';
+
+/// The game's name of a folder of this system off Windows: drive `Z:` ([`HOST_DRIVE`]), each `/`
+/// a `\`. The platform layer's file calls map such a name back (`engine_platform::host_paths`).
+pub fn game_view(host: &str) -> String {
+    format!("{}:{}", HOST_DRIVE as char, host.replace('/', "\\"))
+}
+
 /// The FalloutNV.exe of an installation, given its `Data` folder: the
 /// executable sits in the folder that contains `Data`.
 pub fn installed_exe(data_dir: &Path) -> std::path::PathBuf {
@@ -229,6 +239,16 @@ mod tests {
             installed_exe(data),
             Path::new("C:/Games/Fallout New Vegas/FalloutNV.exe")
         );
+    }
+
+    /// Off Windows the game sees this system's folders on drive Z:, with `\` for `/`.
+    #[test]
+    fn the_game_sees_this_systems_folders_on_drive_z() {
+        assert_eq!(
+            game_view("/home/me/Games/Fallout New Vegas"),
+            r"Z:\home\me\Games\Fallout New Vegas"
+        );
+        assert_eq!(game_view("/"), r"Z:\");
     }
 
     #[test]

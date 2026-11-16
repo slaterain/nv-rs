@@ -328,9 +328,15 @@ pub fn full_path(e: &Engine, name: &[u8]) -> Vec<u8> {
 /// is both valid UTF-8 and meant as code page bytes is read as UTF-8. The separators are found
 /// character by character ([`separators`]), so a double-byte character whose second byte is
 /// `0x5C` stays one character.
+///
+/// On Linux and macOS the text is then this system's path as [`super::host_paths::host_path`]
+/// makes it: drive `Z:` taken off, `\` as `/`, each name found in its folder without case.
 fn real_path(path: &[u8]) -> std::path::PathBuf {
     if path.is_ascii() {
+        #[cfg(windows)]
         return std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned());
+        #[cfg(not(windows))]
+        return super::host_paths::host_path(&String::from_utf8_lossy(path));
     }
     let mut wide: Vec<u16> = Vec::with_capacity(path.len());
     let mut start = 0;
@@ -350,8 +356,14 @@ fn real_path(path: &[u8]) -> std::path::PathBuf {
     }
     #[cfg(not(windows))]
     {
-        std::path::PathBuf::from(String::from_utf16_lossy(&wide))
+        super::host_paths::host_path(&String::from_utf16_lossy(&wide))
     }
+}
+
+/// This system's path of the game's full path `path` ([`real_path`]): for host code that opens
+/// a file the game names (a plugin's cell tables, `host::cell_offsets`).
+pub fn host_path(path: &[u8]) -> std::path::PathBuf {
+    real_path(path)
 }
 
 /// The ANSI code page the game's `...A` calls turn names with: on Windows the system's
@@ -605,7 +617,7 @@ fn wide_to_ansi(units: &[u16]) -> String {
 /// it gives one unit (NTFS's upcase table; ASCII `a`..`z` to `A`..`Z` as in every table); a
 /// unit without one stays. For an ASCII name this is the ASCII upper-case byte order the search
 /// always had.
-fn ntfs_key(units: &[u16]) -> Vec<u16> {
+pub(crate) fn ntfs_key(units: &[u16]) -> Vec<u16> {
     units
         .iter()
         .map(|&u| match u {
@@ -1131,8 +1143,10 @@ fn host_name_text(name: &std::ffi::OsStr) -> String {
 /// last-write times, the size (high word, then low), the two reserved words 0, `cFileName` (the
 /// name as stored, then one zero byte) and an empty `cAlternateFileName` (one zero byte at
 /// +0x130); the rest of the buffer is left as it was.
-// Off Windows the file times stop the run before anything is written (below).
-#[cfg_attr(not(windows), allow(unused_variables, unreachable_code))]
+///
+/// On Linux and macOS: the attributes as [`attributes`] gives them there (a directory, else
+/// `ARCHIVE`), and the system's own creation, last-access and last-write times as Windows'
+/// `FILETIME` ([`filetime`]). A file system that keeps no creation time stops the run.
 fn write_find_data(
     e: &mut Engine,
     data: Ptr,
@@ -1154,8 +1168,24 @@ fn write_find_data(
     };
     #[cfg(not(windows))]
     let (attributes, created, accessed, written): (u32, u64, u64, u64) = {
-        let _ = &meta;
-        panic!("FindFirstFileA(\"{shown}\"): file times are only provided on Windows");
+        let time = |what: &str, t: std::io::Result<std::time::SystemTime>| {
+            filetime(t.unwrap_or_else(|err| {
+                panic!(
+                    "FindFirstFileA(\"{shown}\"): the file system gives no {what} time ({err}); \
+                     not provided"
+                )
+            }))
+        };
+        (
+            if meta.is_dir() {
+                FILE_ATTRIBUTE_DIRECTORY
+            } else {
+                FILE_ATTRIBUTE_ARCHIVE
+            },
+            time("creation", meta.created()),
+            time("last-access", meta.accessed()),
+            time("last-write", meta.modified()),
+        )
     };
     let d = data.addr();
     e.mem.set_u32(d, attributes);
@@ -1169,6 +1199,59 @@ fn write_find_data(
     e.mem.set_u32(d + 0x24, 0);
     e.mem.set_u32(d + 0x28, 0);
     write_names(e, d, &ansi_bytes(stored), b"")
+}
+
+/// A time of this system as Windows' `FILETIME`: 100-nanosecond ticks since 1601-01-01 UTC
+/// (the part of a tick below 100 ns dropped, as Windows keeps none). A time before 1601 is 0.
+#[cfg(any(not(windows), test))]
+fn filetime(t: std::time::SystemTime) -> u64 {
+    use super::zone::{TICKS_PER_SECOND, UNIX_EPOCH_TICKS};
+    let ticks = |d: std::time::Duration| {
+        d.as_secs()
+            .saturating_mul(TICKS_PER_SECOND)
+            .saturating_add(u64::from(d.subsec_nanos() / 100))
+    };
+    match t.duration_since(std::time::UNIX_EPOCH) {
+        Ok(after) => UNIX_EPOCH_TICKS.saturating_add(ticks(after)),
+        // Before 1970: back from the epoch, rounded up to a whole tick earlier.
+        Err(before) => {
+            let d = before.duration();
+            let whole = d.as_secs().saturating_mul(TICKS_PER_SECOND)
+                + u64::from(d.subsec_nanos().div_ceil(100));
+            UNIX_EPOCH_TICKS.saturating_sub(whole)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests_filetime {
+    use super::filetime;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    /// Linux's and macOS's file times as `FILETIME`: ticks of 100 ns since 1601, the rest of a
+    /// tick dropped (down, also before 1970), nothing before 1601.
+    #[test]
+    fn this_systems_times_are_windows_ticks_since_1601() {
+        const EPOCH: u64 = 116_444_736_000_000_000;
+        assert_eq!(filetime(UNIX_EPOCH), EPOCH);
+        assert_eq!(
+            filetime(UNIX_EPOCH + Duration::new(1, 150)),
+            EPOCH + 10_000_001
+        );
+        assert_eq!(filetime(UNIX_EPOCH + Duration::new(0, 99)), EPOCH);
+        assert_eq!(filetime(UNIX_EPOCH - Duration::new(0, 50)), EPOCH - 1);
+        assert_eq!(filetime(UNIX_EPOCH - Duration::new(1, 0)), EPOCH - 10_000_000);
+        assert_eq!(filetime(UNIX_EPOCH - Duration::new(0, 100)), EPOCH - 1);
+        // 2026-01-01 00:00:00 UTC.
+        assert_eq!(
+            filetime(UNIX_EPOCH + Duration::from_secs(1_767_225_600)),
+            134_116_992_000_000_000
+        );
+        // Before 1601 (not a time Windows' own clock type can hold; Linux's and macOS's can).
+        if let Some(t) = UNIX_EPOCH.checked_sub(Duration::from_secs(12_000_000_000)) {
+            assert_eq!(filetime(t), 0);
+        }
+    }
 }
 
 /// `cFileName` (+0x2c) and `cAlternateFileName` (+0x130) of a `WIN32_FIND_DATAA`.
@@ -1921,10 +2004,27 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
             written: h.listed.written,
         })
     }
+    // Linux and macOS: the entry as this system's search shows it ([`listing`] and
+    // [`write_find_data`] there): the name as the folder holds it, no short name, a directory or
+    // `ARCHIVE`, the size and the system's own times.
     #[cfg(not(windows))]
     {
-        let _ = path;
-        None
+        let real = real_path(path);
+        let meta = std::fs::metadata(&real).ok()?;
+        let time = |t: std::io::Result<std::time::SystemTime>| t.ok().map(filetime);
+        Some(Entry {
+            name: host_name_text(real.file_name()?),
+            short: Some(String::new()),
+            attributes: if meta.is_dir() {
+                FILE_ATTRIBUTE_DIRECTORY
+            } else {
+                FILE_ATTRIBUTE_ARCHIVE
+            },
+            size: meta.len(),
+            created: time(meta.created())?,
+            accessed: time(meta.accessed())?,
+            written: time(meta.modified())?,
+        })
     }
 }
 
@@ -3323,6 +3423,44 @@ mod tests {
 mod tests_player_files {
     use super::*;
 
+    /// Linux and macOS: a file the game names on drive Z: in another case than the disk's (as the
+    /// game, its INI files and mods name files) opens and reads, and is listed by the search under
+    /// its own name, with this system's times.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_file_named_on_drive_z_in_any_case_opens_and_is_listed() {
+        let dir = std::env::temp_dir().join(format!("nv-rs-drive-z-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Data").join("Meshes")).unwrap();
+        std::fs::write(dir.join("Data").join("Meshes").join("Armor.NIF"), b"nif").unwrap();
+        let game = engine_core::exe::game_view(&dir.to_string_lossy());
+        let mut e = Engine::new();
+        let name = e.mem.alloc(0x400);
+        e.mem.set_cstr(name, format!(r"{game}\DATA\meshes\armor.nif").as_bytes());
+        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 1, 0, OPEN_EXISTING, 0x80, 0);
+        assert_ne!(h, INVALID_HANDLE_VALUE, "{game}");
+        let buf = e.mem.alloc(16);
+        let got = e.mem.alloc(4);
+        assert_eq!(read_file(&mut e, h, Ptr::new(buf), 16, Ptr::new(got), 0), 1);
+        assert_eq!(e.mem.bytes(buf, e.mem.u32(got)), b"nif".to_vec());
+        super::super::close_handle(&mut e, h);
+        e.mem.set_cstr(name, format!(r"{game}\data\MESHES\*.nif").as_bytes());
+        let data = e.mem.alloc(0x140);
+        let found = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data));
+        assert_ne!(found, INVALID_HANDLE_VALUE);
+        assert_eq!(e.mem.cstr(data + 0x2c), b"Armor.NIF".to_vec());
+        assert_eq!(e.mem.u32(data), FILE_ATTRIBUTE_ARCHIVE);
+        let written =
+            u64::from(e.mem.u32(data + 0x14)) | (u64::from(e.mem.u32(data + 0x18)) << 32);
+        let now = filetime(std::time::SystemTime::now());
+        assert!(written <= now && now - written < 600 * 10_000_000, "{written} {now}");
+        find_close(&mut e, found);
+        // Another drive has no folder here: the run stops, naming it.
+        let other = std::panic::catch_unwind(|| real_path(br"C:\Games\x.esp"));
+        assert!(other.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A file of the player's opened for reading only is read where the reads ask, not copied:
     /// the crate's own manifest stands in for one.
     #[test]
@@ -3385,10 +3523,6 @@ mod tests_player_files {
     }
 
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
-    )]
     fn a_wildcard_search_lists_then_runs_out() {
         let mut e = Engine::new();
         let name = e.mem.alloc(0x200);
@@ -3418,10 +3552,6 @@ mod tests_player_files {
     /// TRUE, the last error left as it was (measured, 32-bit,
     /// `build43-scratch/measure/small-fixes/findclose-2026-11-02.tsv`).
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
-    )]
     fn find_close_after_a_search_that_found_nothing_answers_false() {
         let mut e = Engine::new();
         let name = e.mem.alloc(0x200);
@@ -3467,10 +3597,6 @@ mod tests_player_files {
     }
 
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
-    )]
     fn a_read_only_open_reads_the_players_file_in_place() {
         let mut e = Engine::new();
         let real = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
@@ -4198,10 +4324,6 @@ mod tests_changed_directories {
     /// got (measured, `review-findfile/run1.txt`); not modelled, the run stops.
     #[test]
     #[should_panic(expected = "since FindFirstFileA; not provided")]
-    #[cfg_attr(
-        not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
-    )]
     fn a_search_whose_folder_changed_since_it_began_stops() {
         let dir = scratch("midsearch", &[("a.fos", 5), ("b.fos", 5)]);
         let mut e = Engine::new();
@@ -5005,10 +5127,6 @@ mod tests_code_pages {
     /// listed, the real one first (NTFS's order), and the name opens the real file; the `?` form
     /// of a name opens nothing, with `ERROR_INVALID_NAME` (measured).
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
-    )]
     fn two_host_names_with_one_ansi_name() {
         let _page = Page::new(&CP1252);
         let dir = scratch("alias");
@@ -5061,10 +5179,6 @@ mod tests_code_pages {
     /// code page 932: the separators, the last part, the key, the host path, the matcher, the name
     /// check and `GetFullPathNameA` read them character by character; such a file opens and reads.
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
-    )]
     fn double_byte_names_keep_their_second_byte() {
         let _page = Page::new(&CP932);
         let so = b"\x83\x5c.txt";
@@ -5074,10 +5188,12 @@ mod tests_code_pages {
             key(b"C:\\D\\\x83\x41B/\x83\x5c"),
             b"c:\\d\\\x83\x41b\\\x83\x5c"
         );
-        assert_eq!(
-            real_path(b"C:\\d\\\x83\x5c.txt").file_name().unwrap(),
-            "\u{30bd}.txt"
-        );
+        // Off Windows this system's folders are drive Z: (`super::host_paths`).
+        #[cfg(windows)]
+        let in_d = b"C:\\d\\\x83\x5c.txt";
+        #[cfg(not(windows))]
+        let in_d = b"Z:\\d\\\x83\x5c.txt";
+        assert_eq!(real_path(in_d).file_name().unwrap(), "\u{30bd}.txt");
         assert!(wild_match(b"?.TXT", so));
         assert!(!wild_match(b"\x83\x41.txt", so));
         assert!(wild_match(b"\x83\x5c*", so));
@@ -5169,10 +5285,6 @@ mod tests_code_pages {
     /// fails its open with Windows' answer (32, 5; measured) for reading and for a write open that
     /// reads it into the run, instead of stopping the run at the first read.
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
-    )]
     fn a_file_that_cannot_be_read_answers_windows_errors() {
         let dir = scratch("unreadable");
         std::fs::write(dir.join("held.txt"), b"held").unwrap();

@@ -100,6 +100,7 @@ pub mod dsfx;
 pub mod dshow;
 pub mod dsound;
 pub mod files;
+pub mod host_paths;
 pub mod ini;
 pub mod library;
 pub mod mixer;
