@@ -317,8 +317,11 @@ of the rate. The effect runs at the buffer's format rate, before the volume, 3D 
 sound hears its own tail.
 
 The one table that is not a formula, the band-pass's gain correction for each edge setting
-(32 values with two decimals), is measured once from the player's `dsdmo.dll` through COM (an
-impulse on a float stream, `dsfx::edge_table`). The values measured in a 64-bit process match
+(32 values with two decimals), is a table of constants in `dsdmo.dll`'s read-only data, read by
+its coefficient code (`dsfx::EDGE_TABLE`, with the version and addresses). On Windows it is
+still measured once from the player's `dsdmo.dll` through COM (an impulse on a float stream,
+`dsfx::edge_table`), and a measurement that differs from the constants is named in the log;
+on Linux and macOS (no DLL) the constants are used. The values measured in a 64-bit process match
 the 32-bit DLL's table entry for entry (checked privately). The game's edge 0 uses entry 2.
 
 **Measured:** the four `dsmix-vd-2026-10-24` distortion captures (gain 0, -18 and -40 dB, edge 0

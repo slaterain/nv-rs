@@ -404,7 +404,7 @@ fn not_provided_on(x86_64: bool) -> Result<(), String> {
          anything drawn), the game's Windows folder names (a drive \
          letter and backslashes) over this system's folders, the file listing's file times, \
          this machine's tables (display adapter, sound devices, folders), which are measured on \
-         Windows, the distortion sound effect's table (measured from Windows' own DLL), and text \
+         Windows, and text \
          in the game's code page outside ASCII",
     );
     if !x86_64 {
@@ -730,13 +730,14 @@ mod tests {
                 "folder names",
                 "file times",
                 "tables",
-                "distortion",
                 "code page",
             ] {
                 assert!(why.contains(piece), "{piece}: {why}");
             }
             // The sound on the speakers is provided everywhere (engine-platform sound_out.rs).
             assert!(!why.contains("speakers"), "{why}");
+            // So is the distortion's table (engine-platform dsfx.rs, the DLL's constants).
+            assert!(!why.contains("distortion"), "{why}");
             // The processor's own differences only off x86-64 (Apple silicon).
             assert_eq!(why.contains("x87"), !x86_64, "{why}");
             assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");

@@ -310,7 +310,8 @@ elsewhere only as far as Windows and drivers behave the same:
 - The sound layer's translations of `dsound.dll`, `RESAMPLEDMO.DLL` and `dsdmo.dll` (the mixer, the
   converters, the 3D stage, the distortion) are from this Windows' builds. Only the resampler's tables
   and the distortion's edge table are read from the player's own DLLs. Another Windows' DLLs may mix
-  differently without anyone noticing; the sound would still play. Where the resampler's tables
+  differently without anyone noticing; the sound would still play (an edge table that differs from
+  the constants read from this Windows' DLL is named in the log). Where the resampler's tables
   aren't found, sound goes through DirectSound's second converter (named once in the log: not exact).
   One channel, quad, surround and the "wide" layouts follow the DLL's code only; only stereo and 7.1 ran.
 - `scripts/dsmix-measure`, `scripts/dsound-oracle`, `scripts/mmio-measure` and `scripts/dshow-measure`
