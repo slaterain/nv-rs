@@ -390,7 +390,7 @@ pub fn hit_data_initialize_explosion_data(
     );
     let health_damage = e.get(hit, HitData::fHealthDamage);
     e.set(hit, HitData::fTotalDamage, x87_quiet_bits(health_damage));
-    hit_data_reduce_damage(e, hit, 1);
+    reduce_damage(e, hit, 1);
     hit_data_check_critical_strike(e, hit);
     hit_data_determine_outcome(e, hit);
 }
@@ -404,6 +404,40 @@ fn armor_penetrated_seam(e: &mut Engine, this: Ptr<HitData>) {
     if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
         e.site(0x009b_6335, &[this.addr()]);
     }
+}
+
+/// `HitData::ReduceDamage`'s address: the translations call it by address, so a wrap there (JIP
+/// LN NVSE's O1, `CalculateHitDamageHook`) runs for every caller.
+const HIT_DATA_REDUCE_DAMAGE: u32 = 0x009b_5a30;
+
+/// `ReduceDamage(ignore_block)` on `hit`, called by address (thiscall, `RET 4`).
+#[inline]
+fn reduce_damage(e: &mut Engine, hit: Ptr<HitData>, ignore_block: u32) {
+    e.call(HIT_DATA_REDUCE_DAMAGE, &args![hit, ignore_block]);
+}
+
+/// The `ReduceDamage` calls JIP LN NVSE's O1 (`bIgnoreDTDRFix`) defers to `SetTargetedLimb` by
+/// their return addresses (`0x9B5628` after the call at `0x9B5623` in `InitializeHitData_ov3`,
+/// `0x9B5707` after `0x9B5702` in `_ov4`): with the switch's bit set the seam at the call is
+/// asked with the hit and the call's word, and an answer means the call is deferred (not made).
+/// With the bit clear: one load, false (the call is made).
+#[inline]
+fn reduce_damage_deferred(e: &mut Engine, site: u32, hit: Ptr<HitData>, ignore_block: u32) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::IGNORE_DTDR_FIX != 0
+        && e.site(site, &[hit.addr(), ignore_block]).is_some()
+}
+
+/// The limb step of [`hit_data_set_targeted_limb`] at `0x9B6E81`. JIP LN NVSE's G116
+/// (`SetHitLocationHook`, a fix) replaces it up to `0x9B6EC4`: it runs a deferred
+/// `CalculateHitDamage` and does the limb 0xE move itself; the seam is asked with the hit and
+/// answers 1 when the limb was 0xE (nothing more to do), 0 otherwise (the part step goes on).
+/// With the word's `FIXES` bit clear: one load, `None` (the translation's own limb 0xE step).
+#[inline]
+fn hit_location_seam(e: &mut Engine, hit: Ptr<HitData>) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return e.site(0x009b_6e81, &[hit.addr()]);
+    }
+    None
 }
 
 // Translated from 009b5a30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1411,7 +1445,9 @@ pub fn hit_data_initialize_hit_data_ov3(
             e.set(hit, HitData::fHealthDamage, damage);
         }
         hit_data_check_critical_strike(e, hit);
-        hit_data_reduce_damage(e, hit, 0);
+        if !reduce_damage_deferred(e, 0x009b_5623, hit, 0) {
+            reduce_damage(e, hit, 0);
+        }
     }
     hit_data_set_targeted_limb(e, hit, 0);
     if counts {
@@ -1616,7 +1652,9 @@ pub fn hit_data_initialize_hit_data_ov4(
     let damage = e.get(hit, HitData::fHealthDamage);
     e.set(hit, HitData::fTotalDamage, x87_quiet_bits(damage));
     hit_data_check_critical_strike(e, hit);
-    hit_data_reduce_damage(e, hit, 1);
+    if !reduce_damage_deferred(e, 0x009b_5702, hit, 1) {
+        reduce_damage(e, hit, 1);
+    }
     hit_data_set_targeted_limb(e, hit, projectile);
     hit_data_determine_outcome(e, hit);
 }
@@ -1642,7 +1680,7 @@ pub fn hit_data_initialize_hit_data_ov5(
     let damage = x87_quiet_bits(damage.to_bits());
     e.set(hit, HitData::fHealthDamage, damage);
     e.set(hit, HitData::fTotalDamage, damage);
-    hit_data_reduce_damage(e, hit, 0);
+    reduce_damage(e, hit, 0);
     hit_data_determine_outcome(e, hit);
 }
 
@@ -1724,7 +1762,7 @@ pub fn hit_data_initialize_impact_data(
             e.set(hit, HitData::eDamageLimb, limb);
         }
     });
-    hit_data_reduce_damage(e, hit, 1);
+    reduce_damage(e, hit, 1);
     hit_data_determine_outcome(e, hit);
 }
 
@@ -2044,6 +2082,20 @@ fn pick_limb(e: &mut Engine, hit: Ptr<HitData>, parts: u32, random: Ptr, ebp: u3
 
 /// The damage part of [`hit_data_set_targeted_limb`].
 fn apply_limb(e: &mut Engine, hit: Ptr<HitData>, part: u32) {
+    match hit_location_seam(e, hit) {
+        Some(0) => {}
+        Some(_) => return,
+        None => {
+            if limb_0xe_step(e, hit) {
+                return;
+            }
+        }
+    }
+    apply_part(e, hit, part);
+}
+
+/// The exe's limb 0xE step (`0x9B6E81` to `0x9B6EBF`): true when it ran.
+fn limb_0xe_step(e: &mut Engine, hit: Ptr<HitData>) -> bool {
     if e.get(hit, HitData::eDamageLimb) == 0xe {
         let damage = x87_quiet_bits(e.get(hit, HitData::fHealthDamage));
         e.set(hit, HitData::fTargetedLimbDamage, damage);
@@ -2054,8 +2106,13 @@ fn apply_limb(e: &mut Engine, hit: Ptr<HitData>, part: u32) {
             e.set(hit, HitData::fTargetedLimbDamage, damage);
         }
         e.set(hit, HitData::fHealthDamage, x87_store32(0.0));
-        return;
+        return true;
     }
+    false
+}
+
+/// The part step of [`hit_data_set_targeted_limb`] (`0x9B6EC4` on).
+fn apply_part(e: &mut Engine, hit: Ptr<HitData>, part: u32) {
     if part == 0 {
         return;
     }
@@ -2671,6 +2728,64 @@ mod b035_tests {
         assert_eq!(calls(&log, 0x0070_9c60), vec![vec![0]]);
     }
 
+    /// The exe's `ReduceDamage` (this translation) runs at `009b5a30` with JIP LN NVSE not
+    /// installed, installed with its row off, and installed with the row on (O1's wrap in) but
+    /// `bIgnoreDTDRFix` clear (the wrap hands the call on): the same damage bit for bit as a
+    /// direct call (resistance 30, threshold 10: 100 x 0.7 - 10 = 60); with the switch set the
+    /// wrap does JIP's instead (not the exe's 60).
+    #[test]
+    fn o1_exe_reduce_damage_while_jip_is_off_or_switched_off() {
+        use engine_core::extend::{jip_patches, Owner};
+        let run = |installed: bool, row: bool, switch: bool| {
+            let mut e = Engine::new();
+            let world = World::new(&mut e);
+            let (hit, _, _) = reduce_world(&mut e, &world);
+            e.register_double(SLOT_BASE + 0xc, move |_, a| {
+                float_ret(match a[1] {
+                    0x12 => 30.0,
+                    0x4c => 10.0,
+                    _ => 0.0,
+                })
+            });
+            jip::test_support::install_into_as(&mut e, installed);
+            // `CreateFileA` (the settings file): "no file", so JIP's defaults; `TESTopic::GetOwnerTopic`,
+            // which 3.9a's fix wraps with the row on.
+            e.register(0x00fd_f088, |_, _| Ret {
+                eax: 0xffff_ffff,
+                ..Ret::default()
+            });
+            e.register(0x0061_a310, |_, _| Ret::default());
+            jip::game_patches::set_row(&mut e, row);
+            if !switch {
+                e.set_jip_patches(e.jip_patches() & !jip_patches::IGNORE_DTDR_FIX);
+            }
+            let wrapped = e.wraps_at(0x009b_5a30).contains(&Owner::Jip);
+            let direct = Ptr::<HitData>::new(e.mem.alloc(0x64));
+            for i in 0..0x19 {
+                let word = e.mem.u32(hit.addr() + 4 * i);
+                e.mem.set_u32(direct.addr() + 4 * i, word);
+            }
+            e.call(0x009b_5a30, &args![hit, 0u32]);
+            hit_data_reduce_damage(&mut e, direct, 0);
+            (
+                wrapped,
+                e.get(hit, HitData::fHealthDamage),
+                e.get(direct, HitData::fHealthDamage),
+            )
+        };
+        let sixty = 60.0f32.to_bits();
+        assert_eq!(
+            run(false, true, true),
+            (false, sixty, sixty),
+            "not installed"
+        );
+        assert_eq!(run(true, false, true), (false, sixty, sixty), "row off");
+        assert_eq!(run(true, true, false), (true, sixty, sixty), "switch clear");
+        let (wrapped, jips, exes) = run(true, true, true);
+        assert_eq!((wrapped, exes), (true, sixty));
+        assert_ne!(jips, sixty, "switch set: JIP's");
+    }
+
     #[test]
     fn reduce_damage_spares_an_immune_target() {
         let mut e = Engine::new();
@@ -3006,10 +3121,14 @@ mod n026_tests {
         e.register(0x0088_5d70, |_, _| st0(5.0));
         e.register(AGGRESSOR_DAMAGE_FACTOR, |_, _| st0(1.5));
         let hit = e.new_object::<HitData>();
+        e.call_log = Some(vec![]);
         e.call(
             0x009b_5650,
             &args![hit, aggressor, target, 0x0d00_0000u32, 0x0e00_0000u32],
         );
+        let log = e.call_log.take().unwrap();
+        // `ReduceDamage(1)` by address (JIP LN NVSE not installed: not deferred).
+        assert_eq!(calls(&log, 0x009b_5a30), vec![vec![hit.addr(), 1]]);
         assert_eq!(e.get(hit, HitData::pWeapon), 0x0c00_0000);
         assert_eq!(f(e.get(hit, HitData::fWeaponHealth)), 0.75);
         assert_eq!(e.get(hit, HitData::pSourceRef), 0x0e00_0000);
@@ -3035,12 +3154,44 @@ mod n026_tests {
     }
 
     fn melee(world: Melee) -> (Engine, Ptr<HitData>, Logged) {
+        melee_with(world, false, |_| {})
+    }
+
+    /// JIP LN NVSE installed with its row on (its default switches).
+    fn jip_on(e: &mut Engine) {
+        jip::test_support::install_into(e);
+        // `CreateFileA` (the settings file): "no file", so JIP's defaults; `TESTopic::GetOwnerTopic`,
+        // which 3.9a's fix wraps with the row on.
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        e.register(0x0061_a310, |_, _| Ret::default());
+        jip::game_patches::set_row(e, true);
+    }
+
+    /// [`melee`] on a `character` target (immune, so the critical strike, the exe's
+    /// `ReduceDamage` and the outcome stop at once; `SetTargetedLimb` finds no body part data and
+    /// no projectile impact, and its limb step sees the hit's limb 0xE with
+    /// `fVATSTargetedLimbDamageMult` 1.5), `before` done to the engine just before the call (JIP
+    /// installed, [`jip_on`], or seam handlers).
+    fn melee_with(
+        world: Melee,
+        character: bool,
+        before: fn(&mut Engine),
+    ) -> (Engine, Ptr<HitData>, Logged) {
         let mut e = Engine::new();
         settings(&mut e);
         let player = e.mem.alloc(0x200);
         e.set_global(PLAYER_011DEA3C, player);
         e.register(0x0066_ef50, |_, _| st0(10.0));
-        let target = make_target(&mut e, false, &[(0x230, word(1))]);
+        let target = make_target(&mut e, character, &[(0x230, word(1))]);
+        if character {
+            let base = object(&mut e, 0x0a80_0000, &[(0x180, word(0))]);
+            e.register_double(0x0041_81e0, move |_, _| base.into_ret());
+            e.register(0x009c_3ee0, |_, _| Ret::default());
+            setting(&mut e, 0x011c_e5d0, 1.5);
+        }
         let aggressor = object(
             &mut e,
             0x0a40_0000,
@@ -3100,6 +3251,10 @@ mod n026_tests {
             e.mem.set_u8(command + 8, shots);
             e.set(hit, HitData::pVATSCommand, command);
         }
+        if character {
+            e.set(hit, HitData::eDamageLimb, 0xe);
+        }
+        before(&mut e);
         let item = if world.item { 0x0600_0000u32 } else { 0 };
         e.call_log = Some(vec![]);
         if world.projectile != 0 {
@@ -3141,6 +3296,8 @@ mod n026_tests {
         assert_eq!(e.get(hit, HitData::fHealthDamage), expected);
         assert_eq!(f(e.get(hit, HitData::fDamageToWeapon)), 3.0);
         assert!(calls(&log, 0x0088_5d70).is_empty());
+        // `ReduceDamage(0)` by address (JIP LN NVSE not installed: not deferred).
+        assert_eq!(calls(&log, 0x009b_5a30), vec![vec![hit.addr(), 0]]);
     }
 
     #[test]
@@ -3215,6 +3372,158 @@ mod n026_tests {
         assert_eq!(f(e.get(hit, HitData::fBonusMult)), 1.5);
         assert_eq!(f(e.get(hit, HitData::fFatigueDamage)), 1.0);
         assert_eq!(f(e.get(hit, HitData::fHealthDamage)), 8.0);
+    }
+
+    /// An unarmed VATS hit (damage 7 x 2) on a character, as [`melee_with`] makes it.
+    fn unarmed_vats() -> Melee {
+        Melee {
+            item: false,
+            command: Some((0, 1, 1)),
+            power: 0,
+            hand_to_hand_answer: 1,
+            flags: 0,
+            weapon_test: 0,
+            force_update: 0,
+            projectile: 0,
+        }
+    }
+
+    /// `_ov4` on `target` (no aggressor or item; the projectile's damage 5) with the hit's limb
+    /// 0xE: the hit and the calls logged.
+    fn projectile_hit(e: &mut Engine, target: u32) -> (Ptr<HitData>, Logged) {
+        let hit = e.new_object::<HitData>();
+        e.set(hit, HitData::eDamageLimb, 0xe);
+        e.call_log = Some(vec![]);
+        e.call(0x009b_5650, &args![hit, 0u32, target, 0u32, 0x0e00_0000u32]);
+        (hit, e.call_log.take().unwrap())
+    }
+
+    /// The position of the first call of `addr` in `log`.
+    fn first(log: &CallLog, addr: u32) -> usize {
+        log.iter()
+            .position(|(a, _)| *a == addr)
+            .unwrap_or_else(|| panic!("{addr:08x} not called"))
+    }
+
+    /// JIP LN NVSE not installed: `_ov3` (word 0) and `_ov4` (word 1) call `ReduceDamage` by
+    /// address before `SetTargetedLimb` (its first call `004181e0`), so on a character the limb
+    /// 0xE step moves the reduced health damage (an immune target's: 0), not the raw 14 or 5.
+    #[test]
+    fn o1_ov3_and_ov4_reduce_before_the_limb_step_with_jip_off() {
+        let (mut e, hit, log) = melee_with(unarmed_vats(), true, |_| {});
+        assert_eq!(e.jip_patches(), 0);
+        assert_eq!(calls(&log, 0x009b_5a30), vec![vec![hit.addr(), 0]]);
+        assert!(first(&log, 0x009b_5a30) < first(&log, 0x0041_81e0));
+        assert_eq!(
+            (
+                e.get(hit, HitData::fTargetedLimbDamage),
+                e.get(hit, HitData::fHealthDamage)
+            ),
+            (0, 0),
+            "ov3"
+        );
+        let target = e.get(hit, HitData::pTarget);
+        let (hit, log) = projectile_hit(&mut e, target);
+        assert_eq!(calls(&log, 0x009b_5a30), vec![vec![hit.addr(), 1]]);
+        assert!(first(&log, 0x009b_5a30) < first(&log, 0x0041_81e0));
+        assert_eq!(
+            (
+                e.get(hit, HitData::fTargetedLimbDamage),
+                e.get(hit, HitData::fHealthDamage)
+            ),
+            (0, 0),
+            "ov4"
+        );
+    }
+
+    /// JIP LN NVSE installed, its row on and `bIgnoreDTDRFix` (JIP's default) through the whole
+    /// `_ov3` and `_ov4`: `_ov3` with nothing pending defers its call (none made; word 0 + 1
+    /// pending on this thread, left there by the non-character target's `SetTargetedLimb`, which
+    /// stops before G116); `_ov4` then finds it pending and makes its call (the wrap takes the
+    /// pending word), and the word is gone; the next `_ov4` defers again (word 1 + 1). On a
+    /// character G116 runs the deferred call: no call made, nothing left pending, and JIP's limb
+    /// 0xE move (x 1.5 with the VATS command) done.
+    #[test]
+    fn o1_deferral_through_ov3_and_ov4_with_the_switch_on() {
+        use jip::game_patches::gc::damage::pending_word;
+        let (mut e, hit, log) = melee_with(
+            Melee {
+                command: None,
+                ..unarmed_vats()
+            },
+            false,
+            jip_on,
+        );
+        assert_ne!(
+            e.jip_patches() & engine_core::extend::jip_patches::IGNORE_DTDR_FIX,
+            0
+        );
+        assert!(calls(&log, 0x009b_5a30).is_empty(), "ov3 deferred");
+        assert_eq!(pending_word(&e), 1);
+        let target = e.get(hit, HitData::pTarget);
+        let (hit, log) = projectile_hit(&mut e, target);
+        assert_eq!(calls(&log, 0x009b_5a30), vec![vec![hit.addr(), 1]]);
+        assert_eq!(pending_word(&e), 0, "taken once");
+        let (_, log) = projectile_hit(&mut e, target);
+        assert!(calls(&log, 0x009b_5a30).is_empty(), "ov4 deferred");
+        assert_eq!(pending_word(&e), 2);
+
+        let (e, hit, log) = melee_with(unarmed_vats(), true, jip_on);
+        assert!(calls(&log, 0x009b_5a30).is_empty(), "deferred to G116");
+        assert_eq!(pending_word(&e), 0, "G116 took it");
+        assert_eq!(
+            (
+                f(e.get(hit, HitData::fTargetedLimbDamage)),
+                e.get(hit, HitData::fHealthDamage)
+            ),
+            (14.0 * 1.5, 0)
+        );
+    }
+
+    /// Where the deferral handlers below log the hit and the word they were asked with: one
+    /// pair per site.
+    const ASKED_AT: u32 = 0x0b80_0000;
+
+    /// Handlers at the two deferral sites that log, each its own pair, and answer nothing (the
+    /// call is made), with the word's `bIgnoreDTDRFix` bit set.
+    fn deferral_logs(e: &mut Engine) {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        e.map(ASKED_AT, 0x1000);
+        e.set_jip_patches(jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009b_5623), |e, a| {
+            e.mem.set_u32(ASKED_AT, a[0]);
+            e.mem.set_u32(ASKED_AT + 4, a[1]);
+            None
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009b_5702), |e, a| {
+            e.mem.set_u32(ASKED_AT + 8, a[0]);
+            e.mem.set_u32(ASKED_AT + 12, a[1]);
+            None
+        });
+    }
+
+    /// Each deferral seam is asked at its own call's address: `_ov3` at `0x9B5623` with word 0,
+    /// `_ov4` at `0x9B5702` with word 1 (JIP tells them apart by their return addresses).
+    #[test]
+    fn o1_each_deferral_site_by_its_address() {
+        let (mut e, hit, _) = melee_with(
+            Melee {
+                command: None,
+                ..unarmed_vats()
+            },
+            false,
+            deferral_logs,
+        );
+        let asked = |e: &Engine| {
+            (0..4)
+                .map(|i| e.mem.u32(ASKED_AT + 4 * i))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(asked(&e), vec![hit.addr(), 0, 0, 0], "ov3");
+        e.mem.set_u32(ASKED_AT, 0);
+        let target = e.get(hit, HitData::pTarget);
+        let (hit, _) = projectile_hit(&mut e, target);
+        assert_eq!(asked(&e), vec![0, 0, hit.addr(), 1], "ov4");
     }
 
     #[test]
