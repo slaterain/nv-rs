@@ -10,9 +10,9 @@
 //!   No plugin DLL ever loads in nv-rs, so the answer is what nv-rs builds in and lets answer
 //!   "installed", [`loaded_plugins`] (`crate::plugins`): none yet, so every name answers "not
 //!   installed" (`IsPluginInstalled` 0, `GetPluginVersion` -1, xNVSE's answer for a plugin it did
-//!   not load). When JIP LN NVSE answers "installed" (`jip::ANSWERS_INSTALLED`), it also puts
-//!   its own versions of these two in xNVSE's records (`patches_cmd.h` (JIP LN NVSE)), which
-//!   answer for JIP's names too.
+//!   not load). When JIP LN NVSE answers "installed" (the host's row
+//!   `NV_JIP_INSTALLED`, `jip::set_answers_installed`), it also puts its own versions of these
+//!   two in xNVSE's records (`patches_cmd.h` (JIP LN NVSE)), which answer for JIP's names too.
 //!
 //! Read from xNVSE's source and checked in the shipped DLL (xNVSE 6.4.9's `nvse_1_4.dll`: the
 //! version executes and evals `10056380` to `10056470`, the plugin executes `100ADB40` and
