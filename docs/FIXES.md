@@ -986,8 +986,12 @@ like 3.9a's above (JIP's comment, exe places, what a player with JIP gets, built
 
 #### GA: UI: HUD, messages, text, start-up INI
 
-No rows of its own built yet. Seams for other groups' rows: G06's `0x77765A` (the HUD's action
-text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below).
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| "Increase corner message max text length to 0x203 characters" (16 `SafeWrite8`s, `0x7753B8` to `0x77582B`; a fix row) | `fn_00775380` (queueing a HUD corner message), `HUDMainMenu::DoIdle` `00770430` (`0x7714DA`), `HUDMainMenu::HideMessage` `007756e0` | A corner message (the top-left notices, `ShowMessage`, `MessageEx`) shows up to 515 characters; the game cuts it at 259. The icon path and sound name keep their 259-character limits. With JIP installed and the row off, the game's record is used unchanged | 3.9 GA-3 |
+
+Seams for other groups' rows: G06's `0x77765A` (the HUD's action text in `SetInfoForRef`; group
+GH2's row and handler, listed under GH2 below).
 
 #### GB: UI: item lists, repair, pad dead zones
 
