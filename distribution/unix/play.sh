@@ -107,8 +107,31 @@ done
 
 # What the program finds: its own folder, the games and the saves folders (only read).
 found=$("$program" --find) || fail "the program could not look for your game (above)"
-own=$(printf '%s\n' "$found" | awk -F '\t' '$1 == "own" { print $2; exit }')
+# Each field of --find is escaped: every byte but ASCII letters, digits and ` /._-+,:@=~()` is
+# written %XX, so no field holds a tab or a line break. decode undoes it, byte for byte (through
+# printf's octal escapes), trailing line breaks kept.
+decode() {
+    octal=$(printf '%s' "$1" | LC_ALL=C awk '{
+        s = $0; r = ""; hex = "0123456789ABCDEF"
+        while ((i = index(s, "%")) > 0) {
+            h = toupper(substr(s, i + 1, 2))
+            n = (index(hex, substr(h, 1, 1)) - 1) * 16 + index(hex, substr(h, 2, 1)) - 1
+            r = r substr(s, 1, i - 1) sprintf("\\0%03o", n)
+            s = substr(s, i + 3)
+        }
+        printf "%s", r s
+    }')
+    decoded=$(printf '%bx' "$octal")
+    printf '%s' "${decoded%x}"
+}
+field() { # KIND N: field N of the first record of KIND, still escaped
+    printf '%s\n' "$found" | awk -F '\t' -v kind="$1" -v n="$2" '$1 == kind { print $n; exit }'
+}
+own=$(decode "$(field own 2)")
 [ -n "$own" ] || fail "the program did not name nv-rs's own folder"
+printf '%s\n' "$found" | awk -F '\t' '$1 == "warning" { print $2 }' | while IFS= read -r warning; do
+    printf 'nv-rs: WARNING: %s\n' "$(decode "$warning")" >&2
+done
 case $own in
 /*) ;;
 *) fail "nv-rs's own folder is not a full path: $own" ;;
@@ -133,30 +156,44 @@ else
         say "Forgot the game folder nv-rs remembered."
     fi
     if [ -f "$remembered" ]; then
-        game=$(head -n 1 -- "$remembered")
+        # The whole file but its last line break (a folder's name may hold line breaks).
+        game=$(cat -- "$remembered" && printf x)
+        game=${game%x}
+        game=${game%"
+"}
         if ! has_game "$game"; then
             say "The game nv-rs remembered is no longer in $game."
             game=''
         fi
     fi
     if [ -z "$game" ]; then
-        games=$(printf '%s\n' "$found" | awk -F '\t' '$1 == "game" { print $2 "\t" $3 }')
+        # The copies found that really hold the game (still escaped, one a line).
+        games=$(printf '%s\n' "$found" | awk -F '\t' '$1 == "game" { print $2 "\t" $3 }' |
+            while IFS="$(printf '\t')" read -r store folder; do
+                if has_game "$(decode "$folder")"; then
+                    printf '%s\t%s\n' "$store" "$folder"
+                fi
+            done)
         count=$(printf '%s' "$games" | grep -c '' || true)
         if [ "$count" = 1 ]; then
-            game=$(printf '%s\n' "$games" | cut -f 2-)
+            game=$(decode "$(printf '%s\n' "$games" | cut -f 2-)")
             say "Found your game ($(printf '%s\n' "$games" | cut -f 1)): $game"
             remember=1
         elif [ "$count" -gt 1 ]; then
             can_ask || fail "several copies of the game were found; start with --game FOLDER to choose one"
             say "Found these copies of the game:"
-            printf '%s\n' "$games" | awk -F '\t' '{ printf "  %d. %s (%s)\n", NR, $2, $1 }'
+            number=0
+            printf '%s\n' "$games" | while IFS="$(printf '\t')" read -r store folder; do
+                number=$((number + 1))
+                say "  $number. $(decode "$folder") ($store)"
+            done
             while [ -z "$game" ]; do
                 ask "Type the number of the one to play:"
                 case $answer in
                 '' | *[!0-9]*) [ -n "$answer" ] || exit 1 ;;
                 *)
                     if [ "$answer" -ge 1 ] && [ "$answer" -le "$count" ]; then
-                        game=$(printf '%s\n' "$games" | sed -n "${answer}p" | cut -f 2-)
+                        game=$(decode "$(printf '%s\n' "$games" | sed -n "${answer}p" | cut -f 2-)")
                     fi
                     ;;
                 esac
@@ -252,7 +289,7 @@ if [ "$opt_check" = 0 ] && { [ "$opt_import" = 1 ] || { ! has_own_saves && [ ! -
     folders=$(printf '%s\n' "$found" | awk -F '\t' '$1 == "saves" { print $2 "\t" $3 }')
     if [ -n "$folders" ]; then
         while IFS="$(printf '\t')" read -r from folder <&3; do
-            copy_saves "$from" "$folder"
+            copy_saves "$(decode "$from")" "$(decode "$folder")"
         done 3<<EOF
 $folders
 EOF
