@@ -5,7 +5,8 @@
 //! allies, what it detects, its followers and dropped items, its active effects' modifiers and
 //! its perk modifiers, the turn calls, a name set on a base form or a cell, the character
 //! controller's fall time, velocity, air state and the body under its feet, and the backup
-//! package away from the player. 55 built here (`ToggleDetectionFix` with its patch).
+//! package away from the player, and (lane C3) the radiation an actor takes. 56 built here
+//! (`ToggleDetectionFix` with its patch).
 //!
 //! Built by the core track inside its hook files (not again here): `GetCombatDisabled`,
 //! `SetCombatDisabled`, `ToggleNoHealthReset`, `GetTeammateUsingAmmo`, `SetTeammateUsingAmmo`,
@@ -17,10 +18,6 @@
 //!   row G54): the flag alone changes nothing in the game until that patch exists.
 //!   (`ToggleDetectionFix` is listed here; its handler is with its patch, G53, in
 //!   `game_patches::gc`.)
-//! - `GetRadiationLevelAlt` (a condition; JIP's `Actor::GetRadiationLevel`: water forms, the
-//!   loaded radiation emitters, distances, game settings, the high process's +0x238/+0x23C and
-//!   its vtable +0x76C): nothing it needs is missing, but lane C1 did not reach it; the next
-//!   command agent.
 //!
 //! An actor base (`TESActorBase`): its base data at +0x30 (`ACBS`, saved by
 //! `TESActorBaseData::Save` `0047CAC0` as 0x18 bytes from +4: flags +0x34, level +0x3C (signed
@@ -115,6 +112,7 @@ pub static CONDITIONS: Conditions = &[
     (0x277d, is_in_water, is_in_water_eval),
     (0x27ad, get_is_ragdolled, get_is_ragdolled_eval),
     (0x27b5, is_in_air, is_in_air_eval),
+    (0x277c, get_radiation_level_alt, get_radiation_level_alt_eval),
 ];
 
 /// A reference's base form (+0x20) and an actor's process (`pCurrentProcess`, +0x68).
@@ -1145,6 +1143,184 @@ fn is_in_water_eval(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- radiation (lane C3) ----
+
+/// An actor's `bSwimming` +0x14D (Xbox PDB; `IsSwimming`'s condition reads it) and its loaded
+/// data +0x64 (`LOADED_REF_DATA`, its water reference `pCurrentWaterObject` +0); a reference's cell
+/// +0x40 (`REFR_CELL`, below); a placeable water's water form +0x4C (`BGSPlaceableWater`'s
+/// loader casts the form it reads there); a water form's other water form +0x80 (`004FB070`,
+/// which the cell's own lookup
+/// `00547770` follows) and its radiation +0x188 (JIP reads the byte; the exe's `00778950` reads
+/// the word); `TESObjectCELL::GetWaterType` `00547770` (`thiscall`).
+const SWIMMING: u32 = 0x14d;
+const LOADED_DATA: u32 = 0x64;
+const LOADED_WATER_REF: u32 = 0x00;
+const PLACEABLE_WATER_FORM: u32 = 0x4c;
+const WATER_OTHER: u32 = 0x80;
+const WATER_RADIATION: u32 = 0x188;
+const CELL_WATER_TYPE: u32 = 0x0054_7770;
+/// The game settings `fSwimRadiationDamageMult` and `fWadeRadiationDamageMult` (a setting's
+/// value at +4, as `00403E20` reads it; the game's own water radiation in `Actor::Update`,
+/// `0088A98E`, reads the two).
+const SWIM_RADIATION_MULT: u32 = 0x011d_0460;
+const WADE_RADIATION_MULT: u32 = 0x011d_1464;
+const SETTING_VALUE: u32 = 0x04;
+/// The loaded references (`*0x11C95C8`, made once by `InitTES`; JIP keeps the pointer from its
+/// start-up) and their radiation emitters' map +0x90 (`009C1A50`, walked by the game's own
+/// `009777A0`): an `NiTPtrMap` (bucket count +4, buckets +8; an entry: next +0, key +4, the
+/// reference +8). An emitter's `ExtraRadius` (0x5C) and `ExtraRadiation` (0x5D, `00422450`),
+/// each its value at +0xC.
+const LOADED_REFERENCES: u32 = 0x011c_95c8;
+const RADIATION_EMITTERS: u32 = 0x90;
+const MAP_BUCKET_COUNT: u32 = 0x04;
+const MAP_BUCKETS: u32 = 0x08;
+const MAP_ENTRY_NEXT: u32 = 0x00;
+const MAP_ENTRY_DATA: u32 = 0x08;
+const EXTRA_RADIUS: u32 = 0x5c;
+const EXTRA_RADIATION: u32 = 0x5d;
+const EXTRA_FLOAT: u32 = 0x0c;
+/// `kAVCode_RadResist` (0x14): `Actor::GetRadiationResistanceMult` `008C4330` reads it through
+/// the actor's `ActorValueOwner` (+0xA4, its `GetActorValue` +0xC).
+const AV_RAD_RESIST: u32 = 0x14;
+/// A high process's radiation (HighProcess vtable `01087864`): its +0x75C (`008D89C0`) answers
+/// the float +0x238, its +0x764 (`008D8A00`) the float +0x23C, and `GetRadsSec` +0x76C
+/// (`008D97A0`); the game's `GetRadiationLevel` condition (`005A50F0`) adds the three.
+const P_RADS: u32 = 0x238;
+const P_WATER_RADS: u32 = 0x23c;
+const GET_RADS_SEC: u32 = 0x76c;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::GetRadiationLevel.
+/// The radiation an actor takes where it stands: in water, the water form's radiation times the
+/// swim or wade setting (the water form from the actor's water reference, else its cell's;
+/// its other water form when it has one); plus each loaded emitter's radiation, scaled by how
+/// far inside its radius the actor is; all of it less the actor's radiation resistance (in
+/// percent). Single-precision floats in JIP's order. The emitters' map walk is bounded
+/// ([`list_step`]).
+fn actor_radiation_level(e: &mut Engine, actor: u32) -> f32 {
+    let mut result = 0.0f32;
+    if e.mem.u8(actor + IN_WATER) != 0 {
+        let loaded = e.mem.u32(actor + LOADED_DATA);
+        let water_ref = if loaded != 0 {
+            e.mem.u32(loaded + LOADED_WATER_REF)
+        } else {
+            0
+        };
+        let water = if water_ref != 0 {
+            let base = e.mem.u32(water_ref + BASE);
+            let water = h::rd32(e, base.wrapping_add(PLACEABLE_WATER_FORM)).unwrap_or(0);
+            if water != 0 && e.mem.u32(water + WATER_OTHER) != 0 {
+                e.mem.u32(water + WATER_OTHER)
+            } else {
+                water
+            }
+        } else {
+            let cell = e.mem.u32(actor + REFR_CELL);
+            e.call(CELL_WATER_TYPE, &args![cell]).u32()
+        };
+        if water != 0 && e.mem.u8(water + WATER_RADIATION) != 0 {
+            let setting = if e.mem.u8(actor + SWIMMING) != 0 {
+                SWIM_RADIATION_MULT
+            } else {
+                WADE_RADIATION_MULT
+            };
+            let mult = e.mem.f32(setting + SETTING_VALUE);
+            result = f32::from(e.mem.u8(water + WATER_RADIATION)) * mult;
+        }
+    }
+    let collection = e.mem.u32(LOADED_REFERENCES);
+    if collection == 0 {
+        // Before `InitTES` makes it: JIP's null pointer would stop the game; nothing to walk.
+        return finish_radiation(e, actor, result);
+    }
+    let map = collection + RADIATION_EMITTERS;
+    let buckets = e.mem.u32(map + MAP_BUCKETS);
+    let count = e.mem.u32(map + MAP_BUCKET_COUNT);
+    let mut walked = 0usize;
+    for b in 0..count {
+        if !list_step(e, &mut walked) {
+            break;
+        }
+        let Some(mut entry) = h::rd32(e, buckets.wrapping_add(4u32.wrapping_mul(b))) else {
+            break;
+        };
+        while entry != 0 {
+            if !list_step(e, &mut walked) {
+                return finish_radiation(e, actor, result);
+            }
+            let (Some(refr), Some(next)) = (
+                h::rd32(e, entry.wrapping_add(MAP_ENTRY_DATA)),
+                h::rd32(e, entry.wrapping_add(MAP_ENTRY_NEXT)),
+            ) else {
+                return finish_radiation(e, actor, result);
+            };
+            entry = next;
+            if refr == 0 {
+                continue;
+            }
+            let radius = extra::refr_extra(e, refr, EXTRA_RADIUS);
+            if radius == 0 {
+                continue;
+            }
+            let r = e.mem.f32(radius + EXTRA_FLOAT);
+            let distance = r - super::ln_fn_math::distance_3d(e, actor, refr);
+            if distance > 0.0 {
+                let radiation = extra::refr_extra(e, refr, EXTRA_RADIATION);
+                if radiation != 0 {
+                    result += e.mem.f32(radiation + EXTRA_FLOAT) * distance / r;
+                }
+            }
+        }
+    }
+    finish_radiation(e, actor, result)
+}
+
+/// JIP's last step of `GetRadiationLevel`: a non-zero result times one less the actor's
+/// radiation resistance in hundredths.
+fn finish_radiation(e: &mut Engine, actor: u32, result: f32) -> f32 {
+    if result != 0.0 {
+        let resist = e
+            .vcall(actor + ACTOR_AV_OWNER, GET_ACTOR_VALUE, &[AV_RAD_RESIST])
+            .f32();
+        result * (1.0 - resist * 0.01)
+    } else {
+        result
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: GetRadiationLevelAlt.
+/// An actor with a high process (level 0): for the player, the process's water radiation plus
+/// its radiation plus `GetRadsSec`; for another actor, [`actor_radiation_level`]; else 0.
+fn radiation_level_alt(e: &mut Engine, actor: u32) -> f32 {
+    let p = process(e, actor);
+    if p == 0 || level(e, p) != 0 {
+        return 0.0;
+    }
+    if ref_id(e, actor) == PLAYER_ID {
+        let sum = e.mem.f32(p + P_WATER_RADS) + e.mem.f32(p + P_RADS);
+        sum + e.vcall(p, GET_RADS_SEC, &[]).f32()
+    } else {
+        actor_radiation_level(e, actor)
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetRadiationLevelAlt_Execute.
+fn get_radiation_level_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let v = radiation_level_alt(e, a.this_obj);
+    a.set_result(e, f64::from(v));
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetRadiationLevelAlt_Eval.
+fn get_radiation_level_alt_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    let v = radiation_level_alt(e, a.this_obj);
+    e.mem.set_f64(a.result, f64::from(v));
+    handled(true)
+}
+
 // ---- references ----
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
@@ -1756,3 +1932,7 @@ fn get_object_under_feet(e: &mut Engine, w: &[u32]) -> Ret {
 #[cfg(test)]
 #[path = "jip_fn_actor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_c3_tests.rs"]
+mod c3_tests;

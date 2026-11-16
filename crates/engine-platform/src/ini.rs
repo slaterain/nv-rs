@@ -8,76 +8,35 @@ use crate::prelude::*;
 
 use super::{d3d9, files};
 
-/// ASCII white space taken off both ends (`<[u8]>::trim_ascii` is newer than the MSRV).
-trait TrimSpaces {
-    fn trim_spaces(&self) -> &Self;
-}
+/// The value of a key as `GetPrivateProfileStringA` reads it: the core's (`engine_core::mod_files`,
+/// which the extenders' mod files share); its measured answers are this file's tests.
+pub use engine_core::mod_files::ini_value;
 
-impl TrimSpaces for [u8] {
-    fn trim_spaces(&self) -> &[u8] {
-        let start = self
-            .iter()
-            .position(|b| !b.is_ascii_whitespace())
-            .unwrap_or(self.len());
-        let end = self
-            .iter()
-            .rposition(|b| !b.is_ascii_whitespace())
-            .map_or(start, |i| i + 1);
-        &self[start..end.max(start)]
-    }
-}
-
-/// The value of `key` in section `section` of the INI text `text` (names compared without case,
-/// spaces around names and values trimmed, one pair of surrounding quotes taken off), as
-/// `GetPrivateProfileStringA` finds it: only in the first section of that name, as Windows reads
-/// a file with a repeated section name (measured on scratch files, 2026-11-09; the test
-/// `only_the_first_section_of_a_name_is_read` holds the answers).
-fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let section = section.trim_spaces();
-    let mut inside = false;
-    for line in text.split(|&b| b == b'\n') {
-        let line = line.trim_spaces();
-        if let Some(rest) = line.strip_prefix(b"[") {
-            // The first section of the name ends here: Windows reads no later one.
-            if inside {
-                return None;
-            }
-            let name = rest.split(|&b| b == b']').next().unwrap_or(rest);
-            inside = name.trim_spaces().eq_ignore_ascii_case(section);
-            continue;
-        }
-        if !inside {
-            continue;
-        }
-        let Some(at) = line.iter().position(|&b| b == b'=') else {
-            continue;
-        };
-        if line[..at].trim_spaces().eq_ignore_ascii_case(key) {
-            let value = line[at + 1..].trim_spaces();
-            let value = match value {
-                [b'"', middle @ .., b'"'] => middle,
-                _ => value,
-            };
-            return Some(value.to_vec());
-        }
-    }
-    None
-}
-
-/// The text of the profile file `file` names: a name without a full path is in the Windows
-/// directory, as the profile functions look for it (`d3d9::windows_directory`, from the
-/// player's table); the file as the game made it in this run when it did (`files`), else the
-/// player's file, read only. `None` when there is none.
-fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
-    let name = e.mem.cstr(file.addr());
-    let path = if files::is_full_path(&name) {
-        name
+/// Where the profile functions look for the file `name` names (measured on scratch files,
+/// 2026-11-16, `build43-scratch/measure/mcm/ini-measure/ini-2026-11-16.txt`): a bare name (no `\`
+/// or `/`) is in the Windows directory (`d3d9::windows_directory`, from the player's table); a
+/// full path is itself; any other name with a folder part (`Data\Config\MCM.ini`,
+/// `Data/Config/MCM.ini`, `.\name.ini`) is relative to the current directory. Before 2026-11-16
+/// every name that was not a full path was looked for in the Windows directory.
+fn profile_path(e: &mut Engine, name: &[u8]) -> Vec<u8> {
+    if files::is_full_path(name) {
+        name.to_vec()
+    } else if name.iter().any(|&b| b == b'\\' || b == b'/') {
+        files::full_path(e, name)
     } else {
         let mut path = d3d9::windows_directory(e);
         path.push(b'\\');
-        path.extend_from_slice(&name);
+        path.extend_from_slice(name);
         path
-    };
+    }
+}
+
+/// The text of the profile file `file` names ([`profile_path`]): the file as the game made it
+/// in this run when it did (`files`), else the player's file, read only. `None` when there is
+/// none.
+fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
+    let name = e.mem.cstr(file.addr());
+    let path = profile_path(e, &name);
     files::read_whole(e, &path)
 }
 
@@ -86,6 +45,14 @@ fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
 /// `default` when the file, the section or the key isn't there ([`profile_text`]). The value is
 /// read as [`profile_int`] does, which follows Windows' answers measured on the player's machine
 /// (2026-10-21, 38 values).
+///
+/// One key answers 1 whatever the file says: `[General] bUseMyGamesDirectory`
+/// ([`MY_GAMES_KEY`]), which the game reads at start-up from `.\Custom.ini` and `.\FALLOUT.INI`
+/// in its own folder (`00876ad0`, call sites `00876b13` and `00876b55`): 0 there would put its INI
+/// files, `plugins.txt` and saves in the game's folder, where nv-rs never writes. Before 2026-11-16
+/// those names were looked for in the Windows directory, found nothing and gave the default, 1;
+/// with names now read from the current directory as Windows reads them, the key is pinned
+/// instead: a deliberate difference, said once in the log when a file holds 0.
 pub fn get_private_profile_int_a(
     e: &mut Engine,
     section: Ptr,
@@ -95,12 +62,30 @@ pub fn get_private_profile_int_a(
 ) -> u32 {
     let section = e.mem.cstr(section.addr());
     let key = e.mem.cstr(key.addr());
-    let Some(value) = profile_text(e, file).and_then(|text| ini_value(&text, &section, &key))
-    else {
+    let value = profile_text(e, file).and_then(|text| ini_value(&text, &section, &key));
+    let trim = engine_core::mod_files::trim_spaces;
+    if MY_GAMES_KEY.0.eq_ignore_ascii_case(trim(&section))
+        && MY_GAMES_KEY.1.eq_ignore_ascii_case(trim(&key))
+    {
+        if value.as_deref().map(profile_int) == Some(0) {
+            static SAID: std::sync::Once = std::sync::Once::new();
+            let name = String::from_utf8_lossy(&e.mem.cstr(file.addr())).into_owned();
+            SAID.call_once(|| {
+                println!(
+                    "{name}: bUseMyGamesDirectory=0 is set in the game folder's settings; nv-rs keeps settings and saves in its own folder"
+                )
+            });
+        }
+        return 1;
+    }
+    let Some(value) = value else {
         return default;
     };
     profile_int(&value)
 }
+
+/// The section and key [`get_private_profile_int_a`] answers 1 for.
+pub const MY_GAMES_KEY: (&[u8], &[u8]) = (b"General", b"bUseMyGamesDirectory");
 
 /// A profile value as Windows' `GetPrivateProfileIntA` reads it (measured): leading spaces and
 /// tabs, then one optional `+` or `-`, then an optional lower-case base prefix `0x` (16), `0o`
@@ -364,6 +349,152 @@ mod tests {
         for &(value, want) in measured {
             assert_eq!(profile_int(value), want, "{:?}", std::str::from_utf8(value));
         }
+    }
+
+    /// Where a name is looked for, as Windows looked on scratch files (2026-11-16): a name with a
+    /// folder part from the current directory (both separators, `.\` too), a bare name from the
+    /// Windows directory, a full path as it is.
+    #[test]
+    fn a_name_with_a_folder_part_is_relative_to_the_current_directory() {
+        let mut e = engine();
+        e.kernel.current_directory = br"C:\Games\FNV".to_vec();
+        assert_eq!(
+            profile_path(&mut e, br"Data\Config\MCM.ini"),
+            br"C:\Games\FNV\Data\Config\MCM.ini"
+        );
+        assert_eq!(
+            profile_path(&mut e, b"Data/Config/MCM.ini"),
+            b"C:\\Games\\FNV\\Data/Config/MCM.ini"
+        );
+        assert_eq!(
+            profile_path(&mut e, br".\bare.ini"),
+            br"C:\Games\FNV\bare.ini"
+        );
+        assert_eq!(profile_path(&mut e, br"D:\x\y.ini"), br"D:\x\y.ini");
+        // A bare name: the Windows directory, from the machine's table.
+        windows_table(&mut e);
+        assert_eq!(
+            profile_path(&mut e, b"bare-nvrs-measure.ini"),
+            br"C:\WINDOWS\bare-nvrs-measure.ini"
+        );
+    }
+
+    /// A machine table with only its Windows directory, `C:\WINDOWS`.
+    fn windows_table(e: &mut Engine) {
+        let hex: String = br"C:\WINDOWS".iter().map(|b| format!("{b:02x}")).collect();
+        d3d9::load_adapter_table(e, &format!("GetWindowsDirectoryA\t-\t0\t{hex}\n"));
+    }
+
+    /// A scratch folder removed when the test ends, however it ends.
+    struct Scratch(std::path::PathBuf);
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn scratch(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("nv-ini-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+
+    /// `GetPrivateProfileIntA` through a name with a folder part (`.\FALLOUT.INI`, as the game
+    /// reads it at start-up) reads the current directory's file; `[General]
+    /// bUseMyGamesDirectory` answers 1 whatever the file says (the game's folder keeps nothing of
+    /// nv-rs's), other keys their values; a bare name reads the Windows directory.
+    #[test]
+    fn profile_ints_read_relative_names_and_pin_the_my_games_key() {
+        let game = scratch("game");
+        std::fs::write(
+            game.0.join("FALLOUT.INI"),
+            b"[General]\r\nbUseMyGamesDirectory=0\r\niOther=7\r\n",
+        )
+        .unwrap();
+        let mut e = engine();
+        windows_table(&mut e);
+        e.kernel.current_directory = game.0.to_string_lossy().replace('/', "\\").into_bytes();
+        e.mem.set_cstr(0x1000, b"General");
+        e.mem.set_cstr(0x1020, b"bUseMyGamesDirectory");
+        e.mem.set_cstr(0x1040, br".\FALLOUT.INI");
+        e.mem.set_cstr(0x1060, b"iOther");
+        e.mem.set_cstr(0x1080, b"FALLOUT.INI");
+        let int = |e: &mut Engine, key: u32, file: u32| {
+            get_private_profile_int_a(e, Ptr::new(0x1000), Ptr::new(key), 5, Ptr::new(file))
+        };
+        assert_eq!(int(&mut e, 0x1020, 0x1040), 1, "pinned, the file says 0");
+        assert_eq!(int(&mut e, 0x1060, 0x1040), 7, "another key reads the file");
+        assert_eq!(
+            int(&mut e, 0x1060, 0x1080),
+            5,
+            "a bare name: the Windows directory"
+        );
+        std::fs::write(game.0.join("FALLOUT.INI"), b"[General]\r\niOther=7\r\n").unwrap();
+        assert_eq!(int(&mut e, 0x1020, 0x1040), 1, "no key: 1 too");
+    }
+
+    /// Quotes around a value, as Windows read them on scratch files (2026-11-16,
+    /// `build43-scratch/measure/mcm/ini-measure/ini3-2026-11-16.txt`).
+    #[test]
+    fn quotes_around_a_value_read_as_windows_does() {
+        let measured: &[(&[u8], &[u8])] = &[
+            (b"x='1'", b"1"),
+            (b"x=\"1\"", b"1"),
+            (b"x=\"1'", b"\"1'"),
+            (b"x=\"", b"\""),
+            (b"x=\"\"", b""),
+            (b"x= \"1\" ", b"1"),
+            (b"x=''", b""),
+            (b"x='", b"'"),
+            (b"x=\"a\"b\"", b"a\"b"),
+            (b"x=\"1\" ;c", b"\"1\" ;c"),
+            (b"x=\"1\"\"", b"1\""),
+        ];
+        for &(line, want) in measured {
+            let text = [b"[A]\r\n", line, b"\r\n"].concat();
+            assert_eq!(
+                ini_value(&text, b"A", b"x").unwrap(),
+                want,
+                "{}",
+                String::from_utf8_lossy(line)
+            );
+        }
+    }
+
+    /// The game's own profile reads do not look in the mods' folder: a value a mod's command
+    /// wrote (`engine_core::mod_files`) is not what the import reads; the game's file is.
+    #[test]
+    fn the_games_profile_import_does_not_read_mod_files() {
+        let game = scratch("own");
+        std::fs::create_dir_all(game.0.join(r"Data\Config")).unwrap();
+        std::fs::write(game.0.join(r"Data\Config\X.ini"), b"[A]\r\nx=game\r\n").unwrap();
+        let mut e = engine();
+        e.kernel.current_directory = game.0.to_string_lossy().replace('/', "\\").into_bytes();
+        engine_core::mod_files::write_profile_string(
+            &mut e,
+            br"Data\Config\X.ini",
+            b"A",
+            b"x",
+            b"mod",
+        )
+        .unwrap();
+        assert_eq!(
+            engine_core::mod_files::profile_string(&e, br"Data\Config\X.ini", b"A", b"x").unwrap(),
+            b"mod"
+        );
+        e.mem.set_cstr(0x1000, b"A");
+        e.mem.set_cstr(0x1020, b"x");
+        e.mem.set_cstr(0x1040, br"Data\Config\X.ini");
+        let n = get_private_profile_string_a(
+            &mut e,
+            Ptr::new(0x1000),
+            Ptr::new(0x1020),
+            Ptr::NULL,
+            Ptr::new(0x1100),
+            0x40,
+            Ptr::new(0x1040),
+        );
+        assert_eq!((n, e.mem.cstr(0x1100)), (4, b"game".to_vec()));
     }
 
     /// A missing file gives the default, cut to the buffer; writing changes nothing and answers 1.
