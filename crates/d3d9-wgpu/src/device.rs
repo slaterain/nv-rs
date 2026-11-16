@@ -5346,7 +5346,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.scene_light_ran = Some(self.presents);
         // Said when it starts and whenever the sun term turns on or off or the sun moves (on the
         // screen) by more than about 8 degrees: not every frame.
-        let changed = self.scene_light_said.is_none_or(|was: scene_light::Params| {
+        let changed = self.scene_light_said.map_or(true, |was: scene_light::Params| {
             (was.shadow > 0.0) != (params.shadow > 0.0)
                 || (params.shadow > 0.0
                     && was.sun.iter().zip(params.sun).map(|(a, b)| a * b).sum::<f32>() < 0.99)

@@ -277,12 +277,13 @@ pub fn march_distance(i: u32) -> f32 {
     s * s * SHADOW_LENGTH
 }
 
-/// Whether a march step `q_z` from the camera is shadowed by the scene's surface at `scene_z`
-/// on the same pixel: the surface nearer the camera, by more than the depth's slack and less
+/// Whether a march step `t` units along the ray and `q_z` from the camera is shadowed by the
+/// scene's surface at `scene_z` on the same pixel: the surface nearer the camera, by more than the
+/// slack (the depth's, growing along the ray: a grazing face does not shadow itself) and less
 /// than [`SHADOW_THICKNESS`].
-pub fn blocks(q_z: f32, scene_z: f32) -> bool {
+pub fn blocks(t: f32, q_z: f32, scene_z: f32) -> bool {
     let delta = q_z - scene_z;
-    delta > 1.0 + 0.003 * q_z && delta < SHADOW_THICKNESS
+    delta > 1.0 + 0.003 * q_z + 0.03 * t && delta < SHADOW_THICKNESS
 }
 
 /// The fade with distance: 1 near, 0 from [`FADE_TO`] on.
@@ -377,7 +378,8 @@ fn sun_visible(pc: vec3<f32>, n: vec3<f32>) -> f32 {
     var run = 0;
     for (var i = 1; i <= SHADOW_STEPS; i++) {
         let s = f32(i) / f32(SHADOW_STEPS);
-        let q = start + l * (s * s * SHADOW_LENGTH);
+        let t = s * s * SHADOW_LENGTH;
+        let q = start + l * t;
         if (q.z <= p.depth.x) {
             break;
         }
@@ -386,7 +388,9 @@ fn sun_visible(pc: vec3<f32>, n: vec3<f32>) -> f32 {
             break;
         }
         let delta = q.z - linear(depth_at(vec2<i32>(sp)));
-        if (delta > 1.0 + 0.003 * q.z && delta < SHADOW_THICKNESS) {
+        // The slack grows along the ray, so a surface lit at a grazing angle does not shadow
+        // itself through its own facets.
+        if (delta > 1.0 + 0.003 * q.z + 0.03 * t && delta < SHADOW_THICKNESS) {
             run += 1;
             if (run >= 2) {
                 return 0.0;
@@ -512,8 +516,11 @@ const APPLY: &str = "
         let fade = fade_at(z);
         if (fade > 0.0) {
             let surface = surface_at(xy, pc);
-            if (!surface.thin && dot(surface.n, p.sun.xyz) > 0.0) {
-                f *= 1.0 - p.sun.w * fade * (1.0 - sun_visible(pc, surface.n));
+            // Faces toward the sun, fully from 0.35 (about 70 degrees from the sun) up: a face lit
+            // at a grazing angle is already dim in the game's lighting and only shadows itself.
+            let facing = smoothstep(0.15, 0.35, dot(surface.n, p.sun.xyz));
+            if (!surface.thin && facing > 0.0) {
+                f *= 1.0 - p.sun.w * fade * facing * (1.0 - sun_visible(pc, surface.n));
             }
         }
     }
@@ -896,10 +903,13 @@ mod tests {
         }
         // A surface a little nearer the camera blocks; the surface itself, one far in front, or
         // one behind does not.
-        assert!(blocks(500.0, 480.0));
-        assert!(!blocks(500.0, 499.5));
-        assert!(!blocks(500.0, 500.0 - SHADOW_THICKNESS - 1.0));
-        assert!(!blocks(500.0, 520.0));
+        assert!(blocks(10.0, 500.0, 480.0));
+        // Far along the ray, a surface only a little nearer is the receiver's own facet.
+        assert!(!blocks(200.0, 500.0, 495.0));
+        assert!(blocks(10.0, 500.0, 495.0));
+        assert!(!blocks(10.0, 500.0, 499.5));
+        assert!(!blocks(10.0, 500.0, 500.0 - SHADOW_THICKNESS - 1.0));
+        assert!(!blocks(10.0, 500.0, 520.0));
     }
 
     #[test]
