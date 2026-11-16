@@ -1300,3 +1300,183 @@ fn a_load_and_the_main_menu_clear_the_players_killer() {
         assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0, "{kind}");
     }
 }
+
+/// A destructor on another thread erasing what a loader is putting in, between the loader's read
+/// of an entry and its one take that puts it in (`BETWEEN_TAKES`, here: both maps cleared each
+/// time), only loses what it erased: the rest of the `JPAV` and `JPED` records is still read
+/// (the later owner and the later key are there with their data).
+#[test]
+fn an_erase_between_a_loaders_takes_leaves_the_rest_of_the_record() {
+    let mut w = World::new();
+    w.changed(0x0700_0010);
+    w.changed(0x0700_0011);
+    let aux = Out::default()
+        .u16(1)
+        .u8(6)
+        .u16(2)
+        .u32(0x0700_0010)
+        .u16(1)
+        .name(b"A")
+        .u16(1)
+        .u8(1)
+        .u64(1)
+        .u32(0x0700_0011)
+        .u16(1)
+        .name(b"B")
+        .u16(1)
+        .u8(1)
+        .u64(2)
+        .0;
+    let key = |key: u32, id: u32, v: u32| {
+        let m = extra_mod(6, 0b1, 0, &[v], [b"", b""]);
+        Out::default()
+            .u32(key)
+            .u32(id)
+            .u8(1)
+            .u32(5 + 8 + 4)
+            .bytes(&m)
+            .0
+    };
+    let mut extra = Out::default().u32(2).0;
+    extra.extend(key(0x55, 0x0700_0010, 7));
+    extra.extend(key(0x56, 0x0700_0011, 9));
+    fn erase(e: &mut Engine) {
+        crate::commands::jip_fn_aux_variable::aux_maps(e, false).clear();
+        crate::cosave::extra_data(e).clear();
+    }
+    crate::cosave::BETWEEN_TAKES.with(|h| h.set(Some(erase)));
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
+    load_file(
+        &mut w.e,
+        &cosave(&[
+            chunk(kind::AUX_VARS, 10, aux),
+            chunk(kind::EXTRA_DATA, 1, extra),
+        ]),
+    );
+    crate::cosave::BETWEEN_TAKES.with(|h| h.set(None));
+    {
+        let maps = crate::commands::jip_fn_aux_variable::aux_maps(&mut w.e, false);
+        let owners = maps.get(&6).expect("the mod");
+        assert!(owners.get(&0x0700_0010).is_none(), "the first owner erased");
+        assert!(
+            owners.get(&0x0700_0011).is_some(),
+            "the later owner still read"
+        );
+    }
+    let data = crate::cosave::extra_data(&mut w.e);
+    assert!(data.get(&Uint(0x55)).is_none(), "the first key erased");
+    assert!(data.get(&Uint(0x56)).is_some(), "the later key still read");
+}
+
+/// The load reads `s_dataChangedFlags` whole: bits only its lock-free half holds (set through
+/// `mark_changed`, the entry point the aux variable commands, the reference destructor and the
+/// ExtraJIP routines use, here on a second engine of the run, as a loader or AI thread's) make the
+/// same save's next load read those records again: the session holds the second file's data.
+#[test]
+fn a_load_reads_again_what_only_the_lock_free_half_marked() {
+    let mut w = World::new();
+    w.form(0x14, 0x3b, true);
+    w.changed(0x0700_0010);
+    // The lock-free slots as install makes them (this world installs no JIP).
+    crate::cosave::install_unlocked(&mut w.e);
+    let mut t = Engine::new_untyped_for_test();
+    w.e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    let text = 0x0500_a000;
+    let tell = |w: &mut World, kind: u32, name: &[u8]| {
+        for (i, b) in name.iter().enumerate() {
+            w.e.mem.set_u8(text + i as u32, *b);
+        }
+        listen(
+            &mut w.e,
+            &Message {
+                kind,
+                data: if kind == msg::POST_LOAD_GAME { 1 } else { text },
+                len: name.len() as u32,
+            },
+        );
+    };
+    let aux = |v: u64| {
+        Out::default()
+            .u16(1)
+            .u8(6)
+            .u16(1)
+            .u32(0x14)
+            .u16(1)
+            .name(b"V")
+            .u16(1)
+            .u8(1)
+            .u64(v)
+            .0
+    };
+    let extra = |v: u32| {
+        let m = extra_mod(6, 0b1, 0, &[v], [b"", b""]);
+        Out::default()
+            .u32(1)
+            .u32(0x55)
+            .u32(0x0700_0010)
+            .u8(1)
+            .u32(5 + 8 + 4)
+            .bytes(&m)
+            .0
+    };
+    let file = |a: u64, x: u32| {
+        cosave(&[
+            chunk(kind::AUX_VARS, 10, aux(a)),
+            chunk(kind::EXTRA_DATA, 1, extra(x)),
+        ])
+    };
+    tell(&mut w, msg::PRE_LOAD_GAME, b"Save 1");
+    load_file(&mut w.e, &file(1, 7));
+    tell(&mut w, msg::POST_LOAD_GAME, b"");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut w.e),
+        0,
+        "both halves clear"
+    );
+    crate::commands::jip_fn_aux_variable::mark_changed(&mut t, changed::AUX_VARS);
+    crate::cosave::mark_changed(&mut t, changed::EXTRA_DATA);
+    engine_core::extend::release_held_for_test();
+    tell(&mut w, msg::PRE_LOAD_GAME, b"Save 1");
+    load_file(&mut w.e, &file(2, 9));
+    assert_eq!(
+        written(&mut w.e),
+        [
+            chunk(kind::AUX_VARS, 10, aux(2)),
+            chunk(kind::EXTRA_DATA, 1, extra(9))
+        ],
+        "the second file's data"
+    );
+}
+
+/// The saved bytes do not depend on which engine of the run wrote the data: aux variables and
+/// an ExtraJIP entry written through a thread's engine and saved on the main one give the bytes
+/// the same writes made on the main engine alone give.
+#[test]
+fn data_written_on_a_threads_engine_saves_the_same_bytes() {
+    let write = |e: &mut Engine| {
+        crate::commands::jip_fn_aux_variable::aux_maps(e, false)
+            .emplace(6)
+            .emplace(0x14)
+            .emplace(Name(b"V".to_vec()))
+            .push(Value::Number(1.5));
+        *crate::cosave::extra_data(e).emplace(Uint(0x55)) = crate::cosave::ExtraJipEntry {
+            ref_id: 0x0700_0010,
+            data: std::collections::BTreeMap::from([(6, crate::cosave::ExtraJipData::default())]),
+        };
+    };
+    let mut w = World::new();
+    w.form(0x14, 0x3b, true);
+    crate::cosave::install_unlocked(&mut w.e);
+    let mut t = Engine::new_untyped_for_test();
+    w.e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    write(&mut t);
+    engine_core::extend::release_held_for_test();
+    let through_thread = written(&mut w.e);
+    let mut alone = World::new();
+    alone.form(0x14, 0x3b, true);
+    write(&mut alone.e);
+    assert!(!through_thread.is_empty());
+    assert_eq!(through_thread, written(&mut alone.e));
+}

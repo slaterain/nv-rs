@@ -911,3 +911,34 @@ fn set_from_array_publishes_the_first_value() {
     call_on(&mut e, 0x26be, REF, &[s(b"Cond"), n(arr as i32)]);
     assert_eq!(cond(&mut e, REF, 5), 3.0);
 }
+
+/// End to end through a real command: AuxVarSetFloat on a saved variable sets the aux
+/// variables' changed bit in the lock-free half only, and the next load of the same save reads
+/// the aux variables again: the load's reset clears the session's map (this file has no `JPAV`
+/// record, so nothing comes back). A load that read only `Saved::changed` would keep the variable.
+#[test]
+fn a_real_set_makes_the_next_load_read_the_aux_variables_again() {
+    let mut e = setup();
+    crate::cosave::set_changed(&mut e, 0);
+    set_flt(&mut e, REF, b"v", 9.0, &[]);
+    assert!(vals(&mut e, false, 7, 0xff00_0001, b"v").is_some());
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        crate::cosave::changed::AUX_VARS
+    );
+    let file = nvse::cosave::write(&[nvse::cosave::Plugin {
+        opcode_base: 0x2200,
+        chunks: vec![nvse::cosave::Chunk {
+            kind: crate::cosave::kind::REF_MAPS,
+            version: 10,
+            data: vec![0, 0],
+        }],
+    }]);
+    let mut r = nvse::cosave::Reader::open(&file).expect("a co-save");
+    r.next_plugin().expect("read").expect("JIP's section");
+    crate::cosave::load(&mut e, &mut r).expect("loaded");
+    assert!(
+        vals(&mut e, false, 7, 0xff00_0001, b"v").is_none(),
+        "read again: the reset cleared it"
+    );
+}

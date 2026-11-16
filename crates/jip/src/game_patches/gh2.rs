@@ -32,7 +32,7 @@
 //! start-up message, main thread) writes JIP's kept form flags under the slot.
 
 use super::Area;
-use crate::commands::jip_fn_aux_variable::{aux_pair, maps_may_hold, mark_changed, AuxMods};
+use crate::commands::jip_fn_aux_variable::{maps_may_hold, mark_changed, AuxMaps, AuxMods};
 use crate::cosave::{changed, has_change_data};
 use crate::world_hooks::TextBlock;
 use engine_core::extend::{Hook, Owner, SiteSlot};
@@ -171,17 +171,7 @@ fn destroy_refr(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let id = e.mem.u32(reference + REF_ID);
     if e.mem.u8(reference + MOD_INDEX) == 0xff && !has_change_data(e, id) && maps_may_hold(e) {
         // One take of the maps' lock for the test and both erasures (`AuxMaps`), not JIP's slot.
-        let erased = {
-            let mut maps = aux_pair(e);
-            if maps.saved.is_empty() && maps.temp.is_empty() {
-                maps.maps_found_empty();
-                None
-            } else {
-                let saved = clear_ref_aux_vars(&mut maps.saved, id);
-                clear_ref_aux_vars(&mut maps.temp, id);
-                Some(saved)
-            }
-        };
+        let erased = erase_owner(e.ext_free::<AuxMaps>(), id);
         if let Some(saved) = erased {
             if saved {
                 mark_changed(e, changed::AUX_VARS);
@@ -214,6 +204,21 @@ fn drop_text(
     };
     if found {
         e.add_hook_user(hook, false);
+    }
+}
+
+/// The destructor's aux part on the maps, under one take of their lock: with both empty the
+/// "may hold" flag is cleared and `None` answered; else the id's variables leave the saved and the
+/// temporary map, and whether a saved one went is answered.
+fn erase_owner(maps: &AuxMaps, id: u32) -> Option<bool> {
+    let mut pair = maps.lock();
+    if pair.saved.is_empty() && pair.temp.is_empty() {
+        pair.maps_found_empty();
+        None
+    } else {
+        let saved = clear_ref_aux_vars(&mut pair.saved, id);
+        clear_ref_aux_vars(&mut pair.temp, id);
+        Some(saved)
     }
 }
 

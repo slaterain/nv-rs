@@ -136,15 +136,26 @@ impl Default for AuxMaps {
 /// either): the paths that read or change both, or the saved one as a whole (the destructor,
 /// the co-save, `ClearJIPSavedData`).
 pub fn aux_pair(e: &mut Engine) -> AuxPairGuard<'_> {
-    let maps = e.ext_free::<AuxMaps>();
-    let guard = maps
-        .pair
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    maps.held.store(true, std::sync::atomic::Ordering::SeqCst);
-    AuxPairGuard {
-        guard,
-        held: &maps.held,
+    e.ext_free::<AuxMaps>().lock()
+}
+
+impl AuxMaps {
+    /// Both maps under their one lock, the "may hold" flag set under it ([`aux_pair`]).
+    pub fn lock(&self) -> AuxPairGuard<'_> {
+        let guard = self
+            .pair
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.held.store(true, std::sync::atomic::Ordering::SeqCst);
+        AuxPairGuard {
+            guard,
+            held: &self.held,
+        }
+    }
+
+    /// Whether either map may hold a variable (no lock).
+    pub fn may_hold(&self) -> bool {
+        self.held.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -200,9 +211,7 @@ impl std::ops::DerefMut for AuxMapGuard<'_> {
 
 /// Whether either aux map may hold a variable (no lock).
 pub fn maps_may_hold(e: &mut Engine) -> bool {
-    e.ext_free::<AuxMaps>()
-        .held
-        .load(std::sync::atomic::Ordering::SeqCst)
+    e.ext_free::<AuxMaps>().may_hold()
 }
 
 /// An owner's key in [`Unlocked`]: temporary, mod index, owner id.

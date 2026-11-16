@@ -377,6 +377,7 @@ fn clear_jip_saved_data(e: &mut Engine, w: &[u32]) -> Ret {
     );
     let modi = overriding_mod(e, a.script);
     let saved = &mut e.ext::<Jip>().saved;
+    let mut flags = 0;
     if scr != 0 {
         saved.script_vars.retain(|_, vars| {
             vars.retain(|_, v| u32::from(v.mod_index) != modi);
@@ -387,10 +388,13 @@ fn clear_jip_saved_data(e: &mut Engine, w: &[u32]) -> Ret {
         saved
             .linked_refs
             .retain(|_, l| u32::from(l.mod_index) != modi);
-        saved.changed |= changed::LINKED_REFS;
+        flags |= changed::LINKED_REFS;
     }
     if maps != 0 && saved.ref_maps.erase(&if maps == 2 { 0xff } else { modi }) {
-        saved.changed |= changed::REF_MAPS;
+        flags |= changed::REF_MAPS;
+    }
+    if flags != 0 {
+        crate::cosave::mark_changed(e, flags);
     }
     // The saved aux variables, under their own lock (`AuxMaps`), not JIP's slot.
     if aux != 0

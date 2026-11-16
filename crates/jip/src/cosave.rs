@@ -228,7 +228,7 @@ pub struct Saved {
     /// `s_lastLoadedPath`: the save last loaded or saved.
     pub last_path: Vec<u8>,
     /// `s_dataChangedFlags`.
-    pub changed: u8,
+    changed: u8,
     /// JohnnyGuitar's corrections of the extra data record and the variable skip (the row).
     pub jg_fixes: bool,
     /// JIP's NPC perks patch is installed (`s_patchInstallState.NPCPerks`, the `uNPCPerks`
@@ -817,38 +817,18 @@ fn load_aux_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
         };
         while owners != 0 {
             let id = resolved_ref_id(e, b.u32()?);
-            let mut vars = b.u16()?;
+            let vars = b.u16()?;
             if present(e, id) {
                 let (left, room) = (owners, vars);
-                crate::commands::jip_fn_aux_variable::aux_maps(e, false)
-                    .emplace_with(m, || UnorderedMap::new(align_bucket_count(u32::from(left))))
-                    .0
-                    .emplace_with(id, || {
-                        UnorderedMap::new(align_bucket_count(u32::from(room)))
-                    });
-                while vars != 0 {
-                    let len = b.u8()?;
-                    if len == 0 {
-                        // `goto avSkipVars`: this variable's values and the owner's rest go.
-                        skip_aux_values(b)?;
-                        skip_aux_vars(b, vars - 1)?;
-                        break;
-                    }
-                    let name = b.name(usize::from(len))?;
-                    let count = b.u16()?;
-                    let mut values = Vec::with_capacity(usize::from(count));
-                    for _ in 0..count {
-                        let kind = b.u8()?;
-                        values.push(read_value(e, b, kind)?);
-                    }
-                    let mut maps = crate::commands::jip_fn_aux_variable::aux_maps(e, false);
-                    let owner = maps.get_mut(&m)?.get_mut(&id)?;
-                    owner
-                        .emplace_with(Name(name), || Vec::with_capacity(usize::from(count)))
-                        .0
-                        .extend(values);
-                    vars -= 1;
-                }
+                // The owner's variables are read first (the values resolve ids through game
+                // calls), then put in with one take of the maps' lock: a destructor on another
+                // thread that erases this owner between two takes would otherwise end the whole
+                // record's read. What a cut-short record had read for the owner goes in too.
+                let mut read = Vec::new();
+                let complete = read_owner_vars(e, b, vars, &mut read);
+                between_takes(e);
+                insert_owner(e, m, id, (left, room), read)?;
+                complete?;
             } else {
                 skip_aux_vars(b, vars)?;
             }
@@ -856,6 +836,78 @@ fn load_aux_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
         }
     }
     Some(())
+}
+
+/// One owner's `vars` variables read from `b` into `out` (name, count, values); an empty name
+/// ends them (`goto avSkipVars`: that variable's values and the owner's rest skipped). `None`
+/// when the record ends first (`out` keeps what was read).
+fn read_owner_vars(
+    e: &mut Engine,
+    b: &mut Bytes,
+    mut vars: u16,
+    out: &mut Vec<(Vec<u8>, u16, Vec<Value>)>,
+) -> Option<()> {
+    while vars != 0 {
+        let len = b.u8()?;
+        if len == 0 {
+            skip_aux_values(b)?;
+            skip_aux_vars(b, vars - 1)?;
+            break;
+        }
+        let name = b.name(usize::from(len))?;
+        let count = b.u16()?;
+        let mut values = Vec::with_capacity(usize::from(count));
+        for _ in 0..count {
+            let kind = b.u8()?;
+            values.push(read_value(e, b, kind)?);
+        }
+        out.push((name, count, values));
+        vars -= 1;
+    }
+    Some(())
+}
+
+/// One owner's variables put in under one take of the maps' lock: the mod's map made at its
+/// first owner kept with room for the owners left (`AlignBucketCount`), the owner's with room
+/// for its variables, each variable's values appended (`Emplace`), as JIP's loader.
+fn insert_owner(
+    e: &mut Engine,
+    m: u32,
+    id: u32,
+    (left, room): (u16, u16),
+    read: Vec<(Vec<u8>, u16, Vec<Value>)>,
+) -> Option<()> {
+    let mut maps = crate::commands::jip_fn_aux_variable::aux_maps(e, false);
+    let owner = maps
+        .emplace_with(m, || UnorderedMap::new(align_bucket_count(u32::from(left))))
+        .0
+        .emplace_with(id, || {
+            UnorderedMap::new(align_bucket_count(u32::from(room)))
+        })
+        .0;
+    for (name, count, values) in read {
+        owner
+            .emplace_with(Name(name), || Vec::with_capacity(usize::from(count)))
+            .0
+            .extend(values);
+    }
+    Some(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's step run between a loader's read of an entry and its one take that puts it in
+    /// (a destructor on another thread at that moment).
+    pub(crate) static BETWEEN_TAKES: std::cell::Cell<Option<fn(&mut Engine)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The `BETWEEN_TAKES` step (tests only).
+fn between_takes(_e: &mut Engine) {
+    #[cfg(test)]
+    if let Some(f) = BETWEEN_TAKES.with(std::cell::Cell::get) {
+        f(_e);
+    }
 }
 
 /// One aux variable's values, skipped.
@@ -990,16 +1042,13 @@ fn load_extra_data(e: &mut Engine, b: &mut Bytes) -> Option<()> {
                 let Some(m) = resolved_mod_index(e, saved_index).map(u32::from) else {
                     continue;
                 };
-                // The key's entry is made at its first mod kept (`Emplace(key, refID)`), the
-                // mod's data at its index (`dataMap[modIdx]`), and the bytes copied over it.
+                // The mod's data as it stands (`dataMap[modIdx]`), the bytes copied over it; then
+                // one take puts it in, the key's entry made at its first mod kept
+                // (`Emplace(key, refID)`): a destructor on another thread that erases the key
+                // between two takes would otherwise end the whole record's read.
                 let mut data = extra_data(e)
-                    .emplace_with(Uint(key), || ExtraJipEntry {
-                        ref_id: id,
-                        data: BTreeMap::new(),
-                    })
-                    .0
-                    .data
-                    .get(&m)
+                    .get(&Uint(key))
+                    .and_then(|entry| entry.data.get(&m))
                     .cloned()
                     .unwrap_or_default();
                 data.copy_head(head);
@@ -1015,7 +1064,15 @@ fn load_extra_data(e: &mut Engine, b: &mut Bytes) -> Option<()> {
                 if len2 != 0 {
                     data.strings[1] = string2.to_vec();
                 }
-                extra_data(e).get_mut(&Uint(key))?.data.insert(m, data);
+                between_takes(e);
+                extra_data(e)
+                    .emplace_with(Uint(key), || ExtraJipEntry {
+                        ref_id: id,
+                        data: BTreeMap::new(),
+                    })
+                    .0
+                    .data
+                    .insert(m, data);
             }
         } else {
             b.skip(key_size as usize)?;
@@ -1440,6 +1497,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // `COPY_BYTES(s_lastLoadedPath, fosPath, dataLen + 1)`.
             let path = message_text(e, m);
             saved(e).last_path = path;
+            // JIP's `s_dataChangedFlags = 0`, unlocked, after xNVSE wrote the records: a mark made on
+            // another thread between the write and this reset is lost, as in JIP.
             set_changed(e, 0);
         }
         msg::PRE_LOAD_GAME => {

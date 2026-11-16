@@ -637,9 +637,9 @@ struct Stepped(Engine);
 // kept outside the lock.
 unsafe impl Send for Stepped {}
 
-/// The destructor on a second OS thread against a writer on the main one: the variables the main
-/// thread writes are the ones the other thread's destructor erases (one pair of maps for every
-/// thread), each side one take of the maps' lock.
+/// The hand-over of one engine between two OS threads (as stepped threads run it; not contention:
+/// the two sides run in turn): the variables written on the main thread are the ones the other
+/// thread's destructor erases, one pair of maps for every thread.
 #[test]
 fn the_destructor_on_another_thread_erases_what_the_main_thread_wrote() {
     let e = world(0x15, TEMP_ID);
@@ -671,4 +671,60 @@ fn the_destructor_on_another_thread_erases_what_the_main_thread_wrote() {
     );
     drop(g);
     engine_core::extend::release_held_for_test();
+}
+
+/// The saved map too, under the held slot: a temporary reference's saved variables go, and the
+/// aux variables are marked changed (the lock-free half of the flags), without JIP's slot.
+#[test]
+fn saved_variables_go_and_are_marked_while_another_engine_holds_jips_slot() {
+    let mut e = world(0x15, TEMP_ID);
+    *aux_maps(&mut e, false) = three_mods();
+    crate::cosave::set_changed(&mut e, 0);
+    crate::test_support::with_jips_slot_held(&mut e, |e| destroy(e, REF));
+    assert_eq!(
+        mods_of(&aux_maps(&mut e, false)),
+        vec![(2, vec![0x0100_0001]), (3, vec![0x0100_0001])]
+    );
+    assert_eq!(crate::cosave::changed_flags(&mut e), changed::AUX_VARS);
+}
+
+/// Contention on the "may hold" flag: one OS thread adds and clears a temporary variable under
+/// the maps' lock while another runs the destructor's aux part (`erase_owner`, another id) as
+/// fast as it can, both released together by a barrier. Right after each add the flag must say
+/// "may hold": the flag is set under the lock, and the destructor clears it only while it finds
+/// both maps empty under the same lock. A flag stored before the lock (a destructor that found
+/// the maps empty clears it after the store, then the add lands) breaks this; that interleaving
+/// is timing-dependent, so this test catches such a fault only probabilistically (many rounds).
+#[test]
+fn the_may_hold_flag_holds_under_contention() {
+    const ROUNDS: u32 = 200_000;
+    let mut e = world(0x15, TEMP_ID);
+    let maps = e.ext_free::<AuxMaps>();
+    let barrier = std::sync::Barrier::new(2);
+    let missed = std::sync::atomic::AtomicU32::new(0);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            barrier.wait();
+            for _ in 0..ROUNDS {
+                maps.lock().temp.emplace(1).emplace(TEMP_ID);
+                if !maps.may_hold() {
+                    missed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                maps.lock().temp.clear();
+            }
+        });
+        scope.spawn(|| {
+            barrier.wait();
+            for _ in 0..ROUNDS {
+                if maps.may_hold() {
+                    erase_owner(maps, 0x0100_0999);
+                }
+            }
+        });
+    });
+    assert_eq!(
+        missed.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a variable present while the flag said empty"
+    );
 }

@@ -1090,9 +1090,9 @@ struct Stepped(Engine);
 // kept outside the lock.
 unsafe impl Send for Stepped {}
 
-/// The ExtraJIP destructor on a second OS thread against a writer on the main one: the data the
-/// main thread puts in is the data the other thread's destructor erases (one map for every
-/// thread), each side one take of the map's lock.
+/// The hand-over of one engine between two OS threads (as stepped threads run it; not contention:
+/// the two sides run in turn): the data put in on the main thread is the data the other
+/// thread's ExtraJIP destructor erases, one map for every thread.
 #[test]
 fn the_destructor_on_another_thread_erases_what_the_main_thread_wrote() {
     let mut e = world(true);
