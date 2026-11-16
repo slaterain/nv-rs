@@ -127,7 +127,7 @@ fn can_be_pushed(e: &Engine, actor: u32) -> bool {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::AdjustPushForce.
 /// The force scaled by the actor value 0xA (`(value * 10 * scale + base)`), after the setting
 /// multiplier and the setting offset with the force's sign.
-fn adjust_push_force(e: &mut Engine, actor: u32, force: f32) -> f32 {
+pub(crate) fn adjust_push_force(e: &mut Engine, actor: u32, force: f32) -> f32 {
     let value = e.call(ACTOR_VALUE, &args![actor + 0xa4, 0xau32]).f32();
     let mut scale = value * 10.0f32;
     scale *= e.mem.f32(SETTING_SCALE);
