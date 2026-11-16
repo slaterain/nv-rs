@@ -71,15 +71,15 @@ pub use window_layer::{window_moved, window_titled};
 
 /// A window layer's thread that makes the real windows: where [`Request`]s go.
 type WindowThread = fn() -> &'static std::sync::Mutex<std::sync::mpsc::Sender<Request>>;
+/// The real window following the game's title ([`window_titled`]).
+type WindowTitled = fn(&mut Engine, u32, &[u8]);
+/// The real window following the game's position and size ([`window_moved`]).
+type WindowMoved = fn(&mut Engine, u32, [i32; 4], u32);
 
 /// What a window layer gives this file, the same on every system: the thread that makes the real
 /// windows ([`Request`]s sent to it, each answered with the real window, 0 when it failed), and the
 /// real window following the game's title and position.
-const _: (
-    WindowThread,
-    fn(&mut Engine, u32, &[u8]),
-    fn(&mut Engine, u32, [i32; 4], u32),
-) = (window_thread, window_titled, window_moved);
+const _: (WindowThread, WindowTitled, WindowMoved) = (window_thread, window_titled, window_moved);
 
 /// The real Direct3D 9 device a backend hands the layer's side channel (D3DX's texture loading,
 /// `super::d3dxreal`): Windows only; elsewhere there is none.
