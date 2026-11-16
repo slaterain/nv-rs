@@ -5701,10 +5701,17 @@ mod tests {
         })
     }
 
-    fn at_g125(_: &mut Engine, a: &[u32]) -> Option<u32> {
+    /// G125's ask, with the last call made before it (the exe asks right after the block's
+    /// handle test `00ad8ce0`, before the position call).
+    fn at_g125(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let last = e
+            .call_log
+            .as_ref()
+            .and_then(|log| log.last().map(|call| call.0))
+            .unwrap_or(0);
         HIT_EFFECTS.with(|s| {
             let mut s = s.borrow_mut();
-            s.0.push([&[0x009a_d2c5u32][..], a].concat());
+            s.0.push([&[0x009a_d2c5u32][..], a, &[last]].concat());
             s.2
         })
     }
@@ -5749,7 +5756,7 @@ mod tests {
             assert_eq!(
                 seen,
                 if asked {
-                    vec![vec![0x009a_cec6], vec![0x009a_d2c5, 0x1000]]
+                    vec![vec![0x009a_cec6], vec![0x009a_d2c5, 0x1000, 0x00ad_8ce0]]
                 } else {
                     vec![]
                 },
