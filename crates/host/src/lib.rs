@@ -106,19 +106,14 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
 }
 
 /// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;
-/// `answers_installed`: it does), with the threads asked for: none when it is off as asked.
-pub(crate) fn jip_start_lines(row_on: bool, answers_installed: bool, threads: &str) -> Vec<String> {
+/// `answers_installed`: it does): none when it is off as asked or on as asked. (With real threads
+/// none of JIP's hooks waits for the main thread any more: its aux variables and item data have
+/// their own locks, so there is no line for that either.)
+pub(crate) fn jip_start_lines(row_on: bool, answers_installed: bool) -> Vec<String> {
     let mut lines = Vec::new();
     if row_on && !answers_installed {
         lines.push(
             "JIP LN NVSE: its row is on but JIP installed before reading it: it answers \"not installed\""
-                .to_string(),
-        );
-    }
-    if answers_installed && !threads.trim().eq_ignore_ascii_case("stepped") {
-        lines.push(
-            "JIP LN on with real threads: four of JIP's hooks still wait for the main thread until the \
-             thread-safety follow-up is in; hitches at cell changes are possible"
                 .to_string(),
         );
     }
@@ -165,7 +160,7 @@ impl Host {
             let jip = engine.ext::<jip::Jip>();
             (jip.row_on, jip.answers_installed)
         };
-        for line in jip_start_lines(jip_state.0, jip_state.1, &choice.threads) {
+        for line in jip_start_lines(jip_state.0, jip_state.1) {
             eprintln!("{line}");
         }
         if let Some(note) = &choice.ini_note {
