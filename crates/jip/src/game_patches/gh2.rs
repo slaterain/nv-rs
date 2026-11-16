@@ -16,9 +16,9 @@
 //! activators", JIP's own): the eight places the exe compares a reference's base form with the
 //! two ash pile forms test the base's ash pile bit instead (the two vanilla piles get it in
 //! `DeferredInit`, `MarkActivatorAshPile` gives it to others). G73 (`AttachAshPileHook`, JIP's
-//! own): the ash pile a death leaves can be `AttachAshPileEx`'s form. Not asked yet: G06's
-//! `0x77765A` (group GA's seam), so a marked activator is an ash pile in seven of the eight
-//! places until it lands (`0x95F7FE` is asked in group GP's `fn_0095f6c0`). G73's seam at
+//! own): the ash pile a death leaves can be `AttachAshPileEx`'s form. All eight G06 places are
+//! asked (`0x77765A` in group GA's `SetInfoForRef` action text, `0x95F7FE` in group GP's
+//! `fn_0095f6c0`). G73's seam at
 //! `0x5DBCFD` (in group GS's `fn_005db870`) is asked; it changes nothing until the
 //! `AttachAshPileEx` command exists. G103
 //! (`ClearAshPilesHook`, a fix row): the cell's reset walk deletes ash piles itself and no longer
@@ -49,8 +49,8 @@ pub const DESTROY_REFR: SiteSlot = SiteSlot::new(Owner::Jip, 0x0055_a488);
 /// of a reference's base form with the ash pile forms, each starting with a `call 0x7AF430`
 /// (`TESObjectREFR::GetBaseForm`). Words: the reference (JIP's `ecx`); the answer's low byte is 1
 /// for an ash pile. Six are in this group's translations; `0x77765A` (group GA,
-/// `hud_main_menu_set_info_for_ref`) and `0x95F7FE` (group GP, `fn_0095f6c0`) are those groups'
-/// seams.
+/// `set_info_inventory_action`, the action text part of `hud_main_menu_set_info_for_ref`) and
+/// `0x95F7FE` (group GP, `fn_0095f6c0`) are those groups' seams.
 pub const ASH_PILE_TESTS: [SiteSlot; 8] = [
     SiteSlot::new(Owner::Jip, 0x0056_a30a),
     SiteSlot::new(Owner::Jip, 0x0057_3194),

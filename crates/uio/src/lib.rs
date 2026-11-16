@@ -21,9 +21,15 @@
 //!   `UIOInjectComponent`, which the built-in JIP's `InjectUIComponent` calls.
 //! - [`hash`]: UIO's hash tables, whose walking order decides the order of the lines it writes.
 //!
-//! Not yet (part 3): its new tile operators and its code patches (text zoom, the HUD's hardcore
-//! texts). Left out: UIO's log files and its developer settings (`settings.ini`: `bDebugMode`
-//! and its per-file dumps, `sDoNotCache`).
+//! Part 3, UIO's patches of the game's tile code (seams behind the same word):
+//! - [`operators`]: its operator names (`ge`, `ne`, `le` and 17 new operators) and its jump table,
+//!   which runs every operation of `Tile::Value::CalculateValue` (`00A0968C`).
+//! - [`post_parse`]: `Tile::FinalPostParse`'s trait test (`00A03923`): a text's zoom rebuilds it.
+//! - [`zoom`]: text tiles honour `<zoom>` (`TileText::MakeNode`, `00A221F8`); the HUD's hardcore
+//!   texts no longer set one (`HUDMainMenu::Create`, five places).
+//!
+//! Left out: UIO's log files and its developer settings (`settings.ini`: `bDebugMode` and its
+//! per-file dumps, `sDoNotCache`).
 //!
 //! It is a fixes row ("UI Organizer built in", `NV_UIO`): the row switches it on ([`set_on`]) and
 //! [`install`] (after JIP, as xNVSE loads `ui_organizer.dll` after `jip_nvse.dll`) puts its seams
@@ -34,9 +40,12 @@ pub mod build;
 pub mod game;
 pub mod hash;
 pub mod lists;
+pub mod operators;
 pub mod parse;
 pub mod patch;
+pub mod post_parse;
 pub mod reader;
+pub mod zoom;
 
 pub use game::inject_component;
 
@@ -51,6 +60,19 @@ pub const FILE: &str = "ui_organizer.dll";
 /// UIO's two seams (its patches' addresses).
 pub const LOAD_SITE: SiteSlot = SiteSlot::new(Owner::Uio, 0x0070_a049);
 pub const READ_FILE_SITE: SiteSlot = SiteSlot::new(Owner::Uio, 0x00a0_1b87);
+
+/// UIO's engine patches (part 3): the operators' jump table (`00A0968C`), `FinalPostParse`'s
+/// trait test (`00A03923`), the text zoom (`00A221F8`) and the HUD's five hardcore zooms.
+pub const OPERATOR_SITE: SiteSlot = SiteSlot::new(Owner::Uio, 0x00a0_968c);
+pub const FINAL_POST_PARSE_SITE: SiteSlot = SiteSlot::new(Owner::Uio, 0x00a0_3923);
+pub const TEXT_SCALE_SITE: SiteSlot = SiteSlot::new(Owner::Uio, 0x00a2_21f8);
+pub const HUD_ZOOM_SITES: [SiteSlot; 5] = [
+    SiteSlot::new(Owner::Uio, 0x0076_f688),
+    SiteSlot::new(Owner::Uio, 0x0076_f742),
+    SiteSlot::new(Owner::Uio, 0x0076_f824),
+    SiteSlot::new(Owner::Uio, 0x0076_f92d),
+    SiteSlot::new(Owner::Uio, 0x0076_fa5e),
+];
 
 /// UIO on this engine: one slot, shared by the game's threads once installed.
 #[derive(Default)]
@@ -105,7 +127,7 @@ fn plugin() -> nvse::plugins::BuiltIn {
     }
 }
 
-/// Builds UIO into the engine when the row switched it on: the word the seams read, its two
+/// Builds UIO into the engine when the row switched it on: the word the seams read, its
 /// handlers, its place in xNVSE's list. Once per engine; off, or a second call, does nothing.
 pub fn install(e: &mut Engine) {
     let state = e.ext::<Uio>();
@@ -116,6 +138,12 @@ pub fn install(e: &mut Engine) {
     e.set_uio(true);
     e.on_site(LOAD_SITE, game::uio_load);
     e.on_site(READ_FILE_SITE, game::read_file);
+    e.on_site(OPERATOR_SITE, operators::operate);
+    e.on_site(FINAL_POST_PARSE_SITE, post_parse::final_post_parse);
+    e.on_site(TEXT_SCALE_SITE, zoom::text_scale);
+    for slot in HUD_ZOOM_SITES {
+        e.on_site(slot, zoom::hud_zoom);
+    }
     nvse::plugins::register(e, plugin());
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Uio>();
