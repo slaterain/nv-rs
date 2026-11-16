@@ -132,6 +132,17 @@ pub fn fn_0057d090(e: &mut Engine) -> u32 {
 }
 
 // Translated from 0057d0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The edge-cell tests at `0x57D3B9` in [`fn_0057d0a0`] (a cell in the first or last row or
+/// column of the 5x5 grid never gets grass). JIP LN NVSE's G07 (a fix, the row
+/// `NV_JIP_GAME_PATCHES`) writes `jmp 0x57D3D5` over them, so the outer cells get grass too when
+/// closer than the range: the seam at `0x57D3B9` answers whether to jump (any answer). With the
+/// word's `FIXES` bit clear: one load, then no.
+#[inline]
+fn grass_edge_tests_skipped(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0057_d3b9, &[]).is_some()
+}
+
 // Translation incomplete: 0057d0a0 - the exception-unwinding frame (FS:[0]) and the security-cookie bookkeeping are not translated.
 /// Updates the points around the position (`x`, `y`, `z`) (the guard names
 /// `TESTerrainLODManager.cpp`). Without an interior cell (`005f36f0` on
@@ -281,7 +292,7 @@ fn terrain_update(e: &mut Engine, ebp: u32) {
                 continue;
             }
             let mut far = true;
-            if i != 0 && i != 4 && j != 0 && j != 4 {
+            if grass_edge_tests_skipped(e) || (i != 0 && i != 4 && j != 0 && j != 4) {
                 let distance = e.call(0x0054_fb70, &args![cell, ebp + 8]).f64();
                 if range as f64 > distance {
                     let root = e.global::<u32>(ROOT_NODE);
@@ -1323,6 +1334,104 @@ mod tests {
         assert_eq!(calls_to(&e, 0x00a5_9c60), vec![vec![0x7701, update[0][0]]]);
         assert_eq!(calls_to(&e, 0x00a5_a040), vec![vec![0x7701]]);
         assert!(calls_to(&e, 0x00b6_2970).is_empty());
+    }
+
+    /// Where G07's test handler counts its calls and reads its answer (1 = some).
+    const G07_ASKED: u32 = 0x0534_0000;
+
+    /// [`fn_0057d0a0`] as in [`fn_0057d0a0_updates_the_cells_around_the_position`] with G07's
+    /// seam (JIP LN NVSE step 3.9 GF) handled by a test handler and the word `word`.
+    fn g07_run(word: u32, answer: bool) -> Engine {
+        use engine_core::extend::{Owner, SiteSlot};
+        let (mut e, _) = update_engine(100.0, 10.0, 0);
+        e.map(G07_ASKED, 0x1000);
+        e.mem.set_u32(G07_ASKED + 4, u32::from(answer));
+        // Four cells: the edge cell (-1, -3) (first row and column), the centre (1, -1), and on
+        // the last column (3, -1) (middle row) and (3, 1) (last row). The last one is beyond the
+        // range (200 against 150); the others are at 10.
+        e.register(0x0045_1900, |_, a| {
+            let (x, y) = (a[1] as i32, a[2] as i32);
+            ret(match (x, y) {
+                (1, -1) => 0xa000,
+                (-1, -3) => 0xb000,
+                (3, 1) => 0xc000,
+                (3, -1) => 0xd000,
+                _ => 0,
+            })
+        });
+        e.register(0x0054_fb70, |_, a| {
+            st0(if a[0] == 0xc000 { 200.0 } else { 10.0 })
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0057_d3b9), |e, a| {
+            assert!(a.is_empty());
+            e.mem.set_u32(G07_ASKED, e.mem.u32(G07_ASKED) + 1);
+            (e.mem.u32(G07_ASKED + 4) != 0).then_some(1)
+        });
+        e.set_jip_patches(word);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0057_d0a0,
+            &args![5000.0f32, -100.0f32, 7.0f32, 1u32, 2u32, 3u32, 0.0f32],
+        );
+        e
+    }
+
+    /// The words the on-tests run with: the row's bit alone, and the word a player has (JIP's
+    /// installed bit, the row and an optional switch), so a gate that tests for equality fails.
+    const G07_ON_WORDS: [u32; 2] = [
+        engine_core::extend::jip_patches::FIXES,
+        engine_core::extend::jip_patches::INSTALLED
+            | engine_core::extend::jip_patches::FIXES
+            | engine_core::extend::jip_patches::FO3_WPN_DEGRADATION,
+    ];
+
+    /// The cells measured (`0054fb70`), given grass (`0057d4f0`'s `0054ddd0`) and sent the far
+    /// way (`00b61570`, its count: every cell answers the same grid words).
+    fn g07_paths(e: &Engine) -> (Vec<u32>, Vec<u32>, usize) {
+        let first = |calls: Vec<Vec<u32>>| calls.iter().map(|w| w[0]).collect::<Vec<u32>>();
+        (
+            first(calls_to(e, 0x0054_fb70)),
+            first(calls_to(e, 0x0054_ddd0)),
+            calls_to(e, 0x00b6_1570).len(),
+        )
+    }
+
+    /// G07 off (JIP not installed, or installed with the row off): the seam is not asked; only
+    /// the centre cell is measured and gets grass, the three outer cells go the far way.
+    #[test]
+    fn g07_seam_does_nothing_while_off() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            let e = g07_run(word, true);
+            assert_eq!(e.mem.u32(G07_ASKED), 0, "{word:08x}");
+            assert_eq!(g07_paths(&e), (vec![0xa000], vec![0xa000], 3), "{word:08x}");
+            assert_eq!(calls_to(&e, 0x00b6_1570)[0], [0x31, 0x32]);
+        }
+    }
+
+    /// G07 on: the seam is asked once per cell found (four), and with an answer every cell is
+    /// measured: the outer cells within range (first row and column, last column) get grass,
+    /// the outer cell beyond the range still goes the far way. An answer of none keeps the exe's
+    /// path. Each with the row's bit alone and with a player's whole word.
+    #[test]
+    fn g07_seam_answer_lets_the_edge_cell_get_grass() {
+        for word in G07_ON_WORDS {
+            let e = g07_run(word, true);
+            assert_eq!(e.mem.u32(G07_ASKED), 4, "{word:08x}");
+            assert_eq!(
+                g07_paths(&e),
+                (
+                    vec![0xb000, 0xa000, 0xd000, 0xc000],
+                    vec![0xb000, 0xa000, 0xd000],
+                    1
+                ),
+                "{word:08x}"
+            );
+
+            let e = g07_run(word, false);
+            assert_eq!(e.mem.u32(G07_ASKED), 4, "{word:08x}");
+            assert_eq!(g07_paths(&e), (vec![0xa000], vec![0xa000], 3), "{word:08x}");
+        }
     }
 
     #[test]
