@@ -206,7 +206,10 @@ fn clear(b: &mut WgpuBackend, flags: u32) {
 
 /// Triangles (clip-space x, y and depth per corner).
 fn triangles(b: &mut WgpuBackend, corners: &[[f32; 3]]) {
-    let v: Vec<f32> = corners.iter().flat_map(|c| [c[0], c[1], c[2], 1.0]).collect();
+    let v: Vec<f32> = corners
+        .iter()
+        .flat_map(|c| [c[0], c[1], c[2], 1.0])
+        .collect();
     let bytes = floats(&v);
     run(
         b,

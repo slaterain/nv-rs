@@ -25,13 +25,13 @@
 //!   weighted by depth, so edges stay sharp;
 //! - sun contact shadows (outdoors, the sun up), at full resolution and not blurred, so a shadow's
 //!   edge is a clean line: [`SHADOW_STEPS`] fixed steps toward the sun in view space, closer
-//!   together near the pixel, [`SHADOW_LENGTH`] game units (about 3 m) long, through the depth: two
+//!   together near the pixel, [`SHADOW_LENGTH`] game units (about 1.7 m) long, through the depth: three
 //!   steps in a row behind something nearer the camera by less than [`SHADOW_THICKNESS`] (so a
 //!   blade of grass a step thin does not cast, and a post casts a post-wide shadow, not a smear)
 //!   darken the pixel by [`SHADOW_STRENGTH`]. Only faces turned toward the sun take it: the game's
 //!   own lighting already darkens the others.
 //!
-//! Thin things (a pixel apart in depth from both its neighbours on an axis: grass blades, leaves,
+//! Thin things (a pixel apart in depth from two or more of its four neighbours: grass blades, leaves,
 //! wires, far posts) take neither: alpha-tested foliage gives no surface to shade and would only
 //! speckle. The product multiplies the scene's colour. No history between frames. Both fade out
 //! between [`FADE_FROM`] and [`FADE_TO`] units from the camera; the sky (depth 1) is never touched.
@@ -63,9 +63,9 @@ pub const STRENGTH: f32 = 0.6;
 pub const FLOOR: f32 = 0.5;
 pub const POWER: f32 = 1.5;
 /// The sun march: its length and steps, and how thick a surface is taken to be.
-pub const SHADOW_LENGTH: f32 = 210.0;
+pub const SHADOW_LENGTH: f32 = 120.0;
 pub const SHADOW_STEPS: u32 = 28;
-pub const SHADOW_THICKNESS: f32 = 24.0;
+pub const SHADOW_THICKNESS: f32 = 32.0;
 /// How dark a full contact shadow is, under a full sun.
 pub const SHADOW_STRENGTH: f32 = 0.8;
 /// The distance band (game units) over which both fade out.
@@ -283,7 +283,7 @@ pub fn march_distance(i: u32) -> f32 {
 /// than [`SHADOW_THICKNESS`].
 pub fn blocks(t: f32, q_z: f32, scene_z: f32) -> bool {
     let delta = q_z - scene_z;
-    delta > 1.0 + 0.003 * q_z + 0.03 * t && delta < SHADOW_THICKNESS
+    delta > 1.0 + 0.003 * q_z + 0.05 * t && delta < SHADOW_THICKNESS
 }
 
 /// The fade with distance: 1 near, 0 from [`FADE_TO`] on.
@@ -344,8 +344,8 @@ fn fade_at(z: f32) -> f32 {
 }
 
 // The surface at the full-resolution pixel `c` (its point `pc`): its normal, toward the camera, from
-// the nearer neighbour on each axis; `thin` when the pixel is apart in depth from both neighbours on
-// an axis (a grass blade, a leaf, a wire, a far post a pixel wide): no surface to shade.
+// the nearer neighbour on each axis; `thin` when the pixel is apart in depth from two or more of its
+// four neighbours (a grass blade, a leaf, a wire, a silhouette edge): no surface to shade.
 struct Surface {
     n: vec3<f32>,
     thin: bool,
@@ -363,14 +363,15 @@ fn surface_at(c: vec2<i32>, pc: vec3<f32>) -> Surface {
         n = -n;
     }
     let tz = 0.05 * pc.z + 2.0;
-    let thin = (abs(pl.z - pc.z) > tz && abs(pr.z - pc.z) > tz)
-        || (abs(pu.z - pc.z) > tz && abs(pd.z - pc.z) > tz);
+    let breaks = u32(abs(pl.z - pc.z) > tz) + u32(abs(pr.z - pc.z) > tz)
+        + u32(abs(pu.z - pc.z) > tz) + u32(abs(pd.z - pc.z) > tz);
+    let thin = breaks >= 2u;
     return Surface(n, thin);
 }
 
 // The sun march from the point `pc` (normal `n`) toward the sun, in view space, SHADOW_LENGTH game
 // units long, SHADOW_STEPS fixed steps closer together near the point (no pattern: the edge stays a
-// clean line): 0 when two steps in a row pass behind something nearer the camera by less than
+// clean line): 0 when three steps in a row pass behind something nearer the camera by less than
 // SHADOW_THICKNESS (a blade of grass a step thin does not cast), else 1.
 fn sun_visible(pc: vec3<f32>, n: vec3<f32>) -> f32 {
     let l = p.sun.xyz;
@@ -390,9 +391,9 @@ fn sun_visible(pc: vec3<f32>, n: vec3<f32>) -> f32 {
         let delta = q.z - linear(depth_at(vec2<i32>(sp)));
         // The slack grows along the ray, so a surface lit at a grazing angle does not shadow
         // itself through its own facets.
-        if (delta > 1.0 + 0.003 * q.z + 0.03 * t && delta < SHADOW_THICKNESS) {
+        if (delta > 1.0 + 0.003 * q.z + 0.05 * t && delta < SHADOW_THICKNESS) {
             run += 1;
-            if (run >= 2) {
+            if (run >= 3) {
                 return 0.0;
             }
         } else {
@@ -516,9 +517,9 @@ const APPLY: &str = "
         let fade = fade_at(z);
         if (fade > 0.0) {
             let surface = surface_at(xy, pc);
-            // Faces toward the sun, fully from 0.35 (about 70 degrees from the sun) up: a face lit
+            // Faces toward the sun, fully from 0.5 (60 degrees from the sun) up: a face lit
             // at a grazing angle is already dim in the game's lighting and only shadows itself.
-            let facing = smoothstep(0.15, 0.35, dot(surface.n, p.sun.xyz));
+            let facing = smoothstep(0.25, 0.5, dot(surface.n, p.sun.xyz));
             if (!surface.thin && facing > 0.0) {
                 f *= 1.0 - p.sun.w * fade * facing * (1.0 - sun_visible(pc, surface.n));
             }
