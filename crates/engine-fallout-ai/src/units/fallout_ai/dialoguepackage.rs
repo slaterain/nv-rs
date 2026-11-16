@@ -1156,9 +1156,22 @@ fn advance(e: &mut Engine, this: Ptr) -> bool {
     if actor == 0 {
         return false;
     }
-    let busy = e.vcall(actor, 0x2e8, &args![]).bool() || {
-        let actor = e.mem.u32(field(this, ACTOR));
-        e.vcall(actor, 0x22c, &args![0u32]).bool()
+    // 009ee367: JIP's G102 (a fix) replaces the two state calls with "the actor's life state is
+    // dead (2)"; the seam answers that byte (words: the actor). One load while JIP is not
+    // installed.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x009e_e367, &[actor])
+    } else {
+        None
+    };
+    let busy = match jip {
+        Some(dead) => dead != 0,
+        None => {
+            e.vcall(actor, 0x2e8, &args![]).bool() || {
+                let actor = e.mem.u32(field(this, ACTOR));
+                e.vcall(actor, 0x22c, &args![0u32]).bool()
+            }
+        }
     };
     if !busy {
         if e.mem.u32(field(this, CURRENT_RESPONSE)) == 0 {
@@ -2153,5 +2166,72 @@ mod n026_tests {
             busy: 1,
         });
         assert!(calls(&log, CONVERSATION_FIRST_ITEM).is_empty());
+    }
+
+    thread_local! {
+        static G102_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G102_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g102(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G102_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G102_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's G102 seam at `0x9EE367` (a fix), on the conversation step with the item's last
+    /// response just spoken: not asked without the FIXES bit (the actor's two state calls
+    /// decide); asked with the actor, its answer is "busy": the item is dropped (busy) or the
+    /// next item taken (not busy); no answer makes the two calls.
+    #[test]
+    fn g102_seam_decides_whether_the_speaker_is_done() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        // (the word, the answer, the exe's first call's answer, asked, the next item taken)
+        for (bits, answer, state, asked, next) in [
+            (0, Some(1), 0, false, true),
+            (0, Some(0), 1, false, false),
+            (jip_patches::INSTALLED, Some(1), 0, false, true),
+            (fixes, Some(1), 0, true, false),
+            (fixes, Some(0), 1, true, true),
+            (fixes, None, 1, true, false),
+        ] {
+            let mut e = Engine::new();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009e_e367), at_g102);
+            let actor = object(
+                &mut e,
+                0x0a30_0000,
+                &[(0x2e8, word(state)), (0x22c, word(0))],
+            );
+            let this: Ptr = Ptr::new(e.mem.alloc(0xd0));
+            e.mem.set_u32(this.addr() + ACTOR, actor);
+            e.mem
+                .set_u32(this.addr() + CONVERSATION, CONVERSATION_OBJECT);
+            e.mem.set_u32(this.addr() + CURRENT_ITEM, ITEM);
+            e.mem.set_u32(this.addr() + CURRENT_RESPONSE, 0x0e00_0000);
+            quiet(&mut e, &[ITEM_NEXT_RESPONSE, CONVERSATION_NEXT_ITEM]);
+            e.register_double(GET_CURRENT, |_, a| {
+                word(if a[0] == CONVERSATION_OBJECT {
+                    0x0777
+                } else {
+                    0
+                })
+            });
+            e.set_jip_patches(bits);
+            G102_ASKED.with(|s| s.borrow_mut().clear());
+            G102_ANSWER.with(|c| c.set(answer));
+            e.call_log = Some(vec![]);
+            assert!(!advance(&mut e, this));
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                e.mem.u32(this.addr() + CURRENT_ITEM),
+                if next { 0x0777 } else { 0 },
+                "{bits:x} {answer:?}"
+            );
+            assert_eq!(calls(&log, CONVERSATION_NEXT_ITEM).len(), usize::from(next));
+            let seen = G102_ASKED.with(|s| s.take());
+            assert_eq!(seen, if asked { vec![vec![actor]] } else { vec![] });
+            let state_calls = calls(&log, 0x0a30_0000 + 0x10_0000 + 0x2e8).len();
+            assert_eq!(state_calls, usize::from(answer.is_none() || !asked));
+        }
     }
 }
