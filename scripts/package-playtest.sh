@@ -115,10 +115,12 @@ fi
 programs=$target/$profile
 checker=$target/release/package-check
 if [ "$use_built" = 0 ]; then
-    # The build machine's folders stay out of the program.
+    # The build machine's folders stay out of the program, and so does its symbol table (the
+    # Windows program has none either: its names are in a PDB that is not shipped). macOS keeps
+    # the names of every function in it otherwise.
     registry=${CARGO_HOME:-$HOME/.cargo}/registry/src
     rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
-    RUSTFLAGS="--remap-path-prefix=$root=nv-rs --remap-path-prefix=$registry=cargo --remap-path-prefix=$rustup_home=rustup"
+    RUSTFLAGS="--remap-path-prefix=$root=nv-rs --remap-path-prefix=$registry=cargo --remap-path-prefix=$rustup_home=rustup -C strip=symbols"
     export RUSTFLAGS
     CARGO_TARGET_DIR=$target
     export CARGO_TARGET_DIR
