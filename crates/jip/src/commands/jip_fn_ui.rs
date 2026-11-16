@@ -31,8 +31,8 @@
 //! - 3D and drawing: `AttachUIXML`, `AttachUIComponent` (a tile's node under a reference's node),
 //!   `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene node);
 //! - `RefreshItemsList`: in the map menu JIP sets `s_mapMenuSkipSetXY`, read only by its map
-//!   menu patch (G87, `0x79DF73`, not built), and in the recipe menu it runs JIP's own
-//!   `RefreshRecipeMenu`;
+//!   menu patch (G87, `0x79DF73`: `game_patches::gb::skip_map_centring_once` sets it), and in
+//!   the recipe menu it runs JIP's own `RefreshRecipeMenu`;
 //! - not yet built here (plain, for the next batch): `GetMenuTargetRef` (18 menus' targets),
 //!   `GetSelectedItemRef` (the top menu's selected list item), `GetWorldMapPosMults` (JIP's
 //!   `WorldDimensions` maths and its cached worldspaces).
@@ -440,7 +440,7 @@ fn trait_id(e: &mut Engine, name: &[u8]) -> u32 {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::GetValue (assembly).
 /// The tile's value of trait `id` (a binary search of the sorted values), 0 for none.
-fn value_of(e: &Engine, tile: u32, id: u32) -> u32 {
+pub(crate) fn value_of(e: &Engine, tile: u32, id: u32) -> u32 {
     let data = e.mem.u32(tile + TILE_VALUES);
     let (mut lo, mut hi) = (0u32, e.mem.u32(tile + TILE_VALUE_COUNT));
     while lo != hi {
@@ -521,7 +521,7 @@ fn parent_menu(e: &Engine, tile: u32) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::Value::SetFloat.
 /// The value's number set (`comiss`: nothing when it is equal, or when either is a NaN) and
 /// the value refreshed.
-fn value_set_float(e: &mut Engine, value: u32, num: f32) {
+pub(crate) fn value_set_float(e: &mut Engine, value: u32, num: f32) {
     let old = e.mem.f32(value + VALUE_NUM);
     if num.is_nan() || old.is_nan() || num == old {
         return;
