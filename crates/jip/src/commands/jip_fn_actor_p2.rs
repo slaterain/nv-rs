@@ -5,7 +5,9 @@
 //! equipped items, idles, water depth, weapon drawn and crippled limbs; and (lane C1) the
 //! character controller's tilt, gravity and velocity, the ground's material, the last hit's
 //! node, VATS targetability, `AttachAshPileEx`, the player's 3D, the push away from a point and
-//! a limb dismembered. 53 of its 71 commands; the first 70 lines are lane A1's module.
+//! a limb dismembered; and (lane C3) whether the last hit penetrated the armour, teammates made
+//! killable and an idle played by its conditions. 56 of its 71 commands; the first 70 lines are
+//! lane A1's module.
 //!
 //! Built elsewhere already (the core track's hook files): `SetOnHitEventHandler`,
 //! `SetOnReloadWeaponEventHandler`, `SetOnRagdollEventHandler` (`actor_hooks.rs`) and
@@ -14,17 +16,14 @@
 //! Left for later, each with what it waits for:
 //! - a game patch of stage 3.9 (`measure/jip/PLAN-3.9.md`): `MoveAwayFrom` (G42: the backup package reads
 //!   `s_moveAwayDistance`; H16: JIP's 0x8C package), `TravelToRef` (H16: `AddBackUpPackage`
-//!   allocates JIP's enlarged 0x8C package), `ToggleNoGunWobble` (H19), `ToggleTeammateKillable`
-//!   (the killable-teammates patch of 3.9o), `Get/SetExcludedCombatActions` (H16: the combat
-//!   controller's added mask and JIP's per-reference map), `RemoveAllPerks` and `GetAllPerks` (O18
-//!   NPC perks: their NPC half reads the patch's state and JIP's perk maps), `GetArmourPenetrated`
-//!   (hit flag 0x80000000 is set only by JIP's own hit-damage patch, `patches_game.h`, G77);
+//!   allocates JIP's enlarged 0x8C package), `ToggleNoGunWobble` (H19),
+//!   `Get/SetExcludedCombatActions` (H16: the combat controller's added mask and JIP's
+//!   per-reference map), `RemoveAllPerks` and `GetAllPerks` (O18 NPC perks: their NPC half reads
+//!   the patch's state and JIP's perk maps);
 //! - a hook: `FireWeaponEx` (writes the exe's code at `009BAD76` and `01087F1C` and queues a
 //!   call);
 //! - the 3D scene and physics (not ported to this layer): `ReloadEquippedModels`,
-//!   `RefreshAnimData`, `ReloadCharController`;
-//! - not reached by lane C1 (nothing missing; the next agent): `PlayIdleEx` (the idle directory's
-//!   pick `00600950`, `TESIdleForm::FindIdle`'s condition walk, `AnimData::PlayIdle` `00497F20`).
+//!   `RefreshAnimData`, `ReloadCharController`.
 //!
 //! Layouts (JIP's headers; the exe where the audit table says so): a reference's base form +0x20,
 //! position z +0x38, cell +0x40, extra data list +0x44; an actor's process +0x68, killer +0xC0,
@@ -48,10 +47,11 @@ use super::forms::{ListNode, TES_OBJECT_ARMO_VTBL};
 use super::havok_refs as h;
 use super::ln_fn_actor::{actor_base, changes_list, equipped_extra};
 use super::{
-    heap_alloc, is_actor, is_type, list_contains, list_items, list_prepend, list_remove,
+    heap_alloc, is_actor, is_type, list_contains, list_items, list_prepend, list_remove, list_step,
     model_path, set_form_result, string_set, type_of, Handlers,
 };
 use crate::console::{print_form, print_result};
+use crate::game_patches::ge::TEAMMATE_KILLABLE;
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs, EvalArgs};
@@ -106,6 +106,9 @@ pub static COMMANDS: Handlers = &[
     (0x28c7, update_player_3d),
     (0x288a, push_actor_away_alt),
     (0x2833, dismember_limb),
+    (0x2883, get_armour_penetrated),
+    (0x28eb, toggle_teammate_killable),
+    (0x2807, play_idle_ex),
 ];
 
 #[rustfmt::skip]
@@ -152,6 +155,9 @@ const HIT_WEAPON: u32 = 0x30;
 const HIT_IMPACT_POS: u32 = 0x38;
 const HIT_IMPACT_ANGLE: u32 = 0x44;
 const HIT_FLAGS: u32 = 0x58;
+/// The hit flag JIP's hit-damage patch sets when the minimum damage replaced the hit's damage
+/// (G77, `game_patches::gc`: `or byte [hit+0x5B], 0x80`); nothing of the game's sets it.
+const HIT_ARMOUR_PENETRATED: u32 = 0x8000_0000;
 const BASE_DEATH_ITEM: u32 = 0x4c;
 const BASE_TEMPLATE_FLAGS: u32 = 0x4a;
 const BASE_TEMPLATE_ACTOR: u32 = 0x54;
@@ -278,8 +284,8 @@ fn base_arg(e: &mut Engine, a: &CommandArgs, form: u32, own_base: bool) -> Optio
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::GetHitDataValue.
 /// An actor with a process of level 0 or 1 and last hit data: value `kind` of it (1 the limb
-/// damage, 2 the attacker, 3 the projectile, 4 the weapon, 6 the base weapon damage, 7 the
-/// fatigue damage); a form only when there is one.
+/// damage, 2 the attacker, 3 the projectile, 4 the weapon, 5 1 when the armour was penetrated,
+/// 6 the base weapon damage, 7 the fatigue damage); a form only when there is one.
 fn hit_data_value(e: &mut Engine, a: &CommandArgs, kind: u32) {
     let p = process(e, a.this_obj);
     if p == 0 || e.mem.u32(p + PROCESS_LEVEL) > 1 {
@@ -297,6 +303,11 @@ fn hit_data_value(e: &mut Engine, a: &CommandArgs, kind: u32) {
             let form = e.mem.u32(hit + at);
             if form != 0 {
                 set_form_result(e, a, form);
+            }
+        }
+        5 => {
+            if e.mem.u32(hit + HIT_FLAGS) & HIT_ARMOUR_PENETRATED != 0 {
+                a.set_result(e, 1.0);
             }
         }
         6 => a.set_result(e, float(e, HIT_WPN_BASE_DMG)),
@@ -330,6 +341,13 @@ fn get_hit_projectile(e: &mut Engine, w: &[u32]) -> Ret {
 // Cmd_GetHitWeapon_Execute.
 fn get_hit_weapon(e: &mut Engine, w: &[u32]) -> Ret {
     hit_data_value(e, &CommandArgs::new(w), 4);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetArmourPenetrated_Execute.
+fn get_armour_penetrated(e: &mut Engine, w: &[u32]) -> Ret {
+    hit_data_value(e, &CommandArgs::new(w), 5);
     handled(true)
 }
 
@@ -877,6 +895,116 @@ fn get_played_idle(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+/// The idle manager (`*0x11CB6A0`, JIP's `IdleAnimsDirectoryMap`) and its
+/// `TESIdleManager::GetIdleToPlay` (`00600950`, `thiscall`: the actor, the reference it interacts
+/// with), called so by the game's `PickIdleFunction` (`005CB123`) and `SetupSpecialIdle`
+/// (`008DAD39`); the process's interacted reference +0x40 (what the process's vtable +0x128,
+/// `008D6F30`, answers); `AnimData::PlayIdle` (`00497F20`, `thiscall`: the idle, the animation
+/// data's actor +4, the idle's group `+0x38 & 0x3F` as the game's `005FF160` reads it, then 3);
+/// `ConditionList::Evaluate` (`00680C60`, `thiscall`: the actor, 0, the answer, 0) on an idle's
+/// conditions +0x30; an idle's children +0x40 (`NiFormArray`: data +4, and the word +8 JIP
+/// reads as their count, see [`find_idle`]).
+const IDLE_MANAGER: u32 = 0x011c_b6a0;
+const GET_IDLE_TO_PLAY: u32 = 0x0060_0950;
+const PROCESS_INTERACTED_REF: u32 = 0x40;
+const PLAY_IDLE: u32 = 0x0049_7f20;
+const ANIM_ACTOR: u32 = 0x04;
+const IDLE_GROUP_FLAGS: u32 = 0x38;
+const CONDITIONS_EVALUATE: u32 = 0x0068_0c60;
+const IDLE_CONDITIONS: u32 = 0x30;
+const IDLE_CHILDREN: u32 = 0x40;
+const IDLE_CHILDREN_DATA: u32 = 0x04;
+const IDLE_CHILDREN_COUNT: u32 = 0x08;
+/// The deepest idle tree [`find_idle`] walks: JIP recurses without a bound, so a tree a mod made
+/// circular would overflow its stack (a deliberate difference: deeper is no match).
+const IDLE_DEPTH: u32 = 256;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESIdleForm::FindIdle.
+/// `idle` when its conditions hold for `actor` and it has no children, else its first child (in
+/// order) that answers one, else 0. The children are a `NiFormArray` whose live count is at +0xC;
+/// JIP reads the word at +8 (`BSSimpleArray`'s size), which is the array's capacity (grown by 1
+/// past what is needed, `0058B3F0`, `00864280`, the slots past the count zeroed): when no real
+/// child answers, JIP reaches a zeroed slot and calls `FindIdle` on null (the game would stop).
+/// Here that slot is skipped (a deliberate difference); the walk is bounded ([`list_step`],
+/// [`IDLE_DEPTH`]).
+fn find_idle(e: &mut Engine, idle: u32, actor: u32, depth: u32, walked: &mut usize) -> u32 {
+    let holds = e.with_stack(4, |e, answer| {
+        e.call(
+            CONDITIONS_EVALUATE,
+            &args![idle + IDLE_CONDITIONS, actor, 0u32, answer.addr(), 0u32],
+        )
+        .u32()
+            & 0xff
+            != 0
+    });
+    if !holds {
+        return 0;
+    }
+    let children = e.mem.u32(idle + IDLE_CHILDREN);
+    if children == 0 {
+        return idle;
+    }
+    if depth >= IDLE_DEPTH {
+        return 0;
+    }
+    let data = e.mem.u32(children + IDLE_CHILDREN_DATA);
+    let count = e.mem.u32(children + IDLE_CHILDREN_COUNT);
+    for i in 0..count {
+        if !list_step(e, walked) {
+            return 0;
+        }
+        let Some(child) = h::rd32(e, data.wrapping_add(4u32.wrapping_mul(i))) else {
+            return 0;
+        };
+        if child == 0 {
+            continue;
+        }
+        let found = find_idle(e, child, actor, depth + 1, walked);
+        if found != 0 {
+            return found;
+        }
+    }
+    0
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_PlayIdleEx_Execute.
+/// An actor with a process of level 0 and animation data plays `idle` (read only for such an
+/// actor): with none, the idle manager's pick for it and the reference its process interacts
+/// with; an idle with children, the first that answers ([`find_idle`]). Played only when there
+/// is one and it is not the idle already playing ([`played_idle`]). No result.
+fn play_idle_ex(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let p = process(e, a.this_obj);
+    if p == 0 || e.mem.u32(p + PROCESS_LEVEL) != 0 {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let anim = anim_data(e, a.this_obj);
+    if anim == 0 {
+        return handled(true);
+    }
+    let mut idle = read.form(0);
+    if idle == 0 {
+        let manager = e.mem.u32(IDLE_MANAGER);
+        let interacted = e.mem.u32(p + PROCESS_INTERACTED_REF);
+        idle = e
+            .call(GET_IDLE_TO_PLAY, &args![manager, a.this_obj, interacted])
+            .u32();
+    } else if e.mem.u32(idle + IDLE_CHILDREN) != 0 {
+        idle = find_idle(e, idle, a.this_obj, 0, &mut 0);
+    }
+    if idle != 0 && played_idle(e, anim) != idle {
+        let actor = e.mem.u32(anim + ANIM_ACTOR);
+        let group = u32::from(e.mem.u8(idle + IDLE_GROUP_FLAGS) & 0x3f);
+        e.call(PLAY_IDLE, &args![anim, idle, actor, group, 3u32]);
+    }
+    handled(true)
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: IsIdlePlaying.
 fn is_idle_playing(e: &mut Engine, refr: u32, idle: u32) -> bool {
     let anim = anim_data(e, refr);
@@ -1221,6 +1349,36 @@ fn set_vats_targetable(e: &mut Engine, w: &[u32]) -> Ret {
             flags ^ NON_TARGETABLE,
         );
         e.add_hook_user(engine_core::extend::Hook::AddVATSTarget, targetable == 0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_ToggleTeammateKillable_Execute.
+/// An actor's `kHookActorFlag2_TeammateKillable` (`jipActorFlags2` +0x106, the bit H18's
+/// essential-test seam in `game_patches::ge` reads): 1 when it is set; with an argument (the
+/// line's count not 0) that is read, the bit flipped when the asked state differs. No hook
+/// count: JIP's essential hook is always installed.
+fn toggle_teammate_killable(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let actor = Ptr::<crate::game::JipActorFlags>::new(a.this_obj);
+    let flags = e.get(actor, crate::game::JipActorFlags::jipActorFlags2);
+    let state = flags & TEAMMATE_KILLABLE != 0;
+    if state {
+        a.set_result(e, 1.0);
+    }
+    if super::jip_fn_utility::num_args(e, &a) != 0 {
+        let read = Read::of(e, &a);
+        if read.ok && (read.int(0, 0) == 0) == state {
+            e.set(
+                actor,
+                crate::game::JipActorFlags::jipActorFlags2,
+                flags ^ TEAMMATE_KILLABLE,
+            );
+        }
     }
     handled(true)
 }
@@ -1715,3 +1873,7 @@ mod tests;
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_c1_tests.rs"]
 mod c1_tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_p2_c3_tests.rs"]
+mod c3_tests;
