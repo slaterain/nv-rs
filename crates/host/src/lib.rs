@@ -33,6 +33,8 @@ pub mod patch_data;
 pub mod phys_blend;
 pub mod player_move;
 pub mod save_out;
+#[cfg(test)]
+mod start_up_tests;
 pub mod thread_races;
 pub mod topic_index;
 pub mod uncap;
@@ -76,6 +78,53 @@ impl Drop for Host {
     }
 }
 
+/// The rows and the built-in extenders, in their order (`start_up_tests` pins it): the rows first,
+/// since a row may set a flag an extender reads as it installs (`NV_JIP_INSTALLED` for JIP), and the
+/// extenders' wraps go over what the rows registered.
+pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Choice) {
+    // What differs from the exe in this run, registered over the translations (docs/FIXES.md).
+    fixes::install(engine, choice);
+    // zlib's inflate on the host decoder (unless `NV_NATIVE_INFLATE=0`): the same bytes out, in every
+    // preset, since it changes no behaviour, only the time a compressed file takes.
+    if native_inflate::wanted() {
+        native_inflate::install(engine);
+    }
+    // Full screen asked is drawn in the borderless window over the monitor, in every preset:
+    // nv-rs offers no exclusive full-screen device yet ([`full_screen`]).
+    full_screen::install(engine);
+    // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
+    // registered. Vanilla content calls no extender opcode, and every change it makes to
+    // vanilla commands is a row.
+    nvse::install(engine);
+    // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, answering "not
+    // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
+    // `fixes::install` above) switched it on (`crates/jip`).
+    jip::install(engine);
+    // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
+    // jip_nvse.dll (`crates/uio`).
+    uio::install(engine);
+}
+
+/// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;
+/// `answers_installed`: it does), with the threads asked for: none when it is off as asked.
+pub(crate) fn jip_start_lines(row_on: bool, answers_installed: bool, threads: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    if row_on && !answers_installed {
+        lines.push(
+            "JIP LN NVSE: its row is on but JIP installed before reading it: it answers \"not installed\""
+                .to_string(),
+        );
+    }
+    if answers_installed && !threads.trim().eq_ignore_ascii_case("stepped") {
+        lines.push(
+            "JIP LN on with real threads: four of JIP's hooks still wait for the main thread until the \
+             thread-safety follow-up is in; hitches at cell changes are possible"
+                .to_string(),
+        );
+    }
+    lines
+}
+
 impl Host {
     /// Starts the game's code for the installation whose `Data` folder is
     /// `data`: its `FalloutNV.exe` ([`engine::exe::installed_exe`]),
@@ -110,27 +159,15 @@ impl Host {
         for (address, function) in play_patch::funcs() {
             engine.register(address, function);
         }
-        // What differs from the exe in this run, registered over the translations (docs/FIXES.md).
-        fixes::install(&mut engine, choice);
-        // zlib's inflate on the host decoder (unless `NV_NATIVE_INFLATE=0`): the same bytes out, in every
-        // preset, since it changes no behaviour, only the time a compressed file takes.
-        if native_inflate::wanted() {
-            native_inflate::install(&mut engine);
-        }
-        // Full screen asked is drawn in the borderless window over the monitor, in every preset:
-        // nv-rs offers no exclusive full-screen device yet ([`full_screen`]).
-        full_screen::install(&mut engine);
-        // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
-        // registered. Vanilla content calls no extender opcode, and every change it makes to
-        // vanilla commands is a row.
-        nvse::install(&mut engine);
-        // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, with no command built
-        // yet, and answering "not installed" until the commands mods call are in (`crates/jip`).
-        jip::install(&mut engine);
-        // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
-        // jip_nvse.dll (`crates/uio`).
-        uio::install(&mut engine);
+        install_rows_and_extenders(&mut engine, choice);
         eprintln!("{}", choice.describe());
+        let jip_state = {
+            let jip = engine.ext::<jip::Jip>();
+            (jip.row_on, jip.answers_installed)
+        };
+        for line in jip_start_lines(jip_state.0, jip_state.1, &choice.threads) {
+            eprintln!("{line}");
+        }
         if let Some(note) = &choice.ini_note {
             eprintln!("{note}");
         }
