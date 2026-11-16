@@ -1031,6 +1031,15 @@ player's teammate when others detect it, and with the detection fix its level wo
 | (none; `IsValidAITargetHook`) | `009f5070` (`0x9F50C4`: the sandbox target scan) | With the fixes row on, sandboxing NPCs also skip a reference a script is about to disable when choosing something to use, sit on or eat (the original already skips disabled and deleted ones) (G92) | 3.9-GD |
 | (none; 21 bytes in `InitGamePatches`) | `009ee0a0` (`0x9EE367`: a dialogue package's speaker) | With the fixes row on, a dialogue package's speaker in life state 1 (dying) or 6 keeps its line; only a dead speaker (life state 2) ends it (G102) | 3.9-GD |
 | `bProjImpactDmgFix` (on by default) | `009b7cc0` (`0x9B7E14`: a missile's flags) | With the fixes row on and the switch on, a missile gets the flag "the weapon's damage is not applied again on impact" (0x8000) only when its projectile record also has flag 0x100; the original sets it whenever its own test (`009a7f80` on the record, or VATS in state 4) says so, so impact damage is applied once as JIP intends (O4) | 3.9-GD |
+| (none; `DeathResponseFixHook`) | `009839b0` (`0x984156`: a combat line's speaker) | With the fixes row on, an NPC's death response (a combat line said when it dies) with no combat group behind it is spoken by its nearest living ally within 1024 units (alive, not talking, not in a conversation package) instead of the dying NPC itself; with no such ally the original's line is said (G101). Difference: the distance uses the processor's own reciprocal square root as JIP's code does (on processors other than x86-64, the exact one) | 3.9-GD |
+| (none; `MineExplodeChanceHook`) | `009c39e0` (`0x9C3BD6`: a mine's trigger test) | With the fixes row on, a mine that reacts to an NPC in range rolls the "adjust mine explode chance" perk entry point for that NPC (out of 100, as for the player) instead of always going off; a failed roll goes on to the next NPC (G127) | 3.9-GD |
+
+Built as part of JIP (in every preset once JIP answers "installed", not under the row), group GD:
+the backup package's move-away distance is JIP's variable (`009ed380` at `0x9ED3F8`, `009ed4b0` at
+`0x9ED528`; 300, the original's, until JIP's `MoveAwayFrom` sets it: that command is not built yet)
+(G42); while JIP's hit effects are off (`ToggleHitEffects 0`, or `ToggleImmortalMode 2`), an
+explosion in the player's face shows no image space (`009acd60` at `0x9ACEC6`) and explosions shake
+no screen (`0x9AD2C5`) (G124, G125). With the hit effects on (the default) the original's.
 
 #### GE: Actors: movement, life, NPC perks
 

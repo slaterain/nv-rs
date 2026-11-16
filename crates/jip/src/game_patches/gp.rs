@@ -659,6 +659,18 @@ pub fn disable_hit_effects(e: &mut Engine) -> u32 {
     e.ext_free::<Immortal>().hit_effects.load(Ordering::Relaxed)
 }
 
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_ToggleHitEffects_Execute (its change to the word; the command itself is the lanes').
+/// `ToggleHitEffects`'s change to `s_disableHitEffects`: on keeps only bit 2, off sets bit 1.
+pub fn toggle_hit_effects(e: &mut Engine, on: bool) {
+    let state = e.ext_free::<Immortal>();
+    if on {
+        state.hit_effects.fetch_and(2, Ordering::Relaxed);
+    } else {
+        state.hit_effects.fetch_or(1, Ordering::Relaxed);
+    }
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ModHardcoreNeedsHook.
 /// G114 + O6 (`0x969C41`: the player, where the exe calls `IsInState(4)`): with the switch
 /// `bHardcoreNeedsFix` (O6) each of the three needs (`+0x5D4`) takes its pending change

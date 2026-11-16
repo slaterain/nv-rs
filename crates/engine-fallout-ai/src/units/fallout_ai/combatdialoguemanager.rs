@@ -398,10 +398,27 @@ pub fn fn_009839b0(
         e.vcall(process, 0x2a4, &args![actor, topic, 0u32, 0u32, 0u32, 0u32]);
         return true;
     }
+    // 00984156: JIP's G101 (a fix) gives a death response with no controller to the nearest
+    // living ally, with the three flag words 0; the seam answers that ally, or 0 for the exe's
+    // speaker and words (words: the actor, the controller, the type, the subtype, the flag). One
+    // load while JIP is not installed. JIP calls `0x8B2170` directly: the slot 0x280 of every
+    // actor vtable (Character, Creature, PlayerCharacter).
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(
+            0x0098_4156,
+            &[actor, controller, dialogue_type, subtype, u32::from(flag)],
+        )
+    } else {
+        None
+    };
+    let (speaker, said) = match jip {
+        Some(ally) if ally != 0 => (ally, 0u32),
+        _ => (speaker, 1u32),
+    };
     e.vcall(
         actor,
         0x280,
-        &args![speaker, 0u32, 0u32, 0u32, 1u32, 1u32, topic, 1u32, 0u32],
+        &args![speaker, 0u32, 0u32, 0u32, said, said, topic, said, 0u32],
     )
     .bool()
 }
@@ -786,5 +803,76 @@ mod tests {
         let player = e.mem.alloc(0x610);
         e.mem.set_u8(player + 0x608, 5);
         assert_eq!(e.call(0x0098_4270, &args![player]).u32(), 5);
+    }
+
+    thread_local! {
+        static G101_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G101_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g101(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G101_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G101_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's G101 seam at `0x984156` (a fix): not asked without the FIXES bit; asked with the
+    /// actor, the controller slot 0x428 gave (the exe's `[ebp+0x1C]` after its fallback), the
+    /// type, the subtype and the flag; an ally answered speaks the line with the three flag
+    /// words 0 (JIP's `push edx` with dl 0); 0 or no answer keeps the actor and the words 1.
+    #[test]
+    fn g101_seam_gives_the_line_to_the_answered_ally() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let ally = 0x0500_0010;
+        for (word, answer, asked, to_ally) in [
+            (0, Some(ally), false, false),
+            (jip_patches::INSTALLED, Some(ally), false, false),
+            (fixes, Some(ally), true, true),
+            (fixes, Some(0), true, false),
+            (fixes, None, true, false),
+        ] {
+            let (mut e, actor, controller, _) = world();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0098_4156), at_g101);
+            e.set_jip_patches(word);
+            G101_ASKED.with(|s| s.borrow_mut().clear());
+            G101_ANSWER.with(|c| c.set(answer));
+            e.mem.set_u32(actor + 8, controller);
+            assert!(say(&mut e, actor, (2, 6), 1, 0), "{word:x} {answer:?}");
+            let seen = G101_ASKED.with(|s| s.take());
+            assert_eq!(
+                seen,
+                if asked {
+                    vec![vec![actor, controller, 2, 6, 1]]
+                } else {
+                    vec![]
+                }
+            );
+            let (speaker, said) = if to_ally { (ally, 0) } else { (actor, 1) };
+            assert_eq!(
+                calls(&e, slot(0x280)),
+                vec![vec![actor, speaker, 0, 0, 0, said, said, 0x7700, said, 0]],
+                "{word:x} {answer:?}"
+            );
+        }
+    }
+
+    /// G101's seam is only at the speaker call: a line said directly (slot 0x214) or without a
+    /// topic does not ask it, even with the FIXES bit and an answer.
+    #[test]
+    fn g101_seam_not_asked_off_the_speaker_call() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let (mut e, actor, _, _) = world();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0098_4156), at_g101);
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        G101_ASKED.with(|s| s.borrow_mut().clear());
+        G101_ANSWER.with(|c| c.set(Some(0x0500_0010)));
+        e.mem.set_u32(actor + 0xc, 1);
+        assert!(say(&mut e, actor, (2, 6), 1, 0));
+        assert_eq!(calls(&e, slot(0x2a4)).len(), 1);
+        e.mem.set_u32(actor + 0xc, 0);
+        e.set_global(LAST_LINE_TIME, 0u32);
+        assert!(!say(&mut e, actor, (9, 6), 1, 0));
+        assert_eq!(G101_ASKED.with(|s| s.take()), Vec::<Vec<u32>>::new());
+        assert!(calls(&e, slot(0x280)).is_empty());
     }
 }

@@ -85,7 +85,17 @@ fn back_up_point(e: &mut Engine, out: u32, actor: u32, reference: u32, assign: b
             copy_point(e, position, at(0x38));
             let position = e.vcall(actor, 0x1f4, &[]).u32();
             copy_point(e, position, at(0x2c));
-            let distance = x87_quiet_bits(e.global::<u32>(BACK_UP_DISTANCE));
+            // 009ed3f8 / 009ed528: JIP's G42 (its own) points the load at its move-away
+            // distance; the seam answers its bits (no words). One load while JIP is not
+            // installed.
+            let site = if assign { 0x009e_d528 } else { 0x009e_d3f8 };
+            let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                e.site(site, &[])
+            } else {
+                None
+            };
+            let distance = jip.unwrap_or_else(|| e.global::<u32>(BACK_UP_DISTANCE));
+            let distance = x87_quiet_bits(distance);
             e.mem.set_u32(at(0x20), distance);
             e.call(POINT_SUBTRACT, &args![at(0x2c), at(0x1c), at(0x38)]);
             e.call(POINT_NORMALIZE, &args![at(0x1c)]);
@@ -388,5 +398,67 @@ mod tests {
         assert_eq!(calls(&e, SET_LOC_CELL)[0][1], cell);
         assert_eq!(point(&e, this + BACK_UP_POINT), [0.0, 0.0, 0.0]);
         assert!(calls(&e, POINT_ASSIGN).is_empty());
+    }
+
+    thread_local! {
+        /// The G42 seams asked (their addresses) and the distance answered.
+        static G42: std::cell::RefCell<(Vec<u32>, Option<u32>)> =
+            const { std::cell::RefCell::new((Vec::new(), None)) };
+    }
+
+    fn asked_g42(address: u32, a: &[u32]) -> Option<u32> {
+        assert_eq!(a, &[] as &[u32]);
+        G42.with(|s| {
+            let mut s = s.borrow_mut();
+            s.0.push(address);
+            s.1
+        })
+    }
+
+    fn at_g42_380(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        asked_g42(0x009e_d3f8, a)
+    }
+
+    fn at_g42_4b0(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        asked_g42(0x009e_d528, a)
+    }
+
+    /// JIP's G42 seams at `0x9ED3F8` (`fn_009ed380`) and `0x9ED528` (`fn_009ed4b0`), JIP's own:
+    /// not asked while JIP is not installed (the exe's 300); asked with JIP installed (whatever
+    /// the fixes row), each function at its own address, the answer is the distance; no answer
+    /// keeps 300; no reference asks nothing.
+    #[test]
+    fn g42_seams_give_the_move_away_distance() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for (word, answer, asked, x) in [
+            (0, Some(50.0f32.to_bits()), false, 400.0f32),
+            (jip_patches::FIXES, Some(50.0f32.to_bits()), false, 400.0),
+            (jip_patches::INSTALLED, Some(50.0f32.to_bits()), true, 150.0),
+            (
+                jip_patches::INSTALLED | jip_patches::FIXES,
+                Some(75.0f32.to_bits()),
+                true,
+                175.0,
+            ),
+            (jip_patches::INSTALLED, None, true, 400.0),
+        ] {
+            for (function, site) in [(0x009e_d380u32, 0x009e_d3f8u32), (0x009e_d4b0, 0x009e_d528)] {
+                let mut e = engine();
+                e.on_site(SiteSlot::new(Owner::Jip, 0x009e_d3f8), at_g42_380);
+                e.on_site(SiteSlot::new(Owner::Jip, 0x009e_d528), at_g42_4b0);
+                e.set_jip_patches(word);
+                G42.with(|s| *s.borrow_mut() = (Vec::new(), answer));
+                let actor = reference(&mut e, 100.0, 0.0);
+                let other = reference(&mut e, 0.0, 0.0);
+                let out = e.mem.alloc(12);
+                e.call(function, &args![out, actor, other]);
+                assert_eq!(point(&e, out)[0], x, "{word:x} {function:x}");
+                let seen = G42.with(|s| s.take().0);
+                assert_eq!(seen, if asked { vec![site] } else { vec![] });
+                // No reference: the zero point, nothing asked.
+                e.call(function, &args![out, actor, 0u32]);
+                assert_eq!(G42.with(|s| s.take().0), Vec::<u32>::new());
+            }
+        }
     }
 }
