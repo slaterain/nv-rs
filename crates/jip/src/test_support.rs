@@ -95,6 +95,21 @@ fn prepare(e: &mut Engine) {
         e.map(0x011c_f000, 0x1000);
         e.register(0x0064_6260, |e, _| f32::into_ret(e.mem.f32(0x011c_f154)));
     }
+    // Group GF: `TESNPC`'s model vtable (0x0104A1A4), whose set slot `+0x18` JIP writes (G40),
+    // the two skeleton settings (0x011D2718, 0x011D3E44), and `00601c30` (G39's wrap) when the
+    // test engine has no translation of it: the exe's answer, the female setting's text for a
+    // female NPC (`+0x34` bit 0 of the NPC, the model being at `+0xDC`), else the male one's.
+    e.map(0x0104_a000, 0x1000);
+    e.map(0x011d_2000, 0x2000);
+    if !e.is_registered(0x0060_1c30) {
+        e.register(0x0060_1c30, |e, a| {
+            let female = e.mem.u8(a[0].wrapping_sub(0xdc).wrapping_add(0x34)) & 1 != 0;
+            Ret {
+                eax: e.mem.u32(if female { 0x011d_271c } else { 0x011d_3e48 }),
+                ..Ret::default()
+            }
+        });
+    }
 }
 
 /// Opens or closes the console as the echo sees it.

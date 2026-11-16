@@ -5,10 +5,11 @@
 //! messages (disabled by script, their flags and display time), and the open menus' data (item
 //! filters, the barter caps and price multipliers, the recipe menu's selection, category and
 //! category count, the VATS targets, the font files, the level-up menu with skill points, the
-//! barter offers and a menu's item list as inventory references, a terminal's own model), and
+//! barter offers and a menu's item list as inventory references, a menu's target and the top
+//! menu's highlighted item, a terminal's own model), a reference's place on the world map, and
 //! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
-//! a text's size in a font. 38 of the file's 64 commands; its four menu event commands are the
+//! a text's size in a font. 41 of the file's 64 commands; its four menu event commands are the
 //! core track's (`ui_hooks`).
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
@@ -32,10 +33,14 @@
 //!   `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene node);
 //! - `RefreshItemsList`: in the map menu JIP sets `s_mapMenuSkipSetXY`, read only by its map
 //!   menu patch (G87, `0x79DF73`, not built), and in the recipe menu it runs JIP's own
-//!   `RefreshRecipeMenu`;
-//! - not yet built here (plain, for the next batch): `GetMenuTargetRef` (18 menus' targets),
-//!   `GetSelectedItemRef` (the top menu's selected list item), `GetWorldMapPosMults` (JIP's
-//!   `WorldDimensions` maths and its cached worldspaces).
+//!   `RefreshRecipeMenu`.
+//!
+//! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
+//! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the
+//! command gives no reference here. `GetWorldMapPosMults` works the map's numbers out on every
+//! call where JIP keeps them for the last worldspace and root map (`s_worldDimensionsA`): the
+//! same numbers, since a worldspace's map data does not change in play; a chain of parent
+//! worlds stops after `MAX_WALK` steps.
 //!
 //! `MessageExAlt` cuts its message to the HUD queue's text buffer less its end: 0x103 bytes in
 //! the game, JIP's 0x203 while its corner message length patch is on (G10, `InitGamePatches`,
@@ -80,13 +85,16 @@ pub static COMMANDS: Handlers = &[
     (0x2682, get_active_ui_component_name),
     (0x2683, get_active_ui_component_full_name),
     (0x2684, get_active_ui_component_id),
+    (0x2685, get_menu_target_ref),
     (0x2686, get_menu_item_filter),
     (0x2687, click_menu_button),
+    (0x270b, get_selected_item_ref),
     (0x270e, get_barter_items),
     (0x2711, get_barter_gold_alt),
     (0x2712, get_recipe_menu_selection),
     (0x2713, get_recipe_menu_category),
     (0x2715, get_recipe_menu_num_subcategories),
+    (0x2730, get_world_map_pos_mults),
     (0x2738, message_ex_alt),
     (0x274b, get_font_file),
     (0x2784, set_message_disabled),
@@ -1860,6 +1868,437 @@ fn message_ex_alt(e: &mut Engine, w: &[u32]) -> Ret {
             &args![at, 0u32, icon_ptr, sound_ptr, seconds, 0u32],
         );
     });
+    handled(true)
+}
+
+// ---- a menu's target and its selected item ----
+
+/// The menus' singletons not named above, the game's own selection and target globals, and the
+/// fields read (engine-fallout-interface, Xbox PDB names): the inventory, container and barter
+/// menus' current item (`pCurrItem`, `0x11D9EA8`, `0x11D93FC`, `0x11D8FA8`), the repair menu's
+/// broken item (`0x11DA760`), the item mod menu's item (`0x11D9F58`), the VATS target
+/// (`0x11F21CC`), the repair vendor (`0x11DA7F4`).
+const STATS_MENU: u32 = 0x011d_ace0;
+const MAP_MENU: u32 = 0x011d_a368;
+const ITEM_MOD_MENU: u32 = 0x011d_9f54;
+const INVENTORY_SELECTION: u32 = 0x011d_9ea8;
+const CONTAINER_SELECTION: u32 = 0x011d_93fc;
+const BARTER_SELECTION: u32 = 0x011d_8fa8;
+const REPAIR_TARGET: u32 = 0x011d_a760;
+const ITEM_MOD_TARGET: u32 = 0x011d_9f58;
+const VATS_TARGET: u32 = 0x011f_21cc;
+const REPAIR_SERVICES_TARGET: u32 = 0x011d_a7f4;
+/// `DialogMenu::pSpeaker` +0x80, `LockPickMenu::pLockTarget` +0x6C, `MapMenu`'s highlighted
+/// marker tile +0xD4, its marker list +0xD8 and its quest, note and challenge lists +0x130,
+/// +0x160, +0x1F0, `LevelUpMenu`'s page +0x28 (1: perks) and perk list +0x94,
+/// `CompanionWheelMenu`'s companion +0x68, `RecipeMenu::pCrafterRef` +0x60, `CaravanMenu`'s
+/// opponent +0x100, `TraitMenu`'s perk list +0x54, `StatsMenu`'s perk rank list +0x1E0 (its
+/// items' perk +0), `ItemModMenu`'s list +0x60, the container and barter menus' current list
+/// (+0xF8, +0x108).
+const DIALOG_PARTNER: u32 = 0x80;
+const LOCK_PICK_TARGET: u32 = 0x6c;
+const MAP_MARKER_TILE: u32 = 0xd4;
+const MAP_MARKERS: u32 = 0xd8;
+const MAP_QUESTS: u32 = 0x130;
+const MAP_NOTES: u32 = 0x160;
+const MAP_CHALLENGES: u32 = 0x1f0;
+const LEVEL_UP_PAGE: u32 = 0x28;
+const LEVEL_UP_PERKS: u32 = 0x94;
+const COMPANION_REF: u32 = 0x68;
+const RECIPE_SOURCE: u32 = 0x60;
+const CARAVAN_OPPONENT: u32 = 0x100;
+const TRAIT_PERKS: u32 = 0x54;
+const STATS_PERK_RANKS: u32 = 0x1e0;
+const ITEM_MOD_ITEMS: u32 = 0x60;
+const CONTAINER_CURRENT: u32 = 0xf8;
+const BARTER_CURRENT: u32 = 0x108;
+/// A list box's container tile (+0xC) and highlighted tile (+0x10); a list item's tile (+0).
+const LIST_BOX_PARENT: u32 = 0x0c;
+const LIST_BOX_SELECTED: u32 = 0x10;
+const LIST_ITEM_TILE: u32 = 0x00;
+/// `ExtraTalkingActor` (0x55) and its actor (+0xC); `BGSTalkingActivator`'s form type; a
+/// reference's base form (+0x20).
+const EXTRA_TALKING_ACTOR: u32 = 0x55;
+const TALKING_ACTOR: u32 = 0x0c;
+const TALKING_ACTIVATOR: u8 = 0x16;
+const REFR_BASE: u32 = 0x20;
+/// The menus `GetMenuTargetRef` knows besides those above (JIP's `kMenuType_*`).
+const DIALOG: u32 = 0x3f1;
+const LOCK_PICK: u32 = 0x3f6;
+const QUANTITY: u32 = 0x3f8;
+const LEVEL_UP: u32 = 0x403;
+const HACKING: u32 = 0x41f;
+const VATS: u32 = 0x420;
+const COMPUTERS: u32 = 0x421;
+const COMPANION_WHEEL: u32 = 0x433;
+const RECIPE: u32 = 0x435;
+const CARAVAN: u32 = 0x43b;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameUI.h: ListBox::GetSelected.
+/// The item of the list box's highlighted tile: the first list item whose tile it is; 0 when
+/// nothing is highlighted or no item has it.
+fn list_box_selected(e: &Engine, list_box: u32) -> u32 {
+    let selected = e.mem.u32(list_box + LIST_BOX_SELECTED);
+    if selected == 0 {
+        return 0;
+    }
+    for item in list_items(e, Ptr::<ListNode>::new(list_box + LIST_BOX_LIST)) {
+        if item != 0 && e.mem.u32(item + LIST_ITEM_TILE) == selected {
+            return e.mem.u32(item + LIST_ITEM_OBJECT);
+        }
+    }
+    0
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameUI.h: ListBox::IsEnabled.
+/// The list box has a container tile whose `_enabled` is not 0.
+fn list_box_enabled(e: &mut Engine, list_box: u32) -> bool {
+    let parent = e.mem.u32(list_box + LIST_BOX_PARENT);
+    if parent == 0 {
+        return false;
+    }
+    let id = trait_id(e, b"_enabled");
+    value_float(e, parent, id) != 0.0
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetHackingMenuRef.
+/// The hacking menu's terminal once it has guess tiles (the low byte of their count, +0x17C),
+/// else the interface manager's activate reference (+0xFC).
+fn hacking_menu_ref(e: &Engine, menu: u32) -> u32 {
+    let menu = Ptr::<crate::game::HackingMenu>::new(menu);
+    if e.get(menu, crate::game::HackingMenu::guessTileCount) != 0 {
+        e.get(menu, crate::game::HackingMenu::pTerminalRef)
+    } else {
+        let im = interface_manager(e);
+        if im == 0 {
+            0
+        } else {
+            e.get(
+                Ptr::<crate::game::InterfaceManager>::new(im),
+                crate::game::InterfaceManager::pActivateRef,
+            )
+        }
+    }
+}
+
+/// The highlighted map marker: the `_MarkerIndex` of the marker tile picks the marker list's
+/// item (`tList::GetNthItem`, the float truncated as C++'s conversion does).
+fn map_marker_ref(e: &mut Engine, menu: u32) -> u32 {
+    let tile = e.mem.u32(menu + MAP_MARKER_TILE);
+    if tile == 0 {
+        return 0;
+    }
+    let id = trait_id(e, b"_MarkerIndex");
+    let value = value_of(e, tile, id);
+    if value == 0 {
+        return 0;
+    }
+    let index = cvttss2si(e.mem.f32(value + VALUE_NUM));
+    super::nth_item(e, Ptr::<ListNode>::new(menu + MAP_MARKERS), index)
+}
+
+/// The dialogue partner, or for a talking activator its `ExtraTalkingActor`'s actor when it has
+/// one.
+fn dialog_partner(e: &mut Engine, menu: u32) -> u32 {
+    let partner = e.mem.u32(menu + DIALOG_PARTNER);
+    if partner == 0 {
+        return 0;
+    }
+    let base = e.mem.u32(partner + REFR_BASE);
+    if base == 0 || type_of(e, base) != TALKING_ACTIVATOR {
+        return partner;
+    }
+    let extra = super::extra::refr_extra(e, partner, EXTRA_TALKING_ACTOR);
+    if extra == 0 {
+        partner
+    } else {
+        e.mem.u32(extra + TALKING_ACTOR)
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_GetMenuTargetRef_Execute.
+/// `GetMenuTargetRef menuID`: what the open menu is about. The container, lock, barter,
+/// computers, companion wheel, recipe and caravan menus' own reference; the dialogue partner
+/// (a talking activator's actor); the hacking menu's terminal; the VATS target and the repair
+/// vendor (the game's globals); the highlighted map marker; the highlighted perk of the level-up
+/// menu's perk page and of the trait menu. The quantity, repair and item mod menus' item, as an
+/// inventory reference: the inventory's, else the container menu's (in the container when its
+/// right list is the current one), else the barter menu's (in the merchant's container). No
+/// result when the menu is not open or names nothing.
+fn get_menu_target_ref(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let id = read.int(0, 0);
+    let tile = menu_tile_by_id(e, id);
+    let menu = if tile == 0 {
+        0
+    } else {
+        e.mem.u32(tile + TILE_MENU_MENU)
+    };
+    if menu == 0 {
+        return handled(true);
+    }
+    let mut target = 0;
+    let mut container = e.mem.u32(PLAYER);
+    let mut entry = 0;
+    match id {
+        CONTAINER => target = e.mem.u32(menu + CONTAINER_REF),
+        DIALOG => target = dialog_partner(e, menu),
+        LOCK_PICK => target = e.mem.u32(menu + LOCK_PICK_TARGET),
+        QUANTITY => {
+            let (container_menu, barter_menu) = (e.mem.u32(CONTAINER_MENU), e.mem.u32(BARTER_MENU));
+            if e.mem.u8(MENU_SHOWN + INVENTORY) != 0 {
+                entry = e.mem.u32(INVENTORY_SELECTION);
+            } else if container_menu != 0 {
+                entry = e.mem.u32(CONTAINER_SELECTION);
+                if e.mem.u32(container_menu + CONTAINER_CURRENT)
+                    == container_menu + CONTAINER_RIGHT_ITEMS
+                {
+                    container = e.mem.u32(container_menu + CONTAINER_REF);
+                }
+            } else if barter_menu != 0 {
+                entry = e.mem.u32(BARTER_SELECTION);
+                if e.mem.u32(barter_menu + BARTER_CURRENT) == barter_menu + BARTER_RIGHT_ITEMS {
+                    let merchant = e.mem.u32(barter_menu + BARTER_MERCHANT);
+                    container = merchant_container(e, merchant);
+                }
+            }
+        }
+        MAP => target = map_marker_ref(e, menu),
+        LEVEL_UP => {
+            if e.mem.u32(menu + LEVEL_UP_PAGE) == 1 {
+                target = list_box_selected(e, menu + LEVEL_UP_PERKS);
+            }
+        }
+        REPAIR => entry = e.mem.u32(REPAIR_TARGET),
+        BARTER => target = e.mem.u32(menu + BARTER_MERCHANT),
+        HACKING => target = hacking_menu_ref(e, menu),
+        VATS => target = e.mem.u32(VATS_TARGET),
+        COMPUTERS => {
+            target = e.get(
+                Ptr::<crate::game::ComputersMenu>::new(menu),
+                crate::game::ComputersMenu::pTerminalRef,
+            );
+        }
+        REPAIR_SERVICES => target = e.mem.u32(REPAIR_SERVICES_TARGET),
+        ITEM_MOD => entry = e.mem.u32(ITEM_MOD_TARGET),
+        COMPANION_WHEEL => target = e.mem.u32(menu + COMPANION_REF),
+        RECIPE => target = e.mem.u32(menu + RECIPE_SOURCE),
+        CARAVAN => target = e.mem.u32(menu + CARAVAN_OPPONENT),
+        TRAIT_MENU => target = list_box_selected(e, menu + TRAIT_PERKS),
+        _ => {}
+    }
+    if container != 0 && entry != 0 {
+        target = create_ref_for_stack(e, container, entry);
+    }
+    if target != 0 {
+        set_form_result(e, &a, target);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_GetSelectedItemRef_Execute.
+/// `GetSelectedItemRef`: the highlighted item of the menu on top. The inventory's, the container
+/// menu's (in the container when its right list has the highlight), the barter menu's (in the
+/// merchant's container likewise), the repair, repair services and item mod menus' item, each
+/// as an inventory reference; the stats menu's highlighted perk; the map menu's highlighted
+/// quest, else note, else challenge, each only from an enabled list. No result otherwise.
+fn get_selected_item_ref(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let mut target = 0;
+    let mut container = e.mem.u32(PLAYER);
+    let mut entry = 0;
+    let top = top_visible_menu_id(e);
+    let singleton = match top {
+        INVENTORY => INVENTORY_MENU,
+        STATS => STATS_MENU,
+        CONTAINER => CONTAINER_MENU,
+        MAP => MAP_MENU,
+        REPAIR => REPAIR_MENU,
+        BARTER => BARTER_MENU,
+        REPAIR_SERVICES => REPAIR_SERVICES_MENU,
+        ITEM_MOD => ITEM_MOD_MENU,
+        _ => 0,
+    };
+    let menu = if singleton == 0 {
+        0
+    } else {
+        e.mem.u32(singleton)
+    };
+    if menu != 0 {
+        match top {
+            INVENTORY => {
+                if e.mem.u32(menu + INVENTORY_ITEMS + LIST_BOX_SELECTED) != 0 {
+                    entry = e.mem.u32(INVENTORY_SELECTION);
+                }
+            }
+            STATS => {
+                let rank = list_box_selected(e, menu + STATS_PERK_RANKS);
+                // JIP reads `GetSelected()->perk` with no null test (it would crash on a
+                // highlighted tile no rank has); here that gives none.
+                if rank != 0 {
+                    target = e.mem.u32(rank);
+                }
+            }
+            CONTAINER | BARTER => {
+                let (left, right, selection) = if top == CONTAINER {
+                    (
+                        CONTAINER_LEFT_ITEMS,
+                        CONTAINER_RIGHT_ITEMS,
+                        CONTAINER_SELECTION,
+                    )
+                } else {
+                    (BARTER_LEFT_ITEMS, BARTER_RIGHT_ITEMS, BARTER_SELECTION)
+                };
+                let right_selected = e.mem.u32(menu + right + LIST_BOX_SELECTED) != 0;
+                if e.mem.u32(menu + left + LIST_BOX_SELECTED) != 0 || right_selected {
+                    entry = e.mem.u32(selection);
+                    if right_selected {
+                        container = if top == CONTAINER {
+                            e.mem.u32(menu + CONTAINER_REF)
+                        } else {
+                            let merchant = e.mem.u32(menu + BARTER_MERCHANT);
+                            merchant_container(e, merchant)
+                        };
+                    }
+                }
+            }
+            MAP => {
+                for list in [MAP_QUESTS, MAP_NOTES, MAP_CHALLENGES] {
+                    if e.mem.u32(menu + list + LIST_BOX_SELECTED) != 0
+                        && list_box_enabled(e, menu + list)
+                    {
+                        target = list_box_selected(e, menu + list);
+                        break;
+                    }
+                }
+            }
+            REPAIR => entry = list_box_selected(e, menu + REPAIR_ITEMS),
+            REPAIR_SERVICES => entry = list_box_selected(e, menu + REPAIR_SERVICES_ITEMS),
+            ITEM_MOD => entry = list_box_selected(e, menu + ITEM_MOD_ITEMS),
+            _ => {}
+        }
+    }
+    if container != 0 && entry != 0 {
+        target = create_ref_for_stack(e, container, entry);
+    }
+    if target != 0 {
+        set_form_result(e, &a, target);
+    }
+    handled(true)
+}
+
+// ---- the world map ----
+
+/// `TESObjectREFR`'s position (+0x30, x then y). `TESWorldSpace` (engine-fallout-cell
+/// `tesworldspace.rs`, Xbox PDB): `sParentUseFlags` +0x4E (bit 2: the parent's map data),
+/// `pParentWorld` +0x70, `WorldMapData`'s NW and SE cells +0x88 (four `i16`),
+/// `WorldMapOffsetData` +0x90 (scale, offset x, y), `MinimumCoords` +0xA0 and `MaximumCoords`
+/// +0xA8. A cell's worldspace +0xC0.
+const REFR_POSITION: u32 = 0x30;
+const WS_PARENT_USE_FLAGS: u32 = 0x4e;
+const WS_PARENT: u32 = 0x70;
+const WS_MAP_CELLS: u32 = 0x88;
+const WS_MAP_SCALE: u32 = 0x90;
+const WS_MAP_OFFSET: u32 = 0x94;
+const WS_MIN_COORDS: u32 = 0xa0;
+const CELL_WORLD: u32 = 0xc0;
+/// JIP's `kSizeMults` float (`0x3F4C0000`) and `kPosMultMods` (`0x3DD00000`).
+const MAP_SIZE_MULT: f32 = 0.796_875;
+const MAP_POS_ADD: f32 = 0.101_562_5;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESWorldSpace::GetRootMapWorld
+// (asm).
+/// The world whose map `world` uses: its parents' while it takes its parent's map data.
+fn root_map_world(e: &Engine, world: u32) -> u32 {
+    let mut world = world;
+    for _ in 0..MAX_WALK {
+        let parent = e.mem.u32(world + WS_PARENT);
+        if parent == 0 || e.mem.u8(world + WS_PARENT_USE_FLAGS) & 4 == 0 {
+            return world;
+        }
+        world = parent;
+    }
+    world
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_minimap.h:
+// WorldDimensions::InitDimensions, WorldDimensions::InitPosMods, GetWorldMapPosMults (asm).
+/// Where `pos` lies on the root world's map, as fractions of the map texture: the position
+/// scaled and shifted by its own world's map offset data, less the root map's north-west corner
+/// (cells times 4096), times 0.796875 over the map's size (the processor's reciprocal estimate,
+/// `rcpps`), plus 0.1015625.
+fn world_map_pos_mults(e: &Engine, world: u32, root: u32, pos: [f32; 2]) -> [f32; 2] {
+    let cell = |i: u32| e.mem.u16(root + WS_MAP_CELLS + 2 * i) as i16;
+    // `paddw` adds 1 to the NW cell's y and the SE cell's x (16-bit lanes), then each is widened.
+    let nw = [i32::from(cell(0)), i32::from(cell(1).wrapping_add(1))];
+    let se = [i32::from(cell(2).wrapping_add(1)), i32::from(cell(3))];
+    let min = [nw[0].wrapping_shl(12) as f32, nw[1].wrapping_shl(12) as f32];
+    let size = |i: usize| {
+        let span = se[i].wrapping_sub(nw[i]).wrapping_shl(12) as f32;
+        super::havok_refs::rcp_estimate(span) * MAP_SIZE_MULT
+    };
+    let size = [size(0), size(1)];
+    let offset = [
+        e.mem.f32(world + WS_MAP_OFFSET),
+        e.mem.f32(world + WS_MAP_OFFSET + 4),
+    ];
+    let shifted = if e.mem.u32(world + WS_MAP_SCALE) == 0x3f80_0000 {
+        [pos[0] + offset[0], pos[1] + offset[1]]
+    } else {
+        // `InitPosMods`: (min + max) * (0.5 - scale * 0.5) + offset.
+        let scale = e.mem.f32(world + WS_MAP_SCALE);
+        let half = 0.5 - scale * 0.5;
+        let c = |i: u32| e.mem.f32(world + WS_MIN_COORDS + 4 * i);
+        let pos_mod = [
+            (c(0) + c(2)) * half + offset[0],
+            (c(1) + c(3)) * half + offset[1],
+        ];
+        [pos[0] * scale + pos_mod[0], pos[1] * scale + pos_mod[1]]
+    };
+    [
+        (shifted[0] - min[0]) * size[0] + MAP_POS_ADD,
+        (shifted[1] - min[1]) * size[1] + MAP_POS_ADD,
+    ]
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_GetWorldMapPosMults_Execute.
+/// `ref.GetWorldMapPosMults x y`: where the reference stands on its world's map (see
+/// [`world_map_pos_mults`]) into the two variables; nothing for a reference not in a
+/// worldspace. No result.
+fn get_world_map_pos_mults(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok || a.this_obj == 0 {
+        return handled(true);
+    }
+    let (out_x, out_y) = (read.local(0), read.local(1));
+    // JIP's `GetParentWorld` tests the persistent cell extra's cell for null too.
+    let Some(cell) = super::ln_fn_math::cell_or_persistent(e, a.this_obj).filter(|&cell| cell != 0)
+    else {
+        return handled(true);
+    };
+    let world = e.mem.u32(cell + CELL_WORLD);
+    if world == 0 {
+        return handled(true);
+    }
+    let root = root_map_world(e, world);
+    let pos = [
+        e.mem.f32(a.this_obj + REFR_POSITION),
+        e.mem.f32(a.this_obj + REFR_POSITION + 4),
+    ];
+    let [x, y] = world_map_pos_mults(e, world, root, pos);
+    for (var, v) in [(out_x, x), (out_y, y)] {
+        if var != 0 {
+            e.mem.set_f64(var + 8, f64::from(v));
+        }
+    }
     handled(true)
 }
 
