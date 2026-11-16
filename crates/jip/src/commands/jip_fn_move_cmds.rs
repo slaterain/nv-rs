@@ -104,7 +104,7 @@ fn move_to_cell_cmd(e: &mut Engine, w: &[u32]) -> Ret {
 /// a form of another type: nothing.
 fn move_to_editor_position(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
-    let reset_rot = if super::jip_fn_utility::num_args(e, &a) != 0 {
+    let reset_rot = if super::jip_fn_utility::num_args_ex(e, &a) != 0 {
         Read::of(e, &a).int(0, 0)
     } else {
         0
