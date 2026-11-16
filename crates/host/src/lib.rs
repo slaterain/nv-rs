@@ -390,13 +390,15 @@ impl Host {
 /// names not found, files listed by a call that stops) and fail somewhere less clear.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
-    Err("nv-rs does not run the game on this system yet: it builds here, but these are only \
+    Err(
+        "nv-rs does not run the game on this system yet: it builds here, but these are only \
          provided on Windows so far: the game's window with its mouse and keyboard (and so \
          anything drawn), the sound on the speakers, the game's Windows folder names (a drive \
          letter and backslashes) over this system's folders, the file listing's file times, and \
          this machine's tables (display adapter, sound devices, folders), which are measured on \
          Windows"
-        .to_string())
+            .to_string(),
+    )
 }
 
 /// What `nv-viewer --check` reports for the installation whose `Data` folder is `data`, without
@@ -699,7 +701,13 @@ mod tests {
     #[test]
     fn a_start_off_windows_is_refused_naming_what_is_missing() {
         let why = super::not_provided_here().unwrap_err();
-        for piece in ["window", "mouse and keyboard", "sound", "folder names", "tables"] {
+        for piece in [
+            "window",
+            "mouse and keyboard",
+            "sound",
+            "folder names",
+            "tables",
+        ] {
             assert!(why.contains(piece), "{piece}: {why}");
         }
     }
