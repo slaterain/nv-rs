@@ -200,3 +200,21 @@ fn a_supported_txt_entry_end_to_end() {
         )
     );
 }
+
+#[test]
+fn a_tile_the_text_never_closes_is_named_with_its_count_and_the_text_is_unchanged() {
+    let text = r#"<menu name="M"><rect name="a"></rect></menu>"#;
+    let t = || {
+        tiles(&[
+            ("a", &["x.xml"]),
+            ("gone", &["y.xml", "z.xml"]),
+            ("", &["e.xml"]),
+        ])
+    };
+    let (out, missing) = patch_noted(text.as_bytes(), t());
+    assert_eq!(out, patch(text.as_bytes(), t()));
+    assert_eq!(missing, vec![(b"gone".to_vec(), 2)]);
+    // Every tile found: nothing named.
+    let (_, missing) = patch_noted(text.as_bytes(), tiles(&[("a", &["x.xml"])]));
+    assert!(missing.is_empty());
+}

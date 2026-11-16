@@ -9,6 +9,7 @@ use crate::hash::str_hash;
 use crate::lists::{self, Files};
 use crate::patch;
 use crate::reader::{Fetch, Reader, Served, Source, MAX_TEXT, NOT_KEPT};
+use crate::report::{self, Problem};
 use crate::{Parsed, Uio};
 use engine_core::prelude::*;
 
@@ -177,7 +178,11 @@ struct GameSource<'a>(&'a mut Engine);
 
 impl Source for GameSource<'_> {
     fn serve(&mut self, hash: u32) -> Option<Served> {
-        self.0.ext::<Uio>().patched.serve(hash)
+        let served = self.0.ext::<Uio>().patched.serve(hash);
+        if served.is_some() {
+            note_first_read(self.0, hash);
+        }
+        served
     }
 
     fn keep(&mut self, hash: u32, text: Vec<u8>) {
@@ -195,7 +200,8 @@ impl Source for GameSource<'_> {
 // end here).
 /// The seam at `0070A049` (the new interface manager stored): UIO's lists read, and each file they
 /// target read (`Menu::CompressAndStoreXML`) and patched in memory; a target the game cannot read
-/// is passed over. Nothing is written to a file. Before that, the parse cache's entries for the
+/// is passed over. Nothing is written to a file; the start-up report ([`report::startup_lines`])
+/// goes to the play log, one line each. Before that, the parse cache's entries for the
 /// files whose parse UIO does not keep (`s_cachedParsedData.Emplace(path, false)`: globals, the
 /// six menus the game keeps open and `jip_temp.xml`; an entry already there stays). The exe's
 /// path goes on.
@@ -210,15 +216,49 @@ pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
                 cached: false,
             });
     }
-    let lists = lists::scan(&mut GameFiles(e));
+    let (lists, seen) = lists::scan_noted(&mut GameFiles(e));
+    let mut problems = Vec::new();
     for (file, tiles) in lists.iter() {
+        let additions: usize = tiles.iter().map(|(_, paths)| paths.len()).sum();
         if let Fetch::Text(text) = game_text(e, file, MAX_TEXT) {
-            let text = patch::patch(&text, tiles.clone());
-            e.ext::<Uio>().patched.insert(file, text);
+            let (text, missing) = patch::patch_noted(&text, tiles.clone());
+            for (tile, additions) in missing {
+                problems.push(Problem::TileMissing {
+                    file: file.to_vec(),
+                    tile,
+                    additions,
+                });
+            }
+            let uio = e.ext::<Uio>();
+            uio.patched.insert(file, text);
+            uio.first_read
+                .entry(str_hash(file))
+                .or_insert((file.to_vec(), additions));
+        } else {
+            problems.push(Problem::Unreadable {
+                file: file.to_vec(),
+                additions,
+            });
         }
+    }
+    for line in report::startup_lines(&seen, &problems) {
+        eprintln!("{line}");
     }
     e.ext::<Uio>().loaded = true;
     None
+}
+
+/// The report's line for the first read of a file with additions (once a run).
+fn note_first_read(e: &mut Engine, hash: u32) {
+    let uio = e.ext::<Uio>();
+    if uio.first_read_told {
+        return;
+    }
+    if let Some((file, additions)) = uio.first_read.get(&hash) {
+        let line = report::first_read_line(file, *additions);
+        uio.first_read_told = true;
+        eprintln!("{line}");
+    }
 }
 
 // Translated from UIO 2.30 (426d963), ui_organizer.h: ResolveXMLFileHook (the parse cache, the

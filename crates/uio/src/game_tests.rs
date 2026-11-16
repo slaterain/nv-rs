@@ -420,6 +420,27 @@ fn on_the_lists_patch_the_hud_and_uio_parses_it() {
 }
 
 #[test]
+fn the_reports_first_read_line_comes_once_at_the_first_patched_file_read() {
+    let mut e = engine();
+    a_mod_installed();
+    set_on(&mut e, true);
+    install(&mut e);
+    assert_eq!(e.site(0x0070_a049, &[0]), None);
+    // The HUD, patched with two additions (Radar's and the public list's); nothing read yet.
+    let hud = crate::hash::str_hash(HUD.as_bytes());
+    assert_eq!(
+        e.ext::<Uio>().first_read.get(&hud),
+        Some(&(HUD.as_bytes().to_vec(), 2))
+    );
+    assert!(!e.ext::<Uio>().first_read_told);
+    // A file without additions does not count.
+    let _ = read_file(&mut e, "Data\\Menus\\other.xml");
+    assert!(!e.ext::<Uio>().first_read_told);
+    let _ = read_file(&mut e, HUD);
+    assert!(e.ext::<Uio>().first_read_told);
+}
+
+#[test]
 fn a_kept_parse_is_answered_again_with_the_keep_byte() {
     let mut e = engine();
     set_on(&mut e, true);

@@ -85,7 +85,13 @@ fn sub_str_ci(d: &[u8], src: usize, sub: &[u8], length: usize) -> Option<usize> 
 ///     is already one of the tile's paths or starts `includes_`.
 /// - The text after the last `>` is not copied (UIO's loop ends at the last tag).
 /// - The end-of-file paths are written last.
-pub fn patch(text: &[u8], mut tiles: Map<Set>) -> Vec<u8> {
+pub fn patch(text: &[u8], tiles: Map<Set>) -> Vec<u8> {
+    patch_noted(text, tiles).0
+}
+
+/// [`patch`], with the named tiles never closed in the text (each with its count of paths, which
+/// were not written: UIO drops them without a word).
+pub fn patch_noted(text: &[u8], mut tiles: Map<Set>) -> (Vec<u8>, Vec<(Vec<u8>, usize)>) {
     let length = text.len();
     let mut d = text.to_vec();
     d.push(0);
@@ -150,14 +156,17 @@ pub fn patch(text: &[u8], mut tiles: Map<Set>) -> Vec<u8> {
         out.extend_from_slice(&d[buf..next]);
         buf = next;
     }
+    let mut missing = Vec::new();
     for (tile, paths) in tiles.iter() {
         if tile.is_empty() {
             for p in paths.iter() {
                 write_include(&mut out, p);
             }
+        } else {
+            missing.push((tile.to_vec(), paths.len()));
         }
     }
-    out
+    (out, missing)
 }
 
 #[cfg(test)]
