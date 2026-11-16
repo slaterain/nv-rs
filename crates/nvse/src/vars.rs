@@ -574,8 +574,23 @@ impl Strings {
     /// [`StringTable::add`] in one take of the lock: the id picked and the string put in
     /// together, so two threads never get the same id.
     pub fn add(&self, owning_mod: u8, data: &[u8], temporary: bool) -> u32 {
+        self.add_with(owning_mod, data, temporary, || {})
+    }
+
+    /// [`Strings::add`], with `between` run after the id is picked and before the string is put
+    /// in, still under the lock (tests: another thread's add there must wait for this take).
+    pub fn add_with(
+        &self,
+        owning_mod: u8,
+        data: &[u8],
+        temporary: bool,
+        between: impl FnOnce(),
+    ) -> u32 {
         let mut t = self.lock();
-        t.add(owning_mod, data, temporary)
+        let id = t.string_ids.unused();
+        between();
+        t.put(id, owning_mod, data, temporary);
+        id
     }
 }
 
@@ -875,13 +890,20 @@ pub fn erase_all(e: &mut Engine, id: u32) -> u32 {
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), VarMap.h: VarMap::Reset (for both maps).
-/// Every string and array variable gone, the id sets emptied (ids start from 1 again).
+/// Every string and array variable gone, the id sets emptied (ids start from 1 again). Each
+/// map keeps its buckets (`VarMap::Reset` removes the entries one by one and never shrinks the
+/// table), so the next co-save lists what a load puts back in xNVSE's order. The strings in one
+/// take of their lock.
 pub fn reset(e: &mut Engine) {
     let st = state(e);
     st.arrays.clear();
     st.array_ids = VarIds::default();
     st.array_order.clear();
-    with_strings(e, |t| *t = StringTable::default());
+    with_strings(e, |t| {
+        t.strings.clear();
+        t.string_ids = VarIds::default();
+        t.string_order.clear();
+    });
 }
 
 /// `ArrayElement::Unset` of an element taken out of its array by a caller (a range erased, an
@@ -1036,6 +1058,113 @@ mod tests {
         assert_eq!(add_string(&mut e, 1, b"x", false), 1);
         assert_eq!(add_string(&mut e, 1, b"y", false), 2);
         assert_eq!(add_string(&mut e, 1, b"z", false), 4);
+    }
+
+    /// A reset keeps the string map's buckets, as `VarMap::Reset` (which removes the entries and
+    /// never shrinks the table): after a session with ten strings (16 buckets), ids 1 and 3 put
+    /// back by a load list as [3, 1] (buckets 7 and 13); a fresh 8-bucket map would list [1, 3]
+    /// (buckets 5 and 7), and the next co-save would write them in another order than xNVSE.
+    #[test]
+    fn a_reset_keeps_the_strings_buckets() {
+        let mut e = engine();
+        for i in 0..10u8 {
+            add_string(&mut e, 1, &[b'a' + i], false);
+        }
+        reset(&mut e);
+        let keys = with_strings(&mut e, |t| {
+            assert!(t.strings.is_empty() && t.string_ids.used.is_empty());
+            t.string_order.insert(1);
+            t.string_order.insert(3);
+            t.string_order.keys()
+        });
+        assert_eq!(keys, [3, 1], "the 16 buckets kept");
+        assert_eq!(
+            add_string(&mut e, 1, b"x", false),
+            1,
+            "ids start from 1 again"
+        );
+    }
+
+    /// `vars::install` alone makes the strings' slot, before the threads: a thread's engine made
+    /// right after it (`share_slots_for_test`, as the real threads' engines are) has the same
+    /// table though no string was touched yet, and reads what the main engine adds.
+    #[test]
+    fn install_makes_the_strings_for_every_threads_engine() {
+        fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret::default()
+        }
+        let mut e = engine();
+        e.register(crate::functions::EVENT_LIST_DESTROY, nothing);
+        install(&mut e);
+        let mut t = Engine::new_untyped_for_test();
+        e.share_slots_for_test(&mut t);
+        engine_core::extend::release_held_for_test();
+        assert!(t.ext_get::<Strings>().is_some(), "made at install");
+        let id = add_string(&mut e, 1, b"main", false);
+        assert_eq!(string(&t, id), Some(b"main".to_vec()));
+        engine_core::extend::release_held_for_test();
+    }
+
+    /// The id is picked and the string put in under one take (`Strings::add_with`'s step between
+    /// the two runs while the lock is held): another thread's add started in that step waits for
+    /// this one and gets the next id. Split into two takes, the other add lands in the step,
+    /// picks the same id and is overwritten.
+    #[test]
+    fn an_add_in_the_middle_of_another_gets_its_own_id() {
+        let strings = Strings::default();
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let other = std::sync::Mutex::new(0u32);
+        let first = std::thread::scope(|scope| {
+            strings.add_with(1, b"first", false, || {
+                scope.spawn(|| {
+                    *other.lock().unwrap() = strings.add(1, b"second", false);
+                    done.store(true, std::sync::atomic::Ordering::SeqCst);
+                });
+                let start = std::time::Instant::now();
+                while !done.load(std::sync::atomic::Ordering::SeqCst)
+                    && start.elapsed() < std::time::Duration::from_millis(500)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            })
+        });
+        let second = *other.lock().unwrap();
+        assert_ne!(first, second, "two adds, one id");
+        let t = strings.lock();
+        assert_eq!(t.text(first), Some(b"first".to_vec()));
+        assert_eq!(t.text(second), Some(b"second".to_vec()));
+    }
+
+    /// A reader on another OS thread (an AI thread's condition) sees a string's whole text: one
+    /// thread sets it to one of two whole texts, alternately, as fast as it can, while another
+    /// reads it; every read is one of the two, never a mix.
+    #[test]
+    fn a_reader_sees_only_whole_texts() {
+        const ROUNDS: u32 = 20_000;
+        let strings = Strings::default();
+        let (a, b) = (vec![b'a'; 256], vec![b'b'; 256]);
+        let id = strings.add(1, &a, false);
+        let barrier = std::sync::Barrier::new(2);
+        let torn = std::sync::atomic::AtomicU32::new(0);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                for round in 0..ROUNDS {
+                    let text = if round % 2 == 0 { &b } else { &a };
+                    strings.lock().strings.get_mut(&id).unwrap().data = text.clone();
+                }
+            });
+            scope.spawn(|| {
+                barrier.wait();
+                for _ in 0..ROUNDS {
+                    let read = strings.lock().text(id);
+                    if read.as_ref() != Some(&a) && read.as_ref() != Some(&b) {
+                        torn.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            });
+        });
+        assert_eq!(torn.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     /// Contention on the strings' lock: two OS threads add strings as fast as they can, both
