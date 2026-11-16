@@ -24,6 +24,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0079_0966),
     // `MapMenu::DoGamepad` 00799790, the zoom axis.
     row(0x0079_9861),
+    // G87 (`RefreshMapMenuHook`, a jump at 0x79DF73): `MapMenu::AddMapIcons` 0079dbb0 skips
+    // centring the map once when JIP's item-list refresh asked for it.
+    row(0x0079_df73),
     // `RouletteMenu::DoIdle` 007bd2a0, its three stick values.
     row(0x007b_d47d),
     row(0x007b_d4a0),
@@ -34,6 +37,11 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0094_a95f),
     row(0x0094_ab59),
     row(0x0094_ab88),
+    // G88 (`ProcessGradualSetFloatHook` in the two jump-table words JIP adds after
+    // `Tile::UpdateFadeControls`' table, the type test widened to 6 at 0xA081A8): fade types 5
+    // and 6.
+    row(0x00a0_8718),
+    row(0x00a0_871c),
 ];
 
 /// The group's wraps.
