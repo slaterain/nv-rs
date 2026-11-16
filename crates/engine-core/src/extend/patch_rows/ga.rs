@@ -16,7 +16,8 @@ const fn row(addr: u32) -> Entry {
 /// The group's seams.
 pub(in super::super) const SITES: &[Entry] = &[
     // G58 (fix row): InterfaceManager::Idle's console key query 0x70E5FE: JIP's
-    // ToggleConsoleHook answers "down now and not the frame before".
+    // ToggleConsoleHook answers from the key bytes alone, so the console key works also while a
+    // controller is connected (the exe's query answers 0 then: flag 0x11F35C8).
     row(0x0070_e5fe),
     // G35 (fix row): MenuConsole::Print 0071d0a0: JIP's jump over the loading menu test.
     row(0x0071_d0d2),

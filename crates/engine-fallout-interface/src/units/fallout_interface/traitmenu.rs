@@ -1433,6 +1433,8 @@ mod tests {
 
     thread_local! {
         static G11_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G11_ANSWER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static G11_LEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     }
 
     fn g11_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
@@ -1441,69 +1443,128 @@ mod tests {
 
     fn g11_size(_: &mut Engine, a: &[u32]) -> Option<u32> {
         G11_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
-        Some(0x3f4)
+        Some(G11_ANSWER.with(std::cell::Cell::get))
+    }
+
+    /// The description `0x5EBAC0` writes: `size - 1` letters and the end, or (`exact`) `size`
+    /// letters with no end.
+    fn g11_world(exact: bool, canaries: bool) -> (Engine, u32) {
+        let mut e = engine();
+        let menu = menu(&mut e);
+        quiet(
+            &mut e,
+            &[TILE_SET_VALUE, PLAY_MENU_SOUND, TILE_SET_FLOAT, TILE_POKE],
+        );
+        e.register_double(PERK_BUILD_DESCRIPTION, move |e, a| {
+            // Canaries right after the size, set as the frame stands; read after `DoEnter`.
+            if canaries {
+                for i in 0..0x20 {
+                    e.mem.set_u8(a[1] + a[2] + i, 0xee);
+                }
+            }
+            let letters = if exact { a[2] } else { a[2] - 1 };
+            for i in 0..letters {
+                e.mem.set_u8(a[1] + i, b'a');
+            }
+            if !exact {
+                e.mem.set_u8(a[1] + letters, 0);
+            }
+            Ret::default()
+        });
+        // The text tile's length as `Tile::SetString` reads it (only for an ended text).
+        e.register_double(TILE_SET_STRING, move |e, a| {
+            if a[1] == 0xfc4 && !exact {
+                let mut n = 0;
+                while e.mem.u8(a[2] + n) != 0 {
+                    n += 1;
+                }
+                G11_LEN.with(|l| l.set(n));
+            }
+            Ret::default()
+        });
+        e.register(LIST_BOX_ITEM_OF_TILE, |_, _| ret(0x4000));
+        e.register(STRING_C_STR, |_, a| ret(a[0] + 0x100));
+        e.register(TILE_GET_STRING, |_, _| ret(0x5555));
+        e.register(STRING_LENGTH, |_, _| ret(2));
+        e.register(TILE_TEXT_TO_TRAIT, |_, a| ret(a[0] & 0xff));
+        (e, menu)
     }
 
     /// JIP LN NVSE's G11 seam (`0x007E6F04`, group GA's row, a fix row): with the word 0 or
-    /// `INSTALLED` alone it is not asked and the description is built with the exe's 0x200; with
-    /// `FIXES` and no handler, 0x200; with a handler it is asked once with exactly `[0x200]`, its
-    /// answer is the size `0x5EBAC0` gets (the double fills that whole buffer), the same buffer
-    /// goes to the text tile, and the rest of `DoEnter` runs.
+    /// `INSTALLED` alone it is not asked and the description is built in the exe's 0x200 bytes
+    /// (0x1FF letters reach the text tile); with `FIXES` and no handler, the same; with a handler
+    /// it is asked once with exactly `[0x200]`, and the answer sizes both the block (the stack
+    /// local the frame takes, with 0xEE canaries right after it left intact) and the size
+    /// `0x5EBAC0` gets, the same block reaching the text tile: 0x3F4 gives 0x3F3 letters, 0x400
+    /// (JIP's) 0x3FF, 0x401 0x400; a description that fills the block with no end stays inside
+    /// it. With the block check on, a store past the block stops the test.
     #[test]
     fn do_enter_jip_trait_description_size_seam() {
         use engine_core::extend::jip_patches;
-        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
-            let mut e = engine();
-            let menu = menu(&mut e);
-            quiet(
-                &mut e,
-                &[TILE_SET_VALUE, PLAY_MENU_SOUND, TILE_SET_FLOAT, TILE_POKE],
-            );
-            // The description fills the buffer it is given: size - 1 letters and the end.
-            e.register(PERK_BUILD_DESCRIPTION, |e, a| {
-                for i in 0..a[2] - 1 {
-                    e.mem.set_u8(a[1] + i, b'a');
-                }
-                e.mem.set_u8(a[1] + a[2] - 1, 0);
-                Ret::default()
-            });
-            e.register(TILE_SET_STRING, |e, a| {
-                if a[1] == 0xfc4 {
-                    let mut n = 0;
-                    while e.mem.u8(a[2] + n) != 0 {
-                        n += 1;
-                    }
-                    ret(n)
-                } else {
-                    Ret::default()
-                }
-            });
-            e.register(LIST_BOX_ITEM_OF_TILE, |_, _| ret(0x4000));
-            e.register(STRING_C_STR, |_, a| ret(a[0] + 0x100));
-            e.register(TILE_GET_STRING, |_, _| ret(0x5555));
-            e.register(STRING_LENGTH, |_, _| ret(2));
-            e.register(TILE_TEXT_TO_TRAIT, |_, a| ret(a[0] & 0xff));
-            if let Some(handler) = handler {
-                e.on_site_for_test(0x007e_6f04, handler);
-            }
-            e.set_jip_patches(word);
-            G11_SEEN.with(|s| s.borrow_mut().clear());
-            e.call_log = Some(vec![]);
-            e.call(0x007e_6ea0, &args![menu, 0xau32, 0x8888u32]);
-            let built = calls(&e, PERK_BUILD_DESCRIPTION);
-            assert_eq!(built.len(), 1);
-            assert_eq!(built[0][0], 0x4000);
-            let strings = calls(&e, TILE_SET_STRING);
-            assert_eq!(strings[1], vec![0x9003, 0xfc4, built[0][1], 1]);
-            assert_eq!(calls(&e, PLAY_MENU_SOUND), vec![vec![4]]);
-            (built[0][2], G11_SEEN.with(|s| s.take()))
-        };
-        for word in [0, jip_patches::INSTALLED] {
-            assert_eq!(run(word, Some(g11_never)), (0x200, vec![]));
-        }
         let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        assert_eq!(run(fixes, None), (0x200, vec![]));
-        assert_eq!(run(fixes, Some(g11_size)), (0x3f4, vec![vec![0x200]]));
+        let run =
+            |word: u32, handler: Option<engine_core::extend::SiteFn>, answer: u32, exact: bool| {
+                let (mut e, menu) = g11_world(exact, true);
+                if let Some(handler) = handler {
+                    e.on_site_for_test(0x007e_6f04, handler);
+                }
+                e.set_jip_patches(word);
+                G11_ANSWER.with(|a| a.set(answer));
+                G11_SEEN.with(|s| s.borrow_mut().clear());
+                G11_LEN.with(|l| l.set(0));
+                let size = if handler.is_some() && word & jip_patches::FIXES != 0 {
+                    answer
+                } else {
+                    0x200
+                };
+                let block = e.next_stack_local(size);
+                e.call_log = Some(vec![]);
+                e.call(0x007e_6ea0, &args![menu, 0xau32, 0x8888u32]);
+                let built = calls(&e, PERK_BUILD_DESCRIPTION);
+                assert_eq!(
+                    built,
+                    vec![vec![0x4000, block, size]],
+                    "the block and its size"
+                );
+                let strings = calls(&e, TILE_SET_STRING);
+                assert_eq!(strings[1], vec![0x9003, 0xfc4, block, 1]);
+                assert_eq!(calls(&e, PLAY_MENU_SOUND), vec![vec![4]]);
+                for i in 0..0x20 {
+                    assert_eq!(e.mem.u8(block + size + i), 0xee, "canary {i:#x}");
+                }
+                (
+                    G11_LEN.with(std::cell::Cell::get),
+                    G11_SEEN.with(|s| s.take()),
+                )
+            };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, Some(g11_never), 0x400, false), (0x1ff, vec![]));
+        }
+        assert_eq!(run(fixes, None, 0x400, false), (0x1ff, vec![]));
+        for (answer, letters) in [(0x3f4, 0x3f3), (0x400, 0x3ff), (0x401, 0x400)] {
+            assert_eq!(
+                run(fixes, Some(g11_size), answer, false),
+                (letters, vec![vec![0x200]]),
+                "{answer:#x}"
+            );
+        }
+        for answer in [0x400, 0x401] {
+            assert_eq!(
+                run(fixes, Some(g11_size), answer, true).1,
+                vec![vec![0x200]]
+            );
+        }
+        assert!(run(0, Some(g11_never), 0, true).1.is_empty());
+
+        // The block check on: a store past the block stops the test.
+        let (mut e, menu) = g11_world(false, false);
+        e.mem.enable_block_check(true, true);
+        e.on_site_for_test(0x007e_6f04, g11_size);
+        e.set_jip_patches(fixes);
+        G11_ANSWER.with(|a| a.set(0x400));
+        G11_LEN.with(|l| l.set(0));
+        e.call(0x007e_6ea0, &args![menu, 0xau32, 0x8888u32]);
+        assert_eq!(G11_LEN.with(std::cell::Cell::get), 0x3ff);
     }
 
     #[test]

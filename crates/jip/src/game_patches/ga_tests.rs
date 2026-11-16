@@ -85,6 +85,10 @@ fn ga_each_handler_answers_at_its_own_seam() {
     // G37 answer otherwise.
     forms_map(&mut e);
     e.mem.set_u32(item + 4, AREA_AT + 0x300);
+    // G21 and G58 disagree here (a text: G21 goes on; the key down now only: G58 toggles), so
+    // the two swapped in `install_fixes` fail; so do H21 and G37 against either.
+    assert_eq!(e.site(CONSOLE_KEY.addr(), &[node, 0x1d, 1]), Some(1));
+    assert_eq!(e.site(ACTIVATION_TEXT.addr(), &[node]), Some(0));
     e.mem.set_u8(node + 0x1a21, 0x80);
     assert_eq!(e.site(CHARGEN_QUEST.addr(), &[0]), Some(0));
     assert_eq!(e.site(ACTIVATION_TEXT.addr(), &[node]), Some(0));

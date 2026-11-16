@@ -12915,58 +12915,70 @@ mod tests {
     #[test]
     fn idle_console_key_jip_seam() {
         use engine_core::extend::jip_patches;
-        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>, answer: u32| {
-            let (mut e, m) = focus_world();
-            returns(&mut e, CONSOLE_KEY_FLAG_GET, 0);
-            e.register_double(CONTROLS_QUERY_00A24660, |_, a| Ret {
-                eax: u32::from(a[1] == 0x1d),
-                ..Ret::default()
-            });
-            returns(&mut e, MENU_CONSOLE_INSTANCE, 0x6600);
-            returns(&mut e, CLEAR_KEYSTROKES, 0);
-            returns(&mut e, MENU_CONSOLE_TOGGLE_VISIBLE, 1);
-            returns(&mut e, ADD_TO_ENTER_STACK, 0);
-            returns(&mut e, DEBUG_TEXT_UPDATE, 0);
-            returns(&mut e, 0x0055_9450, 1);
-            let element = e.mem.alloc(4);
-            e.register_double(LIST_NEXT_ELEMENT, move |e, a| {
-                e.mem.set_u32(a[1], 0);
-                e.mem.set_u8(MENU_LOOP_ABORT, 1);
-                Ret {
-                    eax: element,
+        let run =
+            |word: u32, handler: Option<engine_core::extend::SiteFn>, answer: u32, wanted: bool| {
+                let (mut e, m) = focus_world();
+                returns(&mut e, CONSOLE_KEY_FLAG_GET, u32::from(wanted));
+                returns(&mut e, CONSOLE_KEY_FLAG_SET, 0);
+                returns(&mut e, CONSOLE_PRIMARY_DOWN, 0);
+                e.register_double(CONTROLS_QUERY_00A24660, |_, a| Ret {
+                    eax: u32::from(a[1] == 0x1d),
                     ..Ret::default()
+                });
+                returns(&mut e, MENU_CONSOLE_INSTANCE, 0x6600);
+                returns(&mut e, CLEAR_KEYSTROKES, 0);
+                returns(&mut e, MENU_CONSOLE_TOGGLE_VISIBLE, 1);
+                returns(&mut e, ADD_TO_ENTER_STACK, 0);
+                returns(&mut e, DEBUG_TEXT_UPDATE, 0);
+                returns(&mut e, 0x0055_9450, 1);
+                let element = e.mem.alloc(4);
+                e.register_double(LIST_NEXT_ELEMENT, move |e, a| {
+                    e.mem.set_u32(a[1], 0);
+                    e.mem.set_u8(MENU_LOOP_ABORT, 1);
+                    Ret {
+                        eax: element,
+                        ..Ret::default()
+                    }
+                });
+                if let Some(handler) = handler {
+                    e.on_site_for_test(0x0070_e5fe, handler);
                 }
-            });
-            if let Some(handler) = handler {
-                e.on_site_for_test(0x0070_e5fe, handler);
-            }
-            e.set_jip_patches(word);
-            G58_SEEN.with(|s| s.borrow_mut().clear());
-            G58_ANSWER.with(|a| a.set(answer));
-            let mut state = IdleState {
-                controls: 0x7700,
-                ..IdleState::default()
+                e.set_jip_patches(word);
+                G58_SEEN.with(|s| s.borrow_mut().clear());
+                G58_ANSWER.with(|a| a.set(answer));
+                let mut state = IdleState {
+                    controls: 0x7700,
+                    ..IdleState::default()
+                };
+                e.call_log = Some(vec![]);
+                idle_console_and_hot_keys(&mut e, m, &mut state);
+                let queries: Vec<u32> = calls(&e, CONTROLS_QUERY_00A24660)
+                    .iter()
+                    .map(|q| q[1])
+                    .collect();
+                let toggles = calls(&e, MENU_CONSOLE_TOGGLE_VISIBLE).len();
+                assert_eq!(calls(&e, CONSOLE_KEY_FLAG_SET).len(), usize::from(wanted));
+                (queries, toggles, G58_SEEN.with(|s| s.take()))
             };
-            e.call_log = Some(vec![]);
-            idle_console_and_hot_keys(&mut e, m, &mut state);
-            let queries: Vec<u32> = calls(&e, CONTROLS_QUERY_00A24660)
-                .iter()
-                .map(|q| q[1])
-                .collect();
-            let toggles = calls(&e, MENU_CONSOLE_TOGGLE_VISIBLE).len();
-            (queries, toggles, G58_SEEN.with(|s| s.take()))
-        };
         for word in [0, jip_patches::INSTALLED] {
-            assert_eq!(run(word, Some(g58_never), 0), (vec![0x1d, 0x1c], 1, vec![]));
+            assert_eq!(
+                run(word, Some(g58_never), 0, false),
+                (vec![0x1d, 0x1c], 1, vec![])
+            );
         }
         let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
-        assert_eq!(run(fixes, None, 0), (vec![0x1d, 0x1c], 1, vec![]));
+        assert_eq!(run(fixes, None, 0, false), (vec![0x1d, 0x1c], 1, vec![]));
         assert_eq!(
-            run(fixes, Some(g58_answer), 0),
+            run(fixes, Some(g58_answer), 0, false),
             (vec![0x1c], 0, vec![vec![0x7700, 0x1d, 1]])
         );
         assert_eq!(
-            run(fixes, Some(g58_answer), 1),
+            run(fixes, Some(g58_answer), 1, false),
+            (vec![0x1c], 1, vec![vec![0x7700, 0x1d, 1]])
+        );
+        // The console asked for through its flag (not the key): JIP's 0 does not stop the toggle.
+        assert_eq!(
+            run(fixes, Some(g58_answer), 0, true),
             (vec![0x1c], 1, vec![vec![0x7700, 0x1d, 1]])
         );
     }

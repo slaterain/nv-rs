@@ -759,4 +759,71 @@ mod tests {
             (vec![0x100, 0x3f7], 1, vec![vec![0x100]])
         );
     }
+
+    fn g08_jip(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(0x400)
+    }
+
+    /// G08 at its boundaries: the INI holds a text of `letters` letters; the stand-in
+    /// `GetPrivateProfileStringA` copies at most `size - 1` and the end (or, `exact`, `size`
+    /// letters and no end), as the call's size allows. The text stored is cut at the exe's 0xFF
+    /// letters (0xFF, 0x100, 0x3FF, 0x400 letters all give 0xFF) and at JIP's 0x3FF (0xFF, 0x100,
+    /// 0x3FF, 0x3FF); the buffer (`EBP-0x698`) is the frame's own block, nothing between the
+    /// size and the name at `EBP-0x198` is written, and the name stays whole.
+    #[test]
+    fn read_strings_jip_buffer_size_boundaries() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let run = |word: u32, letters: u32, exact: bool| {
+            let (mut e, collection) = ini_engine(false);
+            e.mem.write(LANGUAGE_SECTION, b"LANGUAGE\0");
+            let seen = std::rc::Rc::new(std::cell::Cell::new((0u32, 0u32)));
+            let note = seen.clone();
+            e.register_double(GET_PRIVATE_PROFILE_STRING, move |e, a| {
+                if a[1] == LANGUAGE_KEY {
+                    return Ret::default();
+                }
+                note.set((a[3], a[4]));
+                let n = if exact { a[4] } else { letters.min(a[4] - 1) };
+                for i in 0..n {
+                    e.mem.set_u8(a[3] + i, b'a');
+                }
+                if !exact {
+                    e.mem.set_u8(a[3] + n, 0);
+                }
+                Ret::default()
+            });
+            let stored = std::rc::Rc::new(std::cell::Cell::new(0u32));
+            let keep = stored.clone();
+            e.register_double(SET_STRING_VALUE, move |e, a| {
+                keep.set(e.mem.cstr(a[1]).len() as u32);
+                a[0].into_ret()
+            });
+            e.on_site_for_test(0x00c4_4405, g08_jip);
+            e.set_jip_patches(word);
+            let string = setting(&mut e, "sText:LANGUAGE", 0x5000);
+            e.call(0x00c4_4280, &args![collection, string]);
+            let (buffer, size) = seen.get();
+            for i in size..0x500 {
+                assert_eq!(e.mem.u8(buffer + i), 0, "{i:#x} past the size");
+            }
+            assert_eq!(read(&e, buffer + 0x500), "sText", "the name");
+            (size, stored.get())
+        };
+        for (letters, exe, jip) in [
+            (0xff, 0xff, 0xff),
+            (0x100, 0xff, 0x100),
+            (0x3ff, 0xff, 0x3ff),
+            (0x400, 0xff, 0x3ff),
+        ] {
+            assert_eq!(run(jip_patches::INSTALLED, letters, false), (0x100, exe));
+            assert_eq!(run(fixes, letters, false), (0x400, jip), "{letters:#x}");
+        }
+        assert_eq!(
+            run(fixes, 0x400, true).0,
+            0x400,
+            "no end: only the size written"
+        );
+        assert_eq!(run(0, 0x400, true).0, 0x100);
+    }
 }

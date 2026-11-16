@@ -9,21 +9,27 @@
 //! - **G11** "Increase max trait description length to 0x400 characters" (`SafeWrite8(0x7E6EA6,
 //!   6)`, `SafeWrite8(0x7E6F04, 4)`, `SafeWrite16(0x7E6F09, 0xE8F9)`, `SafeWrite16(0x7E6F2B,
 //!   0xE8F9)`): the trait menu's description (`TraitMenu::DoEnter`, `007e6ea0`) is built into a
-//!   0x400-byte buffer, not 0x200.
+//!   0x400-byte buffer, not 0x200. A longer description still ends the game, as one over
+//!   0x1FF characters does in the exe (`0x5EBAC0` builds it with `vsprintf_s` and `strcat_s`,
+//!   whose overflow goes to the invalid-parameter path; the game installs no handler).
 //! - **G17** "TileMenu::DoDestroy fix for OnMenuClose" (`SafeWrite16(0xA1F035, 0x30EB)`): a
 //!   menu tile's destructor (`00a1eff0`) no longer clears the menu's "open" byte (`0x11F308F` +
 //!   id) before the menu is deleted, so what runs as the menu closes still sees it open.
-//! - **G21** (no comment; `SAFE_WRITE_BUF(0x7AA80F, ...)`): an activation choice (a perk's
-//!   activate entry) with no text is passed over instead of copied from a null pointer
-//!   (`007aa720`).
-//! - **G35** (no comment; `SafeWrite16(0x71D0D2, 0x1BEB)`): the console prints a line also while
-//!   the loading menu is up (`MenuConsole::Print`, `0071d0a0`, no longer returns early there).
-//! - **G37** (no comment; `WriteRelJump(0x7D333B, InvalidChargenQuestFixHook)`): a character
-//!   creation quest in the INI that is not a quest falls back to the vanilla one (form
-//!   `0x102037`) in `StartMenu::ConfirmNewGame` (`007d32b0`).
-//! - **G58** (no comment; `WriteRelCall(0x70E5FE, ToggleConsoleHook)`): the console key toggles
-//!   the console only on the frame it goes down (`InterfaceManager::Idle`, `0070c4a0`, at
-//!   `0x70E5FE`).
+//! - **G21** "NULL check for perk activation text" (`SAFE_WRITE_BUF(0x7AA80F, ...)`): an
+//!   activation choice (a perk's activate entry) with no text is passed over instead of copied
+//!   from a null pointer (`007aa720`).
+//! - **G35** "Enable console prints in the loading menu" (`SafeWrite16(0x71D0D2, 0x1BEB)`): the
+//!   console prints a line also while the loading menu is up (`MenuConsole::Print`,
+//!   `0071d0a0`, no longer returns early there).
+//! - **G37** "Fall back to the vanilla CharGenQuest if the INI one is invalid"
+//!   (`WriteRelJump(0x7D333B, InvalidChargenQuestFixHook)`): a character creation quest in the
+//!   INI that is not a quest falls back to the vanilla one (form `0x102037`) in
+//!   `StartMenu::ConfirmNewGame` (`007d32b0`).
+//! - **G58** (no comment; `WriteRelCall(0x70E5FE, ToggleConsoleHook)`): the console key
+//!   (the grave-accent key, DIK 0x29, whatever the bindings say) works also while a controller is
+//!   connected: the exe's query `0xA24660` answers 0 for it while the gamepad flag `0x11F35C8` is
+//!   set, JIP's reads the key bytes alone (`InterfaceManager::Idle`, `0070c4a0`, at `0x70E5FE`).
+//!   Both toggle once per press (down now, not the frame before).
 //! - **H21** (`InitJIPHooks`: `WriteRelCall(0x7704AE, ClearHUDOrphanedTiles)`): every HUD frame
 //!   (`HUDMainMenu::DoIdle`, `00770430`), the HUD's child tiles whose scene node lost its parent
 //!   are destroyed before the exe's `0x77DA60` runs.
