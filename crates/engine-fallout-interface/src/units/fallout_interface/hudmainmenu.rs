@@ -4563,13 +4563,13 @@ pub fn hud_main_menu_set_info_for_ref(
     let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
     let form_type = e.call(0x0040_1170, &args![form]).u32();
     let mut display_mask = 0_u32;
-    let mut _alchemy_form = 0_u32;
-    let mut armor_form = 0_u32;
+    let mut _armor_form = 0_u32;
     let mut weapon_form = 0_u32;
+    let mut ammo_form = 0_u32;
     match form_type {
         0x15 | 0x16 | 0x17 | 0x1b | 0x1c | 0x27 | 0x2a | 0x2b => {}
         0x18 => {
-            _alchemy_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+            _armor_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
             display_mask |= 0xfc;
         }
         0x1e => {
@@ -4582,14 +4582,14 @@ pub fn hud_main_menu_set_info_for_ref(
         }
         0x20 | 0x21 | 0x25 => return set_info_unsupported_form(e),
         0x28 => {
-            armor_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-            if e.call(0x0047_bcf0, &args![armor_form]).bool() {
+            weapon_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+            if e.call(0x0047_bcf0, &args![weapon_form]).bool() {
                 display_mask |= 0xfc;
             }
         }
         0x29 => {
-            weapon_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-            if e.call(0x004c_94d0, &args![weapon_form]).bool() {
+            ammo_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+            if e.call(0x004c_94d0, &args![ammo_form]).bool() {
                 display_mask |= 0xfc;
             }
         }
@@ -4836,9 +4836,9 @@ pub fn hud_main_menu_set_info_for_ref(
                 if actor {
                     let name_tile = hud_field(e, 0xa8);
                     hud_set_text(e, name_tile, 0x011d_9c48);
-                } else if (weapon_form == 0 || !e.call(0x004c_94d0, &args![weapon_form]).bool())
-                    && (armor_form == 0 || !e.call(0x0047_bcf0, &args![armor_form]).bool())
-                    && (armor_form != 0 || weapon_form != 0)
+                } else if (ammo_form == 0 || !e.call(0x004c_94d0, &args![ammo_form]).bool())
+                    && (weapon_form == 0 || !e.call(0x0047_bcf0, &args![weapon_form]).bool())
+                    && (weapon_form != 0 || ammo_form != 0)
                 {
                     displayed = false;
                 } else {
