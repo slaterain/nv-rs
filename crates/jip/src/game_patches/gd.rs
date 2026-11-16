@@ -49,12 +49,26 @@
 //! functions run on the AI threads too). G91 keeps JIP's one static, the last line's tick count:
 //! a run-wide atomic ([`ReactionTick`], lock-free, the shared slot is never taken), read and
 //! written as JIP's plain loads and stores are (two threads may both pass in one tick, as with JIP).
+//!
+//! **Part 4, H16: a combat controller's excluded actions** (JIP's own, `InitJIPHooks`,
+//! `internal/hooks.h`): every combat controller is allocated 0x18C bytes instead of 0x188
+//! (`0x670C30`, `0x9921C2`, `0x992352`, `0x992416`) and its constructor zeroes 0x40 bytes at +0x14C
+//! instead of 0x3C (`0x97D55F`), so the controller has JIP's word `excludedActionsMask` at
+//! +0x188, kept where JIP keeps it; the constructor sets it from JIP's map of references
+//! ([`ExcludedCombatActions`]) for its attacker (`InitCombatControllerHook`, `0x97D71F`), and the
+//! combat planner treats an action whose bit is set as not applicable
+//! (`CombatActionApplicableHook`, `0x9951B3`). Only `SetExcludedCombatActions` (not built yet:
+//! [`set_excluded_combat_actions`] is its change) sets bits; until then every word is 0 and the
+//! planner's choices are the original's. Threads: the constructor and the planner run on the AI
+//! threads; they read the map under its read lock for one lookup and the controller's own word.
 
 use super::Area;
 use crate::commands::forms::TES_AMMO_VTBL;
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{PoisonError, RwLock};
 
 /// G117's seam: the launch constructor's count block (words: the projectile, the weapon
 /// argument, the actor shooter or 0, the mod-0xC flag).
@@ -97,6 +111,23 @@ pub const MOVE_AWAY_DISTANCE: [SiteSlot; 2] = [
 pub const EXPLOSION_IN_FACE: SiteSlot = SiteSlot::new(Owner::Jip, 0x009a_cec6);
 /// G125's seam: the explosion's screen shake (words: the explosion; answers 1 to skip it).
 pub const EXPLOSION_SHAKE: SiteSlot = SiteSlot::new(Owner::Jip, 0x009a_d2c5);
+/// H16's seams: the combat controller's size in `TESPackage::CreatePackage` (`0x670C30`) and in
+/// `CombatManager::AddCombatant` (`0x9921C2`), `AddGroupMember` (`0x992352`) and
+/// `AddPretendCombatant` (`0x992416`) (no words; answers the size).
+pub const CONTROLLER_SIZE: [SiteSlot; 4] = [
+    SiteSlot::new(Owner::Jip, 0x0067_0c30),
+    SiteSlot::new(Owner::Jip, 0x0099_21c2),
+    SiteSlot::new(Owner::Jip, 0x0099_2352),
+    SiteSlot::new(Owner::Jip, 0x0099_2416),
+];
+/// H16's seam: the count of bytes the controller's constructor zeroes at +0x14C (no words).
+pub const CONTROLLER_CLEARED: SiteSlot = SiteSlot::new(Owner::Jip, 0x0097_d55f);
+/// H16's seam: the constructor's package data call (words: the attacker, the controller; no
+/// answer: the call follows).
+pub const INIT_COMBAT_CONTROLLER: SiteSlot = SiteSlot::new(Owner::Jip, 0x0097_d71f);
+/// H16's seam: the planner's applicable test of a step (words: the planner, the step; answers 0
+/// for an excluded step, none otherwise).
+pub const COMBAT_ACTION_APPLICABLE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0099_51b3);
 
 /// The group's rows and installers.
 pub const AREA: Area = Area {
@@ -121,6 +152,13 @@ pub const AREA: Area = Area {
         MOVE_AWAY_DISTANCE[1].addr(),
         EXPLOSION_IN_FACE.addr(),
         EXPLOSION_SHAKE.addr(),
+        CONTROLLER_SIZE[0].addr(),
+        CONTROLLER_SIZE[1].addr(),
+        CONTROLLER_SIZE[2].addr(),
+        CONTROLLER_SIZE[3].addr(),
+        CONTROLLER_CLEARED.addr(),
+        INIT_COMBAT_CONTROLLER.addr(),
+        COMBAT_ACTION_APPLICABLE.addr(),
     ],
     jip_wraps: &[],
     install_jip,
@@ -187,6 +225,14 @@ fn install_jip(e: &mut Engine) {
     }
     e.on_site(EXPLOSION_IN_FACE, explosion_in_face);
     e.on_site(EXPLOSION_SHAKE, explosion_shake);
+    // H16's run-wide map, made before the threads start (`ext_free`'s rule).
+    e.ext_free::<ExcludedCombatActions>();
+    for slot in CONTROLLER_SIZE {
+        e.on_site(slot, controller_size);
+    }
+    e.on_site(CONTROLLER_CLEARED, controller_cleared);
+    e.on_site(INIT_COMBAT_CONTROLLER, init_combat_controller);
+    e.on_site(COMBAT_ACTION_APPLICABLE, combat_action_applicable);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -515,6 +561,113 @@ fn explosion_in_face(e: &mut Engine, _: &[u32]) -> Option<u32> {
 /// G125: no screen shake while the hit effects are off (1: skip to `0x9AD2FE`); 0 shakes.
 fn explosion_shake(e: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(u32::from(super::gp::disable_hit_effects(e) & 0xff != 0))
+}
+
+/// `CombatController::excludedActionsMask` (JIP LN NVSE's GameProcess.h, "JIP only!"): the word
+/// past the exe's 0x188 bytes.
+pub const EXCLUDED_ACTIONS: u32 = 0x188;
+/// The controller's size with JIP (`static_assert(sizeof(CombatController) == 0x18C)`; the low
+/// byte of `push 0x188` written as 0x8C).
+pub const CONTROLLER_SIZE_JIP: u32 = 0x18c;
+/// The bytes the constructor zeroes at +0x14C with JIP (`unk14C[15]` and the mask).
+pub const CONTROLLER_CLEARED_JIP: u32 = 0x40;
+/// The bits `SetExcludedCombatActions` keeps.
+pub const EXCLUDED_ACTIONS_BITS: u32 = 0x07ff_ffff;
+/// `CombatPlanner`'s controller (`[planner + 0x2058]`, as JIP's hook reads it).
+const PLANNER_CONTROLLER: u32 = 0x2058;
+/// `CombatAction`'s kind (`[action + 0x24]`: the bit JIP's `bt` tests).
+const ACTION_KIND: u32 = 0x24;
+/// `Actor::GetCombatController` (virtual slot `+0x428`).
+const GET_COMBAT_CONTROLLER: u32 = 0x428;
+
+/// H16's `s_excludedCombatActionsMap` (JIP's `UnorderedMap<TESObjectREFR*, UInt32>`): each
+/// reference's excluded combat actions, set by `SetExcludedCombatActions` (not built yet: the
+/// command lane calls [`set_excluded_combat_actions`]) and read when a controller is made for it.
+/// One for the run: a lock-free slot ([`Engine::ext_free`]) made at install; a reader holds the
+/// read lock for one lookup, the command the write lock for one change (never across a game
+/// call). Cleared before a load ([`pre_load`]), as JIP's housekeeping does; never otherwise.
+#[derive(Default)]
+pub struct ExcludedCombatActions(pub RwLock<HashMap<u32, u32>>);
+
+/// The excluded actions of `reference` (0 when it has none): JIP's `Get`, as
+/// `GetExcludedCombatActions` answers.
+pub fn excluded_combat_actions(e: &mut Engine, reference: u32) -> u32 {
+    let map = e.ext_free::<ExcludedCombatActions>().0.read();
+    let map = map.unwrap_or_else(PoisonError::into_inner);
+    map.get(&reference).copied().unwrap_or(0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_SetExcludedCombatActions_Execute (its change, after the actor test and the argument).
+/// `SetExcludedCombatActions`' change for an actor: the mask's low 27 bits kept for it (none:
+/// its entry erased) and written to its current combat controller (virtual slot `+0x428`), if any.
+pub fn set_excluded_combat_actions(e: &mut Engine, actor: u32, mask: u32) {
+    let mask = mask & EXCLUDED_ACTIONS_BITS;
+    {
+        let map = e.ext_free::<ExcludedCombatActions>().0.write();
+        let mut map = map.unwrap_or_else(PoisonError::into_inner);
+        if mask != 0 {
+            map.insert(actor, mask);
+        } else {
+            map.remove(&actor);
+        }
+    }
+    let controller = e.vcall(actor, GET_COMBAT_CONTROLLER, &[]).u32();
+    if controller != 0 {
+        e.mem
+            .set_u32(controller.wrapping_add(EXCLUDED_ACTIONS), mask);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h:
+// DoPreLoadGameHousekeeping (`s_excludedCombatActionsMap->Clear()`).
+/// H16's part of the housekeeping before a load: every reference's excluded actions go. Only
+/// once JIP answers "installed" (the map is made then, before the threads start).
+pub(crate) fn pre_load(e: &mut Engine) {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED == 0 {
+        return;
+    }
+    let map = e.ext_free::<ExcludedCombatActions>().0.write();
+    map.unwrap_or_else(PoisonError::into_inner).clear();
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: InitJIPHooks
+// (SafeWrite8(0x670C30 / 0x9921C2 / 0x992352 / 0x992416, 0x8C)).
+/// H16: a combat controller is allocated 0x18C bytes, room for its excluded actions word.
+fn controller_size(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(CONTROLLER_SIZE_JIP)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: InitJIPHooks
+// (SafeWrite8(0x97D55F, 0x40)).
+/// H16: the constructor zeroes 0x40 bytes at +0x14C, the excluded actions word included.
+fn controller_cleared(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(CONTROLLER_CLEARED_JIP)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: InitCombatControllerHook.
+/// H16: before the constructor's package data call (made only with an attacker), the
+/// controller's excluded actions word is the attacker argument's entry (`[ebp+8]`; 0 for none).
+/// No answer: the call follows (JIP jumps to `0x980AE0`).
+fn init_combat_controller(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (attacker, controller) = (a[0], a[1]);
+    let mask = excluded_combat_actions(e, attacker);
+    e.mem
+        .set_u32(controller.wrapping_add(EXCLUDED_ACTIONS), mask);
+    None
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: CombatActionApplicableHook.
+/// H16: a step whose kind (`+0x24`, taken mod 32 as `bt` does) is set in its controller's
+/// excluded actions word (`[[planner + 0x2058] + 0x188]`) is not applicable (0). Otherwise no
+/// answer: the exe's test `009957c0` runs, which JIP's hook repeats (the list at `+0x14`, each
+/// item's kind and value matched, -1 matching any value).
+fn combat_action_applicable(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (planner, action) = (a[0], a[1]);
+    let controller = e.mem.u32(planner.wrapping_add(PLANNER_CONTROLLER));
+    let mask = e.mem.u32(controller.wrapping_add(EXCLUDED_ACTIONS));
+    let kind = e.mem.u32(action.wrapping_add(ACTION_KIND));
+    (mask & (1 << (kind & 31)) != 0).then_some(0)
 }
 
 /// JIP's `cvttss2si`: truncated toward zero; NaN or out of range gives `0x80000000`.
