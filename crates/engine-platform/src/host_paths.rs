@@ -7,8 +7,10 @@
 //! the names. Windows finds a file whatever the case of its name; Linux's file systems (and macOS's
 //! when formatted case-sensitive) do not. So a path the file calls are given becomes this system's
 //! path here ([`host_path`]):
-//! - `Z:` is taken off, and each `\` becomes `/`. Another drive letter has no folder here: it
-//!   stops the run, naming the drive.
+//! - `Z:` is taken off, and each `\` becomes `/`. Another drive letter is a drive this system
+//!   does not have: everything on it is missing, as on a PC without that drive (the game's own
+//!   paths start on `Z:`; a test or an INI value may name `C:`). Such a path becomes one under
+//!   [`ABSENT_DRIVES`], which is never there, and the log says so once per drive.
 //! - Each part is then looked up in its folder as Windows compares names: without case, by
 //!   NTFS's upper-casing (`super::files`' `ntfs_key`). A part whose name is there as written is
 //!   taken as it is; otherwise the folder's names that match it without case are put in byte
@@ -141,17 +143,38 @@ fn folder_names(folder: &str) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// Where a drive this system does not have lies: a folder that is never there (Debian's policy
+/// keeps `/nonexistent` absent, for exactly this use; macOS has none by default), so every path
+/// on such a drive answers as a missing file or folder.
+pub const ABSENT_DRIVES: &str = "/nonexistent/nv-rs drive";
+
+/// [`ABSENT_DRIVES`]' path for `game` on the drive `drive`: `/nonexistent/nv-rs drive C/...`.
+pub fn absent_drive_path(drive: char, game: &str) -> PathBuf {
+    PathBuf::from(format!(
+        "{ABSENT_DRIVES} {drive}{}",
+        game.get(2..).unwrap_or("").replace('\\', "/")
+    ))
+}
+
 /// The game's path `game` as this system's path ([`unix_text`], then [`resolve`] against this
 /// system's folders, a folder holding two names for one part said once in the log). A drive
-/// other than `Z:` and a drive-relative path stop the run, as a call not provided.
+/// other than `Z:` is absent ([`absent_drive_path`], said once per drive); a drive-relative path
+/// stops the run, as a call not provided.
 pub fn host_path(game: &str) -> PathBuf {
     let text = match unix_text(game) {
         Ok(text) => text,
-        Err(NotHere::OtherDrive(d)) => panic!(
-            "the game's path {game:?}: drive {d}: is not provided off Windows (this system's \
-             folders are the game's drive {}:)",
-            engine_core::exe::HOST_DRIVE as char
-        ),
+        Err(NotHere::OtherDrive(d)) => {
+            static SAID: Mutex<Option<HashSet<char>>> = Mutex::new(None);
+            let mut said = SAID.lock().unwrap_or_else(|p| p.into_inner());
+            if said.get_or_insert_with(HashSet::new).insert(d) {
+                eprintln!(
+                    "files: drive {d}: is not on this system (its folders are the game's drive \
+                     {}:): everything on it is missing, as on a PC without that drive",
+                    engine_core::exe::HOST_DRIVE as char
+                );
+            }
+            return absent_drive_path(d, game);
+        }
         Err(NotHere::DriveRelative) => {
             panic!("the game's path {game:?}: a path relative to a drive is not provided")
         }
@@ -242,6 +265,20 @@ mod tests {
             "/tmp/scratch/a.txt"
         );
         assert_eq!(unix_text(r"Data\Meshes").unwrap(), "Data/Meshes");
+    }
+
+    /// Another drive is one this system does not have: its paths lie under a folder that is never
+    /// there, so they answer as missing.
+    #[test]
+    fn another_drive_is_an_absent_drive() {
+        assert_eq!(
+            absent_drive_path('C', r"C:\Games\FNV\Data\x.esp"),
+            PathBuf::from("/nonexistent/nv-rs drive C/Games/FNV/Data/x.esp")
+        );
+        assert_eq!(
+            absent_drive_path('Q', r"q:\"),
+            PathBuf::from("/nonexistent/nv-rs drive Q/")
+        );
     }
 
     #[test]

@@ -3474,9 +3474,20 @@ mod tests_player_files {
             "{written} {now}"
         );
         find_close(&mut e, found);
-        // Another drive has no folder here: the run stops, naming it.
-        let other = std::panic::catch_unwind(|| real_path(br"C:\Games\x.esp"));
-        assert!(other.is_err());
+        // Another drive is one this system does not have: what is on it is missing.
+        e.mem.set_cstr(name, br"C:\Games\x.esp");
+        let none = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            1,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
+        assert_eq!(none, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_PATH_NOT_FOUND);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -3722,9 +3733,10 @@ mod tests_kept_files {
 
     /// The scratch file `name` in `dir` with `bytes`; its full path.
     fn file(dir: &str, name: &str, bytes: &[u8]) -> String {
-        let path = format!("{dir}\\{name}");
-        std::fs::write(&path, bytes).unwrap();
-        path
+        // Written by this system's path; named to the game as `dir\name` (off Windows a `\` is
+        // a name's own character to the system, a separator to the game's file calls).
+        std::fs::write(std::path::Path::new(dir).join(name), bytes).unwrap();
+        format!("{dir}\\{name}")
     }
 
     fn open(e: &mut Engine, path: &str, access: u32) -> u32 {
@@ -4767,8 +4779,14 @@ mod tests_code_pages {
         dir
     }
 
+    /// The folder as the game names it: off Windows on drive Z: (`super::super::host_paths`),
+    /// so it is a full path to the game's file calls whatever their current folder.
     fn folder_bytes(dir: &std::path::Path) -> Vec<u8> {
-        dir.to_string_lossy().into_owned().into_bytes()
+        #[cfg(windows)]
+        let named = dir.to_string_lossy().into_owned();
+        #[cfg(not(windows))]
+        let named = engine_core::exe::game_view(&dir.to_string_lossy());
+        named.into_bytes()
     }
 
     /// A `WIN32_FIND_DATAA` in guest memory with 0xAA after it, filled with 0xAA.
