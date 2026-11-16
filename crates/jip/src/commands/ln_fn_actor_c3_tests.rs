@@ -38,6 +38,9 @@ const RESET_3D_FN: u32 = 0x008d_3fa0;
 const EGT_AT: u32 = 0x011d_5ae0;
 const PLAYER_AT: u32 = 0x011d_ea3c;
 const COUNTS: [u32; 3] = [50, 30, 50];
+/// What the stand-ins saw: the destination's race at `CopyAppearance`, the EGT byte at the reset.
+const RACE_AT_COPY: u32 = FORMS + 0x7f00;
+const EGT_AT_RESET: u32 = FORMS + 0x7f04;
 
 thread_local! {
     static CALLED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
@@ -137,6 +140,8 @@ fn setup() -> Engine {
     e.register(COPY_APPEARANCE_FN, |e, w| {
         record(COPY_APPEARANCE_FN, w);
         let dest = w[0];
+        // What the destination's race is when the copy runs.
+        e.mem.set_u32(RACE_AT_COPY, e.mem.u32(dest + 0x110));
         for i in 0..3 {
             let v = e.mem.u32(dest + 0x134 + i * 0x20 + 0xc);
             e.mem.set_f32(v, -1.0);
@@ -151,8 +156,10 @@ fn setup() -> Engine {
         e.mem.set_u32(dest + 0x1f0, w[1]);
         eax(0)
     });
-    e.register(RESET_3D_FN, |_, w| {
+    e.register(RESET_3D_FN, |e, w| {
         record(RESET_3D_FN, w);
+        // Whether the EGT setting is on when the reset runs.
+        e.mem.set_u8(EGT_AT_RESET, e.mem.u8(EGT_AT));
         eax(0)
     });
     for npc in [NPC1, NPC2] {
@@ -233,6 +240,12 @@ fn copy_face_gen_from_keeps_the_old_face_once_and_copies() {
     assert!(called(PLAYER_SET_RACE_FN).is_empty());
     assert_eq!(called(COPY_APPEARANCE_FN), vec![vec![NPC1, NPC2]]);
     assert_eq!(e.mem.u8(EGT_AT), 1, "bLoadFaceGenHeadEGTFiles set");
+    assert_eq!(e.mem.u8(EGT_AT_RESET), 1, "set before the reset");
+    assert_eq!(
+        e.mem.u32(RACE_AT_COPY),
+        RACE2,
+        "the race set before CopyAppearance"
+    );
     assert_eq!(called(RESET_3D_FN), vec![vec![ACTOR]]);
     assert_eq!(
         order(),
@@ -300,6 +313,16 @@ fn copy_face_gen_from_on_the_players_base_changes_the_race_through_the_game() {
     e.mem.set_u32(PLAYER_REF + 0x20, NPC1);
     call_on(&mut e, 0x22a1, ACTOR, &[r(1)]);
     assert_eq!(called(PLAYER_SET_RACE_FN), vec![vec![NPC1, RACE2, 0]]);
+    assert_eq!(
+        order(),
+        vec![
+            SET_FLAG_BIT_FN,
+            PLAYER_SET_RACE_FN,
+            COPY_APPEARANCE_FN,
+            RESET_3D_FN
+        ],
+        "the race changed before the copy"
+    );
     assert_eq!(e.mem.u32(NPC1 + 0x110), RACE1, "no store of its own");
     // The same race: neither.
     CALLED.with(|c| c.borrow_mut().clear());

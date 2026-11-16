@@ -346,6 +346,10 @@ fn get_hit_weapon(e: &mut Engine, w: &[u32]) -> Ret {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
 // Cmd_GetArmourPenetrated_Execute.
+/// 1 when the last hit's flags have [`HIT_ARMOUR_PENETRATED`]. Only JIP's hit-damage patches
+/// (G77 and JIP's hit damage, `game_patches::gc`) set that bit, and they go in with the row
+/// `NV_JIP_GAME_PATCHES` (JIP writes them with no switch): with that row off no hit is marked,
+/// so the command answers 0.
 fn get_armour_penetrated(e: &mut Engine, w: &[u32]) -> Ret {
     hit_data_value(e, &CommandArgs::new(w), 5);
     handled(true)

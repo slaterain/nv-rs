@@ -108,7 +108,8 @@ fn setup() -> Engine {
     answer_word!(e, PLAY_IDLE_FN, A_ZERO);
     e.register(EVALUATE_FN, |e, w| {
         record(EVALUATE_FN, w);
-        eax(u32::from(e.mem.u8(w[0])))
+        // A `bool` in `al`: the bits above it are whatever the exe left there.
+        eax(0x1234_5600 | u32::from(e.mem.u8(w[0])))
     });
     for (i, (f, id)) in [
         (IDLE, 0x300),

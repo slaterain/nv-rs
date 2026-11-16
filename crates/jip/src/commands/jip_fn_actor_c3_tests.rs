@@ -27,6 +27,8 @@ const EM1: u32 = FORMS + 0x6000;
 const EM2: u32 = FORMS + 0x6200;
 const EM3: u32 = FORMS + 0x6400;
 const EM4: u32 = FORMS + 0x6600;
+const EM5: u32 = FORMS + 0x6800;
+const EM6: u32 = FORMS + 0x6a00;
 const XS: u32 = FORMS + 0x7000;
 const ACTOR_VT: u32 = FORMS + 0x8000;
 const PLAIN_VT: u32 = FORMS + 0x8400;
@@ -191,6 +193,14 @@ fn water_radiation_by_the_water_reference_and_swimming() {
     // No radiation byte: nothing.
     e.mem.set_u8(WATER2 + 0x188, 0);
     assert_eq!(level(&mut e, ACTOR), 0.0);
+    // A water reference whose base has no water form: none, and no fall back to the cell's.
+    e.mem.set_u32(A_CELL_WATER, WATER3);
+    e.mem.set_u32(PWATER + 0x4c, 0);
+    assert_eq!(
+        level(&mut e, ACTOR),
+        0.0,
+        "no water form on the reference's base"
+    );
     assert!(
         called(CELL_WATER_FN).is_empty(),
         "the reference's water, not the cell's"
@@ -247,8 +257,8 @@ fn entry(e: &mut Engine, at: u32, data: u32, next: u32) {
 fn loaded_emitters_add_by_how_far_inside_their_radius() {
     let mut e = setup();
     e.mem.set_f32(A_RESIST, 10.0);
-    // Bucket 0: EM1 then EM2 (radius only); bucket 1: a null reference, then EM3 (outside its
-    // radius) and EM4 (another cell, no worldspace: `FLT_MAX` away).
+    // Bucket 0: EM1, EM5, then EM2 (radius only); bucket 1: a null reference, then EM6, EM3
+    // (outside its radius) and EM4 (another cell, no worldspace: `FLT_MAX` away).
     emitter(&mut e, EM1, CELL, [30.0, 0.0, 0.0], 100.0, Some(8.0), XS);
     emitter(&mut e, EM2, CELL, [0.0, 10.0, 0.0], 50.0, None, XS + 0x40);
     emitter(
@@ -269,22 +279,58 @@ fn loaded_emitters_add_by_how_far_inside_their_radius() {
         Some(5.0),
         XS + 0xc0,
     );
+    // EM5 (second in bucket 0's chain) and EM6 (bucket 1, after the null entry) radiate too.
+    emitter(
+        &mut e,
+        EM5,
+        CELL,
+        [0.0, 20.0, 0.0],
+        40.0,
+        Some(3.0),
+        XS + 0x100,
+    );
+    emitter(
+        &mut e,
+        EM6,
+        CELL,
+        [0.0, 0.0, -50.0],
+        80.0,
+        Some(6.0),
+        XS + 0x140,
+    );
     e.mem.set_u32(BUCKETS, ENTRIES);
     entry(&mut e, ENTRIES, EM1, ENTRIES + 0x10);
-    entry(&mut e, ENTRIES + 0x10, EM2, 0);
+    entry(&mut e, ENTRIES + 0x10, EM5, ENTRIES + 0x50);
+    entry(&mut e, ENTRIES + 0x50, EM2, 0);
     e.mem.set_u32(BUCKETS + 4, ENTRIES + 0x20);
-    entry(&mut e, ENTRIES + 0x20, 0, ENTRIES + 0x30);
+    entry(&mut e, ENTRIES + 0x20, 0, ENTRIES + 0x60);
+    entry(&mut e, ENTRIES + 0x60, EM6, ENTRIES + 0x30);
     entry(&mut e, ENTRIES + 0x30, EM3, ENTRIES + 0x40);
     entry(&mut e, ENTRIES + 0x40, EM4, 0);
-    let d1 = super::super::ln_fn_math::distance_3d(&mut e, ACTOR, EM1);
-    let in1 = 8.0f32 * (100.0 - d1) / 100.0;
-    let expect = in1 * (1.0 - 10.0f32 * 0.01);
-    assert_eq!(level(&mut e, ACTOR), f64::from(expect));
+    let part = |e: &mut Engine, em: u32, rads: f32, radius: f32| {
+        let d = super::super::ln_fn_math::distance_3d(e, ACTOR, em);
+        rads * (radius - d) / radius
+    };
+    let in1 = part(&mut e, EM1, 8.0, 100.0);
+    let in5 = part(&mut e, EM5, 3.0, 40.0);
+    let in6 = part(&mut e, EM6, 6.0, 80.0);
+    assert!(
+        in1 > 0.0 && in5 > 0.0 && in6 > 0.0,
+        "all three inside their radii"
+    );
+    // JIP's order: bucket 0's chain (EM1, EM5), then bucket 1 past its null entry (EM6).
+    let emitters = 0.0f32 + in1 + in5 + in6;
+    let expect = emitters * (1.0 - 10.0f32 * 0.01);
+    assert_eq!(
+        level(&mut e, ACTOR),
+        f64::from(expect),
+        "the three emitters"
+    );
     assert_eq!(eval(&mut e, ACTOR), f64::from(expect), "the condition");
     // With water: the water's part first, then the emitters', then the resistance.
     e.mem.set_u8(ACTOR + 0x14c, 1);
     e.mem.set_u32(A_CELL_WATER, WATER1);
-    let both = (10.0f32 * 0.5 + in1) * (1.0 - 10.0f32 * 0.01);
+    let both = (10.0f32 * 0.5 + in1 + in5 + in6) * (1.0 - 10.0f32 * 0.01);
     assert_eq!(level(&mut e, ACTOR), f64::from(both));
     // No loaded references (before the game makes them): the water's part only.
     e.mem.set_u32(COLLECTION_AT, 0);
