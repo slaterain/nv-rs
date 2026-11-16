@@ -651,6 +651,13 @@ fn d07_leaves_everything_else() {
 fn d07_runs_at_deferred_init() {
     use nvse::plugins::{dispatch, msg};
     let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
+    // The temporary position marker JIP also makes at `DeferredInit`: stand-ins.
+    use crate::commands::pos_marker::{REFR_CONSTRUCTOR, SET_TEMPORARY};
+    e.register(REFR_CONSTRUCTOR, |_, w| Ret {
+        eax: w[0],
+        ..Ret::default()
+    });
+    e.register(SET_TEMPORARY, |_, _| Ret::default());
     dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
     assert_eq!(word(&e)[1], BEFORE, "only DeferredInit");
     dispatch(&mut e, msg::DEFERRED_INIT, 0, 0);
