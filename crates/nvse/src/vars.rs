@@ -835,6 +835,28 @@ pub fn set_element(e: &mut Engine, id: u32, key: &Key, value: Value) -> bool {
     true
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayVar::SetElementFromAPI
+// with a plugin element of no type (`Get(key, true)`, then nothing set).
+/// The element at `key` of array `id` made, of no type, when it is not there; an element there
+/// is left as it is. False when the array does not exist or the key's type is not the array's.
+pub fn make_element(e: &mut Engine, id: u32, key: &Key) -> bool {
+    let upper = upper_table(e);
+    match state(e).arrays.get(&id) {
+        None => return false,
+        Some(a) if a.position(&upper, key).is_some() => return true,
+        Some(_) => {}
+    }
+    if !set_element(e, id, key, Value::Number(0.0)) {
+        return false;
+    }
+    if let Some(a) = state(e).arrays.get_mut(&id) {
+        if let Some(at) = a.position(&upper, key) {
+            a.at_mut(at).data = Data::Invalid;
+        }
+    }
+    true
+}
+
 /// The element at `key` of array `id`, cloned.
 pub fn get_element(e: &mut Engine, id: u32, key: &Key) -> Option<Element> {
     let upper = upper_table(e);
