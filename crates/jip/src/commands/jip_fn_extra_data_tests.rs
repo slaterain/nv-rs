@@ -1095,25 +1095,23 @@ const LOOP_LOCAL: u32 = FORMS + 0x3400;
 /// and writes back into a live list.
 #[test]
 fn a_stack_a_running_container_loop_still_lists_is_not_freed() {
+    use nvse::commands::scripting::{begin_container_loop_for_test, step_container_loop_for_test};
     let mut e = setup();
-    let refr = inventory(&mut e, 2, STACK);
+    inventory(&mut e, 2, STACK);
     e.mem.set_u32(STACK2, LIST_VTBL);
     e.mem.set_u32(LISTS + 4, NODE2);
     e.mem.set_u32(NODE2, STACK2);
     e.mem.set_u32(NODE2 + 4, 0);
     let second = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, STACK2);
     set(&mut e, second, &[num(3.0), num(4.0)]);
-    let looped = nvse::commands::scripting::begin_container_loop_for_test(
-        &mut e,
-        ACTOR,
-        LOOP_LOCAL,
-        &[(WEAP, 1, STACK), (WEAP, 1, STACK2)],
-    );
-    assert_eq!(nvse::invref::get(&mut e, looped).unwrap().data.xdata, STACK);
-    let _ = refr;
+    let pair = [(WEAP, 1, STACK), (WEAP, 1, STACK2)];
+    let looped = begin_container_loop_for_test(&mut e, ACTOR, LOOP_LOCAL, &pair);
+    let stands_on = |e: &mut Engine| nvse::invref::get(e, looped).unwrap().data.xdata;
+    assert_eq!(stands_on(&mut e), STACK);
     set(&mut e, second, &[]);
     assert_eq!(calls_to(REMOVE_BY_TYPE_FN), vec![vec![STACK2, 0x27]]);
-    assert!(called(DESTROY_FN).is_empty(), "the loop's next stack is kept");
+    let kept = called(DESTROY_FN).is_empty();
+    assert!(kept, "the loop's next stack is kept");
     assert_eq!(
         super::super::list_items(&e, Ptr::new(LISTS)),
         vec![STACK, STACK2],
@@ -1121,11 +1119,11 @@ fn a_stack_a_running_container_loop_still_lists_is_not_freed() {
     );
     assert_eq!(stack_of(&mut e, second), STACK2);
     // The loop's step: its reference stands on the kept stack, reading only live memory.
-    assert!(nvse::commands::scripting::step_container_loop_for_test(&mut e));
-    assert_eq!(nvse::invref::get(&mut e, looped).unwrap().data.xdata, STACK2);
+    assert!(step_container_loop_for_test(&mut e));
+    assert_eq!(stands_on(&mut e), STACK2);
     assert!(!still_poisoned(&e, STACK2, 0x20));
     // Its end: the write-back into the kept stack, nothing freed.
-    assert!(!nvse::commands::scripting::step_container_loop_for_test(&mut e));
+    assert!(!step_container_loop_for_test(&mut e));
     assert!(called(DESTROY_FN).is_empty());
     // A stack the loop has already passed is freed as before.
     let mut e = setup();
@@ -1135,13 +1133,8 @@ fn a_stack_a_running_container_loop_still_lists_is_not_freed() {
     e.mem.set_u32(NODE2, STACK2);
     e.mem.set_u32(NODE2 + 4, 0);
     set(&mut e, refr, &[num(3.0), num(4.0)]);
-    nvse::commands::scripting::begin_container_loop_for_test(
-        &mut e,
-        ACTOR,
-        LOOP_LOCAL,
-        &[(WEAP, 1, STACK), (WEAP, 1, STACK2)],
-    );
-    assert!(nvse::commands::scripting::step_container_loop_for_test(&mut e));
+    begin_container_loop_for_test(&mut e, ACTOR, LOOP_LOCAL, &pair);
+    assert!(step_container_loop_for_test(&mut e));
     set(&mut e, refr, &[]);
     assert_eq!(called(DESTROY_FN), vec![vec![STACK, 1]]);
 }
