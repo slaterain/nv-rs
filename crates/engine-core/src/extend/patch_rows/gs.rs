@@ -15,6 +15,8 @@ const fn row(addr: u32) -> Entry {
 
 /// The group's seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // G51: `AddItem` 005b4be0's tests before the container items' health call, JIP's two-byte jump.
+    row(0x005b_4dbc),
     // O7 `bNoFailedScriptLocks` (`SetOptionalPatch(7)`: three `SafeWrite16` jumps past the clear of a
     // failed script's data length): `ScriptRunner::Run` 005e0d20, then `ScriptRunner::EvaluateLine`
     // 005e1550's set and condition errors.
