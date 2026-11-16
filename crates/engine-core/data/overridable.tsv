@@ -48,7 +48,7 @@
 005b5e40	6	YUP,xNVSE
 005b6cd0	0	NVTF
 005c67e0	0	YUP,xNVSE
-005d2860	1	JIP
+005d2860	0	JIP
 005e0d20	0	script or frame function
 005e1160	0	script or frame function
 005e13a0	0	xNVSE built in (ADR-0016)

@@ -59,7 +59,7 @@ use engine_core::extend::{jip_patches, Hook, Owner, SiteSlot};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 /// G38's seams in `PlayerCharacter::Load3D`: the first-person model's load, the eye height.
@@ -238,6 +238,7 @@ fn install_jip(e: &mut Engine) {
         queued_player_routine,
     );
     e.ext_free::<Immortal>();
+    e.ext_free::<ForceHardcoreNeedsUpdate>();
     e.on_site(HARDCORE_NEEDS, hardcore_needs);
     slots::write_slot(
         e,
@@ -657,6 +658,27 @@ pub fn immortal_mode(e: &mut Engine) -> u32 {
 /// whose `ToggleHitEffects` keeps bit 1).
 pub fn disable_hit_effects(e: &mut Engine) -> u32 {
     e.ext_free::<Immortal>().hit_effects.load(Ordering::Relaxed)
+}
+
+/// JIP's `s_forceHCNeedsUpdate` (`internal/patches_game.h`): set by `SetGameHour`; read and
+/// cleared only by JIP's `UpdateTimeGlobalsHook` (O5, `bGameDaysPassedFix`, at `0x867A40`, not
+/// built yet), which then leaves the player's hardcore reset byte (`+0xE39`) clear so the needs
+/// take the jump in time. Lock-free, made at install before the threads start.
+#[derive(Default)]
+pub struct ForceHardcoreNeedsUpdate(AtomicBool);
+
+/// `s_forceHCNeedsUpdate = on`.
+pub fn set_force_hardcore_needs_update(e: &mut Engine, on: bool) {
+    e.ext_free::<ForceHardcoreNeedsUpdate>()
+        .0
+        .store(on, Ordering::Relaxed);
+}
+
+/// `s_forceHCNeedsUpdate`, for O5's hook when it is built.
+pub fn force_hardcore_needs_update(e: &mut Engine) -> bool {
+    e.ext_free::<ForceHardcoreNeedsUpdate>()
+        .0
+        .load(Ordering::Relaxed)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ModHardcoreNeedsHook.

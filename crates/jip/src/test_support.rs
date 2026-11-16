@@ -74,6 +74,12 @@ fn prepare(e: &mut Engine) {
             ..Ret::default()
         });
     }
+    // `TESImageSpaceModifier::GetGetHit` (`005d2860`, JIP's wrap there once installed: step 3.9
+    // GS, G123), when the test engine has no translation of it: no "get hit" modifier (the
+    // exe's answer while its image space byte is 0).
+    if !e.is_registered(0x005d_2860) {
+        e.register(0x005d_2860, |_, _| Ret::default());
+    }
     // Group GC's wraps (G109 `0058e9d0`, G111 `00646260`), when the test engine has no
     // translation of them: the impact data set's slot for the material (the exe's answer with no
     // override set), and `fDamageToWeaponValue`'s value (`0x11CF154`, the exe's with no ammo).
@@ -261,4 +267,21 @@ impl Drop for KeyEdit<'_> {
     fn drop(&mut self) {
         nvse::input::publish_key_states(self.e);
     }
+}
+
+/// Runs `f` on `e` while a second engine of the run (a real thread's: `share_slots_for_test`)
+/// holds JIP's shared slot. A path that asks for JIP's slot stops the test (two engines on one
+/// thread), so `f` finishing shows the path does not take it: the hooks' seams that run on the AI
+/// and loader threads.
+pub fn with_jips_slot_held<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(
+        other.ext::<crate::Jip>().installed,
+        "the other engine holds JIP's state"
+    );
+    let r = f(e);
+    engine_core::extend::release_held_for_test();
+    r
 }

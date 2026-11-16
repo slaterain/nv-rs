@@ -353,8 +353,8 @@ fn an_unbuilt_command_fails() {
     let file_exists = Record::read(&e, record_of(&e, 0x2201));
     assert_eq!(guest_text(&e, file_exists.long_name), b"FileExists");
     assert_eq!((file_exists.execute, file_exists.eval), (0, 0));
-    let button = Record::read(&e, record_of(&e, 0x27b5));
-    assert_eq!(guest_text(&e, button.long_name), b"IsInAir");
+    let button = Record::read(&e, record_of(&e, 0x277c));
+    assert_eq!(guest_text(&e, button.long_name), b"GetRadiationLevelAlt");
     assert_eq!((button.execute, button.eval, button.flags), (0, 0, 1));
     let words = line(&mut e, 0x2201, &[]);
     let a = nvse::CommandArgs::new(&words);
