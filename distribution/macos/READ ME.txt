@@ -1,0 +1,93 @@
+nv-rs macOS preview
+===================
+
+nv-rs runs Fallout: New Vegas from your own copy of the game, on the game's code translated to
+Rust. This is an EARLY PREVIEW for Macs with Apple silicon (M1 and later). Read "What this build
+can do today" first.
+
+This build was made by the project's automatic build (GitHub Actions) on macOS. Nobody on the
+project has played it on a Mac: the maintainers have only Windows PCs. Expect problems, and please
+tell us what you find (see the end).
+
+nv-rs is an independent project. It is not affiliated with, endorsed by or sponsored by Bethesda,
+ZeniMax, Obsidian, Microsoft or Apple. This package has no game files in it.
+
+
+What you need
+-------------
+- Your own Fallout: New Vegas, version 1.4.0.525 (the last update). The game was never sold for
+  macOS, so no store installs it on a Mac. You need the WINDOWS game's folder copied onto your
+  Mac: install the game on a Windows PC (Steam, GOG or Epic) and copy its whole folder (the one
+  holding Data and FalloutNV.exe) to the Mac, for example with a USB drive. A copy installed on
+  the Mac through CrossOver or another Windows layer works too: give nv-rs that folder.
+- A Mac with Apple silicon (arm64). Intel Macs: no build yet.
+- The drawing goes through Metal, which every such Mac has: nothing to install.
+
+
+What this build can do today
+----------------------------
+Read this before you start: today the program STOPS right after it finds your game, with a message
+that lists what is not provided on macOS yet. The game's window and drawing, the sound, the game's
+Windows folder names, some of the machine's answers to the game, and on Apple silicon the exact
+results of some of the game's maths are still being made. They come in the next previews; play.sh
+and your nv-rs folder stay the same.
+
+What works today: naming your game's folder, remembering it, and the check of your game
+(./play.sh --check).
+
+
+Start
+-----
+1. Extract the archive to a folder of your own (not inside the game's folder), for example in
+   Terminal with: tar -xzf nv-rs-preview-macos-arm64.tar.gz
+2. macOS marks downloaded programs and may refuse to start one that is not signed (this one is
+   not). If it says the program "cannot be opened" or "is damaged", remove the mark from the
+   extracted folder, once, in Terminal:
+     xattr -dr com.apple.quarantine nv-rs-preview-macos-arm64
+   Do this only for a download you trust: the source of every file is at
+   https://github.com/slaterain/nv-rs (BUILD.txt names the exact version).
+3. In Terminal, in that folder: ./play.sh
+
+The first start asks for your game's folder: type it, or drag the folder from Finder into the
+Terminal window, and press Enter. nv-rs remembers it.
+
+  ./play.sh                  start
+  ./play.sh --game FOLDER    use the game in FOLDER, and remember it
+  ./play.sh --forget-game    forget the remembered game folder (it asks again)
+  ./play.sh --check          only check your game and say whether it can start
+
+
+Your files
+----------
+nv-rs never writes to the game's folder, to your Documents or to your Library (but its own folder
+below). Everything it keeps is in:
+
+  ~/Library/Application Support/nv-rs
+
+  game-folder.txt                         the game folder it remembers
+  game/Documents/My Games/FalloutNV/Saves your nv-rs saves (normal saves of the game)
+  logs                                    what the program said, the newest 10 starts
+  reports                                 problem reports (F12 in the game)
+
+Saves from a Windows PC: copy the .fos files (and the .nvse files beside them) from the PC's
+Documents\My Games\FalloutNV\Saves into the Saves folder above.
+
+To remove nv-rs, delete the folder you extracted and that folder (your nv-rs saves go with it).
+
+
+What doesn't work yet
+---------------------
+- Everything in "What this build can do today": the game does not run yet.
+- Once it runs: what the Windows preview's READ ME lists (mods with plugins, controllers), and
+  anything Mac-only nobody has seen yet.
+
+
+Reporting a problem
+-------------------
+https://github.com/slaterain/nv-rs/issues
+
+Say that it is the macOS preview, your Mac's model and macOS version, and where your game's folder
+came from. Attach the newest game-*.log from the logs folder above. Logs can show your user name
+in folder paths: look through them first if that matters to you. Never attach game files.
+
+Licence terms and notices are in LICENSE, LEGAL.md, THIRD-PARTY-NOTICES.txt and the licenses folder.

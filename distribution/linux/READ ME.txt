@@ -1,0 +1,89 @@
+nv-rs Linux preview
+===================
+
+nv-rs runs Fallout: New Vegas from your own copy of the game, on the game's code translated to
+Rust. This is an EARLY PREVIEW for Linux. Read "What this build can do today" first.
+
+This build was made by the project's automatic build (GitHub Actions) on Ubuntu. Nobody on the
+project has played it on Linux: the maintainers have only Windows PCs. Expect problems, and please
+tell us what you find (see the end).
+
+nv-rs is an independent project. It is not affiliated with, endorsed by or sponsored by Bethesda,
+ZeniMax, Obsidian or Microsoft. This package has no game files in it.
+
+
+What you need
+-------------
+- Your own Fallout: New Vegas, version 1.4.0.525 (the last update), installed for Windows. Steam
+  for Linux installs it through Proton: install the game in Steam as usual, nv-rs finds it there
+  (also Steam from Flathub). Copies installed with Heroic (GOG, Epic) or Lutris are found where
+  those programs say they put them. Any other copy: give nv-rs the game's folder (the one holding
+  Data).
+- A 64-bit x86 PC (x86_64) with a graphics driver that has Vulkan (Mesa's RADV for AMD, ANV for
+  Intel, or NVIDIA's own driver). Run `vulkaninfo --summary` (package vulkan-tools) to see whether
+  yours has it.
+- A Linux whose C library (glibc) is as new as the build machine's or newer: see BUILD.txt. Most
+  distributions from 2022 on are.
+
+
+What this build can do today
+----------------------------
+Read this before you start: today the program STOPS right after it finds your game, with a message
+that lists what is not provided on Linux yet. The game's window and drawing, the sound, the game's
+Windows folder names and some of the machine's answers to the game are still being made for Linux
+and macOS. They come in the next previews; play.sh and your nv-rs folder stay the same.
+
+What works today: finding your game, remembering it, copying your saves from Steam's Proton folder
+into nv-rs's own folder, and the check of your game (./play.sh --check).
+
+
+Start
+-----
+1. Extract the archive to a folder of your own (not inside the game's folder or Steam's), for
+   example with: tar -xzf nv-rs-preview-linux-x86_64.tar.gz
+2. In a terminal, in that folder: ./play.sh
+
+The first start finds your game (or asks for its folder: type it, or drag the folder into the
+terminal) and remembers it. If you played the game through Steam's Proton, it offers to COPY your
+saves into nv-rs's own folder: type yes to copy them. They are only read, and stay where they are.
+
+  ./play.sh                  start
+  ./play.sh --game FOLDER    use the game in FOLDER, and remember it
+  ./play.sh --forget-game    forget the remembered game folder (it asks again)
+  ./play.sh --import-saves   offer again to copy your saves from Steam's Proton folder
+  ./play.sh --check          only check your game and say whether it can start
+
+
+Your files
+----------
+nv-rs never writes to the game's folder, to Steam's folders (Proton's folder for the game, with
+your Proton saves, included) or to your Documents. Everything it keeps is in its own folder:
+
+  ~/.local/share/nv-rs (or $XDG_DATA_HOME/nv-rs when that is set)
+
+  game-folder.txt                         the game folder it remembers
+  game/Documents/My Games/FalloutNV/Saves your nv-rs saves (normal saves of the game)
+  logs                                    what the program said, the newest 10 starts
+  reports                                 problem reports (F12 in the game)
+
+To remove nv-rs, delete the folder you extracted and that folder (your nv-rs saves go with it).
+
+
+What doesn't work yet
+---------------------
+- Everything in "What this build can do today": the game does not run yet.
+- Once it runs: what the Windows preview's READ ME lists (mods with plugins, controllers), and
+  anything Linux-only nobody has seen yet.
+- Only x86_64 builds: no ARM Linux build yet.
+
+
+Reporting a problem
+-------------------
+https://github.com/slaterain/nv-rs/issues
+
+Say that it is the Linux preview, your distribution and its version, your graphics card and
+driver, and how you installed the game (Steam, Flathub Steam, Heroic, Lutris, copied). Attach the
+newest game-*.log from the logs folder above. Logs can show your user name in folder paths: look
+through them first if that matters to you. Never attach game files.
+
+Licence terms and notices are in LICENSE, LEGAL.md, THIRD-PARTY-NOTICES.txt and the licenses folder.

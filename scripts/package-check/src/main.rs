@@ -40,6 +40,21 @@ fn files_under(folder: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// A program: a Windows `.exe`, or a Linux (ELF) or macOS (Mach-O, 64-bit or universal) program
+/// by its first bytes, whatever its name (they have no extension).
+fn is_program(file: &Path, data: &[u8]) -> bool {
+    let exe = file
+        .extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+    exe || [
+        &b"\x7fELF"[..],
+        &[0xcf, 0xfa, 0xed, 0xfe],
+        &[0xca, 0xfe, 0xba, 0xbe],
+    ]
+    .iter()
+    .any(|magic| data.starts_with(magic))
+}
+
 fn lower(b: u8) -> u8 {
     b.to_ascii_lowercase()
 }
@@ -234,9 +249,7 @@ fn main() {
             bad += 1;
             continue;
         };
-        let is_program = file
-            .extension()
-            .is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+        let is_program = is_program(file, &data);
         let extra: &[String] = if is_program { &program_needles } else { &[] };
         for needle in needles.iter().chain(extra) {
             for form in forms(needle) {
@@ -290,15 +303,12 @@ fn main() {
             distinct.len()
         );
         for file in &files {
-            let extension = file
-                .extension()
-                .map(|x| x.to_string_lossy().to_ascii_lowercase());
-            if extension.as_deref() != Some("exe") {
-                continue;
-            }
             let Ok(data) = std::fs::read(file) else {
                 continue;
             };
+            if !is_program(file, &data) {
+                continue;
+            }
             let mut runs: Vec<_> = shared_runs(&data, &reference, &index)
                 .into_iter()
                 .filter(|&(at, length, _)| !is_filler(&data[at..at + length]))
@@ -335,6 +345,17 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Linux's and macOS's programs (no extension) are programs by their first bytes; text is not.
+    #[test]
+    fn programs_are_known_by_extension_or_first_bytes() {
+        assert!(is_program(Path::new("app/FalloutNV.exe"), b"MZ"));
+        assert!(is_program(Path::new("app/nv-viewer"), b"\x7fELF\x02\x01"));
+        assert!(is_program(Path::new("app/nv-viewer"), &[0xcf, 0xfa, 0xed, 0xfe, 0x0c]));
+        assert!(is_program(Path::new("app/nv-viewer"), &[0xca, 0xfe, 0xba, 0xbe]));
+        assert!(!is_program(Path::new("play.sh"), b"#!/bin/sh\n"));
+        assert!(!is_program(Path::new("app/nv-viewer"), b""));
+    }
 
     #[test]
     fn needles_are_found_in_either_form_and_any_case() {
