@@ -38,11 +38,11 @@
 //!   `WorldDimensions` maths and its cached worldspaces).
 //!
 //! `MessageExAlt` cuts its message to 0x103 bytes until JIP's corner message length patch
-//! (`InitGamePatches`, 16 bytes from `0x7753B8` to `0x77582B`: the HUD queue's message buffer
-//! 0x104 -> 0x204) is built; then to JIP's 0x203. Its icon path and sound are always cut to
-//! 0x103 bytes (the game's queue copies each into 0x104 and a longer one ends the process, with
-//! JIP too). It calls the game's `QueueUIMessage` with its own seconds: JIP's G09 hook there
-//! changes only the exe's own callers' time (return addresses up to `0x96A262`).
+//! (plan row G10, `InitGamePatches`, 16 bytes from `0x7753B8` to `0x77582B`: the HUD queue's
+//! message buffer 0x104 -> 0x204) is on; then to JIP's 0x203. Its icon path and sound are always
+//! cut to 0x103 bytes (the game's queue copies each into 0x104 and a longer one ends the process,
+//! with JIP too). It calls the game's `QueueUIMessage` with its own seconds: JIP's G09 hook
+//! there changes only the exe's own callers' time (return addresses up to `0x96A262`).
 //!
 //! Where JIP reads through a null pointer (a menu's tile, a recipe menu without a category, a
 //! trait path without a trait), the command does nothing here: listed in the lane's audit. Also
@@ -1747,9 +1747,9 @@ const MESSAGE_MAX: usize = 0x203;
 /// raises the message's to 0x204 (its "corner message max text length" bytes at `0x7753B8`,
 /// `0x7753D2`, `0x7753EA`, `0x77540C`, `0x775443`, `0x775461`, `0x77547E`, `0x77549C`, `0x7754BC`,
 /// `0x7754D0`, `0x77553C`, `0x775600`, `0x7714DA`, `0x7757B1`, `0x7757D3`, `0x77582B`), which the
-/// port has not built yet: until it is, the message is cut to 0x103 bytes. The icon path and
-/// the sound stay 0x104 bytes even with that patch: cut to 0x103 always (JIP would stop the
-/// game there).
+/// port has not built yet (plan row G10): until it is on, the message is cut to 0x103 bytes
+/// (0x203 once it is). The icon path and the sound stay 0x104 bytes even with that patch: cut to
+/// 0x103 always (JIP would stop the game there).
 const HUD_TEXT_MAX: usize = 0x103;
 /// `kCommandInfo_MessageExAlt.numParams`: the seconds and xNVSE's 21 format parameters.
 const MESSAGE_PARAMS: u32 = 22;
