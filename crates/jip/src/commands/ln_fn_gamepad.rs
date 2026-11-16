@@ -11,8 +11,9 @@
 //! which the getters here read.
 
 use super::Handlers;
-use crate::input::{Mods, Pad};
-use crate::Jip;
+// JIP's pad state is in `crate::input`'s lock-free slot: the conditions below read it on any
+// thread without JIP's shared slot.
+use crate::input::{dead_zone_ls, dead_zone_rs, mods, pad, ready, update_mods, Pad};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs, EvalArgs};
@@ -51,18 +52,6 @@ pub static CONDITIONS: super::Conditions = &[
     (0x22a9, is_trigger_held, is_trigger_held_eval),
     (0x289d, is_stick_disabled, is_stick_disabled_eval),
 ];
-
-fn ready(e: &mut Engine) -> bool {
-    e.ext::<Jip>().input.ready
-}
-
-fn pad(e: &mut Engine) -> Pad {
-    e.ext::<Jip>().input.pad
-}
-
-fn mods(e: &mut Engine) -> &mut Mods {
-    &mut e.ext::<Jip>().input.mods
-}
 
 /// The one integer argument, when read.
 fn int_arg(e: &mut Engine, a: &CommandArgs) -> Option<u32> {
@@ -140,13 +129,13 @@ pub fn stick(value: i16, dead_zone: i32) -> f64 {
 
 fn left(e: &mut Engine, axis: fn(&Pad) -> i16) -> f64 {
     let p = pad(e);
-    let dz = e.ext::<Jip>().input.dead_zone_ls;
+    let dz = dead_zone_ls(e);
     stick(axis(&p), dz)
 }
 
 fn right(e: &mut Engine, axis: fn(&Pad) -> i16) -> f64 {
     let p = pad(e);
-    let dz = e.ext::<Jip>().input.dead_zone_rs;
+    let dz = dead_zone_rs(e);
     stick(axis(&p), dz)
 }
 
@@ -221,7 +210,7 @@ fn get_right_trigger_eval(e: &mut Engine, w: &[u32]) -> Ret {
 /// echoed in the console.
 fn get_dead_zone_ls(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
-    let dz = e.ext::<Jip>().input.dead_zone_ls;
+    let dz = dead_zone_ls(e);
     a.set_result(e, f64::from(dz) * (1.0 / 32767.0));
     crate::console::print_result(e, &a);
     handled(true)
@@ -229,7 +218,7 @@ fn get_dead_zone_ls(e: &mut Engine, w: &[u32]) -> Ret {
 
 fn get_dead_zone_rs(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
-    let dz = e.ext::<Jip>().input.dead_zone_rs;
+    let dz = dead_zone_rs(e);
     a.set_result(e, f64::from(dz) * (1.0 / 32767.0));
     crate::console::print_result(e, &a);
     handled(true)
@@ -241,7 +230,7 @@ fn get_dead_zone_rs(e: &mut Engine, w: &[u32]) -> Ret {
 fn enable_button(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(b) = int_arg(e, &a) {
-        mods(e).button_skip |= b as u16;
+        update_mods(e, |m| m.button_skip |= b as u16);
     }
     handled(true)
 }
@@ -249,7 +238,7 @@ fn enable_button(e: &mut Engine, w: &[u32]) -> Ret {
 fn disable_button(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(b) = int_arg(e, &a) {
-        mods(e).button_skip &= !(b as u16);
+        update_mods(e, |m| m.button_skip &= !(b as u16));
     }
     handled(true)
 }
@@ -275,7 +264,7 @@ fn is_button_disabled_eval(e: &mut Engine, w: &[u32]) -> Ret {
 fn hold_button(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(b) = int_arg(e, &a) {
-        mods(e).button_hold |= b as u16;
+        update_mods(e, |m| m.button_hold |= b as u16);
     }
     handled(true)
 }
@@ -283,7 +272,7 @@ fn hold_button(e: &mut Engine, w: &[u32]) -> Ret {
 fn release_button(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(b) = int_arg(e, &a) {
-        mods(e).button_hold &= !(b as u16);
+        update_mods(e, |m| m.button_hold &= !(b as u16));
     }
     handled(true)
 }
@@ -307,7 +296,7 @@ fn is_button_held_eval(e: &mut Engine, w: &[u32]) -> Ret {
 fn tap_button(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(b) = int_arg(e, &a) {
-        mods(e).button_tap |= b as u16;
+        update_mods(e, |m| m.button_tap |= b as u16);
     }
     handled(true)
 }
@@ -327,7 +316,7 @@ fn trigger_bit(right: bool, left_bit: u8) -> u8 {
 fn enable_trigger(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(t) = int_arg(e, &a) {
-        mods(e).trigger_mods &= if t != 0 { 0xfd } else { 0xfe };
+        update_mods(e, |m| m.trigger_mods &= if t != 0 { 0xfd } else { 0xfe });
     }
     handled(true)
 }
@@ -335,7 +324,7 @@ fn enable_trigger(e: &mut Engine, w: &[u32]) -> Ret {
 fn disable_trigger(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(t) = int_arg(e, &a) {
-        mods(e).trigger_mods |= trigger_bit(t != 0, 1);
+        update_mods(e, |m| m.trigger_mods |= trigger_bit(t != 0, 1));
     }
     handled(true)
 }
@@ -359,7 +348,7 @@ fn is_trigger_disabled_eval(e: &mut Engine, w: &[u32]) -> Ret {
 fn hold_trigger(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(t) = int_arg(e, &a) {
-        mods(e).trigger_mods |= trigger_bit(t != 0, 4);
+        update_mods(e, |m| m.trigger_mods |= trigger_bit(t != 0, 4));
     }
     handled(true)
 }
@@ -367,7 +356,7 @@ fn hold_trigger(e: &mut Engine, w: &[u32]) -> Ret {
 fn release_trigger(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(t) = int_arg(e, &a) {
-        mods(e).trigger_mods &= if t != 0 { 0xf7 } else { 0xfb };
+        update_mods(e, |m| m.trigger_mods &= if t != 0 { 0xf7 } else { 0xfb });
     }
     handled(true)
 }
@@ -391,7 +380,7 @@ fn is_trigger_held_eval(e: &mut Engine, w: &[u32]) -> Ret {
 fn tap_trigger(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     if let Some(t) = int_arg(e, &a) {
-        mods(e).trigger_mods |= trigger_bit(t != 0, 0x10);
+        update_mods(e, |m| m.trigger_mods |= trigger_bit(t != 0, 0x10));
     }
     handled(true)
 }
@@ -431,9 +420,9 @@ fn set_stick_disabled(e: &mut Engine, w: &[u32]) -> Ret {
     if read.ok {
         let bits = stick_bits(read.int(0, 0) != 0);
         if read.int(1, 0) != 0 {
-            mods(e).stick_skip |= bits;
+            update_mods(e, |m| m.stick_skip |= bits);
         } else {
-            mods(e).stick_skip &= !bits;
+            update_mods(e, |m| m.stick_skip &= !bits);
         }
     }
     handled(true)

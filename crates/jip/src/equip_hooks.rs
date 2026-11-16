@@ -87,7 +87,7 @@ const VT_GET_COMBAT_STYLE: u32 = 0x188;
 
 /// JIP's inventory map (`InventoryItemsMap`, `internal/jip_core.h`): item -> (count, entry), kept
 /// in the order of the items' addresses as JIP's sorted `Map` is.
-type Items = BTreeMap<u32, (i32, u32)>;
+pub(crate) type Items = BTreeMap<u32, (i32, u32)>;
 
 /// Puts the wrap over `GetCanNotWear` and the command in, when JIP answers "installed" (JIP writes
 /// the patch as it starts, whatever a mod does).
@@ -245,7 +245,7 @@ fn find_for_item(e: &Engine, changes: u32, item: u32) -> u32 {
 /// count alone when it holds a leveled item), then the changes entries' own; only a count above 0
 /// goes in. Answers whether `items` holds anything (JIP's map is not emptied between two calls).
 /// A container entry or changes entry with no form, which JIP would read through, is passed over.
-fn inventory_items(e: &mut Engine, refr: u32, kind: u8, items: &mut Items) -> bool {
+pub(crate) fn inventory_items(e: &mut Engine, refr: u32, kind: u8, items: &mut Items) -> bool {
     let base = crate::overrides::base_form(e, refr);
     let container = crate::overrides::base_container(e, base);
     if container == 0 {

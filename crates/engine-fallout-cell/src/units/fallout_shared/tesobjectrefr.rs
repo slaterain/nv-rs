@@ -95,6 +95,53 @@ pub(crate) const LIST_REMOVE: u32 = 0x0090_5330;
 /// `*(u32 *)this`: the first dword of a pointer wrapper or `BSStringT`.
 #[cfg(test)]
 pub(crate) const READ_FIRST_DWORD: u32 = 0x0055_9450;
+
+/// A stand-in handler for JIP's seams in these files' tests (step 3.9): records the words it is
+/// asked with and answers what the test set.
+#[cfg(test)]
+pub(crate) mod jip_seam {
+    use engine_core::prelude::*;
+    thread_local! {
+        static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        static ONLY: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+    /// The handler at `addr` (owner JIP), answering `answer`; nothing seen yet.
+    pub(crate) fn put(e: &mut Engine, addr: u32, answer: Option<u32>) {
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, addr),
+            handler,
+        );
+        answer_with(answer);
+        only_for(None);
+        seen();
+    }
+    /// The same at a seam whose row another group writes (`Engine::on_site_for_test`).
+    pub(crate) fn put_unlisted(e: &mut Engine, addr: u32, answer: Option<u32>) {
+        e.on_site_for_test(addr, handler);
+        answer_with(answer);
+        only_for(None);
+        seen();
+    }
+    pub(crate) fn answer_with(answer: Option<u32>) {
+        ANSWER.with(|c| c.set(answer));
+    }
+    /// The words it was asked with since the last look.
+    pub(crate) fn seen() -> Vec<Vec<u32>> {
+        SEEN.with(|s| s.take())
+    }
+    /// From now on, answer only when the first word is `word` (no answer for any other).
+    pub(crate) fn only_for(word: Option<u32>) {
+        ONLY.with(|c| c.set(word));
+    }
+    fn handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        match ONLY.with(|c| c.get()) {
+            Some(word) if a[0] != word => None,
+            _ => ANSWER.with(|c| c.get()),
+        }
+    }
+}
 /// `TESForm` accessors.
 pub(crate) const FORM_TYPE: u32 = 0x0040_1170; // cFormType (byte at +4)
 #[cfg(test)]
@@ -355,6 +402,19 @@ pub(crate) fn save_parent_cell(e: &mut Engine, refr: Ptr<TESObjectREFR>) -> u32 
 
 pub(crate) fn global_ptr(e: &Engine, addr: u32) -> u32 {
     e.global::<u32>(addr)
+}
+
+/// JIP LN NVSE's ash pile test (step 3.9 G06, JIP's own: "Recognize custom ashpile
+/// activators") at `site`, the start of one of the exe's two compares of `refr`'s base form with
+/// the ash pile forms (`011ca27c`, `011ca280`): JIP's 14 bytes there test the base's ash pile
+/// bit instead. `Some(true)`: an ash pile (the compares' "equal" path), `Some(false)`: not one;
+/// `None` (the bit clear, or no handler): the exe's compares run. One load while JIP is not
+/// installed; the words are built after it.
+pub(crate) fn jip_ash_pile_test(e: &mut Engine, site: u32, refr: u32) -> Option<bool> {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED == 0 {
+        return None;
+    }
+    e.site(site, &[refr]).map(|answer| answer & 0xff != 0)
 }
 
 /// `BGSSaveLoadReferencesMap::Lookup(old, &new)` (`00853130`, on the map):
@@ -895,7 +955,18 @@ pub fn fn_0055a430(e: &mut Engine, this: Ptr<TESObjectREFR>) {
     e.set(this, TESObjectREFR::vfptrTESChildCell, CHILD_CELL_VTABLE);
     e.call(0x0057_acc0, &args![this]);
 
-    let is_furniture = e.call(0x0056_8680, &args![this]).bool();
+    // JIP LN NVSE's `DestroyRefrHook` (step 3.9 H24, JIP's own) replaces this call
+    // (`0x55A488`): it drops the reference's own name, model path and aux variables and answers
+    // the same furniture test; the seam answers it. One load while JIP is not installed.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0055_a488, &[me])
+    } else {
+        None
+    };
+    let is_furniture = match jip {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(0x0056_8680, &args![this]).bool(),
+    };
     if is_furniture {
         e.call(0x0045_38e0, &args![OBJECT_FURNITURE_MANAGER, 0u32]);
         let stored = e.call(0x0082_5c00, &args![OBJECT_ACTOR_LISTS]).u32();
@@ -7272,6 +7343,78 @@ mod tests {
             calls_to(&log, 0x0082_f1f0),
             vec![vec![OBJECT_FURNITURE_MANAGER]]
         );
+    }
+
+    thread_local! {
+        static DESTROY_SEEN: std::cell::RefCell<Vec<(Vec<u32>, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+        static DESTROY_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn destroy_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let logged = e.call_log.as_ref().map_or(0, Vec::len);
+        DESTROY_SEEN.with(|s| s.borrow_mut().push((a.to_vec(), logged)));
+        DESTROY_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP LN NVSE's `DestroyRefrHook` seam (step 3.9 H24, `0x0055A488`): with the game patch
+    /// word clear, or with only `FIXES` and switches, not asked even with a handler registered, and
+    /// `IsFurniture` called as the exe; with `INSTALLED` asked with the reference right after
+    /// `0057acc0`, its answer's low byte taken in place of the call (1: the furniture branch runs;
+    /// 0x100: not furniture), and no answer leaves the exe's call. (The destructor asks
+    /// `IsFurniture` again later, for the temporary references: that call is not JIP's.)
+    #[test]
+    fn destructor_jip_destroy_refr_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = destructor_engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0055_a488), destroy_handler);
+        DESTROY_ANSWER.with(|c| c.set(Some(1)));
+        let refr = standard_refr(&mut e);
+        let run = |e: &mut Engine| {
+            e.call_log = Some(vec![]);
+            e.call(0x0055_a430, &args![refr]);
+            e.call_log.take().unwrap()
+        };
+        let log = run(&mut e);
+        let exe = calls_to(&log, 0x0056_8680).len();
+        assert_eq!(calls_to(&log, 0x0056_8680)[0], vec![refr.addr()]);
+        assert!(calls_to(&log, 0x0045_38e0).is_empty());
+        e.set_jip_patches(jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX);
+        let log = run(&mut e);
+        assert_eq!(calls_to(&log, 0x0056_8680).len(), exe);
+        assert!(
+            DESTROY_SEEN.with(|s| s.borrow().is_empty()),
+            "only INSTALLED opens it"
+        );
+
+        e.set_jip_patches(jip_patches::INSTALLED);
+        let log = run(&mut e);
+        let seen = DESTROY_SEEN.with(|s| s.take());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, vec![refr.addr()]);
+        assert_eq!(log[seen[0].1 - 1].0, 0x0057_acc0, "right after 0057acc0");
+        assert_eq!(
+            calls_to(&log, 0x0056_8680).len(),
+            exe - 1,
+            "the call replaced"
+        );
+        assert_eq!(
+            calls_to(&log, 0x0045_38e0),
+            vec![vec![OBJECT_FURNITURE_MANAGER, 0]],
+            "furniture"
+        );
+        assert_eq!(calls_to(&log, 0x0086_8270).len(), 1, "goes on");
+        // Only the low byte is the answer (JIP's `al`, then `movzx`).
+        DESTROY_ANSWER.with(|c| c.set(Some(0x100)));
+        let log = run(&mut e);
+        assert_eq!(calls_to(&log, 0x0056_8680).len(), exe - 1);
+        assert!(calls_to(&log, 0x0045_38e0).is_empty(), "not furniture");
+        // No answer: the exe's call.
+        DESTROY_ANSWER.with(|c| c.set(None));
+        returns(&mut e, 0x0056_8680, 1);
+        let log = run(&mut e);
+        assert_eq!(calls_to(&log, 0x0056_8680).len(), exe);
+        assert_eq!(calls_to(&log, 0x0045_38e0).len(), 1);
+        DESTROY_SEEN.with(|s| s.take());
     }
 
     #[test]

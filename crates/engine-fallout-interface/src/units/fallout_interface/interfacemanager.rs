@@ -39,6 +39,9 @@ pub(crate) const MENU_3D_ROOT_NAME: u32 = 0x0106_ef40;
 const CURSOR_NAME: u32 = 0x0106_f010;
 /// `"Data\Menus\globals.xml"`.
 const GLOBALS_XML_PATH: u32 = 0x0106_eff8;
+/// UI Organizer's patch in [`interface_manager_initialize`] (`0070A049`: the new manager stored,
+/// then `UIOLoad`): a seam of `crates/uio`, read only while [`Engine::uio`] is on.
+pub const UIO_LOAD_SITE: u32 = 0x0070_a049;
 /// `"_background_fill_alpha"` and `"_Has360Controller"`.
 const BACKGROUND_FILL_ALPHA_NAME: u32 = 0x0106_efe0;
 const HAS_360_CONTROLLER_NAME: u32 = 0x0106_efcc;
@@ -1343,6 +1346,10 @@ pub fn interface_manager_initialize(e: &mut Engine, phase: i32, flag: u8) {
             interface_manager_construct(e, block.cast()).cast()
         });
         e.set_global(MANAGER_SINGLETON, manager.addr());
+        // UI Organizer's UIOLoad, which its patch at 0070a049 runs right after the store.
+        if e.uio() {
+            e.site(UIO_LOAD_SITE, &[manager.addr()]);
+        }
     }
     let manager: Ptr<InterfaceManager> = Ptr::new(e.global(MANAGER_SINGLETON));
     if phase == 1 {
@@ -3225,14 +3232,24 @@ fn idle_console_and_hot_keys(e: &mut Engine, this: Ptr<InterfaceManager>, state:
             console_wanted = true;
         }
     }
-    if e.call(
-        CONTROLS_QUERY_00A24660,
-        &args![state.controls, 0x1du32, 1u32],
-    )
-    .u32()
-        != 0
-        || console_wanted
-    {
+    // JIP LN NVSE's G58 at `0x0070E5FE` (group GA's row and handler, a fix row: the call
+    // becomes ToggleConsoleHook): the seam with the call's three words answers the query in
+    // its place. One load while JIP's fixes are not in.
+    let jip_key = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0070_e5fe, &[state.controls, 0x1d, 1])
+    } else {
+        None
+    };
+    let key = match jip_key {
+        Some(answer) => answer,
+        None => e
+            .call(
+                CONTROLS_QUERY_00A24660,
+                &args![state.controls, 0x1du32, 1u32],
+            )
+            .u32(),
+    };
+    if key != 0 || console_wanted {
         state.console = e.call(MENU_CONSOLE_INSTANCE, &args![1u32]).u32();
         e.call(CLEAR_KEYSTROKES, &args![state.controls]);
         if e.call(MENU_CONSOLE_TOGGLE_VISIBLE, &args![state.console])
@@ -8523,6 +8540,45 @@ mod tests {
         assert_eq!(e.mem.u32(m + 0xc), 1, "constructed: cMenuMode is 1");
     }
 
+    thread_local! {
+        /// What UI Organizer's handler saw: its word and the singleton then, per call.
+        static UIO_SEEN: RefCell<Vec<(u32, u32)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn uio_load(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let singleton = e.global::<u32>(MANAGER_SINGLETON);
+        UIO_SEEN.with(|s| s.borrow_mut().push((a[0], singleton)));
+        None
+    }
+
+    #[test]
+    fn uio_loads_once_after_the_new_manager_is_stored_and_only_while_on() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_LOAD_SITE);
+        let build = |on: bool| {
+            let mut e = world();
+            allocator(&mut e, OPERATOR_NEW);
+            allocator(&mut e, NI_ALLOC);
+            echo(&mut e, NI_POINT3_CONSTRUCT);
+            e.on_site(AT, uio_load);
+            e.set_uio(on);
+            UIO_SEEN.with(|s| s.borrow_mut().clear());
+            interface_manager_initialize(&mut e, 3, 0);
+            e
+        };
+        // Off: never asked.
+        build(false);
+        assert!(UIO_SEEN.with(|s| s.borrow().is_empty()));
+        // On: once, with the new manager, already stored.
+        let mut e = build(true);
+        let m = e.global::<u32>(MANAGER_SINGLETON);
+        assert_ne!(m, 0);
+        assert_eq!(UIO_SEEN.with(|s| s.borrow().clone()), vec![(m, m)]);
+        // A manager there already: not again.
+        interface_manager_initialize(&mut e, 3, 0);
+        assert_eq!(UIO_SEEN.with(|s| s.borrow().len()), 1);
+    }
+
     #[test]
     fn destroying_the_manager_deletes_it_and_clears_the_singleton() {
         let mut e = world();
@@ -12833,6 +12889,98 @@ mod tests {
                 assert_eq!(seen, vec![vec![m.addr()]]);
             }
         }
+    }
+
+    thread_local! {
+        static G58_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G58_ANSWER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn g58_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G58's seam asked without FIXES");
+    }
+
+    fn g58_answer(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G58_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(G58_ANSWER.with(std::cell::Cell::get))
+    }
+
+    /// JIP LN NVSE's G58 seam (`0x0070E5FE`, group GA's row, a fix row) in `Idle`'s console
+    /// part (the menus' loop ends it early here): the exe's query of key 0x1D answers 1 (the key
+    /// held). With the word 0 or `INSTALLED` alone the seam is not asked and the console
+    /// toggles; with `FIXES` and no handler, the same; with a handler it is asked once with
+    /// exactly the controls, 0x1D and 1, the exe's query of 0x1D is not made, and its answer
+    /// decides the toggle (0: no toggle; 1: toggle); the start menu key query (0x1C) after it
+    /// still runs.
+    #[test]
+    fn idle_console_key_jip_seam() {
+        use engine_core::extend::jip_patches;
+        let run =
+            |word: u32, handler: Option<engine_core::extend::SiteFn>, answer: u32, wanted: bool| {
+                let (mut e, m) = focus_world();
+                returns(&mut e, CONSOLE_KEY_FLAG_GET, u32::from(wanted));
+                returns(&mut e, CONSOLE_KEY_FLAG_SET, 0);
+                returns(&mut e, CONSOLE_PRIMARY_DOWN, 0);
+                e.register_double(CONTROLS_QUERY_00A24660, |_, a| Ret {
+                    eax: u32::from(a[1] == 0x1d),
+                    ..Ret::default()
+                });
+                returns(&mut e, MENU_CONSOLE_INSTANCE, 0x6600);
+                returns(&mut e, CLEAR_KEYSTROKES, 0);
+                returns(&mut e, MENU_CONSOLE_TOGGLE_VISIBLE, 1);
+                returns(&mut e, ADD_TO_ENTER_STACK, 0);
+                returns(&mut e, DEBUG_TEXT_UPDATE, 0);
+                returns(&mut e, 0x0055_9450, 1);
+                let element = e.mem.alloc(4);
+                e.register_double(LIST_NEXT_ELEMENT, move |e, a| {
+                    e.mem.set_u32(a[1], 0);
+                    e.mem.set_u8(MENU_LOOP_ABORT, 1);
+                    Ret {
+                        eax: element,
+                        ..Ret::default()
+                    }
+                });
+                if let Some(handler) = handler {
+                    e.on_site_for_test(0x0070_e5fe, handler);
+                }
+                e.set_jip_patches(word);
+                G58_SEEN.with(|s| s.borrow_mut().clear());
+                G58_ANSWER.with(|a| a.set(answer));
+                let mut state = IdleState {
+                    controls: 0x7700,
+                    ..IdleState::default()
+                };
+                e.call_log = Some(vec![]);
+                idle_console_and_hot_keys(&mut e, m, &mut state);
+                let queries: Vec<u32> = calls(&e, CONTROLS_QUERY_00A24660)
+                    .iter()
+                    .map(|q| q[1])
+                    .collect();
+                let toggles = calls(&e, MENU_CONSOLE_TOGGLE_VISIBLE).len();
+                assert_eq!(calls(&e, CONSOLE_KEY_FLAG_SET).len(), usize::from(wanted));
+                (queries, toggles, G58_SEEN.with(|s| s.take()))
+            };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(
+                run(word, Some(g58_never), 0, false),
+                (vec![0x1d, 0x1c], 1, vec![])
+            );
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, None, 0, false), (vec![0x1d, 0x1c], 1, vec![]));
+        assert_eq!(
+            run(fixes, Some(g58_answer), 0, false),
+            (vec![0x1c], 0, vec![vec![0x7700, 0x1d, 1]])
+        );
+        assert_eq!(
+            run(fixes, Some(g58_answer), 1, false),
+            (vec![0x1c], 1, vec![vec![0x7700, 0x1d, 1]])
+        );
+        // The console asked for through its flag (not the key): JIP's 0 does not stop the toggle.
+        assert_eq!(
+            run(fixes, Some(g58_answer), 0, true),
+            (vec![0x1c], 1, vec![vec![0x7700, 0x1d, 1]])
+        );
     }
 
     #[test]

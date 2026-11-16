@@ -624,6 +624,18 @@ fn ntfs_key(units: &[u16]) -> Vec<u16> {
         .collect()
 }
 
+/// The host path of `path`, a path as the game's ANSI calls carry it ([`real_path`]): for the
+/// mod files folder ([`super::mod_files`]), which keeps a mod's names as the game passes them.
+pub fn host_path(path: &[u8]) -> std::path::PathBuf {
+    real_path(path)
+}
+
+/// Whether the full path `path` is a directory, as `GetFileAttributesA` answers: one the game
+/// made in this run, else the player's ([`attributes`]).
+pub fn is_directory(e: &Engine, path: &[u8]) -> bool {
+    attributes(e, path).is_some_and(|a| a & FILE_ATTRIBUTE_DIRECTORY != 0)
+}
+
 /// The bytes of the file at the full path `path`: as the game made it in this run, else the
 /// player's file (read only); `None` when the game deleted it or there is none.
 pub fn read_whole(e: &Engine, path: &[u8]) -> Option<Vec<u8>> {
@@ -634,7 +646,7 @@ pub fn read_whole(e: &Engine, path: &[u8]) -> Option<Vec<u8>> {
 /// when there is none, else the host's answer ([`host_error`]: `ERROR_ACCESS_DENIED` for a file
 /// the player may not read, `ERROR_SHARING_VIOLATION` for one another program holds without
 /// sharing; measured, `measure/xnvse-rest/findfile-overflow-2026-11-14.txt`).
-fn read_whole_or_error(e: &Engine, path: &[u8]) -> Result<Vec<u8>, u32> {
+pub fn read_whole_or_error(e: &Engine, path: &[u8]) -> Result<Vec<u8>, u32> {
     let k = key(path);
     if let Some(data) = state_ref!(e).disk.files.get(&k) {
         return Ok(data.clone());
@@ -668,7 +680,7 @@ fn host_error(err: &std::io::Error) -> u32 {
 /// The attributes of the full path `path` as Windows reports them: a file or directory the game
 /// made in this run, else the player's (`FILE_ATTRIBUTE_*` as the file system keeps them);
 /// `None` when there is none.
-fn attributes(e: &Engine, path: &[u8]) -> Option<u32> {
+pub fn attributes(e: &Engine, path: &[u8]) -> Option<u32> {
     let k = key(path);
     let trimmed = key(path.strip_suffix(b"\\").unwrap_or(path));
     if state_ref!(e).disk.files.contains_key(&k) {
@@ -1131,6 +1143,8 @@ fn host_name_text(name: &std::ffi::OsStr) -> String {
 /// last-write times, the size (high word, then low), the two reserved words 0, `cFileName` (the
 /// name as stored, then one zero byte) and an empty `cAlternateFileName` (one zero byte at
 /// +0x130); the rest of the buffer is left as it was.
+// Off Windows the file times stop the run before anything is written (below).
+#[cfg_attr(not(windows), allow(unused_variables, unreachable_code))]
 fn write_find_data(
     e: &mut Engine,
     data: Ptr,
@@ -3383,6 +3397,10 @@ mod tests_player_files {
     }
 
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "the file listing's file times: not provided off Windows yet"
+    )]
     fn a_wildcard_search_lists_then_runs_out() {
         let mut e = Engine::new();
         let name = e.mem.alloc(0x200);
@@ -3412,6 +3430,10 @@ mod tests_player_files {
     /// TRUE, the last error left as it was (measured, 32-bit,
     /// `build43-scratch/measure/small-fixes/findclose-2026-11-02.tsv`).
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "the file listing's file times: not provided off Windows yet"
+    )]
     fn find_close_after_a_search_that_found_nothing_answers_false() {
         let mut e = Engine::new();
         let name = e.mem.alloc(0x200);
@@ -3457,6 +3479,10 @@ mod tests_player_files {
     }
 
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths, then the file listing's file times: not provided off Windows yet"
+    )]
     fn a_read_only_open_reads_the_players_file_in_place() {
         let mut e = Engine::new();
         let real = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
@@ -3787,6 +3813,8 @@ mod tests_changed_directories {
     use super::*;
 
     const SECOND: u64 = 10_000_000;
+    // Its tests list folders with the file times only Windows provides so far.
+    #[cfg(windows)]
     const SAVE_138: &str = "Save 138   Alexxander  Doc Mitchell s House  02 02 23.fos";
 
     /// A scratch folder of the test's own (under the system's temporary folder) holding `files`
@@ -4182,6 +4210,10 @@ mod tests_changed_directories {
     /// got (measured, `review-findfile/run1.txt`); not modelled, the run stops.
     #[test]
     #[should_panic(expected = "since FindFirstFileA; not provided")]
+    #[cfg_attr(
+        not(windows),
+        ignore = "the file listing's file times: not provided off Windows yet"
+    )]
     fn a_search_whose_folder_changed_since_it_began_stops() {
         let dir = scratch("midsearch", &[("a.fos", 5), ("b.fos", 5)]);
         let mut e = Engine::new();
@@ -4985,6 +5017,10 @@ mod tests_code_pages {
     /// listed, the real one first (NTFS's order), and the name opens the real file; the `?` form
     /// of a name opens nothing, with `ERROR_INVALID_NAME` (measured).
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn two_host_names_with_one_ansi_name() {
         let _page = Page::new(&CP1252);
         let dir = scratch("alias");
@@ -5037,6 +5073,10 @@ mod tests_code_pages {
     /// code page 932: the separators, the last part, the key, the host path, the matcher, the name
     /// check and `GetFullPathNameA` read them character by character; such a file opens and reads.
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn double_byte_names_keep_their_second_byte() {
         let _page = Page::new(&CP932);
         let so = b"\x83\x5c.txt";
@@ -5141,6 +5181,10 @@ mod tests_code_pages {
     /// fails its open with Windows' answer (32, 5; measured) for reading and for a write open that
     /// reads it into the run, instead of stopping the run at the first read.
     #[test]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn a_file_that_cannot_be_read_answers_windows_errors() {
         let dir = scratch("unreadable");
         std::fs::write(dir.join("held.txt"), b"held").unwrap();

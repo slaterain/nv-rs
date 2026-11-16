@@ -1372,7 +1372,8 @@ pub fn fn_005b4be0(e: &mut Engine, a: ScriptArgs) -> bool {
             let _ = MSG_ADD_ITEM_FAILED;
             fn_005b5e40(e);
         }
-        if type_0x28 && e.call(FN_00446390, &args![form]).i32() < 10 {
+        // JIP LN NVSE's G51 (`SafeWrite16(0x5B4DBC, 0x19EB)`, step 3.9): the jump over both tests.
+        if jip_every_item_health(e) || (type_0x28 && e.call(FN_00446390, &args![form]).i32() < 10) {
             let value: f32 = e.global(ADD_ITEM_FLOAT);
             e.call(FN_00482090, &args![container, value]);
         }
@@ -1388,6 +1389,15 @@ pub fn fn_005b4be0(e: &mut Engine, a: ScriptArgs) -> bool {
         e.call(TES_CONTAINER_DESTRUCT, &args![container]);
     });
     true
+}
+
+/// JIP LN NVSE's G51 (`SafeWrite16(0x5B4DBC, 0x19EB)`, step 3.9): `AddItem`'s two tests before the
+/// container items' health call (a weapon form, its weapon type below 10) are jumped over, so the
+/// call (`00482090` with the float at `0x10231E0`) is made for every added form. The fixes' bit is
+/// tested first; true when JIP's handler at `0x5B4DBC` takes the jump.
+fn jip_every_item_health(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x005b_4dbc, &[]).is_some()
 }
 
 // Translated from 005b4e90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5851,7 +5861,18 @@ pub fn fn_005db870(e: &mut Engine, args: ScriptArgs) -> bool {
             e.mem.set_u8(at(0x35), 1);
             e.call(N045_PICK_POINT, &args![at(0xf0), at(0x28)]);
         }
-        let form = if e.mem.u32(at(0x18)) == 2 {
+        // 005dbcfd: JIP LN NVSE's G73 seam (`AttachAshPileHook`, the row and handler are group
+        // GH2's): with JIP installed its answer is the form (`AttachAshPileEx`'s once, else the
+        // same choice); words: the mode `[ebp-0x18]`.
+        let jip_form = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            let mode = e.mem.u32(at(0x18));
+            e.site(0x005d_bcfd, &[mode])
+        } else {
+            None
+        };
+        let form = if let Some(form) = jip_form {
+            form
+        } else if e.mem.u32(at(0x18)) == 2 {
             e.global::<u32>(N045_FORM_MODE_2)
         } else {
             e.global::<u32>(N045_FORM_OTHER)
@@ -6731,6 +6752,127 @@ mod tests {
         assert!(calls(&e, TES_CONTAINER_CONSTRUCT).is_empty());
         parse_gives(&mut e, false, &[]);
         assert!(!e.call(0x005b_4be0, &args![script(this_obj)]).bool());
+    }
+
+    // ---- JIP LN NVSE's G51 seam (0x5B4DBC) ----
+
+    thread_local! {
+        static G51_ASKED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn g51_takes(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        assert!(a.is_empty(), "no words");
+        G51_ASKED.with(|c| c.set(c.get() + 1));
+        Some(1)
+    }
+
+    fn g51_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        assert!(a.is_empty(), "no words");
+        G51_ASKED.with(|c| c.set(c.get() + 1));
+        None
+    }
+
+    /// `AddItem` of `form` (count 2) on a plain reference with the word `word` and `handler` at
+    /// the seam: (the health calls, the weapon type calls, the hand-over calls, the seam's asks).
+    #[allow(clippy::type_complexity)]
+    fn add_item_g51(
+        kind: u8,
+        word: u32,
+        handler: fn(&mut Engine, &[u32]) -> Option<u32>,
+    ) -> (Vec<Vec<u32>>, usize, Vec<Vec<u32>>, u32, u32) {
+        G51_ASKED.with(|c| c.set(0));
+        let mut e = add_item_engine();
+        let form = object_with(&mut e, &[(0xe4, V_TRUE)]);
+        e.mem.set_u8(form + 4, kind);
+        let this_obj = object_with(&mut e, &[(0x100, V_FALSE)]);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x005b_4dbc, handler);
+        parse_gives(&mut e, true, &[form, 2, 0]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_4be0, &args![script(this_obj)]).bool());
+        let container = calls(&e, TES_CONTAINER_CONSTRUCT)[0][0];
+        (
+            calls(&e, FN_00482090),
+            calls(&e, FN_00446390).len(),
+            calls(&e, FN_004821A0),
+            container,
+            G51_ASKED.with(|c| c.get()),
+        )
+    }
+
+    /// G51 off (not installed; installed with the row off): an armour (type 0x18) gets no health
+    /// call, a weapon of type 5 does; the seam is not asked. Optional switches without `FIXES`
+    /// do not turn it on.
+    #[test]
+    fn jip_g51_off_keeps_the_weapon_test() {
+        use engine_core::extend::jip_patches::{
+            DOUBLE_PRECISION, INSTALLED, NO_FAILED_SCRIPT_LOCKS,
+        };
+        for word in [
+            0,
+            INSTALLED,
+            INSTALLED | NO_FAILED_SCRIPT_LOCKS | DOUBLE_PRECISION,
+        ] {
+            let (health, types, _, _, asked) = add_item_g51(0x18, word, g51_takes);
+            assert_eq!((health.len(), types, asked), (0, 0, 0), "{word:x}");
+            let (health, types, _, container, asked) = add_item_g51(0x28, word, g51_takes);
+            assert_eq!(health, vec![vec![container, 3.5f32.to_bits()]], "{word:x}");
+            assert_eq!((types, asked), (1, 0), "{word:x}");
+        }
+    }
+
+    /// G51 on: asked (no words) before both tests; a taken jump gives the armour the health call
+    /// (the weapon type not asked) and the container is still handed over after it; an answer of
+    /// none keeps the exe's tests. The gate is the `FIXES` bit alone: the bare bit, the bit with
+    /// `INSTALLED`, and with optional switches too.
+    #[test]
+    fn jip_g51_on_every_form_gets_the_health_call() {
+        use engine_core::extend::jip_patches::{
+            DOUBLE_PRECISION, FIXES, INSTALLED, NO_FAILED_SCRIPT_LOCKS,
+        };
+        for on in [
+            FIXES,
+            INSTALLED | FIXES,
+            INSTALLED | FIXES | NO_FAILED_SCRIPT_LOCKS | DOUBLE_PRECISION,
+        ] {
+            let (health, types, handed, container, asked) = add_item_g51(0x18, on, g51_takes);
+            assert_eq!(health, vec![vec![container, 3.5f32.to_bits()]], "{on:x}");
+            assert_eq!((types, asked), (0, 1), "{on:x}");
+            assert_eq!(handed.len(), 1, "the code after the jump runs ({on:x})");
+            // A weapon: the weapon type is not asked when the jump is taken.
+            let (health, types, _, _, asked) = add_item_g51(0x28, on, g51_takes);
+            assert_eq!((health.len(), types, asked), (1, 0, 1), "{on:x}");
+            let (health, types, _, _, asked) = add_item_g51(0x18, on, g51_none);
+            assert_eq!((health.len(), types, asked), (0, 0, 1), "{on:x}");
+            let (health, types, _, _, asked) = add_item_g51(0x28, on, g51_none);
+            assert_eq!((health.len(), types, asked), (1, 1, 1), "{on:x}");
+        }
+    }
+
+    /// G51 with JIP's real handler (JIP installed, the row on): a leveled list added by script
+    /// gets the health call; the weapon type is not asked.
+    #[test]
+    fn jip_g51_real_handler() {
+        let mut e = add_item_engine();
+        let list = object_with(&mut e, &[(0xe4, V_TRUE)]);
+        e.mem.set_u8(list + 4, 0x34);
+        let this_obj = object_with(&mut e, &[(0x100, V_FALSE)]);
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        e.register(0x0061_a310, |_, _| Ret::default());
+        jip::test_support::install_into(&mut e);
+        jip::game_patches::set_row(&mut e, true);
+        parse_gives(&mut e, true, &[list, 2, 0]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_4be0, &args![script(this_obj)]).bool());
+        let container = calls(&e, TES_CONTAINER_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls(&e, FN_00482090),
+            vec![vec![container, 3.5f32.to_bits()]]
+        );
+        assert!(calls(&e, FN_00446390).is_empty());
     }
 
     /// Doubles for the callees of `005b4e90`. By convention of these tests,
@@ -11896,6 +12038,10 @@ mod n045_tests {
     #[test]
     fn fn_005db870_places_a_marker_at_the_pick() {
         let mut e = base_engine();
+        // JIP's G73 seam (group GH2's handler): a test handler noting the mode, answering 0x7500;
+        // asked only with JIP installed (the runs below with the word 0 keep the exe's forms).
+        G73_MODES.with(|m| m.borrow_mut().clear());
+        e.on_site_for_test(0x005d_bcfd, g73_answer);
         let (a, _) = script_args(&mut e, 0);
         e.register(PARSE_PARAMETERS, |_, _| ret(0));
         assert!(!e.call(0x005d_b870, &words(a)).bool());
@@ -11995,6 +12141,34 @@ mod n045_tests {
         assert_eq!(only(&log, N045_INDEX_LIST_CONSTRUCT)[0][1..], [8, 0]);
         assert_eq!(only(&log, N045_PICK_NORMAL).len(), 1);
         assert!(only(&log, N045_LAYER_TEST).is_empty());
+        assert!(
+            G73_MODES.with(|m| m.borrow().is_empty()),
+            "not asked while not installed"
+        );
+        // JIP installed: the answer is the form placed (mode 1, then mode 2).
+        e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+        for mode in [1u32, 2] {
+            parse_writes(&mut e, vec![mode]);
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x005d_b870, &words(a)).bool());
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                only(&log, N045_PLACE_REFERENCE)[0][1],
+                0x7500,
+                "mode {mode}"
+            );
+        }
+        assert_eq!(G73_MODES.with(|m| m.borrow().clone()), [1, 2]);
+    }
+
+    thread_local! {
+        static G73_MODES: std::cell::RefCell<Vec<u32>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g73_answer(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G73_MODES.with(|m| m.borrow_mut().push(a[0]));
+        Some(0x7500)
     }
 
     /// Doubles for the player pick of `005df040` and `005df5d0`.

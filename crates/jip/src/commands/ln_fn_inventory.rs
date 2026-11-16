@@ -85,12 +85,12 @@ impl Default for HotkeyInfo {
 #[derive(Default)]
 pub struct SavedHotkeys(pub [HotkeyInfo; 8]);
 
-fn player(e: &Engine) -> u32 {
+pub(crate) fn player(e: &Engine) -> u32 {
     e.mem.u32(PLAYER)
 }
 
 /// The player's inventory entries (`GetContainerChangesList`'s nodes' items), empty for none.
-fn player_entries(e: &mut Engine) -> Vec<u32> {
+pub(crate) fn player_entries(e: &mut Engine) -> Vec<u32> {
     let p = player(e);
     let list = match extra::refr_extra(e, p, kind::CONTAINER_CHANGES) {
         0 => 0,
@@ -106,7 +106,7 @@ fn player_entries(e: &mut Engine) -> Vec<u32> {
     }
 }
 
-fn hotkey_type(e: &Engine, entry: u32) -> Option<u8> {
+pub(crate) fn hotkey_type(e: &Engine, entry: u32) -> Option<u8> {
     let t = type_of(e, e.mem.u32(entry + ENTRY_TYPE));
     matches!(t, ARMO | WEAP | ALCH).then_some(t)
 }
@@ -130,7 +130,7 @@ fn new_hotkey_list(e: &mut Engine, index: u8) -> u32 {
 
 /// The hotkey's list emptied of its hotkey: removed from the entry's lists and freed when nothing
 /// is left in it (`m_data` 0).
-fn drop_hotkey(e: &mut Engine, entry: u32, xdl: u32) {
+pub(crate) fn drop_hotkey(e: &mut Engine, entry: u32, xdl: u32) {
     extra::remove_by_type(e, xdl, EXTRA_HOTKEY);
     if e.mem.u32(xdl + LIST_DATA) == 0 {
         let lists = e.mem.u32(entry + ENTRY_EXTEND);

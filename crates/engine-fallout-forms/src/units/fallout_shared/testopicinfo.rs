@@ -829,6 +829,13 @@ pub fn fn_0061ccd0(e: &mut Engine, this: Ptr, kind: u32) -> Ptr {
     let base = this.addr();
     e.call(TES_FORM_CONSTRUCT, &args![this]);
     e.mem.set_u32(base, TOPIC_INFO_VTABLE);
+    // JIP LN NVSE's game patch "Store parent TESTopic" (step 3.9a) replaces this call
+    // (`0x61CD16`, `InitTopicInfoHook`): the two words the conditions' construction clears and its
+    // own parent topic word (`+0x50`). The port keeps the info's size and the call: the seam drops
+    // the port-side record of the info. One load while the patches are off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0061_cd16, &[base]);
+    }
     e.call(CONDITIONS_CONSTRUCT, &args![base + 0x18]);
     e.call(STRING_CONSTRUCT, &args![base + 0x28]);
     e.call(LIST_CONSTRUCT, &args![base + 0x30]);
@@ -883,6 +890,11 @@ pub fn fn_0061ceb0(e: &mut Engine, this: Ptr) {
     let base = this.addr();
     e.mem.set_u32(base, TOPIC_INFO_VTABLE);
     tes_topic_info_clear_data(e, this);
+    // The port-side record of JIP LN NVSE's parent topic (step 3.9a) goes with the info (`0x61CEEE`,
+    // after `ClearData`, which reads it); JIP's word goes with the object. One load while off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0061_ceee, &[base]);
+    }
     e.call(LIST_DESTRUCT, &args![base + 0x30]);
     e.call(STRING_DESTRUCT, &args![base + 0x28]);
     e.call(CONDITIONS_DESTRUCT, &args![base + 0x18]);
@@ -933,7 +945,17 @@ pub fn fn_0061cfd0(e: &mut Engine, this: Ptr, text: u32) {
 pub fn tes_topic_info_clear_data(e: &mut Engine, this: Ptr) {
     if !e.call(FORM_004077C0, &args![this]).bool() {
         if e.call(INFO_INDEX, &args![this]).u16() != 0xffff {
-            let topic = e.call(GET_OWNER_TOPIC, &args![this]).u32();
+            // JIP LN NVSE's game patch (step 3.9a) reads the info's parent topic word here
+            // (`0x61D041`) instead of calling `GetOwnerTopic`; the seam answers the recorded topic.
+            let recorded = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x0061_d041, &[this.addr()])
+            } else {
+                None
+            };
+            let topic = match recorded {
+                Some(topic) => topic,
+                None => e.call(GET_OWNER_TOPIC, &args![this]).u32(),
+            };
             if topic != 0 {
                 fn_0061d140(e, this, Ptr::new(topic));
             }
@@ -1276,6 +1298,11 @@ pub fn tes_topic_info_load(e: &mut Engine, this: Ptr, file: Ptr) -> bool {
             let current = e.mem.u32(CURRENT_TOPIC);
             let topic_id = e.mem.u32(topic);
             let previous_id = e.mem.u32(previous.addr());
+            // JIP LN NVSE's game patch (step 3.9a, `LoadTopicInfoHook` at `0x61E086`) stores the
+            // topic in the info before the call; the seam records it port-side. One load while off.
+            if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x0061_e086, &[current, base]);
+            }
             if !e
                 .call(INSERT_INFO, &args![current, topic_id, this, previous_id])
                 .bool()
@@ -2695,6 +2722,168 @@ mod b027_tests {
         let (result, log) = run(&mut e, 0x0061_ce10, &[info, 0]);
         assert_eq!(result.u32(), info);
         assert!(calls(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    thread_local! {
+        /// JIP's parent topic seams asked: the seam, its words, and how many calls the run had
+        /// logged by then (the outer call included).
+        static ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>, usize)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        /// What the `0x61D041` handler answers.
+        static RECORDED: Cell<Option<u32>> = const { Cell::new(None) };
+    }
+
+    fn asked(e: &mut Engine, seam: u32, a: &[u32]) {
+        let logged = e.call_log.as_ref().map_or(0, Vec::len);
+        ASKED.with(|s| s.borrow_mut().push((seam, a.to_vec(), logged)));
+    }
+    fn at_constructor(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        asked(e, 0x0061_cd16, a);
+        None
+    }
+    fn at_destructor(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        asked(e, 0x0061_ceee, a);
+        None
+    }
+    fn at_clear_data(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        asked(e, 0x0061_d041, a);
+        RECORDED.with(Cell::get)
+    }
+    fn at_load(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        asked(e, 0x0061_e086, a);
+        None
+    }
+
+    fn jip_seams(e: &mut Engine) {
+        use engine_core::extend::{Owner, SiteSlot};
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0061_cd16), at_constructor);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0061_ceee), at_destructor);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0061_d041), at_clear_data);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0061_e086), at_load);
+    }
+
+    /// The whole log of a call, the outer call first.
+    fn run_all(e: &mut Engine, addr: u32, words: &[u32]) -> Log {
+        e.call_log = Some(vec![]);
+        e.call(addr, words);
+        e.call_log.take().unwrap()
+    }
+
+    /// JIP LN NVSE's "Store parent TESTopic" seams (step 3.9a: `0x61CD16`, `0x61CEEE`,
+    /// `0x61D041`, `0x61E086`): with the game patch word clear none is asked, even with a handler
+    /// registered, and `ClearData` calls `GetOwnerTopic` as the exe; with `FIXES` each is asked at
+    /// its instruction with its words, the constructor, destructor and load go on as before, and
+    /// `ClearData` takes the seam's topic (0: none) instead of calling `GetOwnerTopic`, unless no
+    /// handler answers.
+    #[test]
+    fn jip_parent_topic_seams() {
+        use engine_core::extend::jip_patches;
+        let mut callees: Vec<u32> = CONSTRUCT_CALLEES.to_vec();
+        callees.extend(CLEAR_CALLEES);
+        let mut e = engine(&callees);
+        e.register(NODE_IS_END, |_, _| ret(1));
+        e.register(GET_OWNER_TOPIC, |_, _| ret(0x5000));
+        jip_seams(&mut e);
+        let info = new_info(&mut e);
+        let clear = |e: &mut Engine| {
+            e.mem.set_u32(info, 0x0f00_0000);
+            e.mem.set_u16(info + 0x20, 4);
+            e.mem.set_u32(info + 0x38, 0);
+            run_all(e, 0x0061_cff0, &[info])
+        };
+        // The word clear: nothing asked anywhere.
+        run_all(&mut e, 0x0061_ccd0, &[info, 0x102]);
+        let log = clear(&mut e);
+        assert_eq!(calls(&log, GET_OWNER_TOPIC), vec![vec![info]]);
+        assert_eq!(calls(&log, TOPIC_00619C50), vec![vec![0x5000, info]]);
+        run_all(&mut e, 0x0061_ce10, &[info, 0]);
+        assert!(ASKED.with(|s| s.borrow().is_empty()));
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::IGNORE_DTDR_FIX);
+        run_all(&mut e, 0x0061_ccd0, &[info, 0x102]);
+        clear(&mut e);
+        assert!(
+            ASKED.with(|s| s.borrow().is_empty()),
+            "only FIXES opens them"
+        );
+
+        e.set_jip_patches(jip_patches::FIXES);
+        // The constructor: asked with the info right before the conditions' construction, which
+        // still runs.
+        let log = run_all(&mut e, 0x0061_ccd0, &[info, 0x102]);
+        let seen = ASKED.with(|s| s.take());
+        assert_eq!(seen.len(), 1);
+        assert_eq!((seen[0].0, seen[0].1.clone()), (0x0061_cd16, vec![info]));
+        assert_eq!(log[seen[0].2], (CONDITIONS_CONSTRUCT, vec![info + 0x18]));
+        assert_eq!(calls(&log, SET_DIFFICULTY), vec![vec![info, 1]], "goes on");
+        // ClearData: the seam's topic, no GetOwnerTopic call.
+        RECORDED.with(|r| r.set(Some(0x5100)));
+        let log = clear(&mut e);
+        assert_eq!(
+            ASKED.with(|s| s.take().into_iter().map(|a| (a.0, a.1)).collect::<Vec<_>>()),
+            vec![(0x0061_d041, vec![info])]
+        );
+        assert!(calls(&log, GET_OWNER_TOPIC).is_empty());
+        assert_eq!(calls(&log, TOPIC_00619C50), vec![vec![0x5100, info]]);
+        assert_eq!(
+            calls(&log, CONDITIONS_CLEAR),
+            vec![vec![info + 0x18]],
+            "goes on"
+        );
+        // A recorded 0: no topic to leave, still no call.
+        RECORDED.with(|r| r.set(Some(0)));
+        let log = clear(&mut e);
+        assert!(calls(&log, GET_OWNER_TOPIC).is_empty());
+        assert!(calls(&log, TOPIC_00619C50).is_empty());
+        // No answer: the exe's call.
+        RECORDED.with(|r| r.set(None));
+        let log = clear(&mut e);
+        assert_eq!(calls(&log, TOPIC_00619C50), vec![vec![0x5000, info]]);
+        // No index: not asked (the exe's test comes first).
+        e.mem.set_u32(info + 0x38, 0);
+        e.mem.set_u16(info + 0x20, 0xffff);
+        ASKED.with(|s| s.take());
+        run_all(&mut e, 0x0061_cff0, &[info]);
+        assert!(ASKED.with(|s| s.take()).iter().all(|a| a.0 != 0x0061_d041));
+        // The destructor body: after ClearData, before the topic list is destroyed.
+        RECORDED.with(|r| r.set(Some(0)));
+        e.mem.set_u16(info + 0x20, 4);
+        let log = run_all(&mut e, 0x0061_ce10, &[info, 0]);
+        let seen = ASKED.with(|s| s.take());
+        assert_eq!(
+            seen.iter().map(|a| (a.0, a.1.clone())).collect::<Vec<_>>(),
+            vec![(0x0061_d041, vec![info]), (0x0061_ceee, vec![info])]
+        );
+        assert_eq!(log[seen[1].2], (LIST_DESTRUCT, vec![info + 0x30]));
+        assert!(calls(&log, TES_FORM_DESTRUCT).len() == 1, "goes on");
+    }
+
+    /// The load's seam (`0x61E086`): asked with the current topic and the info right before
+    /// `TESTopic::InsertInfo`, which runs as before; not asked for an info the exe does not
+    /// insert, nor with the word clear.
+    #[test]
+    fn jip_parent_topic_load_seam() {
+        use engine_core::extend::jip_patches;
+        let mut e = load_engine(vec![CHUNK_QSTI]);
+        jip_seams(&mut e);
+        e.mem.set_u32(CURRENT_TOPIC, 0x5000);
+        let info = new_info(&mut e);
+        run_all(&mut e, 0x0061_dbd0, &[info, 0x7000]);
+        assert!(ASKED.with(|s| s.take()).is_empty());
+        e.set_jip_patches(jip_patches::FIXES);
+        let log = run_all(&mut e, 0x0061_dbd0, &[info, 0x7000]);
+        let seen = ASKED.with(|s| s.take());
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            (seen[0].0, seen[0].1.clone()),
+            (0x0061_e086, vec![0x5000, info])
+        );
+        assert_eq!(log[seen[0].2].0, INSERT_INFO);
+        assert_eq!(calls(&log, INSERT_INFO).len(), 1);
+        // An info with form flag 0x20 is not inserted: nothing to record.
+        e.register(FORM_00440D80, |_, _| ret(1));
+        let log = run_all(&mut e, 0x0061_dbd0, &[info, 0x7000]);
+        assert!(ASKED.with(|s| s.take()).is_empty());
+        assert!(calls(&log, INSERT_INFO).is_empty());
     }
 
     #[test]

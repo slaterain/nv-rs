@@ -569,7 +569,7 @@ pub fn process(e: &mut Engine) {
     }
     process_input(e, true);
     if crate::input::controller_ready(e) {
-        let pad = e.ext::<Jip>().input.pad;
+        let pad = crate::input::pad(e);
         if state(e).flags & ON_BUTTON != 0 {
             let last = state(e).last_buttons;
             let changes = pad.buttons ^ last;

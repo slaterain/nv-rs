@@ -18,6 +18,7 @@ play-patch = { path = "../play-patch" }
 nvse = { path = "../nvse" }
 # JIP LN NVSE built in (ADR-0016), xNVSE's plugin: installed right after it.
 jip = { path = "../jip" }
+uio = { path = "../uio" }
 # The load order the game's forms are read from (`player_move`).
 esm = { path = "../esm" }
 # zlib's inflate on the host for the game's compressed archives and records (`native_inflate`).

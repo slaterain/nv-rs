@@ -185,6 +185,17 @@ pub fn built_ins(e: &Engine) -> Vec<BuiltIn> {
         .unwrap_or_default()
 }
 
+/// The built-in a plugin opcode was registered under (`CommandTable::GetParentPlugin` (xNVSE)):
+/// the one with the greatest opcode base at or below it, of the listed ones when `listed_only`.
+/// A built-in with no opcode base (UI Organizer's) has no commands (`GetInfoFromBase` (xNVSE)
+/// refuses base 0).
+pub fn parent_of(e: &Engine, opcode: u32, listed_only: bool) -> Option<BuiltIn> {
+    built_ins(e)
+        .into_iter()
+        .filter(|p| (p.listed || !listed_only) && p.opcode_base != 0 && p.opcode_base <= opcode)
+        .max_by_key(|p| p.opcode_base)
+}
+
 /// The built-in whose co-save section has `opcode_base` (`LookupHandleFromBaseOpcode`).
 pub fn by_opcode_base(e: &Engine, opcode_base: u32) -> Option<BuiltIn> {
     built_ins(e)
@@ -284,6 +295,26 @@ mod tests {
 
     fn heard_b(_: &mut Engine, m: &Message) {
         HEARD.with(|h| h.borrow_mut().push(("b", *m, Vec::new())));
+    }
+
+    /// A command's parent: the greatest base at or below its opcode (of the listed ones for the
+    /// documentation), never a built-in with no base (UI Organizer's).
+    #[test]
+    fn a_commands_parent_has_the_greatest_base_at_or_below_it_and_never_base_0() {
+        let mut e = Engine::new();
+        register(&mut e, plugin("ui_organizer.dll", "UIO", 0, true));
+        assert!(parent_of(&e, 0x2005, false).is_none());
+        assert!(parent_of(&e, 0x2005, true).is_none());
+        register(&mut e, plugin("jip_nvse.dll", "JIP LN NVSE", 0x2200, false));
+        register(&mut e, plugin("hot_reload.dll", "Hot", 0x2000, true));
+        assert!(parent_of(&e, 0x1fff, false).is_none());
+        assert_eq!(parent_of(&e, 0x2005, false).unwrap().name, "Hot");
+        assert_eq!(parent_of(&e, 0x2200, false).unwrap().name, "JIP LN NVSE");
+        assert_eq!(
+            parent_of(&e, 0x2200, true).unwrap().name,
+            "Hot",
+            "not listed"
+        );
     }
 
     /// Built-ins sort by their DLL's name without case; the same base twice is refused; only

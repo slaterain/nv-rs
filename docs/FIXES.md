@@ -77,6 +77,17 @@ carried out (`shown`, `shown_qpc`), and that frame's time from its poll to its P
 (`input_to_present_us`); every 1000 frames a `# input to present` line gives the median and the 95th
 percentile since the last one.
 
+`NV_STAGE_TIME=1` with `NV_FRAME_LOG` adds columns to each line (`crates/engine-core/src/stage_time.rs`, a
+measuring aid for the drawing thread): the frame's stages on main (`st_u` to `st_p2`, between OnIdle's entry,
+`Main::Swap` around the frame's draw, the world draw's cut and end, and `WaitForThreads`; `st_cut_to_idle` and
+`st_draw_end_to_idle`), each step of the drawing sequence after the world pass by its exe function, the world
+draw's two halves wherever they run, and with the drawing thread on its job's own time and main's wait at each
+join by the join's exe function. Microseconds and calls per column; the stages that end at the next OnIdle land in
+the next frame's line. Each point counts once a frame, the first time, and a draw nested in the frame's draw does
+not move it: a second draw sequence in a frame (a save's screenshot, a menu opened in the frame's tail) adds to the
+steps' columns but not to the stages, so in a frame whose step columns show `_n` above 1 the steps do not add up to
+the stages. Off, each mark is one load.
+
 `NV_PHYS_BLEND_LOG=FILE`, with the smooth physics drawing on (say `NV_PRESET=fixes`: the variable pins
 vanilla otherwise), writes per drawn frame each free body's node as the original draws it and as the
 fix draws it, with the drawing time and the world's last step end; `NV_SHOT_FRAMES=FROM-TO` limits
@@ -97,9 +108,12 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | Mod fit worn question | `007838a0` | `NV_MOD_WORN` | Fitting a weapon mod asks whether the mod is worn before the mod is removed from the inventory, not after. The original asks after (a slip: it means the weapon), through the mod's extra list the removal has just deleted; it nearly always answers no, but a yes rebuilds the inventory list, which frees the weapon entry the mod menu keeps, and closing the menu then re-equips through it and the game stops. A mod is never worn, so the answer is the original's usual no, and no released memory is read. Every other click of the menu is the original's. Below |
 | Dialogue topic index | `00619820`, `0061a310`, `0061a380`, `0061a5a0`, `0045dfe0` | `NV_TOPIC_INDEX` | Finding which topic holds a dialogue info (`TESTopic::GetOwnerTopic`) no longer walks the topic list and every info in it: the original does that for each info a plugin changes (YUP and the add-ons: 5,837 times), so a dialogue mod's load grew with its size times the game's. Every topic `TESTopic::InsertInfo` links an info into (the one place an info enters a topic) is kept beside it; a search asks only those topics, with the original's own search (`00619e10`), which hold this info first by its id, and takes the first of them in the topic list's order, from a copy of the list's order that is made again whenever the list may have changed in a way that matters (its sort, the data handler's `ClearData`, an insert of a topic the copy holds, which can list it again earlier, a changed head node, or a topic inserted since that the copy doesn't hold). So the answer is the walk's, tie-breaks included (an info in two topics, a twin id, the list's order and end). `NV_TOPIC_INDEX_CHECK=1` with `NV_TOPIC_INDEX=1` (alone it is a test variable, which makes the run vanilla) runs the original's walk beside every search and stops the game at the first difference. With the fix on, the typed `topic_search` family (the walk) goes by address for the run, since the fix registers over one of its members. Below |
 | Shaders compiled ahead of first use | none (a flag the real Direct3D 9 backend reads) | `NV_SHADER_WARM` | The graphics driver compiles a shader when it is first drawn with, and the game makes all 960 of its packages' shaders at start-up but first draws some of them in play: the first shot draws 7 for the first time (`SKIN2005.vso`, `SKIN2002.pso`, `SLS2136.pso`, `SLS2148.pso`, `SM3000.pso`, `NOLIGHTTEXVCPMA.pso`; `d3d9-first-use`), and its frame took 29 ms where the others take 12.5 (46 ms without the render thread). It recurs at every launch, whatever the exe's path. With the row the real backend draws once with every shader the game makes, into a 1x1 target of its own, after a `Present`, and sets the game's bindings again with its own commands: 960 draws in 2 ms of the render thread at the first `Present`, compiled by the driver while the menus run. The first shot's frame: 28.6 and 29.2 ms without, 19.3 and 19.8 with (the shooting route, BAAB, 2026-11-09); loads not slower (Doc's house 2.26 and 2.28 s without, 2.14 and 2.10 s with); the real device's frames identical to wgpu's while it runs. The NVIDIA driver also compiles a pixel shader again for a multisampled target, so the shaders warmed into the plain 1x1 target were compiled again at the first shot, drawn into the game's 8x scene target: the warm-up now also draws each shader into a 1x1 target of each multisample type the game's render targets and back buffer use (at 8x antialiasing: 8x for the scene and 4x for its 1024x1024 targets; 2880 draws, 5-12 ms of the render thread over the first 2-4 presents in the game). Found by replaying a recording of the shooting route into a real device with one change at a time to an extra warm-up before the shot: drawing each shader also into a multisampled 1x1 target alone removed the compile (A8R8G8B8 or A16B16G16R16F, 4x or 8x, with or without depth); without multisampling, a float format, the real partner shaders, textures and render states did not; adding the real vertex layout, textures and states on top of multisampling changed nothing. Replay, the shot's two presents, ms inside Direct3D 9 (calm presents 6-7): with main's warm-up 19.5-29.3 and 19.8-33.5, with this one 6.8-8.7 and 6.9-8.5 (with no warm-up at all 28.2-42.5 and 16.4-21.5). In the game (the shooting route cut to its five shots, 2560x1440 with 8x antialiasing, 2026-11-10): without the render thread (BAAB) the first shot's two slow frames were 39.6 and 32.6, 29.3 and 30.8 ms before, 21.8 and 20.6, 23.4 and 22.2 after (the part's median 16-17; what is left is the game's own work at the shot), later shots unchanged (worst 20.5-21.5 ms both). With the render thread (play's setting; 6 runs of main, 4 of the change: too few to stand alone, the replay and the runs without the render thread carry the claim) main had frames over 18 ms in the first shot's window in 3 of 6 runs (22.3, 19.5, 19.4 ms), the change in none (worst 15.9); the later shots' worst frames 17.7-34.6 ms on main, 18.5-25.6 with the change. Start-up (38.5-38.9 s from the first frame to play) and the Goodsprings load unchanged |
+| JIP LN NVSE built in (for testing) | none (a flag JIP reads before it installs) | `NV_JIP_INSTALLED` | **Off in every preset**, for testing mods that need JIP (MCM, oHUD and the like) until they are proven in the game. On, JIP LN NVSE answers "installed": mods find it (version 57.30), 1,006 of its 1,118 commands work with their hooks, and 86 of its 162 game patches go in (its fixes with the row `NV_JIP_GAME_PATCHES`). Not yet: the 112 commands not built are named and found but have no handler (a script line calling one fails and that script stops for that run; every JIP condition is built), so oHUD's INI option does nothing; `InjectUIComponent` needs `NV_UIO` on too; with real threads JIP's own data no longer makes a thread wait, but a mod's event script run from another thread still waits for the main thread a moment. Off, JIP is put in exactly as before the row. To turn it on: `bJIPInstalled=1` in Fallout.ini's `[nv-rs Fixes]` (a play run: fixes preset, real threads unless `bSteppedThreads=1`); the variable is for scripted runs. Below |
 | Co-save keeps other plugins | none (a flag the extender reads) | `NV_COSAVE_KEEP` | A co-save's sections of plugins that are not built in (JohnnyGuitar NVSE's, ShowOff's and the others not built in yet; JIP LN NVSE reads and writes its own) are kept as they were read and written back on each save while the files loaded are the ones that co-save lists, so a save brought from a real modded installation keeps them. xNVSE writes only the plugins it has loaded, so off (vanilla) they go at the next save, as with xNVSE. Below |
 | JIP co-save fixes | none (a flag JIP reads) | `NV_JIP_COSAVE_FIX` | JIP LN NVSE's extra data record (`SetRefExtraData`'s data, `JPED`) as JohnnyGuitar NVSE corrects it (`SerializationFixes`): JIP counts 5 bytes for each mod's part of a key where it writes 9, so a load that skips a key whose reference is gone lands in the middle of the next one; with the row the record is written with the right sizes as version 2 (what VNV's co-saves hold, since VNV installs JohnnyGuitar), JIP's own version 1 is not read, and the variables JIP added to a script whose owner is not loaded are skipped 10 bytes each (JIP skips 9, one short, and reads the next owner wrong). With the row a co-save written by JIP without JohnnyGuitar (version 1) is not read, as JohnnyGuitar gives up on it, but nv-rs does not destroy it: until JIP's saved data is applied to the game, the record is carried unchanged to the next save while the same files are loaded (as is a version 2 record with the row off), so the player can still take that save back to JIP. Off (vanilla), JIP's: version 1, only version 1 read, the 9-byte skip. Below |
-| JIP vanilla commands | none (a flag JIP reads) | `NV_JIP_VANILLA_CMDS` | JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`): `MenuMode` (adds JIP's modes 0 to 4: menu mode, the Pip-Boy, a menu open, the console, the loading screens), `GetItemCount` (also counts a form list's forms), `GetContainer` (also for an inventory reference), `IsInList` (a temporary actor by its leveled base), `GetHitLocation` (the location JIP's hit data hook keeps), `HasPerk` (a follower's perks count on followers) and `GetNVSEVersionFull` at the game's `0x127D`. They take effect only once JIP is built in and answers "installed" (the plan's step 3.10); until then, and off (vanilla), the game's own. Below |
+| JIP vanilla commands | none (a flag JIP reads) | `NV_JIP_VANILLA_CMDS` | JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`): `MenuMode` (adds JIP's modes 0 to 4: menu mode, the Pip-Boy, a menu open, the console, the loading screens), `GetItemCount` (also counts a form list's forms), `GetContainer` (also for an inventory reference), `IsInList` (a temporary actor by its leveled base), `GetHitLocation` (the location JIP's hit data hook keeps), `HasPerk` (a follower's perks count on followers) and `GetNVSEVersionFull` at the game's `0x127D`; also the `Begin MenuMode` script block (JIP's modes and handler, and block type 0xE answering true: see GS below). They take effect only once JIP is built in and answers "installed" (the plan's step 3.10); until then, and off (vanilla), the game's own. Below |
+| JIP game patches | none (a flag JIP reads) | `NV_JIP_GAME_PATCHES` | JIP LN NVSE's changes to the game's own code (`InitGamePatches` and the `[GamePatches]` switches of the player's `Data\NVSE\plugins\jip_nvse.ini`, else JIP's defaults: switches 1, 4-9, 13 and 14 on), as they are built (step 3.9): so far each dialogue info remembers the topic its load linked it into last and `GetOwnerTopic` answers that topic, and a script handler's result starts at 0 for every command. They take effect only once JIP is built in and answers "installed" (the plan's step 3.10); until then, and off (vanilla), the game's own. With the dialogue topic index also on, JIP's answer wins (JIP's wrap goes over the index). With this row off nothing marks a hit as having got through the armour (G77 and JIP's hit damage go in with the row; JIP itself writes them with no switch), so `GetArmourPenetrated` answers 0 for every hit. Below |
+| UI Organizer built in | none (a flag the built-in reads; seams at `0070a049`, `00a01b87`, `00a0968c`, `00a03923`, `00a221f8`, `0076f688` and four more) | `NV_UIO` | **Off in every preset** until proven in the game with a UI mod, then on in `fixes`. UI Organizer 2.30 (jazzisparis) built in, parts 1 to 3: its lists (`Data\uio\supported.txt`, then each `Data\uio\public\*.txt`, with their conditions) put UI mods' `<include>` lines into the menu files they name, in memory, where and in the order UIO puts them, and every menu file `Tile::ReadFile` reads goes through UIO's reader (its patched texts and its own expansion of `<include>` tags), then UIO's own XML parser and parse cache; JIP's `InjectUIComponent` goes through it; its tile operators (three aliases, 17 new) and text tiles' `<zoom>`. Off (vanilla), nothing is installed and no menu file changes. Below |
 | Script error loop guard | none (a flag the extender reads) | `NV_NVSE_ERROR_GUARD` | An error raised while a script's `RuntimeScriptError` handler runs (in the handler itself, or at the call depth limit when handlers call functions that fail) is not sent to the handlers again. xNVSE sends it again, which recurses until the stack runs out and the game stops; off (vanilla), the port does the same. Below |
 | Image-space event form check | none (a flag the extender reads) | `NV_NVSE_IMOD_CHECK` | When an image-space modifier instance runs out, OnRemoveIMOD is raised only for an instance of a modifier form (the game's own `AsForm` test, as its `Stop` makes it), with that form. xNVSE reads a form at the same place in every instance, and a depth-of-field or radial blur instance (iron sights, V.A.T.S., `SetGlobalRadialBlur`) has a number there: a handler then reads garbage as a form. Off (vanilla), the word is read as xNVSE reads it, and a word that is not a readable form drops the event instead of stopping the game. Below |
 | Script reference checks | none (a flag the extender reads) | `NV_NVSE_INVREF_CHECK` | (Once "Inventory reference checks": the variable and the Fallout.ini key `bNVSEInvRefCheck` keep that name, so a setting already made still works.) A reference handed to a script with parts missing, where xNVSE reads or writes through the missing part and the game stops; with the row the command gives its "nothing" answer instead (0, or nothing set). Off (vanilla), the port stops there too. **Inventory references:** an inventory reference's temporary reference is in no cell, and has no base form once released (after `RemoveMeIR`, or a loop's reference kept past its loop): `GetDoorTeleportX`, `GetDoorTeleportY`, `GetDoorTeleportZ`, `GetDoorTeleportRot`, `SetDoorTeleport`, `GetParentCellOwner` and `GetParentCellOwningFactionRequiredRank` read through the missing base form or cell. A container whose base list has an entry without a form stops the game in `ForEach` and `GetInventoryItems` (xNVSE reads the missing form's type), where the row passes over it; the commands that look an item up by its id (`PickOneOf`, `GetTokenValue` and the rest) read its id through it, where the row takes it as another item (`GetNumItems` and `GetInventoryObject` count it as xNVSE does, in both presets). **Doors:** a door whose teleport has no data or no linked door, or whose lock has no data (a mod's broken door data; the game itself makes a lock without data only when an allocation fails, and never a teleport without data): `GetLinkedDoor` reads through it, `SetDoorTeleport` and `SetOpenKey` write through it. **Owners and cell scans:** `HasOwnership` and `IsOwned` read the item's parent cell (for the cell's owner) and the asker's base form through nothing for a reference without them, where the row answers 0; the cell scans read a cell reference's base form for its type, where the row passes over a reference without one. **Scan records:** `GetNextRef` with no scan reports "GetFirstRef MUST be called before GetNextRef" and leaves a record it never builds, and a second one reads that record's uninitialised memory; a console scan that has ended stays under the console's key (xNVSE drops the script's own id instead), and the next console `GetNextRef` reads it through its missing cell. With the row both answer as the first call did: the error line again and 0. A scan whose walk finds no cell of its area in the worldspace's map reads the missing cell's list too; with the row it answers 0. **Form lists and doors** (`Commands_Misc.cpp`): `GetDoorSound` reads the id of the door's open or close sound through nothing for a door record without that sound (the game allows one), and in the console prints the id of a missing form through nothing; `GetLevCreatureRefs` and `GetLevCharacterRefs` read the id of a leveled entry's missing form; `GenericCheckForm` reads the id of an empty node's missing form in the middle of the list. With the row the door answers 0 and nothing is printed, and the entry or node is passed over. `IsRefInList` (`Commands_List.cpp`) reads the id of a reference's missing base form (an inventory reference's, once released) when the list holds a form; with the row nothing is found there. **And two of xNVSE's own slips with inventory references:** `RemoveMeIR` on an unworn stack with data of its own (a weapon with its condition) frees that data through the entry the reference holds, which for a reference from `GetInvRefsForItem`, `ForEach`, OnSell or OnRepair is the reference's own copy: the container's entry keeps the freed data and its count, so the item stays with freed memory as its data; with the row the data leaves the container's own entry too (its count with it) before it is freed, and nothing is freed when no entry of the container holds it. OnSell's item stays kept after the event when no handler ran (every handler filtered out), so a later `GetSoldItemInvRef` reads a sale that is over; with the row it goes when the event ends. Off (vanilla), all of these are xNVSE's, the stops included. Below |
@@ -810,6 +824,29 @@ Tested: `patch_data.rs`'s `the_table_reads_and_every_row_is_applied`, `the_strip
 `the_load_in_both_modes` (the record's flags as loaded in vanilla, 0x11 for the Strip with the row, nothing
 for another world space or another record type).
 
+### Mods' own files and the game's INI start-up
+
+Not a row; in every preset (2026-11-16):
+
+- **Mods' own files** (MCM's `Data\Config\<mod>.ini`, later JIP LN's INI and file commands) are
+  kept in a folder of nv-rs's own beside the saves (`NV_MOD_FILES_OUT`, else `nv-rs mod files`
+  beside `NV_SAVE_OUT`'s folder; docs/PLAYTESTING.md), never in the game's folder. The extenders'
+  commands read a mod's own copy there first, then the game's Data. Without either variable there
+  is no such folder: mods' settings last for the session only, and the start-up log says so in one
+  line. The game's own profile reads (`GetPrivateProfileStringA` and the others the exe calls) do
+  not look in that folder: only the extenders' commands do.
+- **Profile file names** are looked for as Windows looks for them (measured on scratch files): a
+  name with a folder part (`.\FALLOUT.INI`, `Data\Config\X.ini`) in the current directory, a bare
+  name in the Windows directory. Before, every name that was not a full path went to the Windows
+  directory.
+- **`[General] bUseMyGamesDirectory` always reads 1** (a deliberate difference). The game reads it
+  at start-up from `.\Custom.ini` and `.\FALLOUT.INI` in its own folder (`00876ad0`, call sites
+  `00876b13` and `00876b55`); 0 there makes it keep its INI files, `plugins.txt` and saves in the
+  game's folder, where nv-rs never writes. nv-rs keeps the My Games folders (as it did before, when
+  those names went to the Windows directory and found nothing), and says once in the log when a
+  file holds 0. Tested: `host::mod_files` `the_start_up_keeps_the_my_games_folders` (the translated
+  `00876ad0` through the platform's `GetPrivateProfileIntA`).
+
 ### The script extender
 
 The built-in xNVSE (ADR-0016) is the same in both presets, except for these rows and the
@@ -871,6 +908,10 @@ save) should get.
   followers (the player's rank, as for teammates); `0x127D` (the game's `ClearTrackedCells`, which
   does nothing) becomes `GetNVSEVersionFull`. All inert until JIP answers "installed" (step 3.10);
   off, and before that, the game's own.
+- **JIP game patches** (the row above): JIP LN NVSE 57.30's always-on game patches and its
+  `[GamePatches]` switches (`internal/patches_game.h`, `InitGamePatches` and `SetOptionalPatch`),
+  ADR-0016 §5's fix rows; the list of what is built is in "JIP LN NVSE's game patches" below. All
+  inert until JIP answers "installed" (step 3.10); off, and before that, the game's own.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of
   #329). One error reaches the handlers once; the console still shows every error. Kept per game
   thread: an error another thread raises meanwhile is its own and reaches the handlers.
@@ -944,6 +985,401 @@ save) should get.
   that peeks with records, a mouse read of another size, a record size other than DirectInput 8's);
   every keyboard and mouse read the game makes goes through it as with xNVSE, in both presets.
 
+### JIP LN NVSE switched on for testing
+
+JIP LN NVSE 57.30 is built in (`crates/jip`) but answers "not installed" in every preset, so a mod
+that needs it stops with its own "requires JIP" message, as without the plugin. The row
+`NV_JIP_INSTALLED` (Fallout.ini `[nv-rs Fixes] bJIPInstalled`, written as 0) switches it on, to test
+mods that need JIP (MCM, oHUD and the like). **Off in every preset** (`fixes::OFF_IN_EVERY_PRESET`)
+until such mods are proven in the game.
+
+How to turn it on: `bJIPInstalled=1` in `Fallout.ini`'s `[nv-rs Fixes]` (Play.exe writes it there for a
+`settings.ini` line `NV_JIP_INSTALLED=1`). The run stays a play run: the fixes preset, so the other JIP
+rows are on, and real threads unless `[nv-rs Threads] bSteppedThreads=1` (see below). For UI mods turn
+on `bUIO=1` too (oHUD needs the UI Organizer for its UIO patch list). The variable `NV_JIP_INSTALLED=1`
+is for scripted and test runs only: a switch's variable makes the run a test, which alone runs the
+vanilla preset with stepped threads, and in vanilla the co-save does not keep other plugins' sections
+(`NV_COSAVE_KEEP` is off).
+
+With the switch on:
+- A mod finds JIP: `IsPluginInstalled "JIP LN NVSE"` answers 1, `GetPluginVersion` and
+  `GetLNVersion` JIP's version 57.30, and JIP is in xNVSE's list of loaded plugins.
+- 1,006 of JIP's 1,118 script commands work, with their hooks and events (README's list), and JIP's
+  versions of xNVSE's commands; JIP's versions of seven of the game's commands follow their own row
+  (`NV_JIP_VANILLA_CMDS`).
+- 86 of JIP's 162 game patches (below): JIP's own always-on ones go in, its fixes follow the row
+  `NV_JIP_GAME_PATCHES`. JIP's co-save section is read and applied (its script variables, linked
+  references and the rest), as JIP does.
+
+Not yet, with the switch on:
+- The 112 commands not built yet are named and found like the others but have no handler: a script
+  line that calls one fails and that script stops for that run (every JIP condition is built).
+  Mods that call them do not work fully. JIP's INI and file commands are among them, so oHUD's INI
+  option (shown in MCM once oHUD finds JIP) does nothing: oHUD keeps its settings in the save only.
+- `InjectUIComponent` needs the UI Organizer row on too (`NV_UIO`); without it the command does nothing
+  and answers 0 (JIP would write `jip_temp.xml` into the game's folder), and the log says so once.
+- 76 of JIP's 162 game patches are not built (by group in `measure/jip/PLAN-3.9-groups.md`; groups
+  GW, GL and GX have none yet, the others' built ones are under their headings below): what they change stays the game's own; for
+  example `ToggleImmortalMode` does not yet stop the hit effects (G123 to G125).
+- With real threads JIP's own data no longer makes a thread wait (its aux variables and item data have
+  their own locks, and xNVSE's string variables, which `AuxVarGetFltCond` reads its name from, have
+  theirs, as in xNVSE), but a mod's event script run from another thread (JIP's actor, world and UI
+  event hooks) still uses xNVSE's shared state: that thread waits for the main thread a moment (a
+  possible hitch), not a stop. Running a script touches xNVSE's call stack and the game's code
+  throughout, so it stays one thread at a time (xNVSE itself puts off its own event handlers fired on another
+  thread until the main thread runs them).
+
+Nothing changes with the switch off: JIP is put in exactly as before the row (the same records, handlers,
+seams, wraps, vtable slots and plugin list; the patch word 0), checked by `jip`'s `switch_tests` and the
+host's `jip_installed_*` tests (audit `measure/jip/AUDIT-3.10-switch.md`).
+
+### JIP LN NVSE's game patches
+
+The row `NV_JIP_GAME_PATCHES` (Fallout.ini `bJIPGamePatches`) holds every change JIP LN NVSE 57.30
+(jazzisparis) makes to the game's own code for every player, as step 3.9 builds them; each is put in
+only while JIP answers "installed" (step 3.10) and the row is on. Patches that only answer JIP's own
+commands are part of JIP in every preset and are not listed here. A few of JIP's own always-on
+patches do change what a player sees; those are in whenever JIP is installed, whatever the row says
+(as JIP itself does), and their entries below say so and what a player with JIP gets. The switches are read as JIP reads
+them: `GetPrivateProfileSectionA("GamePatches", ..., "Data\NVSE\plugins\jip_nvse.ini")` (a path in
+the game's folder), a switch on unless its value starts with `0`, and with no such section (or one
+with only notes) JIP's defaults: `bIgnoreDTDRFix`, `bProjImpactDmgFix`, `bGameDaysPassedFix`,
+`bHardcoreNeedsFix`, `bNoFailedScriptLocks`, `bDoublePrecision`, `bQttSelectShortKeys`,
+`bVoiceModulationFix` and `bSneakBoundingBoxFix`, the same as the settings file JIP's authors publish.
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| "Store parent TESTopic for every TESTopicInfo" | `0061ccd0` (`0x61CD16`), `0061ceb0` (`0x61CEEE`, the port's record dropped), `0061cff0` (`0x61D041`), `0061dbd0` (`0x61E086`), `0061a310` (rewritten) | `TESTopic::GetOwnerTopic` answers the topic an info's load linked it into last, kept in a record beside the info (JIP adds a word to the info; the port keeps its size), instead of walking every topic for the first holding it; `ClearData`, the dialogue's responses, the topic conditions and JIP's dialogue topic events see that topic. Differs from the original only for an info a plugin links under two topics | 3.9a |
+| "Cmd_Execute >> *result = 0 by default" | `005ac7a0` (`0x5ACB9D`), `005e1550` (`0x5E16C3`, `0x5E2329`) | A script command's result starts at 0 before its handler runs, for every command (the original leaves the previous command's value there; xNVSE zeroes it only for its own commands), so a command that sets nothing answers 0 | 3.9a |
+
+Each group of step 3.9 (`measure/jip/PLAN-3.9-groups.md`) lists its patches under its own heading, as a table
+like 3.9a's above (JIP's comment, exe places, what a player with JIP gets, built), with JIP's credits
+(Stewie, carxt, lStewieAl, TrueCourierSix) where JIP gives them.
+
+#### GA: UI: HUD, messages, text, start-up INI
+
+All fix rows (in with the row `NV_JIP_GAME_PATCHES`, off in vanilla); with JIP installed and the row
+off, each place runs the exe's code unchanged.
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| "Increase buffer size for GetPrivateProfileString" (`SafeWrite8(0xC44405, 4)`) | `INISettingCollection::ReadSetting` `00c44280`, `0xC44405` | A text setting in an INI file longer than 255 characters is read whole (up to 1,023); the game cuts it at 255 | 3.9 GA-2 |
+| "Increase max trait description length to 0x400 characters" (four writes from `0x7E6EA6`) | `TraitMenu::DoEnter` `007e6ea0`, `0x7E6F04` | A trait's description in the character creation trait menu may be up to 1,023 characters; the game closes on one longer than 511 (the description is built with bounded string calls whose overflow ends the process), and with JIP it still closes above 1,023. JIP's own buffer address bytes put its buffer below its stack frame; the port gives the 0x400 bytes inside the frame | 3.9 GA-2 |
+| "TileMenu::DoDestroy fix for OnMenuClose" (`SafeWrite16(0xA1F035, 0x30EB)`) | the menu tile's destructor `00a1eff0`, `0xA1F035` | A menu that is destroyed keeps its "open" mark until it is gone, so what runs as it closes (the `OnMenuClose` events, `MenuMode` tests) still sees it open | 3.9 GA-2 |
+| "NULL check for perk activation text" (11 bytes at `0x7AA80F`) | the activation choices `007aa720`, `0x7AA80F` | A perk's activation choice with no text is left out of the activation menu instead of crashing the game | 3.9 GA-2 |
+| "Enable console prints in the loading menu" (`SafeWrite16(0x71D0D2, 0x1BEB)`) | `MenuConsole::Print` `0071d0a0`, `0x71D0D2` | Console lines printed while a loading screen is up are kept (the game drops them) | 3.9 GA-2 |
+| "Fall back to the vanilla CharGenQuest if the INI one is invalid" (`InvalidChargenQuestFixHook` at `0x7D333B`) | `StartMenu::ConfirmNewGame` `007d32b0`, `0x7D333B` | A new game whose starting quest setting names something that is not a quest starts the vanilla one (`0x102037`) instead of going back to the menu. If even that quest is missing the game goes back to the menu (JIP would start a missing quest) | 3.9 GA-2 |
+| (none; `ToggleConsoleHook` at `0x70E5FE`) | `InterfaceManager::Idle` `0070c4a0`, `0x70E5FE` | The console key (the grave-accent key, DIK 0x29, whatever the key bindings say) opens and closes the console also while a controller is connected; the game ignores it then (its query answers 0 while the gamepad flag `0x11F35C8` is set). Once per press, as in the game | 3.9 GA-2 |
+| (`InitJIPHooks`: `ClearHUDOrphanedTiles` at `0x7704AE`) | `HUDMainMenu::DoIdle` `00770430`, `0x7704AE` | HUD elements whose 3D was taken off the screen are destroyed each frame instead of being left behind | 3.9 GA-2 |
+| "Increase corner message max text length to 0x203 characters" (16 `SafeWrite8`s, `0x7753B8` to `0x77582B`; a fix row) | `fn_00775380` (queueing a HUD corner message), `HUDMainMenu::DoIdle` `00770430` (`0x7714DA`), `HUDMainMenu::HideMessage` `007756e0` | A corner message (the top-left notices, `ShowMessage`, `MessageEx`) of up to 515 characters is shown. In the game one longer than 259 characters ends the game (the queue's `strcpy_s` fails and the invalid-parameter path closes the process); with JIP the same happens above 515. The icon path and sound name keep their 259-character limits (above that the game ends, with JIP too). JIP's `MessageExAlt` cuts its message to the queue's buffer (259 characters, 515 with this row on). With JIP installed and the row off, the game's record is used unchanged | 3.9 GA-3 |
+
+Seams for other groups' rows: G06's `0x77765A` (the HUD's action
+text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below).
+
+#### GB: UI: item lists, repair, pad dead zones
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (`DeferredInit`, when its XInput hook is in: `SafeWrite32` of `&s_deadZoneLSg` / `&s_deadZoneRSg` over the operand of eleven `FCOMP double ptr [0x010718F0]`) | left stick, nine: `00741500` (`0x7416D6`, `0x741705`), `007908f0` (`0x790966`), `00799790` (`0x799861`, the map's zoom), `007bd2a0` (`0x7BD47D`, `0x7BD4A0`, `0x7BD4DD`), `0094a8c0` (`0x94AB59`, `0x94AB88`, the free camera's move axes); right stick, two: `0094a8c0` (`0x94A93C`, `0x94A95F`, the free camera's look axes) | JIP's own: in whenever JIP is installed, whatever this row says (as JIP). The caravan, lockpick, map-zoom and roulette menus and the free camera's movement test the left stick against JIP's left dead zone, a double that starts at the game's own 7849 (no change until `SetDeadZoneLS` is built). The free camera's look axes use JIP's right dead zone, 8689 where the game uses 7849, so a slightly larger right-stick movement is needed before the free camera turns, once group GP's four free-camera seams are in (until then the free camera keeps the game's 7849) | 3.9 GB-1 |
+| (none; `RefreshMapMenuHook` in `InitGamePatches`) | `0079dbb0` (`0x79DF73`: `MapMenu::AddMapIcons`, before the map is centred on the player icon) | JIP's own: in whenever JIP is installed. Nothing changes by itself: the map is centred as in the original unless JIP's item-list refresh asked to leave it where it is, once (that refresh, `RefreshItemsList` and the `RemoveMe` refresh, is not built yet, so nothing asks today) (G87) | 3.9 GB-2 |
+| (none; `ProcessGradualSetFloatHook` and `SafeWrite8(0xA081A8, 6)` in `InitGamePatches`) | `00a080d0` (`0xA08718`, `0xA0871C`: `Tile::UpdateFadeControls`' fade types 5 and 6) | JIP's own: in whenever JIP is installed. Interface fades of JIP's two extra types (made only by `SetUIFloatGradual` with mode 3 or 4) run: the value moves from the start to the end over the time and then goes back to the start value, again and again for mode 3 (suited to turning images), once for mode 4. The original passes these types over, so before this such a fade did nothing. The game's own fades are unchanged (G88) | 3.9 GB-2 |
+
+#### GC: Hit damage, detection, combat formulas
+
+Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): equipping no longer gives the un-equip notice (`0x8ADED0`) of the
+worn item it replaces (`0x88DCDC`); a change of life state is saved with the actor, so the dead do not load
+standing in their bind pose (`0x8A19CF`); kill challenges no longer count teammates, actors JIP flags
+(`+0x143` bit 7) or essential ones (`0x89DC0E`); a hit's weapon effects come from the projectile's own
+weapon (`0x8C227F`); a hit that takes the minimum damage is marked armour-penetrated (`0x9B6335`); while
+the game's impact data replacements are in use, a weapon's impact effect they do not replace is kept
+instead of being dropped (no impact effect at all) (`0058e9d0`); the blood
+on a hit comes from the weapon that made the hit, not the attacker's current weapon (`0x88EBAA`); the wear
+a shot puts on a weapon is the weapon's own value when it has one, and the ammo's effects on that wear come
+from the ammo the actor has equipped (`00646260`); with `bFO3WpnDegradation` weapons wear as in Fallout 3,
+scaled by the weapon's skill (Guns 0.15, Energy Weapons 0.2, Melee and Unarmed 0.25, Big Guns and
+Explosives 0.3) and by its attack damage; with `bCreatureSpreadFix` creatures shoot with the aimed (iron
+sights) spread, and other actors count as aiming only while in high process (`0x8B0FBF`).
+
+JIP's hit damage (with the row on and JIP's switch `bIgnoreDTDRFix`, on by default; `009b5a30`): a hit's
+damage threshold and resistance come from the target's actor values; the ammo actually fired changes the
+fatigue damage, resistance, threshold and damage with its effects; an actor blocking the hit adds its block
+skill bonus to the threshold; the damage perks count for the player, teammates and, with `uNPCPerks`, other
+actors; split-beam shots share the threshold between their beams; automatic melee weapons lose a share of
+their damage instead of the whole threshold; the minimum damage, the hit markers and a companion's
+complaint follow JIP's rules; the player's armour takes damage; the weapon's damage-type resistance counts
+unless the ammo ignores it; in V.A.T.S. the player takes `fVATSPlayerDamageMult` of every damage. A hit
+whose limb is chosen afterwards has its damage worked out when the limb is set, and a hit on limb 0xE
+moves its damage to the limb (`0x9B6E81`). Unlike JIP, which keeps that waiting hit in one value for every
+thread, each game thread keeps its own, so two hits worked out at the same time on two threads can no
+longer swap their damage rules (in JIP one of them could then skip the target's armour entirely). With `bLocalizedDTDR` the armour worn on the hit body part
+decides the threshold and resistance, weaker below half condition. Ammo with a script runs it on the
+actor hit, from the ammo that was fired rather than the weapon's current ammo (`0x89ABDC`).
+
+Built as part of JIP (in every preset once JIP answers "installed", not under the row): the player's
+killer is kept when the player dies (`0x89E790`, `0x89F351`; read by `GetKiller`) and cleared before a
+load; with the row off a player with JIP installed gets that and nothing else of this group's fixes.
+JIP's detection patch (it answers as the original until a JIP command asks) (`008a0d10` at `0x8A0DAB`,
+`0x8A1291`, `0x8A131D`, `0x8A147C`), so an actor given a forced detection value
+(`ForceActorDetectionValue`) or the detection fix (`ToggleDetectionFix`) is no longer treated as the
+player's teammate when others detect it, and with the detection fix its level word is the player's.
+
+#### GD: Projectiles, explosions, combat AI, packages
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; `InitProjectileSetAmmoHook` in `InitGamePatches`) | `009bbef0` (`0x9BC241`: the projectile's launch constructor, its projectile count, damage division and split-beam scale) | With the fixes row on, a weapon's damage is split by JIP's own projectile count: the loaded ammo's projectiles per shot times the weapon's ammo use when the ammo sets one, else the weapon's count, plus the split-beam mod's value when that mod is on (the original counts through `GetNumProjectiles`), and split-beam damage is scaled by 1.3 before the division instead of after. The ammo, the split-beam flag and the count are kept in the projectile (in its own unused bytes, as JIP keeps them) for JIP's hit-damage formula and ammo impact scripts (group GC's O1, G119). With JIP installed and the row off, the original's count and damage, nothing recorded. Differences from JIP: a projectile loaded from a save reads "no ammo" (the port's memory starts zeroed; on the original's heap JIP reads leftover bytes there); JIP's Rock-It Launcher check (`InitRockItLauncher`, not built) never matches | 3.9-GD |
+| (none; 5-byte writes in `InitGamePatches`) | `00475b20` (`0x47667D`) and the projectile's explosion (`0x9C35F7`): the explosion's source | With the fixes row on, an explosion a projectile makes (its own explosion, or its destruction data when it is destroyed) has the projectile as its source instead of the shooter, so the explosion reads the shooter and the weapon from the projectile (G27) | 3.9-GD |
+| (none; 53 bytes in `InitGamePatches`) | `009ac9c0` (`0x9ACA23`: the explosion factory, a projectile source) | With the fixes row on, perks that adjust explosion radius ("adjust explosion radius" entry point) work for NPCs too, with the projectile's weapon; the original applies them only to the player (G30) | 3.9-GD |
+| (none; `PackageSetRunHook`) | `008daa20` (`0x8DAA6F`: the move mode's run tests) | With the fixes row on, an AI package with JIP's Always Walk flag makes the actor walk even in combat or when a script forced it to run (`SetForceRun`); Always Run, combat and forced running still make it run otherwise (G62). The flag is set only by mods that use it | 3.9-GD |
+| (none; `ReactionCooldownCheckHook`) | `009d0a30` (`0x9D10F3`: ranged combat's reaction line) | With the fixes row on, NPCs' combat reaction lines while shooting wait the game's cooldown setting in real seconds since the last such line of anyone, instead of the combat state's own timer (G91) | 3.9-GD |
+| (none; `IsValidAITargetHook`) | `009f5070` (`0x9F50C4`: the sandbox target scan) | With the fixes row on, sandboxing NPCs also skip a reference a script is about to disable when choosing something to use, sit on or eat (the original already skips disabled and deleted ones) (G92) | 3.9-GD |
+| (none; 21 bytes in `InitGamePatches`) | `009ee0a0` (`0x9EE367`: a dialogue package's speaker) | With the fixes row on, a dialogue package's speaker in life state 1 (dying) or 6 keeps its line; only a dead speaker (life state 2) ends it (G102) | 3.9-GD |
+| `bProjImpactDmgFix` (on by default) | `009b7cc0` (`0x9B7E14`: a missile's flags) | With the fixes row on and the switch on, a missile gets the flag "the weapon's damage is not applied again on impact" (0x8000) only when its projectile record also has flag 0x100; the original sets it whenever its own test (`009a7f80` on the record, or VATS in state 4) says so, so impact damage is applied once as JIP intends (O4) | 3.9-GD |
+| (none; `DeathResponseFixHook`) | `009839b0` (`0x984156`: a combat line's speaker) | With the fixes row on, an NPC's death response (a combat line said when it dies) with no combat group behind it is spoken by its nearest living ally within 1024 units (alive, not talking, not in a conversation package) instead of the dying NPC itself; with no such ally the original's line is said (G101). Difference: the distance uses the processor's own reciprocal square root as JIP's code does (on processors other than x86-64, the exact one) | 3.9-GD |
+| (none; `MineExplodeChanceHook`) | `009c39e0` (`0x9C3BD6`: a mine's trigger test) | With the fixes row on, a mine that reacts to an NPC in range rolls the "adjust mine explode chance" perk entry point for that NPC (out of 100, as for the player) instead of always going off; a failed roll goes on to the next NPC (G127) | 3.9-GD |
+
+Built as part of JIP (in every preset once JIP answers "installed", not under the row), group GD:
+the backup package's move-away distance is JIP's variable (`009ed380` at `0x9ED3F8`, `009ed4b0` at
+`0x9ED528`; 300, the original's, until JIP's `MoveAwayFrom` sets it: that command is not built yet)
+(G42); while JIP's hit effects are off (`ToggleImmortalMode 2`; also `ToggleHitEffects 0` once
+that command is built: it is not built yet), an
+explosion in the player's face shows no image space (`009acd60` at `0x9ACEC6`) and explosions shake
+no screen (`0x9AD2C5`) (G124, G125). With the hit effects on (the default) the original's. Every
+combat controller is made 4 bytes bigger to hold JIP's excluded combat actions for its actor
+(`00670b90` at `0x670C30`; `00992110`, `009922b0`, `009923d0` at `0x9921C2`, `0x992352`,
+`0x992416`; its constructor `0097d3a0` clears them at `0x97D55F` and copies the actor's at
+`0x97D71F`), and the combat planner never picks an excluded action (`009950c0` at `0x9951B3`)
+(H16). Only JIP's `SetExcludedCombatActions` excludes actions, and that command is not built yet,
+so until it is NPCs fight as in the original; the actors' list is emptied before each load, as
+JIP does.
+
+#### GE: Actors: movement, life, NPC perks
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; 26 bytes in `InitGamePatches`) | `008ab3a0` (`0x8AB6D9`: the actor's save-game load, its two calls that clear bits of the flag word `+0x140`) | An NPC (not a creature) a script made essential (the reference's own essential bit, set by the exe's `SetActorRefEssential`, `005dfdab`) stays essential across a save and load (the original clears that bit on every load), with the fixes row on. For a creature this needs G04 (next row): the creature's load (`008d4ff0`) clears the whole flag word right after this routine, and G04 skips that clear with the fixes row on. JIP's own per-actor flags (combat disabled, forced detection values and the others its commands set) start clear on every load whenever JIP is installed. With JIP installed and the row off a player gets both: JIP's two flag bytes cleared AND the original's two calls run, so a script's essential flag is still lost on load; real JIP never produces this mix (its 26 bytes always replace the calls) | 3.9-GE |
+| "Don't reset Actor::actorFlags for creatures, upon LoadGame" | `008d4ff0` (`0x8D5003`) | A creature keeps its loaded flag word after a save is loaded (the original clears it all after the actor's load), so a script's essential bit and the other flags survive on creatures too | 3.9-GE |
+| "AI Z fix" (credits Stewie) | `006b0f40` (`0x6B10A3`), `00881860` (`0x881A9C`), `009e6900` (`0x9E6A82`) | Three places where the AI flattened a direction to the ground plane before measuring it keep its height: path smoothing from inside a target circle, the move toward a navmesh point, and the "actor in the way" test of path avoidance, so actors keep their height while pathing | 3.9-GE |
+| "Fix SetLevel XP" | `008d5300` (`0x8D535F`) | `SetLevel` sets the player's experience from the experience table entry of the level given, where the original reads the entry of the level below it | 3.9-GE |
+| "Cap Agility for calculating reload & equip speeds" | `008c17c0` (`0x8C17D9`), `008c1940` (`0x8C1959`) | Reload and weapon-equip speeds use Agility as the game's actor value clamp caps it (`ClampActorValue`), so Agility raised past its limit by effects no longer speeds them up further | 3.9-GE |
+| (InitRagdollControllerHook) | `00930c70` (`0x931384`) | The player's ragdoll is not built again when Havok is set up again on the same body (the original builds it each time) | 3.9-GE |
+| (IsActorEssentialHook; JIP's own) | `0087f3d0` (`0x87F427`) | A teammate JIP's `ToggleTeammateKillable` marked can be killed outside hardcore mode (whenever JIP is installed; nothing changes until the command is used) | 3.9-GE |
+| `bVoiceModulationFix` (on by default) | `009344d0` (`0x934AC8`); `0x578E16` and `0x7974CC` (seams in groups GH2 and GB) | Helmeted characters' voice modulation follows the character: the dialogue sound is made with the sound flag 0x80000 unless the speaker's base form has its flag 0x2000 (the original never sets 0x80000), and the two other voice sound places always add it, as JIP's switch does. The third place is the Pip-Boy's recorded-note playback (`0x7974CC`, group GB's seam in the map menu's conversation notes): their voice lines get 0x80105 where the original uses 0x105 | 3.9-GE |
+
+#### GP: Player character
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| "Ignore disabled MusicMarkers" | `00969930` (`0x9699C5`) | A disabled music marker no longer chooses the music played near it; a marker's position is read from the reference itself (`+0x30`) instead of through its position call | 3.9 GP |
+| (G72, `BuildMusicMarkerListHook`) | `00947d80` (`0x947DD2`) | The player's music markers in a world space come from one list built when he enters that world space (JIP's cache, rebuilt only for another world space), sorted by their media location controller, instead of the world space's markers walked every time | 3.9 GP |
+| (G105, `DamagePCFatigueMinFixHook`) | `0093b7a0` (`0x93B87F`) | Fatigue damage to the player stops at `fMinFatigue` (the change is cut so the value lands on it) | 3.9 GP |
+
+Built as part of JIP (every preset, while JIP answers "installed"; not fix rows): G114 with O6
+and the `ToggleHardcoreTracking` command (`00969c30` at `0x969C41`): with `bHardcoreNeedsFix` (on
+by JIP's defaults, read only with the row on) the hardcore needs take their pending changes each
+update and never go below 0; `ToggleHardcoreTracking 0` (kept in JIP's co-save) makes the hardcore
+timers start again every update, so no needs build up. With JIP installed and the row off, the
+update's state test is JIP's (the same answer) and only the co-save flag acts. G122 with the
+`ToggleImmortalMode` command (the player's `MagicTarget` slot `0x108A9B4`): mode 2 makes the player
+unhittable as god mode does (mode 1 keeps him at 1 health through JIP's PlayerMinHealth hook); with
+JIP installed and no mode set, the god mode test reads the setting's byte itself (the exe answers 1
+for any non-zero byte). The hit effects JIP also turns off in mode 2 are the hit effect patches'
+(G123 to G125, not built yet).
+
+G38 and H09, JIP's "update 3D" on the player and on queued references. The player's first-person
+model is copied from the model loader's cached load (`0094e1d0` at `0x94E4A1`; the eye height is no
+longer read there, `0x94E5F6`), and JIP's own attach goes into the `Attach` slot of four queued
+reference vtables (`0x1016BE0`, `0x1016D28`, `0x1016D70`, `0x1016DB8`): it reads the mark JIP's
+`Update3D` sets, so `Update3D` on the player rebuilds both views, the weapon and the head, and on
+another reference resets its fade.
+
+A player with JIP installed gets these whatever `NV_JIP_GAME_PATCHES` says (they are JIP's own, not
+fixes), also when no script ever calls `Update3D`: for the three references' and the player's queued
+loads, a cell counts as loaded when its state byte (`+0x26`) is 2 or more, where the exe asks
+`TES::IsCellLoaded`; the load's "critical" count is lowered unless the reference's vtable slot
+`+0x100` is the game's shared `return true` (the exe calls that slot); and the player's eye height
+(`+0x698`) is no longer read from the first-person camera node when his 3D loads, for every player.
+The port differs from JIP on purpose in three places, each where JIP would stop the game or break a
+lock: a first-person model missing from the loader's cache is loaded as the exe does (JIP reads a
+null model), and the cell lock JIP's attach takes is let go exactly once and only by the reference
+that took it, the cell it took (JIP also lets go a lock it never took for a reference flagged
+`0x800`/`0x20`, and lets go the lock of the cell read again after the load).
+
+Three steps of JIP's attach are not built yet, because nothing can set what they test:
+- collision turned off for a reference marked by `ToggleObjectCollision`: waits for that command
+  (with JIP's `TESObjectREFR::ToggleCollision` and `NiNode::ToggleCollision`);
+- nodes and models JIP inserts into a reloaded 3D: waits for the `InsertNode` and `AttachModel`
+  commands (their maps);
+- JIP's point lights added to the 3D: waits for group GL's light hooks, which flag the nodes.
+
+#### GH1: Extra data and inventory stacks
+
+Fixes (in with the row `NV_JIP_GAME_PATCHES` while JIP is installed; PLAN-3.9 G46, G79, G50, G61, G75, G76):
+
+| Fix | What a player gets | Where |
+|---|---|---|
+| G46 invisible stacks | Items no stack showed appear in the inventory: an owner extra no longer splits a stack off at once, and JIP's one iterator hands out, after the game's passes, the count left of each form | `CompareListForContainer` (`0x41271E`), the fast iteration's start (`0x4CA200`), next (`0x4CAFA3`) and destructor (`0x4BF630`) |
+| G79 weapon mods | A weapon's mods are read null-safely, from the list of the reference that dropped it when there is one | `GetModSlots` (`0x4BD820`), `HasModEffectActive_ov2` (`0x4BDA70`) |
+| G50 items' health | A container's items get the health JIP's way: clamped below 1, only armour and weapons below type 10 keep one | `00482090` (rewritten) |
+| G61 temporary forms | A temporary reference (mod index 0xFF) is never taken as persistent when picked up or pointed at | the three calls of `GetRefPersists` (`0x41C833`, `0x4C232C`, `0x4C273A`) |
+| G75, G76 hotkeys | A hotkeyed item given to the player, or picked up, loses its hotkey when the player already uses that key; a hotkey moves with its stack | `004c37d0` (`0x4C3976`), `00953ff0` (`0x95400F`, group GP's translation), `CopyListForReference` (`0x412675`) |
+
+Deliberate differences: the iterator's destructor answers `this` (JIP leaves EAX as it was); an owner whose
+base form has no container gives the iterator no container copy (JIP would copy from a null container).
+
+Part of JIP in every preset (not a fix, so not in the row): the ExtraJIP framework
+(PLAN-3.9 G44, "For ExtraJIP framework"), the place JIP keeps `SetRefExtraData`'s data. JIP takes the extra
+data type `0x27` (`ExtraTimeLeft`, which the game never makes) for a key into its own data (the co-save's
+`JPED` record): such an extra goes to the head of its list (`0040f980`), keeps its item out of the
+container's default stack (`0041d030`, `IsExtraDefaultforContainer`), is compared by its data and, when
+destroyed, drops its data unless the data names a reference that is no longer loaded while the save holds
+changes of it (JIP's condition; the two slots of its vtable `010158FC`), is copied or moved with its stack (`AddExtraCopy`)
+and saved and loaded as its key (`SaveGame_ov2`, `LoadGame_ov2`). What a player with JIP installed gets,
+whatever the fix row says (JIP's own patch, kept as JIP does it): the pick-up function (`004c1c90`) takes
+an item's count from its own count extra, and a picked-up stack of two or more gets a count extra on its new
+list, so a merged stack of two or more keeps a list holding only its count (the game alone drops that empty
+list). With JIP not installed nothing of this is in.
+JIP's G41 (three more bytes cleared in a new extra data list) is not built: the port keeps JIP's word of a
+list in records of its own.
+
+#### GH2: References, models, cells, ash piles
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; `SafeWrite16(0x54E421, 0x1EEB)` and `WriteRelJump(0x54E4E1, ClearAshPilesHook)` in `InitGamePatches`, no INI setting) | the cell's reset walk `0054df30` (run when a cell is attached; it is the game's respawn of a cell whose reset time has passed): `0x54E421` (a deleted actor's ash pile) and `0x54E4E1` (the type branches for references that are neither actors nor containers) | GAINS: an ash pile (the two vanilla piles and any activator `MarkActivatorAshPile` marked) is deleted when the reset walk reaches it, unless the actor it came from has flag `0x400` on its base; the actor loses its link to the pile. A dead actor deleted by the reset no longer takes its ash pile with it there (the pile goes when the walk reaches it, if it is in the walked cell). JIP's jump also passes over the exe's two other branches there: a reference whose base is a `FLOR` record (form type 0x26) made harvestable again, and a picked-up placed `INGR` reference (type 0x1D, not persistent) brought back. The game's own data has none: `FalloutNV.esm`, the four story add-ons, Gun Runners' Arsenal and the four packs hold 0 `FLOR` records and 0 placed references to an `INGR` (New Vegas's plants are activators with scripts), so nothing in the game changes; only a mod that adds `FLOR` records or places `INGR` references sees those stop respawning, the same as with real JIP. Containers still refill and actors still respawn. With JIP installed and the row off, the exe's walk runs unchanged | 3.9 GH2-2 |
+
+Part of JIP in every preset (not the row above), while JIP answers "installed":
+- `DestroyRefrHook` (`0055a430`, `0x55A488`): a destroyed reference lets go of its `SetRefName`
+  name and `SetRefrModelPath` model (with their hooks' users) and, when it was made in the game and
+  the save holds nothing of it, its aux variables.
+- "Recognize custom ashpile activators" (G06, eight places: `0x56A30A`, `0x573194`, `0x573FE8`,
+  `0x57445B`, `0x576AF0`, `0x624958`, and groups GA's `0x77765A` and GP's `0x95F7FE`): where the
+  exe compares a reference's base with the ash and goo pile forms it tests JIP's ash pile bit on the
+  base instead; the two vanilla piles get the bit when the game starts (`DeferredInit`), so with no
+  script marking anything nothing changes for a player. A reference with no base answers "not a
+  pile" (JIP would read a bad address). All eight places are asked; the HUD's (`0x77765A`, in
+  `SetInfoForRef`'s action text) shows a marked activator's prompt as the ash pile's "Search".
+- `AttachAshPileHook` (G73, the death ash pile command `005db870`, its seam at `0x5DBCFD`): the
+  pile a death leaves is `AttachAshPileEx`'s form once when a script set one, else the exe's
+  choice. It changes nothing yet: the command `AttachAshPileEx` is not built, so no script can set
+  a form.
+
+#### GF: Forms and records
+
+Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): grass grows in the outer ring of the 5 by 5
+cells around the player too (the original leaves the outer cells bare, so grass now reaches farther; it still
+stops at the grass distance setting) (`0x57D3B9`); the player's shell casings in first person stay as long
+as everyone else's (the original cuts their lifetime to at most 2 seconds) (`0x5251A3`);
+firing a thrown or placed weapon (types 11 to 13) by an actor with no AI process no longer crashes (the
+original calls the missing process) (`0x5248EF`); an armour's icon in the menus follows the player's sex,
+with the female icon when the armour has one (the original follows the sex of the owner the menu passes,
+and shows the male icon when it passes none) (`0x48E761`); a companion perk's effect that targets the
+player is added to the player once, not once per companion (`0x5EB79B`).
+
+Built as part of JIP (in every preset once JIP answers "installed", not under the row), needed by the
+built `GetSkeletonModel`, `SetNPCSkeletonModel` and `SetCRESkeletonModel`: an NPC's skeleton is the NPC's
+own model path when `SetNPCSkeletonModel` set one, else `sNPCModelMale` (`00601c30`; JIP's sex test reads
+the form type, so it never picks `sNPCModelFemale`: with FalloutNV.esm, which sets `sNPCModelFemale` to the
+male skeleton, a player sees the original's skeletons), and an NPC record's model path is no longer stored
+when it loads (`0x104A1BC`, the original ignores it for NPCs anyway). With the row off a player with JIP
+installed gets these two and nothing else of this group.
+
+#### GS: Script engine
+
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (`DeferredInit`: `eventCmdInfos[1].execute = Hook_MenuMode_Execute; eventCmdInfos[0xE].execute = 0x5D4A40`) | the block-type records `0x0118E2F0` [1] (`MenuMode`, the exe's `MenuModeFunction` `005c4240`) and [0xE] ("Unused2", no handler), read by `005e1550` | `Begin MenuMode N` takes JIP's modes 0 to 4 (menu mode, the Pip-Boy, a menu open, the console, the loading screens) and any menu's id, as JIP's `MenuMode` command; a block of type 0xE no longer fails its line (its handler answers true and its body is skipped). Under `NV_JIP_VANILLA_CMDS` (the same switch and handler as the `MenuMode` command), not the game-patch row. Deliberate difference: both block handlers clear the block's result first. JIP's `MenuMode` handler sets the result only when the mode is up and JIP's 0xE handler (the exe's `005d4a40`, `mov al, 1`) never sets it; in JIP the "result = 0" patch above always clears it first, but here the game-patch row can be off, where the exe leaves whatever the stack held and the block would run or not by chance. With that row on nothing differs from JIP | 3.9 GS-1 |
+| `bNoFailedScriptLocks` (`SetOptionalPatch(7)`: three `SafeWrite16` jumps) | `005e0d20` (`0x5E0FBE`, a line that fails), `005e1550` (`0x5E1A23`, a set with an expression error; `0x5E1F0B`, a condition with an expression error) | A script whose line fails (the error is still reported) keeps running on later frames; the game sets its data length to 0 there, so it never runs again until the game is restarted. On with the row and JIP's default switch | 3.9 GS-2 |
+| `bDoublePrecision` (`SetOptionalPatch(8)`: `DoOperatorHook`) | `00593db0` (`CExpression::Eval`, `0x593FBC`: its operator switch) | Script maths as JIP does it: when either side is a decimal number, both are worked in full double precision; `<`, `<=` and `==` are true when a side is not a number, `>`, `>=` and `!=` false; `&&` and `||` count -0.0 as true; dividing by zero no longer stops the script with an error: whole numbers keep the left side, and with a decimal the left side is kept whenever the divisor's top half is zero (so a very small divisor too); `%` always gives a whole number (decimals are cut first) and `x % 0` gives `x`. On with the row and JIP's default switch. Deliberate difference: where JIP's whole-number divide would stop the game (the smallest whole number divided by -1) the port wraps (the same number; remainder 0) | 3.9 GS-3 |
+| (`InitGamePatches`: "Earn Steam achievements even if the console has been used") | `005d3b20` (`AddAchievement`, `0x5D3B69`) | A script's `AddAchievement` still awards the achievement after the console was used | 3.9 GS-3 |
+| (`InitGamePatches`: "PlaySound3D") | `005c22f0` (`PlaySound3D`, `0x5C240D`) | `PlaySound3D` sounds follow the reference's own model (for the player, the third-person body even in first person). Deliberate difference: a reference with no loaded model data keeps the game's choice, where JIP would crash | 3.9 GS-3 |
+| (`InitGamePatches`: `TerminalGetLockedHook`) | `0059d010` (`GetLocked`, `0x59D0B3`: the terminal's unlocked test) | `GetLocked` on a terminal also reads the reference's terminal state: a terminal marked locked-out with the value 0x80 answers unlocked | 3.9 GS-3 |
+| (`InitGamePatches`: 24 bytes at `0x59E034`) | `0059dfe0` (`IsCurrentFurnitureObj`, `0x59E034`) | `IsCurrentFurnitureObj` on an actor with no AI process answers 0 instead of crashing the game | 3.9 GS-3 |
+| (`InitGamePatches`: `WriteRelJump(0x5D2860, GetHitIMODHook)`; JIP's own: the same as the game until JIP's hit effects are off) | `005d2860` (`TESImageSpaceModifier::GetGetHit`, replaced) | The "get hit" screen effect is turned off while JIP's hit effects are off (`ToggleImmortalMode 2` today; `ToggleHitEffects` when it is built). With JIP installed and nothing turned off, the same effect as the game's (looked up by its form id each time, the game's cache not used) | 3.9 GS-3 |
+| (`InitGamePatches`: `SafeWrite16(0x5B4DBC, 0x19EB)`) | `005b4be0` (`AddItem`, `0x5B4DBC`) | Items a script adds with `AddItem` all go through the game's item-condition step that the game gives only to weapons: with JIP's own version of that step (G50, GH1) armour and weapons, also those from leveled lists and form lists, arrive at the same 99.9% condition a plainly added weapon gets, and any other item is left at full condition | 3.9 GS-4 |
+| (`DeferredInit`: "JIP Companions Command & Control.esp") | that plugin's main script (form `0xADE` in the plugin), its compiled data at `+0x29C` | With the plugin "JIP Companions Command & Control.esp" loaded, a known bug in its main script is patched once at start-up (a number in its compiled script, 139, becomes 255), as JIP does. Deliberate difference: a form there that is not a script, has no compiled data, or has data too short to hold that number is left alone, where JIP would crash or read past the data | 3.9 GS-4 |
+
+#### GW: World, sky, sound, saves, start-up
+
+Nothing built yet.
+
+#### GL: Lights and magic effects
+
+Nothing built yet.
+
+#### GX: Havok, pad rumble, mouse
+
+Nothing built yet.
+
+### UI Organizer
+
+UI Organizer (UIO) 2.30, the NVSE plugin by jazzisparis that UI mods (HUD additions, MCM, the JIP
+companions' HUD, Stewie's tweaks menu and many more) rely on, is built in as `crates/uio`
+(`measure/uio/PLAN.md`), translated from its source (commit `426d963`, the source of the shipped
+DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1, 2 and 3 are in:
+
+- **When.** Where UIO's patch in `InterfaceManager::Initialize` (`0070a049`) runs `UIOLoad`: once,
+  right after the interface manager is made, before any menu loads.
+- **The lists.** `Data\uio\supported.txt`, then each `Data\uio\public\*.txt` in the order the folder
+  search gives them, read as UIO reads them (loose files, never the archives; a list larger than
+  UIO's 1 MiB buffer counts as unreadable here, where UIO overruns it). Lines come in pairs: `path:Menu`
+  or `path:Menu:tile` or `path:@file:tile` or `path:@prefabs\file` (end of file), then a condition
+  line; `;` lines are skipped anywhere; `path` must exist as `Data\menus\prefabs\path`. Conditions are
+  UIO's: tab-separated (a public list's spaces become tabs outside file names), `true`, `darn`, `vui+`,
+  `ohud`, `#file`, `?Plugin.esp` (any line of `plugins.txt`), `!`, brackets, and `&&`/`||` read left to
+  right that skip the rest of the line (or bracket) once decided, as UIO's do.
+- **The patch.** Each target file's text (as the game reads it, from archives too) gets
+  `<include src="path"/>` before the closing tag of its tile, in UIO's order, with UIO's quirks
+  (a self-closing named tag opens a tile; text after the last tag is dropped; an `<include>` already
+  listed for that tile, or of an `includes_` file, is removed). Nothing is written to the game's
+  folder: the patched texts stay in memory, as UIO 2.30 keeps them.
+- **The reader.** `Tile::ReadFile` (`00a01b87`) reads every menu file through UIO's reader: a patched
+  file's text (a patched prefab at every read, a patched menu too, except the seven menus whose parse
+  UIO does not keep, which a later read takes from the file again, as with UIO), its `<include>` tags
+  replaced by UIO's own rules (the tag ends at the first `>` 20 bytes in, a path under 5 bytes is
+  dropped, a missing prefab inserts nothing). A file the game cannot find goes to the game's own read
+  (UIO passes no storage on there, and the game then fails).
+- **Its XML reader.** The text is parsed by UIO's own reader in place of the game's
+  (`ResolveXMLFileHook`): game setting values (`&-sName;`, `&-fName;`, `&-iName;`), trait constants
+  (`&name;`) and a mod's own `_name` traits (registered as they are met), each item typed as UIO
+  types it. Its parse cache keeps a menu's parse for every later read (all but globals, the six menus
+  the game keeps open and `jip_temp.xml`), and sets `ReadFile`'s keep byte so the game neither
+  deletes that parse nor lets the menu delete its templates.
+- **JIP's `InjectUIComponent`.** UIO's export `UIOInjectComponent`: menu XML given as text is cleaned
+  by the game, its includes expanded, and read into the tile under the name `jip_temp.xml`, from
+  memory. Without UIO, JIP writes `jip_temp.xml` into the game's folder and reads it; nv-rs never
+  writes there, so with the row off `InjectUIComponent` does nothing.
+- **Where it differs from UIO on purpose.** Include loops end at 64 levels, an expansion at 64 MiB
+  (after which that read fetches no further include) and at 10,000 files read for one read's
+  includes (UIO runs out of stack or memory, or reads on without end); a path longer than UIO's
+  128-byte buffers hold (a list's path, an `@` target or `#file`, an include's `src`: over 127
+  bytes with the folder in front) names no file, where UIO overruns the buffer, and nothing longer
+  than Windows' `MAX_PATH` is handed to the game; bracket nesting is not limited to UIO's 16 levels
+  (UIO overruns its array); expanded texts are kept up to 64 MiB in all, the rest expanded again at
+  each read (the same text); its reader's items are 0x18 bytes (UIO makes 0x14 and the game's own
+  reader writes past them), a text over 65,535 bytes is copied whole, a file gives at most 1,048,576
+  items and a failed allocation ends its parse; UIO's log files and its developer settings
+  (`Data\uio\settings.ini`: `bDebugMode`, `sDoNotCache`) are left out.
+- **Its tile operators** (part 3). `UIOLoad` registers `ge`, `ne`, `le` (other names for `gte`, `neq`,
+  `lte`) and 17 new operators, `neg`, `recipr`, `land`, `lor`, `shl`, `shr`, `bt`, `sqrt`, `pow`, `sin`,
+  `cos`, `tan`, `asin`, `acos`, `atan` (degrees), `log`, `rand` (from the game's random generator). Its
+  jump table in `Tile::Value::CalculateValue` (`00a0968c`) then runs every operation, the game's 23 in
+  UIO's own single-precision code (as with UIO: an unordered comparison answers 1 for `eq`, `lt`, `lte`;
+  `floor`/`ceil` go through a 32-bit integer; `round` adds 0.01 before rounding; `or` with a text looks
+  at the value only). The new operators reach a menu with part 2's parser (the game's own refuses them).
+- **Text zoom** (part 3). A text tile's `<zoom>` scales its text (`TileText::MakeNode`, `00a221f8`): laid
+  out at its wrap width and limit divided by zoom/100, the text drawn at zoom/100, its size multiplied
+  back. As in UIO, only a text whose wrap width is under 2,048 pixels is laid out narrower: a wider
+  one (or one without a wrap width on a screen 2,048 or more wide, where the screen's width is used)
+  keeps its full width and line breaks, is drawn at zoom/100 all the same, and its size is still
+  multiplied back. A zoom change rebuilds the text (`Tile::FinalPostParse`, `00a03923`). The HUD's five hardcore
+  texts no longer set a zoom (`HUDMainMenu::Create`, `0076f688` and four more), so they keep their size.
+- **Where part 3 differs from UIO on purpose.** `mod` of -2147483648 by -1 gives 0 (UIO's division
+  faults there and the game stops).
+- **Installed.** Switched on, xNVSE lists it as "UI Organizer Plugin", version 230, as `IsPluginInstalled`
+  and `GetPluginVersion` see the DLL; built-ins ask `uio::on` where JIP and Stewie's tweaks ask for its
+  DLL.
+
 ## Credits
 
 Written with the fix plugins' knowledge, by their authors' permission (2026-11-03); no code is
@@ -982,8 +1418,9 @@ or 1, like every row): the thread with the value packet's POISON check, for test
   both halves are posted to the `nv-draw` helper (`engine::real_threads::post_draw`). Main goes on with the rest of
   the frame and joins the job at the next `Main::OnIdle` (`0086e650`), before the controls are read; the device then
   replays the drawing side's commands at the cut, in the serial order.
-- **Early joins**, at the entries of: `008746d0`, `00874920`, `00b63a90`, `00875e40`, `006426a0` (the world
-  accumulator's later users); a save (`008503b0`) and a load (`00847df0`); `MemoryLevelManager::FreeReleasedObjects`
+- **Early joins**, at the entries of: `008746d0`, `00874920`, `00b63a90`, `00875e40`, `006426a0`, `00875110` (the
+  world accumulator's later users; `00875110`'s screens and overlay accumulate into it, and indoors with no sky, no
+  water and no refraction step no earlier join comes before them); a save (`008503b0`) and a load (`00847df0`); `MemoryLevelManager::FreeReleasedObjects`
   (`00878250`: `PurgeCellBuffers` from a script or the console, fast travel, cell clearing), `00453dc0`,
   `PositionPlayer` (`0093c200`), `FastTravel` (`0093cdf0`), `ClearCellsIfTargetNotLoaded` (`0093d500`), and the light
   processing (`00b5fd60`, `00b5d300`) that rebuilds a light's object lists; a second draw sequence (the dispatcher
@@ -1006,6 +1443,8 @@ or 1, like every row): the thread with the value packet's POISON check, for test
 - **What it could gain as built: little.** The same draw sequence uses the world accumulator after the world draw
   (the sun's occlusion query `006426a0` in every exterior with a sky, the scope pass, shadows, the water redraw) and
   resets it at its end, so the join is never later than the end of the draw sequence and, outdoors, falls inside the
-  world pass: about nothing outdoors, up to the end of the draw sequence indoors. Every 600 posts the log prints the
-  posts, the joins by join point and the joins inside the same world pass. The corrected plan (the rest of the draw
+  world pass: about nothing outdoors, up to `00875110`'s entry indoors. Every 600 posts the log prints the posts,
+  the joins by join point and the joins inside the same world pass, then a line with main's waits at each join
+  point, the jobs' own run times and the packet's close at the joins (count, total and longest, in ms; a job counts
+  only when it drew to its end). The corrected plan (the rest of the draw
   sequence on the drawing side) is `measure/draw-thread/PLAN-B.md`.

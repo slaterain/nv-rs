@@ -9,3 +9,9 @@ description = "FalloutNV.exe translated function by function: the Bethesda engin
 [dependencies]
 engine-core = { path = "../engine-core" }
 engine-gamebryo = { path = "../engine-gamebryo" }
+
+[dev-dependencies]
+# UI Organizer's XML reader, compared with the game's in tile_uio_diff_tests.rs.
+uio = { path = "../uio" }
+# `Engine::on_site_for_test` for the JIP game patch seams' tests (step 3.9).
+engine-core = { path = "../engine-core", features = ["test-support"] }

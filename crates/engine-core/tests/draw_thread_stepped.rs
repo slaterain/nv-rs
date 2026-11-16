@@ -6,6 +6,7 @@
 
 use engine_core::draw_thread::{self, testing, Counts, Hooks, Packet};
 use engine_core::real_threads::{self, on_draw_helper};
+use engine_core::stage_time;
 use engine_core::{Engine, Ret};
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
@@ -19,6 +20,8 @@ const VALUE: u32 = 0x0300_0000;
 const STOP: u32 = 0x0300_0004;
 /// Set: the first half calls a join point (one reached from the drawing side).
 const JOIN_INSIDE: u32 = 0x0300_0008;
+/// Set: the first half takes this many milliseconds (the job's own time).
+const SLOW_MS: u32 = 0x0300_000c;
 
 /// What the halves did: (half, on the drawing helper, the value it read).
 static DRAWN: Mutex<Vec<(u32, bool, u32)>> = Mutex::new(Vec::new());
@@ -44,6 +47,10 @@ fn first(e: &mut Engine, _: &[u32]) -> Ret {
     if e.mem.u32(JOIN_INSIDE) != 0 {
         draw_thread::finish(e);
         draw_thread::idle(e);
+    }
+    let slow = e.mem.u32(SLOW_MS);
+    if slow != 0 {
+        std::thread::sleep(std::time::Duration::from_millis(u64::from(slow)));
     }
     let v = read_value(e);
     DRAWN.lock().unwrap().push((1, on_draw_helper(), v));
@@ -224,13 +231,24 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     assert!(take_drawn().is_empty());
     assert_eq!(draw_thread::counts(&e).on_main, 1);
 
-    // The job's stop comes back at the join point, and the next frame draws again.
+    // The job's stop comes back at the join point (and counts no job time), and the next frame draws again.
+    let jobs_before_stop = draw_thread::job_times(&e);
+    stage_time::set_on(true);
+    let _ = stage_time::take();
     e.mem.set_u32(STOP, 1);
     draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
     draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
     let stopped =
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw_thread::idle(&mut e)));
     assert!(stopped.is_err(), "the job's stop comes back");
+    assert_eq!(
+        draw_thread::job_times(&e),
+        jobs_before_stop,
+        "a stopped job counts no run time"
+    );
+    let job_column = stage_time::NAMES.iter().position(|n| *n == "job").unwrap();
+    assert_eq!(stage_time::take()[job_column].1, 0, "nor a job column");
+    stage_time::set_on(false);
     assert!(!draw_thread::posted(&e) && !real_threads::draw_posted());
     e.call_stack.clear();
     e.mem.set_u32(STOP, 0);
@@ -245,6 +263,7 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     // after it finds nothing to wait for.
     take_joined();
     draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+    let jobs_before_drop = draw_thread::job_times(&e);
     draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
     assert_eq!(
         real_threads::finish_draw_at_exit(std::time::Duration::from_secs(2)),
@@ -252,6 +271,11 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     );
     draw_thread::idle(&mut e);
     assert!(take_drawn().is_empty(), "dropped unrun");
+    assert_eq!(
+        draw_thread::job_times(&e),
+        jobs_before_drop,
+        "a job never run counts no run time"
+    );
     assert!(take_joined().is_empty());
     assert!(!draw_thread::posted(&e));
 
@@ -275,6 +299,87 @@ fn the_world_draw_runs_after_the_tail_from_the_packet_cut_before_it() {
     let by = draw_thread::joins_by_point(&e);
     assert!(by.contains(&(0x0064_26a0, 1)), "{by:x?}");
     assert!(by.iter().any(|&(a, _)| a == draw_thread::ON_IDLE));
+    take_drawn();
+    take_joined();
+
+    // Main's wait at each join point and the job's own time: two first halves of 20 ms and 5 ms, each joined at
+    // 00875110's entry (stepped, the job runs inside the join, so each wait holds its whole job); `NV_STAGE_TIME`'s
+    // columns get the same.
+    stage_time::set_on(true);
+    let _ = stage_time::take();
+    let jobs_before = draw_thread::job_times(&e);
+    let closes_before = draw_thread::close_times(&e);
+    for ms in [20u32, 5] {
+        e.mem.set_u32(SLOW_MS, ms);
+        draw_thread::first_half(&mut e, 0x6000, 0x8800, 1, 0);
+        draw_thread::second_half(&mut e, 0x6000, 0x8800, 1);
+        draw_thread::world_pass_end(&mut e);
+        draw_thread::finish_at(&mut e, 0x0087_5110);
+    }
+    e.mem.set_u32(SLOW_MS, 0);
+    let waits = draw_thread::join_waits(&e);
+    let at = waits
+        .iter()
+        .find(|j| j.at == 0x0087_5110)
+        .expect("its join counted");
+    assert_eq!(at.waits.count, 2);
+    assert!(at.waits.total_ns >= 25_000_000, "{at:?}");
+    assert!(at.waits.max_ns >= 20_000_000, "{at:?}");
+    assert!(
+        at.waits.max_ns < at.waits.total_ns,
+        "the longest is one of two: {at:?}"
+    );
+    let jobs = draw_thread::job_times(&e);
+    assert_eq!(jobs.count, jobs_before.count + 2);
+    let job_ns = jobs.total_ns - jobs_before.total_ns;
+    assert!(job_ns >= 25_000_000);
+    assert!(job_ns <= at.waits.total_ns, "the jobs inside the waits");
+    // The longest job so far: one of these two (then shorter than their sum) or an earlier one already the longest
+    // (the earlier jobs do not sleep, but a loaded machine may stall one, so no bound on them).
+    assert!(jobs.max_ns >= 20_000_000);
+    assert!(
+        jobs.max_ns < job_ns || jobs.max_ns == jobs_before.max_ns,
+        "{jobs:?}"
+    );
+    let closes = draw_thread::close_times(&e);
+    assert_eq!(closes.count, closes_before.count + 2);
+    let v = stage_time::take();
+    stage_time::set_on(false);
+    let col = |name: &str| v[stage_time::NAMES.iter().position(|n| *n == name).unwrap()];
+    assert_eq!(col("join_00875110").1, 2);
+    assert!(col("join_00875110").0 >= 25_000.0);
+    assert_eq!(col("join_wait").1, 2);
+    assert_eq!(col("job").1, 2);
+    assert!(col("job").0 >= 25_000.0);
+    assert_eq!(
+        col("world_draw_00b6ba20").1,
+        2,
+        "the half timed on the helper"
+    );
+    assert_eq!(col("world_draw_00b6b930").1, 2);
+    // The log line: count / total ms / longest ms, three decimals, for the join point, the jobs and the closes.
+    let ms = |t: &draw_thread::Times| {
+        format!(
+            "{}/{:.3}/{:.3}",
+            t.count,
+            t.total_ns as f64 / 1e6,
+            t.max_ns as f64 / 1e6
+        )
+    };
+    let line = draw_thread::times_line(&waits, jobs, closes);
+    assert!(
+        line.contains(&format!("00875110 {}", ms(&at.waits))),
+        "{line}"
+    );
+    assert!(line.contains(&format!("; job {};", ms(&jobs))), "{line}");
+    assert!(
+        line.ends_with(&format!("; close {}", ms(&closes))),
+        "{line}"
+    );
+    assert!(
+        line.starts_with("waits (count/total ms/longest ms) "),
+        "{line}"
+    );
     take_drawn();
     take_joined();
 

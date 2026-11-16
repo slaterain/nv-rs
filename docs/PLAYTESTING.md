@@ -167,8 +167,11 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_STRIP_LOD_WATER` | No distant water under the Strip (patch data) | `host/patch_data.rs` |
 | `NV_DIRECT_FILES` | Direct file access | `host/direct_files.rs` |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
+| `NV_JIP_INSTALLED` | JIP LN NVSE built in, for testing (off in every preset; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=1`; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
+| `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |
+| `NV_UIO` | UI Organizer built in (off in every preset) | `host/fixes.rs` (flag read by `uio`) |
 | `NV_NVSE_ERROR_GUARD` | Script error loop guard | `host/fixes.rs` |
 | `NV_NVSE_IMOD_CHECK` | Image-space event form check | `host/fixes.rs` |
 | `NV_NVSE_INVREF_CHECK` | Script reference checks | `host/fixes.rs` |
@@ -190,6 +193,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 | `NV_D3DX_CACHE=DIR` | The D3DX texture cache (used only with `NV_TEXTURES=dll`, or for files `crates/d3dx-tex` does not translate) | `%LOCALAPPDATA%\nv-rs\d3dx-cache` |
 | `NV_WGPU_CACHE=DIR` | Where wgpu keeps the graphics driver's compiled pipelines between runs (Vulkan; wgpu keeps none for Direct3D 12): a start whose driver has nothing cached for the program makes them from this file instead of compiling them again. It also keeps the list of the pipelines this machine's runs made (`pipelines.txt`, on every backend), which the next start makes before play behind the loading screen, with the list shipped in the exe. A missing, damaged or foreign file is ignored with one log line and made anew. Play.exe sets `userdata\machine\wgpu-cache`; `d3d9-replay` reads it too | nothing kept |
 | `NV_SAVE_OUT=DIR` | The saves the game writes, copied out to DIR at the end of the frame that wrote them (written by a thread of their own; a clean end waits for them), and the ones it deletes removed there (`crates/host/src/save_out.rs`) | saves stay in memory |
+| `NV_MOD_FILES_OUT=DIR` | Mods' own files (MCM's `Data\Config\<mod>.ini`; later JIP LN's INI and file commands) kept in DIR between sessions, under the name the mod gives (`DIR\Data\Config\MCM.ini`); reads look there first, then in the game's Data. Unset, `nv-rs mod files` beside `NV_SAVE_OUT`'s folder (the launcher: `userdata\<game or mods>\Documents\My Games\FalloutNV\nv-rs mod files`). Refused inside Documents, AppData or the game's folder (`crates/host/src/mod_files.rs`, `engine-platform` mod_files.rs) | with neither variable, mods' settings last for the session only (one start-up line says so). The game's own INI reads do not look in this folder; only the extenders' commands do (docs/FIXES.md, "Mods' own files and the game's INI start-up") |
 | `NV_PREFS_OUT=FILE` | The `FalloutPrefs.ini` the game writes, copied out to FILE | stays in memory |
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) | no F12 report |
 | `NV_SETTINGS=FILE` | The settings file | `settings.ini` beside the program or in the folder above it |
@@ -234,6 +238,7 @@ None of these is for players.
 | **Frames, sound and logs** | | |
 | `NV_SHOT=DIR[,every_ms]`*, `NV_SHOT_FRAMES=FROM-TO`, `NV_SHOT_LIST`, `NV_SHOT_WGPU=DIR` | Screenshots of the game's frames to DIR; only those presents; a list of presents; the wgpu backend's own folder (on wgpu alone in a window, the frame the window got is captured too, as `wgpu-window-*.bmp`) | off |
 | `NV_FRAME_LOG=FILE`* | One line per main frame (clock, step, player position), with no per-call cost | off |
+| `NV_STAGE_TIME=1`* | With `NV_FRAME_LOG`: each line also gives the frame's stages on main, the drawing steps after the world pass, the world draw's halves, and the drawing thread's job and waits by join (`crates/engine-core/src/stage_time.rs`) | off |
 | `NV_LOCK_STATS=FILE`*, `NV_REAL_DUMP`* | Real threads: a line per main frame on the game clock and the waits; a dump of thread-local-storage misuse | off |
 | `NV_PHYS_BLEND_LOG=FILE`* | What the smooth physics drawing did each frame | off |
 | `NV_SOUND_RECORD=FILE.wav`* | What goes to the sound device, recorded, with a log (the device's underruns named in it too) | off |
@@ -279,8 +284,8 @@ GitHub Releases; the packages there from before 2026-11-03 are of the removed vi
   playing, `game` and `mods`), the tables (`machine`), `logs` and `reports`; an older preview's
   `settings.ini` is moved into the two profiles' files once (`settings.ini.migrated`). The table's
   `SHGetFolderPathA` answers point at them. The game's own writes stay in memory as ever
-  (`engine-platform` files.rs); only `NV_SAVE_OUT`, `NV_PREFS_OUT` and (with `NV_D3D9=wgpu`)
-  `NV_WGPU_CACHE` reach the disk, inside `userdata`.
+  (`engine-platform` files.rs); only `NV_SAVE_OUT`, `NV_PREFS_OUT`, mods' own files (`nv-rs mod files` beside the saves) and (with
+  `NV_D3D9=wgpu`) `NV_WGPU_CACHE` reach the disk, inside `userdata`.
 - **The tables:** the adapter table is made again at every start (about 1.3 s here), so a new graphics
   card, driver, monitor, time zone or Windows language can't leave it stale. If its tools fail, the
   last good table is used. The sound table (about 19 s here) is made again when Windows' build or the

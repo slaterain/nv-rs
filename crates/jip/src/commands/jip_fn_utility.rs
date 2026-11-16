@@ -1,15 +1,18 @@
 //! `functions_jip/jip_fn_utility.h` (JIP LN NVSE): form ids to text and back, the smallest and
 //! largest of up to five numbers, the load order checks, clearing a mod's JIP data, a plugin's
 //! header version, an array element as a number, a random integer, and whether the game has the
-//! large address space. 11 of its 19 commands.
+//! large address space, and (lane C1) the seconds since the game started. 12 of its 19 commands.
 //!
 //! Left for later, each for its reason: `ReadArrayFromFile`, `WriteArrayToFile`,
 //! `ReadStringFromFile`, `WriteStringToFile` and `ModLogPrint` read or write the player's files
 //! (the platform keeps every file the game writes in memory, so a file a mod writes would not be
 //! there next session; built together with JIP's INI commands once there is a file seam that
-//! keeps them); `GetOptionalPatch`/`SetOptionalPatch` read and switch JIP's patches (the core
-//! track's hooks); `GetSessionTime` needs `s_initialTickCount`, which JIP takes
-//! in its deferred start (not built yet).
+//! keeps them); `SetOptionalPatch` switches JIP's patches (the switch rows of step 3.9);
+//! `GetOptionalPatch` answers whether each switch's hook or patch is in (`HOOK_INSTALLED`,
+//! `s_patchInstallState`): the port's switch word (`Engine::jip_patches`) says what the player's
+//! ini asks for, and of the switch rows only O6 and O7 are on main (survey of 2026-11-15), so it
+//! would answer 1 for patches the port does not have (`bIgnoreDTDRFix` is on by default);
+//! it waits for those rows, or for a per-switch "in" state that each row sets.
 
 use super::jip_fn_aux_variable::overriding_mod;
 use super::{ref_id, Handlers};
@@ -36,6 +39,7 @@ pub static COMMANDS: Handlers = &[
     (0x28c8, get_array_value),
     (0x28de, get_random_in_range),
     (0x2892, get_is_laa),
+    (0x272e, get_session_time),
 ];
 
 /// `g_dataHandler` (`*011C3F2C`): its loaded file count (`modList.loadedModCount`, +0x218) and
@@ -74,6 +78,21 @@ pub struct StrRefs(pub HashMap<u32, u32>);
 /// `NUM_ARGS` (JIP LN NVSE): the argument count byte at the start of the arguments.
 pub(crate) fn num_args(e: &Engine, a: &CommandArgs) -> u8 {
     e.mem.u8(a.data.wrapping_add(e.mem.u32(a.opcode_offset)))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.h: NUM_ARGS_EX.
+/// [`num_args`], or 0 when the low byte of the line's argument data length (the word before the
+/// count) is 0: a statement compiled with no argument data has length 0 and no count (xNVSE's
+/// own analyser skips such lines, `ScriptAnalyzer.cpp` `if (context.length)`), and the byte
+/// there is the next line's. JIP uses it in `GetReticlePos`, `GetReticleRange`,
+/// `MoveToEditorPosition`, `GetItemRefCurrentHealth` and `ReloadEquippedModels`.
+pub(crate) fn num_args_ex(e: &Engine, a: &CommandArgs) -> u8 {
+    let offset = e.mem.u32(a.opcode_offset);
+    if e.mem.u8(a.data.wrapping_add(offset).wrapping_sub(2)) == 0 {
+        0
+    } else {
+        num_args(e, a)
+    }
 }
 
 fn is_reference(e: &Engine, form: u32) -> bool {
@@ -373,6 +392,7 @@ fn clear_jip_saved_data(e: &mut Engine, w: &[u32]) -> Ret {
     );
     let modi = overriding_mod(e, a.script);
     let saved = &mut e.ext::<Jip>().saved;
+    let mut flags = 0;
     if scr != 0 {
         saved.script_vars.retain(|_, vars| {
             vars.retain(|_, v| u32::from(v.mod_index) != modi);
@@ -383,13 +403,22 @@ fn clear_jip_saved_data(e: &mut Engine, w: &[u32]) -> Ret {
         saved
             .linked_refs
             .retain(|_, l| u32::from(l.mod_index) != modi);
-        saved.changed |= changed::LINKED_REFS;
-    }
-    if aux != 0 && saved.aux_vars.erase(&if aux == 2 { 0xff } else { modi }) {
-        saved.changed |= changed::AUX_VARS;
+        flags |= changed::LINKED_REFS;
     }
     if maps != 0 && saved.ref_maps.erase(&if maps == 2 { 0xff } else { modi }) {
-        saved.changed |= changed::REF_MAPS;
+        flags |= changed::REF_MAPS;
+    }
+    if flags != 0 {
+        crate::cosave::mark_changed(e, flags);
+    }
+    // The saved aux variables, under their own lock (`AuxMaps`), not JIP's slot.
+    if aux != 0
+        && super::jip_fn_aux_variable::aux_maps(e, false).erase(&if aux == 2 { 0xff } else { modi })
+    {
+        super::jip_fn_aux_variable::mark_changed(e, changed::AUX_VARS);
+    }
+    if aux != 0 {
+        super::jip_fn_aux_variable::publish_saved(e);
     }
     handled(true)
 }
@@ -472,6 +501,43 @@ fn get_is_laa(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, IS_LAA);
     crate::console::print_result(e, &a);
+    handled(true)
+}
+
+// ---- the session time (lane C1) ----
+
+/// The game's millisecond clock (`00457FE0`, `cdecl`, no words: it calls the import at
+/// `00FDF060` and returns its answer).
+const TICK_COUNT: u32 = 0x0045_7fe0;
+
+/// JIP's `s_initialTickCount`: the clock at `DeferredInit` (0 before it, as JIP's static). Kept on
+/// the main thread's engine: the start-up message and the command both run there.
+#[derive(Default)]
+pub(crate) struct SessionStart {
+    ticks: u32,
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit
+// (`s_initialTickCount = CdeclCall<UInt32>(0x457FE0)`).
+/// The clock taken once the game has started (xNVSE's deferred start message).
+pub(crate) fn deferred_init(e: &mut Engine) {
+    // Always there in the game; a test engine without the exe's translations has no clock.
+    if !e.is_registered(TICK_COUNT) {
+        return;
+    }
+    let ticks = e.call(TICK_COUNT, &args![]).u32();
+    e.ext::<SessionStart>().ticks = ticks;
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_utility.h:
+// Cmd_GetSessionTime_Execute.
+/// The seconds since the start: the clock less the start (wrapping), read as a signed 32-bit
+/// count of milliseconds, times 0.001.
+fn get_session_time(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let now = e.call(TICK_COUNT, &args![]).u32();
+    let start = e.ext::<SessionStart>().ticks;
+    a.set_result(e, f64::from(now.wrapping_sub(start) as i32) * 0.001);
     handled(true)
 }
 

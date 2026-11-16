@@ -468,6 +468,18 @@ pub(crate) const REFERENCE_BASE_FORM: u32 = 0x007a_f430;
 /// (`00567490(reference, float)`) and the health setter (`00568bd0(reference,
 /// float)`).
 pub(crate) const REFERENCE_PERSISTS: u32 = 0x0056_53d0;
+
+/// `TESObjectREFR::GetRefPersists` of `reference`, called at `site`. JIP LN NVSE's fix for temporary
+/// forms (step 3.9 GH1, G61: `WriteRelCall(site, IsPersistentHook)`) answers false for one while
+/// its row is on. One load while off.
+fn ref_persists(e: &mut Engine, site: u32, reference: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(persists) = e.site(site, &[reference]) {
+            return persists != 0;
+        }
+    }
+    e.call(REFERENCE_PERSISTS, &args![reference]).bool()
+}
 pub(crate) const REFERENCE_SCALE: u32 = 0x0059_8040;
 pub(crate) const REFERENCE_SET_SCALE: u32 = 0x0056_7490;
 pub(crate) const REFR_SET_HEALTH: u32 = 0x0056_8bd0;
@@ -1516,6 +1528,13 @@ pub fn item_change_get_hot_key(e: &mut Engine, this: Ptr<ItemChange>) -> i32 {
 /// `ItemChange::GetModSlots` (Xbox PDB): the weapon mod flags of the first
 /// extra list when it has weapon mods, else 0.
 pub fn item_change_get_mod_slots(e: &mut Engine, this: Ptr<ItemChange>) -> u8 {
+    // JIP LN NVSE's mod flags fix (step 3.9 GH1, G79: `WriteRelJump(0x4BD820,
+    // GetEntryDataModFlagsHook)`). One load while off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(flags) = e.site(0x004b_d820, &[this.addr()]) {
+            return flags as u8;
+        }
+    }
     let extra = first_item(e, this);
     if extra != 0 && e.call(EXTRA_HAS_WEAPON_MODS, &args![extra]).bool() {
         return e.call(EXTRA_GET_WEAPON_MOD_FLAGS, &args![extra]).u8();
@@ -1592,6 +1611,13 @@ pub fn item_change_has_mod_effect_active_ov2(
     this: Ptr<ItemChange>,
     effect: u8,
 ) -> bool {
+    // JIP LN NVSE's mod flags fix (step 3.9 GH1, G79: `WriteRelJump(0x4BDA70,
+    // GetEntryDataHasModHook)`). One load while off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(found) = e.site(0x004b_da70, &[this.addr(), u32::from(effect)]) {
+            return found != 0;
+        }
+    }
     let extra = first_item(e, this);
     if extra == 0 {
         return false;
@@ -2563,6 +2589,13 @@ pub fn oei_fast_inventory_iterator_scalar_deleting_destructor(
     this: u32,
     flags: u32,
 ) -> u32 {
+    // JIP LN NVSE's invisible stack fix (step 3.9 GH1, G46: `SafeWrite32(0x4BF630, 0x4C2)`, `retn 4`:
+    // the iterator is JIP's own). One load while off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(answer) = e.site(0x004b_f630, &[this, flags]) {
+            return answer;
+        }
+    }
     e.call(FAST_ITERATOR_DESTRUCT, &args![this]);
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
@@ -3924,7 +3957,22 @@ pub fn fn_004c1c90(
         let base = reference_base_form(e, reference);
         let entry = inventory_changes_get_object_in_list(e, this, base, 1, 0);
         let list = reference_extra_list(e, reference);
-        e.call(EXTRA_REMOVE_COUNT, &args![list]);
+        // JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44: `WriteRelCall(0x4C21EB,
+        // SetPickedCountHook)`) replaces the call while JIP answers "installed": the seam answers
+        // the count to go on with (the reference's count extra's, which it removes). One load
+        // while JIP is not installed.
+        let picked = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            e.site(0x004c_21eb, &[list, count as u32])
+        } else {
+            None
+        };
+        let count = match picked {
+            Some(picked) => picked as i32,
+            None => {
+                e.call(EXTRA_REMOVE_COUNT, &args![list]);
+                count
+            }
+        };
         let mut created = new_extra_list(e);
         let mut special_weapon = false;
         let list = reference_extra_list(e, reference);
@@ -3936,6 +3984,11 @@ pub fn fn_004c1c90(
                 special_weapon = fn_004c0bf0(e, Ptr::new(weapon));
             }
             let list = reference_extra_list(e, reference);
+            // JIP's CopyExtraListHook (G44, `WriteRelCall(0x4C2291, ...)`) runs before the call:
+            // the seam gives the new list a count extra when the count is above 1.
+            if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                e.site(0x004c_2291, &[created, count as u32]);
+            }
             e.call(EXTRA_COPY_LIST_FOR_CONTAINER, &args![created, list, 0u32]);
             let base = reference_base_form(e, reference);
             if form_type_of(e, base) != 0x29 && (weapon == 0 || !fn_004c0bf0(e, Ptr::new(weapon))) {
@@ -3959,7 +4012,7 @@ pub fn fn_004c1c90(
                 ItemChange::iNumber,
                 number + count,
             );
-            if e.call(REFERENCE_PERSISTS, &args![reference]).bool() {
+            if ref_persists(e, 0x004c_232c, reference) {
                 e.call(EXTRA_SET_REFERENCE, &args![created, reference]);
                 if count > 1 {
                     e.call(EXTRA_SET_COUNT, &args![created, count as u16 as u32]);
@@ -4029,7 +4082,7 @@ pub fn fn_004c1c90(
             if count > 1 {
                 e.call(EXTRA_SET_COUNT, &args![created, count as u16 as u32]);
             }
-            if e.call(REFERENCE_PERSISTS, &args![reference]).bool() {
+            if ref_persists(e, 0x004c_273a, reference) {
                 e.call(EXTRA_SET_REFERENCE, &args![created, reference]);
                 ensure_extra_list(e, added);
                 let head = e.mem.u32(added);
@@ -4807,6 +4860,26 @@ pub fn inventory_changes_drop_item_into_world(
     })
 }
 
+/// `004c37d0`'s hotkey block (`0x4C3976` to `0x4C39B0`): an item dropped or given away whose list
+/// holds a hotkey and whose count is the count removed loses the hotkey. JIP LN NVSE's hotkey fix
+/// (step 3.9 GH1, G75: `WriteRelJump(0x4C3976, HotkeyFixRemoveItemHook)`) replaces the block while
+/// its row is on. One load while off.
+fn remove_item_hotkey(e: &mut Engine, drop_flag: u8, extra: u32, target: u32, count: i32) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x004c_3976, &[u32::from(drop_flag), extra, target])
+            .is_some()
+    {
+        return;
+    }
+    if (drop_flag != 0 || target != 0)
+        && extra != 0
+        && e.call(EXTRA_GET_BY_TYPE, &args![extra, 0x4au32]).u32() != 0
+        && e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16 as i32 == count
+    {
+        e.call(EXTRA_REMOVE_HOT_KEY, &args![extra]);
+    }
+}
+
 // Translated from 004c37d0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Takes `count` of `form` out of the changes of `this` (the removal that
 /// drops, transfers or just discards items); returns the reference of the
@@ -4908,13 +4981,7 @@ pub fn fn_004c37d0(
                 }
             }
         }
-        if (drop_flag != 0 || target != 0)
-            && extra != 0
-            && e.call(EXTRA_GET_BY_TYPE, &args![extra, 0x4au32]).u32() != 0
-            && e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16 as i32 == count
-        {
-            e.call(EXTRA_REMOVE_HOT_KEY, &args![extra]);
-        }
+        remove_item_hotkey(e, drop_flag, extra, target, count);
         if extra != 0 && e.call(EXTRA_ITEMS_IN_LIST, &args![extra]).u32() == 0 {
             if entry != 0 && e.mem.u32(entry) != 0 {
                 let list = e.mem.u32(entry);
@@ -7159,6 +7226,13 @@ pub fn inventory_changes_start_oei_fast_inventory_iteration(
     e: &mut Engine,
     this: Ptr<InventoryChanges>,
 ) -> u32 {
+    // JIP LN NVSE's invisible stack fix (step 3.9 GH1, G46: `WriteRelJump(0x4CA200,
+    // CreateInventoryIteratorHook)`): JIP's one iterator. One load while off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(iterator) = e.site(0x004c_a200, &[this.addr()]) {
+            return iterator;
+        }
+    }
     with_scope_guard(e, 0x19b2, |e| {
         let memory = e.call(OPERATOR_NEW, &args![0x28u32]).u32();
         let iterator = if memory == 0 {
@@ -7472,6 +7546,14 @@ pub fn inventory_changes_get_next_oei_fast_inventory_item(
                     let next = list_next(e, node);
                     e.mem.set_u32(iterator + 0x14, next);
                 }
+            }
+        }
+        // JIP LN NVSE's invisible stack fix (step 3.9 GH1, G46: `WriteRelJump(0x4CAFA3,
+        // InventoryIterGetNextHook)`): the counts handed out, then the stacks no pass gave. One
+        // load while off.
+        if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+            if let Some(item) = e.site(0x004c_afa3, &[iterator]) {
+                return item;
             }
         }
         e.mem.u32(iterator + 0xc)
@@ -11526,7 +11608,18 @@ pub fn inventory_changes_get_repair_item_group(
     }
     for_each_fast_item(e, this, |e, item| {
         let item_form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, item));
-        if e.call(REPAIR_ITEM_TEST, &args![item_form, form]).u8() != 0 {
+        // JIP LN NVSE's FO3 repair (step 3.9, O2, group GB's row: `0x4D4C11`, PopulateRepairListHook)
+        // answers the test in its place while its option is on. One load while off.
+        let jip = if e.jip_patches() & engine_core::extend::jip_patches::ENABLE_FO3_REPAIR != 0 {
+            e.site(0x004d_4c11, &[form, item])
+        } else {
+            None
+        };
+        let accepted = match jip {
+            Some(answer) => answer as u8 != 0,
+            None => e.call(REPAIR_ITEM_TEST, &args![item_form, form]).u8() != 0,
+        };
+        if accepted {
             list_call_with_item(e, LIST_ADD, list, item);
         } else {
             delete_item_change(e, item);
@@ -18519,5 +18612,366 @@ mod tests {
         assert_eq!(e.mem.u32(copied[0] + 4), 2);
         assert_eq!(items(&e, e.mem.u32(copied[0])), vec![scripted]);
         assert_eq!(e.mem.u32(scripted + X_OWNER_SET), 0xcc00);
+    }
+
+    thread_local! {
+        /// The JIP seams asked (address, words) and what the pick-up count seam answers.
+        static JIP_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static JIP_PICKED: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(Some(5)) };
+    }
+
+    fn at_picked_count(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_ASKED.with(|s| s.borrow_mut().push((0x004c_21eb, a.to_vec())));
+        JIP_PICKED.with(|v| v.get())
+    }
+
+    fn at_copy_count(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        // Asked before the copy: no copy logged yet.
+        let copies = calls(e, EXTRA_COPY_LIST_FOR_CONTAINER).len() as u32;
+        JIP_ASKED.with(|s| s.borrow_mut().push((0x004c_2291, vec![a[0], a[1], copies])));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's ExtraJIP framework (step 3.9 GH1, G44) in `004c1c90`: with the word clear
+    /// or only the fix bits neither seam is asked (the count extra removed by the exe's call,
+    /// the count as passed); with `INSTALLED` the pick-up seam is asked with the reference's
+    /// list and the count in place of the call, and its answer is the count from there on (the
+    /// entry's number); the copy seam is asked with the new list and that count right before
+    /// the list is copied. No answer at the pick-up seam: the exe's call and count.
+    #[test]
+    fn jip_extra_jip_pick_up_seams() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32| {
+            let mut e = tx();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004c_21eb), at_picked_count);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004c_2291), at_copy_count);
+            e.set_jip_patches(word);
+            let owner = object(&mut e);
+            let this = inventory(&mut e, &[], owner);
+            let base = form(&mut e, 0x18, 0, 100);
+            casts(&mut e, 0, 0, base);
+            let reference = world_reference(&mut e, base, 0x15);
+            // A list that is not plain, so it is copied.
+            set(&mut e, reference, 0x44, 1);
+            e.call(0x004c1c90, &args![this, reference, 2i32, 0u32, 0u32]);
+            let changes = inventory_list(&e, this);
+            let number = e.get(Ptr::<ItemChange>::new(changes[0]), ItemChange::iNumber);
+            let removes = calls(&e, EXTRA_REMOVE_COUNT);
+            let copies = calls(&e, EXTRA_COPY_LIST_FOR_CONTAINER);
+            (
+                reference,
+                number,
+                removes,
+                copies,
+                JIP_ASKED.with(|s| s.take()),
+            )
+        };
+        for word in [0, jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX] {
+            let (reference, number, removes, copies, asked) = run(word);
+            assert_eq!(number, 2);
+            assert_eq!(removes, vec![vec![reference + 0x40]]);
+            assert_eq!(copies.len(), 1);
+            assert!(asked.is_empty(), "{word:x}");
+        }
+        let (reference, number, removes, copies, asked) = run(jip_patches::INSTALLED);
+        assert_eq!(number, 5);
+        assert!(removes.is_empty());
+        assert_eq!(
+            asked,
+            vec![
+                (0x004c_21eb, vec![reference + 0x40, 2]),
+                (0x004c_2291, vec![copies[0][0], 5, 0]),
+            ]
+        );
+        JIP_PICKED.with(|v| v.set(None));
+        let (reference, number, removes, copies, asked) = run(jip_patches::INSTALLED);
+        JIP_PICKED.with(|v| v.set(Some(5)));
+        assert_eq!(number, 2);
+        assert_eq!(removes, vec![vec![reference + 0x40]]);
+        assert_eq!(asked[1], (0x004c_2291, vec![copies[0][0], 2, 0]));
+    }
+
+    thread_local! {
+        /// The GH1 fix seams asked (address, words) and what their handlers answer.
+        static GH1_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static GH1_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn gh1_asked(addr: u32, a: &[u32]) -> Option<u32> {
+        GH1_ASKED.with(|s| s.borrow_mut().push((addr, a.to_vec())));
+        GH1_ANSWER.with(|v| v.get())
+    }
+    fn at_4bd820(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004b_d820, a)
+    }
+    fn at_4bda70(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004b_da70, a)
+    }
+    fn at_4bf630(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004b_f630, a)
+    }
+    fn at_4c232c(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004c_232c, a)
+    }
+    fn at_4c273a(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004c_273a, a)
+    }
+    fn at_4c3976(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004c_3976, a)
+    }
+    fn at_4ca200(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004c_a200, a)
+    }
+    fn at_4cafa3(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004c_afa3, a)
+    }
+    fn at_4d4c11(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        gh1_asked(0x004d_4c11, a)
+    }
+
+    /// The words a GH1 fix seam is tested under: the word clear and JIP's own bit alone (not
+    /// asked), then the fix row's bit (asked).
+    const GH1_OFF: [u32; 2] = [0, engine_core::extend::jip_patches::INSTALLED];
+    const GH1_ON: u32 =
+        engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES;
+
+    fn gh1_take() -> Vec<(u32, Vec<u32>)> {
+        GH1_ASKED.with(|s| s.take())
+    }
+
+    /// JIP LN NVSE's mod flags fix (step 3.9 GH1, G79) at the heads of `GetModSlots` and
+    /// `HasModEffectActive_ov2`: off, not asked (a stack with no extra lists: 0, false); with the
+    /// fix row asked with the stack (and the effect) and its answer returned; no answer: the exe's.
+    #[test]
+    fn jip_gh1_mod_flag_seams() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = tx();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x004b_d820), at_4bd820);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x004b_da70), at_4bda70);
+        let this = e.mem.alloc(0x10);
+        let run = |e: &mut Engine| {
+            (
+                e.call(0x004b_d820, &args![this]).u32() & 0xff,
+                e.call(0x004b_da70, &args![this, 3u32]).u32() & 0xff,
+            )
+        };
+        GH1_ANSWER.with(|v| v.set(Some(7)));
+        for word in GH1_OFF {
+            e.set_jip_patches(word);
+            assert_eq!(run(&mut e), (0, 0), "{word:x}");
+            assert!(gh1_take().is_empty());
+        }
+        e.set_jip_patches(GH1_ON);
+        assert_eq!(run(&mut e), (7, 1));
+        assert_eq!(
+            gh1_take(),
+            vec![(0x004b_d820, vec![this]), (0x004b_da70, vec![this, 3])]
+        );
+        GH1_ANSWER.with(|v| v.set(None));
+        assert_eq!(run(&mut e), (0, 0));
+        assert_eq!(gh1_take().len(), 2);
+    }
+
+    /// JIP's invisible stack fix (G46) in the fast iteration: off, not asked (the exe's iterator,
+    /// stacks and destructor); with the fix row the start is asked with the changes and answers
+    /// JIP's iterator, the next stack is asked with the iterator at the end and answers, and the
+    /// destructor is asked with the iterator and its flags and runs nothing; no answers: the exe's.
+    #[test]
+    fn jip_gh1_iterator_seams() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = tx4();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004b_f630), at_4bf630);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004c_a200), at_4ca200);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004c_afa3), at_4cafa3);
+            e.set_jip_patches(word);
+            let (this, held, _) = stack_setup(&mut e);
+            e.call_log = Some(vec![]);
+            GH1_ANSWER.with(|v| v.set(None));
+            let iterator = e.call(0x004ca200, &args![this]).u32();
+            GH1_ANSWER.with(|v| v.set(answer));
+            let started = e.call(0x004ca200, &args![this]).u32();
+            let first = e.call(0x004ca330, &args![this, iterator]).u32();
+            let destroyed = e.call(0x004bf630, &args![iterator, 0u32]).u32();
+            let destructs = calls(&e, FAST_ITERATOR_DESTRUCT).len();
+            let first = if first == 0x55 {
+                first
+            } else {
+                e.mem.u32(first + 8)
+            };
+            (this, held, iterator, started, first, destroyed, destructs)
+        };
+        for word in GH1_OFF {
+            let (_, held, iterator, started, first, destroyed, destructs) = run(word, Some(0x55));
+            assert_ne!(started, 0x55);
+            assert_ne!(started, iterator, "a new exe iterator");
+            assert_eq!(first, held);
+            assert_eq!((destroyed, destructs), (iterator, 1));
+            assert!(gh1_take().is_empty(), "{word:x}");
+        }
+        let (this, _, iterator, started, first, destroyed, destructs) = run(GH1_ON, Some(0x55));
+        assert_eq!(
+            (started, first, destroyed, destructs),
+            (0x55, 0x55, 0x55, 0)
+        );
+        let asked = gh1_take();
+        assert_eq!(asked[0], (0x004c_a200, vec![this.addr()]));
+        assert_eq!(asked[1], (0x004c_a200, vec![this.addr()]));
+        assert_eq!(asked[2], (0x004c_afa3, vec![iterator]));
+        assert_eq!(asked[3], (0x004b_f630, vec![iterator, 0]));
+        let (_, held, iterator, started, first, destroyed, destructs) = run(GH1_ON, None);
+        assert_ne!(started, iterator);
+        assert_eq!(first, held);
+        assert_eq!((destroyed, destructs), (iterator, 1));
+        assert_eq!(gh1_take().len(), 4);
+    }
+
+    /// G46, the destructor as the fast iteration's callers run it (flags 1, "free it too"): with
+    /// the fix row and JIP's answer neither the destructor body nor `operator delete` runs (the
+    /// block is JIP's own and the next iteration uses it again); off, and with no answer, the
+    /// exe's destructor and free.
+    #[test]
+    fn jip_gh1_iterator_destructor_frees_nothing_of_jips() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = more();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004b_f630), at_4bf630);
+            e.set_jip_patches(word);
+            GH1_ANSWER.with(|v| v.set(answer));
+            let result = e.call(0x004bf630, &args![0x1111u32, 1u32]).u32();
+            (
+                result,
+                calls(&e, FAST_ITERATOR_DESTRUCT),
+                calls(&e, OPERATOR_DELETE),
+            )
+        };
+        let exe = (0x1111, vec![vec![0x1111]], vec![vec![0x1111]]);
+        for word in GH1_OFF {
+            assert_eq!(run(word, Some(0x55)), exe, "{word:x}");
+            assert!(gh1_take().is_empty());
+        }
+        assert_eq!(run(GH1_ON, Some(0x55)), (0x55, vec![], vec![]));
+        assert_eq!(gh1_take(), vec![(0x004b_f630, vec![0x1111, 1])]);
+        assert_eq!(run(GH1_ON, None), exe);
+        assert_eq!(gh1_take(), vec![(0x004b_f630, vec![0x1111, 1])]);
+    }
+
+    /// JIP's fix for temporary forms (G61) at `004c1c90`'s two calls of `GetRefPersists`: off,
+    /// the exe's call; with the fix row each is asked with the reference (`0x4C232C` when an
+    /// entry of the form is there, `0x4C273A` for a new entry), and an answer stands for the call.
+    #[test]
+    fn jip_gh1_persists_seams() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let run = |word: u32, with_entry: bool, answer: Option<u32>| {
+            let mut e = tx();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004c_232c), at_4c232c);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x004c_273a), at_4c273a);
+            e.set_jip_patches(word);
+            GH1_ANSWER.with(|v| v.set(answer));
+            let owner = object(&mut e);
+            let base = form(&mut e, 0x18, 0, 100);
+            let entries = if with_entry {
+                vec![entry(&mut e, base, &[], 1)]
+            } else {
+                vec![]
+            };
+            let this = inventory(&mut e, &entries, owner);
+            casts(&mut e, 0, 0, base);
+            let reference = world_reference(&mut e, base, 0x15);
+            e.call_log = Some(vec![]);
+            e.call(0x004c1c90, &args![this, reference, 2i32, 0u32, 0u32]);
+            (
+                reference,
+                calls(&e, REFERENCE_PERSISTS).len(),
+                calls(&e, EXTRA_SET_REFERENCE).len(),
+            )
+        };
+        for with_entry in [true, false] {
+            for word in GH1_OFF {
+                let (_, persists, _) = run(word, with_entry, Some(0));
+                assert_eq!(persists, 1, "{word:x}");
+                assert!(gh1_take().is_empty());
+            }
+            let site = if with_entry { 0x004c_232c } else { 0x004c_273a };
+            let (reference, persists, set) = run(GH1_ON, with_entry, Some(0));
+            assert_eq!((persists, set), (0, 0));
+            assert_eq!(gh1_take(), vec![(site, vec![reference])]);
+            let (_, persists, _) = run(GH1_ON, with_entry, None);
+            assert_eq!(persists, 1);
+            assert_eq!(gh1_take().len(), 1);
+            // An answer of true stands for the call too: the reference is set on the new list.
+            let (_, persists, set) = run(GH1_ON, with_entry, Some(1));
+            assert_eq!((persists, set), (0, 1));
+            assert_eq!(gh1_take().len(), 1);
+        }
+    }
+
+    /// JIP's hotkey fix (G75) at `004c37d0`'s hotkey block: off, the exe's block (a dropped stack
+    /// of the count removed with a hotkey loses it); with the fix row asked with the drop flag,
+    /// the list and the target, and an answer skips the block; no answer: the exe's block.
+    #[test]
+    fn jip_gh1_hotkey_seam() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = tx();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x004c_3976), at_4c3976);
+        e.register_double(EXTRA_GET_BY_TYPE, |_, _| returns(1));
+        e.register_double(EXTRA_GET_COUNT, |_, _| returns(2));
+        e.register_double(EXTRA_REMOVE_HOT_KEY, |_, _| Ret::default());
+        let list = e.mem.alloc(0x20);
+        let removes = |e: &mut Engine| {
+            e.call_log = Some(vec![]);
+            remove_item_hotkey(e, 1, list, 0, 2);
+            calls(e, EXTRA_REMOVE_HOT_KEY).len()
+        };
+        GH1_ANSWER.with(|v| v.set(Some(0)));
+        for word in GH1_OFF {
+            e.set_jip_patches(word);
+            assert_eq!(removes(&mut e), 1, "{word:x}");
+            assert!(gh1_take().is_empty());
+        }
+        e.set_jip_patches(GH1_ON);
+        assert_eq!(removes(&mut e), 0);
+        assert_eq!(gh1_take(), vec![(0x004c_3976, vec![1, list, 0])]);
+        GH1_ANSWER.with(|v| v.set(None));
+        assert_eq!(removes(&mut e), 1);
+        assert_eq!(gh1_take().len(), 1);
+    }
+
+    /// JIP's FO3 repair (O2, group GB's row and handler) at `GetRepairItemGroup`'s test: off and
+    /// with only the fix row, the exe's test (one stack kept); with its option bit the inert seam is
+    /// asked with the form and each stack, and an answer stands for the test (both kept); no answer:
+    /// the exe's test. The handler is GB's: the seam is tested with `on_site_for_test`.
+    #[test]
+    fn jip_o2_repair_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = fx();
+            e.on_site_for_test(0x004d_4c11, at_4d4c11);
+            e.set_jip_patches(word);
+            GH1_ANSWER.with(|v| v.set(answer));
+            e.register(REPAIR_ITEM_TEST, |e, a| {
+                returns((e.mem.u8(a[0] + F_TYPE) == 0x20 && a[1] == 0x99) as u32)
+            });
+            let (this, _, _) = stack_setup(&mut e);
+            let group = list(&mut e, &[]);
+            e.call_log = Some(vec![]);
+            e.call(0x004d4bd0, &args![this, 0x99u32, group]);
+            items(&e, group).len()
+        };
+        for word in [0, GH1_ON] {
+            assert_eq!(run(word, Some(1)), 1, "{word:x}");
+            assert!(gh1_take().is_empty());
+        }
+        let on = jip_patches::INSTALLED | jip_patches::ENABLE_FO3_REPAIR;
+        assert_eq!(run(on, Some(1)), 2);
+        let asked = gh1_take();
+        assert_eq!(asked.len(), 2);
+        assert!(asked
+            .iter()
+            .all(|(at, a)| *at == 0x004d_4c11 && a[0] == 0x99));
+        assert_eq!(run(on, None), 1);
+        assert_eq!(gh1_take().len(), 2);
     }
 }

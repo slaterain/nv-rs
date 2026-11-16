@@ -83,10 +83,31 @@ compiled to the same bytes as xNVSE writes them (byte tests from its source's ru
 compiled-script cache file is left out as a speed cache only. JIP LN NVSE's commands are in progress (README's
 system table has the counts; batch 10 of 2026-11-14 adds the maths, utility, load screen, terminal, cell,
 radio, reference and game data commands, batch 11 the actor base, equipped item, hotkey, base container and
-sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters); its engine hooks (step 3.5) are built in at their seams: the UI, actor
+sound commands, batch 12 the script, gamepad, input, CC&C and equipped weapon commands and the reference data getters,
+lane A1 the first half of the actor commands: processes, combat and detection lists, leveling data, creature
+models, lane D the game state commands of `jip_fn_miscellaneous`, lane H JIP's position marker with `PlaceAtCell` and
+the added script variables with their co-save record applied at a load, then JIP's own position, angle and cell moves with `MoveToCell`, `MoveToEditorPosition`, `MoveToPosStr`, `MoveToNode` and `SetPosEx`, then the turns (`SetAngleEx`, `RotateAroundPoint`), `MoveToReticle` and `SetLinkedReference` with the linked references' co-save record applied, lane B the LN miscellaneous commands and the
+first inventory commands with the inventory references, item health, armour DT and DR and the items added, equipped, unequipped and dropped, and an inventory reference's mod flags, health and hotkey set, lane G the references' physics getters and setters, ray casts, hit material and crosshair pick, lane F the model blocks read, then written (transforms, flags, materials, texture transform keys, names, removal, animation sequences), lane C1 the actors' character controllers, ground material, last hit node, VATS targetability, ash piles, backing away, pushes, dismembering, map markers on references, a sound at a node and the session time, package C2 the reticle and point ray casts, gravity, angles, the camera movement, the game hour, descriptions, ash piles, dead actors, HUD messages, system colours, the Pip-Boy light and text sizes, then sneaking and JIP's argument count for lines without argument data, then lane C1 JIP's own extra data on references and inventory stacks); its engine hooks (step 3.5) are built in at
+their seams: the UI, actor
 and AI hooks, and since 2026-11-14 the world hooks (step 3.5c) and `CCCSetEquipped` with its always-on `GetCannotWear`
 patch (step 3.5d), switched on only by its commands and only once JIP answers "installed" (left for later:
 `ToggleImmortalMode` with its hit patches in step 3.9).
+JIP's game patches (step 3.9, its changes to the game's own code) are fix rows behind one switch,
+`NV_JIP_GAME_PATCHES` (on in the fixes preset), read from the player's `jip_nvse.ini` as JIP reads it
+(`crates/jip/src/game_patches`; per-area seam tables in `engine-core/src/extend/patch_rows`, so several
+can be built at once); the first (3.9a) remembers each dialogue line's topic as JIP does and starts
+every command's result at 0. Like the rest of JIP, they act only once JIP answers "installed", which the row
+`NV_JIP_INSTALLED` (`bJIPInstalled`, off in every preset; step 3.10's first half) switches on to test mods that need JIP.
+Before JIP is switched on, every call from `crates/jip` into the game's functions was checked for its
+argument word count (2026-11-15: 188 calls, one wrong and fixed); `crates/engine/tests/jip_call_arity.rs`
+now checks each call to a constant address against the translation it reaches.
+
+UI Organizer (UIO 2.30, which UI mods and then Stewie's tweaks need; maintainer, 2026-11-14) is being built
+in as `crates/uio` (docs/FIXES.md, "UI Organizer"): part 1 (its lists and conditions, the menus patched in
+memory, its reader at `Tile::ReadFile`), part 2 (its XML parser and parse cache, `UIOInjectComponent`
+for JIP's `InjectUIComponent`) and part 3 (its tile operators, the text zoom, the HUD's hardcore texts;
+audit `measure/uio/AUDIT-uio3-unchanged.md`) are a row, off in every preset until proven in the game
+with a UI mod.
 
 An interim Windows preview (maintainer, 2026-11-06) can be built with `scripts/package-playtest.ps1`:
 a ZIP a player can run with no build, labelled a preview, wgpu remaining the big release. It has only

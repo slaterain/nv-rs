@@ -135,6 +135,9 @@ fn setup() -> Engine {
         })
     });
     e.register(REFRESH_PATH_FN, |_, w| {
+        // As its translation (`PlayerCharacter::BuildPathToTarget`, `thiscall`, `RET 0xC`): `this`
+        // and three words.
+        assert_eq!(w.len(), 4, "BuildPathToTarget takes this and three words");
         record(REFRESH_PATH_FN, w);
         eax(0)
     });
@@ -360,7 +363,10 @@ fn the_teleport_links() {
     // Another quest's objective: the path worked out first, for each live target.
     e.mem.set_u32(PC + 0x6b8, QUEST2);
     call(&mut e, 0x2870, &[r(1), n(10)]);
-    assert_eq!(calls_to(REFRESH_PATH_FN), vec![vec![REF1, T1 + 0x10, 1]]);
+    assert_eq!(
+        calls_to(REFRESH_PATH_FN),
+        vec![vec![PC, REF1, T1 + 0x10, 1]]
+    );
     // No live target: an empty array all the same.
     e.mem.set_u32(T1 + 0xc, 0);
     let (_, res) = call(&mut e, 0x2870, &[r(1), n(10)]);
@@ -382,7 +388,7 @@ fn setting_the_nth_target() {
     assert_eq!(snap(&e), want, "T2's reference alone");
     assert_eq!(
         calls_to(REFRESH_PATH_FN),
-        vec![vec![REF3, T2 + 0x10, 1]],
+        vec![vec![PC, REF3, T2 + 0x10, 1]],
         "active"
     );
     CALLS.with(|c| c.borrow_mut().clear());

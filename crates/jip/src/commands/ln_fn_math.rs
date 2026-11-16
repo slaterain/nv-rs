@@ -112,26 +112,40 @@ pub fn cos(angle: f32) -> f32 {
     cos_poly(x, sign)
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: Cos_V3 (asm), one lane.
-/// `Cos_V3` in one lane (its lanes do not mix: a reduction other lanes start subtracts 0 here):
-/// as [`cos`] without its early answer of 1, so an angle of 0 gives the polynomial's
-/// `0x3F7FFFFF` and NaN stays NaN; the quadrant past 3 masked by 3 and the turns taken off; a
-/// quadrant of 1 or 2 less pi with the sign flipped, 3 less 2pi, any other (0, the indefinite)
-/// nothing.
-pub fn cos_lane(angle: f32) -> f32 {
-    let mut x = angle.abs();
-    let mut q = super::cvttss2si(x * FLT_2_D_PI);
-    if q > 3 {
-        let turns = (q as u32) >> 2;
-        q &= 3;
-        x -= (turns as i32) as f32 * FLT_PI_X2;
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: Cos_V3 (asm).
+/// `Cos_V3` on its three lanes (the fourth: `kPS2dPI`'s lane 3 is 0, so its quadrant is never
+/// above 3 and nothing reads its answer). Each absolute angle's quadrant `q` (`cvttps2dq` of the
+/// angle times 2/pi, the integer indefinite for NaN and past the range). ONE test for all lanes
+/// (`pcmpgtd`, `movmskps`, `test dl, dl`): when ANY lane's quadrant is above 3, EVERY lane takes
+/// `q & 3` and loses `q >> 2` (logical) whole turns, so a lane holding the indefinite becomes
+/// quadrant 0 less 2^29 turns while another lane wraps. No early answer of 1 (unlike [`cos`]): an
+/// angle of 0 gives the polynomial's `0x3F7FFFFF` and NaN stays NaN. Then a quadrant of 1 or 2
+/// less pi with the sign flipped, 3 less 2pi, any other (0, the indefinite) nothing.
+pub fn cos_v3(angles: [f32; 3]) -> [f32; 3] {
+    let mut x = angles.map(f32::abs);
+    let mut q = x.map(|v| super::cvttss2si(v * FLT_2_D_PI));
+    if q.iter().any(|&v| v > 3) {
+        for i in 0..3 {
+            let turns = (q[i] as u32) >> 2;
+            q[i] &= 3;
+            x[i] -= (turns as i32) as f32 * FLT_PI_X2;
+        }
     }
-    let (offset, sign) = match q {
-        3 => (FLT_PI_X2, 0),
-        1 | 2 => (FLT_PI, SIGN),
-        _ => (0.0, 0),
-    };
-    cos_poly(x - offset, sign)
+    std::array::from_fn(|i| {
+        let (offset, sign) = match q[i] {
+            3 => (FLT_PI_X2, 0),
+            1 | 2 => (FLT_PI, SIGN),
+            _ => (0.0, 0),
+        };
+        cos_poly(x[i] - offset, sign)
+    })
+}
+
+/// `Cos_V3` of one angle in lane 0 with the other lanes 0 (quadrant 0, so only this angle can
+/// start the reduction): `cos_v3([angle, 0, 0])[0]`. An angle beside other non-zero angles is NOT
+/// this: those lanes' reduction also reduces this one (see [`cos_v3`]).
+pub fn cos_lane(angle: f32) -> f32 {
+    cos_v3([angle, 0.0, 0.0])[0]
 }
 
 /// `Sin(angle)` (JIP LN NVSE, `internal/utility.h`): `Cos(FltPId2 - angle)`.
@@ -140,11 +154,10 @@ pub fn sin(angle: f32) -> f32 {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: Tan (asm), GetSinCos.
-/// `Tan`: the sine and cosine from `Cos_V3` (`GetSinCos`: lanes pi/2 - angle and angle); 0
+/// `Tan`: the sine and cosine from one `Cos_V3` (`GetSinCos`: lanes pi/2 - angle, angle, 0); 0
 /// when the cosine's size is below `FLT_EPSILON` or NaN, else their quotient.
 pub fn tan(angle: f32) -> f32 {
-    let s = cos_lane(FLT_PI_D2 - angle);
-    let c = cos_lane(angle);
+    let [s, c, _] = cos_v3([FLT_PI_D2 - angle, angle, 0.0]);
     if c.abs() >= FLT_EPSILON {
         s / c
     } else {
@@ -289,7 +302,7 @@ pub fn atan(x: f32) -> f32 {
 }
 
 /// `rsqrtss`: the processor's estimate of 1/sqrt, as JIP's code gets it.
-fn rsqrt_estimate(v: f32) -> f32 {
+pub(crate) fn rsqrt_estimate(v: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
         use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
@@ -310,7 +323,7 @@ fn rsqrt_estimate(v: f32) -> f32 {
 
 /// The square root both distance routines take of a sum of squares `s`: 0 (and NaN) answer
 /// themselves; else `s * ((3 - s * r * r) * r * 0.5)` with `r` the estimate.
-fn newton_sqrt(s: f32) -> f32 {
+pub(crate) fn newton_sqrt(s: f32) -> f32 {
     if s == 0.0 || s.is_nan() {
         return s;
     }

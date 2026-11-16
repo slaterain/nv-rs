@@ -475,3 +475,43 @@ fn the_key_queue_is_capped_or_stops_as_out_of_memory() {
     }));
     assert!(stop.is_err());
 }
+
+/// The lock-free copy of the keys' three states (`key_states`: game 1, raw 2, inserted 4) follows
+/// each keyboard and mouse read, as the shared records do; a failed read changes nothing.
+#[test]
+fn the_lock_free_key_states_follow_each_read() {
+    let (mut e, di) = game();
+    let keyboard = device(&mut e, di, GUID_KEYBOARD);
+    let mouse = device(&mut e, di, GUID_MOUSE);
+    e.mem.set_u8(RAW_KEYS + 0x11, 0x80);
+    keys(&mut e).set_key_held_state(0x20, true);
+    keys(&mut e).set_key_disable_state(0x11, true, DISABLE_USER);
+    assert_eq!(key_states(&mut e, 0x11), 0, "nothing read yet");
+    read_keys(&mut e, keyboard);
+    assert_eq!(
+        key_states(&mut e, 0x11),
+        2,
+        "raw only: the player can't press it"
+    );
+    assert_eq!(
+        key_states(&mut e, 0x20),
+        1 | 4,
+        "held: the game's and inserted"
+    );
+    assert_eq!(key_states(&mut e, 0x12), 0);
+    assert_eq!(key_states(&mut e, MAX_MACROS), 0, "past the last key");
+    e.mem.set_u8(RAW_MOUSE + 0xc + 1, 0x80);
+    assert_eq!(e.vcall(mouse, GET_DEVICE_STATE, &[0x14, BUF]).u32(), DI_OK);
+    assert_eq!(key_states(&mut e, MOUSE_BUTTON_OFFSET + 1), 1 | 2);
+    keys(&mut e).set_key_held_state(0x20, false);
+    e.mem.set_u32(ANSWER, DIERR_NOTACQUIRED);
+    read_keys_failed(&mut e, keyboard);
+    assert_eq!(key_states(&mut e, 0x20), 1 | 4, "a failed read: as before");
+}
+
+fn read_keys_failed(e: &mut Engine, keyboard: u32) {
+    assert_eq!(
+        e.vcall(keyboard, GET_DEVICE_STATE, &[256, BUF]).u32(),
+        DIERR_NOTACQUIRED
+    );
+}

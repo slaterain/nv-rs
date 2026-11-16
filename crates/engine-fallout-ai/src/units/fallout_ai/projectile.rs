@@ -2034,20 +2034,32 @@ pub fn fn_009bbef0(
                 }
             }
         }
-        let weapon_form = e.call(GET_WEAPON, &args![this]).u32();
-        let projectiles = e
-            .call(0x0052_5b20, &args![weapon_form, mod_active, 0u32, actor])
-            .u8();
-        let damage = e.get(this, Projectile::fDamage);
-        e.set(
-            this,
-            Projectile::fDamage,
-            (damage as f64 / projectiles as f64) as f32,
-        );
-        if mod_active {
-            let scale: f64 = e.global(MOD_DAMAGE_SCALE);
+        // 009bc241..009bc293: JIP's G117 (InitProjectileSetAmmoHook, a JIP fix) replaces the
+        // projectile count, the division and the mod scale, and records the ammo, the split-beam
+        // flag and the count in the projectile. Words: the projectile, the weapon argument, the
+        // actor shooter (0 if none), the mod-0xC flag. One load while JIP is not installed.
+        if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0
+            || e.site(
+                0x009b_c241,
+                &[this.addr(), weapon, actor, u32::from(mod_active)],
+            )
+            .is_none()
+        {
+            let weapon_form = e.call(GET_WEAPON, &args![this]).u32();
+            let projectiles = e
+                .call(0x0052_5b20, &args![weapon_form, mod_active, 0u32, actor])
+                .u8();
             let damage = e.get(this, Projectile::fDamage);
-            e.set(this, Projectile::fDamage, (damage as f64 * scale) as f32);
+            e.set(
+                this,
+                Projectile::fDamage,
+                (damage as f64 / projectiles as f64) as f32,
+            );
+            if mod_active {
+                let scale: f64 = e.global(MOD_DAMAGE_SCALE);
+                let damage = e.get(this, Projectile::fDamage);
+                e.set(this, Projectile::fDamage, (damage as f64 * scale) as f32);
+            }
         }
     }
 
@@ -5893,7 +5905,18 @@ fn explode_projectile(e: &mut Engine, this: Ptr<Projectile>) {
         let owner = if test_flags(e, this, 0x400) {
             0
         } else {
-            e.call(GET_SHOOTER, &args![this]).u32()
+            // 009c35f7: JIP's G27 (a fix) puts `mov eax, ecx` in place of the shooter call:
+            // the explosion's source is the projectile itself. One load while JIP is not
+            // installed.
+            let source = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x009c_35f7, &[this.addr()])
+            } else {
+                None
+            };
+            match source {
+                Some(source) => source,
+                None => e.call(GET_SHOOTER, &args![this]).u32(),
+            }
         };
         let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
         let form = e.call(0x004f_d3c0, &args![base]).u32();
@@ -6046,6 +6069,8 @@ pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
     let radius_squared = (radius as f64 * radius as f64) as f32;
     let mut candidate = 0u32;
     let mut triggered = false;
+    // G127's roll triggered the mine (JIP jumps past the flag test).
+    let mut rolled = false;
     let mut owner_actor = 0u32;
     let mut faction = 0u32;
     let shooter = e.get(this, Projectile::pShooter);
@@ -6082,11 +6107,27 @@ pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
         if (radius_squared as f64) > distance as f64
             && projectile_get_mine_reacts_to_target(e, this, actor, owner_actor, faction)
         {
-            triggered = true;
+            // 009c3bd6: JIP's G127 (a fix) rolls the actor's explode chance (entry point 4);
+            // the seam answers 1 to explode (straight on at 009c3cfa, past the flag test) or 0
+            // for the next actor (words: the mine, the actor). One load while JIP is not
+            // installed.
+            let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x009c_3bd6, &[this.addr(), actor])
+            } else {
+                None
+            };
+            match jip {
+                Some(explode) if explode & 0xff == 0 => continue,
+                Some(_) => {
+                    rolled = true;
+                    triggered = true;
+                }
+                None => triggered = true,
+            }
             break;
         }
     }
-    if !test_flags(e, this, 0x4000) && !triggered {
+    if !rolled && !test_flags(e, this, 0x4000) && !triggered {
         candidate = e.global(PLAYER);
         let distance = squared_distance_to(e, this, candidate);
         let player: u32 = e.global(PLAYER);
@@ -6806,6 +6847,164 @@ mod tests {
         );
         assert_eq!(calls(&e, 0x0057_5690), vec![vec![this.addr(), 0x5555]]);
         assert_eq!(calls(&e, 0x0052_5b20), vec![vec![weapon, 0, 0, 0]]);
+    }
+
+    thread_local! {
+        static G117_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G117_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g117(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G117_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G117_ANSWER.with(|c| c.get())
+    }
+
+    /// The launch constructor with a 30-damage weapon, an actor shooter whose held item has mod
+    /// effect 0xC active (`004b_da70` answers `split`), its modified damage 24, a projectile count
+    /// of 3 from `0052_5b20` and the mod scale 1.5; G117's seam answered `answer` under `word`.
+    /// Answers the projectile, the shooter, the weapon, the seam's words and the engine.
+    fn g117_run(
+        word: u32,
+        answer: Option<u32>,
+        split: bool,
+    ) -> (Ptr<Projectile>, u32, u32, Vec<Vec<u32>>, Engine) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009b_c241), at_g117);
+        G117_ASKED.with(|s| s.borrow_mut().clear());
+        G117_ANSWER.with(|c| c.set(answer));
+        e.set_jip_patches(word);
+        e.set_global(MOD_DAMAGE_SCALE, 1.5f64);
+        let this = projectile(&mut e);
+        let weapon = e.mem.alloc(0x200);
+        let component = object(&mut e, 0x10);
+        e.mem.set_u32(weapon + 0x9C, e.mem.u32(component));
+        stub(&mut e, 0x7E00_0020, 30);
+        set_slot(&mut e, weapon + 0x9C, 0x10, 0x7E00_0020);
+        let shooter = actor(&mut e);
+        let process = object(&mut e, 0x200);
+        e.mem.set_u32(shooter + 0x68, process);
+        // `Actor::GetCurrentProcess` (the word at +0x68), by address in this engine.
+        stub(&mut e, 0x008d_8520, process);
+        let item = e.mem.alloc(0x20);
+        stub(&mut e, 0x7E00_0030, item);
+        set_slot(&mut e, process, 0x148, 0x7E00_0030);
+        stub_float(&mut e, 0x004b_cdb0, 50.0);
+        stub(&mut e, 0x0048_73d0, 100);
+        stub_float(&mut e, 0x004b_df00, 24.0);
+        stub(&mut e, 0x004b_da70, u32::from(split));
+        stub(&mut e, 0x0052_5b20, 3);
+        fn_009bbef0(
+            &mut e,
+            this,
+            Ptr::new(0x5555),
+            shooter,
+            weapon,
+            1.0f32.to_bits(),
+            2.0f32.to_bits(),
+            3.0f32.to_bits(),
+            0.5,
+            0.25,
+        );
+        let asked = G117_ASKED.with(|s| s.take());
+        (this, shooter, weapon, asked, e)
+    }
+
+    /// JIP's G117 seam at `0x9BC241`: not asked while JIP is not installed (word 0) or installed
+    /// without its fixes (INSTALLED only); the exe's count, division and mod scale run.
+    #[test]
+    fn g117_seam_not_asked_without_jips_fixes() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            let (this, shooter, weapon, asked, e) = g117_run(word, Some(0), true);
+            assert!(asked.is_empty());
+            assert_eq!(calls(&e, 0x0052_5b20), vec![vec![weapon, 1, 0, shooter]]);
+            // 24 / 3 * 1.5.
+            assert_eq!(e.get(this, Projectile::fDamage), 12.0);
+        }
+    }
+
+    /// With JIP's fixes the seam is asked with the projectile, the weapon argument, the actor
+    /// shooter and the mod-0xC flag; an answer replaces the exe's block (no count call, the
+    /// damage left as the handler leaves it), no answer lets it run.
+    #[test]
+    fn g117_seam_replaces_the_count_block_when_answered() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        for split in [false, true] {
+            let (this, shooter, weapon, asked, e) = g117_run(fixes, Some(0), split);
+            assert_eq!(
+                asked,
+                vec![vec![this.addr(), weapon, shooter, u32::from(split)]]
+            );
+            assert!(calls(&e, 0x0052_5b20).is_empty());
+            assert_eq!(e.get(this, Projectile::fDamage), 24.0);
+        }
+        let (this, shooter, weapon, asked, e) = g117_run(fixes, None, false);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(calls(&e, 0x0052_5b20), vec![vec![weapon, 0, 0, shooter]]);
+        assert_eq!(e.get(this, Projectile::fDamage), 8.0);
+    }
+
+    /// `009bbef0` with JIP's real G117 handler (installed, row on): a split-beam shot of a weapon
+    /// with count 3 and a split-beam mod of 2.0 records its ammo, the flag and 5, and its damage
+    /// (24) becomes 24 x 1.3 / 5 in JIP's float order; the exe's count is not asked.
+    #[test]
+    fn g117_real_handler_records_the_shot() {
+        use engine_core::extend::jip_patches;
+        let mut e = engine();
+        // `CreateFileA`'s import slot (the settings file): "no file", so JIP's defaults.
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        // `TESTopic::GetOwnerTopic`, which 3.9a's fix wraps with the row on.
+        e.register(0x0061_a310, |_, _| Ret::default());
+        jip::test_support::install_into(&mut e);
+        jip::game_patches::set_row(&mut e, true);
+        assert_ne!(e.jip_patches() & jip_patches::FIXES, 0);
+        e.mem.set_f32(0x0102_2004, 1.3);
+        let this = projectile(&mut e);
+        let weapon = e.mem.alloc(0x388);
+        let component = object(&mut e, 0x10);
+        e.mem.set_u32(weapon + 0x9C, e.mem.u32(component));
+        stub(&mut e, 0x7E00_0020, 30);
+        set_slot(&mut e, weapon + 0x9C, 0x10, 0x7E00_0020);
+        let ammo = e.mem.alloc(0xdc);
+        e.mem.set_u32(weapon + 0xa8, ammo);
+        e.mem.set_u8(weapon + 0x11e, 3);
+        e.mem.set_u32(weapon + 0x180, 0xc);
+        e.mem.set_f32(weapon + 0x18c, 2.0);
+        let shooter = actor(&mut e);
+        let process = object(&mut e, 0x200);
+        e.mem.set_u32(shooter + 0x68, process);
+        e.mem.set_u8(process + 0x28, 3);
+        stub(&mut e, 0x008d_8520, process);
+        let item = e.mem.alloc(0x20);
+        stub(&mut e, 0x7E00_0030, item);
+        set_slot(&mut e, process, 0x148, 0x7E00_0030);
+        stub_float(&mut e, 0x004b_cdb0, 50.0);
+        stub(&mut e, 0x0048_73d0, 100);
+        stub_float(&mut e, 0x004b_df00, 24.0);
+        stub(&mut e, 0x004b_da70, 1);
+        stub(&mut e, 0x0052_5b20, 3);
+        fn_009bbef0(
+            &mut e,
+            this,
+            Ptr::new(0x5555),
+            shooter,
+            weapon,
+            0,
+            0,
+            0,
+            0.0,
+            0.0,
+        );
+        assert!(calls(&e, 0x0052_5b20).is_empty());
+        assert_eq!(e.mem.u32(this.addr() + 0x60), ammo);
+        assert_eq!(e.mem.u8(this.addr() + 0x149), 1);
+        assert_eq!(e.mem.u8(this.addr() + 0x14a), 5);
+        assert_eq!(e.get(this, Projectile::fDamage), 24.0f32 * 1.3f32 / 5.0);
     }
 
     #[test]
@@ -7755,6 +7954,61 @@ mod tests {
         assert_eq!(calls(&e, 0x009a_c9c0).len(), 1);
     }
 
+    thread_local! {
+        static G27_ASKED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G27_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g27(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G27_ASKED.with(|s| s.borrow_mut().push(a[0]));
+        G27_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's G27 seam at `0x9C35F7` (a fix): the explosion's source. Not asked without the
+    /// FIXES bit or with flag 0x400 (source 0); asked with the projectile otherwise, its answer
+    /// replacing the shooter, no answer leaving the shooter.
+    #[test]
+    fn g27_seam_makes_the_projectile_the_source() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_35f7), at_g27);
+        let this = projectile(&mut e);
+        stub(&mut e, 0x004f_d360, 1);
+        stub(&mut e, 0x004f_d3c0, 0x8800);
+        stub(&mut e, 0x008d_6f30, 0x5000);
+        give_position(&mut e, this.addr(), 0x7E00_0050);
+        e.set(this, Projectile::pShooter, 0x3333);
+        for (word, flags, answer, asked, source) in [
+            (0, 0x100000, Some(this.addr()), false, 0x3333),
+            (
+                jip_patches::INSTALLED,
+                0x100000,
+                Some(this.addr()),
+                false,
+                0x3333,
+            ),
+            (fixes, 0x100000, Some(this.addr()), true, this.addr()),
+            (fixes, 0x100000, None, true, 0x3333),
+            (fixes, 0x100400, Some(this.addr()), false, 0),
+        ] {
+            e.set_jip_patches(word);
+            G27_ASKED.with(|s| s.borrow_mut().clear());
+            G27_ANSWER.with(|c| c.set(answer));
+            e.set(this, Projectile::iFlags, flags);
+            e.call_log = Some(vec![]);
+            projectile_check_explosion(&mut e, this, 0.1);
+            let made = calls(&e, 0x009a_c9c0);
+            assert_eq!(
+                made[0][..4],
+                [0x8800, source, 0, 0x5000],
+                "{word:x} {flags:x}"
+            );
+            let seen = G27_ASKED.with(|s| s.take());
+            assert_eq!(seen, if asked { vec![this.addr()] } else { vec![] });
+        }
+    }
+
     #[test]
     fn mine_reacts_to_hostile_targets_only() {
         let mut e = engine();
@@ -7797,6 +8051,144 @@ mod tests {
         stub_float(&mut e, 0x004a_7290, 200.0);
         e.set(this, Projectile::iFlags, 0x4000);
         assert!(!fn_009c39e0(&mut e, this));
+    }
+
+    thread_local! {
+        static G127_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G127_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g127(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G127_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G127_ANSWER.with(|c| c.get())
+    }
+
+    /// A mine with two actors in range that it reacts to (the process list's 0 and 1), the
+    /// explosion timer setting 6.0; `flag_4000` answers the 0x4000 test (the player's roll
+    /// skipped).
+    fn mine_world(e: &mut Engine, flag_4000: u32) -> (Ptr<Projectile>, u32, u32) {
+        let this = projectile(e);
+        give_position(e, this.addr(), 0x7E00_0050);
+        let first = actor(e);
+        let second = actor(e);
+        give_position(e, first, 0x7E00_0051);
+        give_position(e, second, 0x7E00_0052);
+        stub_float(e, 0x0045_cd80, 10.0);
+        stub(e, 0x005b_e5c0, 2);
+        e.register_double(0x0096_8670, move |_, a| {
+            if a[1] == 0 { first } else { second }.into_ret()
+        });
+        stub_float(e, 0x004a_7290, 25.0);
+        stub(e, TEST_FLAGS, flag_4000);
+        e.mem.set_f32(0x011c_f7ac + 4, 6.0);
+        e.call_log = Some(vec![]);
+        (this, first, second)
+    }
+
+    /// JIP's G127 seam at `0x9C3BD6` (a fix), asked once the mine reacts to an actor in range:
+    /// not asked without the FIXES bit (the first actor triggers it); asked with the mine and
+    /// the actor; an answer's low byte 1 triggers on that actor and goes straight to the timer
+    /// (no 0x4000 test, JIP's `jmp 0x9C3CFA`), 0 goes on to the next actor; no answer is the
+    /// exe's trigger.
+    #[test]
+    fn g127_seam_rolls_each_reacting_actor() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        // (word, answer, the 0x4000 answer, triggered, asked for both, flag tests)
+        for (word, answer, flag_4000, triggered, both, tests) in [
+            (0, Some(0), 1u32, true, false, 1usize),
+            (jip_patches::INSTALLED, Some(0), 1, true, false, 1),
+            (fixes, Some(1), 0, true, false, 0),
+            (fixes, Some(0x101), 0, true, false, 0),
+            (fixes, Some(0), 1, false, true, 1),
+            (fixes, Some(0x100), 1, false, true, 1),
+            (fixes, None, 0, true, false, 1),
+        ] {
+            let mut e = engine();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127);
+            let (this, first, second) = mine_world(&mut e, flag_4000);
+            e.set_jip_patches(word);
+            G127_ASKED.with(|s| s.borrow_mut().clear());
+            G127_ANSWER.with(|c| c.set(answer));
+            assert_eq!(fn_009c39e0(&mut e, this), triggered, "{word:x} {answer:?}");
+            let seen = G127_ASKED.with(|s| s.take());
+            let expected = match (word & jip_patches::FIXES != 0, both) {
+                (false, _) => vec![],
+                (true, false) => vec![vec![this.addr(), first]],
+                (true, true) => vec![vec![this.addr(), first], vec![this.addr(), second]],
+            };
+            assert_eq!(seen, expected, "{word:x} {answer:?}");
+            assert_eq!(calls(&e, TEST_FLAGS).len(), tests, "{word:x} {answer:?}");
+            let timer = if triggered { 6.0 } else { 0.0 };
+            assert_eq!(e.get(this, Projectile::fExplosionTimer), timer);
+        }
+    }
+
+    thread_local! {
+        /// G127's answer for each actor (else 0).
+        static G127_BY_ACTOR: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_g127_by_actor(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G127_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G127_BY_ACTOR.with(|s| {
+            let answer = s
+                .borrow()
+                .iter()
+                .find(|(actor, _)| *actor == a[1])
+                .map(|w| w.1);
+            Some(answer.unwrap_or(0))
+        })
+    }
+
+    /// G127: the first actor fails the roll, the second (a creature, slot 0x218) passes: both
+    /// asked, the mine triggered, no 0x4000 test, and the creature timer taken from the second
+    /// (`actor value 0x23` of its `+0xA4` x `00644790(base)` / the double at `01017a40` + the
+    /// setting: 10 x 2 / 4 + 6 = 11).
+    #[test]
+    fn g127_seam_the_actor_that_passes_sets_the_timer() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127_by_actor);
+        let (this, first, second) = mine_world(&mut e, 0);
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        set_slot(&mut e, second, 0x218, RETURNS_TRUE);
+        stub_float(&mut e, 0x0064_4790, 2.0);
+        e.register_double(0x0066_ef20, move |_, a| {
+            assert_eq!(a, &[second + 0xa4, 0x23]);
+            10u32.into_ret()
+        });
+        e.set_global(0x0101_7a40, 4.0f64);
+        G127_ASKED.with(|s| s.borrow_mut().clear());
+        G127_BY_ACTOR.with(|s| *s.borrow_mut() = vec![(first, 0), (second, 1)]);
+        assert!(fn_009c39e0(&mut e, this));
+        assert_eq!(
+            G127_ASKED.with(|s| s.take()),
+            vec![vec![this.addr(), first], vec![this.addr(), second]]
+        );
+        assert!(calls(&e, TEST_FLAGS).is_empty());
+        assert_eq!(calls(&e, 0x0066_ef20).len(), 1);
+        assert_eq!(e.get(this, Projectile::fExplosionTimer), 11.0);
+    }
+
+    /// G127's seam is asked only for an actor in range that the mine reacts to.
+    #[test]
+    fn g127_seam_not_asked_out_of_range_or_unreacting() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127);
+        let (this, first, _) = mine_world(&mut e, 1);
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        G127_ASKED.with(|s| s.borrow_mut().clear());
+        G127_ANSWER.with(|c| c.set(Some(1)));
+        stub_float(&mut e, 0x004a_7290, 200.0);
+        assert!(!fn_009c39e0(&mut e, this));
+        // In range, but both actors are the mine's own shooter's kind it ignores: the shooter.
+        stub_float(&mut e, 0x004a_7290, 25.0);
+        e.set(this, Projectile::pShooter, first);
+        stub(&mut e, 0x0096_8670, first);
+        assert!(!fn_009c39e0(&mut e, this));
+        assert_eq!(G127_ASKED.with(|s| s.take()), Vec::<Vec<u32>>::new());
     }
 
     // The functions below are doubled in `CALLEES` for the earlier tests, so

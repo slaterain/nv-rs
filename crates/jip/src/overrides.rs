@@ -4,16 +4,18 @@
 //! state. (`IsKeyPressed` and the five control commands read JIP's XInput state and come with
 //! it, in part 2; `IsPluginInstalled` and `GetPluginVersion` are in [`crate::identity`].)
 //!
-//! Only while JIP answers "installed" ([`crate::ANSWERS_INSTALLED`]): until then every one of
+//! Only while JIP answers "installed" ([`crate::set_answers_installed`]): until then every one of
 //! these commands is xNVSE's or the game's, as without the DLL, so a mod that does not use JIP
 //! gets no JIP behaviour early. The seven at the game's own opcodes (`MenuMode`, `GetItemCount`,
 //! `GetContainer`, `IsInList`, `GetHitLocation`, `HasPerk`, `GetNVSEVersionFull` at `0x127D`)
 //! change vanilla commands, so they are also a fixes row (ADR-0016 §5): on in fixes, off under
-//! vanilla ([`set_vanilla_commands`]).
+//! vanilla ([`set_vanilla_commands`]). The same row puts JIP's handler in the `MenuMode` script
+//! block's record and gives block type 0xE one (JIP's `DeferredInit`, PLAN-3.9 D03: `put_blocks`).
 //!
 //! Two of them have their full effect only with JIP's hook sites (steps 3.5 and 3.9):
-//! `Update3D` marks the reference for JIP's hook in the model loader's attach, which this does
-//! not have yet, and `GetHitLocation` reads the place in the hit data where JIP's
+//! `Update3D` marks the reference for JIP's attach in the queued references' vtables, which
+//! reads the mark (`game_patches::gp`, step 3.9 G38 and H09), and `GetHitLocation` reads the
+//! place in the hit data where JIP's
 //! `CopyHitDataHook` stores the location. `GetModelPath`'s per-reference paths come with
 //! `SetRefrModelPath` (step 3.6); until then a reference answers its base form's path, as in JIP
 //! for a reference that has none.
@@ -213,7 +215,65 @@ fn put_vanilla(e: &mut Engine) {
     for (i, o) in VANILLA.iter().enumerate() {
         put(e, (XNVSE.len() + i) as u32, o);
     }
+    put_blocks(e);
     e.ext::<Jip>().overrides.vanilla_in = true;
+}
+
+/// `g_eventBlockCommandInfos` (`0x0118E2F0`, 0x26 records of 0x28 bytes): the block types
+/// `ScriptRunner::EvaluateLine` (`005e1550`) reads each `Begin` line's handler from (`+0x18`,
+/// `CALL [EBP-0x1C]` at `0x5E16DC`).
+const BLOCK_RECORDS: u32 = 0x0118_e2f0;
+const BLOCK_RECORD_SIZE: u32 = 0x28;
+const RECORD_EXECUTE: u32 = 0x18;
+/// Block type 1, `MenuMode` (the exe's handler `MenuModeFunction`, `005c4240`), and block type
+/// 0xE, "Unused2" (no handler in the exe: a `Begin` of that type fails its line).
+const BLOCK_MENU_MODE: u32 = 1;
+const BLOCK_UNUSED_2: u32 = 0xe;
+/// The routines for the `MenuMode` block and block type 0xE: after the overrides' execute and
+/// eval words.
+const BLOCK_ROUTINE: u32 = ROUTINES + 8 * 32;
+const UNUSED_BLOCK_ROUTINE: u32 = BLOCK_ROUTINE + 4;
+const _: () = assert!(UNUSED_BLOCK_ROUTINE + 4 <= engine_core::mem::EXTENDER_CODE.end);
+const _: () = assert!(XNVSE.len() + VANILLA.len() <= 32);
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit
+// (`eventCmdInfos[1].execute = Hook_MenuMode_Execute; eventCmdInfos[0xE].execute = 0x5D4A40`).
+/// PLAN-3.9 D03, under the row of JIP's versions of the game's commands (the same switch and
+/// handler as the `MenuMode` command): `Begin MenuMode N` blocks take JIP's modes 0 to 4 and its
+/// menu ids, and a block of type 0xE has a handler that answers true (its line no longer fails).
+/// JIP's 0xE handler is the exe's `005d4a40` (`mov al, 1`), which leaves the result as it was: with
+/// JIP's "result = 0" patch (G02) always on, the block never runs. Deliberate difference: the
+/// port's 0xE handler is a routine that clears the result and answers true ([`unused_block`]),
+/// the same as JIP whenever G02 is on, and the block never runs also with the game patches row off
+/// (where `005d4a40` would leave whatever the stack held, so the block would run or not by chance).
+fn put_blocks(e: &mut Engine) {
+    e.register(BLOCK_ROUTINE, menu_mode_block);
+    e.register(UNUSED_BLOCK_ROUTINE, unused_block);
+    let menu_mode = BLOCK_RECORDS + BLOCK_MENU_MODE * BLOCK_RECORD_SIZE;
+    e.mem.set_u32(menu_mode + RECORD_EXECUTE, BLOCK_ROUTINE);
+    let unused = BLOCK_RECORDS + BLOCK_UNUSED_2 * BLOCK_RECORD_SIZE;
+    e.mem.set_u32(unused + RECORD_EXECUTE, UNUSED_BLOCK_ROUTINE);
+}
+
+/// Block type 0xE's handler: `005d4a40`'s answer (true), with the result cleared first (see
+/// [`put_blocks`]).
+fn unused_block(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    handled(true)
+}
+
+/// The `MenuMode` block's handler: JIP's `Hook_MenuMode_Execute` (the command's), which sets the
+/// result only when the mode is up. The exe's block call (`0x5E16DC`) gives it a result it never
+/// cleared (a local of `EvaluateLine`); in JIP the "result = 0 by default" patch (G02,
+/// [`crate::game_patches`], at `0x5E16C3`) always cleared it first. The port's rows let this row
+/// be on with the game patches row off, so the result is cleared here first (with G02 on it is
+/// already 0: nothing changes; a deliberate difference only in that mix, where JIP's handler
+/// would read what the stack held).
+fn menu_mode_block(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, 0.0);
+    menu_mode(e, w)
 }
 
 /// The fixes preset's row: JIP's versions of the game's commands, once JIP answers "installed".
@@ -304,8 +364,8 @@ const HAS_PERK_FORMAT: u32 = 0x0103_5f1c;
 /// in its order.
 const GAME_SETTINGS: u32 = 0x011c_8048;
 const INI_COLLECTIONS: [u32; 4] = [0x011f_96a0, 0x011f_35a0, 0x011c_c694, 0x011f_35a4];
-/// `kHookRefFlag5F_Update3D` (`internal/hooks.h`).
-const REF_FLAG_UPDATE_3D: u8 = 1;
+/// `kHookRefFlag5F_Update3D` (`internal/hooks.h`), read by JIP's attach.
+const REF_FLAG_UPDATE_3D: u8 = crate::game_patches::gp::REF_FLAG_UPDATE_3D;
 /// The player's id.
 const PLAYER_ID: u32 = 0x14;
 
@@ -458,8 +518,8 @@ pub fn ref_update_3d(e: &mut Engine, refr: u32) {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_cmd.h: Hook_Update3D_Execute.
 /// The player through the game's own update of its 3D, another reference through
 /// [`ref_update_3d`]. The result is left as it was (0: xNVSE zeroes it), where xNVSE's own
-/// version answers 1. What a player sees of it comes with JIP's hook in the model loader's attach
-/// (steps 3.5 and 3.9), which reads the mark this sets.
+/// version answers 1. What a player sees of it comes from JIP's attach in the queued references'
+/// vtables (`game_patches::gp`), which reads the mark this sets.
 fn update_3d(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     // The command needs a reference: the game calls it only with one.
@@ -583,9 +643,11 @@ pub(crate) fn has_extra_leveled_item(e: &Engine, entry: u32) -> bool {
         ContChangesEntry::extendData,
     );
     // `extendData` is the list's first node itself (`tList<ExtraDataList>*`: data at +0, next at
-    // +4): JIP's asm loads it (`mov eax, [ecx]`) and walks from there.
+    // +4): JIP's asm loads it (`mov eax, [ecx]`) and walks from there. A list that runs back into
+    // itself ends at the crate's bound (`list_step`, the list guard row) as at its end: false.
     let mut node = lists;
-    while node != 0 {
+    let mut walked = 0usize;
+    while node != 0 && nvse::invref::list_step(e, &mut walked) {
         let n = Ptr::<ListNode>::new(node);
         let list = e.get(n, ListNode::data);
         node = e.get(n, ListNode::next);
@@ -599,11 +661,13 @@ pub(crate) fn has_extra_leveled_item(e: &Engine, entry: u32) -> bool {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: GetFormCount.
 /// A form's count: the base container's entries summed, then the reference's changes entry,
 /// added to it (none below 0) unless the entry holds a leveled item or the base has none, when it
-/// is the entry's alone (none below 0).
-fn form_count(e: &Engine, container_list: u32, changes: u32, form: u32) -> i32 {
+/// is the entry's alone (none below 0). A list that runs back into itself ends at the crate's
+/// bound (`list_step`, the list guard row) as at its end.
+pub(crate) fn form_count(e: &Engine, container_list: u32, changes: u32, form: u32) -> i32 {
     let mut count: i32 = 0;
     let mut node = container_list;
-    while node != 0 {
+    let mut walked = 0usize;
+    while node != 0 && nvse::invref::list_step(e, &mut walked) {
         let n = Ptr::<ListNode>::new(node);
         let object = e.get(n, ListNode::data);
         node = e.get(n, ListNode::next);
@@ -615,7 +679,8 @@ fn form_count(e: &Engine, container_list: u32, changes: u32, form: u32) -> i32 {
         }
     }
     let mut node = changes;
-    while node != 0 {
+    let mut walked = 0usize;
+    while node != 0 && nvse::invref::list_step(e, &mut walked) {
         let n = Ptr::<ListNode>::new(node);
         let entry = e.get(n, ListNode::data);
         node = e.get(n, ListNode::next);
@@ -767,7 +832,8 @@ fn perk_rank(e: &mut Engine, actor: u32, perk: u32, for_teammates: bool) -> u8 {
     if actor == 0 || !vtable_says(e, actor, VT_IS_ACTOR) {
         return 0;
     }
-    if e.ext::<Jip>().saved.npc_perks_patch {
+    // The lock-free copy: this is also the eval's path, run on any thread.
+    if crate::cosave::npc_perks_patch(e) {
         let rank = e
             .vcall(
                 actor,

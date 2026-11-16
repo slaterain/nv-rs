@@ -1,12 +1,8 @@
 //! `functions_ln/ln_fn_actor.h` (JIP LN NVSE): an actor's merchant container, an actor base's
 //! aggro radius, services, template, faction ranks, karma, combat style and body part data, a
-//! creature's type, the race and effect conditions, and the equipped item data. 21 of its 22
-//! commands.
-//!
-//! Left for later: `CopyFaceGenFrom` keeps the NPC's old appearance in JIP's
-//! `s_appearanceUndoMap` to undo it later; the core track's co-save reads and writes that map,
-//! but taking and applying an `AppearanceUndo` (the face values, hair, eyes, head parts) is not
-//! built yet: it comes with them.
+//! creature's type, the race and effect conditions, the equipped item data, and (lane C3) a face
+//! copied from another NPC and put back (`CopyFaceGenFrom`, its old appearance kept in JIP's
+//! `s_appearanceUndoMap`, which the co-save reads and writes). All 22 of its commands.
 //!
 //! An actor base (`TESActorBase`, JIP's header): `baseData` at +0x30 (flags +0x34, karma +0x44
 //! (a float), template flags +0x4A (16 bits), template actor +0x54, the faction list +0x5C: a
@@ -24,7 +20,7 @@ use super::{
     heap_alloc, heap_free, is_actor, is_type, list_prepend, list_unlink, set_form_result, type_of,
     Handlers,
 };
-use crate::cosave::lookup_form;
+use crate::cosave::{lookup_form, AppearanceUndo};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::vars::Data;
@@ -51,6 +47,7 @@ pub static COMMANDS: Handlers = &[
     (0x2320, set_base_karma),
     (0x2333, get_body_part_data),
     (0x2848, set_body_part_data),
+    (0x22a1, copy_face_gen_from),
 ];
 
 #[rustfmt::skip]
@@ -455,7 +452,7 @@ fn mask_for_slot(slot: u32) -> u32 {
 }
 
 /// The reference's container changes data's entry list (`data->objList`), 0 for none.
-fn changes_list(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn changes_list(e: &mut Engine, refr: u32) -> u32 {
     match extra::refr_extra(e, refr, kind::CONTAINER_CHANGES) {
         0 => 0,
         x => match e.mem.u32(x + EXTRA_WORD) {
@@ -477,7 +474,7 @@ fn items_at(e: &Engine, list: u32) -> Vec<u32> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
 // ContChangesEntry::GetEquippedExtra (asm).
 /// The entry's first extra data list with the `ExtraWorn` presence bit, 0 for none.
-fn equipped_extra(e: &Engine, entry: u32) -> u32 {
+pub(crate) fn equipped_extra(e: &Engine, entry: u32) -> u32 {
     items_at(e, e.mem.u32(entry + ENTRY_EXTEND))
         .into_iter()
         .find(|&x| x != 0 && extra::has_type(e, x, EXTRA_WORN))
@@ -752,6 +749,191 @@ fn set_body_part_data(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the face (lane C3) ----
+
+/// An NPC (`TESNPC`, Xbox PDB names in engine-fallout-forms `tesnpc.rs`): its base flags +0x34
+/// (the base data component at +0x30, bit 0 female), its race +0x110, its three face-gen
+/// coordinates from +0x134 (0x20 bytes each, as `00601800` answers +0x134; each one's values at
+/// +0xC, as `006578B0` reads them; JIP copies 50, 30 and 50 floats), `pHair` +0x1B8,
+/// `fHairLength` +0x1BC, `pEyeColor` +0x1C0, `iHairColor` +0x1D8, its head parts' list +0x1DC
+/// (`00602170`), `pFaceNPC` +0x1F0 (JIP's `copyFrom`). `CopyAppearance` (`00603790`) writes the
+/// hair, length, eyes, colour and head parts from those offsets.
+const NPC_BASE_DATA: u32 = 0x30;
+const NPC_FLAGS: u32 = 0x34;
+const NPC_FACE_GEN: u32 = 0x134;
+const FACE_GEN_SIZE: u32 = 0x20;
+const FACE_GEN_VALUES: u32 = 0x0c;
+const FACE_GEN_COUNTS: [u32; 3] = [50, 30, 50];
+const NPC_HAIR: u32 = 0x1b8;
+const NPC_HAIR_LENGTH: u32 = 0x1bc;
+const NPC_EYES: u32 = 0x1c0;
+const NPC_HAIR_COLOR: u32 = 0x1d8;
+const NPC_HEAD_PARTS: u32 = 0x1dc;
+const NPC_COPY_FROM: u32 = 0x1f0;
+/// The game functions: `TESActorBaseData::SetFlagBit` (`0047DD50`, `thiscall`: the flag, set,
+/// 1), the player's race change (`0060B240`, `thiscall`: the race, 0), `CopyAppearance`
+/// (`00603790`, `thiscall`: the NPC copied from), `Character::Reset3D` (`008D3FA0`, `thiscall`).
+const SET_FLAG_BIT: u32 = 0x0047_dd50;
+const PLAYER_SET_RACE: u32 = 0x0060_b240;
+const COPY_APPEARANCE: u32 = 0x0060_3790;
+const RESET_3D: u32 = 0x008d_3fa0;
+/// The value of the INI setting `bLoadFaceGenHeadEGTFiles:General` (the setting at
+/// `0x11D5ADC`, its value +4), which JIP sets before the reset.
+const LOAD_FACE_GEN_EGT: u32 = 0x011d_5ae0;
+/// `g_thePlayer`.
+const THE_PLAYER: u32 = 0x011d_ea3c;
+const TES_NPC: u8 = 0x2a;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.h: AppearanceUndo::AppearanceUndo.
+/// The NPC's appearance as JIP keeps it: the face values (each set from its coordinate's values;
+/// a coordinate with no readable values is left 0, where JIP would read through the null
+/// pointer), the flags, hair length and colour, the race, hair, eyes and the head parts that are
+/// set, in the list's order.
+fn take_appearance(e: &mut Engine, npc: u32) -> AppearanceUndo {
+    let mut head = Vec::with_capacity(0x214);
+    for (i, count) in (0u32..).zip(FACE_GEN_COUNTS) {
+        let values = e
+            .mem
+            .u32(npc + NPC_FACE_GEN + i * FACE_GEN_SIZE + FACE_GEN_VALUES);
+        let mut bytes = vec![0u8; count as usize * 4];
+        if values == 0 || e.mem.try_read(values, &mut bytes).is_err() {
+            bytes.fill(0);
+        }
+        head.extend_from_slice(&bytes);
+    }
+    for at in [NPC_FLAGS, NPC_HAIR_LENGTH, NPC_HAIR_COLOR] {
+        head.extend_from_slice(&e.mem.u32(npc + at).to_le_bytes());
+    }
+    let head_parts = super::list_items(e, Ptr::new(npc + NPC_HEAD_PARTS))
+        .into_iter()
+        .filter(|&p| p != 0)
+        .collect();
+    AppearanceUndo {
+        head,
+        race: e.mem.u32(npc + NPC_RACE),
+        hair: e.mem.u32(npc + NPC_HAIR),
+        eyes: e.mem.u32(npc + NPC_EYES),
+        head_parts,
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.h: AppearanceUndo::Undo.
+/// The kept appearance put back: no face NPC, the sex and race as kept ([`set_sex`],
+/// [`set_race`]), the face values written back (into each coordinate's values, where readable),
+/// the hair length and colour, hair and eyes, and the head parts emptied, then each kept one put
+/// in front (so they end in the reverse order, as JIP's `Prepend` loop leaves them).
+fn undo_appearance(e: &mut Engine, npc: u32, undo: &AppearanceUndo) {
+    let word = |at: usize| {
+        undo.head
+            .get(at..at + 4)
+            .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    e.mem.set_u32(npc + NPC_COPY_FROM, 0);
+    set_sex(e, npc, word(0x208));
+    set_race(e, npc, undo.race);
+    let mut from = 0usize;
+    for (i, count) in (0u32..).zip(FACE_GEN_COUNTS) {
+        let len = count as usize * 4;
+        let values = e
+            .mem
+            .u32(npc + NPC_FACE_GEN + i * FACE_GEN_SIZE + FACE_GEN_VALUES);
+        if let Some(bytes) = undo.head.get(from..from + len) {
+            if values != 0 && e.mem.try_read(values, &mut vec![0u8; len]).is_ok() {
+                e.mem.write(values, bytes);
+            }
+        }
+        from += len;
+    }
+    e.mem.set_u32(npc + NPC_HAIR_LENGTH, word(0x20c));
+    e.mem.set_u32(npc + NPC_HAIR_COLOR, word(0x210));
+    e.mem.set_u32(npc + NPC_HAIR, undo.hair);
+    e.mem.set_u32(npc + NPC_EYES, undo.eyes);
+    let parts = Ptr::new(npc + NPC_HEAD_PARTS);
+    super::list_remove_all(e, parts);
+    for &part in &undo.head_parts {
+        list_prepend(e, parts, part);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESNPC::SetSex (asm).
+/// When bit 0 of `flags` differs from the NPC's female flag, the game's `SetFlagBit` on its base
+/// data sets it so.
+fn set_sex(e: &mut Engine, npc: u32, flags: u32) {
+    let female = e.mem.u8(npc + NPC_FLAGS) & 1 != 0;
+    let wanted = flags & 1 != 0;
+    if female != wanted {
+        e.call(
+            SET_FLAG_BIT,
+            &args![npc + NPC_BASE_DATA, 1u32, u32::from(wanted), 1u32],
+        );
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESNPC::SetRace (asm).
+/// A different race: the player's base through the game's race change, any other NPC by a plain
+/// store.
+fn set_race(e: &mut Engine, npc: u32, race: u32) {
+    if e.mem.u32(npc + NPC_RACE) == race {
+        return;
+    }
+    let player = e.mem.u32(THE_PLAYER);
+    if player != 0 && e.mem.u32(player + BASE) == npc {
+        e.call(PLAYER_SET_RACE, &args![npc, race, 0u32]);
+    } else {
+        e.mem.set_u32(npc + NPC_RACE, race);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_actor.h:
+// Cmd_CopyFaceGenFrom_Execute.
+/// On a character, with an NPC (or none) read: the NPC's appearance copied onto the character's
+/// base (its old appearance kept first, once, in JIP's `s_appearanceUndoMap`, which the co-save
+/// writes for the player); with none, the kept appearance put back and forgotten. Either way the
+/// EGT face files are switched on and the character's 3D reset. No result.
+fn copy_face_gen_from(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    // JIP calls `IsCharacter` on the reference without a null check (a null one would stop the
+    // game): nothing here.
+    if !read.ok || a.this_obj == 0 {
+        return handled(true);
+    }
+    if e.vcall(a.this_obj, IS_CHARACTER, &[]).u32() & 0xff == 0 {
+        return handled(true);
+    }
+    let src = read.form(0);
+    if src != 0 && type_of(e, src) != TES_NPC {
+        return handled(true);
+    }
+    let dest = e.mem.u32(a.this_obj + BASE);
+    if src != 0 {
+        if crate::cosave::saved(e).appearance_undo.get(&dest).is_none() {
+            let undo = take_appearance(e, dest);
+            crate::cosave::saved(e)
+                .appearance_undo
+                .emplace_with(dest, || undo);
+        }
+        let flags = e.mem.u32(src + NPC_FLAGS);
+        set_sex(e, dest, flags);
+        let race = e.mem.u32(src + NPC_RACE);
+        set_race(e, dest, race);
+        e.call(COPY_APPEARANCE, &args![dest, src]);
+    } else {
+        let kept = crate::cosave::saved(e).appearance_undo.get(&dest).cloned();
+        if let Some(undo) = kept {
+            crate::cosave::saved(e).appearance_undo.erase(&dest);
+            undo_appearance(e, dest, &undo);
+        }
+    }
+    e.mem.set_u8(LOAD_FACE_GEN_EGT, 1);
+    e.call(RESET_3D, &args![a.this_obj]);
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "ln_fn_actor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ln_fn_actor_c3_tests.rs"]
+mod c3_tests;

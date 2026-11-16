@@ -264,6 +264,7 @@ pub mod rtti {
     pub const TES_EYES: u32 = 0x0118_6388;
     pub const TES_HAIR: u32 = 0x0118_63a0;
     pub const TES_FACTION: u32 = 0x0118_4704;
+    pub const TES_DESCRIPTION: u32 = 0x0118_38f8;
     pub const TES_ACTOR_BASE_DATA: u32 = 0x0118_6cb4;
     pub const TES_OBJECT_LIGH: u32 = 0x0118_3938;
     pub const BS_TEMP_EFFECT: u32 = 0x0119_c08c;

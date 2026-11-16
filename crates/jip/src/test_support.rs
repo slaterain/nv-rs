@@ -28,8 +28,14 @@ pub fn engine() -> Engine {
 /// twice keeps its bytes), then [`crate::install_as`]. A command is then called through its
 /// record with [`call`]; the call's data is at [`DATA`] (64 KB).
 pub fn install_into(e: &mut Engine) {
+    install_into_as(e, true);
+}
+
+/// [`install_into`] with JIP answering "installed" or not (`answers_installed`): the engine
+/// crates' tests of a translation with JIP present but not installed.
+pub fn install_into_as(e: &mut Engine, answers_installed: bool) {
     prepare(e);
-    crate::install_as(e, true);
+    crate::install_as(e, answers_installed);
 }
 
 /// What [`engine`] does to a new engine.
@@ -38,8 +44,15 @@ fn prepare(e: &mut Engine) {
     e.map(CONSOLE_OPEN & !0xfff, 0x1000);
     e.map(DATA, 0x1_0000);
     // The processes' vtables (HighProcess 0x01087864, MiddleHighProcess 0x0108904C), where JIP
-    // writes its hit-data routines once installed.
-    e.map(0x0108_7000, 0x3000);
+    // writes its hit-data routines once installed, and the player's MagicTarget vtable slot
+    // 0x0108A9B4 (game_patches::gp, G122).
+    e.map(0x0108_7000, 0x4000);
+    // `ExtraTimeLeft`'s vtable (0x010158FC), whose two slots JIP's ExtraJIP framework writes
+    // (step 3.9 GH1).
+    e.map(0x0101_5000, 0x1000);
+    // The queued references' vtables (0x01016BA4 to 0x01016D7C), where JIP writes its attaches
+    // (game_patches::gp).
+    e.map(0x0101_6000, 0x1000);
     nvse::table::install(e);
     // The platform's XInputGetState at its import slot, as the host registers it (no controller:
     // ERROR_DEVICE_NOT_CONNECTED), for JIP's wrap there.
@@ -50,10 +63,55 @@ fn prepare(e: &mut Engine) {
     // `ExtraDataList::GetCanNotWear` (`00418b10`, JIP's wrap there), when the test engine has no
     // translation of it: the exe's test, `BaseExtraList::HasExtra(0x3E)` (`0040fe80`), the bit of
     // type 0x3E in the presence bits at `+8` (byte `+0xF`, bit `0x40`).
+    // `00482090` (a container's items' health, JIP's wrap there: group GH1, G50), when the test
+    // engine has no translation of it: a stand-in that does nothing (JIP's wrap replaces it).
+    if !e.is_registered(0x0048_2090) {
+        e.register(0x0048_2090, |_, _| Ret::default());
+    }
     if !e.is_registered(0x0041_8b10) {
         e.register(0x0041_8b10, |e, a| Ret {
             eax: u32::from(e.mem.u8(a[0] + 0xf) & 0x40 != 0),
             ..Ret::default()
+        });
+    }
+    // `TESImageSpaceModifier::GetGetHit` (`005d2860`, JIP's wrap there once installed: step 3.9
+    // GS, G123), when the test engine has no translation of it: no "get hit" modifier (the
+    // exe's answer while its image space byte is 0).
+    if !e.is_registered(0x005d_2860) {
+        e.register(0x005d_2860, |_, _| Ret::default());
+    }
+    // Group GC's wraps (G109 `0058e9d0`, G111 `00646260`), when the test engine has no
+    // translation of them: the impact data set's slot for the material (the exe's answer with no
+    // override set), and `fDamageToWeaponValue`'s value (`0x11CF154`, the exe's with no ammo).
+    if !e.is_registered(0x0058_e9d0) {
+        e.register(0x0058_e9d0, |e, a| Ret {
+            eax: e
+                .mem
+                .u32(a[0].wrapping_add(a[1].wrapping_mul(4)).wrapping_add(0x1c)),
+            ..Ret::default()
+        });
+    }
+    if !e.is_registered(0x0064_6260) {
+        e.map(0x011c_f000, 0x1000);
+        e.register(0x0064_6260, |e, _| f32::into_ret(e.mem.f32(0x011c_f154)));
+    }
+    // O1's wrap (`009b5a30`, `HitData::ReduceDamage`): a stand-in that leaves the hit as it is.
+    if !e.is_registered(0x009b_5a30) {
+        e.register(0x009b_5a30, |_, _| Ret::default());
+    }
+    // Group GF: `TESNPC`'s model vtable (0x0104A1A4), whose set slot `+0x18` JIP writes (G40),
+    // the two skeleton settings (0x011D2718, 0x011D3E44), and `00601c30` (G39's wrap) when the
+    // test engine has no translation of it: the exe's answer, the female setting's text for a
+    // female NPC (`+0x34` bit 0 of the NPC, the model being at `+0xDC`), else the male one's.
+    e.map(0x0104_a000, 0x1000);
+    e.map(0x011d_2000, 0x2000);
+    if !e.is_registered(0x0060_1c30) {
+        e.register(0x0060_1c30, |e, a| {
+            let female = e.mem.u8(a[0].wrapping_sub(0xdc).wrapping_add(0x34)) & 1 != 0;
+            Ret {
+                eax: e.mem.u32(if female { 0x011d_271c } else { 0x011d_3e48 }),
+                ..Ret::default()
+            }
         });
     }
 }
@@ -187,4 +245,74 @@ pub fn int_arg(v: i32) -> Vec<u8> {
 /// two bytes alone, no type byte.
 pub fn short_arg(v: u16) -> Vec<u8> {
     v.to_le_bytes().to_vec()
+}
+
+/// xNVSE's record of key `k`, for a test to change; the keys' lock-free copy
+/// (`nvse::input::publish_key_states`, which a device read writes) is written when it goes, so
+/// JIP's key reads (which read that copy) see the change.
+pub fn key(e: &mut Engine, k: u32) -> KeyEdit<'_> {
+    KeyEdit { e, k: k as usize }
+}
+
+/// [`key`]'s guard.
+pub struct KeyEdit<'a> {
+    e: &'a mut Engine,
+    k: usize,
+}
+
+impl std::ops::Deref for KeyEdit<'_> {
+    type Target = nvse::input::KeyInfo;
+    fn deref(&self) -> &nvse::input::KeyInfo {
+        &self
+            .e
+            .ext_get::<nvse::Nvse>()
+            .expect("xNVSE is installed")
+            .input
+            .keys[self.k]
+    }
+}
+
+impl std::ops::DerefMut for KeyEdit<'_> {
+    fn deref_mut(&mut self) -> &mut nvse::input::KeyInfo {
+        &mut self.e.ext::<nvse::Nvse>().input.keys[self.k]
+    }
+}
+
+impl Drop for KeyEdit<'_> {
+    fn drop(&mut self) {
+        nvse::input::publish_key_states(self.e);
+    }
+}
+
+/// Runs `f` on `e` while a second engine of the run (a real thread's: `share_slots_for_test`)
+/// holds JIP's shared slot. A path that asks for JIP's slot stops the test (two engines on one
+/// thread), so `f` finishing shows the path does not take it: the hooks' seams that run on the AI
+/// and loader threads.
+pub fn with_jips_slot_held<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(
+        other.ext::<crate::Jip>().installed,
+        "the other engine holds JIP's state"
+    );
+    let r = f(e);
+    engine_core::extend::release_held_for_test();
+    r
+}
+
+/// Runs `f` on `e` while a second engine of the run (a real thread's: `share_slots_for_test`)
+/// holds xNVSE's shared slot. A path that asks for xNVSE's slot stops the test (two engines on
+/// one thread), so `f` finishing shows the path does not take it: a condition evaluated on an AI
+/// thread.
+pub fn with_nvses_slot_held<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    // Shared as `nvse::install` shares it (a test engine may hold it as its own).
+    e.share_ext::<nvse::Nvse>();
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    let _ = other.ext::<nvse::Nvse>();
+    let r = f(e);
+    engine_core::extend::release_held_for_test();
+    r
 }

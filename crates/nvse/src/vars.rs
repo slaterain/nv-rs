@@ -435,15 +435,13 @@ pub fn str_compare(upper: &[u8; 256], l: &[u8], r: &[u8]) -> std::cmp::Ordering 
     }
 }
 
-/// The string and array variables of an engine.
+/// The array variables of an engine and the event lists' records (in xNVSE's shared slot); the
+/// string variables are [`Strings`].
 #[derive(Default)]
 pub struct State {
-    pub strings: HashMap<u32, StringVar>,
-    pub string_ids: VarIds,
     pub arrays: HashMap<u32, ArrayVar>,
     pub array_ids: VarIds,
-    /// The maps' iteration orders as xNVSE's hash maps have them (the co-save's order).
-    pub string_order: HashOrder,
+    /// The map's iteration order as xNVSE's hash map has it (the co-save's order).
     pub array_order: HashOrder,
     /// The locals recorded per event list (`g_nvseVarGarbageCollectionMap`).
     pub collected: HashMap<u32, HashMap<u32, VarType>>,
@@ -473,76 +471,169 @@ pub fn upper_table(e: &mut Engine) -> [u8; 256] {
 
 // ---- strings (`StringVarMap`) ----
 
-/// The text of string `id` (`g_StringMap.Get`), if it exists.
-pub fn string(e: &Engine, id: u32) -> Option<Vec<u8>> {
-    e.ext_get::<Nvse>()?
-        .vars
-        .strings
-        .get(&id)
-        .map(|s| s.data.clone())
+/// xNVSE's string variables (`g_StringMap`): the texts by id, the id sets and the map's
+/// iteration order (the co-save's order).
+#[derive(Default)]
+pub struct StringTable {
+    pub strings: HashMap<u32, StringVar>,
+    pub string_ids: VarIds,
+    pub string_order: HashOrder,
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp: StringVarMap::Add.
-/// A new string owned by mod `owning_mod`; temporary with `temporary`.
-pub fn add_string(e: &mut Engine, owning_mod: u8, data: &[u8], temporary: bool) -> u32 {
-    let s = state(e);
-    let id = s.string_ids.unused();
-    s.string_ids.used.insert(id);
-    s.string_order.insert(id);
-    s.strings.insert(
-        id,
-        StringVar {
-            data: data.to_vec(),
-            owning_mod,
-            function_result_cache: false,
-        },
-    );
-    if temporary {
-        mark_string_temporary(e, id, true);
+impl StringTable {
+    /// The text of string `id` (`Get`), if it exists.
+    pub fn text(&self, id: u32) -> Option<Vec<u8>> {
+        self.strings.get(&id).map(|s| s.data.clone())
     }
-    id
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp: StringVarMap::Add.
+    /// A new string owned by mod `owning_mod`; temporary with `temporary`.
+    pub fn add(&mut self, owning_mod: u8, data: &[u8], temporary: bool) -> u32 {
+        let id = self.string_ids.unused();
+        self.put(id, owning_mod, data, temporary);
+        id
+    }
+
+    /// [`StringTable::add`]'s second half: string `id` (from `GetUnusedID`) made and put in.
+    fn put(&mut self, id: u32, owning_mod: u8, data: &[u8], temporary: bool) {
+        self.string_ids.used.insert(id);
+        self.string_order.insert(id);
+        self.strings.insert(
+            id,
+            StringVar {
+                data: data.to_vec(),
+                owning_mod,
+                function_result_cache: false,
+            },
+        );
+        if temporary {
+            self.mark_temporary(id, true);
+        }
+    }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp:
+    // StringVarMap::MarkTemporary.
+    /// The function result string is never made temporary.
+    pub fn mark_temporary(&mut self, id: u32, temporary: bool) {
+        if temporary
+            && self
+                .strings
+                .get(&id)
+                .is_some_and(|v| v.function_result_cache)
+        {
+            return;
+        }
+        self.string_ids.mark_temporary(id, temporary);
+    }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp: StringVarMap::Delete.
+    pub fn delete(&mut self, id: u32) {
+        if self
+            .strings
+            .get(&id)
+            .is_some_and(|v| v.function_result_cache)
+        {
+            self.string_ids.temp.remove(&id);
+            return;
+        }
+        self.strings.remove(&id);
+        self.string_ids.free(id);
+        self.string_order.remove(id);
+    }
+
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp: StringVarMap::Clean.
+    /// Deletes the temporary strings, the largest id first.
+    pub fn clean(&mut self) {
+        while let Some(&last) = self.string_ids.temp.iter().next_back() {
+            self.delete(last);
+        }
+    }
+}
+
+/// The string variables behind their own lock, as xNVSE's `VarMap` keeps its own critical
+/// section (`VarMap.h` `cs`, taken by `Get`, `Add`, `Delete`, `MarkTemporary`, `Clean`), not in
+/// xNVSE's shared slot: a lock-free slot ([`Engine::ext_free`]) made at install
+/// ([`install`]), before the threads start, so every thread's engine of the run has the same
+/// one. A condition evaluated on an AI thread (JIP's `AuxVarGetFltCond` reads its name here)
+/// takes only this lock, never xNVSE's slot, so it does not wait for the main thread. The lock
+/// is a leaf: each operation is one take, and the table is reached only inside
+/// [`with_strings`]' closure (which has no engine) or the functions below, so no guard lives
+/// across a game call, a script call or another slot. Lock order: xNVSE's slot (held by the
+/// commands), then this one; a holder of this one takes nothing else.
+#[derive(Default)]
+pub struct Strings(std::sync::Mutex<StringTable>);
+
+impl Strings {
+    /// The table under its lock.
+    pub fn lock(&self) -> std::sync::MutexGuard<'_, StringTable> {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// [`StringTable::add`] in one take of the lock: the id picked and the string put in
+    /// together, so two threads never get the same id.
+    pub fn add(&self, owning_mod: u8, data: &[u8], temporary: bool) -> u32 {
+        self.add_with(owning_mod, data, temporary, || {})
+    }
+
+    /// [`Strings::add`], with `between` run after the id is picked and before the string is put
+    /// in, still under the lock (tests: another thread's add there must wait for this take).
+    pub fn add_with(
+        &self,
+        owning_mod: u8,
+        data: &[u8],
+        temporary: bool,
+        between: impl FnOnce(),
+    ) -> u32 {
+        let mut t = self.lock();
+        let id = t.string_ids.unused();
+        between();
+        t.put(id, owning_mod, data, temporary);
+        id
+    }
+}
+
+/// `f` on the string table, under its lock (one take).
+pub fn with_strings<R>(e: &mut Engine, f: impl FnOnce(&mut StringTable) -> R) -> R {
+    f(&mut e.ext_free::<Strings>().lock())
+}
+
+/// The text of string `id` (`g_StringMap.Get`), if it exists: the strings' own lock alone, on
+/// any thread's engine.
+pub fn string(e: &Engine, id: u32) -> Option<Vec<u8>> {
+    e.ext_get::<Strings>()?.lock().text(id)
+}
+
+/// A new string owned by mod `owning_mod`; temporary with `temporary` ([`StringTable::add`]).
+pub fn add_string(e: &mut Engine, owning_mod: u8, data: &[u8], temporary: bool) -> u32 {
+    e.ext_free::<Strings>().add(owning_mod, data, temporary)
 }
 
 /// Sets string `id`'s text (`StringVar::Set`); false when there is no such string.
 pub fn set_string(e: &mut Engine, id: u32, data: &[u8]) -> bool {
-    match state(e).strings.get_mut(&id) {
+    with_strings(e, |t| match t.strings.get_mut(&id) {
         Some(s) => {
             s.data = data.to_vec();
             true
         }
         None => false,
-    }
+    })
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp:
-// StringVarMap::MarkTemporary.
-/// The function result string is never made temporary.
+/// [`StringTable::mark_temporary`].
 pub fn mark_string_temporary(e: &mut Engine, id: u32, temporary: bool) {
-    let s = state(e);
-    if temporary && s.strings.get(&id).is_some_and(|v| v.function_result_cache) {
-        return;
-    }
-    s.string_ids.mark_temporary(id, temporary);
+    with_strings(e, |t| t.mark_temporary(id, temporary));
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp: StringVarMap::Delete.
+/// [`StringTable::delete`].
 pub fn delete_string(e: &mut Engine, id: u32) {
-    let s = state(e);
-    if s.strings.get(&id).is_some_and(|v| v.function_result_cache) {
-        s.string_ids.temp.remove(&id);
-        return;
-    }
-    s.strings.remove(&id);
-    s.string_ids.free(id);
-    s.string_order.remove(id);
+    with_strings(e, |t| t.delete(id));
 }
 
-// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), StringVar.cpp: StringVarMap::Clean.
-/// Deletes the temporary strings, the largest id first.
+/// Deletes the temporary strings, the largest id first ([`StringTable::clean`], one take).
 pub fn clean_strings(e: &mut Engine) {
-    while let Some(&last) = state(e).string_ids.temp.iter().next_back() {
-        delete_string(e, last);
-    }
+    with_strings(e, StringTable::clean);
 }
 
 // ---- arrays (`ArrayVarMap`) ----
@@ -744,6 +835,28 @@ pub fn set_element(e: &mut Engine, id: u32, key: &Key, value: Value) -> bool {
     true
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayVar::SetElementFromAPI
+// with a plugin element of no type (`Get(key, true)`, then nothing set).
+/// The element at `key` of array `id` made, of no type, when it is not there; an element there
+/// is left as it is. False when the array does not exist or the key's type is not the array's.
+pub fn make_element(e: &mut Engine, id: u32, key: &Key) -> bool {
+    let upper = upper_table(e);
+    match state(e).arrays.get(&id) {
+        None => return false,
+        Some(a) if a.position(&upper, key).is_some() => return true,
+        Some(_) => {}
+    }
+    if !set_element(e, id, key, Value::Number(0.0)) {
+        return false;
+    }
+    if let Some(a) = state(e).arrays.get_mut(&id) {
+        if let Some(at) = a.position(&upper, key) {
+            a.at_mut(at).data = Data::Invalid;
+        }
+    }
+    true
+}
+
 /// The element at `key` of array `id`, cloned.
 pub fn get_element(e: &mut Engine, id: u32, key: &Key) -> Option<Element> {
     let upper = upper_table(e);
@@ -799,15 +912,20 @@ pub fn erase_all(e: &mut Engine, id: u32) -> u32 {
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), VarMap.h: VarMap::Reset (for both maps).
-/// Every string and array variable gone, the id sets emptied (ids start from 1 again).
+/// Every string and array variable gone, the id sets emptied (ids start from 1 again). Each
+/// map keeps its buckets (`VarMap::Reset` removes the entries one by one and never shrinks the
+/// table), so the next co-save lists what a load puts back in xNVSE's order. The strings in one
+/// take of their lock.
 pub fn reset(e: &mut Engine) {
     let st = state(e);
-    st.strings.clear();
     st.arrays.clear();
-    st.string_ids = VarIds::default();
     st.array_ids = VarIds::default();
-    st.string_order.clear();
     st.array_order.clear();
+    with_strings(e, |t| {
+        t.strings.clear();
+        t.string_ids = VarIds::default();
+        t.string_order.clear();
+    });
 }
 
 /// `ArrayElement::Unset` of an element taken out of its array by a caller (a range erased, an
@@ -909,8 +1027,10 @@ fn event_list_destroy(e: &mut Engine, a: &[u32]) -> Ret {
     e.call_next(EVENT_LIST_DESTROY.addr(), a)
 }
 
-/// Installs the event list wrap (the tick that cleans the temporaries is [`crate::tick`]).
+/// Installs the event list wrap (the tick that cleans the temporaries is [`crate::tick`]) and
+/// makes the strings' lock-free slot ([`Strings`]) before the threads start.
 pub fn install(e: &mut Engine) {
+    e.ext_free::<Strings>();
     e.wrap(EVENT_LIST_DESTROY, event_list_destroy);
 }
 
@@ -960,6 +1080,154 @@ mod tests {
         assert_eq!(add_string(&mut e, 1, b"x", false), 1);
         assert_eq!(add_string(&mut e, 1, b"y", false), 2);
         assert_eq!(add_string(&mut e, 1, b"z", false), 4);
+    }
+
+    /// A reset keeps the string map's buckets, as `VarMap::Reset` (which removes the entries and
+    /// never shrinks the table): after a session with ten strings (16 buckets), ids 1 and 3 put
+    /// back by a load list as [3, 1] (buckets 7 and 13); a fresh 8-bucket map would list [1, 3]
+    /// (buckets 5 and 7), and the next co-save would write them in another order than xNVSE.
+    #[test]
+    fn a_reset_keeps_the_strings_buckets() {
+        let mut e = engine();
+        for i in 0..10u8 {
+            add_string(&mut e, 1, &[b'a' + i], false);
+        }
+        reset(&mut e);
+        let keys = with_strings(&mut e, |t| {
+            assert!(t.strings.is_empty() && t.string_ids.used.is_empty());
+            t.string_order.insert(1);
+            t.string_order.insert(3);
+            t.string_order.keys()
+        });
+        assert_eq!(keys, [3, 1], "the 16 buckets kept");
+        assert_eq!(
+            add_string(&mut e, 1, b"x", false),
+            1,
+            "ids start from 1 again"
+        );
+    }
+
+    /// `vars::install` alone makes the strings' slot, before the threads: a thread's engine made
+    /// right after it (`share_slots_for_test`, as the real threads' engines are) has the same
+    /// table though no string was touched yet, and reads what the main engine adds.
+    #[test]
+    fn install_makes_the_strings_for_every_threads_engine() {
+        fn nothing(_: &mut Engine, _: &[u32]) -> Ret {
+            Ret::default()
+        }
+        let mut e = engine();
+        e.register(crate::functions::EVENT_LIST_DESTROY, nothing);
+        install(&mut e);
+        let mut t = Engine::new_untyped_for_test();
+        e.share_slots_for_test(&mut t);
+        engine_core::extend::release_held_for_test();
+        assert!(t.ext_get::<Strings>().is_some(), "made at install");
+        let id = add_string(&mut e, 1, b"main", false);
+        assert_eq!(string(&t, id), Some(b"main".to_vec()));
+        engine_core::extend::release_held_for_test();
+    }
+
+    /// The id is picked and the string put in under one take (`Strings::add_with`'s step between
+    /// the two runs while the lock is held): another thread's add started in that step waits for
+    /// this one and gets the next id. Split into two takes, the other add lands in the step,
+    /// picks the same id and is overwritten.
+    #[test]
+    fn an_add_in_the_middle_of_another_gets_its_own_id() {
+        let strings = Strings::default();
+        let done = std::sync::atomic::AtomicBool::new(false);
+        let other = std::sync::Mutex::new(0u32);
+        let first = std::thread::scope(|scope| {
+            strings.add_with(1, b"first", false, || {
+                scope.spawn(|| {
+                    *other.lock().unwrap() = strings.add(1, b"second", false);
+                    done.store(true, std::sync::atomic::Ordering::SeqCst);
+                });
+                let start = std::time::Instant::now();
+                while !done.load(std::sync::atomic::Ordering::SeqCst)
+                    && start.elapsed() < std::time::Duration::from_millis(500)
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            })
+        });
+        let second = *other.lock().unwrap();
+        assert_ne!(first, second, "two adds, one id");
+        let t = strings.lock();
+        assert_eq!(t.text(first), Some(b"first".to_vec()));
+        assert_eq!(t.text(second), Some(b"second".to_vec()));
+    }
+
+    /// A reader on another OS thread (an AI thread's condition) sees a string's whole text: one
+    /// thread sets it to one of two whole texts, alternately, as fast as it can, while another
+    /// reads it; every read is one of the two, never a mix.
+    #[test]
+    fn a_reader_sees_only_whole_texts() {
+        const ROUNDS: u32 = 20_000;
+        let strings = Strings::default();
+        let (a, b) = (vec![b'a'; 256], vec![b'b'; 256]);
+        let id = strings.add(1, &a, false);
+        let barrier = std::sync::Barrier::new(2);
+        let torn = std::sync::atomic::AtomicU32::new(0);
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                for round in 0..ROUNDS {
+                    let text = if round % 2 == 0 { &b } else { &a };
+                    strings.lock().strings.get_mut(&id).unwrap().data = text.clone();
+                }
+            });
+            scope.spawn(|| {
+                barrier.wait();
+                for _ in 0..ROUNDS {
+                    let read = strings.lock().text(id);
+                    if read.as_ref() != Some(&a) && read.as_ref() != Some(&b) {
+                        torn.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            });
+        });
+        assert_eq!(torn.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// Contention on the strings' lock: two OS threads add strings as fast as they can, both
+    /// released together by a barrier, each reading its text back and deleting every other one.
+    /// The id is picked and the string put in under one take (`Strings::add`), so no two adds
+    /// get one id: every text read back is the adder's own, and the table holds exactly the
+    /// strings not deleted. An add split into two takes (the id picked, the lock let go, then the
+    /// string put in) gives two threads one id: that interleaving is timing-dependent, so this
+    /// test catches such a fault only probabilistically (many rounds).
+    #[test]
+    fn two_threads_adding_strings_never_share_an_id() {
+        const ROUNDS: u32 = 20_000;
+        let strings = Strings::default();
+        let barrier = std::sync::Barrier::new(2);
+        let wrong = std::sync::atomic::AtomicU32::new(0);
+        std::thread::scope(|scope| {
+            for side in *b"ab" {
+                let (strings, barrier, wrong) = (&strings, &barrier, &wrong);
+                scope.spawn(move || {
+                    barrier.wait();
+                    for round in 0..ROUNDS {
+                        let text = [side; 8];
+                        let id = strings.add(1, &text, false);
+                        if strings.lock().text(id).as_deref() != Some(&text[..]) {
+                            wrong.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        if round % 2 == 1 {
+                            strings.lock().delete(id);
+                        }
+                    }
+                });
+            }
+        });
+        assert_eq!(
+            wrong.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "an add read back another thread's text"
+        );
+        let t = strings.lock();
+        assert_eq!(t.strings.len() as u32, ROUNDS, "half of each side's kept");
+        assert_eq!(t.string_ids.used.len() as u32, ROUNDS);
     }
 
     /// Temporary strings and unreferenced arrays go at the clean-up (each tick, [`crate::tick`]);

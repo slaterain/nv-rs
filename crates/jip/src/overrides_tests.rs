@@ -1010,10 +1010,10 @@ fn has_perk_command() {
             format!("player {perk:x} 0")
         ]
     );
-    e.ext::<Jip>().saved.npc_perks_patch = true;
+    crate::cosave::set_npc_perks_patch(&mut e, true);
     assert_eq!(perk_rank(&mut e, npc, perk, false), 1);
     assert_eq!(calls(), [format!("own {perk:x} 0")]);
-    e.ext::<Jip>().saved.npc_perks_patch = false;
+    crate::cosave::set_npc_perks_patch(&mut e, false);
     e.map(0x0103_5000, 0x1000);
     e.mem.write(0x0103_5f1c, b"Perk Rank >> %d\0");
     set_script_ref(&mut e, 1, perk);
@@ -1192,4 +1192,241 @@ fn records_untouched_when_off() {
         want[XNVSE.len()..],
         "installed, row off: vanilla untouched"
     );
+}
+
+/// The exe's block records 1 (`MenuMode`) and 0xE ("Unused2") as FalloutNV.exe has them (read
+/// from `0x0118E318` and `0x0118E520`): names, opcodes, the parameter list, `MenuModeFunction`
+/// (`005c4240`) and no handler, the parse routine `005b1ba0`.
+fn block_records(e: &mut Engine) {
+    let menu = 0x0118_e318;
+    for (i, word) in [
+        0x0104_45c0u32,
+        0x0101_1584,
+        1,
+        0x0101_1584,
+        0x0001_0000,
+        0x0118_d120,
+        0x005c_4240,
+        0x005b_1ba0,
+        0,
+        0,
+    ]
+    .iter()
+    .enumerate()
+    {
+        e.mem.set_u32(menu + 4 * i as u32, *word);
+    }
+    let unused = 0x0118_e520;
+    for (i, word) in [
+        0x0104_4540u32,
+        0x0101_1584,
+        0xe,
+        0x0101_1584,
+        1,
+        0,
+        0,
+        0x005b_1ba0,
+        0,
+        0,
+    ]
+    .iter()
+    .enumerate()
+    {
+        e.mem.set_u32(unused + 4 * i as u32, *word);
+    }
+}
+
+/// The whole block table (0x26 records of 0x28 bytes from `0x0118E2F0`).
+fn block_table(e: &Engine) -> Vec<u8> {
+    e.mem.bytes(0x0118_e2f0, 0x26 * 0x28)
+}
+
+/// Block type `kind`'s handler word, read as the translated runner reads it
+/// (`runner_evaluate_line`: `0x0118E300 + kind * 0x28 + 8`; the exe's `[kind*0x28 + 0x118E308]`).
+fn block_handler(e: &Engine, kind: u32) -> u32 {
+    e.mem.u32(0x0118_e300 + kind * 0x28 + 8)
+}
+
+/// D03: the two block records change only while JIP answers "installed" with the row on (given
+/// before or after JIP's start): record 1's handler is JIP's routine, record 0xE's the port's
+/// clearing return-true routine (at the literal addresses the runner reads); every other byte of
+/// the table as before. Not installed (row on or off), and installed with the row off: the whole
+/// table untouched.
+#[test]
+fn block_records_only_with_the_row() {
+    let mut plain = engine();
+    block_records(&mut plain);
+    let want = block_table(&plain);
+    for row in [false, true] {
+        let mut e = engine();
+        block_records(&mut e);
+        set_vanilla_commands(&mut e, row);
+        crate::install_as(&mut e, false);
+        set_vanilla_commands(&mut e, row);
+        assert_eq!(block_table(&e), want, "not installed, row {row}");
+    }
+    let mut e = engine();
+    block_records(&mut e);
+    crate::install_as(&mut e, true);
+    assert_eq!(block_table(&e), want, "installed, row off");
+    for row_first in [false, true] {
+        let mut e = engine();
+        block_records(&mut e);
+        if row_first {
+            set_vanilla_commands(&mut e, true);
+        }
+        crate::install_as(&mut e, true);
+        set_vanilla_commands(&mut e, true);
+        // The handler words at `0x0118E330` (record 1 + 0x18) and `0x0118E538` (record 0xE +
+        // 0x18), offsets 0x40 and 0x248 in the table; nothing else.
+        assert_eq!(e.mem.u32(0x0118_e330), BLOCK_ROUTINE);
+        assert_eq!(e.mem.u32(0x0118_e538), UNUSED_BLOCK_ROUTINE);
+        assert_eq!(block_handler(&e, 1), BLOCK_ROUTINE);
+        assert_eq!(block_handler(&e, 0xe), UNUSED_BLOCK_ROUTINE);
+        let mut changed = want.clone();
+        changed[0x40..0x44].copy_from_slice(&BLOCK_ROUTINE.to_le_bytes());
+        changed[0x248..0x24c].copy_from_slice(&UNUSED_BLOCK_ROUTINE.to_le_bytes());
+        assert_eq!(block_table(&e), changed, "row first {row_first}");
+        // Once: a second time changes nothing.
+        set_vanilla_commands(&mut e, true);
+        assert_eq!(block_table(&e), changed);
+    }
+}
+
+/// Runs the `MenuMode` block's handler from its record as `EvaluateLine` calls it (the words of a
+/// `Begin MenuMode` line, the result holding `start`): the handler's `al` and the result.
+fn run_block(e: &mut Engine, args: &[Vec<u8>], console: bool, start: f64) -> (u32, f64) {
+    run_block_type(e, 1, args, console, start)
+}
+
+/// [`run_block`] for block type `kind`, its handler read as the translated runner reads it.
+fn run_block_type(
+    e: &mut Engine,
+    kind: u32,
+    args: &[Vec<u8>],
+    console: bool,
+    start: f64,
+) -> (u32, f64) {
+    crate::test_support::console(e, console);
+    let words = crate::test_support::line(e, 0x1024, args);
+    e.mem.set_f64(crate::test_support::RESULT, start);
+    let execute = block_handler(e, kind);
+    let mut w = vec![execute];
+    w.extend_from_slice(&words);
+    let ok = e.call(0x005e_1550, &w).eax & 0xff;
+    crate::test_support::console(e, false);
+    (ok, e.mem.f64(crate::test_support::RESULT))
+}
+
+/// D03: `Begin MenuMode` with JIP's handler: the mode asked (no argument: 0; JIP's modes 1 to 4;
+/// a menu id; an id out of the menus' range false), the result 1 when up and 0 when not, whatever
+/// the result held before (cleared first: G02's job in JIP); the console line as the command's.
+#[test]
+fn menu_mode_block_as_jip() {
+    // JIP answering "installed" with the row on: the record holds JIP's routine.
+    let mut e = commands_world();
+    e.mem.set_u32(MANAGER + 0xc, 2);
+    assert_eq!(
+        run_block(&mut e, &[], false, 0.0),
+        (1, 1.0),
+        "no argument: 0"
+    );
+    e.mem.set_u32(MANAGER + 0xc, 1);
+    assert_eq!(
+        run_block(&mut e, &[], false, 0.5),
+        (1, 0.0),
+        "false: cleared, not left"
+    );
+    assert_eq!(
+        run_block(
+            &mut e,
+            &[int_arg(0)],
+            false,
+            f64::from_bits(0x4000_0000_0000_0000)
+        ),
+        (1, 0.0),
+        "a stale high word cleared"
+    );
+    // The console open: mode 3; the line printed.
+    assert_eq!(run_block(&mut e, &[int_arg(3)], true, 0.0), (1, 1.0));
+    assert_eq!(lines(), [("MenuMode %d >> %d".to_string(), vec![3, 1])]);
+    // A menu id: up or not.
+    e.mem.set_u8(MENU_VISIBILITY + MENU_MAP, 1);
+    assert_eq!(
+        run_block(&mut e, &[int_arg(MENU_MAP as i32)], false, 0.5),
+        (1, 1.0)
+    );
+    e.mem.set_u8(MENU_VISIBILITY + MENU_MAP, 0);
+    assert_eq!(
+        run_block(&mut e, &[int_arg(MENU_MAP as i32)], false, 0.5),
+        (1, 0.0)
+    );
+    // Past the last menu id (and negative): false, even with the byte there set.
+    e.mem.set_u8(MENU_VISIBILITY + MENU_MAX + 1, 1);
+    assert_eq!(
+        run_block(&mut e, &[int_arg(MENU_MAX as i32 + 1)], false, 0.5),
+        (1, 0.0)
+    );
+    assert_eq!(run_block(&mut e, &[int_arg(-1)], false, 0.5), (1, 0.0));
+}
+
+/// D03, block type 0xE: its handler (read as the runner reads it) answers true and leaves the
+/// result 0 whatever it held (non-zero high word included), so the block is skipped; the exe's
+/// `005d4a40` would leave the stale value (with G02 on, JIP's result is 0 too).
+#[test]
+fn unused_block_answers_true_and_is_skipped() {
+    let mut e = commands_world();
+    for start in [1.0, -0.5, f64::from_bits(0x4000_0000_0000_0000)] {
+        assert_eq!(
+            run_block_type(&mut e, 0xe, &[], false, start),
+            (1, 0.0),
+            "{start}"
+        );
+    }
+    assert!(lines().is_empty(), "no console line");
+}
+
+/// `HasPerk`'s eval reads the NPC perks patch's lock-free copy: while a second engine of the run
+/// (a real thread's) holds JIP's shared slot, it answers on this engine (asking for the slot
+/// here would be refused: two engines on one thread), with the patch (the actor's own rank) and
+/// without (the player's, for a teammate).
+#[test]
+fn has_perk_eval_answers_while_another_engine_holds_jips_state() {
+    let mut e = commands_world();
+    let (_, npc) = perk_world(&mut e);
+    let perk = AREA + 0x9600;
+    form(&mut e, perk, 0x0100_0060, 0x56, VTABLES + 0xd00, &[]);
+    e.mem.set_u8(npc + 0x18d, 1);
+    let res = crate::test_support::RESULT;
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(other.ext::<Jip>().installed, "the other engine holds it");
+    calls();
+    e.mem.set_f64(res, 0.0);
+    has_perk_eval(&mut e, &[npc, perk, 0, res]);
+    assert_eq!(result(&e), 1.0);
+    assert_eq!(
+        calls(),
+        [format!("player {perk:x} 1")],
+        "a teammate: the player's"
+    );
+    engine_core::extend::release_held_for_test();
+    crate::cosave::set_npc_perks_patch(&mut e, true);
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(other.ext::<Jip>().installed);
+    e.mem.set_f64(res, 0.0);
+    has_perk_eval(&mut e, &[npc, perk, 0, res]);
+    assert_eq!(result(&e), 1.0);
+    assert_eq!(
+        calls(),
+        [format!("own {perk:x} 0")],
+        "with the patch: its own"
+    );
+    assert!(
+        crate::cosave::npc_perks_patch(&mut other),
+        "one copy for the run"
+    );
+    engine_core::extend::release_held_for_test();
 }

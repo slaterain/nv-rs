@@ -399,10 +399,24 @@ pub fn fn_00624720(e: &mut Engine, _this: Ptr, island: Ptr) {
                 let scene = e.call(TES_GET_450B80, &args![0u32]).u32();
                 e.call(UPDATE_OBJECT_LIGHTING, &args![scene, node, 0u32]);
             }
-            let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-            let matches = form == e.global::<u32>(FORM_011CA27C) || {
-                let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-                form == e.global::<u32>(FORM_011CA280)
+            // JIP LN NVSE's ash pile test (step 3.9 G06, JIP's own) replaces the two compares
+            // (`0x624958`): the base's ash pile bit answers. One load while JIP is not installed.
+            let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                e.site(0x0062_4958, &[reference])
+            } else {
+                None
+            };
+            let matches = match jip {
+                Some(answer) => answer & 0xff != 0,
+                None => {
+                    let form =
+                        typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+                    form == e.global::<u32>(FORM_011CA27C) || {
+                        let form =
+                            typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+                        form == e.global::<u32>(FORM_011CA280)
+                    }
+                }
             };
             if matches {
                 e.call(BHK_WORLD_SET_MOTION, &args![object, 5u32, 1u32, 0u32, 1u32]);
@@ -778,6 +792,64 @@ mod tests {
             calls(&log, UPDATE_OBJECT_LIGHTING),
             vec![vec![0x0fff_0000, 0, 0]]
         );
+    }
+
+    thread_local! {
+        static JIP_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static JIP_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn jip_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        JIP_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's ash pile test (step 3.9 G06, JIP's own) at `0x624958`: while JIP is not installed
+    /// the handler is not asked and the exe's two compares decide; installed, it is asked with
+    /// the reference and its answer's low byte decides (the compares do not run); no answer
+    /// leaves the compares.
+    #[test]
+    fn settling_callback_jip_ash_pile_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        let reference = object(&mut e, REF_SLOTS, |slot| {
+            (slot == REFR_SLOT_224 || slot == REFR_SLOT_150) as u32
+        });
+        chain(&mut e, reference);
+        let entities = e.mem.alloc(4);
+        e.mem.set_u32(entities, 0x0aaa_0000);
+        e.register(ARRAY_SIZE, |_, _| 1u32.into_ret());
+        e.register_double(ARRAY_ELEMENT, move |_, _| entities.into_ret());
+        e.register(REFERENCE_GET_8D6F30, |_, _| 0x0ddd_0000u32.into_ret());
+        e.map(0x011c_a000, 0x1000);
+        e.set_global(FORM_011CA27C, 0x0123_0000u32);
+        e.set_global(FORM_011CA280, 0x0eee_0000u32);
+        // The base is the goo pile: the exe's compares say "ash pile".
+        e.register(REFERENCE_GET_FORM, |_, _| 0x0eee_0000u32.into_ret());
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0062_4958), jip_handler);
+        let run = |e: &mut Engine, answer: Option<u32>| {
+            JIP_ANSWER.with(|c| c.set(answer));
+            e.call_log = Some(vec![]);
+            e.call(0x0062_4720, &args![0u32, 0x5000u32]);
+            let log = e.call_log.take().unwrap();
+            (
+                calls(&log, BHK_WORLD_SET_MOTION).len(),
+                calls(&log, REFERENCE_GET_FORM).len(),
+                JIP_SEEN.with(|s| s.take()),
+            )
+        };
+        // Not installed: the exe's compares, the handler not asked.
+        assert_eq!(run(&mut e, Some(0)), (1, 2, vec![]));
+        e.set_jip_patches(jip_patches::INSTALLED);
+        // The bit clear: not an ash pile although the base is the goo pile.
+        assert_eq!(run(&mut e, Some(0)), (0, 0, vec![vec![reference]]));
+        // Only the low byte counts.
+        assert_eq!(run(&mut e, Some(0x100)), (0, 0, vec![vec![reference]]));
+        // The bit set on a base that is neither vanilla pile: an ash pile.
+        e.register(REFERENCE_GET_FORM, |_, _| 0x0555_0000u32.into_ret());
+        assert_eq!(run(&mut e, Some(1)), (1, 0, vec![vec![reference]]));
+        // No answer: the exe's compares (neither pile: no motion change).
+        assert_eq!(run(&mut e, None), (0, 2, vec![vec![reference]]));
     }
 
     #[test]

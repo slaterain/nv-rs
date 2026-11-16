@@ -187,7 +187,7 @@ fn the_messages_drive_them() {
         0,
         0x11
     ));
-    e.ext::<nvse::Nvse>().input.keys[0x11].raw_state = true;
+    crate::test_support::key(&mut e, 0x11).raw_state = true;
     dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
     assert_eq!(
         calls(),
@@ -209,11 +209,11 @@ fn the_messages_drive_them() {
     // run on their own.
     let key_up = crate::ln_events::mask(crate::ln_events::id::KEY_UP);
     crate::ln_events::process_ln_event_handler(&mut e, key_up, SCRIPT_FORM, true, 0, 0x11);
-    e.ext::<nvse::Nvse>().input.keys[0x11].raw_state = false;
+    crate::test_support::key(&mut e, 0x11).raw_state = false;
     dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
     assert_eq!(calls(), [(SCRIPT_FORM, 0, vec![0x11])]);
     assert!(callbacks(&mut e).is_empty());
-    e.ext::<nvse::Nvse>().input.keys[0x11].raw_state = true;
+    crate::test_support::key(&mut e, 0x11).raw_state = true;
     dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
     assert_eq!(
         calls(),

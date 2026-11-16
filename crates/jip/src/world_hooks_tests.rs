@@ -11,7 +11,8 @@
 
 use super::*;
 use crate::test_support::{
-    engine, form_arg, int_arg, line, s, script_ref, RESULT, SCRIPT as CALLER,
+    engine, form_arg, int_arg, line, s, script_ref, with_jips_slot_held as held, RESULT,
+    SCRIPT as CALLER,
 };
 
 const AREA: u32 = 0x0500_0000;
@@ -351,10 +352,7 @@ fn unique_items() {
     );
     assert_eq!(users(&e, Hook::CheckUniqueItem), 1);
     let id = e.mem.u32(WEAPON_FORM + 0xc);
-    assert_eq!(
-        e.ext::<Jip>().world_hooks.form_flags.get(&id),
-        Some(&UNIQUE_ITEM)
-    );
+    assert_eq!(state(&mut e).form_flags.get(&id), Some(&UNIQUE_ITEM));
 }
 
 /// Many distinct names on one reference take one block of the game's heap, rewritten in place:
@@ -392,17 +390,17 @@ fn many_names_keep_the_memory_bounded() {
     assert_eq!(nvse::table::guest_text(&e, first), full);
     // Removed: the block waits; the next reference's text takes it.
     run(&mut e, SET_REF_NAME, REF, &[s(b"")]);
-    assert!(e.ext::<Jip>().world_hooks.ref_names.is_empty());
+    assert!(state(&mut e).ref_names.is_empty());
     run(&mut e, SET_REFR_MODEL_PATH, ITEM, &[s(b"b.nif")]);
     assert_eq!(site(&mut e, 0x0050_fe8b, &[BASE, ITEM]), Some(first));
     assert_eq!(e.mem.u32(HEAP), heap + 0x80);
     // Before a load the paths' blocks go back; a name takes it again.
     crate::world_hooks::pre_load(&mut e);
-    assert_eq!(e.ext::<Jip>().world_hooks.free_texts.len(), 1);
+    assert_eq!(state(&mut e).free_texts.len(), 1);
     run(&mut e, SET_REF_NAME, REF, &[s(b"again")]);
     assert_eq!(site(&mut e, 0x0055_d520, &[REF]), Some(first));
     assert_eq!(e.mem.u32(HEAP), heap + 0x80);
-    assert!(e.ext::<Jip>().world_hooks.free_texts.is_empty());
+    assert!(state(&mut e).free_texts.is_empty());
 }
 
 /// A text longer than its block (read whole with the list guard row) moves to a block twice the
@@ -420,12 +418,12 @@ fn a_longer_text_moves_to_a_bigger_block() {
     assert_ne!(big, small);
     assert_eq!(nvse::table::guest_text(&e, big), long);
     assert_eq!(
-        e.ext::<Jip>().world_hooks.ref_names[&REF].capacity,
+        state(&mut e).ref_names[&REF].capacity,
         0x100,
         "the next power of two"
     );
     assert_eq!(
-        e.ext::<Jip>().world_hooks.free_texts,
+        state(&mut e).free_texts,
         vec![TextBlock {
             at: small,
             capacity: 0x80
@@ -450,9 +448,10 @@ fn reference_names_and_model_paths() {
     assert_eq!(users(&e, Hook::GetRefName), 1);
     assert_eq!(users(&e, Hook::GetModelPath), 1);
     assert_eq!(e.mem.u8(REF + 0x5f), ALT_REF_NAME | REFR_MODEL_PATH);
-    let name = site(&mut e, 0x0055_d520, &[REF]).expect("named");
+    // On the loader and AI threads: both answer while another engine holds JIP's shared slot.
+    let name = held(&mut e, |e| site(e, 0x0055_d520, &[REF])).expect("named");
     assert_eq!(nvse::table::guest_text(&e, name), b"Bob");
-    let path = site(&mut e, 0x0050_fe8b, &[BASE, REF]).expect("a path");
+    let path = held(&mut e, |e| site(e, 0x0050_fe8b, &[BASE, REF])).expect("a path");
     assert_eq!(nvse::table::guest_text(&e, path), b"a.nif");
     assert_eq!(site(&mut e, 0x0050_fe8b, &[BASE, 0]), None, "no reference");
     run(&mut e, SET_REF_NAME, REF, &[s(b"Al")]);
@@ -466,7 +465,7 @@ fn reference_names_and_model_paths() {
     assert_eq!(e.mem.u8(REF + 0x5f), ALT_REF_NAME);
     assert_eq!(users(&e, Hook::GetRefName), 1);
     assert_eq!(users(&e, Hook::GetModelPath), 0);
-    assert!(e.ext::<Jip>().world_hooks.model_paths.is_empty());
+    assert!(state(&mut e).model_paths.is_empty());
     e.mem.set_u8(REF + 0x5f, 0);
     crate::world_hooks::pre_load(&mut e);
     assert_eq!(e.mem.u8(REF + 0x5f), ALT_REF_NAME, "set again");
@@ -681,18 +680,64 @@ fn an_info_under_two_topics_takes_get_owner_topics_answer() {
         &[form_arg(R_S1), int_arg(1), form_arg(R_TOPIC)],
     );
     // The second topic's handler (no script argument index of its own here).
-    e.ext::<Jip>()
-        .world_hooks
+    state(&mut e)
         .dialog_topic
         .entry(SECOND_TOPIC)
         .or_default()
         .insert(SCRIPT_TWO);
     crate::script_call::calls();
-    assert_eq!(site(&mut e, 0x0061_f184, &[INFO, 0, REF]), None);
+    // On the AI threads (CreateConversation): it answers while another engine holds JIP's slot.
+    assert_eq!(
+        held(&mut e, |e| site(e, 0x0061_f184, &[INFO, 0, REF])),
+        None
+    );
     assert_eq!(
         crate::script_call::calls(),
         vec![(SCRIPT_ONE, REF, vec![TOPIC_FORM])]
     );
+}
+
+/// With JIP's game patch "Store parent TESTopic" on (step 3.9a: the host's row), the handler reads
+/// the info's recorded topic, the last its load linked (here the second topic, where the exe's
+/// walk answers the first), as JIP reads its word: no call of `GetOwnerTopic`.
+#[test]
+fn an_info_under_two_topics_takes_the_last_linked_with_jips_patch() {
+    let mut e = world();
+    const SECOND_TOPIC: u32 = AREA + 0x4800;
+    form(&mut e, SECOND_TOPIC, TOPIC, 0x0100_0010, false);
+    // No jip_nvse.ini (`CreateFileA` finds none): JIP's defaults.
+    e.register(0x00fd_f088, |_, _| Ret {
+        eax: 0xffff_ffff,
+        ..Ret::default()
+    });
+    crate::game_patches::set_row(&mut e, true);
+    e.site(0x0061_e086, &[TOPIC_FORM, INFO]);
+    e.site(0x0061_e086, &[SECOND_TOPIC, INFO]);
+    run(
+        &mut e,
+        SET_ON_DIALOG_TOPIC,
+        0,
+        &[form_arg(R_S1), int_arg(1), form_arg(R_TOPIC)],
+    );
+    state(&mut e)
+        .dialog_topic
+        .entry(SECOND_TOPIC)
+        .or_default()
+        .insert(SCRIPT_TWO);
+    crate::script_call::calls();
+    e.call_log = Some(vec![]);
+    // The fixes branch reads the dialogue patch's lock-free record: it answers while another
+    // engine holds JIP's shared slot.
+    assert_eq!(
+        held(&mut e, |e| site(e, 0x0061_f184, &[INFO, 0, REF])),
+        None
+    );
+    let log = e.call_log.take().unwrap();
+    assert_eq!(
+        crate::script_call::calls(),
+        vec![(SCRIPT_TWO, REF, vec![SECOND_TOPIC])]
+    );
+    assert!(log.iter().all(|c| c.0 != GET_OWNER_TOPIC), "no call");
 }
 
 #[test]
@@ -802,8 +847,9 @@ fn quest_stage_events() {
     e.mem.set_u8(QUEST_FORM + 0x3c, 8);
     assert_eq!(add(&mut e, R_S2, 10, 0), 1.0);
     assert_eq!(users(&e, Hook::SetQuestStage), 1, "one per quest");
+    // On an AI thread (a result script): it answers while another engine holds JIP's slot.
     assert_eq!(
-        site(&mut e, 0x0060_f4a9, &[STAGE, QUEST_FORM]),
+        held(&mut e, |e| site(e, 0x0060_f4a9, &[STAGE, QUEST_FORM])),
         Some(1),
         "1 | 2: set"
     );
@@ -877,27 +923,27 @@ fn recorded_form_flags_come_back_after_a_load() {
     run(&mut e, SET_INTERACTION_DISABLED, ITEM, &[int_arg(1)]);
     let (ref_id, item_id) = (0x0100_0001, 0x0100_0003);
     assert_eq!(
-        e.ext::<Jip>().world_hooks.form_flags.get(&ref_id),
+        state(&mut e).form_flags.get(&ref_id),
         Some(&NO_PC_ACTIVATION)
     );
     // The load rebuilds the forms: their bytes are 0 again.
     e.mem.set_u8(REF + 6, 0);
     message(&mut e, msg::POST_LOAD_GAME, 0);
     assert_eq!(e.mem.u8(REF + 6), 0, "a failed load restores nothing");
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.len(), 2);
+    assert_eq!(state(&mut e).form_flags.len(), 2);
     message(&mut e, msg::POST_LOAD_GAME, 1);
     assert_eq!(e.mem.u8(REF + 6), NO_PC_ACTIVATION);
     // The item is not in the game's form map: its record goes.
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&item_id), None);
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.len(), 1);
+    assert_eq!(state(&mut e).form_flags.get(&item_id), None);
+    assert_eq!(state(&mut e).form_flags.len(), 1);
     e.mem.set_u8(REF + 6, 0);
     message(&mut e, msg::NEW_GAME, 0);
     assert_eq!(e.mem.u8(REF + 6), NO_PC_ACTIVATION, "a new game too");
     // A byte of 0 (every flag cleared) leaves the record.
     run(&mut e, SET_INTERACTION_DISABLED, REF, &[int_arg(0)]);
-    assert_eq!(e.ext::<Jip>().world_hooks.form_flags.get(&ref_id), Some(&0));
+    assert_eq!(state(&mut e).form_flags.get(&ref_id), Some(&0));
     message(&mut e, msg::POST_LOAD_GAME, 1);
-    assert!(e.ext::<Jip>().world_hooks.form_flags.is_empty());
+    assert!(state(&mut e).form_flags.is_empty());
 }
 
 /// A form type byte past the game's 121 types (bad mod data) answers "not disabled", "no script"
@@ -920,7 +966,7 @@ fn a_form_type_past_the_tables_stops_nothing() {
         0,
         &[form_arg(R_BASE), s(b"OnAdd"), int_arg(1)],
     );
-    assert!(e.ext::<Jip>().world_hooks.disabled_events.is_empty());
+    assert!(state(&mut e).disabled_events.is_empty());
     assert_eq!(users(&e, Hook::MarkScriptEvent), 0);
     // SetInteractionDisabledType's own check passes only the filter types.
     run(
@@ -1135,7 +1181,7 @@ fn script_events_disabled() {
     assert_eq!(users(&e, Hook::MarkScriptEvent), 1);
     assert_eq!(users(&e, Hook::DoActivate), 1);
     assert_eq!(e.mem.u8(REF + 6), EVENT_DISABLED | ACTIVATE_DISABLED);
-    assert_eq!(e.ext::<Jip>().world_hooks.disabled_events[&REF], 0x1080);
+    assert_eq!(state(&mut e).disabled_events[&REF], 0x1080);
     assert_eq!(site(&mut e, 0x0057_3512, &[REF]), Some(1));
     // The seam: the list's extra script with an event list and a script with data.
     let list = REF + 0x44;
@@ -1143,8 +1189,9 @@ fn script_events_disabled() {
     e.mem.set_u32(XSCRIPT + 0xc, OBJ_SCRIPT);
     e.mem.set_u32(XSCRIPT + 0x10, 0x7700);
     e.mem.set_u32(OBJ_SCRIPT + 0x20, 20);
+    // On the AI threads: it answers while another engine holds JIP's shared slot.
     assert_eq!(
-        site(&mut e, 0x005a_c763, &[0, list, 0x80]),
+        held(&mut e, |e| site(e, 0x005a_c763, &[0, list, 0x80])),
         Some(1),
         "OnHit disabled"
     );
@@ -1165,10 +1212,7 @@ fn script_events_disabled() {
     );
     set_extra(&mut e, list, EXTRA_SCRIPT, XSCRIPT);
     // The base's events: OnDeath disabled for the base.
-    e.ext::<Jip>()
-        .world_hooks
-        .disabled_events
-        .insert(BASE, 0x10);
+    state(&mut e).disabled_events.insert(BASE, 0x10);
     e.mem.set_u8(BASE + 6, EVENT_DISABLED);
     assert_eq!(site(&mut e, 0x005a_c763, &[0, list, 0x10]), Some(1));
     // Item events (OnAdd, 1): the form is a reference, so the caller's word decides.
@@ -1177,10 +1221,7 @@ fn script_events_disabled() {
         None,
         "no caller word"
     );
-    e.ext::<Jip>()
-        .world_hooks
-        .disabled_events
-        .insert(ITEM_BASE, 1);
+    state(&mut e).disabled_events.insert(ITEM_BASE, 1);
     e.mem.set_u8(ITEM_BASE + 6, EVENT_DISABLED);
     {
         let _w = e.mark_caller_word(Hook::MarkScriptEvent, ITEM);
@@ -1195,10 +1236,7 @@ fn script_events_disabled() {
     {
         // OnEquip: the item word itself is the form tested.
         let _w = e.mark_caller_word(Hook::MarkScriptEvent, ITEM_BASE);
-        e.ext::<Jip>()
-            .world_hooks
-            .disabled_events
-            .insert(ITEM_BASE, 2);
+        state(&mut e).disabled_events.insert(ITEM_BASE, 2);
         assert_eq!(site(&mut e, 0x005a_c763, &[REF, list, 2]), Some(1));
         assert_eq!(
             site(&mut e, 0x005a_c763, &[REF, list, 8]),
@@ -1207,10 +1245,7 @@ fn script_events_disabled() {
         );
     }
     // OnFire: the form's own events, no caller word.
-    e.ext::<Jip>()
-        .world_hooks
-        .disabled_events
-        .insert(ITEM_BASE, 0x40_0000);
+    state(&mut e).disabled_events.insert(ITEM_BASE, 0x40_0000);
     assert_eq!(
         site(&mut e, 0x005a_c763, &[ITEM_BASE, list, 0x40_0000]),
         Some(1)
@@ -1270,37 +1305,38 @@ fn script_wait_seams() {
         saved_offset: 0x10,
         saved_if_stack: [7; 12],
     };
-    e.ext::<Jip>().world_hooks.script_waits.insert(REF, wait);
+    state(&mut e).script_waits.insert(REF, wait);
     e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
-    site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
-    assert_eq!(e.ext::<Jip>().world_hooks.script_wait, Some(REF));
+    // On the AI threads too (package scripts): the runner's and the block's seams answer while
+    // another engine holds JIP's shared slot.
+    held(&mut e, |e| site(e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]));
+    assert_eq!(current_wait(), Some(REF));
+    // Another thread's run start leaves this thread's wait (JIP's one global would not).
+    std::thread::spawn(crate::world_hooks::clear_current_wait)
+        .join()
+        .expect("ran");
+    assert_eq!(current_wait(), Some(REF), "per thread");
     e.mem.set_u16(OBJ_SCRIPT + 0x28, 0x100);
     site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
-    assert_eq!(
-        e.ext::<Jip>().world_hooks.script_wait,
-        None,
-        "an effect script"
-    );
+    assert_eq!(current_wait(), None, "an effect script");
     e.mem.set_u16(OBJ_SCRIPT + 0x28, 1);
     e.mem.set_u32(OBJ_SCRIPT + 0x40, REF);
     site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, 0]);
-    assert_eq!(
-        e.ext::<Jip>().world_hooks.script_wait,
-        Some(REF),
-        "a quest script's quest"
-    );
+    assert_eq!(current_wait(), Some(REF), "a quest script's quest");
     e.mem.set_u8(REF + 5, 0);
     site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, 0]);
-    assert_eq!(e.ext::<Jip>().world_hooks.script_wait, None, "not flagged");
+    assert_eq!(current_wait(), None, "not flagged");
     e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
     site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, 0]);
     let eval = |e: &mut Engine, kind: u32, cursor: u32, high: u32, action: u32| {
         e.mem.set_u32(LENGTH, 100);
-        let r = site(
-            e,
-            0x005e_1716,
-            &[RUNNER, kind, cursor, high, action, LENGTH, 0x20],
-        );
+        let r = held(e, |e| {
+            site(
+                e,
+                0x005e_1716,
+                &[RUNNER, kind, cursor, high, action, LENGTH, 0x20],
+            )
+        });
         assert_eq!(r, Some(1));
         e.mem.u32(LENGTH)
     };
@@ -1314,22 +1350,27 @@ fn script_wait_seams() {
     );
     // The waiting block: a GameMode pass that does not apply skips without counting.
     assert_eq!(eval(&mut e, 0, 0x40, 0, 0), 0x84);
-    assert_eq!(e.ext::<Jip>().world_hooks.script_waits[&REF].iterations, 2);
+    assert_eq!(state(&mut e).script_waits[&REF].iterations, 2);
     // One that applies counts down and skips.
     assert_eq!(eval(&mut e, 0, 0x40, 0x3ff0_0000, 0), 0x84);
-    assert_eq!(e.ext::<Jip>().world_hooks.script_waits[&REF].iterations, 1);
+    assert_eq!(state(&mut e).script_waits[&REF].iterations, 1);
     // An event block (type above 1) counts even when it does not apply: resumes.
     assert_eq!(eval(&mut e, 2, 0x40, 0, 0), 100 + 0x10);
     for i in 0..12 {
         assert_eq!(e.mem.u32(RUNNER + 0x20 + 4 * i), 7);
     }
-    assert_eq!(e.ext::<Jip>().world_hooks.script_wait, None);
+    assert_eq!(current_wait(), None);
     assert_eq!(e.mem.u8(REF + 5), 0);
-    // The pre-load: the waits go with the hook.
+    // The pre-load: the waits go with the hook, and this thread's current wait (JIP nulls
+    // `s_scriptWaitInfo`).
+    e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
+    site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
+    assert_eq!(current_wait(), Some(REF));
     e.set_hook(Hook::ScriptWait, true);
     crate::world_hooks::pre_load(&mut e);
     assert_eq!(users(&e, Hook::ScriptWait), 0);
-    assert!(e.ext::<Jip>().world_hooks.script_waits.is_empty());
+    assert!(state(&mut e).script_waits.is_empty());
+    assert_eq!(current_wait(), None, "cleared on the loading thread");
 }
 
 /// The block iterator over a compiled script: `scn`, then blocks; the last block before the
@@ -1400,6 +1441,10 @@ fn evaluate_line_stand_in(e: &mut Engine, _: &[u32]) -> Ret {
 #[test]
 fn script_wait_command() {
     let mut e = world();
+    // A thread's engine, made right after install: it reads the waits the command writes.
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
     for addr in [0x005e_0d20u32, 0x005e_1160, 0x005e_13a0] {
         e.register(addr, |_, _| Ret::default());
     }
@@ -1447,10 +1492,15 @@ fn script_wait_command() {
     e.mem.set_u8(CALLER + 0x29, 1);
     assert_eq!(go(&mut e, 3), 18, "an effect script");
     e.mem.set_u8(CALLER + 0x29, 0);
-    assert!(e.ext::<Jip>().world_hooks.script_waits.is_empty());
+    assert!(state(&mut e).script_waits.is_empty());
     assert_eq!(users(&e, Hook::ScriptWait), 0);
     assert_eq!(go(&mut e, 3), 25, "past the command");
-    let wait = e.ext::<Jip>().world_hooks.script_waits[&REF];
+    let wait = state(&mut e).script_waits[&REF];
+    assert_eq!(
+        read(&mut t).script_waits.get(&REF),
+        Some(&wait),
+        "a thread's engine reads it"
+    );
     assert_eq!(
         (
             wait.owner,
@@ -1476,8 +1526,134 @@ fn script_wait_command() {
     e.mem.set_u8(CALLER + 0x28, 1);
     e.mem.set_u32(CALLER + 0x40, QUEST_FORM);
     go(&mut e, 2);
+    assert_eq!(state(&mut e).script_waits[&QUEST_FORM].iterations, 2);
+    crate::world_hooks::pre_load(&mut e);
+    assert!(read(&mut t).script_waits.is_empty(), "and their removal");
+    engine_core::extend::release_held_for_test();
+}
+
+/// A thread's engine (`share_slots_for_test`, as `ExtendState::for_thread`) reads the names the
+/// commands write and remove on the main engine: the world hooks' state is one run-wide slot.
+#[test]
+fn a_threads_engine_reads_the_names_the_commands_write() {
+    let mut e = world();
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    run(&mut e, SET_REF_NAME, REF, &[s(b"Bob")]);
+    assert!(read(&mut t).ref_names.contains_key(&REF), "written");
+    run(&mut e, SET_REF_NAME, REF, &[s(b"")]);
+    assert!(!read(&mut t).ref_names.contains_key(&REF), "removed");
+    engine_core::extend::release_held_for_test();
+}
+
+/// The test engine, moved between two OS threads behind a mutex. `Engine` is not `Send` (its
+/// handlers are `Rc`s and it points at its kernel), because a real thread's engine is one OS
+/// thread's only; stepped threads hand one engine between OS threads one at a time, which is
+/// what the mutex does here: only the thread holding the lock reaches it.
+struct Stepped(Engine);
+// SAFETY: reached only through the `Mutex` below, by one thread at a time (the stepped threads'
+// hand-over), and nothing of it (no `Rc`, no reference) is kept outside the lock.
+unsafe impl Send for Stepped {}
+
+/// A wait a thread took before a load counts nothing after it, also when the same owner waits
+/// again at the same block: JIP's pre-load nulls its one `s_scriptWaitInfo` for every thread;
+/// the port's pre-load (on the loading thread) raises the waits' generation, and the other
+/// thread's older value counts as none and is cleared. A wait taken after the load counts down
+/// and resumes as before. The engine runs on two OS threads in turn (as stepped threads hand it
+/// over), behind a mutex each side locks only for its turn, ordered by the channels.
+#[test]
+fn a_wait_taken_before_a_load_counts_nothing_after_it() {
+    let mut e = world();
+    let wait = ScriptWait {
+        owner: REF,
+        ref_id: 0x0100_0001,
+        iterations: 2,
+        block_offset: 0x40,
+        saved_offset: 0x10,
+        saved_if_stack: [7; 12],
+    };
+    state(&mut e).script_waits.insert(REF, wait);
+    e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
+    engine_core::extend::release_held_for_test();
+    let engine = std::sync::Mutex::new(Stepped(e));
+    let lock = || {
+        engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    let (go, wait_go) = std::sync::mpsc::channel::<()>();
+    let (tell, heard) = std::sync::mpsc::channel::<(u32, Option<u32>)>();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            {
+                let mut g = lock();
+                let e = &mut g.0;
+                site(e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
+                engine_core::extend::release_held_for_test();
+            }
+            tell.send((0, current_wait())).expect("told");
+            wait_go.recv().expect("go");
+            let length = {
+                let mut g = lock();
+                let e = &mut g.0;
+                e.mem.set_u32(LENGTH, 100);
+                site(
+                    e,
+                    0x005e_1716,
+                    &[RUNNER, 0, 0x40, 0x3ff0_0000, 0, LENGTH, 0x20],
+                );
+                engine_core::extend::release_held_for_test();
+                e.mem.u32(LENGTH)
+            };
+            tell.send((length, current_wait())).expect("told");
+        });
+        assert_eq!(heard.recv().expect("heard").1, Some(REF), "it waits");
+        {
+            let mut g = lock();
+            let e = &mut g.0;
+            e.set_hook(Hook::ScriptWait, true);
+            crate::world_hooks::pre_load(e);
+            // The same owner waits again at the same block.
+            state(e).script_waits.insert(REF, wait);
+            e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
+            engine_core::extend::release_held_for_test();
+        }
+        go.send(()).expect("sent");
+        let (length, now) = heard.recv().expect("heard");
+        assert_eq!(length, 100, "the block applies: not counted, not skipped");
+        assert_eq!(now, None, "the old wait is cleared");
+    });
+    let mut e = engine
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .0;
     assert_eq!(
-        e.ext::<Jip>().world_hooks.script_waits[&QUEST_FORM].iterations,
-        2
+        state(&mut e).script_waits[&REF].iterations,
+        2,
+        "nothing counted"
     );
+    // A wait taken after the load (this thread's run start) counts down, then resumes.
+    for i in 0..12 {
+        e.mem.set_u32(RUNNER + 0x20 + 4 * i, 0);
+    }
+    site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
+    assert_eq!(current_wait(), Some(REF));
+    let eval = |e: &mut Engine| {
+        e.mem.set_u32(LENGTH, 100);
+        site(
+            e,
+            0x005e_1716,
+            &[RUNNER, 0, 0x40, 0x3ff0_0000, 0, LENGTH, 0x20],
+        );
+        e.mem.u32(LENGTH)
+    };
+    assert_eq!(eval(&mut e), 0x84, "counted down and skipped");
+    assert_eq!(state(&mut e).script_waits[&REF].iterations, 1);
+    assert_eq!(eval(&mut e), 100 + 0x10, "resumes at the saved line");
+    for i in 0..12 {
+        assert_eq!(e.mem.u32(RUNNER + 0x20 + 4 * i), 7, "the if stack");
+    }
+    assert_eq!(current_wait(), None);
+    engine_core::extend::release_held_for_test();
 }

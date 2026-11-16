@@ -175,8 +175,10 @@ fn with_guest_str<T>(e: &mut Engine, text: &[u8], f: impl FnOnce(&mut Engine, u3
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Serialization.cpp: SerializationTask::Load.
-/// The whole file, or `None` when it cannot be opened or is empty.
-fn read_file(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
+/// The whole file, or `None` when it cannot be opened or is empty: through the game's own imports
+/// (`CreateFileA` with read sharing, `ReadFile` in 4 KB steps, `CloseHandle`), so a relative path
+/// is in the game's folder. Also what the built-in JIP reads its `jip_nvse.ini` with.
+pub fn read_file(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
     let handle = with_guest_str(e, path, |e, p| {
         e.call(
             CREATE_FILE_A,
@@ -402,29 +404,31 @@ pub fn core_chunks(e: &mut Engine) -> Vec<Chunk> {
         version: STRING_VERSION,
         data: Vec::new(),
     });
-    let st = &e.ext::<Nvse>().vars;
-    for id in st.string_order.keys() {
-        if st.string_ids.temp.contains(&id) {
-            continue;
+    // The strings' own lock for the walk (one take; the walk makes no engine call).
+    vars::with_strings(e, |st| {
+        for id in st.string_order.keys() {
+            if st.string_ids.temp.contains(&id) {
+                continue;
+            }
+            let Some(s) = st.strings.get(&id) else {
+                continue;
+            };
+            if s.owning_mod == 0xff {
+                continue;
+            }
+            let mut w = ChunkWriter::default();
+            w.u8(s.owning_mod);
+            w.u32(id);
+            let len = s.data.len() as u16;
+            w.u16(len);
+            w.bytes(&s.data[..usize::from(len)]);
+            chunks.push(Chunk {
+                kind: tag(b"STVR"),
+                version: STRING_VERSION,
+                data: w.data,
+            });
         }
-        let Some(s) = st.strings.get(&id) else {
-            continue;
-        };
-        if s.owning_mod == 0xff {
-            continue;
-        }
-        let mut w = ChunkWriter::default();
-        w.u8(s.owning_mod);
-        w.u32(id);
-        let len = s.data.len() as u16;
-        w.u16(len);
-        w.bytes(&s.data[..usize::from(len)]);
-        chunks.push(Chunk {
-            kind: tag(b"STVR"),
-            version: STRING_VERSION,
-            data: w.data,
-        });
-    }
+    });
     chunks.push(Chunk {
         kind: tag(b"STVE"),
         version: STRING_VERSION,
@@ -693,19 +697,20 @@ fn load_strings(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
         }
         let len = r.read16()?;
         let text = c_text(r.read_data(u32::from(len))?);
-        let st = &mut e.ext::<Nvse>().vars;
-        st.string_ids.used.insert(id);
-        if !st.strings.contains_key(&id) {
-            st.string_order.insert(id);
-            st.strings.insert(
-                id,
-                StringVar {
-                    data: text,
-                    owning_mod: modi,
-                    function_result_cache: false,
-                },
-            );
-        }
+        vars::with_strings(e, |st| {
+            st.string_ids.used.insert(id);
+            if !st.strings.contains_key(&id) {
+                st.string_order.insert(id);
+                st.strings.insert(
+                    id,
+                    StringVar {
+                        data: text,
+                        owning_mod: modi,
+                        function_result_cache: false,
+                    },
+                );
+            }
+        });
     }
     Ok(())
 }
