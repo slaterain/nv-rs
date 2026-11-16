@@ -6,7 +6,8 @@ name: Preview packages (Linux, macOS)
 #
 # The runners are the oldest GitHub has for each system, so the programs start on as many
 # systems as possible: ubuntu-22.04 (the program needs glibc 2.35 or newer, BUILD.txt says the
-# exact version read from the program), macos-14 (the oldest Apple silicon runner; Rust's arm64
+# exact version read from the program), macos-15 (the oldest Apple silicon runner left: macos-14 is
+# refused as "not supported" since 2026-11; Rust's arm64
 # macOS programs start on macOS 11 or newer).
 #
 # Each job uses runners from the account's shared limit (20 jobs at a time); one run is two jobs.
@@ -39,13 +40,16 @@ jobs:
             runner: ubuntu-22.04
             jobs: 4
           - system: macos-arm64
-            runner: macos-14
+            runner: macos-15
             # Apple silicon runners have 7 GB of memory: two compilers at a time.
             jobs: 2
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     env:
       CARGO_BUILD_JOBS: ${{ matrix.jobs }}
+      # macOS: the oldest system the program is built for (Rust's own default for arm64), whatever
+      # the runner's SDK; ignored on Linux.
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
