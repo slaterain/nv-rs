@@ -39,6 +39,7 @@ pub static FIXES: &[Fix] = &[
     crate::mod_fit_worn::FIX,
     crate::topic_index::FIX,
     KEEP_COSAVE_PLUGINS,
+    JIP_INSTALLED,
     JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
@@ -239,6 +240,25 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
     nvse::saveload::set_keep_other_plugins(e, true);
 }
 
+/// JIP LN NVSE answers "installed" (step 3.10's switch; off in every preset, [`OFF_IN_EVERY_PRESET`],
+/// until mods that need JIP are proven in the game): its identity, its place in xNVSE's list of
+/// plugins, its built commands' names and handlers, its hooks and its own always-on patches;
+/// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`], [`JIP_COSAVE_FIXES`]) then follow
+/// their own switches. The row sets a flag; `jip::install` (after xNVSE, in
+/// [`crate::install_rows_and_extenders`]) reads it. Off, JIP answers "not installed", as on main before the
+/// row: the same records, the same registrations.
+pub const JIP_INSTALLED: Fix = Fix {
+    name: "JIP LN NVSE built in (for testing)",
+    env: "NV_JIP_INSTALLED",
+    addresses: &[],
+    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with 995 of its 1,118 commands (a script line calling one of the others fails and stops that script for the run), its hooks and 64 of its 162 game patches",
+    install: install_jip_installed,
+};
+
+fn install_jip_installed(e: &mut Engine) {
+    jip::set_answers_installed(e, true);
+}
+
 /// JohnnyGuitar NVSE's corrections of JIP LN NVSE's co-save (`SerializationFixes`), a flag
 /// `crates/jip` reads: JIP's extra data written with the right sizes as version 2, JIP's own
 /// version 1 not read, an unloaded owner's script variables skipped whole.
@@ -258,7 +278,8 @@ fn install_jip_cosave_fixes(e: &mut Engine) {
 /// JIP LN NVSE's versions of seven of the game's own commands (`InitCmdPatches`: `MenuMode`,
 /// `GetItemCount`, `GetContainer`, `IsInList`, `GetHitLocation`, `HasPerk`, `GetNVSEVersionFull` at
 /// `0x127D`), a flag `crates/jip` reads: they change vanilla commands, so they are a row (ADR-0016
-/// §5). They take effect only once JIP answers "installed" (`jip::ANSWERS_INSTALLED`, step 3.10).
+/// §5). They take effect only once JIP answers "installed" (the row [`JIP_INSTALLED`], off in
+/// every preset).
 pub const JIP_VANILLA_COMMANDS: Fix = Fix {
     name: "JIP vanilla commands",
     env: "NV_JIP_VANILLA_CMDS",
@@ -275,8 +296,8 @@ fn install_jip_vanilla_commands(e: &mut Engine) {
 /// JIP LN NVSE's game patches (its changes to the game's own code: `InitGamePatches`, the
 /// `[GamePatches]` switches of the player's `jip_nvse.ini`, step 3.9), a flag `crates/jip` reads:
 /// they change the game for every player, so they are a row (ADR-0016 §5). They take effect only
-/// once JIP answers "installed" (`jip::ANSWERS_INSTALLED`, step 3.10); JIP's own wraps then go
-/// over the rows installed here (the dialogue topic index at `0061a310`).
+/// once JIP answers "installed" (the row [`JIP_INSTALLED`], off in every preset); JIP's own
+/// wraps then go over the rows installed here (the dialogue topic index at `0061a310`).
 pub const JIP_GAME_PATCHES: Fix = Fix {
     name: "JIP game patches",
     env: "NV_JIP_GAME_PATCHES",
@@ -453,7 +474,7 @@ fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, UIO.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, UIO.env, JIP_INSTALLED.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -461,6 +482,7 @@ pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, UIO.env];
 const NO_ADDRESS: &[&str] = &[
     crate::uncap::MENU_FIX.name,
     KEEP_COSAVE_PLUGINS.name,
+    JIP_INSTALLED.name,
     JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
@@ -1992,6 +2014,129 @@ mod tests {
         let folder = Choice::from_files(None, Some(&dir), &play).unwrap();
         assert_eq!(folder.preset, Preset::Fixes);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Step 3.10's switch (JIP LN NVSE answering "installed") is off in every preset, however the
+    /// preset is chosen: the default, the settings file, `NV_PRESET`, Fallout.ini's `sPreset`.
+    #[test]
+    fn jip_installed_is_off_in_every_preset() {
+        assert_eq!(JIP_INSTALLED.env, "NV_JIP_INSTALLED");
+        assert!(OFF_IN_EVERY_PRESET.contains(&JIP_INSTALLED.env));
+        let choices = [
+            Choice::vanilla(),
+            Choice::from_parts(None, no_env).unwrap(),
+            Choice::from_parts(Some("Preset=fixes\n"), no_env).unwrap(),
+            Choice::from_parts(Some("Preset=vanilla\n"), no_env).unwrap(),
+            Choice::from_parts(None, env_of(&[("NV_PRESET", "fixes")])).unwrap(),
+            Choice::from_parts(None, env_of(&[("NV_PRESET", "vanilla")])).unwrap(),
+            with_ini(None, "[nv-rs General]\nsPreset=fixes\n", &[]),
+            with_ini(None, "[nv-rs General]\nsPreset=vanilla\n", &[]),
+        ];
+        for choice in &choices {
+            assert!(!choice.is_on(&JIP_INSTALLED), "{choice:?}");
+        }
+        assert_eq!(choices[1].preset, Preset::Fixes);
+        // The other JIP rows still follow the preset.
+        assert!(choices[1].is_on(&JIP_GAME_PATCHES));
+        assert!(!choices[0].is_on(&JIP_GAME_PATCHES));
+    }
+
+    /// The switch from its variable: `1` on, `0` off, anything else a stop. Alone it makes the run
+    /// a test (vanilla, so the other JIP rows are off); with `NV_PRESET=fixes` the fixes preset's
+    /// JIP rows are on with it, and the threads stepped, as a test's are.
+    #[test]
+    fn jip_installed_from_its_variable() {
+        let alone = Choice::from_parts(None, env_of(&[("NV_JIP_INSTALLED", "1")])).unwrap();
+        assert!(alone.is_on(&JIP_INSTALLED));
+        assert_eq!(alone.preset, Preset::Vanilla);
+        assert!(!alone.is_on(&JIP_GAME_PATCHES));
+        let fixes = Choice::from_parts(
+            None,
+            env_of(&[("NV_JIP_INSTALLED", " 1 "), ("NV_PRESET", "fixes")]),
+        )
+        .unwrap();
+        assert!(fixes.is_on(&JIP_INSTALLED));
+        assert!(fixes.is_on(&JIP_GAME_PATCHES));
+        assert!(fixes.is_on(&JIP_VANILLA_COMMANDS));
+        assert!(fixes.is_on(&JIP_COSAVE_FIXES));
+        assert!(!fixes.is_on(&UIO), "UIO keeps its own switch");
+        assert_eq!(fixes.threads, "stepped");
+        assert!(fixes.describe().contains(JIP_INSTALLED.name));
+        let off = Choice::from_parts(
+            None,
+            env_of(&[("NV_JIP_INSTALLED", "0"), ("NV_PRESET", "fixes")]),
+        )
+        .unwrap();
+        assert!(!off.is_on(&JIP_INSTALLED));
+        assert!(!off.describe().contains(JIP_INSTALLED.name));
+        assert!(Choice::from_parts(None, env_of(&[("NV_JIP_INSTALLED", "yes")])).is_err());
+    }
+
+    /// The switch from Fallout.ini (a launcher's play run): `[nv-rs Fixes] bJIPInstalled=1` on,
+    /// `0` or commented out or misspelt off; the run stays a play run (fixes preset, its threads);
+    /// the variable makes a test run instead.
+    #[test]
+    fn jip_installed_from_fallout_ini() {
+        let on = with_ini(None, "[nv-rs Fixes]\nbJIPInstalled=1\n", &[]);
+        assert!(on.is_on(&JIP_INSTALLED));
+        assert_eq!(on.preset, Preset::Fixes, "a player's line is not a test");
+        assert!(on.is_on(&JIP_GAME_PATCHES));
+        for text in [
+            "[nv-rs Fixes]\nbJIPInstalled=0\n",
+            "[nv-rs Fixes]\n;bJIPInstalled=1\n",
+            "[nv-rs Fixes]\nbJIPInstall=1\n",
+            "[nv-rs Fixes]\nbJIP=1\n",
+            "[nv-rs Display]\nbJIPInstalled=1\n",
+        ] {
+            assert!(!with_ini(None, text, &[]).is_on(&JIP_INSTALLED), "{text}");
+        }
+        // A play run keeps its threads: real unless the file asks for stepped ones.
+        assert_eq!(on.threads, PLAY_THREADS);
+        let stepped = with_ini(
+            None,
+            "[nv-rs Fixes]\nbJIPInstalled=1\n[nv-rs Threads]\nbSteppedThreads=1\n",
+            &[],
+        );
+        assert!(stepped.is_on(&JIP_INSTALLED));
+        assert_eq!(stepped.threads, "stepped");
+        // The variable in a launcher's run makes it a test, which never reads the file: on, in
+        // vanilla, with stepped threads, whatever the file says.
+        let variable = with_ini(
+            None,
+            "[nv-rs Fixes]\nbJIPInstalled=0\n",
+            &[("NV_JIP_INSTALLED", "1")],
+        );
+        assert!(variable.is_on(&JIP_INSTALLED));
+        assert_eq!(variable.preset, Preset::Vanilla);
+        assert_eq!(variable.threads, "stepped");
+        assert!(!variable.is_on(&KEEP_COSAVE_PLUGINS));
+        let row = crate::game_ini::rows()
+            .into_iter()
+            .find(|r| r.switch == JIP_INSTALLED.env)
+            .expect("the row's Fallout.ini key");
+        assert_eq!((row.key, row.default), ("bJIPInstalled", "0"));
+    }
+
+    /// The row reaches JIP before it installs: off in both presets, on with its variable.
+    #[test]
+    fn the_row_switches_jip_before_it_installs() {
+        let row_on = |choice: &Choice| {
+            let mut e = Engine::new();
+            install(&mut e, choice);
+            e.ext::<jip::Jip>().row_on
+        };
+        assert!(!row_on(&Choice::vanilla()));
+        assert!(!row_on(&Choice::from_parts(None, no_env).unwrap()));
+        assert!(row_on(
+            &Choice::from_parts(
+                None,
+                env_of(&[("NV_JIP_INSTALLED", "1"), ("NV_PRESET", "fixes")])
+            )
+            .unwrap()
+        ));
+        assert!(row_on(
+            &Choice::from_parts(None, env_of(&[("NV_JIP_INSTALLED", "1")])).unwrap()
+        ));
     }
 
     #[test]
