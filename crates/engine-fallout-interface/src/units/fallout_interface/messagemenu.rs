@@ -1591,6 +1591,16 @@ pub fn fn_007aa720(e: &mut Engine, choices: u32, object: u32) -> bool {
         let buffer = local(0xc8);
         let mut node = choices;
         while node != 0 && !typed_call!(leaf::FAMILY, 0x0082_56d0, leaf::both_words_zero(e, node)) {
+            // JIP LN NVSE's G21 at `0x007AA80F` (group GA's row and handler, a fix row: JIP's 11
+            // bytes there read the node's item's text and jump to `0x7AA882` when it is null):
+            // a non-zero answer goes to the next node (`0x7AA882`: `node = [node+4]`), 0 copies
+            // the text as the exe does. One load while JIP's fixes are not in.
+            if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+                && e.site(0x007a_a80f, &[node]).is_some_and(|skip| skip != 0)
+            {
+                node = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, node));
+                continue;
+            }
             let item = item_of(e, node);
             let text = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, item));
             e.call(COPY_C_STRING, &args![buffer, 0x104u32, text]);
@@ -3380,6 +3390,101 @@ mod tests {
         let texts: Vec<&str> = log.iter().map(|(_, t)| t.as_str()).collect();
         assert_eq!(texts, vec!["Pick", ";", "Take", ";"]);
         assert_eq!(calls(&w.e, QUEUE_MENU_CREATE), vec![vec![7, 0, 0, 0, 1, 0]]);
+    }
+
+    thread_local! {
+        static G21_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g21_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G21's seam asked without FIXES");
+    }
+
+    /// JIP's test: 1 for a node whose item has no text (`[[node]+4] == 0`), else 0.
+    fn g21_jip(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        G21_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(u32::from(e.mem.u32(e.mem.u32(a[0]) + 4) == 0))
+    }
+
+    fn g21_two(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G21_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(2)
+    }
+
+    /// JIP LN NVSE's G21 seam (`0x007AA80F`, group GA's row, a fix row) over a two-node list:
+    /// the first node's item has no text, the second's is "Pick". With the word 0 or `INSTALLED`
+    /// alone it is not asked and the exe copies both texts (the null one too: the exe's crash,
+    /// a no-op copy here); with `FIXES` and no handler, the same; with JIP's answer it is asked
+    /// with each node (exactly `[node]`), the first node is passed over (no copy, no choice) and
+    /// the walk goes on to the second, whose choice is added; any non-zero answer skips.
+    #[test]
+    fn activation_choices_jip_skip_a_choice_without_text_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let mut w = activation_world(0, false);
+            let pick = put_cstr(&mut w.e, "Pick");
+            let empty = w.e.mem.alloc(0x10);
+            let full = w.e.mem.alloc(0x10);
+            w.e.mem.set_u32(empty, 0x0b20_0000);
+            w.e.mem.set_u32(full, 0x0b20_0000);
+            w.e.mem.set_u32(full + 4, pick);
+            let second = w.e.mem.alloc(8);
+            let first = w.e.mem.alloc(8);
+            w.e.mem.set_u32(first, empty);
+            w.e.mem.set_u32(first + 4, second);
+            w.e.mem.set_u32(second, full);
+            // The exe's two leaves: the node itself (`006815c0`) and the word at +4.
+            w.e.register_double(NODE_ITEM_SLOT, |_, a| ret(a[0]));
+            w.e.register_double(WORD_AT_FOUR, |e, a| ret(e.mem.u32(a[0] + 4)));
+            w.e.register(COPY_C_STRING, |e, a| {
+                if a[2] != 0 {
+                    let text = e.mem.cstr(a[2]);
+                    e.mem.set_cstr(a[0], &text);
+                }
+                Ret::default()
+            });
+            if let Some(handler) = handler {
+                w.e.on_site_for_test(0x007a_a80f, handler);
+            }
+            w.e.set_jip_patches(word);
+            G21_SEEN.with(|s| s.borrow_mut().clear());
+            w.e.call_log = Some(vec![]);
+            assert!(w.e.call(0x007a_a720, &args![first, 0x9000u32]).bool());
+            // The walk's copies: those before the reference's own choice (its target type).
+            let log = w.e.call_log.clone().unwrap();
+            let own = log
+                .iter()
+                .position(|(at, _)| *at == REFR_GET_TARGET_TYPE)
+                .unwrap();
+            let copied: Vec<u32> = log[..own]
+                .iter()
+                .filter(|(at, _)| *at == COPY_C_STRING)
+                .map(|(_, c)| c[2])
+                .collect();
+            let perks = list_items(&w.lists, &w.e, PERK_ACTIVATIONS).len();
+            (
+                copied,
+                perks,
+                G21_SEEN.with(|s| s.take()),
+                first,
+                second,
+                pick,
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (copied, perks, seen, _, _, pick) = run(word, Some(g21_never));
+            assert_eq!((copied, perks, seen), (vec![0, pick], 2, vec![]));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (copied, perks, _, _, _, pick) = run(fixes, None);
+        assert_eq!((copied, perks), (vec![0, pick], 2), "no handler: the exe's");
+        let (copied, perks, seen, first, second, pick) = run(fixes, Some(g21_jip));
+        assert_eq!(seen, vec![vec![first], vec![second]]);
+        assert_eq!(copied, vec![pick], "the first node passed over");
+        assert_eq!(perks, 2, "the second's choice and the reference's own");
+        let (copied, _, seen, first, second, _) = run(fixes, Some(g21_two));
+        assert_eq!(seen, vec![vec![first], vec![second]]);
+        assert!(copied.is_empty(), "any non-zero answer skips");
     }
 
     #[test]

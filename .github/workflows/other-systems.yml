@@ -54,11 +54,18 @@ jobs:
       - name: Build the play build
         run: cargo build --locked --profile play -p nv-viewer
       # Every workspace crate's tests: none of them is Windows-only (tests that are carry
-      # cfg(windows) or an ignore with its reason). The launcher and the ledger are workspaces of
-      # their own (Windows-only and tooling) and are not built here.
+      # cfg(windows) or an ignore with its reason). Left out: the `engine` crate's 21 integration
+      # suites (tests/typed_*.rs and the others: the typed families' Diff tests against the
+      # translation, about 6,500 s of the 7,900 s the whole workspace took on this runner,
+      # typed_shader alone 2,450 s); its library tests run. The launcher and the ledger are
+      # workspaces of their own (Windows-only and tooling) and are not built here.
       - name: Test the workspace
         if: ${{ !cancelled() }}
-        run: cargo test --locked --no-fail-fast --workspace
+        run: |
+          failed=0
+          cargo test --locked --no-fail-fast --workspace --exclude engine || failed=1
+          cargo test --locked --no-fail-fast -p engine --lib || failed=1
+          exit $failed
   macos:
     name: other systems (macos-latest)
     if: >-

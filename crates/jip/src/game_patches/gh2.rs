@@ -201,9 +201,15 @@ fn drop_text(
     hook: Hook,
     map: fn(&mut crate::world_hooks::State) -> &mut BTreeMap<u32, TextBlock>,
 ) {
-    let state = &mut e.ext::<Jip>().world_hooks;
-    if let Some(block) = map(state).remove(&reference) {
-        state.free_texts.push(block);
+    let found = {
+        let mut state = crate::world_hooks::state(e);
+        let block = map(&mut state).remove(&reference);
+        if let Some(block) = block {
+            state.free_texts.push(block);
+        }
+        block.is_some()
+    };
+    if found {
         e.add_hook_user(hook, false);
     }
 }

@@ -4426,7 +4426,10 @@ pub fn fn_005c22f0(e: &mut Engine, a: ScriptArgs) -> bool {
                         f32::from_bits(z)
                     ],
                 );
-                let object = e.vcall(this, 0x1d0, &args![]).u32();
+                let object = match jip_sound_node(e, this) {
+                    Some(node) => node,
+                    None => e.vcall(this, 0x1d0, &args![]).u32(),
+                };
                 e.call(SOUND_HANDLE_FOLLOW_OBJECT, &args![handle, object]);
                 e.call(SOUND_HANDLE_PLAY, &args![handle, 0u32]);
             }
@@ -4436,6 +4439,16 @@ pub fn fn_005c22f0(e: &mut Engine, a: ScriptArgs) -> bool {
     e.call(SPEAK_RESULT_DESTRUCT, &args![handle]);
     e.mem.free(handle);
     result
+}
+
+/// JIP LN NVSE's G34 (`SAFE_WRITE_BUF(0x5C240D, ...)`, step 3.9): the object the sound follows is read
+/// as the reference's root node where the exe asks slot `0x1D0`. The fixes' bit is tested first; then
+/// JIP's handler at `0x5C240D` gets the reference and answers the node (`None`: the exe's call).
+fn jip_sound_node(e: &mut Engine, this: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0 {
+        return None;
+    }
+    e.site(0x005c_240d, &[this])
 }
 
 // Translated from 005c2460 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -11476,5 +11489,109 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    // ---- JIP LN NVSE's G34 seam (0x5C240D) ----
+
+    thread_local! {
+        static G34_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn g34_node(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G34_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x0b00_0444)
+    }
+
+    fn g34_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G34_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    /// `PlaySound3D` on a reference whose slot `0x1D0` answers 0x0A000333, the word `word` and
+    /// `handler` at the seam: (the reference, the follow call's object, the play calls, the
+    /// seam's asks).
+    fn play_sound_3d_jip(
+        word: u32,
+        handler: Option<fn(&mut Engine, &[u32]) -> Option<u32>>,
+        render_state: Option<u32>,
+    ) -> (u32, Vec<Vec<u32>>, usize, Vec<Vec<u32>>) {
+        G34_ASKED.with(|s| s.borrow_mut().clear());
+        let mut e = engine_c();
+        sound_world(&mut e);
+        let form = form_with_id(&mut e, 0x0100_0def);
+        let position = e.mem.alloc(12);
+        let to_position = answering(&mut e, position);
+        let to_object = answering(&mut e, 0x0a00_0333);
+        let reference = reference_with(&mut e, &[(0x1d0, to_object), (0x1f4, to_position)], 1);
+        if let Some(node) = render_state {
+            let state = e.mem.alloc(0x20);
+            e.mem.set_u32(state + 0x10, 0x1111_1111);
+            e.mem.set_u32(state + 0x14, node);
+            e.mem.set_u32(state + 0x18, 0x2222_2222);
+            e.mem.set_u32(reference + 0x64, state);
+        }
+        match handler {
+            Some(h) => {
+                e.set_jip_patches(word);
+                e.on_site_for_test(0x005c_240d, h);
+            }
+            None => {
+                e.register(0x00fd_f088, |_, _| Ret {
+                    eax: 0xffff_ffff,
+                    ..Ret::default()
+                });
+                e.register(0x0061_a310, |_, _| Ret::default());
+                jip::test_support::install_into(&mut e);
+                jip::game_patches::set_row(&mut e, true);
+            }
+        }
+        parse_gives(&mut e, true, &[form]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005c_22f0, script(reference)));
+        let handle = calls(&e, SPEAK_RESULT_CONSTRUCT)[0][0];
+        let follow: Vec<Vec<u32>> = calls(&e, SOUND_HANDLE_FOLLOW_OBJECT)
+            .into_iter()
+            .map(|w| {
+                assert_eq!(w[0], handle);
+                w[1..].to_vec()
+            })
+            .collect();
+        let plays = calls(&e, SOUND_HANDLE_PLAY).len();
+        (
+            reference,
+            follow,
+            plays,
+            G34_ASKED.with(|s| s.borrow().clone()),
+        )
+    }
+
+    /// G34: off (not installed; installed with the row off) the sound follows slot `0x1D0`'s
+    /// object, the seam not asked; on, asked with the reference, its node is followed and the
+    /// sound still plays after it; none keeps the slot's object.
+    #[test]
+    fn jip_g34_sound_follows_the_reference_node() {
+        use engine_core::extend::jip_patches;
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        for word in [0, jip_patches::INSTALLED] {
+            let (_, follow, plays, asked) = play_sound_3d_jip(word, Some(g34_node), None);
+            assert_eq!((follow, plays), (vec![vec![0x0a00_0333]], 1), "{word:x}");
+            assert!(asked.is_empty(), "{word:x}");
+        }
+        let (reference, follow, plays, asked) = play_sound_3d_jip(on, Some(g34_node), None);
+        assert_eq!((follow, plays), (vec![vec![0x0b00_0444]], 1));
+        assert_eq!(asked, vec![vec![reference]]);
+        let (reference, follow, plays, asked) = play_sound_3d_jip(on, Some(g34_none), None);
+        assert_eq!((follow, plays), (vec![vec![0x0a00_0333]], 1));
+        assert_eq!(asked, vec![vec![reference]]);
+    }
+
+    /// G34 with JIP's real handler: the render state's root node (+0x14); no render state: the
+    /// slot's object.
+    #[test]
+    fn jip_g34_real_handler_reads_the_render_state() {
+        let (_, follow, plays, _) = play_sound_3d_jip(0, None, Some(0x0c00_0555));
+        assert_eq!((follow, plays), (vec![vec![0x0c00_0555]], 1));
+        let (_, follow, _, _) = play_sound_3d_jip(0, None, None);
+        assert_eq!(follow, vec![vec![0x0a00_0333]]);
     }
 }

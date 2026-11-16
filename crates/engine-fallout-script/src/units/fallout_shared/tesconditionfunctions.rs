@@ -1539,8 +1539,12 @@ pub fn script_get_locked_condition_function(
                 } else {
                     let terminal =
                         typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-                    // BGSTerminal::IsUnlocked (Xbox PDB)
-                    if !e.call(0x0050_1ae0, &args![terminal, reference]).bool() {
+                    // BGSTerminal::IsUnlocked (Xbox PDB), or JIP's answer (G70)
+                    let unlocked = match jip_terminal_unlocked(e, terminal, reference.addr()) {
+                        Some(unlocked) => unlocked != 0,
+                        None => e.call(0x0050_1ae0, &args![terminal, reference]).bool(),
+                    };
+                    if !unlocked {
                         set_result(e, result, 1.0);
                     }
                 }
@@ -2258,9 +2262,12 @@ pub fn script_is_current_furniture_obj_condition_function(
         let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor))
             .into_ret()
             .ptr::<()>();
-        let furniture = e
-            .vcall(process.addr(), VSLOT_PROCESS_FURNITURE_REFERENCE, &args![])
-            .ptr::<()>();
+        let furniture = match jip_furniture_process(e, process.addr()) {
+            Some(none) => Ptr::new(none),
+            None => e
+                .vcall(process.addr(), VSLOT_PROCESS_FURNITURE_REFERENCE, &args![])
+                .ptr::<()>(),
+        };
         if !furniture.is_null() {
             if e.call(FORM_GET_TYPE, &args![form]).u32() == FORM_TYPE_FURNITURE {
                 let base = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, furniture))
@@ -5382,6 +5389,28 @@ pub fn script_has_been_eaten_condition_function(
         trace_result(e, 0x0103_5bdc, result);
     }
     true
+}
+
+/// JIP LN NVSE's G70 (`WriteRelCall(0x59D0B3, TerminalGetLockedHook)`, step 3.9): JIP's answer
+/// for `BGSTerminal::IsUnlocked(terminal, reference)` (its `ExtraTerminalState` read as well). The
+/// fixes' bit is tested first; then JIP's handler at `0x59D0B3` gets the terminal and the
+/// reference (`None`: the exe's call).
+fn jip_terminal_unlocked(e: &mut Engine, terminal: u32, reference: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0 {
+        return None;
+    }
+    e.site(0x0059_d0b3, &[terminal, reference])
+}
+
+/// JIP LN NVSE's G71 (24 bytes at `0x59E034`, step 3.9): the actor's process tested for null
+/// before its furniture slot is called. The fixes' bit is tested first; then JIP's handler at
+/// `0x59E034` gets the process and answers the furniture (0) for a null one (`None`: the exe's
+/// call).
+fn jip_furniture_process(e: &mut Engine, process: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0 {
+        return None;
+    }
+    e.site(0x0059_e034, &[process])
 }
 
 /// This unit's translated functions, by exe address.
@@ -9640,5 +9669,201 @@ mod tests {
         stub(&mut e, ACTOR_HAS_BEEN_EATEN, 1);
         assert_eq!(run(&mut e, 0x005a_29d0, plain, 0, 0), (true, 0.0));
         assert!(traces(&mut e, 0x005a_29d0, plain, 0, 0x0103_5bdc));
+    }
+
+    // ---- JIP LN NVSE's G70 (0x59D0B3) and G71 (0x59E034) seams ----
+
+    use engine_core::extend::jip_patches;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static JIP_SEEN: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+        static JIP_ANSWER: RefCell<Option<u32>> = const { RefCell::new(None) };
+    }
+
+    /// A test handler: notes its seam and words, answers what `JIP_ANSWER` holds.
+    fn jip_noted<const AT: u32>(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_SEEN.with(|s| s.borrow_mut().push((AT, a.to_vec())));
+        JIP_ANSWER.with(|x| *x.borrow())
+    }
+
+    /// The word set to `word`, both test handlers in, answering `answer`.
+    fn jip_handlers(e: &mut Engine, word: u32, answer: Option<u32>) {
+        JIP_SEEN.with(|s| s.borrow_mut().clear());
+        JIP_ANSWER.with(|x| *x.borrow_mut() = answer);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0059_d0b3, jip_noted::<0x0059_d0b3>);
+        e.on_site_for_test(0x0059_e034, jip_noted::<0x0059_e034>);
+    }
+
+    fn jip_seen() -> Vec<(u32, Vec<u32>)> {
+        JIP_SEEN.with(|s| s.borrow().clone())
+    }
+
+    const JIP_FIXES: u32 = jip_patches::INSTALLED | jip_patches::FIXES;
+
+    /// JIP installed with its game patches row on (no settings file: JIP's defaults).
+    fn jip_fixes_on(e: &mut Engine) {
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        e.register(0x0061_a310, |_, _| Ret::default());
+        jip::test_support::install_into(e);
+        jip::game_patches::set_row(e, true);
+        assert_ne!(e.jip_patches() & jip_patches::FIXES, 0);
+    }
+
+    /// A terminal reference (0x2000) with no lock, of the terminal 0x6000, the player's access
+    /// `access`, `BGSTerminal::IsUnlocked` answering `exe_unlocked`.
+    fn terminal_engine(access: u32, exe_unlocked: u32) -> Engine {
+        let mut e = engine();
+        stub(&mut e, REF_GET_LOCK, 0);
+        stub(&mut e, REF_GET_BASE_FORM, 0x6000);
+        stub(&mut e, FORM_GET_TYPE, FORM_TYPE_TERMINAL);
+        let player = actor(&mut e);
+        e.set_global(PLAYER, player);
+        stub(&mut e, 0x0096_6c60, access);
+        stub(&mut e, 0x0050_1ae0, exe_unlocked);
+        e
+    }
+
+    /// G70 off (not installed; installed with the row off): not asked, the exe's answer.
+    #[test]
+    fn jip_g70_off_never_asks() {
+        for word in [0, jip_patches::INSTALLED] {
+            let mut e = terminal_engine(0, 0);
+            jip_handlers(&mut e, word, Some(1));
+            assert_eq!(run(&mut e, 0x0059_d010, 0x2000, 0, 0), (true, 1.0));
+            assert!(jip_seen().is_empty(), "{word:x}");
+        }
+    }
+
+    /// G70 on: asked with the terminal and the reference (in that order), its answer replaces
+    /// the exe's call (which is not made); none: the exe's call answers.
+    #[test]
+    fn jip_g70_answer_replaces_is_unlocked() {
+        for (answer, exe, expected) in [
+            (Some(1), 0, 0.0),
+            (Some(0), 1, 1.0),
+            (None, 0, 1.0),
+            (None, 1, 0.0),
+        ] {
+            let mut e = terminal_engine(0, exe);
+            jip_handlers(&mut e, JIP_FIXES, answer);
+            e.call_log = Some(vec![]);
+            assert_eq!(
+                run(&mut e, 0x0059_d010, 0x2000, 0, 0),
+                (true, expected),
+                "{answer:?} {exe}"
+            );
+            let log = take_log(&mut e);
+            assert_eq!(jip_seen(), vec![(0x0059_d0b3, vec![0x6000, 0x2000])]);
+            assert_eq!(
+                calls_to(&log, 0x0050_1ae0).len(),
+                usize::from(answer.is_none())
+            );
+        }
+    }
+
+    /// G70's seam sits after the access test: a fully hacked terminal (access 2) answers 2.0
+    /// without asking; no reference, no ask.
+    #[test]
+    fn jip_g70_not_asked_before_its_guards() {
+        let mut e = terminal_engine(2, 0);
+        jip_handlers(&mut e, JIP_FIXES, Some(0));
+        assert_eq!(run(&mut e, 0x0059_d010, 0x2000, 0, 0), (true, 2.0));
+        assert_eq!(run(&mut e, 0x0059_d010, 0, 0, 0), (true, 0.0));
+        assert!(jip_seen().is_empty());
+    }
+
+    /// G70 with JIP's real handler: a terminal state whose `lockedOut` byte is 0x80 answers
+    /// unlocked (0.0) where the exe's `IsUnlocked` says locked; its lock level 3 answers locked
+    /// (1.0) where the exe says unlocked.
+    #[test]
+    fn jip_g70_real_handler_reads_the_terminal_state() {
+        for (locked_out, level, exe, expected) in [(0x80u8, 3u8, 0, 0.0), (0, 3, 1, 1.0)] {
+            let mut e = terminal_engine(0, exe);
+            // A mapped terminal: its flag byte (+0xA5) with bit 2 clear, its neighbours set.
+            let terminal = e.mem.alloc(0x100);
+            e.mem.set_u32(terminal + 0xa4, 0xffff_fdff);
+            stub(&mut e, REF_GET_BASE_FORM, terminal);
+            let extra = e.mem.alloc(0x10);
+            e.mem.set_u32(extra + 0xc, 0x5555_5555);
+            e.mem.set_u8(extra + 0xc, locked_out);
+            e.mem.set_u8(extra + 0xd, level);
+            e.register_double(0x0041_0220, move |_, w| {
+                assert_eq!(w[..2], [0x2000 + 0x44, 0x50]);
+                Ret {
+                    eax: extra,
+                    ..Ret::default()
+                }
+            });
+            jip_fixes_on(&mut e);
+            assert_eq!(run(&mut e, 0x0059_d010, 0x2000, 0, 0), (true, expected));
+        }
+    }
+
+    /// An actor whose process (`008d8520`) is null or one whose furniture slot answers the
+    /// furniture reference 0x7000, its base a `FURN`.
+    fn furniture_engine(process_null: bool) -> (Engine, u32, u32) {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let furniture = typed_object(&mut e, 0x27);
+        let in_use = slot_function(&mut e, 0x0f00_0320, 0x7000);
+        let process = if process_null {
+            0
+        } else {
+            object(&mut e, &[(VSLOT_PROCESS_FURNITURE_REFERENCE, in_use)])
+        };
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        stub(&mut e, REF_GET_BASE_FORM, furniture);
+        let actor = actor(&mut e);
+        (e, actor, furniture)
+    }
+
+    /// G71 on: asked with the process; a null process answered 0 is no furniture (0.0, no call
+    /// through null); a process answered none keeps the slot call (1.0); off: not asked.
+    #[test]
+    fn jip_g71_null_process_is_no_furniture() {
+        let (mut e, actor, furniture) = furniture_engine(true);
+        jip_handlers(&mut e, JIP_FIXES, Some(0));
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, furniture, 0), (true, 0.0));
+        assert_eq!(jip_seen(), vec![(0x0059_e034, vec![0])]);
+        let (mut e, actor, furniture) = furniture_engine(false);
+        jip_handlers(&mut e, JIP_FIXES, None);
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, furniture, 0), (true, 1.0));
+        assert_eq!(jip_seen(), vec![(0x0059_e034, vec![process])]);
+        for word in [0, jip_patches::INSTALLED] {
+            let (mut e, actor, furniture) = furniture_engine(false);
+            jip_handlers(&mut e, word, Some(0));
+            assert_eq!(run(&mut e, 0x0059_dfe0, actor, furniture, 0), (true, 1.0));
+            assert!(jip_seen().is_empty(), "{word:x}");
+        }
+        // No actor or no form: not asked.
+        let (mut e, _, furniture) = furniture_engine(true);
+        jip_handlers(&mut e, JIP_FIXES, Some(0));
+        assert_eq!(run(&mut e, 0x0059_dfe0, 0, furniture, 0), (true, 0.0));
+        assert!(jip_seen().is_empty());
+        let (mut e, actor, _) = furniture_engine(true);
+        jip_handlers(&mut e, JIP_FIXES, Some(0));
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, 0, 0), (true, 0.0));
+        assert!(jip_seen().is_empty());
+    }
+
+    /// G71 with JIP's real handler: a null process gives 0.0 and the trace line after it still
+    /// runs; a real process keeps the match (1.0).
+    #[test]
+    fn jip_g71_real_handler() {
+        let (mut e, actor, furniture) = furniture_engine(true);
+        jip_fixes_on(&mut e);
+        trace_on(&mut e);
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, furniture, 0), (true, 0.0));
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, DEBUG_PRINT).len(), 1, "the code after runs");
+        let (mut e, actor, furniture) = furniture_engine(false);
+        jip_fixes_on(&mut e);
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, furniture, 0), (true, 1.0));
     }
 }

@@ -153,8 +153,7 @@ fn get_script_event_disabled(e: &mut Engine, w: &[u32]) -> Ret {
         let flags = flags6(e, form);
         let disabled = if mask != 0 {
             flags & EVENT_DISABLED != 0
-                && e.ext::<Jip>()
-                    .world_hooks
+                && crate::world_hooks::state(e)
                     .disabled_events
                     .get(&form)
                     .copied()
@@ -243,7 +242,7 @@ fn stop_script_waiting(e: &mut Engine, w: &[u32]) -> Ret {
     if read.ok {
         let owner = wait_owner(&read, &a);
         if owner != 0 && flags5(e, owner) & SCRIPT_ON_WAIT != 0 {
-            if let Some(wait) = e.ext::<Jip>().world_hooks.script_waits.get_mut(&owner) {
+            if let Some(wait) = crate::world_hooks::state(e).script_waits.get_mut(&owner) {
                 wait.iterations = 1;
             }
         }
