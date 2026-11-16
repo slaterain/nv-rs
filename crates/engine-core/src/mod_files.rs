@@ -248,6 +248,14 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
     out
 }
 
+#[path = "mod_files_sections.rs"]
+mod sections;
+pub use sections::{
+    profile_list, profile_section, profile_section_names, remove_profile_key,
+    remove_profile_section, removed_key, removed_section, section_lines, section_names,
+    write_profile_section, written_section,
+};
+
 #[cfg(test)]
 #[path = "mod_files_tests.rs"]
 mod tests;
