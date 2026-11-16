@@ -44,7 +44,12 @@ fn writes_make_windows_bytes() {
         f,
         b"[List]\r\nMaxWidth=200.0000\r\nAdded=4.0000\r\n\r\n[Messages]\r\nInitial=1\t;Initial message\r\nTutorial=1\t;Tutorial\r\nNew=3.0000\r\n[Other]\r\nK=5.0000\r\n".to_vec()
     );
+    // Each case one write from a measured start to Windows' bytes; the chains (no final line
+    // end, spaced key, LF-only file, two backspace writes) measured one write at a time too
+    // (`ini3-2026-11-16.txt`).
     let cases: &[(&[u8], (&str, &str, &str), &[u8])] = &[
+        (b"\x08", ("B", "y", "2"), b"[B]\r\ny=2\r\n"),
+        (b"[B]\r\ny=2\r\n", ("B", "z", "3"), b"[B]\r\ny=2\r\nz=3\r\n"),
         (b"[A]\r\nx=1", ("A", "y", "2"), b"[A]\r\nx=1\r\ny=2\r\n"),
         (
             b"[A]\r\nx=1\r\ny=2\r\n",
@@ -190,7 +195,11 @@ fn without_the_platform_nothing_is_read_or_written() {
     assert_eq!(read(&e, br"Data\Config\MCM.ini"), None);
     assert!(!exists(&e, br"Data\Config\MCM.ini"));
     assert!(!write(&mut e, br"Data\Config\MCM.ini", b"x"));
-    assert!(!write_profile_string(&mut e, b"MCM.ini", b"A", b"x", b"1"));
+    assert_eq!(
+        write_profile_string(&mut e, b"MCM.ini", b"A", b"x", b"1"),
+        Err(ERROR_NOT_SUPPORTED)
+    );
+    assert_eq!(read_or_error(&e, b"MCM.ini"), Err(ERROR_NOT_SUPPORTED));
     assert_eq!(
         profile_string(&e, br"Data\Config\MCM.ini", b"A", b"x"),
         None

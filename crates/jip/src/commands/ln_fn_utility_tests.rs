@@ -176,7 +176,7 @@ fn res_of(e: &mut Engine, opcode: u32, args: &[Vec<u8>]) -> f64 {
 /// after the last `.` made `ini`.
 #[test]
 fn the_ini_file_a_command_names() {
-    let mut e = files_setup();
+    let e = files_setup();
     let script = crate::test_support::SCRIPT;
     fn path(e: &Engine, name: &[u8]) -> Option<Vec<u8>> {
         ini_path(e, crate::test_support::SCRIPT, name.to_vec())
@@ -251,8 +251,11 @@ fn ini_values_written_and_read_back() {
         res_of(&mut e, 0x227a, &[s(b"A:big"), s(b"n")]),
         4294967296.0
     );
+    // (`line` clears the result: 7 is set after it.)
+    let words = crate::test_support::line(&mut e, 0x227a, &[s(b"A:empty"), s(b"n")]);
     e.mem.set_f64(RESULT, 7.0);
-    call(&mut e, 0x227a, &[s(b"A:empty"), s(b"n")]);
+    let exec = crate::test_support::execute_of(&e, 0x227a);
+    e.call(exec, &words);
     assert_eq!(e.mem.f64(RESULT), 7.0, "an empty value leaves the result");
     // The 31-byte cut: a fraction whose tenth digit is the 32nd byte is not read past.
     files::put(
@@ -280,10 +283,42 @@ fn a_refused_name_writes_nothing() {
         0.0
     );
     assert_eq!(
-        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"../x")]),
+        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"../x.cfg")]),
         0.0
     );
     assert_eq!(files::writes(), 0);
+    // Nothing is read there either: a value or section asked for answers as a missing file.
+    assert_eq!(res_of(&mut e, 0x227a, &[s(b"A:x"), s(b"../x.cfg")]), 0.0);
+    // `../x` is JIP's `..ini` in the config folder (the part after the last `.` made `ini`): a
+    // name inside it, written.
+    assert_eq!(
+        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"../x")]),
+        1.0
+    );
+    assert!(files::get(r"data\config\..ini").is_some());
+}
+
+/// A file that is there but cannot be read (Windows answers the default to reads and fails the
+/// writes, so JIP gives nothing and result 0): nothing read, nothing written, the file kept.
+#[test]
+fn an_unreadable_file_is_left_alone() {
+    let mut e = files_setup();
+    files::put(r"data\config\oHUD.ini", files::LOCKED);
+    assert_eq!(res_of(&mut e, 0x227c, &[s(b"A:x"), z(1.0), s(b"")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"")]), 0.0);
+    let map = nvse::vars::create_array(&mut e, nvse::vars::KEY_STRING, false, 0);
+    nvse::vars::set_element(&mut e, map, &Key::Str(b"k".to_vec()), V::Number(1.0));
+    assert_eq!(
+        res_of(&mut e, 0x227f, &[s(b"A"), n(map as i32), s(b"")]),
+        0.0
+    );
+    assert_eq!(res_of(&mut e, 0x22ae, &[s(b"A:x"), s(b"")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x22af, &[s(b"A"), s(b"")]), 0.0);
+    assert_eq!(files::writes(), 0);
+    assert_eq!(files::get(r"data\config\oHUD.ini").unwrap(), files::LOCKED);
+    assert_eq!(res_of(&mut e, 0x227a, &[s(b"A:x"), s(b"")]), 0.0);
+    let res = res_of(&mut e, 0x227b, &[s(b"A:x"), s(b"")]);
+    assert_eq!(string_result(&e, res), b"");
 }
 
 /// `GetINISection`: a string map of the entries with a value, text or numbers; empty when the

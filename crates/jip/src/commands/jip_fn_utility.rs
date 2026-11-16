@@ -5,7 +5,7 @@
 //! texts read from and written to files and mod logs (`ReadArrayFromFile`, `WriteArrayToFile`,
 //! `ReadStringFromFile`, `WriteStringToFile`, `ModLogPrint`) through the core's seam
 //! `engine_core::mod_files`: what a mod writes is kept in the port's own folder beside the saves,
-//! never in the game folder. 17 of its 19 commands; also `jip_fn_string.h`'s `GetStringHash`.
+//! never in the game folder. 17 of its 19 commands.
 //!
 //! Left for later, each for its reason: `SetOptionalPatch` switches JIP's patches (the switch
 //! rows of step 3.9); `GetOptionalPatch` answers whether each switch's hook or patch is in (`HOOK_INSTALLED`,
@@ -18,7 +18,7 @@ use super::arrays::{append_element, create_array, Element};
 use super::jip_fn_aux_variable::{array_values, overriding_mod};
 use super::jip_fn_ui::next_token;
 use super::{ref_id, Handlers};
-use crate::containers::{str_hash_ci, str_hash_cs};
+use crate::containers::str_hash_ci;
 use crate::cosave::{changed, lookup_form, resolved_mod_index, resolved_ref_id};
 use crate::Jip;
 use engine_core::prelude::*;
@@ -47,7 +47,6 @@ pub static COMMANDS: Handlers = &[
     (0x2892, get_is_laa),
     (0x272e, get_session_time),
     (0x27c0, mod_log_print),
-    (0x293f, get_string_hash),
 ];
 
 /// `g_dataHandler` (`*011C3F2C`): its loaded file count (`modList.loadedModCount`, +0x218) and
@@ -605,21 +604,25 @@ fn file_lines(e: &Engine, path: &[u8], command: &str) -> Option<Vec<Vec<u8>>> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: FileStream::OpenWrite,
 // FileStream::MakeAllDirs.
 /// The file written: after its bytes and a LF when `append` and it is there, else made new (its
-/// folders first when it is not there). False when the seam refuses the name.
+/// folders first when it is not there: JIP asks `FileExists`, the attributes, not a read). False
+/// when the seam refuses the name or the write, or when appending to a file that is there but
+/// cannot be read (JIP's `fopen(.., "ab")` fails there: nothing is written, the file is kept).
 fn open_write(e: &mut Engine, path: &[u8], append: bool, text: &[u8]) -> bool {
-    let old = engine_core::mod_files::read(e, path);
     let mut bytes = Vec::new();
-    match old {
-        Some(old) if append => {
-            bytes = old;
-            bytes.push(b'\n');
-        }
-        Some(_) => {}
-        None => {
-            for (i, &b) in path.iter().enumerate() {
-                if b == b'\\' {
-                    engine_core::mod_files::create_directory(e, &path[..i]);
+    if engine_core::mod_files::exists(e, path) {
+        if append {
+            match engine_core::mod_files::read_or_error(e, path) {
+                Ok(old) => {
+                    bytes = old;
+                    bytes.push(b'\n');
                 }
+                Err(_) => return false,
+            }
+        }
+    } else {
+        for (i, &b) in path.iter().enumerate() {
+            if b == b'\\' {
+                engine_core::mod_files::create_directory(e, &path[..i]);
             }
         }
     }
@@ -709,55 +712,6 @@ fn read_array_from_file(e: &mut Engine, w: &[u32]) -> Ret {
         }
     }
     a.set_result(e, f64::from(main as i32));
-    handled(true)
-}
-
-// `functions_jip/jip_fn_string.h`'s `GetStringHash` is here (with its file write) until that
-// file has a module of its own.
-
-/// `GetStringHash.txt`: the file the split mode writes, in the game's folder for JIP (here the
-/// port's folder for mods' files).
-const STRING_HASH_FILE: &[u8] = b"GetStringHash.txt";
-
-// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_string.h:
-// Cmd_GetStringHash_Execute.
-/// JIP's hash of the text (`StrHashCI`, or `StrHashCS` when `case` is set) as a signed number,
-/// printed in the console when it is open; with `split`, each `|`-separated part (runs of `|`
-/// one separator) and its hash written to `GetStringHash.txt` as `"part"`, the number and a
-/// blank line, and no result. Nothing for an empty text.
-fn get_string_hash(e: &mut Engine, w: &[u32]) -> Ret {
-    let a = CommandArgs::new(w);
-    let read = Read::of(e, &a);
-    if !read.ok {
-        return handled(true);
-    }
-    let text = super::buffer_arg(e, &read, 0, STR_ARG_BUFFER, "GetStringHash");
-    if text.is_empty() {
-        return handled(true);
-    }
-    let hash: fn(&[u8]) -> u32 = if read.int(2, 0) == 0 {
-        str_hash_ci
-    } else {
-        str_hash_cs
-    };
-    if read.int(1, 0) == 0 {
-        a.set_result(e, f64::from(hash(&text) as i32));
-        crate::console::print_result(e, &a);
-        return handled(true);
-    }
-    let mut out = Vec::new();
-    let mut rest: &[u8] = &text;
-    loop {
-        let (part, next) = next_token(rest, b'|');
-        out.push(b'"');
-        out.extend_from_slice(part);
-        out.extend_from_slice(format!("\"\n{}\n\n", hash(part) as i32).as_bytes());
-        if next.is_empty() {
-            break;
-        }
-        rest = next;
-    }
-    engine_core::mod_files::write(e, STRING_HASH_FILE, &out);
     handled(true)
 }
 

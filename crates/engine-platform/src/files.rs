@@ -646,7 +646,7 @@ pub fn read_whole(e: &Engine, path: &[u8]) -> Option<Vec<u8>> {
 /// when there is none, else the host's answer ([`host_error`]: `ERROR_ACCESS_DENIED` for a file
 /// the player may not read, `ERROR_SHARING_VIOLATION` for one another program holds without
 /// sharing; measured, `measure/xnvse-rest/findfile-overflow-2026-11-14.txt`).
-fn read_whole_or_error(e: &Engine, path: &[u8]) -> Result<Vec<u8>, u32> {
+pub fn read_whole_or_error(e: &Engine, path: &[u8]) -> Result<Vec<u8>, u32> {
     let k = key(path);
     if let Some(data) = state_ref!(e).disk.files.get(&k) {
         return Ok(data.clone());
@@ -680,7 +680,7 @@ fn host_error(err: &std::io::Error) -> u32 {
 /// The attributes of the full path `path` as Windows reports them: a file or directory the game
 /// made in this run, else the player's (`FILE_ATTRIBUTE_*` as the file system keeps them);
 /// `None` when there is none.
-fn attributes(e: &Engine, path: &[u8]) -> Option<u32> {
+pub fn attributes(e: &Engine, path: &[u8]) -> Option<u32> {
     let k = key(path);
     let trimmed = key(path.strip_suffix(b"\\").unwrap_or(path));
     if state_ref!(e).disk.files.contains_key(&k) {

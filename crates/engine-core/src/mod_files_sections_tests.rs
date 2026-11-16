@@ -473,12 +473,12 @@ fn without_the_platform_the_section_calls_do_nothing() {
     let mut e = Engine::new();
     assert_eq!(profile_section(&e, br"Data\Config\x.ini", b"A"), None);
     assert_eq!(profile_section_names(&e, br"Data\Config\x.ini"), None);
-    assert!(!remove_profile_key(&mut e, b"x.ini", b"A", b"x"));
-    assert!(!remove_profile_section(&mut e, b"x.ini", b"A"));
-    assert!(!write_profile_section(
-        &mut e,
-        b"x.ini",
-        b"A",
-        &list(&["a=1"])
-    ));
+    // The platform's absence answers `ERROR_NOT_SUPPORTED` (the read), and nothing is written.
+    let none = Err(crate::mod_files::ERROR_NOT_SUPPORTED);
+    assert_eq!(remove_profile_key(&mut e, b"x.ini", b"A", b"x"), none);
+    assert_eq!(remove_profile_section(&mut e, b"x.ini", b"A"), none);
+    assert_eq!(
+        write_profile_section(&mut e, b"x.ini", b"A", &list(&["a=1"])),
+        none
+    );
 }

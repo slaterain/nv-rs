@@ -501,7 +501,7 @@ pub fn processor_rcp(v: f32) -> f32 {
 /// thread, by lower-case name; a name with a `..` part is refused as the platform refuses it
 /// (nothing read, nothing written).
 pub mod files {
-    use engine_core::mod_files::ModFileCalls;
+    use engine_core::mod_files::{self as mf, ModFileCalls};
     use engine_core::Engine;
     use std::cell::RefCell;
     use std::collections::{BTreeMap, BTreeSet};
@@ -517,30 +517,44 @@ pub mod files {
         let refused = name.split(|&b| b == b'\\' || b == b'/').any(|p| p == b"..");
         (!refused).then_some(name)
     }
-    fn read(_: &Engine, name: &[u8]) -> Option<Vec<u8>> {
-        let k = key(name)?;
-        FILES.with(|f| f.borrow().get(&k).cloned())
+    /// A file that is there but cannot be read (Windows' `ERROR_ACCESS_DENIED`).
+    pub const LOCKED: &[u8] = b"\xff locked";
+
+    fn read(_: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
+        // A refused name reads nothing, as a file that is not there.
+        let k = key(name).ok_or(mf::ERROR_FILE_NOT_FOUND)?;
+        match FILES.with(|f| f.borrow().get(&k).cloned()) {
+            Some(bytes) if bytes == LOCKED => Err(mf::ERROR_ACCESS_DENIED),
+            Some(bytes) => Ok(bytes),
+            None => Err(mf::ERROR_FILE_NOT_FOUND),
+        }
     }
-    fn exists(e: &Engine, name: &[u8]) -> bool {
-        read(e, name).is_some()
+    fn exists(_: &Engine, name: &[u8]) -> bool {
+        key(name).is_some_and(|k| FILES.with(|f| f.borrow().contains_key(&k)))
     }
     fn directory_exists(_: &Engine, name: &[u8]) -> bool {
         key(name).is_some_and(|k| FOLDERS.with(|f| f.borrow().contains(&k)))
     }
-    fn create_directory(_: &mut Engine, name: &[u8]) -> bool {
-        let Some(k) = key(name) else {
-            return false;
-        };
+    fn create_directory(_: &mut Engine, name: &[u8]) -> Result<(), u32> {
+        let k = key(name).ok_or(mf::ERROR_ACCESS_DENIED)?;
         FOLDERS.with(|f| f.borrow_mut().insert(k));
-        true
+        Ok(())
     }
-    fn write(_: &mut Engine, name: &[u8], bytes: &[u8]) -> bool {
-        let Some(k) = key(name) else {
-            return false;
-        };
+    fn write(_: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+        let k = key(name).ok_or(mf::ERROR_ACCESS_DENIED)?;
+        // A file in a folder that exists nowhere (not made, and holding no file): Windows'
+        // `ERROR_PATH_NOT_FOUND`.
+        if let Some(at) = k.iter().rposition(|&b| b == b'\\' || b == b'/') {
+            let folder = &k[..at + 1];
+            let there = FOLDERS.with(|f| f.borrow().contains(&k[..at]))
+                || FILES.with(|f| f.borrow().keys().any(|name| name.starts_with(folder)));
+            if !there {
+                return Err(mf::ERROR_PATH_NOT_FOUND);
+            }
+        }
         WRITES.with(|w| *w.borrow_mut() += 1);
         FILES.with(|f| f.borrow_mut().insert(k, bytes.to_vec()));
-        true
+        Ok(())
     }
     static CALLS: ModFileCalls = ModFileCalls {
         read,

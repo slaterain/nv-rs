@@ -559,29 +559,25 @@ fn a_text_written_to_a_file() {
         1.0
     );
     assert_eq!(files::get(r"out\s.txt").unwrap(), b"new");
-}
-
-/// `GetStringHash`: JIP's hash without case, or with case when asked; with `split`, the parts and
-/// their hashes in `GetStringHash.txt` and no result.
-#[test]
-fn string_hashes() {
-    let mut e = files_setup();
-    let ci = f64::from(crate::containers::str_hash_ci(b"Hello") as i32);
-    let cs = f64::from(crate::containers::str_hash_cs(b"Hello") as i32);
-    assert_ne!(ci, cs);
-    assert_eq!(res_of(&mut e, 0x293f, &[s(b"Hello")]), ci);
-    assert_eq!(res_of(&mut e, 0x293f, &[s(b"hello")]), ci);
-    assert_eq!(res_of(&mut e, 0x293f, &[s(b"Hello"), n(0), n(1)]), cs);
-    assert_eq!(res_of(&mut e, 0x293f, &[s(b"a||B|"), n(1)]), 0.0);
-    let want = format!(
-        "\"a\"\n{}\n\n\"B\"\n{}\n\n",
-        crate::containers::str_hash_ci(b"a") as i32,
-        crate::containers::str_hash_ci(b"B") as i32
-    );
-    assert_eq!(files::get("GetStringHash.txt").unwrap(), want.as_bytes());
-    // StrHashCS: the same steps without folding.
+    // A file that is there but cannot be read: appending writes nothing and keeps it (JIP's
+    // `fopen(.., "ab")` fails); reading it gives nothing.
+    files::put(r"out\held.txt", files::LOCKED);
+    let before = files::writes();
     assert_eq!(
-        crate::containers::str_hash_cs(b"abcde"),
-        crate::containers::str_hash_ci(b"ABCDE")
+        res_of(&mut e, 0x263d, &[s(b"out/held.txt"), n(1), s(b"more")]),
+        0.0
     );
+    let one = array_of(&mut e, vec![V::Number(0.5)]);
+    assert_eq!(
+        res_of(&mut e, 0x263c, &[s(b"out/held.txt"), n(1), n(one as i32)]),
+        0.0
+    );
+    assert_eq!(files::writes(), before);
+    assert_eq!(files::get(r"out\held.txt").unwrap(), files::LOCKED);
+    let res = res_of(&mut e, 0x263b, &[s(b"out/held.txt")]);
+    assert_eq!(string_result(&e, res), b"");
+    assert_eq!(res_of(&mut e, 0x263a, &[s(b"out/held.txt")]), 0.0);
+    // A refused name reads nothing.
+    let res = res_of(&mut e, 0x263b, &[s(b"../s.txt")]);
+    assert_eq!(string_result(&e, res), b"");
 }
