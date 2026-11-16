@@ -14,7 +14,7 @@
 //! guide button); the forwarding is plain `XInputGetState`, so the guide button is never seen and
 //! JIP's "guide pressed: no buttons" step never applies.
 //!
-//! Only while JIP answers "installed" ([`crate::ANSWERS_INSTALLED`]): until then nothing wraps the
+//! Only while JIP answers "installed" ([`crate::set_answers_installed`]): until then nothing wraps the
 //! slot and the game reads the pad as without the DLL.
 
 use crate::game::OSInputGlobals;

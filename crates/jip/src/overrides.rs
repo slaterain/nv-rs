@@ -4,7 +4,7 @@
 //! state. (`IsKeyPressed` and the five control commands read JIP's XInput state and come with
 //! it, in part 2; `IsPluginInstalled` and `GetPluginVersion` are in [`crate::identity`].)
 //!
-//! Only while JIP answers "installed" ([`crate::ANSWERS_INSTALLED`]): until then every one of
+//! Only while JIP answers "installed" ([`crate::set_answers_installed`]): until then every one of
 //! these commands is xNVSE's or the game's, as without the DLL, so a mod that does not use JIP
 //! gets no JIP behaviour early. The seven at the game's own opcodes (`MenuMode`, `GetItemCount`,
 //! `GetContainer`, `IsInList`, `GetHitLocation`, `HasPerk`, `GetNVSEVersionFull` at `0x127D`)
