@@ -12,10 +12,31 @@
 //! G116 runs the deferred calculation at `SetTargetedLimb`'s limb step.
 //!
 //! **Threads.** Hit damage runs on the main thread and on the game's AI threads (actors' hits,
-//! `HitMe`); G116 and G119 run with it. No handler takes JIP's shared slot (`e.ext::<Jip>()`):
-//! JIP's two statics (`s_doCalcDamage`, `s_VATSHitDT`) and `s_condDRDTPenalty` are one run-wide
-//! lock-free slot ([`HitDamageState`], `ext_free`, made in `install_fixes` before the threads
-//! start), as JIP's are one per process; everything else is game memory and calls by address.
+//! `HitMe`); G116 and G119 run with it. No handler takes JIP's shared slot (`e.ext::<Jip>()`).
+//! `s_VATSHitDT` and `s_condDRDTPenalty` are one run-wide lock-free slot ([`HitDamageState`],
+//! `ext_free`, made in `install_fixes` before the threads start), as JIP's are one per process;
+//! everything else is game memory and calls by address, except the deferral's word.
+//!
+//! **The deferral's word (`s_doCalcDamage`) is kept per thread** (a deliberate difference: JIP's
+//! is one plain static for every thread). The deferral and the call that takes it always run on
+//! one thread inside one call (`InitializeHitData_ov3` / `_ov4`: the deferred `ReduceDamage` at
+//! `0x9B5623` / `0x9B5702`, then their `SetTargetedLimb` at once, whose limb step `0x9B6E81` runs
+//! it), so nothing needs the word to cross threads; JIP's one static lets two hits built at once
+//! on two threads cross (one then takes the other's word and limb, or none: no DT, no DR, no
+//! minimum). Here each OS thread keeps its own word, keyed by the run (`KernelRef::id()`, the
+//! same in every thread's engine of a run): every game thread is its own OS thread, with stepped
+//! threads (`thread_host`: one coroutine OS thread each, one engine handed between them) and
+//! real threads (`NV_THREADS=real`: one engine each) alike, so on one thread the port does
+//! exactly what JIP does, and a hit on another thread can neither take nor overwrite it.
+//!
+//! **A word left pending** (JIP's own behaviour, kept on one thread): `SetTargetedLimb` leaves at
+//! once (`0x9B6688`) for a null target or one that is not a character, before the limb step, and
+//! `_ov4` makes its `ReduceDamage` call without a target test; a deferral there stays pending.
+//! JIP then has the NEXT `ReduceDamage` (any of the five callers) take it: that call's
+//! calculation runs with the stale word in place of its own, and a deferral site reached while
+//! it is pending does not defer (its call is made at once, before its limb is chosen, with the
+//! stale word). The port does exactly that on the thread that left it; other threads are not
+//! touched by it.
 
 use crate::commands::havok_refs::{is_actor, is_projectile};
 use engine_core::extend::{jip_patches, Owner, SiteSlot, WrapSlot};
@@ -32,12 +53,12 @@ pub const HIT_LOCATION: SiteSlot = SiteSlot::new(Owner::Jip, 0x009b_6e81);
 /// G119's seam: the ammo's script effect in `Actor::HitMe`.
 pub const AMMO_IMPACT_SCRIPT: SiteSlot = SiteSlot::new(Owner::Jip, 0x0089_abdc);
 
-/// JIP's run-wide statics of the hit damage: `s_doCalcDamage` (0, or a deferred call's word + 1),
-/// `s_VATSHitDT` (the last threshold, read by JIP's VATS menu patch G121; `-FLT_MAX` until a
-/// hit, and again when O1 is switched off) and `s_condDRDTPenalty` (the armour condition factor of
-/// O12, set by `SetArmorConditionPenalty`; 1.0), the floats as their bits.
+/// JIP's run-wide statics of the hit damage: `s_VATSHitDT` (the last threshold, read by JIP's
+/// VATS menu patch G121; `-FLT_MAX` until a hit; JIP sets it back to `-FLT_MAX` when O1 is
+/// switched off in the game, which comes with G121, nothing reading it before) and
+/// `s_condDRDTPenalty` (the armour condition factor of O12, set by `SetArmorConditionPenalty`;
+/// 1.0), the floats as their bits. JIP's third, `s_doCalcDamage`, is per thread ([`pending_word`]).
 pub struct HitDamageState {
-    pending: AtomicU32,
     vats_hit_dt: AtomicU32,
     condition_penalty: AtomicU32,
 }
@@ -45,7 +66,6 @@ pub struct HitDamageState {
 impl Default for HitDamageState {
     fn default() -> Self {
         HitDamageState {
-            pending: AtomicU32::new(0),
             vats_hit_dt: AtomicU32::new((-f32::MAX).to_bits()),
             condition_penalty: AtomicU32::new(1.0f32.to_bits()),
         }
@@ -54,6 +74,45 @@ impl Default for HitDamageState {
 
 fn state(e: &mut Engine) -> &HitDamageState {
     e.ext_free::<HitDamageState>()
+}
+
+thread_local! {
+    /// `s_doCalcDamage` of this OS thread, by run (`KernelRef::id()`): 0, or a deferred
+    /// `ReduceDamage` call's word + 1 (see the module's "Threads").
+    static PENDING: std::cell::RefCell<Vec<(usize, u32)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// This thread's `s_doCalcDamage` in `e`'s run: 0 (none), or the deferred call's word + 1.
+pub fn pending_word(e: &Engine) -> u32 {
+    let run = e.kernel.id();
+    PENDING.with(|p| {
+        p.borrow()
+            .iter()
+            .find(|(r, _)| *r == run)
+            .map_or(0, |(_, word)| *word)
+    })
+}
+
+/// Sets this thread's `s_doCalcDamage` in `e`'s run (0 clears it).
+fn set_pending(e: &Engine, word: u32) {
+    let run = e.kernel.id();
+    PENDING.with(|p| {
+        let mut p = p.borrow_mut();
+        p.retain(|(r, _)| *r != run);
+        if word != 0 {
+            p.push((run, word));
+        }
+    });
+}
+
+/// This thread's `s_doCalcDamage` in `e`'s run, read and cleared (JIP's read, then `= 0`).
+fn take_pending(e: &Engine) -> u32 {
+    let word = pending_word(e);
+    if word != 0 {
+        set_pending(e, 0);
+    }
+    word
 }
 
 /// `s_VATSHitDT`: the damage threshold the last hit used (for G121).
@@ -85,7 +144,7 @@ fn reduce_damage(e: &mut Engine, w: &[u32]) -> Ret {
     if e.jip_patches() & jip_patches::IGNORE_DTDR_FIX == 0 {
         return e.call_next(REDUCE_DAMAGE.addr(), w);
     }
-    let pending = state(e).pending.swap(0, Ordering::Relaxed);
+    let pending = take_pending(e);
     let no_block = if pending != 0 { pending - 1 } else { w[1] };
     calculate_hit_damage(e, w[0], no_block);
     Ret::default()
@@ -95,13 +154,13 @@ fn reduce_damage(e: &mut Engine, w: &[u32]) -> Ret {
 // (its `_ReturnAddress()` test).
 /// O1's deferral at a `ReduceDamage` call returning to `0x9B5628` or `0x9B5707` (`a`: the hit, the
 /// call's word): with no deferred call pending, the word + 1 is kept and the call is not made
-/// (answer 0); with one pending, no answer (the call is made and takes the pending word).
+/// (answer 0); with one pending, no answer (the call is made and takes the pending word). The
+/// word is this thread's (the module's "Threads").
 fn defer_reduce_damage(e: &mut Engine, a: &[u32]) -> Option<u32> {
-    let s = state(e);
-    if s.pending.load(Ordering::Relaxed) != 0 {
+    if pending_word(e) != 0 {
         return None;
     }
-    s.pending.store(a[1].wrapping_add(1), Ordering::Relaxed);
+    set_pending(e, a[1].wrapping_add(1));
     Some(0)
 }
 
@@ -642,7 +701,7 @@ fn block(
 /// command, `mulss`; a plain copy without) and is cleared: answer 1. Other limbs: answer 0.
 fn set_hit_location(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let h = a[0];
-    let pending = state(e).pending.swap(0, Ordering::Relaxed);
+    let pending = take_pending(e);
     if pending != 0 {
         calculate_hit_damage(e, h, pending - 1);
     }

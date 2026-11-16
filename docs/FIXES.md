@@ -1020,7 +1020,9 @@ their damage instead of the whole threshold; the minimum damage, the hit markers
 complaint follow JIP's rules; the player's armour takes damage; the weapon's damage-type resistance counts
 unless the ammo ignores it; in V.A.T.S. the player takes `fVATSPlayerDamageMult` of every damage. A hit
 whose limb is chosen afterwards has its damage worked out when the limb is set, and a hit on limb 0xE
-moves its damage to the limb (`0x9B6E81`). With `bLocalizedDTDR` the armour worn on the hit body part
+moves its damage to the limb (`0x9B6E81`). Unlike JIP, which keeps that waiting hit in one value for every
+thread, each game thread keeps its own, so two hits worked out at the same time on two threads can no
+longer swap their damage rules (in JIP one of them could then skip the target's armour entirely). With `bLocalizedDTDR` the armour worn on the hit body part
 decides the threshold and resistance, weaker below half condition. Ammo with a script runs it on the
 actor hit, from the ammo that was fired rather than the weapon's current ammo (`0x89ABDC`).
 

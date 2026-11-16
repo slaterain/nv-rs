@@ -143,10 +143,15 @@ fn o1_deferral_seams_ask_only_with_the_switch() {
     }
 }
 
-/// G116's seam at the limb step: word clear, the exe's limb 0xE move; the row on, the seam is
-/// asked with the hit: 1 ends the step (the handler did it), 0 skips the exe's limb 0xE move.
+/// G116's seam at the limb step, with the body part 0x5150 (its limb 7; `00647a30` gives the limb
+/// damage 3.3): word clear, the exe's limb 0xE move (and no part step); the row on, the seam is
+/// asked with the hit: 1 ends the step (the handler did it: nothing more), 0 skips the exe's limb
+/// 0xE move and goes on with the part step (limb 7, limb damage 3.3).
 #[test]
 fn g116_seam_in_the_limb_step() {
+    const TARGET: u32 = BASE + 0x400;
+    const VTABLE: u32 = BASE + 0x500;
+    const SLOT_360: u32 = BASE + 0xf00;
     let run = |word: u32, answer: u32| {
         let mut e = Engine::new();
         e.map(BASE, 0x1000);
@@ -156,21 +161,67 @@ fn g116_seam_in_the_limb_step() {
             e.mem.set_u32(BASE + 0x34, a[0]);
             Some(e.mem.u32(BASE + 0x30))
         });
+        e.mem.set_u32(TARGET, VTABLE);
+        e.mem.set_u32(VTABLE + 0x360, SLOT_360);
+        e.register(SLOT_360, |_, _| Ret::default());
+        e.register(BODY_PART_LIMB, |_, a| {
+            assert_eq!(a[0], 0x5150);
+            7u32.into_ret()
+        });
+        e.register(0x0064_7a30, |_, _| Ret {
+            st0: f64::from(3.3f32),
+            ..Ret::default()
+        });
+        e.register(0x0063_9b20, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        e.set(HIT2, HitData::pTarget, TARGET);
         e.set(HIT2, HitData::eDamageLimb, 0xe);
         e.set(HIT2, HitData::fHealthDamage, 8.5f32.to_bits());
         e.set(HIT2, HitData::fTargetedLimbDamage, 1.25f32.to_bits());
-        apply_limb(&mut e, HIT2, 0);
+        apply_limb(&mut e, HIT2, 0x5150);
         (
             e.mem.u32(BASE + 0x34),
             f32::from_bits(e.get(HIT2, HitData::fHealthDamage)),
             f32::from_bits(e.get(HIT2, HitData::fTargetedLimbDamage)),
+            e.get(HIT2, HitData::eDamageLimb),
         )
     };
     assert_eq!(
         run(jip_patches::INSTALLED, 1),
-        (0, 0.0, 8.5),
+        (0, 0.0, 8.5, 0xe),
         "the exe's move"
     );
-    assert_eq!(run(jip_patches::FIXES, 1), (HIT2.addr(), 8.5, 1.25));
-    assert_eq!(run(jip_patches::FIXES, 0), (HIT2.addr(), 8.5, 1.25));
+    assert_eq!(
+        run(jip_patches::FIXES, 1),
+        (HIT2.addr(), 8.5, 1.25, 0xe),
+        "1: done"
+    );
+    assert_eq!(
+        run(jip_patches::FIXES, 0),
+        (HIT2.addr(), 8.5, 3.3, 7),
+        "0: the part step"
+    );
+}
+
+/// Not installed (word 0) or installed with the row off (`INSTALLED`): part 3's seams in this
+/// file (the two deferrals, G116) are not asked although handlers that log are in place.
+#[test]
+fn part3_seams_ask_nothing_while_off() {
+    for word in [0, jip_patches::INSTALLED] {
+        let mut e = Engine::new();
+        e.map(BASE, 0x1000);
+        e.set_jip_patches(word);
+        for site in [0x009b_5623, 0x009b_5702, 0x009b_6e81] {
+            e.on_site(SiteSlot::new(Owner::Jip, site), |e, a| {
+                e.mem.set_u32(BASE + 0x40, a[0]);
+                Some(1)
+            });
+        }
+        assert!(!reduce_damage_deferred(&mut e, 0x009b_5623, HIT2, 0));
+        assert!(!reduce_damage_deferred(&mut e, 0x009b_5702, HIT2, 1));
+        assert_eq!(hit_location_seam(&mut e, HIT2), None);
+        assert_eq!(e.mem.u32(BASE + 0x40), 0, "{word:08x}");
+    }
 }

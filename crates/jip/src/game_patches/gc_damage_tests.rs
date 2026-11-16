@@ -33,6 +33,8 @@ const BLOCKS: u32 = B + 0xf08;
 const LOG: u32 = B + 0x8000;
 const AMMO_KINDS: u32 = LOG + 0x100;
 const PERKS: u32 = LOG + 0x200;
+/// How often the exe's `ReduceDamage` (the wrap's next link) ran.
+const NEXT_CALLS: u32 = LOG + 0x60;
 /// Stand-in functions (vtable slots).
 const CANNOT_FN: u32 = B + 0xfe00;
 const PARALYZED_FN: u32 = B + 0xfe10;
@@ -62,6 +64,12 @@ fn world() -> Engine {
 /// [`world`], with JIP installed and the row on first (its installers run before the stand-ins).
 fn world_as(install: bool) -> Engine {
     let mut e = engine();
+    // The exe's `ReduceDamage` as the wrap's next link: a marker (health damage 11.1, a count).
+    e.register(REDUCE_DAMAGE.addr(), |e, a| {
+        bump(e, NEXT_CALLS);
+        e.mem.set_f32(a[0] + 0x14, 11.1);
+        Ret::default()
+    });
     if install {
         crate::install_as(&mut e, true);
         // The group's installer, what the row puts in (the row's settings read needs the ini).
@@ -624,8 +632,9 @@ fn o12_localized_dt_dr() {
     }
 }
 
-/// O1's wrap at `009b5a30`: switch off, the next link (the stand-in, nothing changes); on, JIP's
-/// damage with the call's word; a pending deferred word takes the place of the call's.
+/// O1's wrap at `009b5a30`: switch off, the next link (the exe's, a marker here: health 11.1,
+/// once); on, JIP's damage with the call's word and the next link not run; a pending deferred
+/// word takes the place of the call's.
 #[test]
 fn o1_wrap_by_its_switch_and_the_pending_word() {
     let mut e = world_as(true);
@@ -634,11 +643,22 @@ fn o1_wrap_by_its_switch_and_the_pending_word() {
     e.mem.set_i16(PROCESS + 0x2ec, 7);
     e.mem.set_u8(BLOCKS, 1);
     e.call(REDUCE_DAMAGE.addr(), &[HIT, 0]);
-    assert_eq!(health(&e), 37.3, "switch off: the exe's");
+    assert_eq!(
+        (health(&e), count(&e, NEXT_CALLS)),
+        (11.1, 1),
+        "switch off: the exe's"
+    );
+    assert_eq!(e.mem.u32(HIT + 0x58), 0, "JIP's block not tried");
+    e.mem.set_f32(HIT + 0x14, 37.3);
     e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::IGNORE_DTDR_FIX);
     e.call(REDUCE_DAMAGE.addr(), &[HIT, 1]);
+    assert_eq!(count(&e, NEXT_CALLS), 1, "switch on: the exe's not run");
     assert_eq!(e.mem.u32(HIT + 0x58) & 1, 0, "word 1: no block");
-    assert_ne!(health(&e), 37.3);
+    let dr = resist(25.0);
+    assert_eq!(
+        health(&e).to_bits(),
+        (37.3f32 * 1.3 * dr - 6.0 * dr).to_bits()
+    );
     // Deferred at ov3 (word 0): the next call blocks although it passes 1.
     e.mem.set_f32(HIT + 0x14, 37.3);
     assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
@@ -708,17 +728,403 @@ fn g119_runs_the_projectiles_ammo_script() {
     assert_eq!(count(&e, LOG + 0x50), 1, "no script");
 }
 
-/// Not installed: none of part 3's seams or the wrap has JIP's handler; installed with the row
-/// off: neither.
+/// Not installed: the word stays 0 and none of part 3's seams or the wrap has JIP's handler (the
+/// exe's `ReduceDamage` runs); installed with the row off: the word has no `FIXES` bit, and
+/// neither. Started from a new engine, the word untouched.
 #[test]
 fn part3_only_with_the_row() {
     for (installed, row) in [(false, true), (true, false)] {
-        let mut e = world();
-        crate::install_as(&mut e, installed);
+        let mut e = engine();
+        e.register(REDUCE_DAMAGE.addr(), |e, _| {
+            bump(e, NEXT_CALLS);
+            Ret::default()
+        });
+        e.map(B, 0x1_0000);
         super::super::super::set_row(&mut e, row);
+        crate::install_as(&mut e, installed);
+        if installed {
+            assert_eq!(e.jip_patches(), jip_patches::INSTALLED, "row off");
+        } else {
+            assert_eq!(e.jip_patches(), 0, "not installed");
+        }
         for slot in [DEFER_OV3, DEFER_OV4, HIT_LOCATION, AMMO_IMPACT_SCRIPT] {
             assert_eq!(e.site(slot.addr(), &[HIT, 0]), None, "{installed} {row}");
         }
-        assert!(!e.wraps_at(REDUCE_DAMAGE.addr()).contains(&Owner::Jip));
+        assert!(e.wraps_at(REDUCE_DAMAGE.addr()).is_empty());
+        e.call(REDUCE_DAMAGE.addr(), &[HIT, 0]);
+        assert_eq!(count(&e, NEXT_CALLS), 1, "the exe's");
+        assert_eq!(pending_word(&e), 0);
     }
+}
+
+/// The world with the target's high process blocking (Melee Weapons 55, Unarmed 33) and a held
+/// weapon of type `held` drawn.
+fn blocking(e: &mut Engine, held: u8) {
+    e.mem.set_u32(TARGET + 0x68, PROCESS);
+    e.mem.set_i16(PROCESS + 0x2ec, 7);
+    e.mem.set_u8(BLOCKS, 1);
+    e.mem.set_u32(PROCESS + 0x114, INFO);
+    e.mem.set_u32(INFO + 8, HELD);
+    e.mem.set_u8(HELD + 0xf4, held);
+    e.mem.set_u8(PROCESS + 0x135, 1);
+    av(e, TARGET, 0x26, 55.0);
+    av(e, TARGET, 0x2d, 33.0);
+}
+
+/// `1 - min(23, 85) x 0.01` (`0x3F451EB8`): a factor whose bits are not short.
+fn dr23() -> f32 {
+    let dr = resist(23.0);
+    assert_eq!(dr.to_bits(), 0x3f45_1eb8);
+    dr
+}
+
+/// Split beams without the flag: a projectile of 7 pellets whose split-beam flag is clear keeps
+/// its whole DT (JIP: `hasSplitBeams && numProjectiles > 1` divides it).
+#[test]
+fn o1_pellets_without_the_split_beam_flag_keep_the_whole_dt() {
+    let mut e = world();
+    av(&mut e, TARGET, 0x12, 23.0);
+    e.mem.set_u32(PROJ, VT_PROJECTILE);
+    e.mem.set_u32(HIT + 8, PROJ);
+    e.mem.set_u8(PROJ + 0x14a, 7);
+    calculate_hit_damage(&mut e, HIT, 0);
+    let dr = dr23();
+    let expected = 37.3f32 * 1.3 * dr - 6.0 * dr;
+    assert_eq!(expected.to_bits(), 0x4202_de83);
+    assert_eq!(health(&e).to_bits(), expected.to_bits());
+    assert_eq!(count(&e, LOG + 0x20), 0, "no ammo recorded: no effects");
+}
+
+/// An automatic gun (flag 2, type 5, attack 12) takes the DT off as any gun: JIP's share rule is
+/// for automatic weapons of type 2 or less.
+#[test]
+fn o1_automatic_gun_takes_the_dt_off() {
+    let mut e = world();
+    av(&mut e, TARGET, 0x12, 23.0);
+    e.mem.set_u8(WEAPON + 0x100, 2);
+    e.mem.set_u8(WEAPON + 0xf4, 5);
+    e.mem.set_u16(WEAPON + 0xa0, 12);
+    calculate_hit_damage(&mut e, HIT, 0);
+    let dr = dr23();
+    assert_eq!(health(&e).to_bits(), 0x4202_de83);
+    assert_eq!(
+        health(&e).to_bits(),
+        (37.3f32 * 1.3 * dr - 6.0 * dr).to_bits()
+    );
+}
+
+/// VATS (`mode` 2) scales only a hit on the player: the player's hit on an NPC is as outside VATS.
+#[test]
+fn o1_vats_scales_only_hits_on_the_player() {
+    let mut e = world();
+    e.mem.set_u32(VATS_MODE, 2);
+    e.mem.set_f32(HIT + 0x1c, 2.5);
+    e.mem.set_f32(HIT + 0x2c, 1.7);
+    calculate_hit_damage(&mut e, HIT, 0);
+    let dr = resist(25.0);
+    let expected = 37.3f32 * 1.3 * dr - 6.0 * dr;
+    assert_eq!(health(&e).to_bits(), expected.to_bits());
+    assert_eq!(e.mem.f32(HIT + 0x18), 37.3, "the base damage, not x 0.35");
+    assert_eq!(e.mem.f32(HIT + 0x2c), 1.7, "the weapon damage, not x 0.35");
+}
+
+/// A DR above `fMaxArmorRating` (93 against 85) counts as 85; with `fMinDamMultiplier` 0.1 the
+/// damage stays above the minimum.
+#[test]
+fn o1_dr_above_the_armour_rating_cap() {
+    let mut e = world();
+    av(&mut e, TARGET, 0x12, 93.0);
+    e.mem.set_f32(MIN_DAM_MULTIPLIER, 0.1);
+    calculate_hit_damage(&mut e, HIT, 0);
+    let dr = 1.0f32 - 85.0 * 0.01;
+    let expected = 37.3f32 * 1.3 * dr - 6.0 * dr;
+    assert_eq!(expected.to_bits(), 0x40cb_f3b9);
+    assert!(expected > 0.1f32 * 37.3);
+    assert_eq!(health(&e).to_bits(), expected.to_bits());
+}
+
+/// An automatic melee weapon whose share `1 - DT x DR / attack` is 0 or less (DT 7.5, DR 23,
+/// attack 3: -0.925) leaves the damage after DR as it is.
+#[test]
+fn o1_automatic_melee_share_at_or_below_zero() {
+    let mut e = world();
+    e.mem.set_u32(SOURCE + 0xc, 0x0100_2000);
+    av(&mut e, TARGET, 0x12, 23.0);
+    e.mem.set_u8(WEAPON + 0x100, 2);
+    e.mem.set_u8(WEAPON + 0xf4, 1);
+    e.mem.set_u16(WEAPON + 0xa0, 3);
+    calculate_hit_damage(&mut e, HIT, 0);
+    let dr = dr23();
+    assert!(1.0 - 7.5 * dr / 3.0 < 0.0);
+    let expected = 37.3f32 * dr;
+    assert_eq!(expected.to_bits(), 0x41e5_c49b);
+    assert!(expected > 0.2f32 * 37.3);
+    assert_eq!(health(&e).to_bits(), expected.to_bits());
+}
+
+/// The player hit while taking fatigue damage (4.4): no armour damage; the fatigue follows the
+/// health damage's share of the base.
+#[test]
+fn o1_players_armour_damage_only_without_fatigue_damage() {
+    let mut e = world();
+    e.mem.set_u32(HIT + 4, PLAYER);
+    e.mem.set_u32(SOURCE + 0xc, 0x0100_2000);
+    av(&mut e, PLAYER, 0x12, 10.0);
+    av(&mut e, PLAYER, 0x4c, 5.5);
+    e.mem.set_f32(HIT + 0x1c, 4.4);
+    calculate_hit_damage(&mut e, HIT, 0);
+    let dr = resist(10.0);
+    let expected = 37.3f32 * dr - (5.5 + 2.5) * dr;
+    assert_eq!(health(&e).to_bits(), expected.to_bits());
+    assert_eq!(e.mem.u32(HIT + 0x28), 0, "no armour damage");
+    assert_eq!(
+        e.mem.f32(HIT + 0x1c).to_bits(),
+        (4.4f32 * (expected / 37.3)).to_bits()
+    );
+}
+
+/// A block while holding a gun (type 5): the base bonus alone (no skill); holding a type-0 weapon:
+/// Unarmed; an NPC blocking leaves the player's counter-attack timer alone.
+#[test]
+fn o1_block_skill_by_the_held_weapon() {
+    let mut e = world();
+    blocking(&mut e, 5);
+    calculate_hit_damage(&mut e, HIT, 0);
+    assert_eq!(e.mem.f32(HIT + 0x24), 20.0, "a gun: no skill");
+    assert_eq!(e.mem.u32(HIT + 0x58) & 3, 3);
+    assert_eq!(e.mem.u32(PLAYER + 0xe28), 0, "an NPC blocked: no timer");
+    let mut e = world();
+    blocking(&mut e, 0);
+    calculate_hit_damage(&mut e, HIT, 0);
+    assert_eq!(
+        e.mem.f32(HIT + 0x24).to_bits(),
+        (20.0f32 + 0.37 * 33.0).to_bits(),
+        "type 0: Unarmed"
+    );
+}
+
+/// O12's armour in biped slot 2 (DT 6, rating 40), equipped, at `condition` of 100.
+fn o12_armour(e: &mut Engine, location: u32, condition: f32) {
+    e.set_jip_patches(e.jip_patches() | jip_patches::LOCALIZED_DTDR);
+    e.mem.set_u32(HIT + 0x10, location);
+    e.mem.set_u32(TARGET + 0x1b4, BIPED);
+    e.mem.set_u32(BIPED + 0x4c, ARMOR);
+    e.mem.set_u32(ARMOR, VTBL_ARMOR);
+    e.mem.set_f32(ARMOR + 0x17c, 6.0);
+    e.mem.set_u16(ARMOR + 0x178, 40);
+    e.mem.set_u32(ARMOR + 0x6c, 100);
+    e.mem.set_u32(TARGET + 0x44 + 0x200 + 0x15 * 4, CHANGES);
+    e.mem.set_u32(CHANGES + 0xc, CHANGES + 0x100);
+    e.mem.set_u32(CHANGES + 0x100, CHANGES + 0x200);
+    e.mem.set_u32(CHANGES + 0x200, CHANGES + 0x300);
+    e.mem.set_u32(CHANGES + 0x308, ARMOR);
+    e.mem.set_u32(CHANGES + 0x300, CHANGES + 0x380);
+    e.mem.set_u32(CHANGES + 0x380, XLIST);
+    e.mem.set_u8(XLIST + 8 + (0x16 >> 3), 1 << (0x16 & 7));
+    e.mem.set_u32(XLIST + 0x200 + 0x25 * 4, XHEALTH);
+    e.mem.set_f32(XHEALTH + 0xc, condition);
+}
+
+/// The health damage for a limb-1 hit with the armour's DT and DR taken off the target's 7.5 / 25.
+fn limb1_damage(armor_dt: f32, armor_dr: f32) -> f32 {
+    let dr = resist(25.0 - armor_dr);
+    37.3f32 * 1.3 * dr - (7.5 - armor_dt - 1.5) * dr
+}
+
+/// O12 limb 1: the condition penalty (0.6) scales the armour below half condition (30 of 100:
+/// `1 - 0.2 x 0.6`); at half (50) and above (70) the armour's whole DT 6 and DR 0.4 are taken
+/// off, and with no `ExtraHealth` too.
+#[test]
+fn o12_condition_and_its_penalty() {
+    let mut e = world();
+    set_condition_penalty(&mut e, 0.6);
+    o12_armour(&mut e, 1, 30.0);
+    calculate_hit_damage(&mut e, HIT, 0);
+    let m = 1.0f32 - (0.5 - 30.0f32 / 100.0) * 0.6;
+    let expected = limb1_damage(6.0 * m, 40.0f32 * 0.01 * m);
+    assert_ne!(expected, limb1_damage(6.0 * 0.8, 0.4 * 0.8));
+    assert_eq!(health(&e).to_bits(), expected.to_bits());
+    for condition in [50.0, 70.0] {
+        let mut e = world();
+        o12_armour(&mut e, 1, condition);
+        calculate_hit_damage(&mut e, HIT, 0);
+        assert_eq!(
+            health(&e).to_bits(),
+            limb1_damage(6.0, 40.0f32 * 0.01).to_bits(),
+            "{condition}"
+        );
+    }
+    let mut e = world();
+    o12_armour(&mut e, 1, 30.0);
+    e.mem.set_u32(XLIST + 0x200 + 0x25 * 4, 0);
+    calculate_hit_damage(&mut e, HIT, 0);
+    assert_eq!(
+        health(&e).to_bits(),
+        limb1_damage(6.0, 40.0f32 * 0.01).to_bits(),
+        "no ExtraHealth: full values"
+    );
+}
+
+/// O12 limbs other than 1 (3 and 0): the character's base DT 12 / DR 30 less the armour's (at 30
+/// of 100: DT 4.8, DR 0.32) are taken off a target of DT 13.3 and DR 41 (DT 6.1, DR 11.32 left);
+/// an armour above the base (DT 15, rating 3500) leaves 0 to take off (the target's whole DT 7.5
+/// and DR 25); limb -1, an armour that is not a `TESObjectARMO` or one not equipped: nothing.
+#[test]
+fn o12_other_limbs_the_clamp_and_no_armour() {
+    let m = 1.0f32 - (0.5 - 30.0f32 / 100.0) * 1.0;
+    let (loc_dt, loc_dr) = (12.0f32 - 6.0 * m, 30.0f32 - 40.0f32 * 0.01 * m);
+    assert!(13.3 - loc_dt - 1.5 > 0.0 && 41.0 - loc_dr > 0.0);
+    let dr = resist(41.0 - loc_dr);
+    let expected = 37.3f32 * 1.3 * dr - (13.3 - loc_dt - 1.5) * dr;
+    for limb in [3, 0] {
+        let mut e = world();
+        av(&mut e, TARGET, 0x12, 41.0);
+        av(&mut e, TARGET, 0x4c, 13.3);
+        o12_armour(&mut e, limb, 30.0);
+        calculate_hit_damage(&mut e, HIT, 0);
+        assert_eq!(health(&e).to_bits(), expected.to_bits(), "limb {limb}");
+    }
+    let dr = resist(25.0);
+    let whole = 37.3f32 * 1.3 * dr - 6.0 * dr;
+    let mut e = world();
+    o12_armour(&mut e, 3, 100.0);
+    e.mem.set_f32(ARMOR + 0x17c, 15.0);
+    e.mem.set_u16(ARMOR + 0x178, 3500);
+    calculate_hit_damage(&mut e, HIT, 0);
+    assert_eq!(health(&e).to_bits(), whole.to_bits(), "clamped at 0");
+    for case in 0..3 {
+        let mut e = world();
+        o12_armour(&mut e, 1, 30.0);
+        match case {
+            0 => e.mem.set_u32(HIT + 0x10, u32::MAX),
+            1 => e.mem.set_u32(ARMOR, VT_PROJECTILE),
+            _ => e.mem.set_u8(XLIST + 8 + (0x16 >> 3), 0),
+        }
+        calculate_hit_damage(&mut e, HIT, 0);
+        assert_eq!(health(&e).to_bits(), whole.to_bits(), "case {case}");
+    }
+}
+
+/// G116 runs the pending calculation with the pending word: deferred at `_ov3` (word 0) the
+/// block is tried (flag 1, the bonus); deferred at `_ov4` (word 1) it is not.
+#[test]
+fn g116_runs_the_pending_word() {
+    let mut e = world_as(true);
+    blocking(&mut e, 1);
+    assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
+    assert_eq!(e.site(HIT_LOCATION.addr(), &[HIT]), Some(0));
+    assert_eq!(e.mem.u32(HIT + 0x58) & 1, 1, "word 0: blocked");
+    assert_eq!(
+        e.mem.f32(HIT + 0x24).to_bits(),
+        (20.0f32 + 0.37 * 55.0).to_bits()
+    );
+    let mut e = world_as(true);
+    blocking(&mut e, 1);
+    assert_eq!(e.site(DEFER_OV4.addr(), &[HIT, 1]), Some(0));
+    assert_eq!(e.site(HIT_LOCATION.addr(), &[HIT]), Some(0));
+    assert_eq!(e.mem.u32(HIT + 0x58) & 1, 0, "word 1: not blocked");
+    assert_ne!(health(&e), 37.3, "it ran");
+}
+
+/// G116 with something pending and limb 0xE: the calculation runs first, so the limb damage is
+/// the reduced health damage and the health damage 0.
+#[test]
+fn g116_pending_damage_before_the_limb_0xe_move() {
+    let mut e = world_as(true);
+    e.mem.set_u32(HIT + 0x10, 0xe);
+    assert_eq!(e.site(DEFER_OV4.addr(), &[HIT, 1]), Some(0));
+    assert_eq!(e.site(HIT_LOCATION.addr(), &[HIT]), Some(1));
+    let dr = resist(25.0);
+    assert_eq!(
+        e.mem.u32(HIT + 0x20),
+        (37.3f32 * 1.3 * dr - 6.0 * dr).to_bits()
+    );
+    assert_eq!(health(&e), 0.0);
+    assert_eq!(pending_word(&e), 0);
+}
+
+/// A word left pending (a `SetTargetedLimb` that left before its limb step) is JIP's on one
+/// thread: the next deferral site does not defer, and its call takes the stale word (0: the block
+/// tried although the call passes 1), once.
+#[test]
+fn o1_a_word_left_pending_is_taken_by_the_next_call() {
+    let mut e = world_as(true);
+    blocking(&mut e, 1);
+    assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
+    assert_eq!(pending_word(&e), 1);
+    assert_eq!(e.site(DEFER_OV4.addr(), &[HIT, 1]), None, "not deferred");
+    assert_eq!(pending_word(&e), 1, "a deferral site does not take it");
+    e.call(REDUCE_DAMAGE.addr(), &[HIT, 1]);
+    assert_eq!(e.mem.u32(HIT + 0x58) & 1, 1, "the stale word 0");
+    assert_eq!(pending_word(&e), 0, "taken once");
+    e.mem.set_u32(HIT + 0x58, 0);
+    e.mem.set_f32(HIT + 0x14, 37.3);
+    assert_eq!(e.site(HIT_LOCATION.addr(), &[HIT]), Some(0));
+    assert_eq!(health(&e), 37.3, "nothing left for G116");
+}
+
+/// The pending word is the run's: a second engine sharing the slots (another run's engine on this
+/// thread) neither takes nor overwrites it.
+#[test]
+fn o1_pending_word_is_the_runs() {
+    let mut e = world_as(true);
+    blocking(&mut e, 1);
+    let mut other = world_as(true);
+    blocking(&mut other, 1);
+    e.share_slots_for_test(&mut other);
+    assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
+    other.call(REDUCE_DAMAGE.addr(), &[HIT, 1]);
+    assert_eq!(other.mem.u32(HIT + 0x58) & 1, 0, "its own word 1");
+    assert_eq!(other.site(DEFER_OV4.addr(), &[HIT, 1]), Some(0));
+    assert_eq!((pending_word(&e), pending_word(&other)), (1, 2));
+    assert_eq!(e.site(HIT_LOCATION.addr(), &[HIT]), Some(0));
+    assert_eq!(e.mem.u32(HIT + 0x58) & 1, 1, "word 0 kept for this run");
+    assert_eq!((pending_word(&e), pending_word(&other)), (0, 2));
+}
+
+/// The test engine moved to a second OS thread behind a mutex, as stepped threads hand one engine
+/// between their OS threads (`Engine` is not `Send`: a real thread's engine is one OS thread's).
+struct Stepped(Engine);
+// SAFETY: reached only through the `Mutex` below, by one thread at a time (the stepped threads'
+// hand-over), and nothing of it is kept outside the lock.
+unsafe impl Send for Stepped {}
+
+/// The pending word is the thread's: deferred on this thread, a hit on another OS thread (the same
+/// engine, as a stepped thread runs it; the same run, as a real thread's engine is) works out its
+/// own word and defers its own, and this thread's G116 then runs with word 0.
+#[test]
+fn o1_pending_word_is_the_threads() {
+    let mut e = world_as(true);
+    blocking(&mut e, 1);
+    assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
+    let engine = std::sync::Mutex::new(Stepped(e));
+    let lock = || {
+        engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    let seen = std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let mut g = lock();
+                let e = &mut g.0;
+                e.call(REDUCE_DAMAGE.addr(), &[HIT, 1]);
+                let blocked = e.mem.u32(HIT + 0x58) & 1;
+                let deferred = e.site(DEFER_OV4.addr(), &[HIT, 1]);
+                let mine = pending_word(e);
+                e.mem.set_u32(HIT + 0x58, 0);
+                e.site(HIT_LOCATION.addr(), &[HIT]);
+                (blocked, deferred, mine, e.mem.u32(HIT + 0x58) & 1)
+            })
+            .join()
+            .expect("the other thread")
+    });
+    assert_eq!(seen, (0, Some(0), 2, 0), "the other thread's own word 1");
+    let mut g = lock();
+    let e = &mut g.0;
+    assert_eq!(pending_word(e), 1, "this thread's kept");
+    e.mem.set_u32(HIT + 0x58, 0);
+    assert_eq!(e.site(HIT_LOCATION.addr(), &[HIT]), Some(0));
+    assert_eq!(e.mem.u32(HIT + 0x58) & 1, 1, "word 0");
+    assert_eq!(pending_word(e), 0);
 }
