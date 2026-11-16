@@ -2093,10 +2093,11 @@ fn toggle_sneak(e: &mut Engine, pc: u32, on: bool) {
     let flags = e.mem.u32(mover + MOVER_FLAGS);
     let sneaking = flags & SNEAK != 0;
     let action = i32::from(e.mem.u16(process + PROCESS_ACTION) as i16);
+    // Outside the table (`None`) blocks, as the exe's range check does.
     let blocks = usize::try_from(action + 1)
         .ok()
         .and_then(|i| ACTION_BLOCKS.get(i))
-        .is_none_or(|&b| b != 0);
+        != Some(&0);
     if sneaking == on
         || e.mem.u32(pc + PC_LIFE_STATE) != 0
         || e.mem.u32(pc + PC_SIT_SLEEP_STATE) != 0
