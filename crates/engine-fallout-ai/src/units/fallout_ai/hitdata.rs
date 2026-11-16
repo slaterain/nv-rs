@@ -390,7 +390,7 @@ pub fn hit_data_initialize_explosion_data(
     );
     let health_damage = e.get(hit, HitData::fHealthDamage);
     e.set(hit, HitData::fTotalDamage, x87_quiet_bits(health_damage));
-    hit_data_reduce_damage(e, hit, 1);
+    reduce_damage(e, hit, 1);
     hit_data_check_critical_strike(e, hit);
     hit_data_determine_outcome(e, hit);
 }
@@ -404,6 +404,40 @@ fn armor_penetrated_seam(e: &mut Engine, this: Ptr<HitData>) {
     if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
         e.site(0x009b_6335, &[this.addr()]);
     }
+}
+
+/// `HitData::ReduceDamage`'s address: the translations call it by address, so a wrap there (JIP
+/// LN NVSE's O1, `CalculateHitDamageHook`) runs for every caller.
+const HIT_DATA_REDUCE_DAMAGE: u32 = 0x009b_5a30;
+
+/// `ReduceDamage(ignore_block)` on `hit`, called by address (thiscall, `RET 4`).
+#[inline]
+fn reduce_damage(e: &mut Engine, hit: Ptr<HitData>, ignore_block: u32) {
+    e.call(HIT_DATA_REDUCE_DAMAGE, &args![hit, ignore_block]);
+}
+
+/// The `ReduceDamage` calls JIP LN NVSE's O1 (`bIgnoreDTDRFix`) defers to `SetTargetedLimb` by
+/// their return addresses (`0x9B5628` after the call at `0x9B5623` in `InitializeHitData_ov3`,
+/// `0x9B5707` after `0x9B5702` in `_ov4`): with the switch's bit set the seam at the call is
+/// asked with the hit and the call's word, and an answer means the call is deferred (not made).
+/// With the bit clear: one load, false (the call is made).
+#[inline]
+fn reduce_damage_deferred(e: &mut Engine, site: u32, hit: Ptr<HitData>, ignore_block: u32) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::IGNORE_DTDR_FIX != 0
+        && e.site(site, &[hit.addr(), ignore_block]).is_some()
+}
+
+/// The limb step of [`hit_data_set_targeted_limb`] at `0x9B6E81`. JIP LN NVSE's G116
+/// (`SetHitLocationHook`, a fix) replaces it up to `0x9B6EC4`: it runs a deferred
+/// `CalculateHitDamage` and does the limb 0xE move itself; the seam is asked with the hit and
+/// answers 1 when the limb was 0xE (nothing more to do), 0 otherwise (the part step goes on).
+/// With the word's `FIXES` bit clear: one load, `None` (the translation's own limb 0xE step).
+#[inline]
+fn hit_location_seam(e: &mut Engine, hit: Ptr<HitData>) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return e.site(0x009b_6e81, &[hit.addr()]);
+    }
+    None
 }
 
 // Translated from 009b5a30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1411,7 +1445,9 @@ pub fn hit_data_initialize_hit_data_ov3(
             e.set(hit, HitData::fHealthDamage, damage);
         }
         hit_data_check_critical_strike(e, hit);
-        hit_data_reduce_damage(e, hit, 0);
+        if !reduce_damage_deferred(e, 0x009b_5623, hit, 0) {
+            reduce_damage(e, hit, 0);
+        }
     }
     hit_data_set_targeted_limb(e, hit, 0);
     if counts {
@@ -1616,7 +1652,9 @@ pub fn hit_data_initialize_hit_data_ov4(
     let damage = e.get(hit, HitData::fHealthDamage);
     e.set(hit, HitData::fTotalDamage, x87_quiet_bits(damage));
     hit_data_check_critical_strike(e, hit);
-    hit_data_reduce_damage(e, hit, 1);
+    if !reduce_damage_deferred(e, 0x009b_5702, hit, 1) {
+        reduce_damage(e, hit, 1);
+    }
     hit_data_set_targeted_limb(e, hit, projectile);
     hit_data_determine_outcome(e, hit);
 }
@@ -1642,7 +1680,7 @@ pub fn hit_data_initialize_hit_data_ov5(
     let damage = x87_quiet_bits(damage.to_bits());
     e.set(hit, HitData::fHealthDamage, damage);
     e.set(hit, HitData::fTotalDamage, damage);
-    hit_data_reduce_damage(e, hit, 0);
+    reduce_damage(e, hit, 0);
     hit_data_determine_outcome(e, hit);
 }
 
@@ -1724,7 +1762,7 @@ pub fn hit_data_initialize_impact_data(
             e.set(hit, HitData::eDamageLimb, limb);
         }
     });
-    hit_data_reduce_damage(e, hit, 1);
+    reduce_damage(e, hit, 1);
     hit_data_determine_outcome(e, hit);
 }
 
@@ -2044,6 +2082,20 @@ fn pick_limb(e: &mut Engine, hit: Ptr<HitData>, parts: u32, random: Ptr, ebp: u3
 
 /// The damage part of [`hit_data_set_targeted_limb`].
 fn apply_limb(e: &mut Engine, hit: Ptr<HitData>, part: u32) {
+    match hit_location_seam(e, hit) {
+        Some(0) => {}
+        Some(_) => return,
+        None => {
+            if limb_0xe_step(e, hit) {
+                return;
+            }
+        }
+    }
+    apply_part(e, hit, part);
+}
+
+/// The exe's limb 0xE step (`0x9B6E81` to `0x9B6EBF`): true when it ran.
+fn limb_0xe_step(e: &mut Engine, hit: Ptr<HitData>) -> bool {
     if e.get(hit, HitData::eDamageLimb) == 0xe {
         let damage = x87_quiet_bits(e.get(hit, HitData::fHealthDamage));
         e.set(hit, HitData::fTargetedLimbDamage, damage);
@@ -2054,8 +2106,13 @@ fn apply_limb(e: &mut Engine, hit: Ptr<HitData>, part: u32) {
             e.set(hit, HitData::fTargetedLimbDamage, damage);
         }
         e.set(hit, HitData::fHealthDamage, x87_store32(0.0));
-        return;
+        return true;
     }
+    false
+}
+
+/// The part step of [`hit_data_set_targeted_limb`] (`0x9B6EC4` on).
+fn apply_part(e: &mut Engine, hit: Ptr<HitData>, part: u32) {
     if part == 0 {
         return;
     }

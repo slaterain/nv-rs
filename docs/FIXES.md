@@ -1011,6 +1011,19 @@ scaled by the weapon's skill (Guns 0.15, Energy Weapons 0.2, Melee and Unarmed 0
 Explosives 0.3) and by its attack damage; with `bCreatureSpreadFix` creatures shoot with the aimed (iron
 sights) spread, and other actors count as aiming only while in high process (`0x8B0FBF`).
 
+JIP's hit damage (with the row on and JIP's switch `bIgnoreDTDRFix`, on by default; `009b5a30`): a hit's
+damage threshold and resistance come from the target's actor values; the ammo actually fired changes the
+fatigue damage, resistance, threshold and damage with its effects; an actor blocking the hit adds its block
+skill bonus to the threshold; the damage perks count for the player, teammates and, with `uNPCPerks`, other
+actors; split-beam shots share the threshold between their beams; automatic melee weapons lose a share of
+their damage instead of the whole threshold; the minimum damage, the hit markers and a companion's
+complaint follow JIP's rules; the player's armour takes damage; the weapon's damage-type resistance counts
+unless the ammo ignores it; in V.A.T.S. the player takes `fVATSPlayerDamageMult` of every damage. A hit
+whose limb is chosen afterwards has its damage worked out when the limb is set, and a hit on limb 0xE
+moves its damage to the limb (`0x9B6E81`). With `bLocalizedDTDR` the armour worn on the hit body part
+decides the threshold and resistance, weaker below half condition. Ammo with a script runs it on the
+actor hit, from the ammo that was fired rather than the weapon's current ammo (`0x89ABDC`).
+
 Built as part of JIP (in every preset once JIP answers "installed", not under the row): the player's
 killer is kept when the player dies (`0x89E790`, `0x89F351`; read by `GetKiller`) and cleared before a
 load; with the row off a player with JIP installed gets that and nothing else of this group's fixes.
