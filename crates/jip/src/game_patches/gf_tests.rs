@@ -228,3 +228,93 @@ fn every_handler_is_at_its_row() {
         );
     }
 }
+
+// ---- G48: TESForm::SetFormType ----
+
+/// A form whose bytes `+4`..`+7` and the word at `+0x104` are pre-filled (what reused memory
+/// can hold).
+const G48_FORM: u32 = 0x0539_0000;
+
+/// `004f15a0` called by address with `word` on the pre-filled form: the bytes `+4`..`+7`, the word
+/// at `+0x104`, the byte past it and `EAX`.
+fn g48_set(e: &mut Engine, word: u32) -> ([u8; 4], u32, u8, u32) {
+    if !e.mem.is_mapped(G48_FORM) {
+        e.map(G48_FORM, 0x1000);
+    }
+    e.mem.set_u32(G48_FORM + 4, 0xa5a5_a5a5);
+    e.mem.set_u32(G48_FORM + 0x104, 0x5a5a_5a5a);
+    e.mem.set_u8(G48_FORM + 0x108, 0x77);
+    let eax = e.call(SET_FORM_TYPE.addr(), &[G48_FORM, word]).eax;
+    let b = |i: u32| e.mem.u8(G48_FORM + 4 + i);
+    (
+        [b(0), b(1), b(2), b(3)],
+        e.mem.u32(G48_FORM + 0x104),
+        e.mem.u8(G48_FORM + 0x108),
+        eax,
+    )
+}
+
+/// G48 with JIP not installed (the row on or off): the exe's `004f15a0`, only the type byte is
+/// stored and the form answered; the flag bytes and `+0x104` keep what they held, for an actor
+/// type too.
+#[test]
+fn g48_not_installed_keeps_the_exes_byte_store() {
+    for row in [false, true] {
+        let mut e = world_as(false);
+        super::super::set_row(&mut e, row);
+        assert!(e.wraps_at(SET_FORM_TYPE.addr()).is_empty());
+        for kind in [0x3bu32, 0x3c, 0x2a] {
+            assert_eq!(
+                g48_set(&mut e, kind),
+                ([kind as u8, 0xa5, 0xa5, 0xa5], 0x5a5a_5a5a, 0x77, G48_FORM),
+                "{kind:02x} row {row}"
+            );
+        }
+    }
+}
+
+/// G48 with JIP installed (the row off, on, and on with an optional switch: JIP's own, in every
+/// preset): the type stored as a whole word (JIP's flag bytes `+5`..`+7` cleared); for a
+/// character (0x3B) or a creature (0x3C) the word at `+0x104` cleared too, nothing past it; any
+/// other type (the neighbours 0x3A and 0x3D, an NPC base 0x2A) leaves `+0x104` alone. Only the
+/// stack word's low byte counts. `EAX` is the type, as JIP's bytes leave it.
+#[test]
+fn g48_installed_clears_jips_flag_bytes() {
+    use engine_core::extend::jip_patches;
+    for (row, switch) in [
+        (false, 0),
+        (true, 0),
+        (true, jip_patches::FO3_WPN_DEGRADATION),
+    ] {
+        let mut e = world_as(true);
+        super::super::set_row(&mut e, row);
+        if switch != 0 {
+            e.jip_patches_or(switch);
+        }
+        assert_eq!(e.wraps_at(SET_FORM_TYPE.addr()), [Owner::Jip]);
+        for kind in [0x3bu32, 0x3c] {
+            assert_eq!(
+                g48_set(&mut e, kind),
+                ([kind as u8, 0, 0, 0], 0, 0x77, kind),
+                "{kind:02x} row {row}"
+            );
+        }
+        for kind in [0x3au32, 0x3d, 0x2a] {
+            assert_eq!(
+                g48_set(&mut e, kind),
+                ([kind as u8, 0, 0, 0], 0x5a5a_5a5a, 0x77, kind),
+                "{kind:02x} row {row}"
+            );
+        }
+        assert_eq!(
+            g48_set(&mut e, 0x1234_563b),
+            ([0x3b, 0, 0, 0], 0, 0x77, 0x3b),
+            "the low byte only"
+        );
+        assert_eq!(
+            g48_set(&mut e, 0x0000_3b2a),
+            ([0x2a, 0, 0, 0], 0x5a5a_5a5a, 0x77, 0x2a),
+            "the low byte only"
+        );
+    }
+}

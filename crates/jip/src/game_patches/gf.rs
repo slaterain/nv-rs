@@ -2,7 +2,11 @@
 //! GF's PR edits this file (and its own tests file beside it).
 //!
 //! **JIP's own** (`InitGamePatches`, `internal/patches_game.h` (JIP LN NVSE); in whenever JIP
-//! answers "installed", whatever the row): **G39** rewrites `TESNPC`'s `TESModel::GetModel`
+//! answers "installed", whatever the row): **G48** rewrites `TESForm::SetFormType` (`004f15a0`)
+//! to store the type as a whole word, clearing JIP's form flag bytes `+5`..`+7`, and for a
+//! character or creature (0x3B, 0x3C) the word at `+0x104` (JIP's actor flag bytes): the game
+//! never initialises those bytes, and JIP's built hooks read them, so a form made in reused
+//! memory would otherwise start with stale flags. **G39** rewrites `TESNPC`'s `TESModel::GetModel`
 //! (`00601c30`, reached only through the NPC's model vtable `0x104A1A4`, slot `+0x14`): the NPC's
 //! own model path when one is set (only `SetNPCSkeletonModel` sets one), else the setting
 //! `sNPCModelMale`'s text (JIP's sex test reads bit 0 of the word at the NPC's `+4`, the form type
@@ -29,6 +33,34 @@
 use super::Area;
 use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
+
+/// G48's wrap: `TESForm::SetFormType` (`004f15a0`; linker-shared: other objects' "store a byte
+/// at +4" calls reach it too, as in the game with JIP).
+pub const SET_FORM_TYPE: WrapSlot = WrapSlot::new(Owner::Jip, 0x004f_15a0);
+/// The two types whose word at `+0x104` JIP clears (`Character`, `Creature`: JIP's actor flag
+/// bytes `+0x104`..`+0x107`), and that word.
+const CHARACTER: u32 = 0x3b;
+const CREATURE: u32 = 0x3c;
+const ACTOR_JIP_FLAGS: u32 = 0x104;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SAFE_WRITE_BUF(0x4F15A0, `movzx eax, byte [esp+4]; mov [ecx+4], eax; cmp al, 0x3B; je;
+// cmp al, 0x3C; je; ret 4; xor edx, edx; mov [ecx+0x104], edx; ret 4`)).
+/// G48: `004f15a0` (`ECX` the form, one stack word) rewritten: the word's low byte stored as a
+/// whole word at `+4` (the type, and JIP's form flag bytes `+5`..`+7` cleared); for a character
+/// or a creature also the word at `+0x104` cleared (JIP's actor flag bytes). Answers the type in
+/// `EAX` as JIP's bytes do (the exe's answers the form; no caller reads it).
+fn set_form_type(e: &mut Engine, w: &[u32]) -> Ret {
+    let (form, kind) = (w[0], w[1] & 0xff);
+    e.mem.set_u32(form.wrapping_add(4), kind);
+    if kind == CHARACTER || kind == CREATURE {
+        e.mem.set_u32(form.wrapping_add(ACTOR_JIP_FLAGS), 0);
+    }
+    Ret {
+        eax: kind,
+        ..Ret::default()
+    }
+}
 
 /// G39's wrap: `TESNPC`'s `TESModel::GetModel` (`00601c30`).
 pub const NPC_MODEL: WrapSlot = WrapSlot::new(Owner::Jip, 0x0060_1c30);
@@ -61,11 +93,12 @@ pub const AREA: Area = Area {
     fix_wraps: &[],
     install_fixes,
     jip_sites: &[],
-    jip_wraps: &[NPC_MODEL.addr()],
+    jip_wraps: &[SET_FORM_TYPE.addr(), NPC_MODEL.addr()],
     install_jip,
 };
 
 fn install_jip(e: &mut Engine) {
+    e.wrap(SET_FORM_TYPE, set_form_type);
     e.wrap(NPC_MODEL, npc_model);
     // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
     // (SafeWrite32(0x104A1BC, 0x401290)). The exe's own stub, as JIP writes it (not a routine
