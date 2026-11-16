@@ -591,10 +591,16 @@ pub fn set_world_transform(
         *value = f64::from(narrow(entry(e, i) * s));
     }
     let v = |e: &Engine, i: u32| {
-        wide(capture::own_at::<u32>(e, elem_addr(this, R::kDirectionA, i, 4)))
+        wide(capture::own_at::<u32>(
+            e,
+            elem_addr(this, R::kDirectionA, i, 4),
+        ))
     };
     let w = |e: &Engine, i: u32| {
-        wide(capture::own_at::<u32>(e, elem_addr(this, R::kDirectionB, i, 4)))
+        wide(capture::own_at::<u32>(
+            e,
+            elem_addr(this, R::kDirectionB, i, 4),
+        ))
     };
     let out0 = narrow(v(e, 2) * a[6] + (v(e, 1) * a[3] + v(e, 0) * a[0]));
     let out1 = narrow((v(e, 1) * a[4] + v(e, 0) * a[1]) + v(e, 2) * a[7]);

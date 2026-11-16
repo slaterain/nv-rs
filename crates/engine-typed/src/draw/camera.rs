@@ -293,10 +293,7 @@ pub fn set_camera_data(
             e.set_global(l + 0x48, qx);
             let sign_y = sign(ny);
             e.set_global(l + 0x1c, sign_y);
-            let qy = x87_store32(x87_div(
-                x87_load32(sign_y),
-                x87_m32(own(e, proj + 0x14)),
-            ));
+            let qy = x87_store32(x87_div(x87_load32(sign_y), x87_m32(own(e, proj + 0x14))));
             e.set_global(l + 0x4c, qy);
             let qw = x87_store32(x87_div(
                 x87_sub(1.0, x87_load32(own(e, proj + 0x28))),

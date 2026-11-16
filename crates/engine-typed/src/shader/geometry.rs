@@ -563,7 +563,8 @@ pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
         capture::set_own_at(e, EYE_DIRECTION + 0xc, 0u32);
         let mut shifted = [0f32; 3];
         for (index, value) in shifted.iter_mut().enumerate() {
-            *value = eye[index] - capture::own_at::<f32>(e, CAMERA + 4 * idx(index)); // the camera eye: own state
+            *value = eye[index] - capture::own_at::<f32>(e, CAMERA + 4 * idx(index));
+            // the camera eye: own state
         }
         for (index, value) in shifted.iter().enumerate() {
             capture::set_own_at(e, EYE_VECTOR + 4 * idx(index), *value);

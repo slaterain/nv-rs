@@ -248,7 +248,11 @@ mod tests {
         assert!(capture::begin(&e));
         take(&e, Ptr::new(acc));
         // The drawing side: the particles' render immediate.
-        crate::dispatch::scene::geometry_render_immediate(&mut e, Ptr::new(geometry), Ptr::new(renderer));
+        crate::dispatch::scene::geometry_render_immediate(
+            &mut e,
+            Ptr::new(geometry),
+            Ptr::new(renderer),
+        );
         // Main, with the packet on the drawing side's thread: its extra pass's finish.
         let packet = capture::detach(&e).expect("the packet");
         super::super::packet::clear_scene_word(&mut e);
@@ -335,9 +339,16 @@ mod tests {
         take(&e, Ptr::new(acc));
         super::super::packet::clear_scene_word(&mut e);
         assert_eq!(e.mem.u32(renderer + 0xc), 0x1234_5678, "main's stays");
-        assert_eq!(super::super::packet::current_property_state(&e, renderer), 0);
+        assert_eq!(
+            super::super::packet::current_property_state(&e, renderer),
+            0
+        );
         let _ = capture::end(&mut e);
-        assert_eq!(e.mem.u32(renderer + 0xc), 0, "the join takes the drawing side's");
+        assert_eq!(
+            e.mem.u32(renderer + 0xc),
+            0,
+            "the join takes the drawing side's"
+        );
     }
 
     /// Every renderer block the cut takes is inside the renderer's layout and apart from the others, and the camera's
