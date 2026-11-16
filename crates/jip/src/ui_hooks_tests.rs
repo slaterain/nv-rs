@@ -689,7 +689,7 @@ fn the_readme_counts_the_built_commands() {
     let stated: usize = row[at..]
         .split(' ')
         .next()
-        .and_then(|n| n.parse().ok())
-        .expect("a number");
+        .and_then(|n| n.replace(',', "").parse().ok())
+        .expect("a number (thousands may have a comma)");
     assert_eq!(stated, built, "README says {stated}, the table has {built}");
 }

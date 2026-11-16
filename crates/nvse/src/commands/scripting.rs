@@ -465,6 +465,97 @@ fn container_loop(e: &mut Engine, container: u32, local: u32) -> (Loop, bool) {
     )
 }
 
+/// Whether a running container loop of any thread lists the stack `xdata` from the stack it
+/// stands on (its index) to its last: each element's own node holds its stack, read again at
+/// each step ([`set_container_iterator`]).
+pub(crate) fn container_loops_list(e: &mut Engine, xdata: u32) -> bool {
+    let pending: Vec<u32> = e
+        .ext::<Nvse>()
+        .loops
+        .loops
+        .values()
+        .flatten()
+        .filter_map(|info| match &info.kind {
+            Loop::Container {
+                elements, index, ..
+            } => elements.get(*index..),
+            _ => None,
+        })
+        .flatten()
+        .copied()
+        .collect();
+    pending.into_iter().any(|entry| {
+        let extend = e.mem.u32(entry + crate::invref::ENTRY_EXTEND_DATA);
+        extend != 0 && e.mem.u32(extend) == xdata
+    })
+}
+
+/// For a test of a command run inside `ForEach` over a container: the loop begun on this
+/// thread over the given stacks (`(item, count, stack)`, each an element of its own as
+/// [`container_loop`] makes them), standing on the first, its reference variable at `local`.
+/// Its inventory reference's id.
+#[cfg(any(test, feature = "test-support"))]
+pub fn begin_container_loop_for_test(
+    e: &mut Engine,
+    container: u32,
+    local: u32,
+    stacks: &[(u32, i32, u32)],
+) -> u32 {
+    let refr = crate::invref::create(e, container, crate::invref::Data::default(), false);
+    let invref = e.mem.u32(refr + 0xc);
+    let elements: Vec<u32> = stacks
+        .iter()
+        .map(|&(item, count, xdata)| crate::invref::create_temp_entry(e, item, count, xdata))
+        .collect();
+    set_container_iterator(e, invref, local, &elements, 0);
+    let depth = crate::context::depth(e);
+    loops(e).push(LoopInfo {
+        kind: Loop::Container {
+            invref,
+            local,
+            elements,
+            index: 0,
+        },
+        saved: SavedIp::default(),
+        end_ip: 0,
+        depth,
+    });
+    invref
+}
+
+/// For a test: the innermost container loop's `loop` step on this thread (the write-back, then
+/// the next stack); false at its end or with no container loop.
+#[cfg(any(test, feature = "test-support"))]
+pub fn step_container_loop_for_test(e: &mut Engine) -> bool {
+    let Some(mut info) = loops(e).pop() else {
+        return false;
+    };
+    let more = match &mut info.kind {
+        Loop::Container {
+            invref,
+            local,
+            elements,
+            index,
+        } => container_step(e, *invref, *local, elements, index),
+        _ => false,
+    };
+    loops(e).push(info);
+    more
+}
+
+/// A container loop's next pass: `UnsetIterator` (the write-back), then the next stack.
+fn container_step(
+    e: &mut Engine,
+    invref: u32,
+    local: u32,
+    elements: &[u32],
+    index: &mut usize,
+) -> bool {
+    crate::invref::write_ref_data_to_container(e, invref);
+    *index += 1;
+    set_container_iterator(e, invref, local, elements, *index)
+}
+
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Loops.cpp: ContainerIterLoop::SetIterator.
 /// The inventory reference stands for stack `index` and the variable holds it; past the end
 /// both are cleared.
@@ -641,12 +732,7 @@ fn update(e: &mut Engine, a: &CommandArgs, kind: &mut Loop) -> bool {
             local,
             elements,
             index,
-        } => {
-            // `UnsetIterator`, then the next stack.
-            crate::invref::write_ref_data_to_container(e, *invref);
-            *index += 1;
-            set_container_iterator(e, *invref, *local, elements, *index)
-        }
+        } => container_step(e, *invref, *local, elements, index),
         Loop::FormList {
             node,
             local,
