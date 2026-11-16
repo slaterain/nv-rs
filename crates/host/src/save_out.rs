@@ -305,6 +305,14 @@ fn dialog_commands(text: &str) -> Vec<std::process::Command> {
     }
 }
 
+/// Off Windows: none (Windows' folder answers do not exist there). Its one caller off Windows is
+/// `mod_files`, whose Windows-style check then refuses every folder there (it needs a drive
+/// letter): mods' own settings last for a session off Windows until it uses this system's guard.
+#[cfg(not(windows))]
+pub fn known_folders() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 /// The player's Documents, AppData and Local AppData as Windows answers for them (wherever they
 /// were moved to: OneDrive, another drive). Windows only: off Windows the guard is
 /// `game_folders::never_written`, whose folders carry nv-rs's own folder as their exception.
