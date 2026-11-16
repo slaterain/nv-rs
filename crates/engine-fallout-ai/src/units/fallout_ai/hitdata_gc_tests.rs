@@ -16,20 +16,25 @@ fn world() -> Engine {
     e
 }
 
-/// With JIP not installed or the row off the seam is not asked; with the row on it is asked
-/// with the hit.
+/// G77 is JIP's own: with JIP not installed (word 0, or only other bits) the seam is not asked;
+/// with `INSTALLED` it is asked with the hit, the row's bit on or off.
 #[test]
-fn g77_seam_asks_only_with_the_row() {
-    for word in [0, jip_patches::INSTALLED] {
+fn g77_seam_asks_whenever_jip_is_installed() {
+    for word in [0, jip_patches::FIXES] {
         let mut e = world();
         e.set_jip_patches(word);
         armor_penetrated_seam(&mut e, HIT);
         assert_eq!(e.mem.u32(BASE), 0, "{word:08x}");
     }
-    let mut e = world();
-    e.set_jip_patches(jip_patches::FIXES);
-    armor_penetrated_seam(&mut e, HIT);
-    assert_eq!(e.mem.u32(BASE), HIT.addr());
+    for word in [
+        jip_patches::INSTALLED,
+        jip_patches::INSTALLED | jip_patches::FIXES,
+    ] {
+        let mut e = world();
+        e.set_jip_patches(word);
+        armor_penetrated_seam(&mut e, HIT);
+        assert_eq!(e.mem.u32(BASE), HIT.addr(), "{word:08x}");
+    }
 }
 
 /// Where G77's call-site handler counts its asks, the hit, the player and the setting cell.
@@ -39,7 +44,7 @@ const PLAYER_AT: u32 = BASE + 0x800;
 const SETTING_CELL: u32 = BASE + 0x900;
 
 /// The end of `ReduceDamage` with no weapon, no fatigue damage and a hit neither by nor on the
-/// player, the row on and a G77 handler that marks the hit as JIP does and counts its asks.
+/// player, JIP installed and a G77 handler that marks the hit as JIP does and counts its asks.
 fn finish_world() -> Engine {
     let mut e = Engine::new();
     e.map(BASE, 0x1000);
@@ -48,7 +53,7 @@ fn finish_world() -> Engine {
     e.mem.set_u32(PLAYER_011DEA3C, PLAYER_AT);
     e.register(SETTING_VALUE, |_, _| SETTING_CELL.into_ret());
     e.register(0x0040_ebd0, |_, _| Ret::default());
-    e.set_jip_patches(jip_patches::FIXES);
+    e.set_jip_patches(jip_patches::INSTALLED);
     e.on_site(SiteSlot::new(Owner::Jip, 0x009b_6335), |e, a| {
         e.mem.set_u32(ASKS, e.mem.u32(ASKS) + 1);
         let top = e.mem.u8(a[0] + 0x5b);

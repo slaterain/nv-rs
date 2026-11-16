@@ -205,6 +205,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_linked_ref::COMMANDS,
     jip_fn_misc_ref_havok_w::COMMANDS,
     crate::game_patches::gp::COMMANDS,
+    crate::game_patches::gc::formulas::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -802,6 +803,8 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_misc_ref",
             // game_patches::gp::COMMANDS (its commands are in this file).
+            "jip_fn_miscellaneous",
+            // game_patches::gc::formulas::COMMANDS (likewise).
             "jip_fn_miscellaneous",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
