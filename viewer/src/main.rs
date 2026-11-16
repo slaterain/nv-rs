@@ -10,6 +10,7 @@
 //! Until 2026-11-03 this was also a hand-written reimplementation of the game drawn with Bevy;
 //! that layer was removed (docs/adr/0011-old-layer-removed.md).
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -78,30 +79,46 @@ struct Args {
     ignored: Vec<String>,
 }
 
-/// `Ok(None)`: `--help`.
-fn parse(raw: &[String]) -> Result<Option<Args>, String> {
+/// `Ok(None)`: `--help`. Each argument as the system gave it (on Linux any bytes: a game folder
+/// whose name is not UTF-8 is carried as it is, never turned into text).
+fn parse(raw: &[OsString]) -> Result<Option<Args>, String> {
     let mut args = Args::default();
     let mut data = None;
     let mut i = 0;
     while i < raw.len() {
-        match raw[i].as_str() {
-            "-h" | "--help" => return Ok(None),
-            "--movement-probe" => args.movement_probe = true,
-            "--check" => args.check = true,
-            "--movement-missing" => {
+        let arg = raw[i].as_os_str();
+        match arg.to_str() {
+            Some("-h" | "--help") => return Ok(None),
+            Some("--movement-probe") => args.movement_probe = true,
+            Some("--check") => args.check = true,
+            Some("--movement-missing") => {
                 i += 1;
                 let file = raw.get(i).ok_or("--movement-missing needs a FILE")?;
                 args.movement_missing = Some(PathBuf::from(file));
             }
-            other if data.is_none() && !other.starts_with('-') => {
-                data = Some(PathBuf::from(other));
+            _ if data.is_none() && !arg.to_string_lossy().starts_with('-') => {
+                data = Some(PathBuf::from(arg));
             }
-            other => args.ignored.push(other.to_owned()),
+            _ => args.ignored.push(arg.to_string_lossy().into_owned()),
         }
         i += 1;
     }
     args.data = data.ok_or("the game's Data folder is missing")?;
     Ok(Some(args))
+}
+
+/// The command line after the program's name. On Windows as before (`std::env::args`); on Linux
+/// and macOS as the system's own strings (`args_os`), so a folder name that is not UTF-8 reaches
+/// [`parse`] as it is instead of stopping the program with a panic.
+fn command_line() -> Vec<OsString> {
+    #[cfg(windows)]
+    {
+        std::env::args().skip(1).map(OsString::from).collect()
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::args_os().skip(1).collect()
+    }
 }
 
 /// The game's master file, which a Data folder holds.
@@ -158,9 +175,9 @@ fn main() {
             SetProcessDpiAwarenessContext(-1);
         }
     }
-    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let raw = command_line();
     #[cfg(not(windows))]
-    if raw.first().map(String::as_str) == Some("--find") {
+    if raw.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("--find")) {
         find();
         return;
     }
@@ -289,8 +306,26 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn strings(a: &[&str]) -> Vec<String> {
-        a.iter().map(|s| s.to_string()).collect()
+    fn strings(a: &[&str]) -> Vec<OsString> {
+        a.iter().map(OsString::from).collect()
+    }
+
+    /// Review of #630 (round 2): a game folder whose name is not UTF-8 (Linux allows any bytes)
+    /// is carried as it is, byte for byte, and its check ends with a plain message, not a panic.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_folder_name_that_is_not_utf8_is_carried_as_it_is() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let folder = OsString::from_vec(b"/x/Fallout \xe9".to_vec());
+        let raw = vec![folder.clone(), OsString::from("--check")];
+        let args = parse(&raw).unwrap().unwrap();
+        assert_eq!(args.data.as_os_str().as_bytes(), b"/x/Fallout \xe9");
+        assert!(args.check);
+        let message = find_data_folder(&args.data).unwrap_err();
+        assert!(message.contains("FalloutNV.esm"), "{message}");
+        // An argument that is not UTF-8 and is not the folder is kept among the ignored ones.
+        let raw = vec![folder, OsString::from_vec(b"--odd\xff".to_vec())];
+        assert_eq!(parse(&raw).unwrap().unwrap().ignored.len(), 1);
     }
 
     /// play.sh's command line still parses: the Data folder, the old flags ignored.

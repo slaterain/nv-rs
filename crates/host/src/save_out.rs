@@ -39,7 +39,7 @@ fn out_dir() -> Option<&'static Path> {
                     "NV_SAVE_OUT={}: refused ({why}); saves are not copied.",
                     dir.display()
                 ),
-                &format!("Your saves are NOT being kept: they will be lost when the game closes. The save folder the game was given is one it must not write to. Start the game through {START}, and report this if you did."),
+                &plain_words(why, format!("Your saves are NOT being kept: they will be lost when the game closes. The save folder the game was given is one it must not write to. Start the game through {START}, and report this if you did.")),
             );
             return None;
         }
@@ -128,33 +128,69 @@ pub fn prepare() {
     }
 }
 
-/// The player's folders off Windows ([`prepare`]'s look), waited for at most 10 s: a look that
-/// takes longer (a disk that does not answer) or cannot be made refuses every write, said once.
+/// The refusal when [`prepare`]'s look at the player's folders did not answer within
+/// [`LOOK_WAIT`]: a disk that does not answer (a sleeping or offline disk, a network share listed
+/// as a Steam library), not a save folder of the wrong kind.
+#[cfg(not(windows))]
+const LOOK_TOO_SLOW: &str =
+    "the player's folders could not be looked at in time: a disk did not answer within 10 s";
+
+/// The refusal when [`prepare`]'s look ended without an answer (its thread stopped).
+#[cfg(not(windows))]
+const LOOK_STOPPED: &str = "the look at the player's folders stopped without an answer";
+
+/// How long the first write waits for [`prepare`]'s look.
+#[cfg(not(windows))]
+const LOOK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The player's folders off Windows ([`prepare`]'s look), waited for at most [`LOOK_WAIT`]: a look
+/// that takes longer (a disk that does not answer) or cannot be made refuses every write, said once.
 #[cfg(not(windows))]
 fn guard_list() -> Result<&'static [game_folders::Guarded], &'static str> {
     GUARD
         .get_or_init(|| {
             prepare();
             let receive = GUARD_LOOK.lock().unwrap_or_else(|p| p.into_inner()).take();
-            let Some(receive) = receive else {
-                return Err("the player's folders could not be looked at (no thread)");
-            };
-            match receive.recv_timeout(std::time::Duration::from_secs(10)) {
-                Ok(Some(list)) => Ok(list),
-                Ok(None) => {
-                    Err("HOME is not set to a full path, so the player's folders are unknown")
-                }
-                Err(_) => {
-                    println!(
-                        "NV_SAVE_OUT: the player's folders were not all looked at within 10 s (a sleeping or offline disk?); nothing is written"
-                    );
-                    Err("the player's folders could not be looked at within 10 s")
-                }
+            let answer = wait_for_look(receive, LOOK_WAIT);
+            if let Err(why @ (LOOK_TOO_SLOW | LOOK_STOPPED)) = answer {
+                println!("NV_SAVE_OUT: {why}; nothing is written this run");
             }
+            answer
         })
         .as_ref()
         .map(Vec::as_slice)
         .map_err(|e| *e)
+}
+
+/// [`prepare`]'s look's answer through `receive`, waited for at most `wait`; why every write is
+/// refused when there is none.
+#[cfg(not(windows))]
+#[allow(clippy::type_complexity)]
+fn wait_for_look(
+    receive: Option<std::sync::mpsc::Receiver<Option<Vec<game_folders::Guarded>>>>,
+    wait: std::time::Duration,
+) -> Result<Vec<game_folders::Guarded>, &'static str> {
+    use std::sync::mpsc::RecvTimeoutError;
+    let Some(receive) = receive else {
+        return Err("the player's folders could not be looked at (no thread)");
+    };
+    match receive.recv_timeout(wait) {
+        Ok(Some(list)) => Ok(list),
+        Ok(None) => Err("HOME is not set to a full path, so the player's folders are unknown"),
+        Err(RecvTimeoutError::Timeout) => Err(LOOK_TOO_SLOW),
+        Err(RecvTimeoutError::Disconnected) => Err(LOOK_STOPPED),
+    }
+}
+
+/// The player's words for a refusal `why`: `usual`, but off Windows a look at the player's folders
+/// that did not answer in time is said as what it is (a disk that did not answer), with what to do.
+fn plain_words(why: &str, usual: String) -> String {
+    #[cfg(not(windows))]
+    if why == LOOK_TOO_SLOW || why == LOOK_STOPPED {
+        return "Your saves and changed settings are NOT being kept this run: they will be lost when the game closes. Before it writes anything, nv-rs looks at your own folders (Steam's libraries, Wine prefixes) so it never writes into them, and that look did not finish: a disk did not answer within 10 s (a sleeping or offline disk, or a network share listed as a Steam library). Wake or mount that disk, or take it out of Steam's library list, and start the game again.".to_owned();
+    }
+    let _ = why;
+    usual
 }
 
 /// Writes `bytes` to the temporary file `temporary`. Off Windows a file (or a link) already there
@@ -369,7 +405,7 @@ fn prefs_file() -> Option<&'static Path> {
                     "NV_PREFS_OUT={}: refused ({why}); settings are not copied.",
                     file.display()
                 ),
-                &format!("Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through {START}, and report this if you did."),
+                &plain_words(why, format!("Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through {START}, and report this if you did.")),
             );
             return None;
         }
@@ -502,6 +538,29 @@ pub fn jobs(e: &Engine, watch: &mut Watch, dir: Option<&Path>, prefs: Option<&Pa
 /// Does `job`'s disk work: the log line when there is one (`Ok`), or the line saying why a
 /// write failed (`Err`).
 pub fn run(job: &Job) -> Result<Option<String>, String> {
+    // Off Windows the guard is asked again at write time; on Windows nothing is (the folder was
+    // checked once, at the start, as before).
+    #[cfg(not(windows))]
+    let check = refused_here;
+    #[cfg(windows)]
+    let check = |_: &Path| -> Option<&'static str> { None };
+    run_checked(job, &check)
+}
+
+/// [`run`], with `check` saying why a path may not be written or deleted (`None`: it may).
+///
+/// Asked for the file and its temporary name just before the disk work, so a folder link made
+/// after the start (the save folder swapped for a link into the player's Proton saves) is
+/// refused. What this cannot close: a link swapped in during the microseconds between this check
+/// and the write itself would be followed (closing that needs the folder opened once and the file
+/// made relative to it, which Rust's standard library does not offer); it needs another program
+/// of the player's own changing the folder at that very moment. A link planted at the temporary
+/// name is never written through (`write_part`), and the rename replaces a link at the save's
+/// own name instead of following it.
+fn run_checked(
+    job: &Job,
+    check: &dyn Fn(&Path) -> Option<&'static str>,
+) -> Result<Option<String>, String> {
     match job {
         Job::Write {
             dir,
@@ -511,10 +570,7 @@ pub fn run(job: &Job) -> Result<Option<String>, String> {
             copied,
             ..
         } => {
-            // Off Windows the guard is asked again at write time, for the file and its temporary
-            // name: a link made after the start cannot lead the write into a player's folder.
-            #[cfg(not(windows))]
-            if let Some(why) = refused_here(target).or_else(|| refused_here(temporary)) {
+            if let Some(why) = check(target).or_else(|| check(temporary)) {
                 let which = if copied.is_some() {
                     "NV_SAVE_OUT"
                 } else {
@@ -544,7 +600,20 @@ pub fn run(job: &Job) -> Result<Option<String>, String> {
             }
         }
         Job::Remove { target, name } => {
-            let removed = target.is_file() && std::fs::remove_file(target).is_ok();
+            // A deletion is a write into the folder: the same check (a folder link made after
+            // the start cannot lead it into a player's folder).
+            if let Some(why) = check(target) {
+                return Err(format!(
+                    "NV_SAVE_OUT: {} not deleted: refused ({why})",
+                    target.display()
+                ));
+            }
+            // Off Windows only a plain file is deleted (not a link at the save's name).
+            #[cfg(not(windows))]
+            let file = std::fs::symlink_metadata(target).is_ok_and(|m| m.is_file());
+            #[cfg(windows)]
+            let file = target.is_file();
+            let removed = file && std::fs::remove_file(target).is_ok();
             Ok(removed.then(|| format!("NV_SAVE_OUT: copied {name} (deleted)")))
         }
     }
@@ -1008,5 +1077,156 @@ mod tests {
             assert!(dir.join(kept).exists(), "{kept}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of #630 (round 2): the guard off Windows at write and delete time. Made-up folders
+    /// in the temporary folder: `home/Documents/My Games/FalloutNV/Saves` stands for the player's
+    /// own saves (a guarded folder), `own/Saves` for nv-rs's own save folder.
+    #[cfg(unix)]
+    mod guard_at_write_time {
+        use super::super::*;
+        use game_folders::Guarded;
+
+        struct Scratch(PathBuf);
+
+        impl Scratch {
+            fn new(name: &str) -> Scratch {
+                let dir = std::env::temp_dir()
+                    .join(format!("nv-save-guard-{name}-{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                // The real path, so the guard's look (links resolved) and the text agree.
+                Scratch(std::fs::canonicalize(&dir).unwrap())
+            }
+
+            /// The player's saves folder (guarded), with `x.fos` in it, and nv-rs's own saves.
+            fn folders(&self) -> (PathBuf, PathBuf, Vec<Guarded>) {
+                let players = self.0.join("home/Documents/My Games/FalloutNV/Saves");
+                std::fs::create_dir_all(&players).unwrap();
+                std::fs::write(players.join("x.fos"), b"the player's own save").unwrap();
+                let own = self.0.join("own/Saves");
+                std::fs::create_dir_all(&own).unwrap();
+                let never = vec![Guarded {
+                    root: self.0.join("home/Documents"),
+                    except: Some(self.0.join("own")),
+                }];
+                (players, own, never)
+            }
+        }
+
+        impl Drop for Scratch {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+
+        fn write(dir: &Path, name: &str, bytes: &[u8]) -> Job {
+            Job::Write {
+                key: name.as_bytes().to_vec(),
+                dir: Some(dir.to_path_buf()),
+                target: dir.join(name),
+                temporary: dir.join(format!("{name}.part")),
+                bytes: bytes.to_vec(),
+                copied: Some(name.to_string()),
+            }
+        }
+
+        /// The save folder swapped for a link into the player's saves after the start: the write
+        /// is refused and the player's save is untouched; before the swap it went through.
+        #[test]
+        fn a_write_through_a_folder_link_made_after_the_start_is_refused() {
+            let s = Scratch::new("write");
+            let (players, own, never) = s.folders();
+            let check = |p: &Path| game_folders::refused(p, &never);
+            let job = write(&own, "x.fos", b"nv-rs's copy");
+            assert_eq!(
+                run_checked(&job, &check),
+                Ok(Some("NV_SAVE_OUT: copied x.fos".to_string()))
+            );
+            std::fs::remove_dir_all(&own).unwrap();
+            std::os::unix::fs::symlink(&players, &own).unwrap();
+            let refused = run_checked(&job, &check).unwrap_err();
+            assert!(refused.contains("refused"), "{refused}");
+            assert_eq!(
+                std::fs::read(players.join("x.fos")).unwrap(),
+                b"the player's own save"
+            );
+            assert!(!players.join("x.fos.part").exists());
+        }
+
+        /// A link planted at the temporary name is not written through: it is replaced by a new
+        /// file, and the file it led to keeps its bytes.
+        #[test]
+        fn a_link_planted_at_the_temporary_name_is_not_written_through() {
+            let s = Scratch::new("part");
+            let (_, own, never) = s.folders();
+            let victim = s.0.join("victim.txt");
+            std::fs::write(&victim, b"not nv-rs's").unwrap();
+            std::os::unix::fs::symlink(&victim, own.join("y.fos.part")).unwrap();
+            let check = |p: &Path| game_folders::refused(p, &never);
+            assert_eq!(
+                run_checked(&write(&own, "y.fos", b"the copy"), &check),
+                Ok(Some("NV_SAVE_OUT: copied y.fos".to_string()))
+            );
+            assert_eq!(std::fs::read(&victim).unwrap(), b"not nv-rs's");
+            assert_eq!(std::fs::read(own.join("y.fos")).unwrap(), b"the copy");
+            assert!(std::fs::symlink_metadata(own.join("y.fos.part")).is_err());
+        }
+
+        /// A deletion through a folder link made after the start is refused: the player's save
+        /// the link leads to is still there. A link at the save's own name is not deleted, and
+        /// neither is the file it leads to; a plain file is.
+        #[test]
+        fn a_delete_through_a_folder_link_made_after_the_start_is_refused() {
+            let s = Scratch::new("delete");
+            let (players, own, never) = s.folders();
+            let check = |p: &Path| game_folders::refused(p, &never);
+            let remove = |name: &str| Job::Remove {
+                target: own.join(name),
+                name: name.to_string(),
+            };
+            std::fs::write(own.join("plain.fos"), b"x").unwrap();
+            assert_eq!(
+                run_checked(&remove("plain.fos"), &check),
+                Ok(Some("NV_SAVE_OUT: copied plain.fos (deleted)".to_string()))
+            );
+            assert!(!own.join("plain.fos").exists());
+            let elsewhere = s.0.join("elsewhere.fos");
+            std::fs::write(&elsewhere, b"kept").unwrap();
+            std::os::unix::fs::symlink(&elsewhere, own.join("linked.fos")).unwrap();
+            assert_eq!(run_checked(&remove("linked.fos"), &check), Ok(None));
+            assert!(std::fs::symlink_metadata(own.join("linked.fos")).is_ok());
+            assert_eq!(std::fs::read(&elsewhere).unwrap(), b"kept");
+            std::fs::remove_dir_all(&own).unwrap();
+            std::os::unix::fs::symlink(&players, &own).unwrap();
+            let refused = run_checked(&remove("x.fos"), &check).unwrap_err();
+            assert!(refused.contains("not deleted: refused"), "{refused}");
+            assert_eq!(
+                std::fs::read(players.join("x.fos")).unwrap(),
+                b"the player's own save"
+            );
+        }
+
+        /// A look at the player's folders that never answers refuses after the wait, saying it was
+        /// a disk that did not answer (not a wrong save folder); one whose thread stopped says
+        /// that; an answer is taken.
+        #[test]
+        fn a_look_that_never_answers_refuses_and_says_so() {
+            let (send, receive) = std::sync::mpsc::channel();
+            let wait = std::time::Duration::from_millis(50);
+            assert_eq!(wait_for_look(Some(receive), wait), Err(LOOK_TOO_SLOW));
+            drop(send);
+            let words = plain_words(LOOK_TOO_SLOW, "usual".into());
+            assert!(words.contains("a disk did not answer"), "{words}");
+            assert!(!words.contains("must not write to"), "{words}");
+            let (send, receive) = std::sync::mpsc::channel::<Option<Vec<Guarded>>>();
+            drop(send);
+            assert_eq!(wait_for_look(Some(receive), wait), Err(LOOK_STOPPED));
+            assert!(wait_for_look(None, wait).is_err());
+            let (send, receive) = std::sync::mpsc::channel();
+            send.send(Some(vec![])).unwrap();
+            assert_eq!(wait_for_look(Some(receive), wait), Ok(vec![]));
+            assert_eq!(plain_words("a `..` in the path", "usual".into()), "usual");
+        }
     }
 }

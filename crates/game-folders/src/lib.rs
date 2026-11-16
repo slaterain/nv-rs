@@ -303,10 +303,16 @@ pub fn library_paths(text: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Four hex digits at the front of `chars`.
+/// Four hex digits at the front of `chars`, taken only when they are there: otherwise nothing is
+/// taken (a broken escape never swallows the value's closing quote).
 fn hex4(chars: &mut std::str::Chars<'_>) -> Option<u32> {
-    let text: String = chars.take(4).collect();
-    (text.len() == 4).then(|| u32::from_str_radix(&text, 16).ok())?
+    let mut ahead = chars.clone();
+    let mut code = 0;
+    for _ in 0..4 {
+        code = code * 16 + ahead.next()?.to_digit(16)?;
+    }
+    *chars = ahead;
+    Some(code)
 }
 
 /// Every string value of `field` in a JSON text (`"field": "value"`), its escapes decoded
@@ -346,9 +352,14 @@ pub fn json_strings(text: &str, field: &str) -> Vec<String> {
                             continue;
                         };
                         let code = if (0xd800..0xdc00).contains(&high) {
-                            let low = (chars.next() == Some('\\') && chars.next() == Some('u'))
-                                .then(|| hex4(&mut chars))
+                            // The low half's `\u` and digits, taken only when all are there.
+                            let mut ahead = chars.clone();
+                            let low = (ahead.next() == Some('\\') && ahead.next() == Some('u'))
+                                .then(|| hex4(&mut ahead))
                                 .flatten();
+                            if low.is_some() {
+                                chars = ahead;
+                            }
                             match low {
                                 Some(low) if (0xdc00..0xe000).contains(&low) => {
                                     0x10000 + ((high - 0xd800) << 10) + (low - 0xdc00)
@@ -384,9 +395,10 @@ pub fn json_strings(text: &str, field: &str) -> Vec<String> {
 }
 
 /// A YAML double-quoted scalar's text after its opening quote (several lines joined with `\n`):
-/// the value (escapes `\\ \" \n \t \r \0 \/ \xNN \uNNNN \UNNNNNNNN` decoded, a line break folded
-/// to a space, one ending in `\` joined without one), or `None` when it never closes or an escape
-/// is broken.
+/// the value (every escape YAML has decoded: `\\ \" \/ \  \n \t \r \0 \a \b \e \f \v \N \_ \L \P
+/// \xNN \uNNNN \UNNNNNNNN`, the ones PyYAML writes included, a line break folded to a space, one
+/// ending in `\` joined without one), or `None` when it never closes or an escape is broken or
+/// unknown.
 fn yaml_double_quoted(text: &str) -> Option<String> {
     let mut out = String::new();
     let mut chars = text.chars().peekable();
@@ -414,9 +426,18 @@ fn yaml_double_quoted(text: &str) -> Option<String> {
                 }
                 match chars.next()? {
                     'n' => out.push('\n'),
-                    't' => out.push('\t'),
+                    't' | '\t' => out.push('\t'),
                     'r' => out.push('\r'),
                     '0' => out.push('\0'),
+                    'a' => out.push('\u{7}'),
+                    'b' => out.push('\u{8}'),
+                    'e' => out.push('\u{1b}'),
+                    'f' => out.push('\u{c}'),
+                    'v' => out.push('\u{b}'),
+                    'N' => out.push('\u{85}'),
+                    '_' => out.push('\u{a0}'),
+                    'L' => out.push('\u{2028}'),
+                    'P' => out.push('\u{2029}'),
                     'x' => out.push(code(&mut chars, 2)?),
                     'u' => out.push(code(&mut chars, 4)?),
                     'U' => out.push(code(&mut chars, 8)?),
@@ -425,7 +446,9 @@ fn yaml_double_quoted(text: &str) -> Option<String> {
                             chars.next();
                         }
                     }
-                    other => out.push(other),
+                    other @ (' ' | '"' | '/' | '\\') => out.push(other),
+                    // Not an escape YAML has: the value is broken.
+                    _ => return None,
                 }
             }
             other => out.push(other),
@@ -879,6 +902,10 @@ pub struct Guarded {
     pub root: PathBuf,
     /// nv-rs's own folder ([`own_folder`]): taken only as the real folder at its own place.
     pub except: Option<PathBuf>,
+    /// Whose rule names the exception: on Linux its names must match exactly (`NV-RS` is another
+    /// folder there); macOS's disks ignore case, so there they are compared without it. The
+    /// guarded folder itself is compared without case on both (refusing more, never less).
+    pub system: System,
 }
 
 /// The player's own folders, which nv-rs never writes into (saves, settings, anything), each with
@@ -912,6 +939,7 @@ pub fn never_written_from(home: &Home, scan: &Scan) -> Vec<Guarded> {
         .map(|root| Guarded {
             root,
             except: Some(own.clone()),
+            system: home.system,
         })
         .collect()
 }
@@ -974,18 +1002,36 @@ pub fn by_shape(parts: &[String]) -> bool {
     })
 }
 
-/// Whether the place (its `text` parts and its `real` parts) lies inside nv-rs's own folder `own`
-/// as the real folder at its own place: `own`'s real path must be its parent's real path plus its
-/// own name (a link AT the own folder opens nothing up), and the place must be inside it both by
-/// text and by where it leads (a link inside it to elsewhere is not inside it).
-fn excepted(text: &[String], real: &[String], own: &Path) -> bool {
+/// `path`'s parts exactly as named (each part's bytes, [`escape`]d so that no two names give the
+/// same text): Linux's rule, where names differing only in case are different folders.
+/// (A Windows drive, met only when the tests run there, is [`parts`]'s.)
+fn exact_parts(path: &Path) -> Vec<String> {
+    path.components()
+        .filter(|c| !matches!(c, Component::CurDir))
+        .map(|c| match c {
+            Component::Prefix(_) => parts(Path::new(c.as_os_str())).concat(),
+            _ => escape(&path_bytes(Path::new(c.as_os_str()))),
+        })
+        .collect()
+}
+
+/// Whether the place (`dir`, really `real_dir`) lies inside nv-rs's own folder `own` as the real
+/// folder at its own place: `own`'s real path must be its parent's real path plus its own name (a
+/// link AT the own folder opens nothing up), and the place must be inside it both by text and by
+/// where it leads (a link inside it to elsewhere is not inside it). Names compared by `system`'s
+/// rule: exactly on Linux, without case on macOS.
+fn excepted(dir: &Path, real_dir: &Path, own: &Path, system: System) -> bool {
     let (Some(parent), Some(name)) = (own.parent(), own.file_name()) else {
         return false;
     };
-    let mut expected = parts(&real_path(parent));
-    expected.push(name.to_string_lossy().to_lowercase());
-    let own_real = parts(&real_path(own));
-    own_real == expected && inside(text, &parts(own)) && inside(real, &own_real)
+    let key = match system {
+        System::Linux => exact_parts,
+        System::MacOs => parts,
+    };
+    let own_real = key(&real_path(own));
+    own_real == key(&real_path(parent).join(name))
+        && inside(&key(dir), &key(own))
+        && inside(&key(real_dir), &own_real)
 }
 
 /// Why nv-rs may not write into `dir` (Linux and macOS): it is not a full path, it has a `..`, its
@@ -997,12 +1043,13 @@ pub fn refused(dir: &Path, never: &[Guarded]) -> Option<&'static str> {
         return Some("not a full path");
     }
     if dir.components().any(|c| matches!(c, Component::ParentDir)) {
-        return Some("a `..` in the path");
+        return Some(PARENT);
     }
+    let real_dir = real_path(dir);
     let text = parts(dir);
-    let real = parts(&real_path(dir));
+    let real = parts(&real_dir);
     if by_shape(&text) || by_shape(&real) {
-        return Some("inside a Steam library's or a Wine prefix's folders");
+        return Some(SHAPED);
     }
     for guarded in never {
         let roots = [parts(&guarded.root), parts(&real_path(&guarded.root))];
@@ -1010,7 +1057,7 @@ pub fn refused(dir: &Path, never: &[Guarded]) -> Option<&'static str> {
             continue;
         }
         if let Some(own) = &guarded.except {
-            if excepted(&text, &real, own) {
+            if excepted(dir, &real_dir, own, guarded.system) {
                 continue;
             }
         }
@@ -1019,8 +1066,16 @@ pub fn refused(dir: &Path, never: &[Guarded]) -> Option<&'static str> {
     None
 }
 
+/// [`refused`]'s reason for a path with a `..` in it.
+const PARENT: &str = "a `..` in the path";
+
+/// [`refused`]'s reason for a path shaped like a Steam library's or a Wine prefix's folders.
+const SHAPED: &str = "inside a Steam library's or a Wine prefix's folders";
+
 /// The player folders nv-rs's own folder lies inside (its exception keeps it writable, but the
-/// player should know), and why the own folder itself would be refused (a link at it).
+/// player should know), and why the own folder itself would be refused, in plain words with what
+/// to do: a `..` in its path, a path shaped like Steam's or Wine's folders, or (the one cause
+/// left) a link at it or above it leading elsewhere.
 pub fn own_folder_warnings(home: &Home, never: &[Guarded]) -> Vec<String> {
     let own = own_folder(home);
     let text = parts(&own);
@@ -1037,8 +1092,23 @@ pub fn own_folder_warnings(home: &Home, never: &[Guarded]) -> Vec<String> {
         }
     }
     if let Some(why) = refused(&own.join("Saves"), never) {
+        let set = match home.system {
+            System::Linux => "XDG_DATA_HOME (or HOME)",
+            System::MacOs => "HOME",
+        };
+        let cause = match why {
+            PARENT => format!(
+                "its path has a `..` in it, which nv-rs never writes through. Set {set} to a plain full path without `..`"
+            ),
+            SHAPED => format!(
+                "its path lies inside what looks like a Steam library's or a Wine prefix's folders (steamapps/common, steamapps/compatdata or drive_c/users), which nv-rs never writes into. Set {set} to a folder outside those"
+            ),
+            _ => format!(
+                "it leads into one of your own folders (it, or a folder above it, is a link to elsewhere). Make it a plain folder, or set {set} elsewhere"
+            ),
+        };
         out.push(format!(
-            "nv-rs's own folder {} cannot be written ({why}): saves will NOT be kept. Is it a link? Make it a plain folder, or set XDG_DATA_HOME elsewhere",
+            "nv-rs's own folder {} cannot be written, so saves will NOT be kept: {cause}",
             own.display()
         ));
     }
