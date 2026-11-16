@@ -325,13 +325,19 @@ const SCRIPT_DATA: u32 = 0x30;
 const CCC_WORD_AT: u32 = 0x29c;
 const CCC_WORD_BEFORE: u32 = 0x2039_3331;
 const CCC_WORD_AFTER: u32 = 0x2035_3532;
+/// `TESForm::typeID` (+4) of a `Script` (`kFormType_Script`, 0x11) and `Script::info.dataLength`
+/// (+0x20; JIP nvse/GameScript.h, `ScriptInfo` at +0x18, `dataLength` its +8).
+const FORM_TYPE: u32 = 4;
+const SCRIPT_TYPE: u8 = 0x11;
+const SCRIPT_DATA_LENGTH: u32 = 0x20;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (the
 // "JIP Companions Command & Control.esp" lines).
 /// D07, once at `DeferredInit` (the main thread, before the AI threads run scripts), with the
 /// fixes: when that plugin is loaded (`DataHandler::GetModIndex` not 0xFF) and its form `0xADE`
 /// holds `' 931'` at its data +0x29C, the word becomes `' 552'`. JIP reads the data with no test;
-/// a form with no data (JIP would stop the game) is left alone.
+/// deliberate difference: a form that is not a script, has no data, or has data too short to hold
+/// the word (JIP would stop the game or read past the data) is left alone.
 pub fn deferred_init(e: &mut Engine) {
     if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0 {
         return;
@@ -343,6 +349,11 @@ pub fn deferred_init(e: &mut Engine) {
     let index = u32::from(e.mem.u8(info + MOD_INDEX));
     let script = crate::cosave::lookup_form(e, index << 24 | CCC_SCRIPT);
     if script == 0 {
+        return;
+    }
+    if e.mem.u8(script + FORM_TYPE) != SCRIPT_TYPE
+        || e.mem.u32(script + SCRIPT_DATA_LENGTH) < CCC_WORD_AT + 4
+    {
         return;
     }
     let data = e.mem.u32(script + SCRIPT_DATA);

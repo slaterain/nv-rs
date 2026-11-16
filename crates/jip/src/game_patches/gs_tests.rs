@@ -555,9 +555,9 @@ fn g51_handler_takes_the_jump_with_the_fixes() {
     assert_eq!(e.site(EVERY_ITEM_HEALTH.addr(), &[]), Some(1));
 }
 
-/// The plugin's data: the script form at `SCRIPT_FORM` (its data +0x30 at `DATA`), the word at
-/// data +0x29C (its neighbours set), the plugin loaded at index 5 under `name`, the form in the
-/// form map under `id`.
+/// The plugin's data: the script form at `SCRIPT_FORM` (type `Script`, its data length +0x20
+/// 0x400, its data +0x30 at `DATA`), the word at data +0x29C (its neighbours set), the plugin
+/// loaded at index 5 under `name`, the form in the form map under `id`.
 const SCRIPT_FORM: u32 = crate::commands::test_support::FORMS + 0x100;
 const SCRIPT_DATA_AT: u32 = crate::commands::test_support::FORMS + 0x1000;
 const MOD_INFO: u32 = crate::commands::test_support::FORMS + 0x4000;
@@ -568,6 +568,8 @@ fn ccc(name: &[u8], id: u32, word: u32, data: bool, word_bits: u32) -> Engine {
     game_globals(&mut e);
     loaded_mod(&mut e, 5, MOD_INFO, name);
     in_form_map(&mut e, SCRIPT_FORM, id, 0);
+    e.mem.set_u8(SCRIPT_FORM + 4, 0x11);
+    e.mem.set_u32(SCRIPT_FORM + 0x20, 0x400);
     e.mem.set_u32(SCRIPT_FORM + 0x2c, 0x1111_1111);
     e.mem
         .set_u32(SCRIPT_FORM + 0x30, if data { SCRIPT_DATA_AT } else { 0 });
@@ -598,9 +600,21 @@ const AFTER: u32 = u32::from_le_bytes(*b"255 ");
 #[test]
 fn d07_patches_the_plugins_word() {
     assert_eq!((BEFORE, AFTER), (0x2039_3331, 0x2035_3532));
+    // The gate is the `FIXES` bit alone: bare, with `INSTALLED`, with optional switches.
+    for bits in [
+        jip_patches::FIXES,
+        ON,
+        ON | jip_patches::NO_FAILED_SCRIPT_LOCKS | jip_patches::DOUBLE_PRECISION,
+    ] {
+        let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, bits);
+        deferred_init(&mut e);
+        assert_eq!(word(&e), [0x3333_3333, AFTER, 0x4444_4444], "{bits:x}");
+    }
+    // Data just long enough to hold the word (+0x29C..+0x2A0).
     let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
+    e.mem.set_u32(SCRIPT_FORM + 0x20, 0x2a0);
     deferred_init(&mut e);
-    assert_eq!(word(&e), [0x3333_3333, AFTER, 0x4444_4444]);
+    assert_eq!(word(&e)[1], AFTER);
     // The name as JIP's hash compares it (case-insensitive).
     let mut e = ccc(
         b"jip companions command & control.ESP",
@@ -614,7 +628,9 @@ fn d07_patches_the_plugins_word() {
 }
 
 /// D07 leaves the word alone: the row off or JIP not installed (the word without `FIXES`), another
-/// word there, another plugin, the form under another index, a form with no data.
+/// word there, another plugin, the form under another index, and the deliberate differences
+/// from JIP (which reads on with no test): a form that is not a script, data too short to hold
+/// the word, a form with no data.
 #[test]
 fn d07_leaves_everything_else() {
     for bits in [0, jip_patches::INSTALLED] {
@@ -641,9 +657,24 @@ fn d07_leaves_everything_else() {
     let mut e = ccc(NAME, 0x0500_0adf, BEFORE, true, ON);
     deferred_init(&mut e);
     assert_eq!(word(&e)[1], BEFORE);
-    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, false, ON);
+    // Not a script (type 0x12, not 0x11), with data that holds the word.
+    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
+    e.mem.set_u8(SCRIPT_FORM + 4, 0x12);
     deferred_init(&mut e);
-    assert_eq!(word(&e)[1], BEFORE);
+    assert_eq!(word(&e)[1], BEFORE, "not a script");
+    // Data one byte too short for the word.
+    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
+    e.mem.set_u32(SCRIPT_FORM + 0x20, 0x29f);
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], BEFORE, "data too short");
+    // No data: JIP would read address 0x29C. Page 0 is mapped here with the word at 0x29C, so a
+    // read through the null pointer is an assertion failure, not an unmapped-memory panic.
+    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, false, ON);
+    e.map(0, 0x1000);
+    e.mem.set_u32(0x29c, BEFORE);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.u32(0x29c), BEFORE, "no data");
+    assert_eq!(word(&e)[1], BEFORE, "no data");
 }
 
 /// D07 runs at xNVSE's `DeferredInit` message (JIP's listener).

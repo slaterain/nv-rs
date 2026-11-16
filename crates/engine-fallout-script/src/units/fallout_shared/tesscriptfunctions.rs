@@ -6801,10 +6801,18 @@ mod tests {
     }
 
     /// G51 off (not installed; installed with the row off): an armour (type 0x18) gets no health
-    /// call, a weapon of type 5 does; the seam is not asked.
+    /// call, a weapon of type 5 does; the seam is not asked. Optional switches without `FIXES`
+    /// do not turn it on.
     #[test]
     fn jip_g51_off_keeps_the_weapon_test() {
-        for word in [0, engine_core::extend::jip_patches::INSTALLED] {
+        use engine_core::extend::jip_patches::{
+            DOUBLE_PRECISION, INSTALLED, NO_FAILED_SCRIPT_LOCKS,
+        };
+        for word in [
+            0,
+            INSTALLED,
+            INSTALLED | NO_FAILED_SCRIPT_LOCKS | DOUBLE_PRECISION,
+        ] {
             let (health, types, _, _, asked) = add_item_g51(0x18, word, g51_takes);
             assert_eq!((health.len(), types, asked), (0, 0, 0), "{word:x}");
             let (health, types, _, container, asked) = add_item_g51(0x28, word, g51_takes);
@@ -6815,22 +6823,30 @@ mod tests {
 
     /// G51 on: asked (no words) before both tests; a taken jump gives the armour the health call
     /// (the weapon type not asked) and the container is still handed over after it; an answer of
-    /// none keeps the exe's tests.
+    /// none keeps the exe's tests. The gate is the `FIXES` bit alone: the bare bit, the bit with
+    /// `INSTALLED`, and with optional switches too.
     #[test]
     fn jip_g51_on_every_form_gets_the_health_call() {
-        let on =
-            engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES;
-        let (health, types, handed, container, asked) = add_item_g51(0x18, on, g51_takes);
-        assert_eq!(health, vec![vec![container, 3.5f32.to_bits()]]);
-        assert_eq!((types, asked), (0, 1));
-        assert_eq!(handed.len(), 1, "the code after the jump runs");
-        // A weapon: the weapon type is not asked when the jump is taken.
-        let (health, types, _, _, asked) = add_item_g51(0x28, on, g51_takes);
-        assert_eq!((health.len(), types, asked), (1, 0, 1));
-        let (health, types, _, _, asked) = add_item_g51(0x18, on, g51_none);
-        assert_eq!((health.len(), types, asked), (0, 0, 1));
-        let (health, types, _, _, asked) = add_item_g51(0x28, on, g51_none);
-        assert_eq!((health.len(), types, asked), (1, 1, 1));
+        use engine_core::extend::jip_patches::{
+            DOUBLE_PRECISION, FIXES, INSTALLED, NO_FAILED_SCRIPT_LOCKS,
+        };
+        for on in [
+            FIXES,
+            INSTALLED | FIXES,
+            INSTALLED | FIXES | NO_FAILED_SCRIPT_LOCKS | DOUBLE_PRECISION,
+        ] {
+            let (health, types, handed, container, asked) = add_item_g51(0x18, on, g51_takes);
+            assert_eq!(health, vec![vec![container, 3.5f32.to_bits()]], "{on:x}");
+            assert_eq!((types, asked), (0, 1), "{on:x}");
+            assert_eq!(handed.len(), 1, "the code after the jump runs ({on:x})");
+            // A weapon: the weapon type is not asked when the jump is taken.
+            let (health, types, _, _, asked) = add_item_g51(0x28, on, g51_takes);
+            assert_eq!((health.len(), types, asked), (1, 0, 1), "{on:x}");
+            let (health, types, _, _, asked) = add_item_g51(0x18, on, g51_none);
+            assert_eq!((health.len(), types, asked), (0, 0, 1), "{on:x}");
+            let (health, types, _, _, asked) = add_item_g51(0x28, on, g51_none);
+            assert_eq!((health.len(), types, asked), (1, 1, 1), "{on:x}");
+        }
     }
 
     /// G51 with JIP's real handler (JIP installed, the row on): a leveled list added by script
