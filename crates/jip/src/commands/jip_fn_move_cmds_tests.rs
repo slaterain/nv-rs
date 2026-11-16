@@ -617,7 +617,9 @@ const TO_HK: f32 = f32::from_bits(0x3e12_4dd2);
 
 /// The player in `cell`, with the controller chain the cast reads its filter from; the TES (an
 /// interior when `interior`); the world scene graph's camera at (700, -1400, 70) looking along
-/// +y (identity rotation); the pick answers `hit` with the fraction `fraction`.
+/// +z: its rotation [0,1,0, 0,0,1, 1,0,0] has column 0 (0, 0, 1) (its view, JIP's
+/// `WorldRotate()`), column 1 (1, 0, 0) and row 0 (0, 1, 0), all different, so a cast along
+/// column 1 or along a row misses; the pick answers `hit` with the fraction `fraction`.
 fn reticle_world(e: &mut Engine, cell: u32, interior: bool, hit: u32, fraction: f32) {
     e.mem.set_u32(0x011d_ea10, R_TES);
     e.mem.set_u32(R_TES + 0x34, u32::from(interior));
@@ -630,7 +632,7 @@ fn reticle_world(e: &mut Engine, cell: u32, interior: bool, hit: u32, fraction: 
     e.mem.set_u32(R_HAVOK + 0x2c, 0x1234_5678);
     e.mem.set_u32(0x011d_eb7c, R_GRAPH);
     e.mem.set_u32(R_GRAPH + 0xac, R_CAMERA);
-    for (i, v) in [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+    for (i, v) in [0.0f32, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0]
         .into_iter()
         .enumerate()
     {
@@ -656,10 +658,10 @@ fn reticle_world(e: &mut Engine, cell: u32, interior: bool, hit: u32, fraction: 
 
 /// `RayCastCoords`' point for the camera above at `fraction` of `range`, as JIP computes it:
 /// `(from + (to - from) * fraction) * PS_HKUnitCnvrt`, `from` the camera times `kUnitConv`, `to`
-/// the column (0, 1, 0) times `range` times `kUnitConv` plus `from`.
+/// the camera's column 0 (0, 0, 1) times `range` times `kUnitConv` plus `from`.
 fn reticle_point(range: f32, fraction: f32) -> [f32; 3] {
     let from = [700.0f32 * TO_HK, -1400.0 * TO_HK, 70.0 * TO_HK];
-    let dir = [0.0f32, 1.0, 0.0];
+    let dir = [0.0f32, 0.0, 1.0];
     let to: [f32; 3] = std::array::from_fn(|i| (dir[i] * range) * TO_HK + from[i]);
     std::array::from_fn(|i| (from[i] + (to[i] - from[i]) * fraction) * FROM_HK)
 }

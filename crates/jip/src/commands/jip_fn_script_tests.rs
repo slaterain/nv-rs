@@ -125,8 +125,8 @@ fn quest_delay() {
     assert_eq!(e.mem.f32(SCRIPT_A + 0x38), 7.0);
 }
 
-fn disabled_events(e: &mut Engine) -> &mut std::collections::BTreeMap<u32, u32> {
-    &mut e.ext::<Jip>().world_hooks.disabled_events
+fn hooks(e: &mut Engine) -> std::sync::RwLockWriteGuard<'_, crate::world_hooks::State> {
+    crate::world_hooks::state(e)
 }
 
 /// A masked event by the form's flag (bit 2) and its mask; "OnActivate" by its flag (bit 3);
@@ -136,7 +136,7 @@ fn script_event_disabled() {
     let mut e = setup();
     let ask = |e: &mut Engine, name: &[u8]| run(e, 0x27e5, 0, &[r(3), s(name)]);
     assert_eq!(ask(&mut e, b"OnAdd"), 0.0);
-    disabled_events(&mut e).insert(ACTI, 0x1 | 0x80);
+    hooks(&mut e).disabled_events.insert(ACTI, 0x1 | 0x80);
     assert_eq!(ask(&mut e, b"OnAdd"), 0.0, "the flag is not set");
     e.mem.set_u8(ACTI + 6, 0x04);
     assert_eq!(ask(&mut e, b"OnAdd"), 1.0);
@@ -152,11 +152,11 @@ fn script_event_disabled() {
         0.0,
         "bit 3 alone does not do for a mask"
     );
-    disabled_events(&mut e).clear();
+    hooks(&mut e).disabled_events.clear();
     e.mem.set_u8(ACTI + 6, 0x04);
     assert_eq!(ask(&mut e, b"OnAdd"), 0.0, "flag without an entry");
     // OnReset is the top bit.
-    disabled_events(&mut e).insert(ACTI, 0x8000_0000);
+    hooks(&mut e).disabled_events.insert(ACTI, 0x8000_0000);
     assert_eq!(ask(&mut e, b"OnReset"), 1.0);
 }
 
@@ -239,10 +239,6 @@ fn fake_script_event_on_an_inventory_reference() {
     assert_eq!(calls_to(SET_ACTION_FLAG), vec![vec![EVENTS, 0, 2]]);
 }
 
-fn waits(e: &mut Engine) -> &mut std::collections::BTreeMap<u32, ScriptWait> {
-    &mut e.ext::<Jip>().world_hooks.script_waits
-}
-
 /// The quest given, else the calling reference: its flag (bit 3 of `jipFormFlags5`).
 #[test]
 fn waiting_scripts() {
@@ -269,8 +265,8 @@ fn waiting_scripts() {
         iterations: 9,
         ..ScriptWait::default()
     };
-    waits(&mut e).insert(REFR, wait);
-    waits(&mut e).insert(
+    hooks(&mut e).script_waits.insert(REFR, wait);
+    hooks(&mut e).script_waits.insert(
         QUEST,
         ScriptWait {
             owner: QUEST,
@@ -279,17 +275,21 @@ fn waiting_scripts() {
         },
     );
     run(&mut e, 0x2812, REFR, &[]);
-    assert_eq!(waits(&mut e)[&REFR].iterations, 1);
+    assert_eq!(hooks(&mut e).script_waits[&REFR].iterations, 1);
     run(&mut e, 0x2812, REFR, &[r(1)]);
-    assert_eq!(waits(&mut e)[&QUEST].iterations, 5, "the quest has no flag");
+    assert_eq!(
+        hooks(&mut e).script_waits[&QUEST].iterations,
+        5,
+        "the quest has no flag"
+    );
     e.mem.set_u8(QUEST + 5, 0x08);
     run(&mut e, 0x2812, REFR, &[r(1)]);
-    assert_eq!(waits(&mut e)[&QUEST].iterations, 1);
+    assert_eq!(hooks(&mut e).script_waits[&QUEST].iterations, 1);
     // A flag with no wait, and no owner at all: nothing.
     e.mem.set_u8(REFR2 + 5, 0x08);
     run(&mut e, 0x2812, REFR2, &[]);
     run(&mut e, 0x2812, 0, &[]);
-    assert_eq!(waits(&mut e).len(), 2);
+    assert_eq!(hooks(&mut e).script_waits.len(), 2);
 }
 
 fn blocks(e: &mut Engine, script: u32) -> Vec<DisabledBlock> {

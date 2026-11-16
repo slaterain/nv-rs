@@ -52,18 +52,18 @@ fn destroy(e: &mut Engine, reference: u32) -> Option<u32> {
 /// flags, both texts, one user of each hook; another reference named too.
 fn named(e: &mut Engine) {
     e.mem.set_u8(REF + 0x5f, ALT_REF_NAME | REFR_MODEL_PATH | 1);
-    let s = &mut e.ext::<Jip>().world_hooks;
+    let mut s = crate::world_hooks::state(e);
     s.ref_names.insert(REF, BLOCK);
     s.model_paths.insert(REF, BLOCK_TWO);
     s.ref_names.insert(OTHER, BLOCK_TWO);
+    drop(s);
     e.add_hook_user(Hook::GetRefName, true);
     e.add_hook_user(Hook::GetRefName, true);
     e.add_hook_user(Hook::GetModelPath, true);
 }
 
 fn names(e: &mut Engine) -> Vec<u32> {
-    e.ext::<Jip>()
-        .world_hooks
+    crate::world_hooks::state(e)
         .ref_names
         .keys()
         .copied()
@@ -71,8 +71,7 @@ fn names(e: &mut Engine) -> Vec<u32> {
 }
 
 fn paths(e: &mut Engine) -> Vec<u32> {
-    e.ext::<Jip>()
-        .world_hooks
+    crate::world_hooks::state(e)
         .model_paths
         .keys()
         .copied()
@@ -143,13 +142,18 @@ fn the_answer_is_the_furniture_test() {
 fn the_name_and_the_model_path_go() {
     let mut e = world(0x15, 0x0100_0001);
     named(&mut e);
-    assert_eq!(destroy(&mut e, REF), Some(0));
+    // On any thread (loader threads when cells unload): the texts go while another engine holds
+    // JIP's shared slot (they are in the world hooks' lock-free slot).
+    assert_eq!(
+        crate::test_support::with_jips_slot_held(&mut e, |e| destroy(e, REF)),
+        Some(0)
+    );
     assert_eq!(names(&mut e), vec![OTHER]);
     assert!(paths(&mut e).is_empty());
     assert_eq!(e.hook_users(Hook::GetRefName), 1);
     assert_eq!(e.hook_users(Hook::GetModelPath), 0);
     assert_eq!(
-        e.ext::<Jip>().world_hooks.free_texts,
+        crate::world_hooks::state(&mut e).free_texts,
         vec![BLOCK, BLOCK_TWO],
         "name first"
     );
@@ -157,7 +161,7 @@ fn the_name_and_the_model_path_go() {
     // Again: nothing left to take, no user taken.
     assert_eq!(destroy(&mut e, REF), Some(0));
     assert_eq!(e.hook_users(Hook::GetRefName), 1);
-    assert_eq!(e.ext::<Jip>().world_hooks.free_texts.len(), 2);
+    assert_eq!(crate::world_hooks::state(&mut e).free_texts.len(), 2);
 }
 
 /// Each flag decides alone: only the name's flag drops only the name; only the model's flag only
@@ -406,7 +410,7 @@ fn deferred_init_marks_the_two_vanilla_piles() {
     deferred_init(&mut e);
     assert_eq!(e.mem.u8(ash + 6), IS_ASH_PILE);
     assert_eq!(e.mem.u8(goo + 6), IS_ASH_PILE | 1);
-    let kept = &e.ext::<Jip>().world_hooks.form_flags;
+    let kept = crate::world_hooks::state(&mut e).form_flags.clone();
     assert_eq!(kept.get(&0x0001_0001), Some(&IS_ASH_PILE));
     assert_eq!(kept.get(&0x0001_0002), Some(&(IS_ASH_PILE | 1)));
     // the cosave listener's case
@@ -587,4 +591,16 @@ fn the_may_hold_flag_follows_writes_and_destroys_on_two_engines() {
         "mod 3 keeps its owner"
     );
     release();
+}
+
+/// Today's behaviour, pinned (CONDITION-LOCKS.md): the aux-variable part still takes JIP's
+/// shared slot, for a temporary reference with an aux variable set. The follow-up (the aux maps
+/// out of JIP's slot) turns this into a passing held test. Under the default stepped threads
+/// it cannot stall (one engine); it blocks JIP together with `NV_THREADS=real`.
+#[test]
+#[should_panic(expected = "two engines on one thread")]
+fn a_temporary_reference_with_aux_variables_takes_jips_slot_today() {
+    let mut e = world(0x15, TEMP_ID);
+    *aux_maps(&mut e, true) = three_mods();
+    crate::test_support::with_jips_slot_held(&mut e, |e| destroy(e, REF));
 }

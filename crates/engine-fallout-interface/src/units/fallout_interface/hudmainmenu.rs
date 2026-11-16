@@ -2356,6 +2356,13 @@ pub fn hud_main_menu_do_idle(e: &mut Engine, this: Ptr<HUDMainMenu>) {
     let b = e.mem.u32(this.addr() + 0x38);
     let c = e.mem.u32(this.addr() + 0x3c);
     e.call(0x0077_9070, &args![scene, a, b, c]);
+    // JIP LN NVSE's H21 at `0x007704AE` (group GA's row and handler, a fix row: the call
+    // becomes ClearHUDOrphanedTiles, which ends in a jump to 0x77DA60): the seam with the HUD
+    // runs JIP's walk; its answer is not read and the exe's call follows. One load while JIP's
+    // fixes are not in.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0077_04ae, &[this.addr()]);
+    }
     e.call(0x0077_da60, &args![this]);
     fn_007721c0(e, this);
     e.call(0x0077_e750, &args![this]);
@@ -4614,13 +4621,13 @@ pub fn hud_main_menu_set_info_for_ref(
     let form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
     let form_type = e.call(0x0040_1170, &args![form]).u32();
     let mut display_mask = 0_u32;
-    let mut _alchemy_form = 0_u32;
-    let mut armor_form = 0_u32;
+    let mut _armor_form = 0_u32;
     let mut weapon_form = 0_u32;
+    let mut ammo_form = 0_u32;
     match form_type {
         0x15 | 0x16 | 0x17 | 0x1b | 0x1c | 0x27 | 0x2a | 0x2b => {}
         0x18 => {
-            _alchemy_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+            _armor_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
             display_mask |= 0xfc;
         }
         0x1e => {
@@ -4633,14 +4640,14 @@ pub fn hud_main_menu_set_info_for_ref(
         }
         0x20 | 0x21 | 0x25 => return set_info_unsupported_form(e),
         0x28 => {
-            armor_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-            if e.call(0x0047_bcf0, &args![armor_form]).bool() {
+            weapon_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+            if e.call(0x0047_bcf0, &args![weapon_form]).bool() {
                 display_mask |= 0xfc;
             }
         }
         0x29 => {
-            weapon_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-            if e.call(0x004c_94d0, &args![weapon_form]).bool() {
+            ammo_form = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+            if e.call(0x004c_94d0, &args![ammo_form]).bool() {
                 display_mask |= 0xfc;
             }
         }
@@ -4887,9 +4894,9 @@ pub fn hud_main_menu_set_info_for_ref(
                 if actor {
                     let name_tile = hud_field(e, 0xa8);
                     hud_set_text(e, name_tile, 0x011d_9c48);
-                } else if (weapon_form == 0 || !e.call(0x004c_94d0, &args![weapon_form]).bool())
-                    && (armor_form == 0 || !e.call(0x0047_bcf0, &args![armor_form]).bool())
-                    && (armor_form != 0 || weapon_form != 0)
+                } else if (ammo_form == 0 || !e.call(0x004c_94d0, &args![ammo_form]).bool())
+                    && (weapon_form == 0 || !e.call(0x0047_bcf0, &args![weapon_form]).bool())
+                    && (weapon_form != 0 || ammo_form != 0)
                 {
                     displayed = false;
                 } else {
@@ -12220,6 +12227,90 @@ mod tests {
                 0x0107_2ee4
             ]
         );
+    }
+
+    thread_local! {
+        static H21_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn h21_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("H21's seam asked without FIXES");
+    }
+
+    /// Stands for JIP's walk: notes the words and makes a marker call, so its place among the
+    /// exe's calls shows.
+    fn h21_walk(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        H21_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        e.call(0x00ab_0001, &args![a[0]]);
+        Some(1)
+    }
+
+    /// JIP LN NVSE's H21 seam (`0x007704AE`, group GA's row, a fix row): with the word 0 or
+    /// `INSTALLED` alone it is not asked; with `FIXES` and no handler nothing runs; with a
+    /// handler it is asked once with exactly the HUD, after `0x779070` and before the exe's
+    /// `0x77DA60` call, which still follows (with the HUD), and the rest of `DoIdle` runs.
+    #[test]
+    fn do_idle_jip_orphaned_tiles_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            e.map(0x011d_e000, 0x1000);
+            e.map(0x0101_2000, 0x1000);
+            e.mem.set_f64(0x0101_2060, 0.0);
+            let menu = e.new_object::<HUDMainMenu>();
+            e.mem.set_u32(0x011d_ea3c, 0x5050);
+            for (address, value) in [(0x008d_6f30, 1), (0x0082_5c00, 100)] {
+                e.register_double(address, move |_, _| Ret {
+                    eax: value,
+                    ..Ret::default()
+                });
+            }
+            for address in [
+                0x0045_7fe0,
+                0x00aa_4ee0,
+                0x0077_9070,
+                0x0077_da60,
+                0x008d_8520,
+                0x0077_e750,
+                0x00a0_11b0,
+                0x00ab_0001,
+            ] {
+                e.register_double(address, |_, _| Ret::default());
+            }
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0077_04ae, handler);
+            }
+            e.set_jip_patches(word);
+            H21_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            hud_main_menu_do_idle(&mut e, menu);
+            let log = e.call_log.take().unwrap();
+            let order: Vec<(u32, Vec<u32>)> = log
+                .into_iter()
+                .filter(|(at, _)| [0x0077_9070, 0x00ab_0001, 0x0077_da60, 0x0077_e750].contains(at))
+                .collect();
+            (
+                order.iter().map(|(at, _)| *at).collect::<Vec<u32>>(),
+                order
+                    .iter()
+                    .find(|(at, _)| *at == 0x0077_da60)
+                    .map(|(_, w)| w.clone()),
+                H21_SEEN.with(|s| s.take()),
+                menu.addr(),
+            )
+        };
+        let exe = vec![0x0077_9070, 0x0077_da60, 0x0077_e750];
+        for word in [0, jip_patches::INSTALLED] {
+            let (order, _, seen, _) = run(word, Some(h21_never));
+            assert_eq!((order, seen.len()), (exe.clone(), 0));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, None).0, exe);
+        let (order, call, seen, hud) = run(fixes, Some(h21_walk));
+        assert_eq!(order, [0x0077_9070, 0x00ab_0001, 0x0077_da60, 0x0077_e750]);
+        assert_eq!(call, Some(vec![hud]), "the exe's call follows");
+        assert_eq!(seen, vec![vec![hud]]);
     }
 
     thread_local! {

@@ -114,12 +114,6 @@ pub struct Jip {
     pub quest: commands::jip_fn_quest::State,
     /// What `jip_fn_miscellaneous`'s commands keep between calls (keywords, actor value names).
     pub misc: commands::jip_fn_miscellaneous::State,
-    /// JIP's actor hooks and their events.
-    pub actor_hooks: actor_hooks::State,
-    /// JIP's actor AI hooks' maps and values.
-    pub ai_hooks: ai_hooks::State,
-    /// JIP's world hooks' maps and values.
-    pub world_hooks: world_hooks::State,
     /// What JIP's script commands keep: the script blocks a script disabled.
     pub script: commands::jip_fn_script::State,
     /// What JIP's CC&C commands keep: the actor bases set to NCCS, the location grids.
@@ -196,6 +190,11 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     e.ext::<Jip>().installed = true;
     // Made before the threads start: the aux maps' lock-free "may hold" flag.
     e.ext_free::<commands::jip_fn_aux_variable::AuxVarsHeld>();
+    // The hooks' maps and values, read on the AI and loader threads: lock-free slots, so a
+    // seam never takes JIP's shared slot.
+    actor_hooks::make_slot(e);
+    ai_hooks::make_slot(e);
+    world_hooks::make_slot(e);
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Jip>();
 }
