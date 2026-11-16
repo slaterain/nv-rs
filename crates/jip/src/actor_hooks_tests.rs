@@ -332,7 +332,7 @@ fn anim_action_events() {
         &[form_arg(S2), int_arg(0), form_arg(10), int_arg(2)],
     );
     assert_eq!(e.hook_users(Hook::SetAnimAction), 0);
-    assert!(e.ext::<Jip>().actor_hooks.anim_action.is_empty());
+    assert!(state(&mut e).anim_action.is_empty());
 }
 
 /// The play-group command through its record, its fourth argument a `kParamType_AnimationGroup`
@@ -358,7 +358,7 @@ fn play_group_command_files_under_its_group() {
     assert_eq!(e.hook_users(Hook::SetAnimGroup), 2);
     assert_eq!(flags3(&e, ACTOR), 2);
     {
-        let s = &e.ext::<Jip>().actor_hooks;
+        let s = &state(&mut e);
         assert_eq!(s.play_group.keys().copied().collect::<Vec<_>>(), [0x11]);
         assert_eq!(
             s.play_group_actors[&ACTOR]
@@ -401,7 +401,7 @@ fn play_group_command_files_under_its_group() {
         &[form_arg(S2), int_arg(0), form_arg(10), short_arg(0x11)],
     );
     assert_eq!(e.hook_users(Hook::SetAnimGroup), 0);
-    assert!(e.ext::<Jip>().actor_hooks.play_group.is_empty());
+    assert!(state(&mut e).play_group.is_empty());
 }
 
 /// The play-group events (the shared code, with the group hook and flag): a list of actors
@@ -764,13 +764,13 @@ fn critical_hits_and_the_hit_data() {
     };
     crit(&mut e, S1, 1, &[A1, A2, WEAP]);
     crit(&mut e, S1, 1, &[A1, A2]);
-    assert_eq!(e.ext::<Jip>().actor_hooks.critical_hit.len(), 1, "replaced");
+    assert_eq!(state(&mut e).critical_hit.len(), 1, "replaced");
     crit(&mut e, S1, 1, &[A1, A2, WEAP]);
-    assert_eq!(e.ext::<Jip>().actor_hooks.critical_hit.len(), 1, "covered");
+    assert_eq!(state(&mut e).critical_hit.len(), 1, "covered");
     crit(&mut e, S2, 1, &[]);
     crit(&mut e, S2, 1, &[LIST]);
     assert_eq!(
-        e.ext::<Jip>().actor_hooks.critical_hit.len(),
+        state(&mut e).critical_hit.len(),
         2,
         "not an actor, no source: nothing"
     );
@@ -784,7 +784,7 @@ fn critical_hits_and_the_hit_data() {
         script: SCRIPT_FORM,
     };
     assert_eq!(
-        e.ext::<Jip>().actor_hooks.critical_hit,
+        state(&mut e).critical_hit,
         [
             CriticalHit {
                 script: SCRIPT_TWO,
@@ -835,7 +835,7 @@ fn critical_hits_and_the_hit_data() {
     assert_eq!(e.mem.u32(PROCESS + 0x240), 0, "nothing made");
     // Removal of every event the filters cover.
     crit(&mut e, S1, 0, &[]);
-    assert_eq!(e.ext::<Jip>().actor_hooks.critical_hit.len(), 1);
+    assert_eq!(state(&mut e).critical_hit.len(), 1);
 }
 
 /// Before a load: the fire hook keeps one user per scripted actor and per script for every
@@ -856,7 +856,7 @@ fn pre_load_housekeeping() {
     pre_load(&mut e);
     assert_eq!(e.hook_users(Hook::RemoveAmmo), 3);
     assert_eq!(e.hook_users(Hook::OnRagdoll), 0);
-    assert!(e.ext::<Jip>().actor_hooks.ragdoll.is_empty());
+    assert!(state(&mut e).ragdoll.is_empty());
     assert_eq!(e.hook_users(Hook::ReloadWeapon), 1, "kept");
     let mut e = world();
     e.add_hook_user(Hook::RemoveAmmo, true);
@@ -886,11 +886,239 @@ fn lambda_handlers_keep_their_variables_while_held() {
         &[form_arg(S1), int_arg(1), form_arg(A1)],
     );
     run(&mut e, SET_ON_CRITICAL_HIT, &[form_arg(S1), int_arg(1)]);
-    assert_eq!(e.ext::<Jip>().actor_hooks.critical_hit.len(), 1);
+    assert_eq!(state(&mut e).critical_hit.len(), 1);
     assert_eq!(kept(&e, SCRIPT_FORM), 1, "replaced by a covering filter");
     run(&mut e, SET_ON_RAGDOLL, &[form_arg(S2), int_arg(1)]);
     assert_eq!(kept(&e, SCRIPT_TWO), 1);
     pre_load(&mut e);
     assert_eq!(kept(&e, SCRIPT_TWO), 0, "the ragdoll scripts cleared");
     assert_eq!(kept(&e, SCRIPT_FORM), 1, "the critical hit's hold stays");
+}
+
+// ---- the seams while another engine holds JIP's shared slot ----
+//
+// Each seam below runs on the AI or loader threads: its lists are in a lock-free slot
+// ([`Unlocked`]), so it answers on this engine while a second engine of the run holds JIP's
+// slot (asking for it would stop the test).
+
+use crate::test_support::with_jips_slot_held as held;
+
+/// SetAnimGroupHook: the group's scripts for every actor, then the actor's own.
+#[test]
+fn play_group_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    set_animation_event(&mut e, SCRIPT_FORM, true, 0, 0x11, false);
+    set_animation_event(&mut e, SCRIPT_TWO, true, ACTOR, 0x11, false);
+    let animation = AREA + 0x6600;
+    e.mem.set_u32(animation + 4, ACTOR);
+    calls();
+    assert_eq!(
+        held(&mut e, |e| site(
+            e,
+            0x0049_4e19,
+            &[animation, 3, 0x11, ACTOR]
+        )),
+        None
+    );
+    assert_eq!(
+        calls(),
+        [
+            (SCRIPT_FORM, ACTOR, vec![0x11]),
+            (SCRIPT_TWO, ACTOR, vec![0x11])
+        ]
+    );
+}
+
+/// OnHitEventHook: the scripts for every actor, then the actor's own (its flag).
+#[test]
+fn hit_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    run(&mut e, SET_ON_HIT, &[form_arg(S1), int_arg(1)]);
+    run(
+        &mut e,
+        SET_ON_HIT,
+        &[form_arg(S2), int_arg(1), form_arg(A1)],
+    );
+    e.mem.set_u32(ACTOR, 0x0108_7808);
+    calls();
+    held(&mut e, |e| {
+        site(e, 0x005a_c78a, &[0, ACTOR + 0x44, 0x80, 1])
+    });
+    assert_eq!(
+        calls(),
+        [(SCRIPT_FORM, ACTOR, vec![]), (SCRIPT_TWO, ACTOR, vec![])]
+    );
+}
+
+/// DamageActorValueHook: health and limb scripts by actor.
+#[test]
+fn damage_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    run(
+        &mut e,
+        SET_ON_HEALTH_DAMAGE,
+        &[form_arg(S1), int_arg(1), form_arg(A1)],
+    );
+    run(
+        &mut e,
+        SET_ON_CRIPPLED_LIMB,
+        &[form_arg(S2), int_arg(1), form_arg(A1)],
+    );
+    let (owner, hurt) = (ACTOR + 0xa4, (-5.0f32).to_bits());
+    calls();
+    held(&mut e, |e| {
+        site(e, 0x0066_ee72, &[owner, 0x10, 50.0f32.to_bits(), hurt, 0]);
+        site(
+            e,
+            0x0066_ee72,
+            &[owner, 0x1b, 10.0f32.to_bits(), (-10.0f32).to_bits(), 0],
+        );
+    });
+    assert_eq!(
+        calls(),
+        [
+            (SCRIPT_FORM, ACTOR, vec![hurt, 0]),
+            (SCRIPT_TWO, ACTOR, vec![2])
+        ]
+    );
+}
+
+/// EquipAidItemHook: the item's scripts.
+#[test]
+fn aid_item_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    run(
+        &mut e,
+        SET_ON_USE_AID_ITEM,
+        &[form_arg(S1), int_arg(1), form_arg(AID)],
+    );
+    calls();
+    held(&mut e, |e| site(e, 0x0088_c74e, &[ITEM, ACTOR]));
+    assert_eq!(calls(), [(SCRIPT_FORM, ACTOR, vec![ITEM])]);
+}
+
+/// ReloadWeaponHook: the reload scripts with the held weapon.
+#[test]
+fn reload_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    run(&mut e, SET_ON_RELOAD_WEAPON, &[form_arg(S1), int_arg(1)]);
+    e.mem.set_u16(PROCESS + 0x2ec, 3);
+    calls();
+    held(&mut e, |e| site(e, 0x008a_7549, &[ACTOR, 9, 0]));
+    assert_eq!(calls(), [(SCRIPT_FORM, ACTOR, vec![0])]);
+}
+
+/// SetAnimActionHook: the action's scripts for every actor, then the actor's own.
+#[test]
+fn anim_action_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    set_animation_event(&mut e, SCRIPT_FORM, true, 0, 2, true);
+    set_animation_event(&mut e, SCRIPT_TWO, true, ACTOR, 2, true);
+    e.mem.set_u16(PROCESS + 0x2ec, 0);
+    calls();
+    assert_eq!(
+        held(&mut e, |e| site(e, 0x008a_7551, &[ACTOR, 2, 0])),
+        Some(0)
+    );
+    assert_eq!(
+        calls(),
+        [(SCRIPT_FORM, ACTOR, vec![2]), (SCRIPT_TWO, ACTOR, vec![2])]
+    );
+}
+
+/// RemoveAmmoHook: the fire scripts for every actor, then the actor's own.
+#[test]
+fn fire_weapon_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    run(&mut e, SET_ON_FIRE_WEAPON, &[form_arg(S1), int_arg(1)]);
+    run(
+        &mut e,
+        SET_ON_FIRE_WEAPON,
+        &[form_arg(S2), int_arg(1), form_arg(A1)],
+    );
+    calls();
+    assert_eq!(
+        held(&mut e, |e| site(e, 0x008a_8dd0, &[ACTOR, WEAPON])),
+        Some(0)
+    );
+    assert_eq!(
+        calls(),
+        [
+            (SCRIPT_FORM, ACTOR, vec![WEAPON]),
+            (SCRIPT_TWO, ACTOR, vec![WEAPON])
+        ]
+    );
+}
+
+/// ProjectileImpactHook: the base's scripts on the projectile.
+#[test]
+fn projectile_impact_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    run(
+        &mut e,
+        SET_ON_PROJECTILE_IMPACT,
+        &[form_arg(S2), int_arg(1), form_arg(PROJ)],
+    );
+    e.mem.set_u32(PROJECTILE + 0x20, PROJ_BASE);
+    calls();
+    held(&mut e, |e| site(e, 0x009c_20bf, &[PROJECTILE]));
+    assert_eq!(calls(), [(SCRIPT_TWO, PROJECTILE, vec![])]);
+}
+
+/// OnRagdollHook: the ragdoll scripts on the fade node's reference.
+#[test]
+fn ragdoll_seam_while_jips_slot_is_held() {
+    let mut e = world();
+    run(&mut e, SET_ON_RAGDOLL, &[form_arg(S1), int_arg(1)]);
+    let (controller, bip01, fade) = (AREA + 0x6300, AREA + 0x6400, AREA + 0x6500);
+    e.mem.set_u32(controller + 0x58, bip01);
+    e.mem.set_u32(bip01 + 0x18, fade);
+    e.mem.set_u32(fade, 0x010a_8f90);
+    e.mem.set_u32(fade + 0xcc, ACTOR);
+    calls();
+    held(&mut e, |e| site(e, 0x00c7_c151, &[controller]));
+    assert_eq!(calls(), [(SCRIPT_FORM, ACTOR, vec![])]);
+}
+
+/// CopyHitDataHook on every hit (no hook gate): the copy and, for a critical hit, the matching
+/// scripts; a hit that is not critical and one with no events read no list either.
+#[test]
+fn hit_data_routine_while_jips_slot_is_held() {
+    let mut e = world();
+    e.mem.set_u32(HIT, OTHER);
+    e.mem.set_u32(HIT + 4, ACTOR);
+    e.mem.set_u32(HIT + 0x30, WEAPON);
+    e.mem.set_u32(HIT + 0x58, 4);
+    calls();
+    held(&mut e, |e| e.call(COPY_HIT_DATA_ROUTINE, &[PROCESS, HIT]));
+    assert!(calls().is_empty(), "no events");
+    run(
+        &mut e,
+        SET_ON_CRITICAL_HIT,
+        &[form_arg(S1), int_arg(1), form_arg(A1)],
+    );
+    held(&mut e, |e| e.call(COPY_HIT_DATA_ROUTINE, &[PROCESS, HIT]));
+    assert_eq!(calls(), [(SCRIPT_FORM, ACTOR, vec![OTHER, WEAPON])]);
+    let data = e.mem.u32(PROCESS + 0x240);
+    assert_eq!(e.mem.bytes(data, 0x60), e.mem.bytes(HIT, 0x60));
+}
+
+/// A thread's engine (`share_slots_for_test`, as `ExtendState::for_thread`), made right after
+/// install, reads the critical-hit list the command writes and empties on the main engine: the
+/// actor hooks' state is one run-wide slot.
+#[test]
+fn a_threads_engine_reads_the_lists_the_commands_write() {
+    let mut e = world();
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    run(
+        &mut e,
+        SET_ON_CRITICAL_HIT,
+        &[form_arg(S1), int_arg(1), form_arg(A1)],
+    );
+    assert_eq!(read(&mut t).critical_hit.len(), 1, "written");
+    run(&mut e, SET_ON_CRITICAL_HIT, &[form_arg(S1), int_arg(0)]);
+    assert!(read(&mut t).critical_hit.is_empty(), "removed");
+    engine_core::extend::release_held_for_test();
 }
