@@ -1344,16 +1344,10 @@ fn an_erase_between_a_loaders_takes_leaves_the_rest_of_the_record() {
         crate::commands::jip_fn_aux_variable::aux_maps(e, false).clear();
         crate::cosave::extra_data(e).clear();
     }
+    // One record per load: the step clears both maps, so each record is checked after its own.
     crate::cosave::BETWEEN_TAKES.with(|h| h.set(Some(erase)));
     crate::cosave::set_changed(&mut w.e, changed::ALL);
-    load_file(
-        &mut w.e,
-        &cosave(&[
-            chunk(kind::AUX_VARS, 10, aux),
-            chunk(kind::EXTRA_DATA, 1, extra),
-        ]),
-    );
-    crate::cosave::BETWEEN_TAKES.with(|h| h.set(None));
+    load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 10, aux)]));
     {
         let maps = crate::commands::jip_fn_aux_variable::aux_maps(&mut w.e, false);
         let owners = maps.get(&6).expect("the mod");
@@ -1363,6 +1357,9 @@ fn an_erase_between_a_loaders_takes_leaves_the_rest_of_the_record() {
             "the later owner still read"
         );
     }
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
+    load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, 1, extra)]));
+    crate::cosave::BETWEEN_TAKES.with(|h| h.set(None));
     let data = crate::cosave::extra_data(&mut w.e);
     assert!(data.get(&Uint(0x55)).is_none(), "the first key erased");
     assert!(data.get(&Uint(0x56)).is_some(), "the later key still read");
