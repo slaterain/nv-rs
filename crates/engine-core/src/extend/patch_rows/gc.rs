@@ -19,6 +19,12 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GC",
     },
+    // G119 (a fix), Actor::HitMe 0089a920: the ammo's script effect, from the projectile's own ammo (RunAmmoImpactScriptHook).
+    Entry {
+        addr: 0x0089_abdc,
+        owners: JIP,
+        step: "3.9-GC",
+    },
     // G98 (a fix), Actor::Kill 0089d900: the teammate test before the kill challenges (KillChallengeFixHook).
     Entry {
         addr: 0x0089_dc0e,
@@ -79,9 +85,27 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GC",
     },
+    // O1 (bIgnoreDTDRFix), HitData::InitializeHitData_ov3 009b5170: its ReduceDamage call, deferred to SetTargetedLimb.
+    Entry {
+        addr: 0x009b_5623,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // O1, HitData::InitializeHitData_ov4 009b5650: the same.
+    Entry {
+        addr: 0x009b_5702,
+        owners: JIP,
+        step: "3.9-GC",
+    },
     // G77 (a fix), HitData::ReduceDamage 009b5a30: the minimum damage store, with the armour-penetrated flag.
     Entry {
         addr: 0x009b_6335,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G116 (a fix), HitData::SetTargetedLimb 009b6620: a deferred CalculateHitDamage, then limb 0xE (SetHitLocationHook).
+    Entry {
+        addr: 0x009b_6e81,
         owners: JIP,
         step: "3.9-GC",
     },
@@ -98,6 +122,12 @@ pub(in super::super) const WRAPS: &[Entry] = &[
     // G111 + O11 (a fix): the damage a shot does to the weapon (GetDamageToWeaponHook).
     Entry {
         addr: 0x0064_6260,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // O1 + O12 (bIgnoreDTDRFix, bLocalizedDTDR): HitData::ReduceDamage, JIP's hit damage (CalculateHitDamageHook).
+    Entry {
+        addr: 0x009b_5a30,
         owners: JIP,
         step: "3.9-GC",
     },
