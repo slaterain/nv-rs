@@ -5717,6 +5717,7 @@ mod tests {
     #[test]
     fn g124_g125_seams_turn_off_the_hit_effects() {
         use engine_core::extend::jip_patches;
+        let mut base_positions: Option<usize> = None;
         // (word, G124's answer, G125's answer, asked, the image space, shaken)
         for (word, face, shake, asked, image, shaken) in [
             (0, Some(0), Some(1), false, 0xb100, true),
@@ -5743,6 +5744,7 @@ mod tests {
         ] {
             HIT_EFFECTS.with(|s| *s.borrow_mut() = (Vec::new(), face, shake));
             let log = initialize_snapshot_world(word);
+            // The first row (JIP not installed, shaken) gives the slot 0x1F4 count with the shake.
             let seen = HIT_EFFECTS.with(|s| s.take().0);
             assert_eq!(
                 seen,
@@ -5761,7 +5763,16 @@ mod tests {
             assert_eq!(faces, [&vec![image, 1.0f32.to_bits(), 0]], "{word:x}");
             let shakes = log.iter().filter(|call| call.0 == 0x008d_1960).count();
             assert_eq!(shakes, usize::from(shaken), "{word:x}");
-            // The shake's position call (slot 0x1F4) is skipped with it: JIP jumps to 9ad2fe.
+            // The shake's position call (slot 0x1F4, here 0x6100) and its setting read
+            // (`0x11D0280`) are skipped with it: JIP jumps to 9ad2fe before `mov edx,[eax+0x1F4]`.
+            let settings = log
+                .iter()
+                .filter(|call| call.0 == 0x0040_3e20 && call.1 == [0x011d_0280])
+                .count();
+            assert_eq!(settings, usize::from(shaken), "{word:x}");
+            let positions = log.iter().filter(|call| call.0 == 0x0000_6100).count();
+            let base = *base_positions.get_or_insert(positions);
+            assert_eq!(positions + usize::from(!shaken), base, "{word:x}");
         }
     }
 

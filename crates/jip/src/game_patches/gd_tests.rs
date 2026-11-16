@@ -956,6 +956,29 @@ fn point3_distance_as_jip() {
         );
         // The order of the points does not matter.
         assert_eq!(point3_distance(&e, a, b), point3_distance(&e, b, a));
+        // Bit for bit JIP's SSE sequence on this processor: `subps`, `mulps`, the two `haddps`
+        // as (x + y) + (z + 0), `rsqrtss`, `mulss` x2, `subss` from 3, `mulss` r, `mulss` 0.5,
+        // `mulss` by the sum (scalar SSE intrinsics, one rounding each).
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::*;
+            // SAFETY: SSE and SSE2 are part of every x86-64 processor.
+            let reference = unsafe {
+                let ss = |v: f32| _mm_set_ss(v);
+                let d = |i: usize| _mm_sub_ss(ss(p[i]), ss(q[i]));
+                let sq = |i: usize| _mm_mul_ss(d(i), d(i));
+                let s = _mm_add_ss(_mm_add_ss(sq(0), sq(1)), _mm_add_ss(sq(2), ss(0.0)));
+                let r = _mm_rsqrt_ss(s);
+                let x1 = _mm_mul_ss(_mm_mul_ss(s, r), r);
+                let x3 = _mm_mul_ss(_mm_mul_ss(_mm_sub_ss(ss(3.0), x1), r), ss(0.5));
+                _mm_cvtss_f32(_mm_mul_ss(s, x3))
+            };
+            assert_eq!(
+                point3_distance(&e, a, b).to_bits(),
+                reference.to_bits(),
+                "{p:?} {q:?}"
+            );
+        }
     }
 }
 
@@ -1076,4 +1099,28 @@ fn hit_effect_patches_follow_the_word() {
     super::super::gp::toggle_hit_effects(&mut e, true);
     assert_eq!(e.site(EXPLOSION_IN_FACE.addr(), &[]), None);
     assert_eq!(e.site(EXPLOSION_SHAKE.addr(), &[explosion]), Some(0));
+}
+
+/// With immortal mode 2 (`ToggleImmortalMode 2`: bit 2), the hit effects stay off whatever
+/// ToggleHitEffects does: `ToggleHitEffects 0` gives 3 (`|= 1`), `ToggleHitEffects 1` gives 2
+/// (`&= 2`), and G124 / G125 answer off for both.
+#[test]
+fn hit_effects_stay_off_in_immortal_mode_two() {
+    use super::super::gp::{disable_hit_effects, toggle_hit_effects, TOGGLE_IMMORTAL_MODE};
+    use crate::commands::test_support::{call_on, engine, n};
+    let mut e = engine();
+    e.map(0x011e_0000, 0x1000);
+    let explosion = 0x0300_0040;
+    call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[n(2)]);
+    assert_eq!(disable_hit_effects(&mut e), 2);
+    for (on, word) in [(false, 3), (true, 2), (true, 2), (false, 3)] {
+        toggle_hit_effects(&mut e, on);
+        assert_eq!(disable_hit_effects(&mut e), word, "{on}");
+        assert_eq!(e.site(EXPLOSION_IN_FACE.addr(), &[]), Some(0), "{on}");
+        assert_eq!(
+            e.site(EXPLOSION_SHAKE.addr(), &[explosion]),
+            Some(1),
+            "{on}"
+        );
+    }
 }

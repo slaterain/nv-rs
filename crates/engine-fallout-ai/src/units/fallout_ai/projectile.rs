@@ -8124,6 +8124,53 @@ mod tests {
         }
     }
 
+    thread_local! {
+        /// G127's answer for each actor (else 0).
+        static G127_BY_ACTOR: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_g127_by_actor(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G127_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G127_BY_ACTOR.with(|s| {
+            let answer = s
+                .borrow()
+                .iter()
+                .find(|(actor, _)| *actor == a[1])
+                .map(|w| w.1);
+            Some(answer.unwrap_or(0))
+        })
+    }
+
+    /// G127: the first actor fails the roll, the second (a creature, slot 0x218) passes: both
+    /// asked, the mine triggered, no 0x4000 test, and the creature timer taken from the second
+    /// (`actor value 0x23` of its `+0xA4` x `00644790(base)` / the double at `01017a40` + the
+    /// setting: 10 x 2 / 4 + 6 = 11).
+    #[test]
+    fn g127_seam_the_actor_that_passes_sets_the_timer() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127_by_actor);
+        let (this, first, second) = mine_world(&mut e, 0);
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        set_slot(&mut e, second, 0x218, RETURNS_TRUE);
+        stub_float(&mut e, 0x0064_4790, 2.0);
+        e.register_double(0x0066_ef20, move |_, a| {
+            assert_eq!(a, &[second + 0xa4, 0x23]);
+            10u32.into_ret()
+        });
+        e.set_global(0x0101_7a40, 4.0f64);
+        G127_ASKED.with(|s| s.borrow_mut().clear());
+        G127_BY_ACTOR.with(|s| *s.borrow_mut() = vec![(first, 0), (second, 1)]);
+        assert!(fn_009c39e0(&mut e, this));
+        assert_eq!(
+            G127_ASKED.with(|s| s.take()),
+            vec![vec![this.addr(), first], vec![this.addr(), second]]
+        );
+        assert!(calls(&e, TEST_FLAGS).is_empty());
+        assert_eq!(calls(&e, 0x0066_ef20).len(), 1);
+        assert_eq!(e.get(this, Projectile::fExplosionTimer), 11.0);
+    }
+
     /// G127's seam is asked only for an actor in range that the mine reacts to.
     #[test]
     fn g127_seam_not_asked_out_of_range_or_unreacting() {

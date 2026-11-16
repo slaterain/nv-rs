@@ -856,6 +856,38 @@ mod tests {
         }
     }
 
+    /// G101 with the fixes row on and the group's nearest free member as the speaker: 0 or no
+    /// answer keeps that member (JIP's dl 1 leaves `[ebp-0x14]`) and the words 1; an ally
+    /// answered replaces it.
+    #[test]
+    fn g101_seam_keeps_the_groups_speaker_without_an_ally() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let ally = 0x0500_0010;
+        for (answer, to_ally) in [(Some(0), false), (None, false), (Some(ally), true)] {
+            let (mut e, actor, controller, group) = world();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0098_4156), at_g101);
+            e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+            G101_ASKED.with(|s| s.borrow_mut().clear());
+            G101_ANSWER.with(|c| c.set(answer));
+            e.mem.set_f32(actor + 0x28, 0.0);
+            let member = object(&mut e);
+            e.mem.set_f32(member + 0x28, 10.0);
+            e.mem.set_u32(group, 1);
+            e.mem.set_u32(group + 4, member);
+            assert!(say(&mut e, actor, (2, 6), 1, controller), "{answer:?}");
+            assert_eq!(
+                G101_ASKED.with(|s| s.take()),
+                vec![vec![actor, controller, 2, 6, 1]]
+            );
+            let (speaker, said) = if to_ally { (ally, 0) } else { (member, 1) };
+            assert_eq!(
+                calls(&e, slot(0x280)),
+                vec![vec![actor, speaker, 0, 0, 0, said, said, 0x7700, said, 0]],
+                "{answer:?}"
+            );
+        }
+    }
+
     /// G101's seam is only at the speaker call: a line said directly (slot 0x214) or without a
     /// topic does not ask it, even with the FIXES bit and an answer.
     #[test]

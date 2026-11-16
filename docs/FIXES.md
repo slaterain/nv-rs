@@ -1051,7 +1051,8 @@ player's teammate when others detect it, and with the detection fix its level wo
 Built as part of JIP (in every preset once JIP answers "installed", not under the row), group GD:
 the backup package's move-away distance is JIP's variable (`009ed380` at `0x9ED3F8`, `009ed4b0` at
 `0x9ED528`; 300, the original's, until JIP's `MoveAwayFrom` sets it: that command is not built yet)
-(G42); while JIP's hit effects are off (`ToggleHitEffects 0`, or `ToggleImmortalMode 2`), an
+(G42); while JIP's hit effects are off (`ToggleImmortalMode 2`; also `ToggleHitEffects 0` once
+that command is built: it is not built yet), an
 explosion in the player's face shows no image space (`009acd60` at `0x9ACEC6`) and explosions shake
 no screen (`0x9AD2C5`) (G124, G125). With the hit effects on (the default) the original's.
 
