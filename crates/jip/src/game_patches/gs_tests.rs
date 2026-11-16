@@ -1,4 +1,4 @@
-//! Group GS's game patches: O7, O8, G03, G34, G70, G71, G123. The expected values come from
+//! Group GS's game patches: O7, O8, G03, G34, G70, G71, G123, G51, D07. The expected values come from
 //! JIP's assembly (`DoOperatorHook`, `TerminalGetLockedHook`, `GetHitIMODHook`, the byte patches)
 //! and the exe's code at each place (doubles checked with an independent IEEE computation); the
 //! seams' use in the translations is tested beside them (`expression.rs`,
@@ -36,6 +36,7 @@ fn rows_are_jips_addresses() {
             0x0059_e034,
             0x005c_240d,
             0x005d_3b69,
+            0x005b_4dbc,
             0x005e_0fbe,
             0x005e_1a23,
             0x005e_1f0b
@@ -528,4 +529,168 @@ fn g123_is_in_with_the_row_off() {
     assert_eq!(e.jip_patches() & jip_patches::FIXES, 0);
     assert_ne!(e.jip_patches() & jip_patches::INSTALLED, 0);
     assert_eq!(get_hit(&mut e), 0x0600_0162);
+}
+
+// ---- G51, D07 ----
+
+/// G51 at JIP's address (`SafeWrite16(0x5B4DBC, 0x19EB)`: Ghidra `0F B6 45 D3` there, the read
+/// of the weapon flag), in the area's seams (the whole list: `rows_are_jips_addresses`).
+#[test]
+fn g51_row_is_jips_address() {
+    assert_eq!(EVERY_ITEM_HEALTH.addr(), 0x005b_4dbc);
+    assert!(AREA.fix_sites.contains(&0x005b_4dbc));
+}
+
+/// G51: not installed or the row off, no handler; with the fixes in, the jump is taken (no
+/// words).
+#[test]
+fn g51_handler_takes_the_jump_with_the_fixes() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    assert_eq!(e.site(EVERY_ITEM_HEALTH.addr(), &[]), None);
+    let mut e = engine();
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site(EVERY_ITEM_HEALTH.addr(), &[]), None, "row off");
+    install_fixes(&mut e);
+    assert_eq!(e.site(EVERY_ITEM_HEALTH.addr(), &[]), Some(1));
+}
+
+/// The plugin's data: the script form at `SCRIPT_FORM` (type `Script`, its data length +0x20
+/// 0x400, its data +0x30 at `DATA`), the word at data +0x29C (its neighbours set), the plugin
+/// loaded at index 5 under `name`, the form in the form map under `id`.
+const SCRIPT_FORM: u32 = crate::commands::test_support::FORMS + 0x100;
+const SCRIPT_DATA_AT: u32 = crate::commands::test_support::FORMS + 0x1000;
+const MOD_INFO: u32 = crate::commands::test_support::FORMS + 0x4000;
+
+fn ccc(name: &[u8], id: u32, word: u32, data: bool, word_bits: u32) -> Engine {
+    use crate::commands::test_support::{engine, game_globals, in_form_map, loaded_mod};
+    let mut e = engine();
+    game_globals(&mut e);
+    loaded_mod(&mut e, 5, MOD_INFO, name);
+    in_form_map(&mut e, SCRIPT_FORM, id, 0);
+    e.mem.set_u8(SCRIPT_FORM + 4, 0x11);
+    e.mem.set_u32(SCRIPT_FORM + 0x20, 0x400);
+    e.mem.set_u32(SCRIPT_FORM + 0x2c, 0x1111_1111);
+    e.mem
+        .set_u32(SCRIPT_FORM + 0x30, if data { SCRIPT_DATA_AT } else { 0 });
+    e.mem.set_u32(SCRIPT_FORM + 0x34, 0x2222_2222);
+    e.mem.set_u32(SCRIPT_DATA_AT + 0x298, 0x3333_3333);
+    e.mem.set_u32(SCRIPT_DATA_AT + 0x29c, word);
+    e.mem.set_u32(SCRIPT_DATA_AT + 0x2a0, 0x4444_4444);
+    e.set_jip_patches(word_bits);
+    e
+}
+
+fn word(e: &Engine) -> [u32; 3] {
+    [
+        e.mem.u32(SCRIPT_DATA_AT + 0x298),
+        e.mem.u32(SCRIPT_DATA_AT + 0x29c),
+        e.mem.u32(SCRIPT_DATA_AT + 0x2a0),
+    ]
+}
+
+const NAME: &[u8] = b"JIP Companions Command & Control.esp";
+const ON: u32 = jip_patches::INSTALLED | jip_patches::FIXES;
+/// `' 931'` ("139 ") and `' 552'` ("255 ").
+const BEFORE: u32 = u32::from_le_bytes(*b"139 ");
+const AFTER: u32 = u32::from_le_bytes(*b"255 ");
+
+/// D07 with the fixes: the plugin's form `(index << 24) | 0xADE` has its word at data +0x29C
+/// changed from "139 " to "255 ", only that word.
+#[test]
+fn d07_patches_the_plugins_word() {
+    assert_eq!((BEFORE, AFTER), (0x2039_3331, 0x2035_3532));
+    // The gate is the `FIXES` bit alone: bare, with `INSTALLED`, with optional switches.
+    for bits in [
+        jip_patches::FIXES,
+        ON,
+        ON | jip_patches::NO_FAILED_SCRIPT_LOCKS | jip_patches::DOUBLE_PRECISION,
+    ] {
+        let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, bits);
+        deferred_init(&mut e);
+        assert_eq!(word(&e), [0x3333_3333, AFTER, 0x4444_4444], "{bits:x}");
+    }
+    // Data just long enough to hold the word (+0x29C..+0x2A0).
+    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
+    e.mem.set_u32(SCRIPT_FORM + 0x20, 0x2a0);
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], AFTER);
+    // The name as JIP's hash compares it (case-insensitive).
+    let mut e = ccc(
+        b"jip companions command & control.ESP",
+        0x0500_0ade,
+        BEFORE,
+        true,
+        ON,
+    );
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], AFTER);
+}
+
+/// D07 leaves the word alone: the row off or JIP not installed (the word without `FIXES`), another
+/// word there, another plugin, the form under another index, and the deliberate differences
+/// from JIP (which reads on with no test): a form that is not a script, data too short to hold
+/// the word, a form with no data.
+#[test]
+fn d07_leaves_everything_else() {
+    for bits in [0, jip_patches::INSTALLED] {
+        let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, bits);
+        deferred_init(&mut e);
+        assert_eq!(word(&e)[1], BEFORE, "{bits:x}");
+    }
+    let other = u32::from_le_bytes(*b"138 ");
+    let mut e = ccc(NAME, 0x0500_0ade, other, true, ON);
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], other);
+    let mut e = ccc(
+        b"JIP Companions Command & Control.esm",
+        0x0500_0ade,
+        BEFORE,
+        true,
+        ON,
+    );
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], BEFORE);
+    let mut e = ccc(NAME, 0x0400_0ade, BEFORE, true, ON);
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], BEFORE);
+    let mut e = ccc(NAME, 0x0500_0adf, BEFORE, true, ON);
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], BEFORE);
+    // Not a script (type 0x12, not 0x11), with data that holds the word.
+    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
+    e.mem.set_u8(SCRIPT_FORM + 4, 0x12);
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], BEFORE, "not a script");
+    // Data one byte too short for the word.
+    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
+    e.mem.set_u32(SCRIPT_FORM + 0x20, 0x29f);
+    deferred_init(&mut e);
+    assert_eq!(word(&e)[1], BEFORE, "data too short");
+    // No data: JIP would read address 0x29C. Page 0 is mapped here with the word at 0x29C, so a
+    // read through the null pointer is an assertion failure, not an unmapped-memory panic.
+    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, false, ON);
+    e.map(0, 0x1000);
+    e.mem.set_u32(0x29c, BEFORE);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.u32(0x29c), BEFORE, "no data");
+    assert_eq!(word(&e)[1], BEFORE, "no data");
+}
+
+/// D07 runs at xNVSE's `DeferredInit` message (JIP's listener).
+#[test]
+fn d07_runs_at_deferred_init() {
+    use nvse::plugins::{dispatch, msg};
+    let mut e = ccc(NAME, 0x0500_0ade, BEFORE, true, ON);
+    // The temporary position marker JIP also makes at `DeferredInit`: stand-ins.
+    use crate::commands::pos_marker::{REFR_CONSTRUCTOR, SET_TEMPORARY};
+    e.register(REFR_CONSTRUCTOR, |_, w| Ret {
+        eax: w[0],
+        ..Ret::default()
+    });
+    e.register(SET_TEMPORARY, |_, _| Ret::default());
+    dispatch(&mut e, msg::MAIN_GAME_LOOP, 0, 0);
+    assert_eq!(word(&e)[1], BEFORE, "only DeferredInit");
+    dispatch(&mut e, msg::DEFERRED_INIT, 0, 0);
+    assert_eq!(word(&e)[1], AFTER);
 }

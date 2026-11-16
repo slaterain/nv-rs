@@ -2,13 +2,8 @@
 //! idle paths, names, sounds, encounter zones, impact data sets, playable flags, water traits),
 //! a few of the player's (power armour, quest items shown, regions, notes, the active quest), the
 //! armour class (also a condition), whether the player has a reference's key (also a condition),
-//! and a cell's coordinates. 43 of its 44 commands.
-//!
-//! Not built yet (no hook, patch or missing seam: left for the next agent of the lane):
-//! `ar_Cat` (0x22C0), which copies one xNVSE array's elements into another through the plugin
-//! array interface (`GetContainerType`, `ArrayData`'s keys and values, `ArrayHasKey`): it wants
-//! the element conversions of that interface (a form element as a form pointer looked up again by
-//! id) settled against xNVSE's `ArrayAPI` first.
+//! and a cell's coordinates, and `ar_Cat` (one xNVSE array's elements added to another through
+//! xNVSE's plugin array interface, [`super::arrays`]). All 44 of its commands.
 //!
 //! Layouts, each confirmed in the exe (the exe's translations in the engine crates name the
 //! function or the Xbox PDB field; AUDIT-lane-B.md lists them): the player (`*011DEA3C`) quest
@@ -84,6 +79,7 @@ pub static COMMANDS: Handlers = &[
     (0x2339, get_water_trait),
     (0x233a, set_water_trait),
     (0x2279, get_active_quest),
+    (0x22c0, ar_cat),
 ];
 
 #[rustfmt::skip]
@@ -1182,6 +1178,43 @@ fn get_active_quest(e: &mut Engine, w: &[u32]) -> Ret {
         let quest = e.mem.u32(p + PLAYER_ACTIVE_QUEST);
         form_res(e, &a, quest);
     }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_miscellaneous.h:
+// Cmd_ar_Cat_Execute.
+/// `ar_Cat arr1 arr2 [overrideOldKeys]`: arrays of the same kind only; `arr2`'s elements as
+/// xNVSE hands them to a plugin, read before any is added (`ArrayData`, so an array added to
+/// itself doubles): a packed array's appended to `arr1`, a map's set at their keys when `arr1`
+/// lacks the key or `overrideOldKeys` is not 0. The result 1 once anything was read (`arr2`
+/// not empty), else left.
+fn ar_cat(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let (into, from, override_old) = (read.int(0, 0), read.int(1, 0), read.int(2, 0));
+    if !nvse::vars::array_exists(e, into) || !nvse::vars::array_exists(e, from) {
+        return handled(true);
+    }
+    let kind = super::arrays::container_type(e, into);
+    if kind != super::arrays::container_type(e, from) {
+        return handled(true);
+    }
+    let packed = kind == 0;
+    let elements = super::arrays::plugin_elements(e, from);
+    if elements.is_empty() {
+        return handled(true);
+    }
+    for (key, element) in &elements {
+        if packed {
+            super::arrays::append_plugin_element(e, into, element.as_ref());
+        } else if override_old != 0 || !super::arrays::has_key(e, into, key) {
+            super::arrays::set_plugin_element(e, into, key, element.as_ref());
+        }
+    }
+    e.mem.set_f64(a.result, 1.0);
     handled(true)
 }
 
