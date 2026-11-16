@@ -554,9 +554,9 @@ pub(crate) fn store_chip(e: &mut Engine, data: u32, stream: u32, chip: u32) {
 #[inline(always)]
 pub(crate) fn drawn_bound(e: &mut Engine, renderer: u32, centre: [u32; 3], radius: u32) {
     for (i, word) in (0u32..).zip(centre) {
-        e.set_global(renderer.wrapping_add(0x664 + 4 * i), word);
+        super::capture::set_word(e, renderer, 0x664 + 4 * i, word);
     }
-    e.set_global(renderer.wrapping_add(0x670), radius);
+    super::capture::set_word(e, renderer, 0x670, radius);
 }
 
 /// A camera vector in model space (three words from `from`) into the renderer at `to` (condition 2).
@@ -564,7 +564,7 @@ pub(crate) fn drawn_bound(e: &mut Engine, renderer: u32, centre: [u32; 3], radiu
 pub(crate) fn camera_vector(e: &mut Engine, renderer: u32, to: u32, from: u32) {
     for i in 0..3u32 {
         let word = e.global::<u32>(from.wrapping_add(4 * i));
-        e.set_global(renderer.wrapping_add(to).wrapping_add(4 * i), word);
+        super::capture::set_word(e, renderer, to.wrapping_add(4 * i), word);
     }
 }
 

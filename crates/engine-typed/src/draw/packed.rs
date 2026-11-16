@@ -394,25 +394,29 @@ pub fn draw_points(e: &mut Engine, this: Ptr, geometry: Ptr) {
         let render_state = e.mem.u32(t + 0x8b8);
         e.vcall(render_state, 0x2c, &args![0u32]);
         let scale = x87_quiet_bits(e.mem.u32(f + 0x78));
-        let world = t + 0x940;
-        typed_call!(
-            shader::FAMILY,
-            0x00b7_1a40,
-            accumulator::make_matrix(
-                e,
-                world,
-                Ptr::new(f + 0x48),
-                Ptr::new(f + 0x6c),
-                f32::from_bits(scale)
-            )
-        );
-        own::device_world_transform(e, t, world);
+        // The renderer's world matrix is the drawing side's own (`statics::RENDERER_BLOCKS`): made and sent through
+        // an image of it.
+        capture::own_image(e, t + 0x940, 0x40, |e, world| {
+            typed_call!(
+                shader::FAMILY,
+                0x00b7_1a40,
+                accumulator::make_matrix(
+                    e,
+                    world,
+                    Ptr::new(f + 0x48),
+                    Ptr::new(f + 0x6c),
+                    f32::from_bits(scale)
+                )
+            );
+            own::device_world_transform(e, t, world);
+        });
         let render_state = e.mem.u32(t + 0x8b8);
         e.vcall(render_state, 0x30, &args![f + 0x48]);
         for (from, to) in [(0x634u32, QUAD_RIGHT), (0x640, QUAD_UP)] {
-            let out = e
-                .call(ROTATE_POINT, &args![f + 0x38, t + from, f + 0x48])
-                .u32();
+            let out = capture::own_image_read(e, t + from, 0xc, |e, direction| {
+                e.call(ROTATE_POINT, &args![f + 0x38, direction, f + 0x48])
+                    .u32()
+            });
             own::camera_vector(e, t, to, out);
         }
         let (stride, declaration) = if arrays.bytes != 0 {
@@ -625,7 +629,7 @@ fn idx(i: usize) -> u32 {
 /// A camera component (`index` 0..3 of the vector at `vector`).
 #[inline(always)]
 fn quad_camera(e: &Engine, this: u32, vector: u32, index: u32) -> u32 {
-    e.mem.u32(this.wrapping_add(vector).wrapping_add(4 * index))
+    capture::own_word(e, this, vector.wrapping_add(4 * index))
 }
 
 /// `FLD dword` (`false`) or a `float` memory operand (`true`).

@@ -139,7 +139,7 @@ pub fn vertex_entry_16(e: &mut Engine, _this: Ptr, _unused_0: u32) {
     }
     for index in 0..2u32 {
         let source = e.global::<f32>(SOURCE + 4 * index); // own: main's frame value, value packet B
-        let camera = e.global::<f32>(CAMERA + 4 * index); // own: main's frame value, value packet B
+        let camera = capture::own_at::<f32>(e, CAMERA + 4 * index); // the camera eye: own state
         capture::set_own_at(e, TARGET + 4 * index, source - camera);
     }
     let third = e.global::<f32>(SOURCE + 8); // own: main's frame value, value packet B
@@ -171,7 +171,7 @@ pub fn vertex_entry_17(e: &mut Engine, _this: Ptr, object: Ptr) {
         let offset = 4 * idx(index);
         // The bound's centre through the packet (value packet B).
         let centre = f32::from_bits(crate::draw::packet::bound_word(e, position, idx(index)));
-        *value = centre - e.global::<f32>(CAMERA + offset); // own: main's frame value, value packet B
+        *value = centre - capture::own_at::<f32>(e, CAMERA + offset); // the camera eye: own state
     }
     for (index, value) in values.iter().enumerate() {
         capture::set_own_at(e, OFFSET + 4 * idx(index), *value);
@@ -563,7 +563,7 @@ pub fn eye_pos(e: &mut Engine, pass_type: u32, object: Ptr, matrix: [u32; 16]) {
         capture::set_own_at(e, EYE_DIRECTION + 0xc, 0u32);
         let mut shifted = [0f32; 3];
         for (index, value) in shifted.iter_mut().enumerate() {
-            *value = eye[index] - e.global::<f32>(CAMERA + 4 * idx(index)); // own: main's frame value, value packet B
+            *value = eye[index] - capture::own_at::<f32>(e, CAMERA + 4 * idx(index)); // the camera eye: own state
         }
         for (index, value) in shifted.iter().enumerate() {
             capture::set_own_at(e, EYE_VECTOR + 4 * idx(index), *value);
@@ -639,7 +639,7 @@ pub fn shadow_proj(e: &mut Engine, _this: Ptr, block: Ptr, flag: u32, transform:
             matrix[index] = one;
         }
         for (row, index) in [3usize, 7, 11].iter().enumerate() {
-            matrix[*index] = e.global::<u32>(CAMERA + 4 * idx(row)); // own: main's frame value, value packet B
+            matrix[*index] = capture::own_at::<u32>(e, CAMERA + 4 * idx(row)); // the camera eye: own state
         }
     }
     for (index, word) in matrix.iter().enumerate() {
@@ -694,7 +694,7 @@ pub fn obj_to_cube(
         let product = frame + 0x80;
         if direct {
             let renderer = e.global::<u32>(this.addr() + 0x18); // own: main's object read in place (value packet B, piece 4)
-            let bytes = e.mem.bytes(renderer + 0x940, 0x40); // own: the renderer's matrix (piece 4) into a local
+            let bytes = capture::own_bytes(e, renderer + 0x940, 0x40); // the renderer's matrix (its own state) into a local
             e.mem.write(product, &bytes); // own: a local
             capture::own_image(e, OBJECT_TO_CUBE, 0x40, |e, at| {
                 crate::draw::thunks::call_matrix_transpose(e, at, product);
@@ -717,7 +717,7 @@ pub fn obj_to_cube(
         }
         for index in 0..3u32 {
             let slot = first + 0x30 + 4 * index;
-            let value = e.global::<f32>(CAMERA + 4 * index) + float_at(e, slot); // own: main's frame value, value packet B
+            let value = capture::own_at::<f32>(e, CAMERA + 4 * index) + float_at(e, slot); // the camera eye: own state
             capture::set_own_at::<f32>(e, slot, value);
         }
         let lights = packet::rendering_pass_lights(e, rendering);
@@ -784,12 +784,12 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
         let planes = frame + 0xc0;
         let plane = frame + 0x120;
         let moved = frame + 0x130;
-        let bytes = e.mem.bytes(renderer + 0x980, 0x40); // own: the renderer's matrix (piece 4) into a local
+        let bytes = capture::own_bytes(e, renderer + 0x980, 0x40); // the renderer's matrix (its own state) into a local
         e.mem.write(view, &bytes); // own: a local
         let m = |e: &Engine, index: u32| float_at(e, view + 4 * index);
-        let x = e.global::<f32>(CAMERA); // own: main's frame value, value packet B
-        let y = e.global::<f32>(CAMERA + 4); // own: main's frame value, value packet B
-        let z = e.global::<f32>(CAMERA + 8); // own: main's frame value, value packet B
+        let x = capture::own_at::<f32>(e, CAMERA); // the camera eye: own state
+        let y = capture::own_at::<f32>(e, CAMERA + 4); // the camera eye: own state
+        let z = capture::own_at::<f32>(e, CAMERA + 8); // the camera eye: own state
         let first = y * m(e, 4) + x * m(e, 0);
         let first = first + z * m(e, 8);
         capture::set_own_at::<f32>(e, view + 0x30, -first);
@@ -799,7 +799,7 @@ pub fn simple_shadow_clip_planes(e: &mut Engine, this: Ptr, pass_type: u32) {
         let third = y * m(e, 6) + x * m(e, 2);
         let third = third + z * m(e, 10);
         capture::set_own_at::<f32>(e, view + 0x38, -third);
-        let bytes = e.mem.bytes(renderer + 0x9c0, 0x40); // own: the renderer's matrix (piece 4) into a local
+        let bytes = capture::own_bytes(e, renderer + 0x9c0, 0x40); // the renderer's matrix (its own state) into a local
         e.mem.write(moved, &bytes); // own: a local
         crate::draw::thunks::call_matrix_multiply(e, product, view, moved);
         crate::draw::thunks::call_matrix_inverse(e, inverse, 0u32, product);

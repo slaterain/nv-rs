@@ -17581,3 +17581,87 @@ fn the_pair_textures_are_read_through_the_packet() {
         |e, _| cut::take_frame(e, 0, Ptr::new(0)),
     );
 }
+
+// ---- The renderer's camera set-up, typed so its words are each side's own (the drawing thread, 2026-11-16). ----
+
+use engine_typed::draw::camera;
+
+/// A page mapped when the test world has not mapped it, then `words` written from `at`.
+fn constant_words(e: &mut Engine, at: u32, words: &[u32]) {
+    let page = at & !0xfff;
+    if !e.mem.is_mapped(page) {
+        e.map(page, 0x1000);
+    }
+    for (k, w) in (0u32..).zip(words) {
+        set(e, at + 4 * k, *w);
+    }
+}
+
+#[test]
+fn set_camera_data() {
+    Diff::new(entry!(
+        0x00e6_c780,
+        camera::set_camera_data(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>)
+    ))
+    .draw_common_at(0x00e6_c780)
+    .inputs(&[
+        // The skip byte, the clip plane's flag, the eye's flag, an orthographic frustum, a flipped render state.
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        // The render target's width (one past the sign bit: the unsigned conversion's correction).
+        Input::Of(&[1280, 0x8000_0400]),
+        Input::F32Swept(ONE),
+        Input::F32Swept(HALF),
+    ])
+    .float_sweep(16)
+    .setup(|e, c| {
+        let d = draw_world(e);
+        let r = d.w.renderer;
+        e.mem.set_u8(r + 0x6fc, c.word(0) as u8);
+        constant_words(e, 0x0126_efd0, &[c.word(1) << 8, bits(c, 7)]);
+        constant_words(e, 0x011a_9604, &[c.word(2)]);
+        constant_words(e, 0x011f_426c, &[bits(c, 6), bits(c, 7), ONE]);
+        constant_words(e, 0x011f_474c, &[0, 0, 0]);
+        // The projection's scales (2.0 and -2.0 as doubles), the negative side and 2^32.
+        constant_words(e, 0x0101_1590, &[0, 0x4000_0000]);
+        constant_words(e, 0x0106_d4c8, &[0, 0xc000_0000]);
+        constant_words(e, 0x0101_2054, &[0xbf80_0000]);
+        constant_words(e, 0x0109_9378, &[0x4f80_0000]);
+        // The render target group's size, the render state's handedness, the device's slots.
+        let group = obj(e, 0x10, vtable(e, &[]));
+        set(e, r + 0x888, group);
+        slots!(e; 0x48, 0x4c, 0x8c, 0x90, 0xb0, 0xbc);
+        set(e, RETS + 0x4c, c.word(4));
+        set(e, RETS + 0x8c, c.word(5));
+        set(e, RETS + 0x90, 720);
+        // The camera: location, direction, up, right, the frustum (left, right, top, bottom, near, far, the
+        // orthographic byte) and the port (left, right, top, bottom).
+        let vector = |e: &mut Engine, words: [u32; 3]| {
+            let v = e.mem.alloc(0xc);
+            for (k, w) in (0u32..).zip(words) {
+                set(e, v + 4 * k, w);
+            }
+            v
+        };
+        let (a, b) = (bits(c, 6), bits(c, 7));
+        let location = vector(e, [a, b, 0x4120_0000]);
+        let direction = vector(e, [0, b, a]);
+        let up = vector(e, [b, ONE, 0]);
+        let right = vector(e, [ONE, 0, a ^ 0x8000_0000]);
+        let frustum = e.mem.alloc(0x1c);
+        for (k, w) in (0u32..).zip([0xbf80_0000u32, ONE, a, 0xbf00_0000, b, 0x4500_0000]) {
+            set(e, frustum + 4 * k, w);
+        }
+        e.mem.set_u8(frustum + 0x18, c.word(3) as u8);
+        let port = e.mem.alloc(0x10);
+        for (k, w) in (0u32..).zip([0, ONE, ONE, 0]) {
+            set(e, port + 4 * k, w);
+        }
+        vec![r, location, direction, up, right, frustum, port]
+    })
+    .run()
+    .assert_same();
+}

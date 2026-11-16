@@ -54,9 +54,24 @@ pub(crate) const MODE_FUNCTIONS: (u32, u32) = (0x011f_9f38, 0x011f_9f40);
 pub(crate) const RENDER_STATE_SIZE: u32 = 0x1114;
 /// The accumulator's camera (+8).
 pub(crate) const ACC_CAMERA: (u32, u32) = (8, 0xc);
+/// The camera's eye as the renderer's camera set-up keeps it (`011f474c`, three floats: `00e6c780` writes it; the
+/// matrices `00b71a40` makes are relative to it).
+pub(crate) const CAMERA_EYE: (u32, u32) = (0x011f_474c, 0x011f_4758);
+/// The renderers (`011f4748`, the scene's, and `011f9508`; the same `NiDX9Renderer` in a run) whose per-draw words
+/// every draw writes before it reads them: the geometry's property state and effects (+0xc, +0x10: `00a80610` and
+/// the batch draw set them, each accumulator's finish `00b66570` clears +0xc, the points draw `00e70140` reads
+/// through +0xc), the camera's directions and their model-space turns and the drawn bound (+0x634 to +0x674:
+/// `00e6c780`, `00e6fbb0`, the points draw), the near plane and depth range (+0x684, +0x688: `00e6c780`), and the
+/// world, view, projection, view-projection and inverse view matrices (+0x940 to +0xa80: `00e6fbb0`, `00e6c780`).
+/// Main's own draws after the post (the world pass's extra passes, `00b6c0d0`) write them too, while the drawing
+/// side draws: each side keeps its own (the drawing thread's first-post stop, 2026-11-16: main's finish cleared +0xc
+/// between the particles' `00a80610` and `00e70140` on the drawing side, a read of address 0).
+pub(crate) const RENDERER_GLOBALS: [u32; 2] = [0x011f_4748, 0x011f_9508];
+pub(crate) const RENDERER_BLOCKS: [(u32, u32); 4] =
+    [(0xc, 0x14), (0x634, 0x674), (0x684, 0x68c), (0x940, 0xa80)];
 
 /// The global blocks, in one list (what [`take`] owns besides the render-state cache and the camera).
-pub const GLOBAL_BLOCKS: [(u32, u32); 10] = [
+pub const GLOBAL_BLOCKS: [(u32, u32); 11] = [
     RENDERING_PASS,
     ACCUMULATORS,
     SHADER_STATICS,
@@ -67,6 +82,7 @@ pub const GLOBAL_BLOCKS: [(u32, u32); 10] = [
     FADE_FLAG,
     SHADER_MODE,
     MODE_FUNCTIONS,
+    CAMERA_EYE,
 ];
 
 /// Whether `addr` lies in one of the own blocks of globals (for the checks).
@@ -165,7 +181,18 @@ pub fn take(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
         // From +4: its vtable (set once) is read in place by every call through it.
         capture::own(e, cache, 4, RENDER_STATE_SIZE);
     }
+    take_renderers(e);
     capture::own(e, acc.addr(), ACC_CAMERA.0, ACC_CAMERA.1);
+}
+
+/// The renderers' per-draw words ([`RENDERER_BLOCKS`]) as own blocks (one renderer held twice is taken once).
+pub fn take_renderers(e: &Engine) {
+    for global in RENDERER_GLOBALS {
+        let renderer = e.global::<u32>(global);
+        for (from, to) in RENDERER_BLOCKS {
+            capture::own(e, renderer, from, to);
+        }
+    }
 }
 
 /// The cuts that took the own state, those that kept it in guest memory, and the first reason seen.
@@ -199,6 +226,53 @@ pub fn report() -> (u64, u64, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The drawing thread's first-post stop (2026-11-16): the drawing side's particles set the renderer's current
+    /// property state (`00a80610`) and read it back in the points draw (`00e70140`), while main's own scene draw after
+    /// the post finished (`00b66570` clears it). With the renderer's per-draw words its own state, the drawing side
+    /// reads its value whatever main does meanwhile, and the join keeps main's clear (main wrote it after the cut).
+    #[test]
+    fn mains_finish_does_not_clear_the_drawing_sides_property_state() {
+        let mut e = Engine::new();
+        if !e.mem.is_mapped(0x011f_4000) {
+            e.map(0x011f_4000, 0x6000);
+        }
+        let renderer = e.mem.alloc(0xa80);
+        let geometry = e.mem.alloc(0x100);
+        e.mem.set_u32(0x011f_4748, renderer);
+        e.mem.set_u32(0x011f_9508, renderer);
+        assert!(capture::begin(&e));
+        take_renderers(&e);
+        // The drawing side: the particles' render immediate.
+        crate::dispatch::scene::geometry_render_immediate(&mut e, Ptr::new(geometry), Ptr::new(renderer));
+        // Main, with the packet on the drawing side's thread: its extra pass's finish.
+        let packet = capture::detach(&e).expect("the packet");
+        super::super::packet::clear_scene_word(&mut e);
+        assert_eq!(e.mem.u32(renderer + 0xc), 0, "main clears its own");
+        assert!(capture::attach(packet).is_ok());
+        // The drawing side's points draw reads its own.
+        assert_eq!(
+            super::super::packet::current_property_state(&e, renderer),
+            geometry + 0x9c
+        );
+        // The join: main wrote it after the cut, so main's value stays.
+        let report = capture::end(&mut e);
+        assert_eq!(e.mem.u32(renderer + 0xc), 0);
+        assert!(report.kept_main >= 4);
+    }
+
+    /// Every renderer block the cut takes is inside the renderer's layout and apart from the others, and the camera's
+    /// eye is an own global.
+    #[test]
+    fn the_renderer_blocks_are_apart_and_the_eye_is_owned() {
+        for (i, a) in RENDERER_BLOCKS.iter().enumerate() {
+            assert!(a.0 < a.1 && a.1 <= 0xa80);
+            for b in &RENDERER_BLOCKS[i + 1..] {
+                assert!(a.1 <= b.0 || b.1 <= a.0, "{a:x?} {b:x?}");
+            }
+        }
+        assert!(is_own_global(0x011f_474c) && is_own_global(0x011f_4754));
+    }
 
     /// The global blocks do not overlap.
     #[test]
@@ -241,6 +315,8 @@ mod tests {
             ("draw/skin.rs", include_str!("skin.rs")),
             ("draw/alpha.rs", include_str!("alpha.rs")),
             ("draw/drivers.rs", include_str!("drivers.rs")),
+            ("draw/camera.rs", include_str!("camera.rs")),
+            ("draw/packed.rs", include_str!("packed.rs")),
             ("draw/lists.rs", include_str!("lists.rs")),
             ("draw/constants.rs", include_str!("constants.rs")),
             ("draw/group_c.rs", include_str!("group_c.rs")),

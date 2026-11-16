@@ -162,7 +162,7 @@ fn write_rows(e: &mut Engine, rows: u32, transform: u32) {
         (0u32.wrapping_sub(4), 0x28, ORIGIN + 4),
         (0xc, 0x2c, ORIGIN + 8),
     ] {
-        let value = x87_sub(f(e, source), x87_m32(e.mem.u32(origin)));
+        let value = x87_sub(f(e, source), x87_m32(super::capture::own_at::<u32>(e, origin)));
         e.mem.set_u32(at(target), x87_store32(value));
     }
 }

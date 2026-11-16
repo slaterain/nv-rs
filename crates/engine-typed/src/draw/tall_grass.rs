@@ -271,7 +271,7 @@ pub fn shadow_setup(e: &mut Engine, this: Ptr, word: u32, transform: u32) {
         }
         for k in 0..3u32 {
             let cell = first + 0x30 + 4 * k;
-            let sum = f32::from_bits(e.global::<u32>(CAMERA_OFFSET + 4 * k))
+            let sum = f32::from_bits(super::capture::own_at::<u32>(e, CAMERA_OFFSET + 4 * k))
                 + f32::from_bits(e.global::<u32>(cell));
             e.set_global(cell, sum.to_bits());
         }

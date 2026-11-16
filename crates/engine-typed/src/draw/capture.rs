@@ -963,6 +963,57 @@ pub fn own_image<R>(
     })
 }
 
+/// Runs `f` with an address that stands for the own state's bytes `[addr, addr + len)` for reading only: while this
+/// thread's packet owns them all, a guest-stack image of them (nothing is copied back); else `addr` itself, and
+/// nothing is noted (a read is no write of main's). For a helper handed a pointer it only reads through (a matrix
+/// product's operand, a point a rotation reads).
+pub fn own_image_read<R>(
+    e: &mut Engine,
+    addr: u32,
+    len: u32,
+    f: impl FnOnce(&mut Engine, u32) -> R,
+) -> R {
+    if !active() || len == 0 {
+        return f(e, addr);
+    }
+    let held = PACKET.with(|p| {
+        let p = p.borrow();
+        let p = p.as_ref()?;
+        if !p.serves(e) {
+            return None;
+        }
+        let at = p.own_at(addr, len)?;
+        Some(p.own_bytes[at..at + len as usize].to_vec())
+    });
+    let Some(bytes) = held else {
+        return f(e, addr);
+    };
+    e.with_stack((len + 3) & !3, |e, block| {
+        let block = block.addr();
+        e.mem.write(block, &bytes);
+        f(e, block)
+    })
+}
+
+/// The own state's bytes `[addr, addr + len)` as the draw reads them ([`own_at`] byte by byte, one look-up).
+pub fn own_bytes(e: &Engine, addr: u32, len: u32) -> Vec<u8> {
+    if active() {
+        let held = PACKET.with(|p| {
+            let p = p.borrow();
+            let p = p.as_ref()?;
+            if !p.serves(e) {
+                return None;
+            }
+            let at = p.own_at(addr, len)?;
+            Some(p.own_bytes[at..at + len as usize].to_vec())
+        });
+        if let Some(bytes) = held {
+            return bytes;
+        }
+    }
+    e.mem.bytes(addr, len)
+}
+
 /// A field of the draw's own state through a typed pointer, as [`own_at`].
 #[inline(always)]
 pub fn own_get<S, T: OwnValue>(e: &Engine, p: Ptr<S>, f: Field<S, T>) -> T {

@@ -400,7 +400,10 @@ pub fn setup_pass_constants(e: &mut Engine, this: Ptr, pass_type: u32) {
     if packet::skin_instance(e, geometry) != 0 {
         let renderer = e.global::<u32>(base.wrapping_add(0x18));
         e.with_stack(0x40, |e, matrix| {
-            crate::draw::thunks::call_matrix_transpose(e, matrix, renderer.wrapping_add(0xa00));
+            // The renderer's view-projection: its own state (`statics::RENDERER_BLOCKS`).
+            capture::own_image_read(e, renderer.wrapping_add(0xa00), 0x40, |e, at| {
+                crate::draw::thunks::call_matrix_transpose(e, matrix, at);
+            });
             let device = packet::pass_device(e);
             own::device_vertex_constants(e, device, 1, matrix.addr(), 4);
         });
