@@ -74,6 +74,12 @@ fn prepare(e: &mut Engine) {
             ..Ret::default()
         });
     }
+    // `TESImageSpaceModifier::GetGetHit` (`005d2860`, JIP's wrap there once installed: step 3.9
+    // GS, G123), when the test engine has no translation of it: no "get hit" modifier (the
+    // exe's answer while its image space byte is 0).
+    if !e.is_registered(0x005d_2860) {
+        e.register(0x005d_2860, |_, _| Ret::default());
+    }
     // Group GC's wraps (G109 `0058e9d0`, G111 `00646260`), when the test engine has no
     // translation of them: the impact data set's slot for the material (the exe's answer with no
     // override set), and `fDamageToWeaponValue`'s value (`0x11CF154`, the exe's with no ammo).
