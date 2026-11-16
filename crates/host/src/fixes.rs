@@ -245,13 +245,13 @@ fn install_keep_cosave_plugins(e: &mut Engine) {
 /// plugins, its built commands' names and handlers, its hooks and its own always-on patches;
 /// the JIP rows ([`JIP_VANILLA_COMMANDS`], [`JIP_GAME_PATCHES`], [`JIP_COSAVE_FIXES`]) then follow
 /// their own switches. The row sets a flag; `jip::install` (after xNVSE, in
-/// [`crate::Host::start_with`]) reads it. Off, JIP answers "not installed", as on main before the
+/// [`crate::install_rows_and_extenders`]) reads it. Off, JIP answers "not installed", as on main before the
 /// row: the same records, the same registrations.
 pub const JIP_INSTALLED: Fix = Fix {
     name: "JIP LN NVSE built in (for testing)",
     env: "NV_JIP_INSTALLED",
     addresses: &[],
-    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with its built commands (995 of 1,118; the rest answer as not present), hooks and game patches; test with stepped threads",
+    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with 995 of its 1,118 commands (a script line calling one of the others fails and stops that script for the run), its hooks and 64 of its 162 game patches",
     install: install_jip_installed,
 };
 
@@ -2073,7 +2073,8 @@ mod tests {
     }
 
     /// The switch from Fallout.ini (a launcher's play run): `[nv-rs Fixes] bJIPInstalled=1` on,
-    /// `0` or commented out or misspelt off; the variable wins over the line.
+    /// `0` or commented out or misspelt off; the run stays a play run (fixes preset, its threads);
+    /// the variable makes a test run instead.
     #[test]
     fn jip_installed_from_fallout_ini() {
         let on = with_ini(None, "[nv-rs Fixes]\nbJIPInstalled=1\n", &[]);
@@ -2089,12 +2090,26 @@ mod tests {
         ] {
             assert!(!with_ini(None, text, &[]).is_on(&JIP_INSTALLED), "{text}");
         }
-        let env_wins = with_ini(
+        // A play run keeps its threads: real unless the file asks for stepped ones.
+        assert_eq!(on.threads, PLAY_THREADS);
+        let stepped = with_ini(
             None,
-            "[nv-rs Fixes]\nbJIPInstalled=1\n",
-            &[("NV_JIP_INSTALLED", "0")],
+            "[nv-rs Fixes]\nbJIPInstalled=1\n[nv-rs Threads]\nbSteppedThreads=1\n",
+            &[],
         );
-        assert!(!env_wins.is_on(&JIP_INSTALLED));
+        assert!(stepped.is_on(&JIP_INSTALLED));
+        assert_eq!(stepped.threads, "stepped");
+        // The variable in a launcher's run makes it a test, which never reads the file: on, in
+        // vanilla, with stepped threads, whatever the file says.
+        let variable = with_ini(
+            None,
+            "[nv-rs Fixes]\nbJIPInstalled=0\n",
+            &[("NV_JIP_INSTALLED", "1")],
+        );
+        assert!(variable.is_on(&JIP_INSTALLED));
+        assert_eq!(variable.preset, Preset::Vanilla);
+        assert_eq!(variable.threads, "stepped");
+        assert!(!variable.is_on(&KEEP_COSAVE_PLUGINS));
         let row = crate::game_ini::rows()
             .into_iter()
             .find(|r| r.switch == JIP_INSTALLED.env)
