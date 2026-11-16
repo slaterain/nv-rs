@@ -70,6 +70,15 @@ fn names_outside_the_game_folder_and_devices_are_refused() {
     );
     ok(br"Data\Console.ini", br"Data\Console.ini");
     ok(br"Data\COM10.ini", br"Data\COM10.ini");
+    // `..` takes off the part before it while the name stays inside the game's folder
+    // (REVIEW-642: JIP's `..\NVSE\Plugins\x.ini` from the config folder is Data's).
+    ok(br"Data\Config\..\x.ini", br"Data\x.ini");
+    ok(
+        br"data\config\..\NVSE\Plugins\SomePlugin.ini",
+        br"data\NVSE\Plugins\SomePlugin.ini",
+    );
+    ok(br"Data\a\b\..\..\x.ini", br"Data\x.ini");
+    ok(br"c:\games\fnv\Data\..\Data\x.ini", br"Data\x.ini");
     for bad in [
         &br"..\x.ini"[..],
         br"Data\..\..\x.ini",
@@ -103,6 +112,11 @@ fn names_outside_the_game_folder_and_devices_are_refused() {
         br"Data\conout$.ini",
         br"Data\NUL .ini",
         b"Data\\COM\xb9.ini",
+        // A device is refused before any `..` is weighed (REVIEW-642): never opened, inside or
+        // outside, and also in a part a later `..` takes off.
+        br"..\con.ini",
+        br"Data\Config\..\..\..\nul",
+        br"Data\CON\..\x.ini",
     ] {
         assert_eq!(
             relative(&e, device),
@@ -214,9 +228,10 @@ fn a_refused_name_reads_nothing() {
         &rooted,
     ] {
         let shown = String::from_utf8_lossy(name).into_owned();
+        // As a file that is not there (the stated rule; REVIEW-642).
         assert_eq!(
             seam::read_or_error(&e, name),
-            Err(ERROR_ACCESS_DENIED),
+            Err(ERROR_FILE_NOT_FOUND),
             "{shown}"
         );
         assert_eq!(seam::profile_string(&e, name, b"A", b"x"), None, "{shown}");
@@ -469,4 +484,236 @@ fn the_seam_takes_the_kernel_lock() {
             "given back"
         );
     });
+    // The writes too (REVIEW-629b): each reaches the platform's state with the lock held (its
+    // calls assert it in debug builds), and gives it back.
+    engine_core::real_threads::without_kernel_lock_mut(&mut e, |e| {
+        assert!(!engine_core::real_threads::kernel_lock_held(e));
+        assert_eq!(seam::create_directory_or_error(e, br"Data\New"), Ok(()));
+        assert_eq!(
+            seam::write_or_error(e, br"Data\New\w.ini", b"[A]\r\n"),
+            Ok(())
+        );
+        assert_eq!(
+            seam::write_profile_string(e, br"Data\New\w.ini", b"A", b"k", b"1"),
+            Ok(())
+        );
+        assert!(
+            !engine_core::real_threads::kernel_lock_held(e),
+            "given back"
+        );
+        assert_eq!(
+            seam::profile_string(e, br"Data\New\w.ini", b"A", b"k").unwrap(),
+            b"1"
+        );
+    });
+}
+
+/// A name that goes through `..` and stays inside the game's folder is written under the name it
+/// resolves to, in the port's folder, and read back through either name (REVIEW-642: JIP's
+/// `..\NVSE\Plugins\x.ini` from `Data\Config`).
+#[test]
+fn a_dotdot_name_inside_the_game_folder_is_written() {
+    let game = scratch("dotdot-game");
+    let kept = scratch("dotdot-kept");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    std::fs::create_dir_all(game.join(r"Data\NVSE\Plugins")).unwrap();
+    let before = tree(&game);
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = br"data\config\..\NVSE\Plugins\SomePlugin.ini";
+    seam::write_profile_string(&mut e, name, b"Main", b"bFoo", b"1").unwrap();
+    assert_eq!(
+        std::fs::read(kept.join(r"data\NVSE\Plugins\SomePlugin.ini")).unwrap(),
+        b"[Main]\r\nbFoo=1\r\n"
+    );
+    assert_eq!(
+        seam::profile_string(&e, br"Data\NVSE\Plugins\SomePlugin.ini", b"Main", b"bFoo").unwrap(),
+        b"1"
+    );
+    assert_eq!(
+        seam::profile_string(&e, name, b"Main", b"bFoo").unwrap(),
+        b"1"
+    );
+    assert!(seam::exists(&e, name));
+    assert_eq!(tree(&game), before, "the game's folder is as it was");
+}
+
+/// The `.part` a write goes through is made new: a plain one an earlier write left is replaced;
+/// a folder of that name refuses the write and stays; a hard link to a file elsewhere is taken
+/// away, never written through (REVIEW-642).
+#[test]
+fn a_part_entry_is_never_written_through() {
+    let game = scratch("part-game");
+    let kept = scratch("part-kept");
+    let away = scratch("part-away");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    std::fs::create_dir_all(kept.join(r"Data\Config")).unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let part = kept.join(r"Data\Config\A.ini.part");
+    // A plain one left over.
+    std::fs::write(&part, b"stale").unwrap();
+    assert_eq!(
+        seam::write_or_error(&mut e, br"Data\Config\A.ini", b"new"),
+        Ok(())
+    );
+    assert_eq!(
+        std::fs::read(kept.join(r"Data\Config\A.ini")).unwrap(),
+        b"new"
+    );
+    assert!(!part.exists());
+    // A hard link to a file elsewhere.
+    let outside = away.join("game-file.ini");
+    std::fs::write(&outside, b"keep me").unwrap();
+    std::fs::hard_link(&outside, &part).unwrap();
+    assert_eq!(
+        seam::write_or_error(&mut e, br"Data\Config\A.ini", b"newer"),
+        Ok(())
+    );
+    assert_eq!(std::fs::read(&outside).unwrap(), b"keep me");
+    assert_eq!(
+        std::fs::read(kept.join(r"Data\Config\A.ini")).unwrap(),
+        b"newer"
+    );
+    // A folder of that name.
+    std::fs::create_dir(&part).unwrap();
+    assert_eq!(
+        seam::write_or_error(&mut e, br"Data\Config\A.ini", b"x"),
+        Err(ERROR_ACCESS_DENIED)
+    );
+    assert!(part.is_dir(), "left as it is");
+    assert_eq!(
+        std::fs::read(kept.join(r"Data\Config\A.ini")).unwrap(),
+        b"newer"
+    );
+    std::fs::remove_dir(&part).unwrap();
+    // A symbolic link, where this machine lets a test make one.
+    #[cfg(windows)]
+    let linked = std::os::windows::fs::symlink_file(&outside, &part).is_ok();
+    #[cfg(not(windows))]
+    let linked = std::os::unix::fs::symlink(&outside, &part).is_ok();
+    if linked {
+        assert_eq!(
+            seam::write_or_error(&mut e, br"Data\Config\A.ini", b"x"),
+            Err(ERROR_ACCESS_DENIED)
+        );
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep me");
+        let _ = std::fs::remove_file(&part);
+    }
+}
+
+/// A write whose rename fails (another program holds the kept file without delete sharing)
+/// fails, keeps the kept bytes and leaves no `.part` behind (REVIEW-629b).
+#[cfg(windows)]
+#[test]
+fn a_failed_rename_leaves_no_part() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let game = scratch("rename-game");
+    let kept = scratch("rename-kept");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    std::fs::create_dir_all(kept.join(r"Data\Config")).unwrap();
+    let file = kept.join(r"Data\Config\R.ini");
+    std::fs::write(&file, b"old").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let result = {
+        // FILE_SHARE_READ | FILE_SHARE_WRITE, no FILE_SHARE_DELETE: the rename onto it fails.
+        let _held = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&file)
+            .unwrap();
+        seam::write_or_error(&mut e, br"Data\Config\R.ini", b"new")
+    };
+    assert!(result.is_err(), "{result:?}");
+    assert_eq!(std::fs::read(&file).unwrap(), b"old");
+    assert!(!kept.join(r"Data\Config\R.ini.part").exists());
+    assert_eq!(seam::read(&e, br"Data\Config\R.ini").unwrap(), b"old");
+}
+
+/// The section calls on the real platform: a key or a section removed from a file that is not
+/// there makes it empty (measured, `ini4-2026-11-16.txt`, `DELKEY missing file` and `DELSEC
+/// missing file`); a UTF-16 LE file is changed as text and stays UTF-16 LE (`ini6-...`); a file
+/// that is only its mark gets a line end first from a key write (`ini7-...`, `bom only`) and is
+/// refused by the section writes; a file with a 0 byte that is not UTF-16 LE is never written.
+#[test]
+fn section_calls_on_the_platform_and_encodings() {
+    let game = scratch("enc-game");
+    let kept = scratch("enc-kept");
+    std::fs::create_dir_all(game.join(r"Data\Config")).unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let at = |n: &str| kept.join(format!(r"Data\Config\{n}"));
+    assert_eq!(
+        seam::remove_profile_key(&mut e, br"Data\Config\K.ini", b"A", b"x"),
+        Ok(())
+    );
+    assert_eq!(std::fs::read(at("K.ini")).unwrap(), b"");
+    assert_eq!(
+        seam::remove_profile_section(&mut e, br"Data\Config\S.ini", b"A"),
+        Ok(())
+    );
+    assert_eq!(std::fs::read(at("S.ini")).unwrap(), b"");
+    let u16le = |t: &str| -> Vec<u8> {
+        [0xff, 0xfe]
+            .into_iter()
+            .chain(t.encode_utf16().flat_map(|u| u.to_le_bytes()))
+            .collect()
+    };
+    std::fs::write(
+        game.join(r"Data\Config\U.ini"),
+        u16le("[A]\r\nx=1\r\ny=2\r\n[B]\r\nz=3\r\n"),
+    )
+    .unwrap();
+    let u = br"Data\Config\U.ini";
+    assert_eq!(seam::profile_string(&e, u, b"A", b"y").unwrap(), b"2");
+    assert_eq!(
+        seam::profile_section(&e, u, b"A").unwrap(),
+        [b"x=1".to_vec(), b"y=2".to_vec()]
+    );
+    seam::write_profile_string(&mut e, u, b"A", b"x", b"\xe4").unwrap();
+    assert_eq!(
+        std::fs::read(at("U.ini")).unwrap(),
+        u16le("[A]\r\nx=\u{e4}\r\ny=2\r\n[B]\r\nz=3\r\n")
+    );
+    seam::write_profile_section(&mut e, u, b"A", &[b"p=1".to_vec(), b"q=2".to_vec()]).unwrap();
+    assert_eq!(
+        std::fs::read(at("U.ini")).unwrap(),
+        u16le("[A]\r\np=1\r\nq=2\r\n[B]\r\nz=3\r\n")
+    );
+    seam::remove_profile_section(&mut e, u, b"A").unwrap();
+    assert_eq!(std::fs::read(at("U.ini")).unwrap(), u16le("[B]\r\nz=3\r\n"));
+    // Only the mark.
+    std::fs::write(game.join(r"Data\Config\M.ini"), [0xff, 0xfe]).unwrap();
+    let m = br"Data\Config\M.ini";
+    assert_eq!(
+        seam::write_profile_section(&mut e, m, b"A", &[b"x=5".to_vec()]),
+        Err(seam::ERROR_NOT_SUPPORTED)
+    );
+    seam::write_profile_string(&mut e, m, b"A", b"x", b"5").unwrap();
+    assert_eq!(
+        std::fs::read(at("M.ini")).unwrap(),
+        u16le("\r\n[A]\r\nx=5\r\n")
+    );
+    // UTF-16 BE: never written, the game's copy and the port's folder as they were.
+    let be: Vec<u8> = [0xfe, 0xff]
+        .into_iter()
+        .chain(
+            "[A]\r\nx=1\r\n"
+                .encode_utf16()
+                .flat_map(|u| u.to_be_bytes()),
+        )
+        .collect();
+    std::fs::write(game.join(r"Data\Config\BE.ini"), &be).unwrap();
+    let b = br"Data\Config\BE.ini";
+    assert_eq!(
+        seam::write_profile_string(&mut e, b, b"A", b"x", b"5"),
+        Err(seam::ERROR_NOT_SUPPORTED)
+    );
+    assert_eq!(
+        seam::remove_profile_key(&mut e, b, b"A", b"x"),
+        Err(seam::ERROR_NOT_SUPPORTED)
+    );
+    assert!(!at("BE.ini").exists());
+    assert_eq!(std::fs::read(game.join(r"Data\Config\BE.ini")).unwrap(), be);
 }

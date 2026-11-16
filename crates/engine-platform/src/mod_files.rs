@@ -21,9 +21,12 @@
 //!   or in the game's), as Windows answers `ERROR_PATH_NOT_FOUND` otherwise; in the port's folder
 //!   it is then made.
 //!
-//! Refused (never read, looked for or written: a read fails with `ERROR_ACCESS_DENIED`, the
-//! existence checks answer false): a name that leaves the game's folder (`..`, another drive, a
-//! UNC or device path, another full path), and a part that names a DOS device (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, the
+//! A `..` takes off the part before it, as Windows resolves a path (`Data\Config\..\x.ini` is
+//! `Data\x.ini`, kept and read back under that name). Refused (never read, looked for or written:
+//! a read answers as for a file that is not there, `ERROR_FILE_NOT_FOUND`, the existence checks
+//! false, a write `ERROR_ACCESS_DENIED`): a name that leaves the game's folder (a `..` past it,
+//! another drive, a UNC or device path, another full path), and a part, anywhere in the name,
+//! that names a DOS device (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, the
 //! superscript digits too, `CONIN$`, `CONOUT$`; with any extension). Before the first write into
 //! a folder of the port's folder, the real path of the part that exists (junctions, `subst`, short
 //! names resolved) must lie inside the port folder's real path; the folders checked are kept. The
@@ -124,12 +127,25 @@ pub fn relative_as(e: &Engine, name: &[u8], folder_call: bool) -> Result<Vec<u8>
     if rest.starts_with(b"\\") || rest.contains(&b':') || rest.ends_with(b"\\") {
         return Err(NotMine::Outside);
     }
+    // A device name in any part refuses the name, also in a part a later `..` takes off (so no
+    // path to a device is ever opened, whatever the `..`s do).
+    if rest
+        .split(|&b| b == b'\\')
+        .any(|part| !matches!(part, b"" | b"." | b"..") && is_device(part))
+    {
+        return Err(NotMine::Device);
+    }
+    // `..` takes off the part before it, as Windows resolves a path (`Data\Config\..\x.ini` is
+    // `Data\x.ini`); one that would leave the game's folder refuses the name.
     let mut parts: Vec<&[u8]> = Vec::new();
     for part in rest.split(|&b| b == b'\\') {
         match part {
             b"" | b"." => {}
-            b".." => return Err(NotMine::Outside),
-            _ if is_device(part) => return Err(NotMine::Device),
+            b".." => {
+                if parts.pop().is_none() {
+                    return Err(NotMine::Outside);
+                }
+            }
             _ => parts.push(part),
         }
     }
@@ -185,10 +201,11 @@ fn assert_locked(e: &Engine) {
 /// The bytes of the mod file `name`: written in this run, else the folder's copy, else the
 /// game's (the run's files, then the player's, read only). A copy that is there but cannot be
 /// read (access denied, held by another program, a folder of that name) fails with its error.
-/// A name [`relative`] refuses reads nothing: `ERROR_ACCESS_DENIED`.
+/// A name [`relative`] refuses reads nothing, as a file that is not there:
+/// `ERROR_FILE_NOT_FOUND` (an extender command then answers as for a missing file).
 pub fn read(e: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
     assert_locked(e);
-    let rel = relative(e, name).map_err(|_| ERROR_ACCESS_DENIED)?;
+    let rel = relative(e, name).map_err(|_| ERROR_FILE_NOT_FOUND)?;
     let mods = &state_ref!(e).mod_files;
     if let Some(bytes) = mods.written.get(&key(&rel)) {
         return Ok(bytes.clone());
@@ -277,6 +294,32 @@ fn confined(e: &mut Engine, folder: &Path, target: &Path) -> Result<(), u32> {
     Ok(())
 }
 
+/// The `.part` file a write goes through, made new: a plain file left there (an earlier write
+/// that stopped) is taken away first; anything else of that name (a link, a junction, a folder)
+/// refuses the write, `ERROR_ACCESS_DENIED`, and is left as it is. Made with `create_new`, so an
+/// entry that appears meanwhile is never opened (no link is ever written through).
+fn new_part(part: &std::ffi::OsStr) -> Result<std::fs::File, u32> {
+    match std::fs::symlink_metadata(part) {
+        Ok(meta) if meta.file_type().is_file() => {
+            std::fs::remove_file(part).map_err(|err| code_of(&err))?;
+        }
+        Ok(_) => {
+            println!(
+                "mod files: {} is not a plain file; nothing written through it",
+                Path::new(part).display()
+            );
+            return Err(ERROR_ACCESS_DENIED);
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(code_of(&err)),
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(part)
+        .map_err(|err| code_of(&err))
+}
+
 /// `CreateDirectoryA` for a mod's folder (one trailing separator allowed): made in the port's
 /// folder when there is one, and recorded in this run. `ERROR_ALREADY_EXISTS` when it exists,
 /// `ERROR_PATH_NOT_FOUND` when its parent exists nowhere, `ERROR_ACCESS_DENIED` for a name
@@ -326,13 +369,24 @@ pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
         let parent = target.parent().unwrap_or(&folder).to_path_buf();
         let mut part = target.clone().into_os_string();
         part.push(".part");
-        let done = confined(e, &folder, &parent).and_then(|()| {
-            std::fs::write(&part, bytes)
-                .and_then(|()| std::fs::rename(&part, &target))
-                .map_err(|err| code_of(&err))
-        });
+        let mut made = false;
+        let done = confined(e, &folder, &parent)
+            .and_then(|()| new_part(&part))
+            .and_then(|mut file| {
+                made = true;
+                use std::io::Write as _;
+                file.write_all(bytes)
+                    .and_then(|()| {
+                        drop(file);
+                        std::fs::rename(&part, &target)
+                    })
+                    .map_err(|err| code_of(&err))
+            });
         if let Err(code) = done {
-            let _ = std::fs::remove_file(&part);
+            // Only a `.part` this call made is taken away.
+            if made {
+                let _ = std::fs::remove_file(&part);
+            }
             println!(
                 "mod files: {} not written (Windows error {code})",
                 target.display()

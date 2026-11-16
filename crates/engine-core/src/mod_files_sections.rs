@@ -22,6 +22,7 @@
 //!   any other ends at its last entry's line end (for a section written whole: its last entry
 //!   with `=`), or at its heading's when it has none.
 
+use super::text::Decoded;
 use super::{
     read, read_or_error, trim_spaces, write_or_error, Engine, ERROR_FILE_NOT_FOUND,
     ERROR_PATH_NOT_FOUND,
@@ -45,9 +46,10 @@ enum Kind {
     Entry,
 }
 
-/// A space or a tab: what Windows skips at a line's start.
+/// A space, a tab or a form feed: what Windows skips at a line's start (`\f[A]` is a heading,
+/// `\fx=1` the key `x`: `files-measure/ini6-2026-11-16.txt`, `form feed ...`).
 fn blank(b: u8) -> bool {
-    b == b' ' || b == b'\t'
+    matches!(b, b' ' | b'\t' | 0x0c)
 }
 
 /// The lines of `text`, each line end CR LF, CR or LF.
@@ -85,7 +87,9 @@ fn first(text: &[u8], l: Line) -> usize {
 
 fn kind(text: &[u8], l: Line) -> Kind {
     let at = first(text, l);
-    if at >= l.text_end {
+    // A line of blanks and backspaces is blank (`x=1\r\n\b` reads the one entry `x=1`: ini6,
+    // `trailing backspace` and `trailing backspace line`).
+    if text[at..l.text_end].iter().all(|&b| blank(b) || b == 0x08) {
         return Kind::Blank;
     }
     match text[at] {
@@ -276,44 +280,62 @@ pub fn written_section(old: &[u8], section: &[u8], new_lines: &[Vec<u8>]) -> Vec
             let to = section_end(&text, &ls, found, key_line);
             [&text[..from], &block[..], &text[to..]].concat()
         }
-        None => [&text[..], b"[", section, b"]\r\n", &block[..]].concat(),
+        // A new heading is written without spaces around the name (` C ` writes `[C]`: ini6,
+        // `spaced section arg new`).
+        None => [&text[..], b"[", trim_spaces(section), b"]\r\n", &block[..]].concat(),
     }
 }
 
-/// The file's bytes before a change, as [`super::write_profile_string`] takes them: `None` when
-/// it is not there (`ERROR_FILE_NOT_FOUND` or `_PATH_NOT_FOUND`: Windows makes it, and the
-/// write then answers when its folder exists nowhere); any other error comes back, with one line
-/// in the log, and nothing is written (a kept file is never replaced by one made from nothing).
-fn before_change(e: &Engine, name: &[u8]) -> Result<Option<Vec<u8>>, u32> {
-    match read_or_error(e, name) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => Ok(None),
+/// The file's text before a change, as [`super::write_profile_string`] takes it ([`Decoded`]):
+/// `None` when it is not there (`ERROR_FILE_NOT_FOUND` or `_PATH_NOT_FOUND`: Windows makes it,
+/// and the write then answers when its folder exists nowhere). Any other error comes back, with
+/// one line in the log, and nothing is written (a kept file is never replaced by one made from
+/// nothing); so does a file whose encoding the writes were not measured on (`ERROR_NOT_SUPPORTED`,
+/// [`super::text`]), or a UTF-16 file that is only its mark (measured for a key write only).
+fn before_change(e: &Engine, name: &[u8]) -> Result<Option<Decoded>, u32> {
+    let file = match read_or_error(e, name) {
+        Ok(bytes) => Decoded::of(&bytes),
+        Err(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => return Ok(None),
         Err(code) => {
             println!(
                 "mod files: {} could not be read (Windows error {code}); not written, so it stays as it is",
                 String::from_utf8_lossy(name)
             );
-            Err(code)
+            return Err(code);
         }
+    };
+    if !file.writable || file.mark_only() {
+        return Err(super::unmodelled(name));
     }
+    Ok(Some(file))
 }
 
-/// `GetPrivateProfileSectionA(section, ..., name)` over [`read`]: [`section_lines`]; `None` when
-/// the file or the section is not there.
+/// `GetPrivateProfileSectionA(section, ..., name)` over [`read`]: [`section_lines`] (a UTF-16
+/// file's lines in the ANSI code page, [`super::text`]); `None` when the file or the section is
+/// not there.
 pub fn profile_section(e: &Engine, name: &[u8], section: &[u8]) -> Option<Vec<Vec<u8>>> {
-    section_lines(&read(e, name)?, section)
+    let file = Decoded::of(&read(e, name)?);
+    let lines = section_lines(&file.text, &file.arg(section))?;
+    Some(lines.iter().map(|l| file.answer(l)).collect())
 }
 
-/// `GetPrivateProfileSectionNamesA(..., name)` over [`read`]: [`section_names`]; `None` when the
-/// file is not there.
+/// `GetPrivateProfileSectionNamesA(..., name)` over [`read`]: [`section_names`] (as
+/// [`profile_section`] gives them); `None` when the file is not there.
 pub fn profile_section_names(e: &Engine, name: &[u8]) -> Option<Vec<Vec<u8>>> {
-    Some(section_names(&read(e, name)?))
+    let file = Decoded::of(&read(e, name)?);
+    Some(
+        section_names(&file.text)
+            .iter()
+            .map(|n| file.answer(n))
+            .collect(),
+    )
 }
 
 /// `WritePrivateProfileStringA(section, key, NULL, name)` over [`read_or_error`] and
 /// [`write_or_error`] ([`removed_key`]). Ok, as Windows answers, also when the key is not there;
 /// a file not there is made empty (measured). The error, writing nothing, when the file is there
-/// but cannot be read, its folder exists nowhere, or the write is refused.
+/// but cannot be read (or is not text the writes were measured on), its folder exists nowhere, or
+/// the write is refused.
 pub fn remove_profile_key(
     e: &mut Engine,
     name: &[u8],
@@ -322,8 +344,8 @@ pub fn remove_profile_key(
 ) -> Result<(), u32> {
     match before_change(e, name)? {
         None => write_or_error(e, name, b""),
-        Some(old) => match removed_key(&old, section, key) {
-            Some(new) => write_or_error(e, name, &new),
+        Some(file) => match removed_key(&file.text, &file.arg(section), &file.arg(key)) {
+            Some(new) => write_or_error(e, name, &file.encode(&new)),
             None => Ok(()),
         },
     }
@@ -334,8 +356,8 @@ pub fn remove_profile_key(
 pub fn remove_profile_section(e: &mut Engine, name: &[u8], section: &[u8]) -> Result<(), u32> {
     match before_change(e, name)? {
         None => write_or_error(e, name, b""),
-        Some(old) => match removed_section(&old, section) {
-            Some(new) => write_or_error(e, name, &new),
+        Some(file) => match removed_section(&file.text, &file.arg(section)) {
+            Some(new) => write_or_error(e, name, &file.encode(&new)),
             None => Ok(()),
         },
     }
@@ -350,9 +372,10 @@ pub fn write_profile_section(
     section: &[u8],
     new_lines: &[Vec<u8>],
 ) -> Result<(), u32> {
-    let old = before_change(e, name)?.unwrap_or_default();
-    let new = written_section(&old, section, new_lines);
-    write_or_error(e, name, &new)
+    let file = before_change(e, name)?.unwrap_or_else(|| Decoded::of(b""));
+    let lines: Vec<Vec<u8>> = new_lines.iter().map(|l| file.arg(l)).collect();
+    let new = written_section(&file.text, &file.arg(section), &lines);
+    write_or_error(e, name, &file.encode(&new))
 }
 
 #[cfg(test)]

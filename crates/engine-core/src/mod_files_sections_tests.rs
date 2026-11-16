@@ -8,6 +8,52 @@ fn list(items: &[&str]) -> Vec<Vec<u8>> {
     items.iter().map(|s| s.as_bytes().to_vec()).collect()
 }
 
+/// The cases REVIEW-642 found unmeasured, measured with the A calls on scratch files
+/// (`files-measure/ini6-2026-11-16.txt`): section and key arguments with spaces around them find
+/// their section and key, and a new heading is written without them (`... spaced ...`); a line
+/// of only a backspace is blank and a form feed is skipped at a line's start (`trailing
+/// backspace`, `form feed ...`); names above 0x7F keep their case (`ansi ...`).
+#[test]
+fn spaced_arguments_backspace_and_form_feed_lines() {
+    let text = b"[A]\r\nx=1\r\ny=2\r\n[B]\r\nz=3\r\n";
+    assert_eq!(section_lines(text, b" A ").unwrap(), list(&["x=1", "y=2"]));
+    assert_eq!(
+        removed_key(text, b"A", b" x ").unwrap(),
+        b"[A]\r\ny=2\r\n[B]\r\nz=3\r\n"
+    );
+    assert_eq!(
+        removed_key(text, b" A ", b"x").unwrap(),
+        b"[A]\r\ny=2\r\n[B]\r\nz=3\r\n"
+    );
+    assert_eq!(removed_section(text, b" A ").unwrap(), b"[B]\r\nz=3\r\n");
+    assert_eq!(
+        written_section(text, b" A ", &list(&["p=1"])),
+        b"[A]\r\np=1\r\n[B]\r\nz=3\r\n"
+    );
+    assert_eq!(
+        written_section(text, b" C ", &list(&["p=1"])),
+        b"[A]\r\nx=1\r\ny=2\r\n[B]\r\nz=3\r\n[C]\r\np=1\r\n"
+    );
+    for backspace in [&b"[A]\r\nx=1\r\n\x08"[..], b"[A]\r\nx=1\r\n\x08\r\n"] {
+        assert_eq!(section_lines(backspace, b"A").unwrap(), list(&["x=1"]));
+    }
+    let ff = b"\x0c[A]\r\nx=1\r\n";
+    assert_eq!(section_lines(ff, b"A").unwrap(), list(&["x=1"]));
+    assert_eq!(section_names(ff), list(&["A"]));
+    assert_eq!(
+        section_lines(b"[A]\r\n\x0cx=1\r\n", b"A").unwrap(),
+        list(&["x=1"])
+    );
+    let high = b"[\xc4rger]\r\n\xd6l=1\r\nx=2\r\n[\xe9t\xe9]\r\ny=3\r\n";
+    assert_eq!(section_lines(high, b"\xe4rger"), None);
+    assert_eq!(
+        section_lines(high, b"\xc4rger").unwrap(),
+        [b"\xd6l=1".to_vec(), b"x=2".to_vec()]
+    );
+    assert_eq!(removed_key(high, b"\xe4RGER", b"\xf6L"), None);
+    assert_eq!(removed_section(high, b"\xe4rger"), None);
+}
+
 /// `GetPrivateProfileSectionA` (buffer 0x1000): the entries, spaces and tabs off, comments and
 /// blank lines left out, `#` lines and lines without `=` kept, the first section only.
 #[test]

@@ -171,10 +171,21 @@ mod files {
         static WRITES: RefCell<u32> = const { RefCell::new(0) };
     }
 
+    /// The name as the platform keeps it (`engine_platform::mod_files::relative`): lower case,
+    /// `\`, a `..` taking off the part before it; `None` for one that leaves the game's folder.
     fn key(name: &[u8]) -> Option<Vec<u8>> {
         let name = name.to_ascii_lowercase();
-        let refused = name.split(|&b| b == b'\\' || b == b'/').any(|p| p == b"..");
-        (!refused).then_some(name)
+        let mut parts: Vec<&[u8]> = Vec::new();
+        for part in name.split(|&b| b == b'\\' || b == b'/') {
+            match part {
+                b"" | b"." => {}
+                b".." => {
+                    parts.pop()?;
+                }
+                _ => parts.push(part),
+            }
+        }
+        (!parts.is_empty()).then(|| parts.join(&b'\\'))
     }
     /// A file that is there but cannot be read (Windows' `ERROR_ACCESS_DENIED`).
     pub const LOCKED: &[u8] = b"\xff locked";
@@ -367,22 +378,59 @@ fn ini_values_written_and_read_back() {
     assert_eq!(string_result(&e, res).len(), 0x3fff);
 }
 
-/// A name that leaves the game's folder is refused by the seam: nothing written, result 0, as
-/// JIP answers for a file Windows could not write.
+/// A name that leaves the game's folder (a `..` past it: `data\config\..\..\..\x.ini`) is refused
+/// by the seam: nothing written, result 0, as JIP answers for a file Windows could not write, and
+/// nothing read there, as for a missing file. A name whose `..` stays inside the game's folder is
+/// an ordinary name and is written under the name it resolves to (REVIEW-642).
 #[test]
 fn a_refused_name_writes_nothing() {
     let mut e = files_setup();
     assert_eq!(
-        res_of(&mut e, 0x227c, &[s(b"A:x"), z(1.0), s(b"..\\..\\evil")]),
+        res_of(
+            &mut e,
+            0x227c,
+            &[s(b"A:x"), z(1.0), s(br"..\..\..\evil.cfg")]
+        ),
         0.0
     );
     assert_eq!(
-        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"../x.cfg")]),
+        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"../../../x.cfg")]),
         0.0
     );
     assert_eq!(files::writes(), 0);
-    // Nothing is read there either: a value or section asked for answers as a missing file.
-    assert_eq!(res_of(&mut e, 0x227a, &[s(b"A:x"), s(b"../x.cfg")]), 0.0);
+    assert_eq!(
+        res_of(&mut e, 0x227a, &[s(b"A:x"), s(b"../../../x.cfg")]),
+        0.0
+    );
+    // `..\x.cfg` from the config folder is `data\x.ini`: inside Data, written there.
+    assert_eq!(
+        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(br"..\x.cfg")]),
+        1.0
+    );
+    assert_eq!(files::get(r"data\x.ini").unwrap(), b"[A]\r\nx=v\r\n");
+    // JIP's `..\NVSE\Plugins\SomePlugin.ini` from the config folder: Data's plugin INI.
+    assert_eq!(
+        res_of(
+            &mut e,
+            0x227d,
+            &[
+                s(b"Main:bFoo"),
+                s(b"1"),
+                s(br"..\NVSE\Plugins\SomePlugin.ini")
+            ]
+        ),
+        1.0
+    );
+    assert_eq!(
+        files::get(r"data\nvse\plugins\SomePlugin.ini").unwrap(),
+        b"[Main]\r\nbFoo=1\r\n"
+    );
+    let res = res_of(
+        &mut e,
+        0x227b,
+        &[s(b"Main:bFoo"), s(b"../NVSE/Plugins/SomePlugin.ini")],
+    );
+    assert_eq!(string_result(&e, res), b"1");
     // `../x` is JIP's `..ini` in the config folder (the part after the last `.` made `ini`): a
     // name inside it, written.
     assert_eq!(
