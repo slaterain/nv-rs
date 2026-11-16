@@ -581,6 +581,7 @@ pub fn take_input() -> Input {
 struct Request {
     title: Vec<u8>,
     style: u32,
+    #[cfg_attr(not(windows), allow(dead_code))]
     ex_style: u32,
     rect: [i32; 4],
     parent: RealWindow,
@@ -2297,6 +2298,8 @@ pub fn texture_set_lod(e: &mut Engine, texture: u32, lod: u32, model: u32) {
 // Nothing is read or made when `NV_SHOT` is unset; the game's state and the model are not touched.
 // ---------------------------------------------------------------------------------------------
 pub(super) mod shot {
+    // Off Windows only the tests read most of this: the capture reads the real Direct3D 9.
+    #![cfg_attr(not(windows), allow(dead_code))]
     #[cfg(windows)]
     use super::*;
     use std::path::PathBuf;
@@ -2637,6 +2640,8 @@ pub(super) mod shot {
 //   reported too (`another mesh, same pixel shader as a face pass`: an NPC head to compare with).
 // ---------------------------------------------------------------------------------------------
 pub(super) mod face_check {
+    // Off Windows only the tests read these: the real Direct3D 9 that looks is Windows only.
+    #![cfg_attr(not(windows), allow(dead_code))]
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::{Mutex, OnceLock};
@@ -2737,6 +2742,7 @@ pub(super) mod face_check {
 }
 
 /// `NV_FACE_CHECK`: a texture was created (diagnostic only); the face texture is followed.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_texture(
     texture: u32,
     levels: &[u32],
@@ -2845,6 +2851,7 @@ pub(super) fn face_check_upload(
 }
 
 /// `NV_FACE_CHECK`: a sampler took a texture.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_bind(sampler: u32, texture: u32) {
     let mut s = face_check::state();
     let old = s.samplers.insert(sampler, texture).unwrap_or(0);
@@ -2865,6 +2872,7 @@ pub(super) fn face_check_bind(sampler: u32, texture: u32) {
 }
 
 /// `NV_FACE_CHECK`: a shader was set.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_shader(shader: u32, pixel: bool) {
     let mut s = face_check::state();
     if pixel {
@@ -2876,6 +2884,7 @@ pub(super) fn face_check_shader(shader: u32, pixel: bool) {
 
 /// `NV_FACE_CHECK`: a frame ends: its indexed draw counts (the first 12 frames once the face texture
 /// exists) and, once, the projection transform as set.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_present() {
     let mut s = face_check::state();
     if s.faces.is_empty() {
@@ -2912,6 +2921,7 @@ pub(super) fn face_check_present() {
 
 /// `NV_FACE_CHECK`: an indexed draw with the face texture bound, or one of the few after it.
 /// `NV_FACE_CHECK`: a render state was set.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_render_state(state: u32, value: u32) {
     let mut s = face_check::state();
     s.render_states.insert(state, value);
@@ -2921,6 +2931,7 @@ pub(super) fn face_check_render_state(state: u32, value: u32) {
 /// `NV_FACE_CHECK`: float shader constants were set (`pixel` for the pixel shader's).
 /// `NV_FACE_CHECK`: float constants set (`words`: the registers, 4 words each, as the call gave
 /// them).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_constants(pixel: bool, start: u32, words: &[u32]) {
     let mut s = face_check::state();
     for (i, register) in words.chunks_exact(4).take(256).enumerate() {
@@ -2936,6 +2947,7 @@ pub(super) fn face_check_constants(pixel: bool, start: u32, words: &[u32]) {
 }
 
 /// The render states the face check prints, with their `D3DRENDERSTATETYPE` numbers.
+#[cfg_attr(not(windows), allow(dead_code))]
 const FACE_CHECK_STATES: [(&str, u32); 14] = [
     ("ZENABLE", 7),
     ("FILLMODE", 8),
@@ -2955,6 +2967,7 @@ const FACE_CHECK_STATES: [(&str, u32); 14] = [
 
 /// The determinant of the upper-left 3x3 of three rows of four float words (a negative one
 /// mirrors, flipping the triangles' winding).
+#[cfg_attr(not(windows), allow(dead_code))]
 fn face_check_det3(rows: [&[u32]; 3]) -> f32 {
     let m = |r: usize, c: usize| f32::from_bits(rows[r][c]);
     m(0, 0) * (m(1, 1) * m(2, 2) - m(1, 2) * m(2, 1))
@@ -2964,6 +2977,7 @@ fn face_check_det3(rows: [&[u32]; 3]) -> f32 {
 
 /// The determinants the face check prints: view (2), projection (3), world (256) when set, and
 /// of vertex constants c0..c2 (rows) when set.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_determinants(s: &face_check::State) -> String {
     let mut parts = Vec::new();
     for (name, state) in [("view", 2u32), ("projection", 3), ("world", 256)] {
@@ -2985,6 +2999,7 @@ pub(super) fn face_check_determinants(s: &face_check::State) -> String {
 }
 
 /// One line of float constants: `cN=(x,y,z,w)` for each register set so far, in order.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_constant_list(map: &HashMap<u32, [u32; 4]>, below: u32) -> String {
     let mut registers: Vec<u32> = map.keys().copied().filter(|&r| r < below).collect();
     registers.sort();
@@ -3000,6 +3015,7 @@ pub(super) fn face_check_constant_list(map: &HashMap<u32, [u32; 4]>, below: u32)
 
 /// `NV_FACE_CHECK`: an indexed draw with the face texture bound, or one of the few after it.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn face_check_draw(
     kind: u32,
     base_vertex: u32,
