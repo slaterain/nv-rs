@@ -1181,7 +1181,8 @@ fn host_name_text(name: &std::ffi::OsStr) -> String {
 ///
 /// On Linux and macOS: the attributes as [`attributes`] gives them there (a directory, else
 /// `ARCHIVE`), and the system's own creation, last-access and last-write times as Windows'
-/// `FILETIME` ([`filetime`]). A file system that keeps no creation time stops the run.
+/// `FILETIME` ([`filetime`]); on a file system that keeps no creation time, the last-write time
+/// stands for it, as Wine answers ([`creation_time`]).
 fn write_find_data(
     e: &mut Engine,
     data: Ptr,
@@ -1217,7 +1218,7 @@ fn write_find_data(
             } else {
                 FILE_ATTRIBUTE_ARCHIVE
             },
-            time("creation", meta.created()),
+            time("creation", creation_time(meta.created(), meta.modified())),
             time("last-access", meta.accessed()),
             time("last-write", meta.modified()),
         )
@@ -1234,6 +1235,19 @@ fn write_find_data(
     e.mem.set_u32(d + 0x24, 0);
     e.mem.set_u32(d + 0x28, 0);
     write_names(e, d, &ansi_bytes(stored), b"")
+}
+
+/// An entry's creation time off Windows: the system's own (`created`) when its file system keeps
+/// one, else its last-write time (`modified`), as Wine answers on a system whose file
+/// information has no birth time (Wine 11.22, `dlls/ntdll/unix/file.c` `get_file_times`, lines
+/// 1632-1668: `*creation = *mtime` when `struct stat` has no birth time). Linux's `/proc`,
+/// tmpfs on older kernels, NFS and many FUSE mounts keep none.
+#[cfg(any(not(windows), test))]
+fn creation_time(
+    created: std::io::Result<std::time::SystemTime>,
+    modified: std::io::Result<std::time::SystemTime>,
+) -> std::io::Result<std::time::SystemTime> {
+    created.or(modified)
 }
 
 /// A time of this system as Windows' `FILETIME`: 100-nanosecond ticks since 1601-01-01 UTC
@@ -1262,8 +1276,19 @@ fn filetime(t: std::time::SystemTime) -> u64 {
 
 #[cfg(test)]
 mod tests_filetime {
-    use super::filetime;
+    use super::{creation_time, filetime};
     use std::time::{Duration, UNIX_EPOCH};
+
+    /// The creation time: the system's own, else the last-write time (Wine's answer).
+    #[test]
+    fn with_no_creation_time_the_last_write_time_stands_for_it() {
+        let made = UNIX_EPOCH + Duration::from_secs(100);
+        let written = UNIX_EPOCH + Duration::from_secs(200);
+        let none = || std::io::Error::from(std::io::ErrorKind::Unsupported);
+        assert_eq!(creation_time(Ok(made), Ok(written)).unwrap(), made);
+        assert_eq!(creation_time(Err(none()), Ok(written)).unwrap(), written);
+        assert!(creation_time(Err(none()), Err(none())).is_err());
+    }
 
     /// Linux's and macOS's file times as `FILETIME`: ticks of 100 ns since 1601, the rest of a
     /// tick dropped (down, also before 1970), nothing before 1601.
@@ -2148,7 +2173,7 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
                 FILE_ATTRIBUTE_ARCHIVE
             },
             size: meta.len(),
-            created: time(meta.created())?,
+            created: time(creation_time(meta.created(), meta.modified()))?,
             accessed: time(meta.accessed())?,
             written: time(meta.modified())?,
         })
@@ -3660,7 +3685,8 @@ mod tests_player_files {
     }
 
     /// Linux and macOS: the root of drive Z: (this system's `/`) is a folder like any other: a
-    /// missing file there answers file-not-found, and `Z:\tm?` lists `/tmp`.
+    /// missing file there answers file-not-found, and `Z:\*` lists it (on Linux with `/proc`,
+    /// whose entries keep no creation time).
     #[cfg(not(windows))]
     #[test]
     fn the_root_of_drive_z_is_a_folder() {
@@ -3680,11 +3706,26 @@ mod tests_player_files {
         );
         assert_eq!(h, INVALID_HANDLE_VALUE);
         assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
-        // `tm?`, not `*`: a listing of every entry of `/` reaches `/proc`, whose file system keeps
-        // no creation time, and that stops the run as not provided (`write_find_data`; CI's
-        // Linux job, run 43920957293).
-        let names = listed(&mut e, r"Z:\tm?");
-        assert_eq!(names, [b"tmp".to_vec()]);
+        // Every entry of `/`, `/proc` among them on Linux (a file system that keeps no creation
+        // time: CI's Linux job once stopped here, run 43920957293).
+        let names = listed(&mut e, r"Z:\*");
+        assert!(names.contains(&b"tmp".to_vec()), "{names:?}");
+        // An entry with no creation time: the last-write time stands for it (as Wine answers).
+        #[cfg(target_os = "linux")]
+        {
+            assert!(std::fs::metadata("/proc/version")
+                .unwrap()
+                .created()
+                .is_err());
+            e.mem.set_cstr(name, br"Z:\proc\version");
+            let data = e.mem.alloc(0x140);
+            let found = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data));
+            assert_ne!(found, INVALID_HANDLE_VALUE);
+            let time = |at: u32| (e.mem.u32(data + at), e.mem.u32(data + at + 4));
+            assert_eq!(time(4), time(0x14), "creation = last write");
+            assert_ne!(time(4), (0, 0));
+            find_close(&mut e, found);
+        }
     }
 
     /// Linux and macOS: names Windows cannot hold in a folder (a `:`, a `\`, a dot or space at
