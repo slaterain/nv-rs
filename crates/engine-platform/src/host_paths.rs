@@ -138,7 +138,8 @@ pub fn win32_parts(path: &str) -> Result<(Vec<&str>, bool), NotHere> {
     if !trailing && parts.last().is_some_and(|p| p.eq_ignore_ascii_case("NUL")) {
         return Err(NotHere::Device);
     }
-    Ok((parts, trailing && !parts.is_empty()))
+    let trailing = trailing && !parts.is_empty();
+    Ok((parts, trailing))
 }
 
 /// A folder that held more than one name for one of a path's parts: the folder, the part as the
@@ -467,7 +468,9 @@ fn several_lines(several: Vec<Several>) -> Vec<String> {
     if several.is_empty() {
         return vec![];
     }
-    static SAID: Mutex<Option<HashSet<(String, Vec<u16>)>>> = Mutex::new(None);
+    /// A folder and a part's name as Windows compares it.
+    type Said = HashSet<(String, Vec<u16>)>;
+    static SAID: Mutex<Option<Said>> = Mutex::new(None);
     let mut said = SAID.lock().unwrap_or_else(|p| p.into_inner());
     let said = said.get_or_insert_with(HashSet::new);
     several
@@ -598,9 +601,7 @@ mod tests {
     fn tree_exists(p: &str) -> bool {
         let (folder, name) = p.rsplit_once('/').unwrap();
         let folder = if folder.is_empty() { "/" } else { folder };
-        tree()
-            .get(folder)
-            .is_some_and(|n| n.iter().any(|x| *x == name))
+        tree().get(folder).is_some_and(|n| n.contains(&name))
     }
 
     /// [`resolve`] over [`tree`], and how many folders it listed.
@@ -713,7 +714,9 @@ mod tests {
     /// Windows 11 26200, 2026-11-16; `D` a scratch folder holding `x.dds` and `sub\y.txt`).
     #[test]
     fn names_are_read_as_windows_reads_them() {
-        let parts = |p: &str| win32_parts(p).unwrap();
+        fn parts(p: &str) -> (Vec<&str>, bool) {
+            win32_parts(p).unwrap()
+        }
         // The last name loses its dots and spaces: `x.dds `, `x.dds.`, `x.dds. . `, `x.dds..`.
         for p in ["/D/x.dds ", "/D/x.dds.", "/D/x.dds. . ", "/D/x.dds.."] {
             assert_eq!(parts(p), (vec!["D", "x.dds"], false), "{p:?}");
@@ -1119,11 +1122,16 @@ mod tests {
         let first = several_lines(vec![several("/said-once", "DATA")]);
         assert_eq!(
             first,
-            [r#"files: /said-once holds 2 names for the game's "DATA" (Data, data); "Data" is taken"#]
+            [
+                r#"files: /said-once holds 2 names for the game's "DATA" (Data, data); "Data" is taken"#
+            ]
         );
         assert!(several_lines(vec![several("/said-once", "data")]).is_empty());
         // By Windows' comparison, outside ASCII too.
-        assert_eq!(several_lines(vec![several("/said-once", "ÄGYPTEN")]).len(), 1);
+        assert_eq!(
+            several_lines(vec![several("/said-once", "ÄGYPTEN")]).len(),
+            1
+        );
         assert!(several_lines(vec![several("/said-once", "ägypten")]).is_empty());
         assert_eq!(several_lines(vec![several("/said-twice", "data")]).len(), 1);
     }
