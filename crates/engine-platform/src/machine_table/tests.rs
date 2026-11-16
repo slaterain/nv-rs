@@ -592,22 +592,22 @@ mod this_system {
     }
 
     /// The system's own zone files for the cases above (where the system has them): each read,
-    /// answered for 2025 to 2030, and its bias and daylight bias in July 2026 as the zone has
-    /// them.
+    /// answered for 2025 to 2030, and the offsets in force in July and January 2026.
     #[test]
     fn the_systems_zone_files_are_answered() {
-        for (name, bias, daylight_bias) in [
-            ("America/New_York", 300, -60),
-            ("Asia/Jerusalem", -120, -60),
-            ("Australia/Sydney", -600, -60),
-            ("Asia/Tokyo", -540, 0),
-            ("Asia/Kolkata", -330, 0),
-            ("Asia/Kathmandu", -345, 0),
-            ("Pacific/Chatham", -765, -60),
-            ("America/Santiago", 240, -60),
-            ("Australia/Lord_Howe", -630, -30),
-            ("America/Nuuk", 120, -60),
-            ("Europe/Dublin", -60, 60),
+        // (zone, minutes to add to local time for UTC on 15 July and on 15 January 2026).
+        for (name, july, january) in [
+            ("America/New_York", 240, 300),
+            ("Asia/Jerusalem", -180, -120),
+            ("Australia/Sydney", -600, -660),
+            ("Asia/Tokyo", -540, -540),
+            ("Asia/Kolkata", -330, -330),
+            ("Asia/Kathmandu", -345, -345),
+            ("Pacific/Chatham", -765, -825),
+            ("America/Santiago", 240, 180),
+            ("Australia/Lord_Howe", -630, -660),
+            ("America/Nuuk", 60, 120),
+            ("Europe/Dublin", -60, 0),
         ] {
             let path = zone_folder().join(name);
             let Ok(Ok(bytes)) = read_zone_file(&path) else {
@@ -619,8 +619,14 @@ mod this_system {
                 zone_information_at(&zone, at(year, 7, 1, 0))
                     .unwrap_or_else(|why| panic!("{name}: {why}"));
             }
+            // The offsets in force, whichever form the file has (Dublin's "negative" daylight time,
+            // or Windows' own form where the system's files use it, as macOS's do).
             let z = ZoneInfo::from_bytes(&zone_information_at(&zone, at(2026, 7, 1, 0)).unwrap());
-            assert_eq!((z.bias, z.daylight_bias), (bias, daylight_bias), "{name}");
+            let found = (
+                zone::bias_at(&z, at(2026, 7, 15, 12)),
+                zone::bias_at(&z, at(2026, 1, 15, 12)),
+            );
+            assert_eq!(found, (july, january), "{name}");
         }
     }
 

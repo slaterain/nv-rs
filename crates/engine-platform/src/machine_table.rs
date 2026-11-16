@@ -46,7 +46,9 @@
 //! for every year: past changes of a zone's rules are not kept (Windows keeps some). A zone whose
 //! daylight time is "negative" in the zone file (Dublin: standard IST, +1 h, in summer; GMT as its
 //! daylight time in winter) answers that way: `DaylightBias` +60 and daylight time in winter,
-//! where Windows' entry says the reverse; the offset at every moment is the same. The game itself
+//! where Windows' entry says the reverse; the offset at every moment is the same. (Linux's zone
+//! files have that form; macOS's have Windows' own, GMT standard and IST daylight, and answer
+//! so.) The game itself
 //! is never shown the `TZ` variable (`super::process::shown_to_the_game`); [`this_zone`] reads it.
 // The pure parts run in the tests on every system; only Linux and macOS use them in a run.
 #![cfg_attr(windows, allow(dead_code))]
