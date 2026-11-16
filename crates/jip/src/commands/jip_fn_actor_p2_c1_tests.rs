@@ -459,9 +459,12 @@ fn hit_node_needs_a_projectile_and_a_hit() {
     e.mem.set_u32(AREA + 0xf000, 0);
     assert_eq!(hit_node(&mut e, ACTOR), b"NULL");
     e.mem.set_u32(AREA + 0xf000, HIT);
-    // Not an actor, even with a process word where an actor has one.
+    // Not an actor, even with a process word where an actor has one and an impact on it with a
+    // named body.
     e.mem.set_u32(PLAIN + 0x68, PROCESS);
+    e.mem.set_u32(AREA + 0xd000, PLAIN);
     assert_eq!(hit_node(&mut e, PLAIN), b"NULL");
+    e.mem.set_u32(AREA + 0xd000, ACTOR2);
     // Another actor's impact is that actor's.
     e.mem.set_u32(ACTOR2 + 0x68, PROCESS);
     assert_eq!(hit_node(&mut e, ACTOR2), b"Other");
@@ -530,7 +533,8 @@ fn attach_ash_pile_ex_needs_an_actor_and_an_ash_pile_form() {
     assert_eq!(run(&mut e, 0x2840, ACTOR, &[r(1)]), 0.0);
     e.mem.set_u8(pile + 6, 0x20);
     assert_eq!(run(&mut e, 0x2840, PLAIN, &[r(1)]), 0.0);
-    // A null form (JIP would test byte 6 of address 0).
+    // A reference variable holding no form: the reader refuses it (as xNVSE's ExtractArgs does), so
+    // the command does nothing; the port's own null check behind it is never reached this way.
     set_ref(&mut e, 2, 0);
     assert_eq!(run(&mut e, 0x2840, ACTOR, &[r(2)]), 0.0);
     assert!(called(ATTACH_ASH_PILE_FN).is_empty());
@@ -1262,6 +1266,8 @@ fn play_sound_3d_node_needs_a_sound_form() {
     let mut e = setup();
     sound_scene(&mut e);
     e.mem.set_u32(A_KEY, 5);
+    // A reference variable holding no form: the reader refuses it (as xNVSE's ExtractArgs does), so
+    // nothing is asked of the game; the port's own null check behind it is never reached this way.
     set_ref(&mut e, 2, 0);
     assert_eq!(run(&mut e, 0x291e, PLAIN, &[r(2), s(b"Head")]), 0.0);
     assert!(called(INIT_SOUND_FN).is_empty());
