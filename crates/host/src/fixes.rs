@@ -1019,6 +1019,83 @@ pub fn is_play_run(env: impl Fn(&str) -> Option<String>) -> bool {
     env("NV_SETTINGS").is_some()
 }
 
+/// A start-up line when a launcher's play run ([`is_play_run`]) runs as a test because the
+/// environment names a test's variable ([`TEST_VARIABLES`]) or a fix's own: `Fallout.ini`'s
+/// `[nv-rs ...]` keys are then not read, and play's defaults are not taken. What the run got
+/// instead is read from `choice`, the run's own choice: the variables a launcher may pass on
+/// (`NV_PRESET`, `NV_THREADS`, `NV_RENDER_THREAD`, `NV_BORDERLESS`: Play.exe does, for a test)
+/// still decide, and the game's own `bFull Screen=1` still gives the borderless window
+/// (`crate::full_screen`). A fix's variable is set for play by its `[nv-rs Fixes]` line instead; a
+/// test's variable has no line and is unset for play. `None` for any other run, and for a run only
+/// its command line marks as a test (the viewer's `--movement-missing` and `--movement-probe`),
+/// which is no play. (2026-11-16: `NV_UIO=1` handed over from the play folder's settings.ini did
+/// this, and the framed window, sized in scaled pixels, spilled onto the next monitor.)
+pub fn play_run_taken_as_test(
+    choice: &Choice,
+    env: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
+    if !is_play_run(&env) {
+        return None;
+    }
+    let tests: Vec<&str> = TEST_VARIABLES
+        .iter()
+        .copied()
+        .filter(|name| env(name).is_some())
+        .collect();
+    let fixes: Vec<&str> = FIXES
+        .iter()
+        .map(|f| f.env)
+        .filter(|name| env(name).is_some())
+        .collect();
+    if tests.is_empty() && fixes.is_empty() {
+        return None;
+    }
+    let names: Vec<&str> = tests.iter().chain(&fixes).copied().collect();
+    let window = match choice.borderless {
+        Some(true) => "the borderless window",
+        Some(false) => {
+            "the window as the game makes it (NV_BORDERLESS=0; borderless still if the game asks for full screen)"
+        }
+        None => {
+            "the window as the game makes it (borderless only if the game asks for full screen)"
+        }
+    };
+    // `NV_REPEATABLE` steps the threads whatever `NV_THREADS` says (`Host::start_with`).
+    let threads = if tests.contains(&"NV_REPEATABLE") {
+        "stepped (NV_REPEATABLE)"
+    } else {
+        choice.threads.trim()
+    };
+    let mut note = format!(
+        "A launcher's play run that runs as a test because of {}: Fallout.ini's [nv-rs ...] keys are not read. \
+         This run: preset {}, threads {threads}, render thread {}, {window}.",
+        names.join(", "),
+        choice.preset.name(),
+        if choice.render_thread { "on" } else { "off" },
+    );
+    if !fixes.is_empty() {
+        let rows = crate::game_ini::rows();
+        let lines: Vec<String> = fixes
+            .iter()
+            .map(|name| {
+                let on = env(name).as_deref().map(str::trim) != Some("0");
+                match rows.iter().find(|r| r.switch == *name) {
+                    Some(row) => format!("{}={}", row.key, u8::from(on)),
+                    None => format!("{name}'s line"),
+                }
+            })
+            .collect();
+        note.push_str(&format!(
+            " For play, set {} in Fallout.ini's [nv-rs Fixes] instead of the variable.",
+            lines.join(", ")
+        ));
+    }
+    if !tests.is_empty() {
+        note.push_str(&format!(" For play, unset {}.", tests.join(", ")));
+    }
+    Some(note)
+}
+
 /// The settings file's text: a UTF-8 byte order mark is dropped and UTF-16 (what PowerShell 5.1's
 /// `>` writes) is decoded; anything else is read as UTF-8, bad bytes replaced.
 fn decode_settings(bytes: &[u8]) -> String {
@@ -1662,6 +1739,110 @@ mod tests {
         assert!(is_play_run(env_of(&[("NV_SETTINGS", "")])));
         assert!(!is_play_run(env_of(&[("NV_SAVE_OUT", "x")])));
         assert!(!is_play_run(env_of(&[("NV_D3D9", "real")])));
+    }
+
+    /// A launcher's play run that a test's or a fix's variable makes a test says so at start-up
+    /// (2026-11-16: `NV_UIO=1` from the play folder took play's preset, threads and borderless
+    /// window away, and that line would have named it), saying what this run got, from its own
+    /// choice: Play.exe passes the file's choices on as variables for a test, and those still
+    /// decide. A fix's variable is pointed at its `[nv-rs Fixes]` line, a test's at being unset.
+    /// The line is there exactly when the run did not read `Fallout.ini` (`PLAYER_INI`'s frame
+    /// limit 90 not taken), for every fix's and every test's variable. A play run without one,
+    /// and any run no launcher started, says nothing.
+    #[test]
+    fn a_play_run_made_a_test_says_so() {
+        let run = |pairs: &'static [(&'static str, &'static str)]| {
+            let choice = Choice::from_texts(None, Some(PLAYER_INI), env_of(pairs)).unwrap();
+            (play_run_taken_as_test(&choice, env_of(pairs)), choice)
+        };
+        let note = |pairs: &'static [(&'static str, &'static str)]| run(pairs).0;
+        // Tonight's run: the play folder's script, NV_UIO=1 and nothing else.
+        let uio = note(&[("NV_SETTINGS", "x"), ("NV_UIO", "1")]).unwrap();
+        assert_eq!(
+            uio,
+            "A launcher's play run that runs as a test because of NV_UIO: Fallout.ini's [nv-rs ...] keys are not read. \
+             This run: preset vanilla, threads stepped, render thread off, the window as the game makes it \
+             (borderless only if the game asks for full screen). For play, set bUIO=1 in Fallout.ini's \
+             [nv-rs Fixes] instead of the variable."
+        );
+        // Play.exe's test run: the file's choices passed on as variables decide, and the line says so.
+        let passed = note(&[
+            ("NV_SETTINGS", "x"),
+            ("NV_UIO", "1"),
+            ("NV_BORDERLESS", "1"),
+            ("NV_THREADS", "real"),
+            ("NV_RENDER_THREAD", "1"),
+            ("NV_PRESET", "fixes"),
+        ])
+        .unwrap();
+        assert!(
+            passed.contains(
+                "This run: preset fixes, threads real, render thread on, the borderless window."
+            ),
+            "{passed}"
+        );
+        assert!(!passed.contains("stepped") && !passed.contains("as the game makes it"));
+        let off = note(&[
+            ("NV_SETTINGS", "x"),
+            ("NV_UIO", "1"),
+            ("NV_BORDERLESS", "0"),
+        ])
+        .unwrap();
+        assert!(
+            off.contains(
+                "the window as the game makes it (NV_BORDERLESS=0; borderless still if the game asks for full screen)."
+            ),
+            "{off}"
+        );
+        // NV_REPEATABLE steps the threads whatever NV_THREADS says, and the line says so.
+        let repeatable = note(&[
+            ("NV_SETTINGS", "x"),
+            ("NV_REPEATABLE", "600"),
+            ("NV_THREADS", "real"),
+        ])
+        .unwrap();
+        assert!(
+            repeatable.contains("threads stepped (NV_REPEATABLE), render thread"),
+            "{repeatable}"
+        );
+        // A test's variable is unset for play; a fix's line takes the variable's value.
+        let two = note(&[("NV_SETTINGS", "x"), ("NV_PROFILE", "x"), ("NV_UNCAP", "0")]).unwrap();
+        assert!(two.contains("because of NV_PROFILE, NV_UNCAP:"), "{two}");
+        assert!(
+            two.contains("set bUncap=0 in Fallout.ini's [nv-rs Fixes]"),
+            "{two}"
+        );
+        assert!(two.ends_with(" For play, unset NV_PROFILE."), "{two}");
+        let test_only = note(&[("NV_SETTINGS", "x"), ("NV_PROFILE", "x")]).unwrap();
+        assert!(!test_only.contains("[nv-rs Fixes]"), "{test_only}");
+        // Every fix's and test's variable: the line exactly when Fallout.ini went unread.
+        for name in FIXES
+            .iter()
+            .map(|f| f.env)
+            .chain(TEST_VARIABLES.iter().copied())
+        {
+            let pairs: &'static [(&str, &str)] =
+                Box::leak(vec![("NV_SETTINGS", "x"), (name, "1")].into_boxed_slice());
+            let (line, choice) = run(pairs);
+            assert!(line.is_some(), "{name}");
+            assert_eq!(line.is_some(), choice.frame_limit != 90, "{name}");
+            if FIXES.iter().any(|f| f.env == name) {
+                assert!(line.unwrap().contains("[nv-rs Fixes]"), "{name}");
+            }
+        }
+        let (line, choice) = run(&[("NV_SETTINGS", "x")]);
+        assert_eq!((line, choice.frame_limit), (None, 90));
+        assert_eq!(note(&[("NV_SETTINGS", "x")]), None);
+        assert_eq!(
+            note(&[
+                ("NV_SETTINGS", "x"),
+                ("NV_SAVE_OUT", "x"),
+                ("NV_D3D9", "wgpu")
+            ]),
+            None
+        );
+        assert_eq!(note(&[("NV_UIO", "1")]), None);
+        assert_eq!(note(&[]), None);
     }
 
     /// Play.exe takes the player options' variables out in play and passes the file's choices on
