@@ -17,7 +17,6 @@ use crate::game::{
     ActorHitData, Animation, BSFadeNode, BhkRagdollController, JipActorFlags, JipFormFlags,
     MiddleHighProcess, NiAVObject, TESForm, TESObjectREFR,
 };
-use crate::Jip;
 use engine_core::extend::{Hook, Owner, SiteSlot};
 use engine_core::prelude::*;
 use nvse::commands::Read;
@@ -186,8 +185,35 @@ pub struct State {
     pub critical_hit: Vec<CriticalHit>,
 }
 
-fn state(e: &mut Engine) -> &mut State {
-    &mut e.ext::<Jip>().actor_hooks
+/// JIP's actor hook state for every engine of the run (JIP's globals): a lock-free slot
+/// ([`Engine::ext_free`], made at install before the threads start) holding the one [`State`]
+/// behind a std `RwLock`. The seams run on the AI and loader threads (animations, hits, reloads,
+/// ragdolls; the hit-data routine on every hit) and read it for one copy of a script list;
+/// the commands write it. The lock is a leaf: a guard borrows the engine, so no game call, script
+/// call or second slot access can happen while it is held (the compiler refuses them), and it
+/// never waits on JIP's or xNVSE's shared slot.
+#[derive(Default)]
+pub struct Unlocked(std::sync::RwLock<State>);
+
+/// Makes the slot (before the threads start).
+pub(crate) fn make_slot(e: &mut Engine) {
+    e.ext_free::<Unlocked>();
+}
+
+/// The state to change (the commands, the pre-load).
+pub(crate) fn state(e: &mut Engine) -> std::sync::RwLockWriteGuard<'_, State> {
+    e.ext_free::<Unlocked>()
+        .0
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The state to read (the seams).
+fn read(e: &mut Engine) -> std::sync::RwLockReadGuard<'_, State> {
+    e.ext_free::<Unlocked>()
+        .0
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Puts JIP's actor hooks in, when it answers "installed": the seams' handlers, the hit-data
@@ -244,9 +270,11 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
 /// for every actor (the infinite-ammo users go), and the ragdoll hook loses its users and
 /// scripts. The other events stay, as in JIP.
 pub fn pre_load(e: &mut Engine) {
-    let s = state(e);
-    let size = (s.fire_weapon.len() + s.fire_weapon_scripts.len()) as u32;
-    let ragdoll = std::mem::take(&mut s.ragdoll);
+    let (size, ragdoll) = {
+        let mut s = state(e);
+        let size = (s.fire_weapon.len() + s.fire_weapon_scripts.len()) as u32;
+        (size, std::mem::take(&mut s.ragdoll))
+    };
     if size != 0 {
         e.set_hook_users(Hook::RemoveAmmo, size);
     } else {
@@ -334,13 +362,12 @@ fn set_anim_group_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
             return None;
         }
     }
-    if !state(e).play_group.is_empty() {
-        if let Some(scripts) = scripts_of(&state(e).play_group, kind) {
-            invoke(e, &scripts, actor, &[kind]);
-        }
+    let scripts = scripts_of(&read(e).play_group, kind);
+    if let Some(scripts) = scripts {
+        invoke(e, &scripts, actor, &[kind]);
     }
     if actor_flags3(e, actor) & ON_PLAY_GROUP != 0 {
-        let scripts = state(e)
+        let scripts = read(e)
             .play_group_actors
             .get(&actor)
             .and_then(|m| scripts_of(m, kind));
@@ -366,12 +393,13 @@ fn on_hit_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if e.mem.u8(actor) & 8 == 0 || e.mem.u16(actor + 2) != ACTOR_VTABLE_HIGH {
         return None;
     }
-    if !state(e).on_hit_scripts.is_empty() {
-        let scripts = state(e).on_hit_scripts.clone();
+    let scripts = read(e).on_hit_scripts.clone();
+    if !scripts.is_empty() {
         invoke(e, &scripts, actor, &[]);
     }
     if actor_flags3(e, actor) & ON_HIT != 0 {
-        if let Some(scripts) = scripts_of(&state(e).on_hit, actor) {
+        let scripts = scripts_of(&read(e).on_hit, actor);
+        if let Some(scripts) = scripts {
             invoke(e, &scripts, actor, &[]);
         }
     }
@@ -398,7 +426,8 @@ fn damage_actor_value_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         {
             return Some(0);
         }
-        if let Some(scripts) = scripts_of(&state(e).health_damage, actor) {
+        let scripts = scripts_of(&read(e).health_damage, actor);
+        if let Some(scripts) = scripts {
             let source = if source != 0 {
                 source.wrapping_sub(AV_OWNER_OFFSET)
             } else {
@@ -419,7 +448,8 @@ fn damage_actor_value_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if now > 0.0 {
         return Some(0);
     }
-    if let Some(scripts) = scripts_of(&state(e).crippled_limb, actor) {
+    let scripts = scripts_of(&read(e).crippled_limb, actor);
+    if let Some(scripts) = scripts {
         let limb = (code & !0xff) | u32::from(low.wrapping_sub(PERCEPTION_CONDITION));
         invoke(e, &scripts, actor, &[limb]);
     }
@@ -432,7 +462,8 @@ fn damage_actor_value_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 fn equip_aid_item_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let (item, actor) = (a[0], a[1]);
     if form_flags6(e, item) & FORM_EVENT_HANDLERS != 0 {
-        if let Some(scripts) = scripts_of(&state(e).use_aid_item, item) {
+        let scripts = scripts_of(&read(e).use_aid_item, item);
+        if let Some(scripts) = scripts {
             invoke(e, &scripts, actor, &[item]);
         }
     }
@@ -469,7 +500,7 @@ fn reload_weapon_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     } else {
         0
     };
-    let scripts = state(e).reload_weapon.clone();
+    let scripts = read(e).reload_weapon.clone();
     invoke(e, &scripts, actor, &[weapon]);
     None
 }
@@ -494,13 +525,12 @@ fn set_anim_action_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if (action as i32) < 0 {
         return Some(0);
     }
-    if !state(e).anim_action.is_empty() {
-        if let Some(scripts) = scripts_of(&state(e).anim_action, action) {
-            invoke(e, &scripts, actor, &[action]);
-        }
+    let scripts = scripts_of(&read(e).anim_action, action);
+    if let Some(scripts) = scripts {
+        invoke(e, &scripts, actor, &[action]);
     }
     if actor_flags3(e, actor) & ON_ANIM_ACTION != 0 {
-        let scripts = state(e)
+        let scripts = read(e)
             .anim_action_actors
             .get(&actor)
             .and_then(|m| scripts_of(m, action));
@@ -520,12 +550,13 @@ fn set_anim_action_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
 fn remove_ammo_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let (actor, weapon) = (a[0], a[1]);
     if !e.take_caller_mark(RELOAD_AMMO_CALL) {
-        if !state(e).fire_weapon_scripts.is_empty() {
-            let scripts = state(e).fire_weapon_scripts.clone();
+        let scripts = read(e).fire_weapon_scripts.clone();
+        if !scripts.is_empty() {
             invoke(e, &scripts, actor, &[weapon]);
         }
         if actor_flags3(e, actor) & ON_FIRE_WEAPON != 0 {
-            if let Some(scripts) = scripts_of(&state(e).fire_weapon, actor) {
+            let scripts = scripts_of(&read(e).fire_weapon, actor);
+            if let Some(scripts) = scripts {
                 invoke(e, &scripts, actor, &[weapon]);
             }
         }
@@ -570,7 +601,7 @@ fn projectile_impact_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if form_flags6(e, base) & FORM_EVENT_HANDLERS == 0 {
         return None;
     }
-    let scripts = scripts_of(&state(e).projectile_impact, base)?;
+    let scripts = scripts_of(&read(e).projectile_impact, base)?;
     let p = Ptr::<crate::game::Projectile>::new(projectile);
     let kind = e.get(
         Ptr::<crate::game::BGSProjectile>::new(base),
@@ -608,7 +639,7 @@ fn ragdoll_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if reference == 0 {
         return None;
     }
-    let scripts = state(e).ragdoll.clone();
+    let scripts = read(e).ragdoll.clone();
     invoke(e, &scripts, reference, &[]);
     None
 }
@@ -636,14 +667,15 @@ fn copy_hit_data_routine(e: &mut Engine, a: &[u32]) -> Ret {
     let h = Ptr::<ActorHitData>::new(data);
     let location = e.get(Ptr::<ActorHitData>::new(hit), ActorHitData::eDamageLimb);
     e.set(h, ActorHitData::hitLocation, location as i32);
-    if e.get(h, ActorHitData::uiFlags) as u8 & IS_CRITICAL != 0 && !state(e).critical_hit.is_empty()
+    if e.get(h, ActorHitData::uiFlags) as u8 & IS_CRITICAL != 0 && !read(e).critical_hit.is_empty()
     {
         let (target, source, weapon) = (
             e.get(h, ActorHitData::pTarget),
             e.get(h, ActorHitData::pAggressor),
             e.get(h, ActorHitData::pWeapon),
         );
-        for event in state(e).critical_hit.clone() {
+        let events = read(e).critical_hit.clone();
+        for event in events {
             if (event.target == 0 || event.target == target)
                 && (event.source == 0 || event.source == source)
                 && (event.weapon == 0 || event.weapon == weapon)
@@ -702,7 +734,7 @@ pub(crate) fn form_or_list(e: &Engine, form: u32) -> Vec<u32> {
 }
 
 fn insert(e: &mut Engine, set: impl Fn(&mut State) -> &mut BTreeSet<u32>, script: u32) -> bool {
-    let added = set(state(e)).insert(script);
+    let added = set(&mut state(e)).insert(script);
     if added {
         crate::ln_events::capture(e, script);
     }
@@ -710,7 +742,7 @@ fn insert(e: &mut Engine, set: impl Fn(&mut State) -> &mut BTreeSet<u32>, script
 }
 
 fn erase(e: &mut Engine, set: impl Fn(&mut State) -> &mut BTreeSet<u32>, script: u32) -> bool {
-    let removed = set(state(e)).remove(&script);
+    let removed = set(&mut state(e)).remove(&script);
     if removed {
         crate::ln_events::release(e, script);
     }
@@ -771,7 +803,7 @@ fn set_animation_event(e: &mut Engine, script: u32, add: bool, target: u32, id: 
     if items[0] == 0 {
         // `tempList.Empty()`: the list's first node holds nothing.
         if add {
-            if made(anim_maps(state(e), action).0, id) {
+            if made(anim_maps(&mut state(e), action).0, id) {
                 e.add_hook_user(hook, true);
             }
             insert(
@@ -779,15 +811,15 @@ fn set_animation_event(e: &mut Engine, script: u32, add: bool, target: u32, id: 
                 |s| anim_maps(s, action).0.get_mut(&id).expect("made above"),
                 script,
             );
-        } else if anim_maps(state(e), action).0.contains_key(&id)
+        } else if anim_maps(&mut state(e), action).0.contains_key(&id)
             && erase(
                 e,
                 |s| anim_maps(s, action).0.get_mut(&id).expect("found"),
                 script,
             )
-            && anim_maps(state(e), action).0[&id].is_empty()
+            && anim_maps(&mut state(e), action).0[&id].is_empty()
         {
-            anim_maps(state(e), action).0.remove(&id);
+            anim_maps(&mut state(e), action).0.remove(&id);
             e.add_hook_user(hook, false);
         }
         return;
@@ -800,7 +832,7 @@ fn set_animation_event(e: &mut Engine, script: u32, add: bool, target: u32, id: 
             if !crate::commands::is_actor(e, actor) {
                 continue;
             }
-            if made(anim_maps(state(e), action).1, actor) {
+            if made(anim_maps(&mut state(e), action).1, actor) {
                 let flags = actor_flags3(e, actor);
                 set_actor_flags3(e, actor, flags | flag);
                 e.add_hook_user(hook, true);
@@ -817,7 +849,7 @@ fn set_animation_event(e: &mut Engine, script: u32, add: bool, target: u32, id: 
                 },
                 script,
             );
-        } else if anim_maps(state(e), action)
+        } else if anim_maps(&mut state(e), action)
             .1
             .get(&actor)
             .is_some_and(|m| m.contains_key(&id))
@@ -832,13 +864,20 @@ fn set_animation_event(e: &mut Engine, script: u32, add: bool, target: u32, id: 
                 },
                 script,
             )
-            && anim_maps(state(e), action).1[&actor][&id].is_empty()
+            && anim_maps(&mut state(e), action).1[&actor][&id].is_empty()
         {
-            let maps = anim_maps(state(e), action).1;
-            let actor_map = maps.get_mut(&actor).expect("found");
-            actor_map.remove(&id);
-            if actor_map.is_empty() {
-                maps.remove(&actor);
+            let gone = {
+                let mut s = state(e);
+                let maps = anim_maps(&mut s, action).1;
+                let actor_map = maps.get_mut(&actor).expect("found");
+                actor_map.remove(&id);
+                let gone = actor_map.is_empty();
+                if gone {
+                    maps.remove(&actor);
+                }
+                gone
+            };
+            if gone {
                 let flags = actor_flags3(e, actor);
                 set_actor_flags3(e, actor, flags & !flag);
                 e.add_hook_user(hook, false);
@@ -915,7 +954,7 @@ fn set_actor_event(e: &mut Engine, w: &[u32], event: ActorEvent) -> Ret {
     let hook = event.hook();
     if target == 0 {
         // JIP's damage events have no list for every actor (their form is not optional).
-        if event.unfiltered(state(e)).is_none() {
+        if event.unfiltered(&mut state(e)).is_none() {
             return handled(true);
         }
         if add {
@@ -936,7 +975,7 @@ fn set_actor_event(e: &mut Engine, w: &[u32], event: ActorEvent) -> Ret {
             if !crate::commands::is_actor(e, actor) {
                 continue;
             }
-            if made(event.filtered(state(e)), actor) {
+            if made(event.filtered(&mut state(e)), actor) {
                 e.add_hook_user(hook, true);
             }
             insert(
@@ -946,7 +985,7 @@ fn set_actor_event(e: &mut Engine, w: &[u32], event: ActorEvent) -> Ret {
             );
             let flags = actor_flags3(e, actor);
             set_actor_flags3(e, actor, flags | flag);
-        } else if event.filtered(state(e)).contains_key(&actor)
+        } else if event.filtered(&mut state(e)).contains_key(&actor)
             && erase(
                 e,
                 move |s| event.filtered(s).get_mut(&actor).expect("found"),
@@ -957,8 +996,8 @@ fn set_actor_event(e: &mut Engine, w: &[u32], event: ActorEvent) -> Ret {
                 let flags = actor_flags3(e, actor);
                 set_actor_flags3(e, actor, flags & !flag);
             }
-            if event.filtered(state(e))[&actor].is_empty() {
-                event.filtered(state(e)).remove(&actor);
+            if event.filtered(&mut state(e))[&actor].is_empty() {
+                event.filtered(&mut state(e)).remove(&actor);
                 e.add_hook_user(hook, false);
             }
         }
@@ -1037,7 +1076,7 @@ fn set_on_form_event(
             continue;
         }
         if add {
-            if made(map(state(e)), form) {
+            if made(map(&mut state(e)), form) {
                 e.add_hook_user(hook, true);
             }
             insert(
@@ -1046,11 +1085,11 @@ fn set_on_form_event(
                 script,
             );
             set_form_flag6(e, form, FORM_EVENT_HANDLERS, true);
-        } else if map(state(e)).contains_key(&form)
+        } else if map(&mut state(e)).contains_key(&form)
             && erase(e, move |s| map(s).get_mut(&form).expect("found"), script)
-            && map(state(e))[&form].is_empty()
+            && map(&mut state(e))[&form].is_empty()
         {
-            map(state(e)).remove(&form);
+            map(&mut state(e)).remove(&form);
             e.add_hook_user(hook, false);
             set_form_flag6(e, form, FORM_EVENT_HANDLERS, false);
         }

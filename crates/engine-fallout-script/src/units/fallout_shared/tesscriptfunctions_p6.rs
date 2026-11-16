@@ -1248,7 +1248,8 @@ pub fn script_trigger_hit_shader_function(e: &mut Engine, a: ScriptArgs) -> bool
     let Some([strength]) = parse_params(e, a, [1.0f32.to_bits()]) else {
         return false;
     };
-    let modifier = tes_image_space_modifier_get_get_hit(e);
+    // By address, as the exe calls it (`005d2845`): JIP LN NVSE replaces the function (G123).
+    let modifier = e.call(0x005d_2860, &args![]).u32();
     e.call(
         IMAGE_SPACE_MODIFIER_TRIGGER,
         &args![modifier, f32::from_bits(strength), 0u32],
@@ -1803,15 +1804,24 @@ pub fn script_reset_3d_state_function(e: &mut Engine, a: ScriptArgs) -> bool {
 /// `Script::AddAchievement` (Xbox PDB): parses an achievement id and, unless
 /// the byte at `011d8ce4` is set, unlocks it through
 /// `BSAwardsSystemUtility::QInstance()->Unlock(id)`.
+/// With JIP LN NVSE (G03, step 3.9) the byte is passed over: [`jip_earns_achievement`].
 pub fn script_add_achievement(e: &mut Engine, a: ScriptArgs) -> bool {
     let Some([achievement]) = parse_params(e, a, [0]) else {
         return false;
     };
-    if e.global::<u8>(AWARDS_DISABLED) == 0 {
+    if e.global::<u8>(AWARDS_DISABLED) == 0 || jip_earns_achievement(e) {
         let awards = e.call(AWARDS_QUERY_INSTANCE, &args![]).u32();
         e.call(AWARDS_UNLOCK, &args![awards, achievement]);
     }
     true
+}
+
+/// JIP LN NVSE's G03 (`SafeWrite16(0x5D3B69, 0x9066)`, step 3.9): the `JNZ` over the unlock when the
+/// console-used byte (`011d8ce4`) is set becomes a NOP. The fixes' bit is tested first; true when
+/// JIP's handler at `0x5D3B69` takes the call (asked only when the byte is set).
+fn jip_earns_achievement(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x005d_3b69, &[]).is_some()
 }
 
 // Translated from 005d3b90 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -8254,5 +8264,196 @@ mod tests {
             vec![vec![MSG_QUEST_MISSING, 0x9999, 0x1000]]
         );
         assert!(calls(&e, QUEST_FIND_OBJECTIVE).is_empty());
+    }
+
+    // ---- JIP LN NVSE's G03 (0x5D3B69) seam and G123 (0x5D2860) wrap ----
+
+    use engine_core::extend::jip_patches;
+
+    thread_local! {
+        static G03_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g03_takes(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G03_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    fn g03_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G03_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    /// `AddAchievement 12` with the console-used byte `used`, the word `word` and `handler` at the
+    /// seam: (the unlock calls, the seam's asks).
+    fn add_achievement_jip(
+        used: u8,
+        word: u32,
+        handler: fn(&mut Engine, &[u32]) -> Option<u32>,
+    ) -> (Vec<Vec<u32>>, Vec<Vec<u32>>) {
+        G03_ASKED.with(|s| s.borrow_mut().clear());
+        let mut e = engine();
+        let this_obj = object(&mut e);
+        let a = command(&mut e, this_obj);
+        e.register(AWARDS_QUERY_INSTANCE, |_, _| 0x6000u32.into_ret());
+        e.register(AWARDS_UNLOCK, |_, _| Ret::default());
+        parse_gives(&mut e, true, &[12]);
+        e.set_global(AWARDS_DISABLED, used);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x005d_3b69, handler);
+        start_log(&mut e);
+        assert!(e.call(0x005d_3b20, &args![a]).bool());
+        (
+            calls(&e, AWARDS_UNLOCK),
+            G03_ASKED.with(|s| s.borrow().clone()),
+        )
+    }
+
+    /// G03: off (not installed; installed with the row off) the console-used byte stops the
+    /// unlock and the seam is not asked; on, a taken call unlocks (no words), none keeps the stop;
+    /// with the byte clear the unlock runs without asking.
+    #[test]
+    fn jip_g03_unlocks_after_the_console_was_used() {
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(add_achievement_jip(1, word, g03_takes), (vec![], vec![]));
+        }
+        assert_eq!(
+            add_achievement_jip(1, on, g03_takes),
+            (vec![vec![0x6000, 12]], vec![vec![]])
+        );
+        assert_eq!(add_achievement_jip(1, on, g03_none), (vec![], vec![vec![]]));
+        assert_eq!(
+            add_achievement_jip(0, on, g03_takes),
+            (vec![vec![0x6000, 12]], vec![])
+        );
+    }
+
+    /// JIP installed with its game patches row on (no settings file: JIP's defaults).
+    fn jip_fixes_on(e: &mut Engine) {
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        e.register(0x0061_a310, |_, _| Ret::default());
+        jip::test_support::install_into(e);
+        jip::game_patches::set_row(e, true);
+        assert_ne!(e.jip_patches() & jip_patches::FIXES, 0);
+    }
+
+    /// G03 with JIP's real handler: the console-used byte set, the achievement is unlocked.
+    #[test]
+    fn jip_g03_real_handler_unlocks() {
+        let mut e = engine();
+        let this_obj = object(&mut e);
+        let a = command(&mut e, this_obj);
+        e.register(AWARDS_QUERY_INSTANCE, |_, _| 0x6000u32.into_ret());
+        e.register(AWARDS_UNLOCK, |_, _| Ret::default());
+        parse_gives(&mut e, true, &[12]);
+        e.set_global(AWARDS_DISABLED, 1u8);
+        jip_fixes_on(&mut e);
+        start_log(&mut e);
+        assert!(e.call(0x005d_3b20, &args![a]).bool());
+        assert_eq!(calls(&e, AWARDS_UNLOCK), vec![vec![0x6000, 12]]);
+    }
+
+    /// The modifier `TriggerHitShader` triggers: the image space byte set, the exe's cache word
+    /// 0x5001, the game's form map holding 0x7777 under 0x162.
+    fn hit_shader_modifier(e: &mut Engine) -> u32 {
+        let this_obj = object(e);
+        let a = command(e, this_obj);
+        parse_gives(e, true, &[0.5f32.to_bits()]);
+        start_log(e);
+        assert!(e.call(0x005d_2800, &args![a]).bool());
+        let triggered = calls(e, IMAGE_SPACE_MODIFIER_TRIGGER);
+        assert_eq!(triggered.len(), 1);
+        assert_eq!(triggered[0][1..], [0.5f32.to_bits(), 0]);
+        triggered[0][0]
+    }
+
+    fn hit_shader_engine() -> Engine {
+        let mut e = engine();
+        e.set_global(IMAGE_SPACE_ENABLED, 1u8);
+        e.set_global(CACHED_GET_HIT_MODIFIER, 0x5001u32);
+        e.register(IMAGE_SPACE_MODIFIER_TRIGGER, |_, _| Ret::default());
+        // The form map (`*0x011C54C0`: hash size +4, buckets +8; an item's next +0, key +4,
+        // value +8): one bucket, 0x163 then 0x162.
+        let map = e.mem.alloc(0x40);
+        e.mem.set_u32(map + 4, 1);
+        e.mem.set_u32(map + 8, map + 0x10);
+        e.mem.set_u32(map + 0x10, map + 0x14);
+        e.mem.set_u32(map + 0x14, map + 0x24);
+        e.mem.set_u32(map + 0x18, 0x163);
+        e.mem.set_u32(map + 0x1c, 0x6666);
+        e.mem.set_u32(map + 0x24, 0);
+        e.mem.set_u32(map + 0x28, 0x162);
+        e.mem.set_u32(map + 0x2c, 0x7777);
+        e.set_global(0x011c_54c0, map);
+        e
+    }
+
+    /// G123 through `TriggerHitShader` (which calls `GetGetHit` by address, as the exe does): JIP
+    /// not installed, the exe's cached modifier; installed (the row off: JIP's own), the form
+    /// 0x162; in immortal mode 2 (JIP's hit effects off), none.
+    #[test]
+    fn jip_g123_trigger_hit_shader_gets_jips_modifier() {
+        let mut e = hit_shader_engine();
+        jip::test_support::install_into_as(&mut e, false);
+        assert_eq!(hit_shader_modifier(&mut e), 0x5001);
+        let mut e = hit_shader_engine();
+        e.register(0x00fd_f088, |_, _| Ret {
+            eax: 0xffff_ffff,
+            ..Ret::default()
+        });
+        jip::test_support::install_into(&mut e);
+        assert_eq!(e.jip_patches() & jip_patches::FIXES, 0);
+        assert_eq!(hit_shader_modifier(&mut e), 0x7777);
+        jip::test_support::call(&mut e, 0x28ce, &[jip::test_support::int_arg(2)]);
+        assert_eq!(hit_shader_modifier(&mut e), 0);
+        e.set_global(IMAGE_SPACE_ENABLED, 0u8);
+        jip::test_support::call(&mut e, 0x28ce, &[jip::test_support::int_arg(0)]);
+        assert_eq!(hit_shader_modifier(&mut e), 0, "the byte off");
+    }
+
+    /// O8 with JIP's real handler through `CExpression::Eval` (the forms crate's translation), the
+    /// operands compiled doubles: 7.5 / 0.0 keeps 7.5 where the exe stops the expression (error 4,
+    /// 0); a NaN is less than 2.5 for JIP (`comisd`: unordered), not for the exe.
+    #[test]
+    fn jip_o8_real_handler_through_expression_eval() {
+        let eval = |on: bool, left: f64, right: f64, op: &[u8]| -> f64 {
+            let mut e = engine();
+            let ops: [&[u8]; 16] = [
+                b"(", b")", b"&&", b"||", b"<=", b"<", b">=", b">", b"==", b"!=", b"-", b"+", b"*",
+                b"/", b"%", b"~",
+            ];
+            for (number, text) in ops.iter().enumerate() {
+                let entry = 0x0118_cad0 + number as u32 * 8;
+                e.mem.set_u32(entry, number as u32);
+                e.mem.write(entry + 5, text);
+            }
+            e.register_double(0x005b_5e40, |_, _| Ret::default());
+            if on {
+                jip_fixes_on(&mut e);
+            }
+            let this = e.mem.alloc(0x720);
+            e.call(0x0059_3490, &args![this]);
+            let mut bytes = vec![b' ', b'z'];
+            bytes.extend(left.to_le_bytes());
+            bytes.extend(*b" z");
+            bytes.extend(right.to_le_bytes());
+            bytes.push(b' ');
+            bytes.extend(op);
+            let data = e.mem.alloc(bytes.len() as u32 + 1);
+            e.mem.write(data, &bytes);
+            e.call(
+                0x0059_3db0,
+                &args![this, data, 0u32, 0u32, 0u32, 1u32, bytes.len() as i32, 0u8],
+            )
+            .f64()
+        };
+        assert_eq!(eval(false, 7.5, 0.0, b"/"), 0.0);
+        assert_eq!(eval(true, 7.5, 0.0, b"/"), 7.5);
+        assert_eq!(eval(false, f64::NAN, 2.5, b"<"), 0.0);
+        assert_eq!(eval(true, f64::NAN, 2.5, b"<"), 1.0);
     }
 }
