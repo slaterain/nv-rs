@@ -352,6 +352,7 @@ thread_local! {
 
 /// The owner whose wait this thread's script run is (`s_scriptWaitInfo`), as it was set (the
 /// block seam also checks its generation).
+#[cfg(test)]
 pub(crate) fn current_wait() -> Option<u32> {
     WAIT_INFO.with(std::cell::Cell::get).map(|(owner, _)| owner)
 }
