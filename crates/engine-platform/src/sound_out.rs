@@ -17,7 +17,8 @@
 //! **Linux and macOS** (`mod device`, through cpal: ALSA on Linux, which PipeWire and PulseAudio
 //! serve through their ALSA plugins; CoreAudio's default output unit on macOS). The mixer is the
 //! same; only the device differs, and nothing of it is measured against Windows: the same mixed
-//! samples are handed to the system, and what the system does after is not measured.
+//! samples are handed to the system, and what the system does after is not measured. Nothing here
+//! has been run on Linux or verified on a Mac.
 //! - Rate: the device's default stream as cpal gives it ([`mix_of`]). On Linux that is cpal's
 //!   preference among the rates ALSA lists (48000 Hz first), not necessarily the rate PipeWire,
 //!   PulseAudio or the hardware runs at: they may convert it after us. On macOS it is the
@@ -25,25 +26,37 @@
 //! - Channels: these systems name no speaker positions through cpal (and ALSA orders a 5.1
 //!   device's channels otherwise than Windows does), so a device of one or two channels is mixed
 //!   for as it is (front centre; front left and right: Windows' rule for a mix format without a
-//!   speaker mask), and a larger one is given two channels, which the system spreads as it does
-//!   for any stereo program: no surround placement off Windows. Only 32-bit float streams are
-//!   opened. Linux asks the device's list first (ALSA would otherwise open the nearest rate
-//!   without saying so); macOS asks for the stream directly and only a refusal counts ([`System`],
-//!   [`open_as`], [`refused`]).
+//!   speaker mask), and a larger one is mixed for in two channels; what the system does with them
+//!   (the front pair only, or an upmix) is not measured: no surround placement off Windows. Only
+//!   32-bit float streams are opened. Linux asks the device's list first (ALSA would otherwise
+//!   open the nearest rate without saying so) and opens the mix's own channels. macOS opens the
+//!   device's own offered channel count at its own nominal rate ([`stream_channels`]), the mix in
+//!   the first channels and silence in the rest ([`widen`]): cpal sets the device's physical
+//!   format before it opens a stream (`set_physical_format`, coreaudio-rs's
+//!   `find_matching_physical_format`), and asking for what the device already offers is the
+//!   request least able to change the hardware for every other program. It can still change it
+//!   (a device whose current hardware format is integer but which also lists a 32-bit float one
+//!   of as many channels; a device whose list holds a larger float format first): not verified on
+//!   a Mac. Another layout than the mix is not asked for on macOS ([`open_as`]: DirectSound's
+//!   device then locks to the mix, as on Windows when the endpoint refuses a layout).
 //! - Period: on Linux DirectSound's 10 ms where the device's period sizes include it, else the
 //!   system's own ([`fixed_period`]); on macOS CoreAudio's own IO buffer. The stream's line on
-//!   stderr says the device's name, rate, channels and period ([`opened_line`]).
+//!   stderr says the device's name, the rate and channels asked, and the period the system
+//!   actually opened ([`opened_line`]); a 10 ms request that failed says why.
 //! - Thread: the device calls back on the system's thread ([`period`], [`fill`]). On Linux that is
-//!   cpal's ALSA worker: its first period makes one attempt at `SCHED_FIFO` (the lowest real-time
-//!   priority, the system's own call) and says the true result once ("sound thread: real-time" or
-//!   "... normal priority (the system refused real-time)"); a desktop without real-time limits
-//!   for the user refuses it. On macOS it is CoreAudio's IO thread, already real-time. Windows:
-//!   a thread of this module's at time-critical priority and MMCSS "Audio".
+//!   cpal's ALSA worker at normal priority, said once per run ("sound thread: normal priority"):
+//!   no real-time attempt, because cpal's worker retries errors at once, so a device left in a bad
+//!   state would spin at real-time priority and take a core from the desktop (cpal itself refuses
+//!   real-time for the PipeWire and PulseAudio plugin devices most desktops use); a later step may
+//!   add it for hardware devices only, with a way back. On macOS it is CoreAudio's IO thread, which
+//!   the system runs at real-time priority. Windows: a thread of this module's at time-critical
+//!   priority and MMCSS "Audio".
 //! - Reports ([`Watch`], [`react`]): ALSA's xruns are counted as underruns once frames were given;
 //!   CoreAudio's processor overloads are counted under their own name; a device that stops
 //!   answering is named once and the stream is then silent and not pulled (as the WASAPI arm
 //!   does); a changed default device is said and the stream plays on (cpal 0.18.2: CoreAudio's
-//!   default output unit has already moved it; ALSA reports none).
+//!   default output unit has already moved it; ALSA reports none). Lines said "once" are once per
+//!   run ([`Said`]).
 //! - Linux needs ALSA's library (`libasound.so.2`) to start at all, sound or not (cpal links it).
 
 pub use super::speakers::Layout;
@@ -181,9 +194,8 @@ pub fn range_for(ranges: &[Range], rate: u32, channels: u16) -> Option<&Range> {
 /// rate would open at another one with no error and play at the wrong speed; the list (ALSA's
 /// own hardware ranges) proves the exact rate and channel count first. macOS: no, because cpal's
 /// list names a single channel count (the sum over all the device's output streams), never two
-/// for a 6- or 8-channel device, while CoreAudio's default output unit converts any float
-/// stream to the device's own format: the stream is asked for directly, and only its refusal
-/// counts.
+/// for a 6- or 8-channel device; the stream asked for there is the device's own offer
+/// ([`stream_channels`]), and only a refusal counts.
 fn asks_list(system: System) -> bool {
     system == System::Linux
 }
@@ -191,8 +203,9 @@ fn asks_list(system: System) -> bool {
 /// The mix rate and layout off Windows for a device whose default stream is `offer` and whose
 /// list is `ranges`: the offer's rate; one or two channels as offered, with Windows' layout for
 /// a mix format without a speaker mask ([`Layout::of_mix`]); more channels, whose speakers the
-/// system does not name here, as two (the system spreads them). On Linux the list must hold that
-/// stream in 32-bit float ([`asks_list`]). The reason, for stderr, when there is none.
+/// system does not name here, as two (what the system does with them is not measured). On Linux
+/// the list must hold that stream in 32-bit float ([`asks_list`]). The reason, for stderr, when
+/// there is none.
 pub fn mix_of(offer: Offer, ranges: &[Range], system: System) -> Result<(u32, Layout), String> {
     let Offer { rate, channels } = offer;
     let channels_used = match channels {
@@ -218,9 +231,10 @@ pub fn mix_of(offer: Offer, ranges: &[Range], system: System) -> Result<(u32, La
 
 /// The stream opened off Windows on a device that mixes `mix`, for the layout `want` (as the
 /// WASAPI arm: the mix as it is for `None` or the mix's own layout; another layout at the mix
-/// rate when the device takes it, else [`Refused::Layout`]; on macOS any other layout is asked
-/// for directly, [`refused`] then names a refusal); a mix layout DirectSound does not place
-/// sound on is [`Refused::Format`].
+/// rate when the device's list holds it, else [`Refused::Layout`]); a mix layout DirectSound does
+/// not place sound on is [`Refused::Format`]. On macOS another layout is never asked for (it
+/// would be a request other than the device's own offer, [`stream_channels`]): always
+/// [`Refused::Layout`], so DirectSound's device locks to the mix.
 pub fn open_as(
     mix: (u32, Layout),
     want: Option<Layout>,
@@ -233,7 +247,7 @@ pub fn open_as(
     }
     match want {
         Some(l) if l != mix => {
-            if !asks_list(system) || range_for(ranges, rate, l.channels).is_some() {
+            if asks_list(system) && range_for(ranges, rate, l.channels).is_some() {
                 Ok((rate, l))
             } else {
                 Err(Refused::Layout)
@@ -241,6 +255,71 @@ pub fn open_as(
         }
         _ => Ok((rate, mix)),
     }
+}
+
+/// The channel count of the stream asked of the device for a mix `layout` on a device that offered
+/// `offer`: on Linux the layout's own; on macOS the device's own offered count (never fewer than
+/// the layout's), so that cpal, which sets the device's physical format to the first float format
+/// of at least that many channels before it opens the stream, finds the format the device is
+/// already in where it can. The mix goes in the first channels ([`widen`]).
+pub fn stream_channels(offer: Offer, layout: Layout, system: System) -> u16 {
+    match system {
+        System::Linux => layout.channels,
+        System::Apple => offer.channels.max(layout.channels),
+    }
+}
+
+/// Copies `mix` (interleaved, `mix_channels` per frame) into `out` (interleaved, `out_channels`
+/// per frame, at least as many): each frame's mix in its first channels, silence in the rest.
+/// Frames beyond either buffer are left silent.
+pub fn widen(mix: &[f32], mix_channels: u16, out: &mut [f32], out_channels: u16) {
+    let (m, o) = (usize::from(mix_channels), usize::from(out_channels));
+    out.fill(0.0);
+    if m == 0 || o < m {
+        return;
+    }
+    for (src, dst) in mix.chunks_exact(m).zip(out.chunks_exact_mut(o)) {
+        dst[..m].copy_from_slice(src);
+    }
+}
+
+/// What is asked of the device off Windows for the layout `want`: the mix (rate and layout), the
+/// stream's layout, its channel count ([`stream_channels`]) and the period asked (Linux:
+/// [`fixed_period`] from the list entry of that stream; macOS: the system's own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Plan {
+    pub mix: (u32, Layout),
+    pub rate: u32,
+    pub layout: Layout,
+    pub channels: u16,
+    pub period: Option<u32>,
+}
+
+/// The [`Plan`] for a device that offered `offer` with the list `ranges`, or why there is none
+/// ([`mix_of`], [`open_as`]).
+pub fn plan(
+    offer: Offer,
+    ranges: &[Range],
+    system: System,
+    want: Option<Layout>,
+) -> Result<Plan, Refused> {
+    let mix = mix_of(offer, ranges, system).map_err(Refused::Format)?;
+    let (rate, layout) = open_as(mix, want, ranges, system)?;
+    let channels = stream_channels(offer, layout, system);
+    let period = match system {
+        System::Linux => fixed_period(
+            rate,
+            range_for(ranges, rate, channels).and_then(|r| r.period),
+        ),
+        System::Apple => None,
+    };
+    Ok(Plan {
+        mix,
+        rate,
+        layout,
+        channels,
+        period,
+    })
 }
 
 /// What the system answered when the stream was opened or ran, by kind (cpal's `ErrorKind`,
@@ -286,29 +365,60 @@ pub fn fixed_period(rate: u32, period: Option<(u32, u32)>) -> Option<u32> {
         .map(|_| frames)
 }
 
-/// The line said when the stream opened off Windows.
+/// How the stream's period came about off Windows: asked (`asked`, DirectSound's 10 ms, or the
+/// system's own when `None`), why a 10 ms request failed and the system's own was opened instead
+/// (`fell_back`), and what the system actually opened (`opened`, its period in frames, when it
+/// says).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Periods {
+    pub asked: Option<u32>,
+    pub fell_back: Option<String>,
+    pub opened: Option<u32>,
+}
+
+/// The line said when the stream opened off Windows: the device's name, the rate and channels
+/// asked (and the mix's channels when fewer), and the period opened.
 pub fn opened_line(
     system: System,
     name: &str,
     rate: u32,
     channels: u16,
-    period: Option<u32>,
+    mix_channels: u16,
+    periods: &Periods,
 ) -> String {
-    let period = match period {
-        Some(frames) => format!("a period of {frames} frames (10 ms, as DirectSound's mixer)"),
-        None => "the system's own period".to_string(),
+    let opened = match periods.opened {
+        Some(frames) => format!("a period of {frames} frames opened"),
+        None => "the period not said by the system".to_string(),
+    };
+    let asked = match (&periods.asked, &periods.fell_back) {
+        (Some(n), None) => format!(" ({n} frames asked: 10 ms, DirectSound's mixer period)"),
+        (Some(n), Some(why)) => {
+            format!(" (the system's own: {n} frames, 10 ms, were refused: {why})")
+        }
+        (None, _) => " (the system's own)".to_string(),
+    };
+    let mix = if mix_channels < channels {
+        format!(
+            "; the mix is in the first {mix_channels} channels, the other {} silent",
+            channels - mix_channels
+        )
+    } else {
+        String::new()
     };
     let after = match system {
         System::Linux => {
-            "the rate is the one cpal prefers for this device, not necessarily the system's own; \
-             PipeWire, PulseAudio or ALSA's plug may convert it after"
+            "the rate is the one cpal prefers for this device, not necessarily the system's own, \
+             and PipeWire, PulseAudio or ALSA's plug may convert it"
         }
-        System::Apple => "CoreAudio converts it to the device's own format after",
+        System::Apple => {
+            "these are the device's own offered channels and nominal rate, the request least \
+             able to change its hardware format (not verified on a Mac)"
+        }
     };
     format!(
-        "sound: the stream is open on \"{name}\": {rate} Hz, {channels} channels, {period}. The \
-         same mixed samples are handed to the system; {after}; what the system does after is \
-         not measured"
+        "sound: the stream is open on \"{name}\": {rate} Hz, {channels} channels asked{mix}, \
+         {opened}{asked}. The same mixed samples are handed to the system; {after}; what the \
+         system does after is not measured"
     )
 }
 
@@ -332,21 +442,37 @@ pub struct Gate {
     pub lost: AtomicBool,
 }
 
-/// The device's call for one period off Windows: silence once the stream is lost, else
-/// [`fill`], and from then on the device counts as given frames.
+/// The device's call for one period off Windows (`out` of `out_channels` per frame): silence
+/// once the stream is lost; else the mix of `mix_channels` per frame ([`fill`]), straight into
+/// `out` when the counts match, else through `scratch` into the first channels ([`widen`]); from
+/// then on the device counts as given frames. `scratch` grows only when a period is longer than
+/// any before.
+#[allow(clippy::too_many_arguments)]
 pub fn period(
     gate: &Gate,
     source: &Mutex<dyn Source>,
     rate: u32,
-    channels: u16,
+    mix_channels: u16,
     out: &mut [f32],
+    out_channels: u16,
+    scratch: &mut Vec<f32>,
     muted: bool,
 ) {
     if gate.lost.load(Ordering::Relaxed) {
         out.fill(0.0);
         return;
     }
-    fill(source, rate, channels, out, muted);
+    if mix_channels == out_channels || out_channels == 0 {
+        fill(source, rate, mix_channels, out, muted);
+    } else {
+        let frames = out.len() / usize::from(out_channels);
+        let n = frames * usize::from(mix_channels);
+        if scratch.len() < n {
+            scratch.resize(n, 0.0);
+        }
+        fill(source, rate, mix_channels, &mut scratch[..n], muted);
+        widen(&scratch[..n], mix_channels, out, out_channels);
+    }
     gate.given.store(true, Ordering::Relaxed);
 }
 
@@ -361,10 +487,6 @@ pub enum Event {
     Lost(String),
     /// The default device changed and the system moved the stream to it (still playing).
     Changed,
-    /// Linux: the sound thread was raised to real-time priority.
-    Realtime,
-    /// Linux: the system refused the sound thread real-time priority.
-    NoRealtime,
     /// Anything else, named.
     Other(String),
 }
@@ -377,15 +499,6 @@ pub fn event(kind: Kind, why: String, system: System) -> Event {
         Kind::DeviceNotAvailable | Kind::StreamInvalidated => Event::Lost(why),
         Kind::DeviceChanged => Event::Changed,
         Kind::UnsupportedConfig | Kind::Other => Event::Other(why),
-    }
-}
-
-/// The [`Event`] of the attempt to raise the sound thread (Linux, its first period): `Ok` raised,
-/// `Err` (the system's error number) refused.
-pub fn priority_event(attempt: Result<(), i32>) -> Event {
-    match attempt {
-        Ok(()) => Event::Realtime,
-        Err(_) => Event::NoRealtime,
     }
 }
 
@@ -403,23 +516,45 @@ pub enum Reaction {
     Lose(String),
 }
 
+/// What was said once in this run, whichever stream said it (the device module keeps one for the
+/// whole run; each test its own).
+#[derive(Debug, Default)]
+pub struct Said {
+    /// Another report of the system's ([`Event::Other`]).
+    pub other: AtomicBool,
+    /// The Linux sound thread's priority ([`thread_line`]).
+    pub thread: AtomicBool,
+}
+
+impl Said {
+    /// Whether `flag` is said now: true the first time in the run only.
+    fn first(flag: &AtomicBool) -> bool {
+        !flag.swap(true, Ordering::Relaxed)
+    }
+}
+
+/// The Linux sound thread's line, the first time in the run (`None` after, and on macOS, where
+/// CoreAudio's IO thread is the system's own).
+pub fn thread_line(system: System, said: &Said) -> Option<String> {
+    (system == System::Linux && Said::first(&said.thread))
+        .then(|| "sound thread: normal priority (no real-time attempt off Windows yet)".to_string())
+}
+
 /// A stream's events off Windows: underruns counted once the first frames were given (the stream
 /// starts empty) and until the device is lost; macOS's overloads counted under their own name
-/// (the 1st, 10th, 100th ... said with the count); the device lost said once, after which
-/// nothing more is said of it; a changed default device said each time, the stream playing on;
-/// the thread's priority said once; other reports said once.
+/// (the 1st, 10th, 100th ... of the stream said with the count); the device lost said once, after
+/// which nothing more is said of it; a changed default device said each time, the stream playing
+/// on; other reports said once per run ([`Said`]).
 #[derive(Debug, Default)]
 pub struct Watch {
     starved: u64,
     overloads: u64,
     lost: bool,
-    said_priority: bool,
-    said_other: bool,
 }
 
 impl Watch {
     /// The reaction to `e`, after the device was (`given`) or was not yet given frames.
-    pub fn on(&mut self, e: Event, given: bool) -> Reaction {
+    pub fn on(&mut self, e: Event, given: bool, said: &Said) -> Reaction {
         match e {
             Event::Underrun if given && !self.lost => {
                 self.starved += 1;
@@ -452,24 +587,10 @@ impl Watch {
                  it plays on"
                     .to_string(),
             ),
-            Event::Realtime | Event::NoRealtime if self.said_priority => Reaction::None,
-            Event::Realtime => {
-                self.said_priority = true;
-                Reaction::Say("sound thread: real-time".to_string())
-            }
-            Event::NoRealtime => {
-                self.said_priority = true;
-                Reaction::Say(
-                    "sound thread: normal priority (the system refused real-time)".to_string(),
-                )
-            }
-            Event::Other(_) if self.said_other => Reaction::None,
-            Event::Other(why) => {
-                self.said_other = true;
-                Reaction::Say(format!(
-                    "sound: the sound device reports: {why} (further reports not shown)"
-                ))
-            }
+            Event::Other(why) if Said::first(&said.other) => Reaction::Say(format!(
+                "sound: the sound device reports: {why} (further reports not shown)"
+            )),
+            Event::Other(_) => Reaction::None,
         }
     }
 }
@@ -656,90 +777,42 @@ mod device {
         }
     }
 
-    /// Linux: the calling thread (the device's) raised to the lowest real-time priority of
-    /// `SCHED_FIFO`, the system's own call; `Err` with the system's error number when refused
-    /// (no `CAP_SYS_NICE` and `RLIMIT_RTPRIO` 0, the usual desktop answer without rtkit).
-    #[cfg(target_os = "linux")]
-    fn raise() -> Result<(), i32> {
-        // SAFETY: plain calls about the calling thread with a parameter block of our own.
-        unsafe {
-            let min = libc::sched_get_priority_min(libc::SCHED_FIFO);
-            if min < 0 {
-                return Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(-1));
-            }
-            let p = libc::sched_param {
-                sched_priority: min,
-            };
-            match libc::pthread_setschedparam(libc::pthread_self(), libc::SCHED_FIFO, &p) {
-                0 => Ok(()),
-                e => Err(e),
-            }
-        }
-    }
+    /// What this run has said once, whichever stream said it.
+    static SAID: Said = Said {
+        other: AtomicBool::new(false),
+        thread: AtomicBool::new(false),
+    };
 
-    /// What the device's first period does before its frames: Linux, one attempt at real-time
-    /// priority, said once ([`priority_event`]); macOS nothing (CoreAudio's IO thread is already
-    /// a real-time thread of the system's). Nothing after the first period.
-    #[cfg(target_os = "linux")]
-    fn first_period(
-        watch: Arc<Mutex<Watch>>,
-        gate: Arc<Gate>,
-        source: Arc<Mutex<dyn Source>>,
-    ) -> impl FnMut() + Send {
-        let mut first = true;
-        move || {
-            if first {
-                first = false;
-                let r = match watch.lock() {
-                    Ok(mut w) => w.on(priority_event(raise()), false),
-                    Err(_) => return,
-                };
-                if let Some(line) = react(r, &gate, &*source) {
-                    eprintln!("{line}");
-                }
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    fn first_period(
-        _watch: Arc<Mutex<Watch>>,
-        _gate: Arc<Gate>,
-        _source: Arc<Mutex<dyn Source>>,
-    ) -> impl FnMut() + Send {
-        || {}
-    }
-
-    /// Builds the stream (with `period` frames, or the system's own when `None`) and starts it.
+    /// Builds the stream (`channels` per frame, the mix's `mix_channels` in the first; a period of
+    /// `period_frames`, or the system's own when `None`) and starts it.
     fn build(
         device: &cpal::Device,
         source: &Arc<Mutex<dyn Source>>,
         rate: u32,
+        mix_channels: u16,
         channels: u16,
         period_frames: Option<u32>,
     ) -> Result<cpal::Stream, cpal::Error> {
         let gate = Arc::new(Gate::default());
-        let watch = Arc::new(Mutex::new(Watch::default()));
-        let mut first = first_period(watch.clone(), gate.clone(), source.clone());
+        let mut watch = Watch::default();
         let (gate_cb, source_cb) = (gate.clone(), source.clone());
+        let mut scratch: Vec<f32> = Vec::new();
         let data = move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
-            first();
             period(
                 &gate_cb,
                 &*source_cb,
                 rate,
-                channels,
+                mix_channels,
                 out,
+                channels,
+                &mut scratch,
                 MUTED.load(Ordering::Relaxed),
             );
         };
         let source_err = source.clone();
         let error = move |e: cpal::Error| {
             let ev = event(kind_of(e.kind()), e.to_string(), SYSTEM);
-            let r = match watch.lock() {
-                Ok(mut w) => w.on(ev, gate.given.load(Ordering::Relaxed)),
-                Err(_) => return,
-            };
+            let r = watch.on(ev, gate.given.load(Ordering::Relaxed), &SAID);
             if let Some(line) = react(r, &gate, &*source_err) {
                 eprintln!("{line}");
             }
@@ -763,31 +836,36 @@ mod device {
         want: Option<Layout>,
     ) -> Result<(cpal::Stream, u32, Layout), Refused> {
         let (device, offer) = default_device().ok_or(Refused::NoDevice)?;
-        let ranges = ranges(&device);
-        let mix = mix_of(offer, &ranges, SYSTEM).map_err(Refused::Format)?;
-        let (rate, layout) = open_as(mix, want, &ranges, SYSTEM)?;
-        let channels = layout.channels;
-        // Linux: DirectSound's 10 ms period where the device takes it, else the system's.
-        let fixed = match SYSTEM {
-            System::Linux => fixed_period(
-                rate,
-                range_for(&ranges, rate, channels).and_then(|r| r.period),
-            ),
-            System::Apple => None,
+        let p = plan(offer, &ranges(&device), SYSTEM, want)?;
+        let mix_channels = p.layout.channels;
+        let mut periods = Periods {
+            asked: p.period,
+            ..Periods::default()
         };
-        let built = match fixed {
-            Some(n) => build(&device, &source, rate, channels, Some(n))
-                .map(|s| (s, Some(n)))
-                .or_else(|_| build(&device, &source, rate, channels, None).map(|s| (s, None))),
-            None => build(&device, &source, rate, channels, None).map(|s| (s, None)),
+        let built = match p.period {
+            Some(n) => match build(&device, &source, p.rate, mix_channels, p.channels, Some(n)) {
+                Ok(s) => Ok(s),
+                Err(e) => {
+                    periods.fell_back = Some(e.to_string());
+                    build(&device, &source, p.rate, mix_channels, p.channels, None)
+                }
+            },
+            None => build(&device, &source, p.rate, mix_channels, p.channels, None),
         };
-        let (stream, used) = built.map_err(|e| refused(kind_of(e.kind()), layout, mix, offer))?;
+        let stream = built.map_err(|e| refused(kind_of(e.kind()), p.layout, p.mix, offer))?;
+        periods.opened = stream.buffer_size().ok();
         let name = device
             .description()
             .map(|d| d.to_string())
             .unwrap_or_else(|_| "the default device (no name given)".to_string());
-        eprintln!("{}", opened_line(SYSTEM, &name, rate, channels, used));
-        Ok((stream, rate, layout))
+        eprintln!(
+            "{}",
+            opened_line(SYSTEM, &name, p.rate, p.channels, mix_channels, &periods)
+        );
+        if let Some(line) = thread_line(SYSTEM, &SAID) {
+            eprintln!("{line}");
+        }
+        Ok((stream, p.rate, p.layout))
     }
 
     /// [`super::start`]: the stream opened on a thread of its own, which holds it until the
@@ -1281,31 +1359,66 @@ mod tests {
     }
 
     /// macOS: the list is not asked (cpal names one channel count there, the sum of the device's
-    /// output streams): a 6-channel, an 8-channel and a two-stream device (offer 2, list 4) all
-    /// get two channels at their own rate; a mono device one.
+    /// output streams). The mix is the offer's (two channels for a larger device), and the stream
+    /// asked of the device is its own offered channel count at its own rate: 2, 6 and 8 channel
+    /// offers, and a two-stream device (offer 2, list 4) asked for its first stream's 2.
     #[test]
-    fn on_macos_the_stream_is_asked_for_directly() {
+    fn on_macos_the_device_is_asked_for_its_own_offer() {
         let a = System::Apple;
-        assert_eq!(
-            mix_of(offer(48000, 6), &[at(48000, 6)], a),
-            Ok((48000, Layout::STEREO))
-        );
-        assert_eq!(
-            mix_of(offer(96000, 8), &[at(96000, 8)], a),
-            Ok((96000, Layout::STEREO))
-        );
-        assert_eq!(
-            mix_of(offer(44100, 2), &[at(44100, 4)], a),
-            Ok((44100, Layout::STEREO))
-        );
-        assert_eq!(mix_of(offer(48000, 1), &[], a), Ok((48000, Layout::MONO)));
+        let cases = [
+            // (offer rate, offer channels, list, mix layout, stream channels)
+            (44100, 2, vec![at(44100, 2)], Layout::STEREO, 2),
+            (48000, 6, vec![at(48000, 6)], Layout::STEREO, 6),
+            (96000, 8, vec![at(96000, 8)], Layout::STEREO, 8),
+            (44100, 2, vec![at(44100, 4)], Layout::STEREO, 2),
+            (48000, 1, vec![], Layout::MONO, 1),
+        ];
+        for (rate, ch, list, layout, channels) in cases {
+            let p = plan(offer(rate, ch), &list, a, None).unwrap();
+            assert_eq!(p.mix, (rate, layout), "{ch}");
+            assert_eq!(
+                (p.rate, p.layout, p.channels),
+                (rate, layout, channels),
+                "{ch}"
+            );
+            assert_eq!(p.period, None, "macOS asks no period");
+            // The game's device asking for the mix's own layout gets the same.
+            assert_eq!(plan(offer(rate, ch), &list, a, Some(layout)), Ok(p));
+        }
         assert!(mix_of(offer(48000, 0), &[], a).is_err());
-        // Another layout than the mix is asked for directly too.
+        // Another layout than the mix is never asked for on macOS: DirectSound locks to the mix.
         let stereo = (48000, Layout::STEREO);
         assert_eq!(
             open_as(stereo, Some(Layout::MONO), &[at(48000, 6)], a),
-            Ok((48000, Layout::MONO))
+            Err(Refused::Layout)
         );
+        assert_eq!(
+            plan(offer(48000, 6), &[at(48000, 1)], a, Some(Layout::MONO)),
+            Err(Refused::Layout)
+        );
+        // Linux opens the mix's own channels.
+        let l = System::Linux;
+        assert_eq!(stream_channels(offer(48000, 6), Layout::STEREO, l), 2);
+        assert_eq!(stream_channels(offer(48000, 6), Layout::STEREO, a), 6);
+        assert_eq!(stream_channels(offer(48000, 1), Layout::STEREO, a), 2);
+    }
+
+    /// Which channels carry the mix: the first ones of each frame, the rest silent.
+    #[test]
+    fn the_mix_is_in_the_first_channels() {
+        let mix = [1.0, 2.0, 3.0, 4.0];
+        let mut out = [9.0f32; 12];
+        widen(&mix, 2, &mut out, 6);
+        assert_eq!(
+            out,
+            [1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        let mut out = [9.0f32; 4];
+        widen(&mix, 2, &mut out, 2);
+        assert_eq!(out, mix);
+        let mut out = [9.0f32; 3];
+        widen(&[5.0], 1, &mut out, 3);
+        assert_eq!(out, [5.0, 0.0, 0.0]);
     }
 
     /// The stream opens as the WASAPI arm's does: the mix as it is, another layout only when the
@@ -1343,6 +1456,22 @@ mod tests {
             open_as(odd, None, &both, System::Apple),
             Err(Refused::Format(_))
         ));
+        // Linux's plan: the wanted layout's own list entry gives the period.
+        let mut mono_entry = at(48000, 1);
+        mono_entry.period = Some((64, 4096));
+        let p = plan(
+            offer(48000, 2),
+            &[mono_entry, at(48000, 2)],
+            l,
+            Some(Layout::MONO),
+        )
+        .unwrap();
+        assert_eq!(
+            (p.layout, p.channels, p.period),
+            (Layout::MONO, 1, Some(480))
+        );
+        let p = plan(offer(48000, 2), &[mono_entry, at(48000, 2)], l, None).unwrap();
+        assert_eq!((p.layout, p.channels, p.period), (Layout::STEREO, 2, None));
     }
 
     /// A stream the system refuses: another layout than the mix is `Layout` (asked again in the
@@ -1378,8 +1507,9 @@ mod tests {
     }
 
     /// Linux's period: DirectSound's 10 ms where the device takes it, else the system's; the
-    /// stream's line names the device, the rate, the channels and the period, and says that what
-    /// the system does after is not measured.
+    /// stream's line names the device, the rate and channels asked, the period the system opened
+    /// (and why a 10 ms request fell back), and says that what the system does after is not
+    /// measured.
     #[test]
     fn the_period_is_the_mixers_where_taken() {
         assert_eq!(fixed_period(48000, Some((64, 8192))), Some(480));
@@ -1387,22 +1517,50 @@ mod tests {
         assert_eq!(fixed_period(48000, Some((512, 8192))), None);
         assert_eq!(fixed_period(48000, Some((64, 479))), None);
         assert_eq!(fixed_period(48000, None), None);
-        let line = opened_line(System::Linux, "HDA Intel PCH", 48000, 2, Some(480));
+        let opened = Periods {
+            asked: Some(441),
+            fell_back: None,
+            opened: Some(448),
+        };
+        let line = opened_line(System::Linux, "HDA Intel PCH", 44100, 2, 2, &opened);
         for piece in [
             "\"HDA Intel PCH\"",
-            "48000 Hz",
-            "2 channels",
-            "480 frames",
+            "44100 Hz",
+            "2 channels asked",
+            "448 frames opened",
+            "441 frames asked",
             "cpal prefers",
             "not measured",
         ] {
             assert!(line.contains(piece), "{piece}: {line}");
         }
-        let line = opened_line(System::Apple, "MacBook Pro Speakers", 44100, 2, None);
+        let fell = Periods {
+            asked: Some(480),
+            fell_back: Some("Buffer size 480 is not in the supported range".into()),
+            opened: Some(1024),
+        };
+        let line = opened_line(System::Linux, "pipewire", 48000, 2, 2, &fell);
         assert!(
-            line.contains("the system's own period") && line.contains("CoreAudio converts"),
+            line.contains("1024 frames opened")
+                && line.contains("were refused: Buffer size 480 is not in the supported range"),
             "{line}"
         );
+        let mac = Periods {
+            opened: Some(512),
+            ..Periods::default()
+        };
+        let line = opened_line(System::Apple, "HDMI", 48000, 6, 2, &mac);
+        for piece in [
+            "6 channels asked",
+            "the mix is in the first 2 channels, the other 4 silent",
+            "512 frames opened",
+            "the system's own",
+            "device's own offered channels",
+            "not verified on a Mac",
+        ] {
+            assert!(line.contains(piece), "{piece}: {line}");
+        }
+        assert!(!line.contains("converts"), "{line}");
     }
 
     /// A source that writes a ramp.
@@ -1426,7 +1584,8 @@ mod tests {
     }
 
     /// Each period the device asks for is the mixer's frames as they are (or silence when
-    /// muted, the mixer still pulled); once lost, silence and the mixer not pulled.
+    /// muted, the mixer still pulled), widened into a larger stream's first channels; once lost,
+    /// silence and the mixer not pulled.
     #[test]
     fn a_period_is_the_mixers_frames() {
         let ramp = Arc::new(Mutex::new(Ramp::default()));
@@ -1440,15 +1599,24 @@ mod tests {
         assert_eq!(ramp.lock().unwrap().asked, [(44100, 2, 6), (44100, 2, 4)]);
 
         let gate = Gate::default();
+        let mut scratch = Vec::new();
         let mut out = [9.0f32; 2];
-        period(&gate, &source, 48000, 1, &mut out, false);
+        period(&gate, &source, 48000, 1, &mut out, 1, &mut scratch, false);
         assert_eq!(out, [1.0, 2.0]);
         assert!(gate.given.load(Ordering::Relaxed));
+        // A six-channel stream: two frames of the stereo mix in channels 1 and 2.
+        let mut out = [9.0f32; 12];
+        period(&gate, &source, 48000, 2, &mut out, 6, &mut scratch, false);
+        assert_eq!(
+            out,
+            [1.0, 2.0, 0.0, 0.0, 0.0, 0.0, 3.0, 4.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(ramp.lock().unwrap().asked[3], (48000, 2, 4));
         gate.lost.store(true, Ordering::Relaxed);
         let mut out = [9.0f32; 2];
-        period(&gate, &source, 48000, 1, &mut out, false);
+        period(&gate, &source, 48000, 1, &mut out, 1, &mut scratch, false);
         assert_eq!(out, [0.0; 2]);
-        assert_eq!(ramp.lock().unwrap().asked.len(), 3, "not pulled once lost");
+        assert_eq!(ramp.lock().unwrap().asked.len(), 4, "not pulled once lost");
         // Not given before the first period.
         assert!(!Gate::default().given.load(Ordering::Relaxed));
     }
@@ -1476,59 +1644,67 @@ mod tests {
             );
             assert_eq!(event(Kind::Other, w(), s), Event::Other("why".into()));
         }
-        assert_eq!(priority_event(Ok(())), Event::Realtime);
-        assert_eq!(priority_event(Err(1)), Event::NoRealtime);
         assert_eq!(SYSTEM == System::Apple, cfg!(target_os = "macos"));
     }
 
     /// Underruns count once frames were given and until the device is lost; a lost device is said
     /// once and silences the stream; a changed default device is said and the stream plays on;
-    /// overloads are counted apart; the thread's priority and other reports are said once.
+    /// overloads are counted apart; other reports and the Linux thread line are said once per run,
+    /// whichever stream says them.
     #[test]
     fn the_device_reports_as_on_windows() {
+        let said = Said::default();
         let mut w = Watch::default();
-        assert_eq!(w.on(Event::Underrun, false), Reaction::None);
-        assert_eq!(w.on(Event::Underrun, true), Reaction::Starved(1));
-        assert_eq!(w.on(Event::Underrun, true), Reaction::Starved(2));
-        assert_eq!(
-            w.on(Event::NoRealtime, true),
-            Reaction::Say("sound thread: normal priority (the system refused real-time)".into())
-        );
-        assert_eq!(w.on(Event::NoRealtime, true), Reaction::None);
-        assert_eq!(w.on(Event::Realtime, true), Reaction::None);
+        assert_eq!(w.on(Event::Underrun, false, &said), Reaction::None);
+        assert_eq!(w.on(Event::Underrun, true, &said), Reaction::Starved(1));
+        assert_eq!(w.on(Event::Underrun, true, &said), Reaction::Starved(2));
         assert!(
-            matches!(w.on(Event::Other("x".into()), true), Reaction::Say(s) if s.contains('x'))
+            matches!(w.on(Event::Other("x".into()), true, &said), Reaction::Say(s) if s.contains('x'))
         );
-        assert_eq!(w.on(Event::Other("y".into()), true), Reaction::None);
+        assert_eq!(w.on(Event::Other("y".into()), true, &said), Reaction::None);
         // A changed default device: said each time, not lost; underruns still counted.
-        assert!(matches!(w.on(Event::Changed, true), Reaction::Say(s) if s.contains("plays on")));
-        assert!(matches!(w.on(Event::Changed, true), Reaction::Say(_)));
-        assert_eq!(w.on(Event::Underrun, true), Reaction::Starved(3));
         assert!(
-            matches!(w.on(Event::Lost("gone".into()), true), Reaction::Lose(s) if s.contains("gone"))
+            matches!(w.on(Event::Changed, true, &said), Reaction::Say(s) if s.contains("plays on"))
         );
-        assert_eq!(w.on(Event::Lost("gone".into()), true), Reaction::None);
-        assert_eq!(w.on(Event::Changed, true), Reaction::None);
-        // Once lost, no more underruns or overloads.
-        assert_eq!(w.on(Event::Underrun, true), Reaction::None);
-        assert_eq!(w.on(Event::Overload, true), Reaction::None);
-
-        let mut w = Watch::default();
+        assert!(matches!(
+            w.on(Event::Changed, true, &said),
+            Reaction::Say(_)
+        ));
+        assert_eq!(w.on(Event::Underrun, true, &said), Reaction::Starved(3));
+        assert!(
+            matches!(w.on(Event::Lost("gone".into()), true, &said), Reaction::Lose(s) if s.contains("gone"))
+        );
         assert_eq!(
-            w.on(Event::Realtime, false),
-            Reaction::Say("sound thread: real-time".into())
+            w.on(Event::Lost("gone".into()), true, &said),
+            Reaction::None
         );
-        assert_eq!(w.on(Event::NoRealtime, false), Reaction::None);
+        assert_eq!(w.on(Event::Changed, true, &said), Reaction::None);
+        // Once lost, no more underruns or overloads.
+        assert_eq!(w.on(Event::Underrun, true, &said), Reaction::None);
+        assert_eq!(w.on(Event::Overload, true, &said), Reaction::None);
+
+        // A second stream of the same run: its own counts, but "other" was said already.
+        let mut w = Watch::default();
+        assert_eq!(w.on(Event::Other("z".into()), true, &said), Reaction::None);
         // Overloads: counted apart from underruns, said at 1, 10, 100.
-        let said: Vec<u64> = (1..=150)
-            .filter(|_| matches!(w.on(Event::Overload, true), Reaction::Say(_)))
+        let said_at: Vec<u64> = (1..=150)
+            .filter(|_| matches!(w.on(Event::Overload, true, &said), Reaction::Say(_)))
             .collect();
-        assert_eq!(said.len(), 3);
+        assert_eq!(said_at.len(), 3);
         assert!(
-            matches!(w.on(Event::Overload, true), Reaction::None),
+            matches!(w.on(Event::Overload, true, &said), Reaction::None),
             "the 151st is not said"
         );
-        assert_eq!(w.on(Event::Underrun, true), Reaction::Starved(1));
+        assert_eq!(w.on(Event::Underrun, true, &said), Reaction::Starved(1));
+
+        // The Linux thread line: once per run; none on macOS.
+        let run = Said::default();
+        assert_eq!(thread_line(System::Apple, &run), None);
+        assert_eq!(
+            thread_line(System::Linux, &run).as_deref(),
+            Some("sound thread: normal priority (no real-time attempt off Windows yet)")
+        );
+        assert_eq!(thread_line(System::Linux, &run), None);
     }
 
     /// A reaction carried out: an underrun told to the source, a lost device silencing the

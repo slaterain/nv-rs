@@ -30,20 +30,30 @@ lists what started when: real ms, frames recorded, game clock ms, then the event
 buffer with its format, music `Render`/`Run`, the movie's track, sound file opens, `mmioOpen`
 names, Ogg opens, pace skips).
 
-**On Linux and macOS** (compiled and its tests pass on CI; never heard: nothing off Windows runs
-on the development PC, and the game itself does not start there yet). The device is reached
-through cpal (`sound_out.rs`, its module comment has the details): ALSA on Linux (PipeWire's and
-PulseAudio's ALSA plugins included), CoreAudio's default output on macOS. The same mixed samples
-are handed to the system; what the system does after is not measured against Windows:
+**On Linux and macOS** (compiled and its tests pass on CI; never heard and not verified on a Mac:
+nothing off Windows runs on the development PC, and the game itself does not start there yet).
+The device is reached through cpal (`sound_out.rs`, its module comment has the details): ALSA on
+Linux (PipeWire's and PulseAudio's ALSA plugins included), CoreAudio's default output on macOS.
+The same mixed samples are handed to the system; what the system does after is not measured
+against Windows:
 - the rate is the device's default stream as cpal gives it. On Linux that is cpal's preference
   (48000 Hz first), and PipeWire, PulseAudio or ALSA's plug may convert it to their own rate after
-  us; on macOS it is the device's own rate, and CoreAudio converts to the device's format;
-- two channels at most (no surround placement off Windows; a larger device is given two);
+  us; on macOS it is the device's own nominal rate;
+- the mix has two channels at most (no surround placement off Windows). On Linux the stream has
+  the mix's channels; what the system does with two channels on a larger device (the front pair
+  only, or an upmix) is not measured. On macOS the stream asked for has the device's own offered
+  channel count, the mix in the first channels and silence in the others: cpal sets the device's
+  physical format before it opens a stream, and asking for what the device already offers is the
+  request least able to change the hardware for other programs. It can still change it (for
+  example a device whose current hardware format is integer but which also lists a 32-bit float
+  one); not verified on a Mac;
 - the period is DirectSound's 10 ms on Linux where the device takes it, else the system's own;
-- the log's stream line names the device as the system gives it, the rate, the channels and the
-  period, and on Linux the sound thread's priority ("sound thread: real-time", or "normal
-  priority (the system refused real-time)": one `SCHED_FIFO` attempt, which a desktop without
-  real-time limits for the user refuses).
+- the log's stream line names the device as the system gives it, the rate and channels asked, and
+  the period the system opened (and why a 10 ms request fell back). On Linux the sound thread runs
+  at normal priority, said once per run: no real-time attempt, because cpal's ALSA worker retries
+  errors at once, so a device left in a bad state would spin at real-time priority and take a
+  core from the desktop (cpal itself refuses real-time for the PipeWire and PulseAudio plugin
+  devices most desktops use). A later step may add it for hardware devices only, with a way back.
 
 **What Linux needs:** ALSA's library `libasound.so.2` (package `libasound2`, or `alsa-lib`) to start
 the program at all, sound or not: the program links it. Every desktop Linux has it. Building needs
