@@ -16,6 +16,9 @@ name: Preview packages (Linux, macOS)
 #
 # Each job uses runners from the account's shared limit (20 jobs at a time); one run is two jobs.
 on:
+  # TEMPORARY: one proving run on this branch only, removed in the next commit.
+  push:
+    branches: [claude/linux-mac-pkgci]
   workflow_dispatch:
     inputs:
       version:
