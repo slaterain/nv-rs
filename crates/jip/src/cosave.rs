@@ -1420,11 +1420,12 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.serialized_tail.clear();
             s.had_section = false;
         }
-        // `DeferredInit` (once per run): its temporary position marker and the two vanilla ash
-        // piles marked (step 3.9 G06).
+        // `DeferredInit` (once per run): its temporary position marker, the two vanilla ash
+        // piles marked (step 3.9 G06) and group GF's part (D01's slot, G130's names dropped).
         msg::DEFERRED_INIT => {
             crate::commands::pos_marker::create(e);
             crate::game_patches::gh2::deferred_init(e);
+            crate::game_patches::gf::deferred_init(e);
             crate::commands::jip_fn_utility::deferred_init(e);
         }
         msg::MAIN_GAME_LOOP => {
