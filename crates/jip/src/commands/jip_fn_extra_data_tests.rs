@@ -1082,3 +1082,84 @@ fn two_threads_at_once_neither_wait_forever_nor_lose_a_value() {
     }
     engine_core::extend::release_held_for_test();
 }
+
+// ---- second review: a running container loop's stacks, a removed reference's mark ----
+
+/// A `ForEach` loop's reference variable (its value at +8).
+const LOOP_LOCAL: u32 = FORMS + 0x3400;
+
+/// A `ForEach` over the actor's two stacks of the weapon (`STACK`, then `STACK2`, both in the
+/// entry's list), standing on `STACK`, while a reference for `STACK2` (made by
+/// `GetInvRefsForItem` or an inner loop) erases the mod's data: `STACK2`, left holding nothing,
+/// is not freed (the loop still lists it) and stays in the entry; the loop's step stands on it
+/// and writes back into a live list.
+#[test]
+fn a_stack_a_running_container_loop_still_lists_is_not_freed() {
+    let mut e = setup();
+    let refr = inventory(&mut e, 2, STACK);
+    e.mem.set_u32(STACK2, LIST_VTBL);
+    e.mem.set_u32(LISTS + 4, NODE2);
+    e.mem.set_u32(NODE2, STACK2);
+    e.mem.set_u32(NODE2 + 4, 0);
+    let second = nvse::invref::create_entry(&mut e, ACTOR, WEAP, 1, STACK2);
+    set(&mut e, second, &[num(3.0), num(4.0)]);
+    let looped = nvse::commands::scripting::begin_container_loop_for_test(
+        &mut e,
+        ACTOR,
+        LOOP_LOCAL,
+        &[(WEAP, 1, STACK), (WEAP, 1, STACK2)],
+    );
+    assert_eq!(nvse::invref::get(&mut e, looped).unwrap().data.xdata, STACK);
+    let _ = refr;
+    set(&mut e, second, &[]);
+    assert_eq!(calls_to(REMOVE_BY_TYPE_FN), vec![vec![STACK2, 0x27]]);
+    assert!(called(DESTROY_FN).is_empty(), "the loop's next stack is kept");
+    assert_eq!(
+        super::super::list_items(&e, Ptr::new(LISTS)),
+        vec![STACK, STACK2],
+        "and stays in the entry"
+    );
+    assert_eq!(stack_of(&mut e, second), STACK2);
+    // The loop's step: its reference stands on the kept stack, reading only live memory.
+    assert!(nvse::commands::scripting::step_container_loop_for_test(&mut e));
+    assert_eq!(nvse::invref::get(&mut e, looped).unwrap().data.xdata, STACK2);
+    assert!(!still_poisoned(&e, STACK2, 0x20));
+    // Its end: the write-back into the kept stack, nothing freed.
+    assert!(!nvse::commands::scripting::step_container_loop_for_test(&mut e));
+    assert!(called(DESTROY_FN).is_empty());
+    // A stack the loop has already passed is freed as before.
+    let mut e = setup();
+    let refr = inventory(&mut e, 1, STACK);
+    e.mem.set_u32(STACK2, LIST_VTBL);
+    e.mem.set_u32(LISTS + 4, NODE2);
+    e.mem.set_u32(NODE2, STACK2);
+    e.mem.set_u32(NODE2 + 4, 0);
+    set(&mut e, refr, &[num(3.0), num(4.0)]);
+    nvse::commands::scripting::begin_container_loop_for_test(
+        &mut e,
+        ACTOR,
+        LOOP_LOCAL,
+        &[(WEAP, 1, STACK), (WEAP, 1, STACK2)],
+    );
+    assert!(nvse::commands::scripting::step_container_loop_for_test(&mut e));
+    set(&mut e, refr, &[]);
+    assert_eq!(called(DESTROY_FN), vec![vec![STACK, 1]]);
+}
+
+/// A reference marked removed (`RemoveMeIRAlt`) then given data: it is not copied again and
+/// keeps its mark, so the loop's write-back of a changed copy leaves the stack's words alone.
+#[test]
+fn a_removed_reference_keeps_its_mark_and_writes_nothing_back() {
+    let mut e = setup();
+    let refr = inventory(&mut e, 2, STACK);
+    put_extra(&mut e, STACK, COUNT_X, 0x24, 2);
+    sync(&mut e, refr);
+    let id = id_of(&mut e, refr);
+    nvse::invref::set_removed(&mut e, id);
+    set(&mut e, refr, &[num(3.0), num(4.0)]);
+    assert!(nvse::invref::is_removed(&mut e, id), "the mark kept");
+    let after = words(&e, STACK);
+    e.mem.set_u8(refr + 0x44 + 8 + 2, 0x40);
+    assert!(nvse::invref::write_ref_data_to_container(&mut e, id));
+    assert_eq!(words(&e, STACK), after, "nothing written back");
+}

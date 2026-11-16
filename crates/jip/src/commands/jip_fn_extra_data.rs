@@ -26,7 +26,10 @@
 //! - an emptied stack is freed only when it was really taken out of the entry's list of stacks
 //!   (JIP frees it even when the entry did not hold it, leaving it linked wherever it is), and
 //!   not while an inventory reference's deferred equip or removal is still to run on it (JIP's
-//!   would run on the freed list); it then stays, holding only its count;
+//!   would run on the freed list), nor while a running `ForEach` over a container still lists it
+//!   among the stacks it stands on or has still to visit (its list was made when the loop began:
+//!   with JIP the loop's next step reads the freed stack and its write-back writes into it); it
+//!   then stays in the container, holding only its count (JIP's data is still erased from it);
 //! - when a stack is freed every inventory reference standing for it is made to stand for no
 //!   stack (`set_data` with no list, which also clears the temporary reference's copy of the
 //!   list's words): JIP leaves them pointing at the freed list, so a `ForEach` loop's write-back
@@ -38,7 +41,8 @@
 //!   write-back puts the old copy back: an addition's extras are lost (a leak, the mod's data
 //!   gone) and a removal's freed `ExtraJIP` can come back as the stack's first extra. A copy the
 //!   script had already changed in the same step keeps JIP's outcome for an addition (the loop
-//!   writes it back over the stack);
+//!   writes it back over the stack). A reference marked removed (`RemoveMeIRAlt`, `DropMeAlt`)
+//!   is not copied again and keeps its mark, so its write-back stays skipped as with JIP;
 //! - a text is stored as JIP's `XString` holds it, up to its first zero byte and with JIP's 16-bit
 //!   length (so the co-save's 16-bit length always matches the bytes written), but never more
 //!   than that length: JIP copies one byte more and reads its text on to the next zero byte, and
@@ -393,6 +397,11 @@ fn list_words(e: &Engine, list: u32) -> [u8; LIST_WORDS] {
 /// the module's differences).
 fn copy_again(e: &mut Engine, xdata: u32, before: &[u8; LIST_WORDS]) {
     for id in nvse::invref::refs_on_stack(e, xdata).0 {
+        // A reference marked removed (`RemoveMeIRAlt`, `DropMeAlt`) keeps its mark: its
+        // write-back stays skipped, as with JIP, which never calls `SetData` here.
+        if nvse::invref::is_removed(e, id) {
+            continue;
+        }
         let Some((temp, data)) = nvse::invref::get(e, id).map(|r| (r.temp_ref, r.data)) else {
             continue;
         };
@@ -515,15 +524,24 @@ fn erase(e: &mut Engine, refr: u32, mod_index: u32) {
     if lists == 0 {
         return;
     }
-    // Not while a deferred action is to run on the stack, and only once it is out of the list.
+    // Not while a deferred action is to run on the stack or a running `ForEach` over a container
+    // still lists it, and only once it is out of the list.
     let (refs, deferred) = nvse::invref::refs_on_stack(e, xdata);
-    if deferred || !super::list_remove(e, Ptr::new(lists), xdata) {
+    if deferred
+        || nvse::invref::stack_in_loops(e, xdata)
+        || !super::list_remove(e, Ptr::new(lists), xdata)
+    {
         return;
     }
-    // Every inventory reference standing for the stack stands for none from now on.
+    // Every inventory reference standing for the stack stands for none from now on (a removed
+    // mark kept).
     for id in refs {
         if let Some(data) = nvse::invref::get(e, id).map(|r| r.data) {
+            let removed = nvse::invref::is_removed(e, id);
             nvse::invref::set_data(e, id, nvse::invref::Data { xdata: 0, ..data });
+            if removed {
+                nvse::invref::set_removed(e, id);
+            }
         }
     }
     e.vcall(xdata, LIST_DESTROY_SLOT, &args![1u32]);
