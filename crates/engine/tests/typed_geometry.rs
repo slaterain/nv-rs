@@ -1409,6 +1409,8 @@ const QUEUE_2: u32 = RETS + 0x140;
 const QUEUE_4: u32 = RETS + 0x180;
 const CURSORS: u32 = RETS + 0x1c0;
 const PATTERN: u32 = RETS + 0x1cc;
+/// Set: the read stand-in answers an array's read short (half its words).
+const SHORT_READS: u32 = RETS + 0x1d4;
 /// The sink the write stand-in appends to (its cursor at +0).
 const SINK: u32 = 0x0310_0000;
 
@@ -1476,8 +1478,15 @@ fn lifecycle_globals(e: &mut Engine) {
                 }
             }
             None => {
+                // A short read ([`SHORT_READS`] set): an array's read gets the first half of its words and
+                // answers that many bytes (a truncated file); the rest keeps what the block held.
+                let words = if e.mem.u32(SHORT_READS) != 0 {
+                    bytes / 8
+                } else {
+                    bytes / 4
+                };
                 let mut seed = e.mem.u32(PATTERN);
-                for w in 0..bytes / 4 {
+                for w in 0..words {
                     seed = seed.wrapping_mul(0x0101_0101).wrapping_add(0x3c6e_f35f);
                     set(
                         e,
@@ -1486,6 +1495,9 @@ fn lifecycle_globals(e: &mut Engine) {
                     );
                 }
                 set(e, PATTERN, seed);
+                if e.mem.u32(SHORT_READS) != 0 {
+                    return ret(4 * words);
+                }
             }
         }
         ret(bytes)
@@ -1566,53 +1578,181 @@ fn load_binary() {
             Input::Of(&[6, 0]),
         ])
         .max_cases(700)
+        .setup(load_world)
+        .run()
+        .assert_same();
+}
+
+/// `00a67ea0` with every array read answered short (a truncated file: half of each array's words, the rest left as
+/// the new block held it), over the game's own file version and the older ones, each presence mask (#654's review).
+#[test]
+fn load_binary_short_reads() {
+    Diff::new(entry!(0x00a6_7ea0, lifecycle::load_binary(Ptr, Ptr)))
+        .family(&geometry::GEOMETRY)
+        .max_calls(MAX_CALLS)
+        .inputs(&[
+            Input::Of(&[0x1402_0007, 0x0a01_0072, 0x0400_0002]),
+            Input::Of(&[0x22, 0x12]),
+            Input::Of(&[0x1f, 0, 0x15, 0x0a, 0x1d]),
+            Input::Flag,
+            Input::Of(&[0, 7]),
+            Input::Of(&[0x0001, 0xf001, 0x0003]),
+            Input::Of(&[6, 0]),
+        ])
+        .max_cases(200)
         .setup(|e, c| {
-            lifecycle_globals(e);
-            let vt = vtable(e);
-            let s = stream(e, vt, c.word(0), c.word(1));
-            // The 1-byte answers: keep, compress, then the presences by the mask's bits.
-            let mask = c.word(2);
-            let ones = [
-                0x13,
-                0x07,
-                mask & 1,
-                mask >> 1 & 1,
-                mask >> 2 & 1,
-                mask >> 3 & 1,
-                mask >> 4 & 1,
-            ];
-            for (k, v) in ones.iter().enumerate() {
-                set(e, QUEUE_1 + 4 * k as u32, *v);
-            }
-            // The 2-byte answers: the count, the data flags, the old flags, the dirty flags.
-            let twos = [c.word(6), c.word(5), c.word(5) | 2, 0x4123];
-            for (k, v) in twos.iter().enumerate() {
-                set(e, QUEUE_2 + 4 * k as u32, *v);
-            }
-            // The 4-byte answers: the group id, then old presence words by the mask, the texture
-            // word.
-            let fours = [c.word(4), mask & 1, mask >> 1 & 1, mask >> 2 & 1, 0x7777];
-            for (k, v) in fours.iter().enumerate() {
-                set(e, QUEUE_4 + 4 * k as u32, *v);
-            }
-            let group = if c.word(4) != 0 {
-                let g = e.mem.alloc(0x10);
-                let pool = e.mem.alloc(0x2000);
-                set(e, g + 8, pool);
-                set(e, g + 0xc, 1);
-                g
-            } else {
-                0
-            };
-            set(e, RETS + 0x1d0, group);
-            let own_vt = data_vtable(e);
-            let data = obj(e, 0x40, own_vt);
-            e.mem.set_u8(data + 0x3c, c.word(3) as u8);
-            set(e, 0x011f_4880, 0);
-            vec![data, s]
+            let args = load_world(e, c);
+            set(e, SHORT_READS, 1);
+            args
         })
         .run()
         .assert_same();
+}
+
+/// What one save-then-load round trip gives: the bytes the save wrote, the loaded object's words, and for each array
+/// whether the copy has it and its bytes.
+type RoundTrip = (Vec<u8>, Vec<u32>, Vec<Option<Vec<u8>>>);
+
+/// One round trip on an engine of translations: a geometry data (arrays kept by `keeps`' bits, data flags `flags`,
+/// `count` vertices) saved into the sink, then loaded into a new object from the sink's bytes, every read taking the
+/// next ones. `typed`: the family's save and load called directly; else the translations by address. (The stand-ins
+/// of the object's and the bound's own load and save write and read nothing, so the copy is the load's reading of
+/// what this save wrote, not a full file: the round trip compares the typed pair with the translated pair.)
+fn round_trip(keeps: u32, flags: u32, count: u32, typed: bool) -> RoundTrip {
+    let mut e = Engine::new_untyped_for_test();
+    lifecycle_globals(&mut e);
+    let vt = vtable(&mut e);
+    let out = stream(&mut e, vt, 0x1402_0007, 0x22);
+    let data = geometry_data(&mut e, vt, flags);
+    for (bit, field) in [(1u32, 0x20u32), (2, 0x24), (4, 0x28), (8, 0x2c)] {
+        if keeps & bit == 0 {
+            set(&mut e, data + field, 0);
+        }
+    }
+    e.mem.set_u16(data + 8, count as u16);
+    // m_bSaveVertexData: the arrays are written.
+    e.mem.set_u8(data + 0x3c, 1);
+    set(&mut e, 0x011f_4880, 0);
+    if typed {
+        lifecycle::save_binary(&mut e, Ptr::new(data), Ptr::new(out));
+    } else {
+        e.call(0x00a6_8520, &engine_core::args![data, out]);
+    }
+    let start = SINK + 0x10;
+    let written = e.mem.u32(SINK) - start;
+    let bytes: Vec<u8> = (0..written).map(|k| e.mem.u8(start + k)).collect();
+    // The load's reads take the sink's bytes in order (the read cursor at SINK + 8).
+    set(&mut e, SINK + 8, start);
+    e.register(STREAM_READ, |e, a| {
+        let (buffer, wanted) = (a[1], a[2]);
+        let at = e.mem.u32(SINK + 8);
+        let end = e.mem.u32(SINK);
+        let n = wanted.min(end - at);
+        for k in 0..n {
+            let byte = e.mem.u8(at + k);
+            e.mem.set_u8(buffer + k, byte);
+        }
+        set(e, SINK + 8, at + n);
+        ret(n)
+    });
+    let input = stream(&mut e, vt, 0x1402_0007, 0x22);
+    let own_vt = data_vtable(&mut e);
+    let copy = obj(&mut e, 0x40, own_vt);
+    if typed {
+        lifecycle::load_binary(&mut e, Ptr::new(copy), Ptr::new(input));
+    } else {
+        e.call(0x00a6_7ea0, &engine_core::args![copy, input]);
+    }
+    let words: Vec<u32> = (0..0x40 / 4).map(|w| e.mem.u32(copy + 4 * w)).collect();
+    let vertices = u32::from(e.mem.u16(copy + 8));
+    let mut arrays = Vec::new();
+    for (field, size) in [(0x20u32, 12u32), (0x28, 16), (0x2c, 8)] {
+        let at = e.mem.u32(copy + field);
+        let got = (at != 0).then(|| {
+            (0..vertices * size)
+                .map(|k| e.mem.u8(at + k))
+                .collect::<Vec<u8>>()
+        });
+        arrays.push(got);
+    }
+    // The normals with the binormals and tangents after them when the flags say so.
+    let normals = e.mem.u32(copy + 0x24);
+    let per_vertex = if flags & 0xf000 != 0 { 3 } else { 1 };
+    let got = (normals != 0).then(|| {
+        (0..vertices * 12 * per_vertex)
+            .map(|k| e.mem.u8(normals + k))
+            .collect::<Vec<u8>>()
+    });
+    arrays.push(got);
+    (bytes, words, arrays)
+}
+
+/// `00a68520` then `00a67ea0` (#654's review): a geometry data saved, then loaded back from the bytes written, each
+/// array present or not, with and without the binormals and tangents, six vertices or none: the typed save and load
+/// give the translations' written bytes, loaded object and loaded arrays.
+#[test]
+fn save_then_load_round_trip() {
+    for keeps in [0xfu32, 0x1, 0x5, 0xa, 0x2, 0x0] {
+        for flags in [0x0001u32, 0xf001] {
+            for count in [6u32, 0] {
+                let typed = round_trip(keeps, flags, count, true);
+                let translated = round_trip(keeps, flags, count, false);
+                assert!(!typed.0.is_empty());
+                assert_eq!(
+                    typed, translated,
+                    "keeps {keeps:#x} flags {flags:#x} count {count}"
+                );
+            }
+        }
+    }
+}
+
+/// The world of [`load_binary`]: the stream with the case's file and header versions, the queued answers of its
+/// 1-, 2- and 4-byte reads, a group or none, the data with the save byte.
+fn load_world(e: &mut Engine, c: &Case) -> Vec<u32> {
+    lifecycle_globals(e);
+    let vt = vtable(e);
+    let s = stream(e, vt, c.word(0), c.word(1));
+    // The 1-byte answers: keep, compress, then the presences by the mask's bits.
+    let mask = c.word(2);
+    let ones = [
+        0x13,
+        0x07,
+        mask & 1,
+        mask >> 1 & 1,
+        mask >> 2 & 1,
+        mask >> 3 & 1,
+        mask >> 4 & 1,
+    ];
+    for (k, v) in ones.iter().enumerate() {
+        set(e, QUEUE_1 + 4 * k as u32, *v);
+    }
+    // The 2-byte answers: the count, the data flags, the old flags, the dirty flags.
+    let twos = [c.word(6), c.word(5), c.word(5) | 2, 0x4123];
+    for (k, v) in twos.iter().enumerate() {
+        set(e, QUEUE_2 + 4 * k as u32, *v);
+    }
+    // The 4-byte answers: the group id, then old presence words by the mask, the texture
+    // word.
+    let fours = [c.word(4), mask & 1, mask >> 1 & 1, mask >> 2 & 1, 0x7777];
+    for (k, v) in fours.iter().enumerate() {
+        set(e, QUEUE_4 + 4 * k as u32, *v);
+    }
+    let group = if c.word(4) != 0 {
+        let g = e.mem.alloc(0x10);
+        let pool = e.mem.alloc(0x2000);
+        set(e, g + 8, pool);
+        set(e, g + 0xc, 1);
+        g
+    } else {
+        0
+    };
+    set(e, RETS + 0x1d0, group);
+    let own_vt = data_vtable(e);
+    let data = obj(e, 0x40, own_vt);
+    e.mem.set_u8(data + 0x3c, c.word(3) as u8);
+    set(e, 0x011f_4880, 0);
+    vec![data, s]
 }
 
 /// `00a68520`: each array present or not, the save byte, texture coordinates with and without the
@@ -1921,6 +2061,122 @@ fn create_tangent_space() {
         .assert_same();
 }
 
+/// The second mesh shape the tangent space and the pick are tested on (#654's review): `data` given ten vertices
+/// with new arrays (different values; the ones it had as none stay none), the case's float `value` planted at array
+/// word `at` of the positions (below 30) or the texture coordinates (30 to 49) of the new arrays. Returns the new
+/// positions.
+fn second_shape_arrays(e: &mut Engine, data: u32, at: u32, value: f32) -> u32 {
+    const VERTICES: u32 = 10;
+    e.mem.set_u16(data + 8, VERTICES as u16);
+    let floats = |e: &mut Engine, bytes: u32, seed: u32| {
+        let b = e.mem.alloc(bytes + 0x40);
+        for w in 0..(bytes + 0x40) / 4 {
+            let value = FLOATS[((3 * w + seed) as usize) % FLOATS.len()] * (0.5 + seed as f32)
+                - (w % 7) as f32;
+            set(e, b + 4 * w, value.to_bits());
+        }
+        b
+    };
+    let mut positions = 0;
+    for (field, bytes, seed) in [
+        (0x20u32, VERTICES * 12, 5u32),
+        (0x24, 3 * VERTICES * 12, 6),
+        (0x28, VERTICES * 16, 7),
+        (0x2c, VERTICES * 8, 8),
+    ] {
+        if e.mem.u32(data + field) != 0 {
+            let array = floats(e, bytes, seed);
+            set(e, data + field, array);
+            if field == 0x20 {
+                positions = array;
+            }
+        }
+    }
+    let coordinates = e.mem.u32(data + 0x2c);
+    if positions != 0 && at < 30 {
+        set(e, positions + 4 * at, value.to_bits());
+    } else if coordinates != 0 && (30..50).contains(&at) {
+        set(e, coordinates + 4 * (at - 30), value.to_bits());
+    }
+    positions
+}
+
+/// A list of `count` vertex indices below ten (strips of uneven lengths, repeats), as `u16`s.
+fn second_shape_indices(e: &mut Engine, count: u32) -> u32 {
+    const INDICES: [u16; 24] = [
+        9, 0, 3, 7, 7, 1, 8, 2, 6, 4, 5, 9, 2, 2, 0, 6, 1, 3, 8, 5, 4, 7, 0, 9,
+    ];
+    let list = e.mem.alloc(2 * count + 4);
+    for k in 0..count {
+        e.mem
+            .set_u16(list + 2 * k, INDICES[k as usize % INDICES.len()]);
+    }
+    list
+}
+
+/// The data's triangle query (slot 0xac) of the second shape: ten triangles over ten vertices, two of them with a
+/// repeated vertex.
+fn second_shape_triangles(e: &mut Engine) {
+    e.register(VT_FN + 0xac, |e, a| {
+        const TRIANGLES: [[u16; 3]; 10] = [
+            [9, 0, 3],
+            [3, 0, 7],
+            [7, 7, 1],
+            [1, 8, 2],
+            [2, 8, 6],
+            [6, 4, 5],
+            [5, 4, 9],
+            [2, 2, 0],
+            [0, 6, 1],
+            [3, 8, 5],
+        ];
+        let t = TRIANGLES[(a[1] % 10) as usize];
+        for k in 0..3 {
+            e.mem.set_u16(a[2 + k], t[k]);
+        }
+        ret(0)
+    });
+}
+
+/// `00b54b60` on the second mesh shape: ten vertices, ten triangles (two with a repeated vertex), a strip list of
+/// uneven strips; the triangle count none, seven or ten; the case's float in a position or texture coordinate.
+#[test]
+fn create_tangent_space_second_shape() {
+    Diff::new(entry!(0x00b5_4b60, tangent::create_tangent_space(u32) -> u32))
+        .family(&geometry::GEOMETRY)
+        .max_calls(MAX_CALLS)
+        .inputs(&[
+            Input::Of(&[0, 1]),
+            Input::Of(&[1, 0]),
+            Input::Flag,
+            Input::Of(&[1, 0]),
+            Input::Of(&[10, 0, 7]),
+            Input::Flag,
+            Input::F32,
+            Input::Of(&[99, 0, 5, 19, 26]),
+            Input::Of(&[0, 1, 13, 29, 31, 44, 99]),
+        ])
+        .max_cases(300)
+        .float_sweep(16)
+        .setup(|e, c| {
+            let geometry = tangent_world(e, c);
+            let data = e.mem.u32(geometry + 0xb8);
+            second_shape_arrays(e, data, c.word(8), c.f32(6));
+            second_shape_triangles(e);
+            let strip = second_shape_indices(e, 24);
+            set(e, RETS + 0x5f1, strip);
+            // The existing extra data's halves sized for ten vertices.
+            let existing = e.mem.u32(RETS + 0x5bd);
+            if existing != 0 {
+                let halves = points(e, 24, u32::MAX, 0.0);
+                set(e, existing + 0xc, halves);
+            }
+            vec![geometry]
+        })
+        .run()
+        .assert_same();
+}
+
 // Batch 3: the pick of a geometry's triangles.
 
 use engine_core::typed::leaf;
@@ -2142,6 +2398,75 @@ fn pick_geometry() {
     })
     .run()
     .assert_same();
+}
+
+/// [`pick_world`] on the second mesh shape: ten vertices with new arrays (the case's float planted at word `c.word(10)`
+/// of the new positions), ten triangles, longer strip and index lists, eight triangles counted, the locked blocks
+/// sized for ten vertices.
+fn pick_world_second_shape(e: &mut Engine, c: &Case) -> Picked {
+    let w = pick_world(e, c);
+    let data = e.mem.u32(w.geometry + 0xb8);
+    second_shape_arrays(e, data, c.word(10), c.f32(9));
+    e.mem.set_u16(data + 0x40, 8);
+    second_shape_triangles(e);
+    let strip = second_shape_indices(e, 20);
+    set(e, RETS + 0x954, strip);
+    let list = second_shape_indices(e, 24);
+    set(e, RETS + 0x958, list);
+    let locked_positions = points(e, 12, u32::MAX, 0.0);
+    set(e, RETS + 0x910, locked_positions);
+    for at in [0x920u32, 0x930, 0x940] {
+        if e.mem.u32(RETS + at) != 0 {
+            let block = points(e, 16, u32::MAX, 0.0);
+            set(e, RETS + at, block);
+        }
+    }
+    w
+}
+
+/// `00e9b4f0` on the second mesh shape (#654's review), over the same inputs as [`pick_geometry`].
+#[test]
+fn pick_geometry_second_shape() {
+    Diff::new(entry!(
+        0x00e9_b4f0,
+        pick::pick_geometry(Ptr, Ptr, Ptr, Ptr) -> bool
+    ))
+    .family(&geometry::GEOMETRY)
+    .family(&leaf::LEAVES)
+    .translation_calls_plainly(&[0x00e9_93d0, 0x00e9_a280, 0x00e9_9330])
+    .max_calls(MAX_CALLS)
+    .inputs(PICK_INPUTS)
+    .max_cases(400)
+    .float_sweep(16)
+    .setup(|e, c| {
+        let w = pick_world_second_shape(e, c);
+        vec![w.origin, w.direction, w.pick, w.geometry]
+    })
+    .run()
+    .assert_same();
+}
+
+/// `00e993d0` and `00e9a280`, called directly, on the second mesh shape.
+#[test]
+fn pick_strips_and_shape_second_shape() {
+    for function in [
+        entry!(0x00e9_93d0, pick::pick_strips(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00e9_a280, pick::pick_shape(Ptr, Ptr, Ptr, Ptr) -> bool),
+    ] {
+        Diff::new(function)
+            .family(&geometry::GEOMETRY)
+            .family(&leaf::LEAVES)
+            .translation_calls_plainly(&[0x00e9_9330])
+            .max_calls(MAX_CALLS)
+            .inputs(PICK_INPUTS)
+            .max_cases(250)
+            .setup(|e, c| {
+                let w = pick_world_second_shape(e, c);
+                vec![w.origin, w.direction, w.pick, w.geometry]
+            })
+            .run()
+            .assert_same();
+    }
 }
 
 /// `00e993d0`, called directly: the strips' pick over the same inputs.

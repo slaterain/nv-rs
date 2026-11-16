@@ -72,6 +72,7 @@ pub const TEST_SWITCHES: &[&str] = &[
     "NV_PASS_CHECK",
     "NV_TOPIC_INDEX_CHECK",
     "NV_NVSE_EVENT_LOG",
+    "NV_DRAW_THREAD_CHECK",
 ];
 
 /// `(section, key, variable, default)` for each of our keys, in the table's order.

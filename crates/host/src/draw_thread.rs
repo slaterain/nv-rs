@@ -29,9 +29,19 @@ pub fn draw_families() -> [(&'static str, FamilyId); 8] {
 /// texture lookup). A wrap or an active fix row here draws the world on main.
 pub const HOOKED_DRAW_SET: &[u32] = &[0x00b5_4090];
 
-/// Whether the run may turn the thread on, and why not: it needs real threads with the render thread for play;
-/// stepped threads are the check form (the late gate), accepted.
+/// The refusal while the first posted frame still stops the run (a run without `NV_DRAW_THREAD_CHECK=1`).
+pub const NOT_WORKING_YET: &str = "not working yet: the first posted frame stops the run";
+
+/// Whether the run may turn the thread on, and why not: refused unless `NV_DRAW_THREAD_CHECK=1` names the drawing
+/// thread's own check work ([`NOT_WORKING_YET`]); it needs real threads with the render thread for play; stepped
+/// threads are the check form (the late gate), accepted.
 pub fn refusal(choice: &Choice) -> Option<&'static str> {
+    // Since the geometry family is on (2026-11-16) every family the draw runs in is direct, so a frame is posted, and
+    // the first posted frame stops the run (a read of address 0 in 00b66570 on the drawing helper,
+    // measure/draw-thread/P0-MEASURE.md). Until that is fixed only the drawing thread's own check work turns it on.
+    if !choice.draw_check {
+        return Some(NOT_WORKING_YET);
+    }
     // The scheme the host will run (any spelling of real threads counts as real).
     let stepped =
         engine::thread_host::Scheme::from_name(Some(&choice.threads)).map_or(true, |s| !s.real);
@@ -216,6 +226,36 @@ mod tests {
         assert_eq!(families_reason(|f| e.typed_family_direct(f)), None);
     }
 
+    /// A real default engine (`Engine::new()`, every crate's families at their defaults, whatever registers over them)
+    /// has every family the draw runs in direct. Skipped when the test's environment sets `NV_TYPED`.
+    #[test]
+    fn a_default_engine_has_every_draw_family_direct() {
+        if std::env::var_os("NV_TYPED").is_some() {
+            return;
+        }
+        let e = Engine::new();
+        for (name, family) in draw_families() {
+            assert!(e.typed_family_direct(family), "{name}");
+        }
+        assert_eq!(families_reason(|f| e.typed_family_direct(f)), None);
+    }
+
+    /// Without `NV_DRAW_THREAD_CHECK=1` the row is refused, so even `poison` on stepped threads takes no capture mode.
+    #[test]
+    fn a_refused_row_takes_no_capture_mode() {
+        let choice = crate::fixes::Choice::from_parts(None, |n: &str| match n {
+            "NV_DRAW_THREAD" => Some("poison".into()),
+            "NV_THREADS" => Some("stepped".into()),
+            _ => None,
+        })
+        .unwrap();
+        assert_eq!(refusal(&choice), Some(NOT_WORKING_YET));
+        assert_eq!(
+            capture_mode(&choice),
+            engine_typed::draw::capture::Mode::Off
+        );
+    }
+
     /// A registration over a member of a family the draw runs in (a fix row, a wrap) sends that family by address,
     /// and the draw stays on main; so does a family switched off.
     #[test]
@@ -302,20 +342,25 @@ mod serial_tests {
     fn real_threads_named_any_way_need_the_render_thread() {
         let choice = crate::fixes::Choice::from_parts(None, |n: &str| match n {
             "NV_DRAW_THREAD" => Some("1".into()),
+            "NV_DRAW_THREAD_CHECK" => Some("1".into()),
             "NV_THREADS" => Some("real,notimeout".into()),
             "NV_RENDER_THREAD" => Some("0".into()),
             _ => None,
         })
         .unwrap();
-        assert!(refusal(&choice).is_some());
+        assert_eq!(
+            refusal(&choice),
+            Some("it needs the render thread with real threads (bRenderThread=1)")
+        );
     }
 
     /// A choice with the drawing thread's variable `draw` (`1` or `poison`), the threads `threads` and the render
-    /// thread `render`.
+    /// thread `render`, its own check named (`NV_DRAW_THREAD_CHECK=1`).
     fn draw_choice(draw: &str, threads: &str, render: &str) -> crate::fixes::Choice {
         let (draw, threads, render) = (draw.to_string(), threads.to_string(), render.to_string());
         crate::fixes::Choice::from_parts(None, move |n: &str| match n {
             "NV_DRAW_THREAD" => Some(draw.clone()),
+            "NV_DRAW_THREAD_CHECK" => Some("1".into()),
             "NV_THREADS" => Some(threads.clone()),
             "NV_RENDER_THREAD" => Some(render.clone()),
             _ => None,
