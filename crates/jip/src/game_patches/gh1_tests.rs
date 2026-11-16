@@ -1018,3 +1018,43 @@ fn the_hotkey_seams_test_the_items_given_to_the_player() {
     assert_eq!(e.site(HOTKEY_ACTIVATED.addr(), &[refr]), None);
     assert_eq!(calls(REMOVE_BY_TYPE)[1], vec![refr + 0x44, 0x4a]);
 }
+
+// Today's behaviour, pinned (CONDITION-LOCKS.md): the ExtraJIP routines still take JIP's shared
+// slot (`Saved::extra_data`) for a key holding data. The follow-up (the data out of JIP's slot)
+// turns these into passing held tests. Under the default stepped threads they cannot stall (one
+// engine); they block JIP together with `NV_THREADS=real`.
+
+#[test]
+#[should_panic(expected = "two engines on one thread")]
+fn copy_takes_jips_slot_today() {
+    let mut e = world(true);
+    put(
+        &mut e,
+        0x77,
+        entry(0x99, &[(4, data(2.5, 0x0001_0203, b"abc"))]),
+    );
+    let source = extra_of(&mut e, 0x27, 0x77);
+    crate::test_support::with_jips_slot_held(&mut e, |e| {
+        e.site(COPY.addr(), &[LIST, source, 0x0041_2000, 0])
+    });
+}
+
+#[test]
+#[should_panic(expected = "two engines on one thread")]
+fn destroy_takes_jips_slot_today() {
+    let mut e = world(true);
+    put(&mut e, 1, entry(0x10, &[(3, data(1.5, 0x10, b"ab"))]));
+    let x = extra_of(&mut e, 0x27, 1);
+    crate::test_support::with_jips_slot_held(&mut e, |e| e.call(DESTROY_ROUTINE, &[x, 0]));
+}
+
+#[test]
+#[should_panic(expected = "two engines on one thread")]
+fn differs_takes_jips_slot_today() {
+    let mut e = world(true);
+    let d = data(1.5, 0x10, b"ab");
+    put(&mut e, 1, entry(0x10, &[(3, d.clone())]));
+    put(&mut e, 2, entry(0x20, &[(3, d)]));
+    let (x, y) = (extra_of(&mut e, 0x27, 1), extra_of(&mut e, 0x27, 2));
+    crate::test_support::with_jips_slot_held(&mut e, |e| e.call(COMPARE_ROUTINE, &[x, y]));
+}

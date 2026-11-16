@@ -812,3 +812,19 @@ fn new_commands_without_reference_or_with_a_failed_read_do_nothing() {
         }
     }
 }
+
+/// `NUM_ARGS_EX` (JIP `misc_ref.h:298`): a line with no argument data (length 0) has no count;
+/// the next line's bytes there (a count of 1 and an int 1) are not read as `resetRot`.
+#[test]
+fn move_to_editor_position_line_without_argument_data() {
+    let mut e = engine();
+    actor_place(&mut e);
+    e.mem.set_f32(REFR + 0x2c, 9.0);
+    let mut next = vec![1, 0];
+    next.extend(n(1));
+    let (_, result) = ts::call_on_no_data(&mut e, 0x2759, REFR, &next);
+    assert_eq!(result, 1.0);
+    assert_eq!(calls_to(MOVE_TO_MARKER).len(), 1);
+    assert_eq!(e.mem.f32(REFR + 0x2c), 9.0, "the angles untouched");
+    assert!(calls_to(ts::ADD_CHANGE_FN).is_empty());
+}

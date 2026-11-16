@@ -10,10 +10,12 @@ name: Other systems
 # - macOS: on pull requests labelled "other-systems", by hand, and once a night (not on every push
 #   to main: it takes about half an hour with two compilers).
 # A pull request without the label runs neither; the Windows job runs as before on every one.
+# Adding another label to a labelled pull request starts nothing.
 #
-# Both jobs are continue-on-error for now, so this workflow's result never stands in for the
-# Windows job's. The tests known to fail on these systems today are ignored where they fail, each
-# with its reason and the pull request that will fix it, so a red job here means a NEW failure.
+# This workflow is not a required check. A Linux failure turns its run red. The macOS job is
+# continue-on-error for now (its job shows red, the run does not). The tests known to fail on these
+# systems today are ignored where they fail, each with its reason and the step that will fix it, so
+# a red job here means a NEW failure.
 on:
   push:
     branches: [main]
@@ -25,7 +27,8 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: other-systems-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  # The event in the group: the nightly run on main must not cancel the push run of the same commit.
+  group: other-systems-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
   cancel-in-progress: true
 env:
   CARGO_INCREMENTAL: 0
@@ -36,10 +39,12 @@ jobs:
     if: >-
       (github.event_name == 'push') ||
       (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'other-systems'))
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'other-systems') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'other-systems'))
     runs-on: ubuntu-latest
-    continue-on-error: true
-    timeout-minutes: 180
+    # Measured 20 min on d358058b4 (run 43823529317, cold cache): three times that.
+    timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 4
     steps:
@@ -71,8 +76,13 @@ jobs:
     if: >-
       (github.event_name == 'schedule') ||
       (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'other-systems'))
+      (github.event_name == 'pull_request' &&
+       contains(github.event.pull_request.labels.*.name, 'other-systems') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'other-systems'))
     runs-on: macos-latest
+    # Allowed to fail for now: Apple silicon's known differences are being fixed one step at a time
+    # (the processor's estimates, the software x87 path, the NaN sign, Metal); a failure shows on
+    # the job without turning the run red.
     continue-on-error: true
     timeout-minutes: 180
     env:
