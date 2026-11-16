@@ -50,8 +50,11 @@ pub struct ModFileCalls {
     /// The file written whole (the port's folder and the run): `ERROR_PATH_NOT_FOUND` when its
     /// folder exists nowhere, `ERROR_ACCESS_DENIED` for a folder, a name outside the game's
     /// folder or a port folder that refused the write.
-    pub write: fn(&mut Engine, &[u8], &[u8]) -> Result<(), u32>,
+    pub write: WriteCall,
 }
+
+/// [`ModFileCalls::write`]'s type: the engine, the name, the bytes; Windows' error code.
+pub type WriteCall = fn(&mut Engine, &[u8], &[u8]) -> Result<(), u32>;
 
 static CALLS: std::sync::OnceLock<&'static ModFileCalls> = std::sync::OnceLock::new();
 

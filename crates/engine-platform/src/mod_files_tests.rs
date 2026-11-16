@@ -214,7 +214,11 @@ fn a_refused_name_reads_nothing() {
         &rooted,
     ] {
         let shown = String::from_utf8_lossy(name).into_owned();
-        assert_eq!(seam::read_or_error(&e, name), Err(ERROR_ACCESS_DENIED), "{shown}");
+        assert_eq!(
+            seam::read_or_error(&e, name),
+            Err(ERROR_ACCESS_DENIED),
+            "{shown}"
+        );
         assert_eq!(seam::profile_string(&e, name, b"A", b"x"), None, "{shown}");
         assert!(!seam::exists(&e, name), "{shown}");
     }

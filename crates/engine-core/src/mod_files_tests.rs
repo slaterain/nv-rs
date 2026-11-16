@@ -200,7 +200,11 @@ fn writes_split_at_lone_crs_and_trim_the_files_end() {
             ("A", "q", "1"),
             b"[A]\rx=1\rq=1\r\n[B]\ry=2\r\r\n",
         ),
-        (b"[A]\rx=1\r", ("C", "q", "1"), b"[A]\rx=1\r\r\n[C]\r\nq=1\r\n"),
+        (
+            b"[A]\rx=1\r",
+            ("C", "q", "1"),
+            b"[A]\rx=1\r\r\n[C]\r\nq=1\r\n",
+        ),
         (
             b"[A]\rx=1  \ry=2\r",
             ("A", "x", "5"),
@@ -213,15 +217,39 @@ fn writes_split_at_lone_crs_and_trim_the_files_end() {
         ),
         (b"[A]\nx=1\n\ry=2\n", ("A", "x", "4"), b"[A]\nx=4\n\ry=2\n"),
         (b"[A]\r\nx=1  ", ("A", "y", "2"), b"[A]\r\nx=1\r\ny=2\r\n"),
-        (b"[A]\r\nx=1 \x08", ("A", "y", "2"), b"[A]\r\nx=1\r\ny=2\r\n"),
+        (
+            b"[A]\r\nx=1 \x08",
+            ("A", "y", "2"),
+            b"[A]\r\nx=1\r\ny=2\r\n",
+        ),
         (b"[A]\r\nx=1\t", ("A", "y", "2"), b"[A]\r\nx=1\r\ny=2\r\n"),
-        (b"[A]\r\nx=1\r\ny=2  ", ("A", "y", "5"), b"[A]\r\nx=1\r\ny=5\r\n"),
-        (b"[A]\r\nx=1\r\ny=2  ", ("A", "x", "5"), b"[A]\r\nx=5\r\ny=2\r\n"),
+        (
+            b"[A]\r\nx=1\r\ny=2  ",
+            ("A", "y", "5"),
+            b"[A]\r\nx=1\r\ny=5\r\n",
+        ),
+        (
+            b"[A]\r\nx=1\r\ny=2  ",
+            ("A", "x", "5"),
+            b"[A]\r\nx=5\r\ny=2\r\n",
+        ),
         (b"[A]\r\n  x=1  ", ("A", "x", "3"), b"[A]\r\n  x=3\r\n"),
-        (b"[A]\r\nx=1 \r", ("A", "y", "2"), b"[A]\r\nx=1 \r\r\ny=2\r\n"),
-        (b"[A]\r\nx=1\r ", ("A", "y", "2"), b"[A]\r\nx=1\r\r\ny=2\r\n"),
+        (
+            b"[A]\r\nx=1 \r",
+            ("A", "y", "2"),
+            b"[A]\r\nx=1 \r\r\ny=2\r\n",
+        ),
+        (
+            b"[A]\r\nx=1\r ",
+            ("A", "y", "2"),
+            b"[A]\r\nx=1\r\r\ny=2\r\n",
+        ),
         (b"[A]  ", ("A", "y", "2"), b"[A]\r\ny=2\r\n"),
-        (b"[A]\r\nx=1  ", ("B", "y", "2"), b"[A]\r\nx=1\r\n[B]\r\ny=2\r\n"),
+        (
+            b"[A]\r\nx=1  ",
+            ("B", "y", "2"),
+            b"[A]\r\nx=1\r\n[B]\r\ny=2\r\n",
+        ),
     ];
     for &(old, (s, k, v), want) in cases {
         assert_eq!(
@@ -242,7 +270,10 @@ fn a_read_ends_lines_at_a_lone_cr() {
     assert_eq!(ini_value(cr_only, b"A", b"y").unwrap(), b"2");
     assert_eq!(ini_value(cr_only, b"A", b"x").unwrap(), b"1");
     assert_eq!(ini_value(b"[A]\rx=1\r[B]\ry=2\r", b"A", b"y"), None);
-    assert_eq!(ini_value(b"[A]\rx=1\r[B]\ry=2\r", b"B", b"y").unwrap(), b"2");
+    assert_eq!(
+        ini_value(b"[A]\rx=1\r[B]\ry=2\r", b"B", b"y").unwrap(),
+        b"2"
+    );
     for text in [&b"[A]\r\nx=1\r\r\ny=2\r\n"[..], b"[A]\nx=1\n\ry=2\n"] {
         assert_eq!(ini_value(text, b"A", b"x").unwrap(), b"1");
         assert_eq!(ini_value(text, b"A", b"y").unwrap(), b"2");
