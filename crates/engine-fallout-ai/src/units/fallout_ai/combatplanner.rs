@@ -1142,7 +1142,20 @@ pub fn combat_planner_get_node_connections(e: &mut Engine, this: Ptr, node: Ptr,
                 };
                 if !e.call(0x0099_4250, &args![step, 1u32]).bool() || at_root {
                     'step: {
-                        let applies = fn_009957c0(e, Ptr::new(step), Ptr::new(goal)) as u8 != 0;
+                        // 009951b3: JIP's H16 (its own, CombatActionApplicableHook): an action
+                        // the controller excludes is not applicable; the seam is asked with
+                        // [this, the step] and answers 0 for that (no answer: the exe's test,
+                        // which JIP's hook repeats). One load while JIP is not installed.
+                        let excluded =
+                            if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                                e.site(0x0099_51b3, &[me, step])
+                            } else {
+                                None
+                            };
+                        let applies = match excluded {
+                            Some(answer) => answer as u8 != 0,
+                            None => fn_009957c0(e, Ptr::new(step), Ptr::new(goal)) as u8 != 0,
+                        };
                         let mut value =
                             typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, goal));
                         if e.call(0x0099_4830, &args![value]).bool() {
@@ -2502,6 +2515,71 @@ mod n023_tests {
         entry_answer(&mut e, 2);
         assert!(e.call(0x0099_50c0, &args![c.planner, c.node, c.out]).bool());
         assert!(array_words(&e, c.out).is_empty());
+    }
+
+    thread_local! {
+        /// H16's asks at `0x9951B3` (its words) and the answer to give.
+        static H16: std::cell::RefCell<(Vec<Vec<u32>>, Option<u32>)> =
+            const { std::cell::RefCell::new((Vec::new(), None)) };
+    }
+
+    fn at_h16(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H16.with(|s| {
+            let mut s = s.borrow_mut();
+            s.0.push(a.to_vec());
+            s.1
+        })
+    }
+
+    /// JIP's H16 seam at `0x9951B3` (its own, `CombatActionApplicableHook`): not asked while JIP
+    /// is not installed; with JIP installed (whatever the fixes row) asked with [planner, step]
+    /// in place of the applicable test: 0 makes the step not applicable (the exe's test
+    /// `009aa3b0` is not made, the goal finds no step), no answer makes the exe's test.
+    #[test]
+    fn h16_seam_decides_the_applicable_test() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            for answer in [Some(0), Some(0x100), Some(1), None] {
+                let mut e = Engine::new();
+                let c = connections(&mut e, true, &[(3, 0x30, 0x300)]);
+                entry_answer(&mut e, 0);
+                e.on_site(SiteSlot::new(Owner::Jip, 0x0099_51b3), at_h16);
+                e.set_jip_patches(word);
+                H16.with(|s| *s.borrow_mut() = (Vec::new(), answer));
+                e.call_log = Some(vec![]);
+                let connected = e.call(0x0099_50c0, &args![c.planner, c.node, c.out]).bool();
+                let asked = H16.with(|s| std::mem::take(&mut s.borrow_mut().0));
+                // The answer's low byte decides, as the exe's `al`.
+                let excluded = installed && answer.is_some_and(|a| a & 0xff == 0);
+                let exe_test = !installed || answer.is_none();
+                assert_eq!(connected, !excluded, "{word:x} {answer:?}");
+                assert_eq!(
+                    asked,
+                    if installed {
+                        vec![vec![c.planner, c.step]]
+                    } else {
+                        vec![]
+                    },
+                    "{word:x} {answer:?}"
+                );
+                assert_eq!(
+                    calls(&e, 0x009a_a3b0),
+                    if exe_test {
+                        vec![vec![c.step + 0x14, 3, 0x30]]
+                    } else {
+                        vec![]
+                    },
+                    "{word:x} {answer:?}"
+                );
+                assert_eq!(calls(&e, slot(0)).len(), usize::from(!excluded));
+            }
+        }
     }
 
     #[test]
