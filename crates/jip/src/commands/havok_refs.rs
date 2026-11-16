@@ -820,6 +820,18 @@ pub(crate) fn ray_cast(
     })
 }
 
+/// The rotation as [`ray_cast`] reads it for a cast along the matrix's column 0: JIP hands a
+/// camera's `WorldRotate()` itself (`NiMatrix33`'s `float*`: words 0, 3, 6, the camera's view),
+/// where [`ray_cast`] takes words 1, 4, 7 (the `WorldRotate() + 1` of the node casts). For every
+/// cast from the main camera (`MoveToReticle`, `GetReticlePos` and the others).
+pub(crate) fn along_column_0(rot: [f32; 9]) -> [f32; 9] {
+    let mut out = [0f32; 9];
+    out[1] = rot[0];
+    out[4] = rot[3];
+    out[7] = rot[6];
+    out
+}
+
 /// The cast's hit point in game units, `(from + (to - from) * fraction) * PS_HKUnitCnvrt` (the
 /// fourth lane times 0), as `RayCastCoords` and `GetRayCastMaterial` compute it.
 pub(crate) fn hit_point(cast: &Cast) -> [f32; 4] {

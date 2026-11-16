@@ -1463,23 +1463,12 @@ fn main_camera(e: &Engine) -> Option<([f32; 4], [f32; 9])> {
     super::jip_fn_misc_ref_havok::node_transform(e, camera)
 }
 
-/// The rotation as `ray_cast` reads it for a cast along the matrix's column 0: JIP hands the
-/// camera's `WorldRotate()` itself (`NiMatrix33`'s `float*`: words 0, 3, 6), where `ray_cast`
-/// takes words 1, 4, 7 (the `WorldRotate() + 1` of the node casts).
-fn along_column_0(rot: [f32; 9]) -> [f32; 9] {
-    let mut out = [0f32; 9];
-    out[1] = rot[0];
-    out[4] = rot[3];
-    out[7] = rot[6];
-    out
-}
-
 /// `NiVector4::RayCastCoords` from the main camera along its view: the point and whether it
 /// counts as found. `None` without the camera, `TES` or the player's controller (JIP reads
 /// through them unchecked).
 fn camera_coords(e: &mut Engine, range: f32, layer: i32) -> Option<([f32; 4], bool)> {
     let (pos, rot) = main_camera(e)?;
-    let cast = h::ray_cast(e, pos, along_column_0(rot), range, layer)?;
+    let cast = h::ray_cast(e, pos, h::along_column_0(rot), range, layer)?;
     Some(h::hit_coords(e, &cast))
 }
 
@@ -1492,7 +1481,21 @@ fn reticle_object(e: &mut Engine, range: f32, layer: i32) -> u32 {
     let (Some(pos), Some((_, rot))) = (h::vec4(e, player + PC_CAMERA_POS), main_camera(e)) else {
         return 0;
     };
-    h::ray_cast(e, pos, along_column_0(rot), range, layer).map_or(0, |c| c.object)
+    h::ray_cast(e, pos, h::along_column_0(rot), range, layer).map_or(0, |c| c.object)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.h: NUM_ARGS_EX.
+/// The argument count byte, or 0 when the low byte of the line's argument data length (the
+/// word before it) is 0: a statement compiled with no argument data has length 0 and no count
+/// (xNVSE's own analyser skips such lines, ScriptAnalyzer.cpp if (context.length)), and the
+/// byte there is the next line's.
+fn num_args_ex(e: &Engine, a: &CommandArgs) -> u8 {
+    let offset = e.mem.u32(a.opcode_offset);
+    if e.mem.u8(a.data.wrapping_add(offset).wrapping_sub(2)) == 0 {
+        0
+    } else {
+        super::jip_fn_utility::num_args(e, a)
+    }
 }
 
 /// The player is in a cell.
@@ -1521,13 +1524,19 @@ fn set_vars(e: &mut Engine, vars: [u32; 3], values: [f32; 3]) {
 /// as found or both arguments were given.
 fn get_reticle_pos(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
-    let num_args = super::jip_fn_utility::num_args(e, &a);
-    let read = Read::of(e, &a);
-    if !player_in_cell(e) || (num_args != 0 && !read.ok) {
+    let num_args = num_args_ex(e, &a);
+    if !player_in_cell(e) {
         return handled(true);
     }
-    let layer = read.int(0, u32::MAX) as i32;
-    let range = read.float(1, CAST_RANGE);
+    let (layer, range) = if num_args == 0 {
+        (-1, CAST_RANGE)
+    } else {
+        let read = Read::of(e, &a);
+        if !read.ok {
+            return handled(true);
+        }
+        (read.int(0, u32::MAX) as i32, read.float(1, CAST_RANGE))
+    };
     if let Some((coords, found)) = camera_coords(e, range, layer) {
         if found || num_args >= 2 {
             let elements = coords[..3]
@@ -1549,14 +1558,23 @@ fn get_reticle_pos(e: &mut Engine, w: &[u32]) -> Ret {
 fn get_reticle_range(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, -1.0);
-    let num_args = super::jip_fn_utility::num_args(e, &a);
-    let read = Read::of(e, &a);
-    if !player_in_cell(e) || (num_args != 0 && !read.ok) {
+    let num_args = num_args_ex(e, &a);
+    if !player_in_cell(e) {
         return handled(true);
     }
-    let layer = read.int(0, u32::MAX) as i32;
-    let range = read.float(1, CAST_RANGE);
-    let from_cam = read.int(2, 0);
+    let (layer, range, from_cam) = if num_args == 0 {
+        (-1, CAST_RANGE, 0)
+    } else {
+        let read = Read::of(e, &a);
+        if !read.ok {
+            return handled(true);
+        }
+        (
+            read.int(0, u32::MAX) as i32,
+            read.float(1, CAST_RANGE),
+            read.int(2, 0),
+        )
+    };
     let Some((coords, found)) = camera_coords(e, range, layer) else {
         return handled(true);
     };

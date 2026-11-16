@@ -37,7 +37,11 @@
 //!   `GetSelectedItemRef` (the top menu's selected list item), `GetWorldMapPosMults` (JIP's
 //!   `WorldDimensions` maths and its cached worldspaces).
 //!
-//! `MessageExAlt` calls the game's `QueueUIMessage` with its own seconds: JIP's G09 hook there
+//! `MessageExAlt` cuts its message to 0x103 bytes until JIP's corner message length patch
+//! (`InitGamePatches`, 16 bytes from `0x7753B8` to `0x77582B`: the HUD queue's message buffer
+//! 0x104 -> 0x204) is built; then to JIP's 0x203. Its icon path and sound are always cut to
+//! 0x103 bytes (the game's queue copies each into 0x104 and a longer one ends the process, with
+//! JIP too). It calls the game's `QueueUIMessage` with its own seconds: JIP's G09 hook there
 //! changes only the exe's own callers' time (return addresses up to `0x96A262`).
 //!
 //! Where JIP reads through a null pointer (a menu's tile, a recipe menu without a category, a
@@ -1737,6 +1741,16 @@ const MESSAGE_ICONS: [u32; 7] = [
 ];
 /// `buffer[0x203] = 0`: the most of the message JIP hands on.
 const MESSAGE_MAX: usize = 0x203;
+/// The HUD's queue (`00775380`) copies the message, the icon path and the sound path with
+/// `strcpy_s` into 0x104 bytes each (a block of 0x310: +0, +0x104, +0x208); a longer text fails
+/// the copy and the CRT's invalid parameter path ends the process. JIP's `InitGamePatches`
+/// raises the message's to 0x204 (its "corner message max text length" bytes at `0x7753B8`,
+/// `0x7753D2`, `0x7753EA`, `0x77540C`, `0x775443`, `0x775461`, `0x77547E`, `0x77549C`, `0x7754BC`,
+/// `0x7754D0`, `0x77553C`, `0x775600`, `0x7714DA`, `0x7757B1`, `0x7757D3`, `0x77582B`), which the
+/// port has not built yet: until it is, the message is cut to 0x103 bytes. The icon path and
+/// the sound stay 0x104 bytes even with that patch: cut to 0x103 always (JIP would stop the
+/// game there).
+const HUD_TEXT_MAX: usize = 0x103;
 /// `kCommandInfo_MessageExAlt.numParams`: the seconds and xNVSE's 21 format parameters.
 const MESSAGE_PARAMS: u32 = 22;
 
@@ -1752,18 +1766,20 @@ enum Icon {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: Cmd_MessageExAlt_Execute.
 /// The text split at `|` runs: while a token has text after it, a token `$name` is the sound,
 /// `#n` (`n` 0 to 6) the exe's icon `n` (another `#` token changes nothing), any other the icon's
-/// path; the last token is the message, cut to 0x203 bytes.
+/// path; the last token is the message, cut to 0x203 bytes. nv-rs's own: the message, the icon
+/// path and the sound then cut to [`HUD_TEXT_MAX`], what the game's queue copies safely.
 fn split_message(text: &[u8]) -> (Vec<u8>, Icon, Option<Vec<u8>>) {
+    let fit = |t: &[u8]| t[..t.len().min(HUD_TEXT_MAX)].to_vec();
     let (mut icon, mut sound) = (Icon::None, None);
     let mut rest = text;
     loop {
         let (token, after) = next_token(rest, b'|');
         if after.is_empty() {
             let message = &token[..token.len().min(MESSAGE_MAX)];
-            return (message.to_vec(), icon, sound);
+            return (fit(message), icon, sound);
         }
         match token.first() {
-            Some(b'$') => sound = Some(token[1..].to_vec()),
+            Some(b'$') => sound = Some(fit(&token[1..])),
             Some(b'#') => {
                 // `buffer[1] - '0'` as a signed char: 0 to 6 only.
                 let index = token
@@ -1776,7 +1792,7 @@ fn split_message(text: &[u8]) -> (Vec<u8>, Icon, Option<Vec<u8>>) {
                     icon = Icon::Exe(path);
                 }
             }
-            _ => icon = Icon::Text(token.to_vec()),
+            _ => icon = Icon::Text(fit(token)),
         }
         rest = after;
     }

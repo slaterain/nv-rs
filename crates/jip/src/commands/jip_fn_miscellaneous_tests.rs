@@ -1210,6 +1210,8 @@ fn form_descriptions() {
     // A note of type 1: its text's Get(note, 'TNAM'), with no cast.
     e.mem.set_u32(NOTE + 0x6c, NOTE_TEXT_DESC);
     e.mem.set_u8(NOTE + 0x7c, 1);
+    // The read flag next to the type (+0x7D) set: the type is one byte.
+    e.mem.set_u8(NOTE + 0x7d, 1);
     CALLS.with(|c| c.borrow_mut().clear());
     assert_eq!(description(&mut e, R_NOTE), b"a note's words");
     assert_eq!(
@@ -1229,7 +1231,9 @@ fn form_descriptions() {
     e.mem.set_u32(LSCR + 0x38, t);
     e.mem.set_u16(LSCR + 0x3c, 7);
     assert_eq!(description(&mut e, 31), b"Welcome");
+    // Length 0 with a buffer size (+0x3E) set: still "" (the length is the 16 bits at +0x3C).
     e.mem.set_u16(LSCR + 0x3c, 0);
+    e.mem.set_u16(LSCR + 0x3e, 0x20);
     assert_eq!(description(&mut e, 31), b"");
     // Get answering no text: "".
     e.mem.set_u32(DESC + 4, 0);
@@ -1306,7 +1310,8 @@ fn local_gravity() {
 }
 
 /// The ray cast's scene: the player's controller filter (`0x12340042`), the main camera at
-/// (100, 200, 300) whose rotation's column 0 is +Y and column 1 +X, the player's camera
+/// (100, 200, 300) whose rotation [0,1,0, 0,0,1, 1,0,0] has column 0 +Z (its view), column 1 +X
+/// and row 0 +Y (not symmetric: a row read for column 0 casts elsewhere), the player's camera
 /// position (1, 2, 3), and a pick stand-in that copies the record into `PICKED` and answers the
 /// object and fraction set at `PICK_ANSWER`.
 const CTRL: u32 = C2 + 0x2000;
@@ -1333,7 +1338,7 @@ fn scene(e: &mut Engine) {
     e.mem.set_u32(PC + 0x40, CELL_IN);
     e.mem.set_u32(0x011d_eb7c, SG);
     e.mem.set_u32(SG + 0xac, CAM);
-    let rot = [0.0f32, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+    let rot = [0.0f32, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0];
     for (i, v) in rot.iter().enumerate() {
         e.mem.set_f32(CAM + 0x68 + 4 * i as u32, *v);
     }
@@ -1392,10 +1397,10 @@ fn first3(v: [f32; 4]) -> [f32; 3] {
 fn reticle_pos() {
     let mut e = setup();
     scene(&mut e);
-    // From the main camera along its rotation's column 0 (+Y), 50000 units, layer -1 (6).
+    // From the main camera along its rotation's column 0 (+Z), 50000 units, layer -1 (6).
     let id = call(&mut e, 0x27f1, &[]).1;
     let (from, to, filter) = picked(&e);
-    let (f3, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 1.0, 0.0], 50000.0);
+    let (f3, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 0.0, 1.0], 50000.0);
     assert_eq!((first3(from), first3(to)), (f3, t3));
     assert_eq!(filter, 0x1234_0006);
     let p = cast_point(f3, t3, 0.5);
@@ -1411,7 +1416,7 @@ fn reticle_pos() {
     call(&mut e, 0x27f1, &[n(3), z(10.0)]);
     let (_, to, filter) = picked(&e);
     assert_eq!(filter, 0x1234_0003);
-    let (_, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 1.0, 0.0], 10.0);
+    let (_, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 0.0, 1.0], 10.0);
     assert_eq!(first3(to), t3);
     // Not found: no array, unless both arguments were given.
     not_found(&mut e);
@@ -1435,13 +1440,13 @@ fn reticle_range() {
     for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
         e.mem.set_f32(PC + 0x30 + 4 * i as u32, *v);
     }
-    let (f3, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 1.0, 0.0], 50000.0);
+    let (f3, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 0.0, 1.0], 50000.0);
     let p = cast_point(f3, t3, 0.5);
     // From the player's position.
     let d = crate::commands::ln_fn_math::point3_distance([10.0, 20.0, 30.0], p);
     assert_eq!(call(&mut e, 0x27f2, &[]).1, f64::from(d));
     // From the camera with fromCam (argument 2); the range is argument 1, the layer 0.
-    let (f3, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 1.0, 0.0], 400.0);
+    let (f3, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 0.0, 1.0], 400.0);
     let p = cast_point(f3, t3, 0.5);
     let d = crate::commands::ln_fn_math::point3_distance([100.0, 200.0, 300.0], p);
     assert_eq!(
@@ -1464,7 +1469,7 @@ fn reticle_pos_alt() {
     let mut e = setup();
     scene(&mut e);
     c2_locals(&mut e, 3);
-    let (f3, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 1.0, 0.0], 50000.0);
+    let (f3, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 0.0, 1.0], 50000.0);
     let p = cast_point(f3, t3, 0.5);
     assert_eq!(call(&mut e, 0x291f, &[var(1), var(2), var(3)]).1, 1.0);
     assert_eq!([1, 2, 3].map(|i| local_value(&e, i)), p.map(f64::from));
@@ -1476,7 +1481,7 @@ fn reticle_pos_alt() {
     call(&mut e, 0x291f, &[var(1), var(2), var(3), n(9), z(5.0)]);
     let (_, to, filter) = picked(&e);
     assert_eq!(filter, 0x1234_0009);
-    let (_, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 1.0, 0.0], 5.0);
+    let (_, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 0.0, 1.0], 5.0);
     assert_eq!(first3(to), t3);
     // Not found: nothing unless all five arguments.
     not_found(&mut e);
@@ -1509,7 +1514,7 @@ fn reticle_node() {
     assert_eq!(node(&mut e, &[]), b"");
     // From the player's camera position (1, 2, 3) along the camera's column 0, layer 6.
     let (from, to, filter) = picked(&e);
-    let (f3, t3) = cast_ends([1.0, 2.0, 3.0], [0.0, 1.0, 0.0], 50000.0);
+    let (f3, t3) = cast_ends([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], 50000.0);
     assert_eq!((first3(from), first3(to)), (f3, t3));
     assert_eq!(filter, 0x1234_0006);
     // A hit: its name; the range (argument 0) and layer (argument 1).
@@ -1521,7 +1526,7 @@ fn reticle_node() {
     assert_eq!(filter, 0x1234_0004);
     assert_eq!(
         first3(to),
-        cast_ends([1.0, 2.0, 3.0], [0.0, 1.0, 0.0], 20.0).1
+        cast_ends([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], 20.0).1
     );
     // A block without a name: "NULL".
     e.mem.set_u32(HIT + 8, 0);
@@ -1552,7 +1557,7 @@ fn reticle_target_limb() {
     assert_eq!(calls_to(LIMB_FN), vec![vec![ACTOR, HIT]]);
     assert_eq!(
         first3(picked(&e).1),
-        cast_ends([1.0, 2.0, 3.0], [0.0, 1.0, 0.0], 30.0).1
+        cast_ends([1.0, 2.0, 3.0], [0.0, 0.0, 1.0], 30.0).1
     );
     // Not an actor: -1, no call.
     e.mem.set_u32(NOT_ACTOR, NOT_ACTOR_VT);
@@ -1640,6 +1645,8 @@ fn p2p_ray_cast_range() {
     // From (0, 0, 0) toward (0, 100, 0): From2Points' column 1 is +Y (signs of zero aside); the
     // cast's length the distance; the result the hit's distance to the second point.
     let args = [z(0.0), z(0.0), z(0.0), z(0.0), z(100.0), z(0.0)];
+    // The hit a quarter of the way: 75 from the second point (25 from the first).
+    e.mem.set_f32(PICK_ANSWER + 4, 0.25);
     let res = call(&mut e, 0x2923, &args).1;
     let (from, to, filter) = picked(&e);
     let len = from_2_points_length([0.0; 3], [0.0, 100.0, 0.0]);
@@ -1647,10 +1654,10 @@ fn p2p_ray_cast_range() {
     assert_eq!(first3(from), f3);
     assert_eq!([to[0].abs(), to[1], to[2].abs()], t3);
     assert_eq!(filter, 0x1234_0006);
-    let p = cast_point(f3, t3, 0.5);
+    let p = cast_point(f3, t3, 0.25);
     let d = crate::commands::ln_fn_math::point3_distance(p, [0.0, 100.0, 0.0]);
     assert_eq!(res, f64::from(d));
-    assert!((res - 50.0).abs() < 0.01, "{res}");
+    assert!((res - 75.0).abs() < 0.01, "{res}");
     // The second point is arguments 3 to 5: toward (0, 0, 40) the cast goes up 40.
     call(
         &mut e,
@@ -1896,7 +1903,8 @@ fn clear_dead_actors_cmd() {
     e.mem.set_u32(VT_REFR + 0x100, 0x008d_0360);
     e.register(KEEPS_FN, |e, w| {
         rec(KEEPS_FN, w);
-        eax(u32::from(e.mem.u32(w[0] + 0x40) == 0x77))
+        // The answer is the byte in al: the upper bytes are set for every actor.
+        eax(0xabcd_ef00 | u32::from(e.mem.u32(w[0] + 0x40) == 0x77))
     });
     e.register(FADE_FN, |_, w| {
         rec(FADE_FN, w);
@@ -1933,6 +1941,17 @@ fn clear_dead_actors_cmd() {
         calls_to(KEEPS_FN),
         vec![vec![actors[11].0], vec![actors[1].0]]
     );
+    // Life states other than 2 (dead) are left: 3 (unconscious) and 5 (restrained) too.
+    for (i, life) in [(14, 3), (15, 5)] {
+        let (actor, _) = dead(&mut e, i);
+        e.mem.set_u32(actor + 0x108, life);
+    }
+    e.mem.set_u32(actors[13].0 + 0x108, 1);
+    e.mem.set_u32(pm + 0x24, 16);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x28ef, &[]);
+    assert_eq!(calls_to(FADE_FN), vec![vec![actors[1].1, actors[1].0]]);
+    e.mem.set_u32(pm + 0x24, 13);
     // Two that pass, faded last to first (12 then 2); the end capped at the capacity (13).
     dead(&mut e, 2);
     dead(&mut e, 12);
@@ -1979,4 +1998,111 @@ fn a_chain_of_50000_nested_lists() {
     let mut set = BTreeSet::new();
     assign_list(&mut e, &mut set, lists);
     assert_eq!(set, BTreeSet::from([MISC]));
+}
+
+/// `NUM_ARGS_EX`: a line with no argument data (length 0, as a statement compiled without
+/// arguments is) has no count; the byte after it (5 here: another line's) is not read as one.
+#[test]
+fn reticle_lines_without_argument_data() {
+    let mut e = setup();
+    scene(&mut e);
+    not_found(&mut e);
+    let run = |e: &mut Engine, opcode: u32| {
+        let words = crate::test_support::line(e, opcode, &[]);
+        e.mem.set_u16(crate::test_support::DATA + 2, 0);
+        e.mem.set_u8(crate::test_support::DATA + 4, 5);
+        let execute = crate::test_support::execute_of(e, opcode);
+        e.call(execute, &words);
+        e.mem.f64(RESULT)
+    };
+    // Not found and no arguments: no array, -1.
+    assert_eq!(run(&mut e, 0x27f1), 0.0);
+    assert_eq!(run(&mut e, 0x27f2), -1.0);
+    // The defaults were cast: layer 6 (from -1), range 50000.
+    let (_, to, filter) = picked(&e);
+    assert_eq!(filter, 0x1234_0006);
+    let (_, t3) = cast_ends([100.0, 200.0, 300.0], [0.0, 0.0, 1.0], 50000.0);
+    assert_eq!(first3(to), t3);
+}
+
+/// A global argument with no global behind it: the read fails.
+fn bad_arg() -> Vec<u8> {
+    vec![b'G', 9, 0]
+}
+
+/// Arguments that do not read: no cast, no variable written, the result as the command starts
+/// it (0, or -1 for GetReticleRange and GetReticleTargetLimb).
+#[test]
+fn unreadable_arguments_are_refused() {
+    let mut e = setup();
+    scene(&mut e);
+    worlds(&mut e);
+    c2_locals(&mut e, 3);
+    let globals = C2 + 0x4000;
+    e.map(0x011f_3000, 0x1000);
+    e.mem.set_u32(0x011f_35cc, globals);
+    e.mem.set_u32(globals + 0x1b24, 5);
+    e.mem.set_f32(0x011e_0a6c + 4, 1.0);
+    let hour = C2 + 0x5000;
+    e.mem.set_u32(0x011d_e7b8 + 0xc, hour);
+    e.mem.set_f32(hour + 0x24, 10.0);
+    let gravity = [0, 4, 8].map(|o| e.mem.u32(EXT_HKP + 0x10 + o));
+    let b = bad_arg;
+    let cases: Vec<(u32, Vec<Vec<u8>>, f64)> = vec![
+        (0x27f1, vec![b(), z(10.0)], 0.0),
+        (0x27f2, vec![n(6), b()], -1.0),
+        (0x291f, vec![var(1), var(2), var(3), n(6), b()], 0.0),
+        (0x28f5, vec![b()], 0.0),
+        (0x2942, vec![b()], -1.0),
+        (
+            0x2906,
+            vec![z(1.0), z(2.0), b(), z(0.0), z(0.0), var(1), var(2), var(3)],
+            0.0,
+        ),
+        (
+            0x2923,
+            vec![z(0.0), z(0.0), z(0.0), z(0.0), b(), z(0.0)],
+            0.0,
+        ),
+        (
+            0x2921,
+            vec![
+                z(0.0),
+                z(0.0),
+                z(0.0),
+                z(1.0),
+                z(0.0),
+                z(0.0),
+                z(0.0),
+                z(0.0),
+                b(),
+                var(1),
+                var(2),
+            ],
+            0.0,
+        ),
+        (
+            0x2922,
+            vec![z(1.0), z(0.0), z(0.0), b(), z(0.0), z(0.0), var(1), var(2)],
+            0.0,
+        ),
+        (0x28f0, vec![var(1), var(9)], 0.0),
+        (0x27b2, vec![], 0.0),
+        (0x27b3, vec![z(1.0), b(), z(1.0)], 0.0),
+        (0x288b, vec![b()], 0.0),
+    ];
+    for (opcode, args, start) in cases {
+        CALLS.with(|c| c.borrow_mut().clear());
+        let r = call(&mut e, opcode, &args).1;
+        let r = if opcode == 0x28f5 { 0.0 } else { r };
+        assert_eq!(r, start, "{opcode:04x}");
+        assert!(calls_to(PICK_FN).is_empty(), "{opcode:04x} cast");
+        assert_eq!(
+            [1, 2, 3].map(|i| local_value(&e, i)),
+            [-1.0; 3],
+            "{opcode:04x} wrote a variable"
+        );
+    }
+    assert_eq!(gravity, [0, 4, 8].map(|o| e.mem.u32(EXT_HKP + 0x10 + o)));
+    assert_eq!(e.mem.f32(hour + 0x24), 10.0);
 }

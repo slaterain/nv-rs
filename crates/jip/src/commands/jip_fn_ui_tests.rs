@@ -1819,9 +1819,23 @@ fn message_tokens() {
     );
     // An empty token is an empty icon path.
     assert_eq!(split_message(b"|m").1, Icon::Text(Vec::new()));
-    // The message cut to 0x203 bytes.
+    // The message cut to 0x103 bytes (the game's 0x104-byte copy; JIP's own cut is 0x203, which
+    // needs its corner message length patch), and the icon path and sound too.
     let long = vec![b'x'; 0x300];
-    assert_eq!(split_message(&long).0.len(), 0x203);
+    assert_eq!(split_message(&long).0.len(), 0x103);
+    for n in [0x103usize, 0x104, 0x203, 0x204] {
+        let mut text = vec![b'i'; n];
+        text.push(b'|');
+        text.push(b'$');
+        text.extend(vec![b's'; n]);
+        text.push(b'|');
+        text.extend(vec![b'm'; n]);
+        let (m, icon, sound) = split_message(&text);
+        let fit = n.min(0x103);
+        assert_eq!(m, vec![b'm'; fit], "{n}");
+        assert_eq!(icon, Icon::Text(vec![b'i'; fit]), "{n}");
+        assert_eq!(sound, Some(vec![b's'; fit]), "{n}");
+    }
 }
 
 #[test]
@@ -1884,4 +1898,56 @@ fn message_ex_alt_queues() {
     let w = &calls_to(QUEUE_FN)[0];
     assert_eq!((w[2], w[3]), (0, 0));
     assert_eq!(texts()[0], b"plain");
+    // A 0x104-byte message, icon path and sound: each handed on in 0x103 bytes and its 0, what
+    // the game's queue copies into its 0x104-byte buffers.
+    let mut text = vec![b'i'; 0x104];
+    text.extend(b"|$");
+    text.extend(vec![b's'; 0x104]);
+    text.push(b'|');
+    text.extend(vec![b'm'; 0x104]);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2738, &[z(1.0), s(&text)]);
+    assert_eq!(
+        texts(),
+        vec![vec![b'm'; 0x103], vec![b'i'; 0x103], vec![b's'; 0x103]]
+    );
+}
+
+/// Arguments that do not read (a global argument with no global behind it, a variable with no
+/// local): no game call, no variable written; SetSystemColor without the interface manager sets
+/// the colour and refreshes nothing.
+#[test]
+fn c2_unreadable_arguments_and_no_interface_manager() {
+    let mut e = setup();
+    c2_locals(&mut e, 3);
+    e.mem.set_u32(0x011f_33f8, FONTS);
+    e.register(DIMS_FN, |_, w| {
+        record(DIMS_FN, w);
+        eax(w[1])
+    });
+    e.register(QUEUE_FN, |_, w| {
+        record(QUEUE_FN, w);
+        eax(1)
+    });
+    let bad = || vec![b'G', 9, 0];
+    call(
+        &mut e,
+        0x2927,
+        &[s(b"Hi"), n(1), bad(), var(1), var(2), var(3)],
+    );
+    call(
+        &mut e,
+        0x2927,
+        &[s(b"Hi"), n(1), z(1.0), var(1), var(2), var(9)],
+    );
+    assert!(calls_to(DIMS_FN).is_empty());
+    assert_eq!([1, 2, 3].map(|i| local_value(&e, i)), [-1.0; 3]);
+    call(&mut e, 0x2738, &[bad(), s(b"Hello")]);
+    assert!(calls_to(QUEUE_FN).is_empty());
+    // SetSystemColor with no interface manager.
+    let objects = colors(&mut e, 2);
+    e.mem.set_u32(0x011d_8a80, 0);
+    call(&mut e, 0x2881, &[n(2), n(1), n(2), n(3)]);
+    assert_eq!(calls_to(SET_COLOR_FN), vec![vec![objects[1], 0x0102_03ff]]);
+    assert!(calls_to(REFRESH_COLOR_FN).is_empty());
 }
