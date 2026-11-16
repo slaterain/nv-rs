@@ -2020,7 +2020,7 @@ fn get_menu_target_ref(e: &mut Engine, w: &[u32]) -> Ret {
     if !read.ok {
         return handled(true);
     }
-    let id = read.int(0, 0) as u32;
+    let id = read.int(0, 0);
     let tile = menu_tile_by_id(e, id);
     let menu = if tile == 0 {
         0
