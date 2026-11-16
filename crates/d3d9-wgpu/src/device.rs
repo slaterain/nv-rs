@@ -1070,8 +1070,12 @@ impl Device {
             mapped_at_creation: false,
         });
         // SAFETY: the hal device is only asked a capability it keeps (no Vulkan call).
+        #[cfg(not(target_vendor = "apple"))]
         let libraries = unsafe { device.as_hal::<wgpu::hal::api::Vulkan>() }
             .is_some_and(|hal| hal.uses_pipeline_libraries());
+        // macOS: wgpu has no Vulkan backend there (Metal draws), so never a Vulkan device.
+        #[cfg(target_vendor = "apple")]
+        let libraries = false;
         let finisher = if NO_QUEUE_THREADS_FOR_TESTS.load(Ordering::Relaxed) {
             None
         } else {
@@ -6157,16 +6161,32 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// libraries, or `NV_WGPU_LIBRARIES=off`).
     pub fn pipeline_library_report(&self) -> Option<String> {
         // SAFETY: the hal device is only read (its counters), on the device's own thread.
-        unsafe { self.device.as_hal::<wgpu::hal::api::Vulkan>() }
-            .and_then(|hal| hal.pipeline_library_report())
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            unsafe { self.device.as_hal::<wgpu::hal::api::Vulkan>() }
+                .and_then(|hal| hal.pipeline_library_report())
+        }
+        // macOS: no Vulkan backend there (Metal draws).
+        #[cfg(target_vendor = "apple")]
+        {
+            None
+        }
     }
 
     /// Whether the Vulkan backend links this device's render pipelines from pipeline libraries
     /// ([`Device::pipeline_library_report`]).
     pub fn uses_pipeline_libraries(&self) -> bool {
         // SAFETY: as in `pipeline_library_report`: a capability read on the device's own thread.
-        unsafe { self.device.as_hal::<wgpu::hal::api::Vulkan>() }
-            .is_some_and(|hal| hal.uses_pipeline_libraries())
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            unsafe { self.device.as_hal::<wgpu::hal::api::Vulkan>() }
+                .is_some_and(|hal| hal.uses_pipeline_libraries())
+        }
+        // macOS: no Vulkan backend there (Metal draws).
+        #[cfg(target_vendor = "apple")]
+        {
+            false
+        }
     }
 
     /// What the device made of its pipeline cache file ("N KB read", "none yet...", "...: ignored...");
