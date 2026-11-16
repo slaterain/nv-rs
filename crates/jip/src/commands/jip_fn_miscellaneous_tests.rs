@@ -2116,16 +2116,13 @@ const SNEAK_CHANGED_FN: u32 = 0x0093_ab30;
 const IRON_SIGHTS_FN: u32 = 0x008b_b650;
 const BLOCK_FN: u32 = 0x0089_4cc0;
 
-/// The player standing, able to sneak: mover flags 0x81 (+0x400 when sneaking), action -1, the
-/// exe's action table at `0x94423C` (its bytes, then the jump table's first bytes), cached
-/// flags 0xFFFF; `GetIsParalyzed` answers the byte at `C2 + 0x2_0300` with upper bytes set.
+/// The player standing, able to sneak: mover flags 0x81 (+0x400 when sneaking), action -1,
+/// cached flags 0xFFFF; `GetIsParalyzed` answers the byte at `C2 + 0x2_0300` with upper bytes
+/// set. The exe's action table at `0x94423C` is in its code section, which the game's memory
+/// does not hold: it stays unmapped here too, so the command must not read it.
 fn sneak_setup() -> Engine {
     let mut e = setup();
-    e.map(0x0094_4000, 0x1000);
-    let table = [
-        0u8, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0x90, 0x05, 0x31, 0x94,
-    ];
-    e.mem.write(0x0094_423c, &table);
+    assert!(!e.mem.is_mapped(0x0094_423c));
     e.mem.set_u32(PC + 0x190, SNEAK_MOVER);
     e.mem.set_u32(SNEAK_MOVER, MOVER_VT);
     e.mem.set_u32(MOVER_VT + 0xc, FORCE_FN);
@@ -2194,7 +2191,7 @@ fn toggle_player_sneaking_sneaks_and_stands() {
 fn toggle_player_sneaking_refusals() {
     // Each blocks the change on its own; the neighbouring bytes are set so a wider read differs.
     type Setup = fn(&mut Engine);
-    let cases: [(&str, Setup); 10] = [
+    let cases: [(&str, Setup); 11] = [
         ("alive state", |e| e.mem.set_u32(PC + 0x108, 1)),
         ("sitting", |e| e.mem.set_u32(PC + 0x1ac, 3)),
         ("controls 0x40", |e| e.mem.set_u8(PC + 0x680, 0x40)),
@@ -2203,6 +2200,9 @@ fn toggle_player_sneaking_refusals() {
         ("action 16", |e| e.mem.set_u16(PROCESS + 0x2ec, 16)),
         ("action 18 (past the table)", |e| {
             e.mem.set_u16(PROCESS + 0x2ec, 18)
+        }),
+        ("action -2 (before the table)", |e| {
+            e.mem.set_u16(PROCESS + 0x2ec, 0xfffe)
         }),
         ("paralysed", |e| e.mem.set_u8(C2 + 0x2_0300, 1)),
         ("a lower process", |e| e.mem.set_u32(PROCESS + 0x28, 1)),
@@ -2214,6 +2214,10 @@ fn toggle_player_sneaking_refusals() {
         call(&mut e, 0x2907, &[n(1)]);
         assert_eq!(changes(), 0, "{what}");
         assert!(calls_to(SNEAK_CHANGED_FN).is_empty(), "{what}");
+        assert!(
+            calls_to(IRON_SIGHTS_FN).is_empty() && calls_to(BLOCK_FN).is_empty(),
+            "{what}"
+        );
         assert_eq!(e.mem.u32(CACHED + 0x44), 0xffff, "{what}");
     }
     // Bits other than 0x40 of the controls byte, actions whose byte is 0 (2, 9, 17): allowed.
@@ -2229,6 +2233,7 @@ fn toggle_player_sneaking_refusals() {
         f(&mut e);
         call(&mut e, 0x2907, &[n(1)]);
         assert_eq!(changes(), 1, "case {i}");
+        assert!(!e.mem.is_mapped(0x0094_423c), "case {i}");
     }
     // An argument that does not read: nothing.
     let mut e = sneak_setup();

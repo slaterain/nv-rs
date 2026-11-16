@@ -2058,10 +2058,12 @@ const CACHED_FLAGS: u32 = 0x44;
 const MOVER_FLAGS: u32 = 0x94;
 const FORCE_MOVE_MODE_SLOT: u32 = 0x0c;
 const SNEAK: u32 = 0x400;
-/// JIP's `(bool*)0x94423D`, read at the current action: the exe's own byte table at `0x94423C`
-/// for the action plus one (the sneak key's case table, `0x940E3E`: 0 for no action, 1 for the
-/// actions that block sneaking).
-const ACTION_BLOCKS: u32 = 0x0094_423d;
+/// JIP's `(bool*)0x94423D`, read at the current action: the exe's own byte table at
+/// `FalloutNV.exe 0x94423C`, read at the action plus one (the sneak key's case table: `0x940E2B`
+/// sends action + 1 above 0x12 to the blocked path, `0x940E3E` reads the byte, `0x940E45` jumps
+/// on it; case 0 goes on to sneak, case 1 is blocked). The 19 bytes are copied here because the
+/// table sits in the exe's code section, which the port does not map into game memory.
+const ACTION_BLOCKS: [u8; 19] = [0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0];
 /// `0093AB30` (`thiscall (player, 0xA + was sneaking)`, `RET 4`), `Actor::SetIronSights`
 /// (`008BB650`, three bytes, `RET 0xC`), `Actor::SetBlock` (`00894CC0`, one byte, `RET 4`).
 const SNEAK_CHANGED: u32 = 0x0093_ab30;
@@ -2075,8 +2077,9 @@ const SET_BLOCK: u32 = 0x0089_4cc0;
 /// cleared (its `ForceMoveMode`), `0093AB30(0xA + was sneaking)`, and without the scope iron
 /// sights and blocking ended; the cached walk and run speeds marked stale (flags 0x3000).
 ///
-/// nv-rs's own: an action whose table byte cannot be read counts as blocking (JIP reads past
-/// the table into the code after it, which is not 0 there either).
+/// nv-rs's own: past the table (actions below -1 or above 17, which the game never sets) JIP
+/// reads the padding and the next jump table (non-zero for actions 18 to 21, but 0 for action
+/// 22); nv-rs blocks every such action, as the exe's own range check at `0x940E2B` does.
 fn toggle_sneak(e: &mut Engine, pc: u32, on: bool) {
     let Some(process) = h::ptr(e, pc + PC_PROCESS) else {
         return;
@@ -2090,7 +2093,10 @@ fn toggle_sneak(e: &mut Engine, pc: u32, on: bool) {
     let flags = e.mem.u32(mover + MOVER_FLAGS);
     let sneaking = flags & SNEAK != 0;
     let action = i32::from(e.mem.u16(process + PROCESS_ACTION) as i16);
-    let blocks = h::rd8(e, ACTION_BLOCKS.wrapping_add(action as u32)) != Some(0);
+    let blocks = usize::try_from(action + 1)
+        .ok()
+        .and_then(|i| ACTION_BLOCKS.get(i))
+        .is_none_or(|&b| b != 0);
     if sneaking == on
         || e.mem.u32(pc + PC_LIFE_STATE) != 0
         || e.mem.u32(pc + PC_SIT_SLEEP_STATE) != 0
