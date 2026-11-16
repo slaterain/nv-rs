@@ -440,6 +440,69 @@ fn the_reports_first_read_line_comes_once_at_the_first_patched_file_read() {
     assert!(e.ext::<Uio>().first_read_told);
 }
 
+/// UIOLoad's start-up report as printed: an unreadable target and tiles not in their file are
+/// named; the first-read count holds only the additions put in, and a file that got none is not
+/// counted at all.
+#[test]
+fn the_start_up_report_names_unreadable_targets_and_missing_tiles_as_printed() {
+    let mut e = engine();
+    a_mod_installed();
+    loose(
+        "Data\\uio\\public\\more.txt",
+        "mine\\a b.xml:HUDMainMenu:NoTile\r\ntrue\r\n\
+         mine\\a b.xml:@prefabs\\gone.xml:T\r\ntrue\r\n\
+         mine\\a b.xml:@prefabs\\radar\\radarhud.xml:NoTile\r\ntrue\r\n",
+    );
+    world(|w| w.listing = vec![b"mine.txt".to_vec(), b"more.txt".to_vec()]);
+    crate::game::TOLD.with(|t| t.borrow_mut().clear());
+    set_on(&mut e, true);
+    install(&mut e);
+    assert_eq!(e.site(0x0070_a049, &[0]), None);
+    let told = crate::game::TOLD.with(|t| t.borrow().clone());
+    assert_eq!(
+        told[0],
+        "UI Organizer: read 3 list files: supported.txt, mine.txt, more.txt"
+    );
+    assert!(told[1].starts_with("UI Organizer: 5 additions: "));
+    let problems: Vec<&String> = told.iter().filter(|l| l.contains("not put in")).collect();
+    assert_eq!(problems.len(), 3, "{told:?}");
+    for line in [
+        "UI Organizer: prefabs\\gone.xml could not be read, so its 1 addition was not put in",
+        "UI Organizer: Main\\hud_main_menu.xml has no tile NoTile, so 1 addition was not put in",
+        "UI Organizer: prefabs\\radar\\radarhud.xml has no tile NoTile, so 1 addition was not put in",
+    ] {
+        assert!(problems.iter().any(|l| *l == line), "{line} in {told:?}");
+    }
+    assert_eq!(
+        told.last().unwrap(),
+        "UI Organizer: supported.txt: sc\\sc_hud.xml not added: Stimpak Counter.esp is not in \
+         plugins.txt"
+    );
+    // The HUD: three additions listed, one of them to a tile it lacks: 2 put in. Radar's HUD got
+    // none: not counted; the unreadable file neither.
+    let first = &e.ext::<Uio>().first_read;
+    assert_eq!(
+        first.get(&crate::hash::str_hash(HUD.as_bytes())),
+        Some(&(HUD.as_bytes().to_vec(), 2))
+    );
+    assert_eq!(first.len(), 1);
+    // The first read of the radar file (patched, nothing added) says nothing; the HUD's does,
+    // once.
+    let _ = read_file(&mut e, "Data\\Menus\\prefabs\\radar\\radarhud.xml");
+    assert!(!e.ext::<Uio>().first_read_told);
+    let _ = read_file(&mut e, HUD);
+    let _ = read_file(&mut e, HUD);
+    let told = crate::game::TOLD.with(|t| t.borrow().clone());
+    let firsts: Vec<&String> = told
+        .iter()
+        .filter(|l| l.contains("first file with additions read"))
+        .collect();
+    assert_eq!(
+        firsts,
+        vec!["UI Organizer: first file with additions read: Main\\hud_main_menu.xml (2 additions)"]
+    );
+}
+
 #[test]
 fn a_kept_parse_is_answered_again_with_the_keep_byte() {
     let mut e = engine();

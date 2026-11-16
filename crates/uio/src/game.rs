@@ -222,18 +222,23 @@ pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
         let additions: usize = tiles.iter().map(|(_, paths)| paths.len()).sum();
         if let Fetch::Text(text) = game_text(e, file, MAX_TEXT) {
             let (text, missing) = patch::patch_noted(&text, tiles.clone());
-            for (tile, additions) in missing {
+            let mut put_in = additions;
+            for (tile, additions, opened) in missing {
+                put_in -= additions;
                 problems.push(Problem::TileMissing {
                     file: file.to_vec(),
                     tile,
                     additions,
+                    opened,
                 });
             }
             let uio = e.ext::<Uio>();
             uio.patched.insert(file, text);
-            uio.first_read
-                .entry(str_hash(file))
-                .or_insert((file.to_vec(), additions));
+            if put_in > 0 {
+                uio.first_read
+                    .entry(str_hash(file))
+                    .or_insert((file.to_vec(), put_in));
+            }
         } else {
             problems.push(Problem::Unreadable {
                 file: file.to_vec(),
@@ -242,7 +247,7 @@ pub fn uio_load(e: &mut Engine, _: &[u32]) -> Option<u32> {
         }
     }
     for line in report::startup_lines(&seen, &problems) {
-        eprintln!("{line}");
+        say(line);
     }
     e.ext::<Uio>().loaded = true;
     None
@@ -257,8 +262,22 @@ fn note_first_read(e: &mut Engine, hash: u32) {
     if let Some((file, additions)) = uio.first_read.get(&hash) {
         let line = report::first_read_line(file, *additions);
         uio.first_read_told = true;
-        eprintln!("{line}");
+        say(line);
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The report's lines printed on this thread (the tests read them).
+    pub(crate) static TOLD: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// One line of the report to the play log.
+fn say(line: String) {
+    eprintln!("{line}");
+    #[cfg(test)]
+    TOLD.with(|t| t.borrow_mut().push(line));
 }
 
 // Translated from UIO 2.30 (426d963), ui_organizer.h: ResolveXMLFileHook (the parse cache, the

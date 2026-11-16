@@ -562,6 +562,33 @@ fn ohuds_list_adds_each_patch_into_its_hotkey_hud_when_that_is_installed() {
     );
 }
 
+/// A public list's condition line with a leading space, its `#` file installed: UIO reads the
+/// leading blank as a false operand, so the entry is left out, and the report says why (never
+/// that the installed file is missing).
+#[test]
+fn a_condition_with_a_leading_space_is_false_and_the_report_says_why() {
+    let mut f = ohud_folder();
+    f.file(
+        "Data\\UIO\\Public\\oHUDPatches.txt",
+        &OHUD_PATCHES.replace("\n#GrenadeKeyHUD.xml", "\n #GrenadeKeyHUD.xml"),
+    )
+    .file("Data\\Menus\\Prefabs\\GrenadeKeyHUD.xml", "")
+    .file("Data\\Menus\\Prefabs\\MineKeyHUD.xml", "");
+    let (lists, seen) = scan_noted(&mut f);
+    assert_eq!(
+        order(&lists, "Data\\menus\\Prefabs\\MineKeyHUD.xml", "MineRECT"),
+        vec!["UIOPatches\\MineKey.xml"]
+    );
+    assert_eq!(lists.len(), 1);
+    let grenade = &seen.entries[0];
+    assert_eq!(grenade.outcome, Outcome::ConditionFalse);
+    assert_eq!(grenade.condition, b"\t#GrenadeKeyHUD.xml");
+    assert_eq!(
+        crate::report::reason(grenade).unwrap(),
+        "its condition line starts with a blank, which UIO reads as false (#GrenadeKeyHUD.xml)"
+    );
+}
+
 #[test]
 fn every_way_an_entry_is_left_out_is_noted() {
     let mut f = Fake::default();

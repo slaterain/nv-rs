@@ -4,7 +4,8 @@
 //! when the lists have been read ([`startup_lines`]) and once when the first file with additions is
 //! read ([`first_read_line`]). The row off, UIO never loads and nothing is printed.
 
-use crate::lists::SUPPORTED_NAME;
+use crate::lists::{next_token, PREFABS, SUPPORTED_NAME};
+use crate::reader::UIO_PATH;
 
 /// What became of one entry of a list (UIO's own log line for it, `UIOLoad`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,16 +64,24 @@ pub struct Scan {
 pub enum Problem {
     /// The game could not read the target file: its additions were not put in.
     Unreadable { file: Vec<u8>, additions: usize },
-    /// The tile was not found in the file: its additions were not put in.
+    /// The tile was not closed in the file as UIO walks it: its additions were not put in.
+    /// `opened`: a tag named so was met (UIO's walk opened it but never reached its end, as when a
+    /// self-closing named tag inside it counts as one more open tile); else the file has no tile
+    /// of that name.
     TileMissing {
         file: Vec<u8>,
         tile: Vec<u8>,
         additions: usize,
+        opened: bool,
     },
 }
 
 /// The most "not added" lines printed; the rest are counted in one line.
 pub const MAX_SKIPPED_LINES: usize = 40;
+
+/// The most list files named, paths named in the additions line, and problem lines printed;
+/// the rest are counted.
+pub const MAX_NAMED: usize = 40;
 
 const PREFIX: &str = "UI Organizer: ";
 
@@ -102,19 +111,44 @@ fn plural(n: usize, one: &str, many: &str) -> String {
     format!("{n} {}", if n == 1 { one } else { many })
 }
 
+/// A condition line's tokens as [`crate::lists::evaluate`] (UIO's `GetNextToken`) takes them: a
+/// run of tabs ends one token, so only a LEADING tab makes an empty token (which UIO reads as an
+/// operand that is false).
+fn condition_tokens(condition: &[u8]) -> Vec<&[u8]> {
+    let mut tokens = Vec::new();
+    let mut rest = condition;
+    while !rest.is_empty() {
+        let (token, after) = next_token(rest, b'\t');
+        tokens.push(token);
+        rest = after;
+    }
+    tokens
+}
+
 /// Why a condition line answered false, in plain words: a lone `#file` or `?plugin` (with or
-/// without `!`) is named; anything else is quoted.
+/// without `!`) is named; a line starting with a blank says so (UIO reads that blank as a false
+/// operand and passes over what follows it); anything else is quoted.
 pub fn condition_reason(condition: &[u8]) -> String {
-    let tokens: Vec<&[u8]> = condition
-        .split(|&c| c == b'\t')
-        .filter(|t| !t.is_empty())
-        .collect();
+    let tokens = condition_tokens(condition);
+    if tokens.first().is_some_and(|t| t.is_empty()) {
+        let shown: Vec<String> = tokens[1..].iter().copied().map(text).collect();
+        return format!(
+            "its condition line starts with a blank, which UIO reads as false ({})",
+            shown.join(" ")
+        );
+    }
     if let [token] = tokens.as_slice() {
         let (negated, t) = match token.split_first() {
             Some((b'!', rest)) => (true, rest),
             _ => (false, *token),
         };
         match t.split_first() {
+            Some((b'#', file)) if !negated && PREFABS.len() + file.len() > UIO_PATH => {
+                return format!(
+                    "the name Prefabs\\{} is too long for UIO, which reads it as not installed",
+                    text(file)
+                );
+            }
             Some((b'#', file)) => {
                 let is = if negated { "is" } else { "is not" };
                 return format!("Prefabs\\{} {is} installed", text(file));
@@ -165,12 +199,17 @@ pub fn startup_lines(scan: &Scan, problems: &[Problem]) -> Vec<String> {
     let mut first = if opened.is_empty() {
         format!("{PREFIX}read no list file")
     } else {
+        let more = opened.len().saturating_sub(MAX_NAMED);
+        let mut named = opened[..opened.len() - more].join(", ");
+        if more > 0 {
+            named.push_str(&format!(" and {more} more"));
+        }
         format!(
-            "{PREFIX}read {}: {}",
+            "{PREFIX}read {}: {named}",
             plural(opened.len(), "list file", "list files"),
-            opened.join(", ")
         )
     };
+    let mut unopened = 0usize;
     for l in scan.lists.iter().filter(|l| !l.opened) {
         if l.name == SUPPORTED_NAME {
             first.push_str(
@@ -178,8 +217,17 @@ pub fn startup_lines(scan: &Scan, problems: &[Problem]) -> Vec<String> {
                  Data\\uio\\supported.txt in the UIO download)",
             );
         } else {
-            first.push_str(&format!("; {} could not be opened", text(&l.name)));
+            unopened += 1;
+            if unopened <= MAX_NAMED {
+                first.push_str(&format!("; {} could not be opened", text(&l.name)));
+            }
         }
+    }
+    if unopened > MAX_NAMED {
+        first.push_str(&format!(
+            "; {} could not be opened",
+            plural(unopened - MAX_NAMED, "more list file", "more list files")
+        ));
     }
     out.push(first);
 
@@ -198,25 +246,35 @@ pub fn startup_lines(scan: &Scan, problems: &[Problem]) -> Vec<String> {
     if added == 0 {
         out.push(format!("{PREFIX}no additions"));
     } else {
-        let parts: Vec<String> = groups
-            .iter()
-            .map(|(f, t, paths)| {
-                format!(
-                    "{} at {}: {}",
-                    short_file(f),
-                    tile_name(t),
-                    paths.join(", ")
-                )
-            })
-            .collect();
-        out.push(format!(
+        // At most MAX_NAMED paths named in all, the groups in order; the rest counted.
+        let mut room = MAX_NAMED;
+        let mut parts: Vec<String> = Vec::new();
+        for (f, t, paths) in &groups {
+            if room == 0 {
+                break;
+            }
+            let shown = paths.len().min(room);
+            room -= shown;
+            parts.push(format!(
+                "{} at {}: {}",
+                short_file(f),
+                tile_name(t),
+                paths[..shown].join(", ")
+            ));
+        }
+        let mut line = format!(
             "{PREFIX}{}: {}",
             plural(added, "addition", "additions"),
             parts.join("; ")
-        ));
+        );
+        if added > MAX_NAMED {
+            line.push_str(&format!("; and {} more", added - MAX_NAMED));
+        }
+        out.push(line);
     }
 
-    for p in problems {
+    let more = problems.len().saturating_sub(MAX_NAMED);
+    for p in problems.iter().take(MAX_NAMED) {
         out.push(match p {
             Problem::Unreadable { file, additions } => format!(
                 "{PREFIX}{} could not be read, so its {} not put in",
@@ -227,13 +285,33 @@ pub fn startup_lines(scan: &Scan, problems: &[Problem]) -> Vec<String> {
                 file,
                 tile,
                 additions,
+                opened: false,
             } => format!(
-                "{PREFIX}{} has no tile {}, so {} there not put in",
+                "{PREFIX}{} has no tile {}, so {} not put in",
+                short_file(file),
+                text(tile),
+                plural(*additions, "addition was", "additions were")
+            ),
+            Problem::TileMissing {
+                file,
+                tile,
+                additions,
+                opened: true,
+            } => format!(
+                "{PREFIX}{}: tile {} is opened but UIO never finds its end (a self-closing named \
+                 tag inside it counts as one more open tile), so {} not put in",
                 short_file(file),
                 text(tile),
                 plural(*additions, "addition was", "additions were")
             ),
         });
+    }
+    if more > 0 {
+        out.push(format!(
+            "{PREFIX}and {} more {} met while putting additions in",
+            more,
+            if more == 1 { "problem" } else { "problems" }
+        ));
     }
 
     let skipped: Vec<String> = scan
