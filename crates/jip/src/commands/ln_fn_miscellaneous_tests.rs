@@ -952,4 +952,109 @@ mod ar_cat {
         assert_eq!(cat(&mut e, &[packed as i32, empty as i32]), 0.0);
         assert_eq!(array_data(&e, f64::from(packed)), vec![Data::Number(1.0)]);
     }
+
+    /// A map by number owned by mod `owner`, holding `pairs`.
+    fn owned_map(e: &mut Engine, owner: u8, pairs: Vec<(f64, Value)>) -> u32 {
+        let id = vars::create_array(e, KEY_NUMBER, false, owner);
+        for (k, v) in pairs {
+            vars::set_element(e, id, &Key::Number(k), v);
+        }
+        id
+    }
+
+    fn refs(e: &Engine, id: u32) -> Vec<u8> {
+        vars::array(e, id).expect("the array").refs.clone()
+    }
+
+    /// Maps by text with the overwrite flag: the target's spelling of the key kept, its value
+    /// replaced.
+    #[test]
+    fn a_string_map_with_the_flag_replaces_the_value_and_keeps_the_spelling() {
+        let mut e = setup();
+        let into = map_of(
+            &mut e,
+            KEY_STRING,
+            vec![(Key::Str(b"Key".to_vec()), num(1.0))],
+        );
+        let from = map_of(
+            &mut e,
+            KEY_STRING,
+            vec![
+                (Key::Str(b"KEY".to_vec()), num(2.0)),
+                (Key::Str(b"other".to_vec()), num(3.0)),
+            ],
+        );
+        assert_eq!(cat(&mut e, &[into as i32, from as i32, 1]), 1.0);
+        assert_eq!(
+            keys(&e, into),
+            vec![Key::Str(b"Key".to_vec()), Key::Str(b"other".to_vec())]
+        );
+        assert_eq!(
+            array_data(&e, f64::from(into)),
+            [2.0, 3.0].map(Data::Number).to_vec()
+        );
+    }
+
+    /// An array value between maps of different mods (target mod 1, source and the inner array
+    /// mod 2): the target's new reference is recorded under the target's mod; with the flag
+    /// the target's old array value is replaced and its reference given up.
+    #[test]
+    fn an_array_value_is_referred_to_under_the_targets_mod() {
+        let mut e = setup();
+        let inner = vars::create_array(&mut e, KEY_NUMBER, false, 2);
+        let from = owned_map(&mut e, 2, vec![(1.0, Value::Array(inner))]);
+        assert_eq!(refs(&e, inner), vec![2]);
+        let into = owned_map(&mut e, 1, vec![]);
+        assert_eq!(cat(&mut e, &[into as i32, from as i32]), 1.0);
+        assert_eq!(array_data(&e, f64::from(into)), vec![Data::Array(inner)]);
+        assert_eq!(refs(&e, inner), vec![2, 1], "the target's mod");
+        // With the flag over a key holding another array (owned by the target's mod).
+        let old = vars::create_array(&mut e, KEY_NUMBER, false, 1);
+        let into = owned_map(&mut e, 1, vec![(1.0, Value::Array(old))]);
+        assert_eq!(refs(&e, old), vec![1]);
+        assert_eq!(cat(&mut e, &[into as i32, from as i32, 1]), 1.0);
+        assert_eq!(array_data(&e, f64::from(into)), vec![Data::Array(inner)]);
+        assert_eq!(refs(&e, inner), vec![2, 1, 1]);
+        assert!(refs(&e, old).is_empty(), "the old reference given up");
+    }
+
+    /// A map by number holding a loaded and an unloaded form: the loaded one by its id, the
+    /// other as 0.
+    #[test]
+    fn a_map_holding_forms_keeps_the_loaded_one_and_zeroes_the_other() {
+        let mut e = setup();
+        let from = owned_map(
+            &mut e,
+            0,
+            vec![
+                (1.0, Value::Form(0x0000_0a01)),
+                (2.0, Value::Form(0x0000_0a02)),
+            ],
+        );
+        let into = owned_map(&mut e, 0, vec![]);
+        assert_eq!(cat(&mut e, &[into as i32, from as i32]), 1.0);
+        assert_eq!(
+            array_data(&e, f64::from(into)),
+            vec![Data::Form(0x0000_0a01), Data::Form(0)]
+        );
+    }
+
+    /// A map added to itself with the flag, holding an array: the element is set to the same
+    /// array again (its reference given up and taken again), and the clean-up of temporary
+    /// arrays leaves the inner array.
+    #[test]
+    fn a_map_added_to_itself_keeps_its_inner_array_through_the_clean_up() {
+        let mut e = setup();
+        let inner = vars::create_array(&mut e, KEY_NUMBER, false, 1);
+        let map = owned_map(&mut e, 1, vec![(1.0, Value::Array(inner))]);
+        let mut variable = 0;
+        vars::add_reference(&mut e, &mut variable, map, 1);
+        assert_eq!(cat(&mut e, &[map as i32, map as i32, 1]), 1.0);
+        assert_eq!(array_data(&e, f64::from(map)), vec![Data::Array(inner)]);
+        assert_eq!(refs(&e, inner), vec![1]);
+        vars::clean_arrays(&mut e);
+        assert!(vars::array_exists(&e, map));
+        assert!(vars::array_exists(&e, inner), "the inner array survives");
+        assert_eq!(refs(&e, inner), vec![1]);
+    }
 }
