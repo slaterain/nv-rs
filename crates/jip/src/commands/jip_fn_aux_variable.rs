@@ -3,10 +3,10 @@
 //! commands (`AuxVarGetFltCond` is a condition only).
 //!
 //! The saved variables are JIP's `s_auxVariables[0]`, the co-save's own map
-//! ([`crate::cosave::Saved::aux_vars`], read and written there as JIP's `JPAV` record, byte for
+//! ([`AuxMaps`], read and written by `cosave.rs` as JIP's `JPAV` record, byte for
 //! byte); a command changing them sets JIP's changed flag for them (`kChangedFlag_AuxVars`), so a
 //! load of the same save reads them again. A name beginning `*` is temporary
-//! (`s_auxVariables[1]`): never saved, kept for the session ([`Jip::temp_aux_vars`]). A name whose first
+//! (`s_auxVariables[1]`): never saved, kept for the session (the same [`AuxMaps`]). A name whose first
 //! character after an optional `*` is `_` is shared by every mod (mod index 0xFF); any other
 //! belongs to the calling script's mod (`GetOverridingModIdx`: the last file of the script form's
 //! files). The owner is the form argument (a reference's base form, as JIP's `GetSubjectID`), or
@@ -22,7 +22,6 @@ use super::arrays::{create_array, create_string_map, set_element, Element};
 use super::{assign_string, buffer_arg, cvttsd2si, Handlers};
 use crate::containers::{str_hash_ci, Name, UnorderedMap};
 use crate::cosave::{changed, lookup_form, Value};
-use crate::Jip;
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::vars::{self, Container, Data, Key};
@@ -77,46 +76,133 @@ pub type RefMods = UnorderedMap<u32, UnorderedMap<Name, UnorderedMap<u32, Value>
 
 /// The temporary data JIP keeps for the session (`s_refMapArrays[1]`, made with 8 buckets) and its
 /// ref map walk (`s_refMapIterator`). The temporary aux variables (`s_auxVariables[1]`) are
-/// [`Jip::temp_aux_vars`]: one map for every thread's engine.
+/// in [`AuxMaps`] with the saved ones: one pair of maps for every thread's engine.
 #[derive(Default)]
 pub struct Temp {
     pub ref_maps: RefMods,
     pub ref_map_walk: Option<super::jip_fn_ref_map::Walk>,
 }
 
-/// Whether either aux map may hold a variable: set on every reach of the maps ([`aux_maps`], a
-/// co-save load), cleared only by a reader that found both empty while holding JIP's slot
-/// ([`maps_found_empty`]). Lock-free ([`Engine::ext_free`]), so a path every thread runs often
-/// (the reference destructor) tests it without JIP's slot.
-#[derive(Default)]
-pub struct AuxVarsHeld(pub std::sync::atomic::AtomicBool);
+/// JIP's two aux variable maps (`s_auxVariables[0]`, the saved ones written to the co-save, and
+/// `s_auxVariables[1]`, the temporary ones): one pair for the run, as JIP's globals, behind one
+/// std `Mutex` in a lock-free slot ([`Engine::ext_free`], made at install before the threads
+/// start), with the "may hold" flag. The commands (serialised by xNVSE's slot) and the co-save
+/// reach them on the main or a script's thread, the reference destructor (`game_patches::gh2`)
+/// on any thread that destroys references (loader threads at cell unload): none takes JIP's
+/// shared slot for them. The lock is a leaf: a guard borrows the engine, so no game call,
+/// script call or second slot access can happen while it is held, and each logical operation (a
+/// lookup and its change, the destructor's check and erase of both maps) is one lock take.
+pub struct AuxMaps {
+    pair: std::sync::Mutex<AuxPair>,
+    /// Whether either map may hold a variable: set on every reach of the maps ([`aux_pair`],
+    /// [`aux_maps`]), cleared only by a reader that found both empty ([`AuxPairGuard::maps_found_empty`]),
+    /// each while holding the lock, so the flag is exact whenever the lock is free. Read without
+    /// the lock ([`maps_may_hold`]), so the reference destructor, which every thread runs often,
+    /// takes no lock while both maps are empty.
+    held: std::sync::atomic::AtomicBool,
+}
+
+/// The pair behind [`AuxMaps`]' lock.
+pub struct AuxPair {
+    pub saved: AuxMods,
+    pub temp: AuxMods,
+}
+
+impl AuxPair {
+    /// The saved or the temporary map.
+    pub fn map(&mut self, temp: bool) -> &mut AuxMods {
+        if temp {
+            &mut self.temp
+        } else {
+            &mut self.saved
+        }
+    }
+}
+
+impl Default for AuxMaps {
+    fn default() -> Self {
+        // `s_auxVariables[0]` and `[1]`: 8 buckets each (`UnorderedMap`'s default, as before).
+        AuxMaps {
+            pair: std::sync::Mutex::new(AuxPair {
+                saved: AuxMods::new(8),
+                temp: AuxMods::new(8),
+            }),
+            held: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+}
+
+/// Both maps under their one lock, the "may hold" flag set under it (a writer may add to
+/// either): the paths that read or change both, or the saved one as a whole (the destructor,
+/// the co-save, `ClearJIPSavedData`).
+pub fn aux_pair(e: &mut Engine) -> AuxPairGuard<'_> {
+    let maps = e.ext_free::<AuxMaps>();
+    let guard = maps
+        .pair
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    maps.held.store(true, std::sync::atomic::Ordering::SeqCst);
+    AuxPairGuard {
+        guard,
+        held: &maps.held,
+    }
+}
+
+/// [`aux_pair`]'s guard: the pair, and the flag to clear under the same lock.
+pub struct AuxPairGuard<'a> {
+    guard: std::sync::MutexGuard<'a, AuxPair>,
+    held: &'a std::sync::atomic::AtomicBool,
+}
+
+impl AuxPairGuard<'_> {
+    /// Both maps were found empty under this lock ([`AuxMaps::held`]).
+    pub fn maps_found_empty(&self) {
+        self.held.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+impl std::ops::Deref for AuxPairGuard<'_> {
+    type Target = AuxPair;
+    fn deref(&self) -> &AuxPair {
+        &self.guard
+    }
+}
+
+impl std::ops::DerefMut for AuxPairGuard<'_> {
+    fn deref_mut(&mut self) -> &mut AuxPair {
+        &mut self.guard
+    }
+}
+
+/// One map (saved or temporary) under the pair's lock ([`aux_maps`]).
+pub struct AuxMapGuard<'a> {
+    pair: AuxPairGuard<'a>,
+    temp: bool,
+}
+
+impl std::ops::Deref for AuxMapGuard<'_> {
+    type Target = AuxMods;
+    fn deref(&self) -> &AuxMods {
+        if self.temp {
+            &self.pair.temp
+        } else {
+            &self.pair.saved
+        }
+    }
+}
+
+impl std::ops::DerefMut for AuxMapGuard<'_> {
+    fn deref_mut(&mut self) -> &mut AuxMods {
+        let temp = self.temp;
+        self.pair.map(temp)
+    }
+}
 
 /// Whether either aux map may hold a variable (no lock).
 pub fn maps_may_hold(e: &mut Engine) -> bool {
-    e.ext_free::<AuxVarsHeld>()
-        .0
+    e.ext_free::<AuxMaps>()
+        .held
         .load(std::sync::atomic::Ordering::SeqCst)
-}
-
-/// Marks the maps as possibly holding variables, holding JIP's slot (a writer that bypasses
-/// [`aux_maps`] calls it too). The slot is taken FIRST, then the flag stored: a store made
-/// before taking it could land while a destructor on another thread holds the slot, finds both
-/// maps empty and clears the flag; this writer would then insert with the flag saying "empty"
-/// and later destructors would keep a temporary reference's variables. Set and cleared only by
-/// a holder, the flag is exact whenever the slot is free.
-pub fn maps_reached(e: &mut Engine) {
-    // Taking the slot is the point (held until this engine's next release point).
-    let _ = e.ext::<Jip>();
-    e.ext_free::<AuxVarsHeld>()
-        .0
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-}
-
-/// Both maps were found empty by a holder of JIP's slot (every writer holds it too).
-pub fn maps_found_empty(e: &mut Engine) {
-    e.ext_free::<AuxVarsHeld>()
-        .0
-        .store(false, std::sync::atomic::Ordering::SeqCst);
 }
 
 /// An owner's key in [`Unlocked`]: temporary, mod index, owner id.
@@ -216,20 +302,18 @@ fn first_value(e: &mut Engine, temp: bool, mod_index: u32, owner: u32, name: &[u
     map.get(&(temp, mod_index, owner))?.get(&hash).copied()
 }
 
-/// The aux variables: the saved ones or the temporary ones (both in JIP's shared slot).
-pub fn aux_maps(e: &mut Engine, temp: bool) -> &mut AuxMods {
-    // The slot first, then the flag ([`maps_reached`]).
-    maps_reached(e);
-    if temp {
-        &mut e.ext::<Jip>().temp_aux_vars
-    } else {
-        &mut e.ext::<Jip>().saved.aux_vars
+/// The aux variables: the saved ones or the temporary ones, under the pair's lock ([`AuxMaps`]).
+pub fn aux_maps(e: &mut Engine, temp: bool) -> AuxMapGuard<'_> {
+    AuxMapGuard {
+        pair: aux_pair(e),
+        temp,
     }
 }
 
-/// Sets JIP's changed flag `flag` (`s_dataChangedFlags |= flag`).
+/// Sets JIP's changed flag `flag` (`s_dataChangedFlags |= flag`), without JIP's slot
+/// ([`crate::cosave::mark_changed`]).
 pub fn mark_changed(e: &mut Engine, flag: u8) {
-    e.ext::<Jip>().saved.changed |= flag;
+    crate::cosave::mark_changed(e, flag);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.h: TESForm::MarkModified.
@@ -488,7 +572,7 @@ fn read_value(e: &mut Engine, w: &[u32], command: &str) -> (CommandArgs, Option<
     if read.ok {
         if let Some(info) = info_named(e, &a, read.form(2), name) {
             let idx = read.int(1, 0) as i32;
-            found = value_at(aux_maps(e, info.temp), &info, idx, false).cloned();
+            found = value_at(&mut aux_maps(e, info.temp), &info, idx, false).cloned();
         }
     }
     (a, found)
@@ -504,9 +588,9 @@ fn aux_get_size(e: &mut Engine, w: &[u32]) -> Ret {
     let name = name_arg(e, &read, "AuxiliaryVariableGetSize");
     if read.ok {
         if let Some(info) = info_named(e, &a, read.form(1), name) {
-            if let Some(vals) = values_of(aux_maps(e, info.temp), &info, false) {
-                let size = vals.len() as f64;
-                a.set_result(e, size);
+            let size = values_of(&mut aux_maps(e, info.temp), &info, false).map(|v| v.len());
+            if let Some(size) = size {
+                a.set_result(e, size as f64);
             }
         }
     }
@@ -566,7 +650,8 @@ fn aux_get_as_array(e: &mut Engine, w: &[u32]) -> Ret {
     let Some(info) = info_named(e, &a, read.form(1), name) else {
         return handled(true);
     };
-    let Some(vals) = values_of(aux_maps(e, info.temp), &info, false).cloned() else {
+    let vals = values_of(&mut aux_maps(e, info.temp), &info, false).cloned();
+    let Some(vals) = vals else {
         return handled(true);
     };
     let elements: Vec<Element> = vals.iter().map(|v| value_element(e, v)).collect();
@@ -590,15 +675,15 @@ fn aux_get_all(e: &mut Engine, w: &[u32]) -> Ret {
     let Some(info) = info_typed(e, &a, read.form(1), read.int(0, 0)) else {
         return handled(true);
     };
-    let Some(vars) = aux_maps(e, info.temp)
+    let vars = aux_maps(e, info.temp)
         .get(&info.mod_index)
         .and_then(|owners| owners.get(&info.owner))
         .map(|vars| {
             vars.iter()
                 .map(|(n, v)| (n.0.clone(), v.clone()))
                 .collect::<Vec<_>>()
-        })
-    else {
+        });
+    let Some(vars) = vars else {
         return handled(true);
     };
     let map = create_string_map(e, a.script, &[], &[]);
@@ -614,10 +699,14 @@ fn aux_get_all(e: &mut Engine, w: &[u32]) -> Ret {
 /// A setter: the value at the index (made when it is new), set by `make`; JIP's changed flag
 /// and `MarkModified` for a saved variable; 1.
 fn aux_set(e: &mut Engine, a: &CommandArgs, info: Info, idx: i32, value: Value) {
-    let Some(slot) = value_at(aux_maps(e, info.temp), &info, idx, true) else {
-        return;
-    };
-    *slot = value;
+    {
+        // One take of the maps' lock for the lookup and the write.
+        let mut maps = aux_maps(e, info.temp);
+        let Some(slot) = value_at(&mut maps, &info, idx, true) else {
+            return;
+        };
+        *slot = value;
+    }
     publish_owner(e, info.temp, info.mod_index, info.owner);
     if !info.temp {
         mark_changed(e, changed::AUX_VARS);
@@ -692,7 +781,7 @@ fn aux_set_from_array(e: &mut Engine, w: &[u32]) -> Ret {
     };
     let values: Vec<Value> = data.iter().map(|d| element_value(e, d)).collect();
     let count = values.len();
-    if let Some(vals) = values_of(aux_maps(e, info.temp), &info, true) {
+    if let Some(vals) = values_of(&mut aux_maps(e, info.temp), &info, true) {
         *vals = values;
     }
     publish_owner(e, info.temp, info.mod_index, info.owner);
@@ -722,35 +811,39 @@ fn aux_erase(e: &mut Engine, w: &[u32]) -> Ret {
     };
     let idx = read.int(1, u32::MAX) as i32;
     let key = Name(info.name.clone());
-    let maps = aux_maps(e, info.temp);
-    let Some(owners) = maps.get_mut(&info.mod_index) else {
-        return handled(true);
-    };
-    let Some(vars) = owners.get_mut(&info.owner) else {
-        return handled(true);
-    };
-    let Some(vals) = vars.get_mut(&key) else {
-        return handled(true);
-    };
-    let mut left = None;
-    if idx >= 0 {
-        if idx as usize >= vals.len() {
+    // One take of the maps' lock for the lookup and the erasure.
+    let left = {
+        let mut maps = aux_maps(e, info.temp);
+        let Some(owners) = maps.get_mut(&info.mod_index) else {
             return handled(true);
-        }
-        vals.remove(idx as usize);
-        left = Some(vals.len());
-        if vals.is_empty() {
+        };
+        let Some(vars) = owners.get_mut(&info.owner) else {
+            return handled(true);
+        };
+        let Some(vals) = vars.get_mut(&key) else {
+            return handled(true);
+        };
+        let mut left = None;
+        if idx >= 0 {
+            if idx as usize >= vals.len() {
+                return handled(true);
+            }
+            vals.remove(idx as usize);
+            left = Some(vals.len());
+            if vals.is_empty() {
+                vars.erase(&key);
+            }
+        } else {
             vars.erase(&key);
         }
-    } else {
-        vars.erase(&key);
-    }
-    if vars.is_empty() {
-        owners.erase(&info.owner);
-        if owners.is_empty() {
-            maps.erase(&info.mod_index);
+        if vars.is_empty() {
+            owners.erase(&info.owner);
+            if owners.is_empty() {
+                maps.erase(&info.mod_index);
+            }
         }
-    }
+        left
+    };
     publish_owner(e, info.temp, info.mod_index, info.owner);
     if let Some(n) = left {
         a.set_result(e, n as f64);
@@ -774,15 +867,18 @@ fn aux_erase_all(e: &mut Engine, w: &[u32]) -> Ret {
     let Some(info) = info_typed(e, &a, read.form(1), read.int(0, 0)) else {
         return handled(true);
     };
-    let maps = aux_maps(e, info.temp);
-    let Some(owners) = maps.get_mut(&info.mod_index) else {
-        return handled(true);
-    };
-    if !owners.erase(&info.owner) {
-        return handled(true);
-    }
-    if owners.is_empty() {
-        maps.erase(&info.mod_index);
+    {
+        // One take of the maps' lock for the lookup and the erasure.
+        let mut maps = aux_maps(e, info.temp);
+        let Some(owners) = maps.get_mut(&info.mod_index) else {
+            return handled(true);
+        };
+        if !owners.erase(&info.owner) {
+            return handled(true);
+        }
+        if owners.is_empty() {
+            maps.erase(&info.mod_index);
+        }
     }
     publish_owner(e, info.temp, info.mod_index, info.owner);
     if !info.temp {

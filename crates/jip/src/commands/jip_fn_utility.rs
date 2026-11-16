@@ -389,11 +389,14 @@ fn clear_jip_saved_data(e: &mut Engine, w: &[u32]) -> Ret {
             .retain(|_, l| u32::from(l.mod_index) != modi);
         saved.changed |= changed::LINKED_REFS;
     }
-    if aux != 0 && saved.aux_vars.erase(&if aux == 2 { 0xff } else { modi }) {
-        saved.changed |= changed::AUX_VARS;
-    }
     if maps != 0 && saved.ref_maps.erase(&if maps == 2 { 0xff } else { modi }) {
         saved.changed |= changed::REF_MAPS;
+    }
+    // The saved aux variables, under their own lock (`AuxMaps`), not JIP's slot.
+    if aux != 0
+        && super::jip_fn_aux_variable::aux_maps(e, false).erase(&if aux == 2 { 0xff } else { modi })
+    {
+        super::jip_fn_aux_variable::mark_changed(e, changed::AUX_VARS);
     }
     if aux != 0 {
         super::jip_fn_aux_variable::publish_saved(e);

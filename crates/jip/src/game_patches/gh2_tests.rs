@@ -4,6 +4,7 @@
 //! `+4`, table `+8`; an entry's next `+0`, key `+4`).
 
 use super::*;
+use crate::commands::jip_fn_aux_variable::aux_maps;
 use crate::containers::{Name, UnorderedMap};
 use crate::cosave::Value;
 use crate::test_support::engine;
@@ -193,7 +194,7 @@ fn projectiles_explosions_and_no_base_keep_their_texts() {
         assert_eq!(names(&mut e), vec![REF, OTHER], "type {kind:#x}");
         assert_eq!(paths(&mut e), vec![REF]);
         assert_eq!(e.hook_users(Hook::GetRefName), 2);
-        assert_eq!(mods_of(aux_maps(&mut e, false)).len(), 3);
+        assert_eq!(mods_of(&aux_maps(&mut e, false)).len(), 3);
     }
     let mut e = world(0x15, TEMP_ID);
     named(&mut e);
@@ -209,12 +210,12 @@ fn a_temporary_references_aux_variables_go() {
     let mut e = world(0x15, TEMP_ID);
     *aux_maps(&mut e, false) = three_mods();
     *aux_maps(&mut e, true) = three_mods();
-    e.ext::<Jip>().saved.changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     destroy(&mut e, REF);
     let left = vec![(2, vec![0x0100_0001]), (3, vec![0x0100_0001])];
-    assert_eq!(mods_of(aux_maps(&mut e, false)), left);
-    assert_eq!(mods_of(aux_maps(&mut e, true)), left);
-    assert_eq!(e.ext::<Jip>().saved.changed, changed::AUX_VARS);
+    assert_eq!(mods_of(&aux_maps(&mut e, false)), left);
+    assert_eq!(mods_of(&aux_maps(&mut e, true)), left);
+    assert_eq!(crate::cosave::changed_flags(&mut e), changed::AUX_VARS);
 }
 
 /// Only the saved map's change marks: the temporary map alone clears with no mark, and a saved
@@ -226,14 +227,14 @@ fn only_saved_variables_mark_the_change() {
     let mut saved = AuxMods::new(8);
     saved.emplace(3).emplace_with(0x0100_0001, vars);
     *aux_maps(&mut e, false) = saved;
-    e.ext::<Jip>().saved.changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     destroy(&mut e, REF);
-    assert_eq!(mods_of(aux_maps(&mut e, true)).len(), 2);
+    assert_eq!(mods_of(&aux_maps(&mut e, true)).len(), 2);
     assert_eq!(
-        mods_of(aux_maps(&mut e, false)),
+        mods_of(&aux_maps(&mut e, false)),
         vec![(3, vec![0x0100_0001])]
     );
-    assert_eq!(e.ext::<Jip>().saved.changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
     // A mod that had no owner of the id stays though empty.
     let mut e = world(0x15, TEMP_ID);
     let mut saved = AuxMods::new(8);
@@ -241,7 +242,7 @@ fn only_saved_variables_mark_the_change() {
     saved.emplace(1).emplace_with(TEMP_ID, vars);
     *aux_maps(&mut e, false) = saved;
     destroy(&mut e, REF);
-    assert_eq!(mods_of(aux_maps(&mut e, false)), vec![(4, vec![])]);
+    assert_eq!(mods_of(&aux_maps(&mut e, false)), vec![(4, vec![])]);
 }
 
 /// A reference from a plugin (mod index not 0xFF), or a temporary one the save has changes of,
@@ -254,16 +255,16 @@ fn placed_or_saved_references_keep_their_variables() {
     saved.emplace(1).emplace_with(id, vars);
     *aux_maps(&mut e, false) = saved;
     destroy(&mut e, REF);
-    assert_eq!(mods_of(aux_maps(&mut e, false)), vec![(1, vec![id])]);
+    assert_eq!(mods_of(&aux_maps(&mut e, false)), vec![(1, vec![id])]);
     let mut e = world(0x15, TEMP_ID);
     *aux_maps(&mut e, false) = three_mods();
     // The changes map holds the id.
     e.mem.set_u32(BUCKETS, ENTRY);
     e.mem.set_u32(ENTRY + 4, TEMP_ID);
-    e.ext::<Jip>().saved.changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     destroy(&mut e, REF);
-    assert_eq!(mods_of(aux_maps(&mut e, false)).len(), 3);
-    assert_eq!(e.ext::<Jip>().saved.changed, 0);
+    assert_eq!(mods_of(&aux_maps(&mut e, false)).len(), 3);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
 }
 
 /// `ClearRefAuxVars` on an empty map: nothing, no.
@@ -284,11 +285,11 @@ fn only_temporary_variables_go_without_a_change() {
     *aux_maps(&mut e, true) = three_mods();
     destroy(&mut e, REF);
     assert_eq!(
-        mods_of(aux_maps(&mut e, true)),
+        mods_of(&aux_maps(&mut e, true)),
         vec![(2, vec![0x0100_0001]), (3, vec![0x0100_0001])]
     );
     assert!(aux_maps(&mut e, false).is_empty());
-    assert_eq!(e.ext::<Jip>().saved.changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
 }
 
 /// With both aux maps empty and nothing named, the routine takes no lock: it answers on this
@@ -305,7 +306,10 @@ fn a_temporary_reference_goes_while_another_engine_holds_jips_slot() {
     let mut other = Engine::new_untyped_for_test();
     e.share_slots_for_test(&mut other);
     engine_core::extend::release_held_for_test();
-    assert!(other.ext::<Jip>().installed, "the other engine holds it");
+    assert!(
+        other.ext::<crate::Jip>().installed,
+        "the other engine holds it"
+    );
     assert_eq!(destroy(&mut e, REF), Some(1), "no lock taken");
     engine_core::extend::release_held_for_test();
 }
@@ -323,7 +327,7 @@ fn temporary_variables_written_on_one_engine_go_on_another() {
     destroy(&mut e, REF);
     engine_core::extend::release_held_for_test();
     assert_eq!(
-        mods_of(aux_maps(&mut other, true)),
+        mods_of(&aux_maps(&mut other, true)),
         vec![(2, vec![0x0100_0001]), (3, vec![0x0100_0001])]
     );
     engine_core::extend::release_held_for_test();
@@ -417,7 +421,7 @@ fn deferred_init_marks_the_two_vanilla_piles() {
     let mut e = world(0x15, 0x0100_0001);
     setup(&mut e);
     e.mem.set_u32(0x011c_a280, 0);
-    e.ext::<Jip>().pos_marker.marker = 1;
+    e.ext::<crate::Jip>().pos_marker.marker = 1;
     crate::cosave::listen(
         &mut e,
         &nvse::plugins::Message {
@@ -550,8 +554,8 @@ fn a_pile_with_no_source_or_no_extra_is_deleted_and_others_are_left() {
     assert!(has_ash_ref(&e, REF) && has_ash_ref(&e, OTHER));
 }
 
-/// The flag is exact whenever JIP's slot is free: through writes on one engine and destroys on
-/// another (each holding the slot in turn), it is true whenever either map holds a variable and
+/// The flag is exact whenever the aux maps' lock is free: through writes on one engine and
+/// destroys on another (each taking the lock in turn), it is true whenever either map holds a variable and
 /// false only after a destroy found both empty.
 #[test]
 fn the_may_hold_flag_follows_writes_and_destroys_on_two_engines() {
@@ -560,8 +564,8 @@ fn the_may_hold_flag_follows_writes_and_destroys_on_two_engines() {
     e.share_slots_for_test(&mut other);
     let release = engine_core::extend::release_held_for_test;
     let holds = |e: &mut Engine| {
-        let jip = e.ext::<Jip>();
-        !(jip.saved.aux_vars.is_empty() && jip.temp_aux_vars.is_empty())
+        let maps = crate::commands::jip_fn_aux_variable::aux_pair(e);
+        !(maps.saved.is_empty() && maps.temp.is_empty())
     };
     release();
     // Empty maps: a destroy clears the flag.
@@ -573,13 +577,14 @@ fn the_may_hold_flag_follows_writes_and_destroys_on_two_engines() {
     release();
     e.mem.set_u32(REF + 0xc, 0xff00_0999);
     destroy(&mut e, REF);
-    assert!(holds(&mut e) && maps_may_hold(&mut e));
+    assert!(maps_may_hold(&mut e) && holds(&mut e));
     release();
     // Emptied by a write: the next destroy clears the flag; a new write sets it again.
     *aux_maps(&mut other, true) = AuxMods::new(8);
     release();
     destroy(&mut e, REF);
-    assert!(!holds(&mut e) && !maps_may_hold(&mut e));
+    // The flag first: a look at the maps (`aux_pair`) sets it, as any reach does.
+    assert!(!maps_may_hold(&mut e) && !holds(&mut e));
     release();
     *aux_maps(&mut other, false) = three_mods();
     release();
@@ -587,20 +592,83 @@ fn the_may_hold_flag_follows_writes_and_destroys_on_two_engines() {
     e.mem.set_u32(REF + 0xc, TEMP_ID);
     destroy(&mut e, REF);
     assert!(
-        holds(&mut e) && maps_may_hold(&mut e),
+        maps_may_hold(&mut e) && holds(&mut e),
         "mod 3 keeps its owner"
     );
     release();
 }
 
-/// Today's behaviour, pinned (CONDITION-LOCKS.md): the aux-variable part still takes JIP's
-/// shared slot, for a temporary reference with an aux variable set. The follow-up (the aux maps
-/// out of JIP's slot) turns this into a passing held test. Under the default stepped threads
-/// it cannot stall (one engine); it blocks JIP together with `NV_THREADS=real`.
+/// The aux-variable part takes the aux maps' own lock (`AuxMaps`), not JIP's shared slot: on
+/// any thread (loader threads at cell unload) a temporary reference with aux variables loses
+/// them while another engine of the run holds JIP's slot.
 #[test]
-#[should_panic(expected = "two engines on one thread")]
-fn a_temporary_reference_with_aux_variables_takes_jips_slot_today() {
+fn a_temporary_reference_with_aux_variables_goes_while_another_engine_holds_jips_slot() {
     let mut e = world(0x15, TEMP_ID);
     *aux_maps(&mut e, true) = three_mods();
     crate::test_support::with_jips_slot_held(&mut e, |e| destroy(e, REF));
+    assert_eq!(
+        mods_of(&aux_maps(&mut e, true)),
+        vec![(2, vec![0x0100_0001]), (3, vec![0x0100_0001])]
+    );
+}
+
+/// A thread's engine made right after install (`share_slots_for_test`) reads the aux maps the
+/// main engine's writers fill, and the destructor run on it empties them for the main engine:
+/// one pair of maps for the run.
+#[test]
+fn a_threads_engine_shares_the_aux_maps() {
+    let mut e = world(0x15, TEMP_ID);
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    *aux_maps(&mut e, true) = three_mods();
+    assert_eq!(
+        aux_maps(&mut t, true).len(),
+        3,
+        "written on the main engine"
+    );
+    engine_core::extend::release_held_for_test();
+}
+
+/// The test engine handed between two OS threads behind a mutex, as stepped threads hand one
+/// engine over (`Engine` is not `Send`: its handlers are `Rc`s).
+struct Stepped(Engine);
+// SAFETY: reached only through the `Mutex` below, by one thread at a time, and nothing of it is
+// kept outside the lock.
+unsafe impl Send for Stepped {}
+
+/// The destructor on a second OS thread against a writer on the main one: the variables the main
+/// thread writes are the ones the other thread's destructor erases (one pair of maps for every
+/// thread), each side one take of the maps' lock.
+#[test]
+fn the_destructor_on_another_thread_erases_what_the_main_thread_wrote() {
+    let e = world(0x15, TEMP_ID);
+    engine_core::extend::release_held_for_test();
+    let engine = std::sync::Mutex::new(Stepped(e));
+    let lock = || {
+        engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    {
+        let mut g = lock();
+        *aux_maps(&mut g.0, true) = three_mods();
+    }
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let mut g = lock();
+                assert_eq!(destroy(&mut g.0, REF), Some(0));
+                engine_core::extend::release_held_for_test();
+            })
+            .join()
+            .expect("ran");
+    });
+    let mut g = lock();
+    assert_eq!(
+        mods_of(&aux_maps(&mut g.0, true)),
+        vec![(2, vec![0x0100_0001]), (3, vec![0x0100_0001])]
+    );
+    drop(g);
+    engine_core::extend::release_held_for_test();
 }

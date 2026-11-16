@@ -211,15 +211,15 @@ fn entry(ref_id: u32, mods: &[(u32, ExtraJipData)]) -> ExtraJipEntry {
 }
 
 fn put(e: &mut Engine, key: u32, value: ExtraJipEntry) {
-    *e.ext::<Jip>().saved.extra_data.emplace(Uint(key)) = value;
+    *crate::cosave::extra_data(e).emplace(Uint(key)) = value;
 }
 
 fn get(e: &mut Engine, key: u32) -> Option<ExtraJipEntry> {
-    e.ext::<Jip>().saved.extra_data.get(&Uint(key)).cloned()
+    crate::cosave::extra_data(e).get(&Uint(key)).cloned()
 }
 
 fn changed_flag(e: &mut Engine) -> u8 {
-    e.ext::<Jip>().saved.changed & changed::EXTRA_DATA
+    crate::cosave::changed_flags(e) & changed::EXTRA_DATA
 }
 
 const ADDRESSES: [u32; 9] = [
@@ -509,14 +509,14 @@ fn the_destructor_drops_the_data_unless_a_gone_reference_holds_it() {
         (0x0002_0002, false),
     ] {
         put(&mut e, 0x77, entry(ref_id, &[]));
-        e.ext::<Jip>().saved.changed = 0;
+        crate::cosave::set_changed(&mut e, 0);
         e.mem.set_u32(x + 0x0c, 0x77);
         e.call(DESTROY_ROUTINE, &[x, 0]);
         assert_eq!(get(&mut e, 0x77).is_none(), dropped, "{ref_id:08x}");
         assert_eq!(changed_flag(&mut e) != 0, dropped);
     }
     // A key with no data: nothing marked.
-    e.ext::<Jip>().saved.changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     e.mem.set_u32(x + 0x0c, 0x99);
     e.call(DESTROY_ROUTINE, &[x, 0]);
     assert_eq!(changed_flag(&mut e), 0);
@@ -537,7 +537,7 @@ fn the_destructor_drops_the_data_of_a_reference_that_exists_or_of_id_0() {
     for ref_id in [0x0002_0004, 0] {
         assert!(cosave::has_change_data(&e, ref_id), "{ref_id:08x}");
         put(&mut e, 0x77, entry(ref_id, &[]));
-        e.ext::<Jip>().saved.changed = 0;
+        crate::cosave::set_changed(&mut e, 0);
         e.call(DESTROY_ROUTINE, &[x, 0]);
         assert!(get(&mut e, 0x77).is_none(), "{ref_id:08x}");
         assert_eq!(changed_flag(&mut e), changed::EXTRA_DATA, "{ref_id:08x}");
@@ -1019,42 +1019,110 @@ fn the_hotkey_seams_test_the_items_given_to_the_player() {
     assert_eq!(calls(REMOVE_BY_TYPE)[1], vec![refr + 0x44, 0x4a]);
 }
 
-// Today's behaviour, pinned (CONDITION-LOCKS.md): the ExtraJIP routines still take JIP's shared
-// slot (`Saved::extra_data`) for a key holding data. The follow-up (the data out of JIP's slot)
-// turns these into passing held tests. Under the default stepped threads they cannot stall (one
-// engine); they block JIP together with `NV_THREADS=real`.
+// The ExtraJIP routines run on any thread that copies, frees or compares an item's extra data:
+// the data map is in its own lock-free slot (`cosave::ExtraData`), so they answer while another
+// engine of the run holds JIP's shared slot (asking for it would stop the test).
 
 #[test]
-#[should_panic(expected = "two engines on one thread")]
-fn copy_takes_jips_slot_today() {
+fn copy_answers_while_another_engine_holds_jips_slot() {
     let mut e = world(true);
-    put(
-        &mut e,
-        0x77,
-        entry(0x99, &[(4, data(2.5, 0x0001_0203, b"abc"))]),
-    );
+    let d = data(2.5, 0x0001_0203, b"abc");
+    put(&mut e, 0x77, entry(0x99, &[(4, d.clone())]));
     let source = extra_of(&mut e, 0x27, 0x77);
-    crate::test_support::with_jips_slot_held(&mut e, |e| {
+    RANDOM.with(|r| *r.borrow_mut() = vec![0x1234]);
+    crate::cosave::set_changed(&mut e, 0);
+    let r = crate::test_support::with_jips_slot_held(&mut e, |e| {
         e.site(COPY.addr(), &[LIST, source, 0x0041_2000, 0])
     });
+    assert_eq!(r, Some(0));
+    assert_eq!(get(&mut e, 0x1234), Some(entry(0, &[(4, d)])), "copied");
+    assert_eq!(changed_flag(&mut e), changed::EXTRA_DATA);
 }
 
 #[test]
-#[should_panic(expected = "two engines on one thread")]
-fn destroy_takes_jips_slot_today() {
+fn destroy_answers_while_another_engine_holds_jips_slot() {
     let mut e = world(true);
-    put(&mut e, 1, entry(0x10, &[(3, data(1.5, 0x10, b"ab"))]));
+    put(&mut e, 1, entry(0, &[(3, data(1.5, 0x10, b"ab"))]));
     let x = extra_of(&mut e, 0x27, 1);
-    crate::test_support::with_jips_slot_held(&mut e, |e| e.call(DESTROY_ROUTINE, &[x, 0]));
+    crate::cosave::set_changed(&mut e, 0);
+    let r = crate::test_support::with_jips_slot_held(&mut e, |e| e.call(DESTROY_ROUTINE, &[x, 0]));
+    assert_eq!(r.eax, x);
+    assert_eq!(get(&mut e, 1), None, "no reference: the data goes");
+    assert_eq!(changed_flag(&mut e), changed::EXTRA_DATA);
 }
 
 #[test]
-#[should_panic(expected = "two engines on one thread")]
-fn differs_takes_jips_slot_today() {
+fn differs_answers_while_another_engine_holds_jips_slot() {
     let mut e = world(true);
     let d = data(1.5, 0x10, b"ab");
     put(&mut e, 1, entry(0x10, &[(3, d.clone())]));
     put(&mut e, 2, entry(0x20, &[(3, d)]));
     let (x, y) = (extra_of(&mut e, 0x27, 1), extra_of(&mut e, 0x27, 2));
-    crate::test_support::with_jips_slot_held(&mut e, |e| e.call(COMPARE_ROUTINE, &[x, y]));
+    let r = crate::test_support::with_jips_slot_held(&mut e, |e| e.call(COMPARE_ROUTINE, &[x, y]));
+    assert_eq!(r.eax, 0, "the same data");
+}
+
+/// A thread's engine (`share_slots_for_test`, as `ExtendState::for_thread`) made right after
+/// install reads the data a writer puts in on the main engine, and the changed flag: one map and
+/// one flag for the run.
+#[test]
+fn a_threads_engine_reads_the_extra_data() {
+    let mut e = world(true);
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    put(&mut e, 5, entry(0x10, &[(3, data(1.5, 0x10, b"ab"))]));
+    crate::cosave::mark_changed(&mut e, changed::EXTRA_DATA);
+    assert!(crate::cosave::extra_data(&mut t).get(&Uint(5)).is_some());
+    engine_core::extend::release_held_for_test();
+    assert_eq!(
+        crate::cosave::changed_flags(&mut t) & changed::EXTRA_DATA,
+        changed::EXTRA_DATA,
+        "the thread's engine sees the flag"
+    );
+    engine_core::extend::release_held_for_test();
+}
+
+/// The test engine handed between two OS threads behind a mutex, as stepped threads hand one
+/// engine over (`Engine` is not `Send`: its handlers are `Rc`s).
+struct Stepped(Engine);
+// SAFETY: reached only through the `Mutex` below, by one thread at a time, and nothing of it is
+// kept outside the lock.
+unsafe impl Send for Stepped {}
+
+/// The ExtraJIP destructor on a second OS thread against a writer on the main one: the data the
+/// main thread puts in is the data the other thread's destructor erases (one map for every
+/// thread), each side one take of the map's lock.
+#[test]
+fn the_destructor_on_another_thread_erases_what_the_main_thread_wrote() {
+    let mut e = world(true);
+    let x = extra_of(&mut e, 0x27, 9);
+    engine_core::extend::release_held_for_test();
+    let engine = std::sync::Mutex::new(Stepped(e));
+    let lock = || {
+        engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
+    {
+        let mut g = lock();
+        put(&mut g.0, 9, entry(0, &[(3, data(1.5, 0x10, b"ab"))]));
+        crate::cosave::set_changed(&mut g.0, 0);
+        engine_core::extend::release_held_for_test();
+    }
+    std::thread::scope(|scope| {
+        scope
+            .spawn(|| {
+                let mut g = lock();
+                g.0.call(DESTROY_ROUTINE, &[x, 0]);
+                engine_core::extend::release_held_for_test();
+            })
+            .join()
+            .expect("ran");
+    });
+    let mut g = lock();
+    assert_eq!(get(&mut g.0, 9), None, "erased on the other thread");
+    assert_eq!(changed_flag(&mut g.0), changed::EXTRA_DATA, "and marked");
+    drop(g);
+    engine_core::extend::release_held_for_test();
 }

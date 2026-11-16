@@ -190,10 +190,10 @@ fn where_a_variable_goes() {
         "not saved"
     );
     // No owner, no name: nothing.
-    let before = saved(&mut e).aux_vars.get(&7).unwrap().len();
+    let before = aux_maps(&mut e, false).get(&7).unwrap().len();
     assert_eq!(set_flt(&mut e, 0, b"x", 1.0, &[]), 0.0, "no owner");
     assert_eq!(set_flt(&mut e, REF, b"", 1.0, &[]), 0.0, "no name");
-    assert_eq!(saved(&mut e).aux_vars.get(&7).unwrap().len(), before);
+    assert_eq!(aux_maps(&mut e, false).get(&7).unwrap().len(), before);
     // A script with one file, and with none.
     e.mem.set_u32(SCRIPT + 0x14, 0);
     set_flt(&mut e, REF, b"one", 1.0, &[]);
@@ -324,31 +324,39 @@ fn values_by_index() {
 #[test]
 fn the_changed_flag_and_mark_modified() {
     let mut e = setup();
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     set_flt(&mut e, REF, b"*t", 1.0, &[]);
     call_on(&mut e, 0x2696, REF, &[s(b"*t"), r(3)]);
     call_on(&mut e, 0x2698, REF, &[s(b"*t"), s(b"a")]);
-    assert_eq!(saved(&mut e).changed, 0, "temporary: no flag");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        0,
+        "temporary: no flag"
+    );
     assert!(marks().is_empty(), "nor MarkModified");
     for (op, args) in [
         (0x2694, vec![s(b"a"), z(1.0)]),
         (0x2696, vec![s(b"b"), r(3)]),
         (0x2698, vec![s(b"c"), s(b"t")]),
     ] {
-        saved(&mut e).changed = 0x10;
+        crate::cosave::set_changed(&mut e, 0x10);
         clear_calls();
         call_on(&mut e, op, REF, &args);
-        assert_eq!(saved(&mut e).changed, 0x11, "{op:04x}: the aux flag added");
+        assert_eq!(
+            crate::cosave::changed_flags(&mut e),
+            0x11,
+            "{op:04x}: the aux flag added"
+        );
         assert_eq!(marks(), vec![vec![SL, REF, 0, 0]], "{op:04x}");
     }
     clear_calls();
     call_on(&mut e, 0x2694, 0, &[s(b"a"), z(1.0), n(0), r(3)]);
     assert!(marks().is_empty(), "no calling reference: no MarkModified");
     // Reads change nothing.
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     get_flt(&mut e, REF, b"a", &[]);
     call_on(&mut e, 0x2691, REF, &[s(b"a")]);
-    assert_eq!(saved(&mut e).changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
 }
 
 /// The element arrays: the values in order (a form looked up, a text, a number); `GetAll` makes
@@ -435,7 +443,7 @@ fn set_from_an_array() {
     }
     set_flt(&mut e, REF, b"v", 9.0, &[]);
     set_flt(&mut e, REF, b"v", 9.0, &[n(-1)]);
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     clear_calls();
     let set =
         |e: &mut Engine, name: &[u8], id: u32| call_on(e, 0x26be, REF, &[s(name), n(id as i32)]).1;
@@ -450,7 +458,7 @@ fn set_from_an_array() {
         ]),
         "replaced; a gone form 0"
     );
-    assert_eq!(saved(&mut e).changed, 1);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 1);
     assert_eq!(marks(), vec![vec![SL, REF, 0, 0]]);
     let empty = vars::create_array(&mut e, KEY_NUMBER, true, 6);
     assert_eq!(set(&mut e, b"v", empty), 0.0, "an empty array");
@@ -465,13 +473,17 @@ fn set_from_an_array() {
         &Key::Str(b"k".to_vec()),
         VarValue::Array(empty),
     );
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     assert_eq!(set(&mut e, b"*m", map), 1.0);
     assert_eq!(
         vals(&mut e, true, 7, 0xff00_0001, b"*m"),
         Some(vec![Value::Number(f64::from_bits(u64::from(empty)))])
     );
-    assert_eq!(saved(&mut e).changed, 0, "temporary: no flag");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        0,
+        "temporary: no flag"
+    );
 }
 
 #[test]
@@ -486,12 +498,16 @@ fn erasing() {
         a.extend_from_slice(args);
         call_on(e, 0x269a, REF, &a).1
     };
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     clear_calls();
     assert_eq!(erase(&mut e, b"v", &[n(3)]), -1.0, "past the end");
-    assert_eq!(saved(&mut e).changed, 0, "nothing erased: no flag");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        0,
+        "nothing erased: no flag"
+    );
     assert_eq!(erase(&mut e, b"v", &[n(1)]), 2.0, "the middle: 2 left");
-    assert_eq!(saved(&mut e).changed, 1);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 1);
     assert!(marks().is_empty(), "erasing does not MarkModified");
     assert_eq!(
         vals(&mut e, false, 7, 0xff00_0001, b"v"),
@@ -510,12 +526,12 @@ fn erasing() {
     );
     assert_eq!(erase(&mut e, b"W", &[]), -1.0, "the whole variable: -1");
     assert!(
-        saved(&mut e).aux_vars.get(&7).is_none(),
+        aux_maps(&mut e, false).get(&7).is_none(),
         "the owner and the mod gone"
     );
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     assert_eq!(erase(&mut e, b"w", &[]), -1.0, "none");
-    assert_eq!(saved(&mut e).changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
     // Another owner keeps the mod.
     set_flt(&mut e, REF, b"x", 1.0, &[]);
     set_flt(&mut e, OTHER, b"x", 1.0, &[]);
@@ -523,39 +539,43 @@ fn erasing() {
     assert!(vals(&mut e, false, 7, 0x0200_0333, b"x").is_some());
     // Temporary: no flag.
     set_flt(&mut e, REF, b"*t", 1.0, &[]);
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     erase(&mut e, b"*t", &[n(0)]);
     assert!(aux_maps(&mut e, true).get(&7).is_none());
-    assert_eq!(saved(&mut e).changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
     // EraseAll by type: 0 the script's saved, 1 temporary, 2 shared, 3 shared temporary.
     set_flt(&mut e, REF, b"a", 1.0, &[]);
     set_flt(&mut e, REF, b"*a", 1.0, &[]);
     set_flt(&mut e, REF, b"_a", 1.0, &[]);
     set_flt(&mut e, REF, b"*_a", 1.0, &[]);
     let all = |e: &mut Engine, t: i32| call_on(e, 0x269b, REF, &[n(t)]);
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     all(&mut e, 1);
     assert!(aux_maps(&mut e, true).get(&7).is_none());
     assert!(aux_maps(&mut e, true).get(&0xff).is_some());
-    assert_eq!(saved(&mut e).changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
     all(&mut e, 0);
     assert!(vals(&mut e, false, 7, 0xff00_0001, b"a").is_none());
     assert!(
         vals(&mut e, false, 7, 0x0200_0333, b"x").is_some(),
         "another owner kept"
     );
-    assert_eq!(saved(&mut e).changed, 1);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 1);
     all(&mut e, 3);
     assert!(aux_maps(&mut e, true).get(&0xff).is_none());
-    assert!(saved(&mut e).aux_vars.get(&0xff).is_some());
+    assert!(aux_maps(&mut e, false).get(&0xff).is_some());
     all(&mut e, 2);
-    assert!(saved(&mut e).aux_vars.get(&0xff).is_none());
-    saved(&mut e).changed = 0;
+    assert!(aux_maps(&mut e, false).get(&0xff).is_none());
+    crate::cosave::set_changed(&mut e, 0);
     all(&mut e, 0);
-    assert_eq!(saved(&mut e).changed, 0, "nothing to erase: no flag");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        0,
+        "nothing to erase: no flag"
+    );
     call_on(&mut e, 0x269b, OTHER, &[n(0)]);
     assert!(
-        saved(&mut e).aux_vars.get(&7).is_none(),
+        aux_maps(&mut e, false).get(&7).is_none(),
         "the last owner: the mod goes"
     );
 }
@@ -607,13 +627,16 @@ fn the_maps_and_the_record() {
     set_flt(&mut e, REF, b"Ab", 1.5, &[]);
     call_on(&mut e, 0x2696, REF, &[s(b"ab"), r(3), n(-1)]);
     call_on(&mut e, 0x2698, REF, &[s(b"AB"), s(b"hi"), n(-1)]);
-    let owners = saved(&mut e).aux_vars.get(&7).unwrap();
-    assert_eq!(owners.bucket_count(), 8, "a mod's owners: 8");
-    assert_eq!(
-        owners.get(&0xff00_0001).unwrap().bucket_count(),
-        4,
-        "an owner's variables: 4"
-    );
+    {
+        let maps = aux_maps(&mut e, false);
+        let owners = maps.get(&7).unwrap();
+        assert_eq!(owners.bucket_count(), 8, "a mod's owners: 8");
+        assert_eq!(
+            owners.get(&0xff00_0001).unwrap().bucket_count(),
+            4,
+            "an owner's variables: 4"
+        );
+    }
     let mut r = Records::default();
     crate::cosave::save(&mut e, &mut r);
     let chunk = r
@@ -665,8 +688,7 @@ fn the_owner_argument() {
         Some(vec![Value::Number(3.0), Value::Number(4.0)])
     );
     assert!(
-        saved(&mut e)
-            .aux_vars
+        aux_maps(&mut e, false)
             .get(&7)
             .unwrap()
             .get(&0xff00_0001)
@@ -708,7 +730,7 @@ fn the_owner_argument() {
     );
     call_on(&mut e, 0x269b, 0, &[n(0), r(1)]);
     assert!(
-        saved(&mut e).aux_vars.get(&7).is_none(),
+        aux_maps(&mut e, false).get(&7).is_none(),
         "EraseAll: BASE's all gone"
     );
 }
@@ -747,7 +769,10 @@ fn the_condition_reads_the_lock_free_copy() {
     let mut other = Engine::new_untyped_for_test();
     e.share_slots_for_test(&mut other);
     engine_core::extend::release_held_for_test();
-    assert!(other.ext::<Jip>().installed, "the other engine holds it");
+    assert!(
+        other.ext::<crate::Jip>().installed,
+        "the other engine holds it"
+    );
     assert_eq!(eval(&mut e, 5), 4.25, "the saved variable's value 0");
     assert_eq!(eval(&mut e, 6), 2.5, "the temporary one's");
     let m = overriding_mod(&e, SCRIPT);
@@ -852,7 +877,7 @@ fn a_load_publishes_the_saved_variables() {
     assert_eq!(cond(&mut e, REF, 5), 0.5, "cleared");
     // The save's file 7 is loaded as 7 today.
     e.mem.set_u8(SL + crate::game::save_mod(7), 7);
-    saved(&mut e).changed = crate::cosave::changed::ALL;
+    crate::cosave::set_changed(&mut e, crate::cosave::changed::ALL);
     let mut reader = nvse::cosave::Reader::open(&file).unwrap();
     reader.next_plugin().unwrap().unwrap();
     crate::cosave::load(&mut e, &mut reader).unwrap();
