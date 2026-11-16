@@ -188,10 +188,10 @@ fn after_load_restores_only_when_links_changed() {
     let mut e = engine();
     give_link(&mut e, LINK_A);
     set_linked_ref(&mut e, REFR, LINK_B, 5);
-    s(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     after_load(&mut e);
     assert_eq!(e.mem.u32(XLINK + 0xc), LINK_B);
-    s(&mut e).changed = changed::LINKED_REFS;
+    crate::cosave::set_changed(&mut e, changed::LINKED_REFS);
     after_load(&mut e);
     assert_eq!(e.mem.u32(XLINK + 0xc), LINK_A);
 }
@@ -206,7 +206,7 @@ fn command_sets_and_marks_the_change() {
         assert_eq!((ok, result), (1, 1.0));
         assert_eq!(e.mem.u32(XLINK + 0xc), LINK_B);
         assert_eq!(
-            s(&mut e).changed & changed::LINKED_REFS,
+            crate::cosave::changed_flags(&mut e) & changed::LINKED_REFS,
             changed::LINKED_REFS
         );
     }
@@ -217,10 +217,10 @@ fn command_refused_has_no_result_and_no_change_mark() {
     let mut e = engine();
     give_link(&mut e, 0);
     set_ref(&mut e, 1, LINK_B);
-    s(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     let (_, result) = ts::call_on(&mut e, 0x2281, REFR, &[r(1)]);
     assert_eq!(result, 0.0);
-    assert_eq!(s(&mut e).changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
 }
 
 #[test]
@@ -241,11 +241,11 @@ fn command_without_reference_or_with_a_failed_read_does_nothing() {
         let mut e = engine();
         give_link(&mut e, LINK_A);
         set_ref(&mut e, 1, LINK_B);
-        s(&mut e).changed = 0;
+        crate::cosave::set_changed(&mut e, 0);
         let (ok, result) = ts::call_on(&mut e, 0x2281, this, &[r(index)]);
         assert_eq!((ok, result), (1, 0.0), "this {this:x}");
         assert_eq!(e.mem.u32(XLINK + 0xc), LINK_A);
-        assert_eq!(s(&mut e).changed, 0);
+        assert_eq!(crate::cosave::changed_flags(&mut e), 0);
         assert_eq!(change_of(&mut e), None);
     }
 }

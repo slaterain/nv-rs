@@ -21,10 +21,31 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GD",
     },
+    // G101, the combat dialogue line 009839b0: a death response's speaker call, replaced by JIP's
+    // DeathResponseFixHook (the nearest living ally).
+    Entry {
+        addr: 0x0098_4156,
+        owners: JIP,
+        step: "3.9-GD",
+    },
     // G30, the explosion factory 009ac9c0: a projectile source's shooter and perk entry
     // (JIP's 53 bytes).
     Entry {
         addr: 0x009a_ca23,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G124, Explosion::Initialize 009acd60: the explosion-in-face image space, JIP's
+    // GetExplosionInFaceIMODHook (none while its hit effects are off).
+    Entry {
+        addr: 0x009a_cec6,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G125, Explosion::Initialize 009acd60: the screen shake, JIP's ExplosionScreenShakeHook
+    // (skipped while its hit effects are off).
+    Entry {
+        addr: 0x009a_d2c5,
         owners: JIP,
         step: "3.9-GD",
     },
@@ -49,10 +70,29 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GD",
     },
+    // G127, the mine trigger test 009c39e0: an actor's trigger, JIP's MineExplodeChanceHook (a
+    // roll of the explode chance through entry point 4).
+    Entry {
+        addr: 0x009c_3bd6,
+        owners: JIP,
+        step: "3.9-GD",
+    },
     // G91, CombatProcedureAttackRanged::Update 009d0a30: the reaction cooldown test, replaced by
     // JIP's ReactionCooldownCheckHook.
     Entry {
         addr: 0x009d_10f3,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G42, the backup package's point 009ed380: the move-away distance (JIP's variable).
+    Entry {
+        addr: 0x009e_d3f8,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G42, the backup package's point 009ed4b0: the move-away distance (JIP's variable).
+    Entry {
+        addr: 0x009e_d528,
         owners: JIP,
         step: "3.9-GD",
     },
