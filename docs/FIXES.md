@@ -1217,7 +1217,23 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
 
 #### GF: Forms and records
 
-Nothing built yet.
+Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): grass grows in the outer ring of the 5 by 5
+cells around the player too (the original leaves the outer cells bare, so grass now reaches farther; it still
+stops at the grass distance setting) (`0x57D3B9`); the player's shell casings in first person stay as long
+as everyone else's (the original cuts their lifetime to at most 2 seconds) (`0x5251A3`);
+firing a thrown or placed weapon (types 11 to 13) by an actor with no AI process no longer crashes (the
+original calls the missing process) (`0x5248EF`); an armour's icon in the menus follows the player's sex,
+with the female icon when the armour has one (the original follows the sex of the owner the menu passes,
+and shows the male icon when it passes none) (`0x48E761`); a companion perk's effect that targets the
+player is added to the player once, not once per companion (`0x5EB79B`).
+
+Built as part of JIP (in every preset once JIP answers "installed", not under the row), needed by the
+built `GetSkeletonModel`, `SetNPCSkeletonModel` and `SetCRESkeletonModel`: an NPC's skeleton is the NPC's
+own model path when `SetNPCSkeletonModel` set one, else `sNPCModelMale` (`00601c30`; JIP's sex test reads
+the form type, so it never picks `sNPCModelFemale`: with FalloutNV.esm, which sets `sNPCModelFemale` to the
+male skeleton, a player sees the original's skeletons), and an NPC record's model path is no longer stored
+when it loads (`0x104A1BC`, the original ignores it for NPCs anyway). With the row off a player with JIP
+installed gets these two and nothing else of this group.
 
 #### GS: Script engine
 
