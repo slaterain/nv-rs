@@ -581,6 +581,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-folders"
+version = "0.1.0"
+
+[[package]]
 name = "gpu-allocator"
 version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -635,6 +639,7 @@ dependencies = [
  "engine-core",
  "engine-platform",
  "esm",
+ "game-folders",
  "jip",
  "nvse",
  "play-patch",
@@ -771,6 +776,7 @@ dependencies = [
 name = "nv-viewer"
 version = "0.1.0"
 dependencies = [
+ "game-folders",
  "host",
 ]
 

@@ -24,6 +24,11 @@ esm = { path = "../esm" }
 # zlib's inflate on the host for the game's compressed archives and records (`native_inflate`).
 zlib-rs = "0.6"
 
+# Linux and macOS: the player's own folders there, which saves and settings are never written into
+# (`save_out`). Windows asks Windows for them.
+[target.'cfg(not(windows))'.dependencies]
+game-folders = { path = "../game-folders" }
+
 [dev-dependencies]
 # Tests that apply the typed families themselves (`Engine::new_untyped_for_test`, the drawing thread's row).
 engine-core = { path = "../engine-core", features = ["test-support"] }

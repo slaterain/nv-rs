@@ -43,6 +43,28 @@ ENVIRONMENT:
     docs/PLAYTESTING.md lists the rest (read by crates/host and crates/engine-core).
 ";
 
+/// Linux and macOS: what `play.sh` asks the program before a start.
+#[cfg(not(windows))]
+const FIND_USAGE: &str = "
+LINUX AND MACOS:
+    nv-viewer --find   print nv-rs's own folder, the game folders found (Steam, Heroic, Lutris)
+                       and the game's save folders found in Proton's and Wine's prefixes, one a
+                       line, fields split by tabs: own FOLDER / game STORE FOLDER / saves FROM
+                       FOLDER (only read; nothing is written)
+";
+
+/// `--find` (Linux and macOS): [`FIND_USAGE`]'s lines (`game_folders::report`), from `HOME`.
+#[cfg(not(windows))]
+fn find() {
+    match game_folders::Home::from_process() {
+        Some(home) => print!("{}", game_folders::report(&home)),
+        None => {
+            eprintln!("error: HOME is not set to a full path, so the player's folders are unknown");
+            host::end_process(1);
+        }
+    }
+}
+
 /// The command line.
 #[derive(Debug, Default, PartialEq)]
 struct Args {
@@ -136,10 +158,17 @@ fn main() {
         }
     }
     let raw: Vec<String> = std::env::args().skip(1).collect();
+    #[cfg(not(windows))]
+    if raw.first().map(String::as_str) == Some("--find") {
+        find();
+        return;
+    }
     let args = match parse(&raw) {
         Ok(Some(args)) => args,
         Ok(None) => {
             print!("{USAGE}");
+            #[cfg(not(windows))]
+            print!("{FIND_USAGE}");
             return;
         }
         Err(message) => {

@@ -33,14 +33,13 @@ fn out_dir() -> Option<&'static Path> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
         let dir = PathBuf::from(std::env::var_os("NV_SAVE_OUT")?);
-        let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-        if let Some(why) = refused(&dir, profile.as_deref(), &known_folders()) {
+        if let Some(why) = refused_here(&dir) {
             warn_visibly(
                 &format!(
                     "NV_SAVE_OUT={}: refused ({why}); saves are not copied.",
                     dir.display()
                 ),
-                "Your saves are NOT being kept: they will be lost when the game closes. The save folder the game was given is one it must not write to. Start the game through Play.exe, and report this if you did.",
+                &format!("Your saves are NOT being kept: they will be lost when the game closes. The save folder the game was given is one it must not write to. Start the game through {START}, and report this if you did."),
             );
             return None;
         }
@@ -71,10 +70,56 @@ pub fn clean_parts(dir: &Path) -> Vec<String> {
     removed
 }
 
-/// A warning the player can't miss: a line in the log, and on Windows a message box (from its own
-/// thread, so the game goes on), unless `NV_RS_NO_WINDOWS` is set (scripted runs).
+/// What the player starts the game with, for the warnings' words.
+#[cfg(windows)]
+const START: &str = "Play.exe";
+#[cfg(not(windows))]
+const START: &str = "play.sh";
+
+/// Why the game may not write into `path` (saves, settings), by this system's rule: on Windows
+/// [`refused`] with `USERPROFILE` and [`known_folders`]; on Linux and macOS the player's own
+/// folders there (`game_folders::never_written`: Documents, Steam's folders and Proton's
+/// prefixes, the game's folder, macOS's Library), from `HOME`.
+fn refused_here(path: &Path) -> Option<&'static str> {
+    #[cfg(windows)]
+    {
+        let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
+        refused(path, profile.as_deref(), &known_folders())
+    }
+    #[cfg(not(windows))]
+    match game_folders::Home::from_process() {
+        Some(home) => game_folders::refused(path, &game_folders::never_written(&home)),
+        None => Some("HOME is not set to a full path, so the player's folders are unknown"),
+    }
+}
+
+/// A warning the player can't miss: a line in the log, and a message box (from its own thread,
+/// so the game goes on), unless `NV_RS_NO_WINDOWS` is set (scripted runs). Off Windows the line
+/// also goes to the error output under a banner (a terminal shows it even when the log goes
+/// elsewhere), and the box is the system's own small dialog program when there is one (macOS's
+/// `osascript`; on Linux `zenity`, else `kdialog`): none there, the banner is all.
 fn warn_visibly(line: &str, plain: &str) {
     println!("{line}");
+    #[cfg(not(windows))]
+    {
+        eprintln!("\n*** nv-rs WARNING ***\n{plain}\n{line}\n");
+        if std::env::var_os("NV_RS_NO_WINDOWS").is_none() {
+            let text = format!("{plain}\n\n{line}");
+            std::thread::spawn(move || {
+                for mut command in dialog_commands(&text) {
+                    if command
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .is_ok()
+                    {
+                        break;
+                    }
+                }
+            });
+        }
+    }
     #[cfg(windows)]
     if std::env::var_os("NV_RS_NO_WINDOWS").is_none() {
         let text: Vec<u16> = format!("{plain}\n\n{line}")
@@ -97,12 +142,40 @@ fn warn_visibly(line: &str, plain: &str) {
             unsafe { MessageBoxW(0, text.as_ptr(), title.as_ptr(), 0x30 | 0x1_0000 | 0x4_0000) };
         });
     }
-    #[cfg(not(windows))]
-    let _ = plain;
+}
+
+/// The dialog programs [`warn_visibly`] tries in order, `text` passed as an argument (never
+/// through a shell or a script's text): the first that starts shows it.
+#[cfg(any(not(windows), test))]
+fn dialog_commands(text: &str) -> Vec<std::process::Command> {
+    use std::process::Command;
+    if cfg!(target_os = "macos") {
+        let mut alert = Command::new("osascript");
+        alert
+            .args([
+                "-e",
+                "on run argv",
+                "-e",
+                "display alert \"nv-rs\" message (item 1 of argv) as warning",
+                "-e",
+                "end run",
+            ])
+            .arg(text);
+        vec![alert]
+    } else {
+        let mut zenity = Command::new("zenity");
+        zenity
+            .args(["--warning", "--no-markup", "--title", "nv-rs", "--text"])
+            .arg(text);
+        let mut kdialog = Command::new("kdialog");
+        kdialog.args(["--title", "nv-rs", "--sorry"]).arg(text);
+        vec![zenity, kdialog]
+    }
 }
 
 /// The player's Documents, AppData and Local AppData as Windows answers for them (wherever they
-/// were moved to: OneDrive, another drive); empty off Windows.
+/// were moved to: OneDrive, another drive). Off Windows: the player's own folders there
+/// (`game_folders::never_written`), empty when `HOME` is not set.
 pub fn known_folders() -> Vec<PathBuf> {
     #[cfg(windows)]
     {
@@ -129,7 +202,14 @@ pub fn known_folders() -> Vec<PathBuf> {
         out
     }
     #[cfg(not(windows))]
-    Vec::new()
+    game_folders::Home::from_process()
+        .map(|home| {
+            game_folders::never_written(&home)
+                .into_iter()
+                .map(|g| g.root)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The path the system really means: links, junctions, `subst` and short names resolved, a part
@@ -207,14 +287,13 @@ fn prefs_file() -> Option<&'static Path> {
     static FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
     FILE.get_or_init(|| {
         let file = PathBuf::from(std::env::var_os("NV_PREFS_OUT")?);
-        let profile = std::env::var_os("USERPROFILE").map(PathBuf::from);
-        if let Some(why) = refused(&file, profile.as_deref(), &known_folders()) {
+        if let Some(why) = refused_here(&file) {
             warn_visibly(
                 &format!(
                     "NV_PREFS_OUT={}: refused ({why}); settings are not copied.",
                     file.display()
                 ),
-                "Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through Play.exe, and report this if you did.",
+                &format!("Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through {START}, and report this if you did."),
             );
             return None;
         }
@@ -537,6 +616,20 @@ mod tests {
             r"D:\scratch",
         ] {
             assert_eq!(refused(Path::new(dir), Some(profile), &[]), None, "{dir}");
+        }
+    }
+
+    /// The warning's dialog gets the text as one argument of its own, quotes and all, never inside
+    /// a script's or a shell's text.
+    #[test]
+    fn the_warning_dialog_gets_the_text_as_one_argument() {
+        let text = "a \"quoted\" line; $(not run) `x`\n\nsecond";
+        let commands = dialog_commands(text);
+        assert!(!commands.is_empty());
+        for command in &commands {
+            let args: Vec<_> = command.get_args().collect();
+            assert_eq!(args.last().copied(), Some(std::ffi::OsStr::new(text)));
+            assert_eq!(args.iter().filter(|a| **a == text).count(), 1);
         }
     }
 
