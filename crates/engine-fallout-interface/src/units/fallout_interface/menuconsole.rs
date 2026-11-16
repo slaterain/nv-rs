@@ -285,7 +285,15 @@ fn print_line_entry(e: &mut Engine, words: &[u32]) -> Ret {
 /// It does nothing while the console singleton check `00705ea0` holds and
 /// the `0070edf0` check fails.
 pub fn fn_0071d0a0(e: &mut Engine, this: Ptr<MenuConsole>, format: u32, arguments: u32) {
-    if e.call(0x0070_5ea0, &args![]).bool() && !e.call(0x0070_edf0, &args![]).bool() {
+    // JIP LN NVSE's G35 at `0x0071D0D2` (group GA's row and handler, a fix row:
+    // `SafeWrite16(0x71D0D2, 0x1BEB)`, a jump to 0x71D0EF): an answer skips both tests, so the
+    // line is printed while the loading menu is up too. One load while JIP's fixes are not in.
+    let print_while_loading = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0071_d0d2, &[this.addr()]).is_some();
+    if !print_while_loading
+        && e.call(0x0070_5ea0, &args![]).bool()
+        && !e.call(0x0070_edf0, &args![]).bool()
+    {
         return;
     }
     // The exe's frame (`SUB ESP,0x840` under the exception record, then `ESI` and the record
@@ -2016,6 +2024,73 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log.len(), 3); // the call itself, 705ea0 and 70edf0
         assert!(lines_of(&e, console).is_empty());
+    }
+
+    thread_local! {
+        static G35_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g35_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G35's seam asked without FIXES");
+    }
+
+    fn g35_jump(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G35_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// JIP LN NVSE's G35 seam (`0x0071D0D2`, group GA's row, a fix row) while the loading menu
+    /// is up (`0x705EA0` 1, `0x70EDF0` 0): with the word 0 or `INSTALLED` alone it is not asked
+    /// and the line is dropped; with `FIXES` and no handler, dropped; with a handler (any answer,
+    /// 0 too) it is asked once with exactly the console, neither test is called and the line is
+    /// printed (the code after the jump runs).
+    #[test]
+    fn format_line_jip_prints_while_loading_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let (mut e, _) = console_engine();
+            put_string(&mut e, 0x0106_fcb4, "ab");
+            e.register(0x0070_5ea0, |_, _| ret(1));
+            e.register(0x0070_edf0, |_, _| ret(0));
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0071_d0d2, handler);
+            }
+            e.set_jip_patches(word);
+            let console = new_console(&mut e);
+            G35_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            e.call(0x0071_d0a0, &args![console, 0x0106_fcb4u32, 0u32]);
+            let log = e.call_log.take().unwrap();
+            // The tests at the function's head: before the text is formatted (`0x406150`'s
+            // string, then `0x71DD90`), or all of them when it returns early.
+            let head = log
+                .iter()
+                .position(|(at, _)| *at == 0x0071_dd90)
+                .unwrap_or(log.len());
+            let tests = log[..head]
+                .iter()
+                .filter(|(at, _)| *at == 0x0070_5ea0 || *at == 0x0070_edf0)
+                .count();
+            (
+                lines_of(&e, console),
+                tests,
+                G35_SEEN.with(|s| s.take()),
+                console.addr(),
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (lines, tests, seen, _) = run(word, Some(g35_never));
+            assert!(lines.is_empty());
+            assert_eq!((tests, seen.len()), (2, 0));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (lines, tests, _, _) = run(fixes, None);
+        assert!(lines.is_empty(), "no handler: dropped");
+        assert_eq!(tests, 2);
+        let (lines, tests, seen, console) = run(fixes, Some(g35_jump));
+        assert_eq!(lines, ["ab"]);
+        assert_eq!(tests, 0, "both tests jumped over");
+        assert_eq!(seen, vec![vec![console]]);
     }
 
     #[test]

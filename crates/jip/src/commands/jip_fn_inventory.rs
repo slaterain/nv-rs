@@ -891,8 +891,12 @@ fn base_health(e: &mut Engine, item: u32, first: u32) -> f32 {
 /// own extra data and base form.
 fn get_item_ref_current_health(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
-    let read = Read::of(e, &a);
-    let perc_or_base = read.int(0, 0);
+    // `NUM_ARGS_EX`: no argument data, no read.
+    let perc_or_base = if super::jip_fn_utility::num_args_ex(e, &a) != 0 {
+        Read::of(e, &a).int(0, 0)
+    } else {
+        0
+    };
     if a.this_obj == 0 {
         return handled(true);
     }

@@ -33,6 +33,8 @@ pub mod patch_data;
 pub mod phys_blend;
 pub mod player_move;
 pub mod save_out;
+#[cfg(test)]
+mod start_up_tests;
 pub mod thread_races;
 pub mod topic_index;
 pub mod uncap;
@@ -76,6 +78,53 @@ impl Drop for Host {
     }
 }
 
+/// The rows and the built-in extenders, in their order (`start_up_tests` pins it): the rows first,
+/// since a row may set a flag an extender reads as it installs (`NV_JIP_INSTALLED` for JIP), and the
+/// extenders' wraps go over what the rows registered.
+pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Choice) {
+    // What differs from the exe in this run, registered over the translations (docs/FIXES.md).
+    fixes::install(engine, choice);
+    // zlib's inflate on the host decoder (unless `NV_NATIVE_INFLATE=0`): the same bytes out, in every
+    // preset, since it changes no behaviour, only the time a compressed file takes.
+    if native_inflate::wanted() {
+        native_inflate::install(engine);
+    }
+    // Full screen asked is drawn in the borderless window over the monitor, in every preset:
+    // nv-rs offers no exclusive full-screen device yet ([`full_screen`]).
+    full_screen::install(engine);
+    // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
+    // registered. Vanilla content calls no extender opcode, and every change it makes to
+    // vanilla commands is a row.
+    nvse::install(engine);
+    // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, answering "not
+    // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
+    // `fixes::install` above) switched it on (`crates/jip`).
+    jip::install(engine);
+    // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
+    // jip_nvse.dll (`crates/uio`).
+    uio::install(engine);
+}
+
+/// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;
+/// `answers_installed`: it does), with the threads asked for: none when it is off as asked.
+pub(crate) fn jip_start_lines(row_on: bool, answers_installed: bool, threads: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    if row_on && !answers_installed {
+        lines.push(
+            "JIP LN NVSE: its row is on but JIP installed before reading it: it answers \"not installed\""
+                .to_string(),
+        );
+    }
+    if answers_installed && !threads.trim().eq_ignore_ascii_case("stepped") {
+        lines.push(
+            "JIP LN on with real threads: four of JIP's hooks still wait for the main thread until the \
+             thread-safety follow-up is in; hitches at cell changes are possible"
+                .to_string(),
+        );
+    }
+    lines
+}
+
 impl Host {
     /// Starts the game's code for the installation whose `Data` folder is
     /// `data`: its `FalloutNV.exe` ([`engine::exe::installed_exe`]),
@@ -101,34 +150,28 @@ impl Host {
                 exe.display()
             ));
         }
+        // Linux and macOS: the program builds there, but the game does not run yet.
+        #[cfg(not(windows))]
+        not_provided_here()?;
         let mut engine = Box::new(Engine::with_exe(&exe)?);
         // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with
         // the same addresses.
         for (address, function) in play_patch::funcs() {
             engine.register(address, function);
         }
-        // What differs from the exe in this run, registered over the translations (docs/FIXES.md).
-        fixes::install(&mut engine, choice);
-        // zlib's inflate on the host decoder (unless `NV_NATIVE_INFLATE=0`): the same bytes out, in every
-        // preset, since it changes no behaviour, only the time a compressed file takes.
-        if native_inflate::wanted() {
-            native_inflate::install(&mut engine);
-        }
-        // Full screen asked is drawn in the borderless window over the monitor, in every preset:
-        // nv-rs offers no exclusive full-screen device yet ([`full_screen`]).
-        full_screen::install(&mut engine);
-        // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
-        // registered. Vanilla content calls no extender opcode, and every change it makes to
-        // vanilla commands is a row.
-        nvse::install(&mut engine);
-        // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, with no command built
-        // yet, and answering "not installed" until the commands mods call are in (`crates/jip`).
-        jip::install(&mut engine);
-        // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
-        // jip_nvse.dll (`crates/uio`).
-        uio::install(&mut engine);
+        install_rows_and_extenders(&mut engine, choice);
         eprintln!("{}", choice.describe());
+        let jip_state = {
+            let jip = engine.ext::<jip::Jip>();
+            (jip.row_on, jip.answers_installed)
+        };
+        for line in jip_start_lines(jip_state.0, jip_state.1, &choice.threads) {
+            eprintln!("{line}");
+        }
         if let Some(note) = &choice.ini_note {
+            eprintln!("{note}");
+        }
+        if let Some(note) = fixes::play_run_taken_as_test(choice, |name| std::env::var(name).ok()) {
             eprintln!("{note}");
         }
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
@@ -381,6 +424,38 @@ impl Host {
     }
 }
 
+/// [`Host::start_with`] and [`check_installation`] off Windows: the program builds on Linux and
+/// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
+/// pieces that are still Windows-only, instead of a run that would go on without them (no window
+/// drawn, no sound, the game's own folder names not found, files listed by a call that stops)
+/// and fail somewhere less clear. On a processor other than x86-64 (Apple silicon) it also names
+/// what differs there.
+#[cfg(any(not(windows), test))]
+fn not_provided_here() -> Result<(), String> {
+    not_provided_on(cfg!(target_arch = "x86_64"))
+}
+
+/// [`not_provided_here`]'s message, for an x86-64 processor or another.
+#[cfg(any(not(windows), test))]
+fn not_provided_on(x86_64: bool) -> Result<(), String> {
+    let mut why = String::from(
+        "nv-rs does not run the game on this system yet: it builds here, but these are only \
+         provided on Windows so far: the game's window with its mouse and keyboard (and so \
+         anything drawn), the sound on the speakers, the game's Windows folder names (a drive \
+         letter and backslashes) over this system's folders, the file listing's file times, \
+         this machine's tables (display adapter, sound devices, folders), which are measured on \
+         Windows, the distortion sound effect's table (measured from Windows' own DLL), and text \
+         in the game's code page outside ASCII",
+    );
+    if !x86_64 {
+        why.push_str(
+            "; and on this processor the game's x87 maths (not yet exact off x86-64) and the \
+             processor's quick reciprocal estimates (RCPSS, RSQRTSS)",
+        );
+    }
+    Err(why)
+}
+
 /// What `nv-viewer --check` reports for the installation whose `Data` folder is `data`, without
 /// starting anything: an error when its `FalloutNV.exe` is missing or is not 1.4.0.525
 /// ([`engine::exe::verify`]), else a line for each thing that decides how the run will go.
@@ -389,6 +464,11 @@ pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
     if !exe.is_file() {
         return Err(format!("{}: not found", exe.display()));
     }
+    // Linux and macOS: the game cannot start there yet, so the check says so where the start
+    // does, right after the exe is found (`--check` then ends with status 1, "the game cannot
+    // start").
+    #[cfg(not(windows))]
+    not_provided_here()?;
     engine::exe::verify(&exe)?;
     let converter = if engine_platform::resampler::tables().is_some() {
         "found"
@@ -677,6 +757,67 @@ fn sound_choice(sound: Option<&str>, record: bool, hidden: bool) -> SoundChoice 
 
 #[cfg(test)]
 mod tests {
+    /// Off Windows a start is refused, naming the pieces that are still Windows-only.
+    #[test]
+    fn a_start_off_windows_is_refused_naming_what_is_missing() {
+        let why = super::not_provided_here().unwrap_err();
+        for x86_64 in [true, false] {
+            let why = super::not_provided_on(x86_64).unwrap_err();
+            for piece in [
+                "window",
+                "mouse and keyboard",
+                "sound",
+                "folder names",
+                "file times",
+                "tables",
+                "distortion",
+                "code page",
+            ] {
+                assert!(why.contains(piece), "{piece}: {why}");
+            }
+            // The processor's own differences only off x86-64 (Apple silicon).
+            assert_eq!(why.contains("x87"), !x86_64, "{why}");
+            assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
+        }
+        assert_eq!(
+            why,
+            super::not_provided_on(cfg!(target_arch = "x86_64")).unwrap_err()
+        );
+    }
+
+    /// A scratch installation whose FalloutNV.exe is two bytes (enough to be found).
+    #[cfg(not(windows))]
+    fn scratch_installation(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nv-host-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Data")).unwrap();
+        std::fs::write(dir.join("FalloutNV.exe"), b"MZ").unwrap();
+        dir
+    }
+
+    /// The refusal is made before the exe is mapped: a start with an installation present stops
+    /// with it on Linux and macOS (an installation with no exe still says that first).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_start_off_windows_stops_with_the_refusal() {
+        let dir = scratch_installation("refusal");
+        let err = super::Host::start(&dir.join("Data")).err().unwrap();
+        assert_eq!(err, super::not_provided_here().unwrap_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `nv-viewer --check` off Windows says the same (status 1: the game cannot start), where
+    /// the start does: after the exe is found.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_installation_check_off_windows_says_the_game_cannot_start() {
+        let dir = scratch_installation("check");
+        let err = super::check_installation(&dir.join("Data")).unwrap_err();
+        assert_eq!(err, super::not_provided_here().unwrap_err());
+        let _ = std::fs::remove_dir_all(&dir);
+        let missing = super::check_installation(&dir.join("Data")).unwrap_err();
+        assert!(missing.ends_with("FalloutNV.exe: not found"), "{missing}");
+    }
+
     #[test]
     fn a_hidden_window_never_plays_on_the_speakers() {
         use super::{sound_choice, SoundChoice};

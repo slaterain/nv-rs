@@ -537,16 +537,21 @@ pub fn expression_eval(
                         operand_pop(e, operands, out);
                         Operand::read(e, out.addr())
                     });
-                    match binary(e, this, operator as u32, left, right, parse, token_text) {
-                        Some(value) => {
-                            let (float, words) = value;
-                            result.set_type(float);
-                            match words {
-                                Value::Int(v) => result.set_int(v),
-                                Value::Float(v) => result.set_float(v),
+                    if jip_double_precision(e, operator as u32, left, right, current) {
+                        // JIP's operator wrote the current operand's type byte and value.
+                        result = Operand::read(e, current);
+                    } else {
+                        match binary(e, this, operator as u32, left, right, parse, token_text) {
+                            Some(value) => {
+                                let (float, words) = value;
+                                result.set_type(float);
+                                match words {
+                                    Value::Int(v) => result.set_int(v),
+                                    Value::Float(v) => result.set_float(v),
+                                }
                             }
+                            None => return 0.0,
                         }
-                        None => return 0.0,
                     }
                 }
                 result.write(e, current);
@@ -644,6 +649,36 @@ pub fn expression_eval(
 enum Value {
     Int(i32),
     Float(f64),
+}
+
+/// JIP LN NVSE's `bDoublePrecision` (O8, `SetOptionalPatch(8)`, step 3.9): its `DoOperatorHook`
+/// replaces the operator switch at `0x593FBC` (the operator less 2, 0 to 12, after the exe's range
+/// test). The switch's bit is tested first; then JIP's handler gets the operator's index, the left
+/// operand's type word and value words (low, high), the right's, and the current operand's address,
+/// and writes the result there (its type byte at +0, its value at +8), as JIP writes `[EBP-0x10]`
+/// and `[EBP-8]`. True when the handler took the operator (the exe's code is then skipped).
+fn jip_double_precision(
+    e: &mut Engine,
+    operator: u32,
+    left: Operand,
+    right: Operand,
+    current: u32,
+) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::DOUBLE_PRECISION != 0
+        && e.site(
+            0x0059_3fbc,
+            &[
+                operator.wrapping_sub(2),
+                left.0[0],
+                left.0[2],
+                left.0[3],
+                right.0[0],
+                right.0[2],
+                right.0[3],
+                current,
+            ],
+        )
+        .is_some()
 }
 
 /// One binary operator of [`expression_eval`]: (double result, value), or
@@ -1581,5 +1616,148 @@ mod tests {
             assert_eq!(e.call(address, &[block + 4]).u32(), block + 4);
             assert_eq!(e.mem.bytes(block, size + 8), expected);
         }
+    }
+
+    // ---- JIP LN NVSE's O8 seam (0x593FBC) ----
+
+    use engine_core::extend::jip_patches;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static O8_SEEN: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn o8_seen() -> Vec<Vec<u32>> {
+        O8_SEEN.with(|s| s.borrow().clone())
+    }
+
+    /// A test handler: notes its words; for `-` (index 8) writes the double 0.75 with type 1 into
+    /// the current operand and takes the operator, any other operator is left to the exe.
+    fn o8_takes_minus(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        O8_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        if a[0] != 8 {
+            return None;
+        }
+        e.mem.set_u8(a[7], 1);
+        e.mem.set_f64(a[7] + 8, 0.75);
+        Some(1)
+    }
+
+    /// A test handler that only notes its words.
+    fn o8_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O8_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    /// `eval` with the word `word` and `handler` at the seam: (value bits, error, words seen).
+    fn eval_o8(
+        bytes: &[u8],
+        word: u32,
+        handler: fn(&mut Engine, &[u32]) -> Option<u32>,
+    ) -> (u64, u32, Vec<Vec<u32>>) {
+        O8_SEEN.with(|s| s.borrow_mut().clear());
+        let mut e = Engine::new();
+        table_fixture(&mut e);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0059_3fbc, handler);
+        let this = expression(&mut e);
+        let data = e.mem.alloc(bytes.len() as u32 + 1);
+        e.mem.write(data, bytes);
+        let value = e
+            .call(
+                0x00593db0,
+                &args![this, data, 0u32, 0u32, 0u32, 1u32, bytes.len() as i32, 0u8],
+            )
+            .f64();
+        (
+            value.to_bits(),
+            e.get(this, CExpression::m_ExpressionError),
+            o8_seen(),
+        )
+    }
+
+    const O8_ON: u32 = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::DOUBLE_PRECISION;
+
+    /// Not installed, or installed with the fixes but `bDoublePrecision` off: the seam is not
+    /// asked and the exe's operators run (7 - 2.5 = 4.5; 7 / 0 is error 4).
+    #[test]
+    fn jip_o8_off_never_asks() {
+        for word in [0, jip_patches::INSTALLED | jip_patches::FIXES] {
+            let (bits, error, seen) = eval_o8(b" 7 2.5 -", word, o8_takes_minus);
+            assert_eq!((f64::from_bits(bits), error), (4.5, 0), "{word:x}");
+            assert!(seen.is_empty(), "{word:x}");
+            let (bits, error, seen) = eval_o8(b" 7 0 /", word, o8_takes_minus);
+            assert_eq!((bits, error), (0, 4), "{word:x}");
+            assert!(seen.is_empty(), "{word:x}");
+        }
+    }
+
+    /// On: the seam gets the index (`-` is 8), the left operand's type word and value words (the
+    /// integer 7: type 0, 7, the high word 0 the current operand had), the right's (the double 2.5:
+    /// type 1, 0, 0x40040000) and the current operand's address; the handler's type and value are
+    /// the result (0.75, where the exe gives 4.5).
+    #[test]
+    fn jip_o8_on_passes_every_word_and_uses_the_answer() {
+        let (bits, error, seen) = eval_o8(b" 7 2.5 -", O8_ON, o8_takes_minus);
+        assert_eq!((f64::from_bits(bits), error), (0.75, 0));
+        assert_eq!(seen.len(), 1);
+        let w = &seen[0];
+        assert_eq!(w[..7], [8, 0, 7, 0, 1, 0, 0x4004_0000]);
+        assert_ne!(w[7], 0, "the current operand's address");
+        // Swapped operands: the left is the double.
+        let (_, _, seen) = eval_o8(b" 2.5 7 -", O8_ON, o8_takes_minus);
+        // The integer 7 parsed over the 2.5 keeps its high word (0x40040000), as the frame does.
+        assert_eq!(seen[0][..7], [8, 1, 0, 0x4004_0000, 0, 7, 0x4004_0000]);
+    }
+
+    /// The index of each operator (its number less 2) and the operands' order.
+    #[test]
+    fn jip_o8_indexes_every_operator() {
+        let ops: [(&[u8], u32); 13] = [
+            (b"&&", 0),
+            (b"||", 1),
+            (b"<=", 2),
+            (b"<", 3),
+            (b">=", 4),
+            (b">", 5),
+            (b"==", 6),
+            (b"!=", 7),
+            (b"-", 8),
+            (b"+", 9),
+            (b"*", 10),
+            (b"/", 11),
+            (b"%", 12),
+        ];
+        for (text, index) in ops {
+            let bytes = [b" 9 4 ".as_slice(), text].concat();
+            let (_, _, seen) = eval_o8(&bytes, O8_ON, o8_none);
+            assert_eq!(seen.len(), 1, "{}", String::from_utf8_lossy(text));
+            assert_eq!(seen[0][..7], [index, 0, 9, 0, 0, 4, 0]);
+        }
+        // Unary minus is not an operator of the switch.
+        let (_, _, seen) = eval_o8(b" 9 ~", O8_ON, o8_none);
+        assert!(seen.is_empty());
+    }
+
+    /// An answer of none keeps the exe's operator (4.5; 7 / 0 error 4), asked once each.
+    #[test]
+    fn jip_o8_none_keeps_the_exes_operator() {
+        let (bits, error, seen) = eval_o8(b" 7 2.5 -", O8_ON, o8_none);
+        assert_eq!((f64::from_bits(bits), error), (4.5, 0));
+        assert_eq!(seen.len(), 1);
+        let (bits, error, seen) = eval_o8(b" 7 0 /", O8_ON, o8_none);
+        assert_eq!((bits, error), (0, 4));
+        assert_eq!(seen.len(), 1);
+    }
+
+    /// After JIP's operator the result is pushed and the evaluation goes on: (7 - 2.5) * 2 with
+    /// JIP's 0.75 for the `-` and the exe's `*` gives 1.5.
+    #[test]
+    fn jip_o8_result_is_pushed_and_used_by_the_next_operator() {
+        let (bits, error, seen) = eval_o8(b" 7 2.5 - 2 *", O8_ON, o8_takes_minus);
+        assert_eq!((f64::from_bits(bits), error), (1.5, 0));
+        assert_eq!(seen.len(), 2);
+        // The 2 parsed over JIP's 0.75 keeps its high word.
+        assert_eq!(seen[1][..7], [10, 1, 0, 0x3fe8_0000, 0, 2, 0x3fe8_0000]);
     }
 }

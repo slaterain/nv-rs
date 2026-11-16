@@ -547,11 +547,21 @@ pub fn trait_menu_do_enter(e: &mut Engine, this: Ptr, id: u32, tile: u32) {
     let name = e.call(STRING_C_STR, &args![perk.wrapping_add(0x2c)]).u32();
     let name_tile = tile_at(e, base, 2);
     e.call(TILE_SET_STRING, &args![name_tile, 0xfccu32, name, 1u32]);
-    e.with_stack(0x200, |e, buffer| {
+    // JIP LN NVSE's G11 at `0x007E6F04` (group GA's row and handler, a fix row: the frame
+    // `0x7E6EA6`, the size `0x7E6F04` and the two buffer addresses `0x7E6F09`, `0x7E6F2B`): the
+    // seam answers the description buffer's size (0x400 with JIP; JIP's buffer address bytes
+    // put it below its frame, here it is the frame's own block). One load while JIP's fixes are
+    // not in.
+    let size = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x007e_6f04, &[0x200]).unwrap_or(0x200)
+    } else {
+        0x200
+    };
+    e.with_stack(size, |e, buffer| {
         let perk = e
             .call(LIST_BOX_ITEM_OF_TILE, &args![base + PERKS_LIST, tile])
             .u32();
-        e.call(PERK_BUILD_DESCRIPTION, &args![perk, buffer, 0x200u32]);
+        e.call(PERK_BUILD_DESCRIPTION, &args![perk, buffer, size]);
         let text_tile = tile_at(e, base, 3);
         e.call(TILE_SET_STRING, &args![text_tile, 0xfc4u32, buffer, 1u32]);
     });
@@ -1419,6 +1429,142 @@ mod tests {
         e.call_log = Some(vec![]);
         e.call(0x007e_6ea0, &args![menu, 0x9u32, 0x8888u32]);
         assert!(calls(&e, TILE_SET_STRING).is_empty());
+    }
+
+    thread_local! {
+        static G11_SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G11_ANSWER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        static G11_LEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    fn g11_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G11's seam asked without FIXES");
+    }
+
+    fn g11_size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G11_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(G11_ANSWER.with(std::cell::Cell::get))
+    }
+
+    /// The description `0x5EBAC0` writes: `size - 1` letters and the end, or (`exact`) `size`
+    /// letters with no end.
+    fn g11_world(exact: bool, canaries: bool) -> (Engine, u32) {
+        let mut e = engine();
+        let menu = menu(&mut e);
+        quiet(
+            &mut e,
+            &[TILE_SET_VALUE, PLAY_MENU_SOUND, TILE_SET_FLOAT, TILE_POKE],
+        );
+        e.register_double(PERK_BUILD_DESCRIPTION, move |e, a| {
+            // Canaries right after the size, set as the frame stands; read after `DoEnter`.
+            if canaries {
+                for i in 0..0x20 {
+                    e.mem.set_u8(a[1] + a[2] + i, 0xee);
+                }
+            }
+            let letters = if exact { a[2] } else { a[2] - 1 };
+            for i in 0..letters {
+                e.mem.set_u8(a[1] + i, b'a');
+            }
+            if !exact {
+                e.mem.set_u8(a[1] + letters, 0);
+            }
+            Ret::default()
+        });
+        // The text tile's length as `Tile::SetString` reads it (only for an ended text).
+        e.register_double(TILE_SET_STRING, move |e, a| {
+            if a[1] == 0xfc4 && !exact {
+                let mut n = 0;
+                while e.mem.u8(a[2] + n) != 0 {
+                    n += 1;
+                }
+                G11_LEN.with(|l| l.set(n));
+            }
+            Ret::default()
+        });
+        e.register(LIST_BOX_ITEM_OF_TILE, |_, _| ret(0x4000));
+        e.register(STRING_C_STR, |_, a| ret(a[0] + 0x100));
+        e.register(TILE_GET_STRING, |_, _| ret(0x5555));
+        e.register(STRING_LENGTH, |_, _| ret(2));
+        e.register(TILE_TEXT_TO_TRAIT, |_, a| ret(a[0] & 0xff));
+        (e, menu)
+    }
+
+    /// JIP LN NVSE's G11 seam (`0x007E6F04`, group GA's row, a fix row): with the word 0 or
+    /// `INSTALLED` alone it is not asked and the description is built in the exe's 0x200 bytes
+    /// (0x1FF letters reach the text tile); with `FIXES` and no handler, the same; with a handler
+    /// it is asked once with exactly `[0x200]`, and the answer sizes both the block (the stack
+    /// local the frame takes, with 0xEE canaries right after it left intact) and the size
+    /// `0x5EBAC0` gets, the same block reaching the text tile: 0x3F4 gives 0x3F3 letters, 0x400
+    /// (JIP's) 0x3FF, 0x401 0x400; a description that fills the block with no end stays inside
+    /// it. With the block check on, a store past the block stops the test.
+    #[test]
+    fn do_enter_jip_trait_description_size_seam() {
+        use engine_core::extend::jip_patches;
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let run =
+            |word: u32, handler: Option<engine_core::extend::SiteFn>, answer: u32, exact: bool| {
+                let (mut e, menu) = g11_world(exact, true);
+                if let Some(handler) = handler {
+                    e.on_site_for_test(0x007e_6f04, handler);
+                }
+                e.set_jip_patches(word);
+                G11_ANSWER.with(|a| a.set(answer));
+                G11_SEEN.with(|s| s.borrow_mut().clear());
+                G11_LEN.with(|l| l.set(0));
+                let size = if handler.is_some() && word & jip_patches::FIXES != 0 {
+                    answer
+                } else {
+                    0x200
+                };
+                let block = e.next_stack_local(size);
+                e.call_log = Some(vec![]);
+                e.call(0x007e_6ea0, &args![menu, 0xau32, 0x8888u32]);
+                let built = calls(&e, PERK_BUILD_DESCRIPTION);
+                assert_eq!(
+                    built,
+                    vec![vec![0x4000, block, size]],
+                    "the block and its size"
+                );
+                let strings = calls(&e, TILE_SET_STRING);
+                assert_eq!(strings[1], vec![0x9003, 0xfc4, block, 1]);
+                assert_eq!(calls(&e, PLAY_MENU_SOUND), vec![vec![4]]);
+                for i in 0..0x20 {
+                    assert_eq!(e.mem.u8(block + size + i), 0xee, "canary {i:#x}");
+                }
+                (
+                    G11_LEN.with(std::cell::Cell::get),
+                    G11_SEEN.with(|s| s.take()),
+                )
+            };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, Some(g11_never), 0x400, false), (0x1ff, vec![]));
+        }
+        assert_eq!(run(fixes, None, 0x400, false), (0x1ff, vec![]));
+        for (answer, letters) in [(0x3f4, 0x3f3), (0x400, 0x3ff), (0x401, 0x400)] {
+            assert_eq!(
+                run(fixes, Some(g11_size), answer, false),
+                (letters, vec![vec![0x200]]),
+                "{answer:#x}"
+            );
+        }
+        for answer in [0x400, 0x401] {
+            assert_eq!(
+                run(fixes, Some(g11_size), answer, true).1,
+                vec![vec![0x200]]
+            );
+        }
+        assert!(run(0, Some(g11_never), 0, true).1.is_empty());
+
+        // The block check on: a store past the block stops the test.
+        let (mut e, menu) = g11_world(false, false);
+        e.mem.enable_block_check(true, true);
+        e.on_site_for_test(0x007e_6f04, g11_size);
+        e.set_jip_patches(fixes);
+        G11_ANSWER.with(|a| a.set(0x400));
+        G11_LEN.with(|l| l.set(0));
+        e.call(0x007e_6ea0, &args![menu, 0xau32, 0x8888u32]);
+        assert_eq!(G11_LEN.with(std::cell::Cell::get), 0x3ff);
     }
 
     #[test]
