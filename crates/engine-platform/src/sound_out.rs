@@ -944,7 +944,7 @@ mod tests {
         );
         assert_eq!(open_as(mono, Some(Layout::STEREO), &both), Ok(stereo));
         assert_eq!(
-            open_as(mono, Some(Layout::STEREO), &takes(&[(48000, 1)])),
+            open_as(mono, Some(Layout::STEREO), takes(&[(48000, 1)])),
             Err(Refused::Layout)
         );
         let odd = (

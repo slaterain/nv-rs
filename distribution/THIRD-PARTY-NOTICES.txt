@@ -32,6 +32,13 @@ ash 0.38.0+1.3.281
     ash-0.38.0+1.3.281/LICENSE-APACHE
     ash-0.38.0+1.3.281/LICENSE-MIT
 
+audio_thread_priority 0.35.1
+  License expression: MPL-2.0
+  Repository: https://github.com/padenot/audio_thread_priority
+  Source Code Form: this package is used unmodified, in the Linux and macOS programs only (through cpal's realtime feature: the sound device's thread at real-time priority); its source is at the repository above and at https://crates.io/crates/audio_thread_priority/0.35.1
+  Bundled license files:
+    audio_thread_priority-0.35.1/LICENSE
+
 autocfg 1.5.1
   License expression: Apache-2.0 OR MIT
   Repository: https://github.com/cuviper/autocfg
