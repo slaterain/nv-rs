@@ -735,7 +735,7 @@ fn the_owner_argument() {
     );
 }
 
-/// `AuxVarGetFltCond` reads the lock-free copy of the first values ([`Unlocked`]): while a second
+/// `AuxVarGetFltCond` reads the copy of the first values (`Firsts`): while a second
 /// engine of the run (a real thread's) holds JIP's shared slot it answers on this engine (asking
 /// for the slot here would be refused: two engines on one thread), for a saved and a temporary
 /// variable; the copy follows every change (a value erased, the variable erased, the owner's

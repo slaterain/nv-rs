@@ -107,8 +107,10 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
 
 /// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;
 /// `answers_installed`: it does): none when it is off as asked or on as asked. (With real threads
-/// none of JIP's hooks waits for the main thread any more: its aux variables and item data have
-/// their own locks, so there is no line for that either.)
+/// JIP's own data no longer makes a thread wait: its aux variables and item data have their own
+/// locks. A mod's event script run from another thread (JIP's actor, world and UI event hooks)
+/// and `AuxVarGetFltCond`'s name lookup still take xNVSE's shared state and wait for the main
+/// thread a moment; docs/FIXES.md and the INI row say so, the log does not.)
 pub(crate) fn jip_start_lines(row_on: bool, answers_installed: bool) -> Vec<String> {
     let mut lines = Vec::new();
     if row_on && !answers_installed {

@@ -170,14 +170,11 @@ fn destroy_refr(e: &mut Engine, a: &[u32]) -> Option<u32> {
     }
     let id = e.mem.u32(reference + REF_ID);
     if e.mem.u8(reference + MOD_INDEX) == 0xff && !has_change_data(e, id) && maps_may_hold(e) {
-        // One take of the maps' lock for the test and both erasures (`AuxMaps`), not JIP's slot.
+        // One take of the maps' lock for the test, both erasures and the copy AuxVarGetFltCond
+        // reads losing the owner (`AuxMaps`), not JIP's slot.
         let erased = erase_owner(e.ext_free::<AuxMaps>(), id);
-        if let Some(saved) = erased {
-            if saved {
-                mark_changed(e, changed::AUX_VARS);
-            }
-            // The lock-free copy AuxVarGetFltCond reads loses the owner too.
-            crate::commands::jip_fn_aux_variable::forget_owner(e, id);
+        if erased == Some(true) {
+            mark_changed(e, changed::AUX_VARS);
         }
     }
     let kind = e.mem.u8(e.mem.u32(reference + BASE) + FORM_TYPE);
@@ -209,8 +206,15 @@ fn drop_text(
 
 /// The destructor's aux part on the maps, under one take of their lock: with both empty the
 /// "may hold" flag is cleared and `None` answered; else the id's variables leave the saved and the
-/// temporary map, and whether a saved one went is answered.
+/// temporary map and the copy `AuxVarGetFltCond` reads (in the same take, so a command's publish
+/// on another thread cannot land between them), and whether a saved one went is answered.
 fn erase_owner(maps: &AuxMaps, id: u32) -> Option<bool> {
+    erase_owner_with(maps, id, || {})
+}
+
+/// [`erase_owner`], with `between` run after the maps' erasures and before the copy's (tests:
+/// another thread's set and publish there must wait for this take).
+fn erase_owner_with(maps: &AuxMaps, id: u32, between: impl FnOnce()) -> Option<bool> {
     let mut pair = maps.lock();
     if pair.saved.is_empty() && pair.temp.is_empty() {
         pair.maps_found_empty();
@@ -218,6 +222,8 @@ fn erase_owner(maps: &AuxMaps, id: u32) -> Option<bool> {
     } else {
         let saved = clear_ref_aux_vars(&mut pair.saved, id);
         clear_ref_aux_vars(&mut pair.temp, id);
+        between();
+        maps.forget_owner_held(&pair, id);
         Some(saved)
     }
 }

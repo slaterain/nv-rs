@@ -43,7 +43,9 @@ fn the_rows_go_in_before_the_extenders() {
 }
 
 /// The log says when JIP's row was on but JIP did not read it; nothing when JIP is off as asked
-/// or on as asked (with real threads too: no hook of JIP's waits for the main thread any more).
+/// or on as asked (with real threads too: JIP's own data no longer makes a thread wait; a mod's
+/// event script run from another thread still waits for the main thread a moment, which
+/// docs/FIXES.md and the INI row say, not the log).
 #[test]
 fn jip_start_lines_say_what_jip_is() {
     assert!(jip_start_lines(false, false).is_empty());

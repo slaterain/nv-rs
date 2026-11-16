@@ -728,3 +728,81 @@ fn the_may_hold_flag_holds_under_contention() {
         "a variable present while the flag said empty"
     );
 }
+
+/// Waits up to half a second for `done` (the other thread's step), polling each millisecond.
+fn wait_briefly_for(done: &std::sync::atomic::AtomicBool) {
+    let start = std::time::Instant::now();
+    while !done.load(std::sync::atomic::Ordering::SeqCst)
+        && start.elapsed() < std::time::Duration::from_millis(500)
+    {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// The copy `AuxVarGetFltCond` reads of variable `v` of `TEMP_ID` (mod 1, temporary).
+fn copy_of_v(maps: &AuxMaps) -> Option<f64> {
+    maps.first_value((true, 1, TEMP_ID), crate::containers::str_hash_ci(b"v"))
+}
+
+/// The copy `AuxVarGetFltCond` reads changes in the same take of the maps' lock as the maps: a
+/// destructor's erase on another OS thread that comes after a command's publish read the owner's
+/// values and before it wrote them waits for that write, then erases the owner from the copy
+/// too. With the two in separate takes the erase lands in between and the publish then writes
+/// the destroyed owner's values (a later reference given the same id would answer with them).
+#[test]
+fn a_destroy_during_a_publish_leaves_no_values_of_the_destroyed_owner() {
+    let mut e = world(0x15, TEMP_ID);
+    let maps = e.ext_free::<AuxMaps>();
+    maps.lock().temp.emplace(1).emplace_with(TEMP_ID, vars);
+    let done = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        maps.publish_owner_with(true, 1, TEMP_ID, || {
+            scope.spawn(|| {
+                assert_eq!(erase_owner(maps, TEMP_ID), Some(false));
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            wait_briefly_for(&done);
+        });
+    });
+    assert!(maps.lock().temp.is_empty(), "the owner left the maps");
+    assert_eq!(
+        copy_of_v(maps),
+        None,
+        "the copy keeps no value of the destroyed owner"
+    );
+}
+
+/// The mirror: a command's set and publish on another OS thread that comes after the
+/// destructor's erase left the maps and before it erased the copy waits for that erase, then
+/// sets and publishes. With the two in separate takes the copy's erase lands after the publish
+/// and drops the new value the maps hold (the condition would answer nothing).
+#[test]
+fn a_publish_during_a_destroy_keeps_the_new_value_in_the_copy() {
+    let mut e = world(0x15, TEMP_ID);
+    let maps = e.ext_free::<AuxMaps>();
+    maps.lock().temp.emplace(1).emplace_with(TEMP_ID, vars);
+    maps.publish_owner_with(true, 1, TEMP_ID, || {});
+    assert_eq!(copy_of_v(maps), Some(1.0));
+    let done = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let erased = erase_owner_with(maps, TEMP_ID, || {
+            scope.spawn(|| {
+                maps.lock().temp.emplace(1).emplace_with(TEMP_ID, vars);
+                maps.publish_owner_with(true, 1, TEMP_ID, || {});
+                done.store(true, std::sync::atomic::Ordering::SeqCst);
+            });
+            wait_briefly_for(&done);
+        });
+        assert_eq!(erased, Some(false));
+    });
+    assert_eq!(
+        mods_of(&maps.lock().temp),
+        vec![(1, vec![TEMP_ID])],
+        "set again after the erase"
+    );
+    assert_eq!(
+        copy_of_v(maps),
+        Some(1.0),
+        "the copy holds what the maps hold"
+    );
+}

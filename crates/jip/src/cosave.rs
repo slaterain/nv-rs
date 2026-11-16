@@ -820,8 +820,8 @@ fn load_aux_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
             let vars = b.u16()?;
             if present(e, id) {
                 let (left, room) = (owners, vars);
-                // The owner's variables are read first (the values resolve ids through game
-                // calls), then put in with one take of the maps' lock: a destructor on another
+                // The owner's variables are read first (the values resolve ids with reads of the
+                // engine's memory, no game call), then put in with one take of the maps' lock: a destructor on another
                 // thread that erases this owner between two takes would otherwise end the whole
                 // record's read. What a cut-short record had read for the owner goes in too.
                 let mut read = Vec::new();
@@ -1497,8 +1497,13 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // `COPY_BYTES(s_lastLoadedPath, fosPath, dataLen + 1)`.
             let path = message_text(e, m);
             saved(e).last_path = path;
-            // JIP's `s_dataChangedFlags = 0`, unlocked, after xNVSE wrote the records: a mark made on
-            // another thread between the write and this reset is lost, as in JIP.
+            // JIP's `s_dataChangedFlags = 0`, unlocked. xNVSE sends this message BEFORE the plugins'
+            // save callbacks write the records (`HandleSaveGame`; `nvse::saveload::save_game` the
+            // same), so a mark between this reset and the records' snapshot only reads the data
+            // again at the next load of this save. The window that loses one: the item-copy hook
+            // (`game_patches::gh1` copy) marks before it writes its new key; a save whose reset and
+            // snapshot fall between the two misses the new entry with the bit already cleared. As
+            // in JIP (it marks before the copy and takes no lock there), not a fault against it.
             set_changed(e, 0);
         }
         msg::PRE_LOAD_GAME => {

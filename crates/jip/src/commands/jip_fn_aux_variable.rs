@@ -100,6 +100,10 @@ pub struct AuxMaps {
     /// the lock ([`maps_may_hold`]), so the reference destructor, which every thread runs often,
     /// takes no lock while both maps are empty.
     held: std::sync::atomic::AtomicBool,
+    /// What `AuxVarGetFltCond` reads ([`Firsts`]). Every writer changes it while still holding
+    /// the pair's lock (lock order: the pair, then this one; the condition takes only this one),
+    /// so the copy and the maps change as one, as under JIP's `s_auxVarCS`.
+    firsts: RwLock<Firsts>,
 }
 
 /// The pair behind [`AuxMaps`]' lock.
@@ -128,6 +132,7 @@ impl Default for AuxMaps {
                 temp: AuxMods::new(8),
             }),
             held: std::sync::atomic::AtomicBool::new(false),
+            firsts: RwLock::default(),
         }
     }
 }
@@ -156,6 +161,50 @@ impl AuxMaps {
     /// Whether either map may hold a variable (no lock).
     pub fn may_hold(&self) -> bool {
         self.held.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The copy's write lock. Taken only while the caller holds this pair's guard (the lock
+    /// order), so the copy changes in the same take as the maps.
+    fn firsts_write(&self, _pair: &AuxPairGuard<'_>) -> std::sync::RwLockWriteGuard<'_, Firsts> {
+        self.firsts.write().unwrap_or_else(|p| p.into_inner())
+    }
+
+    /// [`publish_owner`] on the maps, with `between` run after the owner's values are read and
+    /// before the copy is written (tests: another thread's erase there must wait for this take).
+    pub fn publish_owner_with(
+        &self,
+        temp: bool,
+        mod_index: u32,
+        owner: u32,
+        between: impl FnOnce(),
+    ) {
+        let mut pair = self.lock();
+        let firsts = pair
+            .map(temp)
+            .get(&mod_index)
+            .and_then(|owners| owners.get(&owner))
+            .map(firsts_of)
+            .unwrap_or_default();
+        between();
+        let mut map = self.firsts_write(&pair);
+        if firsts.is_empty() {
+            map.remove(&(temp, mod_index, owner));
+        } else {
+            map.insert((temp, mod_index, owner), firsts);
+        }
+    }
+
+    /// Drops every first value of `owner` (temporary and saved, every mod) from the copy, under
+    /// the pair's guard `pair` (the destructor's erase holds it: [`crate::game_patches`]' gh2).
+    pub fn forget_owner_held(&self, pair: &AuxPairGuard<'_>, owner: u32) {
+        self.firsts_write(pair).retain(|k, _| k.2 != owner);
+    }
+
+    /// The first value's number of the variable hashed `hash` of `owner` (temporary or saved,
+    /// of one mod) from the copy: the copy's read lock alone.
+    pub(crate) fn first_value(&self, key: OwnerKey, hash: u32) -> Option<f64> {
+        let map = self.firsts.read().unwrap_or_else(|p| p.into_inner());
+        map.get(&key)?.get(&hash).copied()
     }
 }
 
@@ -214,27 +263,27 @@ pub fn maps_may_hold(e: &mut Engine) -> bool {
     e.ext_free::<AuxMaps>().may_hold()
 }
 
-/// An owner's key in [`Unlocked`]: temporary, mod index, owner id.
-type OwnerKey = (bool, u32, u32);
+/// An owner's key in [`Firsts`]: temporary, mod index, owner id.
+pub type OwnerKey = (bool, u32, u32);
 
-/// What `AuxVarGetFltCond` reads, without JIP's shared slot (which holds both aux maps): a
-/// lock-free slot ([`Engine::ext_free`]) made at install, before the threads start, so every
-/// thread's engine of the run reads the same one (an AI thread evaluating a package's condition
-/// would otherwise wait for the main thread's hold of JIP's state). For each owner of each mod (temporary or saved) it holds each variable's first value
-/// as a number ([`value_float`]), keyed by the name's `StrHashCI` (the maps' own key): the copy
-/// of the maps' first values, written by [`publish_owner`] after every command that changes an
-/// owner's variables and by [`publish_saved`] after every change to the saved maps as a whole
-/// (a load, the reset before one, `ClearJIPSavedData`). The lock is a leaf: held for one map
-/// operation, never across a game call or another lock, so a reader waits at most for one such
-/// operation (never for another thread's safe point).
-#[derive(Default)]
-pub(crate) struct Unlocked {
-    firsts: RwLock<HashMap<OwnerKey, HashMap<u32, f64>>>,
-}
+/// What `AuxVarGetFltCond` reads, without JIP's shared slot and without the pair's lock: for each
+/// owner of each mod (temporary or saved) each variable's first value as a number
+/// ([`value_float`]), keyed by the name's `StrHashCI` (the maps' own key). It is the copy of the
+/// maps' first values, kept in [`AuxMaps`] beside the pair (so every thread's engine of the run
+/// reads the same one; an AI thread evaluating a package's condition would otherwise wait for
+/// the main thread's hold of JIP's state). It is written by [`publish_owner`] after every command
+/// that changes an owner's variables, by [`publish_saved`] after every change to the saved maps
+/// as a whole (a load, the reset before one, `ClearJIPSavedData`) and by the destructor's erase
+/// (`game_patches::gh2`), each in the SAME take of the pair's lock as the maps' read or change
+/// (lock order: the pair, then the copy; the condition takes only the copy). So the copy never
+/// keeps a destroyed owner's values nor loses a value the maps hold, as JIP, whose condition
+/// reads the map under `s_auxVarCS`. Both locks are leaves: held for one map operation, never
+/// across a game call.
+pub type Firsts = HashMap<OwnerKey, HashMap<u32, f64>>;
 
 /// Makes the lock-free slot (at install, before the threads start).
 pub fn install(e: &mut Engine) {
-    e.ext_free::<Unlocked>();
+    e.ext_free::<AuxMaps>();
 }
 
 /// An owner's variables' first values (name hash, number).
@@ -245,30 +294,20 @@ fn firsts_of(vars: &Vars) -> HashMap<u32, f64> {
 }
 
 /// Copies the first values of one owner's variables (temporary or saved, of one mod) into the
-/// lock-free slot, after a command changed them.
+/// copy, after a command changed them, in one take of the pair's lock
+/// ([`AuxMaps::publish_owner_with`]).
 fn publish_owner(e: &mut Engine, temp: bool, mod_index: u32, owner: u32) {
-    let firsts = aux_maps(e, temp)
-        .get(&mod_index)
-        .and_then(|owners| owners.get(&owner))
-        .map(firsts_of)
-        .unwrap_or_default();
-    let mut map = e
-        .ext_free::<Unlocked>()
-        .firsts
-        .write()
-        .unwrap_or_else(|p| p.into_inner());
-    if firsts.is_empty() {
-        map.remove(&(temp, mod_index, owner));
-    } else {
-        map.insert((temp, mod_index, owner), firsts);
-    }
+    e.ext_free::<AuxMaps>()
+        .publish_owner_with(temp, mod_index, owner, || {});
 }
 
-/// Copies the first values of every saved variable into the lock-free slot (the temporary ones
-/// kept), after the saved maps changed as a whole.
+/// Copies the first values of every saved variable into the copy (the temporary ones kept),
+/// after the saved maps changed as a whole, in one take of the pair's lock.
 pub(crate) fn publish_saved(e: &mut Engine) {
+    let maps = e.ext_free::<AuxMaps>();
+    let pair = maps.lock();
     let mut saved = Vec::new();
-    for (mod_index, owners) in aux_maps(e, false).iter() {
+    for (mod_index, owners) in pair.saved.iter() {
         for (owner, vars) in owners.iter() {
             let firsts = firsts_of(vars);
             if !firsts.is_empty() {
@@ -276,39 +315,25 @@ pub(crate) fn publish_saved(e: &mut Engine) {
             }
         }
     }
-    let mut map = e
-        .ext_free::<Unlocked>()
-        .firsts
-        .write()
-        .unwrap_or_else(|p| p.into_inner());
+    let mut map = maps.firsts_write(&pair);
     map.retain(|k, _| k.0);
     map.extend(saved);
 }
 
-/// Drops every first value of `owner` (temporary and saved, every mod) from the lock-free slot:
-/// for a writer that erases an owner from the maps outside the commands here. JIP's reference
-/// destruction patch (`game_patches::gh2`, `ClearRefAuxVars`) erases a destroyed temporary
-/// reference's variables and must call this after (left to that group's owner); until then a
-/// later reference given the same id reads the old first values until a command sets one of its
-/// variables.
+/// Drops every first value of `owner` (temporary and saved, every mod) from the copy, under the
+/// pair's lock ([`AuxMaps::forget_owner_held`], which the reference destructor uses inside its
+/// own erase's take).
 pub fn forget_owner(e: &mut Engine, owner: u32) {
-    e.ext_free::<Unlocked>()
-        .firsts
-        .write()
-        .unwrap_or_else(|p| p.into_inner())
-        .retain(|k, _| k.2 != owner);
+    let maps = e.ext_free::<AuxMaps>();
+    let pair = maps.lock();
+    maps.forget_owner_held(&pair, owner);
 }
 
 /// The first value's number of the variable `name` of `owner` (temporary or saved, of one mod),
-/// from the lock-free slot; `None` when it has no value.
+/// from the copy; `None` when it has no value.
 fn first_value(e: &mut Engine, temp: bool, mod_index: u32, owner: u32, name: &[u8]) -> Option<f64> {
-    let hash = str_hash_ci(name);
-    let map = e
-        .ext_free::<Unlocked>()
-        .firsts
-        .read()
-        .unwrap_or_else(|p| p.into_inner());
-    map.get(&(temp, mod_index, owner))?.get(&hash).copied()
+    e.ext_free::<AuxMaps>()
+        .first_value((temp, mod_index, owner), str_hash_ci(name))
 }
 
 /// The aux variables: the saved ones or the temporary ones, under the pair's lock ([`AuxMaps`]).
@@ -922,7 +947,7 @@ fn aux_get_flt_cond_eval(e: &mut Engine, w: &[u32]) -> Ret {
     let script = e.mem.u32(a.arg1 + 0x1c);
     let (temp, mod_index) = name_scope(e, script, &name);
     let owner = subject_id(e, 0, a.this_obj);
-    // The first value from the lock-free copy ([`Unlocked`]): the maps' value 0 (`GetValue(0)`),
+    // The first value from the copy ([`Firsts`], its read lock alone): the maps' value 0 (`GetValue(0)`),
     // without JIP's shared slot and on any thread's engine.
     if let Some(f) = first_value(e, temp, mod_index, owner, &name) {
         e.mem.set_f64(a.result, f);
