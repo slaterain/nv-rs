@@ -42,11 +42,13 @@ const FORM_ALLOC_FN: u32 = 0x0040_1000;
 const REFR_INIT_FN: u32 = 0x0055_a2f0;
 
 /// The trait ids the stand-in map knows.
-const TRAITS: [(&[u8], u32); 4] = [
+const TRAITS: [(&[u8], u32); 6] = [
     (b"id", 0xfaa),
     (b"target", 0xfaf),
     (b"clicked", 0xfc7),
     (b"string", 0xfb4),
+    (b"_enabled", 0xfd0),
+    (b"_MarkerIndex", 0xfd1),
 ];
 
 fn record(addr: u32, w: &[u32]) {
@@ -1950,4 +1952,477 @@ fn c2_unreadable_arguments_and_no_interface_manager() {
     call(&mut e, 0x2881, &[n(2), n(1), n(2), n(3)]);
     assert_eq!(calls_to(SET_COLOR_FN), vec![vec![objects[1], 0x0102_03ff]]);
     assert!(calls_to(REFRESH_COLOR_FN).is_empty());
+}
+
+// ---- a menu's target and its selected item ----
+
+const Q: u32 = FORMS + 0xa_0000;
+
+/// The form result of `GetMenuTargetRef id` (0 for none: the result is cleared first).
+fn menu_target(e: &mut Engine, id: u32) -> u32 {
+    e.mem.set_f64(crate::test_support::RESULT, 0.0);
+    call(e, 0x2685, &[n(id as i32)]);
+    form_result(e)
+}
+
+/// The form result of `GetSelectedItemRef`.
+fn selected_item(e: &mut Engine) -> u32 {
+    e.mem.set_f64(crate::test_support::RESULT, 0.0);
+    call(e, 0x270b, &[]);
+    form_result(e)
+}
+
+/// A list box at `at`: list items (tile, object) at `items_at`, the highlighted tile `selected`.
+fn list_box(e: &mut Engine, at: u32, items_at: u32, items: &[(u32, u32)], selected: u32) {
+    for (i, (tile, object)) in items.iter().enumerate() {
+        let item = items_at + 0x10 * i as u32;
+        e.mem.set_u32(item, *tile);
+        e.mem.set_u32(item + 4, *object);
+        let node = if i == 0 {
+            at + 4
+        } else {
+            items_at + 0x100 + 8 * i as u32
+        };
+        let next = if i + 1 < items.len() {
+            items_at + 0x100 + 8 * (i as u32 + 1)
+        } else {
+            0
+        };
+        e.mem.set_u32(node, item);
+        e.mem.set_u32(node + 4, next);
+    }
+    e.mem.set_u32(at + 0x10, selected);
+}
+
+#[test]
+fn menu_target_refs_of_the_menus_own_fields() {
+    let mut e = setup();
+    let target = form(&mut e, Q, 0x3b, 0x0000_6001);
+    // Not open, outside the menu ids: none.
+    assert_eq!(menu_target(&mut e, 0x3f0), 0);
+    assert_eq!(menu_target(&mut e, 0x3e8), 0);
+    assert_eq!(menu_target(&mut e, 0x43d), 0);
+    // A menu tile without a menu: none.
+    let (mt, m) = menu(&mut e, 20, 0x3f0, b"ContainerMenu");
+    e.mem.set_u32(m + 0x74, target);
+    e.mem.set_u32(mt + 0x3c, 0);
+    assert_eq!(menu_target(&mut e, 0x3f0), 0);
+    // Container +0x74, lock pick +0x6C, barter +0x80, computers +0xAC, companion wheel +0x68,
+    // recipe +0x60, caravan +0x100: each menu's own reference.
+    let fields = [
+        (0x3f0, 0x74),
+        (0x3f6, 0x6c),
+        (0x41d, 0x80),
+        (0x421, 0xac),
+        (0x433, 0x68),
+        (0x435, 0x60),
+        (0x43b, 0x100),
+    ];
+    for (i, (id, field)) in fields.into_iter().enumerate() {
+        let (_, m) = menu(&mut e, 21 + 2 * i as u32, id, b"Menu");
+        assert_eq!(menu_target(&mut e, id), 0, "{id:x} empty");
+        e.mem.set_u32(m + field, target);
+        assert_eq!(menu_target(&mut e, id), 0x0000_6001, "{id:x}");
+    }
+    // A menu id this command does not know: none.
+    let (_, m) = menu(&mut e, 40, 0x3ea, b"InventoryMenu");
+    e.mem.set_u32(m + 0x74, target);
+    assert_eq!(menu_target(&mut e, 0x3ea), 0);
+    // The VATS target and the repair vendor: the game's globals, whatever the menu holds.
+    e.map(0x011f_2000, 0x1000);
+    menu(&mut e, 42, 0x420, b"VATSMenu");
+    menu(&mut e, 44, 0x422, b"RepairServicesMenu");
+    assert_eq!(menu_target(&mut e, 0x420), 0);
+    assert_eq!(menu_target(&mut e, 0x422), 0);
+    e.mem.set_u32(0x011f_21cc, target);
+    assert_eq!(menu_target(&mut e, 0x420), 0x0000_6001);
+    e.mem.set_u32(0x011d_a7f4, target);
+    assert_eq!(menu_target(&mut e, 0x422), 0x0000_6001);
+}
+
+#[test]
+fn menu_target_dialog_hacking_level_up_trait_and_map() {
+    let mut e = setup();
+    // The dialogue partner; a talking activator's talking actor when it has one.
+    let base = form(&mut e, Q, 0x2a, 0x0000_6010);
+    let partner = form(&mut e, Q + 0x100, 0x3b, 0x0000_6011);
+    let actor = form(&mut e, Q + 0x200, 0x3c, 0x0000_6012);
+    e.mem.set_u32(partner + 0x20, base);
+    let (_, dialog) = menu(&mut e, 20, 0x3f1, b"DialogMenu");
+    assert_eq!(menu_target(&mut e, 0x3f1), 0);
+    e.mem.set_u32(dialog + 0x80, partner);
+    assert_eq!(menu_target(&mut e, 0x3f1), 0x0000_6011, "no talking actor");
+    put_extra(&mut e, partner + 0x44, Q + 0x300, 0x55, actor);
+    assert_eq!(
+        menu_target(&mut e, 0x3f1),
+        0x0000_6011,
+        "not a talking activator"
+    );
+    e.mem.set_u8(base + 4, 0x16);
+    assert_eq!(menu_target(&mut e, 0x3f1), 0x0000_6012);
+    // Hacking: the terminal once the guess tiles' count (its low byte) is set, else the
+    // interface manager's activate reference.
+    let terminal = form(&mut e, Q + 0x400, 0x3b, 0x0000_6020);
+    let activate = form(&mut e, Q + 0x500, 0x3b, 0x0000_6021);
+    let (_, hacking) = menu(&mut e, 22, 0x41f, b"HackingMenu");
+    e.mem.set_u32(hacking + 0x198, terminal);
+    e.mem.set_u32(IM + 0xfc, activate);
+    e.mem.set_u32(hacking + 0x17c, 0x100);
+    assert_eq!(menu_target(&mut e, 0x41f), 0x0000_6021);
+    e.mem.set_u32(hacking + 0x17c, 1);
+    assert_eq!(menu_target(&mut e, 0x41f), 0x0000_6020);
+    // Level up: the highlighted perk on the perk page (1) only; trait: the highlighted perk.
+    let perk1 = form(&mut e, Q + 0x600, 0x56, 0x0000_6030);
+    let perk2 = form(&mut e, Q + 0x700, 0x56, 0x0000_6031);
+    let (_, level_up) = menu(&mut e, 24, 0x403, b"LevelUpMenu");
+    let items = [(t(70), perk1), (t(71), perk2)];
+    list_box(&mut e, level_up + 0x94, Q + 0x1000, &items, t(71));
+    assert_eq!(menu_target(&mut e, 0x403), 0, "the skills page");
+    e.mem.set_u32(level_up + 0x28, 2);
+    assert_eq!(menu_target(&mut e, 0x403), 0, "page 2");
+    e.mem.set_u32(level_up + 0x28, 1);
+    assert_eq!(menu_target(&mut e, 0x403), 0x0000_6031);
+    e.mem.set_u32(level_up + 0x94 + 0x10, t(72));
+    assert_eq!(menu_target(&mut e, 0x403), 0, "a tile no item has");
+    e.mem.set_u32(level_up + 0x94 + 0x10, 0);
+    assert_eq!(menu_target(&mut e, 0x403), 0, "nothing highlighted");
+    let (_, traits) = menu(&mut e, 26, 0x43c, b"TraitMenu");
+    list_box(&mut e, traits + 0x54, Q + 0x1200, &items, t(70));
+    assert_eq!(menu_target(&mut e, 0x43c), 0x0000_6030);
+    // Map: the marker tile's `_MarkerIndex` (truncated) picks the marker list's item.
+    let markers = [
+        form(&mut e, Q + 0x800, 0x3b, 0x0000_6040),
+        form(&mut e, Q + 0x900, 0x3b, 0x0000_6041),
+    ];
+    let (_, map) = menu(&mut e, 28, 0x3ff, b"MapMenu");
+    e.mem.set_u32(map + 0xd8, markers[0]);
+    e.mem.set_u32(map + 0xdc, Q + 0x1400);
+    e.mem.set_u32(Q + 0x1400, markers[1]);
+    assert_eq!(menu_target(&mut e, 0x3ff), 0, "no marker tile");
+    let marker_tile = tile(&mut e, 73, 0, b"marker");
+    e.mem.set_u32(map + 0xd4, marker_tile);
+    assert_eq!(menu_target(&mut e, 0x3ff), 0, "no _MarkerIndex");
+    let v = values(&mut e, marker_tile, &[(0xfd1, 1.75, None)])[0];
+    assert_eq!(menu_target(&mut e, 0x3ff), 0x0000_6041);
+    for (num, want) in [
+        (0.99, 0x0000_6040),
+        (2.0, 0),
+        (-0.5, 0x0000_6040),
+        (-1.0, 0),
+        (f32::NAN, 0),
+    ] {
+        e.mem.set_f32(v + 8, num);
+        assert_eq!(menu_target(&mut e, 0x3ff), want, "{num}");
+    }
+}
+
+#[test]
+fn menu_target_items_as_inventory_references() {
+    let mut e = setup();
+    let item = form(&mut e, Q, 0x28, 0x0000_6101);
+    let chest = form(&mut e, Q + 0x100, 0x3a, 0x0000_6102);
+    let merchant = form(&mut e, Q + 0x200, 0x3b, 0x0000_6103);
+    let shop = form(&mut e, Q + 0x300, 0x3a, 0x0000_6104);
+    let xd = Q + 0x400;
+    let inv = entry(&mut e, Q + 0x500, item, 3, xd);
+    let cnt = entry(&mut e, Q + 0x600, item, 2, 0);
+    let brt = entry(&mut e, Q + 0x700, item, 1, 0);
+    let target = |e: &mut Engine, id: u32| {
+        let r = menu_target(e, id);
+        if r == 0 {
+            None
+        } else {
+            Some(inv_ref(e, r))
+        }
+    };
+    menu(&mut e, 20, 0x3f8, b"QuantityMenu");
+    e.mem.set_u32(0x011d_9ea8, inv);
+    e.mem.set_u32(0x011d_93fc, cnt);
+    e.mem.set_u32(0x011d_8fa8, brt);
+    // No inventory shown, no container or barter menu: none.
+    assert_eq!(target(&mut e, 0x3f8), None);
+    // The barter menu's item: the player's, or the merchant container's when the right list is
+    // the current one (none for a merchant without one).
+    let barter = Q + 0x2000;
+    e.mem.set_u32(0x011d_8fa4, barter);
+    assert_eq!(target(&mut e, 0x3f8), Some((PC, item, 0)));
+    e.mem.set_u32(barter + 0x80, merchant);
+    e.mem.set_u32(barter + 0x108, barter + 0xd8);
+    assert_eq!(target(&mut e, 0x3f8), None);
+    put_extra(&mut e, merchant + 0x44, Q + 0x800, 0x3c, shop);
+    assert_eq!(target(&mut e, 0x3f8), Some((shop, item, 0)));
+    e.mem.set_u32(barter + 0x108, barter + 0xa8);
+    assert_eq!(target(&mut e, 0x3f8), Some((PC, item, 0)));
+    // The container menu before the barter menu: in the container when its right list is the
+    // current one.
+    let container = Q + 0x2200;
+    e.mem.set_u32(0x011d_93f8, container);
+    e.mem.set_u32(container + 0x74, chest);
+    assert_eq!(target(&mut e, 0x3f8), Some((PC, item, 0)));
+    e.mem.set_u32(container + 0xf8, container + 0xc8);
+    assert_eq!(target(&mut e, 0x3f8), Some((chest, item, 0)));
+    // The inventory shown before both: the inventory's item, the player's.
+    e.mem.set_u8(0x011f_308f + 0x3ea, 1);
+    assert_eq!(target(&mut e, 0x3f8), Some((PC, item, xd)));
+    // Repair and item mod: their items, the player's; none without one.
+    menu(&mut e, 22, 0x40b, b"RepairMenu");
+    menu(&mut e, 24, 0x425, b"ItemModMenu");
+    assert_eq!(target(&mut e, 0x40b), None);
+    assert_eq!(target(&mut e, 0x425), None);
+    e.mem.set_u32(0x011d_a760, cnt);
+    e.mem.set_u32(0x011d_9f58, brt);
+    assert_eq!(target(&mut e, 0x40b), Some((PC, item, 0)));
+    let r = menu_target(&mut e, 0x425);
+    assert_eq!(inv_ref(&mut e, r), (PC, item, 0));
+    // Without a player: none.
+    e.mem.set_u32(0x011d_ea3c, 0);
+    assert_eq!(target(&mut e, 0x40b), None);
+}
+
+#[test]
+fn selected_item_of_the_menu_on_top() {
+    let mut e = setup();
+    let item = form(&mut e, Q, 0x28, 0x0000_6201);
+    let chest = form(&mut e, Q + 0x100, 0x3a, 0x0000_6202);
+    let merchant = form(&mut e, Q + 0x200, 0x3b, 0x0000_6203);
+    let shop = form(&mut e, Q + 0x300, 0x3a, 0x0000_6204);
+    let perk = form(&mut e, Q + 0x400, 0x56, 0x0000_6205);
+    let (quest, note, challenge) = (
+        form(&mut e, Q + 0x500, 0x47, 0x0000_6206),
+        form(&mut e, Q + 0x600, 0x31, 0x0000_6207),
+        form(&mut e, Q + 0x700, 0x71, 0x0000_6208),
+    );
+    let sel = entry(&mut e, Q + 0x800, item, 2, 0);
+    let listed = entry(&mut e, Q + 0x900, item, 5, 0);
+    let top = Q + 0x3000;
+    let on_top = |e: &mut Engine, id: u32| {
+        e.mem.set_u32(IM + 0xc, 2);
+        e.mem.set_u32(IM + 0xd0, top);
+        e.mem.set_u32(top + 0x20, id);
+    };
+    let selected = |e: &mut Engine| {
+        let r = selected_item(e);
+        if r == 0 {
+            None
+        } else {
+            Some(inv_ref(e, r))
+        }
+    };
+    // Not in menu mode: none.
+    let inv = Q + 0x4000;
+    e.mem.set_u32(0x011d_9ea4, inv);
+    e.mem.set_u32(inv + 0xb8 + 0x10, t(80));
+    e.mem.set_u32(0x011d_9ea8, sel);
+    assert_eq!(selected_item(&mut e), 0);
+    // Inventory: its selection when its item list has a highlight; no menu object: none.
+    on_top(&mut e, 0x3ea);
+    assert_eq!(selected(&mut e), Some((PC, item, 0)));
+    e.mem.set_u32(inv + 0xb8 + 0x10, 0);
+    assert_eq!(selected_item(&mut e), 0, "nothing highlighted");
+    e.mem.set_u32(inv + 0xb8 + 0x10, t(80));
+    e.mem.set_u32(0x011d_9ea4, 0);
+    assert_eq!(selected_item(&mut e), 0, "no inventory menu");
+    // Stats: the highlighted perk rank's perk.
+    on_top(&mut e, 0x3eb);
+    let stats = Q + 0x4400;
+    e.mem.set_u32(0x011d_ace0, stats);
+    let rank = Q + 0x4a00;
+    e.mem.set_u32(rank, perk);
+    list_box(&mut e, stats + 0x1e0, Q + 0x4c00, &[(t(81), rank)], 0);
+    assert_eq!(selected_item(&mut e), 0);
+    e.mem.set_u32(stats + 0x1e0 + 0x10, t(81));
+    assert_eq!(selected_item(&mut e), 0x0000_6205);
+    // Container: its selection, in the container when the right list has the highlight.
+    on_top(&mut e, 0x3f0);
+    let cnt = Q + 0x5000;
+    e.mem.set_u32(0x011d_93f8, cnt);
+    e.mem.set_u32(cnt + 0x74, chest);
+    e.mem.set_u32(0x011d_93fc, sel);
+    assert_eq!(selected_item(&mut e), 0);
+    e.mem.set_u32(cnt + 0x98 + 0x10, t(82));
+    assert_eq!(selected(&mut e), Some((PC, item, 0)));
+    e.mem.set_u32(cnt + 0x98 + 0x10, 0);
+    e.mem.set_u32(cnt + 0xc8 + 0x10, t(82));
+    assert_eq!(selected(&mut e), Some((chest, item, 0)));
+    // Barter: likewise, in the merchant's container.
+    on_top(&mut e, 0x41d);
+    let brt = Q + 0x5400;
+    e.mem.set_u32(0x011d_8fa4, brt);
+    e.mem.set_u32(brt + 0x80, merchant);
+    e.mem.set_u32(0x011d_8fa8, sel);
+    assert_eq!(selected_item(&mut e), 0);
+    e.mem.set_u32(brt + 0xa8 + 0x10, t(83));
+    assert_eq!(selected(&mut e), Some((PC, item, 0)));
+    e.mem.set_u32(brt + 0xd8 + 0x10, t(83));
+    assert_eq!(selected(&mut e), None, "a merchant without a container");
+    put_extra(&mut e, merchant + 0x44, Q + 0x5800, 0x3c, shop);
+    assert_eq!(selected(&mut e), Some((shop, item, 0)));
+    // Repair, repair services, item mod: the highlighted list item's entry, the player's.
+    for (id, singleton, list) in [
+        (0x40b, 0x011d_a75c, 0x5c),
+        (0x422, 0x011d_a7f0, 0x68),
+        (0x425, 0x011d_9f54, 0x60),
+    ] {
+        on_top(&mut e, id);
+        let m = Q + 0x6000 + 0x400 * (id - 0x40b);
+        e.mem.set_u32(singleton, m);
+        let items_at = Q + 0x9000 + 0x400 * (id - 0x40b);
+        list_box(&mut e, m + list, items_at, &[(t(84), listed)], 0);
+        assert_eq!(selected_item(&mut e), 0, "{id:x}");
+        e.mem.set_u32(m + list + 0x10, t(84));
+        let r = selected_item(&mut e);
+        assert_eq!(inv_ref(&mut e, r), (PC, item, 0), "{id:x}");
+    }
+    // Map: the quest, else the note, else the challenge list; each needs its highlight and an
+    // enabled container tile.
+    on_top(&mut e, 0x3ff);
+    let map = Q + 0xc000;
+    e.mem.set_u32(0x011d_a368, map);
+    let lists = [
+        (0x130, quest, 90),
+        (0x160, note, 92),
+        (0x1f0, challenge, 94),
+    ];
+    let mut enabled = Vec::new();
+    for (i, (list, form, n)) in lists.into_iter().enumerate() {
+        let items_at = Q + 0xd000 + 0x400 * i as u32;
+        list_box(&mut e, map + list, items_at, &[(t(n), form)], t(n));
+        let parent = tile(&mut e, n + 1, 0, b"list");
+        e.mem.set_u32(map + list + 0xc, parent);
+        enabled.push(values(&mut e, parent, &[(0xfd0, 0.0, None)])[0]);
+    }
+    assert_eq!(selected_item(&mut e), 0, "none enabled");
+    e.mem.set_f32(enabled[2] + 8, 1.0);
+    assert_eq!(selected_item(&mut e), 0x0000_6208);
+    e.mem.set_f32(enabled[1] + 8, -2.0);
+    assert_eq!(selected_item(&mut e), 0x0000_6207);
+    e.mem.set_f32(enabled[0] + 8, 1.0);
+    assert_eq!(selected_item(&mut e), 0x0000_6206);
+    e.mem.set_u32(map + 0x130 + 0x10, 0);
+    assert_eq!(
+        selected_item(&mut e),
+        0x0000_6207,
+        "the quest list not highlighted"
+    );
+    e.mem.set_u32(map + 0x160 + 0xc, 0);
+    assert_eq!(selected_item(&mut e), 0x0000_6208, "no note list tile");
+    // Another menu on top: none.
+    on_top(&mut e, 0x3f1);
+    assert_eq!(selected_item(&mut e), 0);
+}
+
+// ---- the world map ----
+
+/// A worldspace's map data: NW and SE cells (x, y), scale, offset, min and max coords.
+struct MapData {
+    cells: [i16; 4],
+    scale: f32,
+    offset: [f32; 2],
+    bounds: [f32; 4],
+}
+
+/// A worldspace at `at` with `map`, its parent and whether it uses the parent's map data.
+fn world(e: &mut Engine, at: u32, map: &MapData, parent: u32, parents_map: bool) -> u32 {
+    form(e, at, 0x41, at);
+    for (i, c) in map.cells.into_iter().enumerate() {
+        e.mem.set_u16(at + 0x88 + 2 * i as u32, c as u16);
+    }
+    e.mem.set_f32(at + 0x90, map.scale);
+    e.mem.set_f32(at + 0x94, map.offset[0]);
+    e.mem.set_f32(at + 0x98, map.offset[1]);
+    e.mem.set_u32(at + 0x9c, 0xdead_beef);
+    for (i, c) in map.bounds.into_iter().enumerate() {
+        e.mem.set_f32(at + 0xa0 + 4 * i as u32, c);
+    }
+    e.mem.set_u32(at + 0x70, parent);
+    e.mem
+        .set_u16(at + 0x4e, if parents_map { 0xff04 } else { 0xfffb });
+    at
+}
+
+/// JIP's numbers for a map with `cells` (after its `paddw`: NW y and SE x plus 1), the position
+/// already moved: (moved - NW * 4096) * rcpss(span * 4096) * 0.796875 + 0.1015625.
+fn expected(cells: [i16; 4], moved: [f32; 2]) -> [f64; 2] {
+    let nw = [i32::from(cells[0]), i32::from(cells[1].wrapping_add(1))];
+    let se = [i32::from(cells[2].wrapping_add(1)), i32::from(cells[3])];
+    [0, 1].map(|i| {
+        let min = (nw[i] << 12) as f32;
+        let size = processor_rcp(((se[i] - nw[i]) << 12) as f32) * 0.796_875;
+        f64::from((moved[i] - min) * size + 0.101_562_5)
+    })
+}
+
+#[test]
+fn world_map_pos_mults_of_a_reference() {
+    let mut e = setup();
+    c2_locals(&mut e, 2);
+    let refr = form(&mut e, Q, 0x3b, 0x0000_6301);
+    e.mem.set_f32(refr + 0x30, 12_345.5);
+    e.mem.set_f32(refr + 0x34, -6_789.25);
+    let pos = |e: &mut Engine| {
+        call_on(e, 0x2730, refr, &[var(1), var(2)]);
+        [local_value(e, 1), local_value(e, 2)]
+    };
+    // No cell (and no persistent cell): the variables stay.
+    assert_eq!(pos(&mut e), [-1.0, -1.0]);
+    // An interior cell (no worldspace): they stay.
+    let cell = Q + 0x100;
+    e.mem.set_u32(refr + 0x40, cell);
+    assert_eq!(pos(&mut e), [-1.0, -1.0]);
+    // A root world, scale 1: the position plus the offset.
+    let root_map = MapData {
+        cells: [-26, 25, 24, -24],
+        scale: 1.0,
+        offset: [100.0, -50.0],
+        bounds: [1.0, 2.0, 3.0, 4.0],
+    };
+    let root = world(&mut e, Q + 0x400, &root_map, 0, false);
+    e.mem.set_u32(cell + 0xc0, root);
+    let want = expected(root_map.cells, [12_345.5 + 100.0, -6_789.25 - 50.0]);
+    assert_eq!(pos(&mut e), want);
+    // The variables in their order.
+    call_on(&mut e, 0x2730, refr, &[var(2), var(1)]);
+    assert_eq!([local_value(&e, 2), local_value(&e, 1)], want);
+    // A child world using its parent's map: the root's cells, the child's own scale and offset
+    // (scale not 1: (min + max) * (0.5 - scale / 2) + offset, then position * scale + that).
+    let child_map = MapData {
+        cells: [0, 0, 1, -1],
+        scale: 0.25,
+        offset: [10.0, 20.0],
+        bounds: [-1000.0, -3000.0, 5000.0, 7000.0],
+    };
+    let child = world(&mut e, Q + 0x600, &child_map, root, true);
+    e.mem.set_u32(cell + 0xc0, child);
+    let half = 0.5f32 - 0.25 * 0.5;
+    let moved = [
+        12_345.5f32 * 0.25 + ((-1000.0f32 + 5000.0) * half + 10.0),
+        -6_789.25f32 * 0.25 + ((-3000.0f32 + 7000.0) * half + 20.0),
+    ];
+    assert_eq!(pos(&mut e), expected(root_map.cells, moved));
+    // Two levels up: the grandparent's map when both pass it up; the first world that keeps its
+    // own map stops the walk.
+    let middle_map = MapData {
+        cells: [-2, 3, 5, -6],
+        scale: 1.0,
+        offset: [0.0; 2],
+        bounds: [0.0; 4],
+    };
+    let middle = world(&mut e, Q + 0x800, &middle_map, root, true);
+    e.mem.set_u32(child + 0x70, middle);
+    assert_eq!(pos(&mut e), expected(root_map.cells, moved));
+    e.mem.set_u16(middle + 0x4e, 0xfffb);
+    assert_eq!(pos(&mut e), expected(middle_map.cells, moved));
+    // The child keeping its own map: its own cells.
+    e.mem.set_u16(child + 0x4e, 0);
+    assert_eq!(pos(&mut e), expected(child_map.cells, moved));
+    // A persistent reference (no parent cell): its `ExtraPersistentCell`'s cell.
+    e.mem.set_u32(refr + 0x40, 0);
+    let persistent = Q + 0x1000;
+    e.mem.set_u32(persistent + 0xc0, root);
+    put_extra(&mut e, refr + 0x44, Q + 0x1100, 0x0c, persistent);
+    assert_eq!(pos(&mut e), want);
+    // Not on a reference: nothing.
+    e.mem.set_f64(C2_LOCALS + 0x108, 7.0);
+    call(&mut e, 0x2730, &[var(1), var(2)]);
+    assert_eq!(local_value(&e, 1), 7.0);
 }
