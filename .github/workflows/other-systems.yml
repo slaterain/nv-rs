@@ -49,6 +49,19 @@ jobs:
       CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # play.sh, the start script of the Linux and macOS packages, under every shell a player may
+      # have as /bin/sh: its syntax, then its whole test (distribution/unix/test-play.sh: made-up
+      # folders, a stand-in program) under dash, bash and BusyBox sh. Before the build: a minute.
+      - name: Test play.sh (dash, bash, BusyBox)
+        run: |
+          sudo apt-get install -y --no-install-recommends busybox >/dev/null || true
+          failed=0
+          for shell in dash bash "busybox sh"; do
+            $shell -n distribution/unix/play.sh || failed=1
+            echo "== $shell"
+            SH="$shell" sh distribution/unix/test-play.sh || failed=1
+          done
+          exit $failed
       - name: Install the pinned Rust tools (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -110,6 +123,12 @@ jobs:
           shared-key: other-macos-latest
           # Saved from the nightly run (macOS never runs on pushes to main).
           save-if: ${{ github.event_name == 'schedule' }}
+      # play.sh under macOS's own /bin/sh (bash 3.2, which parses some things older shells did
+      # not): its syntax, then its whole test (distribution/unix/test-play.sh).
+      - name: Test play.sh (/bin/sh, bash 3.2)
+        run: |
+          /bin/sh -n distribution/unix/play.sh
+          SH=/bin/sh /bin/sh distribution/unix/test-play.sh
       - name: Build the play build
         run: cargo build --locked --profile play -p nv-viewer
       # A shorter list than Linux's, for the runner's time and memory: the crates with this

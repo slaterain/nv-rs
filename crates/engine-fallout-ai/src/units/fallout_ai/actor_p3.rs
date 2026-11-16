@@ -12700,6 +12700,17 @@ fn limb_word(e: &Engine, hit: Ptr<HitData>) -> u32 {
     )
 }
 
+/// The ammo's script effect in [`hit_me_report_attack`] (`0x89ABDC` to `0x89AC5B`: the weapon's
+/// current ammo, its script, `005ac340`). JIP LN NVSE's G119 (`RunAmmoImpactScriptHook`, a fix)
+/// replaces that span: the seam is asked with the hit and the actor hit, and an answer means it
+/// ran JIP's (the projectile's own ammo's script). With the word's `FIXES` bit clear: one load,
+/// false (the exe's calls).
+#[inline]
+fn ammo_impact_script_seam(e: &mut Engine, hit: Ptr<HitData>, this: Ptr<Actor>) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0089_abdc, &[hit.addr(), this.addr()]).is_some()
+}
+
 /// `0089aafe`..`0089ac5b`: the script action flags of the aggressor and the
 /// weapon, and the script effect of the ammo.
 fn hit_me_report_attack(e: &mut Engine, s: &mut HitMe) {
@@ -12733,9 +12744,12 @@ fn hit_me_report_attack(e: &mut Engine, s: &mut HitMe) {
                 }
             }
         }
-        let ammo = e
-            .call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])
-            .u32();
+        let ammo = if ammo_impact_script_seam(e, hit, this) {
+            0
+        } else {
+            e.call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])
+                .u32()
+        };
         if ammo != 0 {
             let ammo = e
                 .call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])

@@ -87,7 +87,17 @@ fn refused_here(path: &Path) -> Option<&'static str> {
         refused(path, profile.as_deref(), &known_folders())
     }
     #[cfg(not(windows))]
-    match guard_list() {
+    refused_by(guard_list(), path)
+}
+
+/// Off Windows: why `path` may not be written by the look's `answer`: by the player's folders it
+/// found, or, when the look gave no answer (none in time, its thread stopped), always refused.
+#[cfg(not(windows))]
+fn refused_by(
+    answer: Result<&[game_folders::Guarded], &'static str>,
+    path: &Path,
+) -> Option<&'static str> {
+    match answer {
         Ok(never) => game_folders::refused(path, never),
         Err(why) => Some(why),
     }
@@ -224,7 +234,8 @@ fn warn_visibly(line: &str, plain: &str) {
     #[cfg(not(windows))]
     {
         eprintln!("\n*** nv-rs WARNING ***\n{plain}\n{line}\n");
-        if std::env::var_os("NV_RS_NO_WINDOWS").is_none() {
+        // Never from the unit tests, which refuse on purpose.
+        if std::env::var_os("NV_RS_NO_WINDOWS").is_none() && !cfg!(test) {
             let text = format!("{plain}\n\n{line}");
             std::thread::spawn(move || {
                 for mut command in dialog_commands(&text) {
@@ -451,6 +462,9 @@ pub struct Watch {
     seen: Option<u64>,
     done: HashMap<Vec<u8>, u64>,
     removed: HashSet<Vec<u8>>,
+    /// The name each save was written under in this run, by key (the key is lower case; the
+    /// copy keeps the game's own case, which a Linux disk compares exactly).
+    names: HashMap<Vec<u8>, String>,
 }
 
 impl Watch {
@@ -496,6 +510,7 @@ pub fn jobs(e: &Engine, watch: &mut Watch, dir: Option<&Path>, prefs: Option<&Pa
                     .entries
                     .get(key)
                     .map_or(name, |entry| entry.name.clone());
+                watch.names.insert(key.clone(), name.clone());
                 Job::Write {
                     key: key.clone(),
                     dir: Some(dir.to_path_buf()),
@@ -526,6 +541,14 @@ pub fn jobs(e: &Engine, watch: &mut Watch, dir: Option<&Path>, prefs: Option<&Pa
             watch.done.remove(key);
             let name = key.rsplit(|&b| b == b'\\').next().unwrap_or(key);
             let name = String::from_utf8_lossy(name).into_owned();
+            // Off Windows the name the copy was written under in this run (the key is lower
+            // case, and Linux compares names exactly); a copy from an earlier run is found by
+            // the delete itself ([`run_checked`]). Windows compares without case: as before.
+            let written = watch.names.remove(key);
+            #[cfg(not(windows))]
+            let name = written.unwrap_or(name);
+            #[cfg(windows)]
+            let _ = written;
             jobs.push(Job::Remove {
                 target: dir.join(&name),
                 name,
@@ -541,20 +564,45 @@ pub fn run(job: &Job) -> Result<Option<String>, String> {
     // Off Windows the guard is asked again at write time; on Windows nothing is (the folder was
     // checked once, at the start, as before).
     #[cfg(not(windows))]
-    let check = refused_here;
+    let check = |path: &Path| {
+        let why = refused_here(path);
+        if let Some(why) = why {
+            warn_refused_mid_run(path, why);
+        }
+        why
+    };
     #[cfg(windows)]
     let check = |_: &Path| -> Option<&'static str> { None };
     run_checked(job, &check)
+}
+
+/// Off Windows: a write or a delete refused at write time (nv-rs's save folder turned into a
+/// link while the game runs, a look at the player's folders that did not answer): said to the
+/// player as visibly as the refusal at the start, once a run (the log has every one).
+#[cfg(not(windows))]
+fn warn_refused_mid_run(path: &Path, why: &str) {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        warn_visibly(
+            &format!("NV_SAVE_OUT: {}: refused at write time ({why})", path.display()),
+            &plain_words(why, format!("Your saves and changed settings are NOT being kept from now on: they will be lost when the game closes. nv-rs's save folder changed while the game was running, so that it now leads into one of your own folders (Steam's, Wine's or your Documents), which nv-rs never writes into. Put nv-rs's own folder back as a plain folder (not a link) and start the game again through {START}.")),
+        );
+    });
 }
 
 /// [`run`], with `check` saying why a path may not be written or deleted (`None`: it may).
 ///
 /// Asked for the file and its temporary name just before the disk work, so a folder link made
 /// after the start (the save folder swapped for a link into the player's Proton saves) is
-/// refused. What this cannot close: a link swapped in during the microseconds between this check
-/// and the write itself would be followed (closing that needs the folder opened once and the file
-/// made relative to it, which Rust's standard library does not offer); it needs another program
-/// of the player's own changing the folder at that very moment. A link planted at the temporary
+/// refused. What this cannot close: a folder link swapped in after the check and before the file
+/// is opened (or deleted) would be followed. That window is not only microseconds: the check
+/// looks up where every guarded folder really is (one look per Steam library, prefix and saves
+/// folder), so with a library on a sleeping disk it lasts as long as that disk takes to answer.
+/// Closing it needs the folder opened once and the file made relative to it, which Rust's
+/// standard library does not offer (no new dependency was added for it). To use it, another
+/// program of the player's own would have to replace nv-rs's Saves folder (or one above it) with
+/// a link into the player's own saves inside that window; nothing nv-rs or play.sh does makes
+/// such a link. The player READ MEs say so. A link planted at the temporary
 /// name is never written through (`write_part`), and the rename replaces a link at the save's
 /// own name instead of following it.
 fn run_checked(
@@ -608,15 +656,60 @@ fn run_checked(
                     target.display()
                 ));
             }
-            // Off Windows only a plain file is deleted (not a link at the save's name).
+            // Off Windows only a plain file is deleted (not a link at the save's name); a copy
+            // whose name differs only in case (written by an earlier run: the game's key is lower
+            // case, Linux compares names exactly) is found as the one such plain file.
             #[cfg(not(windows))]
-            let file = std::fs::symlink_metadata(target).is_ok_and(|m| m.is_file());
+            let (target, name) = match same_but_case(target) {
+                Some(found) => {
+                    if let Some(why) = check(&found) {
+                        return Err(format!(
+                            "NV_SAVE_OUT: {} not deleted: refused ({why})",
+                            found.display()
+                        ));
+                    }
+                    let shown = found
+                        .file_name()
+                        .map_or_else(|| name.clone(), |n| n.to_string_lossy().into_owned());
+                    (found, shown)
+                }
+                None => (target.clone(), name.clone()),
+            };
+            #[cfg(not(windows))]
+            let file = std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_file());
             #[cfg(windows)]
             let file = target.is_file();
-            let removed = file && std::fs::remove_file(target).is_ok();
+            let removed = file && std::fs::remove_file(&target).is_ok();
             Ok(removed.then(|| format!("NV_SAVE_OUT: copied {name} (deleted)")))
         }
     }
+}
+
+/// Off Windows: when nothing is at `target`, the one plain file in its folder whose name is
+/// `target`'s without ASCII case (the game's key for a save is lower case; its copy keeps the
+/// game's own case); `None` when something is at `target`, or there is no such file, or more
+/// than one.
+#[cfg(not(windows))]
+fn same_but_case(target: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    if std::fs::symlink_metadata(target).is_ok() {
+        return None;
+    }
+    let (dir, name) = (target.parent()?, target.file_name()?);
+    let mut found = std::fs::read_dir(dir).ok()?.flatten().filter(|entry| {
+        entry
+            .file_name()
+            .as_bytes()
+            .eq_ignore_ascii_case(name.as_bytes())
+    });
+    let only = found.next()?;
+    if found.next().is_some() {
+        return None;
+    }
+    let path = only.path();
+    std::fs::symlink_metadata(&path)
+        .is_ok_and(|m| m.is_file())
+        .then_some(path)
 }
 
 /// A message to the copy-out's thread.
@@ -1228,6 +1321,142 @@ mod tests {
             send.send(Some(vec![])).unwrap();
             assert_eq!(wait_for_look(Some(receive), wait), Ok(vec![]));
             assert_eq!(plain_words("a `..` in the path", "usual".into()), "usual");
+        }
+
+        /// Review of #630 (round 3): the production path, as the game's copy-out runs it ([`run`]
+        /// with the process's own look at the player's folders): a write into nv-rs's own folder
+        /// goes through; once that folder is swapped for a link into a Proton prefix's saves, a
+        /// write and a delete are refused and the player's save is untouched.
+        #[test]
+        fn the_production_check_refuses_a_write_and_a_delete_through_a_swapped_folder() {
+            let s = Scratch::new("production");
+            let players = s.0.join(
+                "lib/steamapps/compatdata/22380/pfx/drive_c/users/steamuser/Documents/My Games/FalloutNV/Saves",
+            );
+            std::fs::create_dir_all(&players).unwrap();
+            std::fs::write(players.join("x.fos"), b"the player's own save").unwrap();
+            let own = s.0.join("own/Saves");
+            std::fs::create_dir_all(&own).unwrap();
+            assert_eq!(
+                run(&write(&own, "first.fos", b"kept")),
+                Ok(Some("NV_SAVE_OUT: copied first.fos".to_string()))
+            );
+            assert_eq!(std::fs::read(own.join("first.fos")).unwrap(), b"kept");
+            std::fs::remove_dir_all(&own).unwrap();
+            std::os::unix::fs::symlink(&players, &own).unwrap();
+            let refused = run(&write(&own, "x.fos", b"nv-rs's copy")).unwrap_err();
+            assert!(refused.contains("refused"), "{refused}");
+            let refused = run(&Job::Remove {
+                target: own.join("x.fos"),
+                name: "x.fos".into(),
+            })
+            .unwrap_err();
+            assert!(refused.contains("not deleted: refused"), "{refused}");
+            assert_eq!(
+                std::fs::read(players.join("x.fos")).unwrap(),
+                b"the player's own save"
+            );
+            assert!(!players.join("x.fos.part").exists());
+        }
+
+        /// Review of #630 (round 3): a look with no answer refuses every path; an answer is
+        /// used; the first write waits a few seconds for it, not none and not forever.
+        #[test]
+        fn a_look_without_an_answer_refuses_every_path() {
+            let s = Scratch::new("no-answer");
+            let plain = s.0.join("own/Saves/x.fos");
+            assert_eq!(refused_by(Err(LOOK_TOO_SLOW), &plain), Some(LOOK_TOO_SLOW));
+            assert_eq!(refused_by(Err(LOOK_STOPPED), &plain), Some(LOOK_STOPPED));
+            assert_eq!(refused_by(Ok(&[]), &plain), None);
+            let never = [Guarded {
+                root: s.0.join("own"),
+                except: None,
+                system: game_folders::System::this(),
+            }];
+            assert!(refused_by(Ok(&never), &plain).is_some());
+            assert!(
+                LOOK_WAIT >= std::time::Duration::from_secs(5),
+                "{LOOK_WAIT:?}"
+            );
+            assert!(
+                LOOK_WAIT <= std::time::Duration::from_secs(30),
+                "{LOOK_WAIT:?}"
+            );
+        }
+
+        /// Review of #630 (round 3): on Linux a save the game deletes is deleted from nv-rs's
+        /// folder under the name its copy was written with (the game's key is lower case, the
+        /// copy keeps the game's case, Linux compares names exactly), and not a file that differs
+        /// from it only in case.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_deleted_save_goes_under_the_name_it_was_written_with() {
+            let s = Scratch::new("case-delete");
+            let dir = s.0.join("Saves");
+            let mut e = Engine::new();
+            let key = br"c:\scratch\my games\falloutnv\saves\save 3 x.fos".to_vec();
+            super::put(&mut e, &key, b"FO3SAVEGAME");
+            engine_platform::state_mut(&mut e.kernel.platform)
+                .disk
+                .entries
+                .insert(
+                    key.clone(),
+                    engine_platform::files::Entry {
+                        name: "Save 3 X.fos".into(),
+                        short: None,
+                        attributes: 0x20,
+                        size: 11,
+                        created: 0,
+                        accessed: 0,
+                        written: 0,
+                    },
+                );
+            let mut watch = Watch::default();
+            assert_eq!(
+                super::look(&e, &mut watch, Some(&dir), None),
+                ["NV_SAVE_OUT: copied Save 3 X.fos".to_string()]
+            );
+            // Another file differing only in case (not the one written): left alone.
+            std::fs::write(dir.join("SAVE 3 X.FOS"), b"another").unwrap();
+            {
+                let disk = &mut engine_platform::state_mut(&mut e.kernel.platform).disk;
+                disk.files.remove(&key);
+                disk.entries.remove(&key);
+                disk.deleted.insert(key.clone());
+                disk.gone(&key);
+            }
+            assert_eq!(
+                super::look(&e, &mut watch, Some(&dir), None),
+                ["NV_SAVE_OUT: copied Save 3 X.fos (deleted)".to_string()]
+            );
+            assert!(std::fs::symlink_metadata(dir.join("Save 3 X.fos")).is_err());
+            assert_eq!(std::fs::read(dir.join("SAVE 3 X.FOS")).unwrap(), b"another");
+        }
+
+        /// Review of #630 (round 3): a copy an earlier run wrote (its name in the game's case) is
+        /// found by the delete without case, when it is the only such plain file.
+        #[cfg(target_os = "linux")]
+        #[test]
+        fn a_copy_from_an_earlier_run_is_deleted_whatever_its_case() {
+            let s = Scratch::new("case-earlier");
+            let dir = s.0.join("Saves");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("Save 4 Y.fos"), b"x").unwrap();
+            let never: Vec<Guarded> = vec![];
+            let check = |p: &Path| game_folders::refused(p, &never);
+            assert_eq!(
+                run_checked(
+                    &Job::Remove {
+                        target: dir.join("save 4 y.fos"),
+                        name: "save 4 y.fos".into(),
+                    },
+                    &check
+                ),
+                Ok(Some(
+                    "NV_SAVE_OUT: copied Save 4 Y.fos (deleted)".to_string()
+                ))
+            );
+            assert!(std::fs::symlink_metadata(dir.join("Save 4 Y.fos")).is_err());
         }
     }
 }

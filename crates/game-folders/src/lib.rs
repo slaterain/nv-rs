@@ -1077,6 +1077,14 @@ const SHAPED: &str = "inside a Steam library's or a Wine prefix's folders";
 /// to do: a `..` in its path, a path shaped like Steam's or Wine's folders, or (the one cause
 /// left) a link at it or above it leading elsewhere.
 pub fn own_folder_warnings(home: &Home, never: &[Guarded]) -> Vec<String> {
+    let mut out = own_folder_notes(home, never);
+    out.extend(own_folder_refusal(home, never));
+    out
+}
+
+/// The player folders nv-rs's own folder lies inside (its exception keeps it writable, but the
+/// player should know).
+pub fn own_folder_notes(home: &Home, never: &[Guarded]) -> Vec<String> {
     let own = own_folder(home);
     let text = parts(&own);
     let real = parts(&real_path(&own));
@@ -1091,7 +1099,27 @@ pub fn own_folder_warnings(home: &Home, never: &[Guarded]) -> Vec<String> {
             ));
         }
     }
-    if let Some(why) = refused(&own.join("Saves"), never) {
+    out
+}
+
+/// The deepest folder play.sh writes into: the game's own save folder inside nv-rs's own folder
+/// (`game/Documents/My Games/FalloutNV/Saves`, where the game finds its saves).
+pub fn own_saves_folder(home: &Home) -> PathBuf {
+    own_folder(home)
+        .join("game")
+        .join("Documents")
+        .join("My Games")
+        .join("FalloutNV")
+        .join("Saves")
+}
+
+/// Why nv-rs's own folder may not be written at all, in plain words with the folder's name and
+/// what to do (`--find`'s `refused` record: play.sh stops before its first write): checked at
+/// the deepest folder written ([`own_saves_folder`]), so a link anywhere along the way counts.
+pub fn own_folder_refusal(home: &Home, never: &[Guarded]) -> Option<String> {
+    let own = own_folder(home);
+    let why = refused(&own_saves_folder(home), never)?;
+    {
         let set = match home.system {
             System::Linux => "XDG_DATA_HOME (or HOME)",
             System::MacOs => "HOME",
@@ -1107,12 +1135,11 @@ pub fn own_folder_warnings(home: &Home, never: &[Guarded]) -> Vec<String> {
                 "it leads into one of your own folders (it, or a folder above it, is a link to elsewhere). Make it a plain folder, or set {set} elsewhere"
             ),
         };
-        out.push(format!(
+        Some(format!(
             "nv-rs's own folder {} cannot be written, so saves will NOT be kept: {cause}",
             own.display()
-        ));
+        ))
     }
-    out
 }
 
 /// Bytes kept as they are by [`escape`]: ASCII letters and digits, space and `/._-+,:@=~()`.
@@ -1152,13 +1179,17 @@ pub fn path_bytes(path: &Path) -> Vec<u8> {
 /// What `nv-viewer --find` prints, one record a line, its fields split by a tab, each path
 /// [`escape`]d: `own<TAB>FOLDER` (nv-rs's own folder), `warning<TAB>TEXT` for each thing the
 /// player should know (the own folder inside one of their folders, a Steam library list that
-/// could not be read), `game<TAB>STORE<TAB>FOLDER` for each game found, `saves<TAB>FROM<TAB>FOLDER`
+/// could not be read), `refused<TAB>TEXT` when nv-rs's own folder may not be written at all
+/// ([`own_folder_refusal`]: play.sh stops before its first write and shows TEXT), `game<TAB>STORE<TAB>FOLDER` for each game found, `saves<TAB>FROM<TAB>FOLDER`
 /// for each saves folder found. Read by `play.sh`.
 pub fn report(home: &Home) -> String {
     let scan = scan(home);
     let never = never_written_from(home, &scan);
     let mut out = format!("own\t{}\n", escape(&path_bytes(&own_folder(home))));
-    for warning in own_folder_warnings(home, &never)
+    if let Some(why) = own_folder_refusal(home, &never) {
+        out.push_str(&format!("refused\t{}\n", escape(why.as_bytes())));
+    }
+    for warning in own_folder_notes(home, &never)
         .into_iter()
         .chain(scan.problems.iter().cloned())
     {
