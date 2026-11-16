@@ -21,6 +21,27 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GH1",
     },
+    // G76 (the hotkey fix): `ExtraDataList::CopyListForReference` 00412490, the byte table's entry
+    // for 0x4A (2 for 1): a hotkey is copied (and moved) with its list.
+    Entry {
+        addr: 0x0041_2675,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G46 (the invisible stack fix): `ExtraDataList::CompareListForContainer` 004126c0, the `jnz`
+    // after the ownership test becomes `jmp`: an owner extra is no difference at once.
+    Entry {
+        addr: 0x0041_271e,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G61: `0041c7f0`, its call of `TESObjectREFR::GetRefPersists`: JIP's IsPersistentHook
+    // answers false for a temporary form.
+    Entry {
+        addr: 0x0041_c833,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
     // G44: `0041d030`, the type byte table's entry for 0x27 (0 for 3): an ExtraJIP ends the
     // ownership-only scan with false.
     Entry {
@@ -55,6 +76,25 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GH1",
     },
+    // G79: `ItemChange::GetModSlots` 004bd820, its head (JIP's GetEntryDataModFlagsHook; a seam,
+    // as Rust calls the translation directly).
+    Entry {
+        addr: 0x004b_d820,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G79: `ItemChange::HasModEffectActive_ov2` 004bda70, its head (GetEntryDataHasModHook).
+    Entry {
+        addr: 0x004b_da70,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G46: `OEI_Fast_InventoryIterator`'s scalar deleting destructor 004bf630, its head (`retn 4`).
+    Entry {
+        addr: 0x004b_f630,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
     // G44: `004c1c90` (a reference added to the changes), its call of `RemoveExtraCount`: JIP's
     // SetPickedCountHook takes the count from the reference's count extra first.
     Entry {
@@ -69,7 +109,55 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GH1",
     },
+    // G61: the same function, its first call of `GetRefPersists` (IsPersistentHook).
+    Entry {
+        addr: 0x004c_232c,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G61: the same function, its second call.
+    Entry {
+        addr: 0x004c_273a,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G75 (the hotkey fix): `004c37d0` (an item removed), its hotkey block: JIP's
+    // HotkeyFixRemoveItemHook.
+    Entry {
+        addr: 0x004c_3976,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G46: `InventoryChanges::StartOEIFastInventoryIteration` 004ca200, its head
+    // (CreateInventoryIteratorHook).
+    Entry {
+        addr: 0x004c_a200,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G46: `InventoryChanges::GetNextOEIFastInventoryItem` 004ca330, its end
+    // (InventoryIterGetNextHook).
+    Entry {
+        addr: 0x004c_afa3,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+    // G75: `00953ff0` (the player picks up a reference), the base form's type read: JIP's
+    // HotkeyFixPlayerActivateHook (the seam is group GP's, in `playercharacter_p2.rs`).
+    Entry {
+        addr: 0x0095_400f,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
 ];
 
 /// The group's wraps.
-pub(in super::super) const WRAPS: &[Entry] = &[];
+pub(in super::super) const WRAPS: &[Entry] = &[
+    // G50: `00482090` (a container's items' health), only called by address: JIP's
+    // SetContainerItemsHealthHook rewrites it.
+    Entry {
+        addr: 0x0048_2090,
+        owners: JIP,
+        step: "3.9-GH1",
+    },
+];

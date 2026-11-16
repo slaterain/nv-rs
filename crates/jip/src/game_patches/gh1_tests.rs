@@ -253,7 +253,7 @@ fn not_installed_nothing_registered() {
 /// seams have JIP's handler, its two slots JIP's routines; the word is only `INSTALLED`.
 #[test]
 fn installed_with_the_row_off_puts_the_framework_in() {
-    let e = world(true);
+    let mut e = world(true);
     assert_eq!(e.jip_patches(), jip_patches::INSTALLED);
     for addr in ADDRESSES {
         assert_eq!(e.site_owners(addr), vec![Owner::Jip], "{addr:08x}");
@@ -261,7 +261,13 @@ fn installed_with_the_row_off_puts_the_framework_in() {
     assert_eq!(e.mem.u32(DESTROY_SLOT), DESTROY_ROUTINE);
     assert_eq!(e.mem.u32(COMPARE_SLOT), COMPARE_ROUTINE);
     assert_eq!(AREA.jip_sites, &ADDRESSES[..]);
-    assert!(AREA.fix_sites.is_empty() && AREA.fix_wraps.is_empty() && AREA.jip_wraps.is_empty());
+    assert_eq!(AREA.fix_sites, &FIX_ADDRESSES[..]);
+    assert_eq!(AREA.fix_wraps, &[0x0048_2090]);
+    assert!(AREA.jip_wraps.is_empty());
+    // The fixes are not in with the row off: no fix seam answers.
+    for addr in FIX_ADDRESSES {
+        assert_eq!(e.site(addr, &[HEAP, 0, 0]), None, "{addr:08x}");
+    }
 }
 
 /// The four table entries: the head of the chain (`0x40F9D7`) and the scans ended with false.
@@ -581,4 +587,434 @@ fn compare_answers_whether_the_data_differ() {
     put(&mut e, 1, entry(0, &[(3, data(1.5, 0x10, b"ab\0x"))]));
     put(&mut e, 2, entry(0, &[(3, data(1.5, 0x10, b"ab\0y"))]));
     assert_eq!(differs(&mut e, x, y), 0);
+}
+
+// ===================== The fixes =====================
+
+const FIX_ADDRESSES: [u32; 12] = [
+    0x0041_2675,
+    0x0041_271e,
+    0x0041_c833,
+    0x004b_d820,
+    0x004b_da70,
+    0x004b_f630,
+    0x004c_232c,
+    0x004c_273a,
+    0x004c_3976,
+    0x004c_a200,
+    0x004c_afa3,
+    0x0095_400f,
+];
+const ITEMS_HEALTH_FN: u32 = 0x0048_2090;
+/// Where the fix tests' forms and list nodes are (inside the world's mapped heap).
+const FIX_FORMS: u32 = 0x0624_0000;
+const NODES: u32 = 0x0625_0000;
+/// What the stand-in of `00482B00` (the container list's copy) answers.
+const COPIED: u32 = 0x0625_f000;
+
+/// [`world`] with JIP installed and the fixes put in by hand (the word's `FIXES` bit and the
+/// area's installer, as the row does; the whole-table test covers the row's own path).
+fn fixes_world() -> Engine {
+    let mut e = world(true);
+    e.map(0x011d_e000, 0x1000);
+    e.register(ITEMS_HEALTH_FN, |_, a| {
+        log(ITEMS_HEALTH_FN, a);
+        Ret::default()
+    });
+    e.register(CONTAINER_LIST_COPY, |_, a| {
+        log(CONTAINER_LIST_COPY, a);
+        eax(COPIED)
+    });
+    e.jip_patches_or(jip_patches::FIXES);
+    install_fixes(&mut e);
+    e
+}
+
+/// A form of `kind` at slot `n` of the test's forms.
+fn form_of(e: &mut Engine, n: u32, kind: u8) -> u32 {
+    let at = FIX_FORMS + 0x400 * n;
+    e.mem.set_u8(at + 4, kind);
+    at
+}
+
+/// A list of nodes (data, next) holding `items`, at slot `n` of the test's nodes.
+fn nodes(e: &mut Engine, n: u32, items: &[u32]) -> u32 {
+    let base = NODES + 0x100 * n;
+    for (i, &item) in items.iter().enumerate() {
+        let at = base + 8 * i as u32;
+        e.mem.set_u32(at, item);
+        let next = if i + 1 < items.len() { at + 8 } else { 0 };
+        e.mem.set_u32(at + 4, next);
+    }
+    base
+}
+
+/// A changes entry at `at`: its extra lists' first node, its count, its form.
+fn changes_entry(e: &mut Engine, at: u32, lists: u32, count: i32, form: u32) -> u32 {
+    e.mem.set_u32(at, lists);
+    e.mem.set_i32(at + 4, count);
+    e.mem.set_u32(at + 8, form);
+    at
+}
+
+/// The two jumps JIP writes (`0x41271E`, `0x412675`) answer; the temporary-form test answers
+/// false for mod index 0xFF and leaves any other to the exe's call, at each of its three calls.
+#[test]
+fn the_jumps_and_the_temporary_form_test() {
+    let mut e = fixes_world();
+    assert_eq!(e.site(COMPARE_OWNED.addr(), &[]), Some(1));
+    assert_eq!(e.site(HOTKEY_MOVED.addr(), &[]), Some(1));
+    let form = form_of(&mut e, 0, 0x3b);
+    for site in [PERSISTS_LIST, PERSISTS_PICKED, PERSISTS_MERGED] {
+        for (index, answer) in [(0xffu8, Some(0)), (0xfe, None), (0, None)] {
+            e.mem.set_u8(form + 0x0f, index);
+            assert_eq!(e.site(site.addr(), &[form]), answer, "{index:02x}");
+        }
+    }
+}
+
+/// The iterator's destructor does nothing (`retn 4`): nothing freed, `this` answered.
+#[test]
+fn the_iterator_destructor_does_nothing() {
+    let mut e = fixes_world();
+    assert_eq!(e.site(ITERATOR_DESTROY.addr(), &[LIST, 1]), Some(LIST));
+    assert!(calls(HEAP_FREE).is_empty());
+}
+
+/// The start: one block (0x2C bytes) made at the first iteration and kept; the 0x28 bytes
+/// cleared, +0x28 the changes' list, the map emptied; no owner: no container; an owner whose base
+/// is a container: the container (+0x10), its list (+8) and the copy (+0, +4); a base with no
+/// container gets none; the next start frees the last copy (its nodes after the head, the head).
+#[test]
+fn the_iterator_start_resets_jips_iterator() {
+    let mut e = fixes_world();
+    let changes = FIX_FORMS + 0x3000;
+    e.mem.set_u32(changes, 0x0626_0000);
+    let block = e.site(ITERATOR_START.addr(), &[changes]).unwrap();
+    assert_eq!(calls(HEAP_ALLOCATE), vec![vec![0x011f_6238, 0x2c]]);
+    for offset in (0..0x28).step_by(4) {
+        assert_eq!(e.mem.u32(block + offset), 0, "{offset:x}");
+    }
+    assert_eq!(e.mem.u32(block + 0x28), 0x0626_0000);
+    assert!(calls(CONTAINER_LIST_COPY).is_empty());
+    // An owner whose base form is a container (type 0x1B: its container at +0x30).
+    let base = form_of(&mut e, 1, 0x1b);
+    // Its vtable: no slot answers "actor base" (`TESForm::GetContainer`'s second test).
+    e.mem.set_u32(base, FIX_FORMS + 0x3800);
+    let owner = FIX_FORMS + 0x3100;
+    e.mem.set_u32(owner + 0x20, base);
+    e.mem.set_u32(changes + 4, owner);
+    iterator_state(&mut e).handed.insert(0x1234, 5);
+    e.mem.set_u32(block + 0x0c, 0x77);
+    assert_eq!(e.site(ITERATOR_START.addr(), &[changes]), Some(block));
+    assert_eq!(calls(HEAP_ALLOCATE).len(), 1, "the block is kept");
+    assert!(iterator_state(&mut e).handed.is_empty());
+    assert_eq!(e.mem.u32(block + 0x0c), 0);
+    assert_eq!(e.mem.u32(block + 0x10), base + 0x30);
+    assert_eq!(e.mem.u32(block + 8), base + 0x34);
+    assert_eq!(e.mem.u32(block), COPIED);
+    assert_eq!(e.mem.u32(block + 4), COPIED);
+    assert_eq!(calls(CONTAINER_LIST_COPY), vec![vec![base + 0x30]]);
+    // The copy holds two nodes after its head: freed with the head at the next start; a base
+    // with no container (type 0x1F) gets none.
+    let tail = nodes(&mut e, 0, &[0x41, 0x42]);
+    e.mem.set_u32(COPIED, 0x40);
+    e.mem.set_u32(COPIED + 4, tail);
+    e.mem.set_u8(base + 4, 0x1f);
+    e.site(ITERATOR_START.addr(), &[changes]);
+    let freed: Vec<u32> = calls(HEAP_FREE).iter().map(|c| c[1]).collect();
+    assert_eq!(freed, vec![tail, tail + 8, COPIED]);
+    assert_eq!((e.mem.u32(COPIED), e.mem.u32(COPIED + 4)), (0, 0));
+    assert_eq!(e.mem.u32(block), 0);
+    assert_eq!(e.mem.u32(block + 0x10), 0);
+    assert_eq!(e.mem.u32(block + 8), 0);
+    assert_eq!(calls(CONTAINER_LIST_COPY).len(), 1);
+}
+
+/// The next stack: one handed out adds its count to its form's (a new form starting at 0) and
+/// is answered; none: the pass byte becomes 2 and the forms are taken from the highest down: one
+/// whose count is above what was handed out answers a new stack of the rest, one with nothing
+/// left is passed over, and none left answers 0.
+#[test]
+fn the_iterator_next_gives_the_stacks_left() {
+    let mut e = fixes_world();
+    let iterator = FIX_FORMS + 0x4000;
+    let (low, high) = (FIX_FORMS + 0x100, FIX_FORMS + 0x200);
+    let out = changes_entry(&mut e, FIX_FORMS + 0x4100, 0, 2, low);
+    e.mem.set_u32(iterator + 0x0c, out);
+    assert_eq!(e.site(ITERATOR_NEXT.addr(), &[iterator]), Some(out));
+    assert_eq!(e.site(ITERATOR_NEXT.addr(), &[iterator]), Some(out));
+    let out2 = changes_entry(&mut e, FIX_FORMS + 0x4200, 0, -1, high);
+    e.mem.set_u32(iterator + 0x0c, out2);
+    e.site(ITERATOR_NEXT.addr(), &[iterator]);
+    assert_eq!(
+        iterator_state(&mut e)
+            .handed
+            .clone()
+            .into_iter()
+            .collect::<Vec<_>>(),
+        vec![(low, 4), (high, -1)]
+    );
+    // The container holds 5 of `low` and none of `high`; the changes add 1 of `high`.
+    let object = FIX_FORMS + 0x4300;
+    e.mem.set_i32(object, 5);
+    e.mem.set_u32(object + 4, low);
+    let list = nodes(&mut e, 1, &[object]);
+    let delta = changes_entry(&mut e, FIX_FORMS + 0x4400, 0, 1, high);
+    let changes = nodes(&mut e, 2, &[delta]);
+    e.mem.set_u32(iterator + 8, list);
+    e.mem.set_u32(iterator + 0x28, changes);
+    e.mem.set_u32(iterator + 0x0c, 0);
+    e.mem.set_u32(iterator + 0x18, 1);
+    // `high` first: 1 - (-1) = 2 left.
+    let made = e.site(ITERATOR_NEXT.addr(), &[iterator]).unwrap();
+    assert_eq!(e.mem.u32(iterator + 0x18), 2);
+    assert_eq!(
+        (e.mem.u32(made), e.mem.i32(made + 4), e.mem.u32(made + 8)),
+        (0, 2, high)
+    );
+    // Then `low`: 5 - 4 = 1 left.
+    let made = e.site(ITERATOR_NEXT.addr(), &[iterator]).unwrap();
+    assert_eq!((e.mem.i32(made + 4), e.mem.u32(made + 8)), (1, low));
+    assert_eq!(e.site(ITERATOR_NEXT.addr(), &[iterator]), Some(0));
+    // A form with nothing left is passed over.
+    iterator_state(&mut e).handed.insert(low, 5);
+    assert_eq!(e.site(ITERATOR_NEXT.addr(), &[iterator]), Some(0));
+    assert!(iterator_state(&mut e).handed.is_empty());
+}
+
+/// The mod flags: 0 for no stack, a form that is not a weapon, no extra lists or a null first
+/// list, or no flags extra; else the flags of the first list, or of the dropper reference's list
+/// when the first list names one (a dropper extra naming no reference: the first list's).
+#[test]
+fn the_mod_flags_come_from_the_dropper_or_the_first_list() {
+    let mut e = fixes_world();
+    let weapon = form_of(&mut e, 0, FORM_WEAPON);
+    let armor = form_of(&mut e, 1, FORM_ARMOR);
+    let flags_of = |e: &mut Engine, entry: u32| e.site(MOD_FLAGS.addr(), &[entry]);
+    assert_eq!(flags_of(&mut e, 0), Some(0));
+    let entry = changes_entry(&mut e, FIX_FORMS + 0x5000, 0, 1, armor);
+    assert_eq!(flags_of(&mut e, entry), Some(0));
+    e.mem.set_u32(entry + 8, weapon);
+    assert_eq!(flags_of(&mut e, entry), Some(0), "no extra lists");
+    let node = nodes(&mut e, 0, &[0]);
+    e.mem.set_u32(entry, node);
+    assert_eq!(flags_of(&mut e, entry), Some(0), "a null first list");
+    let first = FIX_FORMS + 0x5100;
+    e.mem.set_u32(node, first);
+    assert_eq!(flags_of(&mut e, entry), Some(0), "no flags extra");
+    let flags = extra_of(&mut e, 0x8d, 0x0000_0105);
+    add(&mut e, first, flags);
+    assert_eq!(flags_of(&mut e, entry), Some(5));
+    let dropper = extra_of(&mut e, 0x39, 0);
+    add(&mut e, first, dropper);
+    assert_eq!(
+        flags_of(&mut e, entry),
+        Some(5),
+        "a dropper naming no reference"
+    );
+    let refr = FIX_FORMS + 0x5200;
+    e.mem.set_u32(dropper + 0x0c, refr);
+    assert_eq!(
+        flags_of(&mut e, entry),
+        Some(0),
+        "the dropper's list has no flags"
+    );
+    let theirs = extra_of(&mut e, 0x8d, 2);
+    add(&mut e, refr + 0x44, theirs);
+    assert_eq!(flags_of(&mut e, entry), Some(2));
+}
+
+/// Has a mod: no flags: false; a set slot whose action type (the weapon's byte at +0x180,
+/// +0x184, +0x188) is the effect: true; a matching byte in a slot not set does not count.
+#[test]
+fn has_mod_tests_the_set_slots_in_order() {
+    let mut e = fixes_world();
+    let weapon = form_of(&mut e, 0, FORM_WEAPON);
+    let entry = changes_entry(&mut e, FIX_FORMS + 0x5000, 0, 1, weapon);
+    let has = |e: &mut Engine, effect: u32| e.site(HAS_MOD.addr(), &[entry, effect]);
+    assert_eq!(has(&mut e, 3), Some(0));
+    let first = FIX_FORMS + 0x5100;
+    let node = nodes(&mut e, 0, &[first]);
+    e.mem.set_u32(entry, node);
+    let flags = extra_of(&mut e, 0x8d, 0);
+    add(&mut e, first, flags);
+    e.mem.set_u8(weapon + 0x180, 3);
+    e.mem.set_u8(weapon + 0x184, 4);
+    e.mem.set_u8(weapon + 0x188, 5);
+    assert_eq!(has(&mut e, 3), Some(0), "flags 0");
+    for (bits, effect, answer) in [
+        (1u32, 3u32, 1u32),
+        (1, 4, 0),
+        (2, 4, 1),
+        (2, 3, 0),
+        (4, 5, 1),
+        (6, 5, 1),
+        (6, 3, 0),
+        (7, 0x103, 1),
+    ] {
+        e.mem.set_u32(flags + 0x0c, bits);
+        assert_eq!(has(&mut e, effect), Some(answer), "{bits} {effect}");
+    }
+}
+
+/// The items' health: clamped to 0..0.999 (not a number: 0.999); armour and a weapon of type
+/// below 10 get it (a new extra, or the lower of the two); a weapon of type 10 and other forms
+/// get 1.0, their extra freed when its owner word is 0; empty nodes passed over.
+#[test]
+fn the_items_health_is_jips() {
+    let mut e = fixes_world();
+    let armor = form_of(&mut e, 0, FORM_ARMOR);
+    let gun = form_of(&mut e, 1, FORM_WEAPON);
+    e.mem.set_u8(gun + 0xf4, 9);
+    let rifle = form_of(&mut e, 2, FORM_WEAPON);
+    e.mem.set_u8(rifle + 0xf4, 10);
+    let misc = form_of(&mut e, 3, FORM_MISC);
+    let item = |e: &mut Engine, at: u32, form: u32, extra: u32| {
+        e.mem.set_u32(at + 4, form);
+        e.mem.set_u32(at + 8, extra);
+        at
+    };
+    let base = FIX_FORMS + 0x6000;
+    let kept = base + 0x400;
+    e.mem.set_f32(kept + 8, 0.25);
+    let owned = base + 0x440;
+    e.mem.set_u32(owned, 0x99);
+    let unowned = base + 0x480;
+    let items = [
+        item(&mut e, base, armor, 0),
+        0,
+        item(&mut e, base + 0x40, gun, kept),
+        item(&mut e, base + 0x80, rifle, unowned),
+        item(&mut e, base + 0xc0, misc, owned),
+    ];
+    let container = FIX_FORMS + 0x7000;
+    let list = nodes(&mut e, 0, &items);
+    e.mem.set_u32(container + 4, e.mem.u32(list));
+    e.mem.set_u32(container + 8, e.mem.u32(list + 4));
+    e.call(ITEMS_HEALTH_FN, &[container, 0.5f32.to_bits()]);
+    assert!(calls(ITEMS_HEALTH_FN).is_empty(), "rewritten, not run");
+    let made = e.mem.u32(base + 8);
+    assert_eq!(
+        (e.mem.u32(made), e.mem.u32(made + 4), e.mem.f32(made + 8)),
+        (0, 0, 0.5)
+    );
+    assert_eq!(e.mem.f32(kept + 8), 0.25, "the lower kept");
+    assert_eq!(e.mem.u32(base + 0x88), 0, "freed");
+    assert_eq!(e.mem.f32(unowned + 8), 1.0);
+    assert_eq!(calls(HEAP_FREE), vec![vec![0x011f_6238, unowned]]);
+    assert_eq!(e.mem.u32(base + 0xc8), owned, "an owned extra is kept");
+    assert_eq!(e.mem.f32(owned + 8), 1.0);
+    for (given, health) in [
+        (f32::NAN, f32::from_bits(0x3f7f_be77)),
+        (2.0, f32::from_bits(0x3f7f_be77)),
+        (-1.0, 0.0),
+        (0.1, 0.1),
+    ] {
+        e.mem.set_f32(kept + 8, 1.0);
+        e.call(ITEMS_HEALTH_FN, &[container, given.to_bits()]);
+        assert_eq!(e.mem.f32(kept + 8), health, "{given}");
+    }
+}
+
+/// The player at [`PLAYER`] with the changes list `entries` (his list's container changes
+/// extra).
+fn player_with(e: &mut Engine, entries: &[u32]) {
+    let player = FIX_FORMS + 0x8000;
+    e.mem.set_u32(PLAYER, player);
+    let data = FIX_FORMS + 0x8100;
+    let list = nodes(e, 7, entries);
+    e.mem.set_u32(data, list);
+    let changes = extra_of(e, 0x15, data);
+    e.mem.set_u32(player + 0x44 + 4, 0);
+    add(e, player + 0x44, changes);
+}
+
+/// A list at `at` holding a hotkey of `key`.
+fn hotkey_list(e: &mut Engine, at: u32, key: u32) -> u32 {
+    let hotkey = extra_of(e, 0x4a, key);
+    add(e, at, hotkey);
+    at
+}
+
+/// The hotkey test: a list without a hotkey asks nothing; a key one of the player's stacks
+/// already holds (an aid item's) leaves the given list; the same key on ammo, a misc item or a
+/// form above `AlchemyItem`, another key, or a stack without extra lists does not.
+#[test]
+fn a_hotkey_the_player_uses_leaves_the_list() {
+    let mut e = fixes_world();
+    let weapon = form_of(&mut e, 0, FORM_WEAPON);
+    let ammo = form_of(&mut e, 1, FORM_AMMO);
+    let misc = form_of(&mut e, 2, FORM_MISC);
+    let note = form_of(&mut e, 3, 0x31);
+    let aid = form_of(&mut e, 4, FORM_ALCHEMY);
+    let lists = |e: &mut Engine, n: u32, key: u32| {
+        let list = hotkey_list(e, FIX_FORMS + 0x9000 + 0x40 * n, key);
+        nodes(e, 10 + n, &[0, list])
+    };
+    let ammo_lists = lists(&mut e, 0, 3);
+    let misc_lists = lists(&mut e, 1, 3);
+    let note_lists = lists(&mut e, 2, 3);
+    let other_key = lists(&mut e, 3, 4);
+    let entries = [
+        0,
+        changes_entry(&mut e, FIX_FORMS + 0xa000, 0, 1, weapon),
+        changes_entry(&mut e, FIX_FORMS + 0xa010, ammo_lists, 1, ammo),
+        changes_entry(&mut e, FIX_FORMS + 0xa020, misc_lists, 1, misc),
+        changes_entry(&mut e, FIX_FORMS + 0xa030, note_lists, 1, note),
+        changes_entry(&mut e, FIX_FORMS + 0xa040, other_key, 1, weapon),
+    ];
+    player_with(&mut e, &entries);
+    let given = hotkey_list(&mut e, FIX_FORMS + 0xb000, 3);
+    clear_hotkey_if_used(&mut e, given);
+    assert!(calls(REMOVE_BY_TYPE).is_empty());
+    clear_hotkey_if_used(&mut e, FIX_FORMS + 0xb100);
+    assert!(calls(REMOVE_BY_TYPE).is_empty());
+    let aid_lists = lists(&mut e, 4, 3);
+    let mut with_aid = entries.to_vec();
+    with_aid.push(changes_entry(&mut e, FIX_FORMS + 0xa050, aid_lists, 1, aid));
+    player_with(&mut e, &with_aid);
+    clear_hotkey_if_used(&mut e, given);
+    assert_eq!(calls(REMOVE_BY_TYPE), vec![vec![given, 0x4a]]);
+    assert!(chain(&e, given).is_empty());
+}
+
+/// An item removed: given to the player (form id 0x14), not dropped, with a list: the hotkey
+/// test runs; dropped, no list, no target or another target: it does not; the exe's block is
+/// skipped either way (answered). The player's pick-up: the reference's list (+0x44), no answer.
+#[test]
+fn the_hotkey_seams_test_the_items_given_to_the_player() {
+    let mut e = fixes_world();
+    let weapon = form_of(&mut e, 0, FORM_WEAPON);
+    let held = hotkey_list(&mut e, FIX_FORMS + 0x9000, 3);
+    let held_lists = nodes(&mut e, 10, &[held]);
+    let entry = changes_entry(&mut e, FIX_FORMS + 0xa000, held_lists, 1, weapon);
+    player_with(&mut e, &[entry]);
+    let player = e.mem.u32(PLAYER);
+    e.mem.set_u32(player + 0x0c, 0x14);
+    let other = FIX_FORMS + 0xc000;
+    e.mem.set_u32(other + 0x0c, 0x15);
+    let given = hotkey_list(&mut e, FIX_FORMS + 0xb000, 3);
+    for args in [
+        [1, given, player],
+        [0, 0, player],
+        [0, given, 0],
+        [0, given, other],
+    ] {
+        assert_eq!(e.site(HOTKEY_REMOVED.addr(), &args), Some(0), "{args:x?}");
+    }
+    assert!(calls(REMOVE_BY_TYPE).is_empty());
+    assert_eq!(
+        e.site(HOTKEY_REMOVED.addr(), &[0x100, given, player]),
+        Some(0)
+    );
+    assert_eq!(
+        calls(REMOVE_BY_TYPE),
+        vec![vec![given, 0x4a]],
+        "the flag's low byte"
+    );
+    let refr = FIX_FORMS + 0xd000;
+    hotkey_list(&mut e, refr + 0x44, 3);
+    assert_eq!(e.site(HOTKEY_ACTIVATED.addr(), &[refr]), None);
+    assert_eq!(calls(REMOVE_BY_TYPE)[1], vec![refr + 0x44, 0x4a]);
 }
