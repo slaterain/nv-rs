@@ -157,7 +157,7 @@ pub fn add_extra_jip(e: &mut Engine, list: u32, key: u32) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp: ExtraCount::Create,
 // ExtraDataList::AddExtraCount.
 /// A new count extra of `count` (at most 32,767) added to `list`; answers it.
-fn add_extra_count(e: &mut Engine, list: u32, count: i32) -> u32 {
+pub(crate) fn add_extra_count(e: &mut Engine, list: u32, count: i32) -> u32 {
     let created = extra::create(e, COUNT_VTABLE, EXTRA_COUNT);
     e.mem.set_u32(created + 0x0c, count.min(0x7fff) as u32);
     extra::add_extra(e, list, created)
