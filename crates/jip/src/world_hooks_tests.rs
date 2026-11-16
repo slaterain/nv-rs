@@ -1547,16 +1547,21 @@ fn a_threads_engine_reads_the_names_the_commands_write() {
     engine_core::extend::release_held_for_test();
 }
 
-/// One engine run on two OS threads one at a time, as stepped threads hand it over (the main
-/// thread waits on the channel while the other runs it).
-struct OneAtATime(*mut Engine);
-// SAFETY: the two threads use the engine strictly in turn, ordered by the channels below.
-unsafe impl Send for OneAtATime {}
+/// The test engine, moved between two OS threads behind a mutex. `Engine` is not `Send` (its
+/// handlers are `Rc`s and it points at its kernel), because a real thread's engine is one OS
+/// thread's only; stepped threads hand one engine between OS threads one at a time, which is
+/// what the mutex does here: only the thread holding the lock reaches it.
+struct Stepped(Engine);
+// SAFETY: reached only through the `Mutex` below, by one thread at a time (the stepped threads'
+// hand-over), and nothing of it (no `Rc`, no reference) is kept outside the lock.
+unsafe impl Send for Stepped {}
 
 /// A wait a thread took before a load counts nothing after it, also when the same owner waits
 /// again at the same block: JIP's pre-load nulls its one `s_scriptWaitInfo` for every thread;
 /// the port's pre-load (on the loading thread) raises the waits' generation, and the other
-/// thread's older value counts as none and is cleared.
+/// thread's older value counts as none and is cleared. A wait taken after the load counts down
+/// and resumes as before. The engine runs on two OS threads in turn (as stepped threads hand it
+/// over), behind a mutex each side locks only for its turn, ordered by the channels.
 #[test]
 fn a_wait_taken_before_a_load_counts_nothing_after_it() {
     let mut e = world();
@@ -1571,43 +1576,84 @@ fn a_wait_taken_before_a_load_counts_nothing_after_it() {
     state(&mut e).script_waits.insert(REF, wait);
     e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
     engine_core::extend::release_held_for_test();
-    let raw: *mut Engine = &mut e;
-    let other = OneAtATime(raw);
+    let engine = std::sync::Mutex::new(Stepped(e));
+    let lock = || {
+        engine
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    };
     let (go, wait_go) = std::sync::mpsc::channel::<()>();
     let (tell, heard) = std::sync::mpsc::channel::<(u32, Option<u32>)>();
     std::thread::scope(|scope| {
         scope.spawn(move || {
-            let other = other;
-            // SAFETY: the main thread does not touch the engine until `tell` (see OneAtATime).
-            let e = unsafe { &mut *other.0 };
-            site(e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
+            {
+                let mut g = lock();
+                let e = &mut g.0;
+                site(e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
+                engine_core::extend::release_held_for_test();
+            }
             tell.send((0, current_wait())).expect("told");
             wait_go.recv().expect("go");
-            e.mem.set_u32(LENGTH, 100);
-            site(
-                e,
-                0x005e_1716,
-                &[RUNNER, 0, 0x40, 0x3ff0_0000, 0, LENGTH, 0x20],
-            );
-            tell.send((e.mem.u32(LENGTH), current_wait()))
-                .expect("told");
+            let length = {
+                let mut g = lock();
+                let e = &mut g.0;
+                e.mem.set_u32(LENGTH, 100);
+                site(
+                    e,
+                    0x005e_1716,
+                    &[RUNNER, 0, 0x40, 0x3ff0_0000, 0, LENGTH, 0x20],
+                );
+                engine_core::extend::release_held_for_test();
+                e.mem.u32(LENGTH)
+            };
+            tell.send((length, current_wait())).expect("told");
         });
         assert_eq!(heard.recv().expect("heard").1, Some(REF), "it waits");
-        // SAFETY: the other thread waits on `go` and does not touch the engine meanwhile.
-        let e = unsafe { &mut *raw };
-        e.set_hook(Hook::ScriptWait, true);
-        crate::world_hooks::pre_load(e);
-        // The same owner waits again at the same block.
-        state(e).script_waits.insert(REF, wait);
-        e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
+        {
+            let mut g = lock();
+            let e = &mut g.0;
+            e.set_hook(Hook::ScriptWait, true);
+            crate::world_hooks::pre_load(e);
+            // The same owner waits again at the same block.
+            state(e).script_waits.insert(REF, wait);
+            e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
+            engine_core::extend::release_held_for_test();
+        }
         go.send(()).expect("sent");
         let (length, now) = heard.recv().expect("heard");
         assert_eq!(length, 100, "the block applies: not counted, not skipped");
         assert_eq!(now, None, "the old wait is cleared");
     });
+    let mut e = engine
+        .into_inner()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .0;
     assert_eq!(
         state(&mut e).script_waits[&REF].iterations,
         2,
         "nothing counted"
     );
+    // A wait taken after the load (this thread's run start) counts down, then resumes.
+    for i in 0..12 {
+        e.mem.set_u32(RUNNER + 0x20 + 4 * i, 0);
+    }
+    site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
+    assert_eq!(current_wait(), Some(REF));
+    let eval = |e: &mut Engine| {
+        e.mem.set_u32(LENGTH, 100);
+        site(
+            e,
+            0x005e_1716,
+            &[RUNNER, 0, 0x40, 0x3ff0_0000, 0, LENGTH, 0x20],
+        );
+        e.mem.u32(LENGTH)
+    };
+    assert_eq!(eval(&mut e), 0x84, "counted down and skipped");
+    assert_eq!(state(&mut e).script_waits[&REF].iterations, 1);
+    assert_eq!(eval(&mut e), 100 + 0x10, "resumes at the saved line");
+    for i in 0..12 {
+        assert_eq!(e.mem.u32(RUNNER + 0x20 + 4 * i), 7, "the if stack");
+    }
+    assert_eq!(current_wait(), None);
+    engine_core::extend::release_held_for_test();
 }
