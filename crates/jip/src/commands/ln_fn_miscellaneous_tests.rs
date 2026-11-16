@@ -848,7 +848,11 @@ mod ar_cat {
                 Data::Invalid,
             ]
         );
-        assert_eq!(vars::array(&e, inner).unwrap().refs.len(), 2, "a reference each");
+        assert_eq!(
+            vars::array(&e, inner).unwrap().refs.len(),
+            2,
+            "a reference each"
+        );
     }
 
     /// The elements are read before any is added: an array added to itself doubles.
@@ -858,10 +862,7 @@ mod ar_cat {
         let arr = array_of(&mut e, vec![num(1.0), num(2.0)]);
         assert_eq!(cat(&mut e, &[arr as i32, arr as i32]), 1.0);
         let all = array_data(&e, f64::from(arr));
-        assert_eq!(
-            all,
-            [1.0, 2.0, 1.0, 2.0].map(Data::Number).to_vec()
-        );
+        assert_eq!(all, [1.0, 2.0, 1.0, 2.0].map(Data::Number).to_vec());
     }
 
     /// Maps by number: a key the target lacks is set; one it has is kept unless the third
@@ -887,17 +888,18 @@ mod ar_cat {
             array_data(&e, f64::from(into)),
             [10.0, 20.0, 3.0].map(Data::Number).to_vec()
         );
-        assert_eq!(
-            keys(&e, into),
-            [1.0, 2.0, 3.0].map(Key::Number).to_vec()
-        );
+        assert_eq!(keys(&e, into), [1.0, 2.0, 3.0].map(Key::Number).to_vec());
     }
 
     /// Maps by text: keys match without case (the target's spelling kept).
     #[test]
     fn a_string_map_matches_keys_without_case() {
         let mut e = setup();
-        let into = map_of(&mut e, KEY_STRING, vec![(Key::Str(b"Key".to_vec()), num(1.0))]);
+        let into = map_of(
+            &mut e,
+            KEY_STRING,
+            vec![(Key::Str(b"Key".to_vec()), num(1.0))],
+        );
         let from = map_of(
             &mut e,
             KEY_STRING,
