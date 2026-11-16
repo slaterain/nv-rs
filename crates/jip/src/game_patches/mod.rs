@@ -149,12 +149,15 @@ fn put_fixes_in(e: &mut Engine) {
         return;
     }
     let switches = settings::read(e);
-    e.jip_patches_or(jip_patches::FIXES | switches.on);
+    e.jip_patches_or(switches.on);
     e.ext::<Jip>().game_patches.settings = switches;
     e.ext::<Jip>().game_patches.fixes_in = true;
     for area in AREAS {
         (area.install_fixes)(e);
     }
+    // `FIXES` last: every fix's handler is in before a seam can see the bit (G10's record
+    // layout relies on it: with `FIXES` set its seams always answer).
+    e.jip_patches_or(jip_patches::FIXES);
 }
 
 #[cfg(test)]

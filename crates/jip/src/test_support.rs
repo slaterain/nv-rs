@@ -95,6 +95,10 @@ fn prepare(e: &mut Engine) {
         e.map(0x011c_f000, 0x1000);
         e.register(0x0064_6260, |e, _| f32::into_ret(e.mem.f32(0x011c_f154)));
     }
+    // O1's wrap (`009b5a30`, `HitData::ReduceDamage`): a stand-in that leaves the hit as it is.
+    if !e.is_registered(0x009b_5a30) {
+        e.register(0x009b_5a30, |_, _| Ret::default());
+    }
     // Group GF: `TESNPC`'s model vtable (0x0104A1A4), whose set slot `+0x18` JIP writes (G40),
     // the two skeleton settings (0x011D2718, 0x011D3E44), and `00601c30` (G39's wrap) when the
     // test engine has no translation of it: the exe's answer, the female setting's text for a

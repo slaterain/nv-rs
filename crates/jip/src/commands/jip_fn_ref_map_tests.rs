@@ -117,10 +117,14 @@ fn where_a_map_goes_and_its_values() {
 #[test]
 fn the_changed_flag_and_mark_modified() {
     let mut e = setup();
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     set_flt(&mut e, REF, b"*t", 1.0, None);
     call_on(&mut e, 0x26a7, REF, &[s(b"*t"), r(3)]);
-    assert_eq!(saved(&mut e).changed, 0, "temporary: no flag");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        0,
+        "temporary: no flag"
+    );
     assert!(marks().is_empty());
     let arr = vars::create_array(&mut e, KEY_NUMBER, true, 6);
     vars::set_element(&mut e, arr, &Key::Number(0.0), VarValue::Number(1.0));
@@ -130,11 +134,11 @@ fn the_changed_flag_and_mark_modified() {
         (0x26a9, vec![s(b"c"), s(b"t")]),
         (0x2765, vec![s(b"d"), n(arr as i32)]),
     ] {
-        saved(&mut e).changed = 0x10;
+        crate::cosave::set_changed(&mut e, 0x10);
         clear_calls();
         call_on(&mut e, op, REF, &args);
         assert_eq!(
-            saved(&mut e).changed,
+            crate::cosave::changed_flags(&mut e),
             0x12,
             "{op:04x}: the ref map flag added"
         );
@@ -143,9 +147,9 @@ fn the_changed_flag_and_mark_modified() {
     clear_calls();
     set_flt(&mut e, 0, b"a", 1.0, Some(3));
     assert!(marks().is_empty(), "no calling reference");
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     get_flt(&mut e, REF, b"a", None);
-    assert_eq!(saved(&mut e).changed, 0, "a read");
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0, "a read");
 }
 
 #[test]
@@ -320,22 +324,26 @@ fn keys_and_all_maps() {
 fn erasing_validating_destroying() {
     let mut e = setup();
     three(&mut e);
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     clear_calls();
     assert_eq!(
         call_on(&mut e, 0x26a2, 0, &[s(b"w"), r(3)]).1,
         2.0,
         "2 left"
     );
-    assert_eq!(saved(&mut e).changed, 2);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 2);
     assert!(marks().is_empty(), "erasing does not MarkModified");
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     assert_eq!(
         call_on(&mut e, 0x26a2, 0, &[s(b"w"), r(3)]).1,
         0.0,
         "gone already"
     );
-    assert_eq!(saved(&mut e).changed, 0, "nothing erased: no flag");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        0,
+        "nothing erased: no flag"
+    );
     assert_eq!(call_on(&mut e, 0x26a2, REF, &[s(b"w")]).1, 1.0);
     assert_eq!(
         call_on(&mut e, 0x26a2, 0, &[s(b"w"), r(2)]).1,
@@ -355,16 +363,20 @@ fn erasing_validating_destroying() {
         .get_mut(&Name(b"v".to_vec()))
         .unwrap()
         .emplace_with(MISSING_ID, || Value::Number(3.0));
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     assert_eq!(call_on(&mut e, 0x26f0, 0, &[s(b"V")]).1, 2.0);
-    assert_eq!(saved(&mut e).changed, 2);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 2);
     assert!(ids(&mut e, false, 7, b"v")
         .unwrap()
         .get(&MISSING_ID)
         .is_none());
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     assert_eq!(call_on(&mut e, 0x26f0, 0, &[s(b"v")]).1, 2.0);
-    assert_eq!(saved(&mut e).changed, 0, "nothing gone: no flag");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        0,
+        "nothing gone: no flag"
+    );
     // A map of gone forms only: it goes.
     maps(&mut e, false)
         .get_mut(&7)
@@ -376,16 +388,16 @@ fn erasing_validating_destroying() {
     assert!(ids(&mut e, false, 7, b"g").is_none());
     assert!(ids(&mut e, false, 7, b"v").is_some(), "the mod stays");
     // Destroy.
-    saved(&mut e).changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     call_on(&mut e, 0x26a3, 0, &[s(b"v")]);
     assert!(
         maps(&mut e, false).get(&7).is_none(),
         "the last map: the mod goes"
     );
-    assert_eq!(saved(&mut e).changed, 2);
-    saved(&mut e).changed = 0;
+    assert_eq!(crate::cosave::changed_flags(&mut e), 2);
+    crate::cosave::set_changed(&mut e, 0);
     call_on(&mut e, 0x26a3, 0, &[s(b"v")]);
-    assert_eq!(saved(&mut e).changed, 0, "none: no flag");
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0, "none: no flag");
     // Temporary maps: no flag.
     set_flt(&mut e, REF, b"*t", 1.0, None);
     set_flt(&mut e, 0, b"*t", 1.0, Some(3));
@@ -399,7 +411,7 @@ fn erasing_validating_destroying() {
     call_on(&mut e, 0x26f0, 0, &[s(b"*t")]);
     call_on(&mut e, 0x26a3, 0, &[s(b"*t")]);
     assert!(maps(&mut e, true).get(&7).is_none());
-    assert_eq!(saved(&mut e).changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
     // A second map keeps the mod.
     set_flt(&mut e, REF, b"a", 1.0, None);
     set_flt(&mut e, REF, b"b", 1.0, None);
@@ -555,7 +567,7 @@ fn a_loaded_co_save() {
     e.mem.set_u32(chg + 4, 16);
     e.mem.set_u32(chg + 8, chg + 0x100);
     e.mem.set_u32(sl, chg);
-    saved(&mut e).changed = 0x1f;
+    crate::cosave::set_changed(&mut e, 0x1f);
     let mut av = vec![1, 0, 7, 2, 0];
     av.extend_from_slice(&REF_ID.to_le_bytes());
     av.extend_from_slice(&[1, 0, 5]);
