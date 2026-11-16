@@ -262,7 +262,8 @@ fn g10_not_installed_nothing_answers() {
 
 /// G10 installed with the row off: nothing; with the fixes in, each of the three seams answers
 /// JIP's 0x204 (0x203 letters: JIP's `SafeWrite8(0x7753D2, 2)` makes `PUSH 0x104` `PUSH 0x204`),
-/// a different answer from every other GA seam given the same word.
+/// a different answer from every other GA seam given the same word. The handlers alone (before
+/// `FIXES` is set) do not change `corner_message_text_size`: it reads the queue's own bit.
 #[test]
 fn g10_each_seam_answers_jips_text_buffer() {
     let mut e = engine();
@@ -275,4 +276,14 @@ fn g10_each_seam_answers_jips_text_buffer() {
         assert_eq!(e.site(slot.addr(), &[0x104]), Some(0x204));
     }
     assert_eq!(corner_message_text(&mut e, &[0x104]), Some(0x204));
+    assert_eq!(
+        e.jip_patches() & engine_core::extend::jip_patches::FIXES,
+        0,
+        "only the handlers are in"
+    );
+    assert_eq!(
+        corner_message_text_size(&mut e),
+        0x104,
+        "the queue reads FIXES too"
+    );
 }
