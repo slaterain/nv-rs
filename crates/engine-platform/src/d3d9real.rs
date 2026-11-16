@@ -2247,10 +2247,13 @@ pub fn texture_set_lod(e: &mut Engine, texture: u32, lod: u32, model: u32) {
 // Nothing is read or made when `NV_SHOT` is unset; the game's state and the model are not touched.
 // ---------------------------------------------------------------------------------------------
 pub(super) mod shot {
+    #[cfg(windows)]
     use super::*;
     use std::path::PathBuf;
     use std::sync::{Mutex, OnceLock};
-    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant};
+    #[cfg(windows)]
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// The directory and the interval (`NV_SHOT=DIR[,every_ms]`), read once.
     pub(crate) struct Shots {
