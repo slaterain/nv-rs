@@ -307,3 +307,19 @@ pub fn with_jips_slot_held<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) 
     engine_core::extend::release_held_for_test();
     r
 }
+
+/// Runs `f` on `e` while a second engine of the run (a real thread's: `share_slots_for_test`)
+/// holds xNVSE's shared slot. A path that asks for xNVSE's slot stops the test (two engines on
+/// one thread), so `f` finishing shows the path does not take it: a condition evaluated on an AI
+/// thread.
+pub fn with_nvses_slot_held<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    // Shared as `nvse::install` shares it (a test engine may hold it as its own).
+    e.share_ext::<nvse::Nvse>();
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    let _ = other.ext::<nvse::Nvse>();
+    let r = f(e);
+    engine_core::extend::release_held_for_test();
+    r
+}

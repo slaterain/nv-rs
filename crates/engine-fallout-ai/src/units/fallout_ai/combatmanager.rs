@@ -624,9 +624,17 @@ fn in_scope<R>(e: &mut Engine, line: u32, f: impl FnOnce(&mut Engine) -> R) -> R
 }
 
 /// A 0x188-byte block (`00401000`) given to the combat controller constructor with `actor`,
-/// `group` and `flag`; null when the allocation fails.
-fn new_controller(e: &mut Engine, actor: Ptr, group: u32, flag: u32) -> u32 {
-    let block = e.call(OPERATOR_NEW, &args![0x188u32]).u32();
+/// `group` and `flag`; null when the allocation fails. `site` is the size's place in the
+/// caller (`0x9921C2`, `0x992352`, `0x992416`): JIP's H16 (its own) makes the block 0x18C bytes
+/// there (its excluded actions word at +0x188); the seam answers the size (no words). One load
+/// while JIP is not installed.
+fn new_controller(e: &mut Engine, site: u32, actor: Ptr, group: u32, flag: u32) -> u32 {
+    let size = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(site, &[]).unwrap_or(0x188)
+    } else {
+        0x188
+    };
+    let block = e.call(OPERATOR_NEW, &args![size]).u32();
     if block == 0 {
         return 0;
     }
@@ -952,7 +960,7 @@ pub fn combat_manager_add_combatant(
         }
         let group = combat_manager_create_combat_group(e, this);
         e.call(GROUP_ADD_MEMBER, &args![group, actor]);
-        let controller = new_controller(e, actor, group, 0);
+        let controller = new_controller(e, 0x0099_21c2, actor, group, 0);
         if !e.call(GROUP_ADD_TARGET, &args![group, target]).bool() {
             if controller != 0 {
                 e.vcall(controller, 0x10, &args![1u32]);
@@ -980,7 +988,7 @@ pub fn combat_manager_add_group_member(e: &mut Engine, _this: Ptr, actor: Ptr, g
                 e.call(0x0098_6bd0, &args![old]);
             }
         } else if e.call(GROUP_ADD_MEMBER, &args![group, actor]).bool() {
-            controller = new_controller(e, actor, group.addr(), 0);
+            controller = new_controller(e, 0x0099_2352, actor, group.addr(), 0);
         }
         controller
     })
@@ -999,7 +1007,7 @@ pub fn combat_manager_add_pretend_combatant(
 ) -> u32 {
     let group = combat_manager_create_combat_group(e, this);
     e.call(GROUP_ADD_MEMBER, &args![group, actor]);
-    new_controller(e, actor, group, flag)
+    new_controller(e, 0x0099_2416, actor, group, flag)
 }
 
 // Translated from 00992480 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2700,6 +2708,94 @@ mod n023_tests {
             }
         });
         assert_eq!(e.call(0x0099_23d0, &args![m, actor, 3u32]).u32(), 0);
+    }
+
+    thread_local! {
+        /// H16's asks: the site and its words.
+        static H16_ASKED: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    fn at_h16<const SITE: u32>(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H16_ASKED.with(|s| s.borrow_mut().push((SITE, a.to_vec())));
+        Some(0x18c)
+    }
+
+    /// JIP's H16 seams (its own) at `0x9921C2` (`AddCombatant`), `0x992352` (`AddGroupMember`)
+    /// and `0x992416` (`AddPretendCombatant`): not asked while JIP is not installed (the exe's
+    /// 0x188 bytes); asked with JIP installed (whatever the fixes row), each function at its own
+    /// address and with no words, the answer is the controller's size.
+    #[test]
+    fn h16_seams_size_the_controller_at_each_site() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let mut e = Engine::new();
+            controller_doubles(&mut e);
+            e.register(GROUP_ADD_MEMBER, |_, _| 1u32.into_ret());
+            e.register(GROUP_ADD_TARGET, |_, _| 1u32.into_ret());
+            e.register(0x008b_0670, |_, _| 1u32.into_ret());
+            e.on_site(
+                SiteSlot::new(Owner::Jip, 0x0099_21c2),
+                at_h16::<0x0099_21c2>,
+            );
+            e.on_site(
+                SiteSlot::new(Owner::Jip, 0x0099_2352),
+                at_h16::<0x0099_2352>,
+            );
+            e.on_site(
+                SiteSlot::new(Owner::Jip, 0x0099_2416),
+                at_h16::<0x0099_2416>,
+            );
+            e.set_jip_patches(word);
+            let installed = word & jip_patches::INSTALLED != 0;
+            let m = e.mem.alloc(0x40);
+            let group = e.mem.alloc(0x40);
+            let target = e.mem.alloc(4);
+            let sizes = |e: &Engine| -> Vec<u32> {
+                calls(e, OPERATOR_NEW)
+                    .into_iter()
+                    .map(|c| c[0])
+                    .filter(|size| *size == 0x188 || *size == 0x18c)
+                    .collect()
+            };
+            let runs: [(u32, &dyn Fn(&mut Engine, u32)); 3] = [
+                (0x0099_21c2, &|e, actor| {
+                    e.call(0x0099_2110, &args![m, actor, target, 0u32, 0u32]);
+                }),
+                (0x0099_2352, &|e, actor| {
+                    e.call(0x0099_22b0, &args![m, actor, group]);
+                }),
+                (0x0099_2416, &|e, actor| {
+                    e.call(0x0099_23d0, &args![m, actor, 0u32]);
+                }),
+            ];
+            for (site, run) in runs {
+                let actor = object(&mut e, &[0]);
+                H16_ASKED.with(|s| s.borrow_mut().clear());
+                e.call_log = Some(vec![]);
+                run(&mut e, actor);
+                let made = calls(&e, CONTROLLER_CONSTRUCT);
+                assert_eq!(made.len(), 1, "{word:x} {site:x}");
+                assert_eq!(
+                    sizes(&e),
+                    vec![if installed { 0x18c } else { 0x188 }],
+                    "{word:x} {site:x}"
+                );
+                assert_eq!(
+                    H16_ASKED.with(|s| s.take()),
+                    if installed {
+                        vec![(site, vec![])]
+                    } else {
+                        vec![]
+                    },
+                    "{word:x} {site:x}"
+                );
+            }
+        }
     }
 
     #[test]

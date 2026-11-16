@@ -33,7 +33,8 @@ fn ga_seams_are_jips_addresses() {
             0x00c4_4405
         ]
     );
-    assert_eq!(AREA.fix_sites, sites);
+    let corner: Vec<u32> = CORNER_MESSAGE.iter().map(|s| s.addr()).collect();
+    assert_eq!(AREA.fix_sites, [sites, corner].concat());
     assert!(AREA.fix_wraps.is_empty() && AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
 }
 
@@ -240,4 +241,49 @@ fn forms_map(e: &mut Engine) {
     use crate::commands::test_support::{game_globals, FORMS};
     e.map(FORMS, 0x10_0000);
     game_globals(e);
+}
+
+/// G10: JIP's first byte in each of the three functions, rising.
+#[test]
+fn g10_seams_are_jips_addresses() {
+    let sites: Vec<u32> = CORNER_MESSAGE.iter().map(|s| s.addr()).collect();
+    assert_eq!(sites, [0x0077_14da, 0x0077_53b8, 0x0077_57b1]);
+}
+
+/// G10 not installed: nothing answers.
+#[test]
+fn g10_not_installed_nothing_answers() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    for slot in CORNER_MESSAGE {
+        assert_eq!(e.site(slot.addr(), &[0x104]), None);
+    }
+}
+
+/// G10 installed with the row off: nothing; with the fixes in, each of the three seams answers
+/// JIP's 0x204 (0x203 letters: JIP's `SafeWrite8(0x7753D2, 2)` makes `PUSH 0x104` `PUSH 0x204`),
+/// a different answer from every other GA seam given the same word. The handlers alone (before
+/// `FIXES` is set) do not change `corner_message_text_size`: it reads the queue's own bit.
+#[test]
+fn g10_each_seam_answers_jips_text_buffer() {
+    let mut e = engine();
+    crate::install_as(&mut e, true);
+    for slot in CORNER_MESSAGE {
+        assert_eq!(e.site(slot.addr(), &[0x104]), None, "row off");
+    }
+    install_fixes(&mut e);
+    for slot in CORNER_MESSAGE {
+        assert_eq!(e.site(slot.addr(), &[0x104]), Some(0x204));
+    }
+    assert_eq!(corner_message_text(&mut e, &[0x104]), Some(0x204));
+    assert_eq!(
+        e.jip_patches() & engine_core::extend::jip_patches::FIXES,
+        0,
+        "only the handlers are in"
+    );
+    assert_eq!(
+        corner_message_text_size(&mut e),
+        0x104,
+        "the queue reads FIXES too"
+    );
 }

@@ -942,3 +942,45 @@ fn a_real_set_makes_the_next_load_read_the_aux_variables_again() {
         "read again: the reset cleared it"
     );
 }
+
+/// `AuxVarGetFltCond` reads its variable's name (an xNVSE string variable) under the strings' own
+/// lock (`nvse::vars::Strings`), not xNVSE's shared slot: while a second engine of the run (a
+/// real thread's) holds xNVSE's slot it still answers on this engine (asking for the slot here
+/// would be refused: two engines on one thread), as on an AI thread evaluating a package's
+/// condition while the main thread runs a script.
+#[test]
+fn the_condition_answers_while_another_engine_holds_xnvses_slot() {
+    let mut e = setup();
+    set_flt(&mut e, REF, b"Cond", 4.25, &[]);
+    set_flt(&mut e, REF, b"*Tmp", 2.5, &[]);
+    cond_quest(&mut e, &[b"cond", b"*tmp"]);
+    let at = e.mem.u32(nvse::table::record_of(&e, 0x27b1) + 0x20);
+    let answers = crate::test_support::with_nvses_slot_held(&mut e, |e| {
+        let mut out = Vec::new();
+        for var in [5, 6] {
+            e.mem.set_f64(RESULT, 0.5);
+            e.call(at, &[REF, QUEST, var, RESULT]);
+            out.push(e.mem.f64(RESULT));
+        }
+        out
+    });
+    assert_eq!(answers, [4.25, 2.5]);
+}
+
+/// xNVSE's string variables (`nvse::vars::Strings`) are one table for the run: a thread's engine
+/// made right after install (`share_slots_for_test`) reads what the main engine's commands wrote,
+/// and the reverse, without xNVSE's slot.
+#[test]
+fn a_threads_engine_shares_xnvses_strings() {
+    let mut e = setup();
+    // As `nvse::install` makes it, before the threads.
+    e.ext_free::<vars::Strings>();
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    let id = vars::add_string(&mut e, 1, b"main", false);
+    assert_eq!(vars::string(&t, id), Some(b"main".to_vec()));
+    assert!(vars::set_string(&mut t, id, b"thread"));
+    assert_eq!(vars::string(&e, id), Some(b"thread".to_vec()));
+    engine_core::extend::release_held_for_test();
+}

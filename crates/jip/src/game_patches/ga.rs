@@ -1,7 +1,7 @@
 //! Group GA's game patches (step 3.9: UI: HUD, messages, text, start-up INI): its handlers, wraps and slot routines. Only group
 //! GA's PR edits this file (and its own tests file beside it).
 //!
-//! Eight of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
+//! Nine of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
 //! a fix row (in with the row `NV_JIP_GAME_PATCHES`, [`super::set_row`]):
 //! - **G08** "Increase buffer size for GetPrivateProfileString" (`SafeWrite8(0xC44405, 4)`): the
 //!   INI reader's text settings (`INISettingCollection::ReadSetting`, `00c44280`) are read with a
@@ -33,6 +33,24 @@
 //! - **H21** (`InitJIPHooks`: `WriteRelCall(0x7704AE, ClearHUDOrphanedTiles)`): every HUD frame
 //!   (`HUDMainMenu::DoIdle`, `00770430`), the HUD's child tiles whose scene node lost its parent
 //!   are destroyed before the exe's `0x77DA60` runs.
+//!
+//! - **G10** "Increase corner message max text length to 0x203 characters" (16 `SafeWrite8`s, each
+//!   the second byte of a size or an offset of the HUD corner message record, which grows from
+//!   0x310 to 0x410 bytes): the text buffer 0x104 -> 0x204 (the text copy's limit too), the icon
+//!   path `+0x104` -> `+0x204`, the sound name `+0x208` -> `+0x308`, the display time `+0x30C` ->
+//!   `+0x40C`; the icon and sound buffers stay 0x104 (their copies' `PUSH 0x104` are not written).
+//!   Places: `fn_00775380` (`0x7753B8` size, `0x7753D2` text limit, `0x7753EA` time, `0x77540C`,
+//!   `0x775443`, `0x775461`, `0x77547E`, `0x77549C` icon, `0x7754BC`, `0x7754D0` sound, `0x77553C`
+//!   icon tile, `0x775600` the urgent path's time), `DoIdle` (`0x7714DA` time) and `HideMessage`
+//!   (`0x7757B1`, `0x7757D3` sound, `0x77582B` icon tile). One seam per function answers the text
+//!   buffer's size. One layout for a record's whole life: the fixes go in once, before the first
+//!   frame ([`super::set_row`] is read at start-up; nothing takes `FIXES` out of the word); their
+//!   handlers are registered before `FIXES` is set (`put_fixes_in`), and an engine made for a
+//!   thread copies them, so with `FIXES` set every G10 seam answers and every record is built
+//!   and read with the same layout (the HUD's layout code checks it in debug builds). In the
+//!   game a text too long for the buffer fails the copy (`strcpy_s`) and the game ends: above
+//!   259 characters without JIP, above 515 with it. [`corner_message_text_size`] answers the
+//!   same buffer size for `MessageExAlt`.
 //!
 //! Threads: every seam runs on the main thread (the UI, the INI reader); the handlers keep no
 //! state and take no slot.
@@ -66,6 +84,16 @@ pub const CONSOLE_KEY: SiteSlot = SiteSlot::new(Owner::Jip, 0x0070_e5fe);
 /// follows).
 pub const ORPHANED_TILES: SiteSlot = SiteSlot::new(Owner::Jip, 0x0077_04ae);
 
+/// G10's seams (words: the exe's text buffer size 0x104; the answer is the size): `DoIdle`'s
+/// time read, the queueing `fn_00775380`, `HideMessage`'s next record.
+pub const CORNER_MESSAGE: [SiteSlot; 3] = [
+    SiteSlot::new(Owner::Jip, 0x0077_14da),
+    SiteSlot::new(Owner::Jip, 0x0077_53b8),
+    SiteSlot::new(Owner::Jip, 0x0077_57b1),
+];
+/// JIP's corner message text buffer: 0x203 letters and the end.
+pub const CORNER_MESSAGE_TEXT: u32 = 0x204;
+
 /// The group's fix seams in address order.
 pub const FIX_SITES: [SiteSlot; 8] = [
     CONSOLE_KEY,
@@ -90,6 +118,9 @@ pub const AREA: Area = Area {
         FIX_SITES[5].addr(),
         FIX_SITES[6].addr(),
         FIX_SITES[7].addr(),
+        CORNER_MESSAGE[0].addr(),
+        CORNER_MESSAGE[1].addr(),
+        CORNER_MESSAGE[2].addr(),
     ],
     fix_wraps: &[],
     install_fixes,
@@ -99,6 +130,9 @@ pub const AREA: Area = Area {
 };
 
 fn install_fixes(e: &mut Engine) {
+    for site in CORNER_MESSAGE {
+        e.on_site(site, corner_message_text);
+    }
     e.on_site(INI_STRING_BUFFER, ini_string_buffer);
     e.on_site(TRAIT_DESCRIPTION, trait_description);
     e.on_site(MENU_OPEN_BYTE, keep_menu_open_byte);
@@ -212,6 +246,26 @@ fn clear_orphaned_tiles(e: &mut Engine, a: &[u32]) -> Option<u32> {
         e.vcall(child, 0, &args![1u32]);
     }
     Some(0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// ("Increase corner message max text length to 0x203 characters", the 16 SafeWrite8s).
+/// G10: the corner message's text buffer, 0x204 bytes.
+fn corner_message_text(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(CORNER_MESSAGE_TEXT)
+}
+
+/// The HUD queue's text buffer as the queue (`fn_00775380`) will size it: the exe's 0x104, or
+/// what G10's seam at `0x7753B8` answers while JIP's fixes are in (0x204). The same bit and the
+/// same answer the queue reads, so a caller that fits its text to this never fails the copy.
+pub fn corner_message_text_size(e: &mut Engine) -> u32 {
+    const EXE_TEXT: u32 = 0x104;
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(CORNER_MESSAGE[1].addr(), &[EXE_TEXT])
+            .unwrap_or(EXE_TEXT)
+    } else {
+        EXE_TEXT
+    }
 }
 
 #[cfg(test)]
