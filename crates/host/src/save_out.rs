@@ -337,7 +337,7 @@ pub fn known_folders() -> Vec<PathBuf> {
 
 /// The path the system really means: links, junctions, `subst` and short names resolved, a part
 /// that does not exist yet kept after the real path of the longest part that does.
-fn real_path(path: &Path) -> PathBuf {
+pub(crate) fn real_path(path: &Path) -> PathBuf {
     let mut rest = Vec::new();
     let mut at = path.to_path_buf();
     loop {

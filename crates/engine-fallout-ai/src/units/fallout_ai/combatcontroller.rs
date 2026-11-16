@@ -418,7 +418,15 @@ pub fn combat_controller_combat_controller(
     let delay = x87_quiet(e.global(PLAN_TIMER_DELAY));
     e.call(COMBAT_TIMER_START, &args![this.byte_add(0xb4), delay]);
     e.set(this, CombatController::fLowMovementDelta, 0.0);
-    e.call(FILL_BYTES, &args![this.byte_add(0x14c), 0u32, 0x3cu32]);
+    // 0097d55f: JIP's H16 (its own) zeroes 0x40 bytes, its excluded actions word at +0x188 too
+    // (the block is 0x18C bytes with JIP); the seam answers the count (no words). One load while
+    // JIP is not installed.
+    let failed = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0097_d55f, &[]).unwrap_or(0x3c)
+    } else {
+        0x3c
+    };
+    e.call(FILL_BYTES, &args![this.byte_add(0x14c), 0u32, failed]);
 
     e.set(this, CombatController::pAttacker, attacker);
     e.set(this, CombatController::pTarget, Ptr::NULL);
@@ -460,6 +468,13 @@ pub fn combat_controller_combat_controller(
             let attacker = e.get(this, CombatController::pAttacker);
             let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, attacker));
             package = e.vcall(process, 0x22c, &[]).u32();
+        }
+        // 0097d71f: JIP's H16 (its own, InitCombatControllerHook) first sets the excluded
+        // actions word (+0x188) from the attacker argument's entry; the seam is asked with
+        // [attacker, this] and the call below follows whatever it answers (JIP jumps to it).
+        // One load while JIP is not installed.
+        if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            let _ = e.site(0x0097_d71f, &[attacker.addr(), this.addr()]);
         }
         e.call(0x0098_0ae0, &args![this, package]);
     }
@@ -3266,6 +3281,119 @@ mod tests {
         assert!(e.get(other, CombatController::pCombatState).is_null());
         assert!(calls(&log, 0x0099_7600).is_empty());
         assert!(calls(&log, 0x0098_0ae0).is_empty());
+    }
+
+    thread_local! {
+        /// H16's asks at `0x97D55F` / `0x97D71F`: the site, its words and the number of calls
+        /// logged before it.
+        static H16_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>, usize)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_h16_cleared(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let before = e.call_log.as_ref().map_or(0, Vec::len);
+        H16_ASKED.with(|s| s.borrow_mut().push((0x0097_d55f, a.to_vec(), before)));
+        Some(0x40)
+    }
+
+    fn at_h16_init(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let before = e.call_log.as_ref().map_or(0, Vec::len);
+        H16_ASKED.with(|s| s.borrow_mut().push((0x0097_d71f, a.to_vec(), before)));
+        // What JIP's hook writes; the port's handler is the jip crate's.
+        e.mem.set_u32(a[1] + 0x188, 0x24);
+        None
+    }
+
+    /// JIP's H16 seams in the constructor (its own): not asked while JIP is not installed (0x3C
+    /// bytes zeroed at +0x14C); with JIP installed (whatever the fixes row) the count is the
+    /// answer (0x40), and right before the package data call (`00980ae0`, which still follows)
+    /// the seam is asked with [attacker, this]; without an attacker it is not asked.
+    #[test]
+    fn h16_seams_in_the_constructor() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            for with_attacker in [true, false] {
+                let mut e = engine();
+                stubs(
+                    &mut e,
+                    &[
+                        0x0067_07c0,
+                        0x0098_2430,
+                        0x0090_6f60,
+                        0x0063_3c90,
+                        0x0040_1050,
+                        COMBAT_TIMER_START,
+                        FILL_BYTES,
+                        0x0067_0fc0,
+                        0x0098_4f60,
+                        0x0098_0ae0,
+                    ],
+                );
+                stub(&mut e, OPERATOR_NEW, 0x0050_0000);
+                stub(&mut e, 0x0099_7600, 0x0060_0000);
+                e.on_site(SiteSlot::new(Owner::Jip, 0x0097_d55f), at_h16_cleared);
+                e.on_site(SiteSlot::new(Owner::Jip, 0x0097_d71f), at_h16_init);
+                e.set_jip_patches(word);
+                H16_ASKED.with(|s| s.borrow_mut().clear());
+                // JIP's 0x18C bytes, so the word at +0x188 is the block's own.
+                let this: Ptr<CombatController> = Ptr::new(e.mem.alloc(0x18c));
+                let attacker = if with_attacker {
+                    object(&mut e, 0x7100_0000, 0x100)
+                } else {
+                    0
+                };
+                let log = logged(&mut e, |e| {
+                    e.call(0x0097_d3a0, &args![this, attacker, 0x0070_0000u32, 0x55u32]);
+                });
+                let cleared: Vec<Vec<u32>> = calls(&log, FILL_BYTES)
+                    .into_iter()
+                    .filter(|c| c[0] == this.addr() + 0x14c)
+                    .collect();
+                assert_eq!(
+                    cleared,
+                    vec![vec![
+                        this.addr() + 0x14c,
+                        0,
+                        if installed { 0x40 } else { 0x3c }
+                    ]],
+                    "{word:x}"
+                );
+                let asked = H16_ASKED.with(|s| s.take());
+                let package_call = log.iter().position(|c| c.0 == 0x0098_0ae0);
+                let mut expected = Vec::new();
+                if installed {
+                    let fill = log
+                        .iter()
+                        .position(|c| c.0 == FILL_BYTES && c.1[0] == this.addr() + 0x14c)
+                        .unwrap();
+                    expected.push((0x0097_d55f, vec![], fill));
+                    if with_attacker {
+                        expected.push((
+                            0x0097_d71f,
+                            vec![attacker, this.addr()],
+                            package_call.unwrap(),
+                        ));
+                    }
+                }
+                assert_eq!(asked, expected, "{word:x} {with_attacker}");
+                if with_attacker {
+                    assert_eq!(calls(&log, 0x0098_0ae0), vec![vec![this.addr(), 0x55]]);
+                    assert_eq!(
+                        e.mem.u32(this.addr() + 0x188),
+                        if installed { 0x24 } else { 0 },
+                        "{word:x}"
+                    );
+                } else {
+                    assert!(package_call.is_none());
+                }
+            }
+        }
     }
 
     /// Doubles for every callee of the destructor.
