@@ -8,11 +8,30 @@
 //! `Initialize` with that format (measured as `FalloutNV.exe`, 2026-11-03: `S_OK`). A mix format
 //! that is not 32-bit float, or a layout DirectSound does not place 3D buffers on
 //! (`super::speakers::Layout::provided`), is not provided: [`start`] then refuses, named, and
-//! nothing is heard. Windows only; elsewhere [`start`] answers that there is no device.
+//! nothing is heard.
 //!
 //! The thread asks the [`Source`] for as many frames as the device can take each time the device
 //! signals it (event driven, the device's period), so what plays is at most one device buffer
 //! behind what the mixer was asked for.
+//!
+//! **Linux and macOS** (`mod device`, through cpal: ALSA on Linux, which PipeWire and PulseAudio
+//! serve through their ALSA plugins; CoreAudio on macOS). The mixer is the same; only the device
+//! differs. The default output device's default stream gives the rate, as the mix format does on
+//! Windows ([`mix_of`]). These systems name no speaker positions through cpal (and ALSA orders a
+//! 5.1 device's channels otherwise than Windows does), so a device of one or two channels is
+//! mixed for as it is (front centre; front left and right: Windows' rule for a mix format without
+//! a speaker mask), and a larger one is given two channels, which the system spreads as it does
+//! for any stereo program: no surround placement off Windows. Only 32-bit float streams are
+//! opened, as on Windows ([`open_as`]); the system converts to the hardware as Windows' audio
+//! engine does. The device calls back for each period it wants ([`fill`]: the frames it asks for,
+//! straight from the mixer). Differences from the WASAPI arm, all of the system's own choosing:
+//! the period and buffer size are the system's defaults (cpal's `BufferSize::Default`), not
+//! WASAPI's shared-mode period; the callback runs on the system's thread (real-time priority
+//! where the system allows it, cpal's `realtime`), not a thread of this module's at Windows'
+//! "Audio" priority; underruns are counted as the system reports them (ALSA's xruns; CoreAudio
+//! reports none) rather than as wakes that find the device empty; the device stopping answering,
+//! or the default device changing, is named once and the stream is then silent and not pulled,
+//! as on Windows ([`Watch`]).
 
 pub use super::speakers::Layout;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,7 +60,7 @@ pub struct Output {
 /// Why [`start`] opened no stream.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refused {
-    /// No default output device (or not on Windows).
+    /// No default output device (or it would not open).
     NoDevice,
     /// The endpoint's mix format is not provided (named).
     Format(String),
@@ -67,19 +86,23 @@ impl Drop for Output {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(t) = self.thread.take() {
+            // Off Windows the thread holding the stream waits parked ([`device::start`]).
+            #[cfg(not(windows))]
+            t.thread().unpark();
             let _ = t.join();
         }
     }
 }
 
 /// The default output device's mix rate (its shared-mode format, the rate DirectSound mixes at),
-/// asked once on a thread of its own; `None` when there is no device (or not on Windows).
+/// asked once on a thread of its own; `None` when there is no device.
 pub fn device_rate() -> Option<u32> {
     device_mix().map(|(rate, _)| rate)
 }
 
-/// The default output device's mix rate and layout (its shared-mode format), asked once on a
-/// thread of its own; `None` when there is no device (or not on Windows).
+/// The default output device's mix rate and layout (its shared-mode format; off Windows
+/// [`mix_of`] its default stream), asked once on a thread of its own; `None` when there is no
+/// device (off Windows also when its stream is not provided: the reason is said once).
 pub fn device_mix() -> Option<(u32, Layout)> {
     #[cfg(windows)]
     {
@@ -93,7 +116,167 @@ pub fn device_mix() -> Option<(u32, Layout)> {
     }
     #[cfg(not(windows))]
     {
-        None
+        static MIX: std::sync::OnceLock<Option<(u32, Layout)>> = std::sync::OnceLock::new();
+        *MIX.get_or_init(|| std::thread::spawn(device::mix).join().ok().flatten())
+    }
+}
+
+/// What a device off Windows offers by default (cpal's default output stream): its rate and
+/// channel count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Offer {
+    pub rate: u32,
+    pub channels: u16,
+}
+
+/// The mix rate and layout off Windows for a device whose default stream is `offer`, where
+/// `takes(rate, channels)` says whether the device opens a 32-bit float stream so: the device's
+/// own rate; one or two channels as offered, with Windows' layout for a mix format without a
+/// speaker mask ([`Layout::of_mix`]); more channels, whose speakers the system does not name here,
+/// as two (the system spreads them). The reason, for stderr, when there is none.
+pub fn mix_of(offer: Offer, takes: impl Fn(u32, u16) -> bool) -> Result<(u32, Layout), String> {
+    let Offer { rate, channels } = offer;
+    let channels_used = match channels {
+        0 => return Err("the sound device offers a stream of no channels".to_string()),
+        1 | 2 => channels,
+        _ => 2,
+    };
+    if !takes(rate, channels_used) {
+        return Err(if channels_used == channels {
+            format!(
+                "the sound device takes no 32-bit float stream of {channels} channels at {rate} \
+                 Hz: not provided (32-bit float only)"
+            )
+        } else {
+            format!(
+                "the sound device mixes {channels} channels, whose speakers this system does not \
+                 name, and takes no 32-bit float stream of two at {rate} Hz: not provided"
+            )
+        });
+    }
+    Ok((rate, Layout::of_mix(channels_used, None)))
+}
+
+/// The stream opened off Windows on a device that mixes `mix`, for the layout `want` (as the
+/// WASAPI arm: the mix as it is for `None` or the mix's own layout; another layout at the mix
+/// rate when the device takes it, else [`Refused::Layout`]); a mix layout DirectSound does not
+/// place sound on is [`Refused::Format`].
+pub fn open_as(
+    mix: (u32, Layout),
+    want: Option<Layout>,
+    takes: impl Fn(u32, u16) -> bool,
+) -> Result<(u32, Layout), Refused> {
+    let (rate, mix) = mix;
+    if !mix.provided() {
+        return Err(Refused::Format(not_provided(mix)));
+    }
+    match want {
+        Some(l) if l != mix => {
+            if takes(rate, l.channels) {
+                Ok((rate, l))
+            } else {
+                Err(Refused::Layout)
+            }
+        }
+        _ => Ok((rate, mix)),
+    }
+}
+
+/// One period for the device off Windows: `out` (interleaved, `channels` per frame) zeroed, the
+/// mixer's frames as it renders them, or silence when the device is muted ([`mute_device`]).
+pub fn fill(source: &Mutex<dyn Source>, rate: u32, channels: u16, out: &mut [f32], muted: bool) {
+    out.fill(0.0);
+    if let Ok(mut s) = source.lock() {
+        s.render(rate, channels, out);
+    }
+    if muted {
+        out.fill(0.0);
+    }
+}
+
+/// What the system says about a running stream off Windows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Event {
+    /// The device ran out of frames (an underrun).
+    Underrun,
+    /// The device stopped answering (unplugged, disabled; the stream is gone).
+    Lost(String),
+    /// The default device changed under the stream.
+    Changed,
+    /// The system refused the device thread real-time priority.
+    NoRealtime,
+    /// Anything else, named.
+    Other(String),
+}
+
+/// What [`Watch::on`] makes of an [`Event`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reaction {
+    /// Nothing to do.
+    None,
+    /// Tell the source of its `n`th underrun ([`Source::starved`]).
+    Starved(u64),
+    /// Say this on stderr.
+    Say(String),
+    /// Say this, and from now on give the device silence without pulling the mixer (the WASAPI
+    /// arm's rule for a device that stopped answering).
+    Lose(String),
+}
+
+/// A stream's events off Windows, as the WASAPI arm treats its device's answers: underruns
+/// counted once the first frames were given (the stream starts empty); the device lost said
+/// once (a changed default device is lost too: WASAPI's stream is invalidated then); other
+/// errors said once each kind.
+#[derive(Debug, Default)]
+pub struct Watch {
+    starved: u64,
+    lost: bool,
+    said_realtime: bool,
+    said_other: bool,
+}
+
+impl Watch {
+    /// The reaction to `e`, after the device was (`given`) or was not yet given frames.
+    pub fn on(&mut self, e: Event, given: bool) -> Reaction {
+        match e {
+            Event::Underrun if given && !self.lost => {
+                self.starved += 1;
+                Reaction::Starved(self.starved)
+            }
+            Event::Underrun => Reaction::None,
+            Event::Lost(_) | Event::Changed if self.lost => Reaction::None,
+            Event::Lost(why) => {
+                self.lost = true;
+                Reaction::Lose(format!(
+                    "sound: the sound device stopped answering ({why}: unplugged or disabled?); \
+                     this stream is not heard any more"
+                ))
+            }
+            Event::Changed => {
+                self.lost = true;
+                Reaction::Lose(
+                    "sound: the default sound device changed; this stream is not heard any more \
+                     (as on Windows, it is not opened again)"
+                        .to_string(),
+                )
+            }
+            Event::NoRealtime if self.said_realtime => Reaction::None,
+            Event::NoRealtime => {
+                self.said_realtime = true;
+                Reaction::Say(
+                    "sound: the system refused the sound thread real-time priority; it runs at \
+                     normal priority (busy processors may make the sound skip)"
+                        .to_string(),
+                )
+            }
+            Event::Other(_) if self.said_other => Reaction::None,
+            Event::Other(why) => {
+                self.said_other = true;
+                Reaction::Say(format!(
+                    "sound: the sound device reports: {why} (further reports not shown)"
+                ))
+            }
+        }
     }
 }
 
@@ -155,8 +338,7 @@ pub fn start(source: Arc<Mutex<dyn Source>>, want: Option<Layout>) -> Result<Out
     }
     #[cfg(not(windows))]
     {
-        let _ = (source, want);
-        Err(Refused::NoDevice)
+        device::start(source, want)
     }
 }
 
@@ -180,6 +362,143 @@ pub fn float_format(rate: u32, layout: Layout) -> [u8; 40] {
         3, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71,
     ]);
     f
+}
+
+/// The default output device off Windows, through cpal ([`mix_of`], [`open_as`], [`fill`],
+/// [`Watch`] decide; this only asks the system and hands over).
+#[cfg(not(windows))]
+mod device {
+    use super::*;
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+    /// Whether `device` opens a 32-bit float stream at a rate with a channel count.
+    fn takes(device: &cpal::Device) -> impl Fn(u32, u16) -> bool {
+        let ranges: Vec<cpal::SupportedStreamConfigRange> = device
+            .supported_output_configs()
+            .map(|c| c.collect())
+            .unwrap_or_default();
+        move |rate, channels| {
+            ranges.iter().any(|r| {
+                r.sample_format() == cpal::SampleFormat::F32
+                    && r.channels() == channels
+                    && (r.min_sample_rate()..=r.max_sample_rate()).contains(&rate)
+            })
+        }
+    }
+
+    /// The default device, its offer and what it takes.
+    fn default_device() -> Option<(cpal::Device, Offer)> {
+        let device = cpal::default_host().default_output_device()?;
+        let c = device.default_output_config().ok()?;
+        let offer = Offer {
+            rate: c.sample_rate(),
+            channels: c.channels(),
+        };
+        Some((device, offer))
+    }
+
+    /// [`super::device_mix`]'s answer.
+    pub fn mix() -> Option<(u32, Layout)> {
+        let (device, offer) = default_device()?;
+        match mix_of(offer, takes(&device)) {
+            Ok(m) => Some(m),
+            Err(why) => {
+                eprintln!("sound: {why}");
+                None
+            }
+        }
+    }
+
+    fn event(e: cpal::Error) -> Event {
+        use cpal::ErrorKind as K;
+        match e.kind() {
+            K::Xrun => Event::Underrun,
+            K::DeviceNotAvailable | K::StreamInvalidated => Event::Lost(e.to_string()),
+            K::DeviceChanged => Event::Changed,
+            K::RealtimeDenied => Event::NoRealtime,
+            _ => Event::Other(e.to_string()),
+        }
+    }
+
+    /// Opens the stream and starts it; the stream lives on the calling thread.
+    fn open(
+        source: Arc<Mutex<dyn Source>>,
+        want: Option<Layout>,
+    ) -> Result<(cpal::Stream, u32, Layout), Refused> {
+        let (device, offer) = default_device().ok_or(Refused::NoDevice)?;
+        let takes = takes(&device);
+        let mix = mix_of(offer, &takes).map_err(Refused::Format)?;
+        let (rate, layout) = open_as(mix, want, &takes)?;
+        let channels = layout.channels;
+        let given = Arc::new(AtomicBool::new(false));
+        let lost = Arc::new(AtomicBool::new(false));
+        let (given_cb, lost_cb, source_cb) = (given.clone(), lost.clone(), source.clone());
+        let data = move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            if lost_cb.load(Ordering::Relaxed) {
+                out.fill(0.0);
+                return;
+            }
+            fill(&*source_cb, rate, channels, out, MUTED.load(Ordering::Relaxed));
+            given_cb.store(true, Ordering::Relaxed);
+        };
+        let mut watch = Watch::default();
+        let error = move |e: cpal::Error| match watch.on(event(e), given.load(Ordering::Relaxed)) {
+            Reaction::None => {}
+            Reaction::Starved(n) => {
+                if let Ok(mut s) = source.lock() {
+                    s.starved(n);
+                }
+            }
+            Reaction::Say(why) => eprintln!("{why}"),
+            Reaction::Lose(why) => {
+                lost.store(true, Ordering::Relaxed);
+                eprintln!("{why}");
+            }
+        };
+        let config = cpal::StreamConfig {
+            channels,
+            sample_rate: rate,
+            buffer_size: cpal::BufferSize::Default,
+        };
+        let stream = device
+            .build_output_stream::<f32, _, _>(config, data, error, None)
+            .map_err(|e| match e.kind() {
+                cpal::ErrorKind::UnsupportedConfig => Refused::Layout,
+                _ => Refused::NoDevice,
+            })?;
+        stream.play().map_err(|_| Refused::NoDevice)?;
+        Ok((stream, rate, layout))
+    }
+
+    /// [`super::start`]: the stream opened on a thread of its own, which holds it until the
+    /// [`Output`] is dropped (the device calls back on the system's thread).
+    pub fn start(source: Arc<Mutex<dyn Source>>, want: Option<Layout>) -> Result<Output, Refused> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let flag = stop.clone();
+        let thread = std::thread::Builder::new()
+            .name("nv sound out".into())
+            .spawn(move || match open(source, want) {
+                Ok((stream, rate, layout)) => {
+                    let _ = tx.send(Ok((rate, layout)));
+                    while !flag.load(Ordering::Relaxed) {
+                        std::thread::park_timeout(std::time::Duration::from_millis(200));
+                    }
+                    drop(stream);
+                }
+                Err(why) => {
+                    let _ = tx.send(Err(why));
+                }
+            })
+            .map_err(|_| Refused::NoDevice)?;
+        let (rate, layout) = rx.recv().map_err(|_| Refused::NoDevice)??;
+        Ok(Output {
+            stop,
+            thread: Some(thread),
+            rate,
+            layout,
+        })
+    }
 }
 
 #[cfg(windows)]
@@ -567,5 +886,123 @@ mod wasapi {
         slot::<Fn0>(d.render, 2 * w)(d.render);
         slot::<Fn0>(d.client, 2 * w)(d.client);
         CloseHandle(d.event);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A device that takes 32-bit float streams of these channel counts at these rates.
+    fn takes(ok: &'static [(u32, u16)]) -> impl Fn(u32, u16) -> bool {
+        move |rate, channels| ok.contains(&(rate, channels))
+    }
+
+    /// Off Windows the device's own rate and channels decide the mix: one or two channels as
+    /// offered (Windows' layout for a mix format without a mask), more as two, never another
+    /// rate; a stream the device does not take in 32-bit float is refused, named.
+    #[test]
+    fn the_device_offer_decides_the_mix() {
+        let offer = |rate, channels| Offer { rate, channels };
+        let all = takes(&[(48000, 1), (48000, 2), (44100, 2), (96000, 2), (96000, 6)]);
+        assert_eq!(mix_of(offer(48000, 2), &all), Ok((48000, Layout::STEREO)));
+        assert_eq!(mix_of(offer(44100, 2), &all), Ok((44100, Layout::STEREO)));
+        assert_eq!(mix_of(offer(48000, 1), &all), Ok((48000, Layout::MONO)));
+        // Six channels whose speakers are not named: two, at the device's own rate.
+        assert_eq!(mix_of(offer(96000, 6), &all), Ok((96000, Layout::STEREO)));
+        // Not taken in float (or not at all): refused, saying why.
+        let why = mix_of(offer(22050, 2), &all).unwrap_err();
+        assert!(why.contains("32-bit float") && why.contains("22050"), "{why}");
+        let none = takes(&[(48000, 8)]);
+        let why = mix_of(offer(48000, 8), &none).unwrap_err();
+        assert!(why.contains("8 channels") && why.contains("two"), "{why}");
+        assert!(mix_of(offer(48000, 0), &all).is_err());
+    }
+
+    /// The stream opens as the WASAPI arm's does: the mix as it is, another layout only when the
+    /// device takes it (else `Layout`, so DirectSound's device locks to the mix), a layout
+    /// DirectSound does not place sound on refused as a format.
+    #[test]
+    fn the_stream_opens_as_on_windows() {
+        let stereo_only = takes(&[(48000, 2)]);
+        let both = takes(&[(48000, 1), (48000, 2)]);
+        let stereo = (48000, Layout::STEREO);
+        let mono = (48000, Layout::MONO);
+        assert_eq!(open_as(stereo, None, &stereo_only), Ok(stereo));
+        assert_eq!(
+            open_as(stereo, Some(Layout::STEREO), &stereo_only),
+            Ok(stereo)
+        );
+        assert_eq!(open_as(mono, Some(Layout::STEREO), &both), Ok(stereo));
+        assert_eq!(
+            open_as(mono, Some(Layout::STEREO), &takes(&[(48000, 1)])),
+            Err(Refused::Layout)
+        );
+        let odd = (
+            48000,
+            Layout {
+                channels: 3,
+                mask: 0x3,
+            },
+        );
+        assert!(matches!(
+            open_as(odd, None, &both),
+            Err(Refused::Format(_))
+        ));
+    }
+
+    /// A source that writes a ramp.
+    #[derive(Default)]
+    struct Ramp {
+        asked: Vec<(u32, u16, usize)>,
+    }
+
+    impl Source for Ramp {
+        fn render(&mut self, rate: u32, channels: u16, out: &mut [f32]) {
+            assert!(out.iter().all(|&s| s == 0.0), "given a zeroed period");
+            self.asked.push((rate, channels, out.len()));
+            for (i, s) in out.iter_mut().enumerate() {
+                *s = i as f32 + 1.0;
+            }
+        }
+    }
+
+    /// Each period the device asks for is the mixer's frames as they are (or silence when
+    /// muted, the mixer still pulled).
+    #[test]
+    fn a_period_is_the_mixers_frames() {
+        let ramp = Arc::new(Mutex::new(Ramp::default()));
+        let source: Arc<Mutex<dyn Source>> = ramp.clone();
+        let mut out = [9.0f32; 6];
+        fill(&source, 44100, 2, &mut out, false);
+        assert_eq!(out, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        let mut out = [9.0f32; 4];
+        fill(&source, 44100, 2, &mut out, true);
+        assert_eq!(out, [0.0; 4]);
+        assert_eq!(ramp.lock().unwrap().asked, [(44100, 2, 6), (44100, 2, 4)]);
+    }
+
+    /// Underruns count once frames were given; a lost device (or a changed default device) is
+    /// said once and silences the stream; other reports are said once.
+    #[test]
+    fn the_device_reports_as_on_windows() {
+        let mut w = Watch::default();
+        assert_eq!(w.on(Event::Underrun, false), Reaction::None);
+        assert_eq!(w.on(Event::Underrun, true), Reaction::Starved(1));
+        assert_eq!(w.on(Event::Underrun, true), Reaction::Starved(2));
+        assert!(matches!(w.on(Event::NoRealtime, true), Reaction::Say(_)));
+        assert_eq!(w.on(Event::NoRealtime, true), Reaction::None);
+        assert!(matches!(w.on(Event::Other("x".into()), true), Reaction::Say(s) if s.contains('x')));
+        assert_eq!(w.on(Event::Other("y".into()), true), Reaction::None);
+        assert!(
+            matches!(w.on(Event::Lost("gone".into()), true), Reaction::Lose(s) if s.contains("gone"))
+        );
+        assert_eq!(w.on(Event::Lost("gone".into()), true), Reaction::None);
+        assert_eq!(w.on(Event::Changed, true), Reaction::None);
+        // Once lost, no more underruns are counted.
+        assert_eq!(w.on(Event::Underrun, true), Reaction::None);
+        let mut w = Watch::default();
+        assert!(matches!(w.on(Event::Changed, true), Reaction::Lose(_)));
+        assert_eq!(w.on(Event::Lost("gone".into()), true), Reaction::None);
     }
 }
