@@ -522,7 +522,7 @@ fn aux_variables() {
         .u16(1)
         .bytes(&text(b"gone"))
         .0;
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 10, data)]));
     let expect = Out::default()
         .u16(2)
@@ -551,10 +551,10 @@ fn aux_variables() {
     // stays. A record older than version 10 is not read either (the data is cleared) and is
     // carried as it was.
     let before = written(&mut w.e);
-    s(&mut w.e).changed = changed::REF_MAPS;
+    crate::cosave::set_changed(&mut w.e, changed::REF_MAPS);
     load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 10, Vec::new())]));
     assert_eq!(written(&mut w.e), before, "not changed: kept, not read");
-    s(&mut w.e).changed = changed::AUX_VARS;
+    crate::cosave::set_changed(&mut w.e, changed::AUX_VARS);
     let old = Out::default().u16(0).u8(0xab).0;
     load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 9, old.clone())]));
     assert_eq!(
@@ -562,7 +562,7 @@ fn aux_variables() {
         [chunk(kind::AUX_VARS, 9, old)],
         "cleared, the old version carried, not read"
     );
-    assert!(s(&mut w.e).aux_vars.is_empty());
+    assert!(crate::commands::jip_fn_aux_variable::aux_maps(&mut w.e, false).is_empty());
 }
 
 /// `JPRM`: by mod, name and reference; a reference neither loaded nor changed goes; written in
@@ -589,7 +589,7 @@ fn ref_maps() {
         .u16(1)
         .bytes(b"z")
         .0;
-    s(&mut w.e).changed = changed::REF_MAPS;
+    crate::cosave::set_changed(&mut w.e, changed::REF_MAPS);
     load_file(&mut w.e, &cosave(&[chunk(kind::REF_MAPS, 10, data)]));
     // Ids in a map of 4 buckets (room for 3 references), worked out by hand from `HashKey`:
     // 0x06000001 hashes to 0x4E000C0D (bucket 1), 0x06000002 to 0x4E000C1A (bucket 2).
@@ -655,7 +655,7 @@ fn extra_data_in_both_formats() {
         let mut w = World::new();
         w.changed(0x0700_0010);
         set_johnny_guitar_fixes(&mut w.e, jg);
-        s(&mut w.e).changed = changed::ALL;
+        crate::cosave::set_changed(&mut w.e, changed::ALL);
         load_file(
             &mut w.e,
             &cosave(&[chunk(kind::EXTRA_DATA, version, body(per_mod))]),
@@ -666,13 +666,13 @@ fn extra_data_in_both_formats() {
             "jg {jg}"
         );
         // The other format is not read, and is carried as it was.
-        s(&mut w.e).changed = changed::ALL;
+        crate::cosave::set_changed(&mut w.e, changed::ALL);
         let other = 3 - version;
         load_file(
             &mut w.e,
             &cosave(&[chunk(kind::EXTRA_DATA, other, body(per_mod))]),
         );
-        assert!(s(&mut w.e).extra_data.is_empty(), "jg {jg}");
+        assert!(crate::cosave::extra_data(&mut w.e).is_empty(), "jg {jg}");
         assert_eq!(
             written(&mut w.e),
             [chunk(kind::EXTRA_DATA, other, body(per_mod))],
@@ -683,9 +683,12 @@ fn extra_data_in_both_formats() {
     let mut w = World::new();
     w.changed(0x0700_0010);
     w.file(3, 0xff);
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, 1, body(5))]));
-    let entry = s(&mut w.e).extra_data.get(&Uint(0x55)).cloned().unwrap();
+    let entry = crate::cosave::extra_data(&mut w.e)
+        .get(&Uint(0x55))
+        .cloned()
+        .unwrap();
     let data = &entry.data[&6];
     assert_eq!((data.used, data.forms, data.values[1]), (0b101, 0, 0));
     assert_eq!(data.save_size(), 8 + 12);
@@ -702,7 +705,7 @@ fn a_skipped_extra_data_key() {
         let mut w = World::new();
         w.changed(0x0700_0020);
         set_johnny_guitar_fixes(&mut w.e, jg);
-        s(&mut w.e).changed = changed::ALL;
+        crate::cosave::set_changed(&mut w.e, changed::ALL);
         let size = per_mod + 12;
         let data = Out::default()
             .u32(2)
@@ -711,11 +714,61 @@ fn a_skipped_extra_data_key() {
             .0;
         load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, version, data)]));
         assert_eq!(
-            s(&mut w.e).extra_data.get(&Uint(2)).is_some(),
+            crate::cosave::extra_data(&mut w.e).get(&Uint(2)).is_some(),
             second_read,
             "jg {jg}"
         );
     }
+}
+
+/// `JPED` round trip with texts as `SetRefExtraData` keeps them (JIP's `XString`: up to the first
+/// zero byte, a 16-bit length): a text given 0x10005 bytes and one with a zero byte inside are
+/// saved with lengths that match their bytes, and the key after them loads as it was.
+#[test]
+fn extra_data_texts_round_trip_with_the_keys_after_them() {
+    let text = crate::commands::jip_fn_extra_data::jip_text;
+    let mut w = World::new();
+    w.changed(0x0700_0010);
+    w.changed(0x0700_0020);
+    let first = ExtraJipData {
+        used: 1,
+        values: [7; 18],
+        strings: [text(vec![b'a'; 0x1_0005]), text(b"x\0yz".to_vec())],
+        ..ExtraJipData::default()
+    };
+    let second = ExtraJipData {
+        used: 0b11,
+        forms: 0,
+        values: [9; 18],
+        strings: [text(b"Doc".to_vec()), Vec::new()],
+    };
+    for (key, id, m, data) in [
+        (1u32, 0x0700_0010u32, 6u32, &first),
+        (2, 0x0700_0020, 7, &second),
+    ] {
+        let mut map = crate::cosave::extra_data(&mut w.e);
+        let entry = map.emplace(Uint(key));
+        entry.ref_id = id;
+        entry.data.insert(m, data.clone());
+    }
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
+    let file = cosave(&written(&mut w.e));
+    crate::cosave::extra_data(&mut w.e).clear();
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
+    load_file(&mut w.e, &file);
+    let entry = |w: &mut World, key: u32| {
+        crate::cosave::extra_data(&mut w.e)
+            .get(&Uint(key))
+            .cloned()
+            .unwrap()
+    };
+    let one = entry(&mut w, 1);
+    assert_eq!(one.data[&6].strings, [b"aaaaa".to_vec(), b"x".to_vec()]);
+    assert_eq!(one.ref_id, 0x0700_0010);
+    let two = entry(&mut w, 2);
+    assert_eq!(two.ref_id, 0x0700_0020);
+    assert_eq!(two.data[&7].strings[0], b"Doc");
+    assert_eq!((two.data[&7].used, two.data[&7].values[1]), (0b11, 9));
 }
 
 /// `JPLR`: kept for two loaded references from a loaded file, not for a reference whose linked
@@ -747,7 +800,7 @@ fn linked_references() {
         .u8(0xfe)
         .0;
     w.file(0xfe, 0xff);
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &cosave(&[chunk(kind::LINKED_REFS, 9, data)]));
     let expect = Out::default()
         .u16(1)
@@ -900,7 +953,7 @@ fn npc_perks() {
         .u32(0x0600_0011)
         .u8(1)
         .0;
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(
         &mut w.e,
         &cosave(&[chunk(kind::NPC_PERKS, 10, data.clone())]),
@@ -912,7 +965,7 @@ fn npc_perks() {
         "no patch: carried as it was"
     );
     set_npc_perks_patch(&mut w.e, true);
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &cosave(&[chunk(kind::NPC_PERKS, 10, data)]));
     let expect = Out::default()
         .u16(1)
@@ -958,7 +1011,10 @@ fn what_a_load_reads_again() {
         .0;
     tell(&mut w, msg::PRE_LOAD_GAME, b"Save 1");
     assert_eq!(
-        (s(&mut w.e).changed, &s(&mut w.e).last_path[..]),
+        (
+            crate::cosave::changed_flags(&mut w.e),
+            &s(&mut w.e).last_path[..]
+        ),
         (changed::ALL, &b"Save 1"[..])
     );
     load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 10, aux.clone())]));
@@ -971,7 +1027,7 @@ fn what_a_load_reads_again() {
             len: 1,
         },
     );
-    assert_eq!(s(&mut w.e).changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut w.e), 0);
     assert_eq!(written(&mut w.e).len(), 1);
     // The same save again: nothing changed, the aux variables are not read again (an empty
     // record would clear them if it were).
@@ -980,11 +1036,14 @@ fn what_a_load_reads_again() {
     assert_eq!(written(&mut w.e).len(), 1);
     tell(&mut w, msg::SAVE_GAME, b"Save 2");
     assert_eq!(
-        (s(&mut w.e).changed, &s(&mut w.e).last_path[..]),
+        (
+            crate::cosave::changed_flags(&mut w.e),
+            &s(&mut w.e).last_path[..]
+        ),
         (0, &b"Save 2"[..])
     );
     tell(&mut w, msg::PRE_LOAD_GAME, b"Save 1");
-    assert_eq!(s(&mut w.e).changed, changed::ALL);
+    assert_eq!(crate::cosave::changed_flags(&mut w.e), changed::ALL);
     tell(&mut w, msg::EXIT_TO_MAIN_MENU, b"");
     assert!(written(&mut w.e).is_empty());
     assert!(s(&mut w.e).last_path.is_empty());
@@ -1074,12 +1133,12 @@ fn records_nv_rs_does_not_read_are_carried() {
         chunk(u32::from_le_bytes(*b"ABCD"), 1, vec![1, 2, 3]),
     ];
     let mut w = World::new();
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &cosave(&chunks));
     assert_eq!(saved_chunks(&mut w.e), chunks);
     assert_eq!(section(&saved_chunks(&mut w.e)), section(&chunks));
     // The same save again, nothing changed.
-    s(&mut w.e).changed = 0;
+    crate::cosave::set_changed(&mut w.e, 0);
     load_file(&mut w.e, &cosave(&chunks));
     assert_eq!(saved_chunks(&mut w.e), chunks, "loaded again");
     listen(
@@ -1149,7 +1208,7 @@ fn extra_data_bits_past_the_values() {
         .0;
     let mut w = World::new();
     w.changed(0x0700_0010);
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, 1, data)]));
     // Index 0 alone is left: a head of 12 bytes (the two words and one value), the key's size
     // as JIP counts it (5 for the mod's header, which is 9 bytes) 5 + 12.
@@ -1176,7 +1235,7 @@ fn extra_data_bits_past_the_values() {
 #[test]
 fn damaged_records_end_the_read() {
     let mut w = World::new();
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     let absurd = [
         chunk(
             kind::EXTRA_DATA,
@@ -1187,7 +1246,7 @@ fn damaged_records_end_the_read() {
         chunk(kind::NPC_PERKS, 10, Out::default().u16(u16::MAX).u32(5).0),
     ];
     load_file(&mut w.e, &cosave(&absurd));
-    assert!(s(&mut w.e).extra_data.is_empty());
+    assert!(crate::cosave::extra_data(&mut w.e).is_empty());
     assert!(s(&mut w.e).script_vars.is_empty());
     // A record after `JPGF` whose length says 0x7FFFFFF0 bytes.
     let flags = chunk(
@@ -1198,7 +1257,7 @@ fn damaged_records_end_the_read() {
     let mut file = cosave(&[flags.clone(), chunk(kind::AUX_VARS, 10, vec![0; 4])]);
     let at = file.len() - 4 - 4;
     file[at..at + 4].copy_from_slice(&0x7fff_fff0u32.to_le_bytes());
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &file);
     assert_eq!(
         saved_chunks(&mut w.e),
@@ -1207,7 +1266,7 @@ fn damaged_records_end_the_read() {
     );
     // The same file cut in the middle of its second record.
     let full = cosave(&[flags.clone(), chunk(kind::AUX_VARS, 10, vec![0; 8])]);
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &full[..full.len() - 3]);
     assert_eq!(saved_chunks(&mut w.e), [flags], "truncated");
 }
@@ -1240,7 +1299,7 @@ fn linked_references_set_when_installed() {
         .u32(0x0600_0002)
         .u8(6)
         .0;
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &cosave(&[chunk(kind::LINKED_REFS, 9, data)]));
     assert_eq!(w.e.mem.u32(a + 0x60 + 0xc), b);
     assert_eq!(w.e.mem.u32(c + 0x60 + 0xc), 0);
@@ -1259,7 +1318,7 @@ fn linked_references_set_when_installed() {
     assert!(crate::commands::jip_fn_linked_ref::set_linked_ref(
         &mut w.e, d, b, 6
     ));
-    s(&mut w.e).changed = changed::LINKED_REFS;
+    crate::cosave::set_changed(&mut w.e, changed::LINKED_REFS);
     let to = |e: &mut Engine, kind: u32, data: u32| listen(e, &Message { kind, data, len: 0 });
     to(&mut w.e, msg::POST_LOAD_GAME, 1);
     assert_eq!(w.e.mem.u32(d + 0x60 + 0xc), c, "restored after the load");
@@ -1290,4 +1349,181 @@ fn a_load_and_the_main_menu_clear_the_players_killer() {
         );
         assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0, "{kind}");
     }
+}
+
+/// A destructor on another thread erasing what a loader is putting in, between the loader's read
+/// of an entry and its one take that puts it in (`BETWEEN_TAKES`, here: both maps cleared each
+/// time), only loses what it erased: the rest of the `JPAV` and `JPED` records is still read
+/// (the later owner and the later key are there with their data).
+#[test]
+fn an_erase_between_a_loaders_takes_leaves_the_rest_of_the_record() {
+    let mut w = World::new();
+    w.changed(0x0700_0010);
+    w.changed(0x0700_0011);
+    let aux = Out::default()
+        .u16(1)
+        .u8(6)
+        .u16(2)
+        .u32(0x0700_0010)
+        .u16(1)
+        .name(b"A")
+        .u16(1)
+        .u8(1)
+        .u64(1)
+        .u32(0x0700_0011)
+        .u16(1)
+        .name(b"B")
+        .u16(1)
+        .u8(1)
+        .u64(2)
+        .0;
+    let key = |key: u32, id: u32, v: u32| {
+        let m = extra_mod(6, 0b1, 0, &[v], [b"", b""]);
+        Out::default()
+            .u32(key)
+            .u32(id)
+            .u8(1)
+            .u32(5 + 8 + 4)
+            .bytes(&m)
+            .0
+    };
+    let mut extra = Out::default().u32(2).0;
+    extra.extend(key(0x55, 0x0700_0010, 7));
+    extra.extend(key(0x56, 0x0700_0011, 9));
+    fn erase(e: &mut Engine) {
+        crate::commands::jip_fn_aux_variable::aux_maps(e, false).clear();
+        crate::cosave::extra_data(e).clear();
+    }
+    // One record per load: the step clears both maps, so each record is checked after its own.
+    crate::cosave::BETWEEN_TAKES.with(|h| h.set(Some(erase)));
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
+    load_file(&mut w.e, &cosave(&[chunk(kind::AUX_VARS, 10, aux)]));
+    {
+        let maps = crate::commands::jip_fn_aux_variable::aux_maps(&mut w.e, false);
+        let owners = maps.get(&6).expect("the mod");
+        assert!(owners.get(&0x0700_0010).is_none(), "the first owner erased");
+        assert!(
+            owners.get(&0x0700_0011).is_some(),
+            "the later owner still read"
+        );
+    }
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
+    load_file(&mut w.e, &cosave(&[chunk(kind::EXTRA_DATA, 1, extra)]));
+    crate::cosave::BETWEEN_TAKES.with(|h| h.set(None));
+    let data = crate::cosave::extra_data(&mut w.e);
+    assert!(data.get(&Uint(0x55)).is_none(), "the first key erased");
+    assert!(data.get(&Uint(0x56)).is_some(), "the later key still read");
+}
+
+/// The load reads `s_dataChangedFlags` whole: bits only its lock-free half holds (set through
+/// `mark_changed`, the entry point the aux variable commands, the reference destructor and the
+/// ExtraJIP routines use, here on a second engine of the run, as a loader or AI thread's) make the
+/// same save's next load read those records again: the session holds the second file's data.
+#[test]
+fn a_load_reads_again_what_only_the_lock_free_half_marked() {
+    let mut w = World::new();
+    w.form(0x14, 0x3b, true);
+    w.changed(0x0700_0010);
+    // The lock-free slots as install makes them (this world installs no JIP).
+    crate::cosave::install_unlocked(&mut w.e);
+    let mut t = Engine::new_untyped_for_test();
+    w.e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    let text = 0x0500_a000;
+    let tell = |w: &mut World, kind: u32, name: &[u8]| {
+        for (i, b) in name.iter().enumerate() {
+            w.e.mem.set_u8(text + i as u32, *b);
+        }
+        listen(
+            &mut w.e,
+            &Message {
+                kind,
+                data: if kind == msg::POST_LOAD_GAME { 1 } else { text },
+                len: name.len() as u32,
+            },
+        );
+    };
+    let aux = |v: u64| {
+        Out::default()
+            .u16(1)
+            .u8(6)
+            .u16(1)
+            .u32(0x14)
+            .u16(1)
+            .name(b"V")
+            .u16(1)
+            .u8(1)
+            .u64(v)
+            .0
+    };
+    let extra = |v: u32| {
+        let m = extra_mod(6, 0b1, 0, &[v], [b"", b""]);
+        Out::default()
+            .u32(1)
+            .u32(0x55)
+            .u32(0x0700_0010)
+            .u8(1)
+            .u32(5 + 8 + 4)
+            .bytes(&m)
+            .0
+    };
+    let file = |a: u64, x: u32| {
+        cosave(&[
+            chunk(kind::AUX_VARS, 10, aux(a)),
+            chunk(kind::EXTRA_DATA, 1, extra(x)),
+        ])
+    };
+    tell(&mut w, msg::PRE_LOAD_GAME, b"Save 1");
+    load_file(&mut w.e, &file(1, 7));
+    tell(&mut w, msg::POST_LOAD_GAME, b"");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut w.e),
+        0,
+        "both halves clear"
+    );
+    crate::commands::jip_fn_aux_variable::mark_changed(&mut t, changed::AUX_VARS);
+    crate::cosave::mark_changed(&mut t, changed::EXTRA_DATA);
+    engine_core::extend::release_held_for_test();
+    tell(&mut w, msg::PRE_LOAD_GAME, b"Save 1");
+    load_file(&mut w.e, &file(2, 9));
+    assert_eq!(
+        written(&mut w.e),
+        [
+            chunk(kind::AUX_VARS, 10, aux(2)),
+            chunk(kind::EXTRA_DATA, 1, extra(9))
+        ],
+        "the second file's data"
+    );
+}
+
+/// The saved bytes do not depend on which engine of the run wrote the data: aux variables and
+/// an ExtraJIP entry written through a thread's engine and saved on the main one give the bytes
+/// the same writes made on the main engine alone give.
+#[test]
+fn data_written_on_a_threads_engine_saves_the_same_bytes() {
+    let write = |e: &mut Engine| {
+        crate::commands::jip_fn_aux_variable::aux_maps(e, false)
+            .emplace(6)
+            .emplace(0x14)
+            .emplace(Name(b"V".to_vec()))
+            .push(Value::Number(1.5));
+        *crate::cosave::extra_data(e).emplace(Uint(0x55)) = crate::cosave::ExtraJipEntry {
+            ref_id: 0x0700_0010,
+            data: std::collections::BTreeMap::from([(6, crate::cosave::ExtraJipData::default())]),
+        };
+    };
+    let mut w = World::new();
+    w.form(0x14, 0x3b, true);
+    crate::cosave::install_unlocked(&mut w.e);
+    let mut t = Engine::new_untyped_for_test();
+    w.e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    write(&mut t);
+    engine_core::extend::release_held_for_test();
+    let through_thread = written(&mut w.e);
+    let mut alone = World::new();
+    alone.form(0x14, 0x3b, true);
+    write(&mut alone.e);
+    assert!(!through_thread.is_empty());
+    assert_eq!(through_thread, written(&mut alone.e));
 }

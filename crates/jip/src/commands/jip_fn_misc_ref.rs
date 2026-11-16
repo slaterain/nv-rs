@@ -41,12 +41,7 @@
 //! - The co-save's application (step 3.3) and JIP's own extra data class: `SetLinkedReference`
 //!   (its defaults map and the load's `RestoreLinkedRefs`/`SetLinkedRefID` are not built, so a
 //!   load would keep the links unapplied).
-//! - `RefHasExtraData`, `GetRefExtraData`, `SetRefExtraData` (lane C1 did not reach them; G44's
-//!   `ExtraJIP` framework is on main): the two last are expression-format commands (JIP's
-//!   `PluginExpressionEvaluator` over xNVSE's, no JIP command uses one yet), and the setter makes
-//!   an inventory reference's extra data list (`InventoryRef::CreateExtraData`, a count extra
-//!   copied) and removes it again with the stack's entry when emptied; planned for a new module
-//!   `jip_fn_extra_data.rs`.
+//! - (Built in `jip_fn_extra_data.rs`: `RefHasExtraData`, `GetRefExtraData`, `SetRefExtraData`.)
 //! - `GetPlayerPerks` calls `jip_fn_actor`'s `GetAllPerks` (lane A's module, not built yet).
 
 use super::Handlers;
