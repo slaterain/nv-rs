@@ -919,6 +919,37 @@ mod tests {
         assert!(!held_keys()[0x1e]);
         assert!(!d3d9_wgpu::frame_rate::shown());
         d3d9_wgpu::frame_rate::set_window_device(false);
+        // Losing the focus (Alt+Tab away: WM_ACTIVATE with WA_INACTIVE, WM_KILLFOCUS) lets go of
+        // every key and button held, so none stays down when the player comes back.
+        send(WM_KEYDOWN, 0x41, a);
+        send(WM_XBUTTONDOWN, 2 << 16, 0);
+        assert!(held_keys()[0x1e]);
+        assert!(input().lock().unwrap().buttons[4]);
+        release_input();
+        assert!(held_keys().iter().all(|k| !k), "focus lost: no key held");
+        assert!(
+            input().lock().unwrap().buttons.iter().all(|b| !b),
+            "focus lost: no button held"
+        );
+    }
+
+    /// Closing the game's window (WM_CLOSE: its close button, Alt+F4) ends the run through
+    /// `window_closed` (the line, the host's exit hooks, the end of the process); here the test
+    /// thread stops there instead.
+    #[test]
+    fn closing_the_window_ends_the_run() {
+        std::thread::spawn(|| {
+            TEST_CLOSE.with(|c| c.set(true));
+            window_procedure(HWND(std::ptr::null_mut()), WM_CLOSE, WPARAM(0), LPARAM(0));
+        });
+        let start = std::time::Instant::now();
+        while !TEST_CLOSED.load(std::sync::atomic::Ordering::Relaxed) {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(10),
+                "WM_CLOSE did not reach window_closed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     /// A game window that is never shown ([`Showing::Never`]): the top-level window, asked for

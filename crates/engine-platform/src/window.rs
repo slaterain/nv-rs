@@ -490,6 +490,23 @@ fn border(e: &mut Engine, style: u32, menu: u32, ex_style: u32) -> [i32; 4] {
     }
 }
 
+/// The frame the game adds to the client area it wants before it places its window `handle`: the
+/// renderer's start (exe 0x004da951) calls `AdjustWindowRect` with the window's style
+/// (`GetWindowLongA(GWL_STYLE)`, the record's) and, as `bMenu`, its class's menu name
+/// (`GetClassLongA(GCL_MENUNAME)`), then `SetWindowPos` with the grown rectangle. `None` when the
+/// window is unknown or the table has no border for that style.
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) fn game_frame(e: &mut Engine, handle: u32) -> Option<[i32; 4]> {
+    let w = window(e, handle)?.clone();
+    let menu = state!(e)
+        .windows
+        .classes
+        .iter()
+        .find(|c| c.atom == w.class)
+        .map_or(0, |c| c.menu_name);
+    super::d3d9::window_border(e, w.style, u32::from(menu != 0), 0)
+}
+
 // Platform: replaces USER32.DLL AdjustWindowRectEx (import)
 /// `AdjustWindowRectEx(rect, style, menu, ex style)`: the rectangle grown by the window border
 /// Windows adds for that style (captured, [`border`]); true.

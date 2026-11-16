@@ -106,6 +106,15 @@ const _: (WindowThread, WindowTitled, WindowMoved) = (window_thread, window_titl
 /// jobs main has already handed on: a save written in the frame still running on main when the
 /// window closes can be lost.
 fn window_closed() -> ! {
+    // Tests: a thread that asked for it ([`TEST_CLOSE`]) says it got here and stops here instead
+    // of ending the test run.
+    #[cfg(test)]
+    if TEST_CLOSE.with(std::cell::Cell::get) {
+        TEST_CLOSED.store(true, std::sync::atomic::Ordering::Relaxed);
+        loop {
+            std::thread::park();
+        }
+    }
     eprintln!(
         "NV_D3D9={}: the game's window was closed: the run ends",
         tag()
@@ -113,6 +122,16 @@ fn window_closed() -> ! {
     crate::run_exit_hooks();
     crate::end_process(0)
 }
+
+#[cfg(test)]
+thread_local! {
+    /// Tests: this thread's [`window_closed`] stops instead of ending the run.
+    static TEST_CLOSE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests: a [`window_closed`] of a [`TEST_CLOSE`] thread was reached.
+#[cfg(test)]
+static TEST_CLOSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// The real Direct3D 9 device a backend hands the layer's side channel (D3DX's texture loading,
 /// `super::d3dxreal`): Windows only; elsewhere there is none.
@@ -311,6 +330,7 @@ impl Real {
     /// Tests: whether no answer of the real device has differed from the model's, once every
     /// command recorded is carried out.
     #[cfg(test)]
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) fn logged_is_empty(&mut self) -> bool {
         if let Some(s) = self.stream.as_mut() {
             s.finish();
@@ -334,6 +354,7 @@ fn real(e: &mut Engine) -> &mut Real {
 /// Tests: `stream` as the backend's for the modelled device `device`, as a made device has one, so its
 /// calls are recorded (the two-producer tests watch the order the backend sees).
 #[cfg(test)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn test_stream(e: &mut Engine, device: u32, stream: Stream) {
     let r = real(e);
     r.stream = Some(stream);
@@ -343,6 +364,7 @@ pub(crate) fn test_stream(e: &mut Engine, device: u32, stream: Stream) {
 /// Tests: the modelled object `object` as one the backend was asked for (its calls are recorded;
 /// a surface reads back through [`read_surface`]).
 #[cfg(test)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn test_forwarded(e: &mut Engine, object: u32) {
     real(e).forwarded.insert(object);
 }
@@ -3201,6 +3223,7 @@ pub(crate) fn test_window() -> Option<isize> {
 /// Test only: the 64 by 64 windowed `D3DPRESENT_PARAMETERS` words a test device is made with
 /// (one back buffer, `D3DSWAPEFFECT_DISCARD`).
 #[cfg(test)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn test_present() -> [u32; 14] {
     let mut p = [0u32; 14];
     p[0] = 64;
@@ -3282,6 +3305,7 @@ pub(crate) fn test_real_device_on(
 /// with `threaded`), with the modelled `devices` and `objects` given counterparts there (the
 /// stand-ins of `d3d9backend::stub`).
 #[cfg(test)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn test_forwarding(
     e: &mut Engine,
     backend: Box<dyn d3d9_stream::Backend>,
@@ -3301,6 +3325,7 @@ pub(crate) fn test_forwarding(
 
 /// Test only: returns once every command recorded is carried out (the render thread's too).
 #[cfg(test)]
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) fn test_finish(e: &mut Engine) {
     if let Some(s) = real(e).stream.as_mut() {
         s.finish();

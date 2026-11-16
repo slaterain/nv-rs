@@ -30,9 +30,22 @@ windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Di
 
 # The game's window on Linux (X11, Wayland) and macOS (d3d9real/winit_window.rs), handed to wgpu
 # by its raw window handle (the version wgpu 30 takes). Not on Windows: the Win32 window is there.
+#
+# winit without its default features: raw-window-handle 0.6 (rwh_06), X11, and Wayland with its
+# libraries opened at run time (wayland-dlopen). Left out: wayland-csd-adwaita, the title bar winit
+# draws itself on a Wayland desktop that draws no frames for programs (GNOME), which brings a font
+# (Cantarell, OFL-1.1), a rasteriser and calls to desktop programs; without it such a desktop shows
+# the framed window with a plain frame and no title. The borderless window (play's default) has
+# no frame either way.
 [target.'cfg(not(windows))'.dependencies]
-winit = "0.30.13"
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 raw-window-handle = "=0.6.2"
+
+# The keyboard library winit loads at run time (libxkbcommon, and libxkbcommon-x11 on X11), looked
+# for before the window is made, so that a missing one ends the run with a line naming it (winit
+# would stop its thread with a panic). Already in the lock through winit.
+[target.'cfg(all(not(windows), not(target_vendor = "apple")))'.dependencies]
+xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 
 # The tests of the C runtime's stdio that moved here (crt_stdio_tests.rs) and of the process side
 # use the core's addresses and helpers behind this feature.
