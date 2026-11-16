@@ -30,6 +30,26 @@ lists what started when: real ms, frames recorded, game clock ms, then the event
 buffer with its format, music `Render`/`Run`, the movie's track, sound file opens, `mmioOpen`
 names, Ogg opens, pace skips).
 
+**On Linux and macOS** (compiled and its tests pass on CI; never heard: nothing off Windows runs
+on the development PC, and the game itself does not start there yet). The device is reached
+through cpal (`sound_out.rs`, its module comment has the details): ALSA on Linux (PipeWire's and
+PulseAudio's ALSA plugins included), CoreAudio's default output on macOS. The same mixed samples
+are handed to the system; what the system does after is not measured against Windows:
+- the rate is the device's default stream as cpal gives it. On Linux that is cpal's preference
+  (48000 Hz first), and PipeWire, PulseAudio or ALSA's plug may convert it to their own rate after
+  us; on macOS it is the device's own rate, and CoreAudio converts to the device's format;
+- two channels at most (no surround placement off Windows; a larger device is given two);
+- the period is DirectSound's 10 ms on Linux where the device takes it, else the system's own;
+- the log's stream line names the device as the system gives it, the rate, the channels and the
+  period, and on Linux the sound thread's priority ("sound thread: real-time", or "normal
+  priority (the system refused real-time)": one `SCHED_FIFO` attempt, which a desktop without
+  real-time limits for the user refuses).
+
+**What Linux needs:** ALSA's library `libasound.so.2` (package `libasound2`, or `alsa-lib`) to start
+the program at all, sound or not: the program links it. Every desktop Linux has it. Building needs
+its development files and pkg-config (`libasound2-dev pkg-config` on Debian and Ubuntu). macOS
+needs nothing beyond the system.
+
 **Where the samples live** (ADR-0015, the bulk buffers). A secondary buffer's samples are kept
 outside the game's 32-bit memory; the game's memory holds them only while the game has the buffer
 locked (`dsound.rs`, `Samples`): the first `Lock` takes a block of the buffer's size filled with
