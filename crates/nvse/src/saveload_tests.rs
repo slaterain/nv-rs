@@ -273,7 +273,10 @@ fn variables_survive_a_save_and_a_load() {
     set_files(&mut e, &["FalloutNV.esm", "C.esp", "A.esp"]);
     pre_load(&mut e, NAME);
     assert!(vars::string(&e, of_b).is_none(), "its file is gone");
-    assert_eq!(e.ext::<Nvse>().vars.strings[&kept].owning_mod, 2);
+    assert_eq!(
+        crate::vars::with_strings(&mut e, |t| t.strings[&kept].owning_mod),
+        2
+    );
     assert_eq!(vars::array(&e, arr).unwrap().refs, vec![2]);
     assert_eq!(
         vars::get_element(&mut e, arr, &Key::Number(2.0))

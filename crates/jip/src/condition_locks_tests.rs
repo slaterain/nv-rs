@@ -34,10 +34,10 @@ const ANY_VT: u32 = FORMS + 0x8_1000;
 /// [`ANY`]'s event list as a quest's.
 const EVENT_LIST: u32 = FORMS + 0x8_2000;
 
-/// An eval that asks for a shared slot it must not: xNVSE's string map, which
-/// `AuxVarGetFltCond` reads for the variable's name (listed in the sweep, not made lock-free:
-/// xNVSE's string variables change on every string write of every mod).
-const TAKES_NVSE: &[u32] = &[0x27b1];
+/// The evals that ask for xNVSE's shared slot: none. (`AuxVarGetFltCond` did, for its variable's
+/// name, until xNVSE's string variables got their own lock, `nvse::vars::Strings`, as xNVSE's
+/// `VarMap` has; the guard's scene still names one so the eval reaches that lookup.)
+const TAKES_NVSE: &[u32] = &[];
 
 /// The evals that never run to their end on the guard's scene (see the test).
 const NEVER_FINISH: &[u32] = &[];

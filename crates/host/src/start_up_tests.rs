@@ -42,18 +42,15 @@ fn the_rows_go_in_before_the_extenders() {
     }
 }
 
-/// The log says when JIP is on with real threads, and when its row was on but JIP did not read
-/// it; nothing when JIP is off as asked, or on with stepped threads.
+/// The log says when JIP's row was on but JIP did not read it; nothing when JIP is off as asked
+/// or on as asked (with real threads too: JIP's own data no longer makes a thread wait; a mod's
+/// event script run from another thread still waits for the main thread a moment, which
+/// docs/FIXES.md and the INI row say, not the log).
 #[test]
 fn jip_start_lines_say_what_jip_is() {
-    assert!(jip_start_lines(false, false, "real").is_empty());
-    assert!(jip_start_lines(false, false, "stepped").is_empty());
-    assert!(jip_start_lines(true, true, "stepped").is_empty());
-    assert!(jip_start_lines(true, true, " Stepped ").is_empty());
-    let real = jip_start_lines(true, true, "real");
-    assert_eq!(real.len(), 1);
-    assert!(real[0].contains("real threads"), "{real:?}");
-    let unread = jip_start_lines(true, false, "stepped");
+    assert!(jip_start_lines(false, false).is_empty());
+    assert!(jip_start_lines(true, true).is_empty());
+    let unread = jip_start_lines(true, false);
     assert_eq!(unread.len(), 1);
     assert!(unread[0].contains("not installed"), "{unread:?}");
 }

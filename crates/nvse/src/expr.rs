@@ -1991,9 +1991,11 @@ fn assign_string_result(e: &mut Engine, script: u32, text: &[u8]) -> u32 {
 }
 
 fn set_owner(e: &mut Engine, id: u32, modi: u8) {
-    if let Some(s) = e.ext::<Nvse>().vars.strings.get_mut(&id) {
-        s.owning_mod = modi;
-    }
+    vars::with_strings(e, |t| {
+        if let Some(s) = t.strings.get_mut(&id) {
+            s.owning_mod = modi;
+        }
+    });
 }
 
 /// A double to `SInt64` as MSVC converts it (`cvttsd2si` to 64 bits): truncation,
@@ -2754,7 +2756,7 @@ mod command_string_tests {
         assert_eq!(vars::string(&e, id), Some(b"new".to_vec()));
         // A plain string on the right keeps the owning mod; another command's result moves
         // it to the script's (mod 0 here), as `Eval_Assign_String`'s move path does.
-        let owner = |e: &mut Engine| e.ext::<Nvse>().vars.strings[&id].owning_mod;
+        let owner = |e: &mut Engine| vars::with_strings(e, |t| t.strings[&id].owning_mod);
         assert_eq!(owner(&mut e), 5);
         let other = vars::add_string(&mut e, 7, b"other", true);
         ev.operate(
