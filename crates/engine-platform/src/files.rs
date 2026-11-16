@@ -3733,10 +3733,12 @@ mod tests_kept_files {
 
     /// The scratch file `name` in `dir` with `bytes`; its full path.
     fn file(dir: &str, name: &str, bytes: &[u8]) -> String {
-        // Written by this system's path; named to the game as `dir\name` (off Windows a `\` is
-        // a name's own character to the system, a separator to the game's file calls).
-        std::fs::write(std::path::Path::new(dir).join(name), bytes).unwrap();
-        format!("{dir}\\{name}")
+        // This system's path (`dir\name` on Windows, `dir/name` elsewhere, where a `\` would be a
+        // name's own character to the system): the tests use it with std as well as with the
+        // game's file calls, which take either separator.
+        let path = std::path::Path::new(dir).join(name);
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().into_owned()
     }
 
     fn open(e: &mut Engine, path: &str, access: u32) -> u32 {

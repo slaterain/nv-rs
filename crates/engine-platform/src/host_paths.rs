@@ -40,12 +40,18 @@ pub enum NotHere {
     /// A drive with no `\` after it (`Z:x`, relative to that drive's current folder): the game's
     /// own calls are given full paths (`super::files::full_path`), so this is not provided.
     DriveRelative,
+    /// A network or device path (`\\server\share`, `\\?\`, `\\.\`): not provided off Windows,
+    /// and never laid over this system's root.
+    Unc,
 }
 
 /// The game's path `game` (its text, `\` or `/` between parts) as this system's path, before the
 /// names' case is looked up: `Z:` taken off, `\` as `/`.
 pub fn unix_text(game: &str) -> Result<String, NotHere> {
     let b = game.as_bytes();
+    if b.len() >= 2 && b[0] == b'\\' && matches!(b[1], b'\\' | b'/') {
+        return Err(NotHere::Unc);
+    }
     let rest = if b.len() >= 2 && b[1] == b':' && b[0].is_ascii_alphabetic() {
         if !b[0].eq_ignore_ascii_case(&engine_core::exe::HOST_DRIVE) {
             return Err(NotHere::OtherDrive(b[0].to_ascii_uppercase() as char));
@@ -156,6 +162,23 @@ pub fn absent_drive_path(drive: char, game: &str) -> PathBuf {
     ))
 }
 
+/// The log line for a path on the drive `drive`, which this system does not have: `Some` the first
+/// time in the run for that drive, `None` after (the line is said once per drive, never silently
+/// skipped).
+pub fn absent_drive_line(drive: char) -> Option<String> {
+    static SAID: Mutex<Option<HashSet<char>>> = Mutex::new(None);
+    let mut said = SAID.lock().unwrap_or_else(|p| p.into_inner());
+    said.get_or_insert_with(HashSet::new)
+        .insert(drive)
+        .then(|| {
+            format!(
+            "files: drive {drive}: is not on this system (its folders are the game's drive {}:): \
+             everything on it answers as missing, as on a PC without that drive",
+            engine_core::exe::HOST_DRIVE as char
+        )
+        })
+}
+
 /// The game's path `game` as this system's path ([`unix_text`], then [`resolve`] against this
 /// system's folders, a folder holding two names for one part said once in the log). A drive
 /// other than `Z:` is absent ([`absent_drive_path`], said once per drive); a drive-relative path
@@ -164,20 +187,18 @@ pub fn host_path(game: &str) -> PathBuf {
     let text = match unix_text(game) {
         Ok(text) => text,
         Err(NotHere::OtherDrive(d)) => {
-            static SAID: Mutex<Option<HashSet<char>>> = Mutex::new(None);
-            let mut said = SAID.lock().unwrap_or_else(|p| p.into_inner());
-            if said.get_or_insert_with(HashSet::new).insert(d) {
-                eprintln!(
-                    "files: drive {d}: is not on this system (its folders are the game's drive \
-                     {}:): everything on it is missing, as on a PC without that drive",
-                    engine_core::exe::HOST_DRIVE as char
-                );
+            if let Some(line) = absent_drive_line(d) {
+                eprintln!("{line}");
             }
             return absent_drive_path(d, game);
         }
         Err(NotHere::DriveRelative) => {
             panic!("the game's path {game:?}: a path relative to a drive is not provided")
         }
+        Err(NotHere::Unc) => panic!(
+            "the game's path {game:?}: network and device paths (\\\\server, \\\\?\\) are not \
+             provided off Windows"
+        ),
     };
     if !text.starts_with('/') {
         return PathBuf::from(text);
@@ -279,6 +300,39 @@ mod tests {
             absent_drive_path('Q', r"q:\"),
             PathBuf::from("/nonexistent/nv-rs drive Q/")
         );
+    }
+
+    /// Another drive is never laid over this system's root (Z:'s): `C:\home` is not `/home`.
+    #[test]
+    fn another_drive_is_not_this_systems_root() {
+        let p = absent_drive_path('C', r"C:\home\me");
+        assert!(p.to_string_lossy().starts_with(ABSENT_DRIVES), "{p:?}");
+        assert_ne!(p, PathBuf::from("/home/me"));
+        assert!(!p.to_string_lossy().starts_with("/home"));
+    }
+
+    /// The absent drive's line is said the first time for each drive, and not again.
+    #[test]
+    fn the_absent_drive_line_is_said_once_per_drive() {
+        let first = absent_drive_line('K').expect("said the first time");
+        assert!(
+            first.contains("drive K:") && first.contains("missing"),
+            "{first}"
+        );
+        assert_eq!(absent_drive_line('K'), None);
+        assert_eq!(absent_drive_line('k'.to_ascii_uppercase()), None);
+        assert!(absent_drive_line('J').is_some());
+    }
+
+    /// Network and device paths are refused, not mapped onto this system's root.
+    #[test]
+    fn network_and_device_paths_are_refused() {
+        assert_eq!(unix_text(r"\\server\share\x"), Err(NotHere::Unc));
+        assert_eq!(unix_text(r"\\?\C:\x"), Err(NotHere::Unc));
+        assert_eq!(unix_text(r"\\.\PhysicalDrive0"), Err(NotHere::Unc));
+        assert_eq!(unix_text(r"\/x"), Err(NotHere::Unc));
+        // A host path with a doubled `/` is still this system's.
+        assert_eq!(unix_text("//tmp/x").unwrap(), "//tmp/x");
     }
 
     #[test]
