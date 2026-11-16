@@ -3,7 +3,9 @@
 //! values, a creature's damage, reach and model list, an actor's process (level, light, alpha,
 //! dive breath, idle, weapon, ammo, package, knocked state, last hit), its combat targets and
 //! allies, what it detects, its followers and dropped items, its active effects' modifiers and
-//! its perk modifiers, the turn calls, a name set on a base form or a cell. 48 built here (`ToggleDetectionFix` with its patch).
+//! its perk modifiers, the turn calls, a name set on a base form or a cell, the character
+//! controller's fall time, velocity, air state and the body under its feet, and the backup
+//! package away from the player. 55 built here (`ToggleDetectionFix` with its patch).
 //!
 //! Built by the core track inside its hook files (not again here): `GetCombatDisabled`,
 //! `SetCombatDisabled`, `ToggleNoHealthReset`, `GetTeammateUsingAmmo`, `SetTeammateUsingAmmo`,
@@ -15,12 +17,10 @@
 //!   row G54): the flag alone changes nothing in the game until that patch exists.
 //!   (`ToggleDetectionFix` is listed here; its handler is with its patch, G53, in
 //!   `game_patches::gc`.)
-//! - `GetFallTimeElapsed`, `GetFallTimeRemaining`, `ResetFallTime`, `GetActorVelocity`, `IsInAir`,
-//!   `GetObjectUnderFeet`: fields of the actor's Havok character controller (the process's +0x138)
-//!   and, for the last, its body's parent reference: the physics work.
-//! - `MoveAwayFromPlayer` (JIP's `AddBackUpPackage`: a backup package built and started through
-//!   six game calls) and `GetRadiationLevelAlt` (JIP's `GetRadiationLevel`: water forms, the
-//!   loaded radiation emitters, distances and game settings): not yet translated, next batch.
+//! - `GetRadiationLevelAlt` (a condition; JIP's `Actor::GetRadiationLevel`: water forms, the
+//!   loaded radiation emitters, distances, game settings, the high process's +0x238/+0x23C and
+//!   its vtable +0x76C): nothing it needs is missing, but lane C1 did not reach it; the next
+//!   command agent.
 //!
 //! An actor base (`TESActorBase`): its base data at +0x30 (`ACBS`, saved by
 //! `TESActorBaseData::Save` `0047CAC0` as 0x18 bytes from +4: flags +0x34, level +0x3C (signed
@@ -42,6 +42,7 @@ use super::extra;
 use super::forms::{
     ActiveEffect as A, EffectSetting, ListNode, ProcessManager, ACTOR_MAGIC_TARGET,
 };
+use super::havok_refs as h;
 use super::ln_fn_actor::actor_base;
 use super::ln_fn_inventory::container_of;
 use super::{
@@ -98,6 +99,12 @@ pub static COMMANDS: Handlers = &[
     (0x27f5, get_actor_value_modifier),
     (0x27f6, get_perk_modifier),
     (0x2802, get_hit_health_damage),
+    (0x276c, get_fall_time_elapsed),
+    (0x276d, get_fall_time_remaining),
+    (0x276e, reset_fall_time),
+    (0x27b4, get_actor_velocity),
+    (0x27ba, get_object_under_feet),
+    (0x2781, move_away_from_player),
 ];
 
 #[rustfmt::skip]
@@ -107,6 +114,7 @@ pub static CONDITIONS: Conditions = &[
     (0x2769, is_attacking, is_attacking_eval),
     (0x277d, is_in_water, is_in_water_eval),
     (0x27ad, get_is_ragdolled, get_is_ragdolled_eval),
+    (0x27b5, is_in_air, is_in_air_eval),
 ];
 
 /// A reference's base form (+0x20) and an actor's process (`pCurrentProcess`, +0x68).
@@ -1509,6 +1517,238 @@ fn get_hit_health_damage(e: &mut Engine, w: &[u32]) -> Ret {
         let damage = e.mem.f32(hit + HIT_HEALTH);
         let value = engine_core::x87::x87_mul(f64::from(damage), f64::from(mult));
         a.set_result(e, value);
+    }
+    handled(true)
+}
+
+// ---- the backup package (lane C1) ----
+
+/// `Actor::AddBackUpPackage`'s pieces, each confirmed in the exe: the process's
+/// `GetCurrentPackage` (vtable +0x27C, `0091EEC0`) and a package's type byte (+0x20; 0x1A ends
+/// it); the game's own backup packages are 0x8C bytes (`CreatePackage` `00670DC5` allocates 0x8C
+/// for its `009ED030`); the constructor `BackUpPackage::BackUpPackage` (`009ED030`, no words) and
+/// `InitializeBackUpPackage` (`009ED0D0`, `(actor, cell, target)`, `RET 0xC`); its fields: the
+/// procedure +0x18 (0x30), the flags +0x1C, the backup point +0x80 (`backuppackage.rs`); then the
+/// process's vtable +0x28 (`HighProcess`' `00907650`, no words) and the actor's vtable +0x2F4
+/// (`0087EAC0`, `(package, 1, 1)`, `RET 0xC`: the actor put on the package).
+const GET_CURRENT_PACKAGE: u32 = 0x27c;
+const PACKAGE_TYPE_BYTE: u32 = 0x20;
+const BACKUP_SIZE: u32 = 0x8c;
+const BACKUP_CTOR: u32 = 0x009e_d030;
+const BACKUP_INIT: u32 = 0x009e_d0d0;
+const PACKAGE_PROCEDURE: u32 = 0x18;
+const PACKAGE_FLAGS: u32 = 0x1c;
+const BACKUP_POINT: u32 = 0x80;
+const PROCESS_SLOT_28: u32 = 0x28;
+const ACTOR_SET_PACKAGE: u32 = 0x2f4;
+/// `kPackageFlag_ContinueDuringCombat` (`1 << 26`), a reference's cell (+0x40).
+const CONTINUE_DURING_COMBAT: u32 = 1 << 26;
+const REFR_CELL: u32 = 0x40;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::AddBackUpPackage
+// (asm).
+/// For an actor not in life state 3 or 5, with a high process (level 0) not running a package of
+/// type 0x1A: a new backup package (0x8C bytes) away from `target` (its point the target's
+/// position when there is no cell), procedure 0x30, `flags` added, the process told
+/// (+0x28) and the actor put on it (+0x2F4). JIP then sets `s_moveAwayDistance` back to 300,
+/// which only its move-away patch (row G42, not built) reads: the exe's own distance is that
+/// same 300, so nothing is owed here.
+fn add_back_up_package(e: &mut Engine, actor: u32, target: u32, cell: u32, flags: u32) {
+    let life = e.mem.u32(actor + LIFE_STATE);
+    if life == 3 || life == 5 {
+        return;
+    }
+    let p = process(e, actor);
+    if p == 0 || e.mem.u8(p + P_LEVEL) != 0 {
+        return;
+    }
+    let running = e.vcall(p, GET_CURRENT_PACKAGE, &args![]).u32();
+    if running != 0 && e.mem.u8(running + PACKAGE_TYPE_BYTE) == 0x1a {
+        return;
+    }
+    let block = heap_alloc(e, BACKUP_SIZE);
+    let package = e.call(BACKUP_CTOR, &args![block]).u32();
+    e.call(BACKUP_INIT, &args![package, actor, cell, target]);
+    if cell == 0 {
+        for i in 0..3 {
+            let v = e.mem.u32(target + POS + 4 * i);
+            e.mem.set_u32(package + BACKUP_POINT + 4 * i, v);
+        }
+    }
+    e.mem.set_u32(package + PACKAGE_PROCEDURE, 0x30);
+    let old = e.mem.u32(package + PACKAGE_FLAGS);
+    e.mem.set_u32(package + PACKAGE_FLAGS, old | flags);
+    e.vcall(p, PROCESS_SLOT_28, &args![]);
+    e.vcall(actor, ACTOR_SET_PACKAGE, &args![package, 1u32, 1u32]);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_MoveAwayFromPlayer_Execute.
+/// An actor backs away from the player ([`add_back_up_package`] with its own cell and "continue
+/// during combat"). No result.
+fn move_away_from_player(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let player = e.mem.u32(PLAYER);
+    if player == 0 {
+        return handled(true);
+    }
+    let cell = e.mem.u32(a.this_obj + REFR_CELL);
+    add_back_up_package(e, a.this_obj, player, cell, CONTINUE_DURING_COMBAT);
+    handled(true)
+}
+
+// ---- the character controller (lane C1) ----
+
+/// `bhkCharacterController` fields (Xbox PDB names, engine-havok `bhkcharactercontroller.rs`),
+/// each confirmed in the exe: the state `m_currentState` +0x3F0 (`UpdateState` `00C6CBA0` stores
+/// the wanted state there; JIP's `chrContext.hkState`), the velocity `OutVelocity` +0x4F0 (four
+/// floats; `bhkCharacterStateInAir::Update` `00CD3FB0` loads and stores it with `MOVAPS`), the
+/// pitch timer `fCalculatePitchTimer` +0x530 (`00C70060` tests it), the fall's starting height
+/// `fFallStartHeight` +0x544 (`GetFallDistance` `00C70550` reads it), the fall time `fFallTime`
+/// +0x548 (`00C6E2E0` adds the step time to it), the body under the feet `spSupportBody` +0x60C
+/// (lane G's `havok_refs::SUPPORT_BODY`).
+pub(crate) const CC_STATE: u32 = 0x3f0;
+pub(crate) const CC_VELOCITY: u32 = 0x4f0;
+const CC_PITCH_TIMER: u32 = 0x530;
+const CC_START_HEIGHT: u32 = 0x544;
+const CC_FALL_TIME: u32 = 0x548;
+/// A reference's position z (+0x38).
+const POS_Z: u32 = 0x38;
+
+/// The controller of the reference (`TESObjectREFR::GetCharacterController`), 0 for none.
+pub(crate) fn controller(e: &Engine, refr: u32) -> u32 {
+    if refr == 0 {
+        return 0;
+    }
+    h::character_controller(e, refr)
+}
+
+/// The float at `at` of the reference's controller, `None` without a controller (or when it does
+/// not read).
+fn controller_float(e: &Engine, refr: u32, at: u32) -> Option<f32> {
+    let ctrl = controller(e, refr);
+    (ctrl != 0)
+        .then(|| h::rdf32(e, ctrl.wrapping_add(at)))
+        .flatten()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetFallTimeElapsed_Execute.
+/// The controller's fall time (+0x548); nothing without a controller.
+fn get_fall_time_elapsed(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some(v) = controller_float(e, a.this_obj, CC_FALL_TIME) {
+        a.set_result(e, f64::from(v));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetFallTimeRemaining_Execute.
+/// The controller's pitch timer (+0x530, JIP's `calculatePitchTimer`); nothing without a
+/// controller.
+fn get_fall_time_remaining(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if let Some(v) = controller_float(e, a.this_obj, CC_PITCH_TIMER) {
+        a.set_result(e, f64::from(v));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_ResetFallTime_Execute.
+/// The fall's starting height set to the reference's z and the fall time to 0 (two plain stores
+/// the controller's own step reads; nothing is woken). No result.
+fn reset_fall_time(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let ctrl = controller(e, a.this_obj);
+    if ctrl != 0 {
+        if let Some(z) = h::rd32(e, a.this_obj.wrapping_add(POS_Z)) {
+            let at = ctrl.wrapping_add(CC_START_HEIGHT);
+            if e.mem.try_write(at, &z.to_le_bytes()).is_ok() {
+                let _ = e
+                    .mem
+                    .try_write(ctrl.wrapping_add(CC_FALL_TIME), &0f32.to_le_bytes());
+            }
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetActorVelocity_Execute.
+/// The controller's velocity on the axis (X, Y, Z), or with no axis its length (`Length_V4` of
+/// all four lanes: `(x*x + y*y) + (z*z + w*w)`, then the estimate's Newton step).
+fn get_actor_velocity(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let axis = super::jip_fn_misc_ref_havok::axis_arg(&read, 0);
+    let ctrl = controller(e, a.this_obj);
+    let Some(v) = (ctrl != 0)
+        .then(|| h::vec4(e, ctrl.wrapping_add(CC_VELOCITY)))
+        .flatten()
+    else {
+        return handled(true);
+    };
+    if axis == 0 {
+        let s = (v[0] * v[0] + v[1] * v[1]) + (v[2] * v[2] + v[3] * v[3]);
+        a.set_result(e, f64::from(super::ln_fn_math::newton_sqrt(s)));
+    } else if let Some(i) = axis.checked_sub(b'X').filter(|&i| i < 3) {
+        a.set_result(e, f64::from(v[usize::from(i)]));
+    }
+    handled(true)
+}
+
+/// Whether the reference's controller state has bit 1 (JIP's `chrContext.hkState & 2`).
+fn in_air(e: &Engine, refr: u32) -> bool {
+    let ctrl = controller(e, refr);
+    ctrl != 0 && h::rd32(e, ctrl.wrapping_add(CC_STATE)).is_some_and(|s| s & 2 != 0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_IsInAir_Execute.
+fn is_in_air(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if in_air(e, a.this_obj) {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: Cmd_IsInAir_Eval.
+fn is_in_air_eval(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = EvalArgs::new(w);
+    if in_air(e, a.this_obj) {
+        e.mem.set_f64(a.result, 1.0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetObjectUnderFeet_Execute.
+/// The reference of the body under the controller's feet (`hkpWorldObject::GetParentRef`; the
+/// support count is not consulted here, unlike the contact commands); nothing for none.
+fn get_object_under_feet(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let ctrl = controller(e, a.this_obj);
+    let Some(body) = (ctrl != 0)
+        .then(|| h::ptr(e, ctrl.wrapping_add(h::SUPPORT_BODY)))
+        .flatten()
+    else {
+        return handled(true);
+    };
+    let refr = h::object_parent_ref(e, body, &mut h::Walk::new());
+    if let Some(id) = (refr != 0)
+        .then(|| h::rd32(e, refr.wrapping_add(h::REF_ID)))
+        .flatten()
+    {
+        a.set_form_result(e, id);
     }
     handled(true)
 }

@@ -471,7 +471,7 @@ pub(crate) fn block_parent_ref(e: &Engine, block: u32, walk: &mut Walk) -> u32 {
 /// The scene object of a Havok object: the first property whose key is `bhkNiCollisionObject`'s
 /// (its collision object's node, +8; none when the collision object is null) or `NiAVObject`'s
 /// (the object itself).
-fn parent_node(e: &Engine, object: u32, walk: &mut Walk) -> u32 {
+pub(crate) fn parent_node(e: &Engine, object: u32, walk: &mut Walk) -> u32 {
     let (Some(data), Some(size)) = (
         rd32(e, object.wrapping_add(PROPERTIES)),
         rd32(e, object.wrapping_add(PROPERTIES + 4)),
