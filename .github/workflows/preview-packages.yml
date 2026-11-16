@@ -48,6 +48,8 @@ jobs:
             # Apple silicon runners have 7 GB of memory: two compilers at a time.
             jobs: 2
     runs-on: ${{ matrix.runner }}
+    # The optimised release build, as the Windows package (CI's quick profile was used before
+    # 2026-11-16; this build's time is not measured yet: the timeout leaves room).
     timeout-minutes: 150
     env:
       CARGO_BUILD_JOBS: ${{ matrix.jobs }}
@@ -61,9 +63,10 @@ jobs:
           fetch-depth: 0
       - name: Install the pinned Rust tools (rust-toolchain.toml)
         run: rustup toolchain install
-      # What the program's crates need to build on Linux, kept in step with the Linux pieces as they
-      # come: pkg-config and ALSA's and D-Bus's headers for the sound output (cpal and its
-      # real-time thread priority). The window (winit) and Vulkan load their libraries at run time.
+      # The program needs no system library to build today (the window and the sound are not in it
+      # yet; Vulkan is loaded while it runs). These are installed ahead for the sound output (cpal,
+      # ALSA, D-Bus for its thread priority) that the sound pull request brings; its run-time
+      # libraries go into distribution/unix/libraries.txt, which play.sh checks before a start.
       - name: Install the Linux build packages
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libdbus-1-dev
@@ -75,7 +78,7 @@ jobs:
         run: |
           flag=--test-build
           if [ "$RELEASE" = true ]; then flag=; fi
-          sh scripts/package-playtest.sh --version "$VERSION" --system ${{ matrix.system }} --profile play $flag
+          sh scripts/package-playtest.sh --version "$VERSION" --system ${{ matrix.system }} $flag
           cat "dist/nv-rs-preview-${{ matrix.system }}/BUILD.txt"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
