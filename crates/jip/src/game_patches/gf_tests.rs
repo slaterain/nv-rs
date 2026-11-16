@@ -426,7 +426,7 @@ fn d01_world() -> Engine {
     if !e.mem.is_mapped(REFR_VTABLE) {
         e.map(REFR_VTABLE & !0xfff, 0x1000);
     }
-    e.mem.set_u32(REFR_MARK_MODIFIED_SLOT, MARK_AS_MODIFIED);
+    e.mem.set_u32(REFR_VTABLE + 0x48, MARK_AS_MODIFIED);
     e.mem.set_u32(REFERENCE, REFR_VTABLE);
     e.mem.set_u32(REFERENCE + 0x40, CELL);
     if !e.mem.is_mapped(SAVE_LOAD_GAME) {
@@ -453,7 +453,7 @@ fn d01_slot_written_at_the_deferred_start_with_the_fixes() {
     for word in [0, jip_patches::INSTALLED] {
         e.set_jip_patches(word);
         deferred_init(&mut e);
-        assert_eq!(e.mem.u32(REFR_MARK_MODIFIED_SLOT), MARK_AS_MODIFIED);
+        assert_eq!(e.mem.u32(REFR_VTABLE + 0x48), MARK_AS_MODIFIED);
     }
     for word in [
         jip_patches::FIXES,
@@ -462,8 +462,43 @@ fn d01_slot_written_at_the_deferred_start_with_the_fixes() {
         let mut e = d01_world();
         e.set_jip_patches(word);
         deferred_init(&mut e);
-        assert_eq!(e.mem.u32(REFR_MARK_MODIFIED_SLOT), MARK_MODIFIED_ROUTINE);
+        assert_eq!(e.mem.u32(REFR_VTABLE + 0x48), MARK_MODIFIED_ROUTINE);
         assert!(slots::in_block(MARK_MODIFIED_ROUTINE));
+    }
+}
+
+/// JIP's deferred start through the co-save listener (xNVSE's `DEFERRED_INIT` message, as the
+/// game sends it): with the fixes' bit, D01's slot holds the routine and a G130 name read before
+/// answers 0 after; without the bit, the slot keeps `0x484B60` and the name still answers 1.
+#[test]
+fn deferred_start_through_the_listener_puts_group_gfs_part_in() {
+    use engine_core::extend::jip_patches;
+    let message = nvse::plugins::Message {
+        kind: nvse::plugins::msg::DEFERRED_INIT,
+        data: 0,
+        len: 0,
+    };
+    for (word, slot, name) in [
+        (
+            jip_patches::INSTALLED | jip_patches::FIXES,
+            MARK_MODIFIED_ROUTINE,
+            0,
+        ),
+        (jip_patches::INSTALLED, MARK_AS_MODIFIED, 1),
+    ] {
+        let mut e = d01_world();
+        find_stand_ins(&mut e);
+        read_override_archives(&mut e);
+        assert_eq!(g130_answer(&mut e, b"DATA\\Foo.bsa"), Some(1));
+        e.set_jip_patches(word);
+        e.ext::<crate::Jip>().pos_marker.marker = 1;
+        crate::cosave::listen(&mut e, &message);
+        assert_eq!(e.mem.u32(REFR_VTABLE + 0x48), slot, "{word:08x}");
+        assert_eq!(
+            g130_answer(&mut e, b"DATA\\Foo.bsa"),
+            Some(name),
+            "{word:08x}"
+        );
     }
 }
 
