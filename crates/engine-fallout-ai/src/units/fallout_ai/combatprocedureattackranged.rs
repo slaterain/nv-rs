@@ -527,7 +527,20 @@ pub fn update(e: &mut Engine, this: Ptr<CombatProcedureAttackRanged>) {
                 _ => {}
             }
         }
-        if target != 0 && e.call(STATE_TEST_EE90, &args![combat_state]).bool() {
+        // 009d10f3: JIP's G91 (a fix) replaces this cooldown test with one in real
+        // milliseconds; the seam answers its byte (words: the combat state). One load while
+        // JIP is not installed.
+        if target != 0 && {
+            let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x009d_10f3, &[combat_state])
+            } else {
+                None
+            };
+            match jip {
+                Some(ready) => ready & 0xff != 0,
+                None => e.call(STATE_TEST_EE90, &args![combat_state]).bool(),
+            }
+        } {
             let manager = e.global::<u32>(DIALOGUE_MANAGER);
             let controller = controller_of(e, this);
             e.call(
@@ -1731,6 +1744,80 @@ mod tests {
             calls_to(&log, TIMER_START),
             vec![vec![w.t + 0x30, bits(1.25)]]
         );
+    }
+
+    thread_local! {
+        static G91_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G91_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g91(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G91_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G91_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's G91 seam at `0x9D10F3` (a fix): not asked without the FIXES bit (the exe's
+    /// cooldown test, answering 0, starts no combat line); asked with the combat state, its
+    /// answer's low byte decides whether the line starts; no answer runs the exe's test.
+    #[test]
+    fn g91_seam_decides_the_reaction_line() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        for (word, answer, asked, line) in [
+            (0, Some(1), false, false),
+            (jip_patches::INSTALLED, Some(1), false, false),
+            (fixes, Some(1), true, true),
+            (fixes, Some(0x100), true, false),
+            (fixes, None, true, false),
+        ] {
+            let mut w = world();
+            w.rig
+                .e
+                .on_site(SiteSlot::new(Owner::Jip, 0x009d_10f3), at_g91);
+            w.rig.slot(SLOT_TEST_3F8, 1);
+            w.rig.answer(STATE_TEST_EE90, 0);
+            w.rig.e.set_jip_patches(word);
+            G91_ASKED.with(|s| s.borrow_mut().clear());
+            G91_ANSWER.with(|c| c.set(answer));
+            let manager = 0x6100;
+            w.rig.e.mem.set_u32(DIALOGUE_MANAGER, manager);
+            let (_, log) = w.rig.run(0x009d_0a30, &args![w.t]);
+            let started = calls_to(&log, START_DIALOGUE);
+            assert_eq!(!started.is_empty(), line, "{word:x} {answer:?}");
+            let seen = G91_ASKED.with(|s| s.take());
+            assert_eq!(
+                seen,
+                if asked {
+                    vec![vec![w.combat_state]]
+                } else {
+                    vec![]
+                }
+            );
+        }
+    }
+
+    /// G91 with no target: the exe tests the target first (`[ebp-0x48]`), so JIP's call at
+    /// `0x9D10F3` is never reached: the seam is not asked even with the FIXES bit (the
+    /// run-wide tick stays), and no combat line starts.
+    #[test]
+    fn g91_seam_not_asked_without_a_target() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut w = world();
+        w.rig
+            .e
+            .on_site(SiteSlot::new(Owner::Jip, 0x009d_10f3), at_g91);
+        w.rig.answer(GET_TARGET, 0);
+        w.rig.slot(SLOT_TEST_3F8, 1);
+        w.rig.answer(STATE_TEST_EE90, 1);
+        w.rig
+            .e
+            .set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        G91_ASKED.with(|s| s.borrow_mut().clear());
+        G91_ANSWER.with(|c| c.set(Some(1)));
+        w.rig.e.mem.set_u32(DIALOGUE_MANAGER, 0x6100);
+        let (_, log) = w.rig.run(0x009d_0a30, &args![w.t]);
+        assert_eq!(G91_ASKED.with(|s| s.take()), Vec::<Vec<u32>>::new());
+        assert!(calls_to(&log, START_DIALOGUE).is_empty());
     }
 
     #[test]
