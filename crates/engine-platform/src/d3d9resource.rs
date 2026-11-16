@@ -1277,7 +1277,6 @@ fn set_constants(e: &mut Engine, this: Ptr, kind: u8, start: u32, data: Ptr, cou
 /// (4 words each; a bool register's word first): what the last successful
 /// `Set*ShaderConstant*` calls stored, read from the program's memory. `None` before the
 /// device's first set.
-#[cfg(windows)]
 pub(super) fn constant_registers<'a>(
     draw: &super::d3d9draw::DrawSide,
     resources: &'a Resources,

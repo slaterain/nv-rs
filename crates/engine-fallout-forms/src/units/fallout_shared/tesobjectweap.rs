@@ -2421,6 +2421,7 @@ fn expel_from_node(e: &mut Engine, this: Ptr<TesObjectWeap>, actor: Ptr, node: u
     }
 
     let first_person_player = actor.addr() == player
+        && !player_casing_path_skipped(e)
         && e.call(PLAYER_BIPED_FLAG, &args![player]).u8() == 0
         && !fn_00525430(e, Ptr::new(OBJECT_011F2250));
     let object = e.call(OPERATOR_NEW, &args![0x24u32]).u32();
@@ -2455,6 +2456,30 @@ fn expel_from_node(e: &mut Engine, this: Ptr<TesObjectWeap>, actor: Ptr, node: u
     if first_person_player {
         e.call(DEBRIS_FINISH, &args![created, 1u32]);
     }
+}
+
+/// The player's tests at `0x5251A3` in `ExpelShellCasing` (reached only when the actor is the
+/// player): first person (`004eaf60`) and `00525430` send the casing down the first-person path
+/// (a lifetime of at most 2 and `007e6580(1)`). JIP LN NVSE's G16 (a fix, the row
+/// `NV_JIP_GAME_PATCHES`) writes `jmp 0x52528C` there, the path every other actor takes: the seam
+/// at `0x5251A3` answers whether to jump (any answer). With the word's `FIXES` bit clear: one
+/// load, then no.
+#[inline]
+fn player_casing_path_skipped(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0052_51a3, &[]).is_some()
+}
+
+/// The jump at `0x5248EE` in [`fn_00523150`] taken when the actor has no process (`[ebp-0x74]`):
+/// the exe's lands on the weapon type tests (`0x524900`), and a thrown or placed weapon (types 11
+/// to 13) then calls the missing process's ammo slot. JIP LN NVSE's G20 (a fix, the row
+/// `NV_JIP_GAME_PATCHES`) writes the jump's byte `0x77` at `0x5248EF`, so it lands on `jmp
+/// 0x5249A1`, past the block: the seam at `0x5248EF` answers whether to (any answer). Asked only
+/// with no process; with the word's `FIXES` bit clear: one load, then no.
+#[inline]
+fn hand_held_block_skipped(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0052_48ef, &[]).is_some()
 }
 
 // ---- The firing function --------------------------------------------------------------
@@ -3723,8 +3748,12 @@ fn fire_after_shots(e: &mut Engine, shot: &mut Fire, fired: i32) {
             &args![(fired - adjust) as u32],
         );
     }
-    let weapon_type = e.call(GET_WEAPON_TYPE, &args![shot.this]).u32();
-    let hand_held = (shot.process != 0 && weapon_type == 10) || (11..=13).contains(&weapon_type);
+    let hand_held = if shot.process == 0 && hand_held_block_skipped(e) {
+        false
+    } else {
+        let weapon_type = e.call(GET_WEAPON_TYPE, &args![shot.this]).u32();
+        (shot.process != 0 && weapon_type == 10) || (11..=13).contains(&weapon_type)
+    };
     if hand_held {
         let mut ammo_left = false;
         if e.vcall(shot.process, PROCESS_AMMO_ITEM_SLOT, &[]).u32() != 0 {
@@ -6508,6 +6537,203 @@ mod tests {
         removed.borrow_mut().clear();
         fire_after_shots(&mut e, &mut shot, 1);
         assert!(removed.borrow().is_empty());
+    }
+
+    /// Where the GF test handlers (JIP LN NVSE step 3.9, G16 and G20) count their calls: +0 G16,
+    /// +4 G20; +8 and +12 hold their answers (1 = some).
+    const GF_ASKED: u32 = 0x0535_0000;
+
+    /// G16's and G20's seams handled by test handlers that count and check their words.
+    fn gf_handlers(e: &mut Engine, word: u32, answer: bool) {
+        use engine_core::extend::{Owner, SiteSlot};
+        e.map(GF_ASKED, 0x1000);
+        e.mem.set_u32(GF_ASKED + 8, u32::from(answer));
+        e.mem.set_u32(GF_ASKED + 12, u32::from(answer));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0052_51a3), |e, a| {
+            assert!(a.is_empty());
+            e.mem.set_u32(GF_ASKED, e.mem.u32(GF_ASKED) + 1);
+            (e.mem.u32(GF_ASKED + 8) != 0).then_some(1)
+        });
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0052_48ef), |e, a| {
+            assert!(a.is_empty());
+            e.mem.set_u32(GF_ASKED + 4, e.mem.u32(GF_ASKED + 4) + 1);
+            (e.mem.u32(GF_ASKED + 12) != 0).then_some(1)
+        });
+        e.set_jip_patches(word);
+    }
+
+    /// The first-person player's casing scene of
+    /// [`casing_for_the_first_person_player_is_finished_and_has_a_capped_lifetime`]: the
+    /// casing's lifetime, the finish calls and the first-person test's calls.
+    fn g16_player_casing(word: u32, answer: bool) -> (f32, Vec<Vec<u32>>, usize, u32) {
+        let mut e = Engine::new();
+        let w = weapon(&mut e);
+        let (actor, debris, _) = casing_scene(&mut e, true);
+        e.set_global(PLAYER_CHARACTER, actor);
+        returning(&mut e, PLAYER_GET_CURRENT_3D, 0x5000);
+        let biped = recording(&mut e, PLAYER_BIPED_FLAG);
+        map_pages(&mut e, &[OBJECT_011F2250, TWO]);
+        e.set_global(TWO, 2.0f32);
+        e.register(MIN_FLOAT, |_, a| Ret {
+            st0: f32::from_bits(a[0]).min(f32::from_bits(a[1])) as f64,
+            ..Ret::default()
+        });
+        let finish = recording(&mut e, DEBRIS_FINISH);
+        gf_handlers(&mut e, word, answer);
+        e.call(0x0052_4db0, &args![w, actor]);
+        let lifetime = f32::from_bits(debris.borrow()[0][2]);
+        let finished = finish.borrow().clone();
+        let tests = biped.borrow().len();
+        (lifetime, finished, tests, e.mem.u32(GF_ASKED))
+    }
+
+    /// G16 off (JIP not installed, or installed with the row off): the seam is not asked and the
+    /// first-person player's casing keeps the exe's path (lifetime cut to 2, finished).
+    #[test]
+    fn g16_seam_does_nothing_while_off() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            let (lifetime, finished, tests, asked) = g16_player_casing(word, true);
+            assert_eq!((lifetime, asked, tests), (2.0, 0, 1), "{word:08x}");
+            assert_eq!(finished, [vec![0x9000, 1]]);
+        }
+    }
+
+    /// G16 on: the seam is asked once, the first-person test is not made, and the player's casing
+    /// takes every actor's path: the setting's lifetime (4) and no finish call. An answer of none
+    /// keeps the exe's path. Another actor never reaches the seam.
+    #[test]
+    fn g16_seam_answer_gives_the_player_the_third_person_casing() {
+        use engine_core::extend::jip_patches;
+        // The row's bit alone, and a player's whole word (installed, the row, a switch).
+        for word in [
+            jip_patches::FIXES,
+            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::FO3_WPN_DEGRADATION,
+        ] {
+            let (lifetime, finished, tests, asked) = g16_player_casing(word, true);
+            assert_eq!((lifetime, asked, tests), (4.0, 1, 0), "{word:08x}");
+            assert!(finished.is_empty());
+            let (lifetime, finished, tests, asked) = g16_player_casing(word, false);
+            assert_eq!((lifetime, asked, tests), (2.0, 1, 1), "{word:08x}");
+            assert_eq!(finished, [vec![0x9000, 1]]);
+
+            let mut e = Engine::new();
+            let w = weapon(&mut e);
+            let (actor, debris, _) = casing_scene(&mut e, true);
+            gf_handlers(&mut e, word, true);
+            e.call(0x0052_4db0, &args![w, actor]);
+            assert_eq!(e.mem.u32(GF_ASKED), 0);
+            assert_eq!(f32::from_bits(debris.borrow()[0][2]), 4.0);
+        }
+    }
+
+    /// [`fire_after_shots`] for a shooter with or without a process, a weapon of type `kind`:
+    /// the calls of the weapon type, the removals, G20's count and the calls of the ammo slot
+    /// made on the null process. Without a process, page 0 is mapped with a stand-in vtable
+    /// whose ammo slot records (where the exe would crash), so the exe's path can be driven.
+    fn g20_after_shots(
+        word: u32,
+        answer: bool,
+        with_process: bool,
+        kind: u32,
+    ) -> (usize, usize, u32, usize) {
+        let mut e = Engine::new();
+        let (mut shot, _) = fire_state(&mut e);
+        let actor = shot.actor.addr();
+        let null_ammo = recording(&mut e, 0x00de_f14c);
+        if !with_process {
+            shot.process = 0;
+            e.map(0, 0x1000);
+            e.mem.set_u32(0, 0x100);
+            e.mem.set_u32(0x100 + PROCESS_AMMO_ITEM_SLOT, 0x00de_f14c);
+        }
+        give_vtable(
+            &mut e,
+            actor,
+            &[
+                (ACTOR_SHOTS_FIRED_SLOT, 0x00dd_03f0),
+                (ACTOR_IS_READY_TEST_SLOT, 0x00dd_0360),
+            ],
+        );
+        quiet(
+            &mut e,
+            &[0x00dd_03f0, NI_POINTER_ASSIGN, NI_POINTER_DESTRUCT],
+        );
+        returning(&mut e, 0x00dd_0360, 0);
+        returning(&mut e, GET_WEAPON_TYPE, kind);
+        let removed = recording(&mut e, ACTOR_REMOVE_WEAPON);
+        gf_handlers(&mut e, word, answer);
+        e.call_log = Some(vec![]);
+        fire_after_shots(&mut e, &mut shot, 1);
+        let types = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == GET_WEAPON_TYPE)
+            .count();
+        let removals = removed.borrow().len();
+        let null_calls = null_ammo.borrow().len();
+        (types, removals, e.mem.u32(GF_ASKED + 4), null_calls)
+    }
+
+    /// G20 off: the seam is not asked. With no process: a gun (type 10) skips the block; a
+    /// thrown or placed weapon (types 11 to 13) runs it and calls the null process's ammo slot
+    /// (the exe's crash), then is removed (no ammo item).
+    #[test]
+    fn g20_seam_does_nothing_while_off() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(
+                g20_after_shots(word, true, false, 10),
+                (2, 0, 0, 0),
+                "{word:08x}"
+            );
+            for kind in 11..=13 {
+                assert_eq!(
+                    g20_after_shots(word, true, false, kind),
+                    (2, 1, 0, 1),
+                    "{word:08x} {kind}"
+                );
+            }
+        }
+    }
+
+    /// G20 on: with no process the seam is asked once and its answer jumps over the hand-held
+    /// block: a thrown or placed weapon (types 11 to 13) is neither tested nor removed and the
+    /// null process is not called, and the code after the block still runs (its type call). An
+    /// answer of none keeps the exe's tests (and its call on the null process); with a process
+    /// the seam is not asked. Each with the row's bit alone and with a player's whole word.
+    #[test]
+    fn g20_seam_answer_skips_the_hand_held_block_without_a_process() {
+        use engine_core::extend::jip_patches;
+        for word in [
+            jip_patches::FIXES,
+            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::FO3_WPN_DEGRADATION,
+        ] {
+            for kind in 11..=13 {
+                assert_eq!(
+                    g20_after_shots(word, true, false, kind),
+                    (1, 0, 1, 0),
+                    "{word:08x} {kind}"
+                );
+                assert_eq!(
+                    g20_after_shots(word, false, false, kind),
+                    (2, 1, 1, 1),
+                    "{word:08x} {kind}"
+                );
+            }
+            assert_eq!(
+                g20_after_shots(word, false, false, 10),
+                (2, 0, 1, 0),
+                "{word:08x}"
+            );
+            assert_eq!(
+                g20_after_shots(word, true, true, 11),
+                (2, 1, 0, 0),
+                "{word:08x}"
+            );
+        }
     }
 
     /// `NiPointer` doubles that keep the pointer in the object they are

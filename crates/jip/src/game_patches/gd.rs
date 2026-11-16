@@ -79,6 +79,24 @@ pub const AI_TARGET: SiteSlot = SiteSlot::new(Owner::Jip, 0x009f_50c4);
 pub const SPEAKER_DONE: SiteSlot = SiteSlot::new(Owner::Jip, 0x009e_e367);
 /// O4's seam: the missile's flag 0x8000 call (words: the projectile, the value).
 pub const MISSILE_FLAGS: SiteSlot = SiteSlot::new(Owner::Jip, 0x009b_7e14);
+/// G101's seam: the combat line's speaker call (words: the actor, the controller after the
+/// exe's fallback, the dialogue type, the subtype, the flag byte; answers the living ally that
+/// speaks instead, or 0 for the exe's speaker and words).
+pub const DEATH_RESPONSE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0098_4156);
+/// G127's seam: a mine's actor trigger test (words: the mine, the actor it reacts to; answers 1
+/// to explode, 0 to go on with the next actor).
+pub const MINE_EXPLODE_CHANCE: SiteSlot = SiteSlot::new(Owner::Jip, 0x009c_3bd6);
+/// G42's seams: the backup package's move-away distance in `fn_009ed380` (`0x9ED3F8`) and
+/// `fn_009ed4b0` (`0x9ED528`) (no words; answers the distance's bits).
+pub const MOVE_AWAY_DISTANCE: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x009e_d3f8),
+    SiteSlot::new(Owner::Jip, 0x009e_d528),
+];
+/// G124's seam: the explosion-in-face image space (no words; answers 0 for none while the hit
+/// effects are off, nothing for the exe's own).
+pub const EXPLOSION_IN_FACE: SiteSlot = SiteSlot::new(Owner::Jip, 0x009a_cec6);
+/// G125's seam: the explosion's screen shake (words: the explosion; answers 1 to skip it).
+pub const EXPLOSION_SHAKE: SiteSlot = SiteSlot::new(Owner::Jip, 0x009a_d2c5);
 
 /// The group's rows and installers.
 pub const AREA: Area = Area {
@@ -93,12 +111,19 @@ pub const AREA: Area = Area {
         AI_TARGET.addr(),
         SPEAKER_DONE.addr(),
         MISSILE_FLAGS.addr(),
+        DEATH_RESPONSE.addr(),
+        MINE_EXPLODE_CHANCE.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
-    jip_sites: &[],
+    jip_sites: &[
+        MOVE_AWAY_DISTANCE[0].addr(),
+        MOVE_AWAY_DISTANCE[1].addr(),
+        EXPLOSION_IN_FACE.addr(),
+        EXPLOSION_SHAKE.addr(),
+    ],
     jip_wraps: &[],
-    install_jip: super::nothing,
+    install_jip,
 };
 
 /// The record's three places in a projectile (JIP LN NVSE's `Projectile`, GameObjects.h): the
@@ -148,6 +173,20 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(AI_TARGET, ai_target);
     e.on_site(SPEAKER_DONE, speaker_done);
     e.on_site(MISSILE_FLAGS, missile_flags);
+    e.on_site(DEATH_RESPONSE, death_response);
+    e.on_site(MINE_EXPLODE_CHANCE, mine_explode_chance);
+}
+
+fn install_jip(e: &mut Engine) {
+    // G42's run-wide distance and GP's hit effects word (G124, G125), made before the threads
+    // start (`ext_free`'s rule).
+    e.ext_free::<MoveAwayDistance>();
+    e.ext_free::<super::gp::Immortal>();
+    for slot in MOVE_AWAY_DISTANCE {
+        e.on_site(slot, move_away_distance);
+    }
+    e.on_site(EXPLOSION_IN_FACE, explosion_in_face);
+    e.on_site(EXPLOSION_SHAKE, explosion_shake);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -295,6 +334,187 @@ fn missile_flags(e: &mut Engine, a: &[u32]) -> Option<u32> {
         }
     }
     Some(0)
+}
+
+/// The words of JIP's death-response test (G101): the dialogue type and subtype of a death
+/// response, and the flag byte.
+const COMBAT_DIALOGUE: u32 = 2;
+const DEATH_RESPONSE_SUBTYPE: u32 = 6;
+/// `Actor::combatAllies` (`+0x130`, a `BSSimpleArray<Actor*>*`: data `+4`, count `+8`),
+/// `isTalking` (`+0x7D`), the position (`+0x30`) and `BaseProcess::IsOnDialoguePackage`
+/// (slot `+0x4B8`).
+const COMBAT_ALLIES: u32 = 0x130;
+const IS_TALKING: u32 = 0x7d;
+const POSITION: u32 = 0x30;
+const IS_ON_DIALOGUE_PACKAGE: u32 = 0x4b8;
+/// `kMaxDist`: the farthest an ally may be (1024.0).
+const MAX_ALLY_DISTANCE: f32 = 1024.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeathResponseFixHook.
+/// G101: a death response (dialogue type 2, subtype 6, flag byte 1) with no combat controller
+/// is said by the actor's nearest living ally ([`nearest_living_ally`]); the answer is that
+/// ally, or 0 when there is none or the line is something else (the exe's speaker and words).
+fn death_response(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (actor, controller, kind, subtype, flag) = (a[0], a[1], a[2], a[3], a[4]);
+    if controller != 0
+        || kind != COMBAT_DIALOGUE
+        || subtype != DEATH_RESPONSE_SUBTYPE
+        || flag & 0xff != 1
+        || actor == 0
+    {
+        return Some(0);
+    }
+    Some(nearest_living_ally(e, actor))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetNearestLivingAlly.
+/// The nearest of the actor's combat allies closer than 1024 units that is not the actor, has a
+/// process, is neither dying (life state byte 1) nor dead (2), is not talking and is not on a
+/// dialogue package; 0 when there is none. JIP's loop: the count as a signed word, `comiss`
+/// with `jnb` (an unordered distance is taken).
+pub fn nearest_living_ally(e: &mut Engine, actor: u32) -> u32 {
+    let list = e.mem.u32(actor.wrapping_add(COMBAT_ALLIES));
+    if list == 0 {
+        return 0;
+    }
+    let mut count = e.mem.u32(list.wrapping_add(8)) as i32;
+    let mut at = e.mem.u32(list.wrapping_add(4));
+    let mut best = MAX_ALLY_DISTANCE;
+    let mut nearest = 0;
+    loop {
+        count = count.wrapping_sub(1);
+        if count < 0 {
+            return nearest;
+        }
+        let ally = e.mem.u32(at);
+        at = at.wrapping_add(4);
+        if ally == 0 || ally == actor {
+            continue;
+        }
+        let process = e.mem.u32(ally.wrapping_add(0x68));
+        if process == 0 {
+            continue;
+        }
+        let state = e.mem.u8(ally.wrapping_add(LIFE_STATE));
+        if state == 1 || state == 2 || e.mem.u8(ally.wrapping_add(IS_TALKING)) != 0 {
+            continue;
+        }
+        if e.vcall(process, IS_ON_DIALOGUE_PACKAGE, &args![ally])
+            .bool()
+        {
+            continue;
+        }
+        let distance =
+            point3_distance(e, actor.wrapping_add(POSITION), ally.wrapping_add(POSITION));
+        // `jnb` skips only an ordered "not below": a NaN distance (or best) is taken.
+        #[allow(clippy::neg_cmp_op_on_partial_ord)]
+        let taken = !(distance >= best);
+        if taken {
+            best = distance;
+            nearest = ally;
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/Ni_types.cpp: Point3Distance.
+/// The distance between two points as JIP's SSE code computes it: the squared sum
+/// `(dx² + dy²) + dz²` (`haddps` twice); 0 or NaN as it is; else `rsqrtss` with one Newton step,
+/// `s * ((3 - s * r * r) * r * 0.5)`.
+pub fn point3_distance(e: &Engine, first: u32, second: u32) -> f32 {
+    let d = |i: u32| e.mem.f32(first.wrapping_add(4 * i)) - e.mem.f32(second.wrapping_add(4 * i));
+    let (x, y, z) = (d(0), d(1), d(2));
+    let squared = (x * x + y * y) + (z * z + 0.0);
+    if squared == 0.0 || squared.is_nan() {
+        return squared;
+    }
+    let r = rsqrtss(squared);
+    let x1 = squared * r * r;
+    squared * ((3.0 - x1) * r * 0.5)
+}
+
+/// `rsqrtss`: the processor's own approximation on x86-64, so the result is JIP's on the same
+/// machine; elsewhere the exact reciprocal square root (a documented difference).
+fn rsqrtss(value: f32) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    {
+        use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
+        // SAFETY: SSE is part of every x86-64 processor.
+        unsafe { _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(value))) }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        1.0 / value.sqrt()
+    }
+}
+
+/// `ADDR_GetRandomInt` (`0xAA5230`, `thiscall` on JIP's `GAME_RNG` `0x11C4180`, the bound).
+const GET_RANDOM_INT: u32 = 0x00aa_5230;
+const GAME_RNG: u32 = 0x011c_4180;
+/// `kEntryPoint_AdjustMineExplodeChance` and the chance JIP starts from (100.0).
+const ADJUST_MINE_EXPLODE_CHANCE: u32 = 4;
+const MINE_CHANCE: f32 = 100.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: MineExplodeChanceHook.
+/// G127: a mine reacting to an actor explodes on a roll: the chance 100 through entry point 4
+/// with the actor and the mine's base form (`+0x20`), `GetRandomInt(100)` below the chance
+/// rounded (`cvtss2si`, unsigned compare): 1; else 0 (the next actor).
+fn mine_explode_chance(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (mine, actor) = (a[0], a[1]);
+    let base = e.mem.u32(mine.wrapping_add(0x20));
+    let chance = e.with_stack(4, |e, out| {
+        e.mem.set_f32(out.addr(), MINE_CHANCE);
+        e.call(
+            APPLY_PERK_MODIFIERS,
+            &args![ADJUST_MINE_EXPLODE_CHANCE, actor, base, out],
+        );
+        e.mem.f32(out.addr())
+    });
+    let roll = e.call(GET_RANDOM_INT, &args![GAME_RNG, 100u32]).u32();
+    Some(u32::from(roll < cvtss2si(chance) as u32))
+}
+
+/// JIP's `cvtss2si` under the default rounding: to nearest, ties to even; NaN or out of range
+/// gives `0x80000000`.
+fn cvtss2si(value: f32) -> i32 {
+    // `round` takes halves away from zero; an odd result of a half goes back to the even one.
+    let rounded = value.round();
+    let even = if (rounded - value).abs() == 0.5 && rounded % 2.0 != 0.0 {
+        rounded - value.signum()
+    } else {
+        rounded
+    };
+    cvttss2si(even)
+}
+
+/// G42's `s_moveAwayDistance` (JIP's static, 300.0 at start; `MoveAwayFrom` sets it and JIP's
+/// `AddBackUpPackage` puts 300.0 back): one for the run, read without a lock.
+pub struct MoveAwayDistance(pub AtomicU32);
+
+impl Default for MoveAwayDistance {
+    fn default() -> Self {
+        Self(AtomicU32::new(300.0f32.to_bits()))
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SafeWrite32(0x9ED3F8, &s_moveAwayDistance), the same at 0x9ED528).
+/// G42: the backup package's distance is JIP's variable instead of the exe's 300.0.
+fn move_away_distance(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(e.ext_free::<MoveAwayDistance>().0.load(Ordering::Relaxed))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetExplosionInFaceIMODHook.
+/// G124: no explosion-in-face image space while the hit effects are off (JIP's byte
+/// `s_disableHitEffects`, kept by GP). Otherwise JIP answers the form 0x166 it looked up at load;
+/// here the exe's own getter answers it (the same form).
+fn explosion_in_face(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    (super::gp::disable_hit_effects(e) & 0xff != 0).then_some(0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ExplosionScreenShakeHook.
+/// G125: no screen shake while the hit effects are off (1: skip to `0x9AD2FE`); 0 shakes.
+fn explosion_shake(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(u32::from(super::gp::disable_hit_effects(e) & 0xff != 0))
 }
 
 /// JIP's `cvttss2si`: truncated toward zero; NaN or out of range gives `0x80000000`.

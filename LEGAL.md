@@ -110,6 +110,19 @@ terms, whose notice must be kept:
   LLVM-exception). The copyright line and licence are in
   [crates/nvse/LICENSE-msvc-stl](crates/nvse/LICENSE-msvc-stl), and the module says so
   in its first lines.
+- `crates/nvse` translates parts of xNVSE 6.4.9 (GPL-3.0; its authors are named in
+  [crates/nvse/NOTICE](crates/nvse/NOTICE)). Two pieces of it come from code xNVSE carries
+  under other licences: the vector and quaternion commands in `src/commands/algohol.rs` from
+  Algohol (Copyright (c) 2007 entim, MIT licence:
+  [crates/nvse/LICENSE-algohol](crates/nvse/LICENSE-algohol)), and the MT19937 generator in
+  `src/mt19937.rs` from Makoto Matsumoto's and Takuji Nishimura's reference code (BSD 3-clause
+  licence: [crates/nvse/LICENSE-mt19937](crates/nvse/LICENSE-mt19937)).
+- `crates/jip` translates parts of JIP LN NVSE 57.30 (jazzisparis; GPL-3.0); see
+  [crates/jip/NOTICE](crates/jip/NOTICE).
+- `crates/uio` translates UI Organizer 2.30 (Copyright (c) 2020 Jef, MIT licence); the notice is
+  in [crates/uio/NOTICE](crates/uio/NOTICE).
+- These notices, and those above, are in every Linux and macOS package's licenses folder
+  (distribution/notices.txt lists them, and the package is refused when one is missing).
 - `vendor/wgpu-hal` is wgpu-hal 30.0.1 (gfx-rs developers, MIT or Apache-2.0), kept in the
   repository with the changes [vendor/README.md](vendor/README.md) lists. Its licence files
   are beside it, and each changed file says so in its first line.

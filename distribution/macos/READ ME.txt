@@ -1,16 +1,28 @@
 nv-rs macOS preview
 ===================
 
+PLEASE READ FIRST
+- Nobody on the project has played this build on a Mac: the maintainers have only Windows PCs.
+  It was built and its tests were run by the project's automatic build (GitHub Actions) only.
+- What works today: naming your game's folder, remembering it, and the check of your game
+  (./play.sh --check). The game itself does NOT run on macOS yet: the program stops right after
+  it finds your game, and says what is not provided on macOS yet.
+- Your nv-rs saves, settings and logs live in nv-rs's own folder:
+  ~/Library/Application Support/nv-rs
+- nv-rs never writes to the game's folder, to your Documents or to your Library (but its own
+  folder there), nor to CrossOver's bottles. One limit, said plainly: if another program of yours
+  replaced nv-rs's own Saves folder with a link into one of those folders at the very moment
+  nv-rs writes a save (a moment that can last as long as a sleeping disk takes to wake), that
+  save could be written where the link leads. Nothing nv-rs does makes such a link; don't make
+  one yourself.
+- To report a problem: https://github.com/slaterain/nv-rs/issues with the newest game-*.log from
+  the logs folder of nv-rs's own folder, and any report from its reports folder (F12 in the game
+  makes one). Details at the end.
+
 nv-rs runs Fallout: New Vegas from your own copy of the game, on the game's code translated to
-Rust. This is an EARLY PREVIEW for Macs with Apple silicon (M1 and later). Read "What this build
-can do today" first.
-
-This build was made by the project's automatic build (GitHub Actions) on macOS. Nobody on the
-project has played it on a Mac: the maintainers have only Windows PCs. Expect problems, and please
-tell us what you find (see the end).
-
-nv-rs is an independent project. It is not affiliated with, endorsed by or sponsored by Bethesda,
-ZeniMax, Obsidian, Microsoft or Apple. This package has no game files in it.
+Rust, for Macs with Apple silicon (M1 and later). nv-rs is an independent project. It is not
+affiliated with, endorsed by or sponsored by Bethesda, ZeniMax, Obsidian, Microsoft or Apple. This
+package has no game files in it.
 
 
 What you need
@@ -26,27 +38,29 @@ What you need
 
 What this build can do today
 ----------------------------
-Read this before you start: today the program STOPS right after it finds your game, with a message
-that lists what is not provided on macOS yet. The game's window and drawing, the sound, the game's
-Windows folder names, some of the machine's answers to the game, and on Apple silicon the exact
-results of some of the game's maths are still being made. They come in the next previews; play.sh
-and your nv-rs folder stay the same.
-
-What works today: naming your game's folder, remembering it, and the check of your game
-(./play.sh --check).
+Today the program STOPS right after it finds your game, with a message that lists what is not
+provided on macOS yet. The game's window and drawing, the sound, the game's Windows folder names,
+some of the machine's answers to the game, and on Apple silicon the exact results of some of the
+game's maths are still being made. They come in the next previews; play.sh and your nv-rs folder
+stay the same.
 
 
 Start
 -----
-1. Extract the archive to a folder of your own (not inside the game's folder), for example in
-   Terminal with: tar -xzf nv-rs-preview-macos-arm64.tar.gz
-2. macOS marks downloaded programs and may refuse to start one that is not signed (this one is
-   not). If it says the program "cannot be opened" or "is damaged", remove the mark from the
-   extracted folder, once, in Terminal:
+1. Unpack the archive into a folder of your own (not inside the game's folder). Safari usually
+   unpacks it by itself: then you already have the folder nv-rs-preview-macos-arm64 in Downloads,
+   and you skip this step. Otherwise, in Terminal: cd ~/Downloads
+   and then: tar -xzf nv-rs-preview-macos-arm64.tar.gz
+2. This program is not signed by Apple (the project has no Apple developer certificate), so
+   macOS refuses to start it at first. On macOS 15 it says '"nv-viewer" Not Opened' and 'Apple
+   could not verify "nv-viewer" is free of malware' (older macOS: "cannot be opened" or "is
+   damaged"). The warning names nv-viewer, the program play.sh starts. Allow it once, in
+   Terminal, in the folder that HOLDS nv-rs-preview-macos-arm64 (for example: cd ~/Downloads):
      xattr -dr com.apple.quarantine nv-rs-preview-macos-arm64
    Do this only for a download you trust: the source of every file is at
    https://github.com/slaterain/nv-rs (BUILD.txt names the exact version).
-3. In Terminal, in that folder: ./play.sh
+3. In Terminal, in the package's folder (cd ~/Downloads/nv-rs-preview-macos-arm64): ./play.sh
+   (as yourself: never with sudo)
 
 The first start asks for your game's folder: type it, or drag the folder from Finder into the
 Terminal window, and press Enter. nv-rs remembers it.
@@ -54,13 +68,13 @@ Terminal window, and press Enter. nv-rs remembers it.
   ./play.sh                  start
   ./play.sh --game FOLDER    use the game in FOLDER, and remember it
   ./play.sh --forget-game    forget the remembered game folder (it asks again)
+  ./play.sh --import-saves   offer again to copy saves found in CrossOver's bottles
   ./play.sh --check          only check your game and say whether it can start
 
 
 Your files
 ----------
-nv-rs never writes to the game's folder, to your Documents or to your Library (but its own folder
-below). Everything it keeps is in:
+Everything nv-rs keeps is in:
 
   ~/Library/Application Support/nv-rs
 
@@ -72,7 +86,9 @@ below). Everything it keeps is in:
 Saves from a Windows PC: copy the .fos files (and the .nvse files beside them) from the PC's
 Documents\My Games\FalloutNV\Saves into the Saves folder above.
 
-To remove nv-rs, delete the folder you extracted and that folder (your nv-rs saves go with it).
+Keep that folder a plain folder: if it (or a folder in it) is a link, nv-rs refuses to write
+there and says so. To remove nv-rs, delete the folder you extracted and that folder (your nv-rs
+saves go with it).
 
 
 What doesn't work yet
@@ -87,7 +103,8 @@ Reporting a problem
 https://github.com/slaterain/nv-rs/issues
 
 Say that it is the macOS preview, your Mac's model and macOS version, and where your game's folder
-came from. Attach the newest game-*.log from the logs folder above. Logs can show your user name
-in folder paths: look through them first if that matters to you. Never attach game files.
+came from. Attach the newest game-*.log from the logs folder above, and the report folder from
+reports if you made one with F12. Logs can show your user name in folder paths: look through them
+first if that matters to you. Never attach game files.
 
 Licence terms and notices are in LICENSE, LEGAL.md, THIRD-PARTY-NOTICES.txt and the licenses folder.

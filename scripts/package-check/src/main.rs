@@ -208,9 +208,12 @@ struct Arguments {
     exact_program_needles: Vec<String>,
     games: Vec<PathBuf>,
     max_run: Option<usize>,
+    /// `--notices LIST`: every notice LIST names (`FILE<TAB>NAME` a line, `#` comments) must be
+    /// in the package as `licenses/NAME`.
+    notices: Option<PathBuf>,
 }
 
-const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--program-needle-exact TEXT]... [--game FILE]... [--max-run BYTES]";
+const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--program-needle-exact TEXT]... [--game FILE]... [--max-run BYTES] [--notices LIST]";
 
 /// The command line after the program's name. A switch without its value, an unknown switch or a
 /// `--max-run` that isn't a number is an error: a limit that was asked for is never dropped.
@@ -233,6 +236,7 @@ fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
             "--program-needle" => out.program_needles.push(value?),
             "--program-needle-exact" => out.exact_program_needles.push(value?),
             "--game" => out.games.push(PathBuf::from(value?)),
+            "--notices" => out.notices = Some(PathBuf::from(value?)),
             "--max-run" => {
                 let n = value?;
                 let limit = n
@@ -256,6 +260,7 @@ fn main() {
         exact_program_needles,
         games,
         max_run,
+        notices,
     } = match parse_arguments(&args) {
         Ok(arguments) => arguments,
         Err(why) => {
@@ -383,7 +388,35 @@ fn main() {
             }
         }
     }
+    if let Some(list) = &notices {
+        match std::fs::read_to_string(list) {
+            Ok(text) => {
+                for name in missing_notices(&folder, &text) {
+                    println!(
+                        "MISSING notice licenses/{name} (listed in {})",
+                        list.display()
+                    );
+                    bad += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("--notices {}: {e}", list.display());
+                std::process::exit(2);
+            }
+        }
+    }
     std::process::exit(i32::from(bad != 0));
+}
+
+/// The names `list` (`FILE<TAB>NAME` a line, `#` comments, blank lines) gives that are not in
+/// `folder`'s `licenses` folder as files.
+fn missing_notices(folder: &Path, list: &str) -> Vec<String> {
+    list.lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.split('\t').nth(1).unwrap_or("").trim().to_string())
+        .filter(|name| name.is_empty() || !folder.join("licenses").join(name).is_file())
+        .collect()
 }
 
 #[cfg(test)]
@@ -392,6 +425,23 @@ mod tests {
 
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Every notice the list names must be in the package's licenses folder; a line without a
+    /// name is missing too.
+    #[test]
+    fn a_notice_the_list_names_must_be_in_the_package() {
+        let dir =
+            std::env::temp_dir().join(format!("package-check-notices-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("licenses")).unwrap();
+        std::fs::write(dir.join("licenses/NOTICE-uio"), b"MIT").unwrap();
+        let list = "# comment\n\ncrates/uio/NOTICE\tNOTICE-uio\n\
+                    crates/nvse/LICENSE-algohol\tLICENSE-algohol\nno-name-here\n";
+        assert_eq!(missing_notices(&dir, list), ["LICENSE-algohol", ""]);
+        let parsed = parse_arguments(&args(&["pkg", "--notices", "n.txt"])).unwrap();
+        assert_eq!(parsed.notices, Some(PathBuf::from("n.txt")));
+        assert!(parse_arguments(&args(&["pkg", "--notices"])).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Linux's and macOS's programs (no extension) are programs by their first bytes; text is not.

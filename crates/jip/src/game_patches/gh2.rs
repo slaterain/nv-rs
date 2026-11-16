@@ -32,12 +32,9 @@
 //! start-up message, main thread) writes JIP's kept form flags under the slot.
 
 use super::Area;
-use crate::commands::jip_fn_aux_variable::{
-    aux_maps, maps_found_empty, maps_may_hold, mark_changed, AuxMods,
-};
+use crate::commands::jip_fn_aux_variable::{maps_may_hold, mark_changed, AuxMaps, AuxMods};
 use crate::cosave::{changed, has_change_data};
 use crate::world_hooks::TextBlock;
-use crate::Jip;
 use engine_core::extend::{Hook, Owner, SiteSlot};
 use engine_core::prelude::*;
 use std::collections::BTreeMap;
@@ -148,11 +145,10 @@ fn install_jip(e: &mut Engine) {
 /// threads too, with real threads on). So it runs off the main thread. What the routine reads
 /// without a lock: the reference's and base's bytes, the save's changes map (game memory) and
 /// the aux maps' lock-free "may hold" flag ([`maps_may_hold`]): with nothing named and both
-/// aux maps empty it takes no lock at all. Otherwise it takes JIP's shared slot, where both aux
-/// maps live (one map each for the game, as JIP's globals, whichever engine wrote them); an
-/// engine that holds the slot already (a script command destroying a reference on the main
-/// thread) takes it again at no cost: the slot's holder is the engine (`Engine::ext`), so the
-/// routine never waits on itself.
+/// aux maps empty it takes no lock at all. Otherwise it takes the aux maps' own lock once
+/// (`jip_fn_aux_variable::AuxMaps`, a leaf held for the test and both erasures, never across
+/// a game call), never JIP's shared slot; the names' and model paths' maps are the world hooks'
+/// lock-free slot.
 fn destroy_refr(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let reference = a[0];
     let base = e.mem.u32(reference + BASE);
@@ -174,17 +170,11 @@ fn destroy_refr(e: &mut Engine, a: &[u32]) -> Option<u32> {
     }
     let id = e.mem.u32(reference + REF_ID);
     if e.mem.u8(reference + MOD_INDEX) == 0xff && !has_change_data(e, id) && maps_may_hold(e) {
-        let jip = e.ext::<Jip>();
-        let empty = jip.saved.aux_vars.is_empty() && jip.temp_aux_vars.is_empty();
-        if empty {
-            maps_found_empty(e);
-        } else {
-            if clear_ref_aux_vars(aux_maps(e, false), id) {
-                mark_changed(e, changed::AUX_VARS);
-            }
-            clear_ref_aux_vars(aux_maps(e, true), id);
-            // The lock-free copy AuxVarGetFltCond reads loses the owner too.
-            crate::commands::jip_fn_aux_variable::forget_owner(e, id);
+        // One take of the maps' lock for the test, both erasures and the copy AuxVarGetFltCond
+        // reads losing the owner (`AuxMaps`), not JIP's slot.
+        let erased = erase_owner(e.ext_free::<AuxMaps>(), id);
+        if erased == Some(true) {
+            mark_changed(e, changed::AUX_VARS);
         }
     }
     let kind = e.mem.u8(e.mem.u32(reference + BASE) + FORM_TYPE);
@@ -211,6 +201,30 @@ fn drop_text(
     };
     if found {
         e.add_hook_user(hook, false);
+    }
+}
+
+/// The destructor's aux part on the maps, under one take of their lock: with both empty the
+/// "may hold" flag is cleared and `None` answered; else the id's variables leave the saved and the
+/// temporary map and the copy `AuxVarGetFltCond` reads (in the same take, so a command's publish
+/// on another thread cannot land between them), and whether a saved one went is answered.
+fn erase_owner(maps: &AuxMaps, id: u32) -> Option<bool> {
+    erase_owner_with(maps, id, || {})
+}
+
+/// [`erase_owner`], with `between` run after the maps' erasures and before the copy's (tests:
+/// another thread's set and publish there must wait for this take).
+fn erase_owner_with(maps: &AuxMaps, id: u32, between: impl FnOnce()) -> Option<bool> {
+    let mut pair = maps.lock();
+    if pair.saved.is_empty() && pair.temp.is_empty() {
+        pair.maps_found_empty();
+        None
+    } else {
+        let saved = clear_ref_aux_vars(&mut pair.saved, id);
+        clear_ref_aux_vars(&mut pair.temp, id);
+        between();
+        maps.forget_owner_held(&pair, id);
+        Some(saved)
     }
 }
 

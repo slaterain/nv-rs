@@ -11,7 +11,8 @@
 #                        release". Without it the script refuses unless HEAD is on origin's main,
 #                        the licence notices match Cargo.lock and every dependency's licence is in
 #                        distribution/licenses.
-#       [--profile release|play]   the Cargo profile (default release, as the Windows package)
+#       [--profile release|play]   the Cargo profile (default release: the optimised build the
+#                        Windows package and its frame rates use; play only for quick tests)
 #       [--use-built]    use the programs built before with the same profile, under --target
 #       [--target DIR]   the Cargo target folder (default: target)
 #       [--out DIR]      where the package goes (default: dist)
@@ -91,26 +92,51 @@ sha256() {
     fi
 }
 
-# The licence notices were made for this Cargo.lock (its hash with LF line ends).
-lock=$(tr -d '\r' <Cargo.lock | sha256 | cut -d ' ' -f 1)
-want=$(tr -d '\r \n' <distribution/DEPENDENCY-LOCK.sha256)
-if [ "$lock" != "$want" ]; then
-    [ "$test_build" = 1 ] || fail "the dependency lockfile changed: refresh the licence notices and their lockfile hash (distribution/DEPENDENCY-LOCK.sha256) before packaging"
-    note "THIRD-PARTY-NOTICES.txt was made for another Cargo.lock: refresh it before a release."
-fi
+# The licence notices cover every crates.io package of Cargo.lock: THIRD-PARTY-NOTICES.txt has an
+# entry `NAME VERSION` for each. (Checked by the packages themselves, not by a hash of the whole
+# lock file: the workspace's own crates change the lock file but need no notice. The Windows
+# script keeps its hash, distribution/DEPENDENCY-LOCK.sha256.)
 [ -f distribution/THIRD-PARTY-NOTICES.txt ] || fail "the dependency notices must be assembled before packaging"
+noticed=$(tr -d '\r' <distribution/THIRD-PARTY-NOTICES.txt)
+unnoticed=$(tr -d '\r' <Cargo.lock | awk '
+    /^\[\[package\]\]/ { name = ""; version = "" }
+    /^name = / { name = $3 }
+    /^version = / { version = $3 }
+    /^source = "registry/ { gsub(/"/, "", name); gsub(/"/, "", version); print name " " version }' |
+    sort -u | while IFS= read -r package; do
+        printf '%s\n' "$noticed" | grep -qxF "$package" || printf '%s, ' "$package"
+    done)
+if [ -n "$unnoticed" ]; then
+    [ "$test_build" = 1 ] || fail "THIRD-PARTY-NOTICES.txt has no entry for: $unnoticed refresh it (and distribution/licenses) before packaging"
+    note "THIRD-PARTY-NOTICES.txt has no entry yet for: $unnoticed refresh it before a release."
+fi
 
 # Every crates.io crate in this system's program has its licence folder (licenses/<name>-<version>).
 # The workspace's own crates and the vendored ones are listed with their folder and left out here.
-missing=$(cargo tree --locked --target "$triple" -p nv-viewer -e normal --prefix none --format '{p}' |
-    sed -e 's/ (\*)$//' | grep -v ' (' | sed -e 's/ v/-/' | sort -u |
+# (Through a file: a failing cargo tree must stop the script, which a pipe into a loop would hide.)
+crates=$(mktemp) || fail "no temporary file"
+cargo tree --locked --target "$triple" -p nv-viewer -e normal --prefix none --format '{p}' >"$crates" ||
+    fail "cargo tree did not list the program's crates"
+[ -s "$crates" ] || fail "cargo tree listed no crates for the program"
+missing=$(sed -e 's/ (\*)$//' "$crates" | grep -v ' (' | sed -e 's/ v/-/' | sort -u |
     while IFS= read -r crate; do
         [ -d "distribution/licenses/$crate" ] || printf '%s ' "$crate"
-    done) || fail "cargo tree did not list the program's crates"
+    done)
 if [ -n "$missing" ]; then
     [ "$test_build" = 1 ] || fail "no licence folder in distribution/licenses for: $missing"
     note "No licence folder yet in this package for: $missing"
 fi
+# Every licence or notice file of the program's own and vendored crates (path crates: the
+# workspace's, vendor/) is listed in distribution/notices.txt, which the package copies whole.
+tab=$(printf '\t')
+unlisted=$(sed -n -e 's/^.* v[^ ]* (\(.*\))$/\1/p' "$crates" | sort -u | while IFS= read -r dir; do
+    rel=${dir#"$root"/}
+    git ls-files -- "$rel/LICENSE*" "$rel/NOTICE*" "$rel/COPYING*" | while IFS= read -r file; do
+        grep -q "^$file$tab" distribution/notices.txt || printf '%s ' "$file"
+    done
+done)
+rm -f -- "$crates"
+[ -z "$unlisted" ] || fail "these licence or notice files of the program's crates are not in distribution/notices.txt (add them there and to LEGAL.md): $unlisted"
 
 programs=$target/$profile
 checker=$target/release/package-check
@@ -149,11 +175,24 @@ linux-*) cp -- "distribution/linux/READ ME.txt" "$stage/READ ME.txt" ;;
 macos-*) cp -- "distribution/macos/READ ME.txt" "$stage/READ ME.txt" ;;
 esac
 cp -- distribution/THIRD-PARTY-NOTICES.txt LICENSE LEGAL.md "$stage/"
-cp -R -- distribution/licenses/. "$stage/licenses/"
-cp -- crates/vorbis/LICENSE-libvorbis "$stage/licenses/LICENSE-libvorbis"
-cp -- crates/nvse/LICENSE-msvc-stl "$stage/licenses/LICENSE-msvc-stl"
+# Only the files Git tracks: a .DS_Store or other ignored file left in the folder stays out.
+git ls-files -- distribution/licenses | while IFS= read -r file; do
+    rel=${file#distribution/licenses/}
+    mkdir -p -- "$stage/licenses/$(dirname -- "$rel")"
+    cp -- "$file" "$stage/licenses/$rel"
+done
+# The notices of code that is not a crates.io crate (distribution/notices.txt).
+grep -v '^#' distribution/notices.txt | while IFS="$tab" read -r file named; do
+    [ -n "$file" ] || continue
+    cp -- "$file" "$stage/licenses/$named" || fail "the notice $file is missing"
+done
+# The system libraries play.sh checks for before a start (Linux; none today).
+case $system in
+linux-*) cp -- distribution/unix/libraries.txt "$stage/app/libraries.txt" ;;
+esac
 # Text with LF line ends whatever this checkout has.
-for file in "$stage/READ ME.txt" "$stage/play.sh"; do
+for file in "$stage/READ ME.txt" "$stage/play.sh" "$stage/app/libraries.txt"; do
+    [ -f "$file" ] || continue
     tr -d '\r' <"$file" >"$file.lf" && mv -f -- "$file.lf" "$file"
 done
 find "$stage" -type d -exec chmod 755 {} +
@@ -172,10 +211,10 @@ macos-*)
     ;;
 esac
 sha=$(sha256 "$stage/app/nv-viewer" | cut -d ' ' -f 1)
+# The source link in every mode: any archive that gets out names its source.
+source="Source: https://github.com/slaterain/nv-rs/tree/$commit"
 if [ "$test_build" = 1 ]; then
-    source='test build, not for release'
-else
-    source="Source: https://github.com/slaterain/nv-rs/tree/$commit"
+    source="$source (a test build, not for release: if that commit is no longer on a branch, the pull request that built it holds the source)"
 fi
 [ -n "$game" ] || note "Not checked: that no data of the game's FalloutNV.exe is in the program (packaged without the game, --game)."
 {
@@ -209,16 +248,24 @@ done
 if [ -n "$game" ]; then
     set -- "$@" --game "$game" --max-run 4096
 fi
+set -- "$@" --notices distribution/notices.txt
 "$checker" "$@" || fail "package-check found something that must not be in the package"
 
 # The archive: entries under the package's name, owned by nobody in particular.
-# macOS's tar is bsdtar; elsewhere GNU tar.
+# macOS's tar is bsdtar (no extended attributes or AppleDouble ._ entries); elsewhere GNU tar.
 if [ "$(uname -s)" = Darwin ]; then
-    owner='--uid 0 --gid 0'
+    owner='--uid 0 --gid 0 --no-mac-metadata --no-xattrs'
+    COPYFILE_DISABLE=1
+    export COPYFILE_DISABLE
 else
     owner='--owner=0 --group=0 --numeric-owner'
 fi
 # shellcheck disable=SC2086
 (cd -- "$out" && tar $owner -cf - "$name" | gzip -9 >"$archive") || fail "the archive was not made"
+# Every entry under the package's folder, none of Apple's metadata, no `..`.
+entries=$(tar -tzf "$archive") || fail "the archive cannot be listed"
+odd=$(printf '%s\n' "$entries" | grep -v -e "^$name/" -e "^$name\$" || true)
+odd="$odd$(printf '%s\n' "$entries" | grep -e '/\._' -e '\.\./' || true)"
+[ -z "$odd" ] || fail "the archive holds entries it must not: $odd"
 (cd -- "$out" && sha256 "$name.tar.gz" >"$name.tar.gz.sha256")
 printf '%s\n' "Package: $archive" "Bytes: $(wc -c <"$archive" | tr -d ' ')" "Checksum: $archive.sha256" "Commit: $commit" "Program SHA256: $sha"
