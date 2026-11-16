@@ -21,9 +21,9 @@
 //!   or in the game's), as Windows answers `ERROR_PATH_NOT_FOUND` otherwise; in the port's folder
 //!   it is then made.
 //!
-//! Refused (never read from the disk or written): a name that leaves the game's folder (`..`,
-//! a drive, another full path; reads of those go to the run's files as any other read), and a
-//! part that names a DOS device (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, the
+//! Refused (never read, looked for or written: a read fails with `ERROR_ACCESS_DENIED`, the
+//! existence checks answer false): a name that leaves the game's folder (`..`, another drive, a
+//! UNC or device path, another full path), and a part that names a DOS device (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, the
 //! superscript digits too, `CONIN$`, `CONOUT$`; with any extension). Before the first write into
 //! a folder of the port's folder, the real path of the part that exists (junctions, `subst`, short
 //! names resolved) must lie inside the port folder's real path; the folders checked are kept. The
@@ -75,7 +75,7 @@ pub fn folder(e: &Engine) -> Option<PathBuf> {
 /// Why a name is not a mod file's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NotMine {
-    /// It leaves the game's folder (or names no file): read as any other read, never written.
+    /// It leaves the game's folder (or names no file): neither read nor written.
     Outside,
     /// A part names a DOS device: neither read nor written.
     Device,
@@ -185,13 +185,10 @@ fn assert_locked(e: &Engine) {
 /// The bytes of the mod file `name`: written in this run, else the folder's copy, else the
 /// game's (the run's files, then the player's, read only). A copy that is there but cannot be
 /// read (access denied, held by another program, a folder of that name) fails with its error.
+/// A name [`relative`] refuses reads nothing: `ERROR_ACCESS_DENIED`.
 pub fn read(e: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
     assert_locked(e);
-    let rel = match relative(e, name) {
-        Ok(rel) => rel,
-        Err(NotMine::Outside) => return files::read_whole_or_error(e, &files::full_path(e, name)),
-        Err(NotMine::Device) => return Err(ERROR_ACCESS_DENIED),
-    };
+    let rel = relative(e, name).map_err(|_| ERROR_ACCESS_DENIED)?;
     let mods = &state_ref!(e).mod_files;
     if let Some(bytes) = mods.written.get(&key(&rel)) {
         return Ok(bytes.clone());
@@ -207,14 +204,13 @@ pub fn read(e: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
 }
 
 /// Whether the mod file `name` exists in [`read`]'s places, from attributes alone (the file's
-/// bytes are not read): a file, not a folder; a game file the run deleted is not there.
+/// bytes are not read): a file, not a folder; a game file the run deleted is not there. A name
+/// [`relative`] refuses is not looked for: false.
 pub fn exists(e: &Engine, name: &[u8]) -> bool {
     assert_locked(e);
     let is_file = |a: Option<u32>| a.is_some_and(|a| a & files::FILE_ATTRIBUTE_DIRECTORY == 0);
-    let rel = match relative(e, name) {
-        Ok(rel) => rel,
-        Err(NotMine::Outside) => return is_file(files::attributes(e, &files::full_path(e, name))),
-        Err(NotMine::Device) => return false,
+    let Ok(rel) = relative(e, name) else {
+        return false;
     };
     let mods = &state_ref!(e).mod_files;
     if mods.written.contains_key(&key(&rel)) {
@@ -245,14 +241,10 @@ fn folder_exists(e: &Engine, rel: &[u8]) -> bool {
 }
 
 /// Whether the folder `name` exists: made in this run, in the port's folder, or in the game's
-/// (one trailing separator allowed).
+/// (one trailing separator allowed). A name [`relative_as`] refuses is not looked for: false.
 pub fn directory_exists(e: &Engine, name: &[u8]) -> bool {
     assert_locked(e);
-    match relative_as(e, name, true) {
-        Ok(rel) => folder_exists(e, &rel),
-        Err(NotMine::Outside) => files::is_directory(e, &files::full_path(e, name)),
-        Err(NotMine::Device) => false,
-    }
+    relative_as(e, name, true).is_ok_and(|rel| folder_exists(e, &rel))
 }
 
 /// Makes `target`'s folders in the port's folder `folder`, after checking that the real path of

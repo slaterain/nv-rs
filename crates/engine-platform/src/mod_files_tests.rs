@@ -185,6 +185,54 @@ fn reads_prefer_the_ports_folder_and_writes_never_reach_the_game() {
     }
 }
 
+/// A name the game's folder does not hold reads nothing and is not there, even when a file of
+/// that name exists on disk (`..`, the full path of a file beside the game's folder, another
+/// drive, a UNC path, the folder above).
+#[test]
+fn a_refused_name_reads_nothing() {
+    let root = scratch("refused");
+    let game = root.join("game");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    let above: &Path = &root;
+    let leaf = "beside.ini";
+    let beside = above.join(leaf);
+    std::fs::write(&beside, b"[A]\r\nx=1\r\n").unwrap();
+    let e = engine(&game);
+    let beside_name = beside.to_string_lossy().replace('/', "\\").into_bytes();
+    let above_name = above.to_string_lossy().replace('/', "\\").into_bytes();
+    let dotdot = format!(r"..\{leaf}").into_bytes();
+    let deeper = format!(r"Data\..\..\{leaf}").into_bytes();
+    let other_drive = format!(r"D:\{leaf}").into_bytes();
+    let unc = format!(r"\\server\share\{leaf}").into_bytes();
+    let rooted = format!(r"\{leaf}").into_bytes();
+    for name in [
+        &dotdot[..],
+        &deeper,
+        &beside_name,
+        &other_drive,
+        &unc,
+        &rooted,
+    ] {
+        let shown = String::from_utf8_lossy(name).into_owned();
+        assert_eq!(seam::read_or_error(&e, name), Err(ERROR_ACCESS_DENIED), "{shown}");
+        assert_eq!(seam::profile_string(&e, name, b"A", b"x"), None, "{shown}");
+        assert!(!seam::exists(&e, name), "{shown}");
+    }
+    for folder in [&b".."[..], br"..\", &above_name, br"\\server\share\"] {
+        assert!(
+            !seam::directory_exists(&e, folder),
+            "{}",
+            String::from_utf8_lossy(folder)
+        );
+    }
+    // The same file through the game's folder is read.
+    std::fs::write(game.join(r"Data\in.ini"), b"[A]\r\nx=2\r\n").unwrap();
+    assert_eq!(
+        seam::profile_string(&e, br"Data\in.ini", b"A", b"x").unwrap(),
+        b"2"
+    );
+}
+
 /// A kept file that is there but cannot be read (another program holds it) fails the read: the
 /// game's shipped copy is not used in its place, and a write leaves the kept bytes as they are.
 #[cfg(windows)]
