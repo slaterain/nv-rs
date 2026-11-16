@@ -513,14 +513,17 @@ fn vtable(e: &mut Engine, base: u32, slots: usize) -> u32 {
 }
 
 /// A word of a call's arguments, as the real side (`super::d3d9real`) takes it.
+#[cfg(windows)]
 pub(super) trait Word: Copy {
     fn word(self) -> u32;
 }
+#[cfg(windows)]
 impl Word for u32 {
     fn word(self) -> u32 {
         self
     }
 }
+#[cfg(windows)]
 impl Word for Ptr {
     fn word(self) -> u32 {
         self.addr()
