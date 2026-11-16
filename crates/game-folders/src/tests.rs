@@ -328,6 +328,14 @@ fn the_xdg_documents_folder_is_read_from_user_dirs() {
         &format!("XDG_DOCUMENTS_DIR=\"{}\"\n", full.display()),
     );
     assert_eq!(xdg_documents(&home), Some(full));
+    // Review of #630 (round 2): `/` and the home folder named in full are xdg-user-dirs' "none".
+    for none in ["/".to_string(), s.0.join("home").display().to_string()] {
+        s.file(
+            "home/.config/user-dirs.dirs",
+            &format!("XDG_DOCUMENTS_DIR=\"{none}\"\n"),
+        );
+        assert_eq!(xdg_documents(&home), None, "{none}");
+    }
 }
 
 #[test]
@@ -438,6 +446,12 @@ fn the_own_folder_stays_writable_inside_broad_player_folders() {
     .unwrap();
     let never = never_written(&flatpak);
     assert_eq!(refused(&own_folder(&flatpak).join("Saves"), &never), None);
+    // Review of #630 (round 2): on Linux names that differ in case are other folders, so the
+    // exception is the own folder named exactly.
+    for other in ["NV-RS/Saves", "Nv-Rs/Saves"] {
+        let dir = h.join(".var/app/com.valvesoftware.Steam/data").join(other);
+        assert!(refused(&dir, &never).is_some(), "{}", dir.display());
+    }
     assert!(refused(
         &h.join(".var/app/com.valvesoftware.Steam/data/Steam"),
         &never
@@ -479,6 +493,72 @@ fn a_link_at_or_inside_the_own_folder_opens_nothing() {
     let never = never_written(&linux);
     assert!(refused(&own.join("planted/x.fos"), &never).is_some());
     assert_eq!(refused(&own.join("Saves/x.fos"), &never), None);
+    // Review of #630 (round 2): a link inside a player's folder that leads into the own folder is
+    // still the player's folder by its name: the exception needs the place inside the own folder
+    // by its text too.
+    std::os::unix::fs::symlink(&own, documents.join("to-own")).unwrap();
+    assert!(refused(&documents.join("to-own/Saves"), &never).is_some());
+}
+
+/// Review of #630 (round 2): a plainly named link that leads into a Steam library's prefixes is
+/// refused by where it leads, though no list names that library.
+#[cfg(unix)]
+#[test]
+fn a_plain_link_into_a_libraries_prefixes_is_refused() {
+    let s = Scratch::new("shape-link");
+    let pfx = s.dir("mnt/Lib/steamapps/compatdata/22380/pfx");
+    std::os::unix::fs::symlink(&pfx, s.0.join("innocent")).unwrap();
+    let empty = Home::new(s.0.join("nobody"), None, None, System::Linux).unwrap();
+    let never = never_written(&empty);
+    assert!(refused(&s.0.join("innocent/x"), &never).is_some());
+    assert_eq!(refused(&s.0.join("mnt/Lib/notes"), &never), None);
+}
+
+/// Review of #630 (round 1, owed): a guarded folder that is itself a link (Documents kept on
+/// another disk) is guarded where it leads too.
+#[cfg(unix)]
+#[test]
+fn a_guarded_folder_that_is_a_link_is_guarded_where_it_leads() {
+    let s = Scratch::new("root-link");
+    let elsewhere = s.dir("disk2/Documents");
+    s.dir("home");
+    std::os::unix::fs::symlink(&elsewhere, s.0.join("home/Documents")).unwrap();
+    let home = s.home(System::Linux);
+    let never = never_written(&home);
+    assert!(refused(&elsewhere.join("My Games/FalloutNV/Saves"), &never).is_some());
+    assert!(refused(&s.0.join("home/Documents/x"), &never).is_some());
+    assert_eq!(refused(&s.0.join("disk2/other"), &never), None);
+}
+
+/// Review of #630 (round 2): when the own folder itself is refused, the warning names the cause
+/// and the folder, not a guess: a `..` in XDG_DATA_HOME, a path shaped like Steam's folders.
+#[test]
+fn the_own_folders_warning_names_the_cause() {
+    let s = Scratch::new("own-cause");
+    let h = s.0.join("home");
+    let dotted = Home::new(
+        h.clone(),
+        Some(h.join(".local/../data")),
+        None,
+        System::Linux,
+    )
+    .unwrap();
+    let never = never_written(&dotted);
+    let warnings = own_folder_warnings(&dotted, &never).join("\n");
+    assert!(warnings.contains("`..`"), "{warnings}");
+    assert!(warnings.contains("nv-rs's own folder"), "{warnings}");
+    assert!(!warnings.contains("link"), "{warnings}");
+    let shaped = Home::new(
+        h.clone(),
+        Some(s.0.join("lib/steamapps/common/x")),
+        None,
+        System::Linux,
+    )
+    .unwrap();
+    let never = never_written(&shaped);
+    let warnings = own_folder_warnings(&shaped, &never).join("\n");
+    assert!(warnings.contains("Steam library"), "{warnings}");
+    assert!(!warnings.contains("link"), "{warnings}");
 }
 
 /// The Snap Steam, plain Wine, Bottles, PlayOnLinux and CrossOver: guarded as whole folders, saves
@@ -610,6 +690,36 @@ fn store_files_escapes_are_decoded() {
     assert_eq!(yaml_values(yaml, "prefix"), ["it's"]);
 }
 
+/// Review of #630 (round 2): a broken `\u` escape or a lone high surrogate leaves its value out
+/// without swallowing the closing quote, so the next value is still read.
+#[test]
+fn a_broken_json_escape_does_not_hide_the_next_value() {
+    for broken in [r"\ud83d", r"\u12", r"\ud83d\u12", r"\ud83dA"] {
+        let json = format!(
+            r#"{{"install_path": "/a{broken}", "install_path": "/b", "winePrefix": "/games/fnv-prefix"}}"#
+        );
+        assert_eq!(json_strings(&json, "install_path"), ["/b"], "{json}");
+        assert_eq!(
+            json_strings(&json, "winePrefix"),
+            ["/games/fnv-prefix"],
+            "{json}"
+        );
+    }
+}
+
+/// Review of #630 (round 2): every escape PyYAML writes (`\_` for a no-break space, `\N`, `\L`,
+/// `\P`, `\a`, `\b`, `\e`, `\f`, `\v`) and its `\`-continued lines; an escape YAML has not is a
+/// broken value.
+#[test]
+fn every_yaml_escape_pyyaml_writes_is_decoded() {
+    let yaml = "game:\n  game_path: \"/home/x\\_y/a\\N\\L\\P\\a\\b\\e\\f\\v\\\n    \\ z\"\n  exe: \"/q\\k\"\n";
+    assert_eq!(
+        yaml_values(yaml, "game_path"),
+        ["/home/x\u{a0}y/a\u{85}\u{2028}\u{2029}\u{7}\u{8}\u{1b}\u{c}\u{b} z"]
+    );
+    assert!(yaml_values(yaml, "exe").is_empty());
+}
+
 /// --find's fields are escaped: a tab, a line break, a quote, a percent sign and a non-UTF-8 byte
 /// in a folder's name cannot make or change a record.
 #[test]
@@ -669,4 +779,95 @@ fn a_name_that_is_not_utf8_keeps_its_bytes() {
     // Not found by a manifest that names it in UTF-8, but escaped byte for byte when printed.
     assert!(escape(&path_bytes(&game)).ends_with("Fallout %E9"));
     assert!(!report(&home).contains('\u{fffd}'));
+    // Review of #630 (round 2): a game that IS found under a home folder whose name is not UTF-8
+    // is reported byte for byte (own, game and saves lines), never as lossy text.
+    let odd = s.0.join(std::ffi::OsStr::from_bytes(b"h\xe9me"));
+    let found = odd.join(".local/share/Steam/steamapps/common/Fallout New Vegas");
+    std::fs::create_dir_all(found.join("Data")).unwrap();
+    std::fs::write(found.join("Data/FalloutNV.esm"), b"x").unwrap();
+    std::fs::create_dir_all(odd.join(".local/share/Steam/steamapps/compatdata/22380/pfx/drive_c/users/steamuser/Documents/My Games/FalloutNV")).unwrap();
+    let home = Home::new(odd.clone(), None, None, System::Linux).unwrap();
+    let report = report(&home);
+    let want = escape(&path_bytes(&found));
+    assert!(want.contains("h%E9me"), "{want}");
+    assert!(
+        report.lines().any(|l| l == format!("game\tSteam\t{want}")),
+        "{report}"
+    );
+    assert!(
+        report
+            .lines()
+            .any(|l| l.starts_with("saves\t") && l.contains("h%E9me")),
+        "{report}"
+    );
+    assert!(report.starts_with(&format!("own\t{}", escape(&path_bytes(&own_folder(&home))))));
+    assert!(
+        !report.contains('\u{fffd}') && !report.contains("%EF%BF%BD"),
+        "{report}"
+    );
+}
+
+/// Review of #630 (round 2): every byte a shell or `printf %b` reads specially is escaped (a
+/// backslash above all: play.sh decodes with `printf %b`), and a run of high bytes keeps each.
+#[test]
+fn every_byte_a_shell_reads_specially_is_escaped() {
+    for b in b"\\$`'\"*?!&;|<>[]{}#\r\0\t\n%".iter().copied() {
+        assert_eq!(escape(&[b]), format!("%{b:02X}"), "byte {b:#04x}");
+    }
+    assert_eq!(escape(b"\xc3\xa9\xff\x80"), "%C3%A9%FF%80");
+    for b in b" /._-+,:@=~()aZ09".iter().copied() {
+        assert_eq!(escape(&[b]), (b as char).to_string());
+    }
+}
+
+/// play.sh (distribution/unix/play.sh) reads --find's fields with its own `decode`: run it under
+/// this system's `sh` (dash on Ubuntu, bash 3.2 on macOS, with their own awk and printf) and, when
+/// there, under `bash`, over names [`escape`] wrote, and compare the bytes it prints with the
+/// name's own. Every byte but NUL (no path holds one), runs of high bytes, a backslash before
+/// digits (`printf %b`'s octal escapes), line breaks inside and at the end.
+#[cfg(unix)]
+#[test]
+fn play_sh_decodes_every_name_escape_wrote() {
+    let script = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../distribution/unix/play.sh"),
+    )
+    .unwrap();
+    let start = script.find("\ndecode() {\n").expect("play.sh has decode()") + 1;
+    let end = start + script[start..].find("\n}\n").expect("decode() ends") + 3;
+    let s = Scratch::new("decode");
+    let file = s.0.join("decode.sh");
+    std::fs::write(&file, format!("{}decode \"$1\"\n", &script[start..end])).unwrap();
+    let all: Vec<u8> = (1..=255u8).collect();
+    let names: Vec<Vec<u8>> = vec![
+        all.clone(),
+        all.iter().rev().copied().collect(),
+        b"/home/j\xc3\xb6rg/Games/Fallout New Vegas".to_vec(),
+        b"/mnt/old/Fallout \xe9".to_vec(),
+        b"\\0101\\c\\n%41%%".to_vec(),
+        b"/a\nb\tc\n\n".to_vec(),
+        b"\xff\x80\xc3\xa9".to_vec(),
+        b"-n".to_vec(),
+        b"".to_vec(),
+    ];
+    let mut shells = vec!["sh"];
+    if std::process::Command::new("bash")
+        .arg("-c")
+        .arg("true")
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        shells.push("bash");
+    }
+    for shell in shells {
+        for name in &names {
+            let escaped = escape(name);
+            let out = std::process::Command::new(shell)
+                .arg(&file)
+                .arg(&escaped)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{shell} {escaped}: {out:?}");
+            assert_eq!(out.stdout, *name, "{shell} decoding {escaped}");
+        }
+    }
 }

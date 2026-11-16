@@ -109,7 +109,9 @@ done
 found=$("$program" --find) || fail "the program could not look for your game (above)"
 # Each field of --find is escaped: every byte but ASCII letters, digits and ` /._-+,:@=~()` is
 # written %XX, so no field holds a tab or a line break. decode undoes it, byte for byte (through
-# printf's octal escapes), trailing line breaks kept.
+# printf's octal escapes; CI checks it against the program's own escaping). A shell's $(...) drops
+# line breaks at the end of what it catches, so a game folder whose name ends in a line break is
+# left out below with a warning (nv-rs's own folder ends in nv-rs, a saves folder in FalloutNV).
 decode() {
     octal=$(printf '%s' "$1" | LC_ALL=C awk '{
         s = $0; r = ""; hex = "0123456789ABCDEF"
@@ -170,6 +172,12 @@ else
         # The copies found that really hold the game (still escaped, one a line).
         games=$(printf '%s\n' "$found" | awk -F '\t' '$1 == "game" { print $2 "\t" $3 }' |
             while IFS="$(printf '\t')" read -r store folder; do
+                case $folder in
+                *%0A | *%0a)
+                    printf 'nv-rs: WARNING: %s\n' "a copy of the game in a folder whose name ends in a line break is left out (nv-rs cannot pass such a name on: rename the folder): $(decode "$folder")" >&2
+                    continue
+                    ;;
+                esac
                 if has_game "$(decode "$folder")"; then
                     printf '%s\t%s\n' "$store" "$folder"
                 fi
