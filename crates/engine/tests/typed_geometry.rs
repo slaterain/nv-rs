@@ -1425,8 +1425,15 @@ fn lifecycle_globals(e: &mut Engine) {
     });
     e.map(SINK, 0x10000);
     set(e, SINK, SINK + 0x10);
+    // A new block's first 4 KB hold a pattern, as the exe's memory is not cleared: a write the code
+    // should make but misses (or makes at the wrong place) shows.
     e.register(0x00aa_3e40, |e, a| {
-        ret(e.mem.alloc(a[1].clamp(4, 0x40_0000)))
+        let bytes = a[1].clamp(4, 0x40_0000);
+        let block = e.mem.alloc(bytes);
+        for at in (0..bytes.min(0x1000) & !3).step_by(4) {
+            e.mem.set_u32(block + at, 0xa5a5_a5a5);
+        }
+        ret(block)
     });
     for addr in [
         0x00aa_4060u32,

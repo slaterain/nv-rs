@@ -441,13 +441,14 @@ fn install_script_ui_sort_paths(e: &mut Engine) {
 /// frame's start, before the controls are read, or earlier where the frame's tail reaches what the draw uses
 /// (`engine::draw_thread`, [`crate::draw_thread`]). It needs real threads with the render thread; stepped threads
 /// are its check form. `NV_DRAW_THREAD=poison` (the environment only, for checks) is on with the packet's
-/// POISON check (stepped threads only). The draw family's packet hand-off is wired; until the geometry family is on, every
-/// frame still draws on main.
+/// POISON check (stepped threads only). The draw family's packet hand-off is wired; with the geometry family on (since
+/// 2026-11-16) a frame may be posted, and the first posted job still stops the run (`00b66570` on the helper), so the row
+/// stays off in every preset.
 pub const DRAW_THREAD: Fix = Fix {
     name: "world drawn on a second thread (experimental)",
     env: "NV_DRAW_THREAD",
     addresses: &[],
-    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; for now every frame still draws on main by default (the geometry family it needs is off until its gate; NV_TYPED=geometry)",
+    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; not working yet: its first posted frame stops the game (being fixed)",
     install: install_nothing,
 };
 

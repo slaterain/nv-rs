@@ -195,15 +195,25 @@ fn device_finish(e: &mut Engine) {
 mod tests {
     use super::*;
 
-    /// With the hand-off in, the default families decide: the geometry family is off until its gate, so every frame
-    /// still draws on main.
+    /// With the hand-off in, the default families decide: since the geometry family's gate (2026-11-16) every family
+    /// the draw runs in is on by default, so the families no longer keep the draw on main (the row itself stays off in
+    /// every preset).
     #[test]
-    fn the_default_families_keep_the_draw_on_main() {
-        let e = Engine::new();
-        assert_eq!(
-            serial(&e),
-            Some("a family the world draw runs in is not direct (switched off, or a hook or a fix row on it)")
-        );
+    fn the_default_families_leave_the_draw_free_to_post() {
+        let mut e = Engine::new_untyped_for_test();
+        let families: Vec<&engine::typed::Family> = vec![
+            &engine_typed::draw::DRAW,
+            &engine_typed::draw_f::DRAW_F,
+            &engine_typed::shader::SHADER,
+            &engine_typed::render::RENDER,
+            &engine_typed::dispatch::DISPATCH,
+            &engine_typed::crt::CRT,
+            &engine_typed::pathing::PATHING,
+            &engine_typed::geometry::GEOMETRY,
+        ];
+        e.typed_apply_for_test(&families, "all");
+        assert!(e.typed_family_direct(engine_typed::geometry::FAMILY));
+        assert_eq!(families_reason(|f| e.typed_family_direct(f)), None);
     }
 
     /// A registration over a member of a family the draw runs in (a fix row, a wrap) sends that family by address,
@@ -213,8 +223,7 @@ mod tests {
         fn stand_in(_: &mut Engine, _: &[u32]) -> Ret {
             Ret::default()
         }
-        // The eight families applied, geometry turned on (it is off by default: until it is, the draw stays on
-        // main).
+        // The eight families applied, each on.
         let mut e = Engine::new_untyped_for_test();
         let families: Vec<&engine::typed::Family> = vec![
             &engine_typed::draw::DRAW,
@@ -252,7 +261,7 @@ mod serial_tests {
     use super::*;
     use engine_typed::draw::capture::Mode;
 
-    /// With the default switch the geometry family is off, so the draw stays on main until it is on.
+    /// `NV_TYPED=geometry:off` turns the geometry family off, and the draw stays on main.
     #[test]
     fn the_geometry_family_off_keeps_the_draw_on_main() {
         let mut e = Engine::new_untyped_for_test();
@@ -266,7 +275,7 @@ mod serial_tests {
             &engine_typed::pathing::PATHING,
             &engine_typed::geometry::GEOMETRY,
         ];
-        e.typed_apply_for_test(&families, "all");
+        e.typed_apply_for_test(&families, "all,geometry:off");
         assert!(!e.typed_family_direct(engine_typed::geometry::FAMILY));
         assert!(serial_families_and_hooks(&e).is_some());
     }

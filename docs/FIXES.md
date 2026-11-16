@@ -1401,8 +1401,10 @@ or 1, like every row): the thread with the value packet's POISON check, for test
   waits for it, after the frame's tail, so a stepped run with it on must give the serial command stream byte for
   byte (the late gate, `measure/draw-thread/late-gate.sh`).
 - **Off**, the world pass's two calls and each join point cost one load and a branch; nothing is registered.
-- **For now every frame still draws on main by default**: the draw family's packet hand-off is in, but the geometry
-  family, which the draw runs in, stays off until its gate (`NV_TYPED=geometry` turns it on). The host's choice
+- **Not working yet**: the draw family's packet hand-off is in, and since 2026-11-16 the geometry family, which the
+  draw runs in, is on by default too, so with this row on a frame is posted; the first posted frame still stops the
+  game (a read of address 0 in the accumulator's finish, `00b66570`, on the drawing helper), so the row stays off in
+  every preset until that is fixed. The host's choice
   decides the draw family's value packet (`capture::set_mode`): a refused row turns it off, the `Fallout.ini` line
   turns it on, and `poison` with real threads is on without the scribble.
 - **What it could gain as built: little.** The same draw sequence uses the world accumulator after the world draw
