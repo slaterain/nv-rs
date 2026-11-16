@@ -323,7 +323,8 @@ fn rotate_around_point_cmd(e: &mut Engine, w: &[u32]) -> Ret {
 // Cmd_MoveToReticle_Execute.
 /// `ref.MoveToReticle [range x y z translate]`: when the player is in a cell, the point the main
 /// camera looks at (JIP's `RayCastCoords`: lane G's cast from the camera's world translation along
-/// its world rotation's column 1, up to `range` (50000) on layer 6) plus the offsets, moved to by
+/// its world rotation's column 0, its view (JIP hands `WorldRotate()` itself: `h::along_column_0`),
+/// up to `range` (50000) on layer 6) plus the offsets, moved to by
 /// JIP's `MoveToCell` in the player's cell (in a worldspace: its persistent cell); result 1. Only
 /// when the cast counts as found or `translate` is not 0.
 ///
@@ -348,7 +349,7 @@ fn move_to_reticle(e: &mut Engine, w: &[u32]) -> Ret {
     let Some((pos, rot)) = camera.and_then(|c| node_transform(e, c)) else {
         return handled(true);
     };
-    let Some(cast) = h::ray_cast(e, pos, rot, range, RETICLE_LAYER) else {
+    let Some(cast) = h::ray_cast(e, pos, h::along_column_0(rot), range, RETICLE_LAYER) else {
         return handled(true);
     };
     let (coords, found) = h::hit_coords(e, &cast);

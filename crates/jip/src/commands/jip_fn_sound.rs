@@ -1,11 +1,11 @@
 //! `functions_jip/jip_fn_sound.h` (JIP LN NVSE): a sound form's numbers, flags and file, the
-//! music's state, and the game's volumes. 9 of its 14 commands.
+//! music's state, the game's volumes, and (lane C1) a sound played at a node's place. 10 of its 14
+//! commands.
 //!
 //! Left for later: `SetSoundTraitNumeric`, `IsSoundPlaying`, `GetSoundPlayers` and `StopSound`
 //! find the playing sounds of a form by the form each `BSGameSound` holds at +0x134, a field JIP's
 //! `SetSourceSoundRequestHook` writes there (in the game it is the end of the file path): that
-//! hook is the core track's, and these come with it. `PlaySound3DNode` needs JIP's node lookup by
-//! name (`GetNode2`), built with the node commands.
+//! hook is the core track's, and these come with it.
 //!
 //! `TESSound` (form type 0x0D; the exe's layout in engine-fallout-misc `falloutaudio.rs`): its
 //! file (`TESSoundFile`, path at +0x34, set through the component's virtual `Set`, +0x10), and the
@@ -33,6 +33,7 @@ pub static COMMANDS: Handlers = &[
     (0x2863, set_music_state),
     (0x288c, get_game_volume),
     (0x288d, set_game_volume),
+    (0x291e, play_sound_3d_node),
 ];
 
 const SOUND_FILE: u32 = 0x30;
@@ -260,6 +261,65 @@ fn set_game_volume(e: &mut Engine, w: &[u32]) -> Ret {
         };
         e.mem.set_f32(AUDIO_MANAGER + VOLUMES + 4 * t, v);
     }
+    handled(true)
+}
+
+// ---- a sound at a node (lane C1) ----
+
+/// `BSAudioManager::InitSoundForm` (`00AE5870`, `thiscall (manager, sound, form id, flags)`,
+/// `RET 0xC`: the exe's `GetSoundHandleByNumericID`, which fills the 0xC-byte `Sound` handle),
+/// and the handle's `SetPos` (`00AD8B60`, `(x, y, z)`, `RET 0xC`), `SetNiNode` (`00AD8F20`,
+/// `(node)`, `RET 4`) and `Play` (`00AD8830`, `(0)`, `RET 4`).
+const INIT_SOUND_FORM: u32 = 0x00ae_5870;
+const SOUND_SET_POS: u32 = 0x00ad_8b60;
+const SOUND_SET_NODE: u32 = 0x00ad_8f20;
+const SOUND_PLAY: u32 = 0x00ad_8830;
+/// The flags JIP asks the sound with (`0x102`).
+const SOUND_3D_FLAGS: u32 = 0x102;
+/// `TESForm::refID` (+0xC).
+const REF_ID: u32 = 0x0c;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_sound.h:
+// Cmd_PlaySound3DNode_Execute.
+/// The sound form played at the reference's named node (`GetNode2`: the root for an empty name):
+/// a handle (key `0xFFFFFFFF`, byte 0, word 0) filled for the form's id with flags 0x102; when
+/// the game gave a key, put at the node's world translation (+0x8C), tied to the node and
+/// played. No result.
+fn play_sound_3d_node(e: &mut Engine, w: &[u32]) -> Ret {
+    use super::havok_refs as h;
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok || a.this_obj == 0 {
+        return handled(true);
+    }
+    let sound = read.form(0);
+    let name = buffer_arg(e, &read, 1, 0x40, "PlaySound3DNode");
+    if sound == 0 {
+        return handled(true);
+    }
+    let node = h::node2(e, a.this_obj, &name);
+    if node == 0 {
+        return handled(true);
+    }
+    let Some(pos) = h::vec4(e, node.wrapping_add(h::WORLD_TRANSLATE)) else {
+        return handled(true);
+    };
+    let id = e.mem.u32(sound + REF_ID);
+    e.with_stack(0x10, |e, frame| {
+        let handle = frame.addr();
+        e.mem.set_u32(handle, u32::MAX);
+        e.mem.set_u32(handle + 4, 0);
+        e.mem.set_u32(handle + 8, 0);
+        e.call(
+            INIT_SOUND_FORM,
+            &args![AUDIO_MANAGER, handle, id, SOUND_3D_FLAGS],
+        );
+        if e.mem.u32(handle) != u32::MAX {
+            e.call(SOUND_SET_POS, &args![handle, pos[0], pos[1], pos[2]]);
+            e.call(SOUND_SET_NODE, &args![handle, node]);
+            e.call(SOUND_PLAY, &args![handle, 0u32]);
+        }
+    });
     handled(true)
 }
 
