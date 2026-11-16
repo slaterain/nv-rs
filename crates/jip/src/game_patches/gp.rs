@@ -547,6 +547,8 @@ type MarkerCache = (u32, Vec<MusicMarker>);
 /// JIP's music marker cache (`s_audioMarkerLastWorld`, `s_musicMarkerList`): the world space it
 /// was built for and its markers (reference, `ExtraAudioMarker` data, the data's
 /// `mediaLocCtrlID`), sorted by that id. JIP never empties it except for another world space.
+/// The references are persistent world-space references, never freed in a session (JIP holds
+/// the same references across loads).
 #[derive(Default)]
 pub struct MusicMarkers(Mutex<MarkerCache>);
 

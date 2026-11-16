@@ -6598,6 +6598,20 @@ fn worn_entry_word(e: &mut Engine, worn: u32) -> u32 {
     e.mem.u32(pointer)
 }
 
+/// The last word of `UnEquipObject` for a worn item [`fn_0088db20`] takes off (its `push 1` at
+/// `0x88DCDB`). JIP LN NVSE's G14 (a fix, the row `NV_JIP_GAME_PATCHES`) writes 0 there (no un-equip
+/// notice): the seam at `0x88DCDC` answers the word. With the word's `FIXES` bit clear: one load,
+/// then 1.
+#[inline]
+fn worn_take_off_word(e: &mut Engine) -> u8 {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(word) = e.site(0x0088_dcdc, &[]) {
+            return word as u8;
+        }
+    }
+    1
+}
+
 // Translated from 0088db20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Takes off whatever occupies the biped slots of `item` (each removal
 /// through `UnEquipObject`), then updates the held items (weapons and the
@@ -6666,6 +6680,7 @@ pub fn fn_0088db20(
                     worn_extra = worn_entry_word(e, worn);
                 }
                 if !blocked {
+                    let sound_word = worn_take_off_word(e);
                     let _ = actor_un_equip_object(
                         e,
                         this,
@@ -6674,7 +6689,7 @@ pub fn fn_0088db20(
                         Ptr::new(worn_extra),
                         0,
                         0,
-                        1,
+                        sound_word,
                     );
                     for removed_slot in 0..BIPED_SLOT_COUNT {
                         if e.call(BIPED_FILLS_SLOT, &args![cast, removed_slot, 0u32, 0u32])
@@ -7987,6 +8002,19 @@ pub fn fn_0088e8d0(e: &mut Engine, this: Ptr<Actor>, damage: f32, hit: Ptr) {
     });
 }
 
+/// The hit blood's impact data in [`run_hit_effects`] (`0x88EBAA` to `0x88EC51`: the aggressor's
+/// current weapon, its impact data set, the set's data for the material, its texture set). JIP
+/// LN NVSE's G120 (`CreateHitBloodHook`, a fix) replaces that span: the seam is asked with the hit
+/// and the material and its answer is the impact data (the translation reads its `+0x48`). With
+/// the word's `FIXES` bit clear: one load, `None`, the exe's calls.
+#[inline]
+fn hit_blood_impact(e: &mut Engine, hit: u32, material: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return e.site(0x0088_ebaa, &[hit, material]);
+    }
+    None
+}
+
 fn run_hit_effects(e: &mut Engine, frame_pointer: u32, this: Ptr<Actor>, damage: f32, hit: u32) {
     let under = |distance: u32| frame_pointer - distance;
     let player = e.mem.u32(PLAYER_CHARACTER);
@@ -8042,25 +8070,38 @@ fn run_hit_effects(e: &mut Engine, frame_pointer: u32, this: Ptr<Actor>, damage:
         e.vcall(base + 0x30, BASE_FORM_PART_VSLOT_MATERIAL, &args![])
             .u32()
     };
-    let weapon = if target != 0 {
-        e.call(ACTOR_GET_CURRENT_WEAPON, &args![target]).u32()
-    } else {
-        0
-    };
-    let source = if weapon != 0 {
-        e.call(IMPACT_SOUND_SOURCE, &args![weapon]).u32()
-    } else {
-        0
-    };
-    let mut entry = if source != 0 {
-        e.call(SOUND_SET_ENTRY, &args![source, material]).u32()
-    } else {
-        0
-    };
-    let mut hit_sound = if entry != 0 {
-        e.call(SOUND_SET_ENTRY_SOUND, &args![entry]).u32()
-    } else {
-        0
+    let (mut entry, mut hit_sound) = match hit_blood_impact(e, hit, material) {
+        Some(entry) => (
+            entry,
+            if entry != 0 {
+                e.mem.u32(entry + 0x48)
+            } else {
+                0
+            },
+        ),
+        None => {
+            let weapon = if target != 0 {
+                e.call(ACTOR_GET_CURRENT_WEAPON, &args![target]).u32()
+            } else {
+                0
+            };
+            let source = if weapon != 0 {
+                e.call(IMPACT_SOUND_SOURCE, &args![weapon]).u32()
+            } else {
+                0
+            };
+            let entry = if source != 0 {
+                e.call(SOUND_SET_ENTRY, &args![source, material]).u32()
+            } else {
+                0
+            };
+            let hit_sound = if entry != 0 {
+                e.call(SOUND_SET_ENTRY_SOUND, &args![entry]).u32()
+            } else {
+                0
+            };
+            (entry, hit_sound)
+        }
     };
     let root = e.vcall(this.addr(), VSLOT_GET_3D, &args![]).u32();
     let direction_a = under(0xa4);
@@ -16504,4 +16545,146 @@ mod tests {
         assert_eq!(modifier.borrow()[0][0], 0x5500);
         assert_eq!(scaled.borrow()[0][1], 20.0f32.to_bits());
     }
+    // ---- JIP LN NVSE's game patches of group GC (step 3.9): G14 and G120 run in their
+    // translated functions with the row on.
+
+    /// A page the GC call-site handlers write what they were asked with to and read their answer
+    /// from (site handlers are plain functions).
+    const GC_PAGE: u32 = 0x0532_0000;
+    const GC_ASKED_HIT: u32 = GC_PAGE;
+    const GC_ASKED_MATERIAL: u32 = GC_PAGE + 4;
+    const GC_ANSWER: u32 = GC_PAGE + 8;
+    /// The impact data G120's handler answers: texture set `0x7700` at `+0x48`, a decoy at `+0x44`.
+    const GC_IMPACT_DATA: u32 = GC_PAGE + 0x100;
+
+    /// The first-decal world of [`the_first_decal_is_cast_on_the_cell_and_marks_the_hit_body_parts`]
+    /// with the row on and a G120 handler at `0x88EBAA` answering `answer`.
+    fn g120_world(e: &mut Engine, answer: u32) -> (Ptr<Actor>, u32, HitSnapshots) {
+        let (actor, hit) = hit_world(e);
+        e.register(WEIGHT_OVERRIDE_FLAG, |_, _| eax(1));
+        armed_target(e, hit);
+        slot_at(e, FORM_TABLE, VSLOT_ACTOR_FLAG_0X360, eax(1));
+        e.register(RANDOM_FLOAT, |_, a| st0(f32::from_bits(a[0])));
+        let seen = snapshot_hits(e);
+        e.register(LIST_ENTRY_COUNT, |_, _| eax(2));
+        let first = e.mem.alloc(0x20);
+        let second = e.mem.alloc(0x20);
+        e.mem.set_u32(first + 8, 0x8100);
+        e.mem.set_u32(second + 8, 0x8200);
+        e.register_double(LIST_ENTRY, move |_, a| {
+            eax(if a[1] == 0 { first } else { second })
+        });
+        let this_address = actor.addr();
+        e.register(COLLIDABLE_3D_OBJECT, |_, a| eax(a[0] + 1));
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, a| {
+            eax(if a[0] == 0x8101 { this_address } else { 0x9999 })
+        });
+        e.register(ACTOR_BODY_PART_NUMBER, |_, _| eax(3));
+        double(e, HIT_SECOND_DISTANCE, st0(1000.0));
+        e.mem.set_f32(0x011c_e270, 1.0);
+        slot(e, ACTOR_TABLE, VSLOT_GET_3D, eax(0x5555));
+        e.map(GC_PAGE, 0x1000);
+        e.mem.set_u32(GC_ANSWER, answer);
+        // Its sound member (`+0x18`) as the exe's entry `0x7500` has it.
+        e.mem.set_u32(GC_IMPACT_DATA + 0x18, OTHER_TABLE);
+        e.mem.set_u32(GC_IMPACT_DATA + 0x44, 0x7744);
+        e.mem.set_u32(GC_IMPACT_DATA + 0x48, 0x7700);
+        e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+        e.on_site(
+            engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, 0x0088_ebaa),
+            |e, a| {
+                e.mem.set_u32(GC_ASKED_HIT, a[0]);
+                e.mem.set_u32(GC_ASKED_MATERIAL, a[1]);
+                Some(e.mem.u32(GC_ANSWER))
+            },
+        );
+        (actor, hit, seen)
+    }
+
+    /// G120 at `0x88EBAA` in the hit effects: the seam is asked with the hit and the base's
+    /// material (7); the exe's four calls (current weapon, its impact set, the set's data, its
+    /// texture set) are not made; the decal scale calls get the answer; the decal record's `+0x30`
+    /// is the answer's `+0x48`.
+    #[test]
+    fn g120_hit_effects_take_the_seams_impact_data() {
+        let mut e = engine3();
+        let (actor, hit, seen) = g120_world(&mut e, GC_IMPACT_DATA);
+        let scale_max = record(&mut e, DECAL_SCALE_MAX, st0(2.5));
+        let scale_min = record(&mut e, DECAL_SCALE_MIN, st0(1.5));
+        e.call_log = Some(vec![]);
+        fn_0088e8d0(&mut e, actor, 5.0, Ptr::new(hit));
+        assert_eq!(
+            (e.mem.u32(GC_ASKED_HIT), e.mem.u32(GC_ASKED_MATERIAL)),
+            (hit, 7)
+        );
+        let addresses = logged_addresses(&e);
+        let decal = addresses
+            .iter()
+            .position(|a| *a == DECAL_SCALE_MAX)
+            .expect("the decal is made");
+        for exe in [
+            ACTOR_GET_CURRENT_WEAPON,
+            IMPACT_SOUND_SOURCE,
+            SOUND_SET_ENTRY,
+            SOUND_SET_ENTRY_SOUND,
+            DEFAULT_SOUND_SET_SOURCE,
+        ] {
+            assert!(!addresses[..decal].contains(&exe), "{exe:08x}");
+        }
+        assert_eq!(*scale_max.borrow(), vec![vec![GC_IMPACT_DATA]]);
+        assert_eq!(*scale_min.borrow(), vec![vec![GC_IMPACT_DATA]]);
+        assert_eq!(seen.borrow()[0].1[0x30 / 4], 0x7700);
+    }
+
+    /// G120 answering 0 (no weapon, no set or no data): the exe's calls are still not made, and
+    /// the default set's path after `0x88EC51` gives the decal (the exe's fallback).
+    #[test]
+    fn g120_no_impact_data_takes_the_default_set() {
+        let mut e = engine3();
+        let (actor, hit, seen) = g120_world(&mut e, 0);
+        double(&mut e, DEFAULT_SOUND_SET_SOURCE, eax(0x7480));
+        let entry = record(&mut e, SOUND_SET_ENTRY, eax(0x7500));
+        e.call_log = Some(vec![]);
+        fn_0088e8d0(&mut e, actor, 5.0, Ptr::new(hit));
+        let addresses = logged_addresses(&e);
+        assert!(!addresses.contains(&ACTOR_GET_CURRENT_WEAPON));
+        assert!(!addresses.contains(&IMPACT_SOUND_SOURCE));
+        assert!(addresses.contains(&DEFAULT_SOUND_SET_SOURCE));
+        assert_eq!(entry.borrow()[0], vec![0x7480, 7]);
+        assert_eq!(seen.borrow()[0].1[0x30 / 4], 0x7600);
+    }
+
+    /// G14 at `0x88DCDC`: the seam's word is `UnEquipObject`'s last argument for the worn item
+    /// taken off: with the row on (JIP's 0) the player's un-equip notice for it is not sent; with
+    /// the word clear (the exe's 1) it is.
+    #[test]
+    fn g14_word_reaches_the_worn_items_take_off() {
+        for (word, notices) in [(0, 1), (engine_core::extend::jip_patches::FIXES, 0)] {
+            let mut e = engine3();
+            let (actor, item, data, occupant) = occupied_slot_world(&mut e);
+            make_player(&mut e, actor);
+            double(&mut e, PLAYER_GET_BIPED, eax(data));
+            let (worn, _) = worn_entry(&mut e);
+            double(&mut e, INVENTORY_WORN_ITEM, eax(worn));
+            let removed = record(&mut e, INVENTORY_REMOVE, eax(1));
+            let notified = record(&mut e, ACTOR_EQUIP_NOTIFICATION, Ret::default());
+            e.set_jip_patches(word);
+            e.on_site(
+                engine_core::extend::SiteSlot::new(engine_core::extend::Owner::Jip, 0x0088_dcdc),
+                |_, _| Some(0),
+            );
+            assert_eq!(fn_0088db20(&mut e, actor, item, 1, Ptr::new(0), 0), 1);
+            assert_eq!(removed.borrow()[0][2], occupant, "{word:08x}");
+            let for_occupant = notified
+                .borrow()
+                .iter()
+                .filter(|c| c[1] == occupant)
+                .count();
+            assert_eq!(for_occupant, notices, "{word:08x}");
+        }
+    }
 }
+
+#[cfg(test)]
+#[path = "actor_p2_gc_tests.rs"]
+mod gc_tests;

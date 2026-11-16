@@ -63,6 +63,11 @@ fn prepare(e: &mut Engine) {
     // `ExtraDataList::GetCanNotWear` (`00418b10`, JIP's wrap there), when the test engine has no
     // translation of it: the exe's test, `BaseExtraList::HasExtra(0x3E)` (`0040fe80`), the bit of
     // type 0x3E in the presence bits at `+8` (byte `+0xF`, bit `0x40`).
+    // `00482090` (a container's items' health, JIP's wrap there: group GH1, G50), when the test
+    // engine has no translation of it: a stand-in that does nothing (JIP's wrap replaces it).
+    if !e.is_registered(0x0048_2090) {
+        e.register(0x0048_2090, |_, _| Ret::default());
+    }
     if !e.is_registered(0x0041_8b10) {
         e.register(0x0041_8b10, |e, a| Ret {
             eax: u32::from(e.mem.u8(a[0] + 0xf) & 0x40 != 0),
@@ -74,6 +79,21 @@ fn prepare(e: &mut Engine) {
     // exe's answer while its image space byte is 0).
     if !e.is_registered(0x005d_2860) {
         e.register(0x005d_2860, |_, _| Ret::default());
+    }
+    // Group GC's wraps (G109 `0058e9d0`, G111 `00646260`), when the test engine has no
+    // translation of them: the impact data set's slot for the material (the exe's answer with no
+    // override set), and `fDamageToWeaponValue`'s value (`0x11CF154`, the exe's with no ammo).
+    if !e.is_registered(0x0058_e9d0) {
+        e.register(0x0058_e9d0, |e, a| Ret {
+            eax: e
+                .mem
+                .u32(a[0].wrapping_add(a[1].wrapping_mul(4)).wrapping_add(0x1c)),
+            ..Ret::default()
+        });
+    }
+    if !e.is_registered(0x0064_6260) {
+        e.map(0x011c_f000, 0x1000);
+        e.register(0x0064_6260, |e, _| f32::into_ret(e.mem.f32(0x011c_f154)));
     }
 }
 

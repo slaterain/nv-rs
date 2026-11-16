@@ -36,7 +36,7 @@
 005702e0	0	ITR
 00583560	2	nv-rs cell offsets for every plugin, nv-rs no distant water under the Strip
 005854f0	1	nv-rs cell offsets for every plugin
-0058e9d0	1	JIP
+0058e9d0	0	JIP
 00593870	2	script or frame function
 00595560	2	JIP
 005a5e70	1	JG

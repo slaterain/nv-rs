@@ -4417,7 +4417,14 @@ pub fn fn_009e6900(
                 return false;
             }
         }
-        e.mem.set_f32(offset.addr() + 8, 0.0);
+        // JIP LN NVSE's "AI Z fix" (credits Stewie; step 3.9-GE, PLAN-3.9 G22) at `0x9E6A82`
+        // removes this flattening (`fldz; fstp`): the seam answers whether the height is kept.
+        // One load while the patches are off.
+        if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0
+            || e.site(0x009e_6a82, &[offset.addr()]).is_none()
+        {
+            e.mem.set_f32(offset.addr() + 8, 0.0);
+        }
         let length = e.call(POINT_UNITIZE, &args![offset]).f64() as f32;
         let near = e.call(SETTING_VALUE, &args![SETTING_AVOID_NEAR]).u32();
         let close = e.mem.f32(near) > length;
@@ -7864,6 +7871,58 @@ mod tests {
         // Out of reach: no.
         set_point(&mut w.e, other + A_LOCATION, [0.0, 111.0, 0.0]);
         assert!(!hit(&mut w, false));
+    }
+
+    thread_local! {
+        static G22_ASKED: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G22_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_avoid_height(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let z = e.mem.f32(a[0] + 8);
+        G22_ASKED.with(|s| s.borrow_mut().push(z));
+        G22_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// Whether an actor 60 ahead and 150 above (under the height limit 180) is in the way with JIP's word `word` and a seam
+    /// handler answering `answer`, and the offset's z each time the seam was asked.
+    fn in_the_way_with_jip(word: u32, answer: Option<u32>) -> (bool, Vec<f32>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut w = world();
+        let other = w.e.mem.alloc(0x200);
+        w.e.mem.set_u32(other, ACTOR_VTABLE);
+        w.e.mem.set_f32(other + A_RADIUS, 10.0);
+        set_point(&mut w.e, other + A_LOCATION, [0.0, 60.0, 150.0]);
+        let position = w.e.mem.alloc(12);
+        let direction = w.e.mem.alloc(12);
+        set_point(&mut w.e, direction, [0.0, 1.0, 0.0]);
+        let value = w.e.mem.alloc(4);
+        w.e.on_site(SiteSlot::new(Owner::Jip, 0x009e_6a82), at_avoid_height);
+        G22_ASKED.with(|s| s.borrow_mut().clear());
+        G22_ANSWER.with(|c| c.set(answer));
+        w.e.set_jip_patches(word);
+        let hit =
+            w.e.call(
+                0x009e_6900,
+                &args![w.actor, w.this, other, position, direction, 100.0f32, 0.5f32, value, true],
+            )
+            .bool();
+        (hit, G22_ASKED.with(|s| s.take()))
+    }
+
+    /// JIP's AI Z fix at `0x9E6A82` (G22): not asked without the fixes bit, the offset flattened
+    /// (in reach) as in the exe; asked with the offset, an answer keeps its height (out of reach).
+    #[test]
+    fn actor_in_the_way_jip_height_seam() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED | jip_patches::NPC_PERKS] {
+            let (hit, asked) = in_the_way_with_jip(word, Some(0));
+            assert!(asked.is_empty(), "{word:x}");
+            assert!(hit);
+        }
+        let on = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(in_the_way_with_jip(on, None), (true, vec![150.0]));
+        assert_eq!(in_the_way_with_jip(on, Some(0)), (false, vec![150.0]));
     }
 
     #[test]
