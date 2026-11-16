@@ -2940,6 +2940,10 @@ mod tests_sse2_functions {
     // input words, output words. The measured matrices sat off a 16-byte boundary.
 
     #[test]
+    #[cfg_attr(
+        target_arch = "aarch64",
+        ignore = "arm64: the processor's RCPSS and RSQRTSS estimates are not provided yet (Linux and macOS track, the Apple estimates step)"
+    )]
     fn plane_normalize_matches_the_dll() {
         for (input, want) in [
             // A NaN in the normal: all four zero.
@@ -2984,6 +2988,10 @@ mod tests_sse2_functions {
     }
 
     #[test]
+    #[cfg_attr(
+        target_arch = "aarch64",
+        ignore = "arm64: the processor's RCPSS and RSQRTSS estimates are not provided yet (Linux and macOS track, the Apple estimates step)"
+    )]
     fn matrix_inverse_matches_the_dll() {
         let m: [u32; 16] = words("c4779013 c46d0c0d 439e49be 3d003fc3 4402c71e c227972c 3f403b3a 42e78421 ba6d58e4 3c1fc7e7 400d85ba c0ffa558 bf1ad120 3e2376d8 c080bfba bd7af630").try_into().unwrap();
         let (det, inv) = matrix_inverse_sse2(&m).expect("not singular");

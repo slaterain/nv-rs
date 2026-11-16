@@ -1,4 +1,4 @@
-//! `functions_jip/jip_fn_misc_ref.h` (JIP LN NVSE): references' interaction state and data. 22 of
+//! `functions_jip/jip_fn_misc_ref.h` (JIP LN NVSE): references' interaction state and data. 25 of
 //! its 104 commands here (the core track built five more: `SetInteractionDisabled`,
 //! `SetInteractionDisabledType`, `SetRefName`, `SetRefrModelPath` in `world_hooks.rs` and
 //! `SetOnCriticalHitEventHandler` in `actor_hooks.rs`): the getters of the player's activation a
@@ -9,7 +9,9 @@
 //! the primitive (its bounds read and set, a new one added: the 3D reloaded through the game),
 //! the crosshair's water, the game's own moves (`MoveToFadeDelay`, `MoveToContainer`), the playing
 //! animation groups, and the position, angles, turned offsets and editor place into script
-//! variables (a root node's world transform only read).
+//! variables (a root node's world transform only read), and (lane C1) the references JIP
+//! shows on the map (`AddRefMapMarker`, `RemoveRefMapMarker`, `RefHasMapMarker`: the list
+//! `ui_hooks.rs`' `CreateMapMarkers` seam hands the map menu).
 //!
 //! Not built, each waiting for what it names:
 //! - JIP's node lookup and scene graph work (`GetNifBlock`/`NiNode::GetBlock`/`GetNode2`, node
@@ -33,14 +35,18 @@
 //!   camera node).
 //! - JIP's position marker `s_tempPosMarker` (made in its deferred start, not built):
 //!   `MoveToCell`, `MoveToEditorPosition` (both through JIP's `MoveToCell`), `PlaceAtCell`.
-//! - Hooks or code patches (steps 3.5/3.9): `AddRefMapMarker`, `RemoveRefMapMarker`,
-//!   `RefHasMapMarker` (JIP's map marker hook), `ToggleObjectCollision` (the 3D load hook that
+//! - Hooks or code patches (steps 3.5/3.9): `ToggleObjectCollision` (the 3D load hook that
 //!   keeps the flag's collision off), `ToggleNoZPosReset` (patches the game's code at `00629006`
 //!   and `006295E9`), `SynchronizePosition` (the main loop hook reading `s_syncPosition*`).
 //! - The co-save's application (step 3.3) and JIP's own extra data class: `SetLinkedReference`
 //!   (its defaults map and the load's `RestoreLinkedRefs`/`SetLinkedRefID` are not built, so a
-//!   load would keep the links unapplied), `RefHasExtraData`, `GetRefExtraData`,
-//!   `SetRefExtraData` (`ExtraJIP`, an extra data type with JIP's own vtable and destructor).
+//!   load would keep the links unapplied).
+//! - `RefHasExtraData`, `GetRefExtraData`, `SetRefExtraData` (lane C1 did not reach them; G44's
+//!   `ExtraJIP` framework is on main): the two last are expression-format commands (JIP's
+//!   `PluginExpressionEvaluator` over xNVSE's, no JIP command uses one yet), and the setter makes
+//!   an inventory reference's extra data list (`InventoryRef::CreateExtraData`, a count extra
+//!   copied) and removes it again with the stack's entry when emptied; planned for a new module
+//!   `jip_fn_extra_data.rs`.
 //! - `GetPlayerPerks` calls `jip_fn_actor`'s `GetAllPerks` (lane A's module, not built yet).
 
 use super::Handlers;
@@ -64,6 +70,9 @@ pub static COMMANDS: Handlers = &[
     (0x27f9, get_teleport_door),
     (0x2813, get_crosshair_water),
     (0x2931, toggle_purge_on_unload),
+    (0x27e9, add_ref_map_marker),
+    (0x27ea, remove_ref_map_marker),
+    (0x27eb, ref_has_map_marker),
     // lane E
     (0x2600, set_persistent),
     (0x267a, set_primitive_bound),
@@ -995,6 +1004,178 @@ fn get_editor_position(e: &mut Engine, w: &[u32]) -> Ret {
     }
     super::set_form_result(e, &a, cell);
     handled(true)
+}
+
+// ---- references with map markers (lane C1) ----
+
+/// JIP's `s_refMapMarkersCount`: how many of the first nodes of the map markers' list
+/// (`ui_hooks::State::map_markers_list`, the `tList` JIP's `CreateMapMarkersHook` hands the map
+/// menu) are JIP's own; the list's last own node links on into the player's teammates list
+/// (`PlayerCharacter` +0x5FC, the list the exe's `005EB7E0` answers), so the map shows both. Kept
+/// on the main thread's engine: only these commands and the load's reset (`pre_load`) use it, all
+/// on the main thread.
+#[derive(Default)]
+pub(crate) struct RefMapMarkers {
+    count: i32,
+}
+
+fn marker_count(e: &mut Engine) -> i32 {
+    e.ext::<RefMapMarkers>().count
+}
+
+fn set_marker_count(e: &mut Engine, count: i32) {
+    e.ext::<RefMapMarkers>().count = count;
+}
+
+/// The map markers' list head (0 before JIP's UI hooks are in).
+fn markers_list(e: &mut Engine) -> u32 {
+    e.ext::<Jip>().ui_hooks.map_markers_list
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp:
+// TESObjectREFR::ValidForHooks.
+/// An actor when persistent; anything else when its base is not an inventory type and it is not a
+/// projectile. A reference without a base is not valid (JIP reads through it).
+fn valid_for_hooks(e: &Engine, refr: u32) -> bool {
+    if super::is_actor(e, refr) {
+        return e.mem.u32(refr + FORM_FLAGS) & PERSISTENT != 0;
+    }
+    let base = e.mem.u32(refr + BASE);
+    base != 0
+        && !super::forms::INVENTORY_TYPE
+            .get(usize::from(super::type_of(e, base)))
+            .copied()
+            .unwrap_or(false)
+        && !super::havok_refs::is_projectile(e, refr)
+}
+
+/// `tList::GetIndexOf`: the index of the first node holding `item`, walking the whole list (the
+/// teammates past JIP's own nodes too), -1 for none. Bounded by the crate's list walk.
+fn index_in(e: &Engine, list: u32, item: u32) -> i32 {
+    super::list_items(e, Ptr::new(list))
+        .into_iter()
+        .position(|x| x == item)
+        .map_or(-1, |i| i as i32)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTypes.h: tList::RemoveNth.
+/// The node at `idx` (0 < `idx`) unlinked and freed (`RemoveNext` on the one before it); the
+/// first node's own removal is `RemoveMe`. Nothing when the walk runs out first.
+fn remove_nth(e: &mut Engine, list: u32, idx: i32) {
+    if idx <= 0 {
+        super::list_unlink(e, Ptr::new(list), Ptr::new(0));
+        return;
+    }
+    let mut node = list;
+    let mut walked = 0usize;
+    for _ in 1..idx {
+        if !super::list_step(e, &mut walked) {
+            return;
+        }
+        node = e.mem.u32(node + 4);
+        if node == 0 {
+            return;
+        }
+    }
+    let next = e.mem.u32(node + 4);
+    if next != 0 {
+        super::list_unlink(e, Ptr::new(next), Ptr::new(node));
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_AddRefMapMarker_Execute.
+/// A reference valid for JIP's hooks gets a marker on the map: the first one links JIP's list on
+/// into the player's teammates; one already in the list (the teammates included) is left; else it
+/// is put first, counted, and the `CreateMapMarkers` hook gains a user. No result.
+fn add_ref_map_marker(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let refr = a.this_obj;
+    let list = markers_list(e);
+    if refr == 0 || list == 0 || !valid_for_hooks(e, refr) {
+        return handled(true);
+    }
+    let count = marker_count(e);
+    if count == 0 {
+        let player = e.mem.u32(PLAYER);
+        let teammates = if player == 0 { 0 } else { player + TEAMMATES };
+        e.mem.set_u32(list + 4, teammates);
+    } else if index_in(e, list, refr) >= 0 {
+        return handled(true);
+    }
+    super::list_prepend(e, Ptr::new(list), refr);
+    set_marker_count(e, count.wrapping_add(1));
+    e.add_hook_user(engine_core::extend::Hook::CreateMapMarkers, true);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_RemoveRefMapMarker_Execute.
+/// A reference among JIP's own markers taken out: the last one empties the list (its link to the
+/// teammates cut), else its node goes; the hook loses a user. No result.
+fn remove_ref_map_marker(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let list = markers_list(e);
+    if list == 0 {
+        return handled(true);
+    }
+    let idx = index_in(e, list, a.this_obj);
+    let count = marker_count(e);
+    if idx == -1 || idx >= count {
+        return handled(true);
+    }
+    let count = count - 1;
+    set_marker_count(e, count);
+    if count != 0 {
+        remove_nth(e, list, idx);
+    } else {
+        e.mem.set_u32(list, 0);
+        e.mem.set_u32(list + 4, 0);
+    }
+    e.add_hook_user(engine_core::extend::Hook::CreateMapMarkers, false);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_RefHasMapMarker_Execute.
+/// 1 for a reference among JIP's own markers (not a teammate past them).
+fn ref_has_map_marker(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let count = marker_count(e);
+    let list = markers_list(e);
+    if count != 0 && list != 0 {
+        let idx = index_in(e, list, a.this_obj);
+        if idx >= 0 && idx < count {
+            a.set_result(e, 1.0);
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h:
+// DoPreLoadGameHousekeeping (the map markers' part).
+/// Before a load (and at the exit to the main menu): JIP's own markers' nodes freed but the first,
+/// the list emptied and the `CreateMapMarkers` hook off (`HOOK_SET`).
+pub(crate) fn pre_load(e: &mut Engine) {
+    let count = marker_count(e);
+    if count == 0 {
+        return;
+    }
+    let list = markers_list(e);
+    let mut left = if list == 0 { 0 } else { count };
+    loop {
+        left -= 1;
+        if left <= 0 {
+            break;
+        }
+        remove_nth(e, list, 0);
+    }
+    set_marker_count(e, 0);
+    if list != 0 {
+        e.mem.set_u32(list, 0);
+        e.mem.set_u32(list + 4, 0);
+    }
+    e.set_hook(engine_core::extend::Hook::CreateMapMarkers, false);
 }
 
 #[cfg(test)]

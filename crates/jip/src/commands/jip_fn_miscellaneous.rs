@@ -3,8 +3,10 @@
 //! radio, the enemy health bar's target, the last exterior door, time frozen, the debug toggles),
 //! container respawns, idle loop counts, nav meshes switched off and on, terrain height, exterior
 //! and buffered cells, the moon's textures, days passed since a date, hardcore stages, exact XP
-//! rewards, actor values by name and JIP's keywords. 40 of its 83 commands (85 in the file, two of
-//! them never registered: `SetWobblesRotation`, `PlaceModel`).
+//! rewards, actor values by name and JIP's keywords; forms' descriptions, the physics world's
+//! gravity, what the reticle and other ray casts hit, angles between points, the camera's
+//! movement, the game hour, ash pile activators and dead actors cleared. 56 of its 83 commands
+//! (85 in the file, two of them never registered: `SetWobblesRotation`, `PlaceModel`).
 //!
 //! The core track built ten of the file's commands in its hook files (not repeated here):
 //! `SetFormDescription`, `GetPCFastTravelled`, `GetPCMovedCell`, `SwapObjectLOD` and the event
@@ -26,25 +28,27 @@
 //! `ToggleHardcoreTracking` (G114) and `ToggleImmortalMode` (G122) are built with their game
 //! patches, in `crate::game_patches::gp`.
 //!
+//! `SetGameHour` sets JIP's `s_forceHCNeedsUpdate` (kept in `game_patches::gp`), which only JIP's
+//! time patch reads (O5, `UpdateTimeGlobalsHook`, not built yet): until O5 the hour changes as
+//! with JIP and O5 switched off. `MarkActivatorAshPile` sets the bit G06's tests read (#600).
+//! The ray casts are lane G's (`havok_refs::ray_cast`); the camera casts go along the main
+//! camera's rotation column 0, as JIP hands `WorldRotate()` itself (no `+ 1`).
+//!
 //! Deferred (each waits for what is named; no stand-ins):
-//! - `MarkActivatorAshPile` (G06), `GetConditionDamagePenalty`/`SetConditionDamagePenalty` (G84),
-//!   `SetArmorConditionPenalty` (G85), `SetDamageToArmorMaxPercent` (G99),
-//!   `ToggleHitEffects` (G123-G125), `ToggleNoMovementCombat` (G126), `ToggleDepthClear` (G128),
-//!   `ToggleBipedSlotVisibility` (H15), `SetGameHour` (its flag is read by the time patch, O5/G37,
-//!   with G114's): the stage 3.9 game patches that read what they set.
+//! - `GetConditionDamagePenalty`/`SetConditionDamagePenalty` (G84), `SetArmorConditionPenalty`
+//!   (G85), `SetDamageToArmorMaxPercent` (G99), `ToggleHitEffects` (G123-G125),
+//!   `ToggleNoMovementCombat` (G126), `ToggleDepthClear` (G128), `ToggleBipedSlotVisibility`
+//!   (H15): the stage 3.9 game patches that read what they set.
 //! - `SetInternalMarker`: JIP's hook reading `s_internalMarkerIDs` (hooks.h; core track).
 //! - `SetMoonTexture`, `ToggleCameraCollision`, `InitRockItLauncher`: they patch the game's code.
-//! - `SwapTextureEx`, `GetLightAmountAtPoint`, `GetReticlePos`, `GetReticlePosAlt`,
-//!   `GetReticleRange`, `GetReticleNode`, `GetReticleTargetLimb`, `GetPointRayCastPos`,
-//!   `GetP2PRayCastRange`, `GetLocalGravity`, `SetLocalGravityVector`: the scene graph, ray casts
-//!   and the physics world.
-//! - Left for the next batch (buildable): `GetFormDescription` (the `TESDescription` RTTI and its
-//!   `Get`), `ClearDeadActors`, `TogglePlayerSneaking`, `GetCameraMovement` (script variable
-//!   outputs), `TransformWorldToLocal`, `GetAnglesBetweenPoints` (JIP's SSE maths, script
-//!   variable outputs).
+//! - `SwapTextureEx`, `GetLightAmountAtPoint`: the scene graph's textures and lights.
+//! - Left for the next batch (buildable): `TogglePlayerSneaking` (JIP's
+//!   `PlayerCharacter::ToggleSneak`: the mover's flags, three game calls, a byte table in the
+//!   exe; its offsets still to confirm).
 
 use super::arrays::{self, Element};
-use super::{list_items, ref_id, type_of, Handlers};
+use super::havok_refs as h;
+use super::{extra, list_items, ref_id, type_of, Handlers};
 use crate::containers::str_hash_ci;
 use crate::Jip;
 use engine_core::prelude::*;
@@ -60,6 +64,7 @@ pub static COMMANDS: Handlers = &[
     (0x26ed, disable_nav_mesh_alt),
     (0x26ee, enable_nav_mesh_alt),
     (0x26ef, get_terrain_height),
+    (0x271b, get_form_description),
     (0x2721, get_container_respawns),
     (0x2722, set_container_respawns),
     (0x2736, get_exterior_cell),
@@ -69,10 +74,16 @@ pub static COMMANDS: Handlers = &[
     (0x277b, get_pc_last_exterior_door),
     (0x27a3, get_moon_texture),
     (0x27b0, free_player),
+    (0x27b2, get_local_gravity),
+    (0x27b3, set_local_gravity_vector),
+    (0x27f1, get_reticle_pos),
+    (0x27f2, get_reticle_range),
     (0x282f, get_game_days_passed),
     (0x2838, set_game_difficulty),
     (0x283d, get_enemy_health_target),
+    (0x2841, mark_activator_ash_pile),
     (0x2853, get_buffered_cells),
+    (0x288b, set_game_hour),
     (0x28a5, string_to_actor_value),
     (0x28b6, get_hardcore_stage_threshold),
     (0x28b7, set_hardcore_stage_threshold),
@@ -81,9 +92,18 @@ pub static COMMANDS: Handlers = &[
     (0x28bd, get_debug_mode_state),
     (0x28bf, freeze_time),
     (0x28ed, reward_xp_exact),
+    (0x28ef, clear_dead_actors),
+    (0x28f0, get_camera_movement),
+    (0x28f5, get_reticle_node),
+    (0x2906, get_point_ray_cast_pos),
+    (0x291f, get_reticle_pos_alt),
+    (0x2921, transform_world_to_local_cmd),
+    (0x2922, get_angles_between_points),
+    (0x2923, get_p2p_ray_cast_range),
     (0x293a, assign_keyword),
     (0x293b, has_keyword),
     (0x293c, get_keyword_forms),
+    (0x2942, get_reticle_target_limb),
 ];
 
 #[rustfmt::skip]
@@ -1274,6 +1294,760 @@ fn has_keyword_cond_eval(e: &mut Engine, w: &[u32]) -> Ret {
         let base = crate::overrides::ref_base_form(e, a.this_obj);
         let yes = keyword_has(e, a.arg1, base);
         one_if(e, a.result, yes);
+    }
+    handled(true)
+}
+
+// ---- package C2: descriptions, gravity, the reticle, angles, the camera, time, ash piles,
+// the dead ----
+
+/// `BGSNote`: the note's text (`pNoteData` +0x6C, a `TESDescription` for type 1) and type
+/// (`cType` +0x7C) (the load `005E84E0`); `TESLoadScreen`'s text (`BSStringT` +0x38, which its
+/// load `005A6900` fills from `DESC`).
+const BGS_NOTE: u8 = 0x31;
+const NOTE_DATA: u32 = 0x6c;
+const NOTE_TYPE: u32 = 0x7c;
+const TES_LOAD_SCREEN: u8 = 0x4b;
+const LOAD_SCREEN_TEXT: u32 = 0x38;
+/// `TESDescription::GetDescription` (`00482E90`, `thiscall (form, chunk)`, `RET 8`), slot +0x10
+/// of its vtable (`0101C18C`, stored by the constructor `00482C50`).
+const DESCRIPTION_GET_SLOT: u32 = 0x10;
+/// JIP's chunk ids `'MANT'` and `'CSED'` (`TNAM`, `DESC` as the file stores them).
+const CHUNK_TNAM: u32 = 0x4d41_4e54;
+const CHUNK_DESC: u32 = 0x4353_4544;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESForm::GetDescriptionText.
+/// A note of type 1's text (its description's `Get(form, 'TNAM')`), a load screen's text when its
+/// length is not 0, else the form's `TESDescription` (`DYNAMIC_CAST`) `Get(form, 'DESC')`.
+/// `None` for none. The text is the game's (the description's shared text, which JIP's
+/// `SetFormDescription` hook may answer).
+fn description_text(e: &mut Engine, form: u32) -> Option<Vec<u8>> {
+    let (description, chunk) = match type_of(e, form) {
+        BGS_NOTE => {
+            let text = e.mem.u32(form + NOTE_DATA);
+            if e.mem.u8(form + NOTE_TYPE) != 1 || text == 0 {
+                return None;
+            }
+            (text, CHUNK_TNAM)
+        }
+        TES_LOAD_SCREEN => {
+            let at = form + LOAD_SCREEN_TEXT;
+            let length = e.get(
+                Ptr::<crate::game::BSStringT>::new(at),
+                crate::game::BSStringT::sLen,
+            );
+            return (length != 0).then(|| super::string_text(e, at)).flatten();
+        }
+        _ => {
+            let description = nvse::commands::dynamic_cast(
+                e,
+                form,
+                nvse::commands::rtti::TES_FORM,
+                nvse::commands::rtti::TES_DESCRIPTION,
+            );
+            if description == 0 {
+                return None;
+            }
+            (description, CHUNK_DESC)
+        }
+    };
+    let text = e
+        .vcall(description, DESCRIPTION_GET_SLOT, &args![form, chunk])
+        .u32();
+    (text != 0).then(|| nvse::table::guest_text(e, text))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetFormDescription_Execute.
+/// The form's description text (`""` for none, or when the argument does not read).
+fn get_form_description(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let form = read.form(0);
+    let text = if read.ok && form != 0 {
+        description_text(e, form)
+    } else {
+        None
+    };
+    super::assign_string(e, &a, text);
+    handled(true)
+}
+
+/// `TES::currentInterior` (+0x34), `ExtraHavok` (type 1, its `bhkWorld` +0xC, read by `0041B9A0`)
+/// in a cell's extra list (+0x28), the exterior `bhkWorldM` (`TESObjectCELL::spExteriorWorld`,
+/// `*011CA0D8`), a `bhkWorld`'s `hkpWorld` (`refObject` +8) and its gravity (`hkVector4` +0x10:
+/// the simulation reads it there every step, `hkpsimulation.rs`).
+const EXTRA_HAVOK: u32 = 0x01;
+const EXTRA_HAVOK_WORLD: u32 = 0x0c;
+const CELL_EXTRA_LIST: u32 = 0x28;
+const EXTERIOR_WORLD: u32 = 0x011c_a0d8;
+const WORLD_GRAVITY: u32 = 0x10;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: GethkpWorld.
+/// The `hkpWorld` of the interior the game is in (its `ExtraHavok`), or of the exterior world;
+/// 0 for none.
+fn hkp_world(e: &mut Engine) -> u32 {
+    let Some(tes) = h::ptr(e, h::TES) else {
+        return 0;
+    };
+    let world = match h::ptr(e, tes + h::TES_INTERIOR) {
+        Some(cell) => {
+            let extra = extra::get_by_type(e, cell + CELL_EXTRA_LIST, EXTRA_HAVOK);
+            if extra == 0 {
+                0
+            } else {
+                e.mem.u32(extra + EXTRA_HAVOK_WORLD)
+            }
+        }
+        None => e.mem.u32(EXTERIOR_WORLD),
+    };
+    if world == 0 {
+        return 0;
+    }
+    e.mem.u32(world + h::HAVOK_OBJECT)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetLocalGravity_Execute.
+/// The physics world's gravity on the axis (`X`, `Y`, `Z`); echoed in the console either way.
+fn get_local_gravity(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let axis = super::jip_fn_misc_ref_havok::axis_arg(&read, 0);
+    if read.ok {
+        let world = hkp_world(e);
+        // `kParamType_Axis` reads only X, Y and Z; anything else indexes nothing here.
+        if world != 0 && (b'X'..=b'Z').contains(&axis) {
+            let at = world + WORLD_GRAVITY + 4 * u32::from(axis - b'X');
+            a.set_result(e, f64::from(e.mem.f32(at)));
+        }
+    }
+    crate::console::print_result(e, &a);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_SetLocalGravityVector_Execute.
+/// The physics world's gravity set to the three floats (a plain store: the simulation reads it
+/// each step). No result.
+fn set_local_gravity_vector(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let world = hkp_world(e);
+    if world != 0 {
+        let read = Read::of(e, &a);
+        if read.ok {
+            for i in 0..3u32 {
+                let v = read.float(i as usize, 0.0);
+                e.mem.set_f32(world + WORLD_GRAVITY + 4 * i, v);
+            }
+        }
+    }
+    handled(true)
+}
+
+/// The world scene graph (`*011DEB7C`) and its camera (+0xAC): JIP's `g_mainCamera` (lane H3's
+/// `MoveToReticle` reads it so); the player's `CachedWorldCameraPos` (+0xDE0, JIP's
+/// `cameraPos`), position (+0x30) and `eHardcoreSetting` (+0x7BC).
+const SCENE_GRAPH: u32 = 0x011d_eb7c;
+const SCENE_GRAPH_CAMERA: u32 = 0xac;
+const PC_CAMERA_POS: u32 = 0xde0;
+const PC_POSITION: u32 = 0x30;
+const PC_HARDCORE: u32 = 0x7bc;
+/// JIP's default cast range and layers.
+const CAST_RANGE: f32 = 50000.0;
+const LIMB_LAYER: i32 = 54;
+
+/// The main camera's world translation (16 bytes) and world rotation.
+fn main_camera(e: &Engine) -> Option<([f32; 4], [f32; 9])> {
+    let camera = h::ptr(e, SCENE_GRAPH).and_then(|g| h::ptr(e, g + SCENE_GRAPH_CAMERA))?;
+    super::jip_fn_misc_ref_havok::node_transform(e, camera)
+}
+
+/// `NiVector4::RayCastCoords` from the main camera along its view: the point and whether it
+/// counts as found. `None` without the camera, `TES` or the player's controller (JIP reads
+/// through them unchecked).
+fn camera_coords(e: &mut Engine, range: f32, layer: i32) -> Option<([f32; 4], bool)> {
+    let (pos, rot) = main_camera(e)?;
+    let cast = h::ray_cast(e, pos, h::along_column_0(rot), range, layer)?;
+    Some(h::hit_coords(e, &cast))
+}
+
+/// `GetRayCastObject(g_thePlayer->cameraPos, g_mainCamera->WorldRotate(), range, layer)`: the
+/// block hit (0 for none).
+fn reticle_object(e: &mut Engine, range: f32, layer: i32) -> u32 {
+    let Some(player) = h::ptr(e, PLAYER) else {
+        return 0;
+    };
+    let (Some(pos), Some((_, rot))) = (h::vec4(e, player + PC_CAMERA_POS), main_camera(e)) else {
+        return 0;
+    };
+    h::ray_cast(e, pos, h::along_column_0(rot), range, layer).map_or(0, |c| c.object)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.h: NUM_ARGS_EX.
+/// The argument count byte, or 0 when the low byte of the line's argument data length (the
+/// word before it) is 0: a statement compiled with no argument data has length 0 and no count
+/// (xNVSE's own analyser skips such lines, ScriptAnalyzer.cpp if (context.length)), and the
+/// byte there is the next line's.
+fn num_args_ex(e: &Engine, a: &CommandArgs) -> u8 {
+    let offset = e.mem.u32(a.opcode_offset);
+    if e.mem.u8(a.data.wrapping_add(offset).wrapping_sub(2)) == 0 {
+        0
+    } else {
+        super::jip_fn_utility::num_args(e, a)
+    }
+}
+
+/// The player is in a cell.
+fn player_in_cell(e: &Engine) -> bool {
+    h::ptr(e, PLAYER).is_some_and(|p| h::ptr(e, p + PC_PARENT_CELL).is_some())
+}
+
+/// Script variable `i` (a `ScriptLocal`, its value +8).
+fn set_var(e: &mut Engine, var: u32, v: f64) {
+    if var != 0 {
+        e.mem.set_f64(var + 8, v);
+    }
+}
+
+/// `ResultVars::Set`: x, then y, then z, each a float widened to a double.
+fn set_vars(e: &mut Engine, vars: [u32; 3], values: [f32; 3]) {
+    for (var, v) in vars.into_iter().zip(values) {
+        set_var(e, var, f64::from(v));
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetReticlePos_Execute.
+/// `GetReticlePos [layer range]`: with the player in a cell, the point the main camera looks at
+/// (layer -1, which casts on 6; range 50000) as an array of three numbers, when the cast counts
+/// as found or both arguments were given.
+fn get_reticle_pos(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let num_args = num_args_ex(e, &a);
+    if !player_in_cell(e) {
+        return handled(true);
+    }
+    let (layer, range) = if num_args == 0 {
+        (-1, CAST_RANGE)
+    } else {
+        let read = Read::of(e, &a);
+        if !read.ok {
+            return handled(true);
+        }
+        (read.int(0, u32::MAX) as i32, read.float(1, CAST_RANGE))
+    };
+    if let Some((coords, found)) = camera_coords(e, range, layer) {
+        if found || num_args >= 2 {
+            let elements = coords[..3]
+                .iter()
+                .map(|&c| Element::Number(f64::from(c)))
+                .collect::<Vec<_>>();
+            let id = arrays::create_array(e, a.script, &elements);
+            a.set_result(e, f64::from(id as i32));
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetReticleRange_Execute.
+/// `GetReticleRange [layer range fromCam]`: -1, or with the player in a cell the distance to
+/// the point the main camera looks at from the player's position (from the camera's with
+/// `fromCam`), when the cast counts as found or two arguments or more were given.
+fn get_reticle_range(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, -1.0);
+    let num_args = num_args_ex(e, &a);
+    if !player_in_cell(e) {
+        return handled(true);
+    }
+    let (layer, range, from_cam) = if num_args == 0 {
+        (-1, CAST_RANGE, 0)
+    } else {
+        let read = Read::of(e, &a);
+        if !read.ok {
+            return handled(true);
+        }
+        (
+            read.int(0, u32::MAX) as i32,
+            read.float(1, CAST_RANGE),
+            read.int(2, 0),
+        )
+    };
+    let Some((coords, found)) = camera_coords(e, range, layer) else {
+        return handled(true);
+    };
+    if found || num_args >= 2 {
+        let from = if from_cam == 0 {
+            let player = e.mem.u32(PLAYER);
+            [0, 4, 8].map(|o| e.mem.f32(player + PC_POSITION + o))
+        } else {
+            match main_camera(e) {
+                Some((pos, _)) => [pos[0], pos[1], pos[2]],
+                None => return handled(true),
+            }
+        };
+        let to = [coords[0], coords[1], coords[2]];
+        let d = super::ln_fn_math::point3_distance(from, to);
+        a.set_result(e, f64::from(d));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetReticlePosAlt_Execute.
+/// `GetReticlePosAlt x y z [layer range]`: with the player in a cell, the point the main camera
+/// looks at (layer 6, range 50000) into the three variables with result 1, when the cast counts
+/// as found or all five arguments were given.
+fn get_reticle_pos_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let num_args = super::jip_fn_utility::num_args(e, &a);
+    let read = Read::of(e, &a);
+    if !player_in_cell(e) || !read.ok {
+        return handled(true);
+    }
+    let vars = [read.local(0), read.local(1), read.local(2)];
+    let layer = read.int(3, 6) as i32;
+    let range = read.float(4, CAST_RANGE);
+    if let Some((coords, found)) = camera_coords(e, range, layer) {
+        if found || num_args >= 5 {
+            set_vars(e, vars, [coords[0], coords[1], coords[2]]);
+            a.set_result(e, 1.0);
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetReticleNode_Execute, internal/netimmerse.h: NiFixedString::Get.
+/// `GetReticleNode [range layer]`: the name of the block the player's view hits (from its camera
+/// position along the main camera's view; range 50000, layer 6): `"NULL"` for a block without a
+/// name, `""` for no hit.
+fn get_reticle_node(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let mut name = Vec::new();
+    if read.ok {
+        let range = read.float(0, CAST_RANGE);
+        let layer = read.int(1, 6) as i32;
+        let object = reticle_object(e, range, layer);
+        if object != 0 {
+            name = match h::ptr(e, object + h::NAME) {
+                None => b"NULL".to_vec(),
+                // nv-rs's own: a name with no end within 4 KiB is `""` (JIP reads on).
+                Some(text) => h::c_text(e, text).unwrap_or_default(),
+            };
+        }
+    }
+    super::assign_string(e, &a, Some(name));
+    handled(true)
+}
+
+/// `Actor::GetHitLocationForNode` (`008B3EF0`, `thiscall (actor, block)`, `RET 4`).
+const HIT_LOCATION_FOR_NODE: u32 = 0x008b_3ef0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetReticleTargetLimb_Execute.
+/// `GetReticleTargetLimb [range]`: -1, or the body part of the actor the player's view hits on
+/// layer 54 (the game's `GetHitLocationForNode` of the block).
+fn get_reticle_target_limb(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    a.set_result(e, -1.0);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let range = read.float(0, CAST_RANGE);
+    let object = reticle_object(e, range, LIMB_LAYER);
+    if object == 0 {
+        return handled(true);
+    }
+    let refr = h::block_parent_ref(e, object, &mut h::Walk::new());
+    if refr != 0 && h::is_actor(e, refr) {
+        let limb = e.call(HIT_LOCATION_FOR_NODE, &args![refr, object]).i32();
+        a.set_result(e, f64::from(limb));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetPointRayCastPos_Execute.
+/// `GetPointRayCastPos x y z rx rz outX outY outZ [layer range]`: the point a cast from the
+/// position along the inverse pitch-roll-yaw rotation's column 1 of the angles (degrees; roll 0)
+/// hits (layer 6, range 50000), into the three variables with result 1, when it counts as found
+/// or all ten arguments were given.
+fn get_point_ray_cast_pos(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let num_args = super::jip_fn_utility::num_args(e, &a);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let pos = [
+        read.float(0, 0.0),
+        read.float(1, 0.0),
+        read.float(2, 0.0),
+        0.0,
+    ];
+    let rot = [read.float(3, 0.0), 0.0, read.float(4, 0.0)];
+    let vars = [read.local(5), read.local(6), read.local(7)];
+    let layer = read.int(8, 6) as i32;
+    let range = read.float(9, CAST_RANGE);
+    let m = super::ni_matrix::from_euler_pry_inv(rot.map(|v| v * super::FLT_PI_D_180));
+    let Some(cast) = h::ray_cast(e, pos, m, range, layer) else {
+        return handled(true);
+    };
+    let (coords, found) = h::hit_coords(e, &cast);
+    if found || num_args >= 10 {
+        set_vars(e, vars, [coords[0], coords[1], coords[2]]);
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/Ni_types.cpp: NiMatrix33::From2Points
+// (asm), its answer (`xmm6`'s first lane).
+/// The length `From2Points` answers: 0 when the squared length is 0 or a NaN, `|z|` when only z
+/// differs (the squares of x and y sum to 0 or a NaN), else the squared length times its
+/// reciprocal square root (`rsqrtps` and one Newton step).
+fn from_2_points_length(pt1: [f32; 3], pt2: [f32; 3]) -> f32 {
+    let d = [pt1[0] - pt2[0], pt1[1] - pt2[1], pt1[2] - pt2[2]];
+    let sq = [d[0] * d[0], d[1] * d[1], d[2] * d[2]];
+    let len2 = (sq[0] + sq[1]) + (sq[2] + 0.0);
+    let zero = |v: f32| v == 0.0 || v.is_nan();
+    if zero(len2) {
+        return 0.0;
+    }
+    if zero(sq[0] + sq[1]) {
+        return d[2].abs();
+    }
+    let r = engine_core::x87::rsqrt_estimate(len2);
+    len2 * (((3.0 - (len2 * r) * r) * r) * 0.5)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetP2PRayCastRange_Execute.
+/// `GetP2PRayCastRange x1 y1 z1 x2 y2 z2 [layer]`: when a cast from the first point toward the
+/// second, as long as the two are apart, counts as found (layer 6), the distance from its point
+/// to the second point.
+fn get_p2p_ray_cast_range(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let p1 = [read.float(0, 0.0), read.float(1, 0.0), read.float(2, 0.0)];
+    let p2 = [read.float(3, 0.0), read.float(4, 0.0), read.float(5, 0.0)];
+    let layer = read.int(6, 6) as i32;
+    let m = super::ni_matrix::from_2_points(p1, p2);
+    let length = from_2_points_length(p1, p2);
+    let Some(cast) = h::ray_cast(e, [p1[0], p1[1], p1[2], 0.0], m, length, layer) else {
+        return handled(true);
+    };
+    let (coords, found) = h::hit_coords(e, &cast);
+    if found {
+        let d = super::ln_fn_math::point3_distance([coords[0], coords[1], coords[2]], p2);
+        a.set_result(e, f64::from(d));
+    }
+    handled(true)
+}
+
+/// A float with its sign bit flipped (`xorps` with the sign mask).
+fn flip(v: f32) -> f32 {
+    f32::from_bits(v.to_bits() ^ 0x8000_0000)
+}
+
+/// The two angles both maths routines end with: `[-ATan2(a2y, a2x), ATan2(a1y, a1x)]` in
+/// degrees (times `Flt180dPI`), as `ResultVars::Set` writes x then z.
+fn angles_out(e: &mut Engine, vars: [u32; 2], a1: f32, a2: f32) {
+    let k = super::nif_nodes::FLT_180_D_PI;
+    set_var(e, vars[0], f64::from(flip(a2) * k));
+    set_var(e, vars[1], f64::from(a1 * k));
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/Ni_types.cpp: TransformWorldToLocal
+// (asm).
+/// The target's offset from the origin turned by the inverse pitch-roll-yaw rotation of the
+/// angles (`r`, each row times the offset summed `(a0 + a1) + (a2 + a3)` as `haddps` twice, the
+/// fourth product a word times 0), then `[ATan2(r0, r1), ATan2(r2, sqrt(r0² + r1²))]`.
+fn transform_world_to_local(origin: [f32; 3], target: [f32; 3], rad: [f32; 3]) -> (f32, f32) {
+    let m = super::ni_matrix::from_euler_pry_inv(rad);
+    let v = [
+        target[0] - origin[0],
+        target[1] - origin[1],
+        target[2] - origin[2],
+        0.0,
+    ];
+    // The words `movups` reads: rows 0 and 1 reach into the next row's first word; row 2 the
+    // word after the matrix (JIP's saved frame pointer: a stack address, finite, so its product
+    // with the cleared lane is +0).
+    let row = |r: [f32; 4]| ((r[0] * v[0]) + (r[1] * v[1])) + ((r[2] * v[2]) + (r[3] * v[3]));
+    let r0 = row([m[0], m[1], m[2], m[3]]);
+    let r1 = row([m[3], m[4], m[5], m[6]]);
+    let r2 = row([m[6], m[7], m[8], 0.0]);
+    let h = ((r0 * r0) + (r1 * r1)).sqrt();
+    let a1 = super::ln_fn_math::atan2(r0, r1);
+    let a2 = super::ln_fn_math::atan2(r2, h);
+    (a1, a2)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_TransformWorldToLocal_Execute.
+/// `TransformWorldToLocal ox oy oz tx ty tz rx ry rz outX outZ`: the target's angles seen from the
+/// origin turned by the angles (degrees): x the pitch (`-ATan2(r2, h)`), z the heading
+/// (`ATan2(r0, r1)`), in degrees. No result.
+fn transform_world_to_local_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if read.ok {
+        let f = |i: usize| read.float(i, 0.0);
+        let origin = [f(0), f(1), f(2)];
+        let target = [f(3), f(4), f(5)];
+        let rad = [f(6), f(7), f(8)].map(|v| v * super::FLT_PI_D_180);
+        let vars = [read.local(9), read.local(10)];
+        let (a1, a2) = transform_world_to_local(origin, target, rad);
+        angles_out(e, vars, a1, a2);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/Ni_types.cpp: GetAnglesBetweenPoints
+// (asm).
+/// `d = pt1 - pt2`, then `[ATan2(d0, -d1), ATan2(d2, sqrt(d0² + d1²))]`.
+fn angles_between_points(pt1: [f32; 3], pt2: [f32; 3]) -> (f32, f32) {
+    let d = [pt1[0] - pt2[0], pt1[1] - pt2[1], pt1[2] - pt2[2]];
+    let h = ((d[0] * d[0]) + (d[1] * d[1])).sqrt();
+    let a1 = super::ln_fn_math::atan2(d[0], flip(d[1]));
+    let a2 = super::ln_fn_math::atan2(d[2], h);
+    (a1, a2)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetAnglesBetweenPoints_Execute.
+/// `GetAnglesBetweenPoints x1 y1 z1 x2 y2 z2 outX outZ`: x the pitch (`-ATan2(d2, h)`), z the
+/// heading (`ATan2(d0, -d1)`) of the first point from the second, in degrees. No result.
+fn get_angles_between_points(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if read.ok {
+        let f = |i: usize| read.float(i, 0.0);
+        let vars = [read.local(6), read.local(7)];
+        let (a1, a2) = angles_between_points([f(0), f(1), f(2)], [f(3), f(4), f(5)]);
+        angles_out(e, vars, a1, a2);
+    }
+    handled(true)
+}
+
+/// The right stick's words the game's pad poll writes (`011F35B4`, `011F35B6`:
+/// `xcontrols.rs`), `OSInputGlobals` (`*011F35CC`) and its mouse movement (`DIMOUSESTATE` at
+/// +0x1B24: x, then y), the settings `bInvertYValues:Controls` (`011E0A5C`) and
+/// `fMouseSensitivity:Controls` (`011E0A6C`), their values at +4 (the player's look code reads
+/// them, `playercharacter.rs`).
+const RIGHT_STICK_X: u32 = 0x011f_35b4;
+const RIGHT_STICK_Y: u32 = 0x011f_35b6;
+const INPUT_GLOBALS: u32 = 0x011f_35cc;
+const MOUSE_MOVEMENT: u32 = 0x1b24;
+const INVERT_Y_VALUE: u32 = 0x011e_0a5c + 4;
+const MOUSE_SENSITIVITY_VALUE: u32 = 0x011e_0a6c + 4;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_GetCameraMovement_Execute.
+/// `GetCameraMovement outX outY`: with a controller, the right stick (inside the dead zone 0)
+/// times the mouse sensitivity over 1500 (y negated); else the mouse's movement times the
+/// sensitivity; y negated first when Y is inverted. Both 0 when nothing moved; result 1 when
+/// something did.
+fn get_camera_movement(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let (out_x, out_y) = (read.local(0), read.local(1));
+    let controller = crate::input::ready(e);
+    let x;
+    let mut y;
+    if controller {
+        let dz = crate::input::dead_zone_rs(e);
+        let stick = |v: u16| {
+            let v = i32::from(v as i16);
+            if v >= dz.wrapping_neg() && v <= dz {
+                0
+            } else {
+                v
+            }
+        };
+        x = stick(e.mem.u16(RIGHT_STICK_X));
+        y = stick(e.mem.u16(RIGHT_STICK_Y));
+    } else {
+        let globals = e.mem.u32(INPUT_GLOBALS);
+        if globals == 0 {
+            return handled(true);
+        }
+        x = e.mem.u32(globals + MOUSE_MOVEMENT) as i32;
+        y = e.mem.u32(globals + MOUSE_MOVEMENT + 4) as i32;
+    }
+    if x != 0 || y != 0 {
+        if y != 0 && e.mem.u32(INVERT_Y_VALUE) != 0 {
+            y = y.wrapping_neg();
+        }
+        let sensitivity = f64::from(e.mem.f32(MOUSE_SENSITIVITY_VALUE));
+        let mut fx = f64::from(x) * sensitivity;
+        let mut fy = f64::from(y) * sensitivity;
+        if controller {
+            fx *= 1.0 / 1500.0;
+            fy *= -1.0 / 1500.0;
+        }
+        set_var(e, out_x, fx);
+        set_var(e, out_y, fy);
+        a.set_result(e, 1.0);
+    } else {
+        set_var(e, out_x, 0.0);
+        set_var(e, out_y, 0.0);
+    }
+    handled(true)
+}
+
+/// The kept flag `NoHardcoreTracking` (`kSerializedFlag_NoHardcoreTracking`).
+const NO_HARDCORE_TRACKING: u32 = 1;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_SetGameHour_Execute.
+/// `SetGameHour hour`: for an hour of 0 or more, the hour global set to it when it is not below
+/// the current hour, else to 24 plus it (a day later); then JIP's `s_forceHCNeedsUpdate` set to
+/// whether the player is in hardcore mode and hardcore tracking is not off. No result.
+fn set_game_hour(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let hour = read.float(0, 0.0);
+    if !read.ok || hour.is_nan() || hour < 0.0 {
+        return handled(true);
+    }
+    let global = e.mem.u32(TIME_GLOBALS + 0xc);
+    if global == 0 {
+        return handled(true);
+    }
+    let at = global + GLOBAL_VALUE;
+    if e.mem.f32(at) <= hour {
+        e.mem.set_f32(at, hour);
+    } else {
+        e.mem.set_f32(at, 24.0 + hour);
+    }
+    let hardcore = h::ptr(e, PLAYER).is_some_and(|p| e.mem.u32(p + PC_HARDCORE) != 0);
+    let tracking = serialized_flags(e) & NO_HARDCORE_TRACKING == 0;
+    crate::game_patches::gp::set_force_hardcore_needs_update(e, hardcore && tracking);
+    handled(true)
+}
+
+/// `TESObjectACTI`; a form's flags (+8), bit 0 set on a marked activator.
+const TES_OBJECT_ACTI: u8 = 0x15;
+const FORM_FLAGS: u32 = 0x08;
+
+/// `SetJIPFlag(kHookFormFlag6_IsAshPile, true)` and `flags |= 1`.
+fn mark_ash_pile(e: &mut Engine, form: u32) {
+    crate::world_hooks::set_jip_flag(e, form, crate::game_patches::gh2::IS_ASH_PILE, true);
+    let flags = e.mem.u32(form + FORM_FLAGS);
+    e.mem.set_u32(form + FORM_FLAGS, flags | 1);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_MarkActivatorAshPile_Execute.
+/// `MarkActivatorAshPile form`: an activator, or each activator a form list holds (its own items,
+/// not nested lists), gets JIP's ash pile bit (G06's tests then treat its references as ash
+/// piles) and form flag bit 0. No result.
+fn mark_activator_ash_pile(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let form = read.form(0);
+    if !read.ok || form == 0 {
+        return handled(true);
+    }
+    match type_of(e, form) {
+        TES_OBJECT_ACTI => mark_ash_pile(e, form),
+        BGS_LIST_FORM => {
+            for item in list_items(e, Ptr::new(form + LIST_FORM_LIST)) {
+                if item != 0 && type_of(e, item) == TES_OBJECT_ACTI {
+                    mark_ash_pile(e, item);
+                }
+            }
+        }
+        _ => {}
+    }
+    handled(true)
+}
+
+/// `ProcessManager` (`011E0E80`): its objects (`NiTArray` +4: data +8, capacity +0xC, a `u16`),
+/// the high level's begin (+0x14) and end (+0x24) (the game's own dead-actor clean-up
+/// `00977130` reads them so, `processlists.rs`). An actor's `lifeState` (+0x108, 2 dead), form
+/// flags (+8; 0x200000 left out as `00576D30` tests it), base form (+0x20; its flag 0x400, quest
+/// item), process (+0x68). A high process's level (+0x28), `eFadeState` (+0x3E8) and
+/// `fGreetingTimer` (+0x330: JIP's `dyingTimer`, the timer the game's clean-up reads through slot
+/// +0x4B0). `kXData_ExtraEnableStateChildren` 0x38.
+const PM_OBJECTS: u32 = 0x08;
+const PM_CAPACITY: u32 = 0x0c;
+const PM_BEGIN_HIGH: u32 = 0x14;
+const PM_END_HIGH: u32 = 0x24;
+const ACTOR_LIFE_STATE: u32 = 0x108;
+const ACTOR_BASE: u32 = 0x20;
+const LIFE_DEAD: u32 = 2;
+const PROCESS_FADE: u32 = 0x3e8;
+const PROCESS_DYING_TIMER: u32 = 0x330;
+const EXTRA_ENABLE_STATE_CHILDREN: u32 = 0x38;
+/// `00577DE0` (`thiscall (actor)`: whether the actor's inventory holds something that keeps the
+/// body, `004D0360`) and `HighProcess::FadeAndDisable` (`008FEB60`, `thiscall (process, actor)`,
+/// `RET 4`).
+const KEEPS_BODY: u32 = 0x0057_7de0;
+const FADE_AND_DISABLE: u32 = 0x008f_eb60;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_ClearDeadActors_Execute.
+/// Each high-level actor, last to first, that is dead, not flagged 0x200000, of a base that is
+/// not a quest item, with a high process at level 0 not fading whose dying timer is below 0,
+/// without `ExtraEnableStateChildren` and that `00577DE0` does not keep: faded out and disabled
+/// by the game. No result.
+///
+/// nv-rs's own: the walk stays within the array's capacity and does nothing when the end is
+/// not past the begin (JIP walks an unsigned difference); an actor without a base form is left
+/// alone (JIP reads through it).
+fn clear_dead_actors(e: &mut Engine, _: &[u32]) -> Ret {
+    let pm = PROCESS_MANAGER;
+    let data = e.mem.u32(pm + PM_OBJECTS);
+    let capacity = u32::from(e.mem.u16(pm + PM_CAPACITY));
+    let begin = e.mem.u32(pm + PM_BEGIN_HIGH);
+    let end = e.mem.u32(pm + PM_END_HIGH).min(capacity);
+    if data == 0 || end <= begin {
+        return handled(true);
+    }
+    for i in (begin..end).rev() {
+        let actor = e.mem.u32(data + 4 * i);
+        if actor == 0 || !h::is_actor(e, actor) {
+            continue;
+        }
+        let base = e.mem.u32(actor + ACTOR_BASE);
+        if e.mem.u32(actor + ACTOR_LIFE_STATE) != LIFE_DEAD
+            || e.mem.u32(actor + FORM_FLAGS) & 0x0020_0000 != 0
+            || base == 0
+            || e.mem.u32(base + FORM_FLAGS) & 0x400 != 0
+        {
+            continue;
+        }
+        let process = e.mem.u32(actor + PC_PROCESS);
+        // `dyingTimer < 0` (`comiss`): false for a NaN.
+        if process == 0
+            || e.mem.u32(process + h::PROCESS_LEVEL) != 0
+            || e.mem.u32(process + PROCESS_FADE) != 0
+            || e.mem.f32(process + PROCESS_DYING_TIMER).is_nan()
+            || e.mem.f32(process + PROCESS_DYING_TIMER) >= 0.0
+            || extra::has_type(
+                e,
+                actor + extra::REFR_EXTRA_LIST,
+                EXTRA_ENABLE_STATE_CHILDREN,
+            )
+            || e.call(KEEPS_BODY, &args![actor]).u32() & 0xff != 0
+        {
+            continue;
+        }
+        e.call(FADE_AND_DISABLE, &args![process, actor]);
     }
     handled(true)
 }

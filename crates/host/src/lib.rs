@@ -384,20 +384,34 @@ impl Host {
     }
 }
 
-/// [`Host::start_with`] off Windows: the program builds on Linux and macOS, but the game cannot
-/// run there yet, so every start is refused with the pieces that are still Windows-only, instead
-/// of a run that would go on without them (no window drawn, no sound, the machine's answers
-/// missing) and fail somewhere less clear. The game's paths and file listings are provided
-/// (`engine_platform::host_paths`).
+/// [`Host::start_with`] and [`check_installation`] off Windows: the program builds on Linux and
+/// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
+/// pieces that are still Windows-only, instead of a run that would go on without them (no window
+/// drawn, no sound, the machine's answers missing) and fail somewhere less clear. The game's
+/// paths and file listings are provided (`engine_platform::host_paths`). On a processor other
+/// than x86-64 (Apple silicon) it also names what differs there.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
-    Err(
+    not_provided_on(cfg!(target_arch = "x86_64"))
+}
+
+/// [`not_provided_here`]'s message, for an x86-64 processor or another.
+#[cfg(any(not(windows), test))]
+fn not_provided_on(x86_64: bool) -> Result<(), String> {
+    let mut why = String::from(
         "nv-rs does not run the game on this system yet: it builds here, but these are only \
          provided on Windows so far: the game's window with its mouse and keyboard (and so \
-         anything drawn), the sound on the speakers, and this machine's tables (display \
-         adapter, sound devices, folders), which are measured on Windows"
-            .to_string(),
-    )
+         anything drawn), the sound on the speakers, this machine's tables (display adapter, \
+         sound devices, folders), which are measured on Windows, the distortion sound effect's \
+         table (measured from Windows' own DLL), and text in the game's code page outside ASCII",
+    );
+    if !x86_64 {
+        why.push_str(
+            "; and on this processor the game's x87 maths (not yet exact off x86-64) and the \
+             processor's quick reciprocal estimates (RCPSS, RSQRTSS)",
+        );
+    }
+    Err(why)
 }
 
 /// What `nv-viewer --check` reports for the installation whose `Data` folder is `data`, without
@@ -408,6 +422,11 @@ pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
     if !exe.is_file() {
         return Err(format!("{}: not found", exe.display()));
     }
+    // Linux and macOS: the game cannot start there yet, so the check says so where the start
+    // does, right after the exe is found (`--check` then ends with status 1, "the game cannot
+    // start").
+    #[cfg(not(windows))]
+    not_provided_here()?;
     engine::exe::verify(&exe)?;
     let converter = if engine_platform::resampler::tables().is_some() {
         "found"
@@ -700,11 +719,38 @@ mod tests {
     #[test]
     fn a_start_off_windows_is_refused_naming_what_is_missing() {
         let why = super::not_provided_here().unwrap_err();
-        for piece in ["window", "mouse and keyboard", "sound", "tables"] {
-            assert!(why.contains(piece), "{piece}: {why}");
+        for x86_64 in [true, false] {
+            let why = super::not_provided_on(x86_64).unwrap_err();
+            for piece in [
+                "window",
+                "mouse and keyboard",
+                "sound",
+                "tables",
+                "distortion",
+                "code page",
+            ] {
+                assert!(why.contains(piece), "{piece}: {why}");
+            }
+            // The game's paths and file listings are provided off Windows now.
+            assert!(!why.contains("folder names"), "{why}");
+            assert!(!why.contains("file times"), "{why}");
+            // The processor's own differences only off x86-64 (Apple silicon).
+            assert_eq!(why.contains("x87"), !x86_64, "{why}");
+            assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
         }
-        // The game's paths and file listings are provided off Windows now.
-        assert!(!why.contains("folder names"), "{why}");
+        assert_eq!(
+            why,
+            super::not_provided_on(cfg!(target_arch = "x86_64")).unwrap_err()
+        );
+    }
+
+    /// A scratch installation whose FalloutNV.exe is two bytes (enough to be found).
+    #[cfg(not(windows))]
+    fn scratch_installation(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("nv-host-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Data")).unwrap();
+        std::fs::write(dir.join("FalloutNV.exe"), b"MZ").unwrap();
+        dir
     }
 
     /// The refusal is made before the exe is mapped: a start with an installation present stops
@@ -712,12 +758,23 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn a_start_off_windows_stops_with_the_refusal() {
-        let dir = std::env::temp_dir().join(format!("nv-host-refusal-{}", std::process::id()));
-        std::fs::create_dir_all(dir.join("Data")).unwrap();
-        std::fs::write(dir.join("FalloutNV.exe"), b"MZ").unwrap();
+        let dir = scratch_installation("refusal");
         let err = super::Host::start(&dir.join("Data")).err().unwrap();
         assert_eq!(err, super::not_provided_here().unwrap_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `nv-viewer --check` off Windows says the same (status 1: the game cannot start), where
+    /// the start does: after the exe is found.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_installation_check_off_windows_says_the_game_cannot_start() {
+        let dir = scratch_installation("check");
+        let err = super::check_installation(&dir.join("Data")).unwrap_err();
+        assert_eq!(err, super::not_provided_here().unwrap_err());
+        let _ = std::fs::remove_dir_all(&dir);
+        let missing = super::check_installation(&dir.join("Data")).unwrap_err();
+        assert!(missing.ends_with("FalloutNV.exe: not found"), "{missing}");
     }
 
     #[test]

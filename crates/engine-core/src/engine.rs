@@ -1535,11 +1535,19 @@ fn block_check_from_env() -> Option<(bool, bool, bool)> {
 }
 
 /// `GetTickCount` on Linux and macOS: the milliseconds since the machine started, in 32 bits.
-/// Windows' count goes on while the machine sleeps, so the clock is one that does too: Linux's
-/// `CLOCK_BOOTTIME`, and macOS's `CLOCK_MONOTONIC` (Darwin's goes on in sleep; its
-/// `CLOCK_UPTIME_RAW` does not). Through the C library's `clock_gettime`, declared here as
-/// `mem.rs` declares `mmap` (no `libc` dependency); `timespec` is two 64-bit words on these
-/// 64-bit systems.
+/// Windows' count goes on while the machine sleeps, so the clock is one that does too:
+/// - Linux: `CLOCK_BOOTTIME` (7), the time since boot with suspended time counted (its
+///   `CLOCK_MONOTONIC`, 1, leaves suspended time out; `CLOCK_REALTIME`, 0, is the wall clock);
+/// - macOS: `CLOCK_MONOTONIC` (6), which on Darwin goes on in sleep (its `CLOCK_UPTIME_RAW`,
+///   8, does not).
+///
+/// Why it matters to the game: only the start value is taken from here (after it the clock moves
+/// by `std::time::Instant`, as on Windows), and the game's code reads a zero stamp as long ago
+/// (the loading menu's `Update` 00789a90 looks for the intro movie only within 3000 ms of a
+/// stamp that starts at 0): a start at the machine's uptime, as on Windows, keeps that check
+/// false. Through the C library's `clock_gettime`, declared here as `mem.rs` declares `mmap`
+/// (no `libc` dependency); `timespec` is two 64-bit words on these 64-bit systems. The test
+/// `the_real_clock_starts_at_the_machines_uptime` holds it against the system's own uptime.
 #[cfg(unix)]
 fn host_tick_count() -> u32 {
     #[repr(C)]
@@ -1603,14 +1611,76 @@ mod tests {
         assert_eq!(tick_count_of(4_294_968, 0), 704);
     }
 
-    /// The uptime clock this system has answers, and it starts the game's clock past zero
-    /// unless the machine started less than a millisecond ago.
+    /// The game's clock starts at the machine's uptime, held against the system's own count of
+    /// it, read another way: Linux's `/proc/uptime` (the time since boot, suspended time
+    /// counted, as `CLOCK_BOOTTIME`), macOS's boot time (`sysctl kern.boottime`) taken from the
+    /// wall clock. Within 2 s (both are read a moment apart; the wall clock may be set), on the
+    /// 32-bit count. A wall clock instead (`CLOCK_REALTIME`) fails it. Linux's `CLOCK_MONOTONIC`
+    /// differs from the right clock only after a suspend, which a test machine does not do: the
+    /// choice between those two is the doc's (`host_tick_count`). Past 3000 ms too, the game's
+    /// own threshold, on a machine up longer than 10 s.
     #[cfg(unix)]
     #[test]
     fn the_real_clock_starts_at_the_machines_uptime() {
         let mut e = Engine::new();
         e.start_real_clock();
-        assert!(e.clock_ms > 0);
+        let ours = e.clock_ms;
+        let uptime_ms = system_uptime_ms();
+        let apart = ours.wrapping_sub(uptime_ms as u32) as i32;
+        assert!(
+            apart.unsigned_abs() < 2000,
+            "the game's clock {ours} against the system's uptime {uptime_ms} ms"
+        );
+        if uptime_ms > 10_000 && uptime_ms < u64::from(u32::MAX) {
+            assert!(ours >= 3000, "{ours}");
+        }
+    }
+
+    /// The machine's uptime in milliseconds as the system reports it outside `clock_gettime`.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn system_uptime_ms() -> u64 {
+        let text = std::fs::read_to_string("/proc/uptime").expect("/proc/uptime");
+        let secs: f64 = text.split_whitespace().next().unwrap().parse().unwrap();
+        (secs * 1000.0) as u64
+    }
+
+    /// The machine's uptime in milliseconds as the system reports it outside `clock_gettime`:
+    /// the wall clock less the boot time (`kern.boottime`, a `timeval`).
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    fn system_uptime_ms() -> u64 {
+        #[repr(C)]
+        struct Timeval {
+            sec: i64,
+            usec: i32,
+        }
+        extern "C" {
+            fn sysctlbyname(
+                name: *const std::ffi::c_char,
+                old: *mut std::ffi::c_void,
+                old_len: *mut usize,
+                new: *mut std::ffi::c_void,
+                new_len: usize,
+            ) -> i32;
+        }
+        let mut boot = Timeval { sec: 0, usec: 0 };
+        let mut len = std::mem::size_of::<Timeval>();
+        // SAFETY: the call writes at most `len` bytes into `boot`.
+        let r = unsafe {
+            sysctlbyname(
+                b"kern.boottime\0".as_ptr().cast(),
+                (&mut boot as *mut Timeval).cast(),
+                &mut len,
+                std::ptr::null_mut(),
+                0,
+            )
+        };
+        assert_eq!(r, 0, "sysctl kern.boottime");
+        let booted = std::time::UNIX_EPOCH
+            + std::time::Duration::new(boot.sec as u64, (boot.usec as u32) * 1000);
+        std::time::SystemTime::now()
+            .duration_since(booted)
+            .expect("booted before now")
+            .as_millis() as u64
     }
 
     /// The block check names the translated function that writes past a `with_stack` local
