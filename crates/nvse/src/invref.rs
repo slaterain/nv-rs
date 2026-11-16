@@ -572,6 +572,43 @@ pub fn set_removed(e: &mut Engine, id: u32) {
     }
 }
 
+/// Whether the inventory reference of temporary reference `id` is marked removed
+/// ([`set_removed`]); false for an id that is no inventory reference.
+pub fn is_removed(e: &mut Engine, id: u32) -> bool {
+    state(e).refs.get(&id).is_some_and(|r| r.removed)
+}
+
+/// Whether a running `ForEach` over a container (on any thread) still lists the stack `xdata`
+/// among the stacks it stands on now or is still to visit: for a command that would free a stack
+/// (JIP LN NVSE's `SetRefExtraData`), which keeps it instead, as for a deferred action
+/// ([`refs_on_stack`]). False for `xdata` 0.
+pub fn stack_in_loops(e: &mut Engine, xdata: u32) -> bool {
+    xdata != 0 && crate::commands::scripting::container_loops_list(e, xdata)
+}
+
+/// The inventory references standing for the stack `xdata` (their temporary references' ids, in
+/// id order), and whether a deferred action of any reference is on that stack: for a command that
+/// changes or frees a stack itself (JIP LN NVSE's `SetRefExtraData`), so that no reference keeps
+/// a copy of what it changed or points into what it freed. None for `xdata` 0.
+pub fn refs_on_stack(e: &mut Engine, xdata: u32) -> (Vec<u32>, bool) {
+    if xdata == 0 {
+        return (Vec::new(), false);
+    }
+    let s = state(e);
+    let mut ids: Vec<u32> = s
+        .refs
+        .iter()
+        .filter(|(_, r)| r.data.xdata == xdata)
+        .map(|(id, _)| *id)
+        .collect();
+    ids.sort_unstable();
+    let deferred = s
+        .refs
+        .values()
+        .any(|r| r.deferred.iter().any(|d| d.data.xdata == xdata));
+    (ids, deferred)
+}
+
 /// `GetCount`: the entry's count.
 pub fn count(e: &mut Engine, id: u32) -> i32 {
     let entry = state(e).refs.get(&id).map_or(0, |r| r.data.entry);
