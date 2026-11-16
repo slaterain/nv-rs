@@ -698,6 +698,15 @@ fn inject_ui_xml(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+/// The log's one line, once a run, when `InjectUIComponent` is called with the UI Organizer row
+/// off (nv-rs's own: JIP would write `jip_temp.xml` into the game's folder instead).
+pub const INJECT_WITHOUT_UIO_LINE: &str = "JIP LN NVSE: InjectUIComponent was called with the UI \
+     Organizer row off (bUIO, NV_UIO): nothing is injected; turn it on for UI mods that use it";
+
+/// [`INJECT_WITHOUT_UIO_LINE`] was written in this run.
+static INJECT_WITHOUT_UIO_NOTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
 // Cmd_InjectUIComponent_Execute and InjectUIComponent.
 /// `Menu/tile...` and a formatted text of menu XML: the text made into tiles under the tile
@@ -714,6 +723,9 @@ fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let path = nvse::commands::args_in_buffer(e, &f.leading, 0, PATH_BUFFER, "InjectUIComponent");
     let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "InjectUIComponent");
+    if !uio::on(e) && !INJECT_WITHOUT_UIO_NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("{INJECT_WITHOUT_UIO_LINE}");
+    }
     if let Some((tile, _)) = target_component(e, &path, false) {
         if uio::on(e) && uio::inject_component(e, tile, &text) != 0 {
             a.set_result(e, 1.0);
