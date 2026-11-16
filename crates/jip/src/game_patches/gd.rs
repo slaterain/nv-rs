@@ -22,20 +22,78 @@
 //! Threads: the constructor runs wherever a weapon fires (the main thread, the AI threads with real
 //! threads on). The handler writes only the new projectile and reads forms and the shooter's
 //! process; it keeps no state of JIP's and takes no slot.
+//!
+//! **Part 2, fixes of `InitGamePatches` (with the row) and the switch `bProjImpactDmgFix`:**
+//! - G27 (`SAFE_WRITE_BUF(0x47667D / 0x9C35F7, "\x89\xC8\x0F\x1F\x00")`): `mov eax, ecx` in place of
+//!   the shooter call where a destroyed projectile-like reference (`fn_00475b20`) or a projectile
+//!   (its explosion) makes an explosion: the explosion's source is the projectile, which the
+//!   explosion factory already reads its shooter from (so the shooter's perk entry sees the
+//!   projectile's weapon).
+//! - G30 (`SAFE_WRITE_BUF(0x9ACA23, ...)`, 53 bytes): in the explosion factory (`009ac9c0`), for a
+//!   projectile source, the shooter is read at `+0xFC` and the "adjust explosion radius" entry
+//!   point (0x48) runs for any actor shooter with the projectile's weapon (`+0xF8`), not only for
+//!   the player.
+//! - G62 (`PackageSetRunHook`, 0x8DAA6F): the move mode honours a package's Always Walk flag
+//!   (JIP's bit 0x20000000) before the run tests.
+//! - G91 (`ReactionCooldownCheckHook`, 0x9D10F3): ranged combat's reaction line waits the
+//!   setting's seconds of real time (`GetTickCount`) since the last line of any actor.
+//! - G92 (`IsValidAITargetHook`, 0x9F50C4): sandbox never picks a disabled (or pending
+//!   disabled) reference.
+//! - G102 (`SAFE_WRITE_BUF(0x9EE367, ...)`): a dialogue package's speaker ends its line only when
+//!   dead (life state 2).
+//! - O4 (`InitMissileFlagsHook`, 0x9B7E14, switch `bProjImpactDmgFix`): a missile's flag 0x8000
+//!   (impact damage not taken again from the weapon) is set only for a projectile base with flag
+//!   0x100, and never cleared.
+//!
+//! Threads: G27, G30, G62, G92, G102 and O4 read and write only the objects they are given (their
+//! functions run on the AI threads too). G91 keeps JIP's one static, the last line's tick count:
+//! a run-wide atomic ([`ReactionTick`], lock-free, the shared slot is never taken), read and
+//! written as JIP's plain loads and stores are (two threads may both pass in one tick, as with JIP).
 
 use super::Area;
 use crate::commands::forms::TES_AMMO_VTBL;
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// G117's seam: the launch constructor's count block (words: the projectile, the weapon
 /// argument, the actor shooter or 0, the mod-0xC flag).
 pub const PROJECTILE_SET_AMMO: SiteSlot = SiteSlot::new(Owner::Jip, 0x009b_c241);
+/// G27's seams: the explosion source in `fn_00475b20` (`0x47667D`) and in the projectile's own
+/// explosion (`0x9C35F7`); words: the reference.
+pub const EXPLOSION_SOURCE: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x0047_667d),
+    SiteSlot::new(Owner::Jip, 0x009c_35f7),
+];
+/// G30's seam: the explosion factory's projectile source (words: the source, the multiplier's
+/// bits; answers the multiplier's bits).
+pub const EXPLOSION_PERK: SiteSlot = SiteSlot::new(Owner::Jip, 0x009a_ca23);
+/// G62's seam: the move mode's run tests (words: the actor, the running package; answers the mode
+/// or 0 to go on).
+pub const MOVE_MODE: SiteSlot = SiteSlot::new(Owner::Jip, 0x008d_aa6f);
+/// G91's seam: ranged combat's reaction cooldown test (words: the combat state).
+pub const REACTION_COOLDOWN: SiteSlot = SiteSlot::new(Owner::Jip, 0x009d_10f3);
+/// G92's seam: the sandbox target's flag tests (words: the reference; answers the skip byte).
+pub const AI_TARGET: SiteSlot = SiteSlot::new(Owner::Jip, 0x009f_50c4);
+/// G102's seam: the speaker's state calls (words: the speaker; answers "dead").
+pub const SPEAKER_DONE: SiteSlot = SiteSlot::new(Owner::Jip, 0x009e_e367);
+/// O4's seam: the missile's flag 0x8000 call (words: the projectile, the value).
+pub const MISSILE_FLAGS: SiteSlot = SiteSlot::new(Owner::Jip, 0x009b_7e14);
 
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GD",
-    fix_sites: &[PROJECTILE_SET_AMMO.addr()],
+    fix_sites: &[
+        PROJECTILE_SET_AMMO.addr(),
+        EXPLOSION_SOURCE[0].addr(),
+        EXPLOSION_SOURCE[1].addr(),
+        EXPLOSION_PERK.addr(),
+        MOVE_MODE.addr(),
+        REACTION_COOLDOWN.addr(),
+        AI_TARGET.addr(),
+        SPEAKER_DONE.addr(),
+        MISSILE_FLAGS.addr(),
+    ],
     fix_wraps: &[],
     install_fixes,
     jip_sites: &[],
@@ -79,6 +137,164 @@ const ENTRY_FORM: u32 = 8;
 
 fn install_fixes(e: &mut Engine) {
     e.on_site(PROJECTILE_SET_AMMO, projectile_set_ammo);
+    for slot in EXPLOSION_SOURCE {
+        e.on_site(slot, explosion_source);
+    }
+    e.on_site(EXPLOSION_PERK, explosion_perk);
+    e.on_site(MOVE_MODE, move_mode);
+    // G91's run-wide tick, made before the threads start (`ext_free`'s rule).
+    e.ext_free::<ReactionTick>();
+    e.on_site(REACTION_COOLDOWN, reaction_cooldown);
+    e.on_site(AI_TARGET, ai_target);
+    e.on_site(SPEAKER_DONE, speaker_done);
+    e.on_site(MISSILE_FLAGS, missile_flags);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SAFE_WRITE_BUF(0x47667D, "\x89\xC8\x0F\x1F\x00"), the same at 0x9C35F7).
+/// G27: `mov eax, ecx` in place of the shooter call: the reference itself.
+fn explosion_source(_: &mut Engine, a: &[u32]) -> Option<u32> {
+    Some(a[0])
+}
+
+/// The function an actor's vtable holds at `+0x100` (`IsActor`, answering true), which JIP's G30
+/// compares the shooter's slot with.
+pub const ACTOR_IS_ACTOR: u32 = 0x008d_0360;
+/// `BGSEntryPointPerkEntry::HandleEntryPoint` (`ADDR_ApplyPerkModifiers`; cdecl: the entry point,
+/// the actor, a form, the float it adjusts).
+const APPLY_PERK_MODIFIERS: u32 = 0x005e_58f0;
+/// `kEntryPoint_AdjustExplosionRadius`.
+const ADJUST_EXPLOSION_RADIUS: u32 = 0x48;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SAFE_WRITE_BUF(0x9ACA23, "\x8B\x8A\xFC\x00\x00\x00\x89\x4D\xE8...")).
+/// G30: the projectile source's shooter (`+0xFC`); for an actor shooter (its vtable's `+0x100` is
+/// `Actor::IsActor`) the "adjust explosion radius" entry point adjusts the multiplier with the
+/// projectile's weapon (`+0xF8`). Answers the multiplier's bits (the factory reads the shooter
+/// at `+0xFC` itself, JIP's `[ebp-0x18]`).
+fn explosion_perk(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (source, mut multiplier) = (a[0], a[1]);
+    let shooter = e.mem.u32(source.wrapping_add(0xfc));
+    if shooter != 0 && e.mem.u32(e.mem.u32(shooter).wrapping_add(0x100)) == ACTOR_IS_ACTOR {
+        let weapon = e.mem.u32(source.wrapping_add(0xf8));
+        e.with_stack(4, |e, out| {
+            e.mem.set_u32(out.addr(), multiplier);
+            e.call(
+                APPLY_PERK_MODIFIERS,
+                &args![ADJUST_EXPLOSION_RADIUS, shooter, weapon, out],
+            );
+            multiplier = e.mem.u32(out.addr());
+        });
+    }
+    Some(multiplier)
+}
+
+/// A package's flag word (`+0x1C`): `kPackageFlag_AlwaysRun` and JIP's `kPackageFlag_AlwaysWalk`.
+const ALWAYS_RUN: u32 = 1 << 13;
+const ALWAYS_WALK: u32 = 1 << 29;
+/// The actor's bytes the exe's `008d8220` and `00493bb0` answer: `+0x124` (forced run, JIP's
+/// `Actor::forceRun`, set by `SetForceRun`) and `+0x104` (JIP's `Actor::isInCombat`).
+const ACTOR_BYTE_124: u32 = 0x124;
+const ACTOR_BYTE_104: u32 = 0x104;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PackageSetRunHook.
+/// G62: walk (0x101) for a package with the Always Walk flag; run (0x201) for one with Always
+/// Run, else when the actor's byte `+0x124` or `+0x104` is set; else 0 (go on at `0x8DAAA9`).
+fn move_mode(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (actor, package) = (a[0], a[1]);
+    if package != 0 {
+        let flags = e.mem.u32(package.wrapping_add(0x1c));
+        if flags & ALWAYS_WALK != 0 {
+            return Some(0x101);
+        }
+        if flags & ALWAYS_RUN != 0 {
+            return Some(0x201);
+        }
+    }
+    if e.mem.u8(actor.wrapping_add(ACTOR_BYTE_124)) != 0
+        || e.mem.u8(actor.wrapping_add(ACTOR_BYTE_104)) != 0
+    {
+        return Some(0x201);
+    }
+    Some(0)
+}
+
+/// G91's `lastTickCount` (JIP's static in `ReactionCooldownCheckHook`): one for the run, every
+/// thread's engine reading the same word without a lock.
+#[derive(Default)]
+pub struct ReactionTick(pub AtomicU32);
+
+/// The exe's `GetTickCount` wrapper (`00457fe0`, no argument).
+const TICK_COUNT: u32 = 0x0045_7fe0;
+/// The setting JIP compares with (`0x11CE9B4`'s value).
+const REACTION_COOLDOWN_SETTING: u32 = 0x011c_e9b8;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ReactionCooldownCheckHook.
+/// G91: whether more than the setting's seconds passed since the last line (the tick difference
+/// as a signed int, times 0.001, `comiss`/`seta`); when so the tick is kept.
+fn reaction_cooldown(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    let now = e.call(TICK_COUNT, &[]).u32();
+    let last = e.ext_free::<ReactionTick>().0.load(Ordering::Relaxed);
+    let seconds = now.wrapping_sub(last) as i32 as f32 * 0.001f32;
+    let ready = seconds > e.mem.f32(REACTION_COOLDOWN_SETTING);
+    if ready {
+        e.ext_free::<ReactionTick>().0.store(now, Ordering::Relaxed);
+    }
+    Some(u32::from(ready))
+}
+
+/// `Script::IsPendingEnabledReference` / `IsPendingDisabledReference` (cdecl, the reference).
+const PENDING_ENABLED: u32 = 0x005a_a680;
+const PENDING_DISABLED: u32 = 0x005a_a630;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: TESObjectREFR::GetDisabled.
+/// JIP's disabled test: with the disabled flag (`+8` bit 0x800), disabled unless pending enabled;
+/// else pending disabled.
+pub fn get_disabled(e: &mut Engine, reference: u32) -> bool {
+    if e.mem.u8(reference.wrapping_add(9)) & 8 != 0
+        && !e.call(PENDING_ENABLED, &args![reference]).bool()
+    {
+        return true;
+    }
+    e.call(PENDING_DISABLED, &args![reference]).bool()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: IsValidAITargetHook.
+/// G92: skip a reference with a flag of 0x4820 (deleted 0x20, 0x800, 0x4000), else a disabled
+/// one ([`get_disabled`]).
+fn ai_target(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let reference = a[0];
+    if e.mem.u32(reference.wrapping_add(8)) & 0x4820 != 0 {
+        return Some(1);
+    }
+    Some(u32::from(get_disabled(e, reference)))
+}
+
+/// `Actor::lifeState` (`+0x108`) and the dead state.
+const LIFE_STATE: u32 = 0x108;
+const DEAD: u32 = 2;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SAFE_WRITE_BUF(0x9EE367, "\x8B\x8A\xB0\x00\x00\x00\x83\xB9\x08\x01\x00\x00\x02...")).
+/// G102: whether the speaker's life state is dead (the exe's two state calls not made).
+fn speaker_done(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    Some(u32::from(e.mem.u32(a[0].wrapping_add(LIFE_STATE)) == DEAD))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitMissileFlagsHook.
+/// O4: with the value set and the projectile's base (`+0x20`) flag byte `+0x61` bit 1 (flag
+/// 0x100), the projectile's flag 0x8000 (`or byte [ecx+0xC9], 0x80`); nothing cleared.
+fn missile_flags(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (projectile, value) = (a[0], a[1]);
+    if value & 0xff != 0 {
+        let base = e.mem.u32(projectile.wrapping_add(0x20));
+        if e.mem.u8(base.wrapping_add(0x61)) & 1 != 0 {
+            let flags = projectile.wrapping_add(0xc9);
+            let byte = e.mem.u8(flags);
+            e.mem.set_u8(flags, byte | 0x80);
+        }
+    }
+    Some(0)
 }
 
 /// JIP's `cvttss2si`: truncated toward zero; NaN or out of range gives `0x80000000`.

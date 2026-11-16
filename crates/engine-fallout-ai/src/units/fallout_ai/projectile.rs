@@ -5905,7 +5905,18 @@ fn explode_projectile(e: &mut Engine, this: Ptr<Projectile>) {
         let owner = if test_flags(e, this, 0x400) {
             0
         } else {
-            e.call(GET_SHOOTER, &args![this]).u32()
+            // 009c35f7: JIP's G27 (a fix) puts `mov eax, ecx` in place of the shooter call:
+            // the explosion's source is the projectile itself. One load while JIP is not
+            // installed.
+            let source = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x009c_35f7, &[this.addr()])
+            } else {
+                None
+            };
+            match source {
+                Some(source) => source,
+                None => e.call(GET_SHOOTER, &args![this]).u32(),
+            }
         };
         let base = e.call(GET_BASE_OBJECT, &args![this]).u32();
         let form = e.call(0x004f_d3c0, &args![base]).u32();
@@ -7923,6 +7934,61 @@ mod tests {
         assert_eq!(e.get(this, Projectile::fBlinkTimer), 0.75);
         assert_eq!(calls(&e, 0x009c_4ec0), vec![vec![this.addr()]]);
         assert_eq!(calls(&e, 0x009a_c9c0).len(), 1);
+    }
+
+    thread_local! {
+        static G27_ASKED: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G27_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g27(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G27_ASKED.with(|s| s.borrow_mut().push(a[0]));
+        G27_ANSWER.with(|c| c.get())
+    }
+
+    /// JIP's G27 seam at `0x9C35F7` (a fix): the explosion's source. Not asked without the
+    /// FIXES bit or with flag 0x400 (source 0); asked with the projectile otherwise, its answer
+    /// replacing the shooter, no answer leaving the shooter.
+    #[test]
+    fn g27_seam_makes_the_projectile_the_source() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_35f7), at_g27);
+        let this = projectile(&mut e);
+        stub(&mut e, 0x004f_d360, 1);
+        stub(&mut e, 0x004f_d3c0, 0x8800);
+        stub(&mut e, 0x008d_6f30, 0x5000);
+        give_position(&mut e, this.addr(), 0x7E00_0050);
+        e.set(this, Projectile::pShooter, 0x3333);
+        for (word, flags, answer, asked, source) in [
+            (0, 0x100000, Some(this.addr()), false, 0x3333),
+            (
+                jip_patches::INSTALLED,
+                0x100000,
+                Some(this.addr()),
+                false,
+                0x3333,
+            ),
+            (fixes, 0x100000, Some(this.addr()), true, this.addr()),
+            (fixes, 0x100000, None, true, 0x3333),
+            (fixes, 0x100400, Some(this.addr()), false, 0),
+        ] {
+            e.set_jip_patches(word);
+            G27_ASKED.with(|s| s.borrow_mut().clear());
+            G27_ANSWER.with(|c| c.set(answer));
+            e.set(this, Projectile::iFlags, flags);
+            e.call_log = Some(vec![]);
+            projectile_check_explosion(&mut e, this, 0.1);
+            let made = calls(&e, 0x009a_c9c0);
+            assert_eq!(
+                made[0][..4],
+                [0x8800, source, 0, 0x5000],
+                "{word:x} {flags:x}"
+            );
+            let seen = G27_ASKED.with(|s| s.take());
+            assert_eq!(seen, if asked { vec![this.addr()] } else { vec![] });
+        }
     }
 
     #[test]
