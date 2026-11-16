@@ -13,7 +13,9 @@
 //! `Character`'s vtable `0x01086A6C`; the console's open byte `0x011DEA2E`.
 
 use super::*;
-use crate::test_support::{engine, form_arg, int_arg, line, script_ref, RESULT};
+use crate::test_support::{
+    engine, form_arg, int_arg, line, script_ref, with_jips_slot_held as held, RESULT,
+};
 
 const AREA: u32 = 0x0500_0000;
 const ACTOR: u32 = AREA + 0x1000;
@@ -244,7 +246,11 @@ fn combat_disabled_and_forced_targets() {
     e.mem.set_u32(TARGETS + 0x10, NOT_CHARACTER);
     assert_eq!(site(&mut e, 0x0098_6c79, &[ACTOR]), None);
     e.mem.set_u32(TARGETS + 0x14, OTHER);
-    assert_eq!(site(&mut e, 0x0098_6c79, &[ACTOR]), Some(OTHER));
+    // On the AI threads: it answers while another engine holds JIP's shared slot.
+    assert_eq!(
+        held(&mut e, |e| site(e, 0x0098_6c79, &[ACTOR])),
+        Some(OTHER)
+    );
     e.mem.set_u32(TARGETS + 8, 1);
     assert_eq!(site(&mut e, 0x0098_6c79, &[ACTOR]), None, "past the count");
     e.mem.set_u32(TARGETS + 8, 2);
@@ -398,7 +404,8 @@ fn no_health_reset() {
         }
     });
     calls();
-    assert_eq!(site(&mut e, 0x008a_0963, &[ACTOR]), Some(1));
+    // On the AI threads: it answers while another engine holds JIP's shared slot.
+    assert_eq!(held(&mut e, |e| site(e, 0x008a_0963, &[ACTOR])), Some(1));
     assert_eq!(
         calls(),
         [(0x0088_b740, vec![ACTOR, 0x10, 15.0f32.to_bits()])]
@@ -768,7 +775,11 @@ fn forced_detection_values() {
         ),
         (1, 1)
     );
-    assert_eq!(site(&mut e, 0x008a_152d, &[ACTOR]), Some(0x1_fff9));
+    // On the AI threads: it answers while another engine holds JIP's shared slot.
+    assert_eq!(
+        held(&mut e, |e| site(e, 0x008a_152d, &[ACTOR])),
+        Some(0x1_fff9)
+    );
     run(&mut e, FORCE_ACTOR_DETECTION_VALUE, ACTOR, &[int_arg(30)]);
     assert_eq!(site(&mut e, 0x008a_152d, &[ACTOR]), Some(30));
     state(&mut e).force_detection_value.clear();
@@ -926,4 +937,24 @@ fn pre_load_housekeeping() {
         ),
         (1, 1)
     );
+}
+
+/// A thread's engine (`share_slots_for_test`, as `ExtendState::for_thread`), made right after
+/// install, reads the detection value the command writes and removes on the main engine: the AI
+/// hooks' state is one run-wide slot.
+#[test]
+fn a_threads_engine_reads_the_values_the_commands_write() {
+    let mut e = world();
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    run(&mut e, FORCE_ACTOR_DETECTION_VALUE, ACTOR, &[int_arg(30)]);
+    assert_eq!(
+        read(&mut t).force_detection_value.get(&ACTOR),
+        Some(&30),
+        "written"
+    );
+    run(&mut e, FORCE_ACTOR_DETECTION_VALUE, ACTOR, &[int_arg(0)]);
+    assert!(read(&mut t).force_detection_value.is_empty(), "removed");
+    engine_core::extend::release_held_for_test();
 }

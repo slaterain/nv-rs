@@ -5,7 +5,8 @@
 //! and buffered cells, the moon's textures, days passed since a date, hardcore stages, exact XP
 //! rewards, actor values by name and JIP's keywords; forms' descriptions, the physics world's
 //! gravity, what the reticle and other ray casts hit, angles between points, the camera's
-//! movement, the game hour, ash pile activators and dead actors cleared. 56 of its 83 commands
+//! movement, the game hour, ash pile activators and dead actors cleared, the player made to
+//! sneak. 57 of its 83 commands
 //! (85 in the file, two of them never registered: `SetWobblesRotation`, `PlaceModel`).
 //!
 //! The core track built ten of the file's commands in its hook files (not repeated here):
@@ -42,9 +43,6 @@
 //! - `SetInternalMarker`: JIP's hook reading `s_internalMarkerIDs` (hooks.h; core track).
 //! - `SetMoonTexture`, `ToggleCameraCollision`, `InitRockItLauncher`: they patch the game's code.
 //! - `SwapTextureEx`, `GetLightAmountAtPoint`: the scene graph's textures and lights.
-//! - Left for the next batch (buildable): `TogglePlayerSneaking` (JIP's
-//!   `PlayerCharacter::ToggleSneak`: the mover's flags, three game calls, a byte table in the
-//!   exe; its offsets still to confirm).
 
 use super::arrays::{self, Element};
 use super::havok_refs as h;
@@ -96,6 +94,7 @@ pub static COMMANDS: Handlers = &[
     (0x28f0, get_camera_movement),
     (0x28f5, get_reticle_node),
     (0x2906, get_point_ray_cast_pos),
+    (0x2907, toggle_player_sneaking),
     (0x291f, get_reticle_pos_alt),
     (0x2921, transform_world_to_local_cmd),
     (0x2922, get_angles_between_points),
@@ -1484,20 +1483,6 @@ fn reticle_object(e: &mut Engine, range: f32, layer: i32) -> u32 {
     h::ray_cast(e, pos, h::along_column_0(rot), range, layer).map_or(0, |c| c.object)
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.h: NUM_ARGS_EX.
-/// The argument count byte, or 0 when the low byte of the line's argument data length (the
-/// word before it) is 0: a statement compiled with no argument data has length 0 and no count
-/// (xNVSE's own analyser skips such lines, ScriptAnalyzer.cpp if (context.length)), and the
-/// byte there is the next line's.
-fn num_args_ex(e: &Engine, a: &CommandArgs) -> u8 {
-    let offset = e.mem.u32(a.opcode_offset);
-    if e.mem.u8(a.data.wrapping_add(offset).wrapping_sub(2)) == 0 {
-        0
-    } else {
-        super::jip_fn_utility::num_args(e, a)
-    }
-}
-
 /// The player is in a cell.
 fn player_in_cell(e: &Engine) -> bool {
     h::ptr(e, PLAYER).is_some_and(|p| h::ptr(e, p + PC_PARENT_CELL).is_some())
@@ -1524,7 +1509,7 @@ fn set_vars(e: &mut Engine, vars: [u32; 3], values: [f32; 3]) {
 /// as found or both arguments were given.
 fn get_reticle_pos(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
-    let num_args = num_args_ex(e, &a);
+    let num_args = super::jip_fn_utility::num_args_ex(e, &a);
     if !player_in_cell(e) {
         return handled(true);
     }
@@ -1558,7 +1543,7 @@ fn get_reticle_pos(e: &mut Engine, w: &[u32]) -> Ret {
 fn get_reticle_range(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     a.set_result(e, -1.0);
-    let num_args = num_args_ex(e, &a);
+    let num_args = super::jip_fn_utility::num_args_ex(e, &a);
     if !player_in_cell(e) {
         return handled(true);
     }
@@ -2048,6 +2033,107 @@ fn clear_dead_actors(e: &mut Engine, _: &[u32]) -> Ret {
             continue;
         }
         e.call(FADE_AND_DISABLE, &args![process, actor]);
+    }
+    handled(true)
+}
+
+/// The player's fields `ToggleSneak` reads (`playercharacter.rs`, `actor.rs`): `pActorMover`
+/// +0x190, `eLifeState` +0x108, `cCurrentSitSleepState` +0x1AC, `ucControlsDisabled` +0x680 (its
+/// bit 0x40), `bTemp1stPerson` +0x64F (JIP's `isUsingScope`); `GetIsParalyzed` vtable +0x234 (the
+/// game's own sneak key code asks it first, `0x940D70`). The high process's knocked state
+/// +0x13C (signed byte, `middlehighprocess.rs`), `sAnimAction` +0x2EC (a signed word,
+/// `highprocess.rs`), `pCachedValues` +0x2C and their `iFlags` +0x44 (`actor_p2.rs`). The
+/// `PlayerMover`'s `MoveMode` +0x94 and `ForceMoveMode` (vtable `0109297C` slot +0xC,
+/// `009EA3E0`, one word).
+const PC_MOVER: u32 = 0x190;
+const PC_LIFE_STATE: u32 = 0x108;
+const PC_SIT_SLEEP_STATE: u32 = 0x1ac;
+const PC_CONTROLS_DISABLED: u32 = 0x680;
+const PC_USING_SCOPE: u32 = 0x64f;
+const IS_PARALYZED_SLOT: u32 = 0x234;
+const PROCESS_KNOCKED: u32 = 0x13c;
+const PROCESS_ACTION: u32 = 0x2ec;
+const PROCESS_CACHED: u32 = 0x2c;
+const CACHED_FLAGS: u32 = 0x44;
+const MOVER_FLAGS: u32 = 0x94;
+const FORCE_MOVE_MODE_SLOT: u32 = 0x0c;
+const SNEAK: u32 = 0x400;
+/// JIP's `(bool*)0x94423D`, read at the current action: the exe's own byte table at
+/// `FalloutNV.exe 0x94423C`, read at the action plus one (the sneak key's case table: `0x940E2B`
+/// sends action + 1 above 0x12 to the blocked path, `0x940E3E` reads the byte, `0x940E45` jumps
+/// on it; case 0 goes on to sneak, case 1 is blocked). The 19 bytes are copied here because the
+/// table sits in the exe's code section, which the port does not map into game memory.
+const ACTION_BLOCKS: [u8; 19] = [0, 1, 1, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0];
+/// `0093AB30` (`thiscall (player, 0xA + was sneaking)`, `RET 4`), `Actor::SetIronSights`
+/// (`008BB650`, three bytes, `RET 0xC`), `Actor::SetBlock` (`00894CC0`, one byte, `RET 4`).
+const SNEAK_CHANGED: u32 = 0x0093_ab30;
+const SET_IRON_SIGHTS: u32 = 0x008b_b650;
+const SET_BLOCK: u32 = 0x0089_4cc0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: PlayerCharacter::ToggleSneak.
+/// With a high process (level 0) and a mover: when the sneak flag differs from `on` and the
+/// player is alive, not sitting or sleeping, its controls' bit 0x40 clear, not knocked, its
+/// action not one that blocks sneaking and not paralysed: the mover's flags with 0x400 set or
+/// cleared (its `ForceMoveMode`), `0093AB30(0xA + was sneaking)`, and without the scope iron
+/// sights and blocking ended; the cached walk and run speeds marked stale (flags 0x3000).
+///
+/// nv-rs's own: past the table (actions below -1 or above 17, which the game never sets) JIP
+/// reads the padding and the next jump table (non-zero for actions 18 to 21, but 0 for action
+/// 22); nv-rs blocks every such action, as the exe's own range check at `0x940E2B` does.
+fn toggle_sneak(e: &mut Engine, pc: u32, on: bool) {
+    let Some(process) = h::ptr(e, pc + PC_PROCESS) else {
+        return;
+    };
+    let Some(mover) = h::ptr(e, pc + PC_MOVER) else {
+        return;
+    };
+    if e.mem.u32(process + h::PROCESS_LEVEL) != 0 {
+        return;
+    }
+    let flags = e.mem.u32(mover + MOVER_FLAGS);
+    let sneaking = flags & SNEAK != 0;
+    let action = i32::from(e.mem.u16(process + PROCESS_ACTION) as i16);
+    // Outside the table (`None`) blocks, as the exe's range check does.
+    let blocks = usize::try_from(action + 1)
+        .ok()
+        .and_then(|i| ACTION_BLOCKS.get(i))
+        != Some(&0);
+    if sneaking == on
+        || e.mem.u32(pc + PC_LIFE_STATE) != 0
+        || e.mem.u32(pc + PC_SIT_SLEEP_STATE) != 0
+        || e.mem.u8(pc + PC_CONTROLS_DISABLED) & 0x40 != 0
+        || e.mem.u8(process + PROCESS_KNOCKED) != 0
+        || blocks
+        || e.vcall(pc, IS_PARALYZED_SLOT, &[]).u32() & 0xff != 0
+    {
+        return;
+    }
+    let flags = if on { flags | SNEAK } else { flags & !SNEAK };
+    e.vcall(mover, FORCE_MOVE_MODE_SLOT, &args![flags]);
+    e.call(SNEAK_CHANGED, &args![pc, 0xa + u32::from(sneaking)]);
+    if e.mem.u8(pc + PC_USING_SCOPE) == 0 {
+        e.call(SET_IRON_SIGHTS, &args![pc, 0u32, 0u32, 0u32]);
+        e.call(SET_BLOCK, &args![pc, 0u32]);
+    }
+    if let Some(cached) = h::ptr(e, process + PROCESS_CACHED) {
+        let f = e.mem.u32(cached + CACHED_FLAGS);
+        e.mem.set_u32(cached + CACHED_FLAGS, f & !0x3000);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_TogglePlayerSneaking_Execute.
+/// `TogglePlayerSneaking on`: the player made to sneak (not 0) or stand ([`toggle_sneak`]). No
+/// result.
+fn toggle_player_sneaking(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let on = read.int(0, 0) != 0;
+    if let Some(pc) = h::ptr(e, PLAYER) {
+        toggle_sneak(e, pc, on);
     }
     handled(true)
 }
