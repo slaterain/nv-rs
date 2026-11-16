@@ -347,6 +347,8 @@ pub fn jobs(e: &Engine, watch: &mut Watch, dir: Option<&Path>, prefs: Option<&Pa
 /// Does `job`'s disk work: the log line when there is one (`Ok`), or the line saying why a
 /// write failed (`Err`).
 pub fn run(job: &Job) -> Result<Option<String>, String> {
+    #[cfg(not(windows))]
+    let _forget = ForgetFolder(job);
     match job {
         Job::Write {
             dir,
@@ -377,6 +379,22 @@ pub fn run(job: &Job) -> Result<Option<String>, String> {
         Job::Remove { target, name } => {
             let removed = target.is_file() && std::fs::remove_file(target).is_ok();
             Ok(removed.then(|| format!("NV_SAVE_OUT: copied {name} (deleted)")))
+        }
+    }
+}
+
+/// Off Windows, when a job's disk work is done (dropped at the end of [`run`]): the names of the
+/// job's folder kept for the game's paths are read again at their next look
+/// (`engine_platform::host_paths::forget`), whatever the folder's time says.
+#[cfg(not(windows))]
+struct ForgetFolder<'a>(&'a Job);
+
+#[cfg(not(windows))]
+impl Drop for ForgetFolder<'_> {
+    fn drop(&mut self) {
+        let (Job::Write { target, .. } | Job::Remove { target, .. }) = self.0;
+        if let Some(folder) = target.parent() {
+            engine_platform::host_paths::forget(folder);
         }
     }
 }

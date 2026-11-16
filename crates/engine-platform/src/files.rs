@@ -331,12 +331,10 @@ pub fn full_path(e: &Engine, name: &[u8]) -> Vec<u8> {
 ///
 /// On Linux and macOS the text is then this system's path as [`super::host_paths::host_path`]
 /// makes it: drive `Z:` taken off, `\` as `/`, each name found in its folder without case.
+#[cfg(windows)]
 fn real_path(path: &[u8]) -> std::path::PathBuf {
     if path.is_ascii() {
-        #[cfg(windows)]
         return std::path::PathBuf::from(String::from_utf8_lossy(path).into_owned());
-        #[cfg(not(windows))]
-        return super::host_paths::host_path(&String::from_utf8_lossy(path));
     }
     let mut wide: Vec<u16> = Vec::with_capacity(path.len());
     let mut start = 0;
@@ -349,15 +347,45 @@ fn real_path(path: &[u8]) -> std::path::PathBuf {
         }
         start = end;
     }
-    #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStringExt;
         std::path::PathBuf::from(std::ffi::OsString::from_wide(&wide))
     }
-    #[cfg(not(windows))]
-    {
-        super::host_paths::host_path(&String::from_utf16_lossy(&wide))
+}
+
+/// Off Windows: the path's text as Windows' `real_path` reads it (each part UTF-8 or code page
+/// bytes), then this system's path ([`super::host_paths::host_path`]).
+#[cfg(not(windows))]
+fn real_path(path: &[u8]) -> std::path::PathBuf {
+    super::host_paths::host_path(&game_text(path))
+}
+
+/// The text of the game's path `path` as [`real_path`] reads it: ASCII as it is; else each part
+/// between separators as UTF-8 when it reads so, else as bytes of the code page.
+#[cfg(not(windows))]
+fn game_text(path: &[u8]) -> String {
+    if path.is_ascii() {
+        return String::from_utf8_lossy(path).into_owned();
     }
+    let mut wide: Vec<u16> = Vec::with_capacity(path.len());
+    let mut start = 0;
+    let cuts = separators(path);
+    for end in cuts.iter().map(|&at| at + 1).chain([path.len()]) {
+        let part = &path[start..end];
+        match std::str::from_utf8(part) {
+            Ok(text) => wide.extend(text.encode_utf16()),
+            Err(_) => wide.extend(code_page::to_wide(part)),
+        }
+        start = end;
+    }
+    String::from_utf16_lossy(&wide)
+}
+
+/// Off Windows: every folder of this system the game's folder `path` names, as one folder
+/// ([`super::host_paths::host_folders`]: folders whose names differ only in case).
+#[cfg(not(windows))]
+fn real_folders(path: &[u8]) -> Vec<std::path::PathBuf> {
+    super::host_paths::host_folders(&game_text(path))
 }
 
 /// This system's path of the game's full path `path` ([`real_path`]): for host code that opens
@@ -1102,6 +1130,13 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
         return fail(e, ERROR_FILE_NOT_FOUND);
     };
     let wanted = real.file_name().map(host_name_text).unwrap_or_default();
+    // Off Windows the name as its folder holds it, by the rule the open took it with
+    // (`host_paths::stored_name`): with two names that differ only in case, the open's one.
+    #[cfg(not(windows))]
+    let stored = super::host_paths::stored_name(&real)
+        .map(|name| host_name_text(std::ffi::OsStr::new(&name)))
+        .unwrap_or(wanted);
+    #[cfg(windows)]
     let stored = real
         .parent()
         .and_then(|p| std::fs::read_dir(p).ok())
@@ -1216,8 +1251,10 @@ fn filetime(t: std::time::SystemTime) -> u64 {
         // Before 1970: back from the epoch, rounded up to a whole tick earlier.
         Err(before) => {
             let d = before.duration();
-            let whole = d.as_secs().saturating_mul(TICKS_PER_SECOND)
-                + u64::from(d.subsec_nanos().div_ceil(100));
+            let whole = d
+                .as_secs()
+                .saturating_mul(TICKS_PER_SECOND)
+                .saturating_add(u64::from(d.subsec_nanos().div_ceil(100)));
             UNIX_EPOCH_TICKS.saturating_sub(whole)
         }
     }
@@ -1600,10 +1637,16 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
         "FindFirstFileA(\"{shown}\"): wildcards before the last part are not provided"
     );
     let folder = key(directory);
+    #[cfg(windows)]
     let real = real_path(directory);
     // A directory the game made in this run is not on the disk: only its own entries.
     let made_here = state!(e).disk.directories.contains(&folder);
-    let players = match listing(&real, pattern, &shown) {
+    #[cfg(windows)]
+    let listed = listing(&real, pattern, &shown);
+    // Off Windows every folder the game's folder is here (names that differ only in case).
+    #[cfg(not(windows))]
+    let listed = listing_of(&real_folders(directory), pattern, &shown);
+    let players = match listed {
         Ok(found) => found,
         Err(_) if made_here => vec![],
         Err(ERROR_FILE_NOT_FOUND) => vec![],
@@ -1953,37 +1996,99 @@ fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<V
 /// [`search_finds`] and ordered as NTFS orders a folder ([`order_key`]: for ASCII the measured
 /// upper-case order); no short names; names in the code page ([`host_name_text`]: outside tests a
 /// character outside ASCII as `?`).
-#[cfg(not(windows))]
+#[cfg(all(not(windows), test))]
 fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return Err(if directory.exists() {
+    listing_of(&[directory.to_path_buf()], pattern, shown)
+}
+
+/// [`listing`] of one folder of the game's that is the folders `folders` here (their names
+/// differ only in case: `host_paths::host_folders`, the first the one an open tries first), as
+/// Windows lists one folder: their entries together, `.` and `..` the first's, and a name in
+/// more than one (without case) the first folder's, the entry an open of that name takes. The
+/// log says which folders were listed as one, once per folder.
+#[cfg(not(windows))]
+fn listing_of(
+    folders: &[std::path::PathBuf],
+    pattern: &[u8],
+    shown: &str,
+) -> Result<Vec<Found>, u32> {
+    let first = folders.first().expect("a folder");
+    let mut found: Vec<Found> = Vec::new();
+    let mut listed: Vec<&std::path::PathBuf> = Vec::new();
+    #[cfg(unix)]
+    let mut seen_folders: Vec<(u64, u64)> = Vec::new();
+    let mut names_before: std::collections::HashSet<Vec<u16>> = Default::default();
+    for folder in folders {
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            continue;
+        };
+        // One folder named twice (a file system that ignores case): listed once.
+        #[cfg(unix)]
+        if let Ok(meta) = std::fs::metadata(folder) {
+            use std::os::unix::fs::MetadataExt;
+            if seen_folders.contains(&(meta.dev(), meta.ino())) {
+                continue;
+            }
+            seen_folders.push((meta.dev(), meta.ino()));
+        }
+        if listed.is_empty() {
+            for special in [".", ".."] {
+                if search_finds(pattern, special, shown) {
+                    found.push(Found::Disk {
+                        path: folder.join(special),
+                        name: special.to_string(),
+                        short: String::new(),
+                        directory: true,
+                        listed: None,
+                    });
+                }
+            }
+        }
+        let mut names_here = Vec::new();
+        for entry in entries.filter_map(Result::ok) {
+            let units = host_units(&entry.file_name());
+            let key = ntfs_key(&units);
+            if names_before.contains(&key) {
+                continue;
+            }
+            names_here.push(key);
+            let name = host_name_text(&entry.file_name());
+            if search_finds(pattern, &name, shown) {
+                found.push(Found::Disk {
+                    path: entry.path(),
+                    directory: entry.file_type().is_ok_and(|t| t.is_dir()),
+                    name,
+                    short: String::new(),
+                    listed: None,
+                });
+            }
+        }
+        names_before.extend(names_here);
+        listed.push(folder);
+    }
+    if listed.is_empty() {
+        return Err(if first.exists() {
             ERROR_FILE_NOT_FOUND
         } else {
             ERROR_PATH_NOT_FOUND
         });
-    };
-    let mut found: Vec<Found> = Vec::new();
-    for special in [".", ".."] {
-        if search_finds(pattern, special, shown) {
-            found.push(Found::Disk {
-                path: directory.join(special),
-                name: special.to_string(),
-                short: String::new(),
-                directory: true,
-                listed: None,
-            });
-        }
     }
-    for entry in entries.filter_map(Result::ok) {
-        let name = host_name_text(&entry.file_name());
-        if search_finds(pattern, &name, shown) {
-            found.push(Found::Disk {
-                path: entry.path(),
-                directory: entry.file_type().is_ok_and(|t| t.is_dir()),
-                name,
-                short: String::new(),
-                listed: None,
-            });
+    if listed.len() > 1 {
+        static SAID: std::sync::Mutex<Option<std::collections::HashSet<std::path::PathBuf>>> =
+            std::sync::Mutex::new(None);
+        let mut said = SAID.lock().unwrap_or_else(|p| p.into_inner());
+        if said
+            .get_or_insert_with(Default::default)
+            .insert(listed[0].clone())
+        {
+            let all: Vec<String> = listed.iter().map(|f| f.display().to_string()).collect();
+            eprintln!(
+                "files: FindFirstFileA(\"{shown}\"): the game's folder is {} folders here whose \
+                 names differ only in case ({}), listed as one; a name in more than one is the \
+                 first's",
+                listed.len(),
+                all.join(", ")
+            );
         }
     }
     found.sort_by_cached_key(order_key);
@@ -1993,7 +2098,7 @@ fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<V
 /// The directory entry of the player's file at the full path `path` as the disk keeps it (its
 /// name as stored, short name, attributes, size and times: the host's own search of that name,
 /// [`host_search`]), for a file the game takes into the run, renames or deletes; `None` when
-/// there is none, and elsewhere than on Windows (file times are only provided there).
+/// there is none (elsewhere than on Windows also when the file system keeps none of its times).
 fn player_entry(path: &[u8]) -> Option<Entry> {
     #[cfg(windows)]
     {
@@ -2018,8 +2123,14 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
         let real = real_path(path);
         let meta = std::fs::metadata(&real).ok()?;
         let time = |t: std::io::Result<std::time::SystemTime>| t.ok().map(filetime);
+        // The name as the folder holds it (on a file system that ignores case, not the game's
+        // spelling), as the search answers it.
+        let name = match super::host_paths::stored_name(&real) {
+            Some(name) => host_name_text(std::ffi::OsStr::new(&name)),
+            None => host_name_text(real.file_name()?),
+        };
         Some(Entry {
-            name: host_name_text(real.file_name()?),
+            name,
             short: Some(String::new()),
             attributes: if meta.is_dir() {
                 FILE_ATTRIBUTE_DIRECTORY
@@ -3488,6 +3599,121 @@ mod tests_player_files {
         );
         assert_eq!(none, INVALID_HANDLE_VALUE);
         assert_eq!(e.kernel.last_error, ERROR_PATH_NOT_FOUND);
+        // A file named with a separator after it is not opened (Windows: `ERROR_DIRECTORY`).
+        e.mem
+            .set_cstr(name, format!(r"{game}\Data\Meshes\Armor.NIF\").as_bytes());
+        let none = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            1,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
+        assert_eq!(none, INVALID_HANDLE_VALUE);
+        // Dots and spaces after the last name are not part of it (as on Windows).
+        e.mem
+            .set_cstr(name, format!(r"{game}\data\meshes\armor.nif. ").as_bytes());
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            1,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        super::super::close_handle(&mut e, h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux and macOS: two folders whose names differ only in case (`Textures` and `textures`,
+    /// one folder to Windows) give their files from either, the listing shows them as one folder
+    /// with a name in both once, and the search of one name answers the file the open takes.
+    #[cfg(not(windows))]
+    #[test]
+    fn twin_folders_are_one_folder_to_the_game() {
+        let dir = std::env::temp_dir().join(format!("nv-rs-twins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let upper = dir.join("Data").join("Textures");
+        let lower = dir.join("Data").join("textures");
+        std::fs::create_dir_all(&upper).unwrap();
+        if std::fs::create_dir(&lower).is_err() {
+            // A file system that ignores case (macOS's default) holds one of them only.
+            eprintln!("SKIPPED (not a pass): this file system cannot hold two such folders");
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        std::fs::write(upper.join("a.dds"), b"upper a").unwrap();
+        std::fs::write(lower.join("A.DDS"), b"lower a").unwrap();
+        std::fs::write(lower.join("b.dds"), b"lower b").unwrap();
+        let game = engine_core::exe::game_view(&dir.to_string_lossy());
+        let mut e = Engine::new();
+        let name = e.mem.alloc(0x400);
+        let read = |e: &mut Engine, path: String| -> Option<Vec<u8>> {
+            e.mem.set_cstr(name, path.as_bytes());
+            let h = create_file_a(
+                e,
+                Ptr::new(name),
+                GENERIC_READ,
+                1,
+                0,
+                OPEN_EXISTING,
+                0x80,
+                0,
+            );
+            if h == INVALID_HANDLE_VALUE {
+                return None;
+            }
+            let buf = e.mem.alloc(16);
+            let got = e.mem.alloc(4);
+            read_file(e, h, Ptr::new(buf), 16, Ptr::new(got), 0);
+            super::super::close_handle(e, h);
+            Some(e.mem.bytes(buf, e.mem.u32(got)))
+        };
+        // Only in the second folder: found by any spelling, also one naming the first exactly.
+        for spelled in [
+            r"Data\Textures\b.dds",
+            r"DATA\TEXTURES\B.DDS",
+            r"data\textures\b.dds",
+        ] {
+            assert_eq!(
+                read(&mut e, format!(r"{game}\{spelled}")),
+                Some(b"lower b".to_vec()),
+                "{spelled}"
+            );
+        }
+        // In both: the first folder the open tries holds it.
+        assert_eq!(
+            read(&mut e, format!(r"{game}\Data\Textures\A.dds")),
+            Some(b"upper a".to_vec())
+        );
+        // The listing: one folder, `a.dds` once (the first folder's, which that open took).
+        e.mem
+            .set_cstr(name, format!(r"{game}\Data\Textures\*.dds").as_bytes());
+        let data = e.mem.alloc(0x140);
+        let found = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data));
+        assert_ne!(found, INVALID_HANDLE_VALUE);
+        let mut names = vec![e.mem.cstr(data + 0x2c)];
+        let mut sizes = vec![e.mem.u32(data + 0x20)];
+        while find_next_file_a(&mut e, found, Ptr::new(data)) != 0 {
+            names.push(e.mem.cstr(data + 0x2c));
+            sizes.push(e.mem.u32(data + 0x20));
+        }
+        find_close(&mut e, found);
+        assert_eq!(names, [b"a.dds".to_vec(), b"b.dds".to_vec()]);
+        assert_eq!(sizes, [7, 7]);
+        // The search of one name answers the name of the file the open takes.
+        e.mem
+            .set_cstr(name, format!(r"{game}\Data\Textures\A.DDS").as_bytes());
+        let found = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data));
+        assert_ne!(found, INVALID_HANDLE_VALUE);
+        assert_eq!(e.mem.cstr(data + 0x2c), b"a.dds".to_vec());
+        find_close(&mut e, found);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
