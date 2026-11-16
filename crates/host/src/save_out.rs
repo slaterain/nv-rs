@@ -1109,6 +1109,7 @@ mod tests {
                 let never = vec![Guarded {
                     root: self.0.join("home/Documents"),
                     except: Some(self.0.join("own")),
+                    system: game_folders::System::this(),
                 }];
                 (players, own, never)
             }
