@@ -131,7 +131,7 @@ pub(crate) fn restore_linked_refs(e: &mut Engine, keep_temp: bool) {
 /// `DoLoadGameHousekeeping`'s part: with the linked references changed since the save last loaded
 /// or saved, the defaults the load did not set again restored.
 pub(crate) fn after_load(e: &mut Engine) {
-    if saved(e).changed & changed::LINKED_REFS != 0 {
+    if crate::cosave::changed_flags(e) & changed::LINKED_REFS != 0 {
         restore_linked_refs(e, true);
     }
 }
@@ -150,7 +150,7 @@ fn set_linked_reference(e: &mut Engine, w: &[u32]) -> Ret {
     let mod_index = super::jip_fn_aux_variable::overriding_mod(e, a.script) as u8;
     if set_linked_ref(e, a.this_obj, link, mod_index) {
         a.set_result(e, 1.0);
-        saved(e).changed |= changed::LINKED_REFS;
+        crate::cosave::mark_changed(e, changed::LINKED_REFS);
     }
     handled(true)
 }
