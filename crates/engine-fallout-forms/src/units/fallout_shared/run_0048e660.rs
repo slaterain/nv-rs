@@ -293,27 +293,33 @@ mod tests {
 
     /// With the row on: the seam is asked with the form and the second word (distinct values),
     /// `00480ef0` is not called, the answer is the path; an answer of 0 is the empty string (the
-    /// exe's null test after the call); an answer of none keeps the exe's call.
+    /// exe's null test after the call); an answer of none keeps the exe's call. Each with the
+    /// row's bit alone and with a player's whole word (installed, the row, an optional switch).
     #[test]
     fn g83_seam_answer_replaces_the_call_when_on() {
         use engine_core::extend::jip_patches;
-        let (mut e, form, asked) = g83_world(Some(0x7777));
-        e.set_jip_patches(jip_patches::FIXES);
-        e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), 0x7777);
-        assert_eq!((e.mem.u32(asked), e.mem.u32(asked + 4)), (form, 9));
-        assert!(calls_to(&e, BIPED_TEXTURE_PATH).is_empty());
+        for word in [
+            jip_patches::FIXES,
+            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::FO3_WPN_DEGRADATION,
+        ] {
+            let (mut e, form, asked) = g83_world(Some(0x7777));
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), 0x7777);
+            assert_eq!((e.mem.u32(asked), e.mem.u32(asked + 4)), (form, 9));
+            assert!(calls_to(&e, BIPED_TEXTURE_PATH).is_empty());
 
-        let (mut e, form, _) = g83_world(Some(0));
-        e.set_jip_patches(jip_patches::FIXES);
-        assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), EMPTY_STRING);
+            let (mut e, form, _) = g83_world(Some(0));
+            e.set_jip_patches(word);
+            assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), EMPTY_STRING);
 
-        let (mut e, form, asked) = g83_world(None);
-        e.set_jip_patches(jip_patches::FIXES);
-        e.call_log = Some(vec![]);
-        assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), 0x4444);
-        assert_eq!(e.mem.u32(asked), form);
-        assert_eq!(calls_to(&e, BIPED_TEXTURE_PATH), vec![vec![form, 9]]);
+            let (mut e, form, asked) = g83_world(None);
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), 0x4444);
+            assert_eq!(e.mem.u32(asked), form);
+            assert_eq!(calls_to(&e, BIPED_TEXTURE_PATH), vec![vec![form, 9]]);
+        }
     }
 
     /// A form that is a texture never reaches the seam (it is after the texture's return).

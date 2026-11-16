@@ -6605,35 +6605,47 @@ mod tests {
     #[test]
     fn g16_seam_answer_gives_the_player_the_third_person_casing() {
         use engine_core::extend::jip_patches;
-        let (lifetime, finished, tests, asked) = g16_player_casing(jip_patches::FIXES, true);
-        assert_eq!((lifetime, asked, tests), (4.0, 1, 0));
-        assert!(finished.is_empty());
-        let (lifetime, finished, tests, asked) = g16_player_casing(jip_patches::FIXES, false);
-        assert_eq!((lifetime, asked, tests), (2.0, 1, 1));
-        assert_eq!(finished, [vec![0x9000, 1]]);
+        // The row's bit alone, and a player's whole word (installed, the row, a switch).
+        for word in [
+            jip_patches::FIXES,
+            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::FO3_WPN_DEGRADATION,
+        ] {
+            let (lifetime, finished, tests, asked) = g16_player_casing(word, true);
+            assert_eq!((lifetime, asked, tests), (4.0, 1, 0), "{word:08x}");
+            assert!(finished.is_empty());
+            let (lifetime, finished, tests, asked) = g16_player_casing(word, false);
+            assert_eq!((lifetime, asked, tests), (2.0, 1, 1), "{word:08x}");
+            assert_eq!(finished, [vec![0x9000, 1]]);
 
-        let mut e = Engine::new();
-        let w = weapon(&mut e);
-        let (actor, debris, _) = casing_scene(&mut e, true);
-        gf_handlers(&mut e, jip_patches::FIXES, true);
-        e.call(0x0052_4db0, &args![w, actor]);
-        assert_eq!(e.mem.u32(GF_ASKED), 0);
-        assert_eq!(f32::from_bits(debris.borrow()[0][2]), 4.0);
+            let mut e = Engine::new();
+            let w = weapon(&mut e);
+            let (actor, debris, _) = casing_scene(&mut e, true);
+            gf_handlers(&mut e, word, true);
+            e.call(0x0052_4db0, &args![w, actor]);
+            assert_eq!(e.mem.u32(GF_ASKED), 0);
+            assert_eq!(f32::from_bits(debris.borrow()[0][2]), 4.0);
+        }
     }
 
-    /// [`fire_after_shots`] for a shooter whose process is `process`, a weapon of type `kind`:
-    /// the calls of the weapon type, the removals and G20's count.
+    /// [`fire_after_shots`] for a shooter with or without a process, a weapon of type `kind`:
+    /// the calls of the weapon type, the removals, G20's count and the calls of the ammo slot
+    /// made on the null process. Without a process, page 0 is mapped with a stand-in vtable
+    /// whose ammo slot records (where the exe would crash), so the exe's path can be driven.
     fn g20_after_shots(
         word: u32,
         answer: bool,
         with_process: bool,
         kind: u32,
-    ) -> (usize, usize, u32) {
+    ) -> (usize, usize, u32, usize) {
         let mut e = Engine::new();
         let (mut shot, _) = fire_state(&mut e);
         let actor = shot.actor.addr();
+        let null_ammo = recording(&mut e, 0x00de_f14c);
         if !with_process {
             shot.process = 0;
+            e.map(0, 0x1000);
+            e.mem.set_u32(0, 0x100);
+            e.mem.set_u32(0x100 + PROCESS_AMMO_ITEM_SLOT, 0x00de_f14c);
         }
         give_vtable(
             &mut e,
@@ -6661,42 +6673,67 @@ mod tests {
             .filter(|(a, _)| *a == GET_WEAPON_TYPE)
             .count();
         let removals = removed.borrow().len();
-        (types, removals, e.mem.u32(GF_ASKED + 4))
+        let null_calls = null_ammo.borrow().len();
+        (types, removals, e.mem.u32(GF_ASKED + 4), null_calls)
     }
 
-    /// G20 off: the seam is not asked; with no process the type tests run (two type calls: the
-    /// block's and the one after it).
+    /// G20 off: the seam is not asked. With no process: a gun (type 10) skips the block; a
+    /// thrown or placed weapon (types 11 to 13) runs it and calls the null process's ammo slot
+    /// (the exe's crash), then is removed (no ammo item).
     #[test]
     fn g20_seam_does_nothing_while_off() {
         use engine_core::extend::jip_patches;
         for word in [0, jip_patches::INSTALLED] {
             assert_eq!(
                 g20_after_shots(word, true, false, 10),
-                (2, 0, 0),
+                (2, 0, 0, 0),
                 "{word:08x}"
             );
+            for kind in 11..=13 {
+                assert_eq!(
+                    g20_after_shots(word, true, false, kind),
+                    (2, 1, 0, 1),
+                    "{word:08x} {kind}"
+                );
+            }
         }
     }
 
     /// G20 on: with no process the seam is asked once and its answer jumps over the hand-held
-    /// block: a thrown weapon (type 11, whose block calls the missing process's ammo slot in the
-    /// exe) is neither tested nor removed, and the code after the block still runs (its type
-    /// call). An answer of none keeps the exe's tests; with a process the seam is not asked.
+    /// block: a thrown or placed weapon (types 11 to 13) is neither tested nor removed and the
+    /// null process is not called, and the code after the block still runs (its type call). An
+    /// answer of none keeps the exe's tests (and its call on the null process); with a process
+    /// the seam is not asked. Each with the row's bit alone and with a player's whole word.
     #[test]
     fn g20_seam_answer_skips_the_hand_held_block_without_a_process() {
         use engine_core::extend::jip_patches;
-        assert_eq!(
-            g20_after_shots(jip_patches::FIXES, true, false, 11),
-            (1, 0, 1)
-        );
-        assert_eq!(
-            g20_after_shots(jip_patches::FIXES, false, false, 10),
-            (2, 0, 1)
-        );
-        assert_eq!(
-            g20_after_shots(jip_patches::FIXES, true, true, 11),
-            (2, 1, 0)
-        );
+        for word in [
+            jip_patches::FIXES,
+            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::FO3_WPN_DEGRADATION,
+        ] {
+            for kind in 11..=13 {
+                assert_eq!(
+                    g20_after_shots(word, true, false, kind),
+                    (1, 0, 1, 0),
+                    "{word:08x} {kind}"
+                );
+                assert_eq!(
+                    g20_after_shots(word, false, false, kind),
+                    (2, 1, 1, 1),
+                    "{word:08x} {kind}"
+                );
+            }
+            assert_eq!(
+                g20_after_shots(word, false, false, 10),
+                (2, 0, 1, 0),
+                "{word:08x}"
+            );
+            assert_eq!(
+                g20_after_shots(word, true, true, 11),
+                (2, 1, 0, 0),
+                "{word:08x}"
+            );
+        }
     }
 
     /// `NiPointer` doubles that keep the pointer in the object they are

@@ -2915,18 +2915,24 @@ mod b028_tests {
     #[test]
     fn g12_seam_answer_applies_the_player_entry_once() {
         use engine_core::extend::jip_patches;
-        let (calls, asked, to_player, to_item) = g12_run(jip_patches::FIXES, true);
-        assert_eq!(asked, 1);
-        assert_eq!(
-            calls,
-            vec![
-                vec![to_player, 0x0abc_0000, 1],
-                vec![to_item, 0x0101, 1],
-                vec![to_item, 0x0202, 1],
-            ]
-        );
-        let (calls, asked, _, _) = g12_run(jip_patches::FIXES, false);
-        assert_eq!((asked, calls.len()), (2, 4));
+        // The row's bit alone, and a player's whole word (installed, the row, a switch).
+        for word in [
+            jip_patches::FIXES,
+            jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::FO3_WPN_DEGRADATION,
+        ] {
+            let (calls, asked, to_player, to_item) = g12_run(word, true);
+            assert_eq!(asked, 1, "{word:08x}");
+            assert_eq!(
+                calls,
+                vec![
+                    vec![to_player, 0x0abc_0000, 1],
+                    vec![to_item, 0x0101, 1],
+                    vec![to_item, 0x0202, 1],
+                ]
+            );
+            let (calls, asked, _, _) = g12_run(word, false);
+            assert_eq!((asked, calls.len()), (2, 4), "{word:08x}");
+        }
     }
 
     #[test]
