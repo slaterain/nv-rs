@@ -933,7 +933,9 @@ mod tests {
             })
         };
         let (path, _) = resolve("/a/b/c/d/e/f", &mut Look::new(&mut exists, &mut matches)).unwrap();
-        assert!(steps <= MAX_STEPS + 1, "{steps}");
+        // At most one folder listed per step and one for the start (MAX_STEPS is 64): without
+        // the bound it would be 8 names at each of 5 levels, tens of thousands.
+        assert!(steps <= 65, "{steps}");
         assert_eq!(path, "/a00/b00/c00/d00/e00/f");
     }
 
