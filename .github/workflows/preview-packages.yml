@@ -5,13 +5,17 @@ name: Preview packages (Linux, macOS)
 # workflow > Run workflow, or `gh workflow run preview-packages.yml --ref BRANCH`).
 #
 # The runners are the oldest GitHub has for each system, so the programs start on as many
-# systems as possible: ubuntu-22.04 (the program needs glibc 2.35 or newer, BUILD.txt says the
-# exact version read from the program), macos-15 (the oldest Apple silicon runner left: macos-14 is
+# systems as possible: ubuntu-22.04 (glibc 2.35 there; the program needed glibc 2.34 or newer when
+# built 2026-11-16, and BUILD.txt says it, read from the program), macos-15 (the oldest Apple silicon
+# runner left: macos-14 is
 # refused as "not supported" since 2026-11; Rust's arm64
 # macOS programs start on macOS 11 or newer).
 #
 # Each job uses runners from the account's shared limit (20 jobs at a time); one run is two jobs.
 on:
+  # TEMPORARY: the macOS proving run on this branch only, removed in the next commit.
+  push:
+    branches: [claude/linux-mac-pkgci]
   workflow_dispatch:
     inputs:
       version:
