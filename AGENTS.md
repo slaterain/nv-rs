@@ -15,6 +15,12 @@ layer on 2026-11-03 (ADR-0011; `docs/history/README.md`).
 - Derive behavior and values from game files, compiled shaders, Ghidra or
   recordings. No stand-ins or invented behavior; leave unsupported features
   out. Label unresolved guesses in code and topic findings.
+- README's JIP counts (commands built, game patches built) and the matching count lines in
+  `docs/FIXES.md` are brought up to date by the lead once per batch of merges (maintainer,
+  2026-11-16). A pull request that adds JIP commands or patches leaves those numbers as main
+  has them: every pull request editing the one line made each merge a conflict for the next.
+  The count test covers the README's command count only: it refuses a README that says more
+  than is built or is more than 60 commands behind (the lead brings it up to date well before).
 - Since 2026-10-05 (decisions in `docs/adr/`): names, types and layouts from
   the Xbox 360 prototype symbols may be used, marked `(Xbox PDB)` (ADR-0002),
   and decompiled logic may be translated into Rust, marked with its address
