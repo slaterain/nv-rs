@@ -131,7 +131,7 @@ impl Host {
         if let Some(note) = &choice.ini_note {
             eprintln!("{note}");
         }
-        if let Some(note) = fixes::play_run_taken_as_test(|name| std::env::var(name).ok()) {
+        if let Some(note) = fixes::play_run_taken_as_test(choice, |name| std::env::var(name).ok()) {
             eprintln!("{note}");
         }
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
