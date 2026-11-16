@@ -118,7 +118,9 @@ try {
     # (LEGAL.md names fnv_decomp, so that one only counts in the programs.)
     $needles = @($env:USERNAME, $env:USERPROFILE, $root) | Where-Object { $_ }
     # FUN_, DAT_ and LAB_ are the names a disassembler gives code and data nobody has named.
-    $programNeedles = @('nv-re', 'build43', 'fnv_decomp', '\target\release', 'FUN_', 'DAT_', 'LAB_')
+    # The research folder's name counts with a path separator after it: the bare word also matched
+    # the drawing thread's name (nv-render), which stopped the 2026-11-16 package.
+    $programNeedles = @('nv-re\', 'nv-re/', 'build43', 'fnv_decomp', '\target\release', 'FUN_', 'DAT_', 'LAB_')
     $checkArguments = @($stage) + ($needles | ForEach-Object { '--needle'; $_ }) + ($programNeedles | ForEach-Object { '--program-needle'; $_ })
     # Required: no run of the game's bytes longer than the C runtime's own tables (the longest seen
     # is about 2 KB) in any program.
