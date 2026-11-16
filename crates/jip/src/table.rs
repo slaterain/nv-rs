@@ -12,7 +12,7 @@
 //! JIP's records share them), its condition flag and its return type. A command not built yet
 //! has no handler and no eval: a script line that calls it fails and the script stops for that
 //! run, as it does without the DLL; a condition that names it is false. While JIP answers "not
-//! installed" ([`crate::ANSWERS_INSTALLED`]) an unbuilt command has no name either, so no name
+//! installed" ([`crate::set_answers_installed`]) an unbuilt command has no name either, so no name
 //! finds it (the console, `help`), as without the DLL. Built commands get their handlers and
 //! names through [`set_handlers`]. An empty slot holds `kEmptyCommand` (`internal/jip_core.cpp`):
 //! named `NONE`, three optional integers listed but none counted, and the exe's `005d4a40`
