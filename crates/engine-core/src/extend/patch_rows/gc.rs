@@ -7,6 +7,36 @@ use super::JIP;
 
 /// The group's seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // G14 (a fix), fn_0088db20: the last word of UnEquipObject for a worn item it takes off.
+    Entry {
+        addr: 0x0088_dcdc,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G120 (a fix), fn_0088e8d0: the hit blood's impact data (CreateHitBloodHook).
+    Entry {
+        addr: 0x0088_ebaa,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G98 (a fix), Actor::Kill 0089d900: the teammate test before the kill challenges (KillChallengeFixHook).
+    Entry {
+        addr: 0x0089_dc0e,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G33 (JIP's own), Actor::Kill: the player's killer stored.
+    Entry {
+        addr: 0x0089_e790,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G33, Actor::Kill: the player's killer kept after the progress export.
+    Entry {
+        addr: 0x0089_f351,
+        owners: JIP,
+        step: "3.9-GC",
+    },
     // G53, Actor::GetDetectionLevelAgainstActor 008a0d10: its three calls of the detected
     // actor's teammate test (0056_6950), replaced by JIP's DetectionTeammateHook.
     Entry {
@@ -31,7 +61,44 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GC",
     },
+    // G18 (a fix), Actor::SetLifeState 008a1800: the change mark 0x400 becomes 0x404.
+    Entry {
+        addr: 0x008a_19cf,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // O19 (bCreatureSpreadFix), fn_008b0dd0: the iron sights test in the gun skill value (CreatureSpreadFixHook).
+    Entry {
+        addr: 0x008b_0fbf,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G118 (a fix), fn_008c2190: the weapon test before the projectile's own weapon (the jnz removed).
+    Entry {
+        addr: 0x008c_227f,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G77 (a fix), HitData::ReduceDamage 009b5a30: the minimum damage store, with the armour-penetrated flag.
+    Entry {
+        addr: 0x009b_6335,
+        owners: JIP,
+        step: "3.9-GC",
+    },
 ];
 
 /// The group's wraps.
-pub(in super::super) const WRAPS: &[Entry] = &[];
+pub(in super::super) const WRAPS: &[Entry] = &[
+    // G109 (a fix): BGSImpactDataSet's impact data of a material (GetImpactDataHook).
+    Entry {
+        addr: 0x0058_e9d0,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+    // G111 + O11 (a fix): the damage a shot does to the weapon (GetDamageToWeaponHook).
+    Entry {
+        addr: 0x0064_6260,
+        owners: JIP,
+        step: "3.9-GC",
+    },
+];

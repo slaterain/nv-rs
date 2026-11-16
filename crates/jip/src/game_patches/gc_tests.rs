@@ -67,7 +67,6 @@ fn g53_installed_row_off_puts_the_seams_in() {
             "{addr:08x}"
         );
     }
-    assert!(AREA.fix_sites.is_empty() && AREA.fix_wraps.is_empty());
     assert_ne!(execute_of(&e, TOGGLE_DETECTION_FIX), 0);
 }
 
@@ -169,4 +168,364 @@ fn toggle_detection_fix_sets_the_flag() {
         e.site(DETECTION_LEVEL.addr(), &[ACTOR]),
         Some(PLAYER + 0xa4)
     );
+}
+
+// ---- PR 2: the group's fixes, O19, G33.
+
+const OTHER: u32 = AREA_BASE + 0x2000;
+const BASE_FORM: u32 = AREA_BASE + 0x2400;
+const PROCESS_AT: u32 = AREA_BASE + 0x2800;
+const WEAPON: u32 = AREA_BASE + 0x3000;
+const ENTRY: u32 = AREA_BASE + 0x3400;
+const AMMO: u32 = AREA_BASE + 0x3800;
+const AMMO_ENTRY: u32 = AREA_BASE + 0x3c00;
+const SET: u32 = AREA_BASE + 0x4000;
+const HIT: u32 = AREA_BASE + 0x4400;
+const LOG: u32 = AREA_BASE + 0x5000;
+
+fn fixes_world() -> Engine {
+    let mut e = world_as(true);
+    e.map(IMPACT_FALLBACK & !0xfff, 0x1000);
+    e.map(DAMAGE_TO_WEAPON_VALUE & !0xfff, 0x1000);
+    e
+}
+
+/// While JIP answers "not installed": none of the group's PR 2 seams has a handler, row or not.
+#[test]
+fn pr2_not_installed_nothing_is_put_in() {
+    let mut e = world_as(false);
+    super::super::set_row(&mut e, true);
+    for addr in AREA.fix_sites.iter().chain(AREA.jip_sites) {
+        assert!(!e.site_owners(*addr).contains(&Owner::Jip), "{addr:08x}");
+        assert_eq!(e.site(*addr, &[ACTOR, 0]), None, "{addr:08x}");
+    }
+}
+
+/// Installed, row off: G33 (JIP's own) is in, the fixes are not; the row on puts them in.
+#[test]
+fn pr2_fixes_only_with_the_row() {
+    let mut e = world_as(true);
+    super::super::set_row(&mut e, false);
+    for slot in [PLAYER_KILLER_SET, PLAYER_KILLER_KEPT] {
+        assert_eq!(e.site(slot.addr(), &[PLAYER]), Some(0));
+    }
+    for addr in AREA.fix_sites {
+        assert_eq!(e.site(*addr, &[HIT, 0]), None, "{addr:08x}");
+    }
+    // The group's installer (what the row puts in; the framework's tests hold every area to the
+    // row): every fix seam then has JIP's handler and both wraps are in.
+    install_fixes(&mut e);
+    for addr in AREA.fix_sites {
+        assert_eq!(
+            e.site_owners(*addr).to_vec(),
+            vec![Owner::Jip],
+            "{addr:08x}"
+        );
+    }
+    for addr in AREA.fix_wraps {
+        assert!(e.wraps_at(*addr).contains(&Owner::Jip), "{addr:08x}");
+    }
+}
+
+/// The plain byte patches: G14's word 0, G18's mark `0x404`, G118 answers (the `jnz` gone),
+/// G33 answers (JIP's jumps).
+#[test]
+fn byte_patches_answer_jips_bytes() {
+    let mut e = fixes_world();
+    assert_eq!(equip_no_sound(&mut e, &[]), Some(0));
+    assert_eq!(life_state_mark(&mut e, &[ACTOR]), Some(0x404));
+    assert!(projectile_weapon_first(&mut e, &[]).is_some());
+    assert_eq!(player_killer(&mut e, &[PLAYER]), Some(0));
+}
+
+/// G77: bit 31 of the hit's flags set (`or byte [+0x5B], 0x80`), the other bits kept.
+#[test]
+fn g77_marks_the_hit_armor_penetrated() {
+    let mut e = fixes_world();
+    e.mem.set_u32(HIT + 0x58, 0x4512_3405);
+    armor_penetrated(&mut e, &[HIT]);
+    assert_eq!(e.mem.u32(HIT + 0x58), 0xc512_3405);
+    armor_penetrated(&mut e, &[HIT]);
+    assert_eq!(e.mem.u32(HIT + 0x58), 0xc512_3405);
+}
+
+/// G98: a teammate, an actor with `+0x143` bit 7, an essential base: 1; else 0; no base: 0.
+#[test]
+fn g98_skips_teammates_flagged_and_essential() {
+    let mut e = fixes_world();
+    e.mem.set_u32(OTHER + 0x20, BASE_FORM);
+    assert_eq!(kill_challenge_skips(&mut e, &[OTHER]), Some(0));
+    e.mem.set_u8(OTHER + 0x18d, 2);
+    assert_eq!(kill_challenge_skips(&mut e, &[OTHER]), Some(1));
+    e.mem.set_u8(OTHER + 0x18d, 0);
+    e.mem.set_u8(OTHER + 0x143, 0x7f);
+    assert_eq!(kill_challenge_skips(&mut e, &[OTHER]), Some(0));
+    e.mem.set_u8(OTHER + 0x143, 0x80);
+    assert_eq!(kill_challenge_skips(&mut e, &[OTHER]), Some(1));
+    e.mem.set_u8(OTHER + 0x143, 0);
+    e.mem.set_u8(BASE_FORM + 0x34, 0xfd);
+    assert_eq!(kill_challenge_skips(&mut e, &[OTHER]), Some(0));
+    e.mem.set_u8(BASE_FORM + 0x34, 2);
+    assert_eq!(kill_challenge_skips(&mut e, &[OTHER]), Some(1));
+    e.mem.set_u32(OTHER + 0x20, 0);
+    assert_eq!(kill_challenge_skips(&mut e, &[OTHER]), Some(0));
+}
+
+/// O19: a creature reference 1; no process 0; a process not high 0; else the byte `+0x228`.
+#[test]
+fn o19_answers_as_jip() {
+    let mut e = fixes_world();
+    e.mem.set_u8(OTHER + 4, 0x3c);
+    assert_eq!(creature_spread(&mut e, &[OTHER]), Some(1));
+    e.mem.set_u8(OTHER + 4, 0x3b);
+    assert_eq!(creature_spread(&mut e, &[OTHER]), Some(0));
+    e.mem.set_u32(OTHER + 0x68, PROCESS_AT);
+    e.mem.set_u8(PROCESS_AT + 0x228, 1);
+    e.mem.set_u8(PROCESS_AT + 0x28, 1);
+    assert_eq!(creature_spread(&mut e, &[OTHER]), Some(0));
+    e.mem.set_u8(PROCESS_AT + 0x28, 0);
+    assert_eq!(creature_spread(&mut e, &[OTHER]), Some(1));
+    e.mem.set_u8(PROCESS_AT + 0x228, 0);
+    assert_eq!(creature_spread(&mut e, &[OTHER]), Some(0));
+}
+
+/// G109: an empty slot answers none (the lookup not asked); no fallback set: the slot; the
+/// lookup's answer, or the slot when it answers none. The wrap answers the same.
+#[test]
+fn g109_impact_data_as_jip() {
+    let mut e = fixes_world();
+    e.register(IMPACT_LOOKUP, |e, w| {
+        e.mem.set_u32(LOG, w[0]);
+        e.mem.set_u32(LOG + 4, w[1]);
+        e.mem.set_u32(LOG + 8, w[2]);
+        e.mem.u32(LOG + 12).into_ret()
+    });
+    assert_eq!(impact_data(&mut e, SET, 3), 0);
+    e.mem.set_u32(SET + 0x1c + 12, 0x0d33);
+    assert_eq!(impact_data(&mut e, SET, 3), 0x0d33);
+    assert_eq!(e.mem.u32(LOG), 0, "no fallback: nothing asked");
+    e.mem.set_u32(IMPACT_FALLBACK, 0x0f00);
+    assert_eq!(impact_data(&mut e, SET, 3), 0x0d33);
+    assert_eq!(
+        [e.mem.u32(LOG), e.mem.u32(LOG + 4), e.mem.u32(LOG + 8)],
+        [0x0f00, 3, 0x0d33]
+    );
+    e.mem.set_u32(LOG + 12, 0x0e44);
+    assert_eq!(impact_data(&mut e, SET, 3), 0x0e44);
+    assert_eq!(get_impact_data(&mut e, &[SET, 3]).eax, 0x0e44);
+    e.mem.set_u32(LOG, 0);
+    assert_eq!(impact_data(&mut e, SET, 4), 0);
+    assert_eq!(e.mem.u32(LOG), 0, "empty slot: nothing asked");
+}
+
+/// G120: no weapon or no set on the weapon: 0; else the set's data for the material.
+#[test]
+fn g120_hit_blood_from_the_hits_weapon() {
+    let mut e = fixes_world();
+    e.mem.set_u32(SET + 0x1c + 8, 0x0d22);
+    assert_eq!(hit_blood_impact(&mut e, &[HIT, 2]), Some(0));
+    e.mem.set_u32(HIT + 0x30, WEAPON);
+    assert_eq!(hit_blood_impact(&mut e, &[HIT, 2]), Some(0));
+    e.mem.set_u32(WEAPON + 0x24c, SET);
+    assert_eq!(hit_blood_impact(&mut e, &[HIT, 2]), Some(0x0d22));
+    assert_eq!(hit_blood_impact(&mut e, &[HIT, 3]), Some(0));
+}
+
+fn weapon_damage(e: &mut Engine) -> f64 {
+    get_damage_to_weapon(e, &[OTHER]).st0
+}
+
+/// G111 + O11: the setting without a fitting process or weapon; the weapon's own value with its
+/// flag; O11's skill and `+0xA0` scaling only with its switch and a matched skill; ammo effects
+/// for a weapon with ammo and a `TESAmmo` with effects.
+#[test]
+fn g111_damage_to_weapon_as_jip() {
+    let mut e = fixes_world();
+    e.mem.set_f32(DAMAGE_TO_WEAPON_VALUE, 1.5);
+    assert_eq!(weapon_damage(&mut e), 1.5, "no process");
+    e.mem.set_u32(OTHER + 0x68, PROCESS_AT);
+    e.mem.set_u32(PROCESS_AT + 0x114, ENTRY);
+    e.mem.set_u32(ENTRY + 8, WEAPON);
+    e.mem.set_u8(PROCESS_AT + 0x28, 2);
+    assert_eq!(weapon_damage(&mut e), 1.5, "low process");
+    e.mem.set_u8(PROCESS_AT + 0x28, 1);
+    e.mem.set_f32(WEAPON + 0x148, 4.0);
+    assert_eq!(weapon_damage(&mut e), 1.5, "flag clear: the setting");
+    e.mem.set_u8(WEAPON + 0x12c, 0x80);
+    assert_eq!(weapon_damage(&mut e), 4.0, "own value");
+    e.mem.set_u8(WEAPON + 0x15c, 0x29);
+    e.mem.set_u16(WEAPON + 0xa0, 3);
+    assert_eq!(weapon_damage(&mut e), 4.0, "O11 off");
+    e.set_jip_patches(e.jip_patches() | jip_patches::FO3_WPN_DEGRADATION);
+    let guns = 4.0f32 * f32::from_bits(0x3e19_999a) * 3.0;
+    assert_eq!(weapon_damage(&mut e), f64::from(guns), "Guns 0.15, times 3");
+    e.mem.set_u8(WEAPON + 0x15c, 0x2d);
+    assert_eq!(weapon_damage(&mut e), 3.0, "Unarmed 0.25");
+    e.mem.set_u8(WEAPON + 0x15c, 0x22);
+    let energy = 4.0f32 * f32::from_bits(0x3e4c_cccd) * 3.0;
+    assert_eq!(
+        weapon_damage(&mut e),
+        f64::from(energy),
+        "Energy Weapons 0.2"
+    );
+    e.mem.set_u8(WEAPON + 0x15c, 0x24);
+    assert_eq!(weapon_damage(&mut e), 4.0, "Lockpick: no match");
+    e.mem.set_u8(WEAPON + 0x15c, 0x20);
+    assert_eq!(weapon_damage(&mut e), 4.0, "below Big Guns");
+    e.mem.set_u8(WEAPON + 0x15c, 0x2e);
+    assert_eq!(weapon_damage(&mut e), 4.0, "past the table");
+    e.mem.set_u8(WEAPON + 0x15c, 0x21);
+    let big_guns = 4.0f32 * f32::from_bits(0x3e99_999a) * 3.0;
+    assert_eq!(weapon_damage(&mut e), f64::from(big_guns), "Big Guns 0.3");
+
+    e.register(APPLY_AMMO_EFFECTS, |e, w| {
+        e.mem.set_u32(LOG, w[0]);
+        e.mem.set_u32(LOG + 4, w[1]);
+        e.mem.set_u32(LOG + 8, w[2]);
+        9.25f64.into_ret()
+    });
+    e.mem.set_u32(PROCESS_AT + 0x118, AMMO_ENTRY);
+    e.mem.set_u32(AMMO_ENTRY + 8, AMMO);
+    e.mem.set_u32(AMMO, TES_AMMO_VTABLE);
+    e.mem.set_u32(AMMO + 0xd4, 1);
+    assert_eq!(
+        weapon_damage(&mut e),
+        f64::from(big_guns),
+        "weapon without ammo"
+    );
+    e.mem.set_u32(WEAPON + 0xa8, 0x77);
+    assert_eq!(weapon_damage(&mut e), 9.25, "ammo effects");
+    assert_eq!(
+        [e.mem.u32(LOG), e.mem.u32(LOG + 4), e.mem.u32(LOG + 8)],
+        [4, AMMO + 0xd4, big_guns.to_bits()]
+    );
+    e.mem.set_u32(AMMO, TES_AMMO_VTABLE + 4);
+    assert_eq!(weapon_damage(&mut e), f64::from(big_guns), "not TESAmmo");
+    e.mem.set_u32(AMMO, TES_AMMO_VTABLE);
+    e.mem.set_u32(AMMO + 0xd4, 0);
+    assert_eq!(weapon_damage(&mut e), f64::from(big_guns), "no effects");
+    e.mem.set_u32(AMMO + 0xd4, 1);
+    e.mem.set_u32(AMMO_ENTRY + 8, 0);
+    assert_eq!(weapon_damage(&mut e), f64::from(big_guns), "no ammo form");
+}
+
+/// G33's part of the housekeeping before a load: the player's killer cleared.
+#[test]
+fn g33_pre_load_clears_the_players_killer() {
+    let mut e = fixes_world();
+    e.mem.set_u32(PLAYER + 0xc0, ACTOR);
+    pre_load(&mut e);
+    assert_eq!(e.mem.u32(PLAYER + 0xc0), 0);
+}
+
+// ---- Review round of PR 2 (#605).
+
+/// A page past the area: `HIT2 * 4` wraps to `0x40`, so a handler that took the hit's address as
+/// the material would read `SET + 0x5C` (mapped, a decoy) instead of crashing.
+const HIGH: u32 = 0x4000_0000;
+const HIT2: u32 = HIGH + 0x10;
+
+/// G120: the material is the seam's second word, pinned by value: material 2 and 5 answer their
+/// own slots, never the decoy a material taken from the hit's address would read, and never the
+/// set of the aggressor's (`hit+0`) current weapon.
+#[test]
+fn g120_material_is_the_seams_second_word() {
+    let mut e = fixes_world();
+    e.map(HIGH, 0x1000);
+    e.mem.set_u32(HIT2 + 0x30, WEAPON);
+    e.mem.set_u32(WEAPON + 0x24c, SET);
+    e.mem.set_u32(SET + 0x1c + 2 * 4, 0x0d22);
+    e.mem.set_u32(SET + 0x1c + 5 * 4, 0x0d55);
+    e.mem.set_u32(SET + 0x5c, 0x0bad);
+    // The aggressor at `hit+0` with another weapon and set, whose data must never be answered.
+    let other_weapon = AREA_BASE + 0x6000;
+    let other_set = AREA_BASE + 0x6400;
+    e.mem.set_u32(HIT2, OTHER);
+    e.mem.set_u32(other_weapon + 0x24c, other_set);
+    e.mem.set_u32(other_set + 0x1c + 2 * 4, 0x0a22);
+    e.mem.set_u32(other_set + 0x1c + 5 * 4, 0x0a55);
+    e.register_double(0x008a_1710, move |_, _| other_weapon.into_ret());
+    assert_eq!(hit_blood_impact(&mut e, &[HIT2, 2]), Some(0x0d22));
+    assert_eq!(hit_blood_impact(&mut e, &[HIT2, 5]), Some(0x0d55));
+}
+
+/// G120 uses JIP's impact data rule (`GetImpactDataHook`) for the hit's set: with the fallback
+/// set, the lookup's answer for (fallback, material, slot), the slot when it answers none; an
+/// empty material answers none and the lookup is not asked.
+#[test]
+fn g120_takes_jips_impact_data_rule() {
+    let mut e = fixes_world();
+    e.mem.set_u32(HIT + 0x30, WEAPON);
+    e.mem.set_u32(WEAPON + 0x24c, SET);
+    e.mem.set_u32(SET + 0x1c + 2 * 4, 0x0d22);
+    e.mem.set_u32(SET + 0x1c + 5 * 4, 0x0d55);
+    e.mem.set_u32(IMPACT_FALLBACK, 0x0f00);
+    e.register(IMPACT_LOOKUP, |e, w| {
+        e.mem.set_u32(LOG, e.mem.u32(LOG) + 1);
+        let found = if w[..3] == [0x0f00, 2, 0x0d22] {
+            0x0e44
+        } else {
+            0
+        };
+        found.into_ret()
+    });
+    assert_eq!(hit_blood_impact(&mut e, &[HIT, 2]), Some(0x0e44));
+    assert_eq!(e.mem.u32(LOG), 1);
+    assert_eq!(
+        hit_blood_impact(&mut e, &[HIT, 5]),
+        Some(0x0d55),
+        "none: slot"
+    );
+    assert_eq!(e.mem.u32(LOG), 2);
+    assert_eq!(
+        hit_blood_impact(&mut e, &[HIT, 3]),
+        Some(0),
+        "empty material"
+    );
+    assert_eq!(e.mem.u32(LOG), 2, "empty material: lookup not asked");
+}
+
+/// G111: the high process (level 0: the player and nearby actors) takes the weapon path like
+/// level 1; a weapon entry with no form answers the setting (the port's deliberate difference).
+#[test]
+fn g111_high_process_and_no_weapon_form() {
+    let mut e = fixes_world();
+    e.mem.set_f32(DAMAGE_TO_WEAPON_VALUE, 1.5);
+    e.mem.set_u32(OTHER + 0x68, PROCESS_AT);
+    e.mem.set_u32(PROCESS_AT + 0x114, ENTRY);
+    e.mem.set_u32(ENTRY + 8, WEAPON);
+    e.mem.set_u8(WEAPON + 0x12c, 0x80);
+    e.mem.set_f32(WEAPON + 0x148, 4.0);
+    e.mem.set_u8(PROCESS_AT + 0x28, 0);
+    assert_eq!(weapon_damage(&mut e), 4.0, "high process: own value");
+    e.mem.set_u32(ENTRY + 8, 0);
+    assert_eq!(weapon_damage(&mut e), 1.5, "no weapon form: the setting");
+}
+
+/// O11: Explosives (0.3) and Melee (0.25) with an own value that is not a power of two and the
+/// word `+0xA0` = 9, multiplied in JIP's order (`mulss` by the rate, then by the word).
+#[test]
+fn o11_explosives_and_melee_in_jips_order() {
+    let mut e = fixes_world();
+    e.mem.set_f32(DAMAGE_TO_WEAPON_VALUE, 1.5);
+    e.mem.set_u32(OTHER + 0x68, PROCESS_AT);
+    e.mem.set_u32(PROCESS_AT + 0x114, ENTRY);
+    e.mem.set_u32(ENTRY + 8, WEAPON);
+    e.mem.set_u8(PROCESS_AT + 0x28, 1);
+    e.mem.set_u8(WEAPON + 0x12c, 0x80);
+    e.mem.set_f32(WEAPON + 0x148, 1.7);
+    e.mem.set_u16(WEAPON + 0xa0, 9);
+    e.set_jip_patches(e.jip_patches() | jip_patches::FO3_WPN_DEGRADATION);
+    let explosives = 1.7f32 * f32::from_bits(0x3e99_999a) * 9.0;
+    // The other order rounds differently here, so the test shows JIP's order.
+    assert_ne!(explosives, 1.7f32 * 9.0 * f32::from_bits(0x3e99_999a));
+    e.mem.set_u8(WEAPON + 0x15c, 0x23);
+    assert_eq!(
+        weapon_damage(&mut e),
+        f64::from(explosives),
+        "Explosives 0.3"
+    );
+    e.mem.set_u8(WEAPON + 0x15c, 0x26);
+    let melee = 1.7f32 * f32::from_bits(0x3e80_0000) * 9.0;
+    assert_eq!(weapon_damage(&mut e), f64::from(melee), "Melee 0.25");
 }
