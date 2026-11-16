@@ -88,6 +88,25 @@ fn forms(needle: &str) -> [Vec<u8>; 2] {
     [bytes, wide]
 }
 
+/// [`forms`] in the case given.
+fn exact_forms(needle: &str) -> [Vec<u8>; 2] {
+    let bytes = needle.as_bytes().to_vec();
+    let wide = bytes.iter().flat_map(|&b| [b, 0]).collect();
+    [bytes, wide]
+}
+
+/// Offsets of `needle` in `data`, in the case given.
+fn find_exact(data: &[u8], needle: &[u8]) -> Vec<usize> {
+    if needle.is_empty() {
+        return vec![];
+    }
+    data.windows(needle.len())
+        .enumerate()
+        .filter(|(_, w)| *w == needle)
+        .map(|(at, _)| at)
+        .collect()
+}
+
 fn shown(data: &[u8], at: usize) -> String {
     let from = at.saturating_sub(24);
     let to = (at + 72).min(data.len());
@@ -184,11 +203,14 @@ struct Arguments {
     folder: PathBuf,
     needles: Vec<String>,
     program_needles: Vec<String>,
+    /// `--program-needle-exact`: searched in programs in the case given (a disassembler's
+    /// `FUN_` in upper case, where a program for Linux or macOS holds `fun_` inside other bytes).
+    exact_program_needles: Vec<String>,
     games: Vec<PathBuf>,
     max_run: Option<usize>,
 }
 
-const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--game FILE]... [--max-run BYTES]";
+const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--program-needle-exact TEXT]... [--game FILE]... [--max-run BYTES]";
 
 /// The command line after the program's name. A switch without its value, an unknown switch or a
 /// `--max-run` that isn't a number is an error: a limit that was asked for is never dropped.
@@ -209,6 +231,7 @@ fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
         match arg.as_str() {
             "--needle" => out.needles.push(value?),
             "--program-needle" => out.program_needles.push(value?),
+            "--program-needle-exact" => out.exact_program_needles.push(value?),
             "--game" => out.games.push(PathBuf::from(value?)),
             "--max-run" => {
                 let n = value?;
@@ -230,6 +253,7 @@ fn main() {
         folder,
         needles,
         program_needles,
+        exact_program_needles,
         games,
         max_run,
     } = match parse_arguments(&args) {
@@ -257,6 +281,26 @@ fn main() {
                 if let Some(&first) = hits.first() {
                     println!(
                         "FOUND {:?} {} times in {}: ...{}...",
+                        needle,
+                        hits.len(),
+                        file.display(),
+                        shown(&data, first)
+                    );
+                    bad += hits.len();
+                }
+            }
+        }
+        let exact: &[String] = if is_program {
+            &exact_program_needles
+        } else {
+            &[]
+        };
+        for needle in exact {
+            for form in exact_forms(needle) {
+                let hits = find_exact(&data, &form);
+                if let Some(&first) = hits.first() {
+                    println!(
+                        "FOUND {:?} (this case) {} times in {}: ...{}...",
                         needle,
                         hits.len(),
                         file.display(),
@@ -355,6 +399,25 @@ mod tests {
         assert!(is_program(Path::new("app/nv-viewer"), &[0xca, 0xfe, 0xba, 0xbe]));
         assert!(!is_program(Path::new("play.sh"), b"#!/bin/sh\n"));
         assert!(!is_program(Path::new("app/nv-viewer"), b""));
+    }
+
+    /// An exact needle finds its own case only, as bytes and as UTF-16; the usual needles any case.
+    #[test]
+    fn exact_needles_keep_their_case() {
+        let data = b"..\x66un_scripts..FUN_00401000..F\0U\0N\0_\0";
+        let hits = |needle: &str| -> Vec<usize> {
+            exact_forms(needle)
+                .iter()
+                .flat_map(|form| find_exact(data, form))
+                .collect()
+        };
+        assert_eq!(hits("FUN_"), [15, 29]);
+        assert_eq!(hits("DAT_"), Vec::<usize>::new());
+        assert_eq!(find_exact(data, b""), Vec::<usize>::new());
+        assert_eq!(find_all(data, &forms("FUN_")[0]), [2, 15]);
+        let parsed = parse_arguments(&args(&["pkg", "--program-needle-exact", "FUN_"])).unwrap();
+        assert_eq!(parsed.exact_program_needles, ["FUN_"]);
+        assert!(parse_arguments(&args(&["pkg", "--program-needle-exact"])).is_err());
     }
 
     #[test]
