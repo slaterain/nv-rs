@@ -1102,3 +1102,23 @@ fn hit_data_routine_while_jips_slot_is_held() {
     let data = e.mem.u32(PROCESS + 0x240);
     assert_eq!(e.mem.bytes(data, 0x60), e.mem.bytes(HIT, 0x60));
 }
+
+/// A thread's engine (`share_slots_for_test`, as `ExtendState::for_thread`), made right after
+/// install, reads the critical-hit list the command writes and empties on the main engine: the
+/// actor hooks' state is one run-wide slot.
+#[test]
+fn a_threads_engine_reads_the_lists_the_commands_write() {
+    let mut e = world();
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    run(
+        &mut e,
+        SET_ON_CRITICAL_HIT,
+        &[form_arg(S1), int_arg(1), form_arg(A1)],
+    );
+    assert_eq!(read(&mut t).critical_hit.len(), 1, "written");
+    run(&mut e, SET_ON_CRITICAL_HIT, &[form_arg(S1), int_arg(0)]);
+    assert!(read(&mut t).critical_hit.is_empty(), "removed");
+    engine_core::extend::release_held_for_test();
+}

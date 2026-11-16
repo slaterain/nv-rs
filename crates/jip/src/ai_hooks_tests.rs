@@ -938,3 +938,23 @@ fn pre_load_housekeeping() {
         (1, 1)
     );
 }
+
+/// A thread's engine (`share_slots_for_test`, as `ExtendState::for_thread`), made right after
+/// install, reads the detection value the command writes and removes on the main engine: the AI
+/// hooks' state is one run-wide slot.
+#[test]
+fn a_threads_engine_reads_the_values_the_commands_write() {
+    let mut e = world();
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    run(&mut e, FORCE_ACTOR_DETECTION_VALUE, ACTOR, &[int_arg(30)]);
+    assert_eq!(
+        read(&mut t).force_detection_value.get(&ACTOR),
+        Some(&30),
+        "written"
+    );
+    run(&mut e, FORCE_ACTOR_DETECTION_VALUE, ACTOR, &[int_arg(0)]);
+    assert!(read(&mut t).force_detection_value.is_empty(), "removed");
+    engine_core::extend::release_held_for_test();
+}

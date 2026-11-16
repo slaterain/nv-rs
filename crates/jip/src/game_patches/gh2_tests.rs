@@ -592,3 +592,15 @@ fn the_may_hold_flag_follows_writes_and_destroys_on_two_engines() {
     );
     release();
 }
+
+/// Today's behaviour, pinned (CONDITION-LOCKS.md): the aux-variable part still takes JIP's
+/// shared slot, for a temporary reference with an aux variable set. The follow-up (the aux maps
+/// out of JIP's slot) turns this into a passing held test. Under the default stepped threads
+/// it cannot stall (one engine); it blocks JIP together with `NV_THREADS=real`.
+#[test]
+#[should_panic(expected = "two engines on one thread")]
+fn a_temporary_reference_with_aux_variables_takes_jips_slot_today() {
+    let mut e = world(0x15, TEMP_ID);
+    *aux_maps(&mut e, true) = three_mods();
+    crate::test_support::with_jips_slot_held(&mut e, |e| destroy(e, REF));
+}

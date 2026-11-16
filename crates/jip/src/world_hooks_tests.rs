@@ -726,7 +726,12 @@ fn an_info_under_two_topics_takes_the_last_linked_with_jips_patch() {
         .insert(SCRIPT_TWO);
     crate::script_call::calls();
     e.call_log = Some(vec![]);
-    assert_eq!(site(&mut e, 0x0061_f184, &[INFO, 0, REF]), None);
+    // The fixes branch reads the dialogue patch's lock-free record: it answers while another
+    // engine holds JIP's shared slot.
+    assert_eq!(
+        held(&mut e, |e| site(e, 0x0061_f184, &[INFO, 0, REF])),
+        None
+    );
     let log = e.call_log.take().unwrap();
     assert_eq!(
         crate::script_call::calls(),
@@ -1307,7 +1312,7 @@ fn script_wait_seams() {
     held(&mut e, |e| site(e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]));
     assert_eq!(current_wait(), Some(REF));
     // Another thread's run start leaves this thread's wait (JIP's one global would not).
-    std::thread::spawn(|| crate::world_hooks::set_current_wait(None))
+    std::thread::spawn(crate::world_hooks::clear_current_wait)
         .join()
         .expect("ran");
     assert_eq!(current_wait(), Some(REF), "per thread");
@@ -1356,11 +1361,16 @@ fn script_wait_seams() {
     }
     assert_eq!(current_wait(), None);
     assert_eq!(e.mem.u8(REF + 5), 0);
-    // The pre-load: the waits go with the hook.
+    // The pre-load: the waits go with the hook, and this thread's current wait (JIP nulls
+    // `s_scriptWaitInfo`).
+    e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
+    site(&mut e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
+    assert_eq!(current_wait(), Some(REF));
     e.set_hook(Hook::ScriptWait, true);
     crate::world_hooks::pre_load(&mut e);
     assert_eq!(users(&e, Hook::ScriptWait), 0);
     assert!(state(&mut e).script_waits.is_empty());
+    assert_eq!(current_wait(), None, "cleared on the loading thread");
 }
 
 /// The block iterator over a compiled script: `scn`, then blocks; the last block before the
@@ -1431,6 +1441,10 @@ fn evaluate_line_stand_in(e: &mut Engine, _: &[u32]) -> Ret {
 #[test]
 fn script_wait_command() {
     let mut e = world();
+    // A thread's engine, made right after install: it reads the waits the command writes.
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
     for addr in [0x005e_0d20u32, 0x005e_1160, 0x005e_13a0] {
         e.register(addr, |_, _| Ret::default());
     }
@@ -1483,6 +1497,11 @@ fn script_wait_command() {
     assert_eq!(go(&mut e, 3), 25, "past the command");
     let wait = state(&mut e).script_waits[&REF];
     assert_eq!(
+        read(&mut t).script_waits.get(&REF),
+        Some(&wait),
+        "a thread's engine reads it"
+    );
+    assert_eq!(
         (
             wait.owner,
             wait.ref_id,
@@ -1508,4 +1527,87 @@ fn script_wait_command() {
     e.mem.set_u32(CALLER + 0x40, QUEST_FORM);
     go(&mut e, 2);
     assert_eq!(state(&mut e).script_waits[&QUEST_FORM].iterations, 2);
+    crate::world_hooks::pre_load(&mut e);
+    assert!(read(&mut t).script_waits.is_empty(), "and their removal");
+    engine_core::extend::release_held_for_test();
+}
+
+/// A thread's engine (`share_slots_for_test`, as `ExtendState::for_thread`) reads the names the
+/// commands write and remove on the main engine: the world hooks' state is one run-wide slot.
+#[test]
+fn a_threads_engine_reads_the_names_the_commands_write() {
+    let mut e = world();
+    let mut t = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut t);
+    engine_core::extend::release_held_for_test();
+    run(&mut e, SET_REF_NAME, REF, &[s(b"Bob")]);
+    assert!(read(&mut t).ref_names.contains_key(&REF), "written");
+    run(&mut e, SET_REF_NAME, REF, &[s(b"")]);
+    assert!(!read(&mut t).ref_names.contains_key(&REF), "removed");
+    engine_core::extend::release_held_for_test();
+}
+
+/// One engine run on two OS threads one at a time, as stepped threads hand it over (the main
+/// thread waits on the channel while the other runs it).
+struct OneAtATime(*mut Engine);
+// SAFETY: the two threads use the engine strictly in turn, ordered by the channels below.
+unsafe impl Send for OneAtATime {}
+
+/// A wait a thread took before a load counts nothing after it, also when the same owner waits
+/// again at the same block: JIP's pre-load nulls its one `s_scriptWaitInfo` for every thread;
+/// the port's pre-load (on the loading thread) raises the waits' generation, and the other
+/// thread's older value counts as none and is cleared.
+#[test]
+fn a_wait_taken_before_a_load_counts_nothing_after_it() {
+    let mut e = world();
+    let wait = ScriptWait {
+        owner: REF,
+        ref_id: 0x0100_0001,
+        iterations: 2,
+        block_offset: 0x40,
+        saved_offset: 0x10,
+        saved_if_stack: [7; 12],
+    };
+    state(&mut e).script_waits.insert(REF, wait);
+    e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
+    engine_core::extend::release_held_for_test();
+    let raw: *mut Engine = &mut e;
+    let other = OneAtATime(raw);
+    let (go, wait_go) = std::sync::mpsc::channel::<()>();
+    let (tell, heard) = std::sync::mpsc::channel::<(u32, Option<u32>)>();
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let other = other;
+            // SAFETY: the main thread does not touch the engine until `tell` (see OneAtATime).
+            let e = unsafe { &mut *other.0 };
+            site(e, 0x005e_0ec9, &[OBJ_SCRIPT, REF]);
+            tell.send((0, current_wait())).expect("told");
+            wait_go.recv().expect("go");
+            e.mem.set_u32(LENGTH, 100);
+            site(
+                e,
+                0x005e_1716,
+                &[RUNNER, 0, 0x40, 0x3ff0_0000, 0, LENGTH, 0x20],
+            );
+            tell.send((e.mem.u32(LENGTH), current_wait()))
+                .expect("told");
+        });
+        assert_eq!(heard.recv().expect("heard").1, Some(REF), "it waits");
+        // SAFETY: the other thread waits on `go` and does not touch the engine meanwhile.
+        let e = unsafe { &mut *raw };
+        e.set_hook(Hook::ScriptWait, true);
+        crate::world_hooks::pre_load(e);
+        // The same owner waits again at the same block.
+        state(e).script_waits.insert(REF, wait);
+        e.mem.set_u8(REF + 5, SCRIPT_ON_WAIT);
+        go.send(()).expect("sent");
+        let (length, now) = heard.recv().expect("heard");
+        assert_eq!(length, 100, "the block applies: not counted, not skipped");
+        assert_eq!(now, None, "the old wait is cleared");
+    });
+    assert_eq!(
+        state(&mut e).script_waits[&REF].iterations,
+        2,
+        "nothing counted"
+    );
 }

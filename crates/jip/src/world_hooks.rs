@@ -270,6 +270,9 @@ pub struct State {
     /// `s_scriptWaitInfoMap` by owner (`s_scriptWaitInfo`, the owner whose wait this run is, is
     /// per thread: [`current_wait`]).
     pub script_waits: BTreeMap<u32, ScriptWait>,
+    /// Raised by each pre-load that clears the waits (JIP nulls its one `s_scriptWaitInfo` there for
+    /// every thread): a thread's current wait taken before it is no wait ([`current_wait`]).
+    pub wait_generation: u32,
     /// `s_jipFormFlagsMap`: the flag byte a form was last given (`TESForm::SetJIPFlag`), by id;
     /// [`restore_form_flags`] puts them back after a load and at a new game.
     pub form_flags: BTreeMap<u32, u8>,
@@ -296,6 +299,7 @@ impl Default for State {
             free_texts: Vec::new(),
             disabled_events: BTreeMap::new(),
             script_waits: BTreeMap::new(),
+            wait_generation: 0,
             form_flags: BTreeMap::new(),
         }
     }
@@ -340,17 +344,26 @@ thread_local! {
     /// thread would let a run on an AI thread take another thread's wait and resume this script
     /// at that script's saved line (a deliberate difference). Every guest thread is its own OS
     /// thread, with stepped and real threads alike (as xNVSE's thread-locals in `nvse::events`).
-    static WAIT_INFO: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    /// Kept with the waits' generation it was taken in ([`State::wait_generation`]): JIP's
+    /// pre-load nulls its global for every thread, the port's pre-load runs on one, so a value
+    /// from before a pre-load counts as none on every thread.
+    static WAIT_INFO: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
 }
 
-/// The owner whose wait this thread's script run is (`s_scriptWaitInfo`).
+/// The owner whose wait this thread's script run is (`s_scriptWaitInfo`), as it was set (the
+/// block seam also checks its generation).
 pub(crate) fn current_wait() -> Option<u32> {
-    WAIT_INFO.with(std::cell::Cell::get)
+    WAIT_INFO.with(std::cell::Cell::get).map(|(owner, _)| owner)
 }
 
-/// Sets this thread's `s_scriptWaitInfo`.
-pub(crate) fn set_current_wait(owner: Option<u32>) {
-    WAIT_INFO.with(|w| w.set(owner));
+/// Sets this thread's `s_scriptWaitInfo`: an owner with the generation it was taken in.
+fn set_wait(wait: Option<(u32, u32)>) {
+    WAIT_INFO.with(|w| w.set(wait));
+}
+
+/// Clears this thread's `s_scriptWaitInfo`.
+pub(crate) fn clear_current_wait() {
+    set_wait(None);
 }
 
 /// Puts the handlers and the commands in, when JIP answers "installed".
@@ -475,7 +488,13 @@ pub fn pre_load(e: &mut Engine) {
             }
         }
         e.set_hook(Hook::ScriptWait, false);
-        set_current_wait(None);
+        // JIP nulls `s_scriptWaitInfo` here for every thread: this thread's value goes, and every
+        // other thread's counts as none from now ([`State::wait_generation`]).
+        {
+            let mut s = state(e);
+            s.wait_generation = s.wait_generation.wrapping_add(1);
+        }
+        clear_current_wait();
     }
     if !state(e).swap_obj_lod.is_empty() {
         state(e).swap_obj_lod.clear();
@@ -779,14 +798,14 @@ fn script_runner_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         } else {
             reference
         };
-        if owner != 0
-            && flags5(e, owner) & SCRIPT_ON_WAIT != 0
-            && read(e).script_waits.contains_key(&owner)
-        {
-            wait = Some(owner);
+        if owner != 0 && flags5(e, owner) & SCRIPT_ON_WAIT != 0 {
+            let s = read(e);
+            if s.script_waits.contains_key(&owner) {
+                wait = Some((owner, s.wait_generation));
+            }
         }
     }
-    set_current_wait(wait);
+    set_wait(wait);
     None
 }
 
@@ -802,23 +821,34 @@ fn eval_event_block_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         (a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
     let applies = result_high != 0 && action_list == 0;
     let mut skip = !applies;
-    if let Some(owner) = current_wait() {
+    if let Some((owner, generation)) = WAIT_INFO.with(std::cell::Cell::get) {
         // One write of the entry, as JIP's decrement through its pointer: the count-down and
-        // the copy read back under one lock.
-        let counted = {
+        // the copy read back under one lock. A wait taken before a pre-load is none (JIP's
+        // pre-load nulled its pointer).
+        let (stale, counted) = {
             let mut s = state(e);
-            match s.script_waits.get_mut(&owner) {
-                Some(w) if w.block_offset == cursor => {
-                    if kind > 1 || applies {
-                        w.iterations = w.iterations.wrapping_sub(1);
-                        Some(Some(*w))
-                    } else {
-                        Some(None)
-                    }
-                }
-                _ => None,
+            if s.wait_generation != generation {
+                (true, None)
+            } else {
+                (
+                    false,
+                    match s.script_waits.get_mut(&owner) {
+                        Some(w) if w.block_offset == cursor => {
+                            if kind > 1 || applies {
+                                w.iterations = w.iterations.wrapping_sub(1);
+                                Some(Some(*w))
+                            } else {
+                                Some(None)
+                            }
+                        }
+                        _ => None,
+                    },
+                )
             }
         };
+        if stale {
+            clear_current_wait();
+        }
         if let Some(counted) = counted {
             if let Some(wait) = counted {
                 if wait.iterations == 0 {
@@ -827,7 +857,7 @@ fn eval_event_block_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
                     for (i, word) in wait.saved_if_stack.iter().enumerate() {
                         e.mem.set_u32(runner + 0x20 + 4 * i as u32, *word);
                     }
-                    set_current_wait(None);
+                    clear_current_wait();
                     let flags = flags5(e, wait.owner);
                     set_flags5(e, wait.owner, flags & !SCRIPT_ON_WAIT);
                     return Some(1);
