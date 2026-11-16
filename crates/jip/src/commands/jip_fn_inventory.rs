@@ -1656,7 +1656,7 @@ fn new_list(e: &mut Engine, item: u32) -> u32 {
 
 /// The inventory reference behind `reference` (`InventoryRefGetForID(thisObj->refID)`): its id,
 /// its data and its container.
-fn inv_ref_of(e: &mut Engine, reference: u32) -> Option<(u32, nvse::invref::Data, u32)> {
+pub(crate) fn inv_ref_of(e: &mut Engine, reference: u32) -> Option<(u32, nvse::invref::Data, u32)> {
     if reference == 0 {
         return None;
     }
@@ -1682,7 +1682,7 @@ fn set_inv_ref_xdata(e: &mut Engine, id: u32, xdata: u32) {
 /// container marked as changed (0x20). 0 when the container has no changes.
 ///
 /// A reference without a container makes none (JIP calls through the null container).
-fn inv_ref_create_extra_data(e: &mut Engine, id: u32, item: u32, container: u32) -> u32 {
+pub(crate) fn inv_ref_create_extra_data(e: &mut Engine, id: u32, item: u32, container: u32) -> u32 {
     if container == 0 {
         return 0;
     }

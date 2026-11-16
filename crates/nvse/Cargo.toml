@@ -10,6 +10,8 @@ rust-version.workspace = true
 engine-core = { path = "../engine-core" }
 
 [dev-dependencies]
+# Second engines sharing one's slots, as the real threads' engines do (`share_slots_for_test`).
+engine-core = { path = "../engine-core", features = ["test-support"] }
 # The opt-in test of the decompiler on the player's FalloutNV.esm scripts.
 esm = { path = "../esm" }
 

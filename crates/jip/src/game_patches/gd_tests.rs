@@ -1124,3 +1124,253 @@ fn hit_effects_stay_off_in_immortal_mode_two() {
         );
     }
 }
+
+// ---- part 4: H16 (a combat controller's excluded actions) ----
+
+const PART4_JIP: [SiteSlot; 7] = [
+    CONTROLLER_SIZE[0],
+    CONTROLLER_SIZE[1],
+    CONTROLLER_SIZE[2],
+    CONTROLLER_SIZE[3],
+    CONTROLLER_CLEARED,
+    INIT_COMBAT_CONTROLLER,
+    COMBAT_ACTION_APPLICABLE,
+];
+
+/// H16's seams at JIP's addresses (`InitJIPHooks`: the four `SafeWrite8(.., 0x8C)`, the
+/// `SafeWrite8(0x97D55F, 0x40)`, the two `WriteRelCall`s) and its values pinned to JIP's
+/// literals; each handler answers at its address.
+#[test]
+fn part4_seams_at_jip_addresses() {
+    assert_eq!(
+        PART4_JIP.map(|slot| slot.addr()),
+        [
+            0x0067_0c30,
+            0x0099_21c2,
+            0x0099_2352,
+            0x0099_2416,
+            0x0097_d55f,
+            0x0097_d71f,
+            0x0099_51b3
+        ]
+    );
+    // `push 0x188` with its low byte 0x8C; `push 0x3c` written as 0x40.
+    assert_eq!(CONTROLLER_SIZE_JIP, (0x188 & !0xff) | 0x8c);
+    assert_eq!(CONTROLLER_CLEARED_JIP, 0x40);
+    assert_eq!(0x14c + CONTROLLER_CLEARED_JIP, CONTROLLER_SIZE_JIP);
+    assert_eq!(
+        [EXCLUDED_ACTIONS, EXCLUDED_ACTIONS_BITS, PLANNER_CONTROLLER],
+        [0x188, 0x07ff_ffff, 0x2058]
+    );
+    assert_eq!([ACTION_KIND, GET_COMBAT_CONTROLLER], [0x24, 0x428]);
+    let mut e = jip(true, false);
+    for slot in CONTROLLER_SIZE {
+        assert_eq!(e.site(slot.addr(), &[]), Some(0x18c), "{:x}", slot.addr());
+    }
+    assert_eq!(e.site(0x0097_d55f, &[]), Some(0x40));
+    let controller = e.mem.alloc(0x18c);
+    e.mem.set_u32(controller + 0x188, 0xdead_beef);
+    assert_eq!(e.site(0x0097_d71f, &[0x0300_0000, controller]), None);
+    assert_eq!(e.mem.u32(controller + 0x188), 0);
+    let (planner, action) = planner_with(&mut e, 1 << 5, 5);
+    assert_eq!(e.site(0x0099_51b3, &[planner, action]), Some(0));
+}
+
+/// Not installed: no H16 handler. Installed (JIP's own): all seven, row on or off.
+#[test]
+fn part4_registered_by_their_bits() {
+    let e = jip(false, true);
+    for slot in PART4_JIP {
+        assert!(e.site_owners(slot.addr()).is_empty(), "{:x}", slot.addr());
+    }
+    for row in [false, true] {
+        let e = jip(true, row);
+        for slot in PART4_JIP {
+            assert_eq!(
+                e.site_owners(slot.addr()),
+                [Owner::Jip],
+                "{:x} {row}",
+                slot.addr()
+            );
+        }
+    }
+}
+
+/// A planner whose controller (`+0x2058`) has the excluded actions word `mask`, and a step of
+/// kind `kind` (`+0x24`); the words around both set, so a wider or shifted read would see them.
+fn planner_with(e: &mut Engine, mask: u32, kind: u32) -> (u32, u32) {
+    let controller = e.mem.alloc(0x190);
+    e.mem.set_u32(controller + 0x184, 0xffff_ffff);
+    e.mem.set_u32(controller + 0x188, mask);
+    e.mem.set_u32(controller + 0x18c, 0xffff_ffff);
+    let planner = e.mem.alloc(0x2060);
+    e.mem.set_u32(planner + 0x2054, 0x0500_0000);
+    e.mem.set_u32(planner + 0x2058, controller);
+    e.mem.set_u32(planner + 0x205c, 0x0500_0000);
+    let action = e.mem.alloc(0x30);
+    e.mem.set_u32(action + 0x20, 0xffff_ffff);
+    e.mem.set_u32(action + 0x24, kind);
+    e.mem.set_u32(action + 0x28, 0xffff_ffff);
+    (planner, action)
+}
+
+/// H16's applicable test: a step whose kind's bit (the kind taken mod 32, as `bt` with a
+/// register does) is set is not applicable (0); otherwise no answer (the exe's test runs).
+#[test]
+fn combat_action_applicable_tests_the_kinds_bit() {
+    let mut e = jip(true, false);
+    // (mask, kind, excluded)
+    for (mask, kind, excluded) in [
+        (0, 0, false),
+        (1, 0, true),
+        (1, 1, false),
+        (1 << 9, 9, true),
+        (!(1u32 << 9), 9, false),
+        (1 << 31, 31, true),
+        (1 << 1, 33, true),
+        (1 << 1, 0xffff_ffe1, true),
+        (1, 32, true),
+        (0x07ff_ffff, 27, false),
+    ] {
+        let (planner, action) = planner_with(&mut e, mask, kind);
+        assert_eq!(
+            combat_action_applicable(&mut e, &[planner, action]),
+            excluded.then_some(0),
+            "{mask:x} {kind}"
+        );
+    }
+}
+
+/// `SetExcludedCombatActions`' change: the low 27 bits kept for the actor (0 erases it) and
+/// written to its current controller (slot +0x428) when it has one; `GetExcludedCombatActions`
+/// reads 0 for a reference with no entry.
+#[test]
+fn excluded_actions_set_for_an_actor_and_its_controller() {
+    const CONTROLLER_STUB: u32 = 0x0700_0428;
+    let mut e = jip(true, false);
+    let vtable = e.mem.alloc(0x500);
+    e.mem.set_u32(vtable + 0x428, CONTROLLER_STUB);
+    let controller = e.mem.alloc(0x18c);
+    e.register_double(CONTROLLER_STUB, move |e, a| {
+        // The actor's word +4 says whether it is in combat.
+        if e.mem.u32(a[0] + 4) != 0 {
+            controller.into_ret()
+        } else {
+            0u32.into_ret()
+        }
+    });
+    let actor = e.mem.alloc(0x10);
+    e.mem.set_u32(actor, vtable);
+    let other = e.mem.alloc(0x10);
+    e.mem.set_u32(other, vtable);
+    assert_eq!(excluded_combat_actions(&mut e, actor), 0);
+    // Not in combat: the map only.
+    set_excluded_combat_actions(&mut e, actor, 0xf800_0005);
+    assert_eq!(excluded_combat_actions(&mut e, actor), 5);
+    assert_eq!(e.mem.u32(controller + 0x188), 0);
+    // In combat: the controller's word too; another actor is untouched.
+    e.mem.set_u32(actor + 4, 1);
+    set_excluded_combat_actions(&mut e, actor, 0x0400_0003);
+    assert_eq!(excluded_combat_actions(&mut e, actor), 0x0400_0003);
+    assert_eq!(excluded_combat_actions(&mut e, other), 0);
+    assert_eq!(e.mem.u32(controller + 0x188), 0x0400_0003);
+    // Only bits above 27: the entry goes and the controller's word is 0.
+    set_excluded_combat_actions(&mut e, actor, 0x0800_0000);
+    assert_eq!(excluded_combat_actions(&mut e, actor), 0);
+    assert_eq!(e.mem.u32(controller + 0x188), 0);
+    assert!(e
+        .ext_free::<ExcludedCombatActions>()
+        .0
+        .read()
+        .unwrap()
+        .is_empty());
+}
+
+/// The constructor's hook: the controller's word is the attacker's entry (0 without one, over
+/// whatever the word held); no answer, so the package data call follows.
+#[test]
+fn init_combat_controller_takes_the_attackers_entry() {
+    let mut e = jip(true, false);
+    let (attacker, other) = (0x0300_0010, 0x0300_0020);
+    e.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .insert(attacker, 0x24);
+    for (who, word) in [(attacker, 0x24), (other, 0), (0, 0)] {
+        let controller = e.mem.alloc(0x190);
+        e.mem.set_u32(controller + 0x184, 0x5a5a_5a5a);
+        e.mem.set_u32(controller + 0x188, 0xdead_beef);
+        e.mem.set_u32(controller + 0x18c, 0x5a5a_5a5a);
+        assert_eq!(init_combat_controller(&mut e, &[who, controller]), None);
+        assert_eq!(
+            [
+                e.mem.u32(controller + 0x184),
+                e.mem.u32(controller + 0x188),
+                e.mem.u32(controller + 0x18c)
+            ],
+            [0x5a5a_5a5a, word, 0x5a5a_5a5a],
+            "{who:x}"
+        );
+    }
+}
+
+/// Before a load the map is emptied (JIP's housekeeping), with JIP installed; not installed, the
+/// housekeeping leaves it alone (it never makes or takes the map then: a load comes after the
+/// threads start, when a lock-free slot may no longer be made).
+#[test]
+fn excluded_actions_cleared_before_a_load() {
+    let mut off = jip(false, false);
+    off.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .insert(0x0300_0010, 1);
+    pre_load(&mut off);
+    assert_eq!(excluded_combat_actions(&mut off, 0x0300_0010), 1);
+    let mut e = jip(true, false);
+    e.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .extend([(0x0300_0010, 1), (0x0300_0020, 2)]);
+    pre_load(&mut e);
+    assert_eq!(excluded_combat_actions(&mut e, 0x0300_0010), 0);
+    assert!(e
+        .ext_free::<ExcludedCombatActions>()
+        .0
+        .read()
+        .unwrap()
+        .is_empty());
+    let mut e = jip(false, false);
+    pre_load(&mut e);
+}
+
+/// The map is one for the run: an engine sharing the slots (a real thread's) reads what this one
+/// set, and a change made on a second OS thread is what this engine's handler reads.
+#[test]
+fn excluded_actions_are_run_wide() {
+    let mut e = jip(true, false);
+    let mut other = engine();
+    e.share_slots_for_test(&mut other);
+    e.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .insert(0x0300_0010, 6);
+    assert_eq!(excluded_combat_actions(&mut other, 0x0300_0010), 6);
+    let map = &other.ext_free::<ExcludedCombatActions>().0;
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            map.write().unwrap().insert(0x0300_0010, 9);
+        })
+        .join()
+        .unwrap()
+    });
+    let controller = e.mem.alloc(0x18c);
+    assert_eq!(
+        init_combat_controller(&mut e, &[0x0300_0010, controller]),
+        None
+    );
+    assert_eq!(e.mem.u32(controller + 0x188), 9);
+}

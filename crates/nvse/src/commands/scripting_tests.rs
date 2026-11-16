@@ -143,7 +143,10 @@ fn strings_concatenate_compare_and_convert() {
     );
     let id = local_value(&e, s) as u32;
     assert_eq!(crate::vars::string(&e, id), Some(b"abcd".to_vec()));
-    assert_eq!(e.ext::<Nvse>().vars.strings[&id].owning_mod, 5);
+    assert_eq!(
+        crate::vars::with_strings(&mut e, |t| t.strings[&id].owning_mod),
+        5
+    );
     assert_eq!(
         run_raw(&mut e, 0x153a, &line(&[var(2, 1), text("ABCD"), op(4)])).1,
         1.0
@@ -929,7 +932,7 @@ fn override_strings_to_numbers_give_string_ids() {
         panic!("{:?}", read.args[1]);
     };
     assert_ne!(made as u32, id);
-    let s = e.ext::<crate::Nvse>().vars.strings[&(made as u32)].clone();
+    let s = crate::vars::with_strings(&mut e, |t| t.strings[&(made as u32)].clone());
     assert_eq!((s.data.as_slice(), s.owning_mod), (&b"q"[..], 5));
     assert_eq!(
         read.args[2],

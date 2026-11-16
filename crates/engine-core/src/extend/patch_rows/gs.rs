@@ -24,6 +24,8 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G71: `IsCurrentFurnitureObjConditionFunction` 0059dfe0's process read, JIP's 24 bytes test
     // the process for null.
     row(0x0059_e034),
+    // G51: `AddItem` 005b4be0's tests before the container items' health call, JIP's two-byte jump.
+    row(0x005b_4dbc),
     // G34: `PlaySound3D` 005c22f0's object to follow, JIP's 8 bytes read the reference's node.
     row(0x005c_240d),
     // G03: `AddAchievement` 005d3b20's console-used test, JIP's two-byte NOP.
