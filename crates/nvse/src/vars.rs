@@ -1038,7 +1038,6 @@ mod tests {
         assert_eq!(add_string(&mut e, 1, b"z", false), 4);
     }
 
-
     /// Contention on the strings' lock: two OS threads add strings as fast as they can, both
     /// released together by a barrier, each reading its text back and deleting every other one.
     /// The id is picked and the string put in under one take (`Strings::add`), so no two adds
