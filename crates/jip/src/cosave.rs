@@ -1359,7 +1359,7 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // count, the ragdoll events gone; and the AI hooks' part: the combat, teleport and equipment hooks
 // off, the forced targets and detection values gone; and the world hooks' part: the informed
 // forms, the waits, the swapped LOD blocks and the model paths gone, the reference names' flags set
-// again; and the player's killer cleared, G33's part).
+// again; and the player's killer cleared, G33's part; and the references' own map markers gone).
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
@@ -1369,6 +1369,7 @@ fn pre_load_housekeeping(e: &mut Engine) {
     crate::ai_hooks::pre_load(e);
     crate::world_hooks::pre_load(e);
     crate::game_patches::gc::pre_load(e);
+    crate::commands::jip_fn_misc_ref::pre_load(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
@@ -1424,6 +1425,7 @@ pub fn listen(e: &mut Engine, m: &Message) {
         msg::DEFERRED_INIT => {
             crate::commands::pos_marker::create(e);
             crate::game_patches::gh2::deferred_init(e);
+            crate::commands::jip_fn_utility::deferred_init(e);
         }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
