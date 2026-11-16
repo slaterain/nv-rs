@@ -154,6 +154,9 @@ struct Packet {
     own_bytes: Vec<u8>,
     own_cut: Vec<u8>,
     own_main: Vec<u8>,
+    /// The own words that are counted pointers ([`own_counted`]): the drawing side's holds move their objects' counts
+    /// at the join, in the serial order ([`end`]).
+    counted: Vec<u32>,
 }
 
 impl Packet {
@@ -278,6 +281,7 @@ pub fn begin(e: &Engine) -> bool {
             own_bytes: Vec::new(),
             own_cut: Vec::new(),
             own_main: Vec::new(),
+            counted: Vec::new(),
         });
         true
     });
@@ -398,6 +402,31 @@ pub fn own(e: &Engine, object: u32, from: u32, to: u32) {
         }
     });
 }
+/// Marks the own word at `addr` (taken already, [`own`]) as a counted pointer: the drawing side's holds of it leave
+/// the counts to the join ([`end`]). Nothing without an open packet for `e`'s run.
+pub fn own_counted(e: &Engine, addr: u32) {
+    PACKET.with(|p| {
+        if let Some(p) = p.borrow_mut().as_mut() {
+            if p.run == run(e) && p.own_at(addr, 4).is_some() && !p.counted.contains(&addr) {
+                p.counted.push(addr);
+            }
+        }
+    });
+}
+
+/// Notes that main decided the own state's bytes `[addr, addr + len)` after the cut although it wrote nothing there (a
+/// hold of the object already held): the join keeps main's value for them, as a write would. Nothing on the thread
+/// whose packet serves `e`, or while no packet is open.
+pub fn note_write(e: &Engine, addr: u32, len: u32) {
+    if !active() {
+        return;
+    }
+    let mine = PACKET.with(|p| p.borrow().as_ref().is_some_and(|p| p.serves(e)));
+    if !mine {
+        mark(run(e), addr, len);
+    }
+}
+
 /// Whether this thread's open packet owns all of `[addr, addr + len)` in one own block (for the checks).
 pub fn owns(e: &Engine, addr: u32, len: u32) -> bool {
     PACKET.with(|p| {
@@ -634,6 +663,7 @@ pub fn end(e: &mut Engine) -> Report {
         }
     }
     let mut kept_main = 0;
+    let mut kept = vec![false; packet.own_bytes.len()];
     for b in &packet.own {
         let len = (b.hi - b.lo) as usize;
         let at = b.at as usize;
@@ -644,11 +674,29 @@ pub fn end(e: &mut Engine) -> Report {
         for (i, byte) in live.iter_mut().enumerate() {
             if marked[at + i] || *byte != cut[i] {
                 kept_main += 1;
+                kept[at + i] = true;
             } else {
                 *byte = draw[i];
             }
         }
         e.mem.write(b.lo, &live);
+    }
+    // The counted own words ([`own_counted`]): the drawing side's holds left the counts alone (a hold on main meanwhile
+    // let the cut's object go too); where the join takes the drawing side's object, its counts move now as the draw's
+    // own hold would have moved them in the serial order: the cut's object let go, the drawn one held. Where main held
+    // another (or the same, noted), main's holds already moved them as in the serial order.
+    for &addr in &packet.counted {
+        let Some(at) = packet.own_at(addr, 4) else {
+            continue;
+        };
+        if kept[at..at + 4].iter().any(|&k| k) {
+            continue;
+        }
+        let word = |b: &[u8]| u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]]);
+        let (cut, draw) = (word(&packet.own_cut), word(&packet.own_bytes));
+        if cut != draw {
+            super::own::move_count(e, cut, draw);
+        }
     }
     for object in &packet.held {
         typed_call!(

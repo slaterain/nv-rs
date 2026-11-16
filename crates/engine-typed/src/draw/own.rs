@@ -376,6 +376,14 @@ const SLOT_DELETE: u32 = 4;
 pub fn hold_accumulator(e: &mut Engine, object: u32) {
     let old = capture::own_at::<u32>(e, HELD_ACCUMULATOR);
     if old == object {
+        // Main deciding while the drawing side holds the packet: its value is main's at the join.
+        capture::note_write(e, HELD_ACCUMULATOR, 4);
+        return;
+    }
+    if capture::owns(e, HELD_ACCUMULATOR, 4) {
+        // The drawing side: the word is its own, and the counts move at the join (`capture::end`), so that a hold on
+        // main meanwhile, which lets the same old object go, does not let it go twice.
+        capture::set_own_at(e, HELD_ACCUMULATOR, object);
         return;
     }
     if old != 0 {
@@ -389,6 +397,22 @@ pub fn hold_accumulator(e: &mut Engine, object: u32) {
     capture::set_own_at(e, HELD_ACCUMULATOR, object);
     if object != 0 {
         e.call(INTERLOCKED_INCREMENT, &args![object.wrapping_add(4)]);
+    }
+}
+
+/// A counted pointer moved from `old` to `new` as [`hold_accumulator`] moves it: the old object's count down (deleted at
+/// 0, its slot 4), the new one's up. For the join ([`capture::end`]), which moves the drawing side's held accumulator.
+pub(crate) fn move_count(e: &mut Engine, old: u32, new: u32) {
+    if old != 0 {
+        let left = e
+            .call(INTERLOCKED_DECREMENT, &args![old.wrapping_add(4)])
+            .u32();
+        if left == 0 {
+            e.vcall(old, SLOT_DELETE, &[]);
+        }
+    }
+    if new != 0 {
+        e.call(INTERLOCKED_INCREMENT, &args![new.wrapping_add(4)]);
     }
 }
 

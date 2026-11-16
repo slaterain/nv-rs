@@ -157,12 +157,12 @@ fn write_rows(e: &mut Engine, rows: u32, transform: u32) {
     }
     let last = x87_m32(e.mem.u32(transform.wrapping_add(0x20)));
     e.mem.set_u32(at(8), x87_store32(x87_mul(s, last)));
-    for (target, source, origin) in [
-        (0u32.wrapping_sub(0x14), 0x24, ORIGIN),
-        (0u32.wrapping_sub(4), 0x28, ORIGIN + 4),
-        (0xc, 0x2c, ORIGIN + 8),
+    for (target, source, k) in [
+        (0u32.wrapping_sub(0x14), 0x24, 0u32),
+        (0u32.wrapping_sub(4), 0x28, 1),
+        (0xc, 0x2c, 2),
     ] {
-        let value = x87_sub(f(e, source), x87_m32(super::capture::own_at::<u32>(e, origin)));
+        let value = x87_sub(f(e, source), x87_m32(super::capture::own_at::<u32>(e, ORIGIN + 4 * k)));
         e.mem.set_u32(at(target), x87_store32(value));
     }
 }

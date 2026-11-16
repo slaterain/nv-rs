@@ -1435,6 +1435,15 @@ or 1, like every row): the thread with the value packet's POISON check, for test
   it stays off with a log line. Stepped threads (`NV_THREADS=stepped`) are its check form: the job runs when main
   waits for it, after the frame's tail, so a stepped run with it on must give the serial command stream byte for
   byte (the late gate, `measure/draw-thread/late-gate.sh`).
+- **The renderer's per-draw words are each side's own** (2026-11-16). Main draws its own scenes after the post (the
+  world pass's two extra passes, `00b6c0d0`) while the drawing side draws, and both write the renderer's words that a
+  draw sets before it reads them: the drawn geometry's property state and effects (+0xc, +0x10), the camera set-up's
+  matrices and vectors (`00e6c780`: view, projection, view-projection and inverse view, the camera's right and up, the
+  near plane and depth range, the eye at `011f474c`), the world matrix and the model-space directions (`00e6fbb0`) and
+  the drawn bound. Shared, the first posted frame stopped: main's finish (`00b66570`) cleared +0xc between the
+  particles' `00a80610` and the points draw `00e70140` on the helper, which read through it (address 0). The cut now
+  takes these words as own state (`draw::statics::RENDERER_BLOCKS`, `CAMERA_EYE`); `00e6c780` is typed in the draw
+  family so its writes go through the own accessors.
 - **Off**, the world pass's two calls and each join point cost one load and a branch; nothing is registered.
 - **For now every frame still draws on main by default**: the draw family's packet hand-off is in, but the geometry
   family, which the draw runs in, stays off until its gate (`NV_TYPED=geometry` turns it on). The host's choice

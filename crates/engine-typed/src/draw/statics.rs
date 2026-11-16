@@ -183,6 +183,9 @@ pub fn take(e: &Engine, acc: Ptr<BSShaderAccumulator>) {
     }
     take_renderers(e);
     capture::own(e, acc.addr(), ACC_CAMERA.0, ACC_CAMERA.1);
+    // The held accumulator (`011f95f0`, in [`ACCUMULATORS`]) is a counted pointer: the drawing side's holds move its
+    // objects' counts at the join (main's extra passes hold theirs meanwhile and let the same old one go).
+    capture::own_counted(e, super::own::HELD_ACCUMULATOR);
 }
 
 /// The renderers' per-draw words ([`RENDERER_BLOCKS`]) as own blocks (one renderer held twice is taken once).
@@ -239,10 +242,11 @@ mod tests {
         }
         let renderer = e.mem.alloc(0xa80);
         let geometry = e.mem.alloc(0x100);
+        let acc = e.mem.alloc(0x1a0);
         e.mem.set_u32(0x011f_4748, renderer);
         e.mem.set_u32(0x011f_9508, renderer);
         assert!(capture::begin(&e));
-        take_renderers(&e);
+        take(&e, Ptr::new(acc));
         // The drawing side: the particles' render immediate.
         crate::dispatch::scene::geometry_render_immediate(&mut e, Ptr::new(geometry), Ptr::new(renderer));
         // Main, with the packet on the drawing side's thread: its extra pass's finish.
@@ -259,6 +263,79 @@ mod tests {
         let report = capture::end(&mut e);
         assert_eq!(e.mem.u32(renderer + 0xc), 0);
         assert!(report.kept_main >= 4);
+    }
+
+    /// The held accumulator is a counted pointer (`00b54b10`): the drawing side holds the world's accumulator while main's
+    /// extra pass holds its own, both letting the cut's go. Its count goes down once, as in the serial order (the draw's
+    /// hold, then main's: the cut's object let go once, the world's held and let go); the second run's case, main
+    /// holding nothing new, leaves the drawing side's object held by the join.
+    #[test]
+    fn the_held_accumulator_is_let_go_once() {
+        for main_holds in [true, false] {
+            let mut e = Engine::new();
+            if !e.mem.is_mapped(0x011f_4000) {
+                e.map(0x011f_4000, 0x6000);
+            }
+            // `InterlockedIncrement` and `InterlockedDecrement` (their import slots): the new count.
+            fn step(e: &mut Engine, at: u32, by: u32) -> engine_core::Ret {
+                let v = e.mem.u32(at).wrapping_add(by);
+                e.mem.set_u32(at, v);
+                engine_core::Ret {
+                    eax: v,
+                    ..engine_core::Ret::default()
+                }
+            }
+            e.register(0x00fd_f1c0, |e, a| step(e, a[0], 1));
+            e.register(0x00fd_f1c4, |e, a| step(e, a[0], u32::MAX));
+            // Three accumulators (a counted object: its count at +4), the cut's held one at count 2.
+            let [cut, world, extra] = [0u32; 3].map(|_| e.mem.alloc(0x10));
+            for (a, count) in [(cut, 2u32), (world, 1), (extra, 1)] {
+                e.mem.set_u32(a + 4, count);
+            }
+            e.mem.set_u32(0x011f_95f0, cut);
+            let acc = e.mem.alloc(0x1a0);
+            assert!(capture::begin(&e));
+            take(&e, Ptr::new(acc));
+            // The drawing side's hold.
+            super::super::own::hold_accumulator(&mut e, world);
+            let packet = capture::detach(&e).expect("the packet");
+            if main_holds {
+                super::super::own::hold_accumulator(&mut e, extra);
+            }
+            assert!(capture::attach(packet).is_ok());
+            let _ = capture::end(&mut e);
+            let counts = [cut, world, extra].map(|a| e.mem.u32(a + 4));
+            if main_holds {
+                // Serial: cut 2 -> 1, world 1 -> 2 -> 1, extra 1 -> 2; held: extra.
+                assert_eq!(counts, [1, 1, 2]);
+                assert_eq!(e.mem.u32(0x011f_95f0), extra);
+            } else {
+                assert_eq!(counts, [1, 2, 1]);
+                assert_eq!(e.mem.u32(0x011f_95f0), world);
+            }
+        }
+    }
+
+    /// The drawing side's own finish clears its own property state, not main's: guest memory keeps what main has
+    /// until the join, and the join keeps the drawing side's clear where main wrote nothing.
+    #[test]
+    fn the_drawing_sides_finish_clears_its_own_property_state() {
+        let mut e = Engine::new();
+        if !e.mem.is_mapped(0x011f_4000) {
+            e.map(0x011f_4000, 0x6000);
+        }
+        let renderer = e.mem.alloc(0xa80);
+        let acc = e.mem.alloc(0x1a0);
+        e.mem.set_u32(0x011f_4748, renderer);
+        e.mem.set_u32(0x011f_9508, renderer);
+        e.mem.set_u32(renderer + 0xc, 0x1234_5678);
+        assert!(capture::begin(&e));
+        take(&e, Ptr::new(acc));
+        super::super::packet::clear_scene_word(&mut e);
+        assert_eq!(e.mem.u32(renderer + 0xc), 0x1234_5678, "main's stays");
+        assert_eq!(super::super::packet::current_property_state(&e, renderer), 0);
+        let _ = capture::end(&mut e);
+        assert_eq!(e.mem.u32(renderer + 0xc), 0, "the join takes the drawing side's");
     }
 
     /// Every renderer block the cut takes is inside the renderer's layout and apart from the others, and the camera's
@@ -355,6 +432,8 @@ mod tests {
             "set_constant_word",
             "own_get",
             "own_set",
+            "owns",
+            "note_write",
             // Helpers whose accesses to the own blocks go through the accessors. The constant entries, switch objects
             // and pass stages some of them reach through an owned slot (an entry's +8 and +0x20, a stage's +8) are
             // heap objects the cut does not own: in the drawing thread's plan every draw of the frame after the cut runs
