@@ -997,6 +997,32 @@ pub fn is_play_run(env: impl Fn(&str) -> Option<String>) -> bool {
     env("NV_SETTINGS").is_some()
 }
 
+/// A start-up line when a launcher's play run ([`is_play_run`]) runs as a test because the
+/// environment names a test's variable ([`TEST_VARIABLES`]) or a fix's own: it then gets none of
+/// play's choices (the vanilla preset unless `NV_PRESET`, stepped threads, no render thread,
+/// `Fallout.ini`'s `[nv-rs ...]` keys unread, the game's own framed window). `None` for any other
+/// run. (2026-11-16: `NV_UIO=1` handed over from the play folder's settings.ini did this, and the
+/// framed window, sized in scaled pixels, spilled onto the next monitor.)
+pub fn play_run_taken_as_test(env: impl Fn(&str) -> Option<String>) -> Option<String> {
+    if !is_play_run(&env) {
+        return None;
+    }
+    let names: Vec<&str> = TEST_VARIABLES
+        .iter()
+        .copied()
+        .chain(FIXES.iter().map(|f| f.env))
+        .filter(|name| env(name).is_some())
+        .collect();
+    (!names.is_empty()).then(|| {
+        format!(
+            "A launcher's play run with a test's variable ({}): it runs as a test: the vanilla preset unless NV_PRESET names one, \
+             stepped threads, no render thread, Fallout.ini's [nv-rs ...] keys not read, the game's own framed window. \
+             A fix is turned on for play in Fallout.ini's [nv-rs Fixes] section instead.",
+            names.join(", ")
+        )
+    })
+}
+
 /// The settings file's text: a UTF-8 byte order mark is dropped and UTF-16 (what PowerShell 5.1's
 /// `>` writes) is decoded; anything else is read as UTF-8, bad bytes replaced.
 fn decode_settings(bytes: &[u8]) -> String {
@@ -1640,6 +1666,45 @@ mod tests {
         assert!(is_play_run(env_of(&[("NV_SETTINGS", "")])));
         assert!(!is_play_run(env_of(&[("NV_SAVE_OUT", "x")])));
         assert!(!is_play_run(env_of(&[("NV_D3D9", "real")])));
+    }
+
+    /// A launcher's play run that a test's or a fix's variable makes a test says so at start-up
+    /// (2026-11-16: `NV_UIO=1` from the play folder took play's preset, threads and borderless
+    /// window away, and that line would have named it); a play run without one, and any run no
+    /// launcher started, says nothing. The line agrees with the choice: such a run is not
+    /// borderless.
+    #[test]
+    fn a_play_run_made_a_test_says_so() {
+        let note =
+            |pairs: &'static [(&'static str, &'static str)]| play_run_taken_as_test(env_of(pairs));
+        let uio = note(&[("NV_SETTINGS", "x"), ("NV_UIO", "1")]).unwrap();
+        assert!(
+            uio.starts_with("A launcher's play run with a test's variable (NV_UIO): "),
+            "{uio}"
+        );
+        assert!(uio.contains("framed window"));
+        assert_eq!(
+            with_ini(None, PLAYER_INI, &[("NV_UIO", "1")]).borderless,
+            None
+        );
+        let two = note(&[("NV_SETTINGS", "x"), ("NV_PROFILE", "x"), ("NV_UNCAP", "0")]).unwrap();
+        assert!(two.contains("(NV_PROFILE, NV_UNCAP)"), "{two}");
+        for name in TEST_VARIABLES {
+            let pairs: &'static [(&str, &str)] =
+                Box::leak(vec![("NV_SETTINGS", "x"), (*name, "x")].into_boxed_slice());
+            assert!(note(pairs).is_some(), "{name}");
+        }
+        assert_eq!(note(&[("NV_SETTINGS", "x")]), None);
+        assert_eq!(
+            note(&[
+                ("NV_SETTINGS", "x"),
+                ("NV_SAVE_OUT", "x"),
+                ("NV_D3D9", "wgpu")
+            ]),
+            None
+        );
+        assert_eq!(note(&[("NV_UIO", "1")]), None);
+        assert_eq!(note(&[]), None);
     }
 
     /// Play.exe takes the player options' variables out in play and passes the file's choices on

@@ -44,7 +44,9 @@ use std::collections::{HashMap, HashSet};
 use windows::core::PCSTR;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct3D9::*;
-use windows::Win32::Graphics::Gdi::ClientToScreen;
+use windows::Win32::Graphics::Gdi::{
+    ClientToScreen, GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleA;
 use windows::Win32::UI::HiDpi::{
     SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
@@ -895,6 +897,59 @@ fn refit_borderless(window: HWND) {
     }
 }
 
+/// The start-up line for the game's top-level window `window` just made ([`placement_line`]): its
+/// rectangle and its monitor's, as Windows gives them to the window thread (physical pixels with
+/// the borderless window, whose thread is per-monitor DPI aware; scaled ones without).
+fn placed(window: HWND, borderless: bool) -> String {
+    let rect = |r: RECT| [r.left, r.top, r.right, r.bottom];
+    let mut at = RECT::default();
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: queries of a window this thread made, into buffers sized for them.
+    let read = unsafe {
+        GetWindowRect(window, &mut at).is_ok()
+            && GetMonitorInfoW(
+                MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY),
+                &mut info,
+            )
+            .as_bool()
+    };
+    if !read {
+        return "the game's window: its place could not be read".to_string();
+    }
+    placement_line(
+        borderless,
+        rect(at),
+        rect(info.rcMonitor),
+        info.dwFlags & MONITORINFOF_PRIMARY != 0,
+    )
+}
+
+/// What the start-up line says of the game's top-level window: borderless or framed, its
+/// rectangle `window`, the monitor it is on (`monitor`, the primary one or not) and, for the
+/// borderless window, whether it covers that monitor exactly. A framed window is then placed and
+/// sized by the game itself (`window_moved`: `iLocation X`/`Y`, the game's size with its frame),
+/// in scaled pixels on a monitor with display scaling.
+fn placement_line(borderless: bool, window: [i32; 4], monitor: [i32; 4], primary: bool) -> String {
+    let which = if primary { "primary" } else { "other" };
+    if borderless {
+        let covers = if window == monitor {
+            "covers it exactly"
+        } else {
+            "does NOT cover it exactly"
+        };
+        format!(
+            "the game's window is borderless at {window:?} (physical pixels), on the {which} monitor {monitor:?}: it {covers}"
+        )
+    } else {
+        format!(
+            "the game's window keeps its frame, placed and sized by the game (not borderless: bBorderless=0, or a run that is no launcher's play run, such as a test); made at {window:?} on the {which} monitor {monitor:?}"
+        )
+    }
+}
+
 unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
     let module = GetModuleHandleA(None).unwrap_or_default();
     let class = WNDCLASSA {
@@ -956,6 +1011,7 @@ unsafe fn run_window_thread(rx: std::sync::mpsc::Receiver<Request>) {
                 Ok(w) => {
                     if !child {
                         register_raw_mouse(w);
+                        eprintln!("NV_D3D9={}: {}", tag(), placed(w, borderless));
                     }
                     if borderless {
                         BORDERLESS_WINDOW.store(w.0 as isize, std::sync::atomic::Ordering::Relaxed);
@@ -3645,6 +3701,55 @@ pub(crate) fn real_texture(e: &mut Engine, texture: u32) -> Option<IDirect3DBase
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The start-up line names the window's rectangle and its monitor's, and says whether the
+    /// borderless window covers that monitor exactly. The maintainer's desk of 2026-11-16 (physical
+    /// pixels): the primary 2560x1440 at 0,0, another to its right at 2560,2 and the laptop's
+    /// 1800x1125 panel at -2880,0, the two big ones at 125% scaling. The borderless window over
+    /// the primary covers it; one sized in scaled pixels (3200 wide) does not. A framed run says it
+    /// is not borderless and why that can be (tonight's cause: a fix's variable made the play run
+    /// a test).
+    #[test]
+    fn the_window_line_says_where_the_window_went() {
+        let primary = [0, 0, 2560, 1440];
+        let right = [2560, 2, 5120, 1442];
+        let laptop = [-2880, 0, -1080, 1125];
+        let line = placement_line(true, primary, primary, true);
+        assert_eq!(
+            line,
+            "the game's window is borderless at [0, 0, 2560, 1440] (physical pixels), on the primary monitor [0, 0, 2560, 1440]: it covers it exactly"
+        );
+        let spilled = placement_line(true, [0, 0, 3200, 1800], primary, true);
+        assert!(
+            spilled.ends_with("it does NOT cover it exactly"),
+            "{spilled}"
+        );
+        // Another monitor, also at negative coordinates: named as it is.
+        let other = placement_line(true, laptop, laptop, false);
+        assert!(
+            other.contains("on the other monitor [-2880, 0, -1080, 1125]: it covers it exactly")
+        );
+        assert!(placement_line(true, right, right, false).contains("covers it exactly"));
+        // Off by one on any side is not a cover.
+        for side in 0..4 {
+            let mut near = primary;
+            near[side] += 1;
+            assert!(
+                placement_line(true, near, primary, true).contains("does NOT"),
+                "{side}"
+            );
+        }
+        let framed = placement_line(false, [0, 0, 320, 240], primary, true);
+        assert!(
+            framed.starts_with("the game's window keeps its frame"),
+            "{framed}"
+        );
+        assert!(framed.contains("not borderless"));
+        assert!(
+            framed.ends_with("made at [0, 0, 320, 240] on the primary monitor [0, 0, 2560, 1440]")
+        );
+        assert!(!framed.contains("cover"));
+    }
 
     /// F11 is the port's frame-rate counter key: its press toggles the counter once, its repeats
     /// and release change nothing, and the game's keyboard never holds it (DIK_F11, 0x57), in the
