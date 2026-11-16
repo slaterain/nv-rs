@@ -264,15 +264,17 @@ fn set(e: &mut Engine, this: u32, args: &[Vec<u8>]) -> f64 {
 }
 
 fn entry(e: &mut Engine, key: u32) -> Option<ExtraJipEntry> {
-    e.ext::<crate::Jip>()
-        .saved
-        .extra_data
+    crate::cosave::extra_data(e)
         .get(&crate::containers::Uint(key))
         .cloned()
 }
 
 fn changed(e: &mut Engine) -> u8 {
-    e.ext::<crate::Jip>().saved.changed
+    crate::cosave::changed_flags(e)
+}
+
+fn clear_changed(e: &mut Engine) {
+    crate::cosave::set_changed(e, 0);
 }
 
 /// The `ExtraJIP` (type 0x27) of a list, 0 for none.
@@ -355,10 +357,8 @@ fn a_null_form_unuses_and_keeps_other_form_bits_only_where_used() {
     set(&mut e, REF, &[num(4.0), reff(1)]);
     // Index 4 left a form bit with no use: Set(4, 0) clears it through `typeBtf &= initBtf`.
     {
-        let jip = e.ext::<crate::Jip>();
-        let d = jip
-            .saved
-            .extra_data
+        let mut map = crate::cosave::extra_data(&mut e);
+        let d = map
             .get_mut(&crate::containers::Uint(0x1234))
             .unwrap()
             .data
@@ -389,7 +389,7 @@ fn texts_at_18_and_19() {
     let r = get(&mut e, REF, &[num(19.0)]);
     assert_eq!(string_result(&e, r), b"Mitchell");
     // A number at a text index stores nothing (it cannot be a string), but marks the change.
-    e.ext::<crate::Jip>().saved.changed = 0;
+    clear_changed(&mut e);
     set(&mut e, REF, &[num(18.0), num(5.0)]);
     let data = entry(&mut e, 0x1234).unwrap().data[&5].clone();
     assert_eq!(data.strings[0], b"Doc");
@@ -474,14 +474,12 @@ fn erase_the_mod_and_the_last_mod_takes_the_extra_off() {
     set(&mut e, REF, &[num(3.0), num(1.0)]);
     e.mem.set_u8(FILE + 0x40c, 6);
     set(&mut e, REF, &[num(3.0), num(2.0)]);
-    e.ext::<crate::Jip>()
-        .saved
-        .extra_data
+    crate::cosave::extra_data(&mut e)
         .get_mut(&crate::containers::Uint(0x1234))
         .unwrap()
         .ref_id = 0x0001_0001;
     // Mod 6's data erased: mod 5's stays, the extra and the entry's reference too.
-    e.ext::<crate::Jip>().saved.changed = 0;
+    clear_changed(&mut e);
     set(&mut e, REF, &[]);
     assert_eq!(changed(&mut e), 4);
     let entry_now = entry(&mut e, 0x1234).unwrap();
@@ -490,7 +488,7 @@ fn erase_the_mod_and_the_last_mod_takes_the_extra_off() {
     assert_ne!(xjip(&e, REF + 0x44), 0);
     assert!(calls_to(REMOVE_BY_TYPE_FN).is_empty());
     // Again: nothing to erase, no change mark.
-    e.ext::<crate::Jip>().saved.changed = 0;
+    clear_changed(&mut e);
     set(&mut e, REF, &[]);
     assert_eq!(changed(&mut e), 0);
     // Mod 5's: the last; the entry's reference cleared, the extra taken off.
@@ -996,4 +994,80 @@ fn texts_are_kept_as_jips_strings_hold_them() {
     assert_eq!(data.strings[0], b"Doc");
     let r = get(&mut e, REF, &[num(18.0)]);
     assert_eq!(string_result(&e, r), b"Doc");
+}
+
+/// One test engine moved to its own OS thread (`Engine` is not `Send`: its handlers are `Rc`s).
+struct OnItsThread(Engine);
+// SAFETY: each engine is used by the one thread it is moved to, and nothing of it is kept on the
+// test's thread; what the two share is what a real thread's engine shares (`share_slots_for_test`).
+unsafe impl Send for OnItsThread {}
+
+/// Two OS threads, each with its own engine of one run (a real thread's, sharing the run's slots
+/// as `ExtendState::for_thread` does), set and read their own mod's values on the same key's entry
+/// at once, as fast as they can: both finish (no lock taken in the wrong order or held across a
+/// call into the game's code) and every last value of both mods is in the map (one take of the
+/// map's lock per write: neither write drops the other's mod).
+#[test]
+fn two_threads_at_once_neither_wait_forever_nor_lose_a_value() {
+    const ROUNDS: u32 = 3_000;
+    let mut a = setup();
+    set(&mut a, REF, &[num(0.0), num(1.0)]);
+    engine_core::extend::release_held_for_test();
+    // The second engine: the same memory (the reference, its ExtraJIP under key 0x1234), the
+    // script's mod 6; the run's slots shared.
+    let mut b = setup();
+    for (at, len) in [(FORMS, 0x10_0000), (HEAP, 0x10_0000)] {
+        let bytes = a.mem.bytes(at, len);
+        b.mem.write(at, &bytes);
+    }
+    b.mem.set_u8(FILE + 0x40c, 6);
+    a.share_slots_for_test(&mut b);
+    engine_core::extend::release_held_for_test();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut threads = Vec::new();
+    for (engine, other_mod) in [(OnItsThread(a), 6.0), (OnItsThread(b), 5.0)] {
+        let (done, barrier) = (done_tx.clone(), barrier.clone());
+        threads.push(std::thread::spawn(move || {
+            let mut w = engine;
+            let e = &mut w.0;
+            CALLED.with(|c| c.borrow_mut().clear());
+            barrier.wait();
+            for i in 0..ROUNDS {
+                let (index, value) = (f64::from(i % 18), f64::from(i + 1));
+                set(e, REF, &[num(index), num(value)]);
+                engine_core::extend::release_held_for_test();
+                assert_eq!(get(e, REF, &[num(index)]), value, "its own value read back");
+                engine_core::extend::release_held_for_test();
+                // The other thread's mod read while it writes: any value, never a fault.
+                get(e, REF, &[num(index), num(other_mod)]);
+                engine_core::extend::release_held_for_test();
+            }
+            done.send(()).expect("the test waits");
+            w
+        }));
+    }
+    for _ in 0..2 {
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("both threads finish (no deadlock)");
+    }
+    let mut engines: Vec<Engine> = threads
+        .into_iter()
+        .map(|t| t.join().expect("no thread failed").0)
+        .collect();
+    let entry = entry(&mut engines[0], 0x1234).expect("the key's entry");
+    for m in [5, 6] {
+        let data = &entry.data[&m];
+        for index in 0..18u32 {
+            // The last round that wrote `index`: ROUNDS - 18 + ... (rounds go 0..ROUNDS).
+            let last = (0..ROUNDS).rev().find(|i| i % 18 == index).unwrap();
+            assert_eq!(
+                data.values[index as usize],
+                ((last + 1) as f32).to_bits(),
+                "mod {m}, index {index}: the last value kept"
+            );
+        }
+    }
+    engine_core::extend::release_held_for_test();
 }

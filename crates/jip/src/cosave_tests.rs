@@ -746,20 +746,22 @@ fn extra_data_texts_round_trip_with_the_keys_after_them() {
         (1u32, 0x0700_0010u32, 6u32, &first),
         (2, 0x0700_0020, 7, &second),
     ] {
-        s(&mut w.e).extra_data.emplace(Uint(key)).ref_id = id;
-        s(&mut w.e)
-            .extra_data
-            .get_mut(&Uint(key))
-            .unwrap()
-            .data
-            .insert(m, data.clone());
+        let mut map = crate::cosave::extra_data(&mut w.e);
+        let entry = map.emplace(Uint(key));
+        entry.ref_id = id;
+        entry.data.insert(m, data.clone());
     }
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     let file = cosave(&written(&mut w.e));
-    s(&mut w.e).extra_data.clear();
-    s(&mut w.e).changed = changed::ALL;
+    crate::cosave::extra_data(&mut w.e).clear();
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
     load_file(&mut w.e, &file);
-    let entry = |w: &mut World, key: u32| s(&mut w.e).extra_data.get(&Uint(key)).cloned().unwrap();
+    let entry = |w: &mut World, key: u32| {
+        crate::cosave::extra_data(&mut w.e)
+            .get(&Uint(key))
+            .cloned()
+            .unwrap()
+    };
     let one = entry(&mut w, 1);
     assert_eq!(one.data[&6].strings, [b"aaaaa".to_vec(), b"x".to_vec()]);
     assert_eq!(one.ref_id, 0x0700_0010);

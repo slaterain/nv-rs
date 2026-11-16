@@ -2,19 +2,20 @@
 //! inventory stack (`RefHasExtraData`, `GetRefExtraData`, `SetRefExtraData`), kept per mod: 18
 //! numbers or form ids and 2 texts under a key the reference's `ExtraJIP` holds (group GH1's
 //! framework, row G44: [`crate::game_patches::gh1`]; the co-save's `JPED` record,
-//! [`crate::cosave::Saved::extra_data`]). The two last are expression-format commands: their
+//! [`crate::cosave::ExtraData`]). The two last are expression-format commands: their
 //! arguments are read by xNVSE's expression evaluator ([`nvse::expr::Eval`]) as JIP's
 //! `PluginExpressionEvaluator` reads them.
 //!
-//! State: JIP's map of data (`s_extraDataKeysMap`) and its changed flags are reached through one
-//! accessor, [`saved`]; when the hooks follow-up (#614's second part) moves the map out of JIP's
-//! shared slot into a lock-free one, that function is the one line to change (with
-//! `gh1::make_key`, which reaches the map itself).
+//! State: JIP's map of data (`s_extraDataKeysMap`) is [`cosave::extra_data`] (a std `Mutex` in a
+//! lock-free slot, not JIP's shared slot) and its changed flag is set with
+//! [`cosave::mark_changed`], as group GH1's routines reach them.
 //!
-//! Threads and locks: the commands run on the main thread. As JIP's `XDATA_CS`, each takes the
-//! game's extra data lock (`0x11C3920`, the exe's recursive enter `0x40FBF0` and leave `0x40FBA0`)
-//! around its reads and writes, before it reaches JIP's shared slot, in the order group GH1's
-//! seams use (the game holds the lock when they run and they take the slot).
+//! Threads and locks: the commands run on the main thread or a script's. As JIP's `XDATA_CS`, each
+//! takes the game's extra data lock (`0x11C3920`, the exe's recursive enter `0x40FBF0` and leave
+//! `0x40FBA0`) around its reads and writes, and inside it takes the map's lock, a leaf: one take
+//! per read or write, never held across a call into the game's code (`gh1::make_key` draws its
+//! key before the map is taken; an `ExtraJIP` is taken off the list after the map is let go), the
+//! order group GH1's routines use (the game holds `XDATA_CS` when they run and they take the map).
 //!
 //! Deliberate differences, where JIP (with xNVSE's inventory references) would read through null,
 //! read or write freed memory, or overrun its own buffers:
@@ -51,9 +52,8 @@ use super::extra;
 use super::jip_fn_aux_variable::overriding_mod;
 use super::{cvttsd2si, Handlers};
 use crate::containers::Uint;
-use crate::cosave::{changed, ExtraJipData, Saved};
+use crate::cosave::{self, changed, ExtraJipData};
 use crate::game_patches::gh1;
-use crate::Jip;
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::expr::{expect_return_type, Eval, Tok, Ty};
@@ -91,11 +91,6 @@ const CHANGED_EXTRA_DATA: u32 = 0x400;
 const VALUES: u32 = 18;
 const LAST_INDEX: u32 = 19;
 
-/// JIP's saved data (the extra data map and the changed flags): the one accessor.
-fn saved(e: &mut Engine) -> &mut Saved {
-    &mut e.ext::<Jip>().saved
-}
-
 /// `XDATA_CS` around `f`.
 fn with_extra_data_lock<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
     e.call(LOCK_ENTER, &args![EXTRA_DATA_CS, 0u32]);
@@ -127,8 +122,7 @@ fn jip_data(e: &mut Engine, refr: u32, mod_index: u32) -> Option<ExtraJipData> {
         return None;
     }
     let key = e.mem.u32(xjip + XJIP_KEY);
-    saved(e)
-        .extra_data
+    cosave::extra_data(e)
         .get(&Uint(key))
         .and_then(|entry| entry.data.get(&mod_index))
         .cloned()
@@ -449,15 +443,13 @@ fn set_value(e: &mut Engine, refr: u32, mod_index: u32, var: u32, value: Stored)
         e.mem.set_u32(xjip + XJIP_KEY, key);
         extra::mark_modified(e, owner, CHANGED_EXTRA_DATA);
     }
-    let s = saved(e);
-    let data = s
-        .extra_data
-        .emplace(Uint(key))
-        .data
-        .entry(mod_index)
-        .or_default();
-    store(data, var, value);
-    s.changed |= changed::EXTRA_DATA;
+    // One take of the map's lock (the key drawn above, outside it).
+    {
+        let mut map = cosave::extra_data(e);
+        let data = map.emplace(Uint(key)).data.entry(mod_index).or_default();
+        store(data, var, value);
+    }
+    cosave::mark_changed(e, changed::EXTRA_DATA);
 }
 
 /// The mod's data erased from the list's `ExtraJIP`; when no mod has data left there (the
@@ -469,14 +461,18 @@ fn erase_on(e: &mut Engine, list: u32, mod_index: u32) -> Option<(u32, u32)> {
         return None;
     }
     let key = e.mem.u32(xjip + XJIP_KEY);
-    let s = saved(e);
-    let entry = s.extra_data.get_mut(&Uint(key))?;
-    entry.data.remove(&mod_index)?;
-    let emptied = entry.data.is_empty();
-    if emptied {
-        entry.ref_id = 0;
-    }
-    s.changed |= changed::EXTRA_DATA;
+    // One take of the map's lock, let go before the list is changed (game code).
+    let emptied = {
+        let mut map = cosave::extra_data(e);
+        let entry = map.get_mut(&Uint(key))?;
+        entry.data.remove(&mod_index)?;
+        let emptied = entry.data.is_empty();
+        if emptied {
+            entry.ref_id = 0;
+        }
+        emptied
+    };
+    cosave::mark_changed(e, changed::EXTRA_DATA);
     if !emptied {
         return None;
     }
