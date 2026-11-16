@@ -624,6 +624,18 @@ fn ntfs_key(units: &[u16]) -> Vec<u16> {
         .collect()
 }
 
+/// The host path of `path`, a path as the game's ANSI calls carry it ([`real_path`]): for the
+/// mod files folder ([`super::mod_files`]), which keeps a mod's names as the game passes them.
+pub fn host_path(path: &[u8]) -> std::path::PathBuf {
+    real_path(path)
+}
+
+/// Whether the full path `path` is a directory, as `GetFileAttributesA` answers: one the game
+/// made in this run, else the player's ([`attributes`]).
+pub fn is_directory(e: &Engine, path: &[u8]) -> bool {
+    attributes(e, path).is_some_and(|a| a & FILE_ATTRIBUTE_DIRECTORY != 0)
+}
+
 /// The bytes of the file at the full path `path`: as the game made it in this run, else the
 /// player's file (read only); `None` when the game deleted it or there is none.
 pub fn read_whole(e: &Engine, path: &[u8]) -> Option<Vec<u8>> {

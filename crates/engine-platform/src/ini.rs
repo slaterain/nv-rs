@@ -8,76 +8,35 @@ use crate::prelude::*;
 
 use super::{d3d9, files};
 
-/// ASCII white space taken off both ends (`<[u8]>::trim_ascii` is newer than the MSRV).
-trait TrimSpaces {
-    fn trim_spaces(&self) -> &Self;
-}
+/// The value of a key as `GetPrivateProfileStringA` reads it: the core's (`engine_core::mod_files`,
+/// which the extenders' mod files share); its measured answers are this file's tests.
+pub use engine_core::mod_files::ini_value;
 
-impl TrimSpaces for [u8] {
-    fn trim_spaces(&self) -> &[u8] {
-        let start = self
-            .iter()
-            .position(|b| !b.is_ascii_whitespace())
-            .unwrap_or(self.len());
-        let end = self
-            .iter()
-            .rposition(|b| !b.is_ascii_whitespace())
-            .map_or(start, |i| i + 1);
-        &self[start..end.max(start)]
-    }
-}
-
-/// The value of `key` in section `section` of the INI text `text` (names compared without case,
-/// spaces around names and values trimmed, one pair of surrounding quotes taken off), as
-/// `GetPrivateProfileStringA` finds it: only in the first section of that name, as Windows reads
-/// a file with a repeated section name (measured on scratch files, 2026-11-09; the test
-/// `only_the_first_section_of_a_name_is_read` holds the answers).
-fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let section = section.trim_spaces();
-    let mut inside = false;
-    for line in text.split(|&b| b == b'\n') {
-        let line = line.trim_spaces();
-        if let Some(rest) = line.strip_prefix(b"[") {
-            // The first section of the name ends here: Windows reads no later one.
-            if inside {
-                return None;
-            }
-            let name = rest.split(|&b| b == b']').next().unwrap_or(rest);
-            inside = name.trim_spaces().eq_ignore_ascii_case(section);
-            continue;
-        }
-        if !inside {
-            continue;
-        }
-        let Some(at) = line.iter().position(|&b| b == b'=') else {
-            continue;
-        };
-        if line[..at].trim_spaces().eq_ignore_ascii_case(key) {
-            let value = line[at + 1..].trim_spaces();
-            let value = match value {
-                [b'"', middle @ .., b'"'] => middle,
-                _ => value,
-            };
-            return Some(value.to_vec());
-        }
-    }
-    None
-}
-
-/// The text of the profile file `file` names: a name without a full path is in the Windows
-/// directory, as the profile functions look for it (`d3d9::windows_directory`, from the
-/// player's table); the file as the game made it in this run when it did (`files`), else the
-/// player's file, read only. `None` when there is none.
-fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
-    let name = e.mem.cstr(file.addr());
-    let path = if files::is_full_path(&name) {
-        name
+/// Where the profile functions look for the file `name` names (measured on scratch files,
+/// 2026-11-16, `build43-scratch/measure/mcm/ini-measure/ini-2026-11-16.txt`): a bare name (no `\`
+/// or `/`) is in the Windows directory (`d3d9::windows_directory`, from the player's table); a
+/// full path is itself; any other name with a folder part (`Data\Config\MCM.ini`,
+/// `Data/Config/MCM.ini`, `.\name.ini`) is relative to the current directory. Before 2026-11-16
+/// every name that was not a full path was looked for in the Windows directory.
+fn profile_path(e: &mut Engine, name: &[u8]) -> Vec<u8> {
+    if files::is_full_path(name) {
+        name.to_vec()
+    } else if name.iter().any(|&b| b == b'\\' || b == b'/') {
+        files::full_path(e, name)
     } else {
         let mut path = d3d9::windows_directory(e);
         path.push(b'\\');
-        path.extend_from_slice(&name);
+        path.extend_from_slice(name);
         path
-    };
+    }
+}
+
+/// The text of the profile file `file` names ([`profile_path`]): the file as the game made it
+/// in this run when it did (`files`), else the player's file, read only. `None` when there is
+/// none.
+fn profile_text(e: &mut Engine, file: Ptr) -> Option<Vec<u8>> {
+    let name = e.mem.cstr(file.addr());
+    let path = profile_path(e, &name);
     files::read_whole(e, &path)
 }
 
@@ -364,6 +323,30 @@ mod tests {
         for &(value, want) in measured {
             assert_eq!(profile_int(value), want, "{:?}", std::str::from_utf8(value));
         }
+    }
+
+    /// Where a name is looked for, as Windows looked on scratch files (2026-11-16): a name with a
+    /// folder part from the current directory (both separators, `.\` too), a bare name from the
+    /// Windows directory, a full path as it is.
+    #[test]
+    fn a_name_with_a_folder_part_is_relative_to_the_current_directory() {
+        let mut e = engine();
+        e.kernel.current_directory = br"C:\Games\FNV".to_vec();
+        assert_eq!(
+            profile_path(&mut e, br"Data\Config\MCM.ini"),
+            br"C:\Games\FNV\Data\Config\MCM.ini"
+        );
+        assert_eq!(
+            profile_path(&mut e, b"Data/Config/MCM.ini"),
+            b"C:\\Games\\FNV\\Data/Config/MCM.ini"
+        );
+        assert_eq!(
+            profile_path(&mut e, br".\bare.ini"),
+            br"C:\Games\FNV\bare.ini"
+        );
+        assert_eq!(profile_path(&mut e, br"D:\x\y.ini"), br"D:\x\y.ini");
+        // A bare name goes to the Windows directory, from the machine's table (not loaded in
+        // this test), as before.
     }
 
     /// A missing file gives the default, cut to the buffer; writing changes nothing and answers 1.
