@@ -282,7 +282,7 @@ impl Default for Saved {
     }
 }
 
-fn saved(e: &mut Engine) -> &mut Saved {
+pub(crate) fn saved(e: &mut Engine) -> &mut Saved {
     &mut e.ext::<Jip>().saved
 }
 
