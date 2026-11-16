@@ -1121,7 +1121,14 @@ the backup package's move-away distance is JIP's variable (`009ed380` at `0x9ED3
 (G42); while JIP's hit effects are off (`ToggleImmortalMode 2`; also `ToggleHitEffects 0` once
 that command is built: it is not built yet), an
 explosion in the player's face shows no image space (`009acd60` at `0x9ACEC6`) and explosions shake
-no screen (`0x9AD2C5`) (G124, G125). With the hit effects on (the default) the original's.
+no screen (`0x9AD2C5`) (G124, G125). With the hit effects on (the default) the original's. Every
+combat controller is made 4 bytes bigger to hold JIP's excluded combat actions for its actor
+(`00670b90` at `0x670C30`; `00992110`, `009922b0`, `009923d0` at `0x9921C2`, `0x992352`,
+`0x992416`; its constructor `0097d3a0` clears them at `0x97D55F` and copies the actor's at
+`0x97D71F`), and the combat planner never picks an excluded action (`009950c0` at `0x9951B3`)
+(H16). Only JIP's `SetExcludedCombatActions` excludes actions, and that command is not built yet,
+so until it is NPCs fight as in the original; the actors' list is emptied before each load, as
+JIP does.
 
 #### GE: Actors: movement, life, NPC perks
 

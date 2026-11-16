@@ -394,6 +394,22 @@ pub fn fn_008c7bc0(e: &mut Engine) -> u8 {
     e.global::<u8>(SECOND_FLAG_BYTE)
 }
 
+/// The step `00455640` on the word at `OBJECT_D` (`mov ecx, [0x11DEA10]; call 0x455640`), at
+/// `site` (`0x8C7C4E` in `008c7bd0`, `0x8C7E18` in `008c7da0`). JIP's H12 (its own; group GL's
+/// row and handler, `UpdateAnimatedLightsHook`) replaces the call: the seam is asked with [the
+/// word] and any answer skips it. One load while JIP is not installed.
+fn animated_lights(e: &mut Engine, site: u32) {
+    let object = e.mem.u32(OBJECT_D);
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(site, &[object])
+    } else {
+        None
+    };
+    if jip.is_none() {
+        e.call(STEP_00455640, &args![object]);
+    }
+}
+
 // Translated from 008c7bd0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// One fixed sequence of steps: signals slots and stages of the table
 /// between calls into the game's subsystems, then records stages 6, 0xb and
@@ -411,8 +427,7 @@ pub fn fn_008c7bd0(e: &mut Engine) {
     e.call(STEP_0096CCA0, &args![OBJECT_C]);
     e.call(STEP_0096CDA0, &args![OBJECT_C]);
     e.call(STEP_0040FBA0, &args![OBJECT_B]);
-    let object = e.mem.u32(OBJECT_D);
-    e.call(STEP_00455640, &args![object]);
+    animated_lights(e, 0x008c_7c4e);
     e.call(STEP_0040FBF0, &args![OBJECT_B, 0u32]);
     e.call(STEP_009784C0, &args![OBJECT_C]);
     e.call(STEP_0040FBA0, &args![OBJECT_B]);
@@ -462,8 +477,7 @@ pub fn fn_008c7da0(e: &mut Engine) {
     e.call(STEP_0096CCA0, &args![OBJECT_C]);
     e.call(STEP_0096CDA0, &args![OBJECT_C]);
     signal(e, 0, 2);
-    let object = e.mem.u32(OBJECT_D);
-    e.call(STEP_00455640, &args![object]);
+    animated_lights(e, 0x008c_7e18);
     signal(e, 0, 3);
     let object = e.mem.u32(OBJECT_A);
     e.call(STEP_00991DC0, &args![object]);
@@ -1064,7 +1078,18 @@ mod object_tests {
     /// Runs the sequence at `entry` and returns the engine, the object and
     /// the log.
     fn run_sequence(entry: u32, sequence: &str, optional: bool) -> (Engine, u32, Log) {
+        run_sequence_with(entry, sequence, optional, |_| {})
+    }
+
+    /// [`run_sequence`] with `setup` run on the engine first.
+    fn run_sequence_with(
+        entry: u32,
+        sequence: &str,
+        optional: bool,
+        setup: impl FnOnce(&mut Engine),
+    ) -> (Engine, u32, Log) {
         let mut e = Engine::new();
+        setup(&mut e);
         let this = object(&mut e);
         let mut addrs = expected_addresses(sequence, true);
         addrs.sort_unstable();
@@ -1143,6 +1168,70 @@ mod object_tests {
                 .map(|c| c.1[0])
                 .collect();
             assert_eq!(events, vec![0x1000, 0x1001]);
+        }
+    }
+
+    thread_local! {
+        /// H12's asks (the site, its words) and the answer to give.
+        static H12: std::cell::RefCell<(Vec<(u32, Vec<u32>)>, Option<u32>)> =
+            const { std::cell::RefCell::new((Vec::new(), None)) };
+    }
+
+    fn at_h12<const SITE: u32>(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H12.with(|s| {
+            let mut s = s.borrow_mut();
+            s.0.push((SITE, a.to_vec()));
+            s.1
+        })
+    }
+
+    /// JIP's H12 seams (its own; group GL's row and handler, tested here with a test handler) at
+    /// `0x8C7C4E` (`008c7bd0`) and `0x8C7E18` (`008c7da0`): not asked while JIP is not installed;
+    /// asked with JIP installed (whatever the fixes row), each function at its own address with
+    /// [the word at `011dea10`]; any answer skips the call `00455640`, no answer makes it; the
+    /// rest of the sequence is unchanged.
+    #[test]
+    fn h12_seams_replace_the_animated_lights_call() {
+        use engine_core::extend::jip_patches;
+        for (entry, site, sequence) in [
+            (0x008c_7bd0, 0x008c_7c4e, SEQUENCE_7BD0),
+            (0x008c_7da0, 0x008c_7e18, SEQUENCE_7DA0),
+        ] {
+            for word in [
+                0,
+                jip_patches::FIXES,
+                jip_patches::INSTALLED,
+                jip_patches::INSTALLED | jip_patches::FIXES,
+            ] {
+                let installed = word & jip_patches::INSTALLED != 0;
+                for answer in [Some(0), Some(1), None] {
+                    H12.with(|s| *s.borrow_mut() = (Vec::new(), answer));
+                    let (_, _, calls) = run_sequence_with(entry, sequence, true, |e| {
+                        e.on_site_for_test(0x008c_7c4e, at_h12::<0x008c_7c4e>);
+                        e.on_site_for_test(0x008c_7e18, at_h12::<0x008c_7e18>);
+                        e.set_jip_patches(word);
+                    });
+                    let asked = H12.with(|s| std::mem::take(&mut s.borrow_mut().0));
+                    assert_eq!(
+                        asked,
+                        if installed {
+                            vec![(site, vec![0xd000])]
+                        } else {
+                            vec![]
+                        },
+                        "{entry:x} {word:x} {answer:?}"
+                    );
+                    let skipped = installed && answer.is_some();
+                    let mut expected = expected_addresses(sequence, true);
+                    if skipped {
+                        expected.retain(|addr| *addr != STEP_00455640);
+                    }
+                    assert_eq!(addresses(&calls), expected, "{entry:x} {word:x} {answer:?}");
+                    if !skipped {
+                        assert_eq!(find(&calls, STEP_00455640), vec![0xd000]);
+                    }
+                }
+            }
         }
     }
 
