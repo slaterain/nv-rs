@@ -38,9 +38,43 @@ pub fn fixed_cpuid(leaf: u32) -> Option<[u32; 4]> {
     }
 }
 
+/// The `CPUID` instruction with `EAX = leaf` on this machine (`EAX`, `EBX`, `ECX`, `EDX`): the
+/// processor's own answer on x86 and x86-64 (NiMain's probe, `engine-gamebryo`'s `00a74a10`).
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub fn host_cpuid(leaf: u32) -> Option<[u32; 4]> {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::__cpuid;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::__cpuid;
+    // SAFETY: CPUID is available on every x86 CPU the game runs on.
+    #[allow(unused_unsafe)] // an unsafe fn on the MSRV (1.75), safe on newer toolchains
+    let answer = unsafe { __cpuid(leaf) };
+    Some([answer.eax, answer.ebx, answer.ecx, answer.edx])
+}
+
+/// The `CPUID` answer on a machine without the instruction (Apple silicon): the fixed answer of an
+/// x86-64 PC ([`fixed_cpuid`]).
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+pub fn host_cpuid(leaf: u32) -> Option<[u32; 4]> {
+    fixed_cpuid(leaf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every machine's answer has the extended leaf's bit 31 and SSE2, the real processor's on
+    /// x86-64 and the fixed one elsewhere (this runs on CI's Apple silicon runner too).
+    #[test]
+    fn this_machines_answer_has_the_bits_a_pc_has() {
+        assert_ne!(host_cpuid(0x8000_0000).unwrap()[0] & 0x8000_0000, 0);
+        assert_ne!(host_cpuid(1).unwrap()[3] & 0x0400_0000, 0);
+        if cfg!(not(any(target_arch = "x86", target_arch = "x86_64"))) {
+            for leaf in [0, 1, 0x8000_0000] {
+                assert_eq!(host_cpuid(leaf), fixed_cpuid(leaf));
+            }
+        }
+    }
 
     /// The tested bits as an x86-64 PC answers them: SSE2 for `__get_sse2_info`; bit 31 of the
     /// extended leaf (mode 6 in NiMain's probe), and MMX, CMOV and SSE should leaf 1 be read.
