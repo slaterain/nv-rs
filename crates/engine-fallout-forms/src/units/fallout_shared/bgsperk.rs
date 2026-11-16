@@ -940,6 +940,18 @@ pub fn fn_005eb5e0(e: &mut Engine, this: Ptr) -> u8 {
     result
 }
 
+/// The jump at `0x5EB79A` in [`fn_005eb6a0`] after an entry of kind 2 went to slot 0x30 with the
+/// player: the exe's goes on with the player's next list item (`jmp 0x5EB7B2`), so the entry is
+/// applied to the player once per item. JIP LN NVSE's G12 (a fix, the row `NV_JIP_GAME_PATCHES`)
+/// writes the jump's byte `0x23` at `0x5EB79B` (`jmp 0x5EB7BF`: the perk's next entry): the seam
+/// at `0x5EB79B` answers whether to (any answer). With the word's `FIXES` bit clear: one load,
+/// then no.
+#[inline]
+fn player_entry_once(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x005e_b79b, &[]).is_some()
+}
+
 // Translated from 005eb6a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Applies or removes the perk's entries for `actor` (four stack words: the
 /// actor, two ranks and a flag; the ranks and flag are bytes). Without the
@@ -984,6 +996,9 @@ pub fn fn_005eb6a0(
                         if e.vcall(entry, 0x10, &args![]).u32() == 2 {
                             let player = e.mem.u32(PLAYER);
                             e.vcall(entry, 0x30, &args![player, u32::from(flag)]);
+                            if player_entry_once(e) {
+                                break;
+                            }
                         } else {
                             e.vcall(entry, 0x30, &args![item, u32::from(flag)]);
                         }
@@ -2825,6 +2840,93 @@ mod b028_tests {
         e.call_log = Some(vec![]);
         e.call(0x005e_b6a0, &args![perk, 0x7000u32, 1u32, 3u32, 1u32]);
         assert!(calls_to(&e.call_log.take().unwrap(), 0x0090_0030).is_empty());
+    }
+
+    /// Where G12's test handler (JIP LN NVSE step 3.9 GF) counts its calls and reads its answer.
+    const G12_ASKED: u32 = 0x0538_0000;
+
+    /// [`fn_005eb6a0`] with the flag for a perk whose entries are a kind-2 entry then a kind-0
+    /// one, the player with two teammates, G12's seam handled by a test handler, the word
+    /// `word`: the slot 0x30 calls and the handler's count.
+    fn g12_run(word: u32, answer: bool) -> (Vec<Vec<u32>>, u32, u32, u32) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        e.map(0x011d_e000, 0x1000);
+        e.map(G12_ASKED, 0x1000);
+        e.mem.set_u32(PLAYER, 0x0abc_0000);
+        vtable(&mut e, 0x0200_0000, &[(0x30, 0x0090_0030)]);
+        e.mem.set_u32(0x0200_0000 + 0x10, 0x0090_0010);
+        e.register(0x0090_0010, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        let entry = |e: &mut Engine, kind: u32| {
+            let p = object(e, 0x0200_0000, 0xc);
+            e.mem.set_u32(p + 8, kind);
+            p
+        };
+        let to_player = entry(&mut e, 2);
+        let to_item = entry(&mut e, 0);
+        let perk = e.mem.alloc(0x50);
+        fill_list(&mut e, perk + 0x48, &[to_player, to_item]);
+        let items = e.mem.alloc(8);
+        fill_list(&mut e, items, &[0x0101, 0x0202]);
+        e.register(0x005a_4910, |_, _| 2u32.into_ret());
+        e.register_double(0x005e_b7e0, move |_, _| items.into_ret());
+        e.mem.set_u32(G12_ASKED + 4, u32::from(answer));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005e_b79b), |e, a| {
+            assert!(a.is_empty());
+            e.mem.set_u32(G12_ASKED, e.mem.u32(G12_ASKED) + 1);
+            (e.mem.u32(G12_ASKED + 4) != 0).then_some(1)
+        });
+        e.set_jip_patches(word);
+        e.call_log = Some(vec![]);
+        e.call(0x005e_b6a0, &args![perk, 0x7000u32, 1u32, 3u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        (
+            calls_to(&log, 0x0090_0030),
+            e.mem.u32(G12_ASKED),
+            to_player,
+            to_item,
+        )
+    }
+
+    /// G12 off (JIP not installed, or installed with the row off): the seam is not asked and the
+    /// kind-2 entry goes to the player once per teammate, as the exe's.
+    #[test]
+    fn g12_seam_does_nothing_while_off() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            let (calls, asked, to_player, to_item) = g12_run(word, true);
+            assert_eq!(asked, 0, "{word:08x}");
+            assert_eq!(
+                calls,
+                vec![
+                    vec![to_player, 0x0abc_0000, 1],
+                    vec![to_player, 0x0abc_0000, 1],
+                    vec![to_item, 0x0101, 1],
+                    vec![to_item, 0x0202, 1],
+                ]
+            );
+        }
+    }
+
+    /// G12 on: the seam is asked after the kind-2 entry's call and its answer leaves the
+    /// teammates' walk (the player gets the entry once); the perk's next entry is still applied
+    /// to every teammate (the seam is not asked for it). An answer of none keeps the exe's walk.
+    #[test]
+    fn g12_seam_answer_applies_the_player_entry_once() {
+        use engine_core::extend::jip_patches;
+        let (calls, asked, to_player, to_item) = g12_run(jip_patches::FIXES, true);
+        assert_eq!(asked, 1);
+        assert_eq!(
+            calls,
+            vec![
+                vec![to_player, 0x0abc_0000, 1],
+                vec![to_item, 0x0101, 1],
+                vec![to_item, 0x0202, 1],
+            ]
+        );
+        let (calls, asked, _, _) = g12_run(jip_patches::FIXES, false);
+        assert_eq!((asked, calls.len()), (2, 4));
     }
 
     #[test]

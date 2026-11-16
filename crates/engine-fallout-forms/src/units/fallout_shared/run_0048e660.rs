@@ -97,12 +97,27 @@ pub fn fn_0048e730(e: &mut Engine, form: u32, which: u32) -> u32 {
     if texture != 0 {
         return e.call(STRING_TEXT, &args![texture]).u32();
     }
-    let path = e.call(BIPED_TEXTURE_PATH, &args![form, which]).u32();
+    let path = match biped_icon_path_seam(e, form, which) {
+        Some(path) => path,
+        None => e.call(BIPED_TEXTURE_PATH, &args![form, which]).u32(),
+    };
     if path != 0 {
         path
     } else {
         EMPTY_STRING
     }
+}
+
+/// The call of `00480ef0` at `0x48E761` in [`fn_0048e730`]. JIP LN NVSE's G83 (a fix, the row
+/// `NV_JIP_GAME_PATCHES`) calls its `GetIconPathForItemHook` there (an armour's icon by the
+/// player's sex): the seam at `0x48E761` answers the path in place of the call, asked with the
+/// form and the second word. With the word's `FIXES` bit clear: one load, then none (the call).
+#[inline]
+fn biped_icon_path_seam(e: &mut Engine, form: u32, which: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return e.site(0x0048_e761, &[form, which]);
+    }
+    None
 }
 
 /// `00483710` (thiscall): the base destructor (an empty body).
@@ -222,6 +237,101 @@ mod tests {
         assert_eq!(e.call(0x0048_e730, &args![form, 2u32]).u32(), EMPTY_STRING);
         e.mem.set_u32(form + 4, 0x4444);
         assert_eq!(e.call(0x0048_e730, &args![form, 2u32]).u32(), 0x4444);
+    }
+
+    /// G83's seam (`0x48E761`, JIP LN NVSE step 3.9 GF): an engine where the form is no
+    /// texture and `00480ef0` answers `0x4444`; the test handler writes its words at `asked` and
+    /// answers `answer`.
+    fn g83_world(answer: Option<u32>) -> (Engine, u32, u32) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        e.map(G83_ASKED, 0x1000);
+        e.register(RT_DYNAMIC_CAST, |_, _| Ret::default());
+        e.register(BIPED_TEXTURE_PATH, |_, _| Ret {
+            eax: 0x4444,
+            ..Ret::default()
+        });
+        let form = e.mem.alloc(8);
+        // The answer the handler gives: a flag word (1 = some) and the word.
+        e.mem.set_u32(G83_ASKED + 8, u32::from(answer.is_some()));
+        e.mem.set_u32(G83_ASKED + 12, answer.unwrap_or(0));
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0048_e761), |e, a| {
+            e.mem.set_u32(G83_ASKED, a[0]);
+            e.mem.set_u32(G83_ASKED + 4, a[1]);
+            (e.mem.u32(G83_ASKED + 8) != 0).then(|| e.mem.u32(G83_ASKED + 12))
+        });
+        (e, form, G83_ASKED)
+    }
+
+    /// Where G83's test handler writes its words.
+    const G83_ASKED: u32 = 0x0533_0000;
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
+    }
+
+    /// While JIP is not installed, or installed with the row off: the seam is not asked and the
+    /// exe's `00480ef0` answers.
+    #[test]
+    fn g83_seam_does_nothing_while_off() {
+        use engine_core::extend::jip_patches;
+        for word in [0, jip_patches::INSTALLED] {
+            let (mut e, form, asked) = g83_world(Some(0x7777));
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), 0x4444);
+            assert_eq!(calls_to(&e, BIPED_TEXTURE_PATH), vec![vec![form, 9]]);
+            assert_eq!(e.mem.u32(asked), 0, "{word:08x}");
+        }
+    }
+
+    /// With the row on: the seam is asked with the form and the second word (distinct values),
+    /// `00480ef0` is not called, the answer is the path; an answer of 0 is the empty string (the
+    /// exe's null test after the call); an answer of none keeps the exe's call.
+    #[test]
+    fn g83_seam_answer_replaces_the_call_when_on() {
+        use engine_core::extend::jip_patches;
+        let (mut e, form, asked) = g83_world(Some(0x7777));
+        e.set_jip_patches(jip_patches::FIXES);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), 0x7777);
+        assert_eq!((e.mem.u32(asked), e.mem.u32(asked + 4)), (form, 9));
+        assert!(calls_to(&e, BIPED_TEXTURE_PATH).is_empty());
+
+        let (mut e, form, _) = g83_world(Some(0));
+        e.set_jip_patches(jip_patches::FIXES);
+        assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), EMPTY_STRING);
+
+        let (mut e, form, asked) = g83_world(None);
+        e.set_jip_patches(jip_patches::FIXES);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), 0x4444);
+        assert_eq!(e.mem.u32(asked), form);
+        assert_eq!(calls_to(&e, BIPED_TEXTURE_PATH), vec![vec![form, 9]]);
+    }
+
+    /// A form that is a texture never reaches the seam (it is after the texture's return).
+    #[test]
+    fn g83_seam_is_after_the_texture_test() {
+        use engine_core::extend::jip_patches;
+        let (mut e, form, asked) = g83_world(Some(0x7777));
+        e.register(RT_DYNAMIC_CAST, |_, a| Ret {
+            eax: a[0] + 8,
+            ..Ret::default()
+        });
+        e.register(STRING_TEXT, |_, a| Ret {
+            eax: a[0] + 0x100,
+            ..Ret::default()
+        });
+        e.set_jip_patches(jip_patches::FIXES);
+        assert_eq!(e.call(0x0048_e730, &args![form, 9u32]).u32(), form + 0x108);
+        assert_eq!(e.mem.u32(asked), 0);
     }
 
     #[test]
