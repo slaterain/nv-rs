@@ -64,9 +64,12 @@ fn host_cpuid(leaf: u32) -> Option<[u32; 4]> {
     Some([answer.eax, answer.ebx, answer.ecx, answer.edx])
 }
 
+/// A machine without the `CPUID` instruction (Apple silicon): the fixed answer of an x86-64 PC
+/// (`engine_core::processor`, decision 3 of the Linux and macOS track), so the probe chooses the
+/// mode such a PC gives (6).
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-fn host_cpuid(_leaf: u32) -> Option<[u32; 4]> {
-    None
+fn host_cpuid(leaf: u32) -> Option<[u32; 4]> {
+    engine_core::processor::fixed_cpuid(leaf)
 }
 
 /// The body of `00a74a10` with the `CPUID` instruction given as `cpuid(EAX)`, answering
@@ -432,6 +435,20 @@ mod probe_tests {
             assert_eq!(feature, features);
             assert_eq!(leaves, vec![0x8000_0000, 1]);
         }
+    }
+
+    /// A machine without `CPUID` is given an x86-64 PC's answer (`engine_core::processor`): the
+    /// probe takes mode 6, as on players' PCs; and leaf 1 alone (were the extended leaf
+    /// refused) would still give the PC's mode 5.
+    #[test]
+    fn the_fixed_answer_without_cpuid_gives_a_pcs_mode() {
+        let mut e = Engine::new();
+        e.map(0x011f_4000, 0x1000);
+        probe_cpu(&mut e, engine_core::processor::fixed_cpuid);
+        assert_eq!(e.mem.u32(MODE_WORD), 6);
+        let leaf_1 = engine_core::processor::fixed_cpuid(1).unwrap()[3];
+        let (mode, _, _) = probe(Some(0x7fff_ffff), None, Some(leaf_1));
+        assert_eq!(mode, 5);
     }
 
     #[test]

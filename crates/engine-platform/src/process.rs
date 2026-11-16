@@ -271,9 +271,17 @@ fn machine_memory() -> Option<MachineMemory> {
             avail_page_file: status.ullAvailPageFile,
         })
     }
+    // Linux and macOS: what the system reports, in Windows' fields (`super::machine_table`).
     #[cfg(not(windows))]
     {
-        None
+        let m = super::machine_table::this_memory()?;
+        Some(MachineMemory {
+            load: m.load,
+            total_phys: m.total_phys,
+            avail_phys: m.avail_phys,
+            total_page_file: m.total_page_file,
+            avail_page_file: m.avail_page_file,
+        })
     }
 }
 
@@ -405,8 +413,8 @@ mod tests {
         assert_eq!(global_memory_status_ex(&mut e, Ptr::new(AT)), 0);
         assert_eq!(e.kernel.last_error, 87);
         assert_eq!(e.mem.u64(AT + 0x28), 0x1234, "nothing written");
-        // The machine's sizes are only read on Windows so far.
-        if cfg!(windows) {
+        // The machine's sizes: Windows', Linux's and macOS's (`machine_table::this_memory`).
+        if cfg!(any(windows, target_os = "linux", target_os = "macos")) {
             e.mem.set_u32(AT, 0x40);
             assert_eq!(global_memory_status_ex(&mut e, Ptr::new(AT)), 1);
             assert_eq!(e.mem.u32(AT), 0x40);
