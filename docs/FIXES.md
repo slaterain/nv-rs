@@ -997,8 +997,24 @@ text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below).
 
 #### GC: Hit damage, detection, combat formulas
 
-No fix built yet. Built as part of JIP (in every preset once JIP answers "installed", not under the row:
-it answers as the original until a JIP command asks): JIP's detection patch (`008a0d10` at `0x8A0DAB`,
+Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): equipping no longer gives the un-equip notice (`0x8ADED0`) of the
+worn item it replaces (`0x88DCDC`); a change of life state is saved with the actor, so the dead do not load
+standing in their bind pose (`0x8A19CF`); kill challenges no longer count teammates, actors JIP flags
+(`+0x143` bit 7) or essential ones (`0x89DC0E`); a hit's weapon effects come from the projectile's own
+weapon (`0x8C227F`); a hit that takes the minimum damage is marked armour-penetrated (`0x9B6335`); while
+the game's impact data replacements are in use, a weapon's impact effect they do not replace is kept
+instead of being dropped (no impact effect at all) (`0058e9d0`); the blood
+on a hit comes from the weapon that made the hit, not the attacker's current weapon (`0x88EBAA`); the wear
+a shot puts on a weapon is the weapon's own value when it has one, and the ammo's effects on that wear come
+from the ammo the actor has equipped (`00646260`); with `bFO3WpnDegradation` weapons wear as in Fallout 3,
+scaled by the weapon's skill (Guns 0.15, Energy Weapons 0.2, Melee and Unarmed 0.25, Big Guns and
+Explosives 0.3) and by its attack damage; with `bCreatureSpreadFix` creatures shoot with the aimed (iron
+sights) spread, and other actors count as aiming only while in high process (`0x8B0FBF`).
+
+Built as part of JIP (in every preset once JIP answers "installed", not under the row): the player's
+killer is kept when the player dies (`0x89E790`, `0x89F351`; read by `GetKiller`) and cleared before a
+load; with the row off a player with JIP installed gets that and nothing else of this group's fixes.
+JIP's detection patch (it answers as the original until a JIP command asks) (`008a0d10` at `0x8A0DAB`,
 `0x8A1291`, `0x8A131D`, `0x8A147C`), so an actor given a forced detection value
 (`ForceActorDetectionValue`) or the detection fix (`ToggleDetectionFix`) is no longer treated as the
 player's teammate when others detect it, and with the detection fix its level word is the player's.
