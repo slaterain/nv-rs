@@ -890,7 +890,9 @@ save) should get.
   inert until JIP answers "installed" (step 3.10); off, and before that, the game's own.
 - **Where a mod's files are kept** (no row: always so, the maintainer's rule of 2026-11-16): the
   INI files JIP LN's commands write (`SetINIFloat`, `SetINIString`, `SetINISection`,
-  `RemoveINIKey`, `RemoveINISection`; `Data\Config\<name>.ini`) go to the port's own folder for
+  `RemoveINIKey`, `RemoveINISection`; `Data\Config\<name>.ini`), and the files of
+  `WriteArrayToFile`, `WriteStringToFile`, `ModLogPrint` (`Mod Logs\<plugin>.log`) and
+  `GetStringHash`'s split mode (`GetStringHash.txt`) go to the port's own folder for
   mods' files beside the saves (`nv-rs mod files`, or `NV_MOD_FILES_OUT`; docs/PLAYTESTING.md),
   never into the game's folder; reads (`GetINI*`, `FileExists`) look there first, then in the
   game's Data. A name that would leave the game's folder (`..`, a drive, another full path) is

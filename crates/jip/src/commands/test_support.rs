@@ -484,3 +484,83 @@ pub fn processor_rcp(v: f32) -> f32 {
         1.0 / v
     }
 }
+
+/// The seam's calls in these tests (no platform layer here): files and folders of this test's
+/// thread, by lower-case name; a name with a `..` part is refused as the platform refuses it
+/// (nothing read, nothing written).
+pub mod files {
+    use engine_core::mod_files::ModFileCalls;
+    use engine_core::Engine;
+    use std::cell::RefCell;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    thread_local! {
+        static FILES: RefCell<BTreeMap<Vec<u8>, Vec<u8>>> = RefCell::default();
+        static FOLDERS: RefCell<BTreeSet<Vec<u8>>> = RefCell::default();
+        static WRITES: RefCell<u32> = const { RefCell::new(0) };
+    }
+
+    fn key(name: &[u8]) -> Option<Vec<u8>> {
+        let name = name.to_ascii_lowercase();
+        let refused = name.split(|&b| b == b'\\' || b == b'/').any(|p| p == b"..");
+        (!refused).then_some(name)
+    }
+    fn read(_: &Engine, name: &[u8]) -> Option<Vec<u8>> {
+        let k = key(name)?;
+        FILES.with(|f| f.borrow().get(&k).cloned())
+    }
+    fn exists(e: &Engine, name: &[u8]) -> bool {
+        read(e, name).is_some()
+    }
+    fn directory_exists(_: &Engine, name: &[u8]) -> bool {
+        key(name).is_some_and(|k| FOLDERS.with(|f| f.borrow().contains(&k)))
+    }
+    fn create_directory(_: &mut Engine, name: &[u8]) -> bool {
+        let Some(k) = key(name) else {
+            return false;
+        };
+        FOLDERS.with(|f| f.borrow_mut().insert(k));
+        true
+    }
+    fn write(_: &mut Engine, name: &[u8], bytes: &[u8]) -> bool {
+        let Some(k) = key(name) else {
+            return false;
+        };
+        WRITES.with(|w| *w.borrow_mut() += 1);
+        FILES.with(|f| f.borrow_mut().insert(k, bytes.to_vec()));
+        true
+    }
+    static CALLS: ModFileCalls = ModFileCalls {
+        read,
+        exists,
+        directory_exists,
+        create_directory,
+        write,
+    };
+
+    /// Installs the calls (once a run) and empties this thread's files.
+    pub fn fresh() {
+        engine_core::mod_files::install(&CALLS);
+        FILES.with(|f| f.borrow_mut().clear());
+        FOLDERS.with(|f| f.borrow_mut().clear());
+        WRITES.with(|w| *w.borrow_mut() = 0);
+    }
+    pub fn put(name: &str, text: &[u8]) {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FILES.with(|f| f.borrow_mut().insert(k, text.to_vec()));
+    }
+    pub fn folder(name: &str) {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FOLDERS.with(|f| f.borrow_mut().insert(k));
+    }
+    pub fn get(name: &str) -> Option<Vec<u8>> {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FILES.with(|f| f.borrow().get(&k).cloned())
+    }
+    pub fn folders() -> Vec<Vec<u8>> {
+        FOLDERS.with(|f| f.borrow().iter().cloned().collect())
+    }
+    pub fn writes() -> u32 {
+        WRITES.with(|w| *w.borrow())
+    }
+}

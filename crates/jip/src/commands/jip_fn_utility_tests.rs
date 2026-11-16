@@ -369,3 +369,219 @@ fn large_address_aware() {
     let (res, lines) = echoed(&mut e, 0x2892, 0, &[]);
     assert_eq!((res, lines), (2.0, vec![b"GetIsLAA >> 2".to_vec()]));
 }
+
+// ---- Mods' files (lane files): arrays and texts in files, mod logs, GetStringHash.txt ----
+
+fn res_of(e: &mut Engine, opcode: u32, args: &[Vec<u8>]) -> f64 {
+    e.mem.set_f64(RESULT, 0.0);
+    call(e, opcode, args).1
+}
+
+fn files_setup() -> Engine {
+    let e = setup();
+    files::fresh();
+    e
+}
+
+/// `ReadArrayFromFile`: one line as an array; more as columns, or lines with `transpose`; `@`
+/// forms, `$` texts, numbers; short lines filled with 0; CR, LF and empty lines skipped.
+#[test]
+fn an_array_read_from_a_file() {
+    let mut e = files_setup();
+    files::put(r"data\one.txt", b"1\t$a b\t2.5\t@My Mod.esp:ABC\r\n");
+    let res = res_of(&mut e, 0x263a, &[s(b"data/one.txt")]);
+    assert_eq!(
+        array_data(&e, res),
+        vec![
+            Data::Number(1.0),
+            Data::Str(b"a b".to_vec()),
+            Data::Number(2.5),
+            Data::Form(0x0100_0abc)
+        ]
+    );
+    files::put(r"data\two.txt", b"1\t2\r\n\r\n3\n4\t\t5\t6\n");
+    let columns = |e: &Engine, res: f64| -> Vec<Vec<Data>> {
+        array_data(e, res)
+            .iter()
+            .map(|d| match d {
+                Data::Array(id) => array_data(e, f64::from(*id)),
+                _ => panic!("an array"),
+            })
+            .collect()
+    };
+    let res = res_of(&mut e, 0x263a, &[s(b"data\\two.txt")]);
+    assert_eq!(
+        columns(&e, res),
+        vec![
+            vec![Data::Number(1.0), Data::Number(3.0), Data::Number(4.0)],
+            vec![Data::Number(2.0), Data::Number(0.0), Data::Number(5.0)],
+        ]
+    );
+    let res = res_of(&mut e, 0x263a, &[s(b"data\\two.txt"), n(1)]);
+    assert_eq!(
+        columns(&e, res),
+        vec![
+            vec![Data::Number(1.0), Data::Number(2.0)],
+            vec![Data::Number(3.0), Data::Number(0.0)],
+            vec![Data::Number(4.0), Data::Number(5.0)],
+        ]
+    );
+    // One line with transpose: an array of that line's array.
+    let res = res_of(&mut e, 0x263a, &[s(b"data\\one.txt"), n(1)]);
+    assert_eq!(columns(&e, res).len(), 1);
+    // A first line starting with a tab has no columns; a missing file: nothing.
+    files::put(r"data\tab.txt", b"\t1\r\n");
+    assert_eq!(res_of(&mut e, 0x263a, &[s(b"data\\tab.txt")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x263a, &[s(b"data\\none.txt")]), 0.0);
+}
+
+/// `WriteArrayToFile`: columns of the top array's arrays (other values a column of one), tabs
+/// between and LF after all but the last line; flag 1 a column a line; `0` past a column's end;
+/// append after a LF; the folders made for a new file.
+#[test]
+fn an_array_written_to_a_file() {
+    let mut e = files_setup();
+    let c1 = array_of(&mut e, vec![V::Number(1.0), V::Number(2.0)]);
+    let top = array_of(
+        &mut e,
+        vec![V::Array(c1), V::Str(b"x".to_vec()), V::Form(0x0100_0abc)],
+    );
+    assert_eq!(
+        res_of(&mut e, 0x263c, &[s(b"out/a.txt"), n(0), n(top as i32)]),
+        1.0
+    );
+    assert_eq!(
+        files::get(r"out\a.txt").unwrap(),
+        b"1\t$x\t@My Mod.esp:ABC\n2\t0\t0"
+    );
+    assert!(files::folders().contains(&b"out".to_vec()));
+    assert_eq!(
+        res_of(
+            &mut e,
+            0x263c,
+            &[s(b"out/a.txt"), n(1), n(top as i32), n(1)]
+        ),
+        1.0
+    );
+    assert_eq!(
+        files::get(r"out\a.txt").unwrap(),
+        b"1\t$x\t@My Mod.esp:ABC\n2\t0\t0\n1\t2\n$x\t0\n@My Mod.esp:ABC\t0"
+    );
+    // Not appended: written anew.
+    let one = array_of(&mut e, vec![V::Number(0.5)]);
+    assert_eq!(
+        res_of(&mut e, 0x263c, &[s(b"out/a.txt"), n(0), n(one as i32)]),
+        1.0
+    );
+    assert_eq!(files::get(r"out\a.txt").unwrap(), b"0.5");
+    let empty = array_of(&mut e, vec![]);
+    assert_eq!(
+        res_of(&mut e, 0x263c, &[s(b"out/b.txt"), n(0), n(empty as i32)]),
+        0.0
+    );
+    assert_eq!(files::get(r"out\b.txt"), None);
+    // A refused name: nothing written.
+    assert_eq!(
+        res_of(&mut e, 0x263c, &[s(b"../x.txt"), n(0), n(one as i32)]),
+        0.0
+    );
+}
+
+/// `ReadStringFromFile`: from line `start`, `count` lines (the last one's line end left out);
+/// the whole file by default; `""` for a count of 0 or a missing file.
+#[test]
+fn a_text_read_from_a_file() {
+    let mut e = files_setup();
+    files::put(r"data\t.txt", b"one\r\ntwo\r\nthree\nfour");
+    let text = |e: &mut Engine, args: &[Vec<u8>]| -> Vec<u8> {
+        let res = res_of(e, 0x263b, args);
+        string_result(e, res)
+    };
+    assert_eq!(
+        text(&mut e, &[s(b"data/t.txt")]),
+        b"one\r\ntwo\r\nthree\nfour"
+    );
+    assert_eq!(
+        text(&mut e, &[s(b"data/t.txt"), n(2)]),
+        b"two\r\nthree\nfour"
+    );
+    assert_eq!(text(&mut e, &[s(b"data/t.txt"), n(2), n(1)]), b"two");
+    assert_eq!(
+        text(&mut e, &[s(b"data/t.txt"), n(1), n(3)]),
+        b"one\r\ntwo\r\nthree"
+    );
+    assert_eq!(text(&mut e, &[s(b"data/t.txt"), n(0), n(1)]), b"one");
+    assert_eq!(text(&mut e, &[s(b"data/t.txt"), n(4), n(5)]), b"four");
+    assert_eq!(text(&mut e, &[s(b"data/t.txt"), n(1), n(0)]), b"");
+    assert_eq!(text(&mut e, &[s(b"data/none.txt")]), b"");
+}
+
+/// `ModLogPrint`: `Mod Logs\<file>.log`, the first print of the session anew, later ones after a
+/// LF, indented by tabs (40 at most); nothing for a script of no file.
+#[test]
+fn mod_log_lines() {
+    let mut e = files_setup();
+    files::put(r"Mod Logs\My Mod.esp.log", b"old session");
+    let script = crate::test_support::SCRIPT;
+    e.mem.set_u32(script + 0x10, MOD_B);
+    e.mem.set_u32(script + 0x14, 0);
+    call(&mut e, 0x27c0, &[n(0), s(b"first")]);
+    assert_eq!(files::get(r"Mod Logs\My Mod.esp.log").unwrap(), b"first");
+    call(&mut e, 0x27c0, &[n(2), s(b"second")]);
+    call(&mut e, 0x27c0, &[n(45), s(b"x")]);
+    let mut want = b"first\n\t\tsecond\n".to_vec();
+    want.extend([b'\t'; 40]);
+    want.push(b'x');
+    assert_eq!(files::get(r"Mod Logs\My Mod.esp.log").unwrap(), want);
+    // A script of no file: nothing.
+    e.mem.set_u32(script + 0x10, 0);
+    let before = files::writes();
+    call(&mut e, 0x27c0, &[n(0), s(b"none")]);
+    assert_eq!(files::writes(), before);
+}
+
+/// `WriteStringToFile`: the text written (appended after a LF when asked and the file is there).
+#[test]
+fn a_text_written_to_a_file() {
+    let mut e = files_setup();
+    assert_eq!(
+        res_of(&mut e, 0x263d, &[s(b"out/s.txt"), n(1), s(b"hello")]),
+        1.0
+    );
+    assert_eq!(files::get(r"out\s.txt").unwrap(), b"hello");
+    assert_eq!(
+        res_of(&mut e, 0x263d, &[s(b"out/s.txt"), n(1), s(b"again")]),
+        1.0
+    );
+    assert_eq!(files::get(r"out\s.txt").unwrap(), b"hello\nagain");
+    assert_eq!(
+        res_of(&mut e, 0x263d, &[s(b"out/s.txt"), n(0), s(b"new")]),
+        1.0
+    );
+    assert_eq!(files::get(r"out\s.txt").unwrap(), b"new");
+}
+
+/// `GetStringHash`: JIP's hash without case, or with case when asked; with `split`, the parts and
+/// their hashes in `GetStringHash.txt` and no result.
+#[test]
+fn string_hashes() {
+    let mut e = files_setup();
+    let ci = f64::from(crate::containers::str_hash_ci(b"Hello") as i32);
+    let cs = f64::from(crate::containers::str_hash_cs(b"Hello") as i32);
+    assert_ne!(ci, cs);
+    assert_eq!(res_of(&mut e, 0x293f, &[s(b"Hello")]), ci);
+    assert_eq!(res_of(&mut e, 0x293f, &[s(b"hello")]), ci);
+    assert_eq!(res_of(&mut e, 0x293f, &[s(b"Hello"), n(0), n(1)]), cs);
+    assert_eq!(res_of(&mut e, 0x293f, &[s(b"a||B|"), n(1)]), 0.0);
+    let want = format!(
+        "\"a\"\n{}\n\n\"B\"\n{}\n\n",
+        crate::containers::str_hash_ci(b"a") as i32,
+        crate::containers::str_hash_ci(b"B") as i32
+    );
+    assert_eq!(files::get("GetStringHash.txt").unwrap(), want.as_bytes());
+    // StrHashCS: the same steps without folding.
+    assert_eq!(
+        crate::containers::str_hash_cs(b"abcde"),
+        crate::containers::str_hash_ci(b"ABCDE")
+    );
+}
