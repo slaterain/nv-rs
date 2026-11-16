@@ -1239,8 +1239,14 @@ mod tests_filetime {
             EPOCH + 10_000_001
         );
         assert_eq!(filetime(UNIX_EPOCH + Duration::new(0, 99)), EPOCH);
+        // Part of a tick before 1970 (Linux and macOS keep nanoseconds; Windows' own clock type
+        // keeps whole ticks, so there it would be the epoch itself).
+        #[cfg(not(windows))]
         assert_eq!(filetime(UNIX_EPOCH - Duration::new(0, 50)), EPOCH - 1);
-        assert_eq!(filetime(UNIX_EPOCH - Duration::new(1, 0)), EPOCH - 10_000_000);
+        assert_eq!(
+            filetime(UNIX_EPOCH - Duration::new(1, 0)),
+            EPOCH - 10_000_000
+        );
         assert_eq!(filetime(UNIX_EPOCH - Duration::new(0, 100)), EPOCH - 1);
         // 2026-01-01 00:00:00 UTC.
         assert_eq!(
@@ -3436,24 +3442,37 @@ mod tests_player_files {
         let game = engine_core::exe::game_view(&dir.to_string_lossy());
         let mut e = Engine::new();
         let name = e.mem.alloc(0x400);
-        e.mem.set_cstr(name, format!(r"{game}\DATA\meshes\armor.nif").as_bytes());
-        let h = create_file_a(&mut e, Ptr::new(name), GENERIC_READ, 1, 0, OPEN_EXISTING, 0x80, 0);
+        e.mem
+            .set_cstr(name, format!(r"{game}\DATA\meshes\armor.nif").as_bytes());
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            1,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
         assert_ne!(h, INVALID_HANDLE_VALUE, "{game}");
         let buf = e.mem.alloc(16);
         let got = e.mem.alloc(4);
         assert_eq!(read_file(&mut e, h, Ptr::new(buf), 16, Ptr::new(got), 0), 1);
         assert_eq!(e.mem.bytes(buf, e.mem.u32(got)), b"nif".to_vec());
         super::super::close_handle(&mut e, h);
-        e.mem.set_cstr(name, format!(r"{game}\data\MESHES\*.nif").as_bytes());
+        e.mem
+            .set_cstr(name, format!(r"{game}\data\MESHES\*.nif").as_bytes());
         let data = e.mem.alloc(0x140);
         let found = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(data));
         assert_ne!(found, INVALID_HANDLE_VALUE);
         assert_eq!(e.mem.cstr(data + 0x2c), b"Armor.NIF".to_vec());
         assert_eq!(e.mem.u32(data), FILE_ATTRIBUTE_ARCHIVE);
-        let written =
-            u64::from(e.mem.u32(data + 0x14)) | (u64::from(e.mem.u32(data + 0x18)) << 32);
+        let written = u64::from(e.mem.u32(data + 0x14)) | (u64::from(e.mem.u32(data + 0x18)) << 32);
         let now = filetime(std::time::SystemTime::now());
-        assert!(written <= now && now - written < 600 * 10_000_000, "{written} {now}");
+        assert!(
+            written <= now && now - written < 600 * 10_000_000,
+            "{written} {now}"
+        );
         find_close(&mut e, found);
         // Another drive has no folder here: the run stops, naming it.
         let other = std::panic::catch_unwind(|| real_path(br"C:\Games\x.esp"));

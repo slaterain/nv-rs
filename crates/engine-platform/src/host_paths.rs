@@ -197,9 +197,15 @@ mod tests {
                 "/home/me/Fallout New Vegas",
                 vec!["Data", "FalloutNV.exe", "data"],
             ),
-            ("/home/me/Fallout New Vegas/Data", vec!["Meshes", "Fallout.esm"]),
+            (
+                "/home/me/Fallout New Vegas/Data",
+                vec!["Meshes", "Fallout.esm"],
+            ),
             ("/home/me/Fallout New Vegas/data", vec!["readme.txt"]),
-            ("/home/me/Fallout New Vegas/Data/Meshes", vec!["Armor", "Ägypten"]),
+            (
+                "/home/me/Fallout New Vegas/Data/Meshes",
+                vec!["Armor", "Ägypten"],
+            ),
         ])
     }
 
@@ -225,10 +231,16 @@ mod tests {
         );
         assert_eq!(unix_text(r"z:/home\me").unwrap(), "/home/me");
         assert_eq!(unix_text(r"Z:\").unwrap(), "/");
-        assert_eq!(unix_text(r"C:\Games\x").unwrap_err(), NotHere::OtherDrive('C'));
+        assert_eq!(
+            unix_text(r"C:\Games\x").unwrap_err(),
+            NotHere::OtherDrive('C')
+        );
         assert_eq!(unix_text(r"d:\x").unwrap_err(), NotHere::OtherDrive('D'));
         assert_eq!(unix_text(r"Z:Data\x").unwrap_err(), NotHere::DriveRelative);
-        assert_eq!(unix_text(r"/tmp/scratch\a.txt").unwrap(), "/tmp/scratch/a.txt");
+        assert_eq!(
+            unix_text(r"/tmp/scratch\a.txt").unwrap(),
+            "/tmp/scratch/a.txt"
+        );
         assert_eq!(unix_text(r"Data\Meshes").unwrap(), "Data/Meshes");
     }
 
