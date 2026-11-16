@@ -3385,7 +3385,10 @@ mod tests_player_files {
     }
 
     #[test]
-    #[cfg_attr(not(windows), ignore = "Windows paths and file listings: not provided off Windows yet")]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn a_wildcard_search_lists_then_runs_out() {
         let mut e = Engine::new();
         let name = e.mem.alloc(0x200);
@@ -3415,7 +3418,10 @@ mod tests_player_files {
     /// TRUE, the last error left as it was (measured, 32-bit,
     /// `build43-scratch/measure/small-fixes/findclose-2026-11-02.tsv`).
     #[test]
-    #[cfg_attr(not(windows), ignore = "Windows paths and file listings: not provided off Windows yet")]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn find_close_after_a_search_that_found_nothing_answers_false() {
         let mut e = Engine::new();
         let name = e.mem.alloc(0x200);
@@ -3461,7 +3467,10 @@ mod tests_player_files {
     }
 
     #[test]
-    #[cfg_attr(not(windows), ignore = "Windows paths and file listings: not provided off Windows yet")]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn a_read_only_open_reads_the_players_file_in_place() {
         let mut e = Engine::new();
         let real = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
@@ -4189,7 +4198,10 @@ mod tests_changed_directories {
     /// got (measured, `review-findfile/run1.txt`); not modelled, the run stops.
     #[test]
     #[should_panic(expected = "since FindFirstFileA; not provided")]
-    #[cfg_attr(not(windows), ignore = "Windows paths and file listings: not provided off Windows yet")]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn a_search_whose_folder_changed_since_it_began_stops() {
         let dir = scratch("midsearch", &[("a.fos", 5), ("b.fos", 5)]);
         let mut e = Engine::new();
@@ -4993,7 +5005,10 @@ mod tests_code_pages {
     /// listed, the real one first (NTFS's order), and the name opens the real file; the `?` form
     /// of a name opens nothing, with `ERROR_INVALID_NAME` (measured).
     #[test]
-    #[cfg_attr(not(windows), ignore = "Windows paths and file listings: not provided off Windows yet")]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn two_host_names_with_one_ansi_name() {
         let _page = Page::new(&CP1252);
         let dir = scratch("alias");
@@ -5046,7 +5061,10 @@ mod tests_code_pages {
     /// code page 932: the separators, the last part, the key, the host path, the matcher, the name
     /// check and `GetFullPathNameA` read them character by character; such a file opens and reads.
     #[test]
-    #[cfg_attr(not(windows), ignore = "Windows paths and file listings: not provided off Windows yet")]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn double_byte_names_keep_their_second_byte() {
         let _page = Page::new(&CP932);
         let so = b"\x83\x5c.txt";
@@ -5151,7 +5169,10 @@ mod tests_code_pages {
     /// fails its open with Windows' answer (32, 5; measured) for reading and for a write open that
     /// reads it into the run, instead of stopping the run at the first read.
     #[test]
-    #[cfg_attr(not(windows), ignore = "Windows paths and file listings: not provided off Windows yet")]
+    #[cfg_attr(
+        not(windows),
+        ignore = "Windows paths and file listings: not provided off Windows yet"
+    )]
     fn a_file_that_cannot_be_read_answers_windows_errors() {
         let dir = scratch("unreadable");
         std::fs::write(dir.join("held.txt"), b"held").unwrap();
