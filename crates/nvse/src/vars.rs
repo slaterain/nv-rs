@@ -1052,7 +1052,7 @@ mod tests {
         let barrier = std::sync::Barrier::new(2);
         let wrong = std::sync::atomic::AtomicU32::new(0);
         std::thread::scope(|scope| {
-            for side in [b'a', b'b'] {
+            for side in *b"ab" {
                 let (strings, barrier, wrong) = (&strings, &barrier, &wrong);
                 scope.spawn(move || {
                     barrier.wait();
