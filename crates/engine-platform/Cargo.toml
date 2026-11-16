@@ -28,6 +28,12 @@ d3d9-wgpu = { path = "../d3d9-wgpu" }
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D9", "Win32_Graphics_Gdi", "Foundation_Numerics", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input", "Win32_UI_WindowsAndMessaging"] }
 
+# The game's window on Linux (X11, Wayland) and macOS (d3d9real/winit_window.rs), handed to wgpu
+# by its raw window handle (the version wgpu 30 takes). Not on Windows: the Win32 window is there.
+[target.'cfg(not(windows))'.dependencies]
+winit = "0.30.13"
+raw-window-handle = "=0.6.2"
+
 # The tests of the C runtime's stdio that moved here (crt_stdio_tests.rs) and of the process side
 # use the core's addresses and helpers behind this feature.
 [dev-dependencies]

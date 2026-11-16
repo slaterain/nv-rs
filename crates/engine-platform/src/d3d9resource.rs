@@ -19,7 +19,6 @@ use super::d3d9device::{
     wait_for_present, Store, IID_IUNKNOWN,
 };
 // What the `forwarded!` calls hand the real side, which only Windows has.
-#[cfg(windows)]
 use super::d3d9device::Word;
 use crate::{Engine, Ptr};
 use std::collections::HashMap;
@@ -433,7 +432,6 @@ pub(super) fn create_vertex_buffer(
         },
     );
     e.mem.set_u32(out.addr(), buffer);
-    #[cfg(windows)]
     super::d3d9real::buffer_created(e, this.addr(), buffer, false, length, usage, fvf, pool);
     D3D_OK
 }
@@ -475,7 +473,6 @@ pub(super) fn create_index_buffer(
         },
     );
     e.mem.set_u32(out.addr(), buffer);
-    #[cfg(windows)]
     super::d3d9real::buffer_created(e, this.addr(), buffer, true, length, usage, format, pool);
     D3D_OK
 }
@@ -504,7 +501,6 @@ pub(super) fn create_vertex_shader(e: &mut Engine, this: Ptr, function: Ptr, out
     let tokens = shader_tokens(e, function.addr());
     let shader = make(e, this, VERTEX_SHADER_CODE, Kind::Shader { tokens });
     e.mem.set_u32(out.addr(), shader);
-    #[cfg(windows)]
     if let Kind::Shader { tokens } = &object(e, Ptr::new(shader)).kind.clone() {
         super::d3d9real::shader_created(e, this.addr(), shader, false, tokens);
     }
@@ -520,7 +516,6 @@ pub(super) fn create_pixel_shader(e: &mut Engine, this: Ptr, function: Ptr, out:
     let tokens = shader_tokens(e, function.addr());
     let shader = make(e, this, PIXEL_SHADER_CODE, Kind::Shader { tokens });
     e.mem.set_u32(out.addr(), shader);
-    #[cfg(windows)]
     if let Kind::Shader { tokens } = &object(e, Ptr::new(shader)).kind.clone() {
         super::d3d9real::shader_created(e, this.addr(), shader, true, tokens);
     }
@@ -551,7 +546,6 @@ pub(super) fn create_vertex_declaration(e: &mut Engine, this: Ptr, elements: Ptr
         Kind::Declaration { elements: bytes },
     );
     e.mem.set_u32(out.addr(), declaration);
-    #[cfg(windows)]
     if let Kind::Declaration { elements } = &object(e, Ptr::new(declaration)).kind.clone() {
         super::d3d9real::declaration_created(e, this.addr(), declaration, elements);
     }
@@ -632,7 +626,6 @@ fn destroy(e: &mut Engine, this: Ptr) {
             // A buffer destroyed while locked: its staging block goes with it.
             e.mem.free(staging);
         }
-        #[cfg(windows)]
         super::d3d9real::forget(e, this.addr());
         e.mem.free(this.addr());
         device_release(e, Ptr::new(o.device));
@@ -686,7 +679,6 @@ fn lock(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr, flags: u32)
     if super::d3d9draw::any_cut() && model == D3D_OK && flags & D3DLOCK_READONLY == 0 {
         note_main_lock(e, this, offset, size);
     }
-    #[cfg(windows)]
     super::d3d9real::buffer_locked(e, this.addr(), offset, size, flags, model);
     let _ = flags;
     model
@@ -749,7 +741,6 @@ fn unlock(e: &mut Engine, this: Ptr) -> u32 {
         *staging
     };
     let (memory, length) = (if block != 0 { block } else { *bits }, desc[4]);
-    #[cfg(windows)]
     super::d3d9real::buffer_unlocked(e, this.addr(), memory, length, D3D_OK);
     if last && block != 0 {
         unstage_buffer(e, this, block, length);
@@ -1551,7 +1542,6 @@ forwarded! {
 /// `SetVertexShader` / `SetPixelShader`, then (`NV_D3D9=real`) the real shader.
 pub(super) fn fwd_set_vertex_shader(e: &mut Engine, this: Ptr, shader: u32) -> u32 {
     let model = set_vertex_shader(e, this, shader);
-    #[cfg(windows)]
     if model == D3D_OK {
         super::d3d9real::set_shader(e, this.addr(), shader, false, model);
     }
@@ -1560,7 +1550,6 @@ pub(super) fn fwd_set_vertex_shader(e: &mut Engine, this: Ptr, shader: u32) -> u
 
 pub(super) fn fwd_set_pixel_shader(e: &mut Engine, this: Ptr, shader: u32) -> u32 {
     let model = set_pixel_shader(e, this, shader);
-    #[cfg(windows)]
     if model == D3D_OK {
         super::d3d9real::set_shader(e, this.addr(), shader, true, model);
     }
@@ -1571,7 +1560,6 @@ macro_rules! forwarded_constants {
     ($($name:ident = $set:ident, $kind:expr;)*) => {$(
         pub(super) fn $name(e: &mut Engine, this: Ptr, start: u32, data: Ptr, count: u32) -> u32 {
             let model = $set(e, this, start, data, count);
-            #[cfg(windows)]
             if model == D3D_OK {
                 super::d3d9real::set_constants(e, this.addr(), $kind, start, data.addr(), count, model);
             }
@@ -1590,7 +1578,6 @@ forwarded_constants! {
 
 /// The vertices a draw of `count` primitives of type `kind` takes (`D3DPT_POINTLIST` ..
 /// `D3DPT_TRIANGLEFAN`).
-#[cfg(windows)]
 fn vertices_of(kind: u32, count: u32) -> u32 {
     match kind {
         1 => count,
@@ -1613,7 +1600,6 @@ pub(super) fn fwd_draw_primitive_up(
     stride: u32,
 ) -> u32 {
     let model = draw_primitive_up(e, this, kind, count, vertices, stride);
-    #[cfg(windows)]
     if model == D3D_OK && vertices != 0 && (D3DPT_POINTLIST..=D3DPT_TRIANGLEFAN).contains(&kind) {
         super::d3d9real::draw_primitive_up(
             e,
@@ -1696,7 +1682,6 @@ fn lock_drawing(e: &mut Engine, this: Ptr, offset: u32, size: u32, out: Ptr, fla
         .push((block, offset, size));
     draw.blocks.push(block);
     e.mem.set_u32(out.addr(), block);
-    #[cfg(windows)]
     super::d3d9real::buffer_locked(e, this.addr(), offset, size, flags, D3D_OK);
     let _ = flags;
     D3D_OK
@@ -1719,7 +1704,6 @@ fn unlock_drawing(e: &mut Engine, this: Ptr) -> u32 {
         .or_default()
         .push((offset, bytes));
     // The upload reads `memory + offset`: the block itself.
-    #[cfg(windows)]
     super::d3d9real::buffer_unlocked(
         e,
         this.addr(),

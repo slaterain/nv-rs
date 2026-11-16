@@ -228,28 +228,23 @@ impl Host {
         // The real Direct3D 9 calls (`NV_D3D9=real`) on a render thread of their own, play's
         // default (`fixes::Choice::render_thread`: a test without `NV_RENDER_THREAD` runs
         // without it); `NV_RENDER_THREAD=0` makes them on the game's threads.
-        #[cfg(windows)]
         engine_platform::d3d9real::want_render_thread(&mut engine, choice.render_thread);
-        #[cfg(windows)]
         if let Some(dir) = wgpu_cache_path() {
             engine_platform::d3d9real::want_wgpu_cache(&mut engine, dir);
         }
         // The borderless window (`fixes::Choice::borderless`: `NV_BORDERLESS`; else, in a
         // launcher's play run, Fallout.ini's `[nv-rs Display] bBorderless` or play's default, on).
         // A test or script without the variable makes no choice: the window as the game makes it.
-        #[cfg(windows)]
         if let Some(on) = choice.borderless {
             engine_platform::d3d9real::want_borderless(on);
         }
         // The frame-rate counter from the start (`fixes::Choice::show_frame_rate`: `NV_SHOW_FPS`; else,
         // in a launcher's play run, Fallout.ini's `[nv-rs Display] bShowFrameRate`; off by default).
         // F11 in the game shows or hides it either way.
-        #[cfg(windows)]
         engine_platform::d3d9real::want_frame_rate(choice.show_frame_rate);
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,
         // decides instead. A test or script without `NV_D3D9` makes no choice: nothing draws.
-        #[cfg(windows)]
         if let Some(renderer) = choice.renderer {
             use engine_platform::d3d9real::{want_backend, Backends};
             want_backend(match renderer {
@@ -410,7 +405,6 @@ impl Host {
             return false;
         }
         self.join();
-        #[cfg(windows)]
         engine_platform::d3d9real::finish_recording(&mut self.engine);
         // The sound's recording too (`NV_SOUND_RECORD`): its WAV headers name every frame.
         engine_platform::dsound::finish_recording(&mut self.engine);
@@ -426,26 +420,36 @@ impl Host {
 
 /// [`Host::start_with`] and [`check_installation`] off Windows: the program builds on Linux and
 /// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
-/// pieces that are still Windows-only, instead of a run that would go on without them (no window
-/// drawn, no sound, the game's own folder names not found, files listed by a call that stops)
-/// and fail somewhere less clear. On a processor other than x86-64 (Apple silicon) it also names
-/// what differs there.
+/// pieces that are still Windows-only, instead of a run that would go on without them (no sound,
+/// the game's own folder names not found, files listed by a call that stops) and fail somewhere
+/// less clear. The game's window with its mouse and keyboard is provided on Linux (winit, X11 and
+/// Wayland), not yet on macOS, where it needs the program's main thread. On a processor other than
+/// x86-64 (Apple silicon) it also names what differs there.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
-    not_provided_on(cfg!(target_arch = "x86_64"))
+    not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
 }
 
-/// [`not_provided_here`]'s message, for an x86-64 processor or another.
+/// [`not_provided_here`]'s message, for an x86-64 processor or another, on macOS or another
+/// system.
 #[cfg(any(not(windows), test))]
-fn not_provided_on(x86_64: bool) -> Result<(), String> {
+fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
     let mut why = String::from(
         "nv-rs does not run the game on this system yet: it builds here, but these are only \
-         provided on Windows so far: the game's window with its mouse and keyboard (and so \
-         anything drawn), the sound on the speakers, the game's Windows folder names (a drive \
-         letter and backslashes) over this system's folders, the file listing's file times, \
-         this machine's tables (display adapter, sound devices, folders), which are measured on \
-         Windows, the distortion sound effect's table (measured from Windows' own DLL), and text \
-         in the game's code page outside ASCII",
+         provided on Windows so far: ",
+    );
+    if apple {
+        why.push_str(
+            "the game's window with its mouse and keyboard (and so anything drawn: on macOS the \
+             window needs the program's main thread), ",
+        );
+    }
+    why.push_str(
+        "the sound on the speakers, the game's Windows folder names (a drive letter and \
+         backslashes) over this system's folders, the file listing's file times, this machine's \
+         tables (display adapter, sound devices, folders), which are measured on Windows, the \
+         distortion sound effect's table (measured from Windows' own DLL), and text in the game's \
+         code page outside ASCII",
     );
     if !x86_64 {
         why.push_str(
@@ -762,26 +766,31 @@ mod tests {
     fn a_start_off_windows_is_refused_naming_what_is_missing() {
         let why = super::not_provided_here().unwrap_err();
         for x86_64 in [true, false] {
-            let why = super::not_provided_on(x86_64).unwrap_err();
-            for piece in [
-                "window",
-                "mouse and keyboard",
-                "sound",
-                "folder names",
-                "file times",
-                "tables",
-                "distortion",
-                "code page",
-            ] {
-                assert!(why.contains(piece), "{piece}: {why}");
+            for apple in [true, false] {
+                let why = super::not_provided_on(x86_64, apple).unwrap_err();
+                for piece in [
+                    "sound",
+                    "folder names",
+                    "file times",
+                    "tables",
+                    "distortion",
+                    "code page",
+                ] {
+                    assert!(why.contains(piece), "{piece}: {why}");
+                }
+                // The window with its mouse and keyboard: provided on Linux, not yet on macOS.
+                assert_eq!(why.contains("window"), apple, "{why}");
+                assert_eq!(why.contains("mouse and keyboard"), apple, "{why}");
+                assert_eq!(why.contains("main thread"), apple, "{why}");
+                // The processor's own differences only off x86-64 (Apple silicon).
+                assert_eq!(why.contains("x87"), !x86_64, "{why}");
+                assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
             }
-            // The processor's own differences only off x86-64 (Apple silicon).
-            assert_eq!(why.contains("x87"), !x86_64, "{why}");
-            assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
         }
         assert_eq!(
             why,
-            super::not_provided_on(cfg!(target_arch = "x86_64")).unwrap_err()
+            super::not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
+                .unwrap_err()
         );
     }
 

@@ -563,7 +563,6 @@ pub fn create_window_ex_a(
     };
     let handle = e.kernel.insert(KernelObject::Window);
     let rect = [x, y, x.wrapping_add(width), y.wrapping_add(height)];
-    #[cfg(windows)]
     super::d3d9real::window_created(
         e,
         handle,
@@ -648,10 +647,7 @@ pub fn set_window_text_a(e: &mut Engine, handle: u32, text: Ptr) -> u32 {
         return 0;
     };
     w.title = title.clone();
-    #[cfg(windows)]
     super::d3d9real::window_titled(e, handle, &title);
-    #[cfg(not(windows))]
-    let _ = title;
     1
 }
 
@@ -686,7 +682,6 @@ pub fn set_window_pos(
         size_h = height;
     }
     w.rect = [nx, ny, nx.wrapping_add(size_w), ny.wrapping_add(size_h)];
-    #[cfg(windows)]
     {
         let rect = w.rect;
         super::d3d9real::window_moved(e, handle, rect, flags);

@@ -328,10 +328,7 @@ pub const SHADER_WARM: Fix = Fix {
 };
 
 fn install_shader_warm(e: &mut Engine) {
-    #[cfg(windows)]
     engine_platform::d3d9real::want_shader_warm(e, true);
-    #[cfg(not(windows))]
-    let _ = e;
 }
 
 pub const SCRIPT_ERROR_GUARD: Fix = Fix {
