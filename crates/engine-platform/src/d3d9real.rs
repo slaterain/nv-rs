@@ -1,4 +1,5 @@
-//! The platform's Direct3D 9 layer forwarded to a backend that draws (ADR-0008), switched on with `NV_D3D9`: `real` (the real `d3d9.dll`), `wgpu` (`d3d9_wgpu`, ADR-0007), or
+//! The platform's Direct3D 9 layer forwarded to a backend that draws (ADR-0008), switched on
+//! with `NV_D3D9`: `real` (the real `d3d9.dll`), `wgpu` (`d3d9_wgpu`, ADR-0007), or
 //! `real,wgpu` (the real one draws and answers, wgpu gets every command after it off screen, for
 //! comparison: `d3d9_stream::Tee`); without it, by the run's choice ([`want_backend`]: in a
 //! launcher's play run, `Fallout.ini`'s `sRenderer`, wgpu on Vulkan by default). wgpu falls back to
@@ -9,9 +10,9 @@
 //! same runtime). Each modelled call that changes what is drawn is also recorded here as a command
 //! of the Direct3D 9 call stream (`d3d9_stream`), with the data it points at, for a backend that
 //! makes it on a counterpart: the real device (`super::d3d9backend`) or wgpu's. The modelled window
-//! gets a real Win32 window (here), the modelled device a real device on it, each modelled
-//! resource a real resource whose contents follow the game's unlocks. Where the real runtime
-//! answers differently from the model, the call is printed once (`NV_D3D9=real: ...`), and the
+//! gets a real window (from the window layer, `d3d9real/win32.rs` on Windows), the modelled
+//! device a real device on it, each modelled resource a real resource whose contents follow the
+//! game's unlocks. Where the real runtime answers differently from the model, the call is printed once (`NV_D3D9=real: ...`), and the
 //! model's answer stands.
 //!
 //! Where the backend runs (`d3d9_stream::Stream`): on a render thread of its own, so the game's
@@ -36,7 +37,6 @@
 //! The real device is created with `D3DCREATE_FPU_PRESERVE` added to the game's flags: the
 //! game's x87 precision switch is modelled (`crate::direct3d_device_created`,
 //! from the game's own flags), and the backend's thread's floating-point state is not the game's.
-
 //!
 //! Every system compiles this file (Linux and macOS PR 3a): the backend choice, the stream and the
 //! render thread, the forwarded calls, and the keyboard and mouse state DirectInput reads
@@ -259,7 +259,7 @@ pub struct Real {
     /// Where wgpu keeps the driver's compiled pipelines between runs ([`want_wgpu_cache`]).
     wgpu_cache: Option<std::path::PathBuf>,
     /// Tests: the real backend behind the stream, to look at ([`real_texture`]).
-    #[cfg(test)]
+    #[cfg(all(test, windows))]
     test_backend: Option<std::sync::Arc<std::sync::Mutex<super::d3d9backend::RealBackend>>>,
 }
 
@@ -282,11 +282,15 @@ impl Real {
         if let Some(s) = self.stream.as_mut() {
             s.finish();
         }
-        self.logged.is_empty()
-            && self
-                .test_backend
-                .as_ref()
-                .map_or(true, |b| b.lock().unwrap().logged.is_empty())
+        #[cfg(windows)]
+        let backend_quiet = self
+            .test_backend
+            .as_ref()
+            .map_or(true, |b| b.lock().unwrap().logged.is_empty());
+        // (Off Windows there is no real backend to look at: the game's side's notes only.)
+        #[cfg(not(windows))]
+        let backend_quiet = true;
+        self.logged.is_empty() && backend_quiet
     }
 }
 

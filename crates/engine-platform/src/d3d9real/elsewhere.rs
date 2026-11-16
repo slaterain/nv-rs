@@ -1,32 +1,25 @@
-//! The window layer off Windows (`super`'s contract): none yet. Every real window asked for is
-//! refused with a line naming what is missing; the game's modelled window stays as it is. (A
-//! winit window comes next, Linux and macOS PR 3b; the host refuses a start off Windows until
-//! then.)
+//! The window layer off Windows (`super`'s contract): none yet. A real window asked for stops the
+//! run with a line naming what is missing (a run without its window would go on drawing nothing).
+//! Unreachable today: the host refuses a start off Windows before the game makes its window, and
+//! the callers of `super` are Windows-only until the winit window comes (Linux and macOS PR 3b).
 
 use super::*;
 
-/// The thread that would make the real windows: here a channel whose other end is gone, so a
-/// request is refused at once (`super::window_created` prints that the real window could not be
-/// made), after one line saying why.
+/// The thread that would make the real windows: none, so asking for it stops the run.
 pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Sender<Request>> {
-    static THREAD: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Sender<Request>>> =
-        std::sync::OnceLock::new();
-    THREAD.get_or_init(|| {
-        eprintln!(
-            "NV_D3D9={}: the game's window is not provided on this system yet (no window layer)",
-            tag()
-        );
-        let (tx, _) = std::sync::mpsc::channel::<Request>();
-        std::sync::Mutex::new(tx)
-    })
+    eprintln!(
+        "NV_D3D9={}: the game's window is not provided on this system yet (no window layer): the run ends",
+        tag()
+    );
+    crate::end_process(1)
 }
 
-/// No real window here, so nothing follows the title.
+/// No real window here (none can be made: [`window_thread`]), so nothing follows the title.
 pub fn window_titled(e: &mut Engine, handle: u32, title: &[u8]) {
     let _ = (e, handle, title);
 }
 
-/// No real window here, so nothing follows the position.
+/// No real window here (none can be made: [`window_thread`]), so nothing follows the position.
 pub fn window_moved(e: &mut Engine, handle: u32, rect: [i32; 4], flags: u32) {
     let _ = (e, handle, rect, flags);
 }
