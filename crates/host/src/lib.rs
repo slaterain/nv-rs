@@ -121,8 +121,9 @@ impl Host {
         // registered. Vanilla content calls no extender opcode, and every change it makes to
         // vanilla commands is a row.
         nvse::install(&mut engine);
-        // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, with no command built
-        // yet, and answering "not installed" until the commands mods call are in (`crates/jip`).
+        // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, answering "not
+        // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
+        // `fixes::install` above) switched it on (`crates/jip`).
         jip::install(&mut engine);
         // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
         // jip_nvse.dll (`crates/uio`).
