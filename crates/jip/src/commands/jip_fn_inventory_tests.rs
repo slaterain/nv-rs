@@ -765,6 +765,12 @@ fn item_ref_current_health() {
     // Neither a weapon nor an armour: no full health.
     e.mem.set_u32(CONT_REF + 0x20, MISC);
     assert_eq!(call_on(&mut e, 0x270f, CONT_REF, &[n(2)]).1, 0.0);
+    // `NUM_ARGS_EX`: a line with no argument data has no count; the next line's bytes (a count
+    // and an int 2, which would answer 200) are not read: the stack's health (mode 0), 125.
+    e.mem.set_u32(CONT_REF + 0x20, WEAP);
+    let mut next = vec![1, 0];
+    next.extend(n(2));
+    assert_eq!(call_on_no_data(&mut e, 0x270f, CONT_REF, &next).1, 125.0);
 }
 
 #[test]
