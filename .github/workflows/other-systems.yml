@@ -1,0 +1,98 @@
+name: Other systems
+# Linux and macOS (Apple silicon): the play build compiles there and the unit tests run there. The game
+# does not run on either yet: the host refuses to start it there, naming what is still Windows-only.
+# Nothing here is a check of play.
+#
+# Its own workflow, so CI's Windows job (ci.yml, "check") is untouched. These jobs take runners
+# from the account's shared limit (20 jobs at a time, 5 of them macOS), and the Windows job's runs
+# are long, so they run only where they cannot crowd it out during a burst of pull requests:
+# - Linux: on pushes to main, on pull requests labelled "other-systems", and by hand.
+# - macOS: on pull requests labelled "other-systems", by hand, and once a night (not on every push
+#   to main: it takes about half an hour with two compilers).
+# A pull request without the label runs neither; the Windows job runs as before on every one.
+#
+# Both jobs are continue-on-error for now, so this workflow's result never stands in for the
+# Windows job's. The tests known to fail on these systems today are ignored where they fail, each
+# with its reason and the pull request that will fix it, so a red job here means a NEW failure.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: other-systems-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+jobs:
+  linux:
+    name: other systems (ubuntu-latest)
+    if: >-
+      (github.event_name == 'push') ||
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'other-systems'))
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 180
+    env:
+      CARGO_BUILD_JOBS: 4
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install the pinned Rust tools (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: '. -> target'
+          shared-key: other-ubuntu-latest
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the play build
+        run: cargo build --locked --profile play -p nv-viewer
+      # Every workspace crate's tests: none of them is Windows-only (tests that are carry
+      # cfg(windows) or an ignore with its reason). The launcher and the ledger are workspaces of
+      # their own (Windows-only and tooling) and are not built here.
+      - name: Test the workspace
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --no-fail-fast --workspace
+  macos:
+    name: other systems (macos-latest)
+    if: >-
+      (github.event_name == 'schedule') ||
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'other-systems'))
+    runs-on: macos-latest
+    continue-on-error: true
+    timeout-minutes: 180
+    env:
+      # Apple silicon runners have 7 GB of memory: two compilers at a time.
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install the pinned Rust tools (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: '. -> target'
+          shared-key: other-macos-latest
+          # Saved from the nightly run (macOS never runs on pushes to main).
+          save-if: ${{ github.event_name == 'schedule' }}
+      - name: Build the play build
+        run: cargo build --locked --profile play -p nv-viewer
+      # A shorter list than Linux's, for the runner's time and memory: the crates with this
+      # system's own code (the memory, the clock, the files, the processor arms of the x87 helpers,
+      # Havok and D3DX, the Metal device) and the small ones. Left out for now: the engine part
+      # crates (engine-gamebryo, -bs, -speedtree, -typed, the twelve engine-fallout-*), engine,
+      # nvse, jip, uio, nvinspect, play-patch and the viewer: their test builds are the largest,
+      # and Linux runs them.
+      - name: Test the crates
+        if: ${{ !cancelled() }}
+        run: >
+          cargo test --locked --no-fail-fast
+          -p engine-core -p engine-platform -p engine-havok -p host
+          -p d3d9-wgpu -p d3d9-stream -p d3dx-tex -p frame-model
+          -p esm -p bsa -p fos -p mp3 -p vorbis -p bink

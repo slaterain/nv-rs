@@ -3387,7 +3387,7 @@ mod tests_player_files {
     #[test]
     #[cfg_attr(
         not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
+        ignore = "the file listing's file times: not provided off Windows yet"
     )]
     fn a_wildcard_search_lists_then_runs_out() {
         let mut e = Engine::new();
@@ -3420,7 +3420,7 @@ mod tests_player_files {
     #[test]
     #[cfg_attr(
         not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
+        ignore = "the file listing's file times: not provided off Windows yet"
     )]
     fn find_close_after_a_search_that_found_nothing_answers_false() {
         let mut e = Engine::new();
@@ -3469,7 +3469,7 @@ mod tests_player_files {
     #[test]
     #[cfg_attr(
         not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
+        ignore = "Windows paths, then the file listing's file times: not provided off Windows yet"
     )]
     fn a_read_only_open_reads_the_players_file_in_place() {
         let mut e = Engine::new();
@@ -4200,7 +4200,7 @@ mod tests_changed_directories {
     #[should_panic(expected = "since FindFirstFileA; not provided")]
     #[cfg_attr(
         not(windows),
-        ignore = "Windows paths and file listings: not provided off Windows yet"
+        ignore = "the file listing's file times: not provided off Windows yet"
     )]
     fn a_search_whose_folder_changed_since_it_began_stops() {
         let dir = scratch("midsearch", &[("a.fos", 5), ("b.fos", 5)]);
