@@ -23,8 +23,12 @@
 //!   call);
 //! - the 3D scene and physics (not ported to this layer): `ReloadEquippedModels`,
 //!   `RefreshAnimData`, `ReloadCharController`;
-//! - not reached by lane C1 (nothing missing; the next agent): `PlayIdleEx` (the idle directory's
-//!   pick `00600950`, `TESIdleForm::FindIdle`'s condition walk, `AnimData::PlayIdle` `00497F20`).
+//! - `PlayIdleEx`: JIP's `TESIdleForm::FindIdle` walks an idle's children (`NiFormArray` at +0x40) by
+//!   the word at +8 of the array (its header's `BSSimpleArray::size`), while the exe's own walks of
+//!   the same array (`005FF2E0` through `0084E3A0` and `NiFormArray::GetFormAt` `004D6170`) take the
+//!   count from +0xC: which word JIP walks by in the PC layout, and what it reads past the count, is
+//!   to be settled first (lane C1, 2026-11-16); the rest (`00600950`, `00680C60`, `00497F20`, the
+//!   process's `interactedRef` +0x40) is confirmed.
 //!
 //! Layouts (JIP's headers; the exe where the audit table says so): a reference's base form +0x20,
 //! position z +0x38, cell +0x40, extra data list +0x44; an actor's process +0x68, killer +0xC0,

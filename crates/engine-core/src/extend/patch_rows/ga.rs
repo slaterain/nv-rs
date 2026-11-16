@@ -24,6 +24,13 @@ pub(in super::super) const SITES: &[Entry] = &[
     // H21 (fix row): HUDMainMenu::DoIdle 00770430, before its call of 0x77DA60: JIP's
     // ClearHUDOrphanedTiles destroys the HUD's child tiles whose scene node has no parent.
     row(0x0077_04ae),
+    // G10 (fix row): the HUD corner message record's layout (text 0x104 -> 0x204, record 0x310 ->
+    // 0x410), one seam per function for JIP's 16 bytes: DoIdle 00770430 (0x7714DA), fn_00775380
+    // (the queueing: 0x7753B8 and its ten neighbours to 0x775600), HideMessage 007756e0
+    // (0x7757B1, 0x7757D3, 0x77582B).
+    row(0x0077_14da),
+    row(0x0077_53b8),
+    row(0x0077_57b1),
     // G21 (fix row): the activation choices 007aa720: a choice with no text is passed over.
     row(0x007a_a80f),
     // G37 (fix row): StartMenu::ConfirmNewGame 007d32b0: InvalidChargenQuestFixHook falls back
