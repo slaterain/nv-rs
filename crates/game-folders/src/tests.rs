@@ -192,7 +192,10 @@ fn steam_finds_the_game_in_any_library_and_the_proton_saves() {
     assert!(lines[0].starts_with("own\t"));
     // (The folder as found: on Windows, where these tests also run, its text mixes `/` and `\`.)
     let found = &games(&home)[0].folder;
-    assert_eq!(lines[1], format!("game\tSteam\t{}", found.display()));
+    assert_eq!(
+        lines[1],
+        format!("game\tSteam\t{}", escape(&path_bytes(found)))
+    );
     assert_eq!(found, &game);
     assert!(lines[2].starts_with("saves\tSteam (Proton)\t"));
     // macOS: no store installs the game there, and no Proton.
@@ -407,4 +410,263 @@ fn a_link_into_the_players_folders_is_refused() {
     let never = never_written(&home);
     assert!(refused(&s.0.join("innocent/Saves"), &never).is_some());
     assert_eq!(refused(&s.0.join("elsewhere"), &never), None);
+}
+
+/// Review of #630: nv-rs's own folder is never taken away by a broad player folder: an XDG
+/// Documents folder that is the home folder ("$HOME/", xdg-user-dirs' "none"), XDG_DATA_HOME inside
+/// the Flathub Steam's folder, a Lutris prefix that holds the own folder.
+#[test]
+fn the_own_folder_stays_writable_inside_broad_player_folders() {
+    let s = Scratch::new("own-broad");
+    let h = s.0.join("home");
+    s.file(
+        "home/.config/user-dirs.dirs",
+        "XDG_DOCUMENTS_DIR=\"$HOME/\"\n",
+    );
+    let home = s.home(System::Linux);
+    assert_eq!(xdg_documents(&home), None);
+    let never = never_written(&home);
+    assert_eq!(refused(&own_folder(&home).join("Saves"), &never), None);
+    assert!(refused(&h.join("Documents/x"), &never).is_some());
+    // Started from the Flathub Steam: XDG_DATA_HOME inside its folder.
+    let flatpak = Home::new(
+        h.clone(),
+        Some(h.join(".var/app/com.valvesoftware.Steam/data")),
+        None,
+        System::Linux,
+    )
+    .unwrap();
+    let never = never_written(&flatpak);
+    assert_eq!(refused(&own_folder(&flatpak).join("Saves"), &never), None);
+    assert!(refused(
+        &h.join(".var/app/com.valvesoftware.Steam/data/Steam"),
+        &never
+    )
+    .is_some());
+    assert!(!own_folder_warnings(&flatpak, &never).is_empty());
+    // A Lutris prefix that is the whole data folder.
+    s.file(
+        "home/.local/share/lutris/games/x.yml",
+        &format!("game:\n  prefix: {}\n", h.join(".local/share").display()),
+    );
+    let home = s.home(System::Linux);
+    let never = never_written(&home);
+    assert_eq!(refused(&own_folder(&home).join("Saves"), &never), None);
+    assert!(refused(&h.join(".local/share/other"), &never).is_some());
+    // A prefix trick is not the own folder.
+    assert!(refused(&h.join(".local/share/nv-rs-other"), &never).is_some());
+}
+
+/// A link AT nv-rs's own folder opens nothing up: on macOS a link from it to ~/Library leaves
+/// ~/Library refused; a link planted inside it to a player folder is refused by where it leads.
+#[cfg(unix)]
+#[test]
+fn a_link_at_or_inside_the_own_folder_opens_nothing() {
+    let s = Scratch::new("own-link");
+    let home = s.home(System::MacOs);
+    let library = s.dir("home/Library");
+    s.dir("home/Library/Application Support");
+    std::os::unix::fs::symlink(&library, own_folder(&home)).unwrap();
+    let never = never_written(&home);
+    assert!(refused(&own_folder(&home).join("Preferences"), &never).is_some());
+    assert!(refused(&library.join("Preferences"), &never).is_some());
+    assert!(!own_folder_warnings(&home, &never).is_empty());
+    let linux = s.home(System::Linux);
+    let own = own_folder(&linux);
+    std::fs::create_dir_all(&own).unwrap();
+    let documents = s.dir("home/Documents");
+    std::os::unix::fs::symlink(&documents, own.join("planted")).unwrap();
+    let never = never_written(&linux);
+    assert!(refused(&own.join("planted/x.fos"), &never).is_some());
+    assert_eq!(refused(&own.join("Saves/x.fos"), &never), None);
+}
+
+/// The Snap Steam, plain Wine, Bottles, PlayOnLinux and CrossOver: guarded as whole folders, saves
+/// found in them; and anything shaped like a library's or a prefix's folders is refused even when
+/// no list names it.
+#[test]
+fn other_steams_and_wine_tools_are_guarded_and_their_saves_found() {
+    let s = Scratch::new("wine-tools");
+    let h = s.0.join("home");
+    let snap_game = s.game(
+        "home/snap/steam/common/.local/share/Steam/steamapps/common/Fallout New Vegas",
+        "Data",
+        "FalloutNV.esm",
+    );
+    let snap_saves = s.dir(
+        "home/snap/steam/common/.local/share/Steam/steamapps/compatdata/22380/pfx/drive_c/users/steamuser/Documents/My Games/FalloutNV",
+    );
+    // A non-Steam shortcut's prefix (its own id).
+    let shortcut = s.dir(
+        "home/snap/steam/common/.local/share/Steam/steamapps/compatdata/3123456789/pfx/drive_c/users/steamuser/Documents/My Games/FalloutNV",
+    );
+    let wine = s.dir("home/.wine/drive_c/users/player/Documents/My Games/FalloutNV");
+    let bottles = s.dir(
+        "home/.var/app/com.usebottles.bottles/data/bottles/bottles/FNV/drive_c/users/player/Documents/My Games/FalloutNV",
+    );
+    let pol =
+        s.dir("home/.PlayOnLinux/wineprefix/FNV/drive_c/users/player/Documents/My Games/FalloutNV");
+    let cx = s.dir("home/.cxoffice/FNV/drive_c/users/crossover/Documents/My Games/FalloutNV");
+    let home = s.home(System::Linux);
+    let scan = scan(&home);
+    assert_eq!(
+        scan.games,
+        [Found {
+            store: "Steam",
+            folder: snap_game
+        }]
+    );
+    let found: Vec<&PathBuf> = scan.saves.iter().map(|s| &s.folder).collect();
+    for want in [&snap_saves, &shortcut, &wine, &cx, &pol, &bottles] {
+        assert!(found.contains(&want), "{} in {found:?}", want.display());
+    }
+    let never = never_written_from(&home, &scan);
+    for dir in [
+        h.join("snap/steam/x"),
+        h.join(".wine/x"),
+        h.join(".cxoffice/x"),
+        h.join(".PlayOnLinux/x"),
+        h.join(".var/app/com.usebottles.bottles/x"),
+        h.join(".local/share/bottles/x"),
+    ] {
+        assert!(refused(&dir, &never).is_some(), "{}", dir.display());
+    }
+    // By shape: a library on a disk nobody listed, a prefix nobody named.
+    let empty = Home::new(s.0.join("nobody"), None, None, System::Linux).unwrap();
+    let never = never_written(&empty);
+    for dir in [
+        s.0.join("mnt/Lib/SteamApps/compatdata/22380/pfx/x"),
+        s.0.join("mnt/Lib/steamapps/COMMON/Fallout New Vegas"),
+        s.0.join("games/prefix/drive_c/Users/me/Documents"),
+    ] {
+        assert!(refused(&dir, &never).is_some(), "{}", dir.display());
+    }
+    assert_eq!(refused(&s.0.join("mnt/Lib/notes"), &never), None);
+}
+
+/// The older flat library list, a "path" that is a value, relative paths; a 22490 manifest naming
+/// another folder; two folders differing only in case, the empty one first.
+#[test]
+fn library_lists_manifests_and_case_variants() {
+    let flat = "\"LibraryFolders\"\n{\n\t\"TimeNextStatsReport\"\t\"1\"\n\t\"1\"\t\"/mnt/games/SteamLibrary\"\n\t\"2\"\t\"relative/lib\"\n}\n";
+    assert_eq!(
+        library_paths(flat),
+        [PathBuf::from("/mnt/games/SteamLibrary")]
+    );
+    let labelled = "\"libraryfolders\" { \"0\" { \"label\" \"path\" \"path\" \"/x/Steam\" \"contentid\" \"5\" } }";
+    assert_eq!(library_paths(labelled), [PathBuf::from("/x/Steam")]);
+    assert!(library_paths("\"libraryfolders\" { \"0\" { \"path\" \"/cut").is_empty());
+    let s = Scratch::new("variants");
+    let home = s.home(System::Linux);
+    s.dir("home/.steam/root/steamapps/common/Fallout New Vegas/Data");
+    let real = s.game(
+        "home/.steam/root/steamapps/common/FALLOUT NEW VEGAS",
+        "data",
+        "falloutnv.esm",
+    );
+    let pcr = s.game(
+        "home/.steam/root/steamapps/common/FNV PCR",
+        "Data",
+        "FalloutNV.esm",
+    );
+    s.file(
+        "home/.steam/root/steamapps/appmanifest_22490.acf",
+        "\"AppState\" { \"installdir\" \"FNV PCR\" }",
+    );
+    let found: Vec<PathBuf> = games(&home).into_iter().map(|f| f.folder).collect();
+    assert!(found.contains(&pcr), "{found:?}");
+    // A disk that ignores case (Windows, macOS) holds one folder for both names.
+    if !s
+        .0
+        .join("home/.steam/root/steamapps/common/fallout new vegas")
+        .exists()
+    {
+        assert!(found.contains(&real), "{found:?}");
+        // Two Data folders, the empty one named exactly.
+        let both = s.dir("both");
+        s.dir("both/Data");
+        s.file("both/data/FalloutNV.esm", "x");
+        assert_eq!(data_folder(&both), Some(both.join("data")));
+    }
+}
+
+/// legendary's \u escapes (a non-ASCII home folder) and PyYAML's \x escapes and folded lines.
+#[test]
+fn store_files_escapes_are_decoded() {
+    let json =
+        r#"{"install_path": "/home/j\u00f6rg/Games/FNV", "x": "\ud83d\ude00", "y": "\ud83d"}"#;
+    assert_eq!(json_strings(json, "install_path"), ["/home/jörg/Games/FNV"]);
+    assert_eq!(json_strings(json, "x"), ["\u{1f600}"]);
+    assert!(json_strings(json, "y").is_empty());
+    let yaml = "game:\n  exe: \"/home/j\\xF6rg/Games/a very long folder name that PyYAML\n    folds onto the next line/FalloutNV.exe\"\n  game_path: /home/a plain\n    value folded\n  prefix: 'it''s'\nsystem: {}\n";
+    assert_eq!(
+        yaml_values(yaml, "exe"),
+        ["/home/jörg/Games/a very long folder name that PyYAML folds onto the next line/FalloutNV.exe"]
+    );
+    assert_eq!(
+        yaml_values(yaml, "game_path"),
+        ["/home/a plain value folded"]
+    );
+    assert_eq!(yaml_values(yaml, "prefix"), ["it's"]);
+}
+
+/// --find's fields are escaped: a tab, a line break, a quote, a percent sign and a non-UTF-8 byte
+/// in a folder's name cannot make or change a record.
+#[test]
+fn the_report_cannot_be_forged() {
+    assert_eq!(escape(b"/a b/c-d_e.f"), "/a b/c-d_e.f");
+    assert_eq!(escape(b"a\tb\nc\"d%e\xff"), "a%09b%0Ac%22d%25e%FF");
+    assert_eq!(escape(b"Steam (Proton)"), "Steam (Proton)");
+}
+
+/// The same with real folders: a Heroic prefix whose name holds a line break and a forged record.
+#[cfg(unix)]
+#[test]
+fn a_folder_name_with_a_line_break_stays_one_field() {
+    let s = Scratch::new("forge");
+    let prefix = s.0.join("p\ngame\tSteam\t/q");
+    std::fs::create_dir_all(prefix.join("drive_c/users/x/Documents/My Games/FalloutNV")).unwrap();
+    s.file(
+        "home/.config/heroic/GamesConfig/1.json",
+        &format!(
+            "{{\"1\":{{\"winePrefix\":\"{}\"}}}}",
+            prefix
+                .display()
+                .to_string()
+                .replace('\n', "\\n")
+                .replace('\t', "\\t")
+        ),
+    );
+    let home = s.home(System::Linux);
+    let report = report(&home);
+    let lines: Vec<&str> = report.lines().collect();
+    assert!(lines.iter().all(|l| !l.starts_with("game")), "{report}");
+    assert_eq!(
+        lines.iter().filter(|l| l.starts_with("saves\t")).count(),
+        1,
+        "{report}"
+    );
+    assert!(report.contains("p%0Agame%09Steam%09"), "{report}");
+}
+
+/// A name that is not UTF-8 keeps its bytes (Linux allows any bytes; macOS's disks do not).
+#[cfg(target_os = "linux")]
+#[test]
+fn a_name_that_is_not_utf8_keeps_its_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    let s = Scratch::new("bytes");
+    let name = std::ffi::OsStr::from_bytes(b"Fallout \xe9");
+    let game =
+        s.0.join("home/.local/share/Steam/steamapps/common")
+            .join(name);
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::write(game.join("Data/FalloutNV.esm"), b"x").unwrap();
+    s.file(
+        "home/.local/share/Steam/steamapps/appmanifest_22380.acf",
+        "\"AppState\" { \"installdir\" \"Fallout \\u00e9\" }",
+    );
+    let home = s.home(System::Linux);
+    // Not found by a manifest that names it in UTF-8, but escaped byte for byte when printed.
+    assert!(escape(&path_bytes(&game)).ends_with("Fallout %E9"));
+    assert!(!report(&home).contains('\u{fffd}'));
 }

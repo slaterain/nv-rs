@@ -87,10 +87,95 @@ fn refused_here(path: &Path) -> Option<&'static str> {
         refused(path, profile.as_deref(), &known_folders())
     }
     #[cfg(not(windows))]
-    match game_folders::Home::from_process() {
-        Some(home) => game_folders::refused(path, &game_folders::never_written(&home)),
-        None => Some("HOME is not set to a full path, so the player's folders are unknown"),
+    match guard_list() {
+        Ok(never) => game_folders::refused(path, never),
+        Err(why) => Some(why),
     }
+}
+
+/// Off Windows: the player's folders (`game_folders::never_written`), looked at once, on a thread
+/// of their own that [`prepare`] starts before the game's first frame.
+#[cfg(not(windows))]
+static GUARD: OnceLock<Result<Vec<game_folders::Guarded>, &'static str>> = OnceLock::new();
+
+/// [`prepare`]'s look, until [`guard_list`] takes its answer.
+#[cfg(not(windows))]
+#[allow(clippy::type_complexity)]
+static GUARD_LOOK: Mutex<Option<std::sync::mpsc::Receiver<Option<Vec<game_folders::Guarded>>>>> =
+    Mutex::new(None);
+
+/// Starts looking at the player's folders (Linux and macOS) on a thread of its own, so the first
+/// frame does not wait on every Steam library and Wine prefix (a sleeping or offline disk can take
+/// seconds). Once; nothing on Windows, which asks Windows for its folders.
+pub fn prepare() {
+    #[cfg(not(windows))]
+    {
+        let mut look = GUARD_LOOK.lock().unwrap_or_else(|p| p.into_inner());
+        if look.is_some() || GUARD.get().is_some() {
+            return;
+        }
+        let (send, receive) = std::sync::mpsc::channel();
+        let started = std::thread::Builder::new()
+            .name("nv player folders".into())
+            .spawn(move || {
+                let list = game_folders::Home::from_process()
+                    .map(|home| game_folders::never_written(&home));
+                let _ = send.send(list);
+            });
+        if started.is_ok() {
+            *look = Some(receive);
+        }
+    }
+}
+
+/// The player's folders off Windows ([`prepare`]'s look), waited for at most 10 s: a look that
+/// takes longer (a disk that does not answer) or cannot be made refuses every write, said once.
+#[cfg(not(windows))]
+fn guard_list() -> Result<&'static [game_folders::Guarded], &'static str> {
+    GUARD
+        .get_or_init(|| {
+            prepare();
+            let receive = GUARD_LOOK.lock().unwrap_or_else(|p| p.into_inner()).take();
+            let Some(receive) = receive else {
+                return Err("the player's folders could not be looked at (no thread)");
+            };
+            match receive.recv_timeout(std::time::Duration::from_secs(10)) {
+                Ok(Some(list)) => Ok(list),
+                Ok(None) => {
+                    Err("HOME is not set to a full path, so the player's folders are unknown")
+                }
+                Err(_) => {
+                    println!(
+                        "NV_SAVE_OUT: the player's folders were not all looked at within 10 s (a sleeping or offline disk?); nothing is written"
+                    );
+                    Err("the player's folders could not be looked at within 10 s")
+                }
+            }
+        })
+        .as_ref()
+        .map(Vec::as_slice)
+        .map_err(|e| *e)
+}
+
+/// Writes `bytes` to the temporary file `temporary`. Off Windows a file (or a link) already there
+/// is removed first (a link, not where it leads) and the file is made new, so a link planted under
+/// the temporary name cannot be written through.
+fn write_part(temporary: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        use std::io::Write;
+        match std::fs::remove_file(temporary) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(temporary)?;
+        file.write_all(bytes)
+    }
+    #[cfg(windows)]
+    std::fs::write(temporary, bytes)
 }
 
 /// A warning the player can't miss: a line in the log, and a message box (from its own thread,
@@ -174,10 +259,10 @@ fn dialog_commands(text: &str) -> Vec<std::process::Command> {
 }
 
 /// The player's Documents, AppData and Local AppData as Windows answers for them (wherever they
-/// were moved to: OneDrive, another drive). Off Windows: the player's own folders there
-/// (`game_folders::never_written`), empty when `HOME` is not set.
+/// were moved to: OneDrive, another drive). Windows only: off Windows the guard is
+/// `game_folders::never_written`, whose folders carry nv-rs's own folder as their exception.
+#[cfg(windows)]
 pub fn known_folders() -> Vec<PathBuf> {
-    #[cfg(windows)]
     {
         #[link(name = "shell32")]
         extern "system" {
@@ -201,15 +286,6 @@ pub fn known_folders() -> Vec<PathBuf> {
         }
         out
     }
-    #[cfg(not(windows))]
-    game_folders::Home::from_process()
-        .map(|home| {
-            game_folders::never_written(&home)
-                .into_iter()
-                .map(|g| g.root)
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// The path the system really means: links, junctions, `subst` and short names resolved, a part
@@ -435,10 +511,24 @@ pub fn run(job: &Job) -> Result<Option<String>, String> {
             copied,
             ..
         } => {
+            // Off Windows the guard is asked again at write time, for the file and its temporary
+            // name: a link made after the start cannot lead the write into a player's folder.
+            #[cfg(not(windows))]
+            if let Some(why) = refused_here(target).or_else(|| refused_here(temporary)) {
+                let which = if copied.is_some() {
+                    "NV_SAVE_OUT"
+                } else {
+                    "NV_PREFS_OUT"
+                };
+                return Err(format!(
+                    "{which}: {} not copied: refused ({why})",
+                    target.display()
+                ));
+            }
             let written = dir
                 .as_deref()
                 .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::write(temporary, bytes))
+                .and_then(|()| write_part(temporary, bytes))
                 .and_then(|()| std::fs::rename(temporary, target));
             match (written, copied) {
                 (Ok(()), Some(name)) => Ok(Some(format!("NV_SAVE_OUT: copied {name}"))),
