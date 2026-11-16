@@ -196,10 +196,15 @@ done
 if [ -z "${GITHUB_ACTIONS:-}" ] && [ -n "${USER:-}" ]; then
     set -- "$@" --needle "$USER"
 fi
-# (LEGAL.md names fnv_decomp, so that one only counts in the program.) FUN_, DAT_ and LAB_ are the
-# names a disassembler gives code and data nobody has named.
-for needle in nv-re build43 fnv_decomp /target/release /target/play FUN_ DAT_ LAB_; do
+# (LEGAL.md names fnv_decomp, so that one only counts in the program.)
+for needle in nv-re build43 fnv_decomp /target/release /target/play; do
     set -- "$@" --program-needle "$needle"
+done
+# FUN_, DAT_ and LAB_ are the names a disassembler gives code and data nobody has named, always in
+# upper case: searched in that case only, since macOS's program holds `fun_` inside other bytes (a
+# table of our own function names, a name's tail after a byte that reads as `f`; CI, 2026-11-16).
+for needle in FUN_ DAT_ LAB_; do
+    set -- "$@" --program-needle-exact "$needle"
 done
 if [ -n "$game" ]; then
     set -- "$@" --game "$game" --max-run 4096
