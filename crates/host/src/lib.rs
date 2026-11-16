@@ -101,6 +101,9 @@ impl Host {
                 exe.display()
             ));
         }
+        // Linux and macOS: the program builds there, but the game does not run yet.
+        #[cfg(not(windows))]
+        not_provided_here()?;
         let mut engine = Box::new(Engine::with_exe(&exe)?);
         // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with
         // the same addresses.
@@ -379,6 +382,21 @@ impl Host {
         eprintln!("NV_REPEATABLE: {frames} main frames run; the run ends");
         true
     }
+}
+
+/// [`Host::start_with`] off Windows: the program builds on Linux and macOS, but the game cannot
+/// run there yet, so every start is refused with the pieces that are still Windows-only, instead
+/// of a run that would go on without them (no window drawn, no sound, the game's own folder
+/// names not found, files listed by a call that stops) and fail somewhere less clear.
+#[cfg(any(not(windows), test))]
+fn not_provided_here() -> Result<(), String> {
+    Err("nv-rs does not run the game on this system yet: it builds here, but these are only \
+         provided on Windows so far: the game's window with its mouse and keyboard (and so \
+         anything drawn), the sound on the speakers, the game's Windows folder names (a drive \
+         letter and backslashes) over this system's folders, the file listing's file times, and \
+         this machine's tables (display adapter, sound devices, folders), which are measured on \
+         Windows"
+        .to_string())
 }
 
 /// What `nv-viewer --check` reports for the installation whose `Data` folder is `data`, without
@@ -677,6 +695,28 @@ fn sound_choice(sound: Option<&str>, record: bool, hidden: bool) -> SoundChoice 
 
 #[cfg(test)]
 mod tests {
+    /// Off Windows a start is refused, naming the pieces that are still Windows-only.
+    #[test]
+    fn a_start_off_windows_is_refused_naming_what_is_missing() {
+        let why = super::not_provided_here().unwrap_err();
+        for piece in ["window", "mouse and keyboard", "sound", "folder names", "tables"] {
+            assert!(why.contains(piece), "{piece}: {why}");
+        }
+    }
+
+    /// The refusal is made before the exe is mapped: a start with an installation present stops
+    /// with it on Linux and macOS (an installation with no exe still says that first).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_start_off_windows_stops_with_the_refusal() {
+        let dir = std::env::temp_dir().join(format!("nv-host-refusal-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Data")).unwrap();
+        std::fs::write(dir.join("FalloutNV.exe"), b"MZ").unwrap();
+        let err = super::Host::start(&dir.join("Data")).err().unwrap();
+        assert_eq!(err, super::not_provided_here().unwrap_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_hidden_window_never_plays_on_the_speakers() {
         use super::{sound_choice, SoundChoice};

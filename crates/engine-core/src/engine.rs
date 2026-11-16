@@ -608,6 +608,8 @@ impl Engine {
     /// starts at the host's own `GetTickCount` (milliseconds since the machine started), as the
     /// game sees it: code that takes a zero start stamp as long ago depends on it (the loading
     /// menu's `Update` 00789a90 checks the intro movie only within 3 s of `+0x5b4`, 0 at first).
+    /// On Linux and macOS it starts at the same count from the system's own clock
+    /// ([`host_tick_count`]).
     pub fn start_real_clock(&mut self) {
         #[cfg(windows)]
         {
@@ -616,6 +618,11 @@ impl Engine {
             }
             // SAFETY: GetTickCount takes nothing and only reads the system's tick count.
             self.clock_ms = unsafe { GetTickCount() };
+            self.clock_us = 0;
+        }
+        #[cfg(unix)]
+        {
+            self.clock_ms = host_tick_count();
             self.clock_us = 0;
         }
         self.real_clock = Some(std::time::Instant::now());
@@ -1517,10 +1524,84 @@ fn block_check_from_env() -> Option<(bool, bool, bool)> {
     })
 }
 
+/// `GetTickCount` on Linux and macOS: the milliseconds since the machine started, in 32 bits.
+/// Windows' count goes on while the machine sleeps, so the clock is one that does too: Linux's
+/// `CLOCK_BOOTTIME`, and macOS's `CLOCK_MONOTONIC` (Darwin's goes on in sleep; its
+/// `CLOCK_UPTIME_RAW` does not). Through the C library's `clock_gettime`, declared here as
+/// `mem.rs` declares `mmap` (no `libc` dependency); `timespec` is two 64-bit words on these
+/// 64-bit systems.
+#[cfg(unix)]
+fn host_tick_count() -> u32 {
+    #[repr(C)]
+    struct Timespec {
+        sec: i64,
+        nsec: i64,
+    }
+    extern "C" {
+        fn clock_gettime(clock: i32, out: *mut Timespec) -> i32;
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    const CLOCK: i32 = 7; // CLOCK_BOOTTIME
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    const CLOCK: i32 = 6; // CLOCK_MONOTONIC
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "macos",
+        target_os = "ios"
+    )))]
+    compile_error!("the game's clock: the uptime clock of this system is not known here");
+    let mut now = Timespec { sec: 0, nsec: 0 };
+    // SAFETY: the call writes the one `timespec` it is given.
+    let r = unsafe { clock_gettime(CLOCK, &mut now) };
+    assert_eq!(
+        r,
+        0,
+        "the machine's uptime (clock_gettime): {}",
+        std::io::Error::last_os_error()
+    );
+    tick_count_of(now.sec, now.nsec)
+}
+
+/// The tick count of an uptime of `sec` seconds and `nsec` nanoseconds: whole milliseconds,
+/// kept to 32 bits as `GetTickCount` keeps them (it wraps to 0 after 2^32 ms, 49.7 days).
+#[cfg(any(unix, test))]
+fn tick_count_of(sec: i64, nsec: i64) -> u32 {
+    let ms = (sec as u64)
+        .wrapping_mul(1000)
+        .wrapping_add(nsec as u64 / 1_000_000);
+    ms as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::args;
+
+    /// The tick count Linux and macOS start the game's clock at: whole milliseconds of the
+    /// uptime, wrapping at 2^32 as `GetTickCount` does.
+    #[test]
+    fn the_tick_count_is_the_uptimes_milliseconds_in_32_bits() {
+        assert_eq!(tick_count_of(0, 0), 0);
+        assert_eq!(tick_count_of(0, 999_999), 0);
+        assert_eq!(tick_count_of(0, 1_000_000), 1);
+        assert_eq!(tick_count_of(1, 999_999_999), 1_999);
+        assert_eq!(tick_count_of(3_600, 250_000_000), 3_600_250);
+        // 2^32 ms is 4294967.296 s: the count wraps there, and goes on from 0.
+        assert_eq!(tick_count_of(4_294_967, 295_999_999), u32::MAX);
+        assert_eq!(tick_count_of(4_294_967, 296_000_000), 0);
+        assert_eq!(tick_count_of(4_294_968, 0), 704);
+    }
+
+    /// The uptime clock this system has answers, and it starts the game's clock past zero
+    /// unless the machine started less than a millisecond ago.
+    #[cfg(unix)]
+    #[test]
+    fn the_real_clock_starts_at_the_machines_uptime() {
+        let mut e = Engine::new();
+        e.start_real_clock();
+        assert!(e.clock_ms > 0);
+    }
 
     /// The block check names the translated function that writes past a `with_stack` local
     /// (the 00553bb0 / 004e75d0 case: a 0x20-byte local, nine words written).

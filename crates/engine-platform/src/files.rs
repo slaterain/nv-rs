@@ -1131,6 +1131,8 @@ fn host_name_text(name: &std::ffi::OsStr) -> String {
 /// last-write times, the size (high word, then low), the two reserved words 0, `cFileName` (the
 /// name as stored, then one zero byte) and an empty `cAlternateFileName` (one zero byte at
 /// +0x130); the rest of the buffer is left as it was.
+// Off Windows the file times stop the run before anything is written (below).
+#[cfg_attr(not(windows), allow(unused_variables, unreachable_code))]
 fn write_find_data(
     e: &mut Engine,
     data: Ptr,

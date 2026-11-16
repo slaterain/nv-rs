@@ -1270,7 +1270,7 @@ fn source_for(e: &mut Engine, device: Option<u32>) -> TextureSource {
     };
     #[cfg(not(windows))]
     let real = {
-        let _ = device;
+        let _ = (&e, device);
         false
     };
     #[cfg(windows)]
