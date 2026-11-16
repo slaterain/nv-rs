@@ -999,9 +999,12 @@ Not yet, with the switch on:
   GW, GL and GX have none yet, the others' built ones are under their headings below): what they change stays the game's own; for
   example `ToggleImmortalMode` does not yet stop the hit effects (G123 to G125).
 - With real threads JIP's own data no longer makes a thread wait (its aux variables and item data have
-  their own locks), but a mod's event script run from another thread (JIP's actor, world and UI event
-  hooks) and `AuxVarGetFltCond`'s name lookup still use xNVSE's shared state: that thread waits for
-  the main thread a moment (a possible hitch), not a stop.
+  their own locks, and xNVSE's string variables, which `AuxVarGetFltCond` reads its name from, have
+  theirs, as in xNVSE), but a mod's event script run from another thread (JIP's actor, world and UI
+  event hooks) still uses xNVSE's shared state: that thread waits for the main thread a moment (a
+  possible hitch), not a stop. Running a script touches xNVSE's call stack and the game's code
+  throughout, so it stays one thread at a time (xNVSE itself puts off its own event handlers fired on another
+  thread until the main thread runs them).
 
 Nothing changes with the switch off: JIP is put in exactly as before the row (the same records, handlers,
 seams, wraps, vtable slots and plugin list; the patch word 0), checked by `jip`'s `switch_tests` and the
