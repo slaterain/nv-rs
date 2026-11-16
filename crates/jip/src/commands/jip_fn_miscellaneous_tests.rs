@@ -2106,3 +2106,138 @@ fn unreadable_arguments_are_refused() {
     assert_eq!(gravity, [0, 4, 8].map(|o| e.mem.u32(EXT_HKP + 0x10 + o)));
     assert_eq!(e.mem.f32(hour + 0x24), 10.0);
 }
+
+const SNEAK_MOVER: u32 = C2 + 0x2_0000;
+const MOVER_VT: u32 = C2 + 0x2_0100;
+const CACHED: u32 = C2 + 0x2_0200;
+const FORCE_FN: u32 = 0x00de_c220;
+const PARALYZED_FN: u32 = 0x00de_c230;
+const SNEAK_CHANGED_FN: u32 = 0x0093_ab30;
+const IRON_SIGHTS_FN: u32 = 0x008b_b650;
+const BLOCK_FN: u32 = 0x0089_4cc0;
+
+/// The player standing, able to sneak: mover flags 0x81 (+0x400 when sneaking), action -1,
+/// cached flags 0xFFFF; `GetIsParalyzed` answers the byte at `C2 + 0x2_0300` with upper bytes
+/// set. The exe's action table at `0x94423C` is in its code section, which the game's memory
+/// does not hold: it stays unmapped here too, so the command must not read it.
+fn sneak_setup() -> Engine {
+    let mut e = setup();
+    assert!(!e.mem.is_mapped(0x0094_423c));
+    e.mem.set_u32(PC + 0x190, SNEAK_MOVER);
+    e.mem.set_u32(SNEAK_MOVER, MOVER_VT);
+    e.mem.set_u32(MOVER_VT + 0xc, FORCE_FN);
+    e.mem.set_u32(SNEAK_MOVER + 0x94, 0x81);
+    e.mem.set_u16(PROCESS + 0x2ec, 0xffff);
+    e.mem.set_u32(PROCESS + 0x2c, CACHED);
+    e.mem.set_u32(CACHED + 0x44, 0xffff);
+    e.mem.set_u32(VT_REFR + 0x234, PARALYZED_FN);
+    e.register(PARALYZED_FN, |e, w| {
+        rec(PARALYZED_FN, w);
+        eax(0xabcd_ef00 | u32::from(e.mem.u8(C2 + 0x2_0300)))
+    });
+    e.register(FORCE_FN, |e, w| {
+        rec(FORCE_FN, w);
+        e.mem.set_u32(SNEAK_MOVER + 0x94, w[1]);
+        eax(0)
+    });
+    e.register(SNEAK_CHANGED_FN, |_, w| {
+        rec(SNEAK_CHANGED_FN, w);
+        eax(0)
+    });
+    e.register(IRON_SIGHTS_FN, |_, w| {
+        rec(IRON_SIGHTS_FN, w);
+        eax(0)
+    });
+    e.register(BLOCK_FN, |_, w| {
+        rec(BLOCK_FN, w);
+        eax(0)
+    });
+    e
+}
+
+fn changes() -> usize {
+    calls_to(FORCE_FN).len()
+}
+
+#[test]
+fn toggle_player_sneaking_sneaks_and_stands() {
+    let mut e = sneak_setup();
+    // Sneak: the flag set through the mover, 0093AB30(0xA), iron sights and block ended, the
+    // cached speeds marked stale. No result.
+    assert_eq!(call(&mut e, 0x2907, &[n(1)]).1, 0.0);
+    assert_eq!(calls_to(FORCE_FN), vec![vec![SNEAK_MOVER, 0x481]]);
+    assert_eq!(calls_to(SNEAK_CHANGED_FN), vec![vec![PC, 0xa]]);
+    assert_eq!(calls_to(IRON_SIGHTS_FN), vec![vec![PC, 0, 0, 0]]);
+    assert_eq!(calls_to(BLOCK_FN), vec![vec![PC, 0]]);
+    assert_eq!(e.mem.u32(CACHED + 0x44), 0xcfff);
+    // Already sneaking: nothing; standing: 0x400 cleared, 0093AB30(0xB). With the scope
+    // (+0x64F) no iron sights or block calls.
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2907, &[n(2)]);
+    assert_eq!(changes(), 0);
+    e.mem.set_u8(PC + 0x64f, 1);
+    call(&mut e, 0x2907, &[n(0)]);
+    assert_eq!(calls_to(FORCE_FN), vec![vec![SNEAK_MOVER, 0x81]]);
+    assert_eq!(calls_to(SNEAK_CHANGED_FN), vec![vec![PC, 0xb]]);
+    assert!(calls_to(IRON_SIGHTS_FN).is_empty() && calls_to(BLOCK_FN).is_empty());
+    // No cached values: the rest still done.
+    e.mem.set_u32(PROCESS + 0x2c, 0);
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2907, &[n(1)]);
+    assert_eq!(changes(), 1);
+}
+
+#[test]
+fn toggle_player_sneaking_refusals() {
+    // Each blocks the change on its own; the neighbouring bytes are set so a wider read differs.
+    type Setup = fn(&mut Engine);
+    let cases: [(&str, Setup); 11] = [
+        ("alive state", |e| e.mem.set_u32(PC + 0x108, 1)),
+        ("sitting", |e| e.mem.set_u32(PC + 0x1ac, 3)),
+        ("controls 0x40", |e| e.mem.set_u8(PC + 0x680, 0x40)),
+        ("knocked", |e| e.mem.set_u8(PROCESS + 0x13c, 0xff)),
+        ("action 0", |e| e.mem.set_u16(PROCESS + 0x2ec, 0)),
+        ("action 16", |e| e.mem.set_u16(PROCESS + 0x2ec, 16)),
+        ("action 18 (past the table)", |e| {
+            e.mem.set_u16(PROCESS + 0x2ec, 18)
+        }),
+        ("action -2 (before the table)", |e| {
+            e.mem.set_u16(PROCESS + 0x2ec, 0xfffe)
+        }),
+        ("paralysed", |e| e.mem.set_u8(C2 + 0x2_0300, 1)),
+        ("a lower process", |e| e.mem.set_u32(PROCESS + 0x28, 1)),
+        ("no mover", |e| e.mem.set_u32(PC + 0x190, 0)),
+    ];
+    for (what, f) in cases {
+        let mut e = sneak_setup();
+        f(&mut e);
+        call(&mut e, 0x2907, &[n(1)]);
+        assert_eq!(changes(), 0, "{what}");
+        assert!(calls_to(SNEAK_CHANGED_FN).is_empty(), "{what}");
+        assert!(
+            calls_to(IRON_SIGHTS_FN).is_empty() && calls_to(BLOCK_FN).is_empty(),
+            "{what}"
+        );
+        assert_eq!(e.mem.u32(CACHED + 0x44), 0xffff, "{what}");
+    }
+    // Bits other than 0x40 of the controls byte, actions whose byte is 0 (2, 9, 17): allowed.
+    type Allow = fn(&mut Engine);
+    let allowed: [Allow; 4] = [
+        |e| e.mem.set_u8(PC + 0x680, 0xbf),
+        |e| e.mem.set_u16(PROCESS + 0x2ec, 2),
+        |e| e.mem.set_u16(PROCESS + 0x2ec, 9),
+        |e| e.mem.set_u16(PROCESS + 0x2ec, 17),
+    ];
+    for (i, f) in allowed.into_iter().enumerate() {
+        let mut e = sneak_setup();
+        f(&mut e);
+        call(&mut e, 0x2907, &[n(1)]);
+        assert_eq!(changes(), 1, "case {i}");
+        assert!(!e.mem.is_mapped(0x0094_423c), "case {i}");
+    }
+    // An argument that does not read: nothing.
+    let mut e = sneak_setup();
+    call(&mut e, 0x2907, &[vec![b'G', 9, 0]]);
+    assert_eq!(changes(), 0);
+    assert!(calls_to(PARALYZED_FN).is_empty());
+}
