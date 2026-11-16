@@ -641,6 +641,12 @@ fn missile_flags_set_only_for_flagged_bases() {
     let projectile = e.mem.alloc(0x150);
     let base = e.mem.alloc(0xd0);
     e.mem.set_u32(projectile + 0x20, base);
+    // The neighbouring words point at a form whose byte +0x61 is clear: only `+0x20` (JIP's
+    // `[ecx+0x20]`) is the base.
+    let other = e.mem.alloc(0xd0);
+    for offset in [0x1cu32, 0x24] {
+        e.mem.set_u32(projectile + offset, other);
+    }
     // (value, base byte, flag byte before, after)
     for (value, base_byte, before, after) in [
         (1u32, 0x01u8, 0x01u8, 0x81u8),
