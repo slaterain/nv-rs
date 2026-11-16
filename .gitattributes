@@ -9,3 +9,5 @@
 *.cmd text eol=crlf
 # An open call has an empty final system column; its trailing tab is data.
 research/engine-map/frame_wiring.tsv text eol=lf whitespace=-blank-at-eol
+# UIO 2.30's own list, embedded byte for byte (CRLF lines, no line end at the end).
+crates/uio/data/supported.txt -text

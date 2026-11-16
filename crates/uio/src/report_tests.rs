@@ -22,7 +22,8 @@ fn read(name: &str, opened: bool) -> ListRead {
 /// The scan of the maintainer's oHUD folder (lists_tests' oHUD test gives these entries).
 fn ohud_scan() -> Scan {
     Scan {
-        lists: vec![read("supported.txt", false), read("oHUDPatches.txt", true)],
+        supported: None,
+        lists: vec![read("supported.txt", true), read("oHUDPatches.txt", true)],
         entries: vec![
             entry(
                 "oHUDPatches.txt",
@@ -49,8 +50,7 @@ fn the_ohud_folder_reports_its_list_no_additions_and_both_reasons() {
     assert_eq!(
         startup_lines(&ohud_scan(), &[]),
         vec![
-            "UI Organizer: read 1 list file: oHUDPatches.txt; supported.txt could not be opened \
-             (UIO's own list of the UI mods it knows, Data\\uio\\supported.txt in the UIO download)",
+            "UI Organizer: read 2 list files: supported.txt, oHUDPatches.txt",
             "UI Organizer: no additions",
             "UI Organizer: oHUDPatches.txt: UIOPatches\\GrenadeKey.xml not added: \
              Prefabs\\GrenadeKeyHUD.xml is not installed",
@@ -64,6 +64,7 @@ fn the_ohud_folder_reports_its_list_no_additions_and_both_reasons() {
 fn additions_are_grouped_by_file_and_tile_in_the_order_met() {
     let hud = "Data\\Menus\\Main\\hud_main_menu.xml";
     let scan = Scan {
+        supported: None,
         lists: vec![read("supported.txt", true), read("a.txt", true)],
         entries: vec![
             entry(
@@ -113,6 +114,7 @@ fn additions_are_grouped_by_file_and_tile_in_the_order_met() {
     );
     // One addition: the singular.
     let one = Scan {
+        supported: None,
         lists: vec![read("supported.txt", true)],
         entries: vec![entry(
             "supported.txt",
@@ -135,6 +137,7 @@ fn additions_are_grouped_by_file_and_tile_in_the_order_met() {
 #[test]
 fn lists_that_would_not_open_and_patching_problems_are_named() {
     let scan = Scan {
+        supported: None,
         lists: vec![read("supported.txt", true), read("big.txt", false)],
         entries: Vec::new(),
     };
@@ -170,6 +173,7 @@ fn lists_that_would_not_open_and_patching_problems_are_named() {
     );
     // Nothing at all.
     let none = Scan {
+        supported: None,
         lists: vec![read("supported.txt", false)],
         entries: Vec::new(),
     };
@@ -253,6 +257,7 @@ fn a_condition_is_named_when_it_is_one_file_or_plugin_else_quoted() {
 #[test]
 fn entries_past_the_cap_are_counted_in_one_line() {
     let make = |n: usize| Scan {
+        supported: None,
         lists: vec![read("supported.txt", true)],
         entries: (0..n)
             .map(|i| {
@@ -293,12 +298,14 @@ fn list_files_additions_and_problems_past_the_cap_are_counted() {
         (0..n).map(|i| read(&format!("l{i}.txt"), opened)).collect()
     };
     let scan = Scan {
+        supported: None,
         lists: lists(MAX_NAMED, true),
         entries: Vec::new(),
     };
     let first = &startup_lines(&scan, &[])[0];
     assert!(first.ends_with(&format!("l{}.txt", MAX_NAMED - 1)));
     let scan = Scan {
+        supported: None,
         lists: [lists(MAX_NAMED + 2, true), lists(MAX_NAMED + 3, false)].concat(),
         entries: Vec::new(),
     };
@@ -314,6 +321,7 @@ fn list_files_additions_and_problems_past_the_cap_are_counted() {
 
     // Additions: MAX_NAMED paths named in all, across the groups in order; the rest counted.
     let added = |n: usize| Scan {
+        supported: None,
         lists: vec![read("a.txt", true)],
         entries: (0..n)
             .map(|i| {
@@ -376,5 +384,30 @@ fn the_first_read_line() {
     assert_eq!(
         first_read_line(b"x.xml", 1),
         "UI Organizer: first file with additions read: x.xml (1 addition)"
+    );
+}
+
+#[test]
+fn the_second_line_says_where_supported_txt_came_from_and_its_entries() {
+    let scan = |from: Option<SupportedFrom>| Scan {
+        supported: from,
+        lists: vec![read("supported.txt", true), read("a.txt", true)],
+        entries: vec![
+            entry("supported.txt", "x.xml", "", "", "", Outcome::PrefabMissing),
+            entry("supported.txt", "y.xml", "", "", "", Outcome::PrefabMissing),
+            entry("a.txt", "z.xml", "", "", "", Outcome::PrefabMissing),
+        ],
+    };
+    assert_eq!(
+        startup_lines(&scan(Some(SupportedFrom::BuiltIn)), &[])[1],
+        "UI Organizer: supported.txt: built-in list (2 entries)"
+    );
+    assert_eq!(
+        startup_lines(&scan(Some(SupportedFrom::Disk)), &[])[1],
+        "UI Organizer: supported.txt: from Data\\uio\\supported.txt (2 entries)"
+    );
+    assert_eq!(
+        startup_lines(&scan(None), &[])[1],
+        "UI Organizer: no additions"
     );
 }

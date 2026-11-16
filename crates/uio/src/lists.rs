@@ -7,7 +7,8 @@
 
 use crate::hash::{begins_ci, Map, Set};
 use crate::reader::UIO_PATH;
-use crate::report::{Entry, ListRead, Outcome, Scan};
+use crate::report::{Entry, ListRead, Outcome, Scan, SupportedFrom};
+use std::borrow::Cow;
 
 /// What UIO asks of the file system (the game's folder; paths relative to it, as UIO gives them).
 pub trait Files {
@@ -436,8 +437,16 @@ pub fn read_list_noted(
 /// supported.txt's name in the report.
 pub const SUPPORTED_NAME: &[u8] = b"supported.txt";
 
-/// UIO's whole scan: supported.txt, then each public list in the order the folder search gives
-/// them; a file that does not open is passed over.
+/// UI Organizer 2.30's own `Data\uio\supported.txt` (its list of the 35 UI mods it knows), from
+/// the UIO 2.30 download, unchanged byte for byte (CRLF lines, no line end at the end). UIO is by
+/// jazzisparis (Jef), MIT licence (crates/uio/NOTICE); used with the author's permission. Read in
+/// place of the game folder's `Data\uio\supported.txt` when that one does not open, so UI mods
+/// that rely on UIO's list work without the player copying the file in.
+pub const BUILT_IN_SUPPORTED: &[u8] = include_bytes!("../data/supported.txt");
+
+/// UIO's whole scan: supported.txt (the game folder's, else [`BUILT_IN_SUPPORTED`]), then each
+/// public list in the order the folder search gives them; a public list that does not open is
+/// passed over.
 pub fn scan(files: &mut dyn Files) -> InjectLists {
     scan_noted(files).0
 }
@@ -447,22 +456,27 @@ pub fn scan_noted(files: &mut dyn Files) -> (InjectLists, Scan) {
     let ctx = context(files);
     let mut lists = InjectLists::default();
     let mut seen = Scan::default();
-    let text = read_lines(files, SUPPORTED);
+    // supported.txt: the game folder's when it opens, else UIO 2.30's own; read the same way.
+    let disk = read_lines(files, SUPPORTED);
+    seen.supported = Some(if disk.is_some() {
+        SupportedFrom::Disk
+    } else {
+        SupportedFrom::BuiltIn
+    });
+    let text = disk.map_or(Cow::Borrowed(BUILT_IN_SUPPORTED), Cow::Owned);
     seen.lists.push(ListRead {
         name: SUPPORTED_NAME.to_vec(),
-        opened: text.is_some(),
+        opened: true,
     });
-    if let Some(text) = text {
-        read_list_noted(
-            &lines(&text),
-            false,
-            &ctx,
-            files,
-            &mut lists,
-            SUPPORTED_NAME,
-            &mut seen.entries,
-        );
-    }
+    read_list_noted(
+        &lines(&text),
+        false,
+        &ctx,
+        files,
+        &mut lists,
+        SUPPORTED_NAME,
+        &mut seen.entries,
+    );
     for name in files.list(PUBLIC_PATTERN) {
         let path = [PUBLIC_FOLDER, &name].concat();
         let text = read_lines(files, &path);
