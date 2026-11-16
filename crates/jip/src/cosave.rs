@@ -1542,6 +1542,7 @@ pub fn listen(e: &mut Engine, m: &Message) {
             crate::commands::pos_marker::create(e);
             crate::game_patches::gh2::deferred_init(e);
             crate::commands::jip_fn_utility::deferred_init(e);
+            crate::game_patches::gs::deferred_init(e);
         }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
