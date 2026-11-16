@@ -1029,6 +1029,14 @@ fn two_threads_at_once_neither_wait_forever_nor_lose_a_value() {
     for (engine, other_mod) in [(OnItsThread(a), 6.0), (OnItsThread(b), 5.0)] {
         let (done, barrier) = (done_tx.clone(), barrier.clone());
         threads.push(std::thread::spawn(move || {
+            // Says "finished" when the thread ends, failed or not (a failure shows at the join).
+            struct Finished(std::sync::mpsc::Sender<()>);
+            impl Drop for Finished {
+                fn drop(&mut self) {
+                    let _ = self.0.send(());
+                }
+            }
+            let _finished = Finished(done);
             let mut w = engine;
             let e = &mut w.0;
             CALLED.with(|c| c.borrow_mut().clear());
@@ -1043,10 +1051,10 @@ fn two_threads_at_once_neither_wait_forever_nor_lose_a_value() {
                 get(e, REF, &[num(index), num(other_mod)]);
                 engine_core::extend::release_held_for_test();
             }
-            done.send(()).expect("the test waits");
             w
         }));
     }
+    drop(done_tx);
     for _ in 0..2 {
         done_rx
             .recv_timeout(std::time::Duration::from_secs(60))
@@ -1054,7 +1062,10 @@ fn two_threads_at_once_neither_wait_forever_nor_lose_a_value() {
     }
     let mut engines: Vec<Engine> = threads
         .into_iter()
-        .map(|t| t.join().expect("no thread failed").0)
+        .map(|t| match t.join() {
+            Ok(w) => w.0,
+            Err(panic) => std::panic::resume_unwind(panic),
+        })
         .collect();
     let entry = entry(&mut engines[0], 0x1234).expect("the key's entry");
     for m in [5, 6] {
