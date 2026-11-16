@@ -1,0 +1,79 @@
+name: Preview packages (Linux, macOS)
+# Builds the Linux and macOS preview packages (scripts/package-playtest.sh) and keeps them as this
+# run's artifacts, for the maintainer to download, look at and publish BY HAND. Nothing here makes
+# a release, a tag or anything public, and it never runs by itself: only by hand (Actions > this
+# workflow > Run workflow, or `gh workflow run preview-packages.yml --ref BRANCH`).
+#
+# The runners are the oldest GitHub has for each system, so the programs start on as many
+# systems as possible: ubuntu-22.04 (the program needs glibc 2.35 or newer, BUILD.txt says the
+# exact version read from the program), macos-14 (the oldest Apple silicon runner; Rust's arm64
+# macOS programs start on macOS 11 or newer).
+#
+# Each job uses runners from the account's shared limit (20 jobs at a time); one run is two jobs.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version (BUILD.txt), for example 2026-11-16.1
+        required: true
+        default: test
+      release:
+        description: A release package (HEAD on main, notices and licences complete); else a test build
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: preview-packages-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_INCREMENTAL: 0
+jobs:
+  package:
+    name: package (${{ matrix.system }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: linux-x86_64
+            runner: ubuntu-22.04
+            jobs: 4
+          - system: macos-arm64
+            runner: macos-14
+            # Apple silicon runners have 7 GB of memory: two compilers at a time.
+            jobs: 2
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    env:
+      CARGO_BUILD_JOBS: ${{ matrix.jobs }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # A release package checks that HEAD is on origin's main.
+          fetch-depth: 0
+      - name: Install the pinned Rust tools (rust-toolchain.toml)
+        run: rustup toolchain install
+      # What the program's crates need to build on Linux, kept in step with the Linux pieces as they
+      # come: pkg-config and ALSA's and D-Bus's headers for the sound output (cpal and its
+      # real-time thread priority). The window (winit) and Vulkan load their libraries at run time.
+      - name: Install the Linux build packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libdbus-1-dev
+      - name: Build and package
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          flag=--test-build
+          if [ "$RELEASE" = true ]; then flag=; fi
+          sh scripts/package-playtest.sh --version "$VERSION" --system ${{ matrix.system }} --profile play $flag
+          cat "dist/nv-rs-preview-${{ matrix.system }}/BUILD.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: nv-rs-preview-${{ matrix.system }}
+          path: |
+            dist/nv-rs-preview-${{ matrix.system }}.tar.gz
+            dist/nv-rs-preview-${{ matrix.system }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
