@@ -6,7 +6,7 @@
 //! (`jip_patches::INSTALLED`). JIP takes the extra data type `0x27` (`ExtraTimeLeft`, which the
 //! game never makes) for its own keyed data, `ExtraJIP`: the same 0x10 bytes and vtable
 //! (`0x010158FC`), the word at `+0xC` a key into JIP's map of data (`s_extraDataKeysMap`, the
-//! co-save's `JPED` record: [`crate::cosave::Saved::extra_data`], its keys as `cosave.rs` reads
+//! co-save's `JPED` record: [`crate::cosave::ExtraData`], its keys as `cosave.rs` reads
 //! and writes them). Its patches:
 //! - three type tables: an ExtraJIP goes to the head of its list (`0x40F9D7`), ends the
 //!   ownership-only scan of `0041d030` with false (`0x41D0F6`) and makes a list not the
@@ -37,7 +37,6 @@ use crate::commands::{extra, heap_alloc, heap_free};
 use crate::containers::Uint;
 use crate::cosave::{self, changed, ExtraJipData, ExtraJipEntry};
 use crate::overrides::{base_container, changes_list, form_count};
-use crate::Jip;
 use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 use std::collections::BTreeMap;
@@ -128,10 +127,6 @@ fn install_jip(e: &mut Engine) {
     slots::write_slot(e, COMPARE_SLOT, COMPARE_ROUTINE, differs);
 }
 
-fn saved(e: &mut Engine) -> &mut cosave::Saved {
-    &mut e.ext::<Jip>().saved
-}
-
 /// The key of an ExtraJIP (`+0xC`).
 fn key_of(e: &Engine, extra: u32) -> u32 {
     e.mem.u32(extra + 0x0c)
@@ -144,7 +139,7 @@ pub fn make_key(e: &mut Engine) -> u32 {
         let key = e
             .call(GET_RANDOM_INT, &args![GAME_RNG, 0xffff_ffffu32])
             .u32();
-        if key != 0 && saved(e).extra_data.get(&Uint(key)).is_none() {
+        if key != 0 && cosave::extra_data(e).get(&Uint(key)).is_none() {
             return key;
         }
     }
@@ -216,14 +211,13 @@ fn ends_scan(_: &mut Engine, _: &[u32]) -> Option<u32> {
 fn copy(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let (list, source, caller, flag) = (a[0], a[1], a[2], a[3] as u8);
     let source_key = key_of(e, source);
-    let Some(data) = saved(e)
-        .extra_data
+    let Some(data) = cosave::extra_data(e)
         .get(&Uint(source_key))
         .map(|entry| entry.data.clone())
     else {
         return Some(0);
     };
-    saved(e).changed |= changed::EXTRA_DATA;
+    cosave::mark_changed(e, changed::EXTRA_DATA);
     let mut target = extra::get_by_type(e, list, EXTRA_JIP);
     if target == 0 {
         target = add_extra_jip(e, list, 0);
@@ -234,7 +228,7 @@ fn copy(e: &mut Engine, a: &[u32]) -> Option<u32> {
         _ => false,
     };
     if moved {
-        if let Some(entry) = saved(e).extra_data.get_mut(&Uint(source_key)) {
+        if let Some(entry) = cosave::extra_data(e).get_mut(&Uint(source_key)) {
             entry.ref_id = 0;
         }
         let target_key = key_of(e, target);
@@ -248,7 +242,7 @@ fn copy(e: &mut Engine, a: &[u32]) -> Option<u32> {
         }
         // `s_extraDataKeysMap()[key] = *inEntry`: the data only; an entry already there keeps
         // its reference.
-        saved(e).extra_data.emplace(Uint(key)).data = data;
+        cosave::extra_data(e).emplace(Uint(key)).data = data;
     }
     Some(0)
 }
@@ -272,14 +266,14 @@ fn save(e: &mut Engine, a: &[u32]) -> Option<u32> {
     e.mem.set_u32(buffer + 0x0c, required);
     e.mem.set_u8(at + 4, b'|');
     let key = key_of(e, extra);
-    if saved(e).extra_data.get(&Uint(key)).is_some() {
+    if cosave::extra_data(e).get(&Uint(key)).is_some() {
         let form = e.mem.u32(buffer + 0x20);
         let ref_id = if form != 0 {
             e.mem.u32(form + 0x0c)
         } else {
             e.call(HEADER_REF_ID, &args![buffer + 0x14]).u32()
         };
-        if let Some(entry) = saved(e).extra_data.get_mut(&Uint(key)) {
+        if let Some(entry) = cosave::extra_data(e).get_mut(&Uint(key)) {
             entry.ref_id = ref_id;
         }
         e.mem.set_u32(at, key);
@@ -310,7 +304,7 @@ fn load(e: &mut Engine, a: &[u32]) -> Option<u32> {
     let old = key_of(e, current);
     if old != key {
         e.mem.set_u32(current + 0x0c, key);
-        saved(e).extra_data.erase(&Uint(old));
+        cosave::extra_data(e).erase(&Uint(old));
     }
     Some(0)
 }
@@ -352,17 +346,16 @@ fn destroy(e: &mut Engine, a: &[u32]) -> Ret {
     let (this, free) = (a[0], a[1] as u8);
     let key = key_of(e, this);
     if key != 0 {
-        if let Some(ref_id) = saved(e)
-            .extra_data
+        let ref_id = cosave::extra_data(e)
             .get(&Uint(key))
-            .map(|entry| entry.ref_id)
-        {
+            .map(|entry| entry.ref_id);
+        if let Some(ref_id) = ref_id {
             if ref_id == 0
                 || cosave::lookup_form(e, ref_id) != 0
                 || !cosave::has_change_data(e, ref_id)
             {
-                saved(e).extra_data.erase(&Uint(key));
-                saved(e).changed |= changed::EXTRA_DATA;
+                cosave::extra_data(e).erase(&Uint(key));
+                cosave::mark_changed(e, changed::EXTRA_DATA);
             }
         }
     }
@@ -384,7 +377,7 @@ fn differs(e: &mut Engine, a: &[u32]) -> Ret {
     let mut differs = true;
     if e.mem.u8(this + 4) == e.mem.u8(other + 4) {
         let (k1, k2) = (key_of(e, this), key_of(e, other));
-        let map = &saved(e).extra_data;
+        let map = cosave::extra_data(e);
         if let (Some(x), Some(y)) = (map.get(&Uint(k1)), map.get(&Uint(k2))) {
             differs = !same_data(x, y);
         }
