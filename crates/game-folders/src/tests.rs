@@ -190,7 +190,10 @@ fn steam_finds_the_game_in_any_library_and_the_proton_saves() {
     let lines: Vec<&str> = report.lines().collect();
     assert_eq!(lines.len(), 3, "{report}");
     assert!(lines[0].starts_with("own\t"));
-    assert_eq!(lines[1], format!("game\tSteam\t{}", game.display()));
+    // (The folder as found: on Windows, where these tests also run, its text mixes `/` and `\`.)
+    let found = &games(&home)[0].folder;
+    assert_eq!(lines[1], format!("game\tSteam\t{}", found.display()));
+    assert_eq!(found, &game);
     assert!(lines[2].starts_with("saves\tSteam (Proton)\t"));
     // macOS: no store installs the game there, and no Proton.
     let mac = s.home(System::MacOs);
