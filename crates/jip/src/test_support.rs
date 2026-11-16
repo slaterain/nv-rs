@@ -258,3 +258,20 @@ impl Drop for KeyEdit<'_> {
         nvse::input::publish_key_states(self.e);
     }
 }
+
+/// Runs `f` on `e` while a second engine of the run (a real thread's: `share_slots_for_test`)
+/// holds JIP's shared slot. A path that asks for JIP's slot stops the test (two engines on one
+/// thread), so `f` finishing shows the path does not take it: the hooks' seams that run on the AI
+/// and loader threads.
+pub fn with_jips_slot_held<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let mut other = Engine::new_untyped_for_test();
+    e.share_slots_for_test(&mut other);
+    engine_core::extend::release_held_for_test();
+    assert!(
+        other.ext::<crate::Jip>().installed,
+        "the other engine holds JIP's state"
+    );
+    let r = f(e);
+    engine_core::extend::release_held_for_test();
+    r
+}

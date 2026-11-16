@@ -13,7 +13,6 @@
 //! `GetCannotWear` patch at `0x418B10`, which reads it too, are in `equip_hooks`.
 
 use crate::game::{Actor, JipActorFlags, TESForm, TESObjectREFR};
-use crate::Jip;
 use engine_core::extend::{Hook, Owner, SiteSlot};
 use engine_core::prelude::*;
 use engine_core::x87::{x87_mul, x87_sub};
@@ -147,8 +146,34 @@ pub struct State {
     pub health_restore_ratio: f32,
 }
 
-fn state(e: &mut Engine) -> &mut State {
-    &mut e.ext::<Jip>().ai_hooks
+/// JIP's AI hook state for every engine of the run (JIP's globals): a lock-free slot
+/// ([`Engine::ext_free`], made at install before the threads start) holding the one [`State`]
+/// behind a std `RwLock`. The combat target, wake-up and detection seams run on the AI threads
+/// and read one value; the commands and the pre-load write it. The lock is a leaf: a guard
+/// borrows the engine, so no game call or second slot access can happen while it is held, and
+/// it never waits on JIP's shared slot.
+#[derive(Default)]
+pub struct Unlocked(std::sync::RwLock<State>);
+
+/// Makes the slot (before the threads start).
+pub(crate) fn make_slot(e: &mut Engine) {
+    e.ext_free::<Unlocked>();
+}
+
+/// The state to change (the commands, the pre-load).
+pub(crate) fn state(e: &mut Engine) -> std::sync::RwLockWriteGuard<'_, State> {
+    e.ext_free::<Unlocked>()
+        .0
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The state to read (the seams).
+fn read(e: &mut Engine) -> std::sync::RwLockReadGuard<'_, State> {
+    e.ext_free::<Unlocked>()
+        .0
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Puts the handlers and the commands in, when JIP answers "installed".
@@ -290,7 +315,7 @@ fn set_combat_target_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     if flags1(e, actor) & FORCE_COMBAT_TARGET == 0 {
         return None;
     }
-    let target = state(e)
+    let target = read(e)
         .force_combat_target
         .get(&actor)
         .copied()
@@ -352,7 +377,7 @@ fn reset_hp_wake_up_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
     }
     let owner = actor + 0xa4;
     let base = e.vcall(owner, AV_BASE, &args![HEALTH]).f32();
-    let ratio = state(e).health_restore_ratio;
+    let ratio = read(e).health_restore_ratio;
     let product = x87_mul(f64::from(base), f64::from(ratio));
     let current = e.vcall(owner, AV_CURRENT, &args![HEALTH]).f32();
     let amount = x87_sub(product, f64::from(current)) as f32;
@@ -387,7 +412,7 @@ fn detection_value_site(e: &mut Engine, a: &[u32]) -> Option<u32> {
         return None;
     }
     Some(
-        state(e)
+        read(e)
             .force_detection_value
             .get(&actor)
             .copied()
