@@ -719,7 +719,10 @@ fn create_ddt_and_hardcore(e: &mut Engine, icon_size: f32) {
     create_child(e, 0x164, 0x160, 0x0106_75c0);
     create_trait(e, 0x164, 0xfa1, 0);
     create_trait(e, 0x164, 0xfa2, 0);
-    create_float(e, 0x164, 0xfb8, quiet_f32(icon_size));
+    // UI Organizer's short jumps (0076f688 here, then one per tile below) skip the zooms.
+    if !(e.uio() && uio_skips_zoom(e, 0x164)) {
+        create_float(e, 0x164, 0xfb8, quiet_f32(icon_size));
+    }
     create_trait(e, 0x164, 0xfa9, 0);
     for (offset, name, predecessors) in [
         (0x16c, 0x0106_75b8, &[0x164_u32][..]),
@@ -735,9 +738,31 @@ fn create_ddt_and_hardcore(e: &mut Engine, icon_size: f32) {
         }
         create_float(e, offset, 0xfa1, x as f32);
         create_trait(e, offset, 0xfa2, 0);
-        create_float(e, offset, 0xfb8, quiet_f32(icon_size));
+        if !(e.uio() && uio_skips_zoom(e, offset)) {
+            create_float(e, offset, 0xfb8, quiet_f32(icon_size));
+        }
         create_trait(e, offset, 0xfa9, 0);
     }
+}
+
+/// UI Organizer's patches in [`create_ddt_and_hardcore`]'s hardcore texts (HUDMainMenu::Create
+/// `0076bfe0`) (`SafeWrite16(.., jmp short)` over
+/// each `SetFloat(zoom)`), by the tile's field in the menu: seams of `crates/uio`, read only
+/// while [`Engine::uio`] is on.
+pub const UIO_HUD_ZOOM_SITES: [(u32, u32); 5] = [
+    (0x164, 0x0076_f688),
+    (0x16c, 0x0076_f742),
+    (0x168, 0x0076_f824),
+    (0x178, 0x0076_f92d),
+    (0x17c, 0x0076_fa5e),
+];
+
+/// Whether UI Organizer's handler at the hardcore text `offset`'s seam skips its zoom.
+fn uio_skips_zoom(e: &mut Engine, offset: u32) -> bool {
+    UIO_HUD_ZOOM_SITES
+        .iter()
+        .find(|(field, _)| *field == offset)
+        .is_some_and(|&(_, site)| e.site(site, &[offset]).is_some())
 }
 
 fn create_scene(e: &mut Engine, menu: u32) {
@@ -11638,6 +11663,105 @@ mod tests {
                 0x0107_2ee4
             ]
         );
+    }
+
+    thread_local! {
+        /// The fields UI Organizer's hardcore-zoom handler was asked about.
+        static UIO_ZOOMS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn uio_skip(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_ZOOMS.with(|s| s.borrow_mut().push(a[0]));
+        Some(1)
+    }
+
+    fn uio_keep(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_ZOOMS.with(|s| s.borrow_mut().push(a[0]));
+        None
+    }
+
+    /// The hardcore texts' zooms `create_ddt_and_hardcore` sets (the tile, the value), with UI
+    /// Organizer's `handler` at `sites`, its word `on`; and the fields the handler saw.
+    fn hardcore_zooms(
+        on: bool,
+        handler: fn(&mut Engine, &[u32]) -> Option<u32>,
+        sites: &[u32],
+    ) -> (Vec<(u32, f32)>, Vec<u32>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0080_0000);
+        e.map(0x011d_9000, 0x1000);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.register_double(0x00a0_9030, |_, _| Ret {
+            eax: 0x3ec,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_8b20, |_, words| Ret {
+            eax: words[1],
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_11b0, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_12d0, |_, _| Ret::default());
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        for &(_, site) in &UIO_HUD_ZOOM_SITES {
+            if sites.contains(&site) {
+                e.on_site(SiteSlot::new(Owner::Uio, site), handler);
+            }
+        }
+        e.set_uio(on);
+        UIO_ZOOMS.with(|s| s.borrow_mut().clear());
+        e.call_log = Some(vec![]);
+        create_ddt_and_hardcore(&mut e, 75.0);
+        let hardcore = [
+            0x0106_75c0,
+            0x0106_75b8,
+            0x0106_37d4,
+            0x0105_afd0,
+            0x0107_2ee4,
+        ];
+        let zooms = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, w)| {
+                *address == 0x00a0_12d0 && w[1] == 0xfb8 && hardcore.contains(&w[0])
+            })
+            .map(|(_, w)| (w[0], f32::from_bits(w[2])))
+            .collect();
+        (zooms, UIO_ZOOMS.with(|s| s.borrow().clone()))
+    }
+
+    #[test]
+    fn uio_skips_the_hardcore_texts_zooms_only_while_its_word_is_on() {
+        let all: Vec<u32> = UIO_HUD_ZOOM_SITES.iter().map(|&(_, s)| s).collect();
+        let game = vec![
+            (0x0106_75c0, 75.0),
+            (0x0106_75b8, 75.0),
+            (0x0106_37d4, 75.0),
+            (0x0105_afd0, 75.0),
+            (0x0107_2ee4, 75.0),
+        ];
+        // Off (the handlers registered): the five zooms, never asked.
+        assert_eq!(
+            hardcore_zooms(false, uio_skip, &all),
+            (game.clone(), vec![])
+        );
+        // On: none, each field asked at its own place, in the exe's order.
+        assert_eq!(
+            hardcore_zooms(true, uio_skip, &all),
+            (vec![], vec![0x164, 0x16c, 0x168, 0x178, 0x17c])
+        );
+        // Only 0076f824's handler: only the third tile (field 0x168) loses its zoom.
+        let (zooms, seen) = hardcore_zooms(true, uio_skip, &[0x0076_f824]);
+        assert_eq!(seen, vec![0x168]);
+        assert_eq!(zooms, [&game[..2], &game[3..]].concat());
+        // On, the handlers answering nothing: the game's zooms.
+        assert_eq!(hardcore_zooms(true, uio_keep, &all).0, game);
     }
 
     #[test]
