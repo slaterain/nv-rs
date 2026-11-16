@@ -719,7 +719,10 @@ fn create_ddt_and_hardcore(e: &mut Engine, icon_size: f32) {
     create_child(e, 0x164, 0x160, 0x0106_75c0);
     create_trait(e, 0x164, 0xfa1, 0);
     create_trait(e, 0x164, 0xfa2, 0);
-    create_float(e, 0x164, 0xfb8, quiet_f32(icon_size));
+    // UI Organizer's short jumps (0076f688 here, then one per tile below) skip the zooms.
+    if !(e.uio() && uio_skips_zoom(e, 0x164)) {
+        create_float(e, 0x164, 0xfb8, quiet_f32(icon_size));
+    }
     create_trait(e, 0x164, 0xfa9, 0);
     for (offset, name, predecessors) in [
         (0x16c, 0x0106_75b8, &[0x164_u32][..]),
@@ -735,9 +738,31 @@ fn create_ddt_and_hardcore(e: &mut Engine, icon_size: f32) {
         }
         create_float(e, offset, 0xfa1, x as f32);
         create_trait(e, offset, 0xfa2, 0);
-        create_float(e, offset, 0xfb8, quiet_f32(icon_size));
+        if !(e.uio() && uio_skips_zoom(e, offset)) {
+            create_float(e, offset, 0xfb8, quiet_f32(icon_size));
+        }
         create_trait(e, offset, 0xfa9, 0);
     }
+}
+
+/// UI Organizer's patches in [`create_ddt_and_hardcore`]'s hardcore texts (HUDMainMenu::Create
+/// `0076bfe0`) (`SafeWrite16(.., jmp short)` over
+/// each `SetFloat(zoom)`), by the tile's field in the menu: seams of `crates/uio`, read only
+/// while [`Engine::uio`] is on.
+pub const UIO_HUD_ZOOM_SITES: [(u32, u32); 5] = [
+    (0x164, 0x0076_f688),
+    (0x16c, 0x0076_f742),
+    (0x168, 0x0076_f824),
+    (0x178, 0x0076_f92d),
+    (0x17c, 0x0076_fa5e),
+];
+
+/// Whether UI Organizer's handler at the hardcore text `offset`'s seam skips its zoom.
+fn uio_skips_zoom(e: &mut Engine, offset: u32) -> bool {
+    UIO_HUD_ZOOM_SITES
+        .iter()
+        .find(|(field, _)| *field == offset)
+        .is_some_and(|&(_, site)| e.site(site, &[offset]).is_some())
 }
 
 fn create_scene(e: &mut Engine, menu: u32) {
@@ -1179,14 +1204,32 @@ fn set_info_inventory_action(
             set_info_action_setting(e, setting);
             *display_mask |= 2;
         } else {
-            let first_base = typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-            let special = first_base == e.mem.u32(0x011c_a27c)
-                || {
-                    let second_base =
+            // JIP LN NVSE's G06 at `0x0077765A` (group GH2's row and handler; JIP's own,
+            // "Recognize custom ashpile activators"): JIP's 14 bytes there replace the two
+            // compares of the base form with the ash and goo pile activators by a test of the
+            // base's ash pile bit and jump to the `JZ` at `0x777675`. The seam with the reference
+            // answers it: a low byte of 1 (an ash pile) takes the compares' "equal" path, 0 goes
+            // on to the target type test at `0x777677`. One load while JIP is not installed.
+            let jip_ash_pile = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            {
+                e.site(0x0077_765a, &[reference.addr()])
+            } else {
+                None
+            };
+            let ash_pile = match jip_ash_pile {
+                Some(answer) => answer & 0xff != 0,
+                None => {
+                    let first_base =
                         typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
-                    second_base == e.mem.u32(0x011c_a280)
+                    first_base == e.mem.u32(0x011c_a27c) || {
+                        let second_base =
+                            typed_call!(leaf::FAMILY, 0x007a_f430, leaf::word_at_20(e, reference));
+                        second_base == e.mem.u32(0x011c_a280)
+                    }
                 }
-                || (target_type == 2 && (form_type == 0x2a || form_type == 0x2b));
+            };
+            let special =
+                ash_pile || (target_type == 2 && (form_type == 0x2a || form_type == 0x2b));
             if special {
                 set_info_action_setting(e, 0x011d_38dc);
                 *display_mask |= 2;
@@ -8597,6 +8640,188 @@ mod tests {
         assert_eq!(mask, 2);
     }
 
+    thread_local! {
+        static SEEN_ASH_PILE: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn ash_pile_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G06's seam at 0x77765A asked without INSTALLED");
+    }
+
+    fn ash_pile_seen(a: &[u32]) {
+        SEEN_ASH_PILE.with(|s| s.borrow_mut().push(a.to_vec()));
+    }
+
+    fn ash_pile_yes(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_seen(a);
+        Some(1)
+    }
+
+    fn ash_pile_no(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_seen(a);
+        Some(0)
+    }
+
+    fn ash_pile_high(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        ash_pile_seen(a);
+        Some(0x100)
+    }
+
+    /// What one run of the action part of `SetInfoForRef` did: the settings whose text went to
+    /// the action tile (`00403df0`'s words, in order), the display mask, how many times the base
+    /// form was asked (`007af430`), whether the opacity after the action text was read
+    /// (`00403e20`), and the words the G06 seam saw.
+    struct AshPileRun {
+        settings: Vec<u32>,
+        mask: u32,
+        base_asks: usize,
+        opacity_read: bool,
+        seen: Vec<Vec<u32>>,
+    }
+
+    /// One run of `set_info_inventory_action` (the translation of `SetInfoForRef`, PC
+    /// 007773fe-00777c90, which holds `0x77765A`) for the reference `0x6000` whose base form is
+    /// `base`; the ash pile form is 0x1111, the goo pile form 0x2222; setting table word 1
+    /// (`0x11D5164`, target type 6) is 0x011d_3b00.
+    fn ash_pile_run(
+        word: u32,
+        base: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+        target_type: u32,
+        form_type: u32,
+    ) -> AshPileRun {
+        let mut e = Engine::new();
+        e.map(0x011c_a000, 0x1000);
+        e.map(0x011d_2000, 0xd000);
+        e.map(0x0101_e000, 0x1000);
+        e.mem.set_u32(0x011c_a27c, 0x1111);
+        e.mem.set_u32(0x011c_a280, 0x2222);
+        e.mem.set_u32(0x011d_5164, 0x011d_3b00);
+        e.mem.set_f64(0x0101_e568, 255.0);
+        e.mem.set_f32(0x011d_9774, 0.5);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.mem.set_u32(menu.addr() + 0x9c, 0x5000);
+        e.register_double(0x0040_c0e0, |_, _| Ret::default());
+        e.register_double(0x0040_48e0, |_, _| Ret::default());
+        e.mem.set_u32(0x011d_a000, base);
+        e.register_double(0x007a_f430, |e, words| {
+            assert_eq!(words, [0x6000], "the base of the reference");
+            Ret {
+                eax: e.mem.u32(0x011d_a000),
+                ..Ret::default()
+            }
+        });
+        e.register_double(0x00ec_43fb, |_, _| Ret::default());
+        e.register_double(0x0040_3df0, |_, words| Ret {
+            eax: 0x7400 + words[0] - 0x011d_0000,
+            ..Ret::default()
+        });
+        e.register_double(0x0040_3e20, |_, _| Ret {
+            eax: 0x011d_9774,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_1350, |_, _| Ret::default());
+        e.register_double(0x00a0_1860, |_, _| Ret {
+            eax: 0xfa9,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_12d0, |_, _| Ret::default());
+        e.register_double(0x004b_71d0, |_, _| Ret::default());
+        e.register_double(0x0087_7720, |_, _| Ret::default());
+        e.register_double(0x0070_3be0, |_, _| Ret::default());
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        e.register_double(0x0040_37d0, |_, _| Ret::default());
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x0077_765a, handler);
+        }
+        e.set_jip_patches(word);
+        SEEN_ASH_PILE.with(|s| s.borrow_mut().clear());
+        let mut mask = 0x10;
+        e.call_log = Some(vec![]);
+        set_info_inventory_action(
+            &mut e,
+            Ptr::new(0x6000),
+            0,
+            target_type,
+            form_type,
+            false,
+            0,
+            true,
+            &mut mask,
+        );
+        let calls = e.call_log.take().unwrap();
+        AshPileRun {
+            settings: calls
+                .iter()
+                .filter(|(address, _)| *address == 0x0040_3df0)
+                .map(|(_, words)| words[0])
+                .collect(),
+            mask,
+            // The first ask is the action name's (`00ec43fb`'s base), before the compares.
+            base_asks: calls
+                .iter()
+                .filter(|(address, _)| *address == 0x007a_f430)
+                .count(),
+            opacity_read: calls.iter().any(|(address, _)| *address == 0x0040_3e20),
+            seen: SEEN_ASH_PILE.with(|s| s.take()),
+        }
+    }
+
+    /// JIP LN NVSE's G06 seam at `0x0077765A` (group GH2's row and handler; JIP's own): JIP's
+    /// bytes there (`8B 41 20 F6 40 06 20 0F 95 C0 34 01 EB 0D`) test the base's ash pile bit
+    /// and jump to the `JZ 0x77768F` at `0x777675`. Not installed (word 0) or `FIXES` alone: not
+    /// asked, the exe's two compares decide (the ash or goo pile form: the "Search" text
+    /// `0x11D38DC`); `INSTALLED` with no handler (the row not on): the exe's compares; with a
+    /// handler: asked once with the reference, the compares skipped (no base asks past the
+    /// name's), its low byte decides, and the target type tests after it still run.
+    #[test]
+    fn set_info_inventory_action_jip_ash_pile_seam() {
+        use engine_core::extend::jip_patches;
+        const ASH: u32 = 0x011d_38dc;
+        const TYPE_6: u32 = 0x011d_3b00;
+        for word in [0, jip_patches::FIXES] {
+            for (base, setting, asks) in [(0x1111, ASH, 2), (0x2222, ASH, 3), (0x3333, TYPE_6, 3)] {
+                let run = ash_pile_run(word, base, Some(ash_pile_never), 6, 0x15);
+                assert_eq!(run.settings, [setting], "{word:#x} {base:#x}");
+                assert_eq!(run.base_asks, asks, "{word:#x} {base:#x}");
+                assert_eq!(run.mask, 0x12);
+                assert!(run.opacity_read);
+                assert!(run.seen.is_empty());
+            }
+        }
+        let installed = jip_patches::INSTALLED;
+        // The row not on (no handler): the exe's compares.
+        let run = ash_pile_run(installed, 0x2222, None, 6, 0x15);
+        assert_eq!((run.settings, run.base_asks), (vec![ASH], 3));
+        let run = ash_pile_run(installed, 0x3333, None, 6, 0x15);
+        assert_eq!((run.settings, run.base_asks), (vec![TYPE_6], 3));
+        // On: a marked base that is not a vanilla pile is an ash pile; the compares are skipped.
+        let run = ash_pile_run(installed, 0x3333, Some(ash_pile_yes), 6, 0x15);
+        assert_eq!(run.seen, vec![vec![0x6000]], "all the seam's words");
+        assert_eq!(run.settings, [ASH]);
+        assert_eq!(run.base_asks, 1, "the compares skipped");
+        assert_eq!(run.mask, 0x12);
+        assert!(run.opacity_read, "the code after the action text runs");
+        // On, "not a pile" for the vanilla ash pile form: the target type 6 text instead.
+        let run = ash_pile_run(installed, 0x1111, Some(ash_pile_no), 6, 0x15);
+        assert_eq!(run.seen, vec![vec![0x6000]]);
+        assert_eq!((run.settings, run.base_asks), (vec![TYPE_6], 1));
+        assert_eq!(run.mask, 0x12);
+        assert!(run.opacity_read);
+        // Only the low byte counts (JIP's `SETNZ AL; XOR AL,1` sets ZF from AL).
+        let run = ash_pile_run(installed, 0x1111, Some(ash_pile_high), 6, 0x15);
+        assert_eq!((run.settings, run.base_asks), (vec![TYPE_6], 1));
+        // "Not a pile" goes on to 0x777677: target type 2 with a creature (0x2B) is still
+        // the "Search" text; target type 4 with a creature clears the mask's low two bits.
+        let run = ash_pile_run(installed, 0x1111, Some(ash_pile_no), 2, 0x2b);
+        assert_eq!((run.settings, run.base_asks), (vec![ASH], 1));
+        let run = ash_pile_run(installed, 0x1111, Some(ash_pile_no), 4, 0x2b);
+        assert_eq!((run.settings, run.mask), (vec![], 0x10));
+        let run = ash_pile_run(installed, 0x3333, Some(ash_pile_yes), 4, 0x2b);
+        assert_eq!((run.settings, run.mask), (vec![ASH], 0x12));
+    }
+
     #[test]
     fn set_info_item_details_cover_water_and_unordered_numeric_values() {
         let mut e = Engine::new();
@@ -11729,6 +11954,105 @@ mod tests {
         assert_eq!(order, [0x0077_9070, 0x00ab_0001, 0x0077_da60, 0x0077_e750]);
         assert_eq!(call, Some(vec![hud]), "the exe's call follows");
         assert_eq!(seen, vec![vec![hud]]);
+    }
+
+    thread_local! {
+        /// The fields UI Organizer's hardcore-zoom handler was asked about.
+        static UIO_ZOOMS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn uio_skip(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_ZOOMS.with(|s| s.borrow_mut().push(a[0]));
+        Some(1)
+    }
+
+    fn uio_keep(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_ZOOMS.with(|s| s.borrow_mut().push(a[0]));
+        None
+    }
+
+    /// The hardcore texts' zooms `create_ddt_and_hardcore` sets (the tile, the value), with UI
+    /// Organizer's `handler` at `sites`, its word `on`; and the fields the handler saw.
+    fn hardcore_zooms(
+        on: bool,
+        handler: fn(&mut Engine, &[u32]) -> Option<u32>,
+        sites: &[u32],
+    ) -> (Vec<(u32, f32)>, Vec<u32>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = Engine::new();
+        e.map(0x0100_0000, 0x0080_0000);
+        e.map(0x011d_9000, 0x1000);
+        let menu = e.new_object::<HUDMainMenu>();
+        e.mem.set_u32(0x011d_96c0, menu.addr());
+        e.register_double(0x00a0_9030, |_, _| Ret {
+            eax: 0x3ec,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_8b20, |_, words| Ret {
+            eax: words[1],
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_11b0, |_, _| Ret {
+            st0: 1.0,
+            ..Ret::default()
+        });
+        e.register_double(0x00a0_12d0, |_, _| Ret::default());
+        e.register_double(0x0070_0320, |_, _| Ret::default());
+        for &(_, site) in &UIO_HUD_ZOOM_SITES {
+            if sites.contains(&site) {
+                e.on_site(SiteSlot::new(Owner::Uio, site), handler);
+            }
+        }
+        e.set_uio(on);
+        UIO_ZOOMS.with(|s| s.borrow_mut().clear());
+        e.call_log = Some(vec![]);
+        create_ddt_and_hardcore(&mut e, 75.0);
+        let hardcore = [
+            0x0106_75c0,
+            0x0106_75b8,
+            0x0106_37d4,
+            0x0105_afd0,
+            0x0107_2ee4,
+        ];
+        let zooms = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(address, w)| {
+                *address == 0x00a0_12d0 && w[1] == 0xfb8 && hardcore.contains(&w[0])
+            })
+            .map(|(_, w)| (w[0], f32::from_bits(w[2])))
+            .collect();
+        (zooms, UIO_ZOOMS.with(|s| s.borrow().clone()))
+    }
+
+    #[test]
+    fn uio_skips_the_hardcore_texts_zooms_only_while_its_word_is_on() {
+        let all: Vec<u32> = UIO_HUD_ZOOM_SITES.iter().map(|&(_, s)| s).collect();
+        let game = vec![
+            (0x0106_75c0, 75.0),
+            (0x0106_75b8, 75.0),
+            (0x0106_37d4, 75.0),
+            (0x0105_afd0, 75.0),
+            (0x0107_2ee4, 75.0),
+        ];
+        // Off (the handlers registered): the five zooms, never asked.
+        assert_eq!(
+            hardcore_zooms(false, uio_skip, &all),
+            (game.clone(), vec![])
+        );
+        // On: none, each field asked at its own place, in the exe's order.
+        assert_eq!(
+            hardcore_zooms(true, uio_skip, &all),
+            (vec![], vec![0x164, 0x16c, 0x168, 0x178, 0x17c])
+        );
+        // Only 0076f824's handler: only the third tile (field 0x168) loses its zoom.
+        let (zooms, seen) = hardcore_zooms(true, uio_skip, &[0x0076_f824]);
+        assert_eq!(seen, vec![0x168]);
+        assert_eq!(zooms, [&game[..2], &game[3..]].concat());
+        // On, the handlers answering nothing: the game's zooms.
+        assert_eq!(hardcore_zooms(true, uio_keep, &all).0, game);
     }
 
     #[test]

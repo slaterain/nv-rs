@@ -283,9 +283,10 @@ pub fn fn_0058ea10(e: &mut Engine) {
 /// (`0048cee0`), and its texture set (`006733e0`), when there is one, queued too
 /// (`BGSTextureSet::QueueTextureSet` with the two words and 0).
 pub fn fn_0058ef10(e: &mut Engine, this: Ptr, first: u32, second: u32) {
-    let set = Ptr::new(this.addr().wrapping_sub(0x18));
+    let set: Ptr = Ptr::new(this.addr().wrapping_sub(0x18));
     for material in 0..12u32 {
-        let data = fn_0058e9d0(e, set, material);
+        // By address, so a wrap of `0058e9d0` (JIP LN NVSE's G109) is reached as in the exe.
+        let data = e.call(0x0058_e9d0, &args![set, material]).u32();
         if data == 0 {
             continue;
         }

@@ -395,6 +395,17 @@ pub fn hit_data_initialize_explosion_data(
     hit_data_determine_outcome(e, hit);
 }
 
+/// The minimum damage store in [`hit_data_reduce_damage`] (`0x9B6335`). JIP LN NVSE's G77 (a fix,
+/// the row `NV_JIP_GAME_PATCHES`) does the same compare and store in SSE and marks the hit
+/// armour-penetrated (`uiFlags` bit 31): the seam is asked with the hit where the store happens.
+/// With the word's `FIXES` bit clear: one load, nothing asked.
+#[inline]
+fn armor_penetrated_seam(e: &mut Engine, this: Ptr<HitData>) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x009b_6335, &[this.addr()]);
+    }
+}
+
 // Translated from 009b5a30 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `HitData::ReduceDamage` (Xbox PDB), `RET 4` (`ignore_block`, its low byte). Only for a
 /// character target (vtable slot `0x100`); a target whose `+0x94` object's vtable slot `0x10`
@@ -762,6 +773,7 @@ fn reduce_damage_finish(
     }
     let damage = e.get(this, HitData::fHealthDamage);
     if fpu_compare(x87_load32(minimum), x87_load32(damage)) & 0x41 == 0 {
+        armor_penetrated_seam(e, this);
         e.set(this, HitData::fHealthDamage, x87_quiet_bits(minimum));
         reduce_damage_marker(e, this, marker);
         let aggressor = e.get(this, HitData::pAggressor);
@@ -3599,3 +3611,7 @@ mod n026_tests {
         assert_eq!(calls(&log, LIMB_FOR_NODE)[0][0], target);
     }
 }
+
+#[cfg(test)]
+#[path = "hitdata_gc_tests.rs"]
+mod gc_tests;

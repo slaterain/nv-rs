@@ -1359,7 +1359,7 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // count, the ragdoll events gone; and the AI hooks' part: the combat, teleport and equipment hooks
 // off, the forced targets and detection values gone; and the world hooks' part: the informed
 // forms, the waits, the swapped LOD blocks and the model paths gone, the reference names' flags set
-// again).
+// again; and the player's killer cleared, G33's part).
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
@@ -1368,6 +1368,7 @@ fn pre_load_housekeeping(e: &mut Engine) {
     crate::actor_hooks::pre_load(e);
     crate::ai_hooks::pre_load(e);
     crate::world_hooks::pre_load(e);
+    crate::game_patches::gc::pre_load(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
