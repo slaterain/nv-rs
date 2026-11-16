@@ -246,6 +246,18 @@ pub fn call_on(e: &mut Engine, opcode: u32, this: u32, args: &[Vec<u8>]) -> (u32
     (ok, e.mem.f64(RESULT))
 }
 
+/// A call on `this` from a line with no argument data (its length 0, as a statement compiled
+/// with no arguments is), `next` (another line's bytes) where a count and arguments would be.
+pub fn call_on_no_data(e: &mut Engine, opcode: u32, this: u32, next: &[u8]) -> (u32, f64) {
+    let mut words = crate::test_support::line(e, opcode, &[]);
+    e.mem.set_u16(crate::test_support::DATA + 2, 0);
+    e.mem.write(crate::test_support::DATA + 4, next);
+    words[2] = this;
+    let execute = crate::test_support::execute_of(e, opcode);
+    let ok = e.call(execute, &words).eax & 0xff;
+    (ok, e.mem.f64(RESULT))
+}
+
 /// `BaseExtraList::GetByType` (`00410220`), `AddExtra` (`0040FF60`), `RemoveByType` (`00410140`)
 /// and `BGSSaveLoadGame::AddChange` (`0084A690`) as stand-ins written from the exe's functions:
 /// the walk from the list's +4 (each extra's type at +4, next at +8), the append at the chain's
