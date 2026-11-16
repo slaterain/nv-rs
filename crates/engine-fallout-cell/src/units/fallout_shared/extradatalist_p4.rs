@@ -9924,7 +9924,7 @@ mod tests {
             )]
             .into(),
         };
-        *e.ext::<jip::Jip>().saved.extra_data.emplace(Uint(key)) = entry.clone();
+        *jip::cosave::extra_data(&mut e).emplace(Uint(key)) = entry.clone();
         let list = new_list(&mut e);
         jip::game_patches::gh1::add_extra_jip(&mut e, list.addr(), key);
         add(&mut e, list, 0x24, 3);
@@ -9937,12 +9937,7 @@ mod tests {
             saved,
             vec![8, b'|', 0x27, b'|', k[0], k[1], k[2], k[3], b'|', 0x24, b'|', 3, 0, b'|']
         );
-        let kept = e
-            .ext::<jip::Jip>()
-            .saved
-            .extra_data
-            .get(&Uint(key))
-            .cloned();
+        let kept = jip::cosave::extra_data(&mut e).get(&Uint(key)).cloned();
         assert_eq!(
             kept,
             Some(ExtraJipEntry {
@@ -9954,12 +9949,7 @@ mod tests {
         assert_eq!(chain_types(&e, loaded), vec![0x27, 0x24]);
         assert_eq!(word_of(&mut e, loaded, 0x27), key);
         assert_eq!(word_of(&mut e, loaded, 0x24) & 0xffff, 3);
-        let kept = e
-            .ext::<jip::Jip>()
-            .saved
-            .extra_data
-            .get(&Uint(key))
-            .cloned();
+        let kept = jip::cosave::extra_data(&mut e).get(&Uint(key)).cloned();
         assert_eq!(kept.map(|k| k.data), Some(entry.data));
     }
 
