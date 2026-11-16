@@ -3660,7 +3660,7 @@ mod tests_player_files {
     }
 
     /// Linux and macOS: the root of drive Z: (this system's `/`) is a folder like any other: a
-    /// missing file there answers file-not-found, and `Z:\*` lists it.
+    /// missing file there answers file-not-found, and `Z:\tm?` lists `/tmp`.
     #[cfg(not(windows))]
     #[test]
     fn the_root_of_drive_z_is_a_folder() {
@@ -3680,8 +3680,11 @@ mod tests_player_files {
         );
         assert_eq!(h, INVALID_HANDLE_VALUE);
         assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
-        let names = listed(&mut e, r"Z:\*");
-        assert!(names.contains(&b"tmp".to_vec()), "{names:?}");
+        // `tm?`, not `*`: a listing of every entry of `/` reaches `/proc`, whose file system keeps
+        // no creation time, and that stops the run as not provided (`write_find_data`; CI's
+        // Linux job, run 43920957293).
+        let names = listed(&mut e, r"Z:\tm?");
+        assert_eq!(names, [b"tmp".to_vec()]);
     }
 
     /// Linux and macOS: names Windows cannot hold in a folder (a `:`, a `\`, a dot or space at
