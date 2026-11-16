@@ -390,13 +390,23 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
     /// Linux's and macOS's programs (no extension) are programs by their first bytes; text is not.
     #[test]
     fn programs_are_known_by_extension_or_first_bytes() {
         assert!(is_program(Path::new("app/FalloutNV.exe"), b"MZ"));
         assert!(is_program(Path::new("app/nv-viewer"), b"\x7fELF\x02\x01"));
-        assert!(is_program(Path::new("app/nv-viewer"), &[0xcf, 0xfa, 0xed, 0xfe, 0x0c]));
-        assert!(is_program(Path::new("app/nv-viewer"), &[0xca, 0xfe, 0xba, 0xbe]));
+        assert!(is_program(
+            Path::new("app/nv-viewer"),
+            &[0xcf, 0xfa, 0xed, 0xfe, 0x0c]
+        ));
+        assert!(is_program(
+            Path::new("app/nv-viewer"),
+            &[0xca, 0xfe, 0xba, 0xbe]
+        ));
         assert!(!is_program(Path::new("play.sh"), b"#!/bin/sh\n"));
         assert!(!is_program(Path::new("app/nv-viewer"), b""));
     }
@@ -430,7 +440,6 @@ mod tests {
 
     #[test]
     fn a_max_run_that_is_not_a_number_is_an_error_not_no_limit() {
-        let args = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
         let parsed =
             parse_arguments(&args(&["pkg", "--max-run", "4096", "--game", "g.exe"])).unwrap();
         assert_eq!(parsed.max_run, Some(4096));

@@ -819,3 +819,55 @@ fn every_byte_a_shell_reads_specially_is_escaped() {
         assert_eq!(escape(&[b]), (b as char).to_string());
     }
 }
+
+/// play.sh (distribution/unix/play.sh) reads --find's fields with its own `decode`: run it under
+/// this system's `sh` (dash on Ubuntu, bash 3.2 on macOS, with their own awk and printf) and, when
+/// there, under `bash`, over names [`escape`] wrote, and compare the bytes it prints with the
+/// name's own. Every byte but NUL (no path holds one), runs of high bytes, a backslash before
+/// digits (`printf %b`'s octal escapes), line breaks inside and at the end.
+#[cfg(unix)]
+#[test]
+fn play_sh_decodes_every_name_escape_wrote() {
+    let script = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../distribution/unix/play.sh"),
+    )
+    .unwrap();
+    let start = script.find("\ndecode() {\n").expect("play.sh has decode()") + 1;
+    let end = start + script[start..].find("\n}\n").expect("decode() ends") + 3;
+    let s = Scratch::new("decode");
+    let file = s.0.join("decode.sh");
+    std::fs::write(&file, format!("{}decode \"$1\"\n", &script[start..end])).unwrap();
+    let all: Vec<u8> = (1..=255u8).collect();
+    let names: Vec<Vec<u8>> = vec![
+        all.clone(),
+        all.iter().rev().copied().collect(),
+        b"/home/j\xc3\xb6rg/Games/Fallout New Vegas".to_vec(),
+        b"/mnt/old/Fallout \xe9".to_vec(),
+        b"\\0101\\c\\n%41%%".to_vec(),
+        b"/a\nb\tc\n\n".to_vec(),
+        b"\xff\x80\xc3\xa9".to_vec(),
+        b"-n".to_vec(),
+        b"".to_vec(),
+    ];
+    let mut shells = vec!["sh"];
+    if std::process::Command::new("bash")
+        .arg("-c")
+        .arg("true")
+        .status()
+        .is_ok_and(|s| s.success())
+    {
+        shells.push("bash");
+    }
+    for shell in shells {
+        for name in &names {
+            let escaped = escape(name);
+            let out = std::process::Command::new(shell)
+                .arg(&file)
+                .arg(&escaped)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{shell} {escaped}: {out:?}");
+            assert_eq!(out.stdout, *name, "{shell} decoding {escaped}");
+        }
+    }
+}
