@@ -4,9 +4,10 @@
 //! game's heap. [`install`] gives each listed command its handler in JIP's table; a JIP command
 //! that is not listed keeps its record with no handler (a call fails, as without the DLL).
 //!
-//! Handlers and names exist only while JIP answers "installed" ([`crate::ANSWERS_INSTALLED`], off
-//! until step 3.10): until then every JIP opcode, built or not, is as without the DLL, and only
-//! tests (on an engine installed with the flag on) reach the commands built here.
+//! Handlers and names exist only while JIP answers "installed" ([`crate::set_answers_installed`]:
+//! the host's row `NV_JIP_INSTALLED`, off in every preset): otherwise every JIP opcode, built or
+//! not, is as without the DLL, and only a run with the row on, or a test on an engine installed
+//! with the flag on, reaches the commands built here.
 
 pub mod arrays;
 pub mod extra;
@@ -27,6 +28,7 @@ pub mod jip_fn_combat_style;
 pub mod jip_fn_destruction_data;
 pub mod jip_fn_effect;
 pub mod jip_fn_explosion;
+pub mod jip_fn_extra_data;
 pub mod jip_fn_faction;
 pub mod jip_fn_global_var;
 pub mod jip_fn_grass;
@@ -203,6 +205,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_move_cmds::CCC_COMMANDS,
     jip_fn_linked_ref::COMMANDS,
     jip_fn_misc_ref_havok_w::COMMANDS,
+    jip_fn_extra_data::COMMANDS,
     crate::game_patches::gp::COMMANDS,
 ];
 
@@ -798,6 +801,7 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_misc_ref",
             "jip_fn_ccc",
+            "jip_fn_misc_ref",
             "jip_fn_misc_ref",
             "jip_fn_misc_ref",
             // game_patches::gp::COMMANDS (its commands are in this file).

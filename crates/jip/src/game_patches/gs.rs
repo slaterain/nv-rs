@@ -20,6 +20,10 @@
 //! (`WriteRelJump(0x5D2860, GetHitIMODHook)`), but it is under `INSTALLED`, not the fixes row: it
 //! answers as the game does until JIP's own commands turn the hit effects off.
 //!
+//! **G51** (`InitGamePatches`): `AddItem` gives every added form the container items' health call
+//! ([`every_item_health`]). **D07** (`DeferredInit`): one word of "JIP Companions Command & Control.esp"'s
+//! main script ([`deferred_init`]). Both are fixes (the row on).
+//!
 //! **Threads.** Script expressions, script commands and condition functions run on the main thread
 //! and on the AI threads (their packages' conditions and scripts); `GetGetHit` on any thread that
 //! hits an actor. No handler here keeps state: each reads its words and the game's memory (G123
@@ -46,6 +50,8 @@ pub const FURNITURE_PROCESS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0059_e034);
 pub const SOUND_NODE: SiteSlot = SiteSlot::new(Owner::Jip, 0x005c_240d);
 /// G03: `AddAchievement`'s console-used test.
 pub const ACHIEVEMENT: SiteSlot = SiteSlot::new(Owner::Jip, 0x005d_3b69);
+/// G51: `AddItem`'s tests before the container items' health call (the jump at `0x5B4DBC`).
+pub const EVERY_ITEM_HEALTH: SiteSlot = SiteSlot::new(Owner::Jip, 0x005b_4dbc);
 /// G123: `TESImageSpaceModifier::GetGetHit` (no arguments).
 pub const GET_HIT_IMOD: WrapSlot = WrapSlot::new(Owner::Jip, 0x005d_2860);
 
@@ -58,6 +64,7 @@ pub const AREA: Area = Area {
         FURNITURE_PROCESS.addr(),
         SOUND_NODE.addr(),
         ACHIEVEMENT.addr(),
+        EVERY_ITEM_HEALTH.addr(),
         FAILED_SCRIPT_LOCKS[0].addr(),
         FAILED_SCRIPT_LOCKS[1].addr(),
         FAILED_SCRIPT_LOCKS[2].addr(),
@@ -96,6 +103,7 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(FURNITURE_PROCESS, furniture_process);
     e.on_site(SOUND_NODE, sound_node);
     e.on_site(ACHIEVEMENT, earn_achievement);
+    e.on_site(EVERY_ITEM_HEALTH, every_item_health);
 }
 
 fn install_jip(e: &mut Engine) {
@@ -292,6 +300,68 @@ fn get_hit_imod(e: &mut Engine, _: &[u32]) -> Ret {
     Ret {
         eax,
         ..Ret::default()
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SafeWrite16(0x5B4DBC, 0x19EB)).
+/// G51 (`0x5B4DBC`, no words): `AddItem`'s jump over its two tests (a weapon form, a weapon type
+/// below 10) to the container items' health call: the call is made for every added form, a
+/// leveled list's and a form list's too, and when nothing could be added. With G50 (`00482090`
+/// rewritten, GH1) armour and real weapons get the 0.999 health, other items none. Main thread
+/// and AI threads (scripts); no state.
+fn every_item_health(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
+/// D07: "JIP Companions Command & Control.esp"'s main script (`0xADE` in that file).
+const CCC_PLUGIN: &[u8] = b"JIP Companions Command & Control.esp";
+const CCC_SCRIPT: u32 = 0xade;
+/// `ModInfo::modIndex` (+0x40C), `Script::data` (+0x30), the patched word's place in the data, the
+/// word before and after (MSVC's multi-character constants `' 931'` and `' 552'`: the bytes "139 "
+/// and "255 ").
+const MOD_INDEX: u32 = 0x40c;
+const SCRIPT_DATA: u32 = 0x30;
+const CCC_WORD_AT: u32 = 0x29c;
+const CCC_WORD_BEFORE: u32 = 0x2039_3331;
+const CCC_WORD_AFTER: u32 = 0x2035_3532;
+/// `TESForm::typeID` (+4) of a `Script` (`kFormType_Script`, 0x11) and `Script::info.dataLength`
+/// (+0x20; JIP nvse/GameScript.h, `ScriptInfo` at +0x18, `dataLength` its +8).
+const FORM_TYPE: u32 = 4;
+const SCRIPT_TYPE: u8 = 0x11;
+const SCRIPT_DATA_LENGTH: u32 = 0x20;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (the
+// "JIP Companions Command & Control.esp" lines).
+/// D07, once at `DeferredInit` (the main thread, before the AI threads run scripts), with the
+/// fixes: when that plugin is loaded (`DataHandler::GetModIndex` not 0xFF) and its form `0xADE`
+/// holds `' 931'` at its data +0x29C, the word becomes `' 552'`. JIP reads the data with no test;
+/// deliberate difference: a form that is not a script, has no data, or has data too short to hold
+/// the word (JIP would stop the game or read past the data) is left alone.
+pub fn deferred_init(e: &mut Engine) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0 {
+        return;
+    }
+    let info = crate::commands::jip_fn_utility::lookup_mod_by_name(e, CCC_PLUGIN);
+    if info == 0 {
+        return;
+    }
+    let index = u32::from(e.mem.u8(info + MOD_INDEX));
+    let script = crate::cosave::lookup_form(e, index << 24 | CCC_SCRIPT);
+    if script == 0 {
+        return;
+    }
+    if e.mem.u8(script + FORM_TYPE) != SCRIPT_TYPE
+        || e.mem.u32(script + SCRIPT_DATA_LENGTH) < CCC_WORD_AT + 4
+    {
+        return;
+    }
+    let data = e.mem.u32(script + SCRIPT_DATA);
+    if data == 0 {
+        return;
+    }
+    if e.mem.u32(data + CCC_WORD_AT) == CCC_WORD_BEFORE {
+        e.mem.set_u32(data + CCC_WORD_AT, CCC_WORD_AFTER);
     }
 }
 

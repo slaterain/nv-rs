@@ -4,7 +4,7 @@
 //! `GetPluginVersion` (`0x15E0`), which JIP puts in xNVSE's records at its start and which also
 //! answer for JIP's names (`InitCmdPatches`, `internal/patches_cmd.h`).
 //!
-//! All of it is there only while JIP answers "installed" ([`crate::ANSWERS_INSTALLED`]): until
+//! All of it is there only while JIP answers "installed" ([`crate::set_answers_installed`]): until
 //! then `GetLNVersion` and `GetNVSEVersionFull` have no handler (a call fails, as without the
 //! DLL) and xNVSE's own plugin commands answer, for which no plugin is installed. JIP's copy of
 //! `GetNVSEVersionFull` over the exe's `0x127D` changes a vanilla command, so it is a fix row of

@@ -343,9 +343,8 @@ fn other_plugins_conditions_read_no_eval() {
 }
 
 /// A JIP command not built yet fails as it does without the DLL: its record has no handler
-/// (`EvaluateLine` and the operand reader fail a line whose record has none, the condition code
-/// answers false for a record with no eval), and xNVSE's expression evaluator does not read it
-/// as a command.
+/// (`EvaluateLine` and the operand reader fail a line whose record has none), and xNVSE's
+/// expression evaluator does not read it as a command.
 #[test]
 fn an_unbuilt_command_fails() {
     let mut e = engine();
@@ -353,9 +352,11 @@ fn an_unbuilt_command_fails() {
     let unbuilt = Record::read(&e, record_of(&e, 0x228a));
     assert_eq!(guest_text(&e, unbuilt.long_name), b"GetFilesInFolder");
     assert_eq!((unbuilt.execute, unbuilt.eval), (0, 0));
-    let button = Record::read(&e, record_of(&e, 0x277c));
-    assert_eq!(guest_text(&e, button.long_name), b"GetRadiationLevelAlt");
-    assert_eq!((button.execute, button.eval, button.flags), (0, 0, 1));
+    // Every JIP condition is built since GetRadiationLevelAlt (package C3): an unbuilt command
+    // that waits for a game patch (RefreshItemsList, G87) stands for the rest.
+    let refresh = Record::read(&e, record_of(&e, 0x27e8));
+    assert_eq!(guest_text(&e, refresh.long_name), b"RefreshItemsList");
+    assert_eq!((refresh.execute, refresh.eval, refresh.flags), (0, 0, 0));
     let words = line(&mut e, 0x228a, &[]);
     let a = nvse::CommandArgs::new(&words);
     // An `X` token: no calling reference, the opcode, its arguments' length.

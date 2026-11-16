@@ -228,7 +228,7 @@ pub struct Saved {
     /// `s_lastLoadedPath`: the save last loaded or saved.
     pub last_path: Vec<u8>,
     /// `s_dataChangedFlags`.
-    pub changed: u8,
+    changed: u8,
     /// JohnnyGuitar's corrections of the extra data record and the variable skip (the row).
     pub jg_fixes: bool,
     /// JIP's NPC perks patch is installed (`s_patchInstallState.NPCPerks`, the `uNPCPerks`
@@ -236,12 +236,8 @@ pub struct Saved {
     npc_perks_patch: bool,
     /// `s_scriptVariablesBuffer`: owner id, name.
     pub script_vars: UnorderedMap<u32, UnorderedMap<Name, ScriptVar>>,
-    /// `s_auxVariables[0]` (the saved ones): mod index, owner id, name, values.
-    pub aux_vars: UnorderedMap<u32, UnorderedMap<u32, UnorderedMap<Name, Vec<Value>>>>,
     /// `s_refMapArrays[0]`: mod index, name, reference id.
     pub ref_maps: UnorderedMap<u32, UnorderedMap<Name, UnorderedMap<u32, Value>>>,
-    /// `s_extraDataKeysMap`.
-    pub extra_data: UnorderedMap<Uint, ExtraJipEntry>,
     /// `s_linkedRefModified` and `s_linkedRefsTemp`.
     pub linked_refs: UnorderedMap<u32, LinkedRef>,
     pub linked_refs_temp: UnorderedMap<u32, u32>,
@@ -272,9 +268,7 @@ impl Default for Saved {
             jg_fixes: false,
             npc_perks_patch: false,
             script_vars: UnorderedMap::new(8),
-            aux_vars: UnorderedMap::new(8),
             ref_maps: UnorderedMap::new(8),
-            extra_data: UnorderedMap::new(0x20),
             linked_refs: UnorderedMap::new(8),
             linked_refs_temp: UnorderedMap::new(8),
             linked_ref_defaults: UnorderedMap::new(8),
@@ -288,8 +282,64 @@ impl Default for Saved {
     }
 }
 
-fn saved(e: &mut Engine) -> &mut Saved {
+pub(crate) fn saved(e: &mut Engine) -> &mut Saved {
     &mut e.ext::<Jip>().saved
+}
+
+/// JIP's `s_extraDataKeysMap`: the ExtraJIP data by key, one map for the run, behind a std `Mutex`
+/// in a lock-free slot ([`Engine::ext_free`], made at install before the threads start). Its
+/// routines (`game_patches::gh1`: an extra list's copy, destructor and compare) run on any thread
+/// that copies, frees or compares an item's extra data, the commands and the co-save on the main
+/// or a script's thread: none takes JIP's shared slot for it. The lock is a leaf (a guard
+/// borrows the engine: no game call, script call or second slot access while it is held), one
+/// take per logical operation.
+pub struct ExtraData(std::sync::Mutex<UnorderedMap<Uint, ExtraJipEntry>>);
+
+impl Default for ExtraData {
+    fn default() -> Self {
+        // JIP's `s_extraDataKeysMap` default, as `Saved` made it before.
+        ExtraData(std::sync::Mutex::new(UnorderedMap::new(0x20)))
+    }
+}
+
+/// JIP's ExtraJIP data map ([`ExtraData`]), under its lock.
+pub fn extra_data(e: &mut Engine) -> std::sync::MutexGuard<'_, UnorderedMap<Uint, ExtraJipEntry>> {
+    e.ext_free::<ExtraData>()
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The changed flags set by the paths that must not take JIP's slot (the aux variables', the
+/// ref maps' and the ExtraJIP data's writers: commands, the reference destructor, the ExtraJIP
+/// routines): kept beside [`Saved::changed`] in a lock-free slot, and part of `s_dataChangedFlags`
+/// wherever it is read or reset ([`changed_flags`], [`set_changed`]). JIP has one byte; the two
+/// halves together are that byte.
+#[derive(Default)]
+pub struct ChangedUnlocked(std::sync::atomic::AtomicU8);
+
+/// `s_dataChangedFlags |= flag`, without JIP's slot.
+pub fn mark_changed(e: &mut Engine, flag: u8) {
+    e.ext_free::<ChangedUnlocked>()
+        .0
+        .fetch_or(flag, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// `s_dataChangedFlags` as a whole.
+pub fn changed_flags(e: &mut Engine) -> u8 {
+    let unlocked = e
+        .ext_free::<ChangedUnlocked>()
+        .0
+        .load(std::sync::atomic::Ordering::SeqCst);
+    saved(e).changed | unlocked
+}
+
+/// `s_dataChangedFlags = flags`.
+pub fn set_changed(e: &mut Engine, flags: u8) {
+    e.ext_free::<ChangedUnlocked>()
+        .0
+        .store(0, std::sync::atomic::Ordering::SeqCst);
+    saved(e).changed = flags;
 }
 
 /// A lock-free copy of [`Saved::npc_perks_patch`] ([`Engine::ext_free`], made at install before the
@@ -303,6 +353,9 @@ pub(crate) struct NpcPerksPatch(std::sync::atomic::AtomicBool);
 /// Makes the lock-free copy (at install, before the threads start).
 pub(crate) fn install_unlocked(e: &mut Engine) {
     e.ext_free::<NpcPerksPatch>();
+    e.ext_free::<ExtraData>();
+    e.ext_free::<ChangedUnlocked>();
+    e.ext_free::<crate::commands::jip_fn_aux_variable::AuxMaps>();
 }
 
 /// Sets JIP's NPC perks patch flag ([`Saved::npc_perks_patch`], private: this is its one
@@ -539,15 +592,15 @@ fn skip_value(b: &mut Bytes, kind: u8) -> Option<()> {
 /// Clears what a load will read again: the kinds `flags` names, the script variables, the
 /// temporary links and the saved flags always.
 pub fn process_changed_flags(e: &mut Engine, flags: u8) {
-    let s = saved(e);
     if flags & changed::AUX_VARS != 0 {
-        s.aux_vars.clear();
-    }
-    if flags & changed::REF_MAPS != 0 {
-        s.ref_maps.clear();
+        crate::commands::jip_fn_aux_variable::aux_maps(e, false).clear();
     }
     if flags & changed::EXTRA_DATA != 0 {
-        s.extra_data.clear();
+        extra_data(e).clear();
+    }
+    let s = saved(e);
+    if flags & changed::REF_MAPS != 0 {
+        s.ref_maps.clear();
     }
     if flags & changed::LINKED_REFS != 0 {
         s.linked_refs.clear();
@@ -588,7 +641,7 @@ const KINDS: [u32; 8] = [
 /// loses nothing in nv-rs before the parts that use it are built. A record not read because the
 /// same save is loaded again with nothing changed keeps the data loaded before, as in JIP.
 pub fn load(e: &mut Engine, r: &mut Reader) -> Result<(), OutOfRange> {
-    let flags = saved(e).changed;
+    let flags = changed_flags(e);
     process_changed_flags(e, flags);
     // nv-rs's own: a section cut short (a record running past the file's end) ends JIP's read
     // where it breaks, with what was read kept; xNVSE then goes on at the section's end, so the
@@ -745,7 +798,7 @@ fn present(e: &Engine, id: u32) -> bool {
 /// an empty name ends its owner's variables. A mod's map is made at its first owner kept, with
 /// room for the owners left (`AlignBucketCount`), an owner's map with room for its variables.
 fn load_aux_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
-    crate::commands::jip_fn_aux_variable::maps_reached(e);
+    crate::commands::jip_fn_aux_variable::aux_pair(e);
     let mut mods = b.u16()?;
     while mods != 0 {
         mods -= 1;
@@ -764,38 +817,18 @@ fn load_aux_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
         };
         while owners != 0 {
             let id = resolved_ref_id(e, b.u32()?);
-            let mut vars = b.u16()?;
+            let vars = b.u16()?;
             if present(e, id) {
                 let (left, room) = (owners, vars);
-                saved(e)
-                    .aux_vars
-                    .emplace_with(m, || UnorderedMap::new(align_bucket_count(u32::from(left))))
-                    .0
-                    .emplace_with(id, || {
-                        UnorderedMap::new(align_bucket_count(u32::from(room)))
-                    });
-                while vars != 0 {
-                    let len = b.u8()?;
-                    if len == 0 {
-                        // `goto avSkipVars`: this variable's values and the owner's rest go.
-                        skip_aux_values(b)?;
-                        skip_aux_vars(b, vars - 1)?;
-                        break;
-                    }
-                    let name = b.name(usize::from(len))?;
-                    let count = b.u16()?;
-                    let mut values = Vec::with_capacity(usize::from(count));
-                    for _ in 0..count {
-                        let kind = b.u8()?;
-                        values.push(read_value(e, b, kind)?);
-                    }
-                    let owner = saved(e).aux_vars.get_mut(&m)?.get_mut(&id)?;
-                    owner
-                        .emplace_with(Name(name), || Vec::with_capacity(usize::from(count)))
-                        .0
-                        .extend(values);
-                    vars -= 1;
-                }
+                // The owner's variables are read first (the values resolve ids with reads of the
+                // engine's memory, no game call), then put in with one take of the maps' lock: a destructor on another
+                // thread that erases this owner between two takes would otherwise end the whole
+                // record's read. What a cut-short record had read for the owner goes in too.
+                let mut read = Vec::new();
+                let complete = read_owner_vars(e, b, vars, &mut read);
+                between_takes(e);
+                insert_owner(e, m, id, (left, room), read)?;
+                complete?;
             } else {
                 skip_aux_vars(b, vars)?;
             }
@@ -803,6 +836,78 @@ fn load_aux_vars(e: &mut Engine, b: &mut Bytes) -> Option<()> {
         }
     }
     Some(())
+}
+
+/// One owner's `vars` variables read from `b` into `out` (name, count, values); an empty name
+/// ends them (`goto avSkipVars`: that variable's values and the owner's rest skipped). `None`
+/// when the record ends first (`out` keeps what was read).
+fn read_owner_vars(
+    e: &mut Engine,
+    b: &mut Bytes,
+    mut vars: u16,
+    out: &mut Vec<(Vec<u8>, u16, Vec<Value>)>,
+) -> Option<()> {
+    while vars != 0 {
+        let len = b.u8()?;
+        if len == 0 {
+            skip_aux_values(b)?;
+            skip_aux_vars(b, vars - 1)?;
+            break;
+        }
+        let name = b.name(usize::from(len))?;
+        let count = b.u16()?;
+        let mut values = Vec::with_capacity(usize::from(count));
+        for _ in 0..count {
+            let kind = b.u8()?;
+            values.push(read_value(e, b, kind)?);
+        }
+        out.push((name, count, values));
+        vars -= 1;
+    }
+    Some(())
+}
+
+/// One owner's variables put in under one take of the maps' lock: the mod's map made at its
+/// first owner kept with room for the owners left (`AlignBucketCount`), the owner's with room
+/// for its variables, each variable's values appended (`Emplace`), as JIP's loader.
+fn insert_owner(
+    e: &mut Engine,
+    m: u32,
+    id: u32,
+    (left, room): (u16, u16),
+    read: Vec<(Vec<u8>, u16, Vec<Value>)>,
+) -> Option<()> {
+    let mut maps = crate::commands::jip_fn_aux_variable::aux_maps(e, false);
+    let owner = maps
+        .emplace_with(m, || UnorderedMap::new(align_bucket_count(u32::from(left))))
+        .0
+        .emplace_with(id, || {
+            UnorderedMap::new(align_bucket_count(u32::from(room)))
+        })
+        .0;
+    for (name, count, values) in read {
+        owner
+            .emplace_with(Name(name), || Vec::with_capacity(usize::from(count)))
+            .0
+            .extend(values);
+    }
+    Some(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's step run between a loader's read of an entry and its one take that puts it in
+    /// (a destructor on another thread at that moment).
+    pub(crate) static BETWEEN_TAKES: std::cell::Cell<Option<fn(&mut Engine)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The `BETWEEN_TAKES` step (tests only).
+fn between_takes(_e: &mut Engine) {
+    #[cfg(test)]
+    if let Some(f) = BETWEEN_TAKES.with(std::cell::Cell::get) {
+        f(_e);
+    }
 }
 
 /// One aux variable's values, skipped.
@@ -913,7 +1018,7 @@ fn skip_ref_map_names(b: &mut Bytes, names: u16) -> Option<()> {
 /// ids resolved, an unresolved one's index unused) and texts.
 fn load_extra_data(e: &mut Engine, b: &mut Bytes) -> Option<()> {
     let mut keys = b.u32()?;
-    saved(e).extra_data.set_bucket_count(keys);
+    extra_data(e).set_bucket_count(keys);
     while keys != 0 {
         keys -= 1;
         let key = b.u32()?;
@@ -937,17 +1042,13 @@ fn load_extra_data(e: &mut Engine, b: &mut Bytes) -> Option<()> {
                 let Some(m) = resolved_mod_index(e, saved_index).map(u32::from) else {
                     continue;
                 };
-                // The key's entry is made at its first mod kept (`Emplace(key, refID)`), the
-                // mod's data at its index (`dataMap[modIdx]`), and the bytes copied over it.
-                let mut data = saved(e)
-                    .extra_data
-                    .emplace_with(Uint(key), || ExtraJipEntry {
-                        ref_id: id,
-                        data: BTreeMap::new(),
-                    })
-                    .0
-                    .data
-                    .get(&m)
+                // The mod's data as it stands (`dataMap[modIdx]`), the bytes copied over it; then
+                // one take puts it in, the key's entry made at its first mod kept
+                // (`Emplace(key, refID)`): a destructor on another thread that erases the key
+                // between two takes would otherwise end the whole record's read.
+                let mut data = extra_data(e)
+                    .get(&Uint(key))
+                    .and_then(|entry| entry.data.get(&m))
                     .cloned()
                     .unwrap_or_default();
                 data.copy_head(head);
@@ -963,9 +1064,13 @@ fn load_extra_data(e: &mut Engine, b: &mut Bytes) -> Option<()> {
                 if len2 != 0 {
                     data.strings[1] = string2.to_vec();
                 }
-                saved(e)
-                    .extra_data
-                    .get_mut(&Uint(key))?
+                between_takes(e);
+                extra_data(e)
+                    .emplace_with(Uint(key), || ExtraJipEntry {
+                        ref_id: id,
+                        data: BTreeMap::new(),
+                    })
+                    .0
                     .data
                     .insert(m, data);
             }
@@ -1157,7 +1262,7 @@ fn write_value(r: &mut Records, v: &Value) {
 /// The save callback: JIP's own records ([`save_own`]), each followed by the carried records of
 /// its type, then the carried records of other types, all in the order they were read.
 ///
-/// While JIP answers "not installed" ([`crate::ANSWERS_INSTALLED`]) it writes nothing when it
+/// While JIP answers "not installed" ([`crate::set_answers_installed`]) it writes nothing when it
 /// holds nothing (no section loaded, no data a command made, its flags as reset), so the co-save
 /// is the one xNVSE writes without JIP: xNVSE writes a plugin's section only when the plugin
 /// opens a record (`HandleSaveGame`, `if (s_pluginHeader.numChunks)` (xNVSE)), and JIP writes
@@ -1187,15 +1292,17 @@ pub fn save(e: &mut Engine, r: &mut Records) {
 /// Nothing to save: no section loaded and every map empty, the flags as reset.
 fn holds_nothing(e: &mut Engine) -> bool {
     let player = player_base(e);
+    let aux_empty = crate::commands::jip_fn_aux_variable::aux_maps(e, false).is_empty();
+    let extra_empty = extra_data(e).is_empty();
     let s = saved(e);
     !s.had_section
         && s.carried.is_empty()
         && s.serialized_tail.is_empty()
         && s.serialized == SerializedVars::default()
         && s.script_vars.is_empty()
-        && s.aux_vars.is_empty()
+        && aux_empty
         && s.ref_maps.is_empty()
-        && s.extra_data.is_empty()
+        && extra_empty
         && s.linked_refs.is_empty()
         && s.appearance_undo.get(&player).is_none()
         && (!s.npc_perks_patch || s.npc_perks.is_empty())
@@ -1208,6 +1315,8 @@ fn save_own(e: &mut Engine, r: &mut Records) {
     let jg = saved(e).jg_fixes;
     // `WriteRecord64(&svVarIt().value->data)`: each added variable's value as it is now.
     crate::commands::jip_fn_script_vars::refresh_saved_values(e);
+    let aux_vars = crate::commands::jip_fn_aux_variable::aux_maps(e, false).clone();
+    let extra = extra_data(e).clone();
     let s = e.ext::<Jip>().saved.clone();
     if !s.script_vars.is_empty() {
         r.record(
@@ -1226,13 +1335,13 @@ fn save_own(e: &mut Engine, r: &mut Records) {
             }
         }
     }
-    if !s.aux_vars.is_empty() {
+    if !aux_vars.is_empty() {
         r.record(
             kind::AUX_VARS,
             VARS_VERSION,
-            &(s.aux_vars.len() as u16).to_le_bytes(),
+            &(aux_vars.len() as u16).to_le_bytes(),
         );
-        for (mod_index, owners) in s.aux_vars.iter() {
+        for (mod_index, owners) in aux_vars.iter() {
             r.u8(*mod_index as u8);
             r.u16(owners.len() as u16);
             for (owner, vars) in owners.iter() {
@@ -1269,14 +1378,14 @@ fn save_own(e: &mut Engine, r: &mut Records) {
             }
         }
     }
-    if !s.extra_data.is_empty() {
+    if !extra.is_empty() {
         let (version, per_mod) = if jg {
             (EXTRA_DATA_VERSION_JG, 9)
         } else {
             (EXTRA_DATA_VERSION, 5)
         };
-        r.record(kind::EXTRA_DATA, version, &s.extra_data.len().to_le_bytes());
-        for (key, entry) in s.extra_data.iter() {
+        r.record(kind::EXTRA_DATA, version, &extra.len().to_le_bytes());
+        for (key, entry) in extra.iter() {
             r.u32(key.0);
             r.u32(entry.ref_id);
             r.u8(entry.data.len() as u8);
@@ -1359,7 +1468,8 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // count, the ragdoll events gone; and the AI hooks' part: the combat, teleport and equipment hooks
 // off, the forced targets and detection values gone; and the world hooks' part: the informed
 // forms, the waits, the swapped LOD blocks and the model paths gone, the reference names' flags set
-// again; and the player's killer cleared, G33's part; and the references' own map markers gone).
+// again; and the player's killer cleared, G33's part; and the excluded combat actions gone, H16's
+// part; and the references' own map markers gone).
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
@@ -1369,6 +1479,7 @@ fn pre_load_housekeeping(e: &mut Engine) {
     crate::ai_hooks::pre_load(e);
     crate::world_hooks::pre_load(e);
     crate::game_patches::gc::pre_load(e);
+    crate::game_patches::gd::pre_load(e);
     crate::commands::jip_fn_misc_ref::pre_load(e);
 }
 
@@ -1387,16 +1498,21 @@ pub fn listen(e: &mut Engine, m: &Message) {
         msg::SAVE_GAME => {
             // `COPY_BYTES(s_lastLoadedPath, fosPath, dataLen + 1)`.
             let path = message_text(e, m);
-            let s = saved(e);
-            s.last_path = path;
-            s.changed = 0;
+            saved(e).last_path = path;
+            // JIP's `s_dataChangedFlags = 0`, unlocked. xNVSE sends this message BEFORE the plugins'
+            // save callbacks write the records (`HandleSaveGame`; `nvse::saveload::save_game` the
+            // same), so a mark between this reset and the records' snapshot only reads the data
+            // again at the next load of this save. The window that loses one: the item-copy hook
+            // (`game_patches::gh1` copy) marks before it writes its new key; a save whose reset and
+            // snapshot fall between the two misses the new entry with the bit already cleared. As
+            // in JIP (it marks before the copy and takes no lock there), not a fault against it.
+            set_changed(e, 0);
         }
         msg::PRE_LOAD_GAME => {
             let path = message_text(e, m);
-            let s = saved(e);
-            if path != s.last_path {
-                s.last_path = path;
-                s.changed = changed::ALL;
+            if path != saved(e).last_path {
+                saved(e).last_path = path;
+                set_changed(e, changed::ALL);
             }
             pre_load_housekeeping(e);
         }
@@ -1406,7 +1522,7 @@ pub fn listen(e: &mut Engine, m: &Message) {
                 crate::world_hooks::restore_form_flags(e);
                 // `RestoreLinkedRefs(s_linkedRefsTemp)` with the linked references changed.
                 crate::commands::jip_fn_linked_ref::after_load(e);
-                saved(e).changed = 0;
+                set_changed(e, 0);
             }
         }
         msg::NEW_GAME => {
@@ -1426,6 +1542,7 @@ pub fn listen(e: &mut Engine, m: &Message) {
             crate::commands::pos_marker::create(e);
             crate::game_patches::gh2::deferred_init(e);
             crate::commands::jip_fn_utility::deferred_init(e);
+            crate::game_patches::gs::deferred_init(e);
         }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state

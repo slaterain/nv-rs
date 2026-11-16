@@ -739,7 +739,17 @@ pub fn tes_package_create_package(e: &mut Engine, package_type: i32) -> Ptr<TESP
             Ptr::NULL
         }
         0xf | 0x1c => construct(e, 0xd0, 0x009e_dbc0, &[]),
-        0x12 => construct(e, 0x188, 0x0097_d3a0, &[0, 0, 0]),
+        // 00670c30: JIP's H16 (its own) makes the combat controller 0x18C bytes (its excluded
+        // actions word at +0x188); the seam answers the size (no words). One load while JIP is
+        // not installed.
+        0x12 => {
+            let size = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                e.site(0x0067_0c30, &[]).unwrap_or(0x188)
+            } else {
+                0x188
+            };
+            construct(e, size, 0x0097_d3a0, &[0, 0, 0])
+        }
         0x15 => construct(e, 0x88, 0x009e_c5d0, &[]),
         0x16 => construct(e, 0xac, 0x009f_0e00, &[0, 0, 0]),
         0x17 => construct(e, 0x9c, 0x009f_91b0, &[]),
@@ -4948,6 +4958,51 @@ mod tests {
         assert_eq!(e.get(p, TESPackage::ePROCEDURE_TYPE), -1);
         assert_eq!(e.get(p, TESPackage::cPackType), -1);
         assert_eq!(calls_to(&e, FN_00673180), [[p.addr(), 0]]);
+    }
+
+    thread_local! {
+        /// H16's asks at `0x670C30` (their words).
+        static H16_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_h16(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H16_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x18c)
+    }
+
+    /// JIP's H16 seam at `0x670C30` (its own): not asked while JIP is not installed (0x188
+    /// bytes); with JIP installed (whatever the fixes row) asked with no words for a combat
+    /// controller (type 0x12) only, and its answer is the size.
+    #[test]
+    fn h16_seam_sizes_the_combat_controller() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            let mut e = engine();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0067_0c30), at_h16);
+            e.set_jip_patches(word);
+            for (kind, size, asked) in [
+                (0x12, if installed { 0x18c } else { 0x188 }, installed),
+                (0x16, 0xac, false),
+                (5, 0x80, false),
+            ] {
+                H16_ASKED.with(|s| s.borrow_mut().clear());
+                log_on(&mut e);
+                e.call(0x00670b90, &args![kind]);
+                assert_eq!(calls_to(&e, OPERATOR_NEW)[0], [size], "{word:x} {kind:x}");
+                assert_eq!(
+                    H16_ASKED.with(|s| s.take()),
+                    if asked { vec![vec![]] } else { vec![] },
+                    "{word:x} {kind:x}"
+                );
+            }
+        }
     }
 
     #[test]

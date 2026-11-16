@@ -178,6 +178,109 @@ fn writes_make_windows_bytes() {
     }
 }
 
+/// A CR not followed by LF ends a line; spaces, tabs and backspaces at the very end of the file go
+/// before it is split (`ini-measure/ini-cr-2026-11-16.txt`, every case of it).
+#[test]
+fn writes_split_at_lone_crs_and_trim_the_files_end() {
+    let cases: &[(&[u8], (&str, &str, &str), &[u8])] = &[
+        (b"[A]\rx=1\ry=2\r", ("A", "x", "5"), b"[A]\rx=5\ry=2\r\r\n"),
+        (b"[A]\rx=1\ry=2\r", ("A", "y", "5"), b"[A]\rx=1\ry=5\r\r\n"),
+        (
+            b"[A]\rx=1\ry=2\r",
+            ("A", "z", "3"),
+            b"[A]\rx=1\ry=2\r\r\nz=3\r\n",
+        ),
+        (
+            b"[A]\rx=1\r[B]\ry=2\r",
+            ("B", "y", "7"),
+            b"[A]\rx=1\r[B]\ry=7\r\r\n",
+        ),
+        (
+            b"[A]\rx=1\r[B]\ry=2\r",
+            ("A", "q", "1"),
+            b"[A]\rx=1\rq=1\r\n[B]\ry=2\r\r\n",
+        ),
+        (
+            b"[A]\rx=1\r",
+            ("C", "q", "1"),
+            b"[A]\rx=1\r\r\n[C]\r\nq=1\r\n",
+        ),
+        (
+            b"[A]\rx=1  \ry=2\r",
+            ("A", "x", "5"),
+            b"[A]\rx=5  \ry=2\r\r\n",
+        ),
+        (
+            b"[A]\r\nx=1\r\r\ny=2\r\n",
+            ("A", "y", "9"),
+            b"[A]\r\nx=1\r\r\ny=9\r\n",
+        ),
+        (b"[A]\nx=1\n\ry=2\n", ("A", "x", "4"), b"[A]\nx=4\n\ry=2\n"),
+        (b"[A]\r\nx=1  ", ("A", "y", "2"), b"[A]\r\nx=1\r\ny=2\r\n"),
+        (
+            b"[A]\r\nx=1 \x08",
+            ("A", "y", "2"),
+            b"[A]\r\nx=1\r\ny=2\r\n",
+        ),
+        (b"[A]\r\nx=1\t", ("A", "y", "2"), b"[A]\r\nx=1\r\ny=2\r\n"),
+        (
+            b"[A]\r\nx=1\r\ny=2  ",
+            ("A", "y", "5"),
+            b"[A]\r\nx=1\r\ny=5\r\n",
+        ),
+        (
+            b"[A]\r\nx=1\r\ny=2  ",
+            ("A", "x", "5"),
+            b"[A]\r\nx=5\r\ny=2\r\n",
+        ),
+        (b"[A]\r\n  x=1  ", ("A", "x", "3"), b"[A]\r\n  x=3\r\n"),
+        (
+            b"[A]\r\nx=1 \r",
+            ("A", "y", "2"),
+            b"[A]\r\nx=1 \r\r\ny=2\r\n",
+        ),
+        (
+            b"[A]\r\nx=1\r ",
+            ("A", "y", "2"),
+            b"[A]\r\nx=1\r\r\ny=2\r\n",
+        ),
+        (b"[A]  ", ("A", "y", "2"), b"[A]\r\ny=2\r\n"),
+        (
+            b"[A]\r\nx=1  ",
+            ("B", "y", "2"),
+            b"[A]\r\nx=1\r\n[B]\r\ny=2\r\n",
+        ),
+    ];
+    for &(old, (s, k, v), want) in cases {
+        assert_eq!(
+            String::from_utf8_lossy(&w(old, s, k, v)),
+            String::from_utf8_lossy(want),
+            "{:?} [{s}] {k}={v}",
+            String::from_utf8_lossy(old)
+        );
+    }
+}
+
+/// A read ends lines at CR alone too (`jip-cmds/files-measure/ini4-2026-11-16.txt`, `STRING cr
+/// only` and `SECTION cr only`; `ini5-...`, `SECTION cr cr lf` and `lf cr`, `STRING trailing
+/// spaces no eol`).
+#[test]
+fn a_read_ends_lines_at_a_lone_cr() {
+    let cr_only = b"[A]\rx=1\ry=2\r";
+    assert_eq!(ini_value(cr_only, b"A", b"y").unwrap(), b"2");
+    assert_eq!(ini_value(cr_only, b"A", b"x").unwrap(), b"1");
+    assert_eq!(ini_value(b"[A]\rx=1\r[B]\ry=2\r", b"A", b"y"), None);
+    assert_eq!(
+        ini_value(b"[A]\rx=1\r[B]\ry=2\r", b"B", b"y").unwrap(),
+        b"2"
+    );
+    for text in [&b"[A]\r\nx=1\r\r\ny=2\r\n"[..], b"[A]\nx=1\n\ry=2\n"] {
+        assert_eq!(ini_value(text, b"A", b"x").unwrap(), b"1");
+        assert_eq!(ini_value(text, b"A", b"y").unwrap(), b"2");
+    }
+    assert_eq!(ini_value(b"[A]\r\nx=1  ", b"A", b"x").unwrap(), b"1");
+}
+
 /// A comment after a value is part of what a read gives (measured: `350\t;Max width...`).
 #[test]
 fn a_read_keeps_a_comment_after_the_value() {
