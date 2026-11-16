@@ -438,7 +438,13 @@ mod device {
                 out.fill(0.0);
                 return;
             }
-            fill(&*source_cb, rate, channels, out, MUTED.load(Ordering::Relaxed));
+            fill(
+                &*source_cb,
+                rate,
+                channels,
+                out,
+                MUTED.load(Ordering::Relaxed),
+            );
             given_cb.store(true, Ordering::Relaxed);
         };
         let mut watch = Watch::default();
@@ -912,7 +918,10 @@ mod tests {
         assert_eq!(mix_of(offer(96000, 6), &all), Ok((96000, Layout::STEREO)));
         // Not taken in float (or not at all): refused, saying why.
         let why = mix_of(offer(22050, 2), &all).unwrap_err();
-        assert!(why.contains("32-bit float") && why.contains("22050"), "{why}");
+        assert!(
+            why.contains("32-bit float") && why.contains("22050"),
+            "{why}"
+        );
         let none = takes(&[(48000, 8)]);
         let why = mix_of(offer(48000, 8), &none).unwrap_err();
         assert!(why.contains("8 channels") && why.contains("two"), "{why}");
@@ -945,10 +954,7 @@ mod tests {
                 mask: 0x3,
             },
         );
-        assert!(matches!(
-            open_as(odd, None, &both),
-            Err(Refused::Format(_))
-        ));
+        assert!(matches!(open_as(odd, None, &both), Err(Refused::Format(_))));
     }
 
     /// A source that writes a ramp.
@@ -992,7 +998,9 @@ mod tests {
         assert_eq!(w.on(Event::Underrun, true), Reaction::Starved(2));
         assert!(matches!(w.on(Event::NoRealtime, true), Reaction::Say(_)));
         assert_eq!(w.on(Event::NoRealtime, true), Reaction::None);
-        assert!(matches!(w.on(Event::Other("x".into()), true), Reaction::Say(s) if s.contains('x')));
+        assert!(
+            matches!(w.on(Event::Other("x".into()), true), Reaction::Say(s) if s.contains('x'))
+        );
         assert_eq!(w.on(Event::Other("y".into()), true), Reaction::None);
         assert!(
             matches!(w.on(Event::Lost("gone".into()), true), Reaction::Lose(s) if s.contains("gone"))
