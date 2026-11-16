@@ -80,6 +80,21 @@ pub(crate) fn num_args(e: &Engine, a: &CommandArgs) -> u8 {
     e.mem.u8(a.data.wrapping_add(e.mem.u32(a.opcode_offset)))
 }
 
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.h: NUM_ARGS_EX.
+/// [`num_args`], or 0 when the low byte of the line's argument data length (the word before the
+/// count) is 0: a statement compiled with no argument data has length 0 and no count (xNVSE's
+/// own analyser skips such lines, `ScriptAnalyzer.cpp` `if (context.length)`), and the byte
+/// there is the next line's. JIP uses it in `GetReticlePos`, `GetReticleRange`,
+/// `MoveToEditorPosition`, `GetItemRefCurrentHealth` and `ReloadEquippedModels`.
+pub(crate) fn num_args_ex(e: &Engine, a: &CommandArgs) -> u8 {
+    let offset = e.mem.u32(a.opcode_offset);
+    if e.mem.u8(a.data.wrapping_add(offset).wrapping_sub(2)) == 0 {
+        0
+    } else {
+        num_args(e, a)
+    }
+}
+
 fn is_reference(e: &Engine, form: u32) -> bool {
     e.mem.u32(e.mem.u32(form) + VT_IS_REFERENCE) == RETURN_TRUE
 }

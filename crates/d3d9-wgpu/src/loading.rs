@@ -338,6 +338,7 @@ fn recent_lines() -> Vec<String> {
 
 /// The capture ([`capture_output`]): one pipe for each place the output went (one when standard
 /// output and error go to the same file or console, so their lines keep their order).
+#[cfg(windows)]
 struct Pipe {
     /// The pipe's write end, standing in for the std handles `which`.
     write: isize,
@@ -349,6 +350,7 @@ struct Pipe {
 }
 
 /// The pipes while the output is captured; `true` once the std handles are back.
+#[cfg(windows)]
 static CAPTURED: Mutex<Option<(Vec<Pipe>, bool)>> = Mutex::new(None);
 
 /// While it lives (the start screen's [`crate::device::Device`] start owns it) the run's output
