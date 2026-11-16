@@ -300,6 +300,12 @@ const MENU_GET_XML: u32 = 0x00a1_c9b0;
 /// UI Organizer's patch in [`tile_read_file`] (`00A01B87`, the call of `Tile::ParseFile`): a seam
 /// of `crates/uio`, read only while [`Engine::uio`] is on.
 pub const UIO_READ_FILE_SITE: u32 = 0x00a0_1b87;
+/// UI Organizer's patch in [`tile_final_post_parse`] (`00A03923`, a text tile's trait test): a
+/// seam of `crates/uio`, read only while [`Engine::uio`] is on.
+pub const UIO_FINAL_POST_PARSE_SITE: u32 = 0x00a0_3923;
+/// UI Organizer's patch in [`value_calculate_value`] (`00A0968C`, the operation's dispatch
+/// through its own jump table): a seam of `crates/uio`, read only while [`Engine::uio`] is on.
+pub const UIO_OPERATOR_SITE: u32 = 0x00a0_968c;
 /// `Menu::GetMaxDepth()` (Xbox PDB).
 const MENU_GET_MAX_DEPTH: u32 = 0x00a1_dfb0;
 /// `(menu, template)` (no PDB name, `BSMenu/menu.cpp`): adds the template
@@ -2806,7 +2812,7 @@ pub fn tile_final_post_parse(
 
     let kind = tile_type(e, this);
     if kind == TYPE_TEXT
-        && matches!(
+        && (matches!(
             trait_id,
             TRAIT_WRAP_WIDTH
                 | TRAIT_WRAP_LIMIT
@@ -2816,7 +2822,9 @@ pub fn tile_final_post_parse(
                 | TRAIT_IS_HTML
                 | TRAIT_FONT
                 | TRAIT_JUSTIFY
-        )
+        ) || (e.uio()
+            // UI Organizer's trait test (its patch at 00a03923) also takes the zoom.
+            && e.site(UIO_FINAL_POST_PARSE_SITE, &[trait_id as u32]).is_some()))
     {
         queue(e, UPDATE_CREATE);
         return this;
@@ -5403,6 +5411,21 @@ fn run_action(e: &mut Engine, this: Ptr<TileValue>, action: u32, stack: Ptr, cha
         e.set(this, TileValue::fValue, top);
         if size != 0 {
             e.mem.set_u32(stack.addr() + 8, size - 1);
+        }
+    }
+    // UI Organizer's jump table (its patch at 00a0968c) runs the operation in place of the
+    // switch below; its answer is the "string changed" flag afterwards.
+    if e.uio() {
+        let at = [
+            this.addr(),
+            kind as u32,
+            operand.to_bits(),
+            text,
+            *changed as u32,
+        ];
+        if let Some(flag) = e.site(UIO_OPERATOR_SITE, &at) {
+            *changed = flag != 0;
+            return;
         }
     }
     let current = e.get(this, TileValue::fValue);
@@ -10224,6 +10247,44 @@ mod tests {
 
     fn no_setup(_: &mut Engine, _: Ptr<Tile>) {}
 
+    /// UI Organizer's handler at `00A03923` for the tests: the zoom is in its range.
+    fn uio_zoom_rebuilds(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        (a[0] == TRAIT_ZOOM as u32).then_some(1)
+    }
+
+    fn with_uio(on: bool) -> impl FnOnce(&mut Engine, Ptr<Tile>) {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_FINAL_POST_PARSE_SITE);
+        move |e, _| {
+            e.on_site(AT, uio_zoom_rebuilds);
+            e.set_uio(on);
+        }
+    }
+
+    #[test]
+    fn uio_takes_the_zoom_into_a_text_tiles_rebuild_only_while_its_word_is_on() {
+        // Off (the handler registered): the zoom of a text goes on as in the game (no rebuild).
+        let game = post_parse(TYPE_TEXT, TRAIT_ZOOM, no_setup);
+        assert!(!game.0.contains(&UPDATE_CREATE));
+        assert_eq!(post_parse(TYPE_TEXT, TRAIT_ZOOM, with_uio(false)), game);
+        // On: the rebuild, the tile answered.
+        assert_eq!(
+            post_parse(TYPE_TEXT, TRAIT_ZOOM, with_uio(true)),
+            (vec![UPDATE_CREATE], true)
+        );
+        // The game's own traits are unchanged either way; another tile type is not asked.
+        for on in [false, true] {
+            assert_eq!(
+                post_parse(TYPE_TEXT, TRAIT_FONT, with_uio(on)),
+                (vec![UPDATE_CREATE], true)
+            );
+            assert_eq!(
+                post_parse(TYPE_IMAGE, TRAIT_ZOOM, with_uio(on)).0,
+                post_parse(TYPE_IMAGE, TRAIT_ZOOM, no_setup).0
+            );
+        }
+    }
+
     fn with_clip_window(e: &mut Engine, tile: Ptr<Tile>) {
         give_trait(e, tile, TRAIT_CLIP_WINDOW, 1.0);
     }
@@ -13857,6 +13918,212 @@ mod tests {
         assert_eq!(
             calculate(&[(VA_ADD, 5.0), (VA_MULT, 2.0), (VA_SUB, 6.0)], 10.0),
             24.0
+        );
+    }
+
+    thread_local! {
+        /// The words UI Organizer's handler at `00A0968C` was given, per call.
+        static UIO_OPERATIONS: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// UI Organizer's operator handler for the tests: records its words, writes 77 and answers
+    /// "changed".
+    fn uio_operation(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
+        e.mem.set_f32(a[0] + 8, 77.0);
+        Some(1)
+    }
+
+    /// The same, answering "not changed".
+    fn uio_operation_unchanged(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
+        e.mem.set_f32(a[0] + 8, 77.0);
+        Some(0)
+    }
+
+    fn uio_no_operation(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    #[test]
+    fn uio_runs_the_operation_in_place_of_the_switch_only_while_its_word_is_on() {
+        use engine_core::extend::{Owner, SiteSlot};
+        const AT: SiteSlot = SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE);
+        // (the float, the handler's words, the value, the change events)
+        let calculate = |on: bool, handler: engine_core::extend::SiteFn, text: bool| {
+            let mut e = tile_engine();
+            provide_constants(&mut e);
+            install_float_stack(&mut e);
+            install_double_math(&mut e);
+            let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+            e.on_site(AT, handler);
+            e.set_uio(on);
+            let value = value_with(&mut e, tile, TRAIT_X, 10.0, &[(VA_ADD, 5.0)]);
+            if text {
+                let s = cstring(&mut e, "kept");
+                e.set(value, TileValue::strValue, Ptr::new(s));
+            }
+            UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            value_calculate_value(&mut e, value, false);
+            let seen = UIO_OPERATIONS.with(|s| s.borrow().clone());
+            let events = calls_to(&e, VALUE_CHANGE_EVENT).len();
+            (e.get(value, TileValue::fValue), seen, value.addr(), events)
+        };
+        // Off (the handler registered, the word not set): the game's add, never asked.
+        let (float, seen, _, _) = calculate(false, uio_operation, false);
+        assert_eq!(float, 15.0);
+        assert!(seen.is_empty());
+        // On: the handler alone, given (value, kind, operand, string, changed).
+        let (float, seen, value, _) = calculate(true, uio_operation, false);
+        assert_eq!(float, 77.0);
+        assert_eq!(
+            seen,
+            vec![vec![value, VA_ADD as u32, 5.0f32.to_bits(), 0, 0]]
+        );
+        // Its answer is the "string changed" flag (read when the value keeps a string).
+        assert_eq!(calculate(true, uio_operation, true).3, 1);
+        assert_eq!(calculate(true, uio_operation_unchanged, true).3, 0);
+        // On, the handler answering nothing: the game's add.
+        let (float, seen, _, _) = calculate(true, uio_no_operation, false);
+        assert_eq!(float, 15.0);
+        assert_eq!(seen.len(), 1);
+    }
+
+    /// UI Organizer's handler for the "changed" test: records its words, answers "changed" for a
+    /// copy and passes the incoming flag through for anything else (the float untouched).
+    fn uio_copy_changes(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(if a[1] == VA_COPY as u32 { 1 } else { a[4] })
+    }
+
+    /// UI Organizer's handler for the parentheses test: add and multiply as `v + o` and `v * o`
+    /// on the value's float, anything else (the parentheses' own kinds) left alone; answers the
+    /// incoming flag.
+    fn uio_add_and_multiply(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        UIO_OPERATIONS.with(|s| s.borrow_mut().push(a.to_vec()));
+        let (v, o) = (e.mem.f32(a[0] + 8), f32::from_bits(a[2]));
+        match a[1] as i32 {
+            VA_ADD => e.mem.set_f32(a[0] + 8, v + o),
+            VA_MULT => e.mem.set_f32(a[0] + 8, v * o),
+            _ => {}
+        }
+        Some(a[4])
+    }
+
+    /// A copy action whose reference is a value holding `text`: (the action, the text's address).
+    fn copy_action(e: &mut Engine, text: &str, next: u32) -> (u32, u32) {
+        let source: Ptr<TileValue> = Ptr::new(e.mem.alloc(0x14));
+        let at = cstring(e, text);
+        e.set(source, TileValue::strValue, Ptr::new(at));
+        e.set(source, TileValue::eIndex, 5);
+        let reference = action_vtable(e, 0.0, source.addr());
+        (make_action(e, reference, VA_COPY, next), at)
+    }
+
+    /// The exe at 00a09410: an action with a reference sets `[ebp-0x34]` to the referenced value's
+    /// string (`+0xC`); UIO's jump at 00a0968c hands that word on (`DoTileOperatorCOPY` reads it).
+    #[test]
+    fn uio_is_given_the_referenced_string_of_a_copy() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        e.on_site(SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE), uio_operation);
+        e.set_uio(true);
+        let value = value_with(&mut e, tile, TRAIT_X, 0.0, &[]);
+        let (action, hello) = copy_action(&mut e, "hello", 0);
+        e.set(value, TileValue::pActionListA, Ptr::new(action));
+        UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
+        value_calculate_value(&mut e, value, false);
+        let seen = UIO_OPERATIONS.with(|s| s.borrow().clone());
+        assert_ne!(hello, 0);
+        assert_eq!(
+            seen,
+            vec![vec![
+                value.addr(),
+                VA_COPY as u32,
+                0.0f32.to_bits(),
+                hello,
+                0
+            ]]
+        );
+    }
+
+    /// The exe at 00a09410: the "string changed" byte `[ebp-0x25]` is cleared once before the
+    /// action loop (00a09502) and not per action, so the flag one action leaves is the next one's
+    /// incoming flag; UIO's operators read and write that same byte.
+    #[test]
+    fn uio_carries_the_changed_flag_from_one_action_to_the_next() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        e.on_site(
+            SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE),
+            uio_copy_changes,
+        );
+        e.set_uio(true);
+        // The value keeps a string, so the flag (not the float) decides the event.
+        let value = value_with(&mut e, tile, TRAIT_X, 3.0, &[]);
+        let kept = cstring(&mut e, "kept");
+        e.set(value, TileValue::strValue, Ptr::new(kept));
+        let add = action_vtable(&mut e, 0.0, 0);
+        let second = make_action(&mut e, add, VA_ADD, 0);
+        let (first, _) = copy_action(&mut e, "hello", second);
+        e.set(value, TileValue::pActionListA, Ptr::new(first));
+        UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
+        e.call_log = Some(vec![]);
+        value_calculate_value(&mut e, value, false);
+        let seen = UIO_OPERATIONS.with(|s| s.borrow().clone());
+        assert_eq!(seen.len(), 2);
+        assert_eq!((seen[0][1], seen[0][4]), (VA_COPY as u32, 0));
+        assert_eq!((seen[1][1], seen[1][4]), (VA_ADD as u32, 1));
+        assert_eq!(calls_to(&e, VALUE_CHANGE_EVENT), vec![vec![value.addr()]]);
+    }
+
+    /// The exe at 00a09410: UIO's jump sits at 00a0968c, after the parentheses' code (00a095f7,
+    /// 00a09603 and 00a0965b all jump there), and reads the kind `[ebp-0x30]` that code decoded
+    /// from a right parenthesis's float. So with UIO on the parentheses work as in the game.
+    #[test]
+    fn parentheses_with_uio_on_calculate_the_inside_first() {
+        use engine_core::extend::{Owner, SiteSlot};
+        let mut e = tile_engine();
+        provide_constants(&mut e);
+        install_float_stack(&mut e);
+        let (tile, _) = updating_tile(&mut e, TYPE_RECT);
+        e.on_site(
+            SiteSlot::new(Owner::Uio, UIO_OPERATOR_SITE),
+            uio_add_and_multiply,
+        );
+        e.set_uio(true);
+        let value = value_with(
+            &mut e,
+            tile,
+            TRAIT_X,
+            1.0,
+            &[
+                (VA_ADD, 2.0),
+                (ACTION_LEFT_PAREN, 0.0),
+                (VA_ADD, 4.0),
+                (ACTION_RIGHT_PAREN, VA_MULT as f32),
+            ],
+        );
+        UIO_OPERATIONS.with(|s| s.borrow_mut().clear());
+        value_calculate_value(&mut e, value, false);
+        assert_eq!(e.get(value, TileValue::fValue), 12.0);
+        let kinds: Vec<u32> = UIO_OPERATIONS.with(|s| s.borrow().iter().map(|a| a[1]).collect());
+        assert_eq!(
+            kinds,
+            vec![
+                VA_ADD as u32,
+                ACTION_LEFT_PAREN as u32,
+                VA_ADD as u32,
+                VA_MULT as u32
+            ]
         );
     }
 
