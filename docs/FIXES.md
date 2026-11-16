@@ -1274,7 +1274,16 @@ firing a thrown or placed weapon (types 11 to 13) by an actor with no AI process
 original calls the missing process) (`0x5248EF`); an armour's icon in the menus follows the player's sex,
 with the female icon when the armour has one (the original follows the sex of the owner the menu passes,
 and shows the male icon when it passes none) (`0x48E761`); a companion perk's effect that targets the
-player is added to the player once, not once per companion (`0x5EB79B`).
+player is added to the player once, not once per companion (`0x5EB79B`); a place's music that depends
+on a faction picks its enemy, ally or friend music by that faction's combat reaction to the player (the
+original reads the reaction's modifier number instead) (`0x5956BC`); an armour's sounds named in a
+plugin are found through the plugin's own master list (the original looks the ids up as written, so a
+plugin's armour can get no sound or the wrong one) (`0x512F3D`, `0x512FAF`); an archive that has a file
+of the same name ending in `.override` in `Data` (for example `Data\MyMod - Main.override` beside
+`MyMod - Main.bsa`) is loaded as an override: the same files in the archives opened before it are
+dropped from those, so its copies are the ones used (`0x463855`); a reference in a cell that carries
+form flag `0x400000` is not recorded as moved, so its position is not kept in the save (from the end of
+the start-up on, `0x102F5A4`).
 
 Built as part of JIP (in every preset once JIP answers "installed", not under the row), needed by the
 built `GetSkeletonModel`, `SetNPCSkeletonModel` and `SetCRESkeletonModel`: an NPC's skeleton is the NPC's
