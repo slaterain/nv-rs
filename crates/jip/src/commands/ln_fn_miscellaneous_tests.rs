@@ -774,3 +774,180 @@ fn water_traits() {
     e.mem.set_f64(RESULT, 0.0);
     assert_eq!(call(&mut e, 0x2339, &[rf(SOUND), n(0)]).1, 0.0);
 }
+
+// ---- ar_Cat ----
+
+mod ar_cat {
+    use super::*;
+    use nvse::vars::{self, Data, Key, Value, KEY_NUMBER, KEY_STRING};
+
+    /// A form in the game's form map (`LookupFormByID` finds it) and one that is not.
+    const LOADED: u32 = FORMS + 0x9000;
+    const UNLOADED: u32 = FORMS + 0x9100;
+
+    fn setup() -> Engine {
+        let mut e = engine();
+        game_globals(&mut e);
+        form(&mut e, LOADED, 0x28, 0x0000_0a01);
+        in_form_map(&mut e, LOADED, 0x0000_0a01, 0);
+        form(&mut e, UNLOADED, 0x28, 0x0000_0a02);
+        e
+    }
+
+    fn map_of(e: &mut Engine, key_type: u8, pairs: Vec<(Key, Value)>) -> u32 {
+        let id = vars::create_array(e, key_type, false, 0);
+        for (k, v) in pairs {
+            vars::set_element(e, id, &k, v);
+        }
+        id
+    }
+
+    fn num(v: f64) -> Value {
+        Value::Number(v)
+    }
+
+    fn cat(e: &mut Engine, args: &[i32]) -> f64 {
+        e.mem.set_f64(RESULT, 0.0);
+        let words: Vec<Vec<u8>> = args.iter().map(|&a| n(a)).collect();
+        call_on(e, 0x22c0, 0, &words).1
+    }
+
+    fn keys(e: &Engine, id: u32) -> Vec<Key> {
+        vars::array(e, id).expect("the array").keys()
+    }
+
+    /// A packed array: every element appended in order, each as xNVSE hands it to a plugin and
+    /// takes it back: a number, a text, a form by its id when a form has that id (else 0), an
+    /// array (a reference from the target), an element of no type made and left unset.
+    #[test]
+    fn a_packed_array_appends_every_element_as_xnvse_hands_it_over() {
+        let mut e = setup();
+        let inner = array_of(&mut e, vec![]);
+        let into = array_of(&mut e, vec![num(1.0)]);
+        let from = array_of(
+            &mut e,
+            vec![
+                num(2.5),
+                Value::Str(b"text".to_vec()),
+                Value::Form(0x0000_0a01),
+                Value::Form(0x0000_0a02),
+                Value::Array(inner),
+            ],
+        );
+        assert!(vars::make_element(&mut e, from, &Key::Number(5.0)));
+        assert_eq!(cat(&mut e, &[into as i32, from as i32]), 1.0);
+        assert_eq!(
+            array_data(&e, f64::from(into)),
+            vec![
+                Data::Number(1.0),
+                Data::Number(2.5),
+                Data::Str(b"text".to_vec()),
+                Data::Form(0x0000_0a01),
+                Data::Form(0),
+                Data::Array(inner),
+                Data::Invalid,
+            ]
+        );
+        assert_eq!(vars::array(&e, inner).unwrap().refs.len(), 2, "a reference each");
+    }
+
+    /// The elements are read before any is added: an array added to itself doubles.
+    #[test]
+    fn an_array_added_to_itself_doubles() {
+        let mut e = setup();
+        let arr = array_of(&mut e, vec![num(1.0), num(2.0)]);
+        assert_eq!(cat(&mut e, &[arr as i32, arr as i32]), 1.0);
+        let all = array_data(&e, f64::from(arr));
+        assert_eq!(
+            all,
+            [1.0, 2.0, 1.0, 2.0].map(Data::Number).to_vec()
+        );
+    }
+
+    /// Maps by number: a key the target lacks is set; one it has is kept unless the third
+    /// argument is not 0.
+    #[test]
+    fn a_map_sets_missing_keys_and_overrides_only_when_asked() {
+        let mut e = setup();
+        let pairs = |a: f64, c: f64| vec![(Key::Number(1.0), num(a)), (Key::Number(3.0), num(c))];
+        let from = map_of(
+            &mut e,
+            KEY_NUMBER,
+            vec![(Key::Number(1.0), num(10.0)), (Key::Number(2.0), num(20.0))],
+        );
+        let into = map_of(&mut e, KEY_NUMBER, pairs(1.0, 3.0));
+        assert_eq!(cat(&mut e, &[into as i32, from as i32]), 1.0);
+        assert_eq!(
+            array_data(&e, f64::from(into)),
+            [1.0, 20.0, 3.0].map(Data::Number).to_vec()
+        );
+        let into = map_of(&mut e, KEY_NUMBER, pairs(1.0, 3.0));
+        assert_eq!(cat(&mut e, &[into as i32, from as i32, 1]), 1.0);
+        assert_eq!(
+            array_data(&e, f64::from(into)),
+            [10.0, 20.0, 3.0].map(Data::Number).to_vec()
+        );
+        assert_eq!(
+            keys(&e, into),
+            [1.0, 2.0, 3.0].map(Key::Number).to_vec()
+        );
+    }
+
+    /// Maps by text: keys match without case (the target's spelling kept).
+    #[test]
+    fn a_string_map_matches_keys_without_case() {
+        let mut e = setup();
+        let into = map_of(&mut e, KEY_STRING, vec![(Key::Str(b"Key".to_vec()), num(1.0))]);
+        let from = map_of(
+            &mut e,
+            KEY_STRING,
+            vec![
+                (Key::Str(b"KEY".to_vec()), num(2.0)),
+                (Key::Str(b"other".to_vec()), num(3.0)),
+            ],
+        );
+        assert_eq!(cat(&mut e, &[into as i32, from as i32]), 1.0);
+        assert_eq!(
+            keys(&e, into),
+            vec![Key::Str(b"Key".to_vec()), Key::Str(b"other".to_vec())]
+        );
+        assert_eq!(
+            array_data(&e, f64::from(into)),
+            [1.0, 3.0].map(Data::Number).to_vec()
+        );
+    }
+
+    /// An element of no type in a map: a key the target lacks is made (of no type); a key it
+    /// has is left as it is, even when overriding (`SetElementFromAPI` sets nothing).
+    #[test]
+    fn an_element_of_no_type_makes_a_missing_key_and_leaves_one_there() {
+        let mut e = setup();
+        let from = map_of(&mut e, KEY_NUMBER, vec![]);
+        assert!(vars::make_element(&mut e, from, &Key::Number(1.0)));
+        assert!(vars::make_element(&mut e, from, &Key::Number(2.0)));
+        let into = map_of(&mut e, KEY_NUMBER, vec![(Key::Number(1.0), num(5.0))]);
+        assert_eq!(cat(&mut e, &[into as i32, from as i32, 1]), 1.0);
+        assert_eq!(
+            array_data(&e, f64::from(into)),
+            vec![Data::Number(5.0), Data::Invalid]
+        );
+    }
+
+    /// Nothing done and the result left at 0: arrays of different kinds, a missing array, an
+    /// empty source.
+    #[test]
+    fn different_kinds_missing_arrays_and_an_empty_source_do_nothing() {
+        let mut e = setup();
+        let packed = array_of(&mut e, vec![num(1.0)]);
+        let map = map_of(&mut e, KEY_NUMBER, vec![(Key::Number(0.0), num(2.0))]);
+        assert_eq!(cat(&mut e, &[packed as i32, map as i32]), 0.0);
+        assert_eq!(cat(&mut e, &[map as i32, packed as i32]), 0.0);
+        assert_eq!(array_data(&e, f64::from(packed)), vec![Data::Number(1.0)]);
+        assert_eq!(array_data(&e, f64::from(map)), vec![Data::Number(2.0)]);
+        assert_eq!(cat(&mut e, &[packed as i32, 9999]), 0.0);
+        assert_eq!(cat(&mut e, &[9999, packed as i32]), 0.0);
+        let empty = array_of(&mut e, vec![]);
+        assert_eq!(cat(&mut e, &[packed as i32, empty as i32]), 0.0);
+        assert_eq!(array_data(&e, f64::from(packed)), vec![Data::Number(1.0)]);
+    }
+}
