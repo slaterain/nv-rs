@@ -919,23 +919,39 @@ fn report_placement(window: HWND, borderless: bool, when: &str) {
     if window.0 as isize != TOP_WINDOW.load(std::sync::atomic::Ordering::Relaxed) {
         return;
     }
-    let Some(placement) = read_placement(window, borderless) else {
-        return;
+    if let Some(placement) = next_placement(&PLACEMENT_SAID, || read_placement(window, borderless))
+    {
+        eprintln!("NV_D3D9={}: {when}: {}", tag(), placement_line(&placement));
+    }
+}
+
+/// The placement `read` gives when a line on it is to be printed, counted in `said`: none once
+/// [`MOST_PLACEMENT_LINES`] are out, and then `read` (the Win32 calls) is not made at all; none
+/// either when it would say what the last line said. The lock is held over `read`, whose calls
+/// send no message to any window.
+fn next_placement(
+    said: &std::sync::Mutex<(u32, Option<Said>)>,
+    read: impl FnOnce() -> Option<Placement>,
+) -> Option<Placement> {
+    let Ok(mut said) = said.lock() else {
+        return None;
     };
+    if said.0 >= MOST_PLACEMENT_LINES {
+        return None;
+    }
+    let placement = read()?;
     let key = (placement.judged().1, placement.verdict());
-    let Ok(mut said) = PLACEMENT_SAID.lock() else {
-        return;
-    };
-    if said.0 >= MOST_PLACEMENT_LINES || said.1 == Some(key) {
-        return;
+    if said.1 == Some(key) {
+        return None;
     }
     *said = (said.0 + 1, Some(key));
-    eprintln!("NV_D3D9={}: {when}: {}", tag(), placement_line(&placement));
+    Some(placement)
 }
 
 /// Where `window` is, as the calling thread reads it, and in physical pixels where that thread is
-/// not per-monitor aware: the window's from DWM's frame bounds (never scaled), its monitor's from
-/// the display's current mode. `None` when the window or its monitor cannot be read.
+/// not per-monitor aware: the window's visible frame from DWM's frame bounds (never scaled; they
+/// leave out a framed window's invisible resize border, which `GetWindowRect` includes), its
+/// monitor's from the display's current mode. `None` when the window or its monitor cannot be read.
 fn read_placement(window: HWND, borderless: bool) -> Option<Placement> {
     let rect = |r: RECT| [r.left, r.top, r.right, r.bottom];
     let mut at = RECT::default();
@@ -988,8 +1004,8 @@ fn read_placement(window: HWND, borderless: bool) -> Option<Placement> {
     }
 }
 
-/// `DWMWA_EXTENDED_FRAME_BOUNDS`: the window's frame on the screen, in physical pixels whatever
-/// the caller's DPI awareness.
+/// `DWMWA_EXTENDED_FRAME_BOUNDS`: the window's visible frame on the screen (no invisible resize
+/// border, no shadow), in physical pixels whatever the caller's DPI awareness.
 const DWMWA_EXTENDED_FRAME_BOUNDS: u32 = 9;
 
 #[link(name = "dwmapi")]
@@ -1012,7 +1028,8 @@ struct Placement {
     /// The window's rectangle and its monitor's, as that thread reads them.
     window: [i32; 4],
     monitor: [i32; 4],
-    /// The same two in physical pixels, read where the thread is not per-monitor aware.
+    /// The same two in physical pixels, read where the thread is not per-monitor aware: the
+    /// window's visible frame (without a framed window's invisible resize border) and the monitor.
     physical: Option<([i32; 4], [i32; 4])>,
     /// Whether the monitor is the primary one.
     primary: bool,
@@ -1078,7 +1095,10 @@ fn placement_line(p: &Placement) -> String {
     let which = if p.primary { "primary" } else { "other" };
     let (window, monitor) = (p.window, p.monitor);
     let (physical_window, physical_monitor) = match p.physical {
-        Some((w, m)) => (format!(", physical {w:?}"), format!(", physical {m:?}")),
+        Some((w, m)) => (
+            format!(", visible frame, physical {w:?}"),
+            format!(", physical {m:?}"),
+        ),
         None => (String::new(), String::new()),
     };
     let unit_read = unit(p.awareness);
@@ -3894,7 +3914,9 @@ mod tests {
     /// 0,0 (2048x1152 scaled at 125%), another to its right at 2560,2 and the laptop's 1800x1125
     /// panel at -2880,0. The borderless window over the primary covers it; one of the monitor's
     /// size at another origin does not; tonight's framed window, 2576x1479 scaled pixels at 5,5
-    /// (about 3220x1849 physical from 6,6), reaches beyond it, read either way.
+    /// (about 3220x1849 physical from 6,6), reaches beyond it, read either way. Its physical
+    /// figures here are illustrative (the scaled rectangle times 1.25): DWM's visible frame leaves
+    /// out the invisible resize border, so the real line's overhang is a few pixels smaller.
     #[test]
     fn the_window_line_says_where_the_window_went() {
         let primary = [0, 0, 2560, 1440];
@@ -3932,7 +3954,8 @@ mod tests {
         );
 
         // Tonight's framed window, read on the game's thread (not DPI aware) with the physical
-        // rectangles beside: judged in physical pixels.
+        // rectangles beside: judged in physical pixels. The physical window is illustrative (the
+        // scaled one times 1.25, border included), not what DWM's visible frame would return.
         let tonight = Placement {
             borderless: false,
             awareness: 0,
@@ -3952,7 +3975,7 @@ mod tests {
         );
         assert!(
             line.ends_with(
-                "is at [5, 5, 2581, 1484] (scaled pixels: the thread is not DPI aware), physical [6, 6, 3226, 1855] \
+                "is at [5, 5, 2581, 1484] (scaled pixels: the thread is not DPI aware), visible frame, physical [6, 6, 3226, 1855] \
                  on the primary monitor [0, 0, 2048, 1152], physical [0, 0, 2560, 1440]: \
                  it reaches BEYOND it onto what is next to it: 666 past its right edge, 415 past its bottom edge (physical pixels)"
             ),
@@ -3990,6 +4013,41 @@ mod tests {
             "system-scaled pixels: the thread is system DPI aware"
         );
         assert_eq!(unit(7), "pixels of an unknown DPI awareness");
+    }
+
+    /// A placement line is printed when what it finds is new, [`MOST_PLACEMENT_LINES`] at most;
+    /// once they are out, the placement is not even read (its Win32 calls are not made), and a
+    /// read that fails prints nothing and counts nothing.
+    #[test]
+    fn placement_lines_stop_reading_at_the_cap() {
+        let said = std::sync::Mutex::new((0, None));
+        let reads = std::cell::Cell::new(0);
+        let primary = [0, 0, 2560, 1440];
+        let at = |window: [i32; 4]| {
+            let reads = &reads;
+            move || {
+                reads.set(reads.get() + 1);
+                Some(aware(true, window, primary, true))
+            }
+        };
+        assert!(next_placement(&said, at(primary)).is_some());
+        // The same finding again: read, not printed, not counted.
+        assert!(next_placement(&said, at(primary)).is_none());
+        assert_eq!((reads.get(), said.lock().unwrap().0), (2, 1));
+        // A failed read: nothing printed or counted.
+        assert!(next_placement(&said, || None).is_none());
+        assert_eq!(said.lock().unwrap().0, 1);
+        // Something new each time until the cap.
+        for k in 1..MOST_PLACEMENT_LINES as i32 {
+            assert!(
+                next_placement(&said, at([0, k, 2560, 1440 + k])).is_some(),
+                "{k}"
+            );
+        }
+        assert_eq!(said.lock().unwrap().0, MOST_PLACEMENT_LINES);
+        let before = reads.get();
+        assert!(next_placement(&said, at([0, 0, 1, 1])).is_none());
+        assert_eq!(reads.get(), before, "read after the cap");
     }
 
     /// F11 is the port's frame-rate counter key: its press toggles the counter once, its repeats

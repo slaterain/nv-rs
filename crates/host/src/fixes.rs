@@ -1053,17 +1053,24 @@ pub fn play_run_taken_as_test(
     let names: Vec<&str> = tests.iter().chain(&fixes).copied().collect();
     let window = match choice.borderless {
         Some(true) => "the borderless window",
-        Some(false) => "the window as the game makes it (NV_BORDERLESS=0)",
+        Some(false) => {
+            "the window as the game makes it (NV_BORDERLESS=0; borderless still if the game asks for full screen)"
+        }
         None => {
             "the window as the game makes it (borderless only if the game asks for full screen)"
         }
     };
+    // `NV_REPEATABLE` steps the threads whatever `NV_THREADS` says (`Host::start_with`).
+    let threads = if tests.contains(&"NV_REPEATABLE") {
+        "stepped (NV_REPEATABLE)"
+    } else {
+        choice.threads.trim()
+    };
     let mut note = format!(
         "A launcher's play run that runs as a test because of {}: Fallout.ini's [nv-rs ...] keys are not read. \
-         This run: preset {}, threads {}, render thread {}, {window}.",
+         This run: preset {}, threads {threads}, render thread {}, {window}.",
         names.join(", "),
         choice.preset.name(),
-        choice.threads.trim(),
         if choice.render_thread { "on" } else { "off" },
     );
     if !fixes.is_empty() {
@@ -1782,8 +1789,21 @@ mod tests {
         ])
         .unwrap();
         assert!(
-            off.contains("the window as the game makes it (NV_BORDERLESS=0)"),
+            off.contains(
+                "the window as the game makes it (NV_BORDERLESS=0; borderless still if the game asks for full screen)."
+            ),
             "{off}"
+        );
+        // NV_REPEATABLE steps the threads whatever NV_THREADS says, and the line says so.
+        let repeatable = note(&[
+            ("NV_SETTINGS", "x"),
+            ("NV_REPEATABLE", "600"),
+            ("NV_THREADS", "real"),
+        ])
+        .unwrap();
+        assert!(
+            repeatable.contains("threads stepped (NV_REPEATABLE), render thread"),
+            "{repeatable}"
         );
         // A test's variable is unset for play; a fix's line takes the variable's value.
         let two = note(&[("NV_SETTINGS", "x"), ("NV_PROFILE", "x"), ("NV_UNCAP", "0")]).unwrap();
