@@ -1388,6 +1388,16 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
 - **Installed.** Switched on, xNVSE lists it as "UI Organizer Plugin", version 230, as `IsPluginInstalled`
   and `GetPluginVersion` see the DLL; built-ins ask `uio::on` where JIP and Stewie's tweaks ask for its
   DLL.
+- **What it says in the play log** (`crates/uio/src/report.rs`; in place of UIO's own
+  `ui_organizer.log`). Once its lists are read: the list files read (and any that would not open,
+  `supported.txt` named: it comes in the UIO download, not with the UI mods), the additions by menu file
+  and tile, a target file the game could not read or a tile not in it (or one UIO's reading opens but
+  never finds the end of), and each entry left out with the reason ("oHUDPatches.txt:
+  UIOPatches\GrenadeKey.xml not added: Prefabs\GrenadeKeyHUD.xml is not installed"; a condition line
+  starting with a space is said to be read as false, as UIO reads it). At most 40 list files, 40 added
+  paths, 40 problems and 40 entries left out are named, the rest counted. One more line when the first
+  file with additions put in is read (its count is of the additions actually put in). Off, no line.
+  The lines change nothing UIO does.
 
 ## Credits
 
