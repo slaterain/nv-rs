@@ -561,6 +561,27 @@ pub fn repair_menu_init_func(e: &mut Engine, tile: u32, item: u32) {
     }
     let broken = broken_item(e);
     let broken_health = x87_store32(e.call(GET_ITEM_HEALTH, &args![broken, 1u32]).f64());
+    // `0x7B58DB` (JIP LN NVSE's `SetRepairListValuesHook`, O2, with `bEnableFO3Repair`): JIP's
+    // repair amount from the two healths replaces the condition below (to `0x7B592A`). One load
+    // while off.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::ENABLE_FO3_REPAIR != 0 {
+        e.site(0x007b_58db, &[health, broken_health])
+    } else {
+        None
+    };
+    let limited = match jip {
+        Some(bits) => f64::from(f32::from_bits(bits)),
+        None => repaired_limit(e, health, broken_health),
+    };
+    e.call(
+        SET_FLOAT_TRAIT,
+        &args![tile, 0x1004u32, x87_store32(limited), 1u32],
+    );
+}
+
+/// `repair_menu_init_func`'s condition the broken item (health `broken_health`) would reach
+/// repaired with an item of health `health`: `GetRepairedCondition / 100`, at most 1.
+fn repaired_limit(e: &mut Engine, health: u32, broken_health: u32) -> f64 {
     let fraction = e.with_stack(4, |e, extra| {
         e.mem.set_u32(extra.addr(), 0xffff_ffff);
         let player = e.global::<u32>(PLAYER);
@@ -576,16 +597,11 @@ pub fn repair_menu_init_func(e: &mut Engine, tile: u32, item: u32) {
         let hundred: f64 = e.global(HUNDRED_DOUBLE);
         x87_store32(x87_div(condition, hundred))
     });
-    let limited = e
-        .call(
-            FLOAT_PAIR_0040EBD0,
-            &args![x87_quiet_bits(fraction), 1.0f32.to_bits()],
-        )
-        .f64();
     e.call(
-        SET_FLOAT_TRAIT,
-        &args![tile, 0x1004u32, x87_store32(limited), 1u32],
-    );
+        FLOAT_PAIR_0040EBD0,
+        &args![x87_quiet_bits(fraction), 1.0f32.to_bits()],
+    )
+    .f64()
 }
 
 /// `fn_007b5950`'s "below full alpha": the alpha (`0xfa9`) of the item's tile (`007b5370` on
@@ -725,14 +741,23 @@ pub fn repair_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
         .call(LIST_BOX_NUM_UNFILTERED, &args![base + REPAIR_LIST])
         .u32()
         == 1;
-    let done = last || {
+    // `0x7B5CED` (JIP LN NVSE's `RepairMenuClickHook`, O2, with `bEnableFO3Repair`; JIP's `JBE`
+    // at `0x7B5D05`): JIP's answer (1: set up again) replaces the 99 test. One load while off.
+    let again = if !last
+        && e.jip_patches() & engine_core::extend::jip_patches::ENABLE_FO3_REPAIR != 0
+    {
+        e.site(0x007b_5ced, &[])
+    } else {
+        None
+    };
+    let done = last || again.map(|a| a == 0).unwrap_or_else(|| {
         let broken = broken_item(e);
         let health = e.call(GET_ITEM_HEALTH, &args![broken, 1u32]).f64();
         !matches!(
             health.partial_cmp(&e.global::<f64>(NINETY_NINE_DOUBLE)),
             Some(std::cmp::Ordering::Less) | None
         )
-    };
+    });
     if done {
         e.vcall(base, 0xc, &args![0xcu32, 0u32]);
     } else {
@@ -759,7 +784,17 @@ pub fn repair_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
 /// stack took it or for a single item; a single item's old list is removed from the
 /// entry's lists when a stack took it.
 pub fn repair_menu_repair_item(e: &mut Engine, _this: Ptr, item: u32) {
-    let mut fraction = repaired_fraction(e, item, 0);
+    // `0x7B5DAD` (JIP LN NVSE's `DoRepairItemHook`, O2, with `bEnableFO3Repair`): JIP's repair
+    // amount replaces the condition (to `0x7B5E0B`). One load while off.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::ENABLE_FO3_REPAIR != 0 {
+        e.site(0x007b_5dad, &[item])
+    } else {
+        None
+    };
+    let mut fraction = match jip {
+        Some(bits) => bits,
+        None => repaired_fraction(e, item, 0),
+    };
     let broken = broken_item(e);
     let form = typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, broken));
     let weapon = weapon_of(e, form);
@@ -2232,5 +2267,175 @@ mod n057_tests {
             [6, 0x40b, 0x1f4]
         );
         assert_eq!(calls_to(&e, INTERFACE_007044C0), vec![vec![1, 0, 0]]);
+    }
+
+    // ---- JIP LN NVSE's game patches, group GB-5 (O2, `bEnableFO3Repair`) ----
+
+    use engine_core::extend::jip_patches::{ENABLE_FO3_REPAIR, FIXES, INSTALLED};
+
+    fn never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("an O2 seam asked with its option's bit clear")
+    }
+    fn nothing(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        None
+    }
+    fn amount(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        assert_eq!(w, [50.0f32.to_bits(), 50.0f32.to_bits()], "the two healths");
+        Some(0.25f32.to_bits())
+    }
+    fn used_amount(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        assert_eq!(w, [0x7000], "the stack used");
+        Some(0.25f32.to_bits())
+    }
+    fn close(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(0)
+    }
+    fn again(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(1)
+    }
+
+    /// `init_func_shows_the_repaired_condition`'s tile; answers the engine after the call.
+    fn init(word: u32, handler: engine_core::extend::SiteFn) -> (Engine, u32) {
+        let mut e = engine();
+        st0(&mut e, GET_ITEM_HEALTH, 50.0);
+        st0(&mut e, GET_FLOAT_TRAIT, 2.0);
+        answer(&mut e, TILE_GET_CHILD_BY_ID, 0x2400);
+        st0(&mut e, GET_REPAIRED_CONDITION, 80.0);
+        e.register(FLOAT_PAIR_0040EBD0, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0]).min(f32::from_bits(a[1]))),
+            ..Ret::default()
+        });
+        answer(&mut e, GET_WORN, 0);
+        let tile = e.mem.alloc(0x10);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x007b_58db, handler);
+        e.call_log = Some(vec![]);
+        e.call(0x007b_57f0, &args![tile, 0x7000u32]);
+        (e, tile)
+    }
+
+    /// O2 (`0x7B58DB`, words: the stack's and the broken item's health): with the option's bit
+    /// and JIP's answer the condition is the answer (no `GetRepairedCondition`, no cap call);
+    /// off, or `INSTALLED | FIXES` without the option: not asked; no answer: the exe's.
+    #[test]
+    fn jip_o2_init_takes_jips_amount() {
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED | FIXES, never),
+            (INSTALLED | FIXES | ENABLE_FO3_REPAIR, nothing),
+        ] {
+            let (e, tile) = init(word, handler);
+            assert_eq!(calls_to(&e, GET_REPAIRED_CONDITION).len(), 1);
+            assert_eq!(
+                calls_to(&e, SET_FLOAT_TRAIT).last().unwrap(),
+                &vec![tile, 0x1004, 0.8f32.to_bits(), 1]
+            );
+        }
+        let (e, tile) = init(INSTALLED | FIXES | ENABLE_FO3_REPAIR, amount);
+        assert!(calls_to(&e, GET_REPAIRED_CONDITION).is_empty());
+        assert!(calls_to(&e, FLOAT_PAIR_0040EBD0).is_empty());
+        assert_eq!(
+            calls_to(&e, SET_FLOAT_TRAIT).last().unwrap(),
+            &vec![tile, 0x1004, 0.25f32.to_bits(), 1]
+        );
+    }
+
+    /// `repair_item_stacks_or_keeps_a_new_list`'s repair with the seam at `0x7B5DAD` (words: the
+    /// stack used).
+    fn repair(word: u32, handler: engine_core::extend::SiteFn) -> Engine {
+        let mut e = engine();
+        menu(&mut e);
+        st0(&mut e, GET_ITEM_HEALTH, 40.0);
+        st0(&mut e, GET_REPAIRED_CONDITION, 50.0);
+        e.register(FLOAT_PAIR_0040EBD0, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0]).min(f32::from_bits(a[1]))),
+            ..Ret::default()
+        });
+        answer(&mut e, HEALTH_FORM_GET_FORM_HEALTH, 200);
+        let broken = item_change(&mut e, 0x3300, 0x4400);
+        e.set_global(BROKEN_ITEM, broken);
+        let entry = item_change(&mut e, 0x3300, 0x4500);
+        answer(&mut e, GET_OBJECT_IN_LIST, entry);
+        answer(&mut e, ALLOCATE, 0x4600);
+        answer(&mut e, EXTRA_LIST_CONSTRUCT, 0x4700);
+        answer(&mut e, EXTRA_GET_COUNT, 3);
+        e.map(0x4000, 0x1000);
+        e.mem.set_u32(0x4700, 0x0e00_0000);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x007b_5dad, handler);
+        e.call_log = Some(vec![]);
+        e.call(0x007b_5d80, &args![0u32, 0x7000u32]);
+        e
+    }
+
+    /// O2 (`0x7B5DAD`): with the option's bit and JIP's answer the condition is the answer (a
+    /// quarter of 200 is 50); off: not asked, the exe's (a half, 100); no answer: the exe's.
+    #[test]
+    fn jip_o2_repair_item_takes_jips_amount() {
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED | FIXES, never),
+            (INSTALLED | FIXES | ENABLE_FO3_REPAIR, nothing),
+        ] {
+            let e = repair(word, handler);
+            assert_eq!(
+                calls_to(&e, EXTRA_SET_HEALTH),
+                vec![vec![0x4700, 100.0f32.to_bits()]]
+            );
+        }
+        let e = repair(INSTALLED | FIXES | ENABLE_FO3_REPAIR, used_amount);
+        assert!(calls_to(&e, GET_REPAIRED_CONDITION).is_empty());
+        assert_eq!(
+            calls_to(&e, EXTRA_SET_HEALTH),
+            vec![vec![0x4700, 50.0f32.to_bits()]]
+        );
+    }
+
+    /// `do_click_closes_or_repairs`' repair with two items left (no closing by count) and the
+    /// broken item at 50 (below 99: the exe sets the menu up again).
+    fn click(word: u32, handler: engine_core::extend::SiteFn) -> (Engine, u32) {
+        let mut e = engine();
+        let menu = menu(&mut e);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x2900);
+        answer(&mut e, ITEM_TILE_007B5370, slot);
+        st0(&mut e, GET_FLOAT_TRAIT, 255.0);
+        answer(&mut e, TILE_IS_TRUE, 1);
+        let broken = item_change(&mut e, 0x3300, 0);
+        e.set_global(BROKEN_ITEM, broken);
+        let used = item_change(&mut e, 0x3300, 0x4400);
+        let entry = item_change(&mut e, 0x3300, 0);
+        answer(&mut e, GET_OBJECT_IN_LIST, entry);
+        answer(&mut e, LIST_BOX_CURRENT_ITEM, used);
+        answer(&mut e, ITEM_FORM, 0x3300);
+        answer(&mut e, LIST_BOX_NUM_UNFILTERED, 2);
+        st0(&mut e, GET_ITEM_HEALTH, 50.0);
+        let player = e.mem.alloc(4);
+        e.mem.set_u32(player, 0x0e00_0000);
+        e.set_global(PLAYER, player);
+        // `InitRepairMenu` (a direct call) returns at once without the menu global.
+        e.set_global(REPAIR_MENU, 0u32);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x007b_5ced, handler);
+        e.call_log = Some(vec![]);
+        e.call(0x007b_5b40, &args![menu, 0xei32, 0x2200u32]);
+        (e, menu)
+    }
+
+    /// O2 (`0x7B5CED`, no words): with the option's bit JIP's answer decides between closing (0)
+    /// and setting the menu up again (1); off or no answer: the exe's 99 test (50: again).
+    #[test]
+    fn jip_o2_click_asks_jip_whether_to_repair_again() {
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED | FIXES, never),
+            (INSTALLED | FIXES | ENABLE_FO3_REPAIR, nothing),
+            (INSTALLED | FIXES | ENABLE_FO3_REPAIR, again),
+        ] {
+            let (e, menu) = click(word, handler);
+            assert!(!calls_to(&e, 0x0000_8000).contains(&vec![menu, 0xc, 0]));
+        }
+        let (e, menu) = click(INSTALLED | FIXES | ENABLE_FO3_REPAIR, close);
+        assert!(calls_to(&e, 0x0000_8000).contains(&vec![menu, 0xc, 0]));
     }
 }

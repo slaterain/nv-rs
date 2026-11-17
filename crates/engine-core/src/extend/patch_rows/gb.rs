@@ -15,6 +15,9 @@ const fn row(addr: u32) -> Entry {
 
 /// The group's seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // O2 (`bEnableFO3Repair`, `HOOK_INIT_LIST(FO3Repair, ..)`): `InventoryChanges`' repair list
+    // (`PopulateRepairListHook`; the inert seam is group GH1's, in `inventorychanges.rs`).
+    row(0x004d_4c11),
     // GB-3's fixes (JIP's `InitGamePatches`), in with the game-patch row:
     // G100 (`WriteRelCall(0x72880D, IsDisposableWeaponHook)`): the recipe menu's crafted weapon,
     // disposable by its type.
@@ -51,6 +54,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0075_d1a5),
     // O9: `InventoryMenu::DoClick`'s quantity test; G82: `InventoryMenu::InitFunc`'s item name.
     row(0x0078_0b09),
+    // O2: `InventoryMenu::IsItemRepairable` (`EnableRepairButtonHook`, with the byte `0x77` at
+    // `0x7818D3`).
+    row(0x0078_18b2),
     row(0x0078_2876),
     // `LockPickMenu::RotateLockpick` 007908f0.
     row(0x0079_0966),
@@ -62,6 +68,12 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G69 (`WriteRelJump(0x7AC179, QttMenuEnableWheelHook)`): `QuantityMenu::DoIdle` takes the
     // mouse wheel (a fix).
     row(0x007a_c179),
+    // O2: `RepairMenu::InitFunc` (`SetRepairListValuesHook`), `RepairMenu::DoClick`
+    // (`RepairMenuClickHook`, with the byte `0x76` at `0x7B5D05`), `RepairMenu::RepairItem`
+    // (`DoRepairItemHook`).
+    row(0x007b_58db),
+    row(0x007b_5ced),
+    row(0x007b_5dad),
     // `RouletteMenu::DoIdle` 007bd2a0, its three stick values.
     row(0x007b_d47d),
     row(0x007b_d4a0),
