@@ -55,6 +55,7 @@ pub mod jip_fn_ref_map;
 pub mod jip_fn_script;
 pub mod jip_fn_script_vars;
 pub mod jip_fn_sound;
+pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
 pub mod jip_fn_utility;
@@ -162,6 +163,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_quest::COMMANDS,
     jip_fn_ref_map::COMMANDS,
     jip_fn_sound::COMMANDS,
+    jip_fn_string::COMMANDS,
     jip_fn_texture_set::COMMANDS,
     jip_fn_ui::COMMANDS,
     jip_fn_utility::COMMANDS,
@@ -762,6 +764,7 @@ mod tests {
             "jip_fn_quest",
             "jip_fn_ref_map",
             "jip_fn_sound",
+            "jip_fn_string",
             "jip_fn_texture_set",
             "jip_fn_ui",
             "jip_fn_utility",

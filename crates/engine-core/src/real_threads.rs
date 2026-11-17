@@ -1251,7 +1251,10 @@ pub(crate) fn start_thread(e: &mut Engine, i: usize) {
     std::thread::Builder::new()
         .name(format!("game thread {id}"))
         .stack_size(THREAD_STACK)
-        .spawn(move || run_thread(engine, world, i, start, parameter))
+        .spawn(move || {
+            qos::thread_started();
+            run_thread(engine, world, i, start, parameter)
+        })
         .expect("a real game thread");
 }
 
@@ -2824,7 +2827,10 @@ fn make_pool(e: &mut Engine, world: Option<&'static World>, helpers: usize) -> &
         std::thread::Builder::new()
             .name(format!("render helper {number}"))
             .stack_size(THREAD_STACK)
-            .spawn(move || run_helper(engine, world, pool, number))
+            .spawn(move || {
+                qos::thread_started();
+                run_helper(engine, world, pool, number)
+            })
             .expect("a render helper thread");
     }
     pool
@@ -3205,7 +3211,10 @@ fn make_draw_helper(e: &mut Engine, world: Option<&'static World>) -> &'static D
     std::thread::Builder::new()
         .name("nv-draw".into())
         .stack_size(THREAD_STACK)
-        .spawn(move || run_draw_helper(engine, world, d))
+        .spawn(move || {
+            qos::thread_started();
+            run_draw_helper(engine, world, d)
+        })
         .expect("the drawing helper's thread");
     d
 }

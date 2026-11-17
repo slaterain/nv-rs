@@ -83,6 +83,8 @@ pub struct Keys {
     pub ambient_occlusion: Option<bool>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
+    /// `bNotBackground`: Windows told the game is not background work (`qos`).
+    pub not_background: Option<bool>,
     /// The fix rows the file turns on or off, by `crate::fixes::Fix::env`.
     pub fixes: Vec<(&'static str, bool)>,
     /// The lines whose value can't be used (`key=value`): the default stands for each.
@@ -138,6 +140,10 @@ impl Keys {
                 "bRenderThread" => {
                     keys.render_thread = flag(raw);
                     keys.render_thread.is_some()
+                }
+                "bNotBackground" => {
+                    keys.not_background = flag(raw);
+                    keys.not_background.is_some()
                 }
                 _ => {
                     let fix = FIXES.iter().find(|f| f.env == row.switch);
@@ -287,7 +293,8 @@ mod tests {
                 "bShowFrameRate",
                 "bAmbientOcclusion",
                 "bSteppedThreads",
-                "bRenderThread"
+                "bRenderThread",
+                "bNotBackground"
             ]
         );
     }
@@ -310,6 +317,7 @@ mod tests {
             Some(crate::fixes::PLAY_THREADS == "stepped")
         );
         assert_eq!(keys.render_thread, Some(crate::fixes::PLAY_RENDER_THREAD));
+        assert_eq!(keys.not_background, Some(crate::fixes::PLAY_NOT_BACKGROUND));
         assert_eq!(
             keys.show_frame_rate,
             Some(crate::fixes::PLAY_SHOW_FRAME_RATE)

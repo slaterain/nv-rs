@@ -329,10 +329,7 @@ pub const SHADER_WARM: Fix = Fix {
 };
 
 fn install_shader_warm(e: &mut Engine) {
-    #[cfg(windows)]
     engine_platform::d3d9real::want_shader_warm(e, true);
-    #[cfg(not(windows))]
-    let _ = e;
 }
 
 pub const SCRIPT_ERROR_GUARD: Fix = Fix {
@@ -567,6 +564,17 @@ pub const PLAY_SHOW_FRAME_RATE: bool = false;
 /// a fix). `crates/host/data/game_ini.tsv`'s `bAmbientOcclusion` row is held to it by a test.
 pub const PLAY_AMBIENT_OCCLUSION: bool = false;
 
+/// Whether Windows is told the game is not background work (`qos`: execution-speed throttling off,
+/// timer requests honoured, for the process and each thread the port starts) when neither
+/// `NV_NOT_BACKGROUND` nor `Fallout.ini`'s `[nv-rs Threads] bNotBackground` says
+/// ([`Choice::not_background`]): on, in every run and every preset, the original-behaviour one too
+/// (the maintainer, 2026-11-17: "on by default, no background slowdown"). A platform matter, not a
+/// game fix: it changes nothing the game sees, only how Windows schedules the program when its
+/// window is not the active one (measured 2026-11-17: a hidden run without it once ran about a
+/// third slower, every part of the frame alike). `crates/host/data/game_ini.tsv`'s `bNotBackground`
+/// row is held to it by a test.
+pub const PLAY_NOT_BACKGROUND: bool = true;
+
 /// Who draws the game ([`Choice::renderer`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Renderer {
@@ -669,6 +677,14 @@ pub struct Choice {
     /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
     /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
     pub ambient_occlusion: bool,
+    /// Whether Windows is told the game is not background work (`qos::apply_at_start`):
+    /// `NV_NOT_BACKGROUND` when set (`1` on, else off); else, in a launcher's play run,
+    /// `Fallout.ini`'s `[nv-rs Threads] bNotBackground`; else [`PLAY_NOT_BACKGROUND`], on. Not part
+    /// of any preset: vanilla keeps it too.
+    pub not_background: bool,
+    /// Who decided [`Choice::not_background`] (for its start-up line): `None` the default, else the
+    /// variable or the file's key.
+    pub not_background_by: Option<&'static str>,
     /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,
     /// for stepped threads; `crate::draw_thread::install` decides the draw family's capture mode from it).
     pub draw_poison: bool,
@@ -695,6 +711,8 @@ impl Choice {
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
             ambient_occlusion: PLAY_AMBIENT_OCCLUSION,
+            not_background: PLAY_NOT_BACKGROUND,
+            not_background_by: None,
             ini_note: None,
             draw_poison: false,
             draw_check: false,
@@ -852,6 +870,10 @@ impl Choice {
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
             ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
+            not_background: ini.not_background.unwrap_or(PLAY_NOT_BACKGROUND),
+            not_background_by: ini
+                .not_background
+                .map(|_| "Fallout.ini's [nv-rs Threads] bNotBackground"),
             ini_note: ini.bad_line(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
             draw_check: env(DRAW_THREAD_CHECK).as_deref().map(str::trim) == Some("1"),
@@ -919,6 +941,10 @@ impl Choice {
         }
         if let Some(value) = env("NV_AO").filter(|v| !v.trim().is_empty()) {
             choice.ambient_occlusion = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_NOT_BACKGROUND").filter(|v| !v.trim().is_empty()) {
+            choice.not_background = value.trim() == "1";
+            choice.not_background_by = Some("NV_NOT_BACKGROUND");
         }
         if test {
             choice.preset = Preset::Vanilla;
@@ -2026,6 +2052,72 @@ mod tests {
         assert!(!with_ini(None, on, &[("NV_AO", "0")]).ambient_occlusion);
         let asked = Choice::from_parts(None, env_of(&[("NV_AO", "1")])).unwrap();
         assert!(asked.ambient_occlusion);
+    }
+
+    /// Windows is told the game is not background work in every run and preset (vanilla, a test
+    /// and a play run alike) unless turned off: `bNotBackground=0` in a launcher's play run, or
+    /// `NV_NOT_BACKGROUND=0` anywhere, which wins. Its variable makes no run a test.
+    #[test]
+    fn not_background_is_on_unless_turned_off() {
+        assert!(Choice::vanilla().not_background);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!("[nv-rs General]\nsPreset={preset}\n");
+            let choice = with_ini(None, &file, &[]);
+            assert!(choice.not_background, "{preset}");
+            assert_eq!(choice.not_background_by, None, "{preset}");
+        }
+        let plain = Choice::from_parts(None, no_env).unwrap();
+        assert!(plain.not_background && plain.not_background_by.is_none());
+        assert!(
+            with_ini(
+                None,
+                "[nv-rs General]\nsPreset=fixes\n",
+                &[("NV_SHOT", "x")]
+            )
+            .not_background
+        );
+        let off = "[nv-rs Threads]\nbNotBackground=0\n";
+        let by_file = with_ini(None, off, &[]);
+        assert!(!by_file.not_background);
+        assert_eq!(
+            by_file.not_background_by,
+            Some("Fallout.ini's [nv-rs Threads] bNotBackground")
+        );
+        assert!(with_ini(None, "[nv-rs Threads]\nbNotBackground=1\n", &[]).not_background);
+        let bad = with_ini(None, "[nv-rs Threads]\nbNotBackground=yes\n", &[]);
+        assert!(bad.not_background);
+        assert!(bad.ini_note.unwrap().ends_with("bNotBackground=yes"));
+        // A test never reads the file (on); the variable decides there and over the file.
+        assert!(with_ini(None, off, &[("NV_SHOT", "x")]).not_background);
+        for value in ["0", "no", "2"] {
+            let pairs: &'static [(&'static str, &'static str)] = match value {
+                "0" => &[("NV_NOT_BACKGROUND", "0")],
+                "no" => &[("NV_NOT_BACKGROUND", "no")],
+                _ => &[("NV_NOT_BACKGROUND", "2")],
+            };
+            let choice = Choice::from_parts(None, env_of(pairs)).unwrap();
+            assert!(!choice.not_background, "{value}");
+            assert_eq!(choice.not_background_by, Some("NV_NOT_BACKGROUND"));
+        }
+        let over_file = with_ini(
+            None,
+            "[nv-rs Threads]\nbNotBackground=1\n",
+            &[("NV_NOT_BACKGROUND", "0")],
+        );
+        assert!(!over_file.not_background);
+        let empty = Choice::from_parts(None, env_of(&[("NV_NOT_BACKGROUND", "")])).unwrap();
+        assert!(empty.not_background && empty.not_background_by.is_none());
+        // The variable alone is no test: a launcher's play run with it keeps play's preset and
+        // threads and says nothing about being a test.
+        let play = with_ini(None, "[General]\nx=1\n", &[("NV_NOT_BACKGROUND", "0")]);
+        assert_eq!(play.preset, Preset::Fixes);
+        assert_eq!(play.threads, PLAY_THREADS);
+        let env = |name: &str| match name {
+            "NV_SETTINGS" => Some("x".to_string()),
+            "NV_NOT_BACKGROUND" => Some("0".to_string()),
+            _ => None,
+        };
+        assert_eq!(play_run_taken_as_test(&play, env), None);
     }
 
     /// Lowest to highest: default, preset, settings.ini (the fallback), Fallout.ini, environment.

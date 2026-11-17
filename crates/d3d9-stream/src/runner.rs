@@ -864,6 +864,7 @@ impl Threaded {
         let thread = std::thread::Builder::new()
             .name("nv-render".into())
             .spawn(move || {
+                qos::thread_started();
                 // The backend's panics are caught where it is called; one of the render thread's
                 // own (its slot bookkeeping) stops both recording sides with its reason too, so
                 // neither waits for it forever.
