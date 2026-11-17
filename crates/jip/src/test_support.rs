@@ -102,6 +102,16 @@ fn prepare(e: &mut Engine) {
             e.register(at, |_, _| f32::into_ret(-1.0));
         }
     }
+    // Group GX's wraps (G59 `00ee820a`, the `XInputSetState` thunk; H20 `00a239e0`, the mouse
+    // axis read), when the test engine has no translation of them: a marker answer (0x5a5a).
+    for at in [0x00ee_820a, 0x00a2_39e0] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| Ret {
+                eax: 0x5a5a,
+                ..Ret::default()
+            });
+        }
+    }
     // O1's wrap (`009b5a30`, `HitData::ReduceDamage`): a stand-in that leaves the hit as it is.
     if !e.is_registered(0x009b_5a30) {
         e.register(0x009b_5a30, |_, _| Ret::default());

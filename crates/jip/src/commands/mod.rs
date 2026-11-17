@@ -210,6 +210,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_extra_data::COMMANDS,
     crate::game_patches::gp::COMMANDS,
     crate::game_patches::gc::formulas::COMMANDS,
+    crate::game_patches::gx::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -812,6 +813,8 @@ mod tests {
             "jip_fn_miscellaneous",
             // game_patches::gc::formulas::COMMANDS (likewise).
             "jip_fn_miscellaneous",
+            // game_patches::gx::COMMANDS (`ToggleMouseMovement`, built with H20).
+            "jip_fn_input",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
