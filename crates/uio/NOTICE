@@ -31,7 +31,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 One file of the UIO 2.30 package is included unchanged: data/supported.txt is the package's
-Data\uio\supported.txt (UIO's list of the 35 UI mods it knows; 2,433 bytes, SHA-256
+Data\uio\supported.txt (UIO's list of the UI mods it knows, 35 entries; 2,433 bytes, SHA-256
 e55238ee7a49c758b961d7a837b087c7e632598ba0d557594bdde1f486cf3809), built into the crate and read
 when the game folder has no Data\uio\supported.txt. That file is not in the source repository the
 MIT License above comes with; it is included with the author's permission (as above) and under

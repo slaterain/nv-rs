@@ -1332,7 +1332,7 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
 - **The lists.** `Data\uio\supported.txt`, then each `Data\uio\public\*.txt` in the order the folder
   search gives them, read as UIO reads them (loose files, never the archives; a list larger than
   UIO's 1 MiB buffer counts as unreadable here, where UIO overruns it). UIO's own `supported.txt` (its
-  list of the 35 UI mods it knows, from the UIO 2.30 download, MIT) is built in unchanged
+  list of the UI mods it knows, 35 entries, from the UIO 2.30 download, MIT) is built in unchanged
   (`crates/uio/data/supported.txt`): a `Data\uio\supported.txt` in the game folder wins (a player's or
   a newer UIO's list); when none opens, the built-in one is read in its place, first and the same way,
   so UI mods that rely on UIO's list work without the file being copied in. Lines come in pairs: `path:Menu`

@@ -613,6 +613,34 @@ fn a_condition_with_a_leading_space_is_false_and_the_report_says_why() {
     );
 }
 
+/// A path line whose Prefabs path is one byte too long for UIO's buffer is left out even though
+/// the file is installed, and the report says the name is too long (never "not installed").
+#[test]
+fn an_installed_prefab_whose_path_is_too_long_for_uio_is_reported_as_too_long() {
+    let long = "x".repeat(UIO_PATH - PREFABS.len() + 1);
+    let mut f = Fake::default();
+    f.file(&format!("Data\\menus\\prefabs\\{long}"), "");
+    let text = format!("{long}:HUDMainMenu\r\ntrue\r\n");
+    let mut lists = InjectLists::default();
+    let mut notes = Vec::new();
+    read_list_noted(
+        &lines(text.as_bytes()),
+        true,
+        &ctx(),
+        &mut f,
+        &mut lists,
+        b"l.txt",
+        &mut notes,
+    );
+    assert!(lists.is_empty());
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].outcome, Outcome::PrefabMissing);
+    assert_eq!(
+        crate::report::reason(&notes[0]).unwrap(),
+        format!("the name Prefabs\\{long} is too long for UIO, which reads it as not installed")
+    );
+}
+
 #[test]
 fn every_way_an_entry_is_left_out_is_noted() {
     let mut f = Fake::default();
@@ -681,6 +709,20 @@ fn the_built_in_supported_txt_is_uios_own_list() {
     assert_eq!(seen.supported, Some(SupportedFrom::BuiltIn));
     assert_eq!(seen.entries.len(), 35);
     assert!(seen.entries.iter().all(|e| e.list == SUPPORTED_NAME));
+}
+
+/// The whole built-in file pinned: FNV-1a (64-bit) over all 2,433 bytes. The file is the UIO 2.30
+/// download's `Data\uio\supported.txt` (its SHA-256 as crates/uio/NOTICE gives it:
+/// e55238ee7a49c758b961d7a837b087c7e632598ba0d557594bdde1f486cf3809); any changed byte fails here.
+#[test]
+fn the_built_in_supported_txt_is_pinned_byte_for_byte() {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in BUILT_IN_SUPPORTED {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    assert_eq!(BUILT_IN_SUPPORTED.len(), 2_433);
+    assert_eq!(hash, 0xded5_1806_abc2_5658);
 }
 
 /// The built-in list reads exactly as the same file on disk would: the same lists, the same

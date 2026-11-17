@@ -184,6 +184,10 @@ pub fn reason(entry: &Entry) -> Option<String> {
             short_file(&entry.file),
             tile_name(&entry.tile)
         ),
+        Outcome::PrefabMissing if PREFABS.len() + entry.path.len() > UIO_PATH => format!(
+            "the name Prefabs\\{} is too long for UIO, which reads it as not installed",
+            text(&entry.path)
+        ),
         Outcome::PrefabMissing => format!("Prefabs\\{} is not installed", text(&entry.path)),
         Outcome::EndOfFileNotPrefab => format!(
             "an addition at the end of a file must go into a Prefabs file, not {}",

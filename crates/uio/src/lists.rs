@@ -437,7 +437,7 @@ pub fn read_list_noted(
 /// supported.txt's name in the report.
 pub const SUPPORTED_NAME: &[u8] = b"supported.txt";
 
-/// UI Organizer 2.30's own `Data\uio\supported.txt` (its list of the 35 UI mods it knows), from
+/// UI Organizer 2.30's own `Data\uio\supported.txt` (its list of the UI mods it knows, 35 entries), from
 /// the UIO 2.30 download, unchanged byte for byte (CRLF lines, no line end at the end). UIO is by
 /// jazzisparis (Jef), MIT licence (crates/uio/NOTICE); used with the author's permission. Read in
 /// place of the game folder's `Data\uio\supported.txt` when that one does not open, so UI mods

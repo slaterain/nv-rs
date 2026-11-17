@@ -205,6 +205,24 @@ fn every_reason_in_plain_words() {
     assert_eq!(reason(&e).unwrap(), "Radar.esp is not in plugins.txt");
 }
 
+/// A path line's own Prefabs path too long for UIO's buffer names no file whatever is installed:
+/// said so; one byte shorter it is "not installed" as before.
+#[test]
+fn a_path_too_long_for_uio_is_said_to_be_too_long() {
+    let long = "x".repeat(UIO_PATH - PREFABS.len() + 1);
+    let e = entry("l.txt", &long, "", "", "", Outcome::PrefabMissing);
+    assert_eq!(
+        reason(&e).unwrap(),
+        format!("the name Prefabs\\{long} is too long for UIO, which reads it as not installed")
+    );
+    let fits = "x".repeat(UIO_PATH - PREFABS.len());
+    let e = entry("l.txt", &fits, "", "", "", Outcome::PrefabMissing);
+    assert_eq!(
+        reason(&e).unwrap(),
+        format!("Prefabs\\{fits} is not installed")
+    );
+}
+
 #[test]
 fn a_condition_is_named_when_it_is_one_file_or_plugin_else_quoted() {
     assert_eq!(
