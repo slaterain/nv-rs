@@ -992,7 +992,7 @@ fn gb4_rows_are_jips_addresses() {
     );
     assert_eq!(WEIGHTLESS_TAKE.addr(), 0x0075_bf18);
     assert_eq!(
-        AREA.fix_sites[7..],
+        AREA.fix_sites[7..14],
         [
             0x0072_f33d,
             0x0075_d1a5,
@@ -1003,4 +1003,453 @@ fn gb4_rows_are_jips_addresses() {
             0x0075_bf18
         ]
     );
+}
+
+// ---- GB-5: O2 (Fallout 3 style repair) ----
+
+const ACTOR_VALUE: u32 = 0x0093_acb0;
+const ITEM_TEST: u32 = 0x0047_bb50;
+
+/// A weapon stack at `at` (its form after it: type 0x28, full health 200) with a first list
+/// holding `ExtraHealth` `health` (none: no list).
+fn weapon_stack(e: &mut Engine, at: u32, health: Option<f32>) -> u32 {
+    let form = at + 0x100;
+    e.mem.set_u8(form + 4, 0x28);
+    e.mem.set_u32(form + 0x98, 200);
+    let lists = match health {
+        Some(h) => {
+            let list = extra_list(e, at + 0x200, &[(0x25, h.to_bits())]);
+            node(e, at + 0x300, list, 0)
+        }
+        None => 0,
+    };
+    entry(e, at, lists, 1, form)
+}
+
+/// The repair settings (`fRepairSkillBase` 2, `fRepairSkillMax` 10, `fRepairScavengeMult` 0.5,
+/// `fRepairMin` 1, `fRepairMax` 3), the player and the Repair skill `skill`.
+fn repair_world(e: &mut Engine, skill: f64) {
+    list_world(e);
+    for page in [0x011d_0000, 0x011c_f000, 0x011d_e000, 0x011d_a000] {
+        if !e.mem.is_mapped(page) {
+            e.map(page, 0x1000);
+        }
+    }
+    e.mem.set_f32(0x011d_0ff4, 2.0);
+    e.mem.set_f32(0x011d_0190, 10.0);
+    e.mem.set_f32(0x011d_074c, 0.5);
+    e.mem.set_f32(0x011d_0884, 1.0);
+    e.mem.set_f32(0x011c_ffa4, 3.0);
+    e.mem.set_u32(0x011d_ea3c, AREA_AT + 0x7000);
+    e.register_double(ACTOR_VALUE, move |_, a| {
+        gb3_log(ACTOR_VALUE, a);
+        Ret {
+            st0: skill,
+            ..Ret::default()
+        }
+    });
+}
+
+/// JIP's `GetHealthPercent`: the `ExtraHealth` over the full health times 100, at most 100; 100
+/// without a list; -1 for a type with a bit outside 0x38 (ammunition, 0x29).
+#[test]
+fn o2_health_percent() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(150.0));
+    assert_eq!(health_percent(&mut e, stack), 75.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(300.0));
+    assert_eq!(health_percent(&mut e, stack), 100.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x9000, None);
+    assert_eq!(health_percent(&mut e, stack), 100.0);
+    e.mem.set_u8(AREA_AT + 0x9100 + 4, 0x29);
+    assert_eq!(health_percent(&mut e, stack), -1.0);
+    // Armour (0x18) passes the type test (a bit outside 0x38 only fails): 50 of its 100.
+    e.mem.set_u8(AREA_AT + 0x8100 + 4, 0x18);
+    e.mem.set_u32(AREA_AT + 0x8100 + 0x6c, 100);
+    let armour = entry(
+        &mut e,
+        AREA_AT + 0x8000,
+        AREA_AT + 0x8300,
+        1,
+        AREA_AT + 0x8100,
+    );
+    let list = extra_list(&mut e, AREA_AT + 0x8200, &[(0x25, 50.0f32.to_bits())]);
+    node(&mut e, AREA_AT + 0x8300, list, 0);
+    assert_eq!(health_percent(&mut e, armour), 50.0);
+}
+
+/// `EnableRepairButtonHook`: the cap is the skill scaled from 20 to 100 (here 50 gives 60, -5
+/// gives 20), the health rounded up (55.2 becomes 56); 1 when the cap is above it, else 0; the
+/// three statics kept; the skill read as JIP does (`0093acb0` on the player's +0xA4, 0x27).
+#[test]
+fn o2_repair_button() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 50.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(110.4));
+    gb3_calls();
+    assert_eq!(e.site(REPAIR_BUTTON.addr(), &[stack]), Some(1));
+    assert_eq!(gb3_calls(), [(ACTOR_VALUE, vec![AREA_AT + 0x70a4, 0x27])]);
+    let state = repair_state(&mut e);
+    assert_eq!(f32::from_bits(state.skill.load(Ordering::Relaxed)), 60.0);
+    assert_eq!(f32::from_bits(state.health.load(Ordering::Relaxed)), 56.0);
+    assert!(!state.modded.load(Ordering::Relaxed));
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(130.0));
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(0),
+        "65 is above 60"
+    );
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(119.0));
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(0),
+        "59.5 rounds up to 60, not above 60"
+    );
+    let mut e = fixes_on();
+    repair_world(&mut e, -5.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(30.0));
+    e.mem.set_u8(AREA_AT + 0x8200 + 0x19, 0x20);
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(1),
+        "15 below 20"
+    );
+    let state = repair_state(&mut e);
+    assert_eq!(f32::from_bits(state.skill.load(Ordering::Relaxed)), 20.0);
+    assert!(
+        state.modded.load(Ordering::Relaxed),
+        "the list's mod flags bit"
+    );
+}
+
+/// JIP's rounding up: whole values stay, others go up, out of range is -2^31.
+#[test]
+fn o2_round_up() {
+    assert_eq!(round_up(56.0), 56.0);
+    assert_eq!(round_up(55.01), 56.0);
+    assert_eq!(round_up(-0.5), 0.0);
+    assert_eq!(round_up(f32::NAN), -2_147_483_648.0);
+    assert_eq!(round_up(3.0e9), -2_147_483_648.0);
+}
+
+/// `GetRepairAmount` with the cap 60: healths 20 and 10 give (2 + 1 + 1 * 0.5 + 2 * 0.6) / 10,
+/// in JIP's single-precision steps; a larger result is cut to the cap's 0.6.
+#[test]
+fn o2_repair_amount() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    repair_state(&mut e)
+        .skill
+        .store(60.0f32.to_bits(), Ordering::Relaxed);
+    let s = 60.0f32 * 0.01;
+    let expected = (20.0f32 * 0.1 + 1.0 + 10.0f32 * 0.1 * 0.5 + (3.0f32 - 1.0) * s) * 0.1;
+    assert!(expected < s);
+    assert_eq!(repair_amount(&mut e, 20.0, 10.0), expected);
+    assert_eq!(
+        repair_amount(&mut e, 10.0, 20.0),
+        expected,
+        "the larger, the smaller"
+    );
+    e.mem.set_f32(0x011d_0884, 40.0);
+    assert_eq!(repair_amount(&mut e, 50.0, 30.0), s);
+    let bits = repair_amount(&mut e, 70.0, 10.0).to_bits();
+    assert_eq!(
+        e.site(
+            REPAIR_LIST_VALUE.addr(),
+            &[70.0f32.to_bits(), 10.0f32.to_bits()]
+        ),
+        Some(bits)
+    );
+}
+
+/// `PopulateRepairListHook` (words: the broken item's form, a stack): the exe's test decides;
+/// a stack of the broken item's own form passes only at or below the kept health unless the
+/// broken item has mods.
+#[test]
+fn o2_repair_list() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    e.register(ITEM_TEST, |e, a| {
+        gb3_log(ITEM_TEST, a);
+        u32::from(e.mem.u8(a[0] + 0x10) == 0).into_ret()
+    });
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(100.0));
+    let form = AREA_AT + 0x8100;
+    let state = repair_state(&mut e);
+    state.health.store(40.0f32.to_bits(), Ordering::Relaxed);
+    state.modded.store(false, Ordering::Relaxed);
+    gb3_calls();
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(0),
+        "50 above 40"
+    );
+    assert_eq!(gb3_calls(), [(ITEM_TEST, vec![form, form])]);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[0x0641_0000, stack]),
+        Some(1),
+        "another form"
+    );
+    repair_state(&mut e)
+        .health
+        .store(50.0f32.to_bits(), Ordering::Relaxed);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(1),
+        "50 at 50"
+    );
+    repair_state(&mut e)
+        .health
+        .store(10.0f32.to_bits(), Ordering::Relaxed);
+    repair_state(&mut e).modded.store(true, Ordering::Relaxed);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(1),
+        "modded"
+    );
+    e.mem.set_u8(form + 0x10, 1);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(0),
+        "the exe's test"
+    );
+}
+
+/// `DoRepairItemHook` and `RepairMenuClickHook`: the amount from the broken item's (`0x11DA760`)
+/// and the used stack's health in percent; set up again while the broken item's health + 1 is at
+/// most the cap.
+#[test]
+fn o2_repair_item_and_again() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    repair_state(&mut e)
+        .skill
+        .store(60.0f32.to_bits(), Ordering::Relaxed);
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(20.0));
+    let used = weapon_stack(&mut e, AREA_AT + 0xa000, Some(40.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    let expected = repair_amount(&mut e, 10.0, 20.0).to_bits();
+    assert!(
+        f32::from_bits(expected) < 0.6,
+        "below the cap, so the two healths count"
+    );
+    assert_ne!(expected, repair_amount(&mut e, 20.0, 20.0).to_bits());
+    assert_eq!(e.site(REPAIR_ITEM.addr(), &[used]), Some(expected));
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "11 at most 60");
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(118.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "60 at 60");
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(119.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(0), "60.5 above 60");
+}
+
+/// O2's rows: `HOOK_INIT_LIST(FO3Repair, ..)` (`0x7818B2`, `0x4D4C11`, `0x7B58DB`, `0x7B5DAD`,
+/// `0x7B5CED`; the two byte writes folded into the first and the last).
+#[test]
+fn gb5_rows_are_jips_addresses() {
+    assert_eq!(
+        AREA.fix_sites[14..19],
+        [
+            0x004d_4c11,
+            0x0078_18b2,
+            0x007b_58db,
+            0x007b_5ced,
+            0x007b_5dad
+        ]
+    );
+}
+
+/// G82 reads every stack's form at +0x34/+0x38 as JIP does (REVIEW-683): for a note (`BGSNote`,
+/// 0x31) that word pair is not its name (its model path, as the reviewer found), and a stack of
+/// two shows that text with " (2)", exactly as with JIP.
+#[test]
+fn g82_reads_a_note_at_jips_offsets_too() {
+    let mut e = names_world(0x31, b"Clutter/Notes/Note01.nif", b"");
+    assert_eq!(e.site(ITEM_NAMES[2].addr(), &[TILE, STACK, 2]), Some(1));
+    assert_eq!(shown(&e), b"Clutter/Notes/Note01.nif (2)");
+}
+
+// ---- GB-6: G112, D06, O3 ----
+
+/// `fRepairSkillMax`'s value word and the exe's 9.0 (its static initializer `00f67c30`:
+/// `0040e0b0("fRepairSkillMax", 0x41100000)` on `0x11D018C`).
+const SKILL_MAX: u32 = 0x011d_0190;
+const EXE_SKILL_MAX: u32 = 0x4110_0000;
+
+/// The row on without reading `jip_nvse.ini` (no file in a test): the fixes in, the word set.
+fn row_on(e: &mut Engine) {
+    install_fixes(e);
+    e.set_jip_patches(
+        engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
+    );
+}
+
+fn skill_max_world(e: &mut Engine) {
+    if !e.mem.is_mapped(SKILL_MAX) {
+        e.map(SKILL_MAX & !0xfff, 0x1000);
+    }
+    e.mem.set_u32(SKILL_MAX, EXE_SKILL_MAX);
+}
+
+/// G112's row: the C runtime's `CALL 0x0086A850` (`0x00ECC46B`, xNVSE loader's `hookCallAddr` for
+/// 1.4.0.525; Ghidra: `00ecc46b: CALL 0x0086a850`), a fix.
+#[test]
+fn g112_row_is_the_call_of_main() {
+    assert_eq!(BEFORE_MAIN.addr(), 0x00ec_c46b);
+    assert_eq!(AREA.fix_sites.last(), Some(&0x00ec_c46b));
+    assert!(!JIP_SITES.contains(&0x00ec_c46b));
+    assert_eq!(REPAIR_SKILL_MAX, SKILL_MAX);
+    assert_eq!(f32::from_bits(REPAIR_SKILL_MAX_JIP), 10.0);
+}
+
+/// G112 with the row on: the seam makes `fRepairSkillMax` 10.0 (JIP's `0x41200000`) over the
+/// exe's 9.0 and answers nothing (`main` goes on), every time it is asked.
+#[test]
+fn g112_sets_ten_and_answers_nothing() {
+    let mut e = engine();
+    skill_max_world(&mut e);
+    crate::install_as(&mut e, true);
+    row_on(&mut e);
+    assert_eq!(e.site(BEFORE_MAIN.addr(), &[]), None);
+    assert_eq!(e.mem.u32(SKILL_MAX), 0x4120_0000);
+    assert_eq!(e.mem.f32(SKILL_MAX), 10.0);
+}
+
+/// G112's handler is in only with the row (a fix): not installed, or installed with the row
+/// off, the seam has no handler and the exe's 9.0 stays.
+#[test]
+fn g112_needs_the_row() {
+    for (installed, row) in [(false, true), (true, false)] {
+        let mut e = engine();
+        skill_max_world(&mut e);
+        crate::install_as(&mut e, installed);
+        set_row(&mut e, row);
+        assert_eq!(e.site(BEFORE_MAIN.addr(), &[]), None);
+        assert_eq!(e.mem.u32(SKILL_MAX), EXE_SKILL_MAX, "{installed} {row}");
+    }
+}
+
+/// A plugin's `GMST` still sets `fRepairSkillMax`: the seam runs once, before the data files
+/// load (`main`'s seam test in `engine-fallout-misc` pins that order); a value written after it
+/// (as the data load writes a plugin's setting) is not touched again by anything of JIP's.
+#[test]
+fn g112_a_later_value_wins() {
+    let mut e = engine();
+    skill_max_world(&mut e);
+    crate::install_as(&mut e, true);
+    row_on(&mut e);
+    e.site(BEFORE_MAIN.addr(), &[]);
+    e.mem.set_f32(SKILL_MAX, 12.5);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.f32(SKILL_MAX), 12.5);
+}
+
+/// A Big Guns actor value as the exe registers it (`0066efe0(0x21, .., 2, 0x2000, 0, ..)`): name
+/// `String` at +0x1C (empty), description at +0x24, `avName` `String` at +0x3C ("BigGuns"),
+/// flags 0x2000, derivation 0.
+const AV_INFO: u32 = AREA_AT + 0x2_0000;
+const AV_NAME_TEXT: u32 = AREA_AT + 0x2_0200;
+
+fn big_guns_world(word: u32) -> Engine {
+    let mut e = engine();
+    e.map(AREA_AT, 0x3_0000);
+    if !e.mem.is_mapped(0x011d_61c8) {
+        e.map(0x011d_6000, 0x1000);
+    }
+    crate::install_as(&mut e, true);
+    if !e.mem.is_mapped(0x011c_5490) {
+        e.map(0x011c_5000, 0x1000);
+    }
+    e.mem.set_u32(0x011d_61c8 + 4 * 0x21, AV_INFO);
+    e.mem.write(AV_NAME_TEXT, b"BigGuns\0");
+    e.mem.set_u32(AV_INFO + 0x1c, 0);
+    e.mem.set_u32(AV_INFO + 0x20, 0);
+    e.mem.set_u32(AV_INFO + 0x3c, AV_NAME_TEXT);
+    e.mem.set_u32(AV_INFO + 0x40, 0x0008_0007);
+    e.mem.set_u32(AV_INFO + 0x44, 0x2000);
+    e.mem.set_u32(AV_INFO + 0x4c, 0);
+    e.set_jip_patches(word);
+    e
+}
+
+/// What JIP's description map holds for Big Guns' description, if anything.
+fn big_guns_description(e: &mut Engine) -> Option<Vec<u8>> {
+    crate::world_hooks::state(e)
+        .description_changes
+        .get(&(AV_INFO + 0x24))
+        .cloned()
+}
+
+/// D06 with the row on (`bEnableBigGunsSkill` off): Big Guns' name `String` is its actor value
+/// name's (pointer and both lengths, the buffer shared) and its derivation the skills'
+/// `0x643BD0`; its flags (0x2000) and description stay.
+#[test]
+fn d06_names_big_guns_and_gives_it_the_skills_derivation() {
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+    let mut e = big_guns_world(INSTALLED | FIXES);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.u32(AV_INFO + 0x1c), AV_NAME_TEXT);
+    assert_eq!(e.mem.u32(AV_INFO + 0x20), 0x0008_0007);
+    assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
+    assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x2000);
+    assert_eq!(e.mem.u32(AV_INFO + 0x3c), AV_NAME_TEXT, "avName kept");
+    assert_eq!(big_guns_description(&mut e), None);
+    assert_eq!(e.hook_users(engine_core::extend::Hook::GetDescription), 0);
+}
+
+/// O3 (`bEnableBigGunsSkill`, with the row): D06's part, the flags 0x410 and JIP's description
+/// (`kBigGunsDescription`) put in JIP's description map, one user of its hook.
+#[test]
+fn o3_makes_big_guns_a_skill_with_jips_description() {
+    use engine_core::extend::jip_patches::{ENABLE_BIG_GUNS_SKILL, FIXES, INSTALLED};
+    let mut e = big_guns_world(INSTALLED | FIXES | ENABLE_BIG_GUNS_SKILL);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x410);
+    assert_eq!(e.mem.u32(AV_INFO + 0x1c), AV_NAME_TEXT);
+    assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
+    assert_eq!(
+        big_guns_description(&mut e).as_deref(),
+        Some(&b"The Big Guns skill determines your combat effectiveness with all oversized weapons such as the Fat Man, Missile Launcher, Flamer, Minigun, Gatling Laser, etc."[..])
+    );
+    assert_eq!(e.hook_users(engine_core::extend::Hook::GetDescription), 1);
+}
+
+/// Without the row (installed only, or nothing) Big Guns stays as the exe made it, whatever the
+/// switch bit says.
+#[test]
+fn big_guns_unchanged_without_the_row() {
+    use engine_core::extend::jip_patches::{ENABLE_BIG_GUNS_SKILL, INSTALLED};
+    for word in [0, INSTALLED, INSTALLED | ENABLE_BIG_GUNS_SKILL] {
+        let mut e = big_guns_world(word);
+        deferred_init(&mut e);
+        assert_eq!(e.mem.u32(AV_INFO + 0x1c), 0, "{word:08x}");
+        assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x2000, "{word:08x}");
+        assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0, "{word:08x}");
+        assert_eq!(big_guns_description(&mut e), None, "{word:08x}");
+    }
+}
+
+/// JIP's deferred start through the co-save listener (xNVSE's `DEFERRED_INIT`) runs group GB's
+/// part.
+#[test]
+fn big_guns_through_the_deferred_start() {
+    use engine_core::extend::jip_patches::{ENABLE_BIG_GUNS_SKILL, FIXES, INSTALLED};
+    let mut e = big_guns_world(INSTALLED | FIXES | ENABLE_BIG_GUNS_SKILL);
+    // Group GS's deferred part looks a plugin up through the game's data handler: one with no
+    // files loaded.
+    if !e.mem.is_mapped(0x011c_3f2c) {
+        e.map(0x011c_3000, 0x1000);
+    }
+    e.mem.set_u32(0x011c_3f2c, AREA_AT + 0x2_8000);
+    e.ext::<crate::Jip>().pos_marker.marker = 1;
+    let message = nvse::plugins::Message {
+        kind: nvse::plugins::msg::DEFERRED_INIT,
+        data: 0,
+        len: 0,
+    };
+    crate::cosave::listen(&mut e, &message);
+    assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x410);
+    assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
 }
