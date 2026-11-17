@@ -7107,8 +7107,14 @@ mod tests {
         );
         super::jip_seam::seen();
         // A reference that is not an actor: asked with 0 for the actor.
-        // (The translation reads the null actor's process word as the exe's getters do: page 0 mapped.)
+        // (The translation reads and calls through the null actor's process as the exe does:
+        // page 0 mapped with a vtable of do-nothing slots.)
         s.e.map(0, 0x1000);
+        s.e.register(0x00fe_7000, |_, _| Ret::default());
+        s.e.mem.set_u32(0, 0x800);
+        for slot in (0..0x800).step_by(4) {
+            s.e.mem.set_u32(0x800 + slot, 0x00fe_7000);
+        }
         let node = s.node;
         let thing = reference(&mut s.e, false, &[(0x1e8, 0), (0x1e4, 0), (0x22c, 0)]);
         set_node(&mut s.e, thing, node);
