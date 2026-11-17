@@ -1913,9 +1913,21 @@ fn list_has_named_entry(e: &mut Engine, list: u32) -> bool {
 
 /// Takes `object` out of the shadow scene node and clears its attached
 /// effects (`00b5b1c0`, `00572160`).
-fn remove_from_scene(e: &mut Engine, object: u32) {
+///
+/// `jip_site`: the address of the `call 0x572160` JIP LN's G81 (a fix row,
+/// `WriteRelCall(0x571F65 / 0x571FDF, ClearWeaponNodeHook)`) replaces there (the held weapon
+/// node, the "Weapon" child); any answer of the handler (words: the node) takes the place of the
+/// call.
+fn remove_from_scene(e: &mut Engine, object: u32, jip_site: Option<u32>) {
     let scene = e.call(0x0045_0b80, &args![0u32]).u32();
     e.call(0x00b5_b1c0, &args![scene, object]);
+    if let Some(site) = jip_site {
+        if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+            && e.site(site, &[object]).is_some()
+        {
+            return;
+        }
+    }
     fn_00572160(e, Ptr::new(object));
 }
 
@@ -2027,20 +2039,20 @@ pub fn tes_object_refr_remove_weapon(e: &mut Engine, this: Ptr<TESObjectREFR>) {
     if process != 0 {
         let held = e.vcall(process, 0x1a0, &args![0u32]).u32();
         if held != 0 {
-            remove_from_scene(e, held);
+            remove_from_scene(e, held, Some(0x0057_1f65));
         }
         if e.vcall(me, 0x21c, &args![]).bool() {
             let node = node_of(e, me);
             if node != 0 {
                 let weapon = e.call(0x004a_ae30, &args![node, 0x0101_3be8u32]).u32();
                 if weapon != 0 {
-                    remove_from_scene(e, weapon);
+                    remove_from_scene(e, weapon, Some(0x0057_1fdf));
                 }
             }
         }
         let list = e.vcall(process, 0x1a4, &args![0u32]).u32();
         if list != 0 && list_has_named_entry(e, list) {
-            remove_from_scene(e, list);
+            remove_from_scene(e, list, None);
         }
     }
     if actor != 0 {
@@ -7228,6 +7240,62 @@ mod tests {
         });
         assert_eq!(calls_to(&log, 0x00b5_b1c0), vec![vec![0x5c5c, child]]);
         assert_eq!(calls_to(&log, 0x004d_ffa0), vec![vec![child + 0x9c]]);
+    }
+
+    /// JIP LN's G81 seams at `0x571F65` (the held weapon node) and `0x571FDF` (the "Weapon"
+    /// child): an answer takes the place of the effects release `00572160`; only with the fix
+    /// row's bit; the shadow scene node still lets go of the node first.
+    #[test]
+    fn remove_weapon_jip_g81_seams_replace_the_effects_release() {
+        use engine_core::extend::jip_patches;
+        let mut s = weapon_setup(0, 0);
+        let (actor, node) = (s.actor, s.node);
+        let held = s.e.mem.alloc(0x100);
+        let vtable = s.e.mem.u32(s.process);
+        s.e.register_double(vtable + 0x1a0, move |_, _| ret(held));
+        let child = s.e.mem.alloc(0x100);
+        s.e.register_double(0x004a_ae30, move |_, a| {
+            ret(if a[0] == node && a[1] == 0x0101_3be8 {
+                child
+            } else {
+                0
+            })
+        });
+        let vtable = s.e.mem.u32(actor);
+        s.e.register(vtable + 0x21c, |_, _| ret(1));
+        super::jip_seam::put(&mut s.e, 0x0057_1f65, Some(0));
+        super::jip_seam::put(&mut s.e, 0x0057_1fdf, Some(0));
+        let run = |e: &mut Engine| {
+            logged(e, |e| {
+                e.call(0x0057_1b50, &args![actor]);
+            })
+        };
+        s.e.set_jip_patches(jip_patches::INSTALLED);
+        let log = run(&mut s.e);
+        assert_eq!(
+            calls_to(&log, 0x004d_ffa0),
+            vec![vec![held + 0x9c], vec![child + 0x9c]],
+            "the exe"
+        );
+        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
+        s.e.set_jip_patches(jip_patches::FIXES);
+        let log = run(&mut s.e);
+        assert_eq!(super::jip_seam::seen(), vec![vec![held], vec![child]]);
+        assert!(calls_to(&log, 0x004d_ffa0).is_empty(), "both replaced");
+        assert!(calls_to(&log, 0x0065_8930).is_empty());
+        assert_eq!(
+            calls_to(&log, 0x00b5_b1c0),
+            vec![vec![0x5c5c, held], vec![0x5c5c, child]],
+            "the scene lets go first"
+        );
+        // Only the held node's answer: the child's release is the exe's.
+        super::jip_seam::only_for(Some(held));
+        let log = run(&mut s.e);
+        assert_eq!(calls_to(&log, 0x004d_ffa0), vec![vec![child + 0x9c]]);
+        super::jip_seam::answer_with(None);
+        let log = run(&mut s.e);
+        assert_eq!(calls_to(&log, 0x004d_ffa0).len(), 2, "no answer: the exe");
+        super::jip_seam::seen();
     }
 
     #[test]
