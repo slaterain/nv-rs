@@ -7275,12 +7275,17 @@ extern "system" {
     fn GetModuleHandleW(name: *const u16) -> isize;
 }
 
+/// Elsewhere: the surface of the window the window layer made known as `window`
+/// (`crate::window::register_window`: winit's, on X11, Wayland or macOS).
 #[cfg(not(windows))]
 pub(crate) fn surface_for(
-    _instance: &wgpu::Instance,
-    _window: isize,
+    instance: &wgpu::Instance,
+    window: isize,
 ) -> Result<wgpu::Surface<'static>, String> {
-    Err("windows of other platforms come with the window layer's port".into())
+    let w = crate::window::registered(window).ok_or("no window made known by the window layer")?;
+    instance
+        .create_surface(wgpu::SurfaceTarget::from(w))
+        .map_err(|e| format!("create_surface: {e}"))
 }
 
 /// A pipeline and the layouts of its two sampler groups (the pixel shader's, the vertex
