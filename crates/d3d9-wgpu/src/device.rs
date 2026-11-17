@@ -47,6 +47,9 @@ pub(crate) struct Tex {
     samples: u32,
     id: u64,
     batch: AtomicU64,
+    /// The mean alpha of its smallest level as last uploaded (f32 bits; not a number until then,
+    /// or in a format not read): read with the sun shadows on only ([`sun_shadow::RIBBON_ALPHA`]).
+    alpha: AtomicU32,
 }
 
 /// A surface: a level (and face) of a texture, or a standalone render target or depth surface
@@ -698,6 +701,9 @@ const STAGE: u64 = 8 << 20;
 const SUN_VARIANTS_AT_ONCE: usize = 6;
 /// The sun shadows' moving places at most (each is drawn every frame).
 const MAX_SUN_MOVING: usize = 4096;
+/// A geometry whose body was made this many times (the game wrote into its buffers between) is
+/// drawn whole from then on ([`sun_shadow::Body::of`] not split).
+const SPLIT_BODIES: u32 = 3;
 
 pub struct Device {
     pub(crate) device: wgpu::Device,
@@ -931,16 +937,19 @@ struct SunState {
     /// Geometries let go because the game wrote into their buffers ([`sun_shadow::GeoKey::geometry`]):
     /// when one comes back it moves.
     rewritten: crate::fxhash::Set<sun_shadow::GeoKey>,
-    /// Each geometry's body: its object-space bounding sphere and pieces (none: its positions could
-    /// not be read).
-    bounds: Map<sun_shadow::GeoKey, Option<sun_shadow::Body>>,
+    /// Each geometry's body as written (the key with its buffers' upload counts): its object-space
+    /// bounding sphere and pieces, and the index lists made for them (none: its positions could not
+    /// be read). A body made again for new bytes has lists of its own.
+    bounds: Map<sun_shadow::GeoKey, Option<Arc<sun_shadow::Body>>>,
+    /// How many bodies each geometry ([`sun_shadow::GeoKey::geometry`]) has had made: one the game
+    /// keeps writing is drawn whole from its [`SPLIT_BODIES`]th on (its pieces not worked out each
+    /// frame).
+    bodies_made: Map<sun_shadow::GeoKey, u32>,
     /// Each caster pipeline's place in `gpu.pipelines` by vertex shader, declaration, strides,
     /// primitive type and index size (none: it could not be made).
     pipes: Map<PipeOf, Option<u32>>,
     /// The ribbon cables' coverage pipelines ([`sun_shadow::Draw::ribbon`]), by the same key.
     ribbon_pipes: Map<PipeOf, Option<u32>>,
-    /// Index buffers of geometries with their cables taken out ([`sun_shadow::Body::solid`]).
-    solid_buffers: Map<sun_shadow::GeoKey, Arc<Buf>>,
     keep: [sun_shadow::SunKeep; sun_shadow::CASCADES],
     /// The frame's camera from the new lighting's words ([`scene_light::STATE`], recorded just
     /// before [`sun_shadow::STATE`]).
@@ -1019,6 +1028,8 @@ impl SunState {
         self.prev = None;
         self.moving = 0;
         self.rewritten.clear();
+        self.bounds.clear();
+        self.bodies_made.clear();
         self.gpu.drawn = [None; sun_shadow::CASCADES];
         self.light = None;
         self.forgotten += 1;
@@ -1036,7 +1047,7 @@ impl SunState {
             bounds: Map::default(),
             pipes: Map::default(),
             ribbon_pipes: Map::default(),
-            solid_buffers: Map::default(),
+            bodies_made: Map::default(),
             keep: [sun_shadow::SunKeep::default(); sun_shadow::CASCADES],
             view: None,
             ran: None,
@@ -1682,6 +1693,7 @@ impl Device {
             samples,
             id,
             batch: AtomicU64::new(0),
+            alpha: AtomicU32::new(f32::NAN.to_bits()),
         }))
     }
 
@@ -2151,6 +2163,17 @@ impl Device {
             return;
         }
         let bytes = format::convert(&s.format, &data[..(row * rows) as usize]);
+        // The sun shadows tell a ribbon cable's texture (mostly clear) from a fence's by the mean
+        // alpha of its smallest level (only read with them on).
+        if self.sun.is_some() && s.level + 1 == tex.levels && s.layer == 0 {
+            let mean = if s.format.opaque {
+                Some(1.0)
+            } else {
+                sun_shadow::mean_alpha(s.format.wgpu, s.width, s.height, &bytes)
+            };
+            tex.alpha
+                .store(mean.unwrap_or(f32::NAN).to_bits(), Ordering::Relaxed);
+        }
         let (row, rows) = format::uploaded_layout(&s.format, s.width, s.height);
         let (w, h) = if s.format.block {
             (s.width.div_ceil(4) * 4, s.height.div_ceil(4) * 4)
@@ -6145,19 +6168,26 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let body = match known {
             Some(b) => b,
             None => {
-                let b = self.sun_bounds(
-                    decl,
-                    index32.is_some(),
-                    topology == wgpu::PrimitiveTopology::TriangleStrip,
-                    base_vertex,
-                    start,
-                    count,
-                );
                 let sun = self.sun.as_mut().expect("on");
                 if sun.bounds.len() >= 1 << 16 {
                     sun.bounds.clear();
-                    sun.solid_buffers.clear();
+                    sun.bodies_made.clear();
                 }
+                let made = sun.bodies_made.entry(key.geometry()).or_insert(0);
+                *made += 1;
+                let split = *made < SPLIT_BODIES;
+                let b = self
+                    .sun_bounds(
+                        decl,
+                        index32.is_some(),
+                        topology == wgpu::PrimitiveTopology::TriangleStrip,
+                        base_vertex,
+                        start,
+                        count,
+                        split,
+                    )
+                    .map(Arc::new);
+                let sun = self.sun.as_mut().expect("on");
                 sun.bounds.insert(key.clone(), b.clone());
                 b
             }
@@ -6246,10 +6276,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // pixel shader, its texture's alpha (read at the level the map's texel calls for: the
         // cable's share of each texel) added into the coverage maps; an opaque ribbon is a solid
         // strip and casts as one.
+        // A cut-out of ribbons is cables only when its texture is mostly clear (a fence is not).
+        let alpha = self.st.textures[0].as_ref().map_or(f32::NAN, |t| {
+            f32::from_bits(t.alpha.load(Ordering::Relaxed))
+        });
         let thin = body
             .thin
             .clone()
-            .filter(|t| cutout || !t.ribbons)
+            .filter(|t| !t.ribbons || (cutout && sun_shadow::ribbon_texture(alpha)))
             .filter(|_| sun_shadow::thin_maps());
         let ribbon_header = (cutout && thin.as_ref().is_some_and(|t| t.ribbons)).then(|| {
             let st = &self.st;
@@ -6272,17 +6306,27 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         });
+        // The list pipeline's key (a geometry drawn from a list of the device's own).
+        let lkey = (pkey.0, pkey.1, pkey.2, 4, true, pkey.5, pkey.6, pkey.7);
+        // A geometry of ribbons and other pieces: its ribbons' triangles from a list.
+        let ribbon_list = body.ribbon_list.clone();
+        let rkey = if ribbon_list.is_some() { lkey } else { pkey };
         let ribbon_pipe = match ribbon_header {
-            Some(_) => match self.sun.as_ref().and_then(|s| s.ribbon_pipes.get(&pkey)) {
+            Some(_) => match self.sun.as_ref().and_then(|s| s.ribbon_pipes.get(&rkey)) {
                 Some(p) => *p,
                 None => {
+                    let (topology, index32) = if ribbon_list.is_some() {
+                        (wgpu::PrimitiveTopology::TriangleList, true)
+                    } else {
+                        (topology, pkey.4)
+                    };
                     let made = self.sun_pipeline(
                         vs,
                         ps,
                         link,
                         strides,
                         topology,
-                        pkey.4,
+                        index32,
                         state::cull(cull),
                         Some(&sampler_keys[..]),
                         true,
@@ -6292,7 +6336,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         sun.gpu.pipelines.push(Some(p));
                         (sun.gpu.pipelines.len() - 1) as u32
                     });
-                    sun.ribbon_pipes.insert(pkey, at);
+                    sun.ribbon_pipes.insert(rkey, at);
                     at
                 }
             },
@@ -6300,15 +6344,23 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         };
         // A ribbon whose coverage pipeline could not be made casts as a cut-out.
         let thin = thin.filter(|t| !(cutout && t.ribbons) || ribbon_pipe.is_some());
-        let ribbon = ribbon_pipe.zip(ribbon_header);
+        // Indices as read take the draw's base vertex; a draw without indices numbered its
+        // vertices from 0.
+        let list_base = if index.is_some() { base_vertex } else { 0 };
+        let ribbon = ribbon_pipe
+            .zip(ribbon_header)
+            .map(|(pipe, header)| sun_shadow::Ribbon {
+                pipe,
+                header,
+                list: ribbon_list.map(|l| (l, list_base)),
+            });
         // Cables taken out of a geometry that is not all cables: the rest drawn from a list of its
         // own (an index buffer made once a geometry, a list pipeline), the game's index buffer
         // still watched for writes.
         let mut drawn_as = (pipe, index.clone(), start, count, base_vertex, None);
         let mut whole = false;
         let mut has_rest = false;
-        if let (Some(_), Some(rest)) = (&thin, body.solid_indices.clone()) {
-            let lkey = (pkey.0, pkey.1, pkey.2, 4, true, pkey.5, pkey.6, pkey.7);
+        if let (Some(_), Some(rest)) = (&thin, body.solid_list.clone()) {
             let list_pipe = match self.sun.as_ref().and_then(|s| s.pipes.get(&lkey)) {
                 Some(p) => *p,
                 None => {
@@ -6332,40 +6384,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     at
                 }
             };
-            let device = self.device.clone();
-            let sun = self.sun.as_mut().expect("on");
-            let buf = sun
-                .solid_buffers
-                .entry(key.geometry())
-                .or_insert_with(|| {
-                    let mut bytes: Vec<u8> = rest.iter().flat_map(|i| i.to_le_bytes()).collect();
-                    bytes.resize(bytes.len().max(4), 0);
-                    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                        label: Some("sun shadow caster without its cables"),
-                        size: bytes.len() as u64,
-                        usage: wgpu::BufferUsages::INDEX,
-                        mapped_at_creation: true,
-                    });
-                    // (Unmappable: all zeros, every triangle degenerate: nothing drawn.)
-                    if let Ok(mut m) = buffer.slice(..).get_mapped_range_mut() {
-                        m.copy_from_slice(&bytes);
-                    }
-                    buffer.unmap();
-                    Arc::new(Buf {
-                        buffer,
-                        index32: true,
-                        batch: AtomicU64::new(0),
-                        uploads: AtomicU64::new(0),
-                    })
-                })
-                .clone();
             match list_pipe {
                 Some(p) => {
-                    let n = rest.len() as u32;
-                    // Indices as read take the draw's base vertex; a draw without indices
-                    // numbered its vertices from 0.
-                    let base = if index.is_some() { base_vertex } else { 0 };
-                    drawn_as = (p, Some((buf, 0)), 0, n, base, index.clone());
+                    // The list was made with this body, from the bytes this key names.
+                    drawn_as = (
+                        p,
+                        Some((rest.buf, 0)),
+                        0,
+                        rest.count,
+                        list_base,
+                        index.clone(),
+                    );
                     has_rest = true;
                 }
                 // No list pipeline: the whole geometry casts as before, cables in it.
@@ -6396,12 +6425,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 ribbon,
             },
             depth,
+            alpha,
         });
     }
 
     /// The object-space bounding sphere of a draw's positions (the declaration's `POSITION`, as
     /// floats or half floats), read from the buffers' bytes as the device holds them; none when
-    /// they cannot be read.
+    /// they cannot be read. Its pieces too when `split` ([`sun_shadow::Body::of`]), with the index
+    /// lists they need.
+    #[allow(clippy::too_many_arguments)]
     fn sun_bounds(
         &self,
         decl: &Decl,
@@ -6410,6 +6442,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         base_vertex: i32,
         start: u32,
         count: u32,
+        split: bool,
     ) -> Option<sun_shadow::Body> {
         let e = decl
             .elements
@@ -6485,15 +6518,47 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             points.chunks_exact(3).map(|w| [w[0], w[1], w[2]]).collect()
         };
         let triangles: Vec<[[f32; 3]; 3]> = corners.iter().map(|t| t.map(|c| c.0)).collect();
-        let mut body = sun_shadow::Body::of(&triangles)?;
-        // Cables taken out of it: the rest as a list of its own.
-        body.solid_indices = body.solid.as_ref().map(|rest| {
-            std::sync::Arc::new(
-                rest.iter()
-                    .flat_map(|&t| corners[t as usize].map(|c| c.1))
-                    .collect(),
-            )
-        });
+        let mut body = sun_shadow::Body::of(&triangles, split)?;
+        // Cables taken out of it: the rest as a list of its own; a geometry of ribbons and other
+        // pieces: its ribbons as a list of their own. Made here, with the body: a body made again
+        // for new bytes has new lists.
+        let list = |tris: &[u32], label| {
+            let mut bytes: Vec<u8> = tris
+                .iter()
+                .flat_map(|&t| corners[t as usize].map(|c| c.1))
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            let count = (bytes.len() / 4) as u32;
+            bytes.resize(bytes.len().max(4), 0);
+            let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes.len() as u64,
+                usage: wgpu::BufferUsages::INDEX,
+                mapped_at_creation: true,
+            });
+            // (Unmappable: all zeros, every triangle degenerate: nothing drawn.)
+            if let Ok(mut m) = buffer.slice(..).get_mapped_range_mut() {
+                m.copy_from_slice(&bytes);
+            }
+            buffer.unmap();
+            sun_shadow::List {
+                buf: Arc::new(Buf {
+                    buffer,
+                    index32: true,
+                    batch: AtomicU64::new(0),
+                    uploads: AtomicU64::new(0),
+                }),
+                count,
+            }
+        };
+        body.solid_list = body
+            .solid
+            .as_ref()
+            .map(|t| list(t, "sun shadow caster without its cables"));
+        body.ribbon_list = body
+            .ribbon_tris
+            .as_ref()
+            .map(|t| list(t, "sun shadow ribbons of a caster"));
         Some(body)
     }
 
@@ -6725,7 +6790,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 let r = c.bounds.1 * sun_shadow::stretch(&world);
                 let v = from_camera(centre);
                 eprintln!(
-                    "sun dump caster {n}: at ({:.0}, {:.0}, {:.0}) r {r:.0} cut-out {} casts {} scene {} pipe {} count {} thin {:?} scale {:.2} pieces {} (width, length) {:.1?} kinds (cables, ribbons, other: count, area) {:.2?} ribbon pipe {:?}",
+                    "sun dump caster {n}: at ({:.0}, {:.0}, {:.0}) r {r:.0} cut-out {} casts {} scene {} pipe {} count {} thin {:?} scale {:.2} pieces {} (width, length) {:.1?} kinds (cables, ribbons, other: count, area) {:.2?} ribbon (pipe, list) {:?} texture alpha {:.3}",
                     v[0],
                     v[1],
                     v[2],
@@ -6739,7 +6804,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     c.body.pieces,
                     c.body.look,
                     c.body.kinds,
-                    c.draw.ribbon,
+                    c.draw.ribbon.as_ref().map(|r| (r.pipe, r.list.is_some())),
+                    c.alpha,
                 );
                 // The near ones' triangles, for study (`NV_SUN_SHADOWS_DUMP_DIR`).
                 if let (Some(dir), Some(t)) = (sun_shadow::dump_dir(), &c.body.triangles) {
@@ -7272,6 +7338,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         self.end_pass();
         let levels = (s.levels - skip).min(d.levels);
+        // Its smallest level comes from the source's (the sun shadows' mean alpha, when known).
+        if s.levels - skip == d.levels {
+            d.alpha
+                .store(s.alpha.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
         let layers = if s.cube { 6 } else { 1 };
         for level in 0..levels {
             let w = (d.width >> level).max(1);

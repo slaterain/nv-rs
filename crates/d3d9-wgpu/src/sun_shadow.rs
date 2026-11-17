@@ -28,12 +28,14 @@
 //!
 //! **Cables** cast at their real weight. A geometry all of whose pieces ([`strands`]) are round
 //! cables thinner than [`THIN_WIDTH`] or flat ribbons ([`Strand::ribbon`]: the game draws some
-//! wires as alpha-tested strips 50 to 90 units wide with one or two cables in the texture) is
+//! wires as alpha-tested strips 8 to 118 units wide with one or two cables in the texture; only a
+//! cut-out whose texture is mostly clear, [`RIBBON_ALPHA`], so a fence keeps its shadow) is
 //! drawn not into the depth maps but into a coverage map a cascade ([`THIN_SIZE`],
 //! [`THIN_FORMAT`]): a round cable as quads along its centreline at least [`THIN_DRAWN`]
-//! texels wide, carrying its share of each texel ([`thin_quads`]);
-//! a ribbon through its own pixel shader with its texture's
-//! alpha read at the level the map's texel calls for (the cable's share of the texel), added up,
+//! texels wide, carrying its share of each texel ([`thin_quads`]), cables side by side added;
+//! a ribbon (in the cascades cut-outs are drawn into) through its own pixel shader with its
+//! texture's alpha read at the level the map's texel calls for (the cable's share of the texel),
+//! its ribbons' triangles alone when the geometry has other pieces ([`Body::ribbon_tris`]),
 //! over quads that carry its depth. The lookup takes away the sun by that share, spread over the
 //! band the sun's own half-degree width makes at the cable's height above the receiver
 //! ([`SUN_WIDTH`]): a faint soft line that fades the higher the cable hangs, never a solid
@@ -612,8 +614,10 @@ impl Strand {
     }
 }
 
-/// A ribbon ([`Strand::ribbon`]) is narrower than this (game units) ...
-pub const RIBBON_WIDTH: f64 = 128.0;
+/// A ribbon ([`Strand::ribbon`]) is narrower than this (game units: the cut-out cable strips the
+/// dump tool measured on the Goodsprings and Strip routes are 8 to 118 wide, so the width alone does
+/// not tell a cable from a fence; [`RIBBON_ALPHA`] does) ...
+pub const RIBBON_WIDTH: f64 = 120.0;
 /// ... longer than this many times its width ...
 pub const RIBBON_LENGTH: f64 = 8.0;
 /// ... and flat: its area under this many times its length by its width (one side 1, both 2, a
@@ -622,6 +626,105 @@ pub const FLAT: f64 = 2.5;
 /// A geometry of cables may hold small other pieces (insulators, clamps, a pole top's bolts) of
 /// at most this part of its area; they cast with it as cables do.
 pub const BITS: f64 = 0.1;
+/// A cut-out of ribbons is drawn as cables only when its texture's mean alpha (its smallest level:
+/// the alpha averaged over the whole texture, which a ribbon's strip runs along) is under this: a
+/// cable is a few of the strip's texels across. A fence, a grille or a banner (half its texels
+/// opaque or more) keeps its cut-out shadow in the depth maps, as before.
+pub const RIBBON_ALPHA: f32 = 0.25;
+
+/// Whether a cut-out of ribbons whose texture's mean alpha is `mean` ([`RIBBON_ALPHA`]; not a
+/// number: not known) is drawn as cables.
+pub fn ribbon_texture(mean: f32) -> bool {
+    mean < RIBBON_ALPHA
+}
+
+/// The mean alpha of a texture level's bytes as uploaded (`format`, `width` x `height` texels;
+/// block formats in 4 x 4 blocks): 8-bit four-channel and the three alpha block formats; none for
+/// any other format, or a level over 64 x 64 (only small levels are read: the smallest of a texture
+/// is its mean).
+pub fn mean_alpha(
+    format: wgpu::TextureFormat,
+    width: u32,
+    height: u32,
+    bytes: &[u8],
+) -> Option<f32> {
+    use wgpu::TextureFormat as T;
+    if width == 0 || height == 0 || width > 64 || height > 64 {
+        return None;
+    }
+    let (w, h) = (width as usize, height as usize);
+    match format {
+        T::Bgra8Unorm | T::Rgba8Unorm | T::Bgra8UnormSrgb | T::Rgba8UnormSrgb => {
+            let px = bytes.get(..w * h * 4)?;
+            let sum: u32 = px.chunks_exact(4).map(|p| u32::from(p[3])).sum();
+            Some(sum as f32 / (255.0 * (w * h) as f32))
+        }
+        T::Bc1RgbaUnorm | T::Bc2RgbaUnorm | T::Bc3RgbaUnorm => {
+            let size = if format == T::Bc1RgbaUnorm { 8 } else { 16 };
+            let (bw, bh) = (w.div_ceil(4), h.div_ceil(4));
+            let blocks = bytes.get(..bw * bh * size)?;
+            let mut sum = 0.0f64;
+            let mut n = 0usize;
+            for (b, block) in blocks.chunks_exact(size).enumerate() {
+                let (bx, by) = (b % bw, b / bw);
+                let alpha = block_alpha(format, block);
+                for (t, a) in alpha.iter().enumerate() {
+                    // Texels of a block past the level's edge (a level under 4 wide) are not its.
+                    if bx * 4 + t % 4 < w && by * 4 + t / 4 < h {
+                        sum += f64::from(*a);
+                        n += 1;
+                    }
+                }
+            }
+            (n > 0).then(|| (sum / n as f64) as f32)
+        }
+        _ => None,
+    }
+}
+
+/// A 4 x 4 block's sixteen alphas (0 to 1), texel by texel, row by row.
+fn block_alpha(format: wgpu::TextureFormat, b: &[u8]) -> [f32; 16] {
+    use wgpu::TextureFormat as T;
+    match format {
+        // One bit: a block whose first colour is not above its second has a clear index 3.
+        T::Bc1RgbaUnorm => {
+            let c0 = u16::from_le_bytes([b[0], b[1]]);
+            let c1 = u16::from_le_bytes([b[2], b[3]]);
+            let bits = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+            std::array::from_fn(|t| {
+                let i = (bits >> (2 * t)) & 3;
+                if c0 <= c1 && i == 3 {
+                    0.0
+                } else {
+                    1.0
+                }
+            })
+        }
+        // Four bits a texel.
+        T::Bc2RgbaUnorm => {
+            let bits = u64::from_le_bytes(b[..8].try_into().expect("eight bytes"));
+            std::array::from_fn(|t| ((bits >> (4 * t)) & 15) as f32 / 15.0)
+        }
+        // Two end alphas and three-bit indices between them.
+        _ => {
+            let (a0, a1) = (f32::from(b[0]) / 255.0, f32::from(b[1]) / 255.0);
+            let mut word = [0u8; 8];
+            word[..6].copy_from_slice(&b[2..8]);
+            let bits = u64::from_le_bytes(word);
+            std::array::from_fn(|t| {
+                let i = ((bits >> (3 * t)) & 7) as u8;
+                match (i, b[0] > b[1]) {
+                    (0, _) => a0,
+                    (1, _) => a1,
+                    (i, true) => (f32::from(8 - i) * a0 + f32::from(i - 1) * a1) / 7.0,
+                    (6, false) => 0.0,
+                    (7, false) => 1.0,
+                    (i, false) => (f32::from(6 - i) * a0 + f32::from(i - 1) * a1) / 5.0,
+                }
+            })
+        }
+    }
+}
 
 /// The caster's triangles (object-space corners) split into connected pieces (corners welded by
 /// place, so a seam in the vertex list does not split a cable; degenerate triangles, which join
@@ -841,9 +944,15 @@ pub(crate) struct Body {
     /// With cables taken out of a geometry that is not all cables: its other triangles (their
     /// numbers in its draw), drawn into the depth maps instead of the whole.
     pub solid: Option<std::sync::Arc<Vec<u32>>>,
-    /// ... and those triangles' corners' numbers in the draw (its indices as read, or its vertices),
-    /// three a triangle, as the device found them.
-    pub solid_indices: Option<std::sync::Arc<Vec<u32>>>,
+    /// ... and those triangles as a list of the device's own ([`List`]), made with the body (so a
+    /// body made again for new bytes has its own).
+    pub solid_list: Option<List>,
+    /// A geometry of ribbons with other pieces in it (round cables, small bits): its ribbons'
+    /// triangles, the only ones whose alpha is added into the coverage maps (a round cable there
+    /// would be cut into texel-sized dots).
+    pub ribbon_tris: Option<std::sync::Arc<Vec<u32>>>,
+    /// ... as a list of the device's own.
+    pub ribbon_list: Option<List>,
     pub pieces: usize,
     pub look: Vec<(f32, f32)>,
     /// Its pieces by kind: round cables, ribbons, others (how many, their part of its area).
@@ -852,10 +961,40 @@ pub(crate) struct Body {
     pub triangles: Option<std::sync::Arc<Vec<[[f32; 3]; 3]>>>,
 }
 
+/// A list of triangles' corners (indices, 32-bit) in a buffer of the device's own, and how many.
+#[derive(Clone)]
+pub(crate) struct List {
+    pub buf: std::sync::Arc<crate::device::Buf>,
+    pub count: u32,
+}
+
+impl std::fmt::Debug for List {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "List({})", self.count)
+    }
+}
+
 impl Body {
-    /// A geometry's body from its triangles (object-space corners); none without any.
-    pub fn of(triangles: &[[[f32; 3]; 3]]) -> Option<Body> {
+    /// A geometry's body from its triangles (object-space corners); none without any. Not split
+    /// into pieces unless `split` (a geometry the game keeps writing is drawn whole: its pieces
+    /// would be worked out again every frame).
+    pub fn of(triangles: &[[[f32; 3]; 3]], split: bool) -> Option<Body> {
         let bounds = bounds(triangles.iter().flatten().copied())?;
+        let whole = || Body {
+            bounds,
+            thin: None,
+            solid: None,
+            solid_list: None,
+            ribbon_tris: None,
+            ribbon_list: None,
+            pieces: 0,
+            look: Vec::new(),
+            kinds: [(0, 0.0); 3],
+            triangles: dump_dir().map(|_| std::sync::Arc::new(triangles.to_vec())),
+        };
+        if !split {
+            return Some(whole());
+        }
         // Cheap first: a geometry whose area over its longest side is wider than many cables side
         // by side (a wall, a rock, a house) is not split into pieces.
         let mut lo = [f64::INFINITY; 3];
@@ -877,16 +1016,7 @@ impl Body {
         let long = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max);
         let girth = area / long.max(1e-6);
         if girth.is_nan() || girth >= MANY_CABLES * THIN_WIDTH * std::f64::consts::PI {
-            return Some(Body {
-                bounds,
-                thin: None,
-                solid: None,
-                solid_indices: None,
-                pieces: 0,
-                look: Vec::new(),
-                kinds: [(0, 0.0); 3],
-                triangles: dump_dir().map(|_| std::sync::Arc::new(triangles.to_vec())),
-            });
+            return Some(whole());
         }
         let (s, of) = pieces(triangles);
         let look = s
@@ -911,26 +1041,48 @@ impl Body {
         // All cables (and small bits): drawn as cables. Else its round cables are taken out of it:
         // drawn as cables, the rest as before (a telegraph line's poles and crossbars with its wires
         // in one geometry, as Goodsprings' is).
-        let (thin, solid) = match thin_of(s.clone()) {
-            Some(t) => (Some(t), None),
+        // The triangles (their numbers in the draw) of the pieces `keep` takes (degenerate ones,
+        // in no piece, left out: they draw nothing).
+        let of_pieces = |keep: &dyn Fn(u32) -> bool| -> Vec<u32> {
+            (0..triangles.len() as u32)
+                .filter(|&t| {
+                    let p = of[t as usize];
+                    p != u32::MAX && keep(p)
+                })
+                .collect()
+        };
+        let (thin, solid, ribbon_tris) = match thin_of(s.clone()) {
+            Some(t) => {
+                // A geometry of ribbons with anything else in it: only the ribbons' alpha is
+                // added into the coverage maps.
+                let ribbon_tris = if t.ribbons && (t.rounds || t.strands.len() < s.len()) {
+                    let ribbons: crate::fxhash::Set<u32> = t
+                        .strands
+                        .iter()
+                        .filter(|p| !p.thin())
+                        .map(|p| p.piece)
+                        .collect();
+                    Some(std::sync::Arc::new(of_pieces(&|p| ribbons.contains(&p))))
+                } else {
+                    None
+                };
+                (Some(t), None, ribbon_tris)
+            }
             None => {
                 let cables: Vec<Strand> = s.iter().filter(|p| p.thin()).cloned().collect();
                 if cables.is_empty() {
-                    (None, None)
+                    (None, None, None)
                 } else {
-                    let out: Vec<u32> = cables.iter().map(|c| c.piece).collect();
-                    let rest: Vec<u32> = (0..triangles.len() as u32)
-                        .filter(|&t| {
-                            let p = of[t as usize];
-                            p != u32::MAX && !out.contains(&p)
-                        })
-                        .collect();
+                    let out: crate::fxhash::Set<u32> = cables.iter().map(|c| c.piece).collect();
+                    let rest = of_pieces(&|p| !out.contains(&p));
                     (
                         Some(Thin {
                             strands: std::sync::Arc::new(cables),
                             ribbons: false,
+                            rounds: true,
                         }),
                         Some(std::sync::Arc::new(rest)),
+                        None,
                     )
                 }
             }
@@ -939,7 +1091,9 @@ impl Body {
             bounds,
             thin,
             solid,
-            solid_indices: None,
+            solid_list: None,
+            ribbon_tris,
+            ribbon_list: None,
             pieces,
             look,
             kinds,
@@ -957,11 +1111,13 @@ pub fn dump_dir() -> Option<&'static str> {
 }
 
 /// A geometry of cables: the strands of its cables (round ones, [`Strand::thin`], or ribbons,
-/// [`Strand::ribbon`]) and whether any is a ribbon.
+/// [`Strand::ribbon`]), whether any is a ribbon and whether any is round. Each strand is drawn as
+/// what it is ([`thin_quads`]): a round one at its width, a ribbon by its texture's alpha.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Thin {
     pub strands: std::sync::Arc<Vec<Strand>>,
     pub ribbons: bool,
+    pub rounds: bool,
 }
 
 /// The cables of a geometry's pieces ([`strands`]): none unless every piece is a cable or a ribbon
@@ -976,9 +1132,11 @@ pub fn thin_of(pieces: Vec<Strand>) -> Option<Thin> {
         return None;
     }
     let ribbons = lines.iter().any(|s| !s.thin());
+    let rounds = lines.iter().any(|s| s.thin());
     Some(Thin {
         strands: std::sync::Arc::new(lines),
         ribbons,
+        rounds,
     })
 }
 
@@ -1139,10 +1297,18 @@ pub(crate) struct Draw {
     /// A cable's strands ([`thin_shape`]): drawn into the thin casters' coverage maps, not the
     /// depth maps.
     pub thin: Option<Thin>,
-    /// A ribbon cable's (a cut-out of [`Thin::ribbons`]) pipeline that adds its texture's alpha
-    /// into the coverage maps ([`Gpu::make_pipeline`] with a target), and its pixel block's header
-    /// (no alpha test, the textures read at their own level).
-    pub ribbon: Option<(u32, u32)>,
+    /// A ribbon cable's (a cut-out of [`Thin::ribbons`]) coverage draw ([`Ribbon`]).
+    pub ribbon: Option<Ribbon>,
+}
+
+/// How a ribbon cable's alpha is added into the coverage maps: its pipeline ([`Gpu::make_pipeline`]
+/// with a target), its pixel block's header (no alpha test, the textures read at their own level),
+/// and, for a geometry with other pieces than ribbons, a list of its ribbons' triangles alone
+/// ([`Body::ribbon_list`], a list pipeline) drawn with this base vertex.
+pub(crate) struct Ribbon {
+    pub pipe: u32,
+    pub header: u32,
+    pub list: Option<(List, i32)>,
 }
 
 /// What an alpha-tested caster draws its cut-out with: its pixel shader's textures (bind group 1),
@@ -1183,9 +1349,12 @@ pub(crate) struct Caster {
     pub key: GeoKey,
     /// Its object-space bounding sphere.
     pub bounds: ([f64; 3], f64),
-    /// Its pieces ([`Body`]).
-    pub body: Body,
+    /// Its pieces ([`Body`]; shared with the device's cache of bodies, not copied a draw).
+    pub body: std::sync::Arc<Body>,
     pub draw: Draw,
+    /// Its first texture's mean alpha ([`ribbon_texture`]; not a number: none or not known), for
+    /// the dump tool.
+    pub alpha: f32,
     /// The depth surface it was drawn on.
     pub depth: u64,
 }
@@ -1465,8 +1634,11 @@ pub const LOOKUP_SIZE: u64 = 8 * 16 + 4 * CASCADES as u64 * 16;
 /// The thin casters' coverage maps: texels a side (a layer a cascade, over the same square as the
 /// cascade's depth map, so a texel is `SIZE / THIN_SIZE` of its texels).
 pub const THIN_SIZE: u32 = 1024;
-/// Their format: coverage, coverage x depth (less the middle of the depth range, where half
-/// floats are finest), coverage x the width drawn (game units), unused; added up.
+/// Their format: how many strands were drawn over a texel (added), the sum of their depths (less
+/// the middle of the depth range, where half floats are finest; added), the sum of the bands they
+/// were drawn over (game units; added), and their coverage (round cables' added, so wires side by
+/// side darken more than one; a ribbon's alpha by the most of it and what is there, as a ribbon
+/// drawn on both sides is one cable).
 pub const THIN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The sun's width across the sky (radians: half a degree): a strand `d` units over a receiver
 /// casts a soft band about `SUN_WIDTH x d` wide.
@@ -1490,20 +1662,25 @@ pub fn thin_maps() -> bool {
 /// The quads that draw a placed cable's strands into map `c`'s coverage layer (six corners a
 /// segment: clip x, y; depth less the middle; coverage; the band the coverage is spread over):
 /// each segment `max(width, THIN_DRAWN texels)` wide with its coverage `width / drawn`, so a strand
-/// thinner than a texel covers its real share and never draws a broken line. A `ribbon` geometry's
-/// (a cut-out: its cable is in its texture's alpha, which its own pipeline adds) quads carry its
-/// depth alone, over the ribbon's width, its coverage spread over [`THIN_DRAWN`] texels.
+/// thinner than a texel covers its real share and never draws a broken line. A ribbon's
+/// ([`Strand::ribbon`]: its cable is in its cut-out texture's alpha, which its own pipeline adds)
+/// quads carry its depth alone, over the ribbon's width, its coverage spread over [`THIN_DRAWN`]
+/// texels; drawn only where its alpha is (`alpha`: the first [`CUTOUT_CASCADES`]).
 pub fn thin_quads(
     c: &Cascade,
     w: &World,
     strands: &[Strand],
-    ribbon: bool,
+    alpha: bool,
     out: &mut Vec<[f32; 5]>,
 ) {
     let m = c.world_to_light(w);
     let scale = stretch(w);
     let texel = c.half * 2.0 / f64::from(THIN_SIZE);
     for s in strands {
+        let ribbon = !s.thin();
+        if ribbon && !alpha {
+            continue;
+        }
         let width = s.width * scale;
         let drawn = width.max(THIN_DRAWN * texel);
         let (cover, band) = if ribbon {
@@ -2289,8 +2466,8 @@ impl Gpu {
             dst_factor: wgpu::BlendFactor::One,
             operation: wgpu::BlendOperation::Add,
         };
-        // Coverage: the most of what is drawn over a texel (a strand's quads overlap where it
-        // bends; a ribbon's triangles at its seams), not their sum.
+        // A ribbon's alpha: the most of it and what is there (a ribbon drawn on both sides, or
+        // its triangles meeting at a seam, are one cable), not their sum.
         let most = wgpu::BlendComponent {
             operation: wgpu::BlendOperation::Max,
             ..add
@@ -2406,7 +2583,13 @@ impl Gpu {
         let mut thin_moving = [false; CASCADES];
         for (k, c) in cascades.iter().enumerate() {
             for &(i, m) in &kept {
-                if i.payload.thin.is_some() && thin_maps && c.touches(i.centre, i.radius) {
+                // A ribbon's alpha is drawn only where cut-outs are: past them, only round cables.
+                let here = i
+                    .payload
+                    .thin
+                    .as_ref()
+                    .is_some_and(|t| k < CUTOUT_CASCADES || t.rounds);
+                if here && thin_maps && c.touches(i.centre, i.radius) {
                     thin[k].push(i);
                     thin_moving[k] |= m == 1;
                 }
@@ -2420,10 +2603,12 @@ impl Gpu {
                 let d = &i.payload;
                 if d.thin.is_some() && thin_maps && !d.rest {
                     // A ribbon's alpha, in the cascades cut-outs are drawn into.
-                    if let (true, true, Some((p, _))) =
-                        (thin_redraw[k], k < CUTOUT_CASCADES, d.ribbon)
+                    if let (true, true, Some(r)) =
+                        (thin_redraw[k], k < CUTOUT_CASCADES, d.ribbon.as_ref())
                     {
-                        if c.touches(i.centre, i.radius) && self.pipelines[p as usize].is_some() {
+                        if c.touches(i.centre, i.radius)
+                            && self.pipelines[r.pipe as usize].is_some()
+                        {
                             lists[k][2].push((d, i.world, [0, 0]));
                         }
                     }
@@ -2452,7 +2637,13 @@ impl Gpu {
                 let from = quads.len();
                 for i in &thin[k] {
                     let t = i.payload.thin.as_ref().expect("listed as thin");
-                    thin_quads(&cascades[k], &i.world, &t.strands, t.ribbons, &mut quads);
+                    thin_quads(
+                        &cascades[k],
+                        &i.world,
+                        &t.strands,
+                        k < CUTOUT_CASCADES,
+                        &mut quads,
+                    );
                 }
                 thin_ranges[k] = from as u32..quads.len() as u32;
                 self.thin_in[k] = !thin_ranges[k].is_empty();
@@ -2495,7 +2686,7 @@ impl Gpu {
                 }
                 // Fewer pipeline changes.
                 if n == 2 {
-                    list.sort_by_key(|(d, _, _)| d.ribbon.map_or(0, |r| r.0));
+                    list.sort_by_key(|(d, _, _)| d.ribbon.as_ref().map_or(0, |r| r.pipe));
                 } else {
                     list.sort_by_key(|(d, _, _)| d.pipe);
                 }
@@ -2538,9 +2729,10 @@ impl Gpu {
             |pass: &mut wgpu::RenderPass<'_>, list: &[(&Draw, World, [u32; 2])], ribbons: bool| {
                 let mut last_pipe = u32::MAX;
                 for &(d, _, [vs, ps]) in list {
-                    let (pipe, ribbon_header) = match (ribbons, d.ribbon) {
-                        (true, Some((p, h))) => (p, Some(h)),
-                        _ => (d.pipe, None),
+                    let ribbon = d.ribbon.as_ref().filter(|_| ribbons);
+                    let (pipe, ribbon_header) = match ribbon {
+                        Some(r) => (r.pipe, Some(r.header)),
+                        None => (d.pipe, None),
                     };
                     if pipe != last_pipe {
                         let p = pipelines[pipe as usize].as_ref().expect("listed with one");
@@ -2564,6 +2756,13 @@ impl Gpu {
                         if let Some((b, offset, _)) = s {
                             pass.set_vertex_buffer(slot as u32, b.buffer.slice(*offset..));
                         }
+                    }
+                    // A ribbon among other pieces: its ribbons' triangles alone.
+                    if let Some((l, base)) = ribbon.and_then(|r| r.list.as_ref()) {
+                        pass.set_index_buffer(l.buf.buffer.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..l.count, *base, 0..1);
+                        drawn += 1;
+                        continue;
                     }
                     match &d.index {
                         Some((b, _)) => {
@@ -2707,12 +2906,9 @@ impl Gpu {
             dst_factor: wgpu::BlendFactor::One,
             operation: wgpu::BlendOperation::Add,
         };
-        // Coverage: the most of what is drawn over a texel (a strand's quads overlap where it
-        // bends; a ribbon's triangles at its seams), not their sum.
-        let most = wgpu::BlendComponent {
-            operation: wgpu::BlendOperation::Max,
-            ..add
-        };
+        // Coverage added too: cables side by side (a bundle, a line seen along its run in a far
+        // cascade) take their sum, up to all of the sun ([`LOOKUP_FNS`] takes at most 1). A strand
+        // bending overlaps its own quads only in a wedge on the inside of the bend.
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sun shadow thin casters"),
             layout: None,
@@ -2737,7 +2933,7 @@ impl Gpu {
                     format: THIN_FORMAT,
                     blend: Some(wgpu::BlendState {
                         color: add,
-                        alpha: most,
+                        alpha: add,
                     }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -3502,7 +3698,7 @@ mod tests {
         assert!(thin_shape(&pole).is_none());
         // ... but its wire is taken out of it (as Goodsprings' telegraph line, poles and wires one
         // geometry): cast as a cable, the pole's triangles (the first 16) drawn on their own.
-        let body = Body::of(&pole).unwrap();
+        let body = Body::of(&pole, true).unwrap();
         let t = body.thin.expect("its wire");
         assert!(!t.ribbons && t.strands.len() == 1 && t.strands[0].width < 4.0);
         assert_eq!(*body.solid.unwrap(), (0..16).collect::<Vec<u32>>());
@@ -3515,9 +3711,17 @@ mod tests {
         // A bolt: thin but short.
         assert!(thin_shape(&tube(1.0, 10.0, 8)).is_none());
         assert!(thin_shape(&[]).is_none());
-        assert!(Body::of(&[]).is_none());
-        assert!(Body::of(&tube(1.5, 800.0, 8)).unwrap().thin.is_some());
-        assert!(Body::of(&tube(15.0, 700.0, 8)).unwrap().thin.is_none());
+        assert!(Body::of(&[], true).is_none());
+        assert!(Body::of(&tube(1.5, 800.0, 8), true).unwrap().thin.is_some());
+        // Not split (a geometry the game keeps writing): drawn whole.
+        assert!(Body::of(&tube(1.5, 800.0, 8), false)
+            .unwrap()
+            .thin
+            .is_none());
+        assert!(Body::of(&tube(15.0, 700.0, 8), true)
+            .unwrap()
+            .thin
+            .is_none());
     }
 
     #[test]
@@ -3555,22 +3759,25 @@ mod tests {
     #[test]
     fn a_cable_is_drawn_two_texels_wide_with_its_real_share() {
         let f = Frame::from_game(&game()).unwrap();
-        let c = cascades_of(&f, basis([0.0, 0.0, 1.0]))[2];
+        let c = cascades_of(&f, basis([0.0, 0.0, 1.0]))[0];
         let texel = c.half * 2.0 / f64::from(THIN_SIZE);
+        // (A round cable three texels wide is still a cable here.)
+        assert!(texel * 3.0 < THIN_WIDTH, "{texel}");
         let w: World = [
             [1.0, 0.0, 0.0, f64::from(f.position[0])],
             [0.0, 1.0, 0.0, f64::from(f.position[1])],
             [0.0, 0.0, 1.0, f64::from(f.position[2])],
         ];
+        // A round cable (long for its width), or a ribbon 20 wide.
         let strand = |width: f64| Strand {
             line: vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [200.0, 0.0, 0.0]],
             width,
-            length: 200.0,
+            length: if width < THIN_WIDTH { 1e5 } else { 200.0 },
             area: 0.0,
             piece: 0,
         };
         let mut q = Vec::new();
-        thin_quads(&c, &w, &[strand(texel / 4.0)], false, &mut q);
+        thin_quads(&c, &w, &[strand(texel / 4.0)], true, &mut q);
         // Two segments, six corners each; drawn two texels wide (in clip units, the square 2
         // across), covering an eighth: the cable's own width.
         assert_eq!(q.len(), 12);
@@ -3581,7 +3788,7 @@ mod tests {
             .all(|v| (v[3] - 0.125).abs() < 1e-6 && (f64::from(v[4]) - 2.0 * texel).abs() < 1e-3));
         // Wider than that: drawn as wide as it is, whole.
         q.clear();
-        thin_quads(&c, &w, &[strand(texel * 3.0)], false, &mut q);
+        thin_quads(&c, &w, &[strand(texel * 3.0)], true, &mut q);
         assert!(q.iter().all(|v| v[3] == 1.0));
         // Its depth is the map's, less the middle.
         let mid = c.world_to_light(&w)[2][3] - 0.5;
@@ -3589,10 +3796,80 @@ mod tests {
         // A ribbon (its cable in its texture's alpha, added by its own pipeline): its quads carry
         // no coverage, only its depth over its width and the band its alpha is spread over.
         q.clear();
-        thin_quads(&c, &w, &[strand(texel * 3.0)], true, &mut q);
+        thin_quads(&c, &w, &[strand(20.0)], true, &mut q);
+        assert_eq!(q.len(), 12);
         assert!(q
             .iter()
             .all(|v| v[3] == 0.0 && (f64::from(v[4]) - THIN_DRAWN * texel).abs() < 1e-3));
+        // One geometry of a ribbon and a round cable: each drawn as what it is (the round one
+        // keeps its coverage beside a ribbon).
+        q.clear();
+        thin_quads(&c, &w, &[strand(20.0), strand(texel / 4.0)], true, &mut q);
+        assert_eq!(q.len(), 24);
+        assert!(q[..12].iter().all(|v| v[3] == 0.0));
+        assert!(q[12..].iter().all(|v| (v[3] - 0.125).abs() < 1e-6));
+        // Where no ribbon's alpha is drawn (past the cut-out cascades): the round one alone.
+        q.clear();
+        thin_quads(&c, &w, &[strand(20.0), strand(texel / 4.0)], false, &mut q);
+        assert_eq!(q.len(), 12);
+        assert!(q.iter().all(|v| (v[3] - 0.125).abs() < 1e-6));
+    }
+
+    #[test]
+    fn a_ribbon_with_a_round_wire_draws_only_its_ribbon_from_its_alpha() {
+        // A ribbon 20 wide (28 triangles) and a round wire (96) in one geometry.
+        let mut line = strip(20.0, 700.0, 14);
+        line.extend(moved(tube(1.5, 800.0, 8), [0.0, 60.0, 300.0]));
+        let body = Body::of(&line, true).unwrap();
+        let t = body.thin.as_ref().expect("cables");
+        assert!(t.ribbons && t.rounds && t.strands.len() == 2);
+        assert_eq!(
+            *body.ribbon_tris.expect("its ribbons' own list"),
+            (0..28).collect::<Vec<u32>>()
+        );
+        assert!(body.solid.is_none());
+        // Ribbons alone: their alpha drawn from the game's own draw (no list).
+        let alone = Body::of(&strip(20.0, 700.0, 14), true).unwrap();
+        assert!(alone.thin.unwrap().ribbons && alone.ribbon_tris.is_none());
+    }
+
+    #[test]
+    fn a_ribbon_texture_is_mostly_clear() {
+        use wgpu::TextureFormat as T;
+        // Eight texels, one opaque (a cable on its strip): a cable's.
+        let cable: Vec<u8> = (0..8)
+            .flat_map(|i| [0u8, 0, 0, if i == 3 { 255 } else { 0 }])
+            .collect();
+        let m = mean_alpha(T::Bgra8Unorm, 8, 1, &cable).unwrap();
+        assert!((m - 0.125).abs() < 1e-6 && ribbon_texture(m));
+        // Half opaque (a fence, a grille): not a cable's.
+        let fence: Vec<u8> = (0..8)
+            .flat_map(|i| [0u8, 0, 0, if i % 2 == 0 { 255 } else { 0 }])
+            .collect();
+        assert!(!ribbon_texture(
+            mean_alpha(T::Bgra8Unorm, 8, 1, &fence).unwrap()
+        ));
+        // Not known: not a cable's.
+        assert!(!ribbon_texture(f32::NAN));
+        assert_eq!(mean_alpha(T::R8Unorm, 1, 1, &[0]), None);
+        assert_eq!(mean_alpha(T::Bgra8Unorm, 128, 128, &[0; 65536]), None);
+        // Block formats: one bit (a block whose colours are in order has index 3 clear), four
+        // bits, and two ends with indices between.
+        let bc1 = [0u8, 0, 1, 0, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert_eq!(mean_alpha(T::Bc1RgbaUnorm, 4, 4, &bc1), Some(0.0));
+        let bc1_opaque = [1u8, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF];
+        assert_eq!(mean_alpha(T::Bc1RgbaUnorm, 4, 4, &bc1_opaque), Some(1.0));
+        let mut bc2 = [0u8; 16];
+        bc2[0] = 0x0F;
+        assert!((mean_alpha(T::Bc2RgbaUnorm, 4, 4, &bc2).unwrap() - 1.0 / 16.0).abs() < 1e-6);
+        let mut bc3 = [0u8; 16];
+        bc3[0] = 255;
+        assert_eq!(mean_alpha(T::Bc3RgbaUnorm, 4, 4, &bc3), Some(1.0));
+        // A level under a block's size reads only its own texels: a 1 x 1 level of index 1 (b[1]).
+        let mut bc3 = [0u8; 16];
+        bc3[1] = 51;
+        bc3[2] = 1;
+        assert!((mean_alpha(T::Bc3RgbaUnorm, 1, 1, &bc3).unwrap() - 0.2).abs() < 1e-6);
     }
 
     /// A flat strip, `width` across (y) and `length` along x, in `n` quads.
@@ -3616,7 +3893,7 @@ mod tests {
 
     #[test]
     fn a_ribbon_is_a_cable_and_a_round_pole_is_not() {
-        // Cut-out ribbons (20 wide here; the game's are 50 to 90), 700 long, several in a geometry,
+        // Cut-out ribbons (20 wide here; the game's are 8 to 118), 700 long, several in a geometry,
         // with a small bit (a clamp) beside them.
         let mut line = strip(20.0, 700.0, 14);
         line.extend(moved(strip(20.0, 700.0, 14), [0.0, 60.0, 0.0]));
