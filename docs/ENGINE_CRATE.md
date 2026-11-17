@@ -432,9 +432,10 @@ speed gate passed (G1, 2026-11-06: Goodsprings +7.1%, Doc's room +3.0%). It is n
 `leaves`, `topic_search`, `topic_order` and, since their speed gate (2026-11-08), `lockfree`, `culling`,
 `pathing`, `shader`, `crt` and `dispatch` are on, and since their gates `render` (2026-11-09), `draw`, `scene`,
 `particles`, `collision` and `multibound` (2026-11-10), and on their tests and reviews `animation`, `draw_f` and
-`anim_keys` (2026-11-11: no comparison runs for native code) and `process` and `lights` (2026-11-13) (below); `NV_TYPED=off` turns every family off, and
-`<family>:off` one. A family merged off (`geometry`, below) stays off until its gate, and `NV_TYPED=<family>` turns it
-on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
+`anim_keys` (2026-11-11: no comparison runs for native code), `process` and `lights` (2026-11-13) and, since its gate,
+`geometry` (2026-11-16) (below); `NV_TYPED=off` turns every family off, and
+`<family>:off` one; `geometry` (below) is on since its gate (2026-11-16). A family merged off stays off until its
+gate, and `NV_TYPED=<family>` turns it on. A run compared call for call with the original's record (nv-trace's `NV_TRACE_OUT`,
 `NV_TRACE_LIST`) has every family off unless `NV_TYPED` says otherwise (`typed::switch_for`).
 The second is `topic_search` (`crates/engine-fallout-forms/src/topic_search.rs`, provided from that
 crate): the search for the topic that holds a topic info (`TESTopic::GetOwnerTopic`) and the functions
@@ -671,7 +672,9 @@ release of the arrays a static mesh does not keep goes through, `SetData`, `Repl
 and end (the load from a stream, which FaceGen's deep copies of a head go through, the save with its texture
 coordinates' write, the destructor body, the normals' own allocation, method setter and release), the tangent space a
 lit geometry gets at load (`BSShaderManager::CreateTangentSpaceSimple`) and the pick of a geometry's triangles (the
-general pick and the two it hands strips and shapes). Its tests are `crates/engine/tests/typed_geometry.rs`. Off until its gate (`NV_TYPED=geometry` turns it on).
+general pick and the two it hands strips and shapes). Its tests are `crates/engine/tests/typed_geometry.rs`. On since its gate (2026-11-16: the
+recorded route, Doc's house and the Goodsprings street, 5,400 frames on Vulkan, byte-identical with
+`NV_TYPED=geometry:off`, which still turns it off); its floats are still the exact x87 forms.
 And `animation` (same crate, id 24), the update half's fifth group: a skeleton's bones moved from their animation
 each frame. `BSBipNode::UpdateAllButBip` walks a bip node's controllers; a multi-target transform controller
 (`BSTransCon::UpdateAllButTarget`) updates each bone it drives from its interpolator's transform

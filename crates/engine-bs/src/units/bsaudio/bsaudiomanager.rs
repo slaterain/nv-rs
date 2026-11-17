@@ -6478,6 +6478,17 @@ pub fn fn_00adf080(
             51 => message_add_sound_to_cache(e, this, message),
             52 => message_terminate_thread(e, this, message),
             53 => stop = message_suspend_thread(e, this, message),
+            // Kind 54 has no case in the exe (jump table word `0xAE5648` = the end, `0xAE5527`).
+            // JIP LN NVSE's G108 (group GW's row and handler, not in yet:
+            // `SafeWrite32(0xAE5648, SetSourceSoundRequestHook)`, which gives the sound with the
+            // message's id the message's word +8 and a frequency, then goes to the end): the seam
+            // with the manager and the message; its answer is not read. One load while JIP's fixes
+            // are not in.
+            54 => {
+                if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                    e.site(0x00ae_5648, &[this.addr(), message.addr()]);
+                }
+            }
             55 => message_set_underwater(e, this),
             56 => message_set_listener_position(e, this, message),
             57 => message_data_request(e, this, message),
@@ -9722,6 +9733,56 @@ mod tests {
         }
         assert_eq!(w.f.e.mem.u32(context), 0x1234);
         assert!(w.f.messages().is_empty());
+    }
+
+    thread_local! {
+        static G108_SEEN: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g108_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G108's seam at 0xAE5648 asked without FIXES");
+    }
+
+    fn g108_seen(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G108_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    /// JIP LN NVSE's G108 seam (`0xAE5648`, kind 54's jump table word; group GW's row, inert
+    /// until its handler): with the word 0 or `INSTALLED` alone it is not asked; with `FIXES`
+    /// and no handler kind 54 still does nothing; with a handler it is asked once with exactly
+    /// the manager and the message, for kind 54 only, its answer is not read (the processing
+    /// goes on), and the audio context is restored.
+    #[test]
+    fn kind_54_jip_source_sound_request_seam() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>| {
+            let mut w = world();
+            let context = w.f.e.tls() + AUDIO_TLS_CONTEXT;
+            w.f.e.mem.set_u32(context, 0x1234);
+            if let Some(handler) = handler {
+                w.f.e.on_site_for_test(0x00ae_5648, handler);
+            }
+            w.f.e.set_jip_patches(word);
+            G108_SEEN.with(|s| s.borrow_mut().clear());
+            let mut messages = vec![];
+            for kind in [6, 54, 67] {
+                let message = fake_message(&mut w.f.e, [kind, 4, 9, 0], [0.0; 3]);
+                assert!(!w.f.call(0x00adf080, &[message.addr()]).bool());
+                messages.push(message.addr());
+            }
+            assert_eq!(w.f.e.mem.u32(context), 0x1234);
+            assert!(w.f.messages().is_empty());
+            (G108_SEEN.with(|s| s.take()), w.f.this.addr(), messages[1])
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert!(run(word, Some(g108_never)).0.is_empty());
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert!(run(fixes, None).0.is_empty());
+        let (seen, this, message) = run(fixes, Some(g108_seen));
+        assert_eq!(seen, vec![vec![this, message]]);
     }
 
     #[test]
