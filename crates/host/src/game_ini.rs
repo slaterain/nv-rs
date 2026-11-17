@@ -304,7 +304,10 @@ mod tests {
                 assert!(flag(row.default).is_some(), "{row:?}");
             }
             if row.key.starts_with('f') {
-                assert!(row.default.parse::<f32>().is_ok_and(f32::is_finite), "{row:?}");
+                assert!(
+                    row.default.parse::<f32>().is_ok_and(f32::is_finite),
+                    "{row:?}"
+                );
             }
         }
         assert_eq!(
@@ -320,6 +323,7 @@ mod tests {
                 "iMenuFrameLimit",
                 "bShowFrameRate",
                 "bAmbientOcclusion",
+                "fAmbientOcclusionStrength",
                 "bSteppedThreads",
                 "bRenderThread"
             ]

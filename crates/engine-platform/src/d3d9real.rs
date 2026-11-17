@@ -639,9 +639,9 @@ pub use d3d9_wgpu::scene_light::GameView as SceneView;
 static SCENE_LIGHT: std::sync::OnceLock<fn(&Engine) -> Option<SceneView>> =
     std::sync::OnceLock::new();
 
-/// The new lighting's strength ([`want_scene_light`]), as `f32` bits.
-static SCENE_LIGHT_STRENGTH: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(d3d9_wgpu::scene_light::STRENGTH.to_bits());
+/// The new lighting's strength ([`want_scene_light`]), as `f32` bits; 0 until the run chose one (the
+/// step's default stands).
+static SCENE_LIGHT_STRENGTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
 /// Turns the new lighting on (ambient occlusion, `d3d9_wgpu::scene_light`;
 /// the run's choice, `host::fixes::Choice::ambient_occlusion`), before the game makes its device,
@@ -687,8 +687,10 @@ fn record_scene_light(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<Sce
         .as_ref()
         .and_then(d3d9_wgpu::scene_light::Params::from_game);
     if let Some(mut p) = params {
-        p.strength =
-            f32::from_bits(SCENE_LIGHT_STRENGTH.load(std::sync::atomic::Ordering::Relaxed));
+        let chosen = SCENE_LIGHT_STRENGTH.load(std::sync::atomic::Ordering::Relaxed);
+        if chosen != 0 {
+            p.strength = f32::from_bits(chosen);
+        }
         let m = p.to_words();
         record(
             e,

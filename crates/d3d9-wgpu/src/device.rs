@@ -5338,7 +5338,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .back_buffers
             .first()
             .and_then(|h| self.surface_of(*h))
-            .is_none_or(|s| (s.width, s.height) == (rt.width, rt.height));
+            .map_or(true, |s| (s.width, s.height) == (rt.width, rt.height));
         let fits = !back_buffer
             && screen_sized
             && self.st.rt[1..].iter().all(Option::is_none)

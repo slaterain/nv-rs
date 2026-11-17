@@ -259,6 +259,9 @@ fn light_here(b: &mut WgpuBackend, strength: f32) {
     );
 }
 
+/// A target's pixels (B, G, R, A).
+type Pixels = Vec<[u8; 4]>;
+
 /// The target's pixels (B, G, R, A).
 fn pixels(b: &mut WgpuBackend, surface: u32) -> Vec<[u8; 4]> {
     let d = b.device().expect("the device");
@@ -519,7 +522,7 @@ fn a_smaller_target_is_not_shaded() {
     const SMALL_RT: u32 = 0x1220;
     const SMALL_DS: u32 = 0x1230;
     const HALF: u32 = SIZE / 2;
-    let small_picture = |on: bool| -> Option<(Vec<[u8; 4]>, Vec<[u8; 4]>)> {
+    let small_picture = |on: bool| -> Option<(Pixels, Pixels)> {
         let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
         scene_light::enable(on);
         let b = backend(4);
