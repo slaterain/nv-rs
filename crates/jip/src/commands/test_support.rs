@@ -512,10 +512,21 @@ pub mod files {
         static WRITES: RefCell<u32> = const { RefCell::new(0) };
     }
 
+    /// The name as the platform keeps it (`engine_platform::mod_files::relative`): lower case,
+    /// `\`, a `..` taking off the part before it; `None` for one that leaves the game's folder.
     fn key(name: &[u8]) -> Option<Vec<u8>> {
         let name = name.to_ascii_lowercase();
-        let refused = name.split(|&b| b == b'\\' || b == b'/').any(|p| p == b"..");
-        (!refused).then_some(name)
+        let mut parts: Vec<&[u8]> = Vec::new();
+        for part in name.split(|&b| b == b'\\' || b == b'/') {
+            match part {
+                b"" | b"." => {}
+                b".." => {
+                    parts.pop()?;
+                }
+                _ => parts.push(part),
+            }
+        }
+        (!parts.is_empty()).then(|| parts.join(&b'\\'))
     }
     /// A file that is there but cannot be read (Windows' `ERROR_ACCESS_DENIED`).
     pub const LOCKED: &[u8] = b"\xff locked";

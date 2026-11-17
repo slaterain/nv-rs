@@ -669,3 +669,708 @@ fn missile_flags_set_only_for_flagged_bases() {
         assert_eq!(e.mem.u8(projectile + 0xc8), 0x5a);
     }
 }
+
+/// Part 3's seams: the fixes (G101, G127) and JIP's own (G42 x2, G124, G125).
+const PART3_FIXES: [SiteSlot; 2] = [DEATH_RESPONSE, MINE_EXPLODE_CHANCE];
+const PART3_JIP: [SiteSlot; 4] = [
+    MOVE_AWAY_DISTANCE[0],
+    MOVE_AWAY_DISTANCE[1],
+    EXPLOSION_IN_FACE,
+    EXPLOSION_SHAKE,
+];
+
+/// Each part-3 seam at the exe address JIP patches (internal/patches_game.h: 5393 G101, 5430
+/// G127, 5280 and 5281 G42, 5427 G124, 5428 G125), the game values the handlers use pinned to
+/// JIP's (entry point 4, `GetRandomInt` 0xAA5230 on 0x11C4180, `kMaxDist` 1024.0, the actor's
+/// +0x130 / +0x7D / +0x30 and the process slot +0x4B8, G42's 300.0), and each handler answering
+/// at its own literal address.
+#[test]
+fn part3_seams_at_jip_addresses() {
+    assert_eq!(
+        PART3_FIXES.map(|slot| slot.addr()),
+        [0x0098_4156, 0x009c_3bd6]
+    );
+    assert_eq!(
+        PART3_JIP.map(|slot| slot.addr()),
+        [0x009e_d3f8, 0x009e_d528, 0x009a_cec6, 0x009a_d2c5]
+    );
+    assert_eq!(
+        [
+            ADJUST_MINE_EXPLODE_CHANCE,
+            GET_RANDOM_INT,
+            GAME_RNG,
+            COMBAT_ALLIES,
+            IS_TALKING,
+            POSITION,
+            IS_ON_DIALOGUE_PACKAGE,
+            COMBAT_DIALOGUE,
+            DEATH_RESPONSE_SUBTYPE,
+        ],
+        [4, 0x00aa_5230, 0x011c_4180, 0x130, 0x7d, 0x30, 0x4b8, 2, 6]
+    );
+    assert_eq!(MAX_ALLY_DISTANCE.to_bits(), 0x4480_0000);
+    assert_eq!(MINE_CHANCE.to_bits(), 0x42c8_0000);
+    assert_eq!(
+        MoveAwayDistance::default().0.load(Ordering::Relaxed),
+        0x4396_0000
+    );
+    let mut e = jip(true, true);
+    // G42 at both: JIP's distance.
+    e.ext_free::<MoveAwayDistance>()
+        .0
+        .store(123.0f32.to_bits(), Ordering::Relaxed);
+    for address in [0x009e_d3f8, 0x009e_d528] {
+        assert_eq!(e.site(address, &[]), Some(123.0f32.to_bits()));
+    }
+    // G124 / G125 with the hit effects off: none / skip.
+    super::super::gp::toggle_hit_effects(&mut e, false);
+    assert_eq!(e.site(0x009a_cec6, &[]), Some(0));
+    assert_eq!(e.site(0x009a_d2c5, &[0x0300_0000]), Some(1));
+    // G101: a line that is no death response keeps the exe's speaker.
+    assert_eq!(e.site(0x0098_4156, &[0x0300_0000, 7, 2, 2, 1]), Some(0));
+    // G127: the roll (the entry point stub leaves 100; roll 99 explodes).
+    e.register(APPLY_PERK_MODIFIERS, |_, _| Ret::default());
+    e.register(GET_RANDOM_INT, |_, _| 99u32.into_ret());
+    let mine = e.mem.alloc(0x100);
+    assert_eq!(e.site(0x009c_3bd6, &[mine, 0x0300_0000]), Some(1));
+}
+
+/// Not installed (row on): no part-3 handler. Installed, row off: JIP's own (G42, G124, G125)
+/// only. Installed, row on: all.
+#[test]
+fn part3_registered_by_their_bits() {
+    let e = jip(false, true);
+    for slot in PART3_FIXES.iter().chain(&PART3_JIP) {
+        assert!(e.site_owners(slot.addr()).is_empty(), "{:x}", slot.addr());
+    }
+    let e = jip(true, false);
+    for slot in PART3_FIXES {
+        assert!(e.site_owners(slot.addr()).is_empty(), "{:x}", slot.addr());
+    }
+    for slot in PART3_JIP {
+        assert_eq!(
+            e.site_owners(slot.addr()),
+            [Owner::Jip],
+            "{:x}",
+            slot.addr()
+        );
+    }
+    let e = jip(true, true);
+    for slot in PART3_FIXES.iter().chain(&PART3_JIP) {
+        assert_eq!(
+            e.site_owners(slot.addr()),
+            [Owner::Jip],
+            "{:x}",
+            slot.addr()
+        );
+    }
+}
+
+thread_local! {
+    /// The process slot +0x4B8's calls (the process, then its words) and the allies it says are
+    /// on a dialogue package.
+    static DIALOGUE_PACKAGE: std::cell::RefCell<(Vec<Vec<u32>>, Vec<u32>)> =
+        const { std::cell::RefCell::new((Vec::new(), Vec::new())) };
+}
+
+/// The slot `IsOnDialoguePackage` points at in the test vtable.
+const ON_DIALOGUE_PACKAGE_STUB: u32 = 0x0700_04b8;
+
+/// An ally at `at` with a process (`+0x68`) whose vtable answers slot +0x4B8 from
+/// [`DIALOGUE_PACKAGE`]; the neighbours of its life state and talking bytes set.
+fn ally(e: &mut Engine, vtable: u32, at: [f32; 3]) -> u32 {
+    let actor = e.mem.alloc(0x200);
+    let process = e.mem.alloc(0x40);
+    e.mem.set_u32(process, vtable);
+    e.mem.set_u32(actor + 0x68, process);
+    for (i, v) in at.into_iter().enumerate() {
+        e.mem.set_f32(actor + POSITION + 4 * i as u32, v);
+    }
+    // Neighbours of the bytes JIP reads, set: a wider read would see them.
+    e.mem.set_u8(actor + 0x109, 1);
+    e.mem.set_u8(actor + 0x10a, 2);
+    e.mem.set_u8(actor + 0x7c, 1);
+    e.mem.set_u8(actor + 0x7e, 1);
+    actor
+}
+
+/// An engine for G101: the dialogue-package slot stub and a vtable for the processes.
+fn ally_engine() -> (Engine, u32) {
+    let mut e = jip(true, true);
+    let vtable = e.mem.alloc(0x500);
+    e.mem
+        .set_u32(vtable + IS_ON_DIALOGUE_PACKAGE, ON_DIALOGUE_PACKAGE_STUB);
+    e.register(ON_DIALOGUE_PACKAGE_STUB, |_, a| {
+        DIALOGUE_PACKAGE.with(|s| {
+            let mut s = s.borrow_mut();
+            s.0.push(a.to_vec());
+            u32::from(s.1.contains(&a[1])).into_ret()
+        })
+    });
+    DIALOGUE_PACKAGE.with(|s| *s.borrow_mut() = (Vec::new(), Vec::new()));
+    (e, vtable)
+}
+
+/// The actor's combat allies list (`+0x130`: data `+4`, count `+8`).
+fn allies(e: &mut Engine, actor: u32, members: &[u32], count: u32) {
+    let list = e.mem.alloc(0x10);
+    let data = e.mem.alloc(4 * members.len().max(1) as u32);
+    for (i, m) in members.iter().enumerate() {
+        e.mem.set_u32(data + 4 * i as u32, *m);
+    }
+    e.mem.set_u32(list + 4, data);
+    e.mem.set_u32(list + 8, count);
+    e.mem.set_u32(actor + COMBAT_ALLIES, list);
+}
+
+/// G101's test: only a death response (type 2, subtype 6, flag byte 1) with no controller and
+/// an actor asks for an ally; anything else answers 0 without reading the allies.
+#[test]
+fn death_response_only_for_a_death_response_without_controller() {
+    let (mut e, vtable) = ally_engine();
+    let actor = ally(&mut e, vtable, [0.0; 3]);
+    let near = ally(&mut e, vtable, [10.0, 0.0, 0.0]);
+    allies(&mut e, actor, &[near], 1);
+    // (actor, controller, type, subtype, flag, the answer)
+    for (who, controller, kind, subtype, flag, answer) in [
+        (actor, 0u32, 2u32, 6u32, 1u32, near),
+        (actor, 0x0300_0000, 2, 6, 1, 0),
+        (actor, 0, 4, 6, 1, 0),
+        (actor, 0, 0x102, 6, 1, 0),
+        (actor, 0, 2, 5, 1, 0),
+        (actor, 0, 2, 0x106, 1, 0),
+        (actor, 0, 2, 6, 0, 0),
+        (actor, 0, 2, 6, 2, 0),
+        (actor, 0, 2, 6, 0x101, near),
+        (0, 0, 2, 6, 1, 0),
+    ] {
+        DIALOGUE_PACKAGE.with(|s| s.borrow_mut().0.clear());
+        assert_eq!(
+            e.site(
+                DEATH_RESPONSE.addr(),
+                &[who, controller, kind, subtype, flag]
+            ),
+            Some(answer),
+            "{controller:x} {kind:x} {subtype:x} {flag:x} {who:x}"
+        );
+        let asked = DIALOGUE_PACKAGE.with(|s| s.borrow().0.len());
+        assert_eq!(asked, usize::from(answer != 0));
+    }
+}
+
+/// JIP's GetNearestLivingAlly: the nearest ally under 1024 units that is not the actor, has a
+/// process, is not dying or dead (life state byte), not talking, not on a dialogue package
+/// (the process's slot +0x4B8 asked with the ally); an equal distance keeps the first; an unordered
+/// distance is taken; the count is signed.
+#[test]
+fn nearest_living_ally_as_jip() {
+    let (mut e, vtable) = ally_engine();
+    let actor = ally(&mut e, vtable, [100.0, 200.0, 0.0]);
+    let at = |x: f32| [100.0 + x, 200.0, 0.0];
+    let far = ally(&mut e, vtable, at(30.0));
+    let nearer = ally(&mut e, vtable, at(-20.0));
+    let no_process = ally(&mut e, vtable, at(1.0));
+    e.mem.set_u32(no_process + 0x68, 0);
+    let dying = ally(&mut e, vtable, at(2.0));
+    e.mem.set_u8(dying + 0x108, 1);
+    let dead = ally(&mut e, vtable, at(3.0));
+    e.mem.set_u8(dead + 0x108, 2);
+    let talking = ally(&mut e, vtable, at(4.0));
+    e.mem.set_u8(talking + IS_TALKING, 1);
+    let busy = ally(&mut e, vtable, at(5.0));
+    DIALOGUE_PACKAGE.with(|s| s.borrow_mut().1.push(busy));
+    let members = [
+        0, actor, far, no_process, dying, dead, talking, busy, nearer,
+    ];
+    allies(&mut e, actor, &members, members.len() as u32);
+    assert_eq!(nearest_living_ally(&mut e, actor), nearer);
+    // Asked for those with a process, alive and not talking, each with itself.
+    let asked = DIALOGUE_PACKAGE.with(|s| s.borrow().0.clone());
+    let process = |e: &Engine, a: u32| e.mem.u32(a + 0x68);
+    assert_eq!(
+        asked,
+        vec![
+            vec![process(&e, far), far],
+            vec![process(&e, busy), busy],
+            vec![process(&e, nearer), nearer],
+        ]
+    );
+    // A life state word with a set high byte is still alive (JIP reads the byte).
+    e.mem.set_u32(dying + 0x108, 0x0100);
+    assert_eq!(nearest_living_ally(&mut e, actor), dying);
+    // The count reaches only the first entries; 0 and a negative count find none.
+    allies(&mut e, actor, &members, 3);
+    assert_eq!(nearest_living_ally(&mut e, actor), far);
+    for count in [0, 0xffff_ffff, 0x8000_0001] {
+        allies(&mut e, actor, &members, count);
+        assert_eq!(nearest_living_ally(&mut e, actor), 0, "{count:x}");
+    }
+    // No list: none.
+    e.mem.set_u32(actor + COMBAT_ALLIES, 0);
+    assert_eq!(nearest_living_ally(&mut e, actor), 0);
+    // Beyond 1024 none; of two at the same distance the first stays (`jnb`: equal is skipped).
+    let beyond = ally(&mut e, vtable, at(2000.0));
+    allies(&mut e, actor, &[beyond], 1);
+    assert_eq!(nearest_living_ally(&mut e, actor), 0);
+    let left = ally(&mut e, vtable, at(-30.0));
+    allies(&mut e, actor, &[far, left], 2);
+    assert_eq!(nearest_living_ally(&mut e, actor), far);
+    allies(&mut e, actor, &[left, far], 2);
+    assert_eq!(nearest_living_ally(&mut e, actor), left);
+    // A NaN position is taken (`jnb` after an unordered `comiss`), and so is every later one.
+    let lost = ally(&mut e, vtable, [f32::NAN, 0.0, 0.0]);
+    let later = ally(&mut e, vtable, at(900.0));
+    allies(&mut e, actor, &[nearer, lost, later], 3);
+    assert_eq!(nearest_living_ally(&mut e, actor), later);
+}
+
+/// JIP's Point3Distance: 0 and NaN as they are; otherwise the square root through `rsqrtss` and
+/// one Newton step (within 2^-21 relative of the exact root), from `(dx² + dy²) + dz²`, the
+/// fourth word ignored.
+#[test]
+fn point3_distance_as_jip() {
+    let mut e = jip(true, true);
+    let a = e.mem.alloc(0x20);
+    let b = e.mem.alloc(0x20);
+    let put = |e: &mut Engine, at: u32, p: [f32; 4]| {
+        for (i, v) in p.into_iter().enumerate() {
+            e.mem.set_f32(at + 4 * i as u32, v);
+        }
+    };
+    put(&mut e, a, [1.0, 2.0, 3.0, 99.0]);
+    put(&mut e, b, [1.0, 2.0, 3.0, -7.0]);
+    assert_eq!(point3_distance(&e, a, b).to_bits(), 0);
+    put(&mut e, b, [1.0, f32::NAN, 3.0, 0.0]);
+    assert!(point3_distance(&e, a, b).is_nan());
+    for (p, q, exact) in [
+        ([0.0, 0.0, 0.0], [3.0, 4.0, 0.0], 5.0f64),
+        ([10.0, -2.0, 7.0], [1.0, 2.0, 3.0], 113.0f64.sqrt()),
+        ([0.0, 0.0, 0.0], [0.0, 0.0, 1000.0], 1000.0),
+    ] {
+        put(&mut e, a, [p[0], p[1], p[2], 5.0]);
+        put(&mut e, b, [q[0], q[1], q[2], 9.0]);
+        let d = f64::from(point3_distance(&e, a, b));
+        assert!(
+            (d - exact).abs() <= exact * 2f64.powi(-21),
+            "{p:?} {q:?} {d}"
+        );
+        // The order of the points does not matter.
+        assert_eq!(point3_distance(&e, a, b), point3_distance(&e, b, a));
+        // Bit for bit JIP's SSE sequence on this processor: `subps`, `mulps`, the two `haddps`
+        // as (x + y) + (z + 0), `rsqrtss`, `mulss` x2, `subss` from 3, `mulss` r, `mulss` 0.5,
+        // `mulss` by the sum (scalar SSE intrinsics, one rounding each).
+        #[cfg(target_arch = "x86_64")]
+        {
+            use std::arch::x86_64::*;
+            // SAFETY: SSE and SSE2 are part of every x86-64 processor.
+            let reference = unsafe {
+                let ss = |v: f32| _mm_set_ss(v);
+                let d = |i: usize| _mm_sub_ss(ss(p[i]), ss(q[i]));
+                let sq = |i: usize| _mm_mul_ss(d(i), d(i));
+                let s = _mm_add_ss(_mm_add_ss(sq(0), sq(1)), _mm_add_ss(sq(2), ss(0.0)));
+                let r = _mm_rsqrt_ss(s);
+                let x1 = _mm_mul_ss(_mm_mul_ss(s, r), r);
+                let x3 = _mm_mul_ss(_mm_mul_ss(_mm_sub_ss(ss(3.0), x1), r), ss(0.5));
+                _mm_cvtss_f32(_mm_mul_ss(s, x3))
+            };
+            assert_eq!(
+                point3_distance(&e, a, b).to_bits(),
+                reference.to_bits(),
+                "{p:?} {q:?}"
+            );
+        }
+    }
+}
+
+type MineLog = (Vec<Vec<u32>>, f32, Vec<Vec<u32>>, u32);
+
+thread_local! {
+    /// G127's entry point calls (words and the chance before), the chance it leaves; the roll's
+    /// calls and answer.
+    static MINE: std::cell::RefCell<MineLog> =
+        const { std::cell::RefCell::new((Vec::new(), 0.0, Vec::new(), 0)) };
+}
+
+/// G127: the chance 100 through entry point 4 with the actor and the mine's base (`+0x20`),
+/// then `GetRandomInt(GAME_RNG, 100)`: below the chance rounded to nearest-even (unsigned
+/// compare: a negative or NaN chance is huge) explodes.
+#[test]
+fn mine_explode_chance_rolls_as_jip() {
+    let mut e = jip(true, true);
+    e.register(APPLY_PERK_MODIFIERS, |e, a| {
+        MINE.with(|m| {
+            let mut m = m.borrow_mut();
+            m.0.push(vec![a[0], a[1], a[2], e.mem.u32(a[3])]);
+            e.mem.set_f32(a[3], m.1);
+        });
+        Ret::default()
+    });
+    e.register(GET_RANDOM_INT, |_, a| {
+        MINE.with(|m| {
+            let mut m = m.borrow_mut();
+            m.2.push(a.to_vec());
+            m.3.into_ret()
+        })
+    });
+    let mine = e.mem.alloc(0x100);
+    e.mem.set_u32(mine + 0x1c, 0x0500_0001);
+    e.mem.set_u32(mine + 0x20, 0x0500_0002);
+    e.mem.set_u32(mine + 0x24, 0x0500_0003);
+    let actor = 0x0300_1234;
+    // (the chance the entry point leaves, the roll, explodes)
+    for (chance, roll, explode) in [
+        (100.0f32, 99u32, 1u32),
+        (100.0, 100, 0),
+        (50.0, 49, 1),
+        (50.0, 50, 0),
+        (50.5, 50, 0),
+        (51.5, 51, 1),
+        (51.5, 52, 0),
+        (49.6, 49, 1),
+        (0.0, 0, 0),
+        (-1.0, 99, 1),
+        (f32::NAN, 99, 1),
+    ] {
+        MINE.with(|m| *m.borrow_mut() = (Vec::new(), chance, Vec::new(), roll));
+        assert_eq!(
+            e.site(MINE_EXPLODE_CHANCE.addr(), &[mine, actor]),
+            Some(explode),
+            "{chance} {roll}"
+        );
+        let (entry, _, rolls, _) = MINE.with(|m| m.take());
+        assert_eq!(entry, vec![vec![4, actor, 0x0500_0002, 100.0f32.to_bits()]]);
+        assert_eq!(rolls, vec![vec![0x011c_4180, 100]]);
+    }
+}
+
+/// G42: JIP's distance (300.0 until a command changes it).
+#[test]
+fn move_away_distance_is_jips_variable() {
+    let mut e = jip(true, false);
+    for slot in MOVE_AWAY_DISTANCE {
+        assert_eq!(e.site(slot.addr(), &[]), Some(300.0f32.to_bits()));
+    }
+    e.ext_free::<MoveAwayDistance>()
+        .0
+        .store(55.5f32.to_bits(), Ordering::Relaxed);
+    for slot in MOVE_AWAY_DISTANCE {
+        assert_eq!(e.site(slot.addr(), &[]), Some(55.5f32.to_bits()));
+    }
+}
+
+/// G42's distance is one for the run: an engine sharing the slots (a real thread's) reads what
+/// this one wrote through the handler, and the word it holds, read and written on a second OS
+/// thread (an engine itself stays on its thread), is the one this engine's handler reads.
+#[test]
+fn move_away_distance_is_run_wide() {
+    let mut e = jip(true, false);
+    let mut other = engine();
+    e.share_slots_for_test(&mut other);
+    e.ext_free::<MoveAwayDistance>()
+        .0
+        .store(77.0f32.to_bits(), Ordering::Relaxed);
+    assert_eq!(move_away_distance(&mut other, &[]), Some(77.0f32.to_bits()));
+    let word = &other.ext_free::<MoveAwayDistance>().0;
+    let seen = std::thread::scope(|s| {
+        s.spawn(|| {
+            let seen = word.load(Ordering::Relaxed);
+            word.store(88.0f32.to_bits(), Ordering::Relaxed);
+            seen
+        })
+        .join()
+        .unwrap()
+    });
+    assert_eq!(seen, 77.0f32.to_bits());
+    assert_eq!(move_away_distance(&mut e, &[]), Some(88.0f32.to_bits()));
+}
+
+/// G124 and G125 read `s_disableHitEffects` (byte): 0 gives the exe's image space and shake;
+/// ToggleHitEffects 0 (bit 1) turns both off; ToggleHitEffects 1 keeps only bit 2.
+#[test]
+fn hit_effect_patches_follow_the_word() {
+    let mut e = jip(true, false);
+    let explosion = 0x0300_0040;
+    assert_eq!(e.site(EXPLOSION_IN_FACE.addr(), &[]), None);
+    assert_eq!(e.site(EXPLOSION_SHAKE.addr(), &[explosion]), Some(0));
+    super::super::gp::toggle_hit_effects(&mut e, false);
+    assert_eq!(super::super::gp::disable_hit_effects(&mut e), 1);
+    assert_eq!(e.site(EXPLOSION_IN_FACE.addr(), &[]), Some(0));
+    assert_eq!(e.site(EXPLOSION_SHAKE.addr(), &[explosion]), Some(1));
+    super::super::gp::toggle_hit_effects(&mut e, true);
+    assert_eq!(e.site(EXPLOSION_IN_FACE.addr(), &[]), None);
+    assert_eq!(e.site(EXPLOSION_SHAKE.addr(), &[explosion]), Some(0));
+}
+
+/// With immortal mode 2 (`ToggleImmortalMode 2`: bit 2), the hit effects stay off whatever
+/// ToggleHitEffects does: `ToggleHitEffects 0` gives 3 (`|= 1`), `ToggleHitEffects 1` gives 2
+/// (`&= 2`), and G124 / G125 answer off for both.
+#[test]
+fn hit_effects_stay_off_in_immortal_mode_two() {
+    use super::super::gp::{disable_hit_effects, toggle_hit_effects, TOGGLE_IMMORTAL_MODE};
+    use crate::commands::test_support::{call_on, engine, n};
+    let mut e = engine();
+    e.map(0x011e_0000, 0x1000);
+    let explosion = 0x0300_0040;
+    call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[n(2)]);
+    assert_eq!(disable_hit_effects(&mut e), 2);
+    for (on, word) in [(false, 3), (true, 2), (true, 2), (false, 3)] {
+        toggle_hit_effects(&mut e, on);
+        assert_eq!(disable_hit_effects(&mut e), word, "{on}");
+        assert_eq!(e.site(EXPLOSION_IN_FACE.addr(), &[]), Some(0), "{on}");
+        assert_eq!(
+            e.site(EXPLOSION_SHAKE.addr(), &[explosion]),
+            Some(1),
+            "{on}"
+        );
+    }
+}
+
+// ---- part 4: H16 (a combat controller's excluded actions) ----
+
+const PART4_JIP: [SiteSlot; 7] = [
+    CONTROLLER_SIZE[0],
+    CONTROLLER_SIZE[1],
+    CONTROLLER_SIZE[2],
+    CONTROLLER_SIZE[3],
+    CONTROLLER_CLEARED,
+    INIT_COMBAT_CONTROLLER,
+    COMBAT_ACTION_APPLICABLE,
+];
+
+/// H16's seams at JIP's addresses (`InitJIPHooks`: the four `SafeWrite8(.., 0x8C)`, the
+/// `SafeWrite8(0x97D55F, 0x40)`, the two `WriteRelCall`s) and its values pinned to JIP's
+/// literals; each handler answers at its address.
+#[test]
+fn part4_seams_at_jip_addresses() {
+    assert_eq!(
+        PART4_JIP.map(|slot| slot.addr()),
+        [
+            0x0067_0c30,
+            0x0099_21c2,
+            0x0099_2352,
+            0x0099_2416,
+            0x0097_d55f,
+            0x0097_d71f,
+            0x0099_51b3
+        ]
+    );
+    // `push 0x188` with its low byte 0x8C; `push 0x3c` written as 0x40.
+    assert_eq!(CONTROLLER_SIZE_JIP, (0x188 & !0xff) | 0x8c);
+    assert_eq!(CONTROLLER_CLEARED_JIP, 0x40);
+    assert_eq!(0x14c + CONTROLLER_CLEARED_JIP, CONTROLLER_SIZE_JIP);
+    assert_eq!(
+        [EXCLUDED_ACTIONS, EXCLUDED_ACTIONS_BITS, PLANNER_CONTROLLER],
+        [0x188, 0x07ff_ffff, 0x2058]
+    );
+    assert_eq!([ACTION_KIND, GET_COMBAT_CONTROLLER], [0x24, 0x428]);
+    let mut e = jip(true, false);
+    for slot in CONTROLLER_SIZE {
+        assert_eq!(e.site(slot.addr(), &[]), Some(0x18c), "{:x}", slot.addr());
+    }
+    assert_eq!(e.site(0x0097_d55f, &[]), Some(0x40));
+    let controller = e.mem.alloc(0x18c);
+    e.mem.set_u32(controller + 0x188, 0xdead_beef);
+    assert_eq!(e.site(0x0097_d71f, &[0x0300_0000, controller]), None);
+    assert_eq!(e.mem.u32(controller + 0x188), 0);
+    let (planner, action) = planner_with(&mut e, 1 << 5, 5);
+    assert_eq!(e.site(0x0099_51b3, &[planner, action]), Some(0));
+}
+
+/// Not installed: no H16 handler. Installed (JIP's own): all seven, row on or off.
+#[test]
+fn part4_registered_by_their_bits() {
+    let e = jip(false, true);
+    for slot in PART4_JIP {
+        assert!(e.site_owners(slot.addr()).is_empty(), "{:x}", slot.addr());
+    }
+    for row in [false, true] {
+        let e = jip(true, row);
+        for slot in PART4_JIP {
+            assert_eq!(
+                e.site_owners(slot.addr()),
+                [Owner::Jip],
+                "{:x} {row}",
+                slot.addr()
+            );
+        }
+    }
+}
+
+/// A planner whose controller (`+0x2058`) has the excluded actions word `mask`, and a step of
+/// kind `kind` (`+0x24`); the words around both set, so a wider or shifted read would see them.
+fn planner_with(e: &mut Engine, mask: u32, kind: u32) -> (u32, u32) {
+    let controller = e.mem.alloc(0x190);
+    e.mem.set_u32(controller + 0x184, 0xffff_ffff);
+    e.mem.set_u32(controller + 0x188, mask);
+    e.mem.set_u32(controller + 0x18c, 0xffff_ffff);
+    let planner = e.mem.alloc(0x2060);
+    e.mem.set_u32(planner + 0x2054, 0x0500_0000);
+    e.mem.set_u32(planner + 0x2058, controller);
+    e.mem.set_u32(planner + 0x205c, 0x0500_0000);
+    let action = e.mem.alloc(0x30);
+    e.mem.set_u32(action + 0x20, 0xffff_ffff);
+    e.mem.set_u32(action + 0x24, kind);
+    e.mem.set_u32(action + 0x28, 0xffff_ffff);
+    (planner, action)
+}
+
+/// H16's applicable test: a step whose kind's bit (the kind taken mod 32, as `bt` with a
+/// register does) is set is not applicable (0); otherwise no answer (the exe's test runs).
+#[test]
+fn combat_action_applicable_tests_the_kinds_bit() {
+    let mut e = jip(true, false);
+    // (mask, kind, excluded)
+    for (mask, kind, excluded) in [
+        (0, 0, false),
+        (1, 0, true),
+        (1, 1, false),
+        (1 << 9, 9, true),
+        (!(1u32 << 9), 9, false),
+        (1 << 31, 31, true),
+        (1 << 1, 33, true),
+        (1 << 1, 0xffff_ffe1, true),
+        (1, 32, true),
+        (0x07ff_ffff, 27, false),
+    ] {
+        let (planner, action) = planner_with(&mut e, mask, kind);
+        assert_eq!(
+            combat_action_applicable(&mut e, &[planner, action]),
+            excluded.then_some(0),
+            "{mask:x} {kind}"
+        );
+    }
+}
+
+/// `SetExcludedCombatActions`' change: the low 27 bits kept for the actor (0 erases it) and
+/// written to its current controller (slot +0x428) when it has one; `GetExcludedCombatActions`
+/// reads 0 for a reference with no entry.
+#[test]
+fn excluded_actions_set_for_an_actor_and_its_controller() {
+    const CONTROLLER_STUB: u32 = 0x0700_0428;
+    let mut e = jip(true, false);
+    let vtable = e.mem.alloc(0x500);
+    e.mem.set_u32(vtable + 0x428, CONTROLLER_STUB);
+    let controller = e.mem.alloc(0x18c);
+    e.register_double(CONTROLLER_STUB, move |e, a| {
+        // The actor's word +4 says whether it is in combat.
+        if e.mem.u32(a[0] + 4) != 0 {
+            controller.into_ret()
+        } else {
+            0u32.into_ret()
+        }
+    });
+    let actor = e.mem.alloc(0x10);
+    e.mem.set_u32(actor, vtable);
+    let other = e.mem.alloc(0x10);
+    e.mem.set_u32(other, vtable);
+    assert_eq!(excluded_combat_actions(&mut e, actor), 0);
+    // Not in combat: the map only.
+    set_excluded_combat_actions(&mut e, actor, 0xf800_0005);
+    assert_eq!(excluded_combat_actions(&mut e, actor), 5);
+    assert_eq!(e.mem.u32(controller + 0x188), 0);
+    // In combat: the controller's word too; another actor is untouched.
+    e.mem.set_u32(actor + 4, 1);
+    set_excluded_combat_actions(&mut e, actor, 0x0400_0003);
+    assert_eq!(excluded_combat_actions(&mut e, actor), 0x0400_0003);
+    assert_eq!(excluded_combat_actions(&mut e, other), 0);
+    assert_eq!(e.mem.u32(controller + 0x188), 0x0400_0003);
+    // Only bits above 27: the entry goes and the controller's word is 0.
+    set_excluded_combat_actions(&mut e, actor, 0x0800_0000);
+    assert_eq!(excluded_combat_actions(&mut e, actor), 0);
+    assert_eq!(e.mem.u32(controller + 0x188), 0);
+    assert!(e
+        .ext_free::<ExcludedCombatActions>()
+        .0
+        .read()
+        .unwrap()
+        .is_empty());
+}
+
+/// The constructor's hook: the controller's word is the attacker's entry (0 without one, over
+/// whatever the word held); no answer, so the package data call follows.
+#[test]
+fn init_combat_controller_takes_the_attackers_entry() {
+    let mut e = jip(true, false);
+    let (attacker, other) = (0x0300_0010, 0x0300_0020);
+    e.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .insert(attacker, 0x24);
+    for (who, word) in [(attacker, 0x24), (other, 0), (0, 0)] {
+        let controller = e.mem.alloc(0x190);
+        e.mem.set_u32(controller + 0x184, 0x5a5a_5a5a);
+        e.mem.set_u32(controller + 0x188, 0xdead_beef);
+        e.mem.set_u32(controller + 0x18c, 0x5a5a_5a5a);
+        assert_eq!(init_combat_controller(&mut e, &[who, controller]), None);
+        assert_eq!(
+            [
+                e.mem.u32(controller + 0x184),
+                e.mem.u32(controller + 0x188),
+                e.mem.u32(controller + 0x18c)
+            ],
+            [0x5a5a_5a5a, word, 0x5a5a_5a5a],
+            "{who:x}"
+        );
+    }
+}
+
+/// Before a load the map is emptied (JIP's housekeeping), with JIP installed; not installed, the
+/// housekeeping leaves it alone (it never makes or takes the map then: a load comes after the
+/// threads start, when a lock-free slot may no longer be made).
+#[test]
+fn excluded_actions_cleared_before_a_load() {
+    let mut off = jip(false, false);
+    off.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .insert(0x0300_0010, 1);
+    pre_load(&mut off);
+    assert_eq!(excluded_combat_actions(&mut off, 0x0300_0010), 1);
+    let mut e = jip(true, false);
+    e.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .extend([(0x0300_0010, 1), (0x0300_0020, 2)]);
+    pre_load(&mut e);
+    assert_eq!(excluded_combat_actions(&mut e, 0x0300_0010), 0);
+    assert!(e
+        .ext_free::<ExcludedCombatActions>()
+        .0
+        .read()
+        .unwrap()
+        .is_empty());
+    let mut e = jip(false, false);
+    pre_load(&mut e);
+}
+
+/// The map is one for the run: an engine sharing the slots (a real thread's) reads what this one
+/// set, and a change made on a second OS thread is what this engine's handler reads.
+#[test]
+fn excluded_actions_are_run_wide() {
+    let mut e = jip(true, false);
+    let mut other = engine();
+    e.share_slots_for_test(&mut other);
+    e.ext_free::<ExcludedCombatActions>()
+        .0
+        .write()
+        .unwrap()
+        .insert(0x0300_0010, 6);
+    assert_eq!(excluded_combat_actions(&mut other, 0x0300_0010), 6);
+    let map = &other.ext_free::<ExcludedCombatActions>().0;
+    std::thread::scope(|s| {
+        s.spawn(|| {
+            map.write().unwrap().insert(0x0300_0010, 9);
+        })
+        .join()
+        .unwrap()
+    });
+    let controller = e.mem.alloc(0x18c);
+    assert_eq!(
+        init_combat_controller(&mut e, &[0x0300_0010, controller]),
+        None
+    );
+    assert_eq!(e.mem.u32(controller + 0x188), 9);
+}

@@ -742,12 +742,12 @@ pub fn vats_set_mode(e: &mut Engine, this: Ptr<Vats>, mode: i32, force: u8) {
                 e.set(this, Vats::pUnEquipExtra, Ptr::NULL);
                 let interface = e.call(INTERFACE_OBJECT_GETTER, &args![]).u32();
                 e.call(INTERFACE_MARK_DIRTY, &args![interface]);
-                create_light_when_missing(e);
+                create_light_when_missing(e, 0x009c_6d3d);
             }
             3 => {
                 e.set(this, Vats::pUnEquipWeapon, Ptr::NULL);
                 e.set(this, Vats::pUnEquipExtra, Ptr::NULL);
-                create_light_when_missing(e);
+                create_light_when_missing(e, 0x009c_6cb6);
             }
             4 => {
                 e.set(this, Vats::pUnEquipWeapon, Ptr::NULL);
@@ -812,10 +812,18 @@ pub fn vats_set_mode(e: &mut Engine, this: Ptr<Vats>, mode: i32, force: u8) {
 }
 
 /// The light creation `VATS::SetMode` does for the modes 2 and 3: when the `VATS` object holds no
-/// light, a 0xfc-byte light is allocated and constructed and handed to `SetVATSLight`.
-fn create_light_when_missing(e: &mut Engine) {
+/// light, a 0xfc-byte light is allocated and constructed and handed to `SetVATSLight`. `site`
+/// is the size's place (`0x9C6D3D` in mode 2, `0x9C6CB6` in mode 3): JIP's H03 (its own;
+/// group GL's row and handler) allocates every point light at 0x110 bytes there; the seam
+/// answers the size (no words). One load while JIP is not installed.
+fn create_light_when_missing(e: &mut Engine, site: u32) {
     if e.call(GET_VATS_LIGHT, &args![VATS_SINGLETON]).u32() == 0 {
-        let block = e.call(NI_ALLOCATE, &args![0xfcu32]).u32();
+        let size = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            e.site(site, &[]).unwrap_or(0xfc)
+        } else {
+            0xfc
+        };
+        let block = e.call(NI_ALLOCATE, &args![size]).u32();
         let light = if block != 0 {
             e.call(LIGHT_CONSTRUCTOR, &args![block]).u32()
         } else {
@@ -4481,6 +4489,80 @@ mod tests {
         assert_eq!(calls(&e, NI_ALLOCATE), vec![vec![0xfc]]);
         assert_eq!(calls(&e, LIGHT_CONSTRUCTOR), vec![vec![0x7000]]);
         assert_eq!(calls(&e, ADD_LIGHT), vec![vec![scene_node, 0x7001, 1]]);
+    }
+
+    thread_local! {
+        /// H03's asks: the site and its words.
+        static H03_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_h03<const SITE: u32>(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H03_ASKED.with(|s| s.borrow_mut().push((SITE, a.to_vec())));
+        Some(0x110)
+    }
+
+    /// JIP's H03 seams (its own; group GL's row and handler, tested here with a test handler) at
+    /// `0x9C6D3D` (mode 2) and `0x9C6CB6` (mode 3): not asked while JIP is not installed (the
+    /// exe's 0xfc bytes); asked with JIP installed (whatever the fixes row), each mode at its own
+    /// address and with no words, the answer is the light's size; not asked when the light
+    /// exists.
+    #[test]
+    fn h03_seams_size_the_vats_light() {
+        use engine_core::extend::jip_patches;
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            for (mode, site, exists) in [
+                (2, 0x009c_6d3d, false),
+                (3, 0x009c_6cb6, false),
+                (2, 0x009c_6d3d, true),
+                (3, 0x009c_6cb6, true),
+            ] {
+                let mut e = engine();
+                let scene_node = object_with_slots(&mut e, &[(0xdc, 0)]);
+                stub(&mut e, INTERFACE_OBJECT_GETTER, 0x55);
+                stub(&mut e, INTERFACE_MARK_DIRTY, 0);
+                stub(&mut e, GET_VATS_LIGHT, if exists { 0x900 } else { 0 });
+                stub(&mut e, NI_ALLOCATE, 0x7000);
+                stub(&mut e, LIGHT_CONSTRUCTOR, 0x7001);
+                stub(&mut e, SCENE_NODE_BY_INDEX, scene_node);
+                stub(&mut e, SMART_POINTER_DIFFERS, 0);
+                stub(&mut e, SMART_POINTER_ASSIGN, 0);
+                stub(&mut e, ADD_LIGHT, 0x8000);
+                e.on_site_for_test(0x009c_6d3d, at_h03::<0x009c_6d3d>);
+                e.on_site_for_test(0x009c_6cb6, at_h03::<0x009c_6cb6>);
+                e.set_jip_patches(word);
+                H03_ASKED.with(|s| s.borrow_mut().clear());
+                let this = new_vats(&mut e);
+                e.call_log = Some(vec![]);
+                vats_set_mode(&mut e, this, mode, 0);
+                let asked = H03_ASKED.with(|s| s.take());
+                if exists {
+                    assert!(calls(&e, NI_ALLOCATE).is_empty());
+                    assert!(asked.is_empty(), "{word:x} {mode}");
+                    continue;
+                }
+                assert_eq!(
+                    calls(&e, NI_ALLOCATE),
+                    vec![vec![if installed { 0x110 } else { 0xfc }]],
+                    "{word:x} {mode}"
+                );
+                assert_eq!(
+                    asked,
+                    if installed {
+                        vec![(site, vec![])]
+                    } else {
+                        vec![]
+                    },
+                    "{word:x} {mode}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -88,7 +88,6 @@ pub mod d3d9backend;
 pub mod d3d9device;
 pub mod d3d9draw;
 pub mod d3d9query;
-#[cfg(windows)]
 pub mod d3d9real;
 pub mod d3d9resource;
 pub mod d3dx;
@@ -102,6 +101,7 @@ pub mod dsound;
 pub mod files;
 pub mod ini;
 pub mod library;
+pub mod machine_table;
 pub mod mixer;
 pub mod mmio;
 pub mod mod_files;

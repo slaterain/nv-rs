@@ -184,8 +184,10 @@ fn get_form_count_type(e: &mut Engine, w: &[u32]) -> Ret {
 //
 // Every name goes through the core's seam (`engine_core::mod_files`): a mod's writes are kept in
 // the port's own folder beside the saves, never the game's folder; reads look there first, then
-// the game's Data. A name the seam refuses (outside the game's folder) answers as a file Windows
-// could not open.
+// the game's Data. A `..` takes off the part before it (`..\NVSE\Plugins\x.ini` from the config
+// folder is Data's). A name the seam refuses (a `..` past the game's folder, another drive, a
+// device) reads as a file that is not there and is never written (result 0, as JIP answers for a
+// file Windows could not open).
 
 /// The text `"data\\"` the exe holds at `010A4828` (`GetFileArchived`'s `StrBeginsCI`), and the
 /// folder JIP puts before `FileExists`'s name.

@@ -167,6 +167,7 @@ Each also has a `[nv-rs Fixes]` key in `Fallout.ini` (`bUncap` ... `bNVSEListGua
 | `NV_STRIP_LOD_WATER` | No distant water under the Strip (patch data) | `host/patch_data.rs` |
 | `NV_DIRECT_FILES` | Direct file access | `host/direct_files.rs` |
 | `NV_COSAVE_KEEP` | Co-save keeps other plugins | `host/fixes.rs` (flag read by `nvse`) |
+| `NV_JIP_INSTALLED` | JIP LN NVSE built in, for testing (off in every preset; in play, Fallout.ini `[nv-rs Fixes] bJIPInstalled=1`; the variable makes a test run) | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_COSAVE_FIX` | JIP co-save fixes | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_VANILLA_CMDS` | JIP vanilla commands | `host/fixes.rs` (flag read by `jip`) |
 | `NV_JIP_GAME_PATCHES` | JIP game patches | `host/fixes.rs` (flag read by `jip`) |

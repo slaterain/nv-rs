@@ -34,6 +34,8 @@ pub mod patch_data;
 pub mod phys_blend;
 pub mod player_move;
 pub mod save_out;
+#[cfg(test)]
+mod start_up_tests;
 pub mod thread_races;
 pub mod topic_index;
 pub mod uncap;
@@ -77,6 +79,51 @@ impl Drop for Host {
     }
 }
 
+/// The rows and the built-in extenders, in their order (`start_up_tests` pins it): the rows first,
+/// since a row may set a flag an extender reads as it installs (`NV_JIP_INSTALLED` for JIP), and the
+/// extenders' wraps go over what the rows registered.
+pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Choice) {
+    // What differs from the exe in this run, registered over the translations (docs/FIXES.md).
+    fixes::install(engine, choice);
+    // zlib's inflate on the host decoder (unless `NV_NATIVE_INFLATE=0`): the same bytes out, in every
+    // preset, since it changes no behaviour, only the time a compressed file takes.
+    if native_inflate::wanted() {
+        native_inflate::install(engine);
+    }
+    // Full screen asked is drawn in the borderless window over the monitor, in every preset:
+    // nv-rs offers no exclusive full-screen device yet ([`full_screen`]).
+    full_screen::install(engine);
+    // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
+    // registered. Vanilla content calls no extender opcode, and every change it makes to
+    // vanilla commands is a row.
+    nvse::install(engine);
+    // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, answering "not
+    // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
+    // `fixes::install` above) switched it on (`crates/jip`).
+    jip::install(engine);
+    // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
+    // jip_nvse.dll (`crates/uio`).
+    uio::install(engine);
+}
+
+/// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;
+/// `answers_installed`: it does): none when it is off as asked or on as asked. (With real threads
+/// JIP's own data no longer makes a thread wait: its aux variables and item data have their own
+/// locks, and xNVSE's string variables (which `AuxVarGetFltCond` reads its name from) theirs. A
+/// mod's event script run from another thread (JIP's actor, world and UI event hooks) still takes
+/// xNVSE's shared state and waits for the main thread a moment; docs/FIXES.md and the INI row say
+/// so, the log does not.)
+pub(crate) fn jip_start_lines(row_on: bool, answers_installed: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    if row_on && !answers_installed {
+        lines.push(
+            "JIP LN NVSE: its row is on but JIP installed before reading it: it answers \"not installed\""
+                .to_string(),
+        );
+    }
+    lines
+}
+
 impl Host {
     /// Starts the game's code for the installation whose `Data` folder is
     /// `data`: its `FalloutNV.exe` ([`engine::exe::installed_exe`]),
@@ -114,28 +161,19 @@ impl Host {
         for (address, function) in play_patch::funcs() {
             engine.register(address, function);
         }
-        // What differs from the exe in this run, registered over the translations (docs/FIXES.md).
-        fixes::install(&mut engine, choice);
-        // zlib's inflate on the host decoder (unless `NV_NATIVE_INFLATE=0`): the same bytes out, in every
-        // preset, since it changes no behaviour, only the time a compressed file takes.
-        if native_inflate::wanted() {
-            native_inflate::install(&mut engine);
-        }
-        // Full screen asked is drawn in the borderless window over the monitor, in every preset:
-        // nv-rs offers no exclusive full-screen device yet ([`full_screen`]).
-        full_screen::install(&mut engine);
-        // xNVSE built in, in every preset (ADR-0016): after the rows, so its wraps wrap what is
-        // registered. Vanilla content calls no extender opcode, and every change it makes to
-        // vanilla commands is a row.
-        nvse::install(&mut engine);
-        // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, with no command built
-        // yet, and answering "not installed" until the commands mods call are in (`crates/jip`).
-        jip::install(&mut engine);
-        // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
-        // jip_nvse.dll (`crates/uio`).
-        uio::install(&mut engine);
+        install_rows_and_extenders(&mut engine, choice);
         eprintln!("{}", choice.describe());
+        let jip_state = {
+            let jip = engine.ext::<jip::Jip>();
+            (jip.row_on, jip.answers_installed)
+        };
+        for line in jip_start_lines(jip_state.0, jip_state.1) {
+            eprintln!("{line}");
+        }
         if let Some(note) = &choice.ini_note {
+            eprintln!("{note}");
+        }
+        if let Some(note) = fixes::play_run_taken_as_test(choice, |name| std::env::var(name).ok()) {
             eprintln!("{note}");
         }
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
@@ -478,6 +516,63 @@ pub fn adapter_table_path() -> Option<PathBuf> {
         })
 }
 
+/// The machine table's text. On Windows the file at [`adapter_table_path`], when it can be read.
+#[cfg(windows)]
+pub fn adapter_table_text() -> Option<String> {
+    std::fs::read_to_string(adapter_table_path()?).ok()
+}
+
+/// The machine table's text. On Linux and macOS the file `NV_D3D9_ADAPTER` names when it is set
+/// (a test's table), else the table of this machine (`engine_platform::machine_table`), made once
+/// per run from what the system reports, with the game's Documents and AppData inside nv-rs's own
+/// folder ([`own_folder`], made here when missing). What could not be answered is said in the log.
+#[cfg(not(windows))]
+pub fn adapter_table_text() -> Option<String> {
+    if let Some(path) = std::env::var_os("NV_D3D9_ADAPTER") {
+        return std::fs::read_to_string(path).ok();
+    }
+    static TABLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let own = own_folder();
+        if let Ok(own) = &own {
+            for folder in engine_platform::machine_table::game_folders(own) {
+                if let Err(why) = std::fs::create_dir_all(&folder) {
+                    eprintln!("machine table: {}: {why}", folder.display());
+                }
+            }
+        }
+        let (table, problems) = engine_platform::machine_table::this_machine(own);
+        for line in problems {
+            eprintln!("{line}");
+        }
+        table
+    });
+    Some(table.clone())
+}
+
+/// nv-rs's own folder on Linux and macOS (its saves, settings and the game's Documents and
+/// AppData): Linux `$XDG_DATA_HOME/nv-rs` (a full path only), else `~/.local/share/nv-rs`; macOS
+/// `~/Library/Application Support/nv-rs`. The same rule as `game_folders::own_folder` (#630), which
+/// takes this place when it is merged.
+#[cfg(not(windows))]
+pub fn own_folder() -> Result<PathBuf, String> {
+    let full = |name: &str| {
+        std::env::var_os(name)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    let home = full("HOME").ok_or("HOME is not set to a full path")?;
+    if cfg!(target_os = "macos") {
+        return Ok(home
+            .join("Library")
+            .join("Application Support")
+            .join("nv-rs"));
+    }
+    Ok(full("XDG_DATA_HOME")
+        .unwrap_or_else(|| home.join(".local").join("share"))
+        .join("nv-rs"))
+}
+
 /// Where the player's D3DX texture cache is: `NV_D3DX_CACHE`, else
 /// `%LOCALAPPDATA%\nv-rs\d3dx-cache` (made on this machine by `scripts/d3dx-texture-capture`
 /// from the player's own textures; it stays local).
@@ -517,7 +612,7 @@ pub fn wgpu_cache_path() -> Option<PathBuf> {
 /// renderer's start-up asks about the adapter. Without the file nothing is loaded: the first
 /// Direct3D 9 query stops that stage and its message says how to capture the table.
 fn load_adapter_table(e: &mut Engine) {
-    if let Some(text) = adapter_table_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+    if let Some(text) = adapter_table_text() {
         engine_platform::d3d9::load_adapter_table(e, &text);
     }
     if let Some(dir) = texture_cache_path() {

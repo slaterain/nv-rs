@@ -18,6 +18,15 @@
 //! Locking: the calls reach the platform layer's state (`Kernel::platform`), which with real
 //! threads other threads change under the kernel lock; each wrapper here holds it
 //! ([`crate::real_threads::kernel_guard`]) for the call. The calls make no game call.
+//!
+//! The lock is held across the call's disk work too (the folder made and checked, the `.part`
+//! written and renamed, a kept file read), on purpose (REVIEW-629b, 2026-11-16, weighed): a
+//! write's disk copy and its copy in the run's memory (`written`) must change together, so two
+//! writes of one file can never leave the disk with one and this session with the other, and a
+//! read never sees a file between its rename and its memory copy. Narrowing the lock to the state
+//! alone would need an order per file to keep that true, which is not simple. The cost is one
+//! small file write per mod command that writes (an INI setting changed), on the thread that runs
+//! the script, while other threads' platform calls wait for it.
 
 use crate::Engine;
 
@@ -33,13 +42,15 @@ pub const ERROR_ALREADY_EXISTS: u32 = 183;
 pub struct ModFileCalls {
     /// The file's bytes: written in this run, else the port's folder's copy, else the game's.
     /// `ERROR_FILE_NOT_FOUND` (or `_PATH_NOT_FOUND`) when there is none; any other error when a
-    /// copy is there but cannot be read (a later place is not looked at then).
+    /// copy is there but cannot be read (a later place is not looked at then);
+    /// `ERROR_ACCESS_DENIED` for a name outside the game's folder or a device, which is never
+    /// read.
     pub read: fn(&Engine, &[u8]) -> Result<Vec<u8>, u32>,
     /// Whether the file exists in one of [`ModFileCalls::read`]'s places (not a folder), from
-    /// the file system's attributes: its bytes are not read.
+    /// the file system's attributes: its bytes are not read. False for a name `read` refuses.
     pub exists: fn(&Engine, &[u8]) -> bool,
     /// Whether the folder exists (made in this run, in the port's folder, or the game's); one
-    /// trailing separator is allowed, as Windows allows it.
+    /// trailing separator is allowed, as Windows allows it. False for a name `read` refuses.
     pub directory_exists: fn(&Engine, &[u8]) -> bool,
     /// `CreateDirectoryA` for a mod's folder (one trailing separator allowed):
     /// `ERROR_ALREADY_EXISTS` when it exists, `ERROR_PATH_NOT_FOUND` when its parent exists
@@ -48,8 +59,11 @@ pub struct ModFileCalls {
     /// The file written whole (the port's folder and the run): `ERROR_PATH_NOT_FOUND` when its
     /// folder exists nowhere, `ERROR_ACCESS_DENIED` for a folder, a name outside the game's
     /// folder or a port folder that refused the write.
-    pub write: fn(&mut Engine, &[u8], &[u8]) -> Result<(), u32>,
+    pub write: WriteCall,
 }
+
+/// [`ModFileCalls::write`]'s type: the engine, the name, the bytes; Windows' error code.
+pub type WriteCall = fn(&mut Engine, &[u8], &[u8]) -> Result<(), u32>;
 
 static CALLS: std::sync::OnceLock<&'static ModFileCalls> = std::sync::OnceLock::new();
 
@@ -109,17 +123,38 @@ pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> bool {
 }
 
 /// `GetPrivateProfileStringA(section, key, ..., name)` over [`read`]: the value as Windows reads
-/// it ([`ini_value`]), `None` when the file, the section or the key is not there (or the file
-/// cannot be read, when Windows also answers the default).
+/// it ([`ini_value`]; a UTF-16 LE file as text, [`text`]), `None` when the file, the section or
+/// the key is not there (or the file cannot be read, when Windows also answers the default).
+///
+/// A name without a folder part (`MCM.ini`) is taken from the game's folder, where Windows' own
+/// profile calls take it from the Windows folder (`ini.rs`'s `profile_path`, measured): a mod's
+/// file never belongs in the Windows folder, and the port keeps every mod file under the game's
+/// name rules so a write lands in the port's folder; no extender command passes a bare name today
+/// (MCM and JIP LN add `Data\Config\`).
 pub fn profile_string(e: &Engine, name: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    ini_value(&read(e, name)?, section, key)
+    let file = text::Decoded::of(&read(e, name)?);
+    let value = ini_value(&file.text, &file.arg(section), &file.arg(key))?;
+    Some(file.answer(&value))
+}
+
+/// A file the profile writes leave alone because its encoding was not measured (see
+/// [`text`]): one line in the log, and `ERROR_NOT_SUPPORTED`.
+fn unmodelled(name: &[u8]) -> u32 {
+    println!(
+        "mod files: {} is not a text file Windows' profile calls were measured on (a 0 byte, not \
+         UTF-16 LE with its mark); not written, so it stays as it is",
+        String::from_utf8_lossy(name)
+    );
+    ERROR_NOT_SUPPORTED
 }
 
 /// `WritePrivateProfileStringA(section, key, value, name)` over [`read_or_error`] and
 /// [`write_or_error`]: the file as Windows rewrites it ([`written_profile`]); a missing file
 /// starts empty. A file that is there but cannot be read is not written (so a kept file is never
 /// replaced by one made from nothing), with one line in the log; the error comes back, as it
-/// does when the folder exists nowhere or the write fails.
+/// does when the folder exists nowhere or the write fails. A UTF-16 LE file is changed as text
+/// and written back as UTF-16 LE; a file with a 0 byte that is not one is not written,
+/// `ERROR_NOT_SUPPORTED` ([`text`]). A name without a folder part: as [`profile_string`] says.
 pub fn write_profile_string(
     e: &mut Engine,
     name: &[u8],
@@ -138,8 +173,21 @@ pub fn write_profile_string(
             return Err(code);
         }
     };
-    let new = written_profile(&old, section, key, value);
-    write_or_error(e, name, &new)
+    let file = text::Decoded::of(&old);
+    if !file.writable {
+        return Err(unmodelled(name));
+    }
+    let mut new = written_profile(
+        &file.text,
+        &file.arg(section),
+        &file.arg(key),
+        &file.arg(value),
+    );
+    // A UTF-16 file that is only its mark gets a line end first (ini7 `bom only`).
+    if file.mark_only() {
+        new.splice(0..0, CRLF.iter().copied());
+    }
+    write_or_error(e, name, &file.encode(&new))
 }
 
 /// ASCII white space taken off both ends.
@@ -161,11 +209,15 @@ pub fn trim_spaces(s: &[u8]) -> &[u8] {
 /// `GetPrivateProfileStringA` finds it: only in the first section of that name, as Windows reads
 /// a file with a repeated section name (measured on scratch files, 2026-11-09; the platform's
 /// `ini.rs` tests hold the answers). A comment after a value is part of it (`350\t;note` reads
-/// `350\t;note`, measured 2026-11-16).
+/// `350\t;note`, measured 2026-11-16). A line ends at LF or at CR, alone or together
+/// (`[A]\rx=1\ry=2\r` reads y as 2: `jip-cmds/files-measure/ini4-2026-11-16.txt`, `STRING cr
+/// only`; `ini5-...`, `SECTION cr cr lf` and `lf cr`).
 pub fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let section = trim_spaces(section);
+    // The arguments' own spaces go too (` A `/` x ` find `[A]` and `x`:
+    // `jip-cmds/files-measure/ini6-2026-11-16.txt`, `STRING spaced ...`).
+    let (section, key) = (trim_spaces(section), trim_spaces(key));
     let mut inside = false;
-    for line in text.split(|&b| b == b'\n') {
+    for line in text.split(|&b| b == b'\n' || b == b'\r') {
         let line = trim_spaces(line);
         if let Some(rest) = line.strip_prefix(b"[") {
             // The first section of the name ends here: Windows reads no later one.
@@ -200,18 +252,48 @@ pub fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
 /// What Windows ends every line it writes with, and a last line that had none (not blank).
 const CRLF: &[u8] = b"\r\n";
 
-/// A byte of a blank last line (one with no line end): a write drops such a line (measured: a
-/// space, a tab, a backspace; a lone CR is kept).
+/// A byte a write trims off the end of the file before it splits it into lines (measured: a
+/// space, a tab, a backspace; a CR is kept). So a last line with no end loses its trailing
+/// blanks, and is dropped when nothing else is left.
 fn blank(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | 0x08)
+}
+
+/// `text` as Windows' profile writer splits it into lines: each line's bytes and the bytes that
+/// ended it. An LF ends a line (a CR right before it stays in the line, so a CR LF file is
+/// written back as it was); a CR followed by any other byte ends a line too; a CR at the very
+/// end does not (`ini-measure/ini-cr-2026-11-16.txt`: `[A]\rx=1\ry=2\r` with x=5 is
+/// `[A]\rx=5\ry=2\r\r\n`; `jip-cmds/files-measure/ini4-2026-11-16.txt` and `ini5-...`, the same
+/// lines through Windows' other profile writes; `x=1\r\r\ny=2` and `\n\ry=2` keep the extra line).
+fn profile_lines(text: &[u8]) -> Vec<(&[u8], &[u8])> {
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (i, &b) in text.iter().enumerate() {
+        let ends = match b {
+            b'\n' => true,
+            b'\r' => text.get(i + 1).is_some_and(|&next| next != b'\n'),
+            _ => false,
+        };
+        if ends {
+            lines.push((&text[start..i], &text[i..=i]));
+            start = i + 1;
+        }
+    }
+    if start < text.len() {
+        lines.push((&text[start..], &[][..]));
+    }
+    lines
 }
 
 /// The text of an INI file after `WritePrivateProfileStringA(section, key, value)`, as Windows
 /// writes it (measured on scratch files, 2026-11-16, `build43-scratch/measure/mcm/ini-measure`,
 /// `ini-2026-11-16.txt` and `ini2-2026-11-16.txt`):
-/// - lines end at LF; each line the file had keeps its bytes and its end (an LF-only file stays
-///   so); a last line with no end gets CR LF, unless it is blank (spaces, tabs, backspaces), when
-///   it is dropped (a new file MCM made as one backspace byte becomes the section alone);
+/// - lines end at LF, or at a CR not followed by LF ([`profile_lines`]); each line the file had
+///   keeps its bytes and its end (an LF-only or CR-only file stays so); spaces, tabs and
+///   backspaces at the very end of the file are dropped first, and a last line with no end then
+///   gets CR LF (a new file MCM made as one backspace byte becomes the section alone; `x=1  `
+///   becomes `x=1` CR LF; `x=1\r ` becomes `x=1\r` CR LF: `ini-measure/ini-cr-2026-11-16.txt`,
+///   and `jip-cmds/files-measure/ini5-2026-11-16.txt`, the `trailing spaces no eol` cases);
 /// - the section is the first heading (`[name]`, the text up to the first `]`) whose name matches
 ///   without case or surrounding spaces; only that one is looked in;
 /// - in it, the first line `key=...` whose key matches the same way (lines starting with `;` are
@@ -220,27 +302,12 @@ fn blank(b: u8) -> bool {
 /// - a new key goes right after the section's last key line (after its heading when it has none),
 ///   before comments, other lines and blank lines, as `key=value` CR LF;
 /// - a new section goes at the end, `[section]` CR LF `key=value` CR LF, with no blank line;
-/// - names and the value are written as given.
+/// - names are written without the spaces around them, the value as given.
 pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> Vec<u8> {
-    let mut lines: Vec<(&[u8], bool)> = Vec::new();
-    let mut rest = old;
-    while !rest.is_empty() {
-        match rest.iter().position(|&b| b == b'\n') {
-            Some(at) => {
-                lines.push((&rest[..at], true));
-                rest = &rest[at + 1..];
-            }
-            None => {
-                lines.push((rest, false));
-                rest = &[];
-            }
-        }
-    }
-    if let Some(&(last, false)) = lines.last() {
-        if last.iter().all(|&b| blank(b)) {
-            lines.pop();
-        }
-    }
+    // Blanks at the very end go before the text is split (`x=1\r ` is `x=1\r`, whose CR then
+    // ends no line).
+    let kept = old.iter().rposition(|&b| !blank(b)).map_or(0, |p| p + 1);
+    let lines = profile_lines(&old[..kept]);
     let (section_name, key_name) = (trim_spaces(section), trim_spaces(key));
     let mut heading: Option<usize> = None;
     let mut last_key: Option<usize> = None;
@@ -268,11 +335,13 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
             last_key = Some(i);
         }
     }
-    let new_line: Vec<u8> = [key, b"=", value].concat();
+    // A new key and a new heading are written without spaces around their names (` w `=v writes
+    // `w=v`, ` C ` writes `[C]`: `jip-cmds/files-measure/ini6-2026-11-16.txt`, `spaced ... new`).
+    let new_line: Vec<u8> = [key_name, b"=", value].concat();
     let mut out = Vec::with_capacity(old.len() + new_line.len() + section.len() + 8);
-    let push = |out: &mut Vec<u8>, line: &[u8], ended: bool| {
+    let push = |out: &mut Vec<u8>, line: &[u8], ended: &[u8]| {
         out.extend_from_slice(line);
-        out.extend_from_slice(if ended { b"\n" } else { CRLF });
+        out.extend_from_slice(if ended.is_empty() { CRLF } else { ended });
     };
     for (i, &(line, ended)) in lines.iter().enumerate() {
         match replace {
@@ -296,7 +365,7 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
     }
     if heading.is_none() {
         out.push(b'[');
-        out.extend_from_slice(section);
+        out.extend_from_slice(section_name);
         out.push(b']');
         out.extend_from_slice(CRLF);
         out.extend_from_slice(&new_line);
@@ -304,6 +373,9 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
     }
     out
 }
+
+#[path = "mod_files_text.rs"]
+pub mod text;
 
 #[path = "mod_files_sections.rs"]
 mod sections;

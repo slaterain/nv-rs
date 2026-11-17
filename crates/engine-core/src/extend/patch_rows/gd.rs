@@ -14,6 +14,13 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GD",
     },
+    // H16, TESPackage::CreatePackage 00670b90: the combat controller's size (`push 0x188`, JIP's
+    // byte 0x8C: 0x18C, room for its excluded actions word at +0x188).
+    Entry {
+        addr: 0x0067_0c30,
+        owners: JIP,
+        step: "3.9-GD",
+    },
     // G62, HighProcess::CalculateMoveMode 008daa20: its three run tests, replaced by JIP's
     // PackageSetRunHook.
     Entry {
@@ -21,10 +28,69 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GD",
     },
+    // H16, CombatController::CombatController 0097d3a0: the 0x3C bytes it zeroes at +0x14C (JIP's
+    // byte 0x40: the excluded actions word too).
+    Entry {
+        addr: 0x0097_d55f,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // H16, CombatController::CombatController 0097d3a0: the package data call `00980ae0`, JIP's
+    // InitCombatControllerHook (the attacker's excluded actions first).
+    Entry {
+        addr: 0x0097_d71f,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G101, the combat dialogue line 009839b0: a death response's speaker call, replaced by JIP's
+    // DeathResponseFixHook (the nearest living ally).
+    Entry {
+        addr: 0x0098_4156,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // H16, CombatManager::AddCombatant 00992110, AddGroupMember 009922b0 and
+    // AddPretendCombatant 009923d0: the combat controller's size (as at 0x670C30).
+    Entry {
+        addr: 0x0099_21c2,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    Entry {
+        addr: 0x0099_2352,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    Entry {
+        addr: 0x0099_2416,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // H16, CombatPlanner::GetNodeConnections 009950c0: a step's applicable test `009957c0`,
+    // JIP's CombatActionApplicableHook (an excluded action is not applicable).
+    Entry {
+        addr: 0x0099_51b3,
+        owners: JIP,
+        step: "3.9-GD",
+    },
     // G30, the explosion factory 009ac9c0: a projectile source's shooter and perk entry
     // (JIP's 53 bytes).
     Entry {
         addr: 0x009a_ca23,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G124, Explosion::Initialize 009acd60: the explosion-in-face image space, JIP's
+    // GetExplosionInFaceIMODHook (none while its hit effects are off).
+    Entry {
+        addr: 0x009a_cec6,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G125, Explosion::Initialize 009acd60: the screen shake, JIP's ExplosionScreenShakeHook
+    // (skipped while its hit effects are off).
+    Entry {
+        addr: 0x009a_d2c5,
         owners: JIP,
         step: "3.9-GD",
     },
@@ -49,10 +115,29 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GD",
     },
+    // G127, the mine trigger test 009c39e0: an actor's trigger, JIP's MineExplodeChanceHook (a
+    // roll of the explode chance through entry point 4).
+    Entry {
+        addr: 0x009c_3bd6,
+        owners: JIP,
+        step: "3.9-GD",
+    },
     // G91, CombatProcedureAttackRanged::Update 009d0a30: the reaction cooldown test, replaced by
     // JIP's ReactionCooldownCheckHook.
     Entry {
         addr: 0x009d_10f3,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G42, the backup package's point 009ed380: the move-away distance (JIP's variable).
+    Entry {
+        addr: 0x009e_d3f8,
+        owners: JIP,
+        step: "3.9-GD",
+    },
+    // G42, the backup package's point 009ed4b0: the move-away distance (JIP's variable).
+    Entry {
+        addr: 0x009e_d528,
         owners: JIP,
         step: "3.9-GD",
     },

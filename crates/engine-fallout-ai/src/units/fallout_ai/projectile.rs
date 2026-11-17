@@ -6069,6 +6069,8 @@ pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
     let radius_squared = (radius as f64 * radius as f64) as f32;
     let mut candidate = 0u32;
     let mut triggered = false;
+    // G127's roll triggered the mine (JIP jumps past the flag test).
+    let mut rolled = false;
     let mut owner_actor = 0u32;
     let mut faction = 0u32;
     let shooter = e.get(this, Projectile::pShooter);
@@ -6105,11 +6107,27 @@ pub fn fn_009c39e0(e: &mut Engine, this: Ptr<Projectile>) -> bool {
         if (radius_squared as f64) > distance as f64
             && projectile_get_mine_reacts_to_target(e, this, actor, owner_actor, faction)
         {
-            triggered = true;
+            // 009c3bd6: JIP's G127 (a fix) rolls the actor's explode chance (entry point 4);
+            // the seam answers 1 to explode (straight on at 009c3cfa, past the flag test) or 0
+            // for the next actor (words: the mine, the actor). One load while JIP is not
+            // installed.
+            let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x009c_3bd6, &[this.addr(), actor])
+            } else {
+                None
+            };
+            match jip {
+                Some(explode) if explode & 0xff == 0 => continue,
+                Some(_) => {
+                    rolled = true;
+                    triggered = true;
+                }
+                None => triggered = true,
+            }
             break;
         }
     }
-    if !test_flags(e, this, 0x4000) && !triggered {
+    if !rolled && !test_flags(e, this, 0x4000) && !triggered {
         candidate = e.global(PLAYER);
         let distance = squared_distance_to(e, this, candidate);
         let player: u32 = e.global(PLAYER);
@@ -8033,6 +8051,144 @@ mod tests {
         stub_float(&mut e, 0x004a_7290, 200.0);
         e.set(this, Projectile::iFlags, 0x4000);
         assert!(!fn_009c39e0(&mut e, this));
+    }
+
+    thread_local! {
+        static G127_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static G127_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_g127(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G127_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G127_ANSWER.with(|c| c.get())
+    }
+
+    /// A mine with two actors in range that it reacts to (the process list's 0 and 1), the
+    /// explosion timer setting 6.0; `flag_4000` answers the 0x4000 test (the player's roll
+    /// skipped).
+    fn mine_world(e: &mut Engine, flag_4000: u32) -> (Ptr<Projectile>, u32, u32) {
+        let this = projectile(e);
+        give_position(e, this.addr(), 0x7E00_0050);
+        let first = actor(e);
+        let second = actor(e);
+        give_position(e, first, 0x7E00_0051);
+        give_position(e, second, 0x7E00_0052);
+        stub_float(e, 0x0045_cd80, 10.0);
+        stub(e, 0x005b_e5c0, 2);
+        e.register_double(0x0096_8670, move |_, a| {
+            if a[1] == 0 { first } else { second }.into_ret()
+        });
+        stub_float(e, 0x004a_7290, 25.0);
+        stub(e, TEST_FLAGS, flag_4000);
+        e.mem.set_f32(0x011c_f7ac + 4, 6.0);
+        e.call_log = Some(vec![]);
+        (this, first, second)
+    }
+
+    /// JIP's G127 seam at `0x9C3BD6` (a fix), asked once the mine reacts to an actor in range:
+    /// not asked without the FIXES bit (the first actor triggers it); asked with the mine and
+    /// the actor; an answer's low byte 1 triggers on that actor and goes straight to the timer
+    /// (no 0x4000 test, JIP's `jmp 0x9C3CFA`), 0 goes on to the next actor; no answer is the
+    /// exe's trigger.
+    #[test]
+    fn g127_seam_rolls_each_reacting_actor() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        // (word, answer, the 0x4000 answer, triggered, asked for both, flag tests)
+        for (word, answer, flag_4000, triggered, both, tests) in [
+            (0, Some(0), 1u32, true, false, 1usize),
+            (jip_patches::INSTALLED, Some(0), 1, true, false, 1),
+            (fixes, Some(1), 0, true, false, 0),
+            (fixes, Some(0x101), 0, true, false, 0),
+            (fixes, Some(0), 1, false, true, 1),
+            (fixes, Some(0x100), 1, false, true, 1),
+            (fixes, None, 0, true, false, 1),
+        ] {
+            let mut e = engine();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127);
+            let (this, first, second) = mine_world(&mut e, flag_4000);
+            e.set_jip_patches(word);
+            G127_ASKED.with(|s| s.borrow_mut().clear());
+            G127_ANSWER.with(|c| c.set(answer));
+            assert_eq!(fn_009c39e0(&mut e, this), triggered, "{word:x} {answer:?}");
+            let seen = G127_ASKED.with(|s| s.take());
+            let expected = match (word & jip_patches::FIXES != 0, both) {
+                (false, _) => vec![],
+                (true, false) => vec![vec![this.addr(), first]],
+                (true, true) => vec![vec![this.addr(), first], vec![this.addr(), second]],
+            };
+            assert_eq!(seen, expected, "{word:x} {answer:?}");
+            assert_eq!(calls(&e, TEST_FLAGS).len(), tests, "{word:x} {answer:?}");
+            let timer = if triggered { 6.0 } else { 0.0 };
+            assert_eq!(e.get(this, Projectile::fExplosionTimer), timer);
+        }
+    }
+
+    thread_local! {
+        /// G127's answer for each actor (else 0).
+        static G127_BY_ACTOR: std::cell::RefCell<Vec<(u32, u32)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_g127_by_actor(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G127_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        G127_BY_ACTOR.with(|s| {
+            let answer = s
+                .borrow()
+                .iter()
+                .find(|(actor, _)| *actor == a[1])
+                .map(|w| w.1);
+            Some(answer.unwrap_or(0))
+        })
+    }
+
+    /// G127: the first actor fails the roll, the second (a creature, slot 0x218) passes: both
+    /// asked, the mine triggered, no 0x4000 test, and the creature timer taken from the second
+    /// (`actor value 0x23` of its `+0xA4` x `00644790(base)` / the double at `01017a40` + the
+    /// setting: 10 x 2 / 4 + 6 = 11).
+    #[test]
+    fn g127_seam_the_actor_that_passes_sets_the_timer() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127_by_actor);
+        let (this, first, second) = mine_world(&mut e, 0);
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        set_slot(&mut e, second, 0x218, RETURNS_TRUE);
+        stub_float(&mut e, 0x0064_4790, 2.0);
+        e.register_double(0x0066_ef20, move |_, a| {
+            assert_eq!(a, &[second + 0xa4, 0x23]);
+            10u32.into_ret()
+        });
+        e.set_global(0x0101_7a40, 4.0f64);
+        G127_ASKED.with(|s| s.borrow_mut().clear());
+        G127_BY_ACTOR.with(|s| *s.borrow_mut() = vec![(first, 0), (second, 1)]);
+        assert!(fn_009c39e0(&mut e, this));
+        assert_eq!(
+            G127_ASKED.with(|s| s.take()),
+            vec![vec![this.addr(), first], vec![this.addr(), second]]
+        );
+        assert!(calls(&e, TEST_FLAGS).is_empty());
+        assert_eq!(calls(&e, 0x0066_ef20).len(), 1);
+        assert_eq!(e.get(this, Projectile::fExplosionTimer), 11.0);
+    }
+
+    /// G127's seam is asked only for an actor in range that the mine reacts to.
+    #[test]
+    fn g127_seam_not_asked_out_of_range_or_unreacting() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x009c_3bd6), at_g127);
+        let (this, first, _) = mine_world(&mut e, 1);
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        G127_ASKED.with(|s| s.borrow_mut().clear());
+        G127_ANSWER.with(|c| c.set(Some(1)));
+        stub_float(&mut e, 0x004a_7290, 200.0);
+        assert!(!fn_009c39e0(&mut e, this));
+        // In range, but both actors are the mine's own shooter's kind it ignores: the shooter.
+        stub_float(&mut e, 0x004a_7290, 25.0);
+        e.set(this, Projectile::pShooter, first);
+        stub(&mut e, 0x0096_8670, first);
+        assert!(!fn_009c39e0(&mut e, this));
+        assert_eq!(G127_ASKED.with(|s| s.take()), Vec::<Vec<u32>>::new());
     }
 
     // The functions below are doubled in `CALLEES` for the earlier tests, so
