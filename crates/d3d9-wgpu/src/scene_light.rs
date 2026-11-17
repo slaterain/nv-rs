@@ -101,7 +101,8 @@ pub struct GameView {
     pub rotate: [f32; 9],
     /// The camera's place in the world (read for the sun shadows, `crate::sun_shadow`).
     pub position: [f32; 3],
-    /// Toward the sun in the world (the sun disc's place in the sky, z up); none without a sky.
+    /// Toward the sun in the world, z up: the way toward the directional light the lit shaders use
+    /// (the host reads it from the light; at night the same light, as the moon); none without a sky.
     pub to_sun: Option<[f32; 3]>,
     /// The sky's sun light colour (red, green, blue).
     pub sun_colour: [f32; 3],

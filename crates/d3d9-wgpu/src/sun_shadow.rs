@@ -23,8 +23,9 @@
 //! size does not change as the camera turns) plus a margin, and its centre moves in whole steps of
 //! [`GRID_TEXELS`] texels in the sun's space ([`place`]): edges do not crawl as the camera moves
 //! (Valient, "Stable Rendering of Cascaded Shadow Maps", ShaderX6), and the map stays valid until
-//! the centre crosses a step. The sun's basis is kept until the sun turns by more than
-//! [`SUN_TURN`] ([`SunKeep`]).
+//! the centre crosses a step. Each map keeps the sun it was drawn for ([`SunKeep`]) until the sun
+//! has turned far enough to move a shadow edge in it by half its texel ([`turn_limit`]); one map a
+//! frame takes the new sun ([`sun_turns`]), so the shadows glide with the sun instead of jumping.
 //!
 //! **How it shows (first step, a debug view).** A full-screen step at the same hook darkens the
 //! scene where the sun is blocked, on faces toward the sun only (the game's own lighting already
@@ -67,8 +68,6 @@ pub const LAMBDA: f32 = 0.75;
 pub const GRID_TEXELS: f64 = 64.0;
 /// Half the depth range of every cascade (game units toward and away from the sun).
 pub const DEPTH_RANGE: f64 = 16000.0;
-/// The sun turns by more than this (radians, about 0.25 degrees) before the maps follow it.
-pub const SUN_TURN: f64 = 0.0044;
 /// The sun this low over the horizon (the up part of the unit vector toward it) casts no shadow
 /// (shadows longer than about 33 times the caster's height).
 pub const MIN_SUN_HEIGHT: f32 = 0.03;
@@ -512,6 +511,45 @@ pub fn bounds(points: impl Iterator<Item = [f32; 3]>) -> Option<([f64; 3], f64)>
     Some((centre, dot3(d, d).sqrt()))
 }
 
+/// A caster whose girth (its surface's area over its length: about 2 pi r for a round cable, the
+/// width for a flat strip) is under this many game units casts nothing: a cable or a wire. The sun
+/// is half a degree wide, so a few hundred units under a cable its shadow's soft edge is wider than
+/// the cable itself (about 0.009 x the distance): the real shadow is a faint smear, while a map at
+/// our texel sizes draws it as a solid band.
+pub const THIN: f64 = 12.0;
+/// ... and longer than this many times its girth (a peg or a bolt still casts).
+pub const THIN_LENGTH: f64 = 20.0;
+
+/// Whether a caster's triangles (object-space corners, three a triangle in order) make a cable
+/// ([`THIN`]): their area over the longest side of their box under [`THIN`], and that side over
+/// [`THIN_LENGTH`] times it.
+pub fn line_like(triangles: impl Iterator<Item = [[f32; 3]; 3]>) -> bool {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    let mut area = 0.0;
+    let mut any = false;
+    for t in triangles {
+        let p = t.map(wide);
+        for c in &p {
+            for k in 0..3 {
+                lo[k] = lo[k].min(c[k]);
+                hi[k] = hi[k].max(c[k]);
+            }
+        }
+        let e1 = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+        let e2 = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+        let n = cross(e1, e2);
+        area += 0.5 * dot3(n, n).sqrt();
+        any = true;
+    }
+    if !any {
+        return false;
+    }
+    let long = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max);
+    let girth = area / long.max(1e-6);
+    girth < THIN && long > THIN_LENGTH * girth
+}
+
 /// Whether a sphere in the camera's view space (`centre`, `radius`) lies wholly inside the
 /// camera's view (`frustum` left, right, bottom, top at unit distance) between depths `near` and
 /// `far`: the game draws such an object every frame it is there (unless its own distance fade
@@ -537,25 +575,66 @@ pub fn wholly_in_view(
         && inside([0.0, -1.0, t])
 }
 
-/// The sun direction the maps are drawn for: the frame's, until it has turned by more than
-/// [`SUN_TURN`] from the one kept.
+/// The sun direction one cascade's map was drawn for: kept until the sun has turned far enough
+/// from it to move a shadow edge in that map by half a texel ([`turn_limit`]); then the map is
+/// drawn again with the sun as it is ([`sun_turns`] picks which maps take it in a frame).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SunKeep {
     pub kept: Option<[f64; 3]>,
 }
 
 impl SunKeep {
-    /// The direction to draw with this frame; true when it changed (every map is drawn again).
-    pub fn update(&mut self, to_sun: [f32; 3]) -> ([f64; 3], bool) {
+    /// How far (radians) the sun has turned from the direction kept; none before the first.
+    pub fn turn(&self, to_sun: [f32; 3]) -> Option<f64> {
         let now = normalize(wide(to_sun));
-        match self.kept {
-            Some(k) if dot3(k, now).clamp(-1.0, 1.0).acos() <= SUN_TURN => (k, false),
-            _ => {
-                self.kept = Some(now);
-                (now, true)
-            }
+        self.kept.map(|k| dot3(k, now).clamp(-1.0, 1.0).acos())
+    }
+
+    /// Keeps the sun as it is now.
+    pub fn take(&mut self, to_sun: [f32; 3]) {
+        self.kept = Some(normalize(wide(to_sun)));
+    }
+
+    /// The direction kept, or the sun as it is now before the first.
+    pub fn direction(&self, to_sun: [f32; 3]) -> [f64; 3] {
+        self.kept.unwrap_or_else(|| normalize(wide(to_sun)))
+    }
+}
+
+/// How high (game units, measured along the sun's rays) a caster stands over the ground its
+/// shadow falls on, for the turn rule: a telegraph pole, a tall house.
+pub const SHADOW_REACH: f64 = 1500.0;
+/// The sun this low (the sine of its height over the horizon) and lower counts as this low for the
+/// turn rule.
+pub const TURN_MIN_SUN_SINE: f64 = 0.17;
+/// A map whose sun is this many times past its limit takes the sun in the same frame as the others
+/// that are (time running fast: a wait, a sleep, a set hour); below it, one map a frame.
+pub const OVERDUE: f64 = 4.0;
+
+/// The sun's turn (radians) that moves a shadow edge by half a texel of a map whose texel is
+/// `texel` (game units), for a caster [`SHADOW_REACH`] over the ground with the sun's height's sine
+/// `sine`: the edge's end moves by reach x turn / sine^2 (a low sun's long shadows move fastest).
+pub fn turn_limit(texel: f64, sine: f64) -> f64 {
+    let s = sine.clamp(TURN_MIN_SUN_SINE, 1.0);
+    0.5 * texel * s * s / SHADOW_REACH
+}
+
+/// Which maps take the sun as it is now, from each one's turn as a part of its limit (`over`:
+/// infinite for a map never drawn): every map never drawn, and every map [`OVERDUE`]; else the one
+/// furthest past its limit (at least 1), so a map is drawn again at most once a frame for the sun
+/// and the shadows glide in steps of under half a texel.
+pub fn sun_turns(over: [f64; CASCADES]) -> [bool; CASCADES] {
+    let mut take = over.map(|o| o >= OVERDUE);
+    if !take.iter().any(|&t| t) {
+        let (k, most) = over
+            .iter()
+            .enumerate()
+            .fold((0, 0.0f64), |b, (k, &o)| if o > b.1 { (k, o) } else { b });
+        if most >= 1.0 {
+            take[k] = true;
         }
     }
+    take
 }
 
 /// Whether a map drawn for `drawn` (none: never drawn) is good for `now`: the same size, step and
@@ -582,6 +661,19 @@ pub(crate) struct GeoKey {
     pub start: u32,
     pub count: u32,
     pub base_vertex: i32,
+}
+
+impl GeoKey {
+    /// The same geometry whatever has been written into its buffers since (their upload counts
+    /// left out): what a caster whose buffers the game writes every frame keeps from one frame to
+    /// the next.
+    pub fn geometry(&self) -> GeoKey {
+        GeoKey {
+            streams: self.streams.map(|(b, o, _)| (b, o, 0)),
+            index: (self.index.0, 0),
+            ..self.clone()
+        }
+    }
 }
 
 /// What drawing a caster again takes.
@@ -726,6 +818,11 @@ impl<K: std::hash::Hash + Eq + Clone, T> Cache<K, T> {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    /// Whether any place of geometry `key` is kept.
+    pub fn contains(&self, key: &K) -> bool {
+        self.map.contains_key(key)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1146,6 +1243,9 @@ pub fn half_to_f32(h: u16) -> f32 {
 /// Alpha-tested casters (cut-outs) are drawn into this many cascades, the nearest: further out a
 /// fence or a bush is a few texels and would flicker.
 pub const CUTOUT_CASCADES: usize = 3;
+/// The level bias a cut-out caster's textures are read with in the maps: far below any level, so
+/// the top level (the texture's own alpha, not a smaller level's average) decides what casts.
+pub const CUTOUT_BIAS: f32 = -16.0;
 
 /// The maps' format.
 pub const MAP_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -1853,6 +1953,37 @@ mod tests {
         }
     }
 
+    /// The maps look along the light the lit shaders use (the game view's `to_sun`, the way toward
+    /// the sun light), at the traced 17:30 direction: from the west, north and 11 degrees up.
+    #[test]
+    #[allow(clippy::needless_range_loop)]
+    fn the_maps_look_along_the_lights_own_direction() {
+        let light = [-0.9644f32, 0.1869, 0.1869];
+        let g = scene_light::GameView {
+            to_sun: Some(light),
+            ..game()
+        };
+        let f = Frame::from_game(&g).unwrap();
+        let len = light.iter().map(|v| v * v).sum::<f32>().sqrt();
+        for k in 0..3 {
+            assert!(
+                (f.to_sun[k] - light[k] / len).abs() < 1e-6,
+                "{:?}",
+                f.to_sun
+            );
+        }
+        let b = basis(wide(f.to_sun));
+        for k in 0..3 {
+            assert!((b[2][k] + f64::from(f.to_sun[k])).abs() < 1e-6, "{b:?}");
+        }
+        let mut keep = SunKeep::default();
+        keep.take(f.to_sun);
+        let kept = keep.direction(f.to_sun);
+        for k in 0..3 {
+            assert!((kept[k] - f64::from(f.to_sun[k])).abs() < 1e-6, "{kept:?}");
+        }
+    }
+
     fn frustum() -> [f32; 4] {
         let v = view();
         [v.left, v.right, v.bottom, v.top]
@@ -2048,18 +2179,71 @@ mod tests {
     }
 
     #[test]
-    fn the_sun_is_kept_until_it_turns_a_quarter_degree() {
+    fn the_sun_is_kept_and_its_turn_measured() {
         let mut k = SunKeep::default();
-        let (d0, changed) = k.update([0.0, 0.0, 1.0]);
-        assert!(changed);
-        let small = (0.2f32).to_radians();
-        let (d1, changed) = k.update([small.sin(), 0.0, small.cos()]);
-        assert!(!changed);
-        assert_eq!(d0, d1);
-        let big = (0.3f32).to_radians();
-        let (d2, changed) = k.update([big.sin(), 0.0, big.cos()]);
-        assert!(changed);
-        assert!(d2[0] > 0.0);
+        assert_eq!(k.turn([0.0, 0.0, 1.0]), None);
+        assert_eq!(k.direction([0.0, 0.0, 2.0]), [0.0, 0.0, 1.0]);
+        k.take([0.0, 0.0, 1.0]);
+        let a = (0.2f32).to_radians();
+        let t = k.turn([a.sin(), 0.0, a.cos()]).unwrap();
+        assert!((t - f64::from(a)).abs() < 1e-6);
+        assert_eq!(k.direction([a.sin(), 0.0, a.cos()]), [0.0, 0.0, 1.0]);
+    }
+
+    /// The turn rule: at the limit a shadow edge's end moves by half the map's texel (no visible
+    /// step); the near map's limit is the smallest; a low sun shrinks it.
+    #[test]
+    fn a_sun_turn_at_the_limit_moves_an_edge_half_a_texel() {
+        for (texel, sine) in [(0.83, 0.79), (3.78, 0.79), (12.8, 0.5), (0.83, 0.17)] {
+            let limit = turn_limit(texel, sine);
+            let edge = SHADOW_REACH * limit / (sine * sine);
+            assert!((edge - 0.5 * texel).abs() < 1e-9, "{texel} {sine}: {edge}");
+        }
+        assert!(turn_limit(0.83, 0.79) < turn_limit(12.8, 0.79));
+        assert!(turn_limit(0.83, 0.3) < turn_limit(0.83, 0.79));
+        // Below the lowest sun counted the limit stops shrinking.
+        assert_eq!(turn_limit(0.83, 0.01), turn_limit(0.83, TURN_MIN_SUN_SINE));
+        // At the street's 16:00 sun the near map follows a turn of about a hundredth of a degree.
+        assert!(turn_limit(0.83, 0.79).to_degrees() < 0.01);
+    }
+
+    /// One map a frame takes the sun (the furthest past its limit); none under its limit; every
+    /// map never drawn or far overdue at once.
+    #[test]
+    fn the_maps_take_the_sun_one_a_frame_unless_overdue() {
+        assert_eq!(sun_turns([0.5, 0.9, 0.2, 0.0]), [false; 4]);
+        assert_eq!(sun_turns([1.5, 2.5, 1.2, 0.0]), [false, true, false, false]);
+        assert_eq!(sun_turns([1.0, 0.0, 0.0, 0.0]), [true, false, false, false]);
+        assert_eq!(
+            sun_turns([f64::INFINITY; 4]),
+            [true, true, true, true],
+            "the first frame draws every map"
+        );
+        assert_eq!(
+            sun_turns([OVERDUE, 3.9, OVERDUE * 2.0, 1.0]),
+            [true, false, true, false]
+        );
+        // Under a steady turn every map is drawn in its turn: none waits more than CASCADES frames.
+        let limits = [1.0, 2.0, 4.0, 8.0];
+        let mut kept = [0.0f64; 4];
+        let mut waited = [0u32; 4];
+        for frame in 1..400 {
+            let sun = f64::from(frame) * 0.3;
+            let over: [f64; 4] = std::array::from_fn(|k| (sun - kept[k]) / limits[k]);
+            let take = sun_turns(over);
+            for k in 0..4 {
+                if take[k] {
+                    kept[k] = sun;
+                    waited[k] = 0;
+                } else if over[k] >= 1.0 {
+                    waited[k] += 1;
+                    assert!(
+                        waited[k] <= CASCADES as u32,
+                        "map {k} waited at frame {frame}"
+                    );
+                }
+            }
+        }
     }
 
     /// A caster's matrix through the camera's projection gives what the sun sees of it.
@@ -2226,6 +2410,100 @@ mod tests {
         assert!((r - (4.0f64 + 1.0 + 1.0).sqrt()).abs() < 1e-9);
         assert_eq!(bounds(std::iter::empty()), None);
         assert_eq!(bounds([[f32::NAN, 0.0, 0.0]].into_iter()), None);
+    }
+
+    /// A tube of `sides` faces, `radius` and `length` along x, as triangles.
+    fn tube(radius: f32, length: f32, sides: usize) -> Vec<[[f32; 3]; 3]> {
+        let ring = |i: usize, x: f32| {
+            let a = i as f32 * std::f32::consts::TAU / sides as f32;
+            [x, radius * a.cos(), radius * a.sin()]
+        };
+        (0..sides)
+            .flat_map(|i| {
+                let (a0, a1) = (ring(i, 0.0), ring(i + 1, 0.0));
+                let (b0, b1) = (ring(i, length), ring(i + 1, length));
+                [[a0, b0, a1], [a1, b0, b1]]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_cable_casts_nothing_and_a_pole_a_sign_and_a_bolt_do() {
+        // A cable: 1.5 units round, 800 long.
+        assert!(line_like(tube(1.5, 800.0, 8).into_iter()));
+        // A telegraph pole: 15 round, 700 long.
+        assert!(!line_like(tube(15.0, 700.0, 8).into_iter()));
+        // A sign or a fence: a flat strip 100 wide, 800 long (two triangles).
+        let quad = [
+            [[0.0, 0.0, 0.0], [800.0, 0.0, 0.0], [0.0, 100.0, 0.0]],
+            [[800.0, 0.0, 0.0], [800.0, 100.0, 0.0], [0.0, 100.0, 0.0]],
+        ];
+        assert!(!line_like(quad.into_iter()));
+        // A bolt: thin but short.
+        assert!(!line_like(tube(1.0, 10.0, 8).into_iter()));
+        assert!(!line_like(std::iter::empty()));
+    }
+
+    #[test]
+    fn a_geometry_written_again_is_the_same_geometry() {
+        let mut streams = [(0usize, 0u64, 0u64); 8];
+        streams[0] = (0x1000, 64, 7);
+        let a = GeoKey {
+            pipe: 3,
+            streams,
+            index: (0x2000, 9),
+            start: 12,
+            count: 300,
+            base_vertex: 0,
+        };
+        let mut b = a.clone();
+        b.streams[0].2 = 8;
+        b.index.1 = 10;
+        assert_ne!(a, b);
+        assert_eq!(a.geometry(), b.geometry());
+        let mut other = b.clone();
+        other.streams[0].1 = 128;
+        assert_ne!(a.geometry(), other.geometry());
+        assert_eq!(a.geometry().streams[0], (0x1000, 64, 0));
+    }
+
+    #[test]
+    fn the_sky_and_the_far_land_cast_nothing_and_a_pole_does() {
+        let camera = [1000.0, 2000.0, 300.0];
+        let at = |p: [f64; 3], scale: f64| -> World {
+            [
+                [scale, 0.0, 0.0, p[0]],
+                [0.0, scale, 0.0, p[1]],
+                [0.0, 0.0, scale, p[2]],
+            ]
+        };
+        // A pole (radius 360) next to the camera, and one 9000 units off: both cast.
+        assert!(casts(
+            &at([1100.0, 2100.0, 300.0], 1.0),
+            ([0.0; 3], 360.0),
+            camera
+        ));
+        assert!(casts(
+            &at([10000.0, 2000.0, 0.0], 1.0),
+            ([0.0; 3], 360.0),
+            camera
+        ));
+        // The sky's clouds: a sphere round the camera wider than MAX_AROUND_CAMERA (here its
+        // radius comes from the object's scale); just under it, around the camera, it still casts.
+        assert!(!casts(&at(camera, 100.0), ([0.0; 3], 25.0), camera));
+        assert!(casts(
+            &at(camera, 1.0),
+            ([0.0; 3], MAX_AROUND_CAMERA - 1.0),
+            camera
+        ));
+        // A far land block larger than the maps reach, away from the camera: none; at the limit: casts.
+        let far = [60000.0, 2000.0, 0.0];
+        assert!(!casts(
+            &at(far, 1.0),
+            ([0.0; 3], MAX_CASTER_RADIUS + 1.0),
+            camera
+        ));
+        assert!(casts(&at(far, 1.0), ([0.0; 3], MAX_CASTER_RADIUS), camera));
     }
 
     #[test]

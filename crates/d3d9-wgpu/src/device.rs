@@ -882,12 +882,15 @@ struct SunState {
     last_regs: Option<([[u32; 4]; 16], [u32; 16], u32)>,
     /// The geometry seen to move (a place came as one went), drawn each frame over the still maps.
     moving: crate::fxhash::Set<sun_shadow::GeoKey>,
+    /// Geometries let go because the game wrote into their buffers ([`sun_shadow::GeoKey::geometry`]):
+    /// when one comes back it moves.
+    rewritten: crate::fxhash::Set<sun_shadow::GeoKey>,
     /// Each geometry's object-space bounding sphere (none: its positions could not be read).
     bounds: Map<sun_shadow::GeoKey, Option<([f64; 3], f64)>>,
     /// Each caster pipeline's place in `gpu.pipelines` by vertex shader, declaration, strides,
     /// primitive type and index size (none: it could not be made).
     pipes: Map<PipeOf, Option<u32>>,
-    keep: sun_shadow::SunKeep,
+    keep: [sun_shadow::SunKeep; sun_shadow::CASCADES],
     /// The frame's camera from the new lighting's words ([`scene_light::STATE`], recorded just
     /// before [`sun_shadow::STATE`]).
     view: Option<scene_light::Params>,
@@ -929,6 +932,9 @@ struct SunState {
     /// caster of present N and every draw not kept (why, its shader, its place) in the log.
     dump_at: Option<u64>,
     dump_rejects: Vec<SunReject>,
+    /// `NV_SUN_SHADOWS_TRACE=N`: the sun's direction and which maps take it, in the log for the next N
+    /// updates (how the game moves its sun, frame by frame).
+    trace: u32,
 }
 
 /// A draw the sun's maps did not keep, for the dump: why (the counters' order), its vertex and
@@ -951,9 +957,10 @@ impl SunState {
             headers: Vec::new(),
             last_regs: None,
             moving: crate::fxhash::Set::default(),
+            rewritten: crate::fxhash::Set::default(),
             bounds: Map::default(),
             pipes: Map::default(),
-            keep: sun_shadow::SunKeep::default(),
+            keep: [sun_shadow::SunKeep::default(); sun_shadow::CASCADES],
             view: None,
             ran: None,
             scene_depth: None,
@@ -979,6 +986,10 @@ impl SunState {
                 .ok()
                 .and_then(|v| v.trim().parse().ok()),
             dump_rejects: Vec::new(),
+            trace: std::env::var("NV_SUN_SHADOWS_TRACE")
+                .ok()
+                .and_then(|v| v.trim().parse().ok())
+                .unwrap_or(0),
         }
     }
 }
@@ -3680,6 +3691,32 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 use_sun = false;
             }
         }
+        // The dump tool (`NV_SUN_SHADOWS_DUMP`): every draw of that present that could take the
+        // shadowed lighting, whether it did, and its blending.
+        if (ps.sun.is_some() || vs.sun.is_some())
+            && self
+                .sun
+                .as_ref()
+                .is_some_and(|s| s.dump_at == Some(self.presents))
+        {
+            let rs = &self.st.rs;
+            eprintln!(
+                "sun dump lit draw: vs {:016x} ps {:016x} shadowed {use_sun} blend {} src {} dest {} alpha test {} type {} ps constants {}",
+                vs.stable,
+                ps.stable,
+                rs[rs::ALPHABLENDENABLE],
+                rs[rs::SRCBLEND],
+                rs[rs::DESTBLEND],
+                rs[rs::ALPHATESTENABLE],
+                kind,
+                ps.program
+                    .constants
+                    .iter()
+                    .map(|c| c.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            );
+        }
         // The last draw's pipeline again (most draws), else the cache's, else a new one.
         // With a list, the plane state too: one pipeline with the clip distances serves draws
         // with a plane on and with none, but an adapter without them needs one for each, so each
@@ -5794,7 +5831,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let bounds = match known {
             Some(b) => b,
             None => {
-                let b = self.sun_bounds(decl, index32.is_some(), base_vertex, start, count);
+                let b = self.sun_bounds(
+                    decl,
+                    index32.is_some(),
+                    topology == wgpu::PrimitiveTopology::TriangleStrip,
+                    base_vertex,
+                    start,
+                    count,
+                );
                 let sun = self.sun.as_mut().expect("on");
                 if sun.bounds.len() >= 1 << 16 {
                     sun.bounds.clear();
@@ -5808,8 +5852,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         };
         // A cut-out's pixel block: its alpha test as the game set it (the fixed-function test, never
-        // alpha to coverage: the map has one sample), each sampler's fill mode and bias, its float
-        // registers; and its textures' group as the draw bound it.
+        // alpha to coverage: the map has one sample), each sampler's fill mode, its float registers;
+        // and its textures' group as the draw bound it. Its textures are read at their top level
+        // ([`sun_shadow::CUTOUT_BIAS`]): seen from the sun a thin cut-out (a cable on a strip, a
+        // fence) covers few texels, and a smaller level's blurred alpha would pass the test across
+        // the whole strip and cast it solid.
         let cut = if cutout {
             let st = &self.st;
             let alpha_func = st.rs[rs::ALPHAFUNC] as f32;
@@ -5818,7 +5865,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let mut bias = [0f32; 16];
             for slot in 0..16 {
                 fix[slot] = st.textures[slot].as_ref().map_or(0, |t| t.format.fix);
-                bias[slot] = f32::from_bits(st.samplers[slot][state::ss::MIPMAPLODBIAS]);
+                bias[slot] = sun_shadow::CUTOUT_BIAS;
             }
             let made = block_header(
                 &st.psi,
@@ -5906,6 +5953,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         &self,
         decl: &Decl,
         indexed: bool,
+        strip: bool,
         base_vertex: i32,
         start: u32,
         count: u32,
@@ -5963,7 +6011,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 .map(|v| position(i64::from(v)))
                 .collect()
         };
-        sun_shadow::bounds(points?.into_iter())
+        let points = points?;
+        // A cable casts nothing ([`sun_shadow::line_like`]).
+        let triangles: Box<dyn Iterator<Item = [[f32; 3]; 3]>> = if strip {
+            Box::new(points.windows(3).map(|w| [w[0], w[1], w[2]]))
+        } else {
+            Box::new(points.chunks_exact(3).map(|w| [w[0], w[1], w[2]]))
+        };
+        if sun_shadow::line_like(triangles) {
+            return None;
+        }
+        sun_shadow::bounds(points.into_iter())
     }
 
     /// A caster's depth-only pipeline: the draw's own converted vertex shader (its module as the
@@ -6089,8 +6147,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let s = sun_shadow::splits(view.near, sun_shadow::FAR.min(view.far));
         let axes = frame.axes();
         let position = frame.position.map(f64::from);
-        let b = sun_shadow::basis(sun.keep.kept.unwrap_or(frame.to_sun.map(f64::from)));
         let cascades: [sun_shadow::Cascade; sun_shadow::CASCADES] = std::array::from_fn(|i| {
+            let b = sun_shadow::basis(sun.keep[i].direction(frame.to_sun));
             sun_shadow::place(i, frustum, s[i], s[i + 1], axes, position, b)
         });
         let drawn: [sun_shadow::Cascade; sun_shadow::CASCADES] =
@@ -6136,12 +6194,39 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let started = std::time::Instant::now();
         let now = self.presents;
         let frustum = [view.left, view.right, view.bottom, view.top];
-        let (dir, turned) = sun.keep.update(frame.to_sun);
-        let b = sun_shadow::basis(dir);
         let s = sun_shadow::splits(view.near, sun_shadow::FAR.min(view.far));
         let axes = frame.axes();
         let position = frame.position.map(f64::from);
+        // The sun each map is drawn for: a map takes the sun as it is once it has turned far enough
+        // to move a shadow edge in it by half a texel ([`sun_shadow::turn_limit`]), one map a frame
+        // ([`sun_shadow::sun_turns`]): the shadows glide with the sun instead of jumping.
+        let now_basis = sun_shadow::basis(sun.keep[0].direction(frame.to_sun));
+        let sine = {
+            let t = frame.to_sun.map(f64::from);
+            t[2] / (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-9)
+        };
+        let over: [f64; sun_shadow::CASCADES] = std::array::from_fn(|i| {
+            let texel =
+                sun_shadow::place(i, frustum, s[i], s[i + 1], axes, position, now_basis).texel;
+            sun.keep[i]
+                .turn(frame.to_sun)
+                .map_or(f64::INFINITY, |t| t / sun_shadow::turn_limit(texel, sine))
+        });
+        let turned = sun_shadow::sun_turns(over);
+        for (k, keep) in sun.keep.iter_mut().enumerate() {
+            if turned[k] {
+                keep.take(frame.to_sun);
+            }
+        }
+        if sun.trace > 0 {
+            sun.trace -= 1;
+            eprintln!(
+                "NV_D3D9 wgpu: sun trace present {now}: toward ({:.6}, {:.6}, {:.6}), maps taking it {turned:?}, past their limit {:.2?}",
+                frame.to_sun[0], frame.to_sun[1], frame.to_sun[2], over
+            );
+        }
         let cascades: [sun_shadow::Cascade; sun_shadow::CASCADES] = std::array::from_fn(|i| {
+            let b = sun_shadow::basis(sun.keep[i].direction(frame.to_sun));
             sun_shadow::place(i, frustum, s[i], s[i + 1], axes, position, b)
         });
         // The tool's list (`NV_SUN_SHADOWS_DUMP`), once: each caster's place from the camera (right,
@@ -6225,7 +6310,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 sun.moving.insert(k.clone());
             }
         }
+        // A geometry whose buffers the game wrote since an earlier frame (a sign's animation, a
+        // flag) comes back each frame as a new caster: it moves too, so it does not redraw the
+        // still maps every frame.
+        for k in &came {
+            if sun.rewritten.contains(&k.geometry()) && sun.moving.len() < 4096 {
+                sun.moving.insert(k.clone());
+            }
+        }
         let mut why = [0u64; 3];
+        let mut written = Vec::new();
         let moving = &sun.moving;
         changed.extend(sun.cache.sweep(|k, i| {
             if i.seen == now {
@@ -6243,6 +6337,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             match gone.iter().position(|&g| g) {
                 Some(n) => {
                     why[n] += 1;
+                    if n == 0 {
+                        written.push(k.geometry());
+                    }
                     true
                 }
                 None => false,
@@ -6253,6 +6350,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .filter(|(k, _)| !moving.contains(k))
             .map(|(_, s)| *s)
             .collect();
+        // Moving geometries no longer kept are forgotten (a written one comes back under a new key).
+        let cache = &sun.cache;
+        sun.moving.retain(|k| cache.contains(k));
+        if sun.rewritten.len() + written.len() > 4096 {
+            sun.rewritten.clear();
+        }
+        sun.rewritten.extend(written);
         sun.added += added as u64;
         for (s, w) in sun.gone.iter_mut().zip(why) {
             *s += w;
@@ -6261,7 +6365,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // went or moved.
         let mut redraw = [false; sun_shadow::CASCADES];
         for (k, c) in cascades.iter().enumerate() {
-            let moved = !sun_shadow::still_good(sun.gpu.drawn[k].as_ref(), c, turned);
+            let moved = !sun_shadow::still_good(sun.gpu.drawn[k].as_ref(), c, turned[k]);
             let touched = still.iter().any(|&(p, r)| c.touches(p, r));
             sun.moved[k] += u64::from(moved);
             sun.touched[k] += u64::from(touched && !moved);
@@ -6545,8 +6649,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let s = sun_shadow::splits(view.near, sun_shadow::FAR.min(view.far));
         let axes = frame.axes();
         let position = frame.position.map(f64::from);
-        let b = sun_shadow::basis(sun.keep.kept.unwrap_or(frame.to_sun.map(f64::from)));
         let cascades: [sun_shadow::Cascade; sun_shadow::CASCADES] = std::array::from_fn(|i| {
+            let b = sun_shadow::basis(sun.keep[i].direction(frame.to_sun));
             sun_shadow::place(i, frustum, s[i], s[i + 1], axes, position, b)
         });
         let drawn: [sun_shadow::Cascade; sun_shadow::CASCADES] =
