@@ -1370,7 +1370,28 @@ as with JIP.
 
 #### GW: World, sky, sound, saves, start-up
 
-Nothing built yet.
+Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): the sun's glare uses the climate's glare
+texture (the original loads the sun's own texture for both) (`0x63E705`); in the morning and the afternoon
+the weather's high-noon image space weighs most near noon and the day one near sunrise and sunset (the
+original has them the wrong way round, so the high-noon look peaked at the ends of the day) (`0x63F385`,
+`0x63F3F7`); the wind speed is the weather's wind value times 1/255, or times the factor a mod sets with
+`SetWindSpeedMult` (the original's own formula, with the factor fixed) (`0x63C4D6`, `0x63C52C`); any actor
+firing a weapon with a silencer mod plays the silenced attack sound (the original checks only the player in
+first person) (`0x83AD97`); a pending change of acoustic space (the echo and ambience of a place) is applied
+once and cleared; one with no new space set is dropped (the original applied "no space" then, so a space
+just set could be switched off the next frame and set again after) (`0x82D8CA`); an interior's map section starts with
+JIP's "fully seen" word cleared, which only JIP's mini-map reads (`0x87A12A`). Differences from JIP: where
+JIP would read address 0 (an actor's held weapon with no extra data) the silenced test answers "not
+silenced"; JIP's store of a flags word in the attack sound code is left out, since the game sets that word
+again before reading it.
+
+Built as part of JIP (in every preset once JIP answers "installed"): `ForceClimate` forces a climate (none:
+the force is lifted), which the sky takes in place of the one it is given at its next climate change
+(`0x63C918`); `SetCurrentClimate` to another climate lifts it.
+
+Seams for group GF's row G45 (saving: temporary forms are not written): `0x8497CD` (whether `UnloadForm` goes
+on), `0x846FFB` and `0x845558` (the save's form id and changes maps' bucket counts). Until GF's handler is in,
+those places run the game's code.
 
 #### GL: Lights and magic effects
 

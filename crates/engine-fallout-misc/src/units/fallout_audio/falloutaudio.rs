@@ -616,6 +616,20 @@ pub fn fn_0082d740(e: &mut Engine, sound: u32, loop_begin: Ptr, loop_end: Ptr) -
     true
 }
 
+/// The pending acoustic space change of `UpdateRegionSounds` (`bUpdateAcousticSpace` set; the
+/// next space loaded at `0x82D8C5`). JIP LN NVSE's G104 (a fix, the row `NV_JIP_GAME_PATCHES`;
+/// `SetAcousticSpaceFixHook` at `0x82D8CA`) takes it over: the flag is cleared, and a next space
+/// that is set is cleared and applied unless it is the current one. The seam is asked with the
+/// next space; an answer means it was handled. With the word's `FIXES` bit clear: one load, then
+/// the exe's block.
+#[inline]
+fn jip_pending_space(e: &mut Engine, next: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        return e.site(0x0082_d8ca, &[next]).is_some();
+    }
+    false
+}
+
 // Translation incomplete: 0082d7c0 - C++ exception-unwind frame (FS:[0]) omitted; the normal path is translated.
 // Translated from 0082d7c0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `FalloutAudio::UpdateRegionSounds` (Xbox PDB): the audio's per-frame
@@ -673,7 +687,9 @@ pub fn fallout_audio_update_region_sounds(e: &mut Engine) {
     }
     if e.global::<u8>(UPDATE_ACOUSTIC_SPACE) != 0 {
         let next: u32 = e.global(NEXT_SPACE);
-        if next == e.global::<u32>(CURRENT_SPACE) {
+        if jip_pending_space(e, next) {
+            // JIP's block applied or dropped the pending change.
+        } else if next == e.global::<u32>(CURRENT_SPACE) {
             e.set_global(NEXT_SPACE, 0u32);
             e.set_global(UPDATE_ACOUSTIC_SPACE, 0u8);
         } else {
@@ -1452,6 +1468,8 @@ mod tests {
     /// The data handler double's loading byte and head-node word.
     const TEST_HANDLER_BUSY: u32 = 0x011d_d310;
     const TEST_HANDLER_HEAD: u32 = 0x011d_d314;
+    /// G104's test handler: how often it was asked, with what, and whether it answers.
+    const TEST_ASKED: u32 = 0x011d_d320;
     /// The audio singleton the double of `QInstance` returns (mapped).
     const AUDIO: u32 = 0x5000_0000;
     /// The player's vtable position function and the listener's.
@@ -2473,6 +2491,55 @@ mod tests {
         w.e.call(0x0082d7c0, &[]);
         assert_eq!(word(&w.e, CURRENT_SPACE), other);
         assert_eq!(w.e.mem.u8(UPDATE_ACOUSTIC_SPACE), 1);
+    }
+
+    /// JIP LN NVSE's G104 seam at `0x82D8CA` (group GW, step 3.9): off (JIP not installed, or
+    /// installed with the row off), the exe's block (a different pending space made current, the
+    /// flag kept) and the seam not asked; with the row, asked with the pending space and the
+    /// exe's block skipped when it answers; no answer, the exe's block.
+    #[test]
+    fn g104_seam_takes_the_pending_space() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word_bits: u32, answers: bool| {
+            let (mut w, player) = space_world();
+            let space = w.space(0, [0; 4]);
+            let other = w.space(0, [0; 4]);
+            let cell = w.object();
+            w.e.mem.set_u32(cell + 0x100, space);
+            w.e.mem.set_u32(player + 0x40, cell);
+            w.e.set_global(CURRENT_SPACE, space);
+            w.e.set_global(NEXT_SPACE, other);
+            w.e.mem.set_u8(UPDATE_ACOUSTIC_SPACE, 1);
+            w.e.set_jip_patches(word_bits);
+            w.e.set_global(TEST_ASKED, 0u32);
+            w.e.set_global(TEST_ASKED + 8, u32::from(answers));
+            w.e.on_site(SiteSlot::new(Owner::Jip, 0x0082_d8ca), |e, a| {
+                let n = e.mem.u32(TEST_ASKED);
+                e.mem.set_u32(TEST_ASKED, n + 1);
+                e.mem.set_u32(TEST_ASKED + 4, a[0]);
+                (e.mem.u32(TEST_ASKED + 8) != 0).then_some(0)
+            });
+            w.e.call(0x0082d7c0, &[]);
+            (
+                word(&w.e, CURRENT_SPACE) == other,
+                w.e.mem.u8(UPDATE_ACOUSTIC_SPACE),
+                word(&w.e, TEST_ASKED),
+                word(&w.e, TEST_ASKED + 4) == other,
+            )
+        };
+        for bits in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(bits, true), (true, 1, 0, false), "{bits:08x}");
+        }
+        assert_eq!(
+            run(jip_patches::FIXES, true),
+            (false, 1, 1, true),
+            "handled"
+        );
+        assert_eq!(
+            run(jip_patches::FIXES, false),
+            (true, 1, 1, true),
+            "declined"
+        );
     }
 
     #[test]

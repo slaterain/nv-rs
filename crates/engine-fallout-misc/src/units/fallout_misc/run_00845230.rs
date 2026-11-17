@@ -179,11 +179,26 @@ pub fn fn_008453a0(e: &mut Engine, this: Ptr, capacity: u32, count: u32) {
     }
 }
 
+/// The bucket count `00845550` passes (`push 0x13AF` at `0x845557`). JIP LN NVSE's G45 (a fix, the
+/// row `NV_JIP_GAME_PATCHES`; `SafeWrite16(0x845558, 0x7D63)`; its row and handler are group GF's)
+/// makes it `0x7D63`: the seam answers the count. With the word's `FIXES` bit clear: one load, then
+/// the exe's `0x13AF`.
+#[inline]
+fn bucket_count(e: &mut Engine) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(count) = e.site(0x0084_5558, &[]) {
+            return count;
+        }
+    }
+    0x13af
+}
+
 // Translated from 00845550 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map: runs `00845b30(this, 0x13af)` and stores the
 /// vtable `0107ed68` over the one it set. Returns `this`.
 pub fn fn_00845550(e: &mut Engine, this: Ptr) -> Ptr {
-    e.call(BASE_CONSTRUCTOR, &args![this, 0x13afu32]);
+    let buckets = bucket_count(e);
+    e.call(BASE_CONSTRUCTOR, &args![this, buckets]);
     e.mem.set_u32(this.addr(), VTABLE);
     this
 }
@@ -428,5 +443,33 @@ mod tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(log[1], (BASE_CONSTRUCTOR, vec![this, 0x13af]));
         assert_eq!(e.mem.u32(this), VTABLE, "the vtable replaces the base's");
+    }
+
+    /// JIP LN NVSE's G45 seam at `0x845558` (its row and handler are group GF's; the seam is
+    /// group GW's, step 3.9): off (JIP not installed, or installed with the row off), the base
+    /// constructor gets the exe's `0x13AF`; with the row, the seam's count (no answer: `0x13AF`).
+    #[test]
+    fn g45_seam_gives_the_bucket_count() {
+        use engine_core::extend::jip_patches;
+        let run = |bits: u32, answers: bool| {
+            let mut e = Engine::new();
+            e.register(BASE_CONSTRUCTOR, |_, _| Ret::default());
+            e.set_jip_patches(bits);
+            if answers {
+                e.on_site_for_test(0x0084_5558, |_, _| Some(0x7d63));
+            } else {
+                e.on_site_for_test(0x0084_5558, |_, _| None);
+            }
+            let this = e.mem.alloc(16);
+            e.call_log = Some(vec![]);
+            e.call(0x00845550, &args![this]);
+            let log = e.call_log.take().unwrap();
+            log[1].1[1]
+        };
+        for bits in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(bits, true), 0x13af, "{bits:08x}");
+        }
+        assert_eq!(run(jip_patches::FIXES, true), 0x7d63);
+        assert_eq!(run(jip_patches::FIXES, false), 0x13af);
     }
 }
