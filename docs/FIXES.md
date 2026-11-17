@@ -1294,6 +1294,12 @@ male skeleton, a player sees the original's skeletons), and an NPC record's mode
 when it loads (`0x104A1BC`, the original ignores it for NPCs anyway). With the row off a player with JIP
 installed gets these two and nothing else of this group.
 
+Also built as part of JIP (G48, `004f15a0`): setting a form's type clears JIP's own flag bytes beside it, and
+for an NPC or creature reference JIP's actor flag bytes too. The game never sets those bytes when it makes a
+form, so without this a new NPC made in memory that held something else could start with leftover JIP flags
+(for example one that will not fight, or runs everywhere); with JIP installed every new form now starts clean,
+as with JIP.
+
 #### GS: Script engine
 
 | JIP's comment | Exe places | What a player with JIP gets | Built |

@@ -65,6 +65,12 @@ pub(in super::super) const SITES: &[Entry] = &[
 
 /// The group's wraps.
 pub(in super::super) const WRAPS: &[Entry] = &[
+    // G48 (JIP's own), TESForm::SetFormType 004f15a0 rewritten by JIP (clears its flag bytes).
+    Entry {
+        addr: 0x004f_15a0,
+        owners: JIP,
+        step: "3.9-GF",
+    },
     // G39 (JIP's own), TESNPC's TESModel::GetModel 00601c30 rewritten by JIP.
     Entry {
         addr: 0x0060_1c30,
