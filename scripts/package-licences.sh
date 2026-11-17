@@ -87,20 +87,16 @@ outside=''
 unlisted=''
 for_folders=$(folders_of "$list")
 if [ -n "$for_folders" ]; then
+    # (No `case` inside `$( )`: macOS's /bin/sh, bash 3.2, cannot parse one.)
     outside=$(printf '%s\n' "$for_folders" | while IFS= read -r dir; do
-        case $dir in
-        "$root"/*) ;;
-        *) printf '%s ' "$dir" ;;
-        esac
+        rel=${dir#"$root"/}
+        [ "$rel" != "$dir" ] || printf '%s ' "$dir"
     done)
     listed=$(mktemp) || exit 1
     tr -d '\r' <distribution/notices.txt >"$listed"
     unlisted=$(printf '%s\n' "$for_folders" | while IFS= read -r dir; do
-        case $dir in
-        "$root"/*) ;;
-        *) continue ;;
-        esac
         rel=${dir#"$root"/}
+        [ "$rel" != "$dir" ] || continue
         git ls-files -- "$rel/LICENSE*" "$rel/NOTICE*" "$rel/COPYING*" | while IFS= read -r file; do
             grep -q -e "^$file$tab" "$listed" || printf '%s ' "$file"
         done
