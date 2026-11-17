@@ -913,6 +913,17 @@ save) should get.
   `[GamePatches]` switches (`internal/patches_game.h`, `InitGamePatches` and `SetOptionalPatch`),
   ADR-0016 §5's fix rows; the list of what is built is in "JIP LN NVSE's game patches" below. All
   inert until JIP answers "installed" (step 3.10); off, and before that, the game's own.
+- **Where a mod's files are kept** (no row: always so, the maintainer's rule of 2026-11-16): the
+  INI files JIP LN's commands write (`SetINIFloat`, `SetINIString`, `SetINISection`,
+  `RemoveINIKey`, `RemoveINISection`; `Data\Config\<name>.ini`) go to the port's own folder for
+  mods' files beside the saves (`nv-rs mod files`, or `NV_MOD_FILES_OUT`; docs/PLAYTESTING.md),
+  never into the game's folder; reads (`GetINI*`, `FileExists`) look there first, then in the
+  game's Data. A `..` that stays inside the game's folder is followed (`..\NVSE\Plugins\x.ini`
+  from `Data\Config` is Data's). A name that would leave the game's folder (a `..` past it, a
+  drive, another full path) is refused, where JIP would write anywhere: it reads as a missing file
+  and is never written (no value, result 0). A UTF-16 settings file is read and kept as UTF-16, as
+  Windows does; a file Windows' encoding guess decides (UTF-16 without its mark, big-endian) is
+  read but never written.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of
   #329). One error reaches the handlers once; the console still shows every error. Kept per game
   thread: an error another thread raises meanwhile is its own and reaches the handlers.

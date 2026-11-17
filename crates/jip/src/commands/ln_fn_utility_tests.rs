@@ -153,3 +153,553 @@ fn forms_counted_by_type() {
     e.mem.set_f64(RESULT, 0.0);
     assert_eq!(call(&mut e, 0x2300, &[n(map as i32), n(0x18)]).1, 0.0);
 }
+
+// ---- Mods' files: FileExists and the INI commands ----
+
+/// The seam's calls in these tests (no platform layer here): files and folders of this test's
+/// thread, by lower-case name; a name with a `..` part is refused as the platform refuses it
+/// (nothing read, nothing written).
+mod files {
+    use engine_core::mod_files::{self as mf, ModFileCalls};
+    use engine_core::Engine;
+    use std::cell::RefCell;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    thread_local! {
+        static FILES: RefCell<BTreeMap<Vec<u8>, Vec<u8>>> = RefCell::default();
+        static FOLDERS: RefCell<BTreeSet<Vec<u8>>> = RefCell::default();
+        static WRITES: RefCell<u32> = const { RefCell::new(0) };
+    }
+
+    /// The name as the platform keeps it (`engine_platform::mod_files::relative`): lower case,
+    /// `\`, a `..` taking off the part before it; `None` for one that leaves the game's folder.
+    fn key(name: &[u8]) -> Option<Vec<u8>> {
+        let name = name.to_ascii_lowercase();
+        let mut parts: Vec<&[u8]> = Vec::new();
+        for part in name.split(|&b| b == b'\\' || b == b'/') {
+            match part {
+                b"" | b"." => {}
+                b".." => {
+                    parts.pop()?;
+                }
+                _ => parts.push(part),
+            }
+        }
+        (!parts.is_empty()).then(|| parts.join(&b'\\'))
+    }
+    /// A file that is there but cannot be read (Windows' `ERROR_ACCESS_DENIED`).
+    pub const LOCKED: &[u8] = b"\xff locked";
+
+    fn read(_: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
+        // A refused name reads nothing, as a file that is not there.
+        let k = key(name).ok_or(mf::ERROR_FILE_NOT_FOUND)?;
+        match FILES.with(|f| f.borrow().get(&k).cloned()) {
+            Some(bytes) if bytes == LOCKED => Err(mf::ERROR_ACCESS_DENIED),
+            Some(bytes) => Ok(bytes),
+            None => Err(mf::ERROR_FILE_NOT_FOUND),
+        }
+    }
+    fn exists(_: &Engine, name: &[u8]) -> bool {
+        key(name).is_some_and(|k| FILES.with(|f| f.borrow().contains_key(&k)))
+    }
+    fn directory_exists(_: &Engine, name: &[u8]) -> bool {
+        key(name).is_some_and(|k| FOLDERS.with(|f| f.borrow().contains(&k)))
+    }
+    fn create_directory(_: &mut Engine, name: &[u8]) -> Result<(), u32> {
+        let k = key(name).ok_or(mf::ERROR_ACCESS_DENIED)?;
+        FOLDERS.with(|f| f.borrow_mut().insert(k));
+        Ok(())
+    }
+    fn write(_: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+        let k = key(name).ok_or(mf::ERROR_ACCESS_DENIED)?;
+        // A file in a folder that exists nowhere (not made, and holding no file): Windows'
+        // `ERROR_PATH_NOT_FOUND`.
+        if let Some(at) = k.iter().rposition(|&b| b == b'\\' || b == b'/') {
+            let folder = &k[..at + 1];
+            let there = FOLDERS.with(|f| f.borrow().contains(&k[..at]))
+                || FILES.with(|f| f.borrow().keys().any(|name| name.starts_with(folder)));
+            if !there {
+                return Err(mf::ERROR_PATH_NOT_FOUND);
+            }
+        }
+        WRITES.with(|w| *w.borrow_mut() += 1);
+        FILES.with(|f| f.borrow_mut().insert(k, bytes.to_vec()));
+        Ok(())
+    }
+    static CALLS: ModFileCalls = ModFileCalls {
+        read,
+        exists,
+        directory_exists,
+        create_directory,
+        write,
+    };
+
+    /// Installs the calls (once a run) and empties this thread's files.
+    pub fn fresh() {
+        engine_core::mod_files::install(&CALLS);
+        FILES.with(|f| f.borrow_mut().clear());
+        FOLDERS.with(|f| f.borrow_mut().clear());
+        WRITES.with(|w| *w.borrow_mut() = 0);
+    }
+    pub fn put(name: &str, text: &[u8]) {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FILES.with(|f| f.borrow_mut().insert(k, text.to_vec()));
+    }
+    pub fn folder(name: &str) {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FOLDERS.with(|f| f.borrow_mut().insert(k));
+    }
+    pub fn get(name: &str) -> Option<Vec<u8>> {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FILES.with(|f| f.borrow().get(&k).cloned())
+    }
+    pub fn folders() -> Vec<Vec<u8>> {
+        FOLDERS.with(|f| f.borrow().iter().cloned().collect())
+    }
+    pub fn writes() -> u32 {
+        WRITES.with(|w| *w.borrow())
+    }
+}
+
+const MOD_INFO: u32 = FORMS + 0x4000;
+
+/// The engine with the seam's stand-in, the script of mod 2 (`oHUD.esp`).
+fn files_setup() -> Engine {
+    let mut e = setup();
+    files::fresh();
+    loaded_mod(&mut e, 2, MOD_INFO, b"oHUD.esp");
+    e.mem.set_u8(crate::test_support::SCRIPT + 0xf, 2);
+    e
+}
+
+fn res_of(e: &mut Engine, opcode: u32, args: &[Vec<u8>]) -> f64 {
+    e.mem.set_f64(RESULT, 0.0);
+    call(e, opcode, args).1
+}
+
+/// `GetINIPath`: `data\config\`, the name given (`/` made `\`) or the script's mod, the part
+/// after the last `.` made `ini`.
+#[test]
+fn the_ini_file_a_command_names() {
+    let e = files_setup();
+    let script = crate::test_support::SCRIPT;
+    fn path(e: &Engine, name: &[u8]) -> Option<Vec<u8>> {
+        ini_path(e, crate::test_support::SCRIPT, name.to_vec())
+    }
+    assert_eq!(path(&e, b"oHUD").unwrap(), br"data\config\oHUD.ini");
+    assert_eq!(path(&e, b"a/b.txt").unwrap(), br"data\config\a\b.ini");
+    assert_eq!(path(&e, b"my.mod/cfg").unwrap(), br"data\config\my.ini");
+    assert_eq!(path(&e, b"x.").unwrap(), br"data\config\x.ini");
+    assert_eq!(path(&e, b"").unwrap(), br"data\config\oHUD.ini");
+    // No file for the script's index, or index 0xFF: nothing.
+    e.mem.set_u8(script + 0xf, 3);
+    assert_eq!(path(&e, b""), None);
+    e.mem.set_u8(script + 0xf, 0xff);
+    assert_eq!(path(&e, b""), None);
+    assert_eq!(ini_path(&e, 0, Vec::new()), None);
+}
+
+/// `GetValueDelim`: the first `:`, `/` or `\`; none, or an empty key, is nothing.
+#[test]
+fn a_value_name_splits_at_its_first_delimiter() {
+    let split = split_value_name;
+    assert_eq!(split(b"Main:Scale"), Some((&b"Main"[..], &b"Scale"[..])));
+    assert_eq!(split(b"Main/a:b"), Some((&b"Main"[..], &b"a:b"[..])));
+    assert_eq!(split(b"Main\\x"), Some((&b"Main"[..], &b"x"[..])));
+    assert_eq!(split(b":x"), Some((&b""[..], &b"x"[..])));
+    assert_eq!(split(b"Main"), None);
+    assert_eq!(split(b"Main:"), None);
+}
+
+/// Floats and texts written and read back; the file's folders made first; a value cut to the
+/// buffer's size; nothing for a missing key.
+#[test]
+fn ini_values_written_and_read_back() {
+    let mut e = files_setup();
+    assert_eq!(
+        res_of(&mut e, 0x227c, &[s(b"Main:fScale"), z(1.25), s(b"")]),
+        1.0
+    );
+    assert_eq!(
+        files::get(r"data\config\oHUD.ini").unwrap(),
+        b"[Main]\r\nfScale=1.25\r\n"
+    );
+    assert_eq!(
+        files::folders(),
+        vec![b"data".to_vec(), b"data\\config".to_vec()]
+    );
+    assert_eq!(res_of(&mut e, 0x227a, &[s(b"main:FSCALE"), s(b"")]), 1.25);
+    assert_eq!(
+        res_of(&mut e, 0x227d, &[s(b"Main/sName"), s(b"hello"), s(b"oHUD")]),
+        1.0
+    );
+    let res = res_of(&mut e, 0x227b, &[s(b"Main\\sName"), s(b"oHUD.esp")]);
+    assert_eq!(string_result(&e, res), b"hello");
+    // Missing: no number, an empty text.
+    assert_eq!(res_of(&mut e, 0x227a, &[s(b"Main:none"), s(b"")]), 0.0);
+    let res = res_of(&mut e, 0x227b, &[s(b"Main:none"), s(b"")]);
+    assert_eq!(string_result(&e, res), b"");
+    // No delimiter: nothing written.
+    let before = files::writes();
+    assert_eq!(res_of(&mut e, 0x227c, &[s(b"Main"), z(2.0), s(b"")]), 0.0);
+    assert_eq!(files::writes(), before);
+    // A float reads its first 31 bytes; an empty value is no number.
+    files::put(
+        r"data\config\n.ini",
+        b"[A]\r\nlong=0.1234567890123456789012345678901234\r\nbig=123456789012345678901234567890123\r\nempty=\r\n",
+    );
+    assert_eq!(
+        res_of(&mut e, 0x227a, &[s(b"A:long"), s(b"n")]),
+        123_456_789.0 * 1.0e-09
+    );
+    assert_eq!(
+        res_of(&mut e, 0x227a, &[s(b"A:big"), s(b"n")]),
+        4294967296.0
+    );
+    // (`line` clears the result: 7 is set after it.)
+    let words = crate::test_support::line(&mut e, 0x227a, &[s(b"A:empty"), s(b"n")]);
+    e.mem.set_f64(RESULT, 7.0);
+    let exec = crate::test_support::execute_of(&e, 0x227a);
+    e.call(exec, &words);
+    assert_eq!(e.mem.f64(RESULT), 7.0, "an empty value leaves the result");
+    // The 31-byte cut: a fraction whose tenth digit is the 32nd byte is not read past.
+    files::put(
+        r"data\config\c.ini",
+        b"[A]\r\nk=000000000000000000000000000001.5\r\n",
+    );
+    assert_eq!(res_of(&mut e, 0x227a, &[s(b"A:k"), s(b"c")]), 1.0);
+    // A text value cut to 0x3FFF bytes.
+    let long = vec![b'x'; 0x5000];
+    files::put(
+        r"data\config\t.ini",
+        &[&b"[A]\r\nk="[..], &long[..], &b"\r\n"[..]].concat(),
+    );
+    let res = res_of(&mut e, 0x227b, &[s(b"A:k"), s(b"t")]);
+    assert_eq!(string_result(&e, res).len(), 0x3fff);
+}
+
+/// A name that leaves the game's folder (a `..` past it: `data\config\..\..\..\x.ini`) is refused
+/// by the seam: nothing written, result 0, as JIP answers for a file Windows could not write, and
+/// nothing read there, as for a missing file. A name whose `..` stays inside the game's folder is
+/// an ordinary name and is written under the name it resolves to (REVIEW-642).
+#[test]
+fn a_refused_name_writes_nothing() {
+    let mut e = files_setup();
+    assert_eq!(
+        res_of(
+            &mut e,
+            0x227c,
+            &[s(b"A:x"), z(1.0), s(br"..\..\..\evil.cfg")]
+        ),
+        0.0
+    );
+    assert_eq!(
+        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"../../../x.cfg")]),
+        0.0
+    );
+    assert_eq!(files::writes(), 0);
+    assert_eq!(
+        res_of(&mut e, 0x227a, &[s(b"A:x"), s(b"../../../x.cfg")]),
+        0.0
+    );
+    // `..\x.cfg` from the config folder is `data\x.ini`: inside Data, written there.
+    assert_eq!(
+        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(br"..\x.cfg")]),
+        1.0
+    );
+    assert_eq!(files::get(r"data\x.ini").unwrap(), b"[A]\r\nx=v\r\n");
+    // JIP's `..\NVSE\Plugins\SomePlugin.ini` from the config folder: Data's plugin INI.
+    assert_eq!(
+        res_of(
+            &mut e,
+            0x227d,
+            &[
+                s(b"Main:bFoo"),
+                s(b"1"),
+                s(br"..\NVSE\Plugins\SomePlugin.ini")
+            ]
+        ),
+        1.0
+    );
+    assert_eq!(
+        files::get(r"data\nvse\plugins\SomePlugin.ini").unwrap(),
+        b"[Main]\r\nbFoo=1\r\n"
+    );
+    let res = res_of(
+        &mut e,
+        0x227b,
+        &[s(b"Main:bFoo"), s(b"../NVSE/Plugins/SomePlugin.ini")],
+    );
+    assert_eq!(string_result(&e, res), b"1");
+    // `../x` is JIP's `..ini` in the config folder (the part after the last `.` made `ini`): a
+    // name inside it, written.
+    assert_eq!(
+        res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"../x")]),
+        1.0
+    );
+    assert!(files::get(r"data\config\..ini").is_some());
+}
+
+/// A file that is there but cannot be read (Windows answers the default to reads and fails the
+/// writes, so JIP gives nothing and result 0): nothing read, nothing written, the file kept.
+#[test]
+fn an_unreadable_file_is_left_alone() {
+    let mut e = files_setup();
+    files::put(r"data\config\oHUD.ini", files::LOCKED);
+    assert_eq!(res_of(&mut e, 0x227c, &[s(b"A:x"), z(1.0), s(b"")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x227d, &[s(b"A:x"), s(b"v"), s(b"")]), 0.0);
+    let map = nvse::vars::create_array(&mut e, nvse::vars::KEY_STRING, false, 0);
+    nvse::vars::set_element(&mut e, map, &Key::Str(b"k".to_vec()), V::Number(1.0));
+    assert_eq!(
+        res_of(&mut e, 0x227f, &[s(b"A"), n(map as i32), s(b"")]),
+        0.0
+    );
+    assert_eq!(res_of(&mut e, 0x22ae, &[s(b"A:x"), s(b"")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x22af, &[s(b"A"), s(b"")]), 0.0);
+    assert_eq!(files::writes(), 0);
+    assert_eq!(files::get(r"data\config\oHUD.ini").unwrap(), files::LOCKED);
+    assert_eq!(res_of(&mut e, 0x227a, &[s(b"A:x"), s(b"")]), 0.0);
+    let res = res_of(&mut e, 0x227b, &[s(b"A:x"), s(b"")]);
+    assert_eq!(string_result(&e, res), b"");
+}
+
+/// `GetINISection`: a string map of the entries with a value, text or numbers; empty when the
+/// file or section is not there.
+#[test]
+fn an_ini_section_as_a_map() {
+    let mut e = files_setup();
+    files::put(
+        r"data\config\oHUD.ini",
+        b"[Main]\r\na = 1.5 \r\nb==2\r\nnovalue=\r\njunk\r\n;c=3\r\n=4\r\n[Other]\r\nz=9\r\n",
+    );
+    let entries = |e: &Engine, res: f64| -> Vec<(Vec<u8>, Data)> {
+        let Container::StrMap(items) = &nvse::vars::array(e, res as u32).unwrap().elements else {
+            panic!("a string map");
+        };
+        let mut v: Vec<(Vec<u8>, Data)> = items
+            .iter()
+            .map(|(k, el)| (k.clone(), el.data.clone()))
+            .collect();
+        v.sort_by(|x, y| x.0.cmp(&y.0));
+        v
+    };
+    let res = res_of(&mut e, 0x227e, &[s(b"main"), s(b"")]);
+    assert_eq!(
+        entries(&e, res),
+        vec![
+            (b"".to_vec(), Data::Str(b"4".to_vec())),
+            (b"a".to_vec(), Data::Str(b"1.5".to_vec())),
+            (b"b".to_vec(), Data::Str(b"2".to_vec())),
+        ]
+    );
+    let res = res_of(&mut e, 0x227e, &[s(b"Main"), s(b""), n(1)]);
+    assert_eq!(
+        entries(&e, res),
+        vec![
+            (b"".to_vec(), Data::Number(4.0)),
+            (b"a".to_vec(), Data::Number(1.5)),
+            (b"b".to_vec(), Data::Number(2.0)),
+        ]
+    );
+    // No section, no file: an empty map.
+    let res = res_of(&mut e, 0x227e, &[s(b"None"), s(b"")]);
+    assert!(res != 0.0 && entries(&e, res).is_empty());
+    let res = res_of(&mut e, 0x227e, &[s(b"Main"), s(b"nofile")]);
+    assert!(res != 0.0 && entries(&e, res).is_empty());
+}
+
+/// `SetINISection`: the section written whole from a string map (numbers as `FltToStr`, other
+/// values `0`); nothing for an array that is not a string map or is empty.
+#[test]
+fn an_ini_section_written_from_a_map() {
+    let mut e = files_setup();
+    files::put(
+        r"data\config\oHUD.ini",
+        b"[Main]\r\nold=1\r\n;keep\r\n[B]\r\nx=1\r\n",
+    );
+    let map = nvse::vars::create_array(&mut e, nvse::vars::KEY_STRING, false, 0);
+    for (k, v) in [
+        (&b"num"[..], V::Number(0.5)),
+        (&b"text"[..], V::Str(b"hi".to_vec())),
+        (&b"form"[..], V::Form(0x201)),
+    ] {
+        nvse::vars::set_element(&mut e, map, &Key::Str(k.to_vec()), v);
+    }
+    assert_eq!(
+        res_of(&mut e, 0x227f, &[s(b"main"), n(map as i32), s(b"")]),
+        1.0
+    );
+    let Container::StrMap(items) = &nvse::vars::array(&e, map).unwrap().elements else {
+        unreachable!()
+    };
+    let lines: Vec<u8> = items
+        .iter()
+        .flat_map(|(k, el)| {
+            let v: &[u8] = match &el.data {
+                Data::Number(_) => b"0.5",
+                Data::Str(_) => b"hi",
+                _ => b"0",
+            };
+            [&k[..], b"=", v, b"\r\n"].concat()
+        })
+        .collect();
+    assert_eq!(
+        files::get(r"data\config\oHUD.ini").unwrap(),
+        [
+            &b"[Main]\r\n"[..],
+            &lines[..],
+            &b";keep\r\n[B]\r\nx=1\r\n"[..]
+        ]
+        .concat()
+    );
+    assert_eq!(lines.len(), b"num=0.5\r\ntext=hi\r\nform=0\r\n".len());
+    // A packed array, an empty map, no array: nothing.
+    let packed = array_of(&mut e, vec![V::Number(1.0)]);
+    assert_eq!(
+        res_of(&mut e, 0x227f, &[s(b"X"), n(packed as i32), s(b"")]),
+        0.0
+    );
+    let empty = nvse::vars::create_array(&mut e, nvse::vars::KEY_STRING, false, 0);
+    assert_eq!(
+        res_of(&mut e, 0x227f, &[s(b"X"), n(empty as i32), s(b"")]),
+        0.0
+    );
+    assert_eq!(res_of(&mut e, 0x227f, &[s(b"X"), n(9999), s(b"")]), 0.0);
+    // A new file: its folders made, the section alone.
+    assert_eq!(
+        res_of(&mut e, 0x227f, &[s(b"S"), n(map as i32), s(b"sub/new")]),
+        1.0
+    );
+    let made = files::get(r"data\config\sub\new.ini").unwrap();
+    assert_eq!(made, [&b"[S]\r\n"[..], &lines[..]].concat());
+    assert!(files::folders().contains(&b"data\\config\\sub".to_vec()));
+}
+
+/// `GetINISectionNames`: every heading in order; an empty array without a file.
+#[test]
+fn ini_section_names_as_an_array() {
+    let mut e = files_setup();
+    files::put(
+        r"data\config\oHUD.ini",
+        b"[Main]\r\nx=1\r\n[ Two ]\r\n[]\r\n[Main]\r\n",
+    );
+    let res = res_of(&mut e, 0x2285, &[s(b"")]);
+    assert_eq!(
+        array_data(&e, res),
+        vec![
+            Data::Str(b"Main".to_vec()),
+            Data::Str(b"Two".to_vec()),
+            Data::Str(Vec::new()),
+            Data::Str(b"Main".to_vec())
+        ]
+    );
+    let res = res_of(&mut e, 0x2285, &[s(b"none")]);
+    assert!(res != 0.0 && array_data(&e, res).is_empty());
+}
+
+/// JIP's walk of a filled buffer: a cut last text kept, an empty text kept.
+#[test]
+fn a_filled_buffer_walked_as_jip_walks_it() {
+    let items = vec![b"abc".to_vec(), Vec::new(), b"de".to_vec()];
+    let (buf, count) = engine_core::mod_files::profile_list(&items, 0x100);
+    assert_eq!(walked(&buf, count), items);
+    let (buf, count) = engine_core::mod_files::profile_list(&items, 8);
+    assert_eq!(
+        walked(&buf, count),
+        vec![b"abc".to_vec(), Vec::new(), b"d".to_vec()]
+    );
+    assert!(walked(&[0], 0).is_empty());
+}
+
+/// `RemoveINIKey`/`RemoveINISection`: 1 when the file is there (a missing key too); nothing for a
+/// missing file, which is not made.
+#[test]
+fn ini_keys_and_sections_removed() {
+    let mut e = files_setup();
+    files::put(
+        r"data\config\oHUD.ini",
+        b"[A]\r\nx=1\r\ny=2\r\n[B]\r\nz=3\r\n",
+    );
+    assert_eq!(res_of(&mut e, 0x22ae, &[s(b"A:x"), s(b"")]), 1.0);
+    assert_eq!(
+        files::get(r"data\config\oHUD.ini").unwrap(),
+        b"[A]\r\ny=2\r\n[B]\r\nz=3\r\n"
+    );
+    assert_eq!(res_of(&mut e, 0x22ae, &[s(b"A:none"), s(b"")]), 1.0);
+    assert_eq!(res_of(&mut e, 0x22ae, &[s(b"A"), s(b"")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x22af, &[s(b"a"), s(b"")]), 1.0);
+    assert_eq!(
+        files::get(r"data\config\oHUD.ini").unwrap(),
+        b"[B]\r\nz=3\r\n"
+    );
+    let before = files::writes();
+    assert_eq!(res_of(&mut e, 0x22ae, &[s(b"A:x"), s(b"missing")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x22af, &[s(b"A"), s(b"missing")]), 0.0);
+    assert_eq!(files::writes(), before);
+    assert_eq!(files::get(r"data\config\missing.ini"), None);
+}
+
+const HASH_PATH_FN: u32 = 0x00af_d270;
+const ARCHIVE_HAS_FILE_FN: u32 = 0x00af_9bf0;
+const ARCHIVE_NODE: u32 = FORMS + 0x5000;
+const ARCHIVE: u32 = FORMS + 0x5100;
+
+/// `FileExists`: `data\` and the name; 1 there as asked, 0 there as the other; 2 for a file in
+/// an opened archive of its extension's type (looked for without `data\`).
+#[test]
+fn files_and_folders_found() {
+    let mut e = files_setup();
+    files::put(r"data\textures\a.dds", b"x");
+    files::folder(r"data\textures");
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"textures/a.dds")]), 1.0);
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"textures\\a.dds"), n(1)]), 0.0);
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"textures"), n(1)]), 1.0);
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"textures")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"none"), n(1)]), 0.0);
+    // Archives: one opened archive of meshes (type 1) holding "meshes\x.nif".
+    e.map(0x011f_8000, 0x1000);
+    e.mem.set_u32(0x011f_8160, ARCHIVE_NODE);
+    e.mem.set_u32(ARCHIVE_NODE, ARCHIVE);
+    e.mem.set_u32(ARCHIVE_NODE + 4, 0);
+    e.mem.set_u16(ARCHIVE + 0x180, 1);
+    e.register(HASH_PATH_FN, |e, w| {
+        let path = nvse::table::guest_text(e, w[0]);
+        CALLS.with(|c| {
+            c.borrow_mut()
+                .push((HASH_PATH_FN, path.iter().map(|&b| u32::from(b)).collect()))
+        });
+        e.mem.set_u32(w[1], 0x1111);
+        e.mem.set_u32(w[2], 0x2222);
+        Ret::default()
+    });
+    e.register(ARCHIVE_HAS_FILE_FN, |e, w| {
+        let path = nvse::table::guest_text(e, w[5]);
+        let hit = w[0] == ARCHIVE
+            && e.mem.u32(w[1]) == 0x1111
+            && e.mem.u32(w[2]) == 0x2222
+            && path == b"meshes\\x.nif";
+        Ret {
+            eax: u32::from(hit),
+            ..Ret::default()
+        }
+    });
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"meshes/x.nif")]), 2.0);
+    let hashed: Vec<u8> = calls_to(HASH_PATH_FN)[0].iter().map(|&b| b as u8).collect();
+    assert_eq!(hashed, b"meshes\\x.nif");
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"meshes/y.nif")]), 0.0);
+    // An archive of another type is not asked.
+    e.mem.set_u16(ARCHIVE + 0x180, 2);
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"meshes/x.nif")]), 0.0);
+    e.mem.set_u16(ARCHIVE + 0x180, 1);
+    // An extension not in the table, or none: not looked for.
+    let before = calls_to(HASH_PATH_FN).len();
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"meshes/x.esp")]), 0.0);
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"meshes/x")]), 0.0);
+    assert_eq!(calls_to(HASH_PATH_FN).len(), before);
+    // An upper-case extension: the same hash, looked for.
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"meshes/x.NIF")]), 0.0);
+    assert_eq!(calls_to(HASH_PATH_FN).len(), before + 1);
+    // Asked for a folder: archives are not looked in.
+    assert_eq!(res_of(&mut e, 0x2201, &[s(b"meshes/x.nif"), n(1)]), 0.0);
+    assert_eq!(calls_to(HASH_PATH_FN).len(), before + 1);
+}
