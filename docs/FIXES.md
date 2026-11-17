@@ -915,7 +915,9 @@ save) should get.
   inert until JIP answers "installed" (step 3.10); off, and before that, the game's own.
 - **Where a mod's files are kept** (no row: always so, the maintainer's rule of 2026-11-16): the
   INI files JIP LN's commands write (`SetINIFloat`, `SetINIString`, `SetINISection`,
-  `RemoveINIKey`, `RemoveINISection`; `Data\Config\<name>.ini`) go to the port's own folder for
+  `RemoveINIKey`, `RemoveINISection`; `Data\Config\<name>.ini`), and the files of
+  `WriteArrayToFile`, `WriteStringToFile`, `ModLogPrint` (`Mod Logs\<plugin>.log`) and
+  `GetStringHash`'s split mode (`GetStringHash.txt`) go to the port's own folder for
   mods' files beside the saves (`nv-rs mod files`, or `NV_MOD_FILES_OUT`; docs/PLAYTESTING.md),
   never into the game's folder; reads (`GetINI*`, `FileExists`) look there first, then in the
   game's Data. A `..` that stays inside the game's folder is followed (`..\NVSE\Plugins\x.ini`
@@ -923,7 +925,14 @@ save) should get.
   drive, another full path) is refused, where JIP would write anywhere: it reads as a missing file
   and is never written (no value, result 0). A UTF-16 settings file is read and kept as UTF-16, as
   Windows does; a file Windows' encoding guess decides (UTF-16 without its mark, big-endian) is
-  read but never written.
+  read but never written. Also refused (so one file never has two names, and no mod file is
+  taken for the port's own temporary `.part` file): a name part ending in a dot or a space (read
+  as missing, never written), and in writes a name ending in `.part`. A name with a non-English
+  letter (an accented or Cyrillic plugin or INI name) is written to the port's folder only, so
+  the disk answers every spelling of it as Windows does; with no port folder set (settings kept
+  for the session only) such a write is refused. Appends (`ModLogPrint`, the append flags) write only the new line, as
+  JIP does, and `ReadStringFromFile` reads only the 0x3FFF bytes it uses, so a long log costs
+  nothing more each frame.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of
   #329). One error reaches the handlers once; the console still shows every error. Kept per game
   thread: an error another thread raises meanwhile is its own and reaches the handlers.
