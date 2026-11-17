@@ -102,6 +102,16 @@ fn prepare(e: &mut Engine) {
             e.register(at, |_, _| f32::into_ret(-1.0));
         }
     }
+    // Group GX's wraps (G59 `00ee820a`, the `XInputSetState` thunk; H20 `00a239e0`, the mouse
+    // axis read), when the test engine has no translation of them: a marker answer (0x5a5a).
+    for at in [0x00ee_820a, 0x00a2_39e0] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| Ret {
+                eax: 0x5a5a,
+                ..Ret::default()
+            });
+        }
+    }
     // O1's wrap (`009b5a30`, `HitData::ReduceDamage`): a stand-in that leaves the hit as it is.
     if !e.is_registered(0x009b_5a30) {
         e.register(0x009b_5a30, |_, _| Ret::default());
@@ -113,6 +123,25 @@ fn prepare(e: &mut Engine) {
             eax: 0x5a5a,
             ..Ret::default()
         });
+    }
+    // Group GW's G113 and D05 wraps (`00595560`, `004f4f90`, `005e3630`) when the test engine has
+    // no translation of them: marker answers (0x5a5b, 0x5a5c, 0x5a5d).
+    if !e.is_registered(0x0059_5560) {
+        e.register(0x0059_5560, |_, _| 0x5a5bu32.into_ret());
+    }
+    if !e.is_registered(0x004f_4f90) {
+        e.register(0x004f_4f90, |_, _| 0x5a5cu32.into_ret());
+    }
+    if !e.is_registered(0x005e_3630) {
+        e.register(0x005e_3630, |_, _| 0x5a5du32.into_ret());
+    }
+    // G108's wraps (`00af01e0`, `00af0290`, `BSWin32GameSound`'s frequency set and read): marker
+    // answers (0x5a5e, 7.0).
+    if !e.is_registered(0x00af_01e0) {
+        e.register(0x00af_01e0, |_, _| 0x5a5eu32.into_ret());
+    }
+    if !e.is_registered(0x00af_0290) {
+        e.register(0x00af_0290, |_, _| 7.0f32.into_ret());
     }
     // Group GF: `TESNPC`'s model vtable (0x0104A1A4), whose set slot `+0x18` JIP writes (G40),
     // the two skeleton settings (0x011D2718, 0x011D3E44), and `00601c30` (G39's wrap) when the

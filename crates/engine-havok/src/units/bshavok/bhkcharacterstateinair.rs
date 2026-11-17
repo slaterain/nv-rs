@@ -32,6 +32,21 @@ fn set_lanes(e: &mut Engine, at: u32, value: [f32; 4]) {
     }
 }
 
+/// The test of `iFlags` bit 8 at `0xCD3FDD` (`TEST AL, 1` on the flags shifted right by 8). JIP LN
+/// NVSE's G29 (a fix, the row `NV_JIP_GAME_PATCHES`; `SAFE_WRITE_BUF(0xCD3FDD, ..)`) also takes
+/// the block for its own no-fall flag (bit 30, which its `MarkCreatureNoFallHook` sets on an
+/// immobile creature's controller): the seam is asked with the controller and the flags and its
+/// answer's low byte is the test. With the word's `FIXES` bit clear: one load, the exe's test.
+#[inline]
+fn no_fall_test(e: &mut Engine, controller: Ptr, flags: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(answer) = e.site(0x00cd_3fdd, &[controller.addr(), flags]) {
+            return answer as u8 != 0;
+        }
+    }
+    (flags >> 8) & 1 != 0
+}
+
 // Translated from 00cd3fb0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00cd3fb0 - the /GS cookie check 00ec408c is not modeled
 /// `bhkCharacterStateInAir::Update` (Xbox PDB), virtual `(this, controller)`. `this` (ECX)
@@ -54,7 +69,7 @@ pub fn bhk_character_state_in_air_update(e: &mut Engine, this: Ptr, controller: 
     let c = controller.addr();
     let s = this.addr();
     let flags = e.mem.u32(c + 0x414);
-    if (flags >> 8) & 1 != 0 {
+    if no_fall_test(e, controller, flags) {
         e.mem.set_u32(c + 0x520, 0);
         let flags = e.mem.u32(c + 0x414);
         e.mem.set_u32(c + 0x414, flags | 0x80);
@@ -196,6 +211,57 @@ mod movement_tests {
         e.mem.set_u32(c, vtable);
         let this = e.mem.alloc(0x20);
         (e, log, this, c)
+    }
+
+    /// JIP LN NVSE's G29 seam at `0xCD3FDD`: with the word 0 (or only `INSTALLED`) not asked, the
+    /// exe's bit 8 test; with `FIXES` asked with the controller and the flags, its answer's low
+    /// byte the test (a JIP no-fall flag alone then resets the state and sets 0x80; `0x100` is
+    /// false), no answer the exe's test.
+    #[test]
+    fn g29_seam_decides_the_flag_test() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+            static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        }
+        fn handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+            ANSWER.with(std::cell::Cell::get)
+        }
+        let run = |word: u32, answer: Option<u32>, flags: u32| {
+            let (mut e, _, this, c) = rig();
+            e.on_site(SiteSlot::new(Owner::Jip, 0x00cd_3fdd), handler);
+            e.set_jip_patches(word);
+            ASKED.with(|s| s.borrow_mut().clear());
+            ANSWER.with(|a| a.set(answer));
+            e.mem.set_u32(c + 0x414, flags);
+            e.mem.set_u32(c + 0x520, 0xb);
+            e.mem.set_f32(c + 0x548, 0.0);
+            e.call(0x00cd_3fb0, &args![this, c]);
+            (
+                e.mem.u32(c + 0x520),
+                e.mem.u32(c + 0x414),
+                ASKED.with(|s| s.take()),
+                c,
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (state, flags, asked, _) = run(word, Some(1), 0x4000_0000);
+            assert_eq!(
+                (state, flags, asked.len()),
+                (0xb, 0x4000_0000, 0),
+                "{word:08x}"
+            );
+            let (state, flags, _, _) = run(word, Some(0), 0x100);
+            assert_eq!((state, flags), (0, 0x180), "the exe's bit 8");
+        }
+        let (state, flags, asked, c) = run(jip_patches::FIXES, Some(0x101), 0x4000_0000);
+        assert_eq!((state, flags), (0, 0x4000_0080));
+        assert_eq!(asked, vec![vec![c, 0x4000_0000]]);
+        let (state, flags, _, _) = run(jip_patches::FIXES, Some(0x100), 0x100);
+        assert_eq!((state, flags), (0xb, 0x100), "0x100: false");
+        let (state, flags, _, _) = run(jip_patches::FIXES, None, 0x100);
+        assert_eq!((state, flags), (0, 0x180), "no answer: the exe's");
     }
 
     #[test]

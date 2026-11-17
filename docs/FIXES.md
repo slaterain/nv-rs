@@ -1109,12 +1109,9 @@ off, each place runs the exe's code unchanged.
 
 Seams for other groups' rows: G06's `0x77765A` (the HUD's action
 text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below); O14's `0x770B0E`
-(`DoIdle`'s sneak test, asked with `bSneakBoundingBoxFix` on; group GX's row and handler, not
-built yet; O14's second hook site, `0xC72EA3` in the player's character controller setup where JIP's
-`InitControllerShapeHook` records the controller shape, has no seam yet: group GX adds it with its handler, and
-the two are tested together); G108's `0xAE5648` (the audio manager's message kind 54, which the game ignores; group
-GW's row and handler, not built yet). Until their handlers are in, those two places run the
-game's code.
+(`DoIdle`'s sneak test, asked with `bSneakBoundingBoxFix` on; group GX's row and handler, with its
+second site `0xC72EA3`: listed under GX below); G108's `0xAE5648` (the audio manager's message kind 54, which the
+game ignores; group GW's row and handler, listed under GW below).
 
 #### GB: UI: item lists, repair, pad dead zones
 
@@ -1398,6 +1395,31 @@ on by a fixed table (no leap years, as in the original). Differences from JIP: w
 hardcore needs byte JIP sets is not written (JIP would write to a bad address), and a month number outside
 0 to 11 is taken to have 31 days (JIP reads past its table).
 
+Sound and music fixes (with the row): a sound form's frequency setting (its pitch up or down by a
+percentage) is applied to the sound as it plays, and a script or the game that changes a sound's pitch
+keeps that setting on top (`0x82D416`, the request to the audio thread; `0xAE5648`, the audio thread's
+message 54, which the game ignores; `0xAEACAA`, a new sound's factor 1.0; `00af01e0` and `00af0290`,
+the sound's frequency set and read, replaced: the result is rounded to the nearest whole frequency
+where the game cut it, and setting it answers 0 as JIP's does). A region's music media sets from a
+plugin are found through that plugin's masters (`0x4F49AB`, `0x4F49D2`; credited by JIP to lStewieAl
+and TrueCourierSix); a location's music plays its media sets in a shuffled order with no repeat
+until each has played (`00595560` replaced; the game drew at random and moved the pick to the end);
+battle music never picks the set it played last (`004f4f90`, the region's `GetMediaSetBattle`,
+replaced). A random sound from a folder picks among both its `.wav` and its `.ogg` files (`005e3630`,
+the folder sound picker, replaced; the game took the `.ogg` files only when there were any, and kept a
+pick from repeating). Differences from JIP: a sound map with no buckets or a request with no sound
+form does nothing (JIP would divide by 0 or read a bad address); a location with no music list
+picks nothing, as the game does (JIP would read address 0); JIP puts the folder picker in at its
+deferred start-up, the port from the start.
+
+`FalloutCustom.ini` (with the row; `0x86AC60`, before the game's launcher test at start-up): each
+`setting=value` line of each `[section]` sets the game's INI setting `setting:section` (a `b` setting
+takes 1 when the value starts with `1`, `i` and `u` whole numbers, `f` a decimal, `s` the text), so
+players can override INI settings without editing the game's own files. The port reads the file as a
+mod's file: from its own folder beside the saves (`nv-rs mod files`), else the game's folder; JIP reads
+it from the game's settings folder in Documents, which the port never reads for mods. A setting name
+longer than JIP's 255-character buffer is taken whole.
+
 Seams for group GF's row G45 (saving: temporary forms are not written): `0x8497CD` (whether `UnloadForm` goes
 on), `0x846FFB` and `0x845558` (the save's form id and changes maps' bucket counts). Until GF's handler is in,
 those places run the game's code.
@@ -1408,7 +1430,21 @@ Nothing built yet.
 
 #### GX: Havok, pad rumble, mouse
 
-Nothing built yet.
+Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): immobile creatures (turrets and the like,
+whose creature record is flagged immobile) no longer drop to the ground when their physics starts: JIP marks
+their character controller and the in-air state treats the mark as "not falling" (`0x9313EC`, `0xCD3FDD`); a
+fixed physics body follows its object when the object is moved or turned and asks for it, as `SetPos` or
+`SetAngle` on a static do (the game only moved such bodies outside a physics world) (`00c65b00`); the pad does
+not rumble while the game's controller rumble setting is off (`0xEE820A`); a jump's height counts from the
+character's own jump value in physics units (`0xCD4468`). With JIP's `bSneakBoundingBoxFix` (on by default):
+the player's and teammates' collision shape is lowered by 6 units while the player sneaks, so a sneaking player
+fits under lower ceilings, and goes back when the player stands (`0xC72EA3`, where the controller is given a
+shape of JIP's own, and `0x770B0E`, the HUD's sneak test).
+
+Built as part of JIP (in every preset once JIP answers "installed"): `ToggleMouseMovement` turns the mouse's
+x and y movement off and on, and the mouse wheel does nothing while its key is disabled (`DisableKey` on the
+wheel's up or down code) (`00a239e0`); the player's constructor clears the three bytes after
+`bMenuModeButtonClicked` too, the sneak shape's state among them (`0x939258`).
 
 ### UI Organizer
 
