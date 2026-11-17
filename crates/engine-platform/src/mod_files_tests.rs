@@ -193,10 +193,7 @@ fn reads_prefer_the_ports_folder_and_writes_never_reach_the_game() {
 /// A name the game's folder does not hold reads nothing and is not there, even when a file of
 /// that name exists on disk (`..`, the full path of a file beside the game's folder, another
 /// drive, a UNC path, the folder above).
-// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
-// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
-// as part of a name elsewhere; starting the game there is refused today).
-#[cfg(windows)]
+// Runs on every system: the refusal is name logic alone (only its last read is Windows-only).
 #[test]
 fn a_refused_name_reads_nothing() {
     let root = scratch("refused");
@@ -238,12 +235,17 @@ fn a_refused_name_reads_nothing() {
             String::from_utf8_lossy(folder)
         );
     }
-    // The same file through the game's folder is read.
-    std::fs::write(game.join(r"Data\in.ini"), b"[A]\r\nx=2\r\n").unwrap();
-    assert_eq!(
-        seam::profile_string(&e, br"Data\in.ini", b"A", b"x").unwrap(),
-        b"2"
-    );
+    // The same file through the game's folder is read. Windows only: the game's backslash in
+    // `Data\in.ini` is a separator for the platform's file layer on Windows alone
+    // (`files::real_path` keeps it as part of a name elsewhere).
+    #[cfg(windows)]
+    {
+        std::fs::write(game.join(r"Data\in.ini"), b"[A]\r\nx=2\r\n").unwrap();
+        assert_eq!(
+            seam::profile_string(&e, br"Data\in.ini", b"A", b"x").unwrap(),
+            b"2"
+        );
+    }
 }
 
 /// A kept file that is there but cannot be read (another program holds it) fails the read: the
