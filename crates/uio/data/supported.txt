@@ -1,0 +1,70 @@
+advreconhud.xml:hudmainmenu
+#advrecon\advreconsettings.xml
+arwen\fatigue_hud.xml:hudmainmenu
+true
+arwen\strain_hud.xml:hudmainmenu
+true
+cyberiandawn\cyberiandawnhud.xml:hudmainmenu
+?CyberianDawn.esp
+directorschair\directorschair.xml:hudmainmenu
+true
+fairypack\fairypack_hud.xml:hudmainmenu
+true
+filmgraineffect.xml:hudmainmenu
+#filmgraineffect\filmgraineffectslides.xml	&&	#filmgraineffect\primarygrainlayer.xml	&&	#filmgraineffect\secondarygrainlayer.xml	&&	#filmgraineffect\thirdgrainlayer.xml
+flashlight_battery.xml:hudmainmenu
+true
+fww\weaponwheel.xml:hudmainmenu
+?FPSWeaponWheel.esp
+grenadehotkeyhud.xml:hudmainmenu
+true
+hude\hud_e.xml:hudmainmenu
+true
+imcnnv\imp.xml:hudmainmenu
+true
+jazzisparis\ccchud.xml:hudmainmenu
+?JIP Companions Command & Control.esp
+jazzisparis\firingmodehud.xml:hudmainmenu
+?JIP Selective-Fire.esm
+jazzisparis\ftahud.xml:hudmainmenu
+?JIP Fast-Travel Anywhere.esp
+jazzisparis\heatmeterhud.xml:hudmainmenu
+?JIP Realistic Weapon Overheating.esp
+jetpack\b3jetpack_hud.xml:hudmainmenu
+?Jetpack.esp	&&	!darnui
+jetpack\b3jetpack_hud(darn).xml:hudmainmenu
+?Jetpack.esp	&&	darnui
+meleehotkey\meleehotkey.xml:hudmainmenu
+?MeleeHotkey.esm
+neotropic\neotropic_hud.xml:hudmainmenu
+?NeotropicsWeaponDisplay.esp
+neotropic\neotropicweapondisplay_hud.xml:hudmainmenu
+?NeotropicsWeaponDisplay.esp
+pelinor\quicktrade.xml:hudmainmenu
+?Quick Trade.esp
+pelinor\selectivefire.xml:hudmainmenu
+?Selective Fire.esm
+pnx\pnxeohud.xml:hudmainmenu
+?Project Nevada - Extra Options.esm
+pnx\pnxhud.xml:hudmainmenu
+?Project Nevada - Core.esm
+ppa\ppa_hud.xml:hudmainmenu
+true
+primaryneedshud.xml:hudmainmenu
+#primaryneedshud\pnhclock.xml	&&	#primaryneedshud\pnhcombat.xml	&&	#primaryneedshud\pnhencumb.xml	&&	#primaryneedshud\pnhfat.xml	&&	#primaryneedshud\pnhlabels.xml	&&	#primaryneedshud\pnhprimaryneeds.xml	&&	#primaryneedshud\pnhrads.xml	&&	#primaryneedshud\pnhresists.xml	&&	#primaryneedshud\pnhsettings.xml	&&	#primaryneedshud\pnhstat.xml
+radar\radarhud.xml:hudmainmenu
+?Radar.esp
+rangefinder.xml:hudmainmenu
+true
+sc\sc_hud.xml:hudmainmenu
+?Stimpak Counter.esp
+vera\vera.xml:hudmainmenu
+?Vera.esp
+wmm\wmmtrigger.xml:inventorymenu
+?The Weapon Mod Menu.esp
+wmm\wmm.xml:inventorymenu:glow_branch
+?The Weapon Mod Menu.esp
+mcm\mcm.xml:startmenu
+?The Mod Configuration Menu.esp	||	?Project Nevada - Core.esm
+pnx\pnximplants.xml:tutorialmenu
+?Project Nevada - Core.esm
