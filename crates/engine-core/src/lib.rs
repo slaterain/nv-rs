@@ -71,6 +71,7 @@ pub mod exe;
 pub mod extend;
 pub mod mem;
 pub mod mod_files;
+pub mod processor;
 pub mod profile;
 pub mod ptr;
 pub mod queue_check;

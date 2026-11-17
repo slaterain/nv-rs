@@ -1,0 +1,104 @@
+GetSystemMetrics	1000	0
+CreateWindowStyle	10000000 0	14c00000	100	0
+CreateWindowStyle	50000000 1	50000000	0	0
+AdjustWindowRectEx	0 0 0	1	0 0 0 0
+AdjustWindowRectEx	0 0 100	1	0 0 0 0
+AdjustWindowRectEx	0 0 40000	1	0 0 0 0
+AdjustWindowRectEx	0 1 0	1	0 ffffffec 0 0
+AdjustWindowRectEx	0 1 100	1	0 ffffffec 0 0
+AdjustWindowRectEx	0 1 40000	1	0 ffffffec 0 0
+AdjustWindowRectEx	10000000 0 0	1	0 0 0 0
+AdjustWindowRectEx	10000000 0 100	1	0 0 0 0
+AdjustWindowRectEx	10000000 0 40000	1	0 0 0 0
+AdjustWindowRectEx	10000000 1 0	1	0 ffffffec 0 0
+AdjustWindowRectEx	10000000 1 100	1	0 ffffffec 0 0
+AdjustWindowRectEx	10000000 1 40000	1	0 ffffffec 0 0
+AdjustWindowRectEx	50000000 0 0	1	0 0 0 0
+AdjustWindowRectEx	50000000 0 100	1	0 0 0 0
+AdjustWindowRectEx	50000000 0 40000	1	0 0 0 0
+AdjustWindowRectEx	50000000 1 0	1	0 ffffffec 0 0
+AdjustWindowRectEx	50000000 1 100	1	0 ffffffec 0 0
+AdjustWindowRectEx	50000000 1 40000	1	0 ffffffec 0 0
+AdjustWindowRectEx	80000000 0 0	1	0 0 0 0
+AdjustWindowRectEx	80000000 0 100	1	0 0 0 0
+AdjustWindowRectEx	80000000 0 40000	1	0 0 0 0
+AdjustWindowRectEx	80000000 1 0	1	0 ffffffec 0 0
+AdjustWindowRectEx	80000000 1 100	1	0 ffffffec 0 0
+AdjustWindowRectEx	80000000 1 40000	1	0 ffffffec 0 0
+AdjustWindowRectEx	90000000 0 0	1	0 0 0 0
+AdjustWindowRectEx	90000000 0 100	1	0 0 0 0
+AdjustWindowRectEx	90000000 0 40000	1	0 0 0 0
+AdjustWindowRectEx	90000000 1 0	1	0 ffffffec 0 0
+AdjustWindowRectEx	90000000 1 100	1	0 ffffffec 0 0
+AdjustWindowRectEx	90000000 1 40000	1	0 ffffffec 0 0
+AdjustWindowRectEx	cf0000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	cf0000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	cf0000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	cf0000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	cf0000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	cf0000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10cf0000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10cf0000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10cf0000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10cf0000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10cf0000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10cf0000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	c00000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	c00000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	c00000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	c00000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	c00000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	c00000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10c00000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10c00000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10c00000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10c00000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10c00000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10c00000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	14c00000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	14c00000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	14c00000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	14c00000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	14c00000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	14c00000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	16c00000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	16c00000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	16c00000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	16c00000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	16c00000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	16c00000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	4c00000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	4c00000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	4c00000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	4c00000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	4c00000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	4c00000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	6c00000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	6c00000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	6c00000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	6c00000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	6c00000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	6c00000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	ca0000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	ca0000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	ca0000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	ca0000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	ca0000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	ca0000 1 40000	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10ca0000 0 0	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10ca0000 0 100	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10ca0000 0 40000	1	fffffff8 ffffffe1 8 8
+AdjustWindowRectEx	10ca0000 1 0	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10ca0000 1 100	1	fffffff8 ffffffcd 8 8
+AdjustWindowRectEx	10ca0000 1 40000	1	fffffff8 ffffffcd 8 8
+GetWindowsDirectoryA		a	433a5c57494e444f5753
+SHGetFolderPathA	23 0	0	433a5c50726f6772616d44617461
+SHGetFolderPathA	2e 0	0	433a5c55736572735c5075626c69635c446f63756d656e7473
+GetACP		4e4
+GetOEMCP		1b5
+IsValidCodePage	4e4	1
+GetCPInfo	4e4	1	010000003f000000000000000000000000000000
+IsValidCodePage	1b5	1
+GetCPInfo	1b5	1	010000003f000000000000000000000000000000
+IsValidCodePage	fde9	1
+GetCPInfo	fde9	1	040000003f000000000000000000000000000000

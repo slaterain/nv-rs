@@ -519,6 +519,63 @@ pub fn adapter_table_path() -> Option<PathBuf> {
         })
 }
 
+/// The machine table's text. On Windows the file at [`adapter_table_path`], when it can be read.
+#[cfg(windows)]
+pub fn adapter_table_text() -> Option<String> {
+    std::fs::read_to_string(adapter_table_path()?).ok()
+}
+
+/// The machine table's text. On Linux and macOS the file `NV_D3D9_ADAPTER` names when it is set
+/// (a test's table), else the table of this machine (`engine_platform::machine_table`), made once
+/// per run from what the system reports, with the game's Documents and AppData inside nv-rs's own
+/// folder ([`own_folder`], made here when missing). What could not be answered is said in the log.
+#[cfg(not(windows))]
+pub fn adapter_table_text() -> Option<String> {
+    if let Some(path) = std::env::var_os("NV_D3D9_ADAPTER") {
+        return std::fs::read_to_string(path).ok();
+    }
+    static TABLE: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let own = own_folder();
+        if let Ok(own) = &own {
+            for folder in engine_platform::machine_table::game_folders(own) {
+                if let Err(why) = std::fs::create_dir_all(&folder) {
+                    eprintln!("machine table: {}: {why}", folder.display());
+                }
+            }
+        }
+        let (table, problems) = engine_platform::machine_table::this_machine(own);
+        for line in problems {
+            eprintln!("{line}");
+        }
+        table
+    });
+    Some(table.clone())
+}
+
+/// nv-rs's own folder on Linux and macOS (its saves, settings and the game's Documents and
+/// AppData): Linux `$XDG_DATA_HOME/nv-rs` (a full path only), else `~/.local/share/nv-rs`; macOS
+/// `~/Library/Application Support/nv-rs`. The same rule as `game_folders::own_folder` (#630), which
+/// takes this place when it is merged.
+#[cfg(not(windows))]
+pub fn own_folder() -> Result<PathBuf, String> {
+    let full = |name: &str| {
+        std::env::var_os(name)
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    let home = full("HOME").ok_or("HOME is not set to a full path")?;
+    if cfg!(target_os = "macos") {
+        return Ok(home
+            .join("Library")
+            .join("Application Support")
+            .join("nv-rs"));
+    }
+    Ok(full("XDG_DATA_HOME")
+        .unwrap_or_else(|| home.join(".local").join("share"))
+        .join("nv-rs"))
+}
+
 /// Where the player's D3DX texture cache is: `NV_D3DX_CACHE`, else
 /// `%LOCALAPPDATA%\nv-rs\d3dx-cache` (made on this machine by `scripts/d3dx-texture-capture`
 /// from the player's own textures; it stays local).
@@ -558,7 +615,7 @@ pub fn wgpu_cache_path() -> Option<PathBuf> {
 /// renderer's start-up asks about the adapter. Without the file nothing is loaded: the first
 /// Direct3D 9 query stops that stage and its message says how to capture the table.
 fn load_adapter_table(e: &mut Engine) {
-    if let Some(text) = adapter_table_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+    if let Some(text) = adapter_table_text() {
         engine_platform::d3d9::load_adapter_table(e, &text);
     }
     if let Some(dir) = texture_cache_path() {
