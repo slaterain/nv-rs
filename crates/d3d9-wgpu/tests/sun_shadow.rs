@@ -929,9 +929,10 @@ const MIXED_CUT: u32 = 0x15E0;
 /// coverage maps' texel), 300 high at x 185 (its shadow at x -40), the wire's texture coordinate
 /// where the ribbon's texture is opaque.
 const RIBBON_ROUND: u32 = 0x15F0;
-/// A cut-out strip 60 wide (x 95 to 155), 300 high, 1000 long (y -150 to 850): a ribbon's shape,
+/// A cut-out strip 60 wide (x 1395 to 1455), 2000 high, 1000 long (y -150 to 850): a ribbon's shape,
 /// but its texture half opaque (stripes 7.5 units wide), as a fence's or a grille's; its shadow
-/// at x -130 to -70. Its buffer and texture.
+/// at x -130 to -70. High up, so drawn as a cable it would cast a faint wash (the sun's width spreads
+/// it), as a cut-out its full stripes. Its buffer and texture.
 const FENCE: u32 = 0x1600;
 const FENCE_TEX: u32 = 0x1610;
 /// A lit plate 5 units under the cable 120 high of [`CABLES`] (x -40 to 10, y 250 to 350, z 115).
@@ -1246,16 +1247,16 @@ fn extras(b: &mut WgpuBackend) {
     );
     let bytes = floats(&v.concat());
     bytes_buffer(b, RIBBON_ROUND, false, &bytes);
-    // The half-opaque strip: 20 quads along y, u across x.
-    let corner = |x: f32, y: f32| [x, y, 300.0, 1.0, (x - 95.0) / 60.0, (y + 150.0) / 1000.0];
+    // The half-opaque strip: 40 quads along y, u across x.
+    let corner = |x: f32, y: f32| [x, y, 2000.0, 1.0, (x - 1395.0) / 60.0, (y + 150.0) / 1000.0];
     let mut v = Vec::new();
-    for i in 0..20 {
-        let (y0, y1) = (-150.0 + 50.0 * i as f32, -100.0 + 50.0 * i as f32);
+    for i in 0..40 {
+        let (y0, y1) = (-150.0 + 25.0 * i as f32, -125.0 + 25.0 * i as f32);
         let (a, bb, c, d) = (
-            corner(95.0, y0),
-            corner(155.0, y0),
-            corner(155.0, y1),
-            corner(95.0, y1),
+            corner(1395.0, y0),
+            corner(1455.0, y0),
+            corner(1455.0, y1),
+            corner(1395.0, y1),
         );
         v.extend([a, bb, c, a, c, d]);
     }
@@ -1474,7 +1475,7 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
             draw_cut(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2);
         }
         if e.fence {
-            draw_cut(b, FENCE, FENCE_TEX, 40);
+            draw_cut(b, FENCE, FENCE_TEX, 80);
         }
         if let Some((n, x)) = e.cable_moved {
             set_mvp(b, model_view_proj_at(x, 0.0));
