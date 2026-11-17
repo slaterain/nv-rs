@@ -3991,3 +3991,287 @@ fn a_failure_on_the_queue_thread_is_raised_on_the_render_thread() {
     }
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
 }
+
+// The fixed-function draws: the intro movie's tiles (exe 00ec0280, 00ec0460, 00ebff30).
+
+/// `D3DFMT_X8R8G8B8`, `D3DUSAGE_DYNAMIC`, `D3DFVF_XYZRHW | D3DFVF_TEX1`.
+const X8R8G8B8: u32 = 22;
+const DYNAMIC: u32 = 0x200;
+const XYZRHW_TEX1: u32 = 0x104;
+
+impl Gpu {
+    fn stage_state(&mut self, stage: u32, kind: u32, value: u32) {
+        self.run(Cmd::SetTextureStageState {
+            device: DEVICE,
+            stage,
+            kind,
+            value,
+        });
+    }
+
+    fn sampler_state(&mut self, sampler: u32, kind: u32, value: u32) {
+        self.run(Cmd::SetSamplerState {
+            device: DEVICE,
+            sampler,
+            kind,
+            value,
+        });
+    }
+
+    /// No vertex or pixel shader bound: the fixed-function pipeline draws.
+    fn no_shaders(&mut self) {
+        for pixel in [false, true] {
+            self.run(Cmd::SetShader {
+                device: DEVICE,
+                pixel,
+                shader: 0,
+            });
+        }
+    }
+
+    /// A `width` by `height` X8R8G8B8 texture as the movie makes its tiles (dynamic, default
+    /// pool) at handle `texture`, holding `bgrx` (rows packed), bound to sampler 0.
+    fn movie_texture(&mut self, texture: u32, width: u32, height: u32, bgrx: &[u8]) {
+        let levels = words(&[texture + 1]);
+        self.run(Cmd::CreateTexture {
+            device: DEVICE,
+            texture,
+            levels: Data::Bytes(&levels),
+            width,
+            height,
+            usage: DYNAMIC,
+            format: X8R8G8B8,
+            pool: 0,
+        });
+        self.run(Cmd::UploadSurface {
+            surface: texture + 1,
+            row: 4 * width,
+            rows: height,
+            data: Data::Bytes(bgrx),
+        });
+        self.run(Cmd::SetTexture {
+            device: DEVICE,
+            sampler: 0,
+            texture,
+        });
+    }
+
+    /// The movie's draw state (00ec0460, then 00ebff30's render states): alpha blending off;
+    /// stage 0 alpha SELECTARG1, colour argument 1 TEXTURE, alpha argument 1 TEXTURE, colour
+    /// MODULATE (argument 2 CURRENT: the diffuse, white without one); linear min, mag and mip
+    /// filters, clamped U and V; depth test and writes off, every colour channel written.
+    fn movie_state(&mut self) {
+        self.state(27, 0);
+        for (state, value) in [(4, 2), (2, 2), (5, 2), (1, 4)] {
+            self.stage_state(0, state, value);
+        }
+        for (state, value) in [(6, 2), (5, 2), (7, 2), (1, 3), (2, 3)] {
+            self.sampler_state(0, state, value);
+        }
+        self.state(ZENABLE, 0);
+        self.state(ZWRITEENABLE, 0);
+        self.state(168, 0xF);
+    }
+
+    /// One movie tile (00ec0280): a strip of four pre-transformed vertices from (x, y) to
+    /// (x + w, y + h), texture coordinates 0 to 1, 24 bytes each, drawn with SetFVF(XYZRHW |
+    /// TEX1) and DrawPrimitiveUP.
+    fn movie_quad(&mut self, x: f32, y: f32, w: f32, h: f32) {
+        let mut v = Vec::new();
+        for (px, py, u, t) in [
+            (x, y, 0.0, 0.0),
+            (x, y + h, 0.0, 1.0),
+            (x + w, y, 1.0, 0.0),
+            (x + w, y + h, 1.0, 1.0),
+        ] {
+            v.extend(floats(&[px, py, 0.0, 1.0, u, t]));
+        }
+        self.run(Cmd::SetFvf {
+            device: DEVICE,
+            fvf: XYZRHW_TEX1,
+        });
+        self.run(Cmd::DrawPrimitiveUp {
+            device: DEVICE,
+            kind: 5,
+            count: 2,
+            stride: 24,
+            vertices: Data::Bytes(&v),
+        });
+    }
+}
+
+/// A texture whose texel (x, y) has red 16 x, green 16 y, blue 0x80 and an alpha byte of 0 (an
+/// X8 format's: read as opaque).
+fn ramp(width: u32, height: u32) -> Vec<u8> {
+    let mut b = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            b.extend_from_slice(&[0x80, (16 * y) as u8, (16 * x) as u8, 0]);
+        }
+    }
+    b
+}
+
+/// What Direct3D 9 shows of [`ramp`] drawn as a quad of exactly its size from whole pixel
+/// coordinates with linear filtering: pixel n's centre is at screen n, which is texture
+/// coordinate n / size, half-way between texels n - 1 and n (Microsoft's "Directly Mapping Texels
+/// to Pixels"): 16 n - 8, and 0 for the first (clamped addressing repeats texel 0).
+fn ramp_seen(n: u32) -> u8 {
+    (16 * n).saturating_sub(8) as u8
+}
+
+fn near(a: u8, b: u8) -> bool {
+    a.abs_diff(b) <= 1
+}
+
+/// The intro movie's tile draw, call for call as the game makes it (no shaders, SetFVF(XYZRHW
+/// | TEX1), DrawPrimitiveUP), shows the uploaded texels where Direct3D 9 puts them: every pixel
+/// the half-texel blend of its two texels, blue 0x80, opaque. (The backend skipped every draw
+/// without shaders: the movie played to a black screen on Vulkan.)
+#[test]
+fn the_movies_fixed_function_tile_shows_its_texels_where_direct3d_9_does() {
+    let Some(mut g) = Gpu::new(16, 1) else { return };
+    g.movie_texture(0x1700, 16, 16, &ramp(16, 16));
+    g.no_shaders();
+    g.movie_state();
+    g.clear(1, 0xFF00_0000, 1.0);
+    g.movie_quad(0.0, 0.0, 16.0, 16.0);
+    let px = g.pixels();
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            let p = px[(16 * y + x) as usize];
+            assert!(
+                near(p[2], ramp_seen(x))
+                    && near(p[1], ramp_seen(y))
+                    && near(p[0], 0x80)
+                    && p[3] == 255,
+                "pixel ({x}, {y}): {p:?}, want red {} green {} blue 128 alpha 255",
+                ramp_seen(x),
+                ramp_seen(y)
+            );
+        }
+    }
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// The movie's letterbox: a viewport inside the target (x 4, y 2, 8 by 8, as `Movie::Update`
+/// sets one) and a tile at the same pixels. Pre-transformed positions are the target's pixels
+/// whatever the viewport, so the tile lands at (4, 2) as on Direct3D 9; nothing outside it is
+/// drawn.
+#[test]
+fn a_pre_transformed_tile_lands_on_its_own_pixels_inside_a_smaller_viewport() {
+    let Some(mut g) = Gpu::new(16, 1) else { return };
+    g.movie_texture(0x1710, 8, 8, &ramp(8, 8));
+    g.no_shaders();
+    g.movie_state();
+    g.clear(1, 0xFF00_0000, 1.0);
+    g.viewport(4, 2, 8, 8, 0.0, 1.0);
+    g.movie_quad(4.0, 2.0, 8.0, 8.0);
+    let px = g.pixels();
+    for y in 0..16u32 {
+        for x in 0..16u32 {
+            let p = px[(16 * y + x) as usize];
+            if (4..12).contains(&x) && (2..10).contains(&y) {
+                let (u, v) = (x - 4, y - 2);
+                assert!(
+                    near(p[2], ramp_seen(u)) && near(p[1], ramp_seen(v)) && near(p[0], 0x80),
+                    "pixel ({x}, {y}): {p:?}"
+                );
+            } else {
+                assert_eq!(p, [0, 0, 0, 255], "pixel ({x}, {y}) is outside the tile");
+            }
+        }
+    }
+}
+
+/// Two texture stages and a vertex colour, by `D3DTEXTUREOP`'s formulas: stage 0 MODULATE
+/// (texture, diffuse) for the colour and SELECTARG2 (the diffuse's alpha); stage 1 ADD (current,
+/// texture factor) for the colour and SELECTARG1 (current) for the alpha; each stage's result
+/// clamped to 1. Texel (R 255, G 128, B 0), diffuse 0x80FF8040, factor 0x00102030: red 255 + 16
+/// clamped, green 128 * 128 / 255 + 32, blue 0 + 48, alpha 128.
+#[test]
+fn texture_stages_combine_as_d3dtextureop_says() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.movie_texture(0x1720, 1, 1, &[0, 128, 255, 0]);
+    g.no_shaders();
+    g.state(27, 0);
+    g.state(ZENABLE, 0);
+    const TFACTOR: u32 = 60;
+    g.state(TFACTOR, 0x0010_2030);
+    // D3DTSS_COLOROP 1, COLORARG1 2, COLORARG2 3, ALPHAOP 4, ALPHAARG1 5, ALPHAARG2 6; D3DTA
+    // DIFFUSE 0, CURRENT 1, TEXTURE 2, TFACTOR 3.
+    for (stage, state, value) in [
+        (0, 1, 4),
+        (0, 2, 2),
+        (0, 3, 0),
+        (0, 4, 3),
+        (0, 6, 0),
+        (1, 1, 7),
+        (1, 2, 1),
+        (1, 3, 3),
+        (1, 4, 2),
+        (1, 5, 1),
+    ] {
+        g.stage_state(stage, state, value);
+    }
+    // XYZRHW | DIFFUSE | TEX1, 28 bytes: a quad over the 4 by 4 target.
+    let mut v = Vec::new();
+    for (x, y) in [(0.0f32, 0.0f32), (0.0, 4.0), (4.0, 0.0), (4.0, 4.0)] {
+        v.extend(floats(&[x, y, 0.5, 1.0]));
+        v.extend(0x80FF_8040u32.to_le_bytes());
+        v.extend(floats(&[0.5, 0.5]));
+    }
+    g.clear(1, 0, 1.0);
+    g.run(Cmd::SetFvf {
+        device: DEVICE,
+        fvf: 0x144,
+    });
+    g.run(Cmd::DrawPrimitiveUp {
+        device: DEVICE,
+        kind: 5,
+        count: 2,
+        stride: 28,
+        vertices: Data::Bytes(&v),
+    });
+    for p in g.pixels() {
+        assert!(
+            p[2] == 255 && near(p[1], 96) && near(p[0], 48) && near(p[3], 128),
+            "{p:?}: want B 48, G 96, R 255, A 128"
+        );
+    }
+}
+
+/// A vertex declaration set after an FVF replaces it, and the same declaration set again after
+/// the FVF is the layout again (the game's 00ec0280 saves the declaration, sets its FVF and sets
+/// the declaration back): the shader draw after the movie's tile draws with its own layout.
+#[test]
+fn a_declaration_set_again_after_an_fvf_is_the_layout_again() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.movie_texture(0x1730, 1, 1, &[0, 0, 255, 0]);
+    g.no_shaders();
+    g.movie_state();
+    g.clear(1, 0, 1.0);
+    g.movie_quad(0.0, 0.0, 4.0, 4.0);
+    assert!(g.pixels().iter().all(|p| p[2] == 255), "the tile drew red");
+    for (pixel, shader) in [(false, VS), (true, PS)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    g.run(Cmd::SetVertexDeclaration {
+        device: DEVICE,
+        declaration: DECL,
+    });
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    g.cover(0.5);
+    assert!(
+        g.pixels().iter().all(|p| *p == [0, 255, 0, 255]),
+        "the shader draw covered the target in green: {:?}",
+        g.pixels()
+    );
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+}

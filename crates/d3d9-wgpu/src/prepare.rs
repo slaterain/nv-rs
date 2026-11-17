@@ -18,6 +18,10 @@
 //! (hashes and the declaration in hexadecimal, lists comma-separated, `-` for none). `p1` lines
 //! (the first version, whose shader hashes came from the map hasher) are not read: a list a run
 //! wrote before keeps only its `p2` lines when it is written again.
+//!
+//! `f1 TOKENS` (the tokens in hexadecimal, comma-separated): a fixed-function shader the backend made
+//! ([`crate::ffp`]: the game creates none of them, so the list keeps their bytecode); at start-up
+//! each is made again, so the listed pipelines that name it are made before play like the others.
 
 /// A shader's bytecode hash, fixed by its definition so the shipped list matches in every build:
 /// 64-bit FNV-1a over the tokens as little-endian bytes ([`crate::cache::hash`]), not the map
@@ -155,11 +159,32 @@ impl Entry {
     }
 }
 
-/// The list: entries in the order they were first needed, each once.
+/// A fixed-function shader's line (`f1`).
+pub(crate) fn shader_line(tokens: &[u32]) -> String {
+    let hex: Vec<String> = tokens.iter().map(|t| format!("{t:x}")).collect();
+    format!("f1 {}", hex.join(","))
+}
+
+/// The tokens of an `f1` line; None for anything else.
+pub(crate) fn parse_shader_line(line: &str) -> Option<Vec<u32>> {
+    let rest = line.strip_prefix("f1 ")?;
+    let tokens = rest
+        .trim()
+        .split(',')
+        .map(|t| u32::from_str_radix(t, 16).ok())
+        .collect::<Option<Vec<u32>>>()?;
+    // A shader's version token first and its end token last.
+    (tokens.len() >= 2 && tokens[0] >> 16 >= 0xFFFE && tokens.last() == Some(&0xFFFF))
+        .then_some(tokens)
+}
+
+/// The list: entries in the order they were first needed, each once; the fixed-function
+/// shaders (`f1`) likewise.
 #[derive(Default)]
 pub(crate) struct List {
     pub entries: Vec<Entry>,
     seen: std::collections::HashSet<Entry>,
+    pub shaders: Vec<Vec<u32>>,
 }
 
 impl List {
@@ -168,6 +193,10 @@ impl List {
     pub(crate) fn merge(&mut self, text: &str) -> (usize, usize) {
         let (mut added, mut skipped) = (0, 0);
         for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+            if let Some(tokens) = parse_shader_line(line) {
+                self.add_shader(tokens);
+                continue;
+            }
             match Entry::parse(line) {
                 Some(e) => {
                     if self.add(e) {
@@ -178,6 +207,15 @@ impl List {
             }
         }
         (added, skipped)
+    }
+
+    /// Adds a fixed-function shader's tokens unless they are listed; whether they were new.
+    pub(crate) fn add_shader(&mut self, tokens: Vec<u32>) -> bool {
+        if self.shaders.contains(&tokens) {
+            return false;
+        }
+        self.shaders.push(tokens);
+        true
     }
 
     /// Adds `e` unless it is listed; whether it was new.
@@ -193,6 +231,10 @@ impl List {
     #[cfg(test)]
     pub(crate) fn text(&self) -> String {
         let mut s = String::new();
+        for t in &self.shaders {
+            s.push_str(&shader_line(t));
+            s.push('\n');
+        }
         for e in &self.entries {
             s.push_str(&e.line());
             s.push('\n');
@@ -257,6 +299,29 @@ mod tests {
         assert_eq!(l.merge(&text), (1, 1));
         assert_eq!(l.entries.len(), 1);
         assert_eq!(l.text(), format!("{line}\n"));
+    }
+
+    /// A fixed-function shader's `f1` line reads back as its tokens, once; a damaged one (not
+    /// hexadecimal, no version or end token) is skipped like any line the list cannot read.
+    #[test]
+    fn a_fixed_function_shaders_line_reads_back_once() {
+        let tokens = vec![0xFFFF_0300u32, 0x0200_001F, 0x8000_000A, 0x900F_0000, 0xFFFF];
+        let line = shader_line(&tokens);
+        assert_eq!(line, "f1 ffff0300,200001f,8000000a,900f0000,ffff");
+        assert_eq!(parse_shader_line(&line), Some(tokens.clone()));
+        for bad in [
+            "f1 ",
+            "f1 ffff0300,zz,ffff",
+            "f1 200001f,ffff",
+            "f1 ffff0300,200001f",
+        ] {
+            assert_eq!(parse_shader_line(bad), None, "{bad}");
+        }
+        let mut l = List::default();
+        let text = format!("{line}\n{}\n{line}\nf1 junk\n", entry().line());
+        assert_eq!(l.merge(&text), (1, 1));
+        assert_eq!(l.shaders, vec![tokens]);
+        assert_eq!(l.text(), format!("{line}\n{}\n", entry().line()));
     }
 
     #[test]

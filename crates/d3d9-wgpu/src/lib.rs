@@ -10,6 +10,8 @@
 //! - `sm`: shader bytecode read, listed and converted to WGSL (`sm::wgsl`).
 //! - `format`: `D3DFORMAT` to wgpu formats.
 //! - `state`: render and sampler states to wgpu states.
+//! - `ffp`: the fixed-function pipeline for draws without shaders (FVF layouts, pre-transformed
+//!   vertices, the texture stages), as shader bytecode the converter takes.
 //! - `device`: resources, passes, pipelines, draws and `Present`.
 //! - `window`: the game's window: the swap chain at the window's size, minimised, sized or lost.
 //! - `shot`: `NV_SHOT` captures numbered like the forwarding layer's.
@@ -24,6 +26,7 @@ pub mod device;
 mod fingerprint;
 pub mod format;
 pub mod frame_rate;
+mod ffp;
 mod fxhash;
 pub mod loading;
 mod prepare;
@@ -206,6 +209,10 @@ impl Backend for WgpuBackend {
                 sampler, texture, ..
             } => d.set_texture(sampler, texture),
             Cmd::SetVertexDeclaration { declaration, .. } => d.set_declaration(declaration),
+            Cmd::SetFvf { fvf, .. } => d.set_fvf(fvf),
+            Cmd::SetTextureStageState {
+                stage, kind, value, ..
+            } => d.set_stage_state(stage, kind, value),
             Cmd::SetShader { pixel, shader, .. } => d.set_shader(pixel, shader),
             Cmd::SetConstants {
                 kind,
@@ -357,13 +364,12 @@ impl Backend for WgpuBackend {
             Cmd::SetTransform { state, matrix, .. } if state == scene_light::STATE => {
                 d.scene_light(&matrix.to_words());
             }
-            // Fixed-function state and the rest: the game's shaders do not read them; a draw
-            // without shaders is skipped and printed by the device. (`SetGammaRamp` changes
-            // nothing in a window, which is how the game runs.)
+            // The fixed-function vertex pipeline's state (transforms, materials, lights): no draw
+            // of the game uses it (the fixed-function draws, `ffp`, are pre-transformed), and a
+            // draw of untransformed vertices without a vertex shader is skipped and printed by
+            // the device. (`SetGammaRamp` changes nothing in a window, which is how the game runs.)
             Cmd::SetTransform { .. }
             | Cmd::SetGammaRamp { .. }
-            | Cmd::SetTextureStageState { .. }
-            | Cmd::SetFvf { .. }
             | Cmd::SetMaterial { .. }
             | Cmd::SetLight { .. }
             | Cmd::LightEnable { .. }
