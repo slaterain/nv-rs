@@ -32,6 +32,8 @@ fn id_of(name: &[u8]) -> u32 {
     match name.to_ascii_lowercase().as_slice() {
         b"&startmenu;" => 1013,
         b"&hudmainmenu;" => 1004,
+        // The last id the DLL takes (1001 + 0x53).
+        b"&lastmenu;" => 1084,
         _ if name.first() == Some(&b'&') => 0x7000,
         _ => {
             0x2000
@@ -378,6 +380,16 @@ fn the_lookup_follows_the_dlls_rules() {
     assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/nope/_MCM"), 0);
     // A part that names a trait but not last is nothing too.
     assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/_MCM/x"), 0);
+    // A colon first is part of the name: a child named `:1` is found by that name.
+    let colon = child(&mut e, t.mcm, ":1");
+    value(&mut e, colon, "_c", 4.0);
+    assert_eq!(number(&mut e, "StartMenu/MCM/:1/_c"), 4.0);
+    // The menu ids the DLL takes: up to 1001 + 0x53 (with the array that long).
+    let array = e.mem.u32(MENU_ARRAY);
+    let last = tile(&mut e, Some("LastMenu"));
+    value(&mut e, last, "_m", 2.0);
+    e.mem.set_u32(array + 4 * 0x53, last);
+    assert_eq!(number(&mut e, "LastMenu/_m"), 2.0);
     assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/MCM_Options"), 0);
     assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/_none"), 0);
     assert_eq!(menu::value_at(&mut e, b"HUDMainMenu/MCM/_MCM"), 0);
@@ -602,6 +614,13 @@ fn set_mcm_mod_list() {
     let plain = take(&mut e, 0x40);
     e.mem.set_u8(plain + 4, 0x28);
     assert_eq!(full_name(&mut e, plain), b"<no name>");
+    // A full name whose text is there but empty (length 0).
+    let empty = take(&mut e, 0x40);
+    e.mem.set_u8(empty + 4, 0x28);
+    let etext = take(&mut e, 16);
+    e.mem.set_cstr(etext, b"Stale");
+    e.mem.set_u32(empty + 0x34, etext);
+    assert_eq!(full_name(&mut e, empty), b"<no name>");
     assert_eq!(full_name(&mut e, refr), b"My Mod");
     let world = take(&mut e, 0x40);
     e.mem.set_u8(world + 4, 0x41);
