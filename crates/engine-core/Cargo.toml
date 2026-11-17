@@ -13,6 +13,10 @@ description = "The core of the engine crates: the game's memory model, Engine, t
 # dev-dependency.
 test-support = []
 
+# The threads it starts tell Windows they are not background work when NV_NOT_BACKGROUND=1 (crates/qos).
+[dependencies]
+qos = { path = "../qos" }
+
 # Win32_System_Memory: the guest memory's 4 GB host reservation (mem.rs, VirtualAlloc and
 # VirtualFree). The platform layer's Windows APIs are the `engine-platform` crate's.
 [target.'cfg(windows)'.dependencies]
