@@ -224,7 +224,8 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("error: {e}");
-                host::end_process(1);
+                // The expected stop off Windows: its own status (play.sh: no report needed).
+                host::end_process(host::error_status(&e));
             }
         }
     }
@@ -247,7 +248,7 @@ fn main() {
         Ok(host) => host,
         Err(e) => {
             eprintln!("error: {e}");
-            host::end_process(1);
+            host::end_process(host::error_status(&e));
         }
     };
     println!("{}", game.describe());

@@ -1,0 +1,61 @@
+name: play.sh
+# play.sh, the start script of the Linux and macOS packages (distribution/unix), under every shell a
+# player may have as /bin/sh: its syntax, then its whole test (distribution/unix/test-play.sh: made-up
+# folders, a stand-in program). No Rust build: checkout and the shells, about a minute a job.
+#
+# Its own workflow, so a change to play.sh is checked on every pull request that touches it, label or
+# not, and no job here is allowed to fail: macOS's /bin/sh (bash 3.2) parses things dash, bash and
+# BusyBox accept (a `case` inside `$( )` once stopped every start on a Mac). The Linux job of "Other
+# systems" also runs the test with the real program (NV_RS_REAL_PROGRAM) after its build.
+#
+# Two short jobs from the account's shared limit (20 jobs at a time, 5 of them macOS), only when
+# distribution/unix changes, once a night and by hand.
+on:
+  pull_request:
+    paths:
+      - 'distribution/unix/**'
+      - '.github/workflows/play-sh.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'distribution/unix/**'
+      - '.github/workflows/play-sh.yml'
+  workflow_dispatch:
+  schedule:
+    - cron: '41 3 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: play-sh-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: true
+jobs:
+  linux:
+    name: play.sh (dash, bash, BusyBox)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test play.sh
+        run: |
+          sudo apt-get install -y --no-install-recommends busybox >/dev/null || true
+          failed=0
+          for shell in dash bash "busybox sh"; do
+            $shell -n distribution/unix/play.sh || failed=1
+            echo "== $shell"
+            SH="$shell" sh distribution/unix/test-play.sh || failed=1
+          done
+          exit $failed
+  macos:
+    name: play.sh (macOS /bin/sh, bash 3.2)
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Test play.sh
+        run: |
+          /bin/sh -n distribution/unix/play.sh
+          SH=/bin/sh /bin/sh distribution/unix/test-play.sh

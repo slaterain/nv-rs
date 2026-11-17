@@ -40,6 +40,21 @@ fn files_under(folder: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// A program: a Windows `.exe`, or a Linux (ELF) or macOS (Mach-O, 64-bit or universal) program
+/// by its first bytes, whatever its name (they have no extension).
+fn is_program(file: &Path, data: &[u8]) -> bool {
+    let exe = file
+        .extension()
+        .is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+    exe || [
+        &b"\x7fELF"[..],
+        &[0xcf, 0xfa, 0xed, 0xfe],
+        &[0xca, 0xfe, 0xba, 0xbe],
+    ]
+    .iter()
+    .any(|magic| data.starts_with(magic))
+}
+
 fn lower(b: u8) -> u8 {
     b.to_ascii_lowercase()
 }
@@ -71,6 +86,25 @@ fn forms(needle: &str) -> [Vec<u8>; 2] {
     let bytes = needle.to_ascii_lowercase().into_bytes();
     let wide = bytes.iter().flat_map(|&b| [b, 0]).collect();
     [bytes, wide]
+}
+
+/// [`forms`] in the case given.
+fn exact_forms(needle: &str) -> [Vec<u8>; 2] {
+    let bytes = needle.as_bytes().to_vec();
+    let wide = bytes.iter().flat_map(|&b| [b, 0]).collect();
+    [bytes, wide]
+}
+
+/// Offsets of `needle` in `data`, in the case given.
+fn find_exact(data: &[u8], needle: &[u8]) -> Vec<usize> {
+    if needle.is_empty() {
+        return vec![];
+    }
+    data.windows(needle.len())
+        .enumerate()
+        .filter(|(_, w)| *w == needle)
+        .map(|(at, _)| at)
+        .collect()
 }
 
 fn shown(data: &[u8], at: usize) -> String {
@@ -169,11 +203,17 @@ struct Arguments {
     folder: PathBuf,
     needles: Vec<String>,
     program_needles: Vec<String>,
+    /// `--program-needle-exact`: searched in programs in the case given (a disassembler's
+    /// `FUN_` in upper case, where a program for Linux or macOS holds `fun_` inside other bytes).
+    exact_program_needles: Vec<String>,
     games: Vec<PathBuf>,
     max_run: Option<usize>,
+    /// `--notices LIST`: every notice LIST names (`FILE<TAB>NAME` a line, `#` comments) must be
+    /// in the package as `licenses/NAME`.
+    notices: Option<PathBuf>,
 }
 
-const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--game FILE]... [--max-run BYTES]";
+const USAGE: &str = "usage: package-check FOLDER [--needle TEXT]... [--program-needle TEXT]... [--program-needle-exact TEXT]... [--game FILE]... [--max-run BYTES] [--notices LIST]";
 
 /// The command line after the program's name. A switch without its value, an unknown switch or a
 /// `--max-run` that isn't a number is an error: a limit that was asked for is never dropped.
@@ -194,7 +234,9 @@ fn parse_arguments(args: &[String]) -> Result<Arguments, String> {
         match arg.as_str() {
             "--needle" => out.needles.push(value?),
             "--program-needle" => out.program_needles.push(value?),
+            "--program-needle-exact" => out.exact_program_needles.push(value?),
             "--game" => out.games.push(PathBuf::from(value?)),
+            "--notices" => out.notices = Some(PathBuf::from(value?)),
             "--max-run" => {
                 let n = value?;
                 let limit = n
@@ -215,8 +257,10 @@ fn main() {
         folder,
         needles,
         program_needles,
+        exact_program_needles,
         games,
         max_run,
+        notices,
     } = match parse_arguments(&args) {
         Ok(arguments) => arguments,
         Err(why) => {
@@ -234,9 +278,7 @@ fn main() {
             bad += 1;
             continue;
         };
-        let is_program = file
-            .extension()
-            .is_some_and(|x| x.eq_ignore_ascii_case("exe"));
+        let is_program = is_program(file, &data);
         let extra: &[String] = if is_program { &program_needles } else { &[] };
         for needle in needles.iter().chain(extra) {
             for form in forms(needle) {
@@ -244,6 +286,26 @@ fn main() {
                 if let Some(&first) = hits.first() {
                     println!(
                         "FOUND {:?} {} times in {}: ...{}...",
+                        needle,
+                        hits.len(),
+                        file.display(),
+                        shown(&data, first)
+                    );
+                    bad += hits.len();
+                }
+            }
+        }
+        let exact: &[String] = if is_program {
+            &exact_program_needles
+        } else {
+            &[]
+        };
+        for needle in exact {
+            for form in exact_forms(needle) {
+                let hits = find_exact(&data, &form);
+                if let Some(&first) = hits.first() {
+                    println!(
+                        "FOUND {:?} (this case) {} times in {}: ...{}...",
                         needle,
                         hits.len(),
                         file.display(),
@@ -290,15 +352,12 @@ fn main() {
             distinct.len()
         );
         for file in &files {
-            let extension = file
-                .extension()
-                .map(|x| x.to_string_lossy().to_ascii_lowercase());
-            if extension.as_deref() != Some("exe") {
-                continue;
-            }
             let Ok(data) = std::fs::read(file) else {
                 continue;
             };
+            if !is_program(file, &data) {
+                continue;
+            }
             let mut runs: Vec<_> = shared_runs(&data, &reference, &index)
                 .into_iter()
                 .filter(|&(at, length, _)| !is_filler(&data[at..at + length]))
@@ -329,12 +388,97 @@ fn main() {
             }
         }
     }
+    if let Some(list) = &notices {
+        match std::fs::read_to_string(list) {
+            Ok(text) => {
+                for name in missing_notices(&folder, &text) {
+                    println!(
+                        "MISSING notice licenses/{name} (listed in {})",
+                        list.display()
+                    );
+                    bad += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("--notices {}: {e}", list.display());
+                std::process::exit(2);
+            }
+        }
+    }
     std::process::exit(i32::from(bad != 0));
+}
+
+/// The names `list` (`FILE<TAB>NAME` a line, `#` comments, blank lines) gives that are not in
+/// `folder`'s `licenses` folder as files.
+fn missing_notices(folder: &Path, list: &str) -> Vec<String> {
+    list.lines()
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .map(|line| line.split('\t').nth(1).unwrap_or("").trim().to_string())
+        .filter(|name| name.is_empty() || !folder.join("licenses").join(name).is_file())
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Every notice the list names must be in the package's licenses folder; a line without a
+    /// name is missing too.
+    #[test]
+    fn a_notice_the_list_names_must_be_in_the_package() {
+        let dir =
+            std::env::temp_dir().join(format!("package-check-notices-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("licenses")).unwrap();
+        std::fs::write(dir.join("licenses/NOTICE-uio"), b"MIT").unwrap();
+        let list = "# comment\n\ncrates/uio/NOTICE\tNOTICE-uio\n\
+                    crates/nvse/LICENSE-algohol\tLICENSE-algohol\nno-name-here\n";
+        assert_eq!(missing_notices(&dir, list), ["LICENSE-algohol", ""]);
+        let parsed = parse_arguments(&args(&["pkg", "--notices", "n.txt"])).unwrap();
+        assert_eq!(parsed.notices, Some(PathBuf::from("n.txt")));
+        assert!(parse_arguments(&args(&["pkg", "--notices"])).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux's and macOS's programs (no extension) are programs by their first bytes; text is not.
+    #[test]
+    fn programs_are_known_by_extension_or_first_bytes() {
+        assert!(is_program(Path::new("app/FalloutNV.exe"), b"MZ"));
+        assert!(is_program(Path::new("app/nv-viewer"), b"\x7fELF\x02\x01"));
+        assert!(is_program(
+            Path::new("app/nv-viewer"),
+            &[0xcf, 0xfa, 0xed, 0xfe, 0x0c]
+        ));
+        assert!(is_program(
+            Path::new("app/nv-viewer"),
+            &[0xca, 0xfe, 0xba, 0xbe]
+        ));
+        assert!(!is_program(Path::new("play.sh"), b"#!/bin/sh\n"));
+        assert!(!is_program(Path::new("app/nv-viewer"), b""));
+    }
+
+    /// An exact needle finds its own case only, as bytes and as UTF-16; the usual needles any case.
+    #[test]
+    fn exact_needles_keep_their_case() {
+        let data = b"..\x66un_scripts..FUN_00401000..F\0U\0N\0_\0";
+        let hits = |needle: &str| -> Vec<usize> {
+            exact_forms(needle)
+                .iter()
+                .flat_map(|form| find_exact(data, form))
+                .collect()
+        };
+        assert_eq!(hits("FUN_"), [15, 29]);
+        assert_eq!(hits("DAT_"), Vec::<usize>::new());
+        assert_eq!(find_exact(data, b""), Vec::<usize>::new());
+        assert_eq!(find_all(data, &forms("FUN_")[0]), [2, 15]);
+        let parsed = parse_arguments(&args(&["pkg", "--program-needle-exact", "FUN_"])).unwrap();
+        assert_eq!(parsed.exact_program_needles, ["FUN_"]);
+        assert!(parse_arguments(&args(&["pkg", "--program-needle-exact"])).is_err());
+    }
 
     #[test]
     fn needles_are_found_in_either_form_and_any_case() {
@@ -346,7 +490,6 @@ mod tests {
 
     #[test]
     fn a_max_run_that_is_not_a_number_is_an_error_not_no_limit() {
-        let args = |list: &[&str]| -> Vec<String> { list.iter().map(|s| s.to_string()).collect() };
         let parsed =
             parse_arguments(&args(&["pkg", "--max-run", "4096", "--game", "g.exe"])).unwrap();
         assert_eq!(parsed.max_run, Some(4096));
