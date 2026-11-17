@@ -2139,3 +2139,30 @@ fn set_hotkey_item_ref_moves_a_key_and_makes_a_stack() {
     }
     assert!(calls_to(REMOVE_BY_TYPE_FN).is_empty());
 }
+
+/// JIP's item message (`ShowItemMessage`, a plugin's call of `QueueUIMessage`) marks its call for
+/// G09 while JIP's fixes are in (so it keeps its two seconds), and only then.
+#[test]
+fn item_message_is_marked_as_a_plugins_call() {
+    use engine_core::extend::{jip_patches, PLUGIN_UI_MESSAGE};
+    thread_local! {
+        static MARKED: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut e = setup();
+    inventory(&mut e);
+    b3_stand_ins(&mut e);
+    name_items(&mut e);
+    e.register(MESSAGE_FN, |e, _| {
+        MARKED.with(|m| m.borrow_mut().push(e.caller_marked(PLUGIN_UI_MESSAGE)));
+        Ret::default()
+    });
+    for (word, marked) in [
+        (jip_patches::INSTALLED, false),
+        (jip_patches::INSTALLED | jip_patches::FIXES, true),
+    ] {
+        e.set_jip_patches(word);
+        super::show_item_message(&mut e, ARMO, NAMES);
+        assert_eq!(MARKED.with(|m| m.take()), vec![marked], "{word:#x}");
+        assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "gone after the call");
+    }
+}

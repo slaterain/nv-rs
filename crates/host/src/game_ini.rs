@@ -70,7 +70,7 @@ pub fn value(text: &str, section: &str, key: &str) -> Option<String> {
 }
 
 /// What the `[nv-rs ...]` sections set: `None` where a key is missing, empty or not usable.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Keys {
     pub preset: Option<Preset>,
     pub borderless: Option<bool>,
@@ -81,6 +81,8 @@ pub struct Keys {
     pub show_frame_rate: Option<bool>,
     /// `bAmbientOcclusion`: the new lighting (`d3d9_wgpu::scene_light`).
     pub ambient_occlusion: Option<bool>,
+    /// `fAmbientOcclusionStrength`: how strong its shade is (a number; clamped where it is used).
+    pub ambient_occlusion_strength: Option<f32>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
     /// `bNotBackground`: Windows told the game is not background work (`qos`).
@@ -132,6 +134,11 @@ impl Keys {
                 "bAmbientOcclusion" => {
                     keys.ambient_occlusion = flag(raw);
                     keys.ambient_occlusion.is_some()
+                }
+                "fAmbientOcclusionStrength" => {
+                    keys.ambient_occlusion_strength =
+                        raw.parse::<f32>().ok().filter(|v| v.is_finite());
+                    keys.ambient_occlusion_strength.is_some()
                 }
                 "bSteppedThreads" => {
                     keys.stepped_threads = flag(raw);
@@ -273,10 +280,16 @@ mod tests {
             assert!(row.section.starts_with("nv-rs "), "{row:?}");
             assert!(!row.section.contains(':'), "{row:?}");
             assert!(!row.comment.trim().is_empty(), "{row:?}");
-            assert!(row.key.starts_with(['b', 'i', 's']), "{row:?}");
+            assert!(row.key.starts_with(['b', 'f', 'i', 's']), "{row:?}");
             assert!(seen.insert(row.key.to_ascii_lowercase()), "{row:?}");
             if row.key.starts_with('b') {
                 assert!(flag(row.default).is_some(), "{row:?}");
+            }
+            if row.key.starts_with('f') {
+                assert!(
+                    row.default.parse::<f32>().is_ok_and(f32::is_finite),
+                    "{row:?}"
+                );
             }
         }
         assert_eq!(
@@ -292,6 +305,7 @@ mod tests {
                 "iMenuFrameLimit",
                 "bShowFrameRate",
                 "bAmbientOcclusion",
+                "fAmbientOcclusionStrength",
                 "bSteppedThreads",
                 "bRenderThread",
                 "bNotBackground"
@@ -325,6 +339,10 @@ mod tests {
         assert_eq!(
             keys.ambient_occlusion,
             Some(crate::fixes::PLAY_AMBIENT_OCCLUSION)
+        );
+        assert_eq!(
+            keys.ambient_occlusion_strength,
+            Some(crate::fixes::PLAY_AMBIENT_OCCLUSION_STRENGTH)
         );
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());

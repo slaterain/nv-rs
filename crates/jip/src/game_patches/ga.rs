@@ -1,7 +1,7 @@
 //! Group GA's game patches (step 3.9: UI: HUD, messages, text, start-up INI): its handlers, wraps and slot routines. Only group
 //! GA's PR edits this file (and its own tests file beside it).
 //!
-//! Eleven of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
+//! Twelve of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
 //! a fix row (in with the row `NV_JIP_GAME_PATCHES`, [`super::set_row`]):
 //! - **G08** "Increase buffer size for GetPrivateProfileString" (`SafeWrite8(0xC44405, 4)`): the
 //!   INI reader's text settings (`INISettingCollection::ReadSetting`, `00c44280`) are read with a
@@ -63,9 +63,17 @@
 //!   as in JIP; `s_VATSHitDT`, a negative one as 0), in place of the exe's `0x7700F0`
 //!   (`VATSMenu::DoIdle`, `007ec810`); until a hit has been reckoned that way (`-FLT_MAX`) the
 //!   exe's call runs.
+//! - **G09** (no comment; `WriteRelJump(0x70535C, QueueUIMessageHook)`): a message the game itself
+//!   queues (`QueueUIMessage`, `007052f0`; JIP's test: the caller's return address up to
+//!   `0x96A262`, the game's last caller of the 193) shows for the default message time
+//!   (`s_msgDisplayTime`, 2 seconds, set with `SetDefaultMessageTime`), not the caller's; a
+//!   plugin's message keeps its own. The port's built-in plugins mark their calls
+//!   (`Engine::mark_plugin_ui_message`; xNVSE's `MessageEx`, JIP's `MessageExAlt` and its
+//!   equip message), and the seam answers the default time for an unmarked call.
 //!
-//! Threads: every seam runs on the main thread (the UI, the INI reader); the handlers keep no
-//! state and take no slot.
+//! Threads: every seam runs on the main thread (the UI, the INI reader) but G09's, which runs on
+//! the thread that queues the message; the handlers take no slot, and the one state, G09's default
+//! time, is one lock-free word (the commands write it on the main thread).
 
 use super::Area;
 use engine_core::extend::{Owner, SiteSlot};
@@ -117,6 +125,38 @@ const EXTRA_WEAPON_MOD_FLAGS: u32 = 0x8D;
 /// The HUD's crosshair name buffer (0x104 bytes).
 const ROLLOVER_NAME: u32 = 0x011d_9c48;
 
+/// G09's seam: `QueueUIMessage`'s display time (words: the caller's time's bits; the answer is
+/// the time's bits).
+pub const MESSAGE_TIME: SiteSlot =
+    SiteSlot::new(Owner::Jip, engine_core::extend::PLUGIN_UI_MESSAGE);
+
+/// JIP's `s_msgDisplayTime`, the float's bits: the default message time, 2.0 until
+/// `SetDefaultMessageTime` (any thread may queue a message; the commands write it on the main
+/// thread). Lock-free ([`Engine::ext_free`]), made at install before the threads start.
+pub struct DefaultMessageTime(std::sync::atomic::AtomicU32);
+
+impl Default for DefaultMessageTime {
+    fn default() -> Self {
+        DefaultMessageTime(std::sync::atomic::AtomicU32::new(2.0f32.to_bits()))
+    }
+}
+
+/// The default message time (`GetDefaultMessageTime`).
+pub fn default_message_time(e: &mut Engine) -> f32 {
+    f32::from_bits(
+        e.ext_free::<DefaultMessageTime>()
+            .0
+            .load(std::sync::atomic::Ordering::Relaxed),
+    )
+}
+
+/// Sets the default message time (`SetDefaultMessageTime`).
+pub fn set_default_message_time(e: &mut Engine, seconds: f32) {
+    e.ext_free::<DefaultMessageTime>()
+        .0
+        .store(seconds.to_bits(), std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The group's fix seams in address order.
 pub const FIX_SITES: [SiteSlot; 8] = [
     CONSOLE_KEY,
@@ -146,13 +186,19 @@ pub const AREA: Area = Area {
         CORNER_MESSAGE[2].addr(),
         ROLLOVER_WEAPON.addr(),
         VATS_TARGET_DT.addr(),
+        MESSAGE_TIME.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
     jip_sites: &[],
     jip_wraps: &[],
-    install_jip: super::nothing,
+    install_jip,
 };
+
+/// JIP installed: the default message time's slot, before the threads start.
+fn install_jip(e: &mut Engine) {
+    e.ext_free::<DefaultMessageTime>();
+}
 
 fn install_fixes(e: &mut Engine) {
     for site in CORNER_MESSAGE {
@@ -168,6 +214,7 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(ORPHANED_TILES, clear_orphaned_tiles);
     e.on_site(ROLLOVER_WEAPON, rollover_weapon);
     e.on_site(VATS_TARGET_DT, vats_target_dt);
+    e.on_site(MESSAGE_TIME, message_time);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -335,4 +382,14 @@ fn vats_dt_answer(dt: f32) -> Option<u32> {
         return None;
     }
     Some(if bits & 0x8000_0000 != 0 { 0 } else { bits })
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: QueueUIMessageHook.
+/// G09: the game's own call (not marked by a built-in plugin) shows for the default message
+/// time; a plugin's keeps the time it passed.
+fn message_time(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    if e.caller_marked(engine_core::extend::PLUGIN_UI_MESSAGE) {
+        return Some(a[0]);
+    }
+    Some(default_message_time(e).to_bits())
 }
