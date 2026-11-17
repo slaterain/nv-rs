@@ -1101,6 +1101,43 @@ fn a_move_is_found_while_another_copy_leaves_the_view() {
     }
 }
 
+/// A moved object that comes to rest keeps its shadow when it settles back into the still maps
+/// ([`sun_shadow::SETTLE`] frames later) and after; its first place casts nothing all along.
+#[test]
+fn a_moved_object_at_rest_keeps_its_shadow_when_it_settles() {
+    let mut frames = vec![Extra {
+        moving_box: Some((0.0, 150.0)),
+        ..Extra::default()
+    }];
+    frames.extend(
+        std::iter::repeat(Extra {
+            moving_box: Some((10.0, 150.0)),
+            ..Extra::default()
+        })
+        .take(sun_shadow::SETTLE as usize + 2),
+    );
+    for samples in [1, 4] {
+        let Some(off) = lit_sequence_picture(samples, false, &frames) else {
+            return;
+        };
+        let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+        // From the frame whose maps have the box at (10, 150) to the last: its shadow (to x -65)
+        // is there, the first place's (to x -75) is not.
+        let (shade, gone) = (pixel([-45.0, 150.0, 0.0]), pixel([-70.0, 150.0, 0.0]));
+        for f in 2..frames.len() {
+            assert!(
+                f32::from(at(&on[f], shade)[2]) < 0.7 * f32::from(at(&off[f], shade)[2]),
+                "frame {f}: the box's shadow ({samples})"
+            );
+            assert_eq!(
+                at(&on[f], gone),
+                at(&off[f], gone),
+                "frame {f}: the first place's shadow ({samples})"
+            );
+        }
+    }
+}
+
 /// A lit draw after the depth-only clear (the first-person arms and weapon, drawn with their own
 /// camera) is drawn as without the shadows, even standing inside a shadow; the scene before the
 /// clear is shadowed.
