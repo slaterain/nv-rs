@@ -3,23 +3,28 @@
 //! in the run's `Fallout.ini` or `NV_AO=1` (`host::fixes::Choice::ambient_occlusion`); wgpu only,
 //! the real Direct3D 9 ignores it.
 //!
-//! **Where.** The game draws the world into its multisampled scene target and depth surface,
-//! clears the depth alone (`Clear` with only `D3DCLEAR_ZBUFFER`), draws the first-person arms and
-//! weapon, resolves the target and runs its image-space (HDR) step, then draws the HUD and menus on
-//! the back buffer (`measure/newlight/NOTES.md`, a recorded frame). The step runs at that depth-only
-//! clear: the depth holds the whole world and nothing else, the colour is the world before the
-//! game's image-space step, and what comes after (the arms, the image-space step, HUD, menus,
-//! Pip-Boy, loading screens) is never touched. The platform records [`STATE`] just before such a
-//! clear with the camera and sun of the frame ([`Params`]); the device runs the step once a frame,
-//! only when the bound colour target and depth surface have one size and sample count. (The sun is
-//! carried for the real sun shadows to come; this step does not draw any.)
+//! **Where.** The game draws the world into its multisampled scene target and depth surface; in
+//! first person it then clears the depth alone (`Clear` with only `D3DCLEAR_ZBUFFER`) and draws the
+//! arms and weapon (in third person there is no such clear: the player's body is part of the
+//! world); then it resolves the target, runs its image-space (HDR) step and draws the HUD and menus
+//! on the back buffer (`measure/newlight/NOTES.md`, recorded frames). The step runs where the world
+//! is drawn and nothing after it yet: the depth holds the whole world and nothing else, the colour
+//! is the world before the game's image-space step, and what comes after (the arms, the image-space
+//! step, HUD, menus, Pip-Boy, loading screens) is never touched. The platform records [`STATE`]
+//! with the camera and sun of the frame ([`Params`]) at two places: the frame draw's own point
+//! where the world is drawn (`engine_core::world_drawn`, right after the world pass `00873200`;
+//! first and third person) and just before a depth-only clear (as before; in first
+//! person it comes after the first in the same frame). The device runs the step once a frame, at
+//! the first, only when the bound colour target and depth surface have the screen's size and one
+//! sample count. (The sun is carried for the real sun shadows to come; this step does not draw
+//! any.)
 //!
 //! **What.** From the scene's depth (sample 0 of the multisampled surface), at half resolution:
 //! ground-truth ambient occlusion, the horizon search and cosine-weighted slice integral of
 //! Jimenez, Wu, Pesce and Jarabo, "Practical Real-Time Strategies for Accurate Indirect Occlusion"
 //! (SIGGRAPH 2016 course, Activision tech report ATVI-TR-16-01), as Intel's XeGTAO (MIT) arranges
 //! it: [`SLICES`] slices of [`STEPS`] steps a side, a distance falloff over the outer 60 % of
-//! [`RADIUS`], applied at [`STRENGTH`]; the normal from the depth (the nearer neighbour on each
+//! [`RADIUS`], applied at the run's strength ([`STRENGTH`] by default); the normal from the depth (the nearer neighbour on each
 //! axis). A sample counts only from [`MIN_HEIGHT`] above the surface's own plane, so decals, rugs
 //! and stains lying a hair over the floor do not darken it; and thin occluders in front of what they hide (grass
 //! blades, leaves, posts) weigh little ([`THIN`], XeGTAO's thin-occluder compensation, stronger), so
@@ -31,15 +36,17 @@
 //! is not shaded, apart from multisampled edge pixels it shares with a shaded object (the step works
 //! per pixel, from the depth's first sample, and multiplies all the pixel's samples alike).
 //!
-//! **When.** Measured in a recording of Doc's house, third person, the Pip-Boy and the street
-//! (`measure/newlight/NOTES.md`): in first person, indoors and out, the game clears the depth alone
-//! once a frame, on the scene target; with the Pip-Boy open it does so for the world and again on
-//! the back buffer for the Pip-Boy's own 3D (never shaded: the back buffer is refused, and the frame's
-//! one run is taken by then); in third person it issues no depth-only clear, so there is no ambient
-//! occlusion in third person; loading screens and menus have none either.
+//! **When.** In every frame that draws the world (`00870bd0`, `00870a00`): first and third person,
+//! indoors and out (checked in game runs); by the frame draw's code also V.A.T.S., the dialogue
+//! camera, the kill camera and the race menu's view of the player, which go through the same world
+//! frames with the game's camera of the moment (not checked in a run). With the Pip-Boy open the world is
+//! shaded as behind it and the Pip-Boy's own 3D (a second depth-only clear, on the back buffer) never
+//! is: the back buffer is refused, and the frame's one run is taken by then. A frame drawn over a
+//! menu's background (`008707c0`: no world pass) is not shaded at the frame draw's point; there only
+//! the depth-only clear can bring the step, as before. Loading screens and menus have none.
 //!
 //! **Limits.** Screen space: only what is on screen occludes; transparent things the game drew
-//! before the clear (particles, glass, water) take the darkening of the opaque surface behind them.
+//! in the world pass (particles, glass) take the darkening of the opaque surface behind them.
 //! Screen-space sun shadows were tried and dropped (2026-11-16): on the street they gave only thin
 //! dark edges and speckle, not shadows (`measure/newlight/NOTES.md`); real sun shadows need a shadow
 //! pass from the sun.
@@ -1070,10 +1077,7 @@ mod tests {
         // The strength: the game's default from the game; a chosen one carried; one out of range
         // refused; none (0, a recording from before it was carried) the default.
         assert_eq!(p.strength, STRENGTH);
-        let chosen = Params {
-            strength: 0.9,
-            ..p
-        };
+        let chosen = Params { strength: 0.9, ..p };
         assert_eq!(Params::from_words(&chosen.to_words()), Some(chosen));
         for bad in [0.05f32, 1.5, f32::NAN] {
             let mut w = p.to_words();

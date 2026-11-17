@@ -450,7 +450,11 @@ fn third_person_the_crease_darkens_and_what_follows_does_not() {
         }
         for y in 210..238 {
             for x in 118..138 {
-                assert_eq!(at(&lit, x, y), at(&plain, x, y), "after {x} {y} ({samples})");
+                assert_eq!(
+                    at(&lit, x, y),
+                    at(&plain, x, y),
+                    "after {x} {y} ({samples})"
+                );
             }
         }
         let row = 140;
@@ -476,7 +480,10 @@ fn first_person_through_both_points_runs_once() {
         let both = picture_with(samples, true, Points::Both, true, s).expect("the adapter");
         assert!(both == at_clear, "once a frame ({samples})");
         let world_only = picture_with(samples, true, Points::World, true, s).expect("the adapter");
-        assert!(world_only == at_clear, "the same step at either point ({samples})");
+        assert!(
+            world_only == at_clear,
+            "the same step at either point ({samples})"
+        );
         let plain = picture_with(samples, false, Points::None, true, s).expect("the adapter");
         let off = picture_with(samples, false, Points::Both, true, s).expect("the adapter");
         assert!(plain == off, "off: unchanged ({samples})");
@@ -498,7 +505,10 @@ fn a_stronger_strength_darkens_the_crease_more() {
     let default = crease(scene_light::STRENGTH).expect("the adapter");
     let full = crease(1.0).expect("the adapter");
     eprintln!("crease red: faint {faint}, default {default}, full {full}");
-    assert!(full + 4 < default && default + 4 < faint, "{full} {default} {faint}");
+    assert!(
+        full + 4 < default && default + 4 < faint,
+        "{full} {default} {faint}"
+    );
 }
 
 /// A target smaller than the screen (a water reflection's, a shadow map's) bound where the

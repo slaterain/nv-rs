@@ -687,7 +687,8 @@ fn record_scene_light(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<Sce
         .as_ref()
         .and_then(d3d9_wgpu::scene_light::Params::from_game);
     if let Some(mut p) = params {
-        p.strength = f32::from_bits(SCENE_LIGHT_STRENGTH.load(std::sync::atomic::Ordering::Relaxed));
+        p.strength =
+            f32::from_bits(SCENE_LIGHT_STRENGTH.load(std::sync::atomic::Ordering::Relaxed));
         let m = p.to_words();
         record(
             e,
@@ -3439,6 +3440,64 @@ mod tests {
         log.lock().unwrap().clear();
         clear(&mut e, DEVICE, 0, 0, 2, 0, 0, 0, 0);
         assert_eq!(*log.lock().unwrap(), [("Clear", 2)]);
+    }
+
+    /// The frame draw's point where the world is drawn (`engine_core::world_drawn`, first and
+    /// third person): with a reader, exactly one `SetTransform` of the new lighting's state on the
+    /// game's device, carrying the camera and the run's strength; nothing before the game has its
+    /// device or without a usable camera. Never asked for in this binary: the point records nothing.
+    #[test]
+    fn the_new_lighting_is_recorded_where_the_world_is_drawn() {
+        const DEVICE: u32 = 0x1000;
+        type Seen = std::sync::Arc<std::sync::Mutex<Vec<(u32, Vec<u32>)>>>;
+        /// A backend that keeps each `SetTransform`'s state and words, and each other command's name
+        /// as state 0.
+        struct Words(Seen);
+        impl d3d9_stream::Backend for Words {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let seen = match &cmd {
+                    Cmd::SetTransform { state, matrix, .. } => (*state, matrix.to_words().to_vec()),
+                    _ => (0, Vec::new()),
+                };
+                self.0.lock().unwrap().push(seen);
+                Reply::None
+            }
+        }
+        let seen: Seen = std::sync::Arc::default();
+        let mut e = Engine::new();
+        real(&mut e).stream = Some(Stream::direct(Box::new(Words(std::sync::Arc::clone(
+            &seen,
+        )))));
+        let take = || std::mem::take(&mut *seen.lock().unwrap());
+        // No device yet (the main menu's start): nothing.
+        world_drawn_lit(&mut e, stub_view);
+        assert!(take().is_empty());
+        real(&mut e).devices.push((DEVICE, None));
+        let state = d3d9_wgpu::scene_light::STATE;
+        let strength = |e: &mut Engine| {
+            world_drawn_lit(e, stub_view);
+            let got = take();
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!(got[0].0, state);
+            d3d9_wgpu::scene_light::Params::from_words(&got[0].1)
+                .expect("usable parameters")
+                .strength
+        };
+        // The default strength until the run chose one; then the chosen one.
+        assert_eq!(strength(&mut e), d3d9_wgpu::scene_light::STRENGTH);
+        let was =
+            SCENE_LIGHT_STRENGTH.swap(0.85f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        let chosen = strength(&mut e);
+        SCENE_LIGHT_STRENGTH.store(was, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(chosen, 0.85);
+        // No usable camera: nothing.
+        world_drawn_lit(&mut e, |_| None);
+        assert!(take().is_empty());
+        // Never asked for in this binary: the frame draw's point records nothing.
+        assert!(SCENE_LIGHT.get().is_none());
+        engine_core::world_drawn::world_drawn(&mut e);
+        world_drawn(&mut e);
+        assert!(take().is_empty());
     }
 
     /// With real threads, a kernel-locked function that reaches the device's state takes the device

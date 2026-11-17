@@ -631,6 +631,7 @@ name = "host"
 version = "0.1.0"
 dependencies = [
  "bsa",
+ "d3d9-wgpu",
  "engine",
  "engine-core",
  "engine-platform",

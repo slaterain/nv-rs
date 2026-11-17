@@ -864,9 +864,10 @@ impl Choice {
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
             ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
-            ambient_occlusion_strength: ini
-                .ambient_occlusion_strength
-                .map_or(PLAY_AMBIENT_OCCLUSION_STRENGTH, d3d9_wgpu::scene_light::clamp_strength),
+            ambient_occlusion_strength: ini.ambient_occlusion_strength.map_or(
+                PLAY_AMBIENT_OCCLUSION_STRENGTH,
+                d3d9_wgpu::scene_light::clamp_strength,
+            ),
             ini_note: ini.bad_line(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
             draw_check: env(DRAW_THREAD_CHECK).as_deref().map(str::trim) == Some("1"),
