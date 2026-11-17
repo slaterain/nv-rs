@@ -9,7 +9,8 @@
 //! - winit makes no child windows. The game's child window (the one it draws in) fills its parent's
 //!   client area on Windows, so here it is its parent's window under an id of its own: the parent's
 //!   client area takes the child's size (unless borderless), and the device draws in the parent.
-//! - Borderless is winit's borderless full screen on the monitor the window is on, in its real
+//! - Borderless is winit's borderless full screen on the monitor the machine table describes (the
+//!   primary one, else the first: `crate::machine_table::display::described`), in its real
 //!   pixels (Windows: a popup window over the primary monitor). A framed window is sized and placed
 //!   in the system's scaled pixels, as the Win32 window thread, which is not DPI aware then, is; its
 //!   client area is the rectangle the game asks for less the frame the game added for it
@@ -238,6 +239,106 @@ pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Send
     })
 }
 
+/// The monitors as the window thread read them when its loop started: `None` until then.
+type Monitors = Result<Vec<crate::machine_table::Monitor>, String>;
+
+fn monitors_read() -> &'static (Mutex<Option<Monitors>>, std::sync::Condvar) {
+    static READ: OnceLock<(Mutex<Option<Monitors>>, std::sync::Condvar)> = OnceLock::new();
+    READ.get_or_init(Default::default)
+}
+
+/// How long [`monitors`] waits for the window thread's loop to start.
+const MONITORS_WAIT: Duration = Duration::from_secs(10);
+
+/// The monitors as winit reports them (for the machine table, `crate::machine_table::display`):
+/// the window thread is started if it is not running (a run that draws needs it anyway), and its
+/// loop reads them once when it starts. Where no window can be shown the run ends there, with the
+/// line naming why, as it would when the game makes its window.
+pub(super) fn monitors() -> Monitors {
+    if cfg!(target_vendor = "apple") {
+        return Err(
+            "on macOS the window layer needs the program's main thread, which it does not have yet"
+                .into(),
+        );
+    }
+    let _ = window_thread();
+    let (read, ready) = monitors_read();
+    let guard = read
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (guard, _) = ready
+        .wait_timeout_while(guard, MONITORS_WAIT, |m| m.is_none())
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.clone().unwrap_or_else(|| {
+        Err(format!(
+            "the window system did not answer in {} s",
+            MONITORS_WAIT.as_secs()
+        ))
+    })
+}
+
+/// A winit monitor as the machine table takes it.
+fn monitor_of(m: &winit::monitor::MonitorHandle, primary: bool) -> crate::machine_table::Monitor {
+    let size = m.size();
+    crate::machine_table::Monitor {
+        size: (size.width, size.height),
+        scale: m.scale_factor(),
+        refresh_millihertz: m.refresh_rate_millihertz(),
+        modes: m
+            .video_modes()
+            .map(|v| crate::machine_table::Mode {
+                width: v.size().width,
+                height: v.size().height,
+                bit_depth: v.bit_depth(),
+                refresh_millihertz: v.refresh_rate_millihertz(),
+            })
+            .collect(),
+        primary,
+    }
+}
+
+thread_local! {
+    /// The monitor the machine table describes ([`read_monitors`]), on the window thread.
+    static DESCRIBED: std::cell::RefCell<Option<winit::monitor::MonitorHandle>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The monitor a borderless window is put on: the one the machine table describes, when the
+/// monitors were read; else winit's choice (the current one).
+fn described_monitor() -> Option<winit::monitor::MonitorHandle> {
+    DESCRIBED.with(|d| d.borrow().clone())
+}
+
+/// Reads the monitors for [`monitors`], once, on the window thread.
+fn read_monitors(event_loop: &ActiveEventLoop) {
+    let (read, ready) = monitors_read();
+    let mut slot = read
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if slot.is_some() {
+        return;
+    }
+    let primary = event_loop.primary_monitor();
+    let handles: Vec<_> = event_loop.available_monitors().collect();
+    // The monitor the table describes (the primary one, else the first) is the one the borderless
+    // window is put on ([`described_monitor`]), so the game's screen and its window agree.
+    let described = crate::machine_table::display::described(
+        handles.iter().map(|m| primary.as_ref() == Some(m)),
+    );
+    DESCRIBED.with(|d| *d.borrow_mut() = described.map(|i| handles[i].clone()));
+    let list: Vec<_> = handles
+        .iter()
+        .enumerate()
+        .map(|(i, m)| monitor_of(m, Some(i) == described))
+        .collect();
+    *slot = Some(if list.is_empty() {
+        Err("the window system reports no monitor".into())
+    } else {
+        Ok(list)
+    });
+    ready.notify_all();
+}
+
 /// The keyboard library winit needs and cannot load, if one is missing: libxkbcommon always, and
 /// libxkbcommon-x11 where winit takes X11 (no Wayland compositor named). winit would stop its
 /// thread with a panic instead.
@@ -323,6 +424,7 @@ impl Layer {
     /// Makes the windows asked for since the last look, and looks up whether each top-level window
     /// is minimised (for the drawing side, [`Shown::minimised`]).
     fn serve(&mut self, event_loop: &ActiveEventLoop) {
+        read_monitors(event_loop);
         while let Ok(request) = self.requests.try_recv() {
             let id = self.make(event_loop, &request).unwrap_or(0);
             let _ = request.reply.send(id);
@@ -374,7 +476,7 @@ impl Layer {
         if borderless {
             attributes = attributes
                 .with_decorations(false)
-                .with_fullscreen(Some(Fullscreen::Borderless(None)));
+                .with_fullscreen(Some(Fullscreen::Borderless(described_monitor())));
         } else {
             let mut buttons = WindowButtons::empty();
             buttons.set(WindowButtons::CLOSE, frame.close);

@@ -1341,6 +1341,7 @@ fn g112_a_later_value_wins() {
     crate::install_as(&mut e, true);
     row_on(&mut e);
     e.site(BEFORE_MAIN.addr(), &[]);
+    assert_eq!(e.mem.f32(SKILL_MAX), 10.0, "JIP's value first");
     e.mem.set_f32(SKILL_MAX, 12.5);
     deferred_init(&mut e);
     assert_eq!(e.mem.f32(SKILL_MAX), 12.5);
