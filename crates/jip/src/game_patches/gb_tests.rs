@@ -1067,7 +1067,13 @@ fn o2_health_percent() {
     // Armour (0x18) passes the type test (a bit outside 0x38 only fails): 50 of its 100.
     e.mem.set_u8(AREA_AT + 0x8100 + 4, 0x18);
     e.mem.set_u32(AREA_AT + 0x8100 + 0x6c, 100);
-    let armour = entry(&mut e, AREA_AT + 0x8000, AREA_AT + 0x8300, 1, AREA_AT + 0x8100);
+    let armour = entry(
+        &mut e,
+        AREA_AT + 0x8000,
+        AREA_AT + 0x8300,
+        1,
+        AREA_AT + 0x8100,
+    );
     let list = extra_list(&mut e, AREA_AT + 0x8200, &[(0x25, 50.0f32.to_bits())]);
     node(&mut e, AREA_AT + 0x8300, list, 0);
     assert_eq!(health_percent(&mut e, armour), 50.0);
@@ -1224,7 +1230,10 @@ fn o2_repair_item_and_again() {
     let used = weapon_stack(&mut e, AREA_AT + 0xa000, Some(40.0));
     e.mem.set_u32(0x011d_a760, broken);
     let expected = repair_amount(&mut e, 10.0, 20.0).to_bits();
-    assert!(f32::from_bits(expected) < 0.6, "below the cap, so the two healths count");
+    assert!(
+        f32::from_bits(expected) < 0.6,
+        "below the cap, so the two healths count"
+    );
     assert_ne!(expected, repair_amount(&mut e, 20.0, 20.0).to_bits());
     assert_eq!(e.site(REPAIR_ITEM.addr(), &[used]), Some(expected));
     assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "11 at most 60");
@@ -1257,7 +1266,7 @@ fn gb5_rows_are_jips_addresses() {
 /// two shows that text with " (2)", exactly as with JIP.
 #[test]
 fn g82_reads_a_note_at_jips_offsets_too() {
-    let mut e = names_world(0x31, b"Clutter\Notes\Note01.nif", b"");
+    let mut e = names_world(0x31, b"Clutter/Notes/Note01.nif", b"");
     assert_eq!(e.site(ITEM_NAMES[2].addr(), &[TILE, STACK, 2]), Some(1));
-    assert_eq!(shown(&e), b"Clutter\Notes\Note01.nif (2)");
+    assert_eq!(shown(&e), b"Clutter/Notes/Note01.nif (2)");
 }
