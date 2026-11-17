@@ -1315,6 +1315,8 @@ list in records of its own.
 | (none; `WriteRelCall(0x571F65 / 0x571FDF, ClearWeaponNodeHook)`) | `RemoveWeapon` `00571b50`: the held weapon node (`0x571F65`) and the "Weapon" child (`0x571FDF`) | When an actor's weapon is taken out of its 3D, the weapon node's children are detached (last to first; a child with the top bit of its flags set stays), in place of the original's release of the node's attached effects. Nothing left of the old weapon stays on the node when the next one is drawn | 3.9 GH2-3 |
 | (none; `WriteRelJump(0x454576, CloudsFixHook)`) | leaving an interior, `00454450` (`0x454576`) | The interior cell is cleared as in the original, and at the next main loop the sky's transition weather is cleared (JIP's `EndWeatherTransition`, one call), so coming out of a building the sky shows the current weather at once instead of fading from the weather left when the player went in | 3.9 GH2-3 |
 | (none; `SafeWrite32(0x4E4000, 0x00401F0F)` and `WriteRelCall(0x4E400E, UpdateWaterTexturesHook)`) | the water forms' update `004e3d60`: the "already updated this frame" lookup (`0x4E400E`) | The lookup is JIP's: the value the map keeps for the water form (always 1 when present, as the game stores it, so the same answer) unless the renderer's byte at `0x11F91C5` is set, which skips the noise texture update. The game only ever clears that byte, so in practice the water looks as in the original; a map with no buckets answers "not updated" (JIP would crash dividing by zero) | 3.9 GH2-3 |
+| "Credits to carxt for tracing the weapon backpack bug" (`WriteRelJump(0x4AB400, SetWeaponSlotHook)`, `WriteRelJump(0x6061D9, InitWornObjectHook)`, `WriteRelJump(0x5719ED, PickWeaponModelHook)`) | `BipedAnim::SetWeaponSlot` `004ab400` (rewritten), `TESNPC::InitWornObject` `006061b0` (`0x6061D9`), `00571760` (`0x5719ED`) | NPCs show the modded model of the weapon they hold (a scope, an extended magazine, ...): the weapon slot takes the mod flags of the NPC's weapon entry when the NPC's 3D is built and when it draws the weapon, and the model is chosen by those flags (the third-person modded model when it has a path, the first-person object for the player and for type 8 weapons with a mod). With the row off, NPCs show the plain weapon model as in the original | 3.9 GH2-4 |
+| `bNPCWeaponMods` (off by default; with `uWMChancePerLevel`, `uWMChanceMin`, `uWMChanceMax`, each non-zero) | the NPC's 3D set up `00451ef0` (`0x45234E`, the place `uNPCPerks` shares), the cell's reset walk `0054df30` (`0x54E2A4`), and after a save loads (JIP's `DoLoadGameHousekeeping`) | When an NPC (high or middle-high AI level, alive, not a teammate, not while a save loads) is first loaded, the weapon it holds may get weapon mods: the chance is its level times `uWMChancePerLevel`, held between `uWMChanceMin` and `uWMChanceMax` (percent); the mods its weapon record allows are drawn in a random order of three, each further mod with half the chance. Once dealt, an NPC is not dealt again until its cell respawns. After a save loads, the NPCs in the process manager's high-actor list not dealt yet are dealt the same way (here, as in JIP, whatever their AI level or life state; while the save loads the 3D step passes them over), and the player is marked so it is never dealt. The game's random numbers are drawn as JIP draws them | 3.9 GH2-4 |
 
 Part of JIP in every preset (not the row above), while JIP answers "installed":
 - `DestroyRefrHook` (`0055a430`, `0x55A488`): a destroyed reference lets go of its `SetRefName`
@@ -1366,6 +1368,21 @@ for an NPC or creature reference JIP's actor flag bytes too. The game never sets
 form, so without this a new NPC made in memory that held something else could start with leftover JIP flags
 (for example one that will not fight, or runs everywhere); with JIP installed every new form now starts clean,
 as with JIP.
+
+Also fixes (the row on): a reference made in the game that carries form flag `0x400000` (and a projectile
+that says so itself) is not written to the save as an unloaded form, and a reference keeps that flag from the
+save when it loads (`0x484E03`, `0x8497CD`); the save's two form id maps get 0x7D63 buckets instead of 0x13AF
+(`0x845558`, `0x846FFB`): fewer collisions with many forms, no change in what is saved. A global variable
+whose form flags have bit 0x40 (the record's "Constant" flag, as xEdit names it) is not read again from a
+record once it has that flag (`0x5A64D7`).
+
+Also built as part of JIP (every preset while JIP answers "installed"): a plugin file keeps its name's hash at
+`+0x120` when it opens (JIP's mod lookups read it; `0x470D56`), and JIP's `hasModLog` byte of the file record
+starts clear when the record is made (`0x47079D`), so the built `ModLogPrint` starts each mod's log afresh in a
+session instead of sometimes appending to the last one. `TESObject::IsMarker` (`0050f9e0`) answers by JIP's
+set of ids (the 15 default marker objects by their ids, and 0x64..0x77): the same answers as the original for
+every form except one of a type above idle marker (0x30) with an id 0x64..0x77, which is no longer a marker
+(JIP's `SetInternalMarker`, which edits the set, is not built).
 
 #### GS: Script engine
 
@@ -1443,7 +1460,12 @@ those places run the game's code.
 
 #### GL: Lights and magic effects
 
-Nothing built yet.
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; 26 bytes at `0x80ECA8` in `InitGamePatches`) | `LightEffect::AttachLight` `0080e970` (`0x80ECA8`) | With the fixes row on, a light effect (a spell's or a chem's glow) whose actor has no node to hang the light on skips attaching it, where the original calls through the missing node and crashes. When the node is there nothing changes, and the light itself (its colour, radius and position, everything the renderer is given) is set exactly as before (G66) | 3.9 GL-1 |
+| (none; `GetEffectHiddenHook`) | `EffectItemList::BuildMenuString` `00406620` (`0x406720`) | With the fixes row on, the effect lists of items (the Pip-Boy's and the HUD's effect text) leave out effects marked hidden (setting flag 8) and effects with no setting, as well as the usage monitor the original already leaves out (G86) | 3.9 GL-1 |
+| (none; `EffectSkillModifiers1Hook`, `EffectSkillModifiers2Hook`) | `BuildMenuString` (`0x4069D4`) and `MagicCaster::FindTargets` `00815d00` (`0x816519`) | With the fixes row on, an aid or food item's effect is scaled by the Medicine multiplier or, for an item that is not a medicine, by the Survival one, not by both (the original multiplies a medicine that is also food by both); detrimental effects (a negative value in the effect text, setting flag 4 when cast) are not scaled; the "recovered health" perks still apply to Health (when cast, for the player only, as in the original) (G67) | 3.9 GL-1 |
+| (none; `EffectItemGetModifiedDuration`, `ModPositiveChemDurationHook`) | `StatsMenu::StatusDataList::Register` `007e0b20` (`0x7E0C1F`, with the port's hand-over of the list at `BuildMenuString`'s call, `0x40686D`), `MagicTarget::CheckAddEffect` `00823210` (`0x8236FD`) | With the fixes row on, the `ModifyPositiveChemDuration` perks (Chemist) lengthen only chems' (alchemy types 10 and 11) non-hostile effects when taken, where the original lengthens every non-hostile alchemy effect, and the effect text shows the lengthened duration, which the original never does (G107) | 3.9 GL-1 |
 
 #### GX: Havok, pad rumble, mouse
 

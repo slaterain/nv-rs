@@ -1263,3 +1263,203 @@ fn in_the_lighting_a_shadow_takes_away_the_sun_and_nothing_else() {
         }
     }
 }
+
+/// A lit draw whose state is seen in one frame only (a load's fade, a menu: here six blend
+/// factors with blending off) still has its variant made on a thread; the device takes each made
+/// variant in at the next present, whether that draw comes back or not, so the six do not hold
+/// every place among those made at once: the lit scene drawn after them is shadowed within a few
+/// frames. Before (2026-11-17), a variant was taken in only when its own draw came again, and
+/// after six such the Strip had no shadow at all for the rest of the run.
+#[test]
+fn a_variant_whose_draw_never_comes_back_does_not_hold_the_others() {
+    const SRCBLEND: u32 = 19;
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(1);
+    sun_shadow::enable(false);
+    let Some(mut b) = b else {
+        return;
+    };
+    let b = &mut b;
+    run(
+        b,
+        Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: LIT_PS,
+        },
+    );
+    let (view, frame) = hook_words();
+    let shade = pixel([-55.0, 140.0, 0.0]);
+    let sun_side = pixel([50.0, 150.0, 0.0]);
+    let mut shadowed_at = None;
+    for f in 1..=300u32 {
+        for (state, m) in [
+            (sun_shadow::VIEW_STATE, view),
+            (sun_shadow::BEGIN_STATE, frame),
+        ] {
+            run(
+                b,
+                Cmd::SetTransform {
+                    device: DEVICE,
+                    state,
+                    matrix: Data::from_words(&m),
+                },
+            );
+        }
+        clear(b, 7);
+        let mvp = model_view_proj();
+        let regs: Vec<f32> = mvp.iter().flatten().copied().collect();
+        constants(b, 0, 0, &regs);
+        constants(b, 3, 1, &[0.2, 0.2, 0.2, 1.0]);
+        constants(b, 3, 3, &[0.5, 0.5, 0.5, 0.0]);
+        // The second frame (the first with the maps): six one-off states first.
+        if f == 2 {
+            for factor in 3..=8 {
+                state(b, SRCBLEND, factor);
+                draw(b, GROUND, 2);
+            }
+            state(b, SRCBLEND, 2);
+        }
+        draw(b, GROUND, 2);
+        draw(b, BOX, 10);
+        for (state, m) in [(scene_light::STATE, view), (sun_shadow::STATE, frame)] {
+            run(
+                b,
+                Cmd::SetTransform {
+                    device: DEVICE,
+                    state,
+                    matrix: Data::from_words(&m),
+                },
+            );
+        }
+        clear(b, 2);
+        if f >= 3 {
+            let d = b.device().expect("the device");
+            let (_, _, px) = d.read_surface_pixels(RT).expect("the target's pixels");
+            let px: Vec<[u8; 4]> = px
+                .chunks_exact(4)
+                .map(|p| [p[0], p[1], p[2], p[3]])
+                .collect();
+            if f32::from(at(&px, shade)[2]) < 0.7 * f32::from(at(&px, sun_side)[2]) {
+                shadowed_at = Some(f);
+                break;
+            }
+        }
+        present(b, f);
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+    assert!(
+        shadowed_at.is_some(),
+        "the lit scene never took its variant (six one-off variants held the places)"
+    );
+}
+
+/// Frames of the lit scene with the world word (`sun_shadow::WORLD_STATE`) before the scene's
+/// words: `worlds[i]` the world of frame i + 1, the box drawn while `boxes[i]`; the last frame's
+/// pixels.
+fn world_frames(b: &mut WgpuBackend, worlds: &[u32], boxes: &[bool]) -> Vec<[u8; 4]> {
+    const ZWRITEENABLE: u32 = 14;
+    run(
+        b,
+        Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: LIT_PS,
+        },
+    );
+    let (view, frame) = hook_words();
+    for (i, (&world, &with_box)) in worlds.iter().zip(boxes).enumerate() {
+        let f = i as u32 + 1;
+        for (state, m) in [
+            (sun_shadow::WORLD_STATE, sun_shadow::world_words(world)),
+            (sun_shadow::VIEW_STATE, view),
+            (sun_shadow::BEGIN_STATE, frame),
+        ] {
+            run(
+                b,
+                Cmd::SetTransform {
+                    device: DEVICE,
+                    state,
+                    matrix: Data::from_words(&m),
+                },
+            );
+        }
+        clear(b, 7);
+        let mvp = model_view_proj();
+        let regs: Vec<f32> = mvp.iter().flatten().copied().collect();
+        constants(b, 0, 0, &regs);
+        constants(b, 3, 1, &[0.2, 0.2, 0.2, 1.0]);
+        constants(b, 3, 3, &[0.5, 0.5, 0.5, 0.0]);
+        if with_box {
+            draw(b, GROUND, 2);
+            draw(b, BOX, 10);
+        } else {
+            // Without the box the ground is drawn without depth writes: no caster comes, so only
+            // forgetting the maps themselves takes the box's shadow away.
+            state(b, ZWRITEENABLE, 0);
+            draw(b, GROUND, 2);
+            state(b, ZWRITEENABLE, 1);
+        }
+        for (state, m) in [(scene_light::STATE, view), (sun_shadow::STATE, frame)] {
+            run(
+                b,
+                Cmd::SetTransform {
+                    device: DEVICE,
+                    state,
+                    matrix: Data::from_words(&m),
+                },
+            );
+        }
+        clear(b, 2);
+        if i + 1 < worlds.len() {
+            present(b, f);
+        }
+        // The variants of each new state (the ground without depth writes too) are waited for.
+        if f >= 2 {
+            if let Some(d) = b.device() {
+                d.wait_for_sun_variants();
+            }
+        }
+    }
+    let d = b.device().expect("the device");
+    let (_, _, px) = d.read_surface_pixels(RT).expect("the target's pixels");
+    px.chunks_exact(4)
+        .map(|p| [p[0], p[1], p[2], p[3]])
+        .collect()
+}
+
+/// A new world forgets the casters kept: the box drawn in world 1 and then not drawn in world 2
+/// (the world left behind: Freeside's buildings at the Strip's places, run pf-fs12g) casts no
+/// shadow there from the first frame the maps are drawn again, while in the same world it is kept
+/// through a few frames not drawn (its grace), as before.
+#[test]
+fn a_new_world_forgets_the_casters_of_the_one_left() {
+    let worlds_same = [1u32, 1, 1, 1, 1, 1, 1];
+    let worlds_new = [1u32, 1, 1, 1, 2, 2, 2];
+    let boxes = [true, true, true, true, false, false, false];
+    let picture = |worlds: &[u32]| {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        sun_shadow::enable(true);
+        let b = backend(1);
+        sun_shadow::enable(false);
+        let mut b = b?;
+        Some(world_frames(&mut b, worlds, &boxes))
+    };
+    let Some(same) = picture(&worlds_same) else {
+        return;
+    };
+    let new = picture(&worlds_new).expect("the adapter");
+    let shade = pixel([-55.0, 140.0, 0.0]);
+    let sun_side = pixel([50.0, 150.0, 0.0]);
+    let dark = |px: &[[u8; 4]]| f32::from(at(px, shade)[2]) < 0.7 * f32::from(at(px, sun_side)[2]);
+    assert!(
+        dark(&same),
+        "the same world keeps the box's shadow through its grace"
+    );
+    assert!(
+        !dark(&new),
+        "a new world keeps no shadow of the box left behind"
+    );
+    assert_eq!(at(&new, shade), at(&new, pixel([-110.0, 150.0, 0.0])));
+}

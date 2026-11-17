@@ -42,6 +42,8 @@ const SUN: u32 = 0x28;
 const SUN_ROOT: u32 = 0x04;
 const LOCAL_TRANSLATE: u32 = 0x58;
 const INTERIOR: u32 = 0x34;
+/// `TES::currentWrldspc` (JIP LN NVSE `GameData.h`): the world space the camera is in.
+const WORLD_SPACE: u32 = 0x88;
 const SUN_COLOUR: u32 = 0x6c;
 
 /// The object the word at `at` points to, when it is in the game's memory.
@@ -102,8 +104,17 @@ fn trace_light(e: &Engine, sky: Option<u32>) {
             .map(|(r, m)| [m[0] - r[0], m[1] - r[1], m[2] - r[2]]);
         (angles, way)
     });
+    // The hour (`Sky::fCurrentGameHour` +0xec), the camera's place, and where the disc the game
+    // draws is: its billboard node (`Sun` +0x08) and its quad (+0x10) in the world, to measure the
+    // angle between the drawn disc and the light from the camera.
+    let hour = sky.map(|s| e.mem.f32(s + 0xec));
+    let camera = object(e, SCENE_GRAPH)
+        .and_then(|g| object(e, g + CAMERA))
+        .map(|c| floats::<3>(e, c + TRANSLATE));
+    let drawn: [Option<[f32; 3]>; 2] =
+        [0x08, 0x10].map(|o| object(e, sun + o).map(|n| floats::<3>(e, n + WORLD_TRANSLATE)));
     eprintln!(
-        "nv-rs: sun light trace: disc local {local:.4?} world {world:.1?}; light world rotation {rotate:.4?}; moon (angle, tilt; root to mesh) {moon:.3?}"
+        "nv-rs: sun light trace: hour {hour:.4?} camera {camera:.1?} disc local {local:.4?} world {world:.1?} drawn (base, quad) {drawn:.1?}; light world rotation {rotate:.4?}; moon (angle, tilt; root to mesh) {moon:.3?}"
     );
 }
 
@@ -167,6 +178,7 @@ fn read_with(e: &Engine, sun_shadows: bool) -> Option<SceneView> {
         to_sun,
         sun_colour,
         interior: e.mem.u32(tes + INTERIOR) != 0,
+        world: e.mem.u32(tes + WORLD_SPACE),
     })
 }
 
