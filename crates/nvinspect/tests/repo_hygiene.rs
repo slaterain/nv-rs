@@ -2904,10 +2904,11 @@ fn typed_function_findings(
 }
 
 /// The checkout this test checks: the one `cargo test` is run for. Cargo gives the crate's folder
-/// to the running test in `CARGO_MANIFEST_DIR`; the value compiled in is only the fallback. With
-/// a compile cache shared between checkouts, a test binary built in another checkout can be
-/// handed out, and its compiled-in folder is that other checkout's: on 2026-11-17 such a binary
-/// checked `agents\game-ini` for a pull request made elsewhere.
+/// to the running test in `CARGO_MANIFEST_DIR`; the value compiled in is only the fallback (a
+/// run by hand). A test program built for another checkout has that other checkout's folder
+/// compiled in: on 2026-11-17 such a program checked `agents\game-ini` for a pull request made
+/// elsewhere (how it came to be run there is not known; the shared compile cache stores no test
+/// programs, so it was not that).
 fn repo_root() -> PathBuf {
     let crate_dir = std::env::var_os("CARGO_MANIFEST_DIR")
         .map(PathBuf::from)
