@@ -4374,6 +4374,28 @@ mod frame {
     pub const SIZE: u32 = 0x110;
 }
 
+/// The shared shape's copy into the controller at `0xC72EA3` (`00c663d0` with the static
+/// `NiPointer` `01267be0`). JIP LN NVSE's O14 (`bSneakBoundingBoxFix`, `InitControllerShapeHook`)
+/// gives the player and teammates a shape of its own (made once, with the frame's capsule
+/// vertices, radius and step height, `00c70de0`) whose vertices its sneak test at `0x770B0E`
+/// swaps: the seam is asked with the cinfo and the frame's capsule vertices `A` and `B`, the
+/// radius and the step height (their bits), and an answer is the `NiPointer` to copy from. With the
+/// word's switch bit clear: one load, none (the static one).
+#[inline]
+fn controller_shape_seam(e: &mut Engine, me: u32, info: u32, f: u32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::SNEAK_BOUNDING_BOX_FIX == 0 {
+        return None;
+    }
+    let words = [
+        info,
+        f + frame::A,
+        f + frame::B,
+        e.mem.u32(f + frame::RADIUS),
+        e.mem.u32(me + 0x470),
+    ];
+    e.site(0x00c7_2ea3, &words)
+}
+
 // Translated from 00c72410 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00c72410 - the FS:[0] exception-unwinding frame and the /GS cookie check are not modeled.
 /// Builds the controller's shapes from the cinfo `info` (called by `Init`).
@@ -4567,7 +4589,8 @@ fn measure_and_build(e: &mut Engine, this: Ptr<Ctl>, info: u32, f: u32) {
             );
             e.call(NI_POINTER_ASSIGN, &args![STATIC_NI_POINTER, shape]);
         }
-        e.call(NI_POINTER_COPY, &args![second, STATIC_NI_POINTER]);
+        let holder = controller_shape_seam(e, me, info, f).unwrap_or(STATIC_NI_POINTER);
+        e.call(NI_POINTER_COPY, &args![second, holder]);
     } else {
         let shape = fn_00c70de0(
             e,
@@ -8151,6 +8174,62 @@ mod tests {
         assert_eq!(e.get(c, Ctl::fRadius), 10.125);
         assert_eq!(e.get(c, Ctl::fHeight), 64.0);
         assert_eq!(e.get(c, Ctl::fActorHeight), 64.0);
+    }
+
+    /// JIP LN NVSE's O14 seam at `0xC72EA3`: with the word 0, or the fixes without
+    /// `bSneakBoundingBoxFix`, not asked (the shape copied from `01267be0`); with the switch asked
+    /// with the cinfo, the frame's vertices `A` and `B`, the radius and the step height (bits, the
+    /// same values the shared shape's maker had) and its answer is what the copy is from; no answer
+    /// the shared one.
+    #[test]
+    fn o14_seam_picks_the_shape_to_copy() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+            static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+        }
+        fn handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+            ANSWER.with(std::cell::Cell::get)
+        }
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = engine();
+            shapes_world(&mut e);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x00c7_2ea3), handler);
+            e.set_jip_patches(word);
+            ASKED.with(|s| s.borrow_mut().clear());
+            ANSWER.with(|a| a.set(answer));
+            let info = e.mem.alloc(0xc0);
+            e.mem.set_u8(info + 0x96, 1);
+            let c = controller(&mut e);
+            fn_00c72410(&mut e, c, info);
+            let step = e.get(c, Ctl::fStepHeight).to_bits();
+            (
+                calls(&e, NI_POINTER_COPY),
+                ASKED.with(|s| s.take()),
+                c,
+                info,
+                step,
+            )
+        };
+        for word in [0, jip_patches::FIXES, jip_patches::INSTALLED] {
+            let (copied, asked, c, _, _) = run(word, Some(0x7777));
+            assert_eq!(copied, vec![vec![c.addr() + 0x5a8, STATIC_NI_POINTER]]);
+            assert!(asked.is_empty(), "{word:08x}");
+        }
+        let on = jip_patches::FIXES | jip_patches::SNEAK_BOUNDING_BOX_FIX;
+        let (copied, asked, c, info, step) = run(on, Some(0x7777));
+        assert_eq!(copied, vec![vec![c.addr() + 0x5a8, 0x7777]]);
+        assert_eq!(asked.len(), 1);
+        let radius = ((17.5f64 + 23.0) * 0.5) as f32;
+        let words = &asked[0];
+        assert_eq!(
+            (words[0], words[3], words[4]),
+            (info, radius.to_bits(), step)
+        );
+        assert_eq!(words[2] - words[1], 0x14, "A and B 0x14 apart in the frame");
+        let (copied, _, c, _, _) = run(on, None);
+        assert_eq!(copied, vec![vec![c.addr() + 0x5a8, STATIC_NI_POINTER]]);
     }
 
     #[test]

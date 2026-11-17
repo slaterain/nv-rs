@@ -502,8 +502,9 @@ fn a_link_at_or_inside_the_own_folder_opens_nothing() {
 
 /// Review of #630 (round 5): a link inside nv-rs's own folder to a place no list names (a mounted
 /// Windows partition's Documents with the player's real saves) is refused, and `--find` says why;
-/// a plain folder in the own folder is allowed, and so is the own folder moved to another disk
-/// (the own folder itself a link).
+/// a plain folder in the own folder is allowed, and so is, by this guard on Linux, the own folder
+/// moved to another disk (the own folder itself a link; macOS refuses that by design, and play.sh
+/// refuses a link there on both systems).
 #[cfg(unix)]
 #[test]
 fn a_link_out_of_the_own_folder_to_an_unlisted_place_is_refused() {
