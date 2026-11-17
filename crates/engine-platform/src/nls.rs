@@ -454,7 +454,9 @@ pub mod measured {
     /// `WC_SEPCHARS`, `WC_DEFAULTCHAR`, `WC_ERR_INVALID_CHARS`, `WC_COMPOSITECHECK`, it): a bit
     /// outside them is `ERROR_INVALID_FLAGS`.
     const WC_NO_BEST_FIT_CHARS: u32 = 0x400;
-    const WC_KNOWN: u32 = 0x10 | 0x20 | 0x40 | 0x80 | 0x200 | WC_NO_BEST_FIT_CHARS;
+    const WC_KNOWN: u32 = 0x10 | 0x20 | 0x40 | WC_ERR_INVALID_CHARS | 0x200 | WC_NO_BEST_FIT_CHARS;
+    /// `WC_ERR_INVALID_CHARS`.
+    const WC_ERR_INVALID_CHARS: u32 = 0x80;
 
     // Platform: replaces KERNEL32.DLL WideCharToMultiByte (import)
     /// `WideCharToMultiByte(code page, flags, wide, count, out, size, default, used)` away from
@@ -479,7 +481,9 @@ pub mod measured {
         default: Ptr,
         used: Ptr,
     ) -> u32 {
-        if flags & !WC_KNOWN != 0 {
+        // `WC_ERR_INVALID_CHARS` is taken only by the UTF-8 page: on a single-byte page it is
+        // `ERROR_INVALID_FLAGS`, as Windows answers (compared in the tests).
+        if flags & !WC_KNOWN != 0 || flags & WC_ERR_INVALID_CHARS != 0 {
             e.kernel.last_error = ERROR_INVALID_FLAGS;
             return 0;
         }
@@ -502,8 +506,16 @@ pub mod measured {
         } else {
             e.mem.u8(default.addr())
         };
-        let (bytes, defaulted) =
-            page.to_ansi_units(&units, fill, flags & WC_NO_BEST_FIT_CHARS == 0);
+        let best_fit = flags & WC_NO_BEST_FIT_CHARS == 0;
+        let (bytes, defaulted) = page.to_ansi_units(&units, fill, best_fit);
+        // "used" says whether the default stood for a unit Windows turned: all of them for the
+        // size query, only those that fit in a buffer too small (compared with Windows).
+        let defaulted = match usize::try_from(size) {
+            Ok(room) if room > 0 && room < units.len() => {
+                page.to_ansi_units(&units[..room], fill, best_fit).1
+            }
+            _ => defaulted,
+        };
         if !used.is_null() {
             e.mem.set_u32(used.addr(), u32::from(defaulted));
         }
@@ -514,9 +526,10 @@ pub mod measured {
     /// `LCMAP_LOWERCASE`, `LCMAP_UPPERCASE`.
     const LCMAP_LOWERCASE: u32 = 0x100;
     const LCMAP_UPPERCASE: u32 = 0x200;
-    /// Every flag `LCMapStringW` knows (the `NORM_`, `LINGUISTIC_`, `SORT_` and `LCMAP_` ones): a
+    /// Every flag `LCMapStringW` knows (the `NORM_`, `LINGUISTIC_`, `SORT_` and `LCMAP_` ones,
+    /// `LCMAP_HASH` and `LCMAP_SORTHANDLE` included): a
     /// bit outside them is `ERROR_INVALID_FLAGS`.
-    const LCMAP_KNOWN: u32 = 0x0ff3_1f3f;
+    const LCMAP_KNOWN: u32 = 0x0ff3_1f3f | 0x0004_0000 | 0x2000_0000;
 
     // Platform: replaces KERNEL32.DLL LCMapStringW (import)
     /// `LCMapStringW(locale id, flags, text, count, out, size)` away from Windows: `LCMAP_LOWERCASE`
@@ -938,6 +951,7 @@ mod tests_measured {
         for (call, flags) in [
             (0, 0),
             (0, 0x400),
+            (0, 0x80),
             (0, 1),
             (0, 0x8000),
             (1, 0x4000_0000),
@@ -950,6 +964,56 @@ mod tests_measured {
                 answer(&mut e, false, call, flags),
                 "call {call} flags {flags:#x}"
             );
+        }
+        // The size query and a buffer too small: the answer, the error and the "used" flag (the
+        // C runtime's wcstombs reads it from the size query), on each page, with and without
+        // best fit, over text with ASCII, a best fit, a character with none and a pair.
+        let mixed = wide_text(
+            &mut e,
+            &[0x41, 0xe9, 0x142, 0x416, 0x3042, 0xd83d, 0xde00, 0x7a],
+        );
+        for page in crate::code_page::PAGES {
+            for flags in [0, 0x400] {
+                for size in [0, 2, 4, 6] {
+                    let call = |e: &mut Engine, ours: bool| {
+                        let used = e.mem.alloc(4);
+                        e.mem.set_u32(used, 7);
+                        e.kernel.last_error = 0;
+                        let out = if size == 0 { Ptr::new(0) } else { Ptr::new(a) };
+                        let k = if ours {
+                            measured::wide_char_to_multi_byte(
+                                e,
+                                page,
+                                flags,
+                                Ptr::new(mixed),
+                                8,
+                                out,
+                                size,
+                                Ptr::new(0),
+                                Ptr::new(used),
+                            )
+                        } else {
+                            super::wide_char_to_multi_byte(
+                                e,
+                                page,
+                                flags,
+                                Ptr::new(mixed),
+                                8,
+                                out,
+                                size,
+                                Ptr::new(0),
+                                Ptr::new(used),
+                            )
+                        };
+                        (k, e.kernel.last_error, e.mem.u32(used))
+                    };
+                    assert_eq!(
+                        call(&mut e, true),
+                        call(&mut e, false),
+                        "page {page} flags {flags:#x} size {size}"
+                    );
+                }
+            }
         }
     }
 }

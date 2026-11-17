@@ -5374,12 +5374,13 @@ mod tests_code_pages {
             })
             .collect()
     }
+    // Unit by unit, as Windows turns a single-byte page: a surrogate pair is two `?`.
     fn cp1252_to_ansi(u: &[u16]) -> Vec<u8> {
-        char::decode_utf16(u.iter().copied())
-            .map(|c| match c.map(u32::from) {
-                Ok(c) if c < 0x80 || (0xa0..=0xff).contains(&c) => c as u8,
-                Ok(0x142) => b'l',
-                Ok(0x141) => b'L',
+        u.iter()
+            .map(|&c| match c {
+                c if c < 0x80 || (0xa0..=0xff).contains(&c) => c as u8,
+                0x142 => b'l',
+                0x141 => b'L',
                 _ => b'?',
             })
             .collect()
