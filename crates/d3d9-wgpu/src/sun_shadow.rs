@@ -28,8 +28,9 @@
 //!
 //! **Cables** cast at their real weight. A geometry all of whose pieces ([`strands`]) are round
 //! cables thinner than [`THIN_WIDTH`] or flat ribbons ([`Strand::ribbon`]: the game draws some
-//! wires as alpha-tested strips 8 to 118 units wide with one or two cables in the texture; only a
-//! cut-out whose texture is mostly clear, [`RIBBON_ALPHA`], so a fence keeps its shadow) is
+//! wires as alpha-tested strips 8 to 54 units wide with one or two cables in the texture; only a
+//! cut-out whose texture is mostly clear, [`RIBBON_ALPHA`], so a fence or an opaque strip keeps
+//! its shadow) is
 //! drawn not into the depth maps but into a coverage map a cascade ([`THIN_SIZE`],
 //! [`THIN_FORMAT`]): a round cable as quads along its centreline at least [`THIN_DRAWN`]
 //! texels wide, carrying its share of each texel ([`thin_quads`]), cables side by side added;
@@ -615,9 +616,10 @@ impl Strand {
 }
 
 /// A ribbon ([`Strand::ribbon`]) is narrower than this (game units: the cut-out cable strips the
-/// dump tool measured on the Goodsprings and Strip routes are 8 to 118 wide, so the width alone does
+/// dump tool measured on the Goodsprings and Strip routes are 8 to 54 wide, opaque strips of the
+/// same shape up to 118: the width alone does
 /// not tell a cable from a fence; [`RIBBON_ALPHA`] does) ...
-pub const RIBBON_WIDTH: f64 = 120.0;
+pub const RIBBON_WIDTH: f64 = 64.0;
 /// ... longer than this many times its width ...
 pub const RIBBON_LENGTH: f64 = 8.0;
 /// ... and flat: its area under this many times its length by its width (one side 1, both 2, a
@@ -627,10 +629,13 @@ pub const FLAT: f64 = 2.5;
 /// at most this part of its area; they cast with it as cables do.
 pub const BITS: f64 = 0.1;
 /// A cut-out of ribbons is drawn as cables only when its texture's mean alpha (its smallest level:
-/// the alpha averaged over the whole texture, which a ribbon's strip runs along) is under this: a
-/// cable is a few of the strip's texels across. A fence, a grille or a banner (half its texels
-/// opaque or more) keeps its cut-out shadow in the depth maps, as before.
-pub const RIBBON_ALPHA: f32 = 0.25;
+/// the alpha averaged over the whole texture, which a ribbon's strip runs along) is under this.
+/// Measured with the dump tool (2026-11-17): Goodsprings' telegraph wires 0.255, the Strip's wire
+/// strips 0.333; strips of ribbon shape the old rule took for cables but whose texture is opaque
+/// (the Strip: one 118 wide, one 77 wide, mean alpha 1.0) and other cut-outs 0.43 and up. A fence,
+/// a grille or a banner (about half its texels opaque or more) keeps its cut-out shadow in the
+/// depth maps, as before.
+pub const RIBBON_ALPHA: f32 = 0.4;
 
 /// Whether a cut-out of ribbons whose texture's mean alpha is `mean` ([`RIBBON_ALPHA`]; not a
 /// number: not known) is drawn as cables.
@@ -3893,7 +3898,7 @@ mod tests {
 
     #[test]
     fn a_ribbon_is_a_cable_and_a_round_pole_is_not() {
-        // Cut-out ribbons (20 wide here; the game's are 8 to 118), 700 long, several in a geometry,
+        // Cut-out ribbons (20 wide here; the game's are 8 to 54), 700 long, several in a geometry,
         // with a small bit (a clamp) beside them.
         let mut line = strip(20.0, 700.0, 14);
         line.extend(moved(strip(20.0, 700.0, 14), [0.0, 60.0, 0.0]));
@@ -3910,6 +3915,9 @@ mod tests {
         assert!(thin_shape(&tube(10.0, 700.0, 8)).is_none());
         // A wide sign is none either; nor a geometry of ribbons with a large other piece.
         assert!(thin_shape(&strip(100.0, 700.0, 4)).is_none());
+        // Wider than the cable strips measured (8 to 54): no ribbon, however long (review of #693).
+        assert!(thin_shape(&strip(100.0, 1000.0, 40)).is_none());
+        assert!(thin_shape(&strip(60.0, 1000.0, 40)).is_some());
         let mut with_pole = strip(20.0, 700.0, 14);
         with_pole.extend(moved(tube(15.0, 700.0, 8), [0.0, 200.0, 0.0]));
         assert!(thin_shape(&with_pole).is_none());

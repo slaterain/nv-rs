@@ -931,9 +931,9 @@ const MIXED_CUT: u32 = 0x15E0;
 /// coverage maps' texel), 300 high at x 185 (its shadow at x -40), the wire's texture coordinate
 /// where the ribbon's texture is opaque.
 const RIBBON_ROUND: u32 = 0x15F0;
-/// A cut-out strip 100 wide (x 75 to 175), 300 high, 1000 long (y -150 to 850): a ribbon's shape,
-/// but its texture half opaque (stripes 12.5 units wide), as a fence's or a grille's; its shadow
-/// at x -150 to -50. Its buffer and texture.
+/// A cut-out strip 60 wide (x 95 to 155), 300 high, 1000 long (y -150 to 850): a ribbon's shape,
+/// but its texture half opaque (stripes 7.5 units wide), as a fence's or a grille's; its shadow
+/// at x -130 to -70. Its buffer and texture.
 const FENCE: u32 = 0x1600;
 const FENCE_TEX: u32 = 0x1610;
 /// Two fine wires (as [`CABLES`]' first) 1.5 units apart: a bundle.
@@ -1251,15 +1251,15 @@ fn extras(b: &mut WgpuBackend) {
     let bytes = floats(&v.concat());
     bytes_buffer(b, RIBBON_ROUND, false, &bytes);
     // The half-opaque strip: 20 quads along y, u across x.
-    let corner = |x: f32, y: f32| [x, y, 300.0, 1.0, (x - 75.0) / 100.0, (y + 150.0) / 1000.0];
+    let corner = |x: f32, y: f32| [x, y, 300.0, 1.0, (x - 95.0) / 60.0, (y + 150.0) / 1000.0];
     let mut v = Vec::new();
     for i in 0..20 {
         let (y0, y1) = (-150.0 + 50.0 * i as f32, -100.0 + 50.0 * i as f32);
         let (a, bb, c, d) = (
-            corner(75.0, y0),
-            corner(175.0, y0),
-            corner(175.0, y1),
-            corner(75.0, y1),
+            corner(95.0, y0),
+            corner(155.0, y0),
+            corner(155.0, y1),
+            corner(95.0, y1),
         );
         v.extend([a, bb, c, a, c, d]);
     }
@@ -2304,7 +2304,7 @@ fn a_round_wire_beside_a_ribbon_keeps_its_soft_band() {
     }
 }
 
-/// A cut-out strip shaped like a ribbon (100 wide, 1000 long) whose texture is half opaque (a
+/// A cut-out strip shaped like a ribbon (60 wide, 1000 long) whose texture is half opaque (a
 /// fence, a grille) is no cable (review of #693): it keeps its cut-out shadow in the depth maps,
 /// full where its opaque stripes are, lit between them.
 #[test]
