@@ -581,7 +581,8 @@ fn backslashes(path: &mut [u8]) {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: LineIterator.
-/// The lines `LineIterator` gives of a file: its bytes with CR and LF made 0, the texts between
+/// The lines `LineIterator` gives of a file: its bytes with CR and LF made 0 (those before its
+/// first 0 byte), the texts between
 /// 0s (empty ones skipped) up to one that starts with byte 3 (JIP's end mark after the bytes).
 /// `None` when the file is not there. JIP reads the whole file into its string buffer: a file
 /// that does not fit ([`super::formatted_in_buffer`]'s rule) stops the port without the list
@@ -595,8 +596,17 @@ fn file_lines(e: &Engine, path: &[u8], command: &str) -> Option<Vec<Vec<u8>>> {
             bytes.len()
         );
     }
+    // CR and LF become 0 only before the file's first 0 byte (`ReplaceChr` stops at it); the
+    // whole buffer is then cut at 0 bytes.
+    let mut bytes = bytes;
+    let text_end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    for b in &mut bytes[..text_end] {
+        if *b == b'\r' || *b == b'\n' {
+            *b = 0;
+        }
+    }
     let mut out = Vec::new();
-    for line in bytes.split(|&b| b == b'\r' || b == b'\n' || b == 0) {
+    for line in bytes.split(|&b| b == 0) {
         if line.is_empty() {
             continue;
         }
@@ -610,24 +620,21 @@ fn file_lines(e: &Engine, path: &[u8], command: &str) -> Option<Vec<Vec<u8>>> {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: FileStream::OpenWrite,
 // FileStream::MakeAllDirs.
-/// The file written: after its bytes and a LF when `append` and it is there, else made new (its
-/// folders first when it is not there: JIP asks `FileExists`, the attributes, not a read). False
-/// when the seam refuses the name or the write, or when appending to a file that is there but
-/// cannot be read (JIP's `fopen(.., "ab")` fails there: nothing is written, the file is kept).
+/// The file written: a LF and the text added at its end when `append` and it is there (the
+/// seam's append: only those bytes are written, as `fopen(.., "ab")`), else made new (its folders
+/// first when it is not there: JIP asks `FileExists`, the attributes, not a read). False when the
+/// seam refuses the name or the write, or when appending to a file that is there but cannot be
+/// opened (JIP's `fopen(.., "ab")` fails there: nothing is written, the file is kept).
 fn open_write(e: &mut Engine, path: &[u8], append: bool, text: &[u8]) -> bool {
-    // One kernel lock hold over the look, the read and the write, as the seam's profile writes
-    // hold it, so another thread's write of the file cannot fall between them and be lost.
+    // One kernel lock hold over the look and the write, as the seam's profile writes hold it,
+    // so another thread's write of the file cannot fall between them.
     let _kernel = engine_core::real_threads::kernel_guard(e);
-    let mut bytes = Vec::new();
     if engine_core::mod_files::exists(e, path) {
         if append {
-            match engine_core::mod_files::read_or_error(e, path) {
-                Ok(old) => {
-                    bytes = old;
-                    bytes.push(b'\n');
-                }
-                Err(_) => return false,
-            }
+            let mut bytes = Vec::with_capacity(text.len() + 1);
+            bytes.push(b'\n');
+            bytes.extend_from_slice(text);
+            return engine_core::mod_files::append(e, path, &bytes);
         }
     } else {
         for (i, &b) in path.iter().enumerate() {
@@ -636,8 +643,7 @@ fn open_write(e: &mut Engine, path: &[u8], append: bool, text: &[u8]) -> bool {
             }
         }
     }
-    bytes.extend_from_slice(text);
-    engine_core::mod_files::write(e, path, &bytes)
+    engine_core::mod_files::write(e, path, text)
 }
 
 /// One value of a file line as `ReadArrayFromFile` reads it: `@` a form by `StringToRef` (looked
@@ -835,10 +841,16 @@ fn read_string_from_file(e: &mut Engine, w: &[u32]) -> Ret {
         let mut path = super::buffer_arg(e, &read, 0, STR_ARG_BUFFER, "ReadStringFromFile");
         backslashes(&mut path);
         if count != 0 {
-            if let Some(mut bytes) =
-                engine_core::mod_files::read(e, &path).filter(|b| !b.is_empty())
+            // Only the first 0x3FFF bytes are read (`FileToBuffer`'s `fread`), however large
+            // the file.
+            if let Some(mut bytes) = engine_core::mod_files::read_head(e, &path, READ_STRING_MAX)
+                .filter(|b| !b.is_empty())
             {
-                bytes.truncate(READ_STRING_MAX);
+                // The text ends at its first 0 byte: JIP looks for line ends in the string only
+                // (`FindChr` stops at the 0).
+                if let Some(nul) = bytes.iter().position(|&b| b == 0) {
+                    bytes.truncate(nul);
+                }
                 let (mut from, mut to) = (0usize, bytes.len());
                 start -= 1;
                 if start > 0 || count > 0 {
@@ -864,9 +876,7 @@ fn read_string_from_file(e: &mut Engine, w: &[u32]) -> Ret {
                         at = nl + 1;
                     }
                 }
-                let part = &bytes[from.min(to)..to];
-                let end = part.iter().position(|&b| b == 0).unwrap_or(part.len());
-                text = part[..end].to_vec();
+                text = bytes[from.min(to)..to].to_vec();
             }
         }
     }

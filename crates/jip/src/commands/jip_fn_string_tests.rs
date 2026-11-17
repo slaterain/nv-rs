@@ -40,3 +40,18 @@ fn string_hashes() {
         crate::containers::str_hash_ci(b"ABCDE")
     );
 }
+
+/// `GetStringHash` typed in the console prints its result there (`GetStringHash >> n`); with
+/// `split` nothing is printed (no result).
+#[test]
+fn string_hash_console_echo() {
+    let mut e = files_setup();
+    let ci = crate::containers::str_hash_ci(b"Hello") as i32;
+    let (res, lines) = echoed(&mut e, 0x293f, 0, &[s(b"Hello")]);
+    assert_eq!(res, f64::from(ci));
+    let mut want = b"GetStringHash >> ".to_vec();
+    want.extend(crate::utility::flt_to_str(f64::from(ci)));
+    assert_eq!(lines, vec![want]);
+    let (_, lines) = echoed(&mut e, 0x293f, 0, &[s(b"a|b"), n(1)]);
+    assert!(lines.is_empty());
+}

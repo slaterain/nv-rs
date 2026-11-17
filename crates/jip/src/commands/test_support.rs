@@ -510,6 +510,8 @@ pub mod files {
         static FILES: RefCell<BTreeMap<Vec<u8>, Vec<u8>>> = RefCell::default();
         static FOLDERS: RefCell<BTreeSet<Vec<u8>>> = RefCell::default();
         static WRITES: RefCell<u32> = const { RefCell::new(0) };
+        static BYTES: RefCell<u64> = const { RefCell::new(0) };
+        static WHOLE_READS: RefCell<u32> = const { RefCell::new(0) };
     }
 
     /// The name as the platform keeps it (`engine_platform::mod_files::relative`): lower case,
@@ -532,6 +534,10 @@ pub mod files {
     pub const LOCKED: &[u8] = b"\xff locked";
 
     fn read(_: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
+        WHOLE_READS.with(|w| *w.borrow_mut() += 1);
+        lookup(name)
+    }
+    fn lookup(name: &[u8]) -> Result<Vec<u8>, u32> {
         // A refused name reads nothing, as a file that is not there.
         let k = key(name).ok_or(mf::ERROR_FILE_NOT_FOUND)?;
         match FILES.with(|f| f.borrow().get(&k).cloned()) {
@@ -564,8 +570,35 @@ pub mod files {
             }
         }
         WRITES.with(|w| *w.borrow_mut() += 1);
+        BYTES.with(|w| *w.borrow_mut() += bytes.len() as u64);
         FILES.with(|f| f.borrow_mut().insert(k, bytes.to_vec()));
         Ok(())
+    }
+    /// The platform's append: only the new bytes are written (counted); a file that is not there
+    /// is made by [`write`]; one that cannot be opened ([`LOCKED`]) is refused and kept.
+    fn append(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+        let k = key(name).ok_or(mf::ERROR_ACCESS_DENIED)?;
+        match FILES.with(|f| f.borrow().get(&k).map(|old| old == LOCKED)) {
+            None => write(e, name, bytes),
+            Some(true) => Err(mf::ERROR_ACCESS_DENIED),
+            Some(false) => {
+                WRITES.with(|w| *w.borrow_mut() += 1);
+                BYTES.with(|w| *w.borrow_mut() += bytes.len() as u64);
+                FILES.with(|f| {
+                    if let Some(old) = f.borrow_mut().get_mut(&k) {
+                        old.extend_from_slice(bytes);
+                    }
+                });
+                Ok(())
+            }
+        }
+    }
+    /// The platform's bounded read: the first `max` bytes of what [`read`] answers (not counted
+    /// as a whole read).
+    fn read_head(_: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>, u32> {
+        let mut bytes = lookup(name)?;
+        bytes.truncate(max);
+        Ok(bytes)
     }
     static CALLS: ModFileCalls = ModFileCalls {
         read,
@@ -573,6 +606,8 @@ pub mod files {
         directory_exists,
         create_directory,
         write,
+        append,
+        read_head,
     };
 
     /// Installs the calls (once a run) and empties this thread's files.
@@ -581,6 +616,8 @@ pub mod files {
         FILES.with(|f| f.borrow_mut().clear());
         FOLDERS.with(|f| f.borrow_mut().clear());
         WRITES.with(|w| *w.borrow_mut() = 0);
+        BYTES.with(|w| *w.borrow_mut() = 0);
+        WHOLE_READS.with(|w| *w.borrow_mut() = 0);
     }
     pub fn put(name: &str, text: &[u8]) {
         let k = name.to_ascii_lowercase().into_bytes();
@@ -599,5 +636,13 @@ pub mod files {
     }
     pub fn writes() -> u32 {
         WRITES.with(|w| *w.borrow())
+    }
+    /// The bytes all writes and appends have written.
+    pub fn bytes_written() -> u64 {
+        BYTES.with(|w| *w.borrow())
+    }
+    /// The whole-file reads.
+    pub fn whole_reads() -> u32 {
+        WHOLE_READS.with(|w| *w.borrow())
     }
 }

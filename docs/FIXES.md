@@ -925,7 +925,12 @@ save) should get.
   drive, another full path) is refused, where JIP would write anywhere: it reads as a missing file
   and is never written (no value, result 0). A UTF-16 settings file is read and kept as UTF-16, as
   Windows does; a file Windows' encoding guess decides (UTF-16 without its mark, big-endian) is
-  read but never written.
+  read but never written. Also refused (so one file never has two names, and no mod file is
+  taken for the port's own temporary `.part` file): a name part ending in a dot or a space (read
+  as missing, never written), and in writes a name with a non-English letter (a byte above 0x7F)
+  or one ending in `.part`. Appends (`ModLogPrint`, the append flags) write only the new line, as
+  JIP does, and `ReadStringFromFile` reads only the 0x3FFF bytes it uses, so a long log costs
+  nothing more each frame.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of
   #329). One error reaches the handlers once; the console still shows every error. Kept per game
   thread: an error another thread raises meanwhile is its own and reaches the handlers.
