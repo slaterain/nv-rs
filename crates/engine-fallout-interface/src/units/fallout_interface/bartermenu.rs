@@ -5004,4 +5004,33 @@ mod n051_tests {
         assert!(calls_to(&e, QUANTITY_MENU_CREATE).is_empty());
         assert!(calls_to(&e, SETTING_VALUE_ADDRESS).is_empty());
     }
+
+    /// G82 on an unselected tile whose stack has a transaction entry (REVIEW-683): 5 held with 2
+    /// in the buy list shows 3, and the seam is asked with that 3 (JIP's bytes at `0x72F337`
+    /// load the shown count, not the stack's).
+    #[test]
+    fn jip_g82_is_asked_with_the_count_shown() {
+        let mut e = engine();
+        let this = menu(&mut e);
+        let it = item(&mut e, 0, 5, 0x8000);
+        let traded = item(&mut e, 0, 2, 0x8000);
+        e.mem.set_u32(this.addr() + ITEMS_TO_BUY, traded);
+        e.register(ITEM_GET_VALUE, |_, _| st0(0.5));
+        e.register(FLOAT_PAIR_0040EBD0, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        e.register(FLOAT_PAIR_004BD510, |_, a| {
+            st0(f64::from(f32::from_bits(a[0])))
+        });
+        answer(&mut e, ITEM_FULL_NAME, 0x7500);
+        answer(&mut e, TEXT_TO_TRAIT, 0x33);
+        e.set_global(VALUE_TRAIT, 0x34u32);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0072_f33d, g82_name);
+        asked();
+        e.call_log = Some(vec![]);
+        e.call(0x0072_f210, &args![0x6100u32, it]);
+        assert_eq!(calls_to(&e, TILE_SET_INT), vec![vec![0x6100, 0x33, 2]]);
+        assert_eq!(asked(), [(0x0072_f33d, vec![0x6100, it, 3])]);
+    }
 }

@@ -2280,7 +2280,11 @@ mod n057_tests {
         None
     }
     fn amount(_: &mut Engine, w: &[u32]) -> Option<u32> {
-        assert_eq!(w, [50.0f32.to_bits(), 50.0f32.to_bits()], "the two healths");
+        assert_eq!(
+            w,
+            [50.0f32.to_bits(), 40.0f32.to_bits()],
+            "the stack's, the broken item's"
+        );
         Some(0.25f32.to_bits())
     }
     fn used_amount(_: &mut Engine, w: &[u32]) -> Option<u32> {
@@ -2297,7 +2301,10 @@ mod n057_tests {
     /// `init_func_shows_the_repaired_condition`'s tile; answers the engine after the call.
     fn init(word: u32, handler: engine_core::extend::SiteFn) -> (Engine, u32) {
         let mut e = engine();
-        st0(&mut e, GET_ITEM_HEALTH, 50.0);
+        e.register_double(GET_ITEM_HEALTH, |_, a| Ret {
+            st0: if a[0] == 0x7000 { 50.0 } else { 40.0 },
+            ..Ret::default()
+        });
         st0(&mut e, GET_FLOAT_TRAIT, 2.0);
         answer(&mut e, TILE_GET_CHILD_BY_ID, 0x2400);
         st0(&mut e, GET_REPAIRED_CONDITION, 80.0);

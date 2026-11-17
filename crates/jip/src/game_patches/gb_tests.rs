@@ -1064,6 +1064,13 @@ fn o2_health_percent() {
     assert_eq!(health_percent(&mut e, stack), 100.0);
     e.mem.set_u8(AREA_AT + 0x9100 + 4, 0x29);
     assert_eq!(health_percent(&mut e, stack), -1.0);
+    // Armour (0x18) passes the type test (a bit outside 0x38 only fails): 50 of its 100.
+    e.mem.set_u8(AREA_AT + 0x8100 + 4, 0x18);
+    e.mem.set_u32(AREA_AT + 0x8100 + 0x6c, 100);
+    let armour = entry(&mut e, AREA_AT + 0x8000, AREA_AT + 0x8300, 1, AREA_AT + 0x8100);
+    let list = extra_list(&mut e, AREA_AT + 0x8200, &[(0x25, 50.0f32.to_bits())]);
+    node(&mut e, AREA_AT + 0x8300, list, 0);
+    assert_eq!(health_percent(&mut e, armour), 50.0);
 }
 
 /// `EnableRepairButtonHook`: the cap is the skill scaled from 20 to 100 (here 50 gives 60, -5
@@ -1213,12 +1220,14 @@ fn o2_repair_item_and_again() {
     repair_state(&mut e)
         .skill
         .store(60.0f32.to_bits(), Ordering::Relaxed);
-    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(80.0));
-    let used = weapon_stack(&mut e, AREA_AT + 0xa000, Some(120.0));
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(20.0));
+    let used = weapon_stack(&mut e, AREA_AT + 0xa000, Some(40.0));
     e.mem.set_u32(0x011d_a760, broken);
-    let expected = repair_amount(&mut e, 40.0, 60.0).to_bits();
+    let expected = repair_amount(&mut e, 10.0, 20.0).to_bits();
+    assert!(f32::from_bits(expected) < 0.6, "below the cap, so the two healths count");
+    assert_ne!(expected, repair_amount(&mut e, 20.0, 20.0).to_bits());
     assert_eq!(e.site(REPAIR_ITEM.addr(), &[used]), Some(expected));
-    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "41 at most 60");
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "11 at most 60");
     let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(118.0));
     e.mem.set_u32(0x011d_a760, broken);
     assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "60 at 60");
@@ -1241,4 +1250,14 @@ fn gb5_rows_are_jips_addresses() {
             0x007b_5dad
         ]
     );
+}
+
+/// G82 reads every stack's form at +0x34/+0x38 as JIP does (REVIEW-683): for a note (`BGSNote`,
+/// 0x31) that word pair is not its name (its model path, as the reviewer found), and a stack of
+/// two shows that text with " (2)", exactly as with JIP.
+#[test]
+fn g82_reads_a_note_at_jips_offsets_too() {
+    let mut e = names_world(0x31, b"Clutter\Notes\Note01.nif", b"");
+    assert_eq!(e.site(ITEM_NAMES[2].addr(), &[TILE, STACK, 2]), Some(1));
+    assert_eq!(shown(&e), b"Clutter\Notes\Note01.nif (2)");
 }
