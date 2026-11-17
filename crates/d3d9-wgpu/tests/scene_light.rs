@@ -720,7 +720,7 @@ fn a_comb_of_blades_darkens_the_floor_only_a_little() {
     eprintln!("kept: at the feet blades {comb:.4}, wall {wall:.4}; among the blades {inside:.4}");
     assert!(
         inside > 0.94,
-        "the blades and the floor among them lose at most 6 % (5 % at the default 0.7, 3.6 % at 0.5; 15 % or more without the thin-occluder rule): {inside}"
+        "the blades and the floor among them lose at most 6 % (5 % at the default 0.7, 3.6 % at 0.5; 40 % without the thin-occluder rule): {inside}"
     );
     assert!(wall < 0.97, "a solid wall darkens its foot: {wall}");
     assert!(
