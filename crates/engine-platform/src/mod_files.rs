@@ -21,12 +21,16 @@
 //!   or in the game's), as Windows answers `ERROR_PATH_NOT_FOUND` otherwise; in the port's folder
 //!   it is then made.
 //!
-//! Refused (never read, looked for or written: a read fails with `ERROR_ACCESS_DENIED`, the
-//! existence checks answer false): a name that leaves the game's folder (`..`, another drive, a
-//! UNC or device path, another full path), and a part that names a DOS device (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, the
-//! superscript digits too, `CONIN$`, `CONOUT$`; with any extension). Before the first write into
-//! a folder of the port's folder, the real path of the part that exists (junctions, `subst`, short
-//! names resolved) must lie inside the port folder's real path; the folders checked are kept. The
+//! A `..` takes off the part before it, as Windows resolves a path (`Data\Config\..\x.ini` is
+//! `Data\x.ini`, kept and read back under that name). Refused (never read, looked for or written:
+//! a read answers as for a file that is not there, `ERROR_FILE_NOT_FOUND`, the existence checks
+//! false, a write `ERROR_ACCESS_DENIED`): a name that leaves the game's folder (a `..` past it,
+//! another drive, a UNC or device path, another full path), and a part, anywhere in the name,
+//! that names a DOS device (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, the
+//! superscript digits too, in the code page and in UTF-8, `CONIN$`, `CONOUT$`; with any
+//! extension). Before every write into a folder of the port's folder, the real path of the part
+//! that exists (junctions, `subst`, short names resolved) must lie inside the port folder's real
+//! path (checked each time: a folder swapped for a junction after a first write is refused). The
 //! host chooses the folder (`host::mod_files`, refused inside the player's Documents and AppData
 //! and the game's folder) and hands it over with [`set_folder`].
 
@@ -56,15 +60,12 @@ pub struct ModFiles {
     pub written: BTreeMap<Vec<u8>, Vec<u8>>,
     /// Folders made in this run ([`create_directory`]), by the same keys.
     pub folders: BTreeSet<Vec<u8>>,
-    /// Folders of the port's folder whose real path was found inside it ([`confined`]).
-    pub checked: BTreeSet<PathBuf>,
 }
 
 /// The folder mods' files are kept in from now on (the host's choice; `None`: none).
 pub fn set_folder(e: &mut Engine, folder: Option<PathBuf>) {
     let mods = &mut state!(e).mod_files;
     mods.folder = folder;
-    mods.checked.clear();
 }
 
 /// The folder mods' files are kept in, if any.
@@ -83,7 +84,7 @@ pub enum NotMine {
 
 /// Whether one part of a name is a DOS device's name: the text before its first `.`, without
 /// trailing spaces and dots, compared without case (the superscript digits as the ANSI code
-/// page has them, `0xB9`, `0xB2`, `0xB3`).
+/// page has them, `0xB9`, `0xB2`, `0xB3`, and in UTF-8, `C2 B9`, `C2 B2`, `C2 B3`).
 pub fn is_device(part: &[u8]) -> bool {
     let base = part.split(|&b| b == b'.').next().unwrap_or(part);
     let end = base
@@ -95,6 +96,11 @@ pub fn is_device(part: &[u8]) -> bool {
         b"CON" | b"PRN" | b"AUX" | b"NUL" | b"CONIN$" | b"CONOUT$" => true,
         [b'C', b'O', b'M', d] | [b'L', b'P', b'T', d] => {
             d.is_ascii_digit() || matches!(d, 0xb9 | 0xb2 | 0xb3)
+        }
+        // The same superscripts spelt in UTF-8 (`C2 B9`...), which the file layer reads as UTF-8
+        // when the part is valid UTF-8 (`files::real_path`): the same device (REVIEW-642b).
+        [b'C', b'O', b'M', 0xc2, d] | [b'L', b'P', b'T', 0xc2, d] => {
+            matches!(d, 0xb9 | 0xb2 | 0xb3)
         }
         _ => false,
     }
@@ -124,12 +130,25 @@ pub fn relative_as(e: &Engine, name: &[u8], folder_call: bool) -> Result<Vec<u8>
     if rest.starts_with(b"\\") || rest.contains(&b':') || rest.ends_with(b"\\") {
         return Err(NotMine::Outside);
     }
+    // A device name in any part refuses the name, also in a part a later `..` takes off (so no
+    // path to a device is ever opened, whatever the `..`s do).
+    if rest
+        .split(|&b| b == b'\\')
+        .any(|part| !matches!(part, b"" | b"." | b"..") && is_device(part))
+    {
+        return Err(NotMine::Device);
+    }
+    // `..` takes off the part before it, as Windows resolves a path (`Data\Config\..\x.ini` is
+    // `Data\x.ini`); one that would leave the game's folder refuses the name.
     let mut parts: Vec<&[u8]> = Vec::new();
     for part in rest.split(|&b| b == b'\\') {
         match part {
             b"" | b"." => {}
-            b".." => return Err(NotMine::Outside),
-            _ if is_device(part) => return Err(NotMine::Device),
+            b".." => {
+                if parts.pop().is_none() {
+                    return Err(NotMine::Outside);
+                }
+            }
             _ => parts.push(part),
         }
     }
@@ -185,10 +204,11 @@ fn assert_locked(e: &Engine) {
 /// The bytes of the mod file `name`: written in this run, else the folder's copy, else the
 /// game's (the run's files, then the player's, read only). A copy that is there but cannot be
 /// read (access denied, held by another program, a folder of that name) fails with its error.
-/// A name [`relative`] refuses reads nothing: `ERROR_ACCESS_DENIED`.
+/// A name [`relative`] refuses reads nothing, as a file that is not there:
+/// `ERROR_FILE_NOT_FOUND` (an extender command then answers as for a missing file).
 pub fn read(e: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
     assert_locked(e);
-    let rel = relative(e, name).map_err(|_| ERROR_ACCESS_DENIED)?;
+    let rel = relative(e, name).map_err(|_| ERROR_FILE_NOT_FOUND)?;
     let mods = &state_ref!(e).mod_files;
     if let Some(bytes) = mods.written.get(&key(&rel)) {
         return Ok(bytes.clone());
@@ -249,12 +269,10 @@ pub fn directory_exists(e: &Engine, name: &[u8]) -> bool {
 
 /// Makes `target`'s folders in the port's folder `folder`, after checking that the real path of
 /// the part that exists lies inside `folder`'s real path (junctions, `subst` and short names
-/// resolved), so nothing is made through a link that leads out; the folders checked are kept.
-fn confined(e: &mut Engine, folder: &Path, target: &Path) -> Result<(), u32> {
+/// resolved), so nothing is made through a link that leads out. Checked again on every call (no
+/// folder is trusted for the session: one swapped for a junction later is refused, REVIEW-642b).
+fn confined(folder: &Path, target: &Path) -> Result<(), u32> {
     std::fs::create_dir_all(folder).map_err(|err| code_of(&err))?;
-    if state_ref!(e).mod_files.checked.contains(target) {
-        return Ok(());
-    }
     let root = std::fs::canonicalize(folder).map_err(|err| code_of(&err))?;
     let mut existing = target.to_path_buf();
     while !existing.exists() {
@@ -273,8 +291,33 @@ fn confined(e: &mut Engine, folder: &Path, target: &Path) -> Result<(), u32> {
         return Err(ERROR_ACCESS_DENIED);
     }
     std::fs::create_dir_all(target).map_err(|err| code_of(&err))?;
-    state!(e).mod_files.checked.insert(target.to_path_buf());
     Ok(())
+}
+
+/// The `.part` file a write goes through, made new: a plain file left there (an earlier write
+/// that stopped) is taken away first; anything else of that name (a link, a junction, a folder)
+/// refuses the write, `ERROR_ACCESS_DENIED`, and is left as it is. Made with `create_new`, so an
+/// entry that appears meanwhile is never opened (no link is ever written through).
+fn new_part(part: &std::ffi::OsStr) -> Result<std::fs::File, u32> {
+    match std::fs::symlink_metadata(part) {
+        Ok(meta) if meta.file_type().is_file() => {
+            std::fs::remove_file(part).map_err(|err| code_of(&err))?;
+        }
+        Ok(_) => {
+            println!(
+                "mod files: {} is not a plain file; nothing written through it",
+                Path::new(part).display()
+            );
+            return Err(ERROR_ACCESS_DENIED);
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(code_of(&err)),
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(part)
+        .map_err(|err| code_of(&err))
 }
 
 /// `CreateDirectoryA` for a mod's folder (one trailing separator allowed): made in the port's
@@ -294,7 +337,7 @@ pub fn create_directory(e: &mut Engine, name: &[u8]) -> Result<(), u32> {
     }
     if let Some(folder) = state_ref!(e).mod_files.folder.clone() {
         let target = kept_path(&folder, &rel);
-        if let Err(code) = confined(e, &folder, &target) {
+        if let Err(code) = confined(&folder, &target) {
             println!(
                 "mod files: {} not made (Windows error {code})",
                 target.display()
@@ -326,13 +369,24 @@ pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
         let parent = target.parent().unwrap_or(&folder).to_path_buf();
         let mut part = target.clone().into_os_string();
         part.push(".part");
-        let done = confined(e, &folder, &parent).and_then(|()| {
-            std::fs::write(&part, bytes)
-                .and_then(|()| std::fs::rename(&part, &target))
-                .map_err(|err| code_of(&err))
-        });
+        let mut made = false;
+        let done = confined(&folder, &parent)
+            .and_then(|()| new_part(&part))
+            .and_then(|mut file| {
+                made = true;
+                use std::io::Write as _;
+                file.write_all(bytes)
+                    .and_then(|()| {
+                        drop(file);
+                        std::fs::rename(&part, &target)
+                    })
+                    .map_err(|err| code_of(&err))
+            });
         if let Err(code) = done {
-            let _ = std::fs::remove_file(&part);
+            // Only a `.part` this call made is taken away.
+            if made {
+                let _ = std::fs::remove_file(&part);
+            }
             println!(
                 "mod files: {} not written (Windows error {code})",
                 target.display()

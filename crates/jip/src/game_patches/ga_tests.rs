@@ -34,7 +34,11 @@ fn ga_seams_are_jips_addresses() {
         ]
     );
     let corner: Vec<u32> = CORNER_MESSAGE.iter().map(|s| s.addr()).collect();
-    assert_eq!(AREA.fix_sites, [sites, corner].concat());
+    assert_eq!(ROLLOVER_WEAPON.addr(), 0x0077_7123);
+    assert_eq!(
+        AREA.fix_sites,
+        [sites, corner, vec![ROLLOVER_WEAPON.addr()]].concat()
+    );
     assert!(AREA.fix_wraps.is_empty() && AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
 }
 
@@ -286,4 +290,91 @@ fn g10_each_seam_answers_jips_text_buffer() {
         0x104,
         "the queue reads FIXES too"
     );
+}
+
+/// G80's stand-ins: a weapon at `AREA_AT + 0x400` with flag byte +0x100 `flags`, a reference at
+/// `AREA_AT + 0x800` whose list holds `ExtraWeaponModFlags` with the flags `mods` (none when
+/// `None`), and the crosshair name `name`.
+fn g80_world(flags: u8, mods: Option<u32>, name: &[u8]) -> (Engine, u32, u32) {
+    let mut e = crate::commands::test_support::engine();
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    e.map(AREA_AT, 0x1000);
+    e.map(0x011d_9000, 0x1000);
+    let (weapon, reference) = (AREA_AT + 0x400, AREA_AT + 0x800);
+    e.mem.set_u8(weapon + 0x100, flags);
+    // Another extra kind first, so the lookup walks.
+    crate::commands::test_support::put_extra(&mut e, reference + 0x44, AREA_AT + 0xc00, 0x8C, 7);
+    if let Some(mods) = mods {
+        crate::commands::test_support::put_extra(
+            &mut e,
+            reference + 0x44,
+            AREA_AT + 0xc40,
+            0x8D,
+            mods,
+        );
+    }
+    e.mem.set_cstr(0x011d_9c48, name);
+    // The byte after the buffer, to see a write past it.
+    e.mem.set_u8(0x011d_9c48 + 0x104, 0xAA);
+    (e, weapon, reference)
+}
+
+/// G80 not installed, or installed with the row off: nothing answers at its seam; with the
+/// fixes in, its handler answers there.
+#[test]
+fn g80_seam_answers_only_with_the_fixes() {
+    let (mut e, weapon, reference) = g80_world(0, None, b"Gun");
+    crate::install_as(&mut e, false);
+    assert_eq!(
+        e.site(0x0077_7123, &[weapon, reference]),
+        None,
+        "not installed"
+    );
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site(0x0077_7123, &[weapon, reference]), None, "row off");
+    install_fixes(&mut e);
+    assert_eq!(e.site(0x0077_7123, &[weapon, reference]), Some(1));
+}
+
+/// JIP's `RolloverWeaponHook`: a weapon not playable (+0x100 bit 0x80) answers 0 and its name
+/// stays, mods or not; a playable one answers 1, and its name gets "+" only when the reference
+/// has `ExtraWeaponModFlags` with flags not 0 (low byte +0xC; a higher byte alone is no mod).
+#[test]
+fn g80_playable_weapon_with_mods_gets_a_plus() {
+    let cases: [(u8, Option<u32>, u32, &[u8]); 6] = [
+        (0x80, Some(1), 0, b"Gun"),
+        (0x81, None, 0, b"Gun"),
+        (0x7F, None, 1, b"Gun"),
+        (0, Some(0x100), 1, b"Gun"),
+        (0, Some(1), 1, b"Gun+"),
+        (0x7F, Some(4), 1, b"Gun+"),
+    ];
+    for (flags, mods, answer, name) in cases {
+        let (mut e, weapon, reference) = g80_world(flags, mods, b"Gun");
+        assert_eq!(
+            rollover_weapon(&mut e, &[weapon, reference]),
+            Some(answer),
+            "{flags:#x} {mods:?}"
+        );
+        assert_eq!(e.mem.cstr(0x011d_9c48), name, "{flags:#x} {mods:?}");
+    }
+}
+
+/// The "+" and its end stay inside the 0x104-byte name buffer: a 0x102-byte name gets it (its
+/// end at the last byte), a 0x103-byte one keeps its name (JIP would write one byte past it).
+#[test]
+fn g80_plus_only_within_the_name_buffer() {
+    let fits = vec![b'a'; 0x102];
+    let (mut e, weapon, reference) = g80_world(0, Some(1), &fits);
+    assert_eq!(rollover_weapon(&mut e, &[weapon, reference]), Some(1));
+    assert_eq!(
+        e.mem.cstr(0x011d_9c48),
+        [fits.clone(), b"+".to_vec()].concat()
+    );
+    assert_eq!(e.mem.u8(0x011d_9c48 + 0x104), 0xAA);
+    let full = vec![b'a'; 0x103];
+    let (mut e, weapon, reference) = g80_world(0, Some(1), &full);
+    assert_eq!(rollover_weapon(&mut e, &[weapon, reference]), Some(1));
+    assert_eq!(e.mem.cstr(0x011d_9c48), full);
+    assert_eq!(e.mem.u8(0x011d_9c48 + 0x104), 0xAA);
 }
