@@ -1543,6 +1543,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
         msg::DEFERRED_INIT => {
             crate::commands::pos_marker::create(e);
             crate::game_patches::gh2::deferred_init(e);
+            // O16's lists (JIP turns the switches from 15 on here, `s_deferrSetOptional`).
+            crate::game_patches::ga::deferred_init(e);
             crate::game_patches::gf::deferred_init(e);
             crate::commands::jip_fn_utility::deferred_init(e);
             crate::game_patches::gs::deferred_init(e);

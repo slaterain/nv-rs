@@ -1470,19 +1470,23 @@ fn load_pass_world(draws: &[u32]) -> Engine {
     e.map(0x011e_0000, 0x1000);
     e.mem.set_u32(THE_PLAYER_AT, PLAYER_REF);
     e.mem.set_u32(OTHER_ACTOR + 0x68, PROCESS);
-    e.mem.set_u8(OTHER_ACTOR + 0x143, 0x10);
+    e.mem.set_u8(OTHER_ACTOR + 0x143, 0x90);
     e.mem.set_u32(HIGH_ACTORS_AT, OTHER_ACTOR);
     e.mem.set_u32(HIGH_ACTORS_AT + 4, HIGH_NODE);
     e.mem.set_u32(HIGH_NODE, ACTOR);
     e.mem.set_u32(ACTOR + 0x108, 2);
     e.mem.set_u8(PROCESS + 0x28, 2);
+    // Another flag bit set on the player and the actor: the pass adds its mark, keeps the rest.
+    e.mem.set_u8(PLAYER_REF + 0x143, 0x80);
+    e.mem.set_u8(ACTOR + 0x143, 0x80);
     e
 }
 
 /// O17 after a save loads (JIP's `DoLoadGameHousekeeping`, serialization.h 181-195), through
 /// the post-load message: the player marked; of the two high actors the one already marked is
 /// passed over, the other marked and dealt (dead and low level: JIP looks at neither); a failed
-/// load, a teammate (marked, no draw), no entry (marked) and the switch off (nothing marked).
+/// load, a teammate (marked, no draw), no entry (marked) and the switch off (nothing marked). The
+/// player and the actor start with another flag bit (0x80): the mark is added, the bit kept.
 #[test]
 fn o17_a_loaded_save_deals_the_unmarked_high_actors() {
     use nvse::plugins::{msg, Message};
@@ -1498,12 +1502,16 @@ fn o17_a_loaded_save_deals_the_unmarked_high_actors() {
     };
     let mut e = load_pass_world(&[4, 0]);
     post_load(&mut e, 0);
-    assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "a failed load: nothing");
-    assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x80, "a failed load: nothing");
+    assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0x80);
     post_load(&mut e, 1);
-    assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0x10, "the player marked");
-    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10);
-    assert_eq!(e.mem.u8(OTHER_ACTOR + 0x143), 0x10);
+    assert_eq!(
+        e.mem.u8(PLAYER_REF + 0x143),
+        0x90,
+        "the player marked, its other bit kept"
+    );
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x90);
+    assert_eq!(e.mem.u8(OTHER_ACTOR + 0x143), 0x90);
     assert_eq!(dealt_flags(&mut e), Some(5));
     assert_eq!(
         logged_calls(&e, STUB_UPDATE),
@@ -1517,19 +1525,19 @@ fn o17_a_loaded_save_deals_the_unmarked_high_actors() {
     let mut e = load_pass_world(&[]);
     e.mem.set_u8(ACTOR + 0x18d, 1);
     post_load(&mut e, 1);
-    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10, "a teammate is marked");
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x90, "a teammate is marked");
     assert!(logged_calls(&e, STUB_LEVEL).is_empty());
     // An entry with no extra lists: marked, not dealt.
     let mut e = load_pass_world(&[]);
     e.mem.set_u32(INFO, 0);
     post_load(&mut e, 1);
-    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10, "no lists: marked");
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x90, "no lists: marked");
     assert!(logged_calls(&e, STUB_LEVEL).is_empty());
     // No weapon entry: marked, not dealt.
     let mut e = load_pass_world(&[]);
     e.mem.set_u32(PROCESS + 0x114, 0);
     post_load(&mut e, 1);
-    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10, "no entry: marked");
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x90, "no entry: marked");
     assert!(logged_calls(&e, STUB_LEVEL).is_empty());
     // The switch off, or a number 0: nothing at all.
     for numbers in [None, Some([2, 10, 0])] {
@@ -1539,8 +1547,8 @@ fn o17_a_loaded_save_deals_the_unmarked_high_actors() {
             Some(n) => set_weapon_mod_chance(&mut e, n),
         }
         post_load(&mut e, 1);
-        assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0, "{numbers:?}");
-        assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "{numbers:?}");
+        assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0x80, "{numbers:?}");
+        assert_eq!(e.mem.u8(ACTOR + 0x143), 0x80, "{numbers:?}");
         assert!(logged_calls(&e, STUB_LEVEL).is_empty());
     }
 }
