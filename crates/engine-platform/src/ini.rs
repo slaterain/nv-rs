@@ -386,12 +386,15 @@ mod tests {
     }
 
     /// A scratch folder removed when the test ends, however it ends.
+    #[cfg(windows)]
     struct Scratch(std::path::PathBuf);
+    #[cfg(windows)]
     impl Drop for Scratch {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
+    #[cfg(windows)]
     fn scratch(name: &str) -> Scratch {
         let dir = std::env::temp_dir().join(format!("nv-ini-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -403,6 +406,10 @@ mod tests {
     /// reads it at start-up) reads the current directory's file; `[General]
     /// bUseMyGamesDirectory` answers 1 whatever the file says (the game's folder keeps nothing of
     /// nv-rs's), other keys their values; a bare name reads the Windows directory.
+    // Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+    // file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+    // as part of a name elsewhere; starting the game there is refused today).
+    #[cfg(windows)]
     #[test]
     fn profile_ints_read_relative_names_and_pin_the_my_games_key() {
         let game = scratch("game");
@@ -463,6 +470,10 @@ mod tests {
 
     /// The game's own profile reads do not look in the mods' folder: a value a mod's command
     /// wrote (`engine_core::mod_files`) is not what the import reads; the game's file is.
+    // Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+    // file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+    // as part of a name elsewhere; starting the game there is refused today).
+    #[cfg(windows)]
     #[test]
     fn the_games_profile_import_does_not_read_mod_files() {
         let game = scratch("own");
