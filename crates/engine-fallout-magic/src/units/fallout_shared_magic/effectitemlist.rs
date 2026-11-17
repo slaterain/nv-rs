@@ -609,6 +609,61 @@ pub fn effect_item_list_get_associated_skill(e: &mut Engine, this: Ptr<EffectIte
 /// `ftol` of `factor * value` stored as a `float` (the `FILD`, `FMUL double`,
 /// `FSTP float` of `BuildMenuString`'s multipliers), with entry point 0xc for
 /// actor value 0x10 in between.
+/// `BuildMenuString`'s usage-monitor test (`0x406720`, `CALL 0x404730`). JIP LN NVSE's G86 (a fix,
+/// the row `NV_JIP_GAME_PATCHES`; `WriteRelCall(0x406720, GetEffectHiddenHook)`) answers it
+/// instead (words: the effect item; 1 leaves the effect out: no setting, the usage monitor, or a
+/// hidden setting). With the word's `FIXES` bit clear: one load, then the exe's call.
+#[inline]
+fn usage_monitor_or_hidden(e: &mut Engine, item: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(hidden) = e.site(0x0040_6720, &[item]) {
+            return hidden != 0;
+        }
+    }
+    e.call(ITEM_IS_USAGE_MONITOR, &args![item]).bool()
+}
+
+/// Before `BuildMenuString`'s call of `StatsMenu::StatusDataList::Register` (`0x40686D`): JIP LN
+/// NVSE's G107 (a fix; `EffectItemGetModifiedDuration` at `0x7E0C1F` inside `Register` reads this
+/// function's `this` from its frame, `[[EBP]-0xD4]`) is handed the list here (words: the list; the
+/// answer is not read). With the word's `FIXES` bit clear: one load, nothing else.
+#[inline]
+fn jip_menu_list(e: &mut Engine, list: u32) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0040_686d, &[list]);
+    }
+}
+
+/// `BuildMenuString`'s Medicine and Survival scaling (`0x4069D4` to `0x406A9D`). JIP LN NVSE's G67
+/// (a fix; `WriteRelJump(0x4069D4, EffectSkillModifiers1Hook)`) replaces both blocks (words: the
+/// status entry's own magnitude, the magnitude so far, the actor value, the Medicine and Survival
+/// flags; answered: the magnitude). `None`: the exe's blocks run (with the `FIXES` bit clear: one
+/// load).
+#[inline]
+fn jip_skill_modifiers(
+    e: &mut Engine,
+    node: u32,
+    magnitude: i32,
+    actor_value: u32,
+    medicine: bool,
+    food: bool,
+) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES == 0 {
+        return None;
+    }
+    let entry = item_word(e, node, 0);
+    e.site(
+        0x0040_69d4,
+        &[
+            entry,
+            magnitude as u32,
+            actor_value,
+            u32::from(medicine),
+            u32::from(food),
+        ],
+    )
+}
+
 fn scaled_magnitude(e: &mut Engine, magnitude: i32, factor: f64, actor_value: u32) -> i32 {
     e.with_stack(4, |e, value| {
         let scaled = x87_store32(x87_mul(factor, f64::from(magnitude)));
@@ -659,7 +714,7 @@ pub fn effect_item_list_build_menu_string(
         let mut node = if this.is_null() { 0 } else { this.addr() + 4 };
         while node != 0 && node_item(e, node) != 0 {
             let item = node_item(e, node);
-            let mut listed = !e.call(ITEM_IS_USAGE_MONITOR, &args![item]).bool();
+            let mut listed = !usage_monitor_or_hidden(e, item);
             if listed {
                 let item = node_item(e, node);
                 if e.call(PLUS_1C, &args![item]).u32() != 0 {
@@ -695,6 +750,7 @@ pub fn effect_item_list_build_menu_string(
                     }
                 } else {
                     let item = node_item(e, node);
+                    jip_menu_list(e, this.addr());
                     e.call(STATUS_LIST_REGISTER, &args![status_list, item]);
                 }
             }
@@ -761,15 +817,19 @@ fn write_effect_line(
     {
         magnitude = magnitude.wrapping_neg();
     }
-    if medicine {
-        let player = e.mem.u32(PLAYER_011DEA3C);
-        let factor = e.call(PLAYER_MEDICINE_MULT_008BEBB0, &args![player]).f64();
-        magnitude = scaled_magnitude(e, magnitude, factor, actor_value);
-    }
-    if food && actor_value != 0x36 {
-        let player = e.mem.u32(PLAYER_011DEA3C);
-        let factor = e.call(PLAYER_FOOD_MULT_008BEC80, &args![player]).f64();
-        magnitude = scaled_magnitude(e, magnitude, factor, actor_value);
+    if let Some(scaled) = jip_skill_modifiers(e, node, magnitude, actor_value, medicine, food) {
+        magnitude = scaled as i32;
+    } else {
+        if medicine {
+            let player = e.mem.u32(PLAYER_011DEA3C);
+            let factor = e.call(PLAYER_MEDICINE_MULT_008BEBB0, &args![player]).f64();
+            magnitude = scaled_magnitude(e, magnitude, factor, actor_value);
+        }
+        if food && actor_value != 0x36 {
+            let player = e.mem.u32(PLAYER_011DEA3C);
+            let factor = e.call(PLAYER_FOOD_MULT_008BEC80, &args![player]).f64();
+            magnitude = scaled_magnitude(e, magnitude, factor, actor_value);
+        }
     }
     if actor_value == 0x36 && magnitude > 0 {
         let player = e.mem.u32(PLAYER_011DEA3C);
@@ -1861,6 +1921,147 @@ mod effect_item_list_tests {
             .map(|c| c[0])
             .collect();
         assert_eq!(points, vec![0xc, 0xc, 0x2c]);
+    }
+
+    /// What a JIP seam handler of these tests was asked: its words, appended at `0x0110_0000`
+    /// (count first).
+    const ASKED: u32 = 0x0110_0000;
+
+    fn asked_engine(word: u32) -> Engine {
+        let mut e = engine();
+        if !e.mem.is_mapped(ASKED) {
+            e.map(ASKED, 0x1000);
+        }
+        e.mem.set_u32(ASKED, 0);
+        e.set_jip_patches(word);
+        e
+    }
+
+    fn record(e: &mut Engine, words: &[u32]) {
+        let n = e.mem.u32(ASKED);
+        for (i, w) in words.iter().enumerate() {
+            e.mem.set_u32(ASKED + 4 + 4 * (n + i as u32), *w);
+        }
+        e.mem.set_u32(ASKED, n + words.len() as u32);
+    }
+
+    fn recorded(e: &Engine) -> Vec<u32> {
+        (0..e.mem.u32(ASKED))
+            .map(|i| e.mem.u32(ASKED + 4 + 4 * i))
+            .collect()
+    }
+
+    /// Two value effects (Health 10 and actor value 7, magnitude 5), Medicine and Survival on.
+    fn two_values(e: &mut Engine) -> (u32, u32, Ptr<EffectItemList>) {
+        e.mem.set_u32(PLAYER_011DEA3C, 0x4444);
+        let plain = setting(e, 0);
+        let health = item(e, [10, 0, 0, 0, 0x10, plain]);
+        let other = item(e, [5, 0, 0, 0, 7, plain]);
+        let list = list_of(e, &[health, other]);
+        menu_doubles(e, list, 1, 1);
+        e.register(PLAYER_MEDICINE_MULT_008BEBB0, |_, _| Ret {
+            st0: 1.5,
+            ..Ret::default()
+        });
+        e.register(PLAYER_FOOD_MULT_008BEC80, |_, _| Ret {
+            st0: 2.0,
+            ..Ret::default()
+        });
+        returns(e, HANDLE_ENTRY_POINT, 0);
+        (health, other, list)
+    }
+
+    /// G86's seam at `0x406720` (JIP LN NVSE's `GetEffectHiddenHook`): with the fixes row it is
+    /// asked with each effect item and its answer replaces the usage-monitor call (1 leaves the
+    /// effect out); JIP not installed or installed without the row: not asked, the exe's call.
+    #[test]
+    fn jip_g86_seam_answers_the_hidden_test() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [0, jip_patches::INSTALLED, jip_patches::FIXES] {
+            let mut e = asked_engine(word);
+            let (health, other, list) = two_values(&mut e);
+            e.mem.set_u32(ASKED + 0x800, health);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0040_6720), |e, a| {
+                record(e, a);
+                Some(u32::from(a[0] == e.mem.u32(ASKED + 0x800)))
+            });
+            let text = e.mem.alloc(0x100);
+            e.call_log = Some(vec![]);
+            e.call(0x0040_6620, &args![list, text, 0x100u32]);
+            let registered = calls_to(&e, STATUS_LIST_REGISTER);
+            let monitor = calls_to(&e, ITEM_IS_USAGE_MONITOR).len();
+            if word == jip_patches::FIXES {
+                assert_eq!(recorded(&e), vec![health, other]);
+                assert_eq!(monitor, 0);
+                assert_eq!(registered.len(), 1);
+                assert_eq!(registered[0][1], other);
+            } else {
+                assert_eq!(recorded(&e), Vec::<u32>::new(), "{word:08x}");
+                assert_eq!(monitor, 2, "{word:08x}");
+                assert_eq!(registered.len(), 2, "{word:08x}");
+            }
+        }
+    }
+
+    /// G107's port-side seam at `0x40686D`: with the fixes row it is asked with the list right
+    /// before each `Register` call; without it, never.
+    #[test]
+    fn jip_g107_list_seam_comes_before_each_register() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [0, jip_patches::INSTALLED, jip_patches::FIXES] {
+            let mut e = asked_engine(word);
+            let (_, _, list) = two_values(&mut e);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0040_686d), |e, a| {
+                // The registers so far, then the words.
+                let n = e
+                    .call_log
+                    .as_ref()
+                    .map_or(0, |l| l.iter().filter(|c| c.0 == STATUS_LIST_REGISTER).count());
+                record(e, &[n as u32]);
+                record(e, a);
+                None
+            });
+            let text = e.mem.alloc(0x100);
+            e.call_log = Some(vec![]);
+            e.call(0x0040_6620, &args![list, text, 0x100u32]);
+            let expected = if word == jip_patches::FIXES {
+                vec![0, list.addr(), 1, list.addr()]
+            } else {
+                vec![]
+            };
+            assert_eq!(recorded(&e), expected, "{word:08x}");
+            assert_eq!(calls_to(&e, STATUS_LIST_REGISTER).len(), 2);
+        }
+    }
+
+    /// G67's seam at `0x4069D4` (JIP LN NVSE's `EffectSkillModifiers1Hook`): with the fixes row it
+    /// is asked once per value line with the entry's magnitude, the magnitude, the actor value and
+    /// the Medicine and Survival flags, and its answer is the magnitude shown (the exe's two
+    /// scalings skipped); without the row, not asked and the exe scales (Health 10: 1.5 then 2.0).
+    #[test]
+    fn jip_g67_menu_seam_answers_the_magnitude() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        for word in [0, jip_patches::INSTALLED, jip_patches::FIXES] {
+            let mut e = asked_engine(word);
+            let (_, _, list) = two_values(&mut e);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0040_69d4), |e, a| {
+                record(e, a);
+                Some(70 + a[2])
+            });
+            let text = e.mem.alloc(0x100);
+            e.call_log = Some(vec![]);
+            e.call(0x0040_6620, &args![list, text, 0x100u32]);
+            let formats = calls_to(&e, BUFFER_FORMAT);
+            if word == jip_patches::FIXES {
+                assert_eq!(recorded(&e), vec![10, 10, 0x10, 1, 1, 5, 5, 7, 1, 1]);
+                assert_eq!((formats[0][4], formats[1][4]), (0x56, 77));
+                assert!(calls_to(&e, PLAYER_MEDICINE_MULT_008BEBB0).is_empty());
+                assert!(calls_to(&e, PLAYER_FOOD_MULT_008BEC80).is_empty());
+            } else {
+                assert_eq!(recorded(&e), Vec::<u32>::new(), "{word:08x}");
+                assert_eq!((formats[0][4], formats[1][4]), (30, 14), "{word:08x}");
+            }
+        }
     }
 }
 

@@ -1440,7 +1440,12 @@ those places run the game's code.
 
 #### GL: Lights and magic effects
 
-Nothing built yet.
+| JIP's comment | Exe places | What a player with JIP gets | Built |
+|---|---|---|---|
+| (none; 26 bytes at `0x80ECA8` in `InitGamePatches`) | `LightEffect::AttachLight` `0080e970` (`0x80ECA8`) | With the fixes row on, a light effect (a spell's or a chem's glow) whose actor has no node to hang the light on skips attaching it, where the original calls through the missing node and crashes. When the node is there nothing changes, and the light itself (its colour, radius and position, everything the renderer is given) is set exactly as before (G66) | 3.9 GL-1 |
+| (none; `GetEffectHiddenHook`) | `EffectItemList::BuildMenuString` `00406620` (`0x406720`) | With the fixes row on, the effect lists of items (the Pip-Boy's and the HUD's effect text) leave out effects marked hidden (setting flag 8) and effects with no setting, as well as the usage monitor the original already leaves out (G86) | 3.9 GL-1 |
+| (none; `EffectSkillModifiers1Hook`, `EffectSkillModifiers2Hook`) | `BuildMenuString` (`0x4069D4`) and `MagicCaster::FindTargets` `00815d00` (`0x816519`) | With the fixes row on, an aid or food item's effect is scaled by the Medicine multiplier or, for an item that is not a medicine, by the Survival one, not by both (the original multiplies a medicine that is also food by both); detrimental effects (a negative value in the effect text, setting flag 4 when cast) are not scaled; the "recovered health" perks still apply to Health (when cast, for the player only, as in the original) (G67) | 3.9 GL-1 |
+| (none; `EffectItemGetModifiedDuration`, `ModPositiveChemDurationHook`) | `StatsMenu::StatusDataList::Register` `007e0b20` (`0x7E0C1F`, with the port's hand-over of the list at `BuildMenuString`'s call, `0x40686D`), `MagicTarget::CheckAddEffect` `00823210` (`0x8236FD`) | With the fixes row on, the `ModifyPositiveChemDuration` perks (Chemist) lengthen only chems' (alchemy types 10 and 11) non-hostile effects when taken, where the original lengthens every non-hostile alchemy effect, and the effect text shows the lengthened duration, which the original never does (G107) | 3.9 GL-1 |
 
 #### GX: Havok, pad rumble, mouse
 

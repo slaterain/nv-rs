@@ -371,6 +371,27 @@ fn find_in_area(
     })
 }
 
+/// `FindTargets`' alchemy Medicine and Survival blocks (`0x816519` to `0x816627`). JIP LN NVSE's G67
+/// (a fix, the row `NV_JIP_GAME_PATCHES`; `WriteRelJump(0x816519, EffectSkillModifiers2Hook)`)
+/// replaces both (words: the alchemy item, the active effect, the caster actor, the effectiveness's
+/// bits); answered: done, the radiation block follows. With the word's `FIXES` bit clear: one load,
+/// then the exe's blocks.
+#[inline]
+fn jip_alchemy_skills(
+    e: &mut Engine,
+    alchemy: u32,
+    active: u32,
+    actor: u32,
+    effectiveness: f32,
+) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(
+            0x0081_6519,
+            &[alchemy, active, actor, effectiveness.to_bits()],
+        )
+        .is_some()
+}
+
 /// `FindTargets`' scaling of an alchemy effect by an actor value of the
 /// caster (`scale`), with the perk entry point 0xC for value 0x10.
 fn alchemy_adjust(e: &mut Engine, actor: u32, effect: u32, scale: u32, effectiveness: f32) {
@@ -592,27 +613,36 @@ pub fn magic_caster_find_targets(
                         }
                     }
                     7 => 'alchemy: {
-                        if alchemy != 0 && e.call(ALCHEMY_HAS_FLAG, &args![alchemy, 4u32]).bool() {
-                            alchemy_adjust(
-                                e,
-                                actor,
-                                active,
-                                ALCHEMY_MAGNITUDE_SCALE,
-                                effectiveness,
-                            );
-                        }
-                        if alchemy != 0 && e.call(ALCHEMY_HAS_FLAG, &args![alchemy, 2u32]).bool() {
-                            let item =
-                                typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, active));
-                            if e.call(EFFECT_ITEM_ACTOR_VALUE, &args![item]).u32() != 0x36 {
+                        if !jip_alchemy_skills(e, alchemy, active, actor, effectiveness) {
+                            if alchemy != 0
+                                && e.call(ALCHEMY_HAS_FLAG, &args![alchemy, 4u32]).bool()
+                            {
                                 alchemy_adjust(
                                     e,
                                     actor,
                                     active,
-                                    ALCHEMY_DURATION_SCALE,
+                                    ALCHEMY_MAGNITUDE_SCALE,
                                     effectiveness,
                                 );
-                                break 'alchemy;
+                            }
+                            if alchemy != 0
+                                && e.call(ALCHEMY_HAS_FLAG, &args![alchemy, 2u32]).bool()
+                            {
+                                let item = typed_call!(
+                                    leaf::FAMILY,
+                                    0x0084_e3a0,
+                                    leaf::word_at_c(e, active)
+                                );
+                                if e.call(EFFECT_ITEM_ACTOR_VALUE, &args![item]).u32() != 0x36 {
+                                    alchemy_adjust(
+                                        e,
+                                        actor,
+                                        active,
+                                        ALCHEMY_DURATION_SCALE,
+                                        effectiveness,
+                                    );
+                                    break 'alchemy;
+                                }
                             }
                         }
                         if alchemy != 0 && e.call(ALCHEMY_HAS_FLAG, &args![alchemy, 2u32]).bool() {
@@ -1520,6 +1550,121 @@ mod tests {
         e.call_log = Some(vec![]);
         magic_caster_find_targets(&mut e, Ptr::new(caster), 0.0, 0, 0, 1.0, 0);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    thread_local! {
+        /// The words G67's seam handler of a test was asked with.
+        static G67_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// G67's seam at `0x816519` (JIP LN NVSE's `EffectSkillModifiers2Hook`): an alchemy item's
+    /// effect (kind 7) cast with effectiveness 2.0. With the fixes row the seam is asked once with
+    /// the alchemy item, the active effect, the caster actor and the effectiveness, and an answer
+    /// skips the Medicine and Survival blocks (only the radiation block's flag test is left); JIP
+    /// not installed or installed without the row: not asked, the three flag tests of the exe.
+    #[test]
+    fn jip_g67_cast_seam_replaces_the_skill_blocks() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        const ALCHEMY_AT: u32 = 0x00c4_0000;
+        fn take(e: &mut Engine, a: &[u32]) -> Option<u32> {
+            let _ = e;
+            G67_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(1)
+        }
+        for word in [0, jip_patches::INSTALLED, jip_patches::FIXES] {
+            G67_ASKED.with(|v| v.borrow_mut().clear());
+            let mut e = Engine::new();
+            e.map(ALCHEMY_AT, 0x1000);
+            let caster = e.mem.alloc(0xc);
+            let stats = e.mem.alloc(8);
+            let spell = e.mem.alloc(0x40);
+            let effect = e.mem.alloc(0x20);
+            let active = e.mem.alloc(0x40);
+            vtable(
+                &mut e,
+                caster,
+                0x00a3_0000,
+                &[
+                    (0x2c, 0x00a3_102c),
+                    (0x30, 0x00a3_1030),
+                    (0x34, 0x00a3_1034),
+                    (0x38, 0x00a3_1038),
+                    (0x3c, 0x00a3_103c),
+                    (0x40, 0x00a3_1040),
+                    (0x48, 0x00a3_1048),
+                    (0x4c, 0x00a3_104c),
+                ],
+            );
+            returns(&mut e, 0x00a3_102c, stats);
+            returns(&mut e, 0x00a3_1030, 0);
+            returns(&mut e, 0x00a3_1034, spell);
+            returns(&mut e, 0x00a3_1038, 1);
+            e.register(0x00a3_103c, |_, _| Ret {
+                st0: 0.5,
+                ..Ret::default()
+            });
+            returns(&mut e, 0x00a3_1040, 0);
+            returns(&mut e, 0x00a3_1048, 0);
+            returns(&mut e, 0x00a3_104c, active);
+            vtable(&mut e, stats, 0x00a1_0000, &[(0x100, 0x00a1_1000)]);
+            returns(&mut e, 0x00a1_1000, 0);
+            vtable(&mut e, spell, 0x00a4_0000, &[(0x18, 0x00a4_1018)]);
+            returns(&mut e, 0x00a4_1018, 7);
+            vtable(&mut e, active, 0x00af_0000, &[(0x0, 0x00af_1000)]);
+            returns(&mut e, 0x00af_1000, 0);
+            // The spell's effect list: one node at +0x10 holding `effect`.
+            e.mem.set_u32(spell + 0x10, effect);
+            e.register(NODE_ITEM, |_, a| ret(a[0]));
+            e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+            e.register(WORD_AT_C, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+            e.mem.set_u32(active + 0xc, 0x00b0_0000);
+            returns(&mut e, EFFECT_ITEM_SETTING, 0x00b1_0000);
+            e.register(SETTING_DURATION, |_, _| Ret {
+                st0: 10.0,
+                ..Ret::default()
+            });
+            returns(&mut e, HAS_TOUCH_EFFECT, 0);
+            returns(&mut e, HAS_TARGET_EFFECT, 0);
+            returns(&mut e, RT_DYNAMIC_CAST, ALCHEMY_AT);
+            returns(&mut e, ALCHEMY_HAS_FLAG, 0);
+            e.register(GET_COSTLIEST_EFFECT, |e, a| {
+                // The costliest self effect is the one effect.
+                if a[1] == 0 {
+                    ret(e.mem.u32(a[0] + 4))
+                } else {
+                    ret(0)
+                }
+            });
+            for callee in [
+                LOCAL_LIST_CONSTRUCT,
+                LOCAL_LIST_REMOVE_ALL,
+                LOCAL_LIST_DESTRUCT,
+                ACTIVE_EFFECT_ADJUST_EFFECTIVENESS,
+                GET_AV_EFFECT,
+            ] {
+                returns(&mut e, callee, 0);
+            }
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0081_6519), take);
+            e.call_log = Some(vec![]);
+            let words = args![caster, 0.0f32, 0u32, 0u32, 2.0f32, 0u32];
+            e.call(0x0081_5d00, &words);
+            let asked = G67_ASKED.with(|v| v.borrow().clone());
+            let flags: Vec<u32> = calls_to(&e, ALCHEMY_HAS_FLAG)
+                .iter()
+                .map(|c| c[1])
+                .collect();
+            if word == jip_patches::FIXES {
+                assert_eq!(asked.len(), 1);
+                assert_eq!(asked[0][0], ALCHEMY_AT);
+                assert_eq!(asked[0][1], active);
+                assert_eq!(asked[0][3], 2.0f32.to_bits());
+                assert_eq!(flags, vec![2]);
+            } else {
+                assert!(asked.is_empty(), "{word:08x}");
+                assert_eq!(flags, vec![4, 2, 2], "{word:08x}");
+            }
+        }
     }
 }
 
