@@ -7,6 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+qos = { path = "../qos" }
 engine = { path = "../engine" }
 # The one reader of the game's profile rules (`mod_files::ini_value`) for nv-rs's own keys in
 # Fallout.ini (`game_ini::value`).

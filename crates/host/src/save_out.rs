@@ -448,6 +448,7 @@ fn writer() -> &'static std::sync::mpsc::Sender<Message> {
         let started = std::thread::Builder::new()
             .name("nv save out".into())
             .spawn(move || {
+                qos::thread_started();
                 for message in receive {
                     match message {
                         Message::Job(job) => do_job(&job),
