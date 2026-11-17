@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::test_support::{call, engine, execute_of, form_arg, script_ref};
-use engine_core::extend::jip_patches;
 
 const B: u32 = 0x0590_0000;
 const LOG: u32 = B + 0xf000;
