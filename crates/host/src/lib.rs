@@ -101,6 +101,9 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
     // `fixes::install` above) switched it on (`crates/jip`).
     jip::install(engine);
+    // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
+    // jip_nvse.dll and before ui_organizer.dll (`crates/mcm`).
+    mcm::install(engine);
     // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
     // jip_nvse.dll (`crates/uio`).
     uio::install(engine);
