@@ -91,7 +91,7 @@ fn refused_here(path: &Path) -> Option<&'static str> {
     }
     #[cfg(not(windows))]
     refused_by(guard_list(), path).or_else(|| {
-        let started = STARTED.lock().unwrap_or_else(|p| p.into_inner());
+        let started = STARTED_GAME.lock().unwrap_or_else(|p| p.into_inner());
         game_folders::refused(path, &started)
     })
 }
@@ -99,10 +99,10 @@ fn refused_here(path: &Path) -> Option<&'static str> {
 /// Off Windows: the game folders the port was started with ([`prepare`]), guarded whole (no
 /// exception) whatever the look at the player's folders finds.
 #[cfg(not(windows))]
-static STARTED: Mutex<Vec<game_folders::Guarded>> = Mutex::new(Vec::new());
+static STARTED_GAME: Mutex<Vec<game_folders::Guarded>> = Mutex::new(Vec::new());
 
 /// Off Windows: the game's `data` folder and the folder holding it (the game's folder) added to
-/// [`STARTED`], as full paths (a relative one taken from the current folder).
+/// [`STARTED_GAME`], as full paths (a relative one taken from the current folder).
 #[cfg(not(windows))]
 fn guard_started(data: &Path) {
     let data = if data.has_root() {
@@ -113,7 +113,7 @@ fn guard_started(data: &Path) {
             Err(_) => return,
         }
     };
-    let mut started = STARTED.lock().unwrap_or_else(|p| p.into_inner());
+    let mut started = STARTED_GAME.lock().unwrap_or_else(|p| p.into_inner());
     for root in [Some(data.as_path()), data.parent()].into_iter().flatten() {
         let guarded = game_folders::Guarded {
             root: root.to_path_buf(),
