@@ -1052,6 +1052,22 @@ fn read_point(e: &Engine, at: u32) -> [u32; 3] {
     [e.mem.u32(at), e.mem.u32(at + 4), e.mem.u32(at + 8)]
 }
 
+/// Whether the attack sound is the silenced one (`0083ac30`'s byte `[ebp-0x7D]`, from `0x83AD97`
+/// on). JIP LN NVSE's G94 (a fix, the row `NV_JIP_GAME_PATCHES`; `PlayAttackSoundHook` at
+/// `0x83AD97`) decides it for any actor from the weapon its process holds and that weapon's mods
+/// (the exe: only in first person, from the player's): the seam is asked with the actor and
+/// answers the byte. Its store of the flags word `0x200000` is left out: the flags are set again
+/// before any read. With the word's `FIXES` bit clear: one load, then the exe's test.
+#[inline]
+fn jip_silenced_attack(e: &mut Engine, actor: u32) -> Option<bool> {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(byte) = e.site(0x0083_ad97, &[actor]) {
+            return Some(byte as u8 != 0);
+        }
+    }
+    None
+}
+
 /// The mutable state `0083ac30` keeps in its locals.
 struct WeaponSound {
     position: [u32; 3],
@@ -1125,7 +1141,9 @@ fn weapon_sound_body(e: &mut Engine, weapon: u32, actor: u32, object: u32, first
             }
         }
     }
-    if first_person != 0 {
+    if let Some(silenced) = jip_silenced_attack(e, actor) {
+        modded = silenced;
+    } else if first_person != 0 {
         let player = e.global::<u32>(PLAYER);
         if typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, player)) != 0 {
             let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, player));
@@ -2916,6 +2934,53 @@ mod b047_sound_tests {
         e.call(0x0083_ac30, &args![0u32, actor, 0u32, 0u32]);
         assert!(calls_to(&e, GET_SOUND_HANDLE_BY_FILENAME).is_empty());
         assert_eq!(calls_to(&e, SOUND_HANDLE_DESTRUCT).len(), 2);
+    }
+
+    /// JIP LN NVSE's G94 seam at `0x83AD97` (group GW, step 3.9): off (JIP not installed, or
+    /// installed with the row off), the exe's test (third person: not silenced) and the seam not
+    /// asked; with the row, asked with the actor in either view, its answer's low byte the
+    /// silenced byte the weapon's sounds are asked with.
+    #[test]
+    fn g94_seam_decides_the_silenced_sound() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        const ASKED: u32 = 0x0531_0800;
+        let run = |word: u32, answer: u32, first_person: u32| {
+            let (mut e, actor) = weapon_engine();
+            e.map(ASKED & !0xfff, 0x1000);
+            e.set_jip_patches(word);
+            e.mem.set_u32(ASKED, 0);
+            e.mem.set_u32(ASKED + 8, answer);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0083_ad97), |e, a| {
+                let n = e.mem.u32(ASKED);
+                e.mem.set_u32(ASKED, n + 1);
+                e.mem.set_u32(ASKED + 4, a[0]);
+                Some(e.mem.u32(ASKED + 8))
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0083_ac30, &args![0x5000u32, actor, 0u32, first_person]);
+            let silenced: Vec<u32> = calls_to(&e, WEAPON_SOUND_005215A0)
+                .iter()
+                .chain(calls_to(&e, WEAPON_SOUND_00522470).iter())
+                .map(|a| a[1])
+                .collect();
+            (silenced, e.mem.u32(ASKED), e.mem.u32(ASKED + 4), actor)
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            let (silenced, asked, _, _) = run(word, 1, 0);
+            assert!(silenced.iter().all(|s| *s == 0), "{word:08x}");
+            assert_eq!(asked, 0, "{word:08x}");
+        }
+        let (silenced, asked, with, actor) = run(jip_patches::FIXES, 1, 0);
+        assert!(!silenced.is_empty() && silenced.iter().all(|s| *s == 1));
+        assert_eq!((asked, with), (1, actor));
+        let (silenced, _, _, _) = run(jip_patches::FIXES, 0x100, 1);
+        assert!(
+            !silenced.is_empty() && silenced.iter().all(|s| *s == 0),
+            "low byte"
+        );
+        let (silenced, asked, _, _) = run(jip_patches::FIXES, 1, 1);
+        assert!(!silenced.is_empty() && silenced.iter().all(|s| *s == 1));
+        assert_eq!(asked, 1, "first person");
     }
 }
 

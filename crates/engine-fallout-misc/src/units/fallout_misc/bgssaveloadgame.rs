@@ -766,7 +766,8 @@ pub fn bgssaveloadgame_bgssaveloadgame(
 
     let changes_map = new_and_construct(e, 0x10, CHANGES_MAP_CONSTRUCT, &[]);
     e.set(this, BGSSaveLoadGame::pChangesMap, changes_map);
-    let form_id_map = new_and_construct(e, 0x24, FORM_ID_MAP_CONSTRUCT, &[0x13af]);
+    let buckets = form_id_map_buckets(e);
+    let form_id_map = new_and_construct(e, 0x24, FORM_ID_MAP_CONSTRUCT, &[buckets]);
     e.set(this, BGSSaveLoadGame::pFormIDMap, form_id_map);
     let worldspace_map = new_and_construct(e, 0x24, FORM_ID_MAP_CONSTRUCT, &[0x25]);
     e.set(this, BGSSaveLoadGame::pWorldspaceFormIDMap, worldspace_map);
@@ -2086,6 +2087,35 @@ pub fn bgssaveloadgame_unload_form(
     e.mem.free(guard);
 }
 
+/// Whether `UnloadForm` goes on with `form` (`call 00849a90` at `0x8497CD`). JIP LN NVSE's G45
+/// (a fix, the row `NV_JIP_GAME_PATCHES`; `GetShouldSaveUnloadedFormHook`; its row and handler are
+/// group GF's) replaces the call: a temporary form (and a projectile that says so) is not
+/// written. The seam is asked with the game and the form and answers the byte. With the word's
+/// `FIXES` bit clear: one load, then the exe's call.
+#[inline]
+fn should_save_unloaded_form(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(answer) = e.site(0x0084_97cd, &[this.addr(), form.addr()]) {
+            return answer as u8 != 0;
+        }
+    }
+    e.call(GAME_CAN_UNLOAD_FORM, &args![this, form]).bool()
+}
+
+/// The form id map's bucket count the save-load game's constructor gives (`push 0x13AF` at
+/// `0x846FFA`). JIP LN NVSE's G45 (a fix, the row `NV_JIP_GAME_PATCHES`; `SafeWrite16(0x846FFB,
+/// 0x7D63)`; its row and handler are group GF's) makes it `0x7D63`: the seam answers the count.
+/// With the word's `FIXES` bit clear: one load, then the exe's `0x13AF`.
+#[inline]
+fn form_id_map_buckets(e: &mut Engine) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(count) = e.site(0x0084_6ffb, &[]) {
+            return count;
+        }
+    }
+    0x13af
+}
+
 /// The body of [`bgssaveloadgame_unload_form`] between the scope guard's
 /// construction and destruction.
 fn unload_form_body(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr, force: bool) {
@@ -2098,7 +2128,7 @@ fn unload_form_body(e: &mut Engine, this: Ptr<BGSSaveLoadGame>, form: Ptr, force
     {
         return;
     }
-    if !e.call(GAME_CAN_UNLOAD_FORM, &args![this, form]).bool() {
+    if !should_save_unloaded_form(e, this, form) {
         return;
     }
     let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, form));
@@ -4003,6 +4033,35 @@ mod tests {
 
     // ---- 00846f30 and the destructors ---------------------------------------
 
+    /// JIP LN NVSE's G45 seam at `0x846FFB` (its row and handler are group GF's; the seam is
+    /// group GW's, step 3.9): off (JIP not installed, or installed with the row off), the form id
+    /// map is made with the exe's `0x13AF` buckets; with the row, with the seam's count (no
+    /// answer: `0x13AF`); the worldspace map keeps `0x25`.
+    #[test]
+    fn g45_seam_gives_the_form_id_map_its_buckets() {
+        use engine_core::extend::jip_patches;
+        let run = |bits: u32, answers: bool| {
+            let mut e = engine();
+            e.set_jip_patches(bits);
+            if answers {
+                e.on_site_for_test(0x0084_6ffb, |_, _| Some(0x7d63));
+            } else {
+                e.on_site_for_test(0x0084_6ffb, |_, _| None);
+            }
+            let this = game(&mut e);
+            bgssaveloadgame_bgssaveloadgame(&mut e, this);
+            calls(&e, FORM_ID_MAP_CONSTRUCT)
+                .iter()
+                .map(|w| w[1])
+                .collect::<Vec<u32>>()
+        };
+        for bits in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(bits, true), vec![0x13af, 0x25], "{bits:08x}");
+        }
+        assert_eq!(run(jip_patches::FIXES, true), vec![0x7d63, 0x25]);
+        assert_eq!(run(jip_patches::FIXES, false), vec![0x13af, 0x25]);
+    }
+
     #[test]
     fn constructor_builds_the_owned_objects() {
         let mut e = engine();
@@ -5898,6 +5957,51 @@ mod tests {
             vec![vec![s.this.addr(), s.form]]
         );
         assert!(calls(&s.e, FORM_ID_WORD).is_empty());
+    }
+
+    /// JIP LN NVSE's G45 seam at `0x8497CD` (its row and handler are group GF's; the seam is
+    /// group GW's, step 3.9): off (JIP not installed, or installed with the row off), the exe's
+    /// `00849a90` and the seam not asked; with the row, asked with the game and the form in place
+    /// of the call, its answer's low byte whether the unload goes on; no answer, the exe's call.
+    #[test]
+    fn g45_seam_decides_whether_the_form_is_unloaded() {
+        use engine_core::extend::jip_patches;
+        const ASKED: u32 = 0x0531_0800;
+        let run = |bits: u32, answer: u32| {
+            let mut s = unload_setup();
+            s.e.map(ASKED & !0xfff, 0x1000);
+            s.e.set_jip_patches(bits);
+            s.e.mem.set_u32(ASKED + 8, answer);
+            s.e.on_site_for_test(0x0084_97cd, |e, a| {
+                let n = e.mem.u32(ASKED);
+                e.mem.set_u32(ASKED, n + 1);
+                e.mem.set_u32(ASKED + 4, a[1]);
+                e.mem.set_u32(ASKED + 12, a[0]);
+                let answer = e.mem.u32(ASKED + 8);
+                (answer != 0xffff_ffff).then_some(answer)
+            });
+            bgssaveloadgame_unload_form(&mut s.e, s.this, Ptr::new(s.form), false);
+            (
+                calls(&s.e, GAME_CAN_UNLOAD_FORM).len(),
+                !calls(&s.e, FORM_ID_WORD).is_empty(),
+                s.e.mem.u32(ASKED),
+                (s.e.mem.u32(ASKED + 12), s.e.mem.u32(ASKED + 4)) == (s.this.addr(), s.form),
+            )
+        };
+        for bits in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(bits, 0), (1, true, 0, false), "{bits:08x}");
+        }
+        assert_eq!(
+            run(jip_patches::FIXES, 0x100),
+            (0, false, 1, true),
+            "low byte 0"
+        );
+        assert_eq!(run(jip_patches::FIXES, 1), (0, true, 1, true), "goes on");
+        assert_eq!(
+            run(jip_patches::FIXES, 0xffff_ffff),
+            (1, true, 1, true),
+            "no answer"
+        );
     }
 
     #[test]
