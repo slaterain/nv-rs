@@ -160,6 +160,18 @@ fn set_opened(e: &mut Engine, this: Ptr, opened: u32) -> u32 {
     e.call(SET_OPENED, &args![this, opened]).u32()
 }
 
+/// After the name is copied (`0xAEACAA`, the field clears that follow). JIP LN NVSE's G108 (a fix,
+/// the row `NV_JIP_GAME_PATCHES`; `SAFE_WRITE_BUF(0xAEACAA, ..)`, which also clears `+0x134` and
+/// sets `+0x138` to 1.0, the last bytes of the name's buffer, where JIP keeps the sound's form and
+/// its frequency factor): the seam is asked with the sound (the handler writes them; the answer is
+/// not read). With the word's `FIXES` bit clear: one load, nothing else.
+#[inline]
+fn jip_frequency_fields(e: &mut Engine, this: Ptr) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x00ae_acaa, &[this.addr()]);
+    }
+}
+
 // Translated from 00aeac20 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 00aeac20 - the C++ exception-unwinding frame (FS:[0]) is not translated
 /// Constructor of `BSWin32GameSound` (`RET 4`, `name`): runs the `BSGameSound` constructor
@@ -178,6 +190,7 @@ pub fn fn_00aeac20(e: &mut Engine, this: Ptr, name: u32) -> Ptr {
         let length = e.call(STRLEN, &args![name]).u32().wrapping_add(1);
         e.call(STRCPY_S, &args![filename, length, name]);
     }
+    jip_frequency_fields(e, this);
     for offset in [
         DATA_BYTES,
         BUFFER,
@@ -3581,6 +3594,43 @@ mod b035_tests {
             .map(|i| e.mem.u16(this + ATTENUATION_CURVE + 2 * i))
             .collect();
         assert_eq!(curve, vec![0, 600, 1400, 2600, 5000]);
+    }
+
+    /// G108's seam at `0xAEACAA`: JIP not installed, or installed with the row off, asks nothing;
+    /// with the row it is asked once with the sound, after the name is copied (the name is in the
+    /// buffer when it runs).
+    #[test]
+    fn g108_seam_follows_the_name_copy() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32| {
+            let (mut e, _) = engine();
+            e.register(0x00ae_9360, |_, _| Ret::default());
+            e.set_jip_patches(word);
+            // The seam's asks at `0x011f7f00` (the count, then the sound and the name's first
+            // byte).
+            e.mem.set_u32(0x011f_7f00, 0);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x00ae_acaa), |e, a| {
+                let n = e.mem.u32(0x011f_7f00);
+                e.mem.set_u32(0x011f_7f00, n + 1);
+                e.mem.set_u32(0x011f_7f04, a[0]);
+                e.mem
+                    .set_u32(0x011f_7f08, u32::from(e.mem.u8(a[0] + FILENAME)));
+                Some(0)
+            });
+            let this = e.mem.alloc(0x240);
+            let name = e.mem.alloc(0x20);
+            put_string(&mut e, name, "fx\\door.wav");
+            e.call(0x00ae_ac20, &args![this, name]);
+            (
+                e.mem.u32(0x011f_7f00),
+                e.mem.u32(0x011f_7f04) == this,
+                e.mem.u32(0x011f_7f08),
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word).0, 0, "{word:08x}");
+        }
+        assert_eq!(run(jip_patches::FIXES), (1, true, u32::from(b'f')));
     }
 
     #[test]

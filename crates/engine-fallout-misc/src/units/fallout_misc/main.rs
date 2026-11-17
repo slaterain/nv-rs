@@ -384,6 +384,18 @@ fn raise_single_processor_count(e: &mut Engine) {
     }
 }
 
+/// Before the launcher test (`0x86AC60`, the call of `004da570`). JIP LN NVSE's G115 (a fix, the
+/// row `NV_JIP_GAME_PATCHES`; `WriteRelCall(0x86AC60, ProcessCustomINI)`) applies
+/// `FalloutCustom.ini` to the INI settings there, then makes the same call: the seam is asked with
+/// no words (the answer is not read) and the exe's call follows. With the word's `FIXES` bit
+/// clear: one load, nothing else.
+#[inline]
+fn jip_custom_ini(e: &mut Engine) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0086_ac60, &[]);
+    }
+}
+
 /// Resizes the game window to the renderer's screen size: the client rectangle
 /// (`0, 0, 004dc1f0(), 004dc200()`) grown by the window's style, then `SetWindowPos` with the
 /// rectangle's left and bottom as the position and (right - left, top - bottom) as the size,
@@ -586,6 +598,7 @@ fn run_main(e: &mut Engine, ebp: u32, instance: u32) -> u32 {
     e.call(0x005e_0200, &args![object, path]);
     raise_single_processor_count(e);
 
+    jip_custom_ini(e);
     // Hand over to the launcher when the launcher is wanted and starts.
     if e.call(0x004d_a570, &args![]).bool() {
         e.call(0x004d_a4d0, &args![1u32]);
@@ -4930,6 +4943,42 @@ mod tests {
         // The loop ends after its first pass.
         e.register(0x005d_c960, |_, _| 1u32.into_ret());
         e
+    }
+
+    /// G115's seam at `0x86AC60`: JIP not installed, or installed with the row off, asks nothing;
+    /// with the row it is asked once, with no words, right before the launcher test (`004da570`),
+    /// which still runs.
+    #[test]
+    fn g115_seam_comes_before_the_launcher_test() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        /// The seam's asks, then how many there were when `004da570` ran.
+        const ASKED: u32 = 0x0118_0400;
+        let run = |word: u32| {
+            let mut e = main_engine();
+            if !e.mem.is_mapped(ASKED) {
+                e.map(ASKED & !0xfff, 0x1000);
+            }
+            e.mem.set_u32(ASKED, 0);
+            e.mem.set_u32(ASKED + 4, 0xffff);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0086_ac60), |e, a| {
+                assert!(a.is_empty());
+                let n = e.mem.u32(ASKED);
+                e.mem.set_u32(ASKED, n + 1);
+                Some(0)
+            });
+            e.register(0x004d_a570, |e, _| {
+                e.mem.set_u32(ASKED + 4, e.mem.u32(ASKED));
+                1u32.into_ret()
+            });
+            e.register(API_SHELL_EXECUTE, |_, _| 33u32.into_ret());
+            assert_eq!(run_main_entry(&mut e), 0);
+            (e.mem.u32(ASKED), e.mem.u32(ASKED + 4))
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word), (0, 0), "{word:08x}");
+        }
+        assert_eq!(run(jip_patches::FIXES), (1, 1));
     }
 
     #[test]
