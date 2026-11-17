@@ -85,13 +85,26 @@ fn sub_str_ci(d: &[u8], src: usize, sub: &[u8], length: usize) -> Option<usize> 
 ///     is already one of the tile's paths or starts `includes_`.
 /// - The text after the last `>` is not copied (UIO's loop ends at the last tag).
 /// - The end-of-file paths are written last.
-pub fn patch(text: &[u8], mut tiles: Map<Set>) -> Vec<u8> {
+pub fn patch(text: &[u8], tiles: Map<Set>) -> Vec<u8> {
+    patch_noted(text, tiles).0
+}
+
+/// A listed tile UIO's walk never closed: its name, its count of paths, whether a tag of that
+/// name opened it.
+pub type Unclosed = (Vec<u8>, usize, bool);
+
+/// [`patch`], with the named tiles never closed in the text (each with its count of paths, which
+/// were not written: UIO drops them without a word, and whether a tag of that name opened it, so
+/// that UIO's walk met it but never reached its end).
+pub fn patch_noted(text: &[u8], mut tiles: Map<Set>) -> (Vec<u8>, Vec<Unclosed>) {
     let length = text.len();
     let mut d = text.to_vec();
     d.push(0);
     let mut out = Vec::with_capacity(length + 256);
     let mut buf = 0usize;
     let mut open: Vec<Vec<u8>> = Vec::new();
+    // The listed tiles a named tag opened (for the report only).
+    let mut met: Vec<Vec<u8>> = Vec::new();
     'walk: while let Some(lt) = find_chr(&d, buf, b'<') {
         let bgn = lt + 1;
         let Some(end) = find_chr(&d, bgn, b'>') else {
@@ -128,6 +141,9 @@ pub fn patch(text: &[u8], mut tiles: Map<Set>) -> Vec<u8> {
                                 if q2 < end && q2 > q1 {
                                     let value = d[q1..q2].to_vec();
                                     if kind == 1 {
+                                        if tiles.get(&value).is_some() {
+                                            met.push(value.clone());
+                                        }
                                         open.push(value);
                                     } else {
                                         let top =
@@ -150,14 +166,18 @@ pub fn patch(text: &[u8], mut tiles: Map<Set>) -> Vec<u8> {
         out.extend_from_slice(&d[buf..next]);
         buf = next;
     }
+    let mut missing = Vec::new();
     for (tile, paths) in tiles.iter() {
         if tile.is_empty() {
             for p in paths.iter() {
                 write_include(&mut out, p);
             }
+        } else {
+            let opened = met.iter().any(|m| m.eq_ignore_ascii_case(tile));
+            missing.push((tile.to_vec(), paths.len(), opened));
         }
     }
-    out
+    (out, missing)
 }
 
 #[cfg(test)]

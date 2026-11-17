@@ -7,6 +7,7 @@
 
 use crate::hash::{begins_ci, Map, Set};
 use crate::reader::UIO_PATH;
+use crate::report::{Entry, ListRead, Outcome, Scan};
 
 /// What UIO asks of the file system (the game's folder; paths relative to it, as UIO gives them).
 pub trait Files {
@@ -341,8 +342,31 @@ pub fn read_list(
     files: &mut dyn Files,
     lists: &mut InjectLists,
 ) {
-    // The entry a path line set up, for its condition line: the target file, the tile, the path.
-    let mut pending: Option<(Vec<u8>, Vec<u8>, Vec<u8>)> = None;
+    read_list_noted(lines, fix, ctx, files, lists, b"", &mut Vec::new());
+}
+
+/// [`read_list`], with what became of each entry (the facts UIO's own log gives) pushed to
+/// `notes` under the list's name `list`. The notes change nothing that is read or added.
+pub fn read_list_noted(
+    lines: &[&[u8]],
+    fix: bool,
+    ctx: &Context,
+    files: &mut dyn Files,
+    lists: &mut InjectLists,
+    list: &[u8],
+    notes: &mut Vec<Entry>,
+) {
+    let note = |path: &[u8], target: &[u8], file: &[u8], tile: &[u8], outcome: Outcome| Entry {
+        list: list.to_vec(),
+        path: path.to_vec(),
+        target: target.to_vec(),
+        file: file.to_vec(),
+        tile: tile.to_vec(),
+        condition: Vec::new(),
+        outcome,
+    };
+    // The entry a path line set up, for its condition line (its note, the outcome to be decided).
+    let mut pending: Option<Entry> = None;
     let mut cond_line = false;
     for &line in lines {
         if line.first() == Some(&b';') {
@@ -356,16 +380,19 @@ pub fn read_list(
             cond_line = true;
             pending = None;
             if !prefab_exists(files, path) {
+                notes.push(note(path, target, b"", b"", Outcome::PrefabMissing));
                 continue;
             }
             let (menu, tile) = next_token(target, b':');
             let (file, tile) = if menu.first() == Some(&b'@') {
                 if tile.is_empty() && !begins_ci(&menu[1..], b"prefabs\\") {
+                    notes.push(note(path, menu, b"", b"", Outcome::EndOfFileNotPrefab));
                     continue;
                 }
                 let file = [MENUS, &menu[1..]].concat();
                 // UIO copies it into `menusPath[0x80]`.
                 if file.len() > UIO_PATH {
+                    notes.push(note(path, menu, b"", tile, Outcome::TargetTooLong));
                     continue;
                 }
                 (file, tile)
@@ -373,13 +400,16 @@ pub fn read_list(
                 let tile = if tile.is_empty() { menu } else { tile };
                 match menu_file(menu) {
                     Some(f) => (f.as_bytes().to_vec(), tile),
-                    None => continue,
+                    None => {
+                        notes.push(note(path, menu, b"", tile, Outcome::UnknownMenu));
+                        continue;
+                    }
                 }
             };
-            pending = Some((file, tile.to_vec(), path.to_vec()));
+            pending = Some(note(path, menu, &file, tile, Outcome::ConditionFalse));
         } else {
             cond_line = false;
-            let Some((file, tile, path)) = pending.take() else {
+            let Some(mut entry) = pending.take() else {
                 continue;
             };
             let mut cond = line.to_vec();
@@ -387,27 +417,72 @@ pub fn read_list(
                 fix_spaces(&mut cond);
             }
             if evaluate(&cond, ctx, files) {
-                lists.entry(&file).entry(&tile).insert(&path);
+                let new = lists
+                    .entry(&entry.file)
+                    .entry(&entry.tile)
+                    .insert(&entry.path);
+                entry.outcome = if new {
+                    Outcome::Added
+                } else {
+                    Outcome::AlreadyAdded
+                };
             }
+            entry.condition = cond;
+            notes.push(entry);
         }
     }
 }
 
+/// supported.txt's name in the report.
+pub const SUPPORTED_NAME: &[u8] = b"supported.txt";
+
 /// UIO's whole scan: supported.txt, then each public list in the order the folder search gives
 /// them; a file that does not open is passed over.
 pub fn scan(files: &mut dyn Files) -> InjectLists {
+    scan_noted(files).0
+}
+
+/// [`scan`], with the lists tried and what became of each entry (for the start-up report).
+pub fn scan_noted(files: &mut dyn Files) -> (InjectLists, Scan) {
     let ctx = context(files);
     let mut lists = InjectLists::default();
-    if let Some(text) = read_lines(files, SUPPORTED) {
-        read_list(&lines(&text), false, &ctx, files, &mut lists);
+    let mut seen = Scan::default();
+    let text = read_lines(files, SUPPORTED);
+    seen.lists.push(ListRead {
+        name: SUPPORTED_NAME.to_vec(),
+        opened: text.is_some(),
+    });
+    if let Some(text) = text {
+        read_list_noted(
+            &lines(&text),
+            false,
+            &ctx,
+            files,
+            &mut lists,
+            SUPPORTED_NAME,
+            &mut seen.entries,
+        );
     }
     for name in files.list(PUBLIC_PATTERN) {
         let path = [PUBLIC_FOLDER, &name].concat();
-        if let Some(text) = read_lines(files, &path) {
-            read_list(&lines(&text), true, &ctx, files, &mut lists);
+        let text = read_lines(files, &path);
+        seen.lists.push(ListRead {
+            name: name.clone(),
+            opened: text.is_some(),
+        });
+        if let Some(text) = text {
+            read_list_noted(
+                &lines(&text),
+                true,
+                &ctx,
+                files,
+                &mut lists,
+                &name,
+                &mut seen.entries,
+            );
         }
     }
-    lists
+    (lists, seen)
 }
 
 #[cfg(test)]
