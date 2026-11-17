@@ -508,6 +508,12 @@ fn at(px: &[[u8; 4]], (x, y): (u32, u32)) -> [u8; 4] {
     px[(y * SIZE + x) as usize]
 }
 
+/// The ground's half grey: 0x7F, or 0x80 where the adapter rounds a half up (the software adapter
+/// GitHub's Windows check draws with does; the maintainer's card rounds down).
+fn is_ground_grey(p: [u8; 4]) -> bool {
+    p == [0x7F, 0x7F, 0x7F, 0xFF] || p == [0x80, 0x80, 0x80, 0xFF]
+}
+
 /// Off (the default): the words in the stream change nothing; the frame is bit for bit the one
 /// without them.
 #[test]
@@ -519,14 +525,8 @@ fn off_the_frame_is_unchanged() {
         let with_words = picture(samples, false, true).expect("the adapter");
         assert!(plain == with_words, "{samples} samples");
         // The scene is there: the ground grey, the box drawn.
-        assert_eq!(
-            at(&plain, pixel([-120.0, 150.0, 0.0])),
-            [0x7F, 0x7F, 0x7F, 0xFF]
-        );
-        assert_ne!(
-            at(&plain, pixel([0.0, 150.0, 60.0])),
-            [0x7F, 0x7F, 0x7F, 0xFF]
-        );
+        assert!(is_ground_grey(at(&plain, pixel([-120.0, 150.0, 0.0]))));
+        assert!(!is_ground_grey(at(&plain, pixel([0.0, 150.0, 60.0]))));
     }
 }
 
@@ -1157,7 +1157,7 @@ fn a_lit_draw_after_the_depth_only_clear_is_as_without_the_shadows() {
         for (x, z) in [(-42.0, 14.0), (-44.0, 12.0), (-40.0, 17.0)] {
             let p = pixel([x, 150.0, z]);
             assert_eq!(at(on, p), at(off, p), "({x}, {z}) ({samples})");
-            assert_ne!(at(off, p), [0x7F, 0x7F, 0x7F, 0xFF]);
+            assert!(!is_ground_grey(at(off, p)));
         }
         // The ground in the box's shadow is shadowed in the same frame.
         let p = pixel([-55.0, 140.0, 0.0]);
