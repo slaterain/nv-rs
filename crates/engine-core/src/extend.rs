@@ -2868,7 +2868,7 @@ mod tests {
     /// unwinding panic.
     #[test]
     fn plugin_ui_message_marks_only_with_the_fixes() {
-        let mut e = engine();
+        let e = engine();
         for word in [0, jip_patches::INSTALLED] {
             e.set_jip_patches(word);
             let guard = e.mark_plugin_ui_message();
