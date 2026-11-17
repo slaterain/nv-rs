@@ -295,6 +295,9 @@ fn calendar(e: &mut Engine, values: [f32; 6]) {
     e.mem.set_u8(CALENDAR + 0x1c, 0);
     e.mem.set_u32(PLAYER, PLAYER_AT);
     e.mem.set_u8(PLAYER_AT + HARDCORE_UPDATE, 0x55);
+    let s = state(e);
+    s.hour_and_days[0].store(0, Ordering::Relaxed);
+    s.hour_and_days[1].store(0, Ordering::Relaxed);
 }
 
 fn value(e: &Engine, i: u32) -> f32 {
@@ -351,7 +354,8 @@ fn o5_keeps_the_hour_and_days_in_doubles() {
 
 /// O5 recounts when the stale byte is set (and clears it), when the hour jumped ahead past 0.05,
 /// and when it went back past 0.05 (counted as the next day: past 24, the day rolls on). With
-/// `SetGameHour`'s request the hardcore byte is cleared and the request taken.
+/// `SetGameHour`'s request the hardcore byte is cleared and the request taken. With no player the
+/// recount still happens (no byte written); a NaN hour recounts.
 #[test]
 fn o5_recounts_after_a_jump() {
     let mut e = world(true, true);
@@ -380,6 +384,37 @@ fn o5_recounts_after_a_jump() {
     assert_eq!((value(&e, 2), value(&e, 3)), (20.0, 10.0));
     assert_eq!(e.mem.u32(CALENDAR + 0x18), 8);
     assert_eq!(value(&e, 4), (34.0f64 / 24.0 + 7.0) as f32);
+    // No player (the port's difference from JIP): with the stale byte set the update returns
+    // without a write at `0xE39`, clears the byte and counts the days again (whole 3 + 10 / 24).
+    assert!(
+        !e.mem.is_mapped(HARDCORE_UPDATE),
+        "a write at 0xE39 would fault"
+    );
+    e.mem.set_u32(PLAYER, 0);
+    e.mem.set_f32(B + 0x3100 + 0x30 * 4 + 0x24, 3.9);
+    e.mem.set_u8(CALENDAR + 0x1c, 1);
+    advance(&mut e, 0.0);
+    assert_eq!(
+        e.mem.u8(CALENDAR + 0x1c),
+        0,
+        "no player: the stale byte cleared"
+    );
+    assert_eq!(
+        value(&e, 4),
+        (10.0f64 / 24.0 + 3.0) as f32,
+        "no player: the days counted again"
+    );
+    // A NaN hour (`comisd; jb` takes the unordered compare as below): a recount, so the
+    // player's hardcore byte is written.
+    e.mem.set_u32(PLAYER, PLAYER_AT);
+    e.mem.set_u8(PLAYER_AT + HARDCORE_UPDATE, 0x55);
+    e.mem.set_f32(B + 0x3100 + 0x30 * 3 + 0x24, f32::NAN);
+    advance(&mut e, 0.0);
+    assert_eq!(
+        e.mem.u8(PLAYER_AT + HARDCORE_UPDATE),
+        1,
+        "a NaN hour recounts"
+    );
 }
 
 /// O5's roll-over by JIP's table: the last day of a month goes to the 1st of the next; the 31st
