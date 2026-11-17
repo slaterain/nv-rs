@@ -512,6 +512,9 @@ pub fn fn_00870a00(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
         timed(Column::Targets, || {
             e.call(0x0087_4b50, &args![this, frame, byte_flag, 0u32])
         });
+        // Port-added: the world is drawn (`engine_core::world_drawn`; the call of 00875110 at
+        // 00870b21).
+        engine_core::world_drawn::world_drawn(e);
         timed(Column::DrawRest, || {
             e.call(
                 0x0087_5110,
@@ -661,6 +664,9 @@ pub fn fn_00870bd0(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
         if !water_drawn {
             mt_advance_stage(e, 1, 0x16);
         }
+        // Port-added: the world is drawn (`engine_core::world_drawn`; the call of 00875110 at
+        // 00870f74).
+        engine_core::world_drawn::world_drawn(e);
         timed(Column::DrawRest, || {
             e.call(
                 0x0087_5110,
@@ -5823,6 +5829,50 @@ mod tests {
             vec![vec![this, 0, 0x2000, 0x1000, 0]]
         );
         assert_eq!(calls_to(&log, 0x0087_6830), vec![vec![this, 1, 0x5000]]);
+    }
+
+    /// The port-added point `engine_core::world_drawn` (the new lighting's, in first and third
+    /// person alike): in both world frames once, after the scene target is made current again
+    /// (`00874b50` with slot 0) and before the rest of the draw (`00875110`: the arms, then the
+    /// image-space step and the HUD); not reached in a frame that does not draw the world.
+    #[test]
+    fn world_frames_reach_the_world_drawn_point_before_the_rest_of_the_draw() {
+        const MARK: u32 = 0x7fff_0010;
+        thread_local! {
+            static ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        // Process-wide once installed: it calls only on this test's thread, while armed.
+        fn hook(e: &mut Engine) {
+            if ARMED.with(std::cell::Cell::get) {
+                e.call(MARK, &args![]);
+            }
+        }
+        engine_core::world_drawn::install(hook);
+        ARMED.with(|a| a.set(true));
+        for (byte_131, frame, expected) in [
+            (
+                0u8,
+                0x0087_0bd0u32,
+                vec![0x0087_4b50, 0x0087_4b50, MARK, 0x0087_5110],
+            ),
+            (1, 0x0087_0a00, vec![0x0087_4b50, MARK, 0x0087_5110]),
+        ] {
+            let (mut r, this, _) = frame_rig(byte_131);
+            r.e.register_double(MARK, |_, _| Ret::default());
+            let (_, log) = r.run(frame, &args![this, 0u32, 0u32]);
+            assert_eq!(
+                only(&log, &[0x0087_4b50, MARK, 0x0087_5110]),
+                expected,
+                "{frame:08x}"
+            );
+            assert_eq!(calls_to(&log, 0x0087_4b50).last(), Some(&vec![this, 0, 0, 0]));
+            // The world not drawn (the skip argument): not reached.
+            let (mut r, this, _) = frame_rig(byte_131);
+            r.e.register_double(MARK, |_, _| Ret::default());
+            let (_, log) = r.run(frame, &args![this, 0u32, 1u32]);
+            assert!(!addrs(&log).contains(&MARK), "{frame:08x} without the world");
+        }
+        ARMED.with(|a| a.set(false));
     }
 
     #[test]

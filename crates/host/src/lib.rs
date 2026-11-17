@@ -254,12 +254,19 @@ impl Host {
         #[cfg(windows)]
         engine_platform::d3d9real::want_frame_rate(choice.show_frame_rate);
         // The new lighting (`fixes::Choice::ambient_occlusion`: `NV_AO`; else, in a launcher's play
-        // run, Fallout.ini's `[nv-rs Display] bAmbientOcclusion`; off by default). Off: nothing is
-        // installed, read or recorded.
+        // run, Fallout.ini's `[nv-rs Display] bAmbientOcclusion`; off by default), at its strength
+        // (`fAmbientOcclusionStrength`, `NV_AO_STRENGTH`). Off: nothing is installed, read or
+        // recorded.
         #[cfg(windows)]
         if choice.ambient_occlusion {
-            engine_platform::d3d9real::want_scene_light(scene_light::read);
-            eprintln!("nv-rs: new lighting on (ambient occlusion; Vulkan only)");
+            engine_platform::d3d9real::want_scene_light(
+                scene_light::read,
+                choice.ambient_occlusion_strength,
+            );
+            eprintln!(
+                "nv-rs: new lighting on (ambient occlusion at strength {}; Vulkan only)",
+                choice.ambient_occlusion_strength
+            );
         }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,

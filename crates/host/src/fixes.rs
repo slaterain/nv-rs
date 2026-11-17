@@ -567,6 +567,12 @@ pub const PLAY_SHOW_FRAME_RATE: bool = false;
 /// a fix). `crates/host/data/game_ini.tsv`'s `bAmbientOcclusion` row is held to it by a test.
 pub const PLAY_AMBIENT_OCCLUSION: bool = false;
 
+/// How strong the new lighting's shade is when neither `NV_AO_STRENGTH` nor `Fallout.ini`'s
+/// `fAmbientOcclusionStrength` says ([`Choice::ambient_occlusion_strength`]): the step's own
+/// default (`d3d9_wgpu::scene_light::STRENGTH`). `crates/host/data/game_ini.tsv`'s
+/// `fAmbientOcclusionStrength` row is held to it by a test.
+pub const PLAY_AMBIENT_OCCLUSION_STRENGTH: f32 = d3d9_wgpu::scene_light::STRENGTH;
+
 /// Who draws the game ([`Choice::renderer`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Renderer {
@@ -626,7 +632,7 @@ impl Preset {
 }
 
 /// What this run does, bound before the first frame ([`install`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
     pub preset: Preset,
     /// Frames a second at most, 0 for no limit. Only the uncapped step reads it: the original's
@@ -669,6 +675,11 @@ pub struct Choice {
     /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
     /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
     pub ambient_occlusion: bool,
+    /// How strong its shade is, from 0.1 (faint) to 1 (all of it): `NV_AO_STRENGTH` when it is a
+    /// number; else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display]
+    /// fAmbientOcclusionStrength`; else [`PLAY_AMBIENT_OCCLUSION_STRENGTH`]. Clamped to that range
+    /// (`d3d9_wgpu::scene_light::clamp_strength`). Not part of any preset.
+    pub ambient_occlusion_strength: f32,
     /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,
     /// for stepped threads; `crate::draw_thread::install` decides the draw family's capture mode from it).
     pub draw_poison: bool,
@@ -695,6 +706,7 @@ impl Choice {
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
             ambient_occlusion: PLAY_AMBIENT_OCCLUSION,
+            ambient_occlusion_strength: PLAY_AMBIENT_OCCLUSION_STRENGTH,
             ini_note: None,
             draw_poison: false,
             draw_check: false,
@@ -852,6 +864,9 @@ impl Choice {
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
             ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
+            ambient_occlusion_strength: ini
+                .ambient_occlusion_strength
+                .map_or(PLAY_AMBIENT_OCCLUSION_STRENGTH, d3d9_wgpu::scene_light::clamp_strength),
             ini_note: ini.bad_line(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
             draw_check: env(DRAW_THREAD_CHECK).as_deref().map(str::trim) == Some("1"),
@@ -919,6 +934,13 @@ impl Choice {
         }
         if let Some(value) = env("NV_AO").filter(|v| !v.trim().is_empty()) {
             choice.ambient_occlusion = value.trim() == "1";
+        }
+        // A number, clamped; anything else leaves the strength as it is.
+        if let Some(value) = env("NV_AO_STRENGTH")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+        {
+            choice.ambient_occlusion_strength = d3d9_wgpu::scene_light::clamp_strength(value);
         }
         if test {
             choice.preset = Preset::Vanilla;
@@ -2026,6 +2048,54 @@ mod tests {
         assert!(!with_ini(None, on, &[("NV_AO", "0")]).ambient_occlusion);
         let asked = Choice::from_parts(None, env_of(&[("NV_AO", "1")])).unwrap();
         assert!(asked.ambient_occlusion);
+    }
+
+    /// The new lighting's strength: the step's default in every run unless asked for;
+    /// `fAmbientOcclusionStrength` in a launcher's play run, `NV_AO_STRENGTH` anywhere (which wins);
+    /// both clamped to 0.1..1; a value that is no number is the default (and named in the note).
+    #[test]
+    fn the_new_lightings_strength_is_the_default_unless_asked_for() {
+        let default = d3d9_wgpu::scene_light::STRENGTH;
+        assert_eq!(PLAY_AMBIENT_OCCLUSION_STRENGTH, default);
+        assert_eq!(Choice::vanilla().ambient_occlusion_strength, default);
+        assert_eq!(
+            Choice::from_parts(None, no_env)
+                .unwrap()
+                .ambient_occlusion_strength,
+            default
+        );
+        let strength = |ini: &str, pairs: &'static [(&'static str, &'static str)]| {
+            with_ini(None, ini, pairs).ambient_occlusion_strength
+        };
+        assert_eq!(strength("[General]\nbUseThreadedAI=1\n", &[]), default);
+        let file = "[nv-rs Display]\nfAmbientOcclusionStrength=0.9\n";
+        assert_eq!(strength(file, &[]), 0.9);
+        // Clamped at both ends.
+        assert_eq!(
+            strength("[nv-rs Display]\nfAmbientOcclusionStrength=3\n", &[]),
+            1.0
+        );
+        assert_eq!(
+            strength("[nv-rs Display]\nfAmbientOcclusionStrength=0\n", &[]),
+            0.1
+        );
+        let bad = with_ini(
+            None,
+            "[nv-rs Display]\nfAmbientOcclusionStrength=strong\n",
+            &[],
+        );
+        assert_eq!(bad.ambient_occlusion_strength, default);
+        assert!(bad
+            .ini_note
+            .unwrap()
+            .ends_with("fAmbientOcclusionStrength=strong"));
+        // A test never reads the file; the variable decides there and over the file.
+        assert_eq!(strength(file, &[("NV_SHOT", "x")]), default);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "0.6")]), 0.6);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "-2")]), 0.1);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "x")]), 0.9);
+        let asked = Choice::from_parts(None, env_of(&[("NV_AO_STRENGTH", "0.8")])).unwrap();
+        assert_eq!(asked.ambient_occlusion_strength, 0.8);
     }
 
     /// Lowest to highest: default, preset, settings.ini (the fallback), Fallout.ini, environment.

@@ -95,7 +95,7 @@ pub fn value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
 }
 
 /// What the `[nv-rs ...]` sections set: `None` where a key is missing, empty or not usable.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Keys {
     pub preset: Option<Preset>,
     pub borderless: Option<bool>,
@@ -106,6 +106,8 @@ pub struct Keys {
     pub show_frame_rate: Option<bool>,
     /// `bAmbientOcclusion`: the new lighting (`d3d9_wgpu::scene_light`).
     pub ambient_occlusion: Option<bool>,
+    /// `fAmbientOcclusionStrength`: how strong its shade is (a number; clamped where it is used).
+    pub ambient_occlusion_strength: Option<f32>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
     /// The fix rows the file turns on or off, by `crate::fixes::Fix::env`.
@@ -154,6 +156,11 @@ impl Keys {
                 "bAmbientOcclusion" => {
                     keys.ambient_occlusion = flag(raw);
                     keys.ambient_occlusion.is_some()
+                }
+                "fAmbientOcclusionStrength" => {
+                    keys.ambient_occlusion_strength =
+                        raw.parse::<f32>().ok().filter(|v| v.is_finite());
+                    keys.ambient_occlusion_strength.is_some()
                 }
                 "bSteppedThreads" => {
                     keys.stepped_threads = flag(raw);
@@ -341,6 +348,10 @@ mod tests {
         assert_eq!(
             keys.ambient_occlusion,
             Some(crate::fixes::PLAY_AMBIENT_OCCLUSION)
+        );
+        assert_eq!(
+            keys.ambient_occlusion_strength,
+            Some(crate::fixes::PLAY_AMBIENT_OCCLUSION_STRENGTH)
         );
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());

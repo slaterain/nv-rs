@@ -639,14 +639,66 @@ pub use d3d9_wgpu::scene_light::GameView as SceneView;
 static SCENE_LIGHT: std::sync::OnceLock<fn(&Engine) -> Option<SceneView>> =
     std::sync::OnceLock::new();
 
+/// The new lighting's strength ([`want_scene_light`]), as `f32` bits.
+static SCENE_LIGHT_STRENGTH: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(d3d9_wgpu::scene_light::STRENGTH.to_bits());
+
 /// Turns the new lighting on (ambient occlusion, `d3d9_wgpu::scene_light`;
-/// the run's choice, `host::fixes::Choice::ambient_occlusion`), before the game makes its device:
-/// at each depth-only `Clear` (the game's, before its first-person arms) the frame's camera and
-/// sun, as `read` finds them in the game, are recorded for the backend. Never called while off:
-/// nothing is then read or recorded.
-pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>) {
+/// the run's choice, `host::fixes::Choice::ambient_occlusion`), before the game makes its device,
+/// at `strength` (`host::fixes::Choice::ambient_occlusion_strength`; clamped to
+/// `d3d9_wgpu::scene_light::STRENGTH_RANGE`). The frame's camera and sun, as `read` finds them in
+/// the game, are recorded for the backend where the world is drawn and nothing after it yet: at
+/// the frame draw's port-added point ([`engine_core::world_drawn`], first and third person) and at
+/// each depth-only `Clear` (the game's, before its first-person arms; the device runs the step
+/// once a frame, at the first). Never called while off: nothing is then read or recorded.
+pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>, strength: f32) {
     d3d9_wgpu::scene_light::enable(true);
+    SCENE_LIGHT_STRENGTH.store(
+        d3d9_wgpu::scene_light::clamp_strength(strength).to_bits(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let _ = SCENE_LIGHT.set(read);
+    engine_core::world_drawn::install(world_drawn);
+}
+
+/// The frame draw's port-added point ([`engine_core::world_drawn`], installed by
+/// [`want_scene_light`]): the camera and sun recorded on the game's device.
+fn world_drawn(e: &mut Engine) {
+    if let Some(read) = SCENE_LIGHT.get().copied() {
+        world_drawn_lit(e, read);
+    }
+}
+
+/// [`world_drawn`] with the reader `read`, under the device lock: on the game's device (the
+/// first the backend has; none before the game makes it).
+fn world_drawn_lit(e: &mut Engine, read: fn(&Engine) -> Option<SceneView>) {
+    let _device = engine_core::real_threads::device_guard(e);
+    let Some(this) = real(e).devices.first().map(|(d, _)| *d) else {
+        return;
+    };
+    record_scene_light(e, this, read);
+}
+
+/// Records the frame's camera and sun as `read` finds them, for the backend's new lighting
+/// (`SetTransform` of `d3d9_wgpu::scene_light::STATE`) on the device `this`, at the run's strength;
+/// nothing when the game has no usable camera.
+fn record_scene_light(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<SceneView>) {
+    let params = read(e)
+        .as_ref()
+        .and_then(d3d9_wgpu::scene_light::Params::from_game);
+    if let Some(mut p) = params {
+        p.strength = f32::from_bits(SCENE_LIGHT_STRENGTH.load(std::sync::atomic::Ordering::Relaxed));
+        let m = p.to_words();
+        record(
+            e,
+            this,
+            Cmd::SetTransform {
+                device: this,
+                state: d3d9_wgpu::scene_light::STATE,
+                matrix: Data::from_words(&m),
+            },
+        );
+    }
 }
 
 /// `CreateWindowExA` made the modelled window `handle` (a child of `parent` when that is not
@@ -1134,21 +1186,7 @@ fn clear_lit(
     // arms. With the new lighting on, the frame's camera and sun first.
     if flags == 2 {
         if let Some(read) = light {
-            let params = read(e)
-                .as_ref()
-                .and_then(d3d9_wgpu::scene_light::Params::from_game);
-            if let Some(p) = params {
-                let m = p.to_words();
-                record(
-                    e,
-                    this,
-                    Cmd::SetTransform {
-                        device: this,
-                        state: d3d9_wgpu::scene_light::STATE,
-                        matrix: Data::from_words(&m),
-                    },
-                );
-            }
+            record_scene_light(e, this, read);
         }
     }
     // The rectangles' words on the stack up to 16 rectangles (the game clears one or none).
