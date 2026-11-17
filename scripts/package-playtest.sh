@@ -108,15 +108,19 @@ sha256() {
 # lock file: the workspace's own crates change the lock file but need no notice. The Windows
 # script keeps its hash, distribution/DEPENDENCY-LOCK.sha256.)
 [ -f distribution/THIRD-PARTY-NOTICES.txt ] || fail "the dependency notices must be assembled before packaging"
-noticed=$(tr -d '\r' <distribution/THIRD-PARTY-NOTICES.txt)
+# (grep reads the notices from a file: fed through a pipe, grep -q stops reading at the first match
+# and the writer fails with "Broken pipe".)
+noticed=$(mktemp) || fail "no temporary file"
+tr -d '\r' <distribution/THIRD-PARTY-NOTICES.txt >"$noticed" || fail "could not read THIRD-PARTY-NOTICES.txt"
 unnoticed=$(tr -d '\r' <Cargo.lock | awk '
     /^\[\[package\]\]/ { name = ""; version = "" }
     /^name = / { name = $3 }
     /^version = / { version = $3 }
     /^source = "registry/ { gsub(/"/, "", name); gsub(/"/, "", version); print name " " version }' |
     sort -u | while IFS= read -r package; do
-        printf '%s\n' "$noticed" | grep -qxF "$package" || printf '%s, ' "$package"
+        grep -qxF -e "$package" "$noticed" || printf '%s, ' "$package"
     done)
+rm -f -- "$noticed"
 if [ -n "$unnoticed" ]; then
     [ "$test_build" = 1 ] || fail "THIRD-PARTY-NOTICES.txt has no entry for: $unnoticed refresh it (and distribution/licenses) before packaging"
     note "THIRD-PARTY-NOTICES.txt has no entry yet for: $unnoticed refresh it before a release."
@@ -139,8 +143,12 @@ if [ -n "$missing" ]; then
 fi
 # Every licence or notice file of the program's own and vendored crates (path crates: the
 # workspace's, vendor/) is listed in distribution/notices.txt, which the package copies whole.
+# cargo tree marks a crate it listed before with " (*)" and a macro crate with " (proc-macro)":
+# those marks are taken off first, so only a path crate's own folder is left in brackets (a "*"
+# taken for a folder matched every licence file in the repository).
 tab=$(printf '\t')
-unlisted=$(sed -n -e 's/^.* v[^ ]* (\(.*\))$/\1/p' "$crates" | sort -u | while IFS= read -r dir; do
+unlisted=$(sed -e 's/ (\*)$//' -e 's/ (proc-macro)$//' "$crates" |
+    sed -n -e 's/^[^ ]* v[^ ]* (\(.*\))$/\1/p' | sort -u | while IFS= read -r dir; do
     rel=${dir#"$root"/}
     git ls-files -- "$rel/LICENSE*" "$rel/NOTICE*" "$rel/COPYING*" | while IFS= read -r file; do
         grep -q "^$file$tab" distribution/notices.txt || printf '%s ' "$file"
