@@ -2114,6 +2114,22 @@ mod tests {
         let f0 = Frame::from_game(&g).unwrap();
         let b = basis(wide(f0.to_sun));
         let c0 = cascades_of(&f0, b);
+        // The snapped centre is within half a step of the slice's own centre (in the sun's space):
+        // the map covers the slice, it is only rounded to whole steps.
+        for (i, c) in c0.iter().enumerate() {
+            let (centre_view, _) = slice_sphere(frustum(), c.near, c.far);
+            let axes = f0.axes();
+            let world: [f64; 3] = std::array::from_fn(|k| {
+                f64::from(f0.position[k])
+                    + axes[0][k] * centre_view[0]
+                    + axes[1][k] * centre_view[1]
+                    + axes[2][k] * centre_view[2]
+            });
+            for k in 0..3 {
+                let off = dot3(b[k], world) - c.origin[k] as f64 * c.step;
+                assert!(off.abs() <= c.step / 2.0 + 1e-6, "cascade {i} axis {k}: {off}");
+            }
+        }
         // A small step of the camera: the same snapped centre, so each map is still good.
         g.position[0] += 0.3;
         let f1 = Frame::from_game(&g).unwrap();

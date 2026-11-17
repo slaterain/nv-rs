@@ -693,6 +693,24 @@ fn lit_picture(samples: u32, on: bool, sun: f32) -> Option<Vec<[u8; 4]>> {
     Some(lit_frames(&mut b, sun, on))
 }
 
+/// Off, with the lit shader and the hook's words present (as a build with the switch off still
+/// gets them from nowhere, but a device must not act on them): the frame is the plain one, exactly.
+#[test]
+fn off_the_lit_frame_is_unchanged_with_the_words() {
+    for samples in [1, 4] {
+        let Some(plain) = lit_picture(samples, false, 0.5) else {
+            return;
+        };
+        let with_words = {
+            let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+            sun_shadow::enable(false);
+            let mut b = backend(samples).expect("the adapter");
+            lit_frames(&mut b, 0.5, true)
+        };
+        assert!(plain == with_words, "{samples} samples");
+    }
+}
+
 /// In the lighting: inside the box's shadow the ground takes exactly what it takes with the sun's
 /// colour black (the ambient alone, nothing laid over it: the acceptance test); in the sun it is
 /// exactly as without the shadows; the sky is untouched.
