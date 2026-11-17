@@ -44,6 +44,14 @@
 //! takes the mouse wheel (G69); the barter menu titles the vendor's tab as it opens (G56) and,
 //! before taking a vendor's caps, splits a count over 32,767 into stacks (G64).
 //!
+//! **GB-6, the repair setting and Big Guns** (in with the game-patch row): G112 sets
+//! `fRepairSkillMax` to 10 (`InitGamePatches`: `GMST_INT(fRepairSkillMax) = 0x41200000`) at
+//! [`BEFORE_MAIN`], after the exe's static initializer gave it 9 and before `Main::InitTES` loads
+//! the data files, so a plugin's `GMST` still sets it; D06 (`DeferredInit`) gives the Big Guns
+//! actor value its name and the skills' derivation (`0x643BD0`); with `bEnableBigGunsSkill` (O3,
+//! off by default, set at `DeferredInit` as JIP defers that switch) it gets the other weapon
+//! skills' flags (`0x410`) and JIP's description ([`deferred_init`]).
+//!
 //! Threads: every handler here runs where its menu code runs, on the main thread (the free
 //! camera's dead-zone seams: the main thread's player update). None takes JIP's shared slot: the
 //! dead zones and G87's flag are lock-free `ext_free` words made at JIP's install, G88 reads and
@@ -156,6 +164,23 @@ pub const QUANTITY_KEYS: [SiteSlot; 3] = [
     SiteSlot::new(Owner::Jip, 0x0078_0b09),
 ];
 pub const WEIGHTLESS_TAKE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0075_bf18);
+/// O2's seams (`bEnableFO3Repair`, off by default): the repair list's test (`0x4D4C11`, group GH1's
+/// inert seam; words: the broken item's form, the stack), `InventoryMenu::IsItemRepairable`'s
+/// full-health test (`0x7818B2`; words: the stack), the repair list's condition
+/// (`0x7B58DB`; words: the stack's and the broken item's health bits), `DoClick`'s "repair
+/// again" test (`0x7B5CED`; no words) and `RepairItem`'s condition (`0x7B5DAD`; words: the stack
+/// used).
+pub const REPAIR_LIST: SiteSlot = SiteSlot::new(Owner::Jip, 0x004d_4c11);
+pub const REPAIR_BUTTON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0078_18b2);
+pub const REPAIR_LIST_VALUE: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_58db);
+pub const REPAIR_AGAIN: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_5ced);
+pub const REPAIR_ITEM: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_5dad);
+/// G112's seam: the C runtime's call of `main` (`0x00ECC46B`, `CALL 0x0086A850` in
+/// `__tmainCRTStartup`, after `__cinit`), the call xNVSE's loader takes over to load xNVSE and
+/// its plugins before `main` runs (`loader_common/IdentifyEXE.cpp`, `hookCallAddr` for 1.4.0.525;
+/// `steam_loader/main.cpp`, `OnHook`): JIP's `InitGamePatches` (its `PostLoad`) runs there. The
+/// port's `main` asks it first thing (no words).
+pub const BEFORE_MAIN: SiteSlot = SiteSlot::new(Owner::Jip, 0x00ec_c46b);
 
 /// The group's rows and installers.
 pub const AREA: Area = Area {
@@ -175,6 +200,12 @@ pub const AREA: Area = Area {
         QUANTITY_KEYS[1].addr(),
         QUANTITY_KEYS[2].addr(),
         WEIGHTLESS_TAKE.addr(),
+        REPAIR_LIST.addr(),
+        REPAIR_BUTTON.addr(),
+        REPAIR_LIST_VALUE.addr(),
+        REPAIR_AGAIN.addr(),
+        REPAIR_ITEM.addr(),
+        BEFORE_MAIN.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
@@ -191,6 +222,12 @@ fn install_fixes(e: &mut Engine) {
         e.on_site(slot, quantity_keys);
     }
     e.on_site(WEIGHTLESS_TAKE, weightless_take);
+    e.on_site(REPAIR_LIST, repair_list);
+    e.on_site(REPAIR_BUTTON, repair_button);
+    e.on_site(REPAIR_LIST_VALUE, repair_list_value);
+    e.on_site(REPAIR_AGAIN, repair_again);
+    e.on_site(REPAIR_ITEM, repair_item);
+    e.on_site(BEFORE_MAIN, repair_skill_max);
     e.on_site(DISPOSABLE_WEAPON, disposable_weapon);
     e.on_site(PLAIN_VALUE, plain_value);
     e.on_site(WEIGHT_FORMAT, weight_format);
@@ -607,6 +644,266 @@ fn weightless_take(_: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(1)
 }
 
+// ---- O2: Fallout 3 style repair (`bEnableFO3Repair`) ----
+
+/// The game settings JIP reads (`GMST_FLT`: the setting + 4): `fRepairSkillBase`, `fRepairSkillMax`,
+/// `fRepairScavengeMult`, `fRepairMin`, `fRepairMax`.
+const REPAIR_SKILL_BASE: u32 = 0x011d_0ff4;
+const REPAIR_SKILL_MAX: u32 = 0x011d_0190;
+const REPAIR_SCAVENGE_MULT: u32 = 0x011d_074c;
+const REPAIR_MIN: u32 = 0x011d_0884;
+const REPAIR_MAX: u32 = 0x011c_ffa4;
+/// `g_thePlayer`, its actor value owner (+0xA4), the actor value call JIP makes (`0093acb0`,
+/// `thiscall`, `RET 4`, `ST0`) and `kAVCode_Repair`.
+const PLAYER: u32 = 0x011d_ea3c;
+const ACTOR_VALUE_OWNER: u32 = 0xa4;
+const GET_ACTOR_VALUE: u32 = 0x0093_acb0;
+const AV_REPAIR: u32 = 0x27;
+/// The repair menu's broken item (`0x11DA760`) and the exe's repair list test (`0047bb50`,
+/// `cdecl`: the stack's form, the broken item's form).
+const BROKEN_ITEM: u32 = 0x011d_a760;
+const REPAIR_ITEM_TEST: u32 = 0x0047_bb50;
+/// A stack's first list's presence byte for `ExtraWeaponModFlags` (+0x19, bit 0x20: type 0x8D).
+const MOD_FLAGS_PRESENCE: u32 = 0x19;
+/// `ExtraHealth` (its value at +0xC).
+const EXTRA_HEALTH: u32 = 0x25;
+
+/// JIP's three statics (`s_pcRepairSkill`, `s_repairedItemHealth`, `s_repairedItemModded`),
+/// written by the inventory's repair button test and read by the repair menu. Lock-free (the
+/// menus run on the main thread).
+#[derive(Default)]
+pub struct RepairState {
+    skill: AtomicU32,
+    health: AtomicU32,
+    modded: AtomicBool,
+}
+
+fn repair_state(e: &mut Engine) -> &RepairState {
+    e.ext_free::<RepairState>()
+}
+
+/// SSE `minss`/`maxss`: the first operand when it is below (above) the second, else the second
+/// (so a NaN gives the second).
+fn minss(a: f32, b: f32) -> f32 {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+fn maxss(a: f32, b: f32) -> f32 {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
+// ContChangesEntry::GetHealthPercent.
+/// The stack's health in percent: -1 for a form whose type has a bit outside 0x38, 100 without a
+/// first list or `ExtraHealth`, else the health over the full health
+/// (`jip_fn_inventory::base_health`) times 100, at most 100 (`minss(100, ..)`).
+pub fn health_percent(e: &mut Engine, entry: u32) -> f32 {
+    let item = e.mem.u32(entry + 8);
+    let kind = e.mem.u8(item + 4);
+    if kind & 0x38 != kind {
+        return -1.0;
+    }
+    let lists = e.mem.u32(entry);
+    if lists == 0 {
+        return 100.0;
+    }
+    let list = e.mem.u32(lists);
+    if list == 0 {
+        return 100.0;
+    }
+    let x = crate::commands::extra::get_by_type(e, list, EXTRA_HEALTH);
+    if x == 0 {
+        return 100.0;
+    }
+    let health = e.mem.f32(x + EXTRA_VALUE);
+    let full = crate::commands::jip_fn_inventory::base_health(e, item, list);
+    minss(100.0, health / full * 100.0)
+}
+
+/// `cvtps2dq` under the rounding toward +infinity JIP sets (`MXCSR` 0x5FA0), then `cvtdq2ps`: the
+/// value rounded up; out of range or NaN gives the integer indefinite (-2^31).
+fn round_up(v: f32) -> f32 {
+    let up = v.ceil();
+    if up.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&up) {
+        i32::MIN as f32
+    } else {
+        up as i32 as f32
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: EnableRepairButtonHook
+// (with the byte 0x77, `JA`, at 0x7818D3).
+/// O2, `IsItemRepairable`'s first test (words: the stack): keeps the stack's health in percent,
+/// rounded up, whether its first list has weapon mods, and the player's repair cap: the Repair
+/// skill (at least 0) scaled from `fRepairSkillBase * 10` to `fRepairSkillMax * 10`, at most 100.
+/// Answers 1 (the exe's further tests follow) when the cap is above the health, else 0 (not
+/// repairable).
+fn repair_button(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let entry = *words.first()?;
+    let health = round_up(health_percent(e, entry));
+    let lists = e.mem.u32(entry);
+    let modded = lists != 0 && {
+        let list = e.mem.u32(lists);
+        list != 0 && e.mem.u8(list + MOD_FLAGS_PRESENCE) & 0x20 != 0
+    };
+    let player = e.mem.u32(PLAYER);
+    let skill = e
+        .call(
+            GET_ACTOR_VALUE,
+            &args![player + ACTOR_VALUE_OWNER, AV_REPAIR],
+        )
+        .f64() as f32;
+    let skill = maxss(skill, 0.0);
+    let base = e.mem.f32(REPAIR_SKILL_BASE) * 10.0;
+    let range = 10.0f32 * e.mem.f32(REPAIR_SKILL_MAX) - base;
+    let cap = minss(skill * range * 0.01 + base, 100.0);
+    let state = repair_state(e);
+    state.health.store(health.to_bits(), Ordering::Relaxed);
+    state.modded.store(modded, Ordering::Relaxed);
+    state.skill.store(cap.to_bits(), Ordering::Relaxed);
+    Some(u32::from(cap > health))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PopulateRepairListHook.
+/// O2, the repair list's test (words: the broken item's form, a stack): the exe's test
+/// (`0047bb50`); a stack that passes and is of the broken item's own form, when the broken item
+/// has no weapon mods, passes only at or below the broken item's health (or unordered).
+fn repair_list(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&form, &entry) = (words.first()?, words.get(1)?);
+    let item = e.mem.u32(entry + 8);
+    let mut ok = e.call(REPAIR_ITEM_TEST, &args![item, form]).u8() != 0;
+    if ok && form == item && !repair_state(e).modded.load(Ordering::Relaxed) {
+        let health = health_percent(e, entry);
+        let broken = f32::from_bits(repair_state(e).health.load(Ordering::Relaxed));
+        ok = health.partial_cmp(&broken) != Some(std::cmp::Ordering::Greater);
+    }
+    Some(u32::from(ok))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetRepairAmount.
+/// The condition (0 to 1) a repair reaches: with both healths in tenths and the skill cap in
+/// hundredths, `(larger + fRepairMin + smaller * fRepairScavengeMult + (fRepairMax - fRepairMin)
+/// * cap) / 10` in that order of single-precision steps, at most the cap.
+pub fn repair_amount(e: &mut Engine, to_repair: f32, used: f32) -> f32 {
+    let (a, b) = (to_repair * 0.1, used * 0.1);
+    let skill = f32::from_bits(repair_state(e).skill.load(Ordering::Relaxed)) * 0.01;
+    let scavenged = minss(a, b) * e.mem.f32(REPAIR_SCAVENGE_MULT);
+    let larger = maxss(a, b);
+    let low = e.mem.f32(REPAIR_MIN);
+    let spread = (e.mem.f32(REPAIR_MAX) - low) * skill;
+    let amount = (larger + low + scavenged + spread) * 0.1;
+    minss(amount, skill)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetRepairListValuesHook.
+/// O2, the repair list's condition (words: the stack's health bits, the broken item's).
+fn repair_list_value(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&item, &broken) = (words.first()?, words.get(1)?);
+    Some(repair_amount(e, f32::from_bits(item), f32::from_bits(broken)).to_bits())
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DoRepairItemHook.
+/// O2, `RepairItem`'s condition (words: the stack used): from the broken item's and the stack's
+/// health in percent (JIP's `GetHealthPercent`).
+fn repair_item(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let used = *words.first()?;
+    let used = health_percent(e, used);
+    let broken = e.mem.u32(BROKEN_ITEM);
+    let broken = health_percent(e, broken);
+    Some(repair_amount(e, broken, used).to_bits())
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RepairMenuClickHook (with
+// the byte 0x76, `JBE`, at 0x7B5D05).
+/// O2, `DoClick`'s test after a repair (no words): 1 (set the menu up again) while the broken
+/// item's health in percent plus 1 is at most the skill cap (or unordered), else 0 (close).
+fn repair_again(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    let broken = e.mem.u32(BROKEN_ITEM);
+    let health = health_percent(e, broken) + 1.0;
+    let cap = f32::from_bits(repair_state(e).skill.load(Ordering::Relaxed));
+    Some(u32::from(
+        health.partial_cmp(&cap) != Some(std::cmp::Ordering::Greater),
+    ))
+}
+
+// ---- GB-6: G112 (`fRepairSkillMax`), D06 and O3 (Big Guns) ----
+
+/// `fRepairSkillMax`'s value as JIP writes it (`GMST_INT(..) = 0x41200000`: 10.0).
+pub const REPAIR_SKILL_MAX_JIP: u32 = 0x4120_0000;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (`GMST_INT(fRepairSkillMax) = 0x41200000;`).
+/// G112, before `main` (no words): `fRepairSkillMax` becomes 10.0 (the exe's static initializer
+/// `00f67c30` made it 9.0). Answers nothing: `main` goes on as the exe's.
+fn repair_skill_max(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    e.mem.set_u32(REPAIR_SKILL_MAX, REPAIR_SKILL_MAX_JIP);
+    None
+}
+
+/// `ActorValueInfo::Array()` (`0x11D61C8`) and `kAVCode_BigGuns`.
+const ACTOR_VALUE_INFOS: u32 = 0x011d_61c8;
+const AV_BIG_GUNS: u32 = 0x21;
+/// An `ActorValueInfo`'s `fullName.name` (`TESFullName` at +0x18, its `String` at +0x1C),
+/// `description` (`TESDescription`, +0x24), `avName` (`String`, +0x3C), `avFlags` (+0x44) and
+/// `callback4C` (the exe's `pDerivationFunction`, +0x4C).
+const AV_FULL_NAME: u32 = 0x1c;
+const AV_DESCRIPTION: u32 = 0x24;
+const AV_NAME: u32 = 0x3c;
+const AV_FLAGS: u32 = 0x44;
+const AV_DERIVATION: u32 = 0x4c;
+/// The skills' derivation (`00643bd0`: `AiFormulas::AVDeriveSkill`), as `0066efe0` registers it
+/// for Barter and Energy Weapons; the exe registers Big Guns with none (0) and flags `0x2000`.
+pub const DERIVE_SKILL: u32 = 0x0064_3bd0;
+/// O3's flags (`kAVFlag_Skill | kAVFlag_CreatureCombatSkill`, Energy Weapons' in the exe).
+pub const BIG_GUNS_SKILL_FLAGS: u32 = 0x410;
+/// JIP's `kBigGunsDescription`.
+pub const BIG_GUNS_DESCRIPTION: &[u8] = b"The Big Guns skill determines your combat effectiveness with all oversized weapons such as the Fat Man, Missile Launcher, Flamer, Minigun, Gatling Laser, etc.";
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (the
+// deferred `SetOptionalPatch(3, true)`, then `avInfo->fullName.name = avInfo->avName;
+// avInfo->callback4C = (void*)0x643BD0;`) and SetOptionalPatch case 3.
+/// JIP's `DeferredInit`, group GB's part, with the game-patch row: with `bEnableBigGunsSkill` (O3)
+/// Big Guns' flags become [`BIG_GUNS_SKILL_FLAGS`] and its description JIP's text (JIP's
+/// `SetDescriptionAltText`); then (D06) its display name is its actor value name (the 8-byte
+/// `String` copied as it is, buffer shared, as JIP's assignment does) and its derivation
+/// [`DERIVE_SKILL`]. With the row off nothing changes.
+pub fn deferred_init(e: &mut Engine) {
+    use engine_core::extend::jip_patches;
+    let word = e.jip_patches();
+    if word & jip_patches::FIXES == 0 {
+        return;
+    }
+    let slot = ACTOR_VALUE_INFOS + 4 * AV_BIG_GUNS;
+    // Always mapped and filled in the game (`0066efe0` registers every actor value at start);
+    // a test engine without the exe's data has neither.
+    if !e.mem.is_mapped(slot) {
+        return;
+    }
+    let info = e.mem.u32(slot);
+    if info == 0 {
+        return;
+    }
+    if word & jip_patches::ENABLE_BIG_GUNS_SKILL != 0 {
+        e.mem.set_u32(info + AV_FLAGS, BIG_GUNS_SKILL_FLAGS);
+        crate::world_hooks::set_description_alt_text(
+            e,
+            info + AV_DESCRIPTION,
+            BIG_GUNS_DESCRIPTION,
+        );
+    }
+    for at in [0, 4] {
+        let word = e.mem.u32(info + AV_NAME + at);
+        e.mem.set_u32(info + AV_FULL_NAME + at, word);
+    }
+    e.mem.set_u32(info + AV_DERIVATION, DERIVE_SKILL);
+}
 #[cfg(test)]
 #[path = "gb_tests.rs"]
 mod tests;
