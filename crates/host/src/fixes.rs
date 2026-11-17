@@ -43,6 +43,7 @@ pub static FIXES: &[Fix] = &[
     JIP_COSAVE_FIXES,
     JIP_VANILLA_COMMANDS,
     JIP_GAME_PATCHES,
+    MCM,
     UIO,
     SCRIPT_ERROR_GUARD,
     IMOD_EVENT_FORM_CHECK,
@@ -438,13 +439,15 @@ fn install_script_ui_sort_paths(e: &mut Engine) {
 /// frame's start, before the controls are read, or earlier where the frame's tail reaches what the draw uses
 /// (`engine::draw_thread`, [`crate::draw_thread`]). It needs real threads with the render thread; stepped threads
 /// are its check form. `NV_DRAW_THREAD=poison` (the environment only, for checks) is on with the packet's
-/// POISON check (stepped threads only). The draw family's packet hand-off is wired; until the geometry family is on, every
-/// frame still draws on main.
+/// POISON check (stepped threads only). The draw family's packet hand-off is wired; with the geometry family on (since
+/// 2026-11-16) a frame would be posted, and the first posted job still stops the run (`00b66570` on the helper), so the
+/// row stays off in every preset and the host refuses it unless `NV_DRAW_THREAD_CHECK=1` names the drawing thread's own
+/// check work (`crate::draw_thread::refusal`).
 pub const DRAW_THREAD: Fix = Fix {
     name: "world drawn on a second thread (experimental)",
     env: "NV_DRAW_THREAD",
     addresses: &[],
-    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; for now every frame still draws on main by default (the geometry family it needs is off until its gate; NV_TYPED=geometry)",
+    summary: "experimental, off in every preset: the world's draw on a thread of its own beside the end of the frame; refused for now (not working yet: the first posted frame stops the run), so the world is still drawn on main",
     install: install_nothing,
 };
 
@@ -466,12 +469,30 @@ fn install_uio(e: &mut Engine) {
     uio::set_on(e, true);
 }
 
+/// The Mod Configuration Menu's NVSE plugin built in (`crates/mcm`: MCM.dll 1.5, "MCM Extensions"):
+/// its nine commands at `0x21C0` up, which MCM's scripts and the menus of the mods that use it call
+/// (`GetMCMFloat`, `SetMCMFloat`, `GetModINI`, ...). Off in every preset ([`OFF_IN_EVERY_PRESET`])
+/// until the maintainer has seen it work; the intended rule after that is automatic (on when the
+/// load order has MCM), with no switch. The row sets a flag; `mcm::install` (after JIP, before
+/// UIO, in `install_rows_and_extenders`) registers the commands.
+pub const MCM: Fix = Fix {
+    name: "The Mod Configuration Menu's plugin built in",
+    env: "NV_MCM",
+    addresses: &[],
+    summary: "The Mod Configuration Menu's NVSE plugin (MCM.dll) built in: its script commands, which MCM's menu needs to show",
+    install: install_mcm,
+};
+
+fn install_mcm(e: &mut Engine) {
+    mcm::set_on(e, true);
+}
+
 /// A row whose binding [`install`] makes itself, with the choice.
 fn install_nothing(_: &mut Engine) {}
 
 /// Rows that are off in every preset until the maintainer turns them on: only their own variable or `Fallout.ini`
 /// line turns them on.
-pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, UIO.env, JIP_INSTALLED.env];
+pub const OFF_IN_EVERY_PRESET: &[&str] = &[DRAW_THREAD.env, MCM.env, UIO.env, JIP_INSTALLED.env];
 
 /// The rows that register nothing at an exe address: the menu limit paces the uncapped step;
 /// the extender's rows set flags `crates/nvse` reads.
@@ -483,6 +504,7 @@ const NO_ADDRESS: &[&str] = &[
     JIP_COSAVE_FIXES.name,
     JIP_VANILLA_COMMANDS.name,
     JIP_GAME_PATCHES.name,
+    MCM.name,
     UIO.name,
     SCRIPT_ERROR_GUARD.name,
     IMOD_EVENT_FORM_CHECK.name,
@@ -535,6 +557,12 @@ pub const PLAY_RENDERER: Renderer = Renderer::Vulkan;
 /// off, in every preset. `crates/host/data/game_ini.tsv`'s `bShowFrameRate` row is held to it by a
 /// test.
 pub const PLAY_SHOW_FRAME_RATE: bool = false;
+
+/// Whether the new lighting (ambient occlusion, port-added:
+/// `d3d9_wgpu::scene_light`, Vulkan only) is on when neither `NV_AO` nor `Fallout.ini`'s
+/// `bAmbientOcclusion` says ([`Choice::ambient_occlusion`]): off, in every preset (a new look, not
+/// a fix). `crates/host/data/game_ini.tsv`'s `bAmbientOcclusion` row is held to it by a test.
+pub const PLAY_AMBIENT_OCCLUSION: bool = false;
 
 /// Who draws the game ([`Choice::renderer`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -633,9 +661,17 @@ pub struct Choice {
     /// else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bShowFrameRate`; else
     /// [`PLAY_SHOW_FRAME_RATE`], off. Not part of any preset.
     pub show_frame_rate: bool,
+    /// Whether the new lighting is on (ambient occlusion,
+    /// `d3d9_wgpu::scene_light`, Vulkan only): `NV_AO` when set (`1` on, else off); else, in a
+    /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
+    /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
+    pub ambient_occlusion: bool,
     /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,
     /// for stepped threads; `crate::draw_thread::install` decides the draw family's capture mode from it).
     pub draw_poison: bool,
+    /// Whether `NV_DRAW_THREAD_CHECK=1` names the drawing thread's own check work (the environment only, a test's
+    /// variable): only then is the drawing-thread row not refused as "not working yet" (`crate::draw_thread::refusal`).
+    pub draw_check: bool,
     /// The one log line naming `Fallout.ini` values that could not be used
     /// ([`crate::game_ini::Keys::bad_line`]): the default stood for each.
     pub ini_note: Option<String>,
@@ -655,8 +691,10 @@ impl Choice {
             borderless: None,
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
+            ambient_occlusion: PLAY_AMBIENT_OCCLUSION,
             ini_note: None,
             draw_poison: false,
+            draw_check: false,
         }
     }
 
@@ -810,8 +848,10 @@ impl Choice {
             // The same: play's renderer, the file's choice over it; none for any other run.
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
+            ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
             ini_note: ini.bad_line(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
+            draw_check: env(DRAW_THREAD_CHECK).as_deref().map(str::trim) == Some("1"),
         };
         for line in settings.unwrap_or("").lines() {
             let Some((key, value)) = line.split_once('=') else {
@@ -873,6 +913,9 @@ impl Choice {
         }
         if let Some(value) = env("NV_SHOW_FPS").filter(|v| !v.trim().is_empty()) {
             choice.show_frame_rate = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_AO").filter(|v| !v.trim().is_empty()) {
+            choice.ambient_occlusion = value.trim() == "1";
         }
         if test {
             choice.preset = Preset::Vanilla;
@@ -1004,7 +1047,12 @@ const TEST_VARIABLES: &[&str] = &[
     "NV_PASS_CHECK",
     "NV_TOPIC_INDEX_CHECK",
     "NV_NVSE_EVENT_LOG",
+    DRAW_THREAD_CHECK,
 ];
+
+/// `NV_DRAW_THREAD_CHECK=1`: the drawing thread's own check work, the only run that may turn the drawing-thread row on
+/// while its first posted frame still stops the run (`crate::draw_thread::refusal`). A test's variable.
+pub const DRAW_THREAD_CHECK: &str = "NV_DRAW_THREAD_CHECK";
 
 /// Whether a launcher started this run for play: `NV_SETTINGS` set (Play.exe, and the play
 /// folder's Play.cmd through apply-settings.sh). No scripted, gated or measured run sets it
@@ -1310,7 +1358,8 @@ mod tests {
         assert!(poison.ini_note.is_some());
     }
 
-    /// It needs the render thread with real threads; stepped threads are its check form.
+    /// With the drawing thread's own check named (`NV_DRAW_THREAD_CHECK=1`), it needs the render thread with real
+    /// threads; stepped threads are its check form.
     #[test]
     fn the_drawing_thread_needs_the_render_thread_with_real_threads() {
         let with = |pairs: &'static [(&'static str, &'static str)]| {
@@ -1318,10 +1367,14 @@ mod tests {
         };
         let real_no_render = with(&[
             ("NV_DRAW_THREAD", "1"),
+            ("NV_DRAW_THREAD_CHECK", "1"),
             ("NV_THREADS", "real"),
             ("NV_RENDER_THREAD", "0"),
         ]);
-        assert!(crate::draw_thread::refusal(&real_no_render).is_some());
+        assert_eq!(
+            crate::draw_thread::refusal(&real_no_render),
+            Some("it needs the render thread with real threads (bRenderThread=1)")
+        );
         assert!(
             real_no_render.describe().contains("(refused: "),
             "{}",
@@ -1329,13 +1382,46 @@ mod tests {
         );
         let real_render = with(&[
             ("NV_DRAW_THREAD", "1"),
+            ("NV_DRAW_THREAD_CHECK", "1"),
             ("NV_THREADS", "real"),
             ("NV_RENDER_THREAD", "1"),
         ]);
         assert_eq!(crate::draw_thread::refusal(&real_render), None);
-        let stepped = with(&[("NV_DRAW_THREAD", "1")]);
+        let stepped = with(&[("NV_DRAW_THREAD", "1"), ("NV_DRAW_THREAD_CHECK", "1")]);
         assert_eq!(stepped.threads, "stepped");
         assert_eq!(crate::draw_thread::refusal(&stepped), None);
+    }
+
+    /// While its first posted frame stops the run, the row is refused in play and in any run that does not name the
+    /// drawing thread's own check (`NV_DRAW_THREAD_CHECK=1`): a `Fallout.ini` `bWorldDrawThread=1`, the variable alone,
+    /// `poison`, real threads with the render thread. So the world is drawn on main as before.
+    #[test]
+    fn the_drawing_thread_is_refused_until_its_first_post_works() {
+        use crate::draw_thread::{refusal, NOT_WORKING_YET};
+        let play = with_ini(None, "[nv-rs Fixes]\nbWorldDrawThread=1\n", &[]);
+        assert!(play.is_on(&DRAW_THREAD));
+        assert!(!play.draw_check);
+        assert_eq!(refusal(&play), Some(NOT_WORKING_YET));
+        assert!(
+            play.describe().contains("(refused: "),
+            "{}",
+            play.describe()
+        );
+        for pairs in [
+            &[("NV_DRAW_THREAD", "1")][..],
+            &[("NV_DRAW_THREAD", "poison")],
+            &[
+                ("NV_DRAW_THREAD", "1"),
+                ("NV_THREADS", "real"),
+                ("NV_RENDER_THREAD", "1"),
+            ],
+            &[("NV_DRAW_THREAD", "1"), ("NV_DRAW_THREAD_CHECK", "0")],
+        ] {
+            let choice = Choice::from_parts(None, env_of(pairs)).unwrap();
+            assert_eq!(refusal(&choice), Some(NOT_WORKING_YET), "{pairs:?}");
+        }
+        // The check variable is a test's: a play run that names it runs as a test.
+        assert!(TEST_VARIABLES.contains(&DRAW_THREAD_CHECK));
     }
 
     /// A script that records and was never told about the preset still measures the original; to
@@ -1916,6 +2002,29 @@ mod tests {
         assert!(asked.show_frame_rate);
     }
 
+    /// The new lighting is off in every run and preset unless asked for: `bAmbientOcclusion=1` in
+    /// a launcher's play run, or `NV_AO=1` anywhere, which wins.
+    #[test]
+    fn the_new_lighting_is_off_unless_asked_for() {
+        assert!(!Choice::vanilla().ambient_occlusion);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!("[nv-rs General]\nsPreset={preset}\n");
+            assert!(!with_ini(None, &file, &[]).ambient_occlusion, "{preset}");
+        }
+        assert!(!Choice::from_parts(None, no_env).unwrap().ambient_occlusion);
+        let on = "[nv-rs Display]\nbAmbientOcclusion=1\n";
+        assert!(with_ini(None, on, &[]).ambient_occlusion);
+        assert!(!with_ini(None, "[nv-rs Display]\nbAmbientOcclusion=0\n", &[]).ambient_occlusion);
+        let bad = with_ini(None, "[nv-rs Display]\nbAmbientOcclusion=yes\n", &[]);
+        assert!(!bad.ambient_occlusion);
+        assert!(bad.ini_note.unwrap().ends_with("bAmbientOcclusion=yes"));
+        // A test never reads the file; the variable decides there and over the file.
+        assert!(!with_ini(None, on, &[("NV_SHOT", "x")]).ambient_occlusion);
+        assert!(!with_ini(None, on, &[("NV_AO", "0")]).ambient_occlusion);
+        let asked = Choice::from_parts(None, env_of(&[("NV_AO", "1")])).unwrap();
+        assert!(asked.ambient_occlusion);
+    }
+
     /// Lowest to highest: default, preset, settings.ini (the fallback), Fallout.ini, environment.
     #[test]
     fn the_environment_beats_fallout_ini_which_beats_settings_ini() {
@@ -2212,6 +2321,8 @@ mod tests {
         ];
         for choice in &choices {
             assert!(!choice.is_on(&JIP_INSTALLED), "{choice:?}");
+            // MCM's plugin too, until the maintainer has tried it.
+            assert!(!choice.is_on(&MCM), "{choice:?}");
         }
         assert_eq!(choices[1].preset, Preset::Fixes);
         // The other JIP rows still follow the preset.

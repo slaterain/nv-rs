@@ -13,6 +13,8 @@
 //! - `device`: resources, passes, pipelines, draws and `Present`.
 //! - `window`: the game's window: the swap chain at the window's size, minimised, sized or lost.
 //! - `shot`: `NV_SHOT` captures numbered like the forwarding layer's.
+//! - `scene_light`: the new lighting (port-added, off by default): ambient occlusion on the finished
+//!   scene.
 
 mod ahead;
 mod answers;
@@ -25,6 +27,7 @@ pub mod frame_rate;
 mod fxhash;
 pub mod loading;
 mod prepare;
+pub mod scene_light;
 pub mod shot;
 pub mod sm;
 pub mod state;
@@ -351,6 +354,11 @@ impl Backend for WgpuBackend {
             Cmd::QueryIssue { query, flags } => d.query_issue(query, flags),
             Cmd::SetClipPlane { index, plane, .. } => d.set_clip_plane(index, plane),
             Cmd::ColorFill { .. } => d.not_provided("ColorFill is not provided (skipped)"),
+            // The new lighting's frame parameters, recorded just before the game's depth-only
+            // clear of its scene ([`scene_light`]); no Direct3D 9 transform has this number.
+            Cmd::SetTransform { state, matrix, .. } if state == scene_light::STATE => {
+                d.scene_light(&matrix.to_words());
+            }
             // Fixed-function state and the rest: the game's shaders do not read them; a draw
             // without shaders is skipped and printed by the device. (`SetGammaRamp` changes
             // nothing in a window, which is how the game runs.)

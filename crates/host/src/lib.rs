@@ -34,6 +34,8 @@ pub mod patch_data;
 pub mod phys_blend;
 pub mod player_move;
 pub mod save_out;
+#[cfg(windows)]
+pub mod scene_light;
 #[cfg(test)]
 mod start_up_tests;
 pub mod thread_races;
@@ -101,6 +103,9 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
     // `fixes::install` above) switched it on (`crates/jip`).
     jip::install(engine);
+    // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
+    // jip_nvse.dll and before ui_organizer.dll (`crates/mcm`).
+    mcm::install(engine);
     // UI Organizer, when its row is on: after JIP, as xNVSE loads ui_organizer.dll after
     // jip_nvse.dll (`crates/uio`).
     uio::install(engine);
@@ -244,6 +249,14 @@ impl Host {
         // in a launcher's play run, Fallout.ini's `[nv-rs Display] bShowFrameRate`; off by default).
         // F11 in the game shows or hides it either way.
         engine_platform::d3d9real::want_frame_rate(choice.show_frame_rate);
+        // The new lighting (`fixes::Choice::ambient_occlusion`: `NV_AO`; else, in a launcher's play
+        // run, Fallout.ini's `[nv-rs Display] bAmbientOcclusion`; off by default). Off: nothing is
+        // installed, read or recorded.
+        #[cfg(windows)]
+        if choice.ambient_occlusion {
+            engine_platform::d3d9real::want_scene_light(scene_light::read);
+            eprintln!("nv-rs: new lighting on (ambient occlusion; Vulkan only)");
+        }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,
         // decides instead. A test or script without `NV_D3D9` makes no choice: nothing draws.
