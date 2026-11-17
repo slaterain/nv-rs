@@ -406,6 +406,7 @@ mod tests {
             ("draw/alpha.rs", include_str!("alpha.rs")),
             ("draw/drivers.rs", include_str!("drivers.rs")),
             ("draw/camera.rs", include_str!("camera.rs")),
+            ("draw/defined.rs", include_str!("defined.rs")),
             ("draw/packed.rs", include_str!("packed.rs")),
             ("draw/lists.rs", include_str!("lists.rs")),
             ("draw/constants.rs", include_str!("constants.rs")),

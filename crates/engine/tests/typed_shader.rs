@@ -17693,3 +17693,116 @@ fn set_camera_data() {
     .run()
     .assert_same();
 }
+
+// ---- The shader constant map's defined constants, typed so the renderer's matrices are the drawing side's. ----
+
+use engine_typed::draw::defined;
+
+/// Where the program's `SetShaderConstant` stand-in copies the 0x40 bytes it is handed.
+const DEFINED_COPY: u32 = 0x0121_6000;
+
+/// The program's slot 0x74 (`SetShaderConstant`, `thiscall(program, entry, data, 0)`): the 0x40 bytes at `data`
+/// copied to [`DEFINED_COPY`] (none for a null pointer), then the slot's answer.
+fn defined_constant_answer(e: &mut Engine, a: &[u32]) -> Ret {
+    if let Some(&data) = a.get(2) {
+        let mut bytes = vec![0u8; 0x40];
+        if data >= 0x1000 && e.mem.try_read(data, &mut bytes).is_ok() {
+            e.mem.write(DEFINED_COPY, &bytes);
+        }
+    }
+    slot_answer::<0x74>(e, a)
+}
+
+#[test]
+fn set_defined_constant() {
+    Diff::new(entry!(
+        0x00e8_3db0,
+        defined::set_defined_constant(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+    ))
+    .draw_common_at(0x00e8_3db0)
+    .inputs(&[
+        // The renderer's constants (every matrix case), the inverse view's rows, the property state's floats, no data,
+        // the identity, the skinning array, an unknown constant.
+        Input::Of(&[
+            1, 2, 13, 14, 3, 4, 15, 16, 5, 6, 17, 18, 7, 8, 19, 20, 9, 10, 21, 22, 11, 12, 23, 24, 25, 26, 27, 28,
+            29, 30, 31, 32, 33, 34, 35, 36, 73, 75, 76, 77, 78, 79, 80, 96, 97, 98, 99, 200,
+        ]),
+        // The fourth and fifth words present; the program's answer.
+        Input::Of(TWO_WAYS),
+        Input::Of(TWO_WAYS),
+        Input::F32Swept(ONE),
+        Input::F32Swept(HALF),
+    ])
+    .float_sweep(8)
+    .setup(|e, c| {
+        let d = draw_world(e);
+        let r = d.w.renderer;
+        // The renderer's five matrices, from the swept floats.
+        for k in 0..80u32 {
+            let w = if k % 3 == 0 { bits(c, 3) } else { bits(c, 4) ^ (k << 8) };
+            set(e, r + 0x940 + 4 * k, w);
+        }
+        let map = obj(e, 0x40, 0);
+        set(e, map + 0x3c, r);
+        let program_vt = vtable(e, &[]);
+        let program = obj(e, 0x10, program_vt);
+        if !e.mem.is_mapped(DEFINED_COPY) {
+            e.map(DEFINED_COPY, 0x1000);
+        }
+        e.register(VT_FN + 0x74, defined_constant_answer);
+        slots!(e; 0x78);
+        set(e, RETS + 0x74, c.word(2));
+        set(e, RETS + 0x78, c.word(2));
+        let entry = e.mem.alloc(0x20);
+        set(e, entry + 0x10, c.word(0));
+        // The fourth and fifth words: skinning objects (matrices +0x28, registers +0x20; bones +0x20, indices +4).
+        let (fourth, fifth) = if c.word(1) != 0 {
+            let fourth = e.mem.alloc(0x30);
+            let fifth = e.mem.alloc(0x30);
+            set(e, fourth + 0x28, 0x1234);
+            set(e, fourth + 0x20, 3);
+            e.mem.set_u16(fifth + 0x20, 7);
+            set(e, fifth + 4, 0x5678);
+            (fourth, fifth)
+        } else {
+            (0, 0)
+        };
+        // The property state: its +8 object (floats at +0x1c..+0x3c, +0x34 none), no texturing property.
+        let properties = e.mem.alloc(0x20);
+        let source = e.mem.alloc(0x40);
+        for k in 0..16u32 {
+            set(e, source + 4 * k, bits(c, 3) ^ k);
+        }
+        set(e, source + 0x34, 0);
+        set(e, properties + 8, source);
+        constant_words(e, 0x011f_4998, &[ONE, HALF, bits(c, 4)]);
+        // The D3DX imports as the other set-up tests have them: inverse, transpose, multiply, multiply-transpose.
+        e.register(0x00fd_f428, |e, a| {
+            let m = words_at(e, a[2], 16);
+            for k in 0..16u32 {
+                e.mem.set_u32(a[0] + 4 * k, m[(15 - k) as usize]);
+            }
+            ret(a[0])
+        });
+        e.register(0x00fd_f42c, |e, a| {
+            let m = words_at(e, a[1], 16);
+            for k in 0..16u32 {
+                e.mem.set_u32(a[0] + 4 * k, m[(4 * (k % 4) + k / 4) as usize]);
+            }
+            ret(a[0])
+        });
+        for addr in [0x00fd_f424u32, 0x00fd_f410] {
+            e.register(addr, |e, a| {
+                let (m, n) = (words_at(e, a[1], 16), words_at(e, a[2], 16));
+                for k in 0..16u32 {
+                    let word = m[k as usize] ^ (n[((5 * k + 3) % 16) as usize] & 0xff);
+                    e.mem.set_u32(a[0] + 4 * k, word);
+                }
+                ret(a[0])
+            });
+        }
+        vec![map, program, entry, 0, fourth, fifth, 0, properties, 0, 0, 0, 0]
+    })
+    .run()
+    .assert_same();
+}

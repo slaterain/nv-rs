@@ -74,6 +74,7 @@ pub mod alpha;
 pub mod camera;
 pub mod capture;
 pub mod constants;
+pub mod defined;
 pub mod cut;
 pub mod detach;
 pub mod drivers;
@@ -180,6 +181,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00e6_d310, packed::draw_partition(Ptr<_>, u32, u32, u32)),
         entry!(0x00e7_0140, packed::draw_points(Ptr<_>, Ptr<_>)),
         entry!(0x00e6_c780, camera::set_camera_data(Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>, Ptr<_>)),
+        entry!(0x00e8_3db0, defined::set_defined_constant(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32),
         entry!(0x00e6_9ea0, packed::build_quads(Ptr<_>, u32, u32, u32, u32, u32, u32, u16)),
         entry!(0x00e6_ab40, packed::build_quads_with_byte(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u16)),
         entry!(0x00e6_96a0, packed::declaration(Ptr<_>) -> u32),
