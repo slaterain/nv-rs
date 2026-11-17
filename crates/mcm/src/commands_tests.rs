@@ -732,9 +732,14 @@ static FOLDERS: Mutex<BTreeSet<Vec<u8>>> = Mutex::new(BTreeSet::new());
 /// Every name the commands handed the mod files, as given (all the tests' calls).
 static NAMES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 
-/// The stand-in's key of a name (lower case, `\` for `/`); the name is recorded.
-fn k(name: &[u8]) -> Vec<u8> {
+/// A name the commands handed the stand-in, recorded; its key.
+fn rec(name: &[u8]) -> Vec<u8> {
     NAMES.lock().unwrap().push(name.to_vec());
+    k(name)
+}
+
+/// The stand-in's key of a name (lower case, `\` for `/`).
+fn k(name: &[u8]) -> Vec<u8> {
     name.to_ascii_lowercase()
         .iter()
         .map(|&b| if b == b'/' { b'\\' } else { b })
@@ -746,18 +751,18 @@ static STAND_IN: ModFileCalls = ModFileCalls {
         FILES
             .lock()
             .unwrap()
-            .get(&k(name))
+            .get(&rec(name))
             .cloned()
             .ok_or(mod_files::ERROR_FILE_NOT_FOUND)
     },
-    exists: |_, name| FILES.lock().unwrap().contains_key(&k(name)),
+    exists: |_, name| FILES.lock().unwrap().contains_key(&rec(name)),
     directory_exists: |_, name| {
-        let name = k(name);
+        let name = rec(name);
         let name = name.strip_suffix(b"\\").unwrap_or(&name).to_vec();
         FOLDERS.lock().unwrap().contains(&name)
     },
     create_directory: |_, name| {
-        let name = k(name);
+        let name = rec(name);
         let name = name.strip_suffix(b"\\").unwrap_or(&name).to_vec();
         if FOLDERS.lock().unwrap().insert(name) {
             Ok(())
@@ -766,7 +771,7 @@ static STAND_IN: ModFileCalls = ModFileCalls {
         }
     },
     write: |_, name, bytes| {
-        FILES.lock().unwrap().insert(k(name), bytes.to_vec());
+        FILES.lock().unwrap().insert(rec(name), bytes.to_vec());
         Ok(())
     },
 };
