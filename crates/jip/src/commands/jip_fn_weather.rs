@@ -1,11 +1,9 @@
 //! `functions_jip/jip_fn_weather.h` (JIP LN NVSE): a weather's image space modifiers, cloud
 //! textures, precipitation model, numbers and colours, and the sky's current weather, wind,
-//! lightning and clouds. 17 of its 18 commands.
-//!
-//! `SetWindSpeedMult` (`0x2858`) is built with the wind speed hook that reads its factor (G74),
-//! in `crate::game_patches::gw`. Not built (it only sets a value one of JIP's hooks reads):
-//! `SetWeatherTransitionTimeOverride` (`0x27A6`, JIP's `UpdateWeather` hook and
-//! `s_weatherTransitionRateOverride`).
+//! lightning and clouds. All 18 of its commands: 16 here; `SetWindSpeedMult` (`0x2858`) with the
+//! wind speed hook that reads its factor (G74), in `crate::game_patches::gw`;
+//! `SetWeatherTransitionTimeOverride` (`0x27A6`) with JIP's `UpdateWeather` hook, in
+//! `crate::world_hooks`.
 //!
 //! The weather argument is read as `kParamType_WeatherID`, whose type check xNVSE's reader makes,
 //! so the commands check no type themselves. The game reads a weather's fields when it uses the

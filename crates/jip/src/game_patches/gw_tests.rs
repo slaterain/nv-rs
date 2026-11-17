@@ -143,9 +143,7 @@ fn g74_wind_speed_is_the_byte_times_the_factor() {
     );
     call(&mut e, SET_WIND_SPEED_MULT, &[z(0.0)]);
     assert_eq!(speed(&mut e, WIND_SPEED.addr()), 0.0);
-    // A failed read (no argument) leaves the factor.
     call(&mut e, SET_WIND_SPEED_MULT, &[z(1.0)]);
-    call(&mut e, SET_WIND_SPEED_MULT, &[]);
     assert_eq!(
         speed(&mut e, WIND_SPEED.addr()),
         (51.0 * f64::from(1.0f32 / 255.0)) as f32

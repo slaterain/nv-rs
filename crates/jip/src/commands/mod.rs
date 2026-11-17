@@ -877,8 +877,8 @@ mod tests {
             nvse::table::guest_text(&e, e.mem.u32(record)),
             b"GetClimateSunTexture"
         );
-        // ForceClimate waits for JIP's hook: no handler.
-        assert_eq!(execute(&e, 0x28d8), 0);
+        // SetLightTraitNumeric is not built: no handler.
+        assert_eq!(execute(&e, 0x2643), 0);
     }
 
     /// Answering "not installed" (players' state until step 3.10), every opcode built here is as

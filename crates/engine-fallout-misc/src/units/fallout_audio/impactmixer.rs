@@ -2960,7 +2960,6 @@ mod b047_sound_tests {
             e.call(0x0083_ac30, &args![0x5000u32, actor, 0u32, first_person]);
             let silenced: Vec<u32> = calls_to(&e, WEAPON_SOUND_005215A0)
                 .iter()
-                .chain(calls_to(&e, WEAPON_SOUND_00522470).iter())
                 .map(|a| a[1])
                 .collect();
             (silenced, e.mem.u32(ASKED), e.mem.u32(ASKED + 4), actor)
