@@ -169,6 +169,13 @@ fn prepare(e: &mut Engine) {
             }
         });
     }
+    // `0050f9e0` (H22's wrap) and `004ab400` (G93's) when the test engine has no translation of
+    // them: stand-ins that answer "not a marker" and do nothing (JIP's wraps replace them).
+    for addr in [0x0050_f9e0, 0x004a_b400] {
+        if !e.is_registered(addr) {
+            e.register(addr, |_, _| Ret::default());
+        }
+    }
 }
 
 /// Opens or closes the console as the echo sees it.
