@@ -15,6 +15,9 @@ const fn row(addr: u32) -> Entry {
 
 /// The group's seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // G09 (fix row): QueueUIMessage 007052f0, its display time 0x70535C: JIP's QueueUIMessageHook
+    // gives the game's own callers the default message time (a built-in plugin's call is marked).
+    row(0x0070_535c),
     // G58 (fix row): InterfaceManager::Idle's console key query 0x70E5FE: JIP's
     // ToggleConsoleHook answers from the key bytes alone, so the console key works also while a
     // controller is connected (the exe's query answers 0 then: flag 0x11F35C8).

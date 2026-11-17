@@ -779,3 +779,28 @@ fn a_long_name() {
     assert_eq!(run(&mut e, 0x149a, 0, &[s(&name)]), 4.0);
     assert_eq!(run(&mut e, 0x14ae, 0, &[s(&long)]), 0.0);
 }
+
+/// `MessageEx` (a plugin's call of `QueueUIMessage`) marks its call for JIP's G09 while JIP's
+/// fixes are in (so it keeps its two seconds), and only then.
+#[test]
+fn message_ex_is_marked_as_a_plugins_call() {
+    use engine_core::extend::{jip_patches, PLUGIN_UI_MESSAGE};
+    thread_local! {
+        static MARKED: RefCell<Vec<bool>> = const { RefCell::new(Vec::new()) };
+    }
+    let mut e = setup();
+    e.register(QUEUE_UI_MESSAGE, |e, _| {
+        MARKED.with(|m| m.borrow_mut().push(e.caller_marked(PLUGIN_UI_MESSAGE)));
+        eax(0)
+    });
+    for (word, marked) in [
+        (0, false),
+        (jip_patches::INSTALLED, false),
+        (jip_patches::INSTALLED | jip_patches::FIXES, true),
+    ] {
+        e.set_jip_patches(word);
+        assert_eq!(run(&mut e, 0x14db, 0, &[s("Hello")]), 1.0);
+        assert_eq!(MARKED.with(|m| m.take()), vec![marked], "{word:#x}");
+        assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "gone after the call");
+    }
+}

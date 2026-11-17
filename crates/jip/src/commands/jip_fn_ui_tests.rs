@@ -2485,3 +2485,27 @@ fn world_map_pos_mults_of_a_reference() {
     call(&mut e, 0x2730, &[var(1), var(2)]);
     assert_eq!(local_value(&e, 1), 7.0);
 }
+
+/// `MessageExAlt` (a plugin's call of `QueueUIMessage`) marks its call for G09 while JIP's fixes
+/// are in (so it keeps its own seconds), and only then.
+#[test]
+fn message_ex_alt_is_marked_as_a_plugins_call() {
+    use engine_core::extend::{jip_patches, PLUGIN_UI_MESSAGE};
+    thread_local! {
+        static MARKED: std::cell::RefCell<Vec<bool>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut e = setup();
+    e.register(QUEUE_FN, |e, _| {
+        MARKED.with(|m| m.borrow_mut().push(e.caller_marked(PLUGIN_UI_MESSAGE)));
+        eax(1)
+    });
+    for (word, marked) in [
+        (jip_patches::INSTALLED, false),
+        (jip_patches::INSTALLED | jip_patches::FIXES, true),
+    ] {
+        e.set_jip_patches(word);
+        call(&mut e, 0x2738, &[z(3.5), s(b"Hello")]);
+        assert_eq!(MARKED.with(|m| m.take()), vec![marked], "{word:#x}");
+        assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "gone after the call");
+    }
+}
