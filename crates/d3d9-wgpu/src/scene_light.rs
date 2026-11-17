@@ -3,23 +3,28 @@
 //! in the run's `Fallout.ini` or `NV_AO=1` (`host::fixes::Choice::ambient_occlusion`); wgpu only,
 //! the real Direct3D 9 ignores it.
 //!
-//! **Where.** The game draws the world into its multisampled scene target and depth surface,
-//! clears the depth alone (`Clear` with only `D3DCLEAR_ZBUFFER`), draws the first-person arms and
-//! weapon, resolves the target and runs its image-space (HDR) step, then draws the HUD and menus on
-//! the back buffer (`measure/newlight/NOTES.md`, a recorded frame). The step runs at that depth-only
-//! clear: the depth holds the whole world and nothing else, the colour is the world before the
-//! game's image-space step, and what comes after (the arms, the image-space step, HUD, menus,
-//! Pip-Boy, loading screens) is never touched. The platform records [`STATE`] just before such a
-//! clear with the camera and sun of the frame ([`Params`]); the device runs the step once a frame,
-//! only when the bound colour target and depth surface have one size and sample count. (The sun is
-//! carried for the real sun shadows to come; this step does not draw any.)
+//! **Where.** The game draws the world into its multisampled scene target and depth surface; in
+//! first person it then clears the depth alone (`Clear` with only `D3DCLEAR_ZBUFFER`) and draws the
+//! arms and weapon (in third person there is no such clear: the player's body is part of the
+//! world); then it resolves the target, runs its image-space (HDR) step and draws the HUD and menus
+//! on the back buffer (`measure/newlight/NOTES.md`, recorded frames). The step runs where the world
+//! is drawn and nothing after it yet: the depth holds the whole world and nothing else, the colour
+//! is the world before the game's image-space step, and what comes after (the arms, the image-space
+//! step, HUD, menus, Pip-Boy, loading screens) is never touched. The platform records [`STATE`]
+//! with the camera and sun of the frame ([`Params`]) at two places: the frame draw's own point
+//! where the world is drawn (`engine_core::world_drawn`, right after the world pass `00873200`;
+//! first and third person) and just before a depth-only clear (as before; in first
+//! person it comes after the first in the same frame). The device runs the step once a frame, at
+//! the first, only when the bound colour target and depth surface have the screen's size and one
+//! sample count. (The sun is carried for the real sun shadows to come; this step does not draw
+//! any.)
 //!
 //! **What.** From the scene's depth (sample 0 of the multisampled surface), at half resolution:
 //! ground-truth ambient occlusion, the horizon search and cosine-weighted slice integral of
 //! Jimenez, Wu, Pesce and Jarabo, "Practical Real-Time Strategies for Accurate Indirect Occlusion"
 //! (SIGGRAPH 2016 course, Activision tech report ATVI-TR-16-01), as Intel's XeGTAO (MIT) arranges
 //! it: [`SLICES`] slices of [`STEPS`] steps a side, a distance falloff over the outer 60 % of
-//! [`RADIUS`], applied at [`STRENGTH`]; the normal from the depth (the nearer neighbour on each
+//! [`RADIUS`], applied at the run's strength ([`STRENGTH`] by default); the normal from the depth (the nearer neighbour on each
 //! axis). A sample counts only from [`MIN_HEIGHT`] above the surface's own plane, so decals, rugs
 //! and stains lying a hair over the floor do not darken it; and thin occluders in front of what they hide (grass
 //! blades, leaves, posts) weigh little ([`THIN`], XeGTAO's thin-occluder compensation, stronger), so
@@ -31,15 +36,17 @@
 //! is not shaded, apart from multisampled edge pixels it shares with a shaded object (the step works
 //! per pixel, from the depth's first sample, and multiplies all the pixel's samples alike).
 //!
-//! **When.** Measured in a recording of Doc's house, third person, the Pip-Boy and the street
-//! (`measure/newlight/NOTES.md`): in first person, indoors and out, the game clears the depth alone
-//! once a frame, on the scene target; with the Pip-Boy open it does so for the world and again on
-//! the back buffer for the Pip-Boy's own 3D (never shaded: the back buffer is refused, and the frame's
-//! one run is taken by then); in third person it issues no depth-only clear, so there is no ambient
-//! occlusion in third person; loading screens and menus have none either.
+//! **When.** In every frame that draws the world (`00870bd0`, `00870a00`): first and third person,
+//! indoors and out (checked in game runs); by the frame draw's code also V.A.T.S., the dialogue
+//! camera, the kill camera and the race menu's view of the player, which go through the same world
+//! frames with the game's camera of the moment (not checked in a run). With the Pip-Boy open the world is
+//! shaded as behind it and the Pip-Boy's own 3D (a second depth-only clear, on the back buffer) never
+//! is: the back buffer is refused, and the frame's one run is taken by then. A frame drawn over a
+//! menu's background (`008707c0`: no world pass) is not shaded at the frame draw's point; there only
+//! the depth-only clear can bring the step, as before. Loading screens and menus have none.
 //!
 //! **Limits.** Screen space: only what is on screen occludes; transparent things the game drew
-//! before the clear (particles, glass, water) take the darkening of the opaque surface behind them.
+//! in the world pass (particles, glass) take the darkening of the opaque surface behind them.
 //! Screen-space sun shadows were tried and dropped (2026-11-16): on the street they gave only thin
 //! dark edges and speckle, not shadows (`measure/newlight/NOTES.md`); real sun shadows need a shadow
 //! pass from the sun.
@@ -59,8 +66,12 @@ pub const RADIUS: f32 = 48.0;
 pub const MAX_RADIUS_SCREEN: f32 = 0.04;
 pub const SLICES: u32 = 2;
 pub const STEPS: u32 = 4;
-/// How much of the occlusion is applied, and its curve.
-pub const STRENGTH: f32 = 0.5;
+/// How much of the occlusion is applied by default ([`Params::strength`]; the run may choose
+/// another in [`STRENGTH_RANGE`]: `[nv-rs Display] fAmbientOcclusionStrength`, `NV_AO_STRENGTH`),
+/// and its curve ([`POWER`]).
+pub const STRENGTH: f32 = 0.7;
+/// The strengths a run may choose ([`clamp_strength`]): from faint to all of it.
+pub const STRENGTH_RANGE: std::ops::RangeInclusive<f32> = 0.1..=1.0;
 /// How far above the surface's own plane (game units, plus a little with distance) a sample must be
 /// to occlude: decals, rugs and stains lie a hair above the floor and must not darken it.
 pub const MIN_HEIGHT: f32 = 2.0;
@@ -76,6 +87,14 @@ pub const SHADOW_STRENGTH: f32 = 0.8;
 /// The distance band (game units) over which it fades out.
 pub const FADE_FROM: f32 = 3000.0;
 pub const FADE_TO: f32 = 6000.0;
+
+/// `strength` within [`STRENGTH_RANGE`] ([`STRENGTH`] for a value that is not a number).
+pub fn clamp_strength(strength: f32) -> f32 {
+    if strength.is_nan() {
+        return STRENGTH;
+    }
+    strength.clamp(*STRENGTH_RANGE.start(), *STRENGTH_RANGE.end())
+}
 
 static ON: AtomicBool = AtomicBool::new(false);
 
@@ -122,6 +141,9 @@ pub struct Params {
     /// How strong the sun is: 0 for none (indoors, night, a dark sun). Carried for the sun shadows
     /// to come; this step does not use it.
     pub shadow: f32,
+    /// How much of the occlusion is applied ([`STRENGTH`] unless the run chose another; within
+    /// [`STRENGTH_RANGE`]).
+    pub strength: f32,
 }
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -174,6 +196,7 @@ impl Params {
             top,
             sun,
             shadow,
+            strength: STRENGTH,
         })
     }
 
@@ -190,7 +213,7 @@ impl Params {
             self.sun[1],
             self.sun[2],
             self.shadow,
-            0.0,
+            self.strength,
             0.0,
             0.0,
             0.0,
@@ -215,18 +238,22 @@ impl Params {
             top: f[5],
             sun: [f[6], f[7], f[8]],
             shadow: f[9],
+            // 0 in a recording made before the strength was carried: the default.
+            strength: if w[10] == 0 { STRENGTH } else { f[10] },
         };
-        let usable = f[..10].iter().all(|v| v.is_finite())
+        let usable = f[..11].iter().all(|v| v.is_finite())
             && p.near > 0.0
             && p.far > p.near
             && p.right > p.left
             && p.top > p.bottom
-            && (0.0..=1.0).contains(&p.shadow);
+            && (0.0..=1.0).contains(&p.shadow)
+            && STRENGTH_RANGE.contains(&p.strength);
         usable.then_some(p)
     }
 
     /// The uniform block the shaders read: frustum (left, right, bottom, top), depth (near, far,
-    /// width, height of the full-resolution target), sun (toward it, then the shadow's strength).
+    /// width, height of the full-resolution target), sun (toward it, then the shadow's strength),
+    /// tune (the occlusion's strength, then three unused).
     fn uniform_bytes(&self, width: u32, height: u32) -> Vec<u8> {
         let f = [
             self.left,
@@ -241,6 +268,10 @@ impl Params {
             self.sun[1],
             self.sun[2],
             self.shadow,
+            self.strength,
+            0.0,
+            0.0,
+            0.0,
         ];
         f.iter().flat_map(|v| v.to_le_bytes()).collect()
     }
@@ -287,6 +318,7 @@ struct P {
     frustum: vec4<f32>,
     depth: vec4<f32>,
     sun: vec4<f32>,
+    tune: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> p: P;
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -451,7 +483,7 @@ const HALF_PI: f32 = 1.57079633;
         }
         visibility = pow(saturate(visibility / f32(SLICES)), POWER);
     }
-    let ao = mix(1.0, visibility, fade * STRENGTH);
+    let ao = mix(1.0, visibility, fade * p.tune.x);
     return vec4<f32>(ao, 1.0, pc.z, 1.0);
 }
 ";
@@ -523,7 +555,7 @@ pub fn shader(stage: Stage, multisampled_depth: bool) -> String {
     };
     let constants = format!(
         "const RADIUS: f32 = {RADIUS:?};\nconst MAX_RADIUS_SCREEN: f32 = {MAX_RADIUS_SCREEN:?};\n\
-         const SLICES: i32 = {SLICES};\nconst STEPS: i32 = {STEPS};\nconst STRENGTH: f32 = {STRENGTH:?};\n\
+         const SLICES: i32 = {SLICES};\nconst STEPS: i32 = {STEPS};\n\
          const POWER: f32 = {POWER:?};\nconst MIN_HEIGHT: f32 = {MIN_HEIGHT:?};\n\
          const THIN: f32 = {THIN:?};\n\
          const FADE_FROM: f32 = {FADE_FROM:?};\nconst FADE_TO: f32 = {FADE_TO:?};\n\
@@ -752,7 +784,7 @@ impl Gpu {
         Gpu {
             uniforms: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("scene light"),
-                size: 48,
+                size: 64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
@@ -906,6 +938,7 @@ mod tests {
             top: t,
             sun: [0.0, 1.0, 0.0],
             shadow: 0.5,
+            strength: STRENGTH,
         }
     }
 
@@ -1041,6 +1074,43 @@ mod tests {
         let mut w = p.to_words();
         w[9] = 2.0f32.to_bits();
         assert_eq!(Params::from_words(&w), None);
+        // The strength: the game's default from the game; a chosen one carried; one out of range
+        // refused; none (0, a recording from before it was carried) the default.
+        assert_eq!(p.strength, STRENGTH);
+        let chosen = Params { strength: 0.9, ..p };
+        assert_eq!(Params::from_words(&chosen.to_words()), Some(chosen));
+        for bad in [0.05f32, 1.5, f32::NAN] {
+            let mut w = p.to_words();
+            w[10] = bad.to_bits();
+            assert_eq!(Params::from_words(&w), None, "{bad}");
+        }
+        let mut w = p.to_words();
+        w[10] = 0;
+        assert_eq!(Params::from_words(&w).map(|p| p.strength), Some(STRENGTH));
+    }
+
+    #[test]
+    fn a_chosen_strength_is_kept_in_its_range() {
+        assert!(STRENGTH_RANGE.contains(&STRENGTH));
+        assert_eq!(clamp_strength(0.85), 0.85);
+        assert_eq!(clamp_strength(0.0), 0.1);
+        assert_eq!(clamp_strength(-3.0), 0.1);
+        assert_eq!(clamp_strength(7.0), 1.0);
+        assert_eq!(clamp_strength(f32::INFINITY), 1.0);
+        assert_eq!(clamp_strength(f32::NAN), STRENGTH);
+    }
+
+    /// The uniform block carries the strength after the sun (the shaders' `p.tune.x`).
+    #[test]
+    fn the_uniforms_carry_the_strength() {
+        let p = Params {
+            strength: 0.85,
+            ..params()
+        };
+        let bytes = p.uniform_bytes(64, 32);
+        assert_eq!(bytes.len(), 64);
+        assert_eq!(bytes[48..52], 0.85f32.to_le_bytes());
+        assert!(shader(Stage::Occlusion, false).contains("fade * p.tune.x"));
     }
 
     #[test]
