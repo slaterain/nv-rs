@@ -28,6 +28,13 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GE",
     },
+    // O18 (switch uNPCPerks): Actor::~Actor 0087dcb0, the deleted-flag test 004077c0: JIP's
+    // DestroyActorHook drops the actor's NPC perks first.
+    Entry {
+        addr: 0x0087_de3f,
+        owners: JIP,
+        step: "3.9-GE",
+    },
     // H18: Actor::GetEssential 0087f3d0, the player's test for a teammate: JIP's
     // IsActorEssentialHook answers 1 for a teammate made killable.
     Entry {

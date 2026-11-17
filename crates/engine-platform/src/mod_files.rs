@@ -216,9 +216,17 @@ fn parent_of(rel: &[u8]) -> Option<&[u8]> {
     rel.iter().rposition(|&b| b == b'\\').map(|at| &rel[..at])
 }
 
-/// The folder's copy of a relative name.
+/// The folder's copy of a relative name. Off Windows each part is found in its folder without
+/// case (`host_paths::host_path_under`), as Windows finds it whatever case the game names it in.
 fn kept_path(folder: &Path, rel: &[u8]) -> PathBuf {
-    folder.join(files::host_path(rel))
+    #[cfg(windows)]
+    {
+        folder.join(files::host_path(rel))
+    }
+    #[cfg(not(windows))]
+    {
+        crate::host_paths::host_path_under(folder, &files::host_path(rel))
+    }
 }
 
 /// A host file call's failure as Windows' code (`ERROR_ACCESS_DENIED` when it gives none).

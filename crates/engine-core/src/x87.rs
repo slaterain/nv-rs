@@ -756,7 +756,8 @@ pub fn fistp_chop64(value: f64) -> i64 {
 }
 
 /// The `CMPEQSS`/`RSQRTSS` pair of the Havok normalizer: the hardware
-/// estimate of `1 / sqrt(x)` on x86, exact elsewhere.
+/// estimate of `1 / sqrt(x)` on x86; elsewhere the model of the measured processor's
+/// ([`crate::estimate`]).
 #[cfg(target_arch = "x86_64")]
 pub fn rsqrt_estimate(x: f32) -> f32 {
     use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
@@ -766,7 +767,7 @@ pub fn rsqrt_estimate(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 pub fn rsqrt_estimate(x: f32) -> f32 {
-    1.0 / x.sqrt()
+    crate::estimate::rsqrt(x)
 }
 
 // ---- Transcendental and other non-arithmetic instructions ------------------

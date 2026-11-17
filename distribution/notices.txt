@@ -12,3 +12,4 @@ crates/jip/NOTICE	NOTICE-jip
 crates/uio/NOTICE	NOTICE-uio
 vendor/wgpu-hal/LICENSE.APACHE	LICENSE-wgpu-hal.APACHE
 vendor/wgpu-hal/LICENSE.MIT	LICENSE-wgpu-hal.MIT
+crates/mcm/NOTICE	NOTICE-mcm

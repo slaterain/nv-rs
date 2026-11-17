@@ -1,0 +1,9 @@
+[package]
+name = "estimate-measure"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Measures this x86-64 processor's RCPSS and RSQRTSS on all 2^32 inputs and writes engine-core's estimate tables (crates/engine-core/src/estimate/tables.rs). Run: cargo run --release -- OUT.rs"
+
+# Standalone tool, not part of the root workspace. No dependencies.
+[workspace]
