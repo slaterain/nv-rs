@@ -1,7 +1,7 @@
 //! Group GA's game patches (step 3.9: UI: HUD, messages, text, start-up INI): its handlers, wraps and slot routines. Only group
 //! GA's PR edits this file (and its own tests file beside it).
 //!
-//! Nine of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
+//! Eleven of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
 //! a fix row (in with the row `NV_JIP_GAME_PATCHES`, [`super::set_row`]):
 //! - **G08** "Increase buffer size for GetPrivateProfileString" (`SafeWrite8(0xC44405, 4)`): the
 //!   INI reader's text settings (`INISettingCollection::ReadSetting`, `00c44280`) are read with a
@@ -51,6 +51,18 @@
 //!   game a text too long for the buffer fails the copy (`strcpy_s`) and the game ends: above
 //!   259 characters without JIP, above 515 with it. [`corner_message_text_size`] answers the
 //!   same buffer size for `MessageExAlt`.
+//! - **G80** (no comment; `WriteRelJump(0x777123, RolloverWeaponHook)`): the HUD's crosshair
+//!   name of a weapon lying in the world (`HUDMainMenu::SetInfoForRef`, `00775a00`) gets a "+" at
+//!   its end when the weapon has a weapon mod on it (the reference's `ExtraWeaponModFlags`, kind
+//!   0x8D, flags byte +0xC not 0), as the item lists show a modded weapon. JIP replaces the
+//!   exe's playable test there (`0x47BCF0`: flag byte +0x100 without 0x80) with its own, which
+//!   answers the same. Difference from JIP: the "+" goes in only when it fits the 0x104-byte name
+//!   buffer (`0x11D9C48`) with its end; JIP writes the two bytes past a 259-character name.
+//! - **G121** (no comment; `WriteRelCall(0x7ECE32, GetVATSTargetDTHook)`): V.A.T.S. shows the
+//!   damage threshold of the last hit JIP's hit damage (O1) worked out (any attacker, any target;
+//!   as in JIP; `s_VATSHitDT`, a negative one as 0), in place of the exe's `0x7700F0`
+//!   (`VATSMenu::DoIdle`, `007ec810`); until a hit has been reckoned that way (`-FLT_MAX`) the
+//!   exe's call runs.
 //!
 //! Threads: every seam runs on the main thread (the UI, the INI reader); the handlers keep no
 //! state and take no slot.
@@ -94,6 +106,17 @@ pub const CORNER_MESSAGE: [SiteSlot; 3] = [
 /// JIP's corner message text buffer: 0x203 letters and the end.
 pub const CORNER_MESSAGE_TEXT: u32 = 0x204;
 
+/// G80's seam: `SetInfoForRef`'s weapon test (words: the weapon, the reference; the answer's low
+/// byte is the test's: 1 playable, 0 not).
+pub const ROLLOVER_WEAPON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0077_7123);
+/// G121's seam: `VATSMenu::DoIdle`'s target damage threshold (words: the player, the target;
+/// the answer is the threshold's bits; none runs the exe's call).
+pub const VATS_TARGET_DT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_ce32);
+/// `kXData_ExtraWeaponModFlags`.
+const EXTRA_WEAPON_MOD_FLAGS: u32 = 0x8D;
+/// The HUD's crosshair name buffer (0x104 bytes).
+const ROLLOVER_NAME: u32 = 0x011d_9c48;
+
 /// The group's fix seams in address order.
 pub const FIX_SITES: [SiteSlot; 8] = [
     CONSOLE_KEY,
@@ -121,6 +144,8 @@ pub const AREA: Area = Area {
         CORNER_MESSAGE[0].addr(),
         CORNER_MESSAGE[1].addr(),
         CORNER_MESSAGE[2].addr(),
+        ROLLOVER_WEAPON.addr(),
+        VATS_TARGET_DT.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
@@ -141,6 +166,8 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(CHARGEN_QUEST, chargen_quest);
     e.on_site(CONSOLE_KEY, console_key);
     e.on_site(ORPHANED_TILES, clear_orphaned_tiles);
+    e.on_site(ROLLOVER_WEAPON, rollover_weapon);
+    e.on_site(VATS_TARGET_DT, vats_target_dt);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -271,3 +298,41 @@ pub fn corner_message_text_size(e: &mut Engine) -> u32 {
 #[cfg(test)]
 #[path = "ga_tests.rs"]
 mod tests;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RolloverWeaponHook.
+/// G80: a weapon whose flag byte +0x100 has 0x80 (not playable) answers 0 and nothing else
+/// happens. Otherwise, when the reference (`[ebp+8]`) has `ExtraWeaponModFlags` with its flags
+/// byte +0xC set, "+" is appended to the crosshair name (`0x11D9C48`), and the answer is 1.
+/// nv-rs's own: the "+" and its end go in only within the 0x104-byte buffer (a name of 0x102
+/// bytes or fewer); JIP writes them past a longer one.
+fn rollover_weapon(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (weapon, reference) = (a[0], a[1]);
+    if e.mem.u8(weapon + 0x100) & 0x80 != 0 {
+        return Some(0);
+    }
+    let flags = crate::commands::extra::refr_extra(e, reference, EXTRA_WEAPON_MOD_FLAGS);
+    if flags != 0 && e.mem.u8(flags + 0xC) != 0 {
+        let length = e.mem.cstr(ROLLOVER_NAME).len() as u32;
+        if length + 1 < 0x104 {
+            e.mem.write(ROLLOVER_NAME + length, b"+\0");
+        }
+    }
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetVATSTargetDTHook.
+/// G121: the threshold JIP's hit damage last used (`s_VATSHitDT`), see [`vats_dt_answer`].
+fn vats_target_dt(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    vats_dt_answer(super::gc::damage::vats_hit_dt(e))
+}
+
+/// `GetVATSTargetDTHook` on the recorded threshold `dt`: `-FLT_MAX` (no hit reckoned) gives no
+/// answer (JIP jumps to the exe's `0x7700F0` with the same arguments); a float with its sign
+/// bit set gives 0.0 (`CMOVS`, so -0.0 too); any other its own bits.
+fn vats_dt_answer(dt: f32) -> Option<u32> {
+    let bits = dt.to_bits();
+    if bits == 0xFF7F_FFFF {
+        return None;
+    }
+    Some(if bits & 0x8000_0000 != 0 { 0 } else { bits })
+}

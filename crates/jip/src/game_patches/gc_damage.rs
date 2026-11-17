@@ -23,8 +23,8 @@
 //! `0x9B5623` / `0x9B5702`, then their `SetTargetedLimb` at once, whose limb step `0x9B6E81` runs
 //! it), so nothing needs the word to cross threads; JIP's one static lets two hits built at once
 //! on two threads cross (one then takes the other's word and limb, or none: no DT, no DR, no
-//! minimum). Here each OS thread keeps its own word, keyed by the run (`KernelRef::id()`, the
-//! same in every thread's engine of a run): every game thread is its own OS thread, with stepped
+//! minimum). Here each OS thread keeps its own word, keyed by the run (the run's id in
+//! [`HitDamageState`], a process-wide count; the same in every thread's engine of a run): every game thread is its own OS thread, with stepped
 //! threads (`thread_host`: one coroutine OS thread each, one engine handed between them) and
 //! real threads (`NV_THREADS=real`: one engine each) alike, so on one thread the port does
 //! exactly what JIP does, and a hit on another thread can neither take nor overwrite it.
@@ -41,7 +41,7 @@
 use crate::commands::havok_refs::{is_actor, is_projectile};
 use engine_core::extend::{jip_patches, Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 /// O1's wrap: `HitData::ReduceDamage`.
 pub const REDUCE_DAMAGE: WrapSlot = WrapSlot::new(Owner::Jip, 0x009b_5a30);
@@ -53,39 +53,56 @@ pub const HIT_LOCATION: SiteSlot = SiteSlot::new(Owner::Jip, 0x009b_6e81);
 /// G119's seam: the ammo's script effect in `Actor::HitMe`.
 pub const AMMO_IMPACT_SCRIPT: SiteSlot = SiteSlot::new(Owner::Jip, 0x0089_abdc);
 
-/// JIP's run-wide statics of the hit damage: `s_VATSHitDT` (the last threshold, read by JIP's
-/// VATS menu patch G121; `-FLT_MAX` until a hit; JIP sets it back to `-FLT_MAX` when O1 is
-/// switched off in the game, which comes with G121, nothing reading it before) and
-/// `s_condDRDTPenalty` (the armour condition factor of O12, set by `SetArmorConditionPenalty`;
-/// 1.0), the floats as their bits. JIP's third, `s_doCalcDamage`, is per thread ([`pending_word`]).
+/// JIP's run-wide statics of the hit damage and the combat formulas: `s_VATSHitDT` (the last
+/// threshold, read by JIP's VATS menu patch G121; `-FLT_MAX` until a hit; JIP sets it back to
+/// `-FLT_MAX` when O1 is switched off in the game with `SetOptionalPatch(1, 0)`, not built yet:
+/// that reset comes with it, listed with it in `commands::jip_fn_utility`), `s_condDRDTPenalty`
+/// (the armour condition factor of O12 and G85, set by
+/// `SetArmorConditionPenalty`; 1.0), `s_condDmgPenalty` (G84's weapon condition factor, set by
+/// `SetConditionDamagePenalty`; 0.67) and `s_noMovementCombat` (G126, `ToggleNoMovementCombat`),
+/// the floats as their bits; and the run's id ([`HitDamageState::run`]). JIP's
+/// `s_doCalcDamage` is per thread ([`pending_word`]).
 pub struct HitDamageState {
     vats_hit_dt: AtomicU32,
     condition_penalty: AtomicU32,
+    damage_penalty: AtomicU32,
+    no_movement_combat: AtomicBool,
+    /// This run's id: a process-wide count, one per run's slot (every thread's engine of a run
+    /// shares the slot, so the id). The deferral's word is kept by it: a run's engine dropped
+    /// with a word pending leaves it to no later run on the same thread, as a kernel address,
+    /// which a later run may get again, would.
+    run: usize,
 }
+
+/// The ids [`HitDamageState::run`] takes, counted over the process.
+static NEXT_RUN: AtomicUsize = AtomicUsize::new(1);
 
 impl Default for HitDamageState {
     fn default() -> Self {
         HitDamageState {
             vats_hit_dt: AtomicU32::new((-f32::MAX).to_bits()),
             condition_penalty: AtomicU32::new(1.0f32.to_bits()),
+            damage_penalty: AtomicU32::new(0.67f32.to_bits()),
+            no_movement_combat: AtomicBool::new(false),
+            run: NEXT_RUN.fetch_add(1, Ordering::Relaxed),
         }
     }
 }
 
-fn state(e: &mut Engine) -> &HitDamageState {
+pub(super) fn state(e: &mut Engine) -> &HitDamageState {
     e.ext_free::<HitDamageState>()
 }
 
 thread_local! {
-    /// `s_doCalcDamage` of this OS thread, by run (`KernelRef::id()`): 0, or a deferred
+    /// `s_doCalcDamage` of this OS thread, by run ([`HitDamageState::run`]): 0, or a deferred
     /// `ReduceDamage` call's word + 1 (see the module's "Threads").
     static PENDING: std::cell::RefCell<Vec<(usize, u32)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// This thread's `s_doCalcDamage` in `e`'s run: 0 (none), or the deferred call's word + 1.
-pub fn pending_word(e: &Engine) -> u32 {
-    let run = e.kernel.id();
+pub fn pending_word(e: &mut Engine) -> u32 {
+    let run = state(e).run;
     PENDING.with(|p| {
         p.borrow()
             .iter()
@@ -95,8 +112,8 @@ pub fn pending_word(e: &Engine) -> u32 {
 }
 
 /// Sets this thread's `s_doCalcDamage` in `e`'s run (0 clears it).
-fn set_pending(e: &Engine, word: u32) {
-    let run = e.kernel.id();
+fn set_pending(e: &mut Engine, word: u32) {
+    let run = state(e).run;
     PENDING.with(|p| {
         let mut p = p.borrow_mut();
         p.retain(|(r, _)| *r != run);
@@ -107,7 +124,7 @@ fn set_pending(e: &Engine, word: u32) {
 }
 
 /// This thread's `s_doCalcDamage` in `e`'s run, read and cleared (JIP's read, then `= 0`).
-fn take_pending(e: &Engine) -> u32 {
+fn take_pending(e: &mut Engine) -> u32 {
     let word = pending_word(e);
     if word != 0 {
         set_pending(e, 0);
@@ -120,11 +137,44 @@ pub fn vats_hit_dt(e: &mut Engine) -> f32 {
     f32::from_bits(state(e).vats_hit_dt.load(Ordering::Relaxed))
 }
 
+/// Sets `s_VATSHitDT` (tests of its readers).
+#[cfg(test)]
+pub(crate) fn set_vats_hit_dt(e: &mut Engine, dt: f32) {
+    state(e).vats_hit_dt.store(dt.to_bits(), Ordering::Relaxed);
+}
+
 /// `s_condDRDTPenalty` set (for `SetArmorConditionPenalty`, G85's command).
 pub fn set_condition_penalty(e: &mut Engine, value: f32) {
     state(e)
         .condition_penalty
         .store(value.to_bits(), Ordering::Relaxed);
+}
+
+/// `s_condDRDTPenalty` (O12's and G85's factor).
+pub fn condition_penalty(e: &mut Engine) -> f32 {
+    f32::from_bits(state(e).condition_penalty.load(Ordering::Relaxed))
+}
+
+/// `s_condDmgPenalty` (G84's factor).
+pub fn damage_penalty(e: &mut Engine) -> f32 {
+    f32::from_bits(state(e).damage_penalty.load(Ordering::Relaxed))
+}
+
+/// `s_condDmgPenalty` set (for `SetConditionDamagePenalty`, G84's command).
+pub fn set_damage_penalty(e: &mut Engine, value: f32) {
+    state(e)
+        .damage_penalty
+        .store(value.to_bits(), Ordering::Relaxed);
+}
+
+/// `s_noMovementCombat` (G126).
+pub fn no_movement_combat(e: &mut Engine) -> bool {
+    state(e).no_movement_combat.load(Ordering::Relaxed)
+}
+
+/// `s_noMovementCombat` set (for `ToggleNoMovementCombat`, G126's command).
+pub fn set_no_movement_combat(e: &mut Engine, on: bool) {
+    state(e).no_movement_combat.store(on, Ordering::Relaxed);
 }
 
 pub(super) fn install_fixes(e: &mut Engine) {

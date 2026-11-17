@@ -307,8 +307,17 @@ pub(crate) fn text_image(
     }
 }
 
+/// Elsewhere: no text (the start screen's card and logo only, the frame-rate counter no numbers),
+/// said once in the log: the text is drawn by Windows' GDI in Windows' fonts, and no font or
+/// rasteriser of the port's own draws it yet.
 #[cfg(not(windows))]
 pub(crate) fn text_image(_text: &str, _height: u32, _font: Font) -> Option<(u32, u32, Vec<u8>)> {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        eprintln!(
+            "NV_D3D9 wgpu: no text is drawn on this system (it is drawn by Windows' GDI): the start screen shows its card and logo only, the F11 frame-rate counter no numbers"
+        );
+    });
     None
 }
 
@@ -447,6 +456,7 @@ pub(crate) fn capture_output() -> Option<Capture> {
         let reader = std::thread::Builder::new()
             .name("nv-rs output".into())
             .spawn(move || {
+                qos::thread_started();
                 let (mut buf, mut line) = ([0u8; 4096], Vec::new());
                 loop {
                     let mut n = 0u32;

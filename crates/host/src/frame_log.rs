@@ -222,15 +222,7 @@ fn stage_values() -> String {
 
 /// The Presents submitted so far (this frame's number) and the last one the backend carried out.
 fn presents(e: &mut Engine) -> (u32, Option<(u32, Instant)>) {
-    #[cfg(windows)]
-    {
-        engine_platform::d3d9real::presents(e).unwrap_or((0, None))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = e;
-        (0, None)
-    }
+    engine_platform::d3d9real::presents(e).unwrap_or((0, None))
 }
 
 #[cfg(test)]

@@ -34,7 +34,17 @@ fn ga_seams_are_jips_addresses() {
         ]
     );
     let corner: Vec<u32> = CORNER_MESSAGE.iter().map(|s| s.addr()).collect();
-    assert_eq!(AREA.fix_sites, [sites, corner].concat());
+    assert_eq!(ROLLOVER_WEAPON.addr(), 0x0077_7123);
+    assert_eq!(VATS_TARGET_DT.addr(), 0x007e_ce32);
+    assert_eq!(
+        AREA.fix_sites,
+        [
+            sites,
+            corner,
+            vec![ROLLOVER_WEAPON.addr(), VATS_TARGET_DT.addr()]
+        ]
+        .concat()
+    );
     assert!(AREA.fix_wraps.is_empty() && AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
 }
 
@@ -286,4 +296,148 @@ fn g10_each_seam_answers_jips_text_buffer() {
         0x104,
         "the queue reads FIXES too"
     );
+}
+
+/// G80's stand-ins: a weapon at `AREA_AT + 0x400` with flag byte +0x100 `flags`, a reference at
+/// `AREA_AT + 0x800` whose list holds `ExtraWeaponModFlags` with the flags `mods` (none when
+/// `None`), and the crosshair name `name`.
+fn g80_world(flags: u8, mods: Option<u32>, name: &[u8]) -> (Engine, u32, u32) {
+    let mut e = crate::commands::test_support::engine();
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    e.map(AREA_AT, 0x1000);
+    e.map(0x011d_9000, 0x1000);
+    let (weapon, reference) = (AREA_AT + 0x400, AREA_AT + 0x800);
+    e.mem.set_u8(weapon + 0x100, flags);
+    // Another extra kind first, so the lookup walks.
+    crate::commands::test_support::put_extra(&mut e, reference + 0x44, AREA_AT + 0xc00, 0x8C, 7);
+    if let Some(mods) = mods {
+        crate::commands::test_support::put_extra(
+            &mut e,
+            reference + 0x44,
+            AREA_AT + 0xc40,
+            0x8D,
+            mods,
+        );
+    }
+    e.mem.set_cstr(0x011d_9c48, name);
+    // The byte after the buffer, to see a write past it.
+    e.mem.set_u8(0x011d_9c48 + 0x104, 0xAA);
+    (e, weapon, reference)
+}
+
+/// G80 not installed, or installed with the row off: nothing answers at its seam; with the
+/// fixes in, its handler answers there.
+#[test]
+fn g80_seam_answers_only_with_the_fixes() {
+    let (mut e, weapon, reference) = g80_world(0, None, b"Gun");
+    crate::install_as(&mut e, false);
+    assert_eq!(
+        e.site(0x0077_7123, &[weapon, reference]),
+        None,
+        "not installed"
+    );
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site(0x0077_7123, &[weapon, reference]), None, "row off");
+    install_fixes(&mut e);
+    assert_eq!(e.site(0x0077_7123, &[weapon, reference]), Some(1));
+}
+
+/// JIP's `RolloverWeaponHook`: a weapon not playable (+0x100 bit 0x80) answers 0 and its name
+/// stays, mods or not; a playable one answers 1, and its name gets "+" only when the reference
+/// has `ExtraWeaponModFlags` with flags not 0 (low byte +0xC; a higher byte alone is no mod).
+#[test]
+fn g80_playable_weapon_with_mods_gets_a_plus() {
+    let cases: [(u8, Option<u32>, u32, &[u8]); 6] = [
+        (0x80, Some(1), 0, b"Gun"),
+        (0x81, None, 0, b"Gun"),
+        (0x7F, None, 1, b"Gun"),
+        (0, Some(0x100), 1, b"Gun"),
+        (0, Some(1), 1, b"Gun+"),
+        (0x7F, Some(4), 1, b"Gun+"),
+    ];
+    for (flags, mods, answer, name) in cases {
+        let (mut e, weapon, reference) = g80_world(flags, mods, b"Gun");
+        assert_eq!(
+            rollover_weapon(&mut e, &[weapon, reference]),
+            Some(answer),
+            "{flags:#x} {mods:?}"
+        );
+        assert_eq!(e.mem.cstr(0x011d_9c48), name, "{flags:#x} {mods:?}");
+    }
+}
+
+/// The "+" and its end stay inside the 0x104-byte name buffer: a 0x102-byte name gets it (its
+/// end at the last byte), a 0x103-byte one keeps its name (JIP would write one byte past it).
+#[test]
+fn g80_plus_only_within_the_name_buffer() {
+    let fits = vec![b'a'; 0x102];
+    let (mut e, weapon, reference) = g80_world(0, Some(1), &fits);
+    assert_eq!(rollover_weapon(&mut e, &[weapon, reference]), Some(1));
+    assert_eq!(
+        e.mem.cstr(0x011d_9c48),
+        [fits.clone(), b"+".to_vec()].concat()
+    );
+    assert_eq!(e.mem.u8(0x011d_9c48 + 0x104), 0xAA);
+    let full = vec![b'a'; 0x103];
+    let (mut e, weapon, reference) = g80_world(0, Some(1), &full);
+    assert_eq!(rollover_weapon(&mut e, &[weapon, reference]), Some(1));
+    assert_eq!(e.mem.cstr(0x011d_9c48), full);
+    assert_eq!(e.mem.u8(0x011d_9c48 + 0x104), 0xAA);
+}
+
+/// G121 not installed, or installed with the row off: nothing answers at its seam; with the
+/// fixes in and no hit reckoned by JIP's hit damage yet (`s_VATSHitDT` still `-FLT_MAX`), no
+/// answer either: the exe's call runs, as JIP jumps to it.
+#[test]
+fn g121_no_answer_until_a_hit_is_reckoned() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    assert_eq!(
+        e.site(0x007e_ce32, &[0x5000, 0x6000]),
+        None,
+        "not installed"
+    );
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site(0x007e_ce32, &[0x5000, 0x6000]), None, "row off");
+    install_fixes(&mut e);
+    assert_eq!(
+        vats_target_dt(&mut e, &[0x5000, 0x6000]),
+        None,
+        "no hit yet"
+    );
+    assert_eq!(
+        e.site(0x007e_ce32, &[0x5000, 0x6000]),
+        None,
+        "the exe's call"
+    );
+}
+
+/// JIP's `GetVATSTargetDTHook` on the recorded threshold: `-FLT_MAX` gives no answer; a
+/// threshold with its sign bit set (negative, -0.0, the next float above `-FLT_MAX`) gives 0.0;
+/// any other (0.0, a fraction, `FLT_MAX`) its own bits.
+#[test]
+fn g121_negative_thresholds_show_as_zero() {
+    assert_eq!(vats_dt_answer(-f32::MAX), None);
+    for dt in [-0.5f32, -0.0, -1.0e30, f32::from_bits(0xFF7F_FFFE)] {
+        assert_eq!(vats_dt_answer(dt), Some(0), "{dt}");
+    }
+    for dt in [0.0f32, 6.0, 0.25, f32::MAX] {
+        assert_eq!(vats_dt_answer(dt), Some(dt.to_bits()), "{dt}");
+    }
+}
+
+/// G121 with a hit recorded by JIP's hit damage: the seam answers through the real handler, a
+/// positive threshold as its bits (6.0) and a negative one as 0 (-0.5).
+#[test]
+fn g121_answers_the_recorded_threshold() {
+    let mut e = engine();
+    crate::install_as(&mut e, true);
+    install_fixes(&mut e);
+    crate::game_patches::gc::damage::set_vats_hit_dt(&mut e, 6.0);
+    assert_eq!(
+        e.site(0x007e_ce32, &[0x5000, 0x6000]),
+        Some(6.0f32.to_bits())
+    );
+    crate::game_patches::gc::damage::set_vats_hit_dt(&mut e, -0.5);
+    assert_eq!(e.site(0x007e_ce32, &[0x5000, 0x6000]), Some(0));
 }

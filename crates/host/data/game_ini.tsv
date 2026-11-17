@@ -15,6 +15,7 @@ nv-rs Display	bAmbientOcclusion	NV_AO	0	1 = new lighting: ambient occlusion, a s
 nv-rs Display	fAmbientOcclusionStrength	NV_AO_STRENGTH	0.7	How strong the ambient occlusion's shade is, from 0.1 (faint) to 1.0 (all of it); 0.7 is the default. Used only with bAmbientOcclusion=1.
 nv-rs Threads	bSteppedThreads	NV_THREADS	0	1 = the game's threads take turns, one at a time (the fallback); 0 = side by side on their own cores.
 nv-rs Threads	bRenderThread	NV_RENDER_THREAD	1	1 = the Direct3D 9 calls go to a drawing thread of their own; 0 = on the game's threads, as the original makes them.
+nv-rs Threads	bNotBackground	NV_NOT_BACKGROUND	1	1 = Windows does not slow the game down or move it to the slower cores when its window is not the active one (the default); 0 = let Windows decide: saves power and heat with the game in the background.
 nv-rs Fixes	bUncap	NV_UNCAP	1	Uncapped frame rate: the game's frame step without its sleep, so frames are not held to the original's pace (iFrameLimit paces it).
 nv-rs Fixes	bHighFrameRateLanding	NV_HF_LANDING	1	High-frame-rate landing: the player landing standing still falls as far as at 60 frames a second.
 nv-rs Fixes	bHighFrameRateSlowMotion	NV_HF_SLOWMO	1	High-frame-rate slow motion: the game's time multiplier moves to its target by the time passed, not by the frame.

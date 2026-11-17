@@ -1251,7 +1251,10 @@ pub(crate) fn start_thread(e: &mut Engine, i: usize) {
     std::thread::Builder::new()
         .name(format!("game thread {id}"))
         .stack_size(THREAD_STACK)
-        .spawn(move || run_thread(engine, world, i, start, parameter))
+        .spawn(move || {
+            qos::thread_started();
+            run_thread(engine, world, i, start, parameter)
+        })
         .expect("a real game thread");
 }
 
@@ -1439,7 +1442,19 @@ pub fn device_guard(e: &Engine) -> Option<DeviceGuard> {
 /// lock, which must never wait for the kernel lock: then `f` runs with both held. With stepped
 /// threads it just runs `f`.
 pub fn without_kernel_lock<R>(e: &Engine, f: impl FnOnce() -> R) -> R {
-    let Some(world) = e.real.as_ref().map(|r| r.world) else {
+    released_kernel(e.real.as_ref().map(|r| r.world), f)
+}
+
+/// [`without_kernel_lock`] for work that needs the engine itself (a test that calls a seam's
+/// writes from a thread that does not hold the lock).
+pub fn without_kernel_lock_mut<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> R {
+    let world = e.real.as_ref().map(|r| r.world);
+    released_kernel(world, || f(e))
+}
+
+/// [`without_kernel_lock`]'s work on the run's lock world (`None`: stepped threads).
+fn released_kernel<R>(world: Option<&'static World>, f: impl FnOnce() -> R) -> R {
+    let Some(world) = world else {
         return f();
     };
     if world.device.held_here() || !world.kernel.held_here() {
@@ -2812,7 +2827,10 @@ fn make_pool(e: &mut Engine, world: Option<&'static World>, helpers: usize) -> &
         std::thread::Builder::new()
             .name(format!("render helper {number}"))
             .stack_size(THREAD_STACK)
-            .spawn(move || run_helper(engine, world, pool, number))
+            .spawn(move || {
+                qos::thread_started();
+                run_helper(engine, world, pool, number)
+            })
             .expect("a render helper thread");
     }
     pool
@@ -3193,7 +3211,10 @@ fn make_draw_helper(e: &mut Engine, world: Option<&'static World>) -> &'static D
     std::thread::Builder::new()
         .name("nv-draw".into())
         .stack_size(THREAD_STACK)
-        .spawn(move || run_draw_helper(engine, world, d))
+        .spawn(move || {
+            qos::thread_started();
+            run_draw_helper(engine, world, d)
+        })
         .expect("the drawing helper's thread");
     d
 }
