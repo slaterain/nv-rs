@@ -564,6 +564,27 @@ pub const PLAY_SHOW_FRAME_RATE: bool = false;
 /// a fix). `crates/host/data/game_ini.tsv`'s `bAmbientOcclusion` row is held to it by a test.
 pub const PLAY_AMBIENT_OCCLUSION: bool = false;
 
+/// Whether the sun shadows (port-added: `d3d9_wgpu::sun_shadow`, Vulkan only) are on when neither
+/// `NV_SUN_SHADOWS` nor `Fallout.ini`'s `bSunShadows` says ([`Choice::sun_shadows`]): off, in every
+/// preset (a new look, not a fix). `crates/host/data/game_ini.tsv`'s `bSunShadows` row is held to it
+/// by a test.
+pub const PLAY_SUN_SHADOWS: bool = false;
+/// How strong the new lighting's shade is when neither `NV_AO_STRENGTH` nor `Fallout.ini`'s
+/// `fAmbientOcclusionStrength` says ([`Choice::ambient_occlusion_strength`]): the step's own
+/// default (`d3d9_wgpu::scene_light::STRENGTH`). `crates/host/data/game_ini.tsv`'s
+/// `fAmbientOcclusionStrength` row is held to it by a test.
+pub const PLAY_AMBIENT_OCCLUSION_STRENGTH: f32 = d3d9_wgpu::scene_light::STRENGTH;
+/// Whether Windows is told the game is not background work (`qos`: execution-speed throttling off,
+/// timer requests honoured, for the process and each thread the port starts) when neither
+/// `NV_NOT_BACKGROUND` nor `Fallout.ini`'s `[nv-rs Threads] bNotBackground` says
+/// ([`Choice::not_background`]): on, in every run and every preset, the original-behaviour one too
+/// (the maintainer, 2026-11-17: "on by default, no background slowdown"). A platform matter, not a
+/// game fix: it changes nothing the game sees, only how Windows schedules the program when its
+/// window is not the active one (measured 2026-11-17: a hidden run without it once ran about a
+/// third slower, every part of the frame alike). `crates/host/data/game_ini.tsv`'s `bNotBackground`
+/// row is held to it by a test.
+pub const PLAY_NOT_BACKGROUND: bool = true;
+
 /// Who draws the game ([`Choice::renderer`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Renderer {
@@ -623,7 +644,7 @@ impl Preset {
 }
 
 /// What this run does, bound before the first frame ([`install`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Choice {
     pub preset: Preset,
     /// Frames a second at most, 0 for no limit. Only the uncapped step reads it: the original's
@@ -666,6 +687,24 @@ pub struct Choice {
     /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
     /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
     pub ambient_occlusion: bool,
+    /// Whether the sun shadows are on (`d3d9_wgpu::sun_shadow`, Vulkan only): `NV_SUN_SHADOWS` when
+    /// set (`1` or `debug` on, else off: `1` puts the shadows in the game's own lighting, `debug`
+    /// shows an engineers' overlay instead); else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bSunShadows`;
+    /// else [`PLAY_SUN_SHADOWS`], off. Not part of any preset.
+    pub sun_shadows: bool,
+    /// How strong its shade is, from 0.1 (faint) to 1 (all of it): `NV_AO_STRENGTH` when it is a
+    /// number; else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display]
+    /// fAmbientOcclusionStrength`; else [`PLAY_AMBIENT_OCCLUSION_STRENGTH`]. Clamped to that range
+    /// (`d3d9_wgpu::scene_light::clamp_strength`). Not part of any preset.
+    pub ambient_occlusion_strength: f32,
+    /// Whether Windows is told the game is not background work (`qos::apply_at_start`):
+    /// `NV_NOT_BACKGROUND` when set (`1` on, else off); else, in a launcher's play run,
+    /// `Fallout.ini`'s `[nv-rs Threads] bNotBackground`; else [`PLAY_NOT_BACKGROUND`], on. Not part
+    /// of any preset: vanilla keeps it too.
+    pub not_background: bool,
+    /// Who decided [`Choice::not_background`] (for its start-up line): `None` the default, else the
+    /// variable or the file's key.
+    pub not_background_by: Option<&'static str>,
     /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,
     /// for stepped threads; `crate::draw_thread::install` decides the draw family's capture mode from it).
     pub draw_poison: bool,
@@ -692,6 +731,10 @@ impl Choice {
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
             ambient_occlusion: PLAY_AMBIENT_OCCLUSION,
+            sun_shadows: PLAY_SUN_SHADOWS,
+            ambient_occlusion_strength: PLAY_AMBIENT_OCCLUSION_STRENGTH,
+            not_background: PLAY_NOT_BACKGROUND,
+            not_background_by: None,
             ini_note: None,
             draw_poison: false,
             draw_check: false,
@@ -849,6 +892,15 @@ impl Choice {
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
             ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
+            sun_shadows: ini.sun_shadows.unwrap_or(PLAY_SUN_SHADOWS),
+            ambient_occlusion_strength: ini.ambient_occlusion_strength.map_or(
+                PLAY_AMBIENT_OCCLUSION_STRENGTH,
+                d3d9_wgpu::scene_light::clamp_strength,
+            ),
+            not_background: ini.not_background.unwrap_or(PLAY_NOT_BACKGROUND),
+            not_background_by: ini
+                .not_background
+                .map(|_| "Fallout.ini's [nv-rs Threads] bNotBackground"),
             ini_note: ini.bad_line(),
             draw_poison: env(DRAW_THREAD.env).as_deref().map(str::trim) == Some("poison"),
             draw_check: env(DRAW_THREAD_CHECK).as_deref().map(str::trim) == Some("1"),
@@ -916,6 +968,20 @@ impl Choice {
         }
         if let Some(value) = env("NV_AO").filter(|v| !v.trim().is_empty()) {
             choice.ambient_occlusion = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_SUN_SHADOWS").filter(|v| !v.trim().is_empty()) {
+            choice.sun_shadows = matches!(value.trim(), "1" | "debug");
+        }
+        // A number, clamped; anything else leaves the strength as it is.
+        if let Some(value) = env("NV_AO_STRENGTH")
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .filter(|v| v.is_finite())
+        {
+            choice.ambient_occlusion_strength = d3d9_wgpu::scene_light::clamp_strength(value);
+        }
+        if let Some(value) = env("NV_NOT_BACKGROUND").filter(|v| !v.trim().is_empty()) {
+            choice.not_background = value.trim() == "1";
+            choice.not_background_by = Some("NV_NOT_BACKGROUND");
         }
         if test {
             choice.preset = Preset::Vanilla;
@@ -2023,6 +2089,168 @@ mod tests {
         assert!(!with_ini(None, on, &[("NV_AO", "0")]).ambient_occlusion);
         let asked = Choice::from_parts(None, env_of(&[("NV_AO", "1")])).unwrap();
         assert!(asked.ambient_occlusion);
+    }
+
+    /// The sun shadows are off in every run and preset unless asked for: `bSunShadows=1` in a
+    /// launcher's play run, or `NV_SUN_SHADOWS=1` (or `debug`) anywhere, which wins.
+    #[test]
+    fn the_sun_shadows_are_off_unless_asked_for() {
+        assert!(!Choice::vanilla().sun_shadows);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!(
+                "[nv-rs General]
+sPreset={preset}
+"
+            );
+            assert!(!with_ini(None, &file, &[]).sun_shadows, "{preset}");
+        }
+        assert!(!Choice::from_parts(None, no_env).unwrap().sun_shadows);
+        let on = "[nv-rs Display]
+bSunShadows=1
+";
+        assert!(with_ini(None, on, &[]).sun_shadows);
+        assert!(!with_ini(None, on, &[]).ambient_occlusion);
+        assert!(
+            !with_ini(
+                None,
+                "[nv-rs Display]
+bSunShadows=0
+",
+                &[]
+            )
+            .sun_shadows
+        );
+        let bad = with_ini(
+            None,
+            "[nv-rs Display]
+bSunShadows=yes
+",
+            &[],
+        );
+        assert!(!bad.sun_shadows);
+        assert!(bad.ini_note.unwrap().ends_with("bSunShadows=yes"));
+        assert!(!with_ini(None, on, &[("NV_SHOT", "x")]).sun_shadows);
+        assert!(!with_ini(None, on, &[("NV_SUN_SHADOWS", "0")]).sun_shadows);
+        let one = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "1")])).unwrap();
+        assert!(one.sun_shadows && !one.ambient_occlusion);
+        let debug = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "debug")])).unwrap();
+        assert!(debug.sun_shadows && !debug.ambient_occlusion);
+        let other = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "yes")])).unwrap();
+        assert!(!other.sun_shadows);
+    }
+
+    /// The new lighting's strength: the step's default in every run unless asked for;
+    /// `fAmbientOcclusionStrength` in a launcher's play run, `NV_AO_STRENGTH` anywhere (which wins);
+    /// both clamped to 0.1..1; a value that is no number is the default (and named in the note).
+    #[test]
+    fn the_new_lightings_strength_is_the_default_unless_asked_for() {
+        let default = d3d9_wgpu::scene_light::STRENGTH;
+        assert_eq!(PLAY_AMBIENT_OCCLUSION_STRENGTH, default);
+        assert_eq!(Choice::vanilla().ambient_occlusion_strength, default);
+        assert_eq!(
+            Choice::from_parts(None, no_env)
+                .unwrap()
+                .ambient_occlusion_strength,
+            default
+        );
+        let strength = |ini: &str, pairs: &'static [(&'static str, &'static str)]| {
+            with_ini(None, ini, pairs).ambient_occlusion_strength
+        };
+        assert_eq!(strength("[General]\nbUseThreadedAI=1\n", &[]), default);
+        let file = "[nv-rs Display]\nfAmbientOcclusionStrength=0.9\n";
+        assert_eq!(strength(file, &[]), 0.9);
+        // Clamped at both ends.
+        assert_eq!(
+            strength("[nv-rs Display]\nfAmbientOcclusionStrength=3\n", &[]),
+            1.0
+        );
+        assert_eq!(
+            strength("[nv-rs Display]\nfAmbientOcclusionStrength=0\n", &[]),
+            0.1
+        );
+        let bad = with_ini(
+            None,
+            "[nv-rs Display]\nfAmbientOcclusionStrength=strong\n",
+            &[],
+        );
+        assert_eq!(bad.ambient_occlusion_strength, default);
+        assert!(bad
+            .ini_note
+            .unwrap()
+            .ends_with("fAmbientOcclusionStrength=strong"));
+        // A test never reads the file; the variable decides there and over the file.
+        assert_eq!(strength(file, &[("NV_SHOT", "x")]), default);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "0.6")]), 0.6);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "-2")]), 0.1);
+        assert_eq!(strength(file, &[("NV_AO_STRENGTH", "x")]), 0.9);
+        let asked = Choice::from_parts(None, env_of(&[("NV_AO_STRENGTH", "0.8")])).unwrap();
+        assert_eq!(asked.ambient_occlusion_strength, 0.8);
+    }
+
+    /// Windows is told the game is not background work in every run and preset (vanilla, a test
+    /// and a play run alike) unless turned off: `bNotBackground=0` in a launcher's play run, or
+    /// `NV_NOT_BACKGROUND=0` anywhere, which wins. Its variable makes no run a test.
+    #[test]
+    fn not_background_is_on_unless_turned_off() {
+        assert!(Choice::vanilla().not_background);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!("[nv-rs General]\nsPreset={preset}\n");
+            let choice = with_ini(None, &file, &[]);
+            assert!(choice.not_background, "{preset}");
+            assert_eq!(choice.not_background_by, None, "{preset}");
+        }
+        let plain = Choice::from_parts(None, no_env).unwrap();
+        assert!(plain.not_background && plain.not_background_by.is_none());
+        assert!(
+            with_ini(
+                None,
+                "[nv-rs General]\nsPreset=fixes\n",
+                &[("NV_SHOT", "x")]
+            )
+            .not_background
+        );
+        let off = "[nv-rs Threads]\nbNotBackground=0\n";
+        let by_file = with_ini(None, off, &[]);
+        assert!(!by_file.not_background);
+        assert_eq!(
+            by_file.not_background_by,
+            Some("Fallout.ini's [nv-rs Threads] bNotBackground")
+        );
+        assert!(with_ini(None, "[nv-rs Threads]\nbNotBackground=1\n", &[]).not_background);
+        let bad = with_ini(None, "[nv-rs Threads]\nbNotBackground=yes\n", &[]);
+        assert!(bad.not_background);
+        assert!(bad.ini_note.unwrap().ends_with("bNotBackground=yes"));
+        // A test never reads the file (on); the variable decides there and over the file.
+        assert!(with_ini(None, off, &[("NV_SHOT", "x")]).not_background);
+        for value in ["0", "no", "2"] {
+            let pairs: &'static [(&'static str, &'static str)] = match value {
+                "0" => &[("NV_NOT_BACKGROUND", "0")],
+                "no" => &[("NV_NOT_BACKGROUND", "no")],
+                _ => &[("NV_NOT_BACKGROUND", "2")],
+            };
+            let choice = Choice::from_parts(None, env_of(pairs)).unwrap();
+            assert!(!choice.not_background, "{value}");
+            assert_eq!(choice.not_background_by, Some("NV_NOT_BACKGROUND"));
+        }
+        let over_file = with_ini(
+            None,
+            "[nv-rs Threads]\nbNotBackground=1\n",
+            &[("NV_NOT_BACKGROUND", "0")],
+        );
+        assert!(!over_file.not_background);
+        let empty = Choice::from_parts(None, env_of(&[("NV_NOT_BACKGROUND", "")])).unwrap();
+        assert!(empty.not_background && empty.not_background_by.is_none());
+        // The variable alone is no test: a launcher's play run with it keeps play's preset and
+        // threads and says nothing about being a test.
+        let play = with_ini(None, "[General]\nx=1\n", &[("NV_NOT_BACKGROUND", "0")]);
+        assert_eq!(play.preset, Preset::Fixes);
+        assert_eq!(play.threads, PLAY_THREADS);
+        let env = |name: &str| match name {
+            "NV_SETTINGS" => Some("x".to_string()),
+            "NV_NOT_BACKGROUND" => Some("0".to_string()),
+            _ => None,
+        };
+        assert_eq!(play_run_taken_as_test(&play, env), None);
     }
 
     /// Lowest to highest: default, preset, settings.ini (the fallback), Fallout.ini, environment.

@@ -598,3 +598,19 @@ fn files_and_folders_found() {
     assert_eq!(res_of(&mut e, 0x2201, &[s(b"meshes/x.nif"), n(1)]), 0.0);
     assert_eq!(calls_to(HASH_PATH_FN).len(), before + 1);
 }
+
+/// `GetDefaultMessageTime`: JIP's 2.0 until `SetDefaultMessageTime` sets another (the setter
+/// sets no result); typed in the console, echoed (`DoConsolePrint`).
+#[test]
+fn default_message_time_read_and_set() {
+    let mut e = setup();
+    assert_eq!(call(&mut e, 0x2327, &[]).1, 2.0);
+    assert_eq!(call(&mut e, 0x2328, &[z(4.5)]).1, 0.0, "no result set");
+    assert_eq!(call(&mut e, 0x2327, &[]).1, 4.5);
+    assert_eq!(crate::game_patches::ga::default_message_time(&mut e), 4.5);
+    let (res, lines) = echoed(&mut e, 0x2327, 0, &[]);
+    assert_eq!(
+        (res, lines),
+        (4.5, vec![b"GetDefaultMessageTime >> 4.5".to_vec()])
+    );
+}

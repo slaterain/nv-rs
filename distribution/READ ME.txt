@@ -95,6 +95,11 @@ previous preview, open Settings.cmd, choose "Main thread (slower)" under Drawing
 tell us. Settings.cmd keeps that choice in Fallout.ini as bRenderThread=0; with 1 the drawing has its
 own thread.
 
+The game keeps its speed when its window is not the active one: nv-rs asks Windows not to slow it
+down or move it to the processor's slower cores while it is in the background. On a laptop this
+uses more power and makes more heat while the game runs behind other windows. To let Windows decide
+instead, set bNotBackground=0 in Fallout.ini's [nv-rs Threads] section.
+
 
 Renderer
 --------

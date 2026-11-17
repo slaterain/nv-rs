@@ -15,6 +15,9 @@ const fn row(addr: u32) -> Entry {
 
 /// The group's seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // G09 (fix row): QueueUIMessage 007052f0, its display time 0x70535C: JIP's QueueUIMessageHook
+    // gives the game's own callers the default message time (a built-in plugin's call is marked).
+    row(0x0070_535c),
     // G58 (fix row): InterfaceManager::Idle's console key query 0x70E5FE: JIP's
     // ToggleConsoleHook answers from the key bytes alone, so the console key works also while a
     // controller is connected (the exe's query answers 0 then: flag 0x11F35C8).
@@ -42,6 +45,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G11 (fix row): TraitMenu::DoEnter 007e6ea0: the description's buffer 0x200 -> 0x400 (one
     // seam for JIP's four writes 0x7E6EA6, 0x7E6F04, 0x7E6F09, 0x7E6F2B).
     row(0x007e_6f04),
+    // G121 (fix row): VATSMenu::DoIdle 007ec810, the target's damage threshold 0x7ECE32: JIP's
+    // GetVATSTargetDTHook answers the threshold its hit damage last used.
+    row(0x007e_ce32),
     // G17 (fix row): the TileMenu destructor 00a1eff0: JIP's jump over the menu's open byte clear.
     row(0x00a1_f035),
     // G08 (fix row): INISettingCollection::ReadSetting 00c44280: the text buffer 0x100 -> 0x400.
