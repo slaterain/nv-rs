@@ -304,6 +304,9 @@ impl Host {
                 fixes::Renderer::D3d9 => Backends::Real,
             });
         }
+        // From here the run's renderer is chosen: the display part of the machine table may be
+        // made ([`display_table_text`] refuses before).
+        RENDERER_CHOSEN.store(true, std::sync::atomic::Ordering::Relaxed);
         // The sun light from the sky's discs (`fixes::Choice::light_from_sky`: with the sun shadows
         // on, `bSunLightFromSky` / `NV_SUN_LIGHT_FROM_SKY`, on by default): the game's sun light is
         // turned to come from the sun disc by day and the moon by night, so the lit sides, the game's
@@ -386,7 +389,7 @@ impl Host {
         start_crt_io(&mut engine, &mut movement);
         // The machine table before the C initializers: `__get_sse2_info` (`00ed1927`, from
         // the initializer `00ed454f`) asks the processor, which the table answers.
-        load_adapter_table(&mut engine);
+        load_adapter_table(&mut engine)?;
         start_cinit_float(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         // A skipped initializer leaves its global (a setting among them) unbuilt, silently
@@ -506,7 +509,8 @@ pub fn error_status(err: &str) -> i32 {
 /// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
 /// pieces that are still Windows-only, instead of a run that would go on without them and fail
 /// somewhere less clear. The game's paths and file listings are provided
-/// (`engine_platform::host_paths`), and so is the sound on the speakers. The game's window with its
+/// (`engine_platform::host_paths`), and so is the sound on the speakers, and this machine's tables
+/// (`engine_platform::machine_table`, the sound's `engine_platform::dsound::fixed_table`). The game's window with its
 /// mouse and keyboard is provided on Linux (winit, X11 and Wayland), not yet on macOS, where it
 /// needs the program's main thread. On a processor other than x86-64 (Apple silicon) it also names
 /// what differs there.
@@ -540,10 +544,7 @@ fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
              window needs the program's main thread), ",
         );
     }
-    why.push_str(
-        "this machine's tables (display adapter, sound devices, folders), which are measured on \
-         Windows, and code pages other than Windows' Western one (1252)",
-    );
+    why.push_str("code pages other than Windows' Western one (1252)");
     if !x86_64 {
         why.push_str(
             "; and on this processor the game's x87 maths (not yet exact off x86-64) and the \
@@ -638,6 +639,8 @@ pub fn adapter_table_text() -> Option<String> {
 /// (a test's table), else the table of this machine (`engine_platform::machine_table`), made once
 /// per run from what the system reports, with the game's Documents and AppData inside nv-rs's own
 /// folder ([`own_folder`], made here when missing). What could not be answered is said in the log.
+/// The display and the card are not in it: [`display_table_text`], made in the start after the
+/// renderer choice, so nothing here reads that choice.
 #[cfg(not(windows))]
 pub fn adapter_table_text() -> Option<String> {
     if let Some(path) = std::env::var_os("NV_D3D9_ADAPTER") {
@@ -723,12 +726,63 @@ pub fn wgpu_cache_path() -> Option<PathBuf> {
 /// Gives the Direct3D 9 layer the player's adapter table ([`adapter_table_path`]) before the
 /// renderer's start-up asks about the adapter. Without the file nothing is loaded: the first
 /// Direct3D 9 query stops that stage and its message says how to capture the table.
-fn load_adapter_table(e: &mut Engine) {
+/// Off Windows the table is this machine's part ([`adapter_table_text`]) and, after it, the display
+/// and card part ([`display_table_text`]), made here: after the run's renderer choice. A card the
+/// game cannot draw on refuses the start (the error).
+fn load_adapter_table(e: &mut Engine) -> Result<(), String> {
     if let Some(text) = adapter_table_text() {
+        #[cfg(not(windows))]
+        let text = match display_table_text()? {
+            Some(display) => text + &display,
+            None => text,
+        };
         engine_platform::d3d9::load_adapter_table(e, &text);
     }
     if let Some(dir) = texture_cache_path() {
         engine_platform::d3dx::set_texture_cache(e, dir);
+    }
+    Ok(())
+}
+
+/// Set once the start has made the run's renderer choice ([`Host::start_with`]): the display part
+/// of the machine table asks whether the run draws, which that choice fixes for the whole run, so
+/// it must not be made before (review of #681: the settings' reading once made it first).
+static RENDERER_CHOSEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// [`display_table_text`]'s guard: an error, never a silent "draws nothing", when the renderer has
+/// not been chosen yet.
+#[cfg_attr(windows, allow(dead_code))]
+fn renderer_chosen_first(chosen: bool) -> Result<(), String> {
+    if chosen {
+        Ok(())
+    } else {
+        Err(
+            "nv-rs: the machine table's display part was asked for before the run chose its \
+             renderer (a start-up order fault in the port)"
+                .into(),
+        )
+    }
+}
+
+/// The display and card part of the machine table on Linux and macOS
+/// (`engine_platform::machine_table::this_display`), for a run that draws (the renderer chosen by
+/// now: `NV_D3D9`, or the run's choice made in [`Host::start_with`] before this): `None` with a
+/// test's table (`NV_D3D9_ADAPTER`), which has its own. What could not be answered is said in the
+/// log; a card the game cannot draw on is the error.
+#[cfg(not(windows))]
+pub fn display_table_text() -> Result<Option<String>, String> {
+    renderer_chosen_first(RENDERER_CHOSEN.load(std::sync::atomic::Ordering::Relaxed))?;
+    if std::env::var_os("NV_D3D9_ADAPTER").is_some() {
+        return Ok(None);
+    }
+    let (text, problems, refusal) =
+        engine_platform::machine_table::this_display(engine_platform::d3d9real::wanted());
+    for line in problems {
+        eprintln!("{line}");
+    }
+    match refusal {
+        Some(why) => Err(format!("nv-rs cannot draw the game here: {why}")),
+        None => Ok(Some(text)),
     }
 }
 
@@ -965,8 +1019,11 @@ mod tests {
         for x86_64 in [true, false] {
             for apple in [true, false] {
                 let why = super::not_provided_on(x86_64, apple).unwrap_err();
-                for piece in ["sound devices", "tables", "code page"] {
-                    assert!(why.contains(piece), "{piece}: {why}");
+                assert!(why.contains("code page"), "{why}");
+                // This machine's tables are made from what the system reports (the display, the
+                // card, the sound device, the folders: engine-platform machine_table.rs, dsound.rs).
+                for gone in ["tables", "sound devices", "adapter", "folders"] {
+                    assert!(!why.contains(gone), "{gone}: {why}");
                 }
                 // The window with its mouse and keyboard: provided on Linux, not yet on macOS.
                 assert_eq!(why.contains("window"), apple, "{why}");
@@ -1040,6 +1097,43 @@ mod tests {
         assert!(missing.ends_with("FalloutNV.exe: not found"), "{missing}");
     }
 
+    /// The order of the start off Windows (review of #681): the settings' reading (which finds
+    /// `Fallout.ini` through the Documents folder) comes before the run's renderer choice, and must
+    /// not fix the choice to "draws nothing". Run in a child process of its own, as the choice is
+    /// the process's.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_settings_reading_leaves_the_renderer_choice_to_the_start() {
+        const CHILD: &str = "NV_HOST_TEST_CHOICE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let _ = crate::fixes::Choice::read_with(false);
+            assert!(crate::game_ini::path().is_some());
+            engine_platform::d3d9real::want_backend(engine_platform::d3d9real::Backends::Wgpu);
+            assert!(engine_platform::d3d9real::wanted());
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::the_settings_reading_leaves_the_renderer_choice_to_the_start",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("NV_D3D9")
+            .env_remove("NV_D3D9_ADAPTER")
+            .env("HOME", std::env::temp_dir())
+            .env_remove("XDG_DATA_HOME")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{text}");
+        assert!(text.contains("1 passed"), "{text}");
+        // The machine's part was not made by the settings' reading: no window system or card
+        // was asked there (those lines come only from the start's display part).
+        assert!(!text.contains("machine table: no display"), "{text}");
+    }
+
     /// Review of #631 (round 2): the start's expected stop off Windows ends with a status of its
     /// own (play.sh says it needs no report); any other error with 1.
     #[cfg(not(windows))]
@@ -1052,6 +1146,15 @@ mod tests {
         assert_eq!(super::error_status(&err), super::NOT_PROVIDED_STATUS);
         assert_eq!(super::NOT_PROVIDED_STATUS, 69);
         assert_eq!(super::error_status("FalloutNV.exe: not found"), 1);
+    }
+
+    /// The display part of the machine table is made only after the renderer choice: before it,
+    /// an error naming the order, never a table that silently says the run draws nothing.
+    #[test]
+    fn the_display_part_waits_for_the_renderer_choice() {
+        let why = super::renderer_chosen_first(false).unwrap_err();
+        assert!(why.contains("before the run chose its renderer"), "{why}");
+        assert_eq!(super::renderer_chosen_first(true), Ok(()));
     }
 
     #[test]
