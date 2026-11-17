@@ -110,19 +110,23 @@ mod single {
         .all(|&(x, r, c)| rsqrt(x) == r && rcp(x) == c)
     }
 
+    /// Off x86 the estimates are the model of the reference machine's (engine-core `estimate`,
+    /// whose tables were measured on it): the tests compare with its answers there too.
     #[cfg(all(test, not(any(target_arch = "x86", target_arch = "x86_64"))))]
     pub fn reference_estimates() -> bool {
-        false
+        true
     }
 
+    /// `RCPSS` off x86: the reference machine's, from engine-core's model of it.
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    pub fn rcp(_x: u32) -> u32 {
-        panic!("RCPSS (the processor's reciprocal estimate) is not provided on this processor")
+    pub fn rcp(x: u32) -> u32 {
+        engine_core::estimate::rcp_model(x)
     }
 
+    /// `RSQRTSS` off x86: the reference machine's, from engine-core's model of it.
     #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    pub fn rsqrt(_x: u32) -> u32 {
-        panic!("RSQRTSS (the processor's reciprocal square root estimate) is not provided on this processor")
+    pub fn rsqrt(x: u32) -> u32 {
+        engine_core::estimate::rsqrt_model(x)
     }
 
     /// `COMISS x, y` then `JNC`: `x >= y` as the flags say it (an unordered compare, a NaN on
