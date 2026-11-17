@@ -31,7 +31,7 @@
 //! wires as alpha-tested strips 50 to 90 units wide with one or two cables in the texture) is
 //! drawn not into the depth maps but into a coverage map a cascade ([`THIN_SIZE`],
 //! [`THIN_FORMAT`]): a round cable as quads along its centreline at least [`THIN_DRAWN`]
-//! texels wide, carrying its share of each texel ([`thin_quads`]); 
+//! texels wide, carrying its share of each texel ([`thin_quads`]);
 //! a ribbon through its own pixel shader with its texture's
 //! alpha read at the level the map's texel calls for (the cable's share of the texel), added up,
 //! over quads that carry its depth. The lookup takes away the sun by that share, spread over the
@@ -86,6 +86,19 @@ pub const STATE: u32 = u32::from_le_bytes(*b"NVSS");
 /// lighting variants read this frame. No Direct3D 9 transform state has these numbers.
 pub const VIEW_STATE: u32 = u32::from_le_bytes(*b"NVSV");
 pub const BEGIN_STATE: u32 = u32::from_le_bytes(*b"NVSB");
+/// The port-private `SetTransform` state recorded just before those two: the world the camera is
+/// in ([`world_words`]). When it changes the casters kept are forgotten: a world space's places
+/// overlap another's (Freeside's and the Strip's both start at the same cells), so a building of
+/// the world left behind, kept because it is out of sight, would shade the new one (the Strip
+/// after Freeside at noon, run pf-fs12g of 2026-11-17: 1,900 of Freeside's casters kept there).
+pub const WORLD_STATE: u32 = u32::from_le_bytes(*b"NVSW");
+
+/// The 16 words of [`WORLD_STATE`]: the world first ([`scene_light::GameView::world`]), the rest 0.
+pub fn world_words(world: u32) -> [u32; 16] {
+    let mut w = [0u32; 16];
+    w[0] = world;
+    w
+}
 
 /// Cascades and their sizes (texels a side): nearest first.
 pub const CASCADES: usize = 4;
@@ -504,17 +517,31 @@ pub fn same_place(a: &World, b: &World) -> bool {
 /// A caster larger than this (game units of radius) casts nothing: the sky's dome, the far land's
 /// blocks.
 pub const MAX_CASTER_RADIUS: f64 = 12000.0;
-/// A caster around the camera larger than this casts nothing either (the sky's clouds).
+/// A caster around the camera larger than this, placed at the camera, casts nothing either (a
+/// piece of the sky).
 pub const MAX_AROUND_CAMERA: f64 = 2000.0;
+/// How near the camera (game units) an object's own origin is when the sky places it: the sky's
+/// root stands at the camera every frame (the trace: the sun disc's world place is the camera's
+/// plus its local place), so its pieces have their origin there; a building's origin is where
+/// it stands.
+pub const SKY_ORIGIN: f64 = 16.0;
 
-/// Whether an object placed by `w` with object-space bounds `local` casts: not the sky's dome or
-/// clouds (spheres round the camera at `camera`) and not larger than the maps reach.
+/// Whether an object placed by `w` with object-space bounds `local` casts: not the sky (larger
+/// than [`MAX_AROUND_CAMERA`], round the camera at `camera` and placed at it) and not larger than
+/// the maps reach. A building the camera stands inside the bounding sphere of (a tower, a casino,
+/// the station the player walks on: Lucky 38's tower from the plaza, run pf-s12a) still casts.
 pub fn casts(w: &World, local: ([f64; 3], f64), camera: [f64; 3]) -> bool {
     let c = place_point(w, local.0);
     let r = local.1 * stretch(w);
     let d = [c[0] - camera[0], c[1] - camera[1], c[2] - camera[2]];
     let around = dot3(d, d).sqrt() < r;
-    r <= MAX_CASTER_RADIUS && !(around && r > MAX_AROUND_CAMERA)
+    let o = [
+        w[0][3] - camera[0],
+        w[1][3] - camera[1],
+        w[2][3] - camera[2],
+    ];
+    let at_camera = dot3(o, o).sqrt() <= SKY_ORIGIN;
+    r <= MAX_CASTER_RADIUS && !(around && at_camera && r > MAX_AROUND_CAMERA)
 }
 
 /// The sphere around object-space points (the middle of their box and the half diagonal); none
@@ -754,7 +781,11 @@ pub fn pieces(triangles: &[[[f32; 3]; 3]]) -> (Vec<Strand>, Vec<u32>) {
                     .filter(|&(k, _)| index[step(k)] == end)
                     .map(|(_, c)| dot3([c[0] - p[0], c[1] - p[1], c[2] - p[2]], w))
                     .fold(0.0, f64::max);
-                [p[0] + w[0] * reach, p[1] + w[1] * reach, p[2] + w[2] * reach]
+                [
+                    p[0] + w[0] * reach,
+                    p[1] + w[1] * reach,
+                    p[2] + w[2] * reach,
+                ]
             };
             let mut line = Vec::with_capacity(inner.len() + 2);
             line.push(if last > 0 { out_from(0, 1) } else { inner[0] });
@@ -2421,13 +2452,7 @@ impl Gpu {
                 let from = quads.len();
                 for i in &thin[k] {
                     let t = i.payload.thin.as_ref().expect("listed as thin");
-                    thin_quads(
-                        &cascades[k],
-                        &i.world,
-                        &t.strands,
-                        t.ribbons,
-                        &mut quads,
-                    );
+                    thin_quads(&cascades[k], &i.world, &t.strands, t.ribbons, &mut quads);
                 }
                 thin_ranges[k] = from as u32..quads.len() as u32;
                 self.thin_in[k] = !thin_ranges[k].is_empty();
@@ -2937,6 +2962,7 @@ mod tests {
             to_sun: Some([0.3, 0.2, 0.9]),
             sun_colour: [1.0, 0.9, 0.8],
             interior: false,
+            world: 0,
         }
     }
 
@@ -3674,6 +3700,21 @@ mod tests {
             camera
         ));
         assert!(casts(&at(far, 1.0), ([0.0; 3], MAX_CASTER_RADIUS), camera));
+        // A tower the camera stands inside the bounding sphere of (Lucky 38 from the plaza, run
+        // pf-s12a: radius 4350, its middle 2579 units off, its origin at its foot): it casts.
+        let foot = [camera[0] + 2579.0, camera[1], camera[2] - 900.0];
+        let tower = at(foot, 1.0);
+        assert!(casts(&tower, ([0.0, 0.0, 900.0], 4350.0), camera));
+        // The same placed at the camera (the sky's root): a piece of the sky, none; just past
+        // SKY_ORIGIN from it: a building.
+        assert!(!casts(
+            &at(camera, 1.0),
+            ([0.0, 0.0, 900.0], 4350.0),
+            camera
+        ));
+        let edge = |d: f64| at([camera[0] + d, camera[1], camera[2]], 1.0);
+        assert!(!casts(&edge(SKY_ORIGIN), ([0.0; 3], 4350.0), camera));
+        assert!(casts(&edge(SKY_ORIGIN + 0.5), ([0.0; 3], 4350.0), camera));
     }
 
     #[test]

@@ -980,6 +980,13 @@ struct SunState {
     /// Draws not kept: not opaque; (kept: cut-outs); not kept: no pipeline, no bounds, no
     /// `ModelViewProj` (or skinned), `DrawPrimitiveUP`.
     rejected: [u64; 6],
+    /// The frame's lookups since the last log line: given to the lit draws, ended by a colour and
+    /// depth clear of another target after the scene's, and none for want of a map.
+    lookups: [u64; 3],
+    /// The world the casters were kept in ([`Device::sun_world`]) and how often a new one made
+    /// them forgotten (for the log).
+    world: Option<u32>,
+    forgotten: u64,
     map_draws: u64,
     took: std::time::Duration,
     said: u64,
@@ -1002,6 +1009,19 @@ impl SunState {
     /// cost for nothing), before its depth-only clear.
     fn recording(&self, now: u64) -> bool {
         self.ran == Some(now) && !self.closed
+    }
+
+    /// Another world: the casters kept, the frame's list and its camera go, and every map is to
+    /// be drawn again before the lit draws use it.
+    fn forget_world(&mut self) {
+        self.cache = sun_shadow::Cache::default();
+        self.lists.clear();
+        self.prev = None;
+        self.moving = 0;
+        self.rewritten.clear();
+        self.gpu.drawn = [None; sun_shadow::CASCADES];
+        self.light = None;
+        self.forgotten += 1;
     }
 
     fn new(device: &wgpu::Device) -> SunState {
@@ -1038,6 +1058,9 @@ impl SunState {
             settled: [0; sun_shadow::CASCADES],
             cables: 0,
             rejected: [0; 6],
+            lookups: [0; 3],
+            world: None,
+            forgotten: 0,
             map_draws: 0,
             took: std::time::Duration::ZERO,
             said: 0,
@@ -6898,7 +6921,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if self.presents >= sun.said + 300 || sun.said == 0 {
             let n = sun.frames.max(1) as f64;
             eprintln!(
+<<<<<<< HEAD
                 "NV_D3D9 wgpu: sun shadows at present {}: {:.0} casters on the scene, {:.0} kept ({} moving), {:.2} still maps drawn a frame ({:.0} caster draws), {:.3} ms a frame on this thread; a frame {:.1} added, let go {:.1} written or released, {:.1} far, {:.1} moved or not drawn in view; still maps drawn for moving {:?}, for a changed caster {:?} times (of them for a settled place {:?}); {:.0} cables kept; draws a frame (not opaque, cut-outs kept, no pipeline, no bounds, no ModelViewProj or skinned, UP) {:?}; sun toward ({:.2}, {:.2}, {:.2}), cascades to {:?} units (texels {:?})",
+=======
+                "NV_D3D9 wgpu: sun shadows at present {}: {:.0} casters on the scene, {:.0} kept ({} moving), {:.2} still maps drawn a frame ({:.0} caster draws), {:.3} ms a frame on this thread; a frame {:.1} added, let go {:.1} written or released, {:.1} far, {:.1} moved or not drawn in view; still maps drawn for moving {:?}, for a changed caster {:?} times; draws a frame (not opaque, cut-outs kept, no pipeline, no bounds, no ModelViewProj or skinned, UP) {:?}; sun toward ({:.2}, {:.2}, {:.2}), cascades to {:?} units (texels {:?}); lookups (given, ended by another target's clear, no maps yet) {:?}; lit variants waiting, failed {:?}; casters forgotten for a new world {} times",
+>>>>>>> origin/main
                 self.presents,
                 sun.casters as f64 / n,
                 sun.kept as f64 / n,
@@ -6920,6 +6947,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 frame.to_sun[2],
                 cascades.map(|c| c.far.round()),
                 cascades.map(|c| (c.texel * 100.0).round() / 100.0),
+                sun.lookups,
+                (self.sun_pending.len(), self.sun_failed.len()),
+                sun.forgotten,
             );
             sun.said = self.presents;
             sun.frames = 0;
@@ -6935,6 +6965,39 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.settled = [0; sun_shadow::CASCADES];
             sun.cables = 0;
             sun.rejected = [0; 6];
+            sun.lookups = [0; 3];
+        }
+    }
+
+    /// The sun shadows' variants made since the last frame, into the pipelines' cache, whether
+    /// their draw comes again or not (each present). A variant is waited for only by its own key,
+    /// so one whose draw never came back (a state seen for a frame: a load's fade, a menu)
+    /// held its place among the [`SUN_VARIANTS_AT_ONCE`] for good: after six such, no lit draw
+    /// got its variant again for the rest of the run (the Strip after a coc from Doc's house: no
+    /// shadow at all, runs pf-s12a/s12g/s12g2 of 2026-11-17).
+    fn collect_sun_variants(&mut self) {
+        if self.sun_pending.is_empty() {
+            return;
+        }
+        let keys: Vec<PipeKey> = self.sun_pending.keys().cloned().collect();
+        for key in keys {
+            let Some(rx) = self.sun_pending.get(&key) else {
+                continue;
+            };
+            match rx.try_recv() {
+                Ok(Some(p)) => {
+                    self.sun_pending.remove(&key);
+                    self.pipelines.insert(key, (Some(p), 0));
+                }
+                Ok(None) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.sun_pending.remove(&key);
+                    self.sun_failed.insert(key);
+                    self.warn(
+                        "sun shadows: a lit draw's variant could not be made (drawn without)",
+                    );
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
         }
     }
 
@@ -7081,6 +7144,22 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         false
     }
 
+    /// The world the camera is in ([`sun_shadow::WORLD_STATE`], recorded at a colour and depth
+    /// clear before the camera's words): when it is another than the one the casters were kept in,
+    /// they are forgotten (and the frame's list with them), and every map is drawn again from what
+    /// the new world draws.
+    pub(crate) fn sun_world(&mut self, words: &[u32]) {
+        let Some(&world) = words.first() else {
+            return;
+        };
+        if let Some(s) = &mut self.sun {
+            if s.world.is_some_and(|w| w != world) {
+                s.forget_world();
+            }
+            s.world = Some(world);
+        }
+    }
+
     /// The camera words recorded at the scene's clear ([`sun_shadow::VIEW_STATE`]), for
     /// [`Device::sun_lookup`].
     pub(crate) fn sun_begin_view(&mut self, words: &[u32]) {
@@ -7109,7 +7188,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     fn sun_lookup_with(&mut self, sun: &mut SunState, words: &[u32]) {
-        sun.light = None;
+        let had = sun.light.take().is_some();
         let (Some(frame), Some(view)) =
             (sun_shadow::Frame::from_words(words), sun.begin_view.take())
         else {
@@ -7127,7 +7206,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             && back == Some((rt.width, rt.height))
             && (ds.width, ds.height, ds.samples) == (rt.width, rt.height, rt.samples)
             && !rt.format.depth;
+        // Another target's colour and depth clear (a reflection) after the scene's ends the lookup
+        // for the rest of the frame (counted for the log).
         if !scene {
+            if had {
+                sun.lookups[1] += 1;
+            }
             return;
         }
         if sun.processed != Some(self.presents) {
@@ -7142,8 +7226,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.closed = false;
         }
         if sun.gpu.drawn.iter().any(Option::is_none) {
+            sun.lookups[2] += 1;
             return;
         }
+        sun.lookups[0] += 1;
         let frustum = [view.left, view.right, view.bottom, view.top];
         let s = sun_shadow::splits(view.near, sun_shadow::FAR.min(view.far));
         let axes = frame.axes();
@@ -7757,6 +7843,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.last_present = Some(now);
         // Listed pipelines whose shaders the game has now made, made before its next frame.
         self.prepare_listed();
+        self.collect_sun_variants();
         self.end_pass();
         self.presents += 1;
         // The sun shadows: a frame's light list waits for the next frame's scene clear (where the
