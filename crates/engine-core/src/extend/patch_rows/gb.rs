@@ -89,6 +89,11 @@ pub(in super::super) const SITES: &[Entry] = &[
     // and 6.
     row(0x00a0_8718),
     row(0x00a0_871c),
+    // G112 (`InitGamePatches`: `GMST_INT(fRepairSkillMax) = 0x41200000`): the C runtime's call
+    // of `main` (`__tmainCRTStartup`'s `CALL 0x0086A850`, the call xNVSE's loader takes over;
+    // the seam is asked first thing in `main` 0086a850): `fRepairSkillMax` 10.0, after the
+    // static initializers and before the data files load.
+    row(0x00ec_c46b),
 ];
 
 /// The group's wraps.
