@@ -1201,3 +1201,21 @@ fn bounded_reads() {
     );
     assert!(seam::read_head_or_error(&e, b"Data", 5).is_err());
 }
+
+/// Off Windows, a kept copy in the port's folder is found whatever case the game names it in, as
+/// Windows finds it (#633's review: the copies were found by exact case only).
+#[cfg(not(windows))]
+#[test]
+fn a_kept_copy_is_found_whatever_case_the_game_names_it_in() {
+    let game = scratch("case-game");
+    let kept = scratch("case-kept");
+    let config = kept.join("Data").join("Config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("MCM.ini"), b"[List]\r\nMaxWidth=200\r\n").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    assert_eq!(
+        seam::profile_string(&e, br"data\CONFIG\mcm.INI", b"List", b"MaxWidth").unwrap(),
+        b"200"
+    );
+}

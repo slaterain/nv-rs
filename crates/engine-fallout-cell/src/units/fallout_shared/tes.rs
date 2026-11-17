@@ -1979,15 +1979,16 @@ pub fn fn_00451ef0(e: &mut Engine, this: Ptr<TES>, refr: Ptr, cell: Ptr, source:
         let player: u32 = e.global(PLAYER_CHARACTER);
         if r != player {
             let form_id = typed_call!(leaf::FAMILY, 0x0084_e3a0, leaf::word_at_c(e, r));
-            // JIP LN's O17 (`bNPCWeaponMods`, `WriteRelJump(0x45234E, DoOnLoadActorHook)`; O18
-            // shares the place): the handler deals the NPC's weapon mods and answers the node it
-            // reads itself (its render state's) in place of `0043fcd0`'s. Words: the actor.
-            let jip_node =
-                if e.jip_patches() & engine_core::extend::jip_patches::NPC_WEAPON_MODS != 0 {
-                    e.site(0x0045_234e, &[r])
-                } else {
-                    None
-                };
+            // JIP LN's O17 and O18 (`bNPCWeaponMods`, `uNPCPerks`: either writes
+            // `WriteRelJump(0x45234E, DoOnLoadActorHook)`): the handler puts the NPC's perks on and
+            // deals its weapon mods, and answers the node it reads itself (its render state's) in
+            // place of `0043fcd0`'s. Words: the actor.
+            use engine_core::extend::jip_patches::{NPC_PERKS, NPC_WEAPON_MODS};
+            let jip_node = if e.jip_patches() & (NPC_WEAPON_MODS | NPC_PERKS) != 0 {
+                e.site(0x0045_234e, &[r])
+            } else {
+                None
+            };
             let node_3d = match jip_node {
                 Some(node) => node,
                 None => e.call(0x0043_fcd0, &args![r]).u32(),
@@ -8074,8 +8075,9 @@ mod tests {
         assert_eq!(log.last().unwrap().0, 0x004b_6dc0);
     }
 
-    /// JIP LN's O17 seam at `0x45234E` (`bNPCWeaponMods`): its answer is the node given to
-    /// `004b6dc0` in place of `0043fcd0`'s; only with the switch's bit; no answer is the exe's.
+    /// JIP LN's O17 and O18 seam at `0x45234E` (`bNPCWeaponMods`, `uNPCPerks`): its answer is the
+    /// node given to `004b6dc0` in place of `0043fcd0`'s; only with either switch's bit; no answer
+    /// is the exe's.
     #[test]
     fn loading_an_actor_asks_jip_o17_for_the_node() {
         use crate::units::fallout_shared::tesobjectrefr::jip_seam;
@@ -8089,9 +8091,12 @@ mod tests {
                 e.call(0x0045_1ef0, &args![tes, refr, cell, 0u32, 0u8]);
             })
         };
-        e.set_jip_patches(jip_patches::FIXES | jip_patches::NPC_PERKS);
+        e.set_jip_patches(jip_patches::FIXES | jip_patches::LOAD_SCREEN_FIX);
         let log = run(&mut e);
-        assert!(jip_seam::seen().is_empty(), "only the switch's bit asks");
+        assert!(
+            jip_seam::seen().is_empty(),
+            "only the two switches' bits ask"
+        );
         assert_eq!(calls_to(&log, 0x004b_6dc0), vec![vec![0x9100, 0x1010]]);
         e.set_jip_patches(jip_patches::NPC_WEAPON_MODS);
         let log = run(&mut e);
@@ -8101,6 +8106,9 @@ mod tests {
             "the exe's lookup replaced"
         );
         assert_eq!(calls_to(&log, 0x004b_6dc0), vec![vec![0x5150, 0x1010]]);
+        e.set_jip_patches(jip_patches::NPC_PERKS);
+        run(&mut e);
+        assert_eq!(jip_seam::seen(), vec![vec![refr]], "O18's bit asks too");
         jip_seam::answer_with(None);
         let log = run(&mut e);
         assert_eq!(calls_to(&log, 0x004b_6dc0), vec![vec![0x9100, 0x1010]]);
