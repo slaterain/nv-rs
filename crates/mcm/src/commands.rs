@@ -9,8 +9,9 @@
 //! What differs from the DLL, each where the DLL would write past a buffer, hang or crash: a text
 //! of [`PATH_BUFFER`] bytes or more (the DLL's 16 KB stack buffers) does nothing; an INI name,
 //! section or key of 100 bytes or more (its 100-byte buffers) does nothing; a name of separators
-//! only (the DLL copies from a null) does nothing; the `Mass` commands stop after [`MASS_STEPS`]
-//! indices (the DLL's loop runs up to four billion times). And `GetMCMFloat`'s console line
+//! only (the DLL copies from a null) does nothing; the `Mass` commands walk a range of more than
+//! [`MASS_STEPS`] indices only where a tile can be (the DLL's loop runs up to four billion times,
+//! and forever from the lowest number). And `GetMCMFloat`'s console line
 //! prints the number: the DLL hands the console the result's address where its format wants the
 //! number, so it prints an unrelated value.
 
@@ -220,7 +221,8 @@ pub fn install(e: &mut Engine) {
     }
 }
 
-/// The most indices a `Mass` command walks.
+/// The most indices a `Mass` command walks one by one; a longer range walks only the indices
+/// that can name a tile ([`mass_indices`]).
 pub const MASS_STEPS: u32 = 1 << 16;
 
 /// A text argument the DLL holds in a 16 KB buffer, as a C string (up to its first 0): `None`
@@ -245,15 +247,26 @@ fn leading_text(args: &[Arg], i: usize) -> Vec<u8> {
     text[..end].to_vec()
 }
 
-/// The indices a `Mass` command sets: `max` down to `min` (none when `max < min`), at most
-/// [`MASS_STEPS`].
-pub fn mass_indices(min: i32, max: i32) -> impl Iterator<Item = i32> {
-    let count = if max < min {
-        0
-    } else {
-        (i64::from(max) - i64::from(min) + 1).min(i64::from(MASS_STEPS))
+/// The indices a `Mass` command sets in group `kind`: `max` down to `min` (none when `max < min`),
+/// as the DLL walks them (`10006c10`: signed, `DEC` until below `min`; with `min` the lowest
+/// number it never ends). A range of more than [`MASS_STEPS`] indices walks only the indices
+/// that can name a tile that is there ([`menu::indices_with_tiles`]), still from the top; for a
+/// group whose path takes no index, once, as every index names the same trait. What is left out
+/// changes nothing in the DLL either: each such index only finds no trait (its "not found" line).
+pub fn mass_indices(e: &mut Engine, kind: i32, min: i32, max: i32) -> Vec<i32> {
+    if max < min {
+        return Vec::new();
+    }
+    if i64::from(max) - i64::from(min) < i64::from(MASS_STEPS) {
+        return (min..=max).rev().collect();
+    }
+    let Some(mut named) = menu::indices_with_tiles(e, kind) else {
+        return vec![max];
     };
-    (0..count).map(move |k| (i64::from(max) - k) as i32)
+    named.retain(|i| (min..=max).contains(i));
+    named.sort_unstable_by(|a, b| b.cmp(a));
+    named.dedup();
+    named
 }
 
 // Translated from MCM.dll (MCM 1.5): GetMCMFloat.
@@ -333,7 +346,7 @@ fn set_mcm_float_mass(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     };
     let value = read.float(4, 0.0);
-    for index in mass_indices(min, max) {
+    for index in mass_indices(e, kind, min, max) {
         menu::set_float(e, &menu::path(kind, index, &setting), value);
     }
     handled(true)
@@ -353,7 +366,7 @@ fn set_mcm_string_mass(e: &mut Engine, w: &[u32]) -> Ret {
     let (Some(setting), Some(text)) = (fits(leading_text(&f.leading, 3)), fits(f.text)) else {
         return handled(true);
     };
-    for index in mass_indices(min, max) {
+    for index in mass_indices(e, kind, min, max) {
         menu::set_string(e, &menu::path(kind, index, &setting), &text);
     }
     handled(true)

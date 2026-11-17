@@ -114,6 +114,21 @@ pub fn child(e: &mut Engine, tile: u32, wanted: &[u8]) -> u32 {
     };
     let any = name == b"*";
     let mut seen: i32 = 0;
+    for candidate in children(e, tile) {
+        if any || name_is(e, candidate, name) {
+            if seen == index {
+                return candidate;
+            }
+            seen = seen.wrapping_add(1);
+        }
+    }
+    0
+}
+
+/// `tile`'s children in the order the DLL walks them (NVSE's `tList` over the game's list: node
+/// `+0` data, `+4` next, from `tile + 4`; the data's `+8` the child), at most [`MAX_WALK`] steps.
+fn children(e: &Engine, tile: u32) -> Vec<u32> {
+    let mut out = Vec::new();
     let mut node = tile.wrapping_add(CHILDREN);
     for _ in 0..MAX_WALK {
         let (data, next) = (e.mem.u32(node), e.mem.u32(node.wrapping_add(4)));
@@ -122,11 +137,8 @@ pub fn child(e: &mut Engine, tile: u32, wanted: &[u8]) -> u32 {
         }
         if data != 0 {
             let candidate = e.mem.u32(data.wrapping_add(8));
-            if candidate != 0 && (any || name_is(e, candidate, name)) {
-                if seen == index {
-                    return candidate;
-                }
-                seen = seen.wrapping_add(1);
+            if candidate != 0 {
+                out.push(candidate);
             }
         }
         if next == 0 {
@@ -134,7 +146,68 @@ pub fn child(e: &mut Engine, tile: u32, wanted: &[u8]) -> u32 {
         }
         node = next;
     }
-    0
+    out
+}
+
+/// The indices whose [`path`] in group `kind` can name a tile that is there: 0 (the group's own
+/// place) and each `n` of a child of the group named `<item><n>` (`Option3`, `option3`: names are
+/// compared without case; `n` as the path writes it, so `Option03` names nothing), `SubMenu<m>`
+/// standing for `m + 23` in group 5. For a group whose path takes no index, `None`: every index
+/// names the same place. An empty list when the group's tile is not there.
+pub fn indices_with_tiles(e: &mut Engine, kind: i32) -> Option<Vec<i32>> {
+    let items: &[(&[u8], i64)] = match kind {
+        1 => &[(b"Option", 0)],
+        3 => &[(b"Item", 0)],
+        5 => &[(b"Mod", 0), (b"SubMenu", 23)],
+        _ => return None,
+    };
+    let group: &[u8] = match kind {
+        1 => b"MCM_Options",
+        3 => b"MCM_List",
+        _ => b"MCM_ModList",
+    };
+    let mut out = Vec::new();
+    let Some((menu, _)) = menu_of(e, b"StartMenu/") else {
+        return Some(out);
+    };
+    let mcm = child(e, menu, b"MCM");
+    let tile = if mcm == 0 { 0 } else { child(e, mcm, group) };
+    if tile == 0 {
+        return Some(out);
+    }
+    out.push(0);
+    for c in children(e, tile) {
+        let text = e.mem.u32(c.wrapping_add(NAME));
+        if text == 0 {
+            continue;
+        }
+        let name = nvse::table::guest_text(e, text);
+        for &(item, offset) in items {
+            let Some(number) = name
+                .get(item.len()..)
+                .filter(|_| name[..item.len()].eq_ignore_ascii_case(item))
+            else {
+                continue;
+            };
+            let Some(n) = std::str::from_utf8(number)
+                .ok()
+                .and_then(|t| t.parse::<i32>().ok().filter(|n| n.to_string() == t))
+            else {
+                continue;
+            };
+            // Group 5: `Mod<i>` for i up to 23 (not 0), `SubMenu<i - 23>` above it.
+            let index = i64::from(n) + offset;
+            let named = match (kind, offset) {
+                (5, 0) => index != 0 && index <= 23,
+                (5, _) => index > 23,
+                _ => index != 0,
+            };
+            if let (true, Ok(index)) = (named, i32::try_from(index)) {
+                out.push(index);
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Whether `tile`'s name is `wanted` as `_stricmp` compares (ASCII letters without case); a tile

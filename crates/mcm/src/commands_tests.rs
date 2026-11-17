@@ -444,6 +444,16 @@ fn get_and_set_mcm_float() {
     let calls = e.mem.u32(SET_CALLS);
     call(&mut e, 0x21c3, &[int(1), int(9), s(b"_value"), float(5.0)]);
     assert_eq!(e.mem.u32(SET_CALLS), calls, "a missing trait is not set");
+    // The child and the grandchild in their places: group 1, item 3 (a swap would be group 3).
+    call(&mut e, 0x21c3, &[int(1), int(3), s(b"_value"), float(8.0)]);
+    assert_eq!(
+        number(&mut e, "StartMenu/MCM/MCM_Options/Option3/_value"),
+        8.0
+    );
+    assert_eq!(
+        number(&mut e, "StartMenu/MCM/MCM_Options/Option1/_value"),
+        1.0
+    );
 }
 
 /// `SetMCMString`: the formatted text into the trait; `SetMCMStringMass` from max down to min.
@@ -512,18 +522,78 @@ fn set_mcm_float_mass() {
         number(&mut e, "StartMenu/MCM/MCM_Options/Option1/_enable"),
         2.0
     );
+    // The child (group 1) differs from min: Option1 untouched, Options 2 to 4 set.
+    call(
+        &mut e,
+        0x21c5,
+        &[int(1), int(2), int(4), s(b"_value"), float(9.0)],
+    );
+    let value =
+        |e: &mut Engine, i: u32| number(e, &format!("StartMenu/MCM/MCM_Options/Option{i}/_value"));
+    assert_eq!(value(&mut e, 1), 1.0);
+    for i in 2..=4 {
+        assert_eq!(value(&mut e, i), 9.0, "Option{i}");
+    }
+    // No value: the traits become 0.
+    call(&mut e, 0x21c5, &[int(1), int(1), int(2), s(b"_enable")]);
+    for i in 1..=2 {
+        assert_eq!(
+            number(
+                &mut e,
+                &format!("StartMenu/MCM/MCM_Options/Option{i}/_enable")
+            ),
+            0.0
+        );
+    }
+    // A range far longer than the tiles: every Option still reached.
+    call(
+        &mut e,
+        0x21c5,
+        &[int(1), int(1), int(100_001), s(b"_enable"), float(6.0)],
+    );
+    for i in 1..=4 {
+        assert_eq!(
+            number(
+                &mut e,
+                &format!("StartMenu/MCM/MCM_Options/Option{i}/_enable")
+            ),
+            6.0,
+            "Option{i}"
+        );
+    }
     assert_eq!(
-        mass_indices(1, 4).collect::<Vec<_>>(),
+        mass_indices(&mut e, 1, 1, 4),
         vec![4, 3, 2, 1],
         "max down to min"
     );
-    assert_eq!(mass_indices(3, 3).collect::<Vec<_>>(), vec![3]);
-    assert_eq!(mass_indices(4, 1).count(), 0);
+    assert_eq!(mass_indices(&mut e, 1, 3, 3), vec![3]);
+    assert!(mass_indices(&mut e, 1, 4, 1).is_empty());
+    let steps = crate::commands::MASS_STEPS as i32;
+    assert_eq!(mass_indices(&mut e, 1, 0, steps - 1).len(), steps as usize);
+    // Longer: only the indices that can name a tile, from the top, at either end of the range.
+    for (min, max) in [
+        (i32::MIN, i32::MAX),
+        (-100_000, 4),
+        (0, 100_000),
+        (1, steps + 1),
+    ] {
+        let want: Vec<i32> = [4, 3, 2, 1, 0]
+            .into_iter()
+            .filter(|i| (min..=max).contains(i))
+            .collect();
+        assert_eq!(mass_indices(&mut e, 1, min, max), want, "{min}..{max}");
+    }
+    // Group 5: `Mod5` and `SubMenu2` (index 25); a group without an index: once.
+    assert_eq!(mass_indices(&mut e, 5, i32::MIN, i32::MAX), vec![25, 5, 0]);
+    assert_eq!(mass_indices(&mut e, 2, i32::MIN, i32::MAX), vec![i32::MAX]);
+    // An item number written otherwise names nothing (`Option03` is not `Option3`).
+    let options = menu::value_at(&mut e, b"StartMenu/MCM/MCM_Options/_optionID");
+    let options = e.mem.u32(options + 4);
+    child(&mut e, options, "Option07");
     assert_eq!(
-        mass_indices(i32::MIN, i32::MAX).count() as u32,
-        crate::commands::MASS_STEPS
+        mass_indices(&mut e, 1, i32::MIN, i32::MAX),
+        vec![4, 3, 2, 1, 0]
     );
-    assert_eq!(mass_indices(i32::MIN, i32::MAX).next(), Some(i32::MAX));
 }
 
 /// `SetMCMModList`: each number its low 16 bits, signed; the name only with a reference; a
@@ -659,8 +729,12 @@ fn get_mcm_list_width() {
 /// layer): files and folders by lower-case name, shared by the tests (each its own mod name).
 static FILES: Mutex<BTreeMap<Vec<u8>, Vec<u8>>> = Mutex::new(BTreeMap::new());
 static FOLDERS: Mutex<BTreeSet<Vec<u8>>> = Mutex::new(BTreeSet::new());
+/// Every name the commands handed the mod files, as given (all the tests' calls).
+static NAMES: Mutex<Vec<Vec<u8>>> = Mutex::new(Vec::new());
 
+/// The stand-in's key of a name (lower case, `\` for `/`); the name is recorded.
 fn k(name: &[u8]) -> Vec<u8> {
+    NAMES.lock().unwrap().push(name.to_vec());
     name.to_ascii_lowercase()
         .iter()
         .map(|&b| if b == b'/' { b'\\' } else { b })
@@ -773,6 +847,41 @@ fn set_mod_ini() {
     // A missing key writes nothing.
     set(&mut e, b"SetTest2/Messages", 1.0);
     assert_eq!(file(r"Data\Config\SetTest2.ini"), None);
+}
+
+/// Whatever a script writes, the INI commands hand the mod files only `Data\Config\` or
+/// `Data\Config\<one part>.ini`: `/`, `\` and `:` cut the text into parts before a name is made,
+/// so `..`, a drive, a stream or a deeper folder never reaches a name. A device's name
+/// (`Data\Config\CON.ini`) is refused by the platform's mod files (`engine-platform`
+/// `mod_files::relative`, its test `names_outside_the_game_folder_and_devices_are_refused` has
+/// that very name).
+#[test]
+fn set_mod_ini_names_stay_in_data_config() {
+    let mut e = ini_engine();
+    for text in [
+        &b"../../x/S/K"[..],
+        b"..\\..\\x\\S\\K",
+        b"C:/x/S/K",
+        b"C:\\x\\S\\K",
+        b"//server/share/S/K",
+        b"CON/S/K",
+        b"x:stream/S/K",
+        b"Data/Config/Deep/S/K",
+    ] {
+        call(&mut e, 0x21c1, &[s(text), float(1.0)]);
+        call(&mut e, 0x21c0, &[s(text)]);
+    }
+    let names = NAMES.lock().unwrap().clone();
+    assert!(names.iter().any(|n| n == br"Data\Config\CON.ini"));
+    assert!(names.iter().any(|n| n == br"Data\Config\...ini"));
+    for name in &names {
+        let rest = name
+            .strip_prefix(br"Data\Config\")
+            .unwrap_or_else(|| panic!("{:?}", String::from_utf8_lossy(name)));
+        let one_part = rest.is_empty()
+            || (rest.ends_with(b".ini") && !rest.iter().any(|&b| matches!(b, b'\\' | b'/' | b':')));
+        assert!(one_part, "{:?}", String::from_utf8_lossy(name));
+    }
 }
 
 /// `%.4f` as the VC++ 2010 runtime writes it (measured with `msvcr100.dll`, 2026-11-16).
