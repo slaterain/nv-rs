@@ -1088,12 +1088,21 @@ pub fn refused(dir: &Path, never: &[Guarded]) -> Option<&'static str> {
 
 /// Whether `dir` lies inside nv-rs's own folder `own` by its text but its real path `real_dir`
 /// leads out of `own`'s real path. Names compared by `system`'s rule, as [`excepted`] does.
+/// A link AT `dir`'s own name that does not lead to a folder is not followed: the host never
+/// writes or deletes through one (a write removes it and makes a new file, the rename replaces
+/// it, a delete leaves it), so only where its folder leads counts. A link to a folder is followed.
 fn leaves_own(dir: &Path, real_dir: &Path, own: &Path, system: System) -> bool {
     let key = match system {
         System::Linux => exact_parts,
         System::MacOs => parts,
     };
-    inside(&key(dir), &key(own)) && !inside(&key(real_dir), &key(&real_path(own)))
+    let file_link =
+        std::fs::symlink_metadata(dir).is_ok_and(|m| m.file_type().is_symlink()) && !dir.is_dir();
+    let real = match (file_link, dir.parent(), dir.file_name()) {
+        (true, Some(parent), Some(name)) => real_path(parent).join(name),
+        _ => real_dir.to_path_buf(),
+    };
+    inside(&key(dir), &key(own)) && !inside(&key(&real), &key(&real_path(own)))
 }
 
 /// [`refused`]'s reason for a place in nv-rs's own folder that a link leads out of it.

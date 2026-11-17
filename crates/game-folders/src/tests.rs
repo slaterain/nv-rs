@@ -529,6 +529,20 @@ fn a_link_out_of_the_own_folder_to_an_unlisted_place_is_refused() {
         Some(LEAVES_OWN)
     );
     assert_eq!(refused(&own.join("logs/x.log"), &never), None);
+    // A link AT a file's own name (not a folder) is never written or deleted through by the host,
+    // so only its folder counts: allowed here (the host's own tests pin what it does with one).
+    let outside_file = s.file("elsewhere/x.fos", "not nv-rs's");
+    std::fs::create_dir_all(own.join("Saves")).unwrap();
+    std::os::unix::fs::symlink(&outside_file, own.join("Saves/x.fos.part")).unwrap();
+    assert_eq!(refused(&own.join("Saves/x.fos.part"), &never), None);
+    // Through a folder link it is still refused.
+    let through = own.join("game/Documents/My Games/FalloutNV/Saves/x.fos.part");
+    std::os::unix::fs::symlink(
+        &outside_file,
+        windows.join("My Games/FalloutNV/Saves/x.fos.part"),
+    )
+    .unwrap();
+    assert_eq!(refused(&through, &never), Some(LEAVES_OWN));
     let why = own_folder_refusal(&home, &never).expect("--find refuses the own folder");
     assert!(why.contains("a link to a place outside it"), "{why}");
     // The own folder moved to another disk (a link AT it): its places are still its own.
