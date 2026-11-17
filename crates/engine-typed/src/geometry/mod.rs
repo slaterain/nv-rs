@@ -46,11 +46,12 @@ pub mod tangent;
 /// This family's bit: what each `typed_call!` of it names.
 pub const FAMILY: FamilyId = FamilyId::new(23);
 
-/// `NV_TYPED=geometry`. Not past its gate yet, so off unless `NV_TYPED` names it.
+/// `NV_TYPED=geometry:off` turns it off. On since its gate (2026-11-16: the recorded route, Doc's house and the
+/// Goodsprings street, 5,400 frames on Vulkan, byte-identical with the family off).
 pub static GEOMETRY: Family = Family {
     name: "geometry",
     id: FAMILY,
-    past_gate: false,
+    past_gate: true,
     threads: Threads::Both,
     stage2: false,
     funcs,
