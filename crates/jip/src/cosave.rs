@@ -1520,6 +1520,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // `DoLoadGameHousekeeping` after a load that succeeded: its saved data's part.
             if m.data & 0xff != 0 {
                 crate::world_hooks::restore_form_flags(e);
+                // O17's pass over the high actors (bNPCWeaponMods), JIP's next step.
+                crate::game_patches::gh2::post_load_game(e);
                 // `RestoreLinkedRefs(s_linkedRefsTemp)` with the linked references changed.
                 crate::commands::jip_fn_linked_ref::after_load(e);
                 set_changed(e, 0);

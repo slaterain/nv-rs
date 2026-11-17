@@ -307,6 +307,13 @@ fn install_fixes(e: &mut Engine) {
     e.wrap(SET_WEAPON_SLOT, set_weapon_slot);
     e.on_site(INIT_WORN_WEAPON, init_worn_weapon);
     e.on_site(PICK_WEAPON_MODEL, pick_weapon_model);
+    // O17's numbers into their lock-free slot before its seams can be asked.
+    let numbers = e
+        .ext::<crate::Jip>()
+        .game_patches
+        .settings
+        .weapon_mod_chance;
+    set_weapon_mod_chance(e, numbers);
     e.on_site(DO_ON_LOAD_ACTOR, do_on_load_actor);
     e.on_site(RESET_ACTOR_FLAGS_RESPAWN, reset_actor_flags_respawn);
 }
@@ -673,15 +680,76 @@ const WEAPON_MOD_SHUFFLE: [[u32; 3]; 6] = [
     [4, 2, 1],
 ];
 
+/// O17's three numbers (`uWMChancePerLevel`, `uWMChanceMin`, `uWMChanceMax`) as the fixes went
+/// in. Its handlers run on the loader and AI threads, so the numbers are a lock-free slot
+/// ([`Engine::ext_free`], made at install before the threads start), not JIP's shared one.
+#[derive(Default)]
+pub struct WeaponModChance([std::sync::atomic::AtomicU32; 3]);
+
+fn weapon_mod_chance(e: &mut Engine) -> [u32; 3] {
+    let n = &e.ext_free::<WeaponModChance>().0;
+    [0, 1, 2].map(|i| n[i].load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// O17's numbers put in the lock-free slot (at install, from the player's file).
+pub(super) fn set_weapon_mod_chance(e: &mut Engine, numbers: [u32; 3]) {
+    let n = &e.ext_free::<WeaponModChance>().0;
+    for (slot, value) in n.iter().zip(numbers) {
+        slot.store(value, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// O17 on: the switch's bit and JIP's three numbers each non-zero (JIP installs nothing else).
 fn weapon_mods_on(e: &mut Engine) -> bool {
     e.jip_patches() & engine_core::extend::jip_patches::NPC_WEAPON_MODS != 0
-        && e.ext::<crate::Jip>()
-            .game_patches
-            .settings
-            .weapon_mod_chance
-            .iter()
-            .all(|&n| n != 0)
+        && weapon_mod_chance(e).iter().all(|&n| n != 0)
+}
+
+/// `ProcessManager::highActors` (the exe's `ProcessLists` at `011E0E80`, its list at `+0x80`:
+/// JIP's `GameProcess.h`; the constructor `0096d020` sets up the list head there).
+const HIGH_ACTORS: u32 = 0x011e_0f00;
+/// `g_thePlayer`.
+const THE_PLAYER: u32 = 0x011d_ea3c;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: DoLoadGameHousekeeping
+// (lines 181-195, the `s_patchInstallState.NPCWeaponMods` block).
+/// O17 after a save loads (the 3D seam passes every actor over while the save loads): the player
+/// marked dealt, then every actor of the process manager's high-actor list not marked yet is
+/// marked and, with a held weapon entry that has extra lists and not being a teammate, dealt its
+/// weapon mods ([`distribute_weapon_mods`]). As in JIP, neither the process level nor the life
+/// state is looked at here. With the switch off: nothing. Two things JIP would read at a low
+/// address: no player (JIP's `+0x140`) and an actor with no process (JIP's `+0x114`): the port
+/// passes over them.
+pub(crate) fn post_load_game(e: &mut Engine) {
+    if !weapon_mods_on(e) {
+        return;
+    }
+    let player = e.mem.u32(THE_PLAYER);
+    if player != 0 {
+        let flags = e.mem.u8(player + ACTOR_JIP_FLAGS_143);
+        e.mem
+            .set_u8(player + ACTOR_JIP_FLAGS_143, flags | WEAPON_MODS_DEALT);
+    }
+    let actors = crate::commands::list_items(e, Ptr::new(HIGH_ACTORS));
+    for actor in actors {
+        if actor == 0 {
+            continue;
+        }
+        let flags = e.mem.u8(actor + ACTOR_JIP_FLAGS_143);
+        if flags & WEAPON_MODS_DEALT != 0 {
+            continue;
+        }
+        e.mem
+            .set_u8(actor + ACTOR_JIP_FLAGS_143, flags | WEAPON_MODS_DEALT);
+        let process = e.mem.u32(actor + ACTOR_PROCESS);
+        if process == 0 {
+            continue;
+        }
+        let info = e.mem.u32(process + PROCESS_WEAPON_INFO);
+        if info != 0 && e.mem.u32(info) != 0 && e.mem.u8(actor + ACTOR_IS_TEAMMATE) == 0 {
+            distribute_weapon_mods(e, actor, info);
+        }
+    }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DoOnLoadActorHook (its
@@ -770,11 +838,7 @@ fn distribute_weapon_mods(e: &mut Engine, actor: u32, info: u32) {
     if mods == 0 {
         return;
     }
-    let [per_level, min, max] = e
-        .ext::<crate::Jip>()
-        .game_patches
-        .settings
-        .weapon_mod_chance;
+    let [per_level, min, max] = weapon_mod_chance(e);
     let base = e.mem.u32(actor + BASE);
     let level = e.call(BASE_DATA_GET_LEVEL, &args![base + 0x30]).u32() as u16 as i16 as i32 as u32;
     let mut chance = level.wrapping_mul(per_level);

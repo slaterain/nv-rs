@@ -1309,10 +1309,7 @@ fn g93_the_equipped_model_is_picked_with_the_flags() {
 fn mods_world(draws: &[u32]) -> Engine {
     let mut e = weapon_world(&[], 0, draws);
     e.set_jip_patches(engine_core::extend::jip_patches::NPC_WEAPON_MODS);
-    e.ext::<crate::Jip>()
-        .game_patches
-        .settings
-        .weapon_mod_chance = [2, 10, 60];
+    set_weapon_mod_chance(&mut e, [2, 10, 60]);
     e.mem.set_u32(ACTOR + 0x64, RENDER);
     e.mem.set_u32(RENDER + 0x14, 0x7777);
     e.mem.set_u32(WEAPON + 0x350, 0x11);
@@ -1454,11 +1451,112 @@ fn o17_who_is_dealt_mods() {
     e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
     assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None, "switch off");
     let mut e = mods_world(&[]);
+    set_weapon_mod_chance(&mut e, [2, 0, 60]);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None, "a number 0");
+}
+
+/// O17's load pass world: [`mods_world`] with the player pointer at [`PLAYER_REF`] and the
+/// process manager's high-actor list holding a second actor already marked dealt
+/// ([`OTHER_ACTOR`], the same process and entry), then [`ACTOR`]; [`ACTOR`] dead and at the low
+/// level (the pass looks at neither).
+const OTHER_ACTOR: u32 = P4 + 0x1800;
+const HIGH_NODE: u32 = P4 + 0x1c00;
+const HIGH_ACTORS_AT: u32 = 0x011e_0f00;
+const THE_PLAYER_AT: u32 = 0x011d_ea3c;
+
+fn load_pass_world(draws: &[u32]) -> Engine {
+    let mut e = mods_world(draws);
+    e.map(0x011d_e000, 0x1000);
+    e.map(0x011e_0000, 0x1000);
+    e.mem.set_u32(THE_PLAYER_AT, PLAYER_REF);
+    e.mem.set_u32(OTHER_ACTOR + 0x68, PROCESS);
+    e.mem.set_u8(OTHER_ACTOR + 0x143, 0x10);
+    e.mem.set_u32(HIGH_ACTORS_AT, OTHER_ACTOR);
+    e.mem.set_u32(HIGH_ACTORS_AT + 4, HIGH_NODE);
+    e.mem.set_u32(HIGH_NODE, ACTOR);
+    e.mem.set_u32(ACTOR + 0x108, 2);
+    e.mem.set_u8(PROCESS + 0x28, 2);
+    e
+}
+
+/// O17 after a save loads (JIP's `DoLoadGameHousekeeping`, serialization.h 181-195), through
+/// the post-load message: the player marked; of the two high actors the one already marked is
+/// passed over, the other marked and dealt (dead and low level: JIP looks at neither); a failed
+/// load, a teammate (marked, no draw), no entry (marked) and the switch off (nothing marked).
+#[test]
+fn o17_a_loaded_save_deals_the_unmarked_high_actors() {
+    use nvse::plugins::{msg, Message};
+    let post_load = |e: &mut Engine, data: u32| {
+        crate::cosave::listen(
+            e,
+            &Message {
+                kind: msg::POST_LOAD_GAME,
+                data,
+                len: 0,
+            },
+        );
+    };
+    let mut e = load_pass_world(&[4, 0]);
+    post_load(&mut e, 0);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "a failed load: nothing");
+    assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0);
+    post_load(&mut e, 1);
+    assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0x10, "the player marked");
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10);
+    assert_eq!(e.mem.u8(OTHER_ACTOR + 0x143), 0x10);
+    assert_eq!(dealt_flags(&mut e), Some(5));
+    assert_eq!(
+        logged_calls(&e, STUB_UPDATE),
+        vec![vec![ACTOR, WEAPON, 1, INFO_EXTRA_LIST, 0]],
+        "only the unmarked actor is dealt"
+    );
+    // A second load: both marked, nothing drawn.
+    post_load(&mut e, 1);
+    assert_eq!(logged_calls(&e, STUB_LEVEL).len(), 1);
+    // A teammate: marked, not dealt.
+    let mut e = load_pass_world(&[]);
+    e.mem.set_u8(ACTOR + 0x18d, 1);
+    post_load(&mut e, 1);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10, "a teammate is marked");
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    // An entry with no extra lists: marked, not dealt.
+    let mut e = load_pass_world(&[]);
+    e.mem.set_u32(INFO, 0);
+    post_load(&mut e, 1);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10, "no lists: marked");
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    // No weapon entry: marked, not dealt.
+    let mut e = load_pass_world(&[]);
+    e.mem.set_u32(PROCESS + 0x114, 0);
+    post_load(&mut e, 1);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10, "no entry: marked");
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    // The switch off, or a number 0: nothing at all.
+    for numbers in [None, Some([2, 10, 0])] {
+        let mut e = load_pass_world(&[4, 0]);
+        match numbers {
+            None => e.set_jip_patches(engine_core::extend::jip_patches::FIXES),
+            Some(n) => set_weapon_mod_chance(&mut e, n),
+        }
+        post_load(&mut e, 1);
+        assert_eq!(e.mem.u8(PLAYER_REF + 0x143), 0, "{numbers:?}");
+        assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "{numbers:?}");
+        assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    }
+}
+
+/// The fixes going in copy the player's three O17 numbers into the lock-free slot the handlers
+/// read (not JIP's shared slot).
+#[test]
+fn o17_numbers_go_into_the_lock_free_slot_at_install() {
+    let mut e = mods_world(&[]);
+    set_weapon_mod_chance(&mut e, [0, 0, 0]);
     e.ext::<crate::Jip>()
         .game_patches
         .settings
-        .weapon_mod_chance = [2, 0, 60];
-    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None, "a number 0");
+        .weapon_mod_chance = [3, 11, 70];
+    install_fixes(&mut e);
+    assert_eq!(weapon_mod_chance(&mut e), [3, 11, 70]);
 }
 
 /// O17 `ResetActorFlagsRespawnHook`: the dealt mark cleared (other bits kept), the actor's extra
