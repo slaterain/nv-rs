@@ -1089,7 +1089,7 @@ like 3.9a's above (JIP's comment, exe places, what a player with JIP gets, built
 
 #### GA: UI: HUD, messages, text, start-up INI
 
-All fix rows (in with the row `NV_JIP_GAME_PATCHES`, off in vanilla); with JIP installed and the row
+All fix rows (in with the row `NV_JIP_GAME_PATCHES`, off in vanilla) but `bLoadScreenFix`, a switch of `jip_nvse.ini` read when that row is on; with JIP installed and the row
 off, each place runs the exe's code unchanged.
 
 | JIP's comment | Exe places | What a player with JIP gets | Built |
@@ -1106,6 +1106,7 @@ off, each place runs the exe's code unchanged.
 | (none; `RolloverWeaponHook` at `0x777123`) | `HUDMainMenu::SetInfoForRef` `00775a00`, `0x777123` | A weapon lying in the world that has a weapon mod on it shows "+" after its name when you look at it, as it does in the inventory lists; the game shows the plain name. Difference from JIP: on a name of 259 characters (the buffer's limit) the "+" is left off; JIP writes it past the buffer. With JIP installed and the row off, the game's test runs unchanged | 3.9 GA-4 |
 | (none; `GetVATSTargetDTHook` at `0x7ECE32`) | `VATSMenu::DoIdle` `007ec810`, `0x7ECE32` | In V.A.T.S., the damage threshold shown beside the target's name (with the perk that shows it) is the damage threshold of the last hit JIP's hit damage (its `bIgnoreDTDRFix` option) worked out (any attacker, any target; as in JIP), a negative one as 0; until JIP's hit damage has reckoned a hit, the game's own figure. With JIP installed and the row off, the game's figure is shown unchanged | 3.9 GA-5 |
 | (none; `QueueUIMessageHook` at `0x70535C`) | `QueueUIMessage` `007052f0`, `0x70535C` | Every corner message the game itself shows (item added, quest updated, and the like) stays up for the default message time, 2 seconds unless a mod sets another with `SetDefaultMessageTime`; a mod's own messages (xNVSE's `MessageEx`, JIP's `MessageExAlt` and its equip messages) keep their own time, as with JIP. With JIP installed and the row off, every message keeps the time its caller gives | 3.9 GA-6 |
+| `bLoadScreenFix` (off by default; `GetSuitableLoadScreensHook` at `0x78AC60`, `PickLoadScreenHook` at `0x78A79B`; JIP sorts the data's load screens into those made for places and the generic ones when the switch goes on, at `DeferredInit`) | `LoadingMenu::BuildCandidateList` `0078ac60` (rewritten), `LoadingMenu::MakeLoadScreenList` `0078a5a0` (`0x78A79B`) | Loading screens made for a place are shown there on their own: the game mixes in generic screens whenever it found fewer place screens than its limit, JIP only when no place screen can show there. In the overlay mode the game's flagged screens are taken from the generic ones only; while only type 3 screens are wanted (`0x11D8907` or the OS globals' byte +2), a place screen of another type is left out as the game does. Difference from JIP: with no place screens in the whole load order JIP's walk runs on past its empty list; here it takes the generic ones. With the switch off (or JIP not installed), or before the lists are made, the game's choice is unchanged | 3.9 GA-7 |
 
 Seams for other groups' rows: G06's `0x77765A` (the HUD's action
 text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below); O14's `0x770B0E`

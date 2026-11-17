@@ -37,6 +37,10 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G80 (fix row): HUDMainMenu::SetInfoForRef 00775a00, its weapon test 0x777123: JIP's
     // RolloverWeaponHook answers the same test and appends "+" to a modded weapon's name.
     row(0x0077_7123),
+    // O16 (bLoadScreenFix, off by default): LoadingMenu::MakeLoadScreenList 0078a5a0, its list
+    // lock test before the second pass without the location (0x78A79B): PickLoadScreenHook holds
+    // the pass back while the menu's list has a screen.
+    row(0x0078_a79b),
     // G21 (fix row): the activation choices 007aa720: a choice with no text is passed over.
     row(0x007a_a80f),
     // G37 (fix row): StartMenu::ConfirmNewGame 007d32b0: InvalidChargenQuestFixHook falls back
@@ -55,4 +59,8 @@ pub(in super::super) const SITES: &[Entry] = &[
 ];
 
 /// The group's wraps.
-pub(in super::super) const WRAPS: &[Entry] = &[];
+pub(in super::super) const WRAPS: &[Entry] = &[
+    // O16 (bLoadScreenFix, off by default): LoadingMenu::BuildCandidateList 0078ac60, rewritten by
+    // JIP's GetSuitableLoadScreensHook (no Rust code calls it directly).
+    row(0x0078_ac60),
+];
