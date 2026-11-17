@@ -1087,11 +1087,11 @@ fn o2_repair_button() {
         Some(0),
         "65 is above 60"
     );
-    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(120.0));
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(119.0));
     assert_eq!(
         e.site(REPAIR_BUTTON.addr(), &[stack]),
         Some(0),
-        "60 is not above 60"
+        "59.5 rounds up to 60, not above 60"
     );
     let mut e = fixes_on();
     repair_world(&mut e, -5.0);
