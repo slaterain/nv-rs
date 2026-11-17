@@ -31,6 +31,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0077_14da),
     row(0x0077_53b8),
     row(0x0077_57b1),
+    // G80 (fix row): HUDMainMenu::SetInfoForRef 00775a00, its weapon test 0x777123: JIP's
+    // RolloverWeaponHook answers the same test and appends "+" to a modded weapon's name.
+    row(0x0077_7123),
     // G21 (fix row): the activation choices 007aa720: a choice with no text is passed over.
     row(0x007a_a80f),
     // G37 (fix row): StartMenu::ConfirmNewGame 007d32b0: InvalidChargenQuestFixHook falls back

@@ -14,6 +14,7 @@ use crate::frame_rate;
 use crate::fxhash::Map;
 use crate::loading;
 use crate::prepare;
+use crate::scene_light;
 use crate::shot::{self, Shots};
 use crate::sm::{self, wgsl, Stage};
 use crate::state::{self, rs, SamplerKey};
@@ -828,6 +829,14 @@ pub struct Device {
     /// `END`s (query, number) whose counts are awaited.
     pub(crate) answers: Option<Arc<QueryAnswers>>,
     awaiting: Vec<(Handle, u64)>,
+    /// The new lighting ([`scene_light`]): on for this device ([`scene_light::enabled`] when it
+    /// was made), its GPU objects once it first runs, and the present it last ran in.
+    scene_light_on: bool,
+    scene_light: Option<Box<scene_light::Gpu>>,
+    scene_light_ran: Option<u64>,
+    /// The parameters last said in the log, and `NV_AO_ALTERNATE=1` (diagnostic only).
+    scene_light_said: Option<scene_light::Params>,
+    scene_light_alternate: bool,
 }
 
 pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -1206,6 +1215,12 @@ impl Device {
             skipped: 0,
             answers: None,
             awaiting: Vec::new(),
+            scene_light_on: scene_light::enabled(),
+            scene_light: None,
+            scene_light_ran: None,
+            scene_light_said: None,
+            scene_light_alternate: scene_light::enabled()
+                && std::env::var("NV_AO_ALTERNATE").is_ok_and(|v| v.trim() == "1"),
         };
         d.surface = shown_in;
         // The frame-rate counter can show (F11 is taken) while a device draws the game's window.
@@ -1363,6 +1378,9 @@ impl Device {
             // A multisampled surface is only drawn into and resolved (`StretchRect`; an 8-bit
             // colour one by a shader that reads its samples).
             usage: if samples > 1 && gamma_resolved(format.wgpu) {
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
+            } else if samples > 1 && format.depth && self.scene_light_on {
+                // The new lighting reads the scene's depth ([`Device::scene_light`]).
                 wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING
             } else if samples > 1 {
                 wgpu::TextureUsages::RENDER_ATTACHMENT
@@ -5283,6 +5301,109 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         pass.draw(0..3, 0..1);
     }
 
+    /// The new lighting's step ([`scene_light`]) on the bound colour target and depth surface,
+    /// `words` the frame's [`scene_light::Params`]: once a frame, when this device has it on and
+    /// the two have one size and sample count (the game's scene before its depth-only clear).
+    pub(crate) fn scene_light(&mut self, words: &[u32]) {
+        if !self.scene_light_on || self.scene_light_ran == Some(self.presents) {
+            return;
+        }
+        // `NV_AO_ALTERNATE=1` (diagnostic only): every other frame, so two frames of one run in a
+        // row show the scene with and without it.
+        if self.scene_light_alternate && self.presents % 2 == 0 {
+            return;
+        }
+        let Some(params) = scene_light::Params::from_words(words) else {
+            self.warn("new lighting: a camera it cannot use (skipped)");
+            return;
+        };
+        let (Some(rt), Some(ds)) = (self.st.rt[0].clone(), self.st.ds.clone()) else {
+            return;
+        };
+        let (Some(colour_tex), Some(depth_tex), Some(colour)) =
+            (rt.tex.clone(), ds.tex.clone(), rt.view.clone())
+        else {
+            return;
+        };
+        // Never the back buffer: the Pip-Boy's own 3D clears its depth alone there too, after the
+        // world's (a recording of the Pip-Boy, measure/newlight/NOTES.md).
+        let back_buffer = self
+            .back_buffers
+            .iter()
+            .any(|h| self.surface_of(*h).is_some_and(|s| s.id == rt.id));
+        let fits = !back_buffer
+            && self.st.rt[1..].iter().all(Option::is_none)
+            && rt.width == ds.width
+            && rt.height == ds.height
+            && rt.samples == ds.samples
+            && rt.width >= 64
+            && rt.height >= 64
+            && !rt.format.depth
+            && depth_tex
+                .texture
+                .usage()
+                .contains(wgpu::TextureUsages::TEXTURE_BINDING);
+        if !fits {
+            self.warn(format!(
+                "new lighting: a {}x{} target ({} samples) with a {}x{} depth surface ({} samples) (skipped)",
+                rt.width, rt.height, rt.samples, ds.width, ds.height, ds.samples
+            ));
+            return;
+        }
+        self.scene_light_ran = Some(self.presents);
+        // Said when it starts and whenever the sun term turns on or off or the sun moves (on the
+        // screen) by more than about 8 degrees: not every frame.
+        let changed = self
+            .scene_light_said
+            .map_or(true, |was: scene_light::Params| {
+                (was.shadow > 0.0) != (params.shadow > 0.0)
+                    || (params.shadow > 0.0
+                        && was
+                            .sun
+                            .iter()
+                            .zip(params.sun)
+                            .map(|(a, b)| a * b)
+                            .sum::<f32>()
+                            < 0.99)
+            });
+        if changed {
+            self.scene_light_said = Some(params);
+            let sun = if params.shadow > 0.0 {
+                format!(
+                    "sun toward ({:.2}, {:.2}, {:.2}) on screen (right, up, ahead), sun strength {:.2} (carried, not drawn)",
+                    params.sun[0], params.sun[1], params.sun[2], params.shadow
+                )
+            } else {
+                "no sun term (indoors, the sun down or dark)".to_string()
+            };
+            eprintln!(
+                "NV_D3D9 wgpu: new lighting at present {} on the {}x{} scene, {} samples: near {}, far {}, {sun}",
+                self.presents, rt.width, rt.height, rt.samples, params.near, params.far
+            );
+        }
+        self.end_pass();
+        let mut gpu = self
+            .scene_light
+            .take()
+            .unwrap_or_else(|| Box::new(scene_light::Gpu::new(&self.device)));
+        let targets = scene_light::Targets {
+            colour: &colour,
+            colour_format: rt.format.wgpu,
+            depth: &depth_tex.view,
+            samples: rt.samples,
+            width: rt.width,
+            height: rt.height,
+        };
+        let (buffer, bytes) = gpu.uniforms(&params, &targets);
+        self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
+        let device = self.device.clone();
+        gpu.encode(&device, self.encoder(), &targets);
+        self.scene_light = Some(gpu);
+        for t in [&colour_tex, &depth_tex] {
+            t.batch.store(self.batch, Ordering::Relaxed);
+        }
+    }
+
     pub(crate) fn update_texture(&mut self, source: Handle, destination: Handle) {
         let (Some(s), Some(d)) = (self.texture_of(source), self.texture_of(destination)) else {
             return;
@@ -6444,6 +6565,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     /// The pixels of a back buffer or render target as wgpu holds them, rows packed (tests).
+    /// The wgpu usages of a surface's texture (tests: the new lighting's off path leaves the
+    /// depth surfaces as they were).
+    pub fn surface_usage(&self, surface: Handle) -> Option<wgpu::TextureUsages> {
+        self.surface_of(surface)?
+            .tex
+            .as_ref()
+            .map(|t| t.texture.usage())
+    }
+
     pub fn read_surface_pixels(&mut self, surface: Handle) -> Option<(u32, u32, Vec<u8>)> {
         let s = self.surface_of(surface)?;
         let pixels = self.read_level(&s)?;

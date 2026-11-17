@@ -1084,9 +1084,16 @@ off, each place runs the exe's code unchanged.
 | (none; `ToggleConsoleHook` at `0x70E5FE`) | `InterfaceManager::Idle` `0070c4a0`, `0x70E5FE` | The console key (the grave-accent key, DIK 0x29, whatever the key bindings say) opens and closes the console also while a controller is connected; the game ignores it then (its query answers 0 while the gamepad flag `0x11F35C8` is set). Once per press, as in the game | 3.9 GA-2 |
 | (`InitJIPHooks`: `ClearHUDOrphanedTiles` at `0x7704AE`) | `HUDMainMenu::DoIdle` `00770430`, `0x7704AE` | HUD elements whose 3D was taken off the screen are destroyed each frame instead of being left behind | 3.9 GA-2 |
 | "Increase corner message max text length to 0x203 characters" (16 `SafeWrite8`s, `0x7753B8` to `0x77582B`; a fix row) | `fn_00775380` (queueing a HUD corner message), `HUDMainMenu::DoIdle` `00770430` (`0x7714DA`), `HUDMainMenu::HideMessage` `007756e0` | A corner message (the top-left notices, `ShowMessage`, `MessageEx`) of up to 515 characters is shown. In the game one longer than 259 characters ends the game (the queue's `strcpy_s` fails and the invalid-parameter path closes the process); with JIP the same happens above 515. The icon path and sound name keep their 259-character limits (above that the game ends, with JIP too). JIP's `MessageExAlt` cuts its message to the queue's buffer (259 characters, 515 with this row on). With JIP installed and the row off, the game's record is used unchanged | 3.9 GA-3 |
+| (none; `RolloverWeaponHook` at `0x777123`) | `HUDMainMenu::SetInfoForRef` `00775a00`, `0x777123` | A weapon lying in the world that has a weapon mod on it shows "+" after its name when you look at it, as it does in the inventory lists; the game shows the plain name. Difference from JIP: on a name of 259 characters (the buffer's limit) the "+" is left off; JIP writes it past the buffer. With JIP installed and the row off, the game's test runs unchanged | 3.9 GA-4 |
 
 Seams for other groups' rows: G06's `0x77765A` (the HUD's action
-text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below).
+text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below); O14's `0x770B0E`
+(`DoIdle`'s sneak test, asked with `bSneakBoundingBoxFix` on; group GX's row and handler, not
+built yet; O14's second hook site, `0xC72EA3` in the player's character controller setup where JIP's
+`InitControllerShapeHook` records the controller shape, has no seam yet: group GX adds it with its handler, and
+the two are tested together); G108's `0xAE5648` (the audio manager's message kind 54, which the game ignores; group
+GW's row and handler, not built yet). Until their handlers are in, those two places run the
+game's code.
 
 #### GB: UI: item lists, repair, pad dead zones
 
@@ -1304,6 +1311,12 @@ the form type, so it never picks `sNPCModelFemale`: with FalloutNV.esm, which se
 male skeleton, a player sees the original's skeletons), and an NPC record's model path is no longer stored
 when it loads (`0x104A1BC`, the original ignores it for NPCs anyway). With the row off a player with JIP
 installed gets these two and nothing else of this group.
+
+Also built as part of JIP (G48, `004f15a0`): setting a form's type clears JIP's own flag bytes beside it, and
+for an NPC or creature reference JIP's actor flag bytes too. The game never sets those bytes when it makes a
+form, so without this a new NPC made in memory that held something else could start with leftover JIP flags
+(for example one that will not fight, or runs everywhere); with JIP installed every new form now starts clean,
+as with JIP.
 
 #### GS: Script engine
 
