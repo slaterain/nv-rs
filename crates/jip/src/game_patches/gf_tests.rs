@@ -467,6 +467,10 @@ fn d01_slot_written_at_the_deferred_start_with_the_fixes() {
     }
 }
 
+/// The game's data handler pointer (`0x11C3F2C`) and a handler with no files loaded (zeroed).
+const GAME_DATA_HANDLER: u32 = 0x011c_3f2c;
+const NO_FILES_HANDLER: u32 = 0x053a_0000;
+
 /// JIP's deferred start through the co-save listener (xNVSE's `DEFERRED_INIT` message, as the
 /// game sends it): with the fixes' bit, D01's slot holds the routine and a G130 name read before
 /// answers 0 after; without the bit, the slot keeps `0x484B60` and the name still answers 1.
@@ -492,6 +496,13 @@ fn deferred_start_through_the_listener_puts_group_gfs_part_in() {
         assert_eq!(g130_answer(&mut e, b"DATA\\Foo.bsa"), Some(1));
         e.set_jip_patches(word);
         e.ext::<crate::Jip>().pos_marker.marker = 1;
+        // The listener runs the other groups' deferred parts too: group GS's (D07) looks a
+        // plugin up through the game's data handler, here one with no files loaded.
+        if !e.mem.is_mapped(GAME_DATA_HANDLER) {
+            e.map(GAME_DATA_HANDLER & !0xfff, 0x1000);
+        }
+        e.map(NO_FILES_HANDLER, 0x1000);
+        e.mem.set_u32(GAME_DATA_HANDLER, NO_FILES_HANDLER);
         crate::cosave::listen(&mut e, &message);
         assert_eq!(e.mem.u32(REFR_VTABLE + 0x48), slot, "{word:08x}");
         assert_eq!(
