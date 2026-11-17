@@ -80,6 +80,7 @@ macro_rules! device_ref {
 #[cfg(test)]
 pub(crate) mod alloc_count;
 pub mod bink;
+pub mod code_page;
 #[cfg(test)]
 mod crt_stdio_tests;
 pub mod d3d9;
@@ -943,11 +944,8 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, dsound::co_create_instance(Ptr, u32, u32, Ptr, Ptr) -> u32).1,
         ),
         // The sound imports: end.
-    ];
-    // The code page conversions through Windows' own (`nls`; what they answer is the machine's).
-    // The shader compiler through the player's own d3dx9_38.dll (ADR-0008, Windows only).
-    #[cfg(windows)]
-    imports.extend([
+        // The code page conversions (`nls`): on Windows through Windows' own (what they answer is
+        // the machine's); elsewhere by Windows' measured tables (`code_page`).
         (
             k,
             "MultiByteToWideChar",
@@ -958,6 +956,10 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "LCMapStringW",
             entry!(0, nls::lc_map_string_w(u32, u32, Ptr, i32, Ptr, i32) -> u32).1,
         ),
+    ];
+    // The shader compiler through the player's own d3dx9_38.dll (ADR-0008, Windows only).
+    #[cfg(windows)]
+    imports.extend([
         (
             "d3dx9_38.dll",
             "D3DXCompileShader",
@@ -1022,8 +1024,8 @@ mod tests {
             );
         }
         // The 195 of the table before the layer moved out of `engine-core` (6 are Windows only),
-        // `GlobalMemoryStatus(Ex)`, and `MultiByteToWideChar` and `LCMapStringW` (Windows only).
-        assert_eq!(table.len(), if cfg!(windows) { 199 } else { 191 });
+        // `GlobalMemoryStatus(Ex)`, and `MultiByteToWideChar` and `LCMapStringW`.
+        assert_eq!(table.len(), if cfg!(windows) { 199 } else { 193 });
     }
 
     /// Not a check: the rows of `engine-core`'s `allocations_per_operation_of_the_kernel` whose

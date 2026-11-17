@@ -255,6 +255,13 @@ pub fn wanted() -> bool {
     backends().is_some()
 }
 
+/// The monitors as the window layer's system reports them (Linux and macOS: winit), for the
+/// machine table (`crate::machine_table::display`). Windows' come from `scripts/d3d9-capture`.
+#[cfg(not(windows))]
+pub fn monitors() -> Result<Vec<crate::machine_table::Monitor>, String> {
+    window_layer::monitors()
+}
+
 /// Whether wgpu draws (asked for alone, and not replaced by the real Direct3D 9): the game's
 /// textures are then made on wgpu, in the formats `d3d9_wgpu::format` provides, so the textures
 /// D3DX makes leave out the rest (`super::d3dx`). With `real,wgpu` the real one draws.

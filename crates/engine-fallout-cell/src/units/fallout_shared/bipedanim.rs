@@ -1271,7 +1271,8 @@ pub fn fn_004ab750(e: &mut Engine, this: Ptr<BipedAnim>, form: Ptr, flags: u8) {
     {
         return;
     }
-    fn_004ab400(e, this, form, flags);
+    // By address: JIP LN's G93 wraps `004ab400` (step 3.9, overridable.tsv).
+    e.call(0x004a_b400, &args![this, form, u32::from(flags)]);
     let requester = e.get(this, BipedAnim::m_pRequester);
     let player = e.global::<u32>(PLAYER);
     let weapon_form = e.get(weapon, BipedObject::pParent);
@@ -4835,6 +4836,11 @@ mod tests {
         assert_eq!(slot_words(&e, object(this, 5)), [named, 0xaaaa, 0x9090, 0]);
         let calls = log(&mut e);
         // Not the player: no first person node.
+        // By address (JIP LN's G93 wraps it).
+        assert_eq!(
+            calls_to(&calls, 0x004a_b400),
+            vec![vec![this.addr(), named, 0]]
+        );
         assert_eq!(
             calls_to(&calls, FN_004AEED0),
             vec![vec![named, 0xaaaa, 5, requester, 0]]
@@ -4848,6 +4854,21 @@ mod tests {
         );
         assert_eq!(calls_to(&calls, SET_NAME), vec![vec![0x9090, 0x1f1f]]);
         assert_eq!(calls_to(&calls, SET_WEAPON_FLAG), vec![vec![0x5656, 1]]);
+    }
+
+    /// `004ab750` hands its mod flags to `004ab400` by address (JIP LN's G93 wraps it there).
+    #[test]
+    fn the_weapon_slot_gets_the_mod_flags_by_address() {
+        let mut e = engine();
+        tables(&mut e);
+        let this = biped(&mut e);
+        let form = weapon_form(&mut e);
+        log(&mut e);
+        fn_004ab750(&mut e, this, Ptr::new(form), 3);
+        assert_eq!(
+            calls_to(&log(&mut e), 0x004a_b400),
+            vec![vec![this.addr(), form, 3]]
+        );
     }
 
     #[test]

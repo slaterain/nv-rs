@@ -44,6 +44,14 @@
 //! takes the mouse wheel (G69); the barter menu titles the vendor's tab as it opens (G56) and,
 //! before taking a vendor's caps, splits a count over 32,767 into stacks (G64).
 //!
+//! **GB-6, the repair setting and Big Guns** (in with the game-patch row): G112 sets
+//! `fRepairSkillMax` to 10 (`InitGamePatches`: `GMST_INT(fRepairSkillMax) = 0x41200000`) at
+//! [`BEFORE_MAIN`], after the exe's static initializer gave it 9 and before `Main::InitTES` loads
+//! the data files, so a plugin's `GMST` still sets it; D06 (`DeferredInit`) gives the Big Guns
+//! actor value its name and the skills' derivation (`0x643BD0`); with `bEnableBigGunsSkill` (O3,
+//! off by default, set at `DeferredInit` as JIP defers that switch) it gets the other weapon
+//! skills' flags (`0x410`) and JIP's description ([`deferred_init`]).
+//!
 //! Threads: every handler here runs where its menu code runs, on the main thread (the free
 //! camera's dead-zone seams: the main thread's player update). None takes JIP's shared slot: the
 //! dead zones and G87's flag are lock-free `ext_free` words made at JIP's install, G88 reads and
@@ -167,6 +175,12 @@ pub const REPAIR_BUTTON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0078_18b2);
 pub const REPAIR_LIST_VALUE: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_58db);
 pub const REPAIR_AGAIN: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_5ced);
 pub const REPAIR_ITEM: SiteSlot = SiteSlot::new(Owner::Jip, 0x007b_5dad);
+/// G112's seam: the C runtime's call of `main` (`0x00ECC46B`, `CALL 0x0086A850` in
+/// `__tmainCRTStartup`, after `__cinit`), the call xNVSE's loader takes over to load xNVSE and
+/// its plugins before `main` runs (`loader_common/IdentifyEXE.cpp`, `hookCallAddr` for 1.4.0.525;
+/// `steam_loader/main.cpp`, `OnHook`): JIP's `InitGamePatches` (its `PostLoad`) runs there. The
+/// port's `main` asks it first thing (no words).
+pub const BEFORE_MAIN: SiteSlot = SiteSlot::new(Owner::Jip, 0x00ec_c46b);
 
 /// The group's rows and installers.
 pub const AREA: Area = Area {
@@ -191,6 +205,7 @@ pub const AREA: Area = Area {
         REPAIR_LIST_VALUE.addr(),
         REPAIR_AGAIN.addr(),
         REPAIR_ITEM.addr(),
+        BEFORE_MAIN.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
@@ -212,6 +227,7 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(REPAIR_LIST_VALUE, repair_list_value);
     e.on_site(REPAIR_AGAIN, repair_again);
     e.on_site(REPAIR_ITEM, repair_item);
+    e.on_site(BEFORE_MAIN, repair_skill_max);
     e.on_site(DISPOSABLE_WEAPON, disposable_weapon);
     e.on_site(PLAIN_VALUE, plain_value);
     e.on_site(WEIGHT_FORMAT, weight_format);
@@ -815,6 +831,78 @@ fn repair_again(e: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(u32::from(
         health.partial_cmp(&cap) != Some(std::cmp::Ordering::Greater),
     ))
+}
+
+// ---- GB-6: G112 (`fRepairSkillMax`), D06 and O3 (Big Guns) ----
+
+/// `fRepairSkillMax`'s value as JIP writes it (`GMST_INT(..) = 0x41200000`: 10.0).
+pub const REPAIR_SKILL_MAX_JIP: u32 = 0x4120_0000;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (`GMST_INT(fRepairSkillMax) = 0x41200000;`).
+/// G112, before `main` (no words): `fRepairSkillMax` becomes 10.0 (the exe's static initializer
+/// `00f67c30` made it 9.0). Answers nothing: `main` goes on as the exe's.
+fn repair_skill_max(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    e.mem.set_u32(REPAIR_SKILL_MAX, REPAIR_SKILL_MAX_JIP);
+    None
+}
+
+/// `ActorValueInfo::Array()` (`0x11D61C8`) and `kAVCode_BigGuns`.
+const ACTOR_VALUE_INFOS: u32 = 0x011d_61c8;
+const AV_BIG_GUNS: u32 = 0x21;
+/// An `ActorValueInfo`'s `fullName.name` (`TESFullName` at +0x18, its `String` at +0x1C),
+/// `description` (`TESDescription`, +0x24), `avName` (`String`, +0x3C), `avFlags` (+0x44) and
+/// `callback4C` (the exe's `pDerivationFunction`, +0x4C).
+const AV_FULL_NAME: u32 = 0x1c;
+const AV_DESCRIPTION: u32 = 0x24;
+const AV_NAME: u32 = 0x3c;
+const AV_FLAGS: u32 = 0x44;
+const AV_DERIVATION: u32 = 0x4c;
+/// The skills' derivation (`00643bd0`: `AiFormulas::AVDeriveSkill`), as `0066efe0` registers it
+/// for Barter and Energy Weapons; the exe registers Big Guns with none (0) and flags `0x2000`.
+pub const DERIVE_SKILL: u32 = 0x0064_3bd0;
+/// O3's flags (`kAVFlag_Skill | kAVFlag_CreatureCombatSkill`, Energy Weapons' in the exe).
+pub const BIG_GUNS_SKILL_FLAGS: u32 = 0x410;
+/// JIP's `kBigGunsDescription`.
+pub const BIG_GUNS_DESCRIPTION: &[u8] = b"The Big Guns skill determines your combat effectiveness with all oversized weapons such as the Fat Man, Missile Launcher, Flamer, Minigun, Gatling Laser, etc.";
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (the
+// deferred `SetOptionalPatch(3, true)`, then `avInfo->fullName.name = avInfo->avName;
+// avInfo->callback4C = (void*)0x643BD0;`) and SetOptionalPatch case 3.
+/// JIP's `DeferredInit`, group GB's part, with the game-patch row: with `bEnableBigGunsSkill` (O3)
+/// Big Guns' flags become [`BIG_GUNS_SKILL_FLAGS`] and its description JIP's text (JIP's
+/// `SetDescriptionAltText`); then (D06) its display name is its actor value name (the 8-byte
+/// `String` copied as it is, buffer shared, as JIP's assignment does) and its derivation
+/// [`DERIVE_SKILL`]. With the row off nothing changes.
+pub fn deferred_init(e: &mut Engine) {
+    use engine_core::extend::jip_patches;
+    let word = e.jip_patches();
+    if word & jip_patches::FIXES == 0 {
+        return;
+    }
+    let slot = ACTOR_VALUE_INFOS + 4 * AV_BIG_GUNS;
+    // Always mapped and filled in the game (`0066efe0` registers every actor value at start);
+    // a test engine without the exe's data has neither.
+    if !e.mem.is_mapped(slot) {
+        return;
+    }
+    let info = e.mem.u32(slot);
+    if info == 0 {
+        return;
+    }
+    if word & jip_patches::ENABLE_BIG_GUNS_SKILL != 0 {
+        e.mem.set_u32(info + AV_FLAGS, BIG_GUNS_SKILL_FLAGS);
+        crate::world_hooks::set_description_alt_text(
+            e,
+            info + AV_DESCRIPTION,
+            BIG_GUNS_DESCRIPTION,
+        );
+    }
+    for at in [0, 4] {
+        let word = e.mem.u32(info + AV_NAME + at);
+        e.mem.set_u32(info + AV_FULL_NAME + at, word);
+    }
+    e.mem.set_u32(info + AV_DERIVATION, DERIVE_SKILL);
 }
 #[cfg(test)]
 #[path = "gb_tests.rs"]

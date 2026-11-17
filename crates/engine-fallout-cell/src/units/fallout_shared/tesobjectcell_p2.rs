@@ -5028,8 +5028,20 @@ fn drop_items(e: &mut Engine, list: u32) {
 
 /// The dropped item list of the actor, cleared by [`drop_items`] and then
 /// removed from the actor's extra data (nothing when it has none).
-fn clear_dropped_items(e: &mut Engine, actor: Ptr) {
-    let extra = reference_extra_list(e, actor);
+fn clear_dropped_items(e: &mut Engine, actor: Ptr, respawn: bool) {
+    // JIP LN's O17 (`bNPCWeaponMods`, `WriteRelCall(0x54E2A4, ResetActorFlagsRespawnHook)`, the
+    // respawn's place only): the handler clears the actor's "weapon mods dealt" mark and answers
+    // its extra list. Words: the actor.
+    let jip_list =
+        if respawn && e.jip_patches() & engine_core::extend::jip_patches::NPC_WEAPON_MODS != 0 {
+            e.site(0x0054_e2a4, &[actor.addr()])
+        } else {
+            None
+        };
+    let extra = match jip_list {
+        Some(list) => list,
+        None => reference_extra_list(e, actor),
+    };
     let list = e
         .call(EXTRA_LIST_GET_DROPPED_ITEM_LIST, &args![extra])
         .u32();
@@ -5173,7 +5185,7 @@ pub fn fn_0054df30(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u8 {
         if !actor.is_null() {
             if e.call(ACTOR_TEST_87F4A0, &args![actor]).bool() {
                 e.vcall(actor.addr(), ACTOR_SLOT_324, &args![1u32, 0u32, 0u32]);
-                clear_dropped_items(e, actor);
+                clear_dropped_items(e, actor, true);
                 e.with_stack(12, |e, placed| {
                     e.vcall(actor.addr(), REFERENCE_SLOT_170, &args![placed]);
                     let mut back = false;
@@ -5225,7 +5237,7 @@ pub fn fn_0054df30(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u8 {
                         }
                     }
                 }
-                clear_dropped_items(e, actor);
+                clear_dropped_items(e, actor, false);
             }
         } else {
             let base = base_form(e, item);
@@ -13240,6 +13252,49 @@ mod tests {
             ],
         );
         c
+    }
+
+    /// JIP LN's O17 seam at `0x54E2A4` (`bNPCWeaponMods`): a respawned actor's dropped items are
+    /// looked up in the list the handler answers (in place of `005d43c0`'s); only with the
+    /// switch's bit, only for the respawn (not the deleted actor's `0x54E444`); no answer is the
+    /// exe's.
+    #[test]
+    fn long_detached_cell_asks_jip_o17_for_a_respawned_actors_list() {
+        use super::super::tesobjectrefr::jip_seam;
+        use engine_core::extend::jip_patches;
+        let mut e = detach_engine(500);
+        let c = detach_world(&mut e);
+        let refs = list_items(&e, c.addr() + 0xac);
+        let (restored, killed) = (refs[1], refs[2]);
+        let answered = e.mem.alloc(0x10);
+        jip_seam::put(&mut e, 0x0054_e2a4, Some(answered));
+        let dropped_lists = |e: &mut Engine| {
+            start_log(e);
+            e.call(0x0054_df30, &args![c]);
+            let log = take_log(e);
+            calls_to(&log, EXTRA_LIST_GET_DROPPED_ITEM_LIST)
+        };
+        e.set_jip_patches(jip_patches::FIXES | jip_patches::NPC_PERKS);
+        let exe = dropped_lists(&mut e);
+        assert!(jip_seam::seen().is_empty(), "only the switch's bit asks");
+        assert_eq!(exe[0], vec![restored + 0x44]);
+        e.set_jip_patches(jip_patches::NPC_WEAPON_MODS);
+        let jip = dropped_lists(&mut e);
+        assert_eq!(
+            jip_seam::seen(),
+            vec![vec![restored]],
+            "not the deleted actor"
+        );
+        assert_eq!(jip[0], vec![answered]);
+        assert_eq!(
+            jip[1..],
+            exe[1..],
+            "the deleted actor's lookup as the exe's"
+        );
+        assert!(exe.iter().any(|w| w[0] == killed + 0x44));
+        jip_seam::answer_with(None);
+        assert_eq!(dropped_lists(&mut e), exe);
+        jip_seam::seen();
     }
 
     #[test]
