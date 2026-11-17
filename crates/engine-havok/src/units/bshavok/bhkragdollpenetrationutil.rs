@@ -298,7 +298,7 @@ fn rcp_estimate(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 fn rcp_estimate(x: f32) -> f32 {
-    1.0 / x
+    engine_core::estimate::rcp(x)
 }
 
 /// `RSQRTSS` refined once the way the code does, with the `CMPEQSS`/`ANDNPS` zero guard:

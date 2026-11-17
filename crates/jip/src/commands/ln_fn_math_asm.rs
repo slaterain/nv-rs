@@ -397,7 +397,7 @@ fn emu_sqrt(s: f32) -> f32 {
         unsafe { _mm_cvtss_f32(_mm_rsqrt_ss(_mm_set_ss(s))) }
     };
     #[cfg(not(target_arch = "x86_64"))]
-    let r = 1.0 / s.sqrt();
+    let r = engine_core::estimate::rsqrt(s);
     let mut x1 = x0;
     mulss(&mut x1, b(r));
     mulss(&mut x1, b(r));

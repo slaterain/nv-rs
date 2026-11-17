@@ -85,6 +85,7 @@ pub const AREA: Area = Area {
         VOICE_FLAGS.addr(),
         REF_SOUND_FLAGS.addr(),
         MAP_SOUND_FLAGS.addr(),
+        perks::DESTROY_ACTOR.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
@@ -112,6 +113,7 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(VOICE_FLAGS, voice_flags);
     e.on_site(REF_SOUND_FLAGS, voice_flag_added);
     e.on_site(MAP_SOUND_FLAGS, voice_flag_added);
+    perks::install_fixes(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -261,3 +263,7 @@ fn voice_flag_added(_: &mut Engine, a: &[u32]) -> Option<u32> {
 #[cfg(test)]
 #[path = "ge_tests.rs"]
 mod tests;
+
+/// O18 (`uNPCPerks`), part 1: the NPC perks routines (`ge_perks.rs`).
+#[path = "ge_perks.rs"]
+pub mod perks;

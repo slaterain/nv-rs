@@ -166,6 +166,17 @@ extern "system" {
 }
 
 fn main() {
+    // macOS: winit's loop, and with it the game's window, must own the program's main thread, so
+    // the program runs on a thread of its own and the main thread is the window layer's
+    // (`host::run_on_main_thread`). Everywhere else the program runs here, as before.
+    #[cfg(target_vendor = "apple")]
+    host::run_on_main_thread(Box::new(run));
+    #[cfg(not(target_vendor = "apple"))]
+    run()
+}
+
+/// The program: its arguments, the check or the start, main's frames.
+fn run() {
     // With the game's own window (`NV_D3D9=real`, `wgpu` or `real,wgpu`, or a launcher's play
     // run, which draws by its `Fallout.ini`'s `sRenderer` without the variable) the process is
     // DPI-unaware, as FalloutNV.exe is (no `dpiAware` in its manifest): Windows scales the game's

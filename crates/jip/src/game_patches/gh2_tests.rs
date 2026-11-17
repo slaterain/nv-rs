@@ -1581,3 +1581,31 @@ fn o17_a_respawn_clears_the_mark() {
     e.set_jip_patches(0);
     assert_eq!(reset_actor_flags_respawn(&mut e, &[ACTOR]), None);
 }
+
+/// O18's part of `DoOnLoadActorHook` (`uNPCPerks`): with the NPC perks patch on and O17 off, an
+/// actor with perks gets its lists made and the node is answered, no weapon mods dealt; a dead
+/// one is passed over; with both off no answer.
+#[test]
+fn o18_a_loaded_npc_gets_its_perks_on() {
+    let mut e = mods_world(&[]);
+    e.set_jip_patches(0);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None);
+    let block = e.mem.alloc(0xc0);
+    thread_local! { static O18_BLOCK: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+    O18_BLOCK.with(|b| b.set(block));
+    e.register(0x00aa_3e40, |_, _| Ret {
+        eax: O18_BLOCK.with(std::cell::Cell::get),
+        ..Ret::default()
+    });
+    crate::cosave::set_npc_perks_patch(&mut e, true);
+    let id = e.mem.u32(ACTOR + 0xc);
+    crate::cosave::npc_perks(&mut e).emplace(id);
+    e.mem.set_u32(ACTOR + 0x108, 1);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0x7777));
+    let made = |e: &mut Engine| crate::cosave::npc_perks(e).get(&id).unwrap().entry_points;
+    assert_eq!(made(&mut e), 0, "dead");
+    e.mem.set_u32(ACTOR + 0x108, 0);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0x7777));
+    assert_eq!(made(&mut e), block);
+    assert_eq!(e.mem.u8(ACTOR + 0x143) & 0x10, 0, "O17 off: not dealt");
+}

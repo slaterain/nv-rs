@@ -698,7 +698,7 @@ pub(crate) fn rcp_estimate(v: f32) -> f32 {
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
     {
-        1.0 / v
+        engine_core::estimate::rcp(v)
     }
 }
 

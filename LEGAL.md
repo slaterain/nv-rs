@@ -121,6 +121,8 @@ terms, whose notice must be kept:
   [crates/jip/NOTICE](crates/jip/NOTICE).
 - `crates/uio` translates UI Organizer 2.30 (Copyright (c) 2020 Jef, MIT licence); the notice is
   in [crates/uio/NOTICE](crates/uio/NOTICE).
+- `crates/mcm` rebuilds the NVSE plugin of The Mod Configuration Menu 1.5 (Pelinor) with its
+  author's permission; see [crates/mcm/NOTICE](crates/mcm/NOTICE).
 - These notices, and those above, are in every Linux and macOS package's licenses folder
   (distribution/notices.txt lists them, and the package is refused when one is missing).
 - `vendor/wgpu-hal` is wgpu-hal 30.0.1 (gfx-rs developers, MIT or Apache-2.0), kept in the

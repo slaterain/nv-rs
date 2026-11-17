@@ -4,12 +4,21 @@
 //! The exe uses them (Havok's normalisers and broad phase, D3DX's maths, JIP's and UIO's code),
 //! and their results are not fixed by Intel's manual: only the error bound is (relative error at
 //! most 1.5 * 2^-12). Each processor maker's table gives its own last bits (AMD's differ from
-//! Intel's), so the original game itself gives different bits on different PCs.
+//! Intel's), so the original game itself gives different bits on different PCs. Every copy of the
+//! port's that answers for them uses this module off x86: engine-core `x87::rsqrt_estimate`
+//! (Havok's normaliser), engine-havok's broad phase, AABB tree, ray casts, sphere shape,
+//! quaternion and ragdoll helpers, engine-platform's D3DX maths, JIP's and UIO's.
 //!
 //! On x86 ([`rcp`], [`rsqrt`]) the instruction itself runs: the player's processor answers, as it
 //! does for FalloutNV.exe on that PC. Elsewhere (Apple silicon, ARM Linux) there is no such
 //! instruction, and the answer comes from a model ([`rcp_model`], [`rsqrt_model`]) of one x86
 //! processor's, bit for bit on every input: so such a machine agrees with that PC.
+//!
+//! The processor modelled is the one named in `estimate/tables.rs`'s header (an AMD Zen 5: the
+//! maintainer's PC, where the port is played and judged). The tables are one generated file: an
+//! Intel processor's replace them with one run of `scripts/estimate-measure` on an Intel PC, with
+//! no code change. Any maker's answers are within the instruction's documented error, so the
+//! choice is no difference a player can see or feel.
 //!
 //! The model: on the processor measured, the result depends only on the input's top 12 mantissa
 //! bits and its exponent (`RSQRTSS`: also the exponent's parity picks one of two halves of its
@@ -193,6 +202,26 @@ mod tests {
         }
         assert_eq!(checked, 2 * 256 * 4096 * 3);
     }
+
+    /// A digest of the model's answers to every kind of input (FNV-1a over both results' bits),
+    /// checked on every system: a fault in the tables or the rules is caught without the
+    /// measured processor (the comparison with the instruction runs only on it).
+    #[test]
+    fn the_models_answers_have_their_digest() {
+        let mut digest: u64 = 0xcbf2_9ce4_8422_2325;
+        for x in every_kind_of_input() {
+            for word in [rcp_model(x), rsqrt_model(x)] {
+                for byte in word.to_le_bytes() {
+                    digest ^= u64::from(byte);
+                    digest = digest.wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+        assert_eq!(digest, DIGEST, "the model's digest: {digest:#018x}");
+    }
+
+    /// [`the_models_answers_have_their_digest`]'s value for the committed tables.
+    const DIGEST: u64 = 0xe816_cdbe_850e_37a0;
 
     /// Values measured on the reference processor, checked on every system (Apple silicon's CI
     /// runs this one through the model).

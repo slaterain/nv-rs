@@ -317,7 +317,7 @@ pub(crate) fn rsqrt_estimate(v: f32) -> f32 {
     }
     #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
     {
-        1.0 / v.sqrt()
+        engine_core::estimate::rsqrt(v)
     }
 }
 
