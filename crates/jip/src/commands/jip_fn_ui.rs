@@ -1863,6 +1863,7 @@ fn message_ex_alt(e: &mut Engine, w: &[u32]) -> Ret {
             Icon::Text(_) => at + icon_at,
         };
         let sound_ptr = if sound.is_some() { at + sound_at } else { 0 };
+        let _plugin = e.mark_plugin_ui_message();
         e.call(
             QUEUE_UI_MESSAGE,
             &args![at, 0u32, icon_ptr, sound_ptr, seconds, 0u32],

@@ -2887,7 +2887,10 @@ mod tests {
             panic!("a guest exception");
         }));
         assert!(caught.is_err());
-        assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "gone with the unwinding");
+        assert!(
+            !e.caller_marked(PLUGIN_UI_MESSAGE),
+            "gone with the unwinding"
+        );
     }
 
     /// A caller word: none without a user; with one, the innermost guard's word, back to the

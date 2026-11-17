@@ -127,7 +127,8 @@ const ROLLOVER_NAME: u32 = 0x011d_9c48;
 
 /// G09's seam: `QueueUIMessage`'s display time (words: the caller's time's bits; the answer is
 /// the time's bits).
-pub const MESSAGE_TIME: SiteSlot = SiteSlot::new(Owner::Jip, engine_core::extend::PLUGIN_UI_MESSAGE);
+pub const MESSAGE_TIME: SiteSlot =
+    SiteSlot::new(Owner::Jip, engine_core::extend::PLUGIN_UI_MESSAGE);
 
 /// JIP's `s_msgDisplayTime`, the float's bits: the default message time, 2.0 until
 /// `SetDefaultMessageTime` (any thread may queue a message; the commands write it on the main

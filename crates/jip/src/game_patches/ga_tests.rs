@@ -36,12 +36,17 @@ fn ga_seams_are_jips_addresses() {
     let corner: Vec<u32> = CORNER_MESSAGE.iter().map(|s| s.addr()).collect();
     assert_eq!(ROLLOVER_WEAPON.addr(), 0x0077_7123);
     assert_eq!(VATS_TARGET_DT.addr(), 0x007e_ce32);
+    assert_eq!(MESSAGE_TIME.addr(), 0x0070_535c);
     assert_eq!(
         AREA.fix_sites,
         [
             sites,
             corner,
-            vec![ROLLOVER_WEAPON.addr(), VATS_TARGET_DT.addr()]
+            vec![
+                ROLLOVER_WEAPON.addr(),
+                VATS_TARGET_DT.addr(),
+                MESSAGE_TIME.addr(),
+            ]
         ]
         .concat()
     );
@@ -440,4 +445,45 @@ fn g121_answers_the_recorded_threshold() {
     );
     crate::game_patches::gc::damage::set_vats_hit_dt(&mut e, -0.5);
     assert_eq!(e.site(0x007e_ce32, &[0x5000, 0x6000]), Some(0));
+}
+
+/// G09 not installed, or installed with the row off: nothing answers at its seam; with the fixes
+/// in, its handler answers there (the default time, 2.0, for the game's call).
+#[test]
+fn g09_seam_answers_only_with_the_fixes() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    assert_eq!(
+        e.site(0x0070_535c, &[2.5f32.to_bits()]),
+        None,
+        "not installed"
+    );
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site(0x0070_535c, &[2.5f32.to_bits()]), None, "row off");
+    install_fixes(&mut e);
+    assert_eq!(
+        e.site(0x0070_535c, &[2.5f32.to_bits()]),
+        Some(2.0f32.to_bits())
+    );
+}
+
+/// JIP's `QueueUIMessageHook`: the game's own call (unmarked) gets the default time, 2.0 and
+/// then what `SetDefaultMessageTime` set; a built-in plugin's call (marked while JIP's fixes are
+/// in) keeps the time it passed, and only while its mark lives.
+#[test]
+fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
+    let mut e = engine();
+    crate::install_as(&mut e, true);
+    install_jip(&mut e);
+    e.set_jip_patches(
+        engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
+    );
+    let passed = 2.5f32.to_bits();
+    assert_eq!(message_time(&mut e, &[passed]), Some(2.0f32.to_bits()));
+    set_default_message_time(&mut e, 5.0);
+    assert_eq!(message_time(&mut e, &[passed]), Some(5.0f32.to_bits()));
+    let mark = e.mark_plugin_ui_message();
+    assert_eq!(message_time(&mut e, &[passed]), Some(passed), "a plugin's");
+    drop(mark);
+    assert_eq!(message_time(&mut e, &[passed]), Some(5.0f32.to_bits()));
 }
