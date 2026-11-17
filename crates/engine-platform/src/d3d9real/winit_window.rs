@@ -44,10 +44,11 @@
 //!   game's (the run ends as with its close button), where the Win32 window keeps Alt for the game.
 //! - Minimised or hidden: X11 says so (the drawing side then asks no frame of the window); winit's
 //!   Wayland says neither, so there the drawing side keeps asking a hidden window for frames.
-//! - macOS: winit's event loop must run on the program's main thread, which the port does not hand
-//!   to the window layer yet (the game's own main thread runs there). [`run`] is the loop, on
-//!   whatever thread calls it; until a host calls it on the main thread, macOS has no window, and
-//!   the run ends with a line saying so.
+//! - macOS: winit's event loop must run on the program's main thread. The viewer hands it there
+//!   ([`run_on_main_thread`]): the game runs on a thread of its own (8 MB of stack, as a main
+//!   thread has), and the main thread waits until the game first needs a window (or the monitors),
+//!   then runs [`run`] for good. A program that does not hand it over gets no window on macOS: the
+//!   run ends with a line saying so.
 //! - Where no window can be shown the run ends with a line naming why (a run without its window
 //!   would go on drawing nothing): no X server or Wayland compositor, a missing library, winit's
 //!   loop stopping. The libraries a Linux player needs, all loaded at run time: on X11 libX11.so.6,
@@ -233,7 +234,9 @@ pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Send
                 );
             }
             let (slot, ready) = main_requests();
-            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rx);
+            *slot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rx);
             ready.notify_all();
             return Mutex::new(tx);
         }
@@ -253,13 +256,12 @@ static MAIN_LOOP: AtomicBool = AtomicBool::new(false);
 
 /// The requests' receiver, handed from the first [`window_thread`] call to the main thread.
 fn main_requests() -> &'static (Mutex<Option<Receiver<Request>>>, std::sync::Condvar) {
-    static SLOT: OnceLock<(Mutex<Option<Receiver<Request>>>, std::sync::Condvar)> =
-        OnceLock::new();
+    static SLOT: OnceLock<(Mutex<Option<Receiver<Request>>>, std::sync::Condvar)> = OnceLock::new();
     SLOT.get_or_init(Default::default)
 }
 
 /// The stack of the thread the game runs on when the main thread is the window layer's: the
-/// main thread's own on Linux and macOS (8 MB), not a spawned thread's default (512 KB on macOS).
+/// main thread's own on Linux and macOS (8 MB), not a spawned thread's default (2 MB in Rust).
 const GAME_STACK: usize = 8 << 20;
 
 /// Runs `game` on a thread of its own and the window layer's loop on the calling thread, which
@@ -281,7 +283,9 @@ pub(super) fn run_on_main_thread(game: Box<dyn FnOnce() + Send>) -> ! {
         crate::end_process(1);
     }
     let (slot, ready) = main_requests();
-    let mut taken = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut taken = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let requests = loop {
         if let Some(rx) = taken.take() {
             break rx;

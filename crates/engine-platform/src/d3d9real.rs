@@ -42,8 +42,8 @@
 //! render thread, the forwarded calls, and the keyboard and mouse state DirectInput reads
 //! ([`Input`], [`held_keys`], [`take_input`]). The real windows come from a window layer of the
 //! system's: `d3d9real/win32.rs` on Windows (the Win32 window, its messages and raw input, moved
-//! there unchanged); elsewhere `d3d9real/winit_window.rs` (winit: X11 and Wayland; macOS refused
-//! until a host hands the window layer the program's main thread), whose keyboard and mouse go
+//! there unchanged); elsewhere `d3d9real/winit_window.rs` (winit: X11, Wayland and macOS, where
+//! the viewer hands the layer the program's main thread: [`run_on_main_thread`]), whose keyboard and mouse go
 //! through `d3d9real/input.rs` with the Win32 window's codes and rules. The real Direct3D 9
 //! (`super::d3d9backend`) is Windows only.
 
