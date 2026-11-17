@@ -1068,19 +1068,20 @@ fn click_item(e: &mut Engine, this: Ptr<ContainerMenu>) {
     );
     // `0x75BF18` (JIP LN NVSE's O9, with `bQttSelectShortKeys`: `JMP 0x75BF7D` over the weight
     // test): only gold counts as light. One load while off.
-    let light = e.call(IS_GOLD, &args![object]).bool() || (!jip_skips_weightless(e) && {
-        let player = player_actor(e);
-        let flag = e.call(PLAYER_STATE_004D1360, &args![player]).u8();
-        let object = typed_call!(
-            leaf::FAMILY,
-            0x0044_ddc0,
-            leaf::word_at_8(e, current_item(e))
-        );
-        let weight = e.call(FORM_WEIGHT, &args![object, flag]).f64();
-        // FCOMP; TEST AH,0x41; JP: weightless unless above 0.0 (or NaN).
-        let zero = e.global::<f64>(ZERO_DOUBLE);
-        weight <= zero
-    });
+    let light = e.call(IS_GOLD, &args![object]).bool()
+        || (!jip_skips_weightless(e) && {
+            let player = player_actor(e);
+            let flag = e.call(PLAYER_STATE_004D1360, &args![player]).u8();
+            let object = typed_call!(
+                leaf::FAMILY,
+                0x0044_ddc0,
+                leaf::word_at_8(e, current_item(e))
+            );
+            let weight = e.call(FORM_WEIGHT, &args![object, flag]).f64();
+            // FCOMP; TEST AH,0x41; JP: weightless unless above 0.0 (or NaN).
+            let zero = e.global::<f64>(ZERO_DOUBLE);
+            weight <= zero
+        });
     let companion_take = light
         && matches!(e.get(this, ContainerMenu::eContainerMode), 1 | 2)
         && e.get(this, ContainerMenu::plbCurrListbox) == this.addr() + CONTAINER;

@@ -38,17 +38,17 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G64 (`WriteRelCall(0x73005C, BarterSellFixHook)`): `BarterMenu::CompleteTransaction`
     // splits a vendor's caps over 32,767 into stacks before taking them.
     row(0x0073_005c),
+    // D04, the pad dead zones (JIP's `DeferredInit`: `SafeWrite32` of its own doubles over the
+    // operand of `FCOMP double ptr [0x010718F0]`): each seam answers the double to compare with.
+    // `CaravanMenu::DoIdle` 00741500, the stick's x and y.
+    row(0x0074_16d6),
+    row(0x0074_1705),
     // O9: `ContainerMenu::DoClick`'s weightless-item test (`{0x75BF18, 0x63EB, 2, 0}`) and its
     // quantity test.
     row(0x0075_bf18),
     row(0x0075_bf97),
     // G82: `ContainerMenu::InitFunc`'s item name.
     row(0x0075_d1a5),
-    // D04, the pad dead zones (JIP's `DeferredInit`: `SafeWrite32` of its own doubles over the
-    // operand of `FCOMP double ptr [0x010718F0]`): each seam answers the double to compare with.
-    // `CaravanMenu::DoIdle` 00741500, the stick's x and y.
-    row(0x0074_16d6),
-    row(0x0074_1705),
     // O9: `InventoryMenu::DoClick`'s quantity test; G82: `InventoryMenu::InitFunc`'s item name.
     row(0x0078_0b09),
     row(0x0078_2876),

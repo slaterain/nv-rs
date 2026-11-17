@@ -898,7 +898,10 @@ fn g82_names_the_entry() {
     assert_eq!(shown(&e), b"Laser Rifle+");
     assert_eq!(e.site(ITEM_NAMES[0].addr(), &[TILE, STACK, 12]), Some(1));
     assert_eq!(shown(&e), b"Laser Rifle+ (12)");
-    assert_eq!(e.site(ITEM_NAMES[1].addr(), &[TILE, STACK, -2i32 as u32]), Some(1));
+    assert_eq!(
+        e.site(ITEM_NAMES[1].addr(), &[TILE, STACK, -2i32 as u32]),
+        Some(1)
+    );
     assert_eq!(shown(&e), b"Laser Rifle+");
     // The same text again: nothing freed, nothing copied, no refresh (JIP's compare).
     gb3_calls();
@@ -988,13 +991,16 @@ fn gb4_rows_are_jips_addresses() {
         [0x0072_d8b4, 0x0075_bf97, 0x0078_0b09]
     );
     assert_eq!(WEIGHTLESS_TAKE.addr(), 0x0075_bf18);
-    assert_eq!(AREA.fix_sites[7..], [
-        0x0072_f33d,
-        0x0075_d1a5,
-        0x0078_2876,
-        0x0072_d8b4,
-        0x0075_bf97,
-        0x0078_0b09,
-        0x0075_bf18
-    ]);
+    assert_eq!(
+        AREA.fix_sites[7..],
+        [
+            0x0072_f33d,
+            0x0075_d1a5,
+            0x0078_2876,
+            0x0072_d8b4,
+            0x0075_bf97,
+            0x0078_0b09,
+            0x0075_bf18
+        ]
+    );
 }
