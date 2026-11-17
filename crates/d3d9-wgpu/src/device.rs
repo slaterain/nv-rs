@@ -194,6 +194,8 @@ struct State {
     /// The texture stage states (`SetTextureStageState`), for draws without a pixel shader
     /// ([`ffp`]).
     tss: Box<[[u32; ffp::STAGE_STATES]; ffp::STAGES]>,
+    /// The FVF code the vertex layout came from (`SetFVF`), None after a declaration.
+    fvf: Option<u32>,
     /// The handles the bindings were last set from ([`Bound`]).
     bound: Bound,
 }
@@ -1164,6 +1166,7 @@ impl Device {
                 dirty: [true; 2],
                 header_dirty: [true; 2],
                 tss: Box::new(ffp::default_stage_states()),
+                fvf: None,
                 bound: Bound::default(),
             },
             encoder: None,
@@ -2210,6 +2213,7 @@ impl Device {
             return;
         }
         self.st.bound.declaration = declaration;
+        self.st.fvf = None;
         self.st.decl = match self.objects.get(&declaration) {
             Some(Obj::Decl(d)) => Some(d.clone()),
             _ => None,
@@ -2222,6 +2226,7 @@ impl Device {
     /// position (0 included) leaves no layout, and a draw without one is skipped.
     pub(crate) fn set_fvf(&mut self, fvf: u32) {
         self.st.bound.declaration = UNKNOWN;
+        self.st.fvf = Some(fvf);
         self.st.decl = ffp::fvf_elements(fvf).map(|elements| {
             self.decl_of(
                 elements
@@ -3510,7 +3515,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// cover, printed once for each layout or stage setting.
     fn draw_shaders(&mut self, decl: &Decl) -> Option<(Arc<Shader>, Arc<Shader>, bool, bool)> {
         let (vs, ffp_vs) = match self.st.vs.clone() {
-            Some(vs) => (vs, false),
+            Some(vs) => {
+                // The game's vertex shader with a layout from SetFVF: Direct3D 9 draws so, and so
+                // does this; said once a code, so a log shows where the game does it (the
+                // movie's FVF draws without shaders).
+                if let Some(fvf) = self.st.fvf {
+                    self.warn(format!(
+                        "a draw with a vertex shader and the vertex layout of FVF {fvf:#x} (drawn)"
+                    ));
+                }
+                (vs, false)
+            }
             None => {
                 let elements = decl.elements.iter().map(|e| (e.usage, e.index));
                 let Some(key) = ffp::VertexKey::of(elements) else {
@@ -6835,6 +6850,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.ds = None;
         st.rs = state::default_render_states(pp.auto_depth);
         *st.samplers = [state::default_sampler_states(); 20];
+        *st.tss = ffp::default_stage_states();
+        st.fvf = None;
         st.textures = Default::default();
         st.vs = None;
         st.ps = None;
@@ -6851,6 +6868,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.dirty = [true; 2];
         st.header_dirty = [true; 2];
         st.bound = Bound::default();
+        self.ffp_f = [None, None];
         self.counting = None;
         self.groups.clear();
         self.depth_parts.clear();

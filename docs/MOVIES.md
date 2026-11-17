@@ -253,7 +253,12 @@ coordinates of the target, whatever the viewport; Direct3D 9's pixel centres), a
 stages (`SetTextureStageState`: operations, arguments, result register), as shader bytecode the
 converter takes like the game's. The rules and their Microsoft documentation are in that file. The
 shaders are listed in the pipeline list (`f1` lines), so their pipelines are made before play from
-the second start on (and from the first with the shipped list). Untransformed vertices without a
+the second start on. The shipped list has the shaders and the pipeline of the recorded run
+(an X8R8G8B8 target without antialiasing, the play build's states); with other settings (another
+target format, antialiasing on the movie's target) the movie's pipeline is made on the first
+movie frame of the first start, and listed for the next. A draw with the game's vertex shader
+and a layout from `SetFVF` is drawn and printed once a code (`NV_D3D9 wgpu: a draw with a
+vertex shader and the vertex layout of FVF ...`). Untransformed vertices without a
 vertex shader (fixed-function transform and lighting), bump mapping, `PREMODULATE` and generated
 or projected texture coordinates are not provided: such a draw is skipped and its layout or stage
 printed once (`NV_D3D9 wgpu: a draw ...`), so a gap shows in a player's log.

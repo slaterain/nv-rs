@@ -4293,6 +4293,92 @@ fn the_movies_pipeline_is_made_before_its_first_frame_from_the_second_start() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `Reset` returns the texture stage states to Direct3D 9's defaults (stage 0: MODULATE the
+/// texture by the diffuse, SELECTARG1 its alpha): a stage 0 set to SELECTARG2 (the diffuse, white
+/// here) before the Reset draws the tile's texels after it.
+#[test]
+fn reset_returns_the_texture_stages_to_their_defaults() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.movie_texture(0x1750, 1, 1, &[0x40, 0x80, 0xC0, 0]);
+    g.no_shaders();
+    g.movie_state();
+    g.stage_state(0, 1, 3);
+    g.clear(1, 0, 1.0);
+    g.movie_quad(0.0, 0.0, 4.0, 4.0);
+    assert!(
+        g.pixels().iter().all(|p| *p == [255, 255, 255, 255]),
+        "SELECTARG2: the diffuse, white: {:?}",
+        g.pixels()
+    );
+    let present = words(&[4, 4, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    g.run(Cmd::Reset {
+        device: DEVICE,
+        window: 0,
+        present: Data::Bytes(&present),
+        back_buffers: Data::Bytes(&words(&[BACK])),
+        depth_stencil: 0,
+    });
+    // Everything the draw needs again, but the stage states.
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: RT,
+    });
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: 0x1750,
+    });
+    g.state(ZENABLE, 0);
+    g.state(CULLMODE, 1);
+    g.clear(1, 0, 1.0);
+    g.movie_quad(0.0, 0.0, 4.0, 4.0);
+    assert!(
+        g.pixels().iter().all(|p| *p == [0x40, 0x80, 0xC0, 255]),
+        "the default stages: the texel: {:?}",
+        g.pixels()
+    );
+}
+
+/// A shader draw after the movie's tile reads the constants the game set before the tile: the
+/// game's renderer sends only constants that changed, so the first shader draw after the movie
+/// can read registers set long before it. The fixed-function shaders' own constants must not
+/// stand in for them (the stage's block is written again on leaving fixed function).
+#[test]
+fn a_shader_draw_after_the_tile_reads_the_constants_set_before_it() {
+    let Some(mut g) = Gpu::new(4, 1) else { return };
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    g.clear(3, 0, 1.0);
+    g.cover(0.5);
+    assert!(g.pixels().iter().all(|p| *p == [0, 255, 0, 255]), "green");
+    g.movie_texture(0x1760, 1, 1, &[0, 0, 255, 0]);
+    g.no_shaders();
+    g.movie_state();
+    g.movie_quad(0.0, 0.0, 4.0, 4.0);
+    assert!(
+        g.pixels().iter().all(|p| *p == [0, 0, 255, 255]),
+        "the red tile"
+    );
+    for (pixel, shader) in [(false, VS), (true, PS)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    g.run(Cmd::SetVertexDeclaration {
+        device: DEVICE,
+        declaration: DECL,
+    });
+    // No constant set again: c0 is still the green set before the tile.
+    g.cover(0.5);
+    assert!(
+        g.pixels().iter().all(|p| *p == [0, 255, 0, 255]),
+        "green from the constant set before the tile: {:?}",
+        g.pixels()
+    );
+}
+
 /// A vertex declaration set after an FVF replaces it, and the same declaration set again after
 /// the FVF is the layout again (the game's 00ec0280 saves the declaration, sets its FVF and sets
 /// the declaration back): the shader draw after the movie's tile draws with its own layout.
