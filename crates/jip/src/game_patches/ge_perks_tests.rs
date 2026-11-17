@@ -294,6 +294,10 @@ fn the_entry_point_list_is_the_actors_or_a_teammates() {
     let p = perk(&mut e, 0, [0, 0, 1, 1, 0], &[point]);
     assert_eq!(get_perk_entry_point_list_npc(&mut e, &[ACTOR, 4, 0]).eax, 0);
     set_perk_rank_npc(&mut e, &[ACTOR, p, 1, 0]);
+    assert!(
+        RELOADS.with(|r| r.take()).is_empty(),
+        "no reload speed entry: no update"
+    );
     let block = ranks(&mut e).unwrap().entry_points;
     assert_eq!(
         get_perk_entry_point_list_npc(&mut e, &[ACTOR, 4, 0]).eax,
