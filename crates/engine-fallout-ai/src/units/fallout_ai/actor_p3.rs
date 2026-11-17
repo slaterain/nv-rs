@@ -6160,6 +6160,20 @@ pub fn fn_008a0360(e: &mut Engine, this: Ptr<Actor>) -> u32 {
     }
 }
 
+/// The player's control flag test in [`fn_008a03a0`] (`005a03f0` with flag 1, called at
+/// `0x8A04B2`: `+0x680` bit 0). JIP LN NVSE's G126 (`GetControlFlagHook`, JIP's own) replaces
+/// the call: the seam is asked with the player and its answer's low byte is the test's result
+/// (the call not made). With the word's `INSTALLED` bit clear: one load, then the exe's call.
+#[inline]
+fn player_controls_test(e: &mut Engine, player: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        if let Some(answer) = e.site(0x008a_04b2, &[player]) {
+            return answer as u8 != 0;
+        }
+    }
+    e.call(PLAYER_TEST_5A03F0, &args![player, 1u32]).bool()
+}
+
 // Translated from 008a03a0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Keeps the actor's combat going once the screen has faded in: does
 /// nothing while the fader (number 1) is visible, for actors failing
@@ -6212,10 +6226,7 @@ pub fn fn_008a03a0(e: &mut Engine, this: Ptr<Actor>) {
         return;
     }
     let player_address = e.global::<u32>(PLAYER_CHARACTER);
-    if target == player_address
-        && e.call(PLAYER_TEST_5A03F0, &args![player_address, 1u32])
-            .bool()
-    {
+    if target == player_address && player_controls_test(e, player_address) {
         return;
     }
     if target != 0 {
@@ -12711,6 +12722,49 @@ fn ammo_impact_script_seam(e: &mut Engine, hit: Ptr<HitData>, this: Ptr<Actor>) 
         && e.site(0x0089_abdc, &[hit.addr(), this.addr()]).is_some()
 }
 
+/// The worn armour's damage in [`actor_hit_me`] (`0x89D2FF` to `0x89D362`: the actor's virtual
+/// `0x3C8` with the item and the hit's armour damage, then the item's entry deleted). JIP LN
+/// NVSE's G99 (`DoHitArmorDamageHook`, JIP's own) replaces that span: the seam is asked with the
+/// actor, the item and the hit, and an answer means JIP's ran (the damage capped by
+/// `SetDamageToArmorMaxPercent`, the entry deleted). With the word's `INSTALLED` bit clear: one
+/// load, false (the exe's calls).
+#[inline]
+fn armor_damage_seam(e: &mut Engine, this: Ptr<Actor>, item: u32, hit: Ptr<HitData>) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x0089_d2ff, &[this.addr(), item, hit.addr()])
+            .is_some()
+}
+
+/// `0089d26f`..`0089d362`: the worn armour's damage. For an actor not protected (virtual `0x22C`
+/// with 0) whose hit does armour damage (more than 0) and that passes virtual `0x360`, a random
+/// worn armour (the head's first for limbs 1 and 2) takes the hit's armour damage (virtual
+/// `0x3C8`) and its entry is deleted; [`armor_damage_seam`] may do that part instead.
+fn hit_me_armor_damage(e: &mut Engine, this: Ptr<Actor>, hit: Ptr<HitData>, zero: f64) {
+    if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
+        && e.get(hit, HitData::fArmorDamage) as f64 > zero
+        && e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+    {
+        let limb = e.get(hit, HitData::eDamageLimb);
+        let prefer_head = limb == 1 || limb == 2;
+        let item = actor_get_random_worn_armor(e, this, u8::from(prefer_head));
+        damage_worn_armor(e, this, item, hit);
+    }
+}
+
+/// `0089d2f6`..`0089d362`: with an armour entry, it takes the hit's armour damage (virtual
+/// `0x3C8`) and the entry is deleted, unless [`armor_damage_seam`] did that (JIP's G99).
+fn damage_worn_armor(e: &mut Engine, this: Ptr<Actor>, item: u32, hit: Ptr<HitData>) {
+    if item != 0 && !armor_damage_seam(e, this, item, hit) {
+        let damage = e.get(hit, HitData::fArmorDamage);
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_DAMAGE_EQUIPMENT,
+            &args![item, damage, 0u32],
+        );
+        e.call(ENTRY_DELETE, &args![item, 1u32]);
+    }
+}
+
 /// `0089aafe`..`0089ac5b`: the script action flags of the aggressor and the
 /// weapon, and the script effect of the ammo.
 fn hit_me_report_attack(e: &mut Engine, s: &mut HitMe) {
@@ -13986,23 +14040,7 @@ fn hit_me_finish(e: &mut Engine, s: &mut HitMe) {
     {
         e.call(TRIGGER_FOLLOWER_BARK, &args![this, 3u32]);
     }
-    if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
-        && e.get(hit, HitData::fArmorDamage) as f64 > zero
-        && e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
-    {
-        let limb = e.get(hit, HitData::eDamageLimb);
-        let prefer_head = limb == 1 || limb == 2;
-        let item = actor_get_random_worn_armor(e, this, u8::from(prefer_head));
-        if item != 0 {
-            let damage = e.get(hit, HitData::fArmorDamage);
-            e.vcall(
-                this.addr(),
-                ACTOR_SLOT_DAMAGE_EQUIPMENT,
-                &args![item, damage, 0u32],
-            );
-            e.call(ENTRY_DELETE, &args![item, 1u32]);
-        }
-    }
+    hit_me_armor_damage(e, this, hit, zero);
     let mut target = aggressor;
     let source = s.source(e);
     if target == 0 && source != 0 {

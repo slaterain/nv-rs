@@ -27,7 +27,9 @@
 //! their value at +0x24). The audit table names the exe evidence of each.
 //!
 //! `ToggleHardcoreTracking` (G114) and `ToggleImmortalMode` (G122) are built with their game
-//! patches, in `crate::game_patches::gp`.
+//! patches, in `crate::game_patches::gp`; `GetConditionDamagePenalty`/`SetConditionDamagePenalty`
+//! (G84), `SetArmorConditionPenalty` (G85), `SetDamageToArmorMaxPercent` (G99) and
+//! `ToggleNoMovementCombat` (G126) in `crate::game_patches::gc::formulas`.
 //!
 //! `SetGameHour` sets JIP's `s_forceHCNeedsUpdate` (kept in `game_patches::gp`), which only JIP's
 //! time patch reads (O5, `UpdateTimeGlobalsHook`, not built yet): until O5 the hour changes as
@@ -36,9 +38,7 @@
 //! camera's rotation column 0, as JIP hands `WorldRotate()` itself (no `+ 1`).
 //!
 //! Deferred (each waits for what is named; no stand-ins):
-//! - `GetConditionDamagePenalty`/`SetConditionDamagePenalty` (G84), `SetArmorConditionPenalty`
-//!   (G85), `SetDamageToArmorMaxPercent` (G99), `ToggleHitEffects` (G123-G125),
-//!   `ToggleNoMovementCombat` (G126), `ToggleDepthClear` (G128), `ToggleBipedSlotVisibility`
+//! - `ToggleHitEffects` (G123-G125), `ToggleDepthClear` (G128), `ToggleBipedSlotVisibility`
 //!   (H15): the stage 3.9 game patches that read what they set.
 //! - `SetInternalMarker`: JIP's hook reading `s_internalMarkerIDs` (hooks.h; core track).
 //! - `SetMoonTexture`, `ToggleCameraCollision`, `InitRockItLauncher`: they patch the game's code.
@@ -154,6 +154,19 @@ pub(crate) struct Unlocked {
     /// yet (stage 3.9); each must call it too. The command and the condition both read this copy,
     /// so they always agree.
     serialized_flags: AtomicU32,
+    /// A copy of the armour damage cap (`s_serializedVars.dmgArmorMaxPercent`, kept in
+    /// [`crate::cosave::Saved`], `SetDamageToArmorMaxPercent`), written with the flags word by
+    /// [`publish_serialized_flags`]: G99 reads it on the AI threads (`Actor::HitMe`).
+    armor_damage_cap: ArmorDamageCap,
+}
+
+/// The cap's `float` as its bits; 1.0 (JIP's `Reset`) until the first publish.
+pub(crate) struct ArmorDamageCap(AtomicU32);
+
+impl Default for ArmorDamageCap {
+    fn default() -> Self {
+        ArmorDamageCap(AtomicU32::new(1.0f32.to_bits()))
+    }
 }
 
 /// Makes the lock-free slot (at install, before the threads start).
@@ -161,12 +174,28 @@ pub fn install(e: &mut Engine) {
     e.ext_free::<Unlocked>();
 }
 
-/// Copies JIP's co-save flags word into the lock-free slot (see [`Unlocked::serialized_flags`]).
+/// Copies JIP's co-save flags word and armour damage cap into the lock-free slot (see
+/// [`Unlocked::serialized_flags`]).
 pub(crate) fn publish_serialized_flags(e: &mut Engine) {
     let flags = e.ext::<Jip>().saved.serialized.flags;
     e.ext_free::<Unlocked>()
         .serialized_flags
         .store(flags, Ordering::Relaxed);
+    let cap = e.ext::<Jip>().saved.serialized.dmg_armor_max_percent;
+    e.ext_free::<Unlocked>()
+        .armor_damage_cap
+        .0
+        .store(cap, Ordering::Relaxed);
+}
+
+/// The armour damage cap (`SetDamageToArmorMaxPercent`), from the lock-free copy.
+pub(crate) fn armor_damage_cap(e: &mut Engine) -> f32 {
+    f32::from_bits(
+        e.ext_free::<Unlocked>()
+            .armor_damage_cap
+            .0
+            .load(Ordering::Relaxed),
+    )
 }
 
 /// JIP's co-save flags word, from the lock-free copy.
