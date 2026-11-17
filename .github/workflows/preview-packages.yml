@@ -1,8 +1,13 @@
 name: Preview packages (Linux, macOS)
 # Builds the Linux and macOS preview packages (scripts/package-playtest.sh) and keeps them as this
-# run's artifacts, for the maintainer to download, look at and publish BY HAND. Nothing here makes
-# a release, a tag or anything public, and it never runs by itself: only by hand (Actions > this
-# workflow > Run workflow, or `gh workflow run preview-packages.yml --ref BRANCH`).
+# run's artifacts, for the maintainer to download, check and publish BY HAND. CI has no game, so these
+# are TEST builds only (BUILD.txt and the archive name say so): the check that no data of the game's
+# FalloutNV.exe is in the program (package-check --game --max-run 4096, which the Windows package
+# always makes) is made by the maintainer on the downloaded package before publishing it
+# (docs/MAINTAINING.md, "Releasing a Linux or macOS preview"); package-playtest.sh refuses a release
+# package without the game. Nothing here makes a release, a tag or anything public, and it never
+# runs by itself: only by hand (Actions > this workflow > Run workflow, or
+# `gh workflow run preview-packages.yml --ref BRANCH -f version=...`).
 #
 # The runners are the oldest GitHub has for each system, so the programs start on as many
 # systems as possible:
@@ -11,8 +16,10 @@ name: Preview packages (Linux, macOS)
 # - macos-15: the oldest Apple silicon runner left (macos-14 is refused as "not supported" since
 #   2026-11); the program is built for macOS 11 or newer (MACOSX_DEPLOYMENT_TARGET below).
 #
-# A workflow run by hand can only be started once it is on the default branch: until this file is
-# merged, a branch can prove it only with a push trigger of its own, removed again after one run.
+# A workflow run by hand can only be started once it is on the default branch. NOT YET PROVEN as
+# written: the proving runs before the merge (43845435955) built the quick play profile; the first
+# hand-started run after the merge is the first release-profile build from scratch on these runners.
+# docs/MAINTAINING.md says what to record from it (each job's time against timeout-minutes).
 #
 # Each job uses runners from the account's shared limit (20 jobs at a time); one run is two jobs.
 on:
@@ -22,15 +29,12 @@ on:
         description: Package version (BUILD.txt), for example 2026-11-16.1
         required: true
         default: test
-      release:
-        description: A release package (HEAD on main, notices and licences complete); else a test build
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
+  # A second start on the same branch waits for the first instead of cancelling a package build.
   group: preview-packages-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 env:
   CARGO_INCREMENTAL: 0
 jobs:
@@ -48,9 +52,10 @@ jobs:
             # Apple silicon runners have 7 GB of memory: two compilers at a time.
             jobs: 2
     runs-on: ${{ matrix.runner }}
-    # The optimised release build, as the Windows package (CI's quick profile was used before
-    # 2026-11-16; this build's time is not measured yet: the timeout leaves room).
-    timeout-minutes: 150
+    # The optimised release build, as the Windows package, from scratch (no cache). Its time is not
+    # measured yet (the proving runs built the quick play profile): generous until the first run
+    # after the merge is recorded (docs/MAINTAINING.md), then about twice the slower job's time.
+    timeout-minutes: 240
     env:
       CARGO_BUILD_JOBS: ${{ matrix.jobs }}
       # macOS: the oldest system the program is built for (Rust's own default for arm64), whatever
@@ -59,32 +64,47 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          # A release package checks that HEAD is on origin's main.
-          fetch-depth: 0
+          # The job token is not kept in .git/config (nothing here pushes).
+          persist-credentials: false
       - name: Install the pinned Rust tools (rust-toolchain.toml)
         run: rustup toolchain install
-      # The program needs no system library to build today (the window and the sound are not in it
-      # yet; Vulkan is loaded while it runs). These are installed ahead for the sound output (cpal,
-      # ALSA, D-Bus for its thread priority) that the sound pull request brings; its run-time
-      # libraries go into distribution/unix/libraries.txt, which play.sh checks before a start.
+      # The sound output (cpal's ALSA backend) links libasound: its development files and
+      # pkg-config to build; its run-time library is in distribution/unix/libraries.txt, which
+      # play.sh checks before a start.
       - name: Install the Linux build packages
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libdbus-1-dev
-      - name: Build and package
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev
+      # The cheap tests first, so the READ MEs' words hold for this very build: play.sh's own
+      # test under this system's /bin/sh, the package checker's tests, and the script's refusal
+      # of a release package without the game.
+      - name: Test play.sh and the package checker
+        shell: bash
+        run: |
+          SH=/bin/sh /bin/sh distribution/unix/test-play.sh
+          cargo test --locked --manifest-path scripts/package-check/Cargo.toml
+          if sh scripts/package-playtest.sh --version x --system ${{ matrix.system }} 2>refusal.txt; then
+            echo "a release package without --game was not refused"; exit 1
+          fi
+          grep -q -- "needs --game" refusal.txt
+          rm -f refusal.txt
+      - name: Build and package (a test build)
         shell: bash
         env:
           VERSION: ${{ inputs.version || 'ci-test' }}
-          RELEASE: ${{ inputs.release || false }}
         run: |
-          flag=--test-build
-          if [ "$RELEASE" = true ]; then flag=; fi
-          sh scripts/package-playtest.sh --version "$VERSION" --system ${{ matrix.system }} $flag
-          cat "dist/nv-rs-preview-${{ matrix.system }}/BUILD.txt"
+          sh scripts/package-playtest.sh --version "$VERSION" --system ${{ matrix.system }} --test-build
+          cat "dist/nv-rs-preview-${{ matrix.system }}-test/BUILD.txt"
+      # The packaged program itself on play.sh's test trees: it takes and refuses the same game
+      # folders as play.sh's stand-in, and ends with its expected stop (the game does not run here).
+      - name: The packaged program on play.sh's tests
+        shell: bash
+        run: |
+          NV_RS_REAL_PROGRAM="$PWD/dist/nv-rs-preview-${{ matrix.system }}-test/app/nv-viewer" SH=/bin/sh /bin/sh distribution/unix/test-play.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: nv-rs-preview-${{ matrix.system }}
+          name: nv-rs-preview-${{ matrix.system }}-test
           path: |
-            dist/nv-rs-preview-${{ matrix.system }}.tar.gz
-            dist/nv-rs-preview-${{ matrix.system }}.tar.gz.sha256
+            dist/nv-rs-preview-${{ matrix.system }}-test.tar.gz
+            dist/nv-rs-preview-${{ matrix.system }}-test.tar.gz.sha256
           if-no-files-found: error
           retention-days: 14

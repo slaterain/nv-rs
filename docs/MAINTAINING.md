@@ -65,6 +65,41 @@ Dependency updates require refreshing distribution/licenses and
 THIRD-PARTY-NOTICES.txt before packaging. Keep their upstream provenance and
 copyright notices. Packaging a license list alone is insufficient.
 
+
+## Releasing a Linux or macOS preview
+
+Nobody on the team has a Linux PC or a Mac, so these packages are built by GitHub Actions
+(`.github/workflows/preview-packages.yml`, started by hand only) and checked against the game
+on the maintainer's Windows PC before anything is published:
+
+1. Start the workflow on main: Actions > "Preview packages (Linux, macOS)" > Run workflow, with a
+   version such as `2026-11-20.1` (or `gh workflow run preview-packages.yml --ref main -f
+   version=2026-11-20.1`). CI has no game, so it makes TEST builds only: the archive is named
+   `nv-rs-preview-<system>-test.tar.gz` and its BUILD.txt says the program was not checked
+   against the game's FalloutNV.exe. `scripts/package-playtest.sh` refuses a release package
+   without `--game`.
+2. Download both artifacts (`gh run download RUN-ID`), check each archive against its `.sha256`,
+   and extract it into a scratch folder (not the game's folder).
+3. Run the same check the Windows package always makes, with your own FalloutNV.exe (only read),
+   on each extracted package folder:
+
+   ```powershell
+   cargo run --release --manifest-path scripts/package-check/Cargo.toml -- `
+     <extracted>\nv-rs-preview-linux-x86_64-test --game "<game folder>\FalloutNV.exe" --max-run 4096
+   ```
+
+   It must end without a finding (status 0). Also read each BUILD.txt: a test build lists the
+   licence notices or folders still missing (a release package would have been refused for
+   them); refresh distribution/licenses and THIRD-PARTY-NOTICES.txt and run the workflow again
+   until it lists none. Only then publish the archive and its `.sha256`, as they are (renaming
+   the archive breaks its checksum file): the published preview is that test build, checked here.
+
+The first hand-started run after this workflow is merged is its first run with the release
+profile from scratch on both runners (the earlier proving runs used the quick play profile).
+Record from it, in the pull request that merged the workflow or in the release notes: each job's
+build time, whether it stayed inside `timeout-minutes` (240 for now), and both packages' sizes;
+then set the timeout to about twice the slower job's time.
+
 ## Work queue and AI handoff
 
 Keep a small set of milestone issues. Contributors comment to claim a bounded
