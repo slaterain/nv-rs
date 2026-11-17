@@ -274,16 +274,9 @@ struct P {
     sun: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> p: P;
-@group(0) @binding(1) var depth_tex: DEPTH_TYPE;
-
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
     return vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
-}
-
-fn depth_at(xy: vec2<i32>) -> f32 {
-    let c = clamp(xy, vec2<i32>(0), vec2<i32>(p.depth.zw) - 1);
-    return textureLoad(depth_tex, c, 0);
 }
 
 fn linear(d: f32) -> f32 {
@@ -301,10 +294,6 @@ fn pixel_of(q: vec3<f32>) -> vec2<f32> {
     return vec2<f32>(u, v) * p.depth.zw;
 }
 
-fn point_at(xy: vec2<i32>) -> vec3<f32> {
-    return view_at(vec2<f32>(xy) + 0.5, linear(depth_at(xy)));
-}
-
 fn bayer(q: vec2<i32>) -> f32 {
     let x = u32(q.x & 3);
     let y = u32(q.y & 3);
@@ -318,8 +307,35 @@ fn fade_at(z: f32) -> f32 {
     return 1.0 - t * t * (3.0 - 2.0 * t);
 }
 
-// The normal at the full-resolution pixel `c` (its point `pc`), toward the camera, from the nearer
-// neighbour on each axis.
+";
+
+/// The full-resolution scene depth (the depth and apply steps).
+const FULL: &str = "
+@group(0) @binding(1) var depth_tex: DEPTH_TYPE;
+
+fn depth_at(xy: vec2<i32>) -> f32 {
+    let c = clamp(xy, vec2<i32>(0), vec2<i32>(p.depth.zw) - 1);
+    return textureLoad(depth_tex, c, 0);
+}
+";
+
+/// The half-resolution distances the depth step made (the occlusion step): one load each, not a
+/// load of the multisampled depth surface.
+const HALF: &str = "
+@group(0) @binding(1) var z_tex: texture_2d<f32>;
+
+fn z_at(q: vec2<i32>) -> f32 {
+    let c = clamp(q, vec2<i32>(0), vec2<i32>(textureDimensions(z_tex)) - 1);
+    return textureLoad(z_tex, c, 0).x;
+}
+
+// The view-space point of the half-resolution texel `q` (its full-resolution pixel 2q).
+fn point_at(q: vec2<i32>) -> vec3<f32> {
+    return view_at(vec2<f32>(q) * 2.0 + 0.5, z_at(q));
+}
+
+// The normal at the texel `c` (its point `pc`), toward the camera, from the nearer neighbour on
+// each axis.
 fn normal_at(c: vec2<i32>, pc: vec3<f32>) -> vec3<f32> {
     let pl = point_at(c - vec2<i32>(1, 0));
     let pr = point_at(c + vec2<i32>(1, 0));
@@ -333,7 +349,14 @@ fn normal_at(c: vec2<i32>, pc: vec3<f32>) -> vec3<f32> {
     }
     return n;
 }
+";
 
+/// The depth step: each half-resolution texel's distance (its full-resolution pixel 2q, sample 0;
+/// the sky gives the far distance).
+const DEPTH: &str = "
+@fragment fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    return vec4<f32>(linear(depth_at(vec2<i32>(at.xy) * 2)), 0.0, 0.0, 1.0);
+}
 ";
 
 /// The half-resolution step: occlusion (r), distance (b), weight (a: 0 sky).
@@ -343,12 +366,12 @@ const HALF_PI: f32 = 1.57079633;
 
 @fragment fn fs(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
     let h = vec2<i32>(at.xy);
-    let c = h * 2;
-    let d = depth_at(c);
-    if (d >= 1.0) {
+    let c = h;
+    let z = z_at(c);
+    if (z >= 0.999 * p.depth.y) {
         return vec4<f32>(1.0, 1.0, 0.0, 0.0);
     }
-    let pc = view_at(vec2<f32>(c) + 0.5, linear(d));
+    let pc = point_at(c);
     let fade = fade_at(pc.z);
     if (fade <= 0.0) {
         return vec4<f32>(1.0, 1.0, pc.z, 1.0);
@@ -385,7 +408,8 @@ const HALF_PI: f32 = 1.57079633;
             for (var j = 0; j < STEPS; j++) {
                 var st = (f32(j) + noise_step) / f32(STEPS);
                 st = st * st;
-                let off = omega * max(st * radius_px, f32(j + 1));
+                // In half-resolution texels: half the full-resolution reach.
+                let off = omega * max(st * radius_px * 0.5, f32(j + 1));
                 let o = vec2<i32>(round(off));
                 let s0 = point_at(c + o) - pc;
                 let s1 = point_at(c - o) - pc;
@@ -450,16 +474,28 @@ const APPLY: &str = "
         return vec4<f32>(ao, ao, ao, 1.0);
     }
     let f = ao;
-    if (f >= 0.999) {
+    // Less than about 1.5 % darker: left alone (not visible), so most pixels write nothing into
+    // the multisampled target.
+    if (f >= 0.985) {
         discard;
     }
     return vec4<f32>(f, f, f, 1.0);
 }
 ";
 
-/// The WGSL of the half-resolution step (`apply` false) or the full-resolution one, for a
-/// multisampled depth surface or not.
-pub fn shader(apply: bool, multisampled_depth: bool) -> String {
+/// The three steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    /// The half-resolution distances from the scene's depth.
+    Depth,
+    /// The half-resolution occlusion.
+    Occlusion,
+    /// The full-resolution blur and multiply.
+    Apply,
+}
+
+/// The WGSL of `stage`, for a multisampled depth surface or not.
+pub fn shader(stage: Stage, multisampled_depth: bool) -> String {
     let depth_type = if multisampled_depth {
         "texture_depth_multisampled_2d"
     } else {
@@ -473,10 +509,14 @@ pub fn shader(apply: bool, multisampled_depth: bool) -> String {
          const VIEW: u32 = {}u;\n",
         view()
     );
-    let body = if apply { APPLY } else { AO };
+    let (textures, body) = match stage {
+        Stage::Depth => (FULL, DEPTH),
+        Stage::Occlusion => (HALF, AO),
+        Stage::Apply => (FULL, APPLY),
+    };
     format!(
-        "{constants}{}{body}",
-        COMMON.replace("DEPTH_TYPE", depth_type)
+        "{constants}{COMMON}{}{body}",
+        textures.replace("DEPTH_TYPE", depth_type)
     )
 }
 
@@ -492,13 +532,17 @@ pub fn view() -> u32 {
     )
 }
 
-/// The format of the half-resolution results.
+/// The format of the half-resolution occlusion results, and of the half-resolution distances.
 const HALF_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const Z_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
 /// The step's GPU objects, made at its first use.
 pub(crate) struct Gpu {
     uniforms: wgpu::Buffer,
-    ao_layouts: [Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>; 2],
+    /// The depth step's layout and pipeline by multisampled depth (0 no, 1 yes); the occlusion
+    /// step's.
+    depth: [Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>; 2],
+    occlusion: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
     /// The full-resolution step's layout and pipelines by (multisampled depth, colour format,
     /// samples).
     #[allow(clippy::type_complexity)]
@@ -507,7 +551,8 @@ pub(crate) struct Gpu {
         wgpu::BindGroupLayout,
         wgpu::RenderPipeline,
     )>,
-    half: Option<(u32, u32, wgpu::TextureView)>,
+    /// The half-resolution textures (width, height, distances, occlusion).
+    half: Option<(u32, u32, wgpu::TextureView, wgpu::TextureView)>,
 }
 
 /// What the step is run on: the scene's colour target and depth surface.
@@ -520,38 +565,39 @@ pub(crate) struct Targets<'a> {
     pub height: u32,
 }
 
-fn layout(device: &wgpu::Device, multisampled: bool, apply: bool) -> wgpu::BindGroupLayout {
-    let mut entries = vec![
-        wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
+/// A float texture read with `textureLoad`.
+const FLOAT_TEXTURE: wgpu::BindingType = wgpu::BindingType::Texture {
+    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+    view_dimension: wgpu::TextureViewDimension::D2,
+    multisampled: false,
+};
+
+/// The scene's depth surface.
+fn depth_texture(multisampled: bool) -> wgpu::BindingType {
+    wgpu::BindingType::Texture {
+        sample_type: wgpu::TextureSampleType::Depth,
+        view_dimension: wgpu::TextureViewDimension::D2,
+        multisampled,
+    }
+}
+
+/// The uniform block and `textures` from binding 1 on.
+fn layout(device: &wgpu::Device, textures: &[wgpu::BindingType]) -> wgpu::BindGroupLayout {
+    let mut entries = vec![wgpu::BindGroupLayoutEntry {
+        binding: 0,
+        visibility: wgpu::ShaderStages::FRAGMENT,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
         },
-        wgpu::BindGroupLayoutEntry {
-            binding: 1,
-            visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Depth,
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled,
-            },
-            count: None,
-        },
-    ];
-    if apply {
+        count: None,
+    }];
+    for (i, ty) in textures.iter().enumerate() {
         entries.push(wgpu::BindGroupLayoutEntry {
-            binding: 2,
+            binding: 1 + i as u32,
             visibility: wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Texture {
-                sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                view_dimension: wgpu::TextureViewDimension::D2,
-                multisampled: false,
-            },
+            ty: *ty,
             count: None,
         });
     }
@@ -603,6 +649,83 @@ fn pipeline(
     })
 }
 
+/// A full-screen triangle into `view` with `pipeline` and `group`.
+fn full_screen(
+    encoder: &mut wgpu::CommandEncoder,
+    label: &str,
+    view: &wgpu::TextureView,
+    load: wgpu::LoadOp<wgpu::Color>,
+    pipeline: &wgpu::RenderPipeline,
+    group: &wgpu::BindGroup,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, group, &[]);
+    pass.draw(0..3, 0..1);
+}
+
+fn half_texture(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+    format: wgpu::TextureFormat,
+) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("scene light half"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&Default::default())
+}
+
+fn group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    uniforms: &wgpu::Buffer,
+    textures: &[&wgpu::TextureView],
+) -> wgpu::BindGroup {
+    let mut entries = vec![wgpu::BindGroupEntry {
+        binding: 0,
+        resource: uniforms.as_entire_binding(),
+    }];
+    for (i, view) in textures.iter().enumerate() {
+        entries.push(wgpu::BindGroupEntry {
+            binding: 1 + i as u32,
+            resource: wgpu::BindingResource::TextureView(view),
+        });
+    }
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout,
+        entries: &entries,
+    })
+}
+
 impl Gpu {
     pub(crate) fn new(device: &wgpu::Device) -> Gpu {
         Gpu {
@@ -612,7 +735,8 @@ impl Gpu {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            ao_layouts: [None, None],
+            depth: [None, None],
+            occlusion: None,
             apply: Vec::new(),
             half: None,
         }
@@ -627,8 +751,8 @@ impl Gpu {
         )
     }
 
-    /// Records the two steps into `encoder`: the half-resolution results, then the scene's
-    /// colour multiplied by them.
+    /// Records the three steps into `encoder`: the half-resolution distances, the
+    /// half-resolution occlusion, then the scene's colour multiplied by it.
     pub(crate) fn encode(
         &mut self,
         device: &wgpu::Device,
@@ -637,32 +761,41 @@ impl Gpu {
     ) {
         let ms = t.samples > 1;
         let (hw, hh) = (t.width.div_ceil(2), t.height.div_ceil(2));
-        if !matches!(&self.half, Some((w, h, _)) if *w == hw && *h == hh) {
-            let tex = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("scene light half"),
-                size: wgpu::Extent3d {
-                    width: hw,
-                    height: hh,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: HALF_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            self.half = Some((hw, hh, tex.create_view(&Default::default())));
+        if !matches!(&self.half, Some((w, h, _, _)) if *w == hw && *h == hh) {
+            self.half = Some((
+                hw,
+                hh,
+                half_texture(device, hw, hh, Z_FORMAT),
+                half_texture(device, hw, hh, HALF_FORMAT),
+            ));
         }
-        let half = self.half.as_ref().map(|(_, _, v)| v.clone()).expect("made");
+        let (z, occlusion) = self
+            .half
+            .as_ref()
+            .map(|(_, _, z, o)| (z.clone(), o.clone()))
+            .expect("made");
         let k = usize::from(ms);
-        if self.ao_layouts[k].is_none() {
-            let l = layout(device, ms, false);
+        if self.depth[k].is_none() {
+            let l = layout(device, &[depth_texture(ms)]);
             let p = pipeline(
                 device,
                 &l,
-                shader(false, ms),
+                shader(Stage::Depth, ms),
+                wgpu::ColorTargetState {
+                    format: Z_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                },
+                1,
+            );
+            self.depth[k] = Some((l, p));
+        }
+        if self.occlusion.is_none() {
+            let l = layout(device, &[FLOAT_TEXTURE]);
+            let p = pipeline(
+                device,
+                &l,
+                shader(Stage::Occlusion, ms),
                 wgpu::ColorTargetState {
                     format: HALF_FORMAT,
                     blend: None,
@@ -670,19 +803,19 @@ impl Gpu {
                 },
                 1,
             );
-            self.ao_layouts[k] = Some((l, p));
+            self.occlusion = Some((l, p));
         }
         let key = (ms, t.colour_format, t.samples);
         if !self.apply.iter().any(|(k, _, _)| *k == key) {
-            let l = layout(device, ms, true);
+            let l = layout(device, &[depth_texture(ms), FLOAT_TEXTURE]);
             let p = pipeline(
                 device,
                 &l,
-                shader(true, ms),
+                shader(Stage::Apply, ms),
                 wgpu::ColorTargetState {
                     format: t.colour_format,
-                    // The scene's colour times the source; its alpha kept (a term alone replaces it
-                    // in `NV_AO_VIEW`).
+                    // The scene's colour times the source; its alpha kept (the occlusion alone
+                    // replaces it in `NV_AO_VIEW`).
                     blend: (view() == 0).then_some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::Dst,
@@ -701,81 +834,37 @@ impl Gpu {
             );
             self.apply.push((key, l, p));
         }
-        let (ao_layout, ao_pipeline) = self.ao_layouts[k].as_ref().expect("made");
-        let ao_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: ao_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(t.depth),
-                },
-            ],
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("scene light: occlusion"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &half,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(ao_pipeline);
-            pass.set_bind_group(0, &ao_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
+        let (depth_layout, depth_pipeline) = self.depth[k].as_ref().expect("made");
+        let g = group(device, depth_layout, &self.uniforms, &[t.depth]);
+        full_screen(
+            encoder,
+            "scene light: distances",
+            &z,
+            wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+            depth_pipeline,
+            &g,
+        );
+        let (ao_layout, ao_pipeline) = self.occlusion.as_ref().expect("made");
+        let g = group(device, ao_layout, &self.uniforms, &[&z]);
+        full_screen(
+            encoder,
+            "scene light: occlusion",
+            &occlusion,
+            wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+            ao_pipeline,
+            &g,
+        );
         let (_, apply_layout, apply_pipeline) =
             self.apply.iter().find(|(k, _, _)| *k == key).expect("made");
-        let apply_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: apply_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(t.depth),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&half),
-                },
-            ],
-        });
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("scene light: apply"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: t.colour,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_pipeline(apply_pipeline);
-        pass.set_bind_group(0, &apply_group, &[]);
-        pass.draw(0..3, 0..1);
+        let g = group(device, apply_layout, &self.uniforms, &[t.depth, &occlusion]);
+        full_screen(
+            encoder,
+            "scene light: apply",
+            t.colour,
+            wgpu::LoadOp::Load,
+            apply_pipeline,
+            &g,
+        );
     }
 }
 
@@ -943,9 +1032,9 @@ mod tests {
     /// Both steps' WGSL, for both depth kinds, read and validated as wgpu reads them.
     #[test]
     fn the_shaders_are_valid_wgsl() {
-        for apply in [false, true] {
+        for stage in [Stage::Depth, Stage::Occlusion, Stage::Apply] {
             for ms in [false, true] {
-                let src = shader(apply, ms);
+                let src = shader(stage, ms);
                 let module = naga::front::wgsl::parse_str(&src)
                     .unwrap_or_else(|e| panic!("{}", e.emit_to_string(&src)));
                 naga::valid::Validator::new(
@@ -953,7 +1042,7 @@ mod tests {
                     naga::valid::Capabilities::all(),
                 )
                 .validate(&module)
-                .unwrap_or_else(|e| panic!("apply {apply} ms {ms}: {e:?}"));
+                .unwrap_or_else(|e| panic!("{stage:?} ms {ms}: {e:?}"));
             }
         }
     }

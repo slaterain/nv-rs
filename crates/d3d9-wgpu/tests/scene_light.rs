@@ -71,8 +71,13 @@ fn run(b: &mut WgpuBackend, cmd: Cmd<Data<'_>>) {
 /// A backend with the scene's target and depth (`samples` per pixel), a pass-through vertex
 /// shader (positions in clip space) and a pixel shader writing `c0`; none without an adapter.
 fn backend(samples: u32) -> Option<WgpuBackend> {
+    backend_sized(SIZE, SIZE, samples, A8R8G8B8)
+}
+
+/// [`backend`] with a `width` by `height` target of `format` (and the back buffer of that size).
+fn backend_sized(width: u32, height: u32, samples: u32, format: u32) -> Option<WgpuBackend> {
     let mut b = WgpuBackend::new(Output::Offscreen);
-    let present = words(&[SIZE, SIZE, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    let present = words(&[width, height, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
     let back = words(&[BACK]);
     b.execute(Cmd::CreateDevice {
         device: DEVICE,
@@ -87,15 +92,15 @@ fn backend(samples: u32) -> Option<WgpuBackend> {
         eprintln!("no GPU adapter: the new lighting's tests are skipped");
         return None;
     }
-    for (surface, is_depth, format) in [(RT, false, A8R8G8B8), (DS, true, D24S8)] {
+    for (surface, is_depth, format) in [(RT, false, format), (DS, true, D24S8)] {
         run(
             &mut b,
             Cmd::CreateSurface {
                 device: DEVICE,
                 surface,
                 depth: is_depth,
-                width: SIZE,
-                height: SIZE,
+                width,
+                height,
                 format,
                 multisample: if samples > 1 { samples } else { 0 },
                 quality: 0,
@@ -342,4 +347,94 @@ fn on_the_crease_darkens_and_nothing_else() {
         );
         assert!(open > crease + 4, "open {open} crease {crease} ({samples})");
     }
+}
+
+/// What the step costs on this machine's graphics card at 2560x1440 with 8x multisampling and the
+/// game's A16B16G16R16F scene target (by hand: `--ignored --nocapture`): the same frames with and
+/// without the step, each batch ended by a read-back that waits for the card; the difference a
+/// frame is printed. Not a check (a shared card's timing varies): a measurement.
+#[test]
+#[ignore]
+fn cost_at_2560x1440() {
+    const W: u32 = 2560;
+    const H: u32 = 1440;
+    const A16B16G16R16F: u32 = 113;
+    const FRAMES: u32 = 300;
+    let time = |on: bool| -> Option<f64> {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        scene_light::enable(on);
+        let b = backend_sized(W, H, 8, A16B16G16R16F);
+        scene_light::enable(false);
+        let mut b = b?;
+        run(
+            &mut b,
+            Cmd::SetViewport {
+                device: DEVICE,
+                viewport: [0, 0, W, H, 0f32.to_bits(), 1f32.to_bits()],
+            },
+        );
+        let mut best = f64::MAX;
+        for _ in 0..3 {
+            let start = std::time::Instant::now();
+            for frame in 0..FRAMES {
+                // The valley and the depth-only clear, as `frame` draws them; `Present` ends it.
+                clear(&mut b, 7);
+                colour(&mut b, [0.5, 0.5, 0.5, 1.0]);
+                let (side, middle) = (depth(120.0), depth(250.0));
+                triangles(
+                    &mut b,
+                    &[
+                        [-1.0, -1.0, side],
+                        [-1.0, 0.5, side],
+                        [0.0, 0.5, middle],
+                        [-1.0, -1.0, side],
+                        [0.0, 0.5, middle],
+                        [0.0, -1.0, middle],
+                        [0.0, -1.0, middle],
+                        [0.0, 0.5, middle],
+                        [1.0, 0.5, side],
+                        [0.0, -1.0, middle],
+                        [1.0, 0.5, side],
+                        [1.0, -1.0, side],
+                    ],
+                );
+                let m = params().to_words();
+                run(
+                    &mut b,
+                    Cmd::SetTransform {
+                        device: DEVICE,
+                        state: scene_light::STATE,
+                        matrix: Data::from_words(&m),
+                    },
+                );
+                clear(&mut b, 2);
+                run(
+                    &mut b,
+                    Cmd::Present {
+                        device: DEVICE,
+                        source: None,
+                        dest: None,
+                        window: 0,
+                        dirty: false,
+                        model: 0,
+                        frame: frame + 1,
+                    },
+                );
+            }
+            let d = b.device().expect("the device");
+            let _ = d.read_surface_pixels(RT);
+            best = best.min(start.elapsed().as_secs_f64() / f64::from(FRAMES));
+        }
+        Some(best)
+    };
+    let Some(off) = time(false) else {
+        return;
+    };
+    let on = time(true).expect("the adapter");
+    eprintln!(
+        "2560x1440, 8x: {:.3} ms a frame off, {:.3} ms on: the step costs {:.3} ms",
+        off * 1e3,
+        on * 1e3,
+        (on - off) * 1e3
+    );
 }
