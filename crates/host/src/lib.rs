@@ -181,12 +181,15 @@ impl Host {
         if let Some(note) = fixes::play_run_taken_as_test(choice, |name| std::env::var(name).ok()) {
             eprintln!("{note}");
         }
-        // `NV_NOT_BACKGROUND=1` (off by default): Windows told the game is not background work, so
-        // an unfocused or hidden window keeps full-speed cores (`qos`; the threads the port starts
-        // make their own call). No line when the switch is unset.
-        if let Some(line) = qos::apply_at_start() {
-            eprintln!("{line}");
-        }
+        // Windows told the game is not background work, so a window that is not the active one
+        // keeps the full-speed cores (`qos`; `fixes::Choice::not_background`: on by default in
+        // every run and preset; `bNotBackground=0` in Fallout.ini's `[nv-rs Threads]` or
+        // `NV_NOT_BACKGROUND=0` turns it off). Before any thread of the port's starts: each makes
+        // its own call when this turned it on. One line either way.
+        eprintln!(
+            "{}",
+            qos::apply_at_start(choice.not_background, choice.not_background_by)
+        );
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         // `NV_REPEATABLE=FRAMES` (a test mode, [`repeatable_frames`]): a virtual clock instead, the

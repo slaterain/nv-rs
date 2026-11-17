@@ -1,16 +1,27 @@
-//! Telling Windows the game is not background work (`NV_NOT_BACKGROUND=1`; off by default).
+//! Telling Windows the game is not background work: on by default in every run and every preset
+//! (the maintainer, 2026-11-17: "on by default, no background slowdown"); off with `Fallout.ini`'s
+//! `[nv-rs Threads] bNotBackground=0` in play or `NV_NOT_BACKGROUND=0` in a scripted run
+//! (`host::fixes::Choice::not_background` decides; this crate only acts on it).
 //!
 //! Windows gives each window-owning process a quality of service from its window: in focus High,
 //! visible but not in focus Medium, minimized or fully covered Low; on processors with two kinds
 //! of core, Low work is scheduled to the efficient ones
 //! (<https://learn.microsoft.com/en-us/windows/win32/procthread/quality-of-service>). A game
-//! window that loses the focus can so run slower than the same window in focus. A process or a
-//! thread that turns execution-speed throttling off explicitly is tagged High whatever its window
-//! (the same page, "API" row: the flag "lets developers explicitly tag a process as HighQoS or
-//! EcoQoS").
+//! window that is not the active one can so run slower than the same window in focus (measured
+//! 2026-11-17 on a hidden window: one run without this about a third slower, every part of the
+//! frame alike). A process or a thread that turns execution-speed throttling off explicitly is
+//! tagged High whatever its window (the same page, "API" row: the flag "lets developers
+//! explicitly tag a process as HighQoS or EcoQoS"). The cost: Windows no longer saves power and
+//! heat on the game while it is in the background.
 //!
 //! On, start-up ([`apply_at_start`]) makes two calls for the process and one for the thread that
-//! starts the game, and each thread the port starts makes one at its start ([`thread_started`]):
+//! starts the game, and each long-running thread the port starts makes one at its start
+//! ([`thread_started`]): the game's threads, the render helpers, the drawing helper, the render
+//! thread, wgpu's finishing and submit threads, the read-ahead queue, the window thread, the
+//! sound output thread, the music decoder and the Vorbis read-ahead, the save copier, the cell
+//! offsets builder, the profiler's sampler and the loading screen's output reader. Short-lived
+//! cache savers make none (they follow the process setting). A thread started before start-up
+//! decided makes none either.
 //! - `SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, {Version 1, ControlMask
 //!   EXECUTION_SPEED | IGNORE_TIMER_RESOLUTION, StateMask 0})`: execution-speed throttling off
 //!   ("HighQoS"), and timer resolution requests always honoured (Windows 11 may ignore a
@@ -28,10 +39,6 @@
 //! the test's own process. On other systems nothing is called.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
-
-/// The switch's name.
-pub const SWITCH: &str = "NV_NOT_BACKGROUND";
 
 /// `PROCESS_INFORMATION_CLASS::ProcessPowerThrottling`.
 pub const PROCESS_POWER_THROTTLING: i32 = 4;
@@ -72,11 +79,6 @@ pub trait System {
     fn set_thread(&mut self, state: Throttling) -> Result<(), u32>;
 }
 
-/// Whether the switch's value turns it on: exactly `1`.
-pub fn switch_on(value: Option<&str>) -> bool {
-    value.map(str::trim) == Some("1")
-}
-
 /// What start-up did for the process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Process {
@@ -90,9 +92,9 @@ pub enum Process {
     Refused(u32),
 }
 
-/// Start-up's decision and calls for the process and the calling thread: off, nothing; on, the
-/// process pair (execution speed with the timer bit; again without it when refused), then the
-/// calling thread's call. Answers the process's outcome and the thread's.
+/// Start-up's calls for the process and the calling thread: off, nothing; on, the process pair
+/// (execution speed with the timer bit; again without it when refused), then the calling
+/// thread's call. Answers the process's outcome and the thread's.
 pub fn start(on: bool, sys: &mut impl System) -> (Process, Result<(), u32>) {
     if !on {
         return (Process::Off, Ok(()));
@@ -116,62 +118,80 @@ pub fn thread(on: bool, sys: &mut impl System) -> Result<(), u32> {
     sys.set_thread(Throttling::off(EXECUTION_SPEED))
 }
 
-/// Start-up's log line for the outcome (`None` when the switch is unset: no line).
-pub fn describe(value: Option<&str>, process: Process, thread: Result<(), u32>) -> Option<String> {
-    let value = value?;
+/// How to turn it off, for the start-up line.
+const TURN_OFF: &str =
+    "bNotBackground=0 in Fallout.ini's [nv-rs Threads] or NV_NOT_BACKGROUND=0 turns it off";
+
+/// Start-up's log line: what was applied, or that it is off and who chose that (`by`: the
+/// variable or the file's key; `None` the default).
+pub fn describe(by: Option<&str>, process: Process, thread: Result<(), u32>) -> String {
     let thread = match thread {
         Ok(()) => "this thread and each thread the port starts too".to_string(),
         Err(code) => format!("this thread's call refused (error {code})"),
     };
-    Some(match process {
+    let chosen = by.map_or("on by default".to_string(), |by| format!("on by {by}"));
+    match process {
         Process::Off => format!(
-            "{SWITCH}={value}: off (only 1 turns it on): Windows treats the game as its window's focus says"
+            "Not background: off by choice ({}): Windows may slow the game down or move it to the slower \
+             cores when its window is not the active one",
+            by.unwrap_or("asked")
         ),
         Process::Both => format!(
-            "{SWITCH}=1: Windows told the game is not background work (execution-speed throttling off, \
-             timer requests honoured) whatever its window's focus; {thread}"
+            "Not background ({chosen}; {TURN_OFF}): Windows told the game is not background work \
+             (execution-speed throttling off, timer requests honoured) whatever its window's focus; {thread}"
         ),
         Process::SpeedOnly(pair) => format!(
-            "{SWITCH}=1: Windows told the game is not background work (execution-speed throttling off; \
-             the timer-request bit refused, error {pair}: an older Windows); {thread}"
+            "Not background ({chosen}; {TURN_OFF}): Windows told the game is not background work \
+             (execution-speed throttling off; the timer-request bit refused, error {pair}: an older Windows); {thread}"
         ),
         Process::Refused(code) => format!(
-            "{SWITCH}=1: Windows refused it (error {code}): treated as its window's focus says"
+            "Not background ({chosen}): Windows refused it (error {code}): treated as its window's focus says"
         ),
-    })
-}
-
-/// The switch, read once ([`apply_at_start`] or the first [`thread_started`]).
-fn on() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| switch_on(std::env::var(SWITCH).ok().as_deref()))
-}
-
-/// At start-up, on the thread that starts the game: the process's calls and this thread's
-/// (switch on), and the log line ([`describe`]; none when the switch is unset).
-pub fn apply_at_start() -> Option<String> {
-    let value = std::env::var(SWITCH).ok();
-    if cfg!(not(windows)) {
-        return value.map(|v| format!("{SWITCH}={v}: Windows only, nothing changed here"));
     }
-    let (process, thread) = start(on(), &mut Real);
-    describe(value.as_deref(), process, thread)
 }
 
-/// At the start of each thread the port starts, on that thread: its call (switch on). A refusal
-/// is said once a run.
+/// Start-up's whole step on `flag` (what [`thread_started`] reads afterwards) and `sys`: the flag
+/// set to `on`, the calls ([`start`]), the line ([`describe`]).
+pub fn apply_with(on: bool, by: Option<&str>, flag: &AtomicBool, sys: &mut impl System) -> String {
+    flag.store(on, Ordering::Relaxed);
+    let (process, thread) = start(on, sys);
+    describe(by, process, thread)
+}
+
+/// A started thread's step on `flag` and `sys`: [`thread`] with the flag start-up set (off until
+/// start-up has decided).
+pub fn thread_with(flag: &AtomicBool, sys: &mut impl System) -> Result<(), u32> {
+    thread(flag.load(Ordering::Relaxed), sys)
+}
+
+/// The run's decision, set by [`apply_at_start`]; off until then.
+static ON: AtomicBool = AtomicBool::new(false);
+
+/// At start-up, on the thread that starts the game, with the run's choice (`on`, and `by`: who
+/// chose it, `None` for the default): the process's calls and this thread's, and the log line.
+pub fn apply_at_start(on: bool, by: Option<&str>) -> String {
+    if cfg!(not(windows)) {
+        return "Not background: Windows only, nothing to change here".to_string();
+    }
+    apply_with(on, by, &ON, &mut Real)
+}
+
+/// At the start of each thread the port starts, on that thread: its call (when start-up turned
+/// it on). A refusal is said once a run.
 pub fn thread_started() {
-    if cfg!(not(windows)) || !on() {
+    if cfg!(not(windows)) {
         return;
     }
-    if let Err(code) = thread(true, &mut Real) {
+    if let Err(code) = thread_with(&ON, &mut Real) {
         static SAID: AtomicBool = AtomicBool::new(false);
         if !SAID.swap(true, Ordering::Relaxed) {
             let name = std::thread::current()
                 .name()
                 .unwrap_or("unnamed")
                 .to_string();
-            eprintln!("{SWITCH}=1: Windows refused it for the thread \"{name}\" (error {code})");
+            eprintln!(
+                "Not background: Windows refused it for the thread \"{name}\" (error {code})"
+            );
         }
     }
 }
@@ -313,20 +333,64 @@ mod tests {
     }
 
     #[test]
-    fn only_1_turns_it_on() {
-        assert!(switch_on(Some("1")));
-        assert!(switch_on(Some(" 1 ")));
-        for v in [None, Some(""), Some("0"), Some("true"), Some("2")] {
-            assert!(!switch_on(v), "{v:?}");
-        }
-    }
-
-    #[test]
     fn off_calls_nothing() {
         let mut fake = Fake::default();
         assert_eq!(start(false, &mut fake), (Process::Off, Ok(())));
         assert_eq!(thread(false, &mut fake), Ok(()));
         assert_eq!(fake.calls, vec![]);
+    }
+
+    /// Turned off (the file's key or the variable): start-up and every later thread make no call,
+    /// and the line says it is off and who chose that.
+    #[test]
+    fn turned_off_start_up_and_threads_make_no_call_and_say_so() {
+        for by in [
+            "NV_NOT_BACKGROUND",
+            "Fallout.ini's [nv-rs Threads] bNotBackground",
+        ] {
+            let flag = AtomicBool::new(true);
+            let mut fake = Fake::default();
+            let line = apply_with(false, Some(by), &flag, &mut fake);
+            assert_eq!(thread_with(&flag, &mut fake), Ok(()));
+            assert_eq!(fake.calls, vec![], "{by}");
+            assert!(
+                line.starts_with("Not background: off by choice ("),
+                "{line}"
+            );
+            assert!(line.contains(by), "{line}");
+        }
+        // Before start-up decides, a thread makes no call.
+        let mut fake = Fake::default();
+        assert_eq!(thread_with(&AtomicBool::new(false), &mut fake), Ok(()));
+        assert_eq!(fake.calls, vec![]);
+    }
+
+    /// On (the default): the process pair and this thread at start-up, then one call per started
+    /// thread; the line says it is on by default and how to turn it off.
+    #[test]
+    fn on_by_default_start_up_and_threads_make_the_documented_calls() {
+        let flag = AtomicBool::new(false);
+        let mut fake = Fake::default();
+        let line = apply_with(true, None, &flag, &mut fake);
+        assert_eq!(fake.calls, vec![Call::Process(PAIR), Call::Thread(SPEED)]);
+        assert!(
+            line.starts_with("Not background (on by default; "),
+            "{line}"
+        );
+        assert!(
+            line.contains("bNotBackground=0") && line.contains("NV_NOT_BACKGROUND=0"),
+            "{line}"
+        );
+        assert!(line.contains("timer requests honoured"), "{line}");
+        assert!(line.contains("each thread the port starts"), "{line}");
+        fake.calls.clear();
+        assert_eq!(thread_with(&flag, &mut fake), Ok(()));
+        assert_eq!(fake.calls, vec![Call::Thread(SPEED)]);
+        let asked = apply_with(true, Some("NV_NOT_BACKGROUND"), &flag, &mut Fake::default());
+        assert!(
+            asked.starts_with("Not background (on by NV_NOT_BACKGROUND; "),
+            "{asked}"
+        );
     }
 
     #[test]
@@ -370,18 +434,12 @@ mod tests {
 
     #[test]
     fn the_log_line_says_what_was_applied_or_why_not() {
-        assert_eq!(describe(None, Process::Off, Ok(())), None);
-        let off = describe(Some("0"), Process::Off, Ok(())).unwrap();
-        assert!(off.contains("NV_NOT_BACKGROUND=0: off"), "{off}");
-        let both = describe(Some("1"), Process::Both, Ok(())).unwrap();
-        assert!(both.contains("timer requests honoured"), "{both}");
-        assert!(both.contains("each thread the port starts"), "{both}");
-        let older = describe(Some("1"), Process::SpeedOnly(87), Err(6)).unwrap();
+        let older = describe(None, Process::SpeedOnly(87), Err(6));
         assert!(
             older.contains("error 87") && older.contains("error 6"),
             "{older}"
         );
-        let refused = describe(Some("1"), Process::Refused(5), Ok(())).unwrap();
+        let refused = describe(None, Process::Refused(5), Ok(()));
         assert!(refused.contains("refused it (error 5)"), "{refused}");
     }
 }

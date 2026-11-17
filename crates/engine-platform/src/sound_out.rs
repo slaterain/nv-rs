@@ -484,6 +484,7 @@ mod wasapi {
         let thread = std::thread::Builder::new()
             .name("nv sound out".into())
             .spawn(move || unsafe {
+                qos::thread_started();
                 let task = audio_priority();
                 match open(want) {
                     Ok(d) => {

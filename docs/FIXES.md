@@ -8,7 +8,7 @@ every comparison with the original, gate and recording runs on it (the maintaine
 
 | Where | What | Who |
 | --- | --- | --- |
-| The run's `Fallout.ini`, `[nv-rs General]`, `[nv-rs Display]`, `[nv-rs Threads]` and `[nv-rs Fixes]` | `sPreset=fixes` or `vanilla`; `bBorderless`, `iFrameLimit=n`, `iMenuFrameLimit=n`; `bSteppedThreads`, `bRenderThread`; a fix's own line (`bUncap=0` or `1`, ...: `distribution/nv-rs-sections.ini`), which turns that fix alone on or off without making the run a test; a commented line leaves it to the preset. Read only in a launcher's play run (`NV_SETTINGS` set) that is no test | The player |
+| The run's `Fallout.ini`, `[nv-rs General]`, `[nv-rs Display]`, `[nv-rs Threads]` and `[nv-rs Fixes]` | `sPreset=fixes` or `vanilla`; `bBorderless`, `iFrameLimit=n`, `iMenuFrameLimit=n`; `bSteppedThreads`, `bRenderThread`, `bNotBackground`; a fix's own line (`bUncap=0` or `1`, ...: `distribution/nv-rs-sections.ini`), which turns that fix alone on or off without making the run a test; a commented line leaves it to the preset. Read only in a launcher's play run (`NV_SETTINGS` set) that is no test | The player |
 | `userdata\settings.ini` (older previews' Settings.cmd; today's only before Play.exe's first start) | `Preset=fixes` (the default) or `Preset=vanilla`; `FrameLimit=n` (0: none); `MenuFrameLimit=n` (120 when missing or empty, 0: none of its own). Play.exe moves it into both profiles' `Fallout.ini` at its next start and renames it `settings.ini.migrated`. While it is there Play.exe moves it in at every start, its lines winning over the files (PLAYTESTING.md, "The game's Fallout.ini"), and the game reads these three lines of it itself, each only when neither `Fallout.ini` nor a variable sets it | The player |
 | `NV_PRESET=fixes` or `vanilla`, `NV_FRAME_LIMIT=n`, `NV_MENU_FRAME_LIMIT=n` | Over the files | Tests, scripts |
 | `NV_UNCAP=0` or `1`, and each fix's own variable below | That fix alone; with no `NV_PRESET` the rest of the run is vanilla | Gates, tests |
@@ -33,6 +33,14 @@ made, not which calls or in what order. In play they are made on a render thread
 #347); `bRenderThread=0` in `Fallout.ini`'s `[nv-rs Threads]` (Settings.cmd's "Drawing thread":
 "Main thread") makes them on the game's threads, as the original does, the fallback. A test or scripted
 run without `NV_RENDER_THREAD` makes them on the game's threads whatever play's default is.
+
+Nor is the "not background" request to Windows (`fixes::PLAY_NOT_BACKGROUND`, crates/qos, since 2026-11-17): a
+platform matter, not a game fix, so it is on in every run and every preset, the original-behaviour one too. Windows
+is asked not to slow the program down or move it to the slower cores while its window is not the active one
+(execution-speed throttling off and timer requests honoured, for the process and each thread the port starts); a
+hidden run without it once ran about a third slower, every part of the frame alike (PR #663). `bNotBackground=0` in
+`Fallout.ini`'s `[nv-rs Threads]` or `NV_NOT_BACKGROUND=0` lets Windows decide (it saves power and heat with the
+game in the background).
 
 The borderless window isn't part of the preset either. In a launcher's play run (`NV_SETTINGS` set
 and no test: the run that reads `Fallout.ini`'s sections) the game's window has no frame and fills

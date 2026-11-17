@@ -183,6 +183,7 @@ fn start_building(e: &Engine) {
     let _ = std::thread::Builder::new()
         .name("cell offsets".into())
         .spawn(move || {
+            qos::thread_started();
             for path in paths {
                 tables_of(path);
             }
