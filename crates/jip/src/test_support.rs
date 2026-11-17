@@ -95,6 +95,13 @@ fn prepare(e: &mut Engine) {
         e.map(0x011c_f000, 0x1000);
         e.register(0x0064_6260, |e, _| f32::into_ret(e.mem.f32(0x011c_f154)));
     }
+    // G84's and G85's wraps (`00646d00`, `00646360`), when the test engine has no translation of
+    // them: answers no test reads (JIP's wraps replace them, never handing the call on).
+    for at in [0x0064_6d00, 0x0064_6360] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| f32::into_ret(-1.0));
+        }
+    }
     // O1's wrap (`009b5a30`, `HitData::ReduceDamage`): a stand-in that leaves the hit as it is.
     if !e.is_registered(0x009b_5a30) {
         e.register(0x009b_5a30, |_, _| Ret::default());
@@ -105,6 +112,17 @@ fn prepare(e: &mut Engine) {
     // female NPC (`+0x34` bit 0 of the NPC, the model being at `+0xDC`), else the male one's.
     e.map(0x0104_a000, 0x1000);
     e.map(0x011d_2000, 0x2000);
+    // `004f15a0` (G48's wrap) when the test engine has no translation of it: the exe's, the
+    // word's low byte stored at `+4` alone, the form answered.
+    if !e.is_registered(0x004f_15a0) {
+        e.register(0x004f_15a0, |e, a| {
+            e.mem.set_u8(a[0].wrapping_add(4), a[1] as u8);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+    }
     if !e.is_registered(0x0060_1c30) {
         e.register(0x0060_1c30, |e, a| {
             let female = e.mem.u8(a[0].wrapping_sub(0xdc).wrapping_add(0x34)) & 1 != 0;
