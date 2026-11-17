@@ -2060,25 +2060,21 @@ pub fn fn_00567490(e: &mut Engine, this: Ptr<TESObjectREFR>, value: f32) {
             return;
         }
     }
-    let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
-    let heap = e.call(SCRAP_HEAP_OF_THREAD, &args![manager]).u32();
-    let alignment = e.global::<u32>(SCRAP_ALIGNMENT);
-    let text = e
-        .call(SCRAP_HEAP_ALLOCATE, &args![heap, 0x20u32, alignment])
-        .u32();
-    e.call(
-        FORMAT_TO_BUFFER,
-        &args![text, 0x200u32, FORMAT_TWO_DECIMALS, f64::from(value)],
-    );
-    let mut value = e.call(ATOF, &args![text]).f64() as f32;
-    let low: f64 = e.global(SCALE_MIN_DOUBLE);
-    if f64::from(value) < low {
-        value = e.global(SCALE_MIN_FLOAT);
-    }
-    let high: f64 = e.global(SCALE_MAX_DOUBLE);
-    if f64::from(value) > high {
-        value = e.global(SCALE_MAX_FLOAT);
-    }
+    // JIP LN's G78 (a fix row, `WriteRelJump(0x5674D5, SetScaleHook)` and `0x567709 EB 15`): the
+    // handler answers the clamped scale's bits; the text block, its rounding and the exe's clamps
+    // are passed over, and so is the block's release at the end. Words: the value's bits.
+    let jip_scale = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0056_74d5, &[value.to_bits()])
+    } else {
+        None
+    };
+    let (text, value) = match jip_scale {
+        Some(bits) => (None, f32::from_bits(bits)),
+        None => {
+            let (text, value) = scale_text_rounded(e, value);
+            (Some(text), value)
+        }
+    };
     e.set(this, TESObjectREFR::fRefScale, value);
     e.vcall(me, 0x48, &args![0x10u32]);
     let scale = tes_object_refr_get_scale(e, this);
@@ -2124,9 +2120,37 @@ pub fn fn_00567490(e: &mut Engine, this: Ptr<TESObjectREFR>, value: f32) {
             }
         }
     }
+    if let Some(text) = text {
+        let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
+        let heap = e.call(SCRAP_HEAP_OF_THREAD, &args![manager]).u32();
+        e.call(SCRAP_HEAP_DEALLOCATE, &args![heap, text]);
+    }
+}
+
+/// The exe's rounding of `fn_00567490` (`0x5674D5` .. `0x567554`): a 0x20-byte scrap-heap block
+/// holds `value` as text with two decimals, read back (`atof`), then clamped to the exe's 0.01 ..
+/// 10.0. The block (released at the end of the caller) and the rounded scale.
+fn scale_text_rounded(e: &mut Engine, value: f32) -> (u32, f32) {
     let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
     let heap = e.call(SCRAP_HEAP_OF_THREAD, &args![manager]).u32();
-    e.call(SCRAP_HEAP_DEALLOCATE, &args![heap, text]);
+    let alignment = e.global::<u32>(SCRAP_ALIGNMENT);
+    let text = e
+        .call(SCRAP_HEAP_ALLOCATE, &args![heap, 0x20u32, alignment])
+        .u32();
+    e.call(
+        FORMAT_TO_BUFFER,
+        &args![text, 0x200u32, FORMAT_TWO_DECIMALS, f64::from(value)],
+    );
+    let mut value = e.call(ATOF, &args![text]).f64() as f32;
+    let low: f64 = e.global(SCALE_MIN_DOUBLE);
+    if f64::from(value) < low {
+        value = e.global(SCALE_MIN_FLOAT);
+    }
+    let high: f64 = e.global(SCALE_MAX_DOUBLE);
+    if f64::from(value) > high {
+        value = e.global(SCALE_MAX_FLOAT);
+    }
+    (text, value)
 }
 
 // Translated from 00567730 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -7811,6 +7835,46 @@ mod tests {
             assert_eq!(released.len(), 1);
             assert_eq!(released[0][0], 0x2222);
         }
+    }
+
+    /// JIP LN's G78 seam at `0x5674D5` (a fix row): its answer is the scale, with no text block
+    /// (neither taken nor released) and none of the exe's rounding or clamps; only with the fix
+    /// row's bit; no answer is the exe's way.
+    #[test]
+    fn set_scale_jip_g78_seam_answers_the_scale() {
+        use engine_core::extend::jip_patches;
+        let (mut e, refr) = scale_fixture();
+        super::jip_seam::put(&mut e, 0x0056_74d5, Some(50.0f32.to_bits()));
+        let set = |e: &mut Engine, input: f32| {
+            logged(e, |e| {
+                e.call(0x0056_7490, &args![refr, input]);
+            })
+        };
+        e.set_jip_patches(jip_patches::INSTALLED);
+        set(&mut e, 1.2345);
+        assert_eq!(e.get(refr, TESObjectREFR::fRefScale), 1.23, "the exe");
+        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
+        e.set_jip_patches(jip_patches::FIXES);
+        let log = set(&mut e, 1.2345);
+        assert_eq!(super::jip_seam::seen(), vec![vec![1.2345f32.to_bits()]]);
+        assert_eq!(
+            e.get(refr, TESObjectREFR::fRefScale),
+            50.0,
+            "the answer, unclamped"
+        );
+        assert!(calls_to(&log, SCRAP_HEAP_ALLOCATE).is_empty());
+        assert!(calls_to(&log, FORMAT_TO_BUFFER).is_empty());
+        assert!(calls_to(&log, SCRAP_HEAP_DEALLOCATE).is_empty());
+        let scale = calls_to(&log, SET_NODE_SCALE);
+        assert_eq!(scale.len(), 1);
+        assert_eq!(f32::from_bits(scale[0][1]), 50.0, "the node gets it too");
+        // No answer: the exe's rounding, block and release.
+        super::jip_seam::answer_with(None);
+        let log = set(&mut e, 1.2345);
+        assert_eq!(e.get(refr, TESObjectREFR::fRefScale), 1.23);
+        assert_eq!(calls_to(&log, SCRAP_HEAP_ALLOCATE).len(), 1);
+        assert_eq!(calls_to(&log, SCRAP_HEAP_DEALLOCATE).len(), 1);
+        super::jip_seam::seen();
     }
 
     #[test]
