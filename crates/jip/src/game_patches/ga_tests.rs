@@ -433,11 +433,11 @@ fn g121_answers_the_recorded_threshold() {
     let mut e = engine();
     crate::install_as(&mut e, true);
     install_fixes(&mut e);
-    super::gc::damage::set_vats_hit_dt(&mut e, 6.0);
+    crate::game_patches::gc::damage::set_vats_hit_dt(&mut e, 6.0);
     assert_eq!(
         e.site(0x007e_ce32, &[0x5000, 0x6000]),
         Some(6.0f32.to_bits())
     );
-    super::gc::damage::set_vats_hit_dt(&mut e, -0.5);
+    crate::game_patches::gc::damage::set_vats_hit_dt(&mut e, -0.5);
     assert_eq!(e.site(0x007e_ce32, &[0x5000, 0x6000]), Some(0));
 }
