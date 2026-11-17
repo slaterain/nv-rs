@@ -1169,7 +1169,7 @@ mod tests {
     /// passes the file's choices on and leaves what was set before as it is.
     #[test]
     fn the_games_variables_follow_the_file_only_in_a_test() {
-        let ini = "[nv-rs General]\nsPreset=vanilla\n[nv-rs Display]\nbBorderless=0\niFrameLimit=90\niMenuFrameLimit=bad\n[nv-rs Threads]\nbSteppedThreads=1\n[nv-rs Fixes]\n;bUncap=1\nbGrabPush=0\nbTopicIndex=2\n";
+        let ini = "[nv-rs General]\nsPreset=vanilla\n[nv-rs Display]\nbBorderless=0\niFrameLimit=90\niMenuFrameLimit=bad\nfAmbientOcclusionStrength=0.9\n[nv-rs Threads]\nbSteppedThreads=1\n[nv-rs Fixes]\n;bUncap=1\nbGrabPush=0\nbTopicIndex=2\n";
         let ten = [
             "NV_PRESET",
             "NV_BORDERLESS",

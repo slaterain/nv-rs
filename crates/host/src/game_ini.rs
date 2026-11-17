@@ -298,10 +298,13 @@ mod tests {
             assert!(row.section.starts_with("nv-rs "), "{row:?}");
             assert!(!row.section.contains(':'), "{row:?}");
             assert!(!row.comment.trim().is_empty(), "{row:?}");
-            assert!(row.key.starts_with(['b', 'i', 's']), "{row:?}");
+            assert!(row.key.starts_with(['b', 'f', 'i', 's']), "{row:?}");
             assert!(seen.insert(row.key.to_ascii_lowercase()), "{row:?}");
             if row.key.starts_with('b') {
                 assert!(flag(row.default).is_some(), "{row:?}");
+            }
+            if row.key.starts_with('f') {
+                assert!(row.default.parse::<f32>().is_ok_and(f32::is_finite), "{row:?}");
             }
         }
         assert_eq!(
