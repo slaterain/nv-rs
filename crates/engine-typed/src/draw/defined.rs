@@ -337,9 +337,7 @@ pub fn set_defined_constant(
             80 | 81 => 0,
             82..=86 => {
                 let handle = e.global::<u32>(EXTRA_DATA_NAME);
-                let held = e
-                    .call(FIXED_STRING_CONSTRUCT, &args![name, handle])
-                    .u32();
+                let held = e.call(FIXED_STRING_CONSTRUCT, &args![name, handle]).u32();
                 let extra = e.call(GET_EXTRA_DATA, &args![object, held]).u32();
                 e.call(FIXED_STRING_DESTRUCT, &args![name]);
                 if extra == 0 {

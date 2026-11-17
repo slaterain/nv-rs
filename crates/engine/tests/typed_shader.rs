@@ -17717,15 +17717,29 @@ fn defined_constant_answer(e: &mut Engine, a: &[u32]) -> Ret {
 fn set_defined_constant() {
     Diff::new(entry!(
         0x00e8_3db0,
-        defined::set_defined_constant(Ptr<_>, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32) -> u32
+        defined::set_defined_constant(
+            Ptr<_>,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+            u32,
+        ) -> u32
     ))
     .draw_common_at(0x00e8_3db0)
     .inputs(&[
         // The renderer's constants (every matrix case), the inverse view's rows, the property state's floats, no data,
         // the identity, the skinning array, an unknown constant.
         Input::Of(&[
-            1, 2, 13, 14, 3, 4, 15, 16, 5, 6, 17, 18, 7, 8, 19, 20, 9, 10, 21, 22, 11, 12, 23, 24, 25, 26, 27, 28,
-            29, 30, 31, 32, 33, 34, 35, 36, 73, 75, 76, 77, 78, 79, 80, 96, 97, 98, 99, 200,
+            1, 2, 13, 14, 3, 4, 15, 16, 5, 6, 17, 18, 7, 8, 19, 20, 9, 10, 21, 22, 11, 12, 23, 24,
+            25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 73, 75, 76, 77, 78, 79, 80, 96, 97, 98,
+            99, 200,
         ]),
         // The fourth and fifth words present; the program's answer.
         Input::Of(TWO_WAYS),
@@ -17739,7 +17753,11 @@ fn set_defined_constant() {
         let r = d.w.renderer;
         // The renderer's five matrices, from the swept floats.
         for k in 0..80u32 {
-            let w = if k % 3 == 0 { bits(c, 3) } else { bits(c, 4) ^ (k << 8) };
+            let w = if k % 3 == 0 {
+                bits(c, 3)
+            } else {
+                bits(c, 4) ^ (k << 8)
+            };
             set(e, r + 0x940 + 4 * k, w);
         }
         let map = obj(e, 0x40, 0);
@@ -17787,7 +17805,8 @@ fn set_defined_constant() {
         e.register(0x00fd_f42c, |e, a| {
             let m = words_at(e, a[1], 16);
             for k in 0..16u32 {
-                e.mem.set_u32(a[0] + 4 * k, m[(4 * (k % 4) + k / 4) as usize]);
+                e.mem
+                    .set_u32(a[0] + 4 * k, m[(4 * (k % 4) + k / 4) as usize]);
             }
             ret(a[0])
         });
@@ -17801,7 +17820,9 @@ fn set_defined_constant() {
                 ret(a[0])
             });
         }
-        vec![map, program, entry, 0, fourth, fifth, 0, properties, 0, 0, 0, 0]
+        vec![
+            map, program, entry, 0, fourth, fifth, 0, properties, 0, 0, 0, 0,
+        ]
     })
     .run()
     .assert_same();
