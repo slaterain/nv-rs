@@ -479,7 +479,7 @@ pub fn point3_distance(e: &Engine, first: u32, second: u32) -> f32 {
 }
 
 /// `rsqrtss`: the processor's own approximation on x86-64, so the result is JIP's on the same
-/// machine; elsewhere the exact reciprocal square root (a documented difference).
+/// machine; elsewhere the shared model of a PC's (engine-core `estimate`).
 fn rsqrtss(value: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -489,7 +489,7 @@ fn rsqrtss(value: f32) -> f32 {
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        1.0 / value.sqrt()
+        engine_core::estimate::rsqrt(value)
     }
 }
 
