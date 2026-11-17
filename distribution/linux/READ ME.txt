@@ -12,13 +12,10 @@ PLEASE READ FIRST
   every change to play.sh, and most of the program's unit tests on every change to the project's
   main branch.
 - What works today: finding your game, remembering it, copying your saves from Steam's Proton
-  folder into nv-rs's own folder (only when you type yes), and the check of your game's version
-  (./play.sh --check). The game itself does NOT run on Linux yet: the program stops right after
-  it finds your game, and says what is not provided on Linux yet. That stop is expected and needs
-  no report: it begins with
-    error: nv-rs does not run the game on this system yet: ...
-  and play.sh then says "As expected for this preview: the game does not run on Linux or macOS
-  yet". Anything else that stops it is worth a report.
+  folder into nv-rs's own folder (only when you type yes), the check of your game's version
+  (./play.sh --check), and then the start of the game itself. The program is built and its unit
+  tests pass on Linux, but it has NEVER been started with the game's files on Linux: you may be
+  the first. Any stop, any missing picture or sound, is worth a report with the log.
 - Your nv-rs saves, settings and logs live in nv-rs's own folder:
   ~/.local/share/nv-rs (or $XDG_DATA_HOME/nv-rs when that is set).
 - nv-rs never writes to the game's folder, to Steam's folders (Proton's folder for the game, with
@@ -57,16 +54,20 @@ What you need
 
 What this build can do today
 ----------------------------
-Today the program STOPS right after it finds your game, with a message that lists what is not
-provided on Linux yet (it begins "error: nv-rs does not run the game on this system yet").
-Some of the machine's answers to the game (its display adapter, sound devices and folders,
-measured on Windows) and text in code pages other than Windows' Western one are still being
-made for Linux (the game's window, sound and paths are done). They come in the next previews;
-play.sh and your nv-rs folder stay the same. This stop needs no report: play.sh says
-"As expected for this preview" after it.
+The program goes on to start the game, drawing with Vulkan, with the same play settings as the
+Windows preview. It is built and unit-tested on Linux, but it has never been started with the
+game's files there, so expect stops nobody has seen yet. Known to be missing on Linux today:
+- Sounds whose rate differs from your sound device's are not heard at first (most of the game's
+  sounds, until the game first changes a sound's pitch): the converter Windows uses for them is
+  being made for Linux.
+- Warnings that pop up in a window on Windows (a save that could not be copied) are only in the
+  log.
+- A mod with its own loose shader files (HLSL) stops the game where it needs them compiled.
+Each of these, and any other stop, is worth a report with the log.
 
 ./play.sh --check checks your game's FalloutNV.exe (that it is version 1.4.0.525, the one nv-rs
-needs) before that same stop: a wrong version is said instead.
+needs) and the code page (NV_CODE_PAGE: 1252 for English, French, German, Italian and Spanish
+games, 1250 for Polish and Czech, 1251 for Russian), and says what it found.
 
 
 Start
@@ -111,8 +112,8 @@ saves go with it).
 
 What doesn't work yet
 ---------------------
-- Everything in "What this build can do today": the game does not run yet.
-- Once it runs: what the Windows preview's READ ME lists (mods with plugins, controllers), and
+- Everything in "What this build can do today".
+- What the Windows preview's READ ME lists (mods with plugins, controllers), and
   anything Linux-only nobody has seen yet.
 - Only x86_64 builds: no ARM Linux build yet.
 

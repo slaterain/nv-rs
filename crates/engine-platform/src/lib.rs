@@ -957,6 +957,21 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, nls::lc_map_string_w(u32, u32, Ptr, i32, Ptr, i32) -> u32).1,
         ),
     ];
+    // Off Windows the two shader profile getters by the device's caps (`d3dx::profiles`); the
+    // compiler itself stays Windows only.
+    #[cfg(not(windows))]
+    imports.extend([
+        (
+            "d3dx9_38.dll",
+            "D3DXGetVertexShaderProfile",
+            entry!(0, d3dx::profiles::get_vertex_shader_profile(Ptr) -> u32).1,
+        ),
+        (
+            "d3dx9_38.dll",
+            "D3DXGetPixelShaderProfile",
+            entry!(0, d3dx::profiles::get_pixel_shader_profile(Ptr) -> u32).1,
+        ),
+    ]);
     // The shader compiler through the player's own d3dx9_38.dll (ADR-0008, Windows only).
     #[cfg(windows)]
     imports.extend([
@@ -1025,7 +1040,8 @@ mod tests {
         }
         // The 195 of the table before the layer moved out of `engine-core` (6 are Windows only),
         // `GlobalMemoryStatus(Ex)`, and `MultiByteToWideChar` and `LCMapStringW`.
-        assert_eq!(table.len(), if cfg!(windows) { 199 } else { 193 });
+        // Off Windows also the two shader profile getters (`d3dx::profiles`).
+        assert_eq!(table.len(), if cfg!(windows) { 199 } else { 195 });
     }
 
     /// Not a check: the rows of `engine-core`'s `allocations_per_operation_of_the_kernel` whose

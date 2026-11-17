@@ -16,14 +16,14 @@
 #![windows_subsystem = "windows"]
 
 mod find;
-mod game_ini;
+use game_profile::game_ini;
 mod mods;
-mod settings;
+use game_profile::settings;
 mod tables;
 mod ui;
 mod win;
 
-use settings::Settings;
+use settings::{migrated_name, Settings};
 use std::cell::{Cell, RefCell};
 use std::io::{Read, Write};
 use std::os::windows::process::CommandExt;
@@ -661,7 +661,7 @@ struct Prepared {
 
 /// A profile's `Fallout.ini` and `FalloutPrefs.ini`: the player's own copied once, read only from
 /// `real` (their `My Games\FalloutNV`: the settings the game's launcher made). nv-rs's own sections
-/// go into `Fallout.ini` (`game_ini.rs`): the whole block once, and what a file with only some of
+/// go into `Fallout.ini` (`game_profile::game_ini`, crates/game-profile): the whole block once, and what a file with only some of
 /// them lacks. The player's choices go into them: `pending`, a `settings.ini` that is being moved
 /// into the files, whose lines win. Play.exe has no values of its own: what nothing chose is the
 /// generated sections' value, the game's default (the borderless window among them).
@@ -776,23 +776,6 @@ fn prepare_profile(
         write_keeping_mark(&profile.prefs, &bytes)?;
     }
     Ok(prepared)
-}
-
-/// The name a moved `settings.ini` gets: `settings.ini.migrated`, or with the first free number
-/// after it (`settings.ini.migrated.2`, ...) when an earlier one is there. An earlier one is
-/// never replaced.
-fn migrated_name(settings: &Path) -> PathBuf {
-    let mut base = settings.as_os_str().to_owned();
-    base.push(".migrated");
-    let mut name = PathBuf::from(&base);
-    let mut number = 1u32;
-    while name.symlink_metadata().is_ok() {
-        number += 1;
-        let mut numbered = base.clone();
-        numbered.push(format!(".{number}"));
-        name = PathBuf::from(numbered);
-    }
-    name
 }
 
 /// Both profiles' files made ready ([`prepare_profile`]), so Settings.cmd finds them to edit; a
@@ -1302,7 +1285,7 @@ fn play(
         message: format!("{}: {e}", log_path.display()),
     })?;
     // The player's options are in the profile's Fallout.ini, which the game reads itself (host
-    // `game_ini.rs`): in play no variable is passed for them, so nothing here can beat the file
+    // `game_ini.rs`; Play.exe's side in `game_profile::game_ini`): in play no variable is passed for them, so nothing here can beat the file
     // (`pass_switches`, below).
     let mut command = Command::new(&package.game_exe);
     command

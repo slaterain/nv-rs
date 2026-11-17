@@ -7,6 +7,9 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+# The profile files' sections and lines (first_profile.rs; Play.exe's own code), on every system for
+# its tests; only Linux and macOS write with it.
+game-profile = { path = "../game-profile" }
 qos = { path = "../qos" }
 engine = { path = "../engine" }
 # The one reader of the game's profile rules (`mod_files::ini_value`) for nv-rs's own keys in
