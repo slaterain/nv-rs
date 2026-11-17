@@ -496,3 +496,153 @@ pub fn processor_rcp(v: f32) -> f32 {
         1.0 / v
     }
 }
+
+/// The seam's calls in these tests (no platform layer here): files and folders of this test's
+/// thread, by lower-case name; a name with a `..` part is refused as the platform refuses it
+/// (nothing read, nothing written).
+pub mod files {
+    use engine_core::mod_files::{self as mf, ModFileCalls};
+    use engine_core::Engine;
+    use std::cell::RefCell;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    thread_local! {
+        static FILES: RefCell<BTreeMap<Vec<u8>, Vec<u8>>> = RefCell::default();
+        static FOLDERS: RefCell<BTreeSet<Vec<u8>>> = RefCell::default();
+        static WRITES: RefCell<u32> = const { RefCell::new(0) };
+        static BYTES: RefCell<u64> = const { RefCell::new(0) };
+        static WHOLE_READS: RefCell<u32> = const { RefCell::new(0) };
+    }
+
+    /// The name as the platform keeps it (`engine_platform::mod_files::relative`): lower case,
+    /// `\`, a `..` taking off the part before it; `None` for one that leaves the game's folder.
+    fn key(name: &[u8]) -> Option<Vec<u8>> {
+        let name = name.to_ascii_lowercase();
+        let mut parts: Vec<&[u8]> = Vec::new();
+        for part in name.split(|&b| b == b'\\' || b == b'/') {
+            match part {
+                b"" | b"." => {}
+                b".." => {
+                    parts.pop()?;
+                }
+                _ => parts.push(part),
+            }
+        }
+        (!parts.is_empty()).then(|| parts.join(&b'\\'))
+    }
+    /// A file that is there but cannot be read (Windows' `ERROR_ACCESS_DENIED`).
+    pub const LOCKED: &[u8] = b"\xff locked";
+
+    fn read(_: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
+        WHOLE_READS.with(|w| *w.borrow_mut() += 1);
+        lookup(name)
+    }
+    fn lookup(name: &[u8]) -> Result<Vec<u8>, u32> {
+        // A refused name reads nothing, as a file that is not there.
+        let k = key(name).ok_or(mf::ERROR_FILE_NOT_FOUND)?;
+        match FILES.with(|f| f.borrow().get(&k).cloned()) {
+            Some(bytes) if bytes == LOCKED => Err(mf::ERROR_ACCESS_DENIED),
+            Some(bytes) => Ok(bytes),
+            None => Err(mf::ERROR_FILE_NOT_FOUND),
+        }
+    }
+    fn exists(_: &Engine, name: &[u8]) -> bool {
+        key(name).is_some_and(|k| FILES.with(|f| f.borrow().contains_key(&k)))
+    }
+    fn directory_exists(_: &Engine, name: &[u8]) -> bool {
+        key(name).is_some_and(|k| FOLDERS.with(|f| f.borrow().contains(&k)))
+    }
+    fn create_directory(_: &mut Engine, name: &[u8]) -> Result<(), u32> {
+        let k = key(name).ok_or(mf::ERROR_ACCESS_DENIED)?;
+        FOLDERS.with(|f| f.borrow_mut().insert(k));
+        Ok(())
+    }
+    fn write(_: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+        let k = key(name).ok_or(mf::ERROR_ACCESS_DENIED)?;
+        // A file in a folder that exists nowhere (not made, and holding no file): Windows'
+        // `ERROR_PATH_NOT_FOUND`.
+        if let Some(at) = k.iter().rposition(|&b| b == b'\\' || b == b'/') {
+            let folder = &k[..at + 1];
+            let there = FOLDERS.with(|f| f.borrow().contains(&k[..at]))
+                || FILES.with(|f| f.borrow().keys().any(|name| name.starts_with(folder)));
+            if !there {
+                return Err(mf::ERROR_PATH_NOT_FOUND);
+            }
+        }
+        WRITES.with(|w| *w.borrow_mut() += 1);
+        BYTES.with(|w| *w.borrow_mut() += bytes.len() as u64);
+        FILES.with(|f| f.borrow_mut().insert(k, bytes.to_vec()));
+        Ok(())
+    }
+    /// The platform's append: only the new bytes are written (counted); a file that is not there
+    /// is made by [`write`]; one that cannot be opened ([`LOCKED`]) is refused and kept.
+    fn append(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+        let k = key(name).ok_or(mf::ERROR_ACCESS_DENIED)?;
+        match FILES.with(|f| f.borrow().get(&k).map(|old| old == LOCKED)) {
+            None => write(e, name, bytes),
+            Some(true) => Err(mf::ERROR_ACCESS_DENIED),
+            Some(false) => {
+                WRITES.with(|w| *w.borrow_mut() += 1);
+                BYTES.with(|w| *w.borrow_mut() += bytes.len() as u64);
+                FILES.with(|f| {
+                    if let Some(old) = f.borrow_mut().get_mut(&k) {
+                        old.extend_from_slice(bytes);
+                    }
+                });
+                Ok(())
+            }
+        }
+    }
+    /// The platform's bounded read: the first `max` bytes of what [`read`] answers (not counted
+    /// as a whole read).
+    fn read_head(_: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>, u32> {
+        let mut bytes = lookup(name)?;
+        bytes.truncate(max);
+        Ok(bytes)
+    }
+    static CALLS: ModFileCalls = ModFileCalls {
+        read,
+        exists,
+        directory_exists,
+        create_directory,
+        write,
+        append,
+        read_head,
+    };
+
+    /// Installs the calls (once a run) and empties this thread's files.
+    pub fn fresh() {
+        engine_core::mod_files::install(&CALLS);
+        FILES.with(|f| f.borrow_mut().clear());
+        FOLDERS.with(|f| f.borrow_mut().clear());
+        WRITES.with(|w| *w.borrow_mut() = 0);
+        BYTES.with(|w| *w.borrow_mut() = 0);
+        WHOLE_READS.with(|w| *w.borrow_mut() = 0);
+    }
+    pub fn put(name: &str, text: &[u8]) {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FILES.with(|f| f.borrow_mut().insert(k, text.to_vec()));
+    }
+    pub fn folder(name: &str) {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FOLDERS.with(|f| f.borrow_mut().insert(k));
+    }
+    pub fn get(name: &str) -> Option<Vec<u8>> {
+        let k = name.to_ascii_lowercase().into_bytes();
+        FILES.with(|f| f.borrow().get(&k).cloned())
+    }
+    pub fn folders() -> Vec<Vec<u8>> {
+        FOLDERS.with(|f| f.borrow().iter().cloned().collect())
+    }
+    pub fn writes() -> u32 {
+        WRITES.with(|w| *w.borrow())
+    }
+    /// The bytes all writes and appends have written.
+    pub fn bytes_written() -> u64 {
+        BYTES.with(|w| *w.borrow())
+    }
+    /// The whole-file reads.
+    pub fn whole_reads() -> u32 {
+        WHOLE_READS.with(|w| *w.borrow())
+    }
+}

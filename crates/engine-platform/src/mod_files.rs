@@ -17,6 +17,12 @@
 //!   never sees half of it), then into the run's memory; a failed folder write fails the call and
 //!   changes nothing. Without a folder (no `NV_SAVE_OUT` or `NV_MOD_FILES_OUT`) a write lives in
 //!   the run's memory only: mods' settings last for the session, and nothing touches the disk.
+//! - [`append`]: only the new bytes, added to the folder's copy (made once, whole, when the folder
+//!   has none); [`read_head`]: only a file's first bytes. A log a mod adds to every frame costs
+//!   the same each frame however long it grows (REVIEW-643).
+//! - Writes refuse (`ERROR_ACCESS_DENIED`) a last part ending in `.part`, and a name with a byte
+//!   above 0x7F when there is no port folder (with one, such a name is written to the disk only,
+//!   see `writable_as`); every call refuses a part ending in a dot or a space.
 //! - The folder a file's name says must exist somewhere (made in this run, in the port's folder,
 //!   or in the game's), as Windows answers `ERROR_PATH_NOT_FOUND` otherwise; in the port's folder
 //!   it is then made.
@@ -49,6 +55,8 @@ pub static CALLS: ModFileCalls = ModFileCalls {
     directory_exists,
     create_directory,
     write,
+    append,
+    read_head,
 };
 
 /// The mod files of this run: the folder they are kept in and what mods wrote in this run.
@@ -80,7 +88,41 @@ pub enum NotMine {
     Outside,
     /// A part names a DOS device: neither read nor written.
     Device,
+    /// A part ends in a dot or a space, which Windows takes off when it opens the file (`a.txt.`
+    /// is `a.txt`): neither read nor written, so one disk file never has two names in this
+    /// run's memory (REVIEW-643).
+    Folded,
 }
+
+/// A name a write takes ([`relative_as`]), with the rules for writes alone, all
+/// `ERROR_ACCESS_DENIED`: a last part ending in `.part` in any case (the name a write goes
+/// through, [`new_part`]: a mod's own `x.txt.part` would be taken away by a later write of
+/// `x.txt`), and, without a port folder, a byte above 0x7F anywhere. With a port folder such a
+/// name (an accented or Cyrillic plugin or INI name) is written to the disk only and this run's
+/// memory keeps no copy of it ([`remembered`]), so the disk, which folds those letters' case the
+/// Windows way, answers every spelling; without one the memory would be the only copy, keyed by
+/// ASCII case, and two spellings of one file could hold two contents (REVIEW-643b). Reads of
+/// such names are never refused: the disk answers them.
+fn writable_as(e: &Engine, name: &[u8], folder_call: bool) -> Result<Vec<u8>, u32> {
+    let rel = relative_as(e, name, folder_call).map_err(|_| ERROR_ACCESS_DENIED)?;
+    let last = rel.rsplit(|&b| b == b'\\').next().unwrap_or(&rel);
+    if last.to_ascii_lowercase().ends_with(PART.as_bytes())
+        || (!rel.is_ascii() && state_ref!(e).mod_files.folder.is_none())
+    {
+        return Err(ERROR_ACCESS_DENIED);
+    }
+    Ok(rel)
+}
+
+/// Whether this run's memory keeps a write of the relative name (and a folder it made): an
+/// ASCII name, whose case the memory's keys fold as Windows does. Any other is left to the
+/// disk alone ([`writable_as`] lets one through only with a port folder).
+fn remembered(rel: &[u8]) -> bool {
+    rel.is_ascii()
+}
+
+/// What a write's temporary file adds to the name.
+const PART: &str = ".part";
 
 /// Whether one part of a name is a DOS device's name: the text before its first `.`, without
 /// trailing spaces and dots, compared without case (the superscript digits as the ANSI code
@@ -149,6 +191,7 @@ pub fn relative_as(e: &Engine, name: &[u8], folder_call: bool) -> Result<Vec<u8>
                     return Err(NotMine::Outside);
                 }
             }
+            _ if part.ends_with(b".") || part.ends_with(b" ") => return Err(NotMine::Folded),
             _ => parts.push(part),
         }
     }
@@ -326,7 +369,7 @@ fn new_part(part: &std::ffi::OsStr) -> Result<std::fs::File, u32> {
 /// outside the game's folder or a device, or the port folder's own error; nothing made then.
 pub fn create_directory(e: &mut Engine, name: &[u8]) -> Result<(), u32> {
     assert_locked(e);
-    let rel = relative_as(e, name, true).map_err(|_| ERROR_ACCESS_DENIED)?;
+    let rel = writable_as(e, name, true)?;
     if folder_exists(e, &rel) {
         return Err(ERROR_ALREADY_EXISTS);
     }
@@ -345,7 +388,9 @@ pub fn create_directory(e: &mut Engine, name: &[u8]) -> Result<(), u32> {
             return Err(code);
         }
     }
-    state!(e).mod_files.folders.insert(key(&rel));
+    if remembered(&rel) {
+        state!(e).mod_files.folders.insert(key(&rel));
+    }
     Ok(())
 }
 
@@ -355,7 +400,14 @@ pub fn create_directory(e: &mut Engine, name: &[u8]) -> Result<(), u32> {
 /// error (disk full, access denied): nothing written then, and no `.part` left.
 pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
     assert_locked(e);
-    let rel = relative(e, name).map_err(|_| ERROR_ACCESS_DENIED)?;
+    let rel = writable_file(e, name)?;
+    write_rel(e, &rel, bytes)
+}
+
+/// A file name a write or an append takes ([`writable_as`]), whose own name is not a folder's
+/// (`ERROR_ACCESS_DENIED`) and whose folder exists somewhere (else `ERROR_PATH_NOT_FOUND`).
+fn writable_file(e: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
+    let rel = writable_as(e, name, false)?;
     if folder_exists(e, &rel) {
         return Err(ERROR_ACCESS_DENIED);
     }
@@ -364,11 +416,16 @@ pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
             return Err(ERROR_PATH_NOT_FOUND);
         }
     }
+    Ok(rel)
+}
+
+/// [`write`] of a name [`writable_file`] took.
+fn write_rel(e: &mut Engine, rel: &[u8], bytes: &[u8]) -> Result<(), u32> {
     if let Some(folder) = state_ref!(e).mod_files.folder.clone() {
-        let target = kept_path(&folder, &rel);
+        let target = kept_path(&folder, rel);
         let parent = target.parent().unwrap_or(&folder).to_path_buf();
         let mut part = target.clone().into_os_string();
-        part.push(".part");
+        part.push(PART);
         let mut made = false;
         let done = confined(&folder, &parent)
             .and_then(|()| new_part(&part))
@@ -394,11 +451,175 @@ pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
             return Err(code);
         }
     }
-    state!(e)
-        .mod_files
-        .written
-        .insert(key(&rel), bytes.to_vec());
+    if remembered(rel) {
+        state!(e).mod_files.written.insert(key(rel), bytes.to_vec());
+    }
     Ok(())
+}
+
+/// `fopen(name, "ab")` and one write of `bytes`: only the new bytes are written. With a port
+/// folder, the folder's copy is opened for appending (after the same names, folders and real
+/// path checks as [`write`], made each time), and this run's memory forgets its whole copy (the
+/// disk's answers from then on, so nothing whole is kept or rewritten); a copy that is a link or
+/// a reparse point is refused, `ERROR_ACCESS_DENIED`, and nothing is written through it. When the
+/// folder has no copy yet, it is made once, whole, through [`write`]: what [`read`] answers (this
+/// run's write, else the game's copy; none: empty) and then the bytes. Without a folder the
+/// run's copy grows in memory (seeded once the same way). A failed append leaves the file as it
+/// was (a partly written end is cut off again) and fails with Windows' code: a copy that is there
+/// but cannot be opened (held by another program, unreadable) is never replaced.
+pub fn append(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+    assert_locked(e);
+    let rel = writable_file(e, name)?;
+    let k = key(&rel);
+    let Some(folder) = state_ref!(e).mod_files.folder.clone() else {
+        if !state_ref!(e).mod_files.written.contains_key(&k) {
+            let seed = seed(e, &rel)?;
+            state!(e).mod_files.written.insert(k.clone(), seed);
+        }
+        if let Some(copy) = state!(e).mod_files.written.get_mut(&k) {
+            copy.extend_from_slice(bytes);
+        }
+        return Ok(());
+    };
+    let target = kept_path(&folder, &rel);
+    let parent = target.parent().unwrap_or(&folder).to_path_buf();
+    let done = confined(&folder, &parent).and_then(|()| appended_kept(&target, bytes));
+    match done {
+        // Appended on disk: the disk's copy answers from now on.
+        Ok(true) => {
+            state!(e).mod_files.written.remove(&k);
+            Ok(())
+        }
+        // No copy in the folder yet: made once, whole.
+        Ok(false) => {
+            let mut whole = seed(e, &rel)?;
+            whole.extend_from_slice(bytes);
+            write_rel(e, &rel, &whole)
+        }
+        Err(code) => {
+            println!(
+                "mod files: {} not appended to (Windows error {code})",
+                target.display()
+            );
+            Err(code)
+        }
+    }
+}
+
+/// The folder's copy `target` appended to when it is a plain file (true); false when it is not
+/// there; anything else of that name (a link, a junction) refuses the append.
+fn appended_kept(target: &Path, bytes: &[u8]) -> Result<bool, u32> {
+    match std::fs::symlink_metadata(target) {
+        Ok(meta) if meta.file_type().is_file() => append_to(target, bytes).map(|()| true),
+        Ok(_) => {
+            println!(
+                "mod files: {} is not a plain file; nothing written through it",
+                target.display()
+            );
+            Err(ERROR_ACCESS_DENIED)
+        }
+        Err(err) if missing(code_of(&err)) => Ok(false),
+        Err(err) => Err(code_of(&err)),
+    }
+}
+
+/// What an append starts from when the port's folder has no copy: [`read`]'s answer (this
+/// run's write, else the game's copy), empty when there is none; a copy that is there but cannot
+/// be read fails the append (it is never replaced by one made from nothing).
+fn seed(e: &Engine, rel: &[u8]) -> Result<Vec<u8>, u32> {
+    match read(e, rel) {
+        Ok(bytes) => Ok(bytes),
+        Err(code) if missing(code) => Ok(Vec::new()),
+        Err(code) => Err(code),
+    }
+}
+
+/// The folder's copy `target` (a plain file just looked at) with `bytes` added at its end
+/// ([`append_with`], writing with `write_all`).
+fn append_to(target: &Path, bytes: &[u8]) -> Result<(), u32> {
+    append_with(target, bytes, |file, bytes| {
+        use std::io::Write as _;
+        file.write_all(bytes).and_then(|()| file.flush())
+    })
+}
+
+/// [`append_to`] with the write itself given (the tests make it fail part way). The file is
+/// opened with write access (not append-only, so the same handle can cut it back), at its end,
+/// under the kernel lock: this run writes nothing else to it meanwhile. On Windows the open does
+/// not follow a reparse point and one is refused, so a link put there after the look is not
+/// written through; elsewhere the look before stands for it. A write that fails cuts the file
+/// back to its old length through the same handle (a cut-back that fails too is logged; the file
+/// then keeps the partly written end) and the write's code is the answer.
+///
+/// Left open on purpose (REVIEW-643b, weighed): the real path check ([`confined`]) and this open
+/// are two steps, so a folder swapped for a junction between them, by another program in that
+/// instant, would be followed; and a hard link another program made in the port's folder is
+/// appended through (a write replaces the entry instead). Only programs the player runs can
+/// make either; no script can.
+fn append_with(
+    target: &Path,
+    bytes: &[u8],
+    write: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+) -> Result<(), u32> {
+    use std::io::Seek as _;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // FILE_FLAG_OPEN_REPARSE_POINT: the entry itself, not where a link leads.
+        options.custom_flags(0x0020_0000);
+    }
+    let mut file = options.open(target).map_err(|err| code_of(&err))?;
+    let meta = file.metadata().map_err(|err| code_of(&err))?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt as _;
+        // FILE_ATTRIBUTE_REPARSE_POINT
+        if meta.file_attributes() & 0x400 != 0 {
+            println!(
+                "mod files: {} is a link; nothing written through it",
+                target.display()
+            );
+            return Err(ERROR_ACCESS_DENIED);
+        }
+    }
+    if !meta.is_file() {
+        return Err(ERROR_ACCESS_DENIED);
+    }
+    let old = file
+        .seek(std::io::SeekFrom::End(0))
+        .map_err(|err| code_of(&err))?;
+    if let Err(err) = write(&mut file, bytes) {
+        if let Err(cut) = file.set_len(old) {
+            println!(
+                "mod files: {} could not be cut back to {old} bytes after a failed append ({cut}); \
+                 its end may hold part of the line",
+                target.display()
+            );
+        }
+        return Err(code_of(&err));
+    }
+    Ok(())
+}
+
+/// The first `max` bytes of the mod file `name`, from [`read`]'s places with its answers; only
+/// those bytes are read from the disk.
+pub fn read_head(e: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>, u32> {
+    assert_locked(e);
+    let rel = relative(e, name).map_err(|_| ERROR_FILE_NOT_FOUND)?;
+    let mods = &state_ref!(e).mod_files;
+    if let Some(bytes) = mods.written.get(&key(&rel)) {
+        return Ok(bytes[..bytes.len().min(max)].to_vec());
+    }
+    if let Some(folder) = &mods.folder {
+        match files::read_head_of(&kept_path(folder, &rel), max) {
+            Ok(bytes) => return Ok(bytes),
+            Err(err) if missing(code_of(&err)) => {}
+            Err(err) => return Err(code_of(&err)),
+        }
+    }
+    files::read_head_or_error(e, &files::full_path(e, &rel), max)
 }
 
 #[cfg(test)]

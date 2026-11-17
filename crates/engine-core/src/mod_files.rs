@@ -63,10 +63,21 @@ pub struct ModFileCalls {
     /// folder exists nowhere, `ERROR_ACCESS_DENIED` for a folder, a name outside the game's
     /// folder or a port folder that refused the write.
     pub write: WriteCall,
+    /// `fopen(name, "ab")` and a write of the bytes: added at the end of the file (only the new
+    /// bytes are written, so N appends cost N small writes, not N whole files); a file that is
+    /// not there is made with them. The same names and failures as [`ModFileCalls::write`]; a
+    /// file that is there but cannot be opened (held, unreadable) fails and is left as it is.
+    pub append: WriteCall,
+    /// The first `max` bytes of the file, from [`ModFileCalls::read`]'s places with its
+    /// answers: only those bytes are read (`FileToBuffer`'s `fread` of at most `maxLen`).
+    pub read_head: ReadHeadCall,
 }
 
 /// [`ModFileCalls::write`]'s type: the engine, the name, the bytes; Windows' error code.
 pub type WriteCall = fn(&mut Engine, &[u8], &[u8]) -> Result<(), u32>;
+
+/// [`ModFileCalls::read_head`]'s type: the engine, the name, at most this many bytes.
+pub type ReadHeadCall = fn(&Engine, &[u8], usize) -> Result<Vec<u8>, u32>;
 
 static CALLS: std::sync::OnceLock<&'static ModFileCalls> = std::sync::OnceLock::new();
 
@@ -123,6 +134,29 @@ pub fn write_or_error(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u
 /// [`write_or_error`]: true when written.
 pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> bool {
     write_or_error(e, name, bytes).is_ok()
+}
+
+/// [`ModFileCalls::append`] under the kernel lock.
+pub fn append_or_error(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().map_or(Err(ERROR_NOT_SUPPORTED), |c| (c.append)(e, name, bytes))
+}
+
+/// [`append_or_error`]: true when written.
+pub fn append(e: &mut Engine, name: &[u8], bytes: &[u8]) -> bool {
+    append_or_error(e, name, bytes).is_ok()
+}
+
+/// [`ModFileCalls::read_head`] under the kernel lock; `ERROR_NOT_SUPPORTED` without the
+/// platform.
+pub fn read_head_or_error(e: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>, u32> {
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().map_or(Err(ERROR_NOT_SUPPORTED), |c| (c.read_head)(e, name, max))
+}
+
+/// [`read_head_or_error`]'s bytes; `None` for any error.
+pub fn read_head(e: &Engine, name: &[u8], max: usize) -> Option<Vec<u8>> {
+    read_head_or_error(e, name, max).ok()
 }
 
 /// `GetPrivateProfileStringA(section, key, ..., name)` over [`read`]: the value as Windows reads

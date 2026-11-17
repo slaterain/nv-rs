@@ -38,15 +38,7 @@ extern "system" fn window_procedure(
     // Closing the game's window ends the run (the player's way out, also when the game has
     // stopped); the window itself is not destroyed first.
     if message == WM_CLOSE {
-        eprintln!(
-            "NV_D3D9={}: the game's window was closed: the run ends",
-            tag()
-        );
-        // What the host asked to finish first (the copy-out of saves, `crate::on_exit`). The window
-        // runs on its own thread, so this covers only the jobs main has already handed on: a save
-        // written in the frame still running on main when the window closes can be lost.
-        crate::run_exit_hooks();
-        crate::end_process(0);
+        window_closed();
     }
     // Activated (Alt+Tab back, a click, the screen unlocked), the display changed, or the machine
     // woke: wgpu asks its window for a frame at once rather than at the end of a rest
@@ -101,10 +93,7 @@ extern "system" fn window_procedure(
 }
 
 fn release_input() {
-    if let Ok(mut i) = input().lock() {
-        i.keys = [false; 256];
-        i.buttons = [false; 8];
-    }
+    input::focus_lost();
     let_go_of_cursor();
 }
 
@@ -933,6 +922,43 @@ mod tests {
         assert!(!held_keys()[0x1e]);
         assert!(!d3d9_wgpu::frame_rate::shown());
         d3d9_wgpu::frame_rate::set_window_device(false);
+        // Losing the focus (Alt+Tab away: WM_ACTIVATE with WA_INACTIVE, WM_KILLFOCUS) lets go of
+        // every key and button held, so none stays down when the player comes back.
+        // Both through the window procedure's own arms.
+        for (message, wparam) in [(WM_ACTIVATE, 0usize), (WM_KILLFOCUS, 0)] {
+            send(WM_KEYDOWN, 0x41, a);
+            send(WM_XBUTTONDOWN, 2 << 16, 0);
+            assert!(held_keys()[0x1e]);
+            assert!(input().lock().unwrap().buttons[4]);
+            window_procedure(window, message, WPARAM(wparam), LPARAM(0));
+            assert!(
+                held_keys().iter().all(|k| !k),
+                "{message:#x}: focus lost, no key held"
+            );
+            assert!(
+                input().lock().unwrap().buttons.iter().all(|b| !b),
+                "{message:#x}: focus lost, no button held"
+            );
+        }
+    }
+
+    /// Closing the game's window (WM_CLOSE: its close button, Alt+F4) ends the run through
+    /// `window_closed` (the line, the host's exit hooks, the end of the process); here the test
+    /// thread stops there instead.
+    #[test]
+    fn closing_the_window_ends_the_run() {
+        std::thread::spawn(|| {
+            TEST_CLOSE.with(|c| c.set(true));
+            window_procedure(HWND(std::ptr::null_mut()), WM_CLOSE, WPARAM(0), LPARAM(0));
+        });
+        let start = std::time::Instant::now();
+        while !TEST_CLOSED.load(std::sync::atomic::Ordering::Relaxed) {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(10),
+                "WM_CLOSE did not reach window_closed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     /// A game window that is never shown ([`Showing::Never`]): the top-level window, asked for
