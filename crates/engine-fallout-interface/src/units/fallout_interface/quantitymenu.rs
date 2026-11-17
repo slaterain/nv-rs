@@ -387,6 +387,12 @@ pub fn quantity_menu_do_gamepad_up_event(
 /// the tile at +0x34) since `fPrevQuantity` (+0x40) is at or above the step (`0x1007` of
 /// the tile at +0x28), plays menu sound 4 and takes the value as `fPrevQuantity`.
 pub fn quantity_menu_do_idle(e: &mut Engine, this: Ptr) {
+    // `0x7AC179` (JIP LN NVSE's `QttMenuEnableWheelHook`, G69, with the fix row on): a moved
+    // mouse wheel clicks the plus or minus button (the menu's slot +0xC) first; the answer is not
+    // used. One load while off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x007a_c179, &[this.addr()]);
+    }
     let field = e.mem.u32(this.addr() + 0x34);
     let value = e.call(TILE_GET_FLOAT, &args![field, 0xfc4u32]).f64();
     let previous = e.mem.u32(this.addr() + 0x40);
@@ -680,5 +686,44 @@ mod n057_tests {
         e.call(0x007a_c170, &args![menu]);
         assert_eq!(calls_to(&e, INTERFACE_PLAY_MENU_SOUND), vec![vec![4]]);
         assert_eq!(e.mem.u32(menu + 0x40), 4.0f32.to_bits());
+    }
+
+    // ---- JIP LN NVSE's game patches, group GB-3 (G69) ----
+
+    fn never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("a seam asked with the fix row's bit clear")
+    }
+    /// JIP's handler's stand-in: clicks button 9 (the menu's slot +0xC) and answers nothing.
+    fn clicks(e: &mut Engine, w: &[u32]) -> Option<u32> {
+        e.vcall(w[0], 0xc, &args![9u32, 0u32]);
+        None
+    }
+
+    /// G69 (`0x7AC179`, words: the menu): with the fix row's bit the seam is asked first, before
+    /// the value is read, and `DoIdle` goes on as before; off or `INSTALLED` alone not asked.
+    #[test]
+    fn jip_g69_seam_first_in_do_idle() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        for word in [0, INSTALLED] {
+            let mut e = engine();
+            values(&mut e);
+            let menu = menu(&mut e);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x007a_c179, never);
+            e.call_log = Some(vec![]);
+            e.call(0x007a_c170, &args![menu]);
+            assert_eq!(calls_to(&e, TILE_GET_FLOAT)[0], [0x200c, 0xfc4]);
+        }
+        let mut e = engine();
+        values(&mut e);
+        let menu = menu(&mut e);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x007a_c179, clicks);
+        e.call_log = Some(vec![]);
+        e.call(0x007a_c170, &args![menu]);
+        let log = e.call_log.clone().unwrap();
+        assert_eq!(log[0].0, 0x007a_c170);
+        assert_eq!(log[1], (0x0000_8000, vec![menu, 9, 0]), "the click first");
+        assert_eq!(log[2], (TILE_GET_FLOAT, vec![0x200c, 0xfc4]));
     }
 }

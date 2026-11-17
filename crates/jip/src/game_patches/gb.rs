@@ -38,10 +38,17 @@
 //! 5 starts over (forever), type 6 ends (its control is listed as finished). Only JIP's
 //! `SetUIFloatGradual` (built: modes 3 and 4) makes controls of these types.
 //!
+//! **GB-3, fixes of `InitGamePatches`** (in with the game-patch row `NV_JIP_GAME_PATCHES`): the
+//! recipe menu shows an item's plain value and a weight below 1 with two decimals (G13), lists
+//! ammunition's effects (G68) and tests a crafted weapon's type itself (G100); the quantity menu
+//! takes the mouse wheel (G69); the barter menu titles the vendor's tab as it opens (G56) and,
+//! before taking a vendor's caps, splits a count over 32,767 into stacks (G64).
+//!
 //! Threads: every handler here runs where its menu code runs, on the main thread (the free
 //! camera's dead-zone seams: the main thread's player update). None takes JIP's shared slot: the
 //! dead zones and G87's flag are lock-free `ext_free` words made at JIP's install, G88 reads and
-//! writes only the fade control and its tile in guest memory.
+//! writes only the fade control and its tile in guest memory, GB-3's handlers only guest memory
+//! and the exe's functions.
 
 use super::Area;
 use engine_core::extend::{Owner, SiteSlot};
@@ -117,16 +124,241 @@ const JIP_SITES: [u32; 14] = {
     out
 };
 
+/// G100's seam: `fn_007284f0` (the recipe menu's crafting), its `CALL 0x4C0BF0` on a crafted
+/// weapon (words: the weapon).
+pub const DISPOSABLE_WEAPON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_880d);
+/// G13's two seams in `fn_00728da0` (the recipe menu's item information): the value's
+/// `FSTP; CALL 0x647C00` (no words) and the `"%.1f"` operand of the weight's format (no words).
+pub const PLAIN_VALUE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_8e10);
+pub const WEIGHT_FORMAT: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_9616);
+/// G68's seam: `fn_00728da0`'s effects-list test (words: the form).
+pub const AMMO_EFFECTS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_94dc);
+/// G56's seam: `BarterMenu::Create`'s first list fill (words: the menu).
+pub const BARTER_TAB_TITLE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_d661);
+/// G64's seam: `BarterMenu::CompleteTransaction`'s `RemoveItemBarterContainer` of the vendor's
+/// caps (words: the data handler, the buyer's inventory changes data).
+pub const VENDOR_CAPS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0073_005c);
+/// G69's seam: `QuantityMenu::DoIdle`'s start (words: the menu).
+pub const QUANTITY_WHEEL: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_c179);
+
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GB",
-    fix_sites: &[],
+    fix_sites: &[
+        DISPOSABLE_WEAPON.addr(),
+        PLAIN_VALUE.addr(),
+        AMMO_EFFECTS.addr(),
+        WEIGHT_FORMAT.addr(),
+        BARTER_TAB_TITLE.addr(),
+        VENDOR_CAPS.addr(),
+        QUANTITY_WHEEL.addr(),
+    ],
     fix_wraps: &[],
-    install_fixes: super::nothing,
+    install_fixes,
     jip_sites: &JIP_SITES,
     jip_wraps: &[],
     install_jip,
 };
+
+fn install_fixes(e: &mut Engine) {
+    e.on_site(DISPOSABLE_WEAPON, disposable_weapon);
+    e.on_site(PLAIN_VALUE, plain_value);
+    e.on_site(WEIGHT_FORMAT, weight_format);
+    e.on_site(AMMO_EFFECTS, ammo_effects);
+    e.on_site(BARTER_TAB_TITLE, barter_tab_title);
+    e.on_site(VENDOR_CAPS, fix_vendor_caps);
+    e.on_site(QUANTITY_WHEEL, quantity_wheel);
+}
+
+/// A weapon's type byte (`TESObjectWEAP::eWeaponType`, +0xF4).
+const WEAPON_TYPE: u32 = 0xf4;
+/// A form's type byte (+4) and `kFormType_TESAmmo`.
+const FORM_TYPE: u32 = 4;
+const FORM_AMMO: u8 = 0x29;
+/// The exe's `"%.2f"` (`0x1030018`, read in Ghidra: `25 2e 32 66 00`).
+pub const TWO_DECIMALS: u32 = 0x0103_0018;
+/// `BarterMenu::SetFilterModeTitle` (`007301f0`, `thiscall`, `RET 4`: the tab tile) and the tile
+/// JIP passes, the menu's word at +0x48 (`pTiles[8]`).
+const SET_FILTER_MODE_TITLE: u32 = 0x0073_01f0;
+const BARTER_TAB_TILE: u32 = 0x48;
+/// `g_interfaceManager` and its mouse wheel word (+0x44, signed: up above 0).
+const INTERFACE_MANAGER: u32 = 0x011d_8a80;
+const MOUSE_WHEEL: u32 = 0x44;
+/// A menu's vtable slot +0xC (`Menu::HandleClick(id, tile)`).
+const MENU_HANDLE_CLICK: u32 = 0xc;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: IsDisposableWeaponHook.
+/// G100: the weapon's type byte, signed, above 9 (JIP's `setg`). The exe's `004c0bf0` answers
+/// types 10 to 13; the game has no weapon type above 13, so every weapon answers the same.
+fn disposable_weapon(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let weapon = *words.first()?;
+    Some(u32::from(e.mem.u8(weapon + WEAPON_TYPE) as i8 > 9))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SAFE_WRITE_BUF(0x728E10, 8-byte NOP)).
+/// G13: the value's call is left out (1: the form's plain value is shown).
+fn plain_value(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SafeWrite32(0x729616, 0x1030018)).
+/// G13: the weight's format below 1, `"%.2f"`.
+fn weight_format(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(TWO_DECIMALS)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RecipeMenuAmmoEffectsHook.
+/// G68: 1 for ammunition (its effects text is built from the ammo, `00503a70`, whatever the
+/// exe's effect list holds); anything else answers nothing (the exe's test).
+fn ammo_effects(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let form = *words.first()?;
+    (e.mem.u8(form + FORM_TYPE) == FORM_AMMO).then_some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitBarterMenuHook.
+/// G56: `SetFilterModeTitle(pTiles[8])` before the first list fill; the translation goes on.
+fn barter_tab_title(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let menu = *words.first()?;
+    let tile = e.mem.u32(menu + BARTER_TAB_TILE);
+    e.call(SET_FILTER_MODE_TITLE, &args![menu, tile]);
+    None
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: QttMenuEnableWheelHook.
+/// G69: with the mouse wheel moved, the menu's click on button 2 (wheel up) or 1 (down), as a
+/// click on the plus or minus button; the translation goes on.
+fn quantity_wheel(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let menu = *words.first()?;
+    let manager = e.mem.u32(INTERFACE_MANAGER);
+    let wheel = e.mem.u32(manager + MOUSE_WHEEL) as i32;
+    if wheel != 0 {
+        let button = if wheel > 0 { 2u32 } else { 1 };
+        e.vcall(menu, MENU_HANDLE_CLICK, &args![button, 0u32]);
+    }
+    None
+}
+
+/// `kXData_ExtraOriginalReference` (0x20, its reference at +0xC) and `kXData_ExtraCount` (0x24, its
+/// count at +0xC), with the vtables JIP's `Create` stores (`internal/class_vtbls.h`), and
+/// `kVtbl_ExtraDataList`.
+const EXTRA_ORIGINAL_REFERENCE: u32 = 0x20;
+const EXTRA_COUNT: u32 = 0x24;
+const VTBL_ORIGINAL_REFERENCE: u32 = 0x0101_5bc4;
+const VTBL_COUNT: u32 = 0x0101_58d8;
+const VTBL_EXTRA_DATA_LIST: u32 = 0x0101_43e8;
+const EXTRA_VALUE: u32 = 0xc;
+/// `DataHandler`'s word at +0x628 (the barter container's inventory changes data, as
+/// `RemoveItemBarterContainer` reads it), the caps' form id (`g_capsItem`), a stack's limit.
+const BARTER_CHANGES: u32 = 0x628;
+const CAPS_ID: u32 = 0xf;
+const STACK_MAX: i32 = 0x7fff;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameExtraData.cpp:
+// ContChangesEntryList::FindForItem.
+/// The first entry of the list (from its head node) whose item (+8) is `item`, 0 for none.
+fn find_for_item(e: &Engine, mut node: u32, item: u32) -> u32 {
+    while node != 0 {
+        let entry = e.mem.u32(node);
+        node = e.mem.u32(node + 4);
+        if entry != 0 && e.mem.u32(entry + 8) == item {
+            return entry;
+        }
+    }
+    0
+}
+
+/// JIP's `CreateExtraType` with the word at +0xC (`ExtraOriginalReference::Create`,
+/// `ExtraCount::Create` below `SHRT_MAX`).
+fn extra_with(e: &mut Engine, vtable: u32, kind: u32, value: u32) -> u32 {
+    let extra = crate::commands::extra::create(e, vtable, kind);
+    e.mem.set_u32(extra + EXTRA_VALUE, value);
+    extra
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: BarterSellFixHook,
+// FixVendorCaps; nvse/GameBSExtraData.cpp: ExtraDataList::Create; nvse/GameTypes.h:
+// tList::Prepend.
+/// G64, before the vendor's caps are taken (words: the data handler, the buyer's inventory changes
+/// data): when the barter container holds caps with a stack list and the buyer holds more than
+/// 32,767 caps, the first stack of the barter container marked as the buyer's (its
+/// `ExtraOriginalReference`) gets at most 32,767 of them in its count extra, and new stacks of the
+/// buyer's caps (an original reference and a count of at most 32,767 each) are put at the head of
+/// the list for the rest while more than one is left. Answers nothing (the exe's call follows).
+///
+/// nv-rs's own: a data handler without the barter container's data does nothing (JIP would read
+/// through it).
+fn fix_vendor_caps(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&handler, &changes) = (words.first()?, words.get(1)?);
+    let barter = e.mem.u32(handler + BARTER_CHANGES);
+    if barter == 0 {
+        return None;
+    }
+    let caps = crate::cosave::lookup_form(e, CAPS_ID);
+    let entry = find_for_item(e, e.mem.u32(barter), caps);
+    if entry == 0 {
+        return None;
+    }
+    let stacks = e.mem.u32(entry);
+    if stacks == 0 {
+        return None;
+    }
+    let owner = e.mem.u32(changes + 4);
+    let held = find_for_item(e, e.mem.u32(changes), caps);
+    if held == 0 {
+        return None;
+    }
+    let mut left = e.mem.u32(held + 4) as i32;
+    if left <= STACK_MAX {
+        return None;
+    }
+    let mut node = stacks;
+    while node != 0 {
+        let list = e.mem.u32(node);
+        node = e.mem.u32(node + 4);
+        if list == 0 {
+            continue;
+        }
+        let original = crate::commands::extra::get_by_type(e, list, EXTRA_ORIGINAL_REFERENCE);
+        if original == 0 || e.mem.u32(original + EXTRA_VALUE) != owner {
+            continue;
+        }
+        let count = crate::commands::extra::get_by_type(e, list, EXTRA_COUNT);
+        if count != 0 {
+            let part = left.min(STACK_MAX);
+            e.mem.set_u32(count + EXTRA_VALUE, part as u32);
+            left -= part;
+        }
+        break;
+    }
+    while left > 1 {
+        let list = crate::commands::heap_alloc(e, 0x20);
+        for at in (0..0x20).step_by(4) {
+            e.mem.set_u32(list + at, 0);
+        }
+        e.mem.set_u32(list, VTBL_EXTRA_DATA_LIST);
+        let original = extra_with(e, VTBL_ORIGINAL_REFERENCE, EXTRA_ORIGINAL_REFERENCE, owner);
+        crate::commands::extra::add_extra(e, list, original);
+        let part = left.min(STACK_MAX);
+        left -= part;
+        let count = extra_with(e, VTBL_COUNT, EXTRA_COUNT, part as u32);
+        crate::commands::extra::add_extra(e, list, count);
+        // `tList::Prepend`: an empty head takes the list; else a new node after the head takes
+        // the head's item and the head the list.
+        let head = e.mem.u32(stacks);
+        if head == 0 {
+            e.mem.set_u32(stacks, list);
+        } else {
+            let moved = crate::commands::heap_alloc(e, 8);
+            e.mem.set_u32(moved, head);
+            e.mem.set_u32(moved + 4, e.mem.u32(stacks + 4));
+            e.mem.set_u32(stacks, list);
+            e.mem.set_u32(stacks + 4, moved);
+        }
+    }
+    None
+}
 
 /// Where JIP's two doubles are (0: not made yet). Lock-free: the seams are asked from any game
 /// thread; written once, before the threads start.
