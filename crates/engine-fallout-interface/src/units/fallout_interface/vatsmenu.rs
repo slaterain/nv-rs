@@ -2026,6 +2026,24 @@ fn node_limb(e: &mut Engine, node: u32) -> u32 {
     e.mem.u32(part + 0x20)
 }
 
+/// `DoIdle`'s damage threshold of the target at `0x7ECE32` (`CALL 0x7700F0` with the player and
+/// the target; the float kept with `FSTP` as a float). JIP LN NVSE's G121 (group GA's row and
+/// handler, a fix row: `WriteRelCall(0x7ECE32, GetVATSTargetDTHook)`) answers the threshold its
+/// hit damage last used: the seam with the player and the target answers the float's bits, and
+/// no answer runs the exe's call (JIP jumps to it while it has no hit recorded). One load while
+/// JIP's fixes are not in.
+fn target_damage_threshold(e: &mut Engine, player: u32, target: u32) -> f32 {
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x007e_ce32, &[player, target])
+    } else {
+        None
+    };
+    match jip {
+        Some(bits) => f32::from_bits(bits),
+        None => e.call(DAMAGE_THRESHOLD, &args![player, target]).f64() as f32,
+    }
+}
+
 // Translated from 007ec810 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `VATSMenu::DoIdle` (Xbox PDB): the menu's frame update. Every branch
 /// of the code is kept in order; the comments name the code's blocks.
@@ -2182,7 +2200,7 @@ pub fn vats_menu_do_idle(e: &mut Engine, this: Ptr<VatsMenu>) {
         }
         let player = e.global::<u32>(PLAYER);
         let reference = e.global::<u32>(TARGET_REFERENCE);
-        let threshold = e.call(DAMAGE_THRESHOLD, &args![player, reference]).f64() as f32;
+        let threshold = target_damage_threshold(e, player, reference);
         e.with_stack(4, |e, value| {
             let value = value.addr();
             e.mem.set_f32(value, 0.0);
@@ -9104,6 +9122,102 @@ mod tests {
         e.mem.set_u32(VATS + 8, 1);
         vats_menu_show_target_limb(&mut e, 0);
         assert!(calls(&e, SET_00800AC0).is_empty());
+    }
+
+    thread_local! {
+        static G121_SEEN: std::cell::RefCell<Log> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g121_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G121's seam asked without FIXES");
+    }
+
+    /// Stands for JIP's `GetVATSTargetDTHook` with a hit reckoned: 6.5.
+    fn g121_recorded(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G121_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(6.5f32.to_bits())
+    }
+
+    /// Stands for it with no hit reckoned yet: no answer.
+    fn g121_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G121_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    /// One `DoIdle` on a target in V.A.T.S. whose detailed name shows (the perk entry 0x2F
+    /// answers 1.0), the exe's threshold 2.5, with JIP's `word` and G121's `handler`: the exe's
+    /// threshold calls, the threshold the name text was formatted with, the seam's words, and
+    /// the player and the target.
+    fn g121_run(
+        word_bits: u32,
+        handler: Option<engine_core::extend::SiteFn>,
+    ) -> (Log, Option<f64>, Log, u32, u32) {
+        let mut e = engine();
+        let s = scene(&mut e);
+        e.mem.set_u32(VATS + 8, 1);
+        e.register(IS_TOP_MENU_ID, |_, _| word(1));
+        e.register(DAMAGE_THRESHOLD, |_, _| float(2.5));
+        e.register(HANDLE_ENTRY_POINT, |e, a| {
+            if a[0] == 0x2f {
+                e.mem.set_f32(a[2], 1.0);
+            }
+            Ret::default()
+        });
+        if let Some(handler) = handler {
+            e.on_site_for_test(0x007e_ce32, handler);
+        }
+        e.set_jip_patches(word_bits);
+        G121_SEEN.with(|s| s.borrow_mut().clear());
+        e.call_log = Some(vec![]);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            vats_menu_do_idle(&mut e, Ptr::new(s.menu));
+        }));
+        let shown = calls(&e, SPRINTF)
+            .into_iter()
+            .find(|w| w.get(1) == Some(&TEXT_NAME_FORMAT))
+            .map(|w| f64::from_bits(u64::from(w[6]) | u64::from(w[7]) << 32));
+        let player = e.global::<u32>(PLAYER);
+        (
+            calls(&e, DAMAGE_THRESHOLD),
+            shown,
+            G121_SEEN.with(|s| s.take()),
+            player,
+            s.reference,
+        )
+    }
+
+    /// JIP LN NVSE's G121 seam (`0x007ECE32`, `DoIdle`'s target damage threshold; group GA's
+    /// row, a fix row): with the word 0 or `INSTALLED` alone it is not asked and the exe's
+    /// threshold (2.5) is shown; with `FIXES` and no handler, or a handler with no answer (no
+    /// hit reckoned), the exe's; with an answer it is asked once with exactly the player and
+    /// the target, the exe's call is not made, and the answer (6.5) is shown.
+    #[test]
+    fn idle_jip_vats_target_dt_seam() {
+        use engine_core::extend::jip_patches;
+        for word_bits in [0, jip_patches::INSTALLED] {
+            let (exe, shown, seen, player, target) = g121_run(word_bits, Some(g121_never));
+            assert_eq!(
+                (exe, shown, seen.len()),
+                (vec![vec![player, target]], Some(2.5), 0)
+            );
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        let (exe, shown, _, player, target) = g121_run(fixes, None);
+        assert_eq!(
+            (exe, shown),
+            (vec![vec![player, target]], Some(2.5)),
+            "no handler"
+        );
+        let (exe, shown, seen, player, target) = g121_run(fixes, Some(g121_none));
+        assert_eq!(
+            (exe, shown),
+            (vec![vec![player, target]], Some(2.5)),
+            "no hit yet"
+        );
+        assert_eq!(seen, vec![vec![player, target]]);
+        let (exe, shown, seen, player, target) = g121_run(fixes, Some(g121_recorded));
+        assert_eq!((exe.len(), shown), (0, Some(6.5)), "JIP's threshold");
+        assert_eq!(seen, vec![vec![player, target]]);
     }
 
     #[test]

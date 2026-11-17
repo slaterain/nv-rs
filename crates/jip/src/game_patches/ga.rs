@@ -1,7 +1,7 @@
 //! Group GA's game patches (step 3.9: UI: HUD, messages, text, start-up INI): its handlers, wraps and slot routines. Only group
 //! GA's PR edits this file (and its own tests file beside it).
 //!
-//! Eleven of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
+//! Twelve of JIP's always-on fixes (`InitGamePatches` and `InitJIPHooks`, JIP LN NVSE 57.30), each
 //! a fix row (in with the row `NV_JIP_GAME_PATCHES`, [`super::set_row`]):
 //! - **G08** "Increase buffer size for GetPrivateProfileString" (`SafeWrite8(0xC44405, 4)`): the
 //!   INI reader's text settings (`INISettingCollection::ReadSetting`, `00c44280`) are read with a
@@ -58,6 +58,11 @@
 //!   exe's playable test there (`0x47BCF0`: flag byte +0x100 without 0x80) with its own, which
 //!   answers the same. Difference from JIP: the "+" goes in only when it fits the 0x104-byte name
 //!   buffer (`0x11D9C48`) with its end; JIP writes the two bytes past a 259-character name.
+//! - **G121** (no comment; `WriteRelCall(0x7ECE32, GetVATSTargetDTHook)`): V.A.T.S. shows the
+//!   damage threshold of the last hit JIP's hit damage (O1) worked out (any attacker, any target;
+//!   as in JIP; `s_VATSHitDT`, a negative one as 0), in place of the exe's `0x7700F0`
+//!   (`VATSMenu::DoIdle`, `007ec810`); until a hit has been reckoned that way (`-FLT_MAX`) the
+//!   exe's call runs.
 //! - **G09** (no comment; `WriteRelJump(0x70535C, QueueUIMessageHook)`): a message the game itself
 //!   queues (`QueueUIMessage`, `007052f0`; JIP's test: the caller's return address up to
 //!   `0x96A262`, the game's last caller of the 193) shows for the default message time
@@ -66,8 +71,9 @@
 //!   (`Engine::mark_plugin_ui_message`; xNVSE's `MessageEx`, JIP's `MessageExAlt` and its
 //!   equip message), and the seam answers the default time for an unmarked call.
 //!
-//! Threads: every seam runs on the main thread (the UI, the INI reader); the handlers keep no
-//! state and take no slot.
+//! Threads: every seam runs on the main thread (the UI, the INI reader) but G09's, which runs on
+//! the thread that queues the message; the handlers take no slot, and the one state, G09's default
+//! time, is one lock-free word (the commands write it on the main thread).
 
 use super::Area;
 use engine_core::extend::{Owner, SiteSlot};
@@ -111,6 +117,9 @@ pub const CORNER_MESSAGE_TEXT: u32 = 0x204;
 /// G80's seam: `SetInfoForRef`'s weapon test (words: the weapon, the reference; the answer's low
 /// byte is the test's: 1 playable, 0 not).
 pub const ROLLOVER_WEAPON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0077_7123);
+/// G121's seam: `VATSMenu::DoIdle`'s target damage threshold (words: the player, the target;
+/// the answer is the threshold's bits; none runs the exe's call).
+pub const VATS_TARGET_DT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_ce32);
 /// `kXData_ExtraWeaponModFlags`.
 const EXTRA_WEAPON_MOD_FLAGS: u32 = 0x8D;
 /// The HUD's crosshair name buffer (0x104 bytes).
@@ -175,6 +184,7 @@ pub const AREA: Area = Area {
         CORNER_MESSAGE[1].addr(),
         CORNER_MESSAGE[2].addr(),
         ROLLOVER_WEAPON.addr(),
+        VATS_TARGET_DT.addr(),
         MESSAGE_TIME.addr(),
     ],
     fix_wraps: &[],
@@ -202,6 +212,7 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(CONSOLE_KEY, console_key);
     e.on_site(ORPHANED_TILES, clear_orphaned_tiles);
     e.on_site(ROLLOVER_WEAPON, rollover_weapon);
+    e.on_site(VATS_TARGET_DT, vats_target_dt);
     e.on_site(MESSAGE_TIME, message_time);
 }
 
@@ -353,6 +364,23 @@ fn rollover_weapon(e: &mut Engine, a: &[u32]) -> Option<u32> {
         }
     }
     Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetVATSTargetDTHook.
+/// G121: the threshold JIP's hit damage last used (`s_VATSHitDT`), see [`vats_dt_answer`].
+fn vats_target_dt(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    vats_dt_answer(super::gc::damage::vats_hit_dt(e))
+}
+
+/// `GetVATSTargetDTHook` on the recorded threshold `dt`: `-FLT_MAX` (no hit reckoned) gives no
+/// answer (JIP jumps to the exe's `0x7700F0` with the same arguments); a float with its sign
+/// bit set gives 0.0 (`CMOVS`, so -0.0 too); any other its own bits.
+fn vats_dt_answer(dt: f32) -> Option<u32> {
+    let bits = dt.to_bits();
+    if bits == 0xFF7F_FFFF {
+        return None;
+    }
+    Some(if bits & 0x8000_0000 != 0 { 0 } else { bits })
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: QueueUIMessageHook.
