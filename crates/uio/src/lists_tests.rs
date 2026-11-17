@@ -445,3 +445,387 @@ fn odd_bytes_in_lists_never_stop_the_scan() {
     // `@` alone with no tile: passed over; the junk lines name no menu.
     assert_eq!(lists.len(), 1);
 }
+
+/// oHUD's only list, `Data\UIO\Public\oHUDPatches.txt`, byte for byte (CRLF lines, no line break
+/// at the end): two entries, each a path line, a condition line and a stray `true` line.
+pub const OHUD_PATCHES: &str = "UIOPatches\\GrenadeKey.xml::@Prefabs\\GrenadeKeyHUD.xml::GrenadeRECT\r\n#GrenadeKeyHUD.xml\r\ntrue\r\nUIOPatches\\MineKey.xml::@Prefabs\\MineKeyHUD.xml::MineRECT\r\n#MineKeyHUD.xml\r\ntrue";
+
+/// A game folder with oHUD installed: its list and its two patches (and the other hotkey mod's
+/// file of a different name, which the list does not ask for).
+fn ohud_folder() -> Fake {
+    let mut f = Fake::default();
+    f.file("Data\\UIO\\Public\\oHUDPatches.txt", OHUD_PATCHES)
+        .file("Data\\Menus\\Prefabs\\UIOPatches\\GrenadeKey.xml", "")
+        .file("Data\\Menus\\Prefabs\\UIOPatches\\MineKey.xml", "")
+        .file("Data\\Menus\\Prefabs\\GrenadeHotkeyHUD.xml", "");
+    f.listing = vec![b"oHUDPatches.txt".to_vec()];
+    f
+}
+
+/// The entries of oHUD's list (the built-in supported.txt's come first).
+fn ohud_entries(seen: &Scan) -> Vec<Entry> {
+    seen.entries
+        .iter()
+        .filter(|e| e.list == b"oHUDPatches.txt")
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn ohuds_list_adds_nothing_without_the_two_hotkey_huds() {
+    let mut f = ohud_folder();
+    let (lists, seen) = scan_noted(&mut f);
+    // oHUD's list adds nothing; UIO's own list (built in: no supported.txt in this folder) adds
+    // the other hotkey mod's HUD, which is installed.
+    assert_eq!(seen.supported, Some(SupportedFrom::BuiltIn));
+    assert_eq!(
+        order(
+            &lists,
+            "Data\\Menus\\Main\\hud_main_menu.xml",
+            "hudmainmenu"
+        ),
+        vec!["grenadehotkeyhud.xml"]
+    );
+    assert_eq!(lists.len(), 1);
+    assert_eq!(scan(&mut ohud_folder()).len(), 1);
+    assert_eq!(
+        seen.lists,
+        vec![
+            ListRead {
+                name: b"supported.txt".to_vec(),
+                opened: true
+            },
+            ListRead {
+                name: b"oHUDPatches.txt".to_vec(),
+                opened: true
+            },
+        ]
+    );
+    // Two entries, both left out on their condition (the `#` file); each `true` line is read as a
+    // path line with no `:` and passed over without a note.
+    let expect = |path: &str, target: &str, file: &str, tile: &str, cond: &str| Entry {
+        list: b"oHUDPatches.txt".to_vec(),
+        path: path.as_bytes().to_vec(),
+        target: target.as_bytes().to_vec(),
+        file: file.as_bytes().to_vec(),
+        tile: tile.as_bytes().to_vec(),
+        condition: cond.as_bytes().to_vec(),
+        outcome: Outcome::ConditionFalse,
+    };
+    assert_eq!(
+        ohud_entries(&seen),
+        vec![
+            expect(
+                "UIOPatches\\GrenadeKey.xml",
+                "@Prefabs\\GrenadeKeyHUD.xml",
+                "Data\\menus\\Prefabs\\GrenadeKeyHUD.xml",
+                "GrenadeRECT",
+                "#GrenadeKeyHUD.xml"
+            ),
+            expect(
+                "UIOPatches\\MineKey.xml",
+                "@Prefabs\\MineKeyHUD.xml",
+                "Data\\menus\\Prefabs\\MineKeyHUD.xml",
+                "MineRECT",
+                "#MineKeyHUD.xml"
+            ),
+        ]
+    );
+}
+
+#[test]
+fn ohuds_list_adds_each_patch_into_its_hotkey_hud_when_that_is_installed() {
+    // Both installed: each patch goes into its hotkey HUD's file at its tile.
+    let mut f = ohud_folder();
+    f.file("Data\\Menus\\Prefabs\\GrenadeKeyHUD.xml", "")
+        .file("Data\\Menus\\Prefabs\\MineKeyHUD.xml", "");
+    let (lists, seen) = scan_noted(&mut f);
+    assert_eq!(
+        order(
+            &lists,
+            "Data\\menus\\Prefabs\\GrenadeKeyHUD.xml",
+            "GrenadeRECT"
+        ),
+        vec!["UIOPatches\\GrenadeKey.xml"]
+    );
+    assert_eq!(
+        order(&lists, "Data\\menus\\Prefabs\\MineKeyHUD.xml", "MineRECT"),
+        vec!["UIOPatches\\MineKey.xml"]
+    );
+    // With the HUD file the built-in list adds to (see the test above).
+    assert_eq!(lists.len(), 3);
+    let ohud = ohud_entries(&seen);
+    let outcomes: Vec<&Outcome> = ohud.iter().map(|e| &e.outcome).collect();
+    assert_eq!(outcomes, vec![&Outcome::Added, &Outcome::Added]);
+    // One of the two installed: only its patch; the plain scan agrees.
+    let mut g = ohud_folder();
+    g.file("Data\\Menus\\Prefabs\\GrenadeKeyHUD.xml", "");
+    let plain = scan(&mut g);
+    assert_eq!(plain.len(), 2);
+    assert_eq!(
+        order(
+            &plain,
+            "Data\\menus\\Prefabs\\GrenadeKeyHUD.xml",
+            "GrenadeRECT"
+        ),
+        vec!["UIOPatches\\GrenadeKey.xml"]
+    );
+    // oHUD's patches themselves missing: left out before the condition is read.
+    let mut h = Fake::default();
+    h.file("Data\\UIO\\Public\\oHUDPatches.txt", OHUD_PATCHES)
+        .file("Data\\Menus\\Prefabs\\GrenadeKeyHUD.xml", "");
+    h.listing = vec![b"oHUDPatches.txt".to_vec()];
+    let (lists, seen) = scan_noted(&mut h);
+    assert!(lists.is_empty());
+    let ohud = ohud_entries(&seen);
+    let outcomes: Vec<&Outcome> = ohud.iter().map(|e| &e.outcome).collect();
+    assert_eq!(
+        outcomes,
+        vec![&Outcome::PrefabMissing, &Outcome::PrefabMissing]
+    );
+}
+
+/// A public list's condition line with a leading space, its `#` file installed: UIO reads the
+/// leading blank as a false operand, so the entry is left out, and the report says why (never
+/// that the installed file is missing).
+#[test]
+fn a_condition_with_a_leading_space_is_false_and_the_report_says_why() {
+    let mut f = ohud_folder();
+    f.file(
+        "Data\\UIO\\Public\\oHUDPatches.txt",
+        &OHUD_PATCHES.replace("\n#GrenadeKeyHUD.xml", "\n #GrenadeKeyHUD.xml"),
+    )
+    .file("Data\\Menus\\Prefabs\\GrenadeKeyHUD.xml", "")
+    .file("Data\\Menus\\Prefabs\\MineKeyHUD.xml", "");
+    let (lists, seen) = scan_noted(&mut f);
+    assert_eq!(
+        order(&lists, "Data\\menus\\Prefabs\\MineKeyHUD.xml", "MineRECT"),
+        vec!["UIOPatches\\MineKey.xml"]
+    );
+    // (and the HUD file the built-in list adds to)
+    assert_eq!(lists.len(), 2);
+    let grenade = &ohud_entries(&seen)[0];
+    assert_eq!(grenade.outcome, Outcome::ConditionFalse);
+    assert_eq!(grenade.condition, b"\t#GrenadeKeyHUD.xml");
+    assert_eq!(
+        crate::report::reason(grenade).unwrap(),
+        "its condition line starts with a blank, which UIO reads as false (#GrenadeKeyHUD.xml)"
+    );
+}
+
+/// A path line whose Prefabs path is one byte too long for UIO's buffer is left out even though
+/// the file is installed, and the report says the name is too long (never "not installed").
+#[test]
+fn an_installed_prefab_whose_path_is_too_long_for_uio_is_reported_as_too_long() {
+    let long = "x".repeat(UIO_PATH - PREFABS.len() + 1);
+    let mut f = Fake::default();
+    f.file(&format!("Data\\menus\\prefabs\\{long}"), "");
+    let text = format!("{long}:HUDMainMenu\r\ntrue\r\n");
+    let mut lists = InjectLists::default();
+    let mut notes = Vec::new();
+    read_list_noted(
+        &lines(text.as_bytes()),
+        true,
+        &ctx(),
+        &mut f,
+        &mut lists,
+        b"l.txt",
+        &mut notes,
+    );
+    assert!(lists.is_empty());
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].outcome, Outcome::PrefabMissing);
+    assert_eq!(
+        crate::report::reason(&notes[0]).unwrap(),
+        format!("the name Prefabs\\{long} is too long for UIO, which reads it as not installed")
+    );
+}
+
+#[test]
+fn every_way_an_entry_is_left_out_is_noted() {
+    let mut f = Fake::default();
+    for p in ["a.xml", "b.xml", "c.xml", "d.xml"] {
+        f.file(&format!("Data\\menus\\prefabs\\{p}"), "");
+    }
+    let long = "x".repeat(UIO_PATH);
+    let text = format!(
+        "a.xml:@main\\hud.xml\r\ntrue\r\nb.xml:NoSuchMenu\r\ntrue\r\nc.xml:@{long}:T\r\ntrue\r\n\
+         d.xml:HUDMainMenu\r\ntrue\r\nd.xml:HUDMainMenu\r\ntrue\r\nmissing.xml:HUDMainMenu\r\ntrue\r\n"
+    );
+    let mut lists = InjectLists::default();
+    let mut notes = Vec::new();
+    read_list_noted(
+        &lines(text.as_bytes()),
+        true,
+        &ctx(),
+        &mut f,
+        &mut lists,
+        b"l.txt",
+        &mut notes,
+    );
+    let got: Vec<(&[u8], &Outcome)> = notes
+        .iter()
+        .map(|e| (e.path.as_slice(), &e.outcome))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (&b"a.xml"[..], &Outcome::EndOfFileNotPrefab),
+            (&b"b.xml"[..], &Outcome::UnknownMenu),
+            (&b"c.xml"[..], &Outcome::TargetTooLong),
+            (&b"d.xml"[..], &Outcome::Added),
+            (&b"d.xml"[..], &Outcome::AlreadyAdded),
+            (&b"missing.xml"[..], &Outcome::PrefabMissing),
+        ]
+    );
+    assert!(notes.iter().all(|e| e.list == b"l.txt"));
+    assert_eq!(notes[0].target, b"@main\\hud.xml");
+    assert_eq!(notes[1].target, b"NoSuchMenu");
+    assert_eq!(notes[3].file, b"Data\\Menus\\Main\\hud_main_menu.xml");
+    assert_eq!(notes[3].tile, b"HUDMainMenu");
+    assert_eq!(notes[3].condition, b"true");
+    // The notes change nothing: the plain reader adds the same.
+    let mut plain = InjectLists::default();
+    read_list(&lines(text.as_bytes()), true, &ctx(), &mut f, &mut plain);
+    assert_eq!(plain.len(), lists.len());
+    assert_eq!(
+        order(
+            &plain,
+            "Data\\Menus\\Main\\hud_main_menu.xml",
+            "HUDMainMenu"
+        ),
+        vec!["d.xml"]
+    );
+}
+
+/// UIO 2.30's own supported.txt as built in: the download's file byte for byte, 35 entries.
+#[test]
+fn the_built_in_supported_txt_is_uios_own_list() {
+    assert_eq!(BUILT_IN_SUPPORTED.len(), 2_433);
+    assert!(BUILT_IN_SUPPORTED.starts_with(b"advreconhud.xml:hudmainmenu\r\n#advrecon\\"));
+    assert!(BUILT_IN_SUPPORTED.ends_with(b"\r\n?Project Nevada - Core.esm"));
+    let (lists, seen) = scan_noted(&mut Fake::default());
+    assert!(lists.is_empty());
+    assert_eq!(seen.supported, Some(SupportedFrom::BuiltIn));
+    assert_eq!(seen.entries.len(), 35);
+    assert!(seen.entries.iter().all(|e| e.list == SUPPORTED_NAME));
+}
+
+/// The whole built-in file pinned: FNV-1a (64-bit) over all 2,433 bytes. The file is the UIO 2.30
+/// download's `Data\uio\supported.txt` (its SHA-256 as crates/uio/NOTICE gives it:
+/// e55238ee7a49c758b961d7a837b087c7e632598ba0d557594bdde1f486cf3809); any changed byte fails here.
+#[test]
+fn the_built_in_supported_txt_is_pinned_byte_for_byte() {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in BUILT_IN_SUPPORTED {
+        hash ^= u64::from(b);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    assert_eq!(BUILT_IN_SUPPORTED.len(), 2_433);
+    assert_eq!(hash, 0xded5_1806_abc2_5658);
+}
+
+/// The built-in list reads exactly as the same file on disk would: the same lists, the same
+/// entries in the same order, only where it came from differs.
+#[test]
+fn the_built_in_list_parses_to_the_same_entries_as_the_file() {
+    let folder = |disk: bool| {
+        let mut f = Fake::default();
+        if disk {
+            f.files.insert(key(SUPPORTED), BUILT_IN_SUPPORTED.to_vec());
+        }
+        f.plugins = b"Local\\".to_vec();
+        f.file(
+            "Local\\plugins.txt",
+            "FalloutNV.esm\r\nCyberianDawn.esp\r\n",
+        );
+        // Some of the mods the list knows installed (their prefabs and condition files).
+        f.file("Data\\menus\\prefabs\\arwen\\fatigue_hud.xml", "")
+            .file(
+                "Data\\menus\\prefabs\\cyberiandawn\\cyberiandawnhud.xml",
+                "",
+            )
+            .file("Data\\menus\\prefabs\\advreconhud.xml", "")
+            .file("Data\\menus\\prefabs\\advrecon\\advreconsettings.xml", "");
+        f
+    };
+    let (built_in, seen_built_in) = scan_noted(&mut folder(false));
+    let (disk, seen_disk) = scan_noted(&mut folder(true));
+    assert_eq!(seen_built_in.supported, Some(SupportedFrom::BuiltIn));
+    assert_eq!(seen_disk.supported, Some(SupportedFrom::Disk));
+    assert_eq!(seen_built_in.entries, seen_disk.entries);
+    assert_eq!(seen_built_in.lists, seen_disk.lists);
+    assert_eq!(
+        order(
+            &built_in,
+            "Data\\Menus\\Main\\hud_main_menu.xml",
+            "hudmainmenu"
+        ),
+        order(&disk, "Data\\Menus\\Main\\hud_main_menu.xml", "hudmainmenu"),
+    );
+    let mut got = order(
+        &built_in,
+        "Data\\Menus\\Main\\hud_main_menu.xml",
+        "hudmainmenu",
+    );
+    got.sort();
+    assert_eq!(
+        got,
+        vec![
+            "advreconhud.xml",
+            "arwen\\fatigue_hud.xml",
+            "cyberiandawn\\cyberiandawnhud.xml"
+        ]
+    );
+    let added = seen_built_in
+        .entries
+        .iter()
+        .filter(|e| e.outcome == Outcome::Added)
+        .count();
+    assert_eq!(added, 3);
+}
+
+/// A supported.txt in the game folder wins over the built-in one (a player's, or a newer UIO's),
+/// and the public lists come after it either way: a public entry the list already has is
+/// already added, as with UIO's file.
+#[test]
+fn a_supported_txt_on_disk_wins_and_public_lists_come_after_either_list() {
+    let mut f = Fake::default();
+    f.file(
+        "Data\\uio\\supported.txt",
+        "mine.xml:hudmainmenu\r\ntrue\r\n",
+    )
+    .file("Data\\menus\\prefabs\\mine.xml", "")
+    .file("Data\\menus\\prefabs\\arwen\\fatigue_hud.xml", "")
+    .file(
+        "Data\\uio\\public\\p.txt",
+        "arwen\\fatigue_hud.xml:hudmainmenu\r\ntrue\r\n",
+    );
+    f.listing = vec![b"p.txt".to_vec()];
+    let (lists, seen) = scan_noted(&mut f);
+    assert_eq!(seen.supported, Some(SupportedFrom::Disk));
+    assert_eq!(seen.entries.len(), 2);
+    let mut got = order(
+        &lists,
+        "Data\\Menus\\Main\\hud_main_menu.xml",
+        "hudmainmenu",
+    );
+    got.sort();
+    assert_eq!(got, vec!["arwen\\fatigue_hud.xml", "mine.xml"]);
+    // Without the file on disk: the built-in list first (it has arwen's fatigue HUD), then the
+    // public list's same entry, already added.
+    f.files.remove(&key(SUPPORTED));
+    let (lists, seen) = scan_noted(&mut f);
+    assert_eq!(seen.supported, Some(SupportedFrom::BuiltIn));
+    assert_eq!(
+        order(
+            &lists,
+            "Data\\Menus\\Main\\hud_main_menu.xml",
+            "hudmainmenu"
+        ),
+        vec!["arwen\\fatigue_hud.xml"]
+    );
+    let last = seen.entries.last().unwrap();
+    assert_eq!(last.list, b"p.txt");
+    assert_eq!(last.outcome, Outcome::AlreadyAdded);
+}

@@ -721,6 +721,56 @@ fn a_skipped_extra_data_key() {
     }
 }
 
+/// `JPED` round trip with texts as `SetRefExtraData` keeps them (JIP's `XString`: up to the first
+/// zero byte, a 16-bit length): a text given 0x10005 bytes and one with a zero byte inside are
+/// saved with lengths that match their bytes, and the key after them loads as it was.
+#[test]
+fn extra_data_texts_round_trip_with_the_keys_after_them() {
+    let text = crate::commands::jip_fn_extra_data::jip_text;
+    let mut w = World::new();
+    w.changed(0x0700_0010);
+    w.changed(0x0700_0020);
+    let first = ExtraJipData {
+        used: 1,
+        values: [7; 18],
+        strings: [text(vec![b'a'; 0x1_0005]), text(b"x\0yz".to_vec())],
+        ..ExtraJipData::default()
+    };
+    let second = ExtraJipData {
+        used: 0b11,
+        forms: 0,
+        values: [9; 18],
+        strings: [text(b"Doc".to_vec()), Vec::new()],
+    };
+    for (key, id, m, data) in [
+        (1u32, 0x0700_0010u32, 6u32, &first),
+        (2, 0x0700_0020, 7, &second),
+    ] {
+        let mut map = crate::cosave::extra_data(&mut w.e);
+        let entry = map.emplace(Uint(key));
+        entry.ref_id = id;
+        entry.data.insert(m, data.clone());
+    }
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
+    let file = cosave(&written(&mut w.e));
+    crate::cosave::extra_data(&mut w.e).clear();
+    crate::cosave::set_changed(&mut w.e, changed::ALL);
+    load_file(&mut w.e, &file);
+    let entry = |w: &mut World, key: u32| {
+        crate::cosave::extra_data(&mut w.e)
+            .get(&Uint(key))
+            .cloned()
+            .unwrap()
+    };
+    let one = entry(&mut w, 1);
+    assert_eq!(one.data[&6].strings, [b"aaaaa".to_vec(), b"x".to_vec()]);
+    assert_eq!(one.ref_id, 0x0700_0010);
+    let two = entry(&mut w, 2);
+    assert_eq!(two.ref_id, 0x0700_0020);
+    assert_eq!(two.data[&7].strings[0], b"Doc");
+    assert_eq!((two.data[&7].used, two.data[&7].values[1]), (0b11, 9));
+}
+
 /// `JPLR`: kept for two loaded references from a loaded file, not for a reference whose linked
 /// reference extra data holds none; saved with the link's id.
 #[test]
@@ -1476,4 +1526,30 @@ fn data_written_on_a_threads_engine_saves_the_same_bytes() {
     write(&mut alone.e);
     assert!(!through_thread.is_empty());
     assert_eq!(through_thread, written(&mut alone.e));
+}
+
+/// H16's part of the housekeeping: a load's start and leaving to the main menu empty the excluded
+/// combat actions (`s_excludedCombatActionsMap->Clear()`) through the messages, with JIP installed.
+#[test]
+fn a_load_and_the_main_menu_clear_the_excluded_combat_actions() {
+    use crate::game_patches::gd::{excluded_combat_actions, ExcludedCombatActions};
+    let mut w = World::new();
+    w.e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+    for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
+        w.e.ext_free::<ExcludedCombatActions>()
+            .0
+            .write()
+            .unwrap()
+            .insert(PLAYER_REF, 3);
+        assert_eq!(excluded_combat_actions(&mut w.e, PLAYER_REF), 3);
+        listen(
+            &mut w.e,
+            &Message {
+                kind,
+                data: 0,
+                len: 0,
+            },
+        );
+        assert_eq!(excluded_combat_actions(&mut w.e, PLAYER_REF), 0, "{kind}");
+    }
 }

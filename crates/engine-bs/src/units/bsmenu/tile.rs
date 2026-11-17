@@ -4817,9 +4817,31 @@ fn update_fade_control(e: &mut Engine, node: u32, control: Ptr<FadeControl>, fin
                 fn_00a012d0(e, tile, trait_id, value, 1);
             }
         }
-        _ => {}
+        // The exe's `cmp type,4; ja` passes every other type over. JIP's G88 widens the test to
+        // 6 (`0xA081A8`) and puts its own arm in the table's two new words (`0xA08718`,
+        // `0xA0871C`): asked with JIP installed, with the control and its type; an answer other
+        // than 0 lists the control as finished (`0xA0C7C0`, as JIP does for type 6); then the
+        // next control, as after every arm (`0xA08155`).
+        _ => {
+            if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                let site = match fade_type {
+                    5 => JIP_FADE_TYPE_5,
+                    6 => JIP_FADE_TYPE_6,
+                    _ => return,
+                };
+                let at = [control.addr(), fade_type as u32];
+                if e.site(site, &at).unwrap_or(0) != 0 {
+                    e.call(FADE_LIST_ADD_HEAD, &args![finished, node]);
+                }
+            }
+        }
     }
 }
+
+/// JIP's G88 seams: `Tile::UpdateFadeControls`' jump-table words for fade types 5 and 6 (JIP's
+/// `ProcessGradualSetFloatHook`).
+const JIP_FADE_TYPE_5: u32 = 0x00a0_8718;
+const JIP_FADE_TYPE_6: u32 = 0x00a0_871c;
 
 // Translated from 00a08720 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Tile::FadeIn3D` (Xbox PDB): sets the alpha `alpha` of the shader
@@ -12873,6 +12895,85 @@ mod tests {
         assert_eq!(*sets.borrow(), vec![(TRAIT_RED, 200.0, 1)]);
         assert!(fade_list(&e).is_empty());
         assert_eq!(e.mem.block_size(controls[0]), None);
+    }
+
+    thread_local! {
+        static JIP_FADES: RefCell<Vec<(u32, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+        static JIP_FADE_ANSWER: Cell<Option<u32>> = const { Cell::new(None) };
+    }
+
+    /// Test handlers at G88's two seams: note the seam and its words, answer
+    /// [`JIP_FADE_ANSWER`].
+    fn jip_fade<const SITE: u32>(_: &mut Engine, words: &[u32]) -> Option<u32> {
+        JIP_FADES.with(|s| s.borrow_mut().push((SITE, words.to_vec())));
+        JIP_FADE_ANSWER.with(|a| a.get())
+    }
+
+    /// G88's seams (JIP's fade types 5 and 6, `0xA08718` / `0xA0871C`): asked only with JIP
+    /// installed, at the seam of the control's type, with the control and the type; an answer
+    /// other than 0 lists the control as finished (removed and freed), 0 or none keeps it; the
+    /// next control is updated after it either way. Other types above 4 are never asked; with
+    /// JIP not installed (or only the fixes word) types 5 and 6 do nothing, as in the exe.
+    #[test]
+    fn jips_fade_types_5_and_6_ask_its_seams() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        use engine_core::extend::{Owner, SiteSlot};
+        let run = |word: u32, kind: i32, answer: Option<u32>| {
+            let mut e = tile_engine();
+            provide_constants(&mut e);
+            install_value_array_doubles(&mut e);
+            install_simple_list_doubles(&mut e);
+            e.on_site(
+                SiteSlot::new(Owner::Jip, JIP_FADE_TYPE_5),
+                jip_fade::<0x00a0_8718>,
+            );
+            e.on_site(
+                SiteSlot::new(Owner::Jip, JIP_FADE_TYPE_6),
+                jip_fade::<0x00a0_871c>,
+            );
+            e.set_jip_patches(word);
+            JIP_FADE_ANSWER.with(|a| a.set(answer));
+            JIP_FADES.with(|s| s.borrow_mut().clear());
+            let tile = typed_tile(&mut e, TYPE_RECT);
+            // Newest first: the JIP control is updated before the standard one.
+            let (sets, controls) = run_fades(
+                &mut e,
+                tile,
+                &[
+                    (TRAIT_RED, 100.0, 200.0, 1000.0, FADE_STANDARD),
+                    (TRAIT_GREEN, 3.0, 7.0, 1000.0, kind),
+                ],
+                250,
+            );
+            assert_eq!(
+                sets,
+                vec![(TRAIT_RED, 125.0)],
+                "the next control still runs"
+            );
+            let asked = JIP_FADES.with(|s| std::mem::take(&mut *s.borrow_mut()));
+            let kept = fade_list(&e) == vec![controls[1], controls[0]];
+            (controls[1], asked, kept)
+        };
+        for word in [0, FIXES] {
+            for kind in [5, 6] {
+                let (_, asked, kept) = run(word, kind, Some(1));
+                assert!(asked.is_empty() && kept, "word {word:x} type {kind}");
+            }
+        }
+        for (kind, site) in [(5, 0x00a0_8718u32), (6, 0x00a0_871c)] {
+            let (control, asked, kept) = run(INSTALLED, kind, Some(1));
+            assert_eq!(asked, vec![(site, vec![control, kind as u32])]);
+            assert!(!kept, "listed as finished: removed");
+            for answer in [Some(0), None] {
+                let (control, asked, kept) = run(INSTALLED, kind, answer);
+                assert_eq!(asked, vec![(site, vec![control, kind as u32])]);
+                assert!(kept, "{answer:?}");
+            }
+        }
+        for kind in [7, -1] {
+            let (_, asked, kept) = run(INSTALLED, kind, Some(1));
+            assert!(asked.is_empty() && kept, "type {kind}");
+        }
     }
 
     #[test]

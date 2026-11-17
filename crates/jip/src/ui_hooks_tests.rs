@@ -665,9 +665,12 @@ fn interaction_disabled_waits_for_its_activation_seam() {
     }
 }
 
-/// The README's JIP count is the table's: the JIP opcodes whose record has a handler once JIP
-/// answers "installed", the identity (`GetLNVersion`, `GetNVSEVersionFull`) and the empty slots
-/// left out.
+/// The README's JIP count never says more than the table has, and is at most 60 behind it: the
+/// JIP opcodes whose record has a handler once JIP answers "installed", the identity
+/// (`GetLNVersion`, `GetNVSEVersionFull`) and the empty slots left out. The README's counts are
+/// brought up to date once per batch of merges, not in every pull request (maintainer,
+/// 2026-11-16: every pull request editing the one count line made each merge a conflict for the
+/// next), so a pull request that adds commands leaves the README's number alone.
 #[test]
 fn the_readme_counts_the_built_commands() {
     let e = world();
@@ -689,7 +692,14 @@ fn the_readme_counts_the_built_commands() {
     let stated: usize = row[at..]
         .split(' ')
         .next()
-        .and_then(|n| n.parse().ok())
-        .expect("a number");
-    assert_eq!(stated, built, "README says {stated}, the table has {built}");
+        .and_then(|n| n.replace(',', "").parse().ok())
+        .expect("a number (thousands may have a comma)");
+    assert!(
+        stated <= built,
+        "README says {stated}, the table has only {built}"
+    );
+    assert!(
+        built - stated <= 60,
+        "README says {stated}, the table has {built}: bring the README's counts up to date"
+    );
 }

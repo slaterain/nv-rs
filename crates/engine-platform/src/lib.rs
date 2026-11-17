@@ -101,8 +101,10 @@ pub mod dsound;
 pub mod files;
 pub mod ini;
 pub mod library;
+pub mod machine_table;
 pub mod mixer;
 pub mod mmio;
+pub mod mod_files;
 pub mod nls;
 pub mod nvapi;
 pub mod process;
@@ -130,6 +132,8 @@ pub struct State {
     pub disk: files::Disk,
     /// The process side: the ANSI command line and the environment blocks ([`process`]).
     pub process: process::Process,
+    /// Mods' own files and the port's folder that keeps them ([`mod_files`]).
+    pub mod_files: mod_files::ModFiles,
 }
 
 /// What runs before the platform layer ends the process itself, which it does in one place: the
@@ -336,6 +340,7 @@ pub mod units {
     /// engines made from now on (`Engine::new` runs this before it makes the kernel).
     pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
         crate::install_layer(&crate::LAYER);
+        engine_core::mod_files::install(&crate::mod_files::CALLS);
         out.extend(crate::layer_funcs());
     }
 }
