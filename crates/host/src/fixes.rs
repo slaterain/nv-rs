@@ -2357,6 +2357,40 @@ bSunLightFromSky=1
         assert_eq!(choice.borderless, Some(true));
     }
 
+    /// What Linux's play.sh exports (distribution/unix/play.sh, the same names as Play.exe's but the
+    /// two Windows tables) makes a play run on Vulkan with play's defaults, as Play.exe's does
+    /// (review of #687: without NV_SETTINGS nothing drew).
+    #[test]
+    fn play_sh_variables_make_a_play_run_on_vulkan() {
+        let play_sh: &'static [(&str, &str)] = &[
+            ("NV_SOUND", "out"),
+            (
+                "NV_SAVE_OUT",
+                "/home/p/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves",
+            ),
+            (
+                "NV_PREFS_OUT",
+                "/home/p/.local/share/nv-rs/game/Documents/My Games/FalloutNV/FalloutPrefs.ini",
+            ),
+            ("NV_REPORT_DIR", "/home/p/.local/share/nv-rs/reports"),
+            ("NV_REPORT_LOG", "/home/p/.local/share/nv-rs/logs/game.log"),
+            (
+                "NV_WGPU_CACHE",
+                "/home/p/.local/share/nv-rs/machine/wgpu-cache",
+            ),
+            (
+                "NV_D3DX_CACHE",
+                "/home/p/.local/share/nv-rs/machine/d3dx-cache",
+            ),
+            ("NV_SETTINGS", "/home/p/.local/share/nv-rs/settings.ini"),
+        ];
+        assert!(is_play_run(env_of(play_sh)));
+        let choice = Choice::from_texts(None, None, env_of(play_sh)).unwrap();
+        assert_eq!(choice.renderer, Some(Renderer::Vulkan));
+        assert_eq!(choice.threads, PLAY_THREADS);
+        assert_eq!(choice.render_thread, PLAY_RENDER_THREAD);
+    }
+
     /// Vulkan is play's renderer (the maintainer, 2026-11-11): a launcher's play run with no usable
     /// `sRenderer` line, or no file at all, draws on it, and one whose file says `d3d9` on the real
     /// Direct3D 9. Every other run makes no choice: its `NV_D3D9` names the backend, or nothing
