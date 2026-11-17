@@ -71,12 +71,22 @@
 //!   (`Engine::mark_plugin_ui_message`; xNVSE's `MessageEx`, JIP's `MessageExAlt` and its
 //!   equip message), and the seam answers the default time for an unmarked call.
 //!
+//! - **O16** `bLoadScreenFix` (switch 16, off by default; `WriteRelJump(0x78AC60,
+//!   GetSuitableLoadScreensHook)`, `WriteRelJump(0x78A79B, PickLoadScreenHook)`, the two lists made
+//!   when the switch goes on, at `DeferredInit`): the loading menu's candidates
+//!   (`LoadingMenu::BuildCandidateList`, `0078ac60`) are the screens made for the location when
+//!   any can show there, else the generic ones (no locations), not both; in the overlay mode the
+//!   generic ones with flag `0x400` only; and the second pass without the location
+//!   (`MakeLoadScreenList`, `0078a5a0`) runs only when no screen was picked at all, not whenever
+//!   fewer than the limit were and the list is not locked.
+//!
 //! Threads: every seam runs on the main thread (the UI, the INI reader) but G09's, which runs on
-//! the thread that queues the message; the handlers take no slot, and the one state, G09's default
-//! time, is one lock-free word (the commands write it on the main thread).
+//! the thread that queues the message; the handlers take no slot, and the states, G09's default
+//! time (one lock-free word the commands write on the main thread) and O16's two lists (set once
+//! at `DeferredInit`, read only after), are lock-free slots.
 
 use super::Area;
-use engine_core::extend::{Owner, SiteSlot};
+use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 
 /// G08's seam: the text setting's buffer size in `ReadSetting` (words: the exe's size 0x100; the
@@ -187,8 +197,9 @@ pub const AREA: Area = Area {
         ROLLOVER_WEAPON.addr(),
         VATS_TARGET_DT.addr(),
         MESSAGE_TIME.addr(),
+        PICK_LOAD_SCREEN.addr(),
     ],
-    fix_wraps: &[],
+    fix_wraps: &[LOAD_SCREEN_CANDIDATES.addr()],
     install_fixes,
     jip_sites: &[],
     jip_wraps: &[],
@@ -215,6 +226,10 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(ROLLOVER_WEAPON, rollover_weapon);
     e.on_site(VATS_TARGET_DT, vats_target_dt);
     e.on_site(MESSAGE_TIME, message_time);
+    // O16's lists' slot, filled at `DeferredInit`.
+    e.ext_free::<LoadScreenLists>();
+    e.wrap(LOAD_SCREEN_CANDIDATES, load_screen_candidates);
+    e.on_site(PICK_LOAD_SCREEN, pick_load_screen);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -342,10 +357,6 @@ pub fn corner_message_text_size(e: &mut Engine) -> u32 {
     }
 }
 
-#[cfg(test)]
-#[path = "ga_tests.rs"]
-mod tests;
-
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RolloverWeaponHook.
 /// G80: a weapon whose flag byte +0x100 has 0x80 (not playable) answers 0 and nothing else
 /// happens. Otherwise, when the reference (`[ebp+8]`) has `ExtraWeaponModFlags` with its flags
@@ -393,3 +404,162 @@ fn message_time(e: &mut Engine, a: &[u32]) -> Option<u32> {
     }
     Some(default_message_time(e).to_bits())
 }
+
+// ---- O16, bLoadScreenFix ----
+
+/// O16's wrap: `LoadingMenu::BuildCandidateList` (`0078ac60`, `thiscall`: the menu, the
+/// candidates' `BSSimpleArray`), JIP's `GetSuitableLoadScreensHook` in its place.
+pub const LOAD_SCREEN_CANDIDATES: WrapSlot = WrapSlot::new(Owner::Jip, 0x0078_ac60);
+/// O16's seam: `MakeLoadScreenList`'s list lock test before its second pass without the location
+/// (`0x78A79B`, words: the menu; the answer non-zero holds the second pass back).
+pub const PICK_LOAD_SCREEN: SiteSlot = SiteSlot::new(Owner::Jip, 0x0078_a79b);
+
+/// JIP's `s_locationLoadScreens` and `s_genericLoadScreens`: the data's load screens with and
+/// without locations, in the data handler's order, made once when the game's data is in
+/// (`DeferredInit`, where JIP turns switch 16 on). Lock-free ([`Engine::ext_free`]), made at
+/// install before the threads start.
+#[derive(Default)]
+pub struct LoadScreenLists(std::sync::OnceLock<(Vec<u32>, Vec<u32>)>);
+
+/// `g_dataHandler` and its `loadScreenList` (`+0x128`, the list `00461070` answers).
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+const LOAD_SCREEN_LIST: u32 = 0x128;
+/// `TESLoadScreen`: its locations' list (`+0x2C`) and type (`+0x34`, the type's value at
+/// `+0x18`); a form's flags byte `+9` (bit 4: `0x400`).
+const LOAD_SCREEN_LOCATIONS: u32 = 0x2c;
+const LOAD_SCREEN_TYPE: u32 = 0x34;
+const LOAD_SCREEN_TYPE_VALUE: u32 = 0x18;
+const FORM_FLAGS_BYTE_9: u32 = 9;
+/// `LoadingMenu`: its flags word's high half (`+0x222`, bit 5 = `0x20`: the overlay mode), the
+/// location (`+0x1E8`), its screens' list (`+0x1D0`).
+const MENU_FLAGS_HIGH: u32 = 0x222;
+const MENU_LOCATION: u32 = 0x1e8;
+const MENU_LOAD_SCREENS: u32 = 0x1d0;
+/// The byte `0x11D8907` and `g_OSGlobals` (its byte `+2`): only type 3 screens (or none) then.
+const MENU_REPLACED: u32 = 0x011d_8907;
+const OS_GLOBALS: u32 = 0x011d_ea0c;
+/// `TESLoadScreen::CanDisplayForForm` (`005a6ec0`, `thiscall`: the location) and
+/// `BSSimpleArray::Add` (`007cb2e0`, `thiscall`: the address of the word to add); the array's
+/// size `+8`.
+const CAN_DISPLAY_FOR_FORM: u32 = 0x005a_6ec0;
+const CANDIDATES_ADD: u32 = 0x007c_b2e0;
+const CANDIDATES_SIZE: u32 = 8;
+
+fn load_screen_fix_on(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::LOAD_SCREEN_FIX != 0
+}
+
+/// O16's two lists while the switch is on and they are made; else none.
+fn load_screen_lists(e: &mut Engine) -> Option<(Vec<u32>, Vec<u32>)> {
+    if !load_screen_fix_on(e) {
+        return None;
+    }
+    e.ext_free::<LoadScreenLists>().0.get().cloned()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 16
+// (the lists JIP makes when the switch goes on).
+/// O16 on: the data handler's load screens sorted once into those with locations and the generic
+/// ones (no locations: the list's first item empty, JIP's `Empty()`). Null items are passed over.
+pub(crate) fn deferred_init(e: &mut Engine) {
+    if !load_screen_fix_on(e) {
+        return;
+    }
+    let handler = e.mem.u32(DATA_HANDLER);
+    if handler == 0 {
+        return;
+    }
+    let screens = crate::commands::list_items(e, Ptr::new(handler + LOAD_SCREEN_LIST));
+    let (mut location, mut generic) = (Vec::new(), Vec::new());
+    for screen in screens {
+        if screen == 0 {
+            continue;
+        }
+        if e.mem.u32(screen + LOAD_SCREEN_LOCATIONS) == 0 {
+            generic.push(screen);
+        } else {
+            location.push(screen);
+        }
+    }
+    let _ = e.ext_free::<LoadScreenLists>().0.set((location, generic));
+}
+
+/// O16: whether a screen may be added while only type 3 screens are wanted (`only_type_3`): no
+/// type, a type of value 0, or 3.
+fn type_suits(e: &mut Engine, screen: u32, only_type_3: bool) -> bool {
+    if !only_type_3 {
+        return true;
+    }
+    let kind = e.mem.u32(screen + LOAD_SCREEN_TYPE);
+    if kind == 0 {
+        return true;
+    }
+    let value = e.mem.u32(kind + LOAD_SCREEN_TYPE_VALUE);
+    value == 0 || value == 3
+}
+
+fn add_candidate(e: &mut Engine, results: u32, screen: u32) {
+    e.with_stack(4, |e, cell| {
+        e.mem.set_u32(cell.addr(), screen);
+        e.call(CANDIDATES_ADD, &args![results, cell]);
+    });
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetSuitableLoadScreensHook.
+/// O16's `BuildCandidateList`: the candidates emptied (size 0); in the overlay mode, or with no
+/// location, the generic screens (in the overlay mode only those with flag `0x400`); else the
+/// screens with locations that can show for the location (`CanDisplayForForm`), and the generic
+/// ones when none could. While `0x11D8907` or the OS globals' byte `+2` is set only screens of no
+/// type, type 0 or type 3 are added. With the switch off, or before the lists are made (JIP makes
+/// them in the same step that puts its hooks in, so its hook never runs without them): the next
+/// link (the exe's).
+/// Difference from JIP: with no screens with locations at all, JIP's walk (`dec edi` from 0) runs
+/// on past its list; here it adds none and goes on to the generic screens.
+fn load_screen_candidates(e: &mut Engine, w: &[u32]) -> Ret {
+    let Some((with_location, generic)) = load_screen_lists(e) else {
+        return e.call_next(LOAD_SCREEN_CANDIDATES.addr(), w);
+    };
+    let (menu, results) = (w[0], w[1]);
+    let overlay_mode = e.mem.u8(menu + MENU_FLAGS_HIGH) & 0x20 != 0;
+    let os_globals = e.mem.u32(OS_GLOBALS);
+    let only_type_3 = (e.mem.u8(MENU_REPLACED) | e.mem.u8(os_globals + 2)) != 0;
+    e.mem.set_u32(results + CANDIDATES_SIZE, 0);
+    let location = e.mem.u32(menu + MENU_LOCATION);
+    if !overlay_mode && location != 0 {
+        for screen in with_location {
+            if e.call(CAN_DISPLAY_FOR_FORM, &args![screen, location])
+                .bool()
+                && type_suits(e, screen, only_type_3)
+            {
+                add_candidate(e, results, screen);
+            }
+        }
+        if e.mem.u32(results + CANDIDATES_SIZE) != 0 {
+            return Ret::default();
+        }
+    }
+    for screen in generic {
+        if overlay_mode && e.mem.u8(screen + FORM_FLAGS_BYTE_9) & 4 == 0 {
+            continue;
+        }
+        if type_suits(e, screen, only_type_3) {
+            add_candidate(e, results, screen);
+        }
+    }
+    Ret::default()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PickLoadScreenHook.
+/// O16: the second pass without the location is held back while the menu's screen list has a
+/// screen (its first item set), in place of the list lock test. With the switch off, or before
+/// the lists are made (JIP's hooks go in with them): no answer.
+fn pick_load_screen(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    if !load_screen_fix_on(e) || e.ext_free::<LoadScreenLists>().0.get().is_none() {
+        return None;
+    }
+    Some(u32::from(e.mem.u32(a[0] + MENU_LOAD_SCREENS) != 0))
+}
+
+#[cfg(test)]
+#[path = "ga_tests.rs"]
+mod tests;

@@ -46,11 +46,14 @@ fn ga_seams_are_jips_addresses() {
                 ROLLOVER_WEAPON.addr(),
                 VATS_TARGET_DT.addr(),
                 MESSAGE_TIME.addr(),
+                PICK_LOAD_SCREEN.addr(),
             ]
         ]
         .concat()
     );
-    assert!(AREA.fix_wraps.is_empty() && AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
+    assert_eq!(PICK_LOAD_SCREEN.addr(), 0x0078_a79b);
+    assert_eq!(AREA.fix_wraps, [0x0078_ac60]);
+    assert!(AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
 }
 
 /// Not installed: nothing answers at any seam.
@@ -486,4 +489,280 @@ fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
     assert_eq!(message_time(&mut e, &[passed]), Some(passed), "a plugin's");
     drop(mark);
     assert_eq!(message_time(&mut e, &[passed]), Some(5.0f32.to_bits()));
+}
+
+// ---- O16, bLoadScreenFix ----
+
+const O16_HANDLER: u32 = AREA_AT + 0x2000;
+const O16_NODES: u32 = AREA_AT + 0x2200;
+const O16_SCREENS: u32 = AREA_AT + 0x1000;
+const O16_TYPE: u32 = AREA_AT + 0x1800;
+const O16_RESULTS: u32 = AREA_AT + 0x3000;
+const O16_RESULT_DATA: u32 = AREA_AT + 0x3100;
+const O16_MENU: u32 = AREA_AT + 0x3400;
+const O16_OS_GLOBALS: u32 = AREA_AT + 0x3800;
+const O16_LOCATION: u32 = 0x55;
+const O16_NEXT: u32 = 0x0078_ac60;
+
+fn screen(i: u32) -> u32 {
+    O16_SCREENS + i * 0x100
+}
+
+thread_local! {
+    /// The screens `CanDisplayForForm` answers true for.
+    static SHOWS_HERE: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// O16's world: the switch on (JIP installed, the row off), the data handler's load screen list
+/// `screen(1)` (locations unless `no_locations`), a null item, `screen(2)` (generic, type 5),
+/// `screen(3)` (locations unless `no_locations`), `screen(4)` (generic, flag 0x400, no type); the
+/// menu with the location; the candidates' array (size 5 before); `CanDisplayForForm` true for the
+/// screens in [`SHOWS_HERE`]; the array's add appending the word it is given; the exe's
+/// `BuildCandidateList` a marker (`0x7777` in the size); the lists made (`DeferredInit`).
+fn o16_world_with(shows: &[u32], no_locations: bool) -> Engine {
+    let mut e = o16_world_unmade(shows, no_locations);
+    deferred_init(&mut e);
+    e
+}
+
+/// [`o16_world_with`] before the lists are made.
+fn o16_world_unmade(shows: &[u32], no_locations: bool) -> Engine {
+    let mut e = installed();
+    e.map(0x011c_3000, 0x1000);
+    e.map(0x011d_8000, 0x1000);
+    e.map(0x011d_e000, 0x1000);
+    e.jip_patches_or(engine_core::extend::jip_patches::LOAD_SCREEN_FIX);
+    e.mem.set_u32(0x011c_3f2c, O16_HANDLER);
+    e.mem.set_u32(0x011d_ea0c, O16_OS_GLOBALS);
+    let items = [screen(1), 0, screen(2), screen(3), screen(4)];
+    let mut node = O16_HANDLER + 0x128;
+    for (i, &item) in items.iter().enumerate() {
+        e.mem.set_u32(node, item);
+        let next = if i + 1 < items.len() {
+            O16_NODES + 8 * i as u32
+        } else {
+            0
+        };
+        e.mem.set_u32(node + 4, next);
+        node = next;
+    }
+    if !no_locations {
+        e.mem.set_u32(screen(1) + 0x2c, 0x1111);
+        e.mem.set_u32(screen(3) + 0x2c, 0x3333);
+    }
+    e.mem.set_u32(screen(2) + 0x34, O16_TYPE);
+    e.mem.set_u32(O16_TYPE + 0x18, 5);
+    e.mem.set_u8(screen(4) + 9, 4);
+    e.mem.set_u32(O16_MENU + 0x1e8, O16_LOCATION);
+    e.mem.set_u32(O16_RESULTS + 4, O16_RESULT_DATA);
+    e.mem.set_u32(O16_RESULTS + 8, 5);
+    SHOWS_HERE.with(|s| *s.borrow_mut() = shows.to_vec());
+    e.register(0x005a_6ec0, |_, a| Ret {
+        eax: u32::from(SHOWS_HERE.with(|s| s.borrow().contains(&a[0]))),
+        ..Ret::default()
+    });
+    e.register(0x007c_b2e0, |e, a| {
+        let n = e.mem.u32(a[0] + 8);
+        let data = e.mem.u32(a[0] + 4);
+        e.mem.set_u32(data + 4 * n, e.mem.u32(a[1]));
+        e.mem.set_u32(a[0] + 8, n + 1);
+        Ret::default()
+    });
+    e.register(O16_NEXT, |e, a| {
+        e.mem.set_u32(a[1] + 8, 0x7777);
+        Ret::default()
+    });
+    e.call_log = Some(vec![]);
+    e
+}
+
+fn o16_world(shows: &[u32]) -> Engine {
+    o16_world_with(shows, false)
+}
+
+fn candidates(e: &mut Engine) -> Vec<u32> {
+    let n = e.mem.u32(O16_RESULTS + 8);
+    (0..n).map(|i| e.mem.u32(O16_RESULT_DATA + 4 * i)).collect()
+}
+
+fn shown_asked(e: &Engine) -> Vec<Vec<u32>> {
+    e.call_log
+        .as_ref()
+        .unwrap()
+        .iter()
+        .filter(|c| c.0 == 0x005a_6ec0)
+        .map(|c| c.1.clone())
+        .collect()
+}
+
+/// O16's lists (`SetOptionalPatch` case 16, at `DeferredInit`): the data's screens with
+/// locations and the generic ones, in order, null items passed over; with the switch off, or no
+/// data handler, none are made.
+#[test]
+fn o16_the_lists_are_made_once_the_data_is_in() {
+    let mut e = o16_world(&[]);
+    assert_eq!(
+        e.ext_free::<LoadScreenLists>().0.get(),
+        Some(&(vec![screen(1), screen(3)], vec![screen(2), screen(4)]))
+    );
+    let mut e = installed();
+    e.map(0x011c_3000, 0x1000);
+    e.mem.set_u32(0x011c_3f2c, O16_HANDLER);
+    deferred_init(&mut e);
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), None, "switch off");
+    e.jip_patches_or(engine_core::extend::jip_patches::LOAD_SCREEN_FIX);
+    e.mem.set_u32(0x011c_3f2c, 0);
+    deferred_init(&mut e);
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), None, "no data");
+}
+
+/// O16 `GetSuitableLoadScreensHook` with a location: the array emptied, the location screens
+/// asked in order with the location, those that can show added; when none can, the generic
+/// ones; with no location, the generic ones without asking.
+#[test]
+fn o16_the_location_screens_else_the_generic_ones() {
+    let mut e = o16_world(&[screen(3)]);
+    load_screen_candidates(&mut e, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(candidates(&mut e), [screen(3)]);
+    assert_eq!(
+        shown_asked(&e),
+        [vec![screen(1), O16_LOCATION], vec![screen(3), O16_LOCATION]]
+    );
+    let mut e = o16_world(&[]);
+    load_screen_candidates(&mut e, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(candidates(&mut e), [screen(2), screen(4)], "none can show");
+    let mut e = o16_world(&[screen(1), screen(3)]);
+    e.mem.set_u32(O16_MENU + 0x1e8, 0);
+    load_screen_candidates(&mut e, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(candidates(&mut e), [screen(2), screen(4)], "no location");
+    assert!(shown_asked(&e).is_empty());
+}
+
+/// O16 in the overlay mode (the menu's flag bit 5, `+0x222` bit 0x20): only the generic screens
+/// with flag 0x400, the location screens not asked even with a location.
+#[test]
+fn o16_the_overlay_mode_takes_flagged_generic_screens() {
+    let mut e = o16_world(&[screen(1), screen(3)]);
+    e.mem.set_u8(O16_MENU + 0x222, 0x20);
+    load_screen_candidates(&mut e, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(candidates(&mut e), [screen(4)]);
+    assert!(shown_asked(&e).is_empty());
+}
+
+/// O16 with `0x11D8907` or the OS globals' byte `+2` set: a screen of no type, type 0 or 3 is
+/// added, any other type not (screen 2's type 5).
+#[test]
+fn o16_only_type_3_screens_while_the_menu_is_replaced() {
+    for at in [0x011d_8907, O16_OS_GLOBALS + 2] {
+        let mut e = o16_world(&[]);
+        e.mem.set_u8(at, 1);
+        load_screen_candidates(&mut e, &[O16_MENU, O16_RESULTS]);
+        assert_eq!(candidates(&mut e), [screen(4)], "{at:#x}");
+        for (value, kept) in [(0u32, true), (3, true), (2, false)] {
+            let mut e = o16_world(&[]);
+            e.mem.set_u8(at, 1);
+            e.mem.set_u32(O16_TYPE + 0x18, value);
+            load_screen_candidates(&mut e, &[O16_MENU, O16_RESULTS]);
+            assert_eq!(
+                candidates(&mut e).contains(&screen(2)),
+                kept,
+                "{at:#x} {value}"
+            );
+        }
+    }
+    // A location screen of type 5 that can show is held back too, and the generic ones follow.
+    let mut e = o16_world(&[screen(1)]);
+    e.mem.set_u32(screen(1) + 0x34, O16_TYPE);
+    e.mem.set_u8(0x011d_8907, 1);
+    load_screen_candidates(&mut e, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(candidates(&mut e), [screen(4)]);
+}
+
+/// O16 with no screens with locations at all and a location: none asked or added from them and
+/// the generic ones follow (JIP's walk would run on past its empty list).
+#[test]
+fn o16_no_location_screens_at_all() {
+    let mut e = o16_world_with(&[screen(1)], true);
+    assert_eq!(
+        e.ext_free::<LoadScreenLists>().0.get(),
+        Some(&(vec![], vec![screen(1), screen(2), screen(3), screen(4)]))
+    );
+    load_screen_candidates(&mut e, &[O16_MENU, O16_RESULTS]);
+    assert!(shown_asked(&e).is_empty());
+    assert_eq!(
+        candidates(&mut e),
+        [screen(1), screen(2), screen(3), screen(4)]
+    );
+}
+
+/// O16's wrap through the dispatch: with the switch on JIP's (the next link not run); off, the
+/// exe's `BuildCandidateList` (the next link).
+#[test]
+fn o16_the_wrap_runs_the_exes_with_the_switch_off() {
+    let mut e = o16_world(&[screen(3)]);
+    install_fixes(&mut e);
+    assert_eq!(e.wraps_at(0x0078_ac60), [Owner::Jip]);
+    e.call(0x0078_ac60, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(candidates(&mut e), [screen(3)]);
+    e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+    e.call(0x0078_ac60, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(e.mem.u32(O16_RESULTS + 8), 0x7777, "the exe's");
+}
+
+/// O16 with the switch on but the lists not made yet (JIP puts its hooks in only with them): the
+/// wrap runs the exe's `BuildCandidateList`, and the second-pass seam gives no answer.
+#[test]
+fn o16_before_the_lists_are_made_the_exes_runs() {
+    let mut e = o16_world_unmade(&[screen(3)], false);
+    install_fixes(&mut e);
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), None);
+    e.call(0x0078_ac60, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(e.mem.u32(O16_RESULTS + 8), 0x7777, "the exe's");
+    e.mem.set_u32(O16_MENU + 0x1d0, screen(2));
+    assert_eq!(pick_load_screen(&mut e, &[O16_MENU]), None);
+    deferred_init(&mut e);
+    assert_eq!(pick_load_screen(&mut e, &[O16_MENU]), Some(1), "made");
+}
+
+/// O16 `PickLoadScreenHook`: the second pass held (1) while the menu's list has a first screen,
+/// not (0) when it has none; the switch off: no answer.
+#[test]
+fn o16_the_second_pass_only_for_an_empty_list() {
+    let mut e = o16_world(&[]);
+    assert_eq!(pick_load_screen(&mut e, &[O16_MENU]), Some(0));
+    e.mem.set_u32(O16_MENU + 0x1d0, screen(2));
+    assert_eq!(pick_load_screen(&mut e, &[O16_MENU]), Some(1));
+    e.set_jip_patches(engine_core::extend::jip_patches::INSTALLED);
+    assert_eq!(pick_load_screen(&mut e, &[O16_MENU]), None);
+}
+
+/// O16's lists are made by JIP's `DeferredInit` message (xNVSE's `kMessage_DeferredInit`).
+#[test]
+fn o16_the_deferred_init_message_makes_the_lists() {
+    let mut e = o16_world_unmade(&[], false);
+    // The same message makes JIP's position marker: its game calls as stand-ins.
+    e.register(0x00aa_3e40, |_, _| Ret {
+        eax: AREA_AT + 0x3a00,
+        ..Ret::default()
+    });
+    e.register(crate::commands::pos_marker::REFR_CONSTRUCTOR, |_, w| Ret {
+        eax: w[0],
+        ..Ret::default()
+    });
+    e.register(crate::commands::pos_marker::SET_TEMPORARY, |_, _| {
+        Ret::default()
+    });
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), None);
+    crate::cosave::listen(
+        &mut e,
+        &nvse::plugins::Message {
+            kind: nvse::plugins::msg::DEFERRED_INIT,
+            data: 0,
+            len: 0,
+        },
+    );
+    assert_eq!(
+        e.ext_free::<LoadScreenLists>().0.get(),
+        Some(&(vec![screen(1), screen(3)], vec![screen(2), screen(4)]))
+    );
 }

@@ -707,7 +707,7 @@ fn weapon_mods_on(e: &mut Engine) -> bool {
 
 /// `ProcessManager::highActors` (the exe's `ProcessLists` at `011E0E80`, its list at `+0x80`:
 /// JIP's `GameProcess.h`; the constructor `0096d020` sets up the list head there).
-const HIGH_ACTORS: u32 = 0x011e_0f00;
+pub(crate) const HIGH_ACTORS: u32 = 0x011e_0f00;
 /// `g_thePlayer`.
 const THE_PLAYER: u32 = 0x011d_ea3c;
 
@@ -753,14 +753,16 @@ pub(crate) fn post_load_game(e: &mut Engine) {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DoOnLoadActorHook (its
-// weapon mods part; the perks part comes with uNPCPerks, O18).
-/// An NPC's 3D set up: with a node (its render state's), not while a save loads, and alive, an
+// weapon mods part and, with uNPCPerks (O18), its perks part).
+/// An NPC's 3D set up: with a node (its render state's), not while a save loads, and alive: with
+/// O18 on its perks put on ([`super::ge::perks::init_npc_perks`]); with O17 on an
 /// actor at the high or middle-high level not dealt its weapon mods yet is marked dealt and, not
 /// being a teammate, has the weapon it holds given mods by chance ([`distribute_weapon_mods`]).
 /// The answer is the node `SetReferenceIDOnScenegraph` is then given (0 for none). With the
-/// switch off: no answer (the exe's lookups).
+/// two switches off: no answer (the exe's lookups).
 fn do_on_load_actor(e: &mut Engine, a: &[u32]) -> Option<u32> {
-    if !weapon_mods_on(e) {
+    let (mods, perks) = (weapon_mods_on(e), crate::cosave::npc_perks_patch(e));
+    if !mods && !perks {
         return None;
     }
     let actor = a[0];
@@ -775,6 +777,12 @@ fn do_on_load_actor(e: &mut Engine, a: &[u32]) -> Option<u32> {
     }
     let save_load = e.mem.u32(SAVE_LOAD_GAME);
     if e.mem.u8(save_load + SAVE_LOAD_FLAGS) & 2 != 0 || e.mem.u32(actor + ACTOR_LIFE_STATE) != 0 {
+        return Some(node);
+    }
+    if perks {
+        super::ge::perks::init_npc_perks(e, actor);
+    }
+    if !mods {
         return Some(node);
     }
     let flags = e.mem.u8(actor + ACTOR_JIP_FLAGS_143);

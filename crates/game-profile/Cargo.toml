@@ -1,0 +1,10 @@
+[package]
+name = "game-profile"
+version = "0.1.0"
+description = "nv-rs's own sections in the game's Fallout.ini and the play settings' lines in FalloutPrefs.ini: shared by Play.exe (Windows) and the host's first start on Linux and macOS"
+edition.workspace = true
+license.workspace = true
+# `as_chunks` (Rust 1.88) in settings.rs, as the launcher has used it.
+rust-version = "1.88"
+
+[dependencies]

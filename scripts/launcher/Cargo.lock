@@ -3,5 +3,12 @@
 version = 4
 
 [[package]]
+name = "game-profile"
+version = "0.1.0"
+
+[[package]]
 name = "launcher"
 version = "0.1.0"
+dependencies = [
+ "game-profile",
+]

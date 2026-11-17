@@ -10,5 +10,10 @@ description = "The preview package's Play.exe: finds the player's game, makes th
 name = "Play"
 path = "src/main.rs"
 
-# Standalone tool, not part of the root workspace. No dependencies.
+# Standalone tool, not part of the root workspace. Its one dependency is the project's own
+# game-profile (the profile files' sections and settings lines, shared with the host's first start
+# on Linux and macOS).
+[dependencies]
+game-profile = { path = "../../crates/game-profile" }
+
 [workspace]

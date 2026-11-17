@@ -117,7 +117,8 @@ plainly that they cannot start it. Every text that goes out with them says so.
    checked it is on main, and it must be public: BUILD.txt and CHECKED.txt point at it, and that is
    how the GPL's source is offered). Create a draft pre-release and attach, as they are, each
    archive, its `.sha256` and its `.CHECKED.txt` (renaming an archive breaks its checksum file).
-   The notes say plainly that the game does not run on Linux or macOS yet and what the packages do
+   The notes say plainly that the Linux build goes on to start the game but has never been started
+   with the game's files, that the game does not run on macOS yet, and what the packages do
    instead (find the game, keep the saves apart, say why they stop), carry both CHECKED.txt texts,
    and give the reporting instructions. Say that nobody on the team has run them.
 6. Publish after reviewing the draft. Official builds are maintainer-published; nothing here

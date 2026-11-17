@@ -17,8 +17,8 @@ PLEASE READ FIRST
   after it finds your game, and says what is not provided on macOS yet. That stop is expected
   and needs no report: it begins with
     error: nv-rs does not run the game on this system yet: ...
-  and play.sh then says "As expected for this preview: the game does not run on Linux or macOS
-  yet". Anything else that stops it is worth a report.
+  and play.sh then says "As expected for this preview: the game does not run on this system yet".
+  Anything else that stops it is worth a report.
 - Your nv-rs saves, settings and logs live in nv-rs's own folder:
   ~/Library/Application Support/nv-rs
 - nv-rs never writes to the game's folder, to your Documents or to your Library (but its own

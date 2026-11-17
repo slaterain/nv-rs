@@ -1526,3 +1526,89 @@ mod tests {
         assert_eq!(buffer_release(&mut e, Ptr::new(shader)), 0);
     }
 }
+
+/// The measured profile getters off Windows (`super::d3dx::profiles`) against the player's DLL:
+/// a device whose caps are the machine table's card's (`data/machine/d3d9-card.tsv`, the HAL
+/// device), and the same with only the shader versions lowered (the DLL answers a lower model,
+/// which the measured getters do not provide: they say so instead of answering).
+#[cfg(test)]
+mod tests_profiles {
+    use super::*;
+
+    #[repr(C)]
+    struct FakeDevice {
+        vtable: *const usize,
+        caps: [u8; 304],
+    }
+
+    unsafe extern "system" fn fake_caps(this: *mut FakeDevice, out: *mut u8) -> Hresult {
+        // SAFETY: `this` is the fake device; `out` has room for a `D3DCAPS9`.
+        unsafe { std::ptr::copy_nonoverlapping((*this).caps.as_ptr(), out, 304) };
+        0
+    }
+
+    fn card_caps() -> [u8; 304] {
+        let line = crate::machine_table::display::CARD
+            .lines()
+            .find(|l| l.starts_with("GetDeviceCaps\t0 1\t0\t"))
+            .expect("the HAL device's caps");
+        let h = line.split('\t').nth(3).unwrap();
+        let mut caps = [0u8; 304];
+        for (i, b) in caps.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap();
+        }
+        caps
+    }
+
+    fn dll_profile(caps: [u8; 304], name: &[u8]) -> Option<Vec<u8>> {
+        let mut table = [0usize; 119];
+        table[7] = fake_caps as *const () as usize;
+        let mut device = FakeDevice {
+            vtable: table.as_ptr(),
+            caps,
+        };
+        let found = dll_export(name)?;
+        // SAFETY: the export has this signature (d3dx9shader.h).
+        let f: unsafe extern "system" fn(*mut FakeDevice) -> *const u8 =
+            unsafe { std::mem::transmute(found) };
+        // SAFETY: the DLL calls only GetDeviceCaps on the device and answers a static string.
+        let text = unsafe { f(&mut device) };
+        if text.is_null() {
+            return Some(Vec::new());
+        }
+        Some(
+            unsafe { std::ffi::CStr::from_ptr(text as *const std::ffi::c_char) }
+                .to_bytes()
+                .to_vec(),
+        )
+    }
+
+    #[test]
+    fn the_measured_profiles_are_the_dlls() {
+        let caps = card_caps();
+        let word = |c: &[u8; 304], at: usize| u32::from_le_bytes(c[at..at + 4].try_into().unwrap());
+        for (name, pixel, at) in [
+            (&b"D3DXGetVertexShaderProfile\0"[..], false, 0xc4),
+            (&b"D3DXGetPixelShaderProfile\0"[..], true, 0xcc),
+        ] {
+            let Some(theirs) = dll_profile(caps, name) else {
+                eprintln!("SKIPPED: no d3dx9_38.dll on this machine");
+                return;
+            };
+            let ours = crate::d3dx::profiles::profile(word(&caps, at), pixel).unwrap();
+            assert_eq!(ours, &theirs[..], "{}", String::from_utf8_lossy(name));
+            // A lower model: the DLL answers one, the measured getters provide none.
+            let mut lower = caps;
+            lower[at + 1] = 2;
+            let theirs = dll_profile(lower, name).unwrap();
+            assert!(
+                !theirs.starts_with(if pixel { b"ps_3" } else { b"vs_3" }),
+                "{theirs:?}"
+            );
+            assert_eq!(
+                crate::d3dx::profiles::profile(word(&lower, at), pixel),
+                None
+            );
+        }
+    }
+}
