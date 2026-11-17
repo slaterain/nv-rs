@@ -1049,3 +1049,415 @@ fn g106_the_byte_then_the_maps_value() {
     e.mem.set_u32(WATER_MAP + 4, 0);
     assert_eq!(ask(&mut e, 0x13), 0, "no buckets");
 }
+
+// ---- GH2 part 4: G93 (fix row) and O17 (bNPCWeaponMods) --------------------------------------
+
+const P4: u32 = 0x0520_0000;
+const WEAPON: u32 = P4;
+const FIRST_PERSON: u32 = P4 + 0x800;
+const BIPED: u32 = P4 + 0xa00;
+const ACTOR: u32 = P4 + 0xe00;
+const ACTOR_BASE: u32 = P4 + 0x1100;
+const PROCESS: u32 = P4 + 0x1300;
+const INFO: u32 = P4 + 0x1400;
+const INFO_LIST_NODE: u32 = P4 + 0x1440;
+const INFO_EXTRA_LIST: u32 = P4 + 0x1480;
+const INFO_FLAGS_EXTRA: u32 = P4 + 0x14c0;
+const RENDER: u32 = P4 + 0x1500;
+const PLAYER_REF: u32 = P4 + 0x1600;
+const STUB_CLEAR_SLOT: u32 = 0x004a_aff0;
+const STUB_SET_WEAPON: u32 = 0x004a_b750;
+const STUB_LEVEL: u32 = 0x0047_ded0;
+const STUB_RNG: u32 = 0x00aa_5230;
+const STUB_UPDATE: u32 = 0x0088_db20;
+
+thread_local! {
+    static DRAWS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The commands' engine with the extra stand-ins, a weapon (type 0x28, weapon type 2) whose
+/// modded models' paths are set for the flags in `paths` (the model's length word `+8`), an NPC
+/// (id 0x1234, base level 5) at the high process level whose weapon entry carries the mod flags
+/// `held` (0: no flags extra), a biped of that NPC, the game's draws stubbed with `draws` (taken
+/// in order) and the calls recorded.
+fn weapon_world(paths: &[u32], held: u32, draws: &[u32]) -> Engine {
+    let mut e = crate::commands::test_support::engine();
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    e.map(P4, 0x2000);
+    e.mem.set_u8(WEAPON + 4, 0x28);
+    e.mem.set_u8(WEAPON + 0xf4, 2);
+    for &flags in paths {
+        e.mem.set_u16(WEAPON + MODEL_BY_MOD[flags as usize] + 8, 5);
+    }
+    e.mem.set_u32(ACTOR + 0xc, 0x1234);
+    e.mem.set_u32(ACTOR + 0x20, ACTOR_BASE);
+    e.mem.set_u32(ACTOR + 0x68, PROCESS);
+    e.mem.set_u32(PLAYER_REF + 0xc, 0x14);
+    e.mem.set_u32(PROCESS + 0x114, INFO);
+    e.mem.set_u32(INFO + 8, WEAPON);
+    e.mem.set_u32(INFO, INFO_LIST_NODE);
+    e.mem.set_u32(INFO_LIST_NODE, INFO_EXTRA_LIST);
+    if held != 0 {
+        crate::commands::test_support::put_extra(
+            &mut e,
+            INFO_EXTRA_LIST,
+            INFO_FLAGS_EXTRA,
+            0x8d,
+            held,
+        );
+    }
+    e.mem.set_u32(BIPED + 0x2b0, ACTOR);
+    for stub in [STUB_CLEAR_SLOT, STUB_SET_WEAPON, STUB_UPDATE] {
+        e.register(stub, |_, _| Ret::default());
+    }
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 5,
+        ..Ret::default()
+    });
+    DRAWS.with(|d| *d.borrow_mut() = draws.to_vec());
+    e.register(STUB_RNG, |_, _| Ret {
+        eax: DRAWS.with(|d| d.borrow_mut().remove(0)),
+        ..Ret::default()
+    });
+    e.call_log = Some(vec![]);
+    e
+}
+
+fn logged_calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+    e.call_log
+        .as_ref()
+        .unwrap()
+        .iter()
+        .filter(|c| c.0 == addr)
+        .map(|c| c.1.clone())
+        .collect()
+}
+
+/// G93 `GetWeaponModel`: the modded third-person model when its path is set (else the plain
+/// one, flags taken as 0); the first-person object's model for the player, and for a type 8
+/// weapon with a mod; a missing first-person object falls back to the third-person model; only the
+/// low three bits of the flags count; an actor of 0 is not the player.
+#[test]
+fn g93_the_weapon_model_by_mod_flags() {
+    let mut e = weapon_world(&[1, 5], 0, &[]);
+    assert_eq!(weapon_model(&mut e, WEAPON, 0, ACTOR), WEAPON + 0x3c);
+    assert_eq!(weapon_model(&mut e, WEAPON, 1, ACTOR), WEAPON + 0x270);
+    assert_eq!(weapon_model(&mut e, WEAPON, 5, ACTOR), WEAPON + 0x2f0);
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 9, ACTOR),
+        WEAPON + 0x270,
+        "low bits"
+    );
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 2, ACTOR),
+        WEAPON + 0x3c,
+        "no path: plain"
+    );
+    // The player: the first-person object of the (fallen back) flags.
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 2, PLAYER_REF),
+        WEAPON + 0x3c,
+        "none yet"
+    );
+    e.mem.set_u32(WEAPON + 0x250, FIRST_PERSON);
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 2, PLAYER_REF),
+        FIRST_PERSON + 0x30
+    );
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 0, 0),
+        WEAPON + 0x3c,
+        "no actor"
+    );
+    e.mem.set_u32(WEAPON + 0x254, FIRST_PERSON + 0x100);
+    assert_eq!(
+        weapon_model(&mut e, WEAPON, 1, PLAYER_REF),
+        FIRST_PERSON + 0x130
+    );
+    assert_eq!(weapon_model(&mut e, WEAPON, 1, ACTOR), WEAPON + 0x270);
+    // Type 8 with a mod: first person for anyone; without a mod: third person.
+    e.mem.set_u8(WEAPON + 0xf4, 8);
+    assert_eq!(weapon_model(&mut e, WEAPON, 1, ACTOR), FIRST_PERSON + 0x130);
+    assert_eq!(weapon_model(&mut e, WEAPON, 0, ACTOR), WEAPON + 0x3c);
+}
+
+/// G93 `SetWeaponSlotHook`: a weapon not already loaded clears slot 5, becomes the slot's form
+/// and gets [`weapon_model`]'s model for the biped's actor; a form that is not a weapon, none, or
+/// the same weapon already loaded changes nothing; with the fixes bit clear the call goes on to
+/// the exe's (nothing of JIP's done).
+#[test]
+fn g93_the_weapon_slot_takes_the_modded_model() {
+    let mut e = weapon_world(&[1], 0, &[]);
+    e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+    set_weapon_slot(&mut e, &[BIPED, WEAPON, 0x101]);
+    assert_eq!(
+        logged_calls(&e, STUB_CLEAR_SLOT),
+        vec![vec![BIPED, 5, 1, 0]]
+    );
+    assert_eq!(e.mem.u32(BIPED + 0x7c), WEAPON);
+    assert_eq!(
+        e.mem.u32(BIPED + 0x80),
+        WEAPON + 0x270,
+        "the low byte's flags"
+    );
+    // Loaded already (the clone set): nothing.
+    e.mem.set_u32(BIPED + 0x84, 1);
+    e.mem.set_u32(BIPED + 0x80, 0);
+    set_weapon_slot(&mut e, &[BIPED, WEAPON, 1]);
+    assert_eq!(e.mem.u32(BIPED + 0x80), 0);
+    assert_eq!(logged_calls(&e, STUB_CLEAR_SLOT).len(), 1);
+    // The same form with no clone: loaded again.
+    e.mem.set_u32(BIPED + 0x84, 0);
+    set_weapon_slot(&mut e, &[BIPED, WEAPON, 0]);
+    assert_eq!(e.mem.u32(BIPED + 0x80), WEAPON + 0x3c);
+    // Not a weapon, or none: nothing.
+    e.mem.set_u8(WEAPON + 4, 0x18);
+    set_weapon_slot(&mut e, &[BIPED, WEAPON, 0]);
+    set_weapon_slot(&mut e, &[BIPED, 0, 0]);
+    assert_eq!(logged_calls(&e, STUB_CLEAR_SLOT).len(), 2);
+}
+
+/// G93's flags: an NPC at the high or middle-high level gives its weapon entry's mod flags; a
+/// low process, no process, no entry or no flags give 0; `InitWornObject`'s answer is those
+/// (0 for no actor).
+#[test]
+fn g93_an_npcs_held_weapon_flags() {
+    let mut e = weapon_world(&[], 6, &[]);
+    assert_eq!(init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]), Some(6));
+    e.mem.set_u8(PROCESS + 0x28, 1);
+    assert_eq!(init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]), Some(6));
+    e.mem.set_u8(PROCESS + 0x28, 2);
+    assert_eq!(
+        init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]),
+        Some(0),
+        "low level"
+    );
+    e.mem.set_u8(PROCESS + 0x28, 0);
+    e.mem.set_u32(PROCESS + 0x114, 0);
+    assert_eq!(
+        init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]),
+        Some(0),
+        "no entry"
+    );
+    e.mem.set_u32(PROCESS + 0x114, INFO);
+    e.mem.set_u32(ACTOR + 0x68, 0);
+    assert_eq!(
+        init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]),
+        Some(0),
+        "no process"
+    );
+    assert_eq!(
+        init_worn_weapon(&mut e, &[0, BIPED, WEAPON]),
+        Some(0),
+        "no actor"
+    );
+    let mut e = weapon_world(&[], 0, &[]);
+    assert_eq!(
+        init_worn_weapon(&mut e, &[ACTOR, BIPED, WEAPON]),
+        Some(0),
+        "no flags"
+    );
+}
+
+/// G93 `PickWeaponModelHook`: the mod slots given (the player's) stand; else an NPC's held
+/// weapon's flags (not the player's); with a biped `SetWeapon` gets them and nothing is left to
+/// attach; without, the model part for those flags (none for no item).
+#[test]
+fn g93_the_equipped_model_is_picked_with_the_flags() {
+    let mut e = weapon_world(&[1, 2], 2, &[]);
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, ACTOR, WEAPON, BIPED, 0]),
+        Some(0)
+    );
+    assert_eq!(
+        logged_calls(&e, STUB_SET_WEAPON),
+        vec![vec![BIPED, WEAPON, 2]]
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, ACTOR, WEAPON, BIPED, 0x101]),
+        Some(0)
+    );
+    assert_eq!(
+        logged_calls(&e, STUB_SET_WEAPON)[1],
+        vec![BIPED, WEAPON, 1],
+        "slots stand"
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, ACTOR, WEAPON, 0, 0]),
+        Some(WEAPON + 0x290)
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, 0, WEAPON, 0, 0]),
+        Some(WEAPON + 0x3c),
+        "not an actor: no flags"
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[PLAYER_REF, PLAYER_REF, WEAPON, 0, 0]),
+        Some(WEAPON + 0x3c),
+        "the player: no held flags"
+    );
+    assert_eq!(
+        pick_weapon_model(&mut e, &[ACTOR, ACTOR, 0, 0, 0]),
+        Some(0),
+        "no item"
+    );
+    assert_eq!(logged_calls(&e, STUB_SET_WEAPON).len(), 2);
+}
+
+/// O17's world: the switch on with JIP's published numbers (2, 10, 60), the NPC loaded (a render
+/// state with a node), its weapon (two mod slots) entry with no flags yet.
+fn mods_world(draws: &[u32]) -> Engine {
+    let mut e = weapon_world(&[], 0, draws);
+    e.set_jip_patches(engine_core::extend::jip_patches::NPC_WEAPON_MODS);
+    e.ext::<crate::Jip>()
+        .game_patches
+        .settings
+        .weapon_mod_chance = [2, 10, 60];
+    e.mem.set_u32(ACTOR + 0x64, RENDER);
+    e.mem.set_u32(RENDER + 0x14, 0x7777);
+    e.mem.set_u32(WEAPON + 0x350, 0x11);
+    e.mem.set_u32(WEAPON + 0x358, 0x13);
+    e
+}
+
+fn dealt_flags(e: &mut Engine) -> Option<u32> {
+    let x = crate::commands::extra::get_by_type(e, INFO_EXTRA_LIST, 0x8d);
+    (x != 0).then(|| e.mem.u32(x + 0xc))
+}
+
+/// O17 `DoOnLoadActorHook`: the node answered; the NPC marked dealt; a draw under the chance
+/// (level 5 x 2 = 10) gives mods (here both slots: shuffle 0 = 1, 2, 4: slot 1 halves to 5, slot
+/// 2 absent, slot 4 kept with the draw 4 under 5), the flags extra added and the weapon updated;
+/// a second load deals nothing.
+#[test]
+fn o17_an_npc_is_dealt_weapon_mods_once() {
+    let mut e = mods_world(&[4, 0]);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0x7777));
+    assert_eq!(e.mem.u8(ACTOR + 0x143) & 0x10, 0x10);
+    assert_eq!(dealt_flags(&mut e), Some(5));
+    assert_eq!(
+        logged_calls(&e, STUB_UPDATE),
+        vec![vec![ACTOR, WEAPON, 1, INFO_EXTRA_LIST, 0]]
+    );
+    assert_eq!(logged_calls(&e, STUB_LEVEL), vec![vec![ACTOR_BASE + 0x30]]);
+    DRAWS.with(|d| *d.borrow_mut() = vec![]);
+    assert_eq!(
+        do_on_load_actor(&mut e, &[ACTOR]),
+        Some(0x7777),
+        "dealt: no draw"
+    );
+}
+
+/// O17's draws: the chance held between min and max; a draw at or over it gives nothing (but the
+/// NPC is marked); the shuffle's halving and drops.
+#[test]
+fn o17_the_chance_and_the_shuffle() {
+    // Draw 10 = chance 10: nothing.
+    let mut e = mods_world(&[10]);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), None);
+    assert_eq!(e.mem.u8(ACTOR + 0x143) & 0x10, 0x10);
+    // Level 40 x 2 = 80 held to 60: draw 59 under; shuffle 4 (4, 1, 2): slot 4 halves to 30;
+    // slot 1 present, 30 <= 59: only the first kept (4).
+    let mut e = mods_world(&[59, 4]);
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 40,
+        ..Ret::default()
+    });
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), Some(4));
+    // Level 1 x 2 = 2 held up to 10; draw 9; shuffle 1 (1, 4, 2): 1 halves to 5, 4 present and
+    // 5 <= 9: only the first (1).
+    let mut e = mods_world(&[9, 1]);
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 1,
+        ..Ret::default()
+    });
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), Some(1));
+    // A negative level word (sign-extended) is a huge chance: held to 60. Draw 0, shuffle 5
+    // (4, 2, 1): 4 halves 60 to 30, 2 absent, 1 present and 30 > 0: kept: 5.
+    let mut e = mods_world(&[0, 5]);
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 0xffff,
+        ..Ret::default()
+    });
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), Some(5));
+}
+
+/// O17's conditions: no node (answer 0), a save loading, dead, a low process, already dealt,
+/// a teammate (marked, no draw), a weapon type over 9 or flags 0xA0, flags there already, no mod
+/// slots; and the switch off or a number 0: no answer.
+#[test]
+fn o17_who_is_dealt_mods() {
+    let mut e = mods_world(&[]);
+    e.mem.set_u32(RENDER + 0x14, 0);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0));
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0);
+    let mut e = mods_world(&[]);
+    let save_load = e.mem.u32(0x011d_df38);
+    e.mem.set_u8(save_load + 0x244, 2);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), Some(0x7777));
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "a save loading");
+    let mut e = mods_world(&[]);
+    e.mem.set_u32(ACTOR + 0x108, 2);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "dead");
+    let mut e = mods_world(&[]);
+    e.mem.set_u8(PROCESS + 0x28, 2);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0, "low process");
+    let mut e = mods_world(&[]);
+    e.mem.set_u8(ACTOR + 0x18d, 1);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 0x10, "a teammate is marked");
+    assert_eq!(dealt_flags(&mut e), None);
+    for (at, value) in [(0xf4u32, 10u8), (0x100, 0x20), (0x100, 0x80)] {
+        let mut e = mods_world(&[]);
+        e.mem.set_u8(WEAPON + at, value);
+        do_on_load_actor(&mut e, &[ACTOR]);
+        assert_eq!(dealt_flags(&mut e), None, "{at:#x} {value:#x}");
+        assert!(logged_calls(&e, STUB_LEVEL).is_empty());
+    }
+    let mut e = mods_world(&[]);
+    e.mem.set_u32(WEAPON + 0x350, 0);
+    e.mem.set_u32(WEAPON + 0x358, 0);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty(), "no mod slots");
+    let mut e = mods_world(&[]);
+    crate::commands::test_support::put_extra(&mut e, INFO_EXTRA_LIST, INFO_FLAGS_EXTRA, 0x8d, 0);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert!(
+        logged_calls(&e, STUB_LEVEL).is_empty(),
+        "flags there already"
+    );
+    let mut e = mods_world(&[]);
+    e.mem.set_u32(INFO_LIST_NODE, 0);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert!(logged_calls(&e, STUB_LEVEL).is_empty(), "no first list");
+    let mut e = mods_world(&[]);
+    e.set_jip_patches(engine_core::extend::jip_patches::FIXES);
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None, "switch off");
+    let mut e = mods_world(&[]);
+    e.ext::<crate::Jip>()
+        .game_patches
+        .settings
+        .weapon_mod_chance = [2, 0, 60];
+    assert_eq!(do_on_load_actor(&mut e, &[ACTOR]), None, "a number 0");
+}
+
+/// O17 `ResetActorFlagsRespawnHook`: the dealt mark cleared (other bits kept), the actor's extra
+/// list answered; the switch off: no answer.
+#[test]
+fn o17_a_respawn_clears_the_mark() {
+    let mut e = mods_world(&[]);
+    e.mem.set_u8(ACTOR + 0x143, 0x13);
+    assert_eq!(
+        reset_actor_flags_respawn(&mut e, &[ACTOR]),
+        Some(ACTOR + 0x44)
+    );
+    assert_eq!(e.mem.u8(ACTOR + 0x143), 3);
+    e.set_jip_patches(0);
+    assert_eq!(reset_actor_flags_respawn(&mut e, &[ACTOR]), None);
+}

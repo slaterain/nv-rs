@@ -196,6 +196,14 @@ pub fn fn_005a64b0(e: &mut Engine, this: Ptr<TESGlobal>, file: Ptr) -> bool {
         return false;
     }
     let base = this.addr();
+    // JIP LN's G52 (a fix row, `WriteRelJump(0x5A64D7, TESGlobalLoadFormHook)`): any answer (the
+    // handler's for a global with form flag 0x40) leaves the record unread and answers true.
+    // Words: the global.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x005a_64d7, &[base]).is_some()
+    {
+        return true;
+    }
     e.call(0x0048_5110, &args![this, file]);
     loop {
         let chunk = e.call(0x0047_26b0, &args![file]).u32();
@@ -686,5 +694,36 @@ mod n041_tests {
         e.set(this, TESGlobal::fValue, 0.0);
         e.register(0x0048_5270, |_, _| ret(1));
         assert!(e.call(0x005a_6640, &args![this, other]).bool());
+    }
+    /// JIP LN's G52 seam at `0x5A64D7` (a fix row): after the type test, an answer leaves the
+    /// record unread (no `00485110`, no chunk) and answers true; only with the fix row's bit; no
+    /// answer is the exe's load.
+    #[test]
+    fn a_jip_g52_answer_leaves_the_global_unread() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = form_engine();
+        e.register(0x0047_2660, |_, _| ret(6));
+        e.register(0x0047_26b0, |_, _| ret(0));
+        e.register(0x0048_5110, |_, _| Ret::default());
+        let p = e.new_object::<TESGlobal>();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x005a_64d7), |e, a| {
+            (e.mem.u8(a[0] + 8) & 0x40 != 0).then_some(1)
+        });
+        e.mem.set_u8(p.addr() + 8, 0x40);
+        let read = |e: &mut Engine| {
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x005a_64b0, &args![p, 0x9000u32]).bool());
+            calls(e, 0x005a_64b0).iter().any(|c| c.0 == 0x0048_5110)
+        };
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert!(read(&mut e), "the exe");
+        e.set_jip_patches(jip_patches::FIXES);
+        assert!(!read(&mut e), "JIP: unread");
+        e.mem.set_u8(p.addr() + 8, 0);
+        assert!(read(&mut e), "no answer");
+        // The type test comes first: a wrong type answers false unasked.
+        e.mem.set_u8(p.addr() + 8, 0x40);
+        e.register(0x0047_2660, |_, _| ret(7));
+        assert!(!e.call(0x005a_64b0, &args![p, 0x9000u32]).bool());
     }
 }

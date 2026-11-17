@@ -1851,27 +1851,40 @@ pub fn fn_00571760(e: &mut Engine, this: Ptr<TESObjectREFR>, item: u32) {
             }
         }
     }
-    if biped != 0 {
-        e.call(0x004a_b750, &args![biped, item, slots]);
+    // JIP LN's G93 (a fix row, `WriteRelJump(0x5719ED, PickWeaponModelHook)`): the handler gives
+    // the biped the item with the mod flags of the weapon an NPC holds, or answers the model part
+    // to attach (0 for none). Words: the reference, the actor or 0, the item, the biped or 0, the
+    // mod slots.
+    let jip_part = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0057_19ed, &[me, actor, item, biped, slots])
     } else {
+        None
+    };
+    let part = match jip_part {
+        Some(part) => part,
+        None if biped != 0 => {
+            e.call(0x004a_b750, &args![biped, item, slots]);
+            0
+        }
         // the biped part of the item is embedded at +0x3c
-        let part = if item != 0 { item + 0x3c } else { 0 };
-        if part != 0 {
-            e.call(0x004a_eed0, &args![item, part, 5u32, me, 0u32]);
-            let loading = e.global::<u32>(GLOBAL_LOADING_OBJECT);
-            if !e.call(0x0042_ce10, &args![loading]).bool() {
-                let mut drawn = e.call(0x008a_16d0, &args![actor]).u8();
-                if drawn == 0 && e.call(0x0046_e8c0, &args![item]).bool() {
-                    drawn = 1;
-                }
-                let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor));
-                let animation = e.vcall(actor, 0x1e4, &args![]).u32();
-                e.vcall(
-                    process,
-                    0x1cc,
-                    &args![u32::from(drawn), biped, animation, actor],
-                );
+        None if item != 0 => item + 0x3c,
+        None => 0,
+    };
+    if part != 0 {
+        e.call(0x004a_eed0, &args![item, part, 5u32, me, 0u32]);
+        let loading = e.global::<u32>(GLOBAL_LOADING_OBJECT);
+        if !e.call(0x0042_ce10, &args![loading]).bool() {
+            let mut drawn = e.call(0x008a_16d0, &args![actor]).u8();
+            if drawn == 0 && e.call(0x0046_e8c0, &args![item]).bool() {
+                drawn = 1;
             }
+            let process = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, actor));
+            let animation = e.vcall(actor, 0x1e4, &args![]).u32();
+            e.vcall(
+                process,
+                0x1cc,
+                &args![u32::from(drawn), biped, animation, actor],
+            );
         }
     }
     if actor != 0 {
@@ -7055,6 +7068,44 @@ mod tests {
         );
         // the player hooks are not touched
         assert!(calls_to(&log, 0x004a_b750).is_empty());
+    }
+
+    /// JIP LN's G93 seam at `0x5719ED` (a fix row): asked with the reference, the actor, the item,
+    /// the biped and the mod slots; its answer is the part attached (none for 0); only with the
+    /// fix row's bit; no answer is the exe's.
+    #[test]
+    fn equip_asks_jip_g93_for_the_part_to_attach() {
+        use engine_core::extend::jip_patches;
+        let mut s = equip_setup();
+        let (actor, item) = (s.actor, s.item);
+        returns(&mut s.e, 0x0046_e8c0, 1);
+        super::jip_seam::put(&mut s.e, 0x0057_19ed, Some(0x6a6a));
+        let attached = |e: &mut Engine| {
+            let log = logged(e, |e| {
+                e.call(0x0057_1760, &args![actor, item]);
+            });
+            calls_to(&log, 0x004a_eed0)
+        };
+        s.e.set_jip_patches(jip_patches::INSTALLED);
+        assert_eq!(
+            attached(&mut s.e),
+            vec![vec![item, item + 0x3c, 5, actor, 0]]
+        );
+        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
+        s.e.set_jip_patches(jip_patches::FIXES);
+        assert_eq!(attached(&mut s.e), vec![vec![item, 0x6a6a, 5, actor, 0]]);
+        assert_eq!(
+            super::jip_seam::seen(),
+            vec![vec![actor, actor, item, 0, 0]]
+        );
+        super::jip_seam::answer_with(Some(0));
+        assert!(attached(&mut s.e).is_empty(), "0: nothing attached");
+        super::jip_seam::answer_with(None);
+        assert_eq!(
+            attached(&mut s.e),
+            vec![vec![item, item + 0x3c, 5, actor, 0]]
+        );
+        super::jip_seam::seen();
     }
 
     #[test]

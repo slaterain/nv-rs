@@ -1289,7 +1289,15 @@ pub fn fn_00484da0(e: &mut Engine, this: Ptr<TESForm>, buffer: Ptr) {
     });
     let current = e.get(this, TESForm::iFormFlags);
     let merged = if e.vcall(this.addr(), SLOT_IS_REFERENCE, &[]).bool() {
-        current & !LOAD_GAME_REFERENCE_FLAGS | saved & LOAD_GAME_REFERENCE_FLAGS
+        // JIP LN's G45 (a fix row, `SafeWrite8(0x484E03, 0xD1)`): the handler answers the mask of
+        // the saved flags a reference takes (JIP's adds 0x400000). Words: the exe's mask.
+        let taken = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+            e.site(0x0048_4e03, &[LOAD_GAME_REFERENCE_FLAGS])
+                .unwrap_or(LOAD_GAME_REFERENCE_FLAGS)
+        } else {
+            LOAD_GAME_REFERENCE_FLAGS
+        };
+        current & !LOAD_GAME_REFERENCE_FLAGS | saved & taken
     } else {
         current & !LOAD_GAME_FORM_FLAGS | saved & LOAD_GAME_FORM_FLAGS
     };
@@ -4065,6 +4073,40 @@ mod tests {
         e.call(0x0048_4da0, &args![untouched, buffer]);
         assert!(calls_to(&e.call_log.take().unwrap(), LOAD_BUFFER_READ).is_empty());
         assert_eq!(e.get(untouched, TESForm::iFormFlags), 0x77);
+    }
+
+    /// JIP LN's G45 seam at `0x484E03` (a fix row): asked with the exe's reference mask, its
+    /// answer is the mask of the saved flags a reference takes (the flags it keeps are the exe's);
+    /// only with the fix row's bit and only for a reference.
+    #[test]
+    fn load_from_buffer_asks_jip_g45_for_the_reference_mask() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        fn handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+            Some(a[0] | 0x0040_0000)
+        }
+        let (mut e, buffer) = buffer_engine();
+        e.mem.set_u32(buffer + 0x17, 1);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0048_4e03), handler);
+        e.register(WIDE_IS_REFERENCE, |_, _| ret(1));
+        let load = |e: &mut Engine| {
+            let reference = wide_form(e, 8, 0x20);
+            e.call(0x0048_4da0, &args![reference, buffer]);
+            e.get(reference, TESForm::iFormFlags)
+        };
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert_eq!(load(&mut e), 8 | (0x1234_5678 & 0x0091_2860));
+        assert!(SEEN.with(|s| s.take()).is_empty(), "only FIXES asks");
+        e.set_jip_patches(jip_patches::FIXES);
+        assert_eq!(load(&mut e), 8 | (0x1234_5678 & 0x00d1_2860));
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![0x0091_2860]]);
+        e.register(WIDE_IS_REFERENCE, |_, _| ret(0));
+        let plain = wide_form(&mut e, 8, 0x20);
+        e.call(0x0048_4da0, &args![plain, buffer]);
+        assert!(SEEN.with(|s| s.take()).is_empty(), "not a reference");
     }
 
     #[test]

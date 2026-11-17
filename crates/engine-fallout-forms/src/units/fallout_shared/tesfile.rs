@@ -671,6 +671,11 @@ pub fn tes_file_tes_file(
     e.call(STRING_CONSTRUCT, &args![this.at(TESFile::cSummary)]);
     e.set(this, TESFile::bCached, false);
     e.set(this, TESFile::bCloseFileOverride, false);
+    // JIP LN's G47 (JIP's own, `SAFE_WRITE_BUF(0x47079D, mov word [eax+0x29A], 0)`): the handler
+    // clears the word, so JIP's `hasModLog` byte (`+0x29B`) starts clear too. Words: the file.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0047_079d, &[this.addr()]);
+    }
     e.set(this, TESFile::pDecompressedFormBuffer, Ptr::NULL);
     e.set(this, TESFile::iDecompressedFormBufferSize, 0);
     e.set(this, TESFile::m_firstCellOffset, 0);
@@ -866,6 +871,11 @@ fn open_with_scratch(
         &args![remembered_path, PATH_BUFFER_SIZE, directory],
     );
     e.call(STRCAT_S, &args![path, PATH_BUFFER_SIZE, file_name]);
+    // JIP LN's G47 (JIP's own, `WriteRelJump(0x470D56, InitModInfoNameHook)`): the handler keeps the
+    // name's `StrHashCI` at `+0x120` before the copy. Words: the file, the name.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0047_0d56, &[this.addr(), file_name.addr()]);
+    }
     e.call(
         STRCPY_S,
         &args![remembered_name, PATH_BUFFER_SIZE, file_name],
@@ -3414,6 +3424,61 @@ mod tests {
         assert_eq!(calls_to(&log, LIST_CONSTRUCT).len(), 3);
         assert_eq!(calls_to(&log, STRING_CONSTRUCT).len(), 2);
         assert!(calls_to(&log, CLOSE_ALL_GROUPS).is_empty());
+    }
+
+    thread_local! {
+        static G47_SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// The stand-in of JIP's two G47 handlers: records the seam and the words, and at `0x470D56`
+    /// what the name buffer holds then (its first byte, at `+0x20`) to show the order.
+    fn g47_handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        let at = if a.len() == 2 {
+            0x0047_0d56
+        } else {
+            0x0047_079d
+        };
+        let mut words = a.to_vec();
+        if at == 0x0047_0d56 {
+            words.push(u32::from(e.mem.u8(a[0] + 0x20)));
+        }
+        G47_SEEN.with(|s| s.borrow_mut().push((at, words)));
+        Some(0)
+    }
+
+    /// JIP LN's G47 seams (JIP's own): the constructor asks `0x47079D` with the file after
+    /// `+0x29A` is cleared, and opening asks `0x470D56` with the file and the name before the
+    /// name is copied to `+0x20`; only while JIP answers "installed".
+    #[test]
+    fn jip_g47_seams_in_the_constructor_and_the_open() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let mut e = engine();
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0047_079d), g47_handler);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0047_0d56), g47_handler);
+        let file = new_file(&mut e);
+        let directory = text(&mut e, b"Data\\");
+        let name = text(&mut e, b"Gone.esm");
+        e.set_jip_patches(jip_patches::FIXES);
+        e.call(0x0047_0710, &args![file, directory, name, 0u32]);
+        assert!(
+            G47_SEEN.with(|s| s.take()).is_empty(),
+            "only INSTALLED asks"
+        );
+        e.set_jip_patches(jip_patches::INSTALLED);
+        e.mem.set_u8(file.addr() + 0x29a, 7);
+        e.mem.set_u8(file.addr() + 0x20, b'x');
+        e.call(0x0047_0710, &args![file, directory, name, 0u32]);
+        assert_eq!(
+            G47_SEEN.with(|s| s.take()),
+            vec![
+                (0x0047_079d, vec![file.addr()]),
+                (0x0047_0d56, vec![file.addr(), name, u32::from(b'x')]),
+            ],
+            "the constructor's first, then the open's before the copy"
+        );
+        assert_eq!(e.mem.u8(file.addr() + 0x29a), 0);
+        assert_eq!(e.mem.cstr(file.addr() + 0x20), b"Gone.esm");
     }
 
     #[test]

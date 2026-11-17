@@ -656,3 +656,159 @@ fn part2_handlers_are_at_their_rows() {
     );
     assert_eq!(e.site(ARCHIVE_OVERRIDE.addr(), &[ASKED + 0x200]), Some(0));
 }
+
+// ---- GF part 3: G45, G52 (fixes), G47, H22 (JIP's own) ----
+
+const P3: u32 = 0x053a_0000;
+const P3_FORM: u32 = P3;
+const P3_VTABLE: u32 = P3 + 0x400;
+const P3_SAVE_SLOT: u32 = 0x00fe_3240;
+
+/// Installed: G47's two seams and H22's wrap are JIP's own (in with the row off); G45's four and
+/// G52's seam come with the row's installer.
+#[test]
+fn part_3_installed_and_the_row() {
+    let mut e = world_as(true);
+    super::super::set_row(&mut e, false);
+    for slot in [MOD_NAME_HASH, MOD_LOG_BYTE] {
+        assert_eq!(e.site_owners(slot.addr()).to_vec(), vec![Owner::Jip]);
+    }
+    assert_eq!(e.wraps_at(IS_MARKER.addr()), [Owner::Jip]);
+    for slot in [
+        REF_FLAGS_KEPT,
+        SHOULD_SAVE_UNLOADED,
+        FORM_ID_MAP_BUCKETS[0],
+        FORM_ID_MAP_BUCKETS[1],
+        GLOBAL_LOAD_FORM,
+    ] {
+        assert!(e.site_owners(slot.addr()).is_empty());
+    }
+    install_fixes(&mut e);
+    assert_eq!(
+        e.site(REF_FLAGS_KEPT.addr(), &[0x0091_2860]),
+        Some(0x00d1_2860)
+    );
+    for slot in FORM_ID_MAP_BUCKETS {
+        assert_eq!(e.site(slot.addr(), &[]), Some(0x7d63));
+    }
+}
+
+/// A form whose vtable answers `IsReference` (`+0xF0`) and `IsProjectile` (`+0x224`) as given,
+/// with the projectile's own answer (`+0x324`) recorded.
+fn save_form(e: &mut Engine, reference: bool, projectile: bool, own: u32) {
+    e.mem.write(P3_FORM, &[0; 0x20]);
+    e.mem.set_u32(P3_FORM, P3_VTABLE);
+    let stub = |yes: bool| if yes { RETURN_TRUE } else { 0x00fe_3200 };
+    e.mem.set_u32(P3_VTABLE + 0xf0, stub(reference));
+    e.mem.set_u32(P3_VTABLE + 0x224, stub(projectile));
+    e.mem.set_u32(P3_VTABLE + 0x324, P3_SAVE_SLOT);
+    e.register(P3_SAVE_SLOT, move |_, _| Ret {
+        eax: own,
+        ..Ret::default()
+    });
+}
+
+/// G45 `GetShouldSaveUnloadedFormHook`: flag 0x4000 never; a form that is not a reference
+/// always; a projectile its own answer's low byte; a reference made in the game (mod index 0xFF)
+/// with flag 0x400000 never; other references always.
+#[test]
+fn g45_which_unloaded_forms_are_written() {
+    let mut e = engine();
+    e.map(P3, 0x1000);
+    let ask = |e: &mut Engine| should_save_unloaded(e, &[0, P3_FORM]);
+    save_form(&mut e, false, false, 0);
+    assert_eq!(ask(&mut e), Some(1));
+    e.mem.set_u8(P3_FORM + 9, 0x40);
+    assert_eq!(ask(&mut e), Some(0), "flag 0x4000");
+    save_form(&mut e, true, true, 0x100);
+    assert_eq!(ask(&mut e), Some(0), "the projectile's low byte");
+    save_form(&mut e, true, true, 1);
+    e.mem.set_u8(P3_FORM + 0xf, 0xff);
+    e.mem.set_u8(P3_FORM + 0xa, 0x40);
+    assert_eq!(ask(&mut e), Some(1), "a projectile answers itself");
+    save_form(&mut e, true, false, 0);
+    e.mem.set_u8(P3_FORM + 0xf, 0xff);
+    assert_eq!(ask(&mut e), Some(1));
+    e.mem.set_u8(P3_FORM + 0xa, 0x40);
+    assert_eq!(ask(&mut e), Some(0), "made in the game, flag 0x400000");
+    e.mem.set_u8(P3_FORM + 0xf, 0x01);
+    assert_eq!(ask(&mut e), Some(1), "from a plugin");
+    e.mem.set_u8(P3_FORM + 0xa, 0xbf);
+    e.mem.set_u8(P3_FORM + 0xf, 0xff);
+    assert_eq!(ask(&mut e), Some(1), "other bits");
+}
+
+/// G47: the name's `StrHashCI` at `+0x120` (any case the same); the word at `+0x29A` cleared,
+/// both bytes, nothing beside.
+#[test]
+fn g47_the_name_hash_and_the_log_byte() {
+    let mut e = engine();
+    e.map(P3, 0x1000);
+    e.mem.write(P3 + 0x800, b"FalloutNV.esm\0");
+    e.mem.write(P3 + 0x840, b"falloutnv.ESM\0");
+    mod_name_hash(&mut e, &[P3_FORM, P3 + 0x800]);
+    let hash = e.mem.u32(P3_FORM + 0x120);
+    assert_eq!(hash, crate::containers::str_hash_ci(b"FalloutNV.esm"));
+    assert_ne!(hash, 0);
+    e.mem.set_u32(P3_FORM + 0x120, 0);
+    mod_name_hash(&mut e, &[P3_FORM, P3 + 0x840]);
+    assert_eq!(e.mem.u32(P3_FORM + 0x120), hash, "no case");
+    e.mem.set_u32(P3_FORM + 0x298, 0xffff_ffff);
+    e.mem.set_u32(P3_FORM + 0x29c, 0xffff_ffff);
+    mod_log_byte(&mut e, &[P3_FORM]);
+    assert_eq!(e.mem.u32(P3_FORM + 0x298), 0x0000_ffff);
+    assert_eq!(e.mem.u32(P3_FORM + 0x29c), 0xffff_ffff);
+}
+
+/// G52: a global with form flag 0x40 is left unread (answer 1); others, and other bits, no
+/// answer.
+#[test]
+fn g52_a_constant_global_is_not_read() {
+    let mut e = engine();
+    e.map(P3, 0x1000);
+    assert_eq!(global_load_form(&mut e, &[P3_FORM]), None);
+    e.mem.set_u8(P3_FORM + 8, 0xbf);
+    assert_eq!(global_load_form(&mut e, &[P3_FORM]), None);
+    e.mem.set_u8(P3_FORM + 8, 0x40);
+    assert_eq!(global_load_form(&mut e, &[P3_FORM]), Some(1));
+}
+
+fn marker(e: &mut Engine, kind: u8, id: u32) -> bool {
+    e.mem.set_u8(P3_FORM + 4, kind);
+    e.mem.set_u32(P3_FORM + 0xc, id);
+    let answer = is_marker(e, &[P3_FORM]).eax;
+    assert!(answer <= 1);
+    answer == 1
+}
+
+/// H22 `GetIsInternalMarkerHook`: types above 0x30 never (even an id 0x64..0x77, where the exe
+/// says yes); idle markers and texture sets always; JIP's ids for any other type; an activator
+/// by its model path `EditorMarker.NIF` (no case); a light with an empty model path; a null
+/// form no.
+#[test]
+fn h22_markers_by_jips_ids() {
+    let mut e = engine();
+    e.map(P3, 0x1000);
+    assert!(marker(&mut e, 0x30, 0x9999));
+    assert!(marker(&mut e, 4, 0x9999));
+    assert!(!marker(&mut e, 0x31, 0x64), "above 0x30");
+    assert!(!marker(&mut e, 0x45, 0x3b));
+    for id in [1, 4, 6, 0x10, 0x3b, 0x64, 0x77] {
+        assert!(marker(&mut e, 0x20, id), "{id:#x}");
+    }
+    for id in [0, 7, 0xa, 0x63, 0x78, 0x1_0001] {
+        assert!(!marker(&mut e, 0x20, id), "{id:#x}");
+    }
+    assert!(!marker(&mut e, 0x15, 0x9999), "an activator with no model");
+    e.mem.write(P3 + 0x800, b"editormarker.nif\0");
+    e.mem.set_u32(P3_FORM + 0x40, P3 + 0x800);
+    assert!(marker(&mut e, 0x15, 0x9999));
+    e.mem.write(P3 + 0x800, b"EditorMarker.NIFx\0");
+    assert!(!marker(&mut e, 0x15, 0x9999));
+    e.mem.set_u16(P3_FORM + 0x44, 3);
+    assert!(!marker(&mut e, 0x1e, 0x9999), "a light with a model");
+    e.mem.set_u16(P3_FORM + 0x44, 0);
+    assert!(marker(&mut e, 0x1e, 0x9999));
+    assert!(!marker(&mut e, 0x1f, 0x9999), "another type");
+    assert_eq!(is_marker(&mut e, &[0]).eax, 0, "null");
+}

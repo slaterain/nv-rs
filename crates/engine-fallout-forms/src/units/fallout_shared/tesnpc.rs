@@ -2954,18 +2954,29 @@ pub fn tesnpc_init_worn(e: &mut Engine, this: Ptr<TESNPC>, actor: Ptr, biped: Pt
 /// logged. A biped model list (`00475020`) then has each of its models
 /// added the same way. Always true.
 ///
-/// `_unused_1` is a word the exe never reads.
+/// `actor` (the actor the item is worn by, as its callers pass it) is a word the exe never
+/// reads; JIP LN's G93 does.
 pub fn tesnpc_init_worn_object(
     e: &mut Engine,
     this: Ptr<TESNPC>,
-    _unused_1: Ptr,
+    actor: Ptr,
     biped: Ptr,
     item: Ptr,
 ) -> bool {
     let female = e.get(this, TESNPC::iActorBaseFlags) & 1 != 0;
     let model = e.call(0x0048_0db0, &args![item]).u32();
     if e.call(GET_FORM_TYPE, &args![item]).u32() == 0x28 {
-        e.call(0x004a_b400, &args![biped, item, 0u32]);
+        // JIP LN's G93 (a fix row, `WriteRelJump(0x6061D9, InitWornObjectHook)`): the handler
+        // answers the mod flags of the weapon the actor holds, which the weapon slot gets in
+        // place of the exe's 0. Words: the actor, the biped,
+        // the weapon.
+        let flags = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+            e.site(0x0060_61d9, &[actor.addr(), biped.addr(), item.addr()])
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        e.call(0x004a_b400, &args![biped, item, flags]);
     } else if model != 0 {
         e.call(0x0048_0bd0, &args![model, biped, female, u32::MAX]);
     } else {
@@ -9728,6 +9739,46 @@ mod tests {
         e.call(0x0060_6050, &args![this, actor, 0u32]);
         assert!(calls(&mut e, 0x004c_8c10).is_empty());
         assert_eq!(calls(&mut e, 0x004b_f220), vec![vec![actor]]);
+    }
+
+    /// JIP LN's G93 seam at `0x6061D9` (a fix row): asked with the actor, the biped and the
+    /// weapon; its answer is the mod flags `004ab400` gets (the exe's 0); only with the fix row's
+    /// bit; no answer is the exe's 0; not asked for an item that is not a weapon.
+    #[test]
+    fn init_worn_object_asks_jip_g93_for_the_weapons_flags() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static SEEN: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+            static ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(Some(5)) };
+        }
+        fn handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+            ANSWER.with(|c| c.get())
+        }
+        let mut e = world();
+        let this = new_npc(&mut e);
+        let biped = e.mem.alloc(0x400);
+        let weapon = e.mem.alloc(0x20);
+        e.mem.set_u8(weapon + 4, 0x28);
+        let actor = e.mem.alloc(0x20);
+        e.on_site(SiteSlot::new(Owner::Jip, 0x0060_61d9), handler);
+        let run = |e: &mut Engine, item: u32| {
+            started(e);
+            e.call(0x0060_61b0, &args![this, actor, biped, item]);
+            calls(e, 0x004a_b400)
+        };
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert_eq!(run(&mut e, weapon), vec![vec![biped, weapon, 0]]);
+        assert!(SEEN.with(|s| s.take()).is_empty(), "only FIXES asks");
+        e.set_jip_patches(jip_patches::FIXES);
+        assert_eq!(run(&mut e, weapon), vec![vec![biped, weapon, 5]]);
+        assert_eq!(SEEN.with(|s| s.take()), vec![vec![actor, biped, weapon]]);
+        ANSWER.with(|c| c.set(None));
+        assert_eq!(run(&mut e, weapon), vec![vec![biped, weapon, 0]]);
+        SEEN.with(|s| s.take());
+        let item = e.mem.alloc(0x20);
+        run(&mut e, item);
+        assert!(SEEN.with(|s| s.take()).is_empty(), "not a weapon");
     }
 
     #[test]

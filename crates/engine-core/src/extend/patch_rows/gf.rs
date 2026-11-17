@@ -13,6 +13,26 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GF",
     },
+    // G47 (JIP's own), the TESFile constructor 00470710: the word at +0x29A cleared (JIP's
+    // hasModLog).
+    Entry {
+        addr: 0x0047_079d,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G47 (JIP's own), TESFile::OpenTES_ov2 00470ca0: the name's hash kept before its copy
+    // (InitModInfoNameHook).
+    Entry {
+        addr: 0x0047_0d56,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G45 (a fix), 00484da0: the mask of the saved flags a reference takes (0x400000 added).
+    Entry {
+        addr: 0x0048_4e03,
+        owners: JIP,
+        step: "3.9-GF",
+    },
     // G83 (a fix), fn_0048e730: the biped icon path call (00480ef0), JIP's GetIconPathForItemHook.
     Entry {
         addr: 0x0048_e761,
@@ -55,9 +75,35 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GF",
     },
+    // G52 (a fix), TESGlobal's record load 005a64b0: a global with form flag 0x40 is not read
+    // (TESGlobalLoadFormHook).
+    Entry {
+        addr: 0x005a_64d7,
+        owners: JIP,
+        step: "3.9-GF",
+    },
     // G12 (a fix), BGSPerk fn_005eb6a0: a teammate perk's player entry applied once.
     Entry {
         addr: 0x005e_b79b,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G45 (a fix), 00845550 (group GW's seam): the form id map's bucket count 0x7D63.
+    Entry {
+        addr: 0x0084_5558,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G45 (a fix), the BGSSaveLoadGame constructor (group GW's seam): the same count.
+    Entry {
+        addr: 0x0084_6ffb,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G45 (a fix), UnloadForm (group GW's seam): GetShouldSaveUnloadedFormHook in place of
+    // 00849a90.
+    Entry {
+        addr: 0x0084_97cd,
         owners: JIP,
         step: "3.9-GF",
     },
@@ -68,6 +114,13 @@ pub(in super::super) const WRAPS: &[Entry] = &[
     // G48 (JIP's own), TESForm::SetFormType 004f15a0 rewritten by JIP (clears its flag bytes).
     Entry {
         addr: 0x004f_15a0,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // H22 (JIP's own), TESObject::IsMarker 0050f9e0 rewritten by JIP
+    // (GetIsInternalMarkerHook).
+    Entry {
+        addr: 0x0050_f9e0,
         owners: JIP,
         step: "3.9-GF",
     },

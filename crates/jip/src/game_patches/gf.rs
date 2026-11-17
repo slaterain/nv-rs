@@ -28,8 +28,12 @@
 //! `Data\<name>.override` file opens as an override), and D01 (put in at JIP's deferred start:
 //! a reference in a cell with form flag 0x400000 is not marked moved).
 //!
-//! G45 (temporary forms not saved as unloaded forms) is not here: three of its four places are
-//! in group GW's files (`bgssaveloadgame.rs`, `run_00845230.rs`), which have no seams yet.
+//! Also fixes: G45 (a reference made in the game with flag 0x400000, and a projectile that says
+//! so, is not written as an unloaded form; the flag is taken from the save; the two form id maps
+//! get 0x7D63 buckets: three of its places are group GW's seams) and G52 (a global variable with
+//! form flag 0x40 is not read again from a record). JIP's own: G47 (a plugin file's name hash at
+//! `+0x120`, and JIP's `hasModLog` byte cleared when the file is made, which the built
+//! `ModLogPrint` reads) and H22 (`TESObject::IsMarker` by JIP's set of ids).
 //!
 //! Threads: every handler here reads only the game's own memory and keeps no state, so any
 //! thread may run it: G39 on the main thread and the loader threads (an NPC's model is asked as
@@ -117,17 +121,25 @@ pub const AREA: Area = Area {
         GRASS_EDGE.addr(),
         FACTION_REACTION.addr(),
         PLAYER_PERK_ENTRY.addr(),
+        REF_FLAGS_KEPT.addr(),
+        SHOULD_SAVE_UNLOADED.addr(),
+        FORM_ID_MAP_BUCKETS[0].addr(),
+        FORM_ID_MAP_BUCKETS[1].addr(),
+        GLOBAL_LOAD_FORM.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
-    jip_sites: &[],
-    jip_wraps: &[SET_FORM_TYPE.addr(), NPC_MODEL.addr()],
+    jip_sites: &[MOD_NAME_HASH.addr(), MOD_LOG_BYTE.addr()],
+    jip_wraps: &[SET_FORM_TYPE.addr(), NPC_MODEL.addr(), IS_MARKER.addr()],
     install_jip,
 };
 
 fn install_jip(e: &mut Engine) {
     e.wrap(SET_FORM_TYPE, set_form_type);
     e.wrap(NPC_MODEL, npc_model);
+    e.on_site(MOD_NAME_HASH, mod_name_hash);
+    e.on_site(MOD_LOG_BYTE, mod_log_byte);
+    e.wrap(IS_MARKER, is_marker);
     // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
     // (SafeWrite32(0x104A1BC, 0x401290)). The exe's own stub, as JIP writes it (not a routine
     // of ours, so not `slots::write_slot`).
@@ -145,6 +157,12 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(ARMOR_SOUND_ENTRY, armor_sound_form);
     read_override_archives(e);
     e.on_site(ARCHIVE_OVERRIDE, archive_override);
+    e.on_site(REF_FLAGS_KEPT, ref_flags_kept);
+    e.on_site(SHOULD_SAVE_UNLOADED, should_save_unloaded);
+    for site in FORM_ID_MAP_BUCKETS {
+        e.on_site(site, form_id_map_buckets);
+    }
+    e.on_site(GLOBAL_LOAD_FORM, global_load_form);
 }
 
 /// JIP's `DeferredInit` (xNVSE's deferred start message, once per run), group GF's part: D01's
@@ -390,6 +408,173 @@ fn icon_path(e: &mut Engine, a: &[u32]) -> Option<u32> {
         return Some(e.mem.u32(icons + FEMALE_ICON));
     }
     Some(e.mem.u32(icons + MALE_ICON))
+}
+
+// ===================== GF part 3: G45, G47, G52 (fixes and JIP's own) and H22 =====================
+
+/// G45's seams: `00484da0` (a form's flags read from the save; words: the exe's mask of the saved
+/// flags a reference takes; the answer is the mask), `UnloadForm`'s call of `00849a90`
+/// (`0x8497CD`, group GW's seam; words: the game, the form; the answer's low byte is "write it")
+/// and the bucket counts of two form id maps (`0x845558` and `0x846FFB`, group GW's seams; the
+/// answer is the count).
+pub const REF_FLAGS_KEPT: SiteSlot = SiteSlot::new(Owner::Jip, 0x0048_4e03);
+pub const SHOULD_SAVE_UNLOADED: SiteSlot = SiteSlot::new(Owner::Jip, 0x0084_97cd);
+pub const FORM_ID_MAP_BUCKETS: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x0084_5558),
+    SiteSlot::new(Owner::Jip, 0x0084_6ffb),
+];
+/// G47's seams (JIP's own): a plugin file opened (`0x470D56`, before its name is copied; words:
+/// the file, the name) and made (`0x47079D`; words: the file).
+pub const MOD_NAME_HASH: SiteSlot = SiteSlot::new(Owner::Jip, 0x0047_0d56);
+pub const MOD_LOG_BYTE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0047_079d);
+/// G52's seam: `TESGlobal`'s record load `005a64b0` after its type test (`0x5A64D7`; words: the
+/// global; an answer leaves the record unread).
+pub const GLOBAL_LOAD_FORM: SiteSlot = SiteSlot::new(Owner::Jip, 0x005a_64d7);
+/// H22's wrap (JIP's own): `TESObject::IsMarker` (`0050f9e0`, `fastcall`: the form), rewritten by
+/// JIP's `GetIsInternalMarkerHook`.
+pub const IS_MARKER: WrapSlot = WrapSlot::new(Owner::Jip, 0x0050_f9e0);
+
+/// The flag JIP keeps on a reference from the save (`0x400000`, the byte `0x91` of the mask made
+/// `0xD1`).
+const KEPT_REFERENCE_FLAG: u32 = 0x0040_0000;
+
+/// G45 (`SafeWrite8(0x484E03, 0xD1)`): a reference's flag `0x400000` is taken from the save too.
+fn ref_flags_kept(_: &mut Engine, a: &[u32]) -> Option<u32> {
+    Some(a[0] | KEPT_REFERENCE_FLAG)
+}
+
+/// `SafeWrite16(0x845558 / 0x846FFB, 0x7D63)`: the two form id maps get 0x7D63 buckets (the
+/// exe's 0x13AF).
+fn form_id_map_buckets(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(0x7d63)
+}
+
+/// `ADDR_ReturnTrue` (`0x8D0360`): the stub JIP compares virtual slots with.
+const RETURN_TRUE: u32 = 0x008d_0360;
+/// A form's virtual slots JIP tests: `IsReference` (`+0xF0`), `IsProjectile` (`+0x224`), and the
+/// projectile's own "save me" answer (`+0x324`).
+const SLOT_IS_REFERENCE: u32 = 0xf0;
+const SLOT_IS_PROJECTILE: u32 = 0x224;
+const SLOT_PROJECTILE_SAVE: u32 = 0x324;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: GetShouldSaveUnloadedFormHook.
+/// Whether `UnloadForm` writes the form: not with flag `0x4000` (`kFormFlag_DontSaveForm`);
+/// any form that is not a reference, yes; a projectile, its own answer (virtual `+0x324`); a
+/// reference made in the game (mod index 0xFF) with flag `0x400000`, no; any other, yes.
+fn should_save_unloaded(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let form = a[1];
+    if e.mem.u8(form + 9) & 0x40 != 0 {
+        return Some(0);
+    }
+    let vtable = e.mem.u32(form);
+    if e.mem.u32(vtable + SLOT_IS_REFERENCE) != RETURN_TRUE {
+        return Some(1);
+    }
+    if e.mem.u32(vtable + SLOT_IS_PROJECTILE) == RETURN_TRUE {
+        return Some(e.vcall(form, SLOT_PROJECTILE_SAVE, &args![]).u32() & 0xff);
+    }
+    if e.mem.u8(form + 0xf) == 0xff && e.mem.u8(form + 0xa) & 0x40 != 0 {
+        return Some(0);
+    }
+    Some(1)
+}
+
+/// `ModInfo::nameHash` (`+0x120`) and the word holding `hasModLog` (`+0x29A`, the exe's byte and
+/// JIP's `+0x29B`).
+const MOD_NAME_HASH_AT: u32 = 0x120;
+const MOD_LOG_WORD: u32 = 0x29a;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitModInfoNameHook.
+/// A plugin file opened: its name's `StrHashCI` kept at `+0x120` (JIP's mod lookups compare it;
+/// the port's `LookupModByName` hashes the name itself, so this is JIP's word in the game's
+/// memory for whatever reads it). The exe's copy of the name follows (JIP's `StrCopy` copies the
+/// same bytes for any name shorter than the exe's 0x104-byte limit).
+fn mod_name_hash(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (file, name) = (a[0], a[1]);
+    let hash = crate::containers::str_hash_ci(&nvse::table::guest_text(e, name));
+    e.mem.set_u32(file + MOD_NAME_HASH_AT, hash);
+    Some(hash)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SAFE_WRITE_BUF(0x47079D, "\x66\xC7\x80\x9A\x02\x00\x00\x00\x00\x90")).
+/// A plugin file made: the word at `+0x29A` cleared (the exe clears only its byte), so JIP's
+/// `hasModLog` (`+0x29B`, which `ModLogPrint` reads to append or start the file's log) starts
+/// clear rather than with whatever the heap held.
+fn mod_log_byte(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    e.mem.set_u16(a[0] + MOD_LOG_WORD, 0);
+    Some(0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: TESGlobalLoadFormHook.
+/// A global variable whose form flags have bit `0x40` (the record's "Constant" flag, as xEdit
+/// names it for `GLOB`) is not read again from a record: the load answers true at once. Others:
+/// no answer (the exe's load).
+fn global_load_form(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    if e.mem.u8(a[0] + 8) & 0x40 != 0 {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// `s_internalMarkerIDs`: the ids JIP takes for markers (`InitContainers`, `jip_nvse.cpp`),
+/// `SetInternalMarker`'s set (that command is not built: the set stays JIP's start). The 14
+/// statics and the door the exe compares by address are the first 15 (`GenerateDefaultObjects`
+/// gives them these ids: 1-6, 0x10, 0x12, 0x15, 0x23, 0x24, 0x32-0x34, 0x3B, Ghidra), then the
+/// exe's id range 0x64..0x77.
+const INTERNAL_MARKER_IDS: [u32; 35] = [
+    1, 2, 3, 4, 5, 6, 0x10, 0x12, 0x15, 0x23, 0x24, 0x32, 0x33, 0x34, 0x3b, 0x64, 0x65, 0x66, 0x67,
+    0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
+];
+/// The form types JIP's test names: `TESObjectACTI` (0x15), `TESObjectLIGH` (0x1E),
+/// `BGSTextureSet` (4), `BGSIdleMarker` (0x30).
+const ACTIVATOR: u8 = 0x15;
+const LIGHT: u8 = 0x1e;
+const TEXTURE_SET: u8 = 4;
+const IDLE_MARKER: u8 = 0x30;
+/// `"EditorMarker.NIF"` in the exe (`0x1029C94`), and a form's model path (`+0x40` for an
+/// activator; its length word `+0x44` for a light).
+const EDITOR_MARKER_NIF: &[u8] = b"EditorMarker.NIF";
+const MODEL_PATH: u32 = 0x40;
+const MODEL_PATH_LENGTH: u32 = 0x44;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetIsInternalMarkerHook.
+/// `TESObject::IsMarker` rewritten: a type above `BGSIdleMarker` no; an idle marker or a texture
+/// set yes; an id in [`INTERNAL_MARKER_IDS`] yes; an activator whose model path is
+/// `EditorMarker.NIF` (no case) yes; a light with an empty model path yes; else no. The same
+/// answers as the exe's for every form but one of a type above 0x30 with an id 0x64..0x77 (the
+/// exe: a marker, JIP: not). A null form answers no, as the exe's (JIP would read address 4).
+fn is_marker(e: &mut Engine, w: &[u32]) -> Ret {
+    let form = w[0];
+    let answer = |yes: bool| Ret {
+        eax: u32::from(yes),
+        ..Ret::default()
+    };
+    if form == 0 {
+        return answer(false);
+    }
+    let kind = e.mem.u8(form + 4);
+    if kind > IDLE_MARKER {
+        return answer(false);
+    }
+    if kind == IDLE_MARKER || kind == TEXTURE_SET {
+        return answer(true);
+    }
+    if INTERNAL_MARKER_IDS.contains(&e.mem.u32(form + 0xc)) {
+        return answer(true);
+    }
+    match kind {
+        ACTIVATOR => {
+            let path = e.mem.u32(form + MODEL_PATH);
+            answer(
+                path != 0
+                    && nvse::table::guest_text(e, path).eq_ignore_ascii_case(EDITOR_MARKER_NIF),
+            )
+        }
+        LIGHT => answer(e.mem.u16(form + MODEL_PATH_LENGTH) == 0),
+        _ => answer(false),
+    }
 }
 
 #[cfg(test)]
