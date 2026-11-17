@@ -575,6 +575,70 @@ mod tests {
     /// A made-up correction table (not the DLL's): the tests check the arithmetic only.
     const TABLE: [f64; 32] = [1.25; 32];
 
+    /// The distortion's coefficients bit for bit, on every system: the game's parameters
+    /// `[-18.2, 0, 5000, 1135, 5000]` at the rates its sounds use, and two other gains, with the
+    /// DLL's edge table. The bits were taken on Windows (2026-11-17), where the capture replay
+    /// matches DirectSound. Off Windows the result rests on that system's `cos`, `tan` and `pow`;
+    /// a maths library that rounds one of them differently fails here instead of changing the
+    /// sound silently. (rate, gain, shift, then the bits of gain, feedback, input, centre, width.)
+    #[test]
+    fn the_coefficients_are_pinned_bit_for_bit() {
+        const PINNED: [(u32, f32, u32, u32, u32, u32, u32, u32); 9] = [
+            (
+                11025, -18.2, 2, 0x3e0dec66, 0x3f21e89b, 0x3f464bf8, 0x3f000000, 0x3efeeead,
+            ),
+            (
+                22050, -18.2, 2, 0x3e01d7a8, 0x3f4fb15b, 0x3f15aa51, 0xbe1502fd, 0x3f383098,
+            ),
+            (
+                32000, -18.2, 2, 0x3dbd1337, 0x3f6821f2, 0x3ed7dfe4, 0xbf0e39da, 0x3f4c79f8,
+            ),
+            (
+                44100, -18.2, 2, 0x3d821989, 0x3f733ae9, 0x3e9fb046, 0xbf41be39, 0x3f599f23,
+            ),
+            (
+                48000, -18.2, 2, 0x3d69abdb, 0x3f753107, 0x3e9333c3, 0xbf4b1934, 0x3f5c88fa,
+            ),
+            (
+                22050, 0.0, 2, 0x3f83ecc3, 0x3f4fb15b, 0x3f15aa51, 0xbe1502fd, 0x3f383098,
+            ),
+            (
+                48000, 0.0, 2, 0x3eed6b42, 0x3f753107, 0x3e9333c3, 0xbf4b1934, 0x3f5c88fa,
+            ),
+            (
+                22050, -40.0, 2, 0x3c28dd22, 0x3f4fb15b, 0x3f15aa51, 0xbe1502fd, 0x3f383098,
+            ),
+            (
+                48000, -40.0, 2, 0x3b97f2b9, 0x3f753107, 0x3e9333c3, 0xbf4b1934, 0x3f5c88fa,
+            ),
+        ];
+        let mut differ = Vec::new();
+        for (rate, g, shift, gain, feedback, input, centre, width) in PINNED {
+            let c = Coefficients::new(rate, [g, 0.0, 5000.0, 1135.0, 5000.0], &EDGE_TABLE);
+            let got = [
+                ("gain", c.gain.to_bits(), gain),
+                ("feedback", c.feedback.to_bits(), feedback),
+                ("input", c.input.to_bits(), input),
+                ("centre", c.centre.to_bits(), centre),
+                ("width", c.width.to_bits(), width),
+            ];
+            if c.shift != shift {
+                differ.push(format!(
+                    "{rate} Hz, gain {g}: shift {} (pinned {shift})",
+                    c.shift
+                ));
+            }
+            for (field, bits, pinned) in got {
+                if bits != pinned {
+                    differ.push(format!(
+                        "{rate} Hz, gain {g}: {field} {bits:#010x} (pinned {pinned:#010x})"
+                    ));
+                }
+            }
+        }
+        assert!(differ.is_empty(), "{}", differ.join("; "));
+    }
+
     /// The constants are the DLL's: a fresh measurement of the `dsdmo.dll` this Windows has
     /// gives them, entry for entry (a different DLL version would show here, and in the run's
     /// log through [`differs`]).
