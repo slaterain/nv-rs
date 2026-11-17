@@ -473,7 +473,8 @@ impl Host {
 /// pieces that are still Windows-only, instead of a run that would go on without them and fail
 /// somewhere less clear. The game's paths and file listings are provided
 /// (`engine_platform::host_paths`), and so is the sound on the speakers, and this machine's tables
-/// (`engine_platform::machine_table`, the sound's `engine_platform::dsound::fixed_table`). The game's window with its
+/// (`engine_platform::machine_table`, the sound's `engine_platform::dsound::fixed_table`), and the
+/// code pages of the game's languages (`engine_platform::code_page`). The game's window with its
 /// mouse and keyboard is provided on Linux (winit, X11 and Wayland), not yet on macOS, where it
 /// needs the program's main thread. On a processor other than x86-64 (Apple silicon) it also names
 /// what differs there.
@@ -486,24 +487,31 @@ fn not_provided_here() -> Result<(), String> {
 /// system.
 #[cfg(any(not(windows), test))]
 fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
-    let mut why = String::from(
-        "nv-rs does not run the game on this system yet: it builds here, but these are only \
-         provided on Windows so far: ",
-    );
+    let mut missing = Vec::new();
     if apple {
-        why.push_str(
+        missing.push(
             "the game's window with its mouse and keyboard (and so anything drawn: on macOS the \
-             window needs the program's main thread), ",
+             window needs the program's main thread)",
         );
     }
-    why.push_str("code pages other than Windows' Western one (1252)");
     if !x86_64 {
-        why.push_str(
-            "; and on this processor the game's x87 maths (not yet exact off x86-64) and the \
+        missing.push(
+            "on this processor the game's x87 maths (not yet exact off x86-64) and the \
              processor's quick reciprocal estimates (RCPSS, RSQRTSS)",
         );
     }
-    Err(why)
+    if missing.is_empty() {
+        return Err(
+            "nv-rs does not start the game on this system yet: what it needs from Windows is \
+             provided here, but a first start with the game's files has not been tried"
+                .into(),
+        );
+    }
+    Err(format!(
+        "nv-rs does not run the game on this system yet: it builds here, but these are only \
+         provided on Windows so far: {}",
+        missing.join("; and ")
+    ))
 }
 
 /// The installation's `FalloutNV.exe` beside the `Data` folder `data`
@@ -887,10 +895,10 @@ mod tests {
         for x86_64 in [true, false] {
             for apple in [true, false] {
                 let why = super::not_provided_on(x86_64, apple).unwrap_err();
-                assert!(why.contains("code page"), "{why}");
                 // This machine's tables are made from what the system reports (the display, the
-                // card, the sound device, the folders: engine-platform machine_table.rs, dsound.rs).
-                for gone in ["tables", "sound devices", "adapter", "folders"] {
+                // card, the sound device, the folders: engine-platform machine_table.rs, dsound.rs),
+                // and the game's code pages are provided (engine-platform code_page.rs).
+                for gone in ["tables", "sound devices", "adapter", "folders", "code page"] {
                     assert!(!why.contains(gone), "{gone}: {why}");
                 }
                 // The window with its mouse and keyboard: provided on Linux, not yet on macOS.
@@ -907,6 +915,13 @@ mod tests {
                 // The processor's own differences only off x86-64 (Apple silicon).
                 assert_eq!(why.contains("x87"), !x86_64, "{why}");
                 assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
+                // Nothing Windows-only left (Linux on x86-64): the start is still held until a
+                // first start with the game's files.
+                assert_eq!(
+                    why.contains("has not been tried"),
+                    x86_64 && !apple,
+                    "{why}"
+                );
             }
         }
         assert_eq!(

@@ -20,9 +20,10 @@
 //! locale answers as it does for the original on that machine (nothing here knows a code page).
 //! The guest's text is copied out and the answer back; a failure's last error is Windows' own.
 //! A call that fails while sizing its answer leaves the guest's buffer as it was. Elsewhere there
-//! is no Windows to ask: `WideCharToMultiByte` keeps the measured ASCII model below (the time-zone
-//! names), the other two are not in the import table, so the C runtime's multibyte start-up stops
-//! at their slots there.
+//! is no Windows to ask: the three answer the single-byte pages of the game's languages and
+//! Windows' case by tables measured on Windows (`crate::code_page`: 1252 unless `NV_CODE_PAGE`
+//! names 1250 or 1251), with Windows' sizing rules below; what those pages do not need (other
+//! pages, flags that change a single-byte page's answer, sort keys) stops the run (not provided).
 //!
 //! Measured on this machine (2026-10-21, `build43-scratch/measure/time-2026-10-21.txt`):
 //! `WideCharToMultiByte(CP_ACP (1252 here), 0, text, -1, out, size, NULL, &used)` copies ASCII as
@@ -335,63 +336,207 @@ pub fn lc_map_string_w(
     })
 }
 
-// Platform: replaces KERNEL32.DLL WideCharToMultiByte (import)
-/// `WideCharToMultiByte(code page, flags, wide, count, out, size, default, used)` away from
-/// Windows, for ASCII text in `CP_ACP` (0) or 1252 with no flags and no default character: each
-/// character as its byte (`count` -1: through the zero, which is counted); `used` (when given)
-/// FALSE; `size` 0 answers the size needed; too small a buffer is filled as far as it goes and
-/// answers 0 with `ERROR_INSUFFICIENT_BUFFER` (122). As measured (module comment). Other code
-/// pages, flags, a default character or non-ASCII text are not provided (they stop the run).
-#[cfg(not(windows))]
-#[allow(clippy::too_many_arguments)]
-pub fn wide_char_to_multi_byte(
-    e: &mut Engine,
-    code_page: u32,
-    flags: u32,
-    wide: Ptr,
-    count: i32,
-    out: Ptr,
-    size: i32,
-    default: Ptr,
-    used: Ptr,
-) -> u32 {
-    assert!(
-        (code_page == 0 || code_page == 1252) && flags == 0 && default.addr() == 0,
-        "WideCharToMultiByte(code page {code_page}, flags {flags:#x}, default {:#x}) is not provided",
-        default.addr()
-    );
-    let mut text = Vec::new();
-    let mut at = wide.addr();
-    loop {
-        if count >= 0 && text.len() as i32 >= count {
-            break;
+/// The conversions away from Windows (module comment), compiled on Windows too for the tests that
+/// hold them against Windows' own.
+#[cfg(any(not(windows), test))]
+pub mod measured {
+    use super::*;
+
+    /// The page a conversion off Windows is asked for: `CP_ACP` (0) and `CP_THREAD_ACP` (3) are the
+    /// game's ([`crate::code_page::game_page`]), else the page by its number when it is provided.
+    fn page_of(code_page: u32) -> Option<&'static crate::code_page::Page> {
+        match code_page {
+            0 | 3 => Some(crate::code_page::game_page()),
+            n => crate::code_page::page(n),
         }
-        let c = e.mem.u16(at);
+    }
+
+    /// `ERROR_INSUFFICIENT_BUFFER`.
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+    /// The guest's `count` units of `unit` bytes at `text`, or through its zero (counted) for a
+    /// negative count.
+    fn guest_units(e: &Engine, text: Ptr, count: i32, unit: u32) -> Vec<u32> {
+        let read = |at: u32| {
+            if unit == 1 {
+                u32::from(e.mem.u8(at))
+            } else {
+                u32::from(e.mem.u16(at))
+            }
+        };
+        let mut out = Vec::new();
+        let mut at = text.addr();
+        loop {
+            if count >= 0 && out.len() as i32 >= count {
+                return out;
+            }
+            let v = read(at);
+            out.push(v);
+            at = at.wrapping_add(unit);
+            if count < 0 && v == 0 {
+                return out;
+            }
+        }
+    }
+
+    /// Hands an answer of `answer.len()` units of `unit` bytes back as Windows does: `size` 0 asks
+    /// only its length; too small a buffer is filled as far as it goes and the call answers 0 with
+    /// `ERROR_INSUFFICIENT_BUFFER`.
+    fn give_back(e: &mut Engine, out: Ptr, size: i32, unit: u32, answer: &[u32]) -> u32 {
+        if size == 0 {
+            return answer.len() as u32;
+        }
+        let room = (size.max(0) as usize).min(answer.len());
+        for (i, &v) in answer[..room].iter().enumerate() {
+            let at = out.addr().wrapping_add(unit * i as u32);
+            if unit == 1 {
+                e.mem.set_u8(at, v as u8);
+            } else {
+                e.mem.set_u16(at, v as u16);
+            }
+        }
+        if room < answer.len() {
+            e.kernel.last_error = ERROR_INSUFFICIENT_BUFFER;
+            return 0;
+        }
+        answer.len() as u32
+    }
+
+    /// The refusals every conversion shares: no text or a count of 0, or a negative size, is
+    /// `ERROR_INVALID_PARAMETER` (Windows', measured for the first two: `tests_forwarded`).
+    fn refused(e: &mut Engine, text: Ptr, count: i32, size: i32) -> bool {
+        if text.is_null() || count == 0 || size < 0 {
+            e.kernel.last_error = ERROR_INVALID_PARAMETER;
+            return true;
+        }
+        false
+    }
+
+    // Platform: replaces KERNEL32.DLL MultiByteToWideChar (import)
+    /// `MultiByteToWideChar(code page, flags, text, count, out, size)` away from Windows: the
+    /// single-byte pages of `crate::code_page` by Windows' measured tables, one unit per byte (no byte
+    /// of these pages is refused, so `MB_ERR_INVALID_CHARS` changes nothing). Flags
+    /// `MB_PRECOMPOSED` (1) and `MB_ERR_INVALID_CHARS` (8) are taken (on a single-byte page neither
+    /// changes the answer); any other bit outside Windows' four is `ERROR_INVALID_FLAGS`, as measured;
+    /// `MB_COMPOSITE` (2) and `MB_USEGLYPHCHARS` (4), and a page not provided, stop the run (not
+    /// provided).
+    pub fn multi_byte_to_wide_char(
+        e: &mut Engine,
+        code_page: u32,
+        flags: u32,
+        text: Ptr,
+        count: i32,
+        out: Ptr,
+        size: i32,
+    ) -> u32 {
+        if flags & !0xf != 0 {
+            e.kernel.last_error = ERROR_INVALID_FLAGS;
+            return 0;
+        }
+        if refused(e, text, count, size) {
+            return 0;
+        }
         assert!(
-            c < 0x80,
-            "WideCharToMultiByte: the non-ASCII character {c:#x} is not provided"
+            flags & 6 == 0,
+            "MultiByteToWideChar(code page {code_page}, flags {flags:#x}) is not provided"
         );
-        text.push(c as u8);
-        at += 2;
-        if count < 0 && c == 0 {
-            break;
+        let Some(page) = page_of(code_page) else {
+            panic!("MultiByteToWideChar: code page {code_page} is not provided");
+        };
+        let answer: Vec<u32> = guest_units(e, text, count, 1)
+            .into_iter()
+            .map(|b| u32::from(page.unit(b as u8)))
+            .collect();
+        give_back(e, out, size, 2, &answer)
+    }
+
+    // Platform: replaces KERNEL32.DLL WideCharToMultiByte (import)
+    /// `WideCharToMultiByte(code page, flags, wide, count, out, size, default, used)` away from
+    /// Windows: the single-byte pages of `crate::code_page` by Windows' measured tables (the page's
+    /// own characters and Windows' best fit; any other character, a surrogate pair counted as one,
+    /// the default character: the first byte of `default` when it is given, else `?`, and `used`
+    /// TRUE). Measured (2026-10-21): ASCII as is, the zero counted for a count of -1, `used` FALSE when
+    /// nothing needed the default. Flags other than 0, and a page not provided, stop the run.
+    #[allow(clippy::too_many_arguments)]
+    pub fn wide_char_to_multi_byte(
+        e: &mut Engine,
+        code_page: u32,
+        flags: u32,
+        wide: Ptr,
+        count: i32,
+        out: Ptr,
+        size: i32,
+        default: Ptr,
+        used: Ptr,
+    ) -> u32 {
+        if refused(e, wide, count, size) {
+            return 0;
         }
+        assert!(
+            flags == 0,
+            "WideCharToMultiByte(code page {code_page}, flags {flags:#x}) is not provided"
+        );
+        let Some(page) = page_of(code_page) else {
+            panic!("WideCharToMultiByte: code page {code_page} is not provided");
+        };
+        let units: Vec<u16> = guest_units(e, wide, count, 2)
+            .into_iter()
+            .map(|u| u as u16)
+            .collect();
+        let fill = if default.is_null() {
+            b'?'
+        } else {
+            e.mem.u8(default.addr())
+        };
+        let (bytes, defaulted) = page.to_ansi_with(&units, fill);
+        if !used.is_null() {
+            e.mem.set_u32(used.addr(), u32::from(defaulted));
+        }
+        let answer: Vec<u32> = bytes.into_iter().map(u32::from).collect();
+        give_back(e, out, size, 1, &answer)
     }
-    if used.addr() != 0 {
-        e.mem.set_u32(used.addr(), 0);
+
+    /// `LCMAP_LOWERCASE`, `LCMAP_UPPERCASE`.
+    const LCMAP_LOWERCASE: u32 = 0x100;
+    const LCMAP_UPPERCASE: u32 = 0x200;
+
+    // Platform: replaces KERNEL32.DLL LCMapStringW (import)
+    /// `LCMapStringW(locale id, flags, text, count, out, size)` away from Windows: `LCMAP_LOWERCASE`
+    /// or `LCMAP_UPPERCASE` alone, each unit by Windows' measured case tables
+    /// (`crate::code_page::lower`, `upper`: an English user locale's, whatever locale is named), the
+    /// zero counted for a negative count. No flag is `ERROR_INVALID_FLAGS` (measured); any other flag
+    /// (a sort key among them) stops the run (not provided).
+    pub fn lc_map_string_w(
+        e: &mut Engine,
+        lcid: u32,
+        flags: u32,
+        text: Ptr,
+        count: i32,
+        out: Ptr,
+        size: i32,
+    ) -> u32 {
+        if flags == 0 {
+            e.kernel.last_error = ERROR_INVALID_FLAGS;
+            return 0;
+        }
+        if refused(e, text, count, size) {
+            return 0;
+        }
+        let map: fn(u16) -> u16 = match flags {
+            LCMAP_LOWERCASE => crate::code_page::lower,
+            LCMAP_UPPERCASE => crate::code_page::upper,
+            _ => panic!("LCMapStringW(locale {lcid:#x}, flags {flags:#x}) is not provided"),
+        };
+        let answer: Vec<u32> = guest_units(e, text, count, 2)
+            .into_iter()
+            .map(|u| u32::from(map(u as u16)))
+            .collect();
+        give_back(e, out, size, 2, &answer)
     }
-    if size == 0 {
-        return text.len() as u32;
-    }
-    let room = size.max(0) as usize;
-    let written = text.len().min(room);
-    e.mem.write(out.addr(), &text[..written]);
-    if written < text.len() {
-        e.kernel.last_error = 122;
-        return 0;
-    }
-    text.len() as u32
 }
+
+#[cfg(not(windows))]
+pub use measured::{lc_map_string_w, multi_byte_to_wide_char, wide_char_to_multi_byte};
 
 #[cfg(test)]
 mod tests {
@@ -484,6 +629,236 @@ mod tests {
             );
             assert_eq!(e.kernel.last_error, error);
             assert_eq!(e.mem.u16(out), 0xaaaa);
+        }
+    }
+}
+
+/// The conversions away from Windows: the same answers the forwarded calls' tests hold Windows to
+/// (`tests_forwarded`), and on Windows each against Windows' own call.
+#[cfg(test)]
+mod tests_measured {
+    #[cfg(windows)]
+    use super::measured;
+    use super::measured::{lc_map_string_w, multi_byte_to_wide_char, wide_char_to_multi_byte};
+    use crate::{Engine, Ptr};
+
+    fn wide_text(e: &mut Engine, units: &[u16]) -> u32 {
+        let at = e.mem.alloc(2 * units.len() as u32 + 2);
+        for (i, u) in units.iter().enumerate() {
+            e.mem.set_u16(at + 2 * i as u32, *u);
+        }
+        at
+    }
+
+    fn wide_out(e: &Engine, at: u32, count: u32) -> Vec<u16> {
+        (0..count).map(|i| e.mem.u16(at + 2 * i)).collect()
+    }
+
+    #[test]
+    fn multi_byte_answers_as_windows() {
+        let mut e = Engine::new();
+        let text = e.mem.alloc(8);
+        e.mem.write(text, b"A\x80\x81\xe9\0\xff");
+        let out = e.mem.alloc(16);
+        e.kernel.last_error = 0x1234;
+        let call = |e: &mut Engine, count: i32, size: i32| {
+            multi_byte_to_wide_char(e, 1252, 1, Ptr::new(text), count, Ptr::new(out), size)
+        };
+        assert_eq!(call(&mut e, 4, 0), 4);
+        assert_eq!(e.mem.u16(out), 0);
+        assert_eq!(call(&mut e, 4, 8), 4);
+        assert_eq!(wide_out(&e, out, 5), [0x41, 0x20ac, 0x81, 0xe9, 0]);
+        assert_eq!(e.kernel.last_error, 0x1234);
+        for count in [-1, -2] {
+            e.mem.write(out, &[0xaa; 16]);
+            assert_eq!(call(&mut e, count, 8), 5);
+            assert_eq!(wide_out(&e, out, 6), [0x41, 0x20ac, 0x81, 0xe9, 0, 0xaaaa]);
+        }
+        e.mem.write(out, &[0xaa; 16]);
+        assert_eq!(call(&mut e, 4, 2), 0);
+        assert_eq!(e.kernel.last_error, 122);
+        assert_eq!(wide_out(&e, out, 3), [0x41, 0x20ac, 0xaaaa]);
+        assert_eq!(call(&mut e, 0, 8), 0);
+        assert_eq!(e.kernel.last_error, 87);
+        assert_eq!(
+            multi_byte_to_wide_char(&mut e, 1252, 0x8000, Ptr::new(text), 4, Ptr::new(out), 8),
+            0
+        );
+        assert_eq!(e.kernel.last_error, 1004);
+        assert_eq!(
+            multi_byte_to_wide_char(&mut e, 1252, 9, Ptr::new(0), 4, Ptr::new(out), 8),
+            0
+        );
+        assert_eq!(e.kernel.last_error, 87);
+        // Russian: Zhe. The game's page (`CP_ACP`) is 1252 unless set.
+        let zhe = e.mem.alloc(2);
+        e.mem.write(zhe, b"\xc6");
+        assert_eq!(
+            multi_byte_to_wide_char(&mut e, 1251, 9, Ptr::new(zhe), 1, Ptr::new(out), 2),
+            1
+        );
+        assert_eq!(e.mem.u16(out), 0x416);
+        assert_eq!(
+            multi_byte_to_wide_char(&mut e, 0, 1, Ptr::new(zhe), 1, Ptr::new(out), 2),
+            1
+        );
+        assert_eq!(e.mem.u16(out), 0xc6);
+    }
+
+    #[test]
+    fn wide_to_multi_byte_answers_as_windows() {
+        let mut e = Engine::new();
+        let text = wide_text(&mut e, &[0x41, 0x20ac, 0xe9, 0x416]);
+        let out = e.mem.alloc(8);
+        let used = e.mem.alloc(4);
+        e.mem.set_u32(used, 7);
+        let call = |e: &mut Engine, page: u32, default: u32, used: u32| {
+            wide_char_to_multi_byte(
+                e,
+                page,
+                0,
+                Ptr::new(text),
+                4,
+                Ptr::new(out),
+                8,
+                Ptr::new(default),
+                Ptr::new(used),
+            )
+        };
+        assert_eq!(call(&mut e, 1252, 0, used), 4);
+        assert_eq!(e.mem.bytes(out, 4), b"A\x80\xe9?".to_vec());
+        assert_eq!(e.mem.u32(used), 1);
+        let star = e.mem.alloc(2);
+        e.mem.write(star, b"*\0");
+        assert_eq!(call(&mut e, 1252, star, 0), 4);
+        assert_eq!(e.mem.bytes(out, 4), b"A\x80\xe9*".to_vec());
+        assert_eq!(call(&mut e, 1251, 0, used), 4);
+        assert_eq!(e.mem.bytes(out, 4), b"A\x88e\xc6".to_vec());
+        assert_eq!(e.mem.u32(used), 0, "e acute's best fit is e");
+        assert_eq!(call(&mut e, 1252, 0, 0), 4);
+        let ascii = wide_text(&mut e, &[0x41, 0x42, 0]);
+        e.mem.set_u32(used, 7);
+        assert_eq!(
+            wide_char_to_multi_byte(
+                &mut e,
+                0,
+                0,
+                Ptr::new(ascii),
+                -1,
+                Ptr::new(out),
+                0,
+                Ptr::new(0),
+                Ptr::new(used)
+            ),
+            3
+        );
+        assert_eq!(e.mem.u32(used), 0);
+    }
+
+    #[test]
+    fn lc_map_maps_case_as_windows() {
+        let mut e = Engine::new();
+        let text = wide_text(&mut e, &[0x41, 0xc9, 0x416]);
+        let out = e.mem.alloc(16);
+        let empty = wide_text(&mut e, &[0]);
+        assert_eq!(
+            lc_map_string_w(&mut e, 0, 0x100, Ptr::new(empty), 1, Ptr::new(0), 0),
+            1
+        );
+        let call = |e: &mut Engine, flags: u32, size: i32| {
+            lc_map_string_w(e, 0x409, flags, Ptr::new(text), 3, Ptr::new(out), size)
+        };
+        assert_eq!(call(&mut e, 0x100, 0), 3);
+        assert_eq!(call(&mut e, 0x100, 8), 3);
+        assert_eq!(wide_out(&e, out, 3), [0x61, 0xe9, 0x436]);
+        let upper = wide_text(&mut e, &[0xff, 0xdf]);
+        assert_eq!(
+            lc_map_string_w(&mut e, 0x409, 0x200, Ptr::new(upper), 2, Ptr::new(out), 8),
+            2
+        );
+        assert_eq!(wide_out(&e, out, 2), [0x178, 0xdf]);
+        assert_eq!(call(&mut e, 0x100, 1), 0);
+        assert_eq!(e.kernel.last_error, 122);
+        assert_eq!(call(&mut e, 0, 8), 0);
+        assert_eq!(e.kernel.last_error, 1004);
+    }
+
+    /// Every byte of each page, and a mix of characters with and without a byte, in both
+    /// directions and in both cases, the same as Windows' own calls.
+    #[cfg(windows)]
+    #[test]
+    fn the_measured_calls_agree_with_windows() {
+        let mut e = Engine::new();
+        let bytes: Vec<u8> = (1..=255).collect();
+        let text = e.mem.alloc(256);
+        e.mem.write(text, &bytes);
+        let units: Vec<u16> = (0x20..0x600)
+            .chain([0x20ac, 0x2122, 0x2013, 0xfb01, 0xff21, 0x3042])
+            .collect();
+        let wide = wide_text(&mut e, &units);
+        let (a, b) = (e.mem.alloc(0x2000), e.mem.alloc(0x2000));
+        let n = units.len() as i32;
+        for page in crate::code_page::PAGES {
+            let ours = measured::multi_byte_to_wide_char(
+                &mut e,
+                page,
+                1,
+                Ptr::new(text),
+                255,
+                Ptr::new(a),
+                512,
+            );
+            let theirs = super::multi_byte_to_wide_char(
+                &mut e,
+                page,
+                1,
+                Ptr::new(text),
+                255,
+                Ptr::new(b),
+                512,
+            );
+            assert_eq!(
+                (ours, wide_out(&e, a, ours)),
+                (theirs, wide_out(&e, b, theirs)),
+                "{page}"
+            );
+            let (ua, ub) = (e.mem.alloc(4), e.mem.alloc(4));
+            let ours = measured::wide_char_to_multi_byte(
+                &mut e,
+                page,
+                0,
+                Ptr::new(wide),
+                n,
+                Ptr::new(a),
+                0x2000,
+                Ptr::new(0),
+                Ptr::new(ua),
+            );
+            let theirs = super::wide_char_to_multi_byte(
+                &mut e,
+                page,
+                0,
+                Ptr::new(wide),
+                n,
+                Ptr::new(b),
+                0x2000,
+                Ptr::new(0),
+                Ptr::new(ub),
+            );
+            assert_eq!(ours, theirs, "{page}");
+            assert_eq!(e.mem.bytes(a, ours), e.mem.bytes(b, theirs), "{page}");
+            assert_eq!(e.mem.u32(ua), e.mem.u32(ub), "{page}");
+        }
+        for flags in [0x100, 0x200] {
+            let ours =
+                measured::lc_map_string_w(&mut e, 0, flags, Ptr::new(wide), n, Ptr::new(a), 0x1000);
+            let theirs =
+                super::lc_map_string_w(&mut e, 0, flags, Ptr::new(wide), n, Ptr::new(b), 0x1000);
+            assert_eq!(
+                (ours, wide_out(&e, a, ours)),
+                (theirs, wide_out(&e, b, theirs)),
+                "{flags:#x}"
+            );
         }
     }
 }

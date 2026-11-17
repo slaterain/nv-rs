@@ -561,85 +561,26 @@ mod code_page {
 
     /// Off Windows the game's code page is 1252, Windows' Western page: Wine's for a Unix locale
     /// of English or none (Wine 11.22, `dlls/ntdll/unix/env.c` `unix_to_win_locale`, lines
-    /// 638-660: `C` and `POSIX` are `en-US`, whose ANSI page is 1252). Other pages are not
-    /// provided. Both directions are Windows' own, measured (`cp1252_measured.tsv`: every byte
+    /// 638-660: `C` and `POSIX` are `en-US`, whose ANSI page is 1252), unless `NV_CODE_PAGE`
+    /// names 1250 or 1251 (`crate::code_page`, measured the same way). Both directions are Windows' own, measured (`cp1252_measured.tsv`: every byte
     /// above 0x7F as `MultiByteToWideChar` turns it, and every character `WideCharToMultiByte`
     /// gives a byte for, its best fit included; any other is `?`), so a name the listing gives
     /// opens by the same bytes, as on Windows.
     #[cfg(not(windows))]
     mod system {
-        pub use super::cp1252::{to_ansi, to_wide};
-
-        /// 1252 is a single-byte page.
-        pub fn char_len(_: &[u8]) -> usize {
-            1
-        }
-    }
-
-    /// Code page 1252 by Windows' measured tables (off Windows the game's page, [`system`];
-    /// on Windows compiled for the test that holds it against Windows' own conversion).
-    #[cfg(any(not(windows), test))]
-    pub mod cp1252 {
-        use std::collections::HashMap;
-
-        /// The measured table: byte 0x80..0xFF to its unit, and unit to byte.
-        struct Tables {
-            wide: [u16; 128],
-            ansi: HashMap<u16, u8>,
-        }
-
-        fn tables() -> &'static Tables {
-            static TABLES: std::sync::OnceLock<Tables> = std::sync::OnceLock::new();
-            TABLES.get_or_init(|| {
-                let mut t = Tables {
-                    wide: [0; 128],
-                    ansi: HashMap::new(),
-                };
-                for line in include_str!("cp1252_measured.tsv").lines() {
-                    let mut cols = line.split('\t');
-                    let (Some(kind), Some(a), Some(b)) = (cols.next(), cols.next(), cols.next())
-                    else {
-                        continue;
-                    };
-                    let hex = |s: &str| u32::from_str_radix(s, 16).expect("the table's hex");
-                    match kind {
-                        "w" => t.wide[hex(a) as usize - 0x80] = hex(b) as u16,
-                        "a" => {
-                            t.ansi.insert(hex(a) as u16, hex(b) as u8);
-                        }
-                        _ => {}
-                    }
-                }
-                t
-            })
-        }
-
+        /// The game's page (`crate::code_page::game_page`: 1252 unless `NV_CODE_PAGE` names 1250
+        /// or 1251), by the same measured tables.
         pub fn to_wide(bytes: &[u8]) -> Vec<u16> {
-            let t = tables();
-            bytes
-                .iter()
-                .map(|&b| {
-                    if b < 0x80 {
-                        u16::from(b)
-                    } else {
-                        t.wide[usize::from(b - 0x80)]
-                    }
-                })
-                .collect()
+            crate::code_page::game_page().to_wide(bytes)
         }
 
         pub fn to_ansi(units: &[u16]) -> Vec<u8> {
-            let t = tables();
-            char::decode_utf16(units.iter().copied())
-                .map(|c| match c.map(u32::from) {
-                    Ok(c) if c < 0x80 => c as u8,
-                    Ok(c) => u16::try_from(c)
-                        .ok()
-                        .and_then(|u| t.ansi.get(&u).copied())
-                        .unwrap_or(b'?'),
-                    Err(_) => b'?',
-                })
-                .collect()
+            crate::code_page::game_page().to_ansi(units)
+        }
+
+        /// The provided pages are single-byte pages.
+        pub fn char_len(_: &[u8]) -> usize {
+            1
         }
     }
 
@@ -653,6 +594,24 @@ mod code_page {
             _ => 1,
         }
     }
+
+    /// Code page 1252 by Windows' measured tables (`crate::code_page`), for the tests that hold
+    /// it against Windows' own conversion and against names off Windows.
+    #[cfg(test)]
+    pub mod cp1252 {
+        fn page() -> &'static crate::code_page::Page {
+            crate::code_page::page(1252).expect("provided")
+        }
+
+        pub fn to_wide(bytes: &[u8]) -> Vec<u16> {
+            page().to_wide(bytes)
+        }
+
+        pub fn to_ansi(units: &[u16]) -> Vec<u8> {
+            page().to_ansi(units)
+        }
+    }
+
 }
 
 /// Where the separators (`\` and `/`) of `path` are, found character by character

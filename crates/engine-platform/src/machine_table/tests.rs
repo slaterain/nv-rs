@@ -497,6 +497,7 @@ fn the_table_reads_back_with_its_answers() {
             driver_info: String::new(),
             sample_counts: vec![1, 2, 4],
         }),
+        code_page: 1252,
     });
     assert!(problems.is_empty(), "{problems:?}");
     let mut e = crate::Engine::new();
@@ -546,6 +547,7 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
         own_folder: Err("no HOME".into()),
         monitors: Err("no window system".into()),
         card: Err("no card".into()),
+        code_page: 1251,
     });
     assert_eq!(problems.len(), 4);
     assert!(problems[0].contains("no HOME") && problems[1].contains("no zone file"));
@@ -556,6 +558,13 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
     // Without the card its identity is left out; the captured card's answers stay as captured.
     assert!(!table.contains("GetAdapterIdentifier") && table.ends_with(display::CARD));
     assert!(!table.contains("GetAdapterDisplayMode") && !table.contains("EnumAdapterModes"));
+    // The Russian game's pages answer, after the fixed answers' 1252 and 437.
+    let mut e = crate::Engine::new();
+    crate::d3d9::load_adapter_table(&mut e, &table);
+    assert_eq!(crate::d3d9::get_acp(&mut e), 1251);
+    assert_eq!(crate::d3d9::get_oemcp(&mut e), 866);
+    assert_eq!(crate::d3d9::is_valid_code_page(&mut e, 866), 1);
+    assert_eq!(crate::d3d9::is_valid_code_page(&mut e, 1252), 1);
 }
 
 /// The fixed Windows answers hold nothing personal: no user folder, no adapter, no NVIDIA lines,
