@@ -913,6 +913,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-folders"
+version = "0.1.0"
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1007,6 +1011,7 @@ dependencies = [
  "engine-core",
  "engine-platform",
  "esm",
+ "game-folders",
  "jip",
  "mcm",
  "nvse",
@@ -1329,6 +1334,7 @@ dependencies = [
 name = "nv-viewer"
 version = "0.1.0"
 dependencies = [
+ "game-folders",
  "host",
 ]
 

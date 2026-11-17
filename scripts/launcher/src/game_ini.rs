@@ -532,18 +532,18 @@ pub struct Switches {
 /// The game's variables for the player's options (host `fixes.rs` reads them over the file).
 /// `inherited` says whether a variable is set in Play.exe's own environment.
 ///
-/// In play, all twelve are taken out, so the profile's `Fallout.ini` decides. When a variable that
+/// In play, all thirteen are taken out, so the profile's `Fallout.ini` decides. When a variable that
 /// was set before makes the run a test ([`TEST_SWITCHES`], or a fix's own), the game ignores the
 /// file and would run the original's behaviour with a test's defaults. So that a diagnostic run
 /// plays like the player's game, the file's choices are passed on then: its value for each of
-/// the twelve, or the value a play run has when the file does not say, and each fix line that is
+/// the thirteen, or the value a play run has when the file does not say, and each fix line that is
 /// not commented out. A variable set before the start stays as it was set: nothing is taken out.
 ///
 /// When the played profile's file has none of our sections (Play.exe leaves a UTF-16 file
 /// alone, and makes none when there is nothing to make it from), the game can't find the
 /// player's options in it, and a `settings.ini` stays: the choices then come from `settings`
 /// (that file, when there is one) over the play defaults, as they would be in the file once
-/// moved in. In play the twelve are passed from there, each one set (over an inherited one too);
+/// moved in. In play the thirteen are passed from there, each one set (over an inherited one too);
 /// the fix lines are not, since a fix's own variable would make the run a test.
 pub fn switches(
     fallout_ini: &str,
@@ -642,6 +642,7 @@ pub fn switches(
             ),
             "bNotBackground" => Some(flag.unwrap_or(default).to_string()),
             "bSunShadows" => Some(flag.unwrap_or(default).to_string()),
+            "bSunLightFromSky" => Some(flag.unwrap_or(default).to_string()),
             // A fix line: only one that is there and not commented out.
             _ => flag.map(str::to_string),
         };
@@ -769,14 +770,15 @@ mod tests {
         // The section's own missing keys under it, each with its note, then the other sections
         // as the block has them, an empty line before each.
         let display_rest = format!(
-            "{}{}{}{}{}{}{}",
+            "{}{}{}{}{}{}{}{}",
             with_note("bBorderless"),
             with_note("sRenderer"),
             with_note("iMenuFrameLimit"),
             with_note("bShowFrameRate"),
             with_note("bAmbientOcclusion"),
             with_note("fAmbientOcclusionStrength"),
-            with_note("bSunShadows")
+            with_note("bSunShadows"),
+            with_note("bSunLightFromSky")
         );
         assert!(
             display_rest.starts_with("; 1 = the game's window")
@@ -1114,7 +1116,7 @@ mod tests {
     }
 
     /// The played profile's file has none of our sections (UTF-16, or none could be made): in
-    /// play the twelve are passed from settings.ini over the play defaults, each one set, no fix
+    /// play the thirteen are passed from settings.ini over the play defaults, each one set, no fix
     /// line; in a test the same choices, what was set before kept.
     #[test]
     fn a_file_without_the_sections_gets_the_choices_as_variables() {
@@ -1141,6 +1143,7 @@ mod tests {
                     ("NV_AO", "0"),
                     ("NV_AO_STRENGTH", "0.7"),
                     ("NV_SUN_SHADOWS", "0"),
+                    ("NV_SUN_LIGHT_FROM_SKY", "1"),
                     ("NV_THREADS", "stepped"),
                     ("NV_RENDER_THREAD", "1"),
                     ("NV_NOT_BACKGROUND", "1"),
@@ -1162,6 +1165,7 @@ mod tests {
                 ("NV_AO", "0"),
                 ("NV_AO_STRENGTH", "0.7"),
                 ("NV_SUN_SHADOWS", "0"),
+                ("NV_SUN_LIGHT_FROM_SKY", "1"),
                 ("NV_THREADS", "real"),
                 ("NV_RENDER_THREAD", "1"),
                 ("NV_NOT_BACKGROUND", "1"),
@@ -1238,12 +1242,12 @@ mod tests {
         );
     }
 
-    /// In play Play.exe takes the twelve variables out; in a test, which never reads the file, it
+    /// In play Play.exe takes the thirteen variables out; in a test, which never reads the file, it
     /// passes the file's choices on and leaves what was set before as it is.
     #[test]
     fn the_games_variables_follow_the_file_only_in_a_test() {
         let ini = "[nv-rs General]\nsPreset=vanilla\n[nv-rs Display]\nbBorderless=0\niFrameLimit=90\niMenuFrameLimit=bad\nfAmbientOcclusionStrength=0.9\n[nv-rs Threads]\nbSteppedThreads=1\n[nv-rs Fixes]\n;bUncap=1\nbGrabPush=0\nbTopicIndex=2\n";
-        let twelve = [
+        let thirteen = [
             "NV_PRESET",
             "NV_BORDERLESS",
             "NV_D3D9",
@@ -1253,11 +1257,12 @@ mod tests {
             "NV_AO",
             "NV_AO_STRENGTH",
             "NV_SUN_SHADOWS",
+            "NV_SUN_LIGHT_FROM_SKY",
             "NV_THREADS",
             "NV_RENDER_THREAD",
             "NV_NOT_BACKGROUND",
         ];
-        // Play: nothing passed, all twelve out, whatever else is set.
+        // Play: nothing passed, all thirteen out, whatever else is set.
         let sets: [&[&str]; 3] = [
             &[],
             &["NV_PRESET", "NV_THREADS"],
@@ -1268,7 +1273,7 @@ mod tests {
             assert_eq!(
                 play,
                 Switches {
-                    removed: twelve.to_vec(),
+                    removed: thirteen.to_vec(),
                     ..Switches::default()
                 },
                 "{set:?}"
@@ -1294,6 +1299,7 @@ mod tests {
                 ("NV_AO", "0"),
                 ("NV_AO_STRENGTH", "0.9"),
                 ("NV_SUN_SHADOWS", "0"),
+                ("NV_SUN_LIGHT_FROM_SKY", "1"),
                 ("NV_THREADS", "stepped"),
                 ("NV_RENDER_THREAD", "1"),
                 ("NV_NOT_BACKGROUND", "1"),
@@ -1314,6 +1320,7 @@ mod tests {
                 ("NV_AO", "0"),
                 ("NV_AO_STRENGTH", "0.7"),
                 ("NV_SUN_SHADOWS", "0"),
+                ("NV_SUN_LIGHT_FROM_SKY", "1"),
                 ("NV_THREADS", "real"),
                 ("NV_RENDER_THREAD", "1"),
                 ("NV_NOT_BACKGROUND", "1"),
@@ -1337,6 +1344,7 @@ mod tests {
                 ("NV_AO", "0"),
                 ("NV_AO_STRENGTH", "0.9"),
                 ("NV_SUN_SHADOWS", "0"),
+                ("NV_SUN_LIGHT_FROM_SKY", "1"),
                 ("NV_RENDER_THREAD", "1"),
                 ("NV_NOT_BACKGROUND", "1"),
             ])

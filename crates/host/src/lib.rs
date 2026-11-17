@@ -146,7 +146,7 @@ impl Host {
     /// [`Host::start`] with the [`fixes::Choice`] the player's settings give, bound before the
     /// game's first frame.
     pub fn start_with(data: &Path, choice: &fixes::Choice) -> Result<Host, String> {
-        let exe = engine::exe::installed_exe(data);
+        let exe = game_exe(data);
         if !exe.is_file() {
             return Err(format!(
                 "{}: not found. nv-rs reads the game's own FalloutNV.exe (version \
@@ -154,9 +154,14 @@ impl Host {
                 exe.display()
             ));
         }
-        // Linux and macOS: the program builds there, but the game does not run yet.
+        // Linux and macOS: the program builds there, but the game does not run yet. The exe's
+        // version is checked first, so a wrong FalloutNV.exe is said as such (status 1, a report
+        // asked) and not as the expected stop (review of #631, round 5).
         #[cfg(not(windows))]
-        not_provided_here()?;
+        stop_off_windows(&exe, &engine::exe::verify)?;
+        // Off Windows the save guard's look at the player's folders starts now, off the frames
+        // (nothing on Windows).
+        save_out::prepare(data);
         let mut engine = Box::new(Engine::with_exe(&exe)?);
         // Mods' own files (MCM's and later JIP's INI and file commands) kept beside the saves, never
         // in the game's folder (`mod_files`).
@@ -298,6 +303,22 @@ impl Host {
                 fixes::Renderer::Vulkan => Backends::Wgpu,
                 fixes::Renderer::D3d9 => Backends::Real,
             });
+        }
+        // The sun light from the sky's discs (`fixes::Choice::light_from_sky`: with the sun shadows
+        // on, `bSunLightFromSky` / `NV_SUN_LIGHT_FROM_SKY`, on by default): the game's sun light is
+        // turned to come from the sun disc by day and the moon by night, so the lit sides, the game's
+        // actor shadows and the sun shadows agree with the sky. Only where the sun shadows draw
+        // (Vulkan, `NV_D3D9` naming wgpu or the play default): with the real Direct3D 9 drawing, the
+        // new lighting is off and the game's light stays the exe's ([`light_from_sky_wanted`]); and
+        // each frame only while wgpu still draws (`wgpu_draws`: false once the real Direct3D 9 took
+        // over at the device's making, when no sun shadows are drawn).
+        #[cfg(windows)]
+        if light_from_sky_wanted(choice, engine_platform::d3d9real::backends()) {
+            engine::sky_sun::want_light_from_sky(
+                &mut engine,
+                engine_platform::d3d9real::wgpu_draws,
+            );
+            eprintln!("nv-rs: the sun light comes from the sun and moon discs (bSunLightFromSky)");
         }
         // `NV_SOUND=out`: the game's sound on the player's default device, from when the game
         // makes its DirectSound device on; `NV_SOUND_RECORD=FILE.wav` also records what goes
@@ -465,6 +486,22 @@ impl Host {
     }
 }
 
+/// The process status `nv-viewer` ends with for [`not_provided_here`]'s stop (sysexits'
+/// EX_UNAVAILABLE): the game was found but does not run on this system yet. Expected in the
+/// Linux and macOS previews, so play.sh says it needs no report (`NOT_PROVIDED_STATUS` there).
+pub const NOT_PROVIDED_STATUS: i32 = 69;
+
+/// The process status for an error of [`Host::start_with`] or [`check_installation`]:
+/// [`NOT_PROVIDED_STATUS`] for the stop off Windows ([`not_provided_here`]), 1 for any other.
+pub fn error_status(err: &str) -> i32 {
+    #[cfg(not(windows))]
+    if not_provided_here().err().as_deref() == Some(err) {
+        return NOT_PROVIDED_STATUS;
+    }
+    let _ = err;
+    1
+}
+
 /// [`Host::start_with`] and [`check_installation`] off Windows: the program builds on Linux and
 /// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
 /// pieces that are still Windows-only, instead of a run that would go on without them and fail
@@ -476,6 +513,17 @@ impl Host {
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
     not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
+}
+
+/// Off Windows, the start's and `--check`'s stop: `exe` checked by `verify` first (a wrong
+/// FalloutNV.exe is said as such, status 1), then [`not_provided_here`] (status 69).
+#[cfg(not(windows))]
+fn stop_off_windows(
+    exe: &Path,
+    verify: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    verify(exe)?;
+    not_provided_here()
 }
 
 /// [`not_provided_here`]'s message, for an x86-64 processor or another, on macOS or another
@@ -505,19 +553,36 @@ fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
     Err(why)
 }
 
+/// The installation's `FalloutNV.exe` beside the `Data` folder `data`
+/// ([`engine::exe::installed_exe`]). Off Windows its name is matched without case by the game's
+/// own path rule (`engine_platform::host_paths::stored_name`: the exact name when there, else the
+/// first that differs only in case), as the finder and play.sh take a `Data` folder in any case:
+/// a copy whose exe was lower-cased (`falloutnv.exe`) is found.
+pub fn game_exe(data: &Path) -> PathBuf {
+    let exe = engine::exe::installed_exe(data);
+    #[cfg(not(windows))]
+    if let (Some(name), Some(folder)) =
+        (engine_platform::host_paths::stored_name(&exe), exe.parent())
+    {
+        return folder.join(name);
+    }
+    exe
+}
+
 /// What `nv-viewer --check` reports for the installation whose `Data` folder is `data`, without
 /// starting anything: an error when its `FalloutNV.exe` is missing or is not 1.4.0.525
 /// ([`engine::exe::verify`]), else a line for each thing that decides how the run will go.
 pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
-    let exe = engine::exe::installed_exe(data);
+    let exe = game_exe(data);
     if !exe.is_file() {
         return Err(format!("{}: not found", exe.display()));
     }
-    // Linux and macOS: the game cannot start there yet, so the check says so where the start
-    // does, right after the exe is found (`--check` then ends with status 1, "the game cannot
-    // start").
+    // Linux and macOS: the game cannot start there yet, so the check says so, after the exe was
+    // found and its version checked (a wrong build is said first); `--check` then ends with
+    // [`NOT_PROVIDED_STATUS`] ([`error_status`]), which play.sh says is expected.
     #[cfg(not(windows))]
-    not_provided_here()?;
+    stop_off_windows(&exe, &engine::exe::verify)?;
+    #[cfg(windows)]
     engine::exe::verify(&exe)?;
     let converter = if engine_platform::resampler::tables().is_some() {
         "found"
@@ -861,8 +926,38 @@ fn sound_choice(sound: Option<&str>, record: bool, hidden: bool) -> SoundChoice 
     }
 }
 
+/// Whether the sun light from the sky's discs is installed (`sun::LightFromSky`): the choice says so
+/// (`fixes::Choice::light_from_sky`: the sun shadows on and `bSunLightFromSky` on) and wgpu alone is
+/// asked to draw (`backends`, `engine_platform::d3d9real::backends`). Anything else: the exe's light.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn light_from_sky_wanted(
+    choice: &fixes::Choice,
+    backends: Option<engine_platform::d3d9real::Backends>,
+) -> bool {
+    choice.light_from_sky() && backends == Some(engine_platform::d3d9real::Backends::Wgpu)
+}
+
 #[cfg(test)]
 mod tests {
+    /// The light from the sky is installed only with the sun shadows on, the key on and wgpu alone
+    /// drawing: with the default choice, the sun shadows off (key on), the key off, the real
+    /// Direct3D 9, both, or no backend, nothing is installed and the game's light is the exe's.
+    #[test]
+    fn the_light_from_the_sky_is_installed_only_with_the_sun_shadows_on_wgpu() {
+        use engine_platform::d3d9real::Backends;
+        let wgpu = Some(Backends::Wgpu);
+        let mut choice = super::fixes::Choice::vanilla();
+        assert!(choice.sun_light_from_sky && !choice.sun_shadows);
+        assert!(!super::light_from_sky_wanted(&choice, wgpu));
+        choice.sun_shadows = true;
+        assert!(super::light_from_sky_wanted(&choice, wgpu));
+        for other in [Some(Backends::Real), Some(Backends::RealAndWgpu), None] {
+            assert!(!super::light_from_sky_wanted(&choice, other), "{other:?}");
+        }
+        choice.sun_light_from_sky = false;
+        assert!(!super::light_from_sky_wanted(&choice, wgpu));
+    }
+
     /// Off Windows a start is refused, naming the pieces that are still Windows-only.
     #[test]
     fn a_start_off_windows_is_refused_naming_what_is_missing() {
@@ -905,28 +1000,58 @@ mod tests {
         dir
     }
 
-    /// The refusal is made before the exe is mapped: a start with an installation present stops
-    /// with it on Linux and macOS (an installation with no exe still says that first).
+    /// The refusal is made before the exe is mapped, after its version is checked (review of #631,
+    /// round 5): a start with a file that is not FalloutNV.exe 1.4.0.525 says so (status 1, a
+    /// report asked), not the expected stop; with the right exe (a check that passes) it stops
+    /// with the refusal.
     #[cfg(not(windows))]
     #[test]
-    fn a_start_off_windows_stops_with_the_refusal() {
+    fn a_start_off_windows_checks_the_version_then_stops_with_the_refusal() {
         let dir = scratch_installation("refusal");
         let err = super::Host::start(&dir.join("Data")).err().unwrap();
-        assert_eq!(err, super::not_provided_here().unwrap_err());
+        assert_ne!(err, super::not_provided_here().unwrap_err());
+        assert!(err.contains("1.4.0.525"), "{err}");
+        assert_eq!(super::error_status(&err), 1);
+        let exe = dir.join("FalloutNV.exe");
+        assert_eq!(
+            super::stop_off_windows(&exe, &|_| Ok(())),
+            super::not_provided_here()
+        );
+        assert_eq!(
+            super::stop_off_windows(&exe, &|_| Err("another build".into())),
+            Err("another build".to_string())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `nv-viewer --check` off Windows says the same (status 1: the game cannot start), where
-    /// the start does: after the exe is found.
+    /// Review of #631 (round 2): `nv-viewer --check` off Windows checks the exe's version FIRST
+    /// (a file that is not FalloutNV.exe 1.4.0.525 is said as such, status 1), and only then
+    /// stops as the start does; with no exe it says that.
     #[cfg(not(windows))]
     #[test]
-    fn the_installation_check_off_windows_says_the_game_cannot_start() {
+    fn the_installation_check_off_windows_checks_the_version_first() {
         let dir = scratch_installation("check");
         let err = super::check_installation(&dir.join("Data")).unwrap_err();
-        assert_eq!(err, super::not_provided_here().unwrap_err());
+        assert_ne!(err, super::not_provided_here().unwrap_err());
+        assert!(err.contains("1.4.0.525"), "{err}");
+        assert_eq!(super::error_status(&err), 1);
         let _ = std::fs::remove_dir_all(&dir);
         let missing = super::check_installation(&dir.join("Data")).unwrap_err();
         assert!(missing.ends_with("FalloutNV.exe: not found"), "{missing}");
+    }
+
+    /// Review of #631 (round 2): the start's expected stop off Windows ends with a status of its
+    /// own (play.sh says it needs no report); any other error with 1.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_expected_stop_off_windows_has_its_own_status() {
+        let dir = scratch_installation("status");
+        // The right exe (a version check that passes), as the start makes the stop.
+        let err = super::stop_off_windows(&dir.join("FalloutNV.exe"), &|_| Ok(())).unwrap_err();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(super::error_status(&err), super::NOT_PROVIDED_STATUS);
+        assert_eq!(super::NOT_PROVIDED_STATUS, 69);
+        assert_eq!(super::error_status("FalloutNV.exe: not found"), 1);
     }
 
     #[test]
