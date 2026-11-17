@@ -140,6 +140,10 @@ fn group_or_allocate(e: &mut Engine, data: u32, bytes: u32, size: u32) -> u32 {
 /// An array's presence as `LoadBinary` reads it: before 4.1.0.0 the array word itself (4 bytes into
 /// `field`) and its being set; from 4.1.0.0 one byte into a stack local whose low byte starts as
 /// `initial` (the exe reuses an argument's slot, so a read that writes nothing leaves that byte).
+/// The normals' and colours' flags start at 0 (`initial`): there the exe's local is a stack byte nothing has
+/// written, so when the 1-byte read is cut short (a truncated file) the exe goes on with whatever that byte held.
+/// Starting it at 0 (no array) is a deliberate, safer choice for such a file; no test can compare it with the exe,
+/// whose bytes there are undefined. A full read gives the exe's answer.
 fn presence(e: &mut Engine, stream: Ptr<Stream>, field: u32, initial: u8) -> bool {
     if version(e, stream) < 0x0401_0000 {
         read(e, stream, field, 4, 4);
