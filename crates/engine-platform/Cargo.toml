@@ -28,6 +28,16 @@ d3d9-wgpu = { path = "../d3d9-wgpu" }
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D9", "Win32_Graphics_Gdi", "Foundation_Numerics", "Win32_System_LibraryLoader", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input", "Win32_UI_WindowsAndMessaging"] }
 
+# Sound on the speakers off Windows (sound_out.rs, `mod device`): the default output device through
+# ALSA (PipeWire's and PulseAudio's ALSA plugins among them) on Linux, CoreAudio on macOS. The
+# mixer is the port's own on every system; only the device differs. No cpal features: its
+# `realtime` would do nothing on Linux as built (no D-Bus/rtkit) and is not used on macOS; the
+# Linux sound thread runs at normal priority (sound_out.rs says why). Linux links ALSA's
+# libasound.so.2 (alsa-sys): the program needs it to start. Windows keeps its own WASAPI arm
+# (no cpal there).
+[target.'cfg(not(windows))'.dependencies]
+cpal = "0.18.2"
+
 # The tests of the C runtime's stdio that moved here (crt_stdio_tests.rs) and of the process side
 # use the core's addresses and helpers behind this feature.
 [dev-dependencies]

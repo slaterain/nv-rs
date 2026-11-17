@@ -10,7 +10,11 @@ name: Other systems
 # - macOS: on pull requests labelled "other-systems", by hand, and once a night (not on every push
 #   to main: it takes about half an hour with two compilers).
 # A pull request without the label runs neither; the Windows job runs as before on every one.
-# Adding another label to a labelled pull request starts nothing.
+# Adding another label to a labelled pull request starts nothing and cancels nothing: the run it
+# creates has both jobs skipped, and the concurrency groups are the jobs' own (below), which a job
+# joins when it is queued (GitHub's documentation: a job "is queued" into its group); a skipped job
+# is never queued. A newer push to a pull request cancels that pull request's older jobs; on main,
+# each commit and event (push, nightly, by hand) keeps its own jobs to the end.
 #
 # This workflow is not a required check. A Linux failure turns its run red. The macOS job is
 # continue-on-error for now (its job shows red, the run does not). The tests known to fail on these
@@ -26,10 +30,6 @@ on:
     - cron: '17 3 * * *'
 permissions:
   contents: read
-concurrency:
-  # The event in the group: the nightly run on main must not cancel the push run of the same commit.
-  group: other-systems-${{ github.event_name }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
-  cancel-in-progress: true
 env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: 0
@@ -43,12 +43,19 @@ jobs:
        contains(github.event.pull_request.labels.*.name, 'other-systems') &&
        (github.event.action != 'labeled' || github.event.label.name == 'other-systems'))
     runs-on: ubuntu-latest
+    concurrency:
+      group: other-systems-linux-${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.event_name, github.sha) || github.ref }}
+      cancel-in-progress: true
     # Measured 20 min on d358058b4 (run 43823529317, cold cache): three times that.
     timeout-minutes: 60
     env:
       CARGO_BUILD_JOBS: 4
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      # The sound device's library (cpal's ALSA backend, engine-platform sound_out.rs): alsa-sys
+      # links libasound and finds it with pkg-config at build time.
+      - name: Install ALSA's development files
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev pkg-config
       - name: Install the pinned Rust tools (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -80,6 +87,9 @@ jobs:
        contains(github.event.pull_request.labels.*.name, 'other-systems') &&
        (github.event.action != 'labeled' || github.event.label.name == 'other-systems'))
     runs-on: macos-latest
+    concurrency:
+      group: other-systems-macos-${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.event_name, github.sha) || github.ref }}
+      cancel-in-progress: true
     # Allowed to fail for now: Apple silicon's known differences are being fixed one step at a time
     # (the processor's estimates, the software x87 path, the NaN sign, Metal); a failure shows on
     # the job without turning the run red.

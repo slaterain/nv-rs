@@ -15,13 +15,16 @@
 //!
 //! **The group's fixes** (the row `NV_JIP_GAME_PATCHES`; `InitGamePatches`): G14 (no un-equip
 //! notice for the worn item equipping replaces), G18 (a change of life state is saved, so the dead
-//! do not load in their bind pose), G77 (the armour-penetrated flag on a hit), G98 (kill challenges
+//! do not load in their bind pose), G98 (kill challenges
 //! skip teammates, flagged and essential actors), G109 + G120 (impact data with JIP's fallback rule,
 //! the hit blood from the hit's own weapon), G111 + O11 (the damage a shot does to the weapon: the
 //! weapon's own value, ammo effects, and with `bFO3WpnDegradation` Fallout 3's skill and rate
 //! scaling), G118 (on-hit weapon effects from the projectile's own weapon), O19
 //! (`bCreatureSpreadFix`). **G33** is JIP's own (`GetKiller`): the player's killer is kept, and
-//! cleared before a load.
+//! cleared before a load. **G77** is JIP's own too (`SAFE_WRITE_BUF(0x9B6335, ..)` in
+//! `InitGamePatches`, no switch): the armour-penetrated mark on a hit raised to the minimum damage
+//! (read by `GetArmourPenetrated`); the compare and the store stay the translation's. G84, G85, G99 and G126 (JIP's own: the condition and armour damage
+//! formulas and the no-movement combat switch, with their five commands) are in [`formulas`].
 
 use super::Area;
 use crate::game::JipActorFlags;
@@ -48,7 +51,6 @@ pub const AREA: Area = Area {
         LIFE_STATE_MARK.addr(),
         CREATURE_SPREAD.addr(),
         PROJECTILE_WEAPON.addr(),
-        ARMOR_PENETRATED.addr(),
         damage::AMMO_IMPACT_SCRIPT.addr(),
         damage::DEFER_OV3.addr(),
         damage::DEFER_OV4.addr(),
@@ -67,8 +69,14 @@ pub const AREA: Area = Area {
         DETECTION_TEAMMATE[1].addr(),
         DETECTION_TEAMMATE[2].addr(),
         DETECTION_LEVEL.addr(),
+        ARMOR_PENETRATED.addr(),
+        formulas::HIT_ARMOR_DAMAGE.addr(),
+        formulas::CONTROL_FLAG.addr(),
     ],
-    jip_wraps: &[],
+    jip_wraps: &[
+        formulas::CONDITION_DAMAGE.addr(),
+        formulas::ARMOR_RATING.addr(),
+    ],
     install_jip,
 };
 
@@ -91,6 +99,8 @@ fn install_jip(e: &mut Engine) {
     e.on_site(DETECTION_LEVEL, detection_level);
     e.on_site(PLAYER_KILLER_SET, player_killer);
     e.on_site(PLAYER_KILLER_KEPT, player_killer);
+    e.on_site(ARMOR_PENETRATED, armor_penetrated);
+    formulas::install_jip(e);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DetectionTeammateHook.
@@ -186,7 +196,6 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(LIFE_STATE_MARK, life_state_mark);
     e.on_site(CREATURE_SPREAD, creature_spread);
     e.on_site(PROJECTILE_WEAPON, projectile_weapon_first);
-    e.on_site(ARMOR_PENETRATED, armor_penetrated);
     e.wrap(GET_IMPACT_DATA, get_impact_data);
     e.wrap(GET_DAMAGE_TO_WEAPON, get_damage_to_weapon);
     damage::install_fixes(e);
@@ -434,6 +443,8 @@ pub(crate) fn pre_load(e: &mut Engine) {
 
 #[path = "gc_damage.rs"]
 pub mod damage;
+#[path = "gc_formulas.rs"]
+pub mod formulas;
 
 #[cfg(test)]
 #[path = "gc_tests.rs"]

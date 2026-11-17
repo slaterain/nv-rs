@@ -569,6 +569,8 @@ pub fn jobs(e: &Engine, watch: &mut Watch, dir: Option<&Path>, prefs: Option<&Pa
 /// Does `job`'s disk work: the log line when there is one (`Ok`), or the line saying why a
 /// write failed (`Err`).
 pub fn run(job: &Job) -> Result<Option<String>, String> {
+    #[cfg(not(windows))]
+    let _forget = ForgetFolder(job);
     // Off Windows the guard is asked again at write time; on Windows nothing is (the folder was
     // checked once, at the start, as before).
     #[cfg(not(windows))]
@@ -718,6 +720,22 @@ fn same_but_case(target: &Path) -> Option<PathBuf> {
     std::fs::symlink_metadata(&path)
         .is_ok_and(|m| m.is_file())
         .then_some(path)
+}
+
+/// Off Windows, when a job's disk work is done (dropped at the end of [`run`]): the names of the
+/// job's folder kept for the game's paths are read again at their next look
+/// (`engine_platform::host_paths::forget`), whatever the folder's time says.
+#[cfg(not(windows))]
+struct ForgetFolder<'a>(&'a Job);
+
+#[cfg(not(windows))]
+impl Drop for ForgetFolder<'_> {
+    fn drop(&mut self) {
+        let (Job::Write { target, .. } | Job::Remove { target, .. }) = self.0;
+        if let Some(folder) = target.parent() {
+            engine_platform::host_paths::forget(folder);
+        }
+    }
 }
 
 /// A message to the copy-out's thread.
@@ -1008,6 +1026,51 @@ mod tests {
     /// The bytes a job carries are the run's bytes when the look was made: the game writing the
     /// file again before the copy-out's thread gets to it changes neither the copy nor the next
     /// look's job, which carries the new bytes.
+    /// Linux and macOS: a save the copy-out writes, and one it removes, are seen by the game's
+    /// next look in that folder even when the folder's time does not show the change (it is put
+    /// back here, as a file system whose clock does not move would leave it).
+    #[cfg(not(windows))]
+    #[test]
+    fn the_copy_outs_writes_are_seen_by_the_games_next_look() {
+        use engine_platform::host_paths::folder_matches;
+        let dir = std::env::temp_dir().join(format!("nv-rs-copy-out-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Old.fos"), b"old").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let set_time = || {
+            std::fs::File::open(&dir)
+                .unwrap()
+                .set_modified(old)
+                .unwrap()
+        };
+        set_time();
+        let folder = dir.to_string_lossy().into_owned();
+        assert_eq!(folder_matches(&folder, "NEW.FOS"), Some(vec![]));
+        let write = Job::Write {
+            key: b"new.fos".to_vec(),
+            dir: Some(dir.clone()),
+            target: dir.join("New.fos"),
+            temporary: dir.join("New.fos.part"),
+            bytes: b"new".to_vec(),
+            copied: Some("New.fos".to_string()),
+        };
+        run(&write).unwrap();
+        set_time();
+        assert_eq!(
+            folder_matches(&folder, "new.fos"),
+            Some(vec!["New.fos".to_string()])
+        );
+        let remove = Job::Remove {
+            target: dir.join("Old.fos"),
+            name: "Old.fos".to_string(),
+        };
+        run(&remove).unwrap();
+        set_time();
+        assert_eq!(folder_matches(&folder, "OLD.FOS"), Some(vec![]));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_job_keeps_the_bytes_of_its_look() {
         let mut e = Engine::new();
