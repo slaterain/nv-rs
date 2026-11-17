@@ -127,6 +127,10 @@ pub struct GameView {
     pub sun_colour: [f32; 3],
     /// Whether the current cell is an interior.
     pub interior: bool,
+    /// The world space the camera is in (`TES` +0x88, `currentWrldspc` in JIP LN NVSE's `GameData.h`:
+    /// the game's pointer, only compared), 0 indoors or when unknown: the sun shadows forget the
+    /// casters they keep when it changes (`crate::sun_shadow::WORLD_STATE`).
+    pub world: u32,
 }
 
 /// One frame's camera and sun, as the step reads them.
@@ -1010,6 +1014,7 @@ mod tests {
             to_sun: Some([0.0, 1.0, 1.0]),
             sun_colour: [1.0, 0.9, 0.8],
             interior: false,
+            world: 0,
         }
     }
 

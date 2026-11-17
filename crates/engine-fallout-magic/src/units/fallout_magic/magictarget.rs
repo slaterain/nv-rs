@@ -246,6 +246,22 @@ fn flag_of(e: &mut Engine, getter: u32, object: u32) -> bool {
     e.call(getter, &args![object]).bool()
 }
 
+/// `CheckAddEffect`'s test before an alchemy effect's `ModifyPositiveChemDuration` entry
+/// (`0x8236FD`: the effect item's `IsHostile`). JIP LN NVSE's G107 (a fix, the row
+/// `NV_JIP_GAME_PATCHES`; `WriteRelJump(0x8236FD, ModPositiveChemDurationHook)`) answers it
+/// (words: the alchemy item, the active effect; 1 skips the entry: not a chem of type 10 or 11, or
+/// a hostile effect). With the word's `FIXES` bit clear: one load, then the exe's test.
+#[inline]
+fn skips_chem_duration(e: &mut Engine, alchemy: u32, effect: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(skip) = e.site(0x0082_36fd, &[alchemy, effect]) {
+            return skip != 0;
+        }
+    }
+    let item = word_of(e, EFFECT_ITEM, effect);
+    flag_of(e, EFFECT_ITEM_IS_HOSTILE, item)
+}
+
 fn float_of(e: &mut Engine, getter: u32, object: u32) -> f32 {
     e.call(getter, &args![object]).f32()
 }
@@ -752,11 +768,9 @@ pub fn magic_target_check_add_effect(
         if actor != 0 {
             adjust_duration_by_entry_point(e, actor, effect, 0x18);
         }
-    } else if spell_type(e, spell) == 7
-        && dynamic_cast(e, spell, MAGIC_ITEM_TYPE, ALCHEMY_ITEM_TYPE) != 0
-    {
-        let item = word_of(e, EFFECT_ITEM, effect);
-        if !flag_of(e, EFFECT_ITEM_IS_HOSTILE, item) {
+    } else if spell_type(e, spell) == 7 {
+        let alchemy = dynamic_cast(e, spell, MAGIC_ITEM_TYPE, ALCHEMY_ITEM_TYPE);
+        if alchemy != 0 && !skips_chem_duration(e, alchemy, effect) {
             let actor = magic_target_get_target_as_actor(e, this).addr();
             if actor != 0 {
                 adjust_duration_by_entry_point(e, actor, effect, 0x19);
@@ -2391,6 +2405,59 @@ mod tests {
         let entry = &calls(&e, HANDLE_ENTRY_POINT)[0];
         assert_eq!(entry[..2], [0x18, this.addr() - 0x94]);
         assert_eq!(calls(&e, 0x0069_3d50), vec![vec![fx, 6.0f32.to_bits()]]);
+    }
+
+    thread_local! {
+        /// The words G107's seam handler of a test was asked with.
+        static G107_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// G107's seam at `0x8236FD` (JIP LN NVSE's `ModPositiveChemDurationHook`): an alchemy item's
+    /// (kind 7) non-hostile effect on an actor. With the fixes row the seam is asked with the
+    /// alchemy item and the active effect, and its answer replaces the hostile test (1 skips the
+    /// `ModifyPositiveChemDuration` entry, 0 applies it); JIP not installed or installed without
+    /// the row: not asked, the exe applies the entry (0x19).
+    #[test]
+    fn jip_g107_chem_seam_replaces_the_hostile_test() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn skip(e: &mut Engine, a: &[u32]) -> Option<u32> {
+            let _ = e;
+            G107_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(1)
+        }
+        fn apply(e: &mut Engine, a: &[u32]) -> Option<u32> {
+            let _ = e;
+            G107_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0)
+        }
+        for (word, skips, asked, entries) in [
+            (0, true, 0, 1),
+            (jip_patches::INSTALLED, true, 0, 1),
+            (jip_patches::FIXES, true, 1, 0),
+            (jip_patches::FIXES, false, 1, 1),
+        ] {
+            G107_ASKED.with(|v| v.borrow_mut().clear());
+            let mut e = engine();
+            let (this, s, fx, _) = add_effect_setup(&mut e, 7);
+            e.mem.set_u32(s + RTTI, ALCHEMY_ITEM_TYPE);
+            e.mem.set_u8(this.addr() + T_IS_ACTOR, 1);
+            e.register(HANDLE_ENTRY_POINT, |_, _| ret(0));
+            e.register(0x0069_3d50, |_, _| ret(0));
+            e.set_jip_patches(word);
+            e.on_site(
+                SiteSlot::new(Owner::Jip, 0x0082_36fd),
+                if skips { skip } else { apply },
+            );
+            assert!(magic_target_check_add_effect(&mut e, this, 0x55, s, fx));
+            let words = G107_ASKED.with(|v| v.borrow().clone());
+            assert_eq!(words.len(), asked, "{word:08x}");
+            assert!(words.iter().all(|w| w == &[s, fx]), "{word:08x}");
+            let chem: Vec<_> = calls(&e, HANDLE_ENTRY_POINT)
+                .into_iter()
+                .filter(|c| c[0] == 0x19)
+                .collect();
+            assert_eq!(chem.len(), entries, "{word:08x}");
+        }
     }
 
     #[test]
