@@ -1,0 +1,14 @@
+# Licence notices of code that is compiled into the Linux and macOS programs but is not a crates.io
+# crate (crates.io crates have their folders in distribution/licenses). One a line: the file in this
+# repository, a tab, its name in the package's licenses folder. scripts/package-playtest.sh copies
+# each one and refuses a package when a path crate of the program has a LICENSE* or NOTICE* file
+# that is not listed here; package-check --notices checks the package holds every one.
+crates/vorbis/LICENSE-libvorbis	LICENSE-libvorbis
+crates/nvse/LICENSE-msvc-stl	LICENSE-msvc-stl
+crates/nvse/LICENSE-algohol	LICENSE-algohol
+crates/nvse/LICENSE-mt19937	LICENSE-mt19937
+crates/nvse/NOTICE	NOTICE-nvse
+crates/jip/NOTICE	NOTICE-jip
+crates/uio/NOTICE	NOTICE-uio
+vendor/wgpu-hal/LICENSE.APACHE	LICENSE-wgpu-hal.APACHE
+vendor/wgpu-hal/LICENSE.MIT	LICENSE-wgpu-hal.MIT
