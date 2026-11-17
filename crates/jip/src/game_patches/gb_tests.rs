@@ -1041,7 +1041,7 @@ fn repair_world(e: &mut Engine, skill: f64) {
     e.mem.set_f32(0x011d_0884, 1.0);
     e.mem.set_f32(0x011c_ffa4, 3.0);
     e.mem.set_u32(0x011d_ea3c, AREA_AT + 0x7000);
-    e.register(ACTOR_VALUE, move |_, a| {
+    e.register_double(ACTOR_VALUE, move |_, a| {
         gb3_log(ACTOR_VALUE, a);
         Ret {
             st0: skill,
@@ -1137,17 +1137,17 @@ fn o2_repair_list() {
         gb3_log(ITEM_TEST, a);
         u32::from(e.mem.u8(a[0] + 0x10) == 0).into_ret()
     });
-    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(120.0));
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(100.0));
     let form = AREA_AT + 0x8100;
     let state = repair_state(&mut e);
-    state.health.store(50.0f32.to_bits(), Ordering::Relaxed);
+    state.health.store(40.0f32.to_bits(), Ordering::Relaxed);
     state.modded.store(false, Ordering::Relaxed);
     gb3_calls();
-    assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(0), "60 above 50");
+    assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(0), "50 above 40");
     assert_eq!(gb3_calls(), [(ITEM_TEST, vec![form, form])]);
     assert_eq!(e.site(REPAIR_LIST.addr(), &[0x0641_0000, stack]), Some(1), "another form");
-    repair_state(&mut e).health.store(60.0f32.to_bits(), Ordering::Relaxed);
-    assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(1), "60 at 60");
+    repair_state(&mut e).health.store(50.0f32.to_bits(), Ordering::Relaxed);
+    assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(1), "50 at 50");
     repair_state(&mut e).health.store(10.0f32.to_bits(), Ordering::Relaxed);
     repair_state(&mut e).modded.store(true, Ordering::Relaxed);
     assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(1), "modded");
