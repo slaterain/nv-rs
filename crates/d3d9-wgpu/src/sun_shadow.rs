@@ -26,6 +26,21 @@
 //! `ModelViewProj`'s four registers replaced by the map's view of its place
 //! ([`Cascade::world_to_light`]).
 //!
+//! **Cables** cast at their real weight. A geometry all of whose pieces ([`strands`]) are round
+//! cables thinner than [`THIN_WIDTH`] or flat ribbons ([`Strand::ribbon`]: the game draws its
+//! telegraph lines as alpha-tested strips 20 units wide with the cable in the texture) is drawn
+//! not into the depth maps but into a coverage map a cascade ([`THIN_SIZE`], [`THIN_FORMAT`]): a
+//! round cable as quads along its centreline at least [`THIN_DRAWN`] texels wide, carrying its
+//! share of each texel ([`thin_quads`]); a ribbon through its own pixel shader with its texture's
+//! alpha read at the level the map's texel calls for (the cable's share of the texel), added up,
+//! over quads that carry its depth. The lookup takes away the sun by that share, spread over the
+//! band the sun's own half-degree width makes at the cable's height above the receiver
+//! ([`SUN_WIDTH`]): a faint soft line that fades the higher the cable hangs, never a solid
+//! one-texel line or a broken one. A geometry that is cables and more (Goodsprings' telegraph
+//! line: poles, crossbars and wires in one) has its round cables taken out ([`Body::solid`]): the
+//! rest is drawn into the depth maps from an index list of its own. `NV_SUN_SHADOWS_THIN=solid`
+//! (captures only) casts cables as any other caster.
+//!
 //! **The maps.** [`CASCADES`] cascades of [`SIZE`] texels a side (one texture array, a layer each)
 //! split the camera's view from its near plane to [`FAR`] units by the practical scheme ([`splits`]:
 //! Zhang et al., "Parallel-Split Shadow Maps", 2006, log/linear blend [`LAMBDA`]). Each covers the
@@ -525,43 +540,419 @@ pub fn bounds(points: impl Iterator<Item = [f32; 3]>) -> Option<([f64; 3], f64)>
     Some((centre, dot3(d, d).sqrt()))
 }
 
-/// A caster whose girth (its surface's area over its length: about 2 pi r for a round cable, the
-/// width for a flat strip) is under this many game units casts nothing: a cable or a wire. The sun
-/// is half a degree wide, so a few hundred units under a cable its shadow's soft edge is wider than
-/// the cable itself (about 0.009 x the distance): the real shadow is a faint smear, while a map at
-/// our texel sizes draws it as a solid band.
-pub const THIN: f64 = 12.0;
-/// ... and longer than this many times its girth (a peg or a bolt still casts).
+/// A strand narrower than this (game units) is thin: a cable or a wire. The sun is half a degree
+/// wide, so a few hundred units under a cable its shadow's soft edge is wider than the cable itself
+/// (about 0.009 x the distance): the real shadow is a faint smear, while a depth map draws it as a
+/// solid band (or, under a texel wide, as a broken line that crawls). Thin casters are drawn into
+/// their own coverage maps instead ([`Thin`]), at their real weight.
+pub const THIN_WIDTH: f64 = 7.0;
+/// ... and longer than this many times its width (a peg or a bolt is no cable).
 pub const THIN_LENGTH: f64 = 20.0;
+/// A strand's centreline has a point about this many game units apart (at most [`STRAND_POINTS`]).
+pub const STRAND_STEP: f64 = 48.0;
+pub const STRAND_POINTS: usize = 33;
+/// A geometry is split into pieces only when its area over its longest side is under this many
+/// round cables of [`THIN_WIDTH`] side by side ([`Body::of`]).
+pub const MANY_CABLES: f64 = 16.0;
 
-/// Whether a caster's triangles (object-space corners, three a triangle in order) make a cable
-/// ([`THIN`]): their area over the longest side of their box under [`THIN`], and that side over
-/// [`THIN_LENGTH`] times it.
-pub fn line_like(triangles: impl Iterator<Item = [[f32; 3]; 3]>) -> bool {
-    let mut lo = [f64::INFINITY; 3];
-    let mut hi = [f64::NEG_INFINITY; 3];
-    let mut area = 0.0;
-    let mut any = false;
-    for t in triangles {
-        let p = t.map(wide);
-        for c in &p {
-            for k in 0..3 {
-                lo[k] = lo[k].min(c[k]);
-                hi[k] = hi[k].max(c[k]);
-            }
+/// One connected piece of a caster's surface seen as a strand: its centreline end to end (object
+/// space), its width (twice the mean distance of its corners from the centreline: a round cable's
+/// diameter, a flat strip's width), its length and its area.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Strand {
+    pub line: Vec<[f32; 3]>,
+    pub width: f64,
+    pub length: f64,
+    pub area: f64,
+    /// Its number among the pieces ([`pieces`]).
+    pub piece: u32,
+}
+
+impl Strand {
+    /// Whether it is a cable ([`THIN_WIDTH`], [`THIN_LENGTH`]).
+    pub fn thin(&self) -> bool {
+        self.width < THIN_WIDTH && self.length > THIN_LENGTH * self.width
+    }
+
+    /// Whether it is a ribbon: a flat strip (its area under [`FLAT`] times its length by its width;
+    /// a round tube's is about pi) narrower than [`RIBBON_WIDTH`] and longer than [`RIBBON_LENGTH`]
+    /// times its width: what the game draws a cable as, with the cable in its texture's alpha.
+    pub fn ribbon(&self) -> bool {
+        self.width < RIBBON_WIDTH
+            && self.length > RIBBON_LENGTH * self.width
+            && self.area < FLAT * self.length * self.width
+    }
+}
+
+/// A ribbon ([`Strand::ribbon`]) is narrower than this (game units) ...
+pub const RIBBON_WIDTH: f64 = 128.0;
+/// ... longer than this many times its width ...
+pub const RIBBON_LENGTH: f64 = 8.0;
+/// ... and flat: its area under this many times its length by its width (one side 1, both 2, a
+/// round tube about 3).
+pub const FLAT: f64 = 2.5;
+/// A geometry of cables may hold small other pieces (insulators, clamps, a pole top's bolts) of
+/// at most this part of its area; they cast with it as cables do.
+pub const BITS: f64 = 0.1;
+
+/// The caster's triangles (object-space corners) split into connected pieces (corners welded by
+/// place, so a seam in the vertex list does not split a cable; degenerate triangles, which join
+/// a strip's runs, join nothing), each as a [`Strand`]. Its centreline follows the piece along its
+/// surface: the corners' distances over the surface from one end (the corner furthest from any
+/// other), in [`STRAND_STEP`] steps, each step's corners' middle a point (a sagging cable, or one
+/// that turns at a junction, kept); a piece that branches has steps whose corners lie far from
+/// their middle, so its width comes out wide.
+pub fn strands(triangles: &[[[f32; 3]; 3]]) -> Vec<Strand> {
+    pieces(triangles).0
+}
+
+/// [`strands`], with each triangle's piece ([`Strand::piece`]; `u32::MAX` for one left out: degenerate or
+/// not a number).
+pub fn pieces(triangles: &[[[f32; 3]; 3]]) -> (Vec<Strand>, Vec<u32>) {
+    let mut ids = crate::fxhash::Map::<[i64; 3], u32>::default();
+    let mut at: Vec<[f64; 3]> = Vec::new();
+    let mut parent: Vec<u32> = Vec::new();
+    fn root(parent: &mut [u32], mut i: u32) -> u32 {
+        while parent[i as usize] != i {
+            let up = parent[parent[i as usize] as usize];
+            parent[i as usize] = up;
+            i = up;
         }
-        let e1 = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
-        let e2 = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+        i
+    }
+    let area_of = |t: &[[f64; 3]; 3]| {
+        let e1 = [t[1][0] - t[0][0], t[1][1] - t[0][1], t[1][2] - t[0][2]];
+        let e2 = [t[2][0] - t[0][0], t[2][1] - t[0][1], t[2][2] - t[0][2]];
         let n = cross(e1, e2);
-        area += 0.5 * dot3(n, n).sqrt();
-        any = true;
+        0.5 * dot3(n, n).sqrt()
+    };
+    // Each triangle kept: its corners' places and their welded numbers, its area.
+    let mut kept: Vec<([u32; 3], f64, usize)> = Vec::with_capacity(triangles.len());
+    for (input, t) in triangles.iter().enumerate() {
+        if !t.iter().flatten().all(|v| v.is_finite()) {
+            continue;
+        }
+        let p = t.map(wide);
+        let area = area_of(&p);
+        if area <= 1e-9 {
+            continue;
+        }
+        let corner: [u32; 3] = p.map(|c| {
+            let k = c.map(|v| (v * 16.0).round() as i64);
+            *ids.entry(k).or_insert_with(|| {
+                parent.push(parent.len() as u32);
+                at.push(c);
+                (parent.len() - 1) as u32
+            })
+        });
+        let (a, b) = (root(&mut parent, corner[0]), root(&mut parent, corner[1]));
+        parent[b as usize] = a;
+        let c = root(&mut parent, corner[2]);
+        parent[c as usize] = a;
+        kept.push((corner, area, input));
     }
-    if !any {
-        return false;
+    let mut pieces = crate::fxhash::Map::<u32, Vec<usize>>::default();
+    for (n, k) in kept.iter().enumerate() {
+        let r = root(&mut parent, k.0[0]);
+        pieces.entry(r).or_default().push(n);
     }
-    let long = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max);
-    let girth = area / long.max(1e-6);
-    girth < THIN && long > THIN_LENGTH * girth
+    let dist3 = |a: [f64; 3], b: [f64; 3]| {
+        let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+        dot3(d, d).sqrt()
+    };
+    let mut of = vec![u32::MAX; triangles.len()];
+    let mut out: Vec<Strand> = pieces
+        .into_values()
+        .enumerate()
+        .map(|(piece, tris)| {
+            for &n in &tris {
+                of[kept[n].2] = piece as u32;
+            }
+            let area: f64 = tris.iter().map(|&n| kept[n].1).sum();
+            // The piece's corners (numbered 0.. here) and its edges.
+            let mut local = crate::fxhash::Map::<u32, usize>::default();
+            let mut vert: Vec<[f64; 3]> = Vec::new();
+            let mut edges: Vec<Vec<(usize, f64)>> = Vec::new();
+            for &n in &tris {
+                let c = kept[n].0.map(|id| {
+                    *local.entry(id).or_insert_with(|| {
+                        vert.push(at[id as usize]);
+                        edges.push(Vec::new());
+                        vert.len() - 1
+                    })
+                });
+                for (i, j) in [(0, 1), (1, 2), (2, 0)] {
+                    let l = dist3(vert[c[i]], vert[c[j]]);
+                    edges[c[i]].push((c[j], l));
+                    edges[c[j]].push((c[i], l));
+                }
+            }
+            // Distances over the surface from `from` (Dijkstra).
+            let over = |from: usize| -> Vec<f64> {
+                let mut d = vec![f64::INFINITY; vert.len()];
+                let mut heap = std::collections::BinaryHeap::new();
+                d[from] = 0.0;
+                heap.push((std::cmp::Reverse(0u64), from));
+                while let Some((std::cmp::Reverse(k), v)) = heap.pop() {
+                    let dv = f64::from_bits(k);
+                    if dv > d[v] {
+                        continue;
+                    }
+                    for &(w, l) in &edges[v] {
+                        let nd = dv + l;
+                        if nd < d[w] {
+                            d[w] = nd;
+                            // Distances are not negative: their bits order as they do.
+                            heap.push((std::cmp::Reverse(nd.to_bits()), w));
+                        }
+                    }
+                }
+                d
+            };
+            let furthest = |d: &[f64]| {
+                d.iter()
+                    .enumerate()
+                    .fold((0, -1.0), |b, (i, &x)| if x > b.1 { (i, x) } else { b })
+            };
+            let start = furthest(&over(0)).0;
+            let d = over(start);
+            let length = furthest(&d).1.max(0.0);
+            let n = ((length / STRAND_STEP).ceil() as usize).clamp(1, STRAND_POINTS - 2);
+            let step = |i: usize| ((d[i] / length.max(1e-9) * n as f64) as usize).min(n - 1);
+            let mut sum = vec![([0.0f64; 3], 0.0f64); n];
+            for (i, p) in vert.iter().enumerate() {
+                let s = &mut sum[step(i)];
+                for (acc, v) in s.0.iter_mut().zip(p) {
+                    *acc += v;
+                }
+                s.1 += 1.0;
+            }
+            // The steps' middles in order, and where each step's is among them.
+            let mut index = vec![0usize; n];
+            let mut inner: Vec<[f64; 3]> = Vec::with_capacity(n);
+            for (b, (c, w)) in sum.iter().enumerate() {
+                if *w > 0.0 {
+                    inner.push(c.map(|v| v / w));
+                }
+                index[b] = inner.len().saturating_sub(1);
+            }
+            // The line: the middles, carried on at each end as far as the end step's corners
+            // reach past its middle.
+            let last = inner.len() - 1;
+            let out_from = |end: usize, q: usize| {
+                let p = inner[end];
+                let w = [p[0] - inner[q][0], p[1] - inner[q][1], p[2] - inner[q][2]];
+                let l = dot3(w, w).sqrt();
+                if l.is_nan() || l <= 1e-9 {
+                    return p;
+                }
+                let w = w.map(|v| v / l);
+                let reach = vert
+                    .iter()
+                    .enumerate()
+                    .filter(|&(k, _)| index[step(k)] == end)
+                    .map(|(_, c)| dot3([c[0] - p[0], c[1] - p[1], c[2] - p[2]], w))
+                    .fold(0.0, f64::max);
+                [p[0] + w[0] * reach, p[1] + w[1] * reach, p[2] + w[2] * reach]
+            };
+            let mut line = Vec::with_capacity(inner.len() + 2);
+            line.push(if last > 0 { out_from(0, 1) } else { inner[0] });
+            line.extend(inner.iter().copied());
+            line.push(if last > 0 {
+                out_from(last, last - 1)
+            } else {
+                inner[0]
+            });
+            // Each corner's distance from the line (the segments on either side of its own
+            // step's middle, line[i + 1]).
+            let to_segment = |p: [f64; 3], a: [f64; 3], b: [f64; 3]| {
+                let ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                let ap = [p[0] - a[0], p[1] - a[1], p[2] - a[2]];
+                let t = (dot3(ap, ab) / dot3(ab, ab).max(1e-12)).clamp(0.0, 1.0);
+                let e = [ap[0] - ab[0] * t, ap[1] - ab[1] * t, ap[2] - ab[2] * t];
+                dot3(e, e).sqrt()
+            };
+            let mut across = 0.0;
+            for (k, p) in vert.iter().enumerate() {
+                let i = index[step(k)];
+                across += (i..(i + 2).min(line.len() - 1))
+                    .map(|j| to_segment(*p, line[j], line[j + 1]))
+                    .fold(f64::INFINITY, f64::min);
+            }
+            let length: f64 = line.windows(2).map(|w| dist3(w[0], w[1])).sum();
+            // Twice the corners' mean distance from the line; at least the area over the length
+            // over pi (a round cable's diameter; a coarse piece whose few corners all lie on its
+            // own line is not taken for a thin one).
+            let width = (2.0 * across / vert.len() as f64)
+                .max(area / length.max(1e-9) / std::f64::consts::PI);
+            Strand {
+                line: line.into_iter().map(|p| p.map(|v| v as f32)).collect(),
+                width,
+                length,
+                area,
+                piece: piece as u32,
+            }
+        })
+        .collect();
+    // The largest first (the order of a map's values is not stable).
+    out.sort_by(|x, y| y.area.total_cmp(&x.area));
+    (out, of)
+}
+
+/// What the maps keep of a geometry: its object-space bounding sphere, its cables when it is
+/// cables ([`thin_shape`]: round cables, or ribbons with the cable in their alpha), and for the
+/// dump tool its pieces' count and the largest few's width and length.
+#[derive(Clone, Debug)]
+pub(crate) struct Body {
+    pub bounds: ([f64; 3], f64),
+    pub thin: Option<Thin>,
+    /// With cables taken out of a geometry that is not all cables: its other triangles (their
+    /// numbers in its draw), drawn into the depth maps instead of the whole.
+    pub solid: Option<std::sync::Arc<Vec<u32>>>,
+    /// ... and those triangles' corners' numbers in the draw (its indices as read, or its vertices),
+    /// three a triangle, as the device found them.
+    pub solid_indices: Option<std::sync::Arc<Vec<u32>>>,
+    pub pieces: usize,
+    pub look: Vec<(f32, f32)>,
+    /// Its pieces by kind: round cables, ribbons, others (how many, their part of its area).
+    pub kinds: [(usize, f32); 3],
+    /// Its triangles, kept only for the dump tool (`NV_SUN_SHADOWS_DUMP_DIR`).
+    pub triangles: Option<std::sync::Arc<Vec<[[f32; 3]; 3]>>>,
+}
+
+impl Body {
+    /// A geometry's body from its triangles (object-space corners); none without any.
+    pub fn of(triangles: &[[[f32; 3]; 3]]) -> Option<Body> {
+        let bounds = bounds(triangles.iter().flatten().copied())?;
+        // Cheap first: a geometry whose area over its longest side is wider than many cables side
+        // by side (a wall, a rock, a house) is not split into pieces.
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        let mut area = 0.0;
+        for t in triangles {
+            let p = t.map(wide);
+            for c in &p {
+                for k in 0..3 {
+                    lo[k] = lo[k].min(c[k]);
+                    hi[k] = hi[k].max(c[k]);
+                }
+            }
+            let e1 = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
+            let e2 = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
+            let n = cross(e1, e2);
+            area += 0.5 * dot3(n, n).sqrt();
+        }
+        let long = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max);
+        let girth = area / long.max(1e-6);
+        if girth.is_nan() || girth >= MANY_CABLES * THIN_WIDTH * std::f64::consts::PI {
+            return Some(Body {
+                bounds,
+                thin: None,
+                solid: None,
+                solid_indices: None,
+                pieces: 0,
+                look: Vec::new(),
+                kinds: [(0, 0.0); 3],
+                triangles: dump_dir().map(|_| std::sync::Arc::new(triangles.to_vec())),
+            });
+        }
+        let (s, of) = pieces(triangles);
+        let look = s
+            .iter()
+            .take(4)
+            .map(|p| (p.width as f32, p.length as f32))
+            .collect();
+        let pieces = s.len();
+        let total: f64 = s.iter().map(|p| p.area).sum::<f64>().max(1e-12);
+        let mut kinds = [(0usize, 0.0f32); 3];
+        for p in &s {
+            let k = if p.thin() {
+                0
+            } else if p.ribbon() {
+                1
+            } else {
+                2
+            };
+            kinds[k].0 += 1;
+            kinds[k].1 += (p.area / total) as f32;
+        }
+        // All cables (and small bits): drawn as cables. Else its round cables are taken out of it:
+        // drawn as cables, the rest as before (a telegraph line's poles and crossbars with its wires
+        // in one geometry, as Goodsprings' is).
+        let (thin, solid) = match thin_of(s.clone()) {
+            Some(t) => (Some(t), None),
+            None => {
+                let cables: Vec<Strand> = s.iter().filter(|p| p.thin()).cloned().collect();
+                if cables.is_empty() {
+                    (None, None)
+                } else {
+                    let out: Vec<u32> = cables.iter().map(|c| c.piece).collect();
+                    let rest: Vec<u32> = (0..triangles.len() as u32)
+                        .filter(|&t| {
+                            let p = of[t as usize];
+                            p != u32::MAX && !out.contains(&p)
+                        })
+                        .collect();
+                    (
+                        Some(Thin {
+                            strands: std::sync::Arc::new(cables),
+                            ribbons: false,
+                        }),
+                        Some(std::sync::Arc::new(rest)),
+                    )
+                }
+            }
+        };
+        Some(Body {
+            bounds,
+            thin,
+            solid,
+            solid_indices: None,
+            pieces,
+            look,
+            kinds,
+            triangles: dump_dir().map(|_| std::sync::Arc::new(triangles.to_vec())),
+        })
+    }
+}
+
+/// `NV_SUN_SHADOWS_DUMP_DIR` (a tool, with `NV_SUN_SHADOWS_DUMP`): where the dump writes each near
+/// caster's triangles (object space, an OBJ file) for study; read once.
+pub fn dump_dir() -> Option<&'static str> {
+    static DIR: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| std::env::var("NV_SUN_SHADOWS_DUMP_DIR").ok())
+        .as_deref()
+}
+
+/// A geometry of cables: the strands of its cables (round ones, [`Strand::thin`], or ribbons,
+/// [`Strand::ribbon`]) and whether any is a ribbon.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Thin {
+    pub strands: std::sync::Arc<Vec<Strand>>,
+    pub ribbons: bool,
+}
+
+/// The cables of a geometry's pieces ([`strands`]): none unless every piece is a cable or a ribbon
+/// but small bits of at most [`BITS`] of its area (a pole with its wires is drawn as it always
+/// was).
+pub fn thin_of(pieces: Vec<Strand>) -> Option<Thin> {
+    let total: f64 = pieces.iter().map(|s| s.area).sum();
+    let (lines, bits): (Vec<Strand>, Vec<Strand>) =
+        pieces.into_iter().partition(|s| s.thin() || s.ribbon());
+    let bits: f64 = bits.iter().map(|s| s.area).sum();
+    if lines.is_empty() || bits.is_nan() || bits > BITS * total {
+        return None;
+    }
+    let ribbons = lines.iter().any(|s| !s.thin());
+    Some(Thin {
+        strands: std::sync::Arc::new(lines),
+        ribbons,
+    })
+}
+
+/// [`thin_of`] a geometry's triangles.
+pub fn thin_shape(triangles: &[[[f32; 3]; 3]]) -> Option<Thin> {
+    thin_of(strands(triangles))
 }
 
 /// Whether a sphere in the camera's view space (`centre`, `radius`) lies wholly inside the
@@ -697,6 +1088,12 @@ pub(crate) struct Draw {
     pub streams: [Option<(std::sync::Arc<crate::device::Buf>, u64, u64)>; 8],
     /// The index buffer and its upload count when drawn ([`crate::device::Buf::uploads`]).
     pub index: Option<(std::sync::Arc<crate::device::Buf>, u64)>,
+    /// The game's index buffer and its upload count when `index` is the device's own (a geometry
+    /// with its cables taken out, [`Body::solid`]): watched for writes as `index` is.
+    pub watch: Option<(std::sync::Arc<crate::device::Buf>, u64)>,
+    /// Cables taken out of it ([`Body::solid`]): its draw is the rest, drawn into the depth maps as
+    /// any caster while its cables are drawn into the coverage maps.
+    pub rest: bool,
     pub start: u32,
     pub count: u32,
     pub base_vertex: i32,
@@ -707,6 +1104,13 @@ pub(crate) struct Draw {
     pub header: u32,
     /// An alpha-tested caster's cut-out ([`Cutout`]): drawn through its own pixel shader.
     pub cutout: Option<Cutout>,
+    /// A cable's strands ([`thin_shape`]): drawn into the thin casters' coverage maps, not the
+    /// depth maps.
+    pub thin: Option<Thin>,
+    /// A ribbon cable's (a cut-out of [`Thin::ribbons`]) pipeline that adds its texture's alpha
+    /// into the coverage maps ([`Gpu::make_pipeline`] with a target), and its pixel block's header
+    /// (no alpha test, the textures read at their own level).
+    pub ribbon: Option<(u32, u32)>,
 }
 
 /// What an alpha-tested caster draws its cut-out with: its pixel shader's textures (bind group 1),
@@ -728,6 +1132,7 @@ impl Draw {
         };
         self.streams.iter().flatten().any(|(b, _, n)| gone(b, *n))
             || self.index.as_ref().is_some_and(|(b, n)| gone(b, *n))
+            || self.watch.as_ref().is_some_and(|(b, n)| gone(b, *n))
     }
 
     /// Its `ModelViewProj` as drawn.
@@ -746,6 +1151,8 @@ pub(crate) struct Caster {
     pub key: GeoKey,
     /// Its object-space bounding sphere.
     pub bounds: ([f64; 3], f64),
+    /// Its pieces ([`Body`]).
+    pub body: Body,
     pub draw: Draw,
     /// The depth surface it was drawn on.
     pub depth: u64,
@@ -1021,14 +1428,101 @@ pub fn sample0_offset(samples: u32) -> [f32; 2] {
 }
 
 /// The lookup's uniform block, in bytes ([`lookup_uniforms`]).
-pub const LOOKUP_SIZE: u64 = 7 * 16 + 4 * CASCADES as u64 * 16;
+pub const LOOKUP_SIZE: u64 = 8 * 16 + 4 * CASCADES as u64 * 16;
+
+/// The thin casters' coverage maps: texels a side (a layer a cascade, over the same square as the
+/// cascade's depth map, so a texel is `SIZE / THIN_SIZE` of its texels).
+pub const THIN_SIZE: u32 = 1024;
+/// Their format: coverage, coverage x depth (less the middle of the depth range, where half
+/// floats are finest), coverage x the width drawn (game units), unused; added up.
+pub const THIN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// The sun's width across the sky (radians: half a degree): a strand `d` units over a receiver
+/// casts a soft band about `SUN_WIDTH x d` wide.
+pub const SUN_WIDTH: f32 = 0.0093;
+/// A strand is drawn at least this many of its map's texels wide (so it covers a texel centre all
+/// along its length, whatever its slant: no broken line), with its coverage spread over that
+/// width.
+pub const THIN_DRAWN: f64 = 2.0;
+/// A receiver nearer than this (game units, along the sun's rays) to the strand over it takes none
+/// of its shadow (the cable itself, the pole top it hangs from), and twice as far takes it whole.
+pub const THIN_NEAR: f32 = 12.0;
+
+/// How the thin casters ([`Body::thin`]) are drawn: into their coverage maps (1, the default), or
+/// as `NV_SUN_SHADOWS_THIN=solid` asks (captures only, to compare): into the depth maps as any
+/// other caster (0); read once.
+pub fn thin_maps() -> bool {
+    static THIN: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *THIN.get_or_init(|| std::env::var("NV_SUN_SHADOWS_THIN").map_or(true, |v| v.trim() != "solid"))
+}
+
+/// The quads that draw a placed cable's strands into map `c`'s coverage layer (six corners a
+/// segment: clip x, y; depth less the middle; coverage; the band the coverage is spread over):
+/// each segment `max(width, THIN_DRAWN texels)` wide with its coverage `width / drawn`, so a strand
+/// thinner than a texel covers its real share and never draws a broken line. A `ribbon` geometry's
+/// (a cut-out: its cable is in its texture's alpha, which its own pipeline adds) quads carry its
+/// depth alone, over the ribbon's width, its coverage spread over [`THIN_DRAWN`] texels.
+pub fn thin_quads(
+    c: &Cascade,
+    w: &World,
+    strands: &[Strand],
+    ribbon: bool,
+    out: &mut Vec<[f32; 5]>,
+) {
+    let m = c.world_to_light(w);
+    let scale = stretch(w);
+    let texel = c.half * 2.0 / f64::from(THIN_SIZE);
+    for s in strands {
+        let width = s.width * scale;
+        let drawn = width.max(THIN_DRAWN * texel);
+        let (cover, band) = if ribbon {
+            (0.0, THIN_DRAWN * texel)
+        } else {
+            ((width / drawn) as f32, drawn)
+        };
+        let at = |p: [f32; 3]| -> [f64; 3] {
+            std::array::from_fn(|r| {
+                f64::from(m[r][0]) * f64::from(p[0])
+                    + f64::from(m[r][1]) * f64::from(p[1])
+                    + f64::from(m[r][2]) * f64::from(p[2])
+                    + f64::from(m[r][3])
+            })
+        };
+        // Half the width drawn, in clip units (the map's square is 2 across).
+        let half = drawn / c.half / 2.0;
+        for seg in s.line.windows(2) {
+            let (a, b) = (at(seg[0]), at(seg[1]));
+            let d = [b[0] - a[0], b[1] - a[1]];
+            let len = (d[0] * d[0] + d[1] * d[1]).sqrt();
+            // A segment along the rays (seen end on) covers a spot: drawn square.
+            let (px, py) = if len > 1e-9 {
+                (-d[1] / len * half, d[0] / len * half)
+            } else {
+                (half, 0.0)
+            };
+            let (ex, ey) = if len > 1e-9 { (0.0, 0.0) } else { (0.0, half) };
+            let corner = |p: [f64; 3], s: f64, e: f64| {
+                [
+                    (p[0] + px * s + ex * e) as f32,
+                    (p[1] + py * s + ey * e) as f32,
+                    (p[2] - 0.5) as f32,
+                    cover,
+                    band as f32,
+                ]
+            };
+            let (a0, a1) = (corner(a, -1.0, -1.0), corner(a, 1.0, -1.0));
+            let (b0, b1) = (corner(b, -1.0, 1.0), corner(b, 1.0, 1.0));
+            out.extend([a0, a1, b0, a1, b1, b0]);
+        }
+    }
+}
 
 /// The lookup's uniform block (`SL` in [`LOOKUP_FNS`]), the same for the lighting's variants and
 /// the debug step: frustum (left, right, bottom, top), depth (near, far, width, height of the
 /// scene), sun (toward it in view space; w 1 when there is a sun this frame), splits (each
 /// cascade's far view depth), texels (each cascade's texel in game units), extra (sample 0's place
 /// in the pixel ([`sample0_offset`]), where the fade to lit starts, the blend band as a part of a
-/// cascade's depth), misc (the debug step's darkness), then each cascade's matrix from this
+/// cascade's depth), misc (the debug step's darkness), thin (each cascade's coverage-map texel in
+/// game units, 0 when no thin caster is in it: `thin`), then each cascade's matrix from this
 /// frame's view space to the map it was drawn as (`drawn`: a map kept from an earlier frame keeps
 /// its own place), row by row.
 #[allow(clippy::too_many_arguments)]
@@ -1037,6 +1531,7 @@ pub fn lookup_uniforms(
     strength: f32,
     cascades: &[Cascade; CASCADES],
     drawn: &[Cascade; CASCADES],
+    thin: [bool; CASCADES],
     axes: [[f64; 3]; 3],
     position: [f64; 3],
     samples: u32,
@@ -1069,6 +1564,13 @@ pub fn lookup_uniforms(
         0.0,
         0.0,
     ]);
+    f.extend((0..CASCADES).map(|k| {
+        if thin[k] {
+            (drawn[k].half * 2.0 / f64::from(THIN_SIZE)) as f32
+        } else {
+            0.0
+        }
+    }));
     for c in drawn {
         for row in &c.view_to_light_for(axes, position) {
             f.extend(row.iter().map(|&v| v as f32));
@@ -1091,6 +1593,7 @@ struct SunLookup {
     texel: vec4<f32>,
     extra: vec4<f32>,
     misc: vec4<f32>,
+    thin: vec4<f32>,
     m: array<vec4<f32>, 16>,
 };
 
@@ -1139,6 +1642,32 @@ fn sl_filter(k: i32, p: vec3<f32>, bias: f32) -> f32 {
     return sum / 16.0;
 }
 
+// How much of the sun the thin casters (cables) over map `k`'s point `l` take away: their
+// coverage in a tent of three of its texels, their depth and the width drawn from the sums. A
+// strand `d` units over the receiver casts a band `SUN_WIDTH d` wide (the sun's own width): where
+// that is wider than the band the map shows, the coverage is spread over it (a high cable's shadow
+// is fainter); none on the strand itself.
+fn sl_thin(k: i32, l: vec3<f32>) -> f32 {
+    let texel = SL.thin[k];
+    let uv = vec2<f32>(l.x * 0.5 + 0.5, 0.5 - l.y * 0.5);
+    if (texel <= 0.0 || any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || l.z >= 1.0) {
+        return 0.0;
+    }
+    let t = 0.5 / vec2<f32>(textureDimensions(sl_thin_maps));
+    var s = textureSampleLevel(sl_thin_maps, sl_lin, uv + vec2<f32>(-t.x, -t.y), k, 0.0);
+    s += textureSampleLevel(sl_thin_maps, sl_lin, uv + vec2<f32>(t.x, -t.y), k, 0.0);
+    s += textureSampleLevel(sl_thin_maps, sl_lin, uv + vec2<f32>(-t.x, t.y), k, 0.0);
+    s += textureSampleLevel(sl_thin_maps, sl_lin, uv + vec2<f32>(t.x, t.y), k, 0.0);
+    s = s * 0.25;
+    if (s.x < 1e-3 || s.w < 1e-3) {
+        return 0.0;
+    }
+    let d = (l.z - 0.5 - s.y / s.x) * 2.0 * DEPTH_RANGE;
+    let band = s.z / s.x + 0.5 * texel;
+    let near = saturate((d - THIN_NEAR) / THIN_NEAR);
+    return min(s.w, 1.0) * min(1.0, band / max(d * SUN_WIDTH, 1e-3)) * near;
+}
+
 fn sl_in(k: i32, p: vec3<f32>, n: vec3<f32>) -> f32 {
     let texel = SL.texel[k];
     // The receiver moved along its face's normal by a part of a texel that grows as the face
@@ -1148,7 +1677,8 @@ fn sl_in(k: i32, p: vec3<f32>, n: vec3<f32>) -> f32 {
     let offset = NORMAL_OFFSET * texel * s;
     let slope = min(s / max(c, 0.05), SLOPE_MAX);
     let bias = (DEPTH_BIAS + slope) * texel / (2.0 * DEPTH_RANGE);
-    return sl_filter(k, p + n * offset, bias);
+    let q = p + n * offset;
+    return sl_filter(k, q, bias) * (1.0 - sl_thin(k, sl_to_map(k, q)));
 }
 
 fn sl_visibility(p: vec3<f32>, n: vec3<f32>) -> f32 {
@@ -1190,6 +1720,8 @@ pub const LOOKUP: &str = "
 @group(3) @binding(0) var<uniform> SL: SunLookup;
 @group(3) @binding(1) var sl_maps: texture_depth_2d_array;
 @group(3) @binding(2) var sl_cmp: sampler_comparison;
+@group(3) @binding(3) var sl_thin_maps: texture_2d_array<f32>;
+@group(3) @binding(4) var sl_lin: sampler;
 var<private> sun_lit: f32 = 1.0;
 
 fn sun_visibility(frag: vec4<f32>) -> f32 {
@@ -1216,6 +1748,8 @@ pub const LOOKUP_VERTEX: &str = "
 @group(3) @binding(0) var<uniform> SL: SunLookup;
 @group(3) @binding(1) var sl_maps: texture_depth_2d_array;
 @group(3) @binding(2) var sl_cmp: sampler_comparison;
+@group(3) @binding(3) var sl_thin_maps: texture_2d_array<f32>;
+@group(3) @binding(4) var sl_lin: sampler;
 var<private> sun_lit: f32 = 1.0;
 
 fn sun_visibility_clip(o: vec4<f32>) -> f32 {
@@ -1231,18 +1765,20 @@ fn sun_visibility_clip(o: vec4<f32>) -> f32 {
 
 /// The vertex-lit variants' WGSL addition: the constants, [`LOOKUP_VERTEX`] and [`LOOKUP_FNS`].
 pub fn lookup_wgsl_vertex() -> String {
-    format!(
-        "const NORMAL_OFFSET: f32 = {NORMAL_OFFSET:?};\nconst DEPTH_BIAS: f32 = {DEPTH_BIAS:?};\n\
-         const SLOPE_MAX: f32 = {SLOPE_MAX:?};\nconst DEPTH_RANGE: f32 = {:?};\n{LOOKUP_VERTEX}{LOOKUP_FNS}",
-        DEPTH_RANGE as f32
-    )
+    format!("{}{LOOKUP_VERTEX}{LOOKUP_FNS}", lookup_consts())
 }
 
 /// The lighting variants' WGSL addition: the constants, [`LOOKUP`] and [`LOOKUP_FNS`].
 pub fn lookup_wgsl() -> String {
+    format!("{}{LOOKUP}{LOOKUP_FNS}", lookup_consts())
+}
+
+/// The constants [`LOOKUP_FNS`] reads.
+fn lookup_consts() -> String {
     format!(
         "const NORMAL_OFFSET: f32 = {NORMAL_OFFSET:?};\nconst DEPTH_BIAS: f32 = {DEPTH_BIAS:?};\n\
-         const SLOPE_MAX: f32 = {SLOPE_MAX:?};\nconst DEPTH_RANGE: f32 = {:?};\n{LOOKUP}{LOOKUP_FNS}",
+         const SLOPE_MAX: f32 = {SLOPE_MAX:?};\nconst DEPTH_RANGE: f32 = {:?};\n\
+         const SUN_WIDTH: f32 = {SUN_WIDTH:?};\nconst THIN_NEAR: f32 = {THIN_NEAR:?};\n",
         DEPTH_RANGE as f32
     )
 }
@@ -1252,6 +1788,8 @@ const STEP: &str = "
 @group(0) @binding(1) var depth_tex: DEPTH_TYPE;
 @group(0) @binding(2) var sl_maps: texture_depth_2d_array;
 @group(0) @binding(3) var sl_cmp: sampler_comparison;
+@group(0) @binding(4) var sl_thin_maps: texture_2d_array<f32>;
+@group(0) @binding(5) var sl_lin: sampler;
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
@@ -1340,10 +1878,8 @@ pub fn step_shader_with(multisampled_depth: bool, view: u32) -> String {
         "texture_depth_2d"
     };
     format!(
-        "const NORMAL_OFFSET: f32 = {NORMAL_OFFSET:?};\nconst DEPTH_BIAS: f32 = {DEPTH_BIAS:?};\n\
-         const SLOPE_MAX: f32 = {SLOPE_MAX:?};\nconst DEPTH_RANGE: f32 = {:?};\n\
-         const VIEW: u32 = {view}u;\n{}{LOOKUP_FNS}",
-        DEPTH_RANGE as f32,
+        "{}const VIEW: u32 = {view}u;\n{}{LOOKUP_FNS}",
+        lookup_consts(),
         STEP.replace("DEPTH_TYPE", depth_type)
     )
 }
@@ -1426,6 +1962,17 @@ pub(crate) struct Gpu {
     pub drawn: [Option<Cascade>; CASCADES],
     /// Whether each map the lookups read holds moving casters drawn over its still map's copy.
     live_moving: [bool; CASCADES],
+    /// The thin casters' coverage maps ([`THIN_SIZE`], [`THIN_FORMAT`]): a layer each cascade,
+    /// as one array; whether each layer holds any (the lookups skip an empty one) and whether a
+    /// moving one (drawn again each frame while one does); the pipeline that draws their quads
+    /// ([`thin_quads`]), the sampler the lookups filter them with, and the quads' buffer.
+    thin_views: Vec<wgpu::TextureView>,
+    thin_array: wgpu::TextureView,
+    pub thin_in: [bool; CASCADES],
+    thin_moving: [bool; CASCADES],
+    thin_pipe: Option<wgpu::RenderPipeline>,
+    linear: wgpu::Sampler,
+    thin_quads: Option<wgpu::Buffer>,
     compare: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     #[allow(clippy::type_complexity)]
@@ -1480,11 +2027,56 @@ pub(crate) fn light_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
         count: None,
     });
+    entries.extend(thin_entries(3, wgpu::ShaderStages::VERTEX_FRAGMENT));
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sun shadow lookup"),
         entries: &entries,
     })
 }
+
+/// The thin casters' coverage maps' layout entries at `first` and `first + 1`: the array and its
+/// filtering sampler.
+fn thin_entries(first: u32, visibility: wgpu::ShaderStages) -> [wgpu::BindGroupLayoutEntry; 2] {
+    [
+        wgpu::BindGroupLayoutEntry {
+            binding: first,
+            visibility,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2Array,
+                multisampled: false,
+            },
+            count: None,
+        },
+        wgpu::BindGroupLayoutEntry {
+            binding: first + 1,
+            visibility,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+            count: None,
+        },
+    ]
+}
+
+/// The quads' WGSL ([`thin_quads`]): placed as given; one, their depth and their band added into the
+/// layer's red, green and blue (the band and depth where the cables are), their coverage into its
+/// alpha (with a ribbon's, [`Gpu::make_pipeline`]'s coverage pipeline).
+const THIN_DRAW: &str = "
+struct Q {
+    @builtin(position) at: vec4<f32>,
+    @location(0) v: vec3<f32>,
+};
+
+@vertex fn vs(@location(0) p: vec2<f32>, @location(1) c: vec3<f32>) -> Q {
+    var q: Q;
+    q.at = vec4<f32>(p, 0.5, 1.0);
+    q.v = c;
+    return q;
+}
+
+@fragment fn fs(q: Q) -> @location(0) vec4<f32> {
+    return vec4<f32>(1.0, q.v.x, q.v.z, q.v.y);
+}
+";
 
 /// A map's casters: each one's draw, place, and register offsets (vertex, pixel).
 type MapList<'a> = Vec<(&'a Draw, World, [u32; 2])>;
@@ -1544,6 +2136,33 @@ impl Gpu {
             compare: Some(wgpu::CompareFunction::LessEqual),
             ..Default::default()
         });
+        let thin = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sun shadow thin casters"),
+            size: wgpu::Extent3d {
+                width: THIN_SIZE,
+                height: THIN_SIZE,
+                depth_or_array_layers: CASCADES as u32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: THIN_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let thin_views = layers(&thin);
+        let thin_array = thin.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let linear = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("sun shadow thin casters"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let light_layout = light_layout(device);
         let light_ring = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow lookup"),
@@ -1569,6 +2188,14 @@ impl Gpu {
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(&compare),
             },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&thin_array),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(&linear),
+            },
         ];
         let light_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("sun shadow lookup"),
@@ -1583,6 +2210,13 @@ impl Gpu {
             array,
             drawn: [None; CASCADES],
             live_moving: [false; CASCADES],
+            thin_views,
+            thin_array,
+            thin_in: [false; CASCADES],
+            thin_moving: [false; CASCADES],
+            thin_pipe: None,
+            linear,
+            thin_quads: None,
             compare,
             light_layout,
             light_ring,
@@ -1602,7 +2236,9 @@ impl Gpu {
     /// A depth-only pipeline drawing with the vertex module `module` (a converted game vertex
     /// shader) from vertex buffers `buffers` (stride and attributes by slot), culling `cull` (the
     /// draw's own: a two-sided material none), in `layout`; with the pixel module `cutout` (an
-    /// alpha-tested caster's own, which discards what its alpha test would) or none.
+    /// alpha-tested caster's own, which discards what its alpha test would) or none. With `coverage`
+    /// (a ribbon cable's, its pixel module in `cutout`): no depth, its pixel shader's alpha added
+    /// into the coverage maps' alpha ([`THIN_FORMAT`]).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn make_pipeline(
         device: &wgpu::Device,
@@ -1614,7 +2250,27 @@ impl Gpu {
         topology: wgpu::PrimitiveTopology,
         index32: bool,
         cull: Option<wgpu::Face>,
+        coverage: bool,
     ) -> Result<wgpu::RenderPipeline, String> {
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        // Coverage: the most of what is drawn over a texel (a strand's quads overlap where it
+        // bends; a ribbon's triangles at its seams), not their sum.
+        let most = wgpu::BlendComponent {
+            operation: wgpu::BlendOperation::Max,
+            ..add
+        };
+        let alpha = [Some(wgpu::ColorTargetState {
+            format: THIN_FORMAT,
+            blend: Some(wgpu::BlendState {
+                color: add,
+                alpha: most,
+            }),
+            write_mask: wgpu::ColorWrites::ALPHA,
+        })];
         let buffers: Vec<Option<wgpu::VertexBufferLayout>> = buffers
             .iter()
             .map(|b| {
@@ -1650,13 +2306,14 @@ impl Gpu {
                 cull_mode: cull,
                 // Casters between the sun and the map's near plane are clamped to it, not cut away
                 // (where the adapter can).
-                unclipped_depth: device
-                    .features()
-                    .contains(wgpu::Features::DEPTH_CLIP_CONTROL),
+                unclipped_depth: !coverage
+                    && device
+                        .features()
+                        .contains(wgpu::Features::DEPTH_CLIP_CONTROL),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 conservative: false,
             },
-            depth_stencil: Some(wgpu::DepthStencilState {
+            depth_stencil: (!coverage).then(|| wgpu::DepthStencilState {
                 format: MAP_FORMAT,
                 depth_write_enabled: Some(true),
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
@@ -1672,7 +2329,7 @@ impl Gpu {
                 module: m,
                 entry_point: Some("main"),
                 compilation_options: Default::default(),
-                targets: &[],
+                targets: if coverage { &alpha } else { &[] },
             }),
             multiview_mask: None,
             cache,
@@ -1691,7 +2348,7 @@ impl Gpu {
     /// Each caster through its own pipeline with its `ModelViewProj` replaced by the map's view of
     /// its place; alpha-tested ones (cut-outs) only in the first [`CUTOUT_CASCADES`]. `headers`:
     /// the register blocks' headers. Returns the register ring's bytes, to be written before the
-    /// encoder runs (none when nothing is drawn), and how many caster draws were recorded.
+    /// encoder runs (with the thin casters' quads, [`thin_quads`]), and how many caster draws were recorded.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn draw_maps(
         &mut self,
@@ -1702,16 +2359,44 @@ impl Gpu {
         headers: &[Vec<u8>],
         cascades: &[Cascade; CASCADES],
         redraw: [bool; CASCADES],
-    ) -> (Option<(wgpu::Buffer, Vec<u8>)>, u32) {
-        // Each cascade's still and moving casters touching it.
-        let mut lists: Vec<[MapList<'_>; 2]> =
-            (0..CASCADES).map(|_| [Vec::new(), Vec::new()]).collect();
-        let mut any = false;
+    ) -> (Vec<(wgpu::Buffer, Vec<u8>)>, u32) {
+        // Each cascade's still and moving casters touching it, and its ribbon cables.
+        let mut lists: Vec<[MapList<'_>; 3]> = (0..CASCADES)
+            .map(|_| [Vec::new(), Vec::new(), Vec::new()])
+            .collect();
+        let thin_maps = thin_maps();
         let kept: Vec<(&Instance<Draw>, usize)> =
             cache.iter().map(|i| (i, usize::from(i.moving))).collect();
+        // The cables of each cascade, and whether one moves: a cascade's coverage layer is drawn
+        // again with its still map, and each frame while a cable in it moves (or moved the frame
+        // before).
+        let mut thin: Vec<Vec<&Instance<Draw>>> = (0..CASCADES).map(|_| Vec::new()).collect();
+        let mut thin_moving = [false; CASCADES];
+        for (k, c) in cascades.iter().enumerate() {
+            for &(i, m) in &kept {
+                if i.payload.thin.is_some() && thin_maps && c.touches(i.centre, i.radius) {
+                    thin[k].push(i);
+                    thin_moving[k] |= m == 1;
+                }
+            }
+        }
+        let thin_redraw: [bool; CASCADES] =
+            std::array::from_fn(|k| redraw[k] || thin_moving[k] || self.thin_moving[k]);
+        self.thin_moving = thin_moving;
         for (k, c) in cascades.iter().enumerate() {
             for &(i, m) in &kept {
                 let d = &i.payload;
+                if d.thin.is_some() && thin_maps && !d.rest {
+                    // A ribbon's alpha, in the cascades cut-outs are drawn into.
+                    if let (true, true, Some((p, _))) =
+                        (thin_redraw[k], k < CUTOUT_CASCADES, d.ribbon)
+                    {
+                        if c.touches(i.centre, i.radius) && self.pipelines[p as usize].is_some() {
+                            lists[k][2].push((d, i.world, [0, 0]));
+                        }
+                    }
+                    continue;
+                }
                 if (m == 0 && !redraw[k])
                     || (d.cutout.is_some() && k >= CUTOUT_CASCADES)
                     || !c.touches(i.centre, i.radius)
@@ -1720,15 +2405,36 @@ impl Gpu {
                     continue;
                 }
                 lists[k][m].push((d, i.world, [0, 0]));
-                any = true;
             }
         }
         let live: [bool; CASCADES] = std::array::from_fn(|k| {
             redraw[k] || !lists[k][1].is_empty() || self.live_moving[k] || self.drawn[k].is_none()
         });
         self.live_moving = std::array::from_fn(|k| !lists[k][1].is_empty());
-        if !any && !live.iter().any(|&l| l) {
-            return (None, 0);
+        // The cables' quads (their depth, width and a round cable's coverage).
+        let mut writes = Vec::new();
+        let mut quads: Vec<[f32; 5]> = Vec::new();
+        let mut thin_ranges: [std::ops::Range<u32>; CASCADES] = std::array::from_fn(|_| 0..0);
+        for k in 0..CASCADES {
+            if thin_redraw[k] {
+                let from = quads.len();
+                for i in &thin[k] {
+                    let t = i.payload.thin.as_ref().expect("listed as thin");
+                    thin_quads(
+                        &cascades[k],
+                        &i.world,
+                        &t.strands,
+                        t.ribbons,
+                        &mut quads,
+                    );
+                }
+                thin_ranges[k] = from as u32..quads.len() as u32;
+                self.thin_in[k] = !thin_ranges[k].is_empty();
+            }
+        }
+        let any_lists = lists.iter().flatten().any(|l| !l.is_empty());
+        if quads.is_empty() && !any_lists && !live.iter().any(|&l| l) {
+            return (writes, 0);
         }
         // The ring: every header once, then each caster's float constants for each map it is
         // drawn into (its matrix in place), and a cut-out's pixel constants.
@@ -1740,8 +2446,8 @@ impl Gpu {
             bytes.extend_from_slice(h);
             bytes.resize(bytes.len().div_ceil(ALIGN) * ALIGN, 0);
         }
-        for (c, both) in cascades.iter().zip(lists.iter_mut()) {
-            for list in both.iter_mut() {
+        for (c, all) in cascades.iter().zip(lists.iter_mut()) {
+            for (n, list) in all.iter_mut().enumerate() {
                 for (d, world, at) in list.iter_mut() {
                     let vs = bytes.len();
                     bytes.extend_from_slice(&d.consts);
@@ -1762,7 +2468,11 @@ impl Gpu {
                     *at = [vs as u32, ps as u32];
                 }
                 // Fewer pipeline changes.
-                list.sort_by_key(|(d, _, _)| d.pipe);
+                if n == 2 {
+                    list.sort_by_key(|(d, _, _)| d.ribbon.map_or(0, |r| r.0));
+                } else {
+                    list.sort_by_key(|(d, _, _)| d.pipe);
+                }
             }
         }
         // The floats' binding reads a whole register file past its offset.
@@ -1796,48 +2506,56 @@ impl Gpu {
         let (buffer, group, _) = self.ring.as_ref().expect("made above");
         let mut drawn = 0;
         let pipelines = &self.pipelines;
-        let mut encode = |pass: &mut wgpu::RenderPass<'_>, list: &[(&Draw, World, [u32; 2])]| {
-            let mut last_pipe = u32::MAX;
-            for &(d, _, [vs, ps]) in list {
-                if d.pipe != last_pipe {
-                    let p = pipelines[d.pipe as usize]
-                        .as_ref()
-                        .expect("listed with one");
-                    pass.set_pipeline(p);
-                    last_pipe = d.pipe;
-                }
-                let h = header_at[d.header as usize];
-                let ph = d
-                    .cutout
-                    .as_ref()
-                    .map_or(h, |c| header_at[c.header as usize]);
-                pass.set_bind_group(0, group, &[h, ph, vs, ps]);
-                if let Some(cut) = &d.cutout {
-                    pass.set_bind_group(1, &cut.textures, &[]);
-                    pass.set_bind_group(2, &cut.empty, &[]);
-                }
-                for (slot, s) in d.streams.iter().enumerate() {
-                    if let Some((b, offset, _)) = s {
-                        pass.set_vertex_buffer(slot as u32, b.buffer.slice(*offset..));
+        // A list's draws: through each one's depth pipeline, or a ribbon's coverage pipeline
+        // (`ribbons`) with its own pixel block header.
+        let mut encode =
+            |pass: &mut wgpu::RenderPass<'_>, list: &[(&Draw, World, [u32; 2])], ribbons: bool| {
+                let mut last_pipe = u32::MAX;
+                for &(d, _, [vs, ps]) in list {
+                    let (pipe, ribbon_header) = match (ribbons, d.ribbon) {
+                        (true, Some((p, h))) => (p, Some(h)),
+                        _ => (d.pipe, None),
+                    };
+                    if pipe != last_pipe {
+                        let p = pipelines[pipe as usize].as_ref().expect("listed with one");
+                        pass.set_pipeline(p);
+                        last_pipe = pipe;
                     }
-                }
-                match &d.index {
-                    Some((b, _)) => {
-                        pass.set_index_buffer(
-                            b.buffer.slice(..),
-                            if b.index32 {
-                                wgpu::IndexFormat::Uint32
-                            } else {
-                                wgpu::IndexFormat::Uint16
-                            },
-                        );
-                        pass.draw_indexed(d.start..d.start + d.count, d.base_vertex, 0..1);
+                    let h = header_at[d.header as usize];
+                    let ph = match ribbon_header {
+                        Some(r) => header_at[r as usize],
+                        None => d
+                            .cutout
+                            .as_ref()
+                            .map_or(h, |c| header_at[c.header as usize]),
+                    };
+                    pass.set_bind_group(0, group, &[h, ph, vs, ps]);
+                    if let Some(cut) = &d.cutout {
+                        pass.set_bind_group(1, &cut.textures, &[]);
+                        pass.set_bind_group(2, &cut.empty, &[]);
                     }
-                    None => pass.draw(d.start..d.start + d.count, 0..1),
+                    for (slot, s) in d.streams.iter().enumerate() {
+                        if let Some((b, offset, _)) = s {
+                            pass.set_vertex_buffer(slot as u32, b.buffer.slice(*offset..));
+                        }
+                    }
+                    match &d.index {
+                        Some((b, _)) => {
+                            pass.set_index_buffer(
+                                b.buffer.slice(..),
+                                if b.index32 {
+                                    wgpu::IndexFormat::Uint32
+                                } else {
+                                    wgpu::IndexFormat::Uint16
+                                },
+                            );
+                            pass.draw_indexed(d.start..d.start + d.count, d.base_vertex, 0..1);
+                        }
+                        None => pass.draw(d.start..d.start + d.count, 0..1),
+                    }
+                    drawn += 1;
                 }
-                drawn += 1;
-            }
-        };
+            };
         let depth_pass = |encoder: &mut wgpu::CommandEncoder,
                           view: &wgpu::TextureView,
                           clear: bool|
@@ -1867,7 +2585,7 @@ impl Gpu {
         for k in 0..CASCADES {
             if redraw[k] {
                 let mut pass = depth_pass(encoder, &self.static_views[k], true);
-                encode(&mut pass, &lists[k][0]);
+                encode(&mut pass, &lists[k][0], false);
                 drop(pass);
                 self.drawn[k] = Some(cascades[k]);
             }
@@ -1893,11 +2611,114 @@ impl Gpu {
                 );
                 if !lists[k][1].is_empty() {
                     let mut pass = depth_pass(encoder, &self.maps[k], false);
-                    encode(&mut pass, &lists[k][1]);
+                    encode(&mut pass, &lists[k][1], false);
                 }
             }
         }
-        (Some((buffer.clone(), bytes)), drawn)
+        // The coverage layers: the cables' quads, then the ribbons' alpha added over them.
+        if !quads.is_empty() {
+            let need = (quads.len() * 20) as u64;
+            if !matches!(&self.thin_quads, Some(b) if b.size() >= need) {
+                self.thin_quads = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("sun shadow thin casters"),
+                    size: need.next_power_of_two().max(1 << 16),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+            }
+            let pipe = self
+                .thin_pipe
+                .get_or_insert_with(|| Self::make_thin_pipeline(device));
+            let quad_buffer = self.thin_quads.as_ref().expect("made above");
+            for (k, (view, range)) in self.thin_views.iter().zip(&thin_ranges).enumerate() {
+                if range.is_empty() {
+                    continue;
+                }
+                let mut pass = encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("sun shadow thin casters"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    })
+                    .forget_lifetime();
+                pass.set_pipeline(pipe);
+                pass.set_vertex_buffer(0, quad_buffer.slice(..));
+                pass.draw(range.clone(), 0..1);
+                encode(&mut pass, &lists[k][2], true);
+            }
+            writes.push((
+                quad_buffer.clone(),
+                quads
+                    .iter()
+                    .flatten()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect(),
+            ));
+        }
+        writes.push((buffer.clone(), bytes));
+        (writes, drawn)
+    }
+
+    /// The pipeline that draws the thin casters' quads into a coverage layer, added up.
+    fn make_thin_pipeline(device: &wgpu::Device) -> wgpu::RenderPipeline {
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sun shadow thin casters"),
+            source: wgpu::ShaderSource::Wgsl(THIN_DRAW.into()),
+        });
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        // Coverage: the most of what is drawn over a texel (a strand's quads overlap where it
+        // bends; a ribbon's triangles at its seams), not their sum.
+        let most = wgpu::BlendComponent {
+            operation: wgpu::BlendOperation::Max,
+            ..add
+        };
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("sun shadow thin casters"),
+            layout: None,
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: 20,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x3],
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: THIN_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: add,
+                        alpha: most,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        })
     }
 
     /// The step's uniform buffer.
@@ -1953,6 +2774,7 @@ impl Gpu {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             });
+            entries.extend(thin_entries(4, wgpu::ShaderStages::FRAGMENT));
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("sun shadow step"),
                 entries: &entries,
@@ -2029,6 +2851,14 @@ impl Gpu {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.compare),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(&self.thin_array),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&self.linear),
                 },
             ],
         });
@@ -2603,21 +3433,184 @@ mod tests {
             .collect()
     }
 
+    /// `t` moved by `d`.
+    fn moved(t: Vec<[[f32; 3]; 3]>, d: [f32; 3]) -> Vec<[[f32; 3]; 3]> {
+        t.into_iter()
+            .map(|tri| tri.map(|p| [p[0] + d[0], p[1] + d[1], p[2] + d[2]]))
+            .collect()
+    }
+
     #[test]
-    fn a_cable_casts_nothing_and_a_pole_a_sign_and_a_bolt_do() {
-        // A cable: 1.5 units round, 800 long.
-        assert!(line_like(tube(1.5, 800.0, 8).into_iter()));
+    fn cables_are_thin_and_a_pole_a_sign_and_a_bolt_are_not() {
+        // A cable: 1.5 units round, 800 long: one strand as wide as the cable, along it.
+        let s = thin_shape(&tube(1.5, 800.0, 8)).expect("a cable").strands;
+        assert_eq!(s.len(), 1);
+        assert!((s[0].width - 3.0).abs() < 0.01, "{}", s[0].width);
+        assert!((s[0].length - 800.0).abs() < 1.0);
+        let (a, b) = (s[0].line[0], s[0].line[s[0].line.len() - 1]);
+        assert!(a[0].min(b[0]).abs() < 0.01 && (a[0].max(b[0]) - 800.0).abs() < 0.01);
+        assert!(s[0]
+            .line
+            .iter()
+            .all(|p| p[1].abs() < 0.01 && p[2].abs() < 0.01));
+        // What the old rule (area over length under 12) missed: a cable 6 wide, and three cables
+        // side by side in one geometry (Goodsprings' telegraph line).
+        assert!(thin_shape(&tube(3.0, 1200.0, 6)).is_some());
+        let mut three = tube(2.0, 1200.0, 6);
+        three.extend(moved(tube(2.0, 1200.0, 6), [0.0, 40.0, 0.0]));
+        three.extend(moved(tube(2.0, 1200.0, 6), [0.0, 80.0, 0.0]));
+        assert_eq!(thin_shape(&three).expect("three cables").strands.len(), 3);
+        // A degenerate triangle (a strip joining its runs) joins nothing.
+        let mut joined = tube(2.0, 1200.0, 6);
+        let (p, q) = (joined[0][0], [0.0, 40.0 + 2.0, 0.0]);
+        joined.push([p, p, q]);
+        joined.extend(moved(tube(2.0, 1200.0, 6), [0.0, 40.0, 0.0]));
+        assert_eq!(strands(&joined).len(), 2);
         // A telegraph pole: 15 round, 700 long.
-        assert!(!line_like(tube(15.0, 700.0, 8).into_iter()));
+        assert!(thin_shape(&tube(15.0, 700.0, 8)).is_none());
+        // A pole with its wire in one geometry: drawn as a whole, as before.
+        let mut pole = tube(15.0, 700.0, 8);
+        pole.extend(moved(tube(1.5, 800.0, 8), [0.0, 0.0, 300.0]));
+        assert_eq!(strands(&pole).len(), 2);
+        assert!(thin_shape(&pole).is_none());
+        // ... but its wire is taken out of it (as Goodsprings' telegraph line, poles and wires one
+        // geometry): cast as a cable, the pole's triangles (the first 16) drawn on their own.
+        let body = Body::of(&pole).unwrap();
+        let t = body.thin.expect("its wire");
+        assert!(!t.ribbons && t.strands.len() == 1 && t.strands[0].width < 4.0);
+        assert_eq!(*body.solid.unwrap(), (0..16).collect::<Vec<u32>>());
         // A sign or a fence: a flat strip 100 wide, 800 long (two triangles).
         let quad = [
             [[0.0, 0.0, 0.0], [800.0, 0.0, 0.0], [0.0, 100.0, 0.0]],
             [[800.0, 0.0, 0.0], [800.0, 100.0, 0.0], [0.0, 100.0, 0.0]],
         ];
-        assert!(!line_like(quad.into_iter()));
+        assert!(thin_shape(&quad).is_none());
         // A bolt: thin but short.
-        assert!(!line_like(tube(1.0, 10.0, 8).into_iter()));
-        assert!(!line_like(std::iter::empty()));
+        assert!(thin_shape(&tube(1.0, 10.0, 8)).is_none());
+        assert!(thin_shape(&[]).is_none());
+        assert!(Body::of(&[]).is_none());
+        assert!(Body::of(&tube(1.5, 800.0, 8)).unwrap().thin.is_some());
+        assert!(Body::of(&tube(15.0, 700.0, 8)).unwrap().thin.is_none());
+    }
+
+    #[test]
+    fn a_sagging_cables_line_follows_its_sag() {
+        // A cable 1200 long hanging 60 units in its middle (a parabola), in 24 rings.
+        let ring = |i: usize, s: usize| {
+            let x = i as f32 * 50.0;
+            let sag = 60.0 * (1.0 - ((x - 600.0) / 600.0).powi(2));
+            let a = s as f32 * std::f32::consts::TAU / 6.0;
+            [x, 2.0 * a.cos(), 2.0 * a.sin() - sag]
+        };
+        let mut t = Vec::new();
+        for i in 0..24 {
+            for s in 0..6 {
+                let (a0, a1, b0, b1) = (
+                    ring(i, s),
+                    ring(i, s + 1),
+                    ring(i + 1, s),
+                    ring(i + 1, s + 1),
+                );
+                t.push([a0, b0, a1]);
+                t.push([a1, b0, b1]);
+            }
+        }
+        let s = thin_shape(&t).expect("a cable").strands;
+        let middle = s[0]
+            .line
+            .iter()
+            .min_by(|a, b| (a[0] - 600.0).abs().total_cmp(&(b[0] - 600.0).abs()))
+            .unwrap();
+        assert!((middle[2] + 60.0).abs() < 3.0, "{middle:?}");
+        assert!((s[0].width - 4.0).abs() < 0.3, "{}", s[0].width);
+    }
+
+    #[test]
+    fn a_cable_is_drawn_two_texels_wide_with_its_real_share() {
+        let f = Frame::from_game(&game()).unwrap();
+        let c = cascades_of(&f, basis([0.0, 0.0, 1.0]))[2];
+        let texel = c.half * 2.0 / f64::from(THIN_SIZE);
+        let w: World = [
+            [1.0, 0.0, 0.0, f64::from(f.position[0])],
+            [0.0, 1.0, 0.0, f64::from(f.position[1])],
+            [0.0, 0.0, 1.0, f64::from(f.position[2])],
+        ];
+        let strand = |width: f64| Strand {
+            line: vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [200.0, 0.0, 0.0]],
+            width,
+            length: 200.0,
+            area: 0.0,
+            piece: 0,
+        };
+        let mut q = Vec::new();
+        thin_quads(&c, &w, &[strand(texel / 4.0)], false, &mut q);
+        // Two segments, six corners each; drawn two texels wide (in clip units, the square 2
+        // across), covering an eighth: the cable's own width.
+        assert_eq!(q.len(), 12);
+        let across = ((q[1][0] - q[0][0]).powi(2) + (q[1][1] - q[0][1]).powi(2)).sqrt();
+        assert!((f64::from(across) - THIN_DRAWN * texel / c.half).abs() < 1e-5);
+        assert!(q
+            .iter()
+            .all(|v| (v[3] - 0.125).abs() < 1e-6 && (f64::from(v[4]) - 2.0 * texel).abs() < 1e-3));
+        // Wider than that: drawn as wide as it is, whole.
+        q.clear();
+        thin_quads(&c, &w, &[strand(texel * 3.0)], false, &mut q);
+        assert!(q.iter().all(|v| v[3] == 1.0));
+        // Its depth is the map's, less the middle.
+        let mid = c.world_to_light(&w)[2][3] - 0.5;
+        assert!((q[0][2] - mid).abs() < 1e-6);
+        // A ribbon (its cable in its texture's alpha, added by its own pipeline): its quads carry
+        // no coverage, only its depth over its width and the band its alpha is spread over.
+        q.clear();
+        thin_quads(&c, &w, &[strand(texel * 3.0)], true, &mut q);
+        assert!(q
+            .iter()
+            .all(|v| v[3] == 0.0 && (f64::from(v[4]) - THIN_DRAWN * texel).abs() < 1e-3));
+    }
+
+    /// A flat strip, `width` across (y) and `length` along x, in `n` quads.
+    fn strip(width: f32, length: f32, n: usize) -> Vec<[[f32; 3]; 3]> {
+        (0..n)
+            .flat_map(|i| {
+                let (x0, x1) = (
+                    length * i as f32 / n as f32,
+                    length * (i + 1) as f32 / n as f32,
+                );
+                let (a, b, c, d) = (
+                    [x0, 0.0, 0.0],
+                    [x1, 0.0, 0.0],
+                    [x1, width, 0.0],
+                    [x0, width, 0.0],
+                );
+                [[a, b, c], [a, c, d]]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_ribbon_is_a_cable_and_a_round_pole_is_not() {
+        // Goodsprings' telegraph line: cut-out ribbons 20 wide, 700 long, several in a geometry,
+        // with a small bit (a clamp) beside them.
+        let mut line = strip(20.0, 700.0, 14);
+        line.extend(moved(strip(20.0, 700.0, 14), [0.0, 60.0, 0.0]));
+        line.extend(moved(tube(3.0, 12.0, 6), [0.0, 30.0, 0.0]));
+        let t = thin_shape(&line).expect("ribbons");
+        assert!(t.ribbons);
+        assert_eq!(t.strands.len(), 2);
+        assert!(
+            (t.strands[0].width - 20.0).abs() < 0.5,
+            "{}",
+            t.strands[0].width
+        );
+        // A round pole as thick is no ribbon (its area about pi times its length by its width).
+        assert!(thin_shape(&tube(10.0, 700.0, 8)).is_none());
+        // A wide sign is none either; nor a geometry of ribbons with a large other piece.
+        assert!(thin_shape(&strip(100.0, 700.0, 4)).is_none());
+        let mut with_pole = strip(20.0, 700.0, 14);
+        with_pole.extend(moved(tube(15.0, 700.0, 8), [0.0, 200.0, 0.0]));
+        assert!(thin_shape(&with_pole).is_none());
+        // Round cables alone are no ribbons.
+        assert!(!thin_shape(&tube(1.5, 800.0, 8)).unwrap().ribbons);
     }
 
     #[test]
@@ -3160,6 +4153,7 @@ mod tests {
             f.strength,
             &c,
             &c,
+            [false, true, false, false],
             f.axes(),
             wide(f.position),
             8,
@@ -3174,14 +4168,18 @@ mod tests {
         assert_eq!(at(16), c[0].texel as f32);
         assert_eq!((at(20), at(21)), (0.0625, -0.1875));
         assert_eq!(at(23), BLEND);
-        assert_eq!(at(28), c[0].view_to_light[0][0] as f32);
-        assert_eq!(at(28 + 16 * 3 + 15), 1.0);
+        // Each cascade's thin-caster texel, 0 where none is.
+        assert_eq!((at(28), at(30)), (0.0, 0.0));
+        assert_eq!(at(29), (c[1].half * 2.0 / f64::from(THIN_SIZE)) as f32);
+        assert_eq!(at(32), c[0].view_to_light[0][0] as f32);
+        assert_eq!(at(32 + 16 * 3 + 15), 1.0);
         // No sun: the lookup is off.
         let off = lookup_uniforms(
             &view(),
             0.0,
             &c,
             &c,
+            [false; CASCADES],
             f.axes(),
             wide(f.position),
             1,

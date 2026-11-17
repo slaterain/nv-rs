@@ -2000,25 +2000,36 @@ mod tests {
     /// The finding of the second review: with the light all the moon's (the sun's share 0, as in a
     /// climate whose noon is not full day), the light never jumps over a whole day, at the game's
     /// moon speed (`fMasserSpeed` 0.25: 15 degrees an hour) and at a doubled one (a plugin's),
-    /// whose hidden span ends and starts at other hours. Samples every 6 game seconds.
+    /// whose hidden span ends and starts at other hours; for fades from near the horizon (5) to
+    /// near overhead (80: shown only a little while) and for no tilt (the fades' ways nearly
+    /// opposite, the light turning over the top while hidden) as for Masser's. Samples every 6
+    /// game seconds.
     #[test]
     fn the_moon_light_never_jumps_whatever_the_moon_speed() {
         let sun_disc = [0.0, -800.0, -300.0];
-        for speed in [0.25f32, 0.5, 0.3] {
-            let way_at = |hour: f32| {
-                let pos = (90.0 + speed * 60.0 * hour).rem_euclid(360.0);
-                let moon = sky_light::shown_moon_way(pos, 45.0, 35.0);
-                sky_light::toward_light(sun_disc, 0.0, moon).unwrap()
-            };
-            let mut last = way_at(0.0);
-            let mut worst = 0.0f32;
-            for i in 1..=24 * 600 {
-                let now = way_at(i as f32 / 600.0);
-                worst = worst.max(angle_degrees(last, now));
-                last = now;
+        for fade in [5.0f32, 30.0, 45.0, 80.0] {
+            for tilt in [0.0f32, 35.0] {
+                for speed in [0.25f32, 0.5, 0.3] {
+                    let way_at = |hour: f32| {
+                        let pos = (90.0 + speed * 60.0 * hour).rem_euclid(360.0);
+                        let moon = sky_light::shown_moon_way(pos, fade, tilt);
+                        sky_light::toward_light(sun_disc, 0.0, moon).unwrap()
+                    };
+                    let mut last = way_at(0.0);
+                    let mut worst = 0.0f32;
+                    for i in 1..=24 * 600 {
+                        let now = way_at(i as f32 / 600.0);
+                        worst = worst.max(angle_degrees(last, now));
+                        last = now;
+                    }
+                    // The shown moon moves `speed * 60 / 600` degrees a sample (0.05 at a doubled
+                    // speed).
+                    assert!(
+                        worst < 0.2,
+                        "fade {fade}, tilt {tilt}, speed {speed}: a step of {worst} degrees"
+                    );
+                }
             }
-            // The shown moon moves `speed * 60 / 600` degrees a sample (0.05 at a doubled speed).
-            assert!(worst < 0.2, "speed {speed}: a step of {worst} degrees");
         }
     }
 
