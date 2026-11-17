@@ -396,6 +396,20 @@ fn jip_custom_ini(e: &mut Engine) {
     }
 }
 
+/// The C runtime's call of `main` (`0x00ECC46B`, `CALL 0x0086A850` in `__tmainCRTStartup`, after
+/// the static initializers), where xNVSE's loader loads xNVSE and its plugins before `main` runs:
+/// JIP LN NVSE's `InitGamePatches` sets `fRepairSkillMax` there (G112, a fix, the row
+/// `NV_JIP_GAME_PATCHES`), so the value comes after the exe's static initializer and before
+/// `Main::InitTES` loads the data files (a plugin's `GMST` still sets it). The port's CRT start-up
+/// calls `main` directly, so `main` asks the seam first thing, with no words (the answer is not
+/// read). With the word's `FIXES` bit clear: one load, nothing else.
+#[inline]
+fn jip_before_main(e: &mut Engine) {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x00ec_c46b, &[]);
+    }
+}
+
 /// Resizes the game window to the renderer's screen size: the client rectangle
 /// (`0, 0, 004dc1f0(), 004dc200()`) grown by the window's style, then `SetWindowPos` with the
 /// rectangle's left and bottom as the position and (right - left, top - bottom) as the size,
@@ -462,6 +476,7 @@ fn scope_begin(e: &mut Engine, scope: u32, category: u32, line: u32) {
 /// frames call `Main`'s per-frame function, inactive ones sleep 50 ms and suspend audio); and
 /// the shutdown of everything in reverse.
 pub fn main(e: &mut Engine, instance: u32, _unused_1: u32, _unused_2: u32, _unused_3: u32) -> u32 {
+    jip_before_main(e);
     e.with_stack(MAIN_FRAME_SIZE, |e, frame| {
         let ebp = frame.addr() + MAIN_FRAME_SIZE;
         run_main(e, ebp, instance)
@@ -4979,6 +4994,73 @@ mod tests {
             assert_eq!(run(word), (0, 0), "{word:08x}");
         }
         assert_eq!(run(jip_patches::FIXES), (1, 1));
+    }
+
+    /// G112's seam at `0x00ECC46B` (the C runtime's call of `main`): JIP not installed, or
+    /// installed with the row off, asks nothing; with the row it is asked once, with no words,
+    /// first thing (before the single-instance mutex), and `main` goes on. Its value lands
+    /// between the exe's static initializer (9.0 at `fRepairSkillMax`) and `Main::InitTES`
+    /// (`0086cf20`, the data files): `InitTES` sees JIP's 10.0, and a plugin's `GMST` written
+    /// there is what stays.
+    #[test]
+    fn g112_seam_comes_first_and_before_the_data_load() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        /// `fRepairSkillMax`'s value word; then the asks, the ask count when the mutex was made,
+        /// and the value `InitTES` found.
+        const SKILL_MAX: u32 = 0x011d_0190;
+        const ASKED: u32 = 0x0118_0400;
+        let run = |word: u32, plugin: Option<f32>| {
+            let mut e = main_engine();
+            for at in [ASKED, SKILL_MAX] {
+                if !e.mem.is_mapped(at) {
+                    e.map(at & !0xfff, 0x1000);
+                }
+            }
+            e.mem.set_u32(SKILL_MAX, 0x4110_0000);
+            for i in 0..3 {
+                e.mem.set_u32(ASKED + 4 * i, 0xffff);
+            }
+            e.mem.set_u32(ASKED, 0);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x00ec_c46b), |e, a| {
+                assert!(a.is_empty());
+                let n = e.mem.u32(ASKED);
+                e.mem.set_u32(ASKED, n + 1);
+                // JIP's write (the handler in `jip`'s `game_patches/gb.rs`).
+                e.mem.set_u32(SKILL_MAX, 0x4120_0000);
+                None
+            });
+            e.register(API_CREATE_MUTEX, |e, _| {
+                e.mem.set_u32(ASKED + 4, e.mem.u32(ASKED));
+                0u32.into_ret()
+            });
+            // The plugin's value (its bits; 0: no plugin sets it) for `InitTES` to write.
+            e.mem.set_u32(ASKED + 12, plugin.map_or(0, f32::to_bits));
+            e.register(0x0086_cf20, |e, _| {
+                e.mem.set_u32(ASKED + 8, e.mem.u32(SKILL_MAX));
+                let plugin = e.mem.u32(ASKED + 12);
+                if plugin != 0 {
+                    e.mem.set_u32(SKILL_MAX, plugin);
+                }
+                Ret::default()
+            });
+            assert_eq!(run_main_entry(&mut e), 0);
+            (
+                e.mem.u32(ASKED),
+                e.mem.u32(ASKED + 4),
+                e.mem.u32(ASKED + 8),
+                e.mem.f32(SKILL_MAX),
+            )
+        };
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, None), (0, 0, 0x4110_0000, 9.0), "{word:08x}");
+        }
+        assert_eq!(run(jip_patches::FIXES, None), (1, 1, 0x4120_0000, 10.0));
+        assert_eq!(
+            run(jip_patches::FIXES, Some(12.5)),
+            (1, 1, 0x4120_0000, 12.5),
+            "a plugin's setting wins"
+        );
     }
 
     #[test]
