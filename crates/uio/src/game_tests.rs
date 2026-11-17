@@ -463,7 +463,11 @@ fn the_start_up_report_names_unreadable_targets_and_missing_tiles_as_printed() {
         told[0],
         "UI Organizer: read 3 list files: supported.txt, mine.txt, more.txt"
     );
-    assert!(told[1].starts_with("UI Organizer: 5 additions: "));
+    assert_eq!(
+        told[1],
+        "UI Organizer: supported.txt: from Data\\uio\\supported.txt (2 entries)"
+    );
+    assert!(told[2].starts_with("UI Organizer: 5 additions: "));
     let problems: Vec<&String> = told.iter().filter(|l| l.contains("not put in")).collect();
     assert_eq!(problems.len(), 3, "{told:?}");
     for line in [
@@ -666,6 +670,49 @@ fn no_lists_at_all_patch_nothing() {
     install(&mut e);
     e.site(0x0070_a049, &[0]);
     assert!(e.ext::<Uio>().patched.is_empty());
+}
+
+/// No supported.txt in the game folder: UIO's own list, built in, is read in its place, and a UI
+/// mod it knows is put into the HUD without the player copying the file in.
+#[test]
+fn without_supported_txt_on_disk_the_built_in_list_is_read() {
+    let mut e = engine();
+    // Arwen's fatigue HUD (the built-in list: "arwen\fatigue_hud.xml:hudmainmenu", "true").
+    loose("Data\\menus\\prefabs\\arwen\\fatigue_hud.xml", "");
+    game(HUD, HUD_TEXT);
+    game(
+        "data\\menus\\prefabs\\arwen\\fatigue_hud.xml",
+        r#"<image name="fatigue"></image>"#,
+    );
+    crate::game::TOLD.with(|t| t.borrow_mut().clear());
+    set_on(&mut e, true);
+    install(&mut e);
+    e.site(0x0070_a049, &[0]);
+    let told = crate::game::TOLD.with(|t| t.borrow().clone());
+    assert_eq!(told[0], "UI Organizer: read 1 list file: supported.txt");
+    assert_eq!(
+        told[1],
+        "UI Organizer: supported.txt: built-in list (35 entries)"
+    );
+    assert_eq!(
+        told[2],
+        "UI Organizer: 1 addition: Main\\hud_main_menu.xml at tile hudmainmenu: \
+         arwen\\fatigue_hud.xml"
+    );
+    let (_, _, got) = read_file(&mut e, HUD);
+    assert!(shape(&got).contains(&start(IMAGE, "fatigue")));
+}
+
+/// The row off: no list is read (the built-in one neither) and nothing is said.
+#[test]
+fn off_reads_no_list_and_says_nothing() {
+    let mut e = engine();
+    crate::game::TOLD.with(|t| t.borrow_mut().clear());
+    install(&mut e);
+    assert_eq!(e.site(0x0070_a049, &[0]), None);
+    assert!(e.ext::<Uio>().patched.is_empty());
+    assert!(!e.ext::<Uio>().loaded);
+    assert!(crate::game::TOLD.with(|t| t.borrow().is_empty()));
 }
 
 #[test]

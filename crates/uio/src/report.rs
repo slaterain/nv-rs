@@ -52,11 +52,22 @@ pub struct ListRead {
     pub opened: bool,
 }
 
+/// Where supported.txt was read from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SupportedFrom {
+    /// The game folder's `Data\uio\supported.txt`.
+    Disk,
+    /// UIO 2.30's own list, built in ([`crate::lists::BUILT_IN_SUPPORTED`]).
+    BuiltIn,
+}
+
 /// What the lists' scan saw.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Scan {
     pub lists: Vec<ListRead>,
     pub entries: Vec<Entry>,
+    /// Where supported.txt came from (`None`: not said).
+    pub supported: Option<SupportedFrom>,
 }
 
 /// What went wrong after the lists, while patching a target file.
@@ -173,6 +184,10 @@ pub fn reason(entry: &Entry) -> Option<String> {
             short_file(&entry.file),
             tile_name(&entry.tile)
         ),
+        Outcome::PrefabMissing if PREFABS.len() + entry.path.len() > UIO_PATH => format!(
+            "the name Prefabs\\{} is too long for UIO, which reads it as not installed",
+            text(&entry.path)
+        ),
         Outcome::PrefabMissing => format!("Prefabs\\{} is not installed", text(&entry.path)),
         Outcome::EndOfFileNotPrefab => format!(
             "an addition at the end of a file must go into a Prefabs file, not {}",
@@ -211,16 +226,9 @@ pub fn startup_lines(scan: &Scan, problems: &[Problem]) -> Vec<String> {
     };
     let mut unopened = 0usize;
     for l in scan.lists.iter().filter(|l| !l.opened) {
-        if l.name == SUPPORTED_NAME {
-            first.push_str(
-                "; supported.txt could not be opened (UIO's own list of the UI mods it knows, \
-                 Data\\uio\\supported.txt in the UIO download)",
-            );
-        } else {
-            unopened += 1;
-            if unopened <= MAX_NAMED {
-                first.push_str(&format!("; {} could not be opened", text(&l.name)));
-            }
+        unopened += 1;
+        if unopened <= MAX_NAMED {
+            first.push_str(&format!("; {} could not be opened", text(&l.name)));
         }
     }
     if unopened > MAX_NAMED {
@@ -230,6 +238,20 @@ pub fn startup_lines(scan: &Scan, problems: &[Problem]) -> Vec<String> {
         ));
     }
     out.push(first);
+    if let Some(from) = scan.supported {
+        let entries = scan
+            .entries
+            .iter()
+            .filter(|e| e.list == SUPPORTED_NAME)
+            .count();
+        let entries = plural(entries, "entry", "entries");
+        out.push(match from {
+            SupportedFrom::BuiltIn => format!("{PREFIX}supported.txt: built-in list ({entries})"),
+            SupportedFrom::Disk => {
+                format!("{PREFIX}supported.txt: from Data\\uio\\supported.txt ({entries})")
+            }
+        });
+    }
 
     // The additions, grouped by target file and tile in the order first met.
     let mut groups: Vec<(&[u8], &[u8], Vec<String>)> = Vec::new();
