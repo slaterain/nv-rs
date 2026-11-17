@@ -101,6 +101,7 @@ pub mod dsound;
 pub mod files;
 pub mod ini;
 pub mod library;
+pub mod machine_table;
 pub mod mixer;
 pub mod mmio;
 pub mod mod_files;
