@@ -10,3 +10,7 @@ publish = false
 [dependencies]
 # The game's own translated code (crates/engine), started on the player's FalloutNV.exe.
 host = { path = "../crates/host" }
+
+# Linux and macOS: `--find`, the game and saves folders `play.sh` offers.
+[target.'cfg(not(windows))'.dependencies]
+game-folders = { path = "../crates/game-folders" }
