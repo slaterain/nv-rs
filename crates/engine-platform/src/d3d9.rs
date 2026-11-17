@@ -620,7 +620,6 @@ pub fn direct3d_create9(e: &mut Engine, sdk: u32) -> u32 {
     device!(e)
         .objects
         .insert(object, Direct3D { references: 1 });
-    #[cfg(windows)]
     super::d3d9real::direct3d_created(e);
     object
 }
