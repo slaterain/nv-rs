@@ -447,8 +447,10 @@ pub fn save_lists_now() {
 /// four recordings of the game's Direct3D 9 calls (the intro and the main menu; Save 138's load
 /// and Doc Mitchell's house; the race menu; the Goodsprings street and a full turn there, at 4x
 /// antialiasing) replayed into this backend on Vulkan, each with an empty folder, their lists
-/// joined in that order, each entry once. It holds no game file's bytes: hashes of the game's
-/// shaders, format numbers and render-state values.
+/// joined in that order, each entry once; then the intro movie's fixed-function shaders and
+/// pipeline ([`ffp`]: a real Direct3D 9 run into the movie, replayed so on 2026-11-17). It holds
+/// no game file's bytes: hashes of the game's shaders, format numbers, render-state values and the
+/// fixed-function shaders' bytecode, which this backend writes.
 const SHIPPED_LIST: &str = include_str!("../data/pipelines.txt");
 
 impl Listed {

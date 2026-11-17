@@ -22,11 +22,11 @@ mod ahead;
 mod answers;
 mod cache;
 pub mod device;
+mod ffp;
 #[cfg(test)]
 mod fingerprint;
 pub mod format;
 pub mod frame_rate;
-mod ffp;
 mod fxhash;
 pub mod loading;
 mod prepare;

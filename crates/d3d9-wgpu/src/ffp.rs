@@ -479,7 +479,10 @@ impl PixelKey {
                     | top::MODULATEINVALPHA_ADDCOLOR
                     | top::MODULATEINVCOLOR_ADDALPHA
             ) {
-                return Err(format!("stage {n}: colour-only operation {} as alpha", k.alpha[0]));
+                return Err(format!(
+                    "stage {n}: colour-only operation {} as alpha",
+                    k.alpha[0]
+                ));
             }
             for a in k.colour[1..].iter().chain(&k.alpha[1..]).chain([&k.result]) {
                 if a & ta::SELECTMASK > ta::CONSTANT || a & !0x3F != 0 {
@@ -498,9 +501,7 @@ impl PixelKey {
 /// The pixel shader's constants: c0 the texture factor (`D3DRS_TEXTUREFACTOR`), c8 + n stage n's
 /// constant (`D3DTSS_CONSTANT`), each a `D3DCOLOR` as red, green, blue, alpha.
 pub fn pixel_constants(factor: u32, s: &[[u32; STAGE_STATES]; STAGES]) -> [[f32; 4]; 16] {
-    let colour = |c: u32| {
-        [16, 8, 0, 24].map(|shift| ((c >> shift) & 0xFF) as f32 / 255.0)
-    };
+    let colour = |c: u32| [16, 8, 0, 24].map(|shift| ((c >> shift) & 0xFF) as f32 / 255.0);
     let mut out = [[0.0; 4]; 16];
     out[0] = colour(factor);
     for (n, st) in s.iter().enumerate() {
@@ -528,22 +529,24 @@ pub fn pixel_tokens(k: &PixelKey) -> Vec<u32> {
         })
     };
     let textured = |s: &StageKey| {
+        // The arguments an operation reads (`d3dtextureop`).
         let args = |op: &[u32; 4]| -> Vec<u32> {
-            let n = match op[0] {
+            match op[0] {
                 top::SELECTARG1 => vec![op[1]],
                 top::SELECTARG2 => vec![op[2]],
                 top::MULTIPLYADD | top::LERP => vec![op[1], op[2], op[3]],
                 _ => vec![op[1], op[2]],
-            };
-            n
+            }
         };
         args(&s.colour)
             .into_iter()
-            .chain(if s.colour[0] == top::DOTPRODUCT3 || s.alpha[0] == top::DISABLE {
-                Vec::new()
-            } else {
-                args(&s.alpha)
-            })
+            .chain(
+                if s.colour[0] == top::DOTPRODUCT3 || s.alpha[0] == top::DISABLE {
+                    Vec::new()
+                } else {
+                    args(&s.alpha)
+                },
+            )
             .any(|a| a & ta::SELECTMASK == ta::TEXTURE)
             || [s.colour[0], s.alpha[0]]
                 .iter()
@@ -567,7 +570,10 @@ pub fn pixel_tokens(k: &PixelKey) -> Vec<u32> {
         if textured(s) {
             c.ins(
                 DCL,
-                &[0x8000_0000 | (u32::from(s.dim) << 27), dst(SAMPLER, n as u32, 0xF)],
+                &[
+                    0x8000_0000 | (u32::from(s.dim) << 27),
+                    dst(SAMPLER, n as u32, 0xF),
+                ],
             );
         }
     }
@@ -593,7 +599,10 @@ pub fn pixel_tokens(k: &PixelKey) -> Vec<u32> {
         } else {
             stage_op(&mut c, n, &s.colour, 0x7);
             if s.alpha[0] == top::DISABLE {
-                c.ins(MOV, &[dst(TEMP, RESULT_R, 0x8), src(TEMP, CURRENT_R, XYZW, 0)]);
+                c.ins(
+                    MOV,
+                    &[dst(TEMP, RESULT_R, 0x8), src(TEMP, CURRENT_R, XYZW, 0)],
+                );
             } else {
                 stage_op(&mut c, n, &s.alpha, 0x8);
             }
@@ -630,7 +639,11 @@ fn argument(a: u32, n: u32) -> u32 {
         ta::TEMP => (TEMP, TEMP_R),
         _ => (CONST, 8 + n),
     };
-    let swizzle = if a & ta::ALPHAREPLICATE != 0 { WWWW } else { XYZW };
+    let swizzle = if a & ta::ALPHAREPLICATE != 0 {
+        WWWW
+    } else {
+        XYZW
+    };
     let modifier = if a & ta::COMPLEMENT != 0 { COMP } else { 0 };
     src(ty, r, swizzle, modifier)
 }
@@ -674,9 +687,7 @@ fn stage_op(c: &mut Code, n: u32, op: &[u32; 4], mask: u32) {
         top::BLENDFACTORALPHA => c.ins(LRP, &[d, src(CONST, 0, WWWW, 0), r(3), r(4)]),
         top::BLENDCURRENTALPHA => c.ins(LRP, &[d, src(TEMP, CURRENT_R, WWWW, 0), r(3), r(4)]),
         // Arg1 + Arg2 * (1 - the texture's alpha).
-        top::BLENDTEXTUREALPHAPM => {
-            c.ins(MAD, &[d, r(4), src(TEMP, 10 + n, WWWW, COMP), r(3)])
-        }
+        top::BLENDTEXTUREALPHAPM => c.ins(MAD, &[d, r(4), src(TEMP, 10 + n, WWWW, COMP), r(3)]),
         top::MODULATEALPHA_ADDCOLOR => c.ins(MAD, &[d, rs(3, WWWW, 0), r(4), r(3)]),
         top::MODULATECOLOR_ADDALPHA => c.ins(MAD, &[d, r(3), r(4), rs(3, WWWW, 0)]),
         top::MODULATEINVALPHA_ADDCOLOR => c.ins(MAD, &[d, rs(3, WWWW, COMP), r(4), r(3)]),
@@ -745,7 +756,10 @@ mod tests {
         assert_eq!((y(50.0), y(250.0)), (1.0, -1.0));
         let z = |d: f32| d * c1[0] + c1[1];
         assert_eq!((z(0.25), z(0.75)), (0.0, 1.0));
-        assert_eq!(vertex_constants([0.0, 0.0, 8.0, 8.0, 0.5, 0.5])[1], [0.0; 4]);
+        assert_eq!(
+            vertex_constants([0.0, 0.0, 8.0, 8.0, 0.5, 0.5])[1],
+            [0.0; 4]
+        );
     }
 
     #[test]
@@ -753,7 +767,10 @@ mod tests {
         let s = default_stage_states();
         let k = PixelKey::of(&s, |_| false, false).unwrap();
         assert_eq!(k.stages.len(), 1);
-        assert_eq!(k.stages[0].colour[..3], [top::MODULATE, ta::TEXTURE, ta::CURRENT]);
+        assert_eq!(
+            k.stages[0].colour[..3],
+            [top::MODULATE, ta::TEXTURE, ta::CURRENT]
+        );
         assert_eq!(k.stages[0].alpha[..2], [top::SELECTARG1, ta::TEXTURE]);
         crate::sm::parse(&pixel_tokens(&k)).expect("a pixel shader the converter reads");
         let v = vertex_tokens(VertexKey {
@@ -768,7 +785,9 @@ mod tests {
     fn operations_and_arguments_it_does_not_provide_are_named() {
         let mut s = default_stage_states();
         s[0][tss::COLOROP] = top::PREMODULATE;
-        assert!(PixelKey::of(&s, |_| false, false).unwrap_err().contains("operation 17"));
+        assert!(PixelKey::of(&s, |_| false, false)
+            .unwrap_err()
+            .contains("operation 17"));
         let mut s = default_stage_states();
         s[0][tss::TEXCOORDINDEX] = 0x10000;
         assert!(PixelKey::of(&s, |_| false, false).is_err());
@@ -777,6 +796,9 @@ mod tests {
         assert!(PixelKey::of(&s, |_| false, false).is_err());
         let mut s = default_stage_states();
         s[0][tss::COLOROP] = top::DISABLE;
-        assert_eq!(PixelKey::of(&s, |_| false, false).unwrap().stages, Vec::new());
+        assert_eq!(
+            PixelKey::of(&s, |_| false, false).unwrap().stages,
+            Vec::new()
+        );
     }
 }

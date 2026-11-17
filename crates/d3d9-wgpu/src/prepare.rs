@@ -305,7 +305,13 @@ mod tests {
     /// hexadecimal, no version or end token) is skipped like any line the list cannot read.
     #[test]
     fn a_fixed_function_shaders_line_reads_back_once() {
-        let tokens = vec![0xFFFF_0300u32, 0x0200_001F, 0x8000_000A, 0x900F_0000, 0xFFFF];
+        let tokens = vec![
+            0xFFFF_0300u32,
+            0x0200_001F,
+            0x8000_000A,
+            0x900F_0000,
+            0xFFFF,
+        ];
         let line = shader_line(&tokens);
         assert_eq!(line, "f1 ffff0300,200001f,8000000a,900f0000,ffff");
         assert_eq!(parse_shader_line(&line), Some(tokens.clone()));

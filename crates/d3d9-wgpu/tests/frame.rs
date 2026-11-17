@@ -2860,21 +2860,24 @@ fn a_warm_start_makes_only_the_listed_shaders_libraries() {
         let _ = std::fs::remove_dir_all(&dir);
         return;
     };
-    // Cold: every shader's library at the start: the four and the stand-ins (two vertex shaders
-    // for the two pixel shaders' varyings, one pixel shader).
+    // Cold: every shader's library at the start: the four, the shipped list's two fixed-function
+    // shaders (the intro movie's, made at every start: `ffp`) and the stand-ins (two vertex
+    // shaders for the two pixel shaders' varyings, one pixel shader).
     assert!(note.starts_with("none yet"), "{note}");
-    assert_eq!((waited, start, end), (4, (4, 3), (4, 3)), "cold");
+    assert_eq!((waited, start, end), (6, (6, 4), (6, 4)), "cold");
     let (note, waited, start, end) = run(true).expect("the second run");
     // Warm: the listed pair's libraries and their stand-ins' only (the other pair's modules
-    // are still made ahead); its draw makes the other pair's two.
+    // are still made ahead); its draw makes the other pair's two. The shipped list's
+    // fixed-function pair is listed too: two vertex libraries (its vertex shader and a stand-in)
+    // and one pixel library more throughout.
     assert!(note.ends_with("KB read"), "{note}");
-    assert_eq!(waited, 4, "every module waited for");
+    assert_eq!(waited, 6, "every module waited for");
     assert_eq!(
         start,
-        (2, 2),
-        "warm: the listed pair's and their stand-ins'"
+        (2 + 2, 2 + 1),
+        "warm: the listed pairs' and their stand-ins'"
     );
-    assert_eq!(end, (3, 3), "the other pair's on its first draw");
+    assert_eq!(end, (3 + 2, 3 + 1), "the other pair's on its first draw");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -4240,6 +4243,54 @@ fn texture_stages_combine_as_d3dtextureop_says() {
             "{p:?}: want B 48, G 96, R 255, A 128"
         );
     }
+}
+
+/// The movie's fixed-function shaders and pipeline are made before play like the game's: the
+/// first run makes its pipeline on the tile's draw and lists it with the shaders' bytecode (`f1`
+/// lines: the game creates no such shader); the next run makes the shaders at its start and the
+/// pipeline at its first `Present`, so the tile's draw makes none, with the same pixels.
+#[test]
+fn the_movies_pipeline_is_made_before_its_first_frame_from_the_second_start() {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("ffp-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |cache: &std::path::Path| -> Option<(Vec<u8>, u64)> {
+        let mut g = Gpu::with_cache(16, 1, Some(cache.to_path_buf()))?;
+        g.run(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        });
+        g.movie_texture(0x1740, 16, 16, &ramp(16, 16));
+        g.no_shaders();
+        g.movie_state();
+        g.clear(1, 0xFF00_0000, 1.0);
+        g.movie_quad(0.0, 0.0, 16.0, 16.0);
+        let reds = g.reds();
+        let made = g.b.device().expect("the device").pipelines_made_on_draws();
+        Some((reds, made))
+    };
+    let Some((first, made_first)) = run(&dir) else {
+        return;
+    };
+    assert_eq!(
+        made_first, 1,
+        "the first run makes the tile's pipeline on its draw"
+    );
+    let list = std::fs::read_to_string(dir.join("pipelines.txt")).expect("the list written");
+    assert!(
+        list.lines().filter(|l| l.starts_with("f1 ")).count() >= 2,
+        "the fixed-function vertex and pixel shaders listed"
+    );
+    let (second, made_second) = run(&dir).unwrap();
+    assert_eq!(second, first, "the same pixels");
+    assert_eq!(made_second, 0, "no pipeline made on the tile's draw");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A vertex declaration set after an FVF replaces it, and the same declaration set again after
