@@ -116,20 +116,31 @@ impl Page {
             .and_then(|u| self.ansi.get(&u).copied())
     }
 
-    /// UTF-16 as the page's bytes, `default` for a character it has none for (a surrogate pair is
-    /// one character, a lone surrogate one too), and whether `default` was used.
-    pub fn to_ansi_with(&self, units: &[u16], default: u8) -> (Vec<u8>, bool) {
+    /// UTF-16 as the page's bytes, unit by unit, `default` for a unit it has none for (each unit of
+    /// a surrogate pair is one, as Windows gives a pair two default bytes), and whether `default`
+    /// was used. With `best_fit` false (`WC_NO_BEST_FIT_CHARS`) only the page's own characters (a
+    /// byte that turns back into the same unit) have a byte.
+    pub fn to_ansi_units(&self, units: &[u16], default: u8, best_fit: bool) -> (Vec<u8>, bool) {
         let mut used = false;
-        let bytes = char::decode_utf16(units.iter().copied())
-            .map(|c| match c.ok().and_then(|c| self.byte(u32::from(c))) {
-                Some(b) => b,
-                None => {
+        let bytes = units
+            .iter()
+            .map(|&u| {
+                let byte = self
+                    .byte(u32::from(u))
+                    .filter(|&b| best_fit || self.unit(b) == u)
+                    .filter(|_| !(0xd800..=0xdfff).contains(&u));
+                byte.unwrap_or_else(|| {
                     used = true;
                     default
-                }
+                })
             })
             .collect();
         (bytes, used)
+    }
+
+    /// [`Page::to_ansi_units`] with Windows' best fit.
+    pub fn to_ansi_with(&self, units: &[u16], default: u8) -> (Vec<u8>, bool) {
+        self.to_ansi_units(units, default, true)
     }
 
     /// [`Page::to_ansi_with`] with `?`.
@@ -247,7 +258,7 @@ mod tests {
         );
         assert_eq!(cyrillic.to_ansi(&[0x416, 0x44f, 0x401]), b"\xc6\xff\xa8");
         // A character the page lacks (and has no best fit for) is the default, and says so; e
-        // acute's best fit on the Cyrillic page is e; a pair is one character.
+        // acute's best fit on the Cyrillic page is e; each unit of a pair is one default.
         assert_eq!(
             cyrillic.to_ansi_with(&[0x3042, 0x41], b'*'),
             (b"*A".to_vec(), true)
@@ -255,7 +266,20 @@ mod tests {
         assert_eq!(cyrillic.to_ansi_with(&[0xe9], b'*'), (b"e".to_vec(), false));
         assert_eq!(
             western.to_ansi_with(&[0xd83d, 0xde00], b'?'),
+            (b"??".to_vec(), true)
+        );
+        // A lone surrogate is one default too; without best fit, l with stroke has no byte.
+        assert_eq!(
+            western.to_ansi_with(&[0xdc00, 0x41], b'?'),
+            (b"?A".to_vec(), true)
+        );
+        assert_eq!(
+            western.to_ansi_units(&[0x142], b'?', false),
             (b"?".to_vec(), true)
+        );
+        assert_eq!(
+            western.to_ansi_units(&[0xe9], b'?', false),
+            (vec![0xe9], false)
         );
         assert!(
             !western
@@ -300,7 +324,10 @@ mod tests {
         assert!(table_lines(1251).starts_with("GetACP\t\t4e3\nGetOEMCP\t\t362\n"));
     }
 
-    /// The tables against Windows' own conversion, on Windows.
+    /// The tables against Windows' own conversion, on Windows: every byte above 0x7F both without
+    /// flags and with `MB_ERR_INVALID_CHARS` (none refused); every unit of the first 65,536 but the
+    /// surrogates to bytes, with best fit and with `WC_NO_BEST_FIT_CHARS`, with the default's
+    /// "used" flag; a surrogate pair and a lone surrogate; and both cases of every such unit.
     #[cfg(windows)]
     #[test]
     fn the_tables_are_windows_own() {
@@ -313,27 +340,84 @@ mod tests {
                 o: *mut u16,
                 c: i32,
             ) -> i32;
+            fn WideCharToMultiByte(
+                p: u32,
+                f: u32,
+                t: *const u16,
+                n: i32,
+                o: *mut u8,
+                c: i32,
+                d: *const u8,
+                u: *mut i32,
+            ) -> i32;
             fn LCMapStringW(l: u32, f: u32, t: *const u16, n: i32, o: *mut u16, c: i32) -> i32;
         }
+        let units = || (0u16..=0xffff).filter(|u| !(0xd800..=0xdfff).contains(u));
+        let mut differences = 0usize;
         for n in PAGES {
             let p = page(n).unwrap();
-            for b in 0x80u8..=0xff {
-                let mut out = [0u16; 2];
-                // SAFETY: one byte in, room for two units.
-                let k = unsafe { MultiByteToWideChar(n, 0, &b, 1, out.as_mut_ptr(), 2) };
-                assert_eq!((k, out[0]), (1, p.unit(b)), "code page {n} byte {b:#x}");
+            for flags in [0u32, 8] {
+                for b in 0x80u8..=0xff {
+                    let mut out = [0u16; 2];
+                    // SAFETY: one byte in, room for two units.
+                    let k = unsafe { MultiByteToWideChar(n, flags, &b, 1, out.as_mut_ptr(), 2) };
+                    assert_eq!(
+                        (k, out[0]),
+                        (1, p.unit(b)),
+                        "code page {n} byte {b:#x} flags {flags}"
+                    );
+                }
+            }
+            let to_bytes = |text: &[u16], flags: u32| {
+                let mut out = [0u8; 8];
+                let mut used = 0i32;
+                // SAFETY: `text` is read for its length; room for eight bytes; no default.
+                let k = unsafe {
+                    WideCharToMultiByte(
+                        n,
+                        flags,
+                        text.as_ptr(),
+                        text.len() as i32,
+                        out.as_mut_ptr(),
+                        8,
+                        std::ptr::null(),
+                        &mut used,
+                    )
+                };
+                (out[..k.max(0) as usize].to_vec(), used != 0)
+            };
+            for best_fit in [true, false] {
+                let flags = if best_fit { 0 } else { 0x400 };
+                for u in units() {
+                    let theirs = to_bytes(&[u], flags);
+                    if p.to_ansi_units(&[u], b'?', best_fit) != theirs {
+                        differences += 1;
+                        eprintln!("code page {n} unit {u:#x} flags {flags:#x}: theirs {theirs:?}");
+                    }
+                }
+                for text in [&[0xd83d, 0xde00][..], &[0xdc00, 0x41], &[0x41, 0xd800]] {
+                    assert_eq!(
+                        p.to_ansi_units(text, b'?', best_fit),
+                        to_bytes(text, flags),
+                        "code page {n} {text:x?} flags {flags:#x}"
+                    );
+                }
             }
         }
-        for u in (0u16..=0xffff)
-            .step_by(7)
-            .filter(|u| !(0xd800..=0xdfff).contains(u))
-        {
+        for u in units() {
             for (flags, ours) in [(0x100, lower(u)), (0x200, upper(u))] {
                 let mut out = [0u16; 2];
                 // SAFETY: one unit in, room for two.
                 let k = unsafe { LCMapStringW(0, flags, &u, 1, out.as_mut_ptr(), 2) };
-                assert_eq!((k, out[0]), (1, ours), "unit {u:#x} flags {flags:#x}");
+                if (k, out[0]) != (1, ours) {
+                    differences += 1;
+                    eprintln!("unit {u:#x} flags {flags:#x}: theirs {:#x}", out[0]);
+                }
             }
         }
+        assert_eq!(
+            differences, 0,
+            "the tables differ from Windows (lines above)"
+        );
     }
 }

@@ -450,13 +450,23 @@ pub mod measured {
         give_back(e, out, size, 2, &answer)
     }
 
+    /// `WC_NO_BEST_FIT_CHARS`, and every flag `WideCharToMultiByte` knows (`WC_DISCARDNS`,
+    /// `WC_SEPCHARS`, `WC_DEFAULTCHAR`, `WC_ERR_INVALID_CHARS`, `WC_COMPOSITECHECK`, it): a bit
+    /// outside them is `ERROR_INVALID_FLAGS`.
+    const WC_NO_BEST_FIT_CHARS: u32 = 0x400;
+    const WC_KNOWN: u32 = 0x10 | 0x20 | 0x40 | 0x80 | 0x200 | WC_NO_BEST_FIT_CHARS;
+
     // Platform: replaces KERNEL32.DLL WideCharToMultiByte (import)
     /// `WideCharToMultiByte(code page, flags, wide, count, out, size, default, used)` away from
-    /// Windows: the single-byte pages of `crate::code_page` by Windows' measured tables (the page's
-    /// own characters and Windows' best fit; any other character, a surrogate pair counted as one,
-    /// the default character: the first byte of `default` when it is given, else `?`, and `used`
-    /// TRUE). Measured (2026-10-21): ASCII as is, the zero counted for a count of -1, `used` FALSE when
-    /// nothing needed the default. Flags other than 0, and a page not provided, stop the run.
+    /// Windows: the single-byte pages of `crate::code_page` by Windows' measured tables, unit by
+    /// unit (the page's own characters and Windows' best fit, or with `WC_NO_BEST_FIT_CHARS` the
+    /// page's own only; any other unit, each unit of a surrogate pair included, the default
+    /// character: the first byte of `default` when it is given, else `?`, and `used` TRUE).
+    /// Measured (2026-10-21): ASCII as is, the zero counted for a count of -1, `used` FALSE when
+    /// nothing needed the default. Flags: 0 and `WC_NO_BEST_FIT_CHARS` are provided; a bit
+    /// Windows does not know is `ERROR_INVALID_FLAGS`; the other flags Windows knows
+    /// (`WC_COMPOSITECHECK` and its companions, `WC_ERR_INVALID_CHARS`), and a page not provided,
+    /// stop the run (not provided).
     #[allow(clippy::too_many_arguments)]
     pub fn wide_char_to_multi_byte(
         e: &mut Engine,
@@ -469,11 +479,15 @@ pub mod measured {
         default: Ptr,
         used: Ptr,
     ) -> u32 {
+        if flags & !WC_KNOWN != 0 {
+            e.kernel.last_error = ERROR_INVALID_FLAGS;
+            return 0;
+        }
         if refused(e, wide, count, size) {
             return 0;
         }
         assert!(
-            flags == 0,
+            flags & !WC_NO_BEST_FIT_CHARS == 0,
             "WideCharToMultiByte(code page {code_page}, flags {flags:#x}) is not provided"
         );
         let Some(page) = page_of(code_page) else {
@@ -488,7 +502,8 @@ pub mod measured {
         } else {
             e.mem.u8(default.addr())
         };
-        let (bytes, defaulted) = page.to_ansi_with(&units, fill);
+        let (bytes, defaulted) =
+            page.to_ansi_units(&units, fill, flags & WC_NO_BEST_FIT_CHARS == 0);
         if !used.is_null() {
             e.mem.set_u32(used.addr(), u32::from(defaulted));
         }
@@ -499,13 +514,18 @@ pub mod measured {
     /// `LCMAP_LOWERCASE`, `LCMAP_UPPERCASE`.
     const LCMAP_LOWERCASE: u32 = 0x100;
     const LCMAP_UPPERCASE: u32 = 0x200;
+    /// Every flag `LCMapStringW` knows (the `NORM_`, `LINGUISTIC_`, `SORT_` and `LCMAP_` ones): a
+    /// bit outside them is `ERROR_INVALID_FLAGS`.
+    const LCMAP_KNOWN: u32 = 0x0ff3_1f3f;
 
     // Platform: replaces KERNEL32.DLL LCMapStringW (import)
     /// `LCMapStringW(locale id, flags, text, count, out, size)` away from Windows: `LCMAP_LOWERCASE`
     /// or `LCMAP_UPPERCASE` alone, each unit by Windows' measured case tables
     /// (`crate::code_page::lower`, `upper`: an English user locale's, whatever locale is named), the
-    /// zero counted for a negative count. No flag is `ERROR_INVALID_FLAGS` (measured); any other flag
-    /// (a sort key among them) stops the run (not provided).
+    /// zero counted for a negative count. No flag, or a bit Windows does not know, is
+    /// `ERROR_INVALID_FLAGS` (measured); any other flag (a sort key, `LCMAP_LINGUISTIC_CASING`, the
+    /// width and kana maps) stops the run (not provided). Not provided either: the case of a
+    /// character outside the first 65,536 (a surrogate pair is left as it is, unit by unit).
     pub fn lc_map_string_w(
         e: &mut Engine,
         lcid: u32,
@@ -515,7 +535,7 @@ pub mod measured {
         out: Ptr,
         size: i32,
     ) -> u32 {
-        if flags == 0 {
+        if flags == 0 || flags & !LCMAP_KNOWN != 0 {
             e.kernel.last_error = ERROR_INVALID_FLAGS;
             return 0;
         }
@@ -858,6 +878,77 @@ mod tests_measured {
                 (ours, wide_out(&e, a, ours)),
                 (theirs, wide_out(&e, b, theirs)),
                 "{flags:#x}"
+            );
+        }
+        // Bits Windows does not know: the same answer and error from both.
+        let pair = wide_text(&mut e, &[0xd83d, 0xde00, 0x41]);
+        let answer = |e: &mut Engine, ours: bool, call: u32, flags: u32| {
+            e.kernel.last_error = 0;
+            let (out, used) = (Ptr::new(a), Ptr::new(0));
+            let k = match (call, ours) {
+                (0, true) => measured::wide_char_to_multi_byte(
+                    e,
+                    1252,
+                    flags,
+                    Ptr::new(pair),
+                    3,
+                    out,
+                    8,
+                    Ptr::new(0),
+                    used,
+                ),
+                (0, false) => super::wide_char_to_multi_byte(
+                    e,
+                    1252,
+                    flags,
+                    Ptr::new(pair),
+                    3,
+                    out,
+                    8,
+                    Ptr::new(0),
+                    used,
+                ),
+                (1, true) => {
+                    measured::lc_map_string_w(e, 0x409, flags, Ptr::new(pair), 3, Ptr::new(a), 8)
+                }
+                (1, false) => {
+                    super::lc_map_string_w(e, 0x409, flags, Ptr::new(pair), 3, Ptr::new(a), 8)
+                }
+                (_, true) => measured::multi_byte_to_wide_char(
+                    e,
+                    1252,
+                    flags,
+                    Ptr::new(text),
+                    4,
+                    Ptr::new(a),
+                    8,
+                ),
+                (_, false) => super::multi_byte_to_wide_char(
+                    e,
+                    1252,
+                    flags,
+                    Ptr::new(text),
+                    4,
+                    Ptr::new(a),
+                    8,
+                ),
+            };
+            (k, e.kernel.last_error, e.mem.bytes(a, k.min(8)))
+        };
+        for (call, flags) in [
+            (0, 0),
+            (0, 0x400),
+            (0, 1),
+            (0, 0x8000),
+            (1, 0x4000_0000),
+            (1, 0x100),
+            (2, 0x8000),
+            (2, 0x100),
+        ] {
+            assert_eq!(
+                answer(&mut e, true, call, flags),
+                answer(&mut e, false, call, flags),
+                "call {call} flags {flags:#x}"
             );
         }
     }

@@ -524,8 +524,10 @@ fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
     }
     if missing.is_empty() {
         return Err(
-            "nv-rs does not start the game on this system yet: what it needs from Windows is \
-             provided here, but a first start with the game's files has not been tried"
+            "nv-rs does not start the game on this system yet: the pieces known to be needed \
+             from Windows are provided here (not the D3DX shader compiler, which only shaders \
+             missing from the game's shader packages reach), but a first start with the game's \
+             files has not been tried"
                 .into(),
         );
     }
