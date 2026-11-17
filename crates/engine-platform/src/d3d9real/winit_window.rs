@@ -94,17 +94,29 @@ struct Shown {
     minimised: AtomicBool,
     /// Hidden from view, as the system says (X11).
     occluded: AtomicBool,
+    /// macOS: the window's `CAMetalLayer`, made here on the main thread, where the window is made
+    /// (the loop's thread): AppKit's view, and winit's window handle, are the main thread's only,
+    /// while the game's device and its surface are made on the game's or the render thread
+    /// (d3d9-wgpu `surface_for` makes the surface on this layer). `None` when the window has no
+    /// AppKit view (the device is then refused, naming why).
+    #[cfg(target_vendor = "apple")]
+    metal: Option<raw_window_metal::Layer>,
 }
 
 impl Shown {
+    /// Made on the loop's thread (on macOS the main thread: the Metal layer is made here).
     fn new(window: Window, resizable: bool) -> Shown {
         let size = window.inner_size();
+        #[cfg(target_vendor = "apple")]
+        let metal = metal_layer_of(&window);
         Shown {
             window,
             size: SizeKept::new(size),
             resizable,
             minimised: AtomicBool::new(false),
             occluded: AtomicBool::new(false),
+            #[cfg(target_vendor = "apple")]
+            metal,
         }
     }
 
@@ -177,6 +189,40 @@ impl d3d9_wgpu::GameWindow for Shown {
     fn refresh_millihertz(&self) -> Option<u32> {
         self.window.current_monitor()?.refresh_rate_millihertz()
     }
+
+    #[cfg(target_vendor = "apple")]
+    fn metal_layer(&self) -> Option<std::ptr::NonNull<std::ffi::c_void>> {
+        self.metal.as_ref().map(raw_window_metal::Layer::as_ptr)
+    }
+}
+
+/// macOS: `window`'s `CAMetalLayer` (its view made layer-backed, a Metal layer added that follows
+/// the view's size and scale), made on the main thread, where winit gives the window's handle and
+/// AppKit allows its view to be touched. `None`, with a line, when the window has no AppKit view.
+#[cfg(target_vendor = "apple")]
+fn metal_layer_of(window: &Window) -> Option<raw_window_metal::Layer> {
+    use raw_window_handle::RawWindowHandle;
+    match window.window_handle().map(|h| h.as_raw()) {
+        // SAFETY: winit's AppKit handle names the window's live NSView, and this runs on the main
+        // thread (the loop's: `run_on_main_thread`), as from_ns_view requires.
+        Ok(RawWindowHandle::AppKit(h)) => {
+            Some(unsafe { raw_window_metal::Layer::from_ns_view(h.ns_view) })
+        }
+        Ok(other) => {
+            eprintln!(
+                "NV_D3D9={}: the window is not an AppKit one ({other:?}): no Metal layer",
+                tag()
+            );
+            None
+        }
+        Err(e) => {
+            eprintln!(
+                "NV_D3D9={}: the window's handle: {e}: no Metal layer",
+                tag()
+            );
+            None
+        }
+    }
 }
 
 /// A real window by the id `super` keeps for it (never 0), with its top-level window's id (its
@@ -233,11 +279,7 @@ pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Send
                      program did not hand to the window layer",
                 );
             }
-            let (slot, ready) = main_requests();
-            *slot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rx);
-            ready.notify_all();
+            main_requests().give(rx);
             return Mutex::new(tx);
         }
         if let Err(e) = std::thread::Builder::new()
@@ -255,9 +297,58 @@ pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Send
 static MAIN_LOOP: AtomicBool = AtomicBool::new(false);
 
 /// The requests' receiver, handed from the first [`window_thread`] call to the main thread.
-fn main_requests() -> &'static (Mutex<Option<Receiver<Request>>>, std::sync::Condvar) {
-    static SLOT: OnceLock<(Mutex<Option<Receiver<Request>>>, std::sync::Condvar)> = OnceLock::new();
-    SLOT.get_or_init(Default::default)
+fn main_requests() -> &'static Handoff<Receiver<Request>> {
+    static SLOT: OnceLock<Handoff<Receiver<Request>>> = OnceLock::new();
+    SLOT.get_or_init(Handoff::default)
+}
+
+/// One value handed from one thread to another that waits for it: given before or after the
+/// waiter starts, it is taken (no lost wake-up: the slot is looked at under its lock before each
+/// wait).
+struct Handoff<T>(Mutex<Option<T>>, std::sync::Condvar);
+
+impl<T> Default for Handoff<T> {
+    fn default() -> Self {
+        Handoff(Mutex::new(None), std::sync::Condvar::new())
+    }
+}
+
+impl<T> Handoff<T> {
+    fn give(&self, value: T) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(value);
+        self.1.notify_all();
+    }
+
+    /// Waits until a value is given, and takes it.
+    fn take(&self) -> T {
+        let mut slot = self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if let Some(value) = slot.take() {
+                return value;
+            }
+            slot = self
+                .1
+                .wait(slot)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+}
+
+/// The process's status when the game's thread ends ([`run_on_main_thread`]): 0 when the game
+/// returned, 101 when it stopped with a panic (as Rust's own for a main thread's panic; its message
+/// is already printed).
+fn game_end_status(ended: &std::thread::Result<()>) -> i32 {
+    if ended.is_ok() {
+        0
+    } else {
+        101
+    }
 }
 
 /// The stack of the thread the game runs on when the main thread is the window layer's: the
@@ -276,26 +367,13 @@ pub(super) fn run_on_main_thread(game: Box<dyn FnOnce() + Send>) -> ! {
         .stack_size(GAME_STACK)
         .spawn(move || {
             let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(game));
-            crate::end_process(if ended.is_ok() { 0 } else { 101 })
+            crate::end_process(game_end_status(&ended))
         });
     if let Err(e) = spawned {
         eprintln!("nv-rs: the game's thread could not start ({e})");
         crate::end_process(1);
     }
-    let (slot, ready) = main_requests();
-    let mut taken = slot
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let requests = loop {
-        if let Some(rx) = taken.take() {
-            break rx;
-        }
-        taken = ready
-            .wait(taken)
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-    };
-    drop(taken);
-    run(requests);
+    run(main_requests().take());
     // `run` ends the process itself (`no_window`); this is never reached.
     crate::end_process(1)
 }
@@ -821,6 +899,46 @@ mod tests {
         }
         let unknown = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
         assert_eq!(key_name(unknown), None);
+    }
+
+    /// The hand-off of the requests to the main thread ([`run_on_main_thread`]): a value given
+    /// before the waiter starts and one given after it waits are both taken (no lost wake-up).
+    #[test]
+    fn the_handoff_is_taken_whether_given_before_or_after_the_wait() {
+        // Given before the waiter starts.
+        let before = Handoff::default();
+        before.give(7u32);
+        assert_eq!(before.take(), 7);
+        // Given after the waiter is waiting: the waiter is told it has started, then the value
+        // is given a little later (a lost wake-up would hang here; the test harness's time
+        // limit, and the channel's, end such a run).
+        let after = Arc::new(Handoff::default());
+        let (started, has_started) = std::sync::mpsc::channel();
+        let (took, has_taken) = std::sync::mpsc::channel();
+        let waiter = {
+            let after = Arc::clone(&after);
+            std::thread::spawn(move || {
+                started.send(()).unwrap();
+                took.send(after.take()).unwrap();
+            })
+        };
+        has_started.recv().unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(has_taken.try_recv().is_err(), "taken before it was given");
+        after.give(9u32);
+        assert_eq!(has_taken.recv_timeout(Duration::from_secs(10)), Ok(9));
+        waiter.join().unwrap();
+        // Taken once: the slot is empty again.
+        assert!(after.0.lock().unwrap().is_none());
+    }
+
+    /// The process's status when the game's thread ends: 0 when the game returned, 101 when it
+    /// stopped with a panic.
+    #[test]
+    fn the_games_end_gives_0_or_101() {
+        assert_eq!(game_end_status(&Ok(())), 0);
+        let panicked = std::panic::catch_unwind(|| panic!("the game stopped"));
+        assert_eq!(game_end_status(&panicked), 101);
     }
 
     /// The size the drawing side reads follows the game's own resizes: on Wayland the size applied

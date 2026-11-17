@@ -56,9 +56,9 @@ Today the program STOPS right after it finds your game, with a message that list
 provided on this Mac yet (it begins "error: nv-rs does not run the game on this system yet").
 On Apple silicon (the Macs this package is built for) what is left is the processor's side: the
 exact results of some of the game's maths and the processor's quick estimates the game's physics
-uses. The game's window (on the program's main thread, as macOS requires), drawing, sound, paths,
-the machine's answers and the code pages are in place (built, not yet tried with the game). The
-rest comes in the next previews; play.sh and
+uses. The game's window (on the program's main thread, as macOS requires), drawing on Metal,
+sound, paths, the machine's answers and the code pages are built and pass their checks, but none
+of them has been tried with the game on a Mac yet. The rest comes in the next previews; play.sh and
 your nv-rs folder stay the same. This stop needs no report: play.sh says "As expected for this
 preview" after it.
 
