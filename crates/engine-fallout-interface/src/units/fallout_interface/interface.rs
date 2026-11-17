@@ -2272,6 +2272,17 @@ pub fn fn_007052f0(
         );
         let hud = e.global::<u32>(HUD_MAIN_MENU);
         if ready_manager(e).is_some() && hud != 0 {
+            // JIP LN NVSE's G09 at `0x70535C` (group GA's row and handler, a fix row:
+            // `WriteRelJump(0x70535C, QueueUIMessageHook)`, the time pushed in place of the
+            // caller's): the seam with the time's bits answers the time to show (a built-in
+            // plugin's call is marked, `Engine::mark_plugin_ui_message`). One load while JIP's
+            // fixes are not in.
+            let value = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x0070_535c, &[value.to_bits()])
+                    .map_or(value, f32::from_bits)
+            } else {
+                value
+            };
             e.call(
                 HUD_SHOW_SUBTITLE_TIMED,
                 &args![hud, first, second, third, fourth, value.to_bits(), flag],
@@ -5074,6 +5085,57 @@ mod tests {
             &args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u8],
         );
         assert!(logged(&e, HUD_SHOW_SUBTITLE).is_empty());
+    }
+
+    fn g09_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G09's seam asked without FIXES");
+    }
+
+    thread_local! {
+        static G09_SEEN: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Stands for JIP's `QueueUIMessageHook` giving the default time, 7.0.
+    fn g09_default(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G09_SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(7.0f32.to_bits())
+    }
+
+    /// JIP LN NVSE's G09 seam (`0x0070535C`, the display time; group GA's row, a fix row): with
+    /// the word 0 or `INSTALLED` alone it is not asked and the HUD gets the caller's time; with
+    /// `FIXES` and no handler, the caller's; with a handler it is asked once with exactly the
+    /// caller's time's bits and the HUD gets its answer, the other five words unchanged; and it
+    /// is not asked when nothing is shown (no HUD).
+    #[test]
+    fn fn_007052f0_jip_default_message_time_seam() {
+        use engine_core::extend::jip_patches;
+        let call = args![1u32, 2u32, 3u32, 4u32, 2.5f32, 9u8];
+        let run = |word: u32, handler: Option<engine_core::extend::SiteFn>, hud: u32| {
+            let (mut e, _) = subtitle_world();
+            e.mem.set_u32(HUD_MAIN_MENU, hud);
+            if let Some(handler) = handler {
+                e.on_site_for_test(0x0070_535c, handler);
+            }
+            e.set_jip_patches(word);
+            G09_SEEN.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            e.call(0x0070_52f0, &call);
+            (
+                logged(&e, HUD_SHOW_SUBTITLE_TIMED),
+                G09_SEEN.with(|s| s.take()),
+            )
+        };
+        let caller = vec![vec![0x8000, 1, 2, 3, 4, 2.5f32.to_bits(), 9]];
+        for word in [0, jip_patches::INSTALLED] {
+            assert_eq!(run(word, Some(g09_never), 0x8000), (caller.clone(), vec![]));
+        }
+        let fixes = jip_patches::INSTALLED | jip_patches::FIXES;
+        assert_eq!(run(fixes, None, 0x8000).0, caller, "no handler");
+        let (shown, seen) = run(fixes, Some(g09_default), 0x8000);
+        assert_eq!(shown, vec![vec![0x8000, 1, 2, 3, 4, 7.0f32.to_bits(), 9]]);
+        assert_eq!(seen, vec![vec![2.5f32.to_bits()]]);
+        assert_eq!(run(fixes, Some(g09_default), 0), (vec![], vec![]), "no HUD");
     }
 
     #[test]

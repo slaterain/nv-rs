@@ -1166,6 +1166,7 @@ fn show_item_message(e: &mut Engine, item: u32, text: u32) {
     let block = heap_alloc(e, MESSAGE_BUFFER as u32);
     e.mem.write(block, &message);
     e.mem.set_u8(block + message.len() as u32, 0);
+    let _plugin = e.mark_plugin_ui_message();
     e.call(
         QUEUE_UI_MESSAGE,
         &args![block, 0u32, MESSAGE_ICON, 0u32, TWO_SECONDS, 0u32],

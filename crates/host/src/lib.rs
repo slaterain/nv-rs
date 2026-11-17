@@ -184,6 +184,15 @@ impl Host {
         if let Some(note) = fixes::play_run_taken_as_test(choice, |name| std::env::var(name).ok()) {
             eprintln!("{note}");
         }
+        // Windows told the game is not background work, so a window that is not the active one
+        // keeps the full-speed cores (`qos`; `fixes::Choice::not_background`: on by default in
+        // every run and preset; `bNotBackground=0` in Fallout.ini's `[nv-rs Threads]` or
+        // `NV_NOT_BACKGROUND=0` turns it off). Before any thread of the port's starts: each makes
+        // its own call when this turned it on. One line either way.
+        eprintln!(
+            "{}",
+            qos::apply_at_start(choice.not_background, choice.not_background_by)
+        );
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         // `NV_REPEATABLE=FRAMES` (a test mode, [`repeatable_frames`]): a virtual clock instead, the
@@ -253,12 +262,35 @@ impl Host {
         // F11 in the game shows or hides it either way.
         engine_platform::d3d9real::want_frame_rate(choice.show_frame_rate);
         // The new lighting (`fixes::Choice::ambient_occlusion`: `NV_AO`; else, in a launcher's play
-        // run, Fallout.ini's `[nv-rs Display] bAmbientOcclusion`; off by default). Off: nothing is
-        // installed, read or recorded.
+        // run, Fallout.ini's `[nv-rs Display] bAmbientOcclusion`; off by default), at its strength
+        // (`fAmbientOcclusionStrength`, `NV_AO_STRENGTH`). Off: nothing is installed, read or
+        // recorded.
+        // One reader for both: with the sun shadows on, the sun is the sun light the lit shaders
+        // take (the ambient occlusion's contact shadows follow it too); off, the sun disc's place,
+        // as before.
+        #[cfg(windows)]
+        let reader: fn(
+            &engine_platform::Engine,
+        ) -> Option<engine_platform::d3d9real::SceneView> = if choice.sun_shadows {
+            scene_light::read_lit
+        } else {
+            scene_light::read
+        };
         #[cfg(windows)]
         if choice.ambient_occlusion {
-            engine_platform::d3d9real::want_scene_light(scene_light::read);
-            eprintln!("nv-rs: new lighting on (ambient occlusion; Vulkan only)");
+            engine_platform::d3d9real::want_scene_light(reader, choice.ambient_occlusion_strength);
+            eprintln!(
+                "nv-rs: new lighting on (ambient occlusion at strength {}; Vulkan only)",
+                choice.ambient_occlusion_strength
+            );
+        }
+        // The sun shadows (`fixes::Choice::sun_shadows`: `NV_SUN_SHADOWS`; else, in a launcher's play
+        // run, Fallout.ini's `[nv-rs Display] bSunShadows`; off by default). Off: nothing is
+        // installed, read or recorded.
+        #[cfg(windows)]
+        if choice.sun_shadows {
+            engine_platform::d3d9real::want_sun_shadows(reader);
+            eprintln!("nv-rs: sun shadows on (Vulkan only; in the game's lighting, or the engineers' overlay with NV_SUN_SHADOWS=debug)");
         }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,

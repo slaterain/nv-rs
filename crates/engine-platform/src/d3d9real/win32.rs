@@ -280,7 +280,10 @@ pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Send
         let (tx, rx) = std::sync::mpsc::channel::<Request>();
         let _ = std::thread::Builder::new()
             .name("nv-d3d9-window".into())
-            .spawn(move || unsafe { run_window_thread(rx) });
+            .spawn(move || {
+                qos::thread_started();
+                unsafe { run_window_thread(rx) }
+            });
         std::sync::Mutex::new(tx)
     })
 }

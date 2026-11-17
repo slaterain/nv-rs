@@ -9,6 +9,9 @@ use std::hash::{BuildHasherDefault, Hasher};
 /// A `HashMap` with [`FxHasher`].
 pub type Map<K, V> = HashMap<K, V, BuildHasherDefault<FxHasher>>;
 
+/// A `HashSet` with [`FxHasher`].
+pub type Set<K> = std::collections::HashSet<K, BuildHasherDefault<FxHasher>>;
+
 const SEED: u64 = 0x51_7c_c1_b7_27_22_0a_95;
 
 #[derive(Default, Clone, Copy)]

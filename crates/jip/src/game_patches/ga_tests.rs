@@ -35,9 +35,20 @@ fn ga_seams_are_jips_addresses() {
     );
     let corner: Vec<u32> = CORNER_MESSAGE.iter().map(|s| s.addr()).collect();
     assert_eq!(ROLLOVER_WEAPON.addr(), 0x0077_7123);
+    assert_eq!(VATS_TARGET_DT.addr(), 0x007e_ce32);
+    assert_eq!(MESSAGE_TIME.addr(), 0x0070_535c);
     assert_eq!(
         AREA.fix_sites,
-        [sites, corner, vec![ROLLOVER_WEAPON.addr()]].concat()
+        [
+            sites,
+            corner,
+            vec![
+                ROLLOVER_WEAPON.addr(),
+                VATS_TARGET_DT.addr(),
+                MESSAGE_TIME.addr(),
+            ]
+        ]
+        .concat()
     );
     assert!(AREA.fix_wraps.is_empty() && AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
 }
@@ -377,4 +388,102 @@ fn g80_plus_only_within_the_name_buffer() {
     assert_eq!(rollover_weapon(&mut e, &[weapon, reference]), Some(1));
     assert_eq!(e.mem.cstr(0x011d_9c48), full);
     assert_eq!(e.mem.u8(0x011d_9c48 + 0x104), 0xAA);
+}
+
+/// G121 not installed, or installed with the row off: nothing answers at its seam; with the
+/// fixes in and no hit reckoned by JIP's hit damage yet (`s_VATSHitDT` still `-FLT_MAX`), no
+/// answer either: the exe's call runs, as JIP jumps to it.
+#[test]
+fn g121_no_answer_until_a_hit_is_reckoned() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    assert_eq!(
+        e.site(0x007e_ce32, &[0x5000, 0x6000]),
+        None,
+        "not installed"
+    );
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site(0x007e_ce32, &[0x5000, 0x6000]), None, "row off");
+    install_fixes(&mut e);
+    assert_eq!(
+        vats_target_dt(&mut e, &[0x5000, 0x6000]),
+        None,
+        "no hit yet"
+    );
+    assert_eq!(
+        e.site(0x007e_ce32, &[0x5000, 0x6000]),
+        None,
+        "the exe's call"
+    );
+}
+
+/// JIP's `GetVATSTargetDTHook` on the recorded threshold: `-FLT_MAX` gives no answer; a
+/// threshold with its sign bit set (negative, -0.0, the next float above `-FLT_MAX`) gives 0.0;
+/// any other (0.0, a fraction, `FLT_MAX`) its own bits.
+#[test]
+fn g121_negative_thresholds_show_as_zero() {
+    assert_eq!(vats_dt_answer(-f32::MAX), None);
+    for dt in [-0.5f32, -0.0, -1.0e30, f32::from_bits(0xFF7F_FFFE)] {
+        assert_eq!(vats_dt_answer(dt), Some(0), "{dt}");
+    }
+    for dt in [0.0f32, 6.0, 0.25, f32::MAX] {
+        assert_eq!(vats_dt_answer(dt), Some(dt.to_bits()), "{dt}");
+    }
+}
+
+/// G121 with a hit recorded by JIP's hit damage: the seam answers through the real handler, a
+/// positive threshold as its bits (6.0) and a negative one as 0 (-0.5).
+#[test]
+fn g121_answers_the_recorded_threshold() {
+    let mut e = engine();
+    crate::install_as(&mut e, true);
+    install_fixes(&mut e);
+    crate::game_patches::gc::damage::set_vats_hit_dt(&mut e, 6.0);
+    assert_eq!(
+        e.site(0x007e_ce32, &[0x5000, 0x6000]),
+        Some(6.0f32.to_bits())
+    );
+    crate::game_patches::gc::damage::set_vats_hit_dt(&mut e, -0.5);
+    assert_eq!(e.site(0x007e_ce32, &[0x5000, 0x6000]), Some(0));
+}
+
+/// G09 not installed, or installed with the row off: nothing answers at its seam; with the fixes
+/// in, its handler answers there (the default time, 2.0, for the game's call).
+#[test]
+fn g09_seam_answers_only_with_the_fixes() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    assert_eq!(
+        e.site(0x0070_535c, &[2.5f32.to_bits()]),
+        None,
+        "not installed"
+    );
+    crate::install_as(&mut e, true);
+    assert_eq!(e.site(0x0070_535c, &[2.5f32.to_bits()]), None, "row off");
+    install_fixes(&mut e);
+    assert_eq!(
+        e.site(0x0070_535c, &[2.5f32.to_bits()]),
+        Some(2.0f32.to_bits())
+    );
+}
+
+/// JIP's `QueueUIMessageHook`: the game's own call (unmarked) gets the default time, 2.0 and
+/// then what `SetDefaultMessageTime` set; a built-in plugin's call (marked while JIP's fixes are
+/// in) keeps the time it passed, and only while its mark lives.
+#[test]
+fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
+    let mut e = engine();
+    crate::install_as(&mut e, true);
+    install_jip(&mut e);
+    e.set_jip_patches(
+        engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
+    );
+    let passed = 2.5f32.to_bits();
+    assert_eq!(message_time(&mut e, &[passed]), Some(2.0f32.to_bits()));
+    set_default_message_time(&mut e, 5.0);
+    assert_eq!(message_time(&mut e, &[passed]), Some(5.0f32.to_bits()));
+    let mark = e.mark_plugin_ui_message();
+    assert_eq!(message_time(&mut e, &[passed]), Some(passed), "a plugin's");
+    drop(mark);
+    assert_eq!(message_time(&mut e, &[passed]), Some(5.0f32.to_bits()));
 }

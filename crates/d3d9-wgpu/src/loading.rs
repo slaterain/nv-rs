@@ -456,6 +456,7 @@ pub(crate) fn capture_output() -> Option<Capture> {
         let reader = std::thread::Builder::new()
             .name("nv-rs output".into())
             .spawn(move || {
+                qos::thread_started();
                 let (mut buf, mut line) = ([0u8; 4096], Vec::new());
                 loop {
                     let mut n = 0u32;
