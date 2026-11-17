@@ -3,9 +3,9 @@ nv-rs macOS preview
 
 PLEASE READ FIRST
 - Nobody on the project has played this build on a Mac: the maintainers have only Windows PCs.
-  It was built by the project's automatic build (GitHub Actions), which also ran play.sh's own
-  tests for it; most of the program's unit tests are run there every night on the project's main
-  branch.
+  BUILD.txt in this folder says where this package was built, from which version of the source,
+  and what was checked. On GitHub's Macs, play.sh's own tests run every night and on every change
+  to play.sh, and most of the program's unit tests every night on the project's main branch.
 - What works today: naming your game's folder, remembering it, and the check of your game's
   version (./play.sh --check). The game itself does NOT run on macOS yet: the program stops right
   after it finds your game, and says what is not provided on macOS yet. That stop is expected
@@ -61,21 +61,24 @@ needs) before that same stop: a wrong version is said instead.
 Start
 -----
 1. Unpack the archive into a folder of your own (not inside the game's folder). Safari usually
-   unpacks it by itself: then you already have the folder nv-rs-preview-macos-arm64 in Downloads,
-   and you skip this step. Otherwise, in Terminal: cd ~/Downloads
-   and then: tar -xzf nv-rs-preview-macos-arm64.tar.gz
+   unpacks it by itself: then the package's folder (the folder holding play.sh) is already in
+   Downloads, and you skip this step. Otherwise double-click the archive in Finder, or in
+   Terminal: cd ~/Downloads and then tar -xzf followed by the archive's name (the file you
+   downloaded, ending in .tar.gz).
 2. This program is not signed by Apple (the project has no Apple developer certificate), so
    macOS refuses to start it at first. On macOS 15 it says '"nv-viewer" Not Opened' and 'Apple
    could not verify "nv-viewer" is free of malware' (older macOS: "cannot be opened" or "is
    damaged"). The warning names nv-viewer, the program play.sh starts. Allow it once, in
-   Terminal, in the folder that HOLDS nv-rs-preview-macos-arm64 (for example: cd ~/Downloads):
-     xattr -dr com.apple.quarantine nv-rs-preview-macos-arm64
+   Terminal: type
+     xattr -dr com.apple.quarantine
+   then a space, then drag the folder you extracted (the one holding play.sh) from Finder into
+   the Terminal window (that types its full path), and press Enter.
    Do this only for a download you trust: the source of every file is at
    https://github.com/slaterain/nv-rs (BUILD.txt names the exact version). This removes the
    download's mark from this package's files only; it turns no protection of your Mac off. If
    you skip it, play.sh stops and shows you this command with the package's folder in it.
-3. In Terminal, in the package's folder (cd ~/Downloads/nv-rs-preview-macos-arm64): ./play.sh
-   (as yourself: never with sudo)
+3. In Terminal, go into the folder you extracted (type cd and a space, drag the folder into the
+   window, press Enter), then start: ./play.sh   (as yourself: never with sudo)
    If ./play.sh answers "Permission denied", start it as: sh play.sh
    It then says what is wrong (for example a drive that does not allow programs to run: move
    the package's folder into your home folder instead).

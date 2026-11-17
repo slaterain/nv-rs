@@ -32,23 +32,72 @@ use std::sync::{Mutex, OnceLock};
 fn out_dir() -> Option<&'static Path> {
     static DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
     DIR.get_or_init(|| {
-        let dir = PathBuf::from(std::env::var_os("NV_SAVE_OUT")?);
-        if let Some(why) = refused_here(&dir) {
-            warn_visibly(
-                &format!(
-                    "NV_SAVE_OUT={}: refused ({why}); saves are not copied.",
-                    dir.display()
-                ),
-                &plain_words(why, format!("Your saves are NOT being kept: they will be lost when the game closes. The save folder the game was given is one it must not write to. Start the game through {START}, and report this if you did.")),
-            );
-            return None;
-        }
+        let dir = save_dir_checked(
+            PathBuf::from(std::env::var_os("NV_SAVE_OUT")?),
+            &refused_here,
+        )?;
         for name in clean_parts(&dir) {
             println!("NV_SAVE_OUT: removed {name}, a copy cut short by an earlier run's end");
         }
         Some(dir)
     })
     .as_deref()
+}
+
+/// `NV_SAVE_OUT`'s folder `dir` unless `check` refuses it, said to the player ([`warn_refused`]).
+fn save_dir_checked(
+    dir: PathBuf,
+    check: &dyn Fn(&Path) -> Option<&'static str>,
+) -> Option<PathBuf> {
+    if let Some(why) = check(&dir) {
+        warn_refused(
+            &format!(
+                "NV_SAVE_OUT={}: refused ({why}); saves are not copied.",
+                dir.display()
+            ),
+            why,
+            format!("Your saves are NOT being kept: they will be lost when the game closes. The save folder the game was given is one it must not write to. Start the game through {START}, and report this if you did."),
+        );
+        return None;
+    }
+    Some(dir)
+}
+
+/// `NV_PREFS_OUT`'s file `file` unless `check` refuses it, said to the player ([`warn_refused`]).
+fn prefs_file_checked(
+    file: PathBuf,
+    check: &dyn Fn(&Path) -> Option<&'static str>,
+) -> Option<PathBuf> {
+    if let Some(why) = check(&file) {
+        warn_refused(
+            &format!(
+                "NV_PREFS_OUT={}: refused ({why}); settings are not copied.",
+                file.display()
+            ),
+            why,
+            format!("Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through {START}, and report this if you did."),
+        );
+        return None;
+    }
+    Some(file)
+}
+
+/// A refusal `why` said to the player ([`warn_visibly`] in [`plain_words`]). Off Windows a look at
+/// the player's folders that did not answer refuses the save folder AND the settings file (and any
+/// write after them): one cause, said visibly once a run, the other refusals' lines in the log only
+/// (review of #630, round 5: two dialogs for one sleeping disk).
+fn warn_refused(line: &str, why: &'static str, usual: String) {
+    #[cfg(not(windows))]
+    if why == LOOK_TOO_SLOW || why == LOOK_STOPPED {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        let mut first = false;
+        SAID.call_once(|| first = true);
+        if !first {
+            println!("{line}");
+            return;
+        }
+    }
+    warn_visibly(line, &plain_words(why, usual));
 }
 
 /// The copy-out's temporary files (`<save>.fos.part`, `<save>.nvse.part`) an earlier run left in
@@ -473,18 +522,10 @@ pub fn refused(dir: &Path, profile: Option<&Path>, known: &[PathBuf]) -> Option<
 fn prefs_file() -> Option<&'static Path> {
     static FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
     FILE.get_or_init(|| {
-        let file = PathBuf::from(std::env::var_os("NV_PREFS_OUT")?);
-        if let Some(why) = refused_here(&file) {
-            warn_visibly(
-                &format!(
-                    "NV_PREFS_OUT={}: refused ({why}); settings are not copied.",
-                    file.display()
-                ),
-                &plain_words(why, format!("Your changed game settings are NOT being kept: they will be lost when the game closes. The settings file the game was given is in a folder it must not write to. Start the game through {START}, and report this if you did.")),
-            );
-            return None;
-        }
-        Some(file)
+        prefs_file_checked(
+            PathBuf::from(std::env::var_os("NV_PREFS_OUT")?),
+            &refused_here,
+        )
     })
     .as_deref()
 }
@@ -646,12 +687,13 @@ pub fn run(job: &Job) -> Result<Option<String>, String> {
 /// link while the game runs, a look at the player's folders that did not answer): said to the
 /// player as visibly as the refusal at the start, once a run (the log has every one).
 #[cfg(not(windows))]
-fn warn_refused_mid_run(path: &Path, why: &str) {
+fn warn_refused_mid_run(path: &Path, why: &'static str) {
     static SAID: std::sync::Once = std::sync::Once::new();
     SAID.call_once(|| {
-        warn_visibly(
+        warn_refused(
             &format!("NV_SAVE_OUT: {}: refused at write time ({why})", path.display()),
-            &plain_words(why, format!("Your saves and changed settings are NOT being kept from now on: they will be lost when the game closes. nv-rs's save folder changed while the game was running, so that it now leads into one of your own folders (Steam's, Wine's or your Documents), which nv-rs never writes into. Put nv-rs's own folder back as a plain folder (not a link) and start the game again through {START}.")),
+            why,
+            format!("Your saves and changed settings are NOT being kept from now on: they will be lost when the game closes. nv-rs's save folder changed while the game was running, so that it now leads into one of your own folders (Steam's, Wine's, your Documents) or out of nv-rs's own folder, which nv-rs never writes through. Put nv-rs's own folder back as a plain folder (not a link) and start the game again through {START}."),
         );
     });
 }
@@ -1456,6 +1498,34 @@ mod tests {
             send.send(Some(vec![])).unwrap();
             assert_eq!(wait_for_look(Some(receive), wait), Ok(vec![]));
             assert_eq!(plain_words("a `..` in the path", "usual".into()), "usual");
+        }
+
+        /// Review of #630 (round 5): a look at the player's folders that did not answer refuses
+        /// both the save folder and the settings file (play.sh always gives both), and the player
+        /// is told once, not in two dialogs.
+        #[test]
+        fn a_look_without_an_answer_is_said_once_for_saves_and_settings() {
+            let s = Scratch::new("said-once");
+            let slow = |p: &Path| refused_by(Err(LOOK_TOO_SLOW), p);
+            assert_eq!(save_dir_checked(s.0.join("own/Saves"), &slow), None);
+            assert_eq!(
+                prefs_file_checked(s.0.join("own/FalloutPrefs.ini"), &slow),
+                None
+            );
+            let said: Vec<String> = WARNED
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .filter(|w| w.contains("NOT being kept this run"))
+                .cloned()
+                .collect();
+            assert_eq!(said.len(), 1, "{said:?}");
+            // A path the check allows is kept, and nothing more is said.
+            let none = |_: &Path| None;
+            assert_eq!(
+                save_dir_checked(s.0.join("own/Saves"), &none),
+                Some(s.0.join("own/Saves"))
+            );
         }
 
         /// Review of #630 (round 3): the production path, as the game's copy-out runs it ([`run`]

@@ -3,9 +3,10 @@ nv-rs Linux preview
 
 PLEASE READ FIRST
 - Nobody on the project has played this build on Linux: the maintainers have only Windows PCs.
-  It was built by the project's automatic build (GitHub Actions), which also ran play.sh's own
-  tests for it; the program's unit tests are run there on every change to the project's main
-  branch.
+  BUILD.txt in this folder says where this package was built, from which version of the source,
+  and what was checked. On GitHub's Linux machines, play.sh's own tests run every night and on
+  every change to play.sh, and most of the program's unit tests on every change to the project's
+  main branch.
 - What works today: finding your game, remembering it, copying your saves from Steam's Proton
   folder into nv-rs's own folder (only when you type yes), and the check of your game's version
   (./play.sh --check). The game itself does NOT run on Linux yet: the program stops right after
@@ -66,9 +67,12 @@ needs) before that same stop: a wrong version is said instead.
 
 Start
 -----
-1. Extract the archive to a folder of your own in your home folder (not inside the game's folder
-   or Steam's), for example with: tar -xzf nv-rs-preview-linux-x86_64.tar.gz
-2. In a terminal, in that folder: ./play.sh   (as yourself: never with sudo)
+1. Extract the archive in a folder of your own in your home folder (not inside the game's folder
+   or Steam's): your file manager can, or in a terminal: tar -xzf followed by the archive's name
+   (the file you downloaded, ending in .tar.gz). That makes the package's folder, which holds
+   play.sh.
+2. In a terminal, in the folder you extracted (the one holding play.sh): ./play.sh
+   (as yourself: never with sudo)
    If ./play.sh answers "Permission denied", start it as: sh play.sh
    It then says what is wrong (for example a drive that does not allow programs to run:
    extract the archive into your home folder instead).
