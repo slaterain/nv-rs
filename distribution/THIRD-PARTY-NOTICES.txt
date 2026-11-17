@@ -1211,3 +1211,31 @@ DXVK v3.1.1 (Philip Rebohle and contributors)
 
     – This notice may not be removed or altered from any source distribution.
   Modified: translated to Rust and altered (see Used for).
+
+UI Organizer 2.30 (jazzisparis, Jef)
+  License: MIT
+  Repository: https://github.com/jazzisparis/UIO-User-Interface-Organizer
+  Used for: crates/uio, UI Organizer translated to Rust (commit 426d963, the source of ui_organizer.dll 2.30), and its list of the UI mods it knows, the UIO 2.30 package's Data\uio\supported.txt, built in unchanged (crates/uio/data/supported.txt; read when the game folder has none). Used with the author's permission; the list file is not in the source repository and is included under the same notice.
+  Notice:
+    MIT License
+
+    Copyright (c) 2020 Jef
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+  Modified: the code translated to Rust; the list unchanged.
