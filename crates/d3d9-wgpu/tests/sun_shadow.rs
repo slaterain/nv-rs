@@ -716,6 +716,8 @@ struct Extra {
     still_box: bool,
     /// The moving box ([`MOVING_BOX`]) standing at (x, y).
     moving_box: Option<(f32, f32)>,
+    /// A second copy of the moving box (the same buffer) standing at (x, y).
+    other_box: Option<(f32, f32)>,
     /// The checker cut-out ([`CUT`]).
     cutout: bool,
     /// The lit square after the depth-only clear ([`AFTER`]).
@@ -936,6 +938,11 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
             draw(b, MOVING_BOX, 10);
             set_mvp(b, model_view_proj());
         }
+        if let Some((x, y)) = e.other_box {
+            set_mvp(b, model_view_proj_at(x, y));
+            draw(b, MOVING_BOX, 10);
+            set_mvp(b, model_view_proj());
+        }
         if e.cutout {
             set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
             run(
@@ -1049,6 +1056,47 @@ fn a_moving_casters_shadow_goes_when_it_does() {
         for f in [4, 5] {
             assert!(on[f] == off[f], "frame {f}: a shadow is left ({samples})");
         }
+    }
+}
+
+/// A moving box whose buffer a second copy shares: the copy (out of the view, drawn in the first
+/// frame) is not drawn in the frame the box moves, so that frame has two old places and one new.
+/// The move is still found: the box's first place casts no shadow the next frame (only its new
+/// place does).
+#[test]
+fn a_move_is_found_while_another_copy_leaves_the_view() {
+    let frames = [
+        Extra {
+            moving_box: Some((0.0, 150.0)),
+            other_box: Some((-700.0, 150.0)),
+            ..Extra::default()
+        },
+        Extra {
+            moving_box: Some((10.0, 150.0)),
+            ..Extra::default()
+        },
+        Extra {
+            moving_box: Some((10.0, 150.0)),
+            ..Extra::default()
+        },
+    ];
+    for samples in [1, 4] {
+        let Some(off) = lit_sequence_picture(samples, false, &frames) else {
+            return;
+        };
+        let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+        // The box at (10, 150) throws its shadow to x -65; at (0, 150) it threw it to x -75.
+        let gone = pixel([-70.0, 150.0, 0.0]);
+        assert_eq!(
+            at(&on[2], gone),
+            at(&off[2], gone),
+            "the first place's shadow is left ({samples})"
+        );
+        let p = pixel([-45.0, 150.0, 0.0]);
+        assert!(
+            f32::from(at(&on[2], p)[2]) < 0.7 * f32::from(at(&off[2], p)[2]),
+            "the new place's shadow ({samples})"
+        );
     }
 }
 

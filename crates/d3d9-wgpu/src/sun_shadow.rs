@@ -18,9 +18,10 @@
 //! released, or wholly in view and not drawn) or too far; the sky, clouds and far land never cast
 //! ([`casts`]). Motion is decided place by place ([`Cache::mark_moves`], [`mover`]): a place that
 //! came near a place of the same geometry drawn the frame before and not now moves, and is drawn
-//! each frame over a copy of the still maps; copies of one geometry (fence posts, poles, rocks)
-//! leaving and entering the view are no move. A still map is drawn again only when it moved, the
-//! sun turned, or a still caster in it came, went or moved; then each caster that touches it
+//! each frame over a copy of the still maps until it has stood still for [`SETTLE`] frames; copies
+//! of one geometry (fence posts, poles, rocks) leaving and entering the view are no move. A still
+//! map is drawn again only when it moved, the sun turned, or a still caster in it came, went or
+//! moved; then each caster that touches it
 //! ([`Cascade::touches`]) is drawn again, depth only, through its own converted vertex shader, with
 //! `ModelViewProj`'s four registers replaced by the map's view of its place
 //! ([`Cascade::world_to_light`]).
@@ -777,6 +778,9 @@ impl<T> Instance<T> {
 /// moved (about 3.7 m: faster than anything the game moves that casts).
 pub const MOVE_REACH: f64 = 256.0;
 
+/// The frames a moving place stands still before it is still again ([`Cache::settle`]).
+pub const SETTLE: u64 = 30;
+
 /// Whether a sphere in the camera's view space (`centre`, `radius`) reaches into the camera's view
 /// (`frustum` left, right, bottom, top at unit distance) between depths `near` and `far`.
 pub fn partly_in_view(
@@ -800,7 +804,9 @@ pub fn partly_in_view(
 /// ahead) and `frustum`, `near`, `far`: a new place is an old one moved when the two centres are
 /// within [`MOVE_REACH`] and the old place still reaches into the view (a copy that left the view
 /// was not drawn because it is out of sight, not because it moved: a fence post leaving at one
-/// edge as another enters is no move).
+/// edge as another enters is no move), or, out of the view (the camera turned, or the object
+/// moved out past the edge), when the new centre lies inside the old place's own sphere (no two
+/// copies of a geometry stand that close).
 pub fn mover<T>(
     frustum: [f32; 4],
     position: [f64; 3],
@@ -812,7 +818,9 @@ pub fn mover<T>(
         let d: [f64; 3] = std::array::from_fn(|k| old.centre[k] - position[k]);
         let v = [dot3(axes[0], d), dot3(axes[1], d), dot3(axes[2], d)];
         let m: [f64; 3] = std::array::from_fn(|k| new.centre[k] - old.centre[k]);
-        dot3(m, m).sqrt() <= MOVE_REACH && partly_in_view(frustum, v, old.radius, near, far)
+        let apart = dot3(m, m).sqrt();
+        apart <= MOVE_REACH
+            && (partly_in_view(frustum, v, old.radius, near, far) || apart <= old.radius)
     }
 }
 
@@ -871,10 +879,11 @@ impl<K: std::hash::Hash + Eq + Clone, T> Cache<K, T> {
 
     /// Motion, decided place by place (never for a whole geometry: fence posts, poles and rocks
     /// are many places of one geometry). For each geometry in `came` (places added in frame
-    /// `now`), its new places are paired one for one, nearest first, with its places drawn the
-    /// frame before and not in this one, where `pair(old, new)` holds ([`mover`]), and only when
-    /// there are as many of each. A paired new place moves; its old place has left (the sweep
-    /// lets it go). At most `room` places are marked; returns how many were.
+    /// `now`), its new places are paired with its places drawn the frame before and not in this
+    /// one, one for one, the nearest pairs first, wherever `pair(old, new)` holds ([`mover`]);
+    /// other copies of the geometry coming or going in the same frame (a second can, a fence post
+    /// leaving the view) change nothing for a real move. A paired new place moves; its old place
+    /// has left (the sweep lets it go). At most `room` places are marked; returns how many were.
     pub fn mark_moves<'a>(
         &mut self,
         now: u64,
@@ -896,31 +905,47 @@ impl<K: std::hash::Hash + Eq + Clone, T> Cache<K, T> {
             let old: Vec<usize> = (0..places.len())
                 .filter(|&o| places[o].seen + 1 == now && !places[o].left)
                 .collect();
-            if new.is_empty() || new.len() != old.len() {
-                continue;
-            }
-            let mut taken = vec![false; old.len()];
+            let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
             for &n in &new {
+                for &o in &old {
+                    if pair(&places[o], &places[n]) {
+                        let d: [f64; 3] =
+                            std::array::from_fn(|k| places[o].centre[k] - places[n].centre[k]);
+                        pairs.push((dot3(d, d), n, o));
+                    }
+                }
+            }
+            pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut taken = vec![false; places.len()];
+            for (_, n, o) in pairs {
+                if taken[n] || taken[o] {
+                    continue;
+                }
+                taken[n] = true;
+                taken[o] = true;
                 if marked >= room {
                     return marked;
                 }
-                let apart = |o: usize| {
-                    let d: [f64; 3] =
-                        std::array::from_fn(|k| places[o].centre[k] - places[n].centre[k]);
-                    dot3(d, d)
-                };
-                let best = (0..old.len())
-                    .filter(|&j| !taken[j] && pair(&places[old[j]], &places[n]))
-                    .min_by(|&a, &b| apart(old[a]).total_cmp(&apart(old[b])));
-                if let Some(j) = best {
-                    taken[j] = true;
-                    places[n].moving = true;
-                    places[old[j]].left = true;
-                    marked += 1;
-                }
+                places[n].moving = true;
+                places[o].left = true;
+                marked += 1;
             }
         }
         marked
+    }
+
+    /// Moving places that have stood still: one drawn in frame `now` at the place it came to
+    /// `frames` or more frames before stops moving (it casts from the still maps again, also from
+    /// out of sight); the world spheres of those, for the still maps to be drawn again.
+    pub fn settle(&mut self, now: u64, frames: u64) -> Vec<([f64; 3], f64)> {
+        let mut out = Vec::new();
+        for i in self.map.values_mut().flatten() {
+            if i.moving && i.seen == now && now - i.born >= frames {
+                i.moving = false;
+                out.push((i.centre, i.radius));
+            }
+        }
+        out
     }
 
     /// Lets go of the casters `gone` says are gone (it is asked of every one); the geometry, world
@@ -2745,8 +2770,7 @@ mod tests {
     /// Motion is decided per place. Two copies of one geometry (fence posts sharing a buffer): as
     /// the camera moves, one leaves the view and a third comes in near where it was: nothing moves,
     /// and the copy out of sight is kept (it still casts into view). A copy hidden in view while
-    /// another comes far from it: no move either. Two copies in view and one new: no move (the
-    /// counts differ).
+    /// another comes far from it: no move either.
     #[test]
     fn a_copy_leaving_the_view_as_another_comes_is_no_move() {
         let local = ([0.0, 0.0, 0.0], 2.0);
@@ -2783,14 +2807,66 @@ mod tests {
         assert_eq!(c.mark_moves(4, &came, 100, mover_at([300.0, 0.0, 0.0])), 0);
         assert!(moving_of(&c).is_empty());
         assert!(c.sweep(|_, i| i.moved_on(4)).is_empty());
-        // Frame 5: "stays" and "new" not drawn (two old places in view), one new near them: the
-        // counts differ, no move.
-        c.see(7, at(600.0, 0.0, 2000.0), local, 5, false, || "x");
-        assert!(c
-            .see(7, at(-640.0, 0.0, 1000.0), local, 5, false, || "near")
-            .is_some());
-        assert_eq!(c.mark_moves(5, &came, 100, mover_at([300.0, 0.0, 0.0])), 0);
-        assert!(moving_of(&c).is_empty());
+    }
+
+    /// A real move is found whatever other copies of the geometry do in the same frame: a can
+    /// moves as a second copy leaves the view (two old places, one new), then as a third copy
+    /// comes in (one old, two new); the copy out of sight is kept. When the camera turns so that
+    /// the moving place's old place is out of the view, a new place inside the old place's own
+    /// sphere is still that object moved.
+    #[test]
+    fn a_real_move_is_found_whatever_other_copies_do() {
+        let local = ([0.0, 0.0, 0.0], 2.0);
+        let mut c: Cache<u32, &'static str> = Cache::default();
+        let came = [9u32];
+        let here = mover_at([0.0; 3]);
+        c.see(9, at(0.0, 0.0, 1000.0), local, 1, false, || "can");
+        c.see(9, at(100.0, 0.0, 1000.0), local, 1, false, || "can2");
+        // Out of the view (x 1.2 times the depth), drawn while the camera still saw it.
+        c.see(9, at(-1200.0, 0.0, 1000.0), local, 1, false, || "out");
+        // Frame 2: the can moves 5, "can2" stays, "out" is not drawn.
+        c.see(9, at(100.0, 0.0, 1000.0), local, 2, false, || "x");
+        c.see(9, at(5.0, 0.0, 1000.0), local, 2, false, || "can'");
+        assert_eq!(c.mark_moves(2, &came, 100, &here), 1);
+        assert_eq!(moving_of(&c), ["can'"]);
+        let gone = c.sweep(|_, i| i.moved_on(2));
+        assert_eq!(gone.len(), 1);
+        assert_eq!(gone[0].1 .0, [0.0, 0.0, 1000.0]);
+        assert!(c.iter().any(|i| i.payload == "out" && !i.left));
+        // Frame 3: the can moves 5 more as a third copy comes in far from it.
+        c.see(9, at(100.0, 0.0, 1000.0), local, 3, false, || "x");
+        c.see(9, at(10.0, 0.0, 1000.0), local, 3, false, || "can''");
+        c.see(9, at(500.0, 0.0, 1000.0), local, 3, false, || "more");
+        assert_eq!(c.mark_moves(3, &came, 100, &here), 1);
+        assert_eq!(moving_of(&c), ["can'", "can''"]);
+        assert_eq!(c.sweep(|_, i| i.moved_on(3)).len(), 1);
+        // Frame 4: the camera turned (now at x 1100: the old place is out of the view); the can
+        // moved 1 (inside its own sphere): still a move. Frame 5: 3 more (outside it, the old
+        // place out of the view): not a move.
+        c.see(9, at(11.0, 0.0, 1000.0), local, 4, false, || "can'''");
+        assert_eq!(c.mark_moves(4, &came, 100, mover_at([1100.0, 0.0, 0.0])), 1);
+        assert!(c.iter().any(|i| i.payload == "can''" && i.left));
+        c.sweep(|_, i| i.moved_on(4));
+        c.see(9, at(14.0, 0.0, 1000.0), local, 5, false, || "far");
+        assert_eq!(c.mark_moves(5, &came, 100, mover_at([1100.0, 0.0, 0.0])), 0);
+    }
+
+    /// A moving place that has stood still for [`SETTLE`] frames is still again (the still maps
+    /// take it, so it casts from out of sight too); one that came later, or is not drawn, is not.
+    #[test]
+    fn a_moving_place_standing_still_is_still_again() {
+        let local = ([0.0, 0.0, 0.0], 2.0);
+        let mut c: Cache<u32, &'static str> = Cache::default();
+        c.see(1, at(0.0, 0.0, 1000.0), local, 10, true, || "a");
+        c.see(1, at(50.0, 0.0, 1000.0), local, 20, true, || "b");
+        c.see(1, at(90.0, 0.0, 1000.0), local, 10, true, || "c");
+        let now = 10 + SETTLE;
+        c.see(1, at(0.0, 0.0, 1000.0), local, now, true, || "x");
+        c.see(1, at(50.0, 0.0, 1000.0), local, now, true, || "x");
+        assert!(c.settle(now - 1, SETTLE).is_empty());
+        assert_eq!(c.settle(now, SETTLE), [([0.0, 0.0, 1000.0], 2.0)]);
+        assert_eq!(moving_of(&c), ["b", "c"]);
+        assert!(c.settle(now, SETTLE).is_empty());
     }
 
     /// One object moved a little between frames, in view: its new place moves and its old place

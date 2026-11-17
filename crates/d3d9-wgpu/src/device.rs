@@ -6588,13 +6588,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             MAX_SUN_MOVING.saturating_sub(sun.moving),
             sun_shadow::mover(frustum, position, axes, near, far),
         );
-        // The still maps' changes: places added that do not move, and those let go that did not.
+        // The still maps' changes: places added that do not move, moving places that have stood
+        // still a while (still again, so they cast from out of sight too), and places let go that
+        // did not move.
         let mut still: Vec<([f64; 3], f64)> = sun
             .cache
             .iter()
             .filter(|i| i.born == now && !i.moving)
             .map(|i| (i.centre, i.radius))
             .collect();
+        still.extend(sun.cache.settle(now, sun_shadow::SETTLE));
         let mut why = [0u64; 3];
         let mut written = Vec::new();
         for (_, sphere, moving) in sun.cache.sweep(|k, i| {
