@@ -172,10 +172,10 @@ fn flag(raw: &str) -> Option<bool> {
 }
 
 /// The run's `Fallout.ini`: `My Games\FalloutNV\Fallout.ini` in the Documents folder the run's
-/// adapter table gives the game (`crate::adapter_table_path`), where the game reads it.
+/// adapter table gives the game (`crate::adapter_table_text`), where the game reads it.
 /// A folder whose bytes can't be read is named once in the log ([`path_from_table`]).
 pub fn path() -> Option<PathBuf> {
-    let table = std::fs::read_to_string(crate::adapter_table_path()?).ok()?;
+    let table = crate::adapter_table_text()?;
     path_from_table(&table).unwrap_or_else(|why| {
         eprintln!("{why}");
         None
@@ -201,6 +201,14 @@ pub fn path_from_table(table: &str) -> Result<Option<PathBuf>, String> {
             String::from_utf8_lossy(e.as_bytes())
         )
     })?;
+    // Linux and macOS: the table names the folder as the game sees it, on drive Z:
+    // (`engine_platform::machine_table`); this system's name of it. (#633's
+    // `engine_platform::files::host_path` takes this place when it is merged.)
+    #[cfg(not(windows))]
+    let documents = match documents.strip_prefix("Z:") {
+        Some(rest) => rest.replace('\\', "/"),
+        None => documents,
+    };
     Ok(Some(
         Path::new(&documents)
             .join("My Games")
@@ -510,5 +518,20 @@ mod tests {
         let ansi = "SHGetFolderPathA\t5 0\t0\t443a5c506c61795c4a6f73e9\n";
         let why = path_from_table(ansi).unwrap_err();
         assert!(why.contains("not read"), "{why}");
+    }
+
+    /// Linux and macOS: the table's Documents on drive Z: is this system's folder.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_documents_folder_on_drive_z_is_this_systems() {
+        let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+        let table = format!(
+            "SHGetFolderPathA\t5 0\t0\t{}\n",
+            hex(r"Z:\home\me\.local\share\nv-rs\game\Documents")
+        );
+        assert_eq!(
+            path_from_table(&table).unwrap().unwrap(),
+            Path::new("/home/me/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Fallout.ini")
+        );
     }
 }
