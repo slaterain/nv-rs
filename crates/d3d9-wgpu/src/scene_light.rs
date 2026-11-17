@@ -51,16 +51,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// carries [`Params`] in its 16 words. No Direct3D 9 transform state has this number.
 pub const STATE: u32 = u32::from_le_bytes(*b"NVAO");
 
-/// The occlusion's reach, in game units (about 0.45 m; a unit is about 1.43 cm): creases and contact.
-pub const RADIUS: f32 = 32.0;
+/// The occlusion's reach, in game units (about 0.7 m; a unit is about 1.43 cm).
+pub const RADIUS: f32 = 48.0;
 /// The most the occlusion's reach spans on screen, as a part of the width.
 pub const MAX_RADIUS_SCREEN: f32 = 0.04;
 pub const SLICES: u32 = 2;
 pub const STEPS: u32 = 4;
 /// How much of the occlusion is applied, and its curve.
-pub const STRENGTH: f32 = 0.6;
+pub const STRENGTH: f32 = 0.5;
 /// The darkest the occlusion makes a pixel (a deep crease reads as shade, not a black patch).
-pub const FLOOR: f32 = 0.5;
+pub const FLOOR: f32 = 0.0;
+/// How far above the surface's own plane (game units, plus a little with distance) a sample must be
+/// to occlude: decals, rugs and stains lie a hair above the floor and must not darken it.
+pub const MIN_HEIGHT: f32 = 2.0;
 pub const POWER: f32 = 1.5;
 /// The sun march: its length and steps, and how thick a surface is taken to be.
 pub const SHADOW_LENGTH: f32 = 120.0;
@@ -422,10 +425,8 @@ const HALF_PI: f32 = 1.57079633;
         return vec4<f32>(1.0, 1.0, pc.z, 1.0);
     }
     let surface = surface_at(c, pc);
-    if (surface.thin) {
-        return vec4<f32>(1.0, 1.0, pc.z, 1.0);
-    }
     let n = surface.n;
+    let min_h = MIN_HEIGHT + 0.002 * pc.z;
     let v = normalize(-pc);
     let noise_slice = bayer(h);
     let noise_step = bayer(h + vec2<i32>(2, 1));
@@ -462,8 +463,12 @@ const HALF_PI: f32 = 1.57079633;
                 let s1 = point_at(c - o) - pc;
                 let l0 = max(length(s0), 1e-4);
                 let l1 = max(length(s1), 1e-4);
-                hc_plus = max(hc_plus, mix(low_plus, dot(s0 / l0, v), saturate(l0 * falloff_mul + falloff_add)));
-                hc_minus = max(hc_minus, mix(low_minus, dot(s1 / l1, v), saturate(l1 * falloff_mul + falloff_add)));
+                // A sample barely above the surface's own plane (a decal, a rug, a stain a hair over
+                // the floor) is no occluder: its weight ramps in from MIN_HEIGHT above the plane.
+                let lift0 = saturate((dot(s0, n) - min_h) / min_h);
+                let lift1 = saturate((dot(s1, n) - min_h) / min_h);
+                hc_plus = max(hc_plus, mix(low_plus, dot(s0 / l0, v), saturate(l0 * falloff_mul + falloff_add) * lift0));
+                hc_minus = max(hc_minus, mix(low_minus, dot(s1 / l1, v), saturate(l1 * falloff_mul + falloff_add) * lift1));
             }
             let h_plus = ang + clamp(acos(clamp(hc_plus, -1.0, 1.0)) - ang, -HALF_PI, HALF_PI);
             let h_minus = ang + clamp(-acos(clamp(hc_minus, -1.0, 1.0)) - ang, -HALF_PI, HALF_PI);
@@ -488,6 +493,9 @@ const APPLY: &str = "
     let xy = vec2<i32>(at.xy);
     let d = depth_at(xy);
     if (d >= 1.0) {
+        if (VIEW != 0u) {
+            return vec4<f32>(1.0, 1.0, 1.0, 1.0);
+        }
         discard;
     }
     let z = linear(d);
@@ -506,10 +514,11 @@ const APPLY: &str = "
             wsum += w;
         }
     }
-    var f = 1.0;
+    var ao = 1.0;
     if (wsum >= 1e-3) {
-        f = acc / wsum;
+        ao = acc / wsum;
     }
+    var sun = 1.0;
     // The sun's contact shadow, here at full resolution and unblurred, so its edge is a clean
     // line: only on faces turned toward the sun (the game already darkens the others).
     if (p.sun.w > 0.0) {
@@ -521,10 +530,18 @@ const APPLY: &str = "
             // at a grazing angle is already dim in the game's lighting and only shadows itself.
             let facing = smoothstep(0.25, 0.5, dot(surface.n, p.sun.xyz));
             if (!surface.thin && facing > 0.0) {
-                f *= 1.0 - p.sun.w * fade * facing * (1.0 - sun_visible(pc, surface.n));
+                sun = 1.0 - p.sun.w * fade * facing * (1.0 - sun_visible(pc, surface.n));
             }
         }
     }
+    // `NV_AO_VIEW` (captures only): one term alone, as grey, over the whole picture.
+    if (VIEW == 1u) {
+        return vec4<f32>(ao, ao, ao, 1.0);
+    }
+    if (VIEW == 2u) {
+        return vec4<f32>(sun, sun, sun, 1.0);
+    }
+    let f = ao * sun;
     if (f >= 0.999) {
         discard;
     }
@@ -543,14 +560,29 @@ pub fn shader(apply: bool, multisampled_depth: bool) -> String {
     let constants = format!(
         "const RADIUS: f32 = {RADIUS:?};\nconst MAX_RADIUS_SCREEN: f32 = {MAX_RADIUS_SCREEN:?};\n\
          const SLICES: i32 = {SLICES};\nconst STEPS: i32 = {STEPS};\nconst STRENGTH: f32 = {STRENGTH:?};\n\
-         const POWER: f32 = {POWER:?};\nconst FLOOR: f32 = {FLOOR:?};\nconst SHADOW_LENGTH: f32 = {SHADOW_LENGTH:?};\n\
+         const POWER: f32 = {POWER:?};\nconst FLOOR: f32 = {FLOOR:?};\nconst MIN_HEIGHT: f32 = {MIN_HEIGHT:?};\nconst SHADOW_LENGTH: f32 = {SHADOW_LENGTH:?};\n\
          const SHADOW_STEPS: i32 = {SHADOW_STEPS};\nconst SHADOW_THICKNESS: f32 = {SHADOW_THICKNESS:?};\n\
-         const FADE_FROM: f32 = {FADE_FROM:?};\nconst FADE_TO: f32 = {FADE_TO:?};\n"
+         const FADE_FROM: f32 = {FADE_FROM:?};\nconst FADE_TO: f32 = {FADE_TO:?};\n\
+         const VIEW: u32 = {}u;\n",
+        view()
     );
     let body = if apply { APPLY } else { AO };
     format!(
         "{constants}{}{body}",
         COMMON.replace("DEPTH_TYPE", depth_type)
+    )
+}
+
+/// `NV_AO_VIEW=ao` or `sun` (diagnostic captures only, not a player setting): the scene replaced by
+/// that one term as grey (white: untouched), read once; 0 otherwise.
+pub fn view() -> u32 {
+    static VIEW: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *VIEW.get_or_init(
+        || match std::env::var("NV_AO_VIEW").as_deref().map(str::trim) {
+            Ok("ao") => 1,
+            Ok("sun") => 2,
+            _ => 0,
+        },
     )
 }
 
@@ -743,8 +775,9 @@ impl Gpu {
                 shader(true, ms),
                 wgpu::ColorTargetState {
                     format: t.colour_format,
-                    // The scene's colour times the source; its alpha kept.
-                    blend: Some(wgpu::BlendState {
+                    // The scene's colour times the source; its alpha kept (a term alone replaces it
+                    // in `NV_AO_VIEW`).
+                    blend: (view() == 0).then_some(wgpu::BlendState {
                         color: wgpu::BlendComponent {
                             src_factor: wgpu::BlendFactor::Dst,
                             dst_factor: wgpu::BlendFactor::Zero,
