@@ -377,6 +377,10 @@ impl Backend for WgpuBackend {
             Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::VIEW_STATE => {
                 d.sun_begin_view(&matrix.to_words());
             }
+            // The world the camera is in, before them: a new one forgets the casters kept.
+            Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::WORLD_STATE => {
+                d.sun_world(&matrix.to_words());
+            }
             Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::BEGIN_STATE => {
                 d.sun_lookup(&matrix.to_words());
             }
