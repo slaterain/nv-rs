@@ -1396,7 +1396,7 @@ fn play(
 
 /// The game's variables for the player's options on its command ([`game_ini::switches`]).
 ///
-/// In play the eleven that would beat the profile's `Fallout.ini` are taken out, not even one left
+/// In play the twelve that would beat the profile's `Fallout.ini` are taken out, not even one left
 /// from Play.exe's own environment. When a variable set before the start makes the run a test,
 /// which never reads the file, nothing is taken out and the file's choices are passed on, so the
 /// run plays like the player's game; the line for the log says which variable did it, what was
@@ -2270,12 +2270,12 @@ mod tests {
     }
 
     /// The variables on the game's own command (`pass_switches` on a `Command`, as `play` makes
-    /// it). In play the eleven are taken out and nothing else is said; with a test variable set
+    /// it). In play the twelve are taken out and nothing else is said; with a test variable set
     /// before Play.exe, the file's choices are set on the command, nothing is taken out, the one
     /// set before is left to come through as it was, and the log line names all of it.
     #[test]
     fn the_games_command_gets_the_files_choices_only_in_a_test() {
-        let eleven = [
+        let twelve = [
             "NV_PRESET",
             "NV_BORDERLESS",
             "NV_D3D9",
@@ -2284,6 +2284,7 @@ mod tests {
             "NV_SHOW_FPS",
             "NV_AO",
             "NV_AO_STRENGTH",
+            "NV_SUN_SHADOWS",
             "NV_THREADS",
             "NV_RENDER_THREAD",
             "NV_NOT_BACKGROUND",
@@ -2308,7 +2309,7 @@ mod tests {
         let line = pass_switches(&mut play, &game_ini::switches(&ini, None, |_| false));
         assert_eq!(line, None);
         let mut want: Vec<(String, Option<String>)> =
-            eleven.iter().map(|name| (name.to_string(), None)).collect();
+            twelve.iter().map(|name| (name.to_string(), None)).collect();
         want.push(("NV_SETTINGS".into(), Some("settings.ini".into())));
         want.sort();
         let mut got = envs(&play);
@@ -2329,6 +2330,7 @@ mod tests {
             ("NV_SHOW_FPS", "0"),
             ("NV_AO", "0"),
             ("NV_AO_STRENGTH", "0.7"),
+            ("NV_SUN_SHADOWS", "0"),
             ("NV_RENDER_THREAD", "1"),
             ("NV_NOT_BACKGROUND", "1"),
             ("NV_GRAB_PUSH", "0"),
@@ -2584,6 +2586,7 @@ mod tests {
             ("NV_SHOW_FPS", "0"),
             ("NV_AO", "0"),
             ("NV_AO_STRENGTH", "0.7"),
+            ("NV_SUN_SHADOWS", "0"),
             ("NV_THREADS", "stepped"),
             ("NV_RENDER_THREAD", "1"),
             ("NV_NOT_BACKGROUND", "1"),

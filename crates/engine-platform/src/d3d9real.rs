@@ -773,6 +773,16 @@ fn record_scene_light(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<Sce
     }
 }
 
+/// Turns the sun shadows on (`d3d9_wgpu::sun_shadow`; the run's choice,
+/// `host::fixes::Choice::sun_shadows`), before the game makes its device: at each depth-only
+/// `Clear` the frame's camera (the new lighting's words) and then its rotation, place and sun, as
+/// `read` finds them in the game, are recorded for the backend. Never called while off: nothing is
+/// then read or recorded for them.
+pub fn want_sun_shadows(read: fn(&Engine) -> Option<SceneView>) {
+    d3d9_wgpu::sun_shadow::enable(true);
+    let _ = SCENE_LIGHT.set(read);
+}
+
 /// `CreateWindowExA` made the modelled window `handle` (a child of `parent` when that is not
 /// 0): a real window of the same title, styles and rectangle (a child of the parent's real
 /// window).
@@ -1259,6 +1269,55 @@ fn clear_lit(
     if flags == 2 {
         if let Some(read) = light {
             record_scene_light(e, this, read);
+            // The sun shadows ([`want_sun_shadows`]): the camera's rotation and place and the sun,
+            // after the frustum above (none without a sun); draws after it (the first-person arms
+            // and weapon) neither cast nor take the shadows.
+            let sun = read(e)
+                .as_ref()
+                .filter(|_| d3d9_wgpu::sun_shadow::enabled())
+                .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
+            if let Some(f) = sun {
+                let m = f.to_words();
+                record(
+                    e,
+                    this,
+                    Cmd::SetTransform {
+                        device: this,
+                        state: d3d9_wgpu::sun_shadow::STATE,
+                        matrix: Data::from_words(&m),
+                    },
+                );
+            }
+        }
+    }
+    // A colour and depth clear (the scene's, before the world is drawn; the water reflection's too):
+    // with the sun shadows on, the frame's camera and sun for the lit draws that follow
+    // (`d3d9_wgpu::sun_shadow::BEGIN_STATE`).
+    if flags & 3 == 3 && d3d9_wgpu::sun_shadow::enabled() {
+        if let Some(read) = light {
+            let view = read(e);
+            let params = view
+                .as_ref()
+                .and_then(d3d9_wgpu::scene_light::Params::from_game);
+            let frame = view
+                .as_ref()
+                .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
+            if let (Some(p), Some(f)) = (params, frame) {
+                for (state, m) in [
+                    (d3d9_wgpu::sun_shadow::VIEW_STATE, p.to_words()),
+                    (d3d9_wgpu::sun_shadow::BEGIN_STATE, f.to_words()),
+                ] {
+                    record(
+                        e,
+                        this,
+                        Cmd::SetTransform {
+                            device: this,
+                            state,
+                            matrix: Data::from_words(&m),
+                        },
+                    );
+                }
+            }
         }
     }
     // The rectangles' words on the stack up to 16 rectangles (the game clears one or none).
@@ -3501,6 +3560,7 @@ mod tests {
             frustum: [-0.7, 0.7, 0.4, -0.4, 5.0, 5000.0],
             ortho: false,
             rotate: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            position: [0.0; 3],
             to_sun: None,
             sun_colour: [0.0; 3],
             interior: true,

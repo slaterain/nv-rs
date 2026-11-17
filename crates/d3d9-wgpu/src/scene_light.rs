@@ -118,7 +118,10 @@ pub struct GameView {
     /// The camera's world rotation, row by row (Gamebryo: column 0 the view direction, column 1 up,
     /// column 2 right).
     pub rotate: [f32; 9],
-    /// Toward the sun in the world (the sun disc's place in the sky, z up); none without a sky.
+    /// The camera's place in the world (read for the sun shadows, `crate::sun_shadow`).
+    pub position: [f32; 3],
+    /// Toward the sun in the world, z up: the way toward the directional light the lit shaders use
+    /// (the host reads it from the light; at night the same light, as the moon); none without a sky.
     pub to_sun: Option<[f32; 3]>,
     /// The sky's sun light colour (red, green, blue).
     pub sun_colour: [f32; 3],
@@ -1002,6 +1005,7 @@ mod tests {
             // Looking along the world's +y: forward (0, 1, 0), up (0, 0, 1), right (1, 0, 0) as
             // the rotation's columns.
             rotate: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            position: [0.0; 3],
             // The sun in front of the camera, high up.
             to_sun: Some([0.0, 1.0, 1.0]),
             sun_colour: [1.0, 0.9, 0.8],

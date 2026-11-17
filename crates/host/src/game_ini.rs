@@ -83,6 +83,8 @@ pub struct Keys {
     pub ambient_occlusion: Option<bool>,
     /// `fAmbientOcclusionStrength`: how strong its shade is (a number; clamped where it is used).
     pub ambient_occlusion_strength: Option<f32>,
+    /// `bSunShadows`: the sun shadows (`d3d9_wgpu::sun_shadow`).
+    pub sun_shadows: Option<bool>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
     /// `bNotBackground`: Windows told the game is not background work (`qos`).
@@ -139,6 +141,10 @@ impl Keys {
                     keys.ambient_occlusion_strength =
                         raw.parse::<f32>().ok().filter(|v| v.is_finite());
                     keys.ambient_occlusion_strength.is_some()
+                }
+                "bSunShadows" => {
+                    keys.sun_shadows = flag(raw);
+                    keys.sun_shadows.is_some()
                 }
                 "bSteppedThreads" => {
                     keys.stepped_threads = flag(raw);
@@ -306,6 +312,7 @@ mod tests {
                 "bShowFrameRate",
                 "bAmbientOcclusion",
                 "fAmbientOcclusionStrength",
+                "bSunShadows",
                 "bSteppedThreads",
                 "bRenderThread",
                 "bNotBackground"
@@ -344,6 +351,7 @@ mod tests {
             keys.ambient_occlusion_strength,
             Some(crate::fixes::PLAY_AMBIENT_OCCLUSION_STRENGTH)
         );
+        assert_eq!(keys.sun_shadows, Some(crate::fixes::PLAY_SUN_SHADOWS));
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());
         assert!(keys.bad.is_empty(), "{:?}", keys.bad);
