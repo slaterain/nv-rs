@@ -2013,10 +2013,9 @@ mod effect_item_list_tests {
             let (_, _, list) = two_values(&mut e);
             e.on_site(SiteSlot::new(Owner::Jip, 0x0040_686d), |e, a| {
                 // The registers so far, then the words.
-                let n = e
-                    .call_log
-                    .as_ref()
-                    .map_or(0, |l| l.iter().filter(|c| c.0 == STATUS_LIST_REGISTER).count());
+                let n = e.call_log.as_ref().map_or(0, |l| {
+                    l.iter().filter(|c| c.0 == STATUS_LIST_REGISTER).count()
+                });
                 record(e, &[n as u32]);
                 record(e, a);
                 None

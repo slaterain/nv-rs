@@ -1625,7 +1625,14 @@ mod tests {
             });
             returns(&mut e, HAS_TOUCH_EFFECT, 0);
             returns(&mut e, HAS_TARGET_EFFECT, 0);
-            returns(&mut e, RT_DYNAMIC_CAST, ALCHEMY_AT);
+            e.register(RT_DYNAMIC_CAST, |_, a| {
+                (if a[3] == TYPE_ALCHEMY_ITEM {
+                    ALCHEMY_AT
+                } else {
+                    0
+                })
+                .into_ret()
+            });
             returns(&mut e, ALCHEMY_HAS_FLAG, 0);
             e.register(GET_COSTLIEST_EFFECT, |e, a| {
                 // The costliest self effect is the one effect.

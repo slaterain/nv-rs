@@ -88,11 +88,10 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(CHEM_DURATION, chem_duration);
 }
 
-/// An effect item's magnitude (+0), duration (+8), actor value (+0x10) and setting (+0x14); a
+/// An effect item's duration (+8), actor value (+0x10) and setting (+0x14); a
 /// setting's flags byte (+0x58: 1 hostile, 4 detrimental, 8 hidden, 0x80 no duration); an active
 /// effect's effect item (+0xC); an alchemy item's flags byte (+0xBC: 2 food, 4 medicine) and type
 /// byte (+0xA0, read through its `EffectItemList` at +0x64 in the menu); an actor's form id (+0xC).
-const ITEM_MAGNITUDE: u32 = 0;
 const ITEM_DURATION: u32 = 8;
 const ITEM_ACTOR_VALUE: u32 = 0x10;
 const ITEM_SETTING: u32 = 0x14;
