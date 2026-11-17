@@ -20,8 +20,10 @@
 //!
 //! The coefficients (`1000d8d0`) come from the parameters with the DLL's `f64` and `f32`
 //! roundings. One part is a table: the gain correction for each edge setting (32 values, two
-//! decimals each, not a formula). It is not in this file: [`edge_table`] measures it from the
-//! player's own `dsdmo.dll` at run time, through the effect's public interface.
+//! decimals each, not a formula): [`EDGE_TABLE`], the DLL's own constants. On Windows
+//! [`edge_table`] still measures it from the player's own `dsdmo.dll` at run time, through the
+//! effect's public interface, and says so when that differs from the constants; elsewhere (no
+//! DLL) it is the constants.
 //!
 //! The chain (`dsound.dll`, `CEffectChain`): the effect writes into a copy of the buffer
 //! (`PostFxBuffer`) that the mixer plays. When the buffer starts (`Play`, `10034ae0`) the
@@ -32,6 +34,7 @@
 //! runs about 100 ms ahead (its write-ahead), so data written into those 100 ms is heard
 //! unprocessed there and processed here (open, docs/SOUND.md).
 
+#[cfg(windows)]
 use std::sync::OnceLock;
 
 /// `DSFXDistortion` in its order: gain (dB), edge (%), post-EQ centre frequency (Hz), post-EQ
@@ -314,13 +317,59 @@ impl Chain {
     }
 }
 
-/// The edge correction table of the player's `dsdmo.dll`, measured once through the effect's
-/// own interface ([`measure_edge_table`]); `None` when it cannot be measured (not Windows, no
-/// effect).
+/// The edge correction table as `dsdmo.dll` holds it: 32 `f64` in its read-only data, read by
+/// the coefficient function as `norm * table[shift]` (32-bit DLL, file version 10.0.26100.5074:
+/// the table at `100027c8`, read at `1000dc39` and `1000ddeb`, each `mulsd xmm0, [eax*8 +
+/// 100027c8]` after `cvttss2si eax, [esi+0x204]`, the edge's shift; the 64-bit DLL of the same
+/// version holds the same 32 values). Each is the nearest `f64` of its two-decimal literal
+/// (checked). Entries 0 and 1 cannot be reached (the shift is at least 2) and are 1 in the DLL
+/// too. Constants of the DLL's code, not of the machine: read 2026-11-16 (Windows 11, both
+/// `SysWOW64` and `System32`); the values are written here, no bytes of the DLL are copied.
+pub const EDGE_TABLE: [f64; 32] = [
+    1.0, 1.0, 1.5, 1.0, 1.75, 1.4, 1.17, 1.0, 1.88, 1.76, 1.5, 1.36, 1.25, 1.15, 1.07, 1.0, 1.94,
+    1.82, 1.72, 1.63, 1.55, 1.48, 1.41, 1.35, 1.29, 1.24, 1.19, 1.15, 1.11, 1.07, 1.03, 1.0,
+];
+
+/// The edge correction table. On Windows: the player's `dsdmo.dll`'s, measured once through the
+/// effect's own interface ([`measure_edge_table`]), named on stderr when it differs from
+/// [`EDGE_TABLE`] (another DLL version; the measured one is used); `None` when it cannot be
+/// measured (no effect). Elsewhere, where there is no `dsdmo.dll`: [`EDGE_TABLE`].
 pub fn edge_table() -> Option<&'static [f64; 32]> {
-    static T: OnceLock<Option<[f64; 32]>> = OnceLock::new();
-    T.get_or_init(|| std::thread::spawn(measure_edge_table).join().ok().flatten())
+    #[cfg(windows)]
+    {
+        static T: OnceLock<Option<[f64; 32]>> = OnceLock::new();
+        T.get_or_init(|| {
+            let measured = std::thread::spawn(measure_edge_table).join().ok().flatten();
+            if let Some(why) = measured.as_ref().and_then(differs) {
+                eprintln!("sound: {why}");
+            }
+            measured
+        })
         .as_ref()
+    }
+    #[cfg(not(windows))]
+    {
+        Some(&EDGE_TABLE)
+    }
+}
+
+/// Why a `measured` edge table is not [`EDGE_TABLE`] (the entries that differ), for stderr;
+/// `None` when it is.
+pub fn differs(measured: &[f64; 32]) -> Option<String> {
+    let off: Vec<String> = measured
+        .iter()
+        .zip(EDGE_TABLE.iter())
+        .enumerate()
+        .filter(|(_, (m, c))| m != c)
+        .map(|(i, (m, c))| format!("{i}: {m} (the constant {c})"))
+        .collect();
+    (!off.is_empty()).then(|| {
+        format!(
+            "the distortion's edge table measured from this dsdmo.dll differs from the one read \
+             from version 10.0.26100.5074 at {}; the measured one is used (another DLL version?)",
+            off.join(", ")
+        )
+    })
 }
 
 /// Measures the edge correction: for each shift `n` (2 to 31) the effect, on a float stream at
@@ -525,6 +574,112 @@ mod tests {
 
     /// A made-up correction table (not the DLL's): the tests check the arithmetic only.
     const TABLE: [f64; 32] = [1.25; 32];
+
+    /// The distortion's coefficients bit for bit, on every system: the game's parameters
+    /// `[-18.2, 0, 5000, 1135, 5000]` at the rates its sounds use, and two other gains, with the
+    /// DLL's edge table. The bits were taken on Windows (2026-11-17), where the capture replay
+    /// matches DirectSound. Off Windows the result rests on that system's `cos`, `tan` and `pow`;
+    /// a maths library that rounds one of them differently fails here instead of changing the
+    /// sound silently. (rate, gain, shift, then the bits of gain, feedback, input, centre, width.)
+    #[test]
+    fn the_coefficients_are_pinned_bit_for_bit() {
+        const PINNED: [(u32, f32, u32, u32, u32, u32, u32, u32); 9] = [
+            (
+                11025, -18.2, 2, 0x3e0dec66, 0x3f21e89b, 0x3f464bf8, 0x3f000000, 0x3efeeead,
+            ),
+            (
+                22050, -18.2, 2, 0x3e01d7a8, 0x3f4fb15b, 0x3f15aa51, 0xbe1502fd, 0x3f383098,
+            ),
+            (
+                32000, -18.2, 2, 0x3dbd1337, 0x3f6821f2, 0x3ed7dfe4, 0xbf0e39da, 0x3f4c79f8,
+            ),
+            (
+                44100, -18.2, 2, 0x3d821989, 0x3f733ae9, 0x3e9fb046, 0xbf41be39, 0x3f599f23,
+            ),
+            (
+                48000, -18.2, 2, 0x3d69abdb, 0x3f753107, 0x3e9333c3, 0xbf4b1934, 0x3f5c88fa,
+            ),
+            (
+                22050, 0.0, 2, 0x3f83ecc3, 0x3f4fb15b, 0x3f15aa51, 0xbe1502fd, 0x3f383098,
+            ),
+            (
+                48000, 0.0, 2, 0x3eed6b42, 0x3f753107, 0x3e9333c3, 0xbf4b1934, 0x3f5c88fa,
+            ),
+            (
+                22050, -40.0, 2, 0x3c28dd22, 0x3f4fb15b, 0x3f15aa51, 0xbe1502fd, 0x3f383098,
+            ),
+            (
+                48000, -40.0, 2, 0x3b97f2b9, 0x3f753107, 0x3e9333c3, 0xbf4b1934, 0x3f5c88fa,
+            ),
+        ];
+        let mut differ = Vec::new();
+        for (rate, g, shift, gain, feedback, input, centre, width) in PINNED {
+            let c = Coefficients::new(rate, [g, 0.0, 5000.0, 1135.0, 5000.0], &EDGE_TABLE);
+            let got = [
+                ("gain", c.gain.to_bits(), gain),
+                ("feedback", c.feedback.to_bits(), feedback),
+                ("input", c.input.to_bits(), input),
+                ("centre", c.centre.to_bits(), centre),
+                ("width", c.width.to_bits(), width),
+            ];
+            if c.shift != shift {
+                differ.push(format!(
+                    "{rate} Hz, gain {g}: shift {} (pinned {shift})",
+                    c.shift
+                ));
+            }
+            for (field, bits, pinned) in got {
+                if bits != pinned {
+                    differ.push(format!(
+                        "{rate} Hz, gain {g}: {field} {bits:#010x} (pinned {pinned:#010x})"
+                    ));
+                }
+            }
+        }
+        assert!(differ.is_empty(), "{}", differ.join("; "));
+    }
+
+    /// The constants are the DLL's: a fresh measurement of the `dsdmo.dll` this Windows has
+    /// gives them, entry for entry (a different DLL version would show here, and in the run's
+    /// log through [`differs`]).
+    #[cfg(windows)]
+    #[test]
+    fn the_constants_are_the_measured_table() {
+        let measured = measure_edge_table()
+            .expect("the distortion's edge table could not be measured from dsdmo.dll");
+        assert_eq!(differs(&measured), None);
+        assert_eq!(measured, EDGE_TABLE);
+        assert_eq!(edge_table(), Some(&EDGE_TABLE));
+    }
+
+    /// Off Windows (no `dsdmo.dll`) the table is the constants.
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_the_table_is_the_constants() {
+        assert_eq!(edge_table(), Some(&EDGE_TABLE));
+    }
+
+    /// A table that differs is named entry by entry; the constants themselves are not.
+    #[test]
+    fn a_different_table_is_named() {
+        assert_eq!(differs(&EDGE_TABLE), None);
+        let mut other = EDGE_TABLE;
+        other[6] = 1.18;
+        let why = differs(&other).expect("named");
+        assert!(why.contains("6: 1.18 (the constant 1.17)"), "{why}");
+        assert!(!why.contains("7:"), "{why}");
+        // The values have the DLL's shape: 1 at the end of each exponent group (3, 7, 15, 31),
+        // two decimals, between 1 and 2.
+        for i in [0, 1, 3, 7, 15, 31] {
+            assert_eq!(EDGE_TABLE[i], 1.0, "{i}");
+        }
+        for v in EDGE_TABLE {
+            assert!(
+                (1.0..2.0).contains(&v) && ((v * 100.0).round() / 100.0) == v,
+                "{v}"
+            );
+        }
+    }
 
     #[test]
     fn the_waveshaper_packs_the_value() {

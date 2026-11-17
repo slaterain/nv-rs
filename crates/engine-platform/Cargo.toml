@@ -37,9 +37,18 @@ windows = { version = "0.58", features = ["Win32_Foundation", "Win32_Graphics_Di
 # (Cantarell, OFL-1.1), a rasteriser and calls to desktop programs; without it such a desktop shows
 # the framed window with a plain frame and no title. The borderless window (play's default) has
 # no frame either way.
+#
+# Sound on the speakers off Windows (sound_out.rs, `mod device`): the default output device through
+# ALSA (PipeWire's and PulseAudio's ALSA plugins among them) on Linux, CoreAudio on macOS. The
+# mixer is the port's own on every system; only the device differs. No cpal features: its
+# `realtime` would do nothing on Linux as built (no D-Bus/rtkit) and is not used on macOS; the
+# Linux sound thread runs at normal priority (sound_out.rs says why). Linux links ALSA's
+# libasound.so.2 (alsa-sys): the program needs it to start. Windows keeps its own WASAPI arm
+# (no cpal there).
 [target.'cfg(not(windows))'.dependencies]
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 raw-window-handle = "=0.6.2"
+cpal = "0.18.2"
 
 # The keyboard library winit loads at run time (libxkbcommon, and libxkbcommon-x11 on X11), looked
 # for before the window is made, so that a missing one ends the run with a line naming it (winit

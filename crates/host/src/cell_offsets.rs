@@ -156,7 +156,16 @@ fn plugin_path(e: &Engine, file: Ptr) -> PathBuf {
     }
     name.extend(e.mem.cstr(file.addr() + FILE_NAME));
     let full = engine_platform::files::full_path(e, &name);
-    PathBuf::from(String::from_utf8_lossy(&full).into_owned())
+    #[cfg(windows)]
+    {
+        PathBuf::from(String::from_utf8_lossy(&full).into_owned())
+    }
+    // Off Windows the game's path is this system's as the file calls find it (drive Z:, `\` as
+    // `/`, names without case: `engine_platform::host_paths`).
+    #[cfg(not(windows))]
+    {
+        engine_platform::files::host_path(&full)
+    }
 }
 
 /// Starts building every plugin of the load order on a host thread, once per run (the first
@@ -574,10 +583,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "the game's Windows paths: not provided off Windows yet"
-    )]
     fn a_plugins_tables_are_read_from_its_file() {
         // A plugin with one world space record (no `OFST`) and one cell, in a Data folder of its
         // own; the file's path as the game keeps it in the `TESFile`.
@@ -857,10 +862,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "the game's Windows paths: not provided off Windows yet"
-    )]
     fn load_gives_each_world_space_of_a_plugin_the_table_of_the_record_it_reads() {
         // The second record carries an `OFST`, which the translation reads for a plugin too but
         // never uses: the row's table replaces it.
@@ -913,10 +914,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg_attr(
-        not(windows),
-        ignore = "the game's Windows paths: not provided off Windows yet"
-    )]
     fn load_gives_a_masters_record_without_offsets_its_table_and_keeps_a_masters_own() {
         let own: Vec<u8> = (0..16u32)
             .flat_map(|i| (0x1000 + i).to_le_bytes())

@@ -435,11 +435,12 @@ impl Host {
 
 /// [`Host::start_with`] and [`check_installation`] off Windows: the program builds on Linux and
 /// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
-/// pieces that are still Windows-only, instead of a run that would go on without them (no sound,
-/// the game's own folder names not found, files listed by a call that stops) and fail somewhere
-/// less clear. The game's window with its mouse and keyboard is provided on Linux (winit, X11 and
-/// Wayland), not yet on macOS, where it needs the program's main thread. On a processor other than
-/// x86-64 (Apple silicon) it also names what differs there.
+/// pieces that are still Windows-only, instead of a run that would go on without them and fail
+/// somewhere less clear. The game's paths and file listings are provided
+/// (`engine_platform::host_paths`), and so is the sound on the speakers. The game's window with its
+/// mouse and keyboard is provided on Linux (winit, X11 and Wayland), not yet on macOS, where it
+/// needs the program's main thread. On a processor other than x86-64 (Apple silicon) it also names
+/// what differs there.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
     not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
@@ -460,11 +461,8 @@ fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
         );
     }
     why.push_str(
-        "the sound on the speakers, the game's Windows folder names (a drive letter and \
-         backslashes) over this system's folders, the file listing's file times, this machine's \
-         tables (display adapter, sound devices, folders), which are measured on Windows, the \
-         distortion sound effect's table (measured from Windows' own DLL), and text in the game's \
-         code page outside ASCII",
+        "this machine's tables (display adapter, sound devices, folders), which are measured on \
+         Windows, and code pages other than Windows' Western one (1252)",
     );
     if !x86_64 {
         why.push_str(
@@ -840,20 +838,20 @@ mod tests {
         for x86_64 in [true, false] {
             for apple in [true, false] {
                 let why = super::not_provided_on(x86_64, apple).unwrap_err();
-                for piece in [
-                    "sound",
-                    "folder names",
-                    "file times",
-                    "tables",
-                    "distortion",
-                    "code page",
-                ] {
+                for piece in ["sound devices", "tables", "code page"] {
                     assert!(why.contains(piece), "{piece}: {why}");
                 }
                 // The window with its mouse and keyboard: provided on Linux, not yet on macOS.
                 assert_eq!(why.contains("window"), apple, "{why}");
                 assert_eq!(why.contains("mouse and keyboard"), apple, "{why}");
                 assert_eq!(why.contains("main thread"), apple, "{why}");
+                // The game's paths and file listings are provided off Windows now.
+                assert!(!why.contains("folder names"), "{why}");
+                assert!(!why.contains("file times"), "{why}");
+                // The sound on the speakers is provided everywhere (engine-platform sound_out.rs).
+                assert!(!why.contains("speakers"), "{why}");
+                // So is the distortion's table (engine-platform dsfx.rs, the DLL's constants).
+                assert!(!why.contains("distortion"), "{why}");
                 // The processor's own differences only off x86-64 (Apple silicon).
                 assert_eq!(why.contains("x87"), !x86_64, "{why}");
                 assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
