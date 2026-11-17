@@ -2019,12 +2019,12 @@ mod tests {
     }
 
     /// Play.exe takes the player options' variables out in play and passes the file's choices on
-    /// in a test (scripts/launcher/src/game_ini.rs `switches`). It takes the six names from this
+    /// in a test (`switches` in crates/game-profile/src/game_ini.rs, which Play.exe uses). It takes the six names from this
     /// crate's table itself; what makes a test it keeps as a list, which must be this one. (A
     /// fix's own variable makes a test too: Play.exe reads those from the table.)
     #[test]
     fn the_launcher_knows_what_makes_a_test() {
-        let launcher = include_str!("../../../scripts/launcher/src/game_ini.rs");
+        let launcher = include_str!("../../game-profile/src/game_ini.rs");
         let list = launcher
             .split("pub const TEST_SWITCHES")
             .nth(1)

@@ -16,9 +16,9 @@
 #![windows_subsystem = "windows"]
 
 mod find;
-mod game_ini;
+use game_profile::game_ini;
 mod mods;
-mod settings;
+use game_profile::settings;
 mod tables;
 mod ui;
 mod win;

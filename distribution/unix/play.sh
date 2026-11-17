@@ -464,8 +464,13 @@ NV_REPORT_DIR=$own/reports
 NV_REPORT_LOG=$log
 NV_WGPU_CACHE=$own/machine/wgpu-cache
 NV_D3DX_CACHE=$own/machine/d3dx-cache
-NV_SETTINGS=$own/settings.ini
-export NV_SOUND NV_SAVE_OUT NV_PREFS_OUT NV_REPORT_DIR NV_REPORT_LOG NV_WGPU_CACHE NV_D3DX_CACHE NV_SETTINGS
+export NV_SOUND NV_SAVE_OUT NV_PREFS_OUT NV_REPORT_DIR NV_REPORT_LOG NV_WGPU_CACHE NV_D3DX_CACHE
+# Only where the start goes on (Linux on x86-64): elsewhere the program stops first with its
+# expected status, and the play settings are not read before that stop.
+if [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]; then
+    NV_SETTINGS=$own/settings.ini
+    export NV_SETTINGS
+fi
 cd -- "$own" || fail "could not enter $own"
 
 if [ "$opt_check" = 1 ]; then

@@ -20,6 +20,7 @@ pub mod cell_entry_wait;
 pub mod cell_offsets;
 pub mod direct_files;
 pub mod draw_thread;
+pub mod first_profile;
 pub mod fixes;
 pub mod form_types;
 pub mod frame_log;
@@ -391,7 +392,7 @@ impl Host {
         start_crt_io(&mut engine, &mut movement);
         // The machine table before the C initializers: `__get_sse2_info` (`00ed1927`, from
         // the initializer `00ed454f`) asks the processor, which the table answers.
-        load_adapter_table(&mut engine)?;
+        load_adapter_table(&mut engine, data)?;
         start_cinit_float(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         // A skipped initializer leaves its global (a setting among them) unbuilt, silently
@@ -772,12 +773,29 @@ pub fn wgpu_cache_path() -> Option<PathBuf> {
 /// Direct3D 9 query stops that stage and its message says how to capture the table.
 /// Off Windows the table is this machine's part ([`adapter_table_text`]) and, after it, the display
 /// and card part ([`display_table_text`]), made here: after the run's renderer choice. A card the
-/// game cannot draw on refuses the start (the error).
-fn load_adapter_table(e: &mut Engine) -> Result<(), String> {
+/// game cannot draw on refuses the start (the error). In a play run off Windows the first start's
+/// profile files are prepared here too, from the whole table ([`first_profile::first_start`]: no
+/// Play.exe there), before the game reads them.
+#[cfg_attr(windows, allow(unused_variables))]
+fn load_adapter_table(e: &mut Engine, data: &Path) -> Result<(), String> {
     if let Some(text) = adapter_table_text() {
         #[cfg(not(windows))]
         let text = match display_table_text()? {
-            Some(display) => text + &display,
+            Some(display) => {
+                let text = text + &display;
+                if fixes::is_play_run(|name| std::env::var(name).ok()) {
+                    match (own_folder(), data.parent()) {
+                        (Ok(own), Some(game)) => {
+                            let [documents, _, _] =
+                                engine_platform::machine_table::game_folders(&own);
+                            first_profile::first_start(&documents, game, &text);
+                        }
+                        (Err(why), _) => eprintln!("first start: no profile files: {why}"),
+                        (_, None) => {}
+                    }
+                }
+                text
+            }
             None => text,
         };
         engine_platform::d3d9::load_adapter_table(e, &text);
