@@ -743,21 +743,21 @@ pub fn repair_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
         == 1;
     // `0x7B5CED` (JIP LN NVSE's `RepairMenuClickHook`, O2, with `bEnableFO3Repair`; JIP's `JBE`
     // at `0x7B5D05`): JIP's answer (1: set up again) replaces the 99 test. One load while off.
-    let again = if !last
-        && e.jip_patches() & engine_core::extend::jip_patches::ENABLE_FO3_REPAIR != 0
-    {
-        e.site(0x007b_5ced, &[])
-    } else {
-        None
-    };
-    let done = last || again.map(|a| a == 0).unwrap_or_else(|| {
-        let broken = broken_item(e);
-        let health = e.call(GET_ITEM_HEALTH, &args![broken, 1u32]).f64();
-        !matches!(
-            health.partial_cmp(&e.global::<f64>(NINETY_NINE_DOUBLE)),
-            Some(std::cmp::Ordering::Less) | None
-        )
-    });
+    let again =
+        if !last && e.jip_patches() & engine_core::extend::jip_patches::ENABLE_FO3_REPAIR != 0 {
+            e.site(0x007b_5ced, &[])
+        } else {
+            None
+        };
+    let done = last
+        || again.map(|a| a == 0).unwrap_or_else(|| {
+            let broken = broken_item(e);
+            let health = e.call(GET_ITEM_HEALTH, &args![broken, 1u32]).f64();
+            !matches!(
+                health.partial_cmp(&e.global::<f64>(NINETY_NINE_DOUBLE)),
+                Some(std::cmp::Ordering::Less) | None
+            )
+        });
     if done {
         e.vcall(base, 0xc, &args![0xcu32, 0u32]);
     } else {

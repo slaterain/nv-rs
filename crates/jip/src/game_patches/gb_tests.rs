@@ -1082,17 +1082,32 @@ fn o2_repair_button() {
     assert_eq!(f32::from_bits(state.health.load(Ordering::Relaxed)), 56.0);
     assert!(!state.modded.load(Ordering::Relaxed));
     let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(130.0));
-    assert_eq!(e.site(REPAIR_BUTTON.addr(), &[stack]), Some(0), "65 is above 60");
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(0),
+        "65 is above 60"
+    );
     let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(120.0));
-    assert_eq!(e.site(REPAIR_BUTTON.addr(), &[stack]), Some(0), "60 is not above 60");
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(0),
+        "60 is not above 60"
+    );
     let mut e = fixes_on();
     repair_world(&mut e, -5.0);
     let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(30.0));
     e.mem.set_u8(AREA_AT + 0x8200 + 0x19, 0x20);
-    assert_eq!(e.site(REPAIR_BUTTON.addr(), &[stack]), Some(1), "15 below 20");
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(1),
+        "15 below 20"
+    );
     let state = repair_state(&mut e);
     assert_eq!(f32::from_bits(state.skill.load(Ordering::Relaxed)), 20.0);
-    assert!(state.modded.load(Ordering::Relaxed), "the list's mod flags bit");
+    assert!(
+        state.modded.load(Ordering::Relaxed),
+        "the list's mod flags bit"
+    );
 }
 
 /// JIP's rounding up: whole values stay, others go up, out of range is -2^31.
@@ -1111,17 +1126,26 @@ fn o2_round_up() {
 fn o2_repair_amount() {
     let mut e = fixes_on();
     repair_world(&mut e, 0.0);
-    repair_state(&mut e).skill.store(60.0f32.to_bits(), Ordering::Relaxed);
+    repair_state(&mut e)
+        .skill
+        .store(60.0f32.to_bits(), Ordering::Relaxed);
     let s = 60.0f32 * 0.01;
     let expected = (20.0f32 * 0.1 + 1.0 + 10.0f32 * 0.1 * 0.5 + (3.0f32 - 1.0) * s) * 0.1;
     assert!(expected < s);
     assert_eq!(repair_amount(&mut e, 20.0, 10.0), expected);
-    assert_eq!(repair_amount(&mut e, 10.0, 20.0), expected, "the larger, the smaller");
+    assert_eq!(
+        repair_amount(&mut e, 10.0, 20.0),
+        expected,
+        "the larger, the smaller"
+    );
     e.mem.set_f32(0x011d_0884, 40.0);
     assert_eq!(repair_amount(&mut e, 50.0, 30.0), s);
     let bits = repair_amount(&mut e, 70.0, 10.0).to_bits();
     assert_eq!(
-        e.site(REPAIR_LIST_VALUE.addr(), &[70.0f32.to_bits(), 10.0f32.to_bits()]),
+        e.site(
+            REPAIR_LIST_VALUE.addr(),
+            &[70.0f32.to_bits(), 10.0f32.to_bits()]
+        ),
         Some(bits)
     );
 }
@@ -1143,16 +1167,40 @@ fn o2_repair_list() {
     state.health.store(40.0f32.to_bits(), Ordering::Relaxed);
     state.modded.store(false, Ordering::Relaxed);
     gb3_calls();
-    assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(0), "50 above 40");
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(0),
+        "50 above 40"
+    );
     assert_eq!(gb3_calls(), [(ITEM_TEST, vec![form, form])]);
-    assert_eq!(e.site(REPAIR_LIST.addr(), &[0x0641_0000, stack]), Some(1), "another form");
-    repair_state(&mut e).health.store(50.0f32.to_bits(), Ordering::Relaxed);
-    assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(1), "50 at 50");
-    repair_state(&mut e).health.store(10.0f32.to_bits(), Ordering::Relaxed);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[0x0641_0000, stack]),
+        Some(1),
+        "another form"
+    );
+    repair_state(&mut e)
+        .health
+        .store(50.0f32.to_bits(), Ordering::Relaxed);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(1),
+        "50 at 50"
+    );
+    repair_state(&mut e)
+        .health
+        .store(10.0f32.to_bits(), Ordering::Relaxed);
     repair_state(&mut e).modded.store(true, Ordering::Relaxed);
-    assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(1), "modded");
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(1),
+        "modded"
+    );
     e.mem.set_u8(form + 0x10, 1);
-    assert_eq!(e.site(REPAIR_LIST.addr(), &[form, stack]), Some(0), "the exe's test");
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(0),
+        "the exe's test"
+    );
 }
 
 /// `DoRepairItemHook` and `RepairMenuClickHook`: the amount from the broken item's (`0x11DA760`)
@@ -1162,7 +1210,9 @@ fn o2_repair_list() {
 fn o2_repair_item_and_again() {
     let mut e = fixes_on();
     repair_world(&mut e, 0.0);
-    repair_state(&mut e).skill.store(60.0f32.to_bits(), Ordering::Relaxed);
+    repair_state(&mut e)
+        .skill
+        .store(60.0f32.to_bits(), Ordering::Relaxed);
     let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(80.0));
     let used = weapon_stack(&mut e, AREA_AT + 0xa000, Some(120.0));
     e.mem.set_u32(0x011d_a760, broken);
@@ -1183,6 +1233,12 @@ fn o2_repair_item_and_again() {
 fn gb5_rows_are_jips_addresses() {
     assert_eq!(
         AREA.fix_sites[14..],
-        [0x004d_4c11, 0x0078_18b2, 0x007b_58db, 0x007b_5ced, 0x007b_5dad]
+        [
+            0x004d_4c11,
+            0x0078_18b2,
+            0x007b_58db,
+            0x007b_5ced,
+            0x007b_5dad
+        ]
     );
 }

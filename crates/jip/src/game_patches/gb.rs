@@ -628,7 +628,6 @@ fn weightless_take(_: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(1)
 }
 
-
 // ---- O2: Fallout 3 style repair (`bEnableFO3Repair`) ----
 
 /// The game settings JIP reads (`GMST_FLT`: the setting + 4): `fRepairSkillBase`, `fRepairSkillMax`,
