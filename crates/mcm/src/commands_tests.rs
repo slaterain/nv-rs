@@ -774,6 +774,23 @@ static STAND_IN: ModFileCalls = ModFileCalls {
         FILES.lock().unwrap().insert(rec(name), bytes.to_vec());
         Ok(())
     },
+    append: |_, name, bytes| {
+        FILES
+            .lock()
+            .unwrap()
+            .entry(rec(name))
+            .or_default()
+            .extend_from_slice(bytes);
+        Ok(())
+    },
+    read_head: |_, name, max| {
+        FILES
+            .lock()
+            .unwrap()
+            .get(&rec(name))
+            .map(|b| b[..b.len().min(max)].to_vec())
+            .ok_or(mod_files::ERROR_FILE_NOT_FOUND)
+    },
 };
 
 fn ini_engine() -> Engine {

@@ -124,8 +124,15 @@ fn command_line() -> Vec<OsString> {
 /// The game's master file, which a Data folder holds.
 const MAIN_MASTER: &str = "FalloutNV.esm";
 
-/// The Data folder: `path` itself or its `Data`, whichever holds FalloutNV.esm (any case).
+/// The Data folder: `path` itself or its `Data`, whichever holds FalloutNV.esm (any case). Off
+/// Windows by the finder's own rule (`game_folders::data_folder`: a `Data` folder in any case,
+/// every one tried), which `--find` and play.sh use too, so a game they report is one this takes.
 fn find_data_folder(path: &Path) -> Result<PathBuf, String> {
+    #[cfg(not(windows))]
+    if let Some(data) = game_folders::data_folder(path) {
+        return Ok(data);
+    }
+    #[cfg(windows)]
     for folder in [path.to_path_buf(), path.join("Data")] {
         let has_master = std::fs::read_dir(&folder).is_ok_and(|entries| {
             entries.flatten().any(|e| {
@@ -326,6 +333,26 @@ mod tests {
         // An argument that is not UTF-8 and is not the folder is kept among the ignored ones.
         let raw = vec![folder, OsString::from_vec(b"--odd\xff".to_vec())];
         assert_eq!(parse(&raw).unwrap().unwrap().ignored.len(), 1);
+    }
+
+    /// Review of #630 (round 4): on Linux a game whose `Data` folder, master and exe were
+    /// lower-cased (copied by a tool that does that) is one `--find` reports, and the program takes
+    /// it too: its Data folder and its exe are found, by the same rule as the finder's.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_game_the_finder_reports_in_another_case_is_taken() {
+        let game = std::env::temp_dir().join(format!("nv-viewer-case-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&game);
+        std::fs::create_dir_all(game.join("data")).unwrap();
+        std::fs::write(game.join("data/falloutnv.esm"), b"not the game's file").unwrap();
+        std::fs::write(game.join("falloutnv.exe"), b"not the game's file").unwrap();
+        let reported = game_folders::game_folder(&game);
+        let data = find_data_folder(&game);
+        let exe = host::game_exe(&game.join("data"));
+        let _ = std::fs::remove_dir_all(&game);
+        assert_eq!(reported, Some(game.clone()));
+        assert_eq!(data, Ok(game.join("data")));
+        assert_eq!(exe, game.join("falloutnv.exe"));
     }
 
     /// play.sh's command line still parses: the Data folder, the old flags ignored.

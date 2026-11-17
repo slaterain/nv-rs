@@ -753,7 +753,7 @@ fn part3_only_with_the_row() {
         assert!(e.wraps_at(REDUCE_DAMAGE.addr()).is_empty());
         e.call(REDUCE_DAMAGE.addr(), &[HIT, 0]);
         assert_eq!(count(&e, NEXT_CALLS), 1, "the exe's");
-        assert_eq!(pending_word(&e), 0);
+        assert_eq!(pending_word(&mut e), 0);
     }
 }
 
@@ -1040,7 +1040,7 @@ fn g116_pending_damage_before_the_limb_0xe_move() {
         (37.3f32 * 1.3 * dr - 6.0 * dr).to_bits()
     );
     assert_eq!(health(&e), 0.0);
-    assert_eq!(pending_word(&e), 0);
+    assert_eq!(pending_word(&mut e), 0);
 }
 
 /// A word left pending (a `SetTargetedLimb` that left before its limb step) is JIP's on one
@@ -1051,35 +1051,68 @@ fn o1_a_word_left_pending_is_taken_by_the_next_call() {
     let mut e = world_as(true);
     blocking(&mut e, 1);
     assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
-    assert_eq!(pending_word(&e), 1);
+    assert_eq!(pending_word(&mut e), 1);
     assert_eq!(e.site(DEFER_OV4.addr(), &[HIT, 1]), None, "not deferred");
-    assert_eq!(pending_word(&e), 1, "a deferral site does not take it");
+    assert_eq!(pending_word(&mut e), 1, "a deferral site does not take it");
     e.call(REDUCE_DAMAGE.addr(), &[HIT, 1]);
     assert_eq!(e.mem.u32(HIT + 0x58) & 1, 1, "the stale word 0");
-    assert_eq!(pending_word(&e), 0, "taken once");
+    assert_eq!(pending_word(&mut e), 0, "taken once");
     e.mem.set_u32(HIT + 0x58, 0);
     e.mem.set_f32(HIT + 0x14, 37.3);
     assert_eq!(e.site(HIT_LOCATION.addr(), &[HIT]), Some(0));
     assert_eq!(health(&e), 37.3, "nothing left for G116");
 }
 
-/// The pending word is the run's: a second engine sharing the slots (another run's engine on this
-/// thread) neither takes nor overwrites it.
+/// The pending word is the run's: another run's engine on this thread (its own slots, so its own
+/// run id) neither takes nor overwrites it.
 #[test]
 fn o1_pending_word_is_the_runs() {
     let mut e = world_as(true);
     blocking(&mut e, 1);
     let mut other = world_as(true);
     blocking(&mut other, 1);
-    e.share_slots_for_test(&mut other);
     assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
     other.call(REDUCE_DAMAGE.addr(), &[HIT, 1]);
     assert_eq!(other.mem.u32(HIT + 0x58) & 1, 0, "its own word 1");
     assert_eq!(other.site(DEFER_OV4.addr(), &[HIT, 1]), Some(0));
-    assert_eq!((pending_word(&e), pending_word(&other)), (1, 2));
+    assert_eq!((pending_word(&mut e), pending_word(&mut other)), (1, 2));
     assert_eq!(e.site(HIT_LOCATION.addr(), &[HIT]), Some(0));
     assert_eq!(e.mem.u32(HIT + 0x58) & 1, 1, "word 0 kept for this run");
-    assert_eq!((pending_word(&e), pending_word(&other)), (0, 2));
+    assert_eq!((pending_word(&mut e), pending_word(&mut other)), (0, 2));
+}
+
+/// The engines of one run share the run's slots and so its word (a real thread's engine and the
+/// main thread's, on one OS thread here): what one defers the other's G116 takes.
+#[test]
+fn o1_pending_word_is_shared_by_a_runs_engines() {
+    let mut e = world_as(true);
+    blocking(&mut e, 1);
+    let mut other = world_as(false);
+    e.share_slots_for_test(&mut other);
+    assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
+    assert_eq!(pending_word(&mut other), 1);
+}
+
+/// A run's engine dropped with a word pending leaves it to no later run on this thread, even one
+/// whose kernel has the dropped one's address (the run id is a process-wide count, never used
+/// again): each new engine's G116 runs with its own word.
+#[test]
+fn o1_a_dropped_runs_word_is_not_the_next_runs() {
+    for _ in 0..8 {
+        let mut e = world_as(true);
+        blocking(&mut e, 1);
+        assert_eq!(e.site(DEFER_OV3.addr(), &[HIT, 0]), Some(0));
+        assert_eq!(pending_word(&mut e), 1);
+        let kernel = e.kernel.id();
+        drop(e);
+        let mut next = world_as(true);
+        assert_eq!(
+            pending_word(&mut next),
+            0,
+            "kernel reused: {}",
+            next.kernel.id() == kernel
+        );
+    }
 }
 
 /// The test engine moved to a second OS thread behind a mutex, as stepped threads hand one engine

@@ -8,6 +8,9 @@ rust-version.workspace = true
 
 [dependencies]
 engine = { path = "../engine" }
+# The one reader of the game's profile rules (`mod_files::ini_value`) for nv-rs's own keys in
+# Fallout.ini (`game_ini::value`).
+engine-core = { path = "../engine-core" }
 # The platform layer (the window, Direct3D 9, DirectInput, DirectSound, files): the host drives
 # its input, sound output and adapter table.
 engine-platform = { path = "../engine-platform" }

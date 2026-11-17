@@ -146,7 +146,7 @@ impl Host {
     /// [`Host::start`] with the [`fixes::Choice`] the player's settings give, bound before the
     /// game's first frame.
     pub fn start_with(data: &Path, choice: &fixes::Choice) -> Result<Host, String> {
-        let exe = engine::exe::installed_exe(data);
+        let exe = game_exe(data);
         if !exe.is_file() {
             return Err(format!(
                 "{}: not found. nv-rs reads the game's own FalloutNV.exe (version \
@@ -159,7 +159,7 @@ impl Host {
         not_provided_here()?;
         // Off Windows the save guard's look at the player's folders starts now, off the frames
         // (nothing on Windows).
-        save_out::prepare();
+        save_out::prepare(data);
         let mut engine = Box::new(Engine::with_exe(&exe)?);
         // Mods' own files (MCM's and later JIP's INI and file commands) kept beside the saves, never
         // in the game's folder (`mod_files`).
@@ -445,9 +445,9 @@ impl Host {
 /// [`Host::start_with`] and [`check_installation`] off Windows: the program builds on Linux and
 /// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
 /// pieces that are still Windows-only, instead of a run that would go on without them (no window
-/// drawn, no sound, the game's own folder names not found, files listed by a call that stops)
-/// and fail somewhere less clear. On a processor other than x86-64 (Apple silicon) it also names
-/// what differs there.
+/// drawn) and fail somewhere less clear. The game's paths and file listings are provided
+/// (`engine_platform::host_paths`), and so is the sound on the speakers. On a processor other
+/// than x86-64 (Apple silicon) it also names what differs there.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
     not_provided_on(cfg!(target_arch = "x86_64"))
@@ -459,11 +459,9 @@ fn not_provided_on(x86_64: bool) -> Result<(), String> {
     let mut why = String::from(
         "nv-rs does not run the game on this system yet: it builds here, but these are only \
          provided on Windows so far: the game's window with its mouse and keyboard (and so \
-         anything drawn), the sound on the speakers, the game's Windows folder names (a drive \
-         letter and backslashes) over this system's folders, the file listing's file times, \
-         this machine's tables (display adapter, sound devices, folders), which are measured on \
-         Windows, the distortion sound effect's table (measured from Windows' own DLL), and text \
-         in the game's code page outside ASCII",
+         anything drawn), this machine's tables (display adapter, sound devices, folders), \
+         which are measured on Windows, the distortion sound effect's table (measured from \
+         Windows' own DLL), and code pages other than Windows' Western one (1252)",
     );
     if !x86_64 {
         why.push_str(
@@ -474,11 +472,27 @@ fn not_provided_on(x86_64: bool) -> Result<(), String> {
     Err(why)
 }
 
+/// The installation's `FalloutNV.exe` beside the `Data` folder `data`
+/// ([`engine::exe::installed_exe`]). Off Windows its name is matched without case by the game's
+/// own path rule (`engine_platform::host_paths::stored_name`: the exact name when there, else the
+/// first that differs only in case), as the finder and play.sh take a `Data` folder in any case:
+/// a copy whose exe was lower-cased (`falloutnv.exe`) is found.
+pub fn game_exe(data: &Path) -> PathBuf {
+    let exe = engine::exe::installed_exe(data);
+    #[cfg(not(windows))]
+    if let (Some(name), Some(folder)) =
+        (engine_platform::host_paths::stored_name(&exe), exe.parent())
+    {
+        return folder.join(name);
+    }
+    exe
+}
+
 /// What `nv-viewer --check` reports for the installation whose `Data` folder is `data`, without
 /// starting anything: an error when its `FalloutNV.exe` is missing or is not 1.4.0.525
 /// ([`engine::exe::verify`]), else a line for each thing that decides how the run will go.
 pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
-    let exe = engine::exe::installed_exe(data);
+    let exe = game_exe(data);
     if !exe.is_file() {
         return Err(format!("{}: not found", exe.display()));
     }
@@ -841,15 +855,18 @@ mod tests {
             for piece in [
                 "window",
                 "mouse and keyboard",
-                "sound",
-                "folder names",
-                "file times",
+                "sound devices",
                 "tables",
                 "distortion",
                 "code page",
             ] {
                 assert!(why.contains(piece), "{piece}: {why}");
             }
+            // The game's paths and file listings are provided off Windows now.
+            assert!(!why.contains("folder names"), "{why}");
+            assert!(!why.contains("file times"), "{why}");
+            // The sound on the speakers is provided everywhere (engine-platform sound_out.rs).
+            assert!(!why.contains("speakers"), "{why}");
             // The processor's own differences only off x86-64 (Apple silicon).
             assert_eq!(why.contains("x87"), !x86_64, "{why}");
             assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
