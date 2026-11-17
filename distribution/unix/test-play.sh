@@ -91,6 +91,14 @@ check "1 not marked as asked" '[ ! -e "$own/saves-offered.txt" ]'
 check "1 program got the game" 'printf "%s" "$out" | grep -qF "program args: $game"'
 check "1 save out set" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$S2"'
 check "1 sound out" 'printf "%s" "$out" | grep -qx "NV_SOUND=out"'
+# A play run, as Play.exe starts one on Windows: the program then draws on Vulkan with the play
+# defaults (host fixes::is_play_run; its test play_sh_variables_make_a_play_run_on_vulkan).
+# Only where the start goes on (Linux on x86-64); elsewhere the program stops first.
+if [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]; then
+    check "1 play run" 'printf "%s" "$out" | grep -qxF "NV_SETTINGS=$own/settings.ini"'
+else
+    check "1 no play settings where the start stops" '! printf "%s" "$out" | grep -q "^NV_SETTINGS="'
+fi
 check "1 log written" '[ "$(ls "$own/logs" | grep -c "^game-.*\.log$")" = 1 ]'
 
 # 2. Answers given: Enter (and "no") leave the saves, and mark the question asked.
@@ -251,7 +259,8 @@ check "18 a linked script looks beside itself" 'printf "%s" "$out" | grep -qF "$
 
 check "19 steam folder still unchanged" '[ "$(snapshot)" = "$before" ]'
 
-# 20. The program's expected stop in this preview (the game does not run here yet, status 69):
+# 20. The program's expected stop in this preview on macOS and other processors than x86-64 (the
+# game does not run there yet, status 69; Linux on x86-64 goes on to start it):
 # said as expected, with no request for a report; its status comes back.
 printf 'own%s%s\ngame%sSteam%s%s\n' "$tab" "$own" "$tab" "$tab" "$game" >"$T/find.txt"
 rm -f "$own/game-folder.txt"

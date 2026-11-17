@@ -1367,8 +1367,22 @@ pub fn inventory_menu_is_item_repairable(
     } else {
         0
     };
-    if item != 0 && rounded_health(e, item) == full {
-        return false;
+    if item != 0 {
+        // `0x7818B2` (JIP LN NVSE's `EnableRepairButtonHook`, O2, with `bEnableFO3Repair`; JIP's
+        // `JA` at `0x7818D3`): JIP's answer replaces the full-health test, 0 meaning not
+        // repairable. One load while off.
+        let jip = if e.jip_patches() & engine_core::extend::jip_patches::ENABLE_FO3_REPAIR != 0 {
+            e.site(0x0078_18b2, &[item])
+        } else {
+            None
+        };
+        let refused = match jip {
+            Some(answer) => answer == 0,
+            None => rounded_health(e, item) == full,
+        };
+        if refused {
+            return false;
+        }
     }
     if item == 0 || object == 0 {
         return false;
@@ -3855,5 +3869,62 @@ mod n054_tests {
         assert!(calls_to(&e, QUANTITY_MENU_CREATE).is_empty());
         assert!(calls_to(&e, SETTING_VALUE_WORD).is_empty());
         assert_eq!(calls_to(&e, UPDATE_PLAYER_3D).len(), 1);
+    }
+
+    // ---- GB-5 (O2, `bEnableFO3Repair`) ----
+
+    fn o2_refuse(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        assert_eq!(w, [0x7000], "the stack");
+        Some(0)
+    }
+    fn o2_allow(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(1)
+    }
+
+    /// `repairable_stack_and_group`'s stack of 2 at `health`, with the seam at `0x7818B2`.
+    fn repairable(word: u32, handler: engine_core::extend::SiteFn, health: f64) -> (Engine, bool) {
+        let mut e = Engine::new();
+        let this = menu(&mut e);
+        pages(&mut e, &[FULL_HEALTH]);
+        e.mem.set_f64(FULL_HEALTH, 100.0);
+        answer(&mut e, ITEM_OBJECT, 0x7100);
+        answer(&mut e, FORM_TYPE, 0x28);
+        answer_st0(&mut e, ITEM_GET_HEALTH, health);
+        e.register(HEALTH_ROUND, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0])),
+            ..Ret::default()
+        });
+        answer(&mut e, WORD_AT_FOUR, 2);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0078_18b2, handler);
+        e.call_log = Some(vec![]);
+        let answer = e.call(0x0078_1860, &args![this, 0x7000u32]).bool();
+        (e, answer)
+    }
+
+    /// O2 (`0x7818B2`, words: the stack): with the option's bit JIP's answer replaces the
+    /// rounded full-health test (0: not repairable; 1: the further tests, so a full-health stack
+    /// may pass); off, or `INSTALLED | FIXES` without the option: not asked; no answer: the exe's.
+    #[test]
+    fn jip_o2_repair_button_test() {
+        use engine_core::extend::jip_patches::{ENABLE_FO3_REPAIR, FIXES, INSTALLED};
+        let on = INSTALLED | FIXES | ENABLE_FO3_REPAIR;
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED | FIXES, never),
+            (on, nothing),
+        ] {
+            let (e, ok) = repairable(word, handler, 100.0);
+            assert!(!ok, "full health");
+            assert_eq!(calls_to(&e, HEALTH_ROUND).len(), 1);
+            let (_, ok) = repairable(word, handler, 50.0);
+            assert!(ok);
+        }
+        let (e, ok) = repairable(on, o2_refuse, 50.0);
+        assert!(!ok);
+        assert!(calls_to(&e, HEALTH_ROUND).is_empty());
+        assert!(calls_to(&e, FORM_TYPE).is_empty(), "nothing further");
+        let (_, ok) = repairable(on, o2_allow, 99.9);
+        assert!(ok, "the exe's further tests: below 100, a stack of 2");
     }
 }

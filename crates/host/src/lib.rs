@@ -20,6 +20,7 @@ pub mod cell_entry_wait;
 pub mod cell_offsets;
 pub mod direct_files;
 pub mod draw_thread;
+pub mod first_profile;
 pub mod fixes;
 pub mod form_types;
 pub mod frame_log;
@@ -163,6 +164,9 @@ impl Host {
         // machine table's `GetACP`), so the whole run has one page.
         #[cfg(not(windows))]
         choose_code_page()?;
+        // Off Windows, where the start goes on: what this build is, in the log (and on screen).
+        #[cfg(not(windows))]
+        eprintln!("{FIRST_STARTS}");
         // Off Windows the save guard's look at the player's folders starts now, off the frames
         // (nothing on Windows).
         save_out::prepare(data);
@@ -388,7 +392,7 @@ impl Host {
         start_crt_io(&mut engine, &mut movement);
         // The machine table before the C initializers: `__get_sse2_info` (`00ed1927`, from
         // the initializer `00ed454f`) asks the processor, which the table answers.
-        load_adapter_table(&mut engine)?;
+        load_adapter_table(&mut engine, data)?;
         start_cinit_float(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         // A skipped initializer leaves its global (a setting among them) unbuilt, silently
@@ -494,15 +498,26 @@ impl Host {
 pub const NOT_PROVIDED_STATUS: i32 = 69;
 
 /// The process status for an error of [`Host::start_with`] or [`check_installation`]:
-/// [`NOT_PROVIDED_STATUS`] for the stop off Windows ([`not_provided_here`]), 1 for any other.
+/// [`NOT_PROVIDED_STATUS`] for the stop off Windows (any [`not_provided_on`] refusal: macOS, a
+/// processor other than x86-64), 1 for any other.
 pub fn error_status(err: &str) -> i32 {
-    #[cfg(not(windows))]
-    if not_provided_here().err().as_deref() == Some(err) {
-        return NOT_PROVIDED_STATUS;
+    if err.starts_with(REFUSAL_START) {
+        NOT_PROVIDED_STATUS
+    } else {
+        1
     }
-    let _ = err;
-    1
 }
+
+/// How every refusal of [`not_provided_on`] begins (and nothing else the start says).
+const REFUSAL_START: &str = "nv-rs does not run the game on this system yet: ";
+
+/// The line a Linux start and `--check` say where the start is not refused: what this build is
+/// and is not (review of #687).
+#[cfg_attr(windows, allow(dead_code))]
+const FIRST_STARTS: &str = "nv-rs on this system: built and unit-tested here, but never started \
+     with the game's files before. Known to be missing: sounds at rates other than the sound \
+     device's are not heard until the game first changes a sound's pitch, pop-up warnings are log \
+     lines, a mod's loose HLSL shaders stop the game. Please report any stop with this log.";
 
 /// [`Host::start_with`] and [`check_installation`] off Windows: what is still Windows-only on this
 /// system, which refuses every start (and `--check`) instead of a run that would go on without it
@@ -564,8 +579,7 @@ fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
         return Ok(());
     }
     Err(format!(
-        "nv-rs does not run the game on this system yet: it builds here, but these are only \
-         provided on Windows so far: {}",
+        "{REFUSAL_START}it builds here, but these are only provided on Windows so far: {}",
         missing.join("; and ")
     ))
 }
@@ -601,6 +615,19 @@ pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
     stop_off_windows(&exe, &engine::exe::verify)?;
     #[cfg(windows)]
     engine::exe::verify(&exe)?;
+    // Off Windows, where the start goes on: the code page the start will take (an unsupported
+    // `NV_CODE_PAGE` stops here as it stops the start) and what this build is.
+    #[cfg(not(windows))]
+    let elsewhere = {
+        let page =
+            engine_platform::code_page::chosen(std::env::var("NV_CODE_PAGE").ok().as_deref())?;
+        vec![
+            format!("code page: {page} (NV_CODE_PAGE)"),
+            FIRST_STARTS.to_string(),
+        ]
+    };
+    #[cfg(windows)]
+    let elsewhere: Vec<String> = Vec::new();
     let converter = if engine_platform::resampler::tables().is_some() {
         "found"
     } else {
@@ -623,11 +650,13 @@ pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
             }
         ),
     };
-    Ok(vec![
+    let mut lines = vec![
         format!("game: {} is 1.4.0.525", exe.display()),
         format!("sound device: {device}"),
         format!("sound converter tables: {converter}"),
-    ])
+    ];
+    lines.extend(elsewhere);
+    Ok(lines)
 }
 
 /// `main` (Xbox PDB, `0086a850`), the game's `WinMain`.
@@ -744,12 +773,29 @@ pub fn wgpu_cache_path() -> Option<PathBuf> {
 /// Direct3D 9 query stops that stage and its message says how to capture the table.
 /// Off Windows the table is this machine's part ([`adapter_table_text`]) and, after it, the display
 /// and card part ([`display_table_text`]), made here: after the run's renderer choice. A card the
-/// game cannot draw on refuses the start (the error).
-fn load_adapter_table(e: &mut Engine) -> Result<(), String> {
+/// game cannot draw on refuses the start (the error). In a play run off Windows the first start's
+/// profile files are prepared here too, from the whole table ([`first_profile::first_start`]: no
+/// Play.exe there), before the game reads them.
+#[cfg_attr(windows, allow(unused_variables))]
+fn load_adapter_table(e: &mut Engine, data: &Path) -> Result<(), String> {
     if let Some(text) = adapter_table_text() {
         #[cfg(not(windows))]
         let text = match display_table_text()? {
-            Some(display) => text + &display,
+            Some(display) => {
+                let text = text + &display;
+                if fixes::is_play_run(|name| std::env::var(name).ok()) {
+                    match (own_folder(), data.parent()) {
+                        (Ok(own), Some(game)) => {
+                            let [documents, _, _] =
+                                engine_platform::machine_table::game_folders(&own);
+                            first_profile::first_start(&documents, game, &text);
+                        }
+                        (Err(why), _) => eprintln!("first start: no profile files: {why}"),
+                        (_, None) => {}
+                    }
+                }
+                text
+            }
             None => text,
         };
         engine_platform::d3d9::load_adapter_table(e, &text);
@@ -1161,6 +1207,27 @@ mod tests {
         }
         assert_eq!(super::NOT_PROVIDED_STATUS, 69);
         assert_eq!(super::error_status("FalloutNV.exe: not found"), 1);
+    }
+
+    /// Every refusal (macOS, another processor) has the expected stop's status, on every system;
+    /// any other error 1.
+    #[test]
+    fn every_refusal_has_the_expected_stops_status() {
+        for (x86_64, apple) in [(true, true), (false, true), (false, false)] {
+            let why = super::not_provided_on(x86_64, apple).unwrap_err();
+            assert_eq!(
+                super::error_status(&why),
+                super::NOT_PROVIDED_STATUS,
+                "{why}"
+            );
+        }
+        assert_eq!(super::NOT_PROVIDED_STATUS, 69);
+        assert_eq!(super::error_status("FalloutNV.exe: not found"), 1);
+        assert_eq!(
+            super::error_status("NV_CODE_PAGE=932: give 1252 (English, ...)"),
+            1
+        );
+        assert!(!super::FIRST_STARTS.starts_with(super::REFUSAL_START));
     }
 
     /// The display part of the machine table is made only after the renderer choice: before it,
