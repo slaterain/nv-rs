@@ -7296,6 +7296,29 @@ mod tests {
         let log = run(&mut s.e);
         assert_eq!(calls_to(&log, 0x004d_ffa0).len(), 2, "no answer: the exe");
         super::jip_seam::seen();
+        // Each node at its own address: with a handler at 0x571FDF only, the "Weapon" child is
+        // asked there and the held node is the exe's.
+        let mut t = weapon_setup(0, 0);
+        let t_node = t.node;
+        let vtable = t.e.mem.u32(t.process);
+        t.e.register_double(vtable + 0x1a0, move |_, _| ret(held));
+        t.e.register_double(0x004a_ae30, move |_, a| {
+            ret(if a[0] == t_node && a[1] == 0x0101_3be8 {
+                child
+            } else {
+                0
+            })
+        });
+        let actor_vtable = t.e.mem.u32(t.actor);
+        t.e.register(actor_vtable + 0x21c, |_, _| ret(1));
+        super::jip_seam::put(&mut t.e, 0x0057_1fdf, Some(0));
+        t.e.set_jip_patches(jip_patches::FIXES);
+        let actor = t.actor;
+        let log = logged(&mut t.e, |e| {
+            e.call(0x0057_1b50, &args![actor]);
+        });
+        assert_eq!(super::jip_seam::seen(), vec![vec![child]]);
+        assert_eq!(calls_to(&log, 0x004d_ffa0), vec![vec![held + 0x9c]]);
     }
 
     #[test]
