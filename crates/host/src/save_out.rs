@@ -1506,7 +1506,8 @@ mod tests {
             let home = game_folders::Home::from_process().expect("HOME is a full path");
             let documents = home.home.join("Documents/My Games/FalloutNV/Saves/x.fos");
             assert!(refused_here(&documents).is_some(), "{documents:?}");
-            assert_eq!(refused_here(&s.0.join("own/Saves/y.fos")), None);
+            // (nv-rs's own folder is the link into the prefix by now: a folder beside it.)
+            assert_eq!(refused_here(&s.0.join("beside/Saves/y.fos")), None);
         }
 
         /// Review of #630 (round 4): the game folder the port was started with is guarded, though
