@@ -214,7 +214,8 @@ check_libraries() {
         if [ -z "$lib" ] || [ "${lib#\#}" != "$lib" ]; then
             continue
         fi
-        if ! printf '%s\n' "$known" | grep -qF "$lib ("; then
+        # The 64-bit library (ldconfig: "(libc6,x86-64)"): a 32-bit one alone does not count.
+        if ! printf '%s\n' "$known" | grep -F "$lib (" | grep -qF "x86-64"; then
             printf '  %s (install: %s)\n' "$lib" "${package:-see the READ ME}"
         fi
     done <"$list")

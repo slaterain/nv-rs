@@ -290,16 +290,39 @@ echo x >"$elsewhere_master/FalloutNV.exe"
 out=$(run --game "$elsewhere_master" </dev/null 2>&1); st=$?
 check "23 refused by play.sh" '[ $st = 1 ] && printf "%s" "$out" | grep -q "no game in"'
 
+# 25. Linux's library check (app/libraries.txt; a stand-in ldconfig and uname, on any system): a
+# 32-bit libasound alone is missing, the 64-bit one is found.
+pkg="$T/pkg"
+mkdir -p "$pkg/app" "$T/fakebin"
+cp "$PLAY" "$pkg/play.sh"
+printf 'libasound.so.2 libasound2\n' >"$pkg/app/libraries.txt"
+printf '#!/bin/sh\necho Linux\n' >"$T/fakebin/uname"
+printf '#!/bin/sh\ncat "$FAKE_LDCONFIG"\n' >"$T/fakebin/ldconfig"
+chmod +x "$T/fakebin/uname" "$T/fakebin/ldconfig"
+printf '\tlibasound.so.2 (libc6) => /usr/lib/i386-linux-gnu/libasound.so.2\n' >"$T/ld32.txt"
+printf '\tlibasound.so.2 (libc6,x86-64) => /usr/lib/x86_64-linux-gnu/libasound.so.2\n' >"$T/ld64.txt"
+out=$(PATH="$T/fakebin:$PATH" FAKE_LDCONFIG="$T/ld32.txt" $SH "$pkg/play.sh" --game "$game" </dev/null 2>&1); st=$?
+check "25 a 32-bit libasound alone is missing" '[ $st = 1 ] && printf "%s" "$out" | grep -qF "libasound.so.2 (install: libasound2)"'
+out=$(PATH="$T/fakebin:$PATH" FAKE_LDCONFIG="$T/ld64.txt" $SH "$pkg/play.sh" --game "$game" </dev/null 2>&1); st=$?
+check "25 the 64-bit libasound is found" '[ $st = 0 ] && printf "%s" "$out" | grep -qF "program args: $game"'
+
 # 24. CI's Linux job (NV_RS_REAL_PROGRAM: the built nv-viewer): the real program takes and refuses
-# the same game folders as the stand-in. Taken, it ends with its expected stop here (69: the game
-# does not run on this system yet); refused, with status 1.
+# the same game folders as the stand-in. Taken, it checks the game's FalloutNV.exe before its
+# expected stop (69: the game does not run on this system yet); these trees' exe is a made-up file,
+# so a taken tree ends with the program's "not 1.4.0.525" refusal (status 1, NOT the expected
+# stop: a wrong exe is worth a report); refused, with status 1 and no such refusal.
 if [ -n "${NV_RS_REAL_PROGRAM:-}" ]; then
     for tree in "$game" "$other" "$other/Data" "$stray" "$odd" "$elsewhere_master" "$T/elsewhere"; do
         "$T/program" "$tree" >/dev/null 2>&1
         fake=$?
         (cd -- "$T" && NV_RS_NO_WINDOWS=1 "$NV_RS_REAL_PROGRAM" "$tree" >"$T/real.log" 2>&1)
         real=$?
-        [ "$real" = 69 ] && real=0
+        if [ "$fake" = 0 ]; then
+            check "24 a made-up exe is not the expected stop: $tree" '[ "$real" = 1 ]'
+        fi
+        if [ "$real" = 1 ] && grep -q "other builds are not supported yet" "$T/real.log"; then
+            real=0
+        fi
         check "24 the program decides as the stand-in ($fake): $tree" '[ "$real" = "$fake" ]'
         [ "$real" = "$fake" ] || cat "$T/real.log"
     done

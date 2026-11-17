@@ -154,9 +154,11 @@ impl Host {
                 exe.display()
             ));
         }
-        // Linux and macOS: the program builds there, but the game does not run yet.
+        // Linux and macOS: the program builds there, but the game does not run yet. The exe's
+        // version is checked first, so a wrong FalloutNV.exe is said as such (status 1, a report
+        // asked) and not as the expected stop (review of #631, round 5).
         #[cfg(not(windows))]
-        not_provided_here()?;
+        stop_off_windows(&exe, &engine::exe::verify)?;
         // Off Windows the save guard's look at the player's folders starts now, off the frames
         // (nothing on Windows).
         save_out::prepare(data);
@@ -497,6 +499,17 @@ fn not_provided_here() -> Result<(), String> {
     not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
 }
 
+/// Off Windows, the start's and `--check`'s stop: `exe` checked by `verify` first (a wrong
+/// FalloutNV.exe is said as such, status 1), then [`not_provided_here`] (status 69).
+#[cfg(not(windows))]
+fn stop_off_windows(
+    exe: &Path,
+    verify: &dyn Fn(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    verify(exe)?;
+    not_provided_here()
+}
+
 /// [`not_provided_here`]'s message, for an x86-64 processor or another, on macOS or another
 /// system.
 #[cfg(any(not(windows), test))]
@@ -548,12 +561,13 @@ pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
     if !exe.is_file() {
         return Err(format!("{}: not found", exe.display()));
     }
-    engine::exe::verify(&exe)?;
     // Linux and macOS: the game cannot start there yet, so the check says so, after the exe was
     // found and its version checked (a wrong build is said first); `--check` then ends with
     // [`NOT_PROVIDED_STATUS`] ([`error_status`]), which play.sh says is expected.
     #[cfg(not(windows))]
-    not_provided_here()?;
+    stop_off_windows(&exe, &engine::exe::verify)?;
+    #[cfg(windows)]
+    engine::exe::verify(&exe)?;
     let converter = if engine_platform::resampler::tables().is_some() {
         "found"
     } else {
@@ -940,14 +954,27 @@ mod tests {
         dir
     }
 
-    /// The refusal is made before the exe is mapped: a start with an installation present stops
-    /// with it on Linux and macOS (an installation with no exe still says that first).
+    /// The refusal is made before the exe is mapped, after its version is checked (review of #631,
+    /// round 5): a start with a file that is not FalloutNV.exe 1.4.0.525 says so (status 1, a
+    /// report asked), not the expected stop; with the right exe (a check that passes) it stops
+    /// with the refusal.
     #[cfg(not(windows))]
     #[test]
-    fn a_start_off_windows_stops_with_the_refusal() {
+    fn a_start_off_windows_checks_the_version_then_stops_with_the_refusal() {
         let dir = scratch_installation("refusal");
         let err = super::Host::start(&dir.join("Data")).err().unwrap();
-        assert_eq!(err, super::not_provided_here().unwrap_err());
+        assert_ne!(err, super::not_provided_here().unwrap_err());
+        assert!(err.contains("1.4.0.525"), "{err}");
+        assert_eq!(super::error_status(&err), 1);
+        let exe = dir.join("FalloutNV.exe");
+        assert_eq!(
+            super::stop_off_windows(&exe, &|_| Ok(())),
+            super::not_provided_here()
+        );
+        assert_eq!(
+            super::stop_off_windows(&exe, &|_| Err("another build".into())),
+            Err("another build".to_string())
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -973,7 +1000,8 @@ mod tests {
     #[test]
     fn the_expected_stop_off_windows_has_its_own_status() {
         let dir = scratch_installation("status");
-        let err = super::Host::start(&dir.join("Data")).err().unwrap();
+        // The right exe (a version check that passes), as the start makes the stop.
+        let err = super::stop_off_windows(&dir.join("FalloutNV.exe"), &|_| Ok(())).unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(super::error_status(&err), super::NOT_PROVIDED_STATUS);
         assert_eq!(super::NOT_PROVIDED_STATUS, 69);

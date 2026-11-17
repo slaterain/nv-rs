@@ -19,9 +19,9 @@
 #       [--out DIR]      where the package goes (default: dist)
 #       [--game FILE]    the game's FalloutNV.exe, only read: the check that no data of it is in
 #                        the program (package-check --game --max-run 4096, as the Windows package
-#                        always makes it). A release package needs it. CI has no game, so CI makes
-#                        test builds only, and the maintainer makes this check on the downloaded
-#                        package before publishing it (docs/MAINTAINING.md).
+#                        always makes it). A release package needs it: a machine without the game
+#                        makes test builds only, whose program must get this check before any
+#                        release.
 #
 # Makes DIR/nv-rs-preview-<system>.tar.gz (a test build: nv-rs-preview-<system>-test.tar.gz) and its
 # .sha256.
@@ -69,7 +69,7 @@ esac
 [ -z "$game" ] || [ -f "$game" ] || fail "--game must be the game's FalloutNV.exe, and this file is not there: $game"
 # A release package is checked against the game, as the Windows package always is.
 if [ "$test_build" = 0 ] && [ -z "$game" ]; then
-    fail "a release package needs --game FILE (the game's FalloutNV.exe, only read): the check that no data of it is in the program, which the Windows package always makes. Without the game (CI) make a test build (--test-build) and check the program with package-check --game before publishing it (docs/MAINTAINING.md)."
+    fail "a release package needs --game FILE (the game's FalloutNV.exe, only read): the check that no data of it is in the program, which the Windows package always makes. Without the game make a test build (--test-build); its program needs package-check --game before any release."
 fi
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
@@ -270,12 +270,24 @@ if [ "$(uname -s)" = Darwin ]; then
 else
     owner='--owner=0 --group=0 --numeric-owner'
 fi
+# The tar first and then gzip, each checked (a tar failing inside a pipe would go unseen).
+[ ! -e "$stage.tar" ] || fail "$stage.tar already exists: move it away first"
 # shellcheck disable=SC2086
-(cd -- "$out" && tar $owner -cf - "$name" | gzip -9 >"$archive") || fail "the archive was not made"
+(cd -- "$out" && tar $owner -cf "$name.tar" "$name") || fail "the archive was not made (tar)"
+gzip -9 -n -- "$stage.tar" || fail "the archive was not compressed (gzip)"
+[ -s "$archive" ] || fail "no archive at $archive"
 # Every entry under the package's folder, none of Apple's metadata, no `..`.
 entries=$(tar -tzf "$archive") || fail "the archive cannot be listed"
 odd=$(printf '%s\n' "$entries" | grep -v -e "^$name/" -e "^$name\$" || true)
 odd="$odd$(printf '%s\n' "$entries" | grep -e '/\._' -e '\.\./' || true)"
 [ -z "$odd" ] || fail "the archive holds entries it must not: $odd"
+# And every staged file is in it: play.sh and the program first of all.
+unlisted=$(cd -- "$out" && find "$name" -type f | while IFS= read -r file; do
+    printf '%s\n' "$entries" | grep -qxF -- "$file" || printf '%s ' "$file"
+done)
+[ -z "$unlisted" ] || fail "the archive lacks: $unlisted"
+for file in "$name/play.sh" "$name/app/nv-viewer"; do
+    printf '%s\n' "$entries" | grep -qxF -- "$file" || fail "the archive has no $file"
+done
 (cd -- "$out" && sha256 "$name.tar.gz" >"$name.tar.gz.sha256")
 printf '%s\n' "Package: $archive" "Bytes: $(wc -c <"$archive" | tr -d ' ')" "Checksum: $archive.sha256" "Commit: $commit" "Program SHA256: $sha"
