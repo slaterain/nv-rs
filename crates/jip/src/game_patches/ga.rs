@@ -449,6 +449,14 @@ fn load_screen_fix_on(e: &mut Engine) -> bool {
     e.jip_patches() & engine_core::extend::jip_patches::LOAD_SCREEN_FIX != 0
 }
 
+/// O16's two lists while the switch is on and they are made; else none.
+fn load_screen_lists(e: &mut Engine) -> Option<(Vec<u32>, Vec<u32>)> {
+    if !load_screen_fix_on(e) {
+        return None;
+    }
+    e.ext_free::<LoadScreenLists>().0.get().cloned()
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 16
 // (the lists JIP makes when the switch goes on).
 /// O16 on: the data handler's load screens sorted once into those with locations and the generic
@@ -502,25 +510,21 @@ fn add_candidate(e: &mut Engine, results: u32, screen: u32) {
 /// location, the generic screens (in the overlay mode only those with flag `0x400`); else the
 /// screens with locations that can show for the location (`CanDisplayForForm`), and the generic
 /// ones when none could. While `0x11D8907` or the OS globals' byte `+2` is set only screens of no
-/// type, type 0 or type 3 are added. With the switch off: the next link (the exe's).
+/// type, type 0 or type 3 are added. With the switch off, or before the lists are made (JIP makes
+/// them in the same step that puts its hooks in, so its hook never runs without them): the next
+/// link (the exe's).
 /// Difference from JIP: with no screens with locations at all, JIP's walk (`dec edi` from 0) runs
 /// on past its list; here it adds none and goes on to the generic screens.
 fn load_screen_candidates(e: &mut Engine, w: &[u32]) -> Ret {
-    if !load_screen_fix_on(e) {
+    let Some((with_location, generic)) = load_screen_lists(e) else {
         return e.call_next(LOAD_SCREEN_CANDIDATES.addr(), w);
-    }
+    };
     let (menu, results) = (w[0], w[1]);
     let overlay_mode = e.mem.u8(menu + MENU_FLAGS_HIGH) & 0x20 != 0;
     let os_globals = e.mem.u32(OS_GLOBALS);
     let only_type_3 = (e.mem.u8(MENU_REPLACED) | e.mem.u8(os_globals + 2)) != 0;
     e.mem.set_u32(results + CANDIDATES_SIZE, 0);
     let location = e.mem.u32(menu + MENU_LOCATION);
-    let (with_location, generic) = e
-        .ext_free::<LoadScreenLists>()
-        .0
-        .get()
-        .cloned()
-        .unwrap_or_default();
     if !overlay_mode && location != 0 {
         for screen in with_location {
             if e.call(CAN_DISPLAY_FOR_FORM, &args![screen, location])
@@ -547,9 +551,10 @@ fn load_screen_candidates(e: &mut Engine, w: &[u32]) -> Ret {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: PickLoadScreenHook.
 /// O16: the second pass without the location is held back while the menu's screen list has a
-/// screen (its first item set), in place of the list lock test. With the switch off: no answer.
+/// screen (its first item set), in place of the list lock test. With the switch off, or before
+/// the lists are made (JIP's hooks go in with them): no answer.
 fn pick_load_screen(e: &mut Engine, a: &[u32]) -> Option<u32> {
-    if !load_screen_fix_on(e) {
+    if !load_screen_fix_on(e) || e.ext_free::<LoadScreenLists>().0.get().is_none() {
         return None;
     }
     Some(u32::from(e.mem.u32(a[0] + MENU_LOAD_SCREENS) != 0))

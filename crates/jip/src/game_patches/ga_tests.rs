@@ -709,6 +709,21 @@ fn o16_the_wrap_runs_the_exes_with_the_switch_off() {
     assert_eq!(e.mem.u32(O16_RESULTS + 8), 0x7777, "the exe's");
 }
 
+/// O16 with the switch on but the lists not made yet (JIP puts its hooks in only with them): the
+/// wrap runs the exe's `BuildCandidateList`, and the second-pass seam gives no answer.
+#[test]
+fn o16_before_the_lists_are_made_the_exes_runs() {
+    let mut e = o16_world_unmade(&[screen(3)], false);
+    install_fixes(&mut e);
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), None);
+    e.call(0x0078_ac60, &[O16_MENU, O16_RESULTS]);
+    assert_eq!(e.mem.u32(O16_RESULTS + 8), 0x7777, "the exe's");
+    e.mem.set_u32(O16_MENU + 0x1d0, screen(2));
+    assert_eq!(pick_load_screen(&mut e, &[O16_MENU]), None);
+    deferred_init(&mut e);
+    assert_eq!(pick_load_screen(&mut e, &[O16_MENU]), Some(1), "made");
+}
+
 /// O16 `PickLoadScreenHook`: the second pass held (1) while the menu's list has a first screen,
 /// not (0) when it has none; the switch off: no answer.
 #[test]
