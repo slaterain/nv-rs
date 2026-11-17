@@ -881,7 +881,7 @@ struct SunState {
     /// The integer and boolean registers of the last caster and their header's place.
     last_regs: Option<([[u32; 4]; 16], [u32; 16], u32)>,
     /// The geometry seen to move (a place came as one went), drawn each frame over the still maps.
-    moving: std::collections::HashSet<sun_shadow::GeoKey>,
+    moving: crate::fxhash::Set<sun_shadow::GeoKey>,
     /// Each geometry's object-space bounding sphere (none: its positions could not be read).
     bounds: Map<sun_shadow::GeoKey, Option<([f64; 3], f64)>>,
     /// Each caster pipeline's place in `gpu.pipelines` by vertex shader, declaration, strides,
@@ -950,7 +950,7 @@ impl SunState {
             cache: sun_shadow::Cache::default(),
             headers: Vec::new(),
             last_regs: None,
-            moving: std::collections::HashSet::new(),
+            moving: crate::fxhash::Set::default(),
             bounds: Map::default(),
             pipes: Map::default(),
             keep: sun_shadow::SunKeep::default(),
@@ -5662,14 +5662,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 std::array::from_fn(|r| {
                     std::array::from_fn(|j| {
                         let o = 16 * (m as usize + r) + 4 * j;
-                        f32::from_le_bytes(
-                            self.st.vsf[o..o + 4].try_into().expect("4 bytes"),
-                        )
+                        f32::from_le_bytes(self.st.vsf[o..o + 4].try_into().expect("4 bytes"))
                     })
                 })
             });
-            s.dump_rejects
-                .push((why, vs.stable, ps.stable, count, mvp));
+            s.dump_rejects.push((why, vs.stable, ps.stable, count, mvp));
         }
     }
 
@@ -6210,7 +6207,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         }
         let added = changed.len();
-        let came: std::collections::HashSet<sun_shadow::GeoKey> =
+        let came: crate::fxhash::Set<sun_shadow::GeoKey> =
             changed.iter().map(|(k, _)| k.clone()).collect();
         // Let go: what was written or released since; a moving geometry's old places; what the
         // game would have drawn (wholly in view) and has not for a few frames; what is too far to

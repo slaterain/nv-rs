@@ -658,14 +658,16 @@ pub struct Instance<T> {
 /// cast (the maps are drawn from it, so objects out of sight behind the camera still cast, and a
 /// map is drawn again only when something in it came, went or moved).
 pub struct Cache<K, T> {
-    map: std::collections::HashMap<K, Vec<Instance<T>>>,
+    /// (The fast hasher: the keys are the device's own buffers and ranges, and hashing every kept
+    /// caster's key each frame with the default one cost most of a millisecond standing still.)
+    map: crate::fxhash::Map<K, Vec<Instance<T>>>,
     len: usize,
 }
 
 impl<K: std::hash::Hash + Eq, T> Default for Cache<K, T> {
     fn default() -> Self {
         Cache {
-            map: std::collections::HashMap::new(),
+            map: crate::fxhash::Map::default(),
             len: 0,
         }
     }
@@ -1448,10 +1450,14 @@ impl Gpu {
         let mut lists: Vec<[MapList<'_>; 2]> =
             (0..CASCADES).map(|_| [Vec::new(), Vec::new()]).collect();
         let mut any = false;
+        // Whether each caster moves, asked once a frame (not once a cascade).
+        let kept: Vec<(&Instance<Draw>, usize)> = cache
+            .iter_keyed()
+            .map(|(key, i)| (i, usize::from(moving(key))))
+            .collect();
         for (k, c) in cascades.iter().enumerate() {
-            for (key, i) in cache.iter_keyed() {
+            for &(i, m) in &kept {
                 let d = &i.payload;
-                let m = usize::from(moving(key));
                 if (m == 0 && !redraw[k])
                     || (d.cutout.is_some() && k >= CUTOUT_CASCADES)
                     || !c.touches(i.centre, i.radius)
