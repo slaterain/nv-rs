@@ -376,6 +376,8 @@ fn the_lookup_follows_the_dlls_rules() {
     assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/:1/_MCM"), 0);
     // A trait not last, a path that ends at a tile, a missing trait, no menu.
     assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/nope/_MCM"), 0);
+    // A part that names a trait but not last is nothing too.
+    assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/_MCM/x"), 0);
     assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/MCM_Options"), 0);
     assert_eq!(menu::value_at(&mut e, b"StartMenu/MCM/_none"), 0);
     assert_eq!(menu::value_at(&mut e, b"HUDMainMenu/MCM/_MCM"), 0);
@@ -711,6 +713,19 @@ fn get_mod_ini() {
     assert_eq!(get(&mut e, b"///"), (1, 0.0));
     let long = [b"GetTest/".as_slice(), &[b'x'; 100], b"/Initial"].concat();
     assert_eq!(get(&mut e, &long), (1, 0.0));
+    // 99 bytes fit the DLL's 100-byte buffers; 100 do not, even when the file has that section.
+    let mut text = file(r"Data\Config\GetTest.ini").unwrap();
+    for n in [99, 100] {
+        text.extend_from_slice(&[b"[".as_slice(), &vec![b'y'; n], b"]\r\nK=7\r\n"].concat());
+    }
+    FILES
+        .lock()
+        .unwrap()
+        .insert(k(br"Data\Config\GetTest.ini"), text);
+    for (n, want) in [(99, 7.0), (100, 0.0)] {
+        let path = [b"GetTest/".as_slice(), &vec![b'y'; n], b"/K"].concat();
+        assert_eq!(get(&mut e, &path), (1, want), "{n} bytes");
+    }
 }
 
 /// `SetModINI`: `Data\Config` made, a new file started as one backspace byte and written as
