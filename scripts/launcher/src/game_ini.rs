@@ -800,7 +800,7 @@ mod tests {
         let middle = "[nv-rs Threads]\n;bSteppedThreads=1\n\n[General]\nx=1\n[NV-RS GENERAL]\nspreset=vanilla";
         let seeded = with_sections(middle).unwrap();
         let out = &seeded.text;
-        assert!(out.starts_with("[nv-rs Threads]\n;bSteppedThreads=1\n; 1 = the Direct3D 9 calls go to a drawing thread of their own; 0 = on the game's threads, as the original makes them.\nbRenderThread=1\n\n[General]\nx=1\n[NV-RS GENERAL]\nspreset=vanilla\n\n[nv-rs Display]\n"), "{out}");
+        assert!(out.starts_with("[nv-rs Threads]\n;bSteppedThreads=1\n; 1 = the Direct3D 9 calls go to a drawing thread of their own; 0 = on the game's threads, as the original makes them.\nbRenderThread=1\n; 1 = Windows does not slow the game down or move it to the slower cores when its window is not the active one (the default); 0 = let Windows decide: saves power and heat with the game in the background.\nbNotBackground=1\n\n[General]\nx=1\n[NV-RS GENERAL]\nspreset=vanilla\n\n[nv-rs Display]\n"), "{out}");
         assert!(!out.contains('\r'));
         assert!(!seeded.added.contains(&"bSteppedThreads") && !seeded.added.contains(&"sPreset"));
         assert_eq!(ini_value(out, "nv-rs General", "sPreset"), Some("vanilla"));
