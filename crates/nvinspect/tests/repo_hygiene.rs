@@ -129,6 +129,37 @@ const BANNED_EXTENSIONS: &[&str] = &[
 /// Top-level directories where decompiler names are not allowed.
 const PROVENANCE_DIRS: &[&str] = &["crates", "viewer", "docs"];
 
+/// Words of the maintainer's own folders that the packages' check (`package-check`'s program
+/// needles, scripts/package-playtest.sh and .ps1) refuses in a program. A data file that a crate
+/// embeds (a `.tsv` or `.txt` under a crate's `src/` or `data/`, `include_str!`) or that a package
+/// carries (`distribution/`) ships its comment lines too, so they are refused here, before a
+/// package build finds them (2026-11-17: a code page table's comment named the measuring folder).
+const SHIPPED_DATA_WORDS: &[&str] = &["build43", "nv-re/", "nv-re\\", "/nv-re", "\\nv-re"];
+
+/// Whether `rel` is data that reaches a program or a package: not Rust source, under a crate's or
+/// the viewer's `src/` or `data/`, or under `distribution/` or `vendor/`.
+fn shipped_data(rel: &str) -> bool {
+    if rel.ends_with(".rs") {
+        return false;
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    match parts.as_slice() {
+        ["distribution" | "vendor", _, ..] => true,
+        ["crates", _, "src" | "data", _, ..] => true,
+        ["viewer", "src" | "data", _, ..] => true,
+        _ => false,
+    }
+}
+
+/// The words of [`SHIPPED_DATA_WORDS`] in `line`.
+fn shipped_data_words(line: &str) -> Vec<&'static str> {
+    SHIPPED_DATA_WORDS
+        .iter()
+        .copied()
+        .filter(|w| line.contains(w))
+        .collect()
+}
+
 /// Files above this size are not scanned (and are reported as such).
 const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024;
 
@@ -1066,7 +1097,21 @@ fn check_text(rel: &str, bytes: &[u8]) -> Vec<(usize, String)> {
     }
     let top = rel.split('/').next().unwrap_or("");
     let provenance = rel.contains('/') && PROVENANCE_DIRS.contains(&top);
+    let shipped = shipped_data(rel);
     for (i, line) in text.lines().enumerate() {
+        if shipped {
+            let words = shipped_data_words(line);
+            if !words.is_empty() {
+                found.push((
+                    i + 1,
+                    format!(
+                        "`{}` in a file that ships in a program or package (name no folder of \
+                         this PC; the package check refuses it)",
+                        words.join("`, `")
+                    ),
+                ));
+            }
+        }
         if has_user_profile_path(line) {
             found.push((
                 i + 1,
@@ -2919,6 +2964,33 @@ fn repo_root() -> PathBuf {
 // ---------------------------------------------------------------------------
 // Tests.
 // ---------------------------------------------------------------------------
+
+/// Data that ships: a crate's embedded tables and the package's files, not Rust source or docs.
+/// The folder words are refused in it, and only there.
+#[test]
+fn shipped_data_names_no_folder_of_this_pc() {
+    assert!(shipped_data("crates/engine-platform/src/cp1252_measured.tsv"));
+    assert!(shipped_data("crates/engine-core/data/overridable.tsv"));
+    assert!(shipped_data("crates/d3d9-wgpu/src/shaders/clear.frag"));
+    assert!(shipped_data("viewer/src/x.txt"));
+    assert!(shipped_data("distribution/linux/READ ME.txt"));
+    assert!(shipped_data("vendor/wgpu-hal/LICENSE.MIT"));
+    assert!(!shipped_data("crates/engine-platform/src/code_page.rs"));
+    assert!(!shipped_data("crates/engine-platform/README.md"));
+    assert!(!shipped_data("crates/nvinspect/tests/x.tsv"));
+    assert!(!shipped_data("docs/MAINTAINING.md"));
+    assert!(!shipped_data("distribution"));
+    let folder = ["build", "43-scratch/measure"].concat();
+    let line = format!("# measured 2026-11-16, by {folder}/platforms/cp1252.ps1.");
+    assert_eq!(shipped_data_words(&line), vec!["build43"]);
+    assert_eq!(shipped_data_words(r"C:\x\nv-re\work"), vec!["nv-re\\", "\\nv-re"]);
+    assert_eq!(shipped_data_words("/srv/x/nv-re/work"), vec!["nv-re/", "/nv-re"]);
+    // The render thread's name is not the folder.
+    assert!(shipped_data_words("nv-render; nv-rs").is_empty());
+    let found = check_text("crates/engine-platform/src/cp1252_measured.tsv", line.as_bytes());
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert!(check_text("crates/engine-platform/src/files.rs", line.as_bytes()).is_empty());
+}
 
 /// The check itself: the repository as checked out has no problems.
 #[test]
