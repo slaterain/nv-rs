@@ -262,6 +262,14 @@ pub fn monitors() -> Result<Vec<crate::machine_table::Monitor>, String> {
     window_layer::monitors()
 }
 
+/// Runs `game` on a thread of its own and the window layer's loop on the calling thread, which
+/// must be the program's main thread: macOS, where winit's loop runs only there (the viewer does
+/// this there). Never returns: the process ends from the game's side, or when `game` returns.
+#[cfg(not(windows))]
+pub fn run_on_main_thread(game: Box<dyn FnOnce() + Send>) -> ! {
+    window_layer::run_on_main_thread(game)
+}
+
 /// Whether wgpu draws (asked for alone, and not replaced by the real Direct3D 9): the game's
 /// textures are then made on wgpu, in the formats `d3d9_wgpu::format` provides, so the textures
 /// D3DX makes leave out the rest (`super::d3dx`). With `real,wgpu` the real one draws.

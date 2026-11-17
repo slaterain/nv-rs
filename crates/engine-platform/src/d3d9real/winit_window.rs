@@ -223,11 +223,19 @@ pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Send
     static THREAD: OnceLock<Mutex<std::sync::mpsc::Sender<Request>>> = OnceLock::new();
     THREAD.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<Request>();
+        // macOS: the loop runs on the program's main thread, which the host hands to it
+        // ([`run_on_main_thread`]): the requests go there. Without it no window can be shown.
         if cfg!(target_vendor = "apple") {
-            no_window(
-                "on macOS the game's window needs the program's main thread, which is not handed \
-                 to the window layer yet",
-            );
+            if !MAIN_LOOP.load(Ordering::Acquire) {
+                no_window(
+                    "on macOS the game's window needs the program's main thread, which this \
+                     program did not hand to the window layer",
+                );
+            }
+            let (slot, ready) = main_requests();
+            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rx);
+            ready.notify_all();
+            return Mutex::new(tx);
         }
         if let Err(e) = std::thread::Builder::new()
             .name("nv-d3d9-window".into())
@@ -237,6 +245,55 @@ pub(super) fn window_thread() -> &'static std::sync::Mutex<std::sync::mpsc::Send
         }
         Mutex::new(tx)
     })
+}
+
+/// Whether the program's main thread waits to run the window layer's loop
+/// ([`run_on_main_thread`]).
+static MAIN_LOOP: AtomicBool = AtomicBool::new(false);
+
+/// The requests' receiver, handed from the first [`window_thread`] call to the main thread.
+fn main_requests() -> &'static (Mutex<Option<Receiver<Request>>>, std::sync::Condvar) {
+    static SLOT: OnceLock<(Mutex<Option<Receiver<Request>>>, std::sync::Condvar)> =
+        OnceLock::new();
+    SLOT.get_or_init(Default::default)
+}
+
+/// The stack of the thread the game runs on when the main thread is the window layer's: the
+/// main thread's own on Linux and macOS (8 MB), not a spawned thread's default (512 KB on macOS).
+const GAME_STACK: usize = 8 << 20;
+
+/// Runs `game` on a thread of its own and the window layer's loop on the calling thread, which
+/// must be the program's main thread (macOS: winit's loop only runs there). The loop starts when
+/// the game first needs a window (or the monitors); until then the main thread waits. The process
+/// ends from the game's side (`crate::end_process`, the window closed) or here when `game`
+/// returns (status 0) or stops with a panic (status 101, its message already printed).
+pub(super) fn run_on_main_thread(game: Box<dyn FnOnce() + Send>) -> ! {
+    MAIN_LOOP.store(true, Ordering::Release);
+    let spawned = std::thread::Builder::new()
+        .name("nv-game".into())
+        .stack_size(GAME_STACK)
+        .spawn(move || {
+            let ended = std::panic::catch_unwind(std::panic::AssertUnwindSafe(game));
+            crate::end_process(if ended.is_ok() { 0 } else { 101 })
+        });
+    if let Err(e) = spawned {
+        eprintln!("nv-rs: the game's thread could not start ({e})");
+        crate::end_process(1);
+    }
+    let (slot, ready) = main_requests();
+    let mut taken = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let requests = loop {
+        if let Some(rx) = taken.take() {
+            break rx;
+        }
+        taken = ready
+            .wait(taken)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    };
+    drop(taken);
+    run(requests);
+    // `run` ends the process itself (`no_window`); this is never reached.
+    crate::end_process(1)
 }
 
 /// The monitors as the window thread read them when its loop started: `None` until then.
@@ -255,9 +312,10 @@ const MONITORS_WAIT: Duration = Duration::from_secs(10);
 /// loop reads them once when it starts. Where no window can be shown the run ends there, with the
 /// line naming why, as it would when the game makes its window.
 pub(super) fn monitors() -> Monitors {
-    if cfg!(target_vendor = "apple") {
+    if cfg!(target_vendor = "apple") && !MAIN_LOOP.load(Ordering::Acquire) {
         return Err(
-            "on macOS the window layer needs the program's main thread, which it does not have yet"
+            "on macOS the window layer needs the program's main thread, which this program did \
+             not hand to it"
                 .into(),
         );
     }
