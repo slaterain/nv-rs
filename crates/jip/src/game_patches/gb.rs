@@ -140,7 +140,6 @@ pub const BARTER_TAB_TITLE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_d661);
 pub const VENDOR_CAPS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0073_005c);
 /// G69's seam: `QuantityMenu::DoIdle`'s start (words: the menu).
 pub const QUANTITY_WHEEL: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_c179);
-<<<<<<< HEAD
 /// G82's seams: the barter, container and inventory menus' `InitFunc` at their count test (words:
 /// the tile, the stack, its count). Answered: the name is set and the exe's block is skipped.
 pub const ITEM_NAMES: [SiteSlot; 3] = [
@@ -157,8 +156,6 @@ pub const QUANTITY_KEYS: [SiteSlot; 3] = [
     SiteSlot::new(Owner::Jip, 0x0078_0b09),
 ];
 pub const WEIGHTLESS_TAKE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0075_bf18);
-=======
->>>>>>> origin/main
 
 /// The group's rows and installers.
 pub const AREA: Area = Area {
@@ -171,7 +168,6 @@ pub const AREA: Area = Area {
         BARTER_TAB_TITLE.addr(),
         VENDOR_CAPS.addr(),
         QUANTITY_WHEEL.addr(),
-<<<<<<< HEAD
         ITEM_NAMES[0].addr(),
         ITEM_NAMES[1].addr(),
         ITEM_NAMES[2].addr(),
@@ -179,8 +175,6 @@ pub const AREA: Area = Area {
         QUANTITY_KEYS[1].addr(),
         QUANTITY_KEYS[2].addr(),
         WEIGHTLESS_TAKE.addr(),
-=======
->>>>>>> origin/main
     ],
     fix_wraps: &[],
     install_fixes,
@@ -190,7 +184,6 @@ pub const AREA: Area = Area {
 };
 
 fn install_fixes(e: &mut Engine) {
-<<<<<<< HEAD
     for slot in ITEM_NAMES {
         e.on_site(slot, item_entry_name);
     }
@@ -198,8 +191,6 @@ fn install_fixes(e: &mut Engine) {
         e.on_site(slot, quantity_keys);
     }
     e.on_site(WEIGHTLESS_TAKE, weightless_take);
-=======
->>>>>>> origin/main
     e.on_site(DISPOSABLE_WEAPON, disposable_weapon);
     e.on_site(PLAIN_VALUE, plain_value);
     e.on_site(WEIGHT_FORMAT, weight_format);

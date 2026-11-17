@@ -4436,6 +4436,79 @@ mod n057_tests {
         }
     }
 
+    thread_local! {
+        static G100_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn g100_never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("G100's seam asked with the fix row's bit clear")
+    }
+    fn g100_disposable(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G100_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+    fn g100_kept(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        G100_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+
+    /// `fn_007284f0` (`make_run`'s recipe) making a weapon (type 0x28) with G100's seam at
+    /// `0x72880D`: returns the engine after `count` 3 and the form.
+    fn make_weapon(word: u32, handler: engine_core::extend::SiteFn) -> (Engine, u32) {
+        let mut e = engine();
+        let menu = recipe_menu(&mut e);
+        e.set_global(RECIPE_MENU, menu);
+        let crafter = e.mem.alloc(0x200);
+        e.put_vtable(0x0c00_0000, &[0x0000_a000; 0x120]);
+        answer(&mut e, 0x0000_a000, 1);
+        e.mem.set_u32(crafter, 0x0c00_0000);
+        e.mem.set_u32(menu + CRAFTER_REF, crafter);
+        answer(&mut e, GET_PROCESS, crafter);
+        let form = e.mem.alloc(4);
+        e.mem.set_u32(form, 0x0c00_0000);
+        let input = e.mem.alloc(8);
+        e.mem.set_u32(input, 2);
+        e.mem.set_u32(input + 4, form);
+        let output = e.mem.alloc(8);
+        e.mem.set_u32(output, 1);
+        e.mem.set_u32(output + 4, form);
+        let inputs = chain(&mut e, &[input]);
+        let outputs = chain(&mut e, &[output]);
+        answer(&mut e, RECIPE_INPUTS_005A8080, inputs);
+        answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
+        answer(&mut e, FORM_TYPE, 0x28);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0072_880d, handler);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_84f0, &args![3i32]);
+        (e, form)
+    }
+
+    /// G100 through the crafting function (REVIEW-679): with `INSTALLED | FIXES` the seam at
+    /// `0x72880D` is asked with the made weapon, `004c0bf0` is not called, and the answer picks
+    /// the branch (1: given plainly with `00574fa0`; 0: through a `TESContainer`). With the bit
+    /// clear the seam is not asked (a handler that panics) and the exe's `004c0bf0` decides.
+    #[test]
+    fn jip_g100_seam_in_the_crafting_function() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        for word in [0, INSTALLED] {
+            let (e, form) = make_weapon(word, g100_never);
+            assert_eq!(calls_to(&e, FORM_004C0BF0), vec![vec![form]]);
+            assert_eq!(calls_to(&e, CONTAINER_CONSTRUCT).len(), 1);
+        }
+        G100_ASKED.with(|s| s.take());
+        let (e, form) = make_weapon(INSTALLED | FIXES, g100_disposable);
+        assert_eq!(G100_ASKED.with(|s| s.take()), vec![vec![form]]);
+        assert!(calls_to(&e, FORM_004C0BF0).is_empty());
+        assert!(calls_to(&e, CONTAINER_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&e, ADD_ITEM_00574FA0).len(), 1);
+        let (e, form) = make_weapon(INSTALLED | FIXES, g100_kept);
+        assert_eq!(G100_ASKED.with(|s| s.take()), vec![vec![form]]);
+        assert!(calls_to(&e, FORM_004C0BF0).is_empty());
+        assert_eq!(calls_to(&e, CONTAINER_CONSTRUCT).len(), 1);
+        assert!(calls_to(&e, ADD_ITEM_00574FA0).is_empty());
+    }
+
     #[test]
     fn refresh_request_and_idle_fade() {
         let mut e = engine();
