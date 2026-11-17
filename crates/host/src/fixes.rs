@@ -564,6 +564,11 @@ pub const PLAY_SHOW_FRAME_RATE: bool = false;
 /// a fix). `crates/host/data/game_ini.tsv`'s `bAmbientOcclusion` row is held to it by a test.
 pub const PLAY_AMBIENT_OCCLUSION: bool = false;
 
+/// Whether the sun shadows (port-added: `d3d9_wgpu::sun_shadow`, Vulkan only) are on when neither
+/// `NV_SUN_SHADOWS` nor `Fallout.ini`'s `bSunShadows` says ([`Choice::sun_shadows`]): off, in every
+/// preset (a new look, not a fix). `crates/host/data/game_ini.tsv`'s `bSunShadows` row is held to it
+/// by a test.
+pub const PLAY_SUN_SHADOWS: bool = false;
 /// How strong the new lighting's shade is when neither `NV_AO_STRENGTH` nor `Fallout.ini`'s
 /// `fAmbientOcclusionStrength` says ([`Choice::ambient_occlusion_strength`]): the step's own
 /// default (`d3d9_wgpu::scene_light::STRENGTH`). `crates/host/data/game_ini.tsv`'s
@@ -682,6 +687,11 @@ pub struct Choice {
     /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
     /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
     pub ambient_occlusion: bool,
+    /// Whether the sun shadows are on (`d3d9_wgpu::sun_shadow`, Vulkan only): `NV_SUN_SHADOWS` when
+    /// set (`1` or `debug` on, else off: `1` puts the shadows in the game's own lighting, `debug`
+    /// shows an engineers' overlay instead); else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bSunShadows`;
+    /// else [`PLAY_SUN_SHADOWS`], off. Not part of any preset.
+    pub sun_shadows: bool,
     /// How strong its shade is, from 0.1 (faint) to 1 (all of it): `NV_AO_STRENGTH` when it is a
     /// number; else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display]
     /// fAmbientOcclusionStrength`; else [`PLAY_AMBIENT_OCCLUSION_STRENGTH`]. Clamped to that range
@@ -721,6 +731,7 @@ impl Choice {
             renderer: None,
             show_frame_rate: PLAY_SHOW_FRAME_RATE,
             ambient_occlusion: PLAY_AMBIENT_OCCLUSION,
+            sun_shadows: PLAY_SUN_SHADOWS,
             ambient_occlusion_strength: PLAY_AMBIENT_OCCLUSION_STRENGTH,
             not_background: PLAY_NOT_BACKGROUND,
             not_background_by: None,
@@ -881,6 +892,7 @@ impl Choice {
             renderer: ini.renderer.or(play.then_some(PLAY_RENDERER)),
             show_frame_rate: ini.show_frame_rate.unwrap_or(PLAY_SHOW_FRAME_RATE),
             ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
+            sun_shadows: ini.sun_shadows.unwrap_or(PLAY_SUN_SHADOWS),
             ambient_occlusion_strength: ini.ambient_occlusion_strength.map_or(
                 PLAY_AMBIENT_OCCLUSION_STRENGTH,
                 d3d9_wgpu::scene_light::clamp_strength,
@@ -956,6 +968,9 @@ impl Choice {
         }
         if let Some(value) = env("NV_AO").filter(|v| !v.trim().is_empty()) {
             choice.ambient_occlusion = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_SUN_SHADOWS").filter(|v| !v.trim().is_empty()) {
+            choice.sun_shadows = matches!(value.trim(), "1" | "debug");
         }
         // A number, clamped; anything else leaves the strength as it is.
         if let Some(value) = env("NV_AO_STRENGTH")
@@ -2074,6 +2089,54 @@ mod tests {
         assert!(!with_ini(None, on, &[("NV_AO", "0")]).ambient_occlusion);
         let asked = Choice::from_parts(None, env_of(&[("NV_AO", "1")])).unwrap();
         assert!(asked.ambient_occlusion);
+    }
+
+    /// The sun shadows are off in every run and preset unless asked for: `bSunShadows=1` in a
+    /// launcher's play run, or `NV_SUN_SHADOWS=1` (or `debug`) anywhere, which wins.
+    #[test]
+    fn the_sun_shadows_are_off_unless_asked_for() {
+        assert!(!Choice::vanilla().sun_shadows);
+        for preset in ["fixes", "vanilla"] {
+            let file = format!(
+                "[nv-rs General]
+sPreset={preset}
+"
+            );
+            assert!(!with_ini(None, &file, &[]).sun_shadows, "{preset}");
+        }
+        assert!(!Choice::from_parts(None, no_env).unwrap().sun_shadows);
+        let on = "[nv-rs Display]
+bSunShadows=1
+";
+        assert!(with_ini(None, on, &[]).sun_shadows);
+        assert!(!with_ini(None, on, &[]).ambient_occlusion);
+        assert!(
+            !with_ini(
+                None,
+                "[nv-rs Display]
+bSunShadows=0
+",
+                &[]
+            )
+            .sun_shadows
+        );
+        let bad = with_ini(
+            None,
+            "[nv-rs Display]
+bSunShadows=yes
+",
+            &[],
+        );
+        assert!(!bad.sun_shadows);
+        assert!(bad.ini_note.unwrap().ends_with("bSunShadows=yes"));
+        assert!(!with_ini(None, on, &[("NV_SHOT", "x")]).sun_shadows);
+        assert!(!with_ini(None, on, &[("NV_SUN_SHADOWS", "0")]).sun_shadows);
+        let one = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "1")])).unwrap();
+        assert!(one.sun_shadows && !one.ambient_occlusion);
+        let debug = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "debug")])).unwrap();
+        assert!(debug.sun_shadows && !debug.ambient_occlusion);
+        let other = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS", "yes")])).unwrap();
+        assert!(!other.sun_shadows);
     }
 
     /// The new lighting's strength: the step's default in every run unless asked for;
