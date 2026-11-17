@@ -251,9 +251,7 @@ impl Host {
         #[cfg(windows)]
         if choice.ambient_occlusion {
             engine_platform::d3d9real::want_scene_light(scene_light::read);
-            eprintln!(
-                "nv-rs: new lighting on (ambient occlusion and sun contact shadows; Vulkan only)"
-            );
+            eprintln!("nv-rs: new lighting on (ambient occlusion; Vulkan only)");
         }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,

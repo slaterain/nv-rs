@@ -5363,7 +5363,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.scene_light_said = Some(params);
             let sun = if params.shadow > 0.0 {
                 format!(
-                    "sun toward ({:.2}, {:.2}, {:.2}) on screen (right, up, ahead), contact shadows {:.2}",
+                    "sun toward ({:.2}, {:.2}, {:.2}) on screen (right, up, ahead), sun strength {:.2} (carried, not drawn)",
                     params.sun[0], params.sun[1], params.sun[2], params.shadow
                 )
             } else {

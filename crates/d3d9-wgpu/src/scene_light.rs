@@ -1,7 +1,7 @@
-//! New lighting (port-added, not in the original; off by default): ambient occlusion and sun
-//! contact shadows, one screen-space step on the finished 3D scene. Turned on by
-//! `[nv-rs Display] bAmbientOcclusion=1` in the run's `Fallout.ini` or `NV_AO=1`
-//! (`host::fixes::Choice::ambient_occlusion`); wgpu only, the real Direct3D 9 ignores it.
+//! New lighting (port-added, not in the original; off by default): ambient occlusion, one
+//! screen-space step on the finished 3D scene. Turned on by `[nv-rs Display] bAmbientOcclusion=1`
+//! in the run's `Fallout.ini` or `NV_AO=1` (`host::fixes::Choice::ambient_occlusion`); wgpu only,
+//! the real Direct3D 9 ignores it.
 //!
 //! **Where.** The game draws the world into its multisampled scene target and depth surface,
 //! clears the depth alone (`Clear` with only `D3DCLEAR_ZBUFFER`), draws the first-person arms and
@@ -11,36 +11,28 @@
 //! game's image-space step, and what comes after (the arms, the image-space step, HUD, menus,
 //! Pip-Boy, loading screens) is never touched. The platform records [`STATE`] just before such a
 //! clear with the camera and sun of the frame ([`Params`]); the device runs the step once a frame,
-//! only when the bound colour target and depth surface have one size and sample count.
+//! only when the bound colour target and depth surface have one size and sample count. (The sun is
+//! carried for the real sun shadows to come; this step does not draw any.)
 //!
-//! **What.** From the scene's depth (sample 0 of the multisampled surface):
-//! - ambient occlusion, at half resolution: ground-truth ambient occlusion, the horizon search and
-//!   cosine-weighted slice integral of Jimenez, Wu, Pesce and Jarabo, "Practical Real-Time
-//!   Strategies for Accurate Indirect Occlusion" (SIGGRAPH 2016 course, Activision tech report
-//!   ATVI-TR-16-01), as Intel's XeGTAO (MIT) arranges it: [`SLICES`] slices of [`STEPS`] steps a
-//!   side, a distance falloff over the outer 60 % of [`RADIUS`], never darker than [`FLOOR`]; the
-//!   normal from the depth (the nearer neighbour on each axis). A 4x4 ordered (Bayer) pattern turns
-//!   each pixel's slices and offsets the steps, the same in every frame (nothing crawls); the
-//!   full-resolution step averages a 4x4 window of the results (the pattern's whole period)
-//!   weighted by depth, so edges stay sharp;
-//! - sun contact shadows (outdoors, the sun up), at full resolution and not blurred, so a shadow's
-//!   edge is a clean line: [`SHADOW_STEPS`] fixed steps toward the sun in view space, closer
-//!   together near the pixel, [`SHADOW_LENGTH`] game units (about 1.7 m) long, through the depth: three
-//!   steps in a row behind something nearer the camera by less than [`SHADOW_THICKNESS`] (so a
-//!   blade of grass a step thin does not cast, and a post casts a post-wide shadow, not a smear)
-//!   darken the pixel by [`SHADOW_STRENGTH`]. Only faces turned toward the sun take it: the game's
-//!   own lighting already darkens the others.
+//! **What.** From the scene's depth (sample 0 of the multisampled surface), at half resolution:
+//! ground-truth ambient occlusion, the horizon search and cosine-weighted slice integral of
+//! Jimenez, Wu, Pesce and Jarabo, "Practical Real-Time Strategies for Accurate Indirect Occlusion"
+//! (SIGGRAPH 2016 course, Activision tech report ATVI-TR-16-01), as Intel's XeGTAO (MIT) arranges
+//! it: [`SLICES`] slices of [`STEPS`] steps a side, a distance falloff over the outer 60 % of
+//! [`RADIUS`], applied at [`STRENGTH`]; the normal from the depth (the nearer neighbour on each
+//! axis). A sample counts only from [`MIN_HEIGHT`] above the surface's own plane, so decals, rugs
+//! and stains lying a hair over the floor do not darken it. A 4x4 ordered (Bayer) pattern turns each
+//! pixel's slices and offsets the steps, the same in every frame (nothing crawls); the
+//! full-resolution step averages a 4x4 window of the results (the pattern's whole period) weighted
+//! by depth, so edges stay sharp, and multiplies the scene's colour by it. No history between
+//! frames. It fades out between [`FADE_FROM`] and [`FADE_TO`] units from the camera; the sky
+//! (depth 1) is never touched.
 //!
-//! Thin things (a pixel apart in depth from two or more of its four neighbours: grass blades, leaves,
-//! wires, far posts) take neither: alpha-tested foliage gives no surface to shade and would only
-//! speckle. The product multiplies the scene's colour. No history between frames. Both fade out
-//! between [`FADE_FROM`] and [`FADE_TO`] units from the camera; the sky (depth 1) is never touched.
-//!
-//! **Limits.** Screen space: only what is on screen casts or receives (a caster off screen or hidden
-//! behind something casts nothing); the reach is [`SHADOW_LENGTH`], so low evening sun gives short
-//! shadows, not long ones; a thin object seen edge-on casts little; transparent things the game drew
-//! before the clear (particles, glass, water) take the darkening of the opaque surface behind them;
-//! no character-accurate shadows. A real shadow pass from the sun would remove these.
+//! **Limits.** Screen space: only what is on screen occludes; transparent things the game drew
+//! before the clear (particles, glass, water) take the darkening of the opaque surface behind them.
+//! Screen-space sun shadows were tried and dropped (2026-11-16): on the street they gave only thin
+//! dark edges and speckle, not shadows (`measure/newlight/NOTES.md`); real sun shadows need a shadow
+//! pass from the sun.
 //!
 //! **Off.** Nothing is recorded, no texture or pipeline is made, the depth surfaces are made as
 //! before ([`enabled`] is read when the device is made), so the frame is what it was.
@@ -59,19 +51,14 @@ pub const SLICES: u32 = 2;
 pub const STEPS: u32 = 4;
 /// How much of the occlusion is applied, and its curve.
 pub const STRENGTH: f32 = 0.5;
-/// The darkest the occlusion makes a pixel (a deep crease reads as shade, not a black patch).
-pub const FLOOR: f32 = 0.0;
 /// How far above the surface's own plane (game units, plus a little with distance) a sample must be
 /// to occlude: decals, rugs and stains lie a hair above the floor and must not darken it.
 pub const MIN_HEIGHT: f32 = 2.0;
 pub const POWER: f32 = 1.5;
-/// The sun march: its length and steps, and how thick a surface is taken to be.
-pub const SHADOW_LENGTH: f32 = 120.0;
-pub const SHADOW_STEPS: u32 = 28;
-pub const SHADOW_THICKNESS: f32 = 32.0;
-/// How dark a full contact shadow is, under a full sun.
+/// How strong the sun is taken to be under a full, bright sun ([`Params::shadow`]; carried for the
+/// sun shadows to come, not drawn here).
 pub const SHADOW_STRENGTH: f32 = 0.8;
-/// The distance band (game units) over which both fade out.
+/// The distance band (game units) over which it fades out.
 pub const FADE_FROM: f32 = 3000.0;
 pub const FADE_TO: f32 = 6000.0;
 
@@ -117,7 +104,8 @@ pub struct Params {
     pub top: f32,
     /// Toward the sun in view space (x right, y up, z forward), unit length.
     pub sun: [f32; 3],
-    /// How dark a contact shadow is: 0 for none (indoors, night, no sun).
+    /// How strong the sun is: 0 for none (indoors, night, a dark sun). Carried for the sun shadows
+    /// to come; this step does not use it.
     pub shadow: f32,
 }
 
@@ -273,22 +261,6 @@ pub fn bayer(x: i32, y: i32) -> u32 {
     ((a & 1) << 3) | ((y & 1) << 2) | ((a >> 1) << 1) | (y >> 1)
 }
 
-/// How far along the march toward the sun step `i` (1 to [`SHADOW_STEPS`]) lies: closer together
-/// near the point, where the edge of a contact shadow is decided (the WGSL's `sun_visible`).
-pub fn march_distance(i: u32) -> f32 {
-    let s = i as f32 / SHADOW_STEPS as f32;
-    s * s * SHADOW_LENGTH
-}
-
-/// Whether a march step `t` units along the ray and `q_z` from the camera is shadowed by the
-/// scene's surface at `scene_z` on the same pixel: the surface nearer the camera, by more than the
-/// slack (the depth's, growing along the ray: a grazing face does not shadow itself) and less
-/// than [`SHADOW_THICKNESS`].
-pub fn blocks(t: f32, q_z: f32, scene_z: f32) -> bool {
-    let delta = q_z - scene_z;
-    delta > 1.0 + 0.003 * q_z + 0.05 * t && delta < SHADOW_THICKNESS
-}
-
 /// The fade with distance: 1 near, 0 from [`FADE_TO`] on.
 pub fn fade(z: f32) -> f32 {
     let t = ((z - FADE_FROM) / (FADE_TO - FADE_FROM)).clamp(0.0, 1.0);
@@ -346,15 +318,9 @@ fn fade_at(z: f32) -> f32 {
     return 1.0 - t * t * (3.0 - 2.0 * t);
 }
 
-// The surface at the full-resolution pixel `c` (its point `pc`): its normal, toward the camera, from
-// the nearer neighbour on each axis; `thin` when the pixel is apart in depth from two or more of its
-// four neighbours (a grass blade, a leaf, a wire, a silhouette edge): no surface to shade.
-struct Surface {
-    n: vec3<f32>,
-    thin: bool,
-};
-
-fn surface_at(c: vec2<i32>, pc: vec3<f32>) -> Surface {
+// The normal at the full-resolution pixel `c` (its point `pc`), toward the camera, from the nearer
+// neighbour on each axis.
+fn normal_at(c: vec2<i32>, pc: vec3<f32>) -> vec3<f32> {
     let pl = point_at(c - vec2<i32>(1, 0));
     let pr = point_at(c + vec2<i32>(1, 0));
     let pu = point_at(c - vec2<i32>(0, 1));
@@ -365,46 +331,9 @@ fn surface_at(c: vec2<i32>, pc: vec3<f32>) -> Surface {
     if (dot(n, pc) > 0.0) {
         n = -n;
     }
-    let tz = 0.05 * pc.z + 2.0;
-    let breaks = u32(abs(pl.z - pc.z) > tz) + u32(abs(pr.z - pc.z) > tz)
-        + u32(abs(pu.z - pc.z) > tz) + u32(abs(pd.z - pc.z) > tz);
-    let thin = breaks >= 2u;
-    return Surface(n, thin);
+    return n;
 }
 
-// The sun march from the point `pc` (normal `n`) toward the sun, in view space, SHADOW_LENGTH game
-// units long, SHADOW_STEPS fixed steps closer together near the point (no pattern: the edge stays a
-// clean line): 0 when three steps in a row pass behind something nearer the camera by less than
-// SHADOW_THICKNESS (a blade of grass a step thin does not cast), else 1.
-fn sun_visible(pc: vec3<f32>, n: vec3<f32>) -> f32 {
-    let l = p.sun.xyz;
-    let start = pc + n * (0.5 + 0.002 * pc.z);
-    var run = 0;
-    for (var i = 1; i <= SHADOW_STEPS; i++) {
-        let s = f32(i) / f32(SHADOW_STEPS);
-        let t = s * s * SHADOW_LENGTH;
-        let q = start + l * t;
-        if (q.z <= p.depth.x) {
-            break;
-        }
-        let sp = pixel_of(q);
-        if (any(sp < vec2<f32>(0.0)) || any(sp >= p.depth.zw)) {
-            break;
-        }
-        let delta = q.z - linear(depth_at(vec2<i32>(sp)));
-        // The slack grows along the ray, so a surface lit at a grazing angle does not shadow
-        // itself through its own facets.
-        if (delta > 1.0 + 0.003 * q.z + 0.05 * t && delta < SHADOW_THICKNESS) {
-            run += 1;
-            if (run >= 3) {
-                return 0.0;
-            }
-        } else {
-            run = 0;
-        }
-    }
-    return 1.0;
-}
 ";
 
 /// The half-resolution step: occlusion (r), distance (b), weight (a: 0 sky).
@@ -424,8 +353,7 @@ const HALF_PI: f32 = 1.57079633;
     if (fade <= 0.0) {
         return vec4<f32>(1.0, 1.0, pc.z, 1.0);
     }
-    let surface = surface_at(c, pc);
-    let n = surface.n;
+    let n = normal_at(c, pc);
     let min_h = MIN_HEIGHT + 0.002 * pc.z;
     let v = normalize(-pc);
     let noise_slice = bayer(h);
@@ -479,13 +407,12 @@ const HALF_PI: f32 = 1.57079633;
         }
         visibility = pow(saturate(visibility / f32(SLICES)), POWER);
     }
-    let ao = mix(1.0, max(visibility, FLOOR), fade * STRENGTH);
+    let ao = mix(1.0, visibility, fade * STRENGTH);
     return vec4<f32>(ao, 1.0, pc.z, 1.0);
 }
 ";
 
-/// The full-resolution step: the blurred occlusion times the sun's contact shadow multiply the
-/// scene's colour (the blend: colour times source).
+/// The full-resolution step: the blurred occlusion multiplies the scene's colour (the blend: colour times source).
 const APPLY: &str = "
 @group(0) @binding(2) var ao_tex: texture_2d<f32>;
 
@@ -518,30 +445,11 @@ const APPLY: &str = "
     if (wsum >= 1e-3) {
         ao = acc / wsum;
     }
-    var sun = 1.0;
-    // The sun's contact shadow, here at full resolution and unblurred, so its edge is a clean
-    // line: only on faces turned toward the sun (the game already darkens the others).
-    if (p.sun.w > 0.0) {
-        let pc = view_at(vec2<f32>(xy) + 0.5, z);
-        let fade = fade_at(z);
-        if (fade > 0.0) {
-            let surface = surface_at(xy, pc);
-            // Faces toward the sun, fully from 0.5 (60 degrees from the sun) up: a face lit
-            // at a grazing angle is already dim in the game's lighting and only shadows itself.
-            let facing = smoothstep(0.25, 0.5, dot(surface.n, p.sun.xyz));
-            if (!surface.thin && facing > 0.0) {
-                sun = 1.0 - p.sun.w * fade * facing * (1.0 - sun_visible(pc, surface.n));
-            }
-        }
-    }
     // `NV_AO_VIEW` (captures only): one term alone, as grey, over the whole picture.
     if (VIEW == 1u) {
         return vec4<f32>(ao, ao, ao, 1.0);
     }
-    if (VIEW == 2u) {
-        return vec4<f32>(sun, sun, sun, 1.0);
-    }
-    let f = ao * sun;
+    let f = ao;
     if (f >= 0.999) {
         discard;
     }
@@ -560,8 +468,7 @@ pub fn shader(apply: bool, multisampled_depth: bool) -> String {
     let constants = format!(
         "const RADIUS: f32 = {RADIUS:?};\nconst MAX_RADIUS_SCREEN: f32 = {MAX_RADIUS_SCREEN:?};\n\
          const SLICES: i32 = {SLICES};\nconst STEPS: i32 = {STEPS};\nconst STRENGTH: f32 = {STRENGTH:?};\n\
-         const POWER: f32 = {POWER:?};\nconst FLOOR: f32 = {FLOOR:?};\nconst MIN_HEIGHT: f32 = {MIN_HEIGHT:?};\nconst SHADOW_LENGTH: f32 = {SHADOW_LENGTH:?};\n\
-         const SHADOW_STEPS: i32 = {SHADOW_STEPS};\nconst SHADOW_THICKNESS: f32 = {SHADOW_THICKNESS:?};\n\
+         const POWER: f32 = {POWER:?};\nconst MIN_HEIGHT: f32 = {MIN_HEIGHT:?};\n\
          const FADE_FROM: f32 = {FADE_FROM:?};\nconst FADE_TO: f32 = {FADE_TO:?};\n\
          const VIEW: u32 = {}u;\n",
         view()
@@ -573,14 +480,13 @@ pub fn shader(apply: bool, multisampled_depth: bool) -> String {
     )
 }
 
-/// `NV_AO_VIEW=ao` or `sun` (diagnostic captures only, not a player setting): the scene replaced by
+/// `NV_AO_VIEW=ao` (diagnostic captures only, not a player setting): the scene replaced by
 /// that one term as grey (white: untouched), read once; 0 otherwise.
 pub fn view() -> u32 {
     static VIEW: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *VIEW.get_or_init(
         || match std::env::var("NV_AO_VIEW").as_deref().map(str::trim) {
             Ok("ao") => 1,
-            Ok("sun") => 2,
             _ => 0,
         },
     )
@@ -926,27 +832,6 @@ mod tests {
     }
 
     #[test]
-    fn the_sun_march_walks_its_length_finer_near_the_point() {
-        let d: Vec<f32> = (1..=SHADOW_STEPS).map(march_distance).collect();
-        // The first step is a small part of the length; the last reaches it exactly.
-        assert!(d[0] > 0.0 && d[0] < SHADOW_LENGTH / SHADOW_STEPS as f32);
-        assert!((d[d.len() - 1] - SHADOW_LENGTH).abs() < 1e-3);
-        // Each step longer than the one before.
-        for w in d.windows(3) {
-            assert!(w[1] > w[0] && w[2] - w[1] > w[1] - w[0]);
-        }
-        // A surface a little nearer the camera blocks; the surface itself, one far in front, or
-        // one behind does not.
-        assert!(blocks(10.0, 500.0, 480.0));
-        // Far along the ray, a surface only a little nearer is the receiver's own facet.
-        assert!(!blocks(200.0, 500.0, 495.0));
-        assert!(blocks(10.0, 500.0, 495.0));
-        assert!(!blocks(10.0, 500.0, 499.5));
-        assert!(!blocks(10.0, 500.0, 500.0 - SHADOW_THICKNESS - 1.0));
-        assert!(!blocks(10.0, 500.0, 520.0));
-    }
-
-    #[test]
     fn the_pattern_is_the_4x4_bayer_matrix() {
         let rows = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
         for (y, row) in rows.iter().enumerate() {
@@ -993,7 +878,7 @@ mod tests {
         );
         assert!((p.left, p.right, p.top, p.bottom) == (-0.77, 0.77, 0.43, -0.43));
         assert!(p.shadow > 0.0 && p.shadow <= SHADOW_STRENGTH);
-        // Indoors, at night (the sun below the horizon) or with a dark sun: no contact shadows.
+        // Indoors, at night (the sun below the horizon) or with a dark sun: no sun.
         for g in [
             GameView {
                 interior: true,

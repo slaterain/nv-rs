@@ -639,7 +639,7 @@ pub use d3d9_wgpu::scene_light::GameView as SceneView;
 static SCENE_LIGHT: std::sync::OnceLock<fn(&Engine) -> Option<SceneView>> =
     std::sync::OnceLock::new();
 
-/// Turns the new lighting on (ambient occlusion and sun contact shadows, `d3d9_wgpu::scene_light`;
+/// Turns the new lighting on (ambient occlusion, `d3d9_wgpu::scene_light`;
 /// the run's choice, `host::fixes::Choice::ambient_occlusion`), before the game makes its device:
 /// at each depth-only `Clear` (the game's, before its first-person arms) the frame's camera and
 /// sun, as `read` finds them in the game, are recorded for the backend. Never called while off:

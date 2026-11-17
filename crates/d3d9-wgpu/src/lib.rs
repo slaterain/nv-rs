@@ -13,8 +13,8 @@
 //! - `device`: resources, passes, pipelines, draws and `Present`.
 //! - `window`: the game's window: the swap chain at the window's size, minimised, sized or lost.
 //! - `shot`: `NV_SHOT` captures numbered like the forwarding layer's.
-//! - `scene_light`: the new lighting (port-added, off by default): ambient occlusion and sun
-//!   contact shadows on the finished scene.
+//! - `scene_light`: the new lighting (port-added, off by default): ambient occlusion on the finished
+//!   scene.
 
 mod ahead;
 mod answers;

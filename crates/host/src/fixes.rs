@@ -539,7 +539,7 @@ pub const PLAY_RENDERER: Renderer = Renderer::Vulkan;
 /// test.
 pub const PLAY_SHOW_FRAME_RATE: bool = false;
 
-/// Whether the new lighting (ambient occlusion and sun contact shadows, port-added:
+/// Whether the new lighting (ambient occlusion, port-added:
 /// `d3d9_wgpu::scene_light`, Vulkan only) is on when neither `NV_AO` nor `Fallout.ini`'s
 /// `bAmbientOcclusion` says ([`Choice::ambient_occlusion`]): off, in every preset (a new look, not
 /// a fix). `crates/host/data/game_ini.tsv`'s `bAmbientOcclusion` row is held to it by a test.
@@ -642,7 +642,7 @@ pub struct Choice {
     /// else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bShowFrameRate`; else
     /// [`PLAY_SHOW_FRAME_RATE`], off. Not part of any preset.
     pub show_frame_rate: bool,
-    /// Whether the new lighting is on (ambient occlusion and sun contact shadows,
+    /// Whether the new lighting is on (ambient occlusion,
     /// `d3d9_wgpu::scene_light`, Vulkan only): `NV_AO` when set (`1` on, else off); else, in a
     /// launcher's play run, `Fallout.ini`'s `[nv-rs Display] bAmbientOcclusion`; else
     /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
