@@ -1179,7 +1179,6 @@ fn device_caps(e: &mut Engine, device: Ptr) -> d3dx_tex::Caps {
         caps.texture_formats = takes(D3DRTYPE_TEXTURE);
         caps.cube_formats = takes(D3DRTYPE_CUBETEXTURE);
     }
-    #[cfg(windows)]
     {
         let on_wgpu = super::d3d9real::wgpu_draws();
         #[cfg(test)]
@@ -1198,7 +1197,6 @@ fn device_caps(e: &mut Engine, device: Ptr) -> d3dx_tex::Caps {
 /// lacks 22 of 57: R8G8B8, R3G3B2, A8R3G3B2, A2R10G10B10, A8P8 and P8, A4L4, L6V5U5, X8L8V8U8,
 /// V16U16, A2W10V10U10, Q16W16V16U16, CxV8U8, UYVY, YUY2, R8G8_B8G8, G8R8_G8B8, D15S1, D24X4S4,
 /// D24FS8 and the FourCCs AL16 and ` R16`.
-#[cfg(windows)]
 fn leave_out_what_wgpu_lacks(caps: &mut d3dx_tex::Caps) {
     let makes = |f: &u32| d3d9_wgpu::format::format(*f).is_some();
     caps.texture_formats.retain(makes);
@@ -2533,7 +2531,6 @@ mod tests {
         assert_eq!(asked.get(), 1, "asked once");
     }
 
-    #[cfg(windows)]
     thread_local! {
         /// Whether wgpu draws, for [`device_caps`] on this test's thread (the run-wide answer,
         /// `d3d9real::wgpu_draws`, is `NV_D3D9`'s).
@@ -2544,7 +2541,6 @@ mod tests {
     /// (a texture in one would be drawn as wgpu's stand-in): on a card taking all 57 of D3DX's
     /// table, the 35 wgpu makes, so an A4L4 file becomes A4R4G4B4 (the same nibbles), not an A4L4
     /// texture wgpu draws black. Without wgpu the card's answers stand.
-    #[cfg(windows)]
     #[test]
     fn on_wgpu_the_texture_formats_leave_out_what_wgpu_lacks() {
         let every: Vec<u32> = d3dx_tex::table_formats().collect();

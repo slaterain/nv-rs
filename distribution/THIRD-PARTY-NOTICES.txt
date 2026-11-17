@@ -1,8 +1,15 @@
 THIRD-PARTY NOTICES — nv-rs (nv-viewer: the Windows build, and the Linux and macOS builds)
 
-This file indexes the license texts of the 160 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates, every platform variant of windows-targets, and the sound library cpal with what it uses on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
+This file indexes the license texts of the 254 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
 
 Files are bundled under licenses/<package>-<version>/ in release ZIPs (distribution/licenses/ in the source tree). No crate source or game assets are included.
+
+ahash 0.8.12
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/tkaitchuck/ahash
+  Bundled license files:
+    ahash-0.8.12/LICENSE-APACHE
+    ahash-0.8.12/LICENSE-MIT
 
 allocator-api2 0.2.21
   License expression: MIT OR Apache-2.0
@@ -24,6 +31,20 @@ alsa-sys 0.4.0
   Bundled license files:
     alsa-sys-0.4.0/LICENSE
 
+android-activity 0.6.1
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-mobile/android-activity
+  Bundled license files:
+    android-activity-0.6.1/LICENSE
+    android-activity-0.6.1/LICENSE-APACHE
+    android-activity-0.6.1/LICENSE-MIT
+
+android-properties 0.2.2
+  License expression: MIT
+  Repository: https://github.com/miklelappo/android-properties
+  Bundled license files:
+    android-properties-0.2.2/LICENSE
+
 android_system_properties 0.1.6
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/nical/android_system_properties
@@ -38,12 +59,27 @@ arrayvec 0.7.8
     arrayvec-0.7.8/LICENSE-APACHE
     arrayvec-0.7.8/LICENSE-MIT
 
+as-raw-xcb-connection 1.0.1
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/psychon/as-raw-xcb-connection
+  Bundled license files:
+    as-raw-xcb-connection-1.0.1/LICENSE-APACHE
+    as-raw-xcb-connection-1.0.1/LICENSE-MIT
+
 ash 0.38.0+1.3.281
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/ash-rs/ash
   Bundled license files:
     ash-0.38.0+1.3.281/LICENSE-APACHE
     ash-0.38.0+1.3.281/LICENSE-MIT
+
+atomic-waker 1.1.2
+  License expression: Apache-2.0 OR MIT
+  Repository: https://github.com/smol-rs/atomic-waker
+  Bundled license files:
+    atomic-waker-1.1.2/LICENSE-APACHE
+    atomic-waker-1.1.2/LICENSE-MIT
+    atomic-waker-1.1.2/LICENSE-THIRD-PARTY
 
 autocfg 1.5.1
   License expression: Apache-2.0 OR MIT
@@ -66,12 +102,26 @@ bit-vec 0.9.1
     bit-vec-0.9.1/LICENSE-APACHE
     bit-vec-0.9.1/LICENSE-MIT
 
+bitflags 1.3.2
+  License expression: MIT/Apache-2.0
+  Repository: https://github.com/bitflags/bitflags
+  Bundled license files:
+    bitflags-1.3.2/LICENSE-APACHE
+    bitflags-1.3.2/LICENSE-MIT
+
 bitflags 2.13.2
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/bitflags/bitflags
   Bundled license files:
     bitflags-2.13.2/LICENSE-APACHE
     bitflags-2.13.2/LICENSE-MIT
+
+block2 0.5.1
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    block2-0.5.1/LICENSE-MIT
 
 block2 0.6.2
   License expression: MIT
@@ -109,6 +159,25 @@ bytes 1.12.1
   Bundled license files:
     bytes-1.12.1/LICENSE
 
+calloop 0.13.0
+  License expression: MIT
+  Repository: https://github.com/Smithay/calloop
+  Bundled license files:
+    calloop-0.13.0/LICENSE.txt
+
+calloop-wayland-source 0.3.0
+  License expression: MIT
+  Repository: https://github.com/smithay/calloop-wayland-source
+  Bundled license files:
+    calloop-wayland-source-0.3.0/LICENSE.txt
+
+cc 1.11.1
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-lang/cc-rs
+  Bundled license files:
+    cc-1.11.1/LICENSE-APACHE
+    cc-1.11.1/LICENSE-MIT
+
 cfg-if 1.0.5
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/rust-lang/cfg-if
@@ -135,6 +204,42 @@ combine 4.6.9
   Bundled license files:
     combine-4.6.9/LICENSE
 
+concurrent-queue 2.5.0
+  License expression: Apache-2.0 OR MIT
+  Repository: https://github.com/smol-rs/concurrent-queue
+  Bundled license files:
+    concurrent-queue-2.5.0/LICENSE-APACHE
+    concurrent-queue-2.5.0/LICENSE-MIT
+
+core-foundation 0.9.4
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/servo/core-foundation-rs
+  Bundled license files:
+    core-foundation-0.9.4/LICENSE-APACHE
+    core-foundation-0.9.4/LICENSE-MIT
+
+core-foundation-sys 0.8.7
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/servo/core-foundation-rs
+  Bundled license files:
+    core-foundation-sys-0.8.7/LICENSE-APACHE
+    core-foundation-sys-0.8.7/LICENSE-MIT
+
+core-graphics 0.23.2
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/servo/core-foundation-rs
+  Bundled license files:
+    core-graphics-0.23.2/COPYRIGHT
+    core-graphics-0.23.2/LICENSE-APACHE
+    core-graphics-0.23.2/LICENSE-MIT
+
+core-graphics-types 0.1.3
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/servo/core-foundation-rs
+  Bundled license files:
+    core-graphics-types-0.1.3/LICENSE-APACHE
+    core-graphics-types-0.1.3/LICENSE-MIT
+
 coreaudio-rs 0.14.2
   License expression: MIT/Apache-2.0
   Repository: https://github.com/RustAudio/coreaudio-rs.git
@@ -148,11 +253,26 @@ cpal 0.18.2
   Bundled license files:
     cpal-0.18.2/LICENSE
 
+crossbeam-utils 0.8.23
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/crossbeam-rs/crossbeam
+  Bundled license files:
+    crossbeam-utils-0.8.23/LICENSE-APACHE
+    crossbeam-utils-0.8.23/LICENSE-MIT
+
 crunchy 0.2.4
   License expression: MIT
   Repository: https://github.com/eira-fransham/crunchy
   Bundled license files:
     crunchy-0.2.4/LICENSE
+
+cursor-icon 1.2.0
+  License expression: MIT OR Apache-2.0 OR Zlib
+  Repository: https://github.com/rust-windowing/cursor-icon
+  Bundled license files:
+    cursor-icon-1.2.0/LICENSE-APACHE
+    cursor-icon-1.2.0/LICENSE-MIT
+    cursor-icon-1.2.0/LICENSE-ZLIB
 
 dasp_sample 0.11.0
   License expression: MIT OR Apache-2.0
@@ -162,6 +282,13 @@ dasp_sample 0.11.0
     dasp_sample-0.11.0/LICENSE-APACHE
     dasp_sample-0.11.0/LICENSE-MIT
 
+dispatch 0.2.0
+  License expression: MIT
+  Repository: http://github.com/SSheldon/rust-dispatch
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    dispatch-0.2.0/LICENSE-MIT
+
 dispatch2 0.3.1
   License expression: Zlib OR Apache-2.0 OR MIT
   Repository: https://github.com/madsmtm/objc2
@@ -170,12 +297,32 @@ dispatch2 0.3.1
     dispatch2-0.3.1/LICENSE-APACHE
     dispatch2-0.3.1/LICENSE-MIT
 
+dlib 0.5.3
+  License expression: MIT
+  Repository: https://github.com/elinorbgr/dlib
+  Bundled license files:
+    dlib-0.5.3/LICENSE.txt
+
 document-features 0.2.12
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/slint-ui/document-features
   Bundled license files:
     document-features-0.2.12/LICENSE-APACHE
     document-features-0.2.12/LICENSE-MIT
+
+downcast-rs 1.2.1
+  License expression: MIT/Apache-2.0
+  Repository: https://github.com/marcianx/downcast-rs
+  Bundled license files:
+    downcast-rs-1.2.1/LICENSE-APACHE
+    downcast-rs-1.2.1/LICENSE-MIT
+
+dpi 0.1.2
+  License expression: Apache-2.0 AND MIT
+  Repository: https://github.com/rust-windowing/winit
+  Bundled license files:
+    dpi-0.1.2/LICENSE
+    dpi-0.1.2/LICENSE-LIBM-MIT
 
 equivalent 1.0.3
   License expression: Apache-2.0 OR MIT
@@ -184,11 +331,46 @@ equivalent 1.0.3
     equivalent-1.0.3/LICENSE-APACHE
     equivalent-1.0.3/LICENSE-MIT
 
+errno 0.3.14
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/lambda-fairy/rust-errno
+  Bundled license files:
+    errno-0.3.14/LICENSE-APACHE
+    errno-0.3.14/LICENSE-MIT
+
+find-msvc-tools 0.1.15
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-lang/cc-rs
+  Bundled license files:
+    find-msvc-tools-0.1.15/LICENSE-APACHE
+    find-msvc-tools-0.1.15/LICENSE-MIT
+
 foldhash 0.2.0
   License expression: Zlib
   Repository: https://github.com/orlp/foldhash
   Bundled license files:
     foldhash-0.2.0/LICENSE
+
+foreign-types 0.5.0
+  License expression: MIT/Apache-2.0
+  Repository: https://github.com/sfackler/foreign-types
+  Bundled license files:
+    foreign-types-0.5.0/LICENSE-APACHE
+    foreign-types-0.5.0/LICENSE-MIT
+
+foreign-types-macros 0.2.4
+  License expression: MIT/Apache-2.0
+  Repository: https://github.com/sfackler/foreign-types
+  Bundled license files:
+    foreign-types-macros-0.2.4/LICENSE-APACHE
+    foreign-types-macros-0.2.4/LICENSE-MIT
+
+foreign-types-shared 0.3.1
+  License expression: MIT/Apache-2.0
+  Repository: https://github.com/sfackler/foreign-types
+  Bundled license files:
+    foreign-types-shared-0.3.1/LICENSE-APACHE
+    foreign-types-shared-0.3.1/LICENSE-MIT
 
 futures-core 0.3.34
   License expression: MIT OR Apache-2.0
@@ -210,6 +392,26 @@ futures-util 0.3.34
   Bundled license files:
     futures-util-0.3.34/LICENSE-APACHE
     futures-util-0.3.34/LICENSE-MIT
+
+gethostname 1.1.0
+  License expression: Apache-2.0
+  Repository: https://codeberg.org/swsnr/gethostname.rs.git
+  Bundled license files:
+    gethostname-1.1.0/LICENSE
+
+getrandom 0.3.4
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-random/getrandom
+  Bundled license files:
+    getrandom-0.3.4/LICENSE-APACHE
+    getrandom-0.3.4/LICENSE-MIT
+
+getrandom 0.4.3
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-random/getrandom
+  Bundled license files:
+    getrandom-0.4.3/LICENSE-APACHE
+    getrandom-0.4.3/LICENSE-MIT
 
 gpu-allocator 0.28.0
   License expression: MIT OR Apache-2.0
@@ -238,6 +440,13 @@ hashbrown 0.17.1
   Bundled license files:
     hashbrown-0.17.1/LICENSE-APACHE
     hashbrown-0.17.1/LICENSE-MIT
+
+hermit-abi 0.5.3
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/hermit-os/hermit-rs
+  Bundled license files:
+    hermit-abi-0.5.3/LICENSE-APACHE
+    hermit-abi-0.5.3/LICENSE-MIT
 
 indexmap 2.14.2
   License expression: Apache-2.0 OR MIT
@@ -284,6 +493,13 @@ jni-sys-macros 0.4.1
     jni-sys-macros-0.4.1/LICENSE-APACHE
     jni-sys-macros-0.4.1/LICENSE-MIT
 
+jobserver 0.1.35
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-lang/jobserver-rs
+  Bundled license files:
+    jobserver-0.1.35/LICENSE-APACHE
+    jobserver-0.1.35/LICENSE-MIT
+
 js-sys 0.3.106
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys
@@ -309,6 +525,30 @@ libm 0.2.16
   Repository: https://github.com/rust-lang/compiler-builtins
   Bundled license files:
     libm-0.2.16/LICENSE.txt
+
+libredox 0.1.25
+  License expression: MIT
+  Repository: https://gitlab.redox-os.org/redox-os/libredox.git
+  Bundled license files:
+    libredox-0.1.25/LICENSE
+
+linux-raw-sys 0.12.1
+  License expression: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+  Repository: https://github.com/sunfishcode/linux-raw-sys
+  Bundled license files:
+    linux-raw-sys-0.12.1/COPYRIGHT
+    linux-raw-sys-0.12.1/LICENSE-APACHE
+    linux-raw-sys-0.12.1/LICENSE-Apache-2.0_WITH_LLVM-exception
+    linux-raw-sys-0.12.1/LICENSE-MIT
+
+linux-raw-sys 0.4.15
+  License expression: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+  Repository: https://github.com/sunfishcode/linux-raw-sys
+  Bundled license files:
+    linux-raw-sys-0.4.15/COPYRIGHT
+    linux-raw-sys-0.4.15/LICENSE-APACHE
+    linux-raw-sys-0.4.15/LICENSE-Apache-2.0_WITH_LLVM-exception
+    linux-raw-sys-0.4.15/LICENSE-MIT
 
 litrs 1.0.1
   License expression: MIT OR Apache-2.0
@@ -346,6 +586,13 @@ memchr 2.8.3
     memchr-2.8.3/COPYING
     memchr-2.8.3/LICENSE-MIT
     memchr-2.8.3/UNLICENSE
+
+memmap2 0.9.12
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/RazrFalcon/memmap2-rs
+  Bundled license files:
+    memmap2-0.9.12/LICENSE-APACHE
+    memmap2-0.9.12/LICENSE-MIT
 
 naga 30.0.1
   License expression: MIT OR Apache-2.0
@@ -415,12 +662,33 @@ num_enum_derive 0.7.6
     num_enum_derive-0.7.6/LICENSE-BSD
     num_enum_derive-0.7.6/LICENSE-MIT
 
+objc-sys 0.3.5
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc-sys-0.3.5/LICENSE-MIT
+
+objc2 0.5.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-0.5.2/LICENSE-MIT
+
 objc2 0.6.5
   License expression: MIT
   Repository: https://github.com/madsmtm/objc2
   (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
   Bundled license files:
     objc2-0.6.5/LICENSE-MIT
+
+objc2-app-kit 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-app-kit-0.2.2/LICENSE-MIT
 
 objc2-audio-toolbox 0.3.2
   License expression: Zlib OR Apache-2.0 OR MIT
@@ -438,6 +706,20 @@ objc2-avf-audio 0.3.2
     objc2-avf-audio-0.3.2/LICENSE-APACHE
     objc2-avf-audio-0.3.2/LICENSE-MIT
 
+objc2-cloud-kit 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-cloud-kit-0.2.2/LICENSE-MIT
+
+objc2-contacts 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-contacts-0.2.2/LICENSE-MIT
+
 objc2-core-audio 0.3.2
   License expression: Zlib OR Apache-2.0 OR MIT
   Repository: https://github.com/madsmtm/objc2
@@ -453,6 +735,13 @@ objc2-core-audio-types 0.3.2
   Bundled license files:
     objc2-core-audio-types-0.3.2/LICENSE-APACHE
     objc2-core-audio-types-0.3.2/LICENSE-MIT
+
+objc2-core-data 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-core-data-0.2.2/LICENSE-MIT
 
 objc2-core-foundation 0.3.2
   License expression: Zlib OR Apache-2.0 OR MIT
@@ -470,12 +759,33 @@ objc2-core-graphics 0.3.2
     objc2-core-graphics-0.3.2/LICENSE-APACHE
     objc2-core-graphics-0.3.2/LICENSE-MIT
 
+objc2-core-image 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-core-image-0.2.2/LICENSE-MIT
+
+objc2-core-location 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-core-location-0.2.2/LICENSE-MIT
+
 objc2-encode 4.1.0
   License expression: MIT
   Repository: https://github.com/madsmtm/objc2
   (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
   Bundled license files:
     objc2-encode-4.1.0/LICENSE-MIT
+
+objc2-foundation 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-foundation-0.2.2/LICENSE-MIT
 
 objc2-foundation 0.3.2
   License expression: MIT
@@ -492,6 +802,20 @@ objc2-io-surface 0.3.2
     objc2-io-surface-0.3.2/LICENSE-APACHE
     objc2-io-surface-0.3.2/LICENSE-MIT
 
+objc2-link-presentation 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-link-presentation-0.2.2/LICENSE-MIT
+
+objc2-metal 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-metal-0.2.2/LICENSE-MIT
+
 objc2-metal 0.3.2
   License expression: Zlib OR Apache-2.0 OR MIT
   Repository: https://github.com/madsmtm/objc2
@@ -499,6 +823,13 @@ objc2-metal 0.3.2
   Bundled license files:
     objc2-metal-0.3.2/LICENSE-APACHE
     objc2-metal-0.3.2/LICENSE-MIT
+
+objc2-quartz-core 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-quartz-core-0.2.2/LICENSE-MIT
 
 objc2-quartz-core 0.3.2
   License expression: Zlib OR Apache-2.0 OR MIT
@@ -508,12 +839,46 @@ objc2-quartz-core 0.3.2
     objc2-quartz-core-0.3.2/LICENSE-APACHE
     objc2-quartz-core-0.3.2/LICENSE-MIT
 
+objc2-symbols 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-symbols-0.2.2/LICENSE-MIT
+
+objc2-ui-kit 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-ui-kit-0.2.2/LICENSE-MIT
+
+objc2-uniform-type-identifiers 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-uniform-type-identifiers-0.2.2/LICENSE-MIT
+
+objc2-user-notifications 0.2.2
+  License expression: MIT
+  Repository: https://github.com/madsmtm/objc2
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    objc2-user-notifications-0.2.2/LICENSE-MIT
+
 once_cell 1.21.4
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/matklad/once_cell
   Bundled license files:
     once_cell-1.21.4/LICENSE-APACHE
     once_cell-1.21.4/LICENSE-MIT
+
+orbclient 0.3.55
+  License expression: MIT
+  Repository: https://gitlab.redox-os.org/redox-os/orbclient
+  Bundled license files:
+    orbclient-0.3.55/LICENSE
 
 ordered-float 4.6.0
   License expression: MIT
@@ -535,6 +900,27 @@ parking_lot_core 0.9.12
     parking_lot_core-0.9.12/LICENSE-APACHE
     parking_lot_core-0.9.12/LICENSE-MIT
 
+percent-encoding 2.3.2
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/servo/rust-url/
+  Bundled license files:
+    percent-encoding-2.3.2/LICENSE-APACHE
+    percent-encoding-2.3.2/LICENSE-MIT
+
+pin-project 1.1.13
+  License expression: Apache-2.0 OR MIT
+  Repository: https://github.com/taiki-e/pin-project
+  Bundled license files:
+    pin-project-1.1.13/LICENSE-APACHE
+    pin-project-1.1.13/LICENSE-MIT
+
+pin-project-internal 1.1.13
+  License expression: Apache-2.0 OR MIT
+  Repository: https://github.com/taiki-e/pin-project
+  Bundled license files:
+    pin-project-internal-1.1.13/LICENSE-APACHE
+    pin-project-internal-1.1.13/LICENSE-MIT
+
 pin-project-lite 0.2.17
   License expression: Apache-2.0 OR MIT
   Repository: https://github.com/taiki-e/pin-project-lite
@@ -548,6 +934,20 @@ pkg-config 0.3.34
   Bundled license files:
     pkg-config-0.3.34/LICENSE-APACHE
     pkg-config-0.3.34/LICENSE-MIT
+
+plain 0.2.3
+  License expression: MIT/Apache-2.0
+  Repository: https://github.com/randomites/plain
+  Bundled license files:
+    plain-0.2.3/LICENSE-APACHE
+    plain-0.2.3/LICENSE-MIT
+
+polling 3.11.0
+  License expression: Apache-2.0 OR MIT
+  Repository: https://github.com/smol-rs/polling
+  Bundled license files:
+    polling-3.11.0/LICENSE-APACHE
+    polling-3.11.0/LICENSE-MIT
 
 portable-atomic 1.15.0
   License expression: Apache-2.0 OR MIT
@@ -592,12 +992,34 @@ profiling 1.0.18
     profiling-1.0.18/LICENSE-MIT
     profiling-1.0.18/LICENSE-APACHE
 
+quick-xml 0.41.0
+  License expression: MIT
+  Repository: https://github.com/tafia/quick-xml
+  Bundled license files:
+    quick-xml-0.41.0/LICENSE-MIT.md
+
 quote 1.0.47
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/dtolnay/quote
   Bundled license files:
     quote-1.0.47/LICENSE-APACHE
     quote-1.0.47/LICENSE-MIT
+
+r-efi 5.3.0
+  License expression: MIT OR Apache-2.0 OR LGPL-2.1-or-later
+  Repository: https://github.com/r-efi/r-efi
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    r-efi-5.3.0/LICENSE-APACHE
+    r-efi-5.3.0/LICENSE-MIT
+
+r-efi 6.0.0
+  License expression: MIT OR Apache-2.0 OR LGPL-2.1-or-later
+  Repository: https://github.com/r-efi/r-efi
+  (The package ships no license file: the texts below are written from its license expression; the MIT copyright line names its authors.)
+  Bundled license files:
+    r-efi-6.0.0/LICENSE-APACHE
+    r-efi-6.0.0/LICENSE-MIT
 
 range-alloc 0.1.5
   License expression: MIT OR Apache-2.0
@@ -621,11 +1043,23 @@ raw-window-metal 1.1.0
     raw-window-metal-1.1.0/LICENSE-APACHE
     raw-window-metal-1.1.0/LICENSE-MIT
 
+redox_syscall 0.4.1
+  License expression: MIT
+  Repository: https://gitlab.redox-os.org/redox-os/syscall
+  Bundled license files:
+    redox_syscall-0.4.1/LICENSE
+
 redox_syscall 0.5.18
   License expression: MIT
   Repository: https://gitlab.redox-os.org/redox-os/syscall
   Bundled license files:
     redox_syscall-0.5.18/LICENSE
+
+redox_syscall 0.9.4
+  License expression: MIT
+  Repository: https://gitlab.redox-os.org/redox-os/kernel
+  Bundled license files:
+    redox_syscall-0.9.4/LICENSE
 
 renderdoc-sys 1.1.0
   License expression: MIT OR Apache-2.0
@@ -648,6 +1082,24 @@ rustc_version 0.4.1
     rustc_version-0.4.1/LICENSE-APACHE
     rustc_version-0.4.1/LICENSE-MIT
 
+rustix 0.38.44
+  License expression: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+  Repository: https://github.com/bytecodealliance/rustix
+  Bundled license files:
+    rustix-0.38.44/COPYRIGHT
+    rustix-0.38.44/LICENSE-APACHE
+    rustix-0.38.44/LICENSE-Apache-2.0_WITH_LLVM-exception
+    rustix-0.38.44/LICENSE-MIT
+
+rustix 1.1.6
+  License expression: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+  Repository: https://github.com/bytecodealliance/rustix
+  Bundled license files:
+    rustix-1.1.6/COPYRIGHT
+    rustix-1.1.6/LICENSE-APACHE
+    rustix-1.1.6/LICENSE-Apache-2.0_WITH_LLVM-exception
+    rustix-1.1.6/LICENSE-MIT
+
 rustversion 1.0.23
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/dtolnay/rustversion
@@ -663,6 +1115,13 @@ same-file 1.0.6
     same-file-1.0.6/LICENSE-MIT
     same-file-1.0.6/UNLICENSE
 
+scoped-tls 1.0.1
+  License expression: MIT/Apache-2.0
+  Repository: https://github.com/alexcrichton/scoped-tls
+  Bundled license files:
+    scoped-tls-1.0.1/LICENSE-APACHE
+    scoped-tls-1.0.1/LICENSE-MIT
+
 scopeguard 1.2.0
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/bluss/scopeguard
@@ -677,6 +1136,13 @@ semver 1.0.28
     semver-1.0.28/LICENSE-APACHE
     semver-1.0.28/LICENSE-MIT
 
+serde 1.0.229
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/serde-rs/serde
+  Bundled license files:
+    serde-1.0.229/LICENSE-APACHE
+    serde-1.0.229/LICENSE-MIT
+
 serde_core 1.0.229
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/serde-rs/serde
@@ -690,6 +1156,13 @@ serde_derive 1.0.229
   Bundled license files:
     serde_derive-1.0.229/LICENSE-APACHE
     serde_derive-1.0.229/LICENSE-MIT
+
+shlex 2.0.1
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/comex/rust-shlex
+  Bundled license files:
+    shlex-2.0.1/LICENSE-APACHE
+    shlex-2.0.1/LICENSE-MIT
 
 simd_cesu8 1.2.0
   License expression: Apache-2.0 OR MIT
@@ -717,6 +1190,19 @@ smallvec 1.16.5
   Bundled license files:
     smallvec-1.16.5/LICENSE-APACHE
     smallvec-1.16.5/LICENSE-MIT
+
+smithay-client-toolkit 0.19.2
+  License expression: MIT
+  Repository: https://github.com/smithay/client-toolkit
+  Bundled license files:
+    smithay-client-toolkit-0.19.2/LICENSE.txt
+
+smol_str 0.2.2
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-analyzer/smol_str
+  Bundled license files:
+    smol_str-0.2.2/LICENSE-APACHE
+    smol_str-0.2.2/LICENSE-MIT
 
 spirv 0.4.0+sdk-1.4.341.0
   License expression: Apache-2.0
@@ -801,6 +1287,18 @@ toml_parser 1.1.5+spec-1.1.0
     toml_parser-1.1.5+spec-1.1.0/LICENSE-APACHE
     toml_parser-1.1.5+spec-1.1.0/LICENSE-MIT
 
+tracing 0.1.44
+  License expression: MIT
+  Repository: https://github.com/tokio-rs/tracing
+  Bundled license files:
+    tracing-0.1.44/LICENSE
+
+tracing-core 0.1.36
+  License expression: MIT
+  Repository: https://github.com/tokio-rs/tracing
+  Bundled license files:
+    tracing-core-0.1.36/LICENSE
+
 unicode-ident 1.0.26
   License expression: (MIT OR Apache-2.0) AND Unicode-3.0
   Repository: https://github.com/dtolnay/unicode-ident
@@ -808,6 +1306,14 @@ unicode-ident 1.0.26
     unicode-ident-1.0.26/LICENSE-APACHE
     unicode-ident-1.0.26/LICENSE-MIT
     unicode-ident-1.0.26/LICENSE-UNICODE
+
+unicode-segmentation 1.13.3
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/unicode-rs/unicode-segmentation
+  Bundled license files:
+    unicode-segmentation-1.13.3/COPYRIGHT
+    unicode-segmentation-1.13.3/LICENSE-APACHE
+    unicode-segmentation-1.13.3/LICENSE-MIT
 
 unicode-width 0.1.14
   License expression: MIT OR Apache-2.0
@@ -817,6 +1323,13 @@ unicode-width 0.1.14
     unicode-width-0.1.14/LICENSE-APACHE
     unicode-width-0.1.14/LICENSE-MIT
 
+version_check 0.9.5
+  License expression: MIT/Apache-2.0
+  Repository: https://github.com/SergioBenitez/version_check
+  Bundled license files:
+    version_check-0.9.5/LICENSE-APACHE
+    version_check-0.9.5/LICENSE-MIT
+
 walkdir 2.5.0
   License expression: Unlicense/MIT
   Repository: https://github.com/BurntSushi/walkdir
@@ -824,6 +1337,14 @@ walkdir 2.5.0
     walkdir-2.5.0/COPYING
     walkdir-2.5.0/LICENSE-MIT
     walkdir-2.5.0/UNLICENSE
+
+wasip2 1.0.4+wasi-0.2.12
+  License expression: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+  Repository: https://github.com/bytecodealliance/wasi-rs
+  Bundled license files:
+    wasip2-1.0.4+wasi-0.2.12/LICENSE-APACHE
+    wasip2-1.0.4+wasi-0.2.12/LICENSE-Apache-2.0_WITH_LLVM-exception
+    wasip2-1.0.4+wasi-0.2.12/LICENSE-MIT
 
 wasm-bindgen 0.2.129
   License expression: MIT OR Apache-2.0
@@ -860,12 +1381,73 @@ wasm-bindgen-shared 0.2.129
     wasm-bindgen-shared-0.2.129/LICENSE-APACHE
     wasm-bindgen-shared-0.2.129/LICENSE-MIT
 
+wayland-backend 0.3.17
+  License expression: MIT
+  Repository: https://github.com/smithay/wayland-rs
+  Bundled license files:
+    wayland-backend-0.3.17/LICENSE.txt
+
+wayland-client 0.31.15
+  License expression: MIT
+  Repository: https://github.com/smithay/wayland-rs
+  Bundled license files:
+    wayland-client-0.31.15/LICENSE.txt
+
+wayland-csd-frame 0.3.0
+  License expression: MIT
+  Repository: https://github.com/rust-windowing/wayland-csd-frame
+  Bundled license files:
+    wayland-csd-frame-0.3.0/LICENSE
+
+wayland-cursor 0.31.14
+  License expression: MIT
+  Repository: https://github.com/smithay/wayland-rs
+  Bundled license files:
+    wayland-cursor-0.31.14/LICENSE.txt
+
+wayland-protocols 0.32.13
+  License expression: MIT
+  Repository: https://github.com/smithay/wayland-rs
+  Bundled license files:
+    wayland-protocols-0.32.13/LICENSE.txt
+
+wayland-protocols-plasma 0.3.12
+  License expression: MIT
+  Repository: https://github.com/smithay/wayland-rs
+  Bundled license files:
+    wayland-protocols-plasma-0.3.12/LICENSE.txt
+
+wayland-protocols-wlr 0.3.12
+  License expression: MIT
+  Repository: https://github.com/smithay/wayland-rs
+  Bundled license files:
+    wayland-protocols-wlr-0.3.12/LICENSE.txt
+
+wayland-scanner 0.31.11
+  License expression: MIT
+  Repository: https://github.com/smithay/wayland-rs
+  Bundled license files:
+    wayland-scanner-0.31.11/LICENSE.txt
+
+wayland-sys 0.31.11
+  License expression: MIT
+  Repository: https://github.com/smithay/wayland-rs
+  Bundled license files:
+    wayland-sys-0.31.11/LICENSE.txt
+
 web-sys 0.3.106
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys
   Bundled license files:
     web-sys-0.3.106/LICENSE-APACHE
     web-sys-0.3.106/LICENSE-MIT
+
+web-time 1.1.0
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/daxpedda/web-time
+  Bundled license files:
+    web-time-1.1.0/LICENSE-APACHE
+    web-time-1.1.0/LICENSE-MIT
 
 wgpu 30.0.1
   License expression: MIT OR Apache-2.0
@@ -1037,6 +1619,20 @@ windows-strings 0.5.1
     windows-strings-0.5.1/license-apache-2.0
     windows-strings-0.5.1/license-mit
 
+windows-sys 0.52.0
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/microsoft/windows-rs
+  Bundled license files:
+    windows-sys-0.52.0/license-apache-2.0
+    windows-sys-0.52.0/license-mit
+
+windows-sys 0.59.0
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/microsoft/windows-rs
+  Bundled license files:
+    windows-sys-0.59.0/license-apache-2.0
+    windows-sys-0.59.0/license-mit
+
 windows-sys 0.61.2
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/microsoft/windows-rs
@@ -1114,11 +1710,65 @@ windows_x86_64_msvc 0.52.6
     windows_x86_64_msvc-0.52.6/license-apache-2.0
     windows_x86_64_msvc-0.52.6/license-mit
 
+winit 0.30.13
+  License expression: Apache-2.0
+  Repository: https://github.com/rust-windowing/winit
+  Bundled license files:
+    winit-0.30.13/LICENSE
+
 winnow 1.0.5
   License expression: MIT
   Repository: https://github.com/winnow-rs/winnow
   Bundled license files:
     winnow-1.0.5/LICENSE-MIT
+
+wit-bindgen 0.57.1
+  License expression: Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+  Repository: https://github.com/bytecodealliance/wit-bindgen
+  Bundled license files:
+    wit-bindgen-0.57.1/LICENSE-APACHE
+    wit-bindgen-0.57.1/LICENSE-Apache-2.0_WITH_LLVM-exception
+    wit-bindgen-0.57.1/LICENSE-MIT
+
+x11-dl 2.21.0
+  License expression: MIT
+  Repository: https://github.com/AltF02/x11-rs.git
+  Bundled license files:
+    x11-dl-2.21.0/LICENSE-MIT
+
+x11rb 0.13.2
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/psychon/x11rb
+  Bundled license files:
+    x11rb-0.13.2/LICENSE-APACHE
+    x11rb-0.13.2/LICENSE-MIT
+
+x11rb-protocol 0.13.2
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/psychon/x11rb
+  Bundled license files:
+    x11rb-protocol-0.13.2/LICENSE-APACHE
+    x11rb-protocol-0.13.2/LICENSE-MIT
+
+xcursor 0.3.11
+  License expression: MIT
+  Repository: https://github.com/esposm03/xcursor-rs
+  Bundled license files:
+    xcursor-0.3.11/LICENSE
+
+xkbcommon-dl 0.4.2
+  License expression: MIT
+  Repository: https://github.com/rust-windowing/xkbcommon-dl
+  Bundled license files:
+    xkbcommon-dl-0.4.2/LICENSE
+
+xkeysym 0.2.1
+  License expression: MIT OR Apache-2.0 OR Zlib
+  Repository: https://github.com/notgull/xkeysym
+  Bundled license files:
+    xkeysym-0.2.1/LICENSE-APACHE
+    xkeysym-0.2.1/LICENSE-MIT
+    xkeysym-0.2.1/LICENSE-ZLIB
 
 zerocopy 0.8.63
   License expression: BSD-2-Clause OR Apache-2.0 OR MIT
