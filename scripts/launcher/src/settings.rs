@@ -35,34 +35,42 @@ pub fn decode(bytes: &[u8]) -> String {
     }
 }
 
-/// The value of `key` in `section` of an INI text, found as the game finds it (host
-/// `game_ini::value`): only in the first section of that name (Windows reads no later one,
-/// measured), names compared without case, spaces trimmed, one pair of quotes taken off, the
-/// first match wins; a `;` line never matches.
+/// The value of `key` in `section` of an INI text, found as the game finds it (the same rules as
+/// the engine's one reader, `engine_core::mod_files::ini_value`, which this crate does not link):
+/// only in the first section of that name (Windows reads no later one, measured), names compared
+/// without case, ASCII spaces trimmed, one pair of the same quotes, double or single, taken off
+/// (`ini3-2026-11-16.txt`: `'1'` reads 1, `"1'` stays), a line ending at LF or a lone CR
+/// (`ini4-2026-11-16.txt`, `STRING cr only`), the first match wins; a `;` line never matches.
 pub fn ini_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
+    let ascii_trim = |s: &'a str| s.trim_matches(|c: char| c.is_ascii_whitespace());
     let mut inside = false;
-    for line in text.lines() {
-        let line = line.trim();
+    for line in text.split(['\n', '\r']) {
+        let line = ascii_trim(line);
         if let Some(rest) = line.strip_prefix('[') {
             // The first section of the name ends here.
             if inside {
                 return None;
             }
             let name = rest.split(']').next().unwrap_or(rest);
-            inside = name.trim().eq_ignore_ascii_case(section.trim());
+            inside = ascii_trim(name)
+                .eq_ignore_ascii_case(section.trim_matches(|c: char| c.is_ascii_whitespace()));
             continue;
         }
         let Some((name, value)) = line.split_once('=').filter(|_| inside) else {
             continue;
         };
-        if name.trim().eq_ignore_ascii_case(key) {
-            let value = value.trim();
-            return Some(
+        if ascii_trim(name)
+            .eq_ignore_ascii_case(key.trim_matches(|c: char| c.is_ascii_whitespace()))
+        {
+            let value = ascii_trim(value);
+            let quoted = value.len() >= 2
+                && (value.starts_with('"') || value.starts_with('\''))
+                && value.as_bytes()[0] == value.as_bytes()[value.len() - 1];
+            return Some(if quoted {
+                &value[1..value.len() - 1]
+            } else {
                 value
-                    .strip_prefix('"')
-                    .and_then(|v| v.strip_suffix('"'))
-                    .unwrap_or(value),
-            );
+            });
         }
     }
     None
@@ -184,6 +192,23 @@ pub fn apply_to_prefs(prefs: &str, lines: &[(String, String)]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The game's reader's rules measured on scratch files (2026-11-16), as the engine's
+    /// `engine_core::mod_files::ini_value` holds them: one pair of the same quotes, double or
+    /// single, taken off (`ini3-2026-11-16.txt`: `'1'` reads 1, `"1'` and a lone `"` stay, `""`
+    /// reads nothing); a line ends at LF or at a lone CR (`ini4-2026-11-16.txt`, `STRING cr
+    /// only`: `[A]\rx=1\ry=2\r` reads y as 2).
+    #[test]
+    fn values_read_with_the_measured_quote_and_line_rules() {
+        let text = "[A]\r\na='1'\r\nb=\"1'\r\nc=\"\r\nd=\"\"\r\ne=\"x\"\r\n";
+        assert_eq!(ini_value(text, "A", "a"), Some("1"));
+        assert_eq!(ini_value(text, "A", "b"), Some("\"1'"));
+        assert_eq!(ini_value(text, "A", "c"), Some("\""));
+        assert_eq!(ini_value(text, "A", "d"), Some(""));
+        assert_eq!(ini_value(text, "A", "e"), Some("x"));
+        assert_eq!(ini_value("[A]\rx=1\ry=2\r", "A", "y"), Some("2"));
+        assert_eq!(ini_value("[A]\rx=1\r[B]\ry=2\r", "A", "y"), None);
+    }
 
     fn lines(s: &[(&str, &str)]) -> Vec<(String, String)> {
         s.iter()
