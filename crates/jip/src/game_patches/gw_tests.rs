@@ -279,3 +279,150 @@ fn h17_forces_the_climate_force_climate_sets() {
     assert_eq!(site(&mut e), None);
     assert_eq!(e.mem.u32(SKY_AT + 0xc), OTHER_CLIMATE);
 }
+
+const CALENDAR: u32 = B + 0x3000;
+const PLAYER_AT: u32 = B + 0x4000;
+
+/// The calendar's six globals (year, month, day, hour, days passed, time scale) at `B + 0x3100`
+/// on, each value at `+0x24`; the player for the hardcore byte; JIP's kept hour and days reset.
+fn calendar(e: &mut Engine, values: [f32; 6]) {
+    for (i, v) in values.iter().enumerate() {
+        let g = B + 0x3100 + 0x30 * i as u32;
+        e.mem.set_u32(CALENDAR + 4 * i as u32, g);
+        e.mem.set_f32(g + 0x24, *v);
+    }
+    e.mem.set_u32(CALENDAR + 0x18, 7);
+    e.mem.set_u8(CALENDAR + 0x1c, 0);
+    e.mem.set_u32(PLAYER, PLAYER_AT);
+    e.mem.set_u8(PLAYER_AT + HARDCORE_UPDATE, 0x55);
+}
+
+fn value(e: &Engine, i: u32) -> f32 {
+    e.mem.f32(B + 0x3100 + 0x30 * i + 0x24)
+}
+
+fn advance(e: &mut Engine, seconds: f32) -> u32 {
+    e.call(UPDATE_TIME_GLOBALS.addr(), &[CALENDAR, seconds.to_bits()])
+        .eax
+}
+
+/// O5 without its switch (or without the row): the exe's function (the stand-in's marker).
+#[test]
+fn o5_without_the_switch_runs_the_exe() {
+    let mut e = world(true, true);
+    let word = e.jip_patches();
+    assert_ne!(word & jip_patches::GAME_DAYS_PASSED_FIX, 0, "on by default");
+    calendar(&mut e, [2281.0, 9.0, 19.0, 10.0, 5.5, 30.0]);
+    e.set_jip_patches(word & !jip_patches::GAME_DAYS_PASSED_FIX);
+    assert_eq!(advance(&mut e, 1.0), 0x5a5a);
+    assert_eq!(value(&e, 3), 10.0);
+    let mut e = world(true, false);
+    calendar(&mut e, [2281.0, 9.0, 19.0, 10.0, 5.5, 30.0]);
+    assert_eq!(advance(&mut e, 1.0), 0x5a5a);
+}
+
+/// O5's first update counts the days again (the hour moved from JIP's kept 0): whole days plus
+/// hour / 24, the player's hardcore byte set, then the hours passed (`1 s x 30 / 3600`) added in
+/// doubles. The next update takes JIP's kept doubles (the hour's `float` is within 0.05), so the
+/// days do not drift as the exe's `float` sums do.
+#[test]
+fn o5_keeps_the_hour_and_days_in_doubles() {
+    let mut e = world(true, true);
+    calendar(&mut e, [2281.0, 9.0, 19.0, 10.0, 5.5, 30.0]);
+    let per = f64::from_bits(PER_SECOND);
+    let passed = 1.0f64 * 30.0 * per;
+    advance(&mut e, 1.0);
+    let mut hour = 10.0 + passed;
+    let mut days = 10.0 / 24.0 + 5.0 + passed / 24.0;
+    assert_eq!(value(&e, 3), hour as f32);
+    assert_eq!(value(&e, 4), days as f32);
+    assert_eq!(e.mem.u8(PLAYER_AT + HARDCORE_UPDATE), 1);
+    assert_eq!(e.mem.u32(CALENDAR + 0x18), 7, "no midnight");
+    e.mem.set_u8(PLAYER_AT + HARDCORE_UPDATE, 0x55);
+    for _ in 0..1000 {
+        advance(&mut e, 1.0);
+        hour += passed;
+        days += passed / 24.0;
+    }
+    assert_eq!(value(&e, 3), hour as f32);
+    assert_eq!(value(&e, 4), days as f32);
+    assert_eq!(e.mem.u8(PLAYER_AT + HARDCORE_UPDATE), 0x55, "no recount");
+}
+
+/// O5 recounts when the stale byte is set (and clears it), when the hour jumped ahead past 0.05,
+/// and when it went back past 0.05 (counted as the next day: past 24, the day rolls on). With
+/// `SetGameHour`'s request the hardcore byte is cleared and the request taken.
+#[test]
+fn o5_recounts_after_a_jump() {
+    let mut e = world(true, true);
+    calendar(&mut e, [2281.0, 9.0, 19.0, 10.0, 5.5, 30.0]);
+    advance(&mut e, 0.0);
+    // Stale byte: whole days of the global (5) plus the hour again.
+    e.mem.set_f32(B + 0x3100 + 0x30 * 4 + 0x24, 7.9);
+    e.mem.set_u8(CALENDAR + 0x1c, 1);
+    advance(&mut e, 0.0);
+    assert_eq!(e.mem.u8(CALENDAR + 0x1c), 0);
+    assert_eq!(value(&e, 4), (10.0f64 / 24.0 + 7.0) as f32);
+    // Ahead by 2 hours, with SetGameHour's request: the byte cleared, the request taken.
+    super::super::gp::set_force_hardcore_needs_update(&mut e, true);
+    e.mem.set_f32(B + 0x3100 + 0x30 * 3 + 0x24, 12.0);
+    advance(&mut e, 0.0);
+    assert_eq!(value(&e, 4), (12.0f64 / 24.0 + 7.0) as f32);
+    assert_eq!(e.mem.u8(PLAYER_AT + HARDCORE_UPDATE), 0);
+    assert!(!super::super::gp::force_hardcore_needs_update(&mut e));
+    // Within 0.05 (0.04 back): JIP's kept hour stays.
+    e.mem.set_f32(B + 0x3100 + 0x30 * 3 + 0x24, 11.96);
+    advance(&mut e, 0.0);
+    assert_eq!(value(&e, 3), 12.0);
+    // Back by 2 hours: 10 + 24, so a day on (19 -> 20), the hour 10, one more midnight.
+    e.mem.set_f32(B + 0x3100 + 0x30 * 3 + 0x24, 10.0);
+    advance(&mut e, 0.0);
+    assert_eq!((value(&e, 2), value(&e, 3)), (20.0, 10.0));
+    assert_eq!(e.mem.u32(CALENDAR + 0x18), 8);
+    assert_eq!(value(&e, 4), (34.0f64 / 24.0 + 7.0) as f32);
+}
+
+/// O5's roll-over by JIP's table: the last day of a month goes to the 1st of the next; the 31st
+/// of December (month 11) to January 1st of the next year; a 28-day February has no 29th; each
+/// update past midnight counts once; a month outside 0..11 reads 31 days and rolls to January.
+#[test]
+fn o5_rolls_the_days_months_and_years() {
+    let mut e = world(true, true);
+    let roll = |e: &mut Engine, month: f32, day: f32| {
+        calendar(e, [2281.0, month, day, 23.0, 100.0, 30.0]);
+        advance(e, 0.0);
+        // 23 + 1.5 hours: past midnight once.
+        advance(e, 180.0);
+        (
+            value(e, 0),
+            value(e, 1),
+            value(e, 2),
+            e.mem.u32(CALENDAR + 0x18),
+        )
+    };
+    assert_eq!(roll(&mut e, 9.0, 19.0), (2281.0, 9.0, 20.0, 8));
+    assert_eq!(
+        roll(&mut e, 9.0, 31.0),
+        (2281.0, 10.0, 1.0, 8),
+        "October has 31"
+    );
+    assert_eq!(
+        roll(&mut e, 10.0, 30.0),
+        (2281.0, 11.0, 1.0, 8),
+        "November has 30"
+    );
+    assert_eq!(roll(&mut e, 11.0, 31.0), (2282.0, 0.0, 1.0, 8));
+    assert_eq!(roll(&mut e, 1.0, 28.0), (2281.0, 2.0, 1.0, 8));
+    assert_eq!(
+        roll(&mut e, 12.0, 31.0),
+        (2282.0, 0.0, 1.0, 8),
+        "month 12: 31 days, then the year"
+    );
+    assert_eq!(roll(&mut e, 12.0, 30.0), (2281.0, 12.0, 31.0, 8));
+    // Two midnights in one step: 23 + 25.5 hours (1530 s at scale 60).
+    calendar(&mut e, [2281.0, 9.0, 19.0, 23.0, 100.0, 60.0]);
+    advance(&mut e, 0.0);
+    advance(&mut e, 1530.0);
+    assert_eq!((value(&e, 2), value(&e, 3)), (21.0, 0.5));
+    assert_eq!(e.mem.u32(CALENDAR + 0x18), 8, "counted once per update");
+}

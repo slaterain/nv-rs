@@ -106,6 +106,14 @@ fn prepare(e: &mut Engine) {
     if !e.is_registered(0x009b_5a30) {
         e.register(0x009b_5a30, |_, _| Ret::default());
     }
+    // O5's wrap (`00867a40`, `GameTimeGlobals::Update`) when the test engine has no translation
+    // of it: a marker answer (0x5a5a).
+    if !e.is_registered(0x0086_7a40) {
+        e.register(0x0086_7a40, |_, _| Ret {
+            eax: 0x5a5a,
+            ..Ret::default()
+        });
+    }
     // Group GF: `TESNPC`'s model vtable (0x0104A1A4), whose set slot `+0x18` JIP writes (G40),
     // the two skeleton settings (0x011D2718, 0x011D3E44), and `00601c30` (G39's wrap) when the
     // test engine has no translation of it: the exe's answer, the female setting's text for a

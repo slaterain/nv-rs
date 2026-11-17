@@ -32,8 +32,8 @@
 //! `ToggleNoMovementCombat` (G126) in `crate::game_patches::gc::formulas`.
 //!
 //! `SetGameHour` sets JIP's `s_forceHCNeedsUpdate` (kept in `game_patches::gp`), which only JIP's
-//! time patch reads (O5, `UpdateTimeGlobalsHook`, not built yet): until O5 the hour changes as
-//! with JIP and O5 switched off. `MarkActivatorAshPile` sets the bit G06's tests read (#600).
+//! time patch reads (O5, `UpdateTimeGlobalsHook`, in `game_patches::gw`).
+//! `MarkActivatorAshPile` sets the bit G06's tests read (#600).
 //! The ray casts are lane G's (`havok_refs::ray_cast`); the camera casts go along the main
 //! camera's rotation column 0, as JIP hands `WorldRotate()` itself (no `+ 1`).
 //!

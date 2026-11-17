@@ -1389,6 +1389,15 @@ Built as part of JIP (in every preset once JIP answers "installed"): `ForceClima
 the force is lifted), which the sky takes in place of the one it is given at its next climate change
 (`0x63C918`); `SetCurrentClimate` to another climate lifts it.
 
+With JIP's `bGameDaysPassedFix` (on by default; `00867a40`, `GameTimeGlobals::Update` replaced): the game's
+clock keeps the hour and the days passed in double precision between frames, so `GameDaysPassed` no longer
+drifts away from the calendar over a long game (the original adds a tiny amount to a single-precision number
+every frame). A script that moves the hour by more than 3 minutes (or the game marking the days stale) makes
+the days be counted again from the hour; moving it back counts as the next day. Days, months and years roll
+on by a fixed table (no leap years, as in the original). Differences from JIP: with no player loaded the
+hardcore needs byte JIP sets is not written (JIP would write to a bad address), and a month number outside
+0 to 11 is taken to have 31 days (JIP reads past its table).
+
 Seams for group GF's row G45 (saving: temporary forms are not written): `0x8497CD` (whether `UnloadForm` goes
 on), `0x846FFB` and `0x845558` (the save's form id and changes maps' bucket counts). Until GF's handler is in,
 those places run the game's code.
