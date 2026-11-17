@@ -442,8 +442,8 @@ impl Host {
 /// [`Host::start_with`] and [`check_installation`] off Windows: the program builds on Linux and
 /// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
 /// pieces that are still Windows-only, instead of a run that would go on without them (no window
-/// drawn, no sound, the machine's answers missing) and fail somewhere less clear. The game's
-/// paths and file listings are provided (`engine_platform::host_paths`). On a processor other
+/// drawn) and fail somewhere less clear. The game's paths and file listings are provided
+/// (`engine_platform::host_paths`), and so is the sound on the speakers. On a processor other
 /// than x86-64 (Apple silicon) it also names what differs there.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
@@ -456,10 +456,9 @@ fn not_provided_on(x86_64: bool) -> Result<(), String> {
     let mut why = String::from(
         "nv-rs does not run the game on this system yet: it builds here, but these are only \
          provided on Windows so far: the game's window with its mouse and keyboard (and so \
-         anything drawn), the sound on the speakers, this machine's tables (display adapter, \
-         sound devices, folders), which are measured on Windows, the distortion sound effect's \
-         table (measured from Windows' own DLL), and code pages other than Windows' Western \
-         one (1252)",
+         anything drawn), this machine's tables (display adapter, sound devices, folders), \
+         which are measured on Windows, the distortion sound effect's table (measured from \
+         Windows' own DLL), and code pages other than Windows' Western one (1252)",
     );
     if !x86_64 {
         why.push_str(
@@ -837,7 +836,7 @@ mod tests {
             for piece in [
                 "window",
                 "mouse and keyboard",
-                "sound",
+                "sound devices",
                 "tables",
                 "distortion",
                 "code page",
@@ -847,6 +846,8 @@ mod tests {
             // The game's paths and file listings are provided off Windows now.
             assert!(!why.contains("folder names"), "{why}");
             assert!(!why.contains("file times"), "{why}");
+            // The sound on the speakers is provided everywhere (engine-platform sound_out.rs).
+            assert!(!why.contains("speakers"), "{why}");
             // The processor's own differences only off x86-64 (Apple silicon).
             assert_eq!(why.contains("x87"), !x86_64, "{why}");
             assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
