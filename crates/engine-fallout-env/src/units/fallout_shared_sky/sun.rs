@@ -1721,7 +1721,8 @@ mod tests {
         let moon = u.e.mem.alloc(0x7c);
         u.e.mem.set_f32(moon + 0x74, pos);
         u.e.mem.set_f32(moon + 0x68, z_offset);
-        u.e.mem.set_u32(u.sky + SKY_MASSER, moon);
+        // `Sky::pMasser` at +0x30 (Xbox PDB), written here by its offset, not the seam's constant.
+        u.e.mem.set_u32(u.sky + 0x30, moon);
     }
 
     /// Off (no slot, the default) the light is the exe's `(-height, distance, light height)`, at
