@@ -6054,6 +6054,18 @@ fn new_list(e: &mut Engine) -> u32 {
     }
 }
 
+/// The store of `bMenuModeButtonClicked` at `0x939258` (`MOV byte ptr [ECX+0xD54], 0`). JIP LN
+/// NVSE's G49 (JIP's own; `SafeWrite32(0x939258, 0xD54A183)`, making it `AND dword ptr
+/// [ECX+0xD54], 0`) clears the three bytes after it too, among them the state byte of its sneak
+/// shape (O14, `+0xD57`): the seam is asked with the player after the exe's store. With the
+/// word's `INSTALLED` bit clear: one load, nothing asked.
+#[inline]
+fn menu_mode_byte_seam(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0093_9258, &[this.addr()]);
+    }
+}
+
 // Translated from 00938180 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `PlayerCharacter::PlayerCharacter` (Xbox PDB): constructs the player in
 /// the 0xE50 bytes at `this` and returns it. Runs the `Actor` base
@@ -6519,6 +6531,7 @@ pub fn player_character_construct(
         e.set(this, PlayerCharacter::fPickPocketWarningTimer, timer);
         e.set(this, PlayerCharacter::pListofPercievedActors, Ptr::NULL);
         e.set(this, PlayerCharacter::bMenuModeButtonClicked, false);
+        menu_mode_byte_seam(e, this);
         e.set(this, PlayerCharacter::fMenuModeButtonTimer, 0.0);
         e.set(this, PlayerCharacter::fAmmoSwapButtonTimer, 0.0);
         e.set(this, PlayerCharacter::pIronsightsDOFInstance, Ptr::NULL);
@@ -12538,6 +12551,45 @@ mod tests {
         e.register(0x00b2_0000, |_, _| Ret::default());
         e.mem.set_u32(this.addr() + 0x68, old.addr());
         (this, old.addr())
+    }
+
+    /// JIP LN NVSE's G49 seam at `0x939258`: the constructor clears `bMenuModeButtonClicked` and
+    /// leaves the three bytes after it; with the word's `INSTALLED` bit the seam is asked with the
+    /// player after that store (a test handler clears the word as JIP's `AND dword` does); with
+    /// the word 0 or only `FIXES` it is not asked.
+    #[test]
+    fn g49_seam_after_the_menu_mode_byte() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        thread_local! {
+            static ASKED: std::cell::RefCell<Vec<(Vec<u32>, u8)>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        fn handler(e: &mut Engine, a: &[u32]) -> Option<u32> {
+            ASKED.with(|s| s.borrow_mut().push((a.to_vec(), e.mem.u8(a[0] + 0xd54))));
+            e.mem.set_u32(a[0] + 0xd54, 0);
+            Some(0)
+        }
+        for (word, asked) in [
+            (0, false),
+            (jip_patches::FIXES, false),
+            (jip_patches::INSTALLED, true),
+        ] {
+            let mut e = engine();
+            let (this, _) = constructor_world(&mut e, 0x5000);
+            e.map(0x0000_5000, 0x1000);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0093_9258), handler);
+            e.set_jip_patches(word);
+            e.mem.set_u32(this.addr() + 0xd54, 0xffff_ffff);
+            ASKED.with(|s| s.borrow_mut().clear());
+            e.call(0x0093_8180, &args![this]);
+            let seen = ASKED.with(|s| s.take());
+            if asked {
+                assert_eq!(seen, vec![(vec![this.addr()], 0)], "after the store");
+                assert_eq!(e.mem.u32(this.addr() + 0xd54), 0);
+            } else {
+                assert!(seen.is_empty(), "{word:08x}");
+                assert_eq!(e.mem.u32(this.addr() + 0xd54), 0xffff_ff00, "{word:08x}");
+            }
+        }
     }
 
     #[test]

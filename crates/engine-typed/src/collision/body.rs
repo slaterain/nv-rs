@@ -85,6 +85,22 @@ fn move_body(e: &mut Engine, body: u32, translation: u32, quaternion: u32) {
     release_lock(e);
 }
 
+/// The fixed-body test at `0xC65B5B` (motion type 5, or no Havok object: `GethkWorld`, `00c87a40`,
+/// answering non-zero ends it). JIP LN NVSE's G32 (a fix, the row `NV_JIP_GAME_PATCHES`;
+/// `SafeWrite32(0xC65B47, 0x38F)` and `SAFE_WRITE_BUF(0xC65B5B, ..)`) replaces it: no Havok object
+/// ends it, and a fixed body goes on only while the collision object's bit 6 (`+0xC`) asks for
+/// the move. The seam is asked with the collision object and the Havok object, and its answer's
+/// low byte is whether it ends. With the word's `FIXES` bit clear: one load, the exe's test.
+#[inline]
+fn fixed_body_stops(e: &mut Engine, this: u32, body: u32, object: u32) -> bool {
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        if let Some(answer) = e.site(0x00c6_5b5b, &[this, object]) {
+            return answer & 0xff != 0;
+        }
+    }
+    e.call(GET_HK_WORLD, &args![body]).u32() != 0
+}
+
 // Typed from 00c65b00
 /// `bhkCollisionObject::NitohkTransform` (`thiscall`): moves the Havok body to the node. Nothing
 /// without a node (its world data is refreshed first, `00a68bf0`) or a body; a body of motion type 5
@@ -115,7 +131,7 @@ pub fn ni_to_hk(e: &mut Engine, this: Ptr) {
     } else {
         5
     };
-    if motion_type == 5 && e.call(GET_HK_WORLD, &args![body]).u32() != 0 {
+    if motion_type == 5 && fixed_body_stops(e, this.addr(), body, object) {
         return;
     }
     if e.mem.u32(body + 8) == 0 {
