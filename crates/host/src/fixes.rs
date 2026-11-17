@@ -963,6 +963,7 @@ impl Choice {
             .filter(|v| v.is_finite())
         {
             choice.ambient_occlusion_strength = d3d9_wgpu::scene_light::clamp_strength(value);
+        }
         if let Some(value) = env("NV_NOT_BACKGROUND").filter(|v| !v.trim().is_empty()) {
             choice.not_background = value.trim() == "1";
             choice.not_background_by = Some("NV_NOT_BACKGROUND");
@@ -2121,6 +2122,8 @@ mod tests {
         assert_eq!(strength(file, &[("NV_AO_STRENGTH", "x")]), 0.9);
         let asked = Choice::from_parts(None, env_of(&[("NV_AO_STRENGTH", "0.8")])).unwrap();
         assert_eq!(asked.ambient_occlusion_strength, 0.8);
+    }
+
     /// Windows is told the game is not background work in every run and preset (vanilla, a test
     /// and a play run alike) unless turned off: `bNotBackground=0` in a launcher's play run, or
     /// `NV_NOT_BACKGROUND=0` anywhere, which wins. Its variable makes no run a test.
