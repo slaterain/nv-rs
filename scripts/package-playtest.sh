@@ -227,10 +227,21 @@ if [ "$test_build" = 1 ]; then
     source="$source (a test build, not for release: if that commit is no longer on a branch, the pull request that built it holds the source)"
 fi
 [ -n "$game" ] || note "Not checked: that no data of the game's FalloutNV.exe is in the program (packaged without the game, --game)."
+# Who built it: GitHub's run (its address and branch) or the packager's own machine.
+if [ "${GITHUB_ACTIONS:-}" = true ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
+    built="Built by GitHub Actions, run ${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-slaterain/nv-rs}/actions/runs/$GITHUB_RUN_ID, from ${GITHUB_REF:-an unknown branch}; the maintainers have never started it on this system."
+else
+    built="Built by scripts/package-playtest.sh on the packager's own machine ($(uname -sm)); the maintainers have never started it on this system."
+fi
+# What was checked: this script makes no archive unless all of it passed (the steps below).
+checked="Checked when packaged (no archive is made otherwise): only the package's own file list and file types; no trace of the build machine (its folders, user name) and no disassembler names in the program (package-check); every licence notice of the program's own and vendored crates in licenses/; one package folder in the archive holding every packaged file"
+if [ -n "$game" ]; then
+    checked="$checked; no data of the game's FalloutNV.exe in the program (package-check --game --max-run 4096)"
+fi
 {
     printf '%s\n' "nv-rs $system preview $version" "Source commit: $commit" \
         "app/nv-viewer SHA256: $sha" "Platform: $system ($triple), Cargo profile $profile" "$needs" \
-        "Built by CI or a script on that system; never started on it by the maintainers." "$source"
+        "$built" "$checked." "$source"
     [ -z "$notes" ] || printf '\n%s' "$notes"
 } >"$stage/BUILD.txt"
 
@@ -272,22 +283,27 @@ else
 fi
 # The tar first and then gzip, each checked (a tar failing inside a pipe would go unseen).
 [ ! -e "$stage.tar" ] || fail "$stage.tar already exists: move it away first"
+# A failure from here on leaves no half-made archive behind (the next run would refuse it).
+fail_archive() {
+    rm -f -- "$stage.tar" "$archive"
+    fail "$@"
+}
 # shellcheck disable=SC2086
-(cd -- "$out" && tar $owner -cf "$name.tar" "$name") || fail "the archive was not made (tar)"
-gzip -9 -n -- "$stage.tar" || fail "the archive was not compressed (gzip)"
-[ -s "$archive" ] || fail "no archive at $archive"
+(cd -- "$out" && tar $owner -cf "$name.tar" "$name") || fail_archive "the archive was not made (tar)"
+gzip -9 -n -- "$stage.tar" || fail_archive "the archive was not compressed (gzip)"
+[ -s "$archive" ] || fail_archive "no archive at $archive"
 # Every entry under the package's folder, none of Apple's metadata, no `..`.
-entries=$(tar -tzf "$archive") || fail "the archive cannot be listed"
+entries=$(tar -tzf "$archive") || fail_archive "the archive cannot be listed"
 odd=$(printf '%s\n' "$entries" | grep -v -e "^$name/" -e "^$name\$" || true)
 odd="$odd$(printf '%s\n' "$entries" | grep -e '/\._' -e '\.\./' || true)"
-[ -z "$odd" ] || fail "the archive holds entries it must not: $odd"
+[ -z "$odd" ] || fail_archive "the archive holds entries it must not: $odd"
 # And every staged file is in it: play.sh and the program first of all.
 unlisted=$(cd -- "$out" && find "$name" -type f | while IFS= read -r file; do
     printf '%s\n' "$entries" | grep -qxF -- "$file" || printf '%s ' "$file"
 done)
-[ -z "$unlisted" ] || fail "the archive lacks: $unlisted"
+[ -z "$unlisted" ] || fail_archive "the archive lacks: $unlisted"
 for file in "$name/play.sh" "$name/app/nv-viewer"; do
-    printf '%s\n' "$entries" | grep -qxF -- "$file" || fail "the archive has no $file"
+    printf '%s\n' "$entries" | grep -qxF -- "$file" || fail_archive "the archive has no $file"
 done
 (cd -- "$out" && sha256 "$name.tar.gz" >"$name.tar.gz.sha256")
 printf '%s\n' "Package: $archive" "Bytes: $(wc -c <"$archive" | tr -d ' ')" "Checksum: $archive.sha256" "Commit: $commit" "Program SHA256: $sha"

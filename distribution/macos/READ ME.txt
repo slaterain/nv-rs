@@ -5,7 +5,8 @@ PLEASE READ FIRST
 - Nobody on the project has played this build on a Mac: the maintainers have only Windows PCs.
   BUILD.txt in this folder says where this package was built, from which version of the source,
   and what was checked. On GitHub's Macs, play.sh's own tests run every night and on every change
-  to play.sh, and most of the program's unit tests every night on the project's main branch.
+  to play.sh, and the unit tests of the program's parts with macOS-specific code run every night
+  (in a job that is still allowed to fail while Apple silicon's known differences are fixed).
 - What works today: naming your game's folder, remembering it, and the check of your game's
   version (./play.sh --check). The game itself does NOT run on macOS yet: the program stops right
   after it finds your game, and says what is not provided on macOS yet. That stop is expected
