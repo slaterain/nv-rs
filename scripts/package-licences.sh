@@ -50,32 +50,35 @@ list=$1
 [ -s "$list" ] || { problem "the list of the program's crates is empty or missing: $list"; exit 1; }
 root=$(pwd -P)
 
+work=$(mktemp -d) || exit 1
+trap 'rm -rf -- "$work"' EXIT
+trap 'exit 1' HUP INT TERM
+
 # Cargo.lock's packages with a source: crates.io's own, or refused.
-packages=$(mktemp) || exit 1
+[ -f Cargo.lock ] || { problem "no Cargo.lock here (run from the repository's root)"; exit 1; }
 tr -d '\r' <Cargo.lock | awk '
     /^\[\[package\]\]/ { name = ""; version = "" }
     /^name = / { name = $3 }
     /^version = / { version = $3 }
     /^source = / { source = $3; gsub(/"/, "", name); gsub(/"/, "", version); gsub(/"/, "", source)
-        print name " " version " " source }' >"$packages"
-foreign=$(awk '$3 !~ /^registry\+/ { printf "%s %s (%s), ", $1, $2, $3 }' "$packages")
+        print name " " version " " source }' >"$work/packages"
+foreign=$(awk '$3 !~ /^registry\+/ { printf "%s %s (%s), ", $1, $2, $3 }' "$work/packages")
 [ -z "$foreign" ] || problem "Cargo.lock has packages that are not from crates.io (from Git or another source), and there is no rule yet for their licences: $foreign"
+awk '$3 ~ /^registry\+/ { print $1 " " $2 }' "$work/packages" | sort -u >"$work/registry"
+# No crates.io package at all is a lock file read wrongly (or not the repository's), not a pass.
+[ -s "$work/registry" ] || problem "no crates.io package read from Cargo.lock"
 
 # (grep reads the notices from a file: fed through a pipe, grep -q stops reading at the first match
 # and the writer fails with "Broken pipe".)
 if [ -f distribution/THIRD-PARTY-NOTICES.txt ]; then
-    noticed=$(mktemp) || exit 1
-    tr -d '\r' <distribution/THIRD-PARTY-NOTICES.txt >"$noticed"
-    unnoticed=$(awk '$3 ~ /^registry\+/ { print $1 " " $2 }' "$packages" | sort -u |
-        while IFS= read -r package; do
-            grep -qxF -e "$package" "$noticed" || printf '%s, ' "$package"
-        done)
-    rm -f -- "$noticed"
+    tr -d '\r' <distribution/THIRD-PARTY-NOTICES.txt >"$work/noticed"
+    unnoticed=$(while IFS= read -r package; do
+        grep -qxF -e "$package" "$work/noticed" || printf '%s, ' "$package"
+    done <"$work/registry")
     [ -z "$unnoticed" ] || problem "THIRD-PARTY-NOTICES.txt has no entry for: $unnoticed refresh it (and distribution/licenses) before packaging"
 else
     problem "distribution/THIRD-PARTY-NOTICES.txt is missing: the dependency notices must be assembled before packaging"
 fi
-rm -f -- "$packages"
 
 missing=$(crates_of "$list" | while IFS= read -r crate; do
     [ -d "distribution/licenses/$crate" ] || printf '%s ' "$crate"
@@ -92,16 +95,18 @@ if [ -n "$for_folders" ]; then
         rel=${dir#"$root"/}
         [ "$rel" != "$dir" ] || printf '%s ' "$dir"
     done)
-    listed=$(mktemp) || exit 1
-    tr -d '\r' <distribution/notices.txt >"$listed"
-    unlisted=$(printf '%s\n' "$for_folders" | while IFS= read -r dir; do
-        rel=${dir#"$root"/}
-        [ "$rel" != "$dir" ] || continue
-        git ls-files -- "$rel/LICENSE*" "$rel/NOTICE*" "$rel/COPYING*" | while IFS= read -r file; do
-            grep -q -e "^$file$tab" "$listed" || printf '%s ' "$file"
-        done
-    done)
-    rm -f -- "$listed"
+    if [ -f distribution/notices.txt ]; then
+        tr -d '\r' <distribution/notices.txt >"$work/listed"
+        unlisted=$(printf '%s\n' "$for_folders" | while IFS= read -r dir; do
+            rel=${dir#"$root"/}
+            [ "$rel" != "$dir" ] || continue
+            git ls-files -- "$rel/LICENSE*" "$rel/NOTICE*" "$rel/COPYING*" | while IFS= read -r file; do
+                grep -q -e "^$file$tab" "$work/listed" || printf '%s ' "$file"
+            done
+        done)
+    else
+        problem "distribution/notices.txt is missing (the notices of the repository's own crates)"
+    fi
 fi
 [ -z "$outside" ] || problem "path crates outside the repository (no rule yet for their licences): $outside"
 [ -z "$unlisted" ] || problem "these licence or notice files of the program's crates are not in distribution/notices.txt (add them there and to LEGAL.md): $unlisted"

@@ -3,10 +3,12 @@
 # made-up repository: cargo tree's list read the way the packages read it (its "(*)" and
 # "(proc-macro)" marks), and each check failing on what it is for.
 #
-#   sh scripts/test-package-licences.sh
+#   SH=dash sh scripts/test-package-licences.sh     (SH: the shell that runs the checks; default sh)
 #
-# Needs git and a POSIX shell; no Rust build. Run by the play.sh workflow on Linux and macOS.
+# Needs git and a POSIX shell; no Rust build. Run by the play.sh workflow on Linux (dash, bash,
+# BusyBox) and macOS (/bin/sh).
 set -eu
+SH=${SH:-sh}
 
 script=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)/package-licences.sh
 [ -f "$script" ] || { echo "test-package-licences.sh: no $script" >&2; exit 1; }
@@ -31,9 +33,10 @@ bad() {
 make_repo() {
     rm -rf -- "$repo"
     mkdir -p -- "$repo/distribution/licenses/a-1.0" "$repo/distribution/licenses/b-2.0" \
-        "$repo/app" "$repo/crates/own" "$repo/crates/pm" "$repo/crates/other" "$repo/vendor/v"
+        "$repo/distribution/licenses/c-0.38.0+1.3.281" "$repo/app" "$repo/crates/own" "$repo/crates/pm" "$repo/crates/other" "$repo/vendor/v"
     printf 'MIT\n' >"$repo/distribution/licenses/a-1.0/LICENSE-MIT"
     printf 'MIT\n' >"$repo/distribution/licenses/b-2.0/LICENSE-MIT"
+    printf 'MIT\n' >"$repo/distribution/licenses/c-0.38.0+1.3.281/LICENSE-MIT"
     printf 'own notice\n' >"$repo/crates/own/NOTICE"
     printf 'vendored\n' >"$repo/vendor/v/LICENSE.MIT"
     printf 'not the program\n' >"$repo/crates/other/LICENSE"
@@ -58,8 +61,14 @@ name = "b"
 version = "2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "00"
+
+[[package]]
+name = "c"
+version = "0.38.0+1.3.281"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "00"
 EOF
-    printf 'NOTICES\n\na 1.0\n  License expression: MIT\n\nb 2.0\n  License expression: MIT\n' \
+    printf 'NOTICES\n\na 1.0\n  License expression: MIT\n\nb 2.0\n  License expression: MIT\n\nc 0.38.0+1.3.281\n' \
         >"$repo/distribution/THIRD-PARTY-NOTICES.txt"
     printf '# the notices\ncrates/own/NOTICE\tNOTICE-own\r\nvendor/v/LICENSE.MIT\tLICENSE-v.MIT\n' \
         >"$repo/distribution/notices.txt"
@@ -68,6 +77,8 @@ app v0.1.0 ($repo/app)
 a v1.0
 own v0.1.0 ($repo/crates/own)
 b v2.0 (proc-macro)
+c v0.38.0+1.3.281
+b v2.0 (proc-macro) (*)
 a v1.0 (*)
 own v0.1.0 ($repo/crates/own) (*)
 pm v0.1.0 ($repo/crates/pm) (proc-macro)
@@ -80,7 +91,7 @@ EOF
 # Runs the checks in the repository: status and stderr.
 run() {
     status=0
-    (cd -- "$repo" && sh "$script" crates.txt) >"$tmp/out" 2>"$tmp/err" || status=$?
+    (cd -- "$repo" && $SH "$script" crates.txt) >"$tmp/out" 2>"$tmp/err" || status=$?
 }
 
 expect_fail() { # NAME TEXT: the checks fail, naming TEXT
@@ -94,9 +105,11 @@ expect_fail() { # NAME TEXT: the checks fail, naming TEXT
 
 # The two lists, read from cargo tree's lines.
 make_repo
-got=$(cd -- "$repo" && sh "$script" --crates crates.txt | tr '\n' ' ')
-[ "$got" = "a-1.0 b-2.0 " ] && ok "crates.io crates: a-1.0 b-2.0 (marks taken off)" || bad "crates.io crates: got '$got'"
-got=$(cd -- "$repo" && sh "$script" --folders crates.txt | tr '\n' ' ')
+got=$(cd -- "$repo" && $SH "$script" --crates crates.txt | tr '\n' ' ')
+want="a-1.0 b-2.0 c-0.38.0+1.3.281 "
+[ "$got" = "$want" ] && ok "crates.io crates: $want(marks, \"(proc-macro) (*)\" too, taken off; build metadata kept)" ||
+    bad "crates.io crates: got '$got', want '$want'"
+got=$(cd -- "$repo" && $SH "$script" --folders crates.txt | tr '\n' ' ')
 want="$repo/app $repo/crates/own $repo/crates/pm $repo/vendor/v "
 [ "$got" = "$want" ] && ok "path crates' folders: app, crates/own, crates/pm, vendor/v (no \"*\", no \"proc-macro\")" ||
     bad "path crates' folders: got '$got', want '$want'"
@@ -137,6 +150,18 @@ expect_fail "a path crate outside the repository fails" "path crates outside the
 make_repo
 : >"$repo/crates.txt"
 expect_fail "an empty list of crates fails" "the list of the program's crates is empty or missing"
+
+make_repo
+printf 'version = 4\n' >"$repo/Cargo.lock"
+expect_fail "a Cargo.lock with no crates.io package fails" "no crates.io package read from Cargo.lock"
+
+make_repo
+rm -f -- "$repo/distribution/notices.txt"
+expect_fail "a missing notices.txt fails" "distribution/notices.txt is missing"
+
+make_repo
+rm -rf -- "$repo/distribution/licenses/c-0.38.0+1.3.281"
+expect_fail "a build-metadata crate's licence folder removed fails" "no licence folder in distribution/licenses for: c-0.38.0+1.3.281"
 
 printf 'test-package-licences.sh: %s passed, %s failed\n' "$passed" "$failed"
 [ "$failed" = 0 ]

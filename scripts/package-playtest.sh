@@ -165,7 +165,9 @@ git ls-files -- distribution/licenses | while IFS= read -r file; do
     mkdir -p -- "$stage/licenses/$(dirname -- "$rel")"
     cp -- "$file" "$stage/licenses/$rel"
 done
-# The notices of code that is not a crates.io crate (distribution/notices.txt).
+# The notices of code that is not a crates.io crate (distribution/notices.txt: a file, a tab, its
+# name in licenses/). scripts/test-package-playtest.sh runs this whole script on stand-in programs.
+tab=$(printf '\t')
 grep -v '^#' distribution/notices.txt | while IFS="$tab" read -r file named; do
     [ -n "$file" ] || continue
     cp -- "$file" "$stage/licenses/$named" || fail "the notice $file is missing"

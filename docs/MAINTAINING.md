@@ -127,7 +127,9 @@ plainly that they cannot start it. Every text that goes out with them says so.
    publishes by itself.
 
 `scripts/check-unix-package-test.ps1` tests the check script on made-up packages (no game file): run
-it after changing either script.
+it after changing either script. `scripts/test-package-licences.sh` (the licence checks, on made-up
+lists) and `scripts/test-package-playtest.sh` (scripts/package-playtest.sh whole on this checkout,
+with stand-in programs: no build) run in the play.sh workflow on Linux and macOS.
 
 The first hand-started run after this workflow is merged is its first run with the release
 profile from scratch on both runners (the earlier proving runs used the quick play profile).
