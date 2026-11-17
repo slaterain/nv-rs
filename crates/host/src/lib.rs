@@ -308,7 +308,7 @@ impl Host {
         // each frame only while wgpu still draws (`wgpu_draws`: false once the real Direct3D 9 took
         // over at the device's making, when no sun shadows are drawn).
         #[cfg(windows)]
-        if light_from_sky_wanted(&choice, engine_platform::d3d9real::backends()) {
+        if light_from_sky_wanted(choice, engine_platform::d3d9real::backends()) {
             engine::sky_sun::want_light_from_sky(
                 &mut engine,
                 engine_platform::d3d9real::wgpu_draws,

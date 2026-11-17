@@ -1064,7 +1064,7 @@ pub struct LightFromSky {
 impl LightFromSky {
     /// Whether the light is turned now: the host's `drawing` answer (on when none was given).
     fn on(&self) -> bool {
-        self.drawing.get().is_none_or(|drawing| drawing())
+        self.drawing.get().map_or(true, |drawing| drawing())
     }
 }
 
