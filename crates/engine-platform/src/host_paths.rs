@@ -682,6 +682,32 @@ pub fn host_folders(game: &str) -> Vec<PathBuf> {
     all.into_iter().map(PathBuf::from).collect()
 }
 
+/// The relative path `rel` (this system's text, as [`host_path`] gives a relative path) under
+/// this system's folder `folder`, each part of `rel` found in its folder without case as
+/// [`host_path`] finds the game's (a folder holding two names for one part said once in the
+/// log); parts that are not there keep their names. The port's own folders (mods' kept files,
+/// `mod_files.rs`) are named by the game in any case, as Windows would find them.
+pub fn host_path_under(folder: &Path, rel: &Path) -> PathBuf {
+    let joined = folder.join(rel);
+    let Some(text) = joined.to_str() else {
+        return joined;
+    };
+    if !text.starts_with('/') {
+        return joined;
+    }
+    let mut exists = |p: &str| std::fs::symlink_metadata(p).is_ok();
+    let mut matches = folder_matches;
+    match resolve(text, &mut Look::new(&mut exists, &mut matches)) {
+        Ok((found, several)) => {
+            for line in several_lines(several) {
+                eprintln!("{line}");
+            }
+            PathBuf::from(found)
+        }
+        Err(_) => joined,
+    }
+}
+
 /// The name of the file or folder `path` (this system's, as [`host_path`] made it) as its folder
 /// holds it: the name itself when the folder holds it so (Linux, where [`host_path`] took it
 /// from the folder), else the first in byte order that matches it without case (macOS's file
