@@ -388,16 +388,10 @@ fn real_folders(path: &[u8]) -> Vec<std::path::PathBuf> {
     super::host_paths::host_folders(&game_text(path))
 }
 
-/// This system's path of the game's full path `path` ([`real_path`]): for host code that opens
-/// a file the game names (a plugin's cell tables, `host::cell_offsets`).
-pub fn host_path(path: &[u8]) -> std::path::PathBuf {
-    real_path(path)
-}
-
 /// The ANSI code page the game's `...A` calls turn names with: on Windows the system's
-/// (`CP_ACP`: `MultiByteToWideChar`, `WideCharToMultiByte`, `IsDBCSLeadByte`); elsewhere a
-/// page that holds ASCII only (a name's other characters become `?`, as a page answers a
-/// character it cannot hold; bytes above 0x7F read as UTF-8). Tests put a stand-in page of their
+/// (`CP_ACP`: `MultiByteToWideChar`, `WideCharToMultiByte`, `IsDBCSLeadByte`); elsewhere code
+/// page 1252, Windows' Western page, as Wine's for an English or unset locale, both ways by
+/// Windows' own measured tables (`system` off Windows). Tests put a stand-in page of their
 /// own on their thread (`StandIn`: 1252, 932 and 65001 tables), so the name, order, overflow and
 /// alias rules run on every platform; the game never does.
 mod code_page {
@@ -565,27 +559,92 @@ mod code_page {
         }
     }
 
+    /// Off Windows the game's code page is 1252, Windows' Western page: Wine's for a Unix locale
+    /// of English or none (Wine 11.22, `dlls/ntdll/unix/env.c` `unix_to_win_locale`, lines
+    /// 638-660: `C` and `POSIX` are `en-US`, whose ANSI page is 1252). Other pages are not
+    /// provided. Both directions are Windows' own, measured (`cp1252_measured.tsv`: every byte
+    /// above 0x7F as `MultiByteToWideChar` turns it, and every character `WideCharToMultiByte`
+    /// gives a byte for, its best fit included; any other is `?`), so a name the listing gives
+    /// opens by the same bytes, as on Windows.
     #[cfg(not(windows))]
     mod system {
-        pub fn to_wide(bytes: &[u8]) -> Vec<u16> {
-            String::from_utf8_lossy(bytes).encode_utf16().collect()
+        pub use super::cp1252::{to_ansi, to_wide};
+
+        /// 1252 is a single-byte page.
+        pub fn char_len(_: &[u8]) -> usize {
+            1
+        }
+    }
+
+    /// Code page 1252 by Windows' measured tables (off Windows the game's page, [`system`];
+    /// on Windows compiled for the test that holds it against Windows' own conversion).
+    #[cfg(any(not(windows), test))]
+    pub mod cp1252 {
+        use std::collections::HashMap;
+
+        /// The measured table: byte 0x80..0xFF to its unit, and unit to byte.
+        struct Tables {
+            wide: [u16; 128],
+            ansi: HashMap<u16, u8>,
         }
 
-        pub fn to_ansi(units: &[u16]) -> Vec<u8> {
-            char::decode_utf16(units.iter().copied())
-                .map(|c| match c {
-                    Ok(c) if c.is_ascii() => c as u8,
-                    _ => b'?',
+        fn tables() -> &'static Tables {
+            static TABLES: std::sync::OnceLock<Tables> = std::sync::OnceLock::new();
+            TABLES.get_or_init(|| {
+                let mut t = Tables {
+                    wide: [0; 128],
+                    ansi: HashMap::new(),
+                };
+                for line in include_str!("cp1252_measured.tsv").lines() {
+                    let mut cols = line.split('\t');
+                    let (Some(kind), Some(a), Some(b)) = (cols.next(), cols.next(), cols.next())
+                    else {
+                        continue;
+                    };
+                    let hex = |s: &str| u32::from_str_radix(s, 16).expect("the table's hex");
+                    match kind {
+                        "w" => t.wide[hex(a) as usize - 0x80] = hex(b) as u16,
+                        "a" => {
+                            t.ansi.insert(hex(a) as u16, hex(b) as u8);
+                        }
+                        _ => {}
+                    }
+                }
+                t
+            })
+        }
+
+        pub fn to_wide(bytes: &[u8]) -> Vec<u16> {
+            let t = tables();
+            bytes
+                .iter()
+                .map(|&b| {
+                    if b < 0x80 {
+                        u16::from(b)
+                    } else {
+                        t.wide[usize::from(b - 0x80)]
+                    }
                 })
                 .collect()
         }
 
-        pub fn char_len(bytes: &[u8]) -> usize {
-            super::utf8_len(bytes[0])
+        pub fn to_ansi(units: &[u16]) -> Vec<u8> {
+            let t = tables();
+            char::decode_utf16(units.iter().copied())
+                .map(|c| match c.map(u32::from) {
+                    Ok(c) if c < 0x80 => c as u8,
+                    Ok(c) => u16::try_from(c)
+                        .ok()
+                        .and_then(|u| t.ansi.get(&u).copied())
+                        .unwrap_or(b'?'),
+                    Err(_) => b'?',
+                })
+                .collect()
         }
     }
 
     /// The length of the UTF-8 sequence a byte starts (1 for a byte that starts none).
+    #[cfg(any(windows, test))]
     pub fn utf8_len(b: u8) -> usize {
         match b {
             0xc0..=0xdf => 2,
@@ -664,8 +723,10 @@ pub(crate) fn ntfs_key(units: &[u16]) -> Vec<u16> {
         .collect()
 }
 
-/// The host path of `path`, a path as the game's ANSI calls carry it ([`real_path`]): for the
-/// mod files folder ([`super::mod_files`]), which keeps a mod's names as the game passes them.
+/// The host path of `path`, a path as the game's ANSI calls carry it ([`real_path`]; off Windows
+/// this system's path on drive Z:, `super::host_paths`): for the mod files folder
+/// ([`super::mod_files`]), which keeps a mod's names as the game passes them, and for host code
+/// that opens a file the game names (a plugin's cell tables, `host::cell_offsets`).
 pub fn host_path(path: &[u8]) -> std::path::PathBuf {
     real_path(path)
 }
@@ -1138,6 +1199,13 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
             .kernel
             .insert(KernelObject::FindFile(Opaque::new(Search::default())));
     }
+    // Off Windows a link by what it links to, one whose target is gone not found ([`followed`],
+    // as Wine).
+    #[cfg(not(windows))]
+    let (own, link_to_folder) = match followed(&real) {
+        Ok((meta, folder)) => (Ok(meta), folder),
+        Err(err) => (Err(err), false),
+    };
     let Ok(meta) = own else {
         return fail(e, ERROR_FILE_NOT_FOUND);
     };
@@ -1161,6 +1229,10 @@ pub fn find_first_file_a(e: &mut Engine, name: Ptr, data: Ptr) -> u32 {
         .unwrap_or(wanted);
     if let Err(code) = write_find_data(e, data, &meta, &stored, &shown) {
         return fail(e, code);
+    }
+    #[cfg(not(windows))]
+    if link_to_folder {
+        mark_link_to_folder(e, data);
     }
     e.kernel
         .insert(KernelObject::FindFile(Opaque::new(Search::default())))
@@ -1282,6 +1354,83 @@ fn filetime(t: std::time::SystemTime) -> u64 {
                 .saturating_mul(TICKS_PER_SECOND)
                 .saturating_add(u64::from(d.subsec_nanos().div_ceil(100)));
             UNIX_EPOCH_TICKS.saturating_sub(whole)
+        }
+    }
+}
+
+/// Code page 1252 off Windows: Windows' measured tables, both ways.
+#[cfg(test)]
+mod tests_cp1252 {
+    use super::code_page::cp1252::{to_ansi, to_wide};
+
+    #[test]
+    fn code_page_1252_converts_as_windows_does() {
+        assert_eq!(
+            to_wide(b"Caf\xe9 \x80\x81\x9f"),
+            [0x43, 0x61, 0x66, 0xe9, 0x20, 0x20ac, 0x81, 0x178]
+        );
+        // Every byte comes back as itself.
+        let all: Vec<u8> = (0..=0xffu8).collect();
+        assert_eq!(to_ansi(&to_wide(&all)), all);
+        // Best fit where the page has a near character, `?` where it has none (measured:
+        // `łodz.txt` is `lodz.txt`, `Жuk.txt` `?uk.txt`, `日本.txt` `??.txt`).
+        let units = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(to_ansi(&units("\u{142}odz.txt")), b"lodz.txt");
+        assert_eq!(to_ansi(&units("\u{416}uk.txt")), b"?uk.txt");
+        assert_eq!(to_ansi(&units("\u{65e5}\u{672c}.txt")), b"??.txt");
+        assert_eq!(to_ansi(&units("Caf\u{e9}.esp")), b"Caf\xe9.esp");
+        // A character outside the first 65,536 (two units) is one `?`; a lone half too.
+        assert_eq!(to_ansi(&units("\u{1f600}x")), b"?x");
+        assert_eq!(to_ansi(&[0xd800, 0x78]), b"?x");
+    }
+
+    /// The table is Windows' own: every byte as `MultiByteToWideChar(1252)` turns it, and every
+    /// unit of the first 65,536 as `WideCharToMultiByte(1252)` turns it.
+    #[cfg(windows)]
+    #[test]
+    fn the_measured_1252_table_is_windows_own() {
+        extern "system" {
+            fn MultiByteToWideChar(
+                page: u32,
+                flags: u32,
+                text: *const u8,
+                len: i32,
+                out: *mut u16,
+                cap: i32,
+            ) -> i32;
+            fn WideCharToMultiByte(
+                page: u32,
+                flags: u32,
+                text: *const u16,
+                len: i32,
+                out: *mut u8,
+                cap: i32,
+                default: *const u8,
+                used: *mut i32,
+            ) -> i32;
+        }
+        for b in 0x80..=0xffu8 {
+            let mut out = [0u16; 2];
+            // SAFETY: one byte in, room for two units out.
+            let n = unsafe { MultiByteToWideChar(1252, 0, &b, 1, out.as_mut_ptr(), 2) };
+            assert_eq!(to_wide(&[b]), out[..n as usize], "{b:#x}");
+        }
+        for u in (0x80..=0xffffu16).filter(|u| !(0xd800..=0xdfff).contains(u)) {
+            let mut out = [0u8; 4];
+            // SAFETY: one unit in, room for four bytes out; no default character.
+            let n = unsafe {
+                WideCharToMultiByte(
+                    1252,
+                    0,
+                    &u,
+                    1,
+                    out.as_mut_ptr(),
+                    4,
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(to_ansi(&[u]), out[..n as usize], "{u:#x}");
         }
     }
 }
@@ -1901,8 +2050,8 @@ fn write_listed(
 /// Writes a found entry as `FindFirstFileA` does, `cAlternateFileName` (+0x130, 14 bytes) its
 /// short name and a zero byte. A player's entry is written as the directory listed it (no look
 /// at the file behind it: a link whose target is gone is described as the link it is);
-/// elsewhere than on Windows from its own metadata (`symlink_metadata`), which stops the run
-/// there for the times ([`write_find_data`]); one that went away since it was listed answers
+/// elsewhere than on Windows from its metadata, a link's by what it links to ([`followed`],
+/// as Wine); one that went away since it was listed answers
 /// `ERROR_FILE_NOT_FOUND`. A name that does not fit answers `ERROR_MORE_DATA` ([`write_names`]).
 fn write_found(e: &mut Engine, data: Ptr, found: &Found, shown: &str) -> Result<(), u32> {
     match found {
@@ -1915,8 +2064,16 @@ fn write_found(e: &mut Engine, data: Ptr, found: &Found, shown: &str) -> Result<
         Found::Disk {
             path, name, short, ..
         } => {
+            #[cfg(windows)]
             let meta = std::fs::symlink_metadata(path).map_err(|_| ERROR_FILE_NOT_FOUND)?;
+            // Off Windows a link by what it links to ([`followed`]).
+            #[cfg(not(windows))]
+            let (meta, link_to_folder) = followed(path).map_err(|_| ERROR_FILE_NOT_FOUND)?;
             write_find_data(e, data, &meta, name, shown)?;
+            #[cfg(not(windows))]
+            if link_to_folder {
+                mark_link_to_folder(e, data);
+            }
             write_names(e, data.addr(), &ansi_bytes(name), &ansi_bytes(short))
         }
         Found::Run(entry) => write_entry(e, data, entry, shown),
@@ -2029,10 +2186,35 @@ fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<V
         .collect())
 }
 
+/// The metadata of the entry `path` off Windows as Wine describes it (Wine 11.22,
+/// `dlls/ntdll/unix/file.c` `get_file_info`, lines 1464-1486): a symbolic link by what it
+/// links to (attributes, size, times), and `true` for a link to a folder, which Wine also marks
+/// `FILE_ATTRIBUTE_REPARSE_POINT`. A link whose target is gone answers an error, and Wine's
+/// listing leaves such an entry out (`get_dir_data_entry`, lines 2143-2147: "file no longer
+/// exists"); so do [`listing_of`] and the one-name search here.
+#[cfg(not(windows))]
+fn followed(path: &std::path::Path) -> std::io::Result<(std::fs::Metadata, bool)> {
+    let own = std::fs::symlink_metadata(path)?;
+    if !own.file_type().is_symlink() {
+        return Ok((own, false));
+    }
+    let target = std::fs::metadata(path)?;
+    let folder = target.is_dir();
+    Ok((target, folder))
+}
+
+/// Off Windows, a `WIN32_FIND_DATAA` at `data` written for a link to a folder ([`followed`]):
+/// its attributes also `FILE_ATTRIBUTE_REPARSE_POINT`, as Wine gives them.
+#[cfg(not(windows))]
+fn mark_link_to_folder(e: &mut Engine, data: Ptr) {
+    let attributes = e.mem.u32(data.addr());
+    e.mem
+        .set_u32(data.addr(), attributes | FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
 /// The entries of `directory` that `pattern` finds, elsewhere than on Windows: matched with
 /// [`search_finds`] and ordered as NTFS orders a folder ([`order_key`]: for ASCII the measured
-/// upper-case order); no short names; names in the code page ([`host_name_text`]: outside tests a
-/// character outside ASCII as `?`).
+/// upper-case order); no short names; names in the code page ([`host_name_text`]).
 #[cfg(all(not(windows), test))]
 fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
     listing_of(&[directory.to_path_buf()], pattern, shown)
@@ -2093,6 +2275,11 @@ fn listing_of(
                 }
                 continue;
             }
+            // A link is described by what it links to ([`followed`]); one whose target is gone
+            // is left out, as Wine leaves it out.
+            let Ok((target, _)) = followed(&entry.path()) else {
+                continue;
+            };
             let units = host_units(&entry.file_name());
             let key = ntfs_key(&units);
             if names_before.contains(&key) {
@@ -2103,7 +2290,7 @@ fn listing_of(
             if search_finds(pattern, &name, shown) {
                 found.push(Found::Disk {
                     path: entry.path(),
-                    directory: entry.file_type().is_ok_and(|t| t.is_dir()),
+                    directory: target.is_dir(),
                     name,
                     short: String::new(),
                     listed: None,
@@ -2168,7 +2355,8 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
     #[cfg(not(windows))]
     {
         let real = real_path(path);
-        let meta = std::fs::metadata(&real).ok()?;
+        // A link by what it links to, as the listing describes it ([`followed`], as Wine).
+        let (meta, link_to_folder) = followed(&real).ok()?;
         let time = |t: std::io::Result<std::time::SystemTime>| t.ok().map(filetime);
         // The name as the folder holds it (on a file system that ignores case, not the game's
         // spelling), as the search answers it.
@@ -2179,7 +2367,9 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
         Some(Entry {
             name,
             short: Some(String::new()),
-            attributes: if meta.is_dir() {
+            attributes: if link_to_folder {
+                FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT
+            } else if meta.is_dir() {
                 FILE_ATTRIBUTE_DIRECTORY
             } else {
                 FILE_ATTRIBUTE_ARCHIVE
@@ -3755,6 +3945,8 @@ mod tests_player_files {
             "c.esp.",
             "d.esp ",
             "NUL",
+            "a?b.esp",
+            "a*b.esp",
             "g.esp",
         ] {
             std::fs::write(dir.join(held), held.as_bytes()).unwrap();
@@ -3764,7 +3956,7 @@ mod tests_player_files {
         let names = listed(&mut e, &format!(r"{game}\*"));
         assert_eq!(names, [b".".to_vec(), b"..".to_vec(), b"g.esp".to_vec()]);
         let name = e.mem.alloc(0x400);
-        for spelled in ["Mod: Part 2.esp", "c.esp.", "d.esp "] {
+        for spelled in ["Mod: Part 2.esp", "c.esp.", "d.esp ", "a?b.esp"] {
             e.mem
                 .set_cstr(name, format!(r"{game}\{spelled}").as_bytes());
             let h = create_file_a(
@@ -3779,6 +3971,135 @@ mod tests_player_files {
             );
             assert_eq!(h, INVALID_HANDLE_VALUE, "{spelled:?}");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux and macOS: a name outside ASCII (UTF-8 on the disk) is listed in code page 1252's
+    /// bytes, and those bytes open it, as on Windows.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_name_outside_ascii_is_listed_and_opened_by_its_code_page_bytes() {
+        let dir = std::env::temp_dir().join(format!("nv-rs-cp1252-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Caf\u{e9}.esp"), b"cafe").unwrap();
+        let game = engine_core::exe::game_view(&dir.to_string_lossy());
+        let mut e = Engine::new();
+        let names = listed(&mut e, &format!(r"{game}\*.esp"));
+        assert_eq!(names, [b"Caf\xe9.esp".to_vec()]);
+        let name = e.mem.alloc(0x400);
+        let mut path = format!(r"{game}\").into_bytes();
+        path.extend_from_slice(&names[0]);
+        e.mem.set_cstr(name, &path);
+        let h = create_file_a(
+            &mut e,
+            Ptr::new(name),
+            GENERIC_READ,
+            1,
+            0,
+            OPEN_EXISTING,
+            0x80,
+            0,
+        );
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        let buf = e.mem.alloc(16);
+        let got = e.mem.alloc(4);
+        assert_eq!(read_file(&mut e, h, Ptr::new(buf), 16, Ptr::new(got), 0), 1);
+        assert_eq!(e.mem.bytes(buf, e.mem.u32(got)), b"cafe".to_vec());
+        super::super::close_handle(&mut e, h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux and macOS: a symbolic link is described by what it links to, as Wine does: a link
+    /// to a file with the file's size and times, a link to a folder as a folder (and a reparse
+    /// point); a link whose target is gone is left out. The listing, the one-name search and the
+    /// run's record of the file agree.
+    #[cfg(unix)]
+    #[test]
+    fn links_are_described_by_what_they_link_to() {
+        let dir = std::env::temp_dir().join(format!("nv-rs-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Mods").join("sub")).unwrap();
+        let data = dir.join("Data");
+        std::fs::create_dir_all(&data).unwrap();
+        let plugin = dir.join("Mods").join("real.esp");
+        std::fs::write(&plugin, b"plugin").unwrap();
+        let then = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_500_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&plugin)
+            .unwrap()
+            .set_modified(then)
+            .unwrap();
+        std::os::unix::fs::symlink(&plugin, data.join("linked.esp")).unwrap();
+        std::os::unix::fs::symlink(dir.join("Mods").join("sub"), data.join("Textures")).unwrap();
+        std::os::unix::fs::symlink(dir.join("gone.esp"), data.join("dangling.esp")).unwrap();
+        let game = engine_core::exe::game_view(&dir.to_string_lossy());
+        let mut e = Engine::new();
+        let pattern = e.mem.alloc(0x400);
+        e.mem
+            .set_cstr(pattern, format!(r"{game}\Data\*").as_bytes());
+        let found_at = e.mem.alloc(0x140);
+        let h = find_first_file_a(&mut e, Ptr::new(pattern), Ptr::new(found_at));
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        let mut entries = Vec::new();
+        loop {
+            entries.push((
+                e.mem.cstr(found_at + 0x2c),
+                e.mem.u32(found_at),
+                e.mem.u32(found_at + 0x20),
+                u64::from(e.mem.u32(found_at + 0x14))
+                    | (u64::from(e.mem.u32(found_at + 0x18)) << 32),
+            ));
+            if find_next_file_a(&mut e, h, Ptr::new(found_at)) == 0 {
+                break;
+            }
+        }
+        find_close(&mut e, h);
+        let names: Vec<&[u8]> = entries.iter().map(|x| x.0.as_slice()).collect();
+        assert_eq!(names, [b".".as_slice(), b"..", b"linked.esp", b"Textures"]);
+        let then_ticks = filetime(then);
+        assert_eq!(
+            entries[2].1, FILE_ATTRIBUTE_ARCHIVE,
+            "a link to a file is the file"
+        );
+        assert_eq!((entries[2].2, entries[2].3), (6, then_ticks));
+        assert_eq!(
+            entries[3].1,
+            FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT
+        );
+        // The one-name search answers the same; a link whose target is gone is not found.
+        e.mem
+            .set_cstr(pattern, format!(r"{game}\Data\LINKED.ESP").as_bytes());
+        let h = find_first_file_a(&mut e, Ptr::new(pattern), Ptr::new(found_at));
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.mem.u32(found_at + 0x20), 6);
+        find_close(&mut e, h);
+        e.mem
+            .set_cstr(pattern, format!(r"{game}\Data\textures").as_bytes());
+        let h = find_first_file_a(&mut e, Ptr::new(pattern), Ptr::new(found_at));
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(
+            e.mem.u32(found_at),
+            FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT
+        );
+        find_close(&mut e, h);
+        e.mem
+            .set_cstr(pattern, format!(r"{game}\Data\dangling.esp").as_bytes());
+        let h = find_first_file_a(&mut e, Ptr::new(pattern), Ptr::new(found_at));
+        assert_eq!(h, INVALID_HANDLE_VALUE);
+        assert_eq!(e.kernel.last_error, ERROR_FILE_NOT_FOUND);
+        // The run's record of a player's file agrees with the listing.
+        let entry = player_entry(format!(r"{game}\Data\linked.esp").as_bytes()).unwrap();
+        assert_eq!(
+            (entry.attributes, entry.size, entry.written),
+            (FILE_ATTRIBUTE_ARCHIVE, 6, then_ticks)
+        );
+        let folder = player_entry(format!(r"{game}\Data\Textures").as_bytes()).unwrap();
+        assert_eq!(
+            folder.attributes,
+            FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -5485,8 +5806,7 @@ mod tests_code_pages {
     /// whose target is gone): listed in Windows' order with its names in the code page
     /// (`é` as E9, `ł` best fit to `l`, `Ж` and `日本` as `?`). On Windows also through
     /// `FindFirstFileA`/`FindNextFileA`; elsewhere through the listing (file times are only
-    /// provided on Windows), and with the system's page there each character outside ASCII is `?`
-    /// in the same order.
+    /// provided on Windows), and with the system's page there (1252 off Windows) the same.
     #[test]
     fn the_measured_folder_lists_in_windows_order() {
         let dir = scratch("order");
@@ -5534,6 +5854,7 @@ mod tests_code_pages {
                 assert_eq!(got, want);
             }
         }
+        // Off Windows the system's page is 1252 itself (measured from Windows, best fit too).
         #[cfg(not(windows))]
         {
             let names: Vec<Vec<u8>> = listing(&dir, b"*", "test")
@@ -5541,17 +5862,7 @@ mod tests_code_pages {
                 .iter()
                 .map(|f| ansi_bytes(f.name()))
                 .collect();
-            let system: [&[u8]; 8] = [
-                b".",
-                b"..",
-                b"plain.txt",
-                b"target",
-                b"?t?.txt",
-                b"?odz.txt",
-                b"?uk.txt",
-                b"??.txt",
-            ];
-            assert_eq!(names, system);
+            assert_eq!(names, want);
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -5666,10 +5977,11 @@ mod tests_code_pages {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A link whose target is gone is listed by the search (and, on Windows, found by name), on
-    /// every host that can make one; where none can be made the test says so (not a pass).
+    /// A link whose target is gone is listed by the search on Windows (and found by name); off
+    /// Windows it is left out, as Wine leaves it out (`followed`); where no link can be made the
+    /// test says so (not a pass).
     #[test]
-    fn a_link_whose_target_is_gone_is_listed() {
+    fn a_link_whose_target_is_gone_is_listed_on_windows_only() {
         let dir = scratch("dangling");
         std::fs::write(dir.join("gone.txt"), b"a").unwrap();
         #[cfg(windows)]
@@ -5692,7 +6004,10 @@ mod tests_code_pages {
             .iter()
             .map(|f| f.name().to_string())
             .collect();
+        #[cfg(windows)]
         assert_eq!(names, [".", "..", "dangling.txt"]);
+        #[cfg(not(windows))]
+        assert_eq!(names, [".", ".."]);
         #[cfg(windows)]
         {
             let mut e = Engine::new();

@@ -445,7 +445,8 @@ fn not_provided_on(x86_64: bool) -> Result<(), String> {
          provided on Windows so far: the game's window with its mouse and keyboard (and so \
          anything drawn), the sound on the speakers, this machine's tables (display adapter, \
          sound devices, folders), which are measured on Windows, the distortion sound effect's \
-         table (measured from Windows' own DLL), and text in the game's code page outside ASCII",
+         table (measured from Windows' own DLL), and code pages other than Windows' Western \
+         one (1252)",
     );
     if !x86_64 {
         why.push_str(

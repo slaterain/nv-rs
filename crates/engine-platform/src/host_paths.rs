@@ -111,10 +111,15 @@ pub fn unix_text(game: &str) -> Result<String, NotHere> {
 
 /// Whether a name of this system's is one Windows cannot hold in a folder, so the game is never
 /// shown it ([`hidden_line`], the listing off Windows) and cannot open it: a `:` (a stream to
-/// Windows) or a `\` (a separator), a `.` or a space at its end (Windows drops them, so the
-/// name would open another file), or `NUL` (the null device).
+/// Windows) or a `\` (a separator), one of `* ? " < > |` (wildcards and other characters no
+/// Windows name holds: a search of the name would be another search) or a control character
+/// below U+0020, a `.` or a space at its end (Windows drops them, so the name would open another
+/// file), or `NUL` (the null device).
 pub fn windows_cannot_hold(name: &str) -> bool {
-    name.contains([':', '\\']) || name.ends_with(['.', ' ']) || name.eq_ignore_ascii_case("NUL")
+    name.contains([':', '\\', '*', '?', '"', '<', '>', '|'])
+        || name.chars().any(|c| c < '\u{20}')
+        || name.ends_with(['.', ' '])
+        || name.eq_ignore_ascii_case("NUL")
 }
 
 /// The most folders whose hidden names ([`windows_cannot_hold`]) the log names.
@@ -136,8 +141,9 @@ pub fn hidden_line(folder: &Path, name: &str) -> Option<String> {
         ""
     };
     Some(format!(
-        "files: {} holds {name:?}, a name Windows cannot hold in a folder (':', '\\', a dot or \
-         space at its end, or NUL): the game is not shown it and cannot open it{more}",
+        "files: {} holds {name:?}, a name Windows cannot hold in a folder (one of : \\ * ? \" < > \
+         |, a control character, a dot or space at its end, or NUL): the game is not shown it \
+         and cannot open it{more}",
         folder.display()
     ))
 }
@@ -399,6 +405,9 @@ impl Listing {
 pub struct Listings {
     folders: HashMap<String, Listing>,
     next: u64,
+    /// Moved by every [`forget`]: a listing read before one is not kept after it
+    /// ([`Listings::keep_since`]).
+    generation: u64,
 }
 
 impl Listings {
@@ -407,6 +416,21 @@ impl Listings {
     fn get(&self, folder: &str, modified: SystemTime, key: &[u16]) -> Option<Vec<String>> {
         let listing = self.folders.get(folder)?;
         (listing.modified == modified).then(|| listing.matching(key))
+    }
+
+    /// [`Listings::keep`] for a listing whose reading began at `generation`: dropped when a
+    /// [`forget`] came since (the folder may have changed after it was read).
+    fn keep_since(&mut self, folder: &str, listing: Listing, now: SystemTime, generation: u64) {
+        if generation != self.generation {
+            return;
+        }
+        self.keep(folder, listing, now);
+    }
+
+    /// Drops the names kept for `folder` and moves the generation ([`forget`]).
+    fn forget(&mut self, folder: &str) {
+        self.folders.remove(folder);
+        self.generation += 1;
     }
 
     /// Keeps `listing` for `folder` unless it was read within [`SETTLED`] after its last change,
@@ -460,12 +484,17 @@ pub fn folder_matches(folder: &str, part: &str) -> Option<Vec<String>> {
     let meta = std::fs::metadata(folder).ok()?;
     let at = folder_key(folder, &meta);
     let modified = meta.modified().ok();
-    if let Some(modified) = modified {
+    // The generation before the reading: a [`forget`] during it keeps this reading from being
+    // kept.
+    let generation = {
         let kept = LISTINGS.lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(found) = kept.as_ref().and_then(|l| l.get(&at, modified, &key)) {
-            return Some(found);
+        if let Some(modified) = modified {
+            if let Some(found) = kept.as_ref().and_then(|l| l.get(&at, modified, &key)) {
+                return Some(found);
+            }
         }
-    }
+        kept.as_ref().map_or(0, |l| l.generation)
+    };
     let now = SystemTime::now();
     let names: Vec<String> = std::fs::read_dir(folder)
         .ok()?
@@ -479,7 +508,7 @@ pub fn folder_matches(folder: &str, part: &str) -> Option<Vec<String>> {
     let found = listing.matching(&key);
     let mut kept = LISTINGS.lock().unwrap_or_else(|p| p.into_inner());
     kept.get_or_insert_with(Listings::default)
-        .keep(&at, listing, now);
+        .keep_since(&at, listing, now, generation);
     Some(found)
 }
 
@@ -493,9 +522,7 @@ pub fn forget(folder: &Path) {
     };
     let at = folder_key(&folder.to_string_lossy(), &meta);
     let mut kept = LISTINGS.lock().unwrap_or_else(|p| p.into_inner());
-    if let Some(kept) = kept.as_mut() {
-        kept.folders.remove(&at);
-    }
+    kept.get_or_insert_with(Listings::default).forget(&at);
 }
 
 /// Where a drive this system does not have lies: a folder that is never there (Debian's policy
@@ -958,6 +985,14 @@ mod tests {
             "...",
             "NUL",
             "nul",
+            "a?b.esp",
+            "a*b.esp",
+            "a\"b.esp",
+            "a<b.esp",
+            "a>b.esp",
+            "a|b.esp",
+            "a\u{1}b.esp",
+            "a\u{1f}b.esp",
         ] {
             assert!(windows_cannot_hold(name), "{name:?}");
         }
@@ -968,9 +1003,26 @@ mod tests {
             ".hidden",
             " x.esp",
             "x .esp",
+            "Caf\u{e9}.esp",
+            "a b.esp",
+            "a~b.esp",
         ] {
             assert!(!windows_cannot_hold(name), "{name:?}");
         }
+    }
+
+    /// A [`forget`] while a folder is being read keeps that reading from being kept: the folder
+    /// may have changed after it was read.
+    #[test]
+    fn a_forget_during_a_reading_keeps_it_from_being_kept() {
+        let mut kept = Listings::default();
+        let before = kept.generation;
+        kept.forget("/d");
+        kept.keep_since("/d", Listing::new(at(1), names(&["a"])), at(10), before);
+        assert_eq!(kept.get("/d", at(1), &fold("a")), None);
+        let now = kept.generation;
+        kept.keep_since("/d", Listing::new(at(1), names(&["a"])), at(10), now);
+        assert_eq!(kept.get("/d", at(1), &fold("a")), Some(names(&["a"])));
     }
 
     /// A hidden name is said once per folder, for at most [`MAX_HIDDEN_SAID`] folders.
