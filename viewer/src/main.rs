@@ -224,7 +224,7 @@ fn main() {
             }
             Err(e) => {
                 eprintln!("error: {e}");
-                // The expected stop off Windows ends with its own status (play.sh: no report needed).
+                // The expected stop off Windows: its own status (play.sh: no report needed).
                 host::end_process(host::error_status(&e));
             }
         }
