@@ -25,6 +25,15 @@
 //! with their actor; JIP's jump there also passes over the exe's branches for form types 0x1D and
 //! 0x26 (`FLOR` and placed `INGR` references, of which the game's own plugins have none).
 //!
+//! **G31, G78, G81, G90, G106** (`InitGamePatches`, fix rows): a door's own stealing rules
+//! decide (G31); `SetScale` clamps to about 0.0001 .. 100 with no rounding (G78); removing a
+//! weapon detaches the weapon node's children instead of releasing its effects (G81); leaving an
+//! interior ends the sky's weather transition at the next main loop, JIP's own main-loop function
+//! ([`crate::main_loop::Native`], G90); the water forms' update asks JIP's map lookup and the
+//! renderer's byte `0x11F91C5` (G106). G90 runs on the main thread (the cell change) and takes
+//! JIP's slot for the main-loop list, as the script callbacks do; the others read and write game
+//! memory only.
+//!
 //! Threads: G06's test reads the base's flag byte only and G73's form is a lock-free atomic, so
 //! neither takes JIP's slot (Activate, Enable/Disable and the physics island callback may run off
 //! the main thread). G103's walk `0054df30` runs in the cell attach (`0054bcf0`, from the grid
@@ -66,6 +75,23 @@ pub const ATTACH_ASH_PILE: SiteSlot = SiteSlot::new(Owner::Jip, 0x005d_bcfd);
 /// its base form; any answer means JIP's routine ran and the walk goes on at `0x54E5E6`).
 pub const DELETED_ACTOR_ASH_PILE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0054_e421);
 pub const CLEAR_ASH_PILES: SiteSlot = SiteSlot::new(Owner::Jip, 0x0054_e4e1);
+/// G31's seam in `fn_00579690` (the "is it stealing" test), at the end of its door branch:
+/// words the reference and the door's answer; any answer returns the door's answer.
+pub const DOOR_ANSWER_STANDS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0057_9942);
+/// G78's seam in `fn_00567490` (`SetScale`): words the scale's bits; the answer is the scale.
+pub const SET_SCALE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0056_74d5);
+/// G81's seams in `RemoveWeapon` (`00571b50`): the held weapon node and the "Weapon" child, each
+/// in place of its `call 0x572160`. Words: the node.
+pub const CLEAR_WEAPON_NODE: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x0057_1f65),
+    SiteSlot::new(Owner::Jip, 0x0057_1fdf),
+];
+/// G90's seam in `fn_00454450` (leaving an interior), in place of `008d7dc0(this, 0)`: words the
+/// `TES`.
+pub const CLOUDS_FIX: SiteSlot = SiteSlot::new(Owner::Jip, 0x0045_4576);
+/// G106's seam in `fn_004e3d60` (the water forms' update), in place of the update map's find:
+/// words the map and the water form; the answer's low byte is "already updated".
+pub const UPDATE_WATER_TEXTURES: SiteSlot = SiteSlot::new(Owner::Jip, 0x004e_400e);
 
 /// `kHookFormFlag6_IsAshPile` (the base form's `jipFormFlags6`).
 pub const IS_ASH_PILE: u8 = 1 << 5;
@@ -86,7 +112,16 @@ pub struct AltAshPile(pub std::sync::atomic::AtomicU32);
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GH2",
-    fix_sites: &[DELETED_ACTOR_ASH_PILE.addr(), CLEAR_ASH_PILES.addr()],
+    fix_sites: &[
+        DELETED_ACTOR_ASH_PILE.addr(),
+        CLEAR_ASH_PILES.addr(),
+        DOOR_ANSWER_STANDS.addr(),
+        SET_SCALE.addr(),
+        CLEAR_WEAPON_NODE[0].addr(),
+        CLEAR_WEAPON_NODE[1].addr(),
+        CLOUDS_FIX.addr(),
+        UPDATE_WATER_TEXTURES.addr(),
+    ],
     fix_wraps: &[],
     install_fixes,
     jip_sites: &[
@@ -250,6 +285,107 @@ fn clear_ref_aux_vars(mods: &mut AuxMods, id: u32) -> bool {
 fn install_fixes(e: &mut Engine) {
     e.on_site(DELETED_ACTOR_ASH_PILE, keep_deleted_actors_ash_pile);
     e.on_site(CLEAR_ASH_PILES, clear_ash_piles);
+    e.on_site(DOOR_ANSWER_STANDS, door_answer_stands);
+    e.on_site(SET_SCALE, set_scale_clamp);
+    for site in CLEAR_WEAPON_NODE {
+        e.on_site(site, clear_weapon_node);
+    }
+    e.on_site(CLOUDS_FIX, clouds_fix);
+    e.on_site(UPDATE_WATER_TEXTURES, update_water_textures);
+}
+
+/// G31 (`WriteRelJump(0x579942, 0x579AB7)`): using a door is stealing only when the door's own
+/// rules say so (its lock and the destination cell's owner); the general "an owned object the
+/// player does not own" test after them is passed over, so an unlocked door into a public cell
+/// is no crime.
+fn door_answer_stands(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
+}
+
+/// `kMinScale` (`0x38D1B717`, about 0.0001) and `SS_100`.
+const MIN_SCALE_BITS: u32 = 0x38d1_b717;
+const MAX_SCALE: f32 = 100.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetScaleHook.
+/// The scale `SetScale` stores: `maxss` with about 0.0001 then `minss` with 100 (SSE: a NaN
+/// gives the second operand, so the lower bound), in place of the exe's rounding to two decimals
+/// and its 0.01 .. 10 clamps.
+fn set_scale_clamp(_: &mut Engine, a: &[u32]) -> Option<u32> {
+    let value = f32::from_bits(a[0]);
+    let min = f32::from_bits(MIN_SCALE_BITS);
+    let value = if value > min { value } else { min };
+    let value = if value < MAX_SCALE { value } else { MAX_SCALE };
+    Some(value.to_bits())
+}
+
+/// A node's children (`NiNode::m_children`): the array (`+0xA0`) and its used count (`+0xA6`).
+const CHILDREN: u32 = 0xa0;
+const CHILD_COUNT: u32 = 0xa6;
+/// The child's flag byte JIP tests (`+0x33`, bit `0x80`: the top bit of the object's flags).
+const KEEP_FLAG_BYTE: u32 = 0x33;
+/// `NiNode`'s virtual that detaches a child.
+const DETACH_CHILD: u32 = 0xe8;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ClearWeaponNodeHook.
+/// In place of releasing the weapon node's attached effects: each child of the node, from the
+/// last to the first, that is set and lacks the keep flag is detached (the node's virtual
+/// `+0xE8`). The array and its count are read once, as JIP's registers hold them.
+fn clear_weapon_node(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let node = a[0];
+    let children = e.mem.u32(node + CHILDREN);
+    let count = e.mem.u16(node + CHILD_COUNT);
+    for i in (0..u32::from(count)).rev() {
+        let child = e.mem.u32(children + i * 4);
+        if child == 0 || e.mem.u8(child + KEEP_FLAG_BYTE) & 0x80 != 0 {
+            continue;
+        }
+        e.vcall(node, DETACH_CHILD, &args![child]);
+    }
+    Some(0)
+}
+
+/// `TES::currentInterior` and `TES::sky`.
+const TES_CURRENT_INTERIOR: u32 = 0x34;
+const TES_SKY: u32 = 0x68;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: CloudsFixHook.
+/// Leaving an interior: the interior cell cleared (as the exe's call does), and the sky's weather
+/// transition ended at the next main loop (`EndWeatherTransition` on the sky, one call), so the
+/// clouds do not show the old weather fading out.
+fn clouds_fix(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let tes = a[0];
+    e.mem.set_u32(tes + TES_CURRENT_INTERIOR, 0);
+    let sky = e.mem.u32(tes + TES_SKY);
+    crate::main_loop::add_native(e, crate::main_loop::Native::EndWeatherTransition, sky);
+    Some(0)
+}
+
+/// The renderer's byte JIP tests first (`0x11F91C5`; the exe only clears it, `00b54280`).
+const WATER_TEXTURES_HELD: u32 = 0x011f_91c5;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: UpdateWaterTexturesHook
+// and internal/Ni_types.h: NiTPtrMap::Lookup.
+/// In place of the update map's find: the renderer's byte when set; else the value the map keeps
+/// for the water form (its buckets `+8`, their count `+4`; an entry's next `+0`, key `+4`, value
+/// `+8`), 0 when it has none. A map with no buckets answers 0 (JIP would divide by zero).
+fn update_water_textures(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let (map, key) = (a[0], a[1]);
+    let held = e.mem.u8(WATER_TEXTURES_HELD);
+    if held != 0 {
+        return Some(u32::from(held));
+    }
+    let buckets = e.mem.u32(map + 4);
+    if buckets == 0 {
+        return Some(0);
+    }
+    let mut entry = e.mem.u32(e.mem.u32(map + 8) + (key % buckets) * 4);
+    while entry != 0 {
+        if e.mem.u32(entry + 4) == key {
+            return Some(e.mem.u32(entry + 8));
+        }
+        entry = e.mem.u32(entry);
+    }
+    Some(0)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches,

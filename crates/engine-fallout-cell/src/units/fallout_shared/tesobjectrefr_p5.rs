@@ -1943,6 +1943,14 @@ pub fn fn_00579690(e: &mut Engine, this: Ptr) -> bool {
         } else {
             result = teleport_owner_test(e, me, true);
         }
+        // JIP LN's G31 (a fix row, `WriteRelJump(0x579942, 0x579AB7)`): the door's answer is the
+        // answer; the general owner test below is passed over. Words: the reference and the
+        // door's answer; any answer of the handler takes the jump.
+        if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+            && e.site(0x0057_9942, &[me, u32::from(result)]).is_some()
+        {
+            return result;
+        }
     } else if base_form_type(e, me) == 0x27 {
         let furniture = base_form_of(e, me);
         let player = e.global::<u32>(GLOBAL_PLAYER);
@@ -6841,6 +6849,55 @@ mod tests {
             calls_to(&take_log(&mut e), 0x0054_6ca0),
             vec![vec![cell, player]]
         );
+    }
+
+    /// JIP LN's G31 seam at `0x579942` (a fix row): the door's own answer is the answer, the
+    /// general owner test after it passed over; only with the fix row's bit, and only for doors.
+    #[test]
+    fn fn_00579690_jip_g31_door_answer_stands() {
+        use engine_core::extend::jip_patches;
+        let mut e = engine2();
+        let owner = form(&mut e, 0x2a, 0);
+        stealing_world(&mut e, owner);
+        let door = refr(&mut e, 0x1c, &[]);
+        // An owned, unlocked door with no teleport: the door says no, the general owner test
+        // (an owned object the player does not own) says yes.
+        returns(&mut e, 0x0051_8f00, 0);
+        returns(&mut e, GET_TELEPORT_DATA, 0);
+        super::jip_seam::put(&mut e, 0x0057_9942, Some(1));
+        assert!(e.call(0x0057_9690, &args![door]).bool(), "the exe");
+        e.set_jip_patches(jip_patches::INSTALLED);
+        assert!(e.call(0x0057_9690, &args![door]).bool());
+        assert!(super::jip_seam::seen().is_empty(), "only FIXES asks");
+        e.set_jip_patches(jip_patches::FIXES);
+        assert!(
+            !e.call(0x0057_9690, &args![door]).bool(),
+            "JIP: the door's no"
+        );
+        assert_eq!(super::jip_seam::seen(), vec![vec![door, 0]]);
+        // Any answer takes the jump (JIP's is unconditional).
+        super::jip_seam::answer_with(Some(0));
+        assert!(!e.call(0x0057_9690, &args![door]).bool());
+        super::jip_seam::answer_with(None);
+        assert!(
+            e.call(0x0057_9690, &args![door]).bool(),
+            "no answer: the exe"
+        );
+        super::jip_seam::answer_with(Some(1));
+        super::jip_seam::seen();
+        // A locked door the player may not open: the door's yes is asked with 1 and stands.
+        returns(&mut e, 0x0056_9160, 0x6000);
+        returns(&mut e, 0x0050_21a0, 1);
+        assert!(e.call(0x0057_9690, &args![door]).bool());
+        assert_eq!(super::jip_seam::seen(), vec![vec![door, 1]]);
+        // The early no (0x518f00) returns before the seam, as the exe's `jmp 0x579aba`.
+        returns(&mut e, 0x0051_8f00, 1);
+        assert!(!e.call(0x0057_9690, &args![door]).bool());
+        assert!(super::jip_seam::seen().is_empty());
+        // Not a door: never asked, the general test as the exe.
+        let thing = refr(&mut e, 0x30, &[]);
+        assert!(e.call(0x0057_9690, &args![thing]).bool());
+        assert!(super::jip_seam::seen().is_empty());
     }
 
     // ---- 00579ac0 -------------------------------------------------------
