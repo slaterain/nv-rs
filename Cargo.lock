@@ -135,6 +135,9 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 [[package]]
 name = "d3d9-stream"
 version = "0.1.0"
+dependencies = [
+ "qos",
+]
 
 [[package]]
 name = "d3d9-wgpu"
@@ -143,6 +146,7 @@ dependencies = [
  "d3d9-stream",
  "esm",
  "naga",
+ "qos",
  "raw-window-handle",
  "wgpu",
 ]
@@ -209,6 +213,7 @@ dependencies = [
 name = "engine-core"
 version = "0.1.0"
 dependencies = [
+ "qos",
  "windows 0.58.0",
 ]
 
@@ -514,6 +519,7 @@ dependencies = [
  "engine-core",
  "mp3",
  "nvse",
+ "qos",
  "vorbis",
  "windows 0.58.0",
 ]
@@ -638,6 +644,7 @@ dependencies = [
  "jip",
  "nvse",
  "play-patch",
+ "qos",
  "uio",
  "zlib-rs",
 ]
@@ -958,6 +965,10 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
+
+[[package]]
+name = "qos"
+version = "0.1.0"
 
 [[package]]
 name = "quote"
