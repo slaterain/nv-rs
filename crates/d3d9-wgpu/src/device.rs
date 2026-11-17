@@ -8559,9 +8559,25 @@ pub struct CardFacts {
     pub device: u32,
     pub driver: String,
     pub driver_info: String,
-    /// The sample counts the card takes for both a colour (`Rgba8Unorm`) and a depth
-    /// (`Depth24PlusStencil8`) target.
+    /// The sample counts the device will make a surface with: those [`common_sample_count`] keeps
+    /// as they are for the back buffer's format (X8R8G8B8), so every format of the multisampled
+    /// family and the occlusion count's target take them.
     pub sample_counts: Vec<u32>,
+    /// `TEXTURE_COMPRESSION_BC`: the game's DXT textures.
+    pub bc: bool,
+    /// `FLOAT32_BLENDABLE`.
+    pub float32_blendable: bool,
+}
+
+/// The sample counts of 1 to 16 a device of these `features` keeps as asked for `target`
+/// ([`common_sample_count`], with `supported` the adapter's answer).
+fn kept_sample_counts(
+    target: wgpu::TextureFormat,
+    supported: impl Fn(wgpu::TextureFormat, u32) -> bool,
+) -> Vec<u32> {
+    (1..=16)
+        .filter(|&n| n == 1 || common_sample_count(target, n, &supported) == n)
+        .collect()
 }
 
 /// The graphics card the game's device will most likely be made on, on the APIs `NV_WGPU_BACKEND`
@@ -8588,19 +8604,28 @@ pub fn card_facts() -> Option<CardFacts> {
             .filter(|a| software == (a.get_info().device_type == wgpu::DeviceType::Cpu))
             .min_by_key(|a| rank(a.get_info().device_type))?;
         let info = adapter.get_info();
-        let colour = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm);
-        let depth = adapter.get_texture_format_features(wgpu::TextureFormat::Depth24PlusStencil8);
+        let features = adapter.features();
+        // As the device answers it (`Device::samples_supported`): the adapter's own format
+        // features where the device takes them, else the guaranteed ones.
+        let supported = |f: wgpu::TextureFormat, n: u32| {
+            let flags =
+                if features.contains(wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES) {
+                    adapter.get_texture_format_features(f)
+                } else {
+                    f.guaranteed_format_features(features)
+                };
+            flags.flags.sample_count_supported(n)
+        };
+        let target = format::format(22).map_or(wgpu::TextureFormat::Bgra8Unorm, |f| f.wgpu);
         Some(CardFacts {
             name: info.name,
             vendor: info.vendor,
             device: info.device,
             driver: info.driver,
             driver_info: info.driver_info,
-            sample_counts: (1..=16)
-                .filter(|&n| {
-                    colour.flags.sample_count_supported(n) && depth.flags.sample_count_supported(n)
-                })
-                .collect(),
+            sample_counts: kept_sample_counts(target, supported),
+            bc: features.contains(wgpu::Features::TEXTURE_COMPRESSION_BC),
+            float32_blendable: features.contains(wgpu::Features::FLOAT32_BLENDABLE),
         })
     })
 }
@@ -9769,6 +9794,18 @@ mod tests {
         // The occlusion count's 16-bit target lacks 8x: 4x, so counting still joins the pass.
         let count_4x = |f: F, c: u32| !(f == COUNT_FORMAT_16 && c > 4);
         assert_eq!(common_sample_count(F::Bgra8Unorm, 8, count_4x), 4);
+    }
+
+    /// The counts the machine table answers off Windows are those the device keeps as asked: a
+    /// count only the 16-bit float target lacks is not among them; counts the formats lack too.
+    #[test]
+    fn the_counts_answered_are_the_counts_the_device_keeps() {
+        let float_4x = |f: F, c: u32| c <= 8 && !(f == F::Rgba16Float && c > 4);
+        assert_eq!(kept_sample_counts(F::Bgra8Unorm, float_4x), [1, 2, 4]);
+        let r16_2x = |f: F, c: u32| c <= 16 && !(f == F::R16Float && c > 2);
+        assert_eq!(kept_sample_counts(F::Bgra8Unorm, r16_2x), [1, 2]);
+        let all = |_: F, c: u32| [1, 2, 4, 8].contains(&c);
+        assert_eq!(kept_sample_counts(F::Bgra8Unorm, all), [1, 2, 4, 8]);
     }
 
     /// The alpha test's bounds give the alphas at which the real Direct3D 9 here changes its

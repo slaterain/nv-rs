@@ -474,14 +474,20 @@ fn the_folders_are_nv_rs_own_on_drive_z() {
     assert!(folder_lines(std::path::Path::new(&long)).is_err());
 }
 
-/// The whole table reads back through the Windows table's own reader with every answer in place.
+/// The whole table reads back through the Windows table's own reader with every answer in place:
+/// the machine's part, then the display part added after it (as the host loads them).
 #[test]
 fn the_table_reads_back_with_its_answers() {
-    let (table, problems) = write_table(&Inputs {
+    let (mut table, problems) = write_table(&Inputs {
         zone: parse_posix_tz("CET-1CEST,M3.5.0,M10.5.0/3").map(Zone::from_rule),
         now: at(2026, 7, 1, 12),
         processor: fixed_processor(),
         own_folder: Ok("/home/me/.local/share/nv-rs".into()),
+        code_page: 1252,
+    });
+    assert!(problems.is_empty(), "{problems:?}");
+    assert!(!table.contains("GetAdapterDisplayMode") && !table.contains("GetDeviceCaps"));
+    let (display, problems, refusal) = display_part(&DisplayInputs {
         monitors: Ok(vec![Monitor {
             size: (3840, 2160),
             scale: 2.0,
@@ -496,10 +502,12 @@ fn the_table_reads_back_with_its_answers() {
             driver: String::new(),
             driver_info: String::new(),
             sample_counts: vec![1, 2, 4],
+            bc: true,
+            float32_blendable: true,
         }),
-        code_page: 1252,
     });
-    assert!(problems.is_empty(), "{problems:?}");
+    assert!(problems.is_empty() && refusal.is_none(), "{problems:?}");
+    table.push_str(&display);
     let mut e = crate::Engine::new();
     crate::d3d9::load_adapter_table(&mut e, &table);
     assert_eq!(crate::d3d9::get_acp(&mut e), 1252);
@@ -545,19 +553,21 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
         now: 0,
         processor: fixed_processor(),
         own_folder: Err("no HOME".into()),
-        monitors: Err("no window system".into()),
-        card: Err("no card".into()),
         code_page: 1251,
     });
-    assert_eq!(problems.len(), 4);
+    assert_eq!(problems.len(), 2);
     assert!(problems[0].contains("no HOME") && problems[1].contains("no zone file"));
-    assert!(problems[2].contains("no card") && problems[3].contains("no window system"));
     assert!(!table.contains("GetTimeZoneInformation") && !table.contains("SHGetFolderPathA\t5 "));
     assert!(table.contains("CpuIdFlagTest\t\t200000\nCpuid\t0\t1 0 0 0\nCpuid\t1\t0 0 0 6808000\n"));
-    assert!(table.contains("NvApiLoad\t\t0\t7e\nNvApiEnd\n"));
+    assert!(table.ends_with("NvApiLoad\t\t0\t7e\nNvApiEnd\n"));
+    let (display, problems, refusal) = display_part(&DisplayInputs {
+        monitors: Err("no window system".into()),
+        card: Err("no card".into()),
+    });
+    assert_eq!(problems.len(), 2);
+    assert!(problems[0].contains("no card") && problems[1].contains("no window system"));
+    assert_eq!(refusal, None);
     // Without the card its identity is left out; the captured card's answers stay as captured.
-    assert!(!table.contains("GetAdapterIdentifier") && table.ends_with(display::CARD));
-    assert!(!table.contains("GetAdapterDisplayMode") && !table.contains("EnumAdapterModes"));
     // The Russian game's pages answer, after the fixed answers' 1252 and 437.
     let mut e = crate::Engine::new();
     crate::d3d9::load_adapter_table(&mut e, &table);
@@ -565,6 +575,37 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
     assert_eq!(crate::d3d9::get_oemcp(&mut e), 866);
     assert_eq!(crate::d3d9::is_valid_code_page(&mut e, 866), 1);
     assert_eq!(crate::d3d9::is_valid_code_page(&mut e, 1252), 1);
+    assert_eq!(display, display::CARD.replace("\r\n", "\n"));
+    // A display question then stops the run, saying it was not captured.
+    let mut e = crate::Engine::new();
+    crate::d3d9::load_adapter_table(&mut e, &(table + &display));
+    let d3d = crate::d3d9::direct3d_create9(&mut e, 32);
+    let mode = e.mem.alloc(16);
+    let stop = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        e.vcall(d3d, 0x20, &[0, mode])
+    }));
+    let why = stop.unwrap_err();
+    let why = why.downcast_ref::<String>().cloned().unwrap_or_default();
+    assert!(why.contains("GetAdapterDisplayMode"), "{why}");
+}
+
+/// A card without block-compressed textures: the start is refused with one plain line.
+#[test]
+fn a_card_without_dxt_textures_refuses_the_start() {
+    let (_, _, refusal) = display_part(&DisplayInputs {
+        monitors: Err("x".into()),
+        card: Ok(Card {
+            name: "llvmpipe".into(),
+            vendor: 0x10005,
+            device: 0,
+            driver: String::new(),
+            driver_info: String::new(),
+            sample_counts: vec![1],
+            bc: false,
+            float32_blendable: false,
+        }),
+    });
+    assert!(refusal.unwrap().contains("llvmpipe"));
 }
 
 /// The fixed Windows answers hold nothing personal: no user folder, no adapter, no NVIDIA lines,
@@ -670,6 +711,10 @@ mod this_system {
     /// problems).
     fn this_machines_table_has_no_problems() {
         let (table, problems) = this_machine(Ok("/nonexistent/nv-rs".into()));
+        assert!(problems.is_empty(), "{problems:?}");
+        assert!(table.contains("GetTimeZoneInformation\t\t"));
+        // A run that draws nothing asks neither the window system nor wgpu.
+        let (_, problems, refusal) = this_display(false);
         assert_eq!(
             problems,
             [
@@ -677,6 +722,6 @@ mod this_system {
                 "machine table: no display: the run draws nothing (no renderer chosen)"
             ]
         );
-        assert!(table.contains("GetTimeZoneInformation\t\t"));
+        assert_eq!(refusal, None);
     }
 }

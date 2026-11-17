@@ -157,6 +157,11 @@ impl Host {
         // Linux and macOS: the program builds there, but the game does not run yet.
         #[cfg(not(windows))]
         not_provided_here()?;
+        // Linux and macOS: the game's code page, chosen before anything turns a name or a text
+        // (the exe's own path, the save guard, the mod files, the INIs the extenders read, the
+        // machine table's `GetACP`), so the whole run has one page.
+        #[cfg(not(windows))]
+        choose_code_page();
         // Off Windows the save guard's look at the player's folders starts now, off the frames
         // (nothing on Windows).
         save_out::prepare(data);
@@ -368,7 +373,7 @@ impl Host {
         start_crt_io(&mut engine, &mut movement);
         // The machine table before the C initializers: `__get_sse2_info` (`00ed1927`, from
         // the initializer `00ed454f`) asks the processor, which the table answers.
-        load_adapter_table(&mut engine);
+        load_adapter_table(&mut engine)?;
         start_cinit_float(&mut engine, &mut movement);
         let static_init = engine::static_init::run(&mut engine, &STAND_INS);
         // A skipped initializer leaves its global (a setting among them) unbuilt, silently
@@ -481,6 +486,23 @@ impl Host {
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
     not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
+}
+
+/// The game's code page on Linux and macOS (`engine_platform::code_page`): `NV_CODE_PAGE` (1252
+/// unless it names 1250 or 1251; another value is said and 1252 stands), set for the whole run and
+/// said in the log.
+#[cfg(not(windows))]
+fn choose_code_page() {
+    let page =
+        match engine_platform::code_page::chosen(std::env::var("NV_CODE_PAGE").ok().as_deref()) {
+            Ok(page) => page,
+            Err(why) => {
+                eprintln!("{why}; code page 1252 is used");
+                1252
+            }
+        };
+    engine_platform::code_page::set_game_page(page);
+    eprintln!("code page: {page} (NV_CODE_PAGE)");
 }
 
 /// [`not_provided_here`]'s message, for an x86-64 processor or another, on macOS or another
@@ -598,6 +620,8 @@ pub fn adapter_table_text() -> Option<String> {
 /// (a test's table), else the table of this machine (`engine_platform::machine_table`), made once
 /// per run from what the system reports, with the game's Documents and AppData inside nv-rs's own
 /// folder ([`own_folder`], made here when missing). What could not be answered is said in the log.
+/// The display and the card are not in it: [`display_table_text`], made in the start after the
+/// renderer choice, so nothing here reads that choice.
 #[cfg(not(windows))]
 pub fn adapter_table_text() -> Option<String> {
     if let Some(path) = std::env::var_os("NV_D3D9_ADAPTER") {
@@ -683,12 +707,42 @@ pub fn wgpu_cache_path() -> Option<PathBuf> {
 /// Gives the Direct3D 9 layer the player's adapter table ([`adapter_table_path`]) before the
 /// renderer's start-up asks about the adapter. Without the file nothing is loaded: the first
 /// Direct3D 9 query stops that stage and its message says how to capture the table.
-fn load_adapter_table(e: &mut Engine) {
+/// Off Windows the table is this machine's part ([`adapter_table_text`]) and, after it, the display
+/// and card part ([`display_table_text`]), made here: after the run's renderer choice. A card the
+/// game cannot draw on refuses the start (the error).
+fn load_adapter_table(e: &mut Engine) -> Result<(), String> {
     if let Some(text) = adapter_table_text() {
+        #[cfg(not(windows))]
+        let text = match display_table_text()? {
+            Some(display) => text + &display,
+            None => text,
+        };
         engine_platform::d3d9::load_adapter_table(e, &text);
     }
     if let Some(dir) = texture_cache_path() {
         engine_platform::d3dx::set_texture_cache(e, dir);
+    }
+    Ok(())
+}
+
+/// The display and card part of the machine table on Linux and macOS
+/// (`engine_platform::machine_table::this_display`), for a run that draws (the renderer chosen by
+/// now: `NV_D3D9`, or the run's choice made in [`Host::start_with`] before this): `None` with a
+/// test's table (`NV_D3D9_ADAPTER`), which has its own. What could not be answered is said in the
+/// log; a card the game cannot draw on is the error.
+#[cfg(not(windows))]
+pub fn display_table_text() -> Result<Option<String>, String> {
+    if std::env::var_os("NV_D3D9_ADAPTER").is_some() {
+        return Ok(None);
+    }
+    let (text, problems, refusal) =
+        engine_platform::machine_table::this_display(engine_platform::d3d9real::wanted());
+    for line in problems {
+        eprintln!("{line}");
+    }
+    match refusal {
+        Some(why) => Err(format!("nv-rs cannot draw the game here: {why}")),
+        None => Ok(Some(text)),
     }
 }
 
@@ -962,6 +1016,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let missing = super::check_installation(&dir.join("Data")).unwrap_err();
         assert!(missing.ends_with("FalloutNV.exe: not found"), "{missing}");
+    }
+
+    /// The order of the start off Windows (review of #681): the settings' reading (which finds
+    /// `Fallout.ini` through the Documents folder) comes before the run's renderer choice, and must
+    /// not fix the choice to "draws nothing". Run in a child process of its own, as the choice is
+    /// the process's.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_settings_reading_leaves_the_renderer_choice_to_the_start() {
+        const CHILD: &str = "NV_HOST_TEST_CHOICE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let _ = crate::fixes::Choice::read_with(false);
+            assert!(crate::game_ini::path().is_some());
+            engine_platform::d3d9real::want_backend(engine_platform::d3d9real::Backends::Wgpu);
+            assert!(engine_platform::d3d9real::wanted());
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tests::the_settings_reading_leaves_the_renderer_choice_to_the_start",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env_remove("NV_D3D9")
+            .env_remove("NV_D3D9_ADAPTER")
+            .env("HOME", std::env::temp_dir())
+            .env_remove("XDG_DATA_HOME")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success(), "{text}");
+        assert!(text.contains("1 passed"), "{text}");
+        // The machine's part was not made by the settings' reading: no window system or card
+        // was asked there (those lines come only from the start's display part).
+        assert!(!text.contains("machine table: no display"), "{text}");
     }
 
     #[test]

@@ -611,7 +611,6 @@ mod code_page {
             page().to_ansi(units)
         }
     }
-
 }
 
 /// Where the separators (`\` and `/`) of `path` are, found character by character

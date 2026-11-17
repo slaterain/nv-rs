@@ -9,7 +9,8 @@
 //! - winit makes no child windows. The game's child window (the one it draws in) fills its parent's
 //!   client area on Windows, so here it is its parent's window under an id of its own: the parent's
 //!   client area takes the child's size (unless borderless), and the device draws in the parent.
-//! - Borderless is winit's borderless full screen on the monitor the window is on, in its real
+//! - Borderless is winit's borderless full screen on the monitor the machine table describes (the
+//!   primary one, else the first: `crate::machine_table::display::described`), in its real
 //!   pixels (Windows: a popup window over the primary monitor). A framed window is sized and placed
 //!   in the system's scaled pixels, as the Win32 window thread, which is not DPI aware then, is; its
 //!   client area is the rectangle the game asks for less the frame the game added for it
@@ -296,6 +297,18 @@ fn monitor_of(m: &winit::monitor::MonitorHandle, primary: bool) -> crate::machin
     }
 }
 
+thread_local! {
+    /// The monitor the machine table describes ([`read_monitors`]), on the window thread.
+    static DESCRIBED: std::cell::RefCell<Option<winit::monitor::MonitorHandle>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The monitor a borderless window is put on: the one the machine table describes, when the
+/// monitors were read; else winit's choice (the current one).
+fn described_monitor() -> Option<winit::monitor::MonitorHandle> {
+    DESCRIBED.with(|d| d.borrow().clone())
+}
+
 /// Reads the monitors for [`monitors`], once, on the window thread.
 fn read_monitors(event_loop: &ActiveEventLoop) {
     let (read, ready) = monitors_read();
@@ -306,9 +319,17 @@ fn read_monitors(event_loop: &ActiveEventLoop) {
         return;
     }
     let primary = event_loop.primary_monitor();
-    let list: Vec<_> = event_loop
-        .available_monitors()
-        .map(|m| monitor_of(&m, primary.as_ref() == Some(&m)))
+    let handles: Vec<_> = event_loop.available_monitors().collect();
+    // The monitor the table describes (the primary one, else the first) is the one the borderless
+    // window is put on ([`described_monitor`]), so the game's screen and its window agree.
+    let described = crate::machine_table::display::described(
+        handles.iter().map(|m| primary.as_ref() == Some(m)),
+    );
+    DESCRIBED.with(|d| *d.borrow_mut() = described.map(|i| handles[i].clone()));
+    let list: Vec<_> = handles
+        .iter()
+        .enumerate()
+        .map(|(i, m)| monitor_of(m, Some(i) == described))
         .collect();
     *slot = Some(if list.is_empty() {
         Err("the window system reports no monitor".into())
@@ -455,7 +476,7 @@ impl Layer {
         if borderless {
             attributes = attributes
                 .with_decorations(false)
-                .with_fullscreen(Some(Fullscreen::Borderless(None)));
+                .with_fullscreen(Some(Fullscreen::Borderless(described_monitor())));
         } else {
             let mut buttons = WindowButtons::empty();
             buttons.set(WindowButtons::CLOSE, frame.close);

@@ -24,9 +24,12 @@
 //!
 //! - **the display and the graphics card** ([`display`]): the monitors from winit, the card from
 //!   wgpu, and the Direct3D 9 answers of a modern card captured once on Windows, with the
-//!   multisample counts the card there draws with. They are asked only when the run draws (a
-//!   renderer is chosen); a run that draws nothing has none, and a question about them stops it
-//!   there, saying it was not captured.
+//!   multisample counts and float blending the card there draws with. They are a part of their
+//!   own ([`this_display`], [`display_part`]), which the host makes in its start after the run's
+//!   renderer choice (the folders' part is read earlier, by the settings' reading, and must not
+//!   fix that choice). They are asked only when the run draws; a run that draws nothing has
+//!   none, and a question about them stops it there, saying it was not captured. A card without
+//!   DXT textures refuses the start ([`Card::refusal`]).
 //!
 //! **The time zone.** Windows answers `TIME_ZONE_INFORMATION`: the standard offset (`Bias`,
 //! minutes, UTC = local + bias), and two change-over dates in its "the n-th (5: last) weekday of
@@ -722,10 +725,6 @@ pub struct Inputs {
     pub processor: (u32, [u32; 4], [u32; 4]),
     /// nv-rs's own folder (this system's full path).
     pub own_folder: Result<std::path::PathBuf, String>,
-    /// The monitors ([`display`]).
-    pub monitors: Result<Vec<Monitor>, String>,
-    /// The graphics card ([`display`]).
-    pub card: Result<Card, String>,
     /// The game's ANSI code page (`crate::code_page`): 1252, 1250 or 1251.
     pub code_page: u32,
 }
@@ -761,10 +760,29 @@ pub fn write_table(inputs: &Inputs) -> (String, Vec<String>) {
     let (id, leaf_0, leaf_1) = inputs.processor;
     table.push_str(&processor_lines(id, leaf_0, leaf_1));
     table.push_str(&no_nvapi_lines());
+    (table, problems)
+}
+
+/// The display and graphics-card half of the table ([`display`]), made apart from the rest: it is
+/// asked only once the run has chosen whether it draws (the host makes it in its start, after the
+/// renderer choice), never when an earlier step only wants the folders.
+pub struct DisplayInputs {
+    /// The monitors.
+    pub monitors: Result<Vec<Monitor>, String>,
+    /// The graphics card.
+    pub card: Result<Card, String>,
+}
+
+/// The display half's lines, what could not be answered (lines for the log), and why the game
+/// cannot draw on this card, if it cannot ([`Card::refusal`]: the start is then refused).
+pub fn display_part(inputs: &DisplayInputs) -> (String, Vec<String>, Option<String>) {
+    let mut table = String::new();
+    let mut problems = Vec::new();
     match &inputs.card {
         Ok(card) => {
             table.push_str(&display::card_lines(card));
-            table.push_str(&display::honour_samples(display::CARD, &card.sample_counts));
+            let answers = display::honour_samples(display::CARD, &card.sample_counts);
+            table.push_str(&display::honour_blending(&answers, card.float32_blendable));
         }
         Err(why) => {
             problems.push(format!("machine table: no graphics card: {why}"));
@@ -781,7 +799,8 @@ pub fn write_table(inputs: &Inputs) -> (String, Vec<String>) {
         Ok(lines) => table.push_str(&lines),
         Err(why) => problems.push(format!("machine table: no display: {why}")),
     }
-    (table, problems)
+    let refusal = inputs.card.as_ref().ok().and_then(Card::refusal);
+    (table, problems, refusal)
 }
 
 /// The machine's memory as `GlobalMemoryStatusEx` reports it (bytes; the load in percent).
@@ -1033,18 +1052,35 @@ pub fn this_processor() -> (u32, [u32; 4], [u32; 4]) {
 }
 
 /// This machine's table (Linux and macOS), with nv-rs's own folder `own_folder` for the game's
-/// Documents and AppData: the text and what could not be answered.
+/// Documents and AppData: the text and what could not be answered. The display and the card are
+/// not in it ([`this_display`]): this part asks nothing of the renderer choice, so a step that
+/// runs before the choice is made (the settings' reading) cannot fix it.
 #[cfg(not(windows))]
 pub fn this_machine(own_folder: Result<std::path::PathBuf, String>) -> (String, Vec<String>) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
-    // The display and the card only for a run that draws: the window layer's thread reads the
-    // monitors (the window system must be there), wgpu the card.
-    let (monitors, card) = if super::d3d9real::wanted() {
-        (
-            super::d3d9real::monitors(),
-            d3d9_wgpu::device::card_facts()
+    write_table(&Inputs {
+        zone: this_zone(),
+        now,
+        processor: this_processor(),
+        own_folder,
+        // The game's page, chosen by the host at the very start of the run, before any name is
+        // turned (`crate::code_page::set_game_page`).
+        code_page: crate::code_page::game_page().number,
+    })
+}
+
+/// This machine's display and card ([`display_part`]), for a run that draws (`draws`: the host
+/// asks it in its start, after the run's renderer choice): the window layer's thread reads the
+/// monitors (the window system must be there), wgpu the card. A run that draws nothing asks
+/// neither.
+#[cfg(not(windows))]
+pub fn this_display(draws: bool) -> (String, Vec<String>, Option<String>) {
+    let inputs = if draws {
+        DisplayInputs {
+            monitors: super::d3d9real::monitors(),
+            card: d3d9_wgpu::device::card_facts()
                 .map(|c| Card {
                     name: c.name,
                     vendor: c.vendor,
@@ -1052,35 +1088,19 @@ pub fn this_machine(own_folder: Result<std::path::PathBuf, String>) -> (String, 
                     driver: c.driver,
                     driver_info: c.driver_info,
                     sample_counts: c.sample_counts,
+                    bc: c.bc,
+                    float32_blendable: c.float32_blendable,
                 })
                 .ok_or_else(|| "wgpu finds no graphics card".to_string()),
-        )
+        }
     } else {
         let why = "the run draws nothing (no renderer chosen)".to_string();
-        (Err(why.clone()), Err(why))
+        DisplayInputs {
+            monitors: Err(why.clone()),
+            card: Err(why),
+        }
     };
-    // The game's code page: the game's language decides (`NV_CODE_PAGE`), not the system's
-    // locale. A value that names no provided page is said, and 1252 stands.
-    let (code_page, page_problem) =
-        match crate::code_page::chosen(std::env::var("NV_CODE_PAGE").ok().as_deref()) {
-            Ok(page) => (page, None),
-            Err(why) => (
-                1252,
-                Some(format!("machine table: {why}; code page 1252 is used")),
-            ),
-        };
-    crate::code_page::set_game_page(code_page);
-    let (table, mut problems) = write_table(&Inputs {
-        zone: this_zone(),
-        now,
-        processor: this_processor(),
-        own_folder,
-        monitors,
-        card,
-        code_page,
-    });
-    problems.extend(page_problem);
-    (table, problems)
+    display_part(&inputs)
 }
 
 #[cfg(test)]
