@@ -521,7 +521,7 @@ fn mine_explode_chance(e: &mut Engine, a: &[u32]) -> Option<u32> {
 
 /// JIP's `cvtss2si` under the default rounding: to nearest, ties to even; NaN or out of range
 /// gives `0x80000000`.
-fn cvtss2si(value: f32) -> i32 {
+pub(crate) fn cvtss2si(value: f32) -> i32 {
     // `round` takes halves away from zero; an odd result of a half goes back to the even one.
     let rounded = value.round();
     let even = if (rounded - value).abs() == 0.5 && rounded % 2.0 != 0.0 {

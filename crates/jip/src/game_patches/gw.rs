@@ -880,7 +880,7 @@ fn source_sound(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// `cvtss2si` under the default rounding: to nearest, ties to even (the value is within 100 to
 /// 200000 here).
 fn cvtss2si(v: f32) -> i32 {
-    v.round_ties_even() as i32
+    super::gd::cvtss2si(v)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: AdjustSoundFrequencyHook.

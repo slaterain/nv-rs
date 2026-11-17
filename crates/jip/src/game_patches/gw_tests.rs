@@ -988,7 +988,7 @@ fn g108_set_frequency_takes_the_factor() {
     let mut e = sound_engine();
     assert_eq!(
         set_frequency_to(&mut e, 1.0),
-        vec![(22050.0 * 1.2f32).round_ties_even() as u32]
+        vec![cvtss2si(22050.0 * 1.2f32) as u32]
     );
     assert_eq!(set_frequency_to(&mut e, 0.0), vec![100]);
     assert_eq!(set_frequency_to(&mut e, 1000.0), vec![200_000]);
