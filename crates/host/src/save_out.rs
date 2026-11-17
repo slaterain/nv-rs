@@ -79,7 +79,10 @@ const START: &str = "play.sh";
 /// Why the game may not write into `path` (saves, settings), by this system's rule: on Windows
 /// [`refused`] with `USERPROFILE` and [`known_folders`]; on Linux and macOS the player's own
 /// folders there (`game_folders::never_written`: Documents, Steam's folders and Proton's
-/// prefixes, the game's folder, macOS's Library), from `HOME`.
+/// prefixes, the game folders the look found, macOS's Library), from `HOME`, and the game folder
+/// the port was started with (its `Data` and the folder holding it, [`prepare`]), found by the
+/// look or not (a copy given by hand, one inside a prefix the look does not know, every game
+/// folder on macOS).
 fn refused_here(path: &Path) -> Option<&'static str> {
     #[cfg(windows)]
     {
@@ -87,8 +90,45 @@ fn refused_here(path: &Path) -> Option<&'static str> {
         refused(path, profile.as_deref(), &known_folders())
     }
     #[cfg(not(windows))]
-    refused_by(guard_list(), path)
+    refused_by(guard_list(), path).or_else(|| {
+        let started = STARTED.lock().unwrap_or_else(|p| p.into_inner());
+        game_folders::refused(path, &started)
+    })
 }
+
+/// Off Windows: the game folders the port was started with ([`prepare`]), guarded whole (no
+/// exception) whatever the look at the player's folders finds.
+#[cfg(not(windows))]
+static STARTED: Mutex<Vec<game_folders::Guarded>> = Mutex::new(Vec::new());
+
+/// Off Windows: the game's `data` folder and the folder holding it (the game's folder) added to
+/// [`STARTED`], as full paths (a relative one taken from the current folder).
+#[cfg(not(windows))]
+fn guard_started(data: &Path) {
+    let data = if data.has_root() {
+        data.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(here) => here.join(data),
+            Err(_) => return,
+        }
+    };
+    let mut started = STARTED.lock().unwrap_or_else(|p| p.into_inner());
+    for root in [Some(data.as_path()), data.parent()].into_iter().flatten() {
+        let guarded = game_folders::Guarded {
+            root: root.to_path_buf(),
+            except: None,
+            system: game_folders::System::this(),
+        };
+        if !started.contains(&guarded) {
+            started.push(guarded);
+        }
+    }
+}
+
+/// Off Windows, for the tests: the plain words of every warning [`warn_visibly`] gave.
+#[cfg(all(test, not(windows)))]
+static WARNED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Off Windows: why `path` may not be written by the look's `answer`: by the player's folders it
 /// found, or, when the look gave no answer (none in time, its thread stopped), always refused.
@@ -116,25 +156,36 @@ static GUARD_LOOK: Mutex<Option<std::sync::mpsc::Receiver<Option<Vec<game_folder
 
 /// Starts looking at the player's folders (Linux and macOS) on a thread of its own, so the first
 /// frame does not wait on every Steam library and Wine prefix (a sleeping or offline disk can take
-/// seconds). Once; nothing on Windows, which asks Windows for its folders.
-pub fn prepare() {
+/// seconds). Once; nothing on Windows, which asks Windows for its folders. `data` is the game's
+/// `Data` folder the port was started with: it and the game's folder are guarded from now on,
+/// whether the look finds them or not.
+pub fn prepare(data: &Path) {
     #[cfg(not(windows))]
     {
-        let mut look = GUARD_LOOK.lock().unwrap_or_else(|p| p.into_inner());
-        if look.is_some() || GUARD.get().is_some() {
-            return;
-        }
-        let (send, receive) = std::sync::mpsc::channel();
-        let started = std::thread::Builder::new()
-            .name("nv player folders".into())
-            .spawn(move || {
-                let list = game_folders::Home::from_process()
-                    .map(|home| game_folders::never_written(&home));
-                let _ = send.send(list);
-            });
-        if started.is_ok() {
-            *look = Some(receive);
-        }
+        guard_started(data);
+        start_look();
+    }
+    #[cfg(windows)]
+    let _ = data;
+}
+
+/// Off Windows: [`prepare`]'s look at the player's folders, started once.
+#[cfg(not(windows))]
+fn start_look() {
+    let mut look = GUARD_LOOK.lock().unwrap_or_else(|p| p.into_inner());
+    if look.is_some() || GUARD.get().is_some() {
+        return;
+    }
+    let (send, receive) = std::sync::mpsc::channel();
+    let started = std::thread::Builder::new()
+        .name("nv player folders".into())
+        .spawn(move || {
+            let list =
+                game_folders::Home::from_process().map(|home| game_folders::never_written(&home));
+            let _ = send.send(list);
+        });
+    if started.is_ok() {
+        *look = Some(receive);
     }
 }
 
@@ -159,7 +210,7 @@ const LOOK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 fn guard_list() -> Result<&'static [game_folders::Guarded], &'static str> {
     GUARD
         .get_or_init(|| {
-            prepare();
+            start_look();
             let receive = GUARD_LOOK.lock().unwrap_or_else(|p| p.into_inner()).take();
             let answer = wait_for_look(receive, LOOK_WAIT);
             if let Err(why @ (LOOK_TOO_SLOW | LOOK_STOPPED)) = answer {
@@ -231,6 +282,11 @@ fn write_part(temporary: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// `osascript`; on Linux `zenity`, else `kdialog`): none there, the banner is all.
 fn warn_visibly(line: &str, plain: &str) {
     println!("{line}");
+    #[cfg(all(test, not(windows)))]
+    WARNED
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .push(plain.to_owned());
     #[cfg(not(windows))]
     {
         eprintln!("\n*** nv-rs WARNING ***\n{plain}\n{line}\n");
@@ -612,7 +668,14 @@ fn warn_refused_mid_run(path: &Path, why: &str) {
 /// standard library does not offer (no new dependency was added for it). To use it, another
 /// program of the player's own would have to replace nv-rs's Saves folder (or one above it) with
 /// a link into the player's own saves inside that window; nothing nv-rs or play.sh does makes
-/// such a link. The player READ MEs say so. A link planted at the temporary
+/// such a link. The player READ MEs say so. Not detected at all: a BIND MOUNT of one of the
+/// player's folders (a Proton prefix's or Documents' saves) onto nv-rs's own folder. The guard
+/// compares where paths lead (links resolved), and a bind mount is not a link: the same folder
+/// shows under a second path that resolves to itself. It was left out on purpose: making one
+/// needs administrator rights (`mount --bind`, an fstab line) or a deliberate tool (bindfs),
+/// nothing nv-rs or play.sh does makes one, and the unit tests (which run without those rights)
+/// could not make one to test a check of folder identity, so it would ship untested. The player READ MEs say
+/// this too. A link planted at the temporary
 /// name is never written through (`write_part`), and the rename replaces a link at the save's
 /// own name instead of following it.
 fn run_checked(
@@ -1428,6 +1491,41 @@ mod tests {
                 b"the player's own save"
             );
             assert!(!players.join("x.fos.part").exists());
+            // Review of #630 (round 4): the refusals mid-run were said to the player, once.
+            let warned: Vec<String> = WARNED
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .filter(|w| w.contains("NOT being kept from now on"))
+                .cloned()
+                .collect();
+            assert_eq!(warned.len(), 1, "{warned:?}");
+            // Review of #630 (round 4): the guard's LIST (from HOME, as prepare reads it) is in
+            // use: the player's Documents saves have no Steam or Wine shape, so only the list can
+            // refuse them; a scratch folder is allowed. Nothing is written.
+            let home = game_folders::Home::from_process().expect("HOME is a full path");
+            let documents = home.home.join("Documents/My Games/FalloutNV/Saves/x.fos");
+            assert!(refused_here(&documents).is_some(), "{documents:?}");
+            assert_eq!(refused_here(&s.0.join("own/Saves/y.fos")), None);
+        }
+
+        /// Review of #630 (round 4): the game folder the port was started with is guarded, though
+        /// the look at the player's folders did not find it (a copy given by hand): its `Data` and
+        /// the folder holding it; a folder beside it is not.
+        #[test]
+        fn the_game_folder_started_with_is_guarded_unfound() {
+            let s = Scratch::new("started");
+            let data = s.0.join("game/Data");
+            std::fs::create_dir_all(&data).unwrap();
+            let in_game = s.0.join("game/Saves/x.fos");
+            let in_data = data.join("x.fos");
+            let beside = s.0.join("own/Saves/x.fos");
+            assert_eq!(refused_here(&in_game), None);
+            assert_eq!(refused_here(&in_data), None);
+            prepare(&data);
+            assert!(refused_here(&in_game).is_some());
+            assert!(refused_here(&in_data).is_some());
+            assert_eq!(refused_here(&beside), None);
         }
 
         /// Review of #630 (round 3): a look with no answer refuses every path; an answer is

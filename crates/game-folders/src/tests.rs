@@ -858,3 +858,62 @@ fn a_refused_own_folder_gets_a_record_of_its_own() {
         );
     }
 }
+
+/// Review of #630 (round 4): a manifest's `installdir` names one folder inside the library's
+/// `steamapps/common`, never a path: one that climbs out (`../../outside`), a full path to a
+/// game elsewhere, or one with a `..` inside it is not followed, though each leads to a game.
+#[test]
+fn a_manifests_installdir_cannot_lead_out_of_steamapps_common() {
+    let s = Scratch::new("installdir");
+    let home = s.home(System::Linux);
+    let library = s.0.join("home/.local/share/Steam");
+    let common = s.dir("home/.local/share/Steam/steamapps/common");
+    // Where each installdir would lead if it were joined as a path.
+    let climbed = s.game("home/.local/share/outside", "Data", "FalloutNV.esm");
+    let absolute = s.game("elsewhere/FNV", "Data", "FalloutNV.esm");
+    s.dir("home/.local/share/Steam/steamapps/common/common");
+    let dotted = s.game(
+        "home/.local/share/Steam/steamapps/common/x",
+        "Data",
+        "FalloutNV.esm",
+    );
+    let manifest = |app: u32, dir: &str| {
+        s.file(
+            &format!("home/.local/share/Steam/steamapps/appmanifest_{app}.acf"),
+            &format!(
+                "\"AppState\" {{ \"installdir\" \"{}\" }}",
+                dir.replace('\\', "\\\\")
+            ),
+        );
+    };
+    // Each case alone, so one followed path cannot hide behind another.
+    let cases = [
+        ("../../outside".to_string(), climbed),
+        (absolute.display().to_string(), absolute.clone()),
+        ("common/../x".to_string(), dotted),
+    ];
+    for (dir, there) in &cases {
+        assert!(data_folder(there).is_some(), "{there:?}");
+        manifest(22380, dir);
+        let found = games(&home);
+        assert!(
+            found.is_empty(),
+            "installdir {dir:?} was followed: {found:?}"
+        );
+    }
+    // A plain name is followed (the test's library is read at all).
+    manifest(22380, "FNV Game");
+    let plain = s.game(
+        "home/.local/share/Steam/steamapps/common/FNV Game",
+        "Data",
+        "FalloutNV.esm",
+    );
+    assert_eq!(
+        games(&home),
+        [Found {
+            store: "Steam",
+            folder: plain
+        }]
+    );
+    assert!(common.is_dir() && library.is_dir());
+}
