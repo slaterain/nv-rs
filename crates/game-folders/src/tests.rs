@@ -869,7 +869,7 @@ fn a_manifests_installdir_cannot_lead_out_of_steamapps_common() {
     let library = s.0.join("home/.local/share/Steam");
     let common = s.dir("home/.local/share/Steam/steamapps/common");
     // Where each installdir would lead if it were joined as a path.
-    let climbed = s.game("home/.local/share/outside", "Data", "FalloutNV.esm");
+    let climbed = s.game("home/.local/share/Steam/outside", "Data", "FalloutNV.esm");
     let absolute = s.game("elsewhere/FNV", "Data", "FalloutNV.esm");
     s.dir("home/.local/share/Steam/steamapps/common/common");
     let dotted = s.game(
@@ -892,15 +892,16 @@ fn a_manifests_installdir_cannot_lead_out_of_steamapps_common() {
         (absolute.display().to_string(), absolute.clone()),
         ("common/../x".to_string(), dotted),
     ];
+    let mut followed = Vec::new();
     for (dir, there) in &cases {
         assert!(data_folder(there).is_some(), "{there:?}");
         manifest(22380, dir);
         let found = games(&home);
-        assert!(
-            found.is_empty(),
-            "installdir {dir:?} was followed: {found:?}"
-        );
+        if !found.is_empty() {
+            followed.push(format!("installdir {dir:?} was followed: {found:?}"));
+        }
     }
+    assert!(followed.is_empty(), "{followed:#?}");
     // A plain name is followed (the test's library is read at all).
     manifest(22380, "FNV Game");
     let plain = s.game(
