@@ -1113,7 +1113,7 @@ text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below); O
 built yet; O14's second hook site, `0xC72EA3` in the player's character controller setup where JIP's
 `InitControllerShapeHook` records the controller shape, has no seam yet: group GX adds it with its handler, and
 the two are tested together); G108's `0xAE5648` (the audio manager's message kind 54, which the game ignores; group
-GW's row and handler, not built yet). Until their handlers are in, those two places run the
+GW's row and handler, listed under GW below). Until their handlers are in, those places run the
 game's code.
 
 #### GB: UI: item lists, repair, pad dead zones
@@ -1397,6 +1397,31 @@ the days be counted again from the hour; moving it back counts as the next day. 
 on by a fixed table (no leap years, as in the original). Differences from JIP: with no player loaded the
 hardcore needs byte JIP sets is not written (JIP would write to a bad address), and a month number outside
 0 to 11 is taken to have 31 days (JIP reads past its table).
+
+Sound and music fixes (with the row): a sound form's frequency setting (its pitch up or down by a
+percentage) is applied to the sound as it plays, and a script or the game that changes a sound's pitch
+keeps that setting on top (`0x82D416`, the request to the audio thread; `0xAE5648`, the audio thread's
+message 54, which the game ignores; `0xAEACAA`, a new sound's factor 1.0; `00af01e0` and `00af0290`,
+the sound's frequency set and read, replaced: the result is rounded to the nearest whole frequency
+where the game cut it, and setting it answers 0 as JIP's does). A region's music media sets from a
+plugin are found through that plugin's masters (`0x4F49AB`, `0x4F49D2`; credited by JIP to lStewieAl
+and TrueCourierSix); a location's music plays its media sets in a shuffled order with no repeat
+until each has played (`00595560` replaced; the game drew at random and moved the pick to the end);
+battle music never picks the set it played last (`004f4f90`, the region's `GetMediaSetBattle`,
+replaced). A random sound from a folder picks among both its `.wav` and its `.ogg` files (`005e3630`,
+the folder sound picker, replaced; the game took the `.ogg` files only when there were any, and kept a
+pick from repeating). Differences from JIP: a sound map with no buckets or a request with no sound
+form does nothing (JIP would divide by 0 or read a bad address); a location with no music list
+picks nothing, as the game does (JIP would read address 0); JIP puts the folder picker in at its
+deferred start-up, the port from the start.
+
+`FalloutCustom.ini` (with the row; `0x86AC60`, before the game's launcher test at start-up): each
+`setting=value` line of each `[section]` sets the game's INI setting `setting:section` (a `b` setting
+takes 1 when the value starts with `1`, `i` and `u` whole numbers, `f` a decimal, `s` the text), so
+players can override INI settings without editing the game's own files. The port reads the file as a
+mod's file: from its own folder beside the saves (`nv-rs mod files`), else the game's folder; JIP reads
+it from the game's settings folder in Documents, which the port never reads for mods. A setting name
+longer than JIP's 255-character buffer is taken whole.
 
 Seams for group GF's row G45 (saving: temporary forms are not written): `0x8497CD` (whether `UnloadForm` goes
 on), `0x846FFB` and `0x845558` (the save's form id and changes maps' bucket counts). Until GF's handler is in,
