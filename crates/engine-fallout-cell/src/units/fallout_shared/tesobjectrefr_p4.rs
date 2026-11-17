@@ -7106,6 +7106,17 @@ mod tests {
             vec![vec![item, item + 0x3c, 5, actor, 0]]
         );
         super::jip_seam::seen();
+        // A reference that is not an actor: asked with 0 for the actor.
+        // (The translation reads the null actor's process word as the exe's getters do: page 0 mapped.)
+        s.e.map(0, 0x1000);
+        let node = s.node;
+        let thing = reference(&mut s.e, false, &[(0x1e8, 0), (0x1e4, 0), (0x22c, 0)]);
+        set_node(&mut s.e, thing, node);
+        super::jip_seam::answer_with(Some(0));
+        logged(&mut s.e, |e| {
+            e.call(0x0057_1760, &args![thing, item]);
+        });
+        assert_eq!(super::jip_seam::seen(), vec![vec![thing, 0, item, 0, 0]]);
     }
 
     #[test]

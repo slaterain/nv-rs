@@ -4091,6 +4091,11 @@ mod tests {
         let (mut e, buffer) = buffer_engine();
         e.mem.set_u32(buffer + 0x17, 1);
         e.on_site(SiteSlot::new(Owner::Jip, 0x0048_4e03), handler);
+        // Saved flags with 0x400000 set (and 0x800000, which neither mask takes).
+        e.register(LOAD_BUFFER_READ, |e, a| {
+            e.mem.set_u32(a[1], 0x12c4_5678);
+            Ret::default()
+        });
         e.register(WIDE_IS_REFERENCE, |_, _| ret(1));
         let load = |e: &mut Engine| {
             let reference = wide_form(e, 8, 0x20);
@@ -4098,10 +4103,10 @@ mod tests {
             e.get(reference, TESForm::iFormFlags)
         };
         e.set_jip_patches(jip_patches::INSTALLED);
-        assert_eq!(load(&mut e), 8 | (0x1234_5678 & 0x0091_2860));
+        assert_eq!(load(&mut e), 8 | (0x12c4_5678 & 0x0091_2860));
         assert!(SEEN.with(|s| s.take()).is_empty(), "only FIXES asks");
         e.set_jip_patches(jip_patches::FIXES);
-        assert_eq!(load(&mut e), 8 | (0x1234_5678 & 0x00d1_2860));
+        assert_eq!(load(&mut e), 8 | (0x12c4_5678 & 0x00d1_2860));
         assert_eq!(SEEN.with(|s| s.take()), vec![vec![0x0091_2860]]);
         e.register(WIDE_IS_REFERENCE, |_, _| ret(0));
         let plain = wide_form(&mut e, 8, 0x20);

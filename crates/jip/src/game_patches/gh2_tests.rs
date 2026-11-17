@@ -1384,6 +1384,20 @@ fn o17_the_chance_and_the_shuffle() {
     });
     do_on_load_actor(&mut e, &[ACTOR]);
     assert_eq!(dealt_flags(&mut e), Some(5));
+    // Only the level word counts (`cwde`): 0xABCD_0005 is level 5, chance 10; draw 30: nothing
+    // (the whole word would give 60, over 30).
+    let mut e = mods_world(&[30]);
+    e.register(STUB_LEVEL, |_, _| Ret {
+        eax: 0xabcd_0005,
+        ..Ret::default()
+    });
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), None);
+    // Chance 10, draw 7, shuffle 0 (1, 2, 4): 1 halves to 5; 2 absent; 4 present with 5 <= 7:
+    // dropped: 1.
+    let mut e = mods_world(&[7, 0]);
+    do_on_load_actor(&mut e, &[ACTOR]);
+    assert_eq!(dealt_flags(&mut e), Some(1));
 }
 
 /// O17's conditions: no node (answer 0), a save loading, dead, a low process, already dealt,

@@ -4856,6 +4856,21 @@ mod tests {
         assert_eq!(calls_to(&calls, SET_WEAPON_FLAG), vec![vec![0x5656, 1]]);
     }
 
+    /// `004ab750` hands its mod flags to `004ab400` by address (JIP LN's G93 wraps it there).
+    #[test]
+    fn the_weapon_slot_gets_the_mod_flags_by_address() {
+        let mut e = engine();
+        tables(&mut e);
+        let this = biped(&mut e);
+        let form = weapon_form(&mut e);
+        log(&mut e);
+        fn_004ab750(&mut e, this, Ptr::new(form), 3);
+        assert_eq!(
+            calls_to(&log(&mut e), 0x004a_b400),
+            vec![vec![this.addr(), form, 3]]
+        );
+    }
+
     #[test]
     fn a_weapon_that_fails_to_load_is_not_named() {
         let mut e = engine();
