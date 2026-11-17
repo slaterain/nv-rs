@@ -8,12 +8,15 @@
 //! layer from the game's or the render thread, configures it and presents its frames there. This
 //! test does the same, in two cases, each on a SPAWNED thread with the crate's backend
 //! (`WgpuBackend::new(Output::Window)`, `CreateDevice` on the registered window, a `Clear`, a
-//! `Present`), checking that the device was made and one frame was shown:
-//! 1. a bare `CAMetalLayer` (no view, no window);
+//! `Present`), checking that the device was made and its present ran:
+//! 1. a bare `CAMetalLayer` (no view, no window): exactly one frame shown;
 //! 2. a real window: this program's real main thread runs winit's loop, makes an `NSWindow`, and
 //!    the layer from its view as the window layer does (`raw_window_metal::Layer::from_ns_view`).
 //!    wgpu's Metal surface then also reads that window's occlusion state on the render thread
-//!    each frame, as it will in the game.
+//!    each frame, as it will in the game. CI's Mac has no screen session, so its window is
+//!    hidden from view and wgpu gives no frame (`Occluded`): the port's own outcome for that,
+//!    [`d3d9_wgpu::NoFrame::Occluded`] with no frame shown, passes as well as one frame shown;
+//!    anything else fails.
 //!
 //! No test harness (`harness = false`): case 2 needs the process's real main thread. A machine
 //! with no Metal adapter (enumerated without any surface) skips, saying so in a line that starts
@@ -31,7 +34,7 @@ fn main() {
 #[cfg(target_vendor = "apple")]
 mod mac {
     use d3d9_stream::{Backend, Cmd, Data};
-    use d3d9_wgpu::{GameWindow, Output, WgpuBackend};
+    use d3d9_wgpu::{GameWindow, NoFrame, Output, WgpuBackend};
     use raw_window_handle::{
         DisplayHandle, HandleError, HasDisplayHandle, HasWindowHandle, WindowHandle,
     };
@@ -130,9 +133,13 @@ mod mac {
             .map(|i| i.name)
     }
 
+    /// What one present did: the frames the window showed, and why the last frame asked for was
+    /// not shown (None when it was, or when none was asked).
+    type Shown = (u64, Option<NoFrame>);
+
     /// On a spawned thread, as the game's render thread: the backend's device on the registered
-    /// window `id`, its back buffer cleared and presented once. The frames the window showed.
-    fn draw_off_the_main_thread(id: isize) -> std::thread::JoinHandle<Result<u64, String>> {
+    /// window `id`, its back buffer cleared and presented once.
+    fn draw_off_the_main_thread(id: isize) -> std::thread::JoinHandle<Result<Shown, String>> {
         std::thread::Builder::new()
             .name("render".into())
             .spawn(move || {
@@ -176,16 +183,32 @@ mod mac {
                     model: 0,
                     frame: 1,
                 });
-                Ok(b.device().map_or(0, |d| d.frames_shown()))
+                match b.device() {
+                    Some(d) => Ok((d.frames_shown(), d.frame_not_shown())),
+                    None => Err("the device was gone after its present".into()),
+                }
             })
             .expect("the render thread")
     }
 
-    /// The result of one case: one frame shown, else a failure.
-    fn judge(case: &str, done: std::thread::Result<Result<u64, String>>) {
+    /// The result of one case: one frame shown; or, with `hidden_ok` (a real window, which CI's
+    /// Mac keeps hidden from view), no frame shown because the window is hidden from view (the
+    /// port's own `NoFrame::Occluded`). Anything else is a failure.
+    fn judge(case: &str, hidden_ok: bool, done: std::thread::Result<Result<Shown, String>>) {
         match done {
-            Ok(Ok(1)) => eprintln!("metal_surface: {case}: device made, 1 frame shown: ok"),
-            Ok(Ok(n)) => fail(&format!("{case}: {n} frames shown, 1 expected")),
+            Ok(Ok((1, None))) => eprintln!("metal_surface: {case}: device made, 1 frame shown: ok"),
+            Ok(Ok((0, Some(NoFrame::Occluded)))) if hidden_ok => eprintln!(
+                "metal_surface: {case}: device made, present ran, no frame shown because the \
+                 window is hidden from view (Occluded): ok"
+            ),
+            Ok(Ok((n, why))) => fail(&format!(
+                "{case}: {n} frames shown (not shown because: {why:?}); 1 expected{}",
+                if hidden_ok {
+                    ", or none because the window is hidden from view (Occluded)"
+                } else {
+                    ""
+                }
+            )),
             Ok(Err(e)) => fail(&format!("{case}: {e}")),
             Err(_) => fail(&format!("{case}: the render thread panicked")),
         }
@@ -214,7 +237,7 @@ mod mac {
                 window: None,
             }),
         );
-        judge("bare layer", draw_off_the_main_thread(1).join());
+        judge("bare layer", false, draw_off_the_main_thread(1).join());
         // Case 2: a real window on this, the real main thread.
         window::run();
     }
@@ -228,7 +251,7 @@ mod mac {
 
         #[derive(Default)]
         struct App {
-            render: Option<std::thread::JoinHandle<Result<u64, String>>>,
+            render: Option<std::thread::JoinHandle<Result<Shown, String>>>,
             done: bool,
         }
 
@@ -271,7 +294,7 @@ mod mac {
                 // thread run here) until the render thread is done.
                 if self.render.as_ref().is_some_and(|r| r.is_finished()) {
                     let render = self.render.take().expect("the render thread");
-                    judge("real window", render.join());
+                    judge("real window", true, render.join());
                     self.done = true;
                     event_loop.exit();
                 }
@@ -288,7 +311,7 @@ mod mac {
                 fail(&format!("window: winit's loop ended with {e}"));
             }
             if !app.done {
-                fail("window: winit's loop ended before the frame was shown");
+                fail("window: winit's loop ended before the render thread was done");
             }
         }
     }

@@ -152,9 +152,10 @@ pub(crate) struct Window {
     pub(crate) refused: u64,
 }
 
-/// Why no frame was shown ([`Window::frame`]).
+/// Why no frame was shown ([`Window::frame`]; tests read it through
+/// [`crate::device::Device::frame_not_shown`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NoFrame {
+pub enum NoFrame {
     Minimised,
     NoArea,
     Resting,
@@ -342,6 +343,15 @@ impl Window {
     /// The window's handle (the queue thread takes its DPI awareness for the present).
     pub(crate) fn hwnd(&self) -> isize {
         self.hwnd
+    }
+
+    /// Why the last frame asked for was not shown; None when it was (or none was asked).
+    pub(crate) fn not_shown(&self) -> Option<NoFrame> {
+        if self.skipped > 0 {
+            self.last_why
+        } else {
+            None
+        }
     }
 
     /// The window's next frame, at its size now; `None` when it gives none now (the start and the
