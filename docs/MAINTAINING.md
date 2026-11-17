@@ -65,6 +65,73 @@ Dependency updates require refreshing distribution/licenses and
 THIRD-PARTY-NOTICES.txt before packaging. Keep their upstream provenance and
 copyright notices. Packaging a license list alone is insufficient.
 
+
+## Releasing a Linux or macOS preview
+
+Nobody on the team has a Linux PC or a Mac, so these packages are built by GitHub Actions
+(`.github/workflows/preview-packages.yml`, started by hand only) and checked against the game
+on the maintainer's Windows PC before anything is published. The archive GitHub built is
+published byte for byte: re-packing it on Windows would lose the Unix permissions inside it
+(play.sh and the program executable), which NTFS does not keep. The game does NOT run on Linux
+or macOS yet: these previews find the game, keep nv-rs's saves apart from the player's, and say
+plainly that they cannot start it. Every text that goes out with them says so.
+
+1. Start the workflow on main: Actions > "Preview packages (Linux, macOS)" > Run workflow, with a
+   version such as `2026-11-20.1` (or `gh workflow run preview-packages.yml --ref main -f
+   version=2026-11-20.1`). CI has no game, so it builds without it: each archive is named
+   `nv-rs-preview-<system>-test.tar.gz`, and its BUILD.txt names the run, the branch and the
+   commit, and says the program was not checked against the game where it was built and that a
+   published package is checked first (step 3). `scripts/package-playtest.sh` refuses a package
+   without `--game` unless it is made that way (`--test-build`).
+2. Download both artifacts into a scratch folder (not the game's folder):
+   `gh run download RUN-ID --repo slaterain/nv-rs`.
+3. In PowerShell, from a clean checkout of main, check each archive with your own FalloutNV.exe
+   (only read):
+
+   ```powershell
+   ./scripts/check-unix-package.ps1 -Archive <download>\nv-rs-preview-linux-x86_64-test\nv-rs-preview-linux-x86_64-test.tar.gz -Game '<game folder>\FalloutNV.exe'
+   ./scripts/check-unix-package.ps1 -Archive <download>\nv-rs-preview-macos-arm64-test\nv-rs-preview-macos-arm64-test.tar.gz -Game '<game folder>\FalloutNV.exe'
+   ```
+
+   It needs GitHub's command line signed in (`gh auth login`). For each archive it checks it against
+   its `.sha256`; reads the archive's own list first (only plain files and folders, all under the
+   package's folder, no two names equal when case is ignored, no name Windows cannot hold as it
+   is); extracts it into a temporary folder (removed after); checks the program's SHA256 against
+   BUILD.txt; asks GitHub about the run BUILD.txt names (it must be a run of slaterain/nv-rs's
+   package workflow, started by hand on main at BUILD.txt's commit, and successful: BUILD.txt's
+   words alone are not trusted); checks that commit is on origin's main (so its source link always
+   holds); and runs
+   `package-check --game --max-run 4096` on the package (no data of the game's program in our
+   program). It must end with `check-unix-package: PASSED`. Read the two lines it printed and wrote:
+   `N files, M needles: 0 hits` (N must be the number of files the archive lists; the script checks
+   it, and `package-check` itself refuses a folder that is missing or holds
+   no files, and `--game` with no program in it), and
+   `nv-rs-preview-<system>-test\app\nv-viewer: <bytes> bytes, shares ... longest <L>` with L at most
+   4096: that line is the proof the program itself was compared with the game. It then writes
+   `nv-rs-preview-<system>-test.CHECKED.txt` beside the archive: the run, the commit, the date and
+   those lines. Any `REFUSED` line: publish nothing; fix the cause and start again at step 1.
+4. Read each BUILD.txt (in the archive): a build without the game lists the licence notices or
+   folders still missing (a release package would have been refused for them). If it lists any,
+   refresh distribution/licenses and THIRD-PARTY-NOTICES.txt, merge, and start again at step 1.
+5. Create a release tag at BUILD.txt's source commit (the same in both packages; the script
+   checked it is on main, and it must be public: BUILD.txt and CHECKED.txt point at it, and that is
+   how the GPL's source is offered). Create a draft pre-release and attach, as they are, each
+   archive, its `.sha256` and its `.CHECKED.txt` (renaming an archive breaks its checksum file).
+   The notes say plainly that the game does not run on Linux or macOS yet and what the packages do
+   instead (find the game, keep the saves apart, say why they stop), carry both CHECKED.txt texts,
+   and give the reporting instructions. Say that nobody on the team has run them.
+6. Publish after reviewing the draft. Official builds are maintainer-published; nothing here
+   publishes by itself.
+
+`scripts/check-unix-package-test.ps1` tests the check script on made-up packages (no game file): run
+it after changing either script.
+
+The first hand-started run after this workflow is merged is its first run with the release
+profile from scratch on both runners (the earlier proving runs used the quick play profile).
+Record from it, in the pull request that merged the workflow or in the release notes: each job's
+build time, whether it stayed inside `timeout-minutes` (240 for now), and both packages' sizes;
+then set the timeout to about twice the slower job's time.
+
 ## Work queue and AI handoff
 
 Keep a small set of milestone issues. Contributors comment to claim a bounded

@@ -388,7 +388,7 @@ fn fixes_on() -> Engine {
 #[test]
 fn gb3_rows_are_jips_addresses() {
     assert_eq!(
-        AREA.fix_sites,
+        AREA.fix_sites[..7],
         [
             0x0072_880d,
             0x0072_8e10,
@@ -807,4 +807,200 @@ fn g64_only_the_first_of_the_buyers_stacks() {
     assert_eq!(e.mem.u32(chain(&e, first)[1] + 0xc), 0x7fff);
     assert_eq!(e.mem.u32(chain(&e, second)[1] + 0xc), 6);
     assert_eq!(stacks(&e, head), [first, second]);
+}
+
+// ---- GB-4: G82 (item names), O9 (quantity short keys) ----
+
+const HEAP_FREE: u32 = 0x00aa_4060;
+/// The test's stack, its form, the tile, its value array and string value.
+const STACK: u32 = AREA_AT + 0x6000;
+const WEAPON: u32 = AREA_AT + 0x6100;
+const NAME: u32 = AREA_AT + 0x6200;
+const TILE: u32 = AREA_AT + 0x6300;
+const STRING_VALUE: u32 = AREA_AT + 0x6400;
+const OLD_TEXT: u32 = AREA_AT + 0x6500;
+
+/// A stack of `name` (a form of `kind`) with no stack list, a tile with a string value holding
+/// `old`; the heap, `AddExtra`, `GetByType` stand-ins; refreshes and frees logged.
+fn names_world(kind: u8, name: &[u8], old: &[u8]) -> Engine {
+    let mut e = fixes_on();
+    list_world(&mut e);
+    e.register(HEAP_FREE, |_, a| {
+        gb3_log(HEAP_FREE, a);
+        Ret::default()
+    });
+    e.register(VALUE_REFRESH, |_, a| {
+        gb3_log(VALUE_REFRESH, a);
+        Ret::default()
+    });
+    e.mem.set_u8(WEAPON + 4, kind);
+    e.mem.write(NAME, name);
+    e.mem.set_u32(WEAPON + 0x34, NAME);
+    e.mem.set_u16(WEAPON + 0x38, name.len() as u16);
+    entry(&mut e, STACK, 0, 1, WEAPON);
+    let array = TILE + 0x40;
+    let other = TILE + 0x80;
+    e.mem.set_u32(other, 0xfa0);
+    e.mem.set_u32(STRING_VALUE, 0xfc4);
+    e.mem.set_u32(array, other);
+    e.mem.set_u32(array + 4, STRING_VALUE);
+    e.mem.set_u32(TILE + 0x14, array);
+    e.mem.set_u32(TILE + 0x18, 2);
+    if old.is_empty() {
+        e.mem.set_u32(STRING_VALUE + 0xc, 0);
+    } else {
+        e.mem.write(OLD_TEXT, old);
+        e.mem.set_u8(OLD_TEXT + old.len() as u32, 0);
+        e.mem.set_u32(STRING_VALUE + 0xc, OLD_TEXT);
+    }
+    gb3_calls();
+    e
+}
+
+/// The tile's string now.
+fn shown(e: &Engine) -> Vec<u8> {
+    match e.mem.u32(STRING_VALUE + 0xc) {
+        0 => vec![],
+        at => e.mem.cstr(at),
+    }
+}
+
+/// Gives the stack a first list holding `ExtraWeaponModFlags` with `flags`.
+fn modded(e: &mut Engine, flags: u8) {
+    let list = extra_list(e, AREA_AT + 0x6800, &[(0x8d, u32::from(flags))]);
+    let node_at = node(e, AREA_AT + 0x6a00, list, 0);
+    e.mem.set_u32(STACK, node_at);
+}
+
+/// G82, JIP's `ConstructItemEntryNameHook`: one plain item gets nothing; more than one gets
+/// "Name (count)"; a modded weapon "Name+" alone and "Name+ (count)" with more than one (the
+/// count written as JIP's `IntToStr`); each answers 1 (the exe's block skipped). The text is copied
+/// to the game's heap, the old one freed, the value refreshed once.
+#[test]
+fn g82_names_the_entry() {
+    let site = ITEM_NAMES[2].addr();
+    let mut e = names_world(0x28, b"Laser Rifle", b"old");
+    assert_eq!(e.site(site, &[TILE, STACK, 1]), Some(1));
+    assert_eq!(shown(&e), b"old", "one plain item: nothing set");
+    assert!(gb3_calls().is_empty());
+    assert_eq!(e.site(site, &[TILE, STACK, 3]), Some(1));
+    assert_eq!(shown(&e), b"Laser Rifle (3)");
+    let calls = gb3_calls();
+    assert_eq!(
+        calls.iter().map(|c| c.0).collect::<Vec<_>>(),
+        [HEAP_FREE, HEAP_ALLOCATE, VALUE_REFRESH]
+    );
+    assert_eq!(calls[0].1[1], OLD_TEXT);
+    assert_eq!(calls[1].1[1], 16, "the text and its end");
+    assert_eq!(calls[2].1, [STRING_VALUE, 1]);
+    modded(&mut e, 2);
+    assert_eq!(e.site(site, &[TILE, STACK, 1]), Some(1));
+    assert_eq!(shown(&e), b"Laser Rifle+");
+    assert_eq!(e.site(ITEM_NAMES[0].addr(), &[TILE, STACK, 12]), Some(1));
+    assert_eq!(shown(&e), b"Laser Rifle+ (12)");
+    assert_eq!(
+        e.site(ITEM_NAMES[1].addr(), &[TILE, STACK, -2i32 as u32]),
+        Some(1)
+    );
+    assert_eq!(shown(&e), b"Laser Rifle+");
+    // The same text again: nothing freed, nothing copied, no refresh (JIP's compare).
+    gb3_calls();
+    assert_eq!(e.site(site, &[TILE, STACK, 1]), Some(1));
+    assert!(gb3_calls().is_empty());
+}
+
+/// Not a weapon: never "+" (JIP's mod flags answer 0), a stack of more than one still counted; a
+/// form with an empty name: nothing set; a tile without a string value: nothing set; no old text:
+/// nothing freed.
+#[test]
+fn g82_other_forms_and_empty_names() {
+    let site = ITEM_NAMES[2].addr();
+    let mut e = names_world(0x1f, b"Scrap Metal", b"");
+    modded(&mut e, 1);
+    assert_eq!(e.site(site, &[TILE, STACK, 1]), Some(1));
+    assert_eq!(shown(&e), b"");
+    assert_eq!(e.site(site, &[TILE, STACK, 2]), Some(1));
+    assert_eq!(shown(&e), b"Scrap Metal (2)");
+    assert!(!gb3_calls().iter().any(|c| c.0 == HEAP_FREE));
+    let mut e = names_world(0x28, b"", b"old");
+    modded(&mut e, 1);
+    assert_eq!(e.site(site, &[TILE, STACK, 5]), Some(1));
+    assert_eq!(shown(&e), b"old");
+    let mut e = names_world(0x28, b"Laser Rifle", b"old");
+    e.mem.set_u32(STRING_VALUE, 0xfc5);
+    assert_eq!(e.site(site, &[TILE, STACK, 5]), Some(1));
+    assert_eq!(e.mem.u32(STRING_VALUE + 0xc), OLD_TEXT);
+    assert!(gb3_calls().is_empty());
+}
+
+/// nv-rs's own: a name that does not fit the 0x80-byte buffer is cut to 127 characters.
+#[test]
+fn g82_cuts_to_the_buffer() {
+    let long = [b'x'; 200];
+    let mut e = names_world(0x28, &long, b"");
+    assert_eq!(e.site(ITEM_NAMES[2].addr(), &[TILE, STACK, 7]), Some(1));
+    assert_eq!(shown(&e), [b'x'; 127]);
+}
+
+/// The key state copy the built-in xNVSE publishes, with `keys` held (raw state) and others
+/// pressed only in the game's state.
+fn keys(e: &mut Engine, held: &[u32], game_only: &[u32]) {
+    for k in [0x10, 0x1d, 0x9d, 0x2a, 0x36] {
+        let mut info = crate::test_support::key(e, k);
+        info.raw_state = held.contains(&k);
+        info.game_state = game_only.contains(&k);
+    }
+}
+
+/// O9 (JIP's three `QttSelect` hooks): either Ctrl (raw state) answers 1, either Shift the count,
+/// Ctrl first; no key, or a key pressed only in the game's state, answers nothing. The same at
+/// each of the three seams.
+#[test]
+fn o9_ctrl_one_shift_all() {
+    let mut e = fixes_on();
+    for slot in QUANTITY_KEYS {
+        let site = slot.addr();
+        for (held, answer) in [
+            (vec![], None),
+            (vec![0x1d], Some(1)),
+            (vec![0x9d], Some(1)),
+            (vec![0x2a], Some(37)),
+            (vec![0x36], Some(37)),
+            (vec![0x2a, 0x1d], Some(1)),
+            (vec![0x10], None),
+        ] {
+            keys(&mut e, &held, &[]);
+            assert_eq!(e.site(site, &[37]), answer, "{site:08x} {held:?}");
+        }
+        keys(&mut e, &[], &[0x1d, 0x2a]);
+        assert_eq!(e.site(site, &[37]), None, "game state only");
+    }
+    assert_eq!(e.site(WEIGHTLESS_TAKE.addr(), &[]), Some(1));
+}
+
+/// The rows: `WritePushRetRelJump(0x72F33D/0x75D1A5/0x782876, ..)` and O9's `HOOK_INIT_LIST`
+/// (`0x72D8B4`, `0x75BF97`, `0x780B09`, `0x75BF18`).
+#[test]
+fn gb4_rows_are_jips_addresses() {
+    assert_eq!(
+        ITEM_NAMES.map(|s| s.addr()),
+        [0x0072_f33d, 0x0075_d1a5, 0x0078_2876]
+    );
+    assert_eq!(
+        QUANTITY_KEYS.map(|s| s.addr()),
+        [0x0072_d8b4, 0x0075_bf97, 0x0078_0b09]
+    );
+    assert_eq!(WEIGHTLESS_TAKE.addr(), 0x0075_bf18);
+    assert_eq!(
+        AREA.fix_sites[7..],
+        [
+            0x0072_f33d,
+            0x0075_d1a5,
+            0x0078_2876,
+            0x0072_d8b4,
+            0x0075_bf97,
+            0x0078_0b09,
+            0x0075_bf18
+        ]
+    );
 }

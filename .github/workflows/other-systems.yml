@@ -78,6 +78,24 @@ jobs:
           cargo test --locked --no-fail-fast --workspace --exclude engine || failed=1
           cargo test --locked --no-fail-fast -p engine --lib || failed=1
           exit $failed
+      # play.sh (distribution/unix) reads `nv-viewer --find`'s fields with a decoder of its own:
+      # checked here against the program's own escaping, under this runner's sh (dash) and bash,
+      # named so a run that skipped it shows; play.sh's test with the real program built above
+      # (NV_RS_REAL_PROGRAM: it takes and refuses the same game folders as the test's stand-in,
+      # and ends with its own status for the expected stop); and the package checker's own tests
+      # (a workspace of its own, scripts/package-check, which the step above does not build).
+      # play.sh's test under every shell, with the stand-in only, is its own workflow (play-sh.yml).
+      - name: Check play.sh's decoder, play.sh with the real program, and the package checker
+        if: ${{ !cancelled() }}
+        run: |
+          failed=0
+          cargo test --locked -p game-folders --lib -- --exact tests::play_sh_decodes_every_name_escape_wrote 2>&1 | tee decode.log || failed=1
+          grep -q "test result: ok. 1 passed" decode.log || failed=1
+          NV_RS_REAL_PROGRAM="$PWD/target/play/nv-viewer" SH=dash sh distribution/unix/test-play.sh 2>&1 | tee play.log || failed=1
+          grep -q "^PASS 24 " play.log || failed=1
+          grep -q "^fails: 0" play.log || failed=1
+          cargo test --locked --manifest-path scripts/package-check/Cargo.toml || failed=1
+          exit $failed
   macos:
     name: other systems (macos-latest)
     if: >-

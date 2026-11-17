@@ -2515,10 +2515,21 @@ fn update_water_form_for_reference(e: &mut Engine, this: Ptr<TESWaterSystem>, re
     // Only the first reference of a water form in an update scrolls and
     // renders its noise.
     let update_map = address_of(this, TESWaterSystem::WaterTypeUpdateMap);
-    let already_updated = e.with_stack(1, |e, flag| {
-        e.call(WATER_TYPE_MAP_FIND, &args![update_map, water_form, flag])
-            .bool()
-    });
+    // JIP LN's G106 (a fix row, `0x4E4000` nop4 and `WriteRelCall(0x4E400E,
+    // UpdateWaterTexturesHook)`): the handler's answer takes the place of the map's find; its low
+    // byte is "already updated". Words: the map and the water form.
+    let jip_answer = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x004e_400e, &[update_map, water_form.addr()])
+    } else {
+        None
+    };
+    let already_updated = match jip_answer {
+        Some(answer) => answer & 0xff != 0,
+        None => e.with_stack(1, |e, flag| {
+            e.call(WATER_TYPE_MAP_FIND, &args![update_map, water_form, flag])
+                .bool()
+        }),
+    };
     if already_updated {
         return;
     }
@@ -10201,6 +10212,51 @@ mod tests {
         assert!(s.calls(WATER_TYPE_MAP_SET).is_empty());
         // The property still shares the rendered noise texture.
         assert_eq!(s.e.mem.u32(s.property.addr() + 0x138), FORM_NOISE_TEXTURE);
+    }
+
+    /// JIP LN's G106 seam at `0x4E400E` (a fix row): the answer's low byte takes the place of
+    /// the update map's find; only with the fix row's bit; no answer is the exe's find.
+    #[test]
+    fn a_jip_g106_answer_decides_whether_the_form_was_updated() {
+        use crate::units::fallout_shared::tesobjectrefr::jip_seam;
+        use engine_core::extend::jip_patches;
+        let mut s = form_scene();
+        let (this, form) = (s.this.addr(), s.water_form);
+        jip_seam::put(&mut s.e, 0x004e_400e, Some(0x100));
+        s.e.set_jip_patches(jip_patches::INSTALLED);
+        s.update_forms();
+        assert!(jip_seam::seen().is_empty(), "only FIXES asks");
+        assert_eq!(s.calls(WATER_TYPE_MAP_FIND).len(), 1, "the exe");
+        // FIXES: asked with the map and the form; 0x100's low byte is "not updated yet".
+        let mut s = form_scene();
+        jip_seam::put(&mut s.e, 0x004e_400e, Some(0x100));
+        s.e.mem.set_u8(MAP_FIND_ANSWER, 1);
+        s.e.set_jip_patches(jip_patches::FIXES);
+        s.update_forms();
+        assert_eq!(jip_seam::seen(), vec![vec![this + 0x6c, form]]);
+        assert!(s.calls(WATER_TYPE_MAP_FIND).is_empty(), "the find replaced");
+        assert_eq!(s.calls(IMAGE_SPACE_RENDER_NOISE).len(), 1);
+        assert_eq!(
+            s.calls(WATER_TYPE_MAP_SET),
+            vec![vec![this + 0x6c, form, 1]]
+        );
+        // Low byte set: already updated, nothing scrolled or rendered.
+        let mut s = form_scene();
+        jip_seam::put(&mut s.e, 0x004e_400e, Some(1));
+        s.e.set_jip_patches(jip_patches::FIXES);
+        s.update_forms();
+        assert!(s.calls(IMAGE_SPACE_RENDER_NOISE).is_empty());
+        assert!(s.calls(WATER_TYPE_MAP_SET).is_empty());
+        assert_eq!(s.e.mem.f32(form + 0x34), 0.2);
+        // No answer: the exe's find.
+        let mut s = form_scene();
+        jip_seam::put(&mut s.e, 0x004e_400e, None);
+        s.e.mem.set_u8(MAP_FIND_ANSWER, 1);
+        s.e.set_jip_patches(jip_patches::FIXES);
+        s.update_forms();
+        assert_eq!(s.calls(WATER_TYPE_MAP_FIND).len(), 1);
+        assert!(s.calls(IMAGE_SPACE_RENDER_NOISE).is_empty());
+        jip_seam::seen();
     }
 
     #[test]

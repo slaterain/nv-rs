@@ -806,3 +806,246 @@ fn a_publish_during_a_destroy_keeps_the_new_value_in_the_copy() {
         "the copy holds what the maps hold"
     );
 }
+
+// ---- GH2 part 3: G31, G78, G81, G90, G106 (fix rows) ----------------------------------------
+
+/// JIP installed with the fix row on (no `jip_nvse.ini`; the 3.9a fix's wrapped `GetOwnerTopic`
+/// stood in), over the stand-in area.
+fn row_on() -> Engine {
+    let mut e = world(0x15, 0x0100_0001);
+    e.register(0x00fd_f088, |_, _| Ret {
+        eax: 0xffff_ffff,
+        ..Ret::default()
+    });
+    e.register(0x0061_a310, |_, _| Ret::default());
+    super::super::set_row(&mut e, true);
+    e
+}
+
+const PART_3_SITES: [SiteSlot; 6] = [
+    DOOR_ANSWER_STANDS,
+    SET_SCALE,
+    CLEAR_WEAPON_NODE[0],
+    CLEAR_WEAPON_NODE[1],
+    CLOUDS_FIX,
+    UPDATE_WATER_TEXTURES,
+];
+
+/// The five rows' six seams: no handler while JIP is not installed or the fix row is off; the
+/// row on puts all six in.
+#[test]
+fn part_3_seams_only_with_the_row() {
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    for site in PART_3_SITES {
+        assert!(!e.site_owners(site.addr()).contains(&Owner::Jip));
+    }
+    let mut e = world(0x15, 0x0100_0001);
+    super::super::set_row(&mut e, false);
+    for site in PART_3_SITES {
+        assert_eq!(e.site(site.addr(), &[REF, 0]), None, "{:#x}", site.addr());
+    }
+    let mut e = row_on();
+    assert_eq!(e.site(DOOR_ANSWER_STANDS.addr(), &[REF, 0]), Some(1));
+    assert_eq!(
+        e.site(SET_SCALE.addr(), &[2.0f32.to_bits()]),
+        Some(2.0f32.to_bits())
+    );
+    for site in PART_3_SITES {
+        assert!(
+            e.site_owners(site.addr()).contains(&Owner::Jip),
+            "{:#x}",
+            site.addr()
+        );
+    }
+}
+
+/// G31: the door's answer stands whatever it is (JIP's jump is unconditional).
+#[test]
+fn g31_the_door_answer_always_stands() {
+    let mut e = engine();
+    for door in [0, 1] {
+        assert_eq!(door_answer_stands(&mut e, &[REF, door]), Some(1));
+    }
+}
+
+/// G78 `SetScaleHook`: `maxss` with `0x38D1B717` then `minss` with 100: the bounds kept, the
+/// values between untouched (no rounding to two decimals), a NaN the lower bound, infinities
+/// clamped, zero and negatives the lower bound.
+#[test]
+fn g78_the_scale_is_clamped_not_rounded() {
+    let mut e = engine();
+    let clamp =
+        |e: &mut Engine, v: f32| f32::from_bits(set_scale_clamp(e, &[v.to_bits()]).unwrap());
+    let min = f32::from_bits(0x38d1_b717);
+    assert!((min - 0.0001).abs() < 1e-9);
+    assert_eq!(clamp(&mut e, 1.2345), 1.2345);
+    assert_eq!(clamp(&mut e, 0.005), 0.005, "below the exe's 0.01");
+    assert_eq!(clamp(&mut e, 50.0), 50.0, "above the exe's 10");
+    assert_eq!(clamp(&mut e, 100.0), 100.0);
+    assert_eq!(clamp(&mut e, 100.5), 100.0);
+    assert_eq!(clamp(&mut e, f32::INFINITY), 100.0);
+    assert_eq!(clamp(&mut e, min), min);
+    assert_eq!(clamp(&mut e, 0.0), min);
+    assert_eq!(clamp(&mut e, -0.0), min);
+    assert_eq!(clamp(&mut e, -3.0), min);
+    assert_eq!(clamp(&mut e, f32::NEG_INFINITY), min);
+    assert_eq!(
+        clamp(&mut e, f32::NAN),
+        min,
+        "maxss gives its second operand"
+    );
+}
+
+const NODE: u32 = AREA_AT + 0x900;
+const NODE_VTABLE: u32 = AREA_AT + 0xa00;
+const CHILDREN_AT: u32 = AREA_AT + 0xc00;
+const DETACH: u32 = 0x00fe_0e80;
+
+/// A node (vtable with the detach slot `+0xE8` recorded) whose children array holds `children`
+/// (set or an empty slot, and the flag byte `+0x33`) and whose count word says `count`; the
+/// children at `AREA_AT + 0xd00 + i * 0x40`.
+fn node_world(children: &[(bool, u8)], count: u16) -> (Engine, Vec<u32>) {
+    let mut e = engine();
+    e.map(AREA_AT, 0x1000);
+    e.mem.set_u32(NODE, NODE_VTABLE);
+    e.mem.set_u32(NODE_VTABLE + 0xe8, DETACH);
+    e.register(DETACH, |_, _| Ret::default());
+    e.mem.set_u32(NODE + 0xa0, CHILDREN_AT);
+    e.mem.set_u16(NODE + 0xa6, count);
+    let mut all = Vec::new();
+    for (i, &(set, flags)) in children.iter().enumerate() {
+        let child = AREA_AT + 0xd00 + i as u32 * 0x40;
+        if set {
+            e.mem.set_u8(child + 0x33, flags);
+            e.mem.set_u32(CHILDREN_AT + i as u32 * 4, child);
+        }
+        all.push(child);
+    }
+    e.call_log = Some(vec![]);
+    (e, all)
+}
+
+fn detached(e: &Engine) -> Vec<Vec<u32>> {
+    e.call_log
+        .as_ref()
+        .unwrap()
+        .iter()
+        .filter(|c| c.0 == DETACH)
+        .map(|c| c.1.clone())
+        .collect()
+}
+
+/// G81 `ClearWeaponNodeHook`: from the last child to the first, each one set and without bit
+/// 0x80 of its byte `+0x33` is detached through the node's virtual `+0xE8`; empty slots and kept
+/// children are passed over; only the count word's number of slots is read.
+#[test]
+fn g81_the_weapon_nodes_children_are_detached_last_first() {
+    let (mut e, c) = node_world(
+        &[(true, 0), (false, 0), (true, 0x80), (true, 0x7f), (true, 0)],
+        4,
+    );
+    assert_eq!(clear_weapon_node(&mut e, &[NODE]), Some(0));
+    assert_eq!(detached(&e), vec![vec![NODE, c[3]], vec![NODE, c[0]]]);
+    let (mut e, _) = node_world(&[], 0);
+    assert_eq!(clear_weapon_node(&mut e, &[NODE]), Some(0));
+    assert!(detached(&e).is_empty(), "no children");
+}
+
+/// G90 `CloudsFixHook`: the interior cell (`TES+0x34`) cleared at once; the sky (`TES+0x68`)
+/// loses its transition weather (`+0x14`) at the next main loop, once, then the callback goes.
+#[test]
+fn g90_the_weather_transition_ends_at_the_next_main_loop() {
+    let mut e = row_on();
+    let (tes, sky) = (AREA_AT + 0x900, AREA_AT + 0xa00);
+    e.mem.set_u32(tes + 0x34, 0x1234);
+    e.mem.set_u32(tes + 0x68, sky);
+    e.mem.set_u32(sky + 0x14, 0x5678);
+    e.mem.set_u32(sky + 0x10, 0x9abc);
+    assert_eq!(e.site(CLOUDS_FIX.addr(), &[tes]), Some(0));
+    assert_eq!(e.mem.u32(tes + 0x34), 0);
+    assert_eq!(e.mem.u32(sky + 0x14), 0x5678, "not yet");
+    assert_eq!(
+        e.ext::<crate::Jip>().main_loop.callbacks.len(),
+        1,
+        "one callback"
+    );
+    nvse::plugins::dispatch(&mut e, nvse::plugins::msg::MAIN_GAME_LOOP, 0, 0);
+    assert_eq!(e.mem.u32(sky + 0x14), 0, "the transition weather cleared");
+    assert_eq!(e.mem.u32(sky + 0x10), 0x9abc, "the current weather kept");
+    assert!(e.ext::<crate::Jip>().main_loop.callbacks.is_empty(), "once");
+    e.mem.set_u32(sky + 0x14, 0x5678);
+    nvse::plugins::dispatch(&mut e, nvse::plugins::msg::MAIN_GAME_LOOP, 0, 0);
+    assert_eq!(e.mem.u32(sky + 0x14), 0x5678, "not again");
+}
+
+/// JIP's own functions in the main-loop list: a call after `call_delay` frames, `call_count`
+/// times, then gone; a null sky is left alone.
+#[test]
+fn native_main_loop_callbacks_count_their_calls() {
+    let mut e = row_on();
+    let sky = AREA_AT + 0xa00;
+    crate::main_loop::add_native(&mut e, crate::main_loop::Native::EndWeatherTransition, 0);
+    crate::main_loop::add_native(&mut e, crate::main_loop::Native::EndWeatherTransition, sky);
+    {
+        let list = &mut e.ext::<crate::Jip>().main_loop.callbacks;
+        list[1].call_count = 2;
+        list[1].call_delay = 2;
+        list[1].cycle_count = 2;
+    }
+    let cycle = |e: &mut Engine| {
+        e.mem.set_u32(sky + 0x14, 7);
+        crate::main_loop::cycle(e);
+        e.mem.u32(sky + 0x14) == 0
+    };
+    assert!(!cycle(&mut e), "frame 1 of 2");
+    assert_eq!(
+        e.ext::<crate::Jip>().main_loop.callbacks.len(),
+        1,
+        "the null sky's went after its call"
+    );
+    assert!(cycle(&mut e), "frame 2: called");
+    assert!(!cycle(&mut e));
+    assert!(cycle(&mut e), "second call");
+    assert!(e.ext::<crate::Jip>().main_loop.callbacks.is_empty());
+}
+
+const WATER_MAP: u32 = AREA_AT + 0x900;
+const WATER_BUCKETS: u32 = AREA_AT + 0xa00;
+
+/// A map of 3 buckets holding `entries` (key, value), each put at the head of its chain.
+fn water_world(entries: &[(u32, u32)]) -> Engine {
+    let mut e = engine();
+    e.map(AREA_AT, 0x1000);
+    e.map(0x011f_9000, 0x1000);
+    e.mem.set_u32(WATER_MAP + 4, 3);
+    e.mem.set_u32(WATER_MAP + 8, WATER_BUCKETS);
+    for (i, &(key, value)) in entries.iter().enumerate() {
+        let entry = AREA_AT + 0xb00 + i as u32 * 0x10;
+        let bucket = WATER_BUCKETS + (key % 3) * 4;
+        e.mem.set_u32(entry, e.mem.u32(bucket));
+        e.mem.set_u32(entry + 4, key);
+        e.mem.set_u32(entry + 8, value);
+        e.mem.set_u32(bucket, entry);
+    }
+    e
+}
+
+/// G106 `UpdateWaterTexturesHook`: the renderer's byte `0x11F91C5` when set; else the map's
+/// value for the form (a chain followed), 0 when it has none or the map has no buckets.
+#[test]
+fn g106_the_byte_then_the_maps_value() {
+    let mut e = water_world(&[(0x10, 1), (0x13, 0x200), (0x11, 5)]);
+    let ask = |e: &mut Engine, key: u32| update_water_textures(e, &[WATER_MAP, key]).unwrap();
+    assert_eq!(ask(&mut e, 0x10), 1, "second in its chain");
+    assert_eq!(ask(&mut e, 0x13), 0x200, "the whole value");
+    assert_eq!(ask(&mut e, 0x11), 5);
+    assert_eq!(ask(&mut e, 0x16), 0, "same bucket, not there");
+    assert_eq!(ask(&mut e, 0x12), 0, "empty bucket");
+    e.mem.set_u8(0x011f_91c5, 9);
+    assert_eq!(ask(&mut e, 0x12), 9, "the byte first");
+    assert_eq!(ask(&mut e, 0x13), 9);
+    e.mem.set_u8(0x011f_91c5, 0);
+    e.mem.set_u32(WATER_MAP + 4, 0);
+    assert_eq!(ask(&mut e, 0x13), 0, "no buckets");
+}
