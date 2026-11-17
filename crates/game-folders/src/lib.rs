@@ -1072,8 +1072,10 @@ pub fn refused(dir: &Path, never: &[Guarded]) -> Option<&'static str> {
     // by where it leads. A link in there to a place no list names (a mounted Windows partition's
     // `Users/<name>/Documents/My Games/FalloutNV`, another disk's saves) is refused too: nv-rs
     // never makes a link in its own folder (play.sh refuses any it finds), so ordinary play never
-    // meets this. The own folder itself may be a link (moved to another disk): the place is
-    // compared with where the own folder leads.
+    // meets this. This rule compares the place with where the own folder leads, so a link AT the
+    // own folder (moved to another disk) passes it; but only on Linux is such a folder written:
+    // on macOS the own folder lies inside ~/Library, whose exception takes only the real folder at
+    // its own place ([`excepted`]), and play.sh refuses a link there on both systems.
     for guarded in never {
         if let Some(own) = &guarded.except {
             if leaves_own(dir, &real_dir, own, guarded.system) {
