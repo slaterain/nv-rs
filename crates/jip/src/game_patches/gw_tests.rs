@@ -295,6 +295,9 @@ fn calendar(e: &mut Engine, values: [f32; 6]) {
     e.mem.set_u8(CALENDAR + 0x1c, 0);
     e.mem.set_u32(PLAYER, PLAYER_AT);
     e.mem.set_u8(PLAYER_AT + HARDCORE_UPDATE, 0x55);
+    let s = state(e);
+    s.hour_and_days[0].store(0, Ordering::Relaxed);
+    s.hour_and_days[1].store(0, Ordering::Relaxed);
 }
 
 fn value(e: &Engine, i: u32) -> f32 {
@@ -351,7 +354,8 @@ fn o5_keeps_the_hour_and_days_in_doubles() {
 
 /// O5 recounts when the stale byte is set (and clears it), when the hour jumped ahead past 0.05,
 /// and when it went back past 0.05 (counted as the next day: past 24, the day rolls on). With
-/// `SetGameHour`'s request the hardcore byte is cleared and the request taken.
+/// `SetGameHour`'s request the hardcore byte is cleared and the request taken. With no player the
+/// recount still happens (no byte written); a NaN hour recounts.
 #[test]
 fn o5_recounts_after_a_jump() {
     let mut e = world(true, true);
@@ -380,6 +384,37 @@ fn o5_recounts_after_a_jump() {
     assert_eq!((value(&e, 2), value(&e, 3)), (20.0, 10.0));
     assert_eq!(e.mem.u32(CALENDAR + 0x18), 8);
     assert_eq!(value(&e, 4), (34.0f64 / 24.0 + 7.0) as f32);
+    // No player (the port's difference from JIP): with the stale byte set the update returns
+    // without a write at `0xE39`, clears the byte and counts the days again (whole 3 + 10 / 24).
+    assert!(
+        !e.mem.is_mapped(HARDCORE_UPDATE),
+        "a write at 0xE39 would fault"
+    );
+    e.mem.set_u32(PLAYER, 0);
+    e.mem.set_f32(B + 0x3100 + 0x30 * 4 + 0x24, 3.9);
+    e.mem.set_u8(CALENDAR + 0x1c, 1);
+    advance(&mut e, 0.0);
+    assert_eq!(
+        e.mem.u8(CALENDAR + 0x1c),
+        0,
+        "no player: the stale byte cleared"
+    );
+    assert_eq!(
+        value(&e, 4),
+        (10.0f64 / 24.0 + 3.0) as f32,
+        "no player: the days counted again"
+    );
+    // A NaN hour (`comisd; jb` takes the unordered compare as below): a recount, so the
+    // player's hardcore byte is written.
+    e.mem.set_u32(PLAYER, PLAYER_AT);
+    e.mem.set_u8(PLAYER_AT + HARDCORE_UPDATE, 0x55);
+    e.mem.set_f32(B + 0x3100 + 0x30 * 3 + 0x24, f32::NAN);
+    advance(&mut e, 0.0);
+    assert_eq!(
+        e.mem.u8(PLAYER_AT + HARDCORE_UPDATE),
+        1,
+        "a NaN hour recounts"
+    );
 }
 
 /// O5's roll-over by JIP's table: the last day of a month goes to the 1st of the next; the 31st
@@ -425,4 +460,591 @@ fn o5_rolls_the_days_months_and_years() {
     advance(&mut e, 1530.0);
     assert_eq!((value(&e, 2), value(&e, 3)), (21.0, 0.5));
     assert_eq!(e.mem.u32(CALENDAR + 0x18), 8, "counted once per update");
+}
+
+// ---- G113, D05, G115 ----
+
+/// What the stand-ins below record: `AddCompileIndex`'s, the random draws' bounds, the frees.
+const REC: u32 = B + 0xe000;
+/// The random draws the stand-in answers, in order (a count, then the values).
+const DRAWS: u32 = B + 0xe800;
+
+fn record(e: &mut Engine, at: u32, words: &[u32]) {
+    let n = e.mem.u32(at);
+    e.mem.set_u32(at, n + 1);
+    for (i, w) in words.iter().enumerate() {
+        e.mem
+            .set_u32(at + 4 + 4 * (n * words.len() as u32 + i as u32), *w);
+    }
+}
+
+fn recorded(e: &Engine, at: u32, width: u32) -> Vec<Vec<u32>> {
+    (0..e.mem.u32(at))
+        .map(|n| {
+            (0..width)
+                .map(|i| e.mem.u32(at + 4 + 4 * (n * width + i)))
+                .collect()
+        })
+        .collect()
+}
+
+/// `GetRandomInt(GAME_RNG, bound)`'s stand-in: the next of [`DRAWS`], the bound recorded at
+/// `REC + 0x400`.
+fn draws(e: &mut Engine, values: &[u32]) {
+    e.mem.set_u32(DRAWS, 0);
+    for (i, v) in values.iter().enumerate() {
+        e.mem.set_u32(DRAWS + 4 + 4 * i as u32, *v);
+    }
+    e.mem.set_u32(REC + 0x400, 0);
+    e.register(GET_RANDOM_INT, |e, a| {
+        assert_eq!(a[0], GAME_RNG);
+        record(e, REC + 0x400, &[a[1]]);
+        let n = e.mem.u32(DRAWS);
+        e.mem.set_u32(DRAWS, n + 1);
+        e.mem.u32(DRAWS + 4 + 4 * n).into_ret()
+    });
+}
+
+fn bounds(e: &Engine) -> Vec<u32> {
+    recorded(e, REC + 0x400, 1).concat()
+}
+
+/// A list of `{data, next}` nodes at `at` (0x10 apart) holding `items`; its first node.
+fn nodes(e: &mut Engine, at: u32, items: &[u32]) -> u32 {
+    for (i, item) in items.iter().enumerate() {
+        let node = at + 0x10 * i as u32;
+        e.mem.set_u32(node, *item);
+        let next = if i + 1 < items.len() { node + 0x10 } else { 0 };
+        e.mem.set_u32(node + 4, next);
+    }
+    at
+}
+
+/// G113's two seams: the id in the slot resolved through the masters (`AddCompileIndex(slot,
+/// file)`, here making the mod index 3); the answer 0.
+#[test]
+fn g113_media_set_ids_are_resolved_through_the_masters() {
+    let mut e = world(true, true);
+    e.mem.set_u32(REC, 0);
+    e.register(ADD_COMPILE_INDEX, |e, a| {
+        record(e, REC, &[a[0], a[1]]);
+        let id = e.mem.u32(a[0]);
+        e.mem.set_u32(a[0], (id & 0x00ff_ffff) | 0x0300_0000);
+        Ret::default()
+    });
+    let slot = B + 0x5000;
+    for site in [MEDIA_SET_ID, BATTLE_MEDIA_SET_ID] {
+        e.mem.set_u32(slot, 0x0100_0042);
+        assert_eq!(e.site(site.addr(), &[0x8000, slot]), Some(0));
+        assert_eq!(e.mem.u32(slot), 0x0300_0042);
+    }
+    assert_eq!(recorded(&e, REC, 2), vec![vec![slot, 0x8000]; 2]);
+}
+
+fn pick(e: &mut Engine, head: u32) -> u32 {
+    e.call(PICK_MEDIA_SET.addr(), &[0x1234, head]).eax
+}
+
+/// G113's `00595560`: one node answers its data (no draw). Of more, a bag of the non-null sets in
+/// order, shuffled (bounds 3 then 2: a draw of 2 swaps the first and the third, 0 leaves), is
+/// emptied from its end; an empty bag is filled and shuffled again; each list has its own bag.
+/// Without the row: the exe's function (the stand-in's marker).
+#[test]
+fn g113_media_sets_come_from_a_shuffled_bag() {
+    let mut e = world(true, true);
+    let one = nodes(&mut e, B + 0x5100, &[0x77]);
+    let list = nodes(&mut e, B + 0x5200, &[0x11, 0, 0x33, 0x44]);
+    let other = nodes(&mut e, B + 0x5300, &[0x55, 0x66]);
+    draws(&mut e, &[2, 0, 1, 1, 0]);
+    assert_eq!(pick(&mut e, one), 0x77);
+    assert_eq!(bounds(&e), Vec::<u32>::new(), "one node: no draw");
+    // [0x11, 0x33, 0x44] -> [0x44, 0x33, 0x11].
+    assert_eq!(pick(&mut e, list), 0x11);
+    assert_eq!(pick(&mut e, list), 0x33);
+    assert_eq!(pick(&mut e, list), 0x44);
+    assert_eq!(bounds(&e), vec![3, 2], "one shuffle for the three");
+    // Refilled: draws 1, 1 make [0x33, 0x44, 0x11].
+    assert_eq!(pick(&mut e, list), 0x11);
+    assert_eq!(bounds(&e), vec![3, 2, 3, 2]);
+    // Its own bag: [0x55, 0x66] (draw 0) answers 0x66; the first list's goes on.
+    assert_eq!(pick(&mut e, other), 0x66);
+    assert_eq!(pick(&mut e, list), 0x44);
+    assert_eq!(bounds(&e), vec![3, 2, 3, 2, 2]);
+    // All nulls: an empty bag answers 0; no list answers 0.
+    let nulls = nodes(&mut e, B + 0x5400, &[0, 0]);
+    assert_eq!(pick(&mut e, nulls), 0);
+    assert_eq!(pick(&mut e, 0), 0);
+    let mut off = world(true, false);
+    assert_eq!(pick(&mut off, list), 0x5a5b);
+    let word = e.jip_patches();
+    e.set_jip_patches(word & !jip_patches::FIXES);
+    assert_eq!(pick(&mut e, list), 0x5a5b);
+}
+
+/// The game's form map (`0x11C54C0`, 16 buckets) with `forms` (id, form).
+fn form_map(e: &mut Engine, forms: &[(u32, u32)]) {
+    let map = B + 0x6000;
+    let buckets = map + 0x20;
+    let items = map + 0x100;
+    if !e.mem.is_mapped(0x011c_54c0) {
+        e.map(0x011c_5000, 0x1000);
+    }
+    e.mem.set_u32(0x011c_54c0, map);
+    e.mem.set_u32(map + 4, 16);
+    e.mem.set_u32(map + 8, buckets);
+    for (i, &(id, form)) in forms.iter().enumerate() {
+        let item = items + 12 * i as u32;
+        e.mem.set_u32(item + 4, id);
+        e.mem.set_u32(item + 8, form);
+        let bucket = buckets + 4 * (id % 16);
+        let first = e.mem.u32(bucket);
+        e.mem.set_u32(item, first);
+        e.mem.set_u32(bucket, item);
+    }
+}
+
+fn battle(e: &mut Engine, data: u32) -> u32 {
+    e.call(PICK_BATTLE_MEDIA_SET.addr(), &[data]).eax
+}
+
+/// G113's `GetMediaSetBattle`: no first id answers 0; one id answers its media set; with two, the
+/// second swaps with the first each time (no draw); with four, a draw of 2 (bound 3) swaps the
+/// fourth with the first. An id whose form is not a media set, or that has none, answers 0.
+/// Without the row: the exe's function.
+#[test]
+fn g113_battle_music_is_never_the_last_one_again() {
+    let mut e = world(true, true);
+    let (a, b, c, d) = (B + 0x6400, B + 0x6440, B + 0x6480, B + 0x64c0);
+    for form in [a, b, c, d] {
+        e.mem.set_u8(form + 4, MEDIA_SET_TYPE);
+    }
+    e.mem.set_u8(B + 0x6500 + 4, 0x6e);
+    form_map(
+        &mut e,
+        &[
+            (0xa1, a),
+            (0xb2, b),
+            (0xc3, c),
+            (0xd4, d),
+            (0xe5, B + 0x6500),
+        ],
+    );
+    draws(&mut e, &[2]);
+    let data = B + 0x6600;
+    let head = data + 0x18;
+    e.mem.set_u32(head, 0);
+    assert_eq!(battle(&mut e, data), 0);
+    nodes(&mut e, head, &[0xa1]);
+    assert_eq!(battle(&mut e, data), a);
+    nodes(&mut e, head, &[0xa1, 0xb2]);
+    assert_eq!(battle(&mut e, data), b);
+    assert_eq!(battle(&mut e, data), a);
+    assert_eq!(bounds(&e), Vec::<u32>::new());
+    nodes(&mut e, head, &[0xa1, 0xb2, 0xc3, 0xd4]);
+    assert_eq!(battle(&mut e, data), d);
+    assert_eq!(bounds(&e), vec![3]);
+    let ids: Vec<u32> = (0..4).map(|i| e.mem.u32(head + 0x10 * i)).collect();
+    assert_eq!(ids, vec![0xd4, 0xb2, 0xc3, 0xa1]);
+    nodes(&mut e, head, &[0xe5]);
+    assert_eq!(battle(&mut e, data), 0, "not a media set");
+    nodes(&mut e, head, &[0xf6]);
+    assert_eq!(battle(&mut e, data), 0, "no form");
+    let word = e.jip_patches();
+    e.set_jip_patches(word & !jip_patches::FIXES);
+    assert_eq!(battle(&mut e, data), 0x5a5c);
+}
+
+const PATH: u32 = B + 0x7000;
+const W1: u32 = B + 0x7800;
+const W2: u32 = B + 0x7820;
+const O1: u32 = B + 0x7840;
+const O2: u32 = B + 0x7860;
+
+/// D05's world: the flag's page, the folder path, and stand-ins for the archive test (the pattern
+/// recorded at `REC + 0x800`; "found.wav" into the out path, answering 1), the list builder (the
+/// list for the pattern's end: `.wav` at `REC + 0x900`, `.ogg` at `REC + 0x904`) and the heap's
+/// free (recorded at `REC + 0xa00`).
+fn sound_world(lists: bool, wavs: &[u32], oggs: &[u32]) -> Engine {
+    let mut e = world(true, true);
+    if !e.mem.is_mapped(USE_FILE_LISTS) {
+        e.map(USE_FILE_LISTS & !0xfff, 0x1000);
+    }
+    e.mem.set_u8(USE_FILE_LISTS, u8::from(lists));
+    e.mem.set_cstr(PATH, b"sound\\fx\\x\\");
+    e.register(ARCHIVE_FIND, |e, a| {
+        let pattern = e.mem.cstr(a[0]);
+        e.mem.set_cstr(REC + 0x800, &pattern);
+        assert_eq!((a[1], a[2]), (PATH, 8));
+        e.mem.set_cstr(a[1], b"found.wav");
+        1u32.into_ret()
+    });
+    let wav = if wavs.is_empty() {
+        0
+    } else {
+        nodes(&mut e, B + 0x7200, wavs)
+    };
+    let ogg = if oggs.is_empty() {
+        0
+    } else {
+        nodes(&mut e, B + 0x7400, oggs)
+    };
+    e.mem.set_u32(REC + 0x900, wav);
+    e.mem.set_u32(REC + 0x904, ogg);
+    e.register(BUILD_FILE_LIST, |e, a| {
+        assert_eq!((a[1], a[2], a[3]), (PATH, 8, 0));
+        let pattern = e.mem.cstr(a[0]);
+        let at = match &pattern[..] {
+            b"sound\\fx\\x\\*.wav" => REC + 0x900,
+            b"sound\\fx\\x\\*.ogg" => REC + 0x904,
+            other => panic!("{other:?}"),
+        };
+        e.mem.u32(at).into_ret()
+    });
+    e.mem.set_u32(REC + 0xa00, 0);
+    e.register(0x00aa_4060, |e, a| {
+        record(e, REC + 0xa00, &[a[1]]);
+        Ret::default()
+    });
+    for (at, name) in [
+        (W1, &b"w1.wav"[..]),
+        (W2, b"w2.wav"),
+        (O1, b"o1.ogg"),
+        (O2, b"o2.ogg"),
+    ] {
+        e.mem.set_cstr(at, name);
+    }
+    e
+}
+
+fn pick_file(e: &mut Engine) -> u32 {
+    e.call(PICK_SOUND_FILE.addr(), &[PATH]).eax
+}
+
+/// D05 without the game's flag: the archive's test of `path*.wav` answers, its name in `path`.
+#[test]
+fn d05_without_the_flag_asks_the_archive_for_wav() {
+    let mut e = sound_world(false, &[], &[]);
+    assert_eq!(pick_file(&mut e), 1);
+    assert_eq!(e.mem.cstr(REC + 0x800), b"sound\\fx\\x\\*.wav");
+    assert_eq!(e.mem.cstr(PATH), b"found.wav");
+}
+
+/// D05 with the flag: the `.wav` and `.ogg` lists joined (the `.ogg` after the `.wav`), a draw
+/// of the count (3) picks the third, the `.ogg`; every name and node freed in order; true.
+#[test]
+fn d05_picks_among_wav_and_ogg_files() {
+    let mut e = sound_world(true, &[W1, W2], &[O1]);
+    draws(&mut e, &[2]);
+    assert_eq!(pick_file(&mut e), 1);
+    assert_eq!(e.mem.cstr(PATH), b"o1.ogg");
+    assert_eq!(bounds(&e), vec![3]);
+    assert_eq!(e.mem.u32(B + 0x7210 + 4), B + 0x7400, "joined");
+    assert_eq!(
+        recorded(&e, REC + 0xa00, 1).concat(),
+        vec![W1, B + 0x7200, W2, B + 0x7210, O1, B + 0x7400]
+    );
+}
+
+/// D05 with the flag: one file is taken without a draw (here one `.ogg` file); of two `.wav`
+/// files a draw of 0 (bound 2) takes the first; no file answers false and leaves the path;
+/// without the row, the exe's function.
+#[test]
+fn d05_one_file_or_none() {
+    let mut e = sound_world(true, &[], &[O2]);
+    draws(&mut e, &[]);
+    assert_eq!(pick_file(&mut e), 1);
+    assert_eq!(e.mem.cstr(PATH), b"o2.ogg");
+    assert_eq!(bounds(&e), Vec::<u32>::new());
+    let mut e = sound_world(true, &[W1, W2], &[]);
+    draws(&mut e, &[0]);
+    assert_eq!(pick_file(&mut e), 1);
+    assert_eq!(e.mem.cstr(PATH), b"w1.wav");
+    assert_eq!(bounds(&e), vec![2]);
+    let mut e = sound_world(true, &[], &[]);
+    assert_eq!(pick_file(&mut e), 0);
+    assert_eq!(e.mem.cstr(PATH), b"sound\\fx\\x\\");
+    assert_eq!(recorded(&e, REC + 0xa00, 1), Vec::<Vec<u32>>::new());
+    let word = e.jip_patches();
+    e.set_jip_patches(word & !jip_patches::FIXES);
+    assert_eq!(pick_file(&mut e), 0x5a5d);
+}
+
+/// The INI settings for G115 at `B + 0x8000` on (0x10 apart, names at `B + 0x8800`), in the
+/// first INI collection's list (the other collections and the game settings empty).
+fn ini_settings(e: &mut Engine, settings: &[(&[u8], u32)]) -> Vec<u32> {
+    let games = B + 0x9000;
+    if !e.mem.is_mapped(0x011c_8048) {
+        e.map(0x011c_8000, 0x1000);
+    }
+    e.mem.set_u32(0x011c_8048, games);
+    e.mem.set_u32(games + 0x110, 0);
+    let mut at = Vec::new();
+    for (i, (name, bits)) in settings.iter().enumerate() {
+        let s = B + 0x8000 + 0x10 * i as u32;
+        let text = B + 0x8800 + 0x40 * i as u32;
+        e.mem.set_cstr(text, name);
+        e.mem.set_u32(s + 4, *bits);
+        e.mem.set_u32(s + 8, text);
+        at.push(s);
+    }
+    // A collection's list: data `+0x10C`, next `+0x110`, then nodes.
+    let first = B + 0x9200;
+    for (i, global) in [0x011f_96a0u32, 0x011f_35a0, 0x011c_c694, 0x011f_35a4]
+        .iter()
+        .enumerate()
+    {
+        let coll = first + 0x200 * i as u32;
+        if !e.mem.is_mapped(*global) {
+            e.map(*global & !0xfff, 0x1000);
+        }
+        e.mem.set_u32(*global, coll);
+        e.mem.set_u32(coll + 0x10c, 0);
+        e.mem.set_u32(coll + 0x110, 0);
+    }
+    let mut node = first + 0x10c;
+    for (i, s) in at.iter().enumerate() {
+        e.mem.set_u32(node, *s);
+        let next = if i + 1 < at.len() {
+            B + 0x9a00 + 8 * i as u32
+        } else {
+            0
+        };
+        e.mem.set_u32(node + 4, next);
+        node = next;
+    }
+    at
+}
+
+/// G115: with `FalloutCustom.ini` (the port's mod files), each `key=value` sets `key:section` by
+/// the key's letter: `f` the `float`, `b` the word 1 for a value starting `1` else 0, `i` and `u`
+/// JIP's integer readers (`-1` as an unsigned word is 0xFFFFFFFF), `s` a copy on the game's heap;
+/// a key with no setting, or a setting of another section, is left; the answer 0. Without the
+/// file nothing changes.
+#[test]
+fn g115_falloutcustom_ini_sets_the_ini_settings() {
+    use crate::commands::test_support::files;
+    files::fresh();
+    let mut e = world(true, true);
+    e.register(0x00aa_3e40, |e, a| e.mem.alloc(a[1]).into_ret());
+    let s = ini_settings(
+        &mut e,
+        &[
+            (b"fFoo:General", 0),
+            (b"bBar:General", 0xffff_ff00),
+            (b"iBaz:General", 0),
+            (b"uQux:General", 0),
+            (b"sName:General", 0x1234),
+            (b"bBar:Display", 1),
+            (b"fKeep:Display", 7),
+        ],
+    );
+    assert_eq!(e.site(CUSTOM_INI.addr(), &[]), Some(0));
+    assert_eq!(e.mem.u32(s[1] + 4), 0xffff_ff00, "no file: nothing changes");
+    files::put(
+        "FalloutCustom.ini",
+        b"[General]\r\nfFoo=2.5\r\nbBar=1\r\niBaz=-7\r\nuQux=-1\r\nsName=hello there\r\nfMissing=3\r\nfKeep=9\r\n[Display]\r\nBBAR = 0x\r\n",
+    );
+    assert_eq!(e.site(CUSTOM_INI.addr(), &[]), Some(0));
+    assert_eq!(e.mem.f32(s[0] + 4), 2.5);
+    assert_eq!(e.mem.u32(s[1] + 4), 1);
+    assert_eq!(e.mem.i32(s[2] + 4), -7);
+    assert_eq!(e.mem.u32(s[3] + 4), 0xffff_ffff);
+    let text = e.mem.u32(s[4] + 4);
+    assert_ne!(text, 0x1234);
+    assert_eq!(e.mem.cstr(text), b"hello there");
+    assert_eq!(e.mem.u32(s[5] + 4), 0, "BBAR = 0x: the word 0");
+    assert_eq!(e.mem.u32(s[6] + 4), 7, "fKeep is Display's");
+}
+
+// ---- G108 ----
+
+/// A game sound at `B + 0xa000` (base rate 22050, factor 1.2), its device, and its buffer at
+/// `B + 0xa400` whose `GetFrequency` (slot `0x20`) writes the word at `REC + 0xc00` and answers the
+/// one at `REC + 0xc04`, and whose `SetFrequency` (slot `0x44`) is recorded at `REC + 0xc10`.
+const SOUND: u32 = B + 0xa000;
+const BUFFER_OBJECT: u32 = B + 0xa400;
+
+fn sound_engine() -> Engine {
+    let mut e = world(true, true);
+    let vtable = B + 0xa500;
+    e.mem.set_u32(BUFFER_OBJECT, vtable);
+    e.mem.set_u32(vtable + 0x20, B + 0xa800);
+    e.mem.set_u32(vtable + 0x44, B + 0xa810);
+    e.register(B + 0xa800, |e, a| {
+        e.mem.set_u32(a[1], e.mem.u32(REC + 0xc00));
+        e.mem.u32(REC + 0xc04).into_ret()
+    });
+    e.mem.set_u32(REC + 0xc10, 0);
+    e.register(B + 0xa810, |e, a| {
+        assert_eq!(a[0], BUFFER_OBJECT);
+        record(e, REC + 0xc10, &[a[1]]);
+        0u32.into_ret()
+    });
+    e.mem.set_u16(SOUND + SAMPLES_PER_SECOND, 22050);
+    e.mem.set_f32(SOUND + FREQUENCY_FACTOR, 1.2);
+    e.mem.set_u32(SOUND + DEVICE, 0x4444);
+    e.mem.set_u32(SOUND + BUFFER, BUFFER_OBJECT);
+    e
+}
+
+/// G108 at the constructor: JIP's form field cleared, its factor 1.0.
+#[test]
+fn g108_a_new_sound_has_the_factor_one() {
+    let mut e = world(true, true);
+    e.mem.set_u32(SOUND + 0x134, 0x7777);
+    e.mem.set_u32(SOUND + 0x138, 0x7777);
+    assert_eq!(e.site(FREQUENCY_FIELDS.addr(), &[SOUND]), Some(0));
+    assert_eq!(e.mem.u32(SOUND + 0x134), 0);
+    assert_eq!(e.mem.f32(SOUND + 0x138), 1.0);
+}
+
+/// G108 in `ApplySettingsFromMasterFile`: a handle with a sound id posts the audio manager
+/// (`0x11F6EF0`) a message of kind 54 with the id and the form; a negative id posts nothing.
+#[test]
+fn g108_a_sound_request_is_posted() {
+    let mut e = world(true, true);
+    e.mem.set_u32(REC, 0);
+    e.register(POST_MESSAGE, |e, a| {
+        record(e, REC, &a[..9]);
+        Ret::default()
+    });
+    let handle = B + 0xa900;
+    e.mem.set_u32(handle, 5);
+    assert_eq!(e.site(SOUND_REQUEST.addr(), &[handle, 0x6600]), Some(0));
+    e.mem.set_u32(handle, 0xffff_ffff);
+    assert_eq!(e.site(SOUND_REQUEST.addr(), &[handle, 0x6600]), Some(0));
+    assert_eq!(
+        recorded(&e, REC, 9),
+        vec![vec![0x011f_6ef0, 0x36, 5, 0x6600, 0, 0, 0, 0, 0]]
+    );
+}
+
+/// G108's message 54: the sound with the message's id (the second in its bucket of three) gets
+/// the form and its factor: +20 % is 1.2, -20 % is 0.9 (half as much), the flag bit 0 at `+0x48`
+/// or 0 % is 1.0; another id, or a map of no buckets, changes nothing.
+#[test]
+fn g108_the_audio_thread_gives_the_sound_its_factor() {
+    let mut e = world(true, true);
+    let manager = B + 0xab00;
+    let buckets = manager + 0x100;
+    e.mem.set_u32(manager + 0x58, 3);
+    e.mem.set_u32(manager + 0x5c, buckets);
+    // Bucket 1 (7 % 3): the entry of id 4, then the one of id 7.
+    let (first, second) = (manager + 0x200, manager + 0x210);
+    e.mem.set_u32(buckets + 4, first);
+    e.mem.set_u32(first, second);
+    e.mem.set_u32(first + 4, 4);
+    e.mem.set_u32(first + 8, SOUND + 0x400);
+    e.mem.set_u32(second, 0);
+    e.mem.set_u32(second + 4, 7);
+    e.mem.set_u32(second + 8, SOUND);
+    let message = manager + 0x300;
+    let form = manager + 0x400;
+    e.mem.set_u32(message + 4, 7);
+    e.mem.set_u32(message + 8, form);
+    let factor = |e: &mut Engine, percent: i8, flags: u8| {
+        e.mem.set_u8(form + 0x46, percent as u8);
+        e.mem.set_u8(form + 0x48, flags);
+        e.mem.set_f32(SOUND + 0x138, -1.0);
+        assert_eq!(e.site(SOURCE_SOUND.addr(), &[manager, message]), Some(0));
+        assert_eq!(e.mem.u32(SOUND + 0x134), form);
+        e.mem.f32(SOUND + 0x138)
+    };
+    assert_eq!(
+        factor(&mut e, 20, 0),
+        1.0 + 20.0 * f32::from_bits(0x3c23_d70a)
+    );
+    assert_eq!(
+        factor(&mut e, -20, 0),
+        1.0 - 20.0 * f32::from_bits(0x3ba3_d70a)
+    );
+    assert_eq!(factor(&mut e, 20, 1), 1.0);
+    assert_eq!(factor(&mut e, 0, 0), 1.0);
+    assert_eq!(e.mem.u32(SOUND + 0x400 + 0x134), 0, "id 4 is left");
+    e.mem.set_u32(message + 4, 10);
+    e.mem.set_u32(SOUND + 0x134, 0);
+    assert_eq!(e.site(SOURCE_SOUND.addr(), &[manager, message]), Some(0));
+    assert_eq!(e.mem.u32(SOUND + 0x134), 0, "no sound of id 10");
+    e.mem.set_u32(message + 4, 7);
+    e.mem.set_u32(manager + 0x58, 0);
+    assert_eq!(e.site(SOURCE_SOUND.addr(), &[manager, message]), Some(0));
+    assert_eq!(e.mem.u32(SOUND + 0x134), 0, "no buckets");
+}
+
+fn set_frequency_to(e: &mut Engine, ratio: f32) -> Vec<u32> {
+    e.mem.set_u32(REC + 0xc10, 0);
+    assert_eq!(
+        e.call(SET_FREQUENCY.addr(), &[SOUND, ratio.to_bits()]).eax,
+        0
+    );
+    recorded(e, REC + 0xc10, 1).concat()
+}
+
+/// G108's `SetFrequency`: the base rate times the factor times the ratio, in `float`, rounded to
+/// nearest (ties to even), kept within 100 to 200000 (a NaN is 100); answers 0. No buffer or no
+/// device: no call. Without the row: the exe's function.
+#[test]
+fn g108_set_frequency_takes_the_factor() {
+    let mut e = sound_engine();
+    assert_eq!(
+        set_frequency_to(&mut e, 1.0),
+        vec![cvtss2si(22050.0 * 1.2f32) as u32]
+    );
+    assert_eq!(set_frequency_to(&mut e, 0.0), vec![100]);
+    assert_eq!(set_frequency_to(&mut e, 1000.0), vec![200_000]);
+    assert_eq!(set_frequency_to(&mut e, f32::NAN), vec![100]);
+    e.mem.set_u16(SOUND + SAMPLES_PER_SECOND, 1);
+    e.mem.set_f32(SOUND + FREQUENCY_FACTOR, 1.0);
+    assert_eq!(set_frequency_to(&mut e, 100.5), vec![100]);
+    assert_eq!(set_frequency_to(&mut e, 101.5), vec![102]);
+    assert_eq!(set_frequency_to(&mut e, 150.7), vec![151]);
+    e.mem.set_u32(SOUND + DEVICE, 0);
+    assert_eq!(set_frequency_to(&mut e, 150.0), Vec::<u32>::new());
+    e.mem.set_u32(SOUND + DEVICE, 0x4444);
+    e.mem.set_u32(SOUND + BUFFER, 0);
+    assert_eq!(set_frequency_to(&mut e, 150.0), Vec::<u32>::new());
+    let word = e.jip_patches();
+    e.set_jip_patches(word & !jip_patches::FIXES);
+    assert_eq!(
+        e.call(SET_FREQUENCY.addr(), &[SOUND, 1.0f32.to_bits()]).eax,
+        0x5a5e
+    );
+}
+
+/// G108's `GetFrequency`: the buffer's frequency over the base rate times the factor (26460 over
+/// 22050 x 1.2 is 1.0); a failed `GetFrequency`, no buffer or no device: 1.0. Without the row: the
+/// exe's function.
+#[test]
+fn g108_get_frequency_reads_over_the_factor() {
+    let mut e = sound_engine();
+    let read = |e: &mut Engine| e.call(GET_FREQUENCY.addr(), &[SOUND]).st0;
+    e.mem.set_u32(REC + 0xc00, 26460);
+    e.mem.set_u32(REC + 0xc04, 0);
+    assert_eq!(read(&mut e), f64::from(26460.0f32 / (22050.0f32 * 1.2)));
+    e.mem.set_u32(REC + 0xc00, 44100);
+    assert_eq!(read(&mut e), f64::from(44100.0f32 / (22050.0f32 * 1.2)));
+    e.mem.set_u32(REC + 0xc04, 0x8000_4005);
+    assert_eq!(read(&mut e), 1.0, "failed");
+    e.mem.set_u32(REC + 0xc04, 0);
+    e.mem.set_u32(SOUND + DEVICE, 0);
+    assert_eq!(read(&mut e), 1.0, "no device");
+    e.mem.set_u32(SOUND + DEVICE, 0x4444);
+    e.mem.set_u32(SOUND + BUFFER, 0);
+    assert_eq!(read(&mut e), 1.0, "no buffer");
+    let word = e.jip_patches();
+    e.set_jip_patches(word & !jip_patches::FIXES);
+    assert_eq!(read(&mut e), 7.0);
+}
+
+/// JIP's `StrToUInt`: digits to the first other byte, a minus negating; a fall (unsigned
+/// overflow) answers 0xFFFFFFFF, or 0 with the minus.
+#[test]
+fn g115_str_to_uint_reads_as_jip() {
+    assert_eq!(str_to_uint(b"42x"), 42);
+    assert_eq!(str_to_uint(b"-1"), 0xffff_ffff);
+    assert_eq!(str_to_uint(b"4294967295"), 0xffff_ffff);
+    assert_eq!(str_to_uint(b"4294967296"), 0xffff_ffff);
+    assert_eq!(str_to_uint(b"-4294967296"), 0);
+    assert_eq!(str_to_uint(b"x"), 0);
+    assert_eq!(str_to_uint(b""), 0);
 }
