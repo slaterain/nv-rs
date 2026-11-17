@@ -1088,12 +1088,9 @@ off, each place runs the exe's code unchanged.
 
 Seams for other groups' rows: G06's `0x77765A` (the HUD's action
 text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below); O14's `0x770B0E`
-(`DoIdle`'s sneak test, asked with `bSneakBoundingBoxFix` on; group GX's row and handler, not
-built yet; O14's second hook site, `0xC72EA3` in the player's character controller setup where JIP's
-`InitControllerShapeHook` records the controller shape, has no seam yet: group GX adds it with its handler, and
-the two are tested together); G108's `0xAE5648` (the audio manager's message kind 54, which the game ignores; group
-GW's row and handler, not built yet). Until their handlers are in, those two places run the
-game's code.
+(`DoIdle`'s sneak test, asked with `bSneakBoundingBoxFix` on; group GX's row and handler, with its
+second site `0xC72EA3`: listed under GX below); G108's `0xAE5648` (the audio manager's message kind 54, which the
+game ignores; group GW's row and handler, not built yet). Until its handler is in, that place runs the game's code.
 
 #### GB: UI: item lists, repair, pad dead zones
 
@@ -1357,7 +1354,21 @@ Nothing built yet.
 
 #### GX: Havok, pad rumble, mouse
 
-Nothing built yet.
+Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): immobile creatures (turrets and the like,
+whose creature record is flagged immobile) no longer drop to the ground when their physics starts: JIP marks
+their character controller and the in-air state treats the mark as "not falling" (`0x9313EC`, `0xCD3FDD`); a
+fixed physics body follows its object when the object is moved or turned and asks for it, as `SetPos` or
+`SetAngle` on a static do (the game only moved such bodies outside a physics world) (`00c65b00`); the pad does
+not rumble while the game's controller rumble setting is off (`0xEE820A`); a jump's height counts from the
+character's own jump value in physics units (`0xCD4468`). With JIP's `bSneakBoundingBoxFix` (on by default):
+the player's and teammates' collision shape is lowered by 6 units while the player sneaks, so a sneaking player
+fits under lower ceilings, and goes back when the player stands (`0xC72EA3`, where the controller is given a
+shape of JIP's own, and `0x770B0E`, the HUD's sneak test).
+
+Built as part of JIP (in every preset once JIP answers "installed"): `ToggleMouseMovement` turns the mouse's
+x and y movement off and on, and the mouse wheel does nothing while its key is disabled (`DisableKey` on the
+wheel's up or down code) (`00a239e0`); the player's constructor clears the three bytes after
+`bMenuModeButtonClicked` too, the sneak shape's state among them (`0x939258`).
 
 ### UI Organizer
 
