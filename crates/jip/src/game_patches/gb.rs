@@ -766,7 +766,7 @@ fn repair_list(e: &mut Engine, words: &[u32]) -> Option<u32> {
     if ok && form == item && !repair_state(e).modded.load(Ordering::Relaxed) {
         let health = health_percent(e, entry);
         let broken = f32::from_bits(repair_state(e).health.load(Ordering::Relaxed));
-        ok = !(health > broken);
+        ok = health.partial_cmp(&broken) != Some(std::cmp::Ordering::Greater);
     }
     Some(u32::from(ok))
 }
@@ -812,7 +812,9 @@ fn repair_again(e: &mut Engine, _: &[u32]) -> Option<u32> {
     let broken = e.mem.u32(BROKEN_ITEM);
     let health = health_percent(e, broken) + 1.0;
     let cap = f32::from_bits(repair_state(e).skill.load(Ordering::Relaxed));
-    Some(u32::from(!(health > cap)))
+    Some(u32::from(
+        health.partial_cmp(&cap) != Some(std::cmp::Ordering::Greater),
+    ))
 }
 #[cfg(test)]
 #[path = "gb_tests.rs"]
