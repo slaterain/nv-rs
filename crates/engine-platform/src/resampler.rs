@@ -1633,55 +1633,44 @@ mod probe_tables {
         println!("{name}: {same} of {} equal; first differences {first:?}", theirs.len());
     }
 
-    /// Research probe (not a check): the DLL's tables against candidate formulas, in the x87's
-    /// extended precision (the 32-bit DLL's own arithmetic) through the host's FPU.
+    /// Research probe (not a check): the window's Bessel series, ended several ways; and the
+    /// sinc's last slope with pi 3.1415926535.
     #[test]
     #[ignore]
     fn probe() {
-        use engine_core::x87::*;
         let t = tables().expect("RESAMPLEDMO.DLL");
-        let e = |v: f64| X87Ext::load64(v);
-        let f32_of = |v: X87Ext| f32::from_bits(v.store32());
-        let pi_ext = X87Ext::from_parts(0x4000, 0xC90F_DAA2_2168_C235);
-        let pi_64 = e(std::f64::consts::PI);
-        let n = 16384usize;
-        let sinc = |x: X87Ext, pi: X87Ext| {
-            let px = x87_fmul(x, pi);
-            x87_fdiv(x87_fsin(px), px)
-        };
-        let pi_32 = e(f64::from(std::f32::consts::PI));
-        let pi_closest = e(3.14159265);
-        for (name, pi) in [("pi f32", pi_32), ("pi 3.14159265", pi_closest), ("fldpi", pi_ext)] {
-            let a: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { f32_of(sinc(x87_fdiv(e(i as f64 * 65536.0), e(30_678_338.0)), pi)) }).collect();
-            count(&format!("sinc ext x=i*65536/c, {name}"), &a, &t.sinc_offset);
-            let b: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { f32_of(sinc(e(i as f64 * 65536.0 / 30_678_338.0), pi)) }).collect();
-            count(&format!("sinc ext x=f64, {name}"), &b, &t.sinc_offset);
-            let c: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { f32_of(sinc(x87_fmul(e(i as f64), x87_fdiv(e(65536.0), e(30_678_338.0))), pi)) }).collect();
-            count(&format!("sinc ext x=i*(65536/c), {name}"), &c, &t.sinc_offset);
-            let d: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { f32_of(sinc(x87_fdiv(e(i as f64), e(30_678_338.0 / 65536.0)), pi)) }).collect();
-            count(&format!("sinc ext x=i/(c/65536), {name}"), &d, &t.sinc_offset);
-        }
-        // Window in extended precision.
-        let i0 = |x: X87Ext| {
-            let half = x87_fdiv(x, e(2.0));
-            let q = x87_fmul(half, half);
-            let mut sum = e(1.0);
-            let mut term = e(1.0);
-            for k in 1..60 {
-                let kk = e((k * k) as f64);
-                term = x87_fdiv(x87_fmul(term, q), kk);
-                sum = x87_fadd(sum, term);
+        let pi: f64 = 3.1415926535;
+        let sinc = |i: usize| { if i == 0 { 1.0 } else { let x = i as f64 * 65536.0 / 30_678_338.0; ((pi * x).sin() / (pi * x)) as f32 } };
+        let last = (sinc(16384) - t.sinc_offset[16383]) / 65536.0;
+        println!("sinc last slope {last:e}, theirs {:e}", t.sinc_slope[16383]);
+        let series = |x: f64, stop: &dyn Fn(f64, f64, usize) -> bool| {
+            let mut sum = 1.0f64;
+            let mut term = 1.0f64;
+            let mut k = 1usize;
+            loop {
+                term *= (x / (2.0 * k as f64)) * (x / (2.0 * k as f64));
+                sum += term;
+                if stop(term, sum, k) { return sum; }
+                k += 1;
             }
-            sum
         };
-        let beta = e(10.0);
-        let wv: Vec<f32> = (0..1024)
-            .map(|i| {
-                let x = x87_fdiv(e(i as f64), e(1024.0));
-                let r = x87_fsqrt(x87_fsub(e(1.0), x87_fmul(x, x)));
-                f32_of(x87_fdiv(i0(x87_fmul(beta, r)), i0(beta)))
-            })
-            .collect();
-        count("window ext", &wv, &t.window_offset);
+        let mut rules: Vec<(String, Box<dyn Fn(f64, f64, usize) -> bool>)> = Vec::new();
+        for terms in [8usize, 10, 12, 14, 16, 18, 20, 25, 30] {
+            rules.push((format!("{terms} terms"), Box::new(move |_, _, k| k >= terms)));
+        }
+        for e in [1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9, 1e-10, 1e-12] {
+            rules.push((format!("term < {e:e} * sum"), Box::new(move |term, sum, _| term < e * sum)));
+            rules.push((format!("term < {e:e}"), Box::new(move |term, _, _| term < e)));
+        }
+        for (name, stop) in &rules {
+            let v: Vec<f32> = (0..1024)
+                .map(|i| {
+                    let x = i as f64 / 1024.0;
+                    (series(10.0 * (1.0 - x * x).sqrt(), stop.as_ref()) / series(10.0, stop.as_ref())) as f32
+                })
+                .collect();
+            let same = v.iter().zip(&t.window_offset).filter(|(a, b)| a.to_bits() == b.to_bits()).count();
+            println!("window {name}: {same}");
+        }
     }
 }
