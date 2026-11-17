@@ -16,7 +16,9 @@
 //!   `SM_REMOTESESSION`, the Windows, ProgramData and Public Documents folders), and the facts of
 //!   the code pages named below (`IsValidCodePage`, `GetCPInfo`); nothing personal or per machine;
 //! - **declared choices**: the ANSI code page 1252 and the OEM code page 437 (the pair of an
-//!   English Windows; on Windows they follow the PC's language setting); no NVIDIA library (what a
+//!   English Windows; on Windows they follow the PC's language setting), or the pair of the
+//!   game's language when `NV_CODE_PAGE` names it (1250 and 852, 1251 and 866:
+//!   `crate::code_page`); no NVIDIA library (what a
 //!   PC without NVIDIA's driver answers); and on a processor without `CPUID` (Apple silicon) the
 //!   answer of an x86-64 PC (`engine_core::processor`).
 //!
@@ -723,12 +725,17 @@ pub struct Inputs {
     pub processor: (u32, [u32; 4], [u32; 4]),
     /// nv-rs's own folder (this system's full path).
     pub own_folder: Result<std::path::PathBuf, String>,
+    /// The game's ANSI code page (`crate::code_page`): 1252, 1250 or 1251.
+    pub code_page: u32,
 }
 
 /// The table's text and what could not be answered (each a line for the log; such a question
 /// then stops the run where the game asks it, saying it was not captured).
 pub fn write_table(inputs: &Inputs) -> (String, Vec<String>) {
     let mut table = String::from(WINDOWS_FIXED);
+    // The game's code page and its OEM page, after the fixed answers' 1252 and 437 (a later line
+    // answers for the same question).
+    table.push_str(&crate::code_page::table_lines(inputs.code_page));
     let mut problems = Vec::new();
     match inputs
         .own_folder
@@ -1058,6 +1065,9 @@ pub fn this_machine(own_folder: Result<std::path::PathBuf, String>) -> (String, 
         now,
         processor: this_processor(),
         own_folder,
+        // The game's page, chosen by the host at the very start of the run, before any name is
+        // turned (`crate::code_page::set_game_page`).
+        code_page: crate::code_page::game_page().number,
     })
 }
 

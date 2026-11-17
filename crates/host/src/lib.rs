@@ -159,6 +159,11 @@ impl Host {
         // asked) and not as the expected stop (review of #631, round 5).
         #[cfg(not(windows))]
         stop_off_windows(&exe, &engine::exe::verify)?;
+        // Linux and macOS: the game's code page, chosen before anything turns a name or a text
+        // (the exe's own path, the save guard, the mod files, the INIs the extenders read, the
+        // machine table's `GetACP`), so the whole run has one page.
+        #[cfg(not(windows))]
+        choose_code_page();
         // Off Windows the save guard's look at the player's folders starts now, off the frames
         // (nothing on Windows).
         save_out::prepare(data);
@@ -510,13 +515,31 @@ pub fn error_status(err: &str) -> i32 {
 /// pieces that are still Windows-only, instead of a run that would go on without them and fail
 /// somewhere less clear. The game's paths and file listings are provided
 /// (`engine_platform::host_paths`), and so is the sound on the speakers, and this machine's tables
-/// (`engine_platform::machine_table`, the sound's `engine_platform::dsound::fixed_table`). The game's window with its
+/// (`engine_platform::machine_table`, the sound's `engine_platform::dsound::fixed_table`), and the
+/// code pages of the game's languages (`engine_platform::code_page`). The game's window with its
 /// mouse and keyboard is provided on Linux (winit, X11 and Wayland), not yet on macOS, where it
 /// needs the program's main thread. On a processor other than x86-64 (Apple silicon) it also names
 /// what differs there.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
     not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
+}
+
+/// The game's code page on Linux and macOS (`engine_platform::code_page`): `NV_CODE_PAGE` (1252
+/// unless it names 1250 or 1251; another value is said and 1252 stands), set for the whole run and
+/// said in the log.
+#[cfg(not(windows))]
+fn choose_code_page() {
+    let page =
+        match engine_platform::code_page::chosen(std::env::var("NV_CODE_PAGE").ok().as_deref()) {
+            Ok(page) => page,
+            Err(why) => {
+                eprintln!("{why}; code page 1252 is used");
+                1252
+            }
+        };
+    engine_platform::code_page::set_game_page(page);
+    eprintln!("code page: {page} (NV_CODE_PAGE)");
 }
 
 /// Off Windows, the start's and `--check`'s stop: `exe` checked by `verify` first (a wrong
@@ -534,24 +557,33 @@ fn stop_off_windows(
 /// system.
 #[cfg(any(not(windows), test))]
 fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
-    let mut why = String::from(
-        "nv-rs does not run the game on this system yet: it builds here, but these are only \
-         provided on Windows so far: ",
-    );
+    let mut missing = Vec::new();
     if apple {
-        why.push_str(
+        missing.push(
             "the game's window with its mouse and keyboard (and so anything drawn: on macOS the \
-             window needs the program's main thread), ",
+             window needs the program's main thread)",
         );
     }
-    why.push_str("code pages other than Windows' Western one (1252)");
     if !x86_64 {
-        why.push_str(
-            "; and on this processor the game's x87 maths (not yet exact off x86-64) and the \
+        missing.push(
+            "on this processor the game's x87 maths (not yet exact off x86-64) and the \
              processor's quick reciprocal estimates (RCPSS, RSQRTSS)",
         );
     }
-    Err(why)
+    if missing.is_empty() {
+        return Err(
+            "nv-rs does not start the game on this system yet: the pieces known to be needed \
+             from Windows are provided here (not the D3DX shader compiler, which only shaders \
+             missing from the game's shader packages reach), but a first start with the game's \
+             files has not been tried"
+                .into(),
+        );
+    }
+    Err(format!(
+        "nv-rs does not run the game on this system yet: it builds here, but these are only \
+         provided on Windows so far: {}",
+        missing.join("; and ")
+    ))
 }
 
 /// The installation's `FalloutNV.exe` beside the `Data` folder `data`
@@ -1019,10 +1051,10 @@ mod tests {
         for x86_64 in [true, false] {
             for apple in [true, false] {
                 let why = super::not_provided_on(x86_64, apple).unwrap_err();
-                assert!(why.contains("code page"), "{why}");
                 // This machine's tables are made from what the system reports (the display, the
-                // card, the sound device, the folders: engine-platform machine_table.rs, dsound.rs).
-                for gone in ["tables", "sound devices", "adapter", "folders"] {
+                // card, the sound device, the folders: engine-platform machine_table.rs, dsound.rs),
+                // and the game's code pages are provided (engine-platform code_page.rs).
+                for gone in ["tables", "sound devices", "adapter", "folders", "code page"] {
                     assert!(!why.contains(gone), "{gone}: {why}");
                 }
                 // The window with its mouse and keyboard: provided on Linux, not yet on macOS.
@@ -1039,6 +1071,13 @@ mod tests {
                 // The processor's own differences only off x86-64 (Apple silicon).
                 assert_eq!(why.contains("x87"), !x86_64, "{why}");
                 assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
+                // Nothing Windows-only left (Linux on x86-64): the start is still held until a
+                // first start with the game's files.
+                assert_eq!(
+                    why.contains("has not been tried"),
+                    x86_64 && !apple,
+                    "{why}"
+                );
             }
         }
         assert_eq!(

@@ -483,6 +483,7 @@ fn the_table_reads_back_with_its_answers() {
         now: at(2026, 7, 1, 12),
         processor: fixed_processor(),
         own_folder: Ok("/home/me/.local/share/nv-rs".into()),
+        code_page: 1252,
     });
     assert!(problems.is_empty(), "{problems:?}");
     assert!(!table.contains("GetAdapterDisplayMode") && !table.contains("GetDeviceCaps"));
@@ -552,6 +553,7 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
         now: 0,
         processor: fixed_processor(),
         own_folder: Err("no HOME".into()),
+        code_page: 1251,
     });
     assert_eq!(problems.len(), 2);
     assert!(problems[0].contains("no HOME") && problems[1].contains("no zone file"));
@@ -566,6 +568,13 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
     assert!(problems[0].contains("no card") && problems[1].contains("no window system"));
     assert_eq!(refusal, None);
     // Without the card its identity is left out; the captured card's answers stay as captured.
+    // The Russian game's pages answer, after the fixed answers' 1252 and 437.
+    let mut e = crate::Engine::new();
+    crate::d3d9::load_adapter_table(&mut e, &table);
+    assert_eq!(crate::d3d9::get_acp(&mut e), 1251);
+    assert_eq!(crate::d3d9::get_oemcp(&mut e), 866);
+    assert_eq!(crate::d3d9::is_valid_code_page(&mut e, 866), 1);
+    assert_eq!(crate::d3d9::is_valid_code_page(&mut e, 1252), 1);
     assert_eq!(display, display::CARD.replace("\r\n", "\n"));
     // A display question then stops the run, saying it was not captured.
     let mut e = crate::Engine::new();
