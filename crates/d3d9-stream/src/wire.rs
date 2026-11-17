@@ -407,6 +407,147 @@ pub fn compare_renamed(
     }
 }
 
+/// What [`compare_renamed_ends_deferred`] found besides the first difference: how many objects ended
+/// later in B than in A.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Deferred {
+    pub later: u64,
+}
+
+/// One side of [`compare_renamed_ends_deferred`]: its records, names, the record's place, the
+/// commands other than `Destroy` read so far, and each ended object's name with that count when it
+/// ended (objects never named before their end counted apart).
+struct Side<R> {
+    records: Records<R>,
+    names: Names,
+    index: u64,
+    drawn: u64,
+    ended: std::collections::HashMap<u32, u64>,
+    unnamed_ends: u64,
+}
+
+impl<R: std::io::Read> Side<R> {
+    fn new(from: R) -> Result<Self, String> {
+        Ok(Side {
+            records: Records::new(from)?,
+            names: Names::default(),
+            index: 0,
+            drawn: 0,
+            ended: std::collections::HashMap::new(),
+            unnamed_ends: 0,
+        })
+    }
+
+    /// The next command other than `Destroy` (its place, its renamed encoding into `out`, how it
+    /// prints); each `Destroy` before it noted and its name forgotten. `None` at the end.
+    fn next(&mut self, out: &mut Vec<u8>) -> Result<Option<(u64, String)>, String> {
+        loop {
+            let Some(record) = self.records.next()? else {
+                return Ok(None);
+            };
+            let at = self.index;
+            self.index += 1;
+            let mut r = Reader {
+                bytes: record,
+                at: 0,
+            };
+            let tag = u8::get(&mut r).map_err(|e| e.to_string())?;
+            let cmd = Cmd::get(tag, &mut r).map_err(|e| e.to_string())?;
+            if let Cmd::Destroy { object } = cmd {
+                match self.names.names.get(&object).copied() {
+                    Some(name) => {
+                        self.ended.insert(name, self.drawn);
+                    }
+                    None => self.unnamed_ends += 1,
+                }
+                self.names.forget(object);
+                continue;
+            }
+            let text = renamed(record, &mut self.names, out)?;
+            self.drawn += 1;
+            return Ok(Some((at, text)));
+        }
+    }
+}
+
+/// [`compare_renamed`] for a record made with the world's draw on the drawing thread (A the serial
+/// run, B the posted one): there an object whose last reference the drawing side lets go of ends
+/// only at the join (`engine_platform::d3d9draw`, "a release there that would end an object leaves
+/// it to the join"), so its `Destroy` comes later in B, and an address the serial run hands out
+/// again at once goes to a new object at another address in B. Neither changes a picture: the object
+/// is dead to the game from its release on, and names are given by first use, so the new object has
+/// the same name either way. So `Destroy` commands are left out of the command-by-command
+/// comparison but checked apart: every object (by name) ended in one record is ended in the other,
+/// never earlier in B (counted in commands other than `Destroy`), and a use of an object after its
+/// `Destroy` still shows as a difference (the address is a new name on that side only). Answers the
+/// commands other than `Destroy` that compared alike, the first difference (its place in A's
+/// record, B's place in its text), and how many ends B deferred.
+pub fn compare_renamed_ends_deferred(
+    a: impl std::io::Read,
+    b: impl std::io::Read,
+) -> Result<(u64, Option<Difference>, Deferred), String> {
+    let (mut a, mut b) = (Side::new(a)?, Side::new(b)?);
+    let (mut ea, mut eb) = (Vec::new(), Vec::new());
+    let mut alike = 0u64;
+    loop {
+        let ra = a.next(&mut ea)?;
+        let rb = b.next(&mut eb)?;
+        match (ra, rb) {
+            (None, None) => break,
+            (Some(_), Some(_)) if ea == eb => alike += 1,
+            (ra, rb) => {
+                let index = ra.as_ref().map_or(a.index, |r| r.0);
+                return Ok((
+                    alike,
+                    Some(Difference {
+                        index,
+                        a: ra.map(|r| r.1),
+                        b: rb.map(|r| format!("(B's command {}) {}", r.0, r.1)),
+                    }),
+                    Deferred::default(),
+                ));
+            }
+        }
+    }
+    let ends = |what: String| {
+        Ok((
+            alike,
+            Some(Difference {
+                index: a.index,
+                a: Some(what),
+                b: None,
+            }),
+            Deferred::default(),
+        ))
+    };
+    if a.unnamed_ends != b.unnamed_ends {
+        return ends(format!(
+            "objects never used before their end: {} in A, {} in B",
+            a.unnamed_ends, b.unnamed_ends
+        ));
+    }
+    let mut names: Vec<u32> = a.ended.keys().chain(b.ended.keys()).copied().collect();
+    names.sort_unstable();
+    names.dedup();
+    let mut later = 0;
+    for name in names {
+        match (a.ended.get(&name), b.ended.get(&name)) {
+            (Some(&at_a), Some(&at_b)) if at_b >= at_a => later += u64::from(at_b > at_a),
+            (Some(&at_a), Some(&at_b)) => {
+                return ends(format!(
+                    "object {name} ended earlier in B (after {at_b} commands) than in A ({at_a})"
+                ))
+            }
+            (at_a, at_b) => {
+                return ends(format!(
+                    "object {name} ended in one record only (A: {at_a:?}, B: {at_b:?})"
+                ))
+            }
+        }
+    }
+    Ok((alike, None, Deferred { later }))
+}
+
 /// The 64-bit FNV-1a hash of `bytes` continued from `hash` (start with [`HASH_START`]).
 pub(crate) fn hash(mut hash: u64, bytes: &[u8]) -> u64 {
     for &b in bytes {
