@@ -442,7 +442,7 @@ impl Host {
 /// [`Host::start_with`] and [`check_installation`] off Windows: the program builds on Linux and
 /// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
 /// pieces that are still Windows-only, instead of a run that would go on without them (no window
-/// drawn, no sound, the game's own folder names not found, files listed by a call that stops)
+/// drawn, the game's own folder names not found, files listed by a call that stops)
 /// and fail somewhere less clear. On a processor other than x86-64 (Apple silicon) it also names
 /// what differs there.
 #[cfg(any(not(windows), test))]
@@ -456,7 +456,7 @@ fn not_provided_on(x86_64: bool) -> Result<(), String> {
     let mut why = String::from(
         "nv-rs does not run the game on this system yet: it builds here, but these are only \
          provided on Windows so far: the game's window with its mouse and keyboard (and so \
-         anything drawn), the sound on the speakers, the game's Windows folder names (a drive \
+         anything drawn), the game's Windows folder names (a drive \
          letter and backslashes) over this system's folders, the file listing's file times, \
          this machine's tables (display adapter, sound devices, folders), which are measured on \
          Windows, the distortion sound effect's table (measured from Windows' own DLL), and text \
@@ -838,7 +838,7 @@ mod tests {
             for piece in [
                 "window",
                 "mouse and keyboard",
-                "sound",
+                "sound devices",
                 "folder names",
                 "file times",
                 "tables",
@@ -847,6 +847,8 @@ mod tests {
             ] {
                 assert!(why.contains(piece), "{piece}: {why}");
             }
+            // The sound on the speakers is provided everywhere (engine-platform sound_out.rs).
+            assert!(!why.contains("speakers"), "{why}");
             // The processor's own differences only off x86-64 (Apple silicon).
             assert_eq!(why.contains("x87"), !x86_64, "{why}");
             assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
