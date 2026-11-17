@@ -27,11 +27,12 @@
 //! ([`Cascade::world_to_light`]).
 //!
 //! **Cables** cast at their real weight. A geometry all of whose pieces ([`strands`]) are round
-//! cables thinner than [`THIN_WIDTH`] or flat ribbons ([`Strand::ribbon`]: the game draws its
-//! telegraph lines as alpha-tested strips 20 units wide with the cable in the texture) is drawn
-//! not into the depth maps but into a coverage map a cascade ([`THIN_SIZE`], [`THIN_FORMAT`]): a
-//! round cable as quads along its centreline at least [`THIN_DRAWN`] texels wide, carrying its
-//! share of each texel ([`thin_quads`]); a ribbon through its own pixel shader with its texture's
+//! cables thinner than [`THIN_WIDTH`] or flat ribbons ([`Strand::ribbon`]: the game draws some
+//! wires as alpha-tested strips 50 to 90 units wide with one or two cables in the texture) is
+//! drawn not into the depth maps but into a coverage map a cascade ([`THIN_SIZE`],
+//! [`THIN_FORMAT`]): a round cable as quads along its centreline at least [`THIN_DRAWN`]
+//! texels wide, carrying its share of each texel ([`thin_quads`]); 
+//! a ribbon through its own pixel shader with its texture's
 //! alpha read at the level the map's texel calls for (the cable's share of the texel), added up,
 //! over quads that carry its depth. The lookup takes away the sun by that share, spread over the
 //! band the sun's own half-degree width makes at the cable's height above the receiver
@@ -3589,7 +3590,7 @@ mod tests {
 
     #[test]
     fn a_ribbon_is_a_cable_and_a_round_pole_is_not() {
-        // Goodsprings' telegraph line: cut-out ribbons 20 wide, 700 long, several in a geometry,
+        // Cut-out ribbons (20 wide here; the game's are 50 to 90), 700 long, several in a geometry,
         // with a small bit (a clamp) beside them.
         let mut line = strip(20.0, 700.0, 14);
         line.extend(moved(strip(20.0, 700.0, 14), [0.0, 60.0, 0.0]));
