@@ -207,7 +207,7 @@ const VALUE_NAME: usize = 0x80;
 const SEC_NAME: usize = 0x40;
 const VAL_STR: usize = 0x20;
 const STR_ARG_BUFFER: usize = 0x40000;
-const MAX_MESSAGE_LENGTH: usize = 0x4000;
+pub(crate) const MAX_MESSAGE_LENGTH: usize = 0x4000;
 const SECTION_BUFFER: usize = 0x10000;
 /// `g_dataHandler` (`*011C3F2C`): its loaded files (`modList.loadedMods[255]`, +0x21C), a
 /// file's name (`ModInfo::name`, +0x20).
@@ -412,7 +412,7 @@ fn profile_string_in(
 
 /// The texts of a buffer Windows filled ([`engine_core::mod_files::profile_list`]), as JIP walks
 /// it: while the count left is above 0, the text up to its 0, the count less its length and 1.
-fn walked(buffer: &[u8], count: usize) -> Vec<Vec<u8>> {
+pub(crate) fn walked(buffer: &[u8], count: usize) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     let (mut left, mut at) = (count as isize, 0usize);
     while left > 0 {

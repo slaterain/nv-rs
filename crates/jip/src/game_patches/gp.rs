@@ -673,8 +673,8 @@ pub fn toggle_hit_effects(e: &mut Engine, on: bool) {
 }
 
 /// JIP's `s_forceHCNeedsUpdate` (`internal/patches_game.h`): set by `SetGameHour`; read and
-/// cleared only by JIP's `UpdateTimeGlobalsHook` (O5, `bGameDaysPassedFix`, at `0x867A40`, not
-/// built yet), which then leaves the player's hardcore reset byte (`+0xE39`) clear so the needs
+/// cleared only by JIP's `UpdateTimeGlobalsHook` (O5, `bGameDaysPassedFix`, at `0x867A40`, in
+/// `game_patches::gw`), which then leaves the player's hardcore reset byte (`+0xE39`) clear so the needs
 /// take the jump in time. Lock-free, made at install before the threads start.
 #[derive(Default)]
 pub struct ForceHardcoreNeedsUpdate(AtomicBool);
@@ -686,7 +686,7 @@ pub fn set_force_hardcore_needs_update(e: &mut Engine, on: bool) {
         .store(on, Ordering::Relaxed);
 }
 
-/// `s_forceHCNeedsUpdate`, for O5's hook when it is built.
+/// `s_forceHCNeedsUpdate`, for O5's hook.
 pub fn force_hardcore_needs_update(e: &mut Engine) -> bool {
     e.ext_free::<ForceHardcoreNeedsUpdate>()
         .0

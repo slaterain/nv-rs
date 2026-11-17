@@ -168,6 +168,10 @@ pub fn fn_00595560(e: &mut Engine, _this: Ptr, list: Ptr) -> u32 {
     })
 }
 
+/// [`fn_00595560`], which `00595600` calls through the engine (a built-in extender may replace
+/// it: JIP LN NVSE's G113, `overridable.tsv`).
+const PICK_MEDIA_SET: u32 = 0x0059_5560;
+
 /// `00595600`'s "drop the current entry": `00595cb0` on `+0x50` when it is
 /// set, then `+0x50` = 0.
 fn drop_current(e: &mut Engine, this: Ptr) {
@@ -183,7 +187,10 @@ fn drop_current(e: &mut Engine, this: Ptr) {
 /// table leaves `+0x50` alone.
 fn pick_for_kind(e: &mut Engine, this: Ptr, kind: u32, table: &[u32]) {
     if let Some(&offset) = table.get(kind as usize) {
-        let picked = fn_00595560(e, this, Ptr::new(this.addr() + offset));
+        // Through the engine: JIP LN NVSE's G113 replaces `00595560` (`PickMediaSetHook`).
+        let picked = e
+            .call(PICK_MEDIA_SET, &args![this, this.addr() + offset])
+            .u32();
         e.mem.set_u32(this.addr() + 0x50, picked);
     }
 }
@@ -359,7 +366,7 @@ pub fn fn_00595600(e: &mut Engine, this: Ptr, flag: u8) -> u8 {
             drop_current(e, this);
         }
         if e.global::<u32>(BLOCK_LAST_LIST_011DD378) == 0 {
-            let picked = fn_00595560(e, this, Ptr::new(base + 0xb0));
+            let picked = e.call(PICK_MEDIA_SET, &args![this, base + 0xb0]).u32();
             e.mem.set_u32(base + 0x50, picked);
         }
     }
@@ -928,6 +935,28 @@ mod tests {
         assert_eq!(e.call(0x0059_5600, &args![this, 1u32]).u8(), 0);
         let log = e.call_log.take().unwrap();
         assert_eq!(log.len(), 3);
+    }
+
+    /// `00595600` picks through the engine (`00595560`), so JIP LN NVSE's G113 wrap there
+    /// (`PickMediaSetHook`) is what picks: both picks of the update reach the address, with the
+    /// controller and the list, and the answers are what is kept.
+    #[test]
+    fn fn_00595600_picks_through_the_engine() {
+        let World { mut e, this, .. } = world(10.0);
+        let b = this.addr();
+        e.register_double(PICK_MEDIA_SET, |e, a| {
+            let picked = e.mem.alloc(0x40);
+            e.mem.set_u32(picked, a[1]);
+            picked.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0059_5600, &args![this, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, PICK_MEDIA_SET),
+            vec![vec![b, b + 0x90], vec![b, b + 0xb0]]
+        );
+        assert_eq!(e.mem.u32(e.mem.u32(b + 0x50)), b + 0xb0);
     }
 
     #[test]

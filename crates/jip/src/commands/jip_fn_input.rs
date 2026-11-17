@@ -4,9 +4,8 @@
 //!
 //! Left for later: `ToggleVanityWheel` writes a byte of the game's code (`SafeWrite8(0x945A29,
 //! 0x8B or 0x89)`, inside `009445B0`), which the translated code has no seam for;
-//! `ToggleMouseMovement` sets `s_mouseMovementState`, which only JIP's `GetMouseMovementHook`
-//! reads (`internal/hooks.h`: its jump replaces the game's mouse axis read `00A239E0`): the hook
-//! is the core track's, and the command comes with it.
+//! `ToggleMouseMovement` is built with JIP's `GetMouseMovementHook` (H20), the only reader of what
+//! it sets, in `crate::game_patches::gx`.
 
 use super::Handlers;
 use crate::input::MAX_CONTROL_BIND;
