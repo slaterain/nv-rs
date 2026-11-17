@@ -29,14 +29,29 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G56 (`WriteRelCall(0x72D661, InitBarterMenuHook)`): `BarterMenu::Create` titles the
     // vendor's tab before the first list fill.
     row(0x0072_d661),
+    // O9 (`bQttSelectShortKeys`, `HOOK_INIT_LIST(QuantitySelect, ..)`): the barter menu's
+    // quantity test, Ctrl takes one, Shift all, without the quantity menu.
+    row(0x0072_d8b4),
+    // G82 (`WritePushRetRelJump(0x72F33D, 0x72F37F, ConstructItemEntryNameHook)`, with
+    // `SAFE_WRITE_BUF(0x72F337, ..)` before it): `BarterMenu::InitFunc`'s item name.
+    row(0x0072_f33d),
     // G64 (`WriteRelCall(0x73005C, BarterSellFixHook)`): `BarterMenu::CompleteTransaction`
     // splits a vendor's caps over 32,767 into stacks before taking them.
     row(0x0073_005c),
+    // O9: `ContainerMenu::DoClick`'s weightless-item test (`{0x75BF18, 0x63EB, 2, 0}`) and its
+    // quantity test.
+    row(0x0075_bf18),
+    row(0x0075_bf97),
+    // G82: `ContainerMenu::InitFunc`'s item name.
+    row(0x0075_d1a5),
     // D04, the pad dead zones (JIP's `DeferredInit`: `SafeWrite32` of its own doubles over the
     // operand of `FCOMP double ptr [0x010718F0]`): each seam answers the double to compare with.
     // `CaravanMenu::DoIdle` 00741500, the stick's x and y.
     row(0x0074_16d6),
     row(0x0074_1705),
+    // O9: `InventoryMenu::DoClick`'s quantity test; G82: `InventoryMenu::InitFunc`'s item name.
+    row(0x0078_0b09),
+    row(0x0078_2876),
     // `LockPickMenu::RotateLockpick` 007908f0.
     row(0x0079_0966),
     // `MapMenu::DoGamepad` 00799790, the zoom axis.

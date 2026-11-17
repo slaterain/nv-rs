@@ -140,6 +140,22 @@ pub const BARTER_TAB_TITLE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0072_d661);
 pub const VENDOR_CAPS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0073_005c);
 /// G69's seam: `QuantityMenu::DoIdle`'s start (words: the menu).
 pub const QUANTITY_WHEEL: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_c179);
+/// G82's seams: the barter, container and inventory menus' `InitFunc` at their count test (words:
+/// the tile, the stack, its count). Answered: the name is set and the exe's block is skipped.
+pub const ITEM_NAMES: [SiteSlot; 3] = [
+    SiteSlot::new(Owner::Jip, 0x0072_f33d),
+    SiteSlot::new(Owner::Jip, 0x0075_d1a5),
+    SiteSlot::new(Owner::Jip, 0x0078_2876),
+];
+/// O9's seams (`bQttSelectShortKeys`): the barter, container and inventory menus' quantity test
+/// (words: the stack's count; answered: the count to take without the quantity menu), and the
+/// container's weightless-item test (`0x75BF18`, no words; answered: skipped).
+pub const QUANTITY_KEYS: [SiteSlot; 3] = [
+    SiteSlot::new(Owner::Jip, 0x0072_d8b4),
+    SiteSlot::new(Owner::Jip, 0x0075_bf97),
+    SiteSlot::new(Owner::Jip, 0x0078_0b09),
+];
+pub const WEIGHTLESS_TAKE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0075_bf18);
 
 /// The group's rows and installers.
 pub const AREA: Area = Area {
@@ -152,6 +168,13 @@ pub const AREA: Area = Area {
         BARTER_TAB_TITLE.addr(),
         VENDOR_CAPS.addr(),
         QUANTITY_WHEEL.addr(),
+        ITEM_NAMES[0].addr(),
+        ITEM_NAMES[1].addr(),
+        ITEM_NAMES[2].addr(),
+        QUANTITY_KEYS[0].addr(),
+        QUANTITY_KEYS[1].addr(),
+        QUANTITY_KEYS[2].addr(),
+        WEIGHTLESS_TAKE.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
@@ -161,6 +184,13 @@ pub const AREA: Area = Area {
 };
 
 fn install_fixes(e: &mut Engine) {
+    for slot in ITEM_NAMES {
+        e.on_site(slot, item_entry_name);
+    }
+    for slot in QUANTITY_KEYS {
+        e.on_site(slot, quantity_keys);
+    }
+    e.on_site(WEIGHTLESS_TAKE, weightless_take);
     e.on_site(DISPOSABLE_WEAPON, disposable_weapon);
     e.on_site(PLAIN_VALUE, plain_value);
     e.on_site(WEIGHT_FORMAT, weight_format);
@@ -473,6 +503,108 @@ fn left_stick(e: &mut Engine, _: &[u32]) -> Option<u32> {
 /// A right-stick `FCOMP`: compares with JIP's `s_deadZoneRSg`.
 fn right_stick(e: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(e.ext_free::<DeadZones>().right.load(Ordering::Relaxed))
+}
+
+/// `kTileValue_string`, a form's full name (`TESFullName::name` of the stack's form: text +0x34,
+/// length +0x38, as JIP reads it), the `InitFunc`s' 0x80-byte name buffer.
+const TRAIT_STRING: u32 = 0xfc4;
+const FULL_NAME_TEXT: u32 = 0x34;
+const FULL_NAME_LENGTH: u32 = 0x38;
+const NAME_BUFFER: usize = 0x80;
+/// A tile value's string (+0xC) and `Tile::Value::Refresh` (`00a09410`, `thiscall`, a flag).
+const VALUE_STRING: u32 = 0xc;
+const VALUE_REFRESH: u32 = 0x00a0_9410;
+/// The keys JIP reads in xNVSE's key state (`g_DIHookCtrl`'s raw states at +0xCF, +0x44F,
+/// +0x12A, +0x17E: `KeyInfo` is 7 bytes from +4): left and right Ctrl (one), left and right Shift
+/// (all).
+const KEYS_ONE: [u32; 2] = [0x1d, 0x9d];
+const KEYS_ALL: [u32; 2] = [0x2a, 0x36];
+/// The raw-state bit of [`nvse::input::key_states`].
+const RAW_STATE: u8 = 2;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::SetString,
+// Tile::Value::SetString; internal/utility.cpp: CopyCString.
+/// The tile's value of `id` (none: nothing) gets `text`: nothing when it holds the same text
+/// (case counts); else its old text is freed, a copy on the game's heap is kept and the value
+/// refreshed.
+fn tile_set_string(e: &mut Engine, tile: u32, id: u32, text: &[u8]) {
+    let value = crate::commands::jip_fn_ui::value_of(e, tile, id);
+    if value == 0 {
+        return;
+    }
+    let old = e.mem.u32(value + VALUE_STRING);
+    if old != 0 {
+        if e.mem.cstr(old) == text {
+            return;
+        }
+        crate::commands::heap_free(e, old);
+        e.mem.set_u32(value + VALUE_STRING, 0);
+    }
+    let copy = crate::commands::heap_alloc(e, text.len() as u32 + 1);
+    e.mem.write(copy, text);
+    e.mem.set_u8(copy + text.len() as u32, 0);
+    e.mem.set_u32(value + VALUE_STRING, copy);
+    e.call(VALUE_REFRESH, &args![value, 1u32]);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: ConstructItemEntryNameHook.
+/// G82 (words: the tile, the stack, its count): a stack whose weapon has mods (JIP's
+/// `GetEntryDataModFlagsHook`, [`super::gh1::mod_flags`]) or of more than one gets the form's
+/// name, "+" when modded and " (count)" when more than one, as the tile's string; nothing for
+/// another stack or a form with an empty name. Answers 1 (the exe's block is skipped).
+///
+/// nv-rs's own: the text is cut to the 0x80-byte buffer's 0x7F characters (JIP copies the whole
+/// name into it).
+fn item_entry_name(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&tile, &item, &count) = (words.first()?, words.get(1)?, words.get(2)?);
+    let count = count as i32;
+    let plus = super::gh1::mod_flags(e, item) != 0;
+    if !plus && count <= 1 {
+        return Some(1);
+    }
+    let form = e.mem.u32(item + 8);
+    let length = u32::from(e.mem.u16(form + FULL_NAME_LENGTH));
+    if length == 0 {
+        return Some(1);
+    }
+    let mut text = e.mem.bytes(e.mem.u32(form + FULL_NAME_TEXT), length);
+    if plus {
+        text.push(b'+');
+    }
+    if count > 1 {
+        text.extend_from_slice(b" (");
+        text.extend_from_slice(&crate::utility::int_to_str(count));
+        text.push(b')');
+    }
+    text.truncate(NAME_BUFFER - 1);
+    tile_set_string(e, tile, TRAIT_STRING, &text);
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: QttSelectInventoryHook,
+// QttSelectContainerHook, QttSelectBarterHook.
+/// O9 (words: the stack's count): Ctrl held answers 1, else Shift held answers the count, taken
+/// without the quantity menu; neither: nothing (the exe's test). Ctrl first, as JIP.
+fn quantity_keys(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let count = *words.first()?;
+    let held = |e: &mut Engine, keys: [u32; 2]| {
+        keys.iter()
+            .any(|&k| nvse::input::key_states(e, k) & RAW_STATE != 0)
+    };
+    if held(e, KEYS_ONE) {
+        Some(1)
+    } else if held(e, KEYS_ALL) {
+        Some(count)
+    } else {
+        None
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches (the O9
+// list's `{0x75BF18, 0x63EB, 2, 0}`, `JMP 0x75BF7D`).
+/// O9: the container's weightless-item test is skipped (1).
+fn weightless_take(_: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(1)
 }
 
 #[cfg(test)]

@@ -1731,11 +1731,14 @@ pub fn inventory_menu_init_func(e: &mut Engine, tile: u32, item: u32) {
     if item == 0 {
         return;
     }
-    if typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, item))
+    let count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, item))
         .into_ret()
-        .i32()
-        > 1
-    {
+        .i32();
+    // `0x782876` (JIP LN NVSE's `ConstructItemEntryNameHook`, G82, with the fix row on): JIP names
+    // the entry ("Name+ (count)") and the exe's block is skipped. One load while off.
+    let named = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0078_2876, &[tile, item, count as u32]).is_some();
+    if !named && count > 1 {
         e.with_stack(0x80, |e, buffer| {
             let format = if e.call(ITEM_GET_MOD_SLOTS, &args![item]).bool() {
                 MOD_COUNT_FORMAT
@@ -2523,22 +2526,39 @@ fn click_drop(e: &mut Engine, this: Ptr<InventoryMenu>) {
         )
         .into_ret()
         .i32();
-        let limit = e.call(SETTING_VALUE_WORD, &args![QUANTITY_SETTING]).u32();
-        if count > e.mem.i32(limit) {
-            let count = typed_call!(
-                leaf::FAMILY,
-                0x0072_6070,
-                leaf::word_at_4(e, current_item(e))
-            );
-            e.call(
-                QUANTITY_MENU_CREATE,
-                &args![count, 0x0078_0c50u32, 0x7fff_ffffu32],
-            );
+        // `0x780B09` (JIP LN NVSE's `QttSelectInventoryHook`, O9, with `bQttSelectShortKeys`):
+        // Ctrl drops one, Shift the whole stack, without the quantity menu (the answer is the
+        // count). One load while off.
+        if let Some(chosen) = jip_quantity_keys(e, 0x0078_0b09, count) {
+            e.call(0x0078_0c50, &args![chosen]);
         } else {
-            inventory_menu_drop_current_item(e, 1);
+            let limit = e.call(SETTING_VALUE_WORD, &args![QUANTITY_SETTING]).u32();
+            if count > e.mem.i32(limit) {
+                let count = typed_call!(
+                    leaf::FAMILY,
+                    0x0072_6070,
+                    leaf::word_at_4(e, current_item(e))
+                );
+                e.call(
+                    QUANTITY_MENU_CREATE,
+                    &args![count, 0x0078_0c50u32, 0x7fff_ffffu32],
+                );
+            } else {
+                inventory_menu_drop_current_item(e, 1);
+            }
         }
         refresh_player(e);
     });
+}
+
+/// JIP LN NVSE's quantity short keys (O9, `bQttSelectShortKeys`, step 3.9 GB-4) at `site` with the
+/// stack's count: the count to take without the quantity menu, `None` for the exe's test (and
+/// with the switch's bit clear, the only load).
+fn jip_quantity_keys(e: &mut Engine, site: u32, count: i32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::QTT_SELECT_SHORT_KEYS == 0 {
+        return None;
+    }
+    e.site(site, &[count as u32])
 }
 
 /// `operator new` (cdecl, one word).
@@ -3696,5 +3716,144 @@ mod n054_tests {
             calls_to(&e, SET_TRAIT_FROM_INT).last().unwrap(),
             &vec![0x118, 0xfaf, 1]
         );
+    }
+
+    // ---- JIP LN NVSE's game patches, group GB-4 (G82, O9) ----
+
+    fn never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("a seam asked with its bit clear")
+    }
+    fn nothing(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        None
+    }
+    fn g82_name(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        assert_eq!(w, [0x700, 0x7000, 3], "the tile, the stack, its count");
+        Some(1)
+    }
+    /// JIP's answer stand-in: the count less 2 (5 gives 3).
+    fn keyed(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        Some(w[0] - 2)
+    }
+
+    /// `InitFunc` on a stack of 3 (`init_names_a_stack_and_marks_a_worn_item`'s, not worn).
+    fn init(word: u32, handler: engine_core::extend::SiteFn) -> Engine {
+        let mut e = Engine::new();
+        menu(&mut e);
+        answer(&mut e, WORD_AT_FOUR, 3);
+        answer(&mut e, ITEM_GET_MOD_SLOTS, 0);
+        answer(&mut e, ITEM_GET_FULL_NAME, 0x5500);
+        answer(&mut e, ITEM_OBJECT, 0x7100);
+        answer(&mut e, FORM_TYPE, 0x1f);
+        answer(&mut e, ITEM_GET_WORN, 0);
+        answer(&mut e, WORD_AT_ZERO, 0x66);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x5600);
+        answer(&mut e, TILE_LIST_LOOKUP, slot);
+        stub(&mut e, &[SPRINTF_S, SET_STRING_TRAIT, SET_TRAIT_FROM_INT]);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0078_2876, handler);
+        e.call_log = Some(vec![]);
+        e.call(0x0078_2850, &args![0x700u32, 0x7000u32]);
+        e
+    }
+
+    /// G82 (`0x782876`, words: the tile, the stack, its count): with the fix row's bit and JIP's
+    /// answer the exe's block (mod slots, "name (count)") is skipped, the rest runs; off or
+    /// `INSTALLED` alone not asked; with the bit and no answer the exe's block.
+    #[test]
+    fn jip_g82_names_the_entry_in_place_of_the_count_block() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED, never),
+            (INSTALLED | FIXES, nothing),
+        ] {
+            let e = init(word, handler);
+            assert_eq!(calls_to(&e, SPRINTF_S).len(), 1);
+            assert_eq!(calls_to(&e, ITEM_GET_MOD_SLOTS).len(), 1);
+        }
+        let e = init(INSTALLED | FIXES, g82_name);
+        assert!(calls_to(&e, SPRINTF_S).is_empty());
+        assert!(calls_to(&e, ITEM_GET_MOD_SLOTS).is_empty());
+        assert!(calls_to(&e, SET_STRING_TRAIT).is_empty());
+        assert_eq!(
+            calls_to(&e, SET_TRAIT_FROM_INT)[0],
+            vec![0x700, 0xfaa, 0x1d],
+            "the rest runs"
+        );
+    }
+
+    /// An object with a vtable whose slots are `base + offset`, each answering 0.
+    fn object_at(e: &mut Engine, base: u32) -> u32 {
+        let object = e.mem.alloc(0x100);
+        let vtable = e.mem.alloc(0x1000);
+        e.mem.set_u32(object, vtable);
+        for slot in 0..0x400 {
+            e.mem.set_u32(vtable + 4 * slot, base + 4 * slot);
+        }
+        e.register(base, |_, _| Ret::default());
+        for slot in [0x94u32, 0x3c4, 0x580] {
+            e.register(base + slot, |_, _| Ret::default());
+        }
+        object
+    }
+
+    /// The drop button (7) on a stack of 5 with the quantity setting 1: everything allows the
+    /// drop; the drop (`00780c50`) and the quantity menu stood in.
+    fn dropping(word: u32, handler: engine_core::extend::SiteFn) -> Engine {
+        let mut e = Engine::new();
+        let this = menu(&mut e);
+        e.set_global(CURRENT_ITEM, 0x7000u32);
+        let object = object_at(&mut e, 0x00c3_0000);
+        answer(&mut e, ITEM_OBJECT, object);
+        answer(&mut e, WORD_AT_ZERO, 0);
+        answer(&mut e, WORD_AT_FOUR, 5);
+        answer(&mut e, TILE_IS_TRUE, 0);
+        answer(&mut e, GET_ANIM_ACTION, u32::MAX);
+        answer(&mut e, PLAYER_TEST_009337B0, 0);
+        answer(&mut e, PLAYER_DROP_PREPARE, 1);
+        let setting = e.mem.alloc(4);
+        e.mem.set_i32(setting, 1);
+        answer(&mut e, SETTING_VALUE_WORD, setting);
+        let player = object_at(&mut e, 0x00c4_0000);
+        e.set_global(PLAYER, player);
+        let process = object_at(&mut e, 0x00c5_0000);
+        e.mem.set_u32(player + 0x68, process);
+        stub(
+            &mut e,
+            &[QUANTITY_MENU_CREATE, 0x0078_0c50, UPDATE_PLAYER_3D],
+        );
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0078_0b09, handler);
+        e.call_log = Some(vec![]);
+        e.call(0x0078_0140, &args![this, 7i32, 0u32]);
+        e
+    }
+
+    /// O9 (`0x780B09`, words: the count): with `bQttSelectShortKeys`' bit and JIP's answer, the
+    /// answer goes straight to the drop (`00780c50`): no quantity menu, the setting not read, the
+    /// player still refreshed. Off or `INSTALLED | FIXES` without the switch: not asked; with the
+    /// bit and no answer: the exe's quantity menu.
+    #[test]
+    fn jip_o9_keys_drop_straight() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED, QTT_SELECT_SHORT_KEYS};
+        let on = INSTALLED | FIXES | QTT_SELECT_SHORT_KEYS;
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED | FIXES, never),
+            (on, nothing),
+        ] {
+            let e = dropping(word, handler);
+            assert_eq!(
+                calls_to(&e, QUANTITY_MENU_CREATE),
+                vec![vec![5, 0x0078_0c50, 0x7fff_ffff]]
+            );
+            assert!(calls_to(&e, 0x0078_0c50).is_empty());
+        }
+        let e = dropping(on, keyed);
+        assert_eq!(calls_to(&e, 0x0078_0c50), vec![vec![3]]);
+        assert!(calls_to(&e, QUANTITY_MENU_CREATE).is_empty());
+        assert!(calls_to(&e, SETTING_VALUE_WORD).is_empty());
+        assert_eq!(calls_to(&e, UPDATE_PLAYER_3D).len(), 1);
     }
 }

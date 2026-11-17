@@ -1039,6 +1039,22 @@ fn step_filter(
     }
 }
 
+/// JIP LN NVSE's quantity short keys (O9, `bQttSelectShortKeys`, step 3.9 GB-4) at `site` with the
+/// stack's count: the count to take without the quantity menu, `None` for the exe's test (and
+/// with the switch's bit clear, the only load).
+fn jip_quantity_keys(e: &mut Engine, site: u32, count: i32) -> Option<u32> {
+    if e.jip_patches() & engine_core::extend::jip_patches::QTT_SELECT_SHORT_KEYS == 0 {
+        return None;
+    }
+    e.site(site, &[count as u32])
+}
+
+/// O9's jump over the weight test at `0x75BF18` (with the switch's bit and JIP's answer).
+fn jip_skips_weightless(e: &mut Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::QTT_SELECT_SHORT_KEYS != 0
+        && e.site(0x0075_bf18, &[]).is_some()
+}
+
 /// Id 20 of [`container_menu_do_click`].
 fn click_item(e: &mut Engine, this: Ptr<ContainerMenu>) {
     if current_item(e) == 0 {
@@ -1050,7 +1066,9 @@ fn click_item(e: &mut Engine, this: Ptr<ContainerMenu>) {
         0x0044_ddc0,
         leaf::word_at_8(e, current_item(e))
     );
-    let light = e.call(IS_GOLD, &args![object]).bool() || {
+    // `0x75BF18` (JIP LN NVSE's O9, with `bQttSelectShortKeys`: `JMP 0x75BF7D` over the weight
+    // test): only gold counts as light. One load while off.
+    let light = e.call(IS_GOLD, &args![object]).bool() || (!jip_skips_weightless(e) && {
         let player = player_actor(e);
         let flag = e.call(PLAYER_STATE_004D1360, &args![player]).u8();
         let object = typed_call!(
@@ -1062,7 +1080,7 @@ fn click_item(e: &mut Engine, this: Ptr<ContainerMenu>) {
         // FCOMP; TEST AH,0x41; JP: weightless unless above 0.0 (or NaN).
         let zero = e.global::<f64>(ZERO_DOUBLE);
         weight <= zero
-    };
+    });
     let companion_take = light
         && matches!(e.get(this, ContainerMenu::eContainerMode), 1 | 2)
         && e.get(this, ContainerMenu::plbCurrListbox) == this.addr() + CONTAINER;
@@ -1073,6 +1091,13 @@ fn click_item(e: &mut Engine, this: Ptr<ContainerMenu>) {
     )
     .into_ret()
     .i32();
+    // `0x75BF97` (JIP LN NVSE's `QttSelectContainerHook`, O9, with `bQttSelectShortKeys`): Ctrl
+    // takes one, Shift the whole stack, straight to the callback (the answer is the count). One
+    // load while off.
+    if let Some(chosen) = jip_quantity_keys(e, 0x0075_bf97, count) {
+        e.call(ITEM_SELECT_CALLBACK, &args![chosen]);
+        return;
+    }
     let setting = e.call(SETTING_VALUE_ADDRESS, &args![0x011d_2418u32]).u32();
     if count > e.mem.i32(setting) {
         let reference = e.get(this, ContainerMenu::pContainerRef);
@@ -1641,11 +1666,14 @@ pub fn container_menu_init_func(e: &mut Engine, tile: u32, item: u32) {
         let marker = e.mem.u32(slot);
         set_trait_from_int(e, marker, TRAIT_VISIBLE, 1);
     }
-    if typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, item))
+    let count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, item))
         .into_ret()
-        .i32()
-        > 1
-    {
+        .i32();
+    // `0x75D1A5` (JIP LN NVSE's `ConstructItemEntryNameHook`, G82, with the fix row on): JIP names
+    // the entry ("Name+ (count)") and the exe's block is skipped. One load while off.
+    let named = e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0075_d1a5, &[tile, item, count as u32]).is_some();
+    if !named && count > 1 {
         e.with_stack(0x80, |e, text| {
             let count = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, item));
             let name = e.call(ITEM_FULL_NAME, &args![item]).u32();
@@ -3517,6 +3545,106 @@ mod tests {
         assert!(!e.call(0x0075_c250, &args![this, 0x21i32]).bool());
     }
 
+    // ---- JIP LN NVSE's game patches, group GB-4 (O9, G82) ----
+
+    fn never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("a seam asked with its bit clear")
+    }
+    /// JIP's answer stand-in: the count less 2 (5 gives 3).
+    fn keyed(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        Some(w[0] - 2)
+    }
+    fn nothing(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        None
+    }
+    fn skip(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(1)
+    }
+
+    /// A click (id 20) on a stack of 5 with the setting 1 (`do_click_on_a_big_stack_...`'s).
+    fn big_stack(e: &mut Engine, gold: u32) -> Ptr<ContainerMenu> {
+        let this = container(e);
+        e.set_global(CURRENT_ITEM, 0x7000u32);
+        e.set_global(ITEM_ENTERED, 1u8);
+        e.set(this, ContainerMenu::eContainerMode, 1);
+        e.set(this, ContainerMenu::plbCurrListbox, this.addr() + 0x98);
+        let setting = e.mem.alloc(4);
+        e.mem.set_i32(setting, 1);
+        answer(e, SETTING_VALUE_ADDRESS, setting);
+        answer(e, ITEM_OBJECT, 0x7100);
+        answer(e, IS_GOLD, gold);
+        answer(e, WORD_AT_FOUR, 5);
+        stub(
+            e,
+            &[
+                LIST_SAVE_STATE,
+                0x00c2_0000,
+                QUANTITY_MENU_CREATE,
+                ITEM_SELECT_CALLBACK,
+            ],
+        );
+        this
+    }
+
+    /// O9 (`0x75BF97`, words: the count): with `bQttSelectShortKeys`' bit and JIP's answer, the
+    /// answer goes straight to the item callback (`0075dc80`): no quantity menu, the setting not
+    /// read. Off, or `INSTALLED | FIXES` without the switch: not asked; with the bit and no
+    /// answer: the exe's quantity menu.
+    #[test]
+    fn jip_o9_keys_take_straight_to_the_callback() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED, QTT_SELECT_SHORT_KEYS};
+        let on = INSTALLED | FIXES | QTT_SELECT_SHORT_KEYS;
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED | FIXES, never),
+            (on, nothing),
+        ] {
+            let mut e = Engine::new();
+            let this = big_stack(&mut e, 1);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0075_bf97, handler);
+            e.call_log = Some(vec![]);
+            e.call(0x0075_be80, &args![this, 20i32, 0u32]);
+            assert_eq!(calls_to(&e, QUANTITY_MENU_CREATE).len(), 1);
+            assert!(calls_to(&e, ITEM_SELECT_CALLBACK).is_empty());
+        }
+        let mut e = Engine::new();
+        let this = big_stack(&mut e, 1);
+        e.set_jip_patches(on);
+        e.on_site_for_test(0x0075_bf97, keyed);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_be80, &args![this, 20i32, 0u32]);
+        assert_eq!(calls_to(&e, ITEM_SELECT_CALLBACK), vec![vec![3]]);
+        assert!(calls_to(&e, QUANTITY_MENU_CREATE).is_empty());
+        assert!(calls_to(&e, LIST_SAVE_STATE).is_empty());
+        assert!(calls_to(&e, SETTING_VALUE_ADDRESS).is_empty());
+    }
+
+    /// O9's jump at `0x75BF18` (no words): with the switch's bit and JIP's answer, an item that is
+    /// not gold skips the weight test (no `GetFormWeight`), so a weightless item in the companion
+    /// mode is no companion take and the quantity menu opens. The bit clear: the helper does not ask.
+    #[test]
+    fn jip_o9_skips_the_weightless_test() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED, QTT_SELECT_SHORT_KEYS};
+        for word in [0, INSTALLED | FIXES] {
+            let mut e = Engine::new();
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0075_bf18, never);
+            assert!(!jip_skips_weightless(&mut e));
+        }
+        let mut e = Engine::new();
+        let this = big_stack(&mut e, 0);
+        e.set_jip_patches(INSTALLED | FIXES | QTT_SELECT_SHORT_KEYS);
+        e.on_site_for_test(0x0075_bf18, skip);
+        e.call_log = Some(vec![]);
+        e.call(0x0075_be80, &args![this, 20i32, 0u32]);
+        assert!(calls_to(&e, FORM_WEIGHT).is_empty());
+        assert_eq!(
+            calls_to(&e, QUANTITY_MENU_CREATE),
+            vec![vec![5, ITEM_SELECT_CALLBACK, 0x7fff_ffff]]
+        );
+    }
+
     #[test]
     fn update_lists_refills_both_lists_and_restores_the_current_one() {
         let mut e = Engine::new();
@@ -3740,6 +3868,59 @@ mod tests {
             calls_to(&e, SET_FLOAT_TRAIT),
             vec![vec![0x600, 0xfb0, 0, 1]]
         );
+    }
+
+    fn g82_name(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        assert_eq!(w, [0x600, 0x7000, 3], "the tile, the stack, its count");
+        Some(1)
+    }
+
+    /// G82 (`0x75D1A5`, words: the tile, the stack, its count): with the fix row's bit and JIP's
+    /// answer the exe's "name (count)" block is skipped and the rest runs as before; off or
+    /// `INSTALLED` alone not asked; with the bit and no answer the exe's block.
+    #[test]
+    fn jip_g82_names_the_entry_in_place_of_the_count_block() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        let run = |word: u32, handler: engine_core::extend::SiteFn| {
+            let mut e = Engine::new();
+            let marker = e.mem.alloc(4);
+            e.mem.set_u32(marker, 0x880);
+            answer(&mut e, ITEM_GET_WORN, 0);
+            answer(&mut e, LIST_ITEM_TILE, marker);
+            answer(&mut e, WORD_AT_FOUR, 3);
+            answer(&mut e, ITEM_FULL_NAME, 0x7100);
+            answer(&mut e, TILE_GET_STRING, 0x7200);
+            stub(
+                &mut e,
+                &[
+                    PRINT_BOUNDED,
+                    SET_STRING_TRAIT,
+                    TILE_SET_TEXT,
+                    SET_FLOAT_TRAIT,
+                ],
+            );
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0075_d1a5, handler);
+            e.call_log = Some(vec![]);
+            e.call(0x0075_d160, &args![0x600u32, 0x7000u32]);
+            e
+        };
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED, never),
+            (INSTALLED | FIXES, nothing),
+        ] {
+            let e = run(word, handler);
+            assert_eq!(calls_to(&e, PRINT_BOUNDED).len(), 1);
+            assert_eq!(calls_to(&e, SET_STRING_TRAIT).len(), 2);
+        }
+        let e = run(INSTALLED | FIXES, g82_name);
+        assert!(calls_to(&e, PRINT_BOUNDED).is_empty());
+        assert_eq!(
+            calls_to(&e, SET_STRING_TRAIT),
+            vec![vec![0x880, 0xfc4, 0x7200, 1]]
+        );
+        assert_eq!(calls_to(&e, TILE_SET_TEXT), vec![vec![0x600, 0x7100]]);
     }
 
     #[test]
