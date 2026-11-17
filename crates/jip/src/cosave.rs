@@ -1544,6 +1544,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             crate::game_patches::gf::deferred_init(e);
             crate::commands::jip_fn_utility::deferred_init(e);
             crate::game_patches::gs::deferred_init(e);
+            // Group GB's part: Big Guns' switch (O3), name and derivation (D06).
+            crate::game_patches::gb::deferred_init(e);
         }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
