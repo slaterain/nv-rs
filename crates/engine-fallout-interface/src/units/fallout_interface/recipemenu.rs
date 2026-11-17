@@ -2424,6 +2424,23 @@ const MANY_ADDED_FORMAT: u32 = 0x0101_c178;
 const TWO_STRINGS_FORMAT: u32 = 0x0101_2058;
 const GIFT_ICON_TEXT: u32 = 0x0101_c140;
 
+/// The fix row's bit (JIP LN NVSE's game patches, step 3.9 GB-3).
+fn jip_fixes(e: &Engine) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+}
+
+/// `CALL 0x4C0BF0` on the crafted weapon (`0x72880D`): JIP LN NVSE's `IsDisposableWeaponHook`
+/// (G100) answers there with the fix row on (the weapon's type above 9); otherwise, or with no
+/// answer, the exe's call. One load while off.
+fn jip_disposable_weapon(e: &mut Engine, weapon: u32) -> bool {
+    if jip_fixes(e) {
+        if let Some(answer) = e.site(0x0072_880d, &[weapon]) {
+            return answer != 0;
+        }
+    }
+    e.call(FORM_004C0BF0, &args![weapon]).bool()
+}
+
 // Translated from 007284f0 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 007284f0 - the C++ exception frame (FS:[0] chain, unwind states 0 to 2 around the TESContainer and BSString locals) is not translated.
 /// Unnamed (`cdecl`, a count; the quantity menu's callback for the recipe menu): makes the
@@ -2537,7 +2554,7 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
             let total = made.wrapping_mul(count);
             let kind = e.call(FORM_TYPE, &args![chosen]).u32();
             let through_container = if kind == 0x28 {
-                !e.call(FORM_004C0BF0, &args![chosen]).bool()
+                !jip_disposable_weapon(e, chosen)
             } else {
                 e.call(FORM_TYPE, &args![chosen]).u32() == 0x18
                     || e.call(FORM_TYPE, &args![chosen]).u32() == 0x1a
@@ -2790,6 +2807,12 @@ const ROUND_00476B20: u32 = 0x0047_6b20;
 const GET_FORM_ENCHANTING: u32 = 0x004b_e330;
 const FORM_FLAG_0040E210: u32 = 0x0040_e210;
 const BUILD_MENU_STRING: u32 = 0x0040_6620;
+/// `00503a70` (`thiscall` on an ammo form, `RET 8`: a buffer and its size): the ammo's effects
+/// text, called only through JIP LN NVSE's G68.
+const AMMO_MENU_STRING: u32 = 0x0050_3a70;
+/// `"%.2f"` (`01030018`), JIP LN NVSE's G13 weight format.
+#[cfg(test)]
+const TWO_DECIMAL_FORMAT: u32 = 0x0103_0018;
 /// `"%d"`, `"%.1f"`, `"%.0f"`, `"%.1fx%d"`, `"%s (%i/%i)"`, `"--"`.
 const INT_FORMAT: u32 = 0x0102_0764;
 const ONE_DECIMAL_FORMAT: u32 = 0x0102_0768;
@@ -2833,9 +2856,15 @@ fn double_words(bits: u32) -> [u32; 2] {
     [value as u32, (value >> 32) as u32]
 }
 
-/// `fn_00728da0`'s value and weight text: `"--"` at or below `0.0` (or NaN), `"%.1f"` below
-/// `1.0`, else `"%.0f"`, into the 16-byte buffer, then shown in `tile` (the value trait).
-fn show_amount(e: &mut Engine, buffer: Ptr, bits: u32, tile: u32, value_trait: u32) {
+/// `fn_00728da0`'s value and weight text: `"--"` at or below `0.0` (or NaN), `small` (`"%.1f"`)
+/// below `1.0`, else `"%.0f"`, into the 16-byte buffer, then shown in `tile` (the value trait).
+fn show_amount(
+    e: &mut Engine,
+    buffer: Ptr,
+    (bits, small): (u32, u32),
+    tile: u32,
+    value_trait: u32,
+) {
     let value = x87_load32(bits);
     let zero: f64 = e.global(ZERO_DOUBLE);
     let one: f64 = e.global(ONE_DOUBLE);
@@ -2846,10 +2875,7 @@ fn show_amount(e: &mut Engine, buffer: Ptr, bits: u32, tile: u32, value_trait: u
         Some(std::cmp::Ordering::Less) | None
     ) {
         let [low, high] = double_words(bits);
-        e.call(
-            FORMAT,
-            &args![buffer, 0x10u32, ONE_DECIMAL_FORMAT, low, high],
-        );
+        e.call(FORMAT, &args![buffer, 0x10u32, small, low, high]);
     } else {
         let [low, high] = double_words(bits);
         e.call(
@@ -2883,13 +2909,19 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
     let offset_a = 0.0f32.to_bits();
     let offset_b = 0.0f32.to_bits();
     let price = e.call(GET_FORM_VALUE, &args![form]).i32();
-    let value = e
-        .call(
-            VALUE_00647C00,
-            &args![x87_store32(f64::from(price)), 1.0f32.to_bits()],
-        )
-        .f64();
-    let value = x87_store32(value);
+    // `0x728E10` (JIP LN NVSE's G13, an 8-byte NOP over `FSTP [esp]; CALL 0x647C00` with the fix
+    // row on): the `FILD` of the value is stored as it is. One load while off.
+    let value = if jip_fixes(e) && e.site(0x0072_8e10, &[]).is_some() {
+        x87_store32(f64::from(price))
+    } else {
+        let value = e
+            .call(
+                VALUE_00647C00,
+                &args![x87_store32(f64::from(price)), 1.0f32.to_bits()],
+            )
+            .f64();
+        x87_store32(value)
+    };
     let player = e.global::<u32>(PLAYER);
     let flag = e.call(PLAYER_004D1360, &args![player]).u8();
     let weight = e.call(GET_FORM_WEIGHT, &args![form, u32::from(flag)]).f64();
@@ -2954,9 +2986,17 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
             };
         }
     }
-    if effects != 0 && node_item(e, effects + 4) != 0 {
+    // `0x7294DC` (JIP LN NVSE's `RecipeMenuAmmoEffectsHook`, G68, with the fix row on): for
+    // ammunition the text is built from the ammo (`00503a70`, `thiscall`, the buffer and 0x100),
+    // whatever the effect list holds; anything else takes the exe's test. One load while off.
+    let ammo = jip_fixes(e) && e.site(0x0072_94dc, &[form]).is_some();
+    if ammo || (effects != 0 && node_item(e, effects + 4) != 0) {
         e.with_stack(0x100, |e, buffer| {
-            e.call(BUILD_MENU_STRING, &args![effects, buffer, 0x100u32]);
+            if ammo {
+                e.call(AMMO_MENU_STRING, &args![form, buffer, 0x100u32]);
+            } else {
+                e.call(BUILD_MENU_STRING, &args![effects, buffer, 0x100u32]);
+            }
             if e.call(STRING_LENGTH, &args![buffer]).u32() != 0 {
                 e.call(TILE_SET_STRING, &args![tiles[6], value_trait, buffer, 1u32]);
                 flags |= 0x40;
@@ -2967,9 +3007,22 @@ pub fn fn_00728da0(e: &mut Engine, _this: Ptr, form: u32, holder: u32) {
     } else {
         flags &= !0x40;
     }
+    // `0x729616`, the weight's `"%.1f"` operand (JIP LN NVSE's G13 writes `"%.2f"` there, with the
+    // fix row on: the seam answers the format). One load while off.
+    let weight_format = if jip_fixes(e) {
+        e.site(0x0072_9616, &[]).unwrap_or(ONE_DECIMAL_FORMAT)
+    } else {
+        ONE_DECIMAL_FORMAT
+    };
     e.with_stack(0x10, |e, buffer| {
-        show_amount(e, buffer, value, tiles[3], value_trait);
-        show_amount(e, buffer, weight, tiles[2], value_trait);
+        show_amount(
+            e,
+            buffer,
+            (value, ONE_DECIMAL_FORMAT),
+            tiles[3],
+            value_trait,
+        );
+        show_amount(e, buffer, (weight, weight_format), tiles[2], value_trait);
     });
     for (tile, setting) in ITEM_TITLE_SETTINGS {
         let text = e.call(SETTING_STRING, &args![setting]).u32();
@@ -3421,23 +3474,23 @@ mod n057_tests {
         0x0046ffb0, 0x004702f0, 0x00476b20, 0x00480f80, 0x00481280, 0x00481610, 0x00481680,
         0x004818e0, 0x00482090, 0x004821a0, 0x00482720, 0x00483a00, 0x0048cee0, 0x0048e8a0,
         0x0048ebc0, 0x004b71d0, 0x004b7210, 0x004bd510, 0x004be060, 0x004be330, 0x004bf220,
-        0x004c0bf0, 0x004c8f30, 0x004d1360, 0x004d5e10, 0x004e4430, 0x00525980, 0x00525b20,
-        0x005330e0, 0x00559450, 0x00574fa0, 0x00575610, 0x00576260, 0x00586150, 0x0059bb30,
-        0x005a8080, 0x005ae380, 0x005b5e40, 0x005d43c0, 0x005f5950, 0x006286d0, 0x006450f0,
-        0x00645380, 0x00646360, 0x00647b70, 0x00647c00, 0x00663b40, 0x00663b60, 0x0066e950,
-        0x0066ef20, 0x00680c30, 0x006815c0, 0x00683520, 0x006a1b60, 0x006a7ad0, 0x006a9540,
-        0x006ecd40, 0x00700320, 0x00702450, 0x007052f0, 0x00706f30, 0x00709430, 0x00715860,
-        0x00715c60, 0x00717280, 0x007185e0, 0x00718840, 0x00719b20, 0x0071aa60, 0x0071aa80,
-        0x00721130, 0x007211c0, 0x007240c0, 0x007242c0, 0x007242f0, 0x00726070, 0x007269d0,
-        0x00726c40, 0x0072ce90, 0x007312e0, 0x0075a0d0, 0x00763ff0, 0x007640a0, 0x007a1910,
-        0x007a1950, 0x007a22d0, 0x007a62e0, 0x007a7eb0, 0x007aba00, 0x007b5370, 0x007cb2e0,
-        0x007e8890, 0x008256d0, 0x00825c00, 0x0083fd60, 0x008454f0, 0x0087f4c0, 0x0088d7d0,
-        0x008a1710, 0x008adcf0, 0x008d8520, 0x00905820, 0x00950030, 0x0096a2d0, 0x00a00940,
-        0x00a00e90, 0x00a00f30, 0x00a011b0, 0x00a01230, 0x00a01290, 0x00a012d0, 0x00a01350,
-        0x00a01530, 0x00a01860, 0x00a01b00, 0x00a03c90, 0x00a03d40, 0x00a03da0, 0x00a07530,
-        0x00a08b20, 0x00a09030, 0x00a09080, 0x00a09130, 0x00a09200, 0x00a09410, 0x00a1c4a0,
-        0x00a1c520, 0x00a1d910, 0x00a1dc20, 0x00a1dc70, 0x00a1ddb0, 0x00ec408c, 0x00ec43fb,
-        0x00ec62c0,
+        0x004c0bf0, 0x004c8f30, 0x004d1360, 0x004d5e10, 0x004e4430, 0x00503a70, 0x00525980,
+        0x00525b20, 0x005330e0, 0x00559450, 0x00574fa0, 0x00575610, 0x00576260, 0x00586150,
+        0x0059bb30, 0x005a8080, 0x005ae380, 0x005b5e40, 0x005d43c0, 0x005f5950, 0x006286d0,
+        0x006450f0, 0x00645380, 0x00646360, 0x00647b70, 0x00647c00, 0x00663b40, 0x00663b60,
+        0x0066e950, 0x0066ef20, 0x00680c30, 0x006815c0, 0x00683520, 0x006a1b60, 0x006a7ad0,
+        0x006a9540, 0x006ecd40, 0x00700320, 0x00702450, 0x007052f0, 0x00706f30, 0x00709430,
+        0x00715860, 0x00715c60, 0x00717280, 0x007185e0, 0x00718840, 0x00719b20, 0x0071aa60,
+        0x0071aa80, 0x00721130, 0x007211c0, 0x007240c0, 0x007242c0, 0x007242f0, 0x00726070,
+        0x007269d0, 0x00726c40, 0x0072ce90, 0x007312e0, 0x0075a0d0, 0x00763ff0, 0x007640a0,
+        0x007a1910, 0x007a1950, 0x007a22d0, 0x007a62e0, 0x007a7eb0, 0x007aba00, 0x007b5370,
+        0x007cb2e0, 0x007e8890, 0x008256d0, 0x00825c00, 0x0083fd60, 0x008454f0, 0x0087f4c0,
+        0x0088d7d0, 0x008a1710, 0x008adcf0, 0x008d8520, 0x00905820, 0x00950030, 0x0096a2d0,
+        0x00a00940, 0x00a00e90, 0x00a00f30, 0x00a011b0, 0x00a01230, 0x00a01290, 0x00a012d0,
+        0x00a01350, 0x00a01530, 0x00a01860, 0x00a01b00, 0x00a03c90, 0x00a03d40, 0x00a03da0,
+        0x00a07530, 0x00a08b20, 0x00a09030, 0x00a09080, 0x00a09130, 0x00a09200, 0x00a09410,
+        0x00a1c4a0, 0x00a1c520, 0x00a1d910, 0x00a1dc20, 0x00a1dc70, 0x00a1ddb0, 0x00ec408c,
+        0x00ec43fb, 0x00ec62c0,
     ];
 
     fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
@@ -4522,5 +4575,208 @@ mod n057_tests {
             .collect::<Vec<_>>();
         assert_eq!(y.len(), 4);
         assert_eq!(y[0], vec![0x2100 + 24, 0xfa2, 160.0f32.to_bits(), 1]);
+    }
+
+    // ---- JIP LN NVSE's game patches, group GB-3 (G13, G68, G100) ----
+
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+
+    thread_local! {
+        static ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn asked() -> Vec<(u32, Vec<u32>)> {
+        ASKED.with(|a| a.borrow_mut().drain(..).collect())
+    }
+    fn record(at: u32, words: &[u32]) {
+        ASKED.with(|a| a.borrow_mut().push((at, words.to_vec())));
+    }
+    fn never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("a seam asked with the fix row's bit clear")
+    }
+    fn g13_value(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        record(0x0072_8e10, w);
+        Some(1)
+    }
+    fn g13_format(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        record(0x0072_9616, w);
+        Some(TWO_DECIMAL_FORMAT)
+    }
+    fn g68_ammo(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        record(0x0072_94dc, w);
+        Some(1)
+    }
+    fn nothing(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        None
+    }
+
+    /// An engine for `fn_00728da0` on a form of `kind` (twelve tiles from `0x2100`), the form's value
+    /// 7 (scaled by `00647c00` to 3.0) and weight 0.5; answers the holder.
+    fn info_engine(kind: u32) -> (Engine, u32) {
+        let mut e = engine();
+        let holder = e.mem.alloc(0x10);
+        let cursor_start = e.mem.alloc(4);
+        e.mem.set_u32(holder + 8, cursor_start);
+        let tiles = e.mem.alloc(0x30);
+        for i in 0..12 {
+            e.mem.set_u32(tiles + 4 * i, 0x2100 + 4 * i);
+        }
+        e.register_double(TILE_ARRAY_STEP_00683520, move |e, a| {
+            let at = e.mem.u32(a[1]);
+            let index = (at - cursor_start) / 4;
+            let next = if index < 11 { at + 4 } else { 0 };
+            e.mem.set_u32(a[1], next);
+            (tiles + 4 * index).into_ret()
+        });
+        answer(&mut e, TEXT_TO_TRAIT, 0x31);
+        answer(&mut e, FORM_TYPE, kind);
+        answer(&mut e, GET_FORM_VALUE, 7);
+        st0(&mut e, VALUE_00647C00, 3.0);
+        st0(&mut e, GET_FORM_WEIGHT, 0.5);
+        st0(&mut e, TILE_GET_FLOAT, 200.0);
+        answer(&mut e, STRING_LENGTH, 5);
+        e.set_global(TWENTY_DOUBLE, 20.0f64);
+        e.map(0x0102_3000, 0x1000);
+        (e, holder)
+    }
+
+    /// The value's and the weight's format calls (the last two `FORMAT` calls): (format, value).
+    fn amounts(e: &Engine) -> Vec<(u32, f64)> {
+        let formats = calls_to(e, FORMAT);
+        formats[formats.len() - 2..]
+            .iter()
+            .map(|c| {
+                (
+                    c[2],
+                    f64::from_bits(u64::from(c[3]) | u64::from(c[4]) << 32),
+                )
+            })
+            .collect()
+    }
+
+    /// G13 (`0x728E10`, `0x729616`): with the fix row's bit and JIP's answers, the value is the
+    /// form's plain value (7, no `00647c00`) and a weight below 1 takes `"%.2f"`; the value's own
+    /// `"%.1f"` (below 1) stays. Off, or `INSTALLED` alone: not asked (a handler that panics),
+    /// the exe's scaled value 3 and `"%.1f"`. With the bit and no handler: the exe's.
+    #[test]
+    fn jip_g13_plain_value_and_two_decimal_weight() {
+        for word in [0, INSTALLED] {
+            let (mut e, holder) = info_engine(0x1f);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0072_8e10, never);
+            e.on_site_for_test(0x0072_9616, never);
+            e.call_log = Some(vec![]);
+            e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
+            assert_eq!(calls_to(&e, VALUE_00647C00).len(), 1);
+            assert_eq!(
+                amounts(&e),
+                [(NO_DECIMAL_FORMAT, 3.0), (ONE_DECIMAL_FORMAT, 0.5)]
+            );
+        }
+        let (mut e, holder) = info_engine(0x1f);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
+        assert_eq!(calls_to(&e, VALUE_00647C00).len(), 1, "no handler");
+        assert_eq!(
+            amounts(&e),
+            [(NO_DECIMAL_FORMAT, 3.0), (ONE_DECIMAL_FORMAT, 0.5)]
+        );
+        let (mut e, holder) = info_engine(0x1f);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0072_8e10, g13_value);
+        e.on_site_for_test(0x0072_9616, g13_format);
+        asked();
+        e.call_log = Some(vec![]);
+        e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
+        assert!(calls_to(&e, VALUE_00647C00).is_empty());
+        assert_eq!(
+            amounts(&e),
+            [(NO_DECIMAL_FORMAT, 7.0), (TWO_DECIMAL_FORMAT, 0.5)]
+        );
+        assert_eq!(asked(), [(0x0072_8e10, vec![]), (0x0072_9616, vec![])]);
+        // A value below 1 keeps `"%.1f"` (only the weight's operand is JIP's).
+        answer(&mut e, GET_FORM_VALUE, 0);
+        st0(&mut e, GET_FORM_WEIGHT, 0.25);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
+        let formats = calls_to(&e, FORMAT);
+        assert_eq!(formats.last().unwrap()[2], TWO_DECIMAL_FORMAT);
+        assert_eq!(calls_to(&e, COPY).len(), 1, "a value of 0 is \"--\"");
+    }
+
+    /// G68 (`0x7294DC`, words: the form): with the bit and JIP's answer, the effects text is the
+    /// ammo's (`00503a70` on the form, the buffer and 0x100) although the form has no effect
+    /// list, shown in tile 6 (its flag 0x40 on). Off, `INSTALLED` alone or no answer: the exe's
+    /// test (no list: tile 6 hidden, nothing built).
+    #[test]
+    fn jip_g68_ammo_effects_text() {
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED, never),
+            (INSTALLED | FIXES, nothing),
+        ] {
+            let (mut e, holder) = info_engine(0x29);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0072_94dc, handler);
+            e.call_log = Some(vec![]);
+            e.call(0x0072_8da0, &args![0u32, 0x7300u32, holder]);
+            assert!(calls_to(&e, AMMO_MENU_STRING).is_empty());
+            assert!(calls_to(&e, BUILD_MENU_STRING).is_empty());
+            assert!(calls_to(&e, TILE_SET_INT).contains(&vec![0x2100 + 24, 0xfa3, 0]));
+        }
+        let (mut e, holder) = info_engine(0x29);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0072_94dc, g68_ammo);
+        asked();
+        e.call_log = Some(vec![]);
+        e.call(0x0072_8da0, &args![0u32, 0x7400u32, holder]);
+        assert_eq!(asked(), [(0x0072_94dc, vec![0x7400])]);
+        let built = calls_to(&e, AMMO_MENU_STRING);
+        assert_eq!(built.len(), 1);
+        assert_eq!((built[0][0], built[0][2]), (0x7400, 0x100));
+        assert!(calls_to(&e, BUILD_MENU_STRING).is_empty());
+        assert!(calls_to(&e, TILE_SET_STRING)
+            .iter()
+            .any(|c| c[0] == 0x2100 + 24 && c[2] == built[0][1]));
+        assert!(calls_to(&e, TILE_SET_INT).contains(&vec![0x2100 + 24, 0xfa3, 1]));
+        // An empty text hides tile 6 again (the exe's length test after JIP's build).
+        answer(&mut e, STRING_LENGTH, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_8da0, &args![0u32, 0x7400u32, holder]);
+        assert!(calls_to(&e, TILE_SET_INT).contains(&vec![0x2100 + 24, 0xfa3, 0]));
+    }
+
+    fn g100_weapon(_: &mut Engine, w: &[u32]) -> Option<u32> {
+        record(0x0072_880d, w);
+        Some(1)
+    }
+
+    /// G100 (`0x72880D`, words: the weapon): with the bit and JIP's answer, the answer decides and
+    /// `004c0bf0` is not called; with no answer, off or `INSTALLED` alone, the exe's call.
+    #[test]
+    fn jip_g100_disposable_weapon_seam() {
+        for (word, handler) in [
+            (0, never as engine_core::extend::SiteFn),
+            (INSTALLED, never),
+            (INSTALLED | FIXES, nothing),
+        ] {
+            let mut e = engine();
+            answer(&mut e, FORM_004C0BF0, 0);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0072_880d, handler);
+            e.call_log = Some(vec![]);
+            assert!(!jip_disposable_weapon(&mut e, 0x7500));
+            assert_eq!(calls_to(&e, FORM_004C0BF0), [vec![0x7500]]);
+        }
+        let mut e = engine();
+        answer(&mut e, FORM_004C0BF0, 0);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0072_880d, g100_weapon);
+        asked();
+        e.call_log = Some(vec![]);
+        assert!(jip_disposable_weapon(&mut e, 0x7500));
+        assert!(calls_to(&e, FORM_004C0BF0).is_empty());
+        assert_eq!(asked(), [(0x0072_880d, vec![0x7500])]);
     }
 }

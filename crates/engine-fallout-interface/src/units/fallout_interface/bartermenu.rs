@@ -1146,6 +1146,12 @@ fn finish_barter_create(
     let me = barter_menu(e).addr();
     e.call(MENU_PREP_FOR_VISIBILITY, &args![me, 0u32]);
     let me = barter_menu(e);
+    // `0x72D661` (JIP LN NVSE's `InitBarterMenuHook`, G56, with the fix row on): JIP titles the
+    // vendor's tab (`SetFilterModeTitle(pTiles[8])`) before the fill; the answer is not used.
+    // One load while off.
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+        e.site(0x0072_d661, &[me.addr()]);
+    }
     fn_0072dc30(e, me, 0);
     root
 }
@@ -2603,6 +2609,12 @@ fn complete_transaction_body(e: &mut Engine, this: Ptr<BarterMenu>, base: u32) {
                 let vendor_caps = e.get(this, BarterMenu::iVendorCaps);
                 let bounded = e.call(BOUND_004A8F20, &args![whole, vendor_caps]).u32();
                 let handler = e.global::<u32>(DATA_HANDLER);
+                // `0x73005C` (JIP LN NVSE's `BarterSellFixHook`, G64, with the fix row on): JIP's
+                // `FixVendorCaps(handler, inventory)` runs before the call (a buyer's caps over
+                // 32,767 split into stacks); the answer is not used. One load while off.
+                if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                    e.site(0x0073_005c, &[handler, inventory]);
+                }
                 e.call(
                     REMOVE_ITEM_BARTER_CONTAINER,
                     &args![handler, change, bounded, vendor],
@@ -4703,5 +4715,160 @@ mod n051_tests {
         answer(&mut e, ITEM_CHANGE_NUM_UNFILTERED, 4);
         e.register(slot(0x14), |_, a| (a[1] + 0x100).into_ret());
         assert_eq!(e.call(0x0073_15b0, &args![list]).u32(), 0x103);
+    }
+
+    // ---- JIP LN NVSE's game patches, group GB-3 (G56, G64) ----
+
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+
+    thread_local! {
+        /// The seams asked (address, words) and the log's length at each ask.
+        static ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn asked() -> Vec<(u32, Vec<u32>)> {
+        ASKED.with(|a| a.borrow_mut().drain(..).collect())
+    }
+    fn never(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        panic!("a seam asked with the fix row's bit clear")
+    }
+    /// A handler that records its ask and the calls logged so far (answers nothing, as JIP's).
+    fn recorder(e: &mut Engine, w: &[u32]) -> Option<u32> {
+        let logged = e.call_log.as_ref().map_or(0, Vec::len) as u32;
+        let mut words = w.to_vec();
+        words.push(logged);
+        ASKED.with(|a| a.borrow_mut().push((0, words)));
+        None
+    }
+
+    /// A barter menu that opens fully (the "full start" of
+    /// `create_needs_a_vendor_and_a_menu_of_the_class`).
+    fn opening(e: &mut Engine) -> Ptr<BarterMenu> {
+        let this = menu(e);
+        e.set_global(BARTER_MENU, 0u32);
+        answer(e, TILE_READ_FILE, 0x5000);
+        answer(e, TILE_GET_MENU, this.addr());
+        e.register(slot(0x34), |_, _| 0x41du32.into_ret());
+        e.register(NODE_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        answer(e, TILES_PRESENT_00796F90, 1);
+        e.register(TILE_GET_FLOAT, |_, _| st0(102.0));
+        e.register(TILE_GET_MAXIMUM_DEPTH, |_, _| st0(3.0));
+        e.register(BOUND_00647B70, |_, a| {
+            (a[0] as i32).max(a[1] as i32).into_ret()
+        });
+        e.register(BOUND_004A8F20, |_, a| {
+            (a[0] as i32).min(a[1] as i32).into_ret()
+        });
+        answer(e, TEXT_TO_TRAIT, 0x31);
+        answer(e, TILE_GET_CHILD_BY_NAME, 0x5100);
+        this
+    }
+
+    /// G56 (`0x72D661`, words: the menu): with the fix row's bit the seam is asked once, after
+    /// `PrepForVisibility` and before the first list fill (`0072dc30`); off or `INSTALLED` alone it
+    /// is not asked (a handler that panics), and the menu opens as before.
+    #[test]
+    fn jip_g56_seam_before_the_first_fill() {
+        for word in [0, INSTALLED] {
+            let mut e = engine();
+            let _ = opening(&mut e);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0072_d661, never);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0072_d250, &args![0x9000u32, 0i32]).u32(), 0x5000);
+            assert_eq!(calls_to(&e, LIST_FILL).len(), 2);
+        }
+        let mut e = engine();
+        let this = opening(&mut e);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0072_d661, recorder);
+        asked();
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0072_d250, &args![0x9000u32, 0i32]).u32(), 0x5000);
+        let log = e.call_log.clone().unwrap();
+        let prep = log
+            .iter()
+            .position(|(a, _)| *a == MENU_PREP_FOR_VISIBILITY)
+            .unwrap() as u32;
+        let fill = log.iter().position(|(a, _)| *a == LIST_FILL).unwrap() as u32;
+        let ask = asked();
+        assert_eq!(ask.len(), 1);
+        assert_eq!(ask[0].1[0], this.addr());
+        assert!(
+            prep < ask[0].1[1] && ask[0].1[1] <= fill,
+            "{prep} {ask:?} {fill}"
+        );
+        assert_eq!(calls_to(&e, LIST_FILL).len(), 2, "the fill goes on");
+    }
+
+    /// A transaction that pays the player 25 caps (`completing_moves_the_items_and_the_caps`'s).
+    fn paying(e: &mut Engine) -> Ptr<BarterMenu> {
+        let this = menu(e);
+        e.set(this, BarterMenu::pVendorRef, 0x9000);
+        e.set(this, BarterMenu::iVendorCaps, 40);
+        e.set(this, BarterMenu::fTransactionAmount, 25.0);
+        let process = object(e);
+        answer(e, ACTOR_PROCESS, process);
+        let player = object(e);
+        e.set_global(PLAYER, player);
+        e.set_global(DATA_HANDLER, 0x0606_0000u32);
+        e.register(VALUE_00406CE0, |_, a| st0(f64::from(f32::from_bits(a[0]))));
+        e.register(FLOAT_TO_INT_00406D90, |_, a| {
+            (f32::from_bits(a[0]) as i32).into_ret()
+        });
+        e.register(BOUND_004A8F20, |_, a| {
+            (a[0] as i32).min(a[1] as i32).into_ret()
+        });
+        e.register(ABS_00EC7D40, |_, a| (a[0] as i32).wrapping_abs().into_ret());
+        answer(e, GET_INVENTORY_CHANGES, 0x8800);
+        answer(e, CAPS_FORM_004839C0, 0x0f0f);
+        this
+    }
+
+    /// G64 (`0x73005C`, words: the data handler, the buyer's inventory changes data): with the fix
+    /// row's bit the seam is asked just before the caps' `RemoveItemBarterContainer` (after the
+    /// bound), which follows unchanged; off or `INSTALLED` alone not asked; not asked either when
+    /// the player pays (no caps taken from the vendor).
+    #[test]
+    fn jip_g64_seam_before_the_vendors_caps() {
+        for word in [0, INSTALLED] {
+            let mut e = engine();
+            let this = paying(&mut e);
+            e.set_jip_patches(word);
+            e.on_site_for_test(0x0073_005c, never);
+            e.call_log = Some(vec![]);
+            e.call(0x0072_fd10, &args![this]);
+            let removed = calls_to(&e, REMOVE_ITEM_BARTER_CONTAINER);
+            assert_eq!(removed[0][2..], [25, 0x9000]);
+        }
+        let mut e = engine();
+        let this = paying(&mut e);
+        e.set_jip_patches(INSTALLED | FIXES);
+        e.on_site_for_test(0x0073_005c, recorder);
+        asked();
+        e.call_log = Some(vec![]);
+        e.call(0x0072_fd10, &args![this]);
+        let log = e.call_log.clone().unwrap();
+        let bound = log.iter().position(|(a, _)| *a == BOUND_004A8F20).unwrap() as u32;
+        let removal = log
+            .iter()
+            .position(|(a, _)| *a == REMOVE_ITEM_BARTER_CONTAINER)
+            .unwrap() as u32;
+        let ask = asked();
+        assert_eq!(ask.len(), 1);
+        assert_eq!(ask[0].1[..2], [0x0606_0000, 0x8800]);
+        assert!(
+            bound < ask[0].1[2] && ask[0].1[2] <= removal,
+            "{bound} {ask:?} {removal}"
+        );
+        assert_eq!(
+            calls_to(&e, REMOVE_ITEM_BARTER_CONTAINER)[0][..],
+            [0x0606_0000, log[removal as usize].1[1], 25, 0x9000]
+        );
+        // The player pays: no caps are taken from the vendor, the seam is not asked.
+        e.set(this, BarterMenu::fTransactionAmount, -7.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_fd10, &args![this]);
+        assert!(asked().is_empty());
     }
 }
