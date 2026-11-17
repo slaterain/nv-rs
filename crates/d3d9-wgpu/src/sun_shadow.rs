@@ -2109,6 +2109,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::needless_range_loop)]
     fn the_centre_moves_in_whole_texel_steps_and_holds_still_between_them() {
         let mut g = game();
         let f0 = Frame::from_game(&g).unwrap();
@@ -2127,7 +2128,10 @@ mod tests {
             });
             for k in 0..3 {
                 let off = dot3(b[k], world) - c.origin[k] as f64 * c.step;
-                assert!(off.abs() <= c.step / 2.0 + 1e-6, "cascade {i} axis {k}: {off}");
+                assert!(
+                    off.abs() <= c.step / 2.0 + 1e-6,
+                    "cascade {i} axis {k}: {off}"
+                );
             }
         }
         // A small step of the camera: the same snapped centre, so each map is still good.
