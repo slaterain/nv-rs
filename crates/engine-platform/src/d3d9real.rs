@@ -3411,6 +3411,7 @@ mod tests {
             frustum: [-0.7, 0.7, 0.4, -0.4, 5.0, 5000.0],
             ortho: false,
             rotate: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            position: [0.0; 3],
             to_sun: None,
             sun_colour: [0.0; 3],
             interior: true,

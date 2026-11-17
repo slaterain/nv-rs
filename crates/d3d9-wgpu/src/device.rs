@@ -925,7 +925,15 @@ struct SunState {
     map_draws: u64,
     took: std::time::Duration,
     said: u64,
+    /// A tool for finding why something casts nothing: `NV_SUN_SHADOWS_DUMP=N` lists, once, every
+    /// caster of present N and every draw not kept (why, its shader, its place) in the log.
+    dump_at: Option<u64>,
+    dump_rejects: Vec<SunReject>,
 }
+
+/// A draw the sun's maps did not keep, for the dump: why (the counters' order), its vertex and
+/// pixel shaders' stable hashes, its count and its `ModelViewProj` when it has one.
+type SunReject = (usize, u64, u64, u32, Option<[[f32; 4]; 4]>);
 
 impl SunState {
     /// Whether a draw of present `now` is kept for the maps: after this frame's scene clear with the
@@ -967,6 +975,10 @@ impl SunState {
             map_draws: 0,
             took: std::time::Duration::ZERO,
             said: 0,
+            dump_at: std::env::var("NV_SUN_SHADOWS_DUMP")
+                .ok()
+                .and_then(|v| v.trim().parse().ok()),
+            dump_rejects: Vec::new(),
         }
     }
 }
@@ -3998,11 +4010,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             None => pass.draw(start..start + n, 0..1),
         }
         // The sun shadows' light list ([`sun_shadow`]): off (or no sun last frame), only this test.
-        if let Some(s) = self.sun.as_mut().filter(|s| s.recording(self.presents)) {
+        if self
+            .sun
+            .as_ref()
+            .is_some_and(|s| s.recording(self.presents))
+        {
             if up.is_some() {
-                s.rejected[5] += 1;
+                self.sun_reject(5, &vs, &ps, n);
             } else if vs.mvp.is_none() {
-                s.rejected[4] += 1;
+                self.sun_reject(4, &vs, &ps, n);
             }
         }
         if self
@@ -5633,6 +5649,30 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// triangles, a vertex shader with `ModelViewProj` ([`Shader::mvp`]) and no vertex textures,
     /// positions the device can read for its bounds. Its depth-only pipeline is made the first
     /// time its shader, declaration and layout are seen.
+    /// A draw not kept for the maps, for `why` (the counters' order): counted, and listed when
+    /// `NV_SUN_SHADOWS_DUMP` names this present.
+    fn sun_reject(&mut self, why: usize, vs: &Shader, ps: &Shader, count: u32) {
+        let presents = self.presents;
+        let Some(s) = self.sun.as_mut() else {
+            return;
+        };
+        s.rejected[why] += 1;
+        if s.dump_at == Some(presents) {
+            let mvp = vs.mvp.map(|m| {
+                std::array::from_fn(|r| {
+                    std::array::from_fn(|j| {
+                        let o = 16 * (m as usize + r) + 4 * j;
+                        f32::from_le_bytes(
+                            self.st.vsf[o..o + 4].try_into().expect("4 bytes"),
+                        )
+                    })
+                })
+            });
+            s.dump_rejects
+                .push((why, vs.stable, ps.stable, count, mvp));
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn sun_record(
         &mut self,
@@ -5667,17 +5707,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             )
             || mvp + 4 > vs.fregs
         {
-            if let Some(s) = self.sun.as_mut() {
-                s.rejected[0] += 1;
-            }
+            self.sun_reject(0, vs, ps, count);
             return;
         }
         // A character's face (its pixel shader blends the FaceGen maps): not a caster until the
         // characters' skinned bodies are (a head's shadow alone would float).
         if ps.face {
-            if let Some(s) = self.sun.as_mut() {
-                s.rejected[4] += 1;
-            }
+            self.sun_reject(4, vs, ps, count);
             return;
         }
         let samplers = self.sampler_bindings(vs, ps);
@@ -5720,9 +5756,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         };
         let Some(pipe) = pipe else {
-            if let Some(s) = self.sun.as_mut() {
-                s.rejected[2] += 1;
-            }
+            self.sun_reject(2, vs, ps, count);
             return;
         };
         let mut streams: [Option<(Arc<Buf>, u64, u64)>; 8] = Default::default();
@@ -5773,9 +5807,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         };
         let Some(bounds) = bounds else {
-            if let Some(s) = self.sun.as_mut() {
-                s.rejected[3] += 1;
-            }
+            self.sun_reject(3, vs, ps, count);
             return;
         };
         // A cut-out's pixel block: its alpha test as the game set it (the fixed-function test, never
@@ -6115,6 +6147,47 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let cascades: [sun_shadow::Cascade; sun_shadow::CASCADES] = std::array::from_fn(|i| {
             sun_shadow::place(i, frustum, s[i], s[i + 1], axes, position, b)
         });
+        // The tool's list (`NV_SUN_SHADOWS_DUMP`), once: each caster's place from the camera (right,
+        // up, ahead), its radius and whether it casts; each draw not kept, why and where.
+        if sun.dump_at.is_some_and(|d| now > d) {
+            sun.dump_at = None;
+            let from_camera = |c: [f64; 3]| -> [f64; 3] {
+                let d = [c[0] - position[0], c[1] - position[1], c[2] - position[2]];
+                std::array::from_fn(|k| axes[k][0] * d[0] + axes[k][1] * d[1] + axes[k][2] * d[2])
+            };
+            eprintln!(
+                "NV_D3D9 wgpu: sun shadows dump at present {now}: camera {position:.0?}, sun toward {:.3?}, {} casters, {} not kept",
+                frame.to_sun,
+                sun.lists.casters.len(),
+                sun.dump_rejects.len()
+            );
+            for (n, c) in sun.lists.casters.iter().enumerate() {
+                let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
+                let centre = sun_shadow::place_point(&world, c.bounds.0);
+                let r = c.bounds.1 * sun_shadow::stretch(&world);
+                let v = from_camera(centre);
+                eprintln!(
+                    "sun dump caster {n}: at ({:.0}, {:.0}, {:.0}) r {r:.0} cut-out {} casts {} scene {} pipe {} count {}",
+                    v[0],
+                    v[1],
+                    v[2],
+                    c.draw.cutout.is_some(),
+                    sun_shadow::casts(&world, c.bounds, position),
+                    c.depth == scene,
+                    c.draw.pipe,
+                    c.draw.count
+                );
+            }
+            for (why, vs, ps, count, mvp) in std::mem::take(&mut sun.dump_rejects) {
+                let at = mvp.map(|m| {
+                    let w = sun_shadow::world_of(&m, frustum, axes, position);
+                    from_camera([w[0][3], w[1][3], w[2][3]]).map(|x| x.round())
+                });
+                eprintln!(
+                    "sun dump not kept: why {why} vs {vs:016x} ps {ps:016x} count {count} origin {at:?}"
+                );
+            }
+        }
         // The casters on the scene into the cache.
         let mut changed = Vec::new();
         let mut on_scene = 0u64;
