@@ -200,6 +200,23 @@ fn flag(raw: &str) -> Option<bool> {
 /// adapter table gives the game (`crate::adapter_table_text`), where the game reads it.
 /// A folder whose bytes can't be read is named once in the log ([`path_from_table`]).
 pub fn path() -> Option<PathBuf> {
+    // Linux and macOS: the Documents folder is nv-rs's own (`engine_platform::machine_table::
+    // game_folders`), found without making the machine table, which this settings' reading
+    // (before the run's renderer choice) must not fix. A test's table (`NV_D3D9_ADAPTER`) names
+    // its own.
+    #[cfg(not(windows))]
+    if std::env::var_os("NV_D3D9_ADAPTER").is_none() {
+        let own = crate::own_folder()
+            .map_err(|why| eprintln!("Fallout.ini's nv-rs settings not read: {why}"))
+            .ok()?;
+        let [documents, _, _] = engine_platform::machine_table::game_folders(&own);
+        return Some(
+            documents
+                .join("My Games")
+                .join("FalloutNV")
+                .join("Fallout.ini"),
+        );
+    }
     let table = crate::adapter_table_text()?;
     path_from_table(&table).unwrap_or_else(|why| {
         eprintln!("{why}");

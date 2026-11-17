@@ -7,7 +7,10 @@
 //!   number of monitors); `GetAdapterDisplayMode` (the primary monitor's real pixels and refresh
 //!   rate, as Direct3D 9 answers whatever the program's DPI awareness); the modes of
 //!   `D3DFMT_X8R8G8B8` ([`modes`]); `EnumDisplayDevicesA` (one device per monitor, the primary
-//!   one flagged). Where winit names no primary monitor (Wayland) the first one is taken.
+//!   one flagged). Where winit names no primary monitor (Wayland) the first one is taken, and the
+//!   game's borderless window is put on that same monitor ([`described`]). Not known here: a
+//!   rotated output on Wayland reads unrotated (winit 0.30 reports the mode before the output's
+//!   transform and gives no transform), so a portrait monitor there reads as landscape.
 //! - **The card** (wgpu's adapter, `d3d9_wgpu::device::card_facts`): `GetAdapterIdentifier`'s
 //!   description (the card's name), driver (wgpu's driver name), vendor and device numbers
 //!   ([`identifier`]).
@@ -174,9 +177,27 @@ pub struct Card {
     pub device: u32,
     pub driver: String,
     pub driver_info: String,
-    /// The sample counts wgpu's adapter takes for both a colour (`Rgba8Unorm`) and a depth
-    /// (`Depth24PlusStencil8`) target.
+    /// The sample counts the device will really make a surface with (`d3d9_wgpu`'s rule: every
+    /// format of the multisampled family, the back buffer's and the occlusion count's agree).
     pub sample_counts: Vec<u32>,
+    /// Whether the card takes block-compressed textures (`TEXTURE_COMPRESSION_BC`): the game's
+    /// textures are DXT, so without it the start is refused.
+    pub bc: bool,
+    /// Whether the card blends 32-bit float targets (`FLOAT32_BLENDABLE`).
+    pub float32_blendable: bool,
+}
+
+impl Card {
+    /// Why the game cannot draw on this card, if it cannot.
+    pub fn refusal(&self) -> Option<String> {
+        (!self.bc).then(|| {
+            format!(
+                "the graphics card {} has no block-compressed (DXT) textures in its Vulkan driver, \
+                 and every texture of the game is one",
+                self.name
+            )
+        })
+    }
 }
 
 /// Whole hertz as Direct3D 9 gives them: rounded down (Windows lists 59.94 Hz as 59, beside 60),
@@ -185,12 +206,40 @@ pub fn hertz(millihertz: u32) -> u32 {
     (millihertz + 10) / 1000
 }
 
-/// The monitor the game's screen metrics and display mode describe.
+/// The monitor the game's screen metrics and display mode describe, and the one the window layer
+/// puts the game's borderless window on ([`described`]): the system's primary monitor, else the
+/// first one (Wayland names none).
 fn primary(monitors: &[Monitor]) -> Option<&Monitor> {
-    monitors
+    described(monitors.iter().map(|m| m.primary)).map(|i| &monitors[i])
+}
+
+/// Which of the monitors (given by whether each is the system's primary one) the table describes
+/// and the borderless window is shown on: the primary one, else the first.
+pub fn described(primary: impl IntoIterator<Item = bool>) -> Option<usize> {
+    let mut first = None;
+    for (i, p) in primary.into_iter().enumerate() {
+        if p {
+            return Some(i);
+        }
+        first.get_or_insert(i);
+    }
+    first
+}
+
+/// The monitor's current rate in hertz: the one it reports, else the highest rate of a mode of
+/// its own size, else 60 (no monitor answers 0 Hz to the game).
+pub fn current_hertz(monitor: &Monitor) -> u32 {
+    if let Some(mhz) = monitor.refresh_millihertz.filter(|&m| hertz(m) > 0) {
+        return hertz(mhz);
+    }
+    monitor
+        .modes
         .iter()
-        .find(|m| m.primary)
-        .or_else(|| monitors.first())
+        .filter(|m| (m.width, m.height) == monitor.size)
+        .map(|m| hertz(m.refresh_millihertz))
+        .max()
+        .filter(|&h| h > 0)
+        .unwrap_or(60)
 }
 
 /// The modes of [`X8R8G8B8`] on `monitor`: each of its own modes of 24 or 32 bits (or of a depth
@@ -199,11 +248,11 @@ fn primary(monitors: &[Monitor]) -> Option<&Monitor> {
 /// Its own size at its current rate is always among them.
 pub fn modes(monitor: &Monitor) -> Vec<(u32, u32, u32)> {
     let (width, height) = monitor.size;
-    let current = monitor.refresh_millihertz.map_or(0, hertz);
+    let current = current_hertz(monitor);
     let mut list: Vec<(u32, u32, u32)> = monitor
         .modes
         .iter()
-        .filter(|m| matches!(m.bit_depth, 0 | 24 | 32))
+        .filter(|m| matches!(m.bit_depth, 0 | 24 | 32) && hertz(m.refresh_millihertz) > 0)
         .map(|m| (m.width, m.height, hertz(m.refresh_millihertz)))
         .collect();
     list.push((width, height, current));
@@ -268,11 +317,7 @@ pub fn display_lines(monitors: &[Monitor], card: &str) -> Result<String, String>
         scaled(primary.size.1),
         monitors.len()
     );
-    let current = (
-        primary.size.0,
-        primary.size.1,
-        primary.refresh_millihertz.map_or(0, hertz),
-    );
+    let current = (primary.size.0, primary.size.1, current_hertz(primary));
     t += &format!("GetAdapterDisplayMode\t0\t0\t{}\n", display_mode(current));
     let list = modes(primary);
     for &format in MODE_FORMATS {
@@ -352,11 +397,15 @@ pub fn card_lines(card: &Card) -> String {
         .collect()
 }
 
-/// [`CARD`] with each `CheckDeviceMultiSampleType` answer for a count of 2 to 16 samples the card
-/// does not draw with (`counts`) replaced by that line's answer for 16 samples (not available on
-/// the captured card for any format), each line folded again as `d3d9-capture` folds it (the most
-/// common answer first, the others by their last word in the domain's order).
-pub fn honour_samples(card: &str, counts: &[u32]) -> String {
+/// [`CARD`]'s `kind` lines with each answer given again by `change(lead words, last word,
+/// the line's answer to a last word)`, each line folded again as `d3d9-capture` folds it (the
+/// most common answer first, the others by their last word in the domain's order); every other
+/// line as it was.
+pub fn rewrite_answers(
+    card: &str,
+    kind: &str,
+    change: impl Fn(&str, &str, &dyn Fn(&str) -> String) -> String,
+) -> String {
     let mut domains: std::collections::HashMap<&str, Vec<&str>> = Default::default();
     let mut out = String::with_capacity(card.len());
     for line in card.lines() {
@@ -364,7 +413,7 @@ pub fn honour_samples(card: &str, counts: &[u32]) -> String {
         if f[0] == "Domain" {
             domains.insert(f[1], f[2].split(',').collect());
         }
-        if f[0] != "CheckDeviceMultiSampleType" {
+        if f[0] != kind {
             out += line;
             out.push('\n');
             continue;
@@ -375,22 +424,13 @@ pub fn honour_samples(card: &str, counts: &[u32]) -> String {
             .filter(|e| !e.is_empty())
             .map(|e| e.split_once('=').expect("word=answer"))
             .collect();
-        let answer = |w: &str| *exceptions.get(w).unwrap_or(&f[2]);
-        let none = answer("10");
-        let answers: Vec<(&str, &str)> = domain
+        let answer = |w: &str| exceptions.get(w).unwrap_or(&f[2]).to_string();
+        let answers: Vec<(&str, String)> = domain
             .iter()
-            .map(|&w| {
-                let n = u32::from_str_radix(w, 16).expect("a sample count");
-                let a = if (2..=16).contains(&n) && !counts.contains(&n) {
-                    none
-                } else {
-                    answer(w)
-                };
-                (w, a)
-            })
+            .map(|&w| (w, change(f[1], w, &answer)))
             .collect();
         let mut tally: Vec<(&str, usize)> = Vec::new();
-        for &(_, a) in &answers {
+        for (_, a) in &answers {
             match tally.iter_mut().find(|(t, _)| *t == a) {
                 Some(t) => t.1 += 1,
                 None => tally.push((a, 1)),
@@ -400,7 +440,7 @@ pub fn honour_samples(card: &str, counts: &[u32]) -> String {
         let default = tally[0].0;
         let rest: Vec<String> = answers
             .iter()
-            .filter(|(_, a)| *a != default)
+            .filter(|(_, a)| a != default)
             .map(|(w, a)| format!("{w}={a}"))
             .collect();
         out += &format!(
@@ -412,6 +452,41 @@ pub fn honour_samples(card: &str, counts: &[u32]) -> String {
         );
     }
     out
+}
+
+/// `card` with each `CheckDeviceMultiSampleType` answer for a count of 2 to 16 samples the card
+/// does not draw with (`counts`) replaced by that line's answer for 16 samples (not available on
+/// the captured card for any format).
+pub fn honour_samples(card: &str, counts: &[u32]) -> String {
+    rewrite_answers(card, "CheckDeviceMultiSampleType", |_, w, answer| {
+        let n = u32::from_str_radix(w, 16).expect("a sample count");
+        if (2..=16).contains(&n) && !counts.contains(&n) {
+            answer("10")
+        } else {
+            answer(w)
+        }
+    })
+}
+
+/// `D3DUSAGE_QUERY_POSTPIXELSHADER_BLENDING`, and the 32-bit float formats (`D3DFMT_R32F`,
+/// `G32R32F`, `A32B32G32R32F`) whose blending wgpu takes only with `FLOAT32_BLENDABLE`.
+const BLENDING_QUERY: &str = "80000";
+const FLOAT32_FORMATS: [&str; 3] = ["72", "73", "74"];
+
+/// `card` with `CheckDeviceFormat`'s blending query for the 32-bit float formats answered
+/// `D3DERR_NOTAVAILABLE` where the card cannot blend them (`blendable` false).
+pub fn honour_blending(card: &str, blendable: bool) -> String {
+    if blendable {
+        return card.to_string();
+    }
+    rewrite_answers(card, "CheckDeviceFormat", |lead, w, answer| {
+        let usage = lead.split(' ').nth(3);
+        if usage == Some(BLENDING_QUERY) && FLOAT32_FORMATS.contains(&w) {
+            "8876086a".to_string()
+        } else {
+            answer(w)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -436,6 +511,8 @@ mod tests {
             driver: "radv".into(),
             driver_info: "Mesa 25.0.7".into(),
             sample_counts: vec![1, 2, 4, 8],
+            bc: true,
+            float32_blendable: true,
         }
     }
 
@@ -454,6 +531,86 @@ mod tests {
         assert_eq!(hertz(60_000), 60);
         assert_eq!(hertz(143_856), 143);
         assert_eq!(hertz(0), 0);
+    }
+
+    /// A monitor that reports no rate: its own size's best mode, else 60; never 0 Hz.
+    #[test]
+    fn a_monitor_without_a_rate_never_answers_zero_hertz() {
+        let mut m = monitor((1920, 1080), 1.0, 0, true);
+        m.refresh_millihertz = None;
+        assert_eq!(current_hertz(&m), 60);
+        assert!(
+            modes(&m).iter().all(|&(_, _, r)| r == 60),
+            "{:?}",
+            modes(&m)
+        );
+        m.modes = vec![
+            Mode {
+                width: 1920,
+                height: 1080,
+                bit_depth: 32,
+                refresh_millihertz: 74_973,
+            },
+            Mode {
+                width: 1920,
+                height: 1080,
+                bit_depth: 32,
+                refresh_millihertz: 0,
+            },
+        ];
+        assert_eq!(current_hertz(&m), 74);
+        assert!(
+            modes(&m).iter().all(|&(_, _, r)| r == 74),
+            "{:?}",
+            modes(&m)
+        );
+        let lines = display_lines(&[m], "x").unwrap();
+        assert!(lines.contains(&format!(
+            "GetAdapterDisplayMode\t0\t0\t{}\n",
+            display_mode((1920, 1080, 74))
+        )));
+    }
+
+    /// Two monitors of different shape and no primary (Wayland): the first is described, and it is
+    /// the one the window layer is told to put the window on (`described`); with a primary, it.
+    #[test]
+    fn with_no_primary_the_first_monitor_is_described_and_shown_on() {
+        assert_eq!(described([false, false]), Some(0));
+        assert_eq!(described([false, true]), Some(1));
+        assert_eq!(described([]), None);
+        let monitors = [
+            monitor((2560, 1080), 1.0, 60_000, false),
+            monitor((1920, 1080), 1.0, 60_000, false),
+        ];
+        let mut e = engine_with(&display_lines(&monitors, "c").unwrap());
+        assert_eq!(crate::d3d9::system_metric(&mut e, 0), Some(2560));
+        assert_eq!(crate::d3d9::system_metric(&mut e, 1), Some(1080));
+    }
+
+    /// The card's refusal (no DXT textures) and the 32-bit float blending query.
+    #[test]
+    fn a_card_without_dxt_is_refused_and_float_blending_follows_the_card() {
+        let mut c = card();
+        assert_eq!(c.refusal(), None);
+        c.bc = false;
+        assert!(c.refusal().unwrap().contains("DXT"));
+        assert_eq!(honour_blending(CARD, true), CARD.replace("\r\n", "\n"));
+        let no = honour_blending(CARD, false);
+        let row = |t: &str| {
+            t.lines()
+                .find(|l| l.starts_with("CheckDeviceFormat\t0 1 16 80000 3\t"))
+                .unwrap()
+                .to_string()
+        };
+        assert!(row(CARD).contains("72=0,73=0,74=0"));
+        assert!(
+            !row(&no).contains("72=") && !row(&no).contains("74="),
+            "{}",
+            row(&no)
+        );
+        assert!(row(&no).contains("71=0,c7=8876086c"));
+        assert_eq!(no.lines().count(), CARD.lines().count());
+        let _ = engine_with(&no);
     }
 
     /// The monitor's own modes of 24 or 32 bits, the scaled sizes that fit at each rate of its own
