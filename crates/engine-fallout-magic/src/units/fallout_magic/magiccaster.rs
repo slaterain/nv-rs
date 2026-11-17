@@ -1634,6 +1634,7 @@ mod tests {
                 .into_ret()
             });
             returns(&mut e, ALCHEMY_HAS_FLAG, 0);
+            returns(&mut e, CAN_BE_POISON, 0);
             e.register(GET_COSTLIEST_EFFECT, |e, a| {
                 // The costliest self effect is the one effect.
                 if a[1] == 0 {

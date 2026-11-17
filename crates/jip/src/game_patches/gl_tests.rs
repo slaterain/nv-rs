@@ -123,6 +123,8 @@ fn g66_skips_the_attach_without_a_node() {
 fn g86_leaves_out_hidden_effects() {
     let mut e = world();
     let hidden = |e: &mut Engine| e.site(EFFECT_HIDDEN.addr(), &[ITEM]);
+    // No setting while the usage monitor is another one (0 would match a null monitor too).
+    e.mem.set_u32(USAGE_MONITOR, SETTING + 0x80);
     e.mem.set_u32(ITEM + ITEM_SETTING, 0);
     assert_eq!(hidden(&mut e), Some(1), "no setting");
     e.mem.set_u32(ITEM + ITEM_SETTING, SETTING);
