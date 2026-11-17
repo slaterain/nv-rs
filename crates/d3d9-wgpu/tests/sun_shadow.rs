@@ -462,7 +462,8 @@ fn frame(b: &mut WgpuBackend, words: bool) -> Vec<[u8; 4]> {
     let mvp = model_view_proj();
     let regs: Vec<f32> = mvp.iter().flatten().copied().collect();
     constants(b, 0, 0, &regs);
-    constants(b, 3, 0, &[0.5, 0.5, 0.5, 1.0]);
+    // 0.4 is exactly 102 of 255: no half for an adapter to round either way, and not the clear's 0x80.
+    constants(b, 3, 0, &[0.4, 0.4, 0.4, 1.0]);
     draw(b, GROUND, 2);
     constants(b, 3, 0, &[0.7, 0.6, 0.5, 1.0]);
     draw(b, BOX, 10);
@@ -508,10 +509,10 @@ fn at(px: &[[u8; 4]], (x, y): (u32, u32)) -> [u8; 4] {
     px[(y * SIZE + x) as usize]
 }
 
-/// The ground's half grey: 0x7F, or 0x80 where the adapter rounds a half up (the software adapter
-/// GitHub's Windows check draws with does; the maintainer's card rounds down).
+/// The ground's grey in `frame` (0.4: exactly 0x66). It was a half grey, which GitHub's software
+/// adapter rounds up to 0x80, the clear's colour, and the maintainer's card rounds down to 0x7F.
 fn is_ground_grey(p: [u8; 4]) -> bool {
-    p == [0x7F, 0x7F, 0x7F, 0xFF] || p == [0x80, 0x80, 0x80, 0xFF]
+    p == [0x66, 0x66, 0x66, 0xFF]
 }
 
 /// Off (the default): the words in the stream change nothing; the frame is bit for bit the one
@@ -1157,7 +1158,8 @@ fn a_lit_draw_after_the_depth_only_clear_is_as_without_the_shadows() {
         for (x, z) in [(-42.0, 14.0), (-44.0, 12.0), (-40.0, 17.0)] {
             let p = pixel([x, 150.0, z]);
             assert_eq!(at(on, p), at(off, p), "({x}, {z}) ({samples})");
-            assert!(!is_ground_grey(at(off, p)));
+            // The square is drawn: not the clear's colour (the sky row keeps it).
+            assert_ne!(at(off, p), at(off, (p.0, 2)));
         }
         // The ground in the box's shadow is shadowed in the same frame.
         let p = pixel([-55.0, 140.0, 0.0]);
