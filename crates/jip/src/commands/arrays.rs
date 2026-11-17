@@ -157,6 +157,77 @@ pub fn set_element(e: &mut Engine, id: u32, key: &Key, element: &Element) {
     vars::set_element(e, id, key, v);
 }
 
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayAPI::GetContainerType.
+/// `GetContainerType(arr)`: 0 a packed array, 1 a map by number, 2 a map by text (xNVSE's
+/// `kContainer_*`, JIP's `kArrType_*`); -1 for no array.
+pub fn container_type(e: &Engine, id: u32) -> i32 {
+    match vars::array(e, id).map(|a| &a.elements) {
+        Some(vars::Container::Array(_)) => 0,
+        Some(vars::Container::NumMap(_)) => 1,
+        Some(vars::Container::StrMap(_)) => 2,
+        None => -1,
+    }
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayAPI::GetElements and
+// ArrayAPI::InternalElemToPluginElem.
+/// `GetElements(arr, vals, keys)`: each key and element in order, an element as a plugin is
+/// handed it: a number, a form looked up again by its id (`LookupFormByID`: 0 when no form has
+/// it), a text, an array's id; `None` for an element of no type (left unset). Empty for no array.
+pub fn plugin_elements(e: &Engine, id: u32) -> Vec<(Key, Option<Element>)> {
+    let Some(a) = vars::array(e, id) else {
+        return Vec::new();
+    };
+    let elements: Vec<&vars::Element> = match &a.elements {
+        vars::Container::Array(v) => v.iter().collect(),
+        vars::Container::NumMap(v) => v.iter().map(|(_, el)| el).collect(),
+        vars::Container::StrMap(v) => v.iter().map(|(_, el)| el).collect(),
+    };
+    let values: Vec<Option<Element>> = elements
+        .into_iter()
+        .map(|el| match &el.data {
+            vars::Data::Number(n) => Some(Element::Number(*n)),
+            vars::Data::Form(f) => Some(Element::Form(crate::cosave::lookup_form(e, *f))),
+            vars::Data::Str(s) => Some(Element::Str(s.clone())),
+            vars::Data::Array(arr) => Some(Element::Array(*arr)),
+            vars::Data::Invalid => None,
+        })
+        .collect();
+    a.keys().into_iter().zip(values).collect()
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ArrayVar.cpp: ArrayAPI::ArrayHasKey.
+/// `ArrayHasKey(arr, key)`: whether the array has an element at `key`.
+pub fn has_key(e: &mut Engine, id: u32, key: &Key) -> bool {
+    vars::get_element(e, id, key).is_some()
+}
+
+/// [`append_element`] of a plugin element (`None`: of no type, made and left unset).
+pub fn append_plugin_element(e: &mut Engine, id: u32, element: Option<&Element>) {
+    match element {
+        Some(el) => append_element(e, id, el),
+        None => {
+            let Some(len) = vars::array(e, id)
+                .filter(|a| a.key_type == KEY_NUMBER && a.packed)
+                .map(|a| a.len())
+            else {
+                return;
+            };
+            vars::make_element(e, id, &Key::Number(len as f64));
+        }
+    }
+}
+
+/// [`set_element`] of a plugin element (`None`: of no type, made when missing, else left).
+pub fn set_plugin_element(e: &mut Engine, id: u32, key: &Key, element: Option<&Element>) {
+    match element {
+        Some(el) => set_element(e, id, key, el),
+        None => {
+            vars::make_element(e, id, key);
+        }
+    }
+}
+
 #[cfg(test)]
 #[path = "arrays_tests.rs"]
 mod tests;

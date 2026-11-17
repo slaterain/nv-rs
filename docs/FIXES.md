@@ -1288,7 +1288,16 @@ firing a thrown or placed weapon (types 11 to 13) by an actor with no AI process
 original calls the missing process) (`0x5248EF`); an armour's icon in the menus follows the player's sex,
 with the female icon when the armour has one (the original follows the sex of the owner the menu passes,
 and shows the male icon when it passes none) (`0x48E761`); a companion perk's effect that targets the
-player is added to the player once, not once per companion (`0x5EB79B`).
+player is added to the player once, not once per companion (`0x5EB79B`); a place's music that depends
+on a faction picks its enemy, ally or friend music by that faction's combat reaction to the player (the
+original reads the reaction's modifier number instead) (`0x5956BC`); an armour's sounds named in a
+plugin are found through the plugin's own master list (the original looks the ids up as written, so a
+plugin's armour can get no sound or the wrong one) (`0x512F3D`, `0x512FAF`); an archive that has a file
+of the same name ending in `.override` in `Data` (for example `Data\MyMod - Main.override` beside
+`MyMod - Main.bsa`) is loaded as an override: the same files in the archives opened before it are
+dropped from those, so its copies are the ones used (`0x463855`); a reference in a cell that carries
+form flag `0x400000` is not recorded as moved, so its position is not kept in the save (from the end of
+the start-up on, `0x102F5A4`).
 
 Built as part of JIP (in every preset once JIP answers "installed", not under the row), needed by the
 built `GetSkeletonModel`, `SetNPCSkeletonModel` and `SetCRESkeletonModel`: an NPC's skeleton is the NPC's
@@ -1393,6 +1402,16 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
 - **Installed.** Switched on, xNVSE lists it as "UI Organizer Plugin", version 230, as `IsPluginInstalled`
   and `GetPluginVersion` see the DLL; built-ins ask `uio::on` where JIP and Stewie's tweaks ask for its
   DLL.
+- **What it says in the play log** (`crates/uio/src/report.rs`; in place of UIO's own
+  `ui_organizer.log`). Once its lists are read: the list files read (and any that would not open,
+  `supported.txt` named: it comes in the UIO download, not with the UI mods), the additions by menu file
+  and tile, a target file the game could not read or a tile not in it (or one UIO's reading opens but
+  never finds the end of), and each entry left out with the reason ("oHUDPatches.txt:
+  UIOPatches\GrenadeKey.xml not added: Prefabs\GrenadeKeyHUD.xml is not installed"; a condition line
+  starting with a space is said to be read as false, as UIO reads it). At most 40 list files, 40 added
+  paths, 40 problems and 40 entries left out are named, the rest counted. One more line when the first
+  file with additions put in is read (its count is of the additions actually put in). Off, no line.
+  The lines change nothing UIO does.
 
 ## Credits
 
