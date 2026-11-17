@@ -4354,11 +4354,10 @@ fn a_shader_draw_after_the_tile_reads_the_constants_set_before_it() {
     g.movie_texture(0x1760, 1, 1, &[0, 0, 255, 0]);
     g.no_shaders();
     g.movie_state();
+    // No read-back between the tile and the shader draw: one batch, so the draw's register
+    // blocks follow the tile's in the same ring (a read-back starts a new one, which writes every
+    // block again and would hide a stale one).
     g.movie_quad(0.0, 0.0, 4.0, 4.0);
-    assert!(
-        g.pixels().iter().all(|p| *p == [0, 0, 255, 255]),
-        "the red tile"
-    );
     for (pixel, shader) in [(false, VS), (true, PS)] {
         g.run(Cmd::SetShader {
             device: DEVICE,
