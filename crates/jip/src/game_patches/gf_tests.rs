@@ -287,9 +287,11 @@ fn g48_installed_clears_jips_flag_bytes() {
         (true, jip_patches::FO3_WPN_DEGRADATION),
     ] {
         let mut e = world_as(true);
-        super::super::set_row(&mut e, row);
-        if switch != 0 {
-            e.jip_patches_or(switch);
+        // The row on: the word's bit and the group's fixes (what the row puts in; the row
+        // itself reads the player's jip_nvse.ini through the platform).
+        if row {
+            e.jip_patches_or(jip_patches::FIXES | switch);
+            install_fixes(&mut e);
         }
         assert_eq!(e.wraps_at(SET_FORM_TYPE.addr()), [Owner::Jip]);
         for kind in [0x3bu32, 0x3c] {
