@@ -992,7 +992,7 @@ fn gb4_rows_are_jips_addresses() {
     );
     assert_eq!(WEIGHTLESS_TAKE.addr(), 0x0075_bf18);
     assert_eq!(
-        AREA.fix_sites[7..],
+        AREA.fix_sites[7..14],
         [
             0x0072_f33d,
             0x0075_d1a5,
@@ -1003,4 +1003,270 @@ fn gb4_rows_are_jips_addresses() {
             0x0075_bf18
         ]
     );
+}
+
+// ---- GB-5: O2 (Fallout 3 style repair) ----
+
+const ACTOR_VALUE: u32 = 0x0093_acb0;
+const ITEM_TEST: u32 = 0x0047_bb50;
+
+/// A weapon stack at `at` (its form after it: type 0x28, full health 200) with a first list
+/// holding `ExtraHealth` `health` (none: no list).
+fn weapon_stack(e: &mut Engine, at: u32, health: Option<f32>) -> u32 {
+    let form = at + 0x100;
+    e.mem.set_u8(form + 4, 0x28);
+    e.mem.set_u32(form + 0x98, 200);
+    let lists = match health {
+        Some(h) => {
+            let list = extra_list(e, at + 0x200, &[(0x25, h.to_bits())]);
+            node(e, at + 0x300, list, 0)
+        }
+        None => 0,
+    };
+    entry(e, at, lists, 1, form)
+}
+
+/// The repair settings (`fRepairSkillBase` 2, `fRepairSkillMax` 10, `fRepairScavengeMult` 0.5,
+/// `fRepairMin` 1, `fRepairMax` 3), the player and the Repair skill `skill`.
+fn repair_world(e: &mut Engine, skill: f64) {
+    list_world(e);
+    for page in [0x011d_0000, 0x011c_f000, 0x011d_e000, 0x011d_a000] {
+        if !e.mem.is_mapped(page) {
+            e.map(page, 0x1000);
+        }
+    }
+    e.mem.set_f32(0x011d_0ff4, 2.0);
+    e.mem.set_f32(0x011d_0190, 10.0);
+    e.mem.set_f32(0x011d_074c, 0.5);
+    e.mem.set_f32(0x011d_0884, 1.0);
+    e.mem.set_f32(0x011c_ffa4, 3.0);
+    e.mem.set_u32(0x011d_ea3c, AREA_AT + 0x7000);
+    e.register_double(ACTOR_VALUE, move |_, a| {
+        gb3_log(ACTOR_VALUE, a);
+        Ret {
+            st0: skill,
+            ..Ret::default()
+        }
+    });
+}
+
+/// JIP's `GetHealthPercent`: the `ExtraHealth` over the full health times 100, at most 100; 100
+/// without a list; -1 for a type with a bit outside 0x38 (ammunition, 0x29).
+#[test]
+fn o2_health_percent() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(150.0));
+    assert_eq!(health_percent(&mut e, stack), 75.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(300.0));
+    assert_eq!(health_percent(&mut e, stack), 100.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x9000, None);
+    assert_eq!(health_percent(&mut e, stack), 100.0);
+    e.mem.set_u8(AREA_AT + 0x9100 + 4, 0x29);
+    assert_eq!(health_percent(&mut e, stack), -1.0);
+    // Armour (0x18) passes the type test (a bit outside 0x38 only fails): 50 of its 100.
+    e.mem.set_u8(AREA_AT + 0x8100 + 4, 0x18);
+    e.mem.set_u32(AREA_AT + 0x8100 + 0x6c, 100);
+    let armour = entry(
+        &mut e,
+        AREA_AT + 0x8000,
+        AREA_AT + 0x8300,
+        1,
+        AREA_AT + 0x8100,
+    );
+    let list = extra_list(&mut e, AREA_AT + 0x8200, &[(0x25, 50.0f32.to_bits())]);
+    node(&mut e, AREA_AT + 0x8300, list, 0);
+    assert_eq!(health_percent(&mut e, armour), 50.0);
+}
+
+/// `EnableRepairButtonHook`: the cap is the skill scaled from 20 to 100 (here 50 gives 60, -5
+/// gives 20), the health rounded up (55.2 becomes 56); 1 when the cap is above it, else 0; the
+/// three statics kept; the skill read as JIP does (`0093acb0` on the player's +0xA4, 0x27).
+#[test]
+fn o2_repair_button() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 50.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(110.4));
+    gb3_calls();
+    assert_eq!(e.site(REPAIR_BUTTON.addr(), &[stack]), Some(1));
+    assert_eq!(gb3_calls(), [(ACTOR_VALUE, vec![AREA_AT + 0x70a4, 0x27])]);
+    let state = repair_state(&mut e);
+    assert_eq!(f32::from_bits(state.skill.load(Ordering::Relaxed)), 60.0);
+    assert_eq!(f32::from_bits(state.health.load(Ordering::Relaxed)), 56.0);
+    assert!(!state.modded.load(Ordering::Relaxed));
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(130.0));
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(0),
+        "65 is above 60"
+    );
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(119.0));
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(0),
+        "59.5 rounds up to 60, not above 60"
+    );
+    let mut e = fixes_on();
+    repair_world(&mut e, -5.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(30.0));
+    e.mem.set_u8(AREA_AT + 0x8200 + 0x19, 0x20);
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(1),
+        "15 below 20"
+    );
+    let state = repair_state(&mut e);
+    assert_eq!(f32::from_bits(state.skill.load(Ordering::Relaxed)), 20.0);
+    assert!(
+        state.modded.load(Ordering::Relaxed),
+        "the list's mod flags bit"
+    );
+}
+
+/// JIP's rounding up: whole values stay, others go up, out of range is -2^31.
+#[test]
+fn o2_round_up() {
+    assert_eq!(round_up(56.0), 56.0);
+    assert_eq!(round_up(55.01), 56.0);
+    assert_eq!(round_up(-0.5), 0.0);
+    assert_eq!(round_up(f32::NAN), -2_147_483_648.0);
+    assert_eq!(round_up(3.0e9), -2_147_483_648.0);
+}
+
+/// `GetRepairAmount` with the cap 60: healths 20 and 10 give (2 + 1 + 1 * 0.5 + 2 * 0.6) / 10,
+/// in JIP's single-precision steps; a larger result is cut to the cap's 0.6.
+#[test]
+fn o2_repair_amount() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    repair_state(&mut e)
+        .skill
+        .store(60.0f32.to_bits(), Ordering::Relaxed);
+    let s = 60.0f32 * 0.01;
+    let expected = (20.0f32 * 0.1 + 1.0 + 10.0f32 * 0.1 * 0.5 + (3.0f32 - 1.0) * s) * 0.1;
+    assert!(expected < s);
+    assert_eq!(repair_amount(&mut e, 20.0, 10.0), expected);
+    assert_eq!(
+        repair_amount(&mut e, 10.0, 20.0),
+        expected,
+        "the larger, the smaller"
+    );
+    e.mem.set_f32(0x011d_0884, 40.0);
+    assert_eq!(repair_amount(&mut e, 50.0, 30.0), s);
+    let bits = repair_amount(&mut e, 70.0, 10.0).to_bits();
+    assert_eq!(
+        e.site(
+            REPAIR_LIST_VALUE.addr(),
+            &[70.0f32.to_bits(), 10.0f32.to_bits()]
+        ),
+        Some(bits)
+    );
+}
+
+/// `PopulateRepairListHook` (words: the broken item's form, a stack): the exe's test decides;
+/// a stack of the broken item's own form passes only at or below the kept health unless the
+/// broken item has mods.
+#[test]
+fn o2_repair_list() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    e.register(ITEM_TEST, |e, a| {
+        gb3_log(ITEM_TEST, a);
+        u32::from(e.mem.u8(a[0] + 0x10) == 0).into_ret()
+    });
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(100.0));
+    let form = AREA_AT + 0x8100;
+    let state = repair_state(&mut e);
+    state.health.store(40.0f32.to_bits(), Ordering::Relaxed);
+    state.modded.store(false, Ordering::Relaxed);
+    gb3_calls();
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(0),
+        "50 above 40"
+    );
+    assert_eq!(gb3_calls(), [(ITEM_TEST, vec![form, form])]);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[0x0641_0000, stack]),
+        Some(1),
+        "another form"
+    );
+    repair_state(&mut e)
+        .health
+        .store(50.0f32.to_bits(), Ordering::Relaxed);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(1),
+        "50 at 50"
+    );
+    repair_state(&mut e)
+        .health
+        .store(10.0f32.to_bits(), Ordering::Relaxed);
+    repair_state(&mut e).modded.store(true, Ordering::Relaxed);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(1),
+        "modded"
+    );
+    e.mem.set_u8(form + 0x10, 1);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(0),
+        "the exe's test"
+    );
+}
+
+/// `DoRepairItemHook` and `RepairMenuClickHook`: the amount from the broken item's (`0x11DA760`)
+/// and the used stack's health in percent; set up again while the broken item's health + 1 is at
+/// most the cap.
+#[test]
+fn o2_repair_item_and_again() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    repair_state(&mut e)
+        .skill
+        .store(60.0f32.to_bits(), Ordering::Relaxed);
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(20.0));
+    let used = weapon_stack(&mut e, AREA_AT + 0xa000, Some(40.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    let expected = repair_amount(&mut e, 10.0, 20.0).to_bits();
+    assert!(
+        f32::from_bits(expected) < 0.6,
+        "below the cap, so the two healths count"
+    );
+    assert_ne!(expected, repair_amount(&mut e, 20.0, 20.0).to_bits());
+    assert_eq!(e.site(REPAIR_ITEM.addr(), &[used]), Some(expected));
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "11 at most 60");
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(118.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "60 at 60");
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(119.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(0), "60.5 above 60");
+}
+
+/// O2's rows: `HOOK_INIT_LIST(FO3Repair, ..)` (`0x7818B2`, `0x4D4C11`, `0x7B58DB`, `0x7B5DAD`,
+/// `0x7B5CED`; the two byte writes folded into the first and the last).
+#[test]
+fn gb5_rows_are_jips_addresses() {
+    assert_eq!(
+        AREA.fix_sites[14..],
+        [
+            0x004d_4c11,
+            0x0078_18b2,
+            0x007b_58db,
+            0x007b_5ced,
+            0x007b_5dad
+        ]
+    );
+}
+
+/// G82 reads every stack's form at +0x34/+0x38 as JIP does (REVIEW-683): for a note (`BGSNote`,
+/// 0x31) that word pair is not its name (its model path, as the reviewer found), and a stack of
+/// two shows that text with " (2)", exactly as with JIP.
+#[test]
+fn g82_reads_a_note_at_jips_offsets_too() {
+    let mut e = names_world(0x31, b"Clutter/Notes/Note01.nif", b"");
+    assert_eq!(e.site(ITEM_NAMES[2].addr(), &[TILE, STACK, 2]), Some(1));
+    assert_eq!(shown(&e), b"Clutter/Notes/Note01.nif (2)");
 }
