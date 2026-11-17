@@ -1041,7 +1041,8 @@ fn excepted(dir: &Path, real_dir: &Path, own: &Path, system: System) -> bool {
 /// Why nv-rs may not write into `dir` (Linux and macOS): it is not a full path, it has a `..`, its
 /// parts are shaped like a Steam library's or a Wine prefix's ([`by_shape`]), or it lies inside one
 /// of `never` ([`never_written`]) but not inside that one's exception, by its text or by the real
-/// path it leads to (a link doesn't get round this), parts compared without case.
+/// path it leads to (a link doesn't get round this), parts compared without case; or it lies
+/// inside nv-rs's own folder (an exception's) by its text but leads out of it ([`leaves_own`]).
 pub fn refused(dir: &Path, never: &[Guarded]) -> Option<&'static str> {
     if !dir.has_root() {
         return Some("not a full path");
@@ -1067,8 +1068,34 @@ pub fn refused(dir: &Path, never: &[Guarded]) -> Option<&'static str> {
         }
         return Some("inside the player's own folders");
     }
+    // Review of #630 (round 5): a place inside nv-rs's own folder by its text must stay inside it
+    // by where it leads. A link in there to a place no list names (a mounted Windows partition's
+    // `Users/<name>/Documents/My Games/FalloutNV`, another disk's saves) is refused too: nv-rs
+    // never makes a link in its own folder (play.sh refuses any it finds), so ordinary play never
+    // meets this. The own folder itself may be a link (moved to another disk): the place is
+    // compared with where the own folder leads.
+    for guarded in never {
+        if let Some(own) = &guarded.except {
+            if leaves_own(dir, &real_dir, own, guarded.system) {
+                return Some(LEAVES_OWN);
+            }
+        }
+    }
     None
 }
+
+/// Whether `dir` lies inside nv-rs's own folder `own` by its text but its real path `real_dir`
+/// leads out of `own`'s real path. Names compared by `system`'s rule, as [`excepted`] does.
+fn leaves_own(dir: &Path, real_dir: &Path, own: &Path, system: System) -> bool {
+    let key = match system {
+        System::Linux => exact_parts,
+        System::MacOs => parts,
+    };
+    inside(&key(dir), &key(own)) && !inside(&key(real_dir), &key(&real_path(own)))
+}
+
+/// [`refused`]'s reason for a place in nv-rs's own folder that a link leads out of it.
+const LEAVES_OWN: &str = "a link inside nv-rs's own folder leads out of it";
 
 /// [`refused`]'s reason for a path with a `..` in it.
 const PARENT: &str = "a `..` in the path";
@@ -1134,6 +1161,9 @@ pub fn own_folder_refusal(home: &Home, never: &[Guarded]) -> Option<String> {
             ),
             SHAPED => format!(
                 "its path lies inside what looks like a Steam library's or a Wine prefix's folders (steamapps/common, steamapps/compatdata or drive_c/users), which nv-rs never writes into. Set {set} to a folder outside those"
+            ),
+            LEAVES_OWN => format!(
+                "a folder inside it is a link to a place outside it, which nv-rs never writes through. Make that folder a plain folder (not a link), or set {set} elsewhere"
             ),
             _ => format!(
                 "it leads into one of your own folders (it, or a folder above it, is a link to elsewhere). Make it a plain folder, or set {set} elsewhere"

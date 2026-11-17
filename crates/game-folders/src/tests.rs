@@ -500,6 +500,47 @@ fn a_link_at_or_inside_the_own_folder_opens_nothing() {
     assert!(refused(&documents.join("to-own/Saves"), &never).is_some());
 }
 
+/// Review of #630 (round 5): a link inside nv-rs's own folder to a place no list names (a mounted
+/// Windows partition's Documents with the player's real saves) is refused, and `--find` says why;
+/// a plain folder in the own folder is allowed, and so is the own folder moved to another disk
+/// (the own folder itself a link).
+#[cfg(unix)]
+#[test]
+fn a_link_out_of_the_own_folder_to_an_unlisted_place_is_refused() {
+    let s = Scratch::new("own-leaves");
+    let home = s.home(System::Linux);
+    let own = own_folder(&home);
+    std::fs::create_dir_all(own.join("game")).unwrap();
+    let windows = s.dir("mnt/c/Users/x/Documents");
+    std::fs::create_dir_all(windows.join("My Games/FalloutNV/Saves")).unwrap();
+    let never = never_written(&home);
+    // Before the link: the own folder's saves are allowed, the mounted partition is not guarded.
+    let saves = own.join("game/Documents/My Games/FalloutNV/Saves/x.fos");
+    assert_eq!(refused(&saves, &never), None);
+    assert_eq!(
+        refused(&windows.join("My Games/FalloutNV/Saves/x.fos"), &never),
+        None
+    );
+    std::os::unix::fs::symlink(&windows, own.join("game/Documents")).unwrap();
+    assert_eq!(refused(&saves, &never), Some(LEAVES_OWN));
+    assert_eq!(
+        refused(&own.join("game/Documents"), &never),
+        Some(LEAVES_OWN)
+    );
+    assert_eq!(refused(&own.join("logs/x.log"), &never), None);
+    let why = own_folder_refusal(&home, &never).expect("--find refuses the own folder");
+    assert!(why.contains("a link to a place outside it"), "{why}");
+    // The own folder moved to another disk (a link AT it): its places are still its own.
+    let moved = Home::new(s.0.join("home2"), None, None, System::Linux).unwrap();
+    let moved_own = own_folder(&moved);
+    std::fs::create_dir_all(moved_own.parent().unwrap()).unwrap();
+    let disk2 = s.dir("disk2/nv-rs");
+    std::os::unix::fs::symlink(&disk2, &moved_own).unwrap();
+    let never = never_written(&moved);
+    assert_eq!(refused(&moved_own.join("game/Saves/x.fos"), &never), None);
+    assert_eq!(own_folder_refusal(&moved, &never), None);
+}
+
 /// Review of #630 (round 2): a plainly named link that leads into a Steam library's prefixes is
 /// refused by where it leads, though no list names that library.
 #[cfg(unix)]
