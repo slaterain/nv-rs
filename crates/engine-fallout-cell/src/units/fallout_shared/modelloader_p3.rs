@@ -1330,7 +1330,15 @@ pub fn model_loader_load_file(
     if no_reference == 0 {
         e.call(ADD_REFERENCE, &args![model]);
     }
-    e.call(MODEL_OBJECT_3D, &args![model]).ptr()
+    let object = e.call(MODEL_OBJECT_3D, &args![model]).ptr();
+    // JIP's H06 (group GL's row and handler; `WriteRelJump(0x447155, LoadNifRetnNodeHook)`, the
+    // same reference and 3D object, then its point lights tagged by editor id set up once per
+    // model): the seam is asked with [the 3D object]; its answer is not read. One load while JIP
+    // is not installed.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0044_7155, &[object.addr()]);
+    }
+    object
 }
 
 // Translated from 00447190 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4455,6 +4463,76 @@ mod tests {
         );
         assert!(calls_to(&e, ADD_REFERENCE).is_empty());
         assert!(calls_to(&e, QUEUED_MODEL_CONSTRUCT).is_empty());
+    }
+
+    thread_local! {
+        /// The words H06's seam handler of a test was asked with.
+        static H06_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// H06's seam at `0x447155` (JIP's `WriteRelJump(0x447155, LoadNifRetnNodeHook)`, group
+    /// GL's handler): asked only with JIP installed (whatever the fixes row), after the model's
+    /// reference and 3D object, with [the 3D object]; its answer does not change the result; the
+    /// calls are the same with and without JIP. Not asked without a model.
+    #[test]
+    fn jip_h06_seam_sees_the_loaded_object() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn seen(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            H06_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0x1234)
+        }
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            for model in [0x5000u32, 0] {
+                let installed = word & jip_patches::INSTALLED != 0;
+                H06_ASKED.with(|v| v.borrow_mut().clear());
+                let mut e = engine();
+                let map = lookup_map(&mut e, 0x0300_0000, model);
+                let this = e.mem.alloc(0x30);
+                e.mem.set_u32(this, map);
+                for address in [
+                    QUEUED_MODEL_CONSTRUCT,
+                    QUEUED_MODEL_SET_FLAG_20,
+                    SET_FLAG_BIT_10,
+                    QUEUED_MODEL_RUN,
+                    QUEUED_MODEL_FINISH,
+                    QUEUED_MODEL_DESTRUCT,
+                    ADD_REFERENCE,
+                ] {
+                    e.register(address, |_, _| Ret::default());
+                }
+                constant(&mut e, MODEL_REFERENCE_TOTAL, 1);
+                constant(&mut e, MODEL_OBJECT_3D, 0x6000);
+                e.set_jip_patches(word);
+                e.on_site(SiteSlot::new(Owner::Jip, 0x0044_7155), seen);
+                log(&mut e);
+                let result = e.call(
+                    0x0044_7080,
+                    &args![this, 0x400u32, 3u32, 1u8, 0u32, 1u8, 0u8],
+                );
+                let expected = if model != 0 { 0x6000 } else { 0 };
+                assert_eq!(result.u32(), expected, "{word:08x}");
+                if model != 0 {
+                    assert_eq!(calls_to(&e, ADD_REFERENCE), vec![vec![model]]);
+                    assert_eq!(calls_to(&e, MODEL_OBJECT_3D), vec![vec![model]]);
+                }
+                let asked = H06_ASKED.with(|v| v.borrow().clone());
+                assert_eq!(
+                    asked,
+                    if installed && model != 0 {
+                        vec![vec![0x6000]]
+                    } else {
+                        vec![]
+                    },
+                    "{word:08x} {model:x}"
+                );
+            }
+        }
     }
 
     #[test]

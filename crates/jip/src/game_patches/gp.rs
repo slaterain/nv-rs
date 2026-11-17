@@ -24,11 +24,12 @@
 //! vtables JIP leaves alone and called directly by `0x441800`, which `0x441C30` calls (the
 //! only reference to `0x441C30` is its slot: `get_xrefs_to`, `measure/jip/GROUP-GP-NOTES.md`).
 //!
-//! Waiting (no reader or writer built): the attach's three other steps, collision turned off
+//! Waiting (no reader or writer built): two of the attach's other steps, collision turned off
 //! for a reference marked by `ToggleObjectCollision` (`kHookRefFlag5F_DisableCollision`), JIP's
-//! inserted nodes and models (`InsertNode`, `AttachModel`: `s_insertObjects`) and JIP's point
-//! lights (`AddPointLights`, for a node JIP's light hooks flagged `0x20000000`): none of those
-//! commands or hooks is built, so nothing sets what they test. The first-person node JIP keeps
+//! inserted nodes and models (`InsertNode`, `AttachModel`: `s_insertObjects`): none of those
+//! commands is built, so nothing sets what they test. JIP's point lights (`AddPointLights`, for a
+//! 3D JIP's light hooks flagged `0x20000000`) are group GL's (`gl::lights::add_point_lights`),
+//! after the fade as JIP's `doLights`. The first-person node JIP keeps
 //! (`s_pc1stPersonNode`) is kept here ([`first_person_node`]) for `AttachLine` and kin.
 //!
 //! **Fix rows** (`InitGamePatches`; in with the row `NV_JIP_GAME_PATCHES`, `jip_patches::FIXES`):
@@ -413,6 +414,11 @@ pub fn queued_reference(e: &mut Engine, queued: u32) {
                     e.mem.set_f32(node + off::FADE, 1.0);
                     e.mem.set_f32(node + off::FADE + 4, 1.0);
                 }
+            }
+            // JIP's point lights (`doLights`, group GL's H06/H12): a 3D its light hooks marked
+            // `0x20000000` (the byte +0x33's bit 0x20) has them listed and set from their forms.
+            if e.mem.u8(node + 0x33) & 0x20 != 0 {
+                super::gl::lights::add_point_lights(e, node);
             }
         }
     }

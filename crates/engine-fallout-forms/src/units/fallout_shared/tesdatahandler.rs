@@ -648,6 +648,8 @@ const FORM_TYPE_PROJECTILE: u32 = 0x33;
 const FORM_TYPE_EXPLOSION: u32 = 0x51;
 /// `NAVI`.
 const FORM_TYPE_NAVI: u32 = 0x38;
+/// `LIGH` (`CreateFormOfType` allocates it with `PUSH 0xC8` at `0x465487`).
+const FORM_TYPE_LIGHT: u8 = 0x1e;
 /// `CELL`, `WRLD`, `LAND`, `NAVM`.
 const FORM_TYPE_CELL: u32 = 0x39;
 const FORM_TYPE_WORLD_SPACE: u32 = 0x41;
@@ -4219,6 +4221,17 @@ pub fn tes_data_handler_create_form_of_type(e: &mut Engine, form_type: u8) -> Pt
                 ALIGNED_NEW
             } else {
                 OPERATOR_NEW
+            };
+            // A light form (`PUSH 0xC8` at `0x465487`): JIP's H04 (group GL's row and handler;
+            // `SafeWrite8(0x465488, 0xCC)`) makes it 0xCC bytes, its editor id's word at +0xC8.
+            // The seam `0x465488` answers the size (no words). One load while JIP is not
+            // installed.
+            let size = if form_type == FORM_TYPE_LIGHT
+                && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            {
+                e.site(0x0046_5488, &[]).unwrap_or(size)
+            } else {
+                size
             };
             let memory = e.call(allocator, &args![size]).u32();
             let object = if memory == 0 {
@@ -12860,6 +12873,51 @@ mod tests {
         e.call(0x0046_5110, &args![0x04u32]);
         e.call(0x0046_5110, &args![0x43u32]);
         assert_eq!(*sizes.borrow(), vec![(1, 0xa0), (1, 0x108)]);
+    }
+
+    thread_local! {
+        /// The words H04's seam handler of a test was asked with.
+        static H04_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// H04's seam at `0x465488` (JIP's `SafeWrite8(0x465488, 0xCC)`, group GL's handler): asked
+    /// only for a light form (0x1E) and only with JIP installed (whatever the fixes row), with
+    /// no words; the answer is the light form's size. JIP not installed: the table's 0xC8, not
+    /// asked; other forms never.
+    #[test]
+    fn jip_h04_seam_sizes_the_light_form() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            H04_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0xcc)
+        }
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            H04_ASKED.with(|v| v.borrow_mut().clear());
+            let (mut e, _) = engine3();
+            let sizes = form_factory(&mut e);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0046_5488), size);
+            let form = e.call(0x0046_5110, &args![0x1eu32]).u32();
+            assert_ne!(form, 0);
+            e.call(0x0046_5110, &args![0x15u32]);
+            assert_eq!(
+                *sizes.borrow(),
+                vec![(0, if installed { 0xcc } else { 0xc8 }), (0, 0x90)],
+                "{word:08x}"
+            );
+            let asked = H04_ASKED.with(|v| v.borrow().clone());
+            assert_eq!(
+                asked,
+                if installed { vec![vec![]] } else { vec![] },
+                "{word:08x}"
+            );
+        }
     }
 
     #[test]

@@ -1268,12 +1268,12 @@ null model), and the cell lock JIP's attach takes is let go exactly once and onl
 that took it, the cell it took (JIP also lets go a lock it never took for a reference flagged
 `0x800`/`0x20`, and lets go the lock of the cell read again after the load).
 
-Three steps of JIP's attach are not built yet, because nothing can set what they test:
+JIP's point lights are added to the 3D after the fade (group GL's light hooks flag the nodes: see
+GL below). Two steps of JIP's attach are not built yet, because nothing can set what they test:
 - collision turned off for a reference marked by `ToggleObjectCollision`: waits for that command
   (with JIP's `TESObjectREFR::ToggleCollision` and `NiNode::ToggleCollision`);
 - nodes and models JIP inserts into a reloaded 3D: waits for the `InsertNode` and `AttachModel`
-  commands (their maps);
-- JIP's point lights added to the 3D: waits for group GL's light hooks, which flag the nodes.
+  commands (their maps).
 
 #### GH1: Extra data and inventory stacks
 
@@ -1466,6 +1466,14 @@ those places run the game's code.
 | (none; `GetEffectHiddenHook`) | `EffectItemList::BuildMenuString` `00406620` (`0x406720`) | With the fixes row on, the effect lists of items (the Pip-Boy's and the HUD's effect text) leave out effects marked hidden (setting flag 8) and effects with no setting, as well as the usage monitor the original already leaves out (G86) | 3.9 GL-1 |
 | (none; `EffectSkillModifiers1Hook`, `EffectSkillModifiers2Hook`) | `BuildMenuString` (`0x4069D4`) and `MagicCaster::FindTargets` `00815d00` (`0x816519`) | With the fixes row on, an aid or food item's effect is scaled by the Medicine multiplier or, for an item that is not a medicine, by the Survival one, not by both (the original multiplies a medicine that is also food by both); detrimental effects (a negative value in the effect text, setting flag 4 when cast) are not scaled; the "recovered health" perks still apply to Health (when cast, for the player only, as in the original) (G67) | 3.9 GL-1 |
 | (none; `EffectItemGetModifiedDuration`, `ModPositiveChemDurationHook`) | `StatsMenu::StatusDataList::Register` `007e0b20` (`0x7E0C1F`, with the port's hand-over of the list at `BuildMenuString`'s call, `0x40686D`), `MagicTarget::CheckAddEffect` `00823210` (`0x8236FD`) | With the fixes row on, the `ModifyPositiveChemDuration` perks (Chemist) lengthen only chems' (alchemy types 10 and 11) non-hostile effects when taken, where the original lengthens every non-hostile alchemy effect, and the effect text shows the lengthened duration, which the original never does (G107) | 3.9 GL-1 |
+| (none; `SafeWrite32(addr, 0x110)` twelve times, 12 bytes at `0xA68D6B` in `InitJIPHooks`) | Every place a point light is made: `TESObjectLIGH::GenDynamic` `0050d810`, the Love Tester, S.P.E.C.I.A.L. book and race menus' lights, `FORenderedMenu::CreateMenuLight`, `LightEffect::AttachLight`, `MagicLight::Init`, `VATS::SetMode` (two), `NiPointLight`'s create function and `CreateClone`, `ShadowSceneNode`'s dynamic light `00b5cd00`; `NiDynamicEffect`'s member copy `00a68d40` | With JIP installed (every preset), every point light is 0x110 bytes instead of 0xFC, room for JIP's light data after the game's own, and a copied light keeps JIP's two light bytes. Nothing a player sees changes by itself (H03, H05) | 3.9 GL-2 |
+| (none; `SafeWrite8(0x465488, 0xCC)` and `TESObjectLIGH`'s editor id slots; skipped by JIP when JohnnyGuitar is loaded, never the case in the port) | `TESDataHandler::CreateFormOfType` `00465110` (`0x465488`), `TESObjectLIGH`'s vtable `GetEditorID`/`SetEditorID` | With JIP installed, light forms keep their editor ids (the original throws them away): they are in the game's editor id map, so scripts and the light tags below find a light by its id (H04) | 3.9 GL-2 |
+| (none; `LoadNifRetnNodeHook`) | `ModelLoader::LoadFile` `00447080` (`0x447155`) | With JIP installed, a model's point lights tagged with a `LIGH_EDID` string (a mod's mesh naming a light form's editor id; no mesh of the game has one) take that light form, once per model: when such a model's object is attached to the world its lights get the form's colour, radius and fade, are hidden when the form is "off by default", and are lit and animated as JIP's own lights (below) (H06, with H09's attach in GP) | 3.9 GL-2 |
+| (none; `DestroyNiPointLightHook` in `NiPointLight`'s vtable) | `NiPointLight`'s deleting destructor (slot 0 of its vtable, `00a75c80`, shared with `NiDirectionalLight`, which keeps it) | With JIP installed, a point light gives back its 0x110 bytes; one of JIP's lights is given back by JIP's light list instead, once nothing holds it (H07) | 3.9 GL-2 |
+| (none; `UpdateAnimatedLightHook`, `UpdateAnimatedLightsHook`) | `0050de20` (a light form's animation of its light, replaced), the frame's two task sequences `008c7bd0` and `008c7da0` (`0x8C7C4E`, `0x8C7E18`) | With JIP installed, flickering and pulsing lights (placed lamps and fires, magic lights) animate the way JIP does it: a flickering light's brightness and position drift toward random targets up to 6.4 units from where it started, a pulsing light's brightness swings between its full fade and a quarter of it at a steady rate, and lights a mod sets to JIP's "colour shift" drift in colour; then each frame JIP's own lights (above) are put into the scene's lights once, set again from their form when a script asks, animated, and given back when nothing holds them any more (H12) | 3.9 GL-2 |
+
+Not built in GL: H23 (`CastSpellHook`, `0x815EE6`), JIP's casting without the animation, waits for its command
+`CastImmediate`.
 
 #### GX: Havok, pad rumble, mouse
 
