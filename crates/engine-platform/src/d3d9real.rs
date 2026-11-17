@@ -708,14 +708,69 @@ pub use d3d9_wgpu::scene_light::GameView as SceneView;
 static SCENE_LIGHT: std::sync::OnceLock<fn(&Engine) -> Option<SceneView>> =
     std::sync::OnceLock::new();
 
+/// The new lighting's strength ([`want_scene_light`]), as `f32` bits; 0 until the run chose one (the
+/// step's default stands).
+static SCENE_LIGHT_STRENGTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Turns the new lighting on (ambient occlusion, `d3d9_wgpu::scene_light`;
-/// the run's choice, `host::fixes::Choice::ambient_occlusion`), before the game makes its device:
-/// at each depth-only `Clear` (the game's, before its first-person arms) the frame's camera and
-/// sun, as `read` finds them in the game, are recorded for the backend. Never called while off:
-/// nothing is then read or recorded.
-pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>) {
+/// the run's choice, `host::fixes::Choice::ambient_occlusion`), before the game makes its device,
+/// at `strength` (`host::fixes::Choice::ambient_occlusion_strength`; clamped to
+/// `d3d9_wgpu::scene_light::STRENGTH_RANGE`). The frame's camera and sun, as `read` finds them in
+/// the game, are recorded for the backend where the world is drawn and nothing after it yet: at
+/// the frame draw's port-added point ([`engine_core::world_drawn`], first and third person) and at
+/// each depth-only `Clear` (the game's, before its first-person arms; the device runs the step
+/// once a frame, at the first). Never called while off: nothing is then read or recorded.
+pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>, strength: f32) {
     d3d9_wgpu::scene_light::enable(true);
+    SCENE_LIGHT_STRENGTH.store(
+        d3d9_wgpu::scene_light::clamp_strength(strength).to_bits(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
     let _ = SCENE_LIGHT.set(read);
+    engine_core::world_drawn::install(world_drawn);
+}
+
+/// The frame draw's port-added point ([`engine_core::world_drawn`], installed by
+/// [`want_scene_light`]): the camera and sun recorded on the game's device.
+fn world_drawn(e: &mut Engine) {
+    if let Some(read) = SCENE_LIGHT.get().copied() {
+        world_drawn_lit(e, read);
+    }
+}
+
+/// [`world_drawn`] with the reader `read`, under the device lock: on the game's device (the
+/// first the backend has; none before the game makes it).
+fn world_drawn_lit(e: &mut Engine, read: fn(&Engine) -> Option<SceneView>) {
+    let _device = engine_core::real_threads::device_guard(e);
+    let Some(this) = real(e).devices.first().map(|(d, _)| *d) else {
+        return;
+    };
+    record_scene_light(e, this, read);
+}
+
+/// Records the frame's camera and sun as `read` finds them, for the backend's new lighting
+/// (`SetTransform` of `d3d9_wgpu::scene_light::STATE`) on the device `this`, at the run's strength;
+/// nothing when the game has no usable camera.
+fn record_scene_light(e: &mut Engine, this: u32, read: fn(&Engine) -> Option<SceneView>) {
+    let params = read(e)
+        .as_ref()
+        .and_then(d3d9_wgpu::scene_light::Params::from_game);
+    if let Some(mut p) = params {
+        let chosen = SCENE_LIGHT_STRENGTH.load(std::sync::atomic::Ordering::Relaxed);
+        if chosen != 0 {
+            p.strength = f32::from_bits(chosen);
+        }
+        let m = p.to_words();
+        record(
+            e,
+            this,
+            Cmd::SetTransform {
+                device: this,
+                state: d3d9_wgpu::scene_light::STATE,
+                matrix: Data::from_words(&m),
+            },
+        );
+    }
 }
 
 /// Turns the sun shadows on (`d3d9_wgpu::sun_shadow`; the run's choice,
@@ -1213,39 +1268,25 @@ fn clear_lit(
     // arms. With the new lighting on, the frame's camera and sun first.
     if flags == 2 {
         if let Some(read) = light {
-            let view = read(e);
-            let params = view
+            record_scene_light(e, this, read);
+            // The sun shadows ([`want_sun_shadows`]): the camera's rotation and place and the sun,
+            // after the frustum above (none without a sun); draws after it (the first-person arms
+            // and weapon) neither cast nor take the shadows.
+            let sun = read(e)
                 .as_ref()
-                .and_then(d3d9_wgpu::scene_light::Params::from_game);
-            if let Some(p) = params {
-                let m = p.to_words();
+                .filter(|_| d3d9_wgpu::sun_shadow::enabled())
+                .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
+            if let Some(f) = sun {
+                let m = f.to_words();
                 record(
                     e,
                     this,
                     Cmd::SetTransform {
                         device: this,
-                        state: d3d9_wgpu::scene_light::STATE,
+                        state: d3d9_wgpu::sun_shadow::STATE,
                         matrix: Data::from_words(&m),
                     },
                 );
-                // The sun shadows ([`want_sun_shadows`]): the camera's rotation and place and
-                // the sun, after the frustum above (none without a sun).
-                let sun = view
-                    .as_ref()
-                    .filter(|_| d3d9_wgpu::sun_shadow::enabled())
-                    .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
-                if let Some(f) = sun {
-                    let m = f.to_words();
-                    record(
-                        e,
-                        this,
-                        Cmd::SetTransform {
-                            device: this,
-                            state: d3d9_wgpu::sun_shadow::STATE,
-                            matrix: Data::from_words(&m),
-                        },
-                    );
-                }
             }
         }
     }
@@ -3569,6 +3610,64 @@ mod tests {
         log.lock().unwrap().clear();
         clear(&mut e, DEVICE, 0, 0, 2, 0, 0, 0, 0);
         assert_eq!(*log.lock().unwrap(), [("Clear", 2)]);
+    }
+
+    /// The frame draw's point where the world is drawn (`engine_core::world_drawn`, first and
+    /// third person): with a reader, exactly one `SetTransform` of the new lighting's state on the
+    /// game's device, carrying the camera and the run's strength; nothing before the game has its
+    /// device or without a usable camera. Never asked for in this binary: the point records nothing.
+    #[test]
+    fn the_new_lighting_is_recorded_where_the_world_is_drawn() {
+        const DEVICE: u32 = 0x1000;
+        type Seen = std::sync::Arc<std::sync::Mutex<Vec<(u32, Vec<u32>)>>>;
+        /// A backend that keeps each `SetTransform`'s state and words, and each other command's name
+        /// as state 0.
+        struct Words(Seen);
+        impl d3d9_stream::Backend for Words {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let seen = match &cmd {
+                    Cmd::SetTransform { state, matrix, .. } => (*state, matrix.to_words().to_vec()),
+                    _ => (0, Vec::new()),
+                };
+                self.0.lock().unwrap().push(seen);
+                Reply::None
+            }
+        }
+        let seen: Seen = std::sync::Arc::default();
+        let mut e = Engine::new();
+        real(&mut e).stream = Some(Stream::direct(Box::new(Words(std::sync::Arc::clone(
+            &seen,
+        )))));
+        let take = || std::mem::take(&mut *seen.lock().unwrap());
+        // No device yet (the main menu's start): nothing.
+        world_drawn_lit(&mut e, stub_view);
+        assert!(take().is_empty());
+        real(&mut e).devices.push((DEVICE, None));
+        let state = d3d9_wgpu::scene_light::STATE;
+        let strength = |e: &mut Engine| {
+            world_drawn_lit(e, stub_view);
+            let got = take();
+            assert_eq!(got.len(), 1, "{got:?}");
+            assert_eq!(got[0].0, state);
+            d3d9_wgpu::scene_light::Params::from_words(&got[0].1)
+                .expect("usable parameters")
+                .strength
+        };
+        // The default strength until the run chose one; then the chosen one.
+        assert_eq!(strength(&mut e), d3d9_wgpu::scene_light::STRENGTH);
+        let was =
+            SCENE_LIGHT_STRENGTH.swap(0.85f32.to_bits(), std::sync::atomic::Ordering::Relaxed);
+        let chosen = strength(&mut e);
+        SCENE_LIGHT_STRENGTH.store(was, std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(chosen, 0.85);
+        // No usable camera: nothing.
+        world_drawn_lit(&mut e, |_| None);
+        assert!(take().is_empty());
+        // Never asked for in this binary: the frame draw's point records nothing.
+        assert!(SCENE_LIGHT.get().is_none());
+        engine_core::world_drawn::world_drawn(&mut e);
+        world_drawn(&mut e);
+        assert!(take().is_empty());
     }
 
     /// With real threads, a kernel-locked function that reaches the device's state takes the device

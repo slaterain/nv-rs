@@ -2093,6 +2093,7 @@ mod tests {
             top: t,
             sun: [0.0, 1.0, 0.0],
             shadow: 0.8,
+            strength: scene_light::STRENGTH,
         }
     }
 

@@ -505,6 +505,9 @@ pub fn fn_00870a00(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
         0x0087_3200,
         &args![this, accumulator, draw_world as u32, 1u32, accumulator_flag],
     );
+    // Port-added: the world is drawn (`engine_core::world_drawn`; after the world pass's call at
+    // 00870ae8). In third person too: `draw_world` is false there (the first-person node is culled).
+    engine_core::world_drawn::world_drawn(e);
     if draw_world {
         timed(Column::FirstPersonSetup, || {
             e.call(0x0087_4c10, &args![this])
@@ -615,6 +618,9 @@ pub fn fn_00870bd0(e: &mut Engine, this: Ptr, target: u32, skip_world: u8) {
         0x0087_3200,
         &args![this, accumulator, draw_world as u32, 0u32, accumulator_flag],
     );
+    // Port-added: the world is drawn (`engine_core::world_drawn`; after the world pass's call at
+    // 00870e18). In third person too: `draw_world` is false there (the first-person node is culled).
+    engine_core::world_drawn::world_drawn(e);
     if draw_world && accumulator != 0 {
         let owner = e.call(0x0043_b230, &args![accumulator]).u32();
         e.call(0x0045_0f90, &args![owner, saved_owner_flag as u32]);
@@ -5823,6 +5829,50 @@ mod tests {
             vec![vec![this, 0, 0x2000, 0x1000, 0]]
         );
         assert_eq!(calls_to(&log, 0x0087_6830), vec![vec![this, 1, 0x5000]]);
+    }
+
+    /// The port-added point `engine_core::world_drawn` (the new lighting's): in both world frames
+    /// once, right after the world pass (`00873200`) and before the rest of the draw (`00875110`:
+    /// the first-person arms, then the image-space step and the HUD); in third person too, where
+    /// the first-person node is culled and the rest of the draw is skipped; and when the frame skips
+    /// the first-person part for its other reasons (the skip argument), since the world pass
+    /// still runs.
+    #[test]
+    fn world_frames_reach_the_world_drawn_point_after_the_world_pass() {
+        const MARK: u32 = 0x7fff_0010;
+        thread_local! {
+            static ARMED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+        }
+        // Process-wide once installed: it calls only on this test's thread, while armed.
+        fn hook(e: &mut Engine) {
+            if ARMED.with(std::cell::Cell::get) {
+                e.call(MARK, &args![]);
+            }
+        }
+        engine_core::world_drawn::install(hook);
+        ARMED.with(|a| a.set(true));
+        let watched = [0x0087_3200, MARK, 0x0087_5110];
+        for (byte_131, frame) in [(0u8, 0x0087_0bd0u32), (1, 0x0087_0a00)] {
+            // First person: the world pass, the point, the rest of the draw.
+            let (mut r, this, _) = frame_rig(byte_131);
+            r.e.register_double(MARK, |_, _| Ret::default());
+            let (_, log) = r.run(frame, &args![this, 0u32, 0u32]);
+            assert_eq!(only(&log, &watched), watched, "{frame:08x}");
+            // Third person (the first-person node culled) and the skip argument: the world pass
+            // and the point, no rest of the draw.
+            for (culled, skip) in [(1u32, 0u32), (0, 1)] {
+                let (mut r, this, _) = frame_rig(byte_131);
+                r.set(0x0045_6610, &[culled]);
+                r.e.register_double(MARK, |_, _| Ret::default());
+                let (_, log) = r.run(frame, &args![this, 0u32, skip]);
+                assert_eq!(
+                    only(&log, &watched),
+                    [0x0087_3200, MARK],
+                    "{frame:08x} culled {culled} skip {skip}"
+                );
+            }
+        }
+        ARMED.with(|a| a.set(false));
     }
 
     #[test]

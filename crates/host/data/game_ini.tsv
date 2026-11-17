@@ -12,9 +12,11 @@ nv-rs Display	iFrameLimit	NV_FRAME_LIMIT	0	Most frames a second in play, with th
 nv-rs Display	iMenuFrameLimit	NV_MENU_FRAME_LIMIT	120	Most frames a second in menus (main menu, Pip-Boy, dialogue, inventory, pause); 0 = no limit of their own.
 nv-rs Display	bShowFrameRate	NV_SHOW_FPS	0	1 = the frame rate shown in the top-right corner from the start; 0 = hidden until F11 (the default). F11 in the game shows or hides it (Vulkan only; F11 is then the counter's and cannot be bound in the game or by mods).
 nv-rs Display	bAmbientOcclusion	NV_AO	0	1 = new lighting: ambient occlusion, a soft shade in corners, creases and where things meet the ground (Vulkan only; costs a little speed); 0 = the original's lighting (the default).
+nv-rs Display	fAmbientOcclusionStrength	NV_AO_STRENGTH	0.7	How strong the ambient occlusion's shade is, from 0.1 (faint) to 1.0 (all of it); 0.7 is the default. Used only with bAmbientOcclusion=1.
 nv-rs Display	bSunShadows	NV_SUN_SHADOWS	0	1 = new lighting: sun shadows, objects cast shadows on the ground and on each other from the game's own sun light (by day, and faintly by moonlight at night), out to about 140 m (Vulkan only; costs about 1 ms a frame); 0 = the original's shadows (the default).
 nv-rs Threads	bSteppedThreads	NV_THREADS	0	1 = the game's threads take turns, one at a time (the fallback); 0 = side by side on their own cores.
 nv-rs Threads	bRenderThread	NV_RENDER_THREAD	1	1 = the Direct3D 9 calls go to a drawing thread of their own; 0 = on the game's threads, as the original makes them.
+nv-rs Threads	bNotBackground	NV_NOT_BACKGROUND	1	1 = Windows does not slow the game down or move it to the slower cores when its window is not the active one (the default); 0 = let Windows decide: saves power and heat with the game in the background.
 nv-rs Fixes	bUncap	NV_UNCAP	1	Uncapped frame rate: the game's frame step without its sleep, so frames are not held to the original's pace (iFrameLimit paces it).
 nv-rs Fixes	bHighFrameRateLanding	NV_HF_LANDING	1	High-frame-rate landing: the player landing standing still falls as far as at 60 frames a second.
 nv-rs Fixes	bHighFrameRateSlowMotion	NV_HF_SLOWMO	1	High-frame-rate slow motion: the game's time multiplier moves to its target by the time passed, not by the frame.

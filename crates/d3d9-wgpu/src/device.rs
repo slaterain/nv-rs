@@ -5843,8 +5843,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     /// The new lighting's step ([`scene_light`]) on the bound colour target and depth surface,
-    /// `words` the frame's [`scene_light::Params`]: once a frame, when this device has it on and
-    /// the two have one size and sample count (the game's scene before its depth-only clear).
+    /// `words` the frame's [`scene_light::Params`]: once a frame (the first of the frame's points:
+    /// where the world is drawn, then the depth-only clear before the arms), when this device has
+    /// it on and the two have the screen's size and one sample count (the game's scene).
     pub(crate) fn scene_light(&mut self, words: &[u32]) {
         // The sun shadows take the frame's camera from the same words ([`Device::sun_shadows`]).
         if let Some(sun) = &mut self.sun {
@@ -5876,7 +5877,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .back_buffers
             .iter()
             .any(|h| self.surface_of(*h).is_some_and(|s| s.id == rt.id));
+        // The scene target is the screen's size: never a smaller one (a water reflection's, a
+        // shadow map's) still bound where the world is drawn.
+        let screen_sized = self
+            .back_buffers
+            .first()
+            .and_then(|h| self.surface_of(*h))
+            .map_or(true, |s| (s.width, s.height) == (rt.width, rt.height));
         let fits = !back_buffer
+            && screen_sized
             && self.st.rt[1..].iter().all(Option::is_none)
             && rt.width == ds.width
             && rt.height == ds.height
@@ -9401,24 +9410,28 @@ impl Finisher {
                 let queue = Arc::clone(&queue);
                 std::thread::Builder::new()
                     .name(format!("nv-wgpu-finish {k}"))
-                    .spawn(move || loop {
-                        let job = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
-                        let Ok((encoder, back)) = job else { break };
-                        // The render thread waits for it at the submit (a panic's message too, so
-                        // it can say why); gone (the device dropped), the buffer is dropped too.
-                        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            if planted(PLANT_FINISHING) {
-                                panic!("a planted finishing failure (tests)");
-                            }
-                            encoder.finish()
-                        }))
-                        .map_err(|p| {
-                            p.downcast_ref::<&str>()
-                                .map(|s| s.to_string())
-                                .or_else(|| p.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "a panic without a message".to_string())
-                        });
-                        let _ = back.send(done);
+                    .spawn(move || {
+                        qos::thread_started();
+                        loop {
+                            let job = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                            let Ok((encoder, back)) = job else { break };
+                            // The render thread waits for it at the submit (a panic's message too, so
+                            // it can say why); gone (the device dropped), the buffer is dropped too.
+                            let done =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    if planted(PLANT_FINISHING) {
+                                        panic!("a planted finishing failure (tests)");
+                                    }
+                                    encoder.finish()
+                                }))
+                                .map_err(|p| {
+                                    p.downcast_ref::<&str>()
+                                        .map(|s| s.to_string())
+                                        .or_else(|| p.downcast_ref::<String>().cloned())
+                                        .unwrap_or_else(|| "a panic without a message".to_string())
+                                });
+                            let _ = back.send(done);
+                        }
                     })
                     .expect("a finishing thread starts")
             })
@@ -9510,6 +9523,7 @@ impl Submitter {
             std::thread::Builder::new()
                 .name("nv-wgpu-submit".into())
                 .spawn(move || {
+                    qos::thread_started();
                     for job in rx {
                         let done =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&queue)));

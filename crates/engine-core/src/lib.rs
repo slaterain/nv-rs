@@ -86,6 +86,7 @@ pub mod typed;
 pub mod types;
 pub mod units;
 pub mod watch_check;
+pub mod world_drawn;
 pub mod x87;
 
 pub use abi::{AbiFn, Ret};

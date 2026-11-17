@@ -422,6 +422,7 @@ fn hook_words() -> ([u32; 16], [u32; 16]) {
         top: HALF as f32,
         sun: [dot(axes[0], sun), dot(axes[1], sun), dot(axes[2], sun)].map(|v| v as f32),
         shadow: scene_light::SHADOW_STRENGTH,
+        strength: scene_light::STRENGTH,
     };
     // Gamebryo's rotation, row by row: columns ahead, up, right.
     let [right, up, ahead] = axes;
