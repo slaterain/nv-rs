@@ -31,7 +31,10 @@
 //! and Rust's agree on all of its 16385 points: the curve matches the DLL's in memory) and the
 //! window table. Both read two piecewise-linear tables (a windowed sinc and a Kaiser window)
 //! that are constant data of the DLL: [`Tables`] reads them from the player's own
-//! `RESAMPLEDMO.DLL` at run time, so no byte of them is in the repository.
+//! `RESAMPLEDMO.DLL` at run time on Windows, so no byte of them is in the repository; on Linux and
+//! macOS, which have no such DLL, they are made from their formula ([`Tables::generated`]: the
+//! sinc bit for bit, one window value of 1,024 one `f32` step apart, at most a millionth of a
+//! 16-bit sample step in what is heard).
 
 use std::sync::{Arc, OnceLock};
 
@@ -57,7 +60,7 @@ pub fn tables() -> Option<&'static Tables> {
         .get_or_init(|| {
             #[cfg(windows)]
             {
-                let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\Windows".into());
+                let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
                 let root = std::path::PathBuf::from(root);
                 ["SysWOW64", "System32"].iter().find_map(|d| {
                     Tables::read(&std::fs::read(root.join(d).join("RESAMPLEDMO.DLL")).ok()?)
@@ -70,6 +73,8 @@ pub fn tables() -> Option<&'static Tables> {
 }
 
 /// `pi` as `RESAMPLEDMO` writes it (ten decimals; also in its curve, [`curve_value`]).
+// The DLL's own, not `PI`: its tables are made with this one (`Tables::generated`).
+#[allow(clippy::approx_constant)]
 const DLL_PI: f64 = 3.141_592_653_5;
 /// The Kaiser window's beta.
 const KAISER_BETA: f64 = 10.0;
@@ -82,7 +87,7 @@ impl Tables {
     /// each slope the next value less this one, in `f32`, over the fraction's range (2^16, 2^20),
     /// the last one's next value the function's own just past the end. Measured against this PC's
     /// DLL (Windows 11 10.0.26200, 2026-11-17): every sinc value and slope the same bit for bit;
-    /// of the window's 1,024 values all but [`WINDOW_DIFFERENT`] the same, those one `f32` step
+    /// of the window's 1,024 values all but [`WINDOW_DIFFERENT`] (one, entry 991) the same, that one `f32` step
     /// apart (the DLL's Bessel series is not known exactly). The maintainer's rule
     /// (2026-11-17): the difference is far below hearing (`tests_generated` bounds it), so no
     /// value of the DLL is copied.
@@ -129,7 +134,7 @@ impl Tables {
 
 /// How many of the window's values [`Tables::generated`] gives one `f32` step from the DLL's
 /// (measured on Windows, `tests_generated`).
-pub const WINDOW_DIFFERENT: usize = 2;
+pub const WINDOW_DIFFERENT: usize = 1;
 
 impl Tables {
     /// The tables of a `RESAMPLEDMO.DLL` file: the four pointers beside the masks and shifts that
@@ -1697,7 +1702,11 @@ mod tests_generated {
             ("sinc values", &ours.sinc_offset, &dll.sinc_offset),
             ("sinc slopes", &ours.sinc_slope, &dll.sinc_slope),
         ] {
-            let differ = a.iter().zip(b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+            let differ = a
+                .iter()
+                .zip(b)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count();
             assert_eq!(differ, 0, "{name}");
         }
         let values: Vec<usize> = (0..1024)
@@ -1706,12 +1715,19 @@ mod tests_generated {
         eprintln!("window values that differ: {values:?}");
         assert_eq!(values.len(), WINDOW_DIFFERENT);
         for &i in &values {
-            assert_eq!(steps_apart(ours.window_offset[i], dll.window_offset[i]), 1, "{i}");
+            assert_eq!(
+                steps_apart(ours.window_offset[i], dll.window_offset[i]),
+                1,
+                "{i}"
+            );
         }
         // A slope differs only beside a differing value, by a step of its own size.
         for i in 0..1024 {
             if ours.window_slope[i].to_bits() != dll.window_slope[i].to_bits() {
-                assert!(values.contains(&i) || values.contains(&(i + 1)), "slope {i}");
+                assert!(
+                    values.contains(&i) || values.contains(&(i + 1)),
+                    "slope {i}"
+                );
                 eprintln!(
                     "window slope {i}: {} steps",
                     steps_apart(ours.window_slope[i], dll.window_slope[i])
@@ -1735,7 +1751,8 @@ mod tests_generated {
         let mut most = 0f64;
         let mut x = -35.0f64;
         while x <= 35.0 {
-            let d = f64::from(ours.coefficient(x, per_half)) - f64::from(dll.coefficient(x, per_half));
+            let d =
+                f64::from(ours.coefficient(x, per_half)) - f64::from(dll.coefficient(x, per_half));
             most = most.max(d.abs());
             x += 1.0 / 4096.0;
         }
