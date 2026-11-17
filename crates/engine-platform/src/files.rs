@@ -1359,8 +1359,9 @@ mod tests_cp1252 {
         assert_eq!(to_ansi(&units("\u{416}uk.txt")), b"?uk.txt");
         assert_eq!(to_ansi(&units("\u{65e5}\u{672c}.txt")), b"??.txt");
         assert_eq!(to_ansi(&units("Caf\u{e9}.esp")), b"Caf\xe9.esp");
-        // A character outside the first 65,536 (two units) is one `?`; a lone half too.
-        assert_eq!(to_ansi(&units("\u{1f600}x")), b"?x");
+        // A character outside the first 65,536 (two units) is two `?`, as Windows gives it
+        // (`code_page::tests::the_tables_are_windows_own`); a lone half one.
+        assert_eq!(to_ansi(&units("\u{1f600}x")), b"??x");
         assert_eq!(to_ansi(&[0xd800, 0x78]), b"?x");
     }
 
