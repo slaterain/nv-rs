@@ -2029,7 +2029,7 @@ mod tests {
             .split("pub const TEST_SWITCHES")
             .nth(1)
             .and_then(|rest| rest.split("];").next())
-            .expect("TEST_SWITCHES in the launcher's game_ini.rs");
+            .expect("TEST_SWITCHES in game-profile's game_ini.rs");
         let mut names: Vec<&str> = list
             .split('"')
             .skip(1)

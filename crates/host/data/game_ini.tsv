@@ -2,7 +2,7 @@
 # One row per key: section, key, the environment variable that wins over it (tests and scripts
 # only), the value the generated file writes, and the one comment line written above the key.
 # That value is the built-in default of a play run (crates/host/src/fixes.rs; a test holds the
-# two together), and Play.exe and the generated file take it from here: they have none of their own.
+# two together), and Play.exe, the first start off Windows (both through crates/game-profile) and the generated file take it from here: they have none of their own.
 # scripts/game-ini-sections.sh writes distribution/nv-rs-sections.ini from this table; the
 # [nv-rs Fixes] rows are written commented out, so sPreset decides until a line is uncommented.
 nv-rs General	sPreset	NV_PRESET	fixes	fixes = nv-rs's fixes on (recommended); vanilla = exactly the original game's behaviour.
