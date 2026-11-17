@@ -2235,6 +2235,8 @@ mod tests {
         ];
         for choice in &choices {
             assert!(!choice.is_on(&JIP_INSTALLED), "{choice:?}");
+            // MCM's plugin too, until the maintainer has tried it.
+            assert!(!choice.is_on(&MCM), "{choice:?}");
         }
         assert_eq!(choices[1].preset, Preset::Fixes);
         // The other JIP rows still follow the preset.
