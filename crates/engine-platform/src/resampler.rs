@@ -1605,3 +1605,83 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, windows))]
+mod probe_tables {
+    use super::*;
+
+    fn i0(x: f64) -> f64 {
+        let mut sum = 1.0;
+        let mut term = 1.0;
+        for k in 1..200 {
+            term *= (x / 2.0) * (x / 2.0) / (k as f64 * k as f64);
+            sum += term;
+        }
+        sum
+    }
+
+    fn count(name: &str, ours: &[f32], theirs: &[f32]) {
+        let same = ours.iter().zip(theirs).filter(|(a, b)| a.to_bits() == b.to_bits()).count();
+        let first: Vec<(usize, f32, f32)> = ours
+            .iter()
+            .zip(theirs)
+            .enumerate()
+            .filter(|(_, (a, b))| a.to_bits() != b.to_bits())
+            .take(3)
+            .map(|(i, (a, b))| (i, *a, *b))
+            .collect();
+        println!("{name}: {same} of {} equal; first differences {first:?}", theirs.len());
+    }
+
+    /// Research probe (not a check): the DLL's tables against candidate formulas, in the x87's
+    /// extended precision (the 32-bit DLL's own arithmetic) through the host's FPU.
+    #[test]
+    #[ignore]
+    fn probe() {
+        use engine_core::x87::*;
+        let t = tables().expect("RESAMPLEDMO.DLL");
+        let e = |v: f64| X87Ext::load64(v);
+        let f32_of = |v: X87Ext| f32::from_bits(v.store32());
+        let pi_ext = X87Ext::from_parts(0x4000, 0xC90F_DAA2_2168_C235);
+        let pi_64 = e(std::f64::consts::PI);
+        let n = 16384usize;
+        let sinc = |x: X87Ext, pi: X87Ext| {
+            let px = x87_fmul(x, pi);
+            x87_fdiv(x87_fsin(px), px)
+        };
+        let pi_32 = e(f64::from(std::f32::consts::PI));
+        let pi_closest = e(3.14159265);
+        for (name, pi) in [("pi f32", pi_32), ("pi 3.14159265", pi_closest), ("fldpi", pi_ext)] {
+            let a: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { f32_of(sinc(x87_fdiv(e(i as f64 * 65536.0), e(30_678_338.0)), pi)) }).collect();
+            count(&format!("sinc ext x=i*65536/c, {name}"), &a, &t.sinc_offset);
+            let b: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { f32_of(sinc(e(i as f64 * 65536.0 / 30_678_338.0), pi)) }).collect();
+            count(&format!("sinc ext x=f64, {name}"), &b, &t.sinc_offset);
+            let c: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { f32_of(sinc(x87_fmul(e(i as f64), x87_fdiv(e(65536.0), e(30_678_338.0))), pi)) }).collect();
+            count(&format!("sinc ext x=i*(65536/c), {name}"), &c, &t.sinc_offset);
+            let d: Vec<f32> = (0..n).map(|i| if i == 0 { 1.0 } else { f32_of(sinc(x87_fdiv(e(i as f64), e(30_678_338.0 / 65536.0)), pi)) }).collect();
+            count(&format!("sinc ext x=i/(c/65536), {name}"), &d, &t.sinc_offset);
+        }
+        // Window in extended precision.
+        let i0 = |x: X87Ext| {
+            let half = x87_fdiv(x, e(2.0));
+            let q = x87_fmul(half, half);
+            let mut sum = e(1.0);
+            let mut term = e(1.0);
+            for k in 1..60 {
+                let kk = e((k * k) as f64);
+                term = x87_fdiv(x87_fmul(term, q), kk);
+                sum = x87_fadd(sum, term);
+            }
+            sum
+        };
+        let beta = e(10.0);
+        let wv: Vec<f32> = (0..1024)
+            .map(|i| {
+                let x = x87_fdiv(e(i as f64), e(1024.0));
+                let r = x87_fsqrt(x87_fsub(e(1.0), x87_fmul(x, x)));
+                f32_of(x87_fdiv(i0(x87_fmul(beta, r)), i0(beta)))
+            })
+            .collect();
+        count("window ext", &wv, &t.window_offset);
+    }
+}
