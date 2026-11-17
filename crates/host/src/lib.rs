@@ -176,6 +176,12 @@ impl Host {
         if let Some(note) = fixes::play_run_taken_as_test(choice, |name| std::env::var(name).ok()) {
             eprintln!("{note}");
         }
+        // `NV_NOT_BACKGROUND=1` (off by default): Windows told the game is not background work, so
+        // an unfocused or hidden window keeps full-speed cores (`qos`; the threads the port starts
+        // make their own call). No line when the switch is unset.
+        if let Some(line) = qos::apply_at_start() {
+            eprintln!("{line}");
+        }
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with
         // the real time from here on, `Sleep` moving it on too (`Engine::clock_now_ms`).
         // `NV_REPEATABLE=FRAMES` (a test mode, [`repeatable_frames`]): a virtual clock instead, the

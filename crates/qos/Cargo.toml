@@ -1,0 +1,9 @@
+[package]
+name = "qos"
+version = "0.1.0"
+description = "Telling Windows the game is not background work (NV_NOT_BACKGROUND=1): execution-speed throttling off and timer requests honoured for the process and the threads the port starts"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
