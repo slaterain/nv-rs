@@ -913,6 +913,17 @@ save) should get.
   `[GamePatches]` switches (`internal/patches_game.h`, `InitGamePatches` and `SetOptionalPatch`),
   ADR-0016 §5's fix rows; the list of what is built is in "JIP LN NVSE's game patches" below. All
   inert until JIP answers "installed" (step 3.10); off, and before that, the game's own.
+- **Where a mod's files are kept** (no row: always so, the maintainer's rule of 2026-11-16): the
+  INI files JIP LN's commands write (`SetINIFloat`, `SetINIString`, `SetINISection`,
+  `RemoveINIKey`, `RemoveINISection`; `Data\Config\<name>.ini`) go to the port's own folder for
+  mods' files beside the saves (`nv-rs mod files`, or `NV_MOD_FILES_OUT`; docs/PLAYTESTING.md),
+  never into the game's folder; reads (`GetINI*`, `FileExists`) look there first, then in the
+  game's Data. A `..` that stays inside the game's folder is followed (`..\NVSE\Plugins\x.ini`
+  from `Data\Config` is Data's). A name that would leave the game's folder (a `..` past it, a
+  drive, another full path) is refused, where JIP would write anywhere: it reads as a missing file
+  and is never written (no value, result 0). A UTF-16 settings file is read and kept as UTF-16, as
+  Windows does; a file Windows' encoding guess decides (UTF-16 without its mark, big-endian) is
+  read but never written.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of
   #329). One error reaches the handlers once; the console still shows every error. Kept per game
   thread: an error another thread raises meanwhile is its own and reaches the handlers.
@@ -1099,7 +1110,7 @@ Fixes (with JIP installed and the row `NV_JIP_GAME_PATCHES` on): equipping no lo
 worn item it replaces (`0x88DCDC`); a change of life state is saved with the actor, so the dead do not load
 standing in their bind pose (`0x8A19CF`); kill challenges no longer count teammates, actors JIP flags
 (`+0x143` bit 7) or essential ones (`0x89DC0E`); a hit's weapon effects come from the projectile's own
-weapon (`0x8C227F`); a hit that takes the minimum damage is marked armour-penetrated (`0x9B6335`); while
+weapon (`0x8C227F`); while
 the game's impact data replacements are in use, a weapon's impact effect they do not replace is kept
 instead of being dropped (no impact effect at all) (`0058e9d0`); the blood
 on a hit comes from the weapon that made the hit, not the attacker's current weapon (`0x88EBAA`); the wear
@@ -1126,11 +1137,25 @@ actor hit, from the ammo that was fired rather than the weapon's current ammo (`
 
 Built as part of JIP (in every preset once JIP answers "installed", not under the row): the player's
 killer is kept when the player dies (`0x89E790`, `0x89F351`; read by `GetKiller`) and cleared before a
-load; with the row off a player with JIP installed gets that and nothing else of this group's fixes.
+load; a hit that takes the minimum damage is marked armour-penetrated (`0x9B6335`, read by
+`GetArmourPenetrated`; the damage itself is the original's, so with the row off only the mark is added);
+with the row off a player with JIP installed gets these and nothing else of this group's fixes.
 JIP's detection patch (it answers as the original until a JIP command asks) (`008a0d10` at `0x8A0DAB`,
 `0x8A1291`, `0x8A131D`, `0x8A147C`), so an actor given a forced detection value
 (`ForceActorDetectionValue`) or the detection fix (`ToggleDetectionFix`) is no longer treated as the
 player's teammate when others detect it, and with the detection fix its level word is the player's.
+Also JIP's own, in whenever JIP is installed: a weapon's condition cuts its damage by JIP's formula, the
+original's curve worked out in single precision and kept between 0 and 1, with the factor a script may
+change (`SetConditionDamagePenalty`, 0.67 as in the original; `00646d00`); an armour's damage threshold and
+resistance shrink below half condition by JIP's formula, the original's unless a script changes the factor
+(`SetArmorConditionPenalty`, 1.0; `00646360`); the damage a hit does to the armour worn is at most the
+armour's full condition times `SetDamageToArmorMaxPercent`'s share (1.0 unless a script lowers it; kept in
+JIP's co-save), and goes through the player's armour damage call for every actor, as JIP calls it (so god
+mode spares NPCs' armour too) (`0x89D2FF`); with `ToggleNoMovementCombat` on, actors in combat with the player
+keep their combat going while a script has the player's movement controls disabled (the original holds
+their combat update back then; `0x8A04B2`). Their commands
+(`Get`/`SetConditionDamagePenalty`, `SetArmorConditionPenalty`, `SetDamageToArmorMaxPercent`,
+`ToggleNoMovementCombat`) are built with them.
 
 #### GD: Projectiles, explosions, combat AI, packages
 

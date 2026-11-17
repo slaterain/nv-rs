@@ -262,8 +262,8 @@ fn writes_split_at_lone_crs_and_trim_the_files_end() {
 }
 
 /// A read ends lines at CR alone too (`jip-cmds/files-measure/ini4-2026-11-16.txt`, `STRING cr
-/// only` and `SECTION cr only`; `ini5-...`, `SECTION cr cr lf` and `lf cr`, `STRING trailing
-/// spaces no eol`).
+/// only`; `ini9-2026-11-16.txt`, `cr only two sections`: A/y none, B/y 2, A/x 1, and `cr cr lf`;
+/// `ini5-...`, `SECTION cr cr lf` and `lf cr`, `STRING trailing spaces no eol`).
 #[test]
 fn a_read_ends_lines_at_a_lone_cr() {
     let cr_only = b"[A]\rx=1\ry=2\r";
@@ -279,6 +279,54 @@ fn a_read_ends_lines_at_a_lone_cr() {
         assert_eq!(ini_value(text, b"A", b"y").unwrap(), b"2");
     }
     assert_eq!(ini_value(b"[A]\r\nx=1  ", b"A", b"x").unwrap(), b"1");
+    assert_eq!(ini_value(b"[A]\r\r\nx=1\r\r\n", b"A", b"x").unwrap(), b"1");
+}
+
+/// The four cases REVIEW-642 named, against the measurements: a CR-only file read and changed in
+/// place (`ini-measure/ini-cr-2026-11-16.txt`; `jip-cmds/files-measure/ini4-2026-11-16.txt`,
+/// `STRING cr only`), and blanks at the end of a file with no last line end trimmed before a
+/// change (`ini5-2026-11-16.txt`, `trailing spaces no eol`), the section heading's too.
+#[test]
+fn the_reviewed_cases_read_and_write_as_measured() {
+    let cr_only = b"[A]\rx=1\ry=2\r";
+    assert_eq!(ini_value(cr_only, b"A", b"y").unwrap(), b"2");
+    assert_eq!(
+        written_profile(cr_only, b"A", b"x", b"5"),
+        b"[A]\rx=5\ry=2\r\r\n"
+    );
+    assert_eq!(
+        written_profile(b"[A]\r\n  x=1  ", b"A", b"x", b"3"),
+        b"[A]\r\n  x=3\r\n"
+    );
+    assert_eq!(
+        written_profile(b"[A]  ", b"A", b"y", b"2"),
+        b"[A]\r\ny=2\r\n"
+    );
+    assert_eq!(
+        written_profile(b"[A]\r\nx=1  ", b"A", b"y", b"2"),
+        b"[A]\r\nx=1\r\ny=2\r\n"
+    );
+}
+
+/// A new heading and a new key are written without the spaces around their names
+/// (`jip-cmds/files-measure/ini6-2026-11-16.txt`, `PUT spaced section arg new` and `PUT spaced
+/// key arg new`); the spaced names find their section and key (`STRING spaced ...`).
+#[test]
+fn spaced_names_are_trimmed_when_written() {
+    let text = b"[A]\r\nx=1\r\ny=2\r\n[B]\r\nz=3\r\n";
+    assert_eq!(
+        written_profile(text, b" C ", b"k", b"v"),
+        b"[A]\r\nx=1\r\ny=2\r\n[B]\r\nz=3\r\n[C]\r\nk=v\r\n"
+    );
+    assert_eq!(
+        written_profile(text, b"A", b" w ", b"v"),
+        b"[A]\r\nx=1\r\ny=2\r\nw=v\r\n[B]\r\nz=3\r\n"
+    );
+    assert_eq!(ini_value(text, b" A ", b"x").unwrap(), b"1");
+    assert_eq!(ini_value(text, b"A", b" x ").unwrap(), b"1");
+    // A form feed before a heading or a key (`STRING form feed heading`, `... before key`).
+    assert_eq!(ini_value(b"\x0c[A]\r\nx=1\r\n", b"A", b"x").unwrap(), b"1");
+    assert_eq!(ini_value(b"[A]\r\n\x0cx=1\r\n", b"A", b"x").unwrap(), b"1");
 }
 
 /// A comment after a value is part of what a read gives (measured: `350\t;Max width...`).

@@ -59,39 +59,14 @@ pub fn rows() -> Vec<Row> {
 }
 
 /// The value of `key` in `section` of the INI `text`, as the game's `GetPrivateProfileStringA`
-/// finds it (`engine_platform::ini`'s reader): only in the first section of that name (a later
-/// section of the same name is not read, as Windows measured: measure/ini/repeated-sections.md),
-/// names compared without case, spaces around names and values trimmed, one pair of surrounding
-/// quotes taken off; the first match wins. A `;` line never matches.
-pub fn value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
-    let mut inside = false;
-    for line in text.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix('[') {
-            // The first section of the name ends here: no later one is read.
-            if inside {
-                return None;
-            }
-            let name = rest.split(']').next().unwrap_or(rest);
-            inside = name.trim().eq_ignore_ascii_case(section.trim());
-            continue;
-        }
-        if !inside {
-            continue;
-        }
-        let Some((name, value)) = line.split_once('=') else {
-            continue;
-        };
-        if name.trim().eq_ignore_ascii_case(key) {
-            let value = value.trim();
-            let value = value
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .unwrap_or(value);
-            return Some(value);
-        }
-    }
-    None
+/// finds it: the one reader of those rules, `engine_core::mod_files::ini_value` (measured on
+/// scratch files: only the first section of a name, measure/ini/repeated-sections.md; names
+/// compared without case; spaces around names and values trimmed; one pair of the same quotes,
+/// double or single, taken off, `ini3-2026-11-16.txt`; a line ends at LF or a lone CR,
+/// `ini4-2026-11-16.txt`). A `;` line never matches.
+pub fn value(text: &str, section: &str, key: &str) -> Option<String> {
+    engine_core::mod_files::ini_value(text.as_bytes(), section.as_bytes(), key.as_bytes())
+        .map(|v| String::from_utf8_lossy(&v).into_owned())
 }
 
 /// What the `[nv-rs ...]` sections set: `None` where a key is missing, empty or not usable.
@@ -122,6 +97,7 @@ impl Keys {
             let Some(raw) = value(text, row.section, row.key) else {
                 continue;
             };
+            let raw = raw.as_str();
             // An empty value is the default, as the launcher reads an empty settings.ini line.
             if raw.is_empty() {
                 continue;
@@ -403,13 +379,19 @@ mod tests {
     fn values_are_found_as_the_games_reader_finds_them() {
         let text = "[nv-rs Display]\n;iFrameLimit=30\n  IFRAMELIMIT = \"60\" \niFrameLimit=90\n\
                     [General]\niFrameLimit=10\n[ NV-RS display ]\nbBorderless=1\n";
-        assert_eq!(value(text, "nv-rs Display", "iFrameLimit"), Some("60"));
+        assert_eq!(
+            value(text, "nv-rs Display", "iFrameLimit").as_deref(),
+            Some("60")
+        );
         // Only the first section of a name counts (Windows, measured 2026-11-09): the key in the
         // later `[ NV-RS display ]` is not read.
-        assert_eq!(value(text, "nv-rs Display", "bBorderless"), None);
-        assert_eq!(value(text, "General", "iFrameLimit"), Some("10"));
-        assert_eq!(value(text, "nv-rs Display", ";iFrameLimit"), Some("30"));
-        assert_eq!(value(text, "nv-rs Threads", "iFrameLimit"), None);
+        assert_eq!(value(text, "nv-rs Display", "bBorderless").as_deref(), None);
+        assert_eq!(value(text, "General", "iFrameLimit").as_deref(), Some("10"));
+        assert_eq!(
+            value(text, "nv-rs Display", ";iFrameLimit").as_deref(),
+            Some("30")
+        );
+        assert_eq!(value(text, "nv-rs Threads", "iFrameLimit").as_deref(), None);
     }
 
     /// Three more of Windows' answers (measure/ini/repeated-sections.md, scratch files): a key
@@ -418,8 +400,14 @@ mod tests {
     /// is in no section, and `[]` is a section named "".
     #[test]
     fn repeated_keys_headings_and_keys_before_any_section_read_as_windows_does() {
-        assert_eq!(value("[A]\r\nx=1\r\nx=2\r\n", "A", "x"), Some("1"));
-        assert_eq!(value("[A]\r\nX=1\r\n x =2\r\n", "A", "x"), Some("1"));
+        assert_eq!(
+            value("[A]\r\nx=1\r\nx=2\r\n", "A", "x").as_deref(),
+            Some("1")
+        );
+        assert_eq!(
+            value("[A]\r\nX=1\r\n x =2\r\n", "A", "x").as_deref(),
+            Some("1")
+        );
         for text in [
             "[A] trailing\r\nx=1\r\n",
             "[A]; note\r\nx=1\r\n",
@@ -427,12 +415,32 @@ mod tests {
             "[A\r\nx=1\r\n",
             "[A]x=9\r\nx=1\r\n",
         ] {
-            assert_eq!(value(text, "A", "x"), Some("1"), "{text:?}");
+            assert_eq!(value(text, "A", "x").as_deref(), Some("1"), "{text:?}");
         }
-        assert_eq!(value("[A]]\r\nx=1\r\n", "A]", "x"), None);
-        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "", "x"), None);
-        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "A", "x"), None);
-        assert_eq!(value("x=1\r\n[]\r\nz=3\r\n", "", "z"), Some("3"));
+        assert_eq!(value("[A]]\r\nx=1\r\n", "A]", "x").as_deref(), None);
+        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "", "x").as_deref(), None);
+        assert_eq!(value("x=1\r\n[A]\r\ny=2\r\n", "A", "x").as_deref(), None);
+        assert_eq!(value("x=1\r\n[]\r\nz=3\r\n", "", "z").as_deref(), Some("3"));
+    }
+
+    /// The game's reader's rules measured on 2026-11-16, read here through the core's one reader:
+    /// one pair of single quotes taken off as double ones are (`ini3-2026-11-16.txt`: `'1'` reads
+    /// 1, `"1'` stays), and a line ending at a lone CR (`ini4-2026-11-16.txt`, `STRING cr only`:
+    /// `[A]\rx=1\ry=2\r` reads y as 2).
+    #[test]
+    fn single_quotes_and_a_lone_cr_read_as_the_game_reads_them() {
+        let text = "[nv-rs Display]\r\nsRenderer='vulkan'\r\niFrameLimit=\"144'\r\n";
+        assert_eq!(
+            value(text, "nv-rs Display", "sRenderer").as_deref(),
+            Some("vulkan")
+        );
+        assert_eq!(
+            value(text, "nv-rs Display", "iFrameLimit").as_deref(),
+            Some("\"144'")
+        );
+        assert_eq!(value("[A]\rx=1\ry=2\r", "A", "y").as_deref(), Some("2"));
+        let keys = Keys::read("[nv-rs Display]\riFrameLimit='60'\r");
+        assert_eq!(keys.frame_limit, Some(60));
     }
 
     /// Windows' answers on a file with a repeated section name (measure/ini/repeated-sections.md,
@@ -441,17 +449,17 @@ mod tests {
     #[test]
     fn only_the_first_section_of_a_name_is_read() {
         let text = "[A]\r\nx=1\r\n[B]\r\nz=3\r\n[a]\r\ny=2\r\nx=9\r\n[ A ]\r\nw=6\r\n";
-        assert_eq!(value(text, "A", "x"), Some("1"));
-        assert_eq!(value(text, "A", "y"), None);
-        assert_eq!(value(text, "A", "w"), None);
-        assert_eq!(value(text, "B", "z"), Some("3"));
-        assert_eq!(value(text, " A ", "x"), Some("1"));
+        assert_eq!(value(text, "A", "x").as_deref(), Some("1"));
+        assert_eq!(value(text, "A", "y").as_deref(), None);
+        assert_eq!(value(text, "A", "w").as_deref(), None);
+        assert_eq!(value(text, "B", "z").as_deref(), Some("3"));
+        assert_eq!(value(text, " A ", "x").as_deref(), Some("1"));
         let text = "[a]\r\nx=1\r\n[A]\r\ny=2\r\n[C]\r\nq=1\r\n[C]\r\nq=2\r\nr=3\r\n";
-        assert_eq!(value(text, "A", "x"), Some("1"));
-        assert_eq!(value(text, "A", "y"), None);
-        assert_eq!(value(text, "C", "q"), Some("1"));
-        assert_eq!(value(text, "C", "r"), None);
-        assert_eq!(value("[A]\r\n[A]\r\nx=1\r\n", "A", "x"), None);
+        assert_eq!(value(text, "A", "x").as_deref(), Some("1"));
+        assert_eq!(value(text, "A", "y").as_deref(), None);
+        assert_eq!(value(text, "C", "q").as_deref(), Some("1"));
+        assert_eq!(value(text, "C", "r").as_deref(), None);
+        assert_eq!(value("[A]\r\n[A]\r\nx=1\r\n", "A", "x").as_deref(), None);
     }
 
     /// Unknown keys, original keys and notes are passed over; a value we can't use leaves the
