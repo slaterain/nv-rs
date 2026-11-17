@@ -1085,8 +1085,12 @@ const SKY_MASSER: u32 = 0x30;
 /// disc's alpha (1 by day, 0 at night, the ramps between: the hand-over's weight).
 ///
 /// Masser counts only once its own update has placed it (`fLastPosUpdate` is no longer the
-/// constructor's `FLT_MAX`: a moon made this frame still has angle 0, the north horizon), and its
-/// angle is held where it shows ([`sky_light::shown_moon_angle`], with its own `fAngleFadeEnd`).
+/// constructor's `FLT_MAX`: a moon made this frame still has angle 0, the north horizon), and while
+/// it is hidden the light goes over the sky from where it faded out to where it will fade in
+/// ([`sky_light::shown_moon_way`], with its own `fAngleFadeEnd`). The sky updates the sun before
+/// Masser, so the moon's angle read here is the one of the frame before: the light follows the
+/// moon one frame late (at the game's speeds a small part of a degree), and after a jump in
+/// time (waiting, sleeping) it takes the new place one frame late.
 fn light_from_sky(e: &Engine, sky: u32, disc: &[u32; 3], brightness: u32) -> Option<[f32; 3]> {
     if !e.ext_get::<LightFromSky>()?.on() {
         return None;
@@ -1097,11 +1101,9 @@ fn light_from_sky(e: &Engine, sky: u32, disc: &[u32; 3], brightness: u32) -> Opt
         if f32::from_bits(e.get(moon, Moon::fLastPosUpdate)) == f32::MAX {
             return None;
         }
-        sky_light::toward_moon(
-            sky_light::shown_moon_angle(
-                f32::from_bits(e.get(moon, Moon::fPos)),
-                f32::from_bits(e.get(moon, Moon::fAngleFadeEnd)),
-            ),
+        sky_light::shown_moon_way(
+            f32::from_bits(e.get(moon, Moon::fPos)),
+            f32::from_bits(e.get(moon, Moon::fAngleFadeEnd)),
             f32::from_bits(e.get(moon, Moon::fZOffset)),
         )
     });
@@ -1137,28 +1139,57 @@ pub mod sky_light {
         unit([z.sin(), z.cos() * p.cos(), z.cos() * p.sin()])
     }
 
-    /// The moon's angle the light takes: its own while the game shows it (`Moon::Update` fades it
-    /// in and out between `fade_end` and `180 - fade_end`, Masser 45 and 135: about 21:00 to
-    /// 03:00), and while it is hidden the angle where it was last or will next be seen: from the
-    /// set (`180 - fade_end`) to 270 the place where it faded out, from 270 round to the rise the
-    /// place where it will fade in. So the light never follows a hidden moon down to the horizon,
-    /// stands still while no moon is drawn, and moves on with the moon from the moment it shows:
-    /// no jump at the fades. The one change of side, at 270, is midday (the moon's angle is
-    /// `90 + 15 * hour`), when the light is all the sun's. An angle or fade that is not usable is
-    /// the moon's own angle.
-    pub fn shown_moon_angle(pos: f32, fade_end: f32) -> f32 {
+    /// The way toward the moon the light takes, from its angle `pos`, its fade `fade_end` and its
+    /// tilt `z_offset` (degrees): the moon's own way while the game shows it (`Moon::Update` fades
+    /// it in and out between `fade_end` and `180 - fade_end`, Masser 45 and 135: about 21:00 to
+    /// 03:00 at the game's moon speed). While it is hidden (from the set, `180 - fade_end`, round
+    /// through 360 to the rise, `fade_end`) the light goes slowly from where the moon faded out to
+    /// where it will fade in, at an even pace by the share of that hidden arc the moon has passed,
+    /// over the sky along the arc between the two (both above the horizon, so the arc is too). So
+    /// the light never follows a hidden moon down to the horizon, never jumps (not at the fades,
+    /// and not anywhere while the moon is hidden), whatever the moon's speed (`fMasserSpeed`) and
+    /// whatever hours the climate gives the sun, and moves on with the moon from the moment it
+    /// shows. An angle or fade that is not usable is the moon's own way.
+    pub fn shown_moon_way(pos: f32, fade_end: f32, z_offset: f32) -> Option<[f32; 3]> {
         if !pos.is_finite() || !(0.0..90.0).contains(&fade_end) {
-            return pos;
+            return toward_moon(pos, z_offset);
         }
         let p = pos.rem_euclid(360.0);
         let (rise, set) = (fade_end, 180.0 - fade_end);
         if (rise..=set).contains(&p) {
-            p
-        } else if p > set && p < 270.0 {
-            set
-        } else {
-            rise
+            return toward_moon(p, z_offset);
         }
+        let hidden = 360.0 - (set - rise);
+        let passed = if p > set { p - set } else { p + 360.0 - set };
+        let t = (passed / hidden).clamp(0.0, 1.0);
+        let from = toward_moon(set, z_offset)?;
+        let to = toward_moon(rise, z_offset)?;
+        // Through the middle of the two ways (each half under 90 degrees, so the turn is always
+        // defined); two ways exactly opposite (no tilt, fade 0: both on the horizon) go over the
+        // top.
+        let middle = unit(std::array::from_fn(|i| from[i] + to[i])).unwrap_or([0.0, 0.0, 1.0]);
+        if t <= 0.5 {
+            Some(turn(from, middle, 2.0 * t))
+        } else {
+            Some(turn(middle, to, 2.0 * t - 1.0))
+        }
+    }
+
+    /// `a` turned toward `b` (both unit, less than a half turn apart) by the share `t` of the
+    /// angle between them, at an even pace.
+    fn turn(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
+        let dot: f32 = (0..3).map(|i| a[i] * b[i]).sum();
+        let angle = dot.clamp(-1.0, 1.0).acos();
+        let (wa, wb) = if angle.sin() < 1e-4 {
+            (1.0 - t, t)
+        } else {
+            (
+                ((1.0 - t) * angle).sin() / angle.sin(),
+                (t * angle).sin() / angle.sin(),
+            )
+        };
+        let v = std::array::from_fn(|i| wa * a[i] + wb * b[i]);
+        unit(v).unwrap_or(a)
     }
 
     /// `v` (unit) raised to at least [`LOWEST_DEGREES`] above the horizon, its heading kept; a way
@@ -1858,33 +1889,38 @@ mod tests {
         assert_eq!(light_way(&off), [-disc_place(&off)[0], 50.0, 30.0]);
     }
 
-    /// While the game hides Masser (before it fades in, after it fades out) the light stays where
-    /// it shows; a Masser its update has not placed yet counts as no moon (the sun disc's night
-    /// place); while the host says nothing draws the shadows, the light is the exe's.
+    /// While the game hides Masser (before it fades in, after it fades out) the light stays near
+    /// where it shows (moving slowly from the fade-out to the fade-in); a Masser its update has not
+    /// placed yet counts as no moon (the sun disc's night place); while the host says nothing
+    /// draws the shadows, the light is the exe's.
     #[test]
     fn a_hidden_or_unplaced_moon_and_no_drawing_keep_the_light_sensible() {
-        // 20:30: night; the moon's angle 37.5 (hidden, under its fade-in at 45): held at 45.
+        // 20:30: night; the moon's angle 37.5 (hidden, under its fade-in at 45): close to 45.
         let mut u = update_rig(3, 20.5);
         with_masser(&mut u, 37.5, 35.0);
         want_light_from_sky(&mut u.e, || true);
         run(&mut u);
-        let held = sky_light::toward_moon(45.0, 35.0).unwrap();
+        let held = sky_light::shown_moon_way(37.5, 45.0, 35.0).unwrap();
         assert!(
             close(light_way(&u), held.map(|v| -v)),
             "{:?}",
             light_way(&u)
         );
-        // After it faded out (angle 160, about 04:40): held where it faded out.
+        let rise = sky_light::toward_moon(45.0, 35.0).unwrap();
+        assert!(angle_degrees(held, rise) < 3.0, "{held:?}");
+        // After it faded out (angle 160, about 04:40): close to where it faded out.
         let mut u = update_rig(3, 4.5);
         with_masser(&mut u, 160.0, 35.0);
         want_light_from_sky(&mut u.e, || true);
         run(&mut u);
-        let held = sky_light::toward_moon(135.0, 35.0).unwrap();
+        let held = sky_light::shown_moon_way(160.0, 45.0, 35.0).unwrap();
         assert!(
             close(light_way(&u), held.map(|v| -v)),
             "{:?}",
             light_way(&u)
         );
+        let set = sky_light::toward_moon(135.0, 35.0).unwrap();
+        assert!(angle_degrees(held, set) < 9.0, "{held:?}");
 
         // A Masser made this frame: angle 0 and the constructor's FLT_MAX as its last update.
         let mut u = update_rig(3, 23.0);
@@ -1910,35 +1946,80 @@ mod tests {
         assert_eq!(light_way(&gated), [-disc_place(&gated)[0], 50.0, 30.0]);
     }
 
-    /// The moon's angle the light takes: its own between the fades, held at the fade-in before
-    /// and at the fade-out after, the side changing at 270 (midday); no jump at either fade.
+    /// The moon's way the light takes: its own between the fades; while hidden, from the fade-out
+    /// (135) at the set to the fade-in (45) at the rise, over the sky (halfway at 270, between the
+    /// two, above the horizon); no jump at either fade.
     #[test]
     fn the_moon_is_held_where_it_shows() {
-        let held = |p: f32| sky_light::shown_moon_angle(p, 45.0);
-        for (p, want) in [
-            (60.0, 60.0),
-            (45.0, 45.0),
-            (135.0, 135.0),
-            (30.0, 45.0),
-            (0.0, 45.0),
-            (-10.0, 45.0),
-            (300.0, 45.0),
-            (150.0, 135.0),
-            (269.0, 135.0),
-            (271.0, 45.0),
-            (420.0, 60.0),
-        ] {
-            assert_eq!(held(p), want, "{p}");
+        let way = |p: f32| sky_light::shown_moon_way(p, 45.0, 35.0).unwrap();
+        let moon = |p: f32| sky_light::toward_moon(p, 35.0).unwrap();
+        for p in [60.0f32, 45.0, 135.0, 90.0] {
+            assert!(close(way(p), moon(p)), "{p}");
+        }
+        assert!(close(way(420.0), moon(60.0)));
+        let (rise, set) = (moon(45.0), moon(135.0));
+        let apart = angle_degrees(rise, set);
+        assert!((apart - 71.0).abs() < 1.0, "{apart}");
+        // Halfway round the hidden arc (270): halfway between, due east of overhead, high.
+        let half = way(270.0);
+        assert!(
+            (angle_degrees(half, rise) - apart / 2.0).abs() < 0.01
+                && (angle_degrees(half, set) - apart / 2.0).abs() < 0.01,
+            "{half:?}"
+        );
+        assert!(half[1].abs() < 1e-5 && half[2] > rise[2], "{half:?}");
+        // Just past the set and just before the rise: at the fades' ways.
+        assert!(angle_degrees(way(135.01), set) < 0.01);
+        assert!(angle_degrees(way(44.99), rise) < 0.01);
+        assert!(close(way(-90.0), half));
+        // Every hidden way is above the horizon, at least as high as the fades.
+        for i in 0..2700 {
+            let p = 135.0 + i as f32 * 0.1;
+            assert!(way(p)[2] >= rise[2] - 1e-5, "{p}");
         }
         for edge in [45.0f32, 135.0] {
             assert!(
-                (held(edge - 0.01) - held(edge + 0.01)).abs() < 0.03,
+                angle_degrees(way(edge - 0.01), way(edge + 0.01)) < 0.03,
                 "{edge}"
             );
         }
-        assert!(held(f32::NAN).is_nan());
-        assert_eq!(sky_light::shown_moon_angle(30.0, f32::NAN), 30.0);
-        assert_eq!(sky_light::shown_moon_angle(30.0, 95.0), 30.0);
+        assert_eq!(sky_light::shown_moon_way(f32::NAN, 45.0, 35.0), None);
+        assert!(close(
+            sky_light::shown_moon_way(30.0, f32::NAN, 35.0).unwrap(),
+            moon(30.0)
+        ));
+        assert!(close(
+            sky_light::shown_moon_way(30.0, 95.0, 35.0).unwrap(),
+            moon(30.0)
+        ));
+        // No tilt and a fade at the horizon: the two fades are opposite; over the top between.
+        let flat = sky_light::shown_moon_way(270.0, 0.0, 0.0).unwrap();
+        assert!(close(flat, [0.0, 0.0, 1.0]), "{flat:?}");
+    }
+
+    /// The finding of the second review: with the light all the moon's (the sun's share 0, as in a
+    /// climate whose noon is not full day), the light never jumps over a whole day, at the game's
+    /// moon speed (`fMasserSpeed` 0.25: 15 degrees an hour) and at a doubled one (a plugin's),
+    /// whose hidden span ends and starts at other hours. Samples every 6 game seconds.
+    #[test]
+    fn the_moon_light_never_jumps_whatever_the_moon_speed() {
+        let sun_disc = [0.0, -800.0, -300.0];
+        for speed in [0.25f32, 0.5, 0.3] {
+            let way_at = |hour: f32| {
+                let pos = (90.0 + speed * 60.0 * hour).rem_euclid(360.0);
+                let moon = sky_light::shown_moon_way(pos, 45.0, 35.0);
+                sky_light::toward_light(sun_disc, 0.0, moon).unwrap()
+            };
+            let mut last = way_at(0.0);
+            let mut worst = 0.0f32;
+            for i in 1..=24 * 600 {
+                let now = way_at(i as f32 / 600.0);
+                worst = worst.max(angle_degrees(last, now));
+                last = now;
+            }
+            // The shown moon moves `speed * 60 / 600` degrees a sample (0.05 at a doubled speed).
+            assert!(worst < 0.2, "speed {speed}: a step of {worst} degrees");
+        }
     }
 
     /// The moon's way from its angle: rising at the north horizon, 55 degrees up in the east at
