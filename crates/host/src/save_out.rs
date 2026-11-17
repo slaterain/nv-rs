@@ -145,6 +145,12 @@ fn refused_here(path: &Path) -> Option<&'static str> {
     })
 }
 
+/// [`refused_here`] for the host's other writes off Windows (the first start's profile files).
+#[cfg(not(windows))]
+pub(crate) fn refused_to_write(path: &Path) -> Option<&'static str> {
+    refused_here(path)
+}
+
 /// Off Windows: the game folders the port was started with ([`prepare`]), guarded whole (no
 /// exception) whatever the look at the player's folders finds.
 #[cfg(not(windows))]

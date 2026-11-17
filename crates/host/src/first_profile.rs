@@ -45,6 +45,9 @@ pub struct Outcome {
     pub ini: Option<Vec<u8>>,
     pub prefs: Option<Vec<u8>>,
     pub log: Vec<String>,
+    /// `Fallout.ini` has nv-rs's sections, and with them the pending choices (Play.exe's
+    /// `Prepared::seeded`: a `settings.ini` may then be moved aside).
+    pub seeded: bool,
 }
 
 /// Play.exe's `prepare_profile` steps on [`Inputs`].
@@ -130,6 +133,7 @@ pub fn prepare(inputs: &Inputs) -> Outcome {
     if inputs.prefs.as_ref() != Some(&new) {
         out.prefs = Some(new);
     }
+    out.seeded = seeded;
     out
 }
 
@@ -158,48 +162,147 @@ pub fn table_facts(table: &str) -> (Option<(u32, u32)>, Option<String>) {
     (w.zip(h), device.filter(|d| !d.is_empty()))
 }
 
-/// Off Windows, at a play run's start (after the renderer choice and the machine table): the
-/// profile files in `documents` (`My Games\FalloutNV`) prepared from the game in `game_folder`
-/// and the table's facts, written through the save guard. Each step's line is said in the log;
-/// a refused or failed write is said and the start goes on (the game then makes its own files).
-#[cfg(not(windows))]
-pub fn first_start(documents: &std::path::Path, game_folder: &std::path::Path, table: &str) {
-    let profile = documents.join("My Games").join("FalloutNV");
-    let read = |p: &std::path::Path| std::fs::read(p).ok();
-    let pending = crate::fixes::settings_file()
+/// A file as a first start reads it: its bytes, `None` when it is not there, or why it could not
+/// be read (any error but "not found": such a file is never replaced, as Play.exe does).
+fn read_file(path: &std::path::Path) -> Result<Option<Vec<u8>>, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
+}
+
+/// How [`first_start_with`] writes a file (the bytes to the path) and moves `settings.ini`.
+pub type Write = dyn Fn(&std::path::Path, Vec<u8>) -> Result<(), String>;
+pub type Rename = dyn Fn(&std::path::Path, &std::path::Path) -> Result<(), String>;
+
+/// [`first_start`] with its writes and its move of `settings.ini` given (`write`, `rename`), for
+/// the tests: the profile in `profile` (`My Games\FalloutNV`), the game in `game_folder`, the
+/// pending choices in `settings` (a `settings.ini`, when there is one), the machine table's
+/// `table`. A file that was missing and could not be written stops the start (the error): without
+/// `FalloutPrefs.ini` naming the card the game asks for its launcher and stops in the renderer
+/// (docs/PLAYTESTING.md), and a game with no `Fallout.ini` would not have nv-rs's sections. A file
+/// that was there and could not be updated is said in the log; the game reads it as it is.
+/// `settings.ini` is moved aside (Play.exe's rule, `game_profile::settings::migrated_name`) once
+/// both files hold its choices, so it is applied once.
+pub fn first_start_with(
+    profile: &std::path::Path,
+    game_folder: &std::path::Path,
+    settings_file: Option<&std::path::Path>,
+    table: &str,
+    write: &Write,
+    rename: &Rename,
+) -> Result<Vec<String>, String> {
+    let ini_path = profile.join("Fallout.ini");
+    let prefs_path = profile.join("FalloutPrefs.ini");
+    let ini = read_file(&ini_path);
+    let prefs = read_file(&prefs_path);
+    let pending = settings_file
         .and_then(|p| std::fs::read(p).ok())
         .map(|b| Settings::parse(&settings::decode(&b)));
     let (desktop, device) = table_facts(table);
+    let read = |file: &Result<Option<Vec<u8>>, String>| file.as_ref().ok().cloned().flatten();
     let outcome = prepare(&Inputs {
-        ini: read(&profile.join("Fallout.ini")),
-        prefs: read(&profile.join("FalloutPrefs.ini")),
-        default_ini: read(&game_folder.join("Fallout_default.ini")),
-        high_ini: read(&game_folder.join("high.ini")),
+        ini: read(&ini),
+        prefs: read(&prefs),
+        default_ini: std::fs::read(game_folder.join("Fallout_default.ini")).ok(),
+        high_ini: std::fs::read(game_folder.join("high.ini")).ok(),
         pending: pending.as_ref(),
         desktop,
         device: device.as_deref(),
     });
-    for line in &outcome.log {
-        eprintln!("first start: {line}");
-    }
-    for (name, bytes) in [
-        ("Fallout.ini", outcome.ini),
-        ("FalloutPrefs.ini", outcome.prefs),
+    let mut log = outcome.log.clone();
+    let mut all_written = true;
+    for (path, before, bytes) in [
+        (&ini_path, &ini, outcome.ini),
+        (&prefs_path, &prefs, outcome.prefs),
     ] {
+        if let Err(why) = before {
+            log.push(format!("could not be read, so left as it is: {why}"));
+            all_written = false;
+            continue;
+        }
         let Some(bytes) = bytes else { continue };
-        let target = profile.join(name);
+        if let Err(why) = write(path, bytes) {
+            if matches!(before, Ok(None)) {
+                return Err(format!(
+                    "nv-rs could not make the game's first {} ({why}). The game needs it to start \
+                     (without it the game asks for its own launcher and stops). Make sure nv-rs's \
+                     own folder can be written, then start again.",
+                    path.display()
+                ));
+            }
+            log.push(format!("{}: not updated: {why}", path.display()));
+            all_written = false;
+        }
+    }
+    if let (Some(file), true, true) = (
+        settings_file,
+        pending.is_some(),
+        outcome.seeded && all_written,
+    ) {
+        let moved = settings::migrated_name(file);
+        match rename(file, &moved) {
+            Ok(()) => log.push(format!(
+                "{} moved into the files and renamed {}",
+                file.display(),
+                moved.display()
+            )),
+            Err(why) => log.push(format!(
+                "{}: not renamed ({why}): the next start moves it in again",
+                file.display()
+            )),
+        }
+    }
+    Ok(log)
+}
+
+/// Off Windows, at a play run's start (after the renderer choice and the machine table, before the
+/// game reads its INI files): the profile files in `documents` (`My Games\FalloutNV`) prepared
+/// from the game in `game_folder` and the table's facts ([`first_start_with`]), written through
+/// the save guard (`save_out::run`: a refused path is never written). Each step is said in the
+/// log; the error stops the start.
+#[cfg(not(windows))]
+pub fn first_start(
+    documents: &std::path::Path,
+    game_folder: &std::path::Path,
+    table: &str,
+) -> Result<(), String> {
+    let profile = documents.join("My Games").join("FalloutNV");
+    let settings_file = crate::fixes::settings_file();
+    let write = |target: &std::path::Path, bytes: Vec<u8>| -> Result<(), String> {
+        let name = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let job = crate::save_out::Job::Write {
             key: Vec::new(),
-            dir: Some(profile.clone()),
-            temporary: profile.join(format!("{name}.part")),
-            target,
+            dir: target.parent().map(std::path::Path::to_path_buf),
+            temporary: target.with_file_name(format!("{name}.part")),
+            target: target.to_path_buf(),
             bytes,
             copied: None,
         };
-        if let Err(why) = crate::save_out::run(&job) {
-            eprintln!("first start: {name}: {why}");
+        crate::save_out::run(&job).map(|_| ())
+    };
+    let rename = |from: &std::path::Path, to: &std::path::Path| -> Result<(), String> {
+        match crate::save_out::refused_to_write(to) {
+            Some(why) => Err(format!("refused ({why})")),
+            None => std::fs::rename(from, to).map_err(|e| e.to_string()),
         }
+    };
+    let log = first_start_with(
+        &profile,
+        game_folder,
+        settings_file.as_deref(),
+        table,
+        &write,
+        &rename,
+    )?;
+    for line in log {
+        eprintln!("first start: {line}");
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -297,5 +400,161 @@ mod tests {
             (Some((2048, 1152)), Some("Card".into()))
         );
         assert_eq!(table_facts(""), (None, None));
+    }
+
+    /// The facts from the lines the machine table really writes (a 2x monitor, a card).
+    #[test]
+    fn the_facts_come_from_the_real_table_lines() {
+        use engine_platform::machine_table::display::{card_lines, display_lines};
+        use engine_platform::machine_table::{Card, Monitor};
+        let monitor = Monitor {
+            size: (3840, 2160),
+            scale: 2.0,
+            refresh_millihertz: Some(60_000),
+            modes: Vec::new(),
+            primary: true,
+        };
+        let card = Card {
+            name: "Intel(R) Arc(tm) A770 Graphics (DG2)".into(),
+            vendor: 0x8086,
+            device: 0x56a0,
+            driver: "Intel open-source Mesa driver".into(),
+            driver_info: "Mesa 25.0.7".into(),
+            sample_counts: vec![1, 2, 4, 8],
+            bc: true,
+            float32_blendable: true,
+        };
+        let table = card_lines(&card) + &display_lines(&[monitor], &card.name).unwrap();
+        assert_eq!(
+            table_facts(&table),
+            (Some((1920, 1080)), Some(card.name.clone()))
+        );
+    }
+
+    /// The player's pending choices: their resolution beats the desktop's size, and with the
+    /// window as the game makes it (Borderless=0) no `bFull Screen=0` is set.
+    #[test]
+    fn pending_choices_go_in() {
+        let pending = Settings::parse("Resolution=1920x1080\nBorderless=0\n");
+        let out = prepare(&Inputs {
+            ini: None,
+            prefs: None,
+            default_ini: Some(DEFAULT_INI.to_vec()),
+            high_ini: Some(HIGH_INI.to_vec()),
+            pending: Some(&pending),
+            desktop: Some((2560, 1440)),
+            device: Some("card"),
+        });
+        assert!(out.seeded);
+        let ini = text_of(out.ini.as_deref().unwrap());
+        assert!(!game_ini::borderless(&ini), "{ini}");
+        let prefs = text_of(out.prefs.as_deref().unwrap());
+        assert!(
+            prefs.contains("iSize W=1920") && prefs.contains("iSize H=1080"),
+            "{prefs}"
+        );
+        assert!(!prefs.contains("2560"), "{prefs}");
+        assert!(
+            prefs.contains("bFull Screen=1") && !prefs.contains("bFull Screen=0"),
+            "{prefs}"
+        );
+    }
+
+    /// A scratch profile and game folder for [`first_start_with`].
+    fn scratch(tag: &str) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("nv-first-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let profile = root.join("profile");
+        let game = root.join("game");
+        std::fs::create_dir_all(&profile).unwrap();
+        std::fs::create_dir_all(&game).unwrap();
+        std::fs::write(game.join("Fallout_default.ini"), DEFAULT_INI).unwrap();
+        std::fs::write(game.join("high.ini"), HIGH_INI).unwrap();
+        (root, profile, game)
+    }
+
+    fn plain_write(path: &std::path::Path, bytes: Vec<u8>) -> Result<(), String> {
+        std::fs::write(path, bytes).map_err(|e| e.to_string())
+    }
+
+    fn plain_rename(from: &std::path::Path, to: &std::path::Path) -> Result<(), String> {
+        std::fs::rename(from, to).map_err(|e| e.to_string())
+    }
+
+    /// A refused write of a file that is missing at a first start stops the start, naming it; of
+    /// a file already there, it is said and the start goes on.
+    #[test]
+    fn a_refused_first_write_stops_the_start() {
+        let (root, profile, game) = scratch("refused");
+        let refuse_prefs = |path: &std::path::Path, bytes: Vec<u8>| {
+            if path.ends_with("FalloutPrefs.ini") {
+                Err("refused (a link out of nv-rs's folder)".to_string())
+            } else {
+                plain_write(path, bytes)
+            }
+        };
+        let err =
+            first_start_with(&profile, &game, None, "", &refuse_prefs, &plain_rename).unwrap_err();
+        assert!(
+            err.contains("FalloutPrefs.ini") && err.contains("refused"),
+            "{err}"
+        );
+        // Once it is there, a refused update only goes into the log.
+        std::fs::write(profile.join("FalloutPrefs.ini"), b"[Display]\r\n").unwrap();
+        let log =
+            first_start_with(&profile, &game, None, "", &refuse_prefs, &plain_rename).unwrap();
+        assert!(log.iter().any(|l| l.contains("not updated")), "{log:?}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A file that cannot be read (here a folder by its name) is never replaced.
+    #[test]
+    fn an_unreadable_file_is_left_as_it_is() {
+        let (root, profile, game) = scratch("unreadable");
+        std::fs::create_dir_all(profile.join("Fallout.ini")).unwrap();
+        let log = first_start_with(&profile, &game, None, "", &plain_write, &plain_rename).unwrap();
+        assert!(
+            log.iter().any(|l| l.contains("could not be read")),
+            "{log:?}"
+        );
+        assert!(profile.join("Fallout.ini").is_dir());
+        assert!(profile.join("FalloutPrefs.ini").is_file());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// settings.ini is moved aside once both files hold its choices: applied once.
+    #[test]
+    fn settings_ini_is_applied_once() {
+        let (root, profile, game) = scratch("settings");
+        let settings_file = root.join("settings.ini");
+        std::fs::write(&settings_file, b"Resolution=1600x900\n").unwrap();
+        let log = first_start_with(
+            &profile,
+            &game,
+            Some(&settings_file),
+            "",
+            &plain_write,
+            &plain_rename,
+        )
+        .unwrap();
+        assert!(!settings_file.exists(), "{log:?}");
+        assert!(root.join("settings.ini.migrated").is_file());
+        let prefs = std::fs::read(profile.join("FalloutPrefs.ini")).unwrap();
+        assert!(text_of(&prefs).contains("iSize W=1600"));
+        // The player changes the size later; the next start does not apply settings.ini again.
+        let changed = text_of(&prefs).replace("iSize W=1600", "iSize W=1280");
+        std::fs::write(profile.join("FalloutPrefs.ini"), bytes_of(&changed)).unwrap();
+        first_start_with(
+            &profile,
+            &game,
+            Some(&settings_file),
+            "",
+            &plain_write,
+            &plain_rename,
+        )
+        .unwrap();
+        let again = text_of(&std::fs::read(profile.join("FalloutPrefs.ini")).unwrap());
+        assert!(again.contains("iSize W=1280"), "{again}");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

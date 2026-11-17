@@ -794,7 +794,7 @@ fn load_adapter_table(e: &mut Engine, data: &Path) -> Result<(), String> {
                         (Ok(own), Some(game)) => {
                             let [documents, _, _] =
                                 engine_platform::machine_table::game_folders(&own);
-                            first_profile::first_start(&documents, game, &text);
+                            first_profile::first_start(&documents, game, &text)?;
                         }
                         (Err(why), _) => eprintln!("first start: no profile files: {why}"),
                         (_, None) => {}
