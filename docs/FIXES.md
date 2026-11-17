@@ -927,8 +927,10 @@ save) should get.
   Windows does; a file Windows' encoding guess decides (UTF-16 without its mark, big-endian) is
   read but never written. Also refused (so one file never has two names, and no mod file is
   taken for the port's own temporary `.part` file): a name part ending in a dot or a space (read
-  as missing, never written), and in writes a name with a non-English letter (a byte above 0x7F)
-  or one ending in `.part`. Appends (`ModLogPrint`, the append flags) write only the new line, as
+  as missing, never written), and in writes a name ending in `.part`. A name with a non-English
+  letter (an accented or Cyrillic plugin or INI name) is written to the port's folder only, so
+  the disk answers every spelling of it as Windows does; with no port folder set (settings kept
+  for the session only) such a write is refused. Appends (`ModLogPrint`, the append flags) write only the new line, as
   JIP does, and `ReadStringFromFile` reads only the 0x3FFF bytes it uses, so a long log costs
   nothing more each frame.
 - **Script error loop guard** (the row above): the maintainer's decision, 2026-11-08 (review of

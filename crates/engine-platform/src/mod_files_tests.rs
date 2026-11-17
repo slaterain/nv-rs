@@ -836,11 +836,23 @@ fn names_windows_would_fold_are_refused() {
     assert_eq!(relative(&e, br"Data\.a").unwrap(), br"Data\.a");
 }
 
-/// Writes, appends and new folders refuse a name with a byte above 0x7F and a last part ending in
-/// `.part` (any case); reads are not refused for those.
+/// Writes, appends and new folders refuse a last part ending in `.part` (any case), and without
+/// a port folder a name with a byte above 0x7F (with one, such a name is taken); reads are not
+/// refused for those.
 #[test]
 fn names_writes_refuse() {
-    let e = engine(Path::new(r"C:\Games\FNV"));
+    let mut e = engine(Path::new(r"C:\Games\FNV"));
+    set_folder(&mut e, Some(PathBuf::from(r"C:\Kept")));
+    for accented in [&b"Data\\\xc4.txt"[..], b"Data\\\xc3\xa9t\xc3\xa9.txt"] {
+        assert_eq!(writable_as(&e, accented, false).unwrap(), accented);
+    }
+    assert!(!remembered(b"Data\\\xc4.txt"));
+    assert!(remembered(br"Data\a.txt"));
+    assert_eq!(
+        writable_as(&e, br"Data\x.txt.part", false),
+        Err(ERROR_ACCESS_DENIED)
+    );
+    set_folder(&mut e, None);
     assert_eq!(
         writable_as(&e, br"Data\a.txt", false).unwrap(),
         br"Data\a.txt"
@@ -946,7 +958,6 @@ fn appends_refuse_what_writes_refuse() {
         br"Data\x.txt.part",
         br"Data\a.txt.",
         br"Data\a.txt ",
-        b"Data\\\xc4.txt",
         br"Data\Config",
         br"Data\x.txt:stream",
     ] {
@@ -1025,7 +1036,7 @@ fn a_part_name_and_its_file_both_stay() {
 }
 
 /// Write `a.txt`, then `a.txt.` (one disk file to Windows): the second is refused, and every
-/// read agrees with the disk; a non-ASCII spelling is refused for writes too.
+/// read agrees with the disk.
 #[cfg(windows)]
 #[test]
 fn a_folded_spelling_never_holds_other_bytes() {
@@ -1051,12 +1062,112 @@ fn a_folded_spelling_never_holds_other_bytes() {
     assert_eq!(disk, b"one");
     assert_eq!(seam::read(&e, br"Data\a.txt").unwrap(), disk);
     assert_eq!(seam::read(&e, br"data\A.TXT").unwrap(), disk);
+    assert_eq!(tree(&kept).len(), 2, "Data and a.txt only");
+}
+
+/// An accented or Cyrillic name (a mod's plugin or INI name) is written and appended to in the
+/// port's folder, and read back by another case spelling as Windows folds it: this run's memory
+/// keeps no copy of it, so the disk answers every spelling. Without a port folder it is refused.
+#[cfg(windows)]
+#[test]
+fn non_ascii_names_live_on_the_disk() {
+    let game = scratch("accent-game");
+    let kept = scratch("accent-kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::create_dir_all(game.join("Mod Logs")).unwrap();
+    std::fs::write(game.join("Data").join("Été.txt"), b"game's").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = "Data\\Été.txt".as_bytes();
+    let other = "data\\éTÉ.TXT".as_bytes();
+    assert_eq!(seam::read(&e, other).unwrap(), b"game's");
+    assert_eq!(seam::write_or_error(&mut e, name, b"one"), Ok(()));
+    assert!(state_ref!(e).mod_files.written.is_empty());
+    assert_eq!(seam::read(&e, other).unwrap(), b"one");
+    assert_eq!(seam::append_or_error(&mut e, other, b"+two"), Ok(()));
     assert_eq!(
-        seam::write_or_error(&mut e, b"Data\\\xc4.txt", b"x"),
+        std::fs::read(kept.join("Data").join("Été.txt")).unwrap(),
+        b"one+two"
+    );
+    assert_eq!(seam::read(&e, name).unwrap(), b"one+two");
+    assert_eq!(seam::read_head(&e, other, 3).unwrap(), b"one");
+    assert!(seam::exists(&e, other));
+    // Cyrillic, a folder and a file in it.
+    let folder = "Mod Logs\\Мой".as_bytes();
+    assert_eq!(seam::create_directory_or_error(&mut e, folder), Ok(()));
+    assert!(state_ref!(e).mod_files.folders.is_empty());
+    assert!(seam::directory_exists(&e, "mod logs\\мОЙ".as_bytes()));
+    assert_eq!(
+        seam::append_or_error(&mut e, "Mod Logs\\Мой\\Мод.log".as_bytes(), b"x"),
+        Ok(())
+    );
+    assert_eq!(
+        seam::read(&e, "MOD LOGS\\МОЙ\\мод.LOG".as_bytes()).unwrap(),
+        b"x"
+    );
+    assert_eq!(
+        std::fs::read(game.join("Data").join("Été.txt")).unwrap(),
+        b"game's"
+    );
+    // Without a port folder: refused (the memory would be the only copy).
+    let mut e = engine(&game);
+    assert_eq!(
+        seam::write_or_error(&mut e, name, b"x"),
         Err(ERROR_ACCESS_DENIED)
     );
-    assert!(!seam::create_directory(&mut e, b"Data\\\xc4"));
-    assert_eq!(tree(&kept).len(), 2, "Data and a.txt only");
+    assert_eq!(
+        seam::append_or_error(&mut e, name, b"x"),
+        Err(ERROR_ACCESS_DENIED)
+    );
+    assert!(!seam::create_directory(&mut e, "Data\\Мой".as_bytes()));
+}
+
+/// An append adds to the same file, never a new one put in its place: a reader that holds the
+/// folder's copy open across the append (sharing read, write and delete) sees the new bytes. A
+/// write through a `.part` and a rename would leave that reader on the old, replaced file.
+#[cfg(windows)]
+#[test]
+fn an_append_grows_the_same_file() {
+    use std::io::{Read as _, Seek as _};
+    use std::os::windows::fs::OpenOptionsExt as _;
+    let game = scratch("same-game");
+    let kept = scratch("same-kept");
+    std::fs::create_dir_all(game.join("Logs")).unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let name = br"Logs\S.txt";
+    assert_eq!(seam::write_or_error(&mut e, name, b"one"), Ok(()));
+    let mut held = std::fs::OpenOptions::new()
+        .read(true)
+        // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        .share_mode(7)
+        .open(kept.join(r"Logs\S.txt"))
+        .unwrap();
+    assert_eq!(seam::append_or_error(&mut e, name, b"+two"), Ok(()));
+    let mut seen = Vec::new();
+    held.seek(std::io::SeekFrom::Start(0)).unwrap();
+    held.read_to_end(&mut seen).unwrap();
+    drop(held);
+    assert_eq!(seen, b"one+two", "the file held open grew");
+}
+
+/// A write that fails part way through an append is cut back: the file keeps its old length
+/// and bytes, and the write's code is the answer.
+#[test]
+fn a_failed_append_is_cut_back() {
+    let dir = scratch("cut");
+    let file = dir.join("c.txt");
+    std::fs::write(&file, b"old").unwrap();
+    let failed = append_with(&file, b"new line", |f, bytes| {
+        use std::io::Write as _;
+        f.write_all(&bytes[..3])?;
+        f.flush()?;
+        Err(std::io::Error::from_raw_os_error(112))
+    });
+    assert_eq!(failed, Err(112));
+    assert_eq!(std::fs::read(&file).unwrap(), b"old");
+    assert_eq!(append_to(&file, b"+ok"), Ok(()));
+    assert_eq!(std::fs::read(&file).unwrap(), b"old+ok");
 }
 
 /// `read_head` reads only the first bytes, from this run's write, the folder's copy or the
