@@ -286,6 +286,16 @@ pub fn light_effect_finish(e: &mut Engine, this: Ptr) {
     }
 }
 
+/// `AttachLight`'s attach through the node's slot +0xDC (`0x80ECA8`). JIP LN NVSE's G66 (a fix, the
+/// row `NV_JIP_GAME_PATCHES`; 26 bytes at `0x80ECA8`) tests the node first (words: the node;
+/// answered: skip the call, there is no node). The light itself (colour, radius, position) is not
+/// touched. With the word's `FIXES` bit clear: one load, then the exe's call.
+#[inline]
+fn jip_skips_attach(e: &mut Engine, node: u32) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && e.site(0x0080_eca8, &[node]).is_some()
+}
+
 // Translated from 0080e970 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 0080e970 - the FS:[0] exception frame (unwinding on a throw) is not translated
 /// `LightEffect::AttachLight` (Xbox PDB). Only when the effect has no light yet, its target
@@ -393,8 +403,10 @@ pub fn light_effect_attach_light(e: &mut Engine, this: Ptr) {
     e.with_stack(4, |e, holder| {
         e.call(POINTER_CONSTRUCT, &args![holder, parent]);
         let node = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, holder));
-        let current = light(e, this);
-        e.vcall(node, 0xdc, &args![current, 1u32]);
+        if !jip_skips_attach(e, node) {
+            let current = light(e, this);
+            e.vcall(node, 0xdc, &args![current, 1u32]);
+        }
         let current = light(e, this);
         e.call(SET_SPELL_EFFECT_LIGHT, &args![actor, current]);
         let count = e.mem.u32(LIGHT_COUNT).wrapping_add(1);
@@ -1059,5 +1071,54 @@ mod tests {
         e.register(GET_SPELL_EFFECT_LIGHT, |_, _| 1u32.into_ret());
         e.call(0x0080_e970, &args![this]);
         assert!(calls(&e, SETTING_INT_VALUE).is_empty());
+    }
+
+    thread_local! {
+        /// The words G66's seam handler of a test was asked with.
+        static G66_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// G66's seam at `0x80ECA8` (JIP LN NVSE's 26 bytes there): with the fixes row it is asked once
+    /// with the node, and an answer skips the node's attach call (slot +0xDC) while the rest goes
+    /// on (the light recorded on the actor, counted); no answer: the exe's call. JIP not installed
+    /// or installed without the row: not asked. The light's own values are set as before.
+    #[test]
+    fn jip_g66_seam_decides_the_attach() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn take(e: &mut Engine, a: &[u32]) -> Option<u32> {
+            let _ = e;
+            G66_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(1)
+        }
+        fn pass(e: &mut Engine, a: &[u32]) -> Option<u32> {
+            let _ = e;
+            G66_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            None
+        }
+        let (mut e, this, _) = attach_rig(false);
+        e.call(0x0080_e970, &args![this]);
+        let node = calls(&e, 0x0310_0020)[0][0];
+        for (word, answers, asked, attached) in [
+            (0, true, 0, 1),
+            (jip_patches::INSTALLED, true, 0, 1),
+            (jip_patches::FIXES, false, 1, 1),
+            (jip_patches::FIXES, true, 1, 0),
+        ] {
+            G66_ASKED.with(|v| v.borrow_mut().clear());
+            let (mut e, this, actor) = attach_rig(false);
+            e.set_jip_patches(word);
+            e.on_site(
+                SiteSlot::new(Owner::Jip, 0x0080_eca8),
+                if answers { take } else { pass },
+            );
+            e.call(0x0080_e970, &args![this]);
+            let words = G66_ASKED.with(|v| v.borrow().clone());
+            assert_eq!(words.len(), asked, "{word:08x}");
+            assert!(words.iter().all(|w| w == &[node]), "{word:08x}");
+            assert_eq!(calls(&e, 0x0310_0020).len(), attached, "{word:08x}");
+            assert_eq!(calls(&e, SET_SPELL_EFFECT_LIGHT), vec![vec![actor, 0x0aa1]]);
+            assert_eq!(e.mem.u32(LIGHT_COUNT), 4, "{word:08x}");
+            assert_eq!(calls(&e, LIGHT_SET_FLOAT).len(), 1, "{word:08x}");
+        }
     }
 }

@@ -1091,6 +1091,8 @@ pub fn refused(dir: &Path, never: &[Guarded]) -> Option<&'static str> {
 /// A link AT `dir`'s own name that does not lead to a folder is not followed: the host never
 /// writes or deletes through one (a write removes it and makes a new file, the rename replaces
 /// it, a delete leaves it), so only where its folder leads counts. A link to a folder is followed.
+/// This exception covers only this own-folder rule: a link at a save's name that leads into a
+/// LISTED player folder still blocks that save's copy (the listed folders' rule), deliberately.
 fn leaves_own(dir: &Path, real_dir: &Path, own: &Path, system: System) -> bool {
     let key = match system {
         System::Linux => exact_parts,

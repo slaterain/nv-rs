@@ -714,12 +714,17 @@ fn enum_adapter_modes(
     hr
 }
 
-/// `GetAdapterDisplayMode(adapter, out)`: the captured desktop mode.
+/// `GetAdapterDisplayMode(adapter, out)`: the captured desktop mode; a table without it stops.
 fn get_adapter_display_mode(e: &mut Engine, _this: Ptr, index: u32, out: Ptr) -> u32 {
     if index != 0 || out.is_null() {
         return D3DERR_INVALIDCALL;
     }
     let (hr, data) = device_adapter(e).display_mode.clone();
+    // A table without the line (off Windows: a run that draws nothing) stops here, as the other
+    // getters do, rather than answering D3D_OK with nothing written.
+    if data.len() != DISPLAY_MODE_SIZE {
+        not_captured("GetAdapterDisplayMode", &[index]);
+    }
     e.mem.write(out.addr(), &data);
     hr
 }

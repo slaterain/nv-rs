@@ -872,7 +872,7 @@ fn weapon_mod_effect_value(e: &mut Engine, weapon: u32, xdata: u32, effect: u32)
 // ContChangesEntry::GetBaseHealth.
 /// An item's full health: a weapon's health plus its attached health mod's value (by the first
 /// stack), an armour's health, else 0.
-fn base_health(e: &mut Engine, item: u32, first: u32) -> f32 {
+pub(crate) fn base_health(e: &mut Engine, item: u32, first: u32) -> f32 {
     match type_of(e, item) {
         WEAPON => {
             let health = e.mem.u32(item + WEAPON_HEALTH) as i32 as f32;

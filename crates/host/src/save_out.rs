@@ -1444,6 +1444,27 @@ mod tests {
             assert!(std::fs::symlink_metadata(own.join("y.fos.part")).is_err());
         }
 
+        /// A link planted at the save's own name is not written through either: the guard lets
+        /// the write go (`game_folders`' own-name exception), and the final rename replaces the
+        /// link with the new file, so the file it led to keeps its bytes.
+        #[test]
+        fn a_link_planted_at_the_saves_own_name_is_replaced_not_written_through() {
+            let s = Scratch::new("own-name");
+            let (_, own, never) = s.folders();
+            let victim = s.0.join("victim.txt");
+            std::fs::write(&victim, b"not nv-rs's").unwrap();
+            std::os::unix::fs::symlink(&victim, own.join("y.fos")).unwrap();
+            let check = |p: &Path| game_folders::refused(p, &never);
+            assert_eq!(
+                run_checked(&write(&own, "y.fos", b"the copy"), &check),
+                Ok(Some("NV_SAVE_OUT: copied y.fos".to_string()))
+            );
+            assert_eq!(std::fs::read(&victim).unwrap(), b"not nv-rs's");
+            let meta = std::fs::symlink_metadata(own.join("y.fos")).unwrap();
+            assert!(meta.file_type().is_file(), "{meta:?}");
+            assert_eq!(std::fs::read(own.join("y.fos")).unwrap(), b"the copy");
+        }
+
         /// A deletion through a folder link made after the start is refused: the player's save
         /// the link leads to is still there. A link at the save's own name is not deleted, and
         /// neither is the file it leads to; a plain file is.

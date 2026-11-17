@@ -1520,6 +1520,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // `DoLoadGameHousekeeping` after a load that succeeded: its saved data's part.
             if m.data & 0xff != 0 {
                 crate::world_hooks::restore_form_flags(e);
+                // O17's pass over the high actors (bNPCWeaponMods), JIP's next step.
+                crate::game_patches::gh2::post_load_game(e);
                 // `RestoreLinkedRefs(s_linkedRefsTemp)` with the linked references changed.
                 crate::commands::jip_fn_linked_ref::after_load(e);
                 set_changed(e, 0);
@@ -1544,6 +1546,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             crate::game_patches::gf::deferred_init(e);
             crate::commands::jip_fn_utility::deferred_init(e);
             crate::game_patches::gs::deferred_init(e);
+            // Group GB's part: Big Guns' switch (O3), name and derivation (D06).
+            crate::game_patches::gb::deferred_init(e);
         }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
