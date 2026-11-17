@@ -964,7 +964,8 @@ pub fn combat_formulas_calc_weapon_damage(
         }
     }
 
-    let condition_mult = fn_00646d00(e, health_ratio);
+    // By address: JIP LN NVSE replaces `00646d00` (its G84; `overridable.tsv`).
+    let condition_mult = e.call(0x0064_6d00, &args![health_ratio]).f32();
     let mut perk_mult = 1.0f32;
     let attacker = dynamic_cast(e, owner, TYPE_ACTOR_VALUE_OWNER, TYPE_ACTOR);
     if !attacker.is_null() && e.call(ACTOR_GET_FLAG_566950, &args![attacker]).bool() {
@@ -2944,6 +2945,26 @@ mod tests {
             )
             .f32();
         assert_eq!(damage, 8.0);
+    }
+
+    /// The condition factor (`00646d00`, which JIP LN NVSE's G84 replaces) is called by address
+    /// with the condition, so what is registered there is what counts.
+    #[test]
+    fn calc_weapon_damage_takes_the_condition_factor_by_address() {
+        let (mut e, owner) = damage_world();
+        e.register(0x0064_6d00, |_, _| f32::into_ret(0.5));
+        e.call_log = Some(vec![]);
+        let damage = e
+            .call(
+                0x0064_4ce0,
+                &args![owner, 0u32, 0.625f32, 1.5f32, 0u32, false, 0u32, false],
+            )
+            .f32();
+        let log = e.call_log.take().unwrap_or_default();
+        let calls: Vec<_> = log.iter().filter(|(a, _)| *a == 0x0064_6d00).collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].1[0], 0.625f32.to_bits());
+        assert_ne!(damage, 8.0, "the registered factor used");
     }
 
     #[test]
