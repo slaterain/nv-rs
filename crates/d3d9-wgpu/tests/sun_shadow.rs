@@ -736,8 +736,6 @@ struct Extra {
     ribbon_round: bool,
     /// The half-opaque cut-out strip ([`FENCE`]).
     fence: bool,
-    /// Two fine wires side by side ([`TWO_WIRES`]).
-    two_wires: bool,
     /// One of [`CABLES`] moved by x.
     cable_moved: Option<(usize, f32)>,
     /// The plate under the cable 120 high ([`PLATE`]).
@@ -936,8 +934,6 @@ const RIBBON_ROUND: u32 = 0x15F0;
 /// at x -130 to -70. Its buffer and texture.
 const FENCE: u32 = 0x1600;
 const FENCE_TEX: u32 = 0x1610;
-/// Two fine wires (as [`CABLES`]' first) 1.5 units apart: a bundle.
-const TWO_WIRES: u32 = 0x1620;
 /// A lit plate 5 units under the cable 120 high of [`CABLES`] (x -40 to 10, y 250 to 350, z 115).
 const PLATE: u32 = 0x1630;
 /// Tubes for the indexed draws: ten unused vertices, then the fine wire of [`CABLES`] (its shadow
@@ -1265,9 +1261,6 @@ fn extras(b: &mut WgpuBackend) {
     }
     bytes_buffer(b, FENCE, false, &floats(&v.concat()));
     alpha_texture(b, FENCE_TEX, |i| if i % 2 == 0 { 255 } else { 0 });
-    let mut two = cable_corners(CABLES[0]);
-    two.extend(cable_corners((CABLES[0].0 + 1.5, CABLES[0].1, CABLES[0].2)));
-    buffer(b, TWO_WIRES, &two);
     let (x0, x1, y0, y1, z) = (-40.0, 10.0, 250.0, 350.0, 115.0);
     buffer(
         b,
@@ -1482,9 +1475,6 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
         }
         if e.fence {
             draw_cut(b, FENCE, FENCE_TEX, 40);
-        }
-        if e.two_wires {
-            draw(b, TWO_WIRES, 2 * 16 * 6 * 2);
         }
         if let Some((n, x)) = e.cable_moved {
             set_mvp(b, model_view_proj_at(x, 0.0));
@@ -2327,42 +2317,6 @@ fn a_half_opaque_strip_keeps_its_cut_out_shadow() {
         eprintln!("the half-opaque strip: most {most}, least {least} taken ({samples})");
         assert!(most > 0.9, "its stripes' shadow takes {most} ({samples})");
         assert!(least < 0.1, "between its stripes {least} ({samples})");
-    }
-}
-
-/// Two wires side by side (1.5 units apart: their bands overlap but for a texel) take well over what
-/// one does (0.27 against 0.17; the most of the two would be about one's), not the same (review
-/// of #693: coverage was the most of the two, so a bundle cast as one wire).
-#[test]
-fn two_wires_side_by_side_take_more_than_one() {
-    for samples in [1, 4] {
-        let Some((off, one)) = third_frames(
-            samples,
-            Extra {
-                cable: Some(0),
-                ..Extra::default()
-            },
-        ) else {
-            return;
-        };
-        let (_, two) = third_frames(
-            samples,
-            Extra {
-                two_wires: true,
-                ..Extra::default()
-            },
-        )
-        .expect("the adapter");
-        let (one, two) = (
-            most_taken(&off, &one, -100.0, 300.0),
-            most_taken(&off, &two, -99.0, 300.0),
-        );
-        eprintln!("one wire takes {one}, two {two} ({samples})");
-        assert!(two > 1.4 * one, "one {one}, two {two} ({samples})");
-        assert!(
-            two < 0.9,
-            "two fine wires are no full shadow: {two} ({samples})"
-        );
     }
 }
 

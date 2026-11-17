@@ -33,7 +33,7 @@
 //! its shadow) is
 //! drawn not into the depth maps but into a coverage map a cascade ([`THIN_SIZE`],
 //! [`THIN_FORMAT`]): a round cable as quads along its centreline at least [`THIN_DRAWN`]
-//! texels wide, carrying its share of each texel ([`thin_quads`]), cables side by side added;
+//! texels wide, carrying its share of each texel ([`thin_quads`]);
 //! a ribbon (in the cascades cut-outs are drawn into) through its own pixel shader with its
 //! texture's alpha read at the level the map's texel calls for (the cable's share of the texel),
 //! its ribbons' triangles alone when the geometry has other pieces ([`Body::ribbon_tris`]),
@@ -1641,9 +1641,9 @@ pub const LOOKUP_SIZE: u64 = 8 * 16 + 4 * CASCADES as u64 * 16;
 pub const THIN_SIZE: u32 = 1024;
 /// Their format: how many strands were drawn over a texel (added), the sum of their depths (less
 /// the middle of the depth range, where half floats are finest; added), the sum of the bands they
-/// were drawn over (game units; added), and their coverage (round cables' added, so wires side by
-/// side darken more than one; a ribbon's alpha by the most of it and what is there, as a ribbon
-/// drawn on both sides is one cable).
+/// were drawn over (game units; added), and their coverage (the most drawn over it: wires of a
+/// line closer than a texel cast as one, not as their sum, which merged a telegraph line's wires
+/// into heavy bands; a ribbon drawn on both sides is one cable).
 pub const THIN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// The sun's width across the sky (radians: half a degree): a strand `d` units over a receiver
 /// casts a soft band about `SUN_WIDTH x d` wide.
@@ -2911,9 +2911,15 @@ impl Gpu {
             dst_factor: wgpu::BlendFactor::One,
             operation: wgpu::BlendOperation::Add,
         };
-        // Coverage added too: cables side by side (a bundle, a line seen along its run in a far
-        // cascade) take their sum, up to all of the sun ([`LOOKUP_FNS`] takes at most 1). A strand
-        // bending overlaps its own quads only in a wedge on the inside of the bend.
+        // Coverage: the most of what is drawn over a texel, not the sum. Added (review of #693),
+        // the wires of a telegraph line, a few units apart but within one of the coverage map's
+        // texels (2 to 8 units in the far cascades) and its tent filter, merged into one band as
+        // dark as their sum: heavy dark lines at Goodsprings (thin/crop-th3-on-9835.png against
+        // crop-th-on-9835.png, 2026-11-17), where the real wires cast separate faint lines.
+        let most = wgpu::BlendComponent {
+            operation: wgpu::BlendOperation::Max,
+            ..add
+        };
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sun shadow thin casters"),
             layout: None,
@@ -2938,7 +2944,7 @@ impl Gpu {
                     format: THIN_FORMAT,
                     blend: Some(wgpu::BlendState {
                         color: add,
-                        alpha: add,
+                        alpha: most,
                     }),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
