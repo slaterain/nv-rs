@@ -102,7 +102,7 @@ fn rsqrt_estimate(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 fn rsqrt_estimate(x: f32) -> f32 {
-    1.0 / x.sqrt()
+    engine_core::estimate::rsqrt(x)
 }
 
 /// The refined reciprocal square root of the normalizers: `(0.5 * r) * (3 - (x * r) * r)` for `r`

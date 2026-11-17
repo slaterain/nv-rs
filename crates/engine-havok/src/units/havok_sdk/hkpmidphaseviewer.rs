@@ -104,7 +104,7 @@ fn rcp_estimate(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 fn rcp_estimate(x: f32) -> f32 {
-    1.0 / x
+    engine_core::estimate::rcp(x)
 }
 
 /// `FILD` of a 32-bit integer stored to a float, with `4294967296.0` added first when it is

@@ -198,10 +198,15 @@ pub(crate) fn rsqrtss(dest: Vec4, source: Vec4) -> Vec4 {
     [estimate, dest[1], dest[2], dest[3]]
 }
 
-/// `RSQRTSS` (not x86-64): the exact value.
+/// `RSQRTSS` (not x86-64): the shared model (engine-core `estimate`).
 #[cfg(not(target_arch = "x86_64"))]
 pub(crate) fn rsqrtss(dest: Vec4, source: Vec4) -> Vec4 {
-    [1.0 / source[0].sqrt(), dest[1], dest[2], dest[3]]
+    [
+        engine_core::estimate::rsqrt(source[0]),
+        dest[1],
+        dest[2],
+        dest[3],
+    ]
 }
 
 /// `RSQRTPS`: the host CPU's per-lane estimate of `1 / sqrt(lane)` (it differs between Intel and
@@ -216,10 +221,10 @@ pub(crate) fn rsqrtps(v: Vec4) -> Vec4 {
     out
 }
 
-/// `RSQRTPS` (not x86-64): the exact value.
+/// `RSQRTPS` (not x86-64): the shared model (engine-core `estimate`), per lane.
 #[cfg(not(target_arch = "x86_64"))]
 pub(crate) fn rsqrtps(v: Vec4) -> Vec4 {
-    v.map(|lane| 1.0 / lane.sqrt())
+    v.map(engine_core::estimate::rsqrt)
 }
 
 /// `UNPCKLPS dest, source`: `(d0, s0, d1, s1)`.
@@ -295,10 +300,10 @@ pub(crate) fn rcpps(v: Vec4) -> Vec4 {
     out
 }
 
-/// `RCPPS` (not x86-64): the exact reciprocal.
+/// `RCPPS` (not x86-64): the shared model (engine-core `estimate`), per lane.
 #[cfg(not(target_arch = "x86_64"))]
 pub(crate) fn rcpps(v: Vec4) -> Vec4 {
-    v.map(|lane| 1.0 / lane)
+    v.map(engine_core::estimate::rcp)
 }
 
 /// `CVTDQ2PS`: four signed integers to floats.

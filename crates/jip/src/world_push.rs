@@ -104,7 +104,7 @@ fn rsqrt(x: f32) -> f32 {
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        1.0 / x.sqrt()
+        engine_core::estimate::rsqrt(x)
     }
 }
 

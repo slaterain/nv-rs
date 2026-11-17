@@ -121,7 +121,7 @@ pub(crate) fn shufps(dest: Lanes, source: Lanes, imm: u8) -> Lanes {
 }
 
 /// `RSQRTSS` on one lane: the host CPU's estimate of `1 / sqrt(x)` on x86 (the estimate
-/// differs between Intel and AMD, so tests allow 1 ULP), exact elsewhere.
+/// differs between Intel and AMD, so tests allow 1 ULP), elsewhere the shared model (engine-core `estimate`).
 #[cfg(target_arch = "x86_64")]
 pub(crate) fn rsqrt_estimate(x: f32) -> f32 {
     use std::arch::x86_64::{_mm_cvtss_f32, _mm_rsqrt_ss, _mm_set_ss};
@@ -131,7 +131,7 @@ pub(crate) fn rsqrt_estimate(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 pub(crate) fn rsqrt_estimate(x: f32) -> f32 {
-    1.0 / x.sqrt()
+    engine_core::estimate::rsqrt(x)
 }
 
 /// The compiler's inline `hkArray::pushBack` prologue: asks the memory router and, when the
