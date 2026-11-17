@@ -12,6 +12,9 @@ description = "The core of the engine crates: the game's memory model, Engine, t
 # `units::crt::stdio::test_support` and `units::platform::test_support`); they enable it as a
 # dev-dependency.
 test-support = []
+# The x87 extended-register helpers in software (x87/soft.rs) on an x86-64 host too, so that this
+# PC's tests run the path Apple silicon and ARM Linux use and compare it with the FPU. Tests only.
+soft-x87 = []
 
 # The threads it starts tell Windows they are not background work when NV_NOT_BACKGROUND=1 (crates/qos).
 [dependencies]
