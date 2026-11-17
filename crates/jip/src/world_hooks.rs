@@ -1758,7 +1758,7 @@ const RTTI_TES_DESCRIPTION: u32 = 0x0118_38f8;
 const STR_BUFFER_SIZE: usize = 0x4_0000;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: SetDescriptionAltText.
-fn set_description_alt_text(e: &mut Engine, description: u32, text: &[u8]) {
+pub(crate) fn set_description_alt_text(e: &mut Engine, description: u32, text: &[u8]) {
     if !text.is_empty() {
         if state(e)
             .description_changes

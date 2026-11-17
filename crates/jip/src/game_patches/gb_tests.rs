@@ -1250,7 +1250,7 @@ fn o2_repair_item_and_again() {
 #[test]
 fn gb5_rows_are_jips_addresses() {
     assert_eq!(
-        AREA.fix_sites[14..],
+        AREA.fix_sites[14..19],
         [
             0x004d_4c11,
             0x0078_18b2,
@@ -1269,4 +1269,187 @@ fn g82_reads_a_note_at_jips_offsets_too() {
     let mut e = names_world(0x31, b"Clutter/Notes/Note01.nif", b"");
     assert_eq!(e.site(ITEM_NAMES[2].addr(), &[TILE, STACK, 2]), Some(1));
     assert_eq!(shown(&e), b"Clutter/Notes/Note01.nif (2)");
+}
+
+// ---- GB-6: G112, D06, O3 ----
+
+/// `fRepairSkillMax`'s value word and the exe's 9.0 (its static initializer `00f67c30`:
+/// `0040e0b0("fRepairSkillMax", 0x41100000)` on `0x11D018C`).
+const SKILL_MAX: u32 = 0x011d_0190;
+const EXE_SKILL_MAX: u32 = 0x4110_0000;
+
+/// The row on without reading `jip_nvse.ini` (no file in a test): the fixes in, the word set.
+fn row_on(e: &mut Engine) {
+    install_fixes(e);
+    e.set_jip_patches(
+        engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
+    );
+}
+
+fn skill_max_world(e: &mut Engine) {
+    if !e.mem.is_mapped(SKILL_MAX) {
+        e.map(SKILL_MAX & !0xfff, 0x1000);
+    }
+    e.mem.set_u32(SKILL_MAX, EXE_SKILL_MAX);
+}
+
+/// G112's row: the C runtime's `CALL 0x0086A850` (`0x00ECC46B`, xNVSE loader's `hookCallAddr` for
+/// 1.4.0.525; Ghidra: `00ecc46b: CALL 0x0086a850`), a fix.
+#[test]
+fn g112_row_is_the_call_of_main() {
+    assert_eq!(BEFORE_MAIN.addr(), 0x00ec_c46b);
+    assert_eq!(AREA.fix_sites.last(), Some(&0x00ec_c46b));
+    assert!(!JIP_SITES.contains(&0x00ec_c46b));
+    assert_eq!(REPAIR_SKILL_MAX, SKILL_MAX);
+    assert_eq!(f32::from_bits(REPAIR_SKILL_MAX_JIP), 10.0);
+}
+
+/// G112 with the row on: the seam makes `fRepairSkillMax` 10.0 (JIP's `0x41200000`) over the
+/// exe's 9.0 and answers nothing (`main` goes on), every time it is asked.
+#[test]
+fn g112_sets_ten_and_answers_nothing() {
+    let mut e = engine();
+    skill_max_world(&mut e);
+    crate::install_as(&mut e, true);
+    row_on(&mut e);
+    assert_eq!(e.site(BEFORE_MAIN.addr(), &[]), None);
+    assert_eq!(e.mem.u32(SKILL_MAX), 0x4120_0000);
+    assert_eq!(e.mem.f32(SKILL_MAX), 10.0);
+}
+
+/// G112's handler is in only with the row (a fix): not installed, or installed with the row
+/// off, the seam has no handler and the exe's 9.0 stays.
+#[test]
+fn g112_needs_the_row() {
+    for (installed, row) in [(false, true), (true, false)] {
+        let mut e = engine();
+        skill_max_world(&mut e);
+        crate::install_as(&mut e, installed);
+        set_row(&mut e, row);
+        assert_eq!(e.site(BEFORE_MAIN.addr(), &[]), None);
+        assert_eq!(e.mem.u32(SKILL_MAX), EXE_SKILL_MAX, "{installed} {row}");
+    }
+}
+
+/// A plugin's `GMST` still sets `fRepairSkillMax`: the seam runs once, before the data files
+/// load (`main`'s seam test in `engine-fallout-misc` pins that order); a value written after it
+/// (as the data load writes a plugin's setting) is not touched again by anything of JIP's.
+#[test]
+fn g112_a_later_value_wins() {
+    let mut e = engine();
+    skill_max_world(&mut e);
+    crate::install_as(&mut e, true);
+    row_on(&mut e);
+    e.site(BEFORE_MAIN.addr(), &[]);
+    e.mem.set_f32(SKILL_MAX, 12.5);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.f32(SKILL_MAX), 12.5);
+}
+
+/// A Big Guns actor value as the exe registers it (`0066efe0(0x21, .., 2, 0x2000, 0, ..)`): name
+/// `String` at +0x1C (empty), description at +0x24, `avName` `String` at +0x3C ("BigGuns"),
+/// flags 0x2000, derivation 0.
+const AV_INFO: u32 = AREA_AT + 0x2_0000;
+const AV_NAME_TEXT: u32 = AREA_AT + 0x2_0200;
+
+fn big_guns_world(word: u32) -> Engine {
+    let mut e = engine();
+    e.map(AREA_AT, 0x3_0000);
+    if !e.mem.is_mapped(0x011d_61c8) {
+        e.map(0x011d_6000, 0x1000);
+    }
+    crate::install_as(&mut e, true);
+    if !e.mem.is_mapped(0x011c_5490) {
+        e.map(0x011c_5000, 0x1000);
+    }
+    e.mem.set_u32(0x011d_61c8 + 4 * 0x21, AV_INFO);
+    e.mem.write(AV_NAME_TEXT, b"BigGuns\0");
+    e.mem.set_u32(AV_INFO + 0x1c, 0);
+    e.mem.set_u32(AV_INFO + 0x20, 0);
+    e.mem.set_u32(AV_INFO + 0x3c, AV_NAME_TEXT);
+    e.mem.set_u32(AV_INFO + 0x40, 0x0008_0007);
+    e.mem.set_u32(AV_INFO + 0x44, 0x2000);
+    e.mem.set_u32(AV_INFO + 0x4c, 0);
+    e.set_jip_patches(word);
+    e
+}
+
+/// What JIP's description map holds for Big Guns' description, if anything.
+fn big_guns_description(e: &mut Engine) -> Option<Vec<u8>> {
+    crate::world_hooks::state(e)
+        .description_changes
+        .get(&(AV_INFO + 0x24))
+        .cloned()
+}
+
+/// D06 with the row on (`bEnableBigGunsSkill` off): Big Guns' name `String` is its actor value
+/// name's (pointer and both lengths, the buffer shared) and its derivation the skills'
+/// `0x643BD0`; its flags (0x2000) and description stay.
+#[test]
+fn d06_names_big_guns_and_gives_it_the_skills_derivation() {
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+    let mut e = big_guns_world(INSTALLED | FIXES);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.u32(AV_INFO + 0x1c), AV_NAME_TEXT);
+    assert_eq!(e.mem.u32(AV_INFO + 0x20), 0x0008_0007);
+    assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
+    assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x2000);
+    assert_eq!(e.mem.u32(AV_INFO + 0x3c), AV_NAME_TEXT, "avName kept");
+    assert_eq!(big_guns_description(&mut e), None);
+    assert_eq!(e.hook_users(engine_core::extend::Hook::GetDescription), 0);
+}
+
+/// O3 (`bEnableBigGunsSkill`, with the row): D06's part, the flags 0x410 and JIP's description
+/// (`kBigGunsDescription`) put in JIP's description map, one user of its hook.
+#[test]
+fn o3_makes_big_guns_a_skill_with_jips_description() {
+    use engine_core::extend::jip_patches::{ENABLE_BIG_GUNS_SKILL, FIXES, INSTALLED};
+    let mut e = big_guns_world(INSTALLED | FIXES | ENABLE_BIG_GUNS_SKILL);
+    deferred_init(&mut e);
+    assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x410);
+    assert_eq!(e.mem.u32(AV_INFO + 0x1c), AV_NAME_TEXT);
+    assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
+    assert_eq!(
+        big_guns_description(&mut e).as_deref(),
+        Some(&b"The Big Guns skill determines your combat effectiveness with all oversized weapons such as the Fat Man, Missile Launcher, Flamer, Minigun, Gatling Laser, etc."[..])
+    );
+    assert_eq!(e.hook_users(engine_core::extend::Hook::GetDescription), 1);
+}
+
+/// Without the row (installed only, or nothing) Big Guns stays as the exe made it, whatever the
+/// switch bit says.
+#[test]
+fn big_guns_unchanged_without_the_row() {
+    use engine_core::extend::jip_patches::{ENABLE_BIG_GUNS_SKILL, INSTALLED};
+    for word in [0, INSTALLED, INSTALLED | ENABLE_BIG_GUNS_SKILL] {
+        let mut e = big_guns_world(word);
+        deferred_init(&mut e);
+        assert_eq!(e.mem.u32(AV_INFO + 0x1c), 0, "{word:08x}");
+        assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x2000, "{word:08x}");
+        assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0, "{word:08x}");
+        assert_eq!(big_guns_description(&mut e), None, "{word:08x}");
+    }
+}
+
+/// JIP's deferred start through the co-save listener (xNVSE's `DEFERRED_INIT`) runs group GB's
+/// part.
+#[test]
+fn big_guns_through_the_deferred_start() {
+    use engine_core::extend::jip_patches::{ENABLE_BIG_GUNS_SKILL, FIXES, INSTALLED};
+    let mut e = big_guns_world(INSTALLED | FIXES | ENABLE_BIG_GUNS_SKILL);
+    // Group GS's deferred part looks a plugin up through the game's data handler: one with no
+    // files loaded.
+    if !e.mem.is_mapped(0x011c_3f2c) {
+        e.map(0x011c_3000, 0x1000);
+    }
+    e.mem.set_u32(0x011c_3f2c, AREA_AT + 0x2_8000);
+    e.ext::<crate::Jip>().pos_marker.marker = 1;
+    let message = nvse::plugins::Message {
+        kind: nvse::plugins::msg::DEFERRED_INIT,
+        data: 0,
+        len: 0,
+    };
+    crate::cosave::listen(&mut e, &message);
+    assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x410);
+    assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
 }
