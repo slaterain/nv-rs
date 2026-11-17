@@ -913,7 +913,11 @@ pub struct Guarded {
 /// `~/Documents` and the XDG Documents folder; Steam's and the Wine tools' whole folders
 /// ([`whole_folders`]), every Steam folder and library (the game, Proton's prefixes with the
 /// player's Proton saves), every game folder, prefix and saves folder found. macOS: `~/Documents`
-/// and `~/Library`.
+/// and `~/Library` (CrossOver's bottles and their saves found too). On macOS a prefix outside
+/// `~/Library` (plain Wine's `~/.wine`, a Game Porting Toolkit or Homebrew Wine prefix, Heroic's
+/// `~/Games/Heroic/Prefixes`) is not named: it is left to the `drive_c/users` shape ([`by_shape`],
+/// which refuses every prefix's users folder, where the saves are). The game folder the port was
+/// started with is guarded by the host whether this finds it or not (`host::save_out::prepare`).
 pub fn never_written(home: &Home) -> Vec<Guarded> {
     never_written_from(home, &scan(home))
 }

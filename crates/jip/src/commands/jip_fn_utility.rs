@@ -1,20 +1,22 @@
 //! `functions_jip/jip_fn_utility.h` (JIP LN NVSE): form ids to text and back, the smallest and
 //! largest of up to five numbers, the load order checks, clearing a mod's JIP data, a plugin's
 //! header version, an array element as a number, a random integer, and whether the game has the
-//! large address space, and (lane C1) the seconds since the game started. 12 of its 19 commands.
+//! large address space, (lane C1) the seconds since the game started, and (lane files) arrays and
+//! texts read from and written to files and mod logs (`ReadArrayFromFile`, `WriteArrayToFile`,
+//! `ReadStringFromFile`, `WriteStringToFile`, `ModLogPrint`) through the core's seam
+//! `engine_core::mod_files`: what a mod writes is kept in the port's own folder beside the saves,
+//! never in the game folder. 17 of its 19 commands.
 //!
-//! Left for later, each for its reason: `ReadArrayFromFile`, `WriteArrayToFile`,
-//! `ReadStringFromFile`, `WriteStringToFile` and `ModLogPrint` read or write the player's files
-//! (the platform keeps every file the game writes in memory, so a file a mod writes would not be
-//! there next session; built together with JIP's INI commands once there is a file seam that
-//! keeps them); `SetOptionalPatch` switches JIP's patches (the switch rows of step 3.9);
-//! `GetOptionalPatch` answers whether each switch's hook or patch is in (`HOOK_INSTALLED`,
+//! Left for later, each for its reason: `SetOptionalPatch` switches JIP's patches (the switch
+//! rows of step 3.9); `GetOptionalPatch` answers whether each switch's hook or patch is in (`HOOK_INSTALLED`,
 //! `s_patchInstallState`): the port's switch word (`Engine::jip_patches`) says what the player's
 //! ini asks for, and of the switch rows only O6 and O7 are on main (survey of 2026-11-15), so it
 //! would answer 1 for patches the port does not have (`bIgnoreDTDRFix` is on by default);
 //! it waits for those rows, or for a per-switch "in" state that each row sets.
 
-use super::jip_fn_aux_variable::overriding_mod;
+use super::arrays::{append_element, create_array, Element};
+use super::jip_fn_aux_variable::{array_values, overriding_mod};
+use super::jip_fn_ui::next_token;
 use super::{ref_id, Handlers};
 use crate::containers::str_hash_ci;
 use crate::cosave::{changed, lookup_form, resolved_mod_index, resolved_ref_id};
@@ -32,6 +34,10 @@ pub static COMMANDS: Handlers = &[
     (0x262b, string_to_ref_command),
     (0x262e, get_min_of),
     (0x262f, get_max_of),
+    (0x263a, read_array_from_file),
+    (0x263b, read_string_from_file),
+    (0x263c, write_array_to_file),
+    (0x263d, write_string_to_file),
     (0x268e, get_load_order_changed),
     (0x268f, validate_mod_index),
     (0x26aa, clear_jip_saved_data),
@@ -40,6 +46,7 @@ pub static COMMANDS: Handlers = &[
     (0x28de, get_random_in_range),
     (0x2892, get_is_laa),
     (0x272e, get_session_time),
+    (0x27c0, mod_log_print),
 ];
 
 /// `g_dataHandler` (`*011C3F2C`): its loaded file count (`modList.loadedModCount`, +0x218) and
@@ -538,6 +545,410 @@ fn get_session_time(e: &mut Engine, w: &[u32]) -> Ret {
     let now = e.call(TICK_COUNT, &args![]).u32();
     let start = e.ext::<SessionStart>().ticks;
     a.set_result(e, f64::from(now.wrapping_sub(start) as i32) * 0.001);
+    handled(true)
+}
+// ---- Mods' files: arrays and texts read from and written to files, mod logs (lane files) ----
+//
+// Every name goes through the core's seam (`engine_core::mod_files`): a file a mod writes is kept
+// in the port's own folder beside the saves, never in the game's folder; reads look there first,
+// then in the game's. A name the seam refuses (outside the game's folder) answers as a file
+// Windows could not open: nothing read, result 0.
+
+/// JIP's buffers: `char filePath[0x100]`; `GetStrArgBuffer()` (`STR_BUFFER_SIZE`, 0x40000), which
+/// takes a file's lines whole, `ReadStringFromFile`'s path, `WriteStringToFile`'s path (its
+/// first 0x100 bytes) and text (after them), and `ModLogPrint`'s text; `kMaxMessageLength`
+/// (0x4000), less one: what `ReadStringFromFile` reads of a file.
+const FILE_PATH: usize = 0x100;
+const STR_ARG_BUFFER: usize = 0x4_0000;
+const READ_STRING_MAX: usize = 0x4000 - 1;
+/// `numParams` of `WriteStringToFile` (path, append, then xNVSE's 21 format parameters) and of
+/// `ModLogPrint` (the indent, then the 21).
+const WRITE_STRING_PARAMS: u32 = 23;
+const MOD_LOG_PARAMS: u32 = 22;
+/// `ModInfo::hasModLog` (+0x29B, JIP's own byte in the game's file record): the file's log was
+/// started in this session, so later prints append.
+const HAS_MOD_LOG: u32 = 0x29b;
+/// `kIndentLevelStr`: 40 tabs.
+const INDENT_TABS: usize = 40;
+
+/// `ReplaceChr(path, '/', '\\')`.
+fn backslashes(path: &mut [u8]) {
+    for b in path {
+        if *b == b'/' {
+            *b = b'\\';
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: LineIterator.
+/// The lines `LineIterator` gives of a file: its bytes with CR and LF made 0 (those before its
+/// first 0 byte), the texts between
+/// 0s (empty ones skipped) up to one that starts with byte 3 (JIP's end mark after the bytes).
+/// `None` when the file is not there. JIP reads the whole file into its string buffer: a file
+/// that does not fit ([`super::formatted_in_buffer`]'s rule) stops the port without the list
+/// guard row.
+fn file_lines(e: &Engine, path: &[u8], command: &str) -> Option<Vec<Vec<u8>>> {
+    let bytes = engine_core::mod_files::read(e, path)?;
+    if bytes.len() + 2 > STR_ARG_BUFFER && !super::fix_on(e, super::LIST_GUARD) {
+        panic!(
+            "{command}: a file of {} bytes runs past JIP's {STR_ARG_BUFFER}-byte buffer: the \
+             port stops here (NV_NVSE_LIST_GUARD reads it whole)",
+            bytes.len()
+        );
+    }
+    // CR and LF become 0 only before the file's first 0 byte (`ReplaceChr` stops at it); the
+    // whole buffer is then cut at 0 bytes.
+    let mut bytes = bytes;
+    let text_end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    for b in &mut bytes[..text_end] {
+        if *b == b'\r' || *b == b'\n' {
+            *b = 0;
+        }
+    }
+    let mut out = Vec::new();
+    for line in bytes.split(|&b| b == 0) {
+        if line.is_empty() {
+            continue;
+        }
+        if line[0] == 3 {
+            break;
+        }
+        out.push(line.to_vec());
+    }
+    Some(out)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: FileStream::OpenWrite,
+// FileStream::MakeAllDirs.
+/// The file written: a LF and the text added at its end when `append` and it is there (the
+/// seam's append: only those bytes are written, as `fopen(.., "ab")`), else made new (its folders
+/// first when it is not there: JIP asks `FileExists`, the attributes, not a read). False when the
+/// seam refuses the name or the write, or when appending to a file that is there but cannot be
+/// opened (JIP's `fopen(.., "ab")` fails there: nothing is written, the file is kept).
+fn open_write(e: &mut Engine, path: &[u8], append: bool, text: &[u8]) -> bool {
+    // One kernel lock hold over the look and the write, as the seam's profile writes hold it,
+    // so another thread's write of the file cannot fall between them.
+    let _kernel = engine_core::real_threads::kernel_guard(e);
+    if engine_core::mod_files::exists(e, path) {
+        if append {
+            let mut bytes = Vec::with_capacity(text.len() + 1);
+            bytes.push(b'\n');
+            bytes.extend_from_slice(text);
+            return engine_core::mod_files::append(e, path, &bytes);
+        }
+    } else {
+        for (i, &b) in path.iter().enumerate() {
+            if b == b'\\' {
+                engine_core::mod_files::create_directory(e, &path[..i]);
+            }
+        }
+    }
+    engine_core::mod_files::write(e, path, text)
+}
+
+/// One value of a file line as `ReadArrayFromFile` reads it: `@` a form by `StringToRef` (looked
+/// up, 0 when gone), `$` a text, else JIP's `StrToDbl`.
+fn file_element(e: &mut Engine, token: &[u8]) -> Element {
+    match token.first() {
+        Some(b'@') => {
+            let id = string_to_ref(e, &token[1..]);
+            Element::Form(lookup_form(e, id))
+        }
+        Some(b'$') => Element::Str(token[1..].to_vec()),
+        _ => Element::Number(crate::utility::str_to_dbl(token)),
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_utility.h:
+// Cmd_ReadArrayFromFile_Execute; internal/utility.cpp: GetNextToken (char).
+/// A file of tab-separated values as an array: the first line sets the columns (its values up
+/// to an empty one; none: nothing); each later line gives that many values (0 past its end). One
+/// line without `transpose`: that line's array; else an array of the columns' arrays, or with
+/// `transpose` of the lines' arrays.
+fn read_array_from_file(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let mut path = super::buffer_arg(e, &read, 0, FILE_PATH, "ReadArrayFromFile");
+    let transpose = read.int(1, 0) != 0;
+    backslashes(&mut path);
+    let Some(lines) = file_lines(e, &path, "ReadArrayFromFile") else {
+        return handled(true);
+    };
+    let Some((first, rest)) = lines.split_first() else {
+        return handled(true);
+    };
+    let mut elements = Vec::new();
+    let mut data: &[u8] = first;
+    loop {
+        let (token, next) = next_token(data, b'\t');
+        if token.is_empty() {
+            break;
+        }
+        elements.push(file_element(e, token));
+        data = next;
+    }
+    let columns = elements.len();
+    if columns == 0 {
+        return handled(true);
+    }
+    for line in rest {
+        let mut data: &[u8] = line;
+        for _ in 0..columns {
+            if data.is_empty() {
+                elements.push(Element::Number(0.0));
+            } else {
+                let (token, next) = next_token(data, b'\t');
+                elements.push(file_element(e, token));
+                data = next;
+            }
+        }
+    }
+    let count = lines.len();
+    if count == 1 && !transpose {
+        let id = create_array(e, a.script, &elements);
+        a.set_result(e, f64::from(id as i32));
+        return handled(true);
+    }
+    let main = create_array(e, a.script, &[]);
+    if !transpose {
+        for c in 0..columns {
+            let column: Vec<Element> = (0..count)
+                .map(|l| elements[l * columns + c].clone())
+                .collect();
+            let id = create_array(e, a.script, &column);
+            append_element(e, main, &Element::Array(id));
+        }
+    } else {
+        for line in elements.chunks(columns) {
+            let id = create_array(e, a.script, line);
+            append_element(e, main, &Element::Array(id));
+        }
+    }
+    a.set_result(e, f64::from(main as i32));
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_utility.h: WriteElemToFile.
+/// Value `idx` of a column as `WriteArrayToFile` writes it: a number as `FltToStr`, a form as `@`
+/// and its editor ID (with `edid`, when it has one) or `RefToString`, a text as `$` and the
+/// text; `0` for none (past the column's end, no form, an array).
+fn file_value(e: &mut Engine, column: &[Data], idx: usize, edid: bool) -> Vec<u8> {
+    match column.get(idx) {
+        Some(Data::Number(v)) => crate::utility::flt_to_str(*v),
+        Some(Data::Form(id)) => {
+            let form = lookup_form(e, *id);
+            if form == 0 {
+                return b"0".to_vec();
+            }
+            let mut out = vec![b'@'];
+            if edid {
+                let name = e.vcall(form, super::forms::GET_EDITOR_ID, &[]).u32();
+                if name != 0 && e.mem.u8(name) != 0 {
+                    out.extend(nvse::table::guest_text(e, name));
+                    return out;
+                }
+            }
+            out.extend(ref_string(e, form));
+            out
+        }
+        Some(Data::Str(text)) => [&b"$"[..], text].concat(),
+        _ => b"0".to_vec(),
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_utility.h:
+// Cmd_WriteArrayToFile_Execute.
+/// An array written as tab-separated lines (each element an array is a column, any other value a
+/// column of one; as many lines as the longest column), or with flag 1 a column a line; flag 2
+/// writes forms by editor ID. Appended after a LF when asked and the file is there; 1 when
+/// written.
+fn write_array_to_file(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let mut path = super::buffer_arg(e, &read, 0, FILE_PATH, "WriteArrayToFile");
+    let append = read.int(1, 0) != 0;
+    let flags = read.int(3, 0);
+    let Some(top) = array_values(e, read.int(2, 0)) else {
+        return handled(true);
+    };
+    if top.is_empty() {
+        return handled(true);
+    }
+    let mut lines = 1;
+    let columns: Vec<Vec<Data>> = top
+        .iter()
+        .map(|v| match v {
+            Data::Array(id) => {
+                let column = array_values(e, *id).unwrap_or_default();
+                lines = lines.max(column.len());
+                column
+            }
+            other => vec![other.clone()],
+        })
+        .collect();
+    backslashes(&mut path);
+    let edid = flags & 2 != 0;
+    let mut text = Vec::new();
+    if flags & 1 == 0 {
+        for idx in 0..lines {
+            for (c, column) in columns.iter().enumerate() {
+                text.extend(file_value(e, column, idx, edid));
+                if columns.len() - c > 1 {
+                    text.push(b'\t');
+                }
+            }
+            if lines - idx > 1 {
+                text.push(b'\n');
+            }
+        }
+    } else {
+        for (c, column) in columns.iter().enumerate() {
+            for idx in 0..lines {
+                text.extend(file_value(e, column, idx, edid));
+                if lines - idx > 1 {
+                    text.push(b'\t');
+                }
+            }
+            if columns.len() - c > 1 {
+                text.push(b'\n');
+            }
+        }
+    }
+    if open_write(e, &path, append, &text) {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_utility.h:
+// Cmd_ReadStringFromFile_Execute; internal/utility.cpp: FileToBuffer.
+/// A file's text (its first 0x3FFF bytes, up to a 0 byte): from line `start` (from 1; 0 or 1:
+/// the first), `count` lines (the line end of the last one left out; -1 or none: to the end); a
+/// `count` of 0, or an empty or missing file, `""`.
+fn read_string_from_file(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    let mut text = Vec::new();
+    if read.ok {
+        let mut start = read.int(1, 0) as i32;
+        let mut count = read.int(2, u32::MAX) as i32;
+        let mut path = super::buffer_arg(e, &read, 0, STR_ARG_BUFFER, "ReadStringFromFile");
+        backslashes(&mut path);
+        if count != 0 {
+            // Only the first 0x3FFF bytes are read (`FileToBuffer`'s `fread`), however large
+            // the file.
+            if let Some(mut bytes) = engine_core::mod_files::read_head(e, &path, READ_STRING_MAX)
+                .filter(|b| !b.is_empty())
+            {
+                // The text ends at its first 0 byte: JIP looks for line ends in the string only
+                // (`FindChr` stops at the 0).
+                if let Some(nul) = bytes.iter().position(|&b| b == 0) {
+                    bytes.truncate(nul);
+                }
+                let (mut from, mut to) = (0usize, bytes.len());
+                start -= 1;
+                if start > 0 || count > 0 {
+                    let mut at = 0usize;
+                    while let Some(n) = bytes[at..].iter().position(|&b| b == b'\n') {
+                        let nl = at + n;
+                        if start > 0 {
+                            start -= 1;
+                            from = nl + 1;
+                        } else if count <= 0 {
+                            break;
+                        } else {
+                            count -= 1;
+                            if count == 0 {
+                                to = if nl > 0 && bytes[nl - 1] == b'\r' {
+                                    nl - 1
+                                } else {
+                                    nl
+                                };
+                                break;
+                            }
+                        }
+                        at = nl + 1;
+                    }
+                }
+                text = bytes[from.min(to)..to].to_vec();
+            }
+        }
+    }
+    super::assign_string(e, &a, Some(text));
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_utility.h:
+// Cmd_WriteStringToFile_Execute.
+/// The formatted text written to the file (after its bytes and a LF when asked and the file is
+/// there); 1 when written.
+fn write_string_to_file(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let f = nvse::commands::string::format_string_args_at(e, &a, 2, WRITE_STRING_PARAMS);
+    if !f.ok {
+        return handled(true);
+    }
+    let mut path = nvse::commands::args_in_buffer(e, &f.leading, 0, FILE_PATH, "WriteStringToFile");
+    let append = matches!(f.leading.get(1), Some(Arg::Int(v)) if *v != 0);
+    let text =
+        super::formatted_in_buffer(e, &f.text, STR_ARG_BUFFER - FILE_PATH, "WriteStringToFile");
+    backslashes(&mut path);
+    if open_write(e, &path, append, &text) {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_utility.h:
+// Cmd_ModLogPrint_Execute.
+/// The formatted text written to `Mod Logs\<the script's file>.log`, after `indent` tabs (40 for
+/// 40 or more): the first print of a session starts the file anew, later ones append after a LF.
+/// Nothing for a script of no file.
+fn mod_log_print(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let index = overriding_mod(e, a.script);
+    if index == 0xff {
+        return handled(true);
+    }
+    let f = nvse::commands::string::format_string_args_at(e, &a, 1, MOD_LOG_PARAMS);
+    if !f.ok {
+        return handled(true);
+    }
+    let indent = match f.leading.first() {
+        Some(Arg::Int(v)) => *v as u32,
+        _ => 0,
+    };
+    let text = super::formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "ModLogPrint");
+    let info = e.mem.u32(e.mem.u32(DATA_HANDLER) + LOADED_MODS + 4 * index);
+    // JIP reads the file's record unchecked; a slot with none here writes nothing.
+    if info == 0 {
+        return handled(true);
+    }
+    let mut path = b"Mod Logs\\".to_vec();
+    path.extend(nvse::table::guest_text(e, info + MOD_NAME));
+    path.extend_from_slice(b".log");
+    let mut line = Vec::new();
+    if indent != 0 {
+        line.resize(
+            if indent >= INDENT_TABS as u32 {
+                INDENT_TABS
+            } else {
+                indent as usize
+            },
+            b'\t',
+        );
+    }
+    line.extend_from_slice(&text);
+    let append = e.mem.u8(info + HAS_MOD_LOG) != 0;
+    if open_write(e, &path, append, &line) {
+        e.mem.set_u8(info + HAS_MOD_LOG, 1);
+    }
     handled(true)
 }
 

@@ -95,6 +95,13 @@ fn prepare(e: &mut Engine) {
         e.map(0x011c_f000, 0x1000);
         e.register(0x0064_6260, |e, _| f32::into_ret(e.mem.f32(0x011c_f154)));
     }
+    // G84's and G85's wraps (`00646d00`, `00646360`), when the test engine has no translation of
+    // them: answers no test reads (JIP's wraps replace them, never handing the call on).
+    for at in [0x0064_6d00, 0x0064_6360] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| f32::into_ret(-1.0));
+        }
+    }
     // O1's wrap (`009b5a30`, `HitData::ReduceDamage`): a stand-in that leaves the hit as it is.
     if !e.is_registered(0x009b_5a30) {
         e.register(0x009b_5a30, |_, _| Ret::default());

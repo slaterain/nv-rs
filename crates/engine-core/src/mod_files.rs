@@ -17,7 +17,19 @@
 //!
 //! Locking: the calls reach the platform layer's state (`Kernel::platform`), which with real
 //! threads other threads change under the kernel lock; each wrapper here holds it
-//! ([`crate::real_threads::kernel_guard`]) for the call. The calls make no game call.
+//! ([`crate::real_threads::kernel_guard`]) for the call. The profile writes ([`write_profile_string`],
+//! `remove_profile_key`, `remove_profile_section`, `write_profile_section`) hold it once over their
+//! read, change and write together (the calls' own guards re-enter), so no other thread's write of
+//! the file falls between them and is lost. The calls make no game call.
+//!
+//! The lock is held across the call's disk work too (the folder made and checked, the `.part`
+//! written and renamed, a kept file read), on purpose (REVIEW-629b, 2026-11-16, weighed): a
+//! write's disk copy and its copy in the run's memory (`written`) must change together, so two
+//! writes of one file can never leave the disk with one and this session with the other, and a
+//! read never sees a file between its rename and its memory copy. Narrowing the lock to the state
+//! alone would need an order per file to keep that true, which is not simple. The cost is one
+//! small file write per mod command that writes (an INI setting changed), on the thread that runs
+//! the script, while other threads' platform calls wait for it.
 
 use crate::Engine;
 
@@ -51,10 +63,21 @@ pub struct ModFileCalls {
     /// folder exists nowhere, `ERROR_ACCESS_DENIED` for a folder, a name outside the game's
     /// folder or a port folder that refused the write.
     pub write: WriteCall,
+    /// `fopen(name, "ab")` and a write of the bytes: added at the end of the file (only the new
+    /// bytes are written, so N appends cost N small writes, not N whole files); a file that is
+    /// not there is made with them. The same names and failures as [`ModFileCalls::write`]; a
+    /// file that is there but cannot be opened (held, unreadable) fails and is left as it is.
+    pub append: WriteCall,
+    /// The first `max` bytes of the file, from [`ModFileCalls::read`]'s places with its
+    /// answers: only those bytes are read (`FileToBuffer`'s `fread` of at most `maxLen`).
+    pub read_head: ReadHeadCall,
 }
 
 /// [`ModFileCalls::write`]'s type: the engine, the name, the bytes; Windows' error code.
 pub type WriteCall = fn(&mut Engine, &[u8], &[u8]) -> Result<(), u32>;
+
+/// [`ModFileCalls::read_head`]'s type: the engine, the name, at most this many bytes.
+pub type ReadHeadCall = fn(&Engine, &[u8], usize) -> Result<Vec<u8>, u32>;
 
 static CALLS: std::sync::OnceLock<&'static ModFileCalls> = std::sync::OnceLock::new();
 
@@ -113,18 +136,71 @@ pub fn write(e: &mut Engine, name: &[u8], bytes: &[u8]) -> bool {
     write_or_error(e, name, bytes).is_ok()
 }
 
+/// [`ModFileCalls::append`] under the kernel lock.
+pub fn append_or_error(e: &mut Engine, name: &[u8], bytes: &[u8]) -> Result<(), u32> {
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().map_or(Err(ERROR_NOT_SUPPORTED), |c| (c.append)(e, name, bytes))
+}
+
+/// [`append_or_error`]: true when written.
+pub fn append(e: &mut Engine, name: &[u8], bytes: &[u8]) -> bool {
+    append_or_error(e, name, bytes).is_ok()
+}
+
+/// [`ModFileCalls::read_head`] under the kernel lock; `ERROR_NOT_SUPPORTED` without the
+/// platform.
+pub fn read_head_or_error(e: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>, u32> {
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().map_or(Err(ERROR_NOT_SUPPORTED), |c| (c.read_head)(e, name, max))
+}
+
+/// [`read_head_or_error`]'s bytes; `None` for any error.
+pub fn read_head(e: &Engine, name: &[u8], max: usize) -> Option<Vec<u8>> {
+    read_head_or_error(e, name, max).ok()
+}
+
 /// `GetPrivateProfileStringA(section, key, ..., name)` over [`read`]: the value as Windows reads
-/// it ([`ini_value`]), `None` when the file, the section or the key is not there (or the file
-/// cannot be read, when Windows also answers the default).
+/// it ([`ini_value`]; a UTF-16 LE file as text, [`text`]), `None` when the file, the section or
+/// the key is not there (or the file cannot be read, when Windows also answers the default).
+///
+/// A name without a folder part (`MCM.ini`) is taken from the game's folder, where Windows' own
+/// profile calls take it from the Windows folder (`ini.rs`'s `profile_path`, measured): a mod's
+/// file never belongs in the Windows folder, and the port keeps every mod file under the game's
+/// name rules so a write lands in the port's folder; no extender command passes a bare name today
+/// (MCM and JIP LN add `Data\Config\`).
 pub fn profile_string(e: &Engine, name: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    ini_value(&read(e, name)?, section, key)
+    let file = text::Decoded::of(&read(e, name)?);
+    let value = ini_value(&file.text, &file.arg(section), &file.arg(key))?;
+    Some(file.answer(&value))
+}
+
+/// Between a profile write's read and its write: the kernel lock is still held (the write took
+/// it for the whole change; a debug check, so a write that lost its outer hold fails its tests).
+pub(crate) fn held_across(e: &Engine) {
+    debug_assert!(
+        crate::real_threads::kernel_lock_held(e),
+        "a profile write's read and write must sit under one kernel lock hold"
+    );
+}
+
+/// A file the profile writes leave alone because its encoding was not measured (see
+/// [`text`]): one line in the log, and `ERROR_NOT_SUPPORTED`.
+fn unmodelled(name: &[u8]) -> u32 {
+    println!(
+        "mod files: {} is not a text file Windows' profile calls were measured on (a 0 byte, not \
+         UTF-16 LE with its mark); not written, so it stays as it is",
+        String::from_utf8_lossy(name)
+    );
+    ERROR_NOT_SUPPORTED
 }
 
 /// `WritePrivateProfileStringA(section, key, value, name)` over [`read_or_error`] and
 /// [`write_or_error`]: the file as Windows rewrites it ([`written_profile`]); a missing file
 /// starts empty. A file that is there but cannot be read is not written (so a kept file is never
 /// replaced by one made from nothing), with one line in the log; the error comes back, as it
-/// does when the folder exists nowhere or the write fails.
+/// does when the folder exists nowhere or the write fails. A UTF-16 LE file is changed as text
+/// and written back as UTF-16 LE; a file with a 0 byte that is not one is not written,
+/// `ERROR_NOT_SUPPORTED` ([`text`]). A name without a folder part: as [`profile_string`] says.
 pub fn write_profile_string(
     e: &mut Engine,
     name: &[u8],
@@ -132,6 +208,9 @@ pub fn write_profile_string(
     key: &[u8],
     value: &[u8],
 ) -> Result<(), u32> {
+    // One hold over the read, the change and the write, so another thread's write of the file
+    // cannot fall between them and be lost (REVIEW-642b; the calls' own guards re-enter).
+    let _kernel = crate::real_threads::kernel_guard(e);
     let old = match read_or_error(e, name) {
         Ok(bytes) => bytes,
         Err(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => Vec::new(),
@@ -143,8 +222,22 @@ pub fn write_profile_string(
             return Err(code);
         }
     };
-    let new = written_profile(&old, section, key, value);
-    write_or_error(e, name, &new)
+    held_across(e);
+    let file = text::Decoded::of(&old);
+    if !file.writable {
+        return Err(unmodelled(name));
+    }
+    let mut new = written_profile(
+        &file.text,
+        &file.arg(section),
+        &file.arg(key),
+        &file.arg(value),
+    );
+    // A UTF-16 file that is only its mark gets a line end first (ini7 `bom only`).
+    if file.mark_only() {
+        new.splice(0..0, CRLF.iter().copied());
+    }
+    write_or_error(e, name, &file.encode(&new))
 }
 
 /// ASCII white space taken off both ends.
@@ -170,7 +263,9 @@ pub fn trim_spaces(s: &[u8]) -> &[u8] {
 /// (`[A]\rx=1\ry=2\r` reads y as 2: `jip-cmds/files-measure/ini4-2026-11-16.txt`, `STRING cr
 /// only`; `ini5-...`, `SECTION cr cr lf` and `lf cr`).
 pub fn ini_value(text: &[u8], section: &[u8], key: &[u8]) -> Option<Vec<u8>> {
-    let section = trim_spaces(section);
+    // The arguments' own spaces go too (` A `/` x ` find `[A]` and `x`:
+    // `jip-cmds/files-measure/ini6-2026-11-16.txt`, `STRING spaced ...`).
+    let (section, key) = (trim_spaces(section), trim_spaces(key));
     let mut inside = false;
     for line in text.split(|&b| b == b'\n' || b == b'\r') {
         let line = trim_spaces(line);
@@ -257,7 +352,7 @@ fn profile_lines(text: &[u8]) -> Vec<(&[u8], &[u8])> {
 /// - a new key goes right after the section's last key line (after its heading when it has none),
 ///   before comments, other lines and blank lines, as `key=value` CR LF;
 /// - a new section goes at the end, `[section]` CR LF `key=value` CR LF, with no blank line;
-/// - names and the value are written as given.
+/// - names are written without the spaces around them, the value as given.
 pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> Vec<u8> {
     // Blanks at the very end go before the text is split (`x=1\r ` is `x=1\r`, whose CR then
     // ends no line).
@@ -290,7 +385,9 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
             last_key = Some(i);
         }
     }
-    let new_line: Vec<u8> = [key, b"=", value].concat();
+    // A new key and a new heading are written without spaces around their names (` w `=v writes
+    // `w=v`, ` C ` writes `[C]`: `jip-cmds/files-measure/ini6-2026-11-16.txt`, `spaced ... new`).
+    let new_line: Vec<u8> = [key_name, b"=", value].concat();
     let mut out = Vec::with_capacity(old.len() + new_line.len() + section.len() + 8);
     let push = |out: &mut Vec<u8>, line: &[u8], ended: &[u8]| {
         out.extend_from_slice(line);
@@ -318,7 +415,7 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
     }
     if heading.is_none() {
         out.push(b'[');
-        out.extend_from_slice(section);
+        out.extend_from_slice(section_name);
         out.push(b']');
         out.extend_from_slice(CRLF);
         out.extend_from_slice(&new_line);
@@ -326,6 +423,17 @@ pub fn written_profile(old: &[u8], section: &[u8], key: &[u8], value: &[u8]) -> 
     }
     out
 }
+
+#[path = "mod_files_text.rs"]
+pub mod text;
+
+#[path = "mod_files_sections.rs"]
+mod sections;
+pub use sections::{
+    profile_list, profile_section, profile_section_names, remove_profile_key,
+    remove_profile_section, removed_key, removed_section, section_lines, section_names,
+    write_profile_section, written_section,
+};
 
 #[cfg(test)]
 #[path = "mod_files_tests.rs"]

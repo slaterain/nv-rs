@@ -7,20 +7,24 @@
 #   scripts/package-playtest.sh --version 2026-11-16.1 --system linux-x86_64
 #       --system linux-x86_64 | macos-arm64   which package (built on that system: Linux x86-64 or
 #                        an Apple silicon Mac; nothing here cross-compiles)
-#       [--test-build]   a package for testing (CI's builds): BUILD.txt says "test build, not for
-#                        release". Without it the script refuses unless HEAD is on origin's main,
-#                        the licence notices match Cargo.lock and every dependency's licence is in
-#                        distribution/licenses.
+#       [--test-build]   a package for testing (every CI build): BUILD.txt says "test build, not for
+#                        release" and the archive is named nv-rs-preview-<system>-test.tar.gz. Without
+#                        it (a release package) the script refuses unless --game is given, HEAD is on
+#                        origin's main, the licence notices match Cargo.lock and every dependency's
+#                        licence is in distribution/licenses.
 #       [--profile release|play]   the Cargo profile (default release: the optimised build the
 #                        Windows package and its frame rates use; play only for quick tests)
 #       [--use-built]    use the programs built before with the same profile, under --target
 #       [--target DIR]   the Cargo target folder (default: target)
 #       [--out DIR]      where the package goes (default: dist)
 #       [--game FILE]    the game's FalloutNV.exe, only read: the check that no data of it is in
-#                        the program (the Windows package always makes it; CI has no game, so
-#                        there it is not made, and BUILD.txt says so)
+#                        the program (package-check --game --max-run 4096, as the Windows package
+#                        always makes it). A release package needs it. CI has no game, so CI makes
+#                        test builds only, and the maintainer makes this check on the downloaded
+#                        package before publishing it (docs/MAINTAINING.md).
 #
-# Makes DIR/nv-rs-preview-<system>.tar.gz and its .sha256.
+# Makes DIR/nv-rs-preview-<system>.tar.gz (a test build: nv-rs-preview-<system>-test.tar.gz) and its
+# .sha256.
 set -eu
 
 fail() {
@@ -63,6 +67,10 @@ release | play) ;;
 *) fail "--profile must be release or play" ;;
 esac
 [ -z "$game" ] || [ -f "$game" ] || fail "--game must be the game's FalloutNV.exe, and this file is not there: $game"
+# A release package is checked against the game, as the Windows package always is.
+if [ "$test_build" = 0 ] && [ -z "$game" ]; then
+    fail "a release package needs --game FILE (the game's FalloutNV.exe, only read): the check that no data of it is in the program, which the Windows package always makes. Without the game (CI) make a test build (--test-build) and check the program with package-check --game before publishing it (docs/MAINTAINING.md)."
+fi
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd -- "$root"
@@ -159,6 +167,8 @@ fi
 [ -f "$checker" ] || fail "no package-check at $target/release (build it, or leave out --use-built)"
 
 name=nv-rs-preview-$system
+# A test build says so in its name too.
+[ "$test_build" = 0 ] || name=$name-test
 stage=$out/$name
 archive=$stage.tar.gz
 if [ -e "$stage" ] || [ -e "$archive" ]; then
@@ -186,7 +196,7 @@ grep -v '^#' distribution/notices.txt | while IFS="$tab" read -r file named; do
     [ -n "$file" ] || continue
     cp -- "$file" "$stage/licenses/$named" || fail "the notice $file is missing"
 done
-# The system libraries play.sh checks for before a start (Linux; none today).
+# The system libraries play.sh checks for before a start (Linux: ALSA's libasound today).
 case $system in
 linux-*) cp -- distribution/unix/libraries.txt "$stage/app/libraries.txt" ;;
 esac

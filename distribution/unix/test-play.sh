@@ -15,10 +15,40 @@ trap 'rm -rf -- "$T"' EXIT
 fails=0
 check() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
 tab=$(printf '\t')
-# The stand-in program: --find prints $FAKE_FIND's file; otherwise says what it was given.
+# The stand-in program: --find prints $FAKE_FIND's file. Otherwise it takes the game by the
+# program's own rule (off Windows, nv-viewer's find_data_folder and host::game_exe: FalloutNV.esm,
+# any case, in the folder itself or in a folder of it named Data in any case; FalloutNV.exe, any
+# case, beside that Data folder) and refuses with status 1 as the program does, so a game play.sh
+# takes but the program would not fails a test. Then it says what it was given. CI's Linux job
+# also runs the real program on these trees and compares (NV_RS_REAL_PROGRAM, test 24).
 cat >"$T/program" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = "--find" ]; then cat "$FAKE_FIND"; exit 0; fi
+# FOLDER NAME KIND: the entries of FOLDER named NAME without case that are of KIND (-f or -d).
+named() {
+    ls -1a -- "$1" 2>/dev/null | while IFS= read -r entry; do
+        [ "$(printf '%s' "$entry" | tr '[:upper:]' '[:lower:]')" = "$2" ] || continue
+        [ "$3" "$1/$entry" ] && printf '%s\n' "$1/$entry"
+    done
+}
+if [ -n "$(named "$1" falloutnv.esm -f)" ]; then
+    data=$1
+else
+    data=$(named "$1" data -d | while IFS= read -r d; do
+        if [ -n "$(named "$d" falloutnv.esm -f)" ]; then
+            printf '%s\n' "$d"
+            break
+        fi
+    done)
+fi
+if [ -z "$data" ]; then
+    echo "error: neither $1 nor a Data folder inside it contains FalloutNV.esm" >&2
+    exit 1
+fi
+if [ -z "$(named "$(dirname -- "$data")" falloutnv.exe -f)" ]; then
+    echo "error: $(dirname -- "$data")/FalloutNV.exe: not found" >&2
+    exit 1
+fi
 echo "program args: $*"
 env | grep '^NV_' | sort
 exit "${FAKE_STATUS:-0}"
@@ -35,6 +65,8 @@ answer() { # TEXT ARGS...: play.sh with TEXT as the typed answers
 game="$T/steam/steamapps/common/Fallout New Vegas"
 mkdir -p "$game/data"
 echo x >"$game/data/falloutnv.ESM"
+# The exe in another case too (a copy lower-cased by the tool that copied it).
+echo x >"$game/falloutnv.exe"
 pfx="$T/steam/steamapps/compatdata/22380/pfx/drive_c/users/steamuser/Documents/My Games/FalloutNV"
 mkdir -p "$pfx/saves"
 echo one >"$pfx/saves/Save 1.fos"
@@ -100,6 +132,7 @@ rm -f "$own/game-folder.txt"
 other="$T/elsewhere/FNV copy"
 mkdir -p "$other/Data"
 echo x >"$other/Data/FalloutNV.esm"
+echo x >"$other/FalloutNV.exe"
 printf 'own%s%s\n' "$tab" "$own" >"$T/find.txt"
 out=$(answer "/nowhere\n$T/elsewhere\n'$other'  \n" 2>&1); st=$?
 check "6 missing folder said" 'printf "%s" "$out" | grep -q "that folder does not exist: /nowhere"'
@@ -115,6 +148,7 @@ check "6 Terminal's dropped folder used" 'printf "%s" "$out" | grep -qF "program
 quoted="$T/it's here"
 mkdir -p "$quoted/Data"
 echo x >"$quoted/Data/FalloutNV.esm"
+echo x >"$quoted/FalloutNV.exe"
 rm -f "$own/game-folder.txt"
 out=$(answer "'$T/it'\\\\''s here'\n" 2>&1)
 check "6 GNOME's quoted quote used" 'printf "%s" "$out" | grep -qF "program args: $quoted"'
@@ -167,6 +201,7 @@ check "13 ten logs" '[ "$(ls "$own/logs" | grep -c "^game-.*\.log$")" = 10 ]'
 odd="$T/odd/FNV 'copy' 50%"
 mkdir -p "$odd/Data"
 echo x >"$odd/Data/FalloutNV.esm"
+echo x >"$odd/FalloutNV.exe"
 rm -f "$own/game-folder.txt"
 printf 'own%s%s\nwarning%sown folder inside%%20Documents\ngame%sSteam%s%s\ngame%sLutris%s/nowhere\n' \
     "$tab" "$own" "$tab" "$tab" "$tab" "$(printf %s "$odd" | sed "s/%/%25/g; s/'/%27/g")" "$tab" "$tab" >"$T/find.txt"
@@ -180,6 +215,7 @@ stray="$T/stray/FNV"
 # Both a lower- and an upper-case stray, so one sorts before Data in any ls order (C or a locale).
 mkdir -p "$stray/Data" "$stray/data" "$stray/DATA"
 echo x >"$stray/Data/FalloutNV.esm"
+echo x >"$stray/FalloutNV.exe"
 rm -f "$own/game-folder.txt"
 out=$(run --game "$stray" </dev/null 2>&1); st=$?
 check "15 the game's Data found" '[ $st = 0 ] && printf "%s" "$out" | grep -qF "program args: $stray"'
@@ -214,5 +250,61 @@ out=$(env -u NV_RS_PROGRAM $SH "$T/bin/nv-rs" --check </dev/null 2>&1)
 check "18 a linked script looks beside itself" 'printf "%s" "$out" | grep -qF "$(dirname -- "$PLAY")/app/nv-viewer"'
 
 check "19 steam folder still unchanged" '[ "$(snapshot)" = "$before" ]'
+
+# 20. The program's expected stop in this preview (the game does not run here yet, status 69):
+# said as expected, with no request for a report; its status comes back.
+printf 'own%s%s\ngame%sSteam%s%s\n' "$tab" "$own" "$tab" "$tab" "$game" >"$T/find.txt"
+rm -f "$own/game-folder.txt"
+out=$(FAKE_STATUS=69 run </dev/null 2>&1); st=$?
+check "20 status passed on" '[ $st = 69 ]'
+check "20 said as expected" 'printf "%s" "$out" | grep -q "As expected for this preview"'
+check "20 no report asked" '! printf "%s" "$out" | grep -q "github.com/slaterain/nv-rs/issues"'
+check "20 not called a stop" '! printf "%s" "$out" | grep -q "nv-rs stopped (status"'
+
+# 21. --check: the same stop after the version check passed says so.
+out=$(FAKE_STATUS=69 run --check </dev/null 2>&1); st=$?
+check "21 check: status passed on" '[ $st = 69 ]'
+check "21 check: version said checked" 'printf "%s" "$out" | grep -q "it is the version nv-rs needs"'
+check "21 check: said as expected" 'printf "%s" "$out" | grep -q "As expected for this preview"'
+
+# 22. macOS: a program that still has the download's quarantine mark: a plain stop pointing to
+# the READ ME's step 2, before the program is started (only where xattr marks can be made).
+if [ "$(uname -s)" = Darwin ]; then
+    xattr -w com.apple.quarantine '0081;00000000;Safari;' "$T/program"
+    out=$(run </dev/null 2>&1); st=$?
+    xattr -d com.apple.quarantine "$T/program"
+    check "22 quarantine: stops" '[ $st = 1 ]'
+    check "22 quarantine: READ ME step 2" 'printf "%s" "$out" | grep -q "the READ ME, step 2"'
+    check "22 quarantine: the command" 'printf "%s" "$out" | grep -qF "xattr -dr com.apple.quarantine"'
+    check "22 quarantine: program not started" '! printf "%s" "$out" | grep -q "program args:"'
+else
+    echo "SKIP 22 quarantine (macOS only)"
+fi
+
+# 23. A master that is not in the folder or its Data (in another folder of it): no game, said by
+# play.sh itself, as the program would refuse it.
+elsewhere_master="$T/no-data/FNV"
+mkdir -p "$elsewhere_master/Backup"
+echo x >"$elsewhere_master/Backup/FalloutNV.esm"
+echo x >"$elsewhere_master/FalloutNV.exe"
+out=$(run --game "$elsewhere_master" </dev/null 2>&1); st=$?
+check "23 refused by play.sh" '[ $st = 1 ] && printf "%s" "$out" | grep -q "no game in"'
+
+# 24. CI's Linux job (NV_RS_REAL_PROGRAM: the built nv-viewer): the real program takes and refuses
+# the same game folders as the stand-in. Taken, it ends with its expected stop here (69: the game
+# does not run on this system yet); refused, with status 1.
+if [ -n "${NV_RS_REAL_PROGRAM:-}" ]; then
+    for tree in "$game" "$other" "$other/Data" "$stray" "$odd" "$elsewhere_master" "$T/elsewhere"; do
+        "$T/program" "$tree" >/dev/null 2>&1
+        fake=$?
+        (cd -- "$T" && NV_RS_NO_WINDOWS=1 "$NV_RS_REAL_PROGRAM" "$tree" >"$T/real.log" 2>&1)
+        real=$?
+        [ "$real" = 69 ] && real=0
+        check "24 the program decides as the stand-in ($fake): $tree" '[ "$real" = "$fake" ]'
+        [ "$real" = "$fake" ] || cat "$T/real.log"
+    done
+else
+    echo "SKIP 24 the real program (set NV_RS_REAL_PROGRAM)"
+fi
 echo "fails: $fails"
 [ "$fails" = 0 ]

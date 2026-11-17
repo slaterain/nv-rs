@@ -26,6 +26,11 @@ set -u
 say() { printf '%s\n' "$*"; }
 # The line every stop ends with: where to report.
 REPORT="This preview has not been played by the team on Linux or macOS. Please report what happened at https://github.com/slaterain/nv-rs/issues with the newest log from nv-rs's logs folder."
+# The program's status for its expected stop in this preview: it found the game, but the game does
+# not run on this system yet (sysexits' EX_UNAVAILABLE; host::NOT_PROVIDED_STATUS). Not a fault:
+# it needs no report.
+NOT_PROVIDED_STATUS=69
+EXPECTED="As expected for this preview: the game does not run on Linux or macOS yet (the READ ME says what works today). Nothing to report unless something above looks wrong."
 fail() {
     printf 'nv-rs: %s\n' "$*" >&2
     exit 1
@@ -186,6 +191,15 @@ if [ ! -x "$program" ]; then
         fail "the drive or folder $here does not allow programs to run (it is mounted noexec): extract the archive into your home folder and start it there"
     fi
     fail "the program $program may not be run: extract the archive with tar (it keeps the files' permissions), or run: chmod +x \"$program\""
+fi
+# macOS: a downloaded program keeps the download's quarantine mark until the player removes it
+# (READ ME, step 2), and macOS refuses to start it while it has it. Said here, before the first
+# start, with the one command that removes the mark from this package's own files (no system
+# protection is turned off).
+if [ "$(uname -s)" = Darwin ] && xattr -p com.apple.quarantine "$program" >/dev/null 2>&1; then
+    fail "macOS has not allowed nv-viewer to start yet: this download still has macOS's quarantine mark. In Terminal, run:
+  xattr -dr com.apple.quarantine \"$here\"
+(the READ ME, step 2: it removes the mark from this package's files only), then start again."
 fi
 
 # The system libraries the program needs, named in app/libraries.txt (one a line: the library's
@@ -446,7 +460,13 @@ cd -- "$own" || fail "could not enter $own"
 
 if [ "$opt_check" = 1 ]; then
     "$program" "$game" --check
-    exit $?
+    status=$?
+    if [ "$status" = "$NOT_PROVIDED_STATUS" ]; then
+        say ""
+        say "Your game's FalloutNV.exe was checked: it is the version nv-rs needs (1.4.0.525)."
+        say "$EXPECTED"
+    fi
+    exit "$status"
 fi
 
 # The newest 10 logs are kept.
@@ -463,7 +483,11 @@ rm -f -- "$status_file"
 } | tee -- "$log"
 status=$(cat -- "$status_file" 2>/dev/null || echo 1)
 rm -f -- "$status_file"
-if [ "$status" != 0 ]; then
+if [ "$status" = "$NOT_PROVIDED_STATUS" ]; then
+    say ""
+    say "$EXPECTED"
+    say "Everything the program said is in $log"
+elif [ "$status" != 0 ]; then
     say ""
     say "nv-rs stopped (status $status). Everything it said is in $log"
     say "Problem reports made with F12 in the game are in $own/reports."
