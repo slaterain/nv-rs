@@ -7,8 +7,8 @@
 use super::capture;
 use engine_core::ptr::Ptr;
 use engine_core::x87::{
-    x87_add, x87_div, x87_fistp64_chop, x87_load32, x87_load64, x87_m32, x87_mul, x87_quiet_bits,
-    x87_store32, x87_sub, X87Ext,
+    fistp_chop64, x87_add, x87_div, x87_load32, x87_load64, x87_m32, x87_mul, x87_quiet_bits,
+    x87_store32, x87_sub,
 };
 use engine_core::{args, Engine};
 
@@ -66,9 +66,9 @@ fn unsigned_to_float(e: &Engine, value: u32) -> u32 {
 }
 
 /// `FISTP qword` under the code's chop control word, the low word kept.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn chop_low_word(value: f64) -> u32 {
-    x87_fistp64_chop(X87Ext::load64(value)) as u32
+    let b = fistp_chop64(value).to_le_bytes();
+    u32::from_le_bytes([b[0], b[1], b[2], b[3]])
 }
 
 // Typed from 00e6c780

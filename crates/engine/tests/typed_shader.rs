@@ -17635,6 +17635,33 @@ fn set_camera_data() {
         let group = obj(e, 0x10, group_vt);
         set(e, r + 0x888, group);
         slots!(e; 0x48, 0x4c, 0x8c, 0x90, 0xb0, 0xbc);
+        // The D3DX imports the thunks jump through, as `geometry_stand_ins` has them: the vector ones rotate three
+        // floats, the matrix product mixes its operands; `D3DXVec4Transform` (`00fdf3ec`) copies four floats.
+        for addr in [0x00fd_f414u32, 0x00fd_f420, 0x00fd_f41c] {
+            e.register(addr, |e, a| {
+                let v = words_at(e, a[1], 3);
+                for k in 0..3u32 {
+                    e.mem.set_u32(a[0] + 4 * k, v[((k + 1) % 3) as usize]);
+                }
+                ret(a[0])
+            });
+        }
+        e.register(0x00fd_f3ec, |e, a| {
+            let v = words_at(e, a[1], 4);
+            for k in 0..4u32 {
+                e.mem
+                    .set_u32(a[0] + 4 * k, v[k as usize] ^ e.mem.u32(a[2] + 4 * k));
+            }
+            ret(a[0])
+        });
+        e.register(0x00fd_f424, |e, a| {
+            let (m, n) = (words_at(e, a[1], 16), words_at(e, a[2], 16));
+            for k in 0..16u32 {
+                let word = m[k as usize] ^ (n[((5 * k + 3) % 16) as usize] & 0xff);
+                e.mem.set_u32(a[0] + 4 * k, word);
+            }
+            ret(a[0])
+        });
         set(e, RETS + 0x4c, c.word(4));
         set(e, RETS + 0x8c, c.word(5));
         set(e, RETS + 0x90, 720);
