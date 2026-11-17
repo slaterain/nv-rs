@@ -511,6 +511,9 @@ fn the_seam_takes_the_kernel_lock() {
 /// A name that goes through `..` and stays inside the game's folder is written under the name it
 /// resolves to, in the port's folder, and read back through either name (REVIEW-642: JIP's
 /// `..\NVSE\Plugins\x.ini` from `Data\Config`).
+// Windows only: the game's names with backslashes, which the platform's file layer maps to host
+// paths on Windows alone (`files::real_path` keeps a backslash as part of a name elsewhere).
+#[cfg(windows)]
 #[test]
 fn a_dotdot_name_inside_the_game_folder_is_written() {
     let game = scratch("dotdot-game");
@@ -541,6 +544,9 @@ fn a_dotdot_name_inside_the_game_folder_is_written() {
 /// The `.part` a write goes through is made new: a plain one an earlier write left is replaced;
 /// a folder of that name refuses the write and stays; a hard link to a file elsewhere is taken
 /// away, never written through (REVIEW-642).
+// Windows only: the game's names with backslashes, which the platform's file layer maps to host
+// paths on Windows alone (`files::real_path` keeps a backslash as part of a name elsewhere).
+#[cfg(windows)]
 #[test]
 fn a_part_entry_is_never_written_through() {
     let game = scratch("part-game");
@@ -636,6 +642,9 @@ fn a_failed_rename_leaves_no_part() {
 /// missing file`); a UTF-16 LE file is changed as text and stays UTF-16 LE (`ini6-...`); a file
 /// that is only its mark gets a line end first from a key write (`ini7-...`, `bom only`) and is
 /// refused by the section writes; a file with a 0 byte that is not UTF-16 LE is never written.
+// Windows only: the game's names with backslashes, which the platform's file layer maps to host
+// paths on Windows alone (`files::real_path` keeps a backslash as part of a name elsewhere).
+#[cfg(windows)]
 #[test]
 fn section_calls_on_the_platform_and_encodings() {
     let game = scratch("enc-game");
