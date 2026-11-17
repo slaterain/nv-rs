@@ -7,9 +7,27 @@ use super::JIP;
 
 /// The group's seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // G130 (a fix, only with `Data\*.override` files), fn_00463070's archive open (00af4be0).
+    Entry {
+        addr: 0x0046_3855,
+        owners: JIP,
+        step: "3.9-GF",
+    },
     // G83 (a fix), fn_0048e730: the biped icon path call (00480ef0), JIP's GetIconPathForItemHook.
     Entry {
         addr: 0x0048_e761,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G57 (a fix), TESObjectARMO::InitItem 00512e60: the TNAM sound template's lookup (004839c0).
+    Entry {
+        addr: 0x0051_2f3d,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G57 (a fix), the same function: each SNAM sound entry's lookup (004839c0).
+    Entry {
+        addr: 0x0051_2faf,
         owners: JIP,
         step: "3.9-GF",
     },
@@ -28,6 +46,12 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G07 (a fix), fn_0057d0a0: the grass grid's edge-cell tests jumped over.
     Entry {
         addr: 0x0057_d3b9,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G110 (a fix), fn_00595600: the faction reaction call (005fd3b0), JIP's GetFactionReactionHook.
+    Entry {
+        addr: 0x0059_56bc,
         owners: JIP,
         step: "3.9-GF",
     },
