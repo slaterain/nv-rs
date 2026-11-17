@@ -388,7 +388,7 @@ fn fixes_on() -> Engine {
 #[test]
 fn gb3_rows_are_jips_addresses() {
     assert_eq!(
-        AREA.fix_sites,
+        AREA.fix_sites[..7],
         [
             0x0072_880d,
             0x0072_8e10,
@@ -807,4 +807,466 @@ fn g64_only_the_first_of_the_buyers_stacks() {
     assert_eq!(e.mem.u32(chain(&e, first)[1] + 0xc), 0x7fff);
     assert_eq!(e.mem.u32(chain(&e, second)[1] + 0xc), 6);
     assert_eq!(stacks(&e, head), [first, second]);
+}
+
+// ---- GB-4: G82 (item names), O9 (quantity short keys) ----
+
+const HEAP_FREE: u32 = 0x00aa_4060;
+/// The test's stack, its form, the tile, its value array and string value.
+const STACK: u32 = AREA_AT + 0x6000;
+const WEAPON: u32 = AREA_AT + 0x6100;
+const NAME: u32 = AREA_AT + 0x6200;
+const TILE: u32 = AREA_AT + 0x6300;
+const STRING_VALUE: u32 = AREA_AT + 0x6400;
+const OLD_TEXT: u32 = AREA_AT + 0x6500;
+
+/// A stack of `name` (a form of `kind`) with no stack list, a tile with a string value holding
+/// `old`; the heap, `AddExtra`, `GetByType` stand-ins; refreshes and frees logged.
+fn names_world(kind: u8, name: &[u8], old: &[u8]) -> Engine {
+    let mut e = fixes_on();
+    list_world(&mut e);
+    e.register(HEAP_FREE, |_, a| {
+        gb3_log(HEAP_FREE, a);
+        Ret::default()
+    });
+    e.register(VALUE_REFRESH, |_, a| {
+        gb3_log(VALUE_REFRESH, a);
+        Ret::default()
+    });
+    e.mem.set_u8(WEAPON + 4, kind);
+    e.mem.write(NAME, name);
+    e.mem.set_u32(WEAPON + 0x34, NAME);
+    e.mem.set_u16(WEAPON + 0x38, name.len() as u16);
+    entry(&mut e, STACK, 0, 1, WEAPON);
+    let array = TILE + 0x40;
+    let other = TILE + 0x80;
+    e.mem.set_u32(other, 0xfa0);
+    e.mem.set_u32(STRING_VALUE, 0xfc4);
+    e.mem.set_u32(array, other);
+    e.mem.set_u32(array + 4, STRING_VALUE);
+    e.mem.set_u32(TILE + 0x14, array);
+    e.mem.set_u32(TILE + 0x18, 2);
+    if old.is_empty() {
+        e.mem.set_u32(STRING_VALUE + 0xc, 0);
+    } else {
+        e.mem.write(OLD_TEXT, old);
+        e.mem.set_u8(OLD_TEXT + old.len() as u32, 0);
+        e.mem.set_u32(STRING_VALUE + 0xc, OLD_TEXT);
+    }
+    gb3_calls();
+    e
+}
+
+/// The tile's string now.
+fn shown(e: &Engine) -> Vec<u8> {
+    match e.mem.u32(STRING_VALUE + 0xc) {
+        0 => vec![],
+        at => e.mem.cstr(at),
+    }
+}
+
+/// Gives the stack a first list holding `ExtraWeaponModFlags` with `flags`.
+fn modded(e: &mut Engine, flags: u8) {
+    let list = extra_list(e, AREA_AT + 0x6800, &[(0x8d, u32::from(flags))]);
+    let node_at = node(e, AREA_AT + 0x6a00, list, 0);
+    e.mem.set_u32(STACK, node_at);
+}
+
+/// G82, JIP's `ConstructItemEntryNameHook`: one plain item gets nothing; more than one gets
+/// "Name (count)"; a modded weapon "Name+" alone and "Name+ (count)" with more than one (the
+/// count written as JIP's `IntToStr`); each answers 1 (the exe's block skipped). The text is copied
+/// to the game's heap, the old one freed, the value refreshed once.
+#[test]
+fn g82_names_the_entry() {
+    let site = ITEM_NAMES[2].addr();
+    let mut e = names_world(0x28, b"Laser Rifle", b"old");
+    assert_eq!(e.site(site, &[TILE, STACK, 1]), Some(1));
+    assert_eq!(shown(&e), b"old", "one plain item: nothing set");
+    assert!(gb3_calls().is_empty());
+    assert_eq!(e.site(site, &[TILE, STACK, 3]), Some(1));
+    assert_eq!(shown(&e), b"Laser Rifle (3)");
+    let calls = gb3_calls();
+    assert_eq!(
+        calls.iter().map(|c| c.0).collect::<Vec<_>>(),
+        [HEAP_FREE, HEAP_ALLOCATE, VALUE_REFRESH]
+    );
+    assert_eq!(calls[0].1[1], OLD_TEXT);
+    assert_eq!(calls[1].1[1], 16, "the text and its end");
+    assert_eq!(calls[2].1, [STRING_VALUE, 1]);
+    modded(&mut e, 2);
+    assert_eq!(e.site(site, &[TILE, STACK, 1]), Some(1));
+    assert_eq!(shown(&e), b"Laser Rifle+");
+    assert_eq!(e.site(ITEM_NAMES[0].addr(), &[TILE, STACK, 12]), Some(1));
+    assert_eq!(shown(&e), b"Laser Rifle+ (12)");
+    assert_eq!(
+        e.site(ITEM_NAMES[1].addr(), &[TILE, STACK, -2i32 as u32]),
+        Some(1)
+    );
+    assert_eq!(shown(&e), b"Laser Rifle+");
+    // The same text again: nothing freed, nothing copied, no refresh (JIP's compare).
+    gb3_calls();
+    assert_eq!(e.site(site, &[TILE, STACK, 1]), Some(1));
+    assert!(gb3_calls().is_empty());
+}
+
+/// Not a weapon: never "+" (JIP's mod flags answer 0), a stack of more than one still counted; a
+/// form with an empty name: nothing set; a tile without a string value: nothing set; no old text:
+/// nothing freed.
+#[test]
+fn g82_other_forms_and_empty_names() {
+    let site = ITEM_NAMES[2].addr();
+    let mut e = names_world(0x1f, b"Scrap Metal", b"");
+    modded(&mut e, 1);
+    assert_eq!(e.site(site, &[TILE, STACK, 1]), Some(1));
+    assert_eq!(shown(&e), b"");
+    assert_eq!(e.site(site, &[TILE, STACK, 2]), Some(1));
+    assert_eq!(shown(&e), b"Scrap Metal (2)");
+    assert!(!gb3_calls().iter().any(|c| c.0 == HEAP_FREE));
+    let mut e = names_world(0x28, b"", b"old");
+    modded(&mut e, 1);
+    assert_eq!(e.site(site, &[TILE, STACK, 5]), Some(1));
+    assert_eq!(shown(&e), b"old");
+    let mut e = names_world(0x28, b"Laser Rifle", b"old");
+    e.mem.set_u32(STRING_VALUE, 0xfc5);
+    assert_eq!(e.site(site, &[TILE, STACK, 5]), Some(1));
+    assert_eq!(e.mem.u32(STRING_VALUE + 0xc), OLD_TEXT);
+    assert!(gb3_calls().is_empty());
+}
+
+/// nv-rs's own: a name that does not fit the 0x80-byte buffer is cut to 127 characters.
+#[test]
+fn g82_cuts_to_the_buffer() {
+    let long = [b'x'; 200];
+    let mut e = names_world(0x28, &long, b"");
+    assert_eq!(e.site(ITEM_NAMES[2].addr(), &[TILE, STACK, 7]), Some(1));
+    assert_eq!(shown(&e), [b'x'; 127]);
+}
+
+/// The key state copy the built-in xNVSE publishes, with `keys` held (raw state) and others
+/// pressed only in the game's state.
+fn keys(e: &mut Engine, held: &[u32], game_only: &[u32]) {
+    for k in [0x10, 0x1d, 0x9d, 0x2a, 0x36] {
+        let mut info = crate::test_support::key(e, k);
+        info.raw_state = held.contains(&k);
+        info.game_state = game_only.contains(&k);
+    }
+}
+
+/// O9 (JIP's three `QttSelect` hooks): either Ctrl (raw state) answers 1, either Shift the count,
+/// Ctrl first; no key, or a key pressed only in the game's state, answers nothing. The same at
+/// each of the three seams.
+#[test]
+fn o9_ctrl_one_shift_all() {
+    let mut e = fixes_on();
+    for slot in QUANTITY_KEYS {
+        let site = slot.addr();
+        for (held, answer) in [
+            (vec![], None),
+            (vec![0x1d], Some(1)),
+            (vec![0x9d], Some(1)),
+            (vec![0x2a], Some(37)),
+            (vec![0x36], Some(37)),
+            (vec![0x2a, 0x1d], Some(1)),
+            (vec![0x10], None),
+        ] {
+            keys(&mut e, &held, &[]);
+            assert_eq!(e.site(site, &[37]), answer, "{site:08x} {held:?}");
+        }
+        keys(&mut e, &[], &[0x1d, 0x2a]);
+        assert_eq!(e.site(site, &[37]), None, "game state only");
+    }
+    assert_eq!(e.site(WEIGHTLESS_TAKE.addr(), &[]), Some(1));
+}
+
+/// The rows: `WritePushRetRelJump(0x72F33D/0x75D1A5/0x782876, ..)` and O9's `HOOK_INIT_LIST`
+/// (`0x72D8B4`, `0x75BF97`, `0x780B09`, `0x75BF18`).
+#[test]
+fn gb4_rows_are_jips_addresses() {
+    assert_eq!(
+        ITEM_NAMES.map(|s| s.addr()),
+        [0x0072_f33d, 0x0075_d1a5, 0x0078_2876]
+    );
+    assert_eq!(
+        QUANTITY_KEYS.map(|s| s.addr()),
+        [0x0072_d8b4, 0x0075_bf97, 0x0078_0b09]
+    );
+    assert_eq!(WEIGHTLESS_TAKE.addr(), 0x0075_bf18);
+    assert_eq!(
+        AREA.fix_sites[7..14],
+        [
+            0x0072_f33d,
+            0x0075_d1a5,
+            0x0078_2876,
+            0x0072_d8b4,
+            0x0075_bf97,
+            0x0078_0b09,
+            0x0075_bf18
+        ]
+    );
+}
+
+// ---- GB-5: O2 (Fallout 3 style repair) ----
+
+const ACTOR_VALUE: u32 = 0x0093_acb0;
+const ITEM_TEST: u32 = 0x0047_bb50;
+
+/// A weapon stack at `at` (its form after it: type 0x28, full health 200) with a first list
+/// holding `ExtraHealth` `health` (none: no list).
+fn weapon_stack(e: &mut Engine, at: u32, health: Option<f32>) -> u32 {
+    let form = at + 0x100;
+    e.mem.set_u8(form + 4, 0x28);
+    e.mem.set_u32(form + 0x98, 200);
+    let lists = match health {
+        Some(h) => {
+            let list = extra_list(e, at + 0x200, &[(0x25, h.to_bits())]);
+            node(e, at + 0x300, list, 0)
+        }
+        None => 0,
+    };
+    entry(e, at, lists, 1, form)
+}
+
+/// The repair settings (`fRepairSkillBase` 2, `fRepairSkillMax` 10, `fRepairScavengeMult` 0.5,
+/// `fRepairMin` 1, `fRepairMax` 3), the player and the Repair skill `skill`.
+fn repair_world(e: &mut Engine, skill: f64) {
+    list_world(e);
+    for page in [0x011d_0000, 0x011c_f000, 0x011d_e000, 0x011d_a000] {
+        if !e.mem.is_mapped(page) {
+            e.map(page, 0x1000);
+        }
+    }
+    e.mem.set_f32(0x011d_0ff4, 2.0);
+    e.mem.set_f32(0x011d_0190, 10.0);
+    e.mem.set_f32(0x011d_074c, 0.5);
+    e.mem.set_f32(0x011d_0884, 1.0);
+    e.mem.set_f32(0x011c_ffa4, 3.0);
+    e.mem.set_u32(0x011d_ea3c, AREA_AT + 0x7000);
+    e.register_double(ACTOR_VALUE, move |_, a| {
+        gb3_log(ACTOR_VALUE, a);
+        Ret {
+            st0: skill,
+            ..Ret::default()
+        }
+    });
+}
+
+/// JIP's `GetHealthPercent`: the `ExtraHealth` over the full health times 100, at most 100; 100
+/// without a list; -1 for a type with a bit outside 0x38 (ammunition, 0x29).
+#[test]
+fn o2_health_percent() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(150.0));
+    assert_eq!(health_percent(&mut e, stack), 75.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(300.0));
+    assert_eq!(health_percent(&mut e, stack), 100.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x9000, None);
+    assert_eq!(health_percent(&mut e, stack), 100.0);
+    e.mem.set_u8(AREA_AT + 0x9100 + 4, 0x29);
+    assert_eq!(health_percent(&mut e, stack), -1.0);
+    // Armour (0x18) passes the type test (a bit outside 0x38 only fails): 50 of its 100.
+    e.mem.set_u8(AREA_AT + 0x8100 + 4, 0x18);
+    e.mem.set_u32(AREA_AT + 0x8100 + 0x6c, 100);
+    let armour = entry(
+        &mut e,
+        AREA_AT + 0x8000,
+        AREA_AT + 0x8300,
+        1,
+        AREA_AT + 0x8100,
+    );
+    let list = extra_list(&mut e, AREA_AT + 0x8200, &[(0x25, 50.0f32.to_bits())]);
+    node(&mut e, AREA_AT + 0x8300, list, 0);
+    assert_eq!(health_percent(&mut e, armour), 50.0);
+}
+
+/// `EnableRepairButtonHook`: the cap is the skill scaled from 20 to 100 (here 50 gives 60, -5
+/// gives 20), the health rounded up (55.2 becomes 56); 1 when the cap is above it, else 0; the
+/// three statics kept; the skill read as JIP does (`0093acb0` on the player's +0xA4, 0x27).
+#[test]
+fn o2_repair_button() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 50.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(110.4));
+    gb3_calls();
+    assert_eq!(e.site(REPAIR_BUTTON.addr(), &[stack]), Some(1));
+    assert_eq!(gb3_calls(), [(ACTOR_VALUE, vec![AREA_AT + 0x70a4, 0x27])]);
+    let state = repair_state(&mut e);
+    assert_eq!(f32::from_bits(state.skill.load(Ordering::Relaxed)), 60.0);
+    assert_eq!(f32::from_bits(state.health.load(Ordering::Relaxed)), 56.0);
+    assert!(!state.modded.load(Ordering::Relaxed));
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(130.0));
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(0),
+        "65 is above 60"
+    );
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(119.0));
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(0),
+        "59.5 rounds up to 60, not above 60"
+    );
+    let mut e = fixes_on();
+    repair_world(&mut e, -5.0);
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(30.0));
+    e.mem.set_u8(AREA_AT + 0x8200 + 0x19, 0x20);
+    assert_eq!(
+        e.site(REPAIR_BUTTON.addr(), &[stack]),
+        Some(1),
+        "15 below 20"
+    );
+    let state = repair_state(&mut e);
+    assert_eq!(f32::from_bits(state.skill.load(Ordering::Relaxed)), 20.0);
+    assert!(
+        state.modded.load(Ordering::Relaxed),
+        "the list's mod flags bit"
+    );
+}
+
+/// JIP's rounding up: whole values stay, others go up, out of range is -2^31.
+#[test]
+fn o2_round_up() {
+    assert_eq!(round_up(56.0), 56.0);
+    assert_eq!(round_up(55.01), 56.0);
+    assert_eq!(round_up(-0.5), 0.0);
+    assert_eq!(round_up(f32::NAN), -2_147_483_648.0);
+    assert_eq!(round_up(3.0e9), -2_147_483_648.0);
+}
+
+/// `GetRepairAmount` with the cap 60: healths 20 and 10 give (2 + 1 + 1 * 0.5 + 2 * 0.6) / 10,
+/// in JIP's single-precision steps; a larger result is cut to the cap's 0.6.
+#[test]
+fn o2_repair_amount() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    repair_state(&mut e)
+        .skill
+        .store(60.0f32.to_bits(), Ordering::Relaxed);
+    let s = 60.0f32 * 0.01;
+    let expected = (20.0f32 * 0.1 + 1.0 + 10.0f32 * 0.1 * 0.5 + (3.0f32 - 1.0) * s) * 0.1;
+    assert!(expected < s);
+    assert_eq!(repair_amount(&mut e, 20.0, 10.0), expected);
+    assert_eq!(
+        repair_amount(&mut e, 10.0, 20.0),
+        expected,
+        "the larger, the smaller"
+    );
+    e.mem.set_f32(0x011d_0884, 40.0);
+    assert_eq!(repair_amount(&mut e, 50.0, 30.0), s);
+    let bits = repair_amount(&mut e, 70.0, 10.0).to_bits();
+    assert_eq!(
+        e.site(
+            REPAIR_LIST_VALUE.addr(),
+            &[70.0f32.to_bits(), 10.0f32.to_bits()]
+        ),
+        Some(bits)
+    );
+}
+
+/// `PopulateRepairListHook` (words: the broken item's form, a stack): the exe's test decides;
+/// a stack of the broken item's own form passes only at or below the kept health unless the
+/// broken item has mods.
+#[test]
+fn o2_repair_list() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    e.register(ITEM_TEST, |e, a| {
+        gb3_log(ITEM_TEST, a);
+        u32::from(e.mem.u8(a[0] + 0x10) == 0).into_ret()
+    });
+    let stack = weapon_stack(&mut e, AREA_AT + 0x8000, Some(100.0));
+    let form = AREA_AT + 0x8100;
+    let state = repair_state(&mut e);
+    state.health.store(40.0f32.to_bits(), Ordering::Relaxed);
+    state.modded.store(false, Ordering::Relaxed);
+    gb3_calls();
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(0),
+        "50 above 40"
+    );
+    assert_eq!(gb3_calls(), [(ITEM_TEST, vec![form, form])]);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[0x0641_0000, stack]),
+        Some(1),
+        "another form"
+    );
+    repair_state(&mut e)
+        .health
+        .store(50.0f32.to_bits(), Ordering::Relaxed);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(1),
+        "50 at 50"
+    );
+    repair_state(&mut e)
+        .health
+        .store(10.0f32.to_bits(), Ordering::Relaxed);
+    repair_state(&mut e).modded.store(true, Ordering::Relaxed);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(1),
+        "modded"
+    );
+    e.mem.set_u8(form + 0x10, 1);
+    assert_eq!(
+        e.site(REPAIR_LIST.addr(), &[form, stack]),
+        Some(0),
+        "the exe's test"
+    );
+}
+
+/// `DoRepairItemHook` and `RepairMenuClickHook`: the amount from the broken item's (`0x11DA760`)
+/// and the used stack's health in percent; set up again while the broken item's health + 1 is at
+/// most the cap.
+#[test]
+fn o2_repair_item_and_again() {
+    let mut e = fixes_on();
+    repair_world(&mut e, 0.0);
+    repair_state(&mut e)
+        .skill
+        .store(60.0f32.to_bits(), Ordering::Relaxed);
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(20.0));
+    let used = weapon_stack(&mut e, AREA_AT + 0xa000, Some(40.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    let expected = repair_amount(&mut e, 10.0, 20.0).to_bits();
+    assert!(
+        f32::from_bits(expected) < 0.6,
+        "below the cap, so the two healths count"
+    );
+    assert_ne!(expected, repair_amount(&mut e, 20.0, 20.0).to_bits());
+    assert_eq!(e.site(REPAIR_ITEM.addr(), &[used]), Some(expected));
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "11 at most 60");
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(118.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(1), "60 at 60");
+    let broken = weapon_stack(&mut e, AREA_AT + 0x8000, Some(119.0));
+    e.mem.set_u32(0x011d_a760, broken);
+    assert_eq!(e.site(REPAIR_AGAIN.addr(), &[]), Some(0), "60.5 above 60");
+}
+
+/// O2's rows: `HOOK_INIT_LIST(FO3Repair, ..)` (`0x7818B2`, `0x4D4C11`, `0x7B58DB`, `0x7B5DAD`,
+/// `0x7B5CED`; the two byte writes folded into the first and the last).
+#[test]
+fn gb5_rows_are_jips_addresses() {
+    assert_eq!(
+        AREA.fix_sites[14..],
+        [
+            0x004d_4c11,
+            0x0078_18b2,
+            0x007b_58db,
+            0x007b_5ced,
+            0x007b_5dad
+        ]
+    );
+}
+
+/// G82 reads every stack's form at +0x34/+0x38 as JIP does (REVIEW-683): for a note (`BGSNote`,
+/// 0x31) that word pair is not its name (its model path, as the reviewer found), and a stack of
+/// two shows that text with " (2)", exactly as with JIP.
+#[test]
+fn g82_reads_a_note_at_jips_offsets_too() {
+    let mut e = names_world(0x31, b"Clutter/Notes/Note01.nif", b"");
+    assert_eq!(e.site(ITEM_NAMES[2].addr(), &[TILE, STACK, 2]), Some(1));
+    assert_eq!(shown(&e), b"Clutter/Notes/Note01.nif (2)");
 }

@@ -15,6 +15,9 @@ const fn row(addr: u32) -> Entry {
 
 /// The group's seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // O2 (`bEnableFO3Repair`, `HOOK_INIT_LIST(FO3Repair, ..)`): `InventoryChanges`' repair list
+    // (`PopulateRepairListHook`; the inert seam is group GH1's, in `inventorychanges.rs`).
+    row(0x004d_4c11),
     // GB-3's fixes (JIP's `InitGamePatches`), in with the game-patch row:
     // G100 (`WriteRelCall(0x72880D, IsDisposableWeaponHook)`): the recipe menu's crafted weapon,
     // disposable by its type.
@@ -29,6 +32,12 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G56 (`WriteRelCall(0x72D661, InitBarterMenuHook)`): `BarterMenu::Create` titles the
     // vendor's tab before the first list fill.
     row(0x0072_d661),
+    // O9 (`bQttSelectShortKeys`, `HOOK_INIT_LIST(QuantitySelect, ..)`): the barter menu's
+    // quantity test, Ctrl takes one, Shift all, without the quantity menu.
+    row(0x0072_d8b4),
+    // G82 (`WritePushRetRelJump(0x72F33D, 0x72F37F, ConstructItemEntryNameHook)`, with
+    // `SAFE_WRITE_BUF(0x72F337, ..)` before it): `BarterMenu::InitFunc`'s item name.
+    row(0x0072_f33d),
     // G64 (`WriteRelCall(0x73005C, BarterSellFixHook)`): `BarterMenu::CompleteTransaction`
     // splits a vendor's caps over 32,767 into stacks before taking them.
     row(0x0073_005c),
@@ -37,6 +46,18 @@ pub(in super::super) const SITES: &[Entry] = &[
     // `CaravanMenu::DoIdle` 00741500, the stick's x and y.
     row(0x0074_16d6),
     row(0x0074_1705),
+    // O9: `ContainerMenu::DoClick`'s weightless-item test (`{0x75BF18, 0x63EB, 2, 0}`) and its
+    // quantity test.
+    row(0x0075_bf18),
+    row(0x0075_bf97),
+    // G82: `ContainerMenu::InitFunc`'s item name.
+    row(0x0075_d1a5),
+    // O9: `InventoryMenu::DoClick`'s quantity test; G82: `InventoryMenu::InitFunc`'s item name.
+    row(0x0078_0b09),
+    // O2: `InventoryMenu::IsItemRepairable` (`EnableRepairButtonHook`, with the byte `0x77` at
+    // `0x7818D3`).
+    row(0x0078_18b2),
+    row(0x0078_2876),
     // `LockPickMenu::RotateLockpick` 007908f0.
     row(0x0079_0966),
     // `MapMenu::DoGamepad` 00799790, the zoom axis.
@@ -47,6 +68,12 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G69 (`WriteRelJump(0x7AC179, QttMenuEnableWheelHook)`): `QuantityMenu::DoIdle` takes the
     // mouse wheel (a fix).
     row(0x007a_c179),
+    // O2: `RepairMenu::InitFunc` (`SetRepairListValuesHook`), `RepairMenu::DoClick`
+    // (`RepairMenuClickHook`, with the byte `0x76` at `0x7B5D05`), `RepairMenu::RepairItem`
+    // (`DoRepairItemHook`).
+    row(0x007b_58db),
+    row(0x007b_5ced),
+    row(0x007b_5dad),
     // `RouletteMenu::DoIdle` 007bd2a0, its three stick values.
     row(0x007b_d47d),
     row(0x007b_d4a0),

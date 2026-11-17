@@ -23,7 +23,9 @@
 //!   and 27 at 17:30 (run p-onL1, 2026-11-17), so shadows drawn from the disc would not line up
 //!   with the lit sides. At night the same light shines with the weather's night colour (there is no
 //!   separate moon light), so the shadows follow it then too, as faint as that colour is. The disc
-//!   is the fallback when the light is not there.
+//!   is the fallback when the light is not there. With `bSunLightFromSky` (on with the sun shadows,
+//!   `engine-fallout-env` `sun::LightFromSky`) the game's update turns that light to come from the
+//!   sun disc by day and the moon by night, so reading the light reads the sky's way.
 
 use engine_platform::d3d9real::SceneView;
 use engine_platform::Engine;
@@ -56,6 +58,8 @@ fn floats<const N: usize>(e: &Engine, at: u32) -> [f32; N] {
 const SUN_LIGHT: u32 = 0x1c;
 /// A node's world translation (+0x8c, after its world rotation at +0x68).
 const WORLD_TRANSLATE: u32 = 0x8c;
+/// `Sky::pMasser` (Xbox PDB), the moon the game shows.
+const MASSER: u32 = 0x30;
 
 /// A tool (`NV_SUN_SHADOWS_TRACE=N`, the sun shadows' trace): for the next N reads, the sun disc's
 /// local and world place and the sun light's world rotation, in the log, to compare the way the
@@ -86,8 +90,20 @@ fn trace_light(e: &Engine, sky: Option<u32>) {
     LEFT.fetch_sub(1, Ordering::Relaxed);
     let world: Option<[f32; 3]> = root.map(|n| floats(e, n + WORLD_TRANSLATE));
     let rotate: Option<[f32; 9]> = light.map(|l| floats(e, l + ROTATE));
+    // The moon the game shows (Masser, `Sky` +0x30): its angle and tilt (`Moon` +0x74, +0x68) and
+    // the way from its root to its mesh in the world (root +0x04, mesh +0x10), to check the way
+    // the light from the sky takes for it (`sun::sky_light::toward_moon`).
+    let moon = sky.and_then(|s| object(e, s + MASSER)).map(|m| {
+        let angles: [f32; 2] = [e.mem.f32(m + 0x74), e.mem.f32(m + 0x68)];
+        let root = object(e, m + 0x04).map(|n| floats::<3>(e, n + WORLD_TRANSLATE));
+        let mesh = object(e, m + 0x10).map(|n| floats::<3>(e, n + WORLD_TRANSLATE));
+        let way = root
+            .zip(mesh)
+            .map(|(r, m)| [m[0] - r[0], m[1] - r[1], m[2] - r[2]]);
+        (angles, way)
+    });
     eprintln!(
-        "nv-rs: sun light trace: disc local {local:.4?} world {world:.1?}; light world rotation {rotate:.4?}"
+        "nv-rs: sun light trace: disc local {local:.4?} world {world:.1?}; light world rotation {rotate:.4?}; moon (angle, tilt; root to mesh) {moon:.3?}"
     );
 }
 
