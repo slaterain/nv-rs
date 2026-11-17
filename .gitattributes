@@ -9,3 +9,7 @@
 *.cmd text eol=crlf
 # An open call has an empty final system column; its trailing tab is data.
 research/engine-map/frame_wiring.tsv text eol=lf whitespace=-blank-at-eol
+# The machine table's fixed Windows answers, read with include_str!: the same bytes on every checkout.
+crates/engine-platform/data/machine/*.tsv text eol=lf
+# Real zone files (IANA tzdata, public domain) as hex text for the machine table's tests.
+crates/engine-platform/data/machine/zoneinfo/*.hex text eol=lf
