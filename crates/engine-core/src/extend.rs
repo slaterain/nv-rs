@@ -1528,6 +1528,22 @@ impl Engine {
         self.extend.hooks.0[hook as usize].store(users, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Marks a built-in plugin's call of the game's `QueueUIMessage` (`007052f0`) on this game
+    /// thread, while JIP's fixes are in: JIP's G09 (`QueueUIMessageHook` at `0x70535C`) gives
+    /// the default message time to the game's own callers (return addresses up to `0x96A262`,
+    /// the game's last caller) and lets a plugin's call (an address in its DLL) keep its time;
+    /// the port's plugins call the function as the game's code does, so each marks its call
+    /// with this one line, and the seam reads [`Engine::caller_marked`] at
+    /// [`PLUGIN_UI_MESSAGE`]. Without the fixes: one load, nothing marked.
+    #[must_use]
+    #[inline]
+    pub fn mark_plugin_ui_message(&self) -> CallerMark {
+        if self.jip_patches() & jip_patches::FIXES == 0 {
+            return CallerMark(None);
+        }
+        self.mark_caller_now(PLUGIN_UI_MESSAGE)
+    }
+
     /// Marks the call made at `site` (a call whose callee's hook reads its return address) on this
     /// game thread, while `hook` has users; the mark goes when the guard is dropped, also when a
     /// guest exception unwinds through the call. With no user: one load, nothing marked. A
@@ -1649,6 +1665,10 @@ impl CallerMarks {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
+
+/// The mark key of a built-in plugin's `QueueUIMessage` call ([`Engine::mark_plugin_ui_message`]):
+/// JIP's G09 site in it, `0x70535C`.
+pub const PLUGIN_UI_MESSAGE: u32 = 0x0070_535c;
 
 /// A caller mark's guard ([`Engine::mark_caller`]): drops the mark, if it is still there.
 #[derive(Debug)]
@@ -2841,6 +2861,33 @@ mod tests {
         }));
         assert!(thrown.is_err());
         assert!(!e.caller_marked(0x0100), "gone with the unwinding");
+    }
+
+    /// A plugin's `QueueUIMessage` mark (JIP's G09): none without JIP's fixes (the word 0 or
+    /// `INSTALLED` alone); with them, set at `0x70535C` until its guard drops, also on an
+    /// unwinding panic.
+    #[test]
+    fn plugin_ui_message_marks_only_with_the_fixes() {
+        let mut e = engine();
+        for word in [0, jip_patches::INSTALLED] {
+            e.set_jip_patches(word);
+            let guard = e.mark_plugin_ui_message();
+            assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "{word:#x}");
+            drop(guard);
+        }
+        e.set_jip_patches(jip_patches::INSTALLED | jip_patches::FIXES);
+        let guard = e.mark_plugin_ui_message();
+        assert_eq!(PLUGIN_UI_MESSAGE, 0x0070_535c);
+        assert!(e.caller_marked(PLUGIN_UI_MESSAGE));
+        drop(guard);
+        assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "gone with the guard");
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = e.mark_plugin_ui_message();
+            assert!(e.caller_marked(PLUGIN_UI_MESSAGE));
+            panic!("a guest exception");
+        }));
+        assert!(caught.is_err());
+        assert!(!e.caller_marked(PLUGIN_UI_MESSAGE), "gone with the unwinding");
     }
 
     /// A caller word: none without a user; with one, the innermost guard's word, back to the

@@ -2272,6 +2272,17 @@ pub fn fn_007052f0(
         );
         let hud = e.global::<u32>(HUD_MAIN_MENU);
         if ready_manager(e).is_some() && hud != 0 {
+            // JIP LN NVSE's G09 at `0x70535C` (group GA's row and handler, a fix row:
+            // `WriteRelJump(0x70535C, QueueUIMessageHook)`, the time pushed in place of the
+            // caller's): the seam with the time's bits answers the time to show (a built-in
+            // plugin's call is marked, `Engine::mark_plugin_ui_message`). One load while JIP's
+            // fixes are not in.
+            let value = if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0 {
+                e.site(0x0070_535c, &[value.to_bits()])
+                    .map_or(value, f32::from_bits)
+            } else {
+                value
+            };
             e.call(
                 HUD_SHOW_SUBTITLE_TIMED,
                 &args![hud, first, second, third, fourth, value.to_bits(), flag],
