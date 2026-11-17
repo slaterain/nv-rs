@@ -64,4 +64,11 @@ pub(in super::super) const SITES: &[Entry] = &[
 ];
 
 /// The group's wraps.
-pub(in super::super) const WRAPS: &[Entry] = &[];
+pub(in super::super) const WRAPS: &[Entry] = &[
+    // O5 (bGameDaysPassedFix): GameTimeGlobals::Update 00867a40 in doubles (UpdateTimeGlobalsHook).
+    Entry {
+        addr: 0x0086_7a40,
+        owners: JIP,
+        step: "3.9-GW",
+    },
+];

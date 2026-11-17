@@ -18,6 +18,9 @@
 //!   applied once and cleared (the exe applied it every frame and never cleared it).
 //! - **H17** (JIP's own, `InitJIPHooks`; `SkyRefreshClimateHook` at `0x63C918`): the climate
 //!   `ForceClimate` forced replaces the one the sky is given; with the command built here.
+//! - **O5** (`bGameDaysPassedFix`, on by default; `UpdateTimeGlobalsHook` at `0x867A40`, a wrap):
+//!   the calendar keeps the hours and days passed in doubles between frames, so `GameDaysPassed`
+//!   no longer drifts over a long game.
 //!
 //! G45's three seams in this group's files (`0x8497CD`, `0x845558`, `0x846FFB`) are group GF's
 //! row: GF writes their handler.
@@ -29,11 +32,11 @@
 use super::Area;
 use crate::commands::forms::form_type;
 use crate::commands::type_of;
-use engine_core::extend::{Owner, SiteSlot};
+use engine_core::extend::{jip_patches, Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 /// G15's seam: the climate entry of the sun's glare.
 pub const SUN_GLARE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0063_e705);
@@ -51,6 +54,8 @@ pub const SILENCED_ATTACK: SiteSlot = SiteSlot::new(Owner::Jip, 0x0083_ad97);
 pub const PENDING_SPACE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0082_d8ca);
 /// H17's seam: `Sky::SetCurrentClimate`'s climate.
 pub const FORCED_CLIMATE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0063_c918);
+/// O5's wrap: `GameTimeGlobals::Update` (`bGameDaysPassedFix`).
+pub const UPDATE_TIME_GLOBALS: WrapSlot = WrapSlot::new(Owner::Jip, 0x0086_7a40);
 
 /// `SetWindSpeedMult` (`functions_jip/jip_fn_weather.h`), built with G74, and `ForceClimate`
 /// (`functions_jip/jip_fn_climate.h`), built with H17: in those files' command lists, their
@@ -71,7 +76,7 @@ pub const AREA: Area = Area {
         SILENCED_ATTACK.addr(),
         FULLY_SEEN.addr(),
     ],
-    fix_wraps: &[],
+    fix_wraps: &[UPDATE_TIME_GLOBALS.addr()],
     install_fixes,
     jip_sites: &[FORCED_CLIMATE.addr()],
     jip_wraps: &[],
@@ -79,10 +84,12 @@ pub const AREA: Area = Area {
 };
 
 /// JIP's statics of this group, run-wide and lock-free: `s_windSpeedMult` (G74; its `f32` bits,
-/// 1/255 at first) and `s_forcedClimate` (H17; 0 for none).
+/// 1/255 at first), `s_forcedClimate` (H17; 0 for none) and `UpdateTimeGlobalsHook`'s
+/// `hourAndDays` (O5; the two doubles' bits, 0 at first).
 pub struct GwState {
     wind_speed_mult: AtomicU32,
     forced_climate: AtomicU32,
+    hour_and_days: [AtomicU64; 2],
 }
 
 impl Default for GwState {
@@ -90,6 +97,7 @@ impl Default for GwState {
         GwState {
             wind_speed_mult: AtomicU32::new((1.0f32 / 255.0).to_bits()),
             forced_climate: AtomicU32::new(0),
+            hour_and_days: [AtomicU64::new(0), AtomicU64::new(0)],
         }
     }
 }
@@ -108,6 +116,7 @@ fn install_fixes(e: &mut Engine) {
     e.on_site(FULLY_SEEN, fully_seen);
     e.on_site(SILENCED_ATTACK, silenced_attack);
     e.on_site(PENDING_SPACE, pending_space);
+    e.wrap(UPDATE_TIME_GLOBALS, update_time_globals);
 }
 
 fn install_jip(e: &mut Engine) {
@@ -287,6 +296,133 @@ pub(crate) fn force_climate(e: &mut Engine, w: &[u32]) -> Ret {
         }
     }
     handled(true)
+}
+
+/// `GameTimeGlobals` (the calendar, `0x11DE7B8`): its globals (year `+0`, month `+4`, day `+8`, hour
+/// `+0xC`, days passed `+0x10`, time scale `+0x14`; a global's value at `+0x24`), the midnights
+/// passed (`+0x18`) and the "days passed stale" byte (`+0x1C`). The player (`0x11DEA3C`) and its
+/// hardcore needs update byte (`+0xE39`). JIP's `kMults`: 24, 1/3600 (`0x3F323456789ABCDF`) and
+/// the hour's jump limits +0.05 and -0.05.
+const YEAR: u32 = 0;
+const MONTH: u32 = 4;
+const DAY: u32 = 8;
+const HOUR: u32 = 0xc;
+const DAYS_PASSED: u32 = 0x10;
+const TIME_SCALE: u32 = 0x14;
+const MIDNIGHTS: u32 = 0x18;
+const RECALC: u32 = 0x1c;
+const GLOBAL_VALUE: u32 = 0x24;
+const PLAYER: u32 = 0x011d_ea3c;
+const HARDCORE_UPDATE: u32 = 0xe39;
+const DAY_HOURS: f64 = 24.0;
+const PER_SECOND: u64 = 0x3f32_3456_789a_bcdf;
+const JUMP_AHEAD: u64 = 0x3fa9_9999_9999_999a;
+const JUMP_BACK: u64 = 0xbfa9_9999_9999_999a;
+/// `kDaysPerMonth` (`internal/jip_core.cpp`).
+const DAYS_PER_MONTH: [u32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+fn global(e: &Engine, calendar: u32, at: u32) -> u32 {
+    e.mem
+        .u32(calendar.wrapping_add(at))
+        .wrapping_add(GLOBAL_VALUE)
+}
+
+/// `cvttss2si`/`cvttps2dq`: a float cut to a whole number, `i32::MIN` where it does not fit (NaN).
+fn cut(v: f32) -> i32 {
+    if v.is_nan() || v >= 2_147_483_648.0 || v < -2_147_483_648.0 {
+        i32::MIN
+    } else {
+        v as i32
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: UpdateTimeGlobalsHook.
+/// O5 (`bGameDaysPassedFix`, on by default; `HOOK_INIT_JUMP(0x867A40, ..)`), in place of
+/// `GameTimeGlobals::Update` (`w`: the calendar, the seconds passed as `float` bits): the hours
+/// passed (`seconds * time scale / 3600`) and the days passed are kept in doubles between calls
+/// (`hourAndDays`), so they no longer drift. The hour is taken from the double JIP kept unless the
+/// global moved more than 0.05 hours from it (a script set it: the days are worked out again from
+/// the hour and the whole days, back over midnight counting as a day on) or the calendar's stale
+/// byte asks; a recount sets the player's hardcore update byte (`+0xE39`) unless `SetGameHour` asked
+/// for the needs to take the jump (then clear). Past 24 hours the day, month (JIP's table, no leap
+/// years) and year roll on, and the midnights passed count up. Without the switch, the exe's
+/// function. Difference from JIP: with no player the byte is not written (JIP would write at
+/// address 0xE39); a month outside 0 to 11 reads 31 days (JIP reads past its table).
+fn update_time_globals(e: &mut Engine, w: &[u32]) -> Ret {
+    if e.jip_patches() & jip_patches::GAME_DAYS_PASSED_FIX == 0 {
+        return e.call_next(UPDATE_TIME_GLOBALS.addr(), w);
+    }
+    let calendar = w[0];
+    let seconds = f32::from_bits(w[1]);
+    let per_second = f64::from_bits(PER_SECOND);
+    let scale = e.mem.f32(global(e, calendar, TIME_SCALE));
+    let passed = f64::from(seconds) * f64::from(scale) * per_second;
+    let mut hour = f64::from(e.mem.f32(global(e, calendar, HOUR)));
+    let cached = [0, 1].map(|i| f64::from_bits(state(e).hour_and_days[i].load(Ordering::Relaxed)));
+    let mut days;
+    let mut recount = e.mem.u8(calendar.wrapping_add(RECALC)) != 0;
+    if !recount {
+        let moved = hour - cached[0];
+        if moved > f64::from_bits(JUMP_AHEAD) {
+            recount = true;
+        } else if moved < f64::from_bits(JUMP_BACK) || moved.is_nan() {
+            // `comisd; jb`: back past the limit, or NaN.
+            hour += DAY_HOURS;
+            recount = true;
+        }
+    }
+    if recount {
+        e.mem.set_u8(calendar.wrapping_add(RECALC), 0);
+        let forced = super::gp::force_hardcore_needs_update(e);
+        super::gp::set_force_hardcore_needs_update(e, false);
+        let player = e.mem.u32(PLAYER);
+        if player != 0 {
+            e.mem
+                .set_u8(player.wrapping_add(HARDCORE_UPDATE), u8::from(!forced));
+        }
+        let whole = cut(e.mem.f32(global(e, calendar, DAYS_PASSED)));
+        days = hour / DAY_HOURS + f64::from(whole);
+    } else {
+        hour = cached[0];
+        days = cached[1];
+    }
+    hour += passed;
+    if hour > DAY_HOURS {
+        let mut month = cut(e.mem.f32(global(e, calendar, MONTH))) as u32;
+        let mut day = cut(e.mem.f32(global(e, calendar, DAY))) as u32;
+        let mut month_days = DAYS_PER_MONTH.get(month as usize).copied().unwrap_or(31);
+        while hour > DAY_HOURS {
+            hour -= DAY_HOURS;
+            if day < month_days {
+                day += 1;
+            } else {
+                day = 1;
+                if month < 0xb {
+                    month += 1;
+                    month_days = DAYS_PER_MONTH[month as usize];
+                } else {
+                    month = 0;
+                    month_days = 31;
+                    let year = global(e, calendar, YEAR);
+                    let value = e.mem.f32(year) + 1.0;
+                    e.mem.set_f32(year, value);
+                }
+            }
+        }
+        e.mem
+            .set_f32(global(e, calendar, MONTH), month as i32 as f32);
+        e.mem.set_f32(global(e, calendar, DAY), day as i32 as f32);
+        let at = calendar.wrapping_add(MIDNIGHTS);
+        let midnights = e.mem.u32(at);
+        e.mem.set_u32(at, midnights.wrapping_add(1));
+    }
+    e.mem.set_f32(global(e, calendar, HOUR), hour as f32);
+    days += passed / DAY_HOURS;
+    e.mem.set_f32(global(e, calendar, DAYS_PASSED), days as f32);
+    let s = state(e);
+    s.hour_and_days[0].store(hour.to_bits(), Ordering::Relaxed);
+    s.hour_and_days[1].store(days.to_bits(), Ordering::Relaxed);
+    Ret::default()
 }
 
 #[cfg(test)]
