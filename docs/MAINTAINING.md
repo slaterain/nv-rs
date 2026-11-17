@@ -93,13 +93,18 @@ plainly that they cannot start it. Every text that goes out with them says so.
    ./scripts/check-unix-package.ps1 -Archive <download>\nv-rs-preview-macos-arm64-test\nv-rs-preview-macos-arm64-test.tar.gz -Game '<game folder>\FalloutNV.exe'
    ```
 
-   For each it checks the archive against its `.sha256`; extracts it into a temporary folder (removed
-   after); checks the program's SHA256 against BUILD.txt; checks BUILD.txt says it was built by a
-   GitHub Actions run from `refs/heads/main` and that its source commit is on origin's main (a run
-   started on another branch is refused, so its source link always holds); and runs
+   It needs GitHub's command line signed in (`gh auth login`). For each archive it checks it against
+   its `.sha256`; reads the archive's own list first (only plain files and folders, all under the
+   package's folder, no two names equal when case is ignored, no name Windows cannot hold as it
+   is); extracts it into a temporary folder (removed after); checks the program's SHA256 against
+   BUILD.txt; asks GitHub about the run BUILD.txt names (it must be a run of slaterain/nv-rs's
+   package workflow, started by hand on main at BUILD.txt's commit, and successful: BUILD.txt's
+   words alone are not trusted); checks that commit is on origin's main (so its source link always
+   holds); and runs
    `package-check --game --max-run 4096` on the package (no data of the game's program in our
    program). It must end with `check-unix-package: PASSED`. Read the two lines it printed and wrote:
-   `N files, M needles: 0 hits` (`package-check` itself now refuses a folder that is missing or holds
+   `N files, M needles: 0 hits` (N must be the number of files the archive lists; the script checks
+   it, and `package-check` itself refuses a folder that is missing or holds
    no files, and `--game` with no program in it), and
    `nv-rs-preview-<system>-test\app\nv-viewer: <bytes> bytes, shares ... longest <L>` with L at most
    4096: that line is the proof the program itself was compared with the game. It then writes
