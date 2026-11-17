@@ -2019,17 +2019,17 @@ mod tests {
     }
 
     /// Play.exe takes the player options' variables out in play and passes the file's choices on
-    /// in a test (scripts/launcher/src/game_ini.rs `switches`). It takes the six names from this
+    /// in a test (`switches` in crates/game-profile/src/game_ini.rs, which Play.exe uses). It takes the six names from this
     /// crate's table itself; what makes a test it keeps as a list, which must be this one. (A
     /// fix's own variable makes a test too: Play.exe reads those from the table.)
     #[test]
     fn the_launcher_knows_what_makes_a_test() {
-        let launcher = include_str!("../../../scripts/launcher/src/game_ini.rs");
+        let launcher = include_str!("../../game-profile/src/game_ini.rs");
         let list = launcher
             .split("pub const TEST_SWITCHES")
             .nth(1)
             .and_then(|rest| rest.split("];").next())
-            .expect("TEST_SWITCHES in the launcher's game_ini.rs");
+            .expect("TEST_SWITCHES in game-profile's game_ini.rs");
         let mut names: Vec<&str> = list
             .split('"')
             .skip(1)
@@ -2355,6 +2355,40 @@ bSunLightFromSky=1
         assert_eq!(choice.borderless, Some(true));
         let choice = Choice::from_parts(None, env_of(&[("NV_BORDERLESS", "1")])).unwrap();
         assert_eq!(choice.borderless, Some(true));
+    }
+
+    /// What Linux's play.sh exports (distribution/unix/play.sh, the same names as Play.exe's but the
+    /// two Windows tables) makes a play run on Vulkan with play's defaults, as Play.exe's does
+    /// (review of #687: without NV_SETTINGS nothing drew).
+    #[test]
+    fn play_sh_variables_make_a_play_run_on_vulkan() {
+        let play_sh: &'static [(&str, &str)] = &[
+            ("NV_SOUND", "out"),
+            (
+                "NV_SAVE_OUT",
+                "/home/p/.local/share/nv-rs/game/Documents/My Games/FalloutNV/Saves",
+            ),
+            (
+                "NV_PREFS_OUT",
+                "/home/p/.local/share/nv-rs/game/Documents/My Games/FalloutNV/FalloutPrefs.ini",
+            ),
+            ("NV_REPORT_DIR", "/home/p/.local/share/nv-rs/reports"),
+            ("NV_REPORT_LOG", "/home/p/.local/share/nv-rs/logs/game.log"),
+            (
+                "NV_WGPU_CACHE",
+                "/home/p/.local/share/nv-rs/machine/wgpu-cache",
+            ),
+            (
+                "NV_D3DX_CACHE",
+                "/home/p/.local/share/nv-rs/machine/d3dx-cache",
+            ),
+            ("NV_SETTINGS", "/home/p/.local/share/nv-rs/settings.ini"),
+        ];
+        assert!(is_play_run(env_of(play_sh)));
+        let choice = Choice::from_texts(None, None, env_of(play_sh)).unwrap();
+        assert_eq!(choice.renderer, Some(Renderer::Vulkan));
+        assert_eq!(choice.threads, PLAY_THREADS);
+        assert_eq!(choice.render_thread, PLAY_RENDER_THREAD);
     }
 
     /// Vulkan is play's renderer (the maintainer, 2026-11-11): a launcher's play run with no usable

@@ -1309,8 +1309,12 @@ fn clear_lit(
             let frame = view
                 .as_ref()
                 .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
-            if let (Some(p), Some(f)) = (params, frame) {
+            if let (Some(p), Some(f), Some(v)) = (params, frame, view.as_ref()) {
                 for (state, m) in [
+                    (
+                        d3d9_wgpu::sun_shadow::WORLD_STATE,
+                        d3d9_wgpu::sun_shadow::world_words(v.world),
+                    ),
                     (d3d9_wgpu::sun_shadow::VIEW_STATE, p.to_words()),
                     (d3d9_wgpu::sun_shadow::BEGIN_STATE, f.to_words()),
                 ] {
@@ -3571,6 +3575,7 @@ mod tests {
             to_sun: None,
             sun_colour: [0.0; 3],
             interior: true,
+            world: 0,
         })
     }
 
@@ -3617,6 +3622,64 @@ mod tests {
         log.lock().unwrap().clear();
         clear(&mut e, DEVICE, 0, 0, 2, 0, 0, 0, 0);
         assert_eq!(*log.lock().unwrap(), [("Clear", 2)]);
+    }
+
+    /// With the sun shadows on and a sunny exterior, the scene's colour and depth clear is
+    /// preceded by the world the camera is in (`d3d9_wgpu::sun_shadow::WORLD_STATE`, the reader's
+    /// `world` in its first word), then the camera's and the frame's words, in that order: the
+    /// device forgets the casters of a world left behind before it brings the maps up to date.
+    #[test]
+    fn the_scene_clear_names_the_world_before_the_suns_words() {
+        const DEVICE: u32 = 0x1000;
+        type Seen = std::sync::Arc<std::sync::Mutex<Vec<(u32, Vec<u32>)>>>;
+        struct Words(Seen);
+        impl d3d9_stream::Backend for Words {
+            fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+                let seen = match &cmd {
+                    Cmd::SetTransform { state, matrix, .. } => (*state, matrix.to_words().to_vec()),
+                    Cmd::Clear { flags, .. } => (*flags, Vec::new()),
+                    _ => (0, Vec::new()),
+                };
+                self.0.lock().unwrap().push(seen);
+                Reply::None
+            }
+        }
+        fn sunny(_: &Engine) -> Option<SceneView> {
+            Some(SceneView {
+                frustum: [-0.7, 0.7, 0.4, -0.4, 5.0, 5000.0],
+                ortho: false,
+                rotate: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+                position: [100.0, 200.0, 300.0],
+                to_sun: Some([0.2, -0.1, 0.9]),
+                sun_colour: [1.0, 0.9, 0.8],
+                interior: false,
+                world: 0x0013_b308,
+            })
+        }
+        let seen: Seen = std::sync::Arc::default();
+        let mut e = Engine::new();
+        {
+            let r = real(&mut e);
+            r.stream = Some(Stream::direct(Box::new(Words(std::sync::Arc::clone(
+                &seen,
+            )))));
+            r.devices.push((DEVICE, None));
+        }
+        d3d9_wgpu::sun_shadow::enable(true);
+        clear_lit(&mut e, DEVICE, 0, 0, 3, 0, 0, 0, 0, Some(sunny));
+        d3d9_wgpu::sun_shadow::enable(false);
+        let got = std::mem::take(&mut *seen.lock().unwrap());
+        let states: Vec<u32> = got.iter().map(|(s, _)| *s).collect();
+        assert_eq!(
+            states,
+            [
+                d3d9_wgpu::sun_shadow::WORLD_STATE,
+                d3d9_wgpu::sun_shadow::VIEW_STATE,
+                d3d9_wgpu::sun_shadow::BEGIN_STATE,
+                3
+            ]
+        );
+        assert_eq!(got[0].1, d3d9_wgpu::sun_shadow::world_words(0x0013_b308));
     }
 
     /// The frame draw's point where the world is drawn (`engine_core::world_drawn`, first and

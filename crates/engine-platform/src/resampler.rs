@@ -31,7 +31,10 @@
 //! and Rust's agree on all of its 16385 points: the curve matches the DLL's in memory) and the
 //! window table. Both read two piecewise-linear tables (a windowed sinc and a Kaiser window)
 //! that are constant data of the DLL: [`Tables`] reads them from the player's own
-//! `RESAMPLEDMO.DLL` at run time, so no byte of them is in the repository.
+//! `RESAMPLEDMO.DLL` at run time on Windows, so no byte of them is in the repository; on Linux and
+//! macOS, which have no such DLL, they are made from their formula ([`Tables::generated`]: the
+//! sinc bit for bit, one window value of 1,024 one `f32` step apart, at most a millionth of a
+//! 16-bit sample step in what is heard).
 
 use std::sync::{Arc, OnceLock};
 
@@ -47,19 +50,93 @@ pub struct Tables {
     window_slope: Vec<f32>,
 }
 
-/// The player's `RESAMPLEDMO.DLL` (the 32-bit one the game's `dsound.dll` loads), read once.
+/// The two tables `RESAMPLEDMO`'s first converter reads, from one place: on Windows the player's
+/// own `RESAMPLEDMO.DLL` (the 32-bit one the game's `dsound.dll` loads), read once, as before;
+/// on Linux and macOS, where there is no such DLL, [`Tables::generated`], the same tables made
+/// from their formula.
 pub fn tables() -> Option<&'static Tables> {
     static TABLES: OnceLock<Option<Tables>> = OnceLock::new();
     TABLES
         .get_or_init(|| {
-            let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
-            let root = std::path::PathBuf::from(root);
-            ["SysWOW64", "System32"].iter().find_map(|d| {
-                Tables::read(&std::fs::read(root.join(d).join("RESAMPLEDMO.DLL")).ok()?)
-            })
+            #[cfg(windows)]
+            {
+                let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+                let root = std::path::PathBuf::from(root);
+                ["SysWOW64", "System32"].iter().find_map(|d| {
+                    Tables::read(&std::fs::read(root.join(d).join("RESAMPLEDMO.DLL")).ok()?)
+                })
+            }
+            #[cfg(not(windows))]
+            Some(Tables::generated())
         })
         .as_ref()
 }
+
+/// `pi` as `RESAMPLEDMO` writes it (ten decimals; also in its curve, [`curve_value`]).
+// The DLL's own, not `PI`: its tables are made with this one (`Tables::generated`).
+#[allow(clippy::approx_constant)]
+const DLL_PI: f64 = 3.141_592_653_5;
+/// The Kaiser window's beta.
+const KAISER_BETA: f64 = 10.0;
+
+impl Tables {
+    /// The tables from their formula (Linux and macOS; on Windows compared with the DLL's,
+    /// `tests_generated`): the sinc `sin(pi x) / (pi x)` with the DLL's ten-decimal pi at
+    /// `x = i * 65536 / 30678338` for 16,384 entries, and the Kaiser window (beta 10)
+    /// `I0(10 sqrt(1 - t^2)) / I0(10)` at `t = i / 1024` for 1,024, each value rounded to `f32`;
+    /// each slope the next value less this one, in `f32`, over the fraction's range (2^16, 2^20),
+    /// the last one's next value the function's own just past the end. Measured against this PC's
+    /// DLL (Windows 11 10.0.26200, 2026-11-17): every sinc value and slope the same bit for bit;
+    /// of the window's 1,024 values all but [`WINDOW_DIFFERENT`] (one, entry 991) the same, that one `f32` step
+    /// apart (the DLL's Bessel series is not known exactly). The maintainer's rule
+    /// (2026-11-17): the difference is far below hearing (`tests_generated` bounds it), so no
+    /// value of the DLL is copied. Off Windows the formula runs on that system's own `sin` and
+    /// `sqrt`: a test pins the tables' bits on every system (a hash taken on Windows), so a library
+    /// that gives another `f32` for some entry is caught, not assumed away.
+    pub fn generated() -> Tables {
+        let sinc = |i: usize| -> f32 {
+            if i == 0 {
+                return 1.0;
+            }
+            let x = i as f64 * 65536.0 / 30_678_338.0;
+            ((DLL_PI * x).sin() / (DLL_PI * x)) as f32
+        };
+        let i0 = |x: f64| {
+            let mut sum = 1.0f64;
+            let mut term = 1.0f64;
+            let mut k = 1.0f64;
+            loop {
+                term *= (x / (2.0 * k)) * (x / (2.0 * k));
+                sum += term;
+                if term < 1e-6 {
+                    return sum;
+                }
+                k += 1.0;
+            }
+        };
+        let window = |i: usize| -> f32 {
+            let t = i as f64 / 1024.0;
+            (i0(KAISER_BETA * (1.0 - t * t).sqrt()) / i0(KAISER_BETA)) as f32
+        };
+        let sinc_offset: Vec<f32> = (0..16384).map(sinc).collect();
+        let window_offset: Vec<f32> = (0..1024).map(window).collect();
+        let slopes = |values: &[f32], past: f32, range: f32| -> Vec<f32> {
+            (0..values.len())
+                .map(|i| (values.get(i + 1).copied().unwrap_or(past) - values[i]) / range)
+                .collect()
+        };
+        Tables {
+            sinc_slope: slopes(&sinc_offset, sinc(16384), 65536.0),
+            window_slope: slopes(&window_offset, window(1024), 1_048_576.0),
+            sinc_offset,
+            window_offset,
+        }
+    }
+}
+
+/// How many of the window's values [`Tables::generated`] gives one `f32` step from the DLL's
+/// (measured on Windows, `tests_generated`).
+pub const WINDOW_DIFFERENT: usize = 1;
 
 impl Tables {
     /// The tables of a `RESAMPLEDMO.DLL` file: the four pointers beside the masks and shifts that
@@ -1370,6 +1447,42 @@ impl Converter {
 mod tests {
     use super::*;
 
+    /// Which tables a test of the converter runs on: Windows' the player's DLL's, elsewhere the
+    /// formula's ([`Tables::generated`]).
+    fn tables_source() -> &'static str {
+        if cfg!(windows) {
+            "RESAMPLEDMO.DLL's tables"
+        } else {
+            "the tables made from their formula (Tables::generated)"
+        }
+    }
+
+    /// The formula's tables bit for bit on every system (a hash of their bits, taken on Windows,
+    /// where the same tables are compared with the DLL's in `tests_generated`): another system's
+    /// `sin` or `sqrt` giving another `f32` anywhere fails here.
+    #[test]
+    fn the_formulas_tables_are_the_same_on_every_system() {
+        let t = Tables::generated();
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for table in [
+            &t.sinc_offset,
+            &t.sinc_slope,
+            &t.window_offset,
+            &t.window_slope,
+        ] {
+            for v in table.iter() {
+                for b in v.to_bits().to_le_bytes() {
+                    hash = (hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+        eprintln!("generated tables hash {hash:#018x}");
+        assert_eq!(hash, GENERATED_HASH);
+    }
+
+    /// [`the_formulas_tables_are_the_same_on_every_system`]'s hash.
+    const GENERATED_HASH: u64 = 0xbc3f_3f0f_85ca_efe2;
+
     /// The test signal of `scripts/dsmix-measure` (16-bit, mono).
     fn signal(frames: usize) -> Vec<f32> {
         let mut x = 0x1234_5678u32;
@@ -1547,7 +1660,7 @@ mod tests {
             eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
             return;
         };
-        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
+        eprintln!("RAN against {}", tables_source());
         let d = design(t, 44100.0, 48000.0, 0.0, true, &mut None);
         assert_eq!(
             (d.l, d.m, d.fc, d.taps, 2 * d.span + 500),
@@ -1570,7 +1683,7 @@ mod tests {
             eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
             return;
         };
-        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
+        eprintln!("RAN against {}", tables_source());
         let x = signal(4000);
         let mut out = vec![Vec::new()];
         let mut fed = Vec::new();
@@ -1588,7 +1701,7 @@ mod tests {
             eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
             return;
         };
-        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
+        eprintln!("RAN against {}", tables_source());
         let x = signal(22100);
         let out = run(Converter::Dmo(Box::new(c)), &x, 51);
         for (at, bits) in DMO_44100 {
@@ -1602,6 +1715,109 @@ mod tests {
         let out = run(Converter::Apl(Apl::new(44100, 48000, 1, true)), &x, 42);
         for (at, bits) in APL_44100 {
             assert_eq!(out[at].to_bits(), bits, "frame {at}");
+        }
+    }
+}
+
+/// [`Tables::generated`] against the player's DLL on Windows: the sinc bit for bit, the window's
+/// differences counted and each one `f32` step; and what that difference can do to a sound.
+#[cfg(all(test, windows))]
+mod tests_generated {
+    use super::*;
+
+    fn steps_apart(a: f32, b: f32) -> u32 {
+        (a.to_bits() as i32 - b.to_bits() as i32).unsigned_abs()
+    }
+
+    #[test]
+    fn the_formula_is_the_dlls_tables() {
+        let Some(dll) = tables() else {
+            eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
+            return;
+        };
+        let ours = Tables::generated();
+        for (name, a, b) in [
+            ("sinc values", &ours.sinc_offset, &dll.sinc_offset),
+            ("sinc slopes", &ours.sinc_slope, &dll.sinc_slope),
+        ] {
+            let differ = a
+                .iter()
+                .zip(b)
+                .filter(|(x, y)| x.to_bits() != y.to_bits())
+                .count();
+            assert_eq!(differ, 0, "{name}");
+        }
+        let values: Vec<usize> = (0..1024)
+            .filter(|&i| ours.window_offset[i].to_bits() != dll.window_offset[i].to_bits())
+            .collect();
+        eprintln!("window values that differ: {values:?}");
+        assert_eq!(values.len(), WINDOW_DIFFERENT);
+        for &i in &values {
+            assert_eq!(
+                steps_apart(ours.window_offset[i], dll.window_offset[i]),
+                1,
+                "{i}"
+            );
+        }
+        // A slope differs only beside a differing value, by a step of its own size.
+        for i in 0..1024 {
+            if ours.window_slope[i].to_bits() != dll.window_slope[i].to_bits() {
+                assert!(
+                    values.contains(&i) || values.contains(&(i + 1)),
+                    "slope {i}"
+                );
+                eprintln!(
+                    "window slope {i}: {} steps",
+                    steps_apart(ours.window_slope[i], dll.window_slope[i])
+                );
+            }
+        }
+    }
+
+    /// The most the formula's tables can change an output sample of 16 bits: the largest change
+    /// of one filter coefficient (both of the converter's ways to read them, [`Tables::coefficient`]
+    /// and [`curve_value`]) times the most coefficients one output sample adds up (128, above the
+    /// 68 to 80 the designs use), at full scale.
+    #[test]
+    fn the_difference_is_far_below_one_step_of_a_16_bit_sample() {
+        let Some(dll) = tables() else {
+            eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
+            return;
+        };
+        let ours = Tables::generated();
+        let per_half = 1.0 / f64::from(HALF_LENGTH);
+        let mut most = 0f64;
+        let mut x = -35.0f64;
+        while x <= 35.0 {
+            let d =
+                f64::from(ours.coefficient(x, per_half)) - f64::from(dll.coefficient(x, per_half));
+            most = most.max(d.abs());
+            x += 1.0 / 4096.0;
+        }
+        for p in (0..=16384i64 * 65536).step_by(4096) {
+            let d = f64::from(curve_value(&ours, p)) - f64::from(curve_value(dll, p));
+            most = most.max(d.abs());
+        }
+        let lsb = most * 128.0 * 32768.0;
+        eprintln!("largest coefficient change {most:e}: at most {lsb:e} of a 16-bit step");
+        assert!(lsb < 0.01, "{lsb}");
+        // The finished filters the converter designs (renormalised), for two whole-rate cases:
+        // each coefficient, and the most one output sample can move (all its taps at full scale).
+        for (rin, rout) in [(44100.0f32, 48000.0f32), (60000.0, 48000.0)] {
+            let a = design(&ours, rin, rout, 0.0, true, &mut None);
+            let b = design(dll, rin, rout, 0.0, true, &mut None);
+            let (ta, tb) = (a.table.expect("a table"), b.table.expect("a table"));
+            assert_eq!(ta.len(), tb.len());
+            let most = ta
+                .iter()
+                .zip(&tb)
+                .map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs())
+                .fold(0.0, f64::max);
+            let per_sample = most * a.taps as f64 * 32768.0;
+            eprintln!(
+                "{rin} -> {rout}: designed coefficients differ by at most {most:e}: at most {per_sample:e} of a 16-bit step"
+            );
+            assert!(per_sample < 0.01, "{per_sample}");
         }
     }
 }

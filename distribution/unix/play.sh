@@ -26,11 +26,12 @@ set -u
 say() { printf '%s\n' "$*"; }
 # The line every stop ends with: where to report.
 REPORT="This preview has not been played by the team on Linux or macOS. Please report what happened at https://github.com/slaterain/nv-rs/issues with the newest log from nv-rs's logs folder."
-# The program's status for its expected stop in this preview: it found the game, but the game does
+# The program's status for its expected stop in this preview on macOS and on processors other than
+# x86-64 (Linux on x86-64 goes on to start the game): it found the game, but the game does
 # not run on this system yet (sysexits' EX_UNAVAILABLE; host::NOT_PROVIDED_STATUS). Not a fault:
 # it needs no report.
 NOT_PROVIDED_STATUS=69
-EXPECTED="As expected for this preview: the game does not run on Linux or macOS yet (the READ ME says what works today). Nothing to report unless something above looks wrong."
+EXPECTED="As expected for this preview: the game does not run on this system yet (macOS, and any processor other than x86-64; the READ ME says what works today). Nothing to report unless something above looks wrong."
 fail() {
     printf 'nv-rs: %s\n' "$*" >&2
     exit 1
@@ -449,6 +450,13 @@ fi
 mkdir -p -- "$saves" "$own/logs" "$own/reports" "$own/machine" || fail "could not make nv-rs's folders in $own"
 stamp=$(date +%Y-%m-%d_%H-%M-%S)
 log=$own/logs/game-$stamp.log
+# The play run's variables, as Windows' Play.exe passes them (scripts/launcher main.rs): NV_SOUND,
+# NV_SAVE_OUT, NV_PREFS_OUT, NV_REPORT_DIR, NV_REPORT_LOG, NV_WGPU_CACHE, NV_D3DX_CACHE and
+# NV_SETTINGS. NV_SETTINGS makes the run a play run (host fixes::is_play_run): the play defaults
+# then hold (the fixes preset, real threads, the render thread, the borderless window, drawing on
+# Vulkan), and Fallout.ini's [nv-rs ...] lines decide over them. The settings file it names may be
+# missing. Play.exe's other two, NV_D3D9_ADAPTER and NV_DSOUND_TABLE, name tables made with
+# Windows' own functions: off Windows the program makes this machine's answers itself.
 NV_SOUND=out
 NV_SAVE_OUT=$saves
 NV_PREFS_OUT=$documents/FalloutPrefs.ini
@@ -457,6 +465,12 @@ NV_REPORT_LOG=$log
 NV_WGPU_CACHE=$own/machine/wgpu-cache
 NV_D3DX_CACHE=$own/machine/d3dx-cache
 export NV_SOUND NV_SAVE_OUT NV_PREFS_OUT NV_REPORT_DIR NV_REPORT_LOG NV_WGPU_CACHE NV_D3DX_CACHE
+# Only where the start goes on (Linux on x86-64): elsewhere the program stops first with its
+# expected status, and the play settings are not read before that stop.
+if [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]; then
+    NV_SETTINGS=$own/settings.ini
+    export NV_SETTINGS
+fi
 cd -- "$own" || fail "could not enter $own"
 
 if [ "$opt_check" = 1 ]; then
