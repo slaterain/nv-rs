@@ -90,7 +90,9 @@ impl Tables {
     /// of the window's 1,024 values all but [`WINDOW_DIFFERENT`] (one, entry 991) the same, that one `f32` step
     /// apart (the DLL's Bessel series is not known exactly). The maintainer's rule
     /// (2026-11-17): the difference is far below hearing (`tests_generated` bounds it), so no
-    /// value of the DLL is copied.
+    /// value of the DLL is copied. Off Windows the formula runs on that system's own `sin` and
+    /// `sqrt`: a test pins the tables' bits on every system (a hash taken on Windows), so a library
+    /// that gives another `f32` for some entry is caught, not assumed away.
     pub fn generated() -> Tables {
         let sinc = |i: usize| -> f32 {
             if i == 0 {
@@ -1445,6 +1447,42 @@ impl Converter {
 mod tests {
     use super::*;
 
+    /// Which tables a test of the converter runs on: Windows' the player's DLL's, elsewhere the
+    /// formula's ([`Tables::generated`]).
+    fn tables_source() -> &'static str {
+        if cfg!(windows) {
+            "RESAMPLEDMO.DLL's tables"
+        } else {
+            "the tables made from their formula (Tables::generated)"
+        }
+    }
+
+    /// The formula's tables bit for bit on every system (a hash of their bits, taken on Windows,
+    /// where the same tables are compared with the DLL's in `tests_generated`): another system's
+    /// `sin` or `sqrt` giving another `f32` anywhere fails here.
+    #[test]
+    fn the_formulas_tables_are_the_same_on_every_system() {
+        let t = Tables::generated();
+        let mut hash = 0xcbf2_9ce4_8422_2325u64;
+        for table in [
+            &t.sinc_offset,
+            &t.sinc_slope,
+            &t.window_offset,
+            &t.window_slope,
+        ] {
+            for v in table.iter() {
+                for b in v.to_bits().to_le_bytes() {
+                    hash = (hash ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+                }
+            }
+        }
+        eprintln!("generated tables hash {hash:#018x}");
+        assert_eq!(hash, GENERATED_HASH);
+    }
+
+    /// [`the_formulas_tables_are_the_same_on_every_system`]'s hash.
+    const GENERATED_HASH: u64 = 0xbc3f_3f0f_85ca_efe2;
+
     /// The test signal of `scripts/dsmix-measure` (16-bit, mono).
     fn signal(frames: usize) -> Vec<f32> {
         let mut x = 0x1234_5678u32;
@@ -1622,7 +1660,7 @@ mod tests {
             eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
             return;
         };
-        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
+        eprintln!("RAN against {}", tables_source());
         let d = design(t, 44100.0, 48000.0, 0.0, true, &mut None);
         assert_eq!(
             (d.l, d.m, d.fc, d.taps, 2 * d.span + 500),
@@ -1645,7 +1683,7 @@ mod tests {
             eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
             return;
         };
-        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
+        eprintln!("RAN against {}", tables_source());
         let x = signal(4000);
         let mut out = vec![Vec::new()];
         let mut fed = Vec::new();
@@ -1663,7 +1701,7 @@ mod tests {
             eprintln!("SKIPPED: no RESAMPLEDMO.DLL on this machine");
             return;
         };
-        eprintln!("RAN against RESAMPLEDMO.DLL's tables");
+        eprintln!("RAN against {}", tables_source());
         let x = signal(22100);
         let out = run(Converter::Dmo(Box::new(c)), &x, 51);
         for (at, bits) in DMO_44100 {
@@ -1763,5 +1801,23 @@ mod tests_generated {
         let lsb = most * 128.0 * 32768.0;
         eprintln!("largest coefficient change {most:e}: at most {lsb:e} of a 16-bit step");
         assert!(lsb < 0.01, "{lsb}");
+        // The finished filters the converter designs (renormalised), for two whole-rate cases:
+        // each coefficient, and the most one output sample can move (all its taps at full scale).
+        for (rin, rout) in [(44100.0f32, 48000.0f32), (60000.0, 48000.0)] {
+            let a = design(&ours, rin, rout, 0.0, true, &mut None);
+            let b = design(dll, rin, rout, 0.0, true, &mut None);
+            let (ta, tb) = (a.table.expect("a table"), b.table.expect("a table"));
+            assert_eq!(ta.len(), tb.len());
+            let most = ta
+                .iter()
+                .zip(&tb)
+                .map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs())
+                .fold(0.0, f64::max);
+            let per_sample = most * a.taps as f64 * 32768.0;
+            eprintln!(
+                "{rin} -> {rout}: designed coefficients differ by at most {most:e}: at most {per_sample:e} of a 16-bit step"
+            );
+            assert!(per_sample < 0.01, "{per_sample}");
+        }
     }
 }
