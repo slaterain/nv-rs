@@ -3,7 +3,6 @@
 //! whole `SetModINI` sequence on the real calls (the INI text rules are the core's tests).
 
 use super::*;
-#[cfg(windows)]
 use engine_core::mod_files as seam;
 
 fn engine(game: &Path) -> Engine {
@@ -13,17 +12,14 @@ fn engine(game: &Path) -> Engine {
 }
 
 /// A scratch folder of a test's own, removed when the test ends, however it ends.
-#[cfg(windows)]
 struct Scratch(PathBuf);
 
-#[cfg(windows)]
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
-#[cfg(windows)]
 impl std::ops::Deref for Scratch {
     type Target = Path;
     fn deref(&self) -> &Path {
@@ -31,7 +27,6 @@ impl std::ops::Deref for Scratch {
     }
 }
 
-#[cfg(windows)]
 fn scratch(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("nv-mod-files-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
