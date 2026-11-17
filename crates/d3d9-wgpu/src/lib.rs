@@ -15,6 +15,8 @@
 //! - `shot`: `NV_SHOT` captures numbered like the forwarding layer's.
 //! - `scene_light`: the new lighting (port-added, off by default): ambient occlusion on the finished
 //!   scene.
+//! - `sun_shadow`: sun shadows (port-added, off by default): cascaded shadow maps from the game's
+//!   own opaque draws, shown by a full-screen step.
 
 mod ahead;
 mod answers;
@@ -31,6 +33,7 @@ pub mod scene_light;
 pub mod shot;
 pub mod sm;
 pub mod state;
+pub mod sun_shadow;
 mod window;
 
 /// Writes every live wgpu device's pipeline cache and pipeline list now, when they changed: for
@@ -356,6 +359,17 @@ impl Backend for WgpuBackend {
             // clear of its scene ([`scene_light`]); no Direct3D 9 transform has this number.
             Cmd::SetTransform { state, matrix, .. } if state == scene_light::STATE => {
                 d.scene_light(&matrix.to_words());
+            }
+            // The sun shadows' frame, recorded just after the new lighting's ([`sun_shadow`]).
+            Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::STATE => {
+                d.sun_shadows(&matrix.to_words());
+            }
+            // The sun shadows' camera and frame at the scene's clear, for this frame's lit draws.
+            Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::VIEW_STATE => {
+                d.sun_begin_view(&matrix.to_words());
+            }
+            Cmd::SetTransform { state, matrix, .. } if state == sun_shadow::BEGIN_STATE => {
+                d.sun_lookup(&matrix.to_words());
             }
             // Fixed-function state and the rest: the game's shaders do not read them; a draw
             // without shaders is skipped and printed by the device. (`SetGammaRamp` changes

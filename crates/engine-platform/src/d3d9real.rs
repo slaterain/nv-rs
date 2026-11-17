@@ -649,6 +649,16 @@ pub fn want_scene_light(read: fn(&Engine) -> Option<SceneView>) {
     let _ = SCENE_LIGHT.set(read);
 }
 
+/// Turns the sun shadows on (`d3d9_wgpu::sun_shadow`; the run's choice,
+/// `host::fixes::Choice::sun_shadows`), before the game makes its device: at each depth-only
+/// `Clear` the frame's camera (the new lighting's words) and then its rotation, place and sun, as
+/// `read` finds them in the game, are recorded for the backend. Never called while off: nothing is
+/// then read or recorded for them.
+pub fn want_sun_shadows(read: fn(&Engine) -> Option<SceneView>) {
+    d3d9_wgpu::sun_shadow::enable(true);
+    let _ = SCENE_LIGHT.set(read);
+}
+
 /// `CreateWindowExA` made the modelled window `handle` (a child of `parent` when that is not
 /// 0): a real window of the same title, styles and rectangle (a child of the parent's real
 /// window).
@@ -1134,7 +1144,8 @@ fn clear_lit(
     // arms. With the new lighting on, the frame's camera and sun first.
     if flags == 2 {
         if let Some(read) = light {
-            let params = read(e)
+            let view = read(e);
+            let params = view
                 .as_ref()
                 .and_then(d3d9_wgpu::scene_light::Params::from_game);
             if let Some(p) = params {
@@ -1148,6 +1159,54 @@ fn clear_lit(
                         matrix: Data::from_words(&m),
                     },
                 );
+                // The sun shadows ([`want_sun_shadows`]): the camera's rotation and place and
+                // the sun, after the frustum above (none without a sun).
+                let sun = view
+                    .as_ref()
+                    .filter(|_| d3d9_wgpu::sun_shadow::enabled())
+                    .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
+                if let Some(f) = sun {
+                    let m = f.to_words();
+                    record(
+                        e,
+                        this,
+                        Cmd::SetTransform {
+                            device: this,
+                            state: d3d9_wgpu::sun_shadow::STATE,
+                            matrix: Data::from_words(&m),
+                        },
+                    );
+                }
+            }
+        }
+    }
+    // A colour and depth clear (the scene's, before the world is drawn; the water reflection's too):
+    // with the sun shadows on, the frame's camera and sun for the lit draws that follow
+    // (`d3d9_wgpu::sun_shadow::BEGIN_STATE`).
+    if flags & 3 == 3 && d3d9_wgpu::sun_shadow::enabled() {
+        if let Some(read) = light {
+            let view = read(e);
+            let params = view
+                .as_ref()
+                .and_then(d3d9_wgpu::scene_light::Params::from_game);
+            let frame = view
+                .as_ref()
+                .and_then(d3d9_wgpu::sun_shadow::Frame::from_game);
+            if let (Some(p), Some(f)) = (params, frame) {
+                for (state, m) in [
+                    (d3d9_wgpu::sun_shadow::VIEW_STATE, p.to_words()),
+                    (d3d9_wgpu::sun_shadow::BEGIN_STATE, f.to_words()),
+                ] {
+                    record(
+                        e,
+                        this,
+                        Cmd::SetTransform {
+                            device: this,
+                            state,
+                            matrix: Data::from_words(&m),
+                        },
+                    );
+                }
             }
         }
     }

@@ -541,10 +541,45 @@ struct Gen<'a> {
     loops: usize,
     temps: BTreeSet<u32>,
     labels: BTreeSet<u32>,
+    /// The sun shadows' variant ([`convert_with_sun`]): the register of the sun's light colour,
+    /// whose every read is multiplied by the sun's visibility at the pixel.
+    sun: Option<u32>,
+}
+
+/// The register of the sun's light colour in a lit pixel shader of the game: `PSLightColor`'s first
+/// register (light 0, the sun outdoors) in a shader that also takes `AmbientColor`, so a
+/// pass lit by a point light alone (no ambient) has none. The shader computes the sun's diffuse
+/// and highlight from it, then adds the ambient and the fog: multiplying it by the sun's
+/// visibility shadows the sun's light and nothing else (`crate::sun_shadow`).
+///
+/// A vertex-lit shader (grass) takes the sun as `DiffuseColor` beside `AmbientColor` in its vertex
+/// shader and hands the sun's part to its pixel shader apart from the ambient: there the vertex
+/// shader's `DiffuseColor` is the register.
+pub fn sun_register(p: &Program) -> Option<u32> {
+    let float = |name: &str| p.constants.iter().find(|c| c.name == name && c.set == 2);
+    float("AmbientColor")?;
+    let sun = match p.stage {
+        Stage::Pixel => "PSLightColor",
+        Stage::Vertex => "DiffuseColor",
+    };
+    float(sun).map(|c| u32::from(c.index))
+}
+
+/// [`convert`] of a lit pixel shader as the sun shadows' variant: its sun light colour
+/// ([`sun_register`]) times the sun's visibility, looked up in the maps of bind group 3
+/// (`crate::sun_shadow::LOOKUP`). An error for a shader without a sun register.
+pub fn convert_with_sun(p: &Program, link: &Link) -> Result<String, Error> {
+    let sun = sun_register(p)
+        .ok_or_else(|| Error::Unsupported("no sun light colour to shadow".into()))?;
+    convert_inner(p, link, Some(sun))
 }
 
 /// Converts a shader to WGSL, linked as `link` says.
 pub fn convert(p: &Program, link: &Link) -> Result<String, Error> {
+    convert_inner(p, link, None)
+}
+
+fn convert_inner(p: &Program, link: &Link, sun: Option<u32>) -> Result<String, Error> {
     if p.stage == Stage::Pixel && p.major < 2 {
         return Err(Error::Unsupported(format!("{} pixel shaders", p.profile())));
     }
@@ -568,6 +603,7 @@ pub fn convert(p: &Program, link: &Link) -> Result<String, Error> {
         loops: 0,
         temps: BTreeSet::new(),
         labels: BTreeSet::new(),
+        sun,
     };
     for ins in &p.ins {
         match ins.op {
@@ -655,6 +691,13 @@ impl Gen<'_> {
             self.out,
             "@group(0) @binding({group0}) var<uniform> R: Regs;\n@group(0) @binding({group1}) var<uniform> C: Consts;\n"
         );
+        if self.sun.is_some() {
+            self.out.push_str(&if self.vertex() {
+                crate::sun_shadow::lookup_wgsl_vertex()
+            } else {
+                crate::sun_shadow::lookup_wgsl()
+            });
+        }
         if !self.sig.samplers.is_empty() {
             self.out.push_str(FIX);
         }
@@ -829,7 +872,6 @@ impl Gen<'_> {
             s.push_str(l);
             s.push('\n');
         }
-        s.push_str("    body();\n    var out: Out;\n");
         let position = self
             .sig
             .outputs
@@ -841,6 +883,13 @@ impl Gen<'_> {
             Some(r) => out_name(r),
             None => "o_pos".to_string(),
         };
+        // The sun shadows' variant: the body once for the vertex's place, the sun's visibility
+        // there, then the body again with the sun's colour shadowed (the body reads only its
+        // inputs and constants, and writes every output again).
+        if self.sun.is_some() {
+            let _ = writeln!(s, "    body();\n    sun_lit = sun_visibility_clip({pos});");
+        }
+        s.push_str("    body();\n    var out: Out;\n");
         let _ = writeln!(s, "    let opos = {pos};");
         // Half a pixel right and down: Direct3D 9's pixel centres (module documentation).
         s.push_str("    out.position = opos + vec4<f32>(R.sys[0].xy * opos.w, 0.0, 0.0);\n");
@@ -931,7 +980,16 @@ impl Gen<'_> {
         if self.sig.face {
             s.push_str("    vface = vec4<f32>(select(-1.0, 1.0, input.front));\n");
         }
+        // The sun shadows' variant: the sun's visibility at this pixel, before the body reads
+        // the sun's light colour (in uniform control flow: the lookup takes derivatives).
+        if self.sun.is_some() {
+            s.push_str("    sun_lit = sun_visibility(input.frag);\n");
+        }
         s.push_str("    body();\n");
+        // `NV_SUN_SHADOWS_VIEW=grey` (captures only): the visibility itself, as grey.
+        if self.sun.is_some() && self.sig.colours & 1 != 0 {
+            s.push_str("    if (SL.misc.y > 0.5) { oC0 = vec4<f32>(vec3<f32>(sun_lit), 1.0); }\n");
+        }
         // The fixed-function alpha test (`D3DRS_ALPHATESTENABLE`), as the device sets it:
         // sys[0].y the comparison (`D3DCMPFUNC`, 8 = always); the alpha in steps of 1/4096
         // against sys[0].x (above the reference past it) and sys[0].z (at or above it past it),
@@ -982,7 +1040,12 @@ impl Gen<'_> {
                         float(v[2]),
                         float(v[3])
                     ),
-                    None => format!("C.c[{n}]"),
+                    None => match self.sun {
+                        Some(sun) if sun == n => {
+                            format!("(C.c[{n}] * vec4<f32>(vec3<f32>(sun_lit), 1.0))")
+                        }
+                        _ => format!("C.c[{n}]"),
+                    },
                 },
             },
             reg::CONSTINT => format!("vec4<f32>({})", self.int_constant(n)),

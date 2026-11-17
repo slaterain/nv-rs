@@ -261,6 +261,14 @@ impl Host {
             engine_platform::d3d9real::want_scene_light(scene_light::read);
             eprintln!("nv-rs: new lighting on (ambient occlusion; Vulkan only)");
         }
+        // The sun shadows (`fixes::Choice::sun_shadows`: `NV_SUN_SHADOWS`; else, in a launcher's play
+        // run, Fallout.ini's `[nv-rs Display] bSunShadows`; off by default). Off: nothing is
+        // installed, read or recorded.
+        #[cfg(windows)]
+        if choice.sun_shadows {
+            engine_platform::d3d9real::want_sun_shadows(scene_light::read);
+            eprintln!("nv-rs: sun shadows on (Vulkan only; shown by the debug step)");
+        }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,
         // decides instead. A test or script without `NV_D3D9` makes no choice: nothing draws.

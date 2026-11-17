@@ -9,8 +9,9 @@
 //! `TESMain`/`BSSceneGraph`/`NiCamera`; the scene graph's word is written in `InitSceneGraph`):
 //! - the world scene graph `*011deb7c`, its camera at +0xac (`BSSceneGraph::spCamera`);
 //! - the camera (`NiCamera`): its world rotation at +0x68 (`NiAVObject::m_kWorld`, 3x3 floats row by
-//!   row), its frustum at +0xdc (left, right, top, bottom, near, far as floats, the orthographic
-//!   byte at +0xf4);
+//!   row), its place in the world just after (+0x8c, the translation; for the sun shadows,
+//!   `d3d9_wgpu::sun_shadow`), its frustum at +0xdc (left, right, top, bottom, near, far as
+//!   floats, the orthographic byte at +0xf4);
 //! - `TES` `*011dea10`: the current interior cell at +0x34 (none outdoors);
 //! - `Sky` `*011dea20`: the sun light's colour (`sunDirectional`) at +0x6c; its `Sun` at +0x28, whose
 //!   root node (+0x04) the sun's update (`Sun::Update`, read against fnv_decomp's `sun.cpp`) places
@@ -26,6 +27,7 @@ const TES: u32 = 0x011d_ea10;
 const SKY: u32 = 0x011d_ea20;
 const CAMERA: u32 = 0xac;
 const ROTATE: u32 = 0x68;
+const TRANSLATE: u32 = 0x8c;
 const FRUSTUM: u32 = 0xdc;
 const ORTHO: u32 = 0xf4;
 const SUN: u32 = 0x28;
@@ -58,6 +60,7 @@ pub fn read(e: &Engine) -> Option<SceneView> {
         frustum: floats(e, camera + FRUSTUM),
         ortho: e.mem.u8(camera + ORTHO) != 0,
         rotate: floats(e, camera + ROTATE),
+        position: floats(e, camera + TRANSLATE),
         to_sun,
         sun_colour,
         interior: e.mem.u32(tes + INTERIOR) != 0,

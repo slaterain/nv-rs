@@ -1,3 +1,4 @@
+| `NV_SUN_SHADOWS=1`, `debug` or `0` (`bSunShadows`) | Sun shadows (port-added, not in the original): objects cast sharp shadows on the ground away from the sun, out to about 115 m. Cascaded shadow maps drawn from the sun out of the game's own opaque world draws (characters, foliage and fences do not cast yet; objects the game did not draw this frame, such as those behind the camera, cast nothing). This first step shows them through a full-screen step on the finished 3D scene before the game's image-space step (`1` and `debug` alike), so the HUD, menus, Pip-Boy and first-person arms are never darkened; the next step moves them into the game's lighting, on the sun's own light only. Vulkan only (the real Direct3D 9 says once that it does nothing) (`crates/d3d9-wgpu/src/sun_shadow.rs`) | off |
 # Playtesting
 
 Playtesting uses the tester's own Fallout: New Vegas installation (FalloutNV.exe 1.4.0.525).

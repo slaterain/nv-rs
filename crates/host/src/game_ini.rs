@@ -81,6 +81,8 @@ pub struct Keys {
     pub show_frame_rate: Option<bool>,
     /// `bAmbientOcclusion`: the new lighting (`d3d9_wgpu::scene_light`).
     pub ambient_occlusion: Option<bool>,
+    /// `bSunShadows`: the sun shadows (`d3d9_wgpu::sun_shadow`).
+    pub sun_shadows: Option<bool>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
     /// The fix rows the file turns on or off, by `crate::fixes::Fix::env`.
@@ -130,6 +132,10 @@ impl Keys {
                 "bAmbientOcclusion" => {
                     keys.ambient_occlusion = flag(raw);
                     keys.ambient_occlusion.is_some()
+                }
+                "bSunShadows" => {
+                    keys.sun_shadows = flag(raw);
+                    keys.sun_shadows.is_some()
                 }
                 "bSteppedThreads" => {
                     keys.stepped_threads = flag(raw);
@@ -286,6 +292,7 @@ mod tests {
                 "iMenuFrameLimit",
                 "bShowFrameRate",
                 "bAmbientOcclusion",
+                "bSunShadows",
                 "bSteppedThreads",
                 "bRenderThread"
             ]
@@ -318,6 +325,7 @@ mod tests {
             keys.ambient_occlusion,
             Some(crate::fixes::PLAY_AMBIENT_OCCLUSION)
         );
+        assert_eq!(keys.sun_shadows, Some(crate::fixes::PLAY_SUN_SHADOWS));
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());
         assert!(keys.bad.is_empty(), "{:?}", keys.bad);
