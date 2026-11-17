@@ -1,4 +1,5 @@
 # System libraries the Linux program needs at run time beyond the C library, checked by play.sh
 # before it starts the program (one a line: the library's file name, a space, what to install).
-# None today: the program loads Vulkan itself while it runs. The window and sound work adds its
-# libraries here (for example: libasound.so.2 libasound2 (Debian, Ubuntu) / alsa-lib (Fedora, Arch)).
+# The program loads Vulkan itself while it runs. The sound output (cpal's ALSA backend,
+# engine-platform sound_out.rs) links libasound.
+libasound.so.2 libasound2 (Debian, Ubuntu) / alsa-lib (Fedora, Arch)

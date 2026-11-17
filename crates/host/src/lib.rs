@@ -448,6 +448,22 @@ impl Host {
 /// drawn) and fail somewhere less clear. The game's paths and file listings are provided
 /// (`engine_platform::host_paths`), and so is the sound on the speakers. On a processor other
 /// than x86-64 (Apple silicon) it also names what differs there.
+/// The process status `nv-viewer` ends with for [`not_provided_here`]'s stop (sysexits'
+/// EX_UNAVAILABLE): the game was found but does not run on this system yet. Expected in the
+/// Linux and macOS previews, so play.sh says it needs no report (`NOT_PROVIDED_STATUS` there).
+pub const NOT_PROVIDED_STATUS: i32 = 69;
+
+/// The process status for an error of [`Host::start_with`] or [`check_installation`]:
+/// [`NOT_PROVIDED_STATUS`] for the stop off Windows ([`not_provided_here`]), 1 for any other.
+pub fn error_status(err: &str) -> i32 {
+    #[cfg(not(windows))]
+    if not_provided_here().err().as_deref() == Some(err) {
+        return NOT_PROVIDED_STATUS;
+    }
+    let _ = err;
+    1
+}
+
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
     not_provided_on(cfg!(target_arch = "x86_64"))
@@ -496,12 +512,12 @@ pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
     if !exe.is_file() {
         return Err(format!("{}: not found", exe.display()));
     }
-    // Linux and macOS: the game cannot start there yet, so the check says so where the start
-    // does, right after the exe is found (`--check` then ends with status 1, "the game cannot
-    // start").
+    engine::exe::verify(&exe)?;
+    // Linux and macOS: the game cannot start there yet, so the check says so, after the exe was
+    // found and its version checked (a wrong build is said first); `--check` then ends with
+    // [`NOT_PROVIDED_STATUS`] ([`error_status`]), which play.sh says is expected.
     #[cfg(not(windows))]
     not_provided_here()?;
-    engine::exe::verify(&exe)?;
     let converter = if engine_platform::resampler::tables().is_some() {
         "found"
     } else {
@@ -897,17 +913,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// `nv-viewer --check` off Windows says the same (status 1: the game cannot start), where
-    /// the start does: after the exe is found.
+    /// Review of #631 (round 2): `nv-viewer --check` off Windows checks the exe's version FIRST
+    /// (a file that is not FalloutNV.exe 1.4.0.525 is said as such, status 1), and only then
+    /// stops as the start does; with no exe it says that.
     #[cfg(not(windows))]
     #[test]
-    fn the_installation_check_off_windows_says_the_game_cannot_start() {
+    fn the_installation_check_off_windows_checks_the_version_first() {
         let dir = scratch_installation("check");
         let err = super::check_installation(&dir.join("Data")).unwrap_err();
-        assert_eq!(err, super::not_provided_here().unwrap_err());
+        assert_ne!(err, super::not_provided_here().unwrap_err());
+        assert!(err.contains("1.4.0.525"), "{err}");
+        assert_eq!(super::error_status(&err), 1);
         let _ = std::fs::remove_dir_all(&dir);
         let missing = super::check_installation(&dir.join("Data")).unwrap_err();
         assert!(missing.ends_with("FalloutNV.exe: not found"), "{missing}");
+    }
+
+    /// Review of #631 (round 2): the start's expected stop off Windows ends with a status of its
+    /// own (play.sh says it needs no report); any other error with 1.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_expected_stop_off_windows_has_its_own_status() {
+        let dir = scratch_installation("status");
+        let err = super::Host::start(&dir.join("Data")).err().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(super::error_status(&err), super::NOT_PROVIDED_STATUS);
+        assert_eq!(super::NOT_PROVIDED_STATUS, 69);
+        assert_eq!(super::error_status("FalloutNV.exe: not found"), 1);
     }
 
     #[test]

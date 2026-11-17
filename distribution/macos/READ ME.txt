@@ -3,10 +3,16 @@ nv-rs macOS preview
 
 PLEASE READ FIRST
 - Nobody on the project has played this build on a Mac: the maintainers have only Windows PCs.
-  It was built and its tests were run by the project's automatic build (GitHub Actions) only.
-- What works today: naming your game's folder, remembering it, and the check of your game
-  (./play.sh --check). The game itself does NOT run on macOS yet: the program stops right after
-  it finds your game, and says what is not provided on macOS yet.
+  It was built by the project's automatic build (GitHub Actions), which also ran play.sh's own
+  tests for it; most of the program's unit tests are run there every night on the project's main
+  branch.
+- What works today: naming your game's folder, remembering it, and the check of your game's
+  version (./play.sh --check). The game itself does NOT run on macOS yet: the program stops right
+  after it finds your game, and says what is not provided on macOS yet. That stop is expected
+  and needs no report: it begins with
+    error: nv-rs does not run the game on this system yet: ...
+  and play.sh then says "As expected for this preview: the game does not run on Linux or macOS
+  yet". Anything else that stops it is worth a report.
 - Your nv-rs saves, settings and logs live in nv-rs's own folder:
   ~/Library/Application Support/nv-rs
 - nv-rs never writes to the game's folder, to your Documents or to your Library (but its own
@@ -14,7 +20,9 @@ PLEASE READ FIRST
   replaced nv-rs's own Saves folder with a link into one of those folders at the very moment
   nv-rs writes a save (a moment that can last as long as a sleeping disk takes to wake), that
   save could be written where the link leads. Nothing nv-rs does makes such a link; don't make
-  one yourself.
+  one yourself. And nv-rs cannot see a folder mounted a second time under another name (a bind
+  mount or bindfs, which only an administrator makes): never mount one of your own save folders
+  into nv-rs's folder; copy the saves instead.
 - To report a problem: https://github.com/slaterain/nv-rs/issues with the newest game-*.log from
   the logs folder of nv-rs's own folder, and any report from its reports folder (F12 in the game
   makes one). Details at the end.
@@ -39,10 +47,15 @@ What you need
 What this build can do today
 ----------------------------
 Today the program STOPS right after it finds your game, with a message that lists what is not
-provided on macOS yet. The game's window and drawing, the sound, the game's Windows folder names,
-some of the machine's answers to the game, and on Apple silicon the exact results of some of the
-game's maths are still being made. They come in the next previews; play.sh and your nv-rs folder
-stay the same.
+provided on macOS yet (it begins "error: nv-rs does not run the game on this system yet"). The
+game's window and drawing, some of the machine's answers to the game (its display adapter, sound
+devices and folders, measured on Windows), one sound effect's table, text in code pages other
+than Windows' Western one, and on Apple silicon the exact results of some of the game's maths
+are still being made. They come in the next previews; play.sh and your nv-rs folder stay the
+same. This stop needs no report: play.sh says "As expected for this preview" after it.
+
+./play.sh --check checks your game's FalloutNV.exe (that it is version 1.4.0.525, the one nv-rs
+needs) before that same stop: a wrong version is said instead.
 
 
 Start
@@ -58,9 +71,14 @@ Start
    Terminal, in the folder that HOLDS nv-rs-preview-macos-arm64 (for example: cd ~/Downloads):
      xattr -dr com.apple.quarantine nv-rs-preview-macos-arm64
    Do this only for a download you trust: the source of every file is at
-   https://github.com/slaterain/nv-rs (BUILD.txt names the exact version).
+   https://github.com/slaterain/nv-rs (BUILD.txt names the exact version). This removes the
+   download's mark from this package's files only; it turns no protection of your Mac off. If
+   you skip it, play.sh stops and shows you this command with the package's folder in it.
 3. In Terminal, in the package's folder (cd ~/Downloads/nv-rs-preview-macos-arm64): ./play.sh
    (as yourself: never with sudo)
+   If ./play.sh answers "Permission denied", start it as: sh play.sh
+   It then says what is wrong (for example a drive that does not allow programs to run: move
+   the package's folder into your home folder instead).
 
 The first start asks for your game's folder: type it, or drag the folder from Finder into the
 Terminal window, and press Enter. nv-rs remembers it.
@@ -69,7 +87,7 @@ Terminal window, and press Enter. nv-rs remembers it.
   ./play.sh --game FOLDER    use the game in FOLDER, and remember it
   ./play.sh --forget-game    forget the remembered game folder (it asks again)
   ./play.sh --import-saves   offer again to copy saves found in CrossOver's bottles
-  ./play.sh --check          only check your game and say whether it can start
+  ./play.sh --check          only check your game's version and say whether it can start
 
 
 Your files
