@@ -4477,6 +4477,8 @@ mod n057_tests {
         answer(&mut e, RECIPE_INPUTS_005A8080, inputs);
         answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
         answer(&mut e, FORM_TYPE, 0x28);
+        // The container path's scale `float` (`01030ff0`).
+        e.map(0x0103_0000, 0x1000);
         e.set_jip_patches(word);
         e.on_site_for_test(0x0072_880d, handler);
         e.call_log = Some(vec![]);
