@@ -687,7 +687,7 @@ fn run_checked(
             let file = std::fs::symlink_metadata(&target).is_ok_and(|m| m.is_file());
             #[cfg(windows)]
             let file = target.is_file();
-            let removed = file && std::fs::remove_file(&target).is_ok();
+            let removed = file && std::fs::remove_file(target).is_ok();
             Ok(removed.then(|| format!("NV_SAVE_OUT: copied {name} (deleted)")))
         }
     }
