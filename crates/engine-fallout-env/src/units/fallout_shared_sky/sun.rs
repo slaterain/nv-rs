@@ -13,6 +13,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::units::fallout_shared_sky::moon::Moon;
 use crate::units::fallout_shared_sky::skyobject::{
     pointer_assign, pointer_get, NI_ALLOCATE, NI_POINTER_DESTRUCT, NI_POINTER_FROM_RAW,
     NODE_SET_FLAG_004902F0,
@@ -699,8 +700,8 @@ fn set_quad_color(e: &mut Engine, property: u32, sky: u32, alpha: u32) {
 /// - the sun's height follows the hour (rising over the day, falling after the sunset and
 ///   before the sunrise) times the height setting; the root and the glare node move to
 ///   (height, distance setting, `00408860(height setting) - 00408860(height)`); the light
-///   turns towards `(-height, distance, light height)` normalised, and takes the sky's
-///   colours;
+///   turns towards `(-height, distance, light height)` normalised (port-added: from the sky's
+///   discs instead with [`LightFromSky`]), and takes the sky's colours;
 /// - when the holder at `011dea10` has its `+0xc`, the glare scale moves by the glare step
 ///   (the step setting times the time) towards the occlusion (`004dd130(1 - occlusion, 2)`)
 ///   or down to 0 below the glare limit; the glare node shows with that scale, or hides;
@@ -884,6 +885,12 @@ fn sun_update_body(e: &mut Engine, base: u32, sky: u32, time: f32) {
         let y = x87_store32(e.call(SETTING_FLOAT_IN_ST0, &args![DISTANCE_SETTING]).f64());
         // FLD, FCHS, FSTP: the sign flipped (a NaN's too).
         let x = x87_quiet_bits(height) ^ 0x8000_0000;
+        // Port-added seam ([`LightFromSky`]): with it on, the light shines from the disc that is up
+        // instead; without it (the default) this is the exe's vector, untouched.
+        let (x, y, z) = match light_from_sky(e, sky, &direction, brightness) {
+            Some(way) => (way[0].to_bits(), way[1].to_bits(), way[2].to_bits()),
+            None => (x, y, z),
+        };
         typed_call!(
             leaf::FAMILY,
             0x0041_6870,
@@ -1029,6 +1036,135 @@ pub fn fn_006427c0(e: &mut Engine, this: Ptr<Sun>) -> f32 {
     e.call(TIMER_SCOPE_DESTROY, &args![timer]);
     e.mem.free(timer);
     f32::from_bits(value)
+}
+
+/// Port-added, not in the original (the new lighting's `[nv-rs Display] bSunLightFromSky`,
+/// `NV_SUN_LIGHT_FROM_SKY`; the host makes this slot with [`want_light_from_sky`] when it is on, before
+/// the threads start, and only together with the sun shadows): the sun light shines from the disc
+/// that is up in the sky, the sun's by day and the moon's (Masser, the one the game shows) by night.
+///
+/// The game's own rule (`Update` above) builds the light's way from the sun's east-west place `x`
+/// and two settings, `(-x, fSunYExtreme, fSunZExtreme)` made unit, while the disc sits at `(x,
+/// fSunYExtreme, |fSunXExtreme| - |x|)`: the light comes from the disc's east-west side but from the
+/// other side north-south (the disc is south of overhead, the light comes from the north) and from
+/// a fixed height instead of the disc's, so it never rises above about 45 degrees (traced in a run:
+/// 33 degrees from the disc at 09:00, 56 at noon, 27 at 17:30). With this slot the same light, with
+/// the same colours, is turned to come from the disc ([`sky_light::toward_light`]); everything that
+/// reads the light (the lit shaders, grass, water, the game's actor shadows, the sun shadows) follows.
+/// Indoors (sky modes 0 and 1) nothing changes. Without the slot `Update` runs as the exe's code.
+#[derive(Default)]
+pub struct LightFromSky;
+
+/// Turns [`LightFromSky`] on for this engine and every real thread's engine made from it afterwards.
+pub fn want_light_from_sky(e: &mut Engine) {
+    e.ext_free::<LightFromSky>();
+}
+
+/// `Sky::pMasser` (`+0x30`, Xbox PDB), the moon the game shows.
+const SKY_MASSER: u32 = 0x30;
+
+/// The seam of `Update`'s light: `None` (the exe's vector) without [`LightFromSky`] or when the
+/// numbers are not usable; else the way the light goes (away from the sky), made unit. `disc` is
+/// the sun root's local place `Update` just computed (its parent is not turned: the trace's steps
+/// of the place and of the world place are the same), `brightness` the disc's alpha (1 by day, 0 at
+/// night, the ramps between: the hand-over's weight).
+fn light_from_sky(e: &Engine, sky: u32, disc: &[u32; 3], brightness: u32) -> Option<[f32; 3]> {
+    e.ext_get::<LightFromSky>()?;
+    let masser = e.mem.u32(sky + SKY_MASSER);
+    let moon = (masser != 0 && e.mem.is_mapped(masser)).then(|| {
+        let moon = Ptr::<Moon>::new(masser);
+        sky_light::toward_moon(
+            f32::from_bits(e.get(moon, Moon::fPos)),
+            f32::from_bits(e.get(moon, Moon::fZOffset)),
+        )
+    });
+    let toward = sky_light::toward_light(
+        disc.map(f32::from_bits),
+        f32::from_bits(brightness),
+        moon.flatten(),
+    )?;
+    Some(toward.map(|v| -v))
+}
+
+/// The maths of [`LightFromSky`] (world axes: +x east, +y north, +z up).
+pub mod sky_light {
+    /// The lowest the light comes from: 10 degrees above the horizon. The discs touch the horizon
+    /// at sunrise and sunset (and the moon at its rise and set); a light from there would stretch
+    /// shadows without end and light the ground from its side. The game's own light goes down to
+    /// about 7 degrees; 10 keeps a shadow under 6 times its caster's height.
+    pub const LOWEST_DEGREES: f32 = 10.0;
+
+    /// `v` made unit; none when it is not a direction.
+    pub fn unit(v: [f32; 3]) -> Option<[f32; 3]> {
+        let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        (len.is_finite() && len > 1e-6).then(|| v.map(|c| c / len))
+    }
+
+    /// The way toward the moon from its angle `pos` and tilt `z_offset` (degrees, `Moon::fPos` and
+    /// `fZOffset`): `Moon::Update` turns its root by `Rx(-pos) * Rz(z_offset)` (Gamebryo's
+    /// matrices: `MakeXRotation` rows `[1,0,0], [0,c,s], [0,-s,c]`, `004a0c90` rows `[c,s,0],
+    /// [-s,c,0], [0,0,1]`) and its mesh sits at `(0, 512, 0)` under it: `(sin z, cos z cos p, cos z
+    /// sin p)`. It rises in the north (`pos` 0), stands highest at 90 and sets in the south (180).
+    pub fn toward_moon(pos: f32, z_offset: f32) -> Option<[f32; 3]> {
+        let (p, z) = (pos.to_radians(), z_offset.to_radians());
+        unit([z.sin(), z.cos() * p.cos(), z.cos() * p.sin()])
+    }
+
+    /// `v` (unit) raised to at least [`LOWEST_DEGREES`] above the horizon, its heading kept; a way
+    /// straight down (no heading) becomes straight up.
+    pub fn no_lower_than(v: [f32; 3]) -> [f32; 3] {
+        let (sin, cos) = LOWEST_DEGREES.to_radians().sin_cos();
+        if v[2] >= sin {
+            return v;
+        }
+        let flat = (v[0] * v[0] + v[1] * v[1]).sqrt();
+        if flat < 1e-6 {
+            return [0.0, 0.0, 1.0];
+        }
+        [v[0] * cos / flat, v[1] * cos / flat, sin]
+    }
+
+    /// The sun's share of the light from the disc's brightness (1 by day, 0 at night, the game's
+    /// straight ramps over the sunrise and the sunset between), eased at both ends so the light's
+    /// turn starts and ends gently. A brightness that is not a number counts as day.
+    pub fn sun_share(brightness: f32) -> f32 {
+        if brightness.is_nan() {
+            return 1.0;
+        }
+        let s = brightness.clamp(0.0, 1.0);
+        s * s * (3.0 - 2.0 * s)
+    }
+
+    /// The way toward the light: the sun disc's (`sun_disc`, its place) by day, the moon's
+    /// (`moon`, a way) by night, each no lower than [`LOWEST_DEGREES`], and over the sunrise and the
+    /// sunset turned from one to the other at an even pace along the arc between them by
+    /// [`sun_share`]. That arc is the set of the two ways' sums with weights of one sign, so between
+    /// two ways above the horizon it stays above it: the light turns over the sky, never under it,
+    /// and never jumps. Without a moon (a climate without Masser) the sun disc's own place, which
+    /// the game keeps above the horizon at night too. None when the disc's place is not a direction.
+    pub fn toward_light(
+        sun_disc: [f32; 3],
+        brightness: f32,
+        moon: Option<[f32; 3]>,
+    ) -> Option<[f32; 3]> {
+        let sun = no_lower_than(unit(sun_disc)?);
+        let Some(moon) = moon.and_then(unit).map(no_lower_than) else {
+            return Some(sun);
+        };
+        let w = sun_share(brightness);
+        let dot: f32 = (0..3).map(|i| sun[i] * moon[i]).sum();
+        let angle = dot.clamp(-1.0, 1.0).acos();
+        let (a, b) = if angle.sin() < 1e-4 {
+            (1.0 - w, w)
+        } else {
+            (
+                ((1.0 - w) * angle).sin() / angle.sin(),
+                (w * angle).sin() / angle.sin(),
+            )
+        };
+        let blend = std::array::from_fn(|i| a * moon[i] + b * sun[i]);
+        unit(blend).map(no_lower_than)
+    }
 }
 
 /// This unit's translated functions, by exe address.
@@ -1557,6 +1693,208 @@ mod tests {
         assert_eq!(calls(e, MATRIX_ROTATION_004A0C90)[0][1], 45.0f32.to_bits());
         assert_eq!(calls(e, MATRIX_MAKE_Y_ROTATION)[0][1], 90.0f32.to_bits());
         assert!(calls(e, MATRIX_SET_ELEMENT).is_empty());
+    }
+
+    /// The light's way as `Update` passed it to the point constructor.
+    fn light_way(u: &Update) -> [f32; 3] {
+        let points = calls(&u.e, POINT3_CONSTRUCT);
+        std::array::from_fn(|i| f32::from_bits(points[0][1 + i]))
+    }
+
+    /// The disc's place as `Update` gave it to the root.
+    fn disc_place(u: &Update) -> [f32; 3] {
+        let point = calls(&u.e, NODE_SET_TRANSLATE)[0][1];
+        std::array::from_fn(|i| u.e.mem.f32(point + 4 * i as u32))
+    }
+
+    fn angle_degrees(a: [f32; 3], b: [f32; 3]) -> f32 {
+        let dot: f32 = (0..3).map(|i| a[i] * b[i]).sum();
+        dot.clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    fn close(a: [f32; 3], b: [f32; 3]) -> bool {
+        (0..3).all(|i| (a[i] - b[i]).abs() < 1e-5)
+    }
+
+    /// A Masser at `pos` degrees, tilted `z_offset`, on the rig's sky.
+    fn with_masser(u: &mut Update, pos: f32, z_offset: f32) {
+        let moon = u.e.mem.alloc(0x7c);
+        u.e.mem.set_f32(moon + 0x74, pos);
+        u.e.mem.set_f32(moon + 0x68, z_offset);
+        u.e.mem.set_u32(u.sky + SKY_MASSER, moon);
+    }
+
+    /// Off (no slot, the default) the light is the exe's `(-height, distance, light height)`, at
+    /// every hour; on, the same calls in the same order, only the light's way differs, and it is
+    /// the way away from the sun disc's place.
+    #[test]
+    fn the_seam_is_the_exes_code_off_and_the_disc_on() {
+        for hour in [6.5f32, 9.0, 12.5, 17.0, 19.5] {
+            let mut off = update_rig(3, hour);
+            run(&mut off);
+            let mut on = update_rig(3, hour);
+            want_light_from_sky(&mut on.e);
+            run(&mut on);
+            let log = |u: &Update| {
+                u.e.call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|(a, _)| *a)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(log(&off), log(&on), "{hour}");
+            let disc = disc_place(&off);
+            assert_eq!(disc, disc_place(&on));
+            // The exe's: x = -height, then the distance (50) and light height (30) settings.
+            let exe = light_way(&off);
+            assert_eq!(exe, [-disc[0], 50.0, 30.0], "{hour}");
+            let toward = sky_light::toward_light(disc, 1.0, None).unwrap();
+            let way = light_way(&on);
+            assert!(close(way, toward.map(|v| -v)), "{hour}: {way:?} {toward:?}");
+            // By day the disc is above the lowest height: the light is exactly the disc's way.
+            if disc[2] / disc.iter().map(|v| v * v).sum::<f32>().sqrt() > 0.2 {
+                assert!(close(way, sky_light::unit(disc).unwrap().map(|v| -v)));
+            }
+        }
+    }
+
+    /// Indoors (sky modes 0 and 1) the slot changes nothing: the same calls with the same words.
+    #[test]
+    fn indoors_the_seam_changes_nothing() {
+        let mut off = update_rig(0, 12.0);
+        off.e.map(INTERIOR_ANGLE, 4);
+        off.e.set_global(INTERIOR_ANGLE, -0.5f32);
+        run(&mut off);
+        let mut on = update_rig(0, 12.0);
+        on.e.map(INTERIOR_ANGLE, 4);
+        on.e.set_global(INTERIOR_ANGLE, -0.5f32);
+        want_light_from_sky(&mut on.e);
+        run(&mut on);
+        assert_eq!(off.e.call_log, on.e.call_log);
+    }
+
+    /// At night the light comes from Masser, wherever its angle has it (hidden or shown); a sky
+    /// without Masser keeps the sun disc's night place; the exe's light is the same either way.
+    #[test]
+    fn at_night_the_light_comes_from_the_moon() {
+        let mut u = update_rig(3, 23.0);
+        with_masser(&mut u, 90.0 + 15.0 * 23.0 - 360.0, 35.0);
+        want_light_from_sky(&mut u.e);
+        run(&mut u);
+        let moon = sky_light::toward_moon(75.0, 35.0).unwrap();
+        assert!(
+            close(light_way(&u), moon.map(|v| -v)),
+            "{:?}",
+            light_way(&u)
+        );
+        // 23:00: east (x > 0), north of overhead (y > 0), high.
+        assert!(moon[0] > 0.5 && moon[1] > 0.1 && moon[2] > 0.75, "{moon:?}");
+
+        let mut u = update_rig(3, 23.0);
+        want_light_from_sky(&mut u.e);
+        run(&mut u);
+        let disc = sky_light::unit(disc_place(&u)).unwrap();
+        assert!(close(light_way(&u), disc.map(|v| -v)));
+
+        let mut off = update_rig(3, 23.0);
+        with_masser(&mut off, 75.0, 35.0);
+        run(&mut off);
+        assert_eq!(light_way(&off), [-disc_place(&off)[0], 50.0, 30.0]);
+    }
+
+    /// The moon's way from its angle: rising at the north horizon, 55 degrees up in the east at
+    /// midnight (Masser's tilt 35), setting at the south horizon; below the horizon past 180.
+    #[test]
+    fn the_moons_way_follows_its_angle_and_tilt() {
+        let up = sky_light::toward_moon(90.0, 35.0).unwrap();
+        assert!(close(
+            up,
+            [35f32.to_radians().sin(), 0.0, 35f32.to_radians().cos()]
+        ));
+        assert!((up[2].asin().to_degrees() - 55.0).abs() < 1e-3);
+        let rise = sky_light::toward_moon(0.0, 35.0).unwrap();
+        assert!(rise[1] > 0.8 && rise[2].abs() < 1e-6, "{rise:?}");
+        let set = sky_light::toward_moon(180.0, 35.0).unwrap();
+        assert!(set[1] < -0.8 && set[2].abs() < 1e-5, "{set:?}");
+        assert!(sky_light::toward_moon(270.0, 35.0).unwrap()[2] < -0.8);
+        assert_eq!(sky_light::toward_moon(f32::NAN, 35.0), None);
+    }
+
+    /// No way below the lowest height: raised to it with the heading kept; one above it is kept.
+    #[test]
+    fn the_light_never_comes_from_lower_than_ten_degrees() {
+        let low = sky_light::LOWEST_DEGREES.to_radians();
+        for v in [
+            [1.0, 0.0, 0.0],
+            [0.6, -0.8, 0.0],
+            [0.0, 1.0, -0.5],
+            [-1.0, 0.0, 0.05],
+        ] {
+            let v = sky_light::unit(v).unwrap();
+            let r = sky_light::no_lower_than(v);
+            assert!((r[2] - low.sin()).abs() < 1e-6, "{r:?}");
+            let n: f32 = r.iter().map(|c| c * c).sum();
+            assert!((n - 1.0).abs() < 1e-5);
+            // Same heading.
+            let h = |a: [f32; 3]| a[1].atan2(a[0]);
+            assert!((h(r) - h(v)).abs() < 1e-5);
+        }
+        let high = sky_light::unit([0.2, -0.1, 0.9]).unwrap();
+        assert_eq!(sky_light::no_lower_than(high), high);
+        assert_eq!(sky_light::no_lower_than([0.0, 0.0, -1.0]), [0.0, 0.0, 1.0]);
+        // A disc on the horizon (sunrise) lights from 10 degrees up on its side.
+        let rise = sky_light::toward_light([800.0, -100.0, 0.0], 0.5, None).unwrap();
+        assert!((rise[2].asin().to_degrees() - 10.0).abs() < 1e-3 && rise[0] > 0.9);
+    }
+
+    /// The hand-over: all sun by day, all moon at night, and over the ramp between the light turns
+    /// over the sky in small steps (no jump), never lower than the lowest height.
+    #[test]
+    fn the_hand_over_turns_smoothly_over_the_sky() {
+        // 19:00-ish: the sun low in the west, the moon low in the north-east.
+        let sun_disc = [-700.0, -100.0, 100.0];
+        let moon = sky_light::toward_moon(15.0, 35.0);
+        let sun = sky_light::toward_light(sun_disc, 1.0, moon).unwrap();
+        assert!(close(
+            sun,
+            sky_light::no_lower_than(sky_light::unit(sun_disc).unwrap())
+        ));
+        let night = sky_light::toward_light(sun_disc, 0.0, moon).unwrap();
+        assert!(close(night, sky_light::no_lower_than(moon.unwrap())));
+        let mut last = sun;
+        let steps = 200;
+        let mut largest = 0.0f32;
+        for i in 1..=steps {
+            let b = 1.0 - i as f32 / steps as f32;
+            let way = sky_light::toward_light(sun_disc, b, moon).unwrap();
+            assert!(way[2] >= sky_light::LOWEST_DEGREES.to_radians().sin() - 1e-6);
+            largest = largest.max(angle_degrees(last, way));
+            last = way;
+        }
+        let total = angle_degrees(sun, night);
+        assert!(total > 90.0, "{total}");
+        // 200 steps of a two-hour ramp: an even turn eased at the ends, so no step is over 1.5
+        // times the even share (the easing's steepest).
+        assert!(
+            largest < 1.55 * total / steps as f32,
+            "{largest} of {total}"
+        );
+        assert_eq!(sky_light::sun_share(f32::NAN), 1.0);
+        assert_eq!(sky_light::sun_share(2.0), 1.0);
+        assert_eq!(sky_light::sun_share(-1.0), 0.0);
+        assert_eq!(sky_light::sun_share(0.5), 0.5);
+    }
+
+    /// The traced morning (run p-onL1, 09:00): the game's light 33 degrees from the disc; with
+    /// the seam the light is the disc's way.
+    #[test]
+    fn the_traced_morning_light_comes_from_the_disc() {
+        let disc = [456.9388f32, -100.0, 343.0612];
+        let game = [0.9553f32, 0.2091, 0.2091]; // toward the game's light (column 0 negated)
+        let toward = sky_light::toward_light(disc, 1.0, None).unwrap();
+        assert!(close(toward, sky_light::unit(disc).unwrap()));
+        assert!((angle_degrees(toward, sky_light::unit(game).unwrap()) - 33.0).abs() < 1.0);
     }
 
     fn glare_rig(accumulator: f32, scale: f32) -> Update {

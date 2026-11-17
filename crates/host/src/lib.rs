@@ -299,6 +299,20 @@ impl Host {
                 fixes::Renderer::D3d9 => Backends::Real,
             });
         }
+        // The sun light from the sky's discs (`fixes::Choice::light_from_sky`: with the sun shadows
+        // on, `bSunLightFromSky` / `NV_SUN_LIGHT_FROM_SKY`, on by default): the game's sun light is
+        // turned to come from the sun disc by day and the moon by night, so the lit sides, the game's
+        // actor shadows and the sun shadows agree with the sky. Only where the sun shadows draw
+        // (Vulkan, `NV_D3D9` naming wgpu or the play default): with the real Direct3D 9 drawing, the
+        // new lighting is off and the game's light stays the exe's.
+        #[cfg(windows)]
+        if choice.light_from_sky()
+            && engine_platform::d3d9real::backends()
+                == Some(engine_platform::d3d9real::Backends::Wgpu)
+        {
+            engine::sky_sun::want_light_from_sky(&mut engine);
+            eprintln!("nv-rs: the sun light comes from the sun and moon discs (bSunLightFromSky)");
+        }
         // `NV_SOUND=out`: the game's sound on the player's default device, from when the game
         // makes its DirectSound device on; `NV_SOUND_RECORD=FILE.wav` also records what goes
         // to the device, with a log of what started when (`FILE.log`). Off by default.
