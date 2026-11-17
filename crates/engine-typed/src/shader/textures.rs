@@ -219,7 +219,10 @@ pub fn setup_geometry_textures(e: &mut Engine, this: Ptr, block: Ptr) {
     let kind = u32::from(e.mem.u16(rendering.wrapping_add(4)));
     let property = e.mem.u32(block.addr().wrapping_add(0xc));
     let pass = capture::own_at::<u32>(e, CURRENT_PASS);
-    let second_set = e.mem.u32(property.wrapping_add(0x24)) & 0x100000 == 0;
+    // The property's second flags word is a per-frame value the cut copies (main may change it after the cut): the
+    // packet's. Read in place, the drawing side saw main's later word (POISON: the scribble) and put the land's
+    // second texture set on its stages or not by it (the late gate's sampler 8/9 difference in Goodsprings).
+    let second_set = crate::draw::packet::property_word(e, property, 0x24) & 0x100000 == 0;
     let p = Ptr::new(property);
     let body = match kind {
         0x2

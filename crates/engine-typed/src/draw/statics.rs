@@ -644,11 +644,76 @@ mod tests {
                 }
             }
         }
+        // A shader property's per-frame words (`cut::PROPERTY`: the second flags word, alpha, fade, distance) are copied
+        // by the cut and main may change them after it: a raw read or write of one (`property + 0x24`,
+        // `property.wrapping_add(0x24)` on a name holding a property) goes through the packet's `property_word`. The
+        // land's second texture set chosen by an in-place read of +0x24 was the sampler 8/9 record difference
+        // (2026-11-16).
+        for (name, text) in sources {
+            for (n, line) in code_of(text).lines().enumerate() {
+                if line.contains("// own:") {
+                    continue;
+                }
+                let body = line.split("//").next().unwrap_or(line);
+                if let Some(offset) = raw_property_word(body) {
+                    findings.push(format!(
+                        "{name}:{}: the property's per-frame word +{offset:#x} read in place in `{}`",
+                        n + 1,
+                        line.trim()
+                    ));
+                }
+            }
+        }
         assert!(
             findings.is_empty(),
             "own state read or written past the packet:\n{}",
             findings.join("\n")
         );
+    }
+
+    /// The offset of a shader property's per-frame word (`cut::PROPERTY`) that `body` reads or writes in place: a raw
+    /// access (`e.mem.`, `e.global`, `e.set_global`, `e.get(`, `e.set(`) with, after a name containing `propert`, an
+    /// offset in the range added (`.wrapping_add(0x..)` or `+ 0x..`). `None` when there is none.
+    fn raw_property_word(body: &str) -> Option<u32> {
+        let raw = ["e.mem.", "e.global", "e.set_global", "e.get(", "e.set("]
+            .iter()
+            .any(|r| body.contains(r));
+        if !raw {
+            return None;
+        }
+        let (lo, hi) = super::super::cut::PROPERTY;
+        body.match_indices("0x").find_map(|(at, _)| {
+            let digits: String = body[at + 2..]
+                .chars()
+                .take_while(|c| c.is_ascii_hexdigit() || *c == '_')
+                .filter(|c| *c != '_')
+                .collect();
+            let value = u32::from_str_radix(&digits, 16).ok()?;
+            let before = body[..at].trim_end();
+            let added = before.ends_with("wrapping_add(") || before.ends_with('+');
+            let named = before.find("propert").is_some();
+            ((lo..hi).contains(&value) && added && named).then_some(value)
+        })
+    }
+
+    /// The per-frame property check sees the in-place forms and lets the packet's reads and other offsets pass.
+    #[test]
+    fn raw_property_words_are_seen() {
+        for line in [
+            "let flags = e.mem.u32(property.wrapping_add(0x24)) & 0x100000 == 0;",
+            "let alpha = e.global::<u32>(property + 0x2c);",
+            "e.mem.set_u32(the_property.wrapping_add(0x34), 0);",
+        ] {
+            assert!(raw_property_word(line).is_some(), "{line}");
+        }
+        for line in [
+            "let flags = packet::property_word(e, property, 0x24);",
+            "let textures = e.mem.u32(property.wrapping_add(0xac));",
+            "let x = e.mem.u32(light.wrapping_add(0x24));",
+            "let y = e.mem.u32(property.wrapping_add(0x38));",
+        ] {
+            assert!(raw_property_word(line).is_none(), "{line}");
+        }
     }
 
     /// Whether `word` occurs in `line` as a whole identifier.

@@ -5000,6 +5000,28 @@ fn stage_light_texture_reads_the_pass_lights_through_the_packet() {
     );
 }
 
+/// The texture set-up (`00b7d200`) reads the property's second flags word (+0x24, which keeps the land's second
+/// texture set off the stages) through the packet (the cut copies the property's per-frame words): with them scribbled
+/// (POISON, both scribbles: one has the bit set, the other clear) it fills the same stages. Read in place, the drawing
+/// side chose by main's later word: the late gate's sampler 8/9 difference on Goodsprings' land (2026-11-16).
+#[test]
+fn setup_geometry_textures_reads_the_property_flags_through_the_packet() {
+    packet_same(
+        "setup_geometry_textures",
+        entry!(
+            0x00b7_d200,
+            textures::setup_geometry_textures(Ptr<_>, Ptr<_>)
+        )
+        .1,
+        &product(&[&[0x1f7, 0x1ff, 0x217, 0x227, 0x22e, 0x93, 0x2], TWO_WAYS]),
+        |e, c| {
+            let g = geometry_shape(e, &texture_shape(c.word(0), 1, 0, c.word(1) != 0));
+            (vec![g.shader, g.block], vec![g.property])
+        },
+        |e, w| cut::take_property_lights(e, w[0]),
+    );
+}
+
 #[test]
 fn stage_shared_texture() {
     Diff::new(entry!(0x00b7_c190, textures::stage_shared_texture(u32)))
