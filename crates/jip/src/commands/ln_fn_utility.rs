@@ -3,14 +3,15 @@
 //! there and a mod's INI files read and written (`FileExists`, `GetINIFloat`, `SetINIFloat`,
 //! `GetINIString`, `SetINIString`, `GetINISection`, `SetINISection`, `GetINISectionNames`,
 //! `RemoveINIKey`, `RemoveINISection`) through the core's seam `engine_core::mod_files`: a mod's
-//! writes are kept in the port's own folder beside the saves, never in the game folder. 14 of its
-//! 20 commands (`GetLNVersion` is the core track's, `identity.rs`).
+//! writes are kept in the port's own folder beside the saves, never in the game folder; and
+//! `GetDefaultMessageTime`/`SetDefaultMessageTime`, the time JIP's `QueueUIMessageHook` (G09,
+//! `crate::game_patches::ga`) gives the game's own messages (with JIP's fixes off it is kept but no
+//! message uses it, as with JIP). 16 of its 20 commands (`GetLNVersion` is the core track's,
+//! `identity.rs`).
 //!
 //! Left for later, each for its reason: `GetFilesInFolder`, `GetFoldersInFolder` list a folder
 //! (`FindFirstFileA`; the seam has no folder listing yet); `Console` compiles and runs a script
-//! line (`JIPScriptRunner`, not built yet);
-//! `GetDefaultMessageTime`/`SetDefaultMessageTime` hold the time JIP's `QueueUIMessageHook` gives
-//! messages (the hook is the core track's; without it the setting would change nothing).
+//! line (`JIPScriptRunner`, not built yet).
 
 use super::arrays::{create_array, create_string_map, set_element, Element};
 use super::forms::ListNode;
@@ -39,6 +40,8 @@ pub static COMMANDS: Handlers = &[
     (0x22af, remove_ini_section),
     (0x22ff, sort_forms_by_type),
     (0x2300, get_form_count_type),
+    (0x2327, get_default_message_time),
+    (0x2328, set_default_message_time),
 ];
 
 /// A form list's forms (`BGSListForm::list`, a `tList` at +0x18).
@@ -696,3 +699,28 @@ fn remove_ini_section(e: &mut Engine, w: &[u32]) -> Ret {
 #[cfg(test)]
 #[path = "ln_fn_utility_tests.rs"]
 mod tests;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h:
+// Cmd_GetDefaultMessageTime_Execute.
+/// The default message time (`s_msgDisplayTime`), echoed in the console (`DoConsolePrint`).
+fn get_default_message_time(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let seconds = crate::game_patches::ga::default_message_time(e);
+    a.set_result(e, f64::from(seconds));
+    crate::console::print_result(e, &a);
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h:
+// Cmd_SetDefaultMessageTime_Execute.
+/// Sets the default message time to its float when the argument is read; the result is left as
+/// it was.
+fn set_default_message_time(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if read.ok {
+        let seconds = read.float(0, 0.0);
+        crate::game_patches::ga::set_default_message_time(e, seconds);
+    }
+    handled(true)
+}
