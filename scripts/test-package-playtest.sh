@@ -29,12 +29,12 @@ chmod 755 "$tmp/target/release/nv-viewer" "$tmp/target/release/package-check"
 
 failed=0
 check() { # NAME, then a command that must succeed
-    name=$1
+    what=$1
     shift
     if "$@"; then
-        printf 'ok   %s\n' "$name"
+        printf 'ok   %s\n' "$what"
     else
-        printf 'FAIL %s\n' "$name"
+        printf 'FAIL %s\n' "$what"
         failed=1
     fi
 }
@@ -46,6 +46,7 @@ cat "$tmp/log"
 name=nv-rs-preview-$system-test
 archive=$tmp/out/$name.tar.gz
 check "package-playtest.sh ended with status 0 (was $status)" [ "$status" = 0 ]
+check "it printed no write error (a pipe closed early)" sh -c '! grep -q "write error" "$1"' x "$tmp/log"
 check "the archive is there" [ -s "$archive" ]
 check "its checksum file is there" [ -s "$archive.sha256" ]
 if [ -s "$archive" ]; then
@@ -62,7 +63,7 @@ if [ -s "$archive" ]; then
         check "the archive holds licenses/$named (from $file)" has "licenses/$named"
     done <"$tmp/notices"
     # And a crates.io crate's licence folder.
-    first=$(cd -- "$here/distribution/licenses" && git ls-files | head -n 1)
+    first=$(cd -- "$here/distribution/licenses" && git ls-files | sed -n 1p)
     check "the archive holds licenses/$first" has "licenses/$first"
 fi
 [ "$failed" = 0 ] && echo "test-package-playtest.sh: passed" || echo "test-package-playtest.sh: FAILED"

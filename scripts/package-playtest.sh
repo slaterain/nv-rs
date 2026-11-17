@@ -272,12 +272,17 @@ odd=$(printf '%s\n' "$entries" | grep -v -e "^$name/" -e "^$name\$" || true)
 odd="$odd$(printf '%s\n' "$entries" | grep -e '/\._' -e '\.\./' || true)"
 [ -z "$odd" ] || fail_archive "the archive holds entries it must not: $odd"
 # And every staged file is in it: play.sh and the program first of all.
+# (grep reads the list from a file: fed through a pipe, grep -q stops reading at its match and
+# the writer fails with "Broken pipe".)
+listing=$(mktemp) || fail_archive "no temporary file"
+printf '%s\n' "$entries" >"$listing"
 unlisted=$(cd -- "$out" && find "$name" -type f | while IFS= read -r file; do
-    printf '%s\n' "$entries" | grep -qxF -- "$file" || printf '%s ' "$file"
+    grep -qxF -e "$file" "$listing" || printf '%s ' "$file"
 done)
-[ -z "$unlisted" ] || fail_archive "the archive lacks: $unlisted"
+[ -z "$unlisted" ] || { rm -f -- "$listing"; fail_archive "the archive lacks: $unlisted"; }
 for file in "$name/play.sh" "$name/app/nv-viewer"; do
-    printf '%s\n' "$entries" | grep -qxF -- "$file" || fail_archive "the archive has no $file"
+    grep -qxF -e "$file" "$listing" || { rm -f -- "$listing"; fail_archive "the archive has no $file"; }
 done
+rm -f -- "$listing"
 (cd -- "$out" && sha256 "$name.tar.gz" >"$name.tar.gz.sha256")
 printf '%s\n' "Package: $archive" "Bytes: $(wc -c <"$archive" | tr -d ' ')" "Checksum: $archive.sha256" "Commit: $commit" "Program SHA256: $sha"
