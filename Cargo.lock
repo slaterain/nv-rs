@@ -392,6 +392,7 @@ dependencies = [
  "d3d9-stream",
  "esm",
  "naga",
+ "objc2-quartz-core 0.3.2",
  "qos",
  "raw-window-handle",
  "wgpu",

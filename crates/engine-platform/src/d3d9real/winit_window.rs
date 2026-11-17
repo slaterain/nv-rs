@@ -49,6 +49,10 @@
 //!   thread has), and the main thread waits until the game first needs a window (or the monitors),
 //!   then runs [`run`] for good. A program that does not hand it over gets no window on macOS: the
 //!   run ends with a line saying so.
+//!   The window's Metal layer is made here too, on the main thread, and the surface on it from the
+//!   game's or the render thread (d3d9-wgpu `surface_for`). wgpu itself still reads the window's
+//!   occlusion state on the thread that takes each frame, so a Main Thread Checker report from
+//!   there is expected.
 //! - Where no window can be shown the run ends with a line naming why (a run without its window
 //!   would go on drawing nothing): no X server or Wayland compositor, a missing library, winit's
 //!   loop stopping. The libraries a Linux player needs, all loaded at run time: on X11 libX11.so.6,

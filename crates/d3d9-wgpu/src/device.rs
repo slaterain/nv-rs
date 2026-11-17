@@ -8762,7 +8762,11 @@ pub(crate) fn surface_for(
     let w = crate::window::registered(window).ok_or("no window made known by the window layer")?;
     // macOS: the surface on the window's Metal layer, made on the main thread with the window
     // (this runs on the game's or the render thread, where winit gives no handle and AppKit's
-    // view may not be touched). Metal only: another API's device cannot show it.
+    // view may not be touched). Metal only: another API's device cannot show it. wgpu itself
+    // still reads the window's occlusion state (`occlusionState`, through the layer's view) on
+    // the thread that takes each frame (wgpu-hal metal surface.rs, acquire_texture): a Main
+    // Thread Checker report from there is expected. tests/metal_surface.rs runs this sequence
+    // off the main thread on CI's Mac.
     #[cfg(target_vendor = "apple")]
     if let Some(layer) = w.metal_layer() {
         // SAFETY: the layer is a CAMetalLayer the window keeps retained (`w` holds the window
