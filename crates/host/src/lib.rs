@@ -469,7 +469,8 @@ impl Host {
 /// macOS, but the game cannot run there yet, so every start (and `--check`) is refused with the
 /// pieces that are still Windows-only, instead of a run that would go on without them and fail
 /// somewhere less clear. The game's paths and file listings are provided
-/// (`engine_platform::host_paths`), and so is the sound on the speakers. The game's window with its
+/// (`engine_platform::host_paths`), and so is the sound on the speakers, and this machine's tables
+/// (`engine_platform::machine_table`, the sound's `engine_platform::dsound::fixed_table`). The game's window with its
 /// mouse and keyboard is provided on Linux (winit, X11 and Wayland), not yet on macOS, where it
 /// needs the program's main thread. On a processor other than x86-64 (Apple silicon) it also names
 /// what differs there.
@@ -492,10 +493,7 @@ fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
              window needs the program's main thread), ",
         );
     }
-    why.push_str(
-        "this machine's tables (display adapter, sound devices, folders), which are measured on \
-         Windows, and code pages other than Windows' Western one (1252)",
-    );
+    why.push_str("code pages other than Windows' Western one (1252)");
     if !x86_64 {
         why.push_str(
             "; and on this processor the game's x87 maths (not yet exact off x86-64) and the \
@@ -870,8 +868,11 @@ mod tests {
         for x86_64 in [true, false] {
             for apple in [true, false] {
                 let why = super::not_provided_on(x86_64, apple).unwrap_err();
-                for piece in ["sound devices", "tables", "code page"] {
-                    assert!(why.contains(piece), "{piece}: {why}");
+                assert!(why.contains("code page"), "{why}");
+                // This machine's tables are made from what the system reports (the display, the
+                // card, the sound device, the folders: engine-platform machine_table.rs, dsound.rs).
+                for gone in ["tables", "sound devices", "adapter", "folders"] {
+                    assert!(!why.contains(gone), "{gone}: {why}");
                 }
                 // The window with its mouse and keyboard: provided on Linux, not yet on macOS.
                 assert_eq!(why.contains("window"), apple, "{why}");

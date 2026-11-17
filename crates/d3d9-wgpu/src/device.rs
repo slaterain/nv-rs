@@ -8551,6 +8551,60 @@ pub fn hardware_adapter() -> Option<String> {
     })
 }
 
+/// What the Direct3D 9 layer's machine table off Windows takes from the card ([`card_facts`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardFacts {
+    pub name: String,
+    pub vendor: u32,
+    pub device: u32,
+    pub driver: String,
+    pub driver_info: String,
+    /// The sample counts the card takes for both a colour (`Rgba8Unorm`) and a depth
+    /// (`Depth24PlusStencil8`) target.
+    pub sample_counts: Vec<u32>,
+}
+
+/// The graphics card the game's device will most likely be made on, on the APIs `NV_WGPU_BACKEND`
+/// allows: on the first API, in [`apis`]' order, that has a card, a separate card before one built
+/// into the processor, then a virtual one, then any other, as a high-performance request takes
+/// them (the device itself is chosen when the game makes it, with its window). The software
+/// adapter only when `NV_WGPU_BACKEND=software` asks for it. `None` when there is no card.
+pub fn card_facts() -> Option<CardFacts> {
+    let (tries, software) = apis(std::env::var("NV_WGPU_BACKEND").ok().as_deref());
+    let rank = |t: wgpu::DeviceType| match t {
+        wgpu::DeviceType::DiscreteGpu => 0,
+        wgpu::DeviceType::IntegratedGpu => 1,
+        wgpu::DeviceType::VirtualGpu => 2,
+        wgpu::DeviceType::Other => 3,
+        wgpu::DeviceType::Cpu => 4,
+    };
+    tries.into_iter().find_map(|backends| {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = block_on(instance.enumerate_adapters(backends))
+            .into_iter()
+            .filter(|a| software == (a.get_info().device_type == wgpu::DeviceType::Cpu))
+            .min_by_key(|a| rank(a.get_info().device_type))?;
+        let info = adapter.get_info();
+        let colour = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm);
+        let depth = adapter.get_texture_format_features(wgpu::TextureFormat::Depth24PlusStencil8);
+        Some(CardFacts {
+            name: info.name,
+            vendor: info.vendor,
+            device: info.device,
+            driver: info.driver,
+            driver_info: info.driver_info,
+            sample_counts: (1..=16)
+                .filter(|&n| {
+                    colour.flags.sample_count_supported(n) && depth.flags.sample_count_supported(n)
+                })
+                .collect(),
+        })
+    })
+}
+
 /// Whether `instance` has a graphics card (not a software adapter) on `backends`.
 fn has_card(instance: &wgpu::Instance, backends: wgpu::Backends) -> bool {
     block_on(instance.enumerate_adapters(backends))

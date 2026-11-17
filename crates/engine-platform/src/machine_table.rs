@@ -20,11 +20,11 @@
 //!   PC without NVIDIA's driver answers); and on a processor without `CPUID` (Apple silicon) the
 //!   answer of an x86-64 PC (`engine_core::processor`).
 //!
-//! Not here yet (a follow-up, with the window and drawing work): the display and monitor list
-//! (screen metrics 0, 1 and 0x50, the display mode and modes, `EnumDisplayDevicesA`), the
-//! graphics adapter's identity and its Direct3D answers (capabilities, `Check*`, `CreateQuery`),
-//! which on Windows describe the player's own card. A run reaching one of them stops there and
-//! says it was not captured.
+//! - **the display and the graphics card** ([`display`]): the monitors from winit, the card from
+//!   wgpu, and the Direct3D 9 answers of a modern card captured once on Windows, with the
+//!   multisample counts the card there draws with. They are asked only when the run draws (a
+//!   renderer is chosen); a run that draws nothing has none, and a question about them stops it
+//!   there, saying it was not captured.
 //!
 //! **The time zone.** Windows answers `TIME_ZONE_INFORMATION`: the standard offset (`Bias`,
 //! minutes, UTC = local + bias), and two change-over dates in its "the n-th (5: last) weekday of
@@ -54,6 +54,9 @@
 #![cfg_attr(windows, allow(dead_code))]
 
 use super::zone::{self, ZoneInfo};
+
+pub mod display;
+pub use display::{Card, Mode, Monitor};
 
 /// Windows' fixed answers (see the module's documentation).
 pub const WINDOWS_FIXED: &str = include_str!("../data/machine/windows-fixed.tsv");
@@ -717,6 +720,10 @@ pub struct Inputs {
     pub processor: (u32, [u32; 4], [u32; 4]),
     /// nv-rs's own folder (this system's full path).
     pub own_folder: Result<std::path::PathBuf, String>,
+    /// The monitors ([`display`]).
+    pub monitors: Result<Vec<Monitor>, String>,
+    /// The graphics card ([`display`]).
+    pub card: Result<Card, String>,
 }
 
 /// The table's text and what could not be answered (each a line for the log; such a question
@@ -747,6 +754,26 @@ pub fn write_table(inputs: &Inputs) -> (String, Vec<String>) {
     let (id, leaf_0, leaf_1) = inputs.processor;
     table.push_str(&processor_lines(id, leaf_0, leaf_1));
     table.push_str(&no_nvapi_lines());
+    match &inputs.card {
+        Ok(card) => {
+            table.push_str(&display::card_lines(card));
+            table.push_str(&display::honour_samples(display::CARD, &card.sample_counts));
+        }
+        Err(why) => {
+            problems.push(format!("machine table: no graphics card: {why}"));
+            table.push_str(display::CARD);
+        }
+    }
+    let card_name = inputs.card.as_ref().map_or("", |c| c.name.as_str());
+    match inputs
+        .monitors
+        .as_ref()
+        .map_err(String::clone)
+        .and_then(|m| display::display_lines(m, card_name))
+    {
+        Ok(lines) => table.push_str(&lines),
+        Err(why) => problems.push(format!("machine table: no display: {why}")),
+    }
     (table, problems)
 }
 
@@ -1005,11 +1032,33 @@ pub fn this_machine(own_folder: Result<std::path::PathBuf, String>) -> (String, 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64);
+    // The display and the card only for a run that draws: the window layer's thread reads the
+    // monitors (the window system must be there), wgpu the card.
+    let (monitors, card) = if super::d3d9real::wanted() {
+        (
+            super::d3d9real::monitors(),
+            d3d9_wgpu::device::card_facts()
+                .map(|c| Card {
+                    name: c.name,
+                    vendor: c.vendor,
+                    device: c.device,
+                    driver: c.driver,
+                    driver_info: c.driver_info,
+                    sample_counts: c.sample_counts,
+                })
+                .ok_or_else(|| "wgpu finds no graphics card".to_string()),
+        )
+    } else {
+        let why = "the run draws nothing (no renderer chosen)".to_string();
+        (Err(why.clone()), Err(why))
+    };
     write_table(&Inputs {
         zone: this_zone(),
         now,
         processor: this_processor(),
         own_folder,
+        monitors,
+        card,
     })
 }
 

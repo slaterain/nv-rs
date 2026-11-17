@@ -482,6 +482,21 @@ fn the_table_reads_back_with_its_answers() {
         now: at(2026, 7, 1, 12),
         processor: fixed_processor(),
         own_folder: Ok("/home/me/.local/share/nv-rs".into()),
+        monitors: Ok(vec![Monitor {
+            size: (3840, 2160),
+            scale: 2.0,
+            refresh_millihertz: Some(59_997),
+            modes: Vec::new(),
+            primary: false,
+        }]),
+        card: Ok(Card {
+            name: "Apple M2".into(),
+            vendor: 0,
+            device: 0,
+            driver: String::new(),
+            driver_info: String::new(),
+            sample_counts: vec![1, 2, 4],
+        }),
     });
     assert!(problems.is_empty(), "{problems:?}");
     let mut e = crate::Engine::new();
@@ -490,7 +505,12 @@ fn the_table_reads_back_with_its_answers() {
     assert_eq!(crate::d3d9::get_oemcp(&mut e), 437);
     assert_eq!(crate::d3d9::is_valid_code_page(&mut e, 65001), 1);
     assert_eq!(crate::d3d9::system_metric(&mut e, 0x1000), Some(0));
-    assert_eq!(crate::d3d9::system_metric(&mut e, 0), None);
+    // The only monitor (none is the system's primary one) in scaled pixels.
+    assert_eq!(crate::d3d9::system_metric(&mut e, 0), Some(1920));
+    assert_eq!(crate::d3d9::system_metric(&mut e, 1), Some(1080));
+    assert_eq!(crate::d3d9::system_metric(&mut e, 0x50), Some(1));
+    assert!(table.contains("GetAdapterIdentifier\t0 2\t0\t"));
+    assert!(table.contains("GetDeviceCaps\t0 1\t0\t"));
     assert_eq!(crate::d3d9::windows_directory(&mut e), b"C:\\WINDOWS");
     assert_eq!(
         crate::d3d9::folder_path(&mut e, 0x23),
@@ -524,12 +544,18 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
         now: 0,
         processor: fixed_processor(),
         own_folder: Err("no HOME".into()),
+        monitors: Err("no window system".into()),
+        card: Err("no card".into()),
     });
-    assert_eq!(problems.len(), 2);
+    assert_eq!(problems.len(), 4);
     assert!(problems[0].contains("no HOME") && problems[1].contains("no zone file"));
+    assert!(problems[2].contains("no card") && problems[3].contains("no window system"));
     assert!(!table.contains("GetTimeZoneInformation") && !table.contains("SHGetFolderPathA\t5 "));
     assert!(table.contains("CpuIdFlagTest\t\t200000\nCpuid\t0\t1 0 0 0\nCpuid\t1\t0 0 0 6808000\n"));
-    assert!(table.ends_with("NvApiLoad\t\t0\t7e\nNvApiEnd\n"));
+    assert!(table.contains("NvApiLoad\t\t0\t7e\nNvApiEnd\n"));
+    // Without the card its identity is left out; the captured card's answers stay as captured.
+    assert!(!table.contains("GetAdapterIdentifier") && table.ends_with(display::CARD));
+    assert!(!table.contains("GetAdapterDisplayMode") && !table.contains("EnumAdapterModes"));
 }
 
 /// The fixed Windows answers hold nothing personal: no user folder, no adapter, no NVIDIA lines,
@@ -631,9 +657,17 @@ mod this_system {
     }
 
     #[test]
+    /// A test draws nothing, so the display and the card are not asked (they are the only
+    /// problems).
     fn this_machines_table_has_no_problems() {
         let (table, problems) = this_machine(Ok("/nonexistent/nv-rs".into()));
-        assert!(problems.is_empty(), "{problems:?}");
+        assert_eq!(
+            problems,
+            [
+                "machine table: no graphics card: the run draws nothing (no renderer chosen)",
+                "machine table: no display: the run draws nothing (no renderer chosen)"
+            ]
+        );
         assert!(table.contains("GetTimeZoneInformation\t\t"));
     }
 }
