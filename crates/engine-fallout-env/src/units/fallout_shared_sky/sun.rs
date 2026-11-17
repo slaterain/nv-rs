@@ -1052,29 +1052,56 @@ pub fn fn_006427c0(e: &mut Engine, this: Ptr<Sun>) -> f32 {
 /// the same colours, is turned to come from the disc ([`sky_light::toward_light`]); everything that
 /// reads the light (the lit shaders, grass, water, the game's actor shadows, the sun shadows) follows.
 /// Indoors (sky modes 0 and 1) nothing changes. Without the slot `Update` runs as the exe's code.
+///
+/// The slot also holds what says whether the sun shadows are drawn at all (`drawing`, the host's:
+/// whether wgpu draws, `false` once the real Direct3D 9 took over at the device's making): while it
+/// answers `false` the light is the exe's.
 #[derive(Default)]
-pub struct LightFromSky;
+pub struct LightFromSky {
+    drawing: std::sync::OnceLock<fn() -> bool>,
+}
 
-/// Turns [`LightFromSky`] on for this engine and every real thread's engine made from it afterwards.
-pub fn want_light_from_sky(e: &mut Engine) {
-    e.ext_free::<LightFromSky>();
+impl LightFromSky {
+    /// Whether the light is turned now: the host's `drawing` answer (on when none was given).
+    fn on(&self) -> bool {
+        self.drawing.get().is_none_or(|drawing| drawing())
+    }
+}
+
+/// Turns [`LightFromSky`] on for this engine and every real thread's engine made from it
+/// afterwards, while `drawing` answers `true` (asked once a frame: whether the sun shadows draw).
+pub fn want_light_from_sky(e: &mut Engine, drawing: fn() -> bool) {
+    // A second call keeps the first answer (the host calls this once, before the threads start).
+    let _ = e.ext_free::<LightFromSky>().drawing.set(drawing);
 }
 
 /// `Sky::pMasser` (`+0x30`, Xbox PDB), the moon the game shows.
 const SKY_MASSER: u32 = 0x30;
 
-/// The seam of `Update`'s light: `None` (the exe's vector) without [`LightFromSky`] or when the
-/// numbers are not usable; else the way the light goes (away from the sky), made unit. `disc` is
-/// the sun root's local place `Update` just computed (its parent is not turned: the trace's steps
-/// of the place and of the world place are the same), `brightness` the disc's alpha (1 by day, 0 at
-/// night, the ramps between: the hand-over's weight).
+/// The seam of `Update`'s light: `None` (the exe's vector) without [`LightFromSky`], while it is
+/// not drawing, or when the numbers are not usable; else the way the light goes (away from the
+/// sky), made unit. `disc` is the sun root's local place `Update` just computed (its parent is not
+/// turned: the trace's steps of the place and of the world place are the same), `brightness` the
+/// disc's alpha (1 by day, 0 at night, the ramps between: the hand-over's weight).
+///
+/// Masser counts only once its own update has placed it (`fLastPosUpdate` is no longer the
+/// constructor's `FLT_MAX`: a moon made this frame still has angle 0, the north horizon), and its
+/// angle is held where it shows ([`sky_light::shown_moon_angle`], with its own `fAngleFadeEnd`).
 fn light_from_sky(e: &Engine, sky: u32, disc: &[u32; 3], brightness: u32) -> Option<[f32; 3]> {
-    e.ext_get::<LightFromSky>()?;
+    if !e.ext_get::<LightFromSky>()?.on() {
+        return None;
+    }
     let masser = e.mem.u32(sky + SKY_MASSER);
     let moon = (masser != 0 && e.mem.is_mapped(masser)).then(|| {
         let moon = Ptr::<Moon>::new(masser);
+        if f32::from_bits(e.get(moon, Moon::fLastPosUpdate)) == f32::MAX {
+            return None;
+        }
         sky_light::toward_moon(
-            f32::from_bits(e.get(moon, Moon::fPos)),
+            sky_light::shown_moon_angle(
+                f32::from_bits(e.get(moon, Moon::fPos)),
+                f32::from_bits(e.get(moon, Moon::fAngleFadeEnd)),
+            ),
             f32::from_bits(e.get(moon, Moon::fZOffset)),
         )
     });
@@ -1108,6 +1135,30 @@ pub mod sky_light {
     pub fn toward_moon(pos: f32, z_offset: f32) -> Option<[f32; 3]> {
         let (p, z) = (pos.to_radians(), z_offset.to_radians());
         unit([z.sin(), z.cos() * p.cos(), z.cos() * p.sin()])
+    }
+
+    /// The moon's angle the light takes: its own while the game shows it (`Moon::Update` fades it
+    /// in and out between `fade_end` and `180 - fade_end`, Masser 45 and 135: about 21:00 to
+    /// 03:00), and while it is hidden the angle where it was last or will next be seen: from the
+    /// set (`180 - fade_end`) to 270 the place where it faded out, from 270 round to the rise the
+    /// place where it will fade in. So the light never follows a hidden moon down to the horizon,
+    /// stands still while no moon is drawn, and moves on with the moon from the moment it shows:
+    /// no jump at the fades. The one change of side, at 270, is midday (the moon's angle is
+    /// `90 + 15 * hour`), when the light is all the sun's. An angle or fade that is not usable is
+    /// the moon's own angle.
+    pub fn shown_moon_angle(pos: f32, fade_end: f32) -> f32 {
+        if !pos.is_finite() || !(0.0..90.0).contains(&fade_end) {
+            return pos;
+        }
+        let p = pos.rem_euclid(360.0);
+        let (rise, set) = (fade_end, 180.0 - fade_end);
+        if (rise..=set).contains(&p) {
+            p
+        } else if p > set && p < 270.0 {
+            set
+        } else {
+            rise
+        }
     }
 
     /// `v` (unit) raised to at least [`LOWEST_DEGREES`] above the horizon, its heading kept; a way
@@ -1721,6 +1772,9 @@ mod tests {
         let moon = u.e.mem.alloc(0x7c);
         u.e.mem.set_f32(moon + 0x74, pos);
         u.e.mem.set_f32(moon + 0x68, z_offset);
+        // Placed by its update (not the constructor's FLT_MAX), shown between 45 and 135.
+        u.e.mem.set_f32(moon + 0x78, 21.0);
+        u.e.mem.set_f32(moon + 0x5c, 45.0);
         // `Sky::pMasser` at +0x30 (Xbox PDB), written here by its offset, not the seam's constant.
         u.e.mem.set_u32(u.sky + 0x30, moon);
     }
@@ -1734,7 +1788,7 @@ mod tests {
             let mut off = update_rig(3, hour);
             run(&mut off);
             let mut on = update_rig(3, hour);
-            want_light_from_sky(&mut on.e);
+            want_light_from_sky(&mut on.e, || true);
             run(&mut on);
             let log = |u: &Update| {
                 u.e.call_log
@@ -1770,7 +1824,7 @@ mod tests {
         let mut on = update_rig(0, 12.0);
         on.e.map(INTERIOR_ANGLE, 4);
         on.e.set_global(INTERIOR_ANGLE, -0.5f32);
-        want_light_from_sky(&mut on.e);
+        want_light_from_sky(&mut on.e, || true);
         run(&mut on);
         assert_eq!(off.e.call_log, on.e.call_log);
     }
@@ -1781,7 +1835,7 @@ mod tests {
     fn at_night_the_light_comes_from_the_moon() {
         let mut u = update_rig(3, 23.0);
         with_masser(&mut u, 90.0 + 15.0 * 23.0 - 360.0, 35.0);
-        want_light_from_sky(&mut u.e);
+        want_light_from_sky(&mut u.e, || true);
         run(&mut u);
         let moon = sky_light::toward_moon(75.0, 35.0).unwrap();
         assert!(
@@ -1793,7 +1847,7 @@ mod tests {
         assert!(moon[0] > 0.5 && moon[1] > 0.1 && moon[2] > 0.75, "{moon:?}");
 
         let mut u = update_rig(3, 23.0);
-        want_light_from_sky(&mut u.e);
+        want_light_from_sky(&mut u.e, || true);
         run(&mut u);
         let disc = sky_light::unit(disc_place(&u)).unwrap();
         assert!(close(light_way(&u), disc.map(|v| -v)));
@@ -1802,6 +1856,89 @@ mod tests {
         with_masser(&mut off, 75.0, 35.0);
         run(&mut off);
         assert_eq!(light_way(&off), [-disc_place(&off)[0], 50.0, 30.0]);
+    }
+
+    /// While the game hides Masser (before it fades in, after it fades out) the light stays where
+    /// it shows; a Masser its update has not placed yet counts as no moon (the sun disc's night
+    /// place); while the host says nothing draws the shadows, the light is the exe's.
+    #[test]
+    fn a_hidden_or_unplaced_moon_and_no_drawing_keep_the_light_sensible() {
+        // 20:30: night; the moon's angle 37.5 (hidden, under its fade-in at 45): held at 45.
+        let mut u = update_rig(3, 20.5);
+        with_masser(&mut u, 37.5, 35.0);
+        want_light_from_sky(&mut u.e, || true);
+        run(&mut u);
+        let held = sky_light::toward_moon(45.0, 35.0).unwrap();
+        assert!(
+            close(light_way(&u), held.map(|v| -v)),
+            "{:?}",
+            light_way(&u)
+        );
+        // After it faded out (angle 160, about 04:40): held where it faded out.
+        let mut u = update_rig(3, 4.5);
+        with_masser(&mut u, 160.0, 35.0);
+        want_light_from_sky(&mut u.e, || true);
+        run(&mut u);
+        let held = sky_light::toward_moon(135.0, 35.0).unwrap();
+        assert!(
+            close(light_way(&u), held.map(|v| -v)),
+            "{:?}",
+            light_way(&u)
+        );
+
+        // A Masser made this frame: angle 0 and the constructor's FLT_MAX as its last update.
+        let mut u = update_rig(3, 23.0);
+        with_masser(&mut u, 0.0, 35.0);
+        let moon = u.e.mem.u32(u.sky + 0x30);
+        u.e.mem.set_f32(moon + 0x78, f32::MAX);
+        want_light_from_sky(&mut u.e, || true);
+        run(&mut u);
+        let disc = sky_light::unit(disc_place(&u)).unwrap();
+        assert!(
+            close(light_way(&u), disc.map(|v| -v)),
+            "{:?}",
+            light_way(&u)
+        );
+
+        // Nothing draws the shadows (the real Direct3D 9 took over): the exe's light, same calls.
+        let mut off = update_rig(3, 9.0);
+        run(&mut off);
+        let mut gated = update_rig(3, 9.0);
+        want_light_from_sky(&mut gated.e, || false);
+        run(&mut gated);
+        assert_eq!(off.e.call_log, gated.e.call_log);
+        assert_eq!(light_way(&gated), [-disc_place(&gated)[0], 50.0, 30.0]);
+    }
+
+    /// The moon's angle the light takes: its own between the fades, held at the fade-in before
+    /// and at the fade-out after, the side changing at 270 (midday); no jump at either fade.
+    #[test]
+    fn the_moon_is_held_where_it_shows() {
+        let held = |p: f32| sky_light::shown_moon_angle(p, 45.0);
+        for (p, want) in [
+            (60.0, 60.0),
+            (45.0, 45.0),
+            (135.0, 135.0),
+            (30.0, 45.0),
+            (0.0, 45.0),
+            (-10.0, 45.0),
+            (300.0, 45.0),
+            (150.0, 135.0),
+            (269.0, 135.0),
+            (271.0, 45.0),
+            (420.0, 60.0),
+        ] {
+            assert_eq!(held(p), want, "{p}");
+        }
+        for edge in [45.0f32, 135.0] {
+            assert!(
+                (held(edge - 0.01) - held(edge + 0.01)).abs() < 0.03,
+                "{edge}"
+            );
+        }
+        assert!(held(f32::NAN).is_nan());
+        assert_eq!(sky_light::shown_moon_angle(30.0, f32::NAN), 30.0);
+        assert_eq!(sky_light::shown_moon_angle(30.0, 95.0), 30.0);
     }
 
     /// The moon's way from its angle: rising at the north horizon, 55 degrees up in the east at

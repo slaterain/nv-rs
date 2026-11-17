@@ -304,13 +304,15 @@ impl Host {
         // turned to come from the sun disc by day and the moon by night, so the lit sides, the game's
         // actor shadows and the sun shadows agree with the sky. Only where the sun shadows draw
         // (Vulkan, `NV_D3D9` naming wgpu or the play default): with the real Direct3D 9 drawing, the
-        // new lighting is off and the game's light stays the exe's.
+        // new lighting is off and the game's light stays the exe's ([`light_from_sky_wanted`]); and
+        // each frame only while wgpu still draws (`wgpu_draws`: false once the real Direct3D 9 took
+        // over at the device's making, when no sun shadows are drawn).
         #[cfg(windows)]
-        if choice.light_from_sky()
-            && engine_platform::d3d9real::backends()
-                == Some(engine_platform::d3d9real::Backends::Wgpu)
-        {
-            engine::sky_sun::want_light_from_sky(&mut engine);
+        if light_from_sky_wanted(&choice, engine_platform::d3d9real::backends()) {
+            engine::sky_sun::want_light_from_sky(
+                &mut engine,
+                engine_platform::d3d9real::wgpu_draws,
+            );
             eprintln!("nv-rs: the sun light comes from the sun and moon discs (bSunLightFromSky)");
         }
         // `NV_SOUND=out`: the game's sound on the player's default device, from when the game
@@ -875,8 +877,38 @@ fn sound_choice(sound: Option<&str>, record: bool, hidden: bool) -> SoundChoice 
     }
 }
 
+/// Whether the sun light from the sky's discs is installed (`sun::LightFromSky`): the choice says so
+/// (`fixes::Choice::light_from_sky`: the sun shadows on and `bSunLightFromSky` on) and wgpu alone is
+/// asked to draw (`backends`, `engine_platform::d3d9real::backends`). Anything else: the exe's light.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn light_from_sky_wanted(
+    choice: &fixes::Choice,
+    backends: Option<engine_platform::d3d9real::Backends>,
+) -> bool {
+    choice.light_from_sky() && backends == Some(engine_platform::d3d9real::Backends::Wgpu)
+}
+
 #[cfg(test)]
 mod tests {
+    /// The light from the sky is installed only with the sun shadows on, the key on and wgpu alone
+    /// drawing: with the default choice, the sun shadows off (key on), the key off, the real
+    /// Direct3D 9, both, or no backend, nothing is installed and the game's light is the exe's.
+    #[test]
+    fn the_light_from_the_sky_is_installed_only_with_the_sun_shadows_on_wgpu() {
+        use engine_platform::d3d9real::Backends;
+        let wgpu = Some(Backends::Wgpu);
+        let mut choice = super::fixes::Choice::vanilla();
+        assert!(choice.sun_light_from_sky && !choice.sun_shadows);
+        assert!(!super::light_from_sky_wanted(&choice, wgpu));
+        choice.sun_shadows = true;
+        assert!(super::light_from_sky_wanted(&choice, wgpu));
+        for other in [Some(Backends::Real), Some(Backends::RealAndWgpu), None] {
+            assert!(!super::light_from_sky_wanted(&choice, other), "{other:?}");
+        }
+        choice.sun_light_from_sky = false;
+        assert!(!super::light_from_sky_wanted(&choice, wgpu));
+    }
+
     /// Off Windows a start is refused, naming the pieces that are still Windows-only.
     #[test]
     fn a_start_off_windows_is_refused_naming_what_is_missing() {
