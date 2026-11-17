@@ -524,7 +524,18 @@ pub fn actor_destructor(e: &mut Engine, this: Ptr<Actor>) {
     if !member_array.is_null() {
         e.vcall(member_array.addr(), 0, &args![1u32]);
     }
-    if !e.call(0x0040_77c0, &args![this]).bool() {
+    // JIP LN's O18 (`uNPCPerks`, `WriteRelCall(0x87DE3F, DestroyActorHook)`): the handler drops
+    // the actor's NPC perks; an answer stands for the deleted-flag test. Words: the actor.
+    let jip_deleted = if e.jip_patches() & engine_core::extend::jip_patches::NPC_PERKS != 0 {
+        e.site(0x0087_de3f, &[this.addr()])
+    } else {
+        None
+    };
+    let deleted = match jip_deleted {
+        Some(answer) => answer != 0,
+        None => e.call(0x0040_77c0, &args![this]).bool(),
+    };
+    if !deleted {
         let player = e.global::<u32>(PLAYER_POINTER);
         e.call(REMOVE_FROM_PLAYER_COMBAT_LIST, &args![player, this]);
         e.call(REMOVE_PERCEIVED_ACTOR, &args![player, this]);
@@ -5082,6 +5093,53 @@ mod tests {
         }
         // The members are still taken apart.
         assert!(calls.contains(&0x0046_ffb0) && calls.contains(&0x0092_ec40));
+    }
+
+    thread_local! {
+        static O18_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+        static O18_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_destroy_actor(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O18_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        O18_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// JIP's DestroyActorHook at `0x87DE3F` (O18): not asked without the switch's bit (the deleted
+    /// test runs); asked with the actor; no answer runs the test, an answer stands for it.
+    #[test]
+    fn destructor_jip_npc_perks_seam() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        let run = |word: u32, answer: Option<u32>| {
+            let (mut e, actor, _, _) = destructor_setup();
+            e.register(0x0040_77c0, |_, _| ret(0));
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0087_de3f), at_destroy_actor);
+            O18_ASKED.with(|s| s.borrow_mut().clear());
+            O18_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            e.call(0x0087_dcb0, &args![actor]);
+            let calls = called(&e);
+            let asked = O18_ASKED.with(|s| s.take());
+            (
+                asked,
+                calls.contains(&0x0040_77c0),
+                calls.contains(&REMOVE_FROM_PLAYER_COMBAT_LIST),
+                actor.addr(),
+            )
+        };
+        let off = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NPC_WEAPON_MODS;
+        let (asked, tested, lists, _) = run(off, Some(1));
+        assert!(asked.is_empty());
+        assert!(tested && lists);
+        let on = jip_patches::NPC_PERKS;
+        let (asked, tested, lists, actor) = run(on, None);
+        assert_eq!(asked, vec![vec![actor]]);
+        assert!(tested && lists, "no answer: the exe's test");
+        let (_, tested, lists, _) = run(on, Some(1));
+        assert!(!tested && !lists, "answer 1: deleted");
+        let (_, tested, lists, _) = run(on, Some(0));
+        assert!(!tested && lists, "answer 0: not deleted");
     }
 
     #[test]
