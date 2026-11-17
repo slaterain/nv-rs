@@ -27,6 +27,7 @@ pub mod full_screen;
 pub mod game_file;
 pub mod game_ini;
 pub mod half_loaded_move;
+pub mod mod_files;
 pub mod mod_fit_worn;
 pub mod native_inflate;
 pub mod patch_data;
@@ -106,19 +107,17 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
 }
 
 /// The start-up log's lines on JIP's state, after it installed (`row_on`: its row asked for it;
-/// `answers_installed`: it does), with the threads asked for: none when it is off as asked.
-pub(crate) fn jip_start_lines(row_on: bool, answers_installed: bool, threads: &str) -> Vec<String> {
+/// `answers_installed`: it does): none when it is off as asked or on as asked. (With real threads
+/// JIP's own data no longer makes a thread wait: its aux variables and item data have their own
+/// locks, and xNVSE's string variables (which `AuxVarGetFltCond` reads its name from) theirs. A
+/// mod's event script run from another thread (JIP's actor, world and UI event hooks) still takes
+/// xNVSE's shared state and waits for the main thread a moment; docs/FIXES.md and the INI row say
+/// so, the log does not.)
+pub(crate) fn jip_start_lines(row_on: bool, answers_installed: bool) -> Vec<String> {
     let mut lines = Vec::new();
     if row_on && !answers_installed {
         lines.push(
             "JIP LN NVSE: its row is on but JIP installed before reading it: it answers \"not installed\""
-                .to_string(),
-        );
-    }
-    if answers_installed && !threads.trim().eq_ignore_ascii_case("stepped") {
-        lines.push(
-            "JIP LN on with real threads: four of JIP's hooks still wait for the main thread until the \
-             thread-safety follow-up is in; hitches at cell changes are possible"
                 .to_string(),
         );
     }
@@ -154,6 +153,9 @@ impl Host {
         #[cfg(not(windows))]
         not_provided_here()?;
         let mut engine = Box::new(Engine::with_exe(&exe)?);
+        // Mods' own files (MCM's and later JIP's INI and file commands) kept beside the saves, never
+        // in the game's folder (`mod_files`).
+        engine_platform::mod_files::set_folder(&mut engine, mod_files::folder(data));
         // The play loop's patches (`crates/play-patch`, empty on main) replace the entries with
         // the same addresses.
         for (address, function) in play_patch::funcs() {
@@ -165,10 +167,13 @@ impl Host {
             let jip = engine.ext::<jip::Jip>();
             (jip.row_on, jip.answers_installed)
         };
-        for line in jip_start_lines(jip_state.0, jip_state.1, &choice.threads) {
+        for line in jip_start_lines(jip_state.0, jip_state.1) {
             eprintln!("{line}");
         }
         if let Some(note) = &choice.ini_note {
+            eprintln!("{note}");
+        }
+        if let Some(note) = fixes::play_run_taken_as_test(choice, |name| std::env::var(name).ok()) {
             eprintln!("{note}");
         }
         // The game's clock (`GetTickCount`, `timeGetTime`, `QueryPerformanceCounter`) runs with

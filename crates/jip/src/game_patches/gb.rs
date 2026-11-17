@@ -22,11 +22,31 @@
 //! these seams answer ([`doubles`]: `e.mem.set_f64`) as well as the input state (the dead-zone
 //! atomics of [`crate::input::State`], the lock-free slot the gamepad conditions read) and the
 //! immediates.
+//!
+//! **G87, the map menu's skip of its centring** (`InitGamePatches`: `WriteRelJump(0x79DF73,
+//! RefreshMapMenuHook)`, JIP's own, `INSTALLED`). In `MapMenu::AddMapIcons` (`0079dbb0`), where
+//! the map tile is centred on the player icon (traits `0xFA1`/`0xFA2`), JIP's hook tests its flag
+//! `s_mapMenuSkipSetXY`: set, it clears it and jumps past both sets (`0x79E053`); clear, it does
+//! the exe's work. Only JIP's item-list refresh (`RefreshItemListBox`, for `RefreshItemsList` and
+//! `RemoveMe`'s G60, neither built yet) sets the flag, on the world map tab, just before it calls
+//! `AddMapIcons`; [`skip_map_centring_once`] is that set.
+//!
+//! **G88, JIP's fade types 5 and 6** (`InitGamePatches`: `SafeWrite8(0xA081A8, 6)` and
+//! `ProcessGradualSetFloatHook` in the two jump-table words after `Tile::UpdateFadeControls`'
+//! table, JIP's own, `INSTALLED`). The exe passes types above 4 over; JIP's arm moves the value
+//! from the start to the end over the duration and, at the end, sets the start value again: type
+//! 5 starts over (forever), type 6 ends (its control is listed as finished). Only JIP's
+//! `SetUIFloatGradual` (built: modes 3 and 4) makes controls of these types.
+//!
+//! Threads: every handler here runs where its menu code runs, on the main thread (the free
+//! camera's dead-zone seams: the main thread's player update). None takes JIP's shared slot: the
+//! dead zones and G87's flag are lock-free `ext_free` words made at JIP's install, G88 reads and
+//! writes only the fade control and its tile in guest memory.
 
 use super::Area;
 use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 /// The exe's dead zone double (7849.0), every patched `FCOMP`'s operand.
 pub const EXE_DEAD_ZONE: u32 = 0x0107_18f0;
@@ -75,13 +95,35 @@ const ALL_ADDRS: [u32; 11] = {
     out
 };
 
+/// G87's seam: `MapMenu::AddMapIcons` before the map tile is centred (JIP's jump at 0x79DF73).
+pub const MAP_SKIP_CENTRING: SiteSlot = SiteSlot::new(Owner::Jip, 0x0079_df73);
+/// G88's seams: `Tile::UpdateFadeControls`' jump-table words for fade types 5 and 6.
+pub const FADE_TYPES: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x00a0_8718),
+    SiteSlot::new(Owner::Jip, 0x00a0_871c),
+];
+
+/// The group's JIP-own seams: D04's eleven, then G87's and G88's.
+const JIP_SITES: [u32; 14] = {
+    let mut out = [0; 14];
+    let mut i = 0;
+    while i < 11 {
+        out[i] = ALL_ADDRS[i];
+        i += 1;
+    }
+    out[11] = MAP_SKIP_CENTRING.addr();
+    out[12] = FADE_TYPES[0].addr();
+    out[13] = FADE_TYPES[1].addr();
+    out
+};
+
 /// The group's rows and installers.
 pub const AREA: Area = Area {
     name: "GB",
     fix_sites: &[],
     fix_wraps: &[],
     install_fixes: super::nothing,
-    jip_sites: &ALL_ADDRS,
+    jip_sites: &JIP_SITES,
     jip_wraps: &[],
     install_jip,
 };
@@ -114,12 +156,77 @@ pub fn doubles(e: &mut Engine) -> (u32, u32) {
 
 fn install_jip(e: &mut Engine) {
     doubles(e);
+    e.ext_free::<MapSkipCentring>();
     for slot in LEFT_STICK {
         e.on_site(slot, left_stick);
     }
     for slot in RIGHT_STICK {
         e.on_site(slot, right_stick);
     }
+    e.on_site(MAP_SKIP_CENTRING, map_skip_centring);
+    for slot in FADE_TYPES {
+        e.on_site(slot, gradual_set_float);
+    }
+}
+
+/// JIP's `s_mapMenuSkipSetXY` (G87): lock-free, made at JIP's install.
+#[derive(Default)]
+pub struct MapSkipCentring(AtomicBool);
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: RefreshItemListBox (its
+// `s_mapMenuSkipSetXY = true` before `AddMapIcons` on the world map tab).
+/// The next `MapMenu::AddMapIcons` leaves the map tile where it is (once). For JIP's item-list
+/// refresh (`RefreshItemsList`, G60), not built yet.
+pub fn skip_map_centring_once(e: &mut Engine) {
+    e.ext_free::<MapSkipCentring>()
+        .0
+        .store(true, Ordering::Relaxed);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RefreshMapMenuHook.
+/// G87: 1 (skip the centring) when JIP's flag was set, which clears it; else 0 (the exe's path).
+fn map_skip_centring(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    Some(u32::from(
+        e.ext_free::<MapSkipCentring>()
+            .0
+            .swap(false, Ordering::Relaxed),
+    ))
+}
+
+/// `GetTickCount` through the exe's import slot (JIP calls the same system function through
+/// its own import).
+const TICK_COUNT_IMPORT: u32 = 0x00fd_f060;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h:
+// ProcessGradualSetFloatHook, nvse/GameTiles.cpp: Tile::SetFloat.
+/// G88, a fade control of type 5 or 6 (words: the control, its type). The progress is the ticks
+/// since the start (a signed int, `cvtsi2ss`) over the duration, in floats; below 1 (or a NaN)
+/// the value is `progress * (end - start) + start`; at 1 or above the start time becomes now
+/// and the value the start value, and a type other than 5 answers 1 (listed as finished). The
+/// value goes to the tile's trait as JIP's `Tile::SetFloat` does (nothing for a trait the tile
+/// does not have, an equal value or a NaN). Answers 0 otherwise.
+///
+/// nv-rs's own: a control without a tile sets nothing (JIP would read through it).
+fn gradual_set_float(e: &mut Engine, words: &[u32]) -> Option<u32> {
+    let (&control, &kind) = (words.first()?, words.get(1)?);
+    let now = e.call(TICK_COUNT_IMPORT, &[]).u32();
+    let elapsed = now.wrapping_sub(e.mem.u32(control + 8)) as i32 as f32;
+    let progress = elapsed / e.mem.f32(control + 0xc);
+    let start = e.mem.f32(control);
+    let (value, finished) = if progress >= 1.0 {
+        e.mem.set_u32(control + 8, now);
+        (start, kind != 5)
+    } else {
+        (progress * (e.mem.f32(control + 4) - start) + start, false)
+    };
+    let (id, tile) = (e.mem.u32(control + 0x10), e.mem.u32(control + 0x14));
+    if tile != 0 {
+        let at = crate::commands::jip_fn_ui::value_of(e, tile, id);
+        if at != 0 {
+            crate::commands::jip_fn_ui::value_set_float(e, at, value);
+        }
+    }
+    Some(u32::from(finished))
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit

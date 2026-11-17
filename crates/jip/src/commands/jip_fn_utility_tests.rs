@@ -227,10 +227,11 @@ fn a_mods_saved_data_cleared() {
             link_id: 4,
             mod_index: 1,
         });
-        saved.aux_vars.emplace(7).emplace(0x10);
-        saved.aux_vars.emplace(0xff).emplace(0x10);
         saved.ref_maps.emplace(7);
-        saved.changed = 0;
+        crate::cosave::set_changed(&mut e, 0);
+        let mut aux = crate::commands::jip_fn_aux_variable::aux_maps(&mut e, false);
+        aux.emplace(7).emplace(0x10);
+        aux.emplace(0xff).emplace(0x10);
     }
     call(&mut e, 0x26aa, &[n(1), n(0), n(0), n(0)]);
     let saved = &mut e.ext::<crate::Jip>().saved;
@@ -242,35 +243,50 @@ fn a_mods_saved_data_cleared() {
         .unwrap()
         .get(&Name(b"b".to_vec()))
         .is_some());
-    assert_eq!(saved.changed, 0, "no flag for script variables");
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        0,
+        "no flag for script variables"
+    );
     call(&mut e, 0x26aa, &[n(0), n(1), n(0), n(0)]);
     let saved = &mut e.ext::<crate::Jip>().saved;
     assert_eq!(saved.linked_refs.len(), 1);
     assert!(saved.linked_refs.get(&3).is_some());
-    assert_eq!(saved.changed, crate::cosave::changed::LINKED_REFS);
-    // The aux variables of the shared mod (2): 0xFF's go, 7's stay.
-    saved.changed = 0;
-    call(&mut e, 0x26aa, &[n(0), n(0), n(2), n(0)]);
-    let saved = &mut e.ext::<crate::Jip>().saved;
-    assert!(saved.aux_vars.get(&0xff).is_none() && saved.aux_vars.get(&7).is_some());
-    assert_eq!(saved.changed, crate::cosave::changed::AUX_VARS);
-    // Again: nothing left for 0xFF, no flag; the mod's own (1) go.
-    saved.changed = 0;
-    call(&mut e, 0x26aa, &[n(0), n(0), n(2), n(0)]);
-    assert_eq!(e.ext::<crate::Jip>().saved.changed, 0);
-    call(&mut e, 0x26aa, &[n(0), n(0), n(1), n(1)]);
-    let saved = &mut e.ext::<crate::Jip>().saved;
-    assert_eq!(saved.aux_vars.len(), 0);
     assert_eq!(
-        saved.changed,
+        crate::cosave::changed_flags(&mut e),
+        crate::cosave::changed::LINKED_REFS
+    );
+    // The aux variables of the shared mod (2): 0xFF's go, 7's stay.
+    crate::cosave::set_changed(&mut e, 0);
+    call(&mut e, 0x26aa, &[n(0), n(0), n(2), n(0)]);
+    {
+        let aux = crate::commands::jip_fn_aux_variable::aux_maps(&mut e, false);
+        assert!(aux.get(&0xff).is_none() && aux.get(&7).is_some());
+    }
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        crate::cosave::changed::AUX_VARS
+    );
+    // Again: nothing left for 0xFF, no flag; the mod's own (1) go.
+    crate::cosave::set_changed(&mut e, 0);
+    call(&mut e, 0x26aa, &[n(0), n(0), n(2), n(0)]);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
+    call(&mut e, 0x26aa, &[n(0), n(0), n(1), n(1)]);
+    assert_eq!(
+        crate::commands::jip_fn_aux_variable::aux_maps(&mut e, false).len(),
+        0
+    );
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
         crate::cosave::changed::AUX_VARS | crate::cosave::changed::REF_MAPS
     );
+    let saved = &mut e.ext::<crate::Jip>().saved;
     assert_eq!(saved.ref_maps.len(), 0);
     // Linked refs empty: no flag.
     saved.linked_refs.clear();
-    saved.changed = 0;
+    crate::cosave::set_changed(&mut e, 0);
     call(&mut e, 0x26aa, &[n(0), n(1), n(0), n(0)]);
-    assert_eq!(e.ext::<crate::Jip>().saved.changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
 }
 
 #[test]
@@ -349,15 +365,18 @@ fn shared_ref_maps_cleared() {
         let saved = &mut e.ext::<crate::Jip>().saved;
         saved.ref_maps.emplace(7);
         saved.ref_maps.emplace(0xff);
-        saved.changed = 0;
+        crate::cosave::set_changed(&mut e, 0);
     }
     call(&mut e, 0x26aa, &[n(0), n(0), n(0), n(2)]);
     let saved = &mut e.ext::<crate::Jip>().saved;
     assert!(saved.ref_maps.get(&0xff).is_none() && saved.ref_maps.get(&7).is_some());
-    assert_eq!(saved.changed, crate::cosave::changed::REF_MAPS);
-    saved.changed = 0;
+    assert_eq!(
+        crate::cosave::changed_flags(&mut e),
+        crate::cosave::changed::REF_MAPS
+    );
+    crate::cosave::set_changed(&mut e, 0);
     call(&mut e, 0x26aa, &[n(0), n(0), n(0), n(2)]);
-    assert_eq!(e.ext::<crate::Jip>().saved.changed, 0);
+    assert_eq!(crate::cosave::changed_flags(&mut e), 0);
 }
 
 /// GetIsLAA: 2, the answer JIP gives a patched game that reaches memory above 2 GB.
