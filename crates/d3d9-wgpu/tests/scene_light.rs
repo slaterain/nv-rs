@@ -230,7 +230,8 @@ fn triangles(b: &mut WgpuBackend, corners: &[[f32; 3]]) {
 
 /// The frame: a valley of two walls meeting along the middle column (near at the sides, far in the
 /// middle) below a strip of sky, the depth-only clear (after the new lighting's parameters when
-/// `light`), a small near square drawn after it (the arms), and the target's pixels (B, G, R, A).
+/// `light`), a small near valley drawn after it (the arms: a crease the step would darken if it ran
+/// after them), and the target's pixels (B, G, R, A).
 fn frame(b: &mut WgpuBackend, light: bool) -> Vec<[u8; 4]> {
     clear(b, 7);
     colour(b, [0.5, 0.5, 0.5, 1.0]);
@@ -266,16 +267,23 @@ fn frame(b: &mut WgpuBackend, light: bool) -> Vec<[u8; 4]> {
     }
     clear(b, 2);
     colour(b, [0.25, 0.75, 0.5, 1.0]);
-    let near = depth(12.0);
+    let (near, deep) = (depth(12.0), depth(25.0));
+    let (lo, hi) = (-0.9, -0.6);
     triangles(
         b,
         &[
-            [-0.1, -0.9, near],
-            [-0.1, -0.6, near],
-            [0.1, -0.6, near],
-            [-0.1, -0.9, near],
-            [0.1, -0.6, near],
-            [0.1, -0.9, near],
+            [-0.1, lo, near],
+            [-0.1, hi, near],
+            [0.0, hi, deep],
+            [-0.1, lo, near],
+            [0.0, hi, deep],
+            [0.0, lo, deep],
+            [0.0, lo, deep],
+            [0.0, hi, deep],
+            [0.1, hi, near],
+            [0.0, lo, deep],
+            [0.1, hi, near],
+            [0.1, lo, near],
         ],
     );
     let d = b.device().expect("the device");
@@ -329,7 +337,7 @@ fn on_the_crease_darkens_and_nothing_else() {
                 assert_eq!(at(&lit, x, y), at(&plain, x, y), "sky {x} {y} ({samples})");
             }
         }
-        // The square drawn after the clear (clip -0.1..0.1, -0.9..-0.6): pixels 115..141, 205..243.
+        // The valley drawn after the clear (clip -0.1..0.1, -0.9..-0.6): pixels 115..141, 205..243.
         for y in 210..238 {
             for x in 118..138 {
                 assert_eq!(at(&lit, x, y), at(&plain, x, y), "arms {x} {y} ({samples})");
@@ -347,6 +355,141 @@ fn on_the_crease_darkens_and_nothing_else() {
         );
         assert!(open > crease + 4, "open {open} crease {crease} ({samples})");
     }
+}
+
+/// Off, the multisampled depth surface is made exactly as before (a render attachment only); on,
+/// it can also be read (the step reads it).
+#[test]
+fn off_the_depth_surface_is_made_as_before() {
+    for (on, readable) in [(false, false), (true, true)] {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        scene_light::enable(on);
+        let b = backend(4);
+        scene_light::enable(false);
+        let Some(mut b) = b else {
+            return;
+        };
+        let usage = b
+            .device()
+            .expect("the device")
+            .surface_usage(DS)
+            .expect("the depth");
+        assert!(usage.contains(wgpu::TextureUsages::RENDER_ATTACHMENT));
+        assert_eq!(
+            usage.contains(wgpu::TextureUsages::TEXTURE_BINDING),
+            readable,
+            "on {on}: {usage:?}"
+        );
+        if !on {
+            assert_eq!(usage, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        }
+    }
+}
+
+/// Grass: a comb of thin upright blades standing on a floor darkens the floor around their feet
+/// only a little and the ground seen between them hardly at all (thin occluders weigh little), where
+/// a solid wall darkens its foot more.
+#[test]
+fn a_comb_of_blades_darkens_the_floor_only_a_little() {
+    // A larger target than the others: the step's reach on screen is a part of the width.
+    const COMB: u32 = 1024;
+    // The floor: from 60 units at the bottom to 300 at clip y 0.4; the blades stand on it at clip
+    // y -0.4, two pixels wide every eight, up to clip y 0; the wall is the same, solid.
+    let floor = |y: f32| {
+        let t = (y + 1.0) / 1.4;
+        depth(60.0) + t * (depth(300.0) - depth(60.0))
+    };
+    let base = floor(-0.4);
+    let picture_of = |on: bool, comb: bool| -> Option<Vec<[u8; 4]>> {
+        let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        scene_light::enable(on);
+        let b = backend_sized(COMB, COMB, 1, A8R8G8B8);
+        scene_light::enable(false);
+        let mut b = b?;
+        clear(&mut b, 7);
+        colour(&mut b, [0.5, 0.5, 0.5, 1.0]);
+        triangles(
+            &mut b,
+            &[
+                [-1.0, -1.0, floor(-1.0)],
+                [-1.0, 0.4, floor(0.4)],
+                [1.0, 0.4, floor(0.4)],
+                [-1.0, -1.0, floor(-1.0)],
+                [1.0, 0.4, floor(0.4)],
+                [1.0, -1.0, floor(-1.0)],
+            ],
+        );
+        let px = 2.0 / COMB as f32;
+        let mut quads = Vec::new();
+        let mut x = -0.5;
+        while x < 0.5 {
+            let w = if comb { 2.0 * px } else { 8.0 * px };
+            for c in [
+                [x, -0.4, base],
+                [x, 0.0, base],
+                [x + w, 0.0, base],
+                [x, -0.4, base],
+                [x + w, 0.0, base],
+                [x + w, -0.4, base],
+            ] {
+                quads.push(c);
+            }
+            x += 8.0 * px;
+        }
+        triangles(&mut b, &quads);
+        let m = params().to_words();
+        run(
+            &mut b,
+            Cmd::SetTransform {
+                device: DEVICE,
+                state: scene_light::STATE,
+                matrix: Data::from_words(&m),
+            },
+        );
+        clear(&mut b, 2);
+        let d = b.device().expect("the device");
+        let (_, _, px) = d.read_surface_pixels(RT).expect("the target's pixels");
+        Some(
+            px.chunks_exact(4)
+                .map(|p| [p[0], p[1], p[2], p[3]])
+                .collect(),
+        )
+    };
+    let Some(comb_off) = picture_of(false, true) else {
+        return;
+    };
+    let comb_on = picture_of(true, true).expect("the adapter");
+    let wall_off = picture_of(false, false).expect("the adapter");
+    let wall_on = picture_of(true, false).expect("the adapter");
+    // The floor just below the blades' feet (they stand on row 716), across the comb.
+    // The mean red of rows `rows`, across the comb.
+    let mean = |p: &[[u8; 4]], rows: std::ops::Range<u32>| -> f32 {
+        let n = rows.len() as f32;
+        rows.map(|y| {
+            (300..724)
+                .map(|x| f32::from(p[(x + y * COMB) as usize][2]))
+                .sum::<f32>()
+        })
+        .sum::<f32>()
+            / (n * 424.0)
+    };
+    // Just below the feet (row 716): the floor outside the comb.
+    let comb = mean(&comb_on, 720..724) / mean(&comb_off, 720..724);
+    let wall = mean(&wall_on, 720..724) / mean(&wall_off, 720..724);
+    // Inside the comb, halfway up the blades: blades and the floor seen between them (the grass
+    // itself; at the very feet the blades and floor meet as any wall and floor do).
+    let inside = mean(&comb_on, 560..640) / mean(&comb_off, 560..640);
+    eprintln!("kept: at the feet blades {comb:.4}, wall {wall:.4}; among the blades {inside:.4}");
+    assert!(
+        inside > 0.95,
+        "the blades and the floor among them lose at most 5 %: {inside}"
+    );
+    assert!(wall < 0.97, "a solid wall darkens its foot: {wall}");
+    assert!(
+        comb > 0.9,
+        "a comb of blades darkens the floor by at most 10 %: {comb}"
+    );
+    assert!(comb > wall, "blades {comb} darken less than a wall {wall}");
 }
 
 /// What the step costs on this machine's graphics card at 2560x1440 with 8x multisampling and the

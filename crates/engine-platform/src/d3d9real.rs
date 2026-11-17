@@ -1107,13 +1107,33 @@ pub fn clear(
     stencil: u32,
     model: u32,
 ) {
+    let light = SCENE_LIGHT.get().copied();
+    clear_lit(
+        e, this, count, rects, flags, colour, z, stencil, model, light,
+    );
+}
+
+/// [`clear`] with the new lighting's reader `light` ([`want_scene_light`]; none while off).
+#[allow(clippy::too_many_arguments)]
+fn clear_lit(
+    e: &mut Engine,
+    this: u32,
+    count: u32,
+    rects: u32,
+    flags: u32,
+    colour: u32,
+    z: u32,
+    stencil: u32,
+    model: u32,
+    light: Option<fn(&Engine) -> Option<SceneView>>,
+) {
     if stream_of(real(e), this).is_none() {
         return;
     }
     // `D3DCLEAR_ZBUFFER` alone: the game's depth-only clear of its scene before the first-person
-    // arms. With the new lighting on ([`want_scene_light`]), the frame's camera and sun first.
+    // arms. With the new lighting on, the frame's camera and sun first.
     if flags == 2 {
-        if let Some(read) = SCENE_LIGHT.get() {
+        if let Some(read) = light {
             let params = read(e)
                 .as_ref()
                 .and_then(d3d9_wgpu::scene_light::Params::from_game);
@@ -3310,6 +3330,78 @@ pub(crate) fn real_texture(e: &mut Engine, texture: u32) -> Option<IDirect3DBase
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A backend that keeps each command's name and its state or flags word.
+    struct Recorder(std::sync::Arc<std::sync::Mutex<Vec<(&'static str, u32)>>>);
+
+    impl d3d9_stream::Backend for Recorder {
+        fn execute(&mut self, cmd: Cmd<Data<'_>>) -> Reply {
+            let word = match &cmd {
+                Cmd::SetTransform { state, .. } => *state,
+                Cmd::Clear { flags, .. } => *flags,
+                _ => 0,
+            };
+            self.0.lock().unwrap().push((cmd.name(), word));
+            Reply::None
+        }
+    }
+
+    /// A game view the new lighting can use (an interior: no sun).
+    fn stub_view(_: &Engine) -> Option<SceneView> {
+        Some(SceneView {
+            frustum: [-0.7, 0.7, 0.4, -0.4, 5.0, 5000.0],
+            ortho: false,
+            rotate: [0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+            to_sun: None,
+            sun_colour: [0.0; 3],
+            interior: true,
+        })
+    }
+
+    /// The new lighting's hook: with a reader installed, the game's depth-only `Clear` (flags 2) is
+    /// preceded by exactly one `SetTransform` of the new lighting's state, immediately before it;
+    /// any other clear (colour, colour and depth, depth and stencil) records only itself; without
+    /// a reader nothing is added, and in this test binary none is ever installed, so the public
+    /// `clear` adds nothing either.
+    #[test]
+    fn the_new_lighting_is_recorded_just_before_the_depth_only_clear() {
+        const DEVICE: u32 = 0x1000;
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut e = Engine::new();
+        {
+            let r = real(&mut e);
+            r.stream = Some(Stream::direct(Box::new(Recorder(std::sync::Arc::clone(
+                &log,
+            )))));
+            r.devices.push((DEVICE, None));
+        }
+        let cleared =
+            |e: &mut Engine, flags: u32, light: Option<fn(&Engine) -> Option<SceneView>>| {
+                log.lock().unwrap().clear();
+                clear_lit(e, DEVICE, 0, 0, flags, 0, 0, 0, 0, light);
+                std::mem::take(&mut *log.lock().unwrap())
+            };
+        let state = d3d9_wgpu::scene_light::STATE;
+        assert_eq!(
+            cleared(&mut e, 2, Some(stub_view)),
+            [("SetTransform", state), ("Clear", 2)]
+        );
+        for flags in [7, 3, 6, 1] {
+            assert_eq!(
+                cleared(&mut e, flags, Some(stub_view)),
+                [("Clear", flags)],
+                "{flags}"
+            );
+        }
+        assert_eq!(cleared(&mut e, 2, None), [("Clear", 2)]);
+        // A reader that finds no usable camera (the main menu): nothing added.
+        assert_eq!(cleared(&mut e, 2, Some(|_| None)), [("Clear", 2)]);
+        // Never asked for in this binary: the public clear adds nothing.
+        assert!(SCENE_LIGHT.get().is_none());
+        log.lock().unwrap().clear();
+        clear(&mut e, DEVICE, 0, 0, 2, 0, 0, 0, 0);
+        assert_eq!(*log.lock().unwrap(), [("Clear", 2)]);
+    }
 
     /// With real threads, a kernel-locked function that reaches the device's state takes the device
     /// lock first: `SetWindowPos` (an import, run under the kernel lock) moves the real window

@@ -5325,7 +5325,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         else {
             return;
         };
-        let fits = self.st.rt[1..].iter().all(Option::is_none)
+        // Never the back buffer: the Pip-Boy's own 3D clears its depth alone there too, after the
+        // world's (a recording of the Pip-Boy, measure/newlight/NOTES.md).
+        let back_buffer = self
+            .back_buffers
+            .iter()
+            .any(|h| self.surface_of(*h).is_some_and(|s| s.id == rt.id));
+        let fits = !back_buffer
+            && self.st.rt[1..].iter().all(Option::is_none)
             && rt.width == ds.width
             && rt.height == ds.height
             && rt.samples == ds.samples
@@ -6558,6 +6565,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     }
 
     /// The pixels of a back buffer or render target as wgpu holds them, rows packed (tests).
+    /// The wgpu usages of a surface's texture (tests: the new lighting's off path leaves the
+    /// depth surfaces as they were).
+    pub fn surface_usage(&self, surface: Handle) -> Option<wgpu::TextureUsages> {
+        self.surface_of(surface)?
+            .tex
+            .as_ref()
+            .map(|t| t.texture.usage())
+    }
+
     pub fn read_surface_pixels(&mut self, surface: Handle) -> Option<(u32, u32, Vec<u8>)> {
         let s = self.surface_of(surface)?;
         let pixels = self.read_level(&s)?;

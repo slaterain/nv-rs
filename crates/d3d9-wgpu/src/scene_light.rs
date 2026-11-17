@@ -21,12 +21,22 @@
 //! it: [`SLICES`] slices of [`STEPS`] steps a side, a distance falloff over the outer 60 % of
 //! [`RADIUS`], applied at [`STRENGTH`]; the normal from the depth (the nearer neighbour on each
 //! axis). A sample counts only from [`MIN_HEIGHT`] above the surface's own plane, so decals, rugs
-//! and stains lying a hair over the floor do not darken it. A 4x4 ordered (Bayer) pattern turns each
+//! and stains lying a hair over the floor do not darken it; and thin occluders in front of what they hide (grass
+//! blades, leaves, posts) weigh little ([`THIN`], XeGTAO's thin-occluder compensation, stronger), so
+//! grass is not dulled and does not shimmer as it sways. A 4x4 ordered (Bayer) pattern turns each
 //! pixel's slices and offsets the steps, the same in every frame (nothing crawls); the
 //! full-resolution step averages a 4x4 window of the results (the pattern's whole period) weighted
 //! by depth, so edges stay sharp, and multiplies the scene's colour by it. No history between
-//! frames. It fades out between [`FADE_FROM`] and [`FADE_TO`] units from the camera; the sky
-//! (depth 1) is never touched.
+//! frames. It fades out between [`FADE_FROM`] and [`FADE_TO`] units from the camera. The sky (depth 1)
+//! is not shaded, apart from multisampled edge pixels it shares with a shaded object (the step works
+//! per pixel, from the depth's first sample, and multiplies all the pixel's samples alike).
+//!
+//! **When.** Measured in a recording of Doc's house, third person, the Pip-Boy and the street
+//! (`measure/newlight/NOTES.md`): in first person, indoors and out, the game clears the depth alone
+//! once a frame, on the scene target; with the Pip-Boy open it does so for the world and again on
+//! the back buffer for the Pip-Boy's own 3D (never shaded: the back buffer is refused, and the frame's
+//! one run is taken by then); in third person it issues no depth-only clear, so there is no ambient
+//! occlusion in third person; loading screens and menus have none either.
 //!
 //! **Limits.** Screen space: only what is on screen occludes; transparent things the game drew
 //! before the clear (particles, glass, water) take the darkening of the opaque surface behind them.
@@ -54,6 +64,11 @@ pub const STRENGTH: f32 = 0.5;
 /// How far above the surface's own plane (game units, plus a little with distance) a sample must be
 /// to occlude: decals, rugs and stains lie a hair above the floor and must not darken it.
 pub const MIN_HEIGHT: f32 = 2.0;
+/// Thin-occluder compensation (XeGTAO's, which goes to about 0.7; stronger here, chosen on a comb of
+/// grass blades in the GPU tests): how much longer the step toward the camera counts in an
+/// occluder's falloff distance, so a blade standing in front of the ground behind it weighs
+/// little, while a wall meeting the floor (no step toward the camera at its foot) weighs fully.
+pub const THIN: f32 = 3.0;
 pub const POWER: f32 = 1.5;
 /// How strong the sun is taken to be under a full, bright sun ([`Params::shadow`]; carried for the
 /// sun shadows to come, not drawn here).
@@ -419,8 +434,13 @@ const HALF_PI: f32 = 1.57079633;
                 // the floor) is no occluder: its weight ramps in from MIN_HEIGHT above the plane.
                 let lift0 = saturate((dot(s0, n) - min_h) / min_h);
                 let lift1 = saturate((dot(s1, n) - min_h) / min_h);
-                hc_plus = max(hc_plus, mix(low_plus, dot(s0 / l0, v), saturate(l0 * falloff_mul + falloff_add) * lift0));
-                hc_minus = max(hc_minus, mix(low_minus, dot(s1 / l1, v), saturate(l1 * falloff_mul + falloff_add) * lift1));
+                // Thin-occluder compensation (XeGTAO): the falloff distance counts the step toward
+                // the camera as longer, so a thin thing in front (a blade of grass, a post) weighs
+                // less than a solid wall at the same place.
+                let f0 = length(vec3<f32>(s0.xy, s0.z * (1.0 + THIN)));
+                let f1 = length(vec3<f32>(s1.xy, s1.z * (1.0 + THIN)));
+                hc_plus = max(hc_plus, mix(low_plus, dot(s0 / l0, v), saturate(f0 * falloff_mul + falloff_add) * lift0));
+                hc_minus = max(hc_minus, mix(low_minus, dot(s1 / l1, v), saturate(f1 * falloff_mul + falloff_add) * lift1));
             }
             let h_plus = ang + clamp(acos(clamp(hc_plus, -1.0, 1.0)) - ang, -HALF_PI, HALF_PI);
             let h_minus = ang + clamp(-acos(clamp(hc_minus, -1.0, 1.0)) - ang, -HALF_PI, HALF_PI);
@@ -505,6 +525,7 @@ pub fn shader(stage: Stage, multisampled_depth: bool) -> String {
         "const RADIUS: f32 = {RADIUS:?};\nconst MAX_RADIUS_SCREEN: f32 = {MAX_RADIUS_SCREEN:?};\n\
          const SLICES: i32 = {SLICES};\nconst STEPS: i32 = {STEPS};\nconst STRENGTH: f32 = {STRENGTH:?};\n\
          const POWER: f32 = {POWER:?};\nconst MIN_HEIGHT: f32 = {MIN_HEIGHT:?};\n\
+         const THIN: f32 = {THIN:?};\n\
          const FADE_FROM: f32 = {FADE_FROM:?};\nconst FADE_TO: f32 = {FADE_TO:?};\n\
          const VIEW: u32 = {}u;\n",
         view()
