@@ -132,6 +132,10 @@ pub fn folder(data: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    // Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+    // file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+    // as part of a name elsewhere; starting the game there is refused today).
+    #[cfg(windows)]
     #[test]
     fn the_folder_is_named_or_beside_the_saves() {
         let saves = PathBuf::from(r"C:\nv\userdata\mods\Documents\My Games\FalloutNV\Saves");
@@ -149,6 +153,10 @@ mod tests {
 
     /// The player's folders and the game's folder are refused; the package's and scratch
     /// folders are taken.
+    // Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+    // file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+    // as part of a name elsewhere; starting the game there is refused today).
+    #[cfg(windows)]
     #[test]
     fn the_players_folders_and_the_game_folder_are_refused() {
         let profile = Path::new(r"C:\Users\<name>");
@@ -219,6 +227,10 @@ mod tests {
 
     /// [`folder_from`]: refused folders give none (with the line saying so), as does no variable;
     /// a good folder is taken.
+    // Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+    // file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+    // as part of a name elsewhere; starting the game there is refused today).
+    #[cfg(windows)]
     #[test]
     fn folder_from_answers_none_for_refused_folders() {
         let profile = Path::new(r"C:\Users\<name>");
@@ -366,6 +378,10 @@ mod tests {
     }
 
     /// The host gives the game's folder as Data's parent, from the full path.
+    // Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+    // file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+    // as part of a name elsewhere; starting the game there is refused today).
+    #[cfg(windows)]
     #[test]
     fn the_game_folder_is_datas_parent() {
         assert_eq!(

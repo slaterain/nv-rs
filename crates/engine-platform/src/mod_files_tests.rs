@@ -3,6 +3,7 @@
 //! whole `SetModINI` sequence on the real calls (the INI text rules are the core's tests).
 
 use super::*;
+#[cfg(windows)]
 use engine_core::mod_files as seam;
 
 fn engine(game: &Path) -> Engine {
@@ -12,14 +13,17 @@ fn engine(game: &Path) -> Engine {
 }
 
 /// A scratch folder of a test's own, removed when the test ends, however it ends.
+#[cfg(windows)]
 struct Scratch(PathBuf);
 
+#[cfg(windows)]
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
+#[cfg(windows)]
 impl std::ops::Deref for Scratch {
     type Target = Path;
     fn deref(&self) -> &Path {
@@ -27,6 +31,7 @@ impl std::ops::Deref for Scratch {
     }
 }
 
+#[cfg(windows)]
 fn scratch(name: &str) -> Scratch {
     let dir = std::env::temp_dir().join(format!("nv-mod-files-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -35,6 +40,7 @@ fn scratch(name: &str) -> Scratch {
 }
 
 /// Every file and folder under `root`, with each file's bytes.
+#[cfg(windows)]
 fn tree(root: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -123,6 +129,10 @@ fn names_outside_the_game_folder_and_devices_are_refused() {
 
 /// Reads look at this run's writes, then the port's folder, then the game's; a write goes to the
 /// folder and the run, never the game's folder; names outside it are written nowhere.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn reads_prefer_the_ports_folder_and_writes_never_reach_the_game() {
     let game = scratch("game");
@@ -188,6 +198,10 @@ fn reads_prefer_the_ports_folder_and_writes_never_reach_the_game() {
 /// A name the game's folder does not hold reads nothing and is not there, even when a file of
 /// that name exists on disk (`..`, the full path of a file beside the game's folder, another
 /// drive, a UNC path, the folder above).
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn a_refused_name_reads_nothing() {
     let root = scratch("refused");
@@ -304,6 +318,10 @@ fn exists_does_not_read_the_file() {
 
 /// Without a folder, writes and folders live in the run's memory: nothing on any disk (the game's
 /// folder, the process's current folder, the temporary folder), read back in the run.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn without_a_folder_nothing_touches_the_disk() {
     let game = scratch("session");
@@ -326,6 +344,10 @@ fn without_a_folder_nothing_touches_the_disk() {
 
 /// A write into an empty port folder makes the folders its name says (when the game has them)
 /// and puts the bytes on disk; a folder that exists nowhere fails as Windows does.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn a_write_into_an_empty_port_folder_makes_its_folders() {
     let game = scratch("empty-game");
@@ -358,6 +380,10 @@ fn a_write_into_an_empty_port_folder_makes_its_folders() {
 
 /// A port folder that cannot be written fails the call and changes nothing: no `.part`, no copy
 /// in memory; nor does a name that is a folder.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn a_failed_folder_write_is_a_failure() {
     let game = scratch("fail-game");
@@ -411,6 +437,10 @@ fn a_junction_out_of_the_port_folder_is_refused() {
 /// `CreateDirectoryA`, `fopen("r")`, `fopen("w")` with one backspace byte,
 /// `WritePrivateProfileStringA`): with and without the game's `Data\Config`, with and without a
 /// port folder; the file Windows would make, and the game's folder untouched.
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn mcms_set_mod_ini_sequence() {
     for (game_has_config, with_folder) in
@@ -449,6 +479,10 @@ fn mcms_set_mod_ini_sequence() {
 /// With real threads the seam holds the kernel lock while it reaches the platform's state: a
 /// thread that does not hold it reads through the seam, and the calls' check passes (they
 /// assert the lock in debug builds).
+// Windows only: it builds the game's names with backslashes and drive letters, which the platform's
+// file layer maps to host paths on Windows alone (`files::real_path` keeps a backslash
+// as part of a name elsewhere; starting the game there is refused today).
+#[cfg(windows)]
 #[test]
 fn the_seam_takes_the_kernel_lock() {
     let game = scratch("threads");
