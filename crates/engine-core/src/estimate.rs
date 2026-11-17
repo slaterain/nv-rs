@@ -203,8 +203,6 @@ mod tests {
         assert_eq!(checked, 2 * 256 * 4096 * 3);
     }
 
-    /// Values measured on the reference processor, checked on every system (Apple silicon's CI
-    /// runs this one through the model).
     /// A digest of the model's answers to every kind of input (FNV-1a over both results' bits),
     /// checked on every system: a fault in the tables or the rules is caught without the
     /// measured processor (the comparison with the instruction runs only on it).
@@ -225,6 +223,8 @@ mod tests {
     /// [`the_models_answers_have_their_digest`]'s value for the committed tables.
     const DIGEST: u64 = 0xe816_cdbe_850e_37a0;
 
+    /// Values measured on the reference processor, checked on every system (Apple silicon's CI
+    /// runs this one through the model).
     #[test]
     fn the_model_gives_the_measured_values() {
         for (x, rcp_bits, rsqrt_bits) in [
