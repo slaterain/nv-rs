@@ -1,45 +1,58 @@
 //! Sun shadows (port-added, not in the original; off by default): cascaded shadow maps drawn
-//! from the sun out of the game's own opaque world draws. Turned on by `[nv-rs Display]
-//! bSunShadows=1` in the run's `Fallout.ini` or `NV_SUN_SHADOWS=1` (`host::fixes::Choice::sun_shadows`);
-//! wgpu only, the real Direct3D 9 ignores it. Design: `measure/newlight/SUN-SHADOWS-DESIGN.md`.
+//! from the sun out of the game's own world draws, looked up inside the game's lit shaders. Turned
+//! on by `[nv-rs Display] bSunShadows=1` in the run's `Fallout.ini` or `NV_SUN_SHADOWS=1`
+//! (`host::fixes::Choice::sun_shadows`); wgpu only, the real Direct3D 9 ignores it. Design:
+//! `measure/newlight/SUN-SHADOWS-DESIGN.md`.
 //!
-//! **What is shadowed.** While the game draws its world into the multisampled scene target, the
-//! device keeps a light list of its opaque draws ([`Caster`]): a vertex shader whose constant
-//! table names `ModelViewProj` (and no skinning matrices), depth test and depth writes on, no
-//! blending, no alpha test, no vertex textures. At the game's depth-only clear (option 1's hook,
-//! [`crate::scene_light`]) the object's place in the world comes back from its `ModelViewProj`,
-//! the camera's frustum (rows x, y and w: no near or far plane is needed) and the camera's
-//! rotation and place from the game's memory ([`world_of`], [`Frame`]). The casters are kept
-//! across frames ([`Cache`]): what the game drew, while it is around the camera (so objects behind
-//! the camera still cast), let go when it is gone (its buffers written or released, or wholly in
-//! view and not drawn) or too far. A map is drawn again only when it moved, the sun turned, or a
-//! caster in it came, went or moved; then each caster that touches it ([`Cascade::touches`]) is
-//! drawn again, depth only, through its own converted vertex shader, with `ModelViewProj`'s four
-//! registers replaced by the map's view of its place ([`Cascade::world_to_light`]).
+//! **What casts.** At the scene's colour and depth clear ([`BEGIN_STATE`], after the camera's
+//! words [`VIEW_STATE`]) the device starts a light list of the frame's world draws ([`Caster`]): a
+//! vertex shader whose constant table names `ModelViewProj` (and no skinning matrices), depth test
+//! and depth writes on, no blending, no vertex textures, not a face. Alpha-tested draws are
+//! cut-outs ([`Cutout`]: drawn through their own pixel shader with the game's alpha test), only in
+//! the first [`CUTOUT_CASCADES`] maps. The list ends at the game's depth-only clear ([`STATE`]): the
+//! first-person arms and weapon after it cast nothing. At the next frame's scene clear each
+//! caster's place in the world comes back from its `ModelViewProj`, that frame's frustum (rows x,
+//! y and w) and the camera's rotation and place from the game's memory ([`world_of`], [`Frame`]).
+//! The casters are kept across frames ([`Cache`]): what the game drew, while it is around the
+//! camera (so objects behind the camera still cast), let go when it is gone (its buffers written or
+//! released, or wholly in view and not drawn) or too far; the sky, clouds and far land never cast
+//! ([`casts`]). Motion is decided place by place ([`Cache::mark_moves`], [`mover`]): a place that
+//! came near a place of the same geometry drawn the frame before and not now moves, and is drawn
+//! each frame over a copy of the still maps; copies of one geometry (fence posts, poles, rocks)
+//! leaving and entering the view are no move. A still map is drawn again only when it moved, the
+//! sun turned, or a still caster in it came, went or moved; then each caster that touches it
+//! ([`Cascade::touches`]) is drawn again, depth only, through its own converted vertex shader, with
+//! `ModelViewProj`'s four registers replaced by the map's view of its place
+//! ([`Cascade::world_to_light`]).
 //!
-//! **The maps.** [`CASCADES`] cascades of [`SIZE`] texels a side (one texture of a layer each) split the camera's view from its near
-//! plane to [`FAR`] units by the practical scheme ([`splits`]: Zhang et al., "Parallel-Split Shadow
-//! Maps", 2006, log/linear blend [`LAMBDA`]). Each covers the bounding sphere of its slice (its
-//! size does not change as the camera turns) plus a margin, and its centre moves in whole steps of
-//! [`GRID_TEXELS`] texels in the sun's space ([`place`]): edges do not crawl as the camera moves
-//! (Valient, "Stable Rendering of Cascaded Shadow Maps", ShaderX6), and the map stays valid until
-//! the centre crosses a step. Each map keeps the sun it was drawn for ([`SunKeep`]) until the sun
-//! has turned far enough to move a shadow edge in it by half its texel ([`turn_limit`]); one map a
-//! frame takes the new sun ([`sun_turns`]), so the shadows glide with the sun instead of jumping.
+//! **The maps.** [`CASCADES`] cascades of [`SIZE`] texels a side (one texture array, a layer each)
+//! split the camera's view from its near plane to [`FAR`] units by the practical scheme ([`splits`]:
+//! Zhang et al., "Parallel-Split Shadow Maps", 2006, log/linear blend [`LAMBDA`]). Each covers the
+//! bounding sphere of its slice (its size does not change as the camera turns) plus a margin, and
+//! its centre moves in whole steps of [`GRID_TEXELS`] texels in the sun's space ([`place`]): edges
+//! do not crawl as the camera moves (Valient, "Stable Rendering of Cascaded Shadow Maps",
+//! ShaderX6), and the map stays valid until the centre crosses a step. Each map keeps the sun it
+//! was drawn for ([`SunKeep`]) until the sun has turned far enough to move a shadow edge in it by
+//! half its texel ([`turn_limit`]); one map a frame takes the new sun ([`sun_turns`]), so the
+//! shadows glide with the sun instead of jumping.
 //!
-//! **How it shows (first step, a debug view).** A full-screen step at the same hook darkens the
-//! scene where the sun is blocked, on faces toward the sun only (the game's own lighting already
-//! darkens faces away from it), by [`DARKNESS`] times the sun's strength; the sky and what is
-//! drawn after the clear (the first-person arms, the image-space step, HUD and menus) are never
-//! touched. The second step moves the shadow into the game's lighting shaders, on the direct sun
-//! term only (design section 7).
+//! **How it shows.** In the game's own lighting: each lit shader gets a variant (`sm::wgsl`'s
+//! `convert_with_sun`) in which every read of the sun's light colour (the pixel shader's
+//! `PSLightColor`, or a grass vertex shader's `DiffuseColor`; one stage only) is multiplied by the
+//! sun's visibility there ([`LOOKUP`], [`LOOKUP_VERTEX`]): soft-edged comparisons in the map of the
+//! point's cascade, blended at the seams, faded at the far end. Shade keeps the ambient, lamps and
+//! glow; the sky and what is drawn after the depth-only clear (the first-person arms and weapon,
+//! drawn with their own camera; the image-space step, HUD and menus) are drawn as without the
+//! shadows. A variant is made on a thread of its own; until it is there the plain pipeline draws.
+//! `NV_SUN_SHADOWS=debug` instead lays a full-screen overlay over the scene at the depth-only
+//! clear (an engineers' tool, never the shadows players see).
 //!
-//! **Off.** Nothing is recorded or made; the depth surfaces are made as before ([`enabled`] is read
-//! when the device is made), so the frame is what it was.
+//! **Off.** Nothing is recorded, read or made; the depth surfaces and pipelines are made as before
+//! ([`enabled`] is read when the device is made), so the frame is what it was (GPU-tested).
 //!
-//! **Limits (first step).** Characters (skinned) and alpha-tested foliage and fences cast no
-//! shadow yet; objects the game has not drawn since they came near (out of sight from the start)
-//! cast none until it does.
+//! **Limits.** Characters (skinned) cast no shadow of ours yet (the game's own character shadows
+//! stay); leaves, fronds and distant trees are not shadowed yet; objects the game has not drawn
+//! since they came near (out of sight from the start) cast none until it does.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -737,13 +750,70 @@ pub(crate) struct Caster {
     pub depth: u64,
 }
 
-/// One place of a geometry in the world, with the frame it was last drawn in.
+/// One place of a geometry in the world, with the frame it was last drawn in and the frame it came.
 pub struct Instance<T> {
     pub world: World,
     pub centre: [f64; 3],
     pub radius: f64,
     pub seen: u64,
+    pub born: u64,
+    /// It moves: drawn each frame over a copy of the still maps, not into them
+    /// ([`Cache::mark_moves`]); let go as soon as a frame does not draw it.
+    pub moving: bool,
+    /// Its geometry moved on from here (this place was paired with a new one): let go at the sweep.
+    pub left: bool,
     pub payload: T,
+}
+
+impl<T> Instance<T> {
+    /// Whether, not drawn in frame `now`, it is gone because it moved: a moving place, or one a
+    /// new place of its geometry was paired with.
+    pub fn moved_on(&self, now: u64) -> bool {
+        self.seen != now && (self.moving || self.left)
+    }
+}
+
+/// How far a moving caster's centre may go between two frames and still be the same object
+/// moved (about 3.7 m: faster than anything the game moves that casts).
+pub const MOVE_REACH: f64 = 256.0;
+
+/// Whether a sphere in the camera's view space (`centre`, `radius`) reaches into the camera's view
+/// (`frustum` left, right, bottom, top at unit distance) between depths `near` and `far`.
+pub fn partly_in_view(
+    frustum: [f32; 4],
+    centre: [f64; 3],
+    radius: f64,
+    near: f64,
+    far: f64,
+) -> bool {
+    let [l, r, b, t] = frustum.map(f64::from);
+    let inside = |n: [f64; 3]| dot3(n, centre) / dot3(n, n).sqrt() >= -radius;
+    centre[2] + radius >= near
+        && centre[2] - radius <= far
+        && inside([1.0, 0.0, -l])
+        && inside([-1.0, 0.0, r])
+        && inside([0.0, 1.0, -b])
+        && inside([0.0, -1.0, t])
+}
+
+/// The pairing rule of [`Cache::mark_moves`] for a camera at `position` with `axes` (right, up,
+/// ahead) and `frustum`, `near`, `far`: a new place is an old one moved when the two centres are
+/// within [`MOVE_REACH`] and the old place still reaches into the view (a copy that left the view
+/// was not drawn because it is out of sight, not because it moved: a fence post leaving at one
+/// edge as another enters is no move).
+pub fn mover<T>(
+    frustum: [f32; 4],
+    position: [f64; 3],
+    axes: [[f64; 3]; 3],
+    near: f64,
+    far: f64,
+) -> impl Fn(&Instance<T>, &Instance<T>) -> bool {
+    move |old, new| {
+        let d: [f64; 3] = std::array::from_fn(|k| old.centre[k] - position[k]);
+        let v = [dot3(axes[0], d), dot3(axes[1], d), dot3(axes[2], d)];
+        let m: [f64; 3] = std::array::from_fn(|k| new.centre[k] - old.centre[k]);
+        dot3(m, m).sqrt() <= MOVE_REACH && partly_in_view(frustum, v, old.radius, near, far)
+    }
 }
 
 /// The casters around the camera across frames: what the game drew, kept while it can still
@@ -767,13 +837,15 @@ impl<K: std::hash::Hash + Eq, T> Default for Cache<K, T> {
 
 impl<K: std::hash::Hash + Eq + Clone, T> Cache<K, T> {
     /// A caster drawn in frame `now` at `world` (object-space bounds `local`): kept when the same
-    /// geometry is at the same place, else added; the world sphere of one added.
+    /// geometry is at the same place, else added (moving from the start when `moving`: a geometry
+    /// whose buffers the game writes); the world sphere of one added.
     pub fn see(
         &mut self,
         key: K,
         world: World,
         local: ([f64; 3], f64),
         now: u64,
+        moving: bool,
         payload: impl FnOnce() -> T,
     ) -> Option<([f64; 3], f64)> {
         let places = self.map.entry(key).or_default();
@@ -788,25 +860,82 @@ impl<K: std::hash::Hash + Eq + Clone, T> Cache<K, T> {
             centre,
             radius,
             seen: now,
+            born: now,
+            moving,
+            left: false,
             payload: payload(),
         });
         self.len += 1;
         Some((centre, radius))
     }
 
-    /// Lets go of the casters `gone` says are gone (it is asked of every one); the geometry and
-    /// world sphere of each one let go.
+    /// Motion, decided place by place (never for a whole geometry: fence posts, poles and rocks
+    /// are many places of one geometry). For each geometry in `came` (places added in frame
+    /// `now`), its new places are paired one for one, nearest first, with its places drawn the
+    /// frame before and not in this one, where `pair(old, new)` holds ([`mover`]), and only when
+    /// there are as many of each. A paired new place moves; its old place has left (the sweep
+    /// lets it go). At most `room` places are marked; returns how many were.
+    pub fn mark_moves<'a>(
+        &mut self,
+        now: u64,
+        came: impl IntoIterator<Item = &'a K>,
+        room: usize,
+        pair: impl Fn(&Instance<T>, &Instance<T>) -> bool,
+    ) -> usize
+    where
+        K: 'a,
+    {
+        let mut marked = 0;
+        for key in came {
+            let Some(places) = self.map.get_mut(key) else {
+                continue;
+            };
+            let new: Vec<usize> = (0..places.len())
+                .filter(|&n| places[n].born == now && places[n].seen == now)
+                .collect();
+            let old: Vec<usize> = (0..places.len())
+                .filter(|&o| places[o].seen + 1 == now && !places[o].left)
+                .collect();
+            if new.is_empty() || new.len() != old.len() {
+                continue;
+            }
+            let mut taken = vec![false; old.len()];
+            for &n in &new {
+                if marked >= room {
+                    return marked;
+                }
+                let apart = |o: usize| {
+                    let d: [f64; 3] =
+                        std::array::from_fn(|k| places[o].centre[k] - places[n].centre[k]);
+                    dot3(d, d)
+                };
+                let best = (0..old.len())
+                    .filter(|&j| !taken[j] && pair(&places[old[j]], &places[n]))
+                    .min_by(|&a, &b| apart(old[a]).total_cmp(&apart(old[b])));
+                if let Some(j) = best {
+                    taken[j] = true;
+                    places[n].moving = true;
+                    places[old[j]].left = true;
+                    marked += 1;
+                }
+            }
+        }
+        marked
+    }
+
+    /// Lets go of the casters `gone` says are gone (it is asked of every one); the geometry, world
+    /// sphere and whether it was moving (then it was in no still map) of each one let go.
     #[allow(clippy::type_complexity)]
     pub fn sweep(
         &mut self,
         mut gone: impl FnMut(&K, &Instance<T>) -> bool,
-    ) -> Vec<(K, ([f64; 3], f64))> {
+    ) -> Vec<(K, ([f64; 3], f64), bool)> {
         let mut out = Vec::new();
         self.map.retain(|k, places| {
             places.retain(|i| {
                 let g = gone(k, i);
                 if g {
-                    out.push((k.clone(), (i.centre, i.radius)));
+                    out.push((k.clone(), (i.centre, i.radius), i.moving));
                 }
                 !g
             });
@@ -1270,6 +1399,8 @@ pub(crate) struct Gpu {
     array: wgpu::TextureView,
     /// What each map was last drawn for.
     pub drawn: [Option<Cascade>; CASCADES],
+    /// Whether each map the lookups read holds moving casters drawn over its still map's copy.
+    live_moving: [bool; CASCADES],
     compare: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     #[allow(clippy::type_complexity)]
@@ -1426,6 +1557,7 @@ impl Gpu {
             static_views,
             array,
             drawn: [None; CASCADES],
+            live_moving: [false; CASCADES],
             compare,
             light_layout,
             light_ring,
@@ -1527,9 +1659,10 @@ impl Gpu {
     }
 
     /// Draws the maps: the still casters' map of each cascade `redraw` names, from the casters in
-    /// `cache` that touch it ([`Cascade::touches`]) and do not move (`moving` says which geometry
-    /// moves); then, for each cascade whose still map was drawn or that a moving caster touches,
-    /// the map the lookups read: a copy of the still map with the moving casters drawn over it.
+    /// `cache` that touch it ([`Cascade::touches`]) and do not move ([`Instance::moving`]); then,
+    /// for each cascade whose still map was drawn, that a moving caster touches, or whose map held
+    /// moving casters the frame before (so a moving shadow that is gone leaves no ghost), the map
+    /// the lookups read: a copy of the still map with the moving casters drawn over it.
     /// Each caster through its own pipeline with its `ModelViewProj` replaced by the map's view of
     /// its place; alpha-tested ones (cut-outs) only in the first [`CUTOUT_CASCADES`]. `headers`:
     /// the register blocks' headers. Returns the register ring's bytes, to be written before the
@@ -1541,7 +1674,6 @@ impl Gpu {
         registers: &wgpu::BindGroupLayout,
         encoder: &mut wgpu::CommandEncoder,
         cache: &Cache<GeoKey, Draw>,
-        moving: &dyn Fn(&GeoKey) -> bool,
         headers: &[Vec<u8>],
         cascades: &[Cascade; CASCADES],
         redraw: [bool; CASCADES],
@@ -1550,11 +1682,8 @@ impl Gpu {
         let mut lists: Vec<[MapList<'_>; 2]> =
             (0..CASCADES).map(|_| [Vec::new(), Vec::new()]).collect();
         let mut any = false;
-        // Whether each caster moves, asked once a frame (not once a cascade).
-        let kept: Vec<(&Instance<Draw>, usize)> = cache
-            .iter_keyed()
-            .map(|(key, i)| (i, usize::from(moving(key))))
-            .collect();
+        let kept: Vec<(&Instance<Draw>, usize)> =
+            cache.iter().map(|i| (i, usize::from(i.moving))).collect();
         for (k, c) in cascades.iter().enumerate() {
             for &(i, m) in &kept {
                 let d = &i.payload;
@@ -1570,8 +1699,9 @@ impl Gpu {
             }
         }
         let live: [bool; CASCADES] = std::array::from_fn(|k| {
-            redraw[k] || !lists[k][1].is_empty() || self.drawn[k].is_none()
+            redraw[k] || !lists[k][1].is_empty() || self.live_moving[k] || self.drawn[k].is_none()
         });
+        self.live_moving = std::array::from_fn(|k| !lists[k][1].is_empty());
         if !any && !live.iter().any(|&l| l) {
             return (None, 0);
         }
@@ -2549,15 +2679,20 @@ mod tests {
         let mut c: Cache<u32, &str> = Cache::default();
         let local = ([0.0, 0.0, 1.0], 2.0);
         assert_eq!(
-            c.see(7, at(10.0, 0.0, 0.0), local, 1, || "a"),
+            c.see(7, at(10.0, 0.0, 0.0), local, 1, false, || "a"),
             Some(([10.0, 0.0, 1.0], 2.0))
         );
         // The same place a frame later, the camera's rounding aside: kept.
-        assert_eq!(c.see(7, at(10.004, 0.0, 0.0), local, 2, || "b"), None);
+        assert_eq!(
+            c.see(7, at(10.004, 0.0, 0.0), local, 2, false, || "b"),
+            None
+        );
         assert_eq!(c.len(), 1);
         assert_eq!(c.iter().next().unwrap().seen, 2);
         // The same geometry elsewhere: a second place.
-        assert!(c.see(7, at(50.0, 0.0, 0.0), local, 2, || "c").is_some());
+        assert!(c
+            .see(7, at(50.0, 0.0, 0.0), local, 2, false, || "c")
+            .is_some());
         assert_eq!(c.len(), 2);
         // Scaled: the sphere grows with it.
         let big = [
@@ -2566,15 +2701,17 @@ mod tests {
             [0.0, 0.0, 3.0, 0.0],
         ];
         assert_eq!(
-            c.see(8, big, local, 2, || "d"),
+            c.see(8, big, local, 2, false, || "d"),
             Some(([0.0, 0.0, 3.0], 6.0))
         );
         // Moved: a new place; the sweep lets the old one go when told it is gone.
-        assert!(c.see(7, at(10.0, 5.0, 0.0), local, 3, || "e").is_some());
+        assert!(c
+            .see(7, at(10.0, 5.0, 0.0), local, 3, false, || "e")
+            .is_some());
         let gone = c.sweep(|_, i| i.seen != 3 && i.payload != "d");
         assert_eq!(gone.len(), 2);
-        assert!(gone.iter().all(|(k, _)| *k == 7));
-        let spheres: Vec<_> = gone.iter().map(|(_, s)| *s).collect();
+        assert!(gone.iter().all(|(k, _, m)| *k == 7 && !m));
+        let spheres: Vec<_> = gone.iter().map(|(_, s, _)| *s).collect();
         assert!(
             spheres.contains(&([10.0, 0.0, 1.0], 2.0))
                 && spheres.contains(&([50.0, 0.0, 1.0], 2.0))
@@ -2588,6 +2725,139 @@ mod tests {
         assert!(!c.is_empty());
         assert_eq!(c.sweep(|_, _| true).len(), 2);
         assert!(c.is_empty());
+    }
+
+    /// The camera at `position` looking along +z (right +x, up +y), a 90-degree view, depths 10 to
+    /// 10000: the pairing rule the device uses.
+    fn mover_at(
+        position: [f64; 3],
+    ) -> impl Fn(&Instance<&'static str>, &Instance<&'static str>) -> bool {
+        let axes = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        mover([-1.0, 1.0, -1.0, 1.0], position, axes, 10.0, 10000.0)
+    }
+
+    fn moving_of(c: &Cache<u32, &'static str>) -> Vec<&'static str> {
+        let mut m: Vec<&str> = c.iter().filter(|i| i.moving).map(|i| i.payload).collect();
+        m.sort();
+        m
+    }
+
+    /// Motion is decided per place. Two copies of one geometry (fence posts sharing a buffer): as
+    /// the camera moves, one leaves the view and a third comes in near where it was: nothing moves,
+    /// and the copy out of sight is kept (it still casts into view). A copy hidden in view while
+    /// another comes far from it: no move either. Two copies in view and one new: no move (the
+    /// counts differ).
+    #[test]
+    fn a_copy_leaving_the_view_as_another_comes_is_no_move() {
+        let local = ([0.0, 0.0, 0.0], 2.0);
+        let mut c: Cache<u32, &str> = Cache::default();
+        c.see(7, at(-900.0, 0.0, 1000.0), local, 1, false, || "left");
+        c.see(7, at(0.0, 0.0, 1000.0), local, 1, false, || "stays");
+        // Frame 2, the camera 300 to the right: "left" is out of the view (its edge 140 past the
+        // view's left side), "stays" is drawn again, "new" comes 250 from "left", inside the view.
+        c.see(7, at(0.0, 0.0, 1000.0), local, 2, false, || "x");
+        let came = [7u32];
+        assert!(c
+            .see(7, at(-650.0, 0.0, 1000.0), local, 2, false, || "new")
+            .is_some());
+        assert_eq!(c.mark_moves(2, &came, 100, mover_at([300.0, 0.0, 0.0])), 0);
+        assert!(moving_of(&c).is_empty());
+        assert!(c.iter().all(|i| !i.left && !i.moved_on(2)));
+        assert!(c.sweep(|_, i| i.moved_on(2)).is_empty());
+        assert_eq!(c.len(), 3);
+        // Frame 3, the camera still: "stays" and "new" drawn, "left" not (out of sight), and a
+        // fourth copy comes far from everything: no move.
+        c.see(7, at(0.0, 0.0, 1000.0), local, 3, false, || "x");
+        c.see(7, at(-650.0, 0.0, 1000.0), local, 3, false, || "x");
+        assert!(c
+            .see(7, at(600.0, 0.0, 3000.0), local, 3, false, || "far")
+            .is_some());
+        assert_eq!(c.mark_moves(3, &came, 100, mover_at([300.0, 0.0, 0.0])), 0);
+        // Frame 4, the camera still: "far" hidden in view (not drawn) and another comes 1000
+        // from it: no move (too far to be the same object moved).
+        c.see(7, at(0.0, 0.0, 1000.0), local, 4, false, || "x");
+        c.see(7, at(-650.0, 0.0, 1000.0), local, 4, false, || "x");
+        assert!(c
+            .see(7, at(600.0, 0.0, 2000.0), local, 4, false, || "far2")
+            .is_some());
+        assert_eq!(c.mark_moves(4, &came, 100, mover_at([300.0, 0.0, 0.0])), 0);
+        assert!(moving_of(&c).is_empty());
+        assert!(c.sweep(|_, i| i.moved_on(4)).is_empty());
+        // Frame 5: "stays" and "new" not drawn (two old places in view), one new near them: the
+        // counts differ, no move.
+        c.see(7, at(600.0, 0.0, 2000.0), local, 5, false, || "x");
+        assert!(c
+            .see(7, at(-640.0, 0.0, 1000.0), local, 5, false, || "near")
+            .is_some());
+        assert_eq!(c.mark_moves(5, &came, 100, mover_at([300.0, 0.0, 0.0])), 0);
+        assert!(moving_of(&c).is_empty());
+    }
+
+    /// One object moved a little between frames, in view: its new place moves and its old place
+    /// is let go; the next frame's place moves on from the moving one; two moved together are
+    /// paired nearest first; a written geometry moves from the start; the room is kept to.
+    #[test]
+    fn a_place_moved_in_view_moves_and_its_old_place_goes() {
+        let local = ([0.0, 0.0, 0.0], 2.0);
+        let mut c: Cache<u32, &str> = Cache::default();
+        let came = [7u32];
+        c.see(7, at(0.0, 0.0, 1000.0), local, 1, false, || "a");
+        c.see(7, at(10.0, 0.0, 1000.0), local, 2, false, || "b");
+        assert_eq!(c.mark_moves(2, &came, 100, mover_at([0.0; 3])), 1);
+        assert_eq!(moving_of(&c), ["b"]);
+        let gone = c.sweep(|_, i| i.moved_on(2));
+        // The old place was still (in the still maps): its going redraws them.
+        assert_eq!(gone.len(), 1);
+        assert_eq!(gone[0].1, ([0.0, 0.0, 1000.0], 2.0));
+        assert!(!gone[0].2);
+        c.see(7, at(20.0, 0.0, 1000.0), local, 3, false, || "c");
+        assert_eq!(c.mark_moves(3, &came, 100, mover_at([0.0; 3])), 1);
+        assert_eq!(moving_of(&c), ["b", "c"]);
+        let gone = c.sweep(|_, i| i.moved_on(3));
+        // The moving place was in no still map.
+        assert_eq!(gone.len(), 1);
+        assert!(gone[0].2);
+        // Gone the next frame (not drawn): let go at once.
+        assert_eq!(c.sweep(|_, i| i.moved_on(4)).len(), 1);
+        assert!(c.is_empty());
+        // Two moved together, each from the nearest old place (q2 paired with p, the farther one,
+        // would leave p2 260 from q: too far, and p2 would not move).
+        c.see(8, at(0.0, 0.0, 1000.0), local, 10, false, || "p");
+        c.see(8, at(200.0, 0.0, 1000.0), local, 10, false, || "q");
+        c.see(8, at(190.0, 0.0, 1000.0), local, 11, false, || "q2");
+        c.see(8, at(-60.0, 0.0, 1000.0), local, 11, false, || "p2");
+        assert_eq!(c.mark_moves(11, &[8u32], 100, mover_at([0.0; 3])), 2);
+        assert_eq!(moving_of(&c), ["p2", "q2"]);
+        let mut gone: Vec<f64> = c
+            .sweep(|_, i| i.moved_on(11))
+            .iter()
+            .map(|g| g.1 .0[0])
+            .collect();
+        gone.sort_by(f64::total_cmp);
+        assert_eq!(gone, [0.0, 200.0]);
+        // No room: nothing marked.
+        c.see(9, at(0.0, 0.0, 1000.0), local, 20, false, || "r");
+        c.see(9, at(5.0, 0.0, 1000.0), local, 21, false, || "r2");
+        assert_eq!(c.mark_moves(21, &[9u32], 0, mover_at([0.0; 3])), 0);
+        // Written: moving from the start.
+        c.see(10, at(0.0, 0.0, 1000.0), local, 21, true, || "w");
+        assert!(c.iter().any(|i| i.payload == "w" && i.moving));
+    }
+
+    #[test]
+    fn a_sphere_reaches_into_the_view_unless_wholly_outside_a_side() {
+        let f = [-1.0, 1.0, -1.0, 1.0];
+        assert!(partly_in_view(f, [0.0, 0.0, 100.0], 1.0, 10.0, 1000.0));
+        // Just past the left side, its edge still in.
+        assert!(partly_in_view(f, [-101.0, 0.0, 100.0], 1.0, 10.0, 1000.0));
+        assert!(!partly_in_view(f, [-103.0, 0.0, 100.0], 1.0, 10.0, 1000.0));
+        assert!(!partly_in_view(f, [103.0, 0.0, 100.0], 1.0, 10.0, 1000.0));
+        assert!(!partly_in_view(f, [0.0, -103.0, 100.0], 1.0, 10.0, 1000.0));
+        assert!(!partly_in_view(f, [0.0, 103.0, 100.0], 1.0, 10.0, 1000.0));
+        // Behind the near plane and past the far one.
+        assert!(!partly_in_view(f, [0.0, 0.0, 8.0], 1.0, 10.0, 1000.0));
+        assert!(partly_in_view(f, [0.0, 0.0, 9.5], 1.0, 10.0, 1000.0));
+        assert!(!partly_in_view(f, [0.0, 0.0, 1002.0], 1.0, 10.0, 1000.0));
     }
 
     #[test]

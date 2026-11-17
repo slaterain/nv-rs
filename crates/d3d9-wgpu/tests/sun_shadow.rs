@@ -24,6 +24,17 @@ const DECL: u32 = 0x1400;
 const GROUND: u32 = 0x1500;
 const BOX: u32 = 0x1510;
 const ARMS: u32 = 0x1520;
+/// The box of [`BOX`]'s size around its own origin (placed by its `ModelViewProj`: it moves).
+const MOVING_BOX: u32 = 0x1530;
+/// A lit square drawn after the depth-only clear, inside the box's shadow.
+const AFTER: u32 = 0x1540;
+/// The cut-out: a square standing in the plane x = 0 (edge-on to the camera), its texture's alpha
+/// a 2 by 2 checker, drawn with the alpha test; its shaders, declaration and texture.
+const CUT: u32 = 0x1550;
+const CUT_VS: u32 = 0x1560;
+const CUT_PS: u32 = 0x1570;
+const CUT_DECL: u32 = 0x1580;
+const CUT_TEX: u32 = 0x1590;
 /// The lit pixel shader: ambient (c1) plus the sun's light colour (c3), as the game's lit shaders add
 /// them.
 const LIT_PS: u32 = 0x1320;
@@ -114,9 +125,14 @@ fn pixel(p: [f64; 3]) -> (u32, u32) {
 
 /// A constant table (`CTAB` comment) naming `ModelViewProj` at c0..c3.
 fn constant_table() -> Vec<u32> {
+    constant_table_for(0xFFFE_0200)
+}
+
+/// [`constant_table`] for the shader version `version`.
+fn constant_table_for(version: u32) -> Vec<u32> {
     let mut b = Vec::new();
     // Header: size, creator, version, constants, their info, flags, target.
-    for v in [28u32, 0, 0xFFFE_0200, 1, 28, 0, 0] {
+    for v in [28u32, 0, version, 1, 28, 0, 0] {
         b.extend_from_slice(&v.to_le_bytes());
     }
     // The constant: its name, set (float4), first register, count, reserved, type, default.
@@ -691,6 +707,414 @@ fn lit_picture(samples: u32, on: bool, sun: f32) -> Option<Vec<[u8; 4]>> {
     sun_shadow::enable(false);
     let mut b = b?;
     Some(lit_frames(&mut b, sun, on))
+}
+
+/// What a lit frame of [`lit_sequence`] draws besides the ground.
+#[derive(Clone, Copy, Default)]
+struct Extra {
+    /// The box standing still at (0, 150) ([`BOX`]).
+    still_box: bool,
+    /// The moving box ([`MOVING_BOX`]) standing at (x, y).
+    moving_box: Option<(f32, f32)>,
+    /// The checker cut-out ([`CUT`]).
+    cutout: bool,
+    /// The lit square after the depth-only clear ([`AFTER`]).
+    after_clear: bool,
+}
+
+/// The camera's `ModelViewProj` with the object moved by (x, y) in the world first.
+fn model_view_proj_at(x: f32, y: f32) -> [[f32; 4]; 4] {
+    let mut m = model_view_proj();
+    for row in m.iter_mut() {
+        row[3] += row[0] * x + row[1] * y;
+    }
+    m
+}
+
+fn set_mvp(b: &mut WgpuBackend, m: [[f32; 4]; 4]) {
+    let regs: Vec<f32> = m.iter().flatten().copied().collect();
+    constants(b, 0, 0, &regs);
+}
+
+fn set_shaders(b: &mut WgpuBackend, vs: u32, ps: u32, decl: u32) {
+    for (pixel, shader) in [(false, vs), (true, ps)] {
+        run(
+            b,
+            Cmd::SetShader {
+                device: DEVICE,
+                pixel,
+                shader,
+            },
+        );
+    }
+    run(
+        b,
+        Cmd::SetVertexDeclaration {
+            device: DEVICE,
+            declaration: decl,
+        },
+    );
+}
+
+fn state(b: &mut WgpuBackend, state: u32, value: u32) {
+    run(
+        b,
+        Cmd::SetRenderState {
+            device: DEVICE,
+            state,
+            value,
+        },
+    );
+}
+
+/// The moving box, the square after the clear and the cut-out with its shaders and checker
+/// texture, made once on a backend.
+fn extras(b: &mut WgpuBackend) {
+    buffer(b, MOVING_BOX, &box_corners(0.0, 0.0, 30.0, 60.0));
+    // In the plane y = 150, x -52 to -32, z 2 to 26 (about five pixels a side): every point's way
+    // to the sun goes through the still box (x -30 to 30, 60 high).
+    let (x0, x1, z0, z1) = (-52.0, -32.0, 2.0, 26.0);
+    buffer(
+        b,
+        AFTER,
+        &[
+            [x0, 150.0, z0],
+            [x1, 150.0, z0],
+            [x1, 150.0, z1],
+            [x0, 150.0, z0],
+            [x1, 150.0, z1],
+            [x0, 150.0, z1],
+        ],
+    );
+    // The cut-out: x 0, y 100 to 200 (u 0 to 1), z 60 to 0 (v 0 to 1); position and texture
+    // coordinate (24 bytes a vertex).
+    let corner = |y: f32, z: f32| [0.0, y, z, 1.0, (y - 100.0) / 100.0, (60.0 - z) / 60.0];
+    let (a, bb, c, d) = (
+        corner(100.0, 60.0),
+        corner(200.0, 60.0),
+        corner(200.0, 0.0),
+        corner(100.0, 0.0),
+    );
+    let v: Vec<f32> = [a, bb, c, a, c, d].iter().flatten().copied().collect();
+    let bytes = floats(&v);
+    run(
+        b,
+        Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer: CUT,
+            index: false,
+            length: bytes.len() as u32,
+            usage: 0,
+            format: 0,
+            pool: 0,
+        },
+    );
+    run(
+        b,
+        Cmd::UploadBuffer {
+            buffer: CUT,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(&bytes),
+        },
+    );
+    // The checker: opaque at the top left and bottom right texels, clear at the other two.
+    let levels = words(&[CUT_TEX + 1]);
+    run(
+        b,
+        Cmd::CreateTexture {
+            device: DEVICE,
+            texture: CUT_TEX,
+            levels: Data::Bytes(&levels),
+            width: 2,
+            height: 2,
+            usage: 0,
+            format: A8R8G8B8,
+            pool: 1,
+        },
+    );
+    let texels = [
+        0u8, 0, 0, 255, 0, 0, 0, 0, //
+        0, 0, 0, 0, 0, 0, 0, 255,
+    ];
+    run(
+        b,
+        Cmd::UploadSurface {
+            surface: CUT_TEX + 1,
+            row: 8,
+            rows: 2,
+            data: Data::Bytes(&texels),
+        },
+    );
+    // vs_3_0: dcl_position v0; dcl_texcoord0 v1; dcl_position o0; dcl_texcoord0 o1;
+    // dp4 o0.x..w, v0, c0..c3; mov o1, v1.
+    let mut vs = vec![0xFFFE_0300];
+    vs.extend(constant_table_for(0xFFFE_0300));
+    vs.extend(ins(31, &[0x8000_0000, 0x900F_0000]));
+    vs.extend(ins(31, &[0x8000_0005, 0x900F_0001]));
+    vs.extend(ins(31, &[0x8000_0000, 0xE00F_0000]));
+    vs.extend(ins(31, &[0x8000_0005, 0xE00F_0001]));
+    for k in 0..4u32 {
+        vs.extend(ins(
+            9,
+            &[0xE000_0000 | (0x1_0000 << k), 0x90E4_0000, 0xA0E4_0000 | k],
+        ));
+    }
+    vs.extend(ins(1, &[0xE00F_0001, 0x90E4_0001]));
+    vs.push(END);
+    // ps_3_0: dcl_texcoord0 v0; dcl_2d s0; texld r0, v0, s0; mov oC0, r0.
+    let mut ps = vec![0xFFFF_0300];
+    ps.extend(ins(31, &[0x8000_0005, 0x900F_0000]));
+    ps.extend(ins(31, &[0x9000_0000, 0xA00F_0800]));
+    ps.extend(ins(66, &[0x800F_0000, 0x90E4_0000, 0xA0E4_0800]));
+    ps.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
+    ps.push(END);
+    for (shader, pixel, tokens) in [(CUT_VS, false, vs), (CUT_PS, true, ps)] {
+        let t = words(&tokens);
+        run(
+            b,
+            Cmd::CreateShader {
+                device: DEVICE,
+                shader,
+                pixel,
+                tokens: Data::Bytes(&t),
+            },
+        );
+    }
+    let decl = [
+        0u8, 0, 0, 0, 3, 0, 0, 0, //
+        0, 0, 16, 0, 1, 0, 5, 0, //
+        0xFF, 0, 0, 0, 17, 0, 0, 0,
+    ];
+    run(
+        b,
+        Cmd::CreateDeclaration {
+            device: DEVICE,
+            declaration: CUT_DECL,
+            elements: Data::Bytes(&decl),
+        },
+    );
+}
+
+const ALPHATESTENABLE: u32 = 15;
+const ALPHAREF: u32 = 24;
+const ALPHAFUNC: u32 = 25;
+
+/// Lit frames, one for each of `frames` (each with the words the platform records when `words`),
+/// the ground and what the frame's [`Extra`] says; each frame's pixels.
+fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[u8; 4]>> {
+    extras(b);
+    let (view, frame) = hook_words();
+    let mut out = Vec::new();
+    for (f, e) in frames.iter().enumerate() {
+        set_shaders(b, VS, LIT_PS, DECL);
+        if words {
+            for (state, m) in [
+                (sun_shadow::VIEW_STATE, view),
+                (sun_shadow::BEGIN_STATE, frame),
+            ] {
+                run(
+                    b,
+                    Cmd::SetTransform {
+                        device: DEVICE,
+                        state,
+                        matrix: Data::from_words(&m),
+                    },
+                );
+            }
+        }
+        clear(b, 7);
+        set_mvp(b, model_view_proj());
+        constants(b, 3, 1, &[0.2, 0.2, 0.2, 1.0]);
+        constants(b, 3, 3, &[0.5, 0.5, 0.5, 0.0]);
+        draw(b, GROUND, 2);
+        if e.still_box {
+            draw(b, BOX, 10);
+        }
+        if let Some((x, y)) = e.moving_box {
+            set_mvp(b, model_view_proj_at(x, y));
+            draw(b, MOVING_BOX, 10);
+            set_mvp(b, model_view_proj());
+        }
+        if e.cutout {
+            set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
+            run(
+                b,
+                Cmd::SetTexture {
+                    device: DEVICE,
+                    sampler: 0,
+                    texture: CUT_TEX,
+                },
+            );
+            state(b, ALPHATESTENABLE, 1);
+            state(b, ALPHAREF, 128);
+            state(b, ALPHAFUNC, 7);
+            run(
+                b,
+                Cmd::SetStreamSource {
+                    device: DEVICE,
+                    stream: 0,
+                    buffer: CUT,
+                    offset: 0,
+                    stride: 24,
+                },
+            );
+            run(
+                b,
+                Cmd::DrawPrimitive {
+                    device: DEVICE,
+                    kind: 4,
+                    start: 0,
+                    count: 2,
+                },
+            );
+            state(b, ALPHATESTENABLE, 0);
+            set_shaders(b, VS, LIT_PS, DECL);
+        }
+        if words {
+            for (state, m) in [(scene_light::STATE, view), (sun_shadow::STATE, frame)] {
+                run(
+                    b,
+                    Cmd::SetTransform {
+                        device: DEVICE,
+                        state,
+                        matrix: Data::from_words(&m),
+                    },
+                );
+            }
+        }
+        clear(b, 2);
+        if e.after_clear {
+            draw(b, AFTER, 2);
+        }
+        let d = b.device().expect("the device");
+        let (_, _, px) = d.read_surface_pixels(RT).expect("the target's pixels");
+        out.push(
+            px.chunks_exact(4)
+                .map(|p| [p[0], p[1], p[2], p[3]])
+                .collect(),
+        );
+        present(b, f as u32 + 1);
+        // The variants are made on threads of their own from the second frame (the first with
+        // the maps): the frames after draw with them.
+        if let Some(d) = b.device() {
+            d.wait_for_sun_variants();
+        }
+    }
+    out
+}
+
+/// [`lit_sequence`] on a new backend with the sun shadows `on` (and the words with them).
+fn lit_sequence_picture(samples: u32, on: bool, frames: &[Extra]) -> Option<Vec<Vec<[u8; 4]>>> {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(on);
+    let b = backend(samples);
+    sun_shadow::enable(false);
+    let mut b = b?;
+    Some(lit_sequence(&mut b, frames, on))
+}
+
+/// A moving caster's shadow goes with it: a box moved for two frames is drawn over the still
+/// maps; when it is gone (the camera still, nothing else changing) its shadow is gone the next
+/// frame, and the frame is exactly the one without the shadows (no ghost of where it last was,
+/// nor of where it first stood).
+#[test]
+fn a_moving_casters_shadow_goes_when_it_does() {
+    let moved = |x| Extra {
+        moving_box: Some((x, 150.0)),
+        ..Extra::default()
+    };
+    let frames = [
+        moved(0.0),
+        moved(10.0),
+        moved(20.0),
+        Extra::default(),
+        Extra::default(),
+        Extra::default(),
+    ];
+    for samples in [1, 4] {
+        let Some(off) = lit_sequence_picture(samples, false, &frames) else {
+            return;
+        };
+        let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+        // The fourth frame's maps hold the box where the third drew it (20, 150): its shadow is
+        // on the ground there though the box is not drawn.
+        let p = pixel([-35.0, 150.0, 0.0]);
+        let (shadowed, lit) = (at(&on[3], p)[2], at(&off[3], p)[2]);
+        assert!(
+            f32::from(shadowed) < 0.7 * f32::from(lit),
+            "the moving box's shadow: {shadowed} of {lit} ({samples})"
+        );
+        // Then it is gone.
+        for f in [4, 5] {
+            assert!(on[f] == off[f], "frame {f}: a shadow is left ({samples})");
+        }
+    }
+}
+
+/// A lit draw after the depth-only clear (the first-person arms and weapon, drawn with their own
+/// camera) is drawn as without the shadows, even standing inside a shadow; the scene before the
+/// clear is shadowed.
+#[test]
+fn a_lit_draw_after_the_depth_only_clear_is_as_without_the_shadows() {
+    let frames = [Extra {
+        still_box: true,
+        after_clear: true,
+        ..Extra::default()
+    }; 3];
+    for samples in [1, 4] {
+        let Some(off) = lit_sequence_picture(samples, false, &frames) else {
+            return;
+        };
+        let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+        let (on, off) = (&on[2], &off[2]);
+        for (x, z) in [(-42.0, 14.0), (-44.0, 12.0), (-40.0, 17.0)] {
+            let p = pixel([x, 150.0, z]);
+            assert_eq!(at(on, p), at(off, p), "({x}, {z}) ({samples})");
+            assert_ne!(at(off, p), [0x7F, 0x7F, 0x7F, 0xFF]);
+        }
+        // The ground in the box's shadow is shadowed in the same frame.
+        let p = pixel([-55.0, 140.0, 0.0]);
+        assert!(
+            f32::from(at(on, p)[2]) < 0.7 * f32::from(at(off, p)[2]),
+            "the ground's shadow ({samples})"
+        );
+    }
+}
+
+/// An alpha-tested caster casts what its alpha test keeps: the checker cut-out's shadow is a
+/// checker on the ground (the opaque texels' parts dark, the clear ones' lit exactly as without
+/// the shadows).
+#[test]
+fn a_cut_out_casts_its_alpha_tests_shape() {
+    let frames = [Extra {
+        cutout: true,
+        ..Extra::default()
+    }; 3];
+    for samples in [1, 4] {
+        let Some(off) = lit_sequence_picture(samples, false, &frames) else {
+            return;
+        };
+        let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+        let (on, off) = (&on[2], &off[2]);
+        // A point (y, z) of the square throws its shadow to (-0.75 z, y) on the ground.
+        for (y, z, opaque) in [
+            (125.0, 45.0, true),
+            (175.0, 15.0, true),
+            (175.0, 45.0, false),
+            (125.0, 15.0, false),
+        ] {
+            let p = pixel([-0.75 * z, y, 0.0]);
+            if opaque {
+                assert!(
+                    f32::from(at(on, p)[2]) < 0.7 * f32::from(at(off, p)[2]),
+                    "({y}, {z}) opaque ({samples})"
+                );
+            } else {
+                assert_eq!(at(on, p), at(off, p), "({y}, {z}) clear ({samples})");
+            }
+        }
+    }
 }
 
 /// Off, with the lit shader and the hook's words present (as a build with the switch off still

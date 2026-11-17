@@ -99,19 +99,48 @@ pub fn toward_light(rotate: [f32; 9]) -> Option<[f32; 3]> {
     (len.is_finite() && len > 1e-6).then(|| d.map(|v| v / len))
 }
 
-/// The frame's camera and sun; none before the game has its world camera (the main menu).
+/// The way toward the sun the new lighting is given: with the sun shadows on, the sun light's
+/// (`light`), the disc's place (`disc`) as the fallback; with them off, the disc's place alone, as
+/// before the sun shadows came (the ambient occlusion's contact shadows look as they did).
+fn pick_to_sun(
+    sun_shadows: bool,
+    light: impl FnOnce() -> Option<[f32; 3]>,
+    disc: impl FnOnce() -> Option<[f32; 3]>,
+) -> Option<[f32; 3]> {
+    if sun_shadows {
+        light().or_else(disc)
+    } else {
+        disc()
+    }
+}
+
+/// The frame's camera and sun (the sun disc's place); none before the game has its world camera
+/// (the main menu). The reader with the sun shadows off.
 pub fn read(e: &Engine) -> Option<SceneView> {
+    read_with(e, false)
+}
+
+/// [`read`] with the sun shadows on: the sun is the way toward the sun light ([`toward_light`]).
+pub fn read_lit(e: &Engine) -> Option<SceneView> {
+    read_with(e, true)
+}
+
+fn read_with(e: &Engine, sun_shadows: bool) -> Option<SceneView> {
     let tes = object(e, TES)?;
     let camera = object(e, object(e, SCENE_GRAPH)? + CAMERA)?;
     let sky = object(e, SKY);
     let sun = sky.and_then(|s| object(e, s + SUN));
-    let to_sun = sun
-        .and_then(|s| object(e, s + SUN_LIGHT))
-        .and_then(|l| toward_light(floats(e, l + ROTATE)))
-        .or_else(|| {
+    let to_sun = pick_to_sun(
+        sun_shadows,
+        || {
+            sun.and_then(|s| object(e, s + SUN_LIGHT))
+                .and_then(|l| toward_light(floats(e, l + ROTATE)))
+        },
+        || {
             sun.and_then(|s| object(e, s + SUN_ROOT))
                 .map(|n| floats(e, n + LOCAL_TRANSLATE))
-        });
+        },
+    );
     let sun_colour = sky.map_or([0.0; 3], |s| floats(e, s + SUN_COLOUR));
     trace_light(e, sky);
     Some(SceneView {
@@ -133,6 +162,23 @@ mod tests {
     /// column 0 `(-height, distance, light height)` made unit, the rest the identity's.
     fn traced(x: f32, yz: f32) -> [f32; 9] {
         [x, 0.0, 0.0, yz, 1.0, 0.0, yz, 0.0, 1.0]
+    }
+
+    /// With the sun shadows off the new lighting keeps the sun disc's place (its ambient
+    /// occlusion's look does not change); on, the sun light's way, the disc only without it.
+    #[test]
+    fn the_sun_light_is_taken_only_with_the_sun_shadows_on() {
+        let (light, disc) = ([1.0, 0.0, 0.0], [0.0, 0.6, 0.8]);
+        assert_eq!(
+            pick_to_sun(false, || Some(light), || Some(disc)),
+            Some(disc)
+        );
+        assert_eq!(pick_to_sun(false, || Some(light), || None), None);
+        assert_eq!(
+            pick_to_sun(true, || Some(light), || Some(disc)),
+            Some(light)
+        );
+        assert_eq!(pick_to_sun(true, || None, || Some(disc)), Some(disc));
     }
 
     #[test]

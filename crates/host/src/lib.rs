@@ -252,9 +252,20 @@ impl Host {
         // The new lighting (`fixes::Choice::ambient_occlusion`: `NV_AO`; else, in a launcher's play
         // run, Fallout.ini's `[nv-rs Display] bAmbientOcclusion`; off by default). Off: nothing is
         // installed, read or recorded.
+        // One reader for both: with the sun shadows on, the sun is the sun light the lit shaders
+        // take (the ambient occlusion's contact shadows follow it too); off, the sun disc's place,
+        // as before.
+        #[cfg(windows)]
+        let reader: fn(
+            &engine_platform::Engine,
+        ) -> Option<engine_platform::d3d9real::SceneView> = if choice.sun_shadows {
+            scene_light::read_lit
+        } else {
+            scene_light::read
+        };
         #[cfg(windows)]
         if choice.ambient_occlusion {
-            engine_platform::d3d9real::want_scene_light(scene_light::read);
+            engine_platform::d3d9real::want_scene_light(reader);
             eprintln!("nv-rs: new lighting on (ambient occlusion; Vulkan only)");
         }
         // The sun shadows (`fixes::Choice::sun_shadows`: `NV_SUN_SHADOWS`; else, in a launcher's play
@@ -262,8 +273,8 @@ impl Host {
         // installed, read or recorded.
         #[cfg(windows)]
         if choice.sun_shadows {
-            engine_platform::d3d9real::want_sun_shadows(scene_light::read);
-            eprintln!("nv-rs: sun shadows on (Vulkan only; shown by the debug step)");
+            engine_platform::d3d9real::want_sun_shadows(reader);
+            eprintln!("nv-rs: sun shadows on (Vulkan only; in the game's lighting, or the engineers' overlay with NV_SUN_SHADOWS=debug)");
         }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,

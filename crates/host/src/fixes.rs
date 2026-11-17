@@ -673,8 +673,8 @@ pub struct Choice {
     /// [`PLAY_AMBIENT_OCCLUSION`], off. Not part of any preset.
     pub ambient_occlusion: bool,
     /// Whether the sun shadows are on (`d3d9_wgpu::sun_shadow`, Vulkan only): `NV_SUN_SHADOWS` when
-    /// set (`1` or `debug` on, else off; in this first step both show the shadows through the
-    /// debug step); else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bSunShadows`;
+    /// set (`1` or `debug` on, else off: `1` puts the shadows in the game's own lighting, `debug`
+    /// shows an engineers' overlay instead); else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display] bSunShadows`;
     /// else [`PLAY_SUN_SHADOWS`], off. Not part of any preset.
     pub sun_shadows: bool,
     /// Whether `NV_DRAW_THREAD` is `poison` (the environment only: the drawing thread with the packet's POISON check,

@@ -696,6 +696,8 @@ const UP_RING: u64 = 8 << 20;
 const STAGE: u64 = 8 << 20;
 /// The sun shadows' variant pipelines made on threads of their own at once, at most.
 const SUN_VARIANTS_AT_ONCE: usize = 6;
+/// The sun shadows' moving places at most (each is drawn every frame).
+const MAX_SUN_MOVING: usize = 4096;
 
 pub struct Device {
     pub(crate) device: wgpu::Device,
@@ -923,8 +925,9 @@ struct SunState {
     headers: Vec<Vec<u8>>,
     /// The integer and boolean registers of the last caster and their header's place.
     last_regs: Option<([[u32; 4]; 16], [u32; 16], u32)>,
-    /// The geometry seen to move (a place came as one went), drawn each frame over the still maps.
-    moving: crate::fxhash::Set<sun_shadow::GeoKey>,
+    /// How many kept places move ([`sun_shadow::Instance::moving`]: drawn each frame over the still
+    /// maps), at most [`MAX_SUN_MOVING`].
+    moving: usize,
     /// Geometries let go because the game wrote into their buffers ([`sun_shadow::GeoKey::geometry`]):
     /// when one comes back it moves.
     rewritten: crate::fxhash::Set<sun_shadow::GeoKey>,
@@ -999,7 +1002,7 @@ impl SunState {
             cache: sun_shadow::Cache::default(),
             headers: Vec::new(),
             last_regs: None,
-            moving: crate::fxhash::Set::default(),
+            moving: 0,
             rewritten: crate::fxhash::Set::default(),
             bounds: Map::default(),
             pipes: Map::default(),
@@ -1035,6 +1038,13 @@ impl SunState {
                 .unwrap_or(0),
         }
     }
+}
+
+/// Which of a lit draw's shaders take the sun shadows' lookup (vertex, pixel), given which read a
+/// sun register: the pixel shader when it does (shadowing both would take the sun away twice),
+/// else the vertex shader.
+fn sun_stages(vs: bool, ps: bool) -> (bool, bool) {
+    (vs && !ps, ps)
 }
 
 pub(crate) fn block_on<F: std::future::Future>(f: F) -> F::Output {
@@ -3876,10 +3886,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let depth =
             self.usable_depth_with(|d| (d.format.wgpu, d.format.d3d, d.samples, d.width, d.height));
         // The sun shadows' variant of a lit pixel shader, on the scene while this frame has the
-        // sun's lookup ([`Device::sun_lookup`]).
+        // sun's lookup ([`Device::sun_lookup`]), before its depth-only clear: the first-person
+        // arms and weapon after it are drawn with their own camera, which the lookup does not
+        // know, so they are drawn as without the shadows.
         let mut use_sun = (ps.sun.is_some() || vs.sun.is_some())
             && self.sun.as_ref().is_some_and(|s| {
                 !s.debug
+                    && !s.closed
                     && s.light.is_some()
                     && s.scene_depth.is_some()
                     && s.scene_depth == self.st.ds.as_ref().map(|d| d.id)
@@ -6526,7 +6539,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
         }
         // The casters on the scene into the cache.
-        let mut changed = Vec::new();
+        let mut came = crate::fxhash::Set::<sun_shadow::GeoKey>::default();
+        let mut added = 0usize;
         let mut on_scene = 0u64;
         for c in std::mem::take(&mut sun.lists.casters) {
             if c.depth != scene {
@@ -6540,43 +6554,50 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 sun.rejected[3] += 1;
                 continue;
             }
+            // A geometry whose buffers the game wrote since an earlier frame (a sign's animation, a
+            // flag) comes back each frame as a new caster: it moves from the start, so it does not
+            // redraw the still maps every frame.
+            let moves = sun.moving < MAX_SUN_MOVING && sun.rewritten.contains(&c.key.geometry());
+            sun.moving += usize::from(moves);
             let draw = c.draw;
             let key = c.key.clone();
-            if let Some(sphere) = sun.cache.see(c.key, world, c.bounds, now, move || draw) {
-                changed.push((key, sphere));
+            if sun
+                .cache
+                .see(c.key, world, c.bounds, now, moves, move || draw)
+                .is_some()
+            {
+                came.insert(key);
+                added += 1;
             }
         }
-        let added = changed.len();
-        let came: crate::fxhash::Set<sun_shadow::GeoKey> =
-            changed.iter().map(|(k, _)| k.clone()).collect();
-        // Let go: what was written or released since; a moving geometry's old places; what the
-        // game would have drawn (wholly in view) and has not for a few frames; what is too far to
-        // cast into any map. A geometry that came in a new place while its place of the frame
-        // before was not drawn moves: kept out of the still maps (drawn each frame over a copy of
-        // them), so it does not redraw them.
+        // Let go: what was written or released since; a moving place's old places; what the game
+        // would have drawn (wholly in view) and has not for a few frames; what is too far to cast
+        // into any map. A place that came near a place of the same geometry drawn the frame before
+        // and not in this one moves (decided place by place, [`sun_shadow::Cache::mark_moves`]):
+        // kept out of the still maps (drawn each frame over a copy of them), so it does not redraw
+        // them.
         let reach = f64::from(sun_shadow::FAR) + cascades[sun_shadow::CASCADES - 1].half;
         let in_view = |c: [f64; 3]| -> [f64; 3] {
             let d = [c[0] - position[0], c[1] - position[1], c[2] - position[2]];
             std::array::from_fn(|k| axes[k][0] * d[0] + axes[k][1] * d[1] + axes[k][2] * d[2])
         };
         let (near, far) = (f64::from(view.near), f64::from(s[sun_shadow::CASCADES]));
-        for (k, i) in sun.cache.iter_keyed() {
-            if came.contains(k) && i.seen + 1 == now && sun.moving.len() < 4096 {
-                sun.moving.insert(k.clone());
-            }
-        }
-        // A geometry whose buffers the game wrote since an earlier frame (a sign's animation, a
-        // flag) comes back each frame as a new caster: it moves too, so it does not redraw the
-        // still maps every frame.
-        for k in &came {
-            if sun.rewritten.contains(&k.geometry()) && sun.moving.len() < 4096 {
-                sun.moving.insert(k.clone());
-            }
-        }
+        sun.cache.mark_moves(
+            now,
+            &came,
+            MAX_SUN_MOVING.saturating_sub(sun.moving),
+            sun_shadow::mover(frustum, position, axes, near, far),
+        );
+        // The still maps' changes: places added that do not move, and those let go that did not.
+        let mut still: Vec<([f64; 3], f64)> = sun
+            .cache
+            .iter()
+            .filter(|i| i.born == now && !i.moving)
+            .map(|i| (i.centre, i.radius))
+            .collect();
         let mut why = [0u64; 3];
         let mut written = Vec::new();
-        let moving = &sun.moving;
-        changed.extend(sun.cache.sweep(|k, i| {
+        for (_, sphere, moving) in sun.cache.sweep(|k, i| {
             if i.seen == now {
                 return false;
             }
@@ -6585,7 +6606,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let gone = [
                 i.payload.stale(),
                 distance - i.radius > reach,
-                moving.contains(k)
+                i.moved_on(now)
                     || (now - i.seen > sun_shadow::GRACE
                         && sun_shadow::wholly_in_view(frustum, v, i.radius, near, far)),
             ];
@@ -6599,15 +6620,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
                 None => false,
             }
-        }));
-        let still: Vec<([f64; 3], f64)> = changed
-            .iter()
-            .filter(|(k, _)| !moving.contains(k))
-            .map(|(_, s)| *s)
-            .collect();
-        // Moving geometries no longer kept are forgotten (a written one comes back under a new key).
-        let cache = &sun.cache;
-        sun.moving.retain(|k| cache.contains(k));
+        }) {
+            if !moving {
+                still.push(sphere);
+            }
+        }
+        sun.moving = sun.cache.iter().filter(|i| i.moving).count();
         if sun.rewritten.len() + written.len() > 4096 {
             sun.rewritten.clear();
         }
@@ -6644,7 +6662,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &registers,
             self.encoder(),
             &sun.cache,
-            &|k| sun.moving.contains(k),
             &sun.headers,
             &cascades,
             redraw,
@@ -6665,7 +6682,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 self.presents,
                 sun.casters as f64 / n,
                 sun.kept as f64 / n,
-                sun.moving.len(),
+                sun.moving,
                 sun.maps as f64 / n,
                 sun.map_draws as f64 / n,
                 sun.took.as_secs_f64() * 1000.0 / n,
@@ -6766,7 +6783,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.sun_failed.insert(key.clone());
             return false;
         };
-        let vs_source = vs.sun.map(|_| {
+        // One stage only: a pair whose shaders both read a sun register is shadowed in its pixel
+        // shader (shadowing both would take the sun away twice).
+        let (vs_sun, ps_sun) = sun_stages(vs.sun.is_some(), ps.sun.is_some());
+        let vs_source = vs_sun.then(|| {
             wgsl::convert_with_sun(
                 &vs.program,
                 &wgsl::Link {
@@ -6779,7 +6799,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             )
         });
-        let ps_source = ps.sun.map(|_| {
+        let ps_source = ps_sun.then(|| {
             wgsl::convert_with_sun(
                 &ps.program,
                 &wgsl::Link {
@@ -9611,6 +9631,16 @@ impl Drop for Device {
 mod tests {
     use super::*;
     use wgpu::TextureFormat as F;
+
+    /// A lit draw is shadowed at one stage: its pixel shader when that reads the sun's colour,
+    /// else its vertex shader (grass); a pair whose shaders both read it never twice.
+    #[test]
+    fn a_lit_draw_is_shadowed_at_one_stage_the_pixel_shader_first() {
+        assert_eq!(sun_stages(true, true), (false, true));
+        assert_eq!(sun_stages(false, true), (false, true));
+        assert_eq!(sun_stages(true, false), (true, false));
+        assert_eq!(sun_stages(false, false), (false, false));
+    }
 
     /// The list records whether a plane was on, not only how the adapter cut: the clip
     /// distances every draw takes where the adapter has them write 0 with no plane on, so a list
