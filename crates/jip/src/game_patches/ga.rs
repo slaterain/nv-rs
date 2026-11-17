@@ -58,10 +58,11 @@
 //!   exe's playable test there (`0x47BCF0`: flag byte +0x100 without 0x80) with its own, which
 //!   answers the same. Difference from JIP: the "+" goes in only when it fits the 0x104-byte name
 //!   buffer (`0x11D9C48`) with its end; JIP writes the two bytes past a 259-character name.
-//! - **G121** (no comment; `WriteRelCall(0x7ECE32, GetVATSTargetDTHook)`): V.A.T.S. shows the target's
-//!   damage threshold as JIP's hit damage (O1) last used it (`s_VATSHitDT`, a negative one as 0),
-//!   in place of the exe's `0x7700F0` (`VATSMenu::DoIdle`, `007ec810`); until a hit has been
-//!   reckoned that way (`-FLT_MAX`) the exe's call runs.
+//! - **G121** (no comment; `WriteRelCall(0x7ECE32, GetVATSTargetDTHook)`): V.A.T.S. shows the
+//!   damage threshold of the last hit JIP's hit damage (O1) worked out (any attacker, any target;
+//!   as in JIP; `s_VATSHitDT`, a negative one as 0), in place of the exe's `0x7700F0`
+//!   (`VATSMenu::DoIdle`, `007ec810`); until a hit has been reckoned that way (`-FLT_MAX`) the
+//!   exe's call runs.
 //!
 //! Threads: every seam runs on the main thread (the UI, the INI reader); the handlers keep no
 //! state and take no slot.

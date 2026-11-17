@@ -12,7 +12,9 @@
 //! `s_patchInstallState`): the port's switch word (`Engine::jip_patches`) says what the player's
 //! ini asks for, and of the switch rows only O6 and O7 are on main (survey of 2026-11-15), so it
 //! would answer 1 for patches the port does not have (`bIgnoreDTDRFix` is on by default);
-//! it waits for those rows, or for a per-switch "in" state that each row sets.
+//! it waits for those rows, or for a per-switch "in" state that each row sets. `SetOptionalPatch`
+//! must also do what JIP does on a switch: turning O1 (`bIgnoreDTDRFix`) off sets the last hit's
+//! damage threshold G121 shows back to `-FLT_MAX` (`gc::damage`, `s_VATSHitDT`).
 
 use super::jip_fn_aux_variable::overriding_mod;
 use super::{ref_id, Handlers};
