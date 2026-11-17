@@ -13,8 +13,9 @@
 #                        is checked first, its result in CHECKED.txt beside it (made on Windows by
 #                        scripts/check-unix-package.ps1, docs/MAINTAINING.md). Without
 #                        it (a release package) the script refuses unless --game is given, HEAD is on
-#                        origin's main, the licence notices match Cargo.lock and every dependency's
-#                        licence is in distribution/licenses.
+#                        origin's main. Every package, a test build too, is refused unless the
+#                        licence notices match Cargo.lock and every dependency's licence is in
+#                        distribution/licenses (scripts/package-licences.sh).
 #       [--profile release|play]   the Cargo profile (default release: the optimised build the
 #                        Windows package and its frame rates use; play only for quick tests)
 #       [--use-built]    use the programs built before with the same profile, under --target
@@ -103,59 +104,21 @@ sha256() {
     fi
 }
 
-# The licence notices cover every crates.io package of Cargo.lock: THIRD-PARTY-NOTICES.txt has an
-# entry `NAME VERSION` for each. (Checked by the packages themselves, not by a hash of the whole
-# lock file: the workspace's own crates change the lock file but need no notice. The Windows
-# script keeps its hash, distribution/DEPENDENCY-LOCK.sha256.)
-[ -f distribution/THIRD-PARTY-NOTICES.txt ] || fail "the dependency notices must be assembled before packaging"
-# (grep reads the notices from a file: fed through a pipe, grep -q stops reading at the first match
-# and the writer fails with "Broken pipe".)
-noticed=$(mktemp) || fail "no temporary file"
-tr -d '\r' <distribution/THIRD-PARTY-NOTICES.txt >"$noticed" || fail "could not read THIRD-PARTY-NOTICES.txt"
-unnoticed=$(tr -d '\r' <Cargo.lock | awk '
-    /^\[\[package\]\]/ { name = ""; version = "" }
-    /^name = / { name = $3 }
-    /^version = / { version = $3 }
-    /^source = "registry/ { gsub(/"/, "", name); gsub(/"/, "", version); print name " " version }' |
-    sort -u | while IFS= read -r package; do
-        grep -qxF -e "$package" "$noticed" || printf '%s, ' "$package"
-    done)
-rm -f -- "$noticed"
-if [ -n "$unnoticed" ]; then
-    [ "$test_build" = 1 ] || fail "THIRD-PARTY-NOTICES.txt has no entry for: $unnoticed refresh it (and distribution/licenses) before packaging"
-    note "THIRD-PARTY-NOTICES.txt has no entry yet for: $unnoticed refresh it before a release."
-fi
-
-# Every crates.io crate in this system's program has its licence folder (licenses/<name>-<version>).
-# The workspace's own crates and the vendored ones are listed with their folder and left out here.
-# (Through a file: a failing cargo tree must stop the script, which a pipe into a loop would hide.)
+# The licences: every crates.io package of Cargo.lock has its THIRD-PARTY-NOTICES.txt entry, every
+# crates.io crate of this system's program its folder distribution/licenses/<name>-<version>, and
+# every licence or notice file of its path crates (the workspace's, vendor/) is in
+# distribution/notices.txt; a crate from Git or a path crate outside the repository is refused
+# (scripts/package-licences.sh). Test builds too: a test archive goes to players as well.
+# (The Windows script keeps its hash of Cargo.lock, distribution/DEPENDENCY-LOCK.sha256.)
+# (Through a file: a failing cargo tree must stop the script, which a pipe would hide.)
 crates=$(mktemp) || fail "no temporary file"
 cargo tree --locked --target "$triple" -p nv-viewer -e normal --prefix none --format '{p}' >"$crates" ||
     fail "cargo tree did not list the program's crates"
 [ -s "$crates" ] || fail "cargo tree listed no crates for the program"
-missing=$(sed -e 's/ (\*)$//' "$crates" | grep -v ' (' | sed -e 's/ v/-/' | sort -u |
-    while IFS= read -r crate; do
-        [ -d "distribution/licenses/$crate" ] || printf '%s ' "$crate"
-    done)
-if [ -n "$missing" ]; then
-    [ "$test_build" = 1 ] || fail "no licence folder in distribution/licenses for: $missing"
-    note "No licence folder yet in this package for: $missing"
-fi
-# Every licence or notice file of the program's own and vendored crates (path crates: the
-# workspace's, vendor/) is listed in distribution/notices.txt, which the package copies whole.
-# cargo tree marks a crate it listed before with " (*)" and a macro crate with " (proc-macro)":
-# those marks are taken off first, so only a path crate's own folder is left in brackets (a "*"
-# taken for a folder matched every licence file in the repository).
-tab=$(printf '\t')
-unlisted=$(sed -e 's/ (\*)$//' -e 's/ (proc-macro)$//' "$crates" |
-    sed -n -e 's/^[^ ]* v[^ ]* (\(.*\))$/\1/p' | sort -u | while IFS= read -r dir; do
-    rel=${dir#"$root"/}
-    git ls-files -- "$rel/LICENSE*" "$rel/NOTICE*" "$rel/COPYING*" | while IFS= read -r file; do
-        grep -q "^$file$tab" distribution/notices.txt || printf '%s ' "$file"
-    done
-done)
+licences=0
+sh scripts/package-licences.sh "$crates" || licences=1
 rm -f -- "$crates"
-[ -z "$unlisted" ] || fail "these licence or notice files of the program's crates are not in distribution/notices.txt (add them there and to LEGAL.md): $unlisted"
+[ "$licences" = 0 ] || fail "the licences are not complete (the lines above say which); no package is made without them"
 
 programs=$target/$profile
 checker=$target/release/package-check

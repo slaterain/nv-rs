@@ -8,17 +8,26 @@ name: play.sh
 # BusyBox accept (a `case` inside `$( )` once stopped every start on a Mac). The Linux job of "Other
 # systems" also runs the test with the real program (NV_RS_REAL_PROGRAM) after its build.
 #
+# The same jobs test the packages' licence checks (scripts/package-licences.sh, by
+# scripts/test-package-licences.sh: made-up crate lists and a made-up repository).
+#
 # Two short jobs from the account's shared limit (20 jobs at a time, 5 of them macOS), only when
-# distribution/unix changes, once a night and by hand.
+# distribution/unix or those scripts change, once a night and by hand.
 on:
   pull_request:
     paths:
       - 'distribution/unix/**'
+      - 'scripts/package-licences.sh'
+      - 'scripts/test-package-licences.sh'
+      - 'scripts/package-playtest.sh'
       - '.github/workflows/play-sh.yml'
   push:
     branches: [main]
     paths:
       - 'distribution/unix/**'
+      - 'scripts/package-licences.sh'
+      - 'scripts/test-package-licences.sh'
+      - 'scripts/package-playtest.sh'
       - '.github/workflows/play-sh.yml'
   workflow_dispatch:
   schedule:
@@ -47,6 +56,10 @@ jobs:
             SH="$shell" sh distribution/unix/test-play.sh || failed=1
           done
           exit $failed
+      - name: Test the packages' licence checks
+        run: |
+          for shell in dash bash "busybox sh"; do $shell -n scripts/package-licences.sh || exit 1; done
+          sh scripts/test-package-licences.sh
   macos:
     name: play.sh (macOS /bin/sh, bash 3.2)
     runs-on: macos-latest
@@ -59,3 +72,7 @@ jobs:
         run: |
           /bin/sh -n distribution/unix/play.sh
           SH=/bin/sh /bin/sh distribution/unix/test-play.sh
+      - name: Test the packages' licence checks
+        run: |
+          /bin/sh -n scripts/package-licences.sh
+          /bin/sh scripts/test-package-licences.sh
