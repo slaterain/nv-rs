@@ -246,11 +246,13 @@ mod tests {
             [0x416, 0x44f, 0x401, 0x98]
         );
         assert_eq!(cyrillic.to_ansi(&[0x416, 0x44f, 0x401]), b"\xc6\xff\xa8");
-        // A character the page lacks is the default, and says so; a pair is one character.
+        // A character the page lacks (and has no best fit for) is the default, and says so; e
+        // acute's best fit on the Cyrillic page is e; a pair is one character.
         assert_eq!(
-            cyrillic.to_ansi_with(&[0xe9, 0x41], b'*'),
+            cyrillic.to_ansi_with(&[0x3042, 0x41], b'*'),
             (b"*A".to_vec(), true)
         );
+        assert_eq!(cyrillic.to_ansi_with(&[0xe9], b'*'), (b"e".to_vec(), false));
         assert_eq!(
             western.to_ansi_with(&[0xd83d, 0xde00], b'?'),
             (b"?".to_vec(), true)
