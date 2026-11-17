@@ -8095,24 +8095,28 @@ impl Finisher {
                 let queue = Arc::clone(&queue);
                 std::thread::Builder::new()
                     .name(format!("nv-wgpu-finish {k}"))
-                    .spawn(move || loop {
-                        let job = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
-                        let Ok((encoder, back)) = job else { break };
-                        // The render thread waits for it at the submit (a panic's message too, so
-                        // it can say why); gone (the device dropped), the buffer is dropped too.
-                        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            if planted(PLANT_FINISHING) {
-                                panic!("a planted finishing failure (tests)");
-                            }
-                            encoder.finish()
-                        }))
-                        .map_err(|p| {
-                            p.downcast_ref::<&str>()
-                                .map(|s| s.to_string())
-                                .or_else(|| p.downcast_ref::<String>().cloned())
-                                .unwrap_or_else(|| "a panic without a message".to_string())
-                        });
-                        let _ = back.send(done);
+                    .spawn(move || {
+                        qos::thread_started();
+                        loop {
+                            let job = queue.lock().unwrap_or_else(|e| e.into_inner()).recv();
+                            let Ok((encoder, back)) = job else { break };
+                            // The render thread waits for it at the submit (a panic's message too, so
+                            // it can say why); gone (the device dropped), the buffer is dropped too.
+                            let done =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    if planted(PLANT_FINISHING) {
+                                        panic!("a planted finishing failure (tests)");
+                                    }
+                                    encoder.finish()
+                                }))
+                                .map_err(|p| {
+                                    p.downcast_ref::<&str>()
+                                        .map(|s| s.to_string())
+                                        .or_else(|| p.downcast_ref::<String>().cloned())
+                                        .unwrap_or_else(|| "a panic without a message".to_string())
+                                });
+                            let _ = back.send(done);
+                        }
                     })
                     .expect("a finishing thread starts")
             })
@@ -8204,6 +8208,7 @@ impl Submitter {
             std::thread::Builder::new()
                 .name("nv-wgpu-submit".into())
                 .spawn(move || {
+                    qos::thread_started();
                     for job in rx {
                         let done =
                             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&queue)));
