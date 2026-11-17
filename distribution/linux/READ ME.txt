@@ -53,11 +53,11 @@ What you need
 What this build can do today
 ----------------------------
 Today the program STOPS right after it finds your game, with a message that lists what is not
-provided on Linux yet (it begins "error: nv-rs does not run the game on this system yet"). The
-game's window and drawing, some of the machine's answers to the game (its display adapter, sound
-devices and folders, measured on Windows), one sound effect's table and text in code pages other
-than Windows' Western one are still being made for Linux and macOS. They come in the next
-previews; play.sh and your nv-rs folder stay the same. This stop needs no report: play.sh says
+provided on Linux yet (it begins "error: nv-rs does not run the game on this system yet").
+Some of the machine's answers to the game (its display adapter, sound devices and folders,
+measured on Windows) and text in code pages other than Windows' Western one are still being
+made for Linux (the game's window, sound and paths are done). They come in the next previews;
+play.sh and your nv-rs folder stay the same. This stop needs no report: play.sh says
 "As expected for this preview" after it.
 
 ./play.sh --check checks your game's FalloutNV.exe (that it is version 1.4.0.525, the one nv-rs
