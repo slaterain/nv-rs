@@ -702,8 +702,9 @@ fn save_form(e: &mut Engine, reference: bool, projectile: bool, own: u32) {
     e.mem.set_u32(P3_VTABLE + 0xf0, stub(reference));
     e.mem.set_u32(P3_VTABLE + 0x224, stub(projectile));
     e.mem.set_u32(P3_VTABLE + 0x324, P3_SAVE_SLOT);
-    e.register(P3_SAVE_SLOT, move |_, _| Ret {
-        eax: own,
+    e.mem.set_u32(P3 + 0xf00, own);
+    e.register(P3_SAVE_SLOT, |e, _| Ret {
+        eax: e.mem.u32(P3 + 0xf00),
         ..Ret::default()
     });
 }

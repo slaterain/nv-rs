@@ -536,7 +536,7 @@ const IDLE_MARKER: u8 = 0x30;
 /// `"EditorMarker.NIF"` in the exe (`0x1029C94`), and a form's model path (`+0x40` for an
 /// activator; its length word `+0x44` for a light).
 const EDITOR_MARKER_NIF: &[u8] = b"EditorMarker.NIF";
-const MODEL_PATH: u32 = 0x40;
+const ACTIVATOR_MODEL_PATH: u32 = 0x40;
 const MODEL_PATH_LENGTH: u32 = 0x44;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetIsInternalMarkerHook.
@@ -566,7 +566,7 @@ fn is_marker(e: &mut Engine, w: &[u32]) -> Ret {
     }
     match kind {
         ACTIVATOR => {
-            let path = e.mem.u32(form + MODEL_PATH);
+            let path = e.mem.u32(form + ACTIVATOR_MODEL_PATH);
             answer(
                 path != 0
                     && nvse::table::guest_text(e, path).eq_ignore_ascii_case(EDITOR_MARKER_NIF),

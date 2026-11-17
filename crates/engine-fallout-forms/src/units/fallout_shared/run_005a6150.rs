@@ -701,9 +701,10 @@ mod n041_tests {
     #[test]
     fn a_jip_g52_answer_leaves_the_global_unread() {
         use engine_core::extend::{jip_patches, Owner, SiteSlot};
-        let mut e = form_engine();
+        let mut e = Engine::new();
         e.register(0x0047_2660, |_, _| ret(6));
         e.register(0x0047_26b0, |_, _| ret(0));
+        e.register(0x0047_26f0, |_, _| ret(0));
         e.register(0x0048_5110, |_, _| Ret::default());
         let p = e.new_object::<TESGlobal>();
         e.on_site(SiteSlot::new(Owner::Jip, 0x005a_64d7), |e, a| {
@@ -713,7 +714,7 @@ mod n041_tests {
         let read = |e: &mut Engine| {
             e.call_log = Some(vec![]);
             assert!(e.call(0x005a_64b0, &args![p, 0x9000u32]).bool());
-            calls(e, 0x005a_64b0).iter().any(|c| c.0 == 0x0048_5110)
+            !calls(e, 0x0048_5110).is_empty()
         };
         e.set_jip_patches(jip_patches::INSTALLED);
         assert!(read(&mut e), "the exe");
