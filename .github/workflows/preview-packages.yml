@@ -1,13 +1,15 @@
 name: Preview packages (Linux, macOS)
 # Builds the Linux and macOS preview packages (scripts/package-playtest.sh) and keeps them as this
 # run's artifacts, for the maintainer to download, check and publish BY HAND. CI has no game, so these
-# are TEST builds only (BUILD.txt and the archive name say so): the check that no data of the game's
-# FalloutNV.exe is in the program (package-check --game --max-run 4096, which the Windows package
-# always makes) is made by the maintainer on the downloaded package before publishing it
-# (docs/MAINTAINING.md, "Releasing a Linux or macOS preview"); package-playtest.sh refuses a release
-# package without the game. Nothing here makes a release, a tag or anything public, and it never
-# runs by itself: only by hand (Actions > this workflow > Run workflow, or
-# `gh workflow run preview-packages.yml --ref BRANCH -f version=...`).
+# are built without it (--test-build: the archive's name ends in -test, and BUILD.txt names this run, its
+# branch and commit, and says the program was not checked against the game here): the check that no
+# data of the game's FalloutNV.exe is in the program (package-check --game --max-run 4096, which the
+# Windows package always makes) is made by the maintainer on the downloaded archive, unchanged, with
+# scripts/check-unix-package.ps1, which also refuses an archive built from any branch but main and
+# writes the CHECKED.txt published beside it (docs/MAINTAINING.md, "Releasing a Linux or macOS
+# preview"); package-playtest.sh refuses a package without the game unless made that way.
+# Nothing here makes a release, a tag or anything public, and it never runs by itself: only by
+# hand (Actions > this workflow > Run workflow, or `gh workflow run preview-packages.yml --ref BRANCH -f version=...`).
 #
 # The runners are the oldest GitHub has for each system, so the programs start on as many
 # systems as possible:

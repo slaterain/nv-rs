@@ -15,7 +15,8 @@
 //!
 //! Prints what it finds; status 1 when a needle is found or a shared run is over the limit, 2 when
 //! a `--game` file can't be read or the command line is wrong (a `--max-run` that isn't a number
-//! included).
+//! included), and when nothing would be checked: FOLDER missing, not a folder or without files, or
+//! `--game` given with no program in FOLDER.
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -271,6 +272,19 @@ fn main() {
     let mut files = Vec::new();
     files_under(&folder, &mut files);
     files.sort();
+    // A mistyped or empty folder would otherwise pass with "0 files", unchecked.
+    if let Some(why) = folder_problem(&folder, &files) {
+        eprintln!("{why}");
+        std::process::exit(2);
+    }
+    // And `--game` must have a program to compare with the game.
+    if !games.is_empty() && !has_program(&files) {
+        eprintln!(
+            "--game: no program file in {} (a .exe, or a Linux or macOS program): nothing would be compared with the game",
+            folder.display()
+        );
+        std::process::exit(2);
+    }
     let mut bad = 0usize;
     for file in &files {
         let Ok(data) = std::fs::read(file) else {
@@ -408,6 +422,31 @@ fn main() {
     std::process::exit(i32::from(bad != 0));
 }
 
+/// Why `folder` cannot be checked: it is not a folder (missing, mistyped, a file), or `files` (what
+/// was found under it) is empty. A check of nothing must never pass.
+fn folder_problem(folder: &Path, files: &[PathBuf]) -> Option<String> {
+    if !folder.is_dir() {
+        return Some(format!(
+            "{}: not a folder (missing or mistyped?): nothing was checked",
+            folder.display()
+        ));
+    }
+    files
+        .is_empty()
+        .then(|| format!("{}: no files in it: nothing was checked", folder.display()))
+}
+
+/// Whether any of `files` is a program ([`is_program`], by its name or first bytes).
+fn has_program(files: &[PathBuf]) -> bool {
+    files.iter().any(|file| {
+        let mut head = [0u8; 4];
+        let read = std::fs::File::open(file)
+            .and_then(|mut f| std::io::Read::read(&mut f, &mut head))
+            .unwrap_or(0);
+        is_program(file, &head[..read])
+    })
+}
+
 /// The names `list` (`FILE<TAB>NAME` a line, `#` comments, blank lines) gives that are not in
 /// `folder`'s `licenses` folder as files.
 fn missing_notices(folder: &Path, list: &str) -> Vec<String> {
@@ -441,6 +480,49 @@ mod tests {
         let parsed = parse_arguments(&args(&["pkg", "--notices", "n.txt"])).unwrap();
         assert_eq!(parsed.notices, Some(PathBuf::from("n.txt")));
         assert!(parse_arguments(&args(&["pkg", "--notices"])).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of #632 (round 5): a folder that does not exist, is a file, or holds no files is a
+    /// problem (status 2), not "0 files, 0 hits"; one with a file is checked.
+    #[test]
+    fn a_missing_or_empty_folder_is_not_a_pass() {
+        let dir = std::env::temp_dir().join(format!("package-check-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let found = |folder: &Path| {
+            let mut files = Vec::new();
+            files_under(folder, &mut files);
+            folder_problem(folder, &files)
+        };
+        let missing = found(&dir.join("nv-rs-preview-linux-x86_64"));
+        assert!(missing.is_some_and(|w| w.contains("not a folder")));
+        std::fs::create_dir_all(dir.join("empty/sub")).unwrap();
+        let empty = found(&dir.join("empty"));
+        assert!(empty.is_some_and(|w| w.contains("no files")));
+        std::fs::write(dir.join("empty/sub/x.txt"), b"x").unwrap();
+        assert_eq!(found(&dir.join("empty")), None);
+        let file = found(&dir.join("empty/sub/x.txt"));
+        assert!(file.is_some_and(|w| w.contains("not a folder")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Review of #632 (round 5): `--game` needs a program in the folder: text files alone have
+    /// none; a Linux program (ELF, no extension) or a `.exe` is one.
+    #[test]
+    fn the_game_check_needs_a_program() {
+        let dir =
+            std::env::temp_dir().join(format!("package-check-program-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        let text = dir.join("play.sh");
+        std::fs::write(&text, b"#!/bin/sh\n").unwrap();
+        let short = dir.join("app/x");
+        std::fs::write(&short, b"\x7fE").unwrap();
+        assert!(!has_program(&[text.clone(), short.clone()]));
+        let elf = dir.join("app/nv-viewer");
+        std::fs::write(&elf, b"\x7fELF\x02\x01\x01").unwrap();
+        assert!(has_program(&[text.clone(), elf]));
+        assert!(has_program(&[text, dir.join("app/Play.exe")]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

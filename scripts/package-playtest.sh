@@ -7,8 +7,11 @@
 #   scripts/package-playtest.sh --version 2026-11-16.1 --system linux-x86_64
 #       --system linux-x86_64 | macos-arm64   which package (built on that system: Linux x86-64 or
 #                        an Apple silicon Mac; nothing here cross-compiles)
-#       [--test-build]   a package for testing (every CI build): BUILD.txt says "test build, not for
-#                        release" and the archive is named nv-rs-preview-<system>-test.tar.gz. Without
+#       [--test-build]   a package built without the game (every CI build): the archive is named
+#                        nv-rs-preview-<system>-test.tar.gz and BUILD.txt says the program was not
+#                        checked against the game where it was built, and that a published package
+#                        is checked first, its result in CHECKED.txt beside it (made on Windows by
+#                        scripts/check-unix-package.ps1, docs/MAINTAINING.md). Without
 #                        it (a release package) the script refuses unless --game is given, HEAD is on
 #                        origin's main, the licence notices match Cargo.lock and every dependency's
 #                        licence is in distribution/licenses.
@@ -223,14 +226,19 @@ esac
 sha=$(sha256 "$stage/app/nv-viewer" | cut -d ' ' -f 1)
 # The source link in every mode: any archive that gets out names its source.
 source="Source: https://github.com/slaterain/nv-rs/tree/$commit"
-if [ "$test_build" = 1 ]; then
-    source="$source (a test build, not for release: if that commit is no longer on a branch, the pull request that built it holds the source)"
+# Where it was built: GitHub's run (its number and branch, which the maintainer's check before
+# publishing reads: scripts/check-unix-package.ps1) or this machine.
+if [ "${GITHUB_ACTIONS:-}" = true ] && [ -n "${GITHUB_RUN_ID:-}" ]; then
+    built="Built by GitHub Actions run $GITHUB_RUN_ID (${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-slaterain/nv-rs}/actions/runs/$GITHUB_RUN_ID) from ${GITHUB_REF:-an unknown branch}; the maintainers have never started it on this system."
+else
+    built="Built by scripts/package-playtest.sh on $(uname -sm); the maintainers have never started it on this system."
 fi
-[ -n "$game" ] || note "Not checked: that no data of the game's FalloutNV.exe is in the program (packaged without the game, --game)."
+# Without the game (every GitHub build): said as it is, with what happens before publishing.
+[ -n "$game" ] || note "Checked against the game: not where it was built (no game there). A package the project publishes is checked first against the game's own FalloutNV.exe (package-check --game --max-run 4096: no data of the game's program in this program), and that check's date and result are published beside the archive (its name with .CHECKED.txt for .tar.gz)."
 {
     printf '%s\n' "nv-rs $system preview $version" "Source commit: $commit" \
         "app/nv-viewer SHA256: $sha" "Platform: $system ($triple), Cargo profile $profile" "$needs" \
-        "Built by CI or a script on that system; never started on it by the maintainers." "$source"
+        "$built" "$source"
     [ -z "$notes" ] || printf '\n%s' "$notes"
 } >"$stage/BUILD.txt"
 
