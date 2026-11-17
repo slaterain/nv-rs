@@ -227,10 +227,7 @@ mod tests {
     fn a_first_start_makes_both_files() {
         let out = first(None, None);
         let ini = text_of(out.ini.as_deref().unwrap());
-        assert!(
-            ini.contains("[General]\r\nsLanguage=ENGLISH\r\n"),
-            "{ini}"
-        );
+        assert!(ini.contains("[General]\r\nsLanguage=ENGLISH\r\n"), "{ini}");
         assert!(game_ini::has_sections(&ini), "{ini}");
         let prefs = text_of(out.prefs.as_deref().unwrap());
         for line in [
