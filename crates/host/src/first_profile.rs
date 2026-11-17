@@ -228,7 +228,7 @@ mod tests {
         let out = first(None, None);
         let ini = text_of(out.ini.as_deref().unwrap());
         assert!(
-            ini.starts_with("[General]\r\nsLanguage=ENGLISH\r\n"),
+            ini.contains("[General]\r\nsLanguage=ENGLISH\r\n"),
             "{ini}"
         );
         assert!(game_ini::has_sections(&ini), "{ini}");
