@@ -17,7 +17,10 @@
 //!
 //! Locking: the calls reach the platform layer's state (`Kernel::platform`), which with real
 //! threads other threads change under the kernel lock; each wrapper here holds it
-//! ([`crate::real_threads::kernel_guard`]) for the call. The calls make no game call.
+//! ([`crate::real_threads::kernel_guard`]) for the call. The profile writes ([`write_profile_string`],
+//! `remove_profile_key`, `remove_profile_section`, `write_profile_section`) hold it once over their
+//! read, change and write together (the calls' own guards re-enter), so no other thread's write of
+//! the file falls between them and is lost. The calls make no game call.
 //!
 //! The lock is held across the call's disk work too (the folder made and checked, the `.part`
 //! written and renamed, a kept file read), on purpose (REVIEW-629b, 2026-11-16, weighed): a
@@ -137,6 +140,15 @@ pub fn profile_string(e: &Engine, name: &[u8], section: &[u8], key: &[u8]) -> Op
     Some(file.answer(&value))
 }
 
+/// Between a profile write's read and its write: the kernel lock is still held (the write took
+/// it for the whole change; a debug check, so a write that lost its outer hold fails its tests).
+pub(crate) fn held_across(e: &Engine) {
+    debug_assert!(
+        crate::real_threads::kernel_lock_held(e),
+        "a profile write's read and write must sit under one kernel lock hold"
+    );
+}
+
 /// A file the profile writes leave alone because its encoding was not measured (see
 /// [`text`]): one line in the log, and `ERROR_NOT_SUPPORTED`.
 fn unmodelled(name: &[u8]) -> u32 {
@@ -162,6 +174,9 @@ pub fn write_profile_string(
     key: &[u8],
     value: &[u8],
 ) -> Result<(), u32> {
+    // One hold over the read, the change and the write, so another thread's write of the file
+    // cannot fall between them and be lost (REVIEW-642b; the calls' own guards re-enter).
+    let _kernel = crate::real_threads::kernel_guard(e);
     let old = match read_or_error(e, name) {
         Ok(bytes) => bytes,
         Err(ERROR_FILE_NOT_FOUND | ERROR_PATH_NOT_FOUND) => Vec::new(),
@@ -173,6 +188,7 @@ pub fn write_profile_string(
             return Err(code);
         }
     };
+    held_across(e);
     let file = text::Decoded::of(&old);
     if !file.writable {
         return Err(unmodelled(name));

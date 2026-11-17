@@ -123,6 +123,14 @@ fn files_that_are_not_utf16_le_text() {
         assert!(!file.writable);
         assert_eq!(file.text, *bytes);
     }
+    // The port's reads of these (REVIEW-642b): nothing found, where Windows finds UTF-16 BE's
+    // later sections (`[B] z` 3) and an unmarked UTF-16 LE file's every value (`[A] y` 2).
+    for bytes in [&be, &no_mark] {
+        let file = Decoded::of(bytes);
+        assert_eq!(ini_value(&file.text, b"A", b"y"), None);
+        assert_eq!(ini_value(&file.text, b"B", b"z"), None);
+    }
+    assert!(section_names(&Decoded::of(&be).text).is_empty());
     let utf8: Vec<u8> = [0xef, 0xbb, 0xbf]
         .iter()
         .chain(BASE.as_bytes())

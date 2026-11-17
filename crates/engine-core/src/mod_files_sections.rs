@@ -342,7 +342,11 @@ pub fn remove_profile_key(
     section: &[u8],
     key: &[u8],
 ) -> Result<(), u32> {
-    match before_change(e, name)? {
+    // One hold over the read, the change and the write (as `write_profile_string`).
+    let _kernel = crate::real_threads::kernel_guard(e);
+    let old = before_change(e, name)?;
+    super::held_across(e);
+    match old {
         None => write_or_error(e, name, b""),
         Some(file) => match removed_key(&file.text, &file.arg(section), &file.arg(key)) {
             Some(new) => write_or_error(e, name, &file.encode(&new)),
@@ -354,7 +358,11 @@ pub fn remove_profile_key(
 /// `WritePrivateProfileStructA(section, NULL, NULL, 0, name)` over [`read_or_error`] and
 /// [`write_or_error`] ([`removed_section`]): as [`remove_profile_key`] answers.
 pub fn remove_profile_section(e: &mut Engine, name: &[u8], section: &[u8]) -> Result<(), u32> {
-    match before_change(e, name)? {
+    // One hold over the read, the change and the write (as `write_profile_string`).
+    let _kernel = crate::real_threads::kernel_guard(e);
+    let old = before_change(e, name)?;
+    super::held_across(e);
+    match old {
         None => write_or_error(e, name, b""),
         Some(file) => match removed_section(&file.text, &file.arg(section)) {
             Some(new) => write_or_error(e, name, &file.encode(&new)),
@@ -372,7 +380,10 @@ pub fn write_profile_section(
     section: &[u8],
     new_lines: &[Vec<u8>],
 ) -> Result<(), u32> {
+    // One hold over the read, the change and the write (as `write_profile_string`).
+    let _kernel = crate::real_threads::kernel_guard(e);
     let file = before_change(e, name)?.unwrap_or_else(|| Decoded::of(b""));
+    super::held_across(e);
     let lines: Vec<Vec<u8>> = new_lines.iter().map(|l| file.arg(l)).collect();
     let new = written_section(&file.text, &file.arg(section), &lines);
     write_or_error(e, name, &file.encode(&new))
