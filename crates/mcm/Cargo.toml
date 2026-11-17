@@ -1,0 +1,15 @@
+[package]
+name = "mcm"
+version = "0.1.0"
+description = "The Mod Configuration Menu's NVSE plugin (MCM.dll, \"MCM Extensions\") built in: its nine script commands"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+engine-core = { path = "../engine-core" }
+nvse = { path = "../nvse" }
+
+[dev-dependencies]
+# Every command test checks that each argument is read as its parameter type stores it.
+nvse = { path = "../nvse", features = ["test-support"] }

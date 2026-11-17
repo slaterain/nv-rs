@@ -72,6 +72,7 @@ pub const TEST_SWITCHES: &[&str] = &[
     "NV_PASS_CHECK",
     "NV_TOPIC_INDEX_CHECK",
     "NV_NVSE_EVENT_LOG",
+    "NV_DRAW_THREAD_CHECK",
 ];
 
 /// `(section, key, variable, default)` for each of our keys, in the table's order.
@@ -103,6 +104,29 @@ fn section_of(line: &str) -> Option<&str> {
     Some(rest.split(']').next().unwrap_or(rest).trim())
 }
 
+/// The lines of `text`, each with its end, as the game's reader ends them
+/// ([`crate::settings::ini_value`], measured): at LF, or at a CR not followed by LF (a lone CR).
+fn file_lines(text: &str) -> impl Iterator<Item = &str> {
+    let bytes = text.as_bytes();
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        if b == b'\n' || (b == b'\r' && bytes.get(i + 1) != Some(&b'\n')) {
+            lines.push(&text[start..=i]);
+            start = i + 1;
+        }
+    }
+    if start < text.len() {
+        lines.push(&text[start..]);
+    }
+    lines.into_iter()
+}
+
+/// Whether `text` ends with a line end ([`file_lines`]: LF, or a lone CR).
+fn ends_line(text: &str) -> bool {
+    text.ends_with('\n') || text.ends_with('\r')
+}
+
 /// The line end a text uses: `\r\n` unless it has only bare `\n` ends.
 fn line_end(text: &str) -> &'static str {
     if !text.contains("\r\n") && text.contains('\n') {
@@ -121,7 +145,7 @@ fn is_ours(name: &str) -> bool {
 
 /// Whether `text` already has one of our sections.
 pub fn has_sections(text: &str) -> bool {
-    text.lines().filter_map(section_of).any(is_ours)
+    file_lines(text).filter_map(section_of).any(is_ours)
 }
 
 /// Whether the text is UTF-16: it starts with that mark, in either byte order.
@@ -168,7 +192,7 @@ fn block_key(line: &str) -> Option<&str> {
 /// and is added to the first.
 fn has_key(text: &str, section: &str, key: &str) -> bool {
     let mut inside = false;
-    for line in text.lines() {
+    for line in file_lines(text) {
         if let Some(name) = section_of(line) {
             if inside {
                 return false;
@@ -262,7 +286,7 @@ pub fn with_sections(text: &str) -> Option<Seeded> {
 /// name), its note above it, as the block has it; a missing section goes after the last of our
 /// sections in the file, an empty line before it. Also the keys added.
 fn complete(text: &str, eol: &str) -> (String, Vec<&'static str>) {
-    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let lines: Vec<&str> = file_lines(text).collect();
     let headings: Vec<(usize, &str)> = lines
         .iter()
         .enumerate()
@@ -333,7 +357,7 @@ fn complete(text: &str, eol: &str) -> (String, Vec<&'static str>) {
     for at in 0..=lines.len() {
         for (_, new) in inserts.iter().filter(|(line, _)| *line == at) {
             // Only the file's last line can lack its end.
-            if !out.is_empty() && !out.ends_with('\n') {
+            if !out.is_empty() && !ends_line(&out) {
                 out.push_str(eol);
             }
             out.push_str(new);
@@ -356,7 +380,7 @@ pub fn set_key(text: &str, section: &str, key: &str, value: &str) -> String {
     let mut under_heading = None;
     let mut commented = None;
     let mut at = 0;
-    for line in text.split_inclusive('\n') {
+    for line in file_lines(text) {
         let start = at;
         at += line.len();
         let body = line.trim_end_matches(['\r', '\n']);
@@ -392,10 +416,10 @@ pub fn set_key(text: &str, section: &str, key: &str, value: &str) -> String {
         return format!("{}{key}={value}{}", &text[..from], &text[to..]);
     }
     if let Some(at) = under_heading {
-        let gap = if text[..at].ends_with('\n') { "" } else { eol };
+        let gap = if ends_line(&text[..at]) { "" } else { eol };
         return format!("{}{gap}{key}={value}{eol}{}", &text[..at], &text[at..]);
     }
-    let gap = if text.is_empty() || text.ends_with('\n') {
+    let gap = if text.is_empty() || ends_line(text) {
         ""
     } else {
         eol
@@ -508,18 +532,18 @@ pub struct Switches {
 /// The game's variables for the player's options (host `fixes.rs` reads them over the file).
 /// `inherited` says whether a variable is set in Play.exe's own environment.
 ///
-/// In play, all eight are taken out, so the profile's `Fallout.ini` decides. When a variable that
+/// In play, all nine are taken out, so the profile's `Fallout.ini` decides. When a variable that
 /// was set before makes the run a test ([`TEST_SWITCHES`], or a fix's own), the game ignores the
 /// file and would run the original's behaviour with a test's defaults. So that a diagnostic run
 /// plays like the player's game, the file's choices are passed on then: its value for each of
-/// the eight, or the value a play run has when the file does not say, and each fix line that is
+/// the nine, or the value a play run has when the file does not say, and each fix line that is
 /// not commented out. A variable set before the start stays as it was set: nothing is taken out.
 ///
 /// When the played profile's file has none of our sections (Play.exe leaves a UTF-16 file
 /// alone, and makes none when there is nothing to make it from), the game can't find the
 /// player's options in it, and a `settings.ini` stays: the choices then come from `settings`
 /// (that file, when there is one) over the play defaults, as they would be in the file once
-/// moved in. In play the eight are passed from there, each one set (over an inherited one too);
+/// moved in. In play the nine are passed from there, each one set (over an inherited one too);
 /// the fix lines are not, since a fix's own variable would make the run a test.
 pub fn switches(
     fallout_ini: &str,
@@ -608,6 +632,7 @@ pub fn switches(
             ),
             "bRenderThread" => Some(flag.unwrap_or(default).to_string()),
             "bShowFrameRate" => Some(flag.unwrap_or(default).to_string()),
+            "bAmbientOcclusion" => Some(flag.unwrap_or(default).to_string()),
             // A fix line: only one that is there and not commented out.
             _ => flag.map(str::to_string),
         };
@@ -735,11 +760,12 @@ mod tests {
         // The section's own missing keys under it, each with its note, then the other sections
         // as the block has them, an empty line before each.
         let display_rest = format!(
-            "{}{}{}{}",
+            "{}{}{}{}{}",
             with_note("bBorderless"),
             with_note("sRenderer"),
             with_note("iMenuFrameLimit"),
-            with_note("bShowFrameRate")
+            with_note("bShowFrameRate"),
+            with_note("bAmbientOcclusion")
         );
         assert!(
             display_rest.starts_with("; 1 = the game's window")
@@ -785,6 +811,37 @@ mod tests {
             "{last}"
         );
         assert_eq!(with_sections(out).unwrap().text, *out);
+    }
+
+    /// A file whose lines end at a lone CR and that already has our sections: its sections and
+    /// keys are found (the game's reader ends lines there too, measured), nothing of ours is
+    /// added twice, a key is set where it stands, and the game's reader reads what was written.
+    #[test]
+    fn a_lone_cr_file_with_our_sections() {
+        let cr = "[General]\rx=1\r[nv-rs Display]\riFrameLimit=60\r";
+        assert!(has_sections(cr));
+        assert!(has_key(cr, "nv-rs Display", "iFrameLimit"));
+        let seeded = with_sections(cr).unwrap();
+        assert!(!seeded.fresh);
+        assert!(!seeded.added.contains(&"iFrameLimit"), "not added twice");
+        let out = &seeded.text;
+        assert!(out.starts_with(cr), "what was there stays first");
+        assert_eq!(out.matches("iFrameLimit=").count(), 1);
+        assert_eq!(ini_value(out, "nv-rs Display", "iFrameLimit"), Some("60"));
+        assert_eq!(
+            with_sections(out).unwrap().text,
+            *out,
+            "nothing more to add"
+        );
+        let set = set_key(cr, "nv-rs Display", "iFrameLimit", "144");
+        assert_eq!(set, "[General]\rx=1\r[nv-rs Display]\riFrameLimit=144\r");
+        let added = set_key(cr, "nv-rs Display", "bBorderless", "0");
+        assert_eq!(
+            added,
+            "[General]\rx=1\r[nv-rs Display]\rbBorderless=0\r\niFrameLimit=60\r"
+        );
+        assert_eq!(ini_value(&added, "nv-rs Display", "bBorderless"), Some("0"));
+        assert_eq!(ini_value(&added, "General", "x"), Some("1"));
     }
 
     #[test]
@@ -1046,7 +1103,7 @@ mod tests {
     }
 
     /// The played profile's file has none of our sections (UTF-16, or none could be made): in
-    /// play the eight are passed from settings.ini over the play defaults, each one set, no fix
+    /// play the nine are passed from settings.ini over the play defaults, each one set, no fix
     /// line; in a test the same choices, what was set before kept.
     #[test]
     fn a_file_without_the_sections_gets_the_choices_as_variables() {
@@ -1070,6 +1127,7 @@ mod tests {
                     ("NV_FRAME_LIMIT", "60"),
                     ("NV_MENU_FRAME_LIMIT", "120"),
                     ("NV_SHOW_FPS", "0"),
+                    ("NV_AO", "0"),
                     ("NV_THREADS", "stepped"),
                     ("NV_RENDER_THREAD", "1"),
                 ]),
@@ -1087,6 +1145,7 @@ mod tests {
                 ("NV_FRAME_LIMIT", "0"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
                 ("NV_SHOW_FPS", "0"),
+                ("NV_AO", "0"),
                 ("NV_THREADS", "real"),
                 ("NV_RENDER_THREAD", "1"),
             ])
@@ -1132,22 +1191,23 @@ mod tests {
         assert_eq!(moved("Renderer=opengl\n").as_deref(), Some("vulkan"));
     }
 
-    /// In play Play.exe takes the eight variables out; in a test, which never reads the file, it
+    /// In play Play.exe takes the nine variables out; in a test, which never reads the file, it
     /// passes the file's choices on and leaves what was set before as it is.
     #[test]
     fn the_games_variables_follow_the_file_only_in_a_test() {
         let ini = "[nv-rs General]\nsPreset=vanilla\n[nv-rs Display]\nbBorderless=0\niFrameLimit=90\niMenuFrameLimit=bad\n[nv-rs Threads]\nbSteppedThreads=1\n[nv-rs Fixes]\n;bUncap=1\nbGrabPush=0\nbTopicIndex=2\n";
-        let eight = [
+        let nine = [
             "NV_PRESET",
             "NV_BORDERLESS",
             "NV_D3D9",
             "NV_FRAME_LIMIT",
             "NV_MENU_FRAME_LIMIT",
             "NV_SHOW_FPS",
+            "NV_AO",
             "NV_THREADS",
             "NV_RENDER_THREAD",
         ];
-        // Play: nothing passed, all eight out, whatever else is set.
+        // Play: nothing passed, all nine out, whatever else is set.
         let sets: [&[&str]; 3] = [
             &[],
             &["NV_PRESET", "NV_THREADS"],
@@ -1158,7 +1218,7 @@ mod tests {
             assert_eq!(
                 play,
                 Switches {
-                    removed: eight.to_vec(),
+                    removed: nine.to_vec(),
                     ..Switches::default()
                 },
                 "{set:?}"
@@ -1181,6 +1241,7 @@ mod tests {
                 ("NV_FRAME_LIMIT", "90"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
                 ("NV_SHOW_FPS", "0"),
+                ("NV_AO", "0"),
                 ("NV_THREADS", "stepped"),
                 ("NV_RENDER_THREAD", "1"),
                 ("NV_GRAB_PUSH", "0"),
@@ -1197,6 +1258,7 @@ mod tests {
                 ("NV_FRAME_LIMIT", "0"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
                 ("NV_SHOW_FPS", "0"),
+                ("NV_AO", "0"),
                 ("NV_THREADS", "real"),
                 ("NV_RENDER_THREAD", "1"),
             ])
@@ -1216,6 +1278,7 @@ mod tests {
                 ("NV_FRAME_LIMIT", "90"),
                 ("NV_MENU_FRAME_LIMIT", "120"),
                 ("NV_SHOW_FPS", "0"),
+                ("NV_AO", "0"),
                 ("NV_RENDER_THREAD", "1"),
             ])
         );

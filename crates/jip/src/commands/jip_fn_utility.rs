@@ -615,6 +615,9 @@ fn file_lines(e: &Engine, path: &[u8], command: &str) -> Option<Vec<Vec<u8>>> {
 /// when the seam refuses the name or the write, or when appending to a file that is there but
 /// cannot be read (JIP's `fopen(.., "ab")` fails there: nothing is written, the file is kept).
 fn open_write(e: &mut Engine, path: &[u8], append: bool, text: &[u8]) -> bool {
+    // One kernel lock hold over the look, the read and the write, as the seam's profile writes
+    // hold it, so another thread's write of the file cannot fall between them and be lost.
+    let _kernel = engine_core::real_threads::kernel_guard(e);
     let mut bytes = Vec::new();
     if engine_core::mod_files::exists(e, path) {
         if append {

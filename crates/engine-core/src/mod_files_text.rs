@@ -27,7 +27,12 @@
 //! - Deliberate differences: a character code page 1252 lacks reads as `?` (Windows' best-fit
 //!   table is not copied: a letter like U+0100 reads `A` there); a file with a 0 byte that is not
 //!   such a UTF-16 LE file (UTF-16 BE, UTF-16 without a mark, an odd length) is read as ANSI bytes
-//!   and never written ([`Decoded::writable`]: Windows' own guess decides there); a UTF-16 LE
+//!   and never written ([`Decoded::writable`]: Windows' own guess decides there). Read so, such a
+//!   file has no heading the rules find (each character's 0 byte is part of the line), so every
+//!   value reads as missing, where Windows finds some: in a UTF-16 BE file every section after
+//!   the first (ini6 `U16BE read second section`: `[B] z` reads 3), in a UTF-16 LE file without a
+//!   mark all of them (ini6 `U16LE no BOM read`: `[A] y` reads 2). Decoding an unmarked file
+//!   would need a measurement of when Windows takes a file for Unicode; not done. A UTF-16 LE
 //!   file that is only its mark is written only by `WritePrivateProfileStringA` (measured, ini7
 //!   `bom only`: a CR LF goes first), the other writes refuse it.
 
