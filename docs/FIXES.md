@@ -1111,7 +1111,7 @@ Seams for other groups' rows: G06's `0x77765A` (the HUD's action
 text in `SetInfoForRef`; group GH2's row and handler, listed under GH2 below); O14's `0x770B0E`
 (`DoIdle`'s sneak test, asked with `bSneakBoundingBoxFix` on; group GX's row and handler, with its
 second site `0xC72EA3`: listed under GX below); G108's `0xAE5648` (the audio manager's message kind 54, which the
-game ignores; group GW's row and handler, not built yet). Until its handler is in, that place runs the game's code.
+game ignores; group GW's row and handler, listed under GW below).
 
 #### GB: UI: item lists, repair, pad dead zones
 
@@ -1120,6 +1120,12 @@ game ignores; group GW's row and handler, not built yet). Until its handler is i
 | (`DeferredInit`, when its XInput hook is in: `SafeWrite32` of `&s_deadZoneLSg` / `&s_deadZoneRSg` over the operand of eleven `FCOMP double ptr [0x010718F0]`) | left stick, nine: `00741500` (`0x7416D6`, `0x741705`), `007908f0` (`0x790966`), `00799790` (`0x799861`, the map's zoom), `007bd2a0` (`0x7BD47D`, `0x7BD4A0`, `0x7BD4DD`), `0094a8c0` (`0x94AB59`, `0x94AB88`, the free camera's move axes); right stick, two: `0094a8c0` (`0x94A93C`, `0x94A95F`, the free camera's look axes) | JIP's own: in whenever JIP is installed, whatever this row says (as JIP). The caravan, lockpick, map-zoom and roulette menus and the free camera's movement test the left stick against JIP's left dead zone, a double that starts at the game's own 7849 (no change until `SetDeadZoneLS` is built). The free camera's look axes use JIP's right dead zone, 8689 where the game uses 7849, so a slightly larger right-stick movement is needed before the free camera turns, once group GP's four free-camera seams are in (until then the free camera keeps the game's 7849) | 3.9 GB-1 |
 | (none; `RefreshMapMenuHook` in `InitGamePatches`) | `0079dbb0` (`0x79DF73`: `MapMenu::AddMapIcons`, before the map is centred on the player icon) | JIP's own: in whenever JIP is installed. Nothing changes by itself: the map is centred as in the original unless JIP's item-list refresh asked to leave it where it is, once (that refresh, `RefreshItemsList` and the `RemoveMe` refresh, is not built yet, so nothing asks today) (G87) | 3.9 GB-2 |
 | (none; `ProcessGradualSetFloatHook` and `SafeWrite8(0xA081A8, 6)` in `InitGamePatches`) | `00a080d0` (`0xA08718`, `0xA0871C`: `Tile::UpdateFadeControls`' fade types 5 and 6) | JIP's own: in whenever JIP is installed. Interface fades of JIP's two extra types (made only by `SetUIFloatGradual` with mode 3 or 4) run: the value moves from the start to the end over the time and then goes back to the start value, again and again for mode 3 (suited to turning images), once for mode 4. The original passes these types over, so before this such a fade did nothing. The game's own fades are unchanged (G88) | 3.9 GB-2 |
+| (none; 8 bytes at `0x728E10` and `SafeWrite32(0x729616, 0x1030018)` in `InitGamePatches`) | the recipe menu's item information `00728da0` (`0x728E10`: the value, `0x729616`: the weight's format) | With the fixes row on, the crafting (recipe) menu shows an item's own value, where the original first scales it by condition (`00647c00` with 1.0), and a weight below 1 with two decimals (0.25, not 0.3); a value below 1 keeps one decimal, as in the original (G13) | 3.9 GB-3 |
+| (none; `RecipeMenuAmmoEffectsHook`) | the same function (`0x7294DC`: its effects text) | With the fixes row on, ammunition in the crafting menu lists its effects (the ammo's own text, `00503a70`); the original shows none for ammunition, which has no effect list of the kind it reads (G68) | 3.9 GB-3 |
+| (none; `IsDisposableWeaponHook`) | the recipe menu's crafting `007284f0` (`0x72880D`: is the crafted weapon disposable) | With the fixes row on, a crafted weapon counts as disposable (handed over plainly instead of through the item-condition step) when its type number is above 9, which JIP reads itself; for every weapon type of the game (0 to 13) this answers as the original's test, so nothing changes in the game (G100) | 3.9 GB-3 |
+| (none; `InitBarterMenuHook`) | `BarterMenu::Create` `0072d250` (`0x72D661`: before the first fill of the lists) | With the fixes row on, the barter menu titles the vendor's side tab from its filter mode as it opens (the vendor's name in the "all" mode), as the game otherwise does only when the filter is changed (G56) | 3.9 GB-3 |
+| (none; `BarterSellFixHook`, `FixVendorCaps`) | `BarterMenu::CompleteTransaction` `0072fd10` (`0x73005C`: before the vendor's caps are taken) | With the fixes row on, when the vendor pays the player and holds more than 32,767 caps (the most one stack's count can hold), the vendor's caps in the barter container are first split into stacks of at most 32,767, so the payment comes from the whole amount. When more than one cap is left over, new stacks hold it; a single cap left over gets no stack (as JIP). Difference from JIP: with no barter container data the port does nothing, where JIP would read through it (G64) | 3.9 GB-3 |
+| (none; `QttMenuEnableWheelHook`) | `QuantityMenu::DoIdle` `007ac170` (`0x7AC179`) | With the fixes row on, the mouse wheel moves the count in the "how many" menu: up as the plus button, down as the minus button; the original ignores the wheel there (G69) | 3.9 GB-3 |
 
 #### GC: Hit damage, detection, combat formulas
 
@@ -1399,6 +1405,31 @@ the days be counted again from the hour; moving it back counts as the next day. 
 on by a fixed table (no leap years, as in the original). Differences from JIP: with no player loaded the
 hardcore needs byte JIP sets is not written (JIP would write to a bad address), and a month number outside
 0 to 11 is taken to have 31 days (JIP reads past its table).
+
+Sound and music fixes (with the row): a sound form's frequency setting (its pitch up or down by a
+percentage) is applied to the sound as it plays, and a script or the game that changes a sound's pitch
+keeps that setting on top (`0x82D416`, the request to the audio thread; `0xAE5648`, the audio thread's
+message 54, which the game ignores; `0xAEACAA`, a new sound's factor 1.0; `00af01e0` and `00af0290`,
+the sound's frequency set and read, replaced: the result is rounded to the nearest whole frequency
+where the game cut it, and setting it answers 0 as JIP's does). A region's music media sets from a
+plugin are found through that plugin's masters (`0x4F49AB`, `0x4F49D2`; credited by JIP to lStewieAl
+and TrueCourierSix); a location's music plays its media sets in a shuffled order with no repeat
+until each has played (`00595560` replaced; the game drew at random and moved the pick to the end);
+battle music never picks the set it played last (`004f4f90`, the region's `GetMediaSetBattle`,
+replaced). A random sound from a folder picks among both its `.wav` and its `.ogg` files (`005e3630`,
+the folder sound picker, replaced; the game took the `.ogg` files only when there were any, and kept a
+pick from repeating). Differences from JIP: a sound map with no buckets or a request with no sound
+form does nothing (JIP would divide by 0 or read a bad address); a location with no music list
+picks nothing, as the game does (JIP would read address 0); JIP puts the folder picker in at its
+deferred start-up, the port from the start.
+
+`FalloutCustom.ini` (with the row; `0x86AC60`, before the game's launcher test at start-up): each
+`setting=value` line of each `[section]` sets the game's INI setting `setting:section` (a `b` setting
+takes 1 when the value starts with `1`, `i` and `u` whole numbers, `f` a decimal, `s` the text), so
+players can override INI settings without editing the game's own files. The port reads the file as a
+mod's file: from its own folder beside the saves (`nv-rs mod files`), else the game's folder; JIP reads
+it from the game's settings folder in Documents, which the port never reads for mods. A setting name
+longer than JIP's 255-character buffer is taken whole.
 
 Seams for group GF's row G45 (saving: temporary forms are not written): `0x8497CD` (whether `UnloadForm` goes
 on), `0x846FFB` and `0x845558` (the save's form id and changes maps' bucket counts). Until GF's handler is in,

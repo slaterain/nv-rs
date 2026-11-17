@@ -31,7 +31,10 @@ fn the_seams_are_jips_operands() {
     assert_eq!(RIGHT_ADDRS, RIGHT);
     assert_eq!(ALL_ADDRS[..9], LEFT);
     assert_eq!(ALL_ADDRS[9..], RIGHT);
-    assert!(AREA.fix_sites.is_empty(), "all JIP's own (INSTALLED)");
+    assert!(
+        AREA.fix_sites.iter().all(|a| !JIP_SITES.contains(a)),
+        "D04 all JIP's own (INSTALLED)"
+    );
     assert_eq!(EXE_DEAD_ZONE, 0x0107_18f0);
 }
 
@@ -339,4 +342,469 @@ fn every_gb_handler_sits_at_its_address() {
     e.mem.set_u32(f.control + 8, 0x1000);
     assert_eq!(e.site(FADE_5, &[f.control, 5]), Some(0));
     assert_eq!(e.mem.u32(f.control + 8), 0x3000);
+}
+
+// ---- GB-3: G13, G68, G100, G56, G64, G69 (fixes of `InitGamePatches`) ----
+
+/// Where the GB-3 tests' guest data lives.
+const AREA_AT: u32 = 0x0640_0000;
+/// The stand-ins' heap blocks.
+const BLOCKS: u32 = 0x0650_0000;
+/// The game's functions the GB-3 handlers call.
+const GET_BY_TYPE: u32 = 0x0041_0220;
+const ADD_EXTRA: u32 = 0x0040_ff60;
+const HEAP_ALLOCATE: u32 = 0x00aa_3e40;
+
+thread_local! {
+    static GB3_CALLS: std::cell::RefCell<Vec<(u32, Vec<u32>)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    static GB3_NEXT: std::cell::Cell<u32> = const { std::cell::Cell::new(BLOCKS) };
+}
+
+fn gb3_log(addr: u32, a: &[u32]) {
+    GB3_CALLS.with(|c| c.borrow_mut().push((addr, a.to_vec())));
+}
+
+fn gb3_calls() -> Vec<(u32, Vec<u32>)> {
+    GB3_CALLS.with(|c| c.borrow_mut().drain(..).collect())
+}
+
+/// Installed with the row off, then the group's fix handlers put in (`install_fixes`, as the row
+/// does), guest pages mapped, the call log cleared.
+fn fixes_on() -> Engine {
+    gb3_calls();
+    GB3_NEXT.with(|n| n.set(BLOCKS));
+    let mut e = engine();
+    e.map(AREA_AT, 0x3_0000);
+    e.map(BLOCKS, 0x1_0000);
+    crate::install_as(&mut e, true);
+    install_fixes(&mut e);
+    e
+}
+
+/// JIP's `InitGamePatches` addresses (`WriteRelCall(0x72880D, ..)`, `SAFE_WRITE_BUF(0x728E10, ..)`,
+/// `WriteRelJump(0x7294DC, ..)`, `SafeWrite32(0x729616, 0x1030018)`, `WriteRelCall(0x72D661, ..)`,
+/// `WriteRelCall(0x73005C, ..)`, `WriteRelJump(0x7AC179, ..)`): fixes, in with the row.
+#[test]
+fn gb3_rows_are_jips_addresses() {
+    assert_eq!(
+        AREA.fix_sites,
+        [
+            0x0072_880d,
+            0x0072_8e10,
+            0x0072_94dc,
+            0x0072_9616,
+            0x0072_d661,
+            0x0073_005c,
+            0x007a_c179
+        ]
+    );
+    assert!(AREA.fix_wraps.is_empty() && AREA.jip_wraps.is_empty());
+    assert_eq!(TWO_DECIMALS, 0x0103_0018);
+}
+
+/// Installed with the row off: no GB-3 seam answers (the exe's code); not installed with the row
+/// on: none either.
+#[test]
+fn gb3_off_nothing_answers() {
+    let mut e = installed();
+    let menu = 0x0640_0000;
+    for &addr in AREA.fix_sites {
+        assert_eq!(e.site(addr, &[menu, menu]), None, "{addr:08x}");
+    }
+    let mut e = engine();
+    crate::install_as(&mut e, false);
+    set_row(&mut e, true);
+    for &addr in AREA.fix_sites {
+        assert_eq!(e.site(addr, &[menu, menu]), None, "{addr:08x}");
+    }
+}
+
+/// G100 (`IsDisposableWeaponHook`: `cmp byte [ecx+0xF4], 9; setg al`): the type byte, signed,
+/// above 9. The game's types 10 to 13 answer 1 (as the exe's `004c0bf0`: 3 to 13 and not 3 to 9),
+/// 0 to 9 answer 0; above 13 only JIP's test speaks: 0x7F answers 1, 0x80 and above (negative) 0.
+#[test]
+fn g100_type_above_nine() {
+    let mut e = fixes_on();
+    let weapon = AREA_AT;
+    for (kind, answer) in [
+        (0u8, 0),
+        (3, 0),
+        (9, 0),
+        (10, 1),
+        (11, 1),
+        (13, 1),
+        (0x7f, 1),
+        (0x80, 0),
+        (0xff, 0),
+    ] {
+        e.mem.set_u8(weapon + 0xf4, kind);
+        assert_eq!(
+            e.site(DISPOSABLE_WEAPON.addr(), &[weapon]),
+            Some(answer),
+            "{kind}"
+        );
+    }
+}
+
+/// G13: the value's call is skipped (1), the weight's format is `"%.2f"`.
+#[test]
+fn g13_answers() {
+    let mut e = fixes_on();
+    assert_eq!(e.site(PLAIN_VALUE.addr(), &[]), Some(1));
+    assert_eq!(e.site(WEIGHT_FORMAT.addr(), &[]), Some(0x0103_0018));
+}
+
+/// G68 (`cmp byte [ecx+4], kFormType_TESAmmo`): ammunition (0x29) answers 1, any other type
+/// nothing (the exe's test).
+#[test]
+fn g68_ammo_only() {
+    let mut e = fixes_on();
+    let form = AREA_AT;
+    for (kind, answer) in [(0x29u8, Some(1)), (0x28, None), (0x2f, None), (0, None)] {
+        e.mem.set_u8(form + 4, kind);
+        assert_eq!(e.site(AMMO_EFFECTS.addr(), &[form]), answer, "{kind:x}");
+    }
+}
+
+/// G56 (`InitBarterMenuHook`): `SetFilterModeTitle` on the menu with its word at +0x48, once;
+/// answers nothing (the exe's fill follows).
+#[test]
+fn g56_titles_the_tab_at_0x48() {
+    let mut e = fixes_on();
+    e.register(0x0073_01f0, |_, a| {
+        gb3_log(0x0073_01f0, a);
+        Ret::default()
+    });
+    let menu = AREA_AT;
+    e.mem.set_u32(menu + 0x48, 0x0777_0048);
+    e.mem.set_u32(menu + 0x34, 0x0777_0034);
+    assert_eq!(e.site(BARTER_TAB_TITLE.addr(), &[menu]), None);
+    assert_eq!(gb3_calls(), [(0x0073_01f0, vec![menu, 0x0777_0048])]);
+}
+
+/// G69 (`QttMenuEnableWheelHook`): the wheel word (+0x44 of `g_interfaceManager`), signed: above 0
+/// clicks button 2, below 0 button 1 (the menu's slot +0xC with the id and 0); 0 clicks nothing.
+/// Answers nothing.
+#[test]
+fn g69_wheel_clicks_plus_or_minus() {
+    let mut e = fixes_on();
+    if !e.mem.is_mapped(0x011d_8a80) {
+        e.map(0x011d_8000, 0x1000);
+    }
+    let (manager, menu, vtable) = (AREA_AT, AREA_AT + 0x100, AREA_AT + 0x200);
+    e.mem.set_u32(0x011d_8a80, manager);
+    e.mem.set_u32(menu, vtable);
+    e.mem.set_u32(vtable + 0xc, 0x0000_9c00);
+    e.register(0x0000_9c00, |_, a| {
+        gb3_log(0x0000_9c00, a);
+        Ret::default()
+    });
+    for (wheel, clicked) in [
+        (0i32, vec![]),
+        (1, vec![(0x0000_9c00, vec![menu, 2, 0])]),
+        (120, vec![(0x0000_9c00, vec![menu, 2, 0])]),
+        (-1, vec![(0x0000_9c00, vec![menu, 1, 0])]),
+        (i32::MIN, vec![(0x0000_9c00, vec![menu, 1, 0])]),
+    ] {
+        e.mem.set_u32(manager + 0x44, wheel as u32);
+        assert_eq!(e.site(QUANTITY_WHEEL.addr(), &[menu]), None);
+        assert_eq!(gb3_calls(), clicked, "{wheel}");
+    }
+}
+
+// ---- G64: FixVendorCaps ----
+
+/// The caps' form, another item, the buyer, the data handler, the barter container's data and the
+/// buyer's data.
+const CAPS: u32 = 0x0641_0000;
+const OTHER: u32 = 0x0641_0200;
+const OWNER: u32 = 0x0641_0100;
+const SOMEONE: u32 = 0x0641_0300;
+const HANDLER: u32 = 0x0642_0000;
+const BARTER: u32 = 0x0642_1000;
+const BUYER: u32 = 0x0642_2000;
+/// The caps entries' item words (the barter container's, the buyer's).
+const BARTER_CAPS_ITEM: u32 = AREA_AT + 0x4018;
+const BUYER_CAPS_ITEM: u32 = AREA_AT + 0x4118;
+
+/// The game's form map holding only the caps (id 0xF).
+fn caps_form(e: &mut Engine) {
+    if !e.mem.is_mapped(0x011c_54c0) {
+        e.map(0x011c_5000, 0x1000);
+    }
+    let (map, buckets, item) = (AREA_AT + 0x3000, AREA_AT + 0x3100, AREA_AT + 0x3200);
+    e.mem.set_u32(0x011c_54c0, map);
+    e.mem.set_u32(map + 4, 16);
+    e.mem.set_u32(map + 8, buckets);
+    e.mem.set_u32(item + 4, 0xf);
+    e.mem.set_u32(item + 8, CAPS);
+    e.mem.set_u32(buckets + 4 * 0xf, item);
+}
+
+/// An extra data list's extras (the chain head at +4, next at +8 of each extra).
+fn chain(e: &Engine, list: u32) -> Vec<u32> {
+    let mut out = vec![];
+    let mut at = e.mem.u32(list + 4);
+    while at != 0 {
+        out.push(at);
+        at = e.mem.u32(at + 8);
+    }
+    out
+}
+
+/// The game's list functions stood in (`GetByType` by the type byte, `AddExtra` appends) and
+/// the heap (blocks 0x20 apart, filled with 0xAA so JIP's zeroing shows).
+fn list_world(e: &mut Engine) {
+    e.register(GET_BY_TYPE, |e, a| {
+        let found = chain(e, a[0])
+            .into_iter()
+            .find(|&x| u32::from(e.mem.u8(x + 4)) == a[1])
+            .unwrap_or(0);
+        found.into_ret()
+    });
+    e.register(ADD_EXTRA, |e, a| {
+        gb3_log(ADD_EXTRA, a);
+        match chain(e, a[0]).last() {
+            Some(&last) => e.mem.set_u32(last + 8, a[1]),
+            None => e.mem.set_u32(a[0] + 4, a[1]),
+        }
+        a[1].into_ret()
+    });
+    e.register(HEAP_ALLOCATE, |e, a| {
+        gb3_log(HEAP_ALLOCATE, a);
+        let at = GB3_NEXT.with(|n| {
+            let at = n.get();
+            n.set(at + 0x20);
+            at
+        });
+        for i in 0..8 {
+            e.mem.set_u32(at + 4 * i, 0xaaaa_aaaa);
+        }
+        at.into_ret()
+    });
+}
+
+/// A list node (item, next) at `at`.
+fn node(e: &mut Engine, at: u32, item: u32, next: u32) -> u32 {
+    e.mem.set_u32(at, item);
+    e.mem.set_u32(at + 4, next);
+    at
+}
+
+/// An entry (`ContChangesEntry`: its stack list, count, item) at `at`.
+fn entry(e: &mut Engine, at: u32, stacks: u32, count: i32, item: u32) -> u32 {
+    e.mem.set_u32(at, stacks);
+    e.mem.set_u32(at + 4, count as u32);
+    e.mem.set_u32(at + 8, item);
+    at
+}
+
+/// An extra data list at `at` holding extras of (type, value at +0xC).
+fn extra_list(e: &mut Engine, at: u32, extras: &[(u8, u32)]) -> u32 {
+    e.mem.set_u32(at, 0x0101_43e8);
+    e.mem.set_u32(at + 4, 0);
+    let mut previous = 0;
+    for (i, &(kind, value)) in extras.iter().enumerate() {
+        let x = at + 0x40 + 0x10 * i as u32;
+        e.mem.set_u32(x + 4, u32::from(kind));
+        e.mem.set_u32(x + 8, 0);
+        e.mem.set_u32(x + 0xc, value);
+        if previous == 0 {
+            e.mem.set_u32(at + 4, x);
+        } else {
+            e.mem.set_u32(previous + 8, x);
+        }
+        previous = x;
+    }
+    at
+}
+
+/// The barter container (the handler's +0x628) holding another item, then the caps entry with
+/// `stacks` (a list's head node; 0: none); the buyer (`OWNER`) holding an empty node, another
+/// item, then `held` caps.
+fn vendor_world(e: &mut Engine, stacks: u32, held: i32) {
+    list_world(e);
+    caps_form(e);
+    e.mem.set_u32(HANDLER + 0x628, BARTER);
+    let other = entry(e, AREA_AT + 0x4000, 0, 3, OTHER);
+    let caps = entry(e, AREA_AT + 0x4010, stacks, 5, CAPS);
+    let last = node(e, AREA_AT + 0x4028, caps, 0);
+    let first = node(e, AREA_AT + 0x4020, other, last);
+    e.mem.set_u32(BARTER, first);
+    let other = entry(e, AREA_AT + 0x4100, 0, 9, OTHER);
+    let held = entry(e, AREA_AT + 0x4110, 0, held, CAPS);
+    let last = node(e, AREA_AT + 0x4138, held, 0);
+    let middle = node(e, AREA_AT + 0x4130, other, last);
+    let first = node(e, AREA_AT + 0x4120, 0, middle);
+    e.mem.set_u32(BUYER, first);
+    e.mem.set_u32(BUYER + 4, OWNER);
+}
+
+/// The items of a list from its head node, in order.
+fn stacks(e: &Engine, mut at: u32) -> Vec<u32> {
+    let mut out = vec![];
+    while at != 0 {
+        out.push(e.mem.u32(at));
+        at = e.mem.u32(at + 4);
+    }
+    out
+}
+
+/// The `n`th node of a list from its head node.
+fn nth_node(e: &Engine, mut at: u32, n: usize) -> u32 {
+    for _ in 0..n {
+        at = e.mem.u32(at + 4);
+    }
+    at
+}
+
+/// A new stack: JIP's list (vtable `0x10143E8`, the rest zeroed) with an `ExtraOriginalReference`
+/// of the buyer, then an `ExtraCount` of `count` (each `CreateExtraType`: vtable, type, 0, value;
+/// the stand-in `AddExtra` links the first to the second at +8).
+fn assert_new_stack(e: &Engine, list: u32, count: u32) {
+    assert_eq!(e.mem.u32(list), 0x0101_43e8);
+    for i in 2..8 {
+        assert_eq!(e.mem.u32(list + 4 * i), 0, "zeroed word {i}");
+    }
+    let extras = chain(e, list);
+    assert_eq!(extras.len(), 2);
+    assert_eq!(
+        [0, 4, 8, 0xc].map(|o| e.mem.u32(extras[0] + o)),
+        [0x0101_5bc4, 0x20, extras[1], OWNER]
+    );
+    assert_eq!(
+        [0, 4, 8, 0xc].map(|o| e.mem.u32(extras[1] + o)),
+        [0x0101_58d8, 0x24, 0, count]
+    );
+}
+
+/// The buyer holds 32,767 caps or fewer: nothing changes (no allocation, no extra touched).
+#[test]
+fn g64_at_most_32767_changes_nothing() {
+    for held in [0, 1, 0x7fff, -5] {
+        let mut e = fixes_on();
+        let mine = extra_list(&mut e, AREA_AT + 0x5000, &[(0x20, OWNER), (0x24, 0x1234)]);
+        let head = node(&mut e, AREA_AT + 0x5800, mine, 0);
+        vendor_world(&mut e, head, held);
+        assert_eq!(e.site(VENDOR_CAPS.addr(), &[HANDLER, BUYER]), None);
+        assert!(gb3_calls().is_empty(), "{held}");
+        assert_eq!(e.mem.u32(chain(&e, mine)[1] + 0xc), 0x1234);
+        assert_eq!(stacks(&e, head), [mine]);
+    }
+}
+
+/// The barter container's caps entry has no stack list or is missing, the buyer holds no caps, or
+/// there is no barter container data (nv-rs's own: JIP would read through it): nothing changes.
+#[test]
+fn g64_without_the_entries_changes_nothing() {
+    for case in 0..4 {
+        let mut e = fixes_on();
+        let mine = extra_list(&mut e, AREA_AT + 0x5000, &[(0x20, OWNER), (0x24, 1)]);
+        let head = node(&mut e, AREA_AT + 0x5800, mine, 0);
+        vendor_world(&mut e, if case == 0 { 0 } else { head }, 100_000);
+        match case {
+            1 => e.mem.set_u32(BARTER_CAPS_ITEM, OTHER + 1),
+            2 => e.mem.set_u32(BUYER_CAPS_ITEM, OTHER + 1),
+            3 => e.mem.set_u32(HANDLER + 0x628, 0),
+            _ => {}
+        }
+        assert_eq!(e.site(VENDOR_CAPS.addr(), &[HANDLER, BUYER]), None);
+        assert!(gb3_calls().is_empty(), "case {case}");
+        assert_eq!(e.mem.u32(chain(&e, mine)[1] + 0xc), 1);
+        assert_eq!(stacks(&e, head), [mine]);
+    }
+}
+
+/// 100,000 caps held; the barter container's stacks: someone else's (its count kept), an empty
+/// node, the buyer's (count first in its chain). The buyer's count becomes 32,767; the 67,233 left
+/// go into new stacks of 32,767, 32,767 and 1,699, each put at the head (JIP's `Node::Insert`: the
+/// head node takes the new list, a new node after it the old item), so the newest is first.
+#[test]
+fn g64_splits_the_buyers_caps() {
+    let mut e = fixes_on();
+    let theirs = extra_list(&mut e, AREA_AT + 0x5000, &[(0x20, SOMEONE), (0x24, 7)]);
+    let mine = extra_list(
+        &mut e,
+        AREA_AT + 0x5200,
+        &[(0x24, 0x7fff), (0x20, OWNER), (0x10, 0)],
+    );
+    let third = node(&mut e, AREA_AT + 0x5810, mine, 0);
+    let second = node(&mut e, AREA_AT + 0x5808, 0, third);
+    let head = node(&mut e, AREA_AT + 0x5800, theirs, second);
+    vendor_world(&mut e, head, 100_000);
+    assert_eq!(e.site(VENDOR_CAPS.addr(), &[HANDLER, BUYER]), None);
+    assert_eq!(e.mem.u32(chain(&e, mine)[0] + 0xc), 0x7fff);
+    assert_eq!(e.mem.u32(chain(&e, theirs)[1] + 0xc), 7);
+    let lists = stacks(&e, head);
+    assert_eq!(lists.len(), 6);
+    assert_eq!(lists[3..], [theirs, 0, mine]);
+    assert_new_stack(&e, lists[0], 1_699);
+    assert_new_stack(&e, lists[1], 0x7fff);
+    assert_new_stack(&e, lists[2], 0x7fff);
+    assert_eq!(nth_node(&e, head, 4), second, "the old nodes kept");
+    assert_eq!(nth_node(&e, head, 5), third);
+    let allocs: Vec<Vec<u32>> = gb3_calls()
+        .into_iter()
+        .filter(|(a, _)| *a == HEAP_ALLOCATE)
+        .map(|(_, w)| w[1..].to_vec())
+        .collect();
+    // Per new stack: the list (0x20), the two extras (0x10 each), the node (8).
+    assert_eq!(allocs.len(), 12);
+    assert_eq!(allocs[..4], [vec![0x20], vec![0x10], vec![0x10], vec![8]]);
+}
+
+/// Edges: 32,768 held (the buyer's stack takes 32,767, 1 is left: no new stack); 32,769 (2 left:
+/// a new stack of 2); a buyer's stack with no count extra (no count set, nothing added to it: the
+/// whole 40,000 goes into new stacks, 32,767 then 7,233); an empty head node (`Prepend` with no
+/// item: the head takes the first new list itself).
+#[test]
+fn g64_edges() {
+    for (held, new) in [(0x8000i32, vec![]), (0x8001, vec![2u32])] {
+        let mut e = fixes_on();
+        let mine = extra_list(&mut e, AREA_AT + 0x5200, &[(0x20, OWNER), (0x24, 9)]);
+        let head = node(&mut e, AREA_AT + 0x5800, mine, 0);
+        vendor_world(&mut e, head, held);
+        e.site(VENDOR_CAPS.addr(), &[HANDLER, BUYER]);
+        assert_eq!(e.mem.u32(chain(&e, mine)[1] + 0xc), 0x7fff, "{held}");
+        let lists = stacks(&e, head);
+        assert_eq!(lists.len(), 1 + new.len());
+        for (i, &count) in new.iter().enumerate() {
+            assert_new_stack(&e, lists[i], count);
+        }
+    }
+    let mut e = fixes_on();
+    let mine = extra_list(&mut e, AREA_AT + 0x5200, &[(0x20, OWNER)]);
+    let head = node(&mut e, AREA_AT + 0x5800, mine, 0);
+    vendor_world(&mut e, head, 40_000);
+    e.site(VENDOR_CAPS.addr(), &[HANDLER, BUYER]);
+    assert_eq!(chain(&e, mine).len(), 1, "no count extra added to it");
+    let lists = stacks(&e, head);
+    assert_eq!(lists.len(), 3);
+    assert_new_stack(&e, lists[0], 7_233);
+    assert_new_stack(&e, lists[1], 0x7fff);
+    let mut e = fixes_on();
+    let head = node(&mut e, AREA_AT + 0x5800, 0, 0);
+    vendor_world(&mut e, head, 0x8001);
+    e.site(VENDOR_CAPS.addr(), &[HANDLER, BUYER]);
+    let lists = stacks(&e, head);
+    assert_eq!(lists.len(), 2);
+    assert_new_stack(&e, lists[0], 2);
+    assert_new_stack(&e, lists[1], 0x7fff);
+}
+
+/// Only the first stack marked as the buyer's is counted: a second one of the buyer's keeps its
+/// count (JIP stops the walk at the first match).
+#[test]
+fn g64_only_the_first_of_the_buyers_stacks() {
+    let mut e = fixes_on();
+    let first = extra_list(&mut e, AREA_AT + 0x5000, &[(0x20, OWNER), (0x24, 5)]);
+    let second = extra_list(&mut e, AREA_AT + 0x5200, &[(0x20, OWNER), (0x24, 6)]);
+    let tail = node(&mut e, AREA_AT + 0x5808, second, 0);
+    let head = node(&mut e, AREA_AT + 0x5800, first, tail);
+    vendor_world(&mut e, head, 0x8000);
+    e.site(VENDOR_CAPS.addr(), &[HANDLER, BUYER]);
+    assert_eq!(e.mem.u32(chain(&e, first)[1] + 0xc), 0x7fff);
+    assert_eq!(e.mem.u32(chain(&e, second)[1] + 0xc), 6);
+    assert_eq!(stacks(&e, head), [first, second]);
 }

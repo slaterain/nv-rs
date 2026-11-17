@@ -38,7 +38,7 @@
 005854f0	1	nv-rs cell offsets for every plugin
 0058e9d0	0	JIP
 00593870	2	script or frame function
-00595560	2	JIP
+00595560	0	JIP
 005a5e70	1	JG
 005ac1e0	1	script or frame function
 005ac750	0	script or frame function
@@ -235,7 +235,11 @@
 #> 3.9 GS
 
 #> 3.9 GW
+004f4f90	0	JIP
+005e3630	0	JIP
 00867a40	0	JIP
+00af01e0	0	JIP
+00af0290	0	JIP
 
 #> 3.9 GL
 
