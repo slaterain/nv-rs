@@ -189,6 +189,23 @@ pub fn apply_to_prefs(prefs: &str, lines: &[(String, String)]) -> String {
     })
 }
 
+/// The name a moved `settings.ini` gets: `settings.ini.migrated`, or with the first free number
+/// after it (`settings.ini.migrated.2`, ...) when an earlier one is there. An earlier one is
+/// never replaced.
+pub fn migrated_name(settings: &std::path::Path) -> std::path::PathBuf {
+    let mut base = settings.as_os_str().to_owned();
+    base.push(".migrated");
+    let mut name = std::path::PathBuf::from(&base);
+    let mut number = 1u32;
+    while name.symlink_metadata().is_ok() {
+        number += 1;
+        let mut numbered = base.clone();
+        numbered.push(format!(".{number}"));
+        name = std::path::PathBuf::from(numbered);
+    }
+    name
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
