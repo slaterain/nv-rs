@@ -1294,9 +1294,22 @@ fn start_sequence(e: &mut Engine, controller: u32, sequence: u32) {
     e.call(SEQUENCE_004954C0, &args![sequence]);
 }
 
+/// The size [`add_book_light`] allocates its point light at (the `PUSH 0xFC` at `0x7C6F85`):
+/// 0xFC. JIP's H03 (group GL's row and handler) writes 0x110 into the push (its light data after
+/// the game's object); the seam `0x7C6F86` answers the size (no words). One load while JIP is not
+/// installed.
+fn point_light_size(e: &mut Engine) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x007c_6f86, &[]).unwrap_or(0xfc)
+    } else {
+        0xfc
+    }
+}
+
 /// `InitBook`'s point light (see there).
 fn add_book_light(e: &mut Engine, distance: u32) {
-    let memory = e.call(ALLOCATE_00AA13E0, &args![0xfcu32]).u32();
+    let size = point_light_size(e);
+    let memory = e.call(ALLOCATE_00AA13E0, &args![size]).u32();
     let light = if memory != 0 {
         e.call(LIGHT_CONSTRUCT, &args![memory]).u32()
     } else {
@@ -2771,6 +2784,75 @@ mod n087_tests {
         // The light is made when the scene has none.
         assert_eq!(calls(&r.e, ADD_LIGHT).len(), 1);
         assert_eq!(calls(&r.e, CREATE_TEXTURE_IMAGE).len(), 25);
+    }
+
+    thread_local! {
+        /// The words H03's seam handler of a test was asked with.
+        static H03_ASKED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// H03's seam at `0x7C6F86` (JIP's `SafeWrite32(0x7C6F86, 0x110)`, group GL's handler): not
+    /// asked while JIP is not installed, every call (the light's 0xFC allocation included) the
+    /// same as with no handler; with JIP installed (whatever the fixes row) asked once with no
+    /// words, and the only change is the light allocation's size, the answer.
+    #[test]
+    fn jip_h03_seam_sizes_the_book_light() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            H03_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0x110)
+        }
+        let run = |word: Option<u32>| {
+            let mut r = rig();
+            let book = r.book;
+            let geometry = object(&mut r.e, 0x40);
+            answer(&mut r.e, MODEL_LOADER_LOAD_FILE, geometry);
+            let scene = object(&mut r.e, 0x40);
+            answer(&mut r.e, OBJECT_BY_INDEX, scene);
+            r.e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+            if let Some(word) = word {
+                r.e.set_jip_patches(word);
+                r.e.on_site(SiteSlot::new(Owner::Jip, 0x007c_6f86), size);
+            }
+            r.e.call_log = Some(vec![]);
+            r.e.call(0x007c_6ce0, &args![book]);
+            r.e.call_log.take().unwrap()
+        };
+        let plain = run(None);
+        assert_eq!(
+            plain
+                .iter()
+                .filter(|(a, w)| *a == ALLOCATE_00AA13E0 && w[..] == [0xfc])
+                .count(),
+            1
+        );
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            H03_ASKED.with(|v| v.borrow_mut().clear());
+            let log = run(Some(word));
+            let expected: Vec<_> = plain
+                .iter()
+                .map(|(addr, words)| {
+                    if installed && *addr == ALLOCATE_00AA13E0 && words[..] == [0xfc] {
+                        (*addr, vec![0x110])
+                    } else {
+                        (*addr, words.clone())
+                    }
+                })
+                .collect();
+            assert_eq!(log, expected, "{word:08x}");
+            let asked = H03_ASKED.with(|v| v.borrow().clone());
+            assert_eq!(
+                asked,
+                if installed { vec![vec![]] } else { vec![] },
+                "{word:08x}"
+            );
+        }
     }
 
     #[test]

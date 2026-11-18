@@ -1789,6 +1789,18 @@ fn start_machine(e: &mut Engine, this: u32, frame: Frame) {
     e.call(UPDATE_00A59C60, &args![model, block]);
 }
 
+/// The size [`init_light`] allocates a new point light at (the `PUSH 0xFC` at `0x792DBF`): 0xFC.
+/// JIP's H03 (group GL's row and handler) writes 0x110 into the push (its light data after the
+/// game's object); the seam `0x792DC0` answers the size (no words). One load while JIP is not
+/// installed.
+fn point_light_size(e: &mut Engine) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0079_2dc0, &[]).unwrap_or(0xfc)
+    } else {
+        0xfc
+    }
+}
+
 /// The light of [`love_tester_menu_init_machine`]: the radius is the dynamic model's world
 /// bound's float +0xc times 20.0 (`0102fc70`). The scene graph (`00450b80(1)`) takes the
 /// lights of the model's node (its slot +0xc; `AddAllLightsFromNode_Recurse` with the
@@ -1812,7 +1824,8 @@ fn init_light(e: &mut Engine, frame: Frame) {
         )
         .u32();
     if found == 0 {
-        let block = e.call(ALLOCATE_00AA13E0, &args![0xfcu32]).u32();
+        let light_size = point_light_size(e);
+        let block = e.call(ALLOCATE_00AA13E0, &args![light_size]).u32();
         let light = if block != 0 {
             e.call(LIGHT_CONSTRUCTOR_00A7D670, &args![block]).u32()
         } else {
@@ -3426,6 +3439,78 @@ mod menu_tests {
             .filter(|(a, _)| *a == array)
             .map(|(_, item)| *item)
             .collect()
+    }
+
+    thread_local! {
+        /// The words H03's seam handler of a test was asked with.
+        static H03_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// H03's seam at `0x792DC0` (JIP's `SafeWrite32(0x792DC0, 0x110)`, group GL's handler): not
+    /// asked while JIP is not installed, every call (the light's 0xFC allocation included) the
+    /// same as with no handler; with JIP installed (whatever the fixes row) asked once with no
+    /// words, and the only change is the light allocation's size, the answer.
+    #[test]
+    fn jip_h03_seam_sizes_the_machine_light() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            H03_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0x110)
+        }
+        let run = |word: Option<u32>| {
+            let mut m = machine(640.0, true, 0, true);
+            if let Some(word) = word {
+                m.e.set_jip_patches(word);
+                m.e.on_site(SiteSlot::new(Owner::Jip, 0x0079_2dc0), size);
+            }
+            let this = m.this;
+            m.e.call(0x0079_28e0, &[this]);
+            m.e.call_log.take().unwrap()
+        };
+        let plain = run(None);
+        let light_allocations = |log: &[(u32, Vec<u32>)], size: u32| {
+            log.iter()
+                .filter(|(a, w)| *a == ALLOCATE_00AA13E0 && w[..] == [size])
+                .count()
+        };
+        assert_eq!(light_allocations(&plain, 0xfc), 1);
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            H03_ASKED.with(|v| v.borrow_mut().clear());
+            let log = run(Some(word));
+            if installed {
+                assert_eq!(light_allocations(&log, 0x110), 1);
+            }
+            let expected: Vec<_> = plain
+                .iter()
+                .map(|(addr, words)| {
+                    if installed && *addr == ALLOCATE_00AA13E0 && words[..] == [0xfc] {
+                        (*addr, vec![0x110])
+                    } else {
+                        (*addr, words.clone())
+                    }
+                })
+                .collect();
+            // Installed: the blocks after the bigger one are at other addresses (the test's
+            // allocator), so the same functions are called in the same order.
+            let addresses = |log: &[(u32, Vec<u32>)]| log.iter().map(|c| c.0).collect::<Vec<_>>();
+            assert_eq!(addresses(&log), addresses(&expected), "{word:08x}");
+            let asked = H03_ASKED.with(|v| v.borrow().clone());
+            assert_eq!(
+                asked,
+                if installed { vec![vec![]] } else { vec![] },
+                "{word:08x}"
+            );
+            if !installed {
+                assert_eq!(log, expected, "{word:08x}");
+            }
+        }
     }
 
     #[test]

@@ -1068,6 +1068,18 @@ pub fn fo_rendered_menu_prepare_geometry(e: &mut Engine, this: Ptr<FORenderedMen
     });
 }
 
+/// The size `CreateMenuLight` allocates the menu's point light at (the `PUSH 0xFC` at
+/// `0x7FC4D9`): 0xFC. JIP's H03 (group GL's row and handler) writes 0x110 into the push (its
+/// light data after the game's object); the seam `0x7FC4DA` answers the size (no words). One
+/// load while JIP is not installed.
+fn point_light_size(e: &mut Engine) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x007f_c4da, &[]).unwrap_or(0xfc)
+    } else {
+        0xfc
+    }
+}
+
 // Translated from 007fc400 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 007fc400 - the exception-unwinding frame (FS:[0]) is not translated.
 /// `FORenderedMenu::CreateMenuLight` (Xbox PDB): replaces the menu's light. With the
@@ -1107,7 +1119,8 @@ pub fn fo_rendered_menu_create_menu_light(
             e.vcall(node, 0xc, &[]).u32()
         };
         if source != 0 {
-            let block = e.call(NI_ALLOCATE, &args![0xfcu32]).u32();
+            let size = point_light_size(e);
+            let block = e.call(NI_ALLOCATE, &args![size]).u32();
             let light = if block == 0 {
                 0
             } else {
@@ -2561,6 +2574,57 @@ mod tests {
         let named = calls(&e, SET_NAME_00A5B950);
         assert_eq!(e.mem.u32(named[0][1]), RENDERED_MENU_LIGHT);
         assert_eq!(calls(&e, FIXED_STRING_DESTROY).len(), 2);
+    }
+
+    thread_local! {
+        /// The words H03's seam handler of a test was asked with.
+        static H03_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// H03's seam at `0x7FC4DA` (JIP's `SafeWrite32(0x7FC4DA, 0x110)`, group GL's handler): not
+    /// asked while JIP is not installed, every call (the allocation's 0xFC included) the same as
+    /// with no handler; with JIP installed (whatever the fixes row) asked once with no words, and
+    /// the only change is the allocation's size, the answer.
+    #[test]
+    fn jip_h03_seam_sizes_the_menu_light() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            H03_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0x110)
+        }
+        let (mut e, this) = light_menu_engine(0x7900, 0);
+        assert!(e.call(0x007f_c400, &args![this, 0x1234u32, 0u32]).bool());
+        let plain = e.call_log.take().unwrap();
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            H03_ASKED.with(|v| v.borrow_mut().clear());
+            let (mut e, this) = light_menu_engine(0x7900, 0);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x007f_c4da), size);
+            assert!(e.call(0x007f_c400, &args![this, 0x1234u32, 0u32]).bool());
+            let log = e.call_log.take().unwrap();
+            let expected: Vec<_> = plain
+                .iter()
+                .map(|(addr, words)| match (*addr, installed) {
+                    (NI_ALLOCATE, true) => (*addr, vec![0x110]),
+                    _ => (*addr, words.clone()),
+                })
+                .collect();
+            assert_eq!(log, expected, "{word:08x}");
+            assert_eq!(e.get(this, FORenderedMenu::spLight), 0x7400);
+            let asked = H03_ASKED.with(|v| v.borrow().clone());
+            assert_eq!(
+                asked,
+                if installed { vec![vec![]] } else { vec![] },
+                "{word:08x}"
+            );
+        }
     }
 
     #[test]
