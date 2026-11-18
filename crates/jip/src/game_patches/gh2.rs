@@ -151,6 +151,8 @@ pub const AREA: Area = Area {
         ATTACH_ASH_PILE.addr(),
         BIPED_SLOT_VISIBLE.addr(),
         SYNC_POSITION.addr(),
+        BIPED_PART_NAME.addr(),
+        ADD_ON_TRANSFORM.addr(),
     ],
     jip_wraps: &[],
     install_jip,
@@ -308,8 +310,112 @@ fn sync_position(e: &mut Engine, w: &[u32]) -> Option<u32> {
     Some(1)
 }
 
+/// H10's seams: a loaded biped part's naming in `LoadBipedParts` (`0x4ACCF1`; words: the form,
+/// the clone, the model's root, the slot, first person) and the add-on's transform reset in
+/// `LoadAndAttachAddOn` (`0x4AF0DE`; words: the clone, the form, the root override). Each answers:
+/// the step is done.
+pub const BIPED_PART_NAME: SiteSlot = SiteSlot::new(Owner::Jip, 0x004a_ccf1);
+pub const ADD_ON_TRANSFORM: SiteSlot = SiteSlot::new(Owner::Jip, 0x004a_f0de);
+/// The biped slots' names (`0x1188B98`, a C string each).
+const SLOT_NAMES: u32 = 0x0118_8b98;
+/// A block's name (`+8`), its flag byte `+0x33` (bit `0x20`: JIP's light hooks marked it), a
+/// node's local rotation rows and translation (`+0x34`, `+0x44`, `+0x54`: 16 bytes each as JIP
+/// writes them); `ADDR_ReturnThis` at a node's slot `+0xC`; a form's `jipFormFlags6` (`+6`).
+const NI_NAME: u32 = 8;
+const NI_FLAGS_33: u32 = 0x33;
+const NI_LOCAL_ROWS: [u32; 3] = [0x34, 0x44, 0x54];
+const IS_NODE_SLOT: u32 = 0xc;
+const ADDR_RETURN_THIS: u32 = 0x0068_15c0;
+const FORM_FLAGS_6: u32 = 6;
+const INSERT_OBJECT: u8 = crate::commands::jip_fn_misc_ref_insert::INSERT_NODE
+    | crate::commands::jip_fn_misc_ref_insert::ATTACH_MODEL;
+/// JIP's name buffer (`sprintf_s` into 0x18 bytes: at most 23 characters).
+const PART_NAME_BUFFER: usize = 0x18;
+
+/// The C string at `at` (up to its NUL).
+fn c_text(e: &Engine, at: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut p = at;
+    while p != 0 {
+        let b = e.mem.u8(p);
+        if b == 0 || out.len() >= 0x100 {
+            break;
+        }
+        out.push(b);
+        p += 1;
+    }
+    out
+}
+
+/// The block's name set to the fixed string of `text` (JIP's `NiObjectNET::SetName`, as
+/// `RenameNifBlock` does it: the counts changed with `lock`-ed adds, as JIP's, since the loader
+/// threads name parts while the main thread names others).
+fn set_name(e: &mut Engine, block: u32, text: &[u8]) {
+    crate::commands::jip_fn_misc_ref_nodes_w::set_name(e, block, text);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: LoadBip01SlotHook.
+/// H10, a loaded biped part (with JIP installed, always): when the clone is a node, a form JIP's
+/// `InsertNode`/`AttachModel` marked has its entries put in (the clone first takes the model
+/// root's name, so the entries find their nodes as in the model; one count held), and in third
+/// person a clone JIP's light hooks marked gets its point lights; then the clone is named
+/// `"<slot name> <form id>"` (JIP's text, `%s %08X`, cut at 23 characters as its buffer holds;
+/// the game's own name is `"<slot name> <form name> (<form id>)"`).
+fn biped_part_name(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (form, clone, root, slot, first_person) = (w[0], w[1], w[2], w[3], w[4] != 0);
+    let slot_name = c_text(e, e.mem.u32(SLOT_NAMES + 4 * slot));
+    let mut name = slot_name;
+    name.extend_from_slice(format!(" {:08X}", e.mem.u32(form + REF_ID)).as_bytes());
+    name.truncate(PART_NAME_BUFFER - 1);
+    let vtable = e.mem.u32(clone);
+    if e.mem.u32(vtable + IS_NODE_SLOT) == ADDR_RETURN_THIS {
+        if e.mem.u8(form + FORM_FLAGS_6) & INSERT_OBJECT != 0 {
+            // JIP's `lock inc` on the root name's count; the clone's own name is overwritten
+            // without its count given back, as JIP does.
+            let root_name = e.mem.u32(root + NI_NAME);
+            crate::commands::jip_fn_misc_ref_insert::add_ref(e, root_name);
+            e.mem.set_u32(clone + NI_NAME, root_name);
+            crate::commands::jip_fn_misc_ref_insert::do_insert_objects(e, form, 0, clone);
+        }
+        if !first_person && e.mem.u8(clone + NI_FLAGS_33) & 0x20 != 0 {
+            crate::game_patches::gl::lights::add_point_lights(e, clone);
+        }
+    }
+    set_name(e, clone, &name);
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: LoadWeaponSlotHook.
+/// H10, an add-on (the weapon's model, with JIP installed, always): the clone's rotation set to the
+/// identity and its translation to 0 (JIP's three rows of `1, 0, 0, 0`, what the game's two calls
+/// set); with a form, a form JIP's `InsertNode`/`AttachModel` marked has its entries put in, and a
+/// clone JIP's light hooks marked gets its point lights unless it goes under the player's
+/// first-person node.
+fn add_on_transform(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (clone, form, root_override) = (w[0], w[1], w[2]);
+    for row in NI_LOCAL_ROWS {
+        e.mem.set_f32(clone + row, 1.0);
+        e.mem.set_u32(clone + row + 4, 0);
+        e.mem.set_u32(clone + row + 8, 0);
+        e.mem.set_u32(clone + row + 12, 0);
+    }
+    if form != 0 {
+        if e.mem.u8(form + FORM_FLAGS_6) & INSERT_OBJECT != 0 {
+            crate::commands::jip_fn_misc_ref_insert::do_insert_objects(e, form, 0, clone);
+        }
+        if e.mem.u8(clone + NI_FLAGS_33) & 0x20 != 0
+            && root_override != crate::game_patches::gp::first_person_node(e)
+        {
+            crate::game_patches::gl::lights::add_point_lights(e, clone);
+        }
+    }
+    Some(1)
+}
+
 fn install_jip(e: &mut Engine) {
     e.on_site(DESTROY_REFR, destroy_refr);
+    e.on_site(BIPED_PART_NAME, biped_part_name);
+    e.on_site(ADD_ON_TRANSFORM, add_on_transform);
     e.on_site(BIPED_SLOT_VISIBLE, biped_slot_visible);
     e.on_site(SYNC_POSITION, sync_position);
     e.ext_free::<AltAshPile>();
