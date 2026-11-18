@@ -751,6 +751,8 @@ struct Extra {
     ribbon_round_textured: bool,
     /// The cable of `cable` written again (the same bytes) before it is drawn.
     rewrite_cable: bool,
+    /// The pipe of [`CABLES`] drawn after `cable` (another buffer of the same layout and count).
+    pipe_after: bool,
 }
 
 /// What the index buffer of [`TUBES`] names.
@@ -1501,6 +1503,9 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
                 );
             }
             draw(b, CABLE + n as u32, 16 * 6 * 2);
+        }
+        if e.pipe_after {
+            draw(b, CABLE + 3, 16 * 6 * 2);
         }
         if e.ribbon_round {
             draw_cut(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2);
@@ -2647,4 +2652,22 @@ fn a_cable_written_every_frame_casts_whole_from_its_third_body() {
         hard > 0.9,
         "written every frame, a whole caster's shadow: {hard}"
     );
+}
+
+/// Two buffers alike (the same layout, offsets, upload counts and triangle count: a cable 3 wide
+/// and a pipe 40 wide) are two geometries (review of #693, round 2: keyed by each buffer's own
+/// number, not taken for one another): the pipe drawn after the cable casts its full shadow.
+#[test]
+fn two_buffers_alike_are_two_geometries() {
+    let Some((_, on)) = third_frames(
+        1,
+        Extra {
+            cable: Some(1),
+            pipe_after: true,
+            ..Extra::default()
+        },
+    ) else {
+        return;
+    };
+    assert_eq!(at(&on, pixel([-100.0, 300.0, 0.0]))[2], AMBIENT_RED);
 }
