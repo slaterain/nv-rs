@@ -6,25 +6,21 @@
 //! character controller's tilt, gravity and velocity, the ground's material, the last hit's
 //! node, VATS targetability, `AttachAshPileEx`, the player's 3D, the push away from a point and
 //! a limb dismembered; and (lane C3) whether the last hit penetrated the armour, teammates made
-//! killable and an idle played by its conditions, and the no gun wobble switch. 57 of its 71
+//! killable and an idle played by its conditions, and the no gun wobble switch. 61 of its 71
 //! commands; the first 70 lines are lane A1's module.
 //!
 //! Built elsewhere already (the core track's hook files): `SetOnHitEventHandler`,
 //! `SetOnReloadWeaponEventHandler`, `SetOnRagdollEventHandler` (`actor_hooks.rs`) and
 //! `PushActorNoRagdoll` (`world_hooks.rs`, `world_push.rs`).
 //!
-//! Left for later, each with what it waits for:
-//! - a game patch of stage 3.9 (`measure/jip/PLAN-3.9.md`): `MoveAwayFrom` (G42: the backup package reads
-//!   `s_moveAwayDistance`; H16: JIP's 0x8C package), `TravelToRef` (H16: `AddBackUpPackage`
-//!   allocates JIP's enlarged 0x8C package),
-//!   `Get/SetExcludedCombatActions` (H16: the combat controller's added mask and JIP's
-//!   per-reference map), `RemoveAllPerks` and `GetAllPerks` (O18 NPC perks: their NPC half reads
-//!   the patch's state and JIP's perk maps);
-//! - a hook: `FireWeaponEx` (writes the exe's code at `009BAD76` and `01087F1C` and queues a
-//!   call);
-//! - (`ReloadEquippedModels` and `RefreshAnimData` are built: the models reloaded through the game,
-//!   the animation data refreshed with JIP's `Actor::RefreshAnimData`, [`refresh_anim_data`];
-//!   `ReloadCharController` is built in `jip_fn_actor_anim.rs`.)
+//! Also here: `GetAllPerks` and `RemoveAllPerks` (the NPC half through O18's NPC perks),
+//! `Get/SetExcludedCombatActions` (H16's map and the controller's word, `game_patches::gd`).
+//!
+//! Built, not registered until H01: `FireWeaponEx` (JIP writes the exe's code at `009BAD76` and
+//! `01087F1C` and queues a call: [`AWAITING_H01`]). `ReloadEquippedModels` and `RefreshAnimData`
+//! are built here (the models reloaded through the game, the animation data refreshed with JIP's
+//! `Actor::RefreshAnimData`, [`refresh_anim_data`]); `ReloadCharController` in
+//! `jip_fn_actor_anim.rs`.
 //!
 //! Layouts (JIP's headers; the exe where the audit table says so): a reference's base form +0x20,
 //! position z +0x38, cell +0x40, extra data list +0x44; an actor's process +0x68, killer +0xC0,
@@ -113,6 +109,10 @@ pub static COMMANDS: Handlers = &[
     (0x28ec, toggle_no_gun_wobble),
     (0x280d, reload_equipped_models),
     (0x290c, refresh_anim_data_cmd),
+    (0x2929, get_all_perks_cmd),
+    (0x2905, remove_all_perks),
+    (0x291b, get_excluded_combat_actions),
+    (0x291c, set_excluded_combat_actions),
 ];
 
 /// `FireWeaponEx`, built but not registered until JIP's muzzle flash patch (row H01: its code
@@ -2242,6 +2242,166 @@ fn fire_weapon_ex(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- perks ----
+
+/// The player (`*011DEA3C`), its perk ranks (`perkRanksPC` +0x87C, `perkRanksTM` +0xAD4, lists of
+/// `PerkRank`: the perk +0, the rank +4); an actor's teammate byte (+0x18D) and its `RemovePerk`
+/// (vtable +0x49C: the perk, for teammates); a perk's hidden byte (`data.isHidden`, +0x3C).
+const PERK_RANKS_PC: u32 = 0x87c;
+const PERK_RANKS_TM: u32 = 0xad4;
+const ACTOR_IS_TEAMMATE: u32 = 0x18d;
+const VT_REMOVE_PERK: u32 = 0x49c;
+const PERK_HIDDEN: u32 = 0x3c;
+
+/// The player's perks of the list `for_teammates` names, in the list's order.
+fn player_perks(e: &Engine, for_teammates: bool) -> Vec<u32> {
+    let player = e.mem.u32(THE_PLAYER);
+    let head = player
+        + if for_teammates {
+            PERK_RANKS_TM
+        } else {
+            PERK_RANKS_PC
+        };
+    list_items(e, Ptr::<ListNode>::new(head))
+        .into_iter()
+        .filter(|&rank| rank != 0)
+        .map(|rank| e.mem.u32(rank))
+        .collect()
+}
+
+/// The perks JIP's NPC perks patch (O18) keeps for `actor`, in its map's order (by the perk).
+fn npc_perk_list(e: &mut Engine, actor: u32) -> Vec<u32> {
+    let id = e.mem.u32(actor + 0xc);
+    crate::cosave::npc_perks(e)
+        .get(&id)
+        .map(|p| p.ranks.keys().copied().collect())
+        .unwrap_or_default()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: GetAllPerks.
+/// An actor's perks: the player's own (its teammates' with `for_teammates`, also for a teammate
+/// asked so), and for another actor, while the NPC perks patch is on, its own; a hidden perk only
+/// with `incl_hidden`. As an array (0 when there are none).
+pub(crate) fn get_all_perks(
+    e: &mut Engine,
+    actor: u32,
+    for_teammates: bool,
+    script: u32,
+    incl_hidden: bool,
+) -> u32 {
+    let is_player = actor == e.mem.u32(THE_PLAYER);
+    let shown = |e: &Engine, perk: u32| incl_hidden || e.mem.u8(perk + PERK_HIDDEN) == 0;
+    let mut perks = Vec::new();
+    if is_player || (for_teammates && e.mem.u8(actor + ACTOR_IS_TEAMMATE) != 0) {
+        perks.extend(
+            player_perks(e, for_teammates)
+                .into_iter()
+                .filter(|&p| p != 0 && shown(e, p)),
+        );
+    }
+    if !is_player && crate::cosave::npc_perks_patch(e) {
+        let own = npc_perk_list(e, actor);
+        perks.extend(own.into_iter().filter(|&p| shown(e, p)));
+    }
+    if perks.is_empty() {
+        return 0;
+    }
+    let elements: Vec<Element> = perks.into_iter().map(Element::Form).collect();
+    create_array(e, script, &elements)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetAllPerks_Execute.
+/// `actor.GetAllPerks [forTeammates] [inclHidden]`: [`get_all_perks`]'s array.
+fn get_all_perks_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if read.ok {
+        let id = get_all_perks(
+            e,
+            a.this_obj,
+            read.int(0, 0) != 0,
+            a.script,
+            read.int(1, 0) != 0,
+        );
+        a.set_result(e, f64::from(id));
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_RemoveAllPerks_Execute.
+/// `actor.RemoveAllPerks [forTeammates]`: the player's perks of that list each removed by its
+/// `RemovePerk`; another actor's (while the NPC perks patch is on) each by JIP's NPC perk removal.
+/// No result.
+///
+/// A fix, not JIP's result: JIP 57.30 walks the list while it removes from it. Removing the
+/// first perk copies the second node into the head, so the walk goes on at the third and the
+/// second is never removed; removing the third unlinks its node and clears its next, so the walk
+/// ends there. The player keeps every perk but the first and third. On an NPC, each removal
+/// shifts JIP's sorted perk map under its iterator, so every other perk is skipped, and the map
+/// is then dropped with those perks' abilities and entry points still applied. Here the perks
+/// are listed before the first removal and each one is removed: what the command plainly means.
+fn remove_all_perks(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let actor = a.this_obj;
+    if !is_actor(e, actor) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let for_teammates = read.int(0, 0);
+    // `IsPlayer`: the reference's id 0x14.
+    if e.mem.u32(actor + 0xc) == 0x14 {
+        for perk in player_perks(e, for_teammates != 0) {
+            if perk != 0 {
+                e.vcall(
+                    actor,
+                    VT_REMOVE_PERK,
+                    &[perk, u32::from(for_teammates != 0)],
+                );
+            }
+        }
+    } else if crate::cosave::npc_perks_patch(e) {
+        for perk in npc_perk_list(e, actor) {
+            crate::game_patches::ge::perks::remove_perk_npc(e, &[actor, perk, 0]);
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetExcludedCombatActions_Execute.
+/// `ref.GetExcludedCombatActions`: the reference's excluded combat actions (0 for none), H16's map.
+fn get_excluded_combat_actions(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let mask = crate::game_patches::gd::excluded_combat_actions(e, a.this_obj);
+    a.set_result(e, f64::from(mask as i32));
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_SetExcludedCombatActions_Execute.
+/// `actor.SetExcludedCombatActions mask`: for an actor whose argument reads, H16's change
+/// (`gd::set_excluded_combat_actions`: the low 27 bits kept for it, or its entry gone for none,
+/// and written to its current combat controller). No result.
+fn set_excluded_combat_actions(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if read.ok {
+        crate::game_patches::gd::set_excluded_combat_actions(e, a.this_obj, read.int(0, 0));
+    }
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_tests.rs"]
 mod tests;
@@ -2249,6 +2409,10 @@ mod tests;
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_r4_tests.rs"]
 mod r4_tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_p2_r6_tests.rs"]
+mod r6_tests;
 
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_c1_tests.rs"]
