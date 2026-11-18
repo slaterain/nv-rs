@@ -22,9 +22,9 @@
 //!   the patch's state and JIP's perk maps);
 //! - a hook: `FireWeaponEx` (writes the exe's code at `009BAD76` and `01087F1C` and queues a
 //!   call);
-//! - the 3D scene and physics (not ported to this layer): `ReloadCharController` (lane 2).
-//!   (`ReloadEquippedModels` and `RefreshAnimData` are built: the models reloaded through the
-//!   game, the animation data refreshed with JIP's `Actor::RefreshAnimData`, [`refresh_anim_data`].)
+//! - (`ReloadEquippedModels` and `RefreshAnimData` are built: the models reloaded through the game,
+//!   the animation data refreshed with JIP's `Actor::RefreshAnimData`, [`refresh_anim_data`];
+//!   `ReloadCharController` is built in `jip_fn_actor_anim.rs`.)
 //!
 //! Layouts (JIP's headers; the exe where the audit table says so): a reference's base form +0x20,
 //! position z +0x38, cell +0x40, extra data list +0x44; an actor's process +0x68, killer +0xC0,

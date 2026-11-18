@@ -1047,8 +1047,6 @@ Not yet, with the switch on:
   in the port's own folder beside the saves, never in the game's folder), so oHUD's INI option (shown
   in MCM once oHUD finds JIP) has its commands; JIP's commands that read or write other files
   (`ReadArrayFromFile` and the like) are still among those not built.
-- `InjectUIComponent` needs the UI Organizer row on too (`NV_UIO`); without it the command does nothing
-  and answers 0 (JIP would write `jip_temp.xml` into the game's folder), and the log says so once.
 - 12 of JIP's 162 game patches are not built (by group in `measure/jip/PLAN-3.9-groups.md`; every
   group's built ones are under its heading below): what they change stays the game's own; each waits
   for a JIP command or attach step not built yet (`MessageBoxExAlt`, `FireWeaponEx`, `InsertNode` and the like).
@@ -1546,7 +1544,9 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
 - **JIP's `InjectUIComponent`.** UIO's export `UIOInjectComponent`: menu XML given as text is cleaned
   by the game, its includes expanded, and read into the tile under the name `jip_temp.xml`, from
   memory. Without UIO, JIP writes `jip_temp.xml` into the game's folder and reads it; nv-rs never
-  writes there, so with the row off `InjectUIComponent` does nothing.
+  writes there: with the row off the text is cleaned by the game as that file would be and handed
+  to the same `Tile::ReadFile` through the game's own menu file map (`Menu::XMLHash`), so
+  `InjectUIComponent` and `AttachUIComponent` make the same tiles with the row on or off.
 - **Where it differs from UIO on purpose.** Include loops end at 64 levels, an expansion at 64 MiB
   (after which that read fetches no further include) and at 10,000 files read for one read's
   includes (UIO runs out of stack or memory, or reads on without end); a path longer than UIO's

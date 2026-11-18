@@ -472,7 +472,7 @@ make those calls, so they become Rust calls (the transforms' and matrices' arith
 controller and children walks and getters, counted references, the recursive spin lock, the AI's and the
 inventory's getters; since 2026-11-10 also the word map's lookup `00853130`, which a quicksave makes about
 230,000 times in its frame through the save's 37-bucket references map, and since 2026-11-13 at `00a1e380` too, the
-exe's second, identical copy of that body, which the menus' maps and every thread's scrap-heap map use), stage 1 (its calls into `leaves`,
+exe's second, identical copy of that body, which the menus' maps and every thread's scrap-heap map use), since 2026-11-18 the extra data lookup `00410220` and four getters over it (followers, head-track target, package data, package target; lStewieAl's Engine Optimizations inlines them in the process lists' clean-up of a reference that goes away), stage 1 (its calls into `leaves`,
 `culling` and `pathing` go direct only when those are on), its float maths native since 2026-11-11 (the matrix and
 vector products' sums in `f64` rounded at the stores, a single operation on two floats in plain `f32`, which rounds
 to the same float; no x87 helper left); its tests are `crates/engine/tests/typed_dispatch.rs`. And `shader` (same crate, id 17): the shader
