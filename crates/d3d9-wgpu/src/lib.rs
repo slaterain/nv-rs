@@ -19,12 +19,15 @@
 //!   scene.
 //! - `sun_shadow`: sun shadows (port-added, off by default): cascaded shadow maps from the game's
 //!   own opaque draws, shown by a full-screen step.
+//! - `bright`: the HDR watch (a diagnostic, read only): the game's float targets checked for
+//!   pixels that are not finite, lone bright dots and jumps of the luminance targets.
 
 mod ahead;
 mod answers;
 // Used off Windows only; its tests run everywhere.
 #[cfg_attr(windows, allow(dead_code))]
 mod bitmap_font;
+pub mod bright;
 mod cache;
 pub mod device;
 mod ffp;

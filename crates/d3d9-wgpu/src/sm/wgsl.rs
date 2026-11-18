@@ -6,7 +6,9 @@
 //!   that multiplies (`mul`, `mad`, `dp2add`, `dp3`, `dp4`, the matrix instructions, `lrp`, `nrm`,
 //!   `crs`, `dst`, `pow`'s exponent). This is the rule Direct3D 9 hardware follows and drivers
 //!   still apply to Direct3D 9 shaders; an `nrm` of a zero vector is 0, not NaN.
-//! - **`rsq`, `log`, `pow`** take the absolute value of their source; `log(0)` is -infinity.
+//! - **`rsq`, `log`, `pow`** take the absolute value of their source; `log(0)` is -infinity,
+//!   `rsq(0)` +infinity, `pow(0, y)` 0 for y > 0 (given explicitly: SPIR-V leaves `log2` and
+//!   `inverseSqrt` of 0 undefined, and a driver may answer otherwise).
 //! - **`rcp`** of 1 is exactly 1.
 //! - **`cmp`** selects on `src0 >= 0`, **`cnd`** on `src0 > 0.5`, **`slt`/`sge`** give 1.0 or
 //!   0.0, **`frc`** is `x - floor(x)`, **`sincos`** writes cosine to x and sine to y.
@@ -461,17 +463,20 @@ fn dp4(a: vec4<f32>, b: vec4<f32>) -> f32 {
 fn rcp(x: f32) -> f32 {
     return select(1.0 / x, 1.0, x == 1.0);
 }
+// Direct3D 9 defines rsq(0) as +infinity and log(0) as -infinity; SPIR-V leaves inverseSqrt and
+// log2 of 0 undefined, so they are given here (most drivers give the same; none need to).
 fn rsq(x: f32) -> f32 {
-    return select(inverseSqrt(abs(x)), 1.0, x == 1.0);
+    return select(select(inverseSqrt(abs(x)), bitcast<f32>(0x7f800000u), x == 0.0), 1.0, x == 1.0);
 }
 fn lg(x: f32) -> f32 {
-    return log2(abs(x));
+    return select(log2(abs(x)), bitcast<f32>(0xff800000u), x == 0.0);
 }
 fn pw(a: f32, b: f32) -> f32 {
-    return exp2(m1(b, log2(abs(a))));
+    return exp2(m1(b, lg(a)));
 }
 fn nrm(a: vec4<f32>) -> vec4<f32> {
-    return m4(a, vec4<f32>(inverseSqrt(dp3(a, a))));
+    let d = dp3(a, a);
+    return m4(a, vec4<f32>(select(inverseSqrt(d), bitcast<f32>(0x7f800000u), d == 0.0)));
 }
 fn lrp(s: vec4<f32>, a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
     return m4(s, a - b) + b;
