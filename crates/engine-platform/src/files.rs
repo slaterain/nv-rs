@@ -1779,10 +1779,26 @@ fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
 }
 
 /// Whether a search pattern finds `name` by its long name alone ([`wild_match`], the measured
-/// matcher), as on a volume without 8.3 short names ([`search_finds`]).
+/// matcher), as on a volume without 8.3 short names ([`search_finds`]), with the two rewrites
+/// Windows' search makes of a pattern before matching (kernelbase turns them into its DOS
+/// wildcards; on Windows the port's listing is Windows' own, so this is for other systems): a
+/// pattern of exactly `*.*` is `*` (it also finds a name with no dot), and a pattern ending in a
+/// dot finds a name with no extension (`readme.` finds `readme`; `*.` finds only names with no
+/// dot).
 #[cfg(any(not(windows), test))]
 fn search_finds_long_names(pattern: &[u8], name: &str) -> bool {
-    wild_match(pattern, &ansi_bytes(name))
+    let bytes = ansi_bytes(name);
+    if pattern == b"*.*" {
+        return wild_match(b"*", &bytes);
+    }
+    match pattern.strip_suffix(b".") {
+        Some(stem) if !stem.is_empty() && !stem.iter().all(|&b| b == b'.') => {
+            let no_dot = !bytes.contains(&b'.');
+            (wild_match(stem, &bytes) && (no_dot || !stem.contains(&b'*')))
+                || wild_match(pattern, &bytes)
+        }
+        _ => wild_match(pattern, &bytes),
+    }
 }
 
 /// Whether a search pattern finds `name` on a volume that keeps 8.3 short names: its long name,
@@ -4356,6 +4372,13 @@ mod tests_player_files {
         assert_eq!(found(b"?.esm"), ["A.esm", "b.ESM", "g.esm"]);
         assert!(search_finds_long_names(b"*", "."));
         assert!(!search_finds_long_names(b"*.esm", ".."));
+        // Windows' rewrites: `*.*` is `*`; a trailing dot finds a name with no extension.
+        assert!(search_finds_long_names(b"*.*", "README"));
+        assert!(search_finds_long_names(b"*.*", "A.esm"));
+        assert!(search_finds_long_names(b"README.", "readme"));
+        assert!(search_finds_long_names(b"*.", "README"));
+        assert!(!search_finds_long_names(b"*.", "A.esm"));
+        assert!(search_finds_long_names(b"A.esm.", "A.esm"));
         // Off Windows the search is this one.
         #[cfg(not(windows))]
         for pattern in [&b"*.esm"[..], b"*.ES?", b"?.esm", b"x*.esm", b"*"] {
@@ -4459,6 +4482,41 @@ mod tests_player_files {
             ]
         );
         assert!(list("OldWorldBlues*.bsa").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux and macOS: Windows' two pattern rewrites, through `FindFirstFileA` over a folder
+    /// with a dotless file and a dotless folder: `*.*` lists everything as `*` does, and a
+    /// pattern ending in a dot finds the names with no extension.
+    #[cfg(not(windows))]
+    #[test]
+    fn star_dot_star_and_a_trailing_dot_find_dotless_names() {
+        let dir = std::env::temp_dir().join(format!("nv-rs-dotless-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Menus")).unwrap();
+        std::fs::write(dir.join("README"), b"r").unwrap();
+        std::fs::write(dir.join("a.txt"), b"a").unwrap();
+        let game = engine_core::exe::game_view(&dir.to_string_lossy());
+        let mut e = Engine::new();
+        let mut list = |pattern: &str| listed(&mut e, &format!(r"{game}\{pattern}"));
+        let all: Vec<Vec<u8>> = [".", "..", "a.txt", "Menus", "README"]
+            .iter()
+            .map(|n| n.as_bytes().to_vec())
+            .collect();
+        assert_eq!(list("*"), all);
+        assert_eq!(list("*.*"), all);
+        assert_eq!(list("README."), [b"README".to_vec()]);
+        assert_eq!(list("menus."), [b"Menus".to_vec()]);
+        assert_eq!(
+            list("*."),
+            [
+                b".".to_vec(),
+                b"..".to_vec(),
+                b"Menus".to_vec(),
+                b"README".to_vec()
+            ]
+        );
+        assert!(list("a.txt.").len() == 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

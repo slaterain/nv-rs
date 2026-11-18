@@ -125,13 +125,17 @@ pub fn prepare(inputs: &Inputs) -> Outcome {
     // window covers them: a back buffer in the system's scaled pixels would be stretched and soft
     // on a scaled desktop, the first Linux start's 2194x1234 on 2560x1440, 2026-11-17); framed, the
     // scaled size the window is made in. A FalloutPrefs.ini an earlier start made with the scaled
-    // size of a borderless window (exactly that size, the scale not 1) is corrected once.
+    // size of a borderless window (exactly that size, the scale not 1) is corrected once: the
+    // file then carries [`SIZE_CHECKED`] (written by every start of this build, a fresh file's
+    // at once), so a scaled size the player picks later is kept.
     let size = if borderless {
         inputs.screen.or(inputs.desktop)
     } else {
         inputs.desktop
     };
+    let checked = size_checked(&text_of(&old_prefs));
     let earlier_scaled = !first_time
+        && !checked
         && borderless
         && inputs.screen.is_some()
         && inputs.desktop.is_some()
@@ -150,16 +154,32 @@ pub fn prepare(inputs: &Inputs) -> Outcome {
             lines.push(("iSize H".into(), h.to_string()));
         }
     }
-    let new = if lines.is_empty() {
+    let mut new = if lines.is_empty() {
         old_prefs.clone()
     } else {
         bytes_of(&settings::apply_to_prefs(&text_of(&old_prefs), &lines))
     };
+    if !checked {
+        let (section, key) = SIZE_CHECKED;
+        new = bytes_of(&game_ini::set_key(&text_of(&new), section, key, "1"));
+    }
     if inputs.prefs.as_ref() != Some(&new) {
         out.prefs = Some(new);
     }
     out.seeded = seeded;
     out
+}
+
+/// The marker in `FalloutPrefs.ini` (nv-rs's own profile folder, never the game's folders) that
+/// the window's first size has been looked at by a start that gives a borderless window the
+/// monitor's real pixels: section `[nv-rs]` (the game reads no such section), key
+/// `bWindowSizeChecked=1`. With it, the one-time correction of a scaled size never runs again.
+const SIZE_CHECKED: (&str, &str) = ("nv-rs", "bWindowSizeChecked");
+
+/// Whether a `FalloutPrefs.ini`'s text carries [`SIZE_CHECKED`].
+fn size_checked(text: &str) -> bool {
+    let (section, key) = SIZE_CHECKED;
+    settings::ini_value(text, section, key).is_some_and(|v| v.trim() == "1")
 }
 
 /// The `iSize W` and `iSize H` of a `FalloutPrefs.ini`'s text (keys without case), when both are
@@ -418,7 +438,7 @@ mod tests {
         let ini = made.ini.unwrap();
         let mut edited = ini.clone();
         edited.extend_from_slice(b"[Player]\r\nmine=1\r\n");
-        let prefs = b"[Display]\r\niSize W=1920\r\niSize H=1080\r\nbFull Screen=0\r\nsD3DDevice=\"AMD Radeon RX 7800 XT (RADV NAVI32)\"\r\nfGamma=1.2\r\n";
+        let prefs = b"[Display]\r\niSize W=1920\r\niSize H=1080\r\nbFull Screen=0\r\nsD3DDevice=\"AMD Radeon RX 7800 XT (RADV NAVI32)\"\r\nfGamma=1.2\r\n[nv-rs]\r\nbWindowSizeChecked=1\r\n";
         let again = first(Some(&edited), Some(prefs));
         assert_eq!(again.ini, None, "the edited Fallout.ini stays as it is");
         assert_eq!(
@@ -542,6 +562,8 @@ mod tests {
             "{prefs}"
         );
         assert!(prefs.contains("bFull Screen=0"), "{prefs}");
+        // A fresh file is marked at once: nothing to correct later.
+        assert!(size_checked(&prefs), "{prefs}");
         let framed = Settings::parse("Borderless=0\n");
         let prefs = text_of(inputs(None, Some(&framed)).prefs.as_deref().unwrap());
         assert!(
@@ -560,6 +582,13 @@ mod tests {
             .log
             .iter()
             .any(|l| l.contains("set to the monitor's 2560x1440")));
+        assert!(size_checked(&prefs), "{prefs}");
+        // Once marked, the scaled size is the player's choice (picked later in the game or by
+        // hand): kept on every later start, the file unchanged.
+        let chosen = b"[Display]\r\niSize W=2194\r\niSize H=1234\r\nbFull Screen=0\r\nsD3DDevice=\"card\"\r\n[nv-rs]\r\nbWindowSizeChecked=1\r\n";
+        let out = inputs(Some(chosen), None);
+        assert_eq!(out.prefs, None, "{:?}", out.prefs.as_deref().map(text_of));
+        assert!(!out.log.iter().any(|l| l.contains("set to the monitor's")));
         // A size of the player's own: kept.
         let own = b"[Display]\r\niSize W=1920\r\niSize H=1080\r\nbFull Screen=0\r\n";
         let out = inputs(Some(own), None);
