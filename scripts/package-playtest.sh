@@ -230,8 +230,11 @@ done
 if [ -z "${GITHUB_ACTIONS:-}" ] && [ -n "${USER:-}" ]; then
     set -- "$@" --needle "$USER"
 fi
-# (LEGAL.md names fnv_decomp, so that one only counts in the program.)
-for needle in nv-re build43 fnv_decomp /target/release /target/play; do
+# (LEGAL.md names fnv_decomp, so that one only counts in the program.) The research folder's name
+# counts with a path separator before or after it, as in scripts/package-playtest.ps1: the bare
+# word also matches the render thread's name (nv-render, d3d9-stream), which stopped the first
+# macOS package (2026-11-17).
+for needle in 'nv-re/' '/nv-re' 'nv-re\' '\nv-re' build43 fnv_decomp /target/release /target/play; do
     set -- "$@" --program-needle "$needle"
 done
 # FUN_, DAT_ and LAB_ are the names a disassembler gives code and data nobody has named, always in
