@@ -1422,7 +1422,10 @@ fn a_leftover_staging_folder_is_not_a_mod_and_is_cleared() {
     // An older leftover named like a mod but without its record: not a mod either.
     write(&installs.join("02 Old.part").join("x.esp"), b"x");
     assert!(installed(&installs).unwrap().is_empty());
-    assert_eq!(layers(&installs, &loose).unwrap(), [loose.clone()]);
+    assert_eq!(
+        layers(&installs, &loose).unwrap(),
+        std::slice::from_ref(&loose)
+    );
     let outside = dir.0.join("outside");
     write(&outside.join("keep.txt"), b"keep");
     folder_link(&outside, &installs.join(".staging-09 Link"));

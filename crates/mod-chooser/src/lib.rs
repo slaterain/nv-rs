@@ -261,6 +261,14 @@ fn free_bytes(_: &Path) -> Option<u64> {
     None
 }
 
+/// `path` as a full path (joined to the current folder when it is relative), to show the player.
+fn full_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::env::current_dir().map_or_else(|_| path.to_path_buf(), |here| here.join(path))
+}
+
 /// "Not enough room on the drive: X needed, Y free."
 fn no_room(needed: u64, free: u64) -> String {
     format!(
@@ -565,7 +573,7 @@ pub fn run(input: &mut dyn BufRead, out: Out, places: &Places) -> std::io::Resul
         let archives = waiting(&places.loose);
         writeln!(out)?;
         if installed.is_empty() && archives.is_empty() {
-            let folder = std::path::absolute(&places.loose).unwrap_or(places.loose.clone());
+            let folder = full_path(&places.loose);
             say(
                 out,
                 "No mods yet. Put a mod's archive (.7z, .zip or .fomod, as you downloaded it) in this folder:",
@@ -1226,7 +1234,7 @@ fn install(
     out.flush()?;
     let mut last: Option<Instant> = None;
     let mut report = |p: mod_archive::Progress| {
-        let due = last.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY);
+        let due = last.map_or(true, |t| t.elapsed() >= PROGRESS_EVERY);
         if due || p.files == p.files_total {
             last = Some(Instant::now());
             let _ = writeln!(

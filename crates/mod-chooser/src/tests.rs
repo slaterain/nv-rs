@@ -388,7 +388,7 @@ fn nothing_to_do_says_where_mods_go_and_waits() {
     let places = dir.places();
     let (said, code, rest) = run_window(Ok(places.clone()), "\nleft\n");
     assert!(said.contains("Put a mod's archive"), "{said}");
-    let full = std::path::absolute(&places.loose).unwrap();
+    let full = full_path(&places.loose);
     assert!(
         said.lines().any(|l| l == full.display().to_string()),
         "{said}"
@@ -666,7 +666,10 @@ fn at_least_one_and_the_summary() {
     // Core), Core Enter; summary "ok" (back), Core Enter; summary yes; list Enter.
     let said = run_with(&places, "1\n2\n\n0\n3\n2\n\n\n\nok\n\nyes\n\n");
     assert_eq!(said.matches("Not that:").count(), 1, "{said}");
-    assert!(said.contains("\"3\" is not one of the numbers shown"), "{said}");
+    assert!(
+        said.contains("\"3\" is not one of the numbers shown"),
+        "{said}"
+    );
     assert_eq!(said.matches("\n  Outfits B\n").count(), 3, "{said}");
     assert!(
         said.contains("\"ok\" is not yes or q: back to the choices."),
@@ -770,7 +773,7 @@ fn an_unreadable_folder_refuses() {
     let places = dir.places();
     let locked = places.game.join("Data").join("Locked");
     std::fs::create_dir_all(&locked).unwrap();
-    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
     let enforced = std::fs::read_dir(&locked).is_err();
     let result = facts(&places);
     std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
