@@ -133,8 +133,8 @@ mod mac {
             .map(|i| i.name)
     }
 
-    /// What one present did: the frames the window showed, and why the last frame asked for was
-    /// not shown (None when it was, or when none was asked).
+    /// What one present did: the frames the window showed, and why its frames are not shown (the
+    /// first reason of the stretch: the frames after an Occluded one rest; None when one was shown).
     type Shown = (u64, Option<NoFrame>);
 
     /// On a spawned thread, as the game's render thread: the backend's device on the registered

@@ -7973,8 +7973,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.frames_shown
     }
 
-    /// Why the window's last frame asked for was not shown; None when it was shown, or when no
-    /// frame was asked of a window (tests).
+    /// Why the window's frames are not shown now (why the current stretch of them began); None when
+    /// its last frame was shown, or when no frame was asked of a window (tests).
     pub fn frame_not_shown(&self) -> Option<crate::NoFrame> {
         self.surface
             .as_ref()
