@@ -910,6 +910,30 @@ pub fn deferred_init(e: &mut Engine) {
     }
     e.mem.set_u32(info + AV_DERIVATION, DERIVE_SKILL);
 }
+
+/// The exe's Big Guns flags (`kAVFlag_Unknown2000`, as `0066efe0` registers it): O3 off.
+pub const BIG_GUNS_PLAIN_FLAGS: u32 = 0x2000;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 3.
+/// O3 switched at run time (`SetOptionalPatch(3, on)`): Big Guns' flags [`BIG_GUNS_SKILL_FLAGS`]
+/// and JIP's description text on, [`BIG_GUNS_PLAIN_FLAGS`] and no alternative text off.
+pub fn set_big_guns_skill(e: &mut Engine, on: bool) {
+    let slot = ACTOR_VALUE_INFOS + 4 * AV_BIG_GUNS;
+    if !e.mem.is_mapped(slot) {
+        return;
+    }
+    let info = e.mem.u32(slot);
+    if info == 0 {
+        return;
+    }
+    let (flags, text): (u32, &[u8]) = if on {
+        (BIG_GUNS_SKILL_FLAGS, BIG_GUNS_DESCRIPTION)
+    } else {
+        (BIG_GUNS_PLAIN_FLAGS, b"")
+    };
+    e.mem.set_u32(info + AV_FLAGS, flags);
+    crate::world_hooks::set_description_alt_text(e, info + AV_DESCRIPTION, text);
+}
 #[cfg(test)]
 #[path = "gb_tests.rs"]
 mod tests;

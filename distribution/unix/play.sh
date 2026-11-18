@@ -7,6 +7,10 @@
 #   ./play.sh --forget-game    forget the remembered game folder, then start (it asks again)
 #   ./play.sh --import-saves   offer again to copy the saves found in Steam's Proton folder
 #   ./play.sh --check          only check the game and say whether it can start
+#   ./play.sh --mods           play with mods: those installed with nv-rs and those put in the
+#                              "my mods" folder in nv-rs's own folder (it says where), laid over a
+#                              copy of the game's folder made of links in nv-rs's own folder (saves
+#                              made with mods stay apart; --mods --import-saves copies saves in)
 #   ./play.sh --help           this text
 #
 # nv-rs never writes into the game's folder, Steam's folders or your Documents. Everything it
@@ -169,6 +173,7 @@ opt_game=''
 opt_forget=0
 opt_import=0
 opt_check=0
+opt_mods=0
 while [ $# -gt 0 ]; do
     case $1 in
     (--game)
@@ -179,6 +184,7 @@ while [ $# -gt 0 ]; do
     (--forget-game) opt_forget=1 ;;
     (--import-saves) opt_import=1 ;;
     (--check) opt_check=1 ;;
+    (--mods) opt_mods=1 ;;
     (-h | --help)
         usage
         exit 0
@@ -252,12 +258,24 @@ printf '%s\n' "$found" | awk -F '\t' '$1 == "warning" { print $2 }' | while IFS=
     printf 'nv-rs: WARNING: %s\n' "$(decode "$warning")" >&2
 done
 remembered=$own/game-folder.txt
+# The profile: saves and settings made with mods stay apart (`mods`), as on Windows. The program
+# reads NV_PROFILE for the game's Documents and AppData folders (engine-platform machine_table).
+profile=game
+[ "$opt_mods" = 0 ] || profile=mods
+NV_PROFILE=$profile
+export NV_PROFILE
+# The note that the saves were offered, one a profile: a first start with mods offers them into
+# the mods profile and leaves plain play's offer as it was.
 offered=$own/saves-offered.txt
-documents=$own/game/Documents/My\ Games/FalloutNV
+[ "$profile" = game ] || offered=$own/$profile/saves-offered.txt
+# The folder of mods put in by hand: in nv-rs's own folder, never beside play.sh (a package
+# unpacked in the game's folder must never have a folder made there).
+mods=$own/my\ mods
+documents=$own/$profile/Documents/My\ Games/FalloutNV
 saves=$documents/Saves
 # Nothing nv-rs writes is a link: mkdir -p and cp would follow it out of nv-rs's folder.
-for path in "$own" "$own/game" "$own/game/Documents" "$own/game/Documents/My Games" "$documents" \
-    "$saves" "$own/logs" "$own/reports" "$own/machine" "$remembered" "$remembered.part" "$offered"; do
+for path in "$own" "$own/$profile" "$own/$profile/Documents" "$own/$profile/Documents/My Games" \
+    "$documents" "$saves" "$own/modgame" "$own/mod installs" "$mods" "$own/logs" "$own/reports" "$own/machine" "$remembered" "$remembered.part" "$offered"; do
     [ ! -L "$path" ] || fail "$path is a link: nv-rs writes only into plain folders and files of its own there. Make it a plain folder (or remove the link), then start again."
 done
 
@@ -360,6 +378,11 @@ if [ "$remember" = 1 ] && [ -z "${NV_RS_GAME:-}" ]; then
     printf '%s\n' "$game" >"$remembered.part" && mv -f -- "$remembered.part" "$remembered" ||
         fail "could not remember the game folder in $remembered"
 fi
+# A package unpacked inside the game's folder: said plainly. Nothing is written there all the same
+# (everything nv-rs keeps is in its own folder).
+case "$here/" in
+("$game"/*) say "Note: nv-rs is in the game's folder ($here). It never writes there, but it is better kept apart: move the nv-rs folder out of $game." ;;
+esac
 
 # The saves in Steam's Proton folder (or another Wine prefix): COPIED into nv-rs's own folder on
 # the player's typed yes, never moved, never changed there. A save (.fos) and its script
@@ -447,11 +470,14 @@ if [ "$opt_check" = 0 ] && { [ "$opt_import" = 1 ] || { ! has_own_saves && [ ! -
 $folders
 EOF
         if [ "$asked" = 1 ]; then
-            mkdir -p -- "$own" && say "Asked $(date)" >"$offered"
+            mkdir -p -- "$(dirname -- "$offered")" && say "Asked $(date)" >"$offered"
         fi
     elif [ "$opt_import" = 1 ]; then
         say "No saves were found in Steam's Proton folder or in Heroic's or Lutris's prefixes."
     fi
+fi
+if [ "$profile" = mods ] && ! has_own_saves; then
+    say "Saves made with mods are kept apart from your other nv-rs saves, in $saves. To copy saves from Steam's Proton folder into them: ./play.sh --mods --import-saves"
 fi
 
 # The start: nv-rs's own folders, the program's switches, its output in a log too.
@@ -496,6 +522,33 @@ fi
 ls -1t -- "$own/logs" 2>/dev/null | grep '^game-.*\.log$' | tail -n +10 | while IFS= read -r old; do
     rm -f -- "$own/logs/$old"
 done
+
+# Mods: the whole game folder in nv-rs's own folder (modgame): the game's files linked, never
+# copied or written, the installed mods (mod installs) and then the "my mods" folder in nv-rs's
+# own folder copied over them. The program makes it as Play.exe does on Windows (mod-install's
+# overlay).
+if [ "$opt_mods" = 1 ]; then
+    made=0
+    if [ ! -d "$mods" ]; then
+        mkdir -p -- "$mods" || fail "could not make the mods folder $mods"
+        made=1
+    fi
+    if [ -f "$here/app/mods READ ME.txt" ] && [ ! -e "$mods/READ ME.txt" ]; then
+        copy_file "$here/app/mods READ ME.txt" "$mods/READ ME.txt" || say "Could not put the READ ME in $mods."
+    fi
+    say "The mods folder: $mods"
+    if [ "$made" = 1 ] || [ -z "$(ls -1A -- "$mods" | grep -v '^READ ME' || true)" ]; then
+        say "It is empty$([ "$made" = 1 ] && printf ' (just made)'): put a mod's files in it as they would go in the game's Data folder (its .esp or .esm, its .bsa, and folders such as Meshes, Textures or Sound). Its READ ME says more."
+    fi
+    # A mods folder beside play.sh from an earlier version: said, never used.
+    if [ -d "$here/mods" ]; then
+        say "Note: the mods folder beside play.sh ($here/mods) is not used any more: move its files to $mods."
+    fi
+    say "Getting the mods ready..."
+    "$program" --build-mods "$game" "$own" "$mods" ||
+        fail "the mods could not be made ready (above); your game's folder was not changed"
+    game=$own/modgame
+fi
 
 say "Starting the game ($game). Log: $log"
 status_file=$own/logs/.status

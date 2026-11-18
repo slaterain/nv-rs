@@ -842,8 +842,14 @@ pub(super) fn set_weapon_mod_chance(e: &mut Engine, numbers: [u32; 3]) {
     }
 }
 
+/// JIP's three weapon mod numbers (`uWMChancePerLevel`, `uWMChanceMin`, `uWMChanceMax`) each
+/// non-zero: `SetOptionalPatch(17)` turns O17 on only then.
+pub(crate) fn weapon_mod_numbers_set(e: &mut Engine) -> bool {
+    weapon_mod_chance(e).iter().all(|&n| n != 0)
+}
+
 /// O17 on: the switch's bit and JIP's three numbers each non-zero (JIP installs nothing else).
-fn weapon_mods_on(e: &mut Engine) -> bool {
+pub(crate) fn weapon_mods_on(e: &mut Engine) -> bool {
     e.jip_patches() & engine_core::extend::jip_patches::NPC_WEAPON_MODS != 0
         && weapon_mod_chance(e).iter().all(|&n| n != 0)
 }

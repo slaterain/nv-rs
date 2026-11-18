@@ -55,8 +55,8 @@ pub const AMMO_IMPACT_SCRIPT: SiteSlot = SiteSlot::new(Owner::Jip, 0x0089_abdc);
 
 /// JIP's run-wide statics of the hit damage and the combat formulas: `s_VATSHitDT` (the last
 /// threshold, read by JIP's VATS menu patch G121; `-FLT_MAX` until a hit; JIP sets it back to
-/// `-FLT_MAX` when O1 is switched off in the game with `SetOptionalPatch(1, 0)`, not built yet:
-/// that reset comes with it, listed with it in `commands::jip_fn_utility`), `s_condDRDTPenalty`
+/// `-FLT_MAX` when O1 is switched off in the game with `SetOptionalPatch(1, 0)`:
+/// [`reset_vats_hit_dt`], from `switches::set`), `s_condDRDTPenalty`
 /// (the armour condition factor of O12 and G85, set by
 /// `SetArmorConditionPenalty`; 1.0), `s_condDmgPenalty` (G84's weapon condition factor, set by
 /// `SetConditionDamagePenalty`; 0.67) and `s_noMovementCombat` (G126, `ToggleNoMovementCombat`),
@@ -135,6 +135,15 @@ fn take_pending(e: &mut Engine) -> u32 {
 /// `s_VATSHitDT`: the damage threshold the last hit used (for G121).
 pub fn vats_hit_dt(e: &mut Engine) -> f32 {
     f32::from_bits(state(e).vats_hit_dt.load(Ordering::Relaxed))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 1
+// (`s_VATSHitDT = -FLT_MAX` when the switch goes off).
+/// `s_VATSHitDT` back to `-FLT_MAX` (O1 turned off at run time).
+pub fn reset_vats_hit_dt(e: &mut Engine) {
+    state(e)
+        .vats_hit_dt
+        .store((-f32::MAX).to_bits(), Ordering::Relaxed);
 }
 
 /// Sets `s_VATSHitDT` (tests of its readers).
