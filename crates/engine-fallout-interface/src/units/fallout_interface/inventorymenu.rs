@@ -3722,37 +3722,46 @@ mod n054_tests {
     /// quantity menu, and equipping, each with no item selected. The exe reads the null item's
     /// form (`0044ddc0` reads `+8`, as its stand-in here does) and stops; with each row on the call
     /// ends there.
-    #[test]
-    fn s0022_14_15_16_inventory_actions_with_no_item() {
-        type Action = fn(&mut Engine, Ptr<InventoryMenu>);
-        let cases: [(engine_core::extend::stewie::Row, Action); 3] = [
-            (stewie::INVENTORY_USE_NO_ITEM_JUMP, |e, this| {
-                e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
-            }),
-            (stewie::QUANTITY_MENU_CLOSE_NO_ITEM, |e, _| {
-                e.call(0x0078_0c50, &args![3i32]);
-            }),
-            (stewie::INVENTORY_SELECT_NO_ITEM, |e, this| {
-                e.call(0x0078_0d60, &args![this]);
-            }),
-        ];
-        for (row, action) in cases {
-            for on in [false, true] {
-                let mut e = Engine::new();
-                let this = menu(&mut e);
-                e.mem.unmap(0, 0x1000);
-                e.set_global(CURRENT_ITEM, 0u32);
-                e.register_double(ITEM_OBJECT, |e, a| e.mem.u32(a[0] + 8).into_ret());
-                answer(&mut e, WHEEL_GET_VISIBLE, 0);
-                e.set_stewie(row, on);
-                e.call_log = Some(vec![]);
-                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    action(&mut e, this);
-                }));
-                e.call_stack.clear();
-                assert_eq!(run.is_ok(), on, "{row:?} {on}");
-            }
+    fn inventory_action_with_no_item(
+        row: engine_core::extend::stewie::Row,
+        action: fn(&mut Engine, Ptr<InventoryMenu>),
+    ) {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            e.mem.unmap(0, 0x1000);
+            e.set_global(CURRENT_ITEM, 0u32);
+            e.register_double(ITEM_OBJECT, |e, a| e.mem.u32(a[0] + 8).into_ret());
+            answer(&mut e, WHEEL_GET_VISIBLE, 0);
+            e.set_stewie(row, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                action(&mut e, this);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "{row:?} {on}");
         }
+    }
+
+    #[test]
+    fn s0022_14_use_with_no_item() {
+        inventory_action_with_no_item(stewie::INVENTORY_USE_NO_ITEM_JUMP, |e, this| {
+            e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
+        });
+    }
+
+    #[test]
+    fn s0022_15_drop_with_no_item() {
+        inventory_action_with_no_item(stewie::QUANTITY_MENU_CLOSE_NO_ITEM, |e, _| {
+            e.call(0x0078_0c50, &args![3i32]);
+        });
+    }
+
+    #[test]
+    fn s0022_16_equip_with_no_item() {
+        inventory_action_with_no_item(stewie::INVENTORY_SELECT_NO_ITEM, |e, this| {
+            e.call(0x0078_0d60, &args![this]);
+        });
     }
 
     #[test]
