@@ -81,6 +81,10 @@ pub const SET_ACTOR_REF_ESSENTIAL_NULL_CHECK: Row = Row::at(CRASH, 9);
 /// S0881 `patchFixSavingNullCellCrash` (`SaveInitialData` `0084eb80` at `0x84EE1B`): a created
 /// reference saved with neither worldspace nor cell.
 pub const SAVING_NULL_CELL: Row = Row::at(CRASH, 10);
+/// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
+/// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
+/// changed forms, so it is a fixes row.
+pub const CHANGES_MAP_BUCKETS: Row = Row::at(FIXES, 0);
 
 /// The table: one bit a row.
 #[derive(Debug)]
