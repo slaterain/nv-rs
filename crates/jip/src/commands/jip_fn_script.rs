@@ -8,8 +8,8 @@
 //! `RemoveAllAddedVariables` keep JIP's added variables in its co-save (`s_scriptVariablesBuffer`,
 //! the `JPSV` record, with `Script::AddVariable`'s new `VariableInfo` and `ScriptVar` lists): the
 //! co-save framework does not carry that record yet. `RunScriptSnippet`, `RunBatchScript` and
-//! `RegisterSRScript` compile script text (`Script::Create`, JIP's `JIPScriptRunner`) and the last
-//! two read files from the game folder: the script compiler seam and the file layer are not built.
+//! `RegisterSRScript` compile script text (`Script::Create`, JIP's `JIPScriptRunner`: built in
+//! `crate::script_runner`, with `register` for `RegisterSRScript`); the commands are not built yet.
 //!
 //! `Script` (the exe's layout, JIP's `nvse/GameScript.h`): its data length `info.dataLength`
 //! +0x20 and quest flag +0x28 (`Script::Run`, `005AC1E0`, reads +0x38 and +0x40 beside them;
@@ -40,6 +40,7 @@ pub static COMMANDS: Handlers = &[
     (0x2828, has_script_block),
     (0x282b, disable_scripted_activate),
     (0x283a, execute_script),
+    (0x2938, register_sr_script),
 ];
 
 /// `kFormType_Script`.
@@ -551,6 +552,27 @@ fn execute_script(e: &mut Engine, w: &[u32]) -> Ret {
     let events = e.mem.u32(xscript + XSCRIPT_EVENTS);
     if script != 0 && events != 0 {
         e.call(SCRIPT_RUN, &args![script, a.this_obj, events, 0u32, 0u32]);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_script.h:
+// Cmd_RegisterSRScript_Execute.
+/// `RegisterSRScript path`: while the script runner's files compile (a `gr_` file calls it), the
+/// file `path` below `Data\NVSE\plugins\scripts\` kept to run at its moment
+/// ([`crate::script_runner::register`]): 1; else 0. The path is read into JIP's 0x80-byte buffer.
+fn register_sr_script(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if e.ext::<Jip>().script_runner.init_in_progress == 0 {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let path = buffer_arg(e, &read, 0, 0x80, "RegisterSRScript");
+    if crate::script_runner::register(e, &path) {
+        a.set_result(e, 1.0);
     }
     handled(true)
 }

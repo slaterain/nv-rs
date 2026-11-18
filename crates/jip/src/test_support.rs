@@ -58,10 +58,21 @@ fn prepare(e: &mut Engine) {
     // and H07).
     e.map(0x0102_9000, 0x1000);
     e.map(0x0109_d000, 0x1000);
+    // `ConsoleManager::GetSingleton` (`0071b160`) when the test engine has none: no console, so
+    // JIP's start-up line at the deferred start prints nothing.
+    if !e.is_registered(0x0071_b160) {
+        e.register(0x0071_b160, |_, _| 0u32.into_ret());
+    }
     // `0050de20` (a light form's animation, JIP's wrap there: group GL, H12) when the test engine
     // has no translation of it: a marker answer (0x5a60).
     if !e.is_registered(0x0050_de20) {
         e.register(0x0050_de20, |_, _| 0x5a60u32.into_ret());
+    }
+    // The game's `FindFirstFileA` at its import slot (the script runner's search at the deferred
+    // start), when the test engine has none: no such folder (`INVALID_HANDLE_VALUE`), so no script
+    // file runs.
+    if !e.is_registered(0x00fd_f070) {
+        e.register(0x00fd_f070, |_, _| 0xffff_ffffu32.into_ret());
     }
     nvse::table::install(e);
     // The platform's XInputGetState at its import slot, as the host registers it (no controller:

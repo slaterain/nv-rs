@@ -1469,6 +1469,8 @@ fn load_pass_world(draws: &[u32]) -> Engine {
     e.map(0x011d_e000, 0x1000);
     e.map(0x011e_0000, 0x1000);
     e.mem.set_u32(THE_PLAYER_AT, PLAYER_REF);
+    // The player's teammate count (`+0xD68`, JIP's teammate perks step before O17's): none.
+    e.map((PLAYER_REF + 0xd68) & !0xfff, 0x1000);
     e.mem.set_u32(OTHER_ACTOR + 0x68, PROCESS);
     e.mem.set_u8(OTHER_ACTOR + 0x143, 0x90);
     e.mem.set_u32(HIGH_ACTORS_AT, OTHER_ACTOR);

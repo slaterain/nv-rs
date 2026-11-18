@@ -1410,21 +1410,26 @@ fn linked_references_set_when_installed() {
 }
 
 /// G33's part of the housekeeping: a load's start and leaving to the main menu clear the player's
-/// killer (`+0xC0`) through the messages, as `DoPreLoadGameHousekeeping` does.
+/// killer (`+0xC0`) through the messages, as `DoPreLoadGameHousekeeping` does, only while JIP
+/// answers "installed" (not installed, the killer stays: the game's own behaviour).
 #[test]
 fn a_load_and_the_main_menu_clear_the_players_killer() {
     let mut w = World::new();
-    for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
-        w.e.mem.set_u32(PLAYER_REF + 0xc0, 0x0500_8800);
-        listen(
-            &mut w.e,
-            &Message {
-                kind,
-                data: 0,
-                len: 0,
-            },
-        );
-        assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0, "{kind}");
+    for installed in [false, true] {
+        w.e.ext::<Jip>().answers_installed = installed;
+        for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
+            w.e.mem.set_u32(PLAYER_REF + 0xc0, 0x0500_8800);
+            listen(
+                &mut w.e,
+                &Message {
+                    kind,
+                    data: 0,
+                    len: 0,
+                },
+            );
+            let left = if installed { 0 } else { 0x0500_8800 };
+            assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), left, "{kind} {installed}");
+        }
     }
 }
 
@@ -1629,4 +1634,32 @@ fn a_load_and_the_main_menu_clear_the_excluded_combat_actions() {
         );
         assert_eq!(excluded_combat_actions(&mut w.e, PLAYER_REF), 0, "{kind}");
     }
+}
+
+/// DeferredInit's console line: the format and JIP's version as a double, while installed.
+#[test]
+fn the_version_line_at_the_deferred_start() {
+    thread_local! {
+        static PRINTED: std::cell::RefCell<Vec<(Vec<u8>, f64)>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+    let mut w = World::new();
+    w.e.register(0x0071_b160, |_, _| Ret {
+        eax: 0x0500_0100,
+        ..Ret::default()
+    });
+    w.e.register(0x0071_d0a0, |e, a| {
+        let format = nvse::table::guest_text(e, a[1]);
+        let version = e.mem.f64(a[2]);
+        PRINTED.with(|p| p.borrow_mut().push((format, version)));
+        Ret::default()
+    });
+    print_version(&mut w.e);
+    assert!(PRINTED.with(|p| p.borrow().is_empty()), "not installed");
+    w.e.ext::<Jip>().answers_installed = true;
+    print_version(&mut w.e);
+    assert_eq!(
+        PRINTED.with(|p| p.borrow().clone()),
+        [(b"JIP LN version: %.2f".to_vec(), 57.3)]
+    );
 }
