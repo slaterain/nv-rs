@@ -25,15 +25,98 @@ pub struct Row {
     pub summary: &'static str,
 }
 
-/// Every row built, in PLAN.md's order.
-pub const ROWS: &[Row] = &[Row {
-    bit: stewie::DIALOG_SPEECH_NULL_CHECK,
-    function: "patchDialogSpeechNullCheck",
-    plan: "S0079",
-    key: "bDialogSpeechNullCheck",
-    tweaks: None,
-    summary: "clearing the speaker after dialogue no longer crashes when the speaker's 3D is not loaded (Tweaks' always-on fix)",
-}];
+/// Every row built, in PLAN.md's order. A row's key is `b` and Tweaks' function's name without
+/// its `patch` prefix.
+pub const ROWS: &[Row] = &[
+    Row {
+        bit: stewie::EXPLOSION_WATER_NULL_CALL,
+        function: "fixExplosionWaterNullCall",
+        plan: "S0042",
+        key: "bFixExplosionWaterNullCall",
+        tweaks: None,
+        summary: "water reflecting an explosion no longer crashes on an explosion that is being taken apart",
+    },
+    Row {
+        bit: stewie::HANDLE_MULTIBOUNDS_NULL_CELL,
+        function: "patchFixHandleMultiboundsCrashWithNullCell",
+        plan: "S0064",
+        key: "bFixHandleMultiboundsCrashWithNullCell",
+        tweaks: None,
+        summary: "a reference in a multibound with no cell (being moved or removed) is passed over instead of crashing",
+    },
+    Row {
+        bit: stewie::HANDLE_STEALING_CRASH,
+        function: "fixHandleStealingCrash",
+        plan: "S0068",
+        key: "bFixHandleStealingCrash",
+        tweaks: None,
+        summary: "taking an item marked stolen that has no owner no longer crashes",
+    },
+    Row {
+        bit: stewie::NULL_PLAYER_CELL_IMPOSTER_CHECK,
+        function: "patchNullPlayerCellImposterCheck",
+        plan: "S0078",
+        key: "bNullPlayerCellImposterCheck",
+        tweaks: None,
+        summary: "the regions at the player's place are looked up without crashing when no cell is there yet",
+    },
+    Row {
+        bit: stewie::DIALOG_SPEECH_NULL_CHECK,
+        function: "patchDialogSpeechNullCheck",
+        plan: "S0079",
+        key: "bDialogSpeechNullCheck",
+        tweaks: None,
+        summary: "clearing the speaker after dialogue no longer crashes when the speaker's 3D is not loaded",
+    },
+    Row {
+        bit: stewie::NULL_HIT_LOCATION_NODE_EXPLOSION,
+        function: "patchFixNullHitLocationNodeExplosionCrash",
+        plan: "S0106",
+        key: "bFixNullHitLocationNodeExplosionCrash",
+        tweaks: None,
+        summary: "a limb blown off a body whose model lacks that limb's node no longer crashes",
+    },
+    Row {
+        bit: stewie::PROCESS_ACTIVATE_NULL_PACKAGE,
+        function: "patchProcessActivateAddNullCheckForPackage",
+        plan: "S0124",
+        key: "bProcessActivateAddNullCheckForPackage",
+        tweaks: None,
+        summary: "an NPC using something while it has no package no longer crashes",
+    },
+    Row {
+        bit: stewie::PATROL_MISSING_NULL_CHECK,
+        function: "patchFixPatrolMissingNullCheck",
+        plan: "S0140",
+        key: "bFixPatrolMissingNullCheck",
+        tweaks: None,
+        summary: "an NPC on patrol whose next patrol point is missing waits instead of crashing",
+    },
+    Row {
+        bit: stewie::RARE_NULL_TELEPORT_DOOR,
+        function: "patchFixRareNullTeleportDoorCrash",
+        plan: "S0169",
+        key: "bFixRareNullTeleportDoorCrash",
+        tweaks: None,
+        summary: "an NPC finding its way through doors no longer crashes on an empty door entry",
+    },
+    Row {
+        bit: stewie::SET_ACTOR_REF_ESSENTIAL_NULL_CHECK,
+        function: "patchFixSetActorRefEssentialNullCheck",
+        plan: "S0174",
+        key: "bFixSetActorRefEssentialNullCheck",
+        tweaks: None,
+        summary: "a script calling SetActorRefEssential without a reference no longer crashes",
+    },
+    Row {
+        bit: stewie::SAVING_NULL_CELL,
+        function: "patchFixSavingNullCellCrash",
+        plan: "S0881",
+        key: "bFixSavingNullCellCrash",
+        tweaks: None,
+        summary: "saving with a placed object that has no cell no longer crashes",
+    },
+];
 
 /// The keys of `[nv-rs Stewie]` and how they turn the rows on.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

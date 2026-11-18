@@ -171,7 +171,8 @@ fn setup() -> Engine {
     set_ref(&mut e, R_REFR, REFR);
     set_ref(&mut e, R_MADE, MADE);
     set_ref(&mut e, R_PLAIN, PLAIN);
-    register_awaiting(&mut e, AWAITING_H08_H10);
+    // Registered with their patches (H08, H10).
+    assert_ne!(crate::test_support::execute_of(&e, 0x28d3), 0);
     e
 }
 
@@ -839,4 +840,351 @@ fn model_has_block_loads_a_base_forms_model() {
     CALLS.with(|c| c.borrow_mut().clear());
     assert_eq!(has(&mut e, R_REFR, b"Hinge"), 0.0);
     assert!(of(0x0044_7080).is_empty());
+}
+
+// ---- With the model hooks: H10 (biped parts, add-ons) and H08 (the clone test) ----
+
+/// H10's biped part seam with `InsertNode`: a part whose form has entries gets them in its clone
+/// (here the scene's root, which takes the model root's name first), and the clone is named
+/// `"<slot name> <form id>"`; a form with none is only named.
+#[test]
+fn h10_a_biped_part_gets_its_forms_entries_and_jips_name() {
+    let mut e = setup();
+    e.map(0x0118_8000, 0x1000);
+    let slot_name = FORMS + 0xf000;
+    e.mem.write(slot_name, b"UpperBody\0");
+    e.mem.set_u32(0x0118_8b98 + 4 * 2, slot_name);
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    node_calls();
+    let seam = crate::game_patches::gh2::BIPED_PART_NAME.addr();
+    // The form STATIC, the clone ROOT, the model's root ROOT, slot 2, third person.
+    assert_eq!(e.site(seam, &[STATIC, ROOT, ROOT, 2, 0]), Some(1));
+    let made = NEW_NODES + 0x100;
+    assert_eq!(node_calls(), vec![(ATTACH_FN, SPINE, vec![made, 1])]);
+    assert_eq!(e.mem.u32(ROOT + 8), s_of(b"UpperBody 00001001"));
+    // A plain form: only the name.
+    assert_eq!(e.site(seam, &[PLAIN, ARM, ARM, 2, 0]), Some(1));
+    assert!(node_calls().is_empty());
+}
+
+/// H10's add-on seam with `InsertNode`: the clone's rotation is the identity and its translation
+/// 0, and a form with entries gets them in the clone.
+#[test]
+fn h10_an_add_on_gets_its_forms_entries_and_a_reset_transform() {
+    let mut e = setup();
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    node_calls();
+    for at in (0x34..0x64).step_by(4) {
+        e.mem.set_f32(ROOT + at, 7.0);
+    }
+    let seam = crate::game_patches::gh2::ADD_ON_TRANSFORM.addr();
+    assert_eq!(e.site(seam, &[ROOT, STATIC, 0]), Some(1));
+    let floats: Vec<f32> = (0..12).map(|i| e.mem.f32(ROOT + 0x34 + 4 * i)).collect();
+    assert_eq!(
+        floats,
+        [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    );
+    assert_eq!(
+        node_calls(),
+        vec![(ATTACH_FN, SPINE, vec![NEW_NODES + 0x100, 1])]
+    );
+}
+
+/// H08: a form or a reference with entries is cloned for each placed object (the clone seam
+/// answers 1); without entries the game's checks go on (0).
+#[test]
+fn h08_a_form_with_entries_is_cloned() {
+    let mut e = setup();
+    let seam = crate::game_patches::gl::lights::CLONE_3D.addr();
+    assert_eq!(e.site(seam, &[0, STATIC, 0]), Some(0));
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    assert_eq!(e.site(seam, &[0, STATIC, 0]), Some(1), "the form");
+    assert_eq!(e.site(seam, &[0, PLAIN, STATIC]), Some(1), "the reference");
+    assert_eq!(e.site(seam, &[0, PLAIN, 0]), Some(0));
+}
+
+/// A request kept for the main loop (asked on another thread) runs only while its kept id still
+/// names the very form that was asked: the id in no form map (a load dropped it): nothing done and
+/// the request gone; another form holding the id now (a reference rebuilt elsewhere, or a made-in-
+/// game id reused): that one gets nothing either, and the old pointer is never read; the same form
+/// under its id: it runs.
+#[test]
+fn a_kept_request_runs_only_for_the_same_form_under_its_id() {
+    let mut e = setup();
+    game_globals(&mut e);
+    let keep = |e: &mut Engine, key: u32, form: u32, id: u32| {
+        let req = Request {
+            form,
+            mode: 1,
+            flag: INSERT_NODE,
+            text: b"Bip01 Spine|NewA".to_vec(),
+        };
+        maps(e).pending.insert(key, (req, id));
+    };
+    // The id is in no form map: dropped.
+    keep(&mut e, 7, STATIC, 0x0000_1001);
+    run_pending(&mut e, 7);
+    assert!(maps(&mut e).pending.is_empty(), "taken");
+    assert_eq!(e.mem.u8(STATIC + 6), 0, "nothing done to the old pointer");
+    assert!(node_names(&mut e, true, STATIC).is_none());
+    // The id now names another form (a made-in-game id reused by a new reference after a load).
+    let other = FORMS + 0xb000;
+    form(&mut e, other, 0x20, 0xff00_0002);
+    e.mem.set_u32(other, FORM_VT);
+    in_form_map(&mut e, other, 0xff00_0002, 0);
+    keep(&mut e, 8, STATIC, 0xff00_0002);
+    run_pending(&mut e, 8);
+    assert_eq!(
+        e.mem.u8(other + 6),
+        0,
+        "a different form with the kept id: nothing"
+    );
+    assert!(node_names(&mut e, true, other).is_none());
+    assert!(node_names(&mut e, true, STATIC).is_none());
+    // The same form under its id: run.
+    in_form_map(&mut e, STATIC, 0x0000_1001, 0);
+    keep(&mut e, 9, STATIC, 0x0000_1001);
+    run_pending(&mut e, 9);
+    assert_eq!(e.mem.u8(STATIC + 6), INSERT_NODE);
+    assert!(node_names(&mut e, true, STATIC).is_some());
+    // An unknown key: nothing.
+    run_pending(&mut e, 99);
+}
+
+// ---- H10's name counts and its light and node conditions ----
+
+const LIGHT: u32 = FORMS + 0xc000;
+const LIGHT_FORM: u32 = FORMS + 0xc400;
+const LIT_NODE: u32 = FORMS + 0x7c00;
+
+/// A node `LIT_NODE` ("Lamp", marked by JIP's light hooks: byte +0x33 bit 0x20) holding one of
+/// JIP's point lights (`LIGHT`, marked, with a form); the slot names' page with slot 2 "UpperBody".
+fn lit_scene(e: &mut Engine) {
+    e.map(0x0118_8000, 0x1000);
+    let slot_name = FORMS + 0xf000;
+    e.mem.write(slot_name, b"UpperBody\0");
+    e.mem.set_u32(0x0118_8b98 + 4 * 2, slot_name);
+    e.mem
+        .set_u32(LIGHT, crate::game_patches::gl::lights::POINT_LIGHT_VTABLE);
+    e.mem.set_u8(LIGHT + 0x33, 0x20);
+    e.mem.set_u32(LIGHT + 0xe8, LIGHT_FORM);
+    node(e, LIT_NODE, b"Lamp", &[LIGHT]);
+    e.mem.set_u8(LIT_NODE + 0x33, 0x20);
+}
+
+/// Whether `LIGHT` was listed (its done mark, byte +0x33 bit 0x40, set).
+fn lit(e: &Engine) -> bool {
+    e.mem.u8(LIGHT + 0x33) & 0x40 != 0
+}
+
+/// H10's rename keeps the fixed strings' counts as JIP's `SetName` does (its `lock`-ed adds): the
+/// new name holds one count, the old name one fewer; naming a block the name it has leaves the
+/// count as it was. With entries the clone first takes the model root's name with one count more
+/// (JIP's `lock inc`; the clone's own name is overwritten, its count kept).
+#[test]
+fn h10_the_names_counts_after_a_rename() {
+    let mut e = setup();
+    lit_scene(&mut e);
+    let seam = crate::game_patches::gh2::BIPED_PART_NAME.addr();
+    let lamp = s_of(b"Lamp");
+    e.mem.set_u32(lamp - 8, 5);
+    // A plain form (no entries), first person (no lights): only the name.
+    assert_eq!(e.site(seam, &[PLAIN, LIT_NODE, ROOT, 2, 1]), Some(1));
+    let named = e.mem.u32(LIT_NODE + 8);
+    assert_eq!(named, s_of(b"UpperBody 00003001"));
+    assert_eq!(
+        count(&e, b"UpperBody 00003001"),
+        1,
+        "the new name: one count"
+    );
+    assert_eq!(e.mem.u32(lamp - 8), 4, "the old name: one fewer");
+    // The same name again: unchanged.
+    assert_eq!(e.site(seam, &[PLAIN, LIT_NODE, ROOT, 2, 1]), Some(1));
+    assert_eq!(e.mem.u32(LIT_NODE + 8), named);
+    assert_eq!(count(&e, b"UpperBody 00003001"), 1);
+    // With entries: the root's name taken with one count more, then the part named; the root
+    // name's count back where it was and the part name's old string not given back.
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    let root_name = s_of(b"Scene Root");
+    e.mem.set_u32(root_name - 8, 3);
+    let held = count(&e, b"UpperBody 00003001");
+    assert_eq!(e.site(seam, &[STATIC, LIT_NODE, ROOT, 2, 1]), Some(1));
+    assert_eq!(
+        e.mem.u32(root_name - 8),
+        3,
+        "+1 taken, -1 given back by the rename"
+    );
+    assert_eq!(
+        count(&e, b"UpperBody 00003001"),
+        held,
+        "the overwritten name's count kept"
+    );
+    assert_eq!(e.mem.u32(LIT_NODE + 8), s_of(b"UpperBody 00001001"));
+}
+
+/// H10's biped part conditions: a node clone marked by the light hooks is lit in third person,
+/// not in first person; a clone that is not a node is only named (no entries, no lights).
+#[test]
+fn h10_a_biped_parts_lights_and_node_test() {
+    let seam = crate::game_patches::gh2::BIPED_PART_NAME.addr();
+    let mut e = setup();
+    lit_scene(&mut e);
+    assert_eq!(e.site(seam, &[PLAIN, LIT_NODE, ROOT, 2, 0]), Some(1));
+    assert!(lit(&e), "third person: lit");
+
+    let mut e = setup();
+    lit_scene(&mut e);
+    assert_eq!(e.site(seam, &[PLAIN, LIT_NODE, ROOT, 2, 1]), Some(1));
+    assert!(!lit(&e), "first person: not lit");
+
+    let mut e = setup();
+    lit_scene(&mut e);
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    node_calls();
+    // ARM is a leaf: its slot +0xC is not the shared `return this`.
+    e.mem.set_u8(ARM + 0x33, 0x20);
+    assert_eq!(e.site(seam, &[STATIC, ARM, ROOT, 2, 0]), Some(1));
+    assert!(node_calls().is_empty(), "not a node: no entries");
+    assert_eq!(e.mem.u32(ARM + 8), s_of(b"UpperBody 00001001"), "named");
+}
+
+/// H10's add-on conditions: lit unless its root override is JIP's first-person node; with form 0
+/// only the transform is reset (no entries, no lights).
+#[test]
+fn h10_an_add_ons_lights_and_form_zero() {
+    let seam = crate::game_patches::gh2::ADD_ON_TRANSFORM.addr();
+    let first = FORMS + 0xe000;
+    let mut e = setup();
+    lit_scene(&mut e);
+    crate::game_patches::gp::set_first_person_node_for_test(&mut e, first);
+    assert_eq!(e.site(seam, &[LIT_NODE, PLAIN, first]), Some(1));
+    assert!(!lit(&e), "under the first-person node: not lit");
+
+    let mut e = setup();
+    lit_scene(&mut e);
+    crate::game_patches::gp::set_first_person_node_for_test(&mut e, first);
+    assert_eq!(e.site(seam, &[LIT_NODE, PLAIN, first + 0x100]), Some(1));
+    assert!(lit(&e), "another root: lit");
+
+    let mut e = setup();
+    lit_scene(&mut e);
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    node_calls();
+    for at in (0x34..0x64).step_by(4) {
+        e.mem.set_f32(LIT_NODE + at, 7.0);
+    }
+    assert_eq!(e.site(seam, &[LIT_NODE, 0, 0]), Some(1));
+    assert!(!lit(&e), "form 0: no lights");
+    assert!(node_calls().is_empty(), "form 0: no entries");
+    assert_eq!(e.mem.f32(LIT_NODE + 0x34), 1.0, "the transform reset");
+    assert_eq!(e.mem.f32(LIT_NODE + 0x38), 0.0);
+}
+
+// ---- The queued reference's attach (group GP): a reference loaded later gets its entries ----
+
+thread_local! {
+    /// At each node attach: the light's byte +0x33 then (whether the light step ran before).
+    static LIGHT_AT_ATTACH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+}
+
+/// A queued reference task for `refr` (flags `0x820`: the cell's load is skipped, as for a
+/// reference already loaded), its cell and its loader stand-ins, the root `ROOT` holding `SPINE`
+/// and `LIGHT` (the root marked by the light hooks), and an attach stand-in that records the
+/// light's mark at each attach.
+fn queued(e: &mut Engine, refr: u32) -> u32 {
+    lit_scene(e);
+    node(e, ROOT, b"Scene Root", &[SPINE, LIGHT]);
+    e.mem.set_u8(ROOT + 0x33, 0x20);
+    let task = FORMS + 0xd000;
+    let cell = FORMS + 0xd100;
+    let loader = FORMS + 0xd200;
+    e.mem.set_u32(task + 0x28, refr);
+    e.mem.set_u32(refr + 8, e.mem.u32(refr + 8) | 0x820);
+    e.mem.set_u32(refr + 0x40, cell);
+    e.mem.set_u32(0x011c_3b3c, loader);
+    for f in [0x0090_62e0, 0x0044_0a10, 0x0044_0a50] {
+        e.register(f, |_, _| Ret::default());
+    }
+    LIGHT_AT_ATTACH.with(|l| l.borrow_mut().clear());
+    e.register(ATTACH_FN, |e, w| {
+        LIGHT_AT_ATTACH.with(|l| l.borrow_mut().push(e.mem.u8(LIGHT + 0x33)));
+        NODE_CALLS.with(|c| c.borrow_mut().push((ATTACH_FN, w[0], w[1..].to_vec())));
+        Ret::default()
+    });
+    task
+}
+
+/// The names of the nodes attached, in order (the inserted nodes' names).
+fn attached_names(e: &Engine) -> Vec<(u32, u32)> {
+    node_calls()
+        .into_iter()
+        .filter(|c| c.0 == ATTACH_FN)
+        .map(|(_, parent, w)| (parent, e.mem.u32(w[0] + 8)))
+        .collect()
+}
+
+/// A reference and its base with entries: both forms' entries go under the loaded 3D, the
+/// reference's first (JIP's `DoInsertObjects(refr, base)`), before the point-light step.
+#[test]
+fn a_loaded_reference_gets_its_and_its_bases_entries_before_the_lights() {
+    let mut e = setup();
+    insert(&mut e, R_REFR, 1, b"NewR");
+    insert(&mut e, R_STATIC, 1, b"NewB");
+    let task = queued(&mut e, REFR);
+    node_calls();
+    crate::game_patches::gp::queued_reference(&mut e, task);
+    assert_eq!(
+        attached_names(&e),
+        vec![(ROOT, s_of(b"NewR")), (ROOT, s_of(b"NewB"))],
+        "the reference's, then the base's, under the loaded 3D"
+    );
+    assert_eq!(
+        LIGHT_AT_ATTACH.with(|l| l.borrow().clone()),
+        vec![0x20, 0x20],
+        "attached before the light step"
+    );
+    assert!(lit(&e), "then the lights");
+}
+
+/// The player (`+0xC` 0x14) with a first-person node (`+0x694`): his own entries go under both
+/// roots; entries only on his base go under the loaded 3D only (JIP's first-person call passes
+/// the player alone).
+#[test]
+fn the_player_gets_his_entries_in_his_first_person_node_too() {
+    let first = FORMS + 0xe000;
+    let mut e = setup();
+    insert(&mut e, R_REFR, 1, b"NewR");
+    let task = queued(&mut e, REFR);
+    node(&mut e, first, b"1st", &[]);
+    e.mem.set_u32(REFR + 0xc, 0x14);
+    e.mem.set_u32(REFR + 0x694, first);
+    node_calls();
+    crate::game_patches::gp::queued_reference(&mut e, task);
+    assert_eq!(
+        attached_names(&e),
+        vec![(ROOT, s_of(b"NewR")), (first, s_of(b"NewR"))]
+    );
+
+    let mut e = setup();
+    insert(&mut e, R_STATIC, 1, b"NewB");
+    let task = queued(&mut e, REFR);
+    node(&mut e, first, b"1st", &[]);
+    e.mem.set_u32(REFR + 0xc, 0x14);
+    e.mem.set_u32(REFR + 0x694, first);
+    node_calls();
+    crate::game_patches::gp::queued_reference(&mut e, task);
+    assert_eq!(attached_names(&e), vec![(ROOT, s_of(b"NewB"))]);
+}
+
+/// No base (JIP's `GetBaseForm2` answers 0): nothing goes in, even with entries on the reference.
+#[test]
+fn a_loaded_reference_with_no_base_gets_nothing() {
+    let mut e = setup();
+    insert(&mut e, R_REFR, 1, b"NewR");
+    let task = queued(&mut e, REFR);
+    e.mem.set_u32(REFR + 0x20, 0);
+    node_calls();
+    crate::game_patches::gp::queued_reference(&mut e, task);
+    assert!(attached_names(&e).is_empty());
+    assert!(lit(&e), "the light step still runs");
 }

@@ -61,6 +61,7 @@ pub mod jip_fn_ref_map;
 pub mod jip_fn_script;
 pub mod jip_fn_script_vars;
 pub mod jip_fn_sound;
+pub mod jip_fn_sound_playing;
 pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
@@ -224,11 +225,14 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_lines::COMMANDS,
     jip_fn_miscellaneous_marker::COMMANDS,
     jip_fn_utility_patches::COMMANDS,
+    jip_fn_sound_playing::COMMANDS,
     crate::game_patches::gp::COMMANDS,
     crate::game_patches::gc::formulas::COMMANDS,
     crate::game_patches::gx::COMMANDS,
     jip_fn_misc_ref_insert::COMMANDS,
     jip_fn_ccc_hud::COMMANDS,
+    // `InsertNode` and `AttachModel`, with their patches H08 and H10.
+    jip_fn_misc_ref_insert::AWAITING_H08_H10,
     // `SynchronizePosition`, with its patch H13 (`game_patches::gh2`).
     jip_fn_misc_ref::AWAITING_H13,
     // `ToggleHUDCursor`, with its patch H02 (`game_patches::gp`).
@@ -853,6 +857,7 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_miscellaneous",
             "jip_fn_utility",
+            "jip_fn_sound",
             // game_patches::gp::COMMANDS (its commands are in this file).
             "jip_fn_miscellaneous",
             // game_patches::gc::formulas::COMMANDS (likewise).
@@ -863,6 +868,8 @@ mod tests {
             "jip_fn_misc_ref",
             // jip_fn_ccc_hud (CCCOnLoad and the commands that use what it finds).
             "jip_fn_ccc",
+            // jip_fn_misc_ref_insert::AWAITING_H08_H10 (with H08 and H10).
+            "jip_fn_misc_ref",
             // jip_fn_misc_ref::AWAITING_H13 (`SynchronizePosition`, with H13).
             "jip_fn_misc_ref",
             // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
