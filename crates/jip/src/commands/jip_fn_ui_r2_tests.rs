@@ -331,7 +331,7 @@ fn the_callbacks_lambda_variables_are_kept_while_its_box_waits() {
 fn game_font_settings(e: &mut Engine) {
     for n in 1..=8u32 {
         let text = FORMS + 0x6_0000 + 0x40 * n;
-        e.mem.write(text, format!("Fonts\F{n}.fnt\0").as_bytes());
+        e.mem.write(text, format!("Fonts\\F{n}.fnt\0").as_bytes());
         e.mem.set_u32(0x011f_3418 + 0xc * (n - 1), text);
     }
 }
@@ -346,12 +346,15 @@ fn g129_makes_jips_font_manager_and_set_font_file_uses_its_map() {
     let mut e = setup();
     game_font_settings(&mut e);
     files::put(
-        "data\nvse\plugins\xfonts\list.txt",
-        b"10=Fonts\X.fnt\r\n11=Fonts\Missing.fnt\n10=Fonts\Y.fnt\n12=Fonts\bad.fnt\n13=Fonts\F2.fnt\nnothing\n",
+        "data\\nvse\\plugins\\xfonts\\list.txt",
+        b"10=Fonts\\X.fnt\r\n11=Fonts\\Missing.fnt\n10=Fonts\\Y.fnt\n12=Fonts\\bad.fnt\n13=Fonts\\F2.fnt\nnothing\n",
     );
-    files::put("data\nvse\plugins\xfonts\notes.ini", b"14=Fonts\X.fnt\n");
+    files::put(
+        "data\\nvse\\plugins\\xfonts\\notes.ini",
+        b"14=Fonts\\X.fnt\n",
+    );
     for f in ["x", "y", "bad", "f2"] {
-        files::put(&format!("data\fonts\{f}.fnt"), b"x");
+        files::put(&format!("data\\fonts\\{f}.fnt"), b"x");
     }
     assert_eq!(e.mem.u32(0x011f_33f8), 0);
     assert_eq!(e.site(FONT_MANAGER_START.addr(), &[]), Some(1));
@@ -362,7 +365,7 @@ fn g129_makes_jips_font_manager_and_set_font_file_uses_its_map() {
     assert_eq!(
         game,
         (1..=8u32)
-            .map(|n| (n, format!("Fonts\F{n}.fnt").into_bytes()))
+            .map(|n| (n, format!("Fonts\\F{n}.fnt").into_bytes()))
             .collect::<Vec<_>>()
     );
     for (n, init) in made[..8].iter().enumerate() {
@@ -372,28 +375,35 @@ fn g129_makes_jips_font_manager_and_set_font_file_uses_its_map() {
     let font = |e: &Engine, n: u32| e.mem.u32(manager + 4 * (n - 1));
     let font3 = font(&e, 3);
     assert_eq!(
-        made[8..].iter().map(|i| (i.1, i.2.clone())).collect::<Vec<_>>(),
-        vec![(10, b(b"Fonts\X.fnt")), (12, b(b"Fonts\bad.fnt"))],
+        made[8..]
+            .iter()
+            .map(|i| (i.1, i.2.clone()))
+            .collect::<Vec<_>>(),
+        vec![(10, b(b"Fonts\\X.fnt")), (12, b(b"Fonts\\bad.fnt"))],
         "only new paths load; the second 10, the missing file and the game font's do not"
     );
     assert_eq!(font(&e, 10), made[8].0);
     assert_eq!(font(&e, 11), font3, "missing: font 3");
     assert_eq!(freed(), vec![made[9].0], "not loaded: given back");
     assert_eq!(font(&e, 12), font3);
-    assert_eq!(font(&e, 13), font(&e, 2), "a game font's path: the kept one");
+    assert_eq!(
+        font(&e, 13),
+        font(&e, 2),
+        "a game font's path: the kept one"
+    );
     assert_eq!(font(&e, 14), font3, "a list not .txt is not read");
     assert_eq!(font(&e, 89), font3);
     assert_eq!(e.site(LAST_FONT.addr(), &[]), Some(89));
     // `SetFontFile 1` with font 5's path: no such loose file, the kept `FontInfo` taken.
     assert_eq!(
-        call_on(&mut e, 0x274c, 0, &[n(1), s(b"fonts\f5.FNT")]),
+        call_on(&mut e, 0x274c, 0, &[n(1), s(b"fonts\\f5.FNT")]),
         (1, 1.0)
     );
     assert!(inits().is_empty(), "no new load");
     assert_eq!(font(&e, 1), made[4].0);
     // Font 50 takes X's; again: the manager there, nothing made.
     assert_eq!(
-        call_on(&mut e, 0x274c, 0, &[n(50), s(b"Fonts\X.fnt")]),
+        call_on(&mut e, 0x274c, 0, &[n(50), s(b"Fonts\\X.fnt")]),
         (1, 1.0)
     );
     assert_eq!(font(&e, 50), made[8].0);

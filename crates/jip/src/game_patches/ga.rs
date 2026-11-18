@@ -256,7 +256,9 @@ fn extra_font_paths(e: &mut Engine) -> Vec<Option<Vec<u8>>> {
     let mut paths: Vec<Option<Vec<u8>>> = vec![None; count];
     for entry in engine_core::mod_files::list(e, XFONTS_FOLDER) {
         let name = &entry.name;
-        if entry.is_folder || name.len() < 4 || !name[name.len() - 4..].eq_ignore_ascii_case(b".txt")
+        if entry.is_folder
+            || name.len() < 4
+            || !name[name.len() - 4..].eq_ignore_ascii_case(b".txt")
         {
             continue;
         }
@@ -290,7 +292,8 @@ fn extra_font_paths(e: &mut Engine) -> Vec<Option<Vec<u8>>> {
 /// `FontInfo::Init`, which copies the path).
 fn new_font_info(e: &mut Engine, number: u32, text: u32) -> u32 {
     let block = crate::commands::heap_alloc(e, FONT_INFO_SIZE);
-    e.call(FONT_INFO_INIT, &args![block, number, text, 1u32]).u32()
+    e.call(FONT_INFO_INIT, &args![block, number, text, 1u32])
+        .u32()
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitFontManagerHook
@@ -349,7 +352,6 @@ fn font_manager_start(e: &mut Engine, _: &[u32]) -> Option<u32> {
 fn last_font(_: &mut Engine, _: &[u32]) -> Option<u32> {
     Some(LAST_JIP_FONT)
 }
-
 
 fn install_fixes(e: &mut Engine) {
     for site in CORNER_MESSAGE {
