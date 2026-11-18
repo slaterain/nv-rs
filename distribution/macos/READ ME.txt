@@ -121,9 +121,9 @@ saves go with it).
 
 What doesn't work yet
 ---------------------
-- Everything in "What this build can do today": the game does not run yet.
-- Once it runs: what the Windows preview's READ ME lists (mods with plugins, controllers), and
-  anything Mac-only nobody has seen yet.
+- Never started with the game on a Mac: any stop is new; report it with the log.
+- Also: what the Windows preview's READ ME lists (mods with plugins, controllers), and anything
+  Mac-only nobody has seen yet.
 
 
 Reporting a problem

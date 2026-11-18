@@ -93,9 +93,9 @@ check "1 save out set" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$S2"'
 check "1 sound out" 'printf "%s" "$out" | grep -qx "NV_SOUND=out"'
 # A play run, as Play.exe starts one on Windows: the program then draws on Vulkan with the play
 # defaults (host fixes::is_play_run; its test play_sh_variables_make_a_play_run_on_vulkan).
-# Only where the start goes on (x86-64, and aarch64: arm64 on macOS); elsewhere the program stops
-# first.
-if case "$(uname -m)" in x86_64 | arm64 | aarch64) true ;; *) false ;; esac; then
+# Only where the start goes on (x86-64, and Apple silicon: arm64 on macOS); elsewhere (ARM Linux
+# included) the program stops first.
+if case "$(uname -s) $(uname -m)" in *" x86_64" | "Darwin arm64") true ;; *) false ;; esac; then
     check "1 play run" 'printf "%s" "$out" | grep -qxF "NV_SETTINGS=$own/settings.ini"'
 else
     check "1 no play settings where the start stops" '! printf "%s" "$out" | grep -q "^NV_SETTINGS="'
