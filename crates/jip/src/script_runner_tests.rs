@@ -148,9 +148,13 @@ fn runner_engine() -> Engine {
         Ret::default()
     });
     e.register(SCRIPT_EXECUTE, |e, a| {
-        assert_eq!(&a[1..4], &[0, 0, 0], "no reference, no list");
+        assert_eq!(&a[2..4], &[0, 0], "no list, no container");
         let text = text_of(a[0]);
-        note(format!("run {text} {}", a[4]));
+        if a[1] == 0 {
+            note(format!("run {text} {}", a[4]));
+        } else {
+            note(format!("run {text} {} on {:x}", a[4], a[1]));
+        }
         // A script line `register <path>`: RegisterSRScript's step, as a gr_ file calls it.
         if let Some(path) = text.strip_prefix("register ") {
             let kept = register(e, path.as_bytes());
@@ -596,4 +600,246 @@ fn the_run_order_is_jips_map_order() {
     // Not merely the folder's order (the test means something only if they differ).
     let folder_order: Vec<String> = names.iter().map(|n| format!("run print {n} 0")).collect();
     assert_ne!(order, folder_order);
+}
+
+// ---- the commands on the runner: Console, RunScriptSnippet, RunBatchScript ----
+
+const PLAYER_REF: u32 = AREA + 0xa000;
+const CALLER: u32 = AREA + 0xa100;
+const XSCRIPT: u32 = AREA + 0xa200;
+
+fn command_engine() -> Engine {
+    let mut e = runner_engine();
+    crate::commands::test_support::extra_stand_ins(&mut e);
+    if !e.mem.is_mapped(0x011d_e000) {
+        e.map(0x011d_e000, 0x1000);
+    }
+    e.mem.set_u32(0x011d_ea3c, PLAYER_REF);
+    e
+}
+
+fn cmd(e: &mut Engine, opcode: u32, this: u32, args: &[Vec<u8>]) -> f64 {
+    crate::commands::test_support::call_on(e, opcode, this, args).1
+}
+
+fn s(t: &[u8]) -> Vec<u8> {
+    crate::commands::test_support::s(t)
+}
+
+fn n(v: i32) -> Vec<u8> {
+    crate::commands::test_support::n(v)
+}
+
+/// `Console "text"`: compiled as "Console" on a temporary script and run once: 1; nothing kept.
+#[test]
+fn console_runs_a_line_once() {
+    let mut e = command_engine();
+    assert_eq!(cmd(&mut e, 0x2326, 0, &[s(b"set x to 1")]), 1.0);
+    assert_eq!(runs(), vec!["run set x to 1 1".to_string()]);
+    assert!(calls()
+        .iter()
+        .any(|c| c.starts_with("compile Console mode 0 partial 1")));
+    assert!(calls().iter().any(|c| c == "dtor-script"));
+    assert_eq!(
+        cmd(&mut e, 0x2326, 0, &[s(b"bad line")]),
+        0.0,
+        "does not compile: 0"
+    );
+    assert_eq!(runs().len(), 1);
+    assert_eq!(e.ext::<Jip>().script_runner.cached.len(), 0);
+}
+
+/// `RunScriptSnippet 0 "text"`: line feeds made carriage returns, a new script "RunScriptSnippet"
+/// run on the caller (the player with none), then destroyed.
+#[test]
+fn a_snippet_runs_now_on_the_caller_and_is_destroyed() {
+    let mut e = command_engine();
+    cmd(&mut e, 0x280f, 0, &[n(0), s(b"a\nb")]);
+    assert_eq!(runs(), vec![format!("run a\rb 1 on {PLAYER_REF:x}")]);
+    let c = calls();
+    assert!(c.iter().any(|c| c == "editor-id RunScriptSnippet"));
+    assert_eq!(c.last().unwrap(), "destroy 1", "destroyed after the run");
+    cmd(&mut e, 0x280f, CALLER, &[n(0), s(b"x")]);
+    assert_eq!(runs().last().unwrap(), &format!("run x 1 on {CALLER:x}"));
+    let before = calls().len();
+    cmd(&mut e, 0x280f, 0, &[n(0), s(b"bad")]);
+    assert!(
+        !calls()[before..].iter().any(|c| c.starts_with("run ")),
+        "not compiled: nothing"
+    );
+}
+
+/// With a delay: run once by the main loop after that many frames, the script kept (JIP never
+/// destroys it).
+#[test]
+fn a_delayed_snippet_runs_after_its_frames() {
+    let mut e = command_engine();
+    cmd(&mut e, 0x280f, CALLER, &[n(3), s(b"later")]);
+    assert!(runs().is_empty());
+    crate::main_loop::cycle(&mut e);
+    crate::main_loop::cycle(&mut e);
+    assert!(runs().is_empty(), "two frames: not yet");
+    crate::main_loop::cycle(&mut e);
+    assert_eq!(runs(), vec![format!("run later 1 on {CALLER:x}")]);
+    crate::main_loop::cycle(&mut e);
+    assert_eq!(runs().len(), 1, "once");
+    assert!(
+        !calls().iter().any(|c| c.starts_with("destroy")),
+        "kept, as JIP"
+    );
+}
+
+/// The caller's own script's event list is taken away while the snippet runs and put back.
+#[test]
+fn the_callers_event_list_is_set_aside_for_the_run() {
+    let mut e = command_engine();
+    let list = CALLER + 0x44;
+    crate::commands::test_support::put_extra(&mut e, list, XSCRIPT, 0x0d, 0);
+    e.mem.set_u32(XSCRIPT + 0x10, 0xe7e7);
+    e.register(SCRIPT_EXECUTE, |e, a| {
+        note(format!("events {:x}", e.mem.u32(XSCRIPT + 0x10)));
+        let _ = a;
+        eax(1)
+    });
+    cmd(&mut e, 0x280f, CALLER, &[n(0), s(b"x")]);
+    assert!(
+        calls().contains(&"events 0".to_string()),
+        "none while it runs"
+    );
+    assert_eq!(e.mem.u32(XSCRIPT + 0x10), 0xe7e7, "put back");
+}
+
+/// `RunBatchScript path`: the file read and compiled once under its name (after the last `\`,
+/// `/` made `\`), kept by the runner, run on the caller each call: 1. A missing file: 0.
+#[test]
+fn a_batch_script_is_compiled_once_and_kept() {
+    let mut e = command_engine();
+    files::put(r"data\batch\b.txt", b"do it");
+    assert_eq!(cmd(&mut e, 0x2834, 0, &[s(b"Data/batch/b.txt")]), 1.0);
+    assert_eq!(runs(), vec![format!("run do it 1 on {PLAYER_REF:x}")]);
+    assert!(calls().iter().any(|c| c == "editor-id b.txt"));
+    let compiles = |c: &[String]| c.iter().filter(|c| c.starts_with("compile")).count();
+    assert_eq!(compiles(&calls()), 1);
+    assert_eq!(
+        cmd(&mut e, 0x2834, CALLER, &[s(b"other/B.TXT")]),
+        1.0,
+        "the name kept, any case"
+    );
+    assert_eq!(compiles(&calls()), 1, "not compiled again");
+    assert_eq!(runs().len(), 2);
+    let kept = e
+        .ext::<Jip>()
+        .script_runner
+        .cached
+        .get(&Name(b"b.txt".to_vec()))
+        .copied();
+    assert_eq!(kept.map(|k| k.run_on), Some(None), "no moment");
+    assert_eq!(cmd(&mut e, 0x2834, 0, &[s(b"Data/batch/none.txt")]), 0.0);
+}
+
+/// The batch script belongs to the calling script's file: its `mods` list (+0x10) that file.
+#[test]
+fn a_batch_script_belongs_to_the_callers_file() {
+    use crate::commands::test_support::{game_globals, loaded_mod, FORMS, SCRIPT};
+    let mut e = command_engine();
+    game_globals(&mut e);
+    let info = FORMS + 0x9_0000;
+    loaded_mod(&mut e, 3, info, b"Mod.esp");
+    e.mem.set_u32(SCRIPT + 0x10, info);
+    e.mem.set_u32(SCRIPT + 0x14, 0);
+    files::put("c.txt", b"go");
+    assert_eq!(cmd(&mut e, 0x2834, 0, &[s(b"c.txt")]), 1.0);
+    let made = e
+        .ext::<Jip>()
+        .script_runner
+        .cached
+        .get(&Name(b"c.txt".to_vec()))
+        .unwrap()
+        .script;
+    assert_eq!((e.mem.u32(made + 0x10), e.mem.u32(made + 0x14)), (info, 0));
+}
+
+/// A delayed `RunScriptSnippet` at a load (JIP's `CleanMLCallbacks`): its script destroyed and its
+/// callback gone, so it never runs on a reference the load may have freed.
+#[test]
+fn a_load_cancels_a_delayed_snippet() {
+    let mut e = command_engine();
+    cmd(&mut e, 0x280f, CALLER, &[n(3), s(b"later")]);
+    crate::main_loop::clean(&mut e);
+    let destroys = || calls().iter().filter(|c| c.starts_with("destroy")).count();
+    assert_eq!(destroys(), 1, "destroyed at the load");
+    for _ in 0..4 {
+        crate::main_loop::cycle(&mut e);
+    }
+    assert!(runs().is_empty(), "never run");
+    assert_eq!(destroys(), 1, "once");
+    assert!(e.ext::<Jip>().main_loop.callbacks.is_empty());
+}
+
+thread_local! {
+    static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static ANSWERS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static REENTER: RefCell<(u32, Vec<Vec<u8>>)> = const { RefCell::new((0, Vec::new())) };
+}
+
+/// The script run re-enters `opcode` with `args` (a batch file or snippet that runs itself), up
+/// to 100 deep (the stand-in's own stop).
+fn reentering(e: &mut Engine, opcode: u32, args: Vec<Vec<u8>>) {
+    DEPTH.with(|d| d.set(0));
+    ANSWERS.with(|a| a.borrow_mut().clear());
+    REENTER.with(|r| *r.borrow_mut() = (opcode, args));
+    e.register(SCRIPT_EXECUTE, |e, _| {
+        note("run".into());
+        let depth = DEPTH.with(|d| {
+            d.set(d.get() + 1);
+            d.get()
+        });
+        if depth < 100 {
+            let (opcode, args) = REENTER.with(|r| r.borrow().clone());
+            let answer = cmd(e, opcode, 0, &args);
+            ANSWERS.with(|a| a.borrow_mut().push(answer));
+        }
+        DEPTH.with(|d| d.set(d.get() - 1));
+        Ret::default()
+    });
+}
+
+fn run_count() -> usize {
+    calls().iter().filter(|c| *c == "run").count()
+}
+
+/// A batch file that runs itself: with the fixes row on, 64 nested runs and the 65th call answers
+/// 0; with it off, JIP's way (no cap: here the stand-in's 100).
+#[test]
+fn a_batch_script_running_itself_stops_at_64_with_the_fixes_row() {
+    let mut e = command_engine();
+    files::put("loop.txt", b"again");
+    nvse::events::set_error_guard(&mut e, true);
+    reentering(&mut e, 0x2834, vec![s(b"loop.txt")]);
+    cmd(&mut e, 0x2834, 0, &[s(b"loop.txt")]);
+    assert_eq!(run_count(), 64);
+    let answers = ANSWERS.with(|a| a.borrow().clone());
+    assert_eq!(answers.first(), Some(&0.0), "the innermost call: 0");
+    assert_eq!(answers.iter().filter(|a| **a == 0.0).count(), 1);
+    assert_eq!(e.ext::<Jip>().script_runner.nesting, 0, "counted back down");
+    // Off: no cap.
+    let mut e = command_engine();
+    files::put("loop.txt", b"again");
+    reentering(&mut e, 0x2834, vec![s(b"loop.txt")]);
+    cmd(&mut e, 0x2834, 0, &[s(b"loop.txt")]);
+    assert_eq!(run_count(), 100);
+}
+
+/// A snippet that runs itself with no delay: 64 nested runs with the fixes row on; every script
+/// made is still destroyed (the skipped one too).
+#[test]
+fn a_snippet_running_itself_stops_at_64_with_the_fixes_row() {
+    let mut e = command_engine();
+    nvse::events::set_error_guard(&mut e, true);
+    reentering(&mut e, 0x280f, vec![n(0), s(b"again")]);
+    cmd(&mut e, 0x280f, 0, &[n(0), s(b"again")]);
+    assert_eq!(run_count(), 64);
+    let destroys = calls().iter().filter(|c| c.starts_with("destroy")).count();
+    assert_eq!(destroys, 65);
+    assert_eq!(e.ext::<Jip>().script_runner.nesting, 0);
 }

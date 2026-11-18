@@ -145,6 +145,9 @@ pub struct State {
     /// `JIPScriptRunner::initInProgress`: 0 outside [`init_files`]; 1 while the files compile; 2
     /// once a compile error was reported in this start.
     pub init_in_progress: u8,
+    /// The port's own: how many [`run_script_nested`] runs are under way (the fixes preset's
+    /// "script error loop guard" row caps it).
+    pub nesting: u32,
 }
 
 /// The string release in `ScriptCompiler::ScriptError` (`005aeb66`: the message, "SCRIPTS: ..."),
@@ -201,7 +204,7 @@ fn skipped(name: &[u8]) {
 /// A script file's bytes, as `FileToBuffer` reads them: at most `STR_BUFFER_SIZE - 1`, `None` for
 /// a file that cannot be read or is empty. Through the mods' files seam (the port's folder, then the
 /// game's Data); the game's own read when no platform answers the seam.
-fn read_file(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn read_file(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
     let max = STR_BUFFER_SIZE - 1;
     let bytes = match engine_core::mod_files::read_head_or_error(e, path, max) {
         Ok(bytes) => bytes,
@@ -290,6 +293,77 @@ fn execute(e: &mut Engine, script: u32, arg3: bool) {
         SCRIPT_EXECUTE,
         &args![script, 0u32, 0u32, 0u32, u32::from(arg3)],
     );
+}
+
+/// `ExtraScript` (type 0x0D) and its event list (+0x10).
+const EXTRA_SCRIPT: u32 = 0x0d;
+const XSCRIPT_EVENTS: u32 = 0x10;
+
+/// The deepest [`run_script_nested`] goes while the fixes preset's "script error loop guard" row
+/// is on.
+pub const MAX_NESTING: u32 = 64;
+
+/// [`run_script`] for `RunBatchScript` and `RunScriptSnippet` (`what`: the file or "snippet"),
+/// counted: a script that runs itself again through either command (JIP has no cap: the host's
+/// stack runs out and the game stops) is, with the fixes preset's "script error loop guard" row
+/// on (`nvse::events::error_guard`), not run past [`MAX_NESTING`] deep: one log line and `false`.
+/// Off, JIP's way. One count for the run.
+pub fn run_script_nested(e: &mut Engine, script: u32, calling_ref: u32, what: &[u8]) -> bool {
+    if nvse::events::error_guard(e) && state(e).nesting >= MAX_NESTING {
+        eprintln!(
+            "[SCRIPT RUNNER] {} not run: nested {MAX_NESTING} deep (it runs itself again)",
+            String::from_utf8_lossy(what)
+        );
+        return false;
+    }
+    state(e).nesting += 1;
+    run_script(e, script, calling_ref);
+    let s = state(e);
+    s.nesting = s.nesting.saturating_sub(1);
+    true
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: JIPScriptRunner::RunScript.
+/// `script` run on `calling_ref` (`Script::Execute(callingRef)`: no list, no container, `true`),
+/// with the reference's own script's event list taken away while it runs and put back after.
+pub fn run_script(e: &mut Engine, script: u32, calling_ref: u32) {
+    let xscript = crate::commands::extra::refr_extra(e, calling_ref, EXTRA_SCRIPT);
+    let events = if xscript == 0 {
+        0
+    } else {
+        e.mem.u32(xscript + XSCRIPT_EVENTS)
+    };
+    if events != 0 {
+        e.mem.set_u32(xscript + XSCRIPT_EVENTS, 0);
+    }
+    e.call(
+        SCRIPT_EXECUTE,
+        &args![script, calling_ref, 0u32, 0u32, 1u32],
+    );
+    if events != 0 {
+        e.mem.set_u32(xscript + XSCRIPT_EVENTS, events);
+    }
+}
+
+/// The script kept under `name` (`s_cachedScripts`), 0 for none.
+pub fn cached_script(e: &mut Engine, name: &[u8]) -> u32 {
+    state(e)
+        .cached
+        .get(&Name(name.to_vec()))
+        .map_or(0, |c| c.script)
+}
+
+/// `s_cachedScripts->Emplace(name, script)` with no moment (`RunBatchScript`'s): the first of a
+/// name kept.
+pub fn keep_batch_script(e: &mut Engine, name: &[u8], script: u32) -> u32 {
+    state(e)
+        .cached
+        .emplace_with(Name(name.to_vec()), || Cached {
+            script,
+            run_on: None,
+        })
+        .0
+        .script
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: JIPScriptRunner::RunScriptSource.
