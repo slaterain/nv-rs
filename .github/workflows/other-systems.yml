@@ -148,4 +148,4 @@ jobs:
           -p engine-core -p engine-platform -p engine-havok -p host
           -p d3d9-wgpu -p d3d9-stream -p d3dx-tex -p frame-model
           -p esm -p bsa -p fos -p mp3 -p vorbis -p bink -p game-folders
-          -p jip -p uio -p fomod -p mod-archive -p mod-install
+          -p jip -p uio -p fomod -p mod-archive -p mod-install -p mod-chooser

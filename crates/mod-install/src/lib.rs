@@ -5,6 +5,12 @@
 //!   folder per mod holding exactly the files it installs, laid out as in Data, and its record
 //!   ([`RECORD`]: what was installed from which archive, with which choices, which files). The
 //!   number is the order: a later mod wins a file both have. Removing a mod is removing its folder.
+//!   An install unpacks into a staging folder ([`installs::STAGING`], a name never taken for a
+//!   mod), writes the record whole, and only then renames the folder into its place, so a mod is
+//!   listed and played only with its complete record; a staging folder a stopped install left is
+//!   cleared at the chooser's next start. Every one of these changes (and keeping the archive in
+//!   `installed archives`) goes through [`fsops::act`] with a guard that forbids the game's
+//!   folder.
 //! - **The game folder "Play with mods" plays from** ([`overlay::build`]): every file of the game's
 //!   folder linked into a folder of nv-rs's own (never copied, only ever read), then each layer's
 //!   files linked over it, in order: the installed mods, then the loose `mods` folder the player

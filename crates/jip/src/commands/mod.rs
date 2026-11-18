@@ -60,6 +60,7 @@ pub mod jip_fn_ref_map;
 pub mod jip_fn_script;
 pub mod jip_fn_script_vars;
 pub mod jip_fn_sound;
+pub mod jip_fn_sound_playing;
 pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
@@ -223,6 +224,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_lines::COMMANDS,
     jip_fn_miscellaneous_marker::COMMANDS,
     jip_fn_utility_patches::COMMANDS,
+    jip_fn_sound_playing::COMMANDS,
     crate::game_patches::gp::COMMANDS,
     crate::game_patches::gc::formulas::COMMANDS,
     crate::game_patches::gx::COMMANDS,
@@ -853,6 +855,7 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_miscellaneous",
             "jip_fn_utility",
+            "jip_fn_sound",
             // game_patches::gp::COMMANDS (its commands are in this file).
             "jip_fn_miscellaneous",
             // game_patches::gc::formulas::COMMANDS (likewise).

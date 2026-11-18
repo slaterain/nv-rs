@@ -843,7 +843,7 @@ fn sound_request(e: &mut Engine, a: &[u32]) -> Option<u32> {
 /// A sound form's frequency factor: 1.0, or with its flag `+0x48` bit 0 clear and its signed
 /// percentage byte `+0x46` not 0, `1 + percent * 0.01` (raised) or `1 + percent * 0.005`
 /// (lowered), in `float`.
-fn frequency_modifier(e: &Engine, form: u32) -> f32 {
+pub(crate) fn frequency_modifier(e: &Engine, form: u32) -> f32 {
     if e.mem.u8(form.wrapping_add(0x48)) & 1 != 0 {
         return 1.0;
     }
