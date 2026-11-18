@@ -983,19 +983,16 @@ fn the_guard_refuses_changes_outside() {
 /// call that removes, renames, copies or links a file is looked for outside it.
 #[test]
 fn only_fsops_changes_the_disk() {
+    // Anywhere in the code.
     let banned = [
         "remove_file(",
-        "remove_dir(",
-        "remove_dir_all(",
-        "rename(",
+        "remove_dir",
         "fs::copy(",
         "io::copy(",
-        "fs::hard_link(",
-        "fs::symlink(",
         "symlink_file(",
         "symlink_dir(",
-        "fs::write(",
         "File::create",
+        "File::options",
         "OpenOptions",
         "create_dir",
         "set_permissions(",
@@ -1003,13 +1000,41 @@ fn only_fsops_changes_the_disk() {
         "set_times(",
         "set_modified(",
         "set_readonly(",
-        // An import could rename any of these: no `std::fs` or `std::os::*::fs` imports at all.
-        "use std::fs::",
-        "fs::{",
-        "::fs::*",
+        "process::Command",
+        "Command::new",
         "unix::fs",
         "windows::fs",
     ];
+    // Called as functions (not a method, not part of a longer name, not a `fn` of its own): with
+    // or without a path before them.
+    let calls = ["hard_link(", "symlink(", "copy(", "write(", "rename("];
+    let called = |code: &str, name: &str| {
+        code.match_indices(name).any(|(at, _)| {
+            let before = &code[..at];
+            let joined = before
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.');
+            !joined && !before.trim_end().ends_with("fn")
+        })
+    };
+    // The code of a line: up to a `//` outside a string literal.
+    fn code_of(line: &str) -> &str {
+        let bytes = line.as_bytes();
+        let mut in_string = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\\' if in_string => i += 1,
+                b'\'' if !in_string && bytes.get(i + 2) == Some(&b'\'') => i += 2,
+                b'"' => in_string = !in_string,
+                b'/' if !in_string && bytes.get(i + 1) == Some(&b'/') => return &line[..i],
+                _ => {}
+            }
+            i += 1;
+        }
+        line
+    }
     fn walk(folder: &Path, out: &mut Vec<PathBuf>) {
         for entry in std::fs::read_dir(folder).unwrap() {
             let path = entry.unwrap().path();
@@ -1032,10 +1057,32 @@ fn only_fsops_changes_the_disk() {
             continue;
         }
         let text = std::fs::read_to_string(&path).unwrap();
-        for (n, line) in text.lines().enumerate() {
-            let code = line.split("//").next().unwrap_or("");
+        let code: Vec<&str> = text.lines().map(code_of).collect();
+        for (n, line) in code.iter().enumerate() {
             for b in banned {
-                assert!(!code.contains(b), "{name}:{}: {b} outside fsops", n + 1);
+                assert!(!line.contains(b), "{name}:{}: {b} outside fsops", n + 1);
+            }
+            for c in calls {
+                assert!(!called(line, c), "{name}:{}: {c} outside fsops", n + 1);
+            }
+        }
+        // `use std::...;` statements (over lines too): none names `fs`, so no alias can hide a
+        // banned call.
+        let all = code.join("\n");
+        for (at, _) in all.match_indices("use ") {
+            if at > 0 && all[..at].chars().last().is_some_and(char::is_alphanumeric) {
+                continue;
+            }
+            let statement = &all[at..at + all[at..].find(';').unwrap_or(all.len() - at)];
+            let words: Vec<&str> = statement
+                .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .filter(|w| !w.is_empty())
+                .collect();
+            if words.get(1) == Some(&"std") {
+                assert!(
+                    !words.contains(&"fs"),
+                    "{name}: {statement:?} imports from std::fs"
+                );
             }
         }
     }
@@ -1122,7 +1169,7 @@ fn makes_no_folder_in_the_game() {
 #[test]
 fn a_missing_paths_real_location_starts_at_its_nearest_folder() {
     let dir = Scratch::new("real");
-    let real = crate::fsops::real(&dir.0.join("missing").join("x"));
+    let real = crate::fsops::real(&dir.0.join("missing").join("x")).unwrap();
     assert_eq!(
         real,
         std::fs::canonicalize(&dir.0)
@@ -1130,6 +1177,62 @@ fn a_missing_paths_real_location_starts_at_its_nearest_folder() {
             .join("missing")
             .join("x")
     );
+}
+
+/// A link leading nowhere on the way is not walked past: no real location, the change refused.
+#[cfg(unix)]
+#[test]
+fn a_link_leading_nowhere_has_no_real_location() {
+    use crate::fsops::{act, Guard, Op};
+    let dir = Scratch::new("dangling");
+    let root = dir.0.join("root");
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(dir.0.join("nowhere"), root.join("gone")).unwrap();
+    assert!(crate::fsops::real(&root.join("gone").join("x")).is_err());
+    let guard = Guard::new(&root, &[], &[]).unwrap();
+    assert!(act(&guard, Op::MakeDirAll(&root.join("gone").join("x"))).is_err());
+    assert!(!dir.0.join("nowhere").exists());
+}
+
+/// The mod installs folder swapped for a link: no mod folder is removed through it.
+#[test]
+fn removing_needs_a_plain_installs_folder() {
+    let dir = Scratch::new("installs-link");
+    let real_installs = dir.0.join("elsewhere");
+    write(&real_installs.join("01 Mod").join("a.txt"), b"keep");
+    let installs = dir.0.join("mod installs");
+    folder_link(&real_installs, &installs);
+    assert!(crate::fsops::remove_mod_folder(&installs, &installs.join("01 Mod")).is_err());
+    assert_eq!(
+        std::fs::read(real_installs.join("01 Mod").join("a.txt")).unwrap(),
+        b"keep"
+    );
+}
+
+/// A link at the built folder's place leading to the game's folder itself: the link is removed
+/// (never followed), the folder built again, the game untouched.
+#[test]
+fn a_link_at_the_folders_place_to_the_game_itself() {
+    let dir = Scratch::new("target-game-link");
+    let game = game(&dir.0);
+    let mods = dir.0.join("mods");
+    write(&mods.join("Textures").join("a.dds"), b"mod's");
+    let target = dir.0.join("modgame");
+    let plugins = dir.0.join("p.txt");
+    folder_link(&game, &target);
+    build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap();
+    let meta = std::fs::symlink_metadata(&target).unwrap();
+    assert!(meta.is_dir() && !meta.file_type().is_symlink());
+    assert_eq!(
+        std::fs::read(target.join("Data").join("Textures").join("a.dds")).unwrap(),
+        b"mod's"
+    );
+    assert_eq!(
+        std::fs::read(game.join("Data").join("Textures").join("a.dds")).unwrap(),
+        b"game's"
+    );
+    assert!(game.join("FalloutNV.exe").exists());
+    assert!(game.join("Data").join("FalloutNV.esm").exists());
 }
 
 /// The built folder inside the game's folder, the game's folder inside it, or a layer inside it:

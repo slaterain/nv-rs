@@ -65,17 +65,29 @@ pub struct Guard {
 }
 
 /// The real location of `path`: its nearest existing folder's, links resolved, with the rest of
-/// the path (not there yet) after it.
-pub fn real(path: &Path) -> PathBuf {
+/// the path (not there yet) after it. Only a part that is not there is walked past; any other
+/// failure (no access, a link leading nowhere...) is an error, and the change is refused.
+pub fn real(path: &Path) -> std::io::Result<PathBuf> {
     let mut rest = Vec::new();
     let mut at = path;
     loop {
-        if let Ok(found) = std::fs::canonicalize(at) {
-            let mut out = found;
-            for part in rest.iter().rev() {
-                out.push(part);
+        match std::fs::canonicalize(at) {
+            Ok(found) => {
+                let mut out = found;
+                for part in rest.iter().rev() {
+                    out.push(part);
+                }
+                return Ok(out);
             }
-            return out;
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e),
+        }
+        // A link leading nowhere is NotFound too: never walked past.
+        if std::fs::symlink_metadata(at).is_ok() {
+            return Err(std::io::Error::other(format!(
+                "{} leads nowhere",
+                at.display()
+            )));
         }
         match (at.parent(), at.file_name()) {
             (Some(parent), Some(name)) => {
@@ -86,9 +98,19 @@ pub fn real(path: &Path) -> PathBuf {
                     parent
                 };
             }
-            _ => return path.to_path_buf(),
+            _ => {
+                return Err(std::io::Error::other(format!(
+                    "{} has no real location",
+                    path.display()
+                )))
+            }
         }
     }
+}
+
+/// [`real`] with its failure in words.
+fn real_or(path: &Path) -> Result<PathBuf, String> {
+    real(path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 impl Guard {
@@ -110,8 +132,23 @@ impl Guard {
     /// Learns the real locations again (after the root or a forbidden folder was made), with the
     /// same refusal as [`Guard::new`].
     pub fn settle(&mut self) -> Result<(), String> {
-        self.root = real(&self.root_given);
-        self.forbidden = self.forbidden_given.iter().map(|p| real(p)).collect();
+        // A link at the root's place is the root's name, not where it leads: its real location is
+        // its folder's, with its name (the build removes the link itself, never followed).
+        let link_at_root =
+            std::fs::symlink_metadata(&self.root_given).is_ok_and(|m| m.file_type().is_symlink());
+        self.root = match (
+            link_at_root,
+            self.root_given.parent(),
+            self.root_given.file_name(),
+        ) {
+            (true, Some(parent), Some(name)) => real_or(parent)?.join(name),
+            _ => real_or(&self.root_given)?,
+        };
+        self.forbidden = self
+            .forbidden_given
+            .iter()
+            .map(|p| real_or(p))
+            .collect::<Result<_, _>>()?;
         for no in &self.forbidden {
             if self.root.starts_with(no) || no.starts_with(&self.root) {
                 return Err(format!(
@@ -142,7 +179,7 @@ impl Guard {
         let Some(parent) = path.parent() else {
             return Err(format!("{} has no folder", path.display()));
         };
-        let place = real(parent);
+        let place = real_or(parent)?;
         if !place.starts_with(&self.root) {
             return Err(format!(
                 "{} is not inside {} (a link?)",
@@ -231,7 +268,7 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
             std::fs::create_dir(path)
         }
         Op::MakeDirAll(path) => {
-            let place = real(path);
+            let place = real_or(path).map_err(refused)?;
             if !guard.forbidden.contains(&place) {
                 guard.outside_forbidden(&place).map_err(refused)?;
             }
@@ -278,7 +315,9 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
             let Some(folder) = folder else {
                 return Err(refused(format!("{} has no folder", to.display())));
             };
-            guard.outside_forbidden(&real(folder)).map_err(refused)?;
+            guard
+                .outside_forbidden(&real_or(folder).map_err(refused)?)
+                .map_err(refused)?;
             use std::io::Write;
             remove_name(temporary)?;
             let mut file = create_new(temporary)?;
@@ -291,16 +330,18 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
 }
 
 /// Removes an installed mod's whole folder: `folder` must be directly inside `installs` and a
-/// plain folder (a link is refused).
+/// plain folder, and `installs` a plain folder too (a link at either is refused).
 pub fn remove_mod_folder(installs: &Path, folder: &Path) -> std::io::Result<()> {
-    let meta = std::fs::symlink_metadata(folder)?;
-    if meta.file_type().is_symlink() || !meta.is_dir() {
-        return Err(refused(format!(
-            "{} is not a plain folder",
-            folder.display()
-        )));
+    for place in [installs, folder] {
+        let meta = std::fs::symlink_metadata(place)?;
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(refused(format!(
+                "{} is not a plain folder",
+                place.display()
+            )));
+        }
     }
-    if real(folder).parent() != Some(real(installs).as_path()) {
+    if real(folder)?.parent() != Some(real(installs)?.as_path()) {
         return Err(refused(format!(
             "{} is not inside {}",
             folder.display(),
