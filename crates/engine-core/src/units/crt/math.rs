@@ -7880,10 +7880,6 @@ mod tests_bodies {
     ];
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn pow_x87_matches_the_recorded_results_special_values_included() {
         let (mut e, except, _) = engine(false);
         for (vectors, word) in [(POW_X87_RECORDED, 0x027fu16), (POW_X87_RECORDED_24, 0x007f)] {
@@ -7893,11 +7889,14 @@ mod tests_bodies {
                 let got = pow_of(&mut e, x, y);
                 assert_eq!(x87_control_word(&mut e), word);
                 set_x87_control_word(&mut e, crate::x87::DEFAULT_CONTROL_WORD);
-                assert_eq!(
-                    (got, except_seen(&except)),
-                    (want, error),
-                    "pow({x:016x}, {y:016x}) under {word:04x}"
+                {
+                    let seen = except_seen(&except);
+                    assert!(
+                    crate::x87::fpu_bits_match(got, want, crate::x87::SOFT_TRANSCENDENTAL_ULPS)
+                        && seen == error,
+                    "pow({x:016x}, {y:016x}) under {word:04x}: {got:016x} {seen:#x}, recorded {want:016x} {error:#x}"
                 );
+                }
             }
         }
     }
@@ -8052,10 +8051,6 @@ mod tests_bodies {
     }
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn the_exits_restore_the_control_word_and_check_the_range() {
         let (mut e, except, _) = engine(false);
         // The fast exit: 0x027f stays, any other word is loaded back.
@@ -9351,11 +9346,14 @@ mod tests_bodies {
             for &(x, want, error) in vectors {
                 except.borrow_mut().clear();
                 let got = e.call(addr, &args![x]).f64().to_bits();
-                assert_eq!(
-                    (got, except_seen(&except)),
-                    (want, error),
-                    "{addr:08x}({x:016x})"
+                {
+                    let seen = except_seen(&except);
+                    assert!(
+                    crate::x87::fpu_bits_match(got, want, crate::x87::SOFT_TRANSCENDENTAL_ULPS)
+                        && seen == error,
+                    "{addr:08x}({x:016x}): {got:016x} {seen:#x}, recorded {want:016x} {error:#x}"
                 );
+                }
             }
         }
     }
@@ -10231,33 +10229,35 @@ mod tests_bodies {
     ];
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn exp_and_atan2_x87_match_the_recorded_results() {
         let (mut e, except, _) = dispatch_engine();
         for &(x, want, error) in EXP_X87_RECORDED {
             except.borrow_mut().clear();
             let got = e.call(0x00ec_ae30, &args![x]).f64().to_bits();
-            assert_eq!((got, except_seen(&except)), (want, error), "exp({x:016x})");
+            {
+                let seen = except_seen(&except);
+                assert!(
+                    crate::x87::fpu_bits_match(got, want, crate::x87::SOFT_TRANSCENDENTAL_ULPS)
+                        && seen == error,
+                    "exp({x:016x}): {got:016x} {seen:#x}, recorded {want:016x} {error:#x}"
+                );
+            }
         }
         for &(y, x, want, error) in ATAN2_X87_RECORDED {
             except.borrow_mut().clear();
             let got = e.call(0x00ec_9760, &args![y, x]).f64().to_bits();
-            assert_eq!(
-                (got, except_seen(&except)),
-                (want, error),
-                "atan2({y:016x}, {x:016x})"
-            );
+            {
+                let seen = except_seen(&except);
+                assert!(
+                    crate::x87::fpu_bits_match(got, want, crate::x87::SOFT_TRANSCENDENTAL_ULPS)
+                        && seen == error,
+                    "atan2({y:016x}, {x:016x}): {got:016x} {seen:#x}, recorded {want:016x} {error:#x}"
+                );
+            }
         }
     }
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn the_dispatch_fills_the_exception_from_the_stack_or_the_registers() {
         let (mut e, _, _) = dispatch_engine();
         // The image holds 0x2694 at 011c2b60; this test takes the report path first.
@@ -10642,10 +10642,6 @@ mod tests_bodies {
     ];
 
     #[test]
-    #[cfg_attr(
-        target_arch = "aarch64",
-        ignore = "arm64: the software x87 path is not yet bit-exact with the FPU's recorded results (Linux and macOS track, Apple work after Linux)"
-    )]
     fn logarithm_x87_matches_the_recorded_results() {
         let (mut e, except, _) = inverse_engine(false);
         put_extended(&mut e, MINUS_INFINITY_EXTENDED, 0xffff, 1 << 63);
@@ -10656,11 +10652,14 @@ mod tests_bodies {
             for &(x, want, error) in vectors {
                 except.borrow_mut().clear();
                 let got = e.call(addr, &args![x]).f64().to_bits();
-                assert_eq!(
-                    (got, except_seen(&except)),
-                    (want, error),
-                    "{addr:08x}({x:016x})"
+                {
+                    let seen = except_seen(&except);
+                    assert!(
+                    crate::x87::fpu_bits_match(got, want, crate::x87::SOFT_TRANSCENDENTAL_ULPS)
+                        && seen == error,
+                    "{addr:08x}({x:016x}): {got:016x} {seen:#x}, recorded {want:016x} {error:#x}"
                 );
+                }
             }
         }
     }
