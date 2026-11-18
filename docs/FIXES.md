@@ -1438,7 +1438,11 @@ again before reading it.
 
 Built as part of JIP (in every preset once JIP answers "installed"): `ForceClimate` forces a climate (none:
 the force is lifted), which the sky takes in place of the one it is given at its next climate change
-(`0x63C918`); `SetCurrentClimate` to another climate lifts it.
+(`0x63C918`); `SetCurrentClimate` to another climate lifts it. `FireWeaponEx` makes an actor fire a weapon,
+from a node of the actor named in the call when there is one; from its first use on, the shot's muzzle flash is
+marked, and the next time the game asks for that actor's muzzle flash while it is off the mark is cleared and the
+actor fires from its own node again (`008d9300`, the high process's muzzle flash getter, replaced; `0x9BAD76`, a
+new muzzle flash starts with the mark cleared).
 
 With JIP's `bGameDaysPassedFix` (on by default; `00867a40`, `GameTimeGlobals::Update` replaced): the game's
 clock keeps the hour and the days passed in double precision between frames, so `GameDaysPassed` no longer

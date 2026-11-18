@@ -85,6 +85,12 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GW",
     },
+    // H01 (JIP's own, FireWeaponEx's first use), the MuzzleFlash constructor 009bacb0: the third flag byte's store clears the whole first word (SafeWrite32 0x9BAD76).
+    Entry {
+        addr: 0x009b_ad76,
+        owners: JIP,
+        step: "3.9-GW",
+    },
     // G108 (a fix), BSAudioManager 00adf080, message kind 54 (jump table word 0xAE5648, group GA's seam): the game sound's form and frequency factor (SetSourceSoundRequestHook).
     Entry {
         addr: 0x00ae_5648,
@@ -122,6 +128,12 @@ pub(in super::super) const WRAPS: &[Entry] = &[
     // O5 (bGameDaysPassedFix): GameTimeGlobals::Update 00867a40 in doubles (UpdateTimeGlobalsHook).
     Entry {
         addr: 0x0086_7a40,
+        owners: JIP,
+        step: "3.9-GW",
+    },
+    // H01 (JIP's own, FireWeaponEx's first use): HighProcess::GetCurrentMuzzleFlash 008d9300 (the vtable word 0x1087F1C), a flash JIP's shot marked handed over once (GetMuzzleFlashHook).
+    Entry {
+        addr: 0x008d_9300,
         owners: JIP,
         step: "3.9-GW",
     },
