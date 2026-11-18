@@ -42,8 +42,8 @@
 //! render thread, the forwarded calls, and the keyboard and mouse state DirectInput reads
 //! ([`Input`], [`held_keys`], [`take_input`]). The real windows come from a window layer of the
 //! system's: `d3d9real/win32.rs` on Windows (the Win32 window, its messages and raw input, moved
-//! there unchanged); elsewhere `d3d9real/winit_window.rs` (winit: X11 and Wayland; macOS refused
-//! until a host hands the window layer the program's main thread), whose keyboard and mouse go
+//! there unchanged); elsewhere `d3d9real/winit_window.rs` (winit: X11, Wayland and macOS, where
+//! the viewer hands the layer the program's main thread: [`run_on_main_thread`]), whose keyboard and mouse go
 //! through `d3d9real/input.rs` with the Win32 window's codes and rules. The real Direct3D 9
 //! (`super::d3d9backend`) is Windows only.
 
@@ -260,6 +260,14 @@ pub fn wanted() -> bool {
 #[cfg(not(windows))]
 pub fn monitors() -> Result<Vec<crate::machine_table::Monitor>, String> {
     window_layer::monitors()
+}
+
+/// Runs `game` on a thread of its own and the window layer's loop on the calling thread, which
+/// must be the program's main thread: macOS, where winit's loop runs only there (the viewer does
+/// this there). Never returns: the process ends from the game's side, or when `game` returns.
+#[cfg(not(windows))]
+pub fn run_on_main_thread(game: Box<dyn FnOnce() + Send>) -> ! {
+    window_layer::run_on_main_thread(game)
 }
 
 /// Whether wgpu draws (asked for alone, and not replaced by the real Direct3D 9): the game's
@@ -908,13 +916,25 @@ fn backend_of(
 }
 
 /// The real Direct3D 9 asked for where there is none (`NV_D3D9=real` or `real,wgpu`, the Renderer
-/// setting's `d3d9`, or wgpu's fallback when it finds no graphics card or cannot make the game's
-/// device): refused, the run ends with a line saying so.
+/// setting's `d3d9`): refused, the run ends with a line saying so. wgpu's fallback to it (no
+/// graphics card, or the game's device refused) ends the run first, naming wgpu's reason
+/// ([`wgpu_cannot_draw`]).
 #[cfg(not(windows))]
 fn no_real_direct3d9() -> ! {
     eprintln!(
         "NV_D3D9={}: the real Direct3D 9 is only on Windows (on this system only wgpu draws: Vulkan, or Metal on macOS): the run ends",
         backends().map_or("real", Backends::name)
+    );
+    crate::end_process(1)
+}
+
+/// wgpu cannot draw (no graphics card it can draw with, or the game's device refused) where there
+/// is no real Direct3D 9 to draw instead (Windows' fallback): the run ends with a line saying why,
+/// not the real one's refusal, which would name a Direct3D 9 the player never asked for.
+#[cfg(not(windows))]
+fn wgpu_cannot_draw(why: &str) -> ! {
+    eprintln!(
+        "NV_D3D9=wgpu: {why}: on this system nothing else can draw (the real Direct3D 9 is only on Windows): the run ends"
     );
     crate::end_process(1)
 }
@@ -974,18 +994,27 @@ pub fn want_wgpu_cache(e: &mut Engine, dir: std::path::PathBuf) {
 /// (once), on the calling thread or on the render thread ([`want_render_thread`]), written to a
 /// file with `NV_D3D9_RECORD=FILE`.
 pub fn direct3d_created(e: &mut Engine) {
-    let Some(mut which) = backends() else { return };
+    #[cfg_attr(not(windows), allow(unused_mut))]
+    let Some(mut which) = backends() else {
+        return;
+    };
     if real(e).stream.is_some() {
         return;
     }
     // wgpu without a graphics card it can draw with (no Vulkan or Direct3D 12 driver, only the
-    // software adapter): the real Direct3D 9 instead, so the player still gets a picture.
+    // software adapter): on Windows the real Direct3D 9 instead, so the player still gets a
+    // picture; elsewhere there is none, and the run ends saying why.
     if which == Backends::Wgpu {
         match d3d9_wgpu::hardware_adapter() {
             Some(adapter) => eprintln!("NV_D3D9=wgpu: drawing with {adapter}"),
             None => {
-                eprintln!("NV_D3D9=wgpu: no graphics card wgpu can draw with (Vulkan or Direct3D 12): the real Direct3D 9 draws instead");
-                which = Backends::Real;
+                #[cfg(not(windows))]
+                wgpu_cannot_draw("no graphics card wgpu can draw with (Vulkan, or Metal on macOS)");
+                #[cfg(windows)]
+                {
+                    eprintln!("NV_D3D9=wgpu: no graphics card wgpu can draw with (Vulkan or Direct3D 12): the real Direct3D 9 draws instead");
+                    which = Backends::Real;
+                }
             }
         }
     }
@@ -1131,6 +1160,7 @@ pub fn device_created(
             },
         )
     };
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut reply = create(e);
     // wgpu could not make the game's device (a driver that refuses it, a window it cannot show
     // in): the real Direct3D 9 instead, as when wgpu finds no graphics card (`direct3d_created`),
@@ -1141,13 +1171,23 @@ pub fn device_created(
         && backends() == Some(Backends::Wgpu)
         && !DRAWING_REAL.load(std::sync::atomic::Ordering::Relaxed)
     {
-        eprintln!("NV_D3D9=wgpu: wgpu could not make the game's device: the real Direct3D 9 draws instead");
-        // The wgpu stream is let go first (its render thread ends, its record is written out),
-        // then the real one takes over.
-        real(e).stream = None;
-        let stream = make_stream(e, Backends::Real);
-        real(e).stream = Some(stream);
-        reply = create(e);
+        // Off Windows there is no real one: the wgpu stream is let go (its render thread ends,
+        // its record is written out) and the run ends, saying so.
+        #[cfg(not(windows))]
+        {
+            real(e).stream = None;
+            wgpu_cannot_draw("wgpu could not make the game's device (the lines above say why)");
+        }
+        #[cfg(windows)]
+        {
+            eprintln!("NV_D3D9=wgpu: wgpu could not make the game's device: the real Direct3D 9 draws instead");
+            // The wgpu stream is let go first (its render thread ends, its record is written
+            // out), then the real one takes over.
+            real(e).stream = None;
+            let stream = make_stream(e, Backends::Real);
+            real(e).stream = Some(stream);
+            reply = create(e);
+        }
     }
     let Some(Reply::Device {
         created: true,

@@ -57,6 +57,13 @@ cpal = "0.18.2"
 [target.'cfg(all(not(windows), not(target_vendor = "apple")))'.dependencies]
 xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 
+# macOS: the game's window's CAMetalLayer, made on the main thread with the window (AppKit's view
+# is the main thread's only), on which wgpu's Metal surface is made from the game's or the render
+# thread (d3d9real/winit_window.rs, d3d9-wgpu surface_for). The version wgpu-hal 30 uses: already
+# in the lock.
+[target.'cfg(target_vendor = "apple")'.dependencies]
+raw-window-metal = "=1.1.0"
+
 # The tests of the C runtime's stdio that moved here (crt_stdio_tests.rs) and of the process side
 # use the core's addresses and helpers behind this feature.
 [dev-dependencies]

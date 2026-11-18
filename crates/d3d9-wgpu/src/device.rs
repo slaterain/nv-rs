@@ -9109,6 +9109,21 @@ pub(crate) fn surface_for(
     window: isize,
 ) -> Result<wgpu::Surface<'static>, String> {
     let w = crate::window::registered(window).ok_or("no window made known by the window layer")?;
+    // macOS: the surface on the window's Metal layer, made on the main thread with the window
+    // (this runs on the game's or the render thread, where winit gives no handle and AppKit's
+    // view may not be touched). Metal only: another API's device cannot show it.
+    #[cfg(target_vendor = "apple")]
+    if let Some(layer) = w.metal_layer() {
+        // SAFETY: the layer is a CAMetalLayer the window keeps retained (`w` holds the window
+        // during this call); wgpu's Metal surface retains it again for its own life.
+        return unsafe {
+            instance
+                .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(
+                    layer.as_ptr(),
+                ))
+                .map_err(|e| format!("create_surface on the window's Metal layer: {e}"))
+        };
+    }
     instance
         .create_surface(wgpu::SurfaceTarget::from(w))
         .map_err(|e| format!("create_surface: {e}"))

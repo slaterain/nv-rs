@@ -522,6 +522,13 @@ pub trait GameWindow:
     /// The refresh rate of the monitor it is on, in thousandths of a hertz; `None` where the
     /// system does not say.
     fn refresh_millihertz(&self) -> Option<u32>;
+    /// macOS: the window's `CAMetalLayer`, made on the program's main thread when the window was
+    /// made (AppKit gives a window's view, and winit its handle, to the main thread only, while
+    /// the game's device is made on another thread). The surface is made on it; `None` elsewhere,
+    /// where the surface is made from the window's handles.
+    fn metal_layer(&self) -> Option<std::ptr::NonNull<std::ffi::c_void>> {
+        None
+    }
 }
 
 /// The windows made known by [`register_window`], by the id the game's device names them with

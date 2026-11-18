@@ -8,17 +8,30 @@ name: play.sh
 # BusyBox accept (a `case` inside `$( )` once stopped every start on a Mac). The Linux job of "Other
 # systems" also runs the test with the real program (NV_RS_REAL_PROGRAM) after its build.
 #
+# The same jobs test the packages' licence checks (scripts/package-licences.sh, by
+# scripts/test-package-licences.sh: made-up crate lists and a made-up repository), and make a
+# package of this checkout with stand-in programs (scripts/test-package-playtest.sh: the whole of
+# package-playtest.sh after its build; cargo tree, nothing compiled).
+#
 # Two short jobs from the account's shared limit (20 jobs at a time, 5 of them macOS), only when
-# distribution/unix changes, once a night and by hand.
+# distribution/unix or those scripts change, once a night and by hand.
 on:
   pull_request:
     paths:
       - 'distribution/unix/**'
+      - 'scripts/package-licences.sh'
+      - 'scripts/test-package-licences.sh'
+      - 'scripts/package-playtest.sh'
+      - 'scripts/test-package-playtest.sh'
       - '.github/workflows/play-sh.yml'
   push:
     branches: [main]
     paths:
       - 'distribution/unix/**'
+      - 'scripts/package-licences.sh'
+      - 'scripts/test-package-licences.sh'
+      - 'scripts/package-playtest.sh'
+      - 'scripts/test-package-playtest.sh'
       - '.github/workflows/play-sh.yml'
   workflow_dispatch:
   schedule:
@@ -32,7 +45,7 @@ jobs:
   linux:
     name: play.sh (dash, bash, BusyBox)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -47,10 +60,23 @@ jobs:
             SH="$shell" sh distribution/unix/test-play.sh || failed=1
           done
           exit $failed
+      - name: Test the packages' licence checks
+        run: |
+          failed=0
+          for shell in dash bash "busybox sh"; do
+            $shell -n scripts/package-licences.sh || failed=1
+            echo "== $shell"
+            SH="$shell" sh scripts/test-package-licences.sh || failed=1
+          done
+          exit $failed
+      - name: Install the pinned Rust tools (rust-toolchain.toml; cargo tree only, nothing is built)
+        run: rustup toolchain install
+      - name: Make a package with stand-in programs (package-playtest.sh whole, no build)
+        run: sh scripts/test-package-playtest.sh linux-x86_64
   macos:
     name: play.sh (macOS /bin/sh, bash 3.2)
     runs-on: macos-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -59,3 +85,11 @@ jobs:
         run: |
           /bin/sh -n distribution/unix/play.sh
           SH=/bin/sh /bin/sh distribution/unix/test-play.sh
+      - name: Test the packages' licence checks
+        run: |
+          /bin/sh -n scripts/package-licences.sh
+          SH=/bin/sh /bin/sh scripts/test-package-licences.sh
+      - name: Install the pinned Rust tools (rust-toolchain.toml; cargo tree only, nothing is built)
+        run: rustup toolchain install
+      - name: Make a package with stand-in programs (package-playtest.sh whole, no build)
+        run: /bin/sh scripts/test-package-playtest.sh macos-arm64
