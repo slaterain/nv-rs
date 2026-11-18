@@ -366,12 +366,35 @@ fn device_identifier(card: &Card) -> [u8; 16] {
     out
 }
 
+/// The `Driver` name Windows' 32-bit Direct3D 9 gives for a card of `vendor`: the maker's
+/// user-mode driver DLL (NVIDIA `nvldumd.dll`, AMD `aticfx32.dll`, Intel `igdumdim32.dll`).
+///
+/// The game reads it: its shader setup (`00b4f710`, called by `Renderer::Init` with this field)
+/// picks the shader level from the name's first letters, "ati", "nv" or "ig" (case ignored), and
+/// any other name gets the generic level 2 with "3.0 lighting" off. At that level the shader
+/// manager never makes shader 0x1d (`GetShader`, `00b55560`), yet hair and bloom-lit objects
+/// still get a `Lighting30ShaderProperty` (shader 0x1d, `00bb4540`), and preparing one
+/// (`PrepareGeometry`, `00b579e0`) calls through the missing shader: the first Linux run (AMD,
+/// wgpu's driver name "radv") stopped there when the new game's first head was built.
+///
+/// Every other maker (Apple's, a software adapter) gets NVIDIA's name: the capabilities this table
+/// answers ([`CARD`]) are an NVIDIA card's, and that name gives the level they were captured
+/// with.
+pub fn windows_driver_name(vendor: u32) -> &'static str {
+    match vendor {
+        0x1002 | 0x1022 => "aticfx32.dll",
+        0x8086 => "igdumdim32.dll",
+        _ => "nvldumd.dll",
+    }
+}
+
 /// `D3DADAPTER_IDENTIFIER9` (1100 bytes) for `flags` (0, or `D3DENUM_WHQL_LEVEL` 2): the driver's
-/// name (wgpu's), the card's name, the device name of the primary display, no driver version, the
+/// name Windows would give ([`windows_driver_name`]; wgpu's own name only goes into the device
+/// identifier), the card's name, the device name of the primary display, no driver version, the
 /// vendor and device numbers, no subsystem or revision, [`device_identifier`], and the WHQL level
 /// (asked with flag 2: 1, a signed driver, as measured; else 0).
 pub fn identifier(card: &Card, flags: u32) -> Vec<u8> {
-    let mut b = field(&card.driver, 512);
+    let mut b = field(windows_driver_name(card.vendor), 512);
     b.extend(field(&card.name, 512));
     b.extend(field("\\\\.\\DISPLAY1", 32));
     b.extend_from_slice(&0u64.to_le_bytes());
@@ -705,7 +728,7 @@ mod tests {
         let c = card();
         let id = identifier(&c, 0);
         assert_eq!(id.len(), 1100);
-        assert_eq!(&id[..5], b"radv\0");
+        assert_eq!(&id[..13], b"aticfx32.dll\0");
         assert_eq!(&id[512..512 + 36], b"AMD Radeon RX 7800 XT (RADV NAVI32)\0");
         assert_eq!(&id[1024..1037], b"\\\\.\\DISPLAY1\0");
         let word = |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
@@ -719,6 +742,88 @@ mod tests {
         let lines = card_lines(&c);
         assert_eq!(lines.lines().count(), 2);
         assert!(lines.starts_with("GetAdapterIdentifier\t0 0\t0\t"));
+    }
+
+    /// The driver name the game's shader setup (`00b4f710`) reads, as the game reads it: the
+    /// identifier's first field up to its terminating zero.
+    fn driver_field(id: &[u8]) -> String {
+        let end = id.iter().position(|&b| b == 0).expect("terminated");
+        String::from_utf8(id[..end].to_vec()).unwrap()
+    }
+
+    /// The shader level `00b4f710` gives a driver name with shader model 3 and at least 0x100 pixel
+    /// shader instructions, and whether "3.0 lighting" (shader 0x1d) is on: "ati"
+    /// level 6, "nv" or "ig" level 5, both with it; any other name level 2 without it (its own
+    /// prefix test, `_strnicmp` over 3 or 2 letters, in this order).
+    fn game_shader_level(driver: &str) -> (u32, bool) {
+        let starts = |p: &str| {
+            driver
+                .as_bytes()
+                .get(..p.len())
+                .is_some_and(|b| b.eq_ignore_ascii_case(p.as_bytes()))
+        };
+        if starts("ati") {
+            (6, true)
+        } else if starts("nv") || starts("ig") {
+            (5, true)
+        } else {
+            (2, false)
+        }
+    }
+
+    /// The first Linux run's stop: an AMD card under Mesa (wgpu's driver name "radv") answered
+    /// "radv" as its driver, the game fell to shader level 2 without 3.0 lighting, and the first
+    /// head's hair asked for the shader that level never makes. Every card wgpu reports, under
+    /// the names its Vulkan and Metal drivers give, must answer a Windows driver name that keeps
+    /// 3.0 lighting on, and the maker's own one where Windows has it.
+    #[test]
+    fn every_card_answers_a_windows_driver_name_with_3_0_lighting() {
+        let cases: [(u32, &str, &str); 9] = [
+            (0x1002, "radv", "aticfx32.dll"),
+            (0x1002, "AMD open-source driver", "aticfx32.dll"),
+            (0x1002, "AMD proprietary driver", "aticfx32.dll"),
+            (0x10de, "NVIDIA", "nvldumd.dll"),
+            (0x10de, "nouveau", "nvldumd.dll"),
+            (0x8086, "Intel open-source Mesa driver", "igdumdim32.dll"),
+            (0x106b, "", "nvldumd.dll"),
+            (0, "Apple", "nvldumd.dll"),
+            (0x10005, "llvmpipe", "nvldumd.dll"),
+        ];
+        for (vendor, wgpu_driver, windows) in cases {
+            let mut c = card();
+            c.vendor = vendor;
+            c.driver = wgpu_driver.into();
+            for flags in [0, 2] {
+                let driver = driver_field(&identifier(&c, flags));
+                assert_eq!(driver, windows, "vendor {vendor:x}, wgpu's {wgpu_driver:?}");
+                assert!(
+                    game_shader_level(&driver).1,
+                    "{driver:?} (vendor {vendor:x}) turns the game's 3.0 lighting off"
+                );
+            }
+        }
+        // An AMD card gets the level a Windows AMD card gets.
+        assert_eq!(game_shader_level(windows_driver_name(0x1002)), (6, true));
+        // The level check itself: wgpu's name for the volunteer's card is the one that stopped.
+        assert_eq!(game_shader_level("radv"), (2, false));
+    }
+
+    /// The same through the table the game reads: the card's lines, loaded as a run loads them,
+    /// and the game's `IDirect3D9::GetAdapterIdentifier` (vtable slot 5) into its own memory.
+    #[test]
+    fn get_adapter_identifier_gives_the_game_the_windows_driver_name() {
+        let mut c = card();
+        c.driver = "radv".into();
+        let monitors = [monitor((2560, 1440), 1.0, 60_000, true)];
+        let lines = card_lines(&c) + &display_lines(&monitors, &c.name).unwrap();
+        let mut e = engine_with(&lines);
+        let d3d = crate::d3d9::direct3d_create9(&mut e, 32);
+        assert_ne!(d3d, 0);
+        let out = e.mem.alloc(1100);
+        for flags in [0u32, 2] {
+            assert_eq!(e.vcall(d3d, 4 * 5, &[0, flags, out]).u32(), 0);
+            assert_eq!(driver_field(&e.mem.bytes(out, 1100)), "aticfx32.dll");
+        }
     }
 
     /// The captured card's answers are what the game needs: a hardware device of shader model 3,
