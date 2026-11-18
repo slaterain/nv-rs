@@ -58,6 +58,7 @@ pub mod jip_fn_perk;
 pub mod jip_fn_projectile;
 pub mod jip_fn_quest;
 pub mod jip_fn_ref_map;
+pub mod jip_fn_rock_it;
 pub mod jip_fn_script;
 pub mod jip_fn_script_vars;
 pub mod jip_fn_sound;
@@ -173,6 +174,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_projectile::COMMANDS,
     jip_fn_quest::COMMANDS,
     jip_fn_ref_map::COMMANDS,
+    jip_fn_rock_it::COMMANDS,
     jip_fn_sound::COMMANDS,
     jip_fn_string::COMMANDS,
     jip_fn_texture_set::COMMANDS,
@@ -270,6 +272,7 @@ pub fn install(e: &mut Engine) {
     jip_fn_misc_ref_lines::install(e);
     jip_fn_actor_p2::install(e);
     jip_fn_camera::install(e);
+    jip_fn_rock_it::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
