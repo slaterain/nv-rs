@@ -250,7 +250,11 @@ fn gl2_goes_in_with_jip_only() {
         crate::install_as(&mut e, installed);
         crate::game_patches::set_row(&mut e, row);
         for &site in &SITES {
-            assert_eq!(e.site(site, &[0]).is_some(), installed, "{site:08x}");
+            assert_eq!(
+                e.site(site, &[0, 0, 0, 0, 0]).is_some(),
+                installed,
+                "{site:08x}"
+            );
         }
         let expected = |routine: u32| if installed { routine } else { 0 };
         assert_eq!(
@@ -479,16 +483,18 @@ fn h06_marks_parents_up_to_the_root_only() {
 #[test]
 fn clone_3d_clones_a_model_with_jips_lights() {
     let mut e = world();
+    // A form and a reference with no `InsertNode`/`AttachModel` entries (H08: their flags clear).
+    let (form, reference) = (e.mem.alloc(0x10), e.mem.alloc(0x10));
     for (byte, answer) in [(0x20u8, 1u32), (0x60, 1), (0x40, 0), (0xdf, 0), (0, 0)] {
         let model = node(&mut e, &[]);
         e.mem.set_u8(model + FLAGS_HIGH, byte);
         assert_eq!(
-            e.site(CLONE_3D.addr(), &[model, 0x0400, 0x0500]),
+            e.site(CLONE_3D.addr(), &[model, form, reference]),
             Some(answer),
             "{byte:02x}"
         );
     }
-    assert_eq!(e.site(CLONE_3D.addr(), &[0, 0x0400, 0]), Some(0));
+    assert_eq!(e.site(CLONE_3D.addr(), &[0, form, 0]), Some(0));
 }
 
 // ---- the list ----
