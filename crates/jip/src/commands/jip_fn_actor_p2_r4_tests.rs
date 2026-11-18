@@ -238,5 +238,18 @@ fn h01_stays_off_after_a_refused_call() {
     let mut e = setup();
     call_on(&mut e, 0x28e4, PLAIN, &[r(R_WEAP)]);
     call_on(&mut e, 0x28e4, ACTOR, &[r(R_MISC)]);
+    // No projectile, not in high process, no process: each put back after.
+    e.mem.set_u32(WEAP + 0x118, 0);
+    call_on(&mut e, 0x28e4, ACTOR, &[r(R_WEAP)]);
+    e.mem.set_u32(WEAP + 0x118, FORMS + 0x5000);
+    e.mem.set_u32(PROCESS + 0x28, 1);
+    call_on(&mut e, 0x28e4, ACTOR, &[r(R_WEAP)]);
+    e.mem.set_u32(PROCESS + 0x28, 0);
+    e.mem.set_u32(ACTOR + 0x68, 0);
+    call_on(&mut e, 0x28e4, ACTOR, &[r(R_WEAP)]);
+    e.mem.set_u32(ACTOR + 0x68, PROCESS);
     assert_eq!(e.site(MUZZLE_FLAGS.addr(), &[FLASH]), None);
+    // The same call with every switch back: on (the refusals above were the only reason).
+    call_on(&mut e, 0x28e4, ACTOR, &[r(R_WEAP)]);
+    assert_eq!(e.site(MUZZLE_FLAGS.addr(), &[FLASH]), Some(1));
 }
