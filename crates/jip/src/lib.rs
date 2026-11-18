@@ -59,6 +59,7 @@ pub mod ln_events;
 pub mod main_loop;
 pub mod overrides;
 pub mod script_call;
+pub mod script_runner;
 #[rustfmt::skip]
 pub mod slots;
 #[cfg(test)]
@@ -139,6 +140,8 @@ pub struct Jip {
     pub script_vars: commands::jip_fn_script_vars::State,
     /// JIP's game patches (step 3.9): the host's row and the switches read.
     pub game_patches: game_patches::State,
+    /// JIP's script runner: the script files kept to run at their moments.
+    pub script_runner: script_runner::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,

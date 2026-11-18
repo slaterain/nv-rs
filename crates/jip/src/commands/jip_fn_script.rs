@@ -8,8 +8,8 @@
 //! `RemoveAllAddedVariables` keep JIP's added variables in its co-save (`s_scriptVariablesBuffer`,
 //! the `JPSV` record, with `Script::AddVariable`'s new `VariableInfo` and `ScriptVar` lists): the
 //! co-save framework does not carry that record yet. `RunScriptSnippet`, `RunBatchScript` and
-//! `RegisterSRScript` compile script text (`Script::Create`, JIP's `JIPScriptRunner`) and the last
-//! two read files from the game folder: the script compiler seam and the file layer are not built.
+//! `RegisterSRScript` compile script text (`Script::Create`, JIP's `JIPScriptRunner`: built in
+//! `crate::script_runner`, with `register` for `RegisterSRScript`); the commands are not built yet.
 //!
 //! `Script` (the exe's layout, JIP's `nvse/GameScript.h`): its data length `info.dataLength`
 //! +0x20 and quest flag +0x28 (`Script::Run`, `005AC1E0`, reads +0x38 and +0x40 beside them;
