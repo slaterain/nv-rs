@@ -766,3 +766,21 @@ fn o16_the_deferred_init_message_makes_the_lists() {
         Some(&(vec![screen(1), screen(3)], vec![screen(2), screen(4)]))
     );
 }
+
+/// O16 switched on while the game runs (`SetOptionalPatch(16, true)`): the lists made then, as
+/// JIP makes them when its location list is empty; off and on again keeps them.
+#[test]
+fn o16_switched_on_at_run_time_makes_the_lists() {
+    use engine_core::extend::jip_patches::{FIXES, LOAD_SCREEN_FIX};
+    let mut e = o16_world_unmade(&[], false);
+    e.jip_patches_and_not(LOAD_SCREEN_FIX);
+    e.jip_patches_or(FIXES);
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), None);
+    assert!(crate::game_patches::switches::set(&mut e, 16, true));
+    let made = Some((vec![screen(1), screen(3)], vec![screen(2), screen(4)]));
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), made.as_ref());
+    assert!(crate::game_patches::switches::set(&mut e, 16, false));
+    assert!(!crate::game_patches::switches::is_in(&mut e, 16));
+    assert!(crate::game_patches::switches::set(&mut e, 16, true));
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), made.as_ref());
+}
