@@ -381,7 +381,7 @@ fn controller_shape(e: &mut Engine, a: &[u32]) -> Option<u32> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: NiReplaceObject.
 /// The `NiPointer` at `holder` set to `object`: nothing when it holds it already; the held
 /// object's reference count down (deleted through its virtual `+4` at 0), `object`'s up.
-fn replace_object(e: &mut Engine, holder: u32, object: u32) {
+pub(crate) fn replace_object(e: &mut Engine, holder: u32, object: u32) {
     let held = e.mem.u32(holder);
     if held == object {
         return;
@@ -398,7 +398,7 @@ fn replace_object(e: &mut Engine, holder: u32, object: u32) {
 }
 
 /// `lock inc` / `lock dec` of an `NiRefObject`'s count (`+4`): the new count.
-fn refs_add(e: &mut Engine, object: u32, by: i32) -> i32 {
+pub(crate) fn refs_add(e: &mut Engine, object: u32, by: i32) -> i32 {
     let at = object.wrapping_add(4);
     match e.mem.atomic_u32(at) {
         Some(count) => (count.fetch_add(by as u32, Ordering::AcqRel) as i32).wrapping_add(by),

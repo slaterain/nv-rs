@@ -40,8 +40,9 @@
 //!   input hooks, `TextInputClose`);
 //! - a routine of JIP's the game calls back: `ShowQuantityMenu` (its callback), and
 //!   `CloseActiveMenu`, which clears what it and `MessageBoxExAlt` keep;
-//! - 3D and drawing: `AttachUIXML`, `AttachUIComponent` (a tile's node under a reference's node),
-//!   `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene node);
+//! - 3D and drawing: `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene
+//!   node); (`AttachUIXML` and `AttachUIComponent`, a tile's node under a reference's node, are
+//!   built in `jip_fn_ui_nodes.rs`);
 //!
 //! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
 //! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the
@@ -730,23 +731,59 @@ fn inject_ui_xml(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// The log's one line, once a run, when `InjectUIComponent` is called with the UI Organizer row
-/// off (nv-rs's own: JIP would write `jip_temp.xml` into the game's folder instead).
-pub const INJECT_WITHOUT_UIO_LINE: &str = "JIP LN NVSE: InjectUIComponent was called with the UI \
-     Organizer row off (bUIO, NV_UIO): nothing is injected; turn it on for UI mods that use it";
+/// `jip_temp.xml` (`kTempXMLFile`, JIP): the name the text is read under.
+const INJECTED_FILE: &[u8] = b"jip_temp.xml";
+/// `Menu::CompressAndStoreXML` (`00A1CE70`, `cdecl` (name, text): the text cleaned as a menu
+/// file's would be, in a new `XMLStorage`), `Menu::XMLHash` (`0x011F34E0`, the game's map of
+/// menu files by name, which `Menu::GetXML` `00A1C9B0` looks in before it reads a file) with its
+/// `SetAt` (`00A0C900`, `thiscall` (map, name, storage), `RET 8`) and `RemoveAt` (`00A1E240`,
+/// `thiscall` (map, name), `RET 4`: the entry unlinked, its value not freed).
+const COMPRESS_AND_STORE_XML: u32 = 0x00a1_ce70;
+const XML_HASH: u32 = 0x011f_34e0;
+const XML_HASH_SET_AT: u32 = 0x00a0_c900;
+const XML_HASH_REMOVE_AT: u32 = 0x00a1_e240;
 
-/// [`INJECT_WITHOUT_UIO_LINE`] was written in this run.
-static INJECT_WITHOUT_UIO_NOTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: InjectUIComponent
+// (asm).
+/// JIP's `InjectUIComponent(parent, text)`: menu XML text made into tiles under `parent`; the new
+/// tile, 0 for none. With the built-in UI Organizer row on, its `UIOInjectComponent`
+/// ([`uio::inject_component`]), as JIP calls UIO's export when UIO is loaded. Without it JIP
+/// writes the text to `jip_temp.xml` in the game's folder and reads that file with
+/// `Tile::ReadFile`; the port writes no file: the text is cleaned exactly as the game cleans a
+/// file it reads (`Menu::CompressAndStoreXML` given the text), entered in `Menu::XMLHash` under
+/// `jip_temp.xml` for the one `Tile::ReadFile` (whose `Menu::GetXML` finds it there, expands its
+/// includes, parses and frees it, as it does a file's), and taken out of the map after it. The
+/// same tiles as JIP's file, nothing written to a disk.
+pub(crate) fn inject_component(e: &mut Engine, parent: u32, text: &[u8]) -> u32 {
+    if uio::on(e) {
+        return uio::inject_component(e, parent, text);
+    }
+    let text = &text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())];
+    let buffer = heap_alloc(e, text.len() as u32 + 1);
+    if buffer == 0 {
+        return 0;
+    }
+    e.mem.write(buffer, text);
+    e.mem.set_u8(buffer + text.len() as u32, 0);
+    let tile = with_guest_text(e, INJECTED_FILE, |e, name| {
+        let storage = e.call(COMPRESS_AND_STORE_XML, &args![name, buffer]).u32();
+        if storage == 0 {
+            return 0;
+        }
+        e.call(XML_HASH_SET_AT, &args![XML_HASH, name, storage]);
+        let tile = e.call(TILE_READ_FILE, &args![parent, name]).u32();
+        e.call(XML_HASH_REMOVE_AT, &args![XML_HASH, name]);
+        tile
+    });
+    heap_free(e, buffer);
+    tile
+}
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
-// Cmd_InjectUIComponent_Execute and InjectUIComponent.
+// Cmd_InjectUIComponent_Execute.
 /// `Menu/tile...` and a formatted text of menu XML: the text made into tiles under the tile
-/// (none when the path ends at a trait) by the built-in UI Organizer's `UIOInjectComponent`
-/// ([`uio::inject_component`]); result 1 when a tile is made. Without UIO, JIP writes the text to
-/// `jip_temp.xml` in the game's folder and reads that file into the tile; nv-rs writes nothing
-/// into the game's folder, so without UIO (the row off) the command does nothing (a deliberate
-/// difference, as nothing is written into the game's folder).
+/// (none when the path ends at a trait) by JIP's [`inject_component`]; result 1 when a tile is
+/// made, with the UI Organizer row on or off.
 fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let f = nvse::commands::string::format_string_args_at(e, &a, 1, INJECT_PARAMS);
@@ -755,11 +792,8 @@ fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let path = nvse::commands::args_in_buffer(e, &f.leading, 0, PATH_BUFFER, "InjectUIComponent");
     let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "InjectUIComponent");
-    if !uio::on(e) && !INJECT_WITHOUT_UIO_NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        eprintln!("{INJECT_WITHOUT_UIO_LINE}");
-    }
     if let Some((tile, _)) = target_component(e, &path, false) {
-        if uio::on(e) && uio::inject_component(e, tile, &text) != 0 {
+        if inject_component(e, tile, &text) != 0 {
             a.set_result(e, 1.0);
         }
     }
