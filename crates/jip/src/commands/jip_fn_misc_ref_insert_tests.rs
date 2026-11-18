@@ -528,11 +528,29 @@ fn reload_equipped_models_reloads_the_slots() {
     );
     // The Pip-Boy's slot and past 19: nothing.
     e.mem.set_u32(BIPED + 0x2c + 3 * 0x10 + 8, SLOT_NODE);
+    let before = calls().len();
     call_on(&mut e, 0x280d, CHAR, &[n(6)]);
     call_on(&mut e, 0x280d, CHAR, &[n(20)]);
     assert!(node_calls().is_empty());
+    assert_eq!(calls().len(), before, "nothing reloaded");
     // Not in high process: nothing.
     e.mem.set_u32(PROCESS + 0x28, 1);
     call_on(&mut e, 0x280d, CHAR, &[]);
     assert!(node_calls().is_empty());
+}
+
+/// A put-in name already kept is left as it is (the copy's root name is taken only for an empty
+/// slot, `cmp dword ptr [eax], 0`).
+#[test]
+fn an_attached_models_name_only_fills_an_empty_slot() {
+    let mut e = setup();
+    model_setup(&mut e);
+    let kept = make_string(&mut e, b"Kept");
+    let mut slot = kept;
+    let made = do_attach_model(&mut e, SPINE, b"gun.nif", &mut slot, ROOT);
+    assert_eq!(made, COPY);
+    assert_eq!(slot, kept);
+    let mut empty = 0;
+    do_attach_model(&mut e, SPINE, b"gun.nif", &mut empty, ROOT);
+    assert_eq!(empty, s_of(b"GunRoot"));
 }
