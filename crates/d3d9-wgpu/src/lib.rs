@@ -22,6 +22,9 @@
 
 mod ahead;
 mod answers;
+// Used off Windows only; its tests run everywhere.
+#[cfg_attr(windows, allow(dead_code))]
+mod bitmap_font;
 mod cache;
 pub mod device;
 mod ffp;
