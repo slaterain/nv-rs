@@ -153,7 +153,6 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ammo_effect::COMMANDS,
     jip_fn_armor::COMMANDS,
     jip_fn_body_part_data::COMMANDS,
-    jip_fn_camera::COMMANDS,
     jip_fn_cell::COMMANDS,
     jip_fn_class::COMMANDS,
     jip_fn_climate::COMMANDS,
@@ -175,9 +174,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_perk::COMMANDS,
     jip_fn_projectile::COMMANDS,
     jip_fn_quest::COMMANDS,
-    jip_fn_ui_code::COMMANDS,
     jip_fn_ref_map::COMMANDS,
-    jip_fn_rock_it::COMMANDS,
     jip_fn_sound::COMMANDS,
     jip_fn_string::COMMANDS,
     jip_fn_texture_set::COMMANDS,
@@ -238,6 +235,12 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref::AWAITING_H13,
     // `ToggleHUDCursor`, with its patch H02 (`game_patches::gp`).
     jip_fn_ui::AWAITING_H02,
+    // Code bytes JIP rewrites as seams and wraps (step 3.5f).
+    jip_fn_camera::INPUT_COMMANDS,
+    jip_fn_camera::MISC_COMMANDS,
+    jip_fn_rock_it::COMMANDS,
+    jip_fn_ui_code::COMMANDS,
+    jip_fn_misc_ref_code::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -871,6 +874,12 @@ mod tests {
             // jip_fn_misc_ref::AWAITING_H13 (`SynchronizePosition`, with H13).
             "jip_fn_misc_ref",
             // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
+            "jip_fn_ui",
+            // jip_fn_camera (ToggleVanityWheel; ToggleCameraCollision), jip_fn_rock_it.
+            "jip_fn_input",
+            "jip_fn_miscellaneous",
+            "jip_fn_miscellaneous",
+            // jip_fn_ui_code (the recipe menu, quest messages, item filter).
             "jip_fn_ui",
             // jip_fn_misc_ref_code (ToggleNoZPosReset, ToggleObjectCollision).
             "jip_fn_misc_ref",
