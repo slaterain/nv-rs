@@ -2278,7 +2278,8 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
     }
     // 0075eb5c: lStewieAl's Tweaks' row S0022.17 (`MenuFixes`, "add a null check when mousing over
     // keys in the Container menu"): an entry with no form ends the call (at `0075ec4e`), where the
-    // exe reads the null form's type.
+    // exe reads the null form's type. With the row on an entry's form is read once more, for this test
+    // (`0044ddc0`, a getter; the type test below reads it again, as the exe does).
     if e.stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM)
         && current_item(e) != 0
         && typed_call!(
@@ -4207,6 +4208,7 @@ mod tests {
     /// changes nothing (the same calls and answers).
     #[test]
     fn do_idle_clears_the_subtitle_and_fills_the_card() {
+        ORDINARY_LOG.with(|l| *l.borrow_mut() = None);
         for on in [false, true] {
             do_idle_clears_the_subtitle_and_fills_the_card_row(on);
         }
@@ -4223,11 +4225,29 @@ mod tests {
         answer(&mut e, WORD_AT_FOUR, 0x900);
         answer(&mut e, TILE_FIND_CHILD, 0x950);
         answer(&mut e, LIST_COUNT, 2);
-        answer(&mut e, ITEM_OBJECT, 0x7100);
+        item_form(&mut e, 0x7000, 0x7100);
         answer(&mut e, FORM_TYPE, 0x28);
         stub(&mut e, &[SET_STRING_TRAIT, SET_ITEM_CARD]);
         e.call_log = Some(vec![]);
         e.call(0x0075_eac0, &args![this]);
+        // The calls as with the row off; with it on the item's form is read once more, first (the
+        // row's own test, the exe reads it again for the type).
+        let mut log: Vec<(u32, Vec<u32>)> = e.call_log.clone().unwrap_or_default();
+        if on {
+            let at = log
+                .iter()
+                .position(|(a, _)| *a == ITEM_OBJECT)
+                .expect("the row's form read");
+            assert_eq!(log[at].1, vec![0x7000]);
+            log.remove(at);
+        }
+        ORDINARY_LOG.with(|l| {
+            let mut l = l.borrow_mut();
+            match &*l {
+                None => *l = Some(log),
+                Some(off) => assert_eq!(&log, off, "row on: the calls of the row off"),
+            }
+        });
         assert_eq!(e.get(this, ContainerMenu::m_nTimeToClearSubtitle), 0);
         assert_eq!(
             calls_to(&e, SET_STRING_TRAIT),
@@ -4248,6 +4268,21 @@ mod tests {
         );
     }
 
+    thread_local! {
+        /// The row-off run's calls of [`do_idle_clears_the_subtitle_and_fills_the_card_row`].
+        static ORDINARY_LOG: std::cell::RefCell<Option<Vec<(u32, Vec<u32>)>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// The item's form getter (`0044ddc0`) for the current item `item` only: the guard has to read the
+    /// current item's form, no other object's.
+    fn item_form(e: &mut Engine, item: u32, form: u32) {
+        e.register_double(ITEM_OBJECT, move |_, a| {
+            assert_eq!(a[0], item, "the form of the current item");
+            form.into_ret()
+        });
+    }
+
     /// lStewieAl's Tweaks' row S0022.17: the pointer on an entry whose item has no form (keys).
     /// The exe reads the null form's type (`00401170` reads `+4`, as its stand-in here does) and
     /// stops; with the row on the call ends and no card is filled.
@@ -4260,7 +4295,7 @@ mod tests {
             e.set_global(ITEM_ENTERED, 1u8);
             e.set_global(CURRENT_ITEM, 0x7000u32);
             answer(&mut e, LIST_COUNT, 2);
-            answer(&mut e, ITEM_OBJECT, 0);
+            item_form(&mut e, 0x7000, 0);
             e.register_double(FORM_TYPE, |e, a| u32::from(e.mem.u8(a[0] + 4)).into_ret());
             stub(&mut e, &[SET_STRING_TRAIT, SET_ITEM_CARD]);
             e.set_stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM, on);

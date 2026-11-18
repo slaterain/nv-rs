@@ -15993,25 +15993,29 @@ mod tests {
     /// with it on both levels are printed and set.
     #[test]
     fn s0057_level_100_texts() {
-        for on in [false, true] {
+        for (on, level) in [(false, 100u32), (true, 100), (true, 1_000_000_000)] {
             let mut e = Engine::new();
             e.map(0x011d_9000, 0x1000);
-            e.mem.set_u32(0x011d_9e7c, 100);
-            e.mem.set_u32(0x011d_9e78, 101);
+            e.mem.set_u32(0x011d_9e7c, level);
+            e.mem.set_u32(0x011d_9e78, level + 1);
             let menu = e.new_object::<HUDMainMenu>();
             for offset in [0xe8, 0xec] {
                 let tile = e.mem.alloc(4);
                 e.mem.set_u32(menu.addr() + offset, tile);
             }
-            e.register_double(0x0040_6d00, |e, words| {
+            e.register_double(0x0040_6d00, move |e, words| {
+                // The buffer's size: 16 bytes with the row, the exe's 3 without; all of it written, as
+                // `sprintf_s` fills it, so a smaller buffer would be overrun.
+                assert_eq!(words[1], if on { 0x10 } else { 3 }, "the buffer's size");
                 let text = words[3].to_string();
                 assert!(
                     text.len() < words[1] as usize,
                     "sprintf_s: {text} does not fit {} bytes",
                     words[1]
                 );
-                e.mem.write(words[0], text.as_bytes());
-                e.mem.set_u8(words[0] + text.len() as u32, 0);
+                let mut bytes = text.into_bytes();
+                bytes.resize(words[1] as usize, 0);
+                e.mem.write(words[0], &bytes);
                 Ret::default()
             });
             e.register_double(0x00a0_1350, |_, _| Ret::default());

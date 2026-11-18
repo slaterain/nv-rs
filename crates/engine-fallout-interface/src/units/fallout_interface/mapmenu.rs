@@ -13272,6 +13272,10 @@ mod n056_tests {
         for on in [false, true] {
             let mut e = engine();
             let menu = open_menu(&mut e, 0x100);
+            // As the game has it: the list's buffer allocated (reserved 4), no subtitle in it, the null
+            // page unmapped.
+            e.mem.unmap(0, 0x1000);
+            empty_subtitles(&mut e, menu);
             e.set(menu, MapMenu::bSoundsLoading, 1);
             returns(&mut e, SOUND_IS_VALID, 1);
             returns(&mut e, SOUND_GET_DURATION, 2000);
@@ -13295,6 +13299,68 @@ mod n056_tests {
                 assert_eq!(calls_to(&e, SOUND_PLAY).len(), 1);
                 assert!(calls_to(&e, ARRAY_MOVE_00692480).is_empty());
             }
+        }
+    }
+
+    /// The subtitle list as a holotape with sound and no subtitle left has it: its buffer allocated,
+    /// 4 reserved, none in it.
+    fn empty_subtitles(e: &mut Engine, menu: Ptr<MapMenu>) {
+        let subtitles = Ptr::<BSSimpleArray>::new(menu.addr() + 0xa8);
+        let buffer = e.mem.alloc(0x20);
+        e.set(subtitles, BSSimpleArray::pBuffer, buffer);
+        e.set(subtitles, BSSimpleArray::iReservedSize, 4);
+        e.set(subtitles, BSSimpleArray::iSize, 0);
+    }
+
+    /// lStewieAl's Tweaks' row S0182 on the next-sound path (`0x79AAEB`): two sounds and one subtitle,
+    /// which the first sound used; the first has ended and the wait is over, so the second starts with
+    /// the list empty. The exe removes a subtitle from the empty list and stops; with the row on the
+    /// second sound plays and nothing is moved.
+    #[test]
+    fn s0182_the_next_sound_with_no_subtitle_left() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = open_menu(&mut e, 0x100);
+            e.mem.unmap(0, 0x1000);
+            empty_subtitles(&mut e, menu);
+            let first = menu.addr() + 0x98;
+            let second = e.mem.alloc(0x10);
+            e.mem.set_u32(first + 0xc, second);
+            e.set(menu, MapMenu::pCurrentSound, first);
+            returns(&mut e, SOUND_IS_VALID, 0);
+            // The clock: 1,000 ms when the wait starts, 2,000 ms after (past the 500 ms wait).
+            let clock = std::rc::Rc::new(std::cell::Cell::new(1000u32));
+            let tick = clock.clone();
+            e.register_double(WORD_AT_14, move |_, _| {
+                let now = tick.get();
+                tick.set(now + 1000);
+                Ret {
+                    eax: now,
+                    ..Ret::default()
+                }
+            });
+            let player = with_vtable(&mut e, 0x10, &[(0x1f4, 0x0010_01f4)]);
+            e.mem.set_u32(PLAYER_011DEA3C, player);
+            let position = e.mem.alloc(0xc);
+            returns(&mut e, 0x0010_01f4, position);
+            e.register_double(ARRAY_MOVE_00692480, |_, a| {
+                assert!(a[3] < 0x1000_0000, "a move of {:#x} elements", a[3]);
+                Ret::default()
+            });
+            e.set_stewie(stewie::HOLOTAPE_EMPTY_SUBTITLE, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0079_a660, &args![menu]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(e.get(menu, MapMenu::pCurrentSound), second);
+                assert_eq!(calls_to(&e, SOUND_PLAY).len(), 1);
+                assert!(calls_to(&e, ARRAY_MOVE_00692480).is_empty());
+                assert_eq!(calls_to(&e, SHOW_SUBTITLE).len(), 1);
+            }
+            let _ = clock;
         }
     }
 

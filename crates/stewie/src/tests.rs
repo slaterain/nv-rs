@@ -770,3 +770,99 @@ fn the_install_reads_the_overlay_folder_in_order() {
     assert!(LISTED.with(|l| l.borrow().is_empty()));
     MOD_FILES.with(|m| *m.borrow_mut() = None);
 }
+
+/// Each row's plan number, off key and bit, pinned (crash groups A and B): a key swapped with
+/// another row's, or two bits swapped, fails here. After the install, each key at 0 clears exactly
+/// its own bit.
+#[test]
+fn each_rows_plan_number_key_and_bit_are_pinned() {
+    use engine_core::extend::stewie::{Row, CRASH};
+    let pinned: &[(&'static str, &'static str, Row)] = &[
+        (
+            "S0022.14",
+            "bMenuFixesInventoryUseNoItem",
+            Row::at(CRASH, 11),
+        ),
+        (
+            "S0022.15",
+            "bMenuFixesQuantityMenuCloseNoItem",
+            Row::at(CRASH, 12),
+        ),
+        (
+            "S0022.16",
+            "bMenuFixesInventorySelectNoItem",
+            Row::at(CRASH, 13),
+        ),
+        (
+            "S0022.17",
+            "bMenuFixesContainerMouseoverNoForm",
+            Row::at(CRASH, 14),
+        ),
+        (
+            "S0022.30",
+            "bMenuFixesConsoleWhileMenusLoad",
+            Row::at(CRASH, 15),
+        ),
+        ("S0022.36", "bMenuFixesListBoxNullItem", Row::at(CRASH, 16)),
+        (
+            "S0022.56",
+            "bMenuFixesTileLabelNullName",
+            Row::at(CRASH, 17),
+        ),
+        ("S0042", "bFixExplosionWaterNullCall", Row::at(CRASH, 1)),
+        ("S0057", "bFixLevelGreaterThan99Crash", Row::at(CRASH, 18)),
+        (
+            "S0064",
+            "bFixHandleMultiboundsCrashWithNullCell",
+            Row::at(CRASH, 2),
+        ),
+        ("S0068", "bFixHandleStealingCrash", Row::at(CRASH, 3)),
+        ("S0078", "bNullPlayerCellImposterCheck", Row::at(CRASH, 4)),
+        ("S0079", "bDialogSpeechNullCheck", Row::at(CRASH, 0)),
+        (
+            "S0106",
+            "bFixNullHitLocationNodeExplosionCrash",
+            Row::at(CRASH, 5),
+        ),
+        (
+            "S0124",
+            "bProcessActivateAddNullCheckForPackage",
+            Row::at(CRASH, 6),
+        ),
+        (
+            "S0139",
+            "bFixCreditsCrashIfNoLoadedSave",
+            Row::at(CRASH, 19),
+        ),
+        ("S0140", "bFixPatrolMissingNullCheck", Row::at(CRASH, 7)),
+        ("S0169", "bFixRareNullTeleportDoorCrash", Row::at(CRASH, 8)),
+        (
+            "S0174",
+            "bFixSetActorRefEssentialNullCheck",
+            Row::at(CRASH, 9),
+        ),
+        (
+            "S0182",
+            "bHolotapeEmptySubtitleCrashFix",
+            Row::at(CRASH, 20),
+        ),
+        ("S0881", "bFixSavingNullCellCrash", Row::at(CRASH, 10)),
+    ];
+    let table: Vec<(&str, &str, Row)> = rows::ROWS.iter().map(|r| (r.plan, r.key, r.bit)).collect();
+    assert_eq!(table, pinned);
+    for (plan, key, bit) in pinned {
+        let mut e = engine(None);
+        set_on(&mut e, true);
+        set_keys(
+            &mut e,
+            rows::Keys {
+                rows: vec![(*key, false)],
+                ..Default::default()
+            },
+        );
+        install(&mut e);
+        for (_, _, other) in pinned {
+            assert_eq!(e.stewie(*other), other != bit, "{plan}'s key at 0");
+        }
+    }
+}
