@@ -884,3 +884,21 @@ fn the_games_actor_shadow_gives_way_to_the_characters_only_while_they_cast() {
         at(&theirs[3], p)
     );
 }
+
+/// With the characters on but none cast in a frame (none drawn), the game's own actor shadow shows
+/// as before: it gives way only where ours replace it.
+#[test]
+fn with_no_character_cast_the_games_actor_shadow_stays() {
+    let shots: Vec<Shot> = (0..4)
+        .map(|_| Shot {
+            game_shadow: true,
+            ..Shot::default()
+        })
+        .collect();
+    let Some(off) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let on = picture_of(true, true, &shots).expect("the adapter");
+    let p = [60.0, 300.0, 0.0];
+    assert_eq!(at(&on[3], p), at(&off[3], p));
+}
