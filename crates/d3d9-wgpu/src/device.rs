@@ -22,7 +22,7 @@ use crate::state::{self, rs, SamplerKey};
 use crate::sun_shadow;
 use d3d9_stream::{Handle, Rect};
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Where the device's frames go.
@@ -78,6 +78,9 @@ pub(crate) struct Buf {
     /// a geometry on ([`sun_shadow::GeoKey`]), so a buffer made where a freed one was is not taken
     /// for it.
     pub(crate) id: u64,
+    /// The game released it (or made another in its place): the sun shadows let go of what they
+    /// keep of it, however many places hold it.
+    pub(crate) released: AtomicBool,
 }
 
 impl Buf {
@@ -1040,7 +1043,10 @@ struct SunBody {
 
 impl SunBody {
     fn live(&self) -> bool {
-        self.held.iter().all(|b| b.strong_count() > 0)
+        self.held.iter().all(|b| {
+            b.upgrade()
+                .is_some_and(|b| !b.released.load(Ordering::Relaxed))
+        })
     }
 }
 
@@ -1915,9 +1921,14 @@ impl Device {
             batch: AtomicU64::new(0),
             uploads: AtomicU64::new(0),
             id: Buf::next_id(),
+            released: AtomicBool::new(false),
         });
-        self.objects
-            .insert(buffer, Obj::Buffer(b, vec![0; size as usize]));
+        if let Some(Obj::Buffer(old, _)) = self
+            .objects
+            .insert(buffer, Obj::Buffer(b, vec![0; size as usize]))
+        {
+            old.released.store(true, Ordering::Relaxed);
+        }
     }
 
     pub(crate) fn create_shader(&mut self, shader: Handle, tokens: &[u32]) {
@@ -2060,6 +2071,7 @@ impl Device {
             Some(Obj::Surface(s)) => {
                 self.destroyed.insert(s.id);
             }
+            Some(Obj::Buffer(b, _)) => b.released.store(true, Ordering::Relaxed),
             _ => {}
         }
     }
@@ -6620,6 +6632,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     batch: AtomicU64::new(0),
                     uploads: AtomicU64::new(0),
                     id: Buf::next_id(),
+                    released: AtomicBool::new(false),
                 }),
                 count,
             }
