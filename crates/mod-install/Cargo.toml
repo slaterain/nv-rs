@@ -1,0 +1,10 @@
+[package]
+name = "mod-install"
+version = "0.1.0"
+description = "The port's own mods folders on every system: installed mods (one folder each, with a record, in order), removing them, and the whole game folder \"Play with mods\" plays from (the game's files linked, the mods' copied over), never writing the game's own folder"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# No dependencies: Play.exe (scripts/launcher, its own lock) calls this too.
+[dependencies]
