@@ -15,9 +15,14 @@ use nvse::commands::Read;
 use nvse::{handled, CommandArgs};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// `jip_fn_input.h`'s command.
 #[rustfmt::skip]
-pub static COMMANDS: Handlers = &[
+pub static INPUT_COMMANDS: Handlers = &[
     (0x28b4, toggle_vanity_wheel),
+];
+/// `jip_fn_miscellaneous.h`'s command.
+#[rustfmt::skip]
+pub static MISC_COMMANDS: Handlers = &[
     (0x28d6, toggle_camera_collision),
 ];
 
