@@ -203,7 +203,8 @@ fn attach_line_makes_jips_line_and_adds_it_under_the_node() {
     assert_eq!(e.mem.u32(alpha + 4), 1);
     assert_eq!(e.mem.u16(alpha + 0x18), 0x10ed, "JIP's alpha flags");
     assert_eq!(calls_to(LIST_NODE_NEW), vec![vec![lines], vec![lines]]);
-    assert_eq!(calls_to(ASSIGN_1), vec![vec![lines, 0, 0, 0]]);
+    // `UpdateProperties` takes the line alone (`this`); `PrepareObjectRecurse` four words.
+    assert_eq!(calls_to(ASSIGN_1), vec![vec![lines]]);
     assert_eq!(calls_to(ASSIGN_2), vec![vec![lines, 0, 0, 0]]);
     // Named, its scale the length, added under the node.
     let name = &calls_to(ADD_STRING)[0];

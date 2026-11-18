@@ -3879,7 +3879,12 @@ pub fn tes_object_refr_set_location_on_reference(
         }
         // OBJ_REFR::Location (Xbox PDB) +0x30
         if !replaced {
-            copy_words(e, me + 0x30, loc, 3);
+            // Seam (JIP's H13, `SetRefrPositionHook` at `0x575A7F`): words: the reference, the
+            // location; an answer means the position is written already (the player kept at the
+            // synchronized node, or the location).
+            if e.site(0x0057_5a7f, &[me, loc]).is_none() {
+                copy_words(e, me + 0x30, loc, 3);
+            }
         } else {
             copy_words(e, me + 0x30, corrected, 3);
             let node = node_of(e, me);
@@ -10149,6 +10154,23 @@ mod tests {
         assert_eq!(e.mem.f32(refr + 0x34), 200.0);
         assert_eq!(e.mem.f32(refr + 0x38), 300.0);
         assert!(calls_to(&log, slot(&e, refr, 0x138)).is_empty());
+        assert_eq!(calls_to(&log, slot(&e, refr, 0x48)), vec![vec![refr, 2]]);
+    }
+
+    /// The seam at 0x575A7F (JIP's H13): an answer means the handler wrote the position, so the
+    /// location is not copied over it; the rest of the move goes on.
+    #[test]
+    fn set_location_leaves_the_store_to_an_answering_seam() {
+        let (mut e, refr, location) = location_setup();
+        e.on_site_for_test(0x0057_5a7f, |e, w| {
+            e.mem.set_f32(w[0] + 0x30, 7.0);
+            Some(1)
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_5830, &args![refr, location]);
+        });
+        assert_eq!(e.mem.f32(refr + 0x30), 7.0);
+        assert_eq!(e.mem.f32(refr + 0x34), 0.0);
         assert_eq!(calls_to(&log, slot(&e, refr, 0x48)), vec![vec![refr, 2]]);
     }
 
