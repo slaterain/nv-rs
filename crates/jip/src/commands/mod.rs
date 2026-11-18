@@ -173,7 +173,6 @@ pub const ALL: &[Handlers] = &[
     jip_fn_perk::COMMANDS,
     jip_fn_projectile::COMMANDS,
     jip_fn_quest::COMMANDS,
-    jip_fn_ui_code::COMMANDS,
     jip_fn_ref_map::COMMANDS,
     jip_fn_sound::COMMANDS,
     jip_fn_string::COMMANDS,
@@ -239,6 +238,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_camera::INPUT_COMMANDS,
     jip_fn_camera::MISC_COMMANDS,
     jip_fn_rock_it::COMMANDS,
+    jip_fn_ui_code::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -876,6 +876,8 @@ mod tests {
             "jip_fn_input",
             "jip_fn_miscellaneous",
             "jip_fn_miscellaneous",
+            // jip_fn_ui_code (the recipe menu, quest messages, item filter).
+            "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
