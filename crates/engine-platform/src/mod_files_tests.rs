@@ -1399,3 +1399,91 @@ fn links_are_followed_and_broken_ones_left_out() {
         ]
     );
 }
+
+/// Double-byte names whose second byte is `\` (`0x5C`) are listed and read back (code page 932
+/// stand-in): the forbidden characters are looked at as UTF-16, not byte by byte.
+#[test]
+fn double_byte_names_with_a_backslash_byte_are_listed() {
+    let _page = files::StandInPage::new(&files::CP932);
+    let game = scratch("list-932");
+    let list = game.join("Data").join("List");
+    std::fs::create_dir_all(&list).unwrap();
+    for name in ["a.txt", "\u{30bd}.txt", "\u{8868}.txt"] {
+        std::fs::write(list.join(name), name.as_bytes()).unwrap();
+    }
+    let e = engine(&game);
+    let listed = seam::list(&e, br"Data\List");
+    let names: Vec<&[u8]> = listed.iter().map(|l| l.name.as_slice()).collect();
+    assert_eq!(
+        names,
+        vec![&b"a.txt"[..], b"\x83\x5c.txt", b"\x95\x5c.txt"],
+        "{listed:?}"
+    );
+    for entry in &listed {
+        let name = [&br"Data\List\"[..], &entry.name].concat();
+        assert!(seam::read(&e, &name).is_some(), "{:?}", entry.name);
+    }
+}
+
+/// Names that differ only in a letter's case beyond ASCII are one name to Windows: listed once,
+/// as the first place spells it (code page 1252 stand-in).
+#[test]
+fn names_differing_in_accented_case_are_listed_once() {
+    let _page = files::StandInPage::new(&files::CP1252);
+    let game = scratch("list-1252-game");
+    let kept = scratch("list-1252-kept");
+    std::fs::create_dir_all(game.join("Data").join("List")).unwrap();
+    std::fs::create_dir_all(kept.join("Data").join("List")).unwrap();
+    std::fs::write(game.join("Data").join("List").join("\u{e9}.txt"), b"g").unwrap();
+    std::fs::write(kept.join("Data").join("List").join("\u{c9}.txt"), b"k").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    assert_eq!(
+        seam::list(&e, br"Data\List"),
+        vec![seam::Listed {
+            name: b"\xc9.txt".to_vec(),
+            is_folder: false
+        }]
+    );
+}
+
+/// Off Windows, folders of the port's folder whose names differ only in case are one folder to
+/// Windows: a read finds a file in any of them, so the listing lists all of them.
+#[cfg(unix)]
+#[test]
+fn case_twin_folders_in_the_port_folder_are_listed_together() {
+    let game = scratch("list-twins-game");
+    let kept = scratch("list-twins-kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    let upper = kept
+        .join("Data")
+        .join("NVSE")
+        .join("Plugins")
+        .join("Scripts");
+    let lower = kept
+        .join("data")
+        .join("nvse")
+        .join("plugins")
+        .join("scripts");
+    std::fs::create_dir_all(&upper).unwrap();
+    std::fs::create_dir_all(&lower).unwrap();
+    std::fs::write(upper.join("a.txt"), b"a").unwrap();
+    std::fs::write(lower.join("b.txt"), b"b").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let folder = br"Data\NVSE\Plugins\Scripts";
+    assert_eq!(
+        shown(&seam::list(&e, folder)),
+        vec![("a.txt".to_string(), false), ("b.txt".to_string(), false)]
+    );
+    for name in [
+        &br"Data\NVSE\Plugins\Scripts\a.txt"[..],
+        br"Data\NVSE\Plugins\Scripts\b.txt",
+    ] {
+        assert!(
+            seam::read(&e, name).is_some(),
+            "{}",
+            String::from_utf8_lossy(name)
+        );
+    }
+}

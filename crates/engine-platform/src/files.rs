@@ -753,9 +753,10 @@ pub fn host_path(path: &[u8]) -> std::path::PathBuf {
 /// entry for a name in more than one), less the files the run deleted or renamed away, then the
 /// run's own files and folders there that the player's folder does not hold. Each is its name in
 /// the code page's bytes, as the ANSI calls answer it ([`host_name_text`]), and whether it is a
-/// folder. A link counts as what it leads to; one whose target is gone is left out. `.` and `..`
-/// are not given, and the names are neither checked nor ordered (the caller does both). Nothing is
-/// written.
+/// folder ([`host_entries`]). A name in more than one folder, or in the player's folder and the
+/// run, is given once (compared as Windows compares names, [`name_order`]). `.` and `..` are not
+/// given, and the names are neither checked nor ordered (the caller does both). Nothing is
+/// written. The run's records are looked up by their keys' range, not scanned whole.
 pub(crate) fn folder_entries(e: &Engine, path: &[u8]) -> Vec<(Vec<u8>, bool)> {
     let folder = key(path);
     let disk = &state_ref!(e).disk;
@@ -767,36 +768,83 @@ pub(crate) fn folder_entries(e: &Engine, path: &[u8]) -> Vec<(Vec<u8>, bool)> {
         let hosts = vec![real_path(path)];
         #[cfg(not(windows))]
         let hosts = real_folders(path);
-        for host in &hosts {
-            let Ok(entries) = std::fs::read_dir(host) else {
+        for (name, is_folder) in host_entries(&hosts) {
+            let k = key(&[folder.as_slice(), b"\\", &name].concat());
+            if disk.deleted.contains(&k) || !seen.insert(name_order(&name)) {
                 continue;
-            };
-            for entry in entries.filter_map(Result::ok) {
-                // `metadata` follows a link; a link whose target is gone fails and is left out.
-                let Ok(meta) = std::fs::metadata(entry.path()) else {
-                    continue;
-                };
-                let name = host_name_bytes(&entry.file_name());
-                let k = key(&[folder.as_slice(), b"\\", &name].concat());
-                if disk.deleted.contains(&k) || !seen.insert(k) {
-                    continue;
-                }
-                out.push((name, meta.is_dir()));
             }
+            out.push((name, is_folder));
         }
     }
-    let run = disk.files.keys().chain(disk.directories.iter());
-    for k in run.filter(|k| in_folder(k, &folder)) {
-        if !seen.insert(k.clone()) {
-            continue;
-        }
+    let prefix = [folder.as_slice(), b"\\"].concat();
+    let files = disk
+        .files
+        .range(prefix.clone()..)
+        .map(|(k, _)| k)
+        .take_while(|k| k.starts_with(&prefix));
+    let made = disk
+        .directories
+        .range(prefix.clone()..)
+        .take_while(|k| k.starts_with(&prefix));
+    for k in files.chain(made).filter(|k| in_folder(k, &folder)) {
         let name = disk.entries.get(k).map_or_else(
             || ansi_bytes(&last_part(k)),
             |entry| ansi_bytes(&entry.name),
         );
+        if !seen.insert(name_order(&name)) {
+            continue;
+        }
         out.push((name, disk.directories.contains(k)));
     }
     out
+}
+
+/// The entries of the host folders `hosts` (one folder, or off Windows the folders whose names
+/// differ only in case), for the mods' files listing: each name in the code page's bytes
+/// ([`host_name_bytes`]) and whether it is a folder, from the folder read's own file type, as
+/// `FindNextFile` answers it (nothing is opened per entry). Only a link is looked through
+/// (`metadata`): it counts as what it leads to, and one whose target is gone is left out. A
+/// folder that cannot be read gives nothing. Names may repeat across `hosts`.
+pub(crate) fn host_entries(hosts: &[std::path::PathBuf]) -> Vec<(Vec<u8>, bool)> {
+    let mut out = Vec::new();
+    for host in hosts {
+        let Ok(entries) = std::fs::read_dir(host) else {
+            continue;
+        };
+        for entry in entries.filter_map(Result::ok) {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let is_folder = if kind.is_symlink() {
+                match std::fs::metadata(entry.path()) {
+                    Ok(target) => target.is_dir(),
+                    Err(_) => continue,
+                }
+            } else {
+                kind.is_dir()
+            };
+            out.push((host_name_bytes(&entry.file_name()), is_folder));
+        }
+    }
+    out
+}
+
+/// The UTF-16 units of a name in the code page's bytes, as Windows turns it
+/// ([`code_page::to_wide`]).
+pub(crate) fn name_wide(name: &[u8]) -> Vec<u16> {
+    code_page::to_wide(name)
+}
+
+/// Off Windows: every folder of this system under the port's folder `folder` that the game's
+/// relative folder name `rel` names, read as [`host_path_in`] reads it: the folders whose names
+/// differ only in case, which are one folder to Windows (`host_paths::host_folders_under`).
+#[cfg(not(windows))]
+pub fn host_folders_in(folder: &std::path::Path, rel: &[u8]) -> Vec<std::path::PathBuf> {
+    let under = |text: &str| {
+        super::host_paths::host_path_under(folder, &super::host_paths::host_path(text))
+    };
+    let text = chosen_text(rel, &|text| std::fs::symlink_metadata(under(text)).is_ok());
+    super::host_paths::host_folders_under(folder, &super::host_paths::host_path(&text))
 }
 
 /// The key a folder listing of the mods' files is ordered by ([`super::mod_files::list`]): the
@@ -6008,6 +6056,10 @@ mod tests_ansi_names_and_links {
     }
 }
 
+/// The stand-in code pages, for other modules' tests (the mods' files listing).
+#[cfg(test)]
+pub(crate) use tests_code_pages::{Page as StandInPage, CP1252, CP932};
+
 /// The ANSI code page's rules on every platform, with stand-in code pages (1252, 932 with its
 /// lead bytes, 65001): names, Windows' order, names too long for `cFileName`, two host names
 /// with one ANSI name, double-byte names whose second byte is a `\` or an ASCII capital, the
@@ -6020,10 +6072,10 @@ mod tests_code_pages {
     use super::*;
 
     /// A stand-in code page on this thread while it lives.
-    pub(super) struct Page;
+    pub(crate) struct Page;
 
     impl Page {
-        pub(super) fn new(page: &'static StandIn) -> Page {
+        pub(crate) fn new(page: &'static StandIn) -> Page {
             code_page::stand_in(Some(page));
             Page
         }
@@ -6062,7 +6114,7 @@ mod tests_code_pages {
             })
             .collect()
     }
-    pub(super) static CP1252: StandIn = StandIn {
+    pub(crate) static CP1252: StandIn = StandIn {
         to_wide: cp1252_to_wide,
         to_ansi: cp1252_to_ansi,
         char_len: one,
@@ -6120,7 +6172,7 @@ mod tests_code_pages {
         }
         out
     }
-    pub(super) static CP932: StandIn = StandIn {
+    pub(crate) static CP932: StandIn = StandIn {
         to_wide: cp932_to_wide,
         to_ansi: cp932_to_ansi,
         char_len: cp932_char_len,

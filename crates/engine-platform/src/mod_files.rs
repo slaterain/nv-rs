@@ -638,91 +638,102 @@ pub fn read_head(e: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>, u32> {
 /// The entries of the folder `name` (one trailing separator allowed) for the extenders' folder
 /// listings (JIP LN's `GetFilesInFolder` and script runner, CC&C's commands), from [`read`]'s
 /// places in its order: the files written and the folders made in this run, then the port
-/// folder's copy of the folder, then the game's own folder as the run sees it
-/// (`files::folder_entries`: less the files the run deleted, with the run's own files). A name in
-/// more than one place, compared without ASCII case, is listed once, as the first place has it;
-/// a name this run wrote takes the spelling a later place keeps it in (the run's memory holds its
+/// folder's copy of the folder ([`kept_folders`]: off Windows every folder there whose name
+/// differs only in case, as a read finds files in any of them), then the game's own folder as the
+/// run sees it (`files::folder_entries`: less the files the run deleted, with the run's own
+/// files). A name in more than one place, compared as Windows compares names (NTFS's upper-case
+/// key of the UTF-16 name, `files::name_order`), is listed once, as the first place has it; a
+/// name this run wrote takes the spelling a later place keeps it in (the run's memory holds its
 /// key in lower case only). Only names that can be read back through [`read`] are listed
-/// ([`listable`]). The order is NTFS's (`files::name_order`), the same on every system. A name
-/// [`relative_as`] refuses, or a folder that exists nowhere, lists nothing. Nothing is written or
-/// made.
+/// ([`listable`]). The order is NTFS's, the same on every system. A name [`relative_as`] refuses,
+/// or a folder that exists nowhere, lists nothing. Nothing is written or made.
+///
+/// Links: a link or junction the player put in the port's folder (or in the game's) is followed,
+/// as [`read`] follows it (only writes are kept inside the port's folder, `confined`): what it
+/// leads to is listed, and a link whose target is gone is left out.
+///
+/// Cost (the kernel lock is held): each folder is read once, with the entries' own file types
+/// (nothing is opened per entry, only a link is looked through), and this run's records are
+/// looked up by their keys' range.
 pub fn list(e: &Engine, name: &[u8]) -> Vec<engine_core::mod_files::Listed> {
     use engine_core::mod_files::Listed;
     assert_locked(e);
     let Ok(rel) = relative_as(e, name, true) else {
         return Vec::new();
     };
-    let folder_key = key(&rel);
+    let prefix = [key(&rel).as_slice(), b"\\"].concat();
     let mods = &state_ref!(e).mod_files;
     // Each place's entries: (name, is a folder). The run's own names are its lower-case keys.
     let mut places: Vec<Vec<(Vec<u8>, bool)>> = Vec::new();
-    let in_run = |k: &Vec<u8>| parent_of(k) == Some(folder_key.as_slice());
-    let last = |k: &[u8]| k[k.iter().rposition(|&b| b == b'\\').map_or(0, |i| i + 1)..].to_vec();
-    places.push(
-        mods.written
-            .keys()
-            .filter(|k| in_run(k))
-            .map(|k| (last(k), false))
-            .chain(
-                mods.folders
-                    .iter()
-                    .filter(|k| in_run(k))
-                    .map(|k| (last(k), true)),
-            )
-            .collect(),
-    );
+    let direct =
+        |k: &[u8]| (!k[prefix.len()..].contains(&b'\\')).then(|| k[prefix.len()..].to_vec());
+    let written = mods
+        .written
+        .range(prefix.clone()..)
+        .map(|(k, _)| k)
+        .take_while(|k| k.starts_with(&prefix))
+        .filter_map(|k| direct(k).map(|n| (n, false)));
+    let made = mods
+        .folders
+        .range(prefix.clone()..)
+        .take_while(|k| k.starts_with(&prefix))
+        .filter_map(|k| direct(k).map(|n| (n, true)));
+    places.push(written.chain(made).collect());
     if let Some(folder) = &mods.folder {
-        let mut kept = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(kept_path(folder, &rel)) {
-            for entry in entries.filter_map(Result::ok) {
-                // `metadata` follows a link; one whose target is gone is left out.
-                let Ok(meta) = std::fs::metadata(entry.path()) else {
-                    continue;
-                };
-                kept.push((files::host_name_bytes(&entry.file_name()), meta.is_dir()));
-            }
-        }
-        places.push(kept);
+        places.push(files::host_entries(&kept_folders(folder, &rel)));
     }
     places.push(files::folder_entries(e, &files::full_path(e, &rel)));
-    // The first place's entry wins; the run's lower-case spelling gives way to a later one's.
-    let mut merged: BTreeMap<Vec<u8>, (Vec<u8>, bool, bool)> = BTreeMap::new();
+    // By NTFS's key: the first place's entry wins; the run's lower-case spelling gives way to a
+    // later one's. The map's order is the listing's.
+    let mut merged: BTreeMap<Vec<u16>, (Vec<u8>, bool, bool)> = BTreeMap::new();
     for (place, entries) in places.into_iter().enumerate() {
         for (entry, is_folder) in entries {
             if !listable(e, &rel, &entry) {
                 continue;
             }
-            match merged.get_mut(&key(&entry)) {
-                None => {
-                    merged.insert(key(&entry), (entry, is_folder, place == 0));
+            match merged.entry(files::name_order(&entry)) {
+                std::collections::btree_map::Entry::Vacant(free) => {
+                    free.insert((entry, is_folder, place == 0));
                 }
-                Some(first) if first.2 => {
+                std::collections::btree_map::Entry::Occupied(mut first) if first.get().2 => {
+                    let first = first.get_mut();
                     first.0 = entry;
                     first.2 = false;
                 }
-                Some(_) => {}
+                std::collections::btree_map::Entry::Occupied(_) => {}
             }
         }
     }
-    let mut out: Vec<Listed> = merged
+    merged
         .into_values()
         .map(|(name, is_folder, _)| Listed { name, is_folder })
-        .collect();
-    out.sort_by_cached_key(|entry| (files::name_order(&entry.name), entry.name.clone()));
-    out
+        .collect()
+}
+
+/// The port's folder's copies of the game's folder `rel`: [`kept_path`]'s on Windows; elsewhere
+/// every folder there whose name differs only in case (`files::host_folders_in`), since a read
+/// finds a file in any of them, the one [`kept_path`] takes first.
+fn kept_folders(folder: &Path, rel: &[u8]) -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        vec![kept_path(folder, rel)]
+    }
+    #[cfg(not(windows))]
+    {
+        files::host_folders_in(folder, rel)
+    }
 }
 
 /// Whether the entry `entry` of the folder `rel` can be listed: a name [`read`] takes back (in
 /// the folder, as it is: [`relative`] of `<folder>\<entry>` is that very name, so no device, no
 /// trailing dot or space, no `.` or `..`), with no character a name of Windows' cannot hold
 /// (`\ / : * ? " < > |` or a control character; `?` is also what the code page answers for a
-/// character it could not hold, so such a name could never be opened again).
+/// character it could not hold, so such a name could never be opened again). The characters are
+/// looked at as UTF-16 (`files::name_wide`), so a double-byte character whose second byte is
+/// `0x5C` or `0x7C` is not taken for a `\` or a `|`.
 fn listable(e: &Engine, rel: &[u8], entry: &[u8]) -> bool {
-    if entry.is_empty()
-        || entry
-            .iter()
-            .any(|&b| b < 0x20 || br#"\/:*?"<>|"#.contains(&b))
-    {
+    let forbidden = |u: u16| u < 0x20 || (u < 0x80 && br#"\/:*?"<>|"#.contains(&(u as u8)));
+    if entry.is_empty() || files::name_wide(entry).into_iter().any(forbidden) {
         return false;
     }
     let whole = [rel, b"\\", entry].concat();
