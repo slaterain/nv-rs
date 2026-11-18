@@ -330,8 +330,12 @@ fn the_install_sets_the_bits_and_lists_tweaks() {
     assert_eq!(listed.len(), 1);
     assert_eq!(
         (listed[0].name, listed[0].version, listed[0].listed),
-        (NAME, 1005, true)
+        (NAME, 1005, false)
     );
+    // Not reported as installed while its script commands are not built (IsPluginInstalled 0,
+    // GetPluginVersion -1: what xNVSE answers for a plugin it did not load).
+    assert!(nvse::commands::extender::plugin_info(&e, NAME.as_bytes()).is_none());
+    assert!(nvse::commands::extender::loaded_plugins(&e).is_empty());
     // A second install does nothing.
     install(&mut e);
     assert_eq!(nvse::plugins::built_ins(&e).len(), 1);

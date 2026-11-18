@@ -15,9 +15,11 @@
 //!
 //! It is a fixes row ("lStewieAl's Tweaks built in", `NV_STEWIE`, on in the fixes preset): the row
 //! switches it on ([`set_on`]) and [`install`] (after JIP and MCM, before UIO, as xNVSE loads
-//! `nvse_stewie_tweaks.dll` between them) reads the settings, sets the rows' bits and lists it with
-//! xNVSE as "lStewieAl's Tweaks" 1005 (what `IsPluginInstalled` and `GetPluginVersion` answer). Off,
-//! no bit is set and no translation changes.
+//! `nvse_stewie_tweaks.dll` between them) reads the settings, sets the rows' bits and puts its record
+//! in xNVSE's list as "lStewieAl's Tweaks" 1005, not yet listed: `IsPluginInstalled` and
+//! `GetPluginVersion` answer "absent" until its script commands are built ([`ANSWERS_INSTALLED`]; the
+//! project's rule: nothing half-working is offered to a script). The fixes work either way. Off, no
+//! bit is set and no translation changes.
 //!
 //! Not yet: Tweaks' eight script commands (opcodes `0x2132` up), its co-save records (kept for the
 //! next save by the co-save row while its section is not read here), the `Tweaks\INIs\*.ini` overlay
@@ -77,15 +79,20 @@ pub fn on(e: &Engine) -> bool {
     e.ext_get::<Stewie>().is_some_and(|s| s.installed)
 }
 
-/// xNVSE's record of Tweaks: listed (it answers "installed"), no callbacks yet; its opcode base is
-/// its co-save section's header.
+/// Whether Tweaks answers "installed" (`IsPluginInstalled`, `GetPluginVersion`): not while its
+/// eight script commands are not built, so a mod that checks for Tweaks never calls one that is
+/// missing (the lead, 2026-11-18). The commands' PR turns it on.
+pub const ANSWERS_INSTALLED: bool = false;
+
+/// xNVSE's record of Tweaks: listed only when it answers "installed" ([`ANSWERS_INSTALLED`]), no
+/// callbacks yet; its opcode base is its co-save section's header.
 fn plugin() -> nvse::plugins::BuiltIn {
     nvse::plugins::BuiltIn {
         file: FILE,
         name: NAME,
         version: VERSION,
         opcode_base: OPCODE_BASE,
-        listed: true,
+        listed: ANSWERS_INSTALLED,
         listener: None,
         save: None,
         load: None,

@@ -472,8 +472,9 @@ fn install_uio(e: &mut Engine) {
 
 /// lStewieAl's Tweaks built in (`crates/stewie`, docs/FIXES.md "lStewieAl's Tweaks"): its engine fixes,
 /// each a row of its own with an off key in Fallout.ini's `[nv-rs Stewie]`, with VNV's values as the
-/// defaults of its settings and the player's `nvse_stewie_tweaks.ini` over them; xNVSE lists it as
-/// "lStewieAl's Tweaks" 1005. On in the fixes preset, off in vanilla. The row sets a flag;
+/// defaults of its settings and the player's `nvse_stewie_tweaks.ini` over them. Mods are not told
+/// it is installed until its script commands are built (`stewie::ANSWERS_INSTALLED`); then xNVSE
+/// lists it as "lStewieAl's Tweaks" 1005. On in the fixes preset, off in vanilla. The row sets a flag;
 /// `stewie::install` (after JIP and MCM, before UIO, in `install_rows_and_extenders`) reads the
 /// settings and sets the rows' bits.
 pub const STEWIE: Fix = Fix {
@@ -2776,6 +2777,9 @@ bSunShadowsCharacters=0
                 bit
             );
             assert_eq!(stewie::on(&e), choice.is_on(&STEWIE));
+            // Not reported as installed in any preset while its script commands are not built:
+            // IsPluginInstalled "lStewieAl's Tweaks" answers 0.
+            assert!(nvse::commands::extender::plugin_info(&e, stewie::NAME.as_bytes()).is_none());
         }
     }
 
