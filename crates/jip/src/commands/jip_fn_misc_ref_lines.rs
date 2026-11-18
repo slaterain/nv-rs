@@ -17,7 +17,9 @@
 //!   `0043A010` holding it put first in the property list +0x24, the count +0x2C up, the tail
 //!   +0x28 set for an empty list), then a `BSShaderNoLightingProperty` (0x80 bytes, its
 //!   constructor `00B6FC90`, `fastcall`) added the same way; JIP's `AssignGeometryProps`
-//!   (`00A5A040` then `00B57BD0`, each `cdecl` (lines, 0, 0, 0)); named (JIP's
+//!   (`NiAVObject::UpdateProperties` `00A5A040`, `this` the line in `ecx` and no stack word, `RET`;
+//!   then `BSShaderManager::PrepareObjectRecurse` `00B57BD0`, `cdecl` (lines, 0, 0, 0), the four
+//!   words JIP pushed before the first call); named (JIP's
 //!   `NiObjectNET::SetName`, [`super::jip_fn_misc_ref_nodes_w::set_name`]); its local scale
 //!   (+0x64) the length;
 //! - added under the node (`AddObject`, vtable +0xDC, `00A5ED10`, `thiscall` (node, line, 1));
@@ -76,7 +78,8 @@ const PROPERTIES_TAIL: u32 = 0x28;
 const PROPERTIES_COUNT: u32 = 0x2c;
 const LIST_PREV: u32 = 0x04;
 const LIST_ITEM: u32 = 0x08;
-/// `AssignGeometryProps`' two calls.
+/// `AssignGeometryProps`' two calls: `NiAVObject::UpdateProperties` (`thiscall`, the object
+/// alone) and `BSShaderManager::PrepareObjectRecurse` (`cdecl`, four words).
 const ASSIGN_PROPS_1: u32 = 0x00a5_a040;
 const ASSIGN_PROPS_2: u32 = 0x00b5_7bd0;
 /// `NiAVObject`'s local scale (+0x64).
@@ -177,7 +180,7 @@ fn create_lines(e: &mut Engine, length: f32, colour: [f32; 4], name: &[u8]) -> u
     let block = e.call(NI_ALLOCATE, &args![NO_LIGHTING_SIZE]).u32();
     let shader = e.call(NO_LIGHTING_CONSTRUCT, &args![block]).u32();
     add_property(e, lines, shader);
-    e.call(ASSIGN_PROPS_1, &args![lines, 0u32, 0u32, 0u32]);
+    e.call(ASSIGN_PROPS_1, &args![lines]);
     e.call(ASSIGN_PROPS_2, &args![lines, 0u32, 0u32, 0u32]);
     set_name(e, lines, name);
     e.mem.set_f32(lines.wrapping_add(LOCAL_SCALE), length);

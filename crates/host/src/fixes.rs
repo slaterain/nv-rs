@@ -336,7 +336,7 @@ pub const SCRIPT_ERROR_GUARD: Fix = Fix {
     name: "script error loop guard",
     env: "NV_NVSE_ERROR_GUARD",
     addresses: &[],
-    summary: "an error inside a RuntimeScriptError handler is not sent to the handlers again",
+    summary: "an error inside a RuntimeScriptError handler is not sent to the handlers again; a JIP batch script or snippet running itself stops 64 deep",
     install: install_script_error_guard,
 };
 

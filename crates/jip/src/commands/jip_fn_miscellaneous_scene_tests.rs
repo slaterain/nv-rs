@@ -58,12 +58,12 @@ fn setup() -> Engine {
     });
     e.register(CREATE_TEXTURE_IMAGE, |e, w| {
         // The path's text after the words; the out word set to the answer.
-        let text = nvse::table::guest_text(e, w[0]);
+        let text = nvse::table::guest_text(e, w[1]);
         let mut words = w.to_vec();
         words.extend(text.iter().map(|&b| u32::from(b)));
         record(CREATE_TEXTURE_IMAGE, &words);
         let tex = e.mem.u32(TEX_ANSWER);
-        e.mem.set_u32(w[1], tex);
+        e.mem.set_u32(w[2], tex);
         eax(0)
     });
     e.register(LOCK_ENTER, |_, w| {
@@ -130,7 +130,7 @@ fn swap(e: &mut Engine, block: &[u8], file: &[u8], index: Option<i32>) {
 fn loaded_paths() -> Vec<Vec<u8>> {
     calls_to(CREATE_TEXTURE_IMAGE)
         .into_iter()
-        .map(|w| w[4..].iter().map(|&b| b as u8).collect())
+        .map(|w| w[5..].iter().map(|&b| b as u8).collect())
         .collect()
 }
 
@@ -153,7 +153,11 @@ fn swap_texture_ex_replaces_a_lighting_propertys_list_entry() {
     swap(e, b"Body", b"armor\\new", Some(1));
     assert_eq!(loaded_paths(), vec![b"Textures\\armor\\new.dds".to_vec()]);
     let call = &calls_to(CREATE_TEXTURE_IMAGE)[0];
-    assert_eq!(call[2..4], [0, 0], "(path, &texture, 0, 0)");
+    // The words the translation takes: `this` (unused; JIP's `ecx`, the type mask), the path,
+    // the texture's pointer, quiet 0, alternate 0.
+    assert_eq!(call[0], 0x0020_0100);
+    assert_eq!(call[3..5], [0, 0], "(this, path, &texture, 0, 0)");
+    assert_eq!(call.len() - 5, br"Textures\armor\new.dds".len());
     assert_eq!(e.mem.u32(list1), new, "kind 1's first entry");
     assert_eq!(e.mem.u32(list0), old0, "kind 0 untouched");
     assert_eq!(

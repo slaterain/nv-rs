@@ -355,4 +355,6 @@ fn without_the_platform_nothing_is_read_or_written() {
         profile_string(&e, br"Data\Config\MCM.ini", b"A", b"x"),
         None
     );
+    assert_eq!(list_or_error(&e, br"Data\Config"), Err(ERROR_NOT_SUPPORTED));
+    assert!(list(&e, br"Data\Config").is_empty());
 }
