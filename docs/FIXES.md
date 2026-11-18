@@ -1636,6 +1636,15 @@ and tweaks every VNV player runs, is being built in as `crates/stewie` (`measure
   is not a number, so the default stands), `0x` hexadecimal, the last of a key wins; a value Tweaks
   cannot read as a number counts as missing. One log line at start names each file read and how many
   of its keys changed a value, or says none was found.
+- **The overlay files.** As Tweaks does, every `.ini` file in `Data\NVSE\Plugins\Tweaks\INIs\` is then
+  read over that, one after another in the folder's order (the order Windows lists an NTFS folder, on
+  every system), each key it has winning and each key it lacks keeping the value under it; mods ship
+  their Tweaks settings this way. `[INI] bMultiINISupport=0` in the main file turns them off. The
+  folder is looked for in nv-rs's own folder first, then the game's, its files listed once by name
+  (`engine_core::mod_files::list`). One difference: Windows' `*.ini` search also finds a file whose
+  long name only starts its extension with `ini` (`a.ini_old`, by its 8.3 short name `A~1.INI`, on a
+  drive that keeps short names); nv-rs
+  has no short names and reads only names ending in `.ini`.
 - **Not reported as installed yet.** Its eight script commands (`StewieGetValue` and the rest) are
   not built, so mods are not told it is there: `IsPluginInstalled "lStewieAl's Tweaks"` answers 0 and
   `GetPluginVersion` -1, as for a plugin not loaded (nothing half-working is offered to a script). Its
@@ -1643,8 +1652,7 @@ and tweaks every VNV player runs, is being built in as `crates/stewie` (`measure
   1005. Its co-save section (bobby-pin health, inventory
   scroll positions and the other records of its own features) is not read yet; with the co-save row
   (`NV_COSAVE_KEEP`) it is kept and written back unchanged, as for a plugin not built in.
-- **Not yet:** the `Tweaks\INIs\*.ini` files that overlay the main file (next, with the folder listing
-  of the mods' files), and every row below not listed.
+- **Not yet:** every row below not listed.
 
 | Row (Tweaks' function) | PLAN | Key in `[nv-rs Stewie]` | Exe places | What a player gets |
 |---|---|---|---|---|
