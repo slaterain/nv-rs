@@ -537,3 +537,287 @@ fn a_7z_with_folder_entries_unpacks_by_name() {
     );
     assert_eq!(std::fs::read(to.join("b.esp")).unwrap(), b"bb");
 }
+
+// ------------------------------------------------------------------------------------------------
+// Review of #722
+
+/// The 7z reader is opened with the memory limit: lowered here below what the archive's decoder
+/// needs, unpacking is refused as too big instead of allocating.
+#[test]
+fn a_7z_is_opened_with_a_memory_limit() {
+    let dir = Scratch::new("memory");
+    let archive = &archives(&dir.0)[2];
+    DECODER_MEMORY_KB.with(|kb| kb.set(4));
+    let error = extract(
+        archive,
+        &[("Gun Pack/Textures/a.dds".into(), "a.dds".into())],
+        &dir.0.join("out"),
+        Limits::default(),
+    )
+    .unwrap_err();
+    DECODER_MEMORY_KB.with(|kb| kb.set(MAX_DECODER_MEMORY / 1024));
+    assert_eq!(error.problem, Problem::TooBig, "{error}");
+    assert_eq!(
+        sevenz_error(sevenz_rust2::Error::MaxMemLimited {
+            max_kb: 1,
+            actaul_kb: 2
+        })
+        .problem,
+        Problem::TooBig
+    );
+}
+
+/// A 7z whose big unwanted file comes first: a name it lacks is answered from the listing
+/// without decoding, decoding past the limits is refused before it starts, and a wanted file in
+/// a block of its own is reached without decoding the big one.
+#[test]
+fn a_7z_decodes_only_what_is_wanted() {
+    let dir = Scratch::new("decode");
+    let big = vec![0u8; 64 << 20];
+    let solid = dir.0.join("solid.7z");
+    make_7z(
+        &solid,
+        &[
+            ("pad.bin", &big),
+            ("Mod/fomod/ModuleConfig.xml", b"<config/>"),
+        ],
+    );
+    let started = std::time::Instant::now();
+    assert_eq!(read(&solid, "Mod/fomod/info.xml").unwrap(), None);
+    assert!(
+        started.elapsed().as_millis() < 500,
+        "{:?}",
+        started.elapsed()
+    );
+    let small = Limits {
+        file: 1 << 20,
+        total: 1 << 20,
+    };
+    let error = extract(
+        &solid,
+        &[(
+            "Mod/fomod/ModuleConfig.xml".into(),
+            "ModuleConfig.xml".into(),
+        )],
+        &dir.0.join("out-solid"),
+        small,
+    )
+    .unwrap_err();
+    assert_eq!(error.problem, Problem::TooBig, "{error}");
+    assert!(error.detail.contains("to decode"), "{error}");
+    // Non-solid: each file a block of its own; the wanted one is reached by skipping the other.
+    let blocks = dir.0.join("blocks.7z");
+    let mut writer = sevenz_rust2::ArchiveWriter::create(&blocks).unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("pad.bin"),
+            Some(&big[..]),
+        )
+        .unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("Mod/b.esp"),
+            Some(&b"bb"[..]),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    let to = dir.0.join("out-blocks");
+    let done = extract(&blocks, &[("Mod/b.esp".into(), "b.esp".into())], &to, small).unwrap();
+    assert_eq!(done.written.len(), 1);
+    assert_eq!(std::fs::read(to.join("b.esp")).unwrap(), b"bb");
+}
+
+/// A bad file part-way: nothing partial is left, a file already there is not touched, and the
+/// error says which complete files were written.
+#[test]
+fn a_failure_leaves_no_partial_file_and_says_what_was_written() {
+    let dir = Scratch::new("partial");
+    let archive = dir.0.join("bad.zip");
+    make_zip(
+        &archive,
+        &[("a.esp", b"first file"), ("b.esp", b"second file, damaged")],
+        zip::CompressionMethod::Stored,
+    );
+    // Damage the second file's stored bytes (its CRC no longer matches).
+    let mut bytes = std::fs::read(&archive).unwrap();
+    let at = bytes
+        .windows(b"second file".len())
+        .position(|w| w == b"second file")
+        .unwrap();
+    bytes[at] ^= 0xff;
+    std::fs::write(&archive, bytes).unwrap();
+    let to = dir.0.join("out");
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::write(to.join("b.esp"), b"original").unwrap();
+    let error = extract(
+        &archive,
+        &[
+            ("a.esp".into(), "a.esp".into()),
+            ("b.esp".into(), "b.esp".into()),
+        ],
+        &to,
+        Limits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.problem, Problem::Damaged, "{error}");
+    assert_eq!(error.written, [to.join("a.esp")]);
+    assert_eq!(std::fs::read(to.join("b.esp")).unwrap(), b"original");
+    let names: Vec<String> = std::fs::read_dir(&to)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert!(!names.iter().any(|n| n.contains("nv-rs-part")), "{names:?}");
+}
+
+/// Password-locked archives get the password message: a zip whose entries say so (made here by
+/// setting the flag), and 7-Zip's password method, which this build has no decoder for.
+#[test]
+fn locked_archives_say_so() {
+    let dir = Scratch::new("locked");
+    let archive = dir.0.join("locked.zip");
+    make_zip(
+        &archive,
+        &[("a.esp", b"locked")],
+        zip::CompressionMethod::Stored,
+    );
+    let mut bytes = std::fs::read(&archive).unwrap();
+    // General-purpose bit 0 (encrypted) of a.esp's local header (offset 6, its name at 30) and
+    // central one (offset 8, its name at 46); the test archive starts with a folder entry.
+    let header = |bytes: &[u8], signature: &[u8], name_at: usize| {
+        (0..bytes.len() - name_at - 5)
+            .find(|&i| {
+                bytes[i..].starts_with(signature) && bytes[i + name_at..].starts_with(b"a.esp")
+            })
+            .unwrap()
+    };
+    let local = header(&bytes, b"PK\x03\x04", 30);
+    bytes[local + 6] |= 1;
+    let central = header(&bytes, b"PK\x01\x02", 46);
+    bytes[central + 8] |= 1;
+    std::fs::write(&archive, bytes).unwrap();
+    let error = extract(
+        &archive,
+        &[("a.esp".into(), "a.esp".into())],
+        &dir.0.join("out"),
+        Limits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.problem, Problem::Encrypted, "{error}");
+    assert!(error.player_text().contains("password"));
+    for e in [
+        sevenz_rust2::Error::UnsupportedCompressionMethod("AES256_SHA256".into()),
+        sevenz_rust2::Error::PasswordRequired,
+    ] {
+        assert_eq!(sevenz_error(e).problem, Problem::Encrypted);
+    }
+    assert_eq!(
+        sevenz_error(sevenz_rust2::Error::UnsupportedCompressionMethod(
+            "DEFLATE64".into()
+        ))
+        .problem,
+        Problem::Unsupported
+    );
+}
+
+/// Names no system holds safely are refused; dots and spaces at a new name's end are dropped as
+/// Windows drops them; a name stored in another Unicode form is found.
+#[test]
+fn odd_names_and_unicode_forms() {
+    for bad in [
+        "a<b.dds",
+        "a>b",
+        "a\"b",
+        "a|b",
+        "a?b",
+        "a*b",
+        "a\u{1}b",
+        "PROGRA~1/x",
+        "x/ABCDEF~2.DDS",
+        "CONIN$",
+        "conout$.txt",
+        "CLOCK$",
+    ] {
+        assert!(!stays_inside(bad), "{bad}");
+    }
+    for good in ["Textures/a.dds", "a~b.dds", "COM10.dds", "aux_cable.nif"] {
+        assert!(stays_inside(good), "{good}");
+    }
+    let dir = Scratch::new("unicode");
+    let archive = dir.0.join("nfd.zip");
+    // "Café" stored decomposed (e and a combining acute), asked for composed.
+    make_zip(
+        &archive,
+        &[("Mod/Cafe\u{301}.esp", b"cafe")],
+        zip::CompressionMethod::Stored,
+    );
+    let to = dir.0.join("out");
+    let done = extract(
+        &archive,
+        &[("mod/caf\u{e9}.esp".into(), "Textures /Caf\u{e9}.esp".into())],
+        &to,
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(done.missing.is_empty(), "{:?}", done.missing);
+    assert_eq!(
+        std::fs::read(to.join("Textures").join("Caf\u{e9}.esp")).unwrap(),
+        b"cafe"
+    );
+}
+
+/// The placer gives the spelling already there, on every system whatever its file system does
+/// with case.
+#[test]
+fn the_placer_keeps_the_spelling_already_there() {
+    let dir = Scratch::new("placer");
+    std::fs::create_dir_all(dir.0.join("textures")).unwrap();
+    let mut placer = Placer::new(&dir.0);
+    let placed = placer.place("Textures/a.dds").unwrap();
+    assert_eq!(placed, dir.0.join("textures").join("a.dds"));
+    // A new folder made with the spelling asked for, and kept for the next file.
+    let first = placer.place("Meshes/x.nif").unwrap();
+    let second = placer.place("meshes/y.nif").unwrap();
+    assert_eq!(first.parent(), second.parent());
+}
+
+/// A 7z whose empty file has the name of a file with data, listed first: the first listed is the
+/// one taken, by its index, and the unpacking does not fail.
+#[test]
+fn a_7z_pairs_entries_by_index() {
+    let dir = Scratch::new("pairing");
+    let path = dir.0.join("pair.7z");
+    let mut writer = sevenz_rust2::ArchiveWriter::create(&path).unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("Mod/a.dds"),
+            Some(&b""[..]),
+        )
+        .unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("mod/A.dds"),
+            Some(&b"data"[..]),
+        )
+        .unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("Mod/b.dds"),
+            Some(&b"bbb"[..]),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    let to = dir.0.join("out");
+    let done = extract(
+        &path,
+        &[
+            ("Mod/a.dds".into(), "a.dds".into()),
+            ("Mod/b.dds".into(), "b.dds".into()),
+        ],
+        &to,
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(done.written.len(), 2);
+    assert_eq!(std::fs::read(to.join("a.dds")).unwrap(), b"");
+    assert_eq!(std::fs::read(to.join("b.dds")).unwrap(), b"bbb");
+}
