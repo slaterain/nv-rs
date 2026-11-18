@@ -10,3 +10,7 @@ rust-version.workspace = true
 fomod = { path = "../fomod" }
 mod-archive = { path = "../mod-archive" }
 mod-install = { path = "../mod-install" }
+
+[dev-dependencies]
+# The tests make their own archives.
+zip = { version = "9.7", default-features = false, features = ["deflate-flate2-zlib-rs"] }

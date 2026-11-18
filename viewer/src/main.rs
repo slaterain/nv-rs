@@ -122,6 +122,31 @@ fn build_mods(raw: &[OsString]) {
     }
 }
 
+/// `--install-mods GAME INSTALLS MODS`: the mod installer's text front end (`mod_chooser`): the
+/// mods waiting in MODS installed into INSTALLS, or removed from it; the game folder GAME only
+/// read. Started by Play.exe's `--install-mods` (Install mods.cmd) and play.sh's.
+fn install_mods(raw: &[OsString]) {
+    let [game, installs, loose] = [1, 2, 3].map(|i| raw.get(i).map(PathBuf::from));
+    let (Some(game), Some(installs), Some(loose)) = (game, installs, loose) else {
+        eprintln!("error: --install-mods needs the game's folder, the mod installs folder and the mods folder");
+        host::end_process(2);
+    };
+    let (major, minor, beta) = nvse::VERSION;
+    let places = mod_chooser::Places {
+        game,
+        installs,
+        loose,
+        extenders: vec![("nvse".to_owned(), format!("{major}.{minor}.{beta}"))],
+    };
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+    let mut out = std::io::stdout();
+    if let Err(e) = mod_chooser::run(&mut input, &mut out, &places) {
+        eprintln!("error: {e}");
+        host::end_process(1);
+    }
+}
+
 /// The command line.
 #[derive(Debug, Default, PartialEq)]
 struct Args {
@@ -252,6 +277,10 @@ fn run() {
     #[cfg(not(windows))]
     if raw.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("--find")) {
         find();
+        return;
+    }
+    if raw.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("--install-mods")) {
+        install_mods(&raw);
         return;
     }
     #[cfg(not(windows))]

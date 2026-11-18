@@ -186,7 +186,10 @@ pub fn run(input: &mut dyn BufRead, out: Out, places: &Places) -> std::io::Resul
             return Ok(());
         };
         if answer.is_empty() {
-            writeln!(out, "Done. The mods are used the next time you choose Play with mods.")?;
+            writeln!(
+                out,
+                "Done. The mods are used the next time you choose Play with mods."
+            )?;
             return Ok(());
         }
         let (remove, rest) = match answer.strip_prefix("remove") {
@@ -253,7 +256,10 @@ fn remove_flow(
             chosen.name
         ),
     )?;
-    if answer.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("yes")) {
+    if answer
+        .as_deref()
+        .is_some_and(|a| a.eq_ignore_ascii_case("yes"))
+    {
         match installs::remove(&places.installs, &chosen.folder) {
             Ok(()) => writeln!(out, "Removed {}.", chosen.name)?,
             Err(e) => writeln!(out, "{} could not be removed: {e}", chosen.name)?,
@@ -399,7 +405,10 @@ fn plain_flow(
             wanted.len()
         ),
     )?;
-    if !answer.as_deref().is_some_and(|a| a.eq_ignore_ascii_case("yes")) {
+    if !answer
+        .as_deref()
+        .is_some_and(|a| a.eq_ignore_ascii_case("yes"))
+    {
         return writeln!(out, "Left as it is: nothing was installed.");
     }
     let record = Record {
@@ -523,7 +532,9 @@ fn ask_step(
         let rule = match current.kind {
             G::SelectExactlyOne => "Type the number of the one you want",
             G::SelectAtMostOne => "Type the number of the one you want, or 0 for none",
-            G::SelectAtLeastOne => "Type the numbers you want, with spaces between them (at least one)",
+            G::SelectAtLeastOne => {
+                "Type the numbers you want, with spaces between them (at least one)"
+            }
             G::SelectAny => "Type the numbers you want, with spaces between them, or 0 for none",
             G::SelectAll => "All of these are installed",
         };
@@ -619,14 +630,14 @@ fn install(
         .to_string_lossy()
         .into_owned();
     writeln!(out, "Installing {name}...")?;
-    let done = match mod_archive::extract(archive, &wanted, &staging, mod_archive::Limits::default())
-    {
-        Ok(done) => done,
-        Err(e) => {
-            let _ = std::fs::remove_dir_all(&staging);
-            return writeln!(out, "Nothing was installed.\n{}", e.player_text());
-        }
-    };
+    let done =
+        match mod_archive::extract(archive, &wanted, &staging, mod_archive::Limits::default()) {
+            Ok(done) => done,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&staging);
+                return writeln!(out, "Nothing was installed.\n{}", e.player_text());
+            }
+        };
     record.archive = file_name.clone();
     record.archive_size = std::fs::metadata(archive).map_or(0, |m| m.len());
     record.files = wanted.iter().map(|(_, d)| d.replace('\\', "/")).collect();

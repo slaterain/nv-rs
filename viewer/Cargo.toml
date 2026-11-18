@@ -10,6 +10,10 @@ publish = false
 [dependencies]
 # The game's own translated code (crates/engine), started on the player's FalloutNV.exe.
 host = { path = "../crates/host" }
+# --install-mods: the mod installer's text front end (Install mods.cmd, play.sh --install-mods), and
+# the built-in xNVSE's version for installers that ask for it.
+mod-chooser = { path = "../crates/mod-chooser" }
+nvse = { path = "../crates/nvse" }
 
 # Linux and macOS: `--find`, the game and saves folders `play.sh` offers.
 [target.'cfg(not(windows))'.dependencies]

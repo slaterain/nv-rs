@@ -1279,6 +1279,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mod-chooser"
+version = "0.1.0"
+dependencies = [
+ "fomod",
+ "mod-archive",
+ "mod-install",
+ "zip",
+]
+
+[[package]]
 name = "mod-install"
 version = "0.1.0"
 
@@ -1415,7 +1425,9 @@ version = "0.1.0"
 dependencies = [
  "game-folders",
  "host",
+ "mod-chooser",
  "mod-install",
+ "nvse",
 ]
 
 [[package]]

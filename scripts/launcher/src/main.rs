@@ -62,6 +62,8 @@ const CHECK_LIMIT: Duration = Duration::from_secs(60);
 
 const ISSUES: &str = "https://github.com/slaterain/nv-rs/issues";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// `CREATE_NEW_CONSOLE`: a console tool in a window of its own (Play.exe has none).
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 /// The package's folders.
 struct Package {
@@ -949,6 +951,7 @@ fn log_tail(path: &Path) -> String {
 
 struct Options {
     mods: bool,
+    install: bool,
     import: bool,
     check_only: bool,
     game: Option<PathBuf>,
@@ -958,6 +961,7 @@ struct Options {
 fn parse_options(raw: &[String]) -> Options {
     let mut options = Options {
         mods: false,
+        install: false,
         import: false,
         check_only: false,
         game: std::env::var_os("NV_RS_GAME").map(PathBuf::from),
@@ -968,6 +972,7 @@ fn parse_options(raw: &[String]) -> Options {
         match arg.as_str() {
             "--mods" => options.mods = true,
             "--import-saves" => options.import = true,
+            "--install-mods" => options.install = true,
             "--check" => options.check_only = true,
             "--game" => options.game = args.next().map(PathBuf::from),
             "--from" => options.from = args.next().map(PathBuf::from),
@@ -975,6 +980,32 @@ fn parse_options(raw: &[String]) -> Options {
         }
     }
     options
+}
+
+/// `--install-mods`: the mod installer (nv-rs's own program with `--install-mods`, the same text
+/// chooser as `play.sh --install-mods`) in a console window of its own, for the game found as for
+/// play; Play.exe waits for it. Mods go to `userdatamod installs`, archives are read from `mods`.
+fn install_mods(package: &Package, options: &Options) -> Result<i32, Stop> {
+    let (game, _) = find_game(package, options.game.as_deref())?;
+    clear_for_writing(package, Some(&game.folder))?;
+    let status = Command::new(&package.game_exe)
+        .arg("--install-mods")
+        .arg(&game.folder)
+        .arg(package.userdata.join("mod installs"))
+        .arg(package.root.join("mods"))
+        .current_dir(&package.userdata)
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .status()
+        .map_err(|e| Stop {
+            code: STOP_LOCATION,
+            message: format!(
+                "nv-rs could not start its mod installer ({e}):
+{}",
+                package.game_exe.display()
+            ),
+        })?;
+    package.log(&format!("mod installer ended: {status}"));
+    Ok(status.code().unwrap_or(1))
 }
 
 /// `--import-saves`: the player's saves copied into the package, never the other way, never over a
@@ -1056,6 +1087,9 @@ fn run(package: &Package, options: &Options) -> Result<i32, Stop> {
     if options.import {
         clear_for_writing(package, None)?;
         return import_saves(package, &profile, options.from.as_deref());
+    }
+    if options.install {
+        return install_mods(package, options);
     }
     if win::another_is_running() {
         return stop(
@@ -1544,7 +1578,8 @@ mod tests {
         .map(|s| s.to_string())
         .collect();
         let o = parse_options(&raw);
-        assert!(o.mods && o.import && !o.check_only);
+        assert!(o.mods && o.import && !o.check_only && !o.install);
+        assert!(parse_options(&["--install-mods".to_owned()]).install);
         assert_eq!(o.game.unwrap(), PathBuf::from("D:\\x"));
         assert_eq!(o.from.unwrap(), PathBuf::from("E:\\y"));
     }
