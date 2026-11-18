@@ -145,7 +145,8 @@ fn refused_here(path: &Path) -> Option<&'static str> {
     })
 }
 
-/// [`refused_here`] for the host's other writes off Windows (the first start's profile files).
+/// [`refused_here`] for the host's other writes off Windows (the first start's profile files,
+/// the mods' own files folder: `mod_files::folder`).
 #[cfg(not(windows))]
 pub(crate) fn refused_to_write(path: &Path) -> Option<&'static str> {
     refused_here(path)
@@ -414,14 +415,6 @@ fn dialog_commands(text: &str) -> Vec<std::process::Command> {
         kdialog.args(["--title", "nv-rs", "--sorry"]).arg(text);
         vec![zenity, kdialog]
     }
-}
-
-/// Off Windows: none (Windows' folder answers do not exist there). Its one caller off Windows is
-/// `mod_files`, whose Windows-style check then refuses every folder there (it needs a drive
-/// letter): mods' own settings last for a session off Windows until it uses this system's guard.
-#[cfg(not(windows))]
-pub fn known_folders() -> Vec<PathBuf> {
-    Vec::new()
 }
 
 /// The player's Documents, AppData and Local AppData as Windows answers for them (wherever they
