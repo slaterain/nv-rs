@@ -102,11 +102,15 @@ fn build_mods(raw: &[OsString]) {
     match mod_install::overlay::build(&game, &layers, &own.join("modgame"), &plugins) {
         Ok(built) => {
             println!(
-                "mods: {} game files linked, {} mod files from {} folders",
-                built.linked,
+                "mods: {} mod files from {} folders; {} names made and {} removed since the last start",
                 built.mod_files,
-                layers.len()
+                layers.len(),
+                built.made,
+                built.removed
             );
+            for name in &built.added_plugins {
+                println!("mods: {name} switched on after the mods folder's own plugins.txt");
+            }
             if built.extender_plugins {
                 println!("mods: some mods include plugins for script extenders (.dll files): those are not used");
             }
