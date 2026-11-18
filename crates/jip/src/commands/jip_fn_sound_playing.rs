@@ -11,9 +11,11 @@
 //! when the sound starts: `game_patches::gw`) is that form. For a reference: the scene object
 //! the manager plays the sound at (`soundPlayingObjects`, the map at +0x84, looked up by the
 //! entry's key: bucket `key % count`), and that object's reference (`NiAVObject::GetParentRef`,
-//! [`super::havok_refs::block_parent_ref`]). A sound's state flags (+0x10): stopping keeps all
-//! but bits 4-7 and sets 0x10. Its frequency factor (+0x138, JIP's `float`) and static
-//! attenuation (+0x18, 16 bits).
+//! [`super::havok_refs::block_parent_ref`]). The objects map's lookup is checked in the exe: its
+//! vtable `0x010A3308` (written in the manager's constructor `00AD90E0`) has the bucket function
+//! `00A0D260`, the unsigned `key % count`, and the key compare `00AE8DC0`, plain equality. A
+//! sound's state flags (+0x10): stopping keeps all but bits 4-7 and sets 0x10. Its frequency
+//! factor (+0x138, JIP's `float`) and static attenuation (+0x18, 16 bits).
 //!
 //! G108 is in with the game patches row (`NV_JIP_GAME_PATCHES`, the fixes preset); JIP puts it
 //! in always. Without the row the word at +0x134 is the end of the sound's file name, so the
@@ -21,8 +23,8 @@
 //! name's bytes as a form): `IsSoundPlaying` 0, `GetSoundPlayers` none, `StopSound` and the
 //! playing sounds' part of `SetSoundTraitNumeric` nothing (the form's numbers still change).
 //!
-//! Safety: every guest word of the maps read checked, the walks bounded ([`MAX_WALK`] entries
-//! each); an unreadable word ends that walk. Threads: on the script's thread with no lock, as
+//! Safety: every guest word of the maps read checked, the walks bounded ([`MAX_WALK`] steps
+//! each, buckets and entries); an unreadable word ends that walk. Threads: on the script's thread with no lock, as
 //! JIP's (the audio thread changes these maps too).
 
 use super::arrays::Element;
@@ -68,7 +70,7 @@ const STARTS_AT: u32 = 0x4f;
 const ATT_CURVE: u32 = 0x50;
 const REVERB: u32 = 0x5a;
 const PRIORITY: u32 = 0x5c;
-/// The most entries a map walk reads.
+/// The most steps (buckets and entries) a map walk takes.
 const MAX_WALK: u32 = 1 << 16;
 
 /// The playing sounds' entries (key, sound), in JIP's iterator's order; none without the game
@@ -87,6 +89,11 @@ fn playing_sounds(e: &Engine) -> Vec<(u32, u32)> {
     };
     let mut walked = 0;
     for i in 0..count {
+        // Each bucket counts toward the walk's limit too (a bad count over a readable array).
+        walked += 1;
+        if walked > MAX_WALK {
+            return out;
+        }
         let Some(mut entry) = nif::rd32(e, buckets.wrapping_add(4 * i)) else {
             return out;
         };

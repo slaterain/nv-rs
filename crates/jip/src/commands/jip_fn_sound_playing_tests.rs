@@ -20,8 +20,9 @@ struct World {
     e: Engine,
     form_a: u32,
     form_b: u32,
-    /// The sounds: A at x, A at y, B at x, A with no object.
-    sounds: [u32; 4],
+    /// The sounds: A at x (key 1), A at y (key 2), B at x (key 3), A with no object (key 4), A at x
+    /// (key 5: second in key 1's bucket of the playing sounds, first in key 2's of the objects).
+    sounds: [u32; 5],
     x: u32,
     y: u32,
 }
@@ -83,13 +84,16 @@ fn world() -> World {
         sound(&mut e, form_a, 2),
         sound(&mut e, form_b, 3),
         sound(&mut e, form_a, 4),
+        sound(&mut e, form_a, 5),
     ];
-    // Keys 1..4 in 4 buckets: the walk goes bucket 0 (key 4), 1, 2, 3.
+    // Keys 1..5 in 4 buckets, each put first in its bucket in this order: bucket 1 holds key 1
+    // then key 5 (its next), so the walk goes bucket 0 (key 4), 1 (key 1, key 5), 2, 3.
     map(
         &mut e,
         MANAGER + 0x54,
         4,
         &[
+            (5, sounds[4]),
             (1, sounds[0]),
             (2, sounds[1]),
             (3, sounds[2]),
@@ -100,7 +104,8 @@ fn world() -> World {
         &mut e,
         MANAGER + 0x84,
         3,
-        &[(1, x_at), (2, y_at), (3, x_at)],
+        // Key 5 after key 2: bucket 2 holds key 5 (x) first, then key 2 (y).
+        &[(1, x_at), (2, y_at), (3, x_at), (5, x_at)],
     );
     set_ref(&mut e, 1, form_a);
     set_ref(&mut e, 2, form_b);
@@ -160,14 +165,14 @@ fn stop_sound_stops_every_sound_of_the_form_there() {
     let flags: Vec<u32> = w.sounds.iter().map(|&s| w.e.mem.u32(s + 0x10)).collect();
     assert_eq!(
         flags,
-        vec![0xabcd_12f7, stopped, 0xabcd_12f7, 0xabcd_12f7],
+        vec![0xabcd_12f7, stopped, 0xabcd_12f7, 0xabcd_12f7, 0xabcd_12f7],
         "A at y only"
     );
     call_on(&mut w.e, STOP, 0, &[r(1)]);
     let flags: Vec<u32> = w.sounds.iter().map(|&s| w.e.mem.u32(s + 0x10)).collect();
     assert_eq!(
         flags,
-        vec![stopped, stopped, 0xabcd_12f7, stopped],
+        vec![stopped, stopped, 0xabcd_12f7, stopped, stopped],
         "every A"
     );
 }
@@ -175,21 +180,56 @@ fn stop_sound_stops_every_sound_of_the_form_there() {
 #[test]
 fn get_sound_players_lists_where_the_form_plays_by_each_sounds_key() {
     let mut w = world();
-    // Walk order: bucket 0 (key 4: no object), 1 (x), 2 (y).
+    // Walk order: bucket 0 (key 4: no object), 1 (key 1: x, then key 5: x), 2 (key 2: y).
     let id = call_on(&mut w.e, PLAYERS, 0, &[r(1)]).1;
     let (x, y) = (w.e.mem.u32(w.x + 0xc), w.e.mem.u32(w.y + 0xc));
-    assert_eq!(array_data(&w.e, id), vec![Form(x), Form(y)]);
+    assert_eq!(array_data(&w.e, id), vec![Form(x), Form(x), Form(y)]);
     // The sound's own key (+4) is looked up, not the entry's: A's first sound keyed 2 now.
     w.e.mem.set_u32(w.sounds[0] + 4, 2);
     let id = call_on(&mut w.e, PLAYERS, 0, &[r(1)]).1;
-    assert_eq!(array_data(&w.e, id), vec![Form(y), Form(y)]);
-    // ... while IsSoundPlaying goes by the entry's key (1: at x).
+    assert_eq!(array_data(&w.e, id), vec![Form(y), Form(x), Form(y)]);
+    // ... while IsSoundPlaying goes by the entry's key (1: at x; key 5's sound, also at x, set
+    // to no form first).
+    w.e.mem.set_u32(w.sounds[4] + 0x134, 0);
     assert_eq!(playing(&mut w, 1, Some(3)), 1.0);
     // No player: no array.
     let id = call_on(&mut w.e, PLAYERS, 0, &[r(2)]).1;
     assert_eq!(array_data(&w.e, id), vec![Form(x)]);
     w.e.mem.set_u32(w.sounds[2] + 0x134, 0);
     assert_eq!(call_on(&mut w.e, PLAYERS, 0, &[r(2)]).1, 0.0);
+}
+
+/// Two entries in one bucket: the playing sounds' walk follows the first one's next link (key 5
+/// after key 1), and the objects lookup passes over the first one in a bucket whose key is not
+/// the one asked (key 5 before key 2), each in the chain's order.
+#[test]
+fn the_walks_follow_a_buckets_chain() {
+    let mut w = world();
+    let (x, y) = (w.e.mem.u32(w.x + 0xc), w.e.mem.u32(w.y + 0xc));
+    // Only key 5's sound (second in its bucket) plays A.
+    for i in [0, 1, 3] {
+        w.e.mem.set_u32(w.sounds[i] + 0x134, 0);
+    }
+    assert_eq!(playing(&mut w, 1, None), 1.0);
+    assert_eq!(playing(&mut w, 1, Some(3)), 1.0, "key 5 at x");
+    assert_eq!(playing(&mut w, 1, Some(4)), 0.0);
+    let id = call_on(&mut w.e, PLAYERS, 0, &[r(1)]).1;
+    assert_eq!(array_data(&w.e, id), vec![Form(x)]);
+    call_on(&mut w.e, STOP, 0, &[r(1)]);
+    let stopped = (0xabcd_12f7 & 0xffff_ff0f) | 0x10;
+    assert_eq!(w.e.mem.u32(w.sounds[4] + 0x10), stopped);
+    assert_eq!(w.e.mem.u32(w.sounds[0] + 0x10), 0xabcd_12f7);
+    // Only key 2's sound plays A: its object is the second entry of its bucket (y).
+    let mut w = world();
+    for i in [0, 3, 4] {
+        w.e.mem.set_u32(w.sounds[i] + 0x134, 0);
+    }
+    assert_eq!(playing(&mut w, 1, Some(4)), 1.0, "key 2 at y");
+    assert_eq!(playing(&mut w, 1, Some(3)), 0.0);
+    let id = call_on(&mut w.e, PLAYERS, 0, &[r(1)]).1;
+    assert_eq!(array_data(&w.e, id), vec![Form(y)]);
+    call_on(&mut w.e, STOP, 0, &[r(1), r(4)]);
+    assert_eq!(w.e.mem.u32(w.sounds[1] + 0x10), stopped);
 }
 
 fn set_trait(w: &mut World, form: u16, t: i32, v: f64) {
@@ -200,12 +240,17 @@ fn set_trait(w: &mut World, form: u16, t: i32, v: f64) {
 fn set_sound_trait_numeric_scales_and_clamps_each_number() {
     let mut w = world();
     let a = w.form_a;
-    let cases: [(i32, f64, u32, u32); 20] = [
+    let cases: [(i32, f64, u32, u32); 24] = [
         // (trait, value, offset, expected), each a byte unless noted below.
         (0, 1000.0, 0x44, 200),
         (0, 1276.0, 0x44, 255),
         (0, 1280.0, 0x44, 255),
         (0, -1.0, 0x44, 0),
+        // Values that tell the lower clamps from none: -100 / 5 would be -20 (byte 236).
+        (0, -100.0, 0x44, 0),
+        (1, -1000.0, 0x45, 0),
+        (4, -100.0, 0x4e, 0),
+        (5, -100.0, 0x4f, 0),
         (1, 2599.0, 0x45, 25),
         (1, 25501.0, 0x45, 255),
         (4, 1000.0, 0x4e, 177),
@@ -247,10 +292,15 @@ fn the_frequency_and_static_attenuation_reach_the_playing_sounds() {
     set_trait(&mut w, 1, 2, 50.0);
     assert_eq!(w.e.mem.u8(a + 0x46) as i8, 50);
     let raised = 1.0 + 50.0 * f32::from_bits(0x3c23_d70a);
-    for i in [0, 1, 3] {
+    for i in [0, 1, 3, 4] {
         assert_eq!(w.e.mem.f32(w.sounds[i] + 0x138).to_bits(), raised.to_bits());
     }
     assert_eq!(w.e.mem.u32(w.sounds[2] + 0x138), 0, "B's sound untouched");
+    // The upper clamp: 150 is kept at 100.
+    set_trait(&mut w, 1, 2, 150.0);
+    assert_eq!(w.e.mem.u8(a + 0x46) as i8, 100);
+    let top = 1.0 + 100.0 * f32::from_bits(0x3c23_d70a);
+    assert_eq!(w.e.mem.f32(w.sounds[4] + 0x138).to_bits(), top.to_bits());
     set_trait(&mut w, 1, 2, -150.0);
     assert_eq!(w.e.mem.u8(a + 0x46) as i8, -100);
     let lowered = 1.0 + -100.0 * f32::from_bits(0x3ba3_d70a);
