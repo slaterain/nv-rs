@@ -16,6 +16,8 @@
 //!   word map's lookup (`00853130`), which a quicksave makes about 230,000 times in its one frame
 //!   (2026-11-10: about 30 ms of the 120 ms save frame by address), registered too at `00a1e380`,
 //!   the exe's second copy of the same body (the menus' maps and the threads' scrap heaps).
+//! - [`extra`]: the extra data lookup (`00410220`) and four getters over it, which the process lists
+//!   ask for every actor when a reference goes away (Stewie's Engine Optimizations, measure/stewie-eo).
 //!
 //! Stage 1: the objects stay in guest memory where the game made them. Each function stays
 //! registered at its exe address; a call inside the family, or into another family, is a
@@ -41,6 +43,7 @@ use engine_core::{entry, AbiFn};
 
 use crate::culling::layout::{NiAVObject, NiMatrix3, NiNode, NiPoint3, NiTransform};
 
+pub mod extra;
 pub mod layout;
 pub mod math;
 pub mod refs;
@@ -171,6 +174,12 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0069_aee0, refs::order_array_new(Ptr) -> Ptr),
         entry!(0x0069_af10, refs::info_array_drop(Ptr) -> Ptr),
         entry!(0x004f_1540, refs::extra_kind(Ptr) -> u8),
+        // The extra data lookup and the getters over it the reference clean-up asks for every actor.
+        entry!(0x0041_0220, extra::get_extra_data(Ptr, u8) -> Ptr),
+        entry!(0x0042_2700, extra::followers(Ptr) -> Ptr),
+        entry!(0x0041_9ea0, extra::head_track_target(Ptr) -> u32),
+        entry!(0x0042_12b0, extra::actor_package_data(Ptr) -> u32),
+        entry!(0x0041_cb70, extra::package_target(Ptr) -> u32),
         entry!(0x0085_3130, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
         // The same function at a second address: instruction for instruction the same body.
         entry!(0x00a1_e380, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
