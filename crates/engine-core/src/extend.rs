@@ -628,6 +628,20 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5c",
     },
+    // A reference's reset onto the ground 00628f90, after its collidable reference (0x629006):
+    // JIP LN NVSE's ToggleNoZPosReset (a flagged reference keeps its height).
+    Entry {
+        addr: 0x0062_9006,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // LoadedAreaBound::WarpActor 006295e0, at its start (0x6295E9): JIP LN NVSE's
+    // ToggleNoZPosReset (a flagged actor is not warped).
+    Entry {
+        addr: 0x0062_95e9,
+        owners: JIP,
+        step: "3.5f",
+    },
     // Sky's weather update 0063d1d0, the transition's share: JIP LN NVSE's UpdateWeather.
     Entry {
         addr: 0x0063_d4f5,
@@ -3090,7 +3104,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 132);
+        assert_eq!(SITES.len(), 134);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3146,6 +3160,8 @@ mod tests {
             0x0060_678f,
             0x0066_ee72,
             0x0087_ce34,
+            0x0062_9006,
+            0x0062_95e9,
             0x0094_0998,
             0x0094_5a28,
             0x0094_6310,

@@ -737,6 +737,59 @@ mod tests {
         assert_eq!(e.mem.u32(controller + 0x414) & 0x20, 0);
     }
 
+    /// JIP LN NVSE's ToggleNoZPosReset seam at `0x6295E9`: asked with the actor while JIP is
+    /// installed; 1 skips the warp (no position set), 0 warps without the point's constructor,
+    /// none as the exe.
+    #[test]
+    fn warp_actor_jip_no_z_pos_reset_seam() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, warped, constructed) in [
+            (0, 1, true, true),
+            (jip_patches::INSTALLED, 1, false, false),
+            (jip_patches::INSTALLED, 0, true, false),
+            (jip_patches::INSTALLED, 2, true, true),
+        ] {
+            let mut e = Engine::new();
+            let bound: Ptr<LoadedAreaBound> = e.new_object();
+            let actor: Ptr = Ptr::new(e.mem.alloc(4));
+            let actor_point = e.mem.alloc(12);
+            e.mem.set_u32(actor.addr(), 0x0020_0000);
+            e.map(0x0020_0000, 0x1000);
+            for (slot, target) in [
+                (0x1f4, 0x0020_1000),
+                (0x2a8, 0x0020_1004),
+                (0x100, 0x0020_1008),
+                (0x138, 0x0020_100c),
+            ] {
+                e.mem.set_u32(0x0020_0000 + slot, target);
+            }
+            e.register_double(0x0020_1000, move |_, _| Ret {
+                eax: actor_point,
+                ..Ret::default()
+            });
+            e.register(0x0020_1004, |_, _| Ret::default());
+            e.register(0x0020_1008, |_, _| Ret::default());
+            e.register(0x0020_100c, |_, _| Ret::default());
+            e.register(0x0054_ddd0, |_, _| Ret::default());
+            e.register(0x006d_97b0, |_, _| Ret::default());
+            e.register(0x0054_cfd0, |_, _| Ret::default());
+            e.register(0x0093_06d0, |_, _| Ret::default());
+            noop(&mut e, &[0x0068_15c0]);
+            e.set_jip_patches(word);
+            match answer {
+                0 => e.on_site_for_test(0x0062_95e9, |_, _| Some(0)),
+                1 => e.on_site_for_test(0x0062_95e9, |_, _| Some(1)),
+                _ => e.on_site_for_test(0x0062_95e9, |_, _| None),
+            }
+            e.call_log = Some(vec![]);
+            e.call(0x0062_95e0, &args![bound, actor]);
+            let log = e.call_log.unwrap();
+            let called = |addr: u32| log.iter().any(|(a, _)| *a == addr);
+            assert_eq!(called(0x0020_1004), warped, "{word:x} {answer}");
+            assert_eq!(called(0x0068_15c0), constructed, "{word:x} {answer}");
+        }
+    }
+
     #[test]
     fn append_wrapper_keeps_value_pending_for_array_append() {
         let mut e = Engine::new();

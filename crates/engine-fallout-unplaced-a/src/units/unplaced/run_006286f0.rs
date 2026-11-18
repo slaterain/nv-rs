@@ -1387,6 +1387,39 @@ mod lookahead2_tests {
         assert_eq!(log[1], (REFERENCE_FLAG_TEST, vec![reference, 0x20]));
     }
 
+    /// JIP LN NVSE's ToggleNoZPosReset seam at `0x629006`: asked with the collidable reference
+    /// while JIP is installed; 1 ends the function before the reference's data is read, 0 goes
+    /// on without the two constructors, none as the exe.
+    #[test]
+    fn jip_no_z_pos_reset_seam() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, goes_on, constructed) in [
+            (0, 1, true, true),
+            (jip_patches::INSTALLED, 1, false, false),
+            (jip_patches::INSTALLED, 0, true, false),
+            (jip_patches::INSTALLED, 2, true, true),
+        ] {
+            let (mut e, reference, _) = rig(vec![], vec![]);
+            e.set_jip_patches(word);
+            match answer {
+                0 => e.on_site_for_test(0x0062_9006, |_, _| Some(0)),
+                1 => e.on_site_for_test(0x0062_9006, |_, _| Some(1)),
+                _ => e.on_site_for_test(0x0062_9006, |_, _| None),
+            }
+            e.call(0x0062_8f90, &args![0x9000u32, reference, 0x5500u32]);
+            assert_eq!(
+                !calls(&e, FIND_WARP_LOCATION).is_empty(),
+                goes_on,
+                "{word:x} {answer}"
+            );
+            assert_eq!(
+                !calls(&e, LOCAL_48_CONSTRUCT).is_empty(),
+                constructed,
+                "{word:x} {answer}"
+            );
+        }
+    }
+
     #[test]
     fn found_entity_moves_the_collected_references() {
         let (mut e, reference, collidable) = rig(vec![0xb, 3, 0xb], vec![0x8100, 0]);
