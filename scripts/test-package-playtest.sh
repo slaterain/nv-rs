@@ -113,7 +113,8 @@ package "$tmp/crlf" crlf
 # The real package-check refuses a file holding a Windows user folder in UTF-16 with these needles.
 if [ -n "$checker" ]; then
     mkdir -p -- "$tmp/utf16"
-    printf 'x\000 \000C\000:\000\\000U\000s\000e\000r\000s\000\\000x\000' >"$tmp/utf16/notes.txt"
+    # (The backslash as \134: printf's \\ before an octal escape reads differently between shells.)
+    printf 'x\000 \000C\000:\000\134\000U\000s\000e\000r\000s\000\134\000x\000' >"$tmp/utf16/notes.txt"
     set --
     while IFS= read -r needle; do set -- "$@" --needle "$needle"; done <"$tmp/needles"
     status=0
