@@ -76,7 +76,8 @@ fn setup() -> Engine {
     set_ref(&mut e, R_LOST, LOST);
     extra_stand_ins(&mut e);
     e.ext::<crate::Jip>().pos_marker.marker = MARKER;
-    register_awaiting(&mut e, AWAITING_H13);
+    // Registered with its patch (H13, `game_patches::gh2`).
+    assert_ne!(crate::test_support::execute_of(&e, OP), 0);
     e.register(MOVE_TO_MARKER, |e, w| {
         let pos = floats3(e, MARKER + 0x30);
         let cell = e.mem.u32(MARKER + 0x40);
@@ -196,4 +197,65 @@ fn a_load_forgets_the_reference() {
     let s = sync_position(&mut e);
     assert_eq!(s.refr, 0);
     assert_eq!((s.flags, s.mods[2]), (1, 3.0), "the rest kept");
+}
+
+/// H13 with its command: while `SynchronizePosition` keeps NEAR, each position the game gives
+/// the player (`SetLocationOnReference`'s store, the patch's seam) is NEAR's node plus the offset,
+/// with the rotate flag the node's heading; the kept position follows the node each time; ending
+/// the synchronization puts the player at the last node position.
+#[test]
+fn h13_the_player_follows_the_node_and_ends_at_its_last_place() {
+    let mut e = setup();
+    const LOADED: u32 = FORMS + 0xa000;
+    const ROOT: u32 = FORMS + 0xa100;
+    let seam = crate::game_patches::gh2::SYNC_POSITION.addr();
+    let location = FORMS + 0xa400;
+    let set_at = |e: &mut Engine, at: [f32; 3]| {
+        for (i, v) in at.into_iter().enumerate() {
+            e.mem.set_f32(location + 4 * i as u32, v);
+        }
+        assert_eq!(e.site(seam, &[PC, location]), Some(1));
+    };
+    // Not synchronizing: the location as given.
+    set_at(&mut e, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0]);
+    // NEAR's 3D: its root node, at (100, 200, 300), turned a quarter.
+    e.mem.set_u32(NEAR + 0x64, LOADED);
+    e.mem.set_u32(LOADED + 0x14, ROOT);
+    let node_at = |e: &mut Engine, at: [f32; 3]| {
+        for (i, v) in at.into_iter().enumerate() {
+            e.mem.set_f32(ROOT + 0x8c + 4 * i as u32, v);
+        }
+    };
+    node_at(&mut e, [100.0, 200.0, 300.0]);
+    e.mem.set_f32(ROOT + 0x68, 0.0);
+    e.mem.set_f32(ROOT + 0x6c, 1.0);
+    call_on(&mut e, OP, 0, &[r(R_NEAR), n(1), z(5.5), s(b"Bip01")]);
+    // The root carries the name the command keeps (the same fixed string).
+    e.mem.set_u32(ROOT + 8, string_of(b"Bip01"));
+    set_at(&mut e, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [100.0, 200.0, 305.5]);
+    assert_eq!(
+        e.mem.f32(PC + 0x2c),
+        crate::commands::ln_fn_math::atan2(1.0, 0.0)
+    );
+    // The node moves: the next frame's position follows it.
+    node_at(&mut e, [110.0, 210.0, 310.0]);
+    set_at(&mut e, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [110.0, 210.0, 315.5]);
+    assert_eq!(sync_position(&mut e).pos[..3], [110.0, 210.0, 315.5]);
+    // Another reference's position is never changed.
+    set_at(&mut e, [7.0, 8.0, 9.0]);
+    assert_eq!(e.site(seam, &[OTHER, location]), Some(1));
+    assert_eq!(floats3(&e, OTHER + 0x30), [7.0, 8.0, 9.0]);
+    // Ending: the player goes back to the last node position (through MoveToMarker).
+    MOVES.with(|m| m.borrow_mut().clear());
+    call_on(&mut e, OP, 0, &[]);
+    assert_eq!(
+        moves(),
+        vec![(vec![PC, MARKER, 0, 0, 0], CELL1, [110.0, 210.0, 315.5])]
+    );
+    // And the game's positions are the player's own again.
+    set_at(&mut e, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0]);
 }
