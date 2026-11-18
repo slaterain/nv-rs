@@ -247,3 +247,17 @@ fn the_loaded_ammo_only_for_an_inventory_reference() {
     run(&mut e, 0, &[r(1)]);
     assert_eq!(calls_to(APPLY_AMMO_EFFECTS)[0][1], AMMO + 0xd4);
 }
+
+/// No perk step (an NPC that is not a teammate, the NPC perks patch off) with the damage mod:
+/// the value still ends as a float, as JIP's function returns one: 10 x 1.3 is exactly 13.0
+/// (12.99999952... rounds to even), never the double 12.9999995.
+#[test]
+fn the_damage_mod_without_perks_ends_as_a_float() {
+    let mut e = setup();
+    let refr = inventory_ref(&mut e, NPC);
+    e.mem.set_u32(AMMO + 0xd4, 0);
+    e.mem.set_u32(WEAP + 0x180, 0xc);
+    put_extra(&mut e, XDL, X1, 0x8d, 1);
+    assert_eq!(run(&mut e, refr, &[]), 13.0);
+    assert!(calls_to(APPLY_PERK_MODIFIERS).is_empty());
+}

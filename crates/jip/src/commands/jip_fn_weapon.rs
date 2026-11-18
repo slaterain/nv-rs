@@ -759,8 +759,9 @@ const DAMAGE_MOD_MULT: u32 = 0x0102_2004;
 /// game's weapon damage (`owner`'s actor values, the weapon, the condition, 1.0, 0, 0, the entry,
 /// whether there is ammo), the ammo's damage effects when it has any, times the exe's 1.3 when a
 /// mod of the entry carries effect 0xC, then the "calculate weapon damage" perk entry point for
-/// the player, a teammate, or anyone while JIP's NPC perks patch is installed. That last step
-/// goes through a float in memory; without it the value stays at full precision, as JIP's `ST0`.
+/// the player, a teammate, or anyone while JIP's NPC perks patch is installed. JIP's function
+/// returns a `float`: the value ends as one on every path (10 x 1.3 is 13.0), the steps in single
+/// precision.
 fn calculate_weapon_damage(
     e: &mut Engine,
     entry: u32,
@@ -783,37 +784,33 @@ fn calculate_weapon_damage(
                 u32::from(ammo != 0),
             ],
         )
-        .f64();
+        .f64() as f32;
     if ammo != 0 && e.mem.u32(ammo + AMMO_EFFECTS) != 0 {
         value = e
             .call(
                 APPLY_AMMO_EFFECTS,
-                &[
-                    AMMO_DAMAGE_MOD,
-                    ammo + AMMO_EFFECTS,
-                    (value as f32).to_bits(),
-                ],
+                &[AMMO_DAMAGE_MOD, ammo + AMMO_EFFECTS, value.to_bits()],
             )
-            .f64();
+            .f64() as f32;
     }
     if entry_has_mod(e, entry, DAMAGE_MOD_EFFECT) {
-        value *= f64::from(e.mem.f32(DAMAGE_MOD_MULT));
+        value *= e.mem.f32(DAMAGE_MOD_MULT);
     }
     if crate::cosave::npc_perks_patch(e)
         || e.mem.u32(owner + REF_ID) == 0x14
         || e.mem.u8(owner + IS_TEAMMATE) != 0
     {
-        value = f64::from(e.with_stack(4, |e, at| {
+        value = e.with_stack(4, |e, at| {
             let v = at.addr();
-            e.mem.set_f32(v, value as f32);
+            e.mem.set_f32(v, value);
             e.call(
                 APPLY_PERK_MODIFIERS,
                 &[PERK_CALCULATE_WEAPON_DAMAGE, owner, weapon, owner, v],
             );
             e.mem.f32(v)
-        }));
+        });
     }
-    value
+    f64::from(value)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_weapon.h:
