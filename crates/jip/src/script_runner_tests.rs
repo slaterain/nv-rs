@@ -806,8 +806,8 @@ fn the_name_test_is_a_txt_ending_in_any_case() {
 }
 
 /// Only names ending in `.txt` are taken: a `.txt.bak` or an `.ini` never compiles or runs; a
-/// `.TXT` is kept and runs (the files stand-in lists names in lower case: the case itself is the
-/// name test's, above).
+/// `.TXT` is kept and runs, named with its own spelling (the files stand-in lists each name as it
+/// was put, as Windows does).
 #[test]
 fn only_txt_names_are_taken() {
     let mut e = runner_engine();
@@ -819,7 +819,7 @@ fn only_txt_names_are_taken() {
     init_files(&mut e);
     let c = calls();
     assert!(!c.iter().any(|s| s.contains("backup") || s.contains("cfg")));
-    assert!(c.contains(&"editor-id gs_upper.txt".to_string()));
+    assert!(c.contains(&"editor-id GS_UPPER.TXT".to_string()));
     run(&mut e, RunOn::SaveGame, None);
     assert_eq!(runs(), ["run print upper 0"]);
 }
