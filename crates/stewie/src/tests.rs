@@ -630,6 +630,12 @@ fn seam_list(_: &Engine, folder: &[u8]) -> Vec<engine_core::mod_files::Listed> {
     })
 }
 
+fn seam_name_key(name: &[u8]) -> Vec<u16> {
+    name.iter()
+        .map(|b| u16::from(b.to_ascii_uppercase()))
+        .collect()
+}
+
 static SEAM: engine_core::mod_files::ModFileCalls = engine_core::mod_files::ModFileCalls {
     read: seam_read,
     exists: seam_exists,
@@ -639,6 +645,7 @@ static SEAM: engine_core::mod_files::ModFileCalls = engine_core::mod_files::ModF
     append: seam_no_write,
     read_head: seam_read_head,
     list: seam_list,
+    name_key: seam_name_key,
 };
 
 /// Installs the stand-in seam (once for the test program) with these files for this thread.
