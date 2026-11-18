@@ -44,7 +44,6 @@
 //!   (its defaults map and the load's `RestoreLinkedRefs`/`SetLinkedRefID` are not built, so a
 //!   load would keep the links unapplied).
 //! - (Built in `jip_fn_extra_data.rs`: `RefHasExtraData`, `GetRefExtraData`, `SetRefExtraData`.)
-//! - `GetPlayerPerks` calls `jip_fn_actor`'s `GetAllPerks` (lane A's module, not built yet).
 
 use super::Handlers;
 use crate::game::JipFormFlags;
@@ -81,6 +80,7 @@ pub static COMMANDS: Handlers = &[
     (0x28f9, get_angle_ex),
     (0x2909, get_translated_pos),
     (0x292a, get_editor_position),
+    (0x286b, get_player_perks),
 ];
 
 /// `SynchronizePosition`, built but not registered until JIP's position hook (row H13) is in:
@@ -1296,6 +1296,18 @@ fn synchronize_position(e: &mut Engine, w: &[u32]) -> Ret {
             }
         }
     }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_GetPlayerPerks_Execute.
+/// `GetPlayerPerks`: the player's own perks, hidden ones left out, as an array (0 for none):
+/// `GetAllPerks(player, 0, script, 0)`.
+fn get_player_perks(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let player = e.mem.u32(PLAYER);
+    let id = super::jip_fn_actor_p2::get_all_perks(e, player, false, a.script, false);
+    a.set_result(e, f64::from(id));
     handled(true)
 }
 
