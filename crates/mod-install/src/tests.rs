@@ -1172,6 +1172,28 @@ fn makes_no_folder_in_the_game() {
     assert!(layer.is_dir() && dir.0.join("p").join("q").is_dir());
 }
 
+/// A layer that lies inside the game's folder (a package unpacked there) is never made, though
+/// a forbidden folder itself may be; and a whole build with such a layer writes nothing there.
+#[test]
+fn a_layer_inside_the_game_folder_is_never_made() {
+    use crate::fsops::{act, Guard, Op};
+    let dir = Scratch::new("layer-in-game");
+    let game = game(&dir.0);
+    let layer = game.join("nv-rs").join("mods");
+    let guard = Guard::new(&dir.0.join("modgame"), &[game.clone(), layer.clone()], &[]).unwrap();
+    assert!(act(&guard, Op::MakeDirAll(&layer)).is_err());
+    assert!(!game.join("nv-rs").exists());
+    let plugins = dir.0.join("p.txt");
+    assert!(build(
+        &game,
+        std::slice::from_ref(&layer),
+        &dir.0.join("modgame"),
+        &plugins
+    )
+    .is_err());
+    assert!(!game.join("nv-rs").exists());
+}
+
 /// The real location of a path not there yet: its nearest existing folder's, with the rest after.
 #[test]
 fn a_missing_paths_real_location_starts_at_its_nearest_folder() {

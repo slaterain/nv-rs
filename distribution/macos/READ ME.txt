@@ -98,6 +98,12 @@ Terminal window, and press Enter. nv-rs remembers it.
   ./play.sh --forget-game    forget the remembered game folder (it asks again)
   ./play.sh --import-saves   offer again to copy saves found in CrossOver's bottles
   ./play.sh --check          only check your game's version and say whether it can start
+  ./play.sh --mods           play with mods: the installed ones, then those you put in the "my
+                             mods" folder in nv-rs's own folder (as they would go in Data; it
+                             says where, and its READ ME says more), over a copy of the game
+                             folder made of links in nv-rs's own folder; your game folder is
+                             never changed, and saves made with mods stay apart
+                             (--mods --import-saves copies saves into them)
 
 
 Your files
