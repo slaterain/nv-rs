@@ -614,3 +614,77 @@ fn default_message_time_read_and_set() {
         (4.5, vec![b"GetDefaultMessageTime >> 4.5".to_vec()])
     );
 }
+
+// ---- GetFilesInFolder and GetFoldersInFolder ----
+
+fn names(e: &Engine, id: f64) -> Vec<Vec<u8>> {
+    array_data(e, id)
+        .into_iter()
+        .map(|d| match d {
+            Data::Str(s) => s,
+            other => panic!("{other:?}"),
+        })
+        .collect()
+}
+
+fn folder_scene() -> Engine {
+    let e = files_setup();
+    files::put(r"data\textures\a.dds", b"1");
+    files::put(r"data\textures\B.txt", b"2");
+    files::put(r"data\textures\c.dds", b"3");
+    files::put(r"data\textures\sub\d.dds", b"4");
+    files::folder(r"data\textures\sub");
+    files::folder(r"data\textures\menus");
+    e
+}
+
+/// `data\` and the path (`/` made `\`, a `\` added), all files with no filter, in the listing's
+/// order; the folders apart; an empty array (not 0) for a folder that is not there.
+#[test]
+fn the_files_and_folders_of_a_data_folder() {
+    let mut e = folder_scene();
+    let id = res_of(&mut e, 0x228a, &[s(b"textures")]);
+    assert_eq!(names(&e, id), [&b"a.dds"[..], b"b.txt", b"c.dds"]);
+    let id = res_of(&mut e, 0x228a, &[s(b"Textures/")]);
+    assert_eq!(names(&e, id).len(), 3, "a slash, the case");
+    let id = res_of(&mut e, 0x22a3, &[s(b"textures")]);
+    assert_eq!(names(&e, id), [&b"menus"[..], b"sub"]);
+    let id = res_of(&mut e, 0x228a, &[s(br"textures\sub")]);
+    assert_eq!(names(&e, id), [&b"d.dds"[..]]);
+    let id = res_of(&mut e, 0x228a, &[s(b"nowhere")]);
+    assert!(id != 0.0 && names(&e, id).is_empty());
+}
+
+/// The filter as `FindFirstFileA` takes it: `*` and `?`, without case; `*.*` every name.
+#[test]
+fn the_filter_is_a_wildcard() {
+    let mut e = folder_scene();
+    let id = res_of(&mut e, 0x228a, &[s(b"textures"), s(b"*.DDS")]);
+    assert_eq!(names(&e, id), [&b"a.dds"[..], b"c.dds"]);
+    let id = res_of(&mut e, 0x228a, &[s(b"textures"), s(b"?.txt")]);
+    assert_eq!(names(&e, id), [&b"b.txt"[..]]);
+    let id = res_of(&mut e, 0x22a3, &[s(b"textures"), s(b"s*")]);
+    assert_eq!(names(&e, id), [&b"sub"[..]]);
+    let id = res_of(&mut e, 0x22a3, &[s(b"textures"), s(b"*.*")]);
+    assert_eq!(names(&e, id).len(), 2, "*.* takes names without a dot");
+    let id = res_of(&mut e, 0x228a, &[s(b"textures"), s(b"")]);
+    assert!(names(&e, id).is_empty(), "an empty filter matches nothing");
+}
+
+#[test]
+fn wildcards_as_windows_long_names() {
+    for (p, n, want) in [
+        (&b"*"[..], &b"abc"[..], true),
+        (b"a*c", b"abbbc", true),
+        (b"a*c", b"abcd", false),
+        (b"*.dds", b"x.dds.bak", false),
+        (b"*.dds", b"x.y.dds", true),
+        (b"a?c", b"ac", false),
+        (b"A?C", b"abc", true),
+        (b"*.*", b"noext", true),
+        (b"**", b"", true),
+        (b"abc", b"abcd", false),
+    ] {
+        assert_eq!(wildcard_match(p, n), want, "{p:?} {n:?}");
+    }
+}

@@ -6,12 +6,10 @@
 //! writes are kept in the port's own folder beside the saves, never in the game folder; and
 //! `GetDefaultMessageTime`/`SetDefaultMessageTime`, the time JIP's `QueueUIMessageHook` (G09,
 //! `crate::game_patches::ga`) gives the game's own messages (with JIP's fixes off it is kept but no
-//! message uses it, as with JIP). 16 of its 20 commands (`GetLNVersion` is the core track's,
-//! `identity.rs`).
-//!
-//! Left for later, each for its reason: `GetFilesInFolder`, `GetFoldersInFolder` list a folder
-//! (`FindFirstFileA`; the seam has no folder listing yet). `Console` compiles and runs a script
-//! line on JIP's script runner (`crate::script_runner::run_script_source`).
+//! message uses it, as with JIP), `GetFilesInFolder`/`GetFoldersInFolder` (a Data folder listed
+//! through the seam) and `Console` (a script line run on JIP's script runner,
+//! `crate::script_runner::run_script_source`). 19 of its 20 commands (`GetLNVersion` is the core
+//! track's, `identity.rs`).
 
 use super::arrays::{create_array, create_string_map, set_element, Element};
 use super::forms::ListNode;
@@ -43,6 +41,8 @@ pub static COMMANDS: Handlers = &[
     (0x2327, get_default_message_time),
     (0x2328, set_default_message_time),
     (0x2326, console_line),
+    (0x228a, get_files_in_folder),
+    (0x22a3, get_folders_in_folder),
 ];
 
 /// A form list's forms (`BGSListForm::list`, a `tList` at +0x18).
@@ -716,6 +716,84 @@ fn console_line(e: &mut Engine, w: &[u32]) -> Ret {
         a.set_result(e, 1.0);
     }
     handled(true)
+}
+
+// ---- folder listings ----
+
+/// `GetFilesInFolder`'s and `GetFoldersInFolder`'s filter buffer (`char filter[0x40]`).
+const FILTER_ARG: usize = 0x40;
+
+/// Whether `name` matches `pattern` as `FindFirstFileA` matches a long name: `*` any run of
+/// characters, `?` any one, everything else itself without ASCII case; `*.*` (and so `*.*.*`...)
+/// matches every name, with or without a dot. Windows also matches a name's short 8.3 form and
+/// lets a `?` before the end or a dot stand for nothing; neither is taken here (a mod lists its
+/// own files by their real names).
+fn wildcard_match(pattern: &[u8], name: &[u8]) -> bool {
+    if pattern.iter().all(|&b| b == b'*' || b == b'.') && pattern.contains(&b'*') {
+        return true;
+    }
+    let (mut p, mut n) = (0, 0);
+    let (mut star, mut mark) = (None, 0);
+    while n < name.len() {
+        if p < pattern.len() && (pattern[p] == b'?' || pattern[p].eq_ignore_ascii_case(&name[n])) {
+            p += 1;
+            n += 1;
+        } else if p < pattern.len() && pattern[p] == b'*' {
+            star = Some(p);
+            mark = n;
+            p += 1;
+        } else if let Some(s) = star {
+            p = s + 1;
+            mark += 1;
+            n = mark;
+        } else {
+            return false;
+        }
+    }
+    pattern[p..].iter().all(|&b| b == b'*')
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h:
+// Cmd_GetFilesInFolder_Execute and Cmd_GetFoldersInFolder_Execute.
+/// `data\<path>` (`/` made `\`, a `\` added when it does not end in one) listed through the seam
+/// ([`engine_core::mod_files::list`]: the port's folder's files, then the game's, as a mod reads
+/// them) with `filter` (default `*`): an array of the names of the files (`folders` false) or of
+/// the folders, in the listing's order; empty when nothing matches or the folder is not there.
+fn folder_listing(e: &mut Engine, w: &[u32], folders: bool, command: &str) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let mut folder = DATA_FOLDER.to_vec();
+    folder.extend(super::buffer_arg(e, &read, 0, DATA_PATH_ARG, command));
+    backslashes(&mut folder);
+    if folder.last() != Some(&b'\\') {
+        folder.push(b'\\');
+    }
+    let filter = if read.args.len() > 1 {
+        super::buffer_arg(e, &read, 1, FILTER_ARG, command)
+    } else {
+        b"*".to_vec()
+    };
+    let names: Vec<Element> = engine_core::mod_files::list(e, &folder)
+        .into_iter()
+        .filter(|l| l.is_folder == folders && wildcard_match(&filter, &l.name))
+        .map(|l| Element::Str(l.name))
+        .collect();
+    let id = create_array(e, a.script, &names);
+    a.set_result(e, f64::from(id));
+    handled(true)
+}
+
+/// `GetFilesInFolder path [filter]`: the files' names ([`folder_listing`]).
+fn get_files_in_folder(e: &mut Engine, w: &[u32]) -> Ret {
+    folder_listing(e, w, false, "GetFilesInFolder")
+}
+
+/// `GetFoldersInFolder path [filter]`: the folders' names ([`folder_listing`]; no `.` or `..`).
+fn get_folders_in_folder(e: &mut Engine, w: &[u32]) -> Ret {
+    folder_listing(e, w, true, "GetFoldersInFolder")
 }
 
 #[cfg(test)]
