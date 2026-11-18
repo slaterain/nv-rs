@@ -187,8 +187,25 @@ impl std::fmt::Display for ConfigError {
     }
 }
 
+/// The largest installer or details file read: real ones are a few hundred KB at most, and a
+/// larger one is refused before it is decoded.
+pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
+
+/// The most steps read (real installers have tens); the rest are left out with a warning.
+pub const MAX_STEPS: usize = 1024;
+
+/// How deep conditions nest inside each other (real ones: two or three); a deeper one is read as
+/// never holding, with a warning.
+pub const MAX_CONDITION_DEPTH: usize = 32;
+
 /// The installer in `bytes` (the file as it is in the archive).
 pub fn parse_config(bytes: &[u8]) -> Result<Config, ConfigError> {
+    if bytes.len() > MAX_FILE_BYTES {
+        return Err(ConfigError(format!(
+            "the installer file is {} bytes; more than {MAX_FILE_BYTES} is not an installer",
+            bytes.len()
+        )));
+    }
     let text = text::decode(bytes);
     let root = xml::parse(&text)
         .ok_or_else(|| ConfigError("the installer file holds no XML element".into()))?;
@@ -203,6 +220,9 @@ pub fn parse_config(bytes: &[u8]) -> Result<Config, ConfigError> {
 
 /// The details in `bytes` (`info.xml`); an unreadable file gives empty details.
 pub fn parse_info(bytes: &[u8]) -> Info {
+    if bytes.len() > MAX_FILE_BYTES {
+        return Info::default();
+    }
     let text = text::decode(bytes);
     let Some(root) = xml::parse(&text) else {
         return Info::default();
@@ -279,6 +299,8 @@ const DEPENDENCIES: &[&str] = &["dependencies", "dependancies"];
 #[derive(Default)]
 struct Reader {
     sequence: usize,
+    /// How many conditions the one being read is inside.
+    depth: usize,
     schema: Option<(u32, u32)>,
     warnings: Vec<String>,
 }
@@ -312,6 +334,13 @@ impl Reader {
                     .collect();
                 sort_by(&mut steps, order, |s| &s.name);
                 config.steps.extend(steps);
+                if config.steps.len() > MAX_STEPS {
+                    self.warn(format!(
+                        "{} steps; only the first {MAX_STEPS} are read",
+                        config.steps.len()
+                    ));
+                    config.steps.truncate(MAX_STEPS);
+                }
             } else if element.is(&["optionalFileGroups"]) {
                 // 1.0 to 3.0: one unnamed step. 1.0 and 2.0 had no `order` and showed the groups
                 // as written (Vortex's parsers); 3.0's schema default is Ascending.
@@ -479,10 +508,18 @@ impl Reader {
 
     /// A `compositeDependency` (or 1.0's plain list, an And).
     fn composite(&mut self, element: &Element) -> Condition {
+        if self.depth >= MAX_CONDITION_DEPTH {
+            self.warn(format!(
+                "conditions nested more than {MAX_CONDITION_DEPTH} deep; read as never holding"
+            ));
+            return Condition::Any(vec![]);
+        }
+        self.depth += 1;
         let parts: Vec<Condition> = element
             .elements()
             .filter_map(|c| self.condition(c))
             .collect();
+        self.depth -= 1;
         match element.attr("operator") {
             Some(o) if o.trim().eq_ignore_ascii_case("Or") => Condition::Any(parts),
             _ => Condition::All(parts),

@@ -1,14 +1,20 @@
 //! Where things are in a mod archive, from its list of files (paths with `/` or `\`).
 //!
+//! The listing may come straight from an archive: folder entries (`Wrapper/`, or a bare
+//! `Wrapper` from a 7z) are dropped, so only files are left ([`Listing`]). Names are compared as
+//! Windows and macOS compare them ([`fold`]); `__MACOSX` folders (left by Macs' zip tool) are not
+//! looked at.
+//!
 //! The `fomod` folder is found as Mod Organizer 2 finds it: at the top, else, when the top holds
-//! exactly one entry and that is a folder, inside it, and so on down (archives often wrap
-//! everything in `ModName v1.2\`). Names are compared without case; `__MACOSX` folders (left by
-//! Macs' zip tool) are not looked at. File sources in the installer are relative to the folder
+//! exactly one name and that is a folder, inside it, and so on down (archives often wrap
+//! everything in `ModName v1.2\`). File sources in the installer are relative to the folder
 //! holding `fomod` (the prefix).
 //!
 //! An archive without an installer, or with a C# `script.cs` installer this port does not run,
 //! may still hold a plain Data layout: [`data_folder`] finds the shallowest folder that looks like
 //! a Data folder (holds a plugin or archive, or one of the game's Data folders), as managers do.
+
+use std::collections::BTreeMap;
 
 /// What an archive holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,6 +46,21 @@ pub fn normalise(path: &str) -> String {
         .join("/")
 }
 
+/// One part of a path as Windows (and macOS by default) tells names apart: dots and spaces at
+/// its end do not count, nor does case (Unicode lower case).
+pub fn fold_part(part: &str) -> String {
+    part.trim_end_matches(['.', ' ']).to_lowercase()
+}
+
+/// A path's key: [`normalise`]d, each part [`fold_part`]ed.
+pub fn fold(path: &str) -> String {
+    normalise(path)
+        .split('/')
+        .map(fold_part)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// `a` and `b` joined with `/` (either may be empty).
 pub fn join(a: &str, b: &str) -> String {
     match (a.is_empty(), b.is_empty()) {
@@ -49,76 +70,116 @@ pub fn join(a: &str, b: &str) -> String {
     }
 }
 
-fn skipped(path: &str) -> bool {
-    path.split('/').any(|p| p.eq_ignore_ascii_case("__MACOSX"))
+/// An archive's files, indexed once: by [`fold`]ed path, each with the listing's own spelling.
+#[derive(Debug, Clone, Default)]
+pub struct Listing<'a> {
+    files: BTreeMap<String, &'a str>,
 }
 
-/// The listing's entries as (normalised, lower case, as given), without `__MACOSX`.
-fn entries(listing: &[String]) -> Vec<(String, String, &str)> {
-    listing
-        .iter()
-        .map(|e| {
-            let n = normalise(e);
-            let lower = n.to_ascii_lowercase();
-            (n, lower, e.as_str())
-        })
-        .filter(|(n, _, _)| !n.is_empty() && !skipped(n))
-        .collect()
-}
-
-/// The folder (normalised, original case) holding `fomod`, by the rule above.
-fn fomod_prefix(entries: &[(String, String, &str)]) -> Option<String> {
-    let mut base = String::new();
-    loop {
-        let under = |path: &str| -> Option<String> {
-            if base.is_empty() {
-                Some(path.to_owned())
-            } else {
-                path.strip_prefix(&format!("{}/", base.to_ascii_lowercase()))
-                    .map(str::to_owned)
+impl<'a> Listing<'a> {
+    /// The files of `listing`: folder entries (ending in `/` or `\`, or a name another entry is
+    /// inside of), `__MACOSX` and empty paths left out; of two entries that fold to one path, the
+    /// first.
+    pub fn new(listing: &'a [String]) -> Self {
+        let mut files: BTreeMap<String, &'a str> = BTreeMap::new();
+        for given in listing {
+            if given.ends_with(['/', '\\']) {
+                continue;
             }
-        };
-        // The entries below `base`, as (first part, whether it is a folder).
-        let mut tops: Vec<(String, bool)> = Vec::new();
-        for (_, lower, _) in entries {
-            let Some(rest) = under(lower) else { continue };
-            let (first, is_folder) = match rest.find('/') {
-                Some(at) => (&rest[..at], true),
-                None => (rest.as_str(), false),
-            };
-            if first == "fomod" && is_folder {
-                return Some(base);
+            let key = fold(given);
+            if key.is_empty() || key.split('/').any(|p| p == "__macosx") {
+                continue;
             }
-            if !tops.iter().any(|(t, f)| t == first && *f == is_folder) {
-                tops.push((first.to_owned(), is_folder));
-            }
+            files.entry(key).or_insert(given.as_str());
         }
-        match tops.as_slice() {
-            [(_, true)] => {
-                // The one folder, in the listing's own case.
-                let first = entries
-                    .iter()
-                    .find_map(|(n, lower, _)| {
-                        under(lower)?;
-                        let skip = if base.is_empty() { 0 } else { base.len() + 1 };
-                        let rest = &n[skip..];
-                        rest.find('/').map(|at| rest[..at].to_owned())
-                    })
-                    .unwrap_or_default();
-                base = join(&base, &first);
+        let folders: Vec<String> = files
+            .keys()
+            .filter(|k| {
+                let under = format!("{k}/");
+                files
+                    .range(under.clone()..)
+                    .next()
+                    .is_some_and(|(next, _)| next.starts_with(&under))
+            })
+            .cloned()
+            .collect();
+        for folder in folders {
+            files.remove(&folder);
+        }
+        Self { files }
+    }
+
+    /// The listing's spelling of the file at `path` (any case, either separator).
+    pub fn file(&self, path: &str) -> Option<&'a str> {
+        self.files.get(&fold(path)).copied()
+    }
+
+    /// The files inside the folder `path`: each as (its path below the folder, in the listing's
+    /// own spelling; the listing's spelling of the whole path).
+    pub fn under(&self, path: &str) -> Vec<(String, &'a str)> {
+        let key = fold(path);
+        let depth = if key.is_empty() {
+            0
+        } else {
+            key.split('/').count()
+        };
+        let start = if key.is_empty() {
+            String::new()
+        } else {
+            format!("{key}/")
+        };
+        self.files
+            .range(start.clone()..)
+            .take_while(|(k, _)| k.starts_with(&start))
+            .map(|(_, given)| {
+                let own = normalise(given);
+                let rest = own.split('/').skip(depth).collect::<Vec<_>>().join("/");
+                (rest, *given)
+            })
+            .collect()
+    }
+
+    /// Every file: (folded path, the listing's spelling), in folded order.
+    pub fn files(&self) -> impl Iterator<Item = (&String, &&'a str)> {
+        self.files.iter()
+    }
+}
+
+/// The folder (normalised, the listing's case) holding `fomod`, by the rule above.
+fn fomod_prefix(listing: &Listing) -> Option<String> {
+    let paths: Vec<(Vec<String>, Vec<String>)> = listing
+        .files()
+        .map(|(key, given)| {
+            let own: Vec<String> = normalise(given).split('/').map(str::to_owned).collect();
+            (key.split('/').map(str::to_owned).collect(), own)
+        })
+        .collect();
+    let mut base: Vec<String> = Vec::new();
+    let mut spelled: Vec<String> = Vec::new();
+    loop {
+        // The names right below `base`: (folded) -> (own spelling, is a folder).
+        let mut tops: BTreeMap<&str, (&str, bool)> = BTreeMap::new();
+        for (key, own) in &paths {
+            if key.len() <= base.len() || key[..base.len()] != base[..] {
+                continue;
+            }
+            let at = base.len();
+            let folder = key.len() > at + 1;
+            let entry = tops.entry(&key[at]).or_insert((&own[at], folder));
+            entry.1 |= folder;
+        }
+        if tops.get("fomod").is_some_and(|(_, folder)| *folder) {
+            return Some(spelled.join("/"));
+        }
+        let mut only = tops.into_iter();
+        match (only.next(), only.next()) {
+            (Some((key, (own, true))), None) => {
+                base.push(key.to_owned());
+                spelled.push(own.to_owned());
             }
             _ => return None,
         }
     }
-}
-
-/// The listing's own spelling of the file `path` (normalised, any case).
-fn spelled(entries: &[(String, String, &str)], path: &str) -> Option<String> {
-    let lower = path.to_ascii_lowercase();
-    entries
-        .iter()
-        .find(|(_, l, _)| *l == lower)
-        .map(|(_, _, given)| (*given).to_owned())
 }
 
 /// The game's Data folders a mod's files go in (lower case).
@@ -141,31 +202,31 @@ const DATA_FILES: &[&str] = &[".esm", ".esp", ".bsa"];
 
 /// The shallowest folder (normalised, the listing's case; `""` the top) that holds a plugin or
 /// archive, or one of the game's Data folders, or is itself named `Data`, leaving out `fomod`
-/// folders; `None` when there is none. On a tie the first in the listing's order.
+/// folders; `None` when there is none. On a tie the first in folded order.
 pub fn data_folder(listing: &[String]) -> Option<String> {
+    let index = Listing::new(listing);
     let mut best: Option<(usize, String)> = None;
-    let mut offer = |parts: &[&str]| {
+    let mut offer = |parts: &[String]| {
         let depth = parts.len();
         if best.as_ref().map_or(true, |(d, _)| depth < *d) {
             best = Some((depth, parts.join("/")));
         }
     };
-    for (n, _, _) in entries(listing) {
-        let parts: Vec<&str> = n.split('/').collect();
-        if parts.iter().any(|p| p.eq_ignore_ascii_case("fomod")) {
+    for (key, given) in index.files() {
+        let keys: Vec<&str> = key.split('/').collect();
+        if keys.contains(&"fomod") {
             continue;
         }
-        let last = parts.len() - 1;
-        let name = parts[last].to_ascii_lowercase();
-        if DATA_FILES.iter().any(|ext| name.ends_with(ext)) {
-            offer(&parts[..last]);
+        let own: Vec<String> = normalise(given).split('/').map(str::to_owned).collect();
+        let last = keys.len() - 1;
+        if DATA_FILES.iter().any(|ext| keys[last].ends_with(ext)) {
+            offer(&own[..last]);
         }
         for k in 0..last {
-            let part = parts[k].to_ascii_lowercase();
-            if part == "data" {
-                offer(&parts[..=k]);
-            } else if DATA_FOLDERS.contains(&part.as_str()) {
-                offer(&parts[..k]);
+            if keys[k] == "data" {
+                offer(&own[..=k]);
+            } else if DATA_FOLDERS.contains(&keys[k]) {
+                offer(&own[..k]);
             }
         }
     }
@@ -174,20 +235,24 @@ pub fn data_folder(listing: &[String]) -> Option<String> {
 
 /// What the archive with this listing holds.
 pub fn layout(listing: &[String]) -> Layout {
-    let all = entries(listing);
-    let prefix = fomod_prefix(&all);
-    let info = prefix
-        .as_deref()
-        .and_then(|p| spelled(&all, &join(p, "fomod/info.xml")));
+    let index = Listing::new(listing);
+    let prefix = fomod_prefix(&index);
+    let found = |name: &str| {
+        prefix
+            .as_deref()
+            .and_then(|p| index.file(&join(p, name)))
+            .map(str::to_owned)
+    };
+    let info = found("fomod/info.xml");
     if let Some(prefix) = &prefix {
-        if let Some(config) = spelled(&all, &join(prefix, "fomod/ModuleConfig.xml")) {
+        if let Some(config) = found("fomod/ModuleConfig.xml") {
             return Layout::Installer {
                 prefix: prefix.clone(),
                 config,
                 info,
             };
         }
-        if let Some(script) = spelled(&all, &join(prefix, "fomod/script.cs")) {
+        if let Some(script) = found("fomod/script.cs") {
             return Layout::Script {
                 prefix: prefix.clone(),
                 script,
