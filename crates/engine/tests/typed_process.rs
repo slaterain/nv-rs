@@ -873,6 +873,8 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
         0 => [&one_plain, &lead_level, &hole, &three],
         1 => [&lead_plain, &[], &[], &others],
         2 => [&[], &[], &skipped_level, &other_lead],
+        // The array one actor long: the temp list's loop starts from index 1.
+        3 if pattern & 8 != 0 => [&lead_level, &[], &[], &[]],
         _ => [&lead_level, &others, &[], &[]],
     };
     let a = process_array(e, levels, 2, [0; 4]);

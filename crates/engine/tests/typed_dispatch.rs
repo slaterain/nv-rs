@@ -3332,57 +3332,69 @@ fn extra_get_extra_data() {
 
 /// The four getters over the lookup: each the typed getter against its translation, which calls the
 /// lookup by address too, with the type it asks for.
-fn extra_getter(d: Diff, address: u32, asked: u8) {
-    d.common(address)
-        // The cache's memset wrapper, a C runtime family member: translated on both sides here (this
-        // file stands in for that family's square root).
-        .goes_by_address(&[0x0040_3d30])
-        .inputs(&extra_inputs())
-        .setup(move |e, case| {
-            vec![extra_world(
-                e,
-                case.word(0),
-                case.word(1),
-                case.word(2),
-                asked,
-            )]
-        })
-        .run()
-        .assert_same();
+trait ExtraGetter {
+    fn extra_getter(self, address: u32, asked: u8) -> Diff;
+}
+
+impl ExtraGetter for Diff {
+    fn extra_getter(self, address: u32, asked: u8) -> Diff {
+        self.common(address)
+            // The cache's memset wrapper, a C runtime family member: translated on both sides
+            // here (this file stands in for that family's square root).
+            .goes_by_address(&[0x0040_3d30])
+            .inputs(&extra_inputs())
+            .setup(move |e, case| {
+                vec![extra_world(
+                    e,
+                    case.word(0),
+                    case.word(1),
+                    case.word(2),
+                    asked,
+                )]
+            })
+    }
 }
 
 #[test]
 fn extra_followers() {
-    let d = Diff::new(entry!(
+    Diff::new(entry!(
         0x0042_2700,
         dispatch::extra::followers(Ptr<_>) -> Ptr<_>
-    ));
-    extra_getter(d, 0x0042_2700, 0x1d);
+    ))
+    .extra_getter(0x0042_2700, 0x1d)
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn extra_head_track_target() {
-    let d = Diff::new(entry!(
+    Diff::new(entry!(
         0x0041_9ea0,
         dispatch::extra::head_track_target(Ptr<_>) -> u32
-    ));
-    extra_getter(d, 0x0041_9ea0, 0x46);
+    ))
+    .extra_getter(0x0041_9ea0, 0x46)
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn extra_actor_package_data() {
-    let d = Diff::new(entry!(
+    Diff::new(entry!(
         0x0042_12b0,
         dispatch::extra::actor_package_data(Ptr<_>) -> u32
-    ));
-    extra_getter(d, 0x0042_12b0, 0x70);
+    ))
+    .extra_getter(0x0042_12b0, 0x70)
+    .run()
+    .assert_same();
 }
 
 #[test]
 fn extra_package_target() {
-    let d = Diff::new(entry!(
+    Diff::new(entry!(
         0x0041_cb70,
         dispatch::extra::package_target(Ptr<_>) -> u32
-    ));
-    extra_getter(d, 0x0041_cb70, 0x19);
+    ))
+    .extra_getter(0x0041_cb70, 0x19)
+    .run()
+    .assert_same();
 }
