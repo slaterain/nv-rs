@@ -74,7 +74,7 @@
 //! stay); leaves, fronds and distant trees are not shadowed yet; objects the game has not drawn
 //! since they came near (out of sight from the start) cast none until it does.
 
-use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 
 use crate::scene_light;
 
@@ -135,7 +135,38 @@ pub const BLEND: f32 = 0.1;
 /// one that misses a frame or two (the game's own fades, its culling's edges) stays in the maps.
 pub const GRACE: u64 = 8;
 
+/// The geometries' bodies a device keeps at most (one a geometry, those of buffers the game let go
+/// dropped first): past it, all are forgotten and made again as they come. Not reached in play.
+pub const BODIES: usize = 1 << 16;
+
 static MODE: AtomicU8 = AtomicU8::new(0);
+static BODY_LIMIT: AtomicUsize = AtomicUsize::new(0);
+static BODIES_FORGOTTEN: AtomicU64 = AtomicU64::new(0);
+
+/// Tests: the bodies kept at most ([`BODIES`]; 0: that), so a test can reach the limit.
+#[doc(hidden)]
+pub fn limit_bodies(limit: usize) {
+    BODY_LIMIT.store(limit, Ordering::Relaxed);
+}
+
+/// The bodies kept at most ([`BODIES`], or a test's [`limit_bodies`]).
+pub(crate) fn body_limit() -> usize {
+    match BODY_LIMIT.load(Ordering::Relaxed) {
+        0 => BODIES,
+        n => n,
+    }
+}
+
+/// Tests: how many times a device has forgotten every body at the limit (all devices, ever).
+#[doc(hidden)]
+pub fn bodies_forgotten() -> u64 {
+    BODIES_FORGOTTEN.load(Ordering::Relaxed)
+}
+
+/// A device forgot every body at the limit.
+pub(crate) fn forgot_bodies() {
+    BODIES_FORGOTTEN.fetch_add(1, Ordering::Relaxed);
+}
 
 /// Turns the sun shadows on or off for devices made from now on (the host, from the run's choice).
 pub fn enable(on: bool) {
@@ -958,6 +989,14 @@ pub(crate) struct Body {
     pub ribbon_tris: Option<std::sync::Arc<Vec<u32>>>,
     /// ... as a list of the device's own.
     pub ribbon_list: Option<List>,
+    /// A geometry of round cables and ribbons whose ribbons are no cables after all (opaque, or
+    /// a texture too opaque, [`ribbon_texture`]: a strip): its round cables alone ([`Thin`]
+    /// without ribbons), and its other triangles (the strips and small bits), drawn into the depth
+    /// maps as a caster's ([`Body::solid`] for that case; review of #693).
+    pub rounds: Option<Thin>,
+    pub strips: Option<std::sync::Arc<Vec<u32>>>,
+    /// ... as a list of the device's own.
+    pub strips_list: Option<List>,
     pub pieces: usize,
     pub look: Vec<(f32, f32)>,
     /// Its pieces by kind: round cables, ribbons, others (how many, their part of its area).
@@ -992,6 +1031,9 @@ impl Body {
             solid_list: None,
             ribbon_tris: None,
             ribbon_list: None,
+            rounds: None,
+            strips: None,
+            strips_list: None,
             pieces: 0,
             look: Vec::new(),
             kinds: [(0, 0.0); 3],
@@ -1056,7 +1098,25 @@ impl Body {
                 })
                 .collect()
         };
-        let (thin, solid, ribbon_tris) = match thin_of(s.clone()) {
+        // Round cables beside ribbons: the round ones alone and the rest, for when the ribbons
+        // turn out to be strips (decided by the draw's texture, [`ribbon_texture`]).
+        let found = thin_of(s.clone());
+        let (rounds, strips) = match &found {
+            Some(t) if t.ribbons && t.rounds => {
+                let cables: Vec<Strand> = t.strands.iter().filter(|p| p.thin()).cloned().collect();
+                let out: crate::fxhash::Set<u32> = cables.iter().map(|c| c.piece).collect();
+                (
+                    Some(Thin {
+                        strands: std::sync::Arc::new(cables),
+                        ribbons: false,
+                        rounds: true,
+                    }),
+                    Some(std::sync::Arc::new(of_pieces(&|p| !out.contains(&p)))),
+                )
+            }
+            _ => (None, None),
+        };
+        let (thin, solid, ribbon_tris) = match found {
             Some(t) => {
                 // A geometry of ribbons with anything else in it: only the ribbons' alpha is
                 // added into the coverage maps.
@@ -1099,6 +1159,9 @@ impl Body {
             solid_list: None,
             ribbon_tris,
             ribbon_list: None,
+            rounds,
+            strips,
+            strips_list: None,
             pieces,
             look,
             kinds,
@@ -1251,13 +1314,13 @@ pub fn still_good(drawn: Option<&Cascade>, now: &Cascade, sun_changed: bool) -> 
     }
 }
 
-/// What a caster draws: its pipeline, buffers (by address, offset and upload count) and range. One
-/// geometry can stand in several places ([`Cache`]).
+/// What a caster draws: its pipeline, buffers (by their own numbers, [`crate::device::Buf::id`],
+/// offset and upload count) and range. One geometry can stand in several places ([`Cache`]).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct GeoKey {
     pub pipe: u32,
-    pub streams: [(usize, u64, u64); 8],
-    pub index: (usize, u64),
+    pub streams: [(u64, u64, u64); 8],
+    pub index: (u64, u64),
     pub start: u32,
     pub count: u32,
     pub base_vertex: i32,
@@ -1327,14 +1390,16 @@ pub(crate) struct Cutout {
 }
 
 impl Draw {
-    /// Whether a buffer it draws from was written since, or let go by the game (only the light
-    /// list holds it).
+    /// Whether a buffer of the game's it draws from was written since, or let go by the game (only
+    /// this draw holds it). The device's own list of a geometry without its cables (`index` when
+    /// [`Draw::rest`]) is no buffer of the game's: this draw may well hold it alone (the device's
+    /// bodies forgotten, review of #693); the game's index buffer is `watch` then.
     pub fn stale(&self) -> bool {
         let gone = |b: &std::sync::Arc<crate::device::Buf>, n: u64| {
             std::sync::Arc::strong_count(b) == 1 || b.uploads.load(Ordering::Relaxed) != n
         };
         self.streams.iter().flatten().any(|(b, _, n)| gone(b, *n))
-            || self.index.as_ref().is_some_and(|(b, n)| gone(b, *n))
+            || (!self.rest && self.index.as_ref().is_some_and(|(b, n)| gone(b, *n)))
             || self.watch.as_ref().is_some_and(|(b, n)| gone(b, *n))
     }
 
@@ -3839,8 +3904,17 @@ mod tests {
             (0..28).collect::<Vec<u32>>()
         );
         assert!(body.solid.is_none());
-        // Ribbons alone: their alpha drawn from the game's own draw (no list).
+        // For when its strip is no cable (opaque, or too opaque a texture): the round wire alone,
+        // and everything else (the strip's 28 triangles) for the depth maps.
+        let r = body.rounds.as_ref().expect("its round wire alone");
+        assert!(!r.ribbons && r.rounds && r.strands.len() == 1 && r.strands[0].thin());
+        assert_eq!(
+            *body.strips.expect("the rest's own list"),
+            (0..28).collect::<Vec<u32>>()
+        );
+        // Ribbons alone: their alpha drawn from the game's own draw (no list), nothing round.
         let alone = Body::of(&strip(20.0, 700.0, 14), true).unwrap();
+        assert!(alone.rounds.is_none() && alone.strips.is_none());
         assert!(alone.thin.unwrap().ribbons && alone.ribbon_tris.is_none());
     }
 
@@ -3933,7 +4007,7 @@ mod tests {
 
     #[test]
     fn a_geometry_written_again_is_the_same_geometry() {
-        let mut streams = [(0usize, 0u64, 0u64); 8];
+        let mut streams = [(0u64, 0u64, 0u64); 8];
         streams[0] = (0x1000, 64, 7);
         let a = GeoKey {
             pipe: 3,

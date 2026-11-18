@@ -74,6 +74,18 @@ pub(crate) struct Buf {
     /// How many times its bytes were written: the sun shadows ([`sun_shadow`]) draw a caster
     /// again only from the bytes it was drawn with.
     pub(crate) uploads: AtomicU64,
+    /// Its own number, never given to another buffer ([`Buf::next_id`]): what the sun shadows key
+    /// a geometry on ([`sun_shadow::GeoKey`]), so a buffer made where a freed one was is not taken
+    /// for it.
+    pub(crate) id: u64,
+}
+
+impl Buf {
+    /// A new buffer's number: one more than the last.
+    pub(crate) fn next_id() -> u64 {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    }
 }
 
 pub(crate) struct Shader {
@@ -937,14 +949,11 @@ struct SunState {
     /// Geometries let go because the game wrote into their buffers ([`sun_shadow::GeoKey::geometry`]):
     /// when one comes back it moves.
     rewritten: crate::fxhash::Set<sun_shadow::GeoKey>,
-    /// Each geometry's body as written (the key with its buffers' upload counts): its object-space
-    /// bounding sphere and pieces, and the index lists made for them (none: its positions could not
-    /// be read). A body made again for new bytes has lists of its own.
-    bounds: Map<sun_shadow::GeoKey, Option<Arc<sun_shadow::Body>>>,
-    /// How many bodies each geometry ([`sun_shadow::GeoKey::geometry`]) has had made: one the game
-    /// keeps writing is drawn whole from its [`SPLIT_BODIES`]th on (its pieces not worked out each
-    /// frame).
-    bodies_made: Map<sun_shadow::GeoKey, u32>,
+    /// Each geometry's body ([`sun_shadow::GeoKey::geometry`]: one a geometry, the last made,
+    /// [`SunBody`]). Entries of buffers the game let go are dropped when the map has doubled since
+    /// (`prune_at`); past [`sun_shadow::body_limit`] all are forgotten (not reached in play).
+    bounds: Map<sun_shadow::GeoKey, SunBody>,
+    prune_at: usize,
     /// Each caster pipeline's place in `gpu.pipelines` by vertex shader, declaration, strides,
     /// primitive type and index size (none: it could not be made).
     pipes: Map<PipeOf, Option<u32>>,
@@ -1008,6 +1017,30 @@ struct SunState {
     trace: u32,
 }
 
+/// A geometry's body as last made ([`SunState::bounds`]).
+struct SunBody {
+    /// The key it was made for (its buffers' upload counts with it): a draw of other bytes makes a
+    /// new one in its place.
+    key: sun_shadow::GeoKey,
+    /// Its object-space bounding sphere and pieces, and the index lists made for them (none: its
+    /// positions could not be read). A body made again for new bytes has lists of its own.
+    body: Option<Arc<sun_shadow::Body>>,
+    /// How many bodies the geometry has had made: one the game keeps writing is drawn whole from
+    /// its [`SPLIT_BODIES`]th on (its pieces not worked out each frame).
+    made: u32,
+    /// The game's buffers it was made from: once one is gone, so is the geometry.
+    held: Vec<std::sync::Weak<Buf>>,
+}
+
+impl SunBody {
+    fn live(&self) -> bool {
+        self.held.iter().all(|b| b.strong_count() > 0)
+    }
+}
+
+/// The least number of bodies kept before those of buffers let go are looked for.
+const SUN_PRUNE_FROM: usize = 1024;
+
 /// A draw the sun's maps did not keep, for the dump: why (the counters' order), its vertex and
 /// pixel shaders' stable hashes, its count and its `ModelViewProj` when it has one.
 type SunReject = (usize, u64, u64, u32, Option<[[f32; 4]; 4]>);
@@ -1029,7 +1062,6 @@ impl SunState {
         self.moving = 0;
         self.rewritten.clear();
         self.bounds.clear();
-        self.bodies_made.clear();
         self.gpu.drawn = [None; sun_shadow::CASCADES];
         self.light = None;
         self.forgotten += 1;
@@ -1045,9 +1077,9 @@ impl SunState {
             moving: 0,
             rewritten: crate::fxhash::Set::default(),
             bounds: Map::default(),
+            prune_at: SUN_PRUNE_FROM,
             pipes: Map::default(),
             ribbon_pipes: Map::default(),
-            bodies_made: Map::default(),
             keep: [sun_shadow::SunKeep::default(); sun_shadow::CASCADES],
             view: None,
             ran: None,
@@ -1870,6 +1902,7 @@ impl Device {
             index32: index && format == 102,
             batch: AtomicU64::new(0),
             uploads: AtomicU64::new(0),
+            id: Buf::next_id(),
         });
         self.objects
             .insert(buffer, Obj::Buffer(b, vec![0; size as usize]));
@@ -6131,7 +6164,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         };
         let mut streams: [Option<(Arc<Buf>, u64, u64)>; 8] = Default::default();
-        let mut key_streams = [(0usize, 0u64, 0u64); 8];
+        let mut key_streams = [(0u64, 0u64, 0u64); 8];
         for (k, a) in link.attributes.iter().enumerate() {
             if a.is_empty() {
                 continue;
@@ -6141,7 +6174,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             };
             let uploads = b.uploads.load(Ordering::Relaxed);
             let offset = u64::from(self.st.streams[k].offset);
-            key_streams[k] = (Arc::as_ptr(&b) as usize, offset, uploads);
+            key_streams[k] = (b.id, offset, uploads);
             streams[k] = Some((b, offset, uploads));
         }
         let index = match index32 {
@@ -6157,25 +6190,40 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let key = sun_shadow::GeoKey {
             pipe,
             streams: key_streams,
-            index: index
-                .as_ref()
-                .map_or((0, 0), |(b, n)| (Arc::as_ptr(b) as usize, *n)),
+            index: index.as_ref().map_or((0, 0), |(b, n)| (b.id, *n)),
             start,
             count,
             base_vertex,
         };
-        let known = self.sun.as_ref().and_then(|s| s.bounds.get(&key)).cloned();
+        // One body a geometry: the last made, replaced when its bytes were written since.
+        let geometry = key.geometry();
+        let (known, made) = match self.sun.as_ref().and_then(|s| s.bounds.get(&geometry)) {
+            Some(e) if e.key == key => (Some(e.body.clone()), e.made),
+            Some(e) => (None, e.made),
+            None => (None, 0),
+        };
         let body = match known {
             Some(b) => b,
             None => {
                 let sun = self.sun.as_mut().expect("on");
-                if sun.bounds.len() >= 1 << 16 {
-                    sun.bounds.clear();
-                    sun.bodies_made.clear();
+                if made == 0 && sun.bounds.len() >= sun.prune_at.min(sun_shadow::body_limit()) {
+                    // Those of buffers the game let go first; all only past the limit.
+                    sun.bounds.retain(|_, e| e.live());
+                    if sun.bounds.len() >= sun_shadow::body_limit() {
+                        sun.bounds.clear();
+                        sun_shadow::forgot_bodies();
+                    }
+                    sun.prune_at = (2 * sun.bounds.len()).max(SUN_PRUNE_FROM);
                 }
-                let made = sun.bodies_made.entry(key.geometry()).or_insert(0);
-                *made += 1;
-                let split = *made < SPLIT_BODIES;
+                let made = made + 1;
+                let split = made < SPLIT_BODIES;
+                let held: Vec<std::sync::Weak<Buf>> = streams
+                    .iter()
+                    .flatten()
+                    .map(|(b, _, _)| b)
+                    .chain(index.as_ref().map(|(b, _)| b))
+                    .map(Arc::downgrade)
+                    .collect();
                 let b = self
                     .sun_bounds(
                         decl,
@@ -6188,7 +6236,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     )
                     .map(Arc::new);
                 let sun = self.sun.as_mut().expect("on");
-                sun.bounds.insert(key.clone(), b.clone());
+                sun.bounds.insert(
+                    geometry,
+                    SunBody {
+                        key: key.clone(),
+                        body: b.clone(),
+                        made,
+                        held,
+                    },
+                );
                 b
             }
         };
@@ -6280,11 +6336,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let alpha = self.st.textures[0].as_ref().map_or(f32::NAN, |t| {
             f32::from_bits(t.alpha.load(Ordering::Relaxed))
         });
-        let thin = body
-            .thin
-            .clone()
-            .filter(|t| !t.ribbons || (cutout && sun_shadow::ribbon_texture(alpha)))
-            .filter(|_| sun_shadow::thin_maps());
+        // Ribbons that are no cables (opaque, or a texture too opaque) beside round cables: the
+        // round ones are still cables, the rest casts from its own list.
+        let (thin, solid_list) = match &body.thin {
+            Some(t) if t.ribbons && !(cutout && sun_shadow::ribbon_texture(alpha)) => {
+                (body.rounds.clone(), body.strips_list.clone())
+            }
+            t => (t.clone(), body.solid_list.clone()),
+        };
+        let thin = thin.filter(|_| sun_shadow::thin_maps());
         let ribbon_header = (cutout && thin.as_ref().is_some_and(|t| t.ribbons)).then(|| {
             let st = &self.st;
             let (above, from) = alpha_bounds(st.rs[rs::ALPHAREF] & 0xFF);
@@ -6360,7 +6420,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut drawn_as = (pipe, index.clone(), start, count, base_vertex, None);
         let mut whole = false;
         let mut has_rest = false;
-        if let (Some(_), Some(rest)) = (&thin, body.solid_list.clone()) {
+        if let (Some(_), Some(rest)) = (&thin, solid_list) {
             let list_pipe = match self.sun.as_ref().and_then(|s| s.pipes.get(&lkey)) {
                 Some(p) => *p,
                 None => {
@@ -6547,6 +6607,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     index32: true,
                     batch: AtomicU64::new(0),
                     uploads: AtomicU64::new(0),
+                    id: Buf::next_id(),
                 }),
                 count,
             }
@@ -6559,6 +6620,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .ribbon_tris
             .as_ref()
             .map(|t| list(t, "sun shadow ribbons of a caster"));
+        body.strips_list = body
+            .strips
+            .as_ref()
+            .map(|t| list(t, "sun shadow caster without its round cables"));
         Some(body)
     }
 

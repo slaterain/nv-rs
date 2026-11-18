@@ -745,6 +745,12 @@ struct Extra {
     tubes: Option<MixedIndexed>,
     /// The wire and pipe drawn as an indexed strip ([`STRIP_VB`]).
     strip: bool,
+    /// [`RIBBON_ROUND`] drawn without the alpha test (its strip opaque).
+    ribbon_round_opaque: bool,
+    /// [`RIBBON_ROUND`] drawn with a texture too opaque for a cable ([`STRIP_TEX`]) and the alpha test.
+    ribbon_round_textured: bool,
+    /// The cable of `cable` written again (the same bytes) before it is drawn.
+    rewrite_cable: bool,
 }
 
 /// What the index buffer of [`TUBES`] names.
@@ -822,6 +828,11 @@ fn alpha_texture(b: &mut WgpuBackend, texture: u32, alpha: impl Fn(u8) -> u8) {
 /// Draws `count` triangles of `buffer` (position and texture coordinate, 24 bytes a vertex) with
 /// the cut-out shaders, `texture` and the alpha test.
 fn draw_cut(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32) {
+    draw_textured(b, buffer, texture, count, true);
+}
+
+/// [`draw_cut`] with the alpha test on (`test`) or off.
+fn draw_textured(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32, test: bool) {
     set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
     run(
         b,
@@ -831,7 +842,7 @@ fn draw_cut(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32) {
             texture,
         },
     );
-    state(b, ALPHATESTENABLE, 1);
+    state(b, ALPHATESTENABLE, u32::from(test));
     state(b, ALPHAREF, 128);
     state(b, ALPHAFUNC, 7);
     run(
@@ -935,6 +946,8 @@ const RIBBON_ROUND: u32 = 0x15F0;
 /// it), as a cut-out its full stripes. Its buffer and texture.
 const FENCE: u32 = 0x1600;
 const FENCE_TEX: u32 = 0x1610;
+/// A texture opaque but for one texel in eight (mean alpha 0.875: no cable).
+const STRIP_TEX: u32 = 0x1620;
 /// A lit plate 5 units under the cable 120 high of [`CABLES`] (x -40 to 10, y 250 to 350, z 115).
 const PLATE: u32 = 0x1630;
 /// Tubes for the indexed draws: ten unused vertices, then the fine wire of [`CABLES`] (its shadow
@@ -1262,6 +1275,9 @@ fn extras(b: &mut WgpuBackend) {
     }
     bytes_buffer(b, FENCE, false, &floats(&v.concat()));
     alpha_texture(b, FENCE_TEX, |i| if i % 2 == 0 { 255 } else { 0 });
+    // Opaque but for texel 3 (where the round wire of [`RIBBON_ROUND`] reads it): too opaque for
+    // a cable, its strip cast in wide opaque blocks.
+    alpha_texture(b, STRIP_TEX, |i| if i == 3 { 0 } else { 255 });
     let (x0, x1, y0, y1, z) = (-40.0, 10.0, 250.0, 350.0, 115.0);
     buffer(
         b,
@@ -1469,10 +1485,31 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
             set_shaders(b, VS, LIT_PS, DECL);
         }
         if let Some(n) = e.cable {
+            if e.rewrite_cable {
+                let v: Vec<f32> = cable_corners(CABLES[n])
+                    .iter()
+                    .flat_map(|c| [c[0], c[1], c[2], 1.0])
+                    .collect();
+                run(
+                    b,
+                    Cmd::UploadBuffer {
+                        buffer: CABLE + n as u32,
+                        offset: 0,
+                        flags: 0,
+                        data: Data::Bytes(&floats(&v)),
+                    },
+                );
+            }
             draw(b, CABLE + n as u32, 16 * 6 * 2);
         }
         if e.ribbon_round {
             draw_cut(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2);
+        }
+        if e.ribbon_round_opaque {
+            draw_textured(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2, false);
+        }
+        if e.ribbon_round_textured {
+            draw_cut(b, RIBBON_ROUND, STRIP_TEX, 32 + 16 * 6 * 2);
         }
         if e.fence {
             draw_cut(b, FENCE, FENCE_TEX, 80);
@@ -2479,4 +2516,135 @@ fn new_indices_written_into_a_mixed_geometry_cast_as_on_a_new_device() {
             );
         }
     }
+}
+
+/// [`lit_sequence`] with the sun shadows on and the device's bodies limited to `limit`
+/// ([`sun_shadow::limit_bodies`]); with how many times they were all forgotten.
+fn limited_sequence(samples: u32, frames: &[Extra], limit: usize) -> Option<(Vec<Pixels>, u64)> {
+    struct Unlimit;
+    impl Drop for Unlimit {
+        fn drop(&mut self) {
+            sun_shadow::limit_bodies(0);
+        }
+    }
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(samples);
+    sun_shadow::enable(false);
+    let mut b = b?;
+    let before = sun_shadow::bodies_forgotten();
+    let _unlimit = Unlimit;
+    sun_shadow::limit_bodies(limit);
+    let on = lit_sequence(&mut b, frames, true);
+    Some((on, sun_shadow::bodies_forgotten() - before))
+}
+
+/// The device's kept bodies all forgotten at their limit (review of #693, round 2: a smaller limit
+/// here, so it is reached): a wire and pipe in one geometry, kept for the maps while not drawn (out
+/// of sight; here through its grace), keeps the pipe's full shadow, where before its list of what is
+/// not cable was taken for a buffer the game had let go and its shadow dropped at once.
+#[test]
+fn a_split_pole_not_drawn_keeps_its_shadow_when_the_bodies_are_forgotten() {
+    let pole = Extra {
+        mixed: true,
+        ..Extra::default()
+    };
+    // Another geometry comes while the pole is not drawn: its body is one past the limit.
+    let other = Extra {
+        cable: Some(2),
+        ..Extra::default()
+    };
+    let frames = [pole, pole, pole, pole, other, other, other, other];
+    for samples in [1, 4] {
+        // The ground and the pole: the next new geometry's body is past the limit.
+        let Some((on, forgotten)) = limited_sequence(samples, &frames, 2) else {
+            return;
+        };
+        assert!(forgotten > 0, "the bodies were forgotten ({samples})");
+        let p = pixel([-40.0, 300.0, 0.0]);
+        // (The first frame has no maps yet; a frame's maps hold the casters of the frame before.)
+        for (f, px) in on.iter().enumerate().skip(2) {
+            assert_eq!(
+                at(px, p)[2],
+                AMBIENT_RED,
+                "the pipe's shadow in frame {f} ({samples})"
+            );
+        }
+    }
+}
+
+/// A round wire in one geometry with a flat strip that is no cable (review of #693, round 2):
+/// drawn opaque, or with a texture too opaque for a cable (opaque but for one stripe), the strip
+/// casts its full shadow while the wire keeps its faint band all along it.
+#[test]
+fn a_round_wire_beside_a_strip_keeps_its_soft_band() {
+    for (samples, textured) in [(1, false), (4, false), (1, true), (4, true)] {
+        let Some((off, on)) = third_frames(
+            samples,
+            Extra {
+                ribbon_round_opaque: !textured,
+                ribbon_round_textured: textured,
+                ..Extra::default()
+            },
+        ) else {
+            return;
+        };
+        let along: Vec<f32> = (0..=12)
+            .map(|i| most_taken(&off, &on, -40.0, 150.0 + 25.0 * f64::from(i)))
+            .collect();
+        eprintln!(
+            "the round wire beside a strip (textured {textured}), along it: {along:.2?} ({samples})"
+        );
+        let (most, least) = (
+            along.iter().copied().fold(f32::MIN, f32::max),
+            along.iter().copied().fold(f32::MAX, f32::min),
+        );
+        assert!(
+            least > 0.04 && most < 0.6 && most - least < 0.1,
+            "the wire's band along it {along:?} (textured {textured}, {samples})"
+        );
+        // The strip's shadow (x -110 to -90): full along it, in its opaque blocks when textured.
+        let strip: Vec<f32> = (0..=8)
+            .map(|i| most_taken(&off, &on, -100.0, 200.0 + 25.0 * f64::from(i)))
+            .collect();
+        eprintln!("the strip along it: {strip:.2?} (textured {textured}, {samples})");
+        assert!(
+            strip.iter().all(|&t| t > 0.9),
+            "the strip's shadow {strip:?} (textured {textured}, {samples})"
+        );
+    }
+}
+
+/// A geometry the game writes again every frame (a cable here) has its pieces worked out for its
+/// first two bodies only: from its third on it casts whole, as any caster (a hard line), not as a
+/// cable (chosen in review of #693, round 2: its cables would have to be found again each frame).
+#[test]
+fn a_cable_written_every_frame_casts_whole_from_its_third_body() {
+    let still = Extra {
+        cable: Some(1),
+        ..Extra::default()
+    };
+    let written = Extra {
+        rewrite_cable: true,
+        ..still
+    };
+    let Some(off) = lit_sequence_picture(1, false, &[still; 6]) else {
+        return;
+    };
+    let kept = lit_sequence_picture(1, true, &[still; 6]).expect("the adapter");
+    // One body a geometry, whatever its writes: the ground and the cable stay under a limit of 3
+    // (a body for each write, as before review round 2, would pass it on the third frame).
+    let (rewritten, forgotten) = limited_sequence(1, &[written; 6], 3).expect("the adapter");
+    assert_eq!(forgotten, 0, "one body a geometry");
+    let soft = most_taken(&off[5], &kept[5], -100.0, 300.0);
+    let hard = most_taken(&off[5], &rewritten[5], -100.0, 300.0);
+    eprintln!("the cable kept {soft}, written every frame {hard}");
+    assert!(
+        soft < hard - 0.2,
+        "kept, a cable's band: {soft} against {hard}"
+    );
+    assert!(
+        hard > 0.9,
+        "written every frame, a whole caster's shadow: {hard}"
+    );
 }
