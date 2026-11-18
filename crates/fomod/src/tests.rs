@@ -10,6 +10,29 @@ use crate::layout::*;
 use crate::text::decode;
 use crate::xml;
 
+// The tests' own short forms (local items shadow the glob imports above).
+fn layout(listing: &[String]) -> Layout {
+    crate::layout::layout(listing).expect("a mod's listing")
+}
+
+fn data_folder(listing: &[String]) -> Option<String> {
+    crate::layout::data_folder(listing).expect("a mod's listing")
+}
+
+fn holds(c: &Condition, flags: &std::collections::BTreeMap<String, String>, f: &Facts) -> bool {
+    crate::install::holds(c, flags, &f.index())
+}
+
+trait PlanOk {
+    fn plan_ok(&self, listing: &[String], prefix: &str) -> Plan;
+}
+
+impl PlanOk for Session<'_> {
+    fn plan_ok(&self, listing: &[String], prefix: &str) -> Plan {
+        self.plan(listing, prefix).expect("a plan")
+    }
+}
+
 fn list(paths: &[&str]) -> Vec<String> {
     paths.iter().map(|p| (*p).to_owned()).collect()
 }
@@ -118,7 +141,7 @@ fn the_reader_takes_what_mods_write() {
     // A stray end tag is skipped.
     assert_eq!(root.child(&["a"]).unwrap().text(), "xy");
     assert_eq!(root.child(&["open"]).unwrap().text(), "never closed");
-    assert_eq!(xml::parse("no element here"), None);
+    assert_eq!(xml::parse("no element here"), Err(xml::XmlError::NoElement));
 }
 
 #[test]
@@ -315,7 +338,7 @@ fn each_group_type_keeps_its_rule() {
             vec!["y1", "y2"]
         ]
     );
-    let plan = s.plan(&list(&["e1.esp", "e2.esp"]), "");
+    let plan = s.plan_ok(&list(&["e1.esp", "e2.esp"]), "");
     assert_eq!(copies(&plan), ["e2.esp <- e2.esp"]);
 }
 
@@ -415,14 +438,14 @@ fn flags_decide_which_steps_show_and_a_later_step_overrides() {
     assert_eq!(s.next_step(Some(1)), Some(2));
     assert_eq!(s.previous_step(2), Some(1));
     assert_eq!(
-        copies(&s.plan(&listing, "")),
+        copies(&s.plan_ok(&listing, "")),
         ["red.esp <- red.esp", "shade.esp <- shade.esp"]
     );
     // Darker sets colour again: the later step wins, and the Or pattern installs extra.esp.
     s.choose(1, 0, &[0]).unwrap();
     assert_eq!(s.flags()["colour"], "dark red");
     assert_eq!(
-        copies(&s.plan(&listing, "")),
+        copies(&s.plan_ok(&listing, "")),
         [
             "dark.esp <- dark.esp",
             "extra.esp <- extra.esp",
@@ -435,13 +458,13 @@ fn flags_decide_which_steps_show_and_a_later_step_overrides() {
     assert_eq!(s.next_step(Some(0)), Some(2));
     assert_eq!(s.flags()["colour"], "blue");
     assert_eq!(
-        copies(&s.plan(&listing, "")),
+        copies(&s.plan_ok(&listing, "")),
         ["extra.esp <- extra.esp", "shade.esp <- shade.esp"]
     );
     // Leaving Shade out: the flag stays unset.
     s.choose(2, 0, &[]).unwrap();
     assert!(!s.flags().contains_key("shade"));
-    assert_eq!(copies(&s.plan(&listing, "")), ["extra.esp <- extra.esp"]);
+    assert_eq!(copies(&s.plan_ok(&listing, "")), ["extra.esp <- extra.esp"]);
 }
 
 #[test]
@@ -537,7 +560,7 @@ fn destinations_follow_the_managers_rules() {
         "Pack/loose/meshes/m.nif",
         "Pack/loose/../../outside.txt",
     ]);
-    let plan = s.plan(&listing, "Pack");
+    let plan = s.plan_ok(&listing, "Pack");
     assert_eq!(
         copies(&plan),
         [
@@ -584,7 +607,7 @@ fn priority_then_document_order_decides_a_clash() {
         "first.dds",
         "second.dds",
     ]);
-    let plan = s.plan(&listing, "");
+    let plan = s.plan_ok(&listing, "");
     assert_eq!(
         copies(&plan),
         [
@@ -622,7 +645,7 @@ fn always_install_and_install_if_usable() {
         "usable2.esp",
     ]);
     assert_eq!(
-        copies(&s.plan(&listing, "")),
+        copies(&s.plan_ok(&listing, "")),
         [
             "always.esp <- always.esp",
             "always2.esp <- always2.esp",
@@ -677,7 +700,7 @@ fn a_version_one_installer_reads() {
     let s = Session::new(&c, &with).unwrap();
     assert_eq!(s.view(0).groups[0].options[1].kind, PluginType::Recommended);
     assert_eq!(
-        copies(&s.plan(&list(&["base.esp", "a.esp", "b.esp"]), "")),
+        copies(&s.plan_ok(&list(&["base.esp", "a.esp", "b.esp"]), "")),
         ["b.esp <- b.esp", "base.esp <- base.esp"]
     );
 }
@@ -778,7 +801,7 @@ fn a_texture_pack_installs_by_its_flags() {
     // 1K: the extras step stays hidden.
     assert_eq!(s.next_step(Some(first)), None);
     assert_eq!(
-        copies(&s.plan(&listing, &prefix)),
+        copies(&s.plan_ok(&listing, &prefix)),
         [
             "textures/core/sky.dds <- Wasteland Textures 1.0/core/sky.dds",
             "textures/rock.dds <- Wasteland Textures 1.0/1k/rock.dds",
@@ -790,7 +813,7 @@ fn a_texture_pack_installs_by_its_flags() {
     assert_eq!(s.view(extras).name, "Extras");
     s.choose(extras, 0, &[0]).unwrap();
     assert_eq!(
-        copies(&s.plan(&listing, &prefix)),
+        copies(&s.plan_ok(&listing, &prefix)),
         [
             "textures/core/sky.dds <- Wasteland Textures 1.0/core/sky.dds",
             "textures/rock.dds <- Wasteland Textures 1.0/parallax/rock.dds",
@@ -889,7 +912,7 @@ fn a_weapon_mod_offers_the_patches_for_the_dlc_there() {
     s.choose(0, 0, &[0, 1]).unwrap();
     s.choose(0, 1, &[0]).unwrap();
     assert_eq!(
-        copies(&s.plan(&listing, "")),
+        copies(&s.plan_ok(&listing, "")),
         [
             "GunPack - DM.esp <- Patches/GunPack - DM.esp",
             "GunPack - HH.esp <- Patches/GunPack - HH.esp",
@@ -931,59 +954,80 @@ fn an_answer_follows_types_changed_by_an_earlier_step() {
     let listing = list(&["core.esp", "lite.esp"]);
     let mut s = Session::new(&c, &f).unwrap();
     s.choose(1, 0, &[1]).unwrap();
-    assert_eq!(copies(&s.plan(&listing, "")), ["lite.esp <- lite.esp"]);
+    assert_eq!(copies(&s.plan_ok(&listing, "")), ["lite.esp <- lite.esp"]);
     s.choose(0, 0, &[1]).unwrap();
     assert_eq!(selected(&s.view(1)), [vec!["Core"]]);
-    assert_eq!(copies(&s.plan(&listing, "")), ["core.esp <- core.esp"]);
+    assert_eq!(copies(&s.plan_ok(&listing, "")), ["core.esp <- core.esp"]);
 }
 
 // ------------------------------------------------------------------------------------------------
-// Hostile and odd downloads (review of #720)
+// Hostile and odd downloads (reviews of #720): every count from the download has a cap that
+// refuses in words; every lookup is indexed. Sizes here would take many seconds if any of the
+// work were quadratic; each test asserts a bound well under that.
 
-/// 100,000 nested elements, and 100,000 nested conditions: read without overflowing the stack,
-/// the tree no deeper than the cap.
-#[test]
-fn deep_nesting_is_capped() {
-    fn depth(e: &xml::Element) -> usize {
-        1 + e.elements().map(depth).max().unwrap_or(0)
-    }
-    let mut text = String::from("<config>");
-    text.push_str(&"<a>".repeat(100_000));
-    let root = xml::parse(&text).unwrap();
-    assert!(depth(&root) <= xml::MAX_DEPTH, "{}", depth(&root));
-    assert!(parse_config(text.as_bytes()).is_ok());
-    let mut deep = String::from("<config><moduleDependencies>");
-    deep.push_str(&"<dependencies operator=\"Or\">".repeat(100_000));
-    deep.push_str("<flagDependency flag=\"x\" value=\"\"/>");
-    let c = parse_config(deep.as_bytes()).unwrap();
+/// A bound on the time a test's work may take: quadratic work at these sizes takes far longer.
+fn quick(started: std::time::Instant) {
     assert!(
-        c.warnings.iter().any(|w| w.contains("nested")),
-        "{:?}",
-        c.warnings
+        started.elapsed().as_secs() < 10,
+        "took {:?}",
+        started.elapsed()
     );
-    // Too deep reads as never holding: the mod is refused, in words.
-    assert!(Session::new(&c, &Facts::default()).is_err());
-    let info = parse_info(text.replace("config", "fomod").as_bytes());
-    assert_eq!(info, Info::default());
 }
 
-/// A megabyte of `&` (no `;`) and attributes by the thousand stay quick and bounded.
+/// Steps of `n` options in one group of type `kind`.
+fn one_group(kind: &str, n: usize, plugin: &str) -> String {
+    format!(
+        "<config><installSteps><installStep name=\"s\"><optionalFileGroups><group name=\"g\" type=\"{kind}\"><plugins>{}</plugins></group></optionalFileGroups></installStep></installSteps></config>",
+        plugin.repeat(n)
+    )
+}
+
 #[test]
-fn long_runs_stay_linear() {
+fn nesting_past_the_caps_is_refused() {
+    let mut text = String::from("<config>");
+    text.push_str(&"<a>".repeat(100_000));
+    assert_eq!(xml::parse(&text), Err(xml::XmlError::TooDeep));
+    assert!(parse_config(text.as_bytes())
+        .unwrap_err()
+        .0
+        .contains("nest"));
+    assert_eq!(
+        parse_info(text.replace("config", "fomod").as_bytes()),
+        Info::default()
+    );
+    // At the cap: read.
+    let mut at_cap = String::new();
+    at_cap.push_str(&"<a>".repeat(xml::MAX_DEPTH - 1));
+    at_cap.push_str("<b/>");
+    assert!(xml::parse(&at_cap).is_ok());
+    let mut deep = String::from("<config><moduleDependencies>");
+    deep.push_str(&"<dependencies operator=\"Or\">".repeat(200));
+    deep.push_str("<flagDependency flag=\"x\" value=\"\"/>");
+    let error = parse_config(deep.as_bytes()).unwrap_err();
+    assert!(error.0.contains("conditions nest"), "{error}");
+}
+
+#[test]
+fn long_runs_stay_linear_and_attributes_are_capped() {
     let started = std::time::Instant::now();
     let run = "&".repeat(1 << 20);
     assert_eq!(xml::unescape(&run).len(), 1 << 20);
     let mut tag = String::from("<config");
-    for i in 0..10_000 {
+    for i in 0..=xml::MAX_ATTRIBUTES {
         tag.push_str(&format!(" a{i}=\"x\""));
     }
-    tag.push_str(">x < y < z</config>");
-    let root = xml::parse(&tag).unwrap();
-    assert_eq!(root.attributes.len(), xml::MAX_ATTRIBUTES);
+    tag.push_str("/>");
+    assert_eq!(xml::parse(&tag), Err(xml::XmlError::TooManyAttributes));
+    let ok = tag.replacen(&format!(" a{}=\"x\"", xml::MAX_ATTRIBUTES), "", 1);
+    assert_eq!(
+        xml::parse(&ok).unwrap().attributes.len(),
+        xml::MAX_ATTRIBUTES
+    );
     // Stray `<`s join the text around them: one node.
+    let root = xml::parse("<config>x < y < z</config>").unwrap();
     assert_eq!(root.children.len(), 1);
     assert_eq!(root.text(), "x < y < z");
-    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+    quick(started);
 }
 
 #[test]
@@ -993,30 +1037,157 @@ fn an_oversized_installer_is_refused_before_reading() {
     assert_eq!(parse_info(&big), Info::default());
 }
 
-/// 10,000 steps each setting its own flag: the walk keeps one map, not one per step.
+/// Steps over the cap refuse the installer, through either way of writing steps; at the cap,
+/// 1,024 flag-setting steps walk with one map.
 #[test]
-fn many_flag_setting_steps_stay_cheap() {
-    let mut text = String::from("<config><installSteps order=\"Explicit\">");
-    for i in 0..10_000 {
-        text.push_str(&format!(
-            "<installStep name=\"s{i}\"><optionalFileGroups><group name=\"g\" type=\"SelectAll\"><plugins><plugin name=\"p\"><description/><conditionFlags><flag name=\"f{i}\">1</flag></conditionFlags><typeDescriptor><type name=\"Optional\"/></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep>"
-        ));
-    }
-    text.push_str("</installSteps></config>");
-    let c = config(&text);
-    assert_eq!(c.steps.len(), MAX_STEPS);
-    assert!(c.warnings.iter().any(|w| w.contains("10000 steps")));
+fn steps_are_capped_and_walked_once() {
+    let step = |i: usize| {
+        format!("<installStep name=\"s{i:04}\"><optionalFileGroups><group name=\"g\" type=\"SelectAll\"><plugins><plugin name=\"p\"><description/><conditionFlags><flag name=\"f{i}\">1</flag></conditionFlags><typeDescriptor><type name=\"Optional\"/></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep>")
+    };
+    let steps = |n: usize| -> String {
+        format!(
+            "<config><installSteps order=\"Explicit\">{}</installSteps></config>",
+            (0..n).map(step).collect::<String>()
+        )
+    };
+    assert!(parse_config(steps(MAX_STEPS + 1).as_bytes())
+        .unwrap_err()
+        .0
+        .contains("steps"));
+    let repeated = format!(
+        "<config>{}</config>",
+        "<optionalFileGroups/>".repeat(MAX_STEPS + 1)
+    );
+    assert!(parse_config(repeated.as_bytes())
+        .unwrap_err()
+        .0
+        .contains("steps"));
+    let c = config(&steps(MAX_STEPS));
     let f = Facts::default();
     let s = Session::new(&c, &f).unwrap();
     let started = std::time::Instant::now();
     assert_eq!(s.flags().len(), MAX_STEPS);
     assert_eq!(s.view(MAX_STEPS - 1).name, "s1023");
     assert!(s.problems().is_empty());
-    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+    quick(started);
 }
 
-/// Folder entries in a raw listing ("Wrapper/", a bare "Wrapper") neither hide the installer
-/// nor become copies.
+/// Options over the caps refuse the installer; at the cap, a group of 2,000 chosen options
+/// views, checks and plans in time proportional to it (one flag per option, no list search).
+#[test]
+fn options_are_capped_and_selections_indexed() {
+    let bare = "<plugin name=\"p\"><description/><typeDescriptor><type name=\"Required\"/></typeDescriptor></plugin>";
+    let too_many = one_group("SelectAll", MAX_OPTIONS_PER_GROUP + 1, bare);
+    assert!(parse_config(too_many.as_bytes())
+        .unwrap_err()
+        .0
+        .contains("options"));
+    // Over the total in groups each under the cap.
+    let group = format!(
+        "<group name=\"g\" type=\"SelectAny\"><plugins>{}</plugins></group>",
+        bare.repeat(MAX_OPTIONS_PER_GROUP)
+    );
+    let total = format!(
+        "<config><installSteps><installStep name=\"s\"><optionalFileGroups>{}</optionalFileGroups></installStep></installSteps></config>",
+        group.repeat(MAX_OPTIONS / MAX_OPTIONS_PER_GROUP + 1)
+    );
+    assert!(parse_config(total.as_bytes())
+        .unwrap_err()
+        .0
+        .contains("options"));
+    let started = std::time::Instant::now();
+    let with_file = "<plugin name=\"p\"><description/><files><file source=\"a.esp\"/></files><typeDescriptor><type name=\"Required\"/></typeDescriptor></plugin>";
+    let c = config(&one_group("SelectAll", MAX_OPTIONS_PER_GROUP, with_file));
+    let f = Facts::default();
+    let mut s = Session::new(&c, &f).unwrap();
+    let all: Vec<usize> = (0..MAX_OPTIONS_PER_GROUP).collect();
+    s.choose(0, 0, &all).unwrap();
+    for _ in 0..20 {
+        assert_eq!(s.view(0).groups[0].options.len(), MAX_OPTIONS_PER_GROUP);
+        assert!(s.problems().is_empty());
+        assert_eq!(s.plan_ok(&list(&["a.esp"]), "").copies.len(), 1);
+    }
+    quick(started);
+}
+
+/// Conditions and file items over their caps refuse the installer.
+#[test]
+fn conditions_and_files_are_capped() {
+    let conditions = format!(
+        "<config><moduleDependencies>{}</moduleDependencies></config>",
+        "<flagDependency flag=\"x\" value=\"\"/>".repeat(MAX_CONDITIONS + 1)
+    );
+    assert!(parse_config(conditions.as_bytes())
+        .unwrap_err()
+        .0
+        .contains("conditions"));
+    let files = format!(
+        "<config><requiredInstallFiles>{}</requiredInstallFiles></config>",
+        "<file source=\"a\"/>".repeat(MAX_FILE_ITEMS + 1)
+    );
+    assert!(parse_config(files.as_bytes())
+        .unwrap_err()
+        .0
+        .contains("files and folders"));
+}
+
+/// 100,000 files the player has and 10,000 file conditions: each condition is one lookup.
+#[test]
+fn the_players_files_are_indexed_once() {
+    let mut f = Facts::default();
+    for i in 0..100_000 {
+        f.plugins
+            .push((format!("Textures\\Pack\\T{i}.dds"), FileState::Active));
+    }
+    f.plugins.push(("Needed.esm".into(), FileState::Active));
+    let patterns: String = (0..10_000)
+        .map(|i| format!("<pattern><dependencies><fileDependency file=\"missing{i}.esp\" state=\"Active\"/></dependencies><type name=\"Recommended\"/></pattern>"))
+        .collect();
+    let plugin = format!("<plugin name=\"p\"><description/><typeDescriptor><dependencyType><defaultType name=\"Optional\"/><patterns>{patterns}<pattern><dependencies><fileDependency file=\"needed.ESM\" state=\"Active\"/></dependencies><type name=\"Required\"/></pattern></patterns></dependencyType></typeDescriptor></plugin>");
+    let c = config(&one_group("SelectAny", 1, &plugin));
+    let started = std::time::Instant::now();
+    let s = Session::new(&c, &f).unwrap();
+    for _ in 0..5 {
+        assert_eq!(s.view(0).groups[0].options[0].kind, PluginType::Required);
+    }
+    quick(started);
+}
+
+/// A listing of deep wrapper folders is walked one lookup per level; past the caps it is
+/// refused as not a mod's.
+#[test]
+fn listings_are_capped_and_walked_by_index() {
+    let started = std::time::Instant::now();
+    let wrap = "w/".repeat(MAX_PATH_PARTS - 3);
+    let mut listing: Vec<String> = (0..50_000)
+        .map(|i| format!("{wrap}files/{i}.dds"))
+        .collect();
+    listing.push(format!("{wrap}fomod/ModuleConfig.xml"));
+    let Layout::Installer { prefix, .. } = layout(&listing) else {
+        panic!("no installer found");
+    };
+    assert_eq!(prefix.split('/').count(), MAX_PATH_PARTS - 3);
+    quick(started);
+    let deep = vec![format!("{}x.dds", "d/".repeat(MAX_PATH_PARTS))];
+    assert!(crate::layout::layout(&deep).unwrap_err().0.contains("deep"));
+    let long = vec![format!("{}.dds", "x".repeat(MAX_PATH_BYTES))];
+    assert!(crate::layout::layout(&long)
+        .unwrap_err()
+        .0
+        .contains("bytes"));
+    let many: Vec<String> = (0..=MAX_ENTRIES).map(|i| i.to_string()).collect();
+    assert!(crate::layout::layout(&many)
+        .unwrap_err()
+        .0
+        .contains("entries"));
+    let c = config("<config/>");
+    let f = Facts::default();
+    let error = Session::new(&c, &f).unwrap().plan(&deep, "").unwrap_err();
+    assert!(matches!(error, PlanError::Listing(_)), "{error}");
+}
+
+/// Folder entries in a raw listing ("Wrapper/", a bare "Wrapper", an empty "Wrapper/tex/Empty/")
+/// neither hide the installer nor become copies.
 #[test]
 fn folder_entries_in_a_listing_are_not_files() {
     let listing = list(&[
@@ -1038,7 +1209,7 @@ fn folder_entries_in_a_listing_are_not_files() {
         r#"<config><requiredInstallFiles><folder source="tex" destination="textures"/></requiredInstallFiles></config>"#,
     );
     let f = Facts::default();
-    let plan = Session::new(&c, &f).unwrap().plan(&listing, &prefix);
+    let plan = Session::new(&c, &f).unwrap().plan_ok(&listing, &prefix);
     assert_eq!(
         copies(&plan),
         [
@@ -1046,10 +1217,31 @@ fn folder_entries_in_a_listing_are_not_files() {
             "textures/One/1.dds <- Wrapper/tex/One/1.dds"
         ]
     );
+    // Names sorting around the `/` ("Wrapper-2", "Wrapper.old") are other top names.
+    let two = list(&["Wrapper/fomod/ModuleConfig.xml", "Wrapper-2/x.esp"]);
+    assert!(!matches!(layout(&two), Layout::Installer { .. }));
+    let dot = list(&["A/fomod/ModuleConfig.xml", "A.old/x.esp"]);
+    assert!(!matches!(layout(&dot), Layout::Installer { .. }));
+}
+
+/// Repeated identical file items are resolved once.
+#[test]
+fn repeated_items_are_resolved_once() {
+    let text = format!(
+        "<config><requiredInstallFiles>{}</requiredInstallFiles></config>",
+        "<folder source=\"tex\" destination=\"textures\"/>".repeat(20_000)
+    );
+    let c = config(&text);
+    let listing: Vec<String> = (0..20_000).map(|i| format!("tex/{i}.dds")).collect();
+    let started = std::time::Instant::now();
+    let f = Facts::default();
+    let plan = Session::new(&c, &f).unwrap().plan_ok(&listing, "");
+    assert_eq!(plan.copies.len(), 20_000);
+    quick(started);
 }
 
 /// An AtLeastOne group of Optional options starts with its first (Mod Organizer 2), and a choice
-/// an earlier answer made impossible shows as a problem.
+/// an earlier answer made impossible shows as a problem; no plan is given while it does.
 #[test]
 fn an_at_least_one_group_is_never_left_empty() {
     let text = r#"<config><installSteps order="Explicit">
@@ -1069,11 +1261,12 @@ fn an_at_least_one_group_is_never_left_empty() {
     let mut s = Session::new(&c, &f).unwrap();
     assert_eq!(selected(&s.view(1)), [vec!["Body A"]]);
     assert!(s.problems().is_empty());
-    assert_eq!(copies(&s.plan(&listing, "")), ["a.dds <- a.dds"]);
+    assert_eq!(copies(&s.plan_ok(&listing, "")), ["a.dds <- a.dds"]);
     // Unanswered, with Body A not usable: the first CouldBeUsable one.
     s.choose(0, 0, &[1]).unwrap();
     assert_eq!(selected(&s.view(1)), [vec!["Body B"]]);
-    // Answered with Body A, then Full: the answer is empty now, and that is a problem.
+    assert_eq!(s.chosen(1, 0), [1]);
+    // Answered with Body A, then Full: the answer is empty now, a problem, and no plan.
     s.choose(0, 0, &[0]).unwrap();
     s.choose(1, 0, &[0]).unwrap();
     s.choose(0, 0, &[1]).unwrap();
@@ -1081,10 +1274,14 @@ fn an_at_least_one_group_is_never_left_empty() {
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert_eq!(problems[0].0, 1);
     assert!(problems[0].1 .0.contains("at least one"));
+    assert_eq!(
+        s.plan(&listing, ""),
+        Err(PlanError::Choices(problems.clone()))
+    );
 }
 
 /// Destinations fold as Windows and macOS fold names, and parts no system can hold safely are
-/// refused on every system.
+/// refused on every system; the device-name boundary is pinned.
 #[test]
 fn destinations_fold_and_odd_names_are_refused() {
     let text = r#"<config><requiredInstallFiles>
@@ -1103,7 +1300,7 @@ fn destinations_fold_and_odd_names_are_refused() {
     let f = Facts::default();
     let plan = Session::new(&c, &f)
         .unwrap()
-        .plan(&list(&["x.dds", "y.dds", "ü/é.esp"]), "");
+        .plan_ok(&list(&["x.dds", "y.dds", "ü/é.esp"]), "");
     // One file for the two spellings: the later (y) wins.
     assert_eq!(
         copies(&plan),
@@ -1111,6 +1308,31 @@ fn destinations_fold_and_odd_names_are_refused() {
     );
     assert_eq!(plan.refused.len(), 7, "{:?}", plan.refused);
     assert!(plan.missing.is_empty());
+    for refused in [
+        "CON",
+        "con.",
+        "CON .txt",
+        "nul.tar.gz",
+        "AUX",
+        "prn.dds",
+        "COM1",
+        "lpt9.x",
+        "COM¹",
+        "CONIN$",
+        "conout$.txt",
+    ] {
+        assert!(device_name(refused), "{refused}");
+    }
+    for accepted in [
+        "COM10.dds",
+        "aux_cable.nif",
+        "console.txt",
+        "connie.esp",
+        "LPT",
+        "COM0x",
+    ] {
+        assert!(!device_name(accepted), "{accepted}");
+    }
 }
 
 #[test]

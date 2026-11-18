@@ -428,3 +428,112 @@ fn a_link_at_the_file_is_not_followed() {
     assert_eq!(error.problem, Problem::Outside, "{error}");
     assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
 }
+
+// ------------------------------------------------------------------------------------------------
+// Caps and indexes (review of #720, applied here): every count from the archive is capped with a
+// refusal, every lookup indexed.
+
+/// File lists past the caps are refused as not a mod's; at the caps they are taken.
+#[test]
+fn file_lists_past_the_caps_are_refused() {
+    let entry = |name: String| (name, 1u64, true);
+    let ok: Vec<(String, u64, bool)> = vec![
+        entry("x".repeat(MAX_PATH_BYTES)),
+        entry("d/".repeat(MAX_PATH_PARTS - 1) + "f"),
+    ];
+    assert!(check_entries(&ok).is_ok());
+    for bad in [
+        vec![entry("x".repeat(MAX_PATH_BYTES + 1))],
+        vec![entry("d/".repeat(MAX_PATH_PARTS) + "f")],
+        vec![entry("a".into()); MAX_ENTRIES + 1],
+    ] {
+        assert_eq!(check_entries(&bad).unwrap_err().problem, Problem::NotAMod);
+    }
+    assert!(stays_inside(&format!("{}/x", "n".repeat(MAX_NAME_BYTES))));
+    assert!(!stays_inside(&"n".repeat(MAX_NAME_BYTES + 1)));
+    assert!(!stays_inside(&"d/".repeat(MAX_PATH_PARTS).to_string()));
+    assert!(!stays_inside(&"a/".repeat(MAX_PATH_BYTES / 2 + 1)));
+    let dir = Scratch::new("wanted-cap");
+    let archive = &archives(&dir.0)[0];
+    let many = vec![("a".to_owned(), "a".to_owned()); MAX_ENTRIES + 1];
+    let error = extract(archive, &many, &dir.0.join("out"), Limits::default()).unwrap_err();
+    assert_eq!(error.problem, Problem::NotAMod);
+}
+
+/// 20,000 files into one folder: each placed with one look in that folder's names, not a reading
+/// of the folder per file (which takes minutes at this size).
+#[test]
+fn many_files_in_one_folder_are_placed_by_index() {
+    let dir = Scratch::new("many");
+    let names: Vec<String> = (0..20_000)
+        .map(|i| format!("Mod/Textures/t{i}.dds"))
+        .collect();
+    let files: Vec<(&str, &[u8])> = names.iter().map(|n| (n.as_str(), &b"x"[..])).collect();
+    let archive = dir.0.join("many.zip");
+    make_zip(&archive, &files, zip::CompressionMethod::Stored);
+    let wanted: Vec<(String, String)> = names
+        .iter()
+        .map(|n| (n.clone(), n.trim_start_matches("Mod/").to_owned()))
+        .collect();
+    let started = std::time::Instant::now();
+    let done = extract(&archive, &wanted, &dir.0.join("out"), Limits::default()).unwrap();
+    assert_eq!(done.written.len(), 20_000);
+    assert!(
+        started.elapsed().as_secs() < 60,
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
+/// A 7z with folder entries and an empty file among its files: files are matched by name.
+#[test]
+fn a_7z_with_folder_entries_unpacks_by_name() {
+    let dir = Scratch::new("7z-folders");
+    let path = dir.0.join("folders.7z");
+    let mut writer = sevenz_rust2::ArchiveWriter::create(&path).unwrap();
+    writer
+        .push_archive_entry::<&[u8]>(sevenz_rust2::ArchiveEntry::new_directory("Mod"), None)
+        .unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("Mod/empty.txt"),
+            Some(&b""[..]),
+        )
+        .unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_directory("Mod/Textures"),
+            None::<&[u8]>,
+        )
+        .unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("Mod/Textures/a.dds"),
+            Some(&b"aaa"[..]),
+        )
+        .unwrap();
+    writer
+        .push_archive_entry(
+            sevenz_rust2::ArchiveEntry::new_file("Mod/b.esp"),
+            Some(&b"bb"[..]),
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    let to = dir.0.join("out");
+    let done = extract(
+        &path,
+        &[
+            ("Mod/Textures/a.dds".into(), "Textures/a.dds".into()),
+            ("Mod/b.esp".into(), "b.esp".into()),
+        ],
+        &to,
+        Limits::default(),
+    )
+    .unwrap();
+    assert!(done.missing.is_empty(), "{:?}", done.missing);
+    assert_eq!(
+        std::fs::read(to.join("Textures").join("a.dds")).unwrap(),
+        b"aaa"
+    );
+    assert_eq!(std::fs::read(to.join("b.esp")).unwrap(), b"bb");
+}

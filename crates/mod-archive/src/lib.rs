@@ -22,6 +22,23 @@
 //!   sizes are checked against [`Limits`] before anything is written, and a file that unpacks
 //!   to more than its archive said stops the unpacking (a "bomb"); of two names differing only in
 //!   case the first is taken; [`read`] returns at most [`MAX_READ`] bytes.
+//!
+//! # Limits
+//!
+//! Every count from the archive has a cap far above any mod's; past one the archive is refused
+//! in words ([`Problem::NotAMod`], [`Problem::TooBig`]), never unpacked by half. Every lookup is
+//! indexed: wanted files by name, each destination folder's names read once ([`Placer`]).
+//!
+//! | Cap | Number | Why that number |
+//! |---|---|---|
+//! | [`MAX_ENTRIES`] | 500,000 entries (and wanted files) | a big texture mod has tens of thousands |
+//! | [`MAX_PATH_BYTES`] | 1,024 bytes a path | Windows' own limit for most programs is 260 characters |
+//! | [`MAX_NAME_BYTES`] | 255 bytes a name | the file systems' own limit |
+//! | [`MAX_PATH_PARTS`] | 64 parts | the game's deepest Data paths have under 12 |
+//! | [`MAX_READ`] | 16 MB | installers and their details are a few hundred KB |
+//! | [`Limits::file`] | 16 GB by default | the game's largest archives are about 2 GB |
+//! | [`Limits::total`] | 64 GB by default; the front end lowers it to the room on the drive | the largest mods are tens of GB |
+//! | a file's declared size | as the archive says | a file that unpacks to more stops the unpacking |
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -70,6 +87,9 @@ pub enum Problem {
     /// More to unpack than the limits allow (room on the drive, or a file far larger than any
     /// mod's): a broken or hostile archive.
     TooBig,
+    /// A file list beyond any mod's: more entries than [`MAX_ENTRIES`], or a name longer or deeper
+    /// than [`MAX_PATH_BYTES`], [`MAX_NAME_BYTES`] or [`MAX_PATH_PARTS`].
+    NotAMod,
 }
 
 #[derive(Debug)]
@@ -98,6 +118,7 @@ impl ArchiveError {
             Problem::Io => "nv-rs could not read or write a file. Check there is room on the drive and that no other program has the file open, then try again.",
             Problem::Outside => "This mod tries to put a file outside its own folder, so nothing was installed. Please tell the mod's author.",
             Problem::TooBig => "This archive unpacks to more than nv-rs allows or than there is room for on the drive. Free some space and try again; if it still happens, the archive is damaged: download it again.",
+            Problem::NotAMod => "This archive's list of files is not a mod's: far too many files, or names far too long or too deeply nested. Download it again; if it still happens, it is not a mod nv-rs can install.",
         };
         format!("{advice}\n\n({})", self.detail)
     }
@@ -130,6 +151,38 @@ fn key(path: &str) -> String {
         .map(fold_part)
         .collect::<Vec<_>>()
         .join("/")
+}
+
+/// The most entries an archive may hold: a big texture mod has tens of thousands.
+pub const MAX_ENTRIES: usize = 500_000;
+
+/// The most bytes a path in an archive, or a destination, may have (Windows' own limit for most
+/// programs is 260 characters).
+pub const MAX_PATH_BYTES: usize = 1_024;
+
+/// The most bytes one part of a destination may have (the file systems' own limit, 255).
+pub const MAX_NAME_BYTES: usize = 255;
+
+/// The most parts a path may have: the game's deepest Data paths have under 12.
+pub const MAX_PATH_PARTS: usize = 64;
+
+/// Refuses a file list beyond the caps above.
+fn check_entries(entries: &[(String, u64, bool)]) -> Result<(), ArchiveError> {
+    if entries.len() > MAX_ENTRIES {
+        return Err(ArchiveError::new(
+            Problem::NotAMod,
+            format!("{} entries (at most {MAX_ENTRIES})", entries.len()),
+        ));
+    }
+    for (name, _, _) in entries {
+        if name.len() > MAX_PATH_BYTES || name.split(['/', '\\']).count() > MAX_PATH_PARTS {
+            return Err(ArchiveError::new(
+                Problem::NotAMod,
+                format!("a name of {} bytes", name.len()),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// The most [`read`] returns: installers and their details are a few hundred KB at most.
@@ -236,6 +289,12 @@ fn sevenz_link(entry: &sevenz_rust2::ArchiveEntry) -> bool {
 
 /// One entry of an archive as this reads it: (path, size, a plain file).
 fn zip_entries(zip: &mut zip::ZipArchive<File>) -> Result<Vec<(String, u64, bool)>, ArchiveError> {
+    if zip.len() > MAX_ENTRIES {
+        return Err(ArchiveError::new(
+            Problem::NotAMod,
+            format!("{} entries (at most {MAX_ENTRIES})", zip.len()),
+        ));
+    }
     let mut out = Vec::with_capacity(zip.len());
     for i in 0..zip.len() {
         let file = zip.by_index_raw(i).map_err(zip_error)?;
@@ -247,11 +306,23 @@ fn zip_entries(zip: &mut zip::ZipArchive<File>) -> Result<Vec<(String, u64, bool
             plain,
         ));
     }
+    check_entries(&out)?;
     Ok(out)
 }
 
-fn sevenz_entries(reader: &sevenz_rust2::ArchiveReader<File>) -> Vec<(String, u64, bool)> {
-    reader
+fn sevenz_entries(
+    reader: &sevenz_rust2::ArchiveReader<File>,
+) -> Result<Vec<(String, u64, bool)>, ArchiveError> {
+    if reader.archive().files.len() > MAX_ENTRIES {
+        return Err(ArchiveError::new(
+            Problem::NotAMod,
+            format!(
+                "{} entries (at most {MAX_ENTRIES})",
+                reader.archive().files.len()
+            ),
+        ));
+    }
+    let out: Vec<(String, u64, bool)> = reader
         .archive()
         .files
         .iter()
@@ -259,7 +330,9 @@ fn sevenz_entries(reader: &sevenz_rust2::ArchiveReader<File>) -> Vec<(String, u6
             let plain = !f.is_directory() && !sevenz_link(f);
             (f.name().to_owned(), f.size(), plain)
         })
-        .collect()
+        .collect();
+    check_entries(&out)?;
+    Ok(out)
 }
 
 /// The files in the archive at `path`, in the archive's order. Folders and links are left out:
@@ -267,7 +340,7 @@ fn sevenz_entries(reader: &sevenz_rust2::ArchiveReader<File>) -> Vec<(String, u6
 pub fn list(path: &Path) -> Result<Vec<Entry>, ArchiveError> {
     let entries = match readable(path)? {
         Format::Zip => zip_entries(&mut open_zip(path)?)?,
-        _ => sevenz_entries(&open_7z(path)?),
+        _ => sevenz_entries(&open_7z(path)?)?,
     };
     Ok(entries
         .into_iter()
@@ -358,13 +431,16 @@ fn device_name(part: &str) -> bool {
 
 /// Whether `relative` (with `/` or `\`) stays inside the folder it is joined to, on every system:
 /// no empty, `.` or `..` part, no leading separator, no `:` (drives and NTFS streams), no Windows
-/// device name.
+/// device name, and within [`MAX_PATH_BYTES`], [`MAX_PATH_PARTS`] and [`MAX_NAME_BYTES`].
 fn stays_inside(relative: &str) -> bool {
     let text = relative.replace('\\', "/");
     !text.is_empty()
+        && text.len() <= MAX_PATH_BYTES
+        && text.split('/').count() <= MAX_PATH_PARTS
         && !text.starts_with('/')
         && text.split('/').all(|p| {
             !p.is_empty()
+                && p.len() <= MAX_NAME_BYTES
                 && p != "."
                 && p.trim() != ".."
                 && !fold_part(p).is_empty()
@@ -373,42 +449,104 @@ fn stays_inside(relative: &str) -> bool {
         })
 }
 
-/// `relative` under `folder`, each part an entry already there under another case if there is
-/// one. A link on the way, or at the end, is refused: a file is never written through a link.
-fn place(folder: &Path, relative: &str) -> Result<PathBuf, ArchiveError> {
-    let parts: Vec<&str> = relative.split(['/', '\\']).collect();
-    let mut at = folder.to_path_buf();
-    for (i, part) in parts.iter().enumerate() {
-        let last = i + 1 == parts.len();
-        let wanted = fold_part(part);
-        let existing = std::fs::read_dir(&at).ok().and_then(|dir| {
-            dir.filter_map(Result::ok)
-                .find(|e| fold_part(&e.file_name().to_string_lossy()) == wanted)
-        });
-        match existing {
-            Some(entry) => {
-                let kind = entry.file_type().map_err(|e| io(&entry.path(), e))?;
-                if kind.is_symlink() {
-                    return Err(ArchiveError::new(
-                        Problem::Outside,
-                        format!("{} is a link", entry.path().display()),
-                    ));
-                }
-                if !last && !kind.is_dir() {
-                    return Err(ArchiveError::new(
-                        Problem::Outside,
-                        format!("{} is a file, not a folder", entry.path().display()),
-                    ));
-                }
-                at.push(entry.file_name());
-            }
-            None => at.push(part),
-        }
-        if !last {
-            std::fs::create_dir_all(&at).map_err(|e| io(&at, e))?;
+/// What is known of one entry in a folder: its own name, and whether it is a folder or a link.
+#[derive(Clone)]
+struct Seen {
+    name: std::ffi::OsString,
+    folder: bool,
+    link: bool,
+}
+
+/// Places relative paths under one folder. Each folder's names are read once and kept, so
+/// placing many files in one folder costs one look each, not a reading of the folder each.
+struct Placer<'f> {
+    folder: &'f Path,
+    folders: BTreeMap<PathBuf, BTreeMap<String, Seen>>,
+}
+
+impl<'f> Placer<'f> {
+    fn new(folder: &'f Path) -> Self {
+        Self {
+            folder,
+            folders: BTreeMap::new(),
         }
     }
-    Ok(at)
+
+    /// The names in `dir` by [`fold_part`]; the first of two that fold alike.
+    fn names(&mut self, dir: &Path) -> Result<&mut BTreeMap<String, Seen>, ArchiveError> {
+        if !self.folders.contains_key(dir) {
+            let mut names = BTreeMap::new();
+            match std::fs::read_dir(dir) {
+                Ok(entries) => {
+                    for entry in entries {
+                        let entry = entry.map_err(|e| io(dir, e))?;
+                        let kind = entry.file_type().map_err(|e| io(&entry.path(), e))?;
+                        names
+                            .entry(fold_part(&entry.file_name().to_string_lossy()))
+                            .or_insert(Seen {
+                                name: entry.file_name(),
+                                folder: kind.is_dir(),
+                                link: kind.is_symlink(),
+                            });
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(io(dir, e)),
+            }
+            self.folders.insert(dir.to_path_buf(), names);
+        }
+        Ok(self.folders.get_mut(dir).expect("just read"))
+    }
+
+    /// `relative` under the folder, each part an entry already there under another case if there
+    /// is one; the folders on the way made. A link on the way, or at the end, is refused: a file
+    /// is never written through a link.
+    fn place(&mut self, relative: &str) -> Result<PathBuf, ArchiveError> {
+        let parts: Vec<&str> = relative.split(['/', '\\']).collect();
+        let mut at = self.folder.to_path_buf();
+        for (i, part) in parts.iter().enumerate() {
+            let last = i + 1 == parts.len();
+            let wanted = fold_part(part);
+            let here = at.clone();
+            let names = self.names(&here)?;
+            let next = match names.get(&wanted) {
+                Some(seen) => {
+                    if seen.link {
+                        return Err(ArchiveError::new(
+                            Problem::Outside,
+                            format!("{} is a link", here.join(&seen.name).display()),
+                        ));
+                    }
+                    if !last && !seen.folder {
+                        return Err(ArchiveError::new(
+                            Problem::Outside,
+                            format!(
+                                "{} is a file, not a folder",
+                                here.join(&seen.name).display()
+                            ),
+                        ));
+                    }
+                    here.join(&seen.name)
+                }
+                None => {
+                    names.insert(
+                        wanted,
+                        Seen {
+                            name: (*part).into(),
+                            folder: !last,
+                            link: false,
+                        },
+                    );
+                    here.join(part)
+                }
+            };
+            if !last {
+                std::fs::create_dir_all(&next).map_err(|e| io(&next, e))?;
+            }
+            at = next;
+        }
+        Ok(at)
+    }
 }
 
 /// Unpacks from the archive at `path` each wanted file: (path in the archive, `\` or `/`, any
@@ -425,6 +563,12 @@ pub fn extract(
     folder: &Path,
     limits: Limits,
 ) -> Result<Extracted, ArchiveError> {
+    if wanted.len() > MAX_ENTRIES {
+        return Err(ArchiveError::new(
+            Problem::NotAMod,
+            format!("{} files wanted (at most {MAX_ENTRIES})", wanted.len()),
+        ));
+    }
     if let Some((_, bad)) = wanted.iter().find(|(_, d)| !stays_inside(d)) {
         return Err(ArchiveError::new(Problem::Outside, bad.clone()));
     }
@@ -437,7 +581,7 @@ pub fn extract(
     let mut sevenz = None;
     let entries = match format {
         Format::Zip => zip_entries(zip.insert(open_zip(path)?))?,
-        _ => sevenz_entries(sevenz.insert(open_7z(path)?)),
+        _ => sevenz_entries(sevenz.insert(open_7z(path)?))?,
     };
     // Which entry each wanted file is (the first plain file of its name), and what it all comes
     // to as the archive says.
@@ -468,13 +612,14 @@ pub fn extract(
     let by_index: BTreeMap<usize, String> = chosen.iter().map(|(k, &i)| (i, k.clone())).collect();
     std::fs::create_dir_all(folder).map_err(|e| io(folder, e))?;
     let mut done = Extracted::default();
+    let mut placer = Placer::new(folder);
     // Writes one archive file to its destinations; the first written, the rest copied from it.
-    let write =
+    let mut write =
         |index: usize, data: &mut dyn Read, done: &mut Extracted| -> Result<(), ArchiveError> {
             let source_key = &by_index[&index];
             let (name, size, _) = &entries[index];
             let destinations = &by_source[source_key];
-            let first = place(folder, destinations[0])?;
+            let first = placer.place(destinations[0])?;
             let mut file = File::create(&first).map_err(|e| io(&first, e))?;
             let written = std::io::copy(&mut data.take(size.saturating_add(1)), &mut file)
                 .map_err(|e| ArchiveError::new(Problem::Damaged, format!("{name}: {e}")))?;
@@ -488,7 +633,7 @@ pub fn extract(
             }
             done.written.push(first.clone());
             for destination in &destinations[1..] {
-                let other = place(folder, destination)?;
+                let other = placer.place(destination)?;
                 std::fs::copy(&first, &other).map_err(|e| io(&other, e))?;
                 done.written.push(other);
             }
@@ -500,19 +645,23 @@ pub fn extract(
             write(index, &mut file, &mut done)?;
         }
     } else if let Some(reader) = sevenz.as_mut() {
-        let last = by_index.keys().next_back().copied();
-        let mut index = 0usize;
+        // By name, in the order the archive decodes; done when nothing wanted is left.
+        let mut pending: BTreeMap<String, usize> = chosen.clone();
         let mut failure = None;
-        let result = reader.for_each_entries_with_decision(|_, data| {
-            let at = index;
-            index += 1;
-            if by_index.contains_key(&at) {
-                if let Err(e) = write(at, data, &mut done) {
+        let result = reader.for_each_entries_with_decision(|entry, data| {
+            if pending.is_empty() {
+                return Ok(sevenz_rust2::EntryDecision::Stop);
+            }
+            if entry.is_directory() || sevenz_link(entry) {
+                return Ok(sevenz_rust2::EntryDecision::Continue);
+            }
+            if let Some(index) = pending.remove(&key(entry.name())) {
+                if let Err(e) = write(index, data, &mut done) {
                     failure = Some(e);
                     return Ok(sevenz_rust2::EntryDecision::Stop);
                 }
             }
-            Ok(if Some(at) >= last {
+            Ok(if pending.is_empty() {
                 sevenz_rust2::EntryDecision::Stop
             } else {
                 sevenz_rust2::EntryDecision::Continue

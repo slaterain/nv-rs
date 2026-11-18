@@ -191,12 +191,33 @@ impl std::fmt::Display for ConfigError {
 /// larger one is refused before it is decoded.
 pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 
-/// The most steps read (real installers have tens); the rest are left out with a warning.
-pub const MAX_STEPS: usize = 1024;
+/// The most steps an installer may have (real ones: tens).
+pub const MAX_STEPS: usize = 1_024;
 
-/// How deep conditions nest inside each other (real ones: two or three); a deeper one is read as
-/// never holding, with a warning.
+/// The most groups, all steps together (real installers: tens).
+pub const MAX_GROUPS: usize = 10_000;
+
+/// The most options one group may have (real ones: a few, at most a few hundred).
+pub const MAX_OPTIONS_PER_GROUP: usize = 2_000;
+
+/// The most options, all groups together (real installers: tens to a few hundred).
+pub const MAX_OPTIONS: usize = 20_000;
+
+/// The most `file` and `folder` items, everywhere together (real installers: hundreds).
+pub const MAX_FILE_ITEMS: usize = 200_000;
+
+/// The most flags set and conditions tested, everywhere together (real installers: hundreds).
+pub const MAX_CONDITIONS: usize = 50_000;
+
+/// How deep conditions may nest inside each other (real ones: two or three).
 pub const MAX_CONDITION_DEPTH: usize = 32;
+
+/// Every cap above refuses the whole installer with a [`ConfigError`] that names it: nothing is
+/// left out silently, so a mod is never installed by half. Each is far above any real installer
+/// and low enough that the work on what it bounds stays short.
+fn over(what: &str, cap: usize) -> String {
+    format!("the installer has more {what} than any real installer ({cap} at most)")
+}
 
 /// The installer in `bytes` (the file as it is in the archive).
 pub fn parse_config(bytes: &[u8]) -> Result<Config, ConfigError> {
@@ -208,14 +229,14 @@ pub fn parse_config(bytes: &[u8]) -> Result<Config, ConfigError> {
     }
     let text = text::decode(bytes);
     let root = xml::parse(&text)
-        .ok_or_else(|| ConfigError("the installer file holds no XML element".into()))?;
+        .map_err(|e| ConfigError(format!("the installer file can't be read: {e}")))?;
     if !root.is(&["config"]) {
         return Err(ConfigError(format!(
             "the installer file's first element is <{}>, not <config>",
             root.name
         )));
     }
-    Ok(Reader::default().config(&root))
+    Reader::default().config(&root)
 }
 
 /// The details in `bytes` (`info.xml`); an unreadable file gives empty details.
@@ -224,7 +245,7 @@ pub fn parse_info(bytes: &[u8]) -> Info {
         return Info::default();
     }
     let text = text::decode(bytes);
-    let Some(root) = xml::parse(&text) else {
+    let Ok(root) = xml::parse(&text) else {
         return Info::default();
     };
     let field = |name: &str| {
@@ -296,6 +317,14 @@ fn plugin_type(name: Option<&str>) -> Option<PluginType> {
 
 const DEPENDENCIES: &[&str] = &["dependencies", "dependancies"];
 
+/// The kinds of things counted against a cap.
+#[derive(Clone, Copy)]
+enum Kind {
+    Groups,
+    Options,
+    Conditions,
+}
+
 #[derive(Default)]
 struct Reader {
     sequence: usize,
@@ -303,6 +332,11 @@ struct Reader {
     depth: usize,
     schema: Option<(u32, u32)>,
     warnings: Vec<String>,
+    // Counts against the caps; the first cap passed.
+    groups: usize,
+    options: usize,
+    conditions: usize,
+    refused: Option<String>,
 }
 
 impl Reader {
@@ -310,7 +344,27 @@ impl Reader {
         self.warnings.push(text);
     }
 
-    fn config(mut self, root: &Element) -> Config {
+    /// Notes the first cap passed; the installer is then refused.
+    fn refuse(&mut self, why: String) {
+        self.refused.get_or_insert(why);
+    }
+
+    /// Counts `n` more of a capped kind; true when still within the cap.
+    fn count(&mut self, kind: Kind, n: usize) -> bool {
+        let (count, cap, what) = match kind {
+            Kind::Groups => (&mut self.groups, MAX_GROUPS, "groups"),
+            Kind::Options => (&mut self.options, MAX_OPTIONS, "options"),
+            Kind::Conditions => (&mut self.conditions, MAX_CONDITIONS, "flags and conditions"),
+        };
+        *count += n;
+        if *count > cap {
+            self.refuse(over(what, cap));
+            return false;
+        }
+        true
+    }
+
+    fn config(mut self, root: &Element) -> Result<Config, ConfigError> {
         self.schema = schema_version(root);
         let mut config = Config {
             schema: self.schema,
@@ -334,13 +388,6 @@ impl Reader {
                     .collect();
                 sort_by(&mut steps, order, |s| &s.name);
                 config.steps.extend(steps);
-                if config.steps.len() > MAX_STEPS {
-                    self.warn(format!(
-                        "{} steps; only the first {MAX_STEPS} are read",
-                        config.steps.len()
-                    ));
-                    config.steps.truncate(MAX_STEPS);
-                }
             } else if element.is(&["optionalFileGroups"]) {
                 // 1.0 to 3.0: one unnamed step. 1.0 and 2.0 had no `order` and showed the groups
                 // as written (Vortex's parsers); 3.0's schema default is Ascending.
@@ -372,9 +419,20 @@ impl Reader {
                     element.name
                 ));
             }
+            // After every element, so repeated `optionalFileGroups` cannot pass it either.
+            if config.steps.len() > MAX_STEPS {
+                self.refuse(over("steps", MAX_STEPS));
+                break;
+            }
+        }
+        if self.sequence > MAX_FILE_ITEMS {
+            self.refuse(over("files and folders", MAX_FILE_ITEMS));
+        }
+        if let Some(why) = self.refused {
+            return Err(ConfigError(why));
         }
         config.warnings = self.warnings;
-        config
+        Ok(config)
     }
 
     fn step(&mut self, element: &Element) -> Step {
@@ -395,6 +453,7 @@ impl Reader {
             .children_named(&["group"])
             .map(|g| self.group(g))
             .collect();
+        self.count(Kind::Groups, groups.len());
         sort_by(&mut groups, order, |g| &g.name);
         groups
     }
@@ -427,6 +486,12 @@ impl Reader {
                 .map(|p| self.plugin(p))
                 .collect();
         }
+        if plugins.len() > MAX_OPTIONS_PER_GROUP {
+            self.refuse(format!(
+                "the group \"{name}\" has more options than any real installer's ({MAX_OPTIONS_PER_GROUP} at most)"
+            ));
+        }
+        self.count(Kind::Options, plugins.len());
         sort_by(&mut plugins, order, |p| &p.name);
         Group {
             name,
@@ -458,6 +523,7 @@ impl Reader {
                 plugin.files.extend(files);
             } else if child.is(&["conditionFlags"]) {
                 for flag in child.children_named(&["flag"]) {
+                    self.count(Kind::Conditions, 1);
                     plugin.flags.push((
                         flag.attr("name").unwrap_or_default().to_owned(),
                         flag.text(),
@@ -509,8 +575,8 @@ impl Reader {
     /// A `compositeDependency` (or 1.0's plain list, an And).
     fn composite(&mut self, element: &Element) -> Condition {
         if self.depth >= MAX_CONDITION_DEPTH {
-            self.warn(format!(
-                "conditions nested more than {MAX_CONDITION_DEPTH} deep; read as never holding"
+            self.refuse(format!(
+                "the installer's conditions nest deeper than any real installer's ({MAX_CONDITION_DEPTH} at most)"
             ));
             return Condition::Any(vec![]);
         }
@@ -527,6 +593,7 @@ impl Reader {
     }
 
     fn condition(&mut self, element: &Element) -> Option<Condition> {
+        self.count(Kind::Conditions, 1);
         let attr = |n: &str| element.attr(n).unwrap_or_default().to_owned();
         if element.is(DEPENDENCIES) {
             return Some(self.composite(element));

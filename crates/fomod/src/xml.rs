@@ -9,8 +9,9 @@
 //! the helpers compare them without case and without a namespace prefix (`xsi:...`).
 //!
 //! A downloaded file may be hostile, so the work stays in proportion to its size and the tree
-//! stays shallow: nesting stops at [`MAX_DEPTH`] (a deeper tree would overflow the stack when it
-//! is walked or dropped), attributes at [`MAX_ATTRIBUTES`] an element, a reference is looked for in
+//! stays shallow: a file nested deeper than [`MAX_DEPTH`] (a deeper tree would overflow the stack
+//! when it is walked or dropped) or with more than [`MAX_ATTRIBUTES`] attributes on an element is
+//! refused, a reference is looked for in
 //! the 11 bytes after a `&` only, and text runs (stray `<`s among them) make one node.
 
 /// One element: its name as written, its attributes in order (the first of a repeated name
@@ -141,13 +142,13 @@ fn is_name_end(b: u8) -> bool {
     b.is_ascii_whitespace() || matches!(b, b'/' | b'>' | b'=' | b'<')
 }
 
-/// The deepest elements nest. Past it an opening tag opens nothing (its contents stay at the level
-/// it is at), so a hostile file cannot make a tree deep enough to overflow the stack when it is
-/// walked or dropped. Real installers nest under 15 levels.
+/// The deepest elements may nest: a deeper file is refused ([`XmlError::TooDeep`]), so a hostile
+/// file cannot make a tree deep enough to overflow the stack when it is walked or dropped. Real
+/// installers nest under 15 levels.
 pub const MAX_DEPTH: usize = 256;
 
-/// The most attributes kept on one element (real installer tags have at most 6); the rest are
-/// skipped.
+/// The most attributes one element may have (real installer tags have at most 6); more is refused
+/// ([`XmlError::TooManyAttributes`]).
 pub const MAX_ATTRIBUTES: usize = 64;
 
 /// Where `pattern` starts in `text` at or after `from`.
@@ -155,8 +156,29 @@ fn find(text: &str, from: usize, pattern: &str) -> Option<usize> {
     text.get(from..)?.find(pattern).map(|i| from + i)
 }
 
-/// The first element of `text` with everything inside it, or `None` when there is no element.
-pub fn parse(text: &str) -> Option<Element> {
+/// Why a text could not be read as XML.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XmlError {
+    /// No element in it.
+    NoElement,
+    /// Elements nested deeper than [`MAX_DEPTH`].
+    TooDeep,
+    /// An element with more than [`MAX_ATTRIBUTES`] attributes.
+    TooManyAttributes,
+}
+
+impl std::fmt::Display for XmlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            XmlError::NoElement => "it holds no XML element",
+            XmlError::TooDeep => "its elements nest deeper than any installer's",
+            XmlError::TooManyAttributes => "an element has more attributes than any installer's",
+        })
+    }
+}
+
+/// The first element of `text` with everything inside it.
+pub fn parse(text: &str) -> Result<Element, XmlError> {
     let b = text.as_bytes();
     let len = b.len();
     // The document itself is the bottom of the stack; its first element is the answer.
@@ -291,19 +313,24 @@ pub fn parse(text: &str) -> Option<Element> {
                     }
                     j = k;
                 }
-                if element.attributes.len() < MAX_ATTRIBUTES
-                    && !element
-                        .attributes
-                        .iter()
-                        .any(|(n, _)| n.eq_ignore_ascii_case(&name))
+                if element.attributes.len() >= MAX_ATTRIBUTES {
+                    return Err(XmlError::TooManyAttributes);
+                }
+                if !element
+                    .attributes
+                    .iter()
+                    .any(|(n, _)| n.eq_ignore_ascii_case(&name))
                 {
                     element.attributes.push((name, value));
                 }
             }
             i = j;
-            // The document is the stack's first entry: with `MAX_DEPTH - 1` elements open, an element
-            // is added empty, so none is deeper than `MAX_DEPTH`.
-            if empty || stack.len() >= MAX_DEPTH {
+            // The document is the stack's first entry: `MAX_DEPTH - 1` elements may be open, and an
+            // empty one inside the last, so none is deeper than `MAX_DEPTH`.
+            if !empty && stack.len() >= MAX_DEPTH {
+                return Err(XmlError::TooDeep);
+            }
+            if empty {
                 if let Some(top) = stack.last_mut() {
                     top.children.push(Node::Element(element));
                 }
@@ -318,11 +345,15 @@ pub fn parse(text: &str) -> Option<Element> {
     while stack.len() > 1 {
         close(&mut stack);
     }
-    let document = stack.pop()?;
-    document.children.into_iter().find_map(|c| match c {
-        Node::Element(e) => Some(e),
-        Node::Text(_) => None,
-    })
+    let document = stack.pop().ok_or(XmlError::NoElement)?;
+    document
+        .children
+        .into_iter()
+        .find_map(|c| match c {
+            Node::Element(e) => Some(e),
+            Node::Text(_) => None,
+        })
+        .ok_or(XmlError::NoElement)
 }
 
 /// Ends the innermost open element: it becomes its parent's last child.
