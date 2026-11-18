@@ -8,6 +8,7 @@
 //! state (pipelines, shader modules, samplers, bind groups) are where the speed work starts.
 
 use crate::answers::QueryAnswers;
+use crate::bright;
 use crate::cache;
 use crate::ffp;
 use crate::format::{self, d3dfmt, Format};
@@ -50,6 +51,12 @@ pub(crate) struct Tex {
     /// The mean alpha of its smallest level as last uploaded (f32 bits; not a number until then,
     /// or in a format not read): read with the sun shadows on only ([`sun_shadow::RIBBON_ALPHA`]).
     alpha: AtomicU32,
+    /// The present (counted from 1) in which a pass last drew into or cleared it, a resolve or copy
+    /// last wrote it; 0 never (the draws check it).
+    written: AtomicU64,
+    /// Whether a draw sampling it before it was drawn into in that present was said (the log
+    /// says each texture once).
+    stale_said: AtomicBool,
 }
 
 /// A surface: a level (and face) of a texture, or a standalone render target or depth surface
@@ -850,6 +857,8 @@ pub struct Device {
     count_buffer: wgpu::Buffer,
     next_count_slot: u32,
     reduce: Map<bool, (wgpu::ComputePipeline, wgpu::BindGroupLayout)>,
+    /// The HDR watch ([`bright`]): the float targets read on one present in four, for the log.
+    hdr_watch: bright::Watch,
     /// The copies of textures a draw samples while drawing into them, by the texture's id
     /// ([`Device::copy_for_sampling`]).
     target_copies: Map<u64, Arc<Tex>>,
@@ -871,6 +880,11 @@ pub struct Device {
     errors: Arc<AtomicU64>,
     pub(crate) draws: u64,
     pub(crate) skipped: u64,
+    /// Draws' samples of render-target textures not drawn into in their present (the periodic
+    /// report).
+    stale_samples: u64,
+    /// Render-target textures said sampled before being drawn into (once each).
+    stale_textures: u64,
     /// Pipelines made on the draw that needed them (not ahead from the list).
     made_on_draws: u64,
     /// Entries the draws offered the pipeline list: each pipeline once for each plane state it
@@ -1548,6 +1562,7 @@ impl Device {
             count_buffer,
             next_count_slot: 0,
             reduce: Map::default(),
+            hdr_watch: bright::Watch::new(),
             target_copies: Map::default(),
             destroyed: HashSet::new(),
             next_id: 1,
@@ -1561,6 +1576,8 @@ impl Device {
             errors,
             draws: 0,
             skipped: 0,
+            stale_samples: 0,
+            stale_textures: 0,
             answers: None,
             awaiting: Vec::new(),
             scene_light_on: scene_light::enabled(),
@@ -1729,6 +1746,12 @@ impl Device {
             self.sample_mask |= bit;
             self.listed_new = true;
         }
+        // The game's anti-aliasing setting, said once for each sample count (for reports).
+        if samples > 1 && !format.depth {
+            self.warn(format!(
+                "the game draws into multisampled targets: {samples} samples a pixel (its anti-aliasing setting)"
+            ));
+        }
         let layers = if cube { 6 } else { 1 };
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: None,
@@ -1782,6 +1805,8 @@ impl Device {
             id,
             batch: AtomicU64::new(0),
             alpha: AtomicU32::new(f32::NAN.to_bits()),
+            written: AtomicU64::new(0),
+            stale_said: AtomicBool::new(false),
         }))
     }
 
@@ -2136,6 +2161,9 @@ impl Device {
             }
         }
         self.depth_parts.retain(|k, _| !gone.contains(&k.0));
+        for &id in &gone {
+            self.hdr_watch.forget(id);
+        }
     }
 
     /// How many bind groups are cached (tests).
@@ -2408,11 +2436,77 @@ impl Device {
         if self.st.rt.get(index as usize).is_some_and(|r| same(r, &s)) {
             return;
         }
+        // The target the game leaves after drawing into it, for the HDR watch ([`bright`]).
+        if index == 0 {
+            if let Some(old) = self.st.rt[0].clone() {
+                if self.draws > self.hdr_watch.bound_draws {
+                    self.watch_target(&old, "drawn into, then left", true);
+                }
+            }
+            self.hdr_watch.bound_draws = self.draws;
+        }
         if let Some(slot) = self.st.rt.get_mut(index as usize) {
             *slot = s;
         }
         self.st.touch(0);
         self.st.touch(1);
+    }
+
+    /// The HDR watch's read of the single-sample surface `s`, when it wants one now ([`bright`]):
+    /// recorded in the frame's commands after the open pass, read back a few frames later. `kept`:
+    /// the surface stays (its bind group is kept); a scratch surface's is made for this read only.
+    fn watch_target(&mut self, s: &Arc<Surf>, what: &'static str, kept: bool) {
+        if !self.hdr_watch.armed {
+            return;
+        }
+        let (Some(tex), Some(view)) = (s.tex.clone(), s.view.clone()) else {
+            return;
+        };
+        if s.samples != 1 {
+            return;
+        }
+        let target = bright::Target {
+            id: tex.id,
+            width: s.width,
+            height: s.height,
+            format: s.format.wgpu,
+        };
+        if !self.hdr_watch.wants(&target, tex.texture.usage()) {
+            return;
+        }
+        self.end_pass();
+        let device = self.device.clone();
+        let present = self.presents + 1;
+        let mut watch = std::mem::take(&mut self.hdr_watch);
+        let key = kept.then_some((tex.id, s.id));
+        watch.read(&device, self.encoder(), &view, target, present, what, key);
+        self.hdr_watch = watch;
+    }
+
+    /// Waits (at most 10 seconds) until the HDR watch's reads are back and judged; the last
+    /// judged presents' results, oldest first (tests: after a `Present`, which asks for them).
+    pub fn hdr_watch_settle(&mut self) -> Vec<(u64, Vec<(bright::Target, bright::Seen)>)> {
+        let start = std::time::Instant::now();
+        loop {
+            self.sync();
+            let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+            self.hdr_watch.collect();
+            if !self.hdr_watch.waiting() || start.elapsed().as_secs() >= 10 {
+                return self.hdr_watch.recent();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Draws' samples of render-target textures not drawn into in their present since the last
+    /// report, and the textures said so since the device was made (tests).
+    pub fn stale_sample_counts(&self) -> (u64, u64) {
+        (self.stale_samples, self.stale_textures)
+    }
+
+    /// The HDR watch's totals since the device was made (tests).
+    pub fn hdr_watch_totals(&self) -> bright::Totals {
+        self.hdr_watch.totals
     }
 
     pub(crate) fn set_depth_stencil(&mut self, surface: Handle) {
@@ -3053,6 +3147,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return Some(f(s));
         }
         let (format, samples) = (ds.format.d3d, ds.samples);
+        let what = format!(
+            "a {}x{} depth stand-in for a render target smaller than the {}x{} depth surface (its own contents, not the depth surface's top-left part)",
+            key.1, key.2, ds.width, ds.height
+        );
+        self.warn(what);
         let tex = self.new_texture(key.1, key.2, 1, format, false, false, samples)?;
         let s = self.level_surface(&tex, 0, 0);
         self.depth_parts.insert(key, s.clone());
@@ -3065,6 +3164,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let targets = self.current_targets();
         if clear.is_none() && self.pass.is_some() && self.pass_targets.as_ref() == Some(&targets) {
             return;
+        }
+        // What it draws into is written in this present (the draws check it).
+        let now = self.presents + 1;
+        for s in self.st.rt.iter().flatten() {
+            if let Some(t) = &s.tex {
+                t.written.store(now, Ordering::Relaxed);
+            }
+        }
+        if let Some(t) = self.usable_depth_with(|d| d.tex.clone()).flatten() {
+            t.written.store(now, Ordering::Relaxed);
         }
         self.end_pass();
         if let (Some(ds), Some(rt)) = (&self.st.ds, self.st.rt.iter().flatten().next()) {
@@ -4204,6 +4313,46 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         {
             self.skipped += 1;
             return;
+        }
+        // Render-target textures it samples that nothing drew into in this present (a
+        // diagnostic, for reports: water drawn without its reflection, a target read before it
+        // is drawn), with the HDR watch's switch: counted for the periodic report, each texture
+        // said once (a flag of its own: no text made or looked up on later draws).
+        if self.hdr_watch.on() {
+            let now = self.presents + 1;
+            for &(_, slot) in samplers {
+                let Some(t) = &self.st.textures[slot] else {
+                    continue;
+                };
+                let written = t.written.load(Ordering::Relaxed);
+                // A target of 64 pixels or fewer drawn in an earlier present is the game's own
+                // carry-over (the eye adaptation's last luminance, sampled every frame).
+                if written == now
+                    || (written != 0 && t.width * t.height <= 64)
+                    || !t
+                        .texture
+                        .usage()
+                        .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+                {
+                    continue;
+                }
+                self.stale_samples += 1;
+                if t.stale_said.swap(true, Ordering::Relaxed) {
+                    continue;
+                }
+                self.stale_textures += 1;
+                eprintln!(
+                    "NV_D3D9 wgpu: a draw sampled a {}x{} render-target texture (format {:#x}, sampler {slot}) {}",
+                    t.width,
+                    t.height,
+                    t.format.d3d,
+                    if written == 0 {
+                        "that nothing has drawn into since it was made"
+                    } else {
+                        "drawn into in an earlier present, not this one"
+                    }
+                );
+            }
         }
         // A texture the draw samples that is also one of its colour targets (a level or a face of
         // it): Direct3D 9 draws so, and wgpu refuses such a pass and with it the whole submit. The
@@ -5781,6 +5930,10 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let (Some(sv), Some(dv)) = (src.view.clone(), dst.view.clone()) else {
             return;
         };
+        // Written in this present (the draws' check of the targets they sample).
+        if let Some(t) = &dst.tex {
+            t.written.store(self.presents + 1, Ordering::Relaxed);
+        }
         if src.format.depth || dst.format.depth {
             if src.width == dst.width
                 && src.height == dst.height
@@ -5838,6 +5991,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         t.batch.store(self.batch, Ordering::Relaxed);
                     }
                 }
+                self.watch_target(&dst, "a multisampled target resolved into it", true);
                 return;
             }
             let Some(scratch) =
@@ -5848,6 +6002,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let resolved = self.level_surface(&scratch, 0, 0);
             let rv = resolved.view.clone().expect("a view");
             self.resolve(&sv, &rv, &src);
+            self.watch_target(&resolved, "a multisampled target resolved", false);
             (rv, (src.width, src.height))
         } else {
             (sv, (src.width, src.height))
@@ -5867,6 +6022,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 t.batch.store(self.batch, Ordering::Relaxed);
             }
         }
+        self.watch_target(&dst, "a StretchRect destination", true);
     }
 
     /// Resolves the multisampled `source` (the view of `surface`) into `target` (same size and
@@ -8350,6 +8506,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         self.made.end_present(self.presents);
         self.collect_modules();
+        // The HDR watch's reads that are back ([`bright`]): never waited for.
+        if self.hdr_watch.waiting() {
+            let _ = self.device.poll(wgpu::PollType::Poll);
+            self.hdr_watch.collect();
+        }
         // The start is over once the game has shown a picture (the GPU's gate already stopped
         // the screen), or at the backstop.
         if let Some(why) = self
@@ -8499,6 +8660,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             frame_texture = Some(t);
         }
         self.flush();
+        // The HDR watch's reads of this frame, mapped once their submit has run.
+        if let Some(job) = self.hdr_watch.map_to_ask() {
+            self.on_queue(move |_| job());
+        }
+        self.hdr_watch.next_present(self.presents + 1);
         let presents = self.presents;
         if let Some(map) = self
             .start
@@ -8597,6 +8763,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     w.configures, w.refused
                 ))
             );
+            if let Some(line) = self.hdr_watch.report() {
+                eprintln!("{line}");
+            }
+            if self.stale_samples > 0 {
+                eprintln!(
+                    "NV_D3D9 wgpu: since the last report, draws sampled render-target textures not drawn into in their present {} times",
+                    std::mem::take(&mut self.stale_samples)
+                );
+            }
             self.report_made();
         }
     }

@@ -458,7 +458,7 @@ impl Overlay {
     }
 
     /// The glyph strip at `height` pixels: its cell and bind group, made when the height changed;
-    /// none where Windows' GDI draws no text (other platforms).
+    /// none when Windows' GDI fails (other systems: the port's bitmap font, always drawn).
     fn strip(
         &mut self,
         device: &wgpu::Device,
@@ -471,7 +471,8 @@ impl Overlay {
             }
         }
         self.strip = None;
-        // Consolas: every glyph the same width, so the strip's cells are equal.
+        // Consolas (and the bitmap font off Windows): every glyph the same width, so the strip's
+        // cells are equal.
         let (w, h, px) = crate::loading::text_image(GLYPHS, height, ("Consolas", 700))?;
         let n = GLYPHS.chars().count() as u32;
         let view = crate::loading::texture(device, queue, (w, h, &px));

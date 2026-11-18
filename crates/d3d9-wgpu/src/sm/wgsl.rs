@@ -6,8 +6,15 @@
 //!   that multiplies (`mul`, `mad`, `dp2add`, `dp3`, `dp4`, the matrix instructions, `lrp`, `nrm`,
 //!   `crs`, `dst`, `pow`'s exponent). This is the rule Direct3D 9 hardware follows and drivers
 //!   still apply to Direct3D 9 shaders; an `nrm` of a zero vector is 0, not NaN.
-//! - **`rsq`, `log`, `pow`** take the absolute value of their source; `log(0)` is -infinity.
-//! - **`rcp`** of 1 is exactly 1.
+//! - **`rsq`, `log`, `pow`** take the absolute value of their source; `log(0)` is -infinity,
+//!   `rsq(0)` +infinity, `rsq` of an infinity 0, `pow(0, y)` 0, 1 or +infinity as y is above, at
+//!   or below 0.
+//! - **`rcp`** of 1 is exactly 1, of 0 +infinity, of an infinity 0.
+//!
+//!   These answers at 0 and infinity are given in the converted code, since SPIR-V leaves them
+//!   undefined and a driver may answer otherwise. `texldp`'s division by w is left as it is (no
+//!   report points at it). Metal compiles with fast math by default, which may fold them away:
+//!   unverified on a Mac.
 //! - **`cmp`** selects on `src0 >= 0`, **`cnd`** on `src0 > 0.5`, **`slt`/`sge`** give 1.0 or
 //!   0.0, **`frc`** is `x - floor(x)`, **`sincos`** writes cosine to x and sine to y.
 //! - **Saturation** clamps to [0, 1] (`saturate`, NaN to 0 as the hardware does).
@@ -458,20 +465,32 @@ fn dp4(a: vec4<f32>, b: vec4<f32>) -> f32 {
     let p = m4(a, b);
     return p.x + p.y + p.z + p.w;
 }
+// Direct3D 9's answers at 0 and infinity, given here because SPIR-V leaves them undefined (the
+// precision of 1 / x, inverseSqrt and log2 at 0 and infinity, exp2 of an infinity): rcp(0) and
+// rsq(0) are +infinity, rcp and rsq of an infinity 0, log(0) -infinity, pow(0, y) 0, 1 or
+// +infinity as y is above, at or below 0. Most drivers already give these; none need to. Metal
+// compiles with fast math by default and may fold the selects away: unverified on a Mac (to check
+// with tests/ops.rs when one runs them).
+fn inf() -> f32 {
+    return bitcast<f32>(0x7f800000u);
+}
 fn rcp(x: f32) -> f32 {
-    return select(1.0 / x, 1.0, x == 1.0);
+    return select(select(select(1.0 / x, 0.0, abs(x) == inf()), inf(), x == 0.0), 1.0, x == 1.0);
 }
 fn rsq(x: f32) -> f32 {
-    return select(inverseSqrt(abs(x)), 1.0, x == 1.0);
+    let a = abs(x);
+    return select(select(select(inverseSqrt(a), 0.0, a == inf()), inf(), a == 0.0), 1.0, a == 1.0);
 }
 fn lg(x: f32) -> f32 {
-    return log2(abs(x));
+    return select(log2(abs(x)), -inf(), x == 0.0);
 }
 fn pw(a: f32, b: f32) -> f32 {
-    return exp2(m1(b, log2(abs(a))));
+    let zero = select(select(1.0, inf(), b < 0.0), 0.0, b > 0.0);
+    return select(exp2(m1(b, lg(a))), zero, a == 0.0);
 }
 fn nrm(a: vec4<f32>) -> vec4<f32> {
-    return m4(a, vec4<f32>(inverseSqrt(dp3(a, a))));
+    let d = dp3(a, a);
+    return m4(a, vec4<f32>(select(inverseSqrt(d), inf(), d == 0.0)));
 }
 fn lrp(s: vec4<f32>, a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
     return m4(s, a - b) + b;
