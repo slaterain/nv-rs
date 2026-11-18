@@ -813,3 +813,74 @@ fn h22_markers_by_jips_ids() {
     assert!(!marker(&mut e, 0x1f, 0x9999), "another type");
     assert_eq!(is_marker(&mut e, &[0]).eax, 0, "null");
 }
+
+/// G54 with its command: the companion wheel's teammate test at its three places answers the
+/// teammate byte (`+0x18D`) while the actor's wheel is on, and false once `SetWheelDisabled 1`
+/// turned it off; `SetWheelDisabled 0` gives it back. A non-teammate is false whatever the flag.
+#[test]
+fn g54_set_wheel_disabled_turns_the_wheel_off() {
+    use crate::commands::test_support::{call_on, engine, n, FORMS};
+    const ACTOR: u32 = FORMS + 0x1000;
+    const ACTOR_VT: u32 = FORMS + 0x8000;
+    let mut e = engine();
+    e.mem.set_u32(ACTOR, ACTOR_VT);
+    // `IS_ACTOR`: the vtable's +0x100 slot is `Actor::IsActor`'s `return true` (`008D0360`).
+    e.mem.set_u32(ACTOR_VT + 0x100, 0x008d_0360);
+    let answers = |e: &mut Engine| -> Vec<Option<u32>> {
+        WHEEL_TEAMMATE
+            .iter()
+            .map(|s| e.site(s.addr(), &[ACTOR]))
+            .collect()
+    };
+    assert_eq!(answers(&mut e), [Some(0); 3], "not a teammate");
+    e.mem.set_u8(ACTOR + 0x18d, 1);
+    assert_eq!(answers(&mut e), [Some(1); 3], "a teammate: the wheel");
+    call_on(&mut e, 0x2729, ACTOR, &[n(1)]);
+    assert_eq!(answers(&mut e), [Some(0); 3], "turned off");
+    call_on(&mut e, 0x2729, ACTOR, &[n(0)]);
+    assert_eq!(answers(&mut e), [Some(1); 3], "on again");
+    e.mem.set_u8(ACTOR + 0x18d, 0);
+    call_on(&mut e, 0x2729, ACTOR, &[n(1)]);
+    assert_eq!(answers(&mut e), [Some(0); 3]);
+}
+
+/// H19 with its command: JIP's gun wobble adds the high process's aim value and the actor's stat 2
+/// times `fNPCMaxGunWobbleAngle` in radians; after `ToggleNoGunWobble 1` only the aim value; after
+/// `ToggleNoGunWobble 0` both again. No process, or a lower one: the spread unchanged.
+#[test]
+fn h19_toggle_no_gun_wobble_leaves_out_the_stat_part() {
+    use crate::commands::test_support::{call_on, engine, n, FORMS};
+    const ACTOR: u32 = FORMS + 0x1000;
+    const ACTOR_VT: u32 = FORMS + 0x8000;
+    const PROCESS: u32 = FORMS + 0x2000;
+    let mut e = engine();
+    e.map(MAX_GUN_WOBBLE_ANGLE & !0xfff, 0x1000);
+    e.mem.set_u32(ACTOR, ACTOR_VT);
+    e.mem.set_u32(ACTOR_VT + 0x100, 0x008d_0360);
+    e.mem.set_f32(MAX_GUN_WOBBLE_ANGLE, 10.0);
+    e.register(ACTOR_GET_STAT, |_, w| {
+        assert_eq!(w[1], 2, "the stat JIP asks for");
+        Ret {
+            st0: 0.5,
+            ..Ret::default()
+        }
+    });
+    let wobble = |e: &mut Engine| {
+        f32::from_bits(
+            e.site(GUN_WOBBLE.addr(), &[ACTOR, 1.0f32.to_bits()])
+                .unwrap(),
+        )
+    };
+    assert_eq!(wobble(&mut e), 1.0, "no process");
+    e.mem.set_u32(ACTOR + 0x68, PROCESS);
+    e.mem.set_u32(PROCESS + 0x28, 1);
+    assert_eq!(wobble(&mut e), 1.0, "a lower process");
+    e.mem.set_u32(PROCESS + 0x28, 0);
+    e.mem.set_f32(PROCESS + 0x1d0, 0.25);
+    let full = (1.0f64 + 0.25 + 0.5 * 10.0 * f64::from(PI_D180)) as f32;
+    assert_eq!(wobble(&mut e), full);
+    call_on(&mut e, 0x28ec, ACTOR, &[n(1)]);
+    assert_eq!(wobble(&mut e), 1.25, "the stat part left out");
+    call_on(&mut e, 0x28ec, ACTOR, &[n(0)]);
+    assert_eq!(wobble(&mut e), full);
+}

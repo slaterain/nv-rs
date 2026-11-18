@@ -57,14 +57,15 @@ pub enum Native {
     /// `EndWeatherTransition` (`internal/patches_game.h`, G90's `CloudsFixHook`): the sky's
     /// `transWeather` (`+0x14`) cleared.
     EndWeatherTransition,
+    /// `RegisterInsertObject` (`InsertNode`, `AttachModel` asked on another thread to change the
+    /// 3D now): the request kept under the callback's `this` (a key of
+    /// `commands::jip_fn_misc_ref_insert`).
+    RegisterInsertObject,
     /// `JIPScriptRunner::RunScript` (`RunScriptSnippet` with a delay): the callback's `this` is
     /// the script, its first argument (kept in [`Callback::ref_id`]) the calling reference.
     RunScript,
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallback
-// (MainLoopCallback::Create with a function: one call, after one frame, no arguments).
-/// One of JIP's own functions, called once at the next cycle, in game and menu mode alike.
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallbackArgsEx (one
 // argument).
 /// One of JIP's own functions with one argument (`arg`, kept in [`Callback::ref_id`]), called
@@ -91,6 +92,9 @@ pub fn add_native_with(
     });
 }
 
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallback
+// (MainLoopCallback::Create with a function: one call, after one frame, no arguments).
+/// One of JIP's own functions, called once at the next cycle, in game and menu mode alike.
 pub fn add_native(e: &mut Engine, native: Native, this_obj: u32) {
     state(e).callbacks.push(Callback {
         script: 0,
@@ -115,6 +119,9 @@ fn execute_native(e: &mut Engine, native: Native, this_obj: u32, arg: u32) {
             if this_obj != 0 {
                 e.mem.set_u32(this_obj + 0x14, 0);
             }
+        }
+        Native::RegisterInsertObject => {
+            crate::commands::jip_fn_misc_ref_insert::run_pending(e, this_obj);
         }
         Native::RunScript => crate::script_runner::run_script(e, this_obj, arg),
     }

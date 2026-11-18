@@ -22,8 +22,9 @@
 //!   the patch's state and JIP's perk maps);
 //! - a hook: `FireWeaponEx` (writes the exe's code at `009BAD76` and `01087F1C` and queues a
 //!   call);
-//! - the 3D scene and physics (not ported to this layer): `ReloadEquippedModels`,
-//!   `RefreshAnimData` (`ReloadCharController` is built in `jip_fn_actor_anim.rs`).
+//! - (`ReloadEquippedModels` and `RefreshAnimData` are built: the models reloaded through the game,
+//!   the animation data refreshed with JIP's `Actor::RefreshAnimData`, [`refresh_anim_data`];
+//!   `ReloadCharController` is built in `jip_fn_actor_anim.rs`.)
 //!
 //! Layouts (JIP's headers; the exe where the audit table says so): a reference's base form +0x20,
 //! position z +0x38, cell +0x40, extra data list +0x44; an actor's process +0x68, killer +0xC0,
@@ -110,7 +111,15 @@ pub static COMMANDS: Handlers = &[
     (0x28eb, toggle_teammate_killable),
     (0x2807, play_idle_ex),
     (0x28ec, toggle_no_gun_wobble),
+    (0x280d, reload_equipped_models),
+    (0x290c, refresh_anim_data_cmd),
 ];
+
+/// `FireWeaponEx`, built but not registered until JIP's muzzle flash patch (row H01: its code
+/// writes at `009BAD76` and `01087F1C`, which the command makes on its first use) is in: without
+/// it the shot's muzzle flash would be left as the game's. The row's pull request adds this list
+/// to `commands::ALL`.
+pub static AWAITING_H01: Handlers = &[(0x28e4, fire_weapon_ex)];
 
 #[rustfmt::skip]
 pub static CONDITIONS: super::Conditions = &[
@@ -1904,9 +1913,342 @@ fn get_actor_velocity_alt(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the equipped models reloaded ----
+
+/// An animation data's blend set (`004994F0`: the data, 4, 0) and its refresh (`00499240`: the
+/// data, 0); a process's animation data (+0x1C0) and the byte JIP tests first (+0x135); an
+/// animation data's +0xF0 word; the player's first-person animation data (+0x690).
+const ANIM_BLEND: u32 = 0x0049_94f0;
+const ANIM_REFRESH: u32 = 0x0049_9240;
+const PROCESS_ANIM_DATA: u32 = 0x1c0;
+const PROCESS_BLEND_BYTE: u32 = 0x135;
+const ANIM_BLEND_WORD: u32 = 0xf0;
+const PLAYER_ANIM_DATA_1ST: u32 = 0x690;
+const PLAYER_REF_ID: u32 = 0x14;
+
+/// One animation data refreshed (blended first when the process's byte and the data's word are
+/// set).
+fn refresh_one_anim_data(e: &mut Engine, data: u32, blend: bool) {
+    if blend && e.mem.u32(data + ANIM_BLEND_WORD) != 0 {
+        e.call(ANIM_BLEND, &args![data, 4u32, 0u32]);
+    }
+    e.call(ANIM_REFRESH, &args![data, 0u32]);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::RefreshAnimData
+// (asm).
+/// For an actor in high process with animation data: the data refreshed, and for the player its
+/// first-person data too (as the asm, unchecked).
+pub(crate) fn refresh_anim_data(e: &mut Engine, actor: u32) {
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    if process == 0 || e.mem.u32(process + PROCESS_LEVEL) != 0 {
+        return;
+    }
+    let data = e.mem.u32(process + PROCESS_ANIM_DATA);
+    if data == 0 {
+        return;
+    }
+    let blend = e.mem.u8(process + PROCESS_BLEND_BYTE) != 0;
+    refresh_one_anim_data(e, data, blend);
+    if e.mem.u32(actor + 0xc) != PLAYER_REF_ID {
+        return;
+    }
+    let first = e.mem.u32(actor + PLAYER_ANIM_DATA_1ST);
+    refresh_one_anim_data(e, first, blend);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_RefreshAnimData_Execute.
+/// `actor.RefreshAnimData`: for an actor, [`refresh_anim_data`]. No result.
+fn refresh_anim_data_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if is_actor(e, a.this_obj) {
+        refresh_anim_data(e, a.this_obj);
+    }
+    handled(true)
+}
+
+/// The biped slots (`BipedAnim::slotData`, from +0x2C, 0x10 bytes each: the item +0, the node
+/// +8), the biped's character (+0x2B0) and Bip01 (+0); the game's model reload of a biped
+/// (`00606540`: the character's base form, the character, the biped, 0) and its update
+/// (`004AC1E0`: the biped, 0); a node's downward update (vtable +0xA4: the data, 0).
+const BIPED_CHARACTER: u32 = 0x2b0;
+const BIPED_LOAD_MODELS: u32 = 0x0060_6540;
+const BIPED_UPDATE: u32 = 0x004a_c1e0;
+const NODE_UPDATE_DOWNWARD: u32 = 0xa4;
+const NODE_REMOVE_OBJECT: u32 = 0xe8;
+const NODE_PARENT: u32 = 0x18;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: ReloadBipedAnim
+// (asm).
+/// Each slot of `mask` (from slot 0, stopping after the mask's last set bit): its node taken off
+/// the slot and out of its parent; then the game loads the biped's models again, updates the
+/// biped and the root's transforms.
+fn reload_biped_anim(e: &mut Engine, biped: u32, root: u32, mask: u32) {
+    let mut bits = mask;
+    let mut slot = biped + BIPED_SLOTS;
+    while bits != 0 {
+        let take = bits & 1 != 0;
+        bits >>= 1;
+        if take {
+            let node = e.mem.u32(slot + 8);
+            if node != 0 {
+                e.mem.set_u32(slot + 8, 0);
+                let parent = e.mem.u32(node + NODE_PARENT);
+                if parent != 0 {
+                    e.vcall(parent, NODE_REMOVE_OBJECT, &[node]);
+                }
+            }
+        }
+        slot += 0x10;
+    }
+    let character = e.mem.u32(biped + BIPED_CHARACTER);
+    let base = e.mem.u32(character + 0x20);
+    e.call(BIPED_LOAD_MODELS, &args![base, character, biped, 0u32]);
+    e.call(BIPED_UPDATE, &args![biped, 0u32]);
+    e.with_stack(0xc, |e, data| {
+        for i in 0..3 {
+            e.mem.set_u32(data.addr() + 4 * i, 0);
+        }
+        e.vcall(root, NODE_UPDATE_DOWNWARD, &[data.addr(), 0]);
+    });
+}
+
+/// `g_OSGlobals` (`*011DEA0C`): the free camera state (+6) and time frozen (+7).
+const OS_GLOBALS: u32 = 0x011d_ea0c;
+/// `Character::IsCharacter` (vtable +0x218); a character's biped (+0x1B4); the player's
+/// first-person biped (+0x68C) and node (+0x694).
+const VT_IS_CHARACTER: u32 = 0x218;
+const CHARACTER_BIPED: u32 = 0x1b4;
+const PLAYER_BIPED_1ST: u32 = 0x68c;
+const PLAYER_NODE_1ST: u32 = 0x694;
+/// The weapon's flags (+0x100: bit 0x10 the weapon is re-equipped) and its scope model
+/// (`targetNIF`, +0x1E8); the HUD's scope refreshes (`0077F270`, `0077F2F0` with the model);
+/// a process's weapon entry (+0x114) and `QueueEquipItem` (vtable +0x178).
+const WEAPON_FLAGS1: u32 = 0x100;
+const WEAPON_TARGET_NIF: u32 = 0x1e8;
+const HUD_WEAPON_REFRESH: u32 = 0x0077_f270;
+const HUD_SCOPE_REFRESH: u32 = 0x0077_f2f0;
+const PROCESS_WEAPON_INFO: u32 = 0x114;
+const VT_QUEUE_EQUIP_ITEM: u32 = 0x178;
+/// Every slot but the Pip-Boy's (6).
+const ALL_BUT_PIPBOY: u32 = 0xf_ffbf;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_ReloadEquippedModels_Execute.
+/// `ReloadEquippedModels [slot]`: not while the free camera's time is frozen; for a character
+/// with 3D, a biped and a high process, and a slot that reads (up to 19, not 6) or none: the
+/// slot's (else every slot's but the Pip-Boy's) models taken off and loaded again, the player's
+/// first-person ones too (and the HUD's weapon and scope refreshed when the weapon slot is
+/// reloaded with a weapon); a weapon with flag 0x10 first loses its backpack node and is queued
+/// to equip again after; the animation data refreshed. No result.
+fn reload_equipped_models(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let os = e.mem.u32(OS_GLOBALS);
+    if os != 0 && e.mem.u8(os + 6) != 0 && e.mem.u8(os + 7) != 0 {
+        return handled(true);
+    }
+    let character = a.this_obj;
+    if character == 0 {
+        return handled(true);
+    }
+    let vtbl = e.mem.u32(character);
+    let is_character = e.call(e.mem.u32(vtbl + VT_IS_CHARACTER), &[character]).eax & 0xff != 0;
+    let root = super::jip_fn_misc_ref::ref_ni_node(e, character);
+    let biped = e.mem.u32(character + CHARACTER_BIPED);
+    let process = e.mem.u32(character + ACTOR_PROCESS);
+    if !is_character
+        || root == 0
+        || biped == 0
+        || process == 0
+        || e.mem.u32(process + PROCESS_LEVEL) != 0
+    {
+        return handled(true);
+    }
+    let mut slot: i32 = -1;
+    if super::jip_fn_utility::num_args_ex(e, &a) != 0 {
+        let read = Read::of(e, &a);
+        slot = read.int(0, u32::MAX) as i32;
+        if !read.ok || slot > 19 || slot == 6 {
+            return handled(true);
+        }
+    }
+    let weapon = if slot < 0 || slot == 5 {
+        e.mem.u32(biped + BIPED_SLOTS + 5 * 0x10)
+    } else {
+        0
+    };
+    let re_equip = weapon != 0 && e.mem.u8(weapon + WEAPON_FLAGS1) & 0x10 != 0;
+    if re_equip {
+        let bip01 = e.mem.u32(biped);
+        let backpack = super::nif_nodes::get_node(e, bip01, b"Backpack");
+        if backpack != 0 {
+            let parent = e.mem.u32(backpack + NODE_PARENT);
+            e.vcall(parent, NODE_REMOVE_OBJECT, &[backpack]);
+        }
+    }
+    let mut mask = ALL_BUT_PIPBOY;
+    if slot >= 0 {
+        mask &= 1 << slot;
+    }
+    reload_biped_anim(e, biped, root, mask);
+    if e.mem.u32(character + 0xc) == PLAYER_REF_ID {
+        let biped_1st = e.mem.u32(character + PLAYER_BIPED_1ST);
+        let node_1st = e.mem.u32(character + PLAYER_NODE_1ST);
+        reload_biped_anim(e, biped_1st, node_1st, mask);
+        if weapon != 0 {
+            e.call(HUD_WEAPON_REFRESH, &[]);
+            if super::jip_fn_weapon::equipped_weapon_has_scope(e, character) != 0 {
+                e.call(HUD_SCOPE_REFRESH, &args![weapon + WEAPON_TARGET_NIF]);
+            }
+        }
+    }
+    if re_equip {
+        let info = e.mem.u32(process + PROCESS_WEAPON_INFO);
+        if info != 0 && e.mem.u32(info + 8) == weapon {
+            let extend = e.mem.u32(info);
+            let first = if extend != 0 { e.mem.u32(extend) } else { 0 };
+            e.vcall(
+                process,
+                VT_QUEUE_EQUIP_ITEM,
+                &[character, 1, weapon, 1, first, 1, 0, 1, 0, 0],
+            );
+        }
+    }
+    refresh_anim_data(e, character);
+    handled(true)
+}
+
+// ---- FireWeaponEx and JIP's queued command calls ----
+
+/// JIP's queued call's function for `FireWeaponEx` (`DoFireWeaponEx`), a routine of JIP's own (after
+/// `MessageBoxExAlt`'s answer routine). Its words: the reference, 0, the weapon (JIP's `__fastcall`
+/// with one argument on the stack).
+pub const DO_FIRE_WEAPON_EX: u32 = crate::identity::ROUTINES + 0x704;
+/// The task queue interface (`*011DF1A8`), its task queue (+8) and `Push` (`009054A0`, `thiscall`:
+/// the queue, the task copied in); a queued call's kind (`0x2B`) and size (`QueuedCmdCall`: the kind,
+/// the function, the reference's id, the argument count, four arguments).
+const TASK_QUEUE_INTERFACE: u32 = 0x011d_f1a8;
+const TASK_QUEUE: u32 = 0x08;
+const QUEUE_PUSH: u32 = 0x0090_54a0;
+const QUEUED_CMD_CALL: u32 = 0x2b;
+const QUEUED_CMD_CALL_SIZE: u32 = 0x20;
+/// A weapon's projectile (+0x118); a high process's weapon entry (+0x114), ammo entry (+0x118),
+/// projectile node (+0x130), muzzle flash (+0x3D4, its byte +3 JIP's "fired by JIP" mark); the
+/// weapon's fire (`TESObjectWEAP::Fire`, `00523150`, `thiscall`: the weapon, the actor).
+const WEAPON_PROJECTILE: u32 = 0x118;
+const PROCESS_PROJECTILE_NODE: u32 = 0x130;
+const PROCESS_MUZZLE_FLASH: u32 = 0x3d4;
+const WEAPON_FIRE: u32 = 0x0052_3150;
+/// `kFormType_TESObjectWEAP`; JIP's `nodeName[0x40]`.
+const WEAPON_TYPE: u8 = 0x28;
+const FIRE_NODE_BUFFER: usize = 0x40;
+
+/// Registers the queued call's seam and `DoFireWeaponEx` (install, before the threads start).
+pub fn install(e: &mut Engine) {
+    use engine_core::extend::{Owner, SiteSlot};
+    e.on_site(SiteSlot::new(Owner::Jip, 0x0087_ce34), queued_cmd_call);
+    e.register(DO_FIRE_WEAPON_EX, do_fire_weapon_ex);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: DoQueuedCmdCallHook (asm).
+/// The task queue's tag 0x2B (`a`: the task): the reference of the task's id (+8) looked up, and
+/// when it is there the task's function (+4) called with it, 0 and the task's arguments (+0x10,
+/// their count +0xC) in order. Answers 0 (not read).
+fn queued_cmd_call(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let task = a[0];
+    let refr = crate::cosave::lookup_form(e, e.mem.u32(task + 8));
+    if refr != 0 {
+        let function = e.mem.u32(task + 4);
+        let count = e.mem.u32(task + 0xc);
+        let mut words = vec![refr, 0];
+        words.extend((0..count).map(|i| e.mem.u32(task + 0x10 + 4 * i)));
+        e.call(function, &words);
+    }
+    Some(0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: DoFireWeaponEx (asm).
+/// The actor fires `weapon` (the weapon's `Fire`) with its process's weapon and ammo entries
+/// cleared for the shot and put back after; the muzzle flash, when there is one, gets JIP's mark
+/// (byte +3), which H01's muzzle flash patch reads.
+fn do_fire_weapon_ex(e: &mut Engine, w: &[u32]) -> Ret {
+    let (actor, weapon) = (w[0], w[2]);
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    let ammo = e.mem.u32(process + PROCESS_AMMO_INFO);
+    e.mem.set_u32(process + PROCESS_AMMO_INFO, 0);
+    let entry = e.mem.u32(process + PROCESS_WEAPON_INFO);
+    e.mem.set_u32(process + PROCESS_WEAPON_INFO, 0);
+    e.call(WEAPON_FIRE, &args![weapon, actor]);
+    e.mem.set_u32(process + PROCESS_WEAPON_INFO, entry);
+    e.mem.set_u32(process + PROCESS_AMMO_INFO, ammo);
+    let flash = e.mem.u32(process + PROCESS_MUZZLE_FLASH);
+    if flash != 0 {
+        e.mem.set_u8(flash + 3, 1);
+    }
+    Ret::default()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_FireWeaponEx_Execute.
+/// `actor.FireWeaponEx weapon [node]`: for an actor in high process and a weapon with a
+/// projectile, the shot's node set to the actor's node of that name when one is named and found,
+/// and the shot queued to the task queue as JIP's queued call ([`DO_FIRE_WEAPON_EX`] with the
+/// weapon). The muzzle flash patch's two code writes JIP makes here on first use are H01's. No
+/// result.
+fn fire_weapon_ex(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let actor = a.this_obj;
+    if !is_actor(e, actor) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    let weapon = read.form(0);
+    if !read.ok
+        || weapon == 0
+        || type_of(e, weapon) != WEAPON_TYPE
+        || e.mem.u32(weapon + WEAPON_PROJECTILE) == 0
+    {
+        return handled(true);
+    }
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    if process == 0 || e.mem.u32(process + PROCESS_LEVEL) != 0 {
+        return handled(true);
+    }
+    let name = super::buffer_arg(e, &read, 1, FIRE_NODE_BUFFER, "FireWeaponEx");
+    if !name.is_empty() {
+        let root = super::nif_nodes::ni_node(e, actor);
+        let node = if root == 0 {
+            0
+        } else {
+            super::nif_nodes::get_node(e, root, &name)
+        };
+        if node != 0 {
+            e.mem.set_u32(process + PROCESS_PROJECTILE_NODE, node);
+        }
+    }
+    let id = e.mem.u32(actor + 0xc);
+    let queue = e.mem.u32(e.mem.u32(TASK_QUEUE_INTERFACE) + TASK_QUEUE);
+    e.with_stack(QUEUED_CMD_CALL_SIZE, |e, call| {
+        let at = call.addr();
+        for (i, word) in [QUEUED_CMD_CALL, DO_FIRE_WEAPON_EX, id, 1, weapon, 0, 0, 0]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(at + 4 * i as u32, word);
+        }
+        e.call(QUEUE_PUSH, &args![queue, at]);
+    });
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_p2_r4_tests.rs"]
+mod r4_tests;
 
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_c1_tests.rs"]

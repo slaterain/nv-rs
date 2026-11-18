@@ -15,7 +15,9 @@
 //! **G06, G73, G103**: JIP's ash piles. G06 (`InitGamePatches`, "Recognize custom ashpile
 //! activators", JIP's own): the eight places the exe compares a reference's base form with the
 //! two ash pile forms test the base's ash pile bit instead (the two vanilla piles get it in
-//! `DeferredInit`, `MarkActivatorAshPile` gives it to others). G73 (`AttachAshPileHook`, JIP's
+//! `DeferredInit`, `MarkActivatorAshPile` gives it to others). H15 (JIP's own, `BipedSlotVisibilityHook` at
+//! `0x4AC645`): which slots load their parts in first person, by JIP's mask (slots 2 to 6 at the start,
+//! the game's own test) that `ToggleBipedSlotVisibility` edits. G73 (`AttachAshPileHook`, JIP's
 //! own): the ash pile a death leaves can be `AttachAshPileEx`'s form. All eight G06 places are
 //! asked (`0x77765A` in group GA's `SetInfoForRef` action text, `0x95F7FE` in group GP's
 //! `fn_0095f6c0`). G73's seam at
@@ -147,6 +149,7 @@ pub const AREA: Area = Area {
         ASH_PILE_TESTS[6].addr(),
         ASH_PILE_TESTS[7].addr(),
         ATTACH_ASH_PILE.addr(),
+        BIPED_SLOT_VISIBLE.addr(),
     ],
     jip_wraps: &[],
     install_jip,
@@ -167,8 +170,22 @@ const MOD_INDEX: u32 = 0xf;
 const JIP_FLAGS: u32 = 0x5f;
 const FORM_TYPE: u32 = 4;
 
+/// H15's seam: the first-person slot test in `BipedAnim::LoadBipedParts` (`0x4AC645`; words: the
+/// slot; the answer: whether its part loads).
+pub const BIPED_SLOT_VISIBLE: SiteSlot = SiteSlot::new(Owner::Jip, 0x004a_c645);
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: BipedSlotVisibilityHook.
+/// H15: in first person a slot's part loads when the slot's bit is set in JIP's mask
+/// (`s_bipedSlotVisibility`, 0x7C at the start: slots 2 to 6, the game's own test), which
+/// `ToggleBipedSlotVisibility` edits. The bit is the slot's number modulo 32, as `bt` reads it.
+fn biped_slot_visible(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let mask = crate::commands::jip_fn_miscellaneous::biped_slot_visibility(e);
+    Some((mask >> (w[0] & 31)) & 1)
+}
+
 fn install_jip(e: &mut Engine) {
     e.on_site(DESTROY_REFR, destroy_refr);
+    e.on_site(BIPED_SLOT_VISIBLE, biped_slot_visible);
     e.ext_free::<AltAshPile>();
     for site in ASH_PILE_TESTS {
         e.on_site(site, is_ash_pile);

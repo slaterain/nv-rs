@@ -1664,8 +1664,16 @@ fn load_part(
     if part.is_null() || part.addr() == 0xffff_ffff {
         return;
     }
-    if first_person && !(2..=6).contains(&slot) {
-        return;
+    // Seam (JIP's H15, its slot visibility mask at `0x4AC645`): words: the slot; an answer is whether
+    // the slot's part loads in first person (the game's: slots 2 to 6).
+    if first_person {
+        let shown = match e.site(0x004a_c645, &[slot]) {
+            Some(answer) => answer != 0,
+            None => (2..=6).contains(&slot),
+        };
+        if !shown {
+            return;
+        }
     }
     if flag == 0
         && is_face_gen_slot(e, this, slot)
@@ -5430,6 +5438,38 @@ mod tests {
         assert_eq!(slot_words(&e, buffered(this, 4)), [0; 4]);
         assert_eq!(calls_to(&calls, PREPARE_DETACH), vec![vec![0x3333]]);
         assert_eq!(calls_to(&calls, RELEASE_MODEL), vec![vec![0x5555, 0xabc0]]);
+    }
+
+    /// A first-person biped with parts in slots 3 and 10: the models whose files were loaded.
+    fn first_person_loads(seam: bool) -> Vec<u32> {
+        let mut e = engine();
+        let s = scene(&mut e, 10, 4);
+        e.mem.set_u32(SLOT_BONES + 4 * 3, 4);
+        let model3 = object_with_slots(&mut e, &[(0x14, 0xdef0), (0x1c, 0)]);
+        set_slot(&mut e, s.this, 3, s.form, model3, 0);
+        let bone_node = object_with_slots(&mut e, &[(0xdc, 0)]);
+        e.set(bone(s.this, 4), BipedBone::pParent, Ptr::new(bone_node));
+        returns(&mut e, FIXED_STRING_INIT, 0x1f1f);
+        e.set_global(PLAYER, 0x0abc_0000u32);
+        returns(&mut e, IS_FIRST_PERSON_BIPED, 1);
+        if seam {
+            // JIP's H15 mask with slot 10 only.
+            e.on_site_for_test(0x004a_c645, |_, w| Some(u32::from(w[0] == 10)));
+        }
+        log(&mut e);
+        biped_anim_load_biped_parts(&mut e, s.this, 0);
+        calls_to(&log(&mut e), LOAD_FILE)
+            .iter()
+            .map(|c| c[1])
+            .collect()
+    }
+
+    /// The seam at 0x4AC645 (JIP's H15): in first person the game loads slots 2 to 6 only (slot
+    /// 3's model, not slot 10's); the seam answering "slot 10 only" loads slot 10's and not 3's.
+    #[test]
+    fn first_person_slots_follow_the_seam() {
+        assert_eq!(first_person_loads(false), vec![0xdef0], "the game's slots");
+        assert_eq!(first_person_loads(true), vec![0xabc0], "the seam's");
     }
 
     #[test]
