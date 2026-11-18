@@ -721,6 +721,8 @@ const FORGET_CALLEES: [u32; 38] = [
 ];
 /// Where each callee's answer is.
 const FORGET_ANSWERS: u32 = LOG + 0x3c00;
+/// A slot that answers 0 (a non-actor's "is it an actor"), past the stand-in slots.
+const NOT_AN_ACTOR: u32 = 0x00ff_3000;
 
 fn forget_callee<const I: u32>(e: &mut Engine, a: &[u32]) -> Ret {
     log(e, 0x5000 | I, a.first().copied().unwrap_or(0));
@@ -731,6 +733,10 @@ fn forget_callee<const I: u32>(e: &mut Engine, a: &[u32]) -> Ret {
 }
 
 fn forget_callees(e: &mut Engine) {
+    e.register(NOT_AN_ACTOR, |e, a| {
+        log(e, 0x3000, a.first().copied().unwrap_or(0));
+        ret(0)
+    });
     macro_rules! each {
         ($($i:literal)*) => { $( e.register(FORGET_CALLEES[$i], forget_callee::<$i>); )* };
     }
@@ -860,6 +866,9 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
     let other = forget_object(e, if pattern & 4 != 0 { target } else { 0 });
     // The words around the one the clean-up clears in a non-actor (`009707f0`: +0xfc).
     words(e, other + 0xf8, &[0x1111, 0x2222, 0x3333]);
+    // A non-actor: its slot 0x100 (is it an actor) answers 0 whatever its other slots answer.
+    let vt = e.mem.u32(other);
+    e.mem.set_u32(vt + 0x100, NOT_AN_ACTOR);
     // The array's levels; the temp list holds the follower, the non-actor and the skipped one.
     let one_plain = [plain];
     let lead_level = [lead];
