@@ -8557,7 +8557,13 @@ fn apply_look_input(
         pitch = 0;
         zoom = 0;
     }
-    if zoom != 0 && e.call(0x0096_7ae0, &args![this]).u8() == 0 {
+    // Seam (JIP's ToggleVanityWheel, `SafeWrite8(0x945A29, ..)`: the zoom test's `JNP` at
+    // `0x945A28` made a `JNS`, always taken, while the wheel is off): no words; an answer of 1
+    // skips the zoom block as if no zoom were read. Asked only while JIP is installed.
+    let wheel_off = zoom != 0
+        && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x0094_5a28, &[]).is_some_and(|answer| answer & 0xff != 0);
+    if zoom != 0 && !wheel_off && e.call(0x0096_7ae0, &args![this]).u8() == 0 {
         if e.mem.u8(FREE_CAMERA_FLAG) == 0 {
             result = 1;
         }
@@ -10591,13 +10597,20 @@ fn camera_distance_in_frame(
             };
             e.call(0x0062_1370, &args![caster, shape]);
         }
-        if e.call(
-            0x0062_0bc0,
-            &args![caster, pick_direction, pick_origin, result],
-        )
-        .u8()
-            != 0
-        {
+        let hit_something = e
+            .call(
+                0x0062_0bc0,
+                &args![caster, pick_direction, pick_origin, result],
+            )
+            .u8()
+            != 0;
+        // Seam (JIP's ToggleCameraCollision, `SafeWrite8(0x94A34E, ..)`: the `JZ` after the pick
+        // made a `JMP` while collision is off): no words, asked after the pick; an answer of 1
+        // leaves the camera's distance as if nothing were hit. Asked only while JIP is installed.
+        let collision_off = hit_something
+            && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+            && e.site(0x0094_a34e, &[]).is_some_and(|answer| answer & 0xff != 0);
+        if hit_something && !collision_off {
             e.call(0x0045_78c0, &args![pick_origin, pick_direction]);
             let hit = e.call(0x0045_7990, &args![pick_origin]).f64();
             if length as f64 - hit > e.global::<f64>(0x0101_1590) {
@@ -18298,6 +18311,61 @@ mod tests {
         assert_eq!(result, 1);
     }
 
+    /// The seam at 0x945A28 (JIP's ToggleVanityWheel): asked only while JIP is installed and a
+    /// zoom was read; an answer of 1 skips the zoom block (the distance kept, `00967ae0` not
+    /// asked, no look result from the zoom); 0, or JIP not installed, zooms as the exe.
+    #[test]
+    fn the_vanity_wheel_seam_skips_the_zoom() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, zooms) in [
+            (0, 1, true),
+            (jip_patches::FIXES, 1, true),
+            (jip_patches::INSTALLED, 0, true),
+            (jip_patches::INSTALLED, 1, false),
+        ] {
+            let (mut e, this) = look_world(0);
+            e.register(0x00a2_39e0, |_, a| int(if a[1] == 3 { 120 } else { 0 }));
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0099_e040, |_, _| float(1.0));
+            e.register(0x004e_3d00, |_, _| float(1.0));
+            e.register(0x0045_c670, |_, _| int(0x6000));
+            e.set_global(0x011e_0a6c, 3.0f32);
+            e.set_global(0x0120_315c, 1.0f32);
+            e.set(this, PlayerCharacter::b3rdPerson, true);
+            e.set_global(ZOOM_DISTANCE, 100.0f32);
+            e.set_global(0x011c_dc98, 0.5f32);
+            e.set_global(0x011c_d568, 500.0f32);
+            e.set_global(0x011c_d614, 1.0f32);
+            e.set_global(0x011c_da94, 10.0f32);
+            e.register_double(0x00b0_022c, |_, _| int(1));
+            put_vtable(
+                &mut e,
+                this.addr(),
+                0x026a_0000,
+                &[
+                    (0x2bc, 0x00b0_02bc),
+                    (0x214, 0x00b0_0214),
+                    (0x2c4, 0x00b0_02c4),
+                    (0x22c, 0x00b0_022c),
+                ],
+            );
+            e.set_jip_patches(word);
+            if answer == 1 {
+                e.on_site_for_test(0x0094_5a28, |_, _| Some(1));
+            } else {
+                e.on_site_for_test(0x0094_5a28, |_, _| Some(0));
+            }
+            let flags = Ptr::<()>::new(e.mem.alloc(4));
+            let result = e
+                .call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32])
+                .u8();
+            let distance = if zooms { 50.0 } else { 100.0 };
+            assert_eq!(e.global::<f32>(ZOOM_DISTANCE), distance, "{word:x} {answer}");
+            assert_eq!(called(&e, 0x0096_7ae0).len(), usize::from(zooms), "{word:x}");
+            assert_eq!(result, u8::from(zooms), "{word:x} {answer}");
+        }
+    }
+
     #[test]
     fn the_vats_target_camera_aims_at_the_target_and_masks_the_input_flags() {
         let (mut e, this) = look_world(4);
@@ -19104,6 +19172,47 @@ mod tests {
         assert_eq!(called(&e, 0x0062_0bc0).len(), 1);
         // Without a world the caster is given the controller's shape (null here).
         assert_eq!(called(&e, 0x0062_1370), vec![vec![caster, 0]]);
+    }
+
+    /// The seam at 0x94A34E (JIP's ToggleCameraCollision): asked after a pick that hit, only
+    /// while JIP is installed; an answer of 1 leaves the distance as if nothing were hit (the
+    /// pick itself still made); 0, or JIP not installed, shortens it as the exe.
+    #[test]
+    fn the_camera_collision_seam_ignores_the_hit() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, pulled_in) in [
+            (0, 1, true),
+            (jip_patches::FIXES, 1, true),
+            (jip_patches::INSTALLED, 0, true),
+            (jip_patches::INSTALLED, 1, false),
+        ] {
+            let (mut e, this) = camera_distance_world();
+            e.set_global(CAMERA_DISTANCE, 5.0f32);
+            e.set_global(0x011c_d288, 1000.0f32);
+            e.set_global(0x011c_d568, 100.0f32);
+            e.set_global(0x011c_da94, 1.0f32);
+            e.set_global(0x011e_0934, 1.0f32);
+            e.set_global(PLAYER_FADE, 1.0f32);
+            let caster = e.mem.alloc(0x40);
+            e.mem.set_u32(this.addr() + 0x21c, caster);
+            e.register(0x0062_0bc0, |_, _| int(1));
+            e.register(0x0045_7990, |_, _| float(3.0));
+            e.set_jip_patches(word);
+            if answer == 1 {
+                e.on_site_for_test(0x0094_a34e, |_, _| Some(1));
+            } else {
+                e.on_site_for_test(0x0094_a34e, |_, _| Some(0));
+            }
+            let position = move_camera(&mut e, this, [8.0, 0.0, 0.0], [0.0, 0.0, 0.0], false);
+            assert_eq!(called(&e, 0x0062_0bc0).len(), 1, "{word:x}: the pick made");
+            if pulled_in {
+                assert_eq!(e.mem.u8(CAMERA_BLOCKED), 1, "{word:x} {answer}");
+                assert_eq!(position, [2.5, 0.0, 0.0], "{word:x} {answer}");
+            } else {
+                assert_eq!(e.mem.u8(CAMERA_BLOCKED), 0, "not blocked");
+                assert_eq!(position, [8.0, 0.0, 0.0], "the camera where it was");
+            }
+        }
     }
 
     #[test]

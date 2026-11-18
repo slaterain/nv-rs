@@ -21,6 +21,7 @@ pub mod jip_fn_ammo_effect;
 pub mod jip_fn_armor;
 pub mod jip_fn_aux_variable;
 pub mod jip_fn_body_part_data;
+pub mod jip_fn_camera;
 pub mod jip_fn_ccc;
 pub mod jip_fn_cell;
 pub mod jip_fn_class;
@@ -149,6 +150,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ammo_effect::COMMANDS,
     jip_fn_armor::COMMANDS,
     jip_fn_body_part_data::COMMANDS,
+    jip_fn_camera::COMMANDS,
     jip_fn_cell::COMMANDS,
     jip_fn_class::COMMANDS,
     jip_fn_climate::COMMANDS,
@@ -267,6 +269,7 @@ pub fn install(e: &mut Engine) {
     jip_fn_misc_ref_insert::install(e);
     jip_fn_misc_ref_lines::install(e);
     jip_fn_actor_p2::install(e);
+    jip_fn_camera::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);

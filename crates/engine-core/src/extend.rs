@@ -942,6 +942,20 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5c",
     },
+    // The player's look handling 009445b0, the zoom test (its `JNP` at 0x945A28): JIP LN NVSE's
+    // ToggleVanityWheel (`SafeWrite8(0x945A29, ..)`), the wheel's zoom skipped while it is off.
+    Entry {
+        addr: 0x0094_5a28,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // The player's camera distance 0094a0c0, the `JZ` after the camera pick: JIP LN NVSE's
+    // ToggleCameraCollision (`SafeWrite8(0x94A34E, ..)`), the pick's hit ignored while it is off.
+    Entry {
+        addr: 0x0094_a34e,
+        owners: JIP,
+        step: "3.5f",
+    },
     // The player's cell change 0094cae0, its test call: JIP LN NVSE's PCCellChange.
     Entry {
         addr: 0x0094_cb35,
@@ -2978,7 +2992,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 124);
+        assert_eq!(SITES.len(), 126);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3034,6 +3048,8 @@ mod tests {
             0x0060_678f,
             0x0066_ee72,
             0x0087_ce34,
+            0x0094_5a28,
+            0x0094_a34e,
             0x0088_c74e,
             0x0088_c87a,
             0x0089_1c86,
