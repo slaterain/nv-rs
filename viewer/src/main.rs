@@ -81,7 +81,9 @@ fn find() {
 fn build_mods(raw: &[OsString]) {
     let [game, own, loose] = [1, 2, 3].map(|i| raw.get(i).map(PathBuf::from));
     let (Some(game), Some(own), Some(loose)) = (game, own, loose) else {
-        eprintln!("error: --build-mods needs the game's folder, nv-rs's own folder and the mods folder");
+        eprintln!(
+            "error: --build-mods needs the game's folder, nv-rs's own folder and the mods folder"
+        );
         host::end_process(2);
     };
     let layers = match mod_install::installs::layers(&own.join("mod installs"), &loose) {
