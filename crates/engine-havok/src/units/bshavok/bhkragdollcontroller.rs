@@ -781,7 +781,7 @@ fn rcpps(a: Lanes) -> Lanes {
 
 #[cfg(not(target_arch = "x86_64"))]
 fn rcpps(a: Lanes) -> Lanes {
-    a.map(|lane| 1.0 / lane)
+    a.map(engine_core::estimate::rcp)
 }
 
 /// The dot product `x2 + (x1 + x0)` of the three lowest lanes of a product (`SHUFPS`/`ADDSS`).

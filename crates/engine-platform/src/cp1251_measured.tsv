@@ -1,5 +1,5 @@
 # Code page 1251 as Windows converts it (kernel32 MultiByteToWideChar / WideCharToMultiByte, flags 0,
-# no default character given), measured on Windows 11 26200, 2026-11-17, by build43-scratch/measure/platforms/lm-run/codepages.ps1.
+# no default character given), measured on Windows 11 build 26200, 2026-11-17, with Windows' own calls; the measuring script is not part of the repository.
 # w: byte<TAB>unit for 0x80..0xFF. x: byte refused with MB_ERR_INVALID_CHARS (error 1113). a: unit<TAB>byte for every
 # BMP unit >= 0x80 (not a surrogate) that does NOT give the default '?' (the page's own characters and its best fit).
 w	80	0402

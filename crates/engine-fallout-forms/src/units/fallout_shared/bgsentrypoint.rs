@@ -70,7 +70,8 @@ pub fn fn_005e5b40(
 /// `BGSEntryPoint::HandleEntryPoint` (Xbox PDB; cdecl with variable
 /// arguments). For an actor and an entry point below 0x4A: the actor's (or,
 /// when it is not the player and passes `00566950`, the player's) perk
-/// entries for the entry point (its virtual `+0x4AC`). The extra words are
+/// entries for the entry point (its virtual `+0x4AC`; with JIP LN's
+/// `uNPCPerks`, seam `0x5E592F`, a teammate's own). The extra words are
 /// the entry point's filter arguments after the actor, then its function
 /// type's arguments (counts from the tables). With every argument set, each
 /// entry whose conditions pass (its virtual `+0` with the filters) runs its
@@ -92,7 +93,13 @@ pub fn bgs_entry_point_handle_entry_point(
     let mut forced = false;
     if owner != e.global::<u32>(PLAYER) && e.call(ACTOR_TEST_00566950, &args![owner]).bool() {
         forced = true;
-        owner = e.global::<u32>(PLAYER);
+        // JIP LN's O18 (`uNPCPerks`: `SAFE_WRITE_BUF(0x5E592F, nop8)`): an answer keeps the
+        // actor as the owner (its own routine, still told it is for teammates). Words: the actor.
+        let jip_keeps = e.jip_patches() & engine_core::extend::jip_patches::NPC_PERKS != 0
+            && e.site(0x005e_592f, &[owner]).is_some();
+        if !jip_keeps {
+            owner = e.global::<u32>(PLAYER);
+        }
     }
     let mut list = e
         .vcall(owner, 0x4ac, &args![entry_point & 0xff, u32::from(forced)])
@@ -338,5 +345,60 @@ mod tests {
             calls_to(&e, 0x0650_0200).last().unwrap(),
             &vec![player, 5, 1]
         );
+    }
+
+    thread_local! {
+        static O18_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static O18_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_teammate_own_entries(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O18_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        O18_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// JIP's O18 seam at `0x5E592F`: a teammate's entries are the player's unless the switch's bit
+    /// is set and the handler answers; then the teammate's own routine is asked, still told it is
+    /// for teammates. Not asked for the player or a non-teammate.
+    #[test]
+    fn handle_entry_point_jip_o18_keeps_the_teammate() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, answer: Option<u32>, teammate: bool| {
+            let mut e = Engine::new();
+            let (actor, list) = setup(&mut e, true);
+            e.mem.set_u32(list, 0);
+            let player = e.mem.alloc(4);
+            let vtable = e.mem.u32(actor);
+            e.mem.set_u32(player, vtable);
+            e.set_global(PLAYER, player);
+            if teammate {
+                e.register(ACTOR_TEST_00566950, |_, _| true.into_ret());
+            }
+            e.on_site_for_test(0x005e_592f, at_teammate_own_entries);
+            O18_ASKED.with(|s| s.borrow_mut().clear());
+            O18_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            e.call(0x005e_58f0, &args![5u32, actor, 0x66u32, 0x77u32]);
+            let asked = O18_ASKED.with(|s| s.take());
+            (asked, calls_to(&e, 0x0650_0200), actor, player)
+        };
+        let off = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NPC_WEAPON_MODS;
+        let (asked, owner, _, player) = run(off, Some(1), true);
+        assert!(asked.is_empty(), "the bit off: not asked");
+        assert_eq!(owner, vec![vec![player, 5, 1]]);
+        let (asked, owner, actor, player) = run(jip_patches::NPC_PERKS, None, true);
+        assert_eq!(asked, vec![vec![actor]]);
+        assert_eq!(owner, vec![vec![player, 5, 1]], "no answer: the player's");
+        let (_, owner, actor, _) = run(jip_patches::NPC_PERKS, Some(1), true);
+        assert_eq!(
+            owner,
+            vec![vec![actor, 5, 1]],
+            "an answer: its own, for teammates"
+        );
+        let (asked, owner, actor, _) = run(jip_patches::NPC_PERKS, Some(1), false);
+        assert!(asked.is_empty(), "not a teammate: not asked");
+        assert_eq!(owner, vec![vec![actor, 5, 0]]);
     }
 }

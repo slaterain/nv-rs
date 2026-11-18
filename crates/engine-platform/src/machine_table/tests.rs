@@ -506,7 +506,11 @@ fn the_table_reads_back_with_its_answers() {
             float32_blendable: true,
         }),
     });
-    assert!(problems.is_empty() && refusal.is_none(), "{problems:?}");
+    // One log line: the real card and the driver name the game is given.
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].starts_with("graphics card: Apple M2 (vendor 0000"));
+    assert!(problems[0].contains("nvldumd.dll"));
+    assert!(refusal.is_none());
     table.push_str(&display);
     let mut e = crate::Engine::new();
     crate::d3d9::load_adapter_table(&mut e, &table);

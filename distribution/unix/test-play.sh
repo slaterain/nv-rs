@@ -93,8 +93,9 @@ check "1 save out set" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$S2"'
 check "1 sound out" 'printf "%s" "$out" | grep -qx "NV_SOUND=out"'
 # A play run, as Play.exe starts one on Windows: the program then draws on Vulkan with the play
 # defaults (host fixes::is_play_run; its test play_sh_variables_make_a_play_run_on_vulkan).
-# Only where the start goes on (x86-64); elsewhere the program stops first.
-if [ "$(uname -m)" = x86_64 ]; then
+# Only where the start goes on (x86-64, and Apple silicon: arm64 on macOS); elsewhere (ARM Linux
+# included) the program stops first.
+if case "$(uname -s) $(uname -m)" in *" x86_64" | "Darwin arm64") true ;; *) false ;; esac; then
     check "1 play run" 'printf "%s" "$out" | grep -qxF "NV_SETTINGS=$own/settings.ini"'
 else
     check "1 no play settings where the start stops" '! printf "%s" "$out" | grep -q "^NV_SETTINGS="'
@@ -259,8 +260,8 @@ check "18 a linked script looks beside itself" 'printf "%s" "$out" | grep -qF "$
 
 check "19 steam folder still unchanged" '[ "$(snapshot)" = "$before" ]'
 
-# 20. The program's expected stop in this preview on macOS and other processors than x86-64 (the
-# game does not run there yet, status 69; Linux on x86-64 goes on to start it):
+# 20. The program's expected stop on a processor nv-rs is not built for (the game does not run
+# there yet, status 69; x86-64 and aarch64, Linux and macOS, go on to start it):
 # said as expected, with no request for a report; its status comes back.
 printf 'own%s%s\ngame%sSteam%s%s\n' "$tab" "$own" "$tab" "$tab" "$game" >"$T/find.txt"
 rm -f "$own/game-folder.txt"

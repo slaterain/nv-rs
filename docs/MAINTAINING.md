@@ -55,7 +55,9 @@ What the ZIP holds, and why each is allowed:
 
 Never in it: game files, saves, reports, machine tables (`.tsv`), `.ini`, DLLs, debug files (the
 script's type list refuses them), anything from fnv_decomp, or this PC's paths and user name
-(`package-check`'s needles). Windows' and the graphics driver's DLLs stay on the player's own PC.
+(`package-check`'s needles: the packaging machine's user name and folders, and for every file of
+every package the words in `scripts/package-needles.txt`, which the Windows and the Linux/macOS
+scripts share). Windows' and the graphics driver's DLLs stay on the player's own PC.
 
 An unsigned exe: SmartScreen warns on a downloaded one ("More info", "Run anyway"), Smart App
 Control blocks it with no way through, and an antivirus may hold or remove it, more so as it starts other
@@ -110,9 +112,11 @@ plainly that they cannot start it. Every text that goes out with them says so.
    4096: that line is the proof the program itself was compared with the game. It then writes
    `nv-rs-preview-<system>-test.CHECKED.txt` beside the archive: the run, the commit, the date and
    those lines. Any `REFUSED` line: publish nothing; fix the cause and start again at step 1.
-4. Read each BUILD.txt (in the archive): a build without the game lists the licence notices or
-   folders still missing (a release package would have been refused for them). If it lists any,
-   refresh distribution/licenses and THIRD-PARTY-NOTICES.txt, merge, and start again at step 1.
+4. Read each BUILD.txt (in the archive). Its licences need no reading: no package is made, a test
+   build neither, while a licence notice or folder is missing (`scripts/package-licences.sh`,
+   tested by `scripts/test-package-licences.sh`); when the workflow stops on that, refresh
+   distribution/licenses and THIRD-PARTY-NOTICES.txt (and distribution/notices.txt with LEGAL.md
+   for the repository's own crates), merge, and start again at step 1.
 5. Create a release tag at BUILD.txt's source commit (the same in both packages; the script
    checked it is on main, and it must be public: BUILD.txt and CHECKED.txt point at it, and that is
    how the GPL's source is offered). Create a draft pre-release and attach, as they are, each
@@ -125,7 +129,9 @@ plainly that they cannot start it. Every text that goes out with them says so.
    publishes by itself.
 
 `scripts/check-unix-package-test.ps1` tests the check script on made-up packages (no game file): run
-it after changing either script.
+it after changing either script. `scripts/test-package-licences.sh` (the licence checks, on made-up
+lists) and `scripts/test-package-playtest.sh` (scripts/package-playtest.sh whole on this checkout,
+with stand-in programs: no build) run in the play.sh workflow on Linux and macOS.
 
 The first hand-started run after this workflow is merged is its first run with the release
 profile from scratch on both runners (the earlier proving runs used the quick play profile).

@@ -806,7 +806,7 @@ pub fn moon_update(e: &mut Engine, this: Ptr<Moon>, sky: Ptr, time: f32) {
 /// setting (`180 - start <= pos <= 180 - end`) `(180 - end - pos) / ((180
 /// - end) - (180 - start))`; 1 between `start` and `180 - start`; else 0.
 /// The comparisons and the arithmetic are the code's, NaN included.
-fn fade(position: u32, start: u32, end: u32, half_turn: f64) -> f32 {
+pub(crate) fn fade(position: u32, start: u32, end: u32, half_turn: f64) -> f32 {
     let rise_end = x87_store32(x87_sub(half_turn, x87_load32(start)));
     let set_end = x87_store32(x87_sub(half_turn, x87_load32(end)));
     let pos = x87_load32(position);

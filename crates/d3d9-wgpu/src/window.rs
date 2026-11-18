@@ -147,14 +147,18 @@ pub(crate) struct Window {
     asked: u64,
     skipped: u64,
     last_why: Option<NoFrame>,
+    /// Why the first frame of the current stretch of frames not shown was not shown (the frames
+    /// after it may only be resting: [`Backoff`]).
+    first_why: Option<NoFrame>,
     /// Configurations made, and those wgpu refused (the device's line every 600 presents).
     pub(crate) configures: u64,
     pub(crate) refused: u64,
 }
 
-/// Why no frame was shown ([`Window::frame`]).
+/// Why no frame was shown ([`Window::frame`]; tests read it through
+/// [`crate::device::Device::frame_not_shown`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum NoFrame {
+pub enum NoFrame {
     Minimised,
     NoArea,
     Resting,
@@ -235,6 +239,7 @@ impl Window {
             asked: 0,
             skipped: 0,
             last_why: None,
+            first_why: None,
             configures: 0,
             refused: 0,
         };
@@ -344,6 +349,17 @@ impl Window {
         self.hwnd
     }
 
+    /// Why the window's frames are not shown now: why the first of the current stretch of frames
+    /// not shown was not (those after it may only be resting); None when the last frame asked for
+    /// was shown (or none was asked).
+    pub(crate) fn not_shown(&self) -> Option<NoFrame> {
+        if self.skipped > 0 {
+            self.first_why
+        } else {
+            None
+        }
+    }
+
     /// The window's next frame, at its size now; `None` when it gives none now (the start and the
     /// end of a stretch of frames not shown are each one log line).
     pub(crate) fn frame(&mut self, device: &wgpu::Device) -> Option<wgpu::SurfaceTexture> {
@@ -369,6 +385,7 @@ impl Window {
                         self.asked,
                         why.says()
                     );
+                    self.first_why = Some(why);
                 }
                 self.skipped += 1;
                 self.last_why = Some(why);

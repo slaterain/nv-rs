@@ -1020,6 +1020,40 @@ fn npc_perks_kept_at_a_save() {
     assert!(!kept(&mut w, true), "dead");
 }
 
+/// O18 through the save itself (`save_own`): with the patch on, a dead actor's entry and an id
+/// that is no form leave the map before `JPNP` is written, which lists only the kept actor.
+#[test]
+fn npc_perks_save_writes_only_the_kept() {
+    let mut w = World::new();
+    let perk = w.form(0x0600_0010, PERK, false);
+    let base = w.form(0x0600_0020, 0x2a, false);
+    let kept = w.form(0x0600_0001, 0x2a, true);
+    let dead = w.form(0x0600_0002, 0x2a, true);
+    for actor in [kept, dead] {
+        w.e.mem.set_u32(actor + 0x20, base);
+    }
+    w.e.mem.set_u32(dead + 0x108, 1);
+    set_npc_perks_patch(&mut w.e, true);
+    {
+        let mut map = crate::cosave::npc_perks(&mut w.e);
+        for id in [0x0600_0001, 0x0600_0002, 0x0600_0099] {
+            map.emplace(id).ranks.insert(perk, 1);
+        }
+    }
+    let expect = Out::default()
+        .u16(1)
+        .u32(0x0600_0001)
+        .u8(1)
+        .u32(0x0600_0010)
+        .u8(1)
+        .0;
+    assert_eq!(written(&mut w.e), [chunk(kind::NPC_PERKS, 10, expect)]);
+    let map = crate::cosave::npc_perks(&mut w.e);
+    assert!(map.get(&0x0600_0002).is_none(), "dead: dropped");
+    assert!(map.get(&0x0600_0099).is_none(), "not a form: dropped");
+    assert!(map.get(&0x0600_0001).is_some());
+}
+
 /// The messages: a save records its name and clears the changes; a load of another save marks
 /// everything changed; a load of the same one keeps what is loaded; a load that succeeded
 /// clears the changes; leaving to the main menu clears the data and the name.

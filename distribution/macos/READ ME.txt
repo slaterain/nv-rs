@@ -12,13 +12,11 @@ PLEASE READ FIRST
   night and on every change to play.sh, and the unit tests of the program's parts with
   macOS-specific code run every night (in a job that is still allowed to fail while Apple
   silicon's known differences are fixed).
-- What works today: naming your game's folder, remembering it, and the check of your game's
-  version (./play.sh --check). The game itself does NOT run on macOS yet: the program stops right
-  after it finds your game, and says what is not provided on macOS yet. That stop is expected
-  and needs no report: it begins with
-    error: nv-rs does not run the game on this system yet: ...
-  and play.sh then says "As expected for this preview: the game does not run on this system yet".
-  Anything else that stops it is worth a report.
+- What this preview does: it finds your game, checks its version (./play.sh --check), and goes
+  on to start it, drawing with Metal. It builds and passes unit tests on Apple silicon; maths
+  differs from a PC's in the last bits in a few functions (far below anything you could see or
+  feel); never started with the game: expect stops nobody has seen yet, and report each one
+  with its log.
 - Your nv-rs saves, settings and logs live in nv-rs's own folder:
   ~/Library/Application Support/nv-rs
 - nv-rs never writes to the game's folder, to your Documents or to your Library (but its own
@@ -52,18 +50,19 @@ What you need
 
 What this build can do today
 ----------------------------
-Today the program STOPS right after it finds your game, with a message that lists what is not
-provided on this Mac yet (it begins "error: nv-rs does not run the game on this system yet").
-On Apple silicon (the Macs this package is built for) what is left is the processor's side: the
-exact results of some of the game's maths and the processor's quick estimates the game's physics
-uses. The game's window (on the program's main thread, as macOS requires), drawing on Metal,
-sound, paths, the machine's answers and the code pages are built and pass their checks, but none
-of them has been tried with the game on a Mac yet. The rest comes in the next previews; play.sh and
-your nv-rs folder stay the same. This stop needs no report: play.sh says "As expected for this
-preview" after it.
+The program goes on to start the game, drawing with Metal, with the same play settings as the
+Windows preview. It builds and passes unit tests on Apple silicon; maths differs from a PC's in
+the last bits in a few functions (the game's x87 maths runs in software, the processor's quick
+estimates come from a model measured on a PC); never started with the game on a Mac. The
+game's window (on the program's main thread, as macOS requires), sound, paths, the
+machine's answers and the code pages are built and pass their checks, but none of them has been
+tried with the game on a Mac yet. Known to be missing, as on Linux: sounds at rates other than
+your sound device's are not heard until the game first changes a sound's pitch, pop-up warnings
+are log lines, a mod's own loose shader files (HLSL) stop the game. Each of these, and any other
+stop, is worth a report with the log.
 
 ./play.sh --check checks your game's FalloutNV.exe (that it is version 1.4.0.525, the one nv-rs
-needs) before that same stop: a wrong version is said instead.
+needs) and the code page, and says what it found.
 
 
 Start
@@ -122,9 +121,9 @@ saves go with it).
 
 What doesn't work yet
 ---------------------
-- Everything in "What this build can do today": the game does not run yet.
-- Once it runs: what the Windows preview's READ ME lists (mods with plugins, controllers), and
-  anything Mac-only nobody has seen yet.
+- Never started with the game on a Mac: any stop is new; report it with the log.
+- Also: what the Windows preview's READ ME lists (mods with plugins, controllers), and anything
+  Mac-only nobody has seen yet.
 
 
 Reporting a problem

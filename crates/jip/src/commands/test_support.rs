@@ -462,7 +462,7 @@ pub fn newton_step(s: f32, r: f32) -> f32 {
 }
 
 /// This processor's `rsqrtss(s)`, read with the instruction itself (inline asm, not the port's
-/// intrinsic); elsewhere the rounded `1/sqrt(s)`, an allowed estimate.
+/// intrinsic); elsewhere the shared model of the measured processor (`engine_core::estimate`).
 pub fn processor_rsqrt(s: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -475,12 +475,12 @@ pub fn processor_rsqrt(s: f32) -> f32 {
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        (1.0 / f64::from(s).sqrt()) as f32
+        engine_core::estimate::rsqrt(s)
     }
 }
 
 /// This processor's `rcpss(v)`, read with the instruction itself (inline asm, not the port's
-/// intrinsic); elsewhere the rounded `1/v`, an allowed estimate.
+/// intrinsic); elsewhere the shared model of the measured processor (`engine_core::estimate`).
 pub fn processor_rcp(v: f32) -> f32 {
     #[cfg(target_arch = "x86_64")]
     {
@@ -493,7 +493,7 @@ pub fn processor_rcp(v: f32) -> f32 {
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        1.0 / v
+        engine_core::estimate::rcp(v)
     }
 }
 

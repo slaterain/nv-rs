@@ -70,7 +70,7 @@ fn rcp_estimate(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 fn rcp_estimate(x: f32) -> f32 {
-    1.0 / x
+    engine_core::estimate::rcp(x)
 }
 
 /// The four words at `addr`, bit for bit.

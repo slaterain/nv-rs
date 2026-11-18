@@ -86,8 +86,11 @@ pub const AREA: Area = Area {
         REF_SOUND_FLAGS.addr(),
         MAP_SOUND_FLAGS.addr(),
         perks::DESTROY_ACTOR.addr(),
+        perks::TEAMMATE_OWN_ENTRIES.addr(),
+        perks::WEAPON_DAMAGE_PERKS.addr(),
+        perks::KILL_EFFECT_WEAPON.addr(),
     ],
-    fix_wraps: &[],
+    fix_wraps: &[perks::SET_PLAYER_TEAMMATE.addr()],
     install_fixes,
     jip_sites: &[ACTOR_FLAGS_LOADED.addr(), TEAMMATE_ESSENTIAL.addr()],
     jip_wraps: &[],
@@ -264,6 +267,7 @@ fn voice_flag_added(_: &mut Engine, a: &[u32]) -> Option<u32> {
 #[path = "ge_tests.rs"]
 mod tests;
 
-/// O18 (`uNPCPerks`), part 1: the NPC perks routines (`ge_perks.rs`).
+/// O18 (`uNPCPerks`): the NPC and player perk routines, the teammate wrap and the entry point
+/// seams (`ge_perks.rs`).
 #[path = "ge_perks.rs"]
 pub mod perks;
