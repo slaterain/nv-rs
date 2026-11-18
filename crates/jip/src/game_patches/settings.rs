@@ -73,10 +73,20 @@ pub struct Switches {
     pub weapon_mod_chance: [u32; 3],
 }
 
-/// Reads the player's file through the game's file calls (as the built-in xNVSE reads its files)
-/// and answers its switches; JIP's defaults when it has none.
+/// Reads the player's file and answers its switches; JIP's defaults when it has none. A mod's
+/// settings file is looked for in the port's own folder beside the saves first (the maintainer's
+/// rule, 2026-11-16), then the game's Data, through the mods' files seam
+/// ([`engine_core::mod_files`]); then through the game's own file calls (as the built-in xNVSE reads
+/// its files: the game's folder), which also answer when no platform answers the seam.
 pub fn read(e: &mut Engine) -> Switches {
-    let text = nvse::saveload::read_file(e, PATH);
+    let text = match engine_core::mod_files::read_or_error(e, PATH) {
+        Ok(bytes) => Some(bytes),
+        Err(engine_core::mod_files::ERROR_FILE_NOT_FOUND)
+        | Err(engine_core::mod_files::ERROR_PATH_NOT_FOUND)
+        | Err(engine_core::mod_files::ERROR_NOT_SUPPORTED) => nvse::saveload::read_file(e, PATH),
+        // A copy that is there but cannot be read: no later place is looked at (the seam's rule).
+        Err(_) => None,
+    };
     switches(&section(text.as_deref().unwrap_or(&[]), b"GamePatches"))
 }
 
