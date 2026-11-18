@@ -6,6 +6,7 @@
 //!   nv-launcher --game FOLDER --capture FILE.png   drawn off screen and saved, then it ends
 //!   --size WIDTHxHEIGHT                            the capture's size (960x720)
 //!   --plain                                        the port's own look, as before the game is found
+//!   --settings                                     the Settings screen instead (today's 12 rows)
 //!
 //! Silent: it plays no sound. Nothing is written but the capture.
 
@@ -26,6 +27,7 @@ struct Options {
     capture: Option<PathBuf>,
     size: (u32, u32),
     plain: bool,
+    settings: bool,
 }
 
 fn options() -> Result<Options, String> {
@@ -34,6 +36,7 @@ fn options() -> Result<Options, String> {
         capture: None,
         size: (screen::WIDTH, screen::HEIGHT),
         plain: false,
+        settings: false,
     };
     let mut args = std::env::args_os().skip(1);
     while let Some(a) = args.next() {
@@ -52,6 +55,7 @@ fn options() -> Result<Options, String> {
                 );
             }
             Some("--plain") => o.plain = true,
+            Some("--settings") => o.settings = true,
             _ => return Err(format!("unknown argument {}", a.to_string_lossy())),
         }
     }
@@ -103,12 +107,45 @@ fn start_screen(o: &Options, adapter: &str) -> Screen {
     let entries = if game.is_empty() {
         vec!["Look for the game again", "Help", "Exit"]
     } else {
-        vec!["Play", "Mods", "Settings", "Renderer", "Import saves", "Help", "Exit"]
+        vec!["Play", "Mods", "Settings", "Import saves", "Help", "Exit"]
     };
     Screen {
         title: "-nv-rs-".into(),
         welcome,
         entries: entries.into_iter().map(String::from).collect(),
+        highlighted: 0,
+        typed: String::new(),
+    }
+}
+
+/// The screen the prototype opens on: the start screen, or (`--settings`) the Settings screen
+/// with today's 12 rows (Settings.ps1's names and its defaults) and Back.
+fn first_screen(o: &Options, adapter: &str) -> Screen {
+    if !o.settings {
+        return start_screen(o, adapter);
+    }
+    let rows = [
+        "Renderer: Vulkan",
+        "Display mode: Borderless fullscreen",
+        "Resolution: Game's setting",
+        "Anti-aliasing: Game's setting",
+        "Anisotropic filtering: Game's setting",
+        "V-sync: Game's setting",
+        "Game fixes: Fixes",
+        "Frame rate limit: No limit",
+        "Frame rate limit in menus: 120",
+        "Frame rate counter: Hidden",
+        "Game threads: Side by side",
+        "Drawing thread: Own thread",
+        "Back",
+    ];
+    Screen {
+        title: "-Settings-".into(),
+        welcome: vec![
+            "Saved at once, for both ways".into(),
+            "of playing. Enter: choices.".into(),
+        ],
+        entries: rows.into_iter().map(String::from).collect(),
         highlighted: 0,
         typed: String::new(),
     }
@@ -127,7 +164,7 @@ fn capture(o: &Options, file: &std::path::Path) -> Result<(), String> {
     let instance = gpu::instance();
     let picture = (screen::WIDTH, screen::HEIGHT);
     let mut g = gpu::Gpu::new(&instance, None, picture)?;
-    let s = start_screen(o, &g.adapter.get_info().name);
+    let s = first_screen(o, &g.adapter.get_info().name);
     let (canvas, _) = screen::draw(&look, &s, usize::MAX, true);
     g.upload(&canvas.pixels, picture);
     let rgba = g.capture(picture, o.size)?;
@@ -171,13 +208,13 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        let shown = self.shown();
+        let cursor = (self.started.elapsed().as_millis() as u64 / screen::BLINK_MS) % 2 == 0;
         let (Some(surface), Some(config), Some(gpu), Some(s)) =
             (&self.surface, &self.config, &mut self.gpu, &self.screen)
         else {
             return;
         };
-        let shown = self.shown();
-        let cursor = (self.started.elapsed().as_millis() as u64 / screen::BLINK_MS) % 2 == 0;
         let (canvas, rows) = screen::draw(&self.look, s, shown, cursor);
         self.rows = Some(rows);
         let picture = (screen::WIDTH, screen::HEIGHT);
@@ -194,7 +231,7 @@ impl App {
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         gpu.draw(&mut encoder, &view, config.format, (config.width, config.height), picture);
         gpu.queue.submit([encoder.finish()]);
-        frame.present();
+        gpu.queue.present(frame);
         if !self.finished && shown >= screen::total_chars(&self.look, s) {
             self.finished = true;
         }
@@ -202,15 +239,15 @@ impl App {
 
     /// The row under the window position, if any.
     fn row_at(&self, pos: (f64, f64)) -> Option<usize> {
-        let (config, rows, s) = (self.config.as_ref()?, self.rows.as_ref()?, self.screen.as_ref()?);
+        let (config, rows) = (self.config.as_ref()?, self.rows.as_ref()?);
         let (x, y, w, h) = gpu::fit((screen::WIDTH, screen::HEIGHT), (config.width, config.height));
         let px = (pos.0 - x as f64) * screen::WIDTH as f64 / w as f64;
         let py = (pos.1 - y as f64) * screen::HEIGHT as f64 / h as f64;
         if px < rows.x as f64 || px > (rows.x + rows.width as i32) as f64 || py < rows.top as f64 {
             return None;
         }
-        let i = ((py - rows.top as f64) / rows.row as f64) as usize;
-        (i < s.entries.len().min(12)).then_some(i)
+        let k = ((py - rows.top as f64) / rows.row as f64) as usize;
+        (k < rows.shown).then_some(rows.first + k)
     }
 
     fn choose(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
@@ -270,7 +307,7 @@ impl winit::application::ApplicationHandler for App {
         }
         surface.configure(&g.device, &config);
         println!("drawing with {}; look: {}", g.describe(), self.look.from);
-        self.screen = Some(start_screen(&self.options, &g.adapter.get_info().name));
+        self.screen = Some(first_screen(&self.options, &g.adapter.get_info().name));
         self.started = Instant::now();
         self.config = Some(config);
         self.surface = Some(surface);
@@ -302,7 +339,7 @@ impl winit::application::ApplicationHandler for App {
                     // Any key finishes the typing, as a click does in the game's terminal.
                     self.finished = true;
                 } else if let Some(s) = &mut self.screen {
-                    let n = s.entries.len().min(12);
+                    let n = s.entries.len();
                     match event.logical_key {
                         Key::Named(NamedKey::ArrowUp) => s.highlighted = (s.highlighted + n - 1) % n,
                         Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::Tab) => {

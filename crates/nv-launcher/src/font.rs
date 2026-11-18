@@ -20,7 +20,7 @@ use crate::canvas::Canvas;
 
 /// One letter of the game's font.
 #[derive(Clone, Copy, Default, Debug)]
-struct Letter {
+pub struct Letter {
     /// Texture pixels: left, top, width, height.
     cell: (u32, u32, u32, u32),
     width: f32,

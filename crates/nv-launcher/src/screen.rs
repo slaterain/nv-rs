@@ -124,14 +124,58 @@ pub struct Rows {
     pub x: i32,
     pub width: u32,
     pub row: u32,
+    /// The first entry shown (the list scrolls) and how many show.
+    pub first: usize,
+    pub shown: usize,
+}
+
+/// Where everything goes on `screen` (the welcome text's height decides where the list starts).
+struct Layout {
+    line_height: i32,
+    welcome_y: i32,
+    line_y: i32,
+    rows: Rows,
+    prompt_y: i32,
+}
+
+fn layout(look: &Look, screen: &Screen) -> Layout {
+    let lh = look.font.line_height() as i32;
+    let welcome_y = 60 + lh * 3 + 20;
+    let line_y = welcome_y + lh * screen.welcome.len() as i32 + 10;
+    let top = line_y + 2 + 10;
+    let row = (lh + 20) as u32;
+    let prompt_y = HEIGHT as i32 - lh - 30;
+    // As many rows as fit above the prompt, at most the game's 12; scrolled so the highlighted
+    // one shows.
+    let fit = (((prompt_y - 10 - top).max(0) as u32 / row) as usize).clamp(1, 12);
+    let first = screen.highlighted.saturating_sub(fit - 1);
+    let shown = screen.entries.len().saturating_sub(first).min(fit);
+    Layout {
+        line_height: lh,
+        welcome_y,
+        line_y,
+        rows: Rows {
+            top,
+            x: 100,
+            width: 700 - 5,
+            row,
+            first,
+            shown,
+        },
+        prompt_y,
+    }
 }
 
 /// How many characters the screen types before it is whole.
 pub fn total_chars(look: &Look, screen: &Screen) -> usize {
+    let rows = layout(look, screen).rows;
     look.header.iter().map(|l| l.chars().count()).sum::<usize>()
         + screen.title.chars().count()
         + screen.welcome.iter().map(|l| l.chars().count()).sum::<usize>()
-        + screen.entries.iter().take(12).map(|e| e.chars().count() + 2).sum::<usize>()
+        + screen.entries[rows.first..rows.first + rows.shown]
+            .iter()
+            .map(|e| e.chars().count() + 2)
+            .sum::<usize>()
 }
 
 /// The screen drawn with `look`, `shown` characters of its text typed so far (`usize::MAX`: all),
@@ -142,7 +186,8 @@ pub fn draw(look: &Look, screen: &Screen, shown: usize, cursor: bool) -> (Canvas
         // `computers_background`: x 10, the screen's size, brightness 90, alpha 255.
         c.stretch((px, *w, *h), (10, 0, WIDTH, HEIGHT), look.at(90.0, 255.0));
     }
-    let lh = look.font.line_height() as i32;
+    let l = layout(look, screen);
+    let lh = l.line_height;
     let text = look.at(255.0, 255.0);
     // The highlight shows once everything is typed (the game enables the items then).
     let done = shown >= total_chars(look, screen);
@@ -152,56 +197,44 @@ pub fn draw(look: &Look, screen: &Screen, shown: usize, cursor: bool) -> (Canvas
         budget -= n;
         s.chars().take(n).collect()
     };
-    // The header, centred by 17 a character (the game's own measure in `FinishIntro`).
-    let centred = |s: &str| (WIDTH as i32 - 17 * s.chars().count() as i32) / 2;
+    // The header, centred: `FinishIntro` measures 17 a character, the game font's advance (the
+    // font's own width gives the same); the plain font's by its own cell.
+    let centred = |s: &str| (WIDTH as i32 - look.font.width(s) as i32) / 2;
     let lines = [look.header[0].as_str(), look.header[1].as_str(), screen.title.as_str()];
     for (i, line) in lines.iter().enumerate() {
         let part = typed(line);
         look.font.draw(&mut c, centred(line), 60 + lh * i as i32, &part, text);
     }
-    // The welcome text, then the line under it.
-    let mut y = 60 + lh * 3 + 20;
+    // The welcome text, then the line under it, as wide as the text.
     let mut widest = 0;
-    for line in &screen.welcome {
+    for (i, line) in screen.welcome.iter().enumerate() {
         let part = typed(line);
-        look.font.draw(&mut c, 100, y, &part, text);
+        look.font.draw(&mut c, 100, l.welcome_y + lh * i as i32, &part, text);
         widest = widest.max(look.font.width(line));
-        y += lh;
     }
-    let line_y = y + 10;
     if !screen.welcome.is_empty() {
-        c.fill(100, line_y, widest, 2, look.at(200.0, 255.0));
+        c.fill(100, l.line_y, widest, 2, look.at(200.0, 255.0));
     }
     // The list.
-    let top = line_y + 2 + 10;
-    let row = (lh + 20) as u32;
-    for (i, entry) in screen.entries.iter().take(12).enumerate() {
-        let ry = top + (row as i32) * i as i32;
-        let label = format!("> {entry}");
-        let part = typed(&label);
+    let r = &l.rows;
+    for (k, entry) in screen.entries[r.first..r.first + r.shown].iter().enumerate() {
+        let i = r.first + k;
+        let ry = r.top + r.row as i32 * k as i32;
+        let part = typed(&format!("> {entry}"));
         let colour = if i == screen.highlighted && done {
-            c.fill(100, ry, 700 - 5, row - 1, look.at(128.0, 224.0));
+            c.fill(r.x, ry, r.width, r.row - 1, look.at(128.0, 224.0));
             [0.0, 5.0 / 255.0, 0.0, 1.0]
         } else {
             text
         };
-        look.font.draw(&mut c, 100, ry + 15, &part, colour);
+        look.font.draw(&mut c, r.x, ry + 15, &part, colour);
     }
     // The prompt and the cursor.
-    let py = HEIGHT as i32 - lh - 30;
     let prompt = format!("> {}", screen.typed);
-    look.font.draw(&mut c, 100, py, &prompt, text);
+    look.font.draw(&mut c, 100, l.prompt_y, &prompt, text);
     if cursor {
         let x = 100 + look.font.width(&prompt) as i32;
-        c.fill(x, py + (lh - 17) / 2, 17, 17, text);
+        c.fill(x, l.prompt_y + (lh - 17) / 2, 17, 17, text);
     }
-    (
-        c,
-        Rows {
-            top,
-            x: 100,
-            width: 695,
-            row,
-        },
-    )
+    (c, l.rows)
 }

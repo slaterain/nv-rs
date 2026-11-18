@@ -40,32 +40,22 @@ impl Game {
         std::fs::read(&at).ok()
     }
 
-    /// The default text of the game setting `name` as the player's `FalloutNV.exe` holds it: the
-    /// exe's static initializer pushes the value's address and then the name's
-    /// (`PUSH value; PUSH name; MOV ECX, setting; CALL`), so the name's address is found in the
-    /// exe's data and the push before it in its code. None when the exe is not the one expected.
+    /// The default text of the game setting `name` as the player's `FalloutNV.exe` 1.4.0.525
+    /// holds it ([`SETTINGS`]: the addresses its static initializer pushes, `PUSH value; PUSH
+    /// name; MOV ECX, setting; CALL 0040c150`). Read from the exe's `.rdata`, which the Steam
+    /// exe keeps unpacked (only its code is encrypted; `engine_core::exe`). The name must stand
+    /// at its address, else the exe is not 1.4.0.525 and None is the answer.
     pub fn exe_setting_text(&self, name: &str) -> Option<String> {
+        let &(_, name_va, value_va) = SETTINGS.iter().find(|(n, _, _)| *n == name)?;
         let exe = std::fs::read(child(&self.folder, "FalloutNV.exe")?).ok()?;
         let pe = Pe::parse(&exe)?;
-        let mut needle = name.as_bytes().to_vec();
-        needle.push(0);
-        let at = find(&exe, &needle, 0)?;
-        // The name starts the string: the byte before it ends another string or is padding.
-        let name_va = pe.va_of(at)?;
-        let mut pattern = vec![0x68];
-        pattern.extend_from_slice(&name_va.to_le_bytes());
-        let mut from = 0;
-        while let Some(i) = find(&exe, &pattern, from) {
-            from = i + 1;
-            if i >= 5 && exe[i - 5] == 0x68 {
-                let value_va = u32::from_le_bytes(exe[i - 4..i].try_into().ok()?);
-                let off = pe.offset_of(value_va)?;
-                let end = exe[off..].iter().position(|&b| b == 0)?;
-                // The game's text is Windows-1252; the terminal strings are plain ASCII.
-                return Some(exe[off..off + end].iter().map(|&b| b as char).collect());
-            }
-        }
-        None
+        let text_at = |va: u32| -> Option<String> {
+            let off = pe.offset_of(va)?;
+            let end = exe.get(off..)?.iter().position(|&b| b == 0)?;
+            // The game's text is Windows-1252, one character a byte.
+            Some(exe[off..off + end].iter().map(|&b| b as char).collect())
+        };
+        (text_at(name_va)? == name).then(|| text_at(value_va))?
     }
 
     /// The terminal colour (`[Interface] iSystemColorTerminalRed`, `Green`, `Blue`): the first
@@ -137,14 +127,17 @@ fn ini_value<'a>(text: &'a str, section: &str, key: &str) -> Option<&'a str> {
     None
 }
 
-fn find(hay: &[u8], needle: &[u8], from: usize) -> Option<usize> {
-    if needle.is_empty() || hay.len() < needle.len() {
-        return None;
-    }
-    (from..=hay.len() - needle.len()).find(|&i| &hay[i..i + needle.len()] == needle)
-}
+/// The terminal's game settings with text: name, the name's address and the default value's
+/// address in FalloutNV.exe 1.4.0.525 (their static initializers 00f6daa0, 00f6dad0, 00f6dc80,
+/// 00f6dc20 push them).
+const SETTINGS: [(&str, u32, u32); 4] = [
+    ("sComputersHeader1", 0x0105_a540, 0x0105_a554),
+    ("sComputersHeader2", 0x0105_a580, 0x0105_a594),
+    ("sHackingIntro01", 0x0105_a6c8, 0x0105_a6d8),
+    ("sComputersLogon", 0x0105_a680, 0x0105_a690),
+];
 
-/// The sections of a 32-bit PE file: enough to turn file offsets into addresses and back.
+/// The sections of a 32-bit PE file: enough to turn addresses into file offsets.
 struct Pe {
     base: u32,
     /// (virtual address, virtual size, file offset, file size) of each section.
@@ -170,13 +163,6 @@ impl Pe {
             })
             .collect::<Option<Vec<_>>>()?;
         Some(Pe { base, sections })
-    }
-
-    fn va_of(&self, offset: usize) -> Option<u32> {
-        let offset = offset as u32;
-        self.sections.iter().find_map(|&(va, _, raw, size)| {
-            (offset >= raw && offset < raw + size).then(|| self.base + va + (offset - raw))
-        })
     }
 
     fn offset_of(&self, address: u32) -> Option<usize> {
