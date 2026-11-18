@@ -86,40 +86,48 @@ fn build_mods(raw: &[OsString]) {
         );
         host::end_process(2);
     };
-    let layers = match mod_install::installs::layers(&own.join("mod installs"), &loose) {
-        Ok(layers) => layers,
-        Err(e) => {
-            eprintln!("error: the installed mods could not be read: {e}");
-            host::end_process(1);
-        }
-    };
-    let plugins = own
-        .join("mods")
-        .join("AppData")
-        .join("Local")
-        .join("FalloutNV")
-        .join("plugins.txt");
-    match mod_install::overlay::build(&game, &layers, &own.join("modgame"), &plugins) {
-        Ok(built) => {
-            println!(
-                "mods: {} mod files from {} folders; {} names made and {} removed since the last start",
-                built.mod_files,
-                layers.len(),
-                built.made,
-                built.removed
-            );
-            for name in &built.added_plugins {
-                println!("mods: {name} switched on after the mods folder's own plugins.txt");
-            }
-            if built.extender_plugins {
-                println!("mods: some mods include plugins for script extenders (.dll files): those are not used");
+    match build_mods_in(&game, &own, &loose) {
+        Ok(lines) => {
+            for line in lines {
+                println!("{line}");
             }
         }
-        Err(e) => {
-            eprintln!("{}", e.player_text());
+        Err(text) => {
+            eprintln!("{text}");
             host::end_process(1);
         }
     }
+}
+
+/// [`build_mods`]'s work: `OWN/modgame` made from GAME, the installed mods and LOOSE, the plugin
+/// list at the mods profile's place where the game reads it (`machine_table::plugins_txt`); the
+/// lines to say, or what went wrong in words.
+#[cfg(not(windows))]
+fn build_mods_in(game: &Path, own: &Path, loose: &Path) -> Result<Vec<String>, String> {
+    let layers = mod_install::installs::layers(&own.join("mod installs"), loose)
+        .map_err(|e| format!("error: the installed mods could not be read: {e}"))?;
+    let plugins = engine_platform::machine_table::plugins_txt(own, "mods");
+    let built = mod_install::overlay::build(game, &layers, &own.join("modgame"), &plugins)
+        .map_err(|e| e.player_text())?;
+    let mut lines = vec![format!(
+        "mods: {} mod files from {} folders; {} names made and {} removed since the last start",
+        built.mod_files,
+        layers.len(),
+        built.made,
+        built.removed
+    )];
+    for name in &built.added_plugins {
+        lines.push(format!(
+            "mods: {name} switched on after the mods folder's own plugins.txt"
+        ));
+    }
+    if built.extender_plugins {
+        lines.push(
+            "mods: some mods include plugins for script extenders (.dll files): those are not used"
+                .to_owned(),
+        );
+    }
+    Ok(lines)
 }
 
 /// The command line.
@@ -387,6 +395,66 @@ mod tests {
 
     fn strings(a: &[&str]) -> Vec<OsString> {
         a.iter().map(OsString::from).collect()
+    }
+
+    /// The real `--build-mods` on a tiny game tree: the game's master linked, the mod's file in
+    /// place over it, and the plugin list at the mods profile's place where the game reads it.
+    #[cfg(unix)]
+    #[test]
+    fn build_mods_makes_the_mods_game_folder_and_its_plugin_list() {
+        let dir = std::env::temp_dir().join(format!("nv-viewer-build-mods-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |path: &Path, bytes: &[u8]| {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, bytes).unwrap();
+        };
+        let game = dir.join("game");
+        write(&game.join("FalloutNV.exe"), b"exe");
+        write(&game.join("Data").join("FalloutNV.esm"), b"esm");
+        write(&game.join("Data").join("DeadMoney.esm"), b"dm");
+        write(&game.join("Data").join("Textures").join("a.dds"), b"game's");
+        let own = dir.join("own");
+        let loose = own.join("my mods");
+        write(&loose.join("Textures").join("a.dds"), b"mod's");
+        // A plugin header with FalloutNV.esm as its only master.
+        let mut esp = b"TES4".to_vec();
+        let fields: Vec<u8> = [
+            &b"MAST\x0e\0FalloutNV.esm\0"[..],
+            &b"DATA\x08\0"[..],
+            &[0; 8],
+        ]
+        .concat();
+        esp.extend_from_slice(&(fields.len() as u32).to_le_bytes());
+        esp.extend_from_slice(&[0; 16]);
+        esp.extend_from_slice(&fields);
+        write(&loose.join("Mine.esp"), &esp);
+        let lines = build_mods_in(&game, &own, &loose).unwrap();
+        assert!(lines[0].starts_with("mods: 2 mod files"), "{lines:?}");
+        let data = own.join("modgame").join("Data");
+        assert_eq!(std::fs::read(data.join("FalloutNV.esm")).unwrap(), b"esm");
+        assert_eq!(
+            std::fs::read(data.join("Textures").join("a.dds")).unwrap(),
+            b"mod's"
+        );
+        assert_eq!(
+            std::fs::read(game.join("Data").join("Textures").join("a.dds")).unwrap(),
+            b"game's"
+        );
+        let plugins = own
+            .join("mods")
+            .join("AppData")
+            .join("Local")
+            .join("FalloutNV")
+            .join("plugins.txt");
+        assert_eq!(
+            plugins,
+            engine_platform::machine_table::plugins_txt(&own, "mods")
+        );
+        assert_eq!(
+            std::fs::read_to_string(&plugins).unwrap(),
+            "DeadMoney.esm\r\nMine.esp\r\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Review of #630 (round 2): a game folder whose name is not UTF-8 (Linux allows any bytes)

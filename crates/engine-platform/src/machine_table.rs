@@ -687,12 +687,24 @@ pub fn profile() -> &'static str {
 /// `game\AppData\Roaming`, `game\AppData\Local`, or `mods\...` for [`profile`] `mods`): this
 /// system's paths.
 pub fn game_folders(own: &std::path::Path) -> [std::path::PathBuf; 3] {
-    let game = own.join(profile());
+    profile_folders(own, profile())
+}
+
+/// [`game_folders`] of the profile `profile` (`game` or `mods`), whatever this run's is.
+pub fn profile_folders(own: &std::path::Path, profile: &str) -> [std::path::PathBuf; 3] {
+    let game = own.join(profile);
     [
         game.join("Documents"),
         game.join("AppData").join("Roaming"),
         game.join("AppData").join("Local"),
     ]
+}
+
+/// The plugin list the game reads in the profile `profile`: its local AppData's
+/// `FalloutNV/plugins.txt` ([`profile_folders`]).
+pub fn plugins_txt(own: &std::path::Path, profile: &str) -> std::path::PathBuf {
+    let [_, _, local] = profile_folders(own, profile);
+    local.join("FalloutNV").join("plugins.txt")
 }
 
 /// The game's name of a full path of this system: on drive `Z:`, each `/` a `\` (decision 3;
