@@ -96,6 +96,11 @@ they are. A save and its .nvse file are copied together.
                              folder made of links in nv-rs's own folder; your game folder is
                              never changed, and saves made with mods stay apart
                              (--mods --import-saves copies saves into them)
+  ./play.sh --install-mods   install a mod: put its .7z, .zip or .fomod in the "my mods" folder
+                             (--mods and --install-mods say where), then
+                             answer its installer's questions (type what each line says; Enter
+                             keeps the recommended choice); it goes to nv-rs's own folder, and
+                             --mods plays with it. Also lists and removes installed mods
 
 
 Your files

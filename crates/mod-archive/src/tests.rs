@@ -347,10 +347,12 @@ fn what_is_too_big_is_refused_first() {
         let file_limit = Limits {
             file: 29,
             total: 1000,
+            ..Limits::default()
         };
         let total_limit = Limits {
             file: 1000,
             total: 59,
+            ..Limits::default()
         };
         for limits in [file_limit, total_limit] {
             let error = extract(&archive, &wanted, &to, limits).unwrap_err();
@@ -360,6 +362,7 @@ fn what_is_too_big_is_refused_first() {
         let fits = Limits {
             file: 30,
             total: 60,
+            ..Limits::default()
         };
         assert_eq!(
             extract(&archive, &wanted, &to, fits).unwrap().written.len(),
@@ -592,6 +595,7 @@ fn a_7z_decodes_only_what_is_wanted() {
     let small = Limits {
         file: 1 << 20,
         total: 1 << 20,
+        decode: 1 << 20,
     };
     let error = extract(
         &solid,
@@ -820,4 +824,269 @@ fn a_7z_pairs_entries_by_index() {
     assert_eq!(done.written.len(), 2);
     assert_eq!(std::fs::read(to.join("a.dds")).unwrap(), b"");
     assert_eq!(std::fs::read(to.join("b.dds")).unwrap(), b"bbb");
+}
+
+/// Progress: reported after every file (one archive file going to two places counts twice), with
+/// the totals known from the start and every megabyte inside a large file; the size shown before
+/// unpacking ([`wanted_size`]) is what is written.
+#[test]
+fn progress_is_reported_as_it_goes() {
+    let dir = Scratch::new("progress");
+    let big = vec![7u8; (3 << 20) + 5];
+    let files: &[(&str, &[u8])] = &[("Data/a.esp", b"plugin"), ("Data/big.bsa", &big)];
+    let zip = dir.0.join("p.zip");
+    let sevenz = dir.0.join("p.7z");
+    make_zip(&zip, files, zip::CompressionMethod::Deflated);
+    make_7z(&sevenz, files);
+    let wanted = vec![
+        ("data/A.esp".to_owned(), "a.esp".to_owned()),
+        ("Data/big.bsa".to_owned(), "big.bsa".to_owned()),
+        ("Data/a.esp".to_owned(), "copy/a.esp".to_owned()),
+        ("Data/none.esp".to_owned(), "none.esp".to_owned()),
+    ];
+    for (i, archive) in [zip, sevenz].iter().enumerate() {
+        let (files_wanted, bytes_wanted) = wanted_size(&list(archive).unwrap(), &wanted);
+        assert_eq!(files_wanted, 3);
+        assert_eq!(bytes_wanted, 6 + 6 + big.len() as u64);
+        let mut seen = Vec::new();
+        let to = dir.0.join(format!("out{i}"));
+        extract_with(archive, &wanted, &to, Limits::default(), &mut |p| {
+            seen.push(p)
+        })
+        .unwrap();
+        let last = *seen.last().unwrap();
+        assert_eq!(
+            last,
+            Progress {
+                files: 3,
+                files_total: 3,
+                bytes: bytes_wanted,
+                bytes_total: bytes_wanted,
+                read: 0,
+                saved: 3,
+                saving: 3,
+            }
+        );
+        assert_eq!(
+            seen[0].files, 0,
+            "a first report as the unpacking starts: {seen:?}"
+        );
+        assert!(seen
+            .iter()
+            .all(|p| p.files_total == 3 && p.bytes_total == bytes_wanted));
+        // The plugin and its copy come first (the archive's order), then inside the large file
+        // at least one report per megabyte before it is done.
+        let inside = seen.iter().filter(|p| p.files == 2).count();
+        assert!(inside >= 3, "{seen:?}");
+        assert!(seen
+            .windows(2)
+            .all(|w| w[0].bytes <= w[1].bytes && w[0].files <= w[1].files));
+    }
+}
+
+/// A full drive is said as a full drive, never as a damaged archive, whichever side of the copy
+/// the system's "disk full" comes from.
+#[test]
+fn a_full_drive_is_not_a_damaged_archive() {
+    struct Full;
+    impl Read for Full {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+        }
+    }
+    let dir = Scratch::new("full");
+    let placer = Placer::new(&dir.0);
+    let e = write_whole(&placer, &dir.0.join("a.bsa"), &mut Full, 10, "a.bsa").unwrap_err();
+    assert_eq!(e.problem, Problem::NoRoom);
+    assert!(e.player_text().contains("not enough room on the drive"));
+    assert!(drive_full(&std::io::Error::from(
+        std::io::ErrorKind::QuotaExceeded
+    )));
+    // The systems' own codes: ENOSPC (28) on Linux and macOS, ERROR_DISK_FULL (112) on Windows.
+    #[cfg(unix)]
+    assert!(drive_full(&std::io::Error::from_raw_os_error(28)));
+    #[cfg(windows)]
+    assert!(drive_full(&std::io::Error::from_raw_os_error(112)));
+    assert_eq!(
+        io(
+            &dir.0,
+            std::io::Error::from_raw_os_error(if cfg!(windows) { 112 } else { 28 })
+        )
+        .problem,
+        Problem::NoRoom
+    );
+    // Nothing left behind, not even the temporary name.
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+}
+
+/// What a 7z decodes is capped apart from what is written: a small file after a big one in a
+/// solid block installs with the written total far below the decoded bytes (the front end lowers
+/// only the written total, to the room on the drive), and only a low decode cap refuses it. The
+/// big file read through on the way is reported as read past, before the first file is written.
+#[test]
+fn decoding_is_capped_apart_from_writing() {
+    let dir = Scratch::new("decode-cap");
+    let big = vec![0u8; 3 << 20];
+    let solid = dir.0.join("solid.7z");
+    make_7z(&solid, &[("pad.bin", &big), ("Data/a.esp", b"plugin")]);
+    let wanted = vec![("Data/a.esp".to_owned(), "a.esp".to_owned())];
+    let mut seen = Vec::new();
+    let written = Limits {
+        total: 100,
+        ..Limits::default()
+    };
+    let done = extract_with(&solid, &wanted, &dir.0.join("out"), written, &mut |p| {
+        seen.push(p)
+    })
+    .unwrap();
+    assert_eq!(done.written.len(), 1);
+    assert_eq!(
+        std::fs::read(dir.0.join("out").join("a.esp")).unwrap(),
+        b"plugin"
+    );
+    let before_first: Vec<&Progress> = seen.iter().filter(|p| p.files == 0).collect();
+    assert!(before_first.len() >= 3, "{seen:?}");
+    assert!(before_first.iter().any(|p| p.read >= 2 << 20), "{seen:?}");
+    let decode = Limits {
+        decode: 1 << 20,
+        ..Limits::default()
+    };
+    let error = extract(&solid, &wanted, &dir.0.join("out2"), decode).unwrap_err();
+    assert_eq!(error.problem, Problem::TooBig, "{error}");
+    assert!(error.detail.contains("to decode"), "{error}");
+    assert!(!dir.0.join("out2").exists());
+}
+
+/// The destination folder removed while unpacking (another window clearing it): never made again;
+/// the unpacking stops with an error, and nothing is left where it was.
+#[test]
+fn a_destination_removed_while_unpacking_is_never_made_again() {
+    let dir = Scratch::new("root-gone");
+    let files: &[(&str, &[u8])] = &[
+        ("Data/Textures/a.dds", b"a"),
+        ("Data/Textures/b.dds", b"b"),
+        ("Data/Meshes/c.nif", b"c"),
+        ("Data/d.esp", b"d"),
+    ];
+    let zip = dir.0.join("m.zip");
+    let sevenz = dir.0.join("m.7z");
+    make_zip(&zip, files, zip::CompressionMethod::Stored);
+    make_7z(&sevenz, files);
+    let wanted: Vec<(String, String)> = files
+        .iter()
+        .map(|(n, _)| (n.to_string(), n.trim_start_matches("Data/").to_owned()))
+        .collect();
+    for (i, archive) in [zip, sevenz].iter().enumerate() {
+        let to = dir.0.join(format!("out{i}"));
+        std::fs::create_dir_all(&to).unwrap();
+        let error = extract_with(archive, &wanted, &to, Limits::default(), &mut |p| {
+            if p.files == 1 {
+                let _ = std::fs::remove_dir_all(&to);
+            }
+        })
+        .unwrap_err();
+        assert!(!to.exists(), "{error}");
+    }
+}
+
+/// What each way of syncing the unpacked files costs, on scratch files only: about 2,000 small
+/// files and a few large ones, unpacked with each [`SyncMode`] (ABCDDCBA, three rounds). Run by
+/// hand:
+/// `cargo test -p mod-archive syncing_cost -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn syncing_cost() {
+    let dir = Scratch::new("sync-cost");
+    let mut files: Vec<(String, Vec<u8>)> = (0..2000u32)
+        .map(|i| {
+            let size = 1024 + (i as usize * 37) % 15_000;
+            (
+                format!("Data/Textures/set{}/t{i}.dds", i % 20),
+                (0..size).map(|b| (b as u32 ^ i) as u8).collect(),
+            )
+        })
+        .collect();
+    for i in 0..3u32 {
+        files.push((
+            format!("Data/big{i}.bsa"),
+            (0..(64usize << 20))
+                .map(|b| (b as u32 >> 3 ^ i) as u8)
+                .collect(),
+        ));
+    }
+    let named: Vec<(&str, &[u8])> = files.iter().map(|(n, d)| (n.as_str(), &d[..])).collect();
+    let archive = dir.0.join("cost.zip");
+    make_zip(&archive, &named, zip::CompressionMethod::Stored);
+    let wanted: Vec<(String, String)> = files
+        .iter()
+        .map(|(n, _)| (n.clone(), n.trim_start_matches("Data/").to_owned()))
+        .collect();
+    let bytes: usize = files.iter().map(|(_, d)| d.len()).sum();
+    println!("{} files, {} MB", files.len(), bytes >> 20);
+    let modes = [
+        SyncMode::Off,
+        SyncMode::EachFile,
+        SyncMode::PassAll,
+        SyncMode::PassBigAndPlugins,
+    ];
+    let mut times = vec![Vec::new(); modes.len()];
+    for round in 0..3 {
+        // Each mode twice a round, the second half in the reverse order (ABCDDCBA).
+        let order: Vec<usize> = (0..modes.len()).chain((0..modes.len()).rev()).collect();
+        for (n, &m) in order.iter().enumerate() {
+            SYNC_MODE.with(|s| s.set(modes[m]));
+            let to = dir.0.join(format!("out-{round}-{n}"));
+            let _ = std::fs::remove_dir_all(&to);
+            let started = std::time::Instant::now();
+            extract(&archive, &wanted, &to, Limits::default()).unwrap();
+            let took = started.elapsed().as_secs_f64();
+            times[m].push(took);
+            println!("round {round} {:?}: {took:.2} s", modes[m]);
+            std::fs::remove_dir_all(&to).unwrap();
+        }
+    }
+    SYNC_MODE.with(|s| s.set(SyncMode::USED));
+    let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
+    let base = mean(&times[0]);
+    for (m, mode) in modes.iter().enumerate() {
+        let t = mean(&times[m]);
+        println!(
+            "{mode:?}: mean {t:.2} s, {:+.0}% against Off ({:?})",
+            (t / base - 1.0) * 100.0,
+            times[m]
+                .iter()
+                .map(|t| format!("{t:.2}"))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Which files the end-of-unpacking pass syncs: every one on Linux and macOS; on Windows the
+/// plugins and archives whatever their size (any case) and every file of 1 MB and more.
+#[test]
+fn the_sync_pass_takes_plugins_and_big_files() {
+    let dir = Scratch::new("sync-pick");
+    let write = |name: &str, size: usize| {
+        let path = dir.0.join(name);
+        std::fs::write(&path, vec![1u8; size]).unwrap();
+        path
+    };
+    let plugin = write("Small.ESP", 10);
+    let master = write("m.esm", 10);
+    let archive = write("a.Bsa", 10);
+    let texture = write("t.dds", 10);
+    let big = write("big.dds", SYNC_BIG as usize);
+    let some = SyncMode::PassBigAndPlugins;
+    for p in [&plugin, &master, &archive, &big] {
+        assert!(pass_syncs(some, p), "{}", p.display());
+    }
+    assert!(!pass_syncs(some, &texture));
+    assert!(pass_syncs(SyncMode::PassAll, &texture));
+    assert!(!pass_syncs(SyncMode::Off, &plugin) && !pass_syncs(SyncMode::EachFile, &plugin));
+    let used_on_this_system = if cfg!(windows) {
+        SyncMode::PassBigAndPlugins
+    } else {
+        SyncMode::PassAll
+    };
+    assert_eq!(SyncMode::USED, used_on_this_system);
 }
