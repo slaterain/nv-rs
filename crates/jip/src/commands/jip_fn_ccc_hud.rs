@@ -414,10 +414,10 @@ fn ccc_on_load(e: &mut Engine, w: &[u32]) -> Ret {
         }
         let message = nvse::table::guest_str(e, OLD_VERSION);
         let ok = nvse::table::guest_str(e, b"OK");
-        e.call(
-            SHOW_MESSAGE_BOX,
-            &[message, 0, 0, MESSAGE_BOX_CALLBACK, 0, 0x17, 0, 0, ok, 0],
-        );
+        // `ShowMessageBox` is variadic (its translation reads the words it is given), as
+        // `jip_fn_ui`'s call.
+        let words = [message, 0, 0, MESSAGE_BOX_CALLBACK, 0, 0x17, 0, 0, ok, 0];
+        e.call(SHOW_MESSAGE_BOX, &words);
         return handled(false);
     }
     read_avatars(e);
