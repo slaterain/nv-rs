@@ -14,6 +14,20 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GE",
     },
+    // O18 (switch uNPCPerks): BGSEntryPoint::HandleEntryPoint 005e58f0, a teammate's entries
+    // asked of the player: JIP's 8-byte nop keeps the teammate.
+    Entry {
+        addr: 0x005e_592f,
+        owners: JIP,
+        step: "3.9-GE",
+    },
+    // O18: the weapon damage per second 00645380, entry point 0 only when the caller asks for
+    // perks: JIP's 4-byte nop runs it always.
+    Entry {
+        addr: 0x0064_570f,
+        owners: JIP,
+        step: "3.9-GE",
+    },
     // G22 (AI Z fix, credits Stewie): PathSmootherPOV 006b0f40, the start direction's z set to
     // 0 (fldz; fstp): removed.
     Entry {
@@ -45,6 +59,13 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G22: 00881860, the move direction's z set to 0: removed.
     Entry {
         addr: 0x0088_1a9c,
+        owners: JIP,
+        step: "3.9-GE",
+    },
+    // O18: Actor::HitMe 0089a760, the kill effect's weapon (the player's current one): JIP's 32
+    // bytes take the attacker's.
+    Entry {
+        addr: 0x0089_b455,
         owners: JIP,
         step: "3.9-GE",
     },
@@ -106,4 +127,12 @@ pub(in super::super) const SITES: &[Entry] = &[
 ];
 
 /// The group's wraps.
-pub(in super::super) const WRAPS: &[Entry] = &[];
+pub(in super::super) const WRAPS: &[Entry] = &[
+    // O18 (switch uNPCPerks): Actor::SetPlayerTeammate 008bca90, rewritten by JIP's
+    // SetPlayerTeammateHook (no Rust code calls it directly).
+    Entry {
+        addr: 0x008b_ca90,
+        owners: JIP,
+        step: "3.9-GE",
+    },
+];

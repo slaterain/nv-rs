@@ -724,6 +724,272 @@ struct Extra {
     cutout: bool,
     /// The lit square after the depth-only clear ([`AFTER`]).
     after_clear: bool,
+    /// One of [`CABLES`] (its buffer `CABLE + n`).
+    cable: Option<usize>,
+    /// The ribbon cable ([`RIBBON`]).
+    ribbon: bool,
+    /// A wire and a pipe in one geometry ([`MIXED`]).
+    mixed: bool,
+    /// ... drawn as a cut-out (with the alpha test, its texture opaque where it is read).
+    mixed_cut: bool,
+    /// The ribbon and a round wire in one cut-out geometry ([`RIBBON_ROUND`]).
+    ribbon_round: bool,
+    /// The half-opaque cut-out strip ([`FENCE`]).
+    fence: bool,
+    /// One of [`CABLES`] moved by x.
+    cable_moved: Option<(usize, f32)>,
+    /// The plate under the cable 120 high ([`PLATE`]).
+    plate: bool,
+    /// The tubes drawn indexed ([`TUBES`]): which three the index buffer names (written into it
+    /// when it changes).
+    tubes: Option<MixedIndexed>,
+    /// The wire and pipe drawn as an indexed strip ([`STRIP_VB`]).
+    strip: bool,
+    /// [`RIBBON_ROUND`] drawn without the alpha test (its strip opaque).
+    ribbon_round_opaque: bool,
+    /// [`RIBBON_ROUND`] drawn with a texture too opaque for a cable ([`STRIP_TEX`]) and the alpha test.
+    ribbon_round_textured: bool,
+    /// The cable of `cable` written again (the same bytes) before it is drawn.
+    rewrite_cable: bool,
+    /// The pipe of [`CABLES`] drawn after `cable` (another buffer of the same layout and count).
+    pipe_after: bool,
+    /// A buffer the game releases at the frame's start (`Cmd::Destroy`), before anything is drawn.
+    destroy: Option<u32>,
+    /// Other buffers (and their triangle counts) drawn far off (at x -3000, y 3000): new
+    /// geometries whose shadows fall nowhere the tests look.
+    also: [Option<(u32, u32)>; 2],
+}
+
+/// What the index buffer of [`TUBES`] names.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum MixedIndexed {
+    /// The fine wire, the second wire and the pipe: cables and a pipe.
+    TwoWiresAPipe,
+    /// The fine wire and both pipes: a longer list of what is not cable.
+    AWireTwoPipes,
+}
+
+impl MixedIndexed {
+    fn indices(self) -> Vec<u16> {
+        let tube = |n: u32| (n * TUBE_CORNERS..(n + 1) * TUBE_CORNERS).map(|i| i as u16);
+        match self {
+            MixedIndexed::TwoWiresAPipe => tube(0).chain(tube(1)).chain(tube(2)).collect(),
+            MixedIndexed::AWireTwoPipes => tube(0).chain(tube(2)).chain(tube(3)).collect(),
+        }
+    }
+}
+
+/// A buffer `handle` of `bytes` (an index buffer of 16-bit indices when `index`).
+fn bytes_buffer(b: &mut WgpuBackend, handle: u32, index: bool, bytes: &[u8]) {
+    run(
+        b,
+        Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer: handle,
+            index,
+            length: bytes.len() as u32,
+            usage: 0,
+            format: if index { 101 } else { 0 },
+            pool: 0,
+        },
+    );
+    run(
+        b,
+        Cmd::UploadBuffer {
+            buffer: handle,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(bytes),
+        },
+    );
+}
+
+/// A texture 8 texels across, 1 high, with alpha `alpha(i)` at texel i.
+fn alpha_texture(b: &mut WgpuBackend, texture: u32, alpha: impl Fn(u8) -> u8) {
+    let levels = words(&[texture + 1]);
+    run(
+        b,
+        Cmd::CreateTexture {
+            device: DEVICE,
+            texture,
+            levels: Data::Bytes(&levels),
+            width: 8,
+            height: 1,
+            usage: 0,
+            format: A8R8G8B8,
+            pool: 1,
+        },
+    );
+    let texels: Vec<u8> = (0..8).flat_map(|i| [0u8, 0, 0, alpha(i)]).collect();
+    run(
+        b,
+        Cmd::UploadSurface {
+            surface: texture + 1,
+            row: 32,
+            rows: 1,
+            data: Data::Bytes(&texels),
+        },
+    );
+}
+
+/// Draws `count` triangles of `buffer` (position and texture coordinate, 24 bytes a vertex) with
+/// the cut-out shaders, `texture` and the alpha test.
+fn draw_cut(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32) {
+    draw_textured(b, buffer, texture, count, true);
+}
+
+/// [`draw_cut`] with the alpha test on (`test`) or off.
+fn draw_textured(b: &mut WgpuBackend, buffer: u32, texture: u32, count: u32, test: bool) {
+    set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
+    run(
+        b,
+        Cmd::SetTexture {
+            device: DEVICE,
+            sampler: 0,
+            texture,
+        },
+    );
+    state(b, ALPHATESTENABLE, u32::from(test));
+    state(b, ALPHAREF, 128);
+    state(b, ALPHAFUNC, 7);
+    run(
+        b,
+        Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer,
+            offset: 0,
+            stride: 24,
+        },
+    );
+    run(
+        b,
+        Cmd::DrawPrimitive {
+            device: DEVICE,
+            kind: 4,
+            start: 0,
+            count,
+        },
+    );
+    state(b, ALPHATESTENABLE, 0);
+    set_shaders(b, VS, LIT_PS, DECL);
+}
+
+/// The ribbon of [`RIBBON`]'s corners (position, w, texture coordinate): 16 quads along y.
+fn ribbon_corners() -> Vec<[f32; 6]> {
+    let corner = |x: f32, y: f32| [x, y, 300.0, 1.0, (x - 115.0) / 20.0, (y + 100.0) / 800.0];
+    let mut v = Vec::new();
+    for i in 0..16 {
+        let (y0, y1) = (-100.0 + 50.0 * i as f32, -50.0 + 50.0 * i as f32);
+        let (a, bb, c, d) = (
+            corner(115.0, y0),
+            corner(135.0, y0),
+            corner(135.0, y1),
+            corner(115.0, y1),
+        );
+        v.extend([a, bb, c, a, c, d]);
+    }
+    v
+}
+
+/// A tube's rings (seven corners each, the seam twice) as an indexed strip's vertices and indices
+/// (numbered from `first`), the bands joined by degenerate triangles.
+fn tube_strip((x, h, r): (f32, f32, f32), first: u16) -> (Vec<[f32; 3]>, Vec<u16>) {
+    let ring = |i: usize, s: usize| {
+        let a = s as f32 * std::f32::consts::TAU / 6.0;
+        [x + r * a.cos(), -100.0 + 50.0 * i as f32, h + r * a.sin()]
+    };
+    let mut v = Vec::new();
+    for i in 0..=16 {
+        for s in 0..=6 {
+            v.push(ring(i, s));
+        }
+    }
+    let at = |i: usize, s: usize| first + (i * 7 + s) as u16;
+    let mut idx: Vec<u16> = Vec::new();
+    for i in 0..16 {
+        if i > 0 {
+            // Joined: the last corner again, the next band's first (an even count before each
+            // band, so every band starts on an even triangle).
+            let last = *idx.last().expect("a band before");
+            idx.extend([last, at(i, 0)]);
+        }
+        for s in 0..=6 {
+            idx.extend([at(i, s), at(i + 1, s)]);
+        }
+    }
+    (v, idx)
+}
+
+/// Round cables along y (from y -100 to 700, six sides, rings 50 apart): (x, height, radius). Each
+/// one's shadow falls on the ground at x -100 (the sun throws it 0.75 x its height toward -x).
+const CABLES: [(f32, f32, f32); 4] = [
+    // A fine wire 300 high: its shadow is wider than it (the sun's own width) and faint.
+    (125.0, 300.0, 0.4),
+    // A cable 3 wide, 120 high and 2000 high.
+    (-10.0, 120.0, 1.5),
+    (1400.0, 2000.0, 1.5),
+    // A pipe 40 wide: no cable, a full shadow.
+    (-25.0, 100.0, 20.0),
+];
+const CABLE: u32 = 0x15A0;
+/// A ribbon cable as the game draws its telegraph lines: a flat strip 20 wide (x 115 to 135, 300
+/// high, y -100 to 700) drawn with the alpha test, its texture 8 texels across with one opaque
+/// (the cable, 2.5 units of the 20); its shadow falls at x -100 (the strip's middle). Its
+/// buffer (position and texture coordinate) and texture.
+const RIBBON: u32 = 0x15B0;
+const RIBBON_TEX: u32 = 0x15C0;
+/// One geometry of the fine wire of [`CABLES`] (its shadow at x -100) and a pipe 40 wide, 100 high at
+/// x 35 (its shadow at x -40), as a telegraph line's poles and wires are one.
+const MIXED: u32 = 0x15D0;
+const MIXED_CUT: u32 = 0x15E0;
+/// One cut-out geometry of the ribbon of [`RIBBON`] and a round wire 0.8 wide (thinner than the
+/// coverage maps' texel), 300 high at x 185 (its shadow at x -40), the wire's texture coordinate
+/// where the ribbon's texture is opaque.
+const RIBBON_ROUND: u32 = 0x15F0;
+/// A cut-out strip 60 wide (x 1395 to 1455), 2000 high, 1000 long (y -150 to 850): a ribbon's shape,
+/// but its texture half opaque (stripes 7.5 units wide), as a fence's or a grille's; its shadow
+/// at x -130 to -70. High up, so drawn as a cable it would cast a faint wash (the sun's width spreads
+/// it), as a cut-out its full stripes. Its buffer and texture.
+const FENCE: u32 = 0x1600;
+const FENCE_TEX: u32 = 0x1610;
+/// A texture opaque but for one texel in eight (mean alpha 0.875: no cable).
+const STRIP_TEX: u32 = 0x1620;
+/// A lit plate 5 units under the cable 120 high of [`CABLES`] (x -40 to 10, y 250 to 350, z 115).
+const PLATE: u32 = 0x1630;
+/// Tubes for the indexed draws: ten unused vertices, then the fine wire of [`CABLES`] (its shadow
+/// at x -100), a second fine wire at x 400 (its shadow at x 175), the pipe of [`MIXED`] (its shadow
+/// at x -40) and a second pipe 40 wide, 100 high at x 250 (its shadow about x 175); each as a list
+/// of 576 corners. Its index buffer (16-bit) names three of them ([`MixedIndexed`]).
+const TUBES: u32 = 0x1640;
+const TUBES_IB: u32 = 0x1650;
+/// The fine wire and the pipe of [`MIXED`] as one indexed strip (rings of seven corners, the bands
+/// joined by degenerate triangles), seven unused vertices first; its index buffer.
+const STRIP_VB: u32 = 0x1660;
+const STRIP_IB: u32 = 0x1670;
+const TUBE_CORNERS: u32 = 16 * 6 * 2 * 3;
+const PADDING: u32 = 10;
+const STRIP_PADDING: u32 = 7;
+
+/// [`CABLES`]' corners as triangles.
+fn cable_corners((x, h, r): (f32, f32, f32)) -> Vec<[f32; 3]> {
+    let ring = |i: usize, s: usize| {
+        let a = s as f32 * std::f32::consts::TAU / 6.0;
+        [x + r * a.cos(), -100.0 + 50.0 * i as f32, h + r * a.sin()]
+    };
+    let mut v = Vec::new();
+    for i in 0..16 {
+        for s in 0..6 {
+            let (a0, a1, b0, b1) = (
+                ring(i, s),
+                ring(i, s + 1),
+                ring(i + 1, s),
+                ring(i + 1, s + 1),
+            );
+            v.extend([a0, b0, a1, a1, b0, b1]);
+        }
+    }
+    v
 }
 
 /// The camera's `ModelViewProj` with the object moved by (x, y) in the world first.
@@ -775,6 +1041,100 @@ fn state(b: &mut WgpuBackend, state: u32, value: u32) {
 /// texture, made once on a backend.
 fn extras(b: &mut WgpuBackend) {
     buffer(b, MOVING_BOX, &box_corners(0.0, 0.0, 30.0, 60.0));
+    for (n, c) in CABLES.iter().enumerate() {
+        buffer(b, CABLE + n as u32, &cable_corners(*c));
+    }
+    let mut mixed = cable_corners(CABLES[0]);
+    mixed.extend(cable_corners((35.0, 100.0, 20.0)));
+    buffer(b, MIXED, &mixed);
+    // The same with a texture coordinate where the ribbon's texture is opaque.
+    let v: Vec<f32> = mixed
+        .iter()
+        .flat_map(|p| [p[0], p[1], p[2], 1.0, 3.5 / 8.0, 0.5])
+        .collect();
+    let bytes = floats(&v);
+    run(
+        b,
+        Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer: MIXED_CUT,
+            index: false,
+            length: bytes.len() as u32,
+            usage: 0,
+            format: 0,
+            pool: 0,
+        },
+    );
+    run(
+        b,
+        Cmd::UploadBuffer {
+            buffer: MIXED_CUT,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(&bytes),
+        },
+    );
+    // The ribbon: 16 quads along y, u across x, v along y.
+    let corner = |x: f32, y: f32| [x, y, 300.0, 1.0, (x - 115.0) / 20.0, (y + 100.0) / 800.0];
+    let mut v = Vec::new();
+    for i in 0..16 {
+        let (y0, y1) = (-100.0 + 50.0 * i as f32, -50.0 + 50.0 * i as f32);
+        let (a, bb, c, d) = (
+            corner(115.0, y0),
+            corner(135.0, y0),
+            corner(135.0, y1),
+            corner(115.0, y1),
+        );
+        v.extend([a, bb, c, a, c, d].iter().flatten().copied());
+    }
+    let bytes = floats(&v);
+    run(
+        b,
+        Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer: RIBBON,
+            index: false,
+            length: bytes.len() as u32,
+            usage: 0,
+            format: 0,
+            pool: 0,
+        },
+    );
+    run(
+        b,
+        Cmd::UploadBuffer {
+            buffer: RIBBON,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(&bytes),
+        },
+    );
+    let levels = words(&[RIBBON_TEX + 1]);
+    run(
+        b,
+        Cmd::CreateTexture {
+            device: DEVICE,
+            texture: RIBBON_TEX,
+            levels: Data::Bytes(&levels),
+            width: 8,
+            height: 1,
+            usage: 0,
+            format: A8R8G8B8,
+            pool: 1,
+        },
+    );
+    let texels: Vec<u8> = (0..8)
+        .flat_map(|i| [0u8, 0, 0, if i == 3 { 255 } else { 0 }])
+        .collect();
+    run(
+        b,
+        Cmd::UploadSurface {
+            surface: RIBBON_TEX + 1,
+            row: 32,
+            rows: 1,
+            data: Data::Bytes(&texels),
+        },
+    );
     // In the plane y = 150, x -52 to -32, z 2 to 26 (about five pixels a side): every point's way
     // to the sun goes through the still box (x -30 to 30, 60 high).
     let (x0, x1, z0, z1) = (-52.0, -32.0, 2.0, 26.0);
@@ -898,6 +1258,117 @@ fn extras(b: &mut WgpuBackend) {
             elements: Data::Bytes(&decl),
         },
     );
+    // The ribbon and a round wire in one cut-out geometry.
+    let mut v = ribbon_corners();
+    v.extend(
+        cable_corners((185.0, 300.0, 0.4))
+            .iter()
+            .map(|p| [p[0], p[1], p[2], 1.0, 3.5 / 8.0, 0.5]),
+    );
+    let bytes = floats(&v.concat());
+    bytes_buffer(b, RIBBON_ROUND, false, &bytes);
+    // The half-opaque strip: 40 quads along y, u across x.
+    let corner = |x: f32, y: f32| [x, y, 2000.0, 1.0, (x - 1395.0) / 60.0, (y + 150.0) / 1000.0];
+    let mut v = Vec::new();
+    for i in 0..40 {
+        let (y0, y1) = (-150.0 + 25.0 * i as f32, -125.0 + 25.0 * i as f32);
+        let (a, bb, c, d) = (
+            corner(1395.0, y0),
+            corner(1455.0, y0),
+            corner(1455.0, y1),
+            corner(1395.0, y1),
+        );
+        v.extend([a, bb, c, a, c, d]);
+    }
+    bytes_buffer(b, FENCE, false, &floats(&v.concat()));
+    alpha_texture(b, FENCE_TEX, |i| if i % 2 == 0 { 255 } else { 0 });
+    // Opaque but for texel 3 (where the round wire of [`RIBBON_ROUND`] reads it): too opaque for
+    // a cable, its strip cast in wide opaque blocks.
+    alpha_texture(b, STRIP_TEX, |i| if i == 3 { 0 } else { 255 });
+    let (x0, x1, y0, y1, z) = (-40.0, 10.0, 250.0, 350.0, 115.0);
+    buffer(
+        b,
+        PLATE,
+        &[
+            [x0, y0, z],
+            [x1, y0, z],
+            [x1, y1, z],
+            [x0, y0, z],
+            [x1, y1, z],
+            [x0, y1, z],
+        ],
+    );
+    // The tubes, ten unused corners first.
+    let mut tubes = vec![[0.0, 0.0, -10_000.0]; PADDING as usize];
+    for t in [
+        CABLES[0],
+        (400.0, 300.0, 0.4),
+        (35.0, 100.0, 20.0),
+        (250.0, 100.0, 20.0),
+    ] {
+        tubes.extend(cable_corners(t));
+    }
+    buffer(b, TUBES, &tubes);
+    // (Room for either list: both are three tubes.)
+    let ib: Vec<u8> = MixedIndexed::TwoWiresAPipe
+        .indices()
+        .iter()
+        .flat_map(|i| i.to_le_bytes())
+        .collect();
+    bytes_buffer(b, TUBES_IB, true, &ib);
+    // The wire and the pipe as one strip.
+    let (mut sv, mut si) = tube_strip(CABLES[0], 0);
+    let (pv, pi) = tube_strip((35.0, 100.0, 20.0), sv.len() as u16);
+    let last = *si.last().expect("the wire's strip");
+    si.extend([last, pi[0]]);
+    si.extend(pi);
+    sv.extend(pv);
+    let mut padded = vec![[0.0, 0.0, -10_000.0]; STRIP_PADDING as usize];
+    padded.extend(sv);
+    buffer(b, STRIP_VB, &padded);
+    let ib: Vec<u8> = si.iter().flat_map(|i| i.to_le_bytes()).collect();
+    bytes_buffer(b, STRIP_IB, true, &ib);
+}
+
+/// The strip's index count ([`STRIP_IB`]).
+fn strip_indices() -> u32 {
+    let (_, w) = tube_strip(CABLES[0], 0);
+    let (_, p) = tube_strip((35.0, 100.0, 20.0), 0);
+    (w.len() + 2 + p.len()) as u32
+}
+
+/// Draws `count` primitives of kind `kind` from index buffer `ib` over vertex buffer `vb` (positions,
+/// 16 bytes a vertex) from base vertex `base`.
+fn draw_indexed(b: &mut WgpuBackend, vb: u32, ib: u32, kind: u32, base: i32, count: u32) {
+    run(
+        b,
+        Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: vb,
+            offset: 0,
+            stride: 16,
+        },
+    );
+    run(
+        b,
+        Cmd::SetIndices {
+            device: DEVICE,
+            buffer: ib,
+        },
+    );
+    run(
+        b,
+        Cmd::DrawIndexedPrimitive {
+            device: DEVICE,
+            kind,
+            base_vertex: base,
+            min_index: 0,
+            vertices: 4 * TUBE_CORNERS,
+            start_index: 0,
+            count,
+        },
+    );
 }
 
 const ALPHATESTENABLE: u32 = 15;
@@ -910,8 +1381,13 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
     extras(b);
     let (view, frame) = hook_words();
     let mut out = Vec::new();
+    // What the tubes' index buffer holds (made with the first list).
+    let mut tubes_written = Some(MixedIndexed::TwoWiresAPipe);
     for (f, e) in frames.iter().enumerate() {
         set_shaders(b, VS, LIT_PS, DECL);
+        if let Some(object) = e.destroy {
+            run(b, Cmd::Destroy { object });
+        }
         if words {
             for (state, m) in [
                 (sun_shadow::VIEW_STATE, view),
@@ -935,6 +1411,11 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
         if e.still_box {
             draw(b, BOX, 10);
         }
+        for (buffer, triangles) in e.also.iter().flatten() {
+            set_mvp(b, model_view_proj_at(-3000.0, 3000.0));
+            draw(b, *buffer, *triangles);
+            set_mvp(b, model_view_proj());
+        }
         if let Some((x, y)) = e.moving_box {
             set_mvp(b, model_view_proj_at(x, y));
             draw(b, MOVING_BOX, 10);
@@ -944,6 +1425,152 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
             set_mvp(b, model_view_proj_at(x, y));
             draw(b, MOVING_BOX, 10);
             set_mvp(b, model_view_proj());
+        }
+        if e.ribbon {
+            set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
+            run(
+                b,
+                Cmd::SetTexture {
+                    device: DEVICE,
+                    sampler: 0,
+                    texture: RIBBON_TEX,
+                },
+            );
+            state(b, ALPHATESTENABLE, 1);
+            state(b, ALPHAREF, 128);
+            state(b, ALPHAFUNC, 7);
+            run(
+                b,
+                Cmd::SetStreamSource {
+                    device: DEVICE,
+                    stream: 0,
+                    buffer: RIBBON,
+                    offset: 0,
+                    stride: 24,
+                },
+            );
+            run(
+                b,
+                Cmd::DrawPrimitive {
+                    device: DEVICE,
+                    kind: 4,
+                    start: 0,
+                    count: 32,
+                },
+            );
+            state(b, ALPHATESTENABLE, 0);
+            set_shaders(b, VS, LIT_PS, DECL);
+        }
+        if e.mixed {
+            draw(b, MIXED, 2 * 16 * 6 * 2);
+        }
+        if e.mixed_cut {
+            set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
+            run(
+                b,
+                Cmd::SetTexture {
+                    device: DEVICE,
+                    sampler: 0,
+                    texture: RIBBON_TEX,
+                },
+            );
+            state(b, ALPHATESTENABLE, 1);
+            state(b, ALPHAREF, 128);
+            state(b, ALPHAFUNC, 7);
+            run(
+                b,
+                Cmd::SetStreamSource {
+                    device: DEVICE,
+                    stream: 0,
+                    buffer: MIXED_CUT,
+                    offset: 0,
+                    stride: 24,
+                },
+            );
+            run(
+                b,
+                Cmd::DrawPrimitive {
+                    device: DEVICE,
+                    kind: 4,
+                    start: 0,
+                    count: 2 * 16 * 6 * 2,
+                },
+            );
+            state(b, ALPHATESTENABLE, 0);
+            set_shaders(b, VS, LIT_PS, DECL);
+        }
+        if let Some(n) = e.cable {
+            if e.rewrite_cable {
+                let v: Vec<f32> = cable_corners(CABLES[n])
+                    .iter()
+                    .flat_map(|c| [c[0], c[1], c[2], 1.0])
+                    .collect();
+                run(
+                    b,
+                    Cmd::UploadBuffer {
+                        buffer: CABLE + n as u32,
+                        offset: 0,
+                        flags: 0,
+                        data: Data::Bytes(&floats(&v)),
+                    },
+                );
+            }
+            draw(b, CABLE + n as u32, 16 * 6 * 2);
+        }
+        if e.pipe_after {
+            draw(b, CABLE + 3, 16 * 6 * 2);
+        }
+        if e.ribbon_round {
+            draw_cut(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2);
+        }
+        if e.ribbon_round_opaque {
+            draw_textured(b, RIBBON_ROUND, RIBBON_TEX, 32 + 16 * 6 * 2, false);
+        }
+        if e.ribbon_round_textured {
+            draw_cut(b, RIBBON_ROUND, STRIP_TEX, 32 + 16 * 6 * 2);
+        }
+        if e.fence {
+            draw_cut(b, FENCE, FENCE_TEX, 80);
+        }
+        if let Some((n, x)) = e.cable_moved {
+            set_mvp(b, model_view_proj_at(x, 0.0));
+            draw(b, CABLE + n as u32, 16 * 6 * 2);
+            set_mvp(b, model_view_proj());
+        }
+        if e.plate {
+            draw(b, PLATE, 2);
+        }
+        if let Some(which) = e.tubes {
+            // The game writes new indices into the same buffer when the list changes.
+            if tubes_written != Some(which) {
+                let ib: Vec<u8> = which
+                    .indices()
+                    .iter()
+                    .flat_map(|i| i.to_le_bytes())
+                    .collect();
+                run(
+                    b,
+                    Cmd::UploadBuffer {
+                        buffer: TUBES_IB,
+                        offset: 0,
+                        flags: 0,
+                        data: Data::Bytes(&ib),
+                    },
+                );
+                tubes_written = Some(which);
+            }
+            // Three tubes of 192 triangles.
+            draw_indexed(b, TUBES, TUBES_IB, 4, PADDING as i32, TUBE_CORNERS);
+        }
+        if e.strip {
+            draw_indexed(
+                b,
+                STRIP_VB,
+                STRIP_IB,
+                5,
+                STRIP_PADDING as i32,
+                strip_indices() - 2,
+            );
         }
         if e.cutout {
             set_shaders(b, CUT_VS, CUT_PS, CUT_DECL);
@@ -1264,6 +1891,205 @@ fn in_the_lighting_a_shadow_takes_away_the_sun_and_nothing_else() {
     }
 }
 
+/// The darkest red along the ground across x -112 to -88 at y 300 (where every one of
+/// [`CABLES`]' shadows falls, a pixel or two wide) in a frame.
+fn darkest_under_the_cables(px: &[[u8; 4]]) -> u8 {
+    (0..=24)
+        .map(|i| at(px, pixel([-112.0 + f64::from(i), 300.0, 0.0]))[2])
+        .min()
+        .expect("pixels")
+}
+
+/// A frame's pixels (B, G, R, A).
+type Pixels = Vec<[u8; 4]>;
+
+/// The third frame of a sequence drawing cable `n` of [`CABLES`] alone, off and on.
+fn cable_pictures(samples: u32, n: usize) -> Option<(Pixels, Pixels)> {
+    let frames = [Extra {
+        cable: Some(n),
+        ..Extra::default()
+    }; 3];
+    let off = lit_sequence_picture(samples, false, &frames)?;
+    let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+    Some((off[2].clone(), on[2].clone()))
+}
+
+/// The lit ground's red (ambient 0.2 and the sun's 0.5, both exactly representable after the
+/// sum: 0.7 x 255 = 178.5 is not, so the ground is read from the frame) and the ambient alone
+/// (the sun taken away: 0.2 x 255 = 51).
+const AMBIENT_RED: u8 = 51;
+
+/// A thin caster (a wire 0.8 wide, 300 high) darkens the ground by about its real share of the
+/// sun, a faint band; nowhere a full shadow; the ground beside the band as without the shadows.
+#[test]
+fn a_wire_casts_a_faint_band_not_a_full_shadow() {
+    for samples in [1, 4] {
+        let Some((off, on)) = cable_pictures(samples, 0) else {
+            return;
+        };
+        let lit = darkest_under_the_cables(&off);
+        let dark = darkest_under_the_cables(&on);
+        // Taken: about a fifth of the sun (0.8 over a band about 4 wide), never all of it.
+        let taken = f32::from(lit - dark) / f32::from(lit - AMBIENT_RED);
+        eprintln!("the wire: {dark} of {lit} (ambient {AMBIENT_RED}): {taken} of the sun taken ({samples})");
+        assert!(
+            (0.04..0.5).contains(&taken),
+            "the wire takes {taken} of the sun ({dark} of {lit}, {samples})"
+        );
+        for x in [-140.0, -60.0] {
+            let p = pixel([x, 300.0, 0.0]);
+            assert_eq!(
+                at(&on, p),
+                at(&off, p),
+                "beside the band at x {x} ({samples})"
+            );
+        }
+    }
+}
+
+/// A cable's shadow is fainter the higher it hangs over the ground (the sun's own width spreads
+/// it): the same cable 120 and 2000 units up, both shadows on the same ground.
+#[test]
+fn a_cables_shadow_fades_with_its_height() {
+    for samples in [1, 4] {
+        let Some((off, low)) = cable_pictures(samples, 1) else {
+            return;
+        };
+        let (_, high) = cable_pictures(samples, 2).expect("the adapter");
+        let lit = darkest_under_the_cables(&off);
+        let low = lit - darkest_under_the_cables(&low);
+        let high = lit - darkest_under_the_cables(&high);
+        eprintln!("taken by the cable 120 high {low}, 2000 high {high}, of {lit} ({samples})");
+        assert!(high > 0, "the high cable casts ({samples})");
+        assert!(
+            f32::from(high) < 0.75 * f32::from(low),
+            "high {high} against low {low} ({samples})"
+        );
+        // Not a full shadow even low down: the cable is narrower than the band the map shows.
+        assert!(lit - low > AMBIENT_RED, "low {low} of {lit} ({samples})");
+    }
+}
+
+/// A caster wider than any cable (a pipe 40 wide) casts the full shadow it always did: the sun
+/// taken away exactly in its middle.
+#[test]
+fn a_thick_caster_still_casts_a_full_shadow() {
+    for samples in [1, 4] {
+        let Some((off, on)) = cable_pictures(samples, 3) else {
+            return;
+        };
+        let p = pixel([-100.0, 300.0, 0.0]);
+        assert_eq!(at(&on, p)[2], AMBIENT_RED, "({samples})");
+        assert_ne!(at(&off, p)[2], AMBIENT_RED);
+    }
+}
+
+/// Off, with the cables drawn and the words in the stream: every frame bit for bit the one
+/// without the words.
+#[test]
+fn off_the_cables_change_nothing() {
+    let frames: Vec<Extra> = (0..CABLES.len())
+        .map(|n| Extra {
+            cable: Some(n),
+            still_box: true,
+            ..Extra::default()
+        })
+        .collect();
+    for samples in [1, 4] {
+        let Some(plain) = lit_sequence_picture(samples, false, &frames) else {
+            return;
+        };
+        let with_words = {
+            let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+            sun_shadow::enable(false);
+            let mut b = backend(samples).expect("the adapter");
+            lit_sequence(&mut b, &frames, true)
+        };
+        assert!(plain == with_words, "{samples} samples");
+    }
+}
+
+/// A ribbon cable (as Goodsprings' telegraph lines are drawn: a strip with the cable in its
+/// texture's alpha, drawn with the alpha test) casts a faint band of about the cable's share of
+/// the sun, not the hard one-texel line its alpha test would cut; beside it, nothing.
+#[test]
+fn a_ribbon_cable_casts_a_faint_band() {
+    let frames = [Extra {
+        ribbon: true,
+        ..Extra::default()
+    }; 3];
+    for samples in [1, 4] {
+        let Some(off) = lit_sequence_picture(samples, false, &frames) else {
+            return;
+        };
+        let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+        let (off, on) = (&off[2], &on[2]);
+        let lit = darkest_under_the_cables(off);
+        let dark = darkest_under_the_cables(on);
+        let taken = f32::from(lit - dark) / f32::from(lit - AMBIENT_RED);
+        eprintln!("the ribbon: {dark} of {lit}: {taken} of the sun taken ({samples})");
+        // Soft, not the hard line the alpha test cuts (review of #693: the old path took about as
+        // much at its darkest): the band is as strong all along the ribbon, where the alpha test's
+        // one-texel line comes and goes with where the cable's texel falls on the map's (0.31 to
+        // 0.46 along it, measured with the coverage path off). No exact grey is asked for.
+        let along: Vec<f32> = (0..=12)
+            .map(|i| most_taken(off, on, -100.0, 225.0 + 25.0 * f64::from(i)))
+            .collect();
+        let (most, least) = (
+            along.iter().copied().fold(f32::MIN, f32::max),
+            along.iter().copied().fold(f32::MAX, f32::min),
+        );
+        eprintln!("the ribbon along it: {along:.2?} ({samples})");
+        assert!(
+            most - least < 0.1 && least > 0.04,
+            "the ribbon's band along it {along:?} ({samples})"
+        );
+        assert!(
+            (0.04..0.6).contains(&taken),
+            "the ribbon takes {taken} of the sun ({dark} of {lit}, {samples})"
+        );
+        for x in [-140.0, -60.0] {
+            let p = pixel([x, 300.0, 0.0]);
+            assert_eq!(
+                at(on, p),
+                at(off, p),
+                "beside the band at x {x} ({samples})"
+            );
+        }
+    }
+}
+
+/// A wire and a pipe in one geometry (as Goodsprings' telegraph line is poles and wires in one):
+/// the wire is taken out and casts its faint band, the pipe still casts its full shadow; drawn plain
+/// and as a cut-out (as Goodsprings' is).
+#[test]
+fn a_wire_in_one_geometry_with_a_pipe_is_taken_out() {
+    for (samples, cut) in [(1, false), (4, false), (1, true), (4, true)] {
+        let frames = [Extra {
+            mixed: !cut,
+            mixed_cut: cut,
+            ..Extra::default()
+        }; 3];
+        let Some(off) = lit_sequence_picture(samples, false, &frames) else {
+            return;
+        };
+        let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+        let (off, on) = (&off[2], &on[2]);
+        let lit = darkest_under_the_cables(off);
+        let taken = f32::from(lit - darkest_under_the_cables(on)) / f32::from(lit - AMBIENT_RED);
+        assert!(
+            (0.04..0.5).contains(&taken),
+            "the wire takes {taken} of the sun ({samples}, cut-out {cut})"
+        );
+        let p = pixel([-40.0, 300.0, 0.0]);
+        assert_eq!(
+            at(on, p)[2],
+            AMBIENT_RED,
+            "the pipe's shadow ({samples}, cut-out {cut})"
+        );
+    }
+}
+
 /// A lit draw whose state is seen in one frame only (a load's fade, a menu: here six blend
 /// factors with blending off) still has its variant made on a thread; the device takes each made
 /// variant in at the next present, whether that draw comes back or not, so the six do not hold
@@ -1462,4 +2288,471 @@ fn a_new_world_forgets_the_casters_of_the_one_left() {
         "a new world keeps no shadow of the box left behind"
     );
     assert_eq!(at(&new, shade), at(&new, pixel([-110.0, 150.0, 0.0])));
+}
+
+/// The share of the sun taken (0 lit, 1 none) at ground point (x, y), `on` against `off`, from the
+/// red channel.
+fn taken_at(off: &[[u8; 4]], on: &[[u8; 4]], x: f64, y: f64) -> f32 {
+    let p = pixel([x, y, 0.0]);
+    let lit = f32::from(at(off, p)[2]);
+    (lit - f32::from(at(on, p)[2])) / (lit - f32::from(AMBIENT_RED))
+}
+
+/// The most taken along the ground across x - 12 to x + 12 at y (one-unit steps).
+fn most_taken(off: &[[u8; 4]], on: &[[u8; 4]], x: f64, y: f64) -> f32 {
+    (0..=24)
+        .map(|i| taken_at(off, on, x - 12.0 + f64::from(i), y))
+        .fold(f32::MIN, f32::max)
+}
+
+/// The third frames of `frames` (three alike) off and on.
+fn third_frames(samples: u32, e: Extra) -> Option<(Pixels, Pixels)> {
+    let frames = [e; 3];
+    let off = lit_sequence_picture(samples, false, &frames)?;
+    let on = lit_sequence_picture(samples, true, &frames).expect("the adapter");
+    Some((off[2].clone(), on[2].clone()))
+}
+
+/// A round wire in one cut-out geometry with a ribbon (review of #693) keeps its own coverage: its
+/// shadow is a faint band all along it (no gaps, no texel-sized dots at full strength), while the
+/// ribbon beside it still casts its own.
+#[test]
+fn a_round_wire_beside_a_ribbon_keeps_its_soft_band() {
+    for samples in [1, 4] {
+        let Some((off, on)) = third_frames(
+            samples,
+            Extra {
+                ribbon_round: true,
+                ..Extra::default()
+            },
+        ) else {
+            return;
+        };
+        // All along the wire's shadow (at x -40), y 150 to 450.
+        let along: Vec<f32> = (0..=12)
+            .map(|i| most_taken(&off, &on, -40.0, 150.0 + 25.0 * f64::from(i)))
+            .collect();
+        eprintln!("the round wire beside a ribbon, along it: {along:.2?} ({samples})");
+        let (most, least) = (
+            along.iter().copied().fold(f32::MIN, f32::max),
+            along.iter().copied().fold(f32::MAX, f32::min),
+        );
+        // As strong all along (drawn through the ribbon's alpha it came and went: 0.24 to 0.49).
+        assert!(
+            least > 0.04 && most < 0.6 && most - least < 0.1,
+            "the wire's band along it {along:?} ({samples})"
+        );
+        let ribbon = most_taken(&off, &on, -100.0, 300.0);
+        assert!(
+            (0.04..0.6).contains(&ribbon),
+            "the ribbon takes {ribbon} ({samples})"
+        );
+    }
+}
+
+/// A cut-out strip shaped like a ribbon (60 wide, 1000 long) whose texture is half opaque (a
+/// fence, a grille) is no cable (review of #693): it keeps its cut-out shadow in the depth maps,
+/// full where its opaque stripes are, lit between them.
+#[test]
+fn a_half_opaque_strip_keeps_its_cut_out_shadow() {
+    for samples in [1, 4] {
+        let Some((off, on)) = third_frames(
+            samples,
+            Extra {
+                fence: true,
+                ..Extra::default()
+            },
+        ) else {
+            return;
+        };
+        let across: Vec<f32> = (0..=90)
+            .map(|i| taken_at(&off, &on, -145.0 + f64::from(i), 300.0))
+            .collect();
+        let most = across.iter().copied().fold(f32::MIN, f32::max);
+        let least = across.iter().copied().fold(f32::MAX, f32::min);
+        eprintln!("the half-opaque strip: most {most}, least {least} taken ({samples})");
+        assert!(most > 0.9, "its stripes' shadow takes {most} ({samples})");
+        assert!(least < 0.1, "between its stripes {least} ({samples})");
+    }
+}
+
+/// A receiver a few units under a cable (the cable's own surface, the pole top it hangs from: here
+/// a plate 5 units under the cable 120 high) takes none of its shadow: the plate is as without the
+/// shadows.
+#[test]
+fn a_plate_just_under_a_cable_takes_none_of_its_shadow() {
+    for samples in [1, 4] {
+        let Some((off, on)) = third_frames(
+            samples,
+            Extra {
+                cable: Some(1),
+                plate: true,
+                ..Extra::default()
+            },
+        ) else {
+            return;
+        };
+        for i in 0..=12 {
+            let x = -32.0 + 2.5 * f64::from(i);
+            let p = pixel([x, 300.0, 115.0]);
+            assert_eq!(at(&on, p), at(&off, p), "the plate at x {x} ({samples})");
+        }
+    }
+}
+
+/// A cable that moves: its band follows it, and when it is gone its band is gone the next frame
+/// (the frame then exactly as without the shadows).
+#[test]
+fn a_moving_cables_band_follows_it_and_goes_with_it() {
+    let at_x = |x| Extra {
+        cable_moved: Some((1, x)),
+        ..Extra::default()
+    };
+    let frames = [
+        at_x(0.0),
+        at_x(0.0),
+        at_x(0.0),
+        at_x(30.0),
+        at_x(60.0),
+        Extra::default(),
+        Extra::default(),
+    ];
+    let Some(off) = lit_sequence_picture(1, false, &frames) else {
+        return;
+    };
+    let on = lit_sequence_picture(1, true, &frames).expect("the adapter");
+    // (A frame's maps hold the casters of the frame before.)
+    let still = most_taken(&off[3], &on[3], -100.0, 300.0);
+    let moving = most_taken(&off[4], &on[4], -70.0, 300.0);
+    let moved_here = most_taken(&off[5], &on[5], -40.0, 300.0);
+    let moved_from = most_taken(&off[5], &on[5], -100.0, 300.0);
+    eprintln!(
+        "the cable standing {still}, moving {moving}, moved: at its new place {moved_here}, its old {moved_from}"
+    );
+    assert!(
+        still > 0.04 && moving > 0.04 && moved_here > 0.04,
+        "{still} {moving} {moved_here}"
+    );
+    assert!(
+        moved_from < 0.02,
+        "no band left where it stood: {moved_from}"
+    );
+    assert!(on[6] == off[6], "the cable gone, its band gone");
+}
+
+/// A geometry of a wire and a pipe drawn as an indexed strip from a base vertex (the game's usual
+/// draw) casts as the same geometry drawn as a list: the wire's faint band, the pipe's full shadow.
+#[test]
+fn a_wire_and_pipe_drawn_as_an_indexed_strip_cast_as_the_list() {
+    for samples in [1, 4] {
+        let Some((off, list)) = third_frames(
+            samples,
+            Extra {
+                mixed: true,
+                ..Extra::default()
+            },
+        ) else {
+            return;
+        };
+        let (off_strip, strip) = third_frames(
+            samples,
+            Extra {
+                strip: true,
+                ..Extra::default()
+            },
+        )
+        .expect("the adapter");
+        let (wire_list, wire_strip) = (
+            most_taken(&off, &list, -100.0, 300.0),
+            most_taken(&off_strip, &strip, -100.0, 300.0),
+        );
+        eprintln!("the wire's band: list {wire_list}, strip {wire_strip} ({samples})");
+        assert!(
+            (0.04..0.5).contains(&wire_strip),
+            "{wire_strip} ({samples})"
+        );
+        assert!(
+            (wire_strip - wire_list).abs() < 0.05,
+            "{wire_list} {wire_strip} ({samples})"
+        );
+        let p = pixel([-40.0, 300.0, 0.0]);
+        assert_eq!(
+            at(&strip, p)[2],
+            AMBIENT_RED,
+            "the pipe's shadow ({samples})"
+        );
+        // Elsewhere the pictures are those of the list (the same triangles).
+        let differ_off = off.iter().zip(&off_strip).filter(|(a, b)| a != b).count();
+        let differ = list.iter().zip(&strip).filter(|(a, b)| a != b).count();
+        eprintln!("pixels differing, list and strip: {differ} on, {differ_off} off ({samples})");
+        assert!(differ < 40, "{differ} pixels differ ({samples})");
+    }
+}
+
+/// The game writes new indices into a geometry of cables and pipes between frames (review of #693:
+/// the list of what is not cable was kept by the geometry and drawn with the old indices; a longer
+/// new list read past its end and lost the frame): from then on it casts as a new device given the
+/// new indices from the start does: the second pipe's full shadow, no band of the wire it lost.
+#[test]
+fn new_indices_written_into_a_mixed_geometry_cast_as_on_a_new_device() {
+    let first = Extra {
+        tubes: Some(MixedIndexed::TwoWiresAPipe),
+        ..Extra::default()
+    };
+    let then = Extra {
+        tubes: Some(MixedIndexed::AWireTwoPipes),
+        ..Extra::default()
+    };
+    for samples in [1, 4] {
+        let Some(off) = lit_sequence_picture(samples, false, &[first; 3]) else {
+            return;
+        };
+        let rewritten =
+            lit_sequence_picture(samples, true, &[first, first, first, then, then, then])
+                .expect("the adapter");
+        let fresh = lit_sequence_picture(samples, true, &[then; 6]).expect("the adapter");
+        // Before: the second wire's faint band where the second pipe's shadow comes later.
+        let before = most_taken(&off[2], &rewritten[2], 175.0, 300.0);
+        eprintln!("at x 175 before the write {before} ({samples})");
+        assert!((0.04..0.6).contains(&before), "{before} ({samples})");
+        for f in [4, 5] {
+            let p = pixel([175.0, 300.0, 0.0]);
+            assert_eq!(
+                at(&rewritten[f], p)[2],
+                AMBIENT_RED,
+                "frame {f} ({samples})"
+            );
+            let differ = rewritten[f]
+                .iter()
+                .zip(&fresh[f])
+                .filter(|(a, b)| a != b)
+                .count();
+            eprintln!("frame {f}: {differ} pixels differ from a new device's ({samples})");
+            assert!(
+                rewritten[f] == fresh[f],
+                "frame {f}: {differ} pixels ({samples})"
+            );
+        }
+    }
+}
+
+/// [`lit_sequence`] with the sun shadows on and the device's bodies limited to `limit`
+/// ([`sun_shadow::limit_bodies`]); with how many times they were all forgotten.
+fn limited_sequence(samples: u32, frames: &[Extra], limit: usize) -> Option<(Vec<Pixels>, u64)> {
+    struct Unlimit;
+    impl Drop for Unlimit {
+        fn drop(&mut self) {
+            sun_shadow::limit_bodies(0);
+        }
+    }
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    sun_shadow::enable(true);
+    let b = backend(samples);
+    sun_shadow::enable(false);
+    let mut b = b?;
+    let before = sun_shadow::bodies_forgotten();
+    let _unlimit = Unlimit;
+    sun_shadow::limit_bodies(limit);
+    let on = lit_sequence(&mut b, frames, true);
+    Some((on, sun_shadow::bodies_forgotten() - before))
+}
+
+/// The device's kept bodies all forgotten at their limit (review of #693, round 2: a smaller limit
+/// here, so it is reached): a wire and pipe in one geometry, kept for the maps while not drawn (out
+/// of sight; here through its grace), keeps the pipe's full shadow, where before its list of what is
+/// not cable was taken for a buffer the game had let go and its shadow dropped at once.
+#[test]
+fn a_split_pole_not_drawn_keeps_its_shadow_when_the_bodies_are_forgotten() {
+    let pole = Extra {
+        mixed: true,
+        ..Extra::default()
+    };
+    // Another geometry comes while the pole is not drawn: its body is one past the limit.
+    let other = Extra {
+        cable: Some(2),
+        ..Extra::default()
+    };
+    let frames = [pole, pole, pole, pole, other, other, other, other];
+    for samples in [1, 4] {
+        // The ground and the pole: the next new geometry's body is past the limit.
+        let Some((on, forgotten)) = limited_sequence(samples, &frames, 2) else {
+            return;
+        };
+        assert!(forgotten > 0, "the bodies were forgotten ({samples})");
+        let p = pixel([-40.0, 300.0, 0.0]);
+        // (The first frame has no maps yet; a frame's maps hold the casters of the frame before.)
+        for (f, px) in on.iter().enumerate().skip(2) {
+            assert_eq!(
+                at(px, p)[2],
+                AMBIENT_RED,
+                "the pipe's shadow in frame {f} ({samples})"
+            );
+        }
+    }
+}
+
+/// A round wire in one geometry with a flat strip that is no cable (review of #693, round 2):
+/// drawn opaque, or with a texture too opaque for a cable (opaque but for one stripe), the strip
+/// casts its full shadow while the wire keeps its faint band all along it.
+#[test]
+fn a_round_wire_beside_a_strip_keeps_its_soft_band() {
+    for (samples, textured) in [(1, false), (4, false), (1, true), (4, true)] {
+        let Some((off, on)) = third_frames(
+            samples,
+            Extra {
+                ribbon_round_opaque: !textured,
+                ribbon_round_textured: textured,
+                ..Extra::default()
+            },
+        ) else {
+            return;
+        };
+        let along: Vec<f32> = (0..=12)
+            .map(|i| most_taken(&off, &on, -40.0, 150.0 + 25.0 * f64::from(i)))
+            .collect();
+        eprintln!(
+            "the round wire beside a strip (textured {textured}), along it: {along:.2?} ({samples})"
+        );
+        let (most, least) = (
+            along.iter().copied().fold(f32::MIN, f32::max),
+            along.iter().copied().fold(f32::MAX, f32::min),
+        );
+        assert!(
+            least > 0.04 && most < 0.6 && most - least < 0.1,
+            "the wire's band along it {along:?} (textured {textured}, {samples})"
+        );
+        // The strip's shadow (x -110 to -90): full along it, in its opaque blocks when textured.
+        let strip: Vec<f32> = (0..=8)
+            .map(|i| most_taken(&off, &on, -100.0, 200.0 + 25.0 * f64::from(i)))
+            .collect();
+        eprintln!("the strip along it: {strip:.2?} (textured {textured}, {samples})");
+        assert!(
+            strip.iter().all(|&t| t > 0.9),
+            "the strip's shadow {strip:?} (textured {textured}, {samples})"
+        );
+    }
+}
+
+/// A geometry the game writes again every frame (a cable here) has its pieces worked out for its
+/// first two bodies only: from its third on it casts whole, as any caster (a hard line), not as a
+/// cable (chosen in review of #693, round 2: its cables would have to be found again each frame).
+#[test]
+fn a_cable_written_every_frame_casts_whole_from_its_third_body() {
+    let still = Extra {
+        cable: Some(1),
+        ..Extra::default()
+    };
+    let written = Extra {
+        rewrite_cable: true,
+        ..still
+    };
+    let Some(off) = lit_sequence_picture(1, false, &[still; 6]) else {
+        return;
+    };
+    let kept = lit_sequence_picture(1, true, &[still; 6]).expect("the adapter");
+    // One body a geometry, whatever its writes: the ground and the cable stay under a limit of 3
+    // (a body for each write, as before review round 2, would pass it on the third frame).
+    let (rewritten, forgotten) = limited_sequence(1, &[written; 6], 3).expect("the adapter");
+    assert_eq!(forgotten, 0, "one body a geometry");
+    let soft = most_taken(&off[5], &kept[5], -100.0, 300.0);
+    let hard = most_taken(&off[5], &rewritten[5], -100.0, 300.0);
+    eprintln!("the cable kept {soft}, written every frame {hard}");
+    assert!(
+        soft < hard - 0.2,
+        "kept, a cable's band: {soft} against {hard}"
+    );
+    assert!(
+        hard > 0.9,
+        "written every frame, a whole caster's shadow: {hard}"
+    );
+}
+
+/// Two buffers alike (the same layout, offsets, upload counts and triangle count: a cable 3 wide
+/// and a pipe 40 wide) are two geometries (review of #693, round 2: keyed by each buffer's own
+/// number, not taken for one another): the pipe drawn after the cable casts its full shadow.
+#[test]
+fn two_buffers_alike_are_two_geometries() {
+    let Some((_, on)) = third_frames(
+        1,
+        Extra {
+            cable: Some(1),
+            pipe_after: true,
+            ..Extra::default()
+        },
+    ) else {
+        return;
+    };
+    assert_eq!(at(&on, pixel([-100.0, 300.0, 0.0]))[2], AMBIENT_RED);
+}
+
+/// Bodies of geometries the game released are dropped to make room (review of #693, round 3): with
+/// room for 4 bodies, the ground and a cable the game writes every frame (live) and a box the game
+/// then releases, a fourth and a fifth geometry coming find room by the released box's body going,
+/// so nothing is forgotten wholesale and the cable, written three times and more, still casts
+/// whole (its count of bodies kept: forgotten, it would be split again and cast soft).
+#[test]
+fn a_released_geometrys_body_makes_room_and_nothing_is_forgotten() {
+    let cable = Extra {
+        cable: Some(1),
+        rewrite_cable: true,
+        ..Extra::default()
+    };
+    let with = |also: [Option<(u32, u32)>; 2], destroy: Option<u32>| Extra {
+        also,
+        destroy,
+        ..cable
+    };
+    let a = Some((MOVING_BOX, 10));
+    let frames = [
+        with([a, None], None),
+        with([a, None], None),
+        with([a, None], None),
+        // The box released; a new geometry: the fourth body.
+        with([Some((BOX, 10)), None], Some(MOVING_BOX)),
+        // Another new one: no room but the released box's.
+        with([Some((BOX, 10)), Some((AFTER, 2))], None),
+        with([Some((BOX, 10)), Some((AFTER, 2))], None),
+        with([Some((BOX, 10)), Some((AFTER, 2))], None),
+    ];
+    let Some(off) = lit_sequence_picture(1, false, &frames) else {
+        return;
+    };
+    let (on, forgotten) = limited_sequence(1, &frames, 4).expect("the adapter");
+    assert_eq!(forgotten, 0, "the released box's body made room");
+    for f in 4..frames.len() {
+        let hard = most_taken(&off[f], &on[f], -100.0, 300.0);
+        eprintln!("frame {f}: the cable written every frame takes {hard}");
+        assert!(hard > 0.9, "frame {f}: the cable casts whole ({hard})");
+    }
+}
+
+/// A geometry kept at two places that the game releases while it is not drawn is let go at both
+/// at once (review of #693, round 3: "only this draw holds it" never held for two): the frame
+/// after is the one without the shadows, not the boxes' shadows kept through their grace.
+#[test]
+fn a_released_geometry_at_two_places_goes_at_both() {
+    let two = Extra {
+        moving_box: Some((0.0, 150.0)),
+        other_box: Some((150.0, 400.0)),
+        ..Extra::default()
+    };
+    let released = Extra {
+        destroy: Some(MOVING_BOX),
+        ..Extra::default()
+    };
+    let frames = [two, two, two, released, Extra::default(), Extra::default()];
+    let Some(off) = lit_sequence_picture(1, false, &frames) else {
+        return;
+    };
+    let on = lit_sequence_picture(1, true, &frames).expect("the adapter");
+    let dark = |px: &[[u8; 4]], p: [f64; 3]| {
+        f32::from(at(px, pixel(p))[2]) < 0.7 * f32::from(at(px, pixel([50.0, 150.0, 0.0]))[2])
+    };
+    assert!(
+        dark(&on[2], [-55.0, 140.0, 0.0]) && dark(&on[2], [95.0, 390.0, 0.0]),
+        "both boxes cast while drawn"
+    );
+    for f in [4, 5] {
+        assert!(on[f] == off[f], "frame {f}: both places let go");
+    }
 }

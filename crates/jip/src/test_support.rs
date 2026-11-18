@@ -169,10 +169,10 @@ fn prepare(e: &mut Engine) {
             }
         });
     }
-    // `0050f9e0` (H22's wrap), `004ab400` (G93's) and `0078ac60` (O16's) when the test engine has
-    // no translation of them: stand-ins that answer "not a marker" and do nothing (JIP's wraps
-    // replace them).
-    for addr in [0x0050_f9e0, 0x004a_b400, 0x0078_ac60] {
+    // `0050f9e0` (H22's wrap), `004ab400` (G93's), `0078ac60` (O16's) and `008bca90` (O18's) when
+    // the test engine has no translation of them: stand-ins that answer "not a marker" and do
+    // nothing (JIP's wraps replace them).
+    for addr in [0x0050_f9e0, 0x004a_b400, 0x0078_ac60, 0x008b_ca90] {
         if !e.is_registered(addr) {
             e.register(addr, |_, _| Ret::default());
         }

@@ -54,6 +54,13 @@ fn operands(n: usize, seed: u64) -> Vec<X87Ext> {
         X87Ext::from_parts(0xbfff, u64::MAX),
         X87Ext::from_parts(0x7ffe, u64::MAX),
         X87Ext::from_parts(0x0001, INTEGER_BIT),
+        // The encodings the FPU does not support (an invalid operand) or reads its own way: an
+        // unnormal, a pseudo-NaN, a pseudo-infinity, and a pseudo-denormal (exponent 0 with the
+        // integer bit set, read as exponent 1).
+        X87Ext::from_parts(0x3fff, 0x4000_0000_0000_0000),
+        X87Ext::from_parts(0x7fff, 0x4000_0000_0000_0001),
+        X87Ext::from_parts(0xffff, 0),
+        X87Ext::from_parts(0x0000, INTEGER_BIT | 0x1234),
     ];
     (0..n)
         .map(|i| match i % 6 {
@@ -178,11 +185,25 @@ fn ulps(a: f64, b: f64) -> u64 {
         .unsigned_abs()
 }
 
+/// Whether `x` is reduced by the FPU's pi/2 in FSIN, FCOS, FSINCOS and FPTAN (finite, |x| at or
+/// above pi/4, below 2^63): only there may a result near a zero of the function be off by more
+/// than a unit, as far as the reduction itself is.
+fn reduced(x: X87Ext) -> bool {
+    match unpack(x).kind {
+        Kind::Finite { e, sig } => {
+            (e > BIAS - 1 || (e == BIAS - 1 && sig >= 0xc90f_daa2_2168_c234)) && e - BIAS < 63
+        }
+        _ => false,
+    }
+}
+
 #[test]
 fn the_transcendentals_store_the_fpus_double_within_one_unit() {
     let values = operands(6000, 0x5851_f42d_4c95_7f2d);
-    let mut stats = (0u64, 0u64);
-    let mut check = |name: &str, args: &[X87Ext], ours: X87Ext, fpu: X87Ext| {
+    let mut stats = (0u64, 0u64, 0u64);
+    // `wide`: an operand reduced by pi/2 ([`reduced`]), where a result near a zero of the function
+    // may differ by up to 2^-60 of the operand instead of one unit.
+    let mut check = |name: &str, args: &[X87Ext], ours: X87Ext, fpu: X87Ext, wide: bool| {
         let (o, f) = (ours.store64(), fpu.store64());
         stats.0 += 1;
         if o.to_bits() == f.to_bits() {
@@ -193,44 +214,72 @@ fn the_transcendentals_store_the_fpus_double_within_one_unit() {
             && (o == 0.0) == (f == 0.0)
             && o.is_sign_negative() == f.is_sign_negative()
             && ulps(o, f) <= 1;
-        // Near a zero of the function a result is only as good as the reduction: there the
-        // difference is measured against the operand's size.
-        let tiny = o.is_finite()
+        let near_zero = wide
+            && o.is_finite()
             && f.is_finite()
             && (o - f).abs() <= 2f64.powi(-60) * nearest64(args[0]).abs().max(1.0);
         assert!(
-            close || tiny,
+            close || near_zero,
             "{name} {args:x?}: {o:e} ({:#x}) against the FPU's {f:e} ({:#x})",
             o.to_bits(),
             f.to_bits()
         );
-        stats.1 += 1;
+        if close {
+            stats.1 += 1;
+        } else {
+            stats.2 += 1;
+        }
     };
     for (i, &a) in values.iter().enumerate() {
         let in_range = !matches!(unpack(a).kind, Kind::Finite { e, .. } if e - BIAS >= 63);
-        check("FSIN", &[a], fsin(a), hw::fsin(a));
-        check("FCOS", &[a], fcos(a), hw::fcos(a));
+        let wide = reduced(a);
+        check("FSIN", &[a], fsin(a), hw::fsin(a), wide);
+        check("FCOS", &[a], fcos(a), hw::fcos(a), wide);
+        // FSINCOS: the FPU's pair, and the same bits as FSIN and FCOS one by one.
+        let (sine, cosine) = fsincos(a);
+        let (fpu_sine, fpu_cosine) = hw::fsincos(a);
+        check("FSINCOS sine", &[a], sine, fpu_sine, wide);
+        check("FSINCOS cosine", &[a], cosine, fpu_cosine, wide);
         if in_range {
-            check("FPTAN", &[a], fptan(a), hw::fptan(a));
+            assert_eq!((sine, cosine), (fsin(a), fcos(a)), "FSINCOS {a:x?}");
+            check("FPTAN", &[a], fptan(a), hw::fptan(a), wide);
         }
         let b = values[(i * 13) % values.len()];
-        check("FPATAN", &[a, b], fpatan(a, b), hw::fpatan(a, b));
-        check("FYL2X", &[b, a], fyl2x(b, a), hw::fyl2x(b, a));
-        // F2XM1 and FYL2XP1 are defined on |x| <= 1 and |x| < 1 - sqrt(2)/2.
+        check("FPATAN", &[a, b], fpatan(a, b), hw::fpatan(a, b), false);
+        check("FYL2X", &[b, a], fyl2x(b, a), hw::fyl2x(b, a), false);
+        // F2XM1 on its whole range |x| <= 1, FYL2XP1 on |x| < 1 - sqrt(2)/2.
         let v = nearest64(a);
         if v.is_finite() {
+            let within = load64(v % 1.0);
+            check("F2XM1", &[within], f2xm1(within), hw::f2xm1(within), false);
             let small = load64((v % 1.0).clamp(-0.29, 0.29));
-            check("F2XM1", &[small], f2xm1(small), hw::f2xm1(small));
             check(
                 "FYL2XP1",
                 &[b, small],
                 fyl2xp1(b, small),
                 hw::fyl2xp1(b, small),
+                false,
             );
         }
     }
+    // F2XM1's edges.
+    for v in [
+        -1.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.5,
+        -0.5,
+        1e-300,
+        -1e-300,
+        0.999_999_999_999_999_9,
+    ] {
+        let x = load64(v);
+        check("F2XM1", &[x], f2xm1(x), hw::f2xm1(x), false);
+    }
     eprintln!(
-        "transcendentals: {} compared, {} one unit apart",
-        stats.0, stats.1
+        "transcendentals: {} compared, {} one unit apart, {} near a zero of FSIN/FCOS/FPTAN within \
+         2^-60 of the operand",
+        stats.0, stats.1, stats.2
     );
 }

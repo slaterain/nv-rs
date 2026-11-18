@@ -1087,8 +1087,9 @@ const SKY_MASSER: u32 = 0x30;
 ///
 /// Masser counts only once its own update has placed it (`fLastPosUpdate` is no longer the
 /// constructor's `FLT_MAX`: a moon made this frame still has angle 0, the north horizon); its way
-/// and how much of it shows ([`sky_light::moon_shown`], the game's own fade of it from its angle
-/// and `fAngleFadeStart`/`fAngleFadeEnd`) go to [`sky_light::toward_light`]. The sky updates the
+/// and its share of the light ([`sky_light::moon_share`]: the game's own fade of it from its angle
+/// and `fAngleFadeStart`/`fAngleFadeEnd`, [`sky_light::moon_shown`], made continuous) go to
+/// [`sky_light::toward_light`]. The sky updates the
 /// sun before Masser, so the moon's angle read here is the one of the frame before: the light
 /// follows the moon one frame late (at the game's speeds a small part of a degree), and after a
 /// jump in time (waiting, sleeping) it takes the new place one frame late.
@@ -1104,7 +1105,7 @@ fn light_from_sky(e: &Engine, sky: u32, disc: &[u32; 3], brightness: u32) -> Opt
         }
         let pos = f32::from_bits(e.get(moon, Moon::fPos));
         let way = sky_light::toward_moon(pos, f32::from_bits(e.get(moon, Moon::fZOffset)))?;
-        let shown = sky_light::moon_shown(
+        let shown = sky_light::moon_share(
             pos,
             f32::from_bits(e.get(moon, Moon::fAngleFadeStart)),
             f32::from_bits(e.get(moon, Moon::fAngleFadeEnd)),
@@ -1144,25 +1145,59 @@ pub mod sky_light {
         unit([z.sin(), z.cos() * p.cos(), z.cos() * p.sin()])
     }
 
-    /// How much of the moon the game shows at angle `pos` (degrees), from 0 to 1: its own fade
-    /// (`Moon::Update`'s `006366d0`, `moon.rs` `fade`) between `fAngleFadeEnd` (`end`) and
-    /// `fAngleFadeStart` (`start`): 0 below `end` and past 180, rising to 1 at `start`, 1 up to
-    /// `180 - start`, falling to 0 at `180 - end`. FalloutNV.esm sets Masser's to 35 and 20 (its
-    /// GMSTs `fMasserAngleFadeStart`, `fMasserAngleFadeEnd`; the exe's defaults are 55 and 45): it
-    /// shows from about 19:20 to 04:40 at the game's moon speed, so it rises before the sun's
-    /// fade ends (20:00 in the Mojave's climates). Numbers that are not usable count as not shown.
+    /// How much of the moon the game shows at angle `pos` (degrees): its own fade, `Moon::Update`'s
+    /// `006366d0` (`moon.rs` `fade`), with the same comparisons in the same order, between
+    /// `fAngleFadeEnd` (`end`) and `fAngleFadeStart` (`start`): 0 past 180; `(pos - end) / (start -
+    /// end)` from `end` to `start`; `(180 - end - pos) / (start - end)` from `180 - start` to `180 -
+    /// end`; 1 between `start` and `180 - start`; else 0. With `start` at or below `end` the moon is
+    /// shown whole between `start` and `180 - start` (no fade); a negative `end` shows part of it on
+    /// the horizon. FalloutNV.esm sets Masser's to 35 and 20 (its GMSTs `fMasserAngleFadeStart`,
+    /// `fMasserAngleFadeEnd`; the exe's defaults are 55 and 45): at the game's moon speed it starts
+    /// to show at about 19:20, is whole from about 20:20 to 03:40 and gone at about 04:40. The light
+    /// takes [`moon_share`] (this fade made continuous); this one is the game's, to check it by.
     pub fn moon_shown(pos: f32, start: f32, end: f32) -> f32 {
-        if !(pos.is_finite() && start.is_finite() && end.is_finite()) || start <= end {
+        let (pos, s, n) = (f64::from(pos), f64::from(start), f64::from(end));
+        let (rise_end, set_end) = (180.0 - s, 180.0 - n);
+        if pos > 180.0 {
+            return 0.0;
+        }
+        if !(s < pos || s.is_nan() || pos.is_nan()) && n <= pos {
+            return ((pos - n) / (s - n)) as f32;
+        }
+        if rise_end <= pos && !(set_end < pos || set_end.is_nan() || pos.is_nan()) {
+            return ((set_end - pos) / (set_end - rise_end)) as f32;
+        }
+        if s < pos && rise_end > pos {
+            return 1.0;
+        }
+        0.0
+    }
+
+    /// The moon's share of the light at angle `pos` (degrees, any turn): the game's fade
+    /// ([`moon_shown`]) wherever that changes smoothly, made continuous where the game's jumps, so
+    /// the light never jumps: the fade's ends are kept at or above the horizon (a negative `end`
+    /// would show part of the moon at the horizon, which the game then hides past 180 at once),
+    /// and data with no fade (`start` at or below `end`: the game shows the moon whole at once)
+    /// takes a fade over the [`MOON_RAMP`] degrees before `start`. For the game's data (0 <= `end` <
+    /// `start` <= 90) it is the game's fade itself. Numbers that are not usable count as none.
+    pub fn moon_share(pos: f32, start: f32, end: f32) -> f32 {
+        if !(pos.is_finite() && start.is_finite() && end.is_finite()) {
             return 0.0;
         }
         let p = pos.rem_euclid(360.0);
         if p > 180.0 {
             return 0.0;
         }
-        let rising = (p - end) / (start - end);
-        let setting = (180.0 - end - p) / (start - end);
+        let e = if start > end { end } else { start - MOON_RAMP };
+        let e = e.clamp(0.0, 90.0 - MOON_RAMP);
+        let s = start.clamp(e + MOON_RAMP.min(start - e).max(1e-3), 90.0);
+        let rising = (p - e) / (s - e);
+        let setting = (180.0 - e - p) / (s - e);
         rising.min(setting).clamp(0.0, 1.0)
     }
+
+    /// The fade [`moon_share`] gives a moon whose data has none, in degrees of its angle.
+    pub const MOON_RAMP: f32 = 10.0;
 
     /// `a` turned toward `b` (both unit) by the share `t` of the angle between them, at an even
     /// pace; `t` 0 is `a` and 1 is `b` exactly. Two ways exactly opposite turn over the top.
@@ -1227,11 +1262,14 @@ pub mod sky_light {
     /// The way toward the light, so shadows agree with what the player sees in the sky:
     /// - while the game draws the sun disc and not the moon (from the start of the sunrise to the
     ///   moon's rise at dusk), the disc's own way, no lower than [`LOWEST_DEGREES`] (heading kept);
-    /// - while the game shows the moon (`moon`: its way and [`moon_shown`]), turned from the sun's
+    /// - while the game shows the moon (`moon`: its way and its share, [`moon_share`]: the game's
+    ///   fade, [`moon_shown`], made continuous), turned from the sun's
     ///   place toward the moon's way at an even pace along the arc between them by the moon's eased
     ///   fade times the sun's missing share: the moon's alone once the disc is gone and the moon
-    ///   fully shown; while both show (the game's moon rises at 19:20, the sun's fade ends at
-    ///   20:00) the light turns from the fading disc to the rising moon, never past either;
+    ///   whole; at dusk (the game's moon starts to show at about 19:20, the sun's fade ends at
+    ///   20:00, the moon is whole at about 20:20) the light turns from the fading disc to the
+    ///   rising moon, never past either, and at dawn it turns back to the sun's hidden place as
+    ///   the moon fades, between about 03:40 and 04:40;
     /// - while neither shows (from the moon's fade-out to the sunrise), the sun's hidden place, which the game keeps above the horizon
     ///   at night (up from the west horizon, over the top at midnight, down to the east one): the
     ///   light is already where the disc will appear at the sunrise and starts where it went at
@@ -1896,6 +1934,36 @@ mod tests {
         assert_eq!(light_way(&off), [-disc_place(&off)[0], 50.0, 30.0]);
     }
 
+    /// The dusk hand-over the maintainer reported, through `Update` itself: at 19:30 the disc is
+    /// drawn at a quarter (the base quad's alpha, the brightness the seam is given) and Masser shows
+    /// half (angle 50 between its fades 45 and 55): the light is the blend of the two with the
+    /// disc's real brightness, not the one a dark sky (brightness 0) would give.
+    #[test]
+    fn at_dusk_the_light_blends_the_fading_disc_and_the_rising_moon() {
+        let mut u = update_rig(3, 19.5);
+        with_masser(&mut u, 50.0, 35.0);
+        want_light_from_sky(&mut u.e, || true);
+        run(&mut u);
+        let brightness = u.e.mem.f32(u.base_property + 0x6c);
+        assert_eq!(brightness, 0.25);
+        let disc = disc_place(&u);
+        let moon = sky_light::toward_moon(50.0, 35.0).map(|w| (w, 0.5));
+        let want = sky_light::toward_light(disc, brightness, moon).unwrap();
+        assert!(
+            close(light_way(&u), want.map(|v| -v)),
+            "{:?} {want:?}",
+            light_way(&u)
+        );
+        let dark = sky_light::toward_light(disc, 0.0, moon).unwrap();
+        assert!(angle_degrees(want, dark) > 1.0, "{want:?} {dark:?}");
+        // Between the disc's way and the moon's, nearer the disc than a dark sky's light.
+        let d = sky_light::no_lower_than(sky_light::unit(disc).unwrap());
+        let m = sky_light::no_lower_than(moon.unwrap().0);
+        let on_arc = angle_degrees(want, d) + angle_degrees(want, m) - angle_degrees(d, m);
+        assert!(on_arc.abs() < 0.05, "{on_arc}");
+        assert!(angle_degrees(want, d) < angle_degrees(dark, d));
+    }
+
     /// While the game shows neither the sun nor Masser (before it fades in, after it fades out)
     /// the light comes from the sun's hidden place; a Masser its update has not placed yet counts
     /// as no moon (the same); while the host says nothing draws the shadows, the light is the
@@ -1940,30 +2008,72 @@ mod tests {
         assert_eq!(light_way(&gated), [-disc_place(&gated)[0], 50.0, 30.0]);
     }
 
-    /// How much of the moon shows: the game's own fade (`moon.rs` `fade`), Masser's 55 and 45.
+    /// How much of the moon shows is the game's own fade (`moon.rs` `fade`, the exe's comparisons)
+    /// over a grid of angles and fade data, the usual (Masser's 35/20, the exe's 55/45) and the
+    /// odd: no fade (`start` at or below `end`: whole at once), `start` past 90, a negative `end`.
     #[test]
     fn the_moon_shows_as_the_game_fades_it() {
-        let shown = |p: f32| sky_light::moon_shown(p, 55.0, 45.0);
-        for (p, want) in [
-            (0.0f32, 0.0f32),
-            (44.0, 0.0),
-            (45.0, 0.0),
-            (50.0, 0.5),
-            (55.0, 1.0),
-            (90.0, 1.0),
-            (125.0, 1.0),
-            (130.0, 0.5),
-            (135.0, 0.0),
-            (179.0, 0.0),
-            (270.0, 0.0),
-            (410.0, 0.5),
-            (-310.0, 0.5),
-        ] {
-            assert!((shown(p) - want).abs() < 1e-5, "{p}: {}", shown(p));
+        use crate::units::fallout_shared_sky::moon::fade;
+        let datas = [
+            (35.0f32, 20.0f32),
+            (55.0, 45.0),
+            (45.0, 55.0),
+            (30.0, 30.0),
+            (100.0, 45.0),
+            (35.0, -10.0),
+            (5.0, -20.0),
+        ];
+        for (start, end) in datas {
+            for i in 0..3600 {
+                let p = i as f32 * 0.1;
+                let game = fade(p.to_bits(), start.to_bits(), end.to_bits(), 180.0);
+                let ours = sky_light::moon_shown(p, start, end);
+                assert!(
+                    (game - ours).abs() < 1e-6 || (game.is_nan() && ours.is_nan()),
+                    "({start}, {end}) at {p}: game {game}, ours {ours}"
+                );
+            }
         }
-        assert_eq!(sky_light::moon_shown(f32::NAN, 55.0, 45.0), 0.0);
-        assert_eq!(sky_light::moon_shown(90.0, f32::NAN, 45.0), 0.0);
-        assert_eq!(sky_light::moon_shown(90.0, 45.0, 55.0), 0.0);
+        // Numbers that are not numbers (a position, a start or an end): as the game's comparisons
+        // take them.
+        let nan = f32::NAN;
+        let odd = [(nan, 20.0f32), (35.0, nan), (nan, nan)];
+        for (start, end) in datas.iter().copied().chain(odd) {
+            for p in [nan, 0.0, 30.0, 90.0, 150.0, 200.0] {
+                let game = fade(p.to_bits(), start.to_bits(), end.to_bits(), 180.0);
+                let ours = sky_light::moon_shown(p, start, end);
+                assert!(
+                    game == ours || (game.is_nan() && ours.is_nan()),
+                    "({start}, {end}) at {p}: game {game}, ours {ours}"
+                );
+            }
+        }
+        // No fade: whole between start and 180 - start, as the game shows it.
+        assert_eq!(sky_light::moon_shown(90.0, 45.0, 55.0), 1.0);
+        // For the game's data the light's share is the game's fade.
+        for (start, end) in [(35.0f32, 20.0f32), (55.0, 45.0)] {
+            for i in 0..3600 {
+                let p = i as f32 * 0.1;
+                let d = sky_light::moon_share(p, start, end) - sky_light::moon_shown(p, start, end);
+                assert!(d.abs() < 1e-5, "({start}, {end}) at {p}");
+            }
+        }
+        // Where the game's fade jumps (no fade, a negative end, past 180), the share does not.
+        for (start, end) in datas {
+            let mut last = sky_light::moon_share(0.0, start, end);
+            assert_eq!(last, 0.0);
+            for i in 1..=36000 {
+                let now = sky_light::moon_share(i as f32 * 0.01, start, end);
+                assert!(
+                    (now - last).abs() < 0.01,
+                    "({start}, {end}) at {}: {last} to {now}",
+                    i as f32 * 0.01
+                );
+                last = now;
+            }
+        }
+        assert_eq!(sky_light::moon_share(f32::NAN, 55.0, 45.0), 0.0);
+        assert_eq!(sky_light::moon_share(90.0, f32::NAN, 45.0), 0.0);
     }
 
     /// The disc of a whole game day (the Strip's and Goodsprings' climates: sunrise 6:00-8:00,
@@ -1974,6 +2084,7 @@ mod tests {
         hour: f32,
         speed: f32,
         fades: (f32, f32),
+        tilt: f32,
     ) -> ([f32; 3], f32, Option<([f32; 3], f32)>) {
         let (rise_low, rise_high, set_low, set_high) = (6.0f32, 8.0, 18.0, 20.0);
         let night = 24.0 - (set_high - rise_low);
@@ -1994,13 +2105,13 @@ mod tests {
             1.0
         };
         let pos = (90.0 + speed * 60.0 * hour).rem_euclid(360.0);
-        let moon = sky_light::toward_moon(pos, 35.0)
-            .map(|w| (w, sky_light::moon_shown(pos, fades.0, fades.1)));
+        let moon = sky_light::toward_moon(pos, tilt)
+            .map(|w| (w, sky_light::moon_share(pos, fades.0, fades.1)));
         ([x, -100.0, 800.0 - x.abs()], brightness, moon)
     }
 
     /// Masser's fades: FalloutNV.esm's GMSTs fMasserAngleFadeStart 35 and fMasserAngleFadeEnd 20 (the
-    /// moon shows from about 19:20 to 04:40, fully from 19:40 to 03:40), and the exe's defaults.
+    /// moon shows from about 19:20 to 04:40, whole from about 20:20 to 03:40), and the exe's defaults.
     const MASSER_FADES: [(f32, f32); 2] = [(35.0, 20.0), (55.0, 45.0)];
 
     /// The faults the maintainer saw (2026-11-17, "the shadows' directions aren't always faithful
@@ -2020,7 +2131,7 @@ mod tests {
     fn follows_the_disc(fades: (f32, f32)) {
         for i in 0..24 * 600 {
             let hour = i as f32 / 600.0;
-            let (disc, brightness, moon) = sky_at(hour, 0.25, fades);
+            let (disc, brightness, moon) = sky_at(hour, 0.25, fades, 35.0);
             let way = sky_light::toward_light(disc, brightness, moon).unwrap();
             let disc_way = sky_light::unit(disc).unwrap();
             let shown = moon.map_or(0.0, |m| m.1);
@@ -2050,7 +2161,7 @@ mod tests {
         }
         // The hours of the fault: 19:00 and 19:30, the disc low in the west.
         for hour in [6.5f32, 7.0, 18.5, 19.0] {
-            let (disc, brightness, moon) = sky_at(hour, 0.25, fades);
+            let (disc, brightness, moon) = sky_at(hour, 0.25, fades, 35.0);
             let way = sky_light::toward_light(disc, brightness, moon).unwrap();
             let off = angle_degrees(way, sky_light::unit(disc).unwrap());
             assert!(off < 10.0, "{hour}: {off} degrees from the disc");
@@ -2059,15 +2170,27 @@ mod tests {
 
     /// The light never jumps over a whole day, every 6 game seconds, at the game's moon speed
     /// (`fMasserSpeed` 0.25: 15 degrees an hour) and at others (a plugin's), whose moon shows at
-    /// other hours, over the sun's ramps too.
+    /// other hours, over the sun's ramps too; for the game's fade data and odd data (no fade, a
+    /// start past 90, a negative end, a fade only 5 degrees wide) and with no tilt (the moon's
+    /// rise and set due north and south) as with Masser's.
     #[test]
     fn the_light_never_jumps_whatever_the_moon_speed() {
-        for (speed, fades) in [0.25f32, 0.5, 0.3, 0.1]
-            .into_iter()
-            .flat_map(|s| MASSER_FADES.map(|f| (s, f)))
-        {
+        let datas = [
+            (35.0f32, 20.0f32),
+            (55.0, 45.0),
+            (45.0, 55.0),
+            (30.0, 30.0),
+            (100.0, 45.0),
+            (35.0, -10.0),
+            (5.0, -20.0),
+        ];
+        for (speed, fades, tilt) in [0.25f32, 0.5, 0.3, 0.1].into_iter().flat_map(|s| {
+            datas
+                .into_iter()
+                .flat_map(move |f| [0.0f32, 35.0].map(move |t| (s, f, t)))
+        }) {
             let way_at = |hour: f32| {
-                let (disc, brightness, moon) = sky_at(hour, speed, fades);
+                let (disc, brightness, moon) = sky_at(hour, speed, fades, tilt);
                 sky_light::toward_light(disc, brightness, moon).unwrap()
             };
             let mut last = way_at(0.0);
@@ -2086,10 +2209,16 @@ mod tests {
             // doubled one) while the light turns up to about 100 degrees with it: at most about half a
             // degree in 6 game seconds (a fifth of a second at the game's time scale), more with a
             // faster moon.
-            let bound = 0.5 * (speed / 0.25).max(1.0);
+            // A narrower fade turns the light faster, as the moon shows faster.
+            let width = if fades.0 > fades.1 {
+                fades.0.min(90.0) - fades.1.max(0.0)
+            } else {
+                sky_light::MOON_RAMP
+            };
+            let bound = 0.5 * (speed / 0.25).max(1.0) * (sky_light::MOON_RAMP / width).max(1.0);
             assert!(
                 worst.0 < bound,
-                "speed {speed}, fades {fades:?}: a step of {worst:?} (degrees, hour)"
+                "speed {speed}, fades {fades:?}, tilt {tilt}: a step of {worst:?} (degrees, hour)"
             );
         }
     }

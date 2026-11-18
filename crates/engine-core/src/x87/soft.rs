@@ -233,6 +233,15 @@ fn round_pack(neg: bool, mut e: i32, mut sig: u128, p: u32, rc: u16) -> X87Ext {
     X87Ext::from_parts(sign_word(neg) | field as u16, sig64)
 }
 
+/// `x` as the FPU holds a value it computed with: a pseudo-denormal (exponent 0, integer bit set)
+/// with exponent 1; anything else as it is.
+fn canonical(x: X87Ext, u: Val) -> X87Ext {
+    match u.kind {
+        Kind::Finite { e, sig } => round_pack(u.neg, e, u128::from(sig) << 64, 64, ROUND_NEAREST),
+        _ => x,
+    }
+}
+
 fn rounding() -> u16 {
     control_word() & ROUNDING_CONTROL
 }
@@ -630,6 +639,10 @@ pub fn fscale(x: X87Ext, scale: X87Ext) -> X87Ext {
                 infinity(ux.neg)
             }
         }
+        // A zero scale: the value as a register holds it (a pseudo-denormal normalised).
+        (Kind::Finite { e, sig }, Kind::Zero) => {
+            round_pack(ux.neg, e, u128::from(sig) << 64, 64, rounding())
+        }
         (Kind::Finite { e, sig }, Kind::Finite { e: es, sig: ss }) => {
             // trunc(scale), large ones clamped (anything past 2^17 overflows or underflows).
             let n = if es - BIAS >= 20 {
@@ -666,7 +679,7 @@ fn remainder(x: X87Ext, y: X87Ext, nearest: bool) -> (X87Ext, u16) {
         status |= STATUS_DE;
     }
     let (ex, sx, ey, sy) = match (ux.kind, uy.kind) {
-        (Kind::Zero, _) | (_, Kind::Inf) => return (x, status),
+        (Kind::Zero, _) | (_, Kind::Inf) => return (canonical(x, ux), status),
         (Kind::Finite { e: ex, sig: sx }, Kind::Finite { e: ey, sig: sy }) => (ex, sx, ey, sy),
         _ => return (indefinite(), status | STATUS_IE),
     };
@@ -692,7 +705,7 @@ fn remainder(x: X87Ext, y: X87Ext, nearest: bool) -> (X87Ext, u16) {
     } else if nearest && d == -1 {
         (u128::from(sx), u128::from(sy) << 1, ex)
     } else {
-        return (x, status);
+        return (canonical(x, ux), status);
     };
     let mut q = numerator / divisor;
     let mut r = numerator % divisor;
@@ -740,8 +753,26 @@ fn reduce(e: i32, sig: u64) -> (f64, u64) {
         return (value(e, sig), 0);
     }
     let modulus = pi66_bits();
-    // |x| / (pi/2) = sig * 2^(e - BIAS - 63 + 67) / M, by long division bit by bit.
+    // |x| / (pi/2) = sig * 2^(e - BIAS - 63 + 67) / M: one 128-bit division below 2^60, where
+    // the dividend fits; above, long division bit by bit.
     let shift = (e - BIAS - 63 + 67) as u32;
+    let (q, rem) = if shift <= 64 {
+        let dividend = u128::from(sig) << shift;
+        ((dividend / modulus) as u64, dividend % modulus)
+    } else {
+        long_division(sig, shift, modulus)
+    };
+    let scale = 2f64.powi(-67);
+    if 2 * rem > modulus {
+        (-((modulus - rem) as f64) * scale, q.wrapping_add(1))
+    } else {
+        ((rem as f64) * scale, q)
+    }
+}
+
+/// `sig * 2^shift` divided by `modulus` bit by bit: (quotient, remainder) (the quotient's
+/// below 2^63 for an operand below 2^63).
+fn long_division(sig: u64, shift: u32, modulus: u128) -> (u64, u128) {
     let total = 64 + shift;
     let mut rem: u128 = 0;
     let mut q: u64 = 0;
@@ -758,12 +789,7 @@ fn reduce(e: i32, sig: u64) -> (f64, u64) {
             q |= 1;
         }
     }
-    let scale = 2f64.powi(-67);
-    if 2 * rem > modulus {
-        (-((modulus - rem) as f64) * scale, q.wrapping_add(1))
-    } else {
-        ((rem as f64) * scale, q)
-    }
+    (q, rem)
 }
 
 /// The FPU's pi for argument reduction (66 significant bits, Intel SDM vol. 1, 8.3.10) as an
@@ -782,16 +808,32 @@ enum Circular {
 
 /// `FSIN`, `FCOS` and `FPTAN`'s result for a finite `|x|` below 2^63 (`u` its parts).
 fn circular(x: X87Ext, u: Val, e: i32, sig: u64, which: Circular) -> X87Ext {
-    // Below 2^-40 the sine and tangent are the operand and the cosine 1, at 64 bits (and no
-    // double could carry an operand below the double range).
+    match reduced(e, sig) {
+        None => tiny(x, which),
+        Some((r, quadrant)) => of_reduced(u, r, quadrant, which),
+    }
+}
+
+/// Below 2^-40 the sine and tangent are the operand and the cosine 1, at 64 bits (and no double
+/// could carry an operand below the double range).
+fn tiny(x: X87Ext, which: Circular) -> X87Ext {
+    match which {
+        Circular::Cos => load64(1.0),
+        _ => canonical(x, unpack(x)),
+    }
+}
+
+/// `|x|` reduced ([`reduce`]) as `(r, quadrant)`, or `None` below 2^-40 ([`tiny`]).
+fn reduced(e: i32, sig: u64) -> Option<(f64, u64)> {
     if e < BIAS - 40 {
-        return match which {
-            Circular::Cos => load64(1.0),
-            _ => x,
-        };
+        return None;
     }
     let (r, k) = reduce(e, sig);
-    let quadrant = k & 3;
+    Some((r, k & 3))
+}
+
+/// The function `which` of `x` (sign in `u`) from its reduced argument `r` and `quadrant`.
+fn of_reduced(u: Val, r: f64, quadrant: u64, which: Circular) -> X87Ext {
     let magnitude = match which {
         Circular::Sin => match quadrant {
             0 => r.sin(),
@@ -852,9 +894,21 @@ pub fn fcos(x: X87Ext) -> X87Ext {
 pub fn fsincos(x: X87Ext) -> (X87Ext, X87Ext) {
     // Out of range (finite, |x| >= 2^63): the stores the FPU block makes (the hardware path's
     // `settle_unpushed`): the cosine's place the operand, the sine's the indefinite.
-    match (trig(x, Circular::Sin), trig(x, Circular::Cos)) {
-        (Ok(sine), Ok(cosine)) => (sine, cosine),
-        _ => (indefinite(), x),
+    // Otherwise the argument is reduced once for both.
+    let u = unpack(x);
+    match u.kind {
+        Kind::Finite { e, .. } if e - BIAS >= 63 => (indefinite(), x),
+        Kind::Finite { e, sig } => match reduced(e, sig) {
+            None => (tiny(x, Circular::Sin), tiny(x, Circular::Cos)),
+            Some((r, quadrant)) => (
+                of_reduced(u, r, quadrant, Circular::Sin),
+                of_reduced(u, r, quadrant, Circular::Cos),
+            ),
+        },
+        _ => (
+            trig(x, Circular::Sin).unwrap_or(x),
+            trig(x, Circular::Cos).unwrap_or(x),
+        ),
     }
 }
 
