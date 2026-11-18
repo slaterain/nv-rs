@@ -1795,7 +1795,7 @@ fn pre_load_housekeeping(e: &mut Engine) {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
-// load, exit and new game cases' saved data; their scripts come with JIP's script runner).
+// load, exit and new game cases: their saved data, then the script runner's files).
 /// JIP's listener for xNVSE's messages.
 pub fn listen(e: &mut Engine, m: &Message) {
     match m.kind {
@@ -1894,6 +1894,9 @@ pub fn listen(e: &mut Engine, m: &Message) {
         }
         _ => {}
     }
+    // The script runner's files, after each case's own steps as in JIP: compiled at the deferred
+    // start (its last step), run at the load, new game, save and exits.
+    crate::script_runner::on_message(e, m.kind, m.data);
 }
 
 #[cfg(test)]

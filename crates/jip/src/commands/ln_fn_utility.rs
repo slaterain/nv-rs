@@ -11,7 +11,7 @@
 //!
 //! Left for later, each for its reason: `GetFilesInFolder`, `GetFoldersInFolder` list a folder
 //! (`FindFirstFileA`; the seam has no folder listing yet); `Console` compiles and runs a script
-//! line (`JIPScriptRunner`, not built yet).
+//! line (on JIP's script runner, `crate::script_runner`; the command itself is not built yet).
 
 use super::arrays::{create_array, create_string_map, set_element, Element};
 use super::forms::ListNode;

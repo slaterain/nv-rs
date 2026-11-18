@@ -63,6 +63,12 @@ fn prepare(e: &mut Engine) {
     if !e.is_registered(0x0050_de20) {
         e.register(0x0050_de20, |_, _| 0x5a60u32.into_ret());
     }
+    // The game's `FindFirstFileA` at its import slot (the script runner's search at the deferred
+    // start), when the test engine has none: no such folder (`INVALID_HANDLE_VALUE`), so no script
+    // file runs.
+    if !e.is_registered(0x00fd_f070) {
+        e.register(0x00fd_f070, |_, _| 0xffff_ffffu32.into_ret());
+    }
     nvse::table::install(e);
     // The platform's XInputGetState at its import slot, as the host registers it (no controller:
     // ERROR_DEVICE_NOT_CONNECTED), for JIP's wrap there.
