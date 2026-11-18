@@ -76,7 +76,8 @@ fn setup() -> Engine {
     set_ref(&mut e, R_LOST, LOST);
     extra_stand_ins(&mut e);
     e.ext::<crate::Jip>().pos_marker.marker = MARKER;
-    register_awaiting(&mut e, AWAITING_H13);
+    // Registered with its patch (H13, `game_patches::gh2`).
+    assert_ne!(crate::test_support::execute_of(&e, OP), 0);
     e.register(MOVE_TO_MARKER, |e, w| {
         let pos = floats3(e, MARKER + 0x30);
         let cell = e.mem.u32(MARKER + 0x40);
@@ -196,4 +197,158 @@ fn a_load_forgets_the_reference() {
     let s = sync_position(&mut e);
     assert_eq!(s.refr, 0);
     assert_eq!((s.flags, s.mods[2]), (1, 3.0), "the rest kept");
+}
+
+/// H13 with its command: while `SynchronizePosition` keeps NEAR, each position the game gives
+/// the player (`SetLocationOnReference`'s store, the patch's seam) is NEAR's node plus the offset,
+/// with the rotate flag the node's heading; the kept position follows the node each time; ending
+/// the synchronization puts the player at the last node position.
+#[test]
+fn h13_the_player_follows_the_node_and_ends_at_its_last_place() {
+    let mut e = setup();
+    const LOADED: u32 = FORMS + 0xa000;
+    const ROOT: u32 = FORMS + 0xa100;
+    let seam = crate::game_patches::gh2::SYNC_POSITION.addr();
+    let location = FORMS + 0xa400;
+    let set_at = |e: &mut Engine, at: [f32; 3]| {
+        for (i, v) in at.into_iter().enumerate() {
+            e.mem.set_f32(location + 4 * i as u32, v);
+        }
+        assert_eq!(e.site(seam, &[PC, location]), Some(1));
+    };
+    // Not synchronizing: the location as given.
+    set_at(&mut e, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0]);
+    // NEAR's 3D: its root node, at (100, 200, 300), turned a quarter.
+    e.mem.set_u32(NEAR + 0x64, LOADED);
+    e.mem.set_u32(LOADED + 0x14, ROOT);
+    let node_at = |e: &mut Engine, at: [f32; 3]| {
+        for (i, v) in at.into_iter().enumerate() {
+            e.mem.set_f32(ROOT + 0x8c + 4 * i as u32, v);
+        }
+    };
+    node_at(&mut e, [100.0, 200.0, 300.0]);
+    e.mem.set_f32(ROOT + 0x68, 0.0);
+    e.mem.set_f32(ROOT + 0x6c, 1.0);
+    call_on(&mut e, OP, 0, &[r(R_NEAR), n(1), z(5.5), s(b"Bip01")]);
+    // The root carries the name the command keeps (the same fixed string).
+    e.mem.set_u32(ROOT + 8, string_of(b"Bip01"));
+    set_at(&mut e, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [100.0, 200.0, 305.5]);
+    assert_eq!(
+        e.mem.f32(PC + 0x2c),
+        crate::commands::ln_fn_math::atan2(1.0, 0.0)
+    );
+    // The node moves: the next frame's position follows it.
+    node_at(&mut e, [110.0, 210.0, 310.0]);
+    set_at(&mut e, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [110.0, 210.0, 315.5]);
+    assert_eq!(sync_position(&mut e).pos[..3], [110.0, 210.0, 315.5]);
+    // Another reference's position is never changed.
+    set_at(&mut e, [7.0, 8.0, 9.0]);
+    assert_eq!(e.site(seam, &[OTHER, location]), Some(1));
+    assert_eq!(floats3(&e, OTHER + 0x30), [7.0, 8.0, 9.0]);
+    // Ending: the player goes back to the last node position (through MoveToMarker).
+    MOVES.with(|m| m.borrow_mut().clear());
+    call_on(&mut e, OP, 0, &[]);
+    assert_eq!(
+        moves(),
+        vec![(vec![PC, MARKER, 0, 0, 0], CELL1, [110.0, 210.0, 315.5])]
+    );
+    // And the game's positions are the player's own again.
+    set_at(&mut e, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0]);
+}
+
+/// NEAR with its 3D: a root (named "Root") with a child node A, under it a block B named
+/// `name`; B at (40, 50, 60). The command starts the sync on B's name.
+fn h13_named_scene(e: &mut Engine, name: &[u8]) -> (u32, u32) {
+    const LOADED: u32 = FORMS + 0xb000;
+    const ROOT: u32 = FORMS + 0xb100;
+    const A: u32 = FORMS + 0xb300;
+    const B: u32 = FORMS + 0xb500;
+    const VT: u32 = FORMS + 0xb700;
+    const KIDS: u32 = FORMS + 0xb800;
+    e.mem.set_u32(NEAR + 0x64, LOADED);
+    e.mem.set_u32(LOADED + 0x14, ROOT);
+    e.mem.set_u32(VT + 0xc, 0x0068_15c0);
+    for (node, kid, at) in [(ROOT, A, KIDS), (A, B, KIDS + 0x10)] {
+        e.mem.set_u32(node, VT);
+        e.mem.set_u32(node + 0xa0, at);
+        e.mem.set_u16(node + 0xa6, 1);
+        e.mem.set_u32(at, kid);
+    }
+    // B is a leaf: a vtable whose `+0xC` is not `return this`.
+    e.mem.set_u32(B, VT + 0x80);
+    for (i, v) in [40.0f32, 50.0, 60.0].into_iter().enumerate() {
+        e.mem.set_f32(B + 0x8c + 4 * i as u32, v);
+    }
+    call_on(e, OP, 0, &[r(R_NEAR), n(0), z(0.0), s(name)]);
+    e.mem.set_u32(B + 8, string_of(name));
+    (ROOT, B)
+}
+
+fn h13_set(e: &mut Engine, refr: u32, at: [f32; 3]) {
+    let location = FORMS + 0xc000;
+    for (i, v) in at.into_iter().enumerate() {
+        e.mem.set_f32(location + 4 * i as u32, v);
+    }
+    let seam = crate::game_patches::gh2::SYNC_POSITION.addr();
+    assert_eq!(e.site(seam, &[refr, location]), Some(1));
+}
+
+/// H13's block search: the name on a block two levels below the root is found (the root has
+/// another name), and the player follows it.
+#[test]
+fn h13_the_named_block_is_found_below_the_root() {
+    let mut e = setup();
+    h13_named_scene(&mut e, b"Bip01 Head");
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [40.0, 50.0, 60.0]);
+    // No block of that name: the location as given, the kept position unchanged.
+    let mut e = setup();
+    let (_, b) = h13_named_scene(&mut e, b"Bip01 Head");
+    e.mem.set_u32(b + 8, 0);
+    let kept = sync_position(&mut e).pos;
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0]);
+    assert_eq!(sync_position(&mut e).pos, kept);
+}
+
+/// H13's place checks: another cell of the same world space follows the node; another world space,
+/// or a reference without 3D, keeps the location as given and the kept position unchanged.
+#[test]
+fn h13_the_place_checks() {
+    const WORLD: u32 = FORMS + 0xd000;
+    const OTHER_WORLD: u32 = FORMS + 0xd100;
+    let mut e = setup();
+    h13_named_scene(&mut e, b"Bip01 Head");
+    e.mem.set_u32(NEAR + 0x40, CELL2);
+    e.mem.set_u32(CELL1 + 0xc0, WORLD);
+    e.mem.set_u32(CELL2 + 0xc0, WORLD);
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(
+        floats3(&e, PC + 0x30),
+        [40.0, 50.0, 60.0],
+        "same world space"
+    );
+    let kept = sync_position(&mut e).pos;
+    e.mem.set_u32(CELL2 + 0xc0, OTHER_WORLD);
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(
+        floats3(&e, PC + 0x30),
+        [1.0, 2.0, 3.0],
+        "another world space"
+    );
+    assert_eq!(sync_position(&mut e).pos, kept);
+    e.mem.set_u32(CELL1 + 0xc0, 0);
+    e.mem.set_u32(CELL2 + 0xc0, 0);
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0], "two interiors");
+    // The same cell but no 3D.
+    e.mem.set_u32(NEAR + 0x40, CELL1);
+    e.mem.set_u32(NEAR + 0x64, 0);
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0], "no 3D");
+    assert_eq!(sync_position(&mut e).pos, kept);
 }
