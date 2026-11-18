@@ -202,6 +202,21 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-9",
     },
+    // TESObjectWEAP::GetCurrentAmmo 00525980 (reached by address; its own file calls it by
+    // address too): JIP LN NVSE's InitRockItLauncher (JIP's GetEquippedAmmo: none for its
+    // Rock-It Launcher).
+    Entry {
+        addr: 0x0052_5980,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // The weapon's projectile for an actor 00525a90 (reached only by address): JIP LN NVSE's
+    // InitRockItLauncher (GetWeaponProjectileHook).
+    Entry {
+        addr: 0x0052_5a90,
+        owners: JIP,
+        step: "3.5f",
+    },
     // ScriptEventList::SetActionFlag: the game events of the script event masks.
     Entry {
         addr: 0x005a_c750,
@@ -1004,6 +1019,13 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-10",
     },
+    // PlayerCharacter::Update 0093e860, the ammo switch key's weapon entry test (0x940998): JIP
+    // LN NVSE's InitRockItLauncher (PCAmmoSwitchHook: no switch for its Rock-It Launcher).
+    Entry {
+        addr: 0x0094_0998,
+        owners: JIP,
+        step: "3.5f",
+    },
     // PlayerCharacter::Update 0093e860, the activation of the reference under the crosshair: JIP LN
     // NVSE's InteractionDisabled (its activation half; 0x775B9B is the other).
     Entry {
@@ -1015,6 +1037,13 @@ pub const SITES: &[Entry] = &[
     // ToggleVanityWheel (`SafeWrite8(0x945A29, ..)`), the wheel's zoom skipped while it is off.
     Entry {
         addr: 0x0094_5a28,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // PlayerCharacter::AmmoSwapHelper 009462c0, the second weapon entry call (0x946310): JIP LN
+    // NVSE's InitRockItLauncher (RILAmmoFixHook: no ammo swap for its Rock-It Launcher).
+    Entry {
+        addr: 0x0094_6310,
         owners: JIP,
         step: "3.5f",
     },
@@ -3061,7 +3090,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 130);
+        assert_eq!(SITES.len(), 132);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3117,7 +3146,9 @@ mod tests {
             0x0060_678f,
             0x0066_ee72,
             0x0087_ce34,
+            0x0094_0998,
             0x0094_5a28,
+            0x0094_6310,
             0x0094_a34e,
             0x0072_74e1,
             0x0072_7975,

@@ -4443,9 +4443,23 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
             (ammo_timer as f64 + delta as f64) as f32,
         );
         if e.call(0x00a2_4660, &args![main_state, 0x12u32, 1u32]).u32() != 0 {
-            let process = process_of(e, this);
-            if e.vcall(process, 0x148, &args![]).u32() != 0
-                && e.call(0x008a_16d0, &args![this]).bool()
+            // Seam (JIP LN NVSE's InitRockItLauncher, `PCAmmoSwitchHook` jumped to from
+            // `0x940998` in place of the weapon entry test): no words; an answer of 1 skips the
+            // ammo switch (the HUD's weapon is JIP's Rock-It Launcher), 0 goes on without the
+            // test. Asked only while JIP is installed.
+            let jip_skip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                e.site(0x0094_0998, &[])
+            } else {
+                None
+            };
+            let has_weapon = match jip_skip {
+                Some(skip) => skip == 0,
+                None => {
+                    let process = process_of(e, this);
+                    e.vcall(process, 0x148, &args![]).u32() != 0
+                }
+            };
+            if has_weapon && e.call(0x008a_16d0, &args![this]).bool()
             {
                 let first = e.call(0x0071_7a40, &args![1u32, 0u32]).i32();
                 let second = e.call(0x0071_7a40, &args![4u32, 0u32]).i32();
@@ -7339,10 +7353,22 @@ pub fn player_character_ammo_swap_helper(
     if process == 0 {
         return;
     }
-    if e.vcall(process, 0x148, &args![]).u32() == 0 {
+    let first_entry = e.vcall(process, 0x148, &args![]).u32();
+    if first_entry == 0 {
         return;
     }
-    let equipped = e.vcall(process, 0x148, &args![]).u32();
+    // Seam (JIP LN NVSE's InitRockItLauncher, `RILAmmoFixHook` jumped to from `0x946310` in place
+    // of the second slot `0x148` call): words: the entry the first call gave; an answer is the
+    // entry used (0 for JIP's Rock-It Launcher: no ammo swap). Asked only while JIP is installed.
+    let jip_entry = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0094_6310, &[first_entry])
+    } else {
+        None
+    };
+    let equipped = match jip_entry {
+        Some(entry) => entry,
+        None => e.vcall(process, 0x148, &args![]).u32(),
+    };
     let weapon = if equipped != 0 {
         typed_call!(leaf::FAMILY, 0x0044_ddc0, leaf::word_at_8(e, equipped))
     } else {
@@ -16686,6 +16712,33 @@ mod tests {
         }
     }
 
+    /// JIP LN NVSE's InitRockItLauncher seam at the ammo switch key's weapon test (`0x940998`):
+    /// asked only while JIP is installed; an answer of 0 goes on to the drawn test (`008a16d0`)
+    /// without the exe's weapon entry test (the process's slot `0x148`, 0 here), 1 skips it as
+    /// the exe does without a weapon; none leaves the exe's test.
+    #[test]
+    fn update_ammo_switch_seam() {
+        use engine_core::extend::jip_patches;
+        let drawn_tests = |word: u32, answer: u32| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            e.register(0x00a2_4660, |_, a| int(u32::from(a[1] == 0x12 && a[2] == 1)));
+            e.set_jip_patches(word);
+            match answer {
+                0 => e.on_site_for_test(0x0094_0998, |_, _| Some(0)),
+                1 => e.on_site_for_test(0x0094_0998, |_, _| Some(1)),
+                _ => e.on_site_for_test(0x0094_0998, |_, _| None),
+            }
+            player_character_update(&mut e, this, 0.5);
+            called(&e, 0x008a_16d0).len()
+        };
+        let exe = drawn_tests(0, 0);
+        assert_eq!(drawn_tests(jip_patches::FIXES, 0), exe, "not installed: not asked");
+        assert_eq!(drawn_tests(jip_patches::INSTALLED, 1), exe, "skipped");
+        assert_eq!(drawn_tests(jip_patches::INSTALLED, 2), exe, "no answer: the exe's test");
+        assert_eq!(drawn_tests(jip_patches::INSTALLED, 0), exe + 1, "on without the test");
+    }
+
     #[test]
     fn update_counts_the_warning_timers_down_and_resets_them_when_out() {
         let mut e = engine();
@@ -18070,6 +18123,44 @@ mod tests {
         e.mem.set_u32(this.addr() + 0x68, 0);
         e.call(0x0094_62c0, &args![this, true, false]);
         assert_eq!(call_addresses(&e), vec![0x0094_62c0]);
+    }
+
+    /// The seam at 0x946310 (JIP's InitRockItLauncher, `RILAmmoFixHook`): asked with the first
+    /// weapon entry while JIP is installed; its answer is the entry used in place of the second
+    /// call (0: no swap at all), none leaves the exe's second call.
+    #[test]
+    fn ammo_swap_seam_gives_the_weapon_entry() {
+        use engine_core::extend::jip_patches;
+        for (word, answer, swaps, calls) in [
+            (0, 0, true, 2),
+            (jip_patches::FIXES, 0, true, 2),
+            (jip_patches::INSTALLED, 0, false, 1),
+            (jip_patches::INSTALLED, 1, true, 1),
+            (jip_patches::INSTALLED, 2, true, 2),
+        ] {
+            let mut e = engine();
+            let (this, _) = ammo_world(&mut e);
+            e.set_jip_patches(word);
+            match answer {
+                0 => e.on_site_for_test(0x0094_6310, |_, a| {
+                    assert_eq!(a, &[0x5100]);
+                    Some(0)
+                }),
+                1 => e.on_site_for_test(0x0094_6310, |_, a| Some(a[0])),
+                _ => e.on_site_for_test(0x0094_6310, |_, _| None),
+            }
+            e.call(0x0094_62c0, &args![this, true, false]);
+            assert_eq!(
+                slot_calls(&e, 0x0268_0000, 0x148).len(),
+                calls,
+                "{word:x} {answer}"
+            );
+            assert_eq!(
+                !called(&e, 0x00b0_03ec).is_empty(),
+                swaps,
+                "{word:x} {answer}"
+            );
+        }
     }
 
     /// Every callee of `009445b0` outside this file, and of the curve
