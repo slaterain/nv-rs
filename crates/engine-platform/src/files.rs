@@ -100,8 +100,9 @@ pub struct Entry {
     /// The name as the directory stores it: in the case of the call that made it or renamed it
     /// there.
     pub name: String,
-    /// Its 8.3 short name, empty for a name that needs none ([`short_name`]); `None` where it
-    /// could not be made as Windows makes it (writing it stops the run).
+    /// Its 8.3 short name, empty for a name that needs none or on a file system without 8.3 names
+    /// (every one off Windows, [`short_name`]); `None` on Windows where it could not be made as
+    /// Windows makes it (writing it stops the run there; elsewhere it is written empty).
     pub short: Option<String>,
     /// `FILE_ATTRIBUTE_*`.
     pub attributes: u32,
@@ -1402,17 +1403,11 @@ fn write_find_data(
 /// to, [`followed`]): the attributes there (a directory, else `ARCHIVE`; a link to a folder also
 /// `FILE_ATTRIBUTE_REPARSE_POINT`, as Wine gives it), the system's creation, last-access and
 /// last-write times as `FILETIME`s ([`filetime`], [`creation_time`]), the size, no reparse tag.
-/// A file system that gives no such time stops the run, naming the search `shown`.
+/// A time the file system does not keep is 0 ([`known_or_zero`]); nothing stops.
 #[cfg(not(windows))]
 fn listed_from(meta: &std::fs::Metadata, link_to_folder: bool, shown: &str) -> Listed {
-    let time = |what: &str, t: std::io::Result<std::time::SystemTime>| {
-        filetime(t.unwrap_or_else(|err| {
-            panic!(
-                "FindFirstFileA(\"{shown}\"): the file system gives no {what} time ({err}); \
-                 not provided"
-            )
-        }))
-    };
+    let _ = shown;
+    let time = |_what: &str, t: std::io::Result<std::time::SystemTime>| known_or_zero(t);
     let mut attributes = if meta.is_dir() {
         FILE_ATTRIBUTE_DIRECTORY
     } else {
@@ -1429,6 +1424,15 @@ fn listed_from(meta: &std::fs::Metadata, link_to_folder: bool, shown: &str) -> L
         written: time("last-write", meta.modified()),
         tag: 0,
     }
+}
+
+/// A time the file system gives as `FILETIME` ([`filetime`]), or 0 where it keeps none (Windows
+/// answers 0 for a time a volume does not keep, as FAT's creation time on media that never set
+/// one); no stop. Linux and macOS give the last-write and last-access times for every entry, so
+/// this is a guard, not a path the game's files take.
+#[cfg(any(not(windows), test))]
+fn known_or_zero(t: std::io::Result<std::time::SystemTime>) -> u64 {
+    t.map_or(0, filetime)
 }
 
 /// An entry's creation time off Windows: the system's own (`created`) when its file system keeps
@@ -1639,16 +1643,12 @@ fn write_names(e: &mut Engine, d: u32, name: &[u8], short: &[u8]) -> Result<(), 
 /// Writes the `WIN32_FIND_DATAA` at `data` for an entry of this run as [`write_find_data`] writes
 /// one, with its short name in `cAlternateFileName` (+0x130) and a zero byte; the rest of the
 /// buffer is left as it was (measured: the bytes after the name's terminator stayed 0xAA,
-/// `findfile-changed/findfile-2026-11-03.txt` 8). A short name that could not be made as Windows
-/// makes it ([`short_name`]) stops the run.
+/// `findfile-changed/findfile-2026-11-03.txt` 8). On Windows a short name that could not be made
+/// as Windows makes it ([`short_name`]) stops the run; elsewhere there are no short names
+/// ([`short_name_off_windows`]): `cAlternateFileName` is empty and nothing stops.
 fn write_entry(e: &mut Engine, data: Ptr, entry: &Entry, shown: &str) -> Result<(), u32> {
-    let Some(short) = &entry.short else {
-        panic!(
-            "FindFirstFileA(\"{shown}\"): the 8.3 short name of \"{}\", made in this run, is not \
-             provided",
-            entry.name
-        );
-    };
+    let short = alternate_name(entry, shown);
+    let short = &short;
     let d = data.addr();
     e.mem.set_u32(d, entry.attributes);
     for (offset, time) in [
@@ -1664,6 +1664,26 @@ fn write_entry(e: &mut Engine, data: Ptr, entry: &Entry, shown: &str) -> Result<
     e.mem.set_u32(d + 0x24, 0);
     e.mem.set_u32(d + 0x28, 0);
     write_names(e, d, &ansi_bytes(&entry.name), &ansi_bytes(short))
+}
+
+/// The `cAlternateFileName` a search answers for an entry of this run: its short name; one that
+/// is not known stops the run on Windows (not provided) and is empty elsewhere, where the file
+/// system keeps no 8.3 names.
+fn alternate_name(entry: &Entry, shown: &str) -> String {
+    match &entry.short {
+        Some(short) => short.clone(),
+        #[cfg(not(windows))]
+        None => {
+            let _ = shown;
+            String::new()
+        }
+        #[cfg(windows)]
+        None => panic!(
+            "FindFirstFileA(\"{shown}\"): the 8.3 short name of \"{}\", made in this run, is not \
+             provided",
+            entry.name
+        ),
+    }
 }
 
 /// `ERROR_NO_MORE_FILES`.
@@ -1752,7 +1772,8 @@ fn run_entry(e: &Engine, k: &[u8], shown: &str) -> Entry {
 
 /// The directory entry of the file at the full path `path` now: the run's ([`Disk::entries`]),
 /// else the player's as the disk keeps it ([`player_entry`]); `None` for a file of the run
-/// without one, or a player's file elsewhere than on Windows (times not provided there).
+/// without one (a copy), or a player's file that is not there (gone, or off Windows a link whose
+/// target is gone).
 fn entry_of(e: &Engine, path: &[u8]) -> Option<Entry> {
     let k = key(path);
     if state_ref!(e).disk.files.contains_key(&k) {
@@ -1834,6 +1855,7 @@ fn wild_units(pattern: &[u16], name: &[u16]) -> bool {
 /// the extension of that short name: the first three characters of its last extension, upper
 /// case, with spaces left out (`d.esmx` is `D6104~1.ESM`, measured). The rest of a short name is
 /// a hash Windows makes (for a name made in this run: [`short_name`]).
+#[cfg(any(windows, test))]
 fn short_extension(name: &str) -> Option<String> {
     let dots = name.matches('.').count();
     let (base, extension) = match name.rfind('.') {
@@ -2024,8 +2046,15 @@ fn find_first_wild(e: &mut Engine, text: &[u8], data: Ptr) -> u32 {
             )),
             _ => None,
         };
+        // On Windows (NTFS) a folder's times move with the game's changes inside it, which the
+        // run does not model: a stop. Elsewhere the folder is answered with the times its file
+        // system keeps, as a Windows volume that does not update a folder's times for changes
+        // inside it (FAT) answers it: no stop.
         if let Some(why) = why {
+            #[cfg(windows)]
             panic!("FindFirstFileA(\"{shown}\"): {why} is not provided");
+            #[cfg(not(windows))]
+            let _ = why;
         }
         found.push(item);
     }
@@ -2491,7 +2520,8 @@ fn listing_of(
 /// The directory entry of the player's file at the full path `path` as the disk keeps it (its
 /// name as stored, short name, attributes, size and times: the host's own search of that name,
 /// [`host_search`]), for a file the game takes into the run, renames or deletes; `None` when
-/// there is none (elsewhere than on Windows also when the file system keeps none of its times).
+/// there is none (off Windows also a link whose target is gone; a time the file system does not
+/// keep is 0, [`known_or_zero`]).
 fn player_entry(path: &[u8]) -> Option<Entry> {
     #[cfg(windows)]
     {
@@ -2516,7 +2546,8 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
         let real = real_path(path);
         // A link by what it links to, as the listing describes it ([`followed`], as Wine).
         let (meta, link_to_folder) = followed(&real).ok()?;
-        let time = |t: std::io::Result<std::time::SystemTime>| t.ok().map(filetime);
+        // A time the file system does not keep is 0, as the listing gives it ([`known_or_zero`]).
+        let time = |t: std::io::Result<std::time::SystemTime>| Some(known_or_zero(t));
         // The name as the folder holds it (on a file system that ignores case, not the game's
         // spelling), as the search answers it.
         let name = match super::host_paths::stored_name(&real) {
@@ -2549,9 +2580,32 @@ fn player_entry(path: &[u8]) -> Option<Entry> {
 /// to `~4`, then the checksum names. Measured (`findfile-changed/findfile-2026-11-03.txt` 4,
 /// `gen-2026-11-03.tsv`): ntdll's names were NTFS's for all 25 long names measured with an
 /// extension of three characters or fewer; for a longer extension they differ (`d.esmx`: ntdll
-/// `D6104~1.ES~`, NTFS `D6104~1.ESM`), so such a name's short name is `None` (not provided), as
-/// it is elsewhere than on Windows.
+/// `D6104~1.ES~`, NTFS `D6104~1.ESM`), so on Windows such a name's short name is `None` (not
+/// provided).
+///
+/// Elsewhere than on Windows always empty ([`short_name_off_windows`]): Linux and macOS file
+/// systems keep no 8.3 names, as a Windows volume with 8.3 name creation turned off keeps none,
+/// so a file the game makes there has none and its search answers an empty `cAlternateFileName`
+/// (the first Linux save menu stopped on `quicksave.fos` here, 2026-11-17).
 fn short_name(e: &Engine, path: &[u8]) -> Option<String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (e, path);
+        short_name_off_windows()
+    }
+    #[cfg(windows)]
+    short_name_on_windows(e, path)
+}
+
+/// [`short_name`] on a volume without 8.3 names (every one off Windows): none, for every name.
+#[cfg(any(not(windows), test))]
+fn short_name_off_windows() -> Option<String> {
+    Some(String::new())
+}
+
+/// [`short_name`] on a Windows volume that makes 8.3 names (the system drive's default).
+#[cfg(windows)]
+fn short_name_on_windows(e: &Engine, path: &[u8]) -> Option<String> {
     let name = last_part(path);
     if short_extension(&name).is_none() {
         return Some(String::new());
@@ -2560,20 +2614,12 @@ fn short_name(e: &Engine, path: &[u8]) -> Option<String> {
     if extension.len() > 3 {
         return None;
     }
-    #[cfg(windows)]
-    {
-        let cut = last_separator(path)?;
-        let taken = names_in(e, &path[..cut]);
-        let mut generator = ntdll::Generator::new(&name);
-        (0..1000)
-            .map(|_| generator.next())
-            .find(|short| !taken.contains(&short.to_ascii_uppercase()))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = e;
-        None
-    }
+    let cut = last_separator(path)?;
+    let taken = names_in(e, &path[..cut]);
+    let mut generator = ntdll::Generator::new(&name);
+    (0..1000)
+        .map(|_| generator.next())
+        .find(|short| !taken.contains(&short.to_ascii_uppercase()))
 }
 
 /// Every long and short name the directory at the full path `directory` holds now, upper case:
@@ -5167,6 +5213,201 @@ mod tests_changed_directories {
         )
     }
 
+    /// The alternate name a search writes for an entry of the run, on every system: a known short
+    /// name as it is (Windows' `QUICKS~1.FOS`, an empty one), an unknown one empty off Windows
+    /// (no 8.3 names there, every new name gets none), a stop on Windows (unchanged).
+    #[test]
+    fn the_alternate_name_of_an_entry_of_the_run() {
+        let entry = |short: Option<&str>| Entry {
+            name: "quicksave.fos".into(),
+            short: short.map(str::to_string),
+            attributes: FILE_ATTRIBUTE_ARCHIVE,
+            size: 1,
+            created: 0,
+            accessed: 0,
+            written: 0,
+        };
+        assert_eq!(
+            alternate_name(&entry(Some("QUICKS~1.FOS")), "test"),
+            "QUICKS~1.FOS"
+        );
+        assert_eq!(alternate_name(&entry(Some("")), "test"), "");
+        assert_eq!(short_name_off_windows(), Some(String::new()));
+        // A time the file system does not keep is 0, never a stop; a kept one is its FILETIME.
+        let none = std::io::Error::new(std::io::ErrorKind::Unsupported, "no such time");
+        assert_eq!(known_or_zero(Err(none)), 0);
+        assert_eq!(
+            known_or_zero(Ok(std::time::UNIX_EPOCH)),
+            filetime(std::time::UNIX_EPOCH)
+        );
+        let unknown = std::panic::catch_unwind(|| alternate_name(&entry(None), "test"));
+        #[cfg(not(windows))]
+        assert_eq!(unknown.unwrap(), "");
+        #[cfg(windows)]
+        assert!(unknown.is_err(), "Windows keeps its stop");
+    }
+
+    /// The `FILETIME` of the last write the disk keeps for the host file `path`.
+    #[cfg(not(windows))]
+    fn disk_written(path: &std::path::Path) -> u64 {
+        filetime(std::fs::metadata(path).unwrap().modified().unwrap())
+    }
+
+    /// Starts the run's file clock a minute after the disk's newest file in `dir`, so the run's
+    /// saves are newer than the player's (as in a real run) and the save menu sorts them so.
+    #[cfg(not(windows))]
+    fn clock_after_disk(e: &mut Engine, dir: &std::path::Path) {
+        let newest = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| disk_written(&entry.path()))
+            .max()
+            .unwrap_or(0);
+        state!(e).disk.clock = Some(newest + 60 * SECOND);
+    }
+
+    /// Linux and macOS (the first Linux save menu's stop, 2026-11-17): a quick save, a named save
+    /// and the same quick save again (its backup made: `CloseSaveFile`'s rename to `.bak`), all
+    /// with names that need an 8.3 name on Windows, beside a save of the player's from before the
+    /// run; then the save menu's `Saves\*.fos` listing (`00851330`) and the save list's look at
+    /// one save by name (`00846a20`). Every save is found, the player's and the run's, with an
+    /// empty `cAlternateFileName` (no 8.3 names on this file system), `ARCHIVE`, its size and
+    /// the times the save menu sorts by (the run's saves later than the player's), and nothing
+    /// stops; the whole folder lists `.` with its times on the disk; deleting a save from the
+    /// menu takes it out of the next listing.
+    #[cfg(not(windows))]
+    #[test]
+    fn saves_made_in_the_run_are_listed_without_short_names_here() {
+        let player = "Save 1   Courier  Goodsprings.fos";
+        let named = "Save 2   Courier  Doc Mitchell s House";
+        let dir = scratch("saves-here", &[(player, 300)]);
+        let host = std::path::PathBuf::from(&dir);
+        let saves = engine_core::exe::game_view(&dir);
+        let mut e = Engine::new();
+        clock_after_disk(&mut e, &host);
+        let (quick_made, _) = save(&mut e, &saves, "quicksave", &[100, 20]);
+        let (named_made, named_last) = save(&mut e, &saves, named, &[200]);
+        let (_, quick_last) = save(&mut e, &saves, "quicksave", &[150]);
+        let all = listed(&mut e, &format!(r"{saves}\*.fos"));
+        let player_written = disk_written(&host.join(player));
+        let expected: Vec<Listed> = vec![
+            // The second quick save takes the first one's creation time (tunnelling: the
+            // name was renamed away to `.bak` and made again within 15 s).
+            (
+                "quicksave.fos".into(),
+                String::new(),
+                FILE_ATTRIBUTE_ARCHIVE,
+                150,
+                quick_made,
+                quick_last,
+                quick_last,
+            ),
+            (
+                player.into(),
+                String::new(),
+                FILE_ATTRIBUTE_ARCHIVE,
+                300,
+                all[1].4,
+                all[1].5,
+                player_written,
+            ),
+            (
+                format!("{named}.fos"),
+                String::new(),
+                FILE_ATTRIBUTE_ARCHIVE,
+                200,
+                named_made,
+                named_last,
+                named_last,
+            ),
+        ];
+        assert_eq!(all, expected);
+        assert!(quick_last > player_written && named_last > player_written);
+        // The backup is there too, under its own name, with no short name: the first quick
+        // save's bytes and times.
+        let backups = listed(&mut e, &format!(r"{saves}\*.bak"));
+        assert_eq!(backups.len(), 1);
+        assert_eq!(
+            (backups[0].0.as_str(), backups[0].1.as_str(), backups[0].3),
+            ("quicksave.fos.bak", "", 120)
+        );
+        // The save list's look at one save by name: the same entry.
+        assert_eq!(
+            listed(&mut e, &format!(r"{saves}\quicksave.fos")),
+            [all[0].clone()]
+        );
+        // The whole folder (`*`): its `.` too, though the game changed the folder in this run
+        // (on Windows a stop: NTFS moves the folder's times; here the disk's times, no stop).
+        let every = listed(&mut e, &format!(r"{saves}\*"));
+        let named_fos = format!("{named}.fos");
+        let names: Vec<&str> = every.iter().map(|l| l.0.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                ".",
+                "..",
+                "quicksave.fos",
+                "quicksave.fos.bak",
+                player,
+                named_fos.as_str()
+            ]
+        );
+        assert_eq!(every[0].2, FILE_ATTRIBUTE_DIRECTORY);
+        assert_eq!(
+            every[0].6,
+            disk_written(&host),
+            "`.` has the folder's own times"
+        );
+        // Deleting a save from the menu: gone from the next listing.
+        assert_eq!(delete(&mut e, &format!(r"{saves}\quicksave.fos")), 1);
+        let left: Vec<String> = listed(&mut e, &format!(r"{saves}\*.fos"))
+            .into_iter()
+            .map(|l| l.0)
+            .collect();
+        assert_eq!(left, [player.to_string(), format!("{named}.fos")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux and macOS: a quick save over a quick save and its backup from an earlier session
+    /// (both on the disk): `CloseSaveFile` deletes the old backup, renames the old quick save to
+    /// the backup and the new one into place. `*.fos` and `*.bak` then list one entry each,
+    /// with no short names: the new save's size, and the backup with the old quick save's size
+    /// and its last-write time as the disk keeps it (never 0).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_quick_save_over_saves_from_the_disk_keeps_their_times() {
+        let dir = scratch(
+            "quick-over-disk",
+            &[("quicksave.fos", 500), ("quicksave.fos.bak", 400)],
+        );
+        let host = std::path::PathBuf::from(&dir);
+        let old_written = disk_written(&host.join("quicksave.fos"));
+        let saves = engine_core::exe::game_view(&dir);
+        let mut e = Engine::new();
+        clock_after_disk(&mut e, &host);
+        let (_, last) = save(&mut e, &saves, "quicksave", &[150]);
+        let fos = listed(&mut e, &format!(r"{saves}\*.fos"));
+        assert_eq!(fos.len(), 1);
+        assert_eq!(
+            (
+                fos[0].0.as_str(),
+                fos[0].1.as_str(),
+                fos[0].2,
+                fos[0].3,
+                fos[0].6
+            ),
+            ("quicksave.fos", "", FILE_ATTRIBUTE_ARCHIVE, 150, last)
+        );
+        let bak = listed(&mut e, &format!(r"{saves}\*.bak"));
+        assert_eq!(bak.len(), 1);
+        assert_eq!(
+            (bak[0].0.as_str(), bak[0].1.as_str(), bak[0].3, bak[0].6),
+            ("quicksave.fos.bak", "", 500, old_written)
+        );
+        assert_ne!(bak[0].6, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The console's `save nvfix` beside a save of the player's, then the pause menu's
     /// `Saves\*.fos` (`007cbaf0`) and the save list's look at the new file (`00846a20`): the new
     /// save is listed first (upper-case order), `ARCHIVE`, no short name (a valid 8.3 name), its
@@ -5442,7 +5683,9 @@ mod tests_changed_directories {
     }
 
     /// `.` of a directory the game changed is not listed as Windows would (its times move with
-    /// the changes, not modelled): the run stops.
+    /// the changes, not modelled): the run stops. Windows only: elsewhere the folder's times
+    /// on the disk are answered (`saves_made_in_the_run_are_listed_without_short_names_here`).
+    #[cfg(windows)]
     #[test]
     #[should_panic(expected = "of a directory the game changed in this run")]
     fn a_search_that_finds_dot_in_a_changed_directory_stops() {

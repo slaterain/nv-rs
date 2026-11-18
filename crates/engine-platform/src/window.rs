@@ -142,11 +142,12 @@ pub fn shell_execute_a(
 }
 
 // Platform: replaces ADVAPI32.DLL GetUserNameA (import)
-/// `GetUserNameA(buffer, size)`: the player's user name (the `USERNAME` the process runs with),
-/// zero-terminated, with `*size` set to its length plus one; false with
-/// `ERROR_INSUFFICIENT_BUFFER` (122) and the size needed when it doesn't fit.
+/// `GetUserNameA(buffer, size)`: the player's user name ([`user_name`]), zero-terminated, with
+/// `*size` set to its length plus one; false with `ERROR_INSUFFICIENT_BUFFER` (122) and the size
+/// needed when it doesn't fit. Its one reader in the exe (`004b4a30`) writes it into the game's
+/// own error log.
 pub fn get_user_name_a(e: &mut Engine, buffer: Ptr, size: Ptr) -> u32 {
-    let name = std::env::var("USERNAME").unwrap_or_default().into_bytes();
+    let name = user_name(|key| std::env::var(key).ok()).into_bytes();
     let needed = name.len() as u32 + 1;
     let room = e.mem.u32(size.addr());
     e.mem.set_u32(size.addr(), needed);
@@ -156,6 +157,15 @@ pub fn get_user_name_a(e: &mut Engine, buffer: Ptr, size: Ptr) -> u32 {
     }
     e.mem.set_cstr(buffer.addr(), &name);
     1
+}
+
+/// The user name the process runs with, from the variables `var` reads: Windows' `USERNAME`,
+/// else `USER` (what Linux and macOS set; Windows has no `USER`), else empty.
+fn user_name(var: impl Fn(&str) -> Option<String>) -> String {
+    ["USERNAME", "USER"]
+        .into_iter()
+        .find_map(|key| var(key).filter(|v| !v.is_empty()))
+        .unwrap_or_default()
 }
 
 // Platform: replaces STEAM_API.DLL SteamAPI_Init (import)
@@ -797,6 +807,30 @@ mod tests {
         e.mem.map(0x1000, 0x1000);
         e.mem.write(0x1000, b"FalloutNVLauncher.exe\0");
         assert_eq!(shell_execute_a(&mut e, 0, 0, Ptr::new(0x1000), 0, 0, 1), 0);
+    }
+
+    /// Windows' `USERNAME` first; Linux and macOS set only `USER`, which then answers (it was
+    /// empty there).
+    #[test]
+    fn the_user_name_is_usernames_else_users() {
+        let vars = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        assert_eq!(
+            user_name(vars(&[("USERNAME", "win"), ("USER", "unix")])),
+            "win"
+        );
+        assert_eq!(user_name(vars(&[("USER", "unix")])), "unix");
+        assert_eq!(
+            user_name(vars(&[("USERNAME", ""), ("USER", "unix")])),
+            "unix"
+        );
+        assert_eq!(user_name(vars(&[])), "");
     }
 
     fn wide_of(text: &str) -> Vec<u16> {
