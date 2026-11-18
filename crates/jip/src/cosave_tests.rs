@@ -1410,21 +1410,26 @@ fn linked_references_set_when_installed() {
 }
 
 /// G33's part of the housekeeping: a load's start and leaving to the main menu clear the player's
-/// killer (`+0xC0`) through the messages, as `DoPreLoadGameHousekeeping` does.
+/// killer (`+0xC0`) through the messages, as `DoPreLoadGameHousekeeping` does, only while JIP
+/// answers "installed" (not installed, the killer stays: the game's own behaviour).
 #[test]
 fn a_load_and_the_main_menu_clear_the_players_killer() {
     let mut w = World::new();
-    for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
-        w.e.mem.set_u32(PLAYER_REF + 0xc0, 0x0500_8800);
-        listen(
-            &mut w.e,
-            &Message {
-                kind,
-                data: 0,
-                len: 0,
-            },
-        );
-        assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0, "{kind}");
+    for installed in [false, true] {
+        w.e.ext::<Jip>().answers_installed = installed;
+        for kind in [msg::PRE_LOAD_GAME, msg::EXIT_TO_MAIN_MENU] {
+            w.e.mem.set_u32(PLAYER_REF + 0xc0, 0x0500_8800);
+            listen(
+                &mut w.e,
+                &Message {
+                    kind,
+                    data: 0,
+                    len: 0,
+                },
+            );
+            let left = if installed { 0 } else { 0x0500_8800 };
+            assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), left, "{kind} {installed}");
+        }
     }
 }
 
@@ -1629,19 +1634,6 @@ fn a_load_and_the_main_menu_clear_the_excluded_combat_actions() {
         );
         assert_eq!(excluded_combat_actions(&mut w.e, PLAYER_REF), 0, "{kind}");
     }
-}
-
-/// `DoPreLoadGameHousekeeping`'s last step: the player's killer cleared, only while JIP answers
-/// "installed".
-#[test]
-fn the_players_killer_is_cleared_before_a_load() {
-    let mut w = World::new();
-    w.e.mem.set_u32(PLAYER_REF + 0xc0, 0x0500_9000);
-    clear_player_killer(&mut w.e);
-    assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0x0500_9000, "not installed");
-    w.e.ext::<Jip>().answers_installed = true;
-    clear_player_killer(&mut w.e);
-    assert_eq!(w.e.mem.u32(PLAYER_REF + 0xc0), 0);
 }
 
 /// DeferredInit's console line: the format and JIP's version as a double, while installed.

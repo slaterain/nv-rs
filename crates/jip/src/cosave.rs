@@ -630,8 +630,6 @@ const SAVE_LOAD_GAME: u32 = 0x011d_df38;
 const ALL_FORMS: u32 = 0x011c_54c0;
 /// `PlayerCharacter` (`0x011DEA3C`).
 const PLAYER: u32 = 0x011d_ea3c;
-/// `Actor::killer` (`+0xC0`).
-const PLAYER_KILLER: u32 = 0xc0;
 /// A vtable's entries that answer true (`0x008D0360`) for a reference (`+0xF0`) and an actor
 /// (`+0x100`): JIP's `IS_REFERENCE` and `IS_ACTOR`.
 const RETURN_TRUE: u32 = 0x008d_0360;
@@ -1783,6 +1781,9 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // forms, the waits, the swapped LOD blocks and the model paths gone, the reference names' flags set
 // again; and the player's killer cleared, G33's part; and the excluded combat actions gone, H16's
 // part; and the references' own map markers gone).
+/// Not installed, every step leaves the game as it is: the ones that write the game's memory (G33's
+/// killer, H16's excluded actions) check that JIP answers "installed"; the others only clear JIP's
+/// own maps and switch off hooks, which are empty and off while JIP is not installed.
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
@@ -1794,21 +1795,6 @@ fn pre_load_housekeeping(e: &mut Engine) {
     crate::game_patches::gc::pre_load(e);
     crate::game_patches::gd::pre_load(e);
     crate::commands::jip_fn_misc_ref::pre_load(e);
-    clear_player_killer(e);
-}
-
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: DoPreLoadGameHousekeeping
-// (its last step).
-/// `g_thePlayer->killer = nullptr`: the player names no killer after the load (or at the main
-/// menu). Only while JIP answers "installed".
-pub(crate) fn clear_player_killer(e: &mut Engine) {
-    if !e.ext::<Jip>().answers_installed {
-        return;
-    }
-    let player = e.mem.u32(PLAYER);
-    if player != 0 {
-        e.mem.set_u32(player + PLAYER_KILLER, 0);
-    }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (its console
