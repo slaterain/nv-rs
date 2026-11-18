@@ -329,29 +329,10 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
     game
 }
 
-/// The expiry queue's own calls in the exe's clean-up (its construction with the bucket array's
-/// allocation and memset, inserts, finds, hash and key compares, items made and freed, flush and
-/// destruction): the typed clean-up makes none.
-const QUEUE_CALLS: &[u32] = &[
-    0x0084_b750,
-    0x00aa_1070,
-    0x0040_3d30,
-    0x00ec_61c0,
-    0x0084_b7c0,
-    0x0084_b8b0,
-    0x0084_b930,
-    0x0084_b950,
-    0x0084_b990,
-    0x0045_34f0,
-    0x0084_ba50,
-    0x0040_1000,
-    0x0043_8af0,
-    0x0084_ba70,
-    0x006b_8310,
-    0x0040_1030,
-    0x0084_b9c0,
-    0x00aa_10f0,
-];
+/// The expiry queue's finds (`0084b8b0`) and the hash and key compares they and the inserts make:
+/// the typed clean-up keeps the queue as the exe builds it (construction, inserts, flush,
+/// destruction, its heap blocks) and answers the finds from a native map beside it.
+const QUEUE_CALLS: &[u32] = &[0x0084_b8b0, 0x0084_b930, 0x0084_b950];
 
 /// Every entry of the changes map after the clean-up: key and flags, in the map's order.
 fn changes_map(e: &Engine, game: u32) -> Vec<(u32, u32)> {
@@ -380,11 +361,7 @@ fn cleanup_run(mut e: Engine, w: World) -> Run {
     e.call_log = Some(vec![]);
     e.call(0x0084_ab20, &args![game]);
     let log = e.call_log.take().unwrap();
-    let heap = [0x0040_1000, 0x0040_1030];
-    let queue = log
-        .iter()
-        .filter(|(a, _)| QUEUE_CALLS.contains(a) && !heap.contains(a))
-        .count();
+    let queue = log.iter().filter(|(a, _)| *a == 0x0084_b8b0).count();
     let frees = log
         .iter()
         .filter(|(a, _)| *a == 0x0040_1030)
@@ -417,12 +394,12 @@ fn typed_cleanup_expired_data_matches_the_translation() {
     let (exe_log, exe_map, exe_queue, exe_frees) = cleanup_run(Engine::new_untyped_for_test(), w);
     let (typed_log, typed_map, typed_queue, typed_frees) = cleanup_run(Engine::new(), w);
     assert!(
-        exe_queue > 3000,
-        "the exe's queue was used: {exe_queue} calls"
+        exe_queue >= 3000,
+        "the exe asked its queue {exe_queue} times"
     );
     assert_eq!(
         typed_queue, 0,
-        "the typed clean-up keeps no queue in guest memory"
+        "the typed clean-up asks its own map, not the queue"
     );
     for (i, (t, x)) in typed_log.iter().zip(&exe_log).enumerate() {
         assert_eq!(
@@ -435,9 +412,11 @@ fn typed_cleanup_expired_data_matches_the_translation() {
     assert_eq!(typed_log.len(), exe_log.len());
     assert_eq!(typed_map, exe_map);
     // The old stored buffers the partial removals free, in the exe's order among its frees.
-    assert_eq!(typed_frees.len(), 20);
-    let mut rest = exe_frees.iter();
-    assert!(typed_frees.iter().all(|f| rest.any(|x| x == f)));
+    assert_eq!(typed_frees, exe_frees);
+    assert!(
+        exe_frees.len() > 20,
+        "the queue's items and the 20 old buffers"
+    );
     // Each branch ran: whole entries removed (flags 4), bits 0xc cleared, kept (6), the note.
     let count = |log: &[(u32, Vec<u32>)], a: u32| log.iter().filter(|(x, _)| *x == a).count();
     assert_eq!(
@@ -493,4 +472,53 @@ fn cleanup_expired_data_speed() {
             );
         }
     }
+}
+
+/// The differential harness's run of the typed clean-up against its translation (the queue's own
+/// calls left out, with what they do): two small worlds (the large one is the test above's; this harness hashes memory at every call).
+#[test]
+fn cleanup_expired_data_diff() {
+    use engine_core::typed::diff::{Diff, Input};
+    use engine_core::typed::leaf;
+    use engine_typed::dispatch;
+    let small = World {
+        worlds: 2,
+        cells: 16,
+        expired: 8,
+        references: 60,
+        in_expired: 24,
+        buffered: 4,
+        interior: 2,
+        missing: true,
+        buckets: 37,
+    };
+    let larger = World {
+        worlds: 3,
+        cells: 30,
+        expired: 12,
+        references: 120,
+        in_expired: 48,
+        buffered: 8,
+        interior: 3,
+        missing: false,
+        buckets: 53,
+    };
+    Diff::new(engine_core::entry!(
+        0x0084_ab20,
+        dispatch::saveload::cleanup_expired_data(Ptr<_>)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    // The expiry queue: its construction, inserts, finds, flush and destruction.
+    .ignore_calls(&[0x0084_b8b0])
+    .inputs(&[Input::Of(&[0, 1])])
+    .max_calls(400_000)
+    .setup(move |e, case| {
+        vec![cleanup_world(
+            e,
+            if case.word(0) == 0 { small } else { larger },
+        )]
+    })
+    .run()
+    .assert_same();
 }

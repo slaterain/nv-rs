@@ -8,12 +8,12 @@
 //! Optimizations fixes the hash and gives it 4,999 buckets (lStewieAl's Tweaks, `InitSaveMapHook`,
 //! `NiTMap_int64_int__Insert`/`__Lookup`).
 //!
-//! Here the queue is a Rust hash map with the exe's insert (a key already there takes the new value)
-//! and find. Nothing walks the queue (the function builds, fills, asks and frees it itself), so the
-//! save is the same byte for byte: every other call, in the exe's order, with the exe's words (the
-//! differential test compares the two runs' calls and the changes map they leave). The queue's own
-//! calls (`0084b4e0` construction, `0084b7c0`/`0084b8b0`, `00438af0` flush, `0084b9c0` destruction)
-//! and its heap blocks are the ones left out.
+//! Here the queue is built, filled, flushed and freed as the exe does it (the same calls, heap blocks
+//! and memory), and a Rust hash map beside it, filled with the same keys and values, answers the
+//! finds (`0084b8b0`): the second pass's walk of the chain is the cost, and it is gone. The answer
+//! and the "found" slot are the exe's, so the changes map the function leaves, and the save, are the
+//! same byte for byte. The inserts still walk their chain as the exe does (a smaller cost: once per
+//! expired cell).
 
 use engine_core::ptr::Ptr;
 use engine_core::typed::leaf;
@@ -64,6 +64,12 @@ const MAP_REMOVE_AT: u32 = 0x0040_5430;
 const REFERENCES_MAP_REMOVE: u32 = 0x0085_2a10;
 const REFERENCES_MAP_REMOVE_EXTERIOR: u32 = 0x0085_2cd0;
 const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// The expiry queue (`NiTMap<__int64,int>`): base constructor, own vtable, insert, flush, destructor.
+const EXPIRY_QUEUE_BASE_CONSTRUCT: u32 = 0x0084_b750;
+const EXPIRY_QUEUE_VTABLE: u32 = 0x0107_f494;
+const EXPIRY_QUEUE_INSERT: u32 = 0x0084_b7c0;
+const EXPIRY_QUEUE_FLUSH: u32 = 0x0043_8af0;
+const EXPIRY_QUEUE_DESTRUCT: u32 = 0x0084_b9c0;
 const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
 const HISTORY_ADD_NOTE: u32 = 0x0084_dff0;
 /// `"SAVELOAD: CleanupExpiredData: no form or buffer for %08X (flags %08X)"`-style warning.
@@ -78,6 +84,7 @@ const REFERENCE_SLOT_PLACE: u32 = 0x1f4;
 const POSITION: u32 = 0x00;
 const KEY: u32 = 0x04;
 const ENTRY: u32 = 0x08;
+const FOUND: u32 = 0x0c;
 const VALUE_SIZE: u32 = 0x10;
 const INITIAL_DATA: u32 = 0x20;
 const SECOND_INITIAL_DATA: u32 = 0x50;
@@ -125,16 +132,22 @@ fn grid_of(e: &mut Engine, value: u32) -> u32 {
 pub fn cleanup_expired_data(e: &mut Engine, this: Ptr) {
     let saved_flag = e.call(SET_THREAD_FLAG, &args![this, 0u32]).u8();
     // The exe's queue had 0x10 bytes of frame, then its passes 0xa0.
-    e.with_stack(0x10, |e, _queue| {
+    e.with_stack(0x10, |e, queue| {
+        // `0084b4e0`: the queue's base constructor (37 buckets), then its own vtable.
+        e.call(EXPIRY_QUEUE_BASE_CONSTRUCT, &args![queue, 0x25u32]);
+        e.mem.set_u32(queue.addr(), EXPIRY_QUEUE_VTABLE);
         e.with_stack(0xa0, |e, frame| {
-            body(e, this.addr(), frame.addr());
+            body(e, this.addr(), queue.addr(), frame.addr());
         });
+        e.call(EXPIRY_QUEUE_FLUSH, &args![queue]);
         e.call(SET_THREAD_FLAG, &args![this, u32::from(saved_flag)]);
+        e.call(EXPIRY_QUEUE_DESTRUCT, &args![queue]);
     });
 }
 
-fn body(e: &mut Engine, this: u32, frame: u32) {
-    let mut queue: HashMap<(u32, u32), u32> = HashMap::new();
+fn body(e: &mut Engine, this: u32, queue: u32, frame: u32) {
+    // The queue's keys and values beside it, for the finds.
+    let mut expired_cells: HashMap<(u32, u32), u32> = HashMap::new();
     let data_handler = e.mem.u32(DATA_HANDLER);
     let position = frame + POSITION;
     let key_slot = frame + KEY;
@@ -192,8 +205,9 @@ fn body(e: &mut Engine, this: u32, frame: u32) {
         }
         if detach_time != 0 && now.wrapping_sub(detach_time) > e.call(EXPIRY_LIMIT, &args![]).u32()
         {
-            let key = expiry_key(e, area, x, y);
-            queue.insert(key, detach_time);
+            let (low, high) = expiry_key(e, area, x, y);
+            e.call(EXPIRY_QUEUE_INSERT, &args![queue, low, high, detach_time]);
+            expired_cells.insert((low, high), detach_time);
             expired += 1;
         }
     }
@@ -278,8 +292,17 @@ fn body(e: &mut Engine, this: u32, frame: u32) {
             continue;
         }
         let key_words = expiry_key(e, area, x, y);
-        // The exe zeroes its "found" slot and stores the value there; nothing reads it after.
-        if queue.contains_key(&key_words)
+        // `0084b8b0` (the find): the exe zeroes its "found" slot and stores the value there.
+        let found = frame + FOUND;
+        e.mem.set_u32(found, 0);
+        let in_queue = match expired_cells.get(&key_words) {
+            Some(value) => {
+                e.mem.set_u32(found, *value);
+                true
+            }
+            None => false,
+        };
+        if in_queue
             && e.call(FLAGS_TEST, &args![entry, 4u32]).bool()
             && !e.call(FLAGS_TEST, &args![entry, 2u32]).bool()
         {
