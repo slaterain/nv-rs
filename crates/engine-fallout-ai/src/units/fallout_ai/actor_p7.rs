@@ -3025,7 +3025,12 @@ mod tests {
                 e
             };
             let (off, on) = (run(false), run(true));
-            assert_eq!(on.call_log, off.call_log, "owner type {owner_type:#x}");
+            // The calls into the exe (the stand-in slots' own addresses differ between engines).
+            let exe = |e: &Engine| -> Vec<(u32, Vec<u32>)> {
+                let log = e.call_log.clone().unwrap_or_default();
+                log.into_iter().filter(|(a, _)| *a < 0x0200_0000).collect()
+            };
+            assert_eq!(exe(&on), exe(&off), "owner type {owner_type:#x}");
             assert_eq!(calls_to(&on, REWARD_KARMA).len(), 1);
             let looked_up = if owner_type == 8 {
                 PROCESS_LISTS_FIND_ACTOR_REF
