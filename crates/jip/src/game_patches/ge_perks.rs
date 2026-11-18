@@ -1,26 +1,30 @@
-//! Group GE's O18 (`uNPCPerks`, JIP's switch 18), part 1: NPCs keep perks of their own. JIP's
+//! Group GE's O18 (`uNPCPerks`, JIP's switch 18): NPCs keep perks of their own. JIP's
 //! `NPCPerksInfo` per actor (its ranks by perk and its 24 entry point lists), the four routines it
 //! writes into the `Character` and `Creature` vtables (set and remove a perk, a perk's rank, an
 //! entry point's list), the starting perks (`uNPCPerks=2`), the lists made when an actor's 3D is
 //! set up or a save is loaded, the entry dropped with the actor, and the co-save's walk at a save
-//! (`cosave.rs`).
+//! (`cosave.rs`); the player's two routines (set and remove a perk, for the player or the
+//! teammates), JIP's rewrite of `Actor::SetPlayerTeammate` (`0x8BCA90`) and its three entry point
+//! patches (`0x5E592F`, `0x64570F`, `0x89B455`). JIP's fourth write there (`0x89B50B`) puts back
+//! the five bytes the exe already has: nothing to port.
 //!
 //! The ranks live in [`crate::cosave::NpcPerksMap`] (JIP's `s_NPCPerksInfoMap`, by actor id); an
 //! actor's entry point lists are a guest block of 24 `tList` heads, since the game's
 //! `HandleEntryPoint` walks the list the routine answers. The routines run on any thread that asks
-//! an actor's perks: the map's lock is taken for each read or write alone, never across a game
-//! call.
+//! an actor's perks: a change takes the map's lock for itself alone, never across a game call;
+//! the rank and list reads take no lock ([`crate::cosave::npc_perks_read`]).
 //!
-//! Part 2 adds the player's two routines, the teammate wrap (`0x8BCA90`), the entry point byte
-//! patches (`0x5E592F`, `0x64570F`, `0x89B455`) and turns the switch on ([`switch_on`] is called
-//! from `DeferredInit` then); until then nothing calls this file's routines in a game.
+//! The switch goes on at `DeferredInit` ([`switch_on`], as JIP's `s_deferrSetOptional`): until
+//! then (and with `uNPCPerks` off, or JIP's row off) every seam and the wrap leave the game as it
+//! is.
 
 use crate::commands::forms::ListNode;
 use crate::commands::list_remove_all;
 use crate::commands::{heap_alloc, heap_free, list_append, list_contains, list_items, list_remove};
-use crate::cosave::{mark_changed, npc_perks};
+use crate::commands::{list_prepend, list_unlink};
+use crate::cosave::{mark_changed, npc_perks, npc_perks_read};
 use engine_core::abi::AbiFn;
-use engine_core::extend::{Owner, SiteSlot};
+use engine_core::extend::{Owner, SiteSlot, WrapSlot};
 use engine_core::prelude::*;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
@@ -50,10 +54,31 @@ const ROUTINES: [u32; 4] = [
     routine(Group::GE, 11),
 ];
 
+/// `PlayerCharacter`'s two slots (`0x108AED4` set a perk's rank, `0x108AED8` remove a perk; the
+/// exe's `00963790` and `00963900`) and their routines.
+pub const PLAYER_SLOTS: [u32; 2] = [0x0108_aed4, 0x0108_aed8];
+const PLAYER_ROUTINES: [u32; 2] = [routine(Group::GE, 12), routine(Group::GE, 13)];
+
 /// O18's seam in `Actor::~Actor` (`0087dcb0`) at `0x87DE3F`, in place of `call 004077c0` (the
 /// deleted-flag test; words: the actor). JIP's `DestroyActorHook` drops the actor's entry and does
 /// the same test; here the handler drops the entry and gives no answer, so the exe's test runs.
 pub const DESTROY_ACTOR: SiteSlot = SiteSlot::new(Owner::Jip, 0x0087_de3f);
+/// O18's seam in `BGSEntryPoint::HandleEntryPoint` (`005e58f0`) at `0x5E592F`: a teammate's
+/// entries are asked of the player (`mov eax, [player]; mov [ebp+0xC], eax`); JIP's 8-byte nop
+/// keeps the teammate (with the teammate flag still set). Words: the actor; an answer keeps it.
+pub const TEAMMATE_OWN_ENTRIES: SiteSlot = SiteSlot::new(Owner::Jip, 0x005e_592f);
+/// O18's seam in the weapon damage per second (`00645380`) at `0x64570F`: the entry point 0
+/// (`HandleEntryPoint`) runs only when the caller asks for perks (`test ecx, ecx; jz`); JIP's
+/// 4-byte nop runs it always. Asked when the caller did not ask; words: the actor; an answer runs
+/// it.
+pub const WEAPON_DAMAGE_PERKS: SiteSlot = SiteSlot::new(Owner::Jip, 0x0064_570f);
+/// O18's seam in `Actor::HitMe` (`0089a760`) at `0x89B455`: the kill effect (entry point 0x2E,
+/// for a kill with a weapon of kind 0x22) looks at the player's current weapon; JIP's 32 bytes
+/// look at the attacker's. Words: the attacker; the answer is the weapon's form (0 for none).
+pub const KILL_EFFECT_WEAPON: SiteSlot = SiteSlot::new(Owner::Jip, 0x0089_b455);
+/// O18's wrap of `Actor::SetPlayerTeammate` (`008bca90`, `thiscall`: the actor, the flag):
+/// JIP's `WriteRelJump(0x8BCA90, SetPlayerTeammateHook)` replaces the function.
+pub const SET_PLAYER_TEAMMATE: WrapSlot = WrapSlot::new(Owner::Jip, 0x008b_ca90);
 
 /// A form's type byte (`+4`), a reference's id (`+0xC`) and base form (`+0x20`), its render state
 /// (`+0x64`) and that state's node (`+0x14`); `Character`'s type.
@@ -71,6 +96,21 @@ const ACTOR_IS_TEAMMATE: u32 = 0x18d;
 const THE_PLAYER: u32 = 0x011d_ea3c;
 const PLAYER_PERK_RANKS_TM: u32 = 0xad4;
 const PLAYER_TM_ENTRY_LISTS: u32 = 0xadc;
+/// The player's own perk ranks (`perkRanksPC`, `+0x87C`), its teammates (`+0x5FC`) and their
+/// count (`+0xD68`).
+const PLAYER_PERK_RANKS_PC: u32 = 0x87c;
+const PLAYER_TEAMMATES: u32 = 0x5fc;
+const PLAYER_TEAMMATE_COUNT: u32 = 0xd68;
+/// `BGSAbilityPerkEntry`'s vtable (JIP's `IS_TYPE(entry, BGSAbilityPerkEntry)`; its `GetType`
+/// `00978f30` answers 1).
+const ABILITY_ENTRY_VTABLE: u32 = 0x0104_6c44;
+/// The stats menu's refresh (`007dd710`, `cdecl`, no arguments).
+const REFRESH_STATS_MENU: u32 = 0x007d_d710;
+/// A process's current weapon (virtual `+0x148`: its inventory entry, the form at `+8`) and an
+/// actor's process (`+0x68`).
+const ACTOR_PROCESS: u32 = 0x68;
+const VT_CURRENT_WEAPON: u32 = 0x148;
+const INVENTORY_ENTRY_FORM: u32 = 8;
 /// `g_dataHandler` and its perk list (`+0x178`).
 const DATA_HANDLER: u32 = 0x011c_3f2c;
 const PERK_LIST: u32 = 0x178;
@@ -463,10 +503,7 @@ fn remove_perk_npc(e: &mut Engine, w: &[u32]) -> Ret {
 fn get_perk_rank_npc(e: &mut Engine, w: &[u32]) -> Ret {
     let (actor, perk) = (w[0], w[1]);
     let id = e.mem.u32(actor + REF_ID);
-    let own = npc_perks(e)
-        .get(&id)
-        .and_then(|p| p.ranks.get(&perk).copied())
-        .unwrap_or(0);
+    let own = npc_perks_read(e, |s| s.rank(id, perk)).unwrap_or(0);
     let mut rank = u32::from(own);
     if own == 0 && e.mem.u8(actor + ACTOR_IS_TEAMMATE) != 0 {
         let player = e.mem.u32(THE_PLAYER);
@@ -491,7 +528,7 @@ fn get_perk_rank_npc(e: &mut Engine, w: &[u32]) -> Ret {
 fn get_perk_entry_point_list_npc(e: &mut Engine, w: &[u32]) -> Ret {
     let (actor, point) = (w[0], w[1] as u8);
     let id = e.mem.u32(actor + REF_ID);
-    let block = npc_perks(e).get(&id).map_or(0, |p| p.entry_points);
+    let block = npc_perks_read(e, |s| s.entry_points(id)).unwrap_or(0);
     let own = if block == 0 {
         None
     } else {
@@ -514,6 +551,260 @@ fn get_perk_entry_point_list_npc(e: &mut Engine, w: &[u32]) -> Ret {
         eax,
         ..Ret::default()
     }
+}
+
+/// The perk's ability entries (`IS_TYPE(entry, BGSAbilityPerkEntry)`: the vtable's word, not
+/// `GetType`), empty items passed over.
+fn ability_entries(e: &mut Engine, perk: u32) -> Vec<u32> {
+    list_items(e, Ptr::new(perk + PERK_ENTRIES))
+        .into_iter()
+        .filter(|&entry| entry != 0 && e.mem.u32(entry) == ABILITY_ENTRY_VTABLE)
+        .collect()
+}
+
+/// Whether the actor has an entry of its own holding the perk (`perksInfo->perkRanks.HasKey`).
+fn has_own_perk(e: &mut Engine, actor: u32, perk: u32) -> bool {
+    let id = e.mem.u32(actor + REF_ID);
+    npc_perks(e)
+        .get(&id)
+        .is_some_and(|p| p.ranks.contains_key(&perk))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: AddTeammatePerkEntries
+// (lines 3248-3261).
+/// A teammates' perk at `rank` (its rank less one) on one teammate: unless the teammate has the
+/// perk of its own, each ability entry of that rank added, of another rank removed (the entry
+/// point entries come through [`get_perk_entry_point_list_npc`]'s teammate lists).
+fn add_teammate_perk_entries(e: &mut Engine, teammate: u32, perk: u32, rank: u8) {
+    if has_own_perk(e, teammate, perk) {
+        return;
+    }
+    for entry in ability_entries(e, perk) {
+        if e.mem.u8(entry + ENTRY_RANK) != rank {
+            e.vcall(entry, VT_REMOVE_ENTRY, &args![teammate, 0u32]);
+        } else {
+            e.vcall(entry, VT_ADD_ENTRY, &args![teammate, 0u32]);
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RemoveTeammatePerkEntries
+// (lines 3263-3274).
+/// A teammates' perk taken off one teammate: unless it has the perk of its own, each ability
+/// entry removed.
+fn remove_teammate_perk_entries(e: &mut Engine, teammate: u32, perk: u32) {
+    if has_own_perk(e, teammate, perk) {
+        return;
+    }
+    for entry in ability_entries(e, perk) {
+        e.vcall(entry, VT_REMOVE_ENTRY, &args![teammate, 0u32]);
+    }
+}
+
+/// The player's own perk list or its teammates' (`perkRanksPC`, `perkRanksTM`).
+fn player_ranks_list(player: u32, for_teammates: bool) -> Ptr<ListNode> {
+    Ptr::new(
+        player
+            + if for_teammates {
+                PLAYER_PERK_RANKS_TM
+            } else {
+                PLAYER_PERK_RANKS_PC
+            },
+    )
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetPerkRankPlayerHook
+// (lines 3276-3313).
+/// The player's `SetPerkRank` (`thiscall`: the perk, the new rank, for teammates): the perk's
+/// `PerkRank` in the player's list or the teammates' (a new 8-byte one put first when it has none;
+/// the same rank changes nothing) takes the new rank. For the player: each entry of that rank
+/// added, of another rank removed (every kind, the player's own entry point lists included), the
+/// stats menu refreshed and the reload speed updated. For the teammates: each teammate's ability
+/// entries ([`add_teammate_perk_entries`]). Difference from JIP: a null perk changes nothing (the
+/// exe's own test; JIP would read address 0x48).
+fn set_perk_rank_player(e: &mut Engine, w: &[u32]) -> Ret {
+    let (player, perk, new_rank, for_teammates) = (w[0], w[1], w[2] as u8, w[3] as u8 != 0);
+    if perk == 0 {
+        return Ret::default();
+    }
+    let list = player_ranks_list(player, for_teammates);
+    let found = list_items(e, list)
+        .into_iter()
+        .find(|&item| item != 0 && e.mem.u32(item) == perk);
+    let rank_item = match found {
+        None => {
+            let item = heap_alloc(e, 8);
+            e.mem.set_u32(item, perk);
+            list_prepend(e, list, item);
+            item
+        }
+        Some(item) if e.mem.u8(item + 4) == new_rank => return Ret::default(),
+        Some(item) => item,
+    };
+    e.mem.set_u8(rank_item + 4, new_rank);
+    let rank = new_rank.wrapping_sub(1);
+    if !for_teammates {
+        for entry in list_items(e, Ptr::new(perk + PERK_ENTRIES)) {
+            if entry == 0 {
+                continue;
+            }
+            if e.mem.u8(entry + ENTRY_RANK) != rank {
+                e.vcall(entry, VT_REMOVE_ENTRY, &args![player, 0u32]);
+            } else {
+                e.vcall(entry, VT_ADD_ENTRY, &args![player, 0u32]);
+            }
+        }
+        e.call(REFRESH_STATS_MENU, &args![]);
+        e.call(UPDATE_RELOAD_SPEED, &args![player]);
+    } else {
+        for teammate in list_items(e, Ptr::new(player + PLAYER_TEAMMATES)) {
+            if teammate != 0 {
+                add_teammate_perk_entries(e, teammate, perk, rank);
+            }
+        }
+    }
+    Ret::default()
+}
+
+/// `tList::RemoveIf` with `PerkRankFinder`: the first `PerkRank` of `perk` unlinked from the
+/// list; it, or none.
+fn remove_perk_rank(e: &mut Engine, list: Ptr<ListNode>, perk: u32) -> Option<u32> {
+    let items = list_items(e, list);
+    let at = items
+        .iter()
+        .position(|&item| item != 0 && e.mem.u32(item) == perk)?;
+    let (mut node, mut prev) = (list, Ptr::<ListNode>::NULL);
+    for _ in 0..at {
+        prev = node;
+        node = Ptr::new(e.get(node, ListNode::next));
+    }
+    list_unlink(e, node, prev);
+    Some(items[at])
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RemovePerkPlayerHook
+// (lines 3347-3375).
+/// The player's `RemovePerk` (`thiscall`: the perk, for teammates): the perk's `PerkRank` taken
+/// out of the player's list or the teammates' and freed (none: nothing). For the player: each of
+/// the perk's entries removed, the stats menu refreshed and the reload speed updated. For the
+/// teammates: each teammate's ability entries ([`remove_teammate_perk_entries`]). Difference from
+/// JIP: a null perk changes nothing (as [`set_perk_rank_player`]).
+fn remove_perk_player(e: &mut Engine, w: &[u32]) -> Ret {
+    let (player, perk, for_teammates) = (w[0], w[1], w[2] as u8 != 0);
+    if perk == 0 {
+        return Ret::default();
+    }
+    let list = player_ranks_list(player, for_teammates);
+    let Some(rank_item) = remove_perk_rank(e, list, perk) else {
+        return Ret::default();
+    };
+    heap_free(e, rank_item);
+    if !for_teammates {
+        for entry in list_items(e, Ptr::new(perk + PERK_ENTRIES)) {
+            if entry != 0 {
+                e.vcall(entry, VT_REMOVE_ENTRY, &args![player, 0u32]);
+            }
+        }
+        e.call(REFRESH_STATS_MENU, &args![]);
+        e.call(UPDATE_RELOAD_SPEED, &args![player]);
+    } else {
+        for teammate in list_items(e, Ptr::new(player + PLAYER_TEAMMATES)) {
+            if teammate != 0 {
+                remove_teammate_perk_entries(e, teammate, perk);
+            }
+        }
+    }
+    Ret::default()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetPlayerTeammateHook
+// (lines 3449-3485).
+/// O18's wrap of `Actor::SetPlayerTeammate` (`thiscall`: the actor, the flag byte), once the
+/// switch is on (before: the exe's function). Not for the player, nor when the teammate byte
+/// already equals the flag. The byte takes the flag. Made a teammate: the player's count up, the
+/// actor put first in its teammates, and each of the teammates' perks' ability entries put on it
+/// at that perk's rank ([`add_teammate_perk_entries`]). No longer one: the count down, the actor
+/// taken out of the teammates and, when it has perks of its own (JIP's test), the teammates'
+/// perks' ability entries taken off ([`remove_teammate_perk_entries`]). JIP's quirk kept: an
+/// actor with no perks of its own keeps those ability entries after it leaves.
+fn set_player_teammate(e: &mut Engine, w: &[u32]) -> Ret {
+    if !crate::cosave::npc_perks_patch(e) {
+        return e.call_next(SET_PLAYER_TEAMMATE.addr(), w);
+    }
+    let (actor, do_set) = (w[0], w[1] as u8);
+    let player = e.mem.u32(THE_PLAYER);
+    if actor == player || e.mem.u8(actor + ACTOR_IS_TEAMMATE) == do_set {
+        return Ret::default();
+    }
+    e.mem.set_u8(actor + ACTOR_IS_TEAMMATE, do_set);
+    let count = e.mem.u32(player + PLAYER_TEAMMATE_COUNT);
+    let teammates = Ptr::<ListNode>::new(player + PLAYER_TEAMMATES);
+    let ranks = Ptr::<ListNode>::new(player + PLAYER_PERK_RANKS_TM);
+    // `tList::Empty`: the first node's item is 0.
+    let ranks_empty = e.get(ranks, ListNode::data) == 0;
+    if do_set != 0 {
+        e.mem
+            .set_u32(player + PLAYER_TEAMMATE_COUNT, count.wrapping_add(1));
+        list_prepend(e, teammates, actor);
+        if !ranks_empty {
+            for item in list_items(e, ranks) {
+                if item != 0 {
+                    let (perk, rank) = (e.mem.u32(item), e.mem.u8(item + 4));
+                    add_teammate_perk_entries(e, actor, perk, rank.wrapping_sub(1));
+                }
+            }
+        }
+    } else {
+        e.mem
+            .set_u32(player + PLAYER_TEAMMATE_COUNT, count.wrapping_sub(1));
+        list_remove(e, teammates, actor);
+        let id = e.mem.u32(actor + REF_ID);
+        if !ranks_empty && has_entry(e, id) {
+            for item in list_items(e, ranks) {
+                if item != 0 {
+                    let perk = e.mem.u32(item);
+                    remove_teammate_perk_entries(e, actor, perk);
+                }
+            }
+        }
+    }
+    Ret::default()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 18
+// (SAFE_WRITE_BUF(0x5E592F, "\x0F\x1F\x84\x00\x00\x00\x00\x00"), line 4925).
+/// `0x5E592F`: with the switch on, the teammate keeps itself as the entries' owner (answer 1);
+/// before, nothing (the player's entries).
+fn teammate_own_entries(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    crate::cosave::npc_perks_patch(e).then_some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 18
+// (SafeWrite32(0x64570F, 0x401F0F), line 4926).
+/// `0x64570F`: with the switch on, the entry point runs whatever the caller asked (answer 1);
+/// before, nothing (the caller's byte decides).
+fn weapon_damage_perks(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    crate::cosave::npc_perks_patch(e).then_some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 18
+// (SAFE_WRITE_BUF(0x89B455, "\x8B\x02\x8B\x48\x68\x85\xC9\x74\x6E...\xEB\x57"), line 4927).
+/// `0x89B455`: with the switch on, the attacker's current weapon (its process `+0x68`, the
+/// process's virtual `+0x148`, that entry's form `+8`; 0 without a process or a weapon); before,
+/// nothing (the player's).
+fn kill_effect_weapon(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    if !crate::cosave::npc_perks_patch(e) {
+        return None;
+    }
+    let process = e.mem.u32(a[0] + ACTOR_PROCESS);
+    if process == 0 {
+        return Some(0);
+    }
+    let entry = e.vcall(process, VT_CURRENT_WEAPON, &args![]).u32();
+    if entry == 0 {
+        return Some(0);
+    }
+    Some(e.mem.u32(entry + INVENTORY_ENTRY_FORM))
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitNPCPerks.
@@ -581,18 +872,25 @@ pub fn post_load_game(e: &mut Engine) {
     }
 }
 
-/// The seam's handler, in with the fixes (it answers nothing with the switch off).
+/// The seams' handlers and the teammate wrap, in with the fixes (before the threads start; each
+/// leaves the game as it is until [`switch_on`]: the destructor's with the switch's bit off, the
+/// others until the patch is marked installed).
 pub(super) fn install_fixes(e: &mut Engine) {
     e.ext_free::<NpcPerkLists>();
     e.on_site(DESTROY_ACTOR, destroy_actor);
+    e.on_site(TEAMMATE_OWN_ENTRIES, teammate_own_entries);
+    e.on_site(WEAPON_DAMAGE_PERKS, weapon_damage_perks);
+    e.on_site(KILL_EFFECT_WEAPON, kill_effect_weapon);
+    e.wrap(SET_PLAYER_TEAMMATE, set_player_teammate);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 18
-// (the lists and the `Character`/`Creature` slots; the player's slots, the jumps and the byte
-// patches come with part 2).
-/// O18 on (the switch's bit set): the valid perks and traits made from the data, `uNPCPerks=2`'s
-/// flag kept, the patch marked installed for the co-save, and the four routines written into both
-/// vtables. Once; nothing with the switch off.
+// (lines 4906-4930). Its jumps and byte writes are the seams and the wrap above, which answer
+// once the patch is marked installed here; 0x89B50B's five bytes are the exe's own.
+/// O18 on (the switch's bit set; called at `DeferredInit`): the valid perks and traits made from
+/// the data, `uNPCPerks=2`'s flag kept, the patch marked installed (the co-save, the seams and the
+/// wrap), and the routines written into the slots: four in each of the `Character` and `Creature`
+/// vtables, two in the player's. Once; nothing with the switch off.
 pub fn switch_on(e: &mut Engine, auto_add: bool) {
     if !npc_perks_on(e) || crate::cosave::npc_perks_patch(e) {
         return;
@@ -612,6 +910,10 @@ pub fn switch_on(e: &mut Engine, auto_add: bool) {
         for ((slot, at), f) in slots.into_iter().zip(ROUTINES).zip(routines) {
             write_slot(e, slot, at, f);
         }
+    }
+    let player: [AbiFn; 2] = [set_perk_rank_player, remove_perk_player];
+    for ((slot, at), f) in PLAYER_SLOTS.into_iter().zip(PLAYER_ROUTINES).zip(player) {
+        write_slot(e, slot, at, f);
     }
 }
 

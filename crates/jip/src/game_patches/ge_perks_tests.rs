@@ -1,4 +1,5 @@
-//! O18 part 1 (`uNPCPerks`): the NPC perk routines, case by case from JIP's source.
+//! O18 (`uNPCPerks`): the NPC and player perk routines, the teammate wrap and the seams' handlers,
+//! case by case from JIP's source.
 
 use super::*;
 use crate::cosave::{changed, changed_flags, set_changed, set_npc_perks_patch, NpcPerks};
@@ -417,7 +418,7 @@ fn a_load_puts_the_high_actors_perks_on() {
 #[test]
 fn switching_on_writes_the_slots() {
     let mut e = world();
-    e.map(0x0108_6000, 0x2000);
+    e.map(0x0108_6000, 0x5000);
     switch_on(&mut e, true);
     assert_eq!(e.mem.u32(CHARACTER_SLOTS[0]), 0, "switch off");
     assert!(!crate::cosave::npc_perks_patch(&mut e));
@@ -446,4 +447,356 @@ fn switching_on_writes_the_slots() {
             .load(Ordering::Relaxed),
         "once"
     );
+}
+
+// ---- part 2: the player's routines, the teammate wrap, the seams, the lock-free reads ----
+
+/// The ability entries' vtable page (the stand-ins of `GetType`, `AddEntry` and `RemoveEntry`)
+/// and the stats menu's refresh (counted in [`REFRESHES`]).
+fn ability_world() -> Engine {
+    let mut e = world();
+    REFRESHES.with(|r| r.set(0));
+    e.map(0x0104_6000, 0x1000);
+    e.mem.set_u32(ABILITY_ENTRY_VTABLE + 0x10, GET_TYPE_AT);
+    e.mem.set_u32(ABILITY_ENTRY_VTABLE + 0x30, ADD_ENTRY_AT);
+    e.mem.set_u32(ABILITY_ENTRY_VTABLE + 0x34, REMOVE_ENTRY_AT);
+    e.register(REFRESH_STATS_MENU, |_, _| {
+        REFRESHES.with(|r| r.set(r.get() + 1));
+        ret(0)
+    });
+    e
+}
+
+/// An ability entry at `n` (the entries' area, as [`entry`]) of `rank`.
+fn ability(e: &mut Engine, n: u32, rank: u8) -> u32 {
+    let at = entry(e, n, 1, rank, 0);
+    e.mem.set_u32(at, ABILITY_ENTRY_VTABLE);
+    at
+}
+
+/// A second actor (a teammate) and its id.
+const MATE: u32 = AREA + 0x1800;
+const MATE_ID: u32 = 0x0700_0002;
+
+thread_local! {
+    static REFRESHES: Cell<u32> = const { Cell::new(0) };
+    static BASE_TEAMMATE: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The stats menu refreshes since the last look.
+fn refreshes() -> u32 {
+    REFRESHES.with(|r| r.replace(0))
+}
+
+/// `SetPerkRankPlayerHook`, the player's own list: a new `PerkRank` put first; every entry of the
+/// rank added and of another rank removed (an entry point entry too), the stats menu refreshed,
+/// the reload speed updated; the same rank again nothing; another rank changes the one kept.
+#[test]
+fn the_players_set_rank_puts_its_entries_on() {
+    let mut e = ability_world();
+    let point = entry(&mut e, 0, 2, 0, 4);
+    let other = ability(&mut e, 1, 1);
+    let p = perk(&mut e, 0, [0, 0, 2, 1, 0], &[point, other]);
+    let q = AREA + 0x3800;
+    let old = AREA + 0x7000;
+    e.mem.set_u32(old, q);
+    e.mem.set_u8(old + 4, 1);
+    list(&mut e, PLAYER + 0x87c, AREA + 0x7100, &[old]);
+    set_perk_rank_player(&mut e, &[PLAYER, p, 1, 0]);
+    let items = list_items(&e, Ptr::new(PLAYER + 0x87c));
+    assert_eq!(items.len(), 2);
+    let made = items[0];
+    assert_eq!((e.mem.u32(made), e.mem.u8(made + 4)), (p, 1), "put first");
+    assert_eq!(items[1], old);
+    assert_eq!(calls(), [(1, point, PLAYER), (0, other, PLAYER)]);
+    assert_eq!((refreshes(), RELOADS.with(|r| r.take())), (1, vec![PLAYER]));
+    set_perk_rank_player(&mut e, &[PLAYER, p, 1, 0]);
+    assert!(calls().is_empty() && refreshes() == 0, "same rank: nothing");
+    set_perk_rank_player(&mut e, &[PLAYER, p, 2, 0]);
+    assert_eq!(e.mem.u8(made + 4), 2);
+    assert_eq!(
+        list_items(&e, Ptr::new(PLAYER + 0x87c)).len(),
+        2,
+        "no new one"
+    );
+    assert_eq!(calls(), [(0, point, PLAYER), (1, other, PLAYER)]);
+    // A null perk: nothing (the exe's own test).
+    set_perk_rank_player(&mut e, &[PLAYER, 0, 1, 0]);
+    assert_eq!(list_items(&e, Ptr::new(PLAYER + 0x87c)).len(), 2);
+}
+
+/// `SetPerkRankPlayerHook` for the teammates: the teammates' list keeps the rank; each teammate
+/// gets the perk's ability entries of the rank (others removed; entry point entries are left to
+/// the teammate lists), unless it has the perk of its own; no menu refresh, no reload update.
+#[test]
+fn the_teammates_set_rank_puts_abilities_on_each_teammate() {
+    let mut e = ability_world();
+    e.mem.set_u32(MATE + 0xc, MATE_ID);
+    let point = entry(&mut e, 0, 2, 0, 4);
+    let at_rank = ability(&mut e, 1, 0);
+    let other = ability(&mut e, 2, 1);
+    let p = perk(&mut e, 0, [0, 0, 2, 1, 0], &[point, at_rank, other]);
+    list(&mut e, PLAYER + 0x5fc, AREA + 0x7100, &[ACTOR, 0, MATE]);
+    crate::cosave::npc_perks(&mut e)
+        .emplace(MATE_ID)
+        .ranks
+        .insert(p, 1);
+    set_perk_rank_player(&mut e, &[PLAYER, p, 1, 1]);
+    let items = list_items(&e, Ptr::new(PLAYER + 0xad4));
+    assert_eq!((e.mem.u32(items[0]), e.mem.u8(items[0] + 4)), (p, 1));
+    assert_eq!(
+        calls(),
+        [(1, at_rank, ACTOR), (0, other, ACTOR)],
+        "not MATE"
+    );
+    assert_eq!((refreshes(), RELOADS.with(|r| r.take())), (0, vec![]));
+    assert!(
+        list_items(&e, Ptr::new(PLAYER + 0x87c)) == [0],
+        "not the player's own list"
+    );
+}
+
+/// `RemovePerkPlayerHook`: the `PerkRank` unlinked and freed; for the player every entry removed,
+/// the menu refreshed and the reload speed updated; for the teammates each teammate's abilities
+/// removed unless it has the perk; a perk not had: nothing.
+#[test]
+fn the_players_remove_takes_the_entries_off() {
+    let mut e = ability_world();
+    let point = entry(&mut e, 0, 2, 0, 4);
+    let skill = ability(&mut e, 1, 0);
+    let p = perk(&mut e, 0, [0, 0, 1, 1, 0], &[point, skill]);
+    let q = AREA + 0x3800;
+    let (rank_q, rank_p) = (AREA + 0x7000, AREA + 0x7010);
+    e.mem.set_u32(rank_q, q);
+    e.mem.set_u32(rank_p, p);
+    list(&mut e, PLAYER + 0x87c, AREA + 0x7100, &[rank_q, rank_p]);
+    remove_perk_player(&mut e, &[PLAYER, p, 0]);
+    assert_eq!(list_items(&e, Ptr::new(PLAYER + 0x87c)), [rank_q]);
+    assert!(FREED.with(|f| f.take()).contains(&rank_p), "freed");
+    assert_eq!(calls(), [(0, point, PLAYER), (0, skill, PLAYER)]);
+    assert_eq!((refreshes(), RELOADS.with(|r| r.take())), (1, vec![PLAYER]));
+    remove_perk_player(&mut e, &[PLAYER, p, 0]);
+    assert!(calls().is_empty() && refreshes() == 0, "not had: nothing");
+    // The teammates' list: the abilities off each teammate without the perk of its own.
+    e.mem.set_u32(MATE + 0xc, MATE_ID);
+    list(&mut e, PLAYER + 0xad4, AREA + 0x7200, &[rank_p]);
+    list(&mut e, PLAYER + 0x5fc, AREA + 0x7300, &[MATE, ACTOR]);
+    crate::cosave::npc_perks(&mut e)
+        .emplace(MATE_ID)
+        .ranks
+        .insert(p, 1);
+    remove_perk_player(&mut e, &[PLAYER, p, 1]);
+    assert!(list_items(&e, Ptr::new(PLAYER + 0xad4)) == [0]);
+    assert_eq!(calls(), [(0, skill, ACTOR)]);
+    assert_eq!((refreshes(), RELOADS.with(|r| r.take())), (0, vec![]));
+}
+
+fn base_set_player_teammate(_: &mut Engine, a: &[u32]) -> Ret {
+    BASE_TEAMMATE.with(|b| b.borrow_mut().push(a.to_vec()));
+    ret(0)
+}
+
+/// `SetPlayerTeammateHook` through the wrap: before the switch the exe's function; then the
+/// player, or an unchanged flag, nothing; joining counts the teammate, puts it first and puts
+/// the teammates' perks' abilities on at each perk's rank; leaving uncounts, takes it out and
+/// takes those abilities off only when it has perks of its own (JIP's test).
+#[test]
+fn the_teammate_wrap() {
+    let mut e = ability_world();
+    e.register(0x008b_ca90, base_set_player_teammate);
+    BASE_TEAMMATE.with(|b| b.borrow_mut().clear());
+    e.wrap(SET_PLAYER_TEAMMATE, set_player_teammate);
+    e.call(0x008b_ca90, &[ACTOR, 1]);
+    assert_eq!(
+        BASE_TEAMMATE.with(|b| b.take()),
+        [vec![ACTOR, 1]],
+        "not on yet"
+    );
+    assert_eq!(e.mem.u8(ACTOR + 0x18d), 0);
+    set_npc_perks_patch(&mut e, true);
+    let skill = ability(&mut e, 0, 1);
+    let low = ability(&mut e, 1, 0);
+    let p = perk(&mut e, 0, [0, 0, 2, 1, 0], &[skill, low]);
+    let rank = AREA + 0x7000;
+    e.mem.set_u32(rank, p);
+    e.mem.set_u8(rank + 4, 2);
+    list(&mut e, PLAYER + 0xad4, AREA + 0x7100, &[rank]);
+    // (`tList::Empty` looks at the first node only: a list starting empty counts as empty.)
+    list(&mut e, PLAYER + 0x5fc, AREA + 0x7200, &[MATE]);
+    e.mem.set_u32(PLAYER + 0xd68, 1);
+    e.call(0x008b_ca90, &[PLAYER, 1]);
+    assert_eq!(e.mem.u32(PLAYER + 0xd68), 1, "the player: nothing");
+    e.call(0x008b_ca90, &[ACTOR, 1]);
+    assert!(BASE_TEAMMATE.with(|b| b.take()).is_empty(), "JIP's");
+    assert_eq!(e.mem.u8(ACTOR + 0x18d), 1);
+    assert_eq!(e.mem.u32(PLAYER + 0xd68), 2);
+    assert_eq!(list_items(&e, Ptr::new(PLAYER + 0x5fc)), [ACTOR, MATE]);
+    assert_eq!(calls(), [(1, skill, ACTOR), (0, low, ACTOR)]);
+    e.call(0x008b_ca90, &[ACTOR, 1]);
+    assert_eq!(e.mem.u32(PLAYER + 0xd68), 2, "already one: nothing");
+    // Leaving with no perks of its own: the abilities stay (JIP's test).
+    e.call(0x008b_ca90, &[ACTOR, 0]);
+    assert_eq!(e.mem.u8(ACTOR + 0x18d), 0);
+    assert_eq!(e.mem.u32(PLAYER + 0xd68), 1);
+    assert_eq!(list_items(&e, Ptr::new(PLAYER + 0x5fc)), [MATE]);
+    assert!(calls().is_empty());
+    // With perks of its own (not this one): taken off.
+    e.call(0x008b_ca90, &[ACTOR, 1]);
+    calls();
+    crate::cosave::npc_perks(&mut e)
+        .emplace(ACTOR_ID)
+        .ranks
+        .insert(AREA + 0x3800, 1);
+    e.call(0x008b_ca90, &[ACTOR, 0]);
+    assert_eq!(calls(), [(0, skill, ACTOR), (0, low, ACTOR)]);
+}
+
+/// The three seams' handlers: nothing until the patch is marked installed; then the teammate
+/// kept, the damage entry point run, and the attacker's current weapon (0 without a process or a
+/// weapon).
+#[test]
+fn the_seams_answer_once_switched_on() {
+    let mut e = world();
+    let weapon_at = 0x0040_1f10;
+    let process = AREA + 0x7000;
+    let process_vt = AREA + 0x7100;
+    let inventory_entry = AREA + 0x7200;
+    e.mem.set_u32(process, process_vt);
+    e.mem.set_u32(process_vt + 0x148, weapon_at);
+    e.register(weapon_at, |e, a| ret(e.mem.u32(a[0] + 4)));
+    e.mem.set_u32(inventory_entry + 8, 0x6400);
+    assert_eq!(teammate_own_entries(&mut e, &[ACTOR]), None);
+    assert_eq!(weapon_damage_perks(&mut e, &[ACTOR]), None);
+    assert_eq!(kill_effect_weapon(&mut e, &[ACTOR]), None);
+    set_npc_perks_patch(&mut e, true);
+    assert_eq!(teammate_own_entries(&mut e, &[ACTOR]), Some(1));
+    assert_eq!(weapon_damage_perks(&mut e, &[ACTOR]), Some(1));
+    assert_eq!(kill_effect_weapon(&mut e, &[ACTOR]), Some(0), "no process");
+    e.mem.set_u32(ACTOR + 0x68, process);
+    assert_eq!(kill_effect_weapon(&mut e, &[ACTOR]), Some(0), "no weapon");
+    e.mem.set_u32(process + 4, inventory_entry);
+    assert_eq!(kill_effect_weapon(&mut e, &[ACTOR]), Some(0x6400));
+}
+
+/// The handlers and the wrap go in with the fixes.
+#[test]
+fn installed_with_the_fixes() {
+    let mut e = world();
+    install_fixes(&mut e);
+    for site in [
+        DESTROY_ACTOR,
+        TEAMMATE_OWN_ENTRIES,
+        WEAPON_DAMAGE_PERKS,
+        KILL_EFFECT_WEAPON,
+    ] {
+        assert_eq!(e.site_owners(site.addr()), [Owner::Jip]);
+    }
+    assert_eq!(e.wraps_at(SET_PLAYER_TEAMMATE.addr()), [Owner::Jip]);
+}
+
+/// O18 on: the player's two routines in its slots too.
+#[test]
+fn switching_on_writes_the_players_slots() {
+    let mut e = ability_world();
+    e.map(0x0108_6000, 0x5000);
+    e.jip_patches_or(engine_core::extend::jip_patches::NPC_PERKS);
+    e.mem.set_u32(PLAYER_SLOTS[0], 0x0096_3790);
+    e.mem.set_u32(PLAYER_SLOTS[1], 0x0096_3900);
+    switch_on(&mut e, false);
+    assert_eq!(e.mem.u32(PLAYER_SLOTS[0]), PLAYER_ROUTINES[0]);
+    assert_eq!(e.mem.u32(PLAYER_SLOTS[1]), PLAYER_ROUTINES[1]);
+    // Through the slot: the player's set rank.
+    let p = perk(&mut e, 0, [0, 0, 1, 1, 0], &[]);
+    e.call(PLAYER_ROUTINES[0], &args![PLAYER, p, 1u32, 0u32]);
+    let items = list_items(&e, Ptr::new(PLAYER + 0x87c));
+    assert_eq!(e.mem.u32(items[0]), p);
+    assert_eq!(refreshes(), 1);
+}
+
+/// The rank and list reads take the map's lock only for the first read after a change (on this
+/// thread); a look through the map that changes nothing makes no new version; each change is
+/// seen by the next read; another engine's map is never taken for this one's.
+#[test]
+fn the_reads_take_no_lock_while_nothing_changes() {
+    let mut e = world();
+    let locked = |e: &mut Engine| {
+        e.ext_free::<crate::cosave::NpcPerksMap>()
+            .locked_reads
+            .load(Ordering::Relaxed)
+    };
+    let p = AREA + 0x3000;
+    crate::cosave::npc_perks(&mut e)
+        .emplace(ACTOR_ID)
+        .ranks
+        .insert(p, 2);
+    let before = locked(&mut e);
+    assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 2);
+    assert_eq!(locked(&mut e), before + 1, "the first read copies");
+    for _ in 0..3 {
+        assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 2);
+        assert_eq!(get_perk_entry_point_list_npc(&mut e, &[ACTOR, 0, 0]).eax, 0);
+    }
+    assert!(crate::cosave::npc_perks(&mut e).get(&ACTOR_ID).is_some());
+    assert_eq!(locked(&mut e), before + 1, "no change: no lock");
+    crate::cosave::npc_perks(&mut e)
+        .emplace(ACTOR_ID)
+        .ranks
+        .insert(p, 3);
+    assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 3, "seen");
+    assert_eq!(locked(&mut e), before + 2);
+    crate::cosave::npc_perks(&mut e)
+        .emplace(ACTOR_ID)
+        .entry_points = AREA + 0x7000;
+    e.mem.set_u32(AREA + 0x7000, 0x55);
+    assert_eq!(
+        get_perk_entry_point_list_npc(&mut e, &[ACTOR, 0, 0]).eax,
+        AREA + 0x7000
+    );
+    let mut other = world();
+    crate::cosave::npc_perks(&mut other)
+        .emplace(ACTOR_ID)
+        .ranks
+        .insert(p, 7);
+    assert_eq!(get_perk_rank_npc(&mut other, &[ACTOR, p, 0]).eax, 7);
+    assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 3);
+}
+
+/// The switch goes on at xNVSE's `DEFERRED_INIT` (through the co-save listener, as JIP's
+/// `s_deferrSetOptional`), with the settings' `uNPCPerks=2` flag; without the switch's bit the
+/// message turns nothing on.
+#[test]
+fn the_deferred_init_message_switches_it_on() {
+    let mut e = world();
+    e.map(0x0108_6000, 0x5000);
+    // The same message makes JIP's position marker: its game calls as stand-ins.
+    e.register(crate::commands::pos_marker::REFR_CONSTRUCTOR, |_, w| {
+        ret(w[0])
+    });
+    e.register(crate::commands::pos_marker::SET_TEMPORARY, |_, _| ret(0));
+    e.ext::<crate::Jip>()
+        .game_patches
+        .settings
+        .npc_perks_auto_add = true;
+    let deferred = |e: &mut Engine| {
+        crate::cosave::listen(
+            e,
+            &nvse::plugins::Message {
+                kind: nvse::plugins::msg::DEFERRED_INIT,
+                data: 0,
+                len: 0,
+            },
+        );
+    };
+    deferred(&mut e);
+    assert!(!crate::cosave::npc_perks_patch(&mut e), "switch off");
+    assert_eq!(e.mem.u32(PLAYER_SLOTS[0]), 0);
+    e.jip_patches_or(engine_core::extend::jip_patches::NPC_PERKS);
+    deferred(&mut e);
+    assert!(crate::cosave::npc_perks_patch(&mut e));
+    assert_eq!(e.mem.u32(PLAYER_SLOTS[0]), PLAYER_ROUTINES[0]);
+    assert_eq!(e.mem.u32(CHARACTER_SLOTS[0]), ROUTINES[0]);
+    assert!(e
+        .ext_free::<NpcPerkLists>()
+        .auto_add
+        .load(Ordering::Relaxed));
 }
