@@ -3198,6 +3198,12 @@ fn fire_aim_at_target(e: &mut Engine, shot: &mut Fire, spread: &mut f32) -> Opti
     } else if shot.process != 0 {
         fire_aim_at_package(e, shot)?;
     }
+    // Seam (JIP's H19, its gun wobble at `0x524014`, up to `0x524072`): words: the actor, the spread
+    // so far (`f32` bits); an answer is the new spread (`f32` bits), the steps below passed over.
+    if let Some(bits) = e.site(0x0052_4014, &[shot.actor.addr(), spread.to_bits()]) {
+        *spread = f32::from_bits(bits);
+        return Some(target);
+    }
     // The actor's second stat widens the spread; the process adds recoil.
     let stat = e.call(ACTOR_GET_STAT, &args![shot.actor, 2u32]).f32();
     let setting = e
@@ -6251,6 +6257,23 @@ mod tests {
         assert_eq!(e.mem.f32(frame + FIRE_ANGLE_X), -(0.5f64.asin() as f32));
         // 1.0 + (2.0 * 0.5) * 0.5 + 0.25 recoil.
         assert_eq!(spread, 1.75);
+        // The seam at 0x524014 (JIP's H19): its answer is the spread, the stat and recoil steps
+        // passed over; it is given the actor and the spread so far.
+        e.on_site_for_test(0x0052_4014, |_, a| {
+            assert_eq!(f32::from_bits(a[1]), 1.0);
+            Some(9.0f32.to_bits())
+        });
+        e.call_log = Some(vec![]);
+        let mut spread = 1.0f32;
+        assert_eq!(
+            fire_aim_at_target(&mut e, &mut shot, &mut spread),
+            Some(0x1111)
+        );
+        assert_eq!(spread, 9.0);
+        let log = e.call_log.take().unwrap();
+        assert!(!log
+            .iter()
+            .any(|c| c.0 == ACTOR_GET_STAT || c.0 == 0x00dd_042c));
     }
 
     #[test]

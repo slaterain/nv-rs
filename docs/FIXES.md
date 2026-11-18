@@ -1047,8 +1047,6 @@ Not yet, with the switch on:
   in the port's own folder beside the saves, never in the game's folder), so oHUD's INI option (shown
   in MCM once oHUD finds JIP) has its commands; JIP's commands that read or write other files
   (`ReadArrayFromFile` and the like) are still among those not built.
-- `InjectUIComponent` needs the UI Organizer row on too (`NV_UIO`); without it the command does nothing
-  and answers 0 (JIP would write `jip_temp.xml` into the game's folder), and the log says so once.
 - 12 of JIP's 162 game patches are not built (by group in `measure/jip/PLAN-3.9-groups.md`; every
   group's built ones are under its heading below): what they change stays the game's own; each waits
   for a JIP command or attach step not built yet (`MessageBoxExAlt`, `FireWeaponEx`, `InsertNode` and the like).
@@ -1335,6 +1333,10 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
   pile a death leaves is `AttachAshPileEx`'s form once when a script set one, else the exe's
   choice. It changes nothing yet: the command `AttachAshPileEx` is not built, so no script can set
   a form.
+- `BipedSlotVisibilityHook` (H15, JIP's own, `0x4AC645` in `BipedAnim::LoadBipedParts`): in first
+  person a slot's part loads when its bit is set in JIP's mask, slots 2 to 6 at the start (the game's
+  own test, so nothing changes until a script calls `ToggleBipedSlotVisibility`, which shows or hides
+  a slot's part in first person).
 
 #### GF: Forms and records
 
@@ -1386,6 +1388,14 @@ set of ids (the 15 default marker objects by their ids, and 0x64..0x77): the sam
 every form except one of a type above idle marker (0x30) with an id 0x64..0x77, which is no longer a marker
 (JIP's `SetInternalMarker`, which edits the set, is not built).
 
+Also built as part of JIP: the companion wheel (G54: the teammate test before it at `0x5FA977`,
+`0x5FB122` and `0x607C8E`) does not open for an actor whose wheel `SetWheelDisabled` turned off; and
+JIP's gun wobble (H19, `0x524014` in the firing code): a shooter's spread gets its high process's aim
+value and, unless `ToggleNoGunWobble` marked the actor, its stat 2 times `fNPCMaxGunWobbleAngle` in
+radians, as the original adds them (the sum rounded once where the original rounds after each step;
+an actor with no high process keeps the spread as it is, where the original asks the lower process
+too).
+
 #### GS: Script engine
 
 | JIP's comment | Exe places | What a player with JIP gets | Built |
@@ -1399,6 +1409,7 @@ every form except one of a type above idle marker (0x30) with an id 0x64..0x77, 
 | (`InitGamePatches`: 24 bytes at `0x59E034`) | `0059dfe0` (`IsCurrentFurnitureObj`, `0x59E034`) | `IsCurrentFurnitureObj` on an actor with no AI process answers 0 instead of crashing the game | 3.9 GS-3 |
 | (`InitGamePatches`: `WriteRelJump(0x5D2860, GetHitIMODHook)`; JIP's own: the same as the game until JIP's hit effects are off) | `005d2860` (`TESImageSpaceModifier::GetGetHit`, replaced) | The "get hit" screen effect is turned off while JIP's hit effects are off (`ToggleImmortalMode 2` today; `ToggleHitEffects` when it is built). With JIP installed and nothing turned off, the same effect as the game's (looked up by its form id each time, the game's cache not used) | 3.9 GS-3 |
 | (`InitGamePatches`: `SafeWrite16(0x5B4DBC, 0x19EB)`) | `005b4be0` (`AddItem`, `0x5B4DBC`) | Items a script adds with `AddItem` all go through the game's item-condition step that the game gives only to weapons: with JIP's own version of that step (G50, GH1) armour and weapons, also those from leveled lists and form lists, arrive at the same 99.9% condition a plainly added weapon gets, and any other item is left at full condition | 3.9 GS-4 |
+| (`InitGamePatches`: `WriteRelJump(0x5B54E7, RemoveMeHook)`) | `005b53d0` (`RemoveMe`, `0x5B54E7`: the menu refresh when the player gets the item, `00704af0`) | When a script's `RemoveMe` gives the player the item, the open item list (inventory, container, barter, recipe menu) is refreshed at the next main loop pass, through JIP's own refresh, instead of at once (G60) | 3.9 GS |
 | (`DeferredInit`: "JIP Companions Command & Control.esp") | that plugin's main script (form `0xADE` in the plugin), its compiled data at `+0x29C` | With the plugin "JIP Companions Command & Control.esp" loaded, a known bug in its main script is patched once at start-up (a number in its compiled script, 139, becomes 255), as JIP does. Deliberate difference: a form there that is not a script, has no compiled data, or has data too short to hold that number is left alone, where JIP would crash or read past the data | 3.9 GS-4 |
 
 #### GW: World, sky, sound, saves, start-up
@@ -1546,7 +1557,9 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
 - **JIP's `InjectUIComponent`.** UIO's export `UIOInjectComponent`: menu XML given as text is cleaned
   by the game, its includes expanded, and read into the tile under the name `jip_temp.xml`, from
   memory. Without UIO, JIP writes `jip_temp.xml` into the game's folder and reads it; nv-rs never
-  writes there, so with the row off `InjectUIComponent` does nothing.
+  writes there: with the row off the text is cleaned by the game as that file would be and handed
+  to the same `Tile::ReadFile` through the game's own menu file map (`Menu::XMLHash`), so
+  `InjectUIComponent` and `AttachUIComponent` make the same tiles with the row on or off.
 - **Where it differs from UIO on purpose.** Include loops end at 64 levels, an expansion at 64 MiB
   (after which that read fetches no further include) and at 10,000 files read for one read's
   includes (UIO runs out of stack or memory, or reads on without end); a path longer than UIO's
