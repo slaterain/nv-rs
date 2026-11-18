@@ -20,6 +20,24 @@ const TILE_DESTROY_FN: u32 = 0x0000_9000;
 const RENDERED_AT: u32 = FORMS + 0x4_0000;
 const LIST: u32 = FORMS + 0x5_0000;
 const SEAM: u32 = 0x007a_becc;
+// The exe's and JIP's numbers, written here from JIP's headers (nvse/GameUI.h: `InterfaceManager`
+// `currentMode` +0xC, `menuStack` +0x114, `renderedMenu` +0x16C, `pipBoyMode` +0x4BC,
+// `pipBoyModeCallback` +0x4C0; `kMenuType_Message` 0x3E9, `kMenuType_Quantity` 0x3F8) and the exe
+// (`g_interfaceManager` 0x11D8A80, `QuantityMenu::pMe` 0x11DA618, `QuantityMenu::ShowMenu` 0x7ABA00,
+// `FORenderedMenu::Close` 0x7FFD50, the message menu's clean-up 0x7AA480), not taken from the module.
+const INTERFACE_MANAGER: u32 = 0x011d_8a80;
+const IM_CURRENT_MODE: u32 = 0x0c;
+const IM_MENU_STACK: u32 = 0x114;
+const IM_RENDERED_MENU: u32 = 0x16c;
+const IM_PIPBOY_MODE: u32 = 0x4bc;
+const IM_PIPBOY_MODE_CALLBACK: u32 = 0x4c0;
+const MENU_MIN: u32 = 0x3e9;
+const MESSAGE_MENU: u32 = 0x3e9;
+const QUANTITY: u32 = 0x3f8;
+const QUANTITY_MENU: u32 = 0x011d_a618;
+const QUANTITY_SHOW_MENU: u32 = 0x007a_ba00;
+const RENDERED_MENU_CLOSE: u32 = 0x007f_fd50;
+const MESSAGE_MENU_CLEAR: u32 = 0x007a_a480;
 
 thread_local! {
     /// The stand-ins' calls: the address and the words.
@@ -259,8 +277,13 @@ fn the_message_and_quantity_menus_give_up_their_scripts() {
         1
     );
     log();
+    let _ = crate::script_call::calls();
     menus(&mut e, &[MESSAGE_MENU, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     call_on(&mut e, CLOSE, 0, &[]);
+    assert!(
+        crate::script_call::calls().is_empty(),
+        "the kept box script is dropped, never run"
+    );
     assert_eq!(
         log(),
         vec![
@@ -277,15 +300,57 @@ fn the_message_and_quantity_menus_give_up_their_scripts() {
     let mut e = setup();
     call_on(&mut e, SHOW, 0, &[r(1), n(10)]);
     log();
+    let _ = crate::script_call::calls();
     menus(&mut e, &[QUANTITY, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     e.mem.set_u32(ARRAY_AT + 4 * (QUANTITY - MENU_MIN), 0);
     call_on(&mut e, CLOSE, 0, &[]);
+    assert!(
+        crate::script_call::calls().is_empty(),
+        "the kept quantity script is dropped, never run (not as Cancel either)"
+    );
     assert!(log().is_empty(), "no tile: nothing closed");
     assert_eq!(quantity_menu_script(&mut e), 0);
     assert_eq!(kept(&e), 0);
     assert_eq!(stack(&e)[0], 0);
-    let _ = crate::script_call::calls();
     assert_eq!(e.site(SEAM, &[QUANTITY_MENU_CALLBACK, 3, 4]), Some(0));
+    assert!(crate::script_call::calls().is_empty());
+}
+
+/// Both kept at once (a `MessageBoxExAlt` box and a `ShowQuantityMenu` menu): closing the message
+/// menu drops only the box's script, closing the quantity menu only the quantity script, closing
+/// another menu neither.
+#[test]
+fn each_menu_drops_only_its_own_script() {
+    let both = |e: &mut Engine| {
+        e.register(0x0070_3e80, note::<0x0070_3e80, 1>);
+        call_on(e, 0x2826, 0, &[r(1), s(b"M|A")]);
+        call_on(e, SHOW, 0, &[r(1), n(10)]);
+        log();
+        let _ = crate::script_call::calls();
+    };
+    let pending = |e: &mut Engine| super::super::jip_fn_ui::message_box_scripts_pending(e);
+    let mut e = setup();
+    both(&mut e);
+    menus(&mut e, &[MESSAGE_MENU, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    call_on(&mut e, CLOSE, 0, &[]);
+    assert_eq!(pending(&mut e), 0);
+    assert_eq!(
+        quantity_menu_script(&mut e),
+        SCPT,
+        "the quantity script stays"
+    );
+    let mut e = setup();
+    both(&mut e);
+    menus(&mut e, &[QUANTITY, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    call_on(&mut e, CLOSE, 0, &[]);
+    assert_eq!(quantity_menu_script(&mut e), 0);
+    assert_eq!(pending(&mut e), 1, "the box's script stays");
+    let mut e = setup();
+    both(&mut e);
+    menus(&mut e, &[0x3ea, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    call_on(&mut e, CLOSE, 0, &[]);
+    assert_eq!(quantity_menu_script(&mut e), SCPT);
+    assert_eq!(pending(&mut e), 1);
     assert!(crate::script_call::calls().is_empty());
 }
 

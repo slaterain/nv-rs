@@ -743,15 +743,29 @@ mod n057_tests {
     thread_local! {
         static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
     }
-    /// JIP's handler's stand-in: notes the words, takes the call for callback 0x7000 only.
-    fn takes_7000(_: &mut Engine, w: &[u32]) -> Option<u32> {
-        ASKED.with(|a| a.borrow_mut().push(w.to_vec()));
+    /// How many closes (trait `0x1772` set) the call log holds.
+    fn closes(e: &Engine) -> u32 {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, words)| *a == TILE_SET_INT && words.get(1) == Some(&0x1772))
+            .count() as u32
+    }
+    /// JIP's handler's stand-in: notes the words and how many closes came before it was asked,
+    /// takes the call for callback 0x7000 only.
+    fn takes_7000(e: &mut Engine, w: &[u32]) -> Option<u32> {
+        let mut noted = w.to_vec();
+        noted.push(closes(e));
+        ASKED.with(|a| a.borrow_mut().push(noted));
         (w[0] == 0x0000_7000).then_some(0)
     }
 
     /// `0x7ABECC` (words: the callback, the count, the id): with JIP's `INSTALLED` the seam is asked
-    /// before the callback's call, an answer skips the call, no answer makes it; without the bit it
-    /// is not asked and the call is the exe's. The menu closes either way.
+    /// before the callback's call and before the menu closes, an answer skips the call, no answer
+    /// makes it; without the bit it is not asked and the call is the exe's. The menu closes either
+    /// way, after the callback. Clicks: OK with a count of 7, OK with 0, Cancel (DoClick's 0), so
+    /// the count and the id cannot be told from each other.
     #[test]
     fn jip_quantity_callback_seam_hands_over_the_id() {
         use engine_core::extend::jip_patches::INSTALLED;
@@ -764,26 +778,53 @@ mod n057_tests {
             e.register(0x0000_7000, |_, _| Ret::default());
             e.register(0x0000_7100, |_, _| Ret::default());
             e.set_global(RESULT_CALLBACK, callback);
-            answer(&mut e, FLOAT_TO_INT_00406D90, 4);
             e.set_jip_patches(word);
             e.on_site_for_test(JIP_QUANTITY_CALLBACK, takes_7000);
             ASKED.with(|a| a.borrow_mut().clear());
             e.call_log = Some(vec![]);
+            answer(&mut e, FLOAT_TO_INT_00406D90, 7);
+            e.call(0x007a_be40, &args![menu, 4i32, 0u32]);
+            answer(&mut e, FLOAT_TO_INT_00406D90, 0);
             e.call(0x007a_be40, &args![menu, 4i32, 0u32]);
             e.call(0x007a_be40, &args![menu, 5i32, 0u32]);
             let asked = ASKED.with(|a| a.borrow().clone());
             let called = calls_to(&e, callback);
-            let closed = calls_to(&e, TILE_SET_INT)
+            // The order of the callback's calls (1) and the closes (2).
+            let order: Vec<u32> = e
+                .call_log
+                .as_ref()
+                .unwrap()
                 .iter()
-                .filter(|c| c[1] == 0x1772)
-                .count();
-            (asked, called, closed)
+                .filter_map(|(a, words)| {
+                    if *a == callback {
+                        Some(1)
+                    } else if *a == TILE_SET_INT && words.get(1) == Some(&0x1772) {
+                        Some(2)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            (asked, called, closes(&e), order)
         };
-        let both = vec![vec![0x7000, 4, 4], vec![0x7000, 0, 5]];
-        assert_eq!(run(INSTALLED, 0x7000), (both, vec![], 2));
-        let both = vec![vec![0x7100, 4, 4], vec![0x7100, 0, 5]];
-        assert_eq!(run(INSTALLED, 0x7100), (both, vec![vec![4], vec![0]], 2));
-        assert_eq!(run(0, 0x7000), (vec![], vec![vec![4], vec![0]], 2));
+        let made = vec![1, 2, 1, 2, 1, 2];
+        let asked = vec![
+            vec![0x7000, 7, 4, 0],
+            vec![0x7000, 0, 4, 1],
+            vec![0x7000, 0, 5, 2],
+        ];
+        assert_eq!(run(INSTALLED, 0x7000), (asked, vec![], 3, vec![2, 2, 2]));
+        let asked = vec![
+            vec![0x7100, 7, 4, 0],
+            vec![0x7100, 0, 4, 1],
+            vec![0x7100, 0, 5, 2],
+        ];
+        let calls = vec![vec![7], vec![0], vec![0]];
+        assert_eq!(
+            run(INSTALLED, 0x7100),
+            (asked, calls.clone(), 3, made.clone())
+        );
+        assert_eq!(run(0, 0x7000), (vec![], calls, 3, made));
         assert_eq!(JIP_QUANTITY_CALLBACK, 0x007a_becc);
     }
 }
