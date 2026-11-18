@@ -1,5 +1,5 @@
 # Code page 1252 as Windows converts it (kernel32 MultiByteToWideChar / WideCharToMultiByte, flags 0,
-# no default character given), measured on Windows 11 26200, 2026-11-16, by build43-scratch/measure/platforms/cp1252.ps1.
+# no default character given), measured on Windows 11 build 26200, 2026-11-16, with Windows' own calls; the measuring script is not part of the repository.
 # to_wide: byte<TAB>unit for 0x80..0xFF. to_ansi: unit<TAB>byte for every BMP unit >= 0x80 (not a
 # surrogate) that does NOT give the default '?' (the page's own characters and its best fit).
 w	80	20ac
