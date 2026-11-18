@@ -1,0 +1,21 @@
+Mods for nv-rs (Linux and macOS)
+================================
+
+This is the "my mods" folder in nv-rs's own folder. ./play.sh --mods says where it is each time.
+
+Put a mod's files here exactly as they would go in the game's Data folder: its .esp or .esm,
+its .bsa, and folders such as Meshes, Textures or Sound. Then start ./play.sh --mods.
+
+Your game folder is never changed. Each start with --mods builds a whole game folder in nv-rs's
+own folder (modgame): your game's files linked, not copied, plus these on top. A file a link
+cannot reach is linked by a symbolic link instead.
+
+Which plugins are on: every DLC and pack your game has, then the mods' .esm files, then their
+.esp files. The game itself orders them by file date, as the original does. To choose yourself,
+put a plugins.txt here (one file name per line, like the game's own plugins.txt).
+
+Saves made with mods stay apart from your other nv-rs saves. To copy saves from Steam's Proton
+folder into them: ./play.sh --mods --import-saves
+
+Regular .esp and .esm mods work. Mods that need xNVSE, JIP, or other plugins (.dll files) don't
+work yet: their script commands are not built in yet, and those files are not used.

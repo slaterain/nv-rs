@@ -2424,8 +2424,11 @@ pub fn middle_high_process_process_activate(
     // 009164d9: lStewieAl's Tweaks' row S0124 (`patchProcessActivateAddNullCheckForPackage`): no
     // current package is not a dialogue package (0x1C), where the exe reads the null package's
     // type. (Tweaks' 10 bytes also cover the exe's `jnz` after the type test, so with Tweaks every
-    // package type takes the dialogue branch; the port keeps the exe's type test, the intent of the
-    // fix.)
+    // non-null package takes the dialogue branch: an actor whose path failed (`00915ef0`, the actor
+    // mover's byte at +0x70) has its dialogue stopped (slot 0x288) and the step answers false at
+    // once, whatever its package, skipping the clean-up below (the target's script, the acquired
+    // object, slot 0x12C). The port keeps the exe's type test, the intent of the fix; a test locks
+    // that the row changes nothing for a non-null package.)
     let is_dialogue = if e.stewie(stewie::PROCESS_ACTIVATE_NULL_PACKAGE) && current == 0 {
         false
     } else {
@@ -13103,6 +13106,53 @@ mod tests {
             if on {
                 assert!(run.unwrap());
                 assert_eq!(calls(&e, REFERENCE_ACTIVATE).len(), 1);
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0124 with a current package (ordinary input): the row changes
+    /// nothing, the same calls and the same answer as with it off. A package that is not a dialogue
+    /// package goes past the dialogue test whether or not the actor's path failed (`00915ef0`, the
+    /// actor mover's byte at `+0x70`), as in the exe: with the path failed the object is not
+    /// activated but the step's clean-up runs and the actor's dialogue is not stopped. (Tweaks'
+    /// bytes, which also cover the exe's `jnz`, stop the dialogue and return at once there for every
+    /// package; the port keeps the exe's type test: docs/FIXES.md.) A dialogue package (0x1C) with
+    /// the path failed stops the dialogue and answers false, row on or off.
+    #[test]
+    fn s0124_row_on_with_a_current_package_changes_nothing() {
+        for (kind, failed) in [(0u8, 0u32), (0, 1), (0x1c, 0), (0x1c, 1)] {
+            let run = |on: bool| {
+                let mut e = engine();
+                let p = process(&mut e);
+                let a = actor(&mut e);
+                let package = with_package(&mut e);
+                e.mem.set_u8(package + 0x20, kind);
+                e.register(
+                    PACKAGE_TYPE,
+                    |e, a| ret(e.mem.i8(a[0] + 0x20) as i32 as u32),
+                );
+                e.register_double(ACTOR_BYTE_70, move |_, _| ret(failed));
+                let target = thing(&mut e);
+                e.mem.set_u32(p.addr() + 0x40, target);
+                e.mem.set_u32(p.addr() + 0x64, 0);
+                e.register(OBJECT_SLOTS + 0x144, |_, _| ret(1));
+                e.set_stewie(stewie::PROCESS_ACTIVATE_NULL_PACKAGE, on);
+                let result = middle_high_process_process_activate(&mut e, p, a, 0);
+                (result, e, package)
+            };
+            let (off, e_off, _) = run(false);
+            let (on, e, package) = run(true);
+            let case = format!("package type {kind:#x}, path failed {failed}");
+            assert_eq!(on, off, "{case}");
+            assert_eq!(e.call_log, e_off.call_log, "{case}");
+            assert_eq!(calls(&e, PACKAGE_TYPE), vec![vec![package]], "{case}");
+            let stopped = calls(&e, ACTOR_SLOTS + 0x288).len();
+            let activated = calls(&e, REFERENCE_ACTIVATE).len();
+            let cleaned = calls(&e, REFERENCE_RUN_SCRIPT).len();
+            match (kind, failed) {
+                (0x1c, 1) => assert_eq!((on, stopped, activated, cleaned), (false, 1, 0, 0)),
+                (_, 1) => assert_eq!((on, stopped, activated, cleaned), (false, 0, 0, 1)),
+                _ => assert_eq!((on, stopped, activated, cleaned), (true, 0, 1, 1)),
             }
         }
     }
