@@ -1,0 +1,1506 @@
+# lStewieAl's Tweaks' settings (nvse_stewie_tweaks.ini): every key its code reads (settings.h HandleIniFile,
+# Tweaks 10.05 source; 1,499 keys, measure/stewie/scripts/settings.tsv), with Tweaks' code default and
+# VNV's value (Viva New Vegas' "VNV INI", ModdingLinked, MIT: NOTICE). Columns: section, key, code default,
+# VNV's value. A code default written as an expression in Tweaks' source is kept as written after a
+# ?, to be settled when the row reading it is built; floats are written without their F suffix. VNV's
+# value '-' means VNV's INI has no such key (the code default stands); an empty value is VNV's empty text.
+# The VNV column is read from VNV's INI with SimpleIni's rules (crates/stewie/src/ini.rs).
+INI	bSortAlphabetically	0	0
+INI	bPrependNewSettings	1	1
+INI	bMultiINISupport	1	1
+INI	bShowSubsettingPaths	0	0
+INI	bTweaksMenuAllowXMLHotReload	0	0
+Tweaks	bAllowActivateWhileAnimPlays	0	0
+Tweaks	bBetterAutoWalk	0	1
+Tweaks	bCompanionPipColorChange	0	0
+Tweaks	bConsoleNumpadSupport	0	1
+Tweaks	bDebugLockpickMenu	0	0
+Tweaks	bDescriptiveMarkerAddedMessage	0	1
+Tweaks	bDisableFastTravel	0	0
+Tweaks	bDisableShowQuestLocation	0	0
+Tweaks	bDontShowContainerAfterLockpick	0	0
+Tweaks	bDontOpenDoorsAfterLockpick	0	-
+Tweaks	bEquipBrokenItems	0	0
+Tweaks	bFasterHackingTransition	0	1
+Tweaks	bFasterSaveMenuClose	0	1
+Tweaks	bFastTravelOverencumbered	0	0
+Tweaks	bHideEnemyMarkers	0	0
+Tweaks	bHideInvisibleUndiscoveredLocations	0	0
+Tweaks	bIgnoreCompanionsVATS	0	0
+Tweaks	bJumpWhileAiming	0	0
+Tweaks	bJumpWhileOverencumbered	0	0
+Tweaks	bKeepCrosshairWhenAiming	0	0
+Tweaks	bKeepPipboyLightOnCellChange	0	0
+Tweaks	bKeepRouletteBetAmount	0	0
+Tweaks	bLockpickAllowMouse	0	0
+Tweaks	bManualReload	0	0
+Tweaks	bMapShowUnconsciousCompanions	0	0
+Tweaks	bMidairFastTravel	0	0
+Tweaks	bNoAltTabPause	0	0
+Tweaks	bNoAmmoCasings	0	0
+Tweaks	bNoEquippedWeaponMovementPenalty	0	0
+Tweaks	bNoHackingRetryDelay	0	0
+Tweaks	bNoLocationPopup	0	0
+Tweaks	bNoMaxCasinoBet	0	0
+Tweaks	bNoMinCompanionMapDistance	0	0
+Tweaks	bNoPipboyOnAltTab	0	0
+Tweaks	bNoQuestAddedPopup	0	0
+Tweaks	bNoQuestCompletedPopup	0	0
+Tweaks	bNoSkillBooksAbove100	0	0
+Tweaks	bNoUnconciousMessage	0	0
+Tweaks	bNoVATSTargetInvisible	0	0
+Tweaks	bNoXPMessages	0	0
+Tweaks	bOnlyAllowWaitWhileSitting	0	0
+Tweaks	bRememberBobbyPinHealth	0	0
+Tweaks	bRemoveDownloadsButton	0	1
+Tweaks	bRemoveSneakLabel	0	0
+Tweaks	bShowSneakLabelWhileStanding	0	0
+Tweaks	bRemoveWeaponDamageBuffer	0	0
+Tweaks	bSkipDeathcamHotkey	0	1
+Tweaks	bTabBackInStartMenu	0	0
+Tweaks	bTabClosesTerminals	0	0
+Tweaks	bUseWASDAsArrowKeys	0	0
+Tweaks	bRepeatJumping	0	0
+Tweaks	bContinueGameHotkey	0	0
+Tweaks	bLevelUpScrollWheelSupport	0	1
+Tweaks	bNoLTRTOnPipboy	0	0
+Tweaks	bNoRedCrosshairOnEnemies	0	0
+Tweaks	bAllowOpenPipboyDuringCameraShake	0	0
+Tweaks	bLeftAndRightCancelEachOther	0	1
+Tweaks	bFixEnhancedCameraGroundSinkBug	0	0
+Tweaks	bTalkWhileSneakingIfShiftIsHeld	0	0
+Tweaks	bAddInventoryDropItemHotkey	0	0
+Tweaks	bInstantContinueButton	0	1
+Tweaks	bDecreasedDialogueClickDelay	0	1
+Tweaks	bHideUnknownNPCNames	0	0
+Tweaks	bReduceXP	0	0
+Tweaks	bVatsExitKey	0	1
+Tweaks	bDontSetQuestWhenCompletingObjectives	0	0
+Tweaks	bNoExitHacking	0	0
+Tweaks	bSlotsAutoSpinHotkey	0	0
+Tweaks	bUKKeyboard	0	0
+Tweaks	bPickLocksEvenWithKey	0	0
+Tweaks	bInlineVanillaFunctions	0	-
+Tweaks	bConsoleHistoryNoStoreDuplicates	0	1
+Tweaks	bNoKillcamKillSound	0	0
+Tweaks	bNoGrabOwnedItems	0	0
+Tweaks	bSkipIntroVideo	0	1
+Tweaks	bFirstPersonVATS	0	0
+Tweaks	bAllowUnsafeFastTravel	0	0
+Tweaks	bHoldCrouchToSneak	0	0
+Tweaks	bRemoveLandingAnim	0	0
+Tweaks	bFastTravelCostsSpecialNukaBottles	0	0
+Tweaks	bNoFastTravelIfLegsCrippled	0	0
+Tweaks	bDisableSellingItems	0	0
+Tweaks	bNumberedDialogHotkeys	0	1
+Tweaks	bNumberedComputerHotkeys	0	1
+Tweaks	bNoAutoContinueDialog	0	0
+Tweaks	bNoSkipDialog	0	-
+Tweaks	bDisableHitShader	0	0
+Tweaks	bTerminalInstantDisplayHotkey	0	0
+Tweaks	bSwapKeyboardYZKeys	0	0
+Tweaks	bReloadingWithFullClipSwitchesAmmoType	0	0
+Tweaks	bBetterFlycam	0	1
+Tweaks	bNPCsDropWeaponHolsteredWeapon	0	0
+Tweaks	bDisableReloadingNonEmptyClip	0	0
+Tweaks	bDisableGrenadeIndicator	0	0
+Tweaks	bWeightlessWornPowerArmor	0	0
+Tweaks	bWeightlessWornArmor	0	0
+Tweaks	bShiftScreenshotHidesMenus	0	1
+Tweaks	bFastTravelWithEnemiesNearby	0	0
+Tweaks	bNoKnockdownInGodmode	0	0
+Tweaks	bDoubleTapReloadToChangeAmmoType	0	1
+Tweaks	bForceLockpickNoBreakLock	0	0
+Tweaks	bDisableControllerDeadzones	0	0
+Tweaks	bFasterControllerPOVRotate	0	1
+Tweaks	bHideCursorInDialog	0	1
+Tweaks	bFasterTitleMenu	0	0
+Tweaks	bShiftIgnoresFriendlyVATS	0	1
+Tweaks	bDisableExplosionInFaceIMOD	0	0
+Tweaks	bModifySkillPointsEarned	0	0
+Tweaks	bLuckDoesntAffectGambling	0	0
+Tweaks	bRemoveChemWarnOffIMOD	0	0
+Tweaks	bAdjustableScopeZoom	0	0
+Tweaks	bPopupMenusDontMoveCursor	0	0
+Tweaks	bAddNightVisionToggle	0	0
+Tweaks	bScopeHoldBreath	0	0
+Tweaks	bPowerArmorScalesFallDamage	0	0
+Tweaks	bAgilityScalesMovementSpeed	0	0
+Tweaks	bDisableWeaponFOV	0	0
+Tweaks	bDisableHolsteredWeaponFOVZoom	0	0
+Tweaks	bNoCapitaliseContainerCategories	0	0
+Tweaks	bUnequipBrokenArmor	0	0
+Tweaks	bWeaponRequirementsMatter	0	0
+Tweaks	bNoSneakAttacksCriticals	0	0
+Tweaks	bSneakAttackWithoutCrouching	0	0
+Tweaks	bDisableLoadingScreenTips	0	0
+Tweaks	bDisableCompanionKillcam	0	0
+Tweaks	bPauseOnSaveLoad	0	0
+Tweaks	bDisableInteriorFog	0	0
+Tweaks	bImprovedHacking	0	0
+Tweaks	bLockNeedsKeyShowName	0	0
+Tweaks	bScopeVisibleAPHP	0	0
+Tweaks	bDelayPostCombatLevelUp	0	1
+Tweaks	bJumpingDoesntDropGrabbedItem	0	0
+Tweaks	bNoMapMarkerAddedPopup	0	0
+Tweaks	bNonSelectablePlayerInConsole	0	1
+Tweaks	bPrintErrorsToConsole	0	0
+Tweaks	bHideMiscQuestItems	0	0
+Tweaks	bPickpocketOverhaul	0	0
+Tweaks	bRepairsRewardXP	0	0
+Tweaks	bKillsRewardAP	0	0
+Tweaks	bNoHUDHotkeyPopup	0	0
+Tweaks	bClipSizeMatters	0	0
+Tweaks	bHUDShowRegionNames	0	0
+Tweaks	bNoCompanionKillXP	0	0
+Tweaks	bGodmodePreventsLegCrippleSound	0	1
+Tweaks	bNoAPRegenWhileOverencumbered	0	0
+Tweaks	bDisableCharacterRespec	0	0
+Tweaks	bNoReputationMessages	0	0
+Tweaks	bShowInventorySortButton	0	0
+Tweaks	bAllowRebindNumkeys	0	0
+Tweaks	bClickingActiveTabTogglesSorting	0	0
+Tweaks	bDisableHUDCrippledLimbIndicator	0	0
+Tweaks	bConsoleBackground	0	1
+Tweaks	bHideAmmoLabel	0	0
+Tweaks	bIndividialItemStats	0	0
+Tweaks	bAddRGBSliders	0	1
+Tweaks	bShowCurrencyInContainers	0	0
+Tweaks	bHideGrenadeIndicatorForNoDamageExplosions	0	1
+Tweaks	bUnspokenNPCIndicator	0	0
+Tweaks	bDisableTutorialMessages	0	0
+Tweaks	bNoScaleNpcDamageThresholdByCondition	0	0
+Tweaks	bNoScaleNpcDamageResistanceByCondition	0	0
+Tweaks	bNoScaleNpcDamageByCondition	0	0
+Tweaks	bUseFallout3AudioDistortion	0	0
+Tweaks	bBarterCheckActorBuySellFlags	0	0
+Tweaks	bSortUnavailableRadiosToBottom	0	1
+Tweaks	bRemoveFollowerTopics	0	0
+Tweaks	bKeepSelectedConsoleRef	0	0
+Tweaks	bSleepInOwnedBeds	0	0
+Tweaks	bNoFastTravelTimeChange	0	0
+Tweaks	bDetectedByWhom	0	0
+Tweaks	bRunningCostsAP	0	0
+Tweaks	bHideCompletedQuests	0	0
+Tweaks	bHoldWaitKeyToShowMenu	0	0
+Tweaks	bKeepXPBarWhenClosingMenus	0	0
+Tweaks	bPickLocksWithoutSkill	0	0
+Tweaks	bHackTerminalsWithoutSkill	0	0
+Tweaks	bTurnFurtherWhileSeated	0	0
+Tweaks	bLootUnconsciousVictims	0	0
+Tweaks	bColorRecentlyAddedMapMarkers	0	1
+Tweaks	bOpenPipboyToInventoryByDefault	0	0
+Tweaks	bShowWeaponAmmoUseInMenus	0	1
+Tweaks	bShowAlternateAmmoTypesAvailableInMenus	0	0
+Tweaks	bQuestTextVisibleWhileAiming	0	0
+Tweaks	bQuestTextVisibleInMenus	0	0
+Tweaks	bAllowTeammatesUseMeltdown	0	0
+Tweaks	bNoSelfExplosionDamage	0	0
+Tweaks	bNoSelfMeltdownDamage	0	0
+Tweaks	bHoldToActivate	0	0
+Tweaks	bRememberPipboyScrollPositions	0	1
+Tweaks	bNoWeaponConditionDamagePenalty	0	0
+Tweaks	bPlayerMeleeDamageIgnoresScale	0	0
+Tweaks	bCharacterMeleeDamageIgnoresScale	0	0
+Tweaks	bCharacterNonMeleeDamageIgnoresScale	0	0
+Tweaks	bPlayerNonMeleeDamageIgnoresScale	0	0
+Tweaks	bHideMapMarkerFactionReputation	0	0
+Tweaks	bCompareWeaponStats	0	0
+Tweaks	bCompareArmorStats	0	0
+Tweaks	bSleepWaitAnywhere	0	0
+Tweaks	bNoInteriorBlackLoadingScreen	0	1
+Tweaks	bSkipSkillMenuIfNoPointsToAssign	0	1
+Tweaks	bCustomArmorConditionPenalty	0	0
+Tweaks	bHittingWeaponsDoesntDamageThem	0	0
+Tweaks	bNoExteriorLoadScreens	0	0
+Tweaks	bUltrawideSupport	0	0
+Tweaks	bWeightlessAidItems	0	0
+Tweaks	bWeightlessItems	0	0
+Tweaks	bHideCrosshairInFirstPerson	0	0
+Tweaks	bHideCrosshairInThirdPerson	0	0
+Tweaks	bNoCasinoBans	0	0
+Tweaks	bNPCsCanSneakCritPlayer	0	0
+Tweaks	bNPCsCanDisarmPlayer	0	0
+Tweaks	bSneakCriticalsOnlyMeleeWeapons	0	0
+Tweaks	bShowQuestAndNoDRDTItemsInRepairMenu	0	0
+Tweaks	bHUDFatigueIndicator	0	0
+Tweaks	bInvertContainerTitleScrollwheelDirection	0	0
+Tweaks	bDisableGodmodeOnLoad	0	0
+Tweaks	bAllowWeaponHotkeysAndPipBoyWhileReloading	0	0
+Tweaks	bAllowWeaponHotkeysWhileFiring	0	0
+Tweaks	bAllowWeaponHotkeysWhileEquipping	0	0
+Tweaks	bNoDisarmCompanions	0	0
+Tweaks	bAllowFiringWhileLanding	0	0
+Tweaks	bFireWhileAiming	0	0
+Tweaks	bAutoWeaponNoFiringDelay	0	0
+Tweaks	bDontAllowConsoleTillLoadingIsDone	0	1
+Tweaks	bPowerAttackWhileOverencumbered	0	0
+Tweaks	bSlowBreathRegen	0	0
+Tweaks	bNoteMenuShowSeparateMenu	0	0
+Tweaks	bDontSetQuestWhenObjectivesAdded	0	0
+Tweaks	bSpinWeaponsSoundFix	0	1
+Tweaks	bCreatureMovementSoundFix	0	-
+Tweaks	bTurnSlowerWhileAiming	0	0
+Tweaks	bVATSAutoTargetHead	0	0
+Tweaks	bOnlyChangeCameraHeightIfPOVKeyHeld	0	0
+Tweaks	bAllowVATSWhileAnimsPlay	0	0
+Tweaks	bRobotCompanionsHealWithScrapMetal	0	0
+Tweaks	bCustomScreenshotFormat	0	1
+Tweaks	bModConsolePrintsIncludeName	0	1
+Tweaks	bStatsMenuShowEffectTimeRemaining	0	0
+Tweaks	bScaleRadioSongVolumeDuringDialogue	0	1
+Tweaks	bScaleMusicVolumeDuringDialogue	0	1
+Tweaks	bUseFirstPersonEmptyClipSound	0	0
+Tweaks	bMenuSearch	0	0
+Tweaks	bAllowKeyboardAndMouseWithControllerConnected	0	1
+Tweaks	bAllowControllerMovementWithKeyboardConnected	0	-
+Tweaks	bScaleCriticalDamage	0	0
+Tweaks	bCookableGrenades	0	0
+Tweaks	bUseConsoleOutputFile	0	0
+Tweaks	bCacheQuestAndNoteMenu	0	1
+Tweaks	bKeepHolotapePlayingWhenSelectingOtherNotes	0	0
+Tweaks	bSmoothIronsightsCameraTransition	0	0
+Tweaks	bDisableNeedsMessages	0	0
+Tweaks	bCrouchWhileEquippingWeapons	0	1
+Tweaks	bRecentlyDeadNPCIndicator	0	0
+Tweaks	bControllerBackButtonDoesntClosePipBoy	0	0
+Tweaks	iHUDMaxCompassNPCTicks	0	0
+Tweaks	bMinBloodSplatterHealthDamage	0	0
+Tweaks	bVATSStopBurstIfTargetDead	0	0
+Tweaks	bHoldAndReleaseThrowables	0	0
+Tweaks	bAllowSleepWaitWithReducedMaxHealth	0	0
+Tweaks	bLevelDifferenceAffectsCombatXP	0	0
+Tweaks	bSwapAmmoWithWeaponHolstered	0	0
+Tweaks	bPowerArmorNeedsNoTraining	0	0
+Tweaks	bColoredHUDBars	0	0
+Tweaks	bSpeedMultScalesJumpHeight	0	0
+Tweaks	bStealingSendsNoAlarm	0	0
+Tweaks	bSneakCriticalsHeadshotsOnly	0	0
+Tweaks	bSortPipboyNotes	0	0
+Tweaks	bSortPipboyQuests	0	0
+Tweaks	bDisableAchievements	0	0
+Tweaks	bShowWeaponPoisonEffects	0	1
+Tweaks	bShowBookEffects	0	1
+Tweaks	bHideUnavailableRadios	0	0
+Tweaks	bStatsMenuPercentageXP	0	0
+Tweaks	bUnequipWeaponMods	0	0
+Tweaks	bDifficultyDoesntAffectNPCToNPCDamage	0	0
+Tweaks	bDisableCombatMusic	0	0
+Tweaks	bKeepBrokenItemsEquipped	0	0
+Tweaks	bPickpocketWornItems	0	0
+Tweaks	bMoveDuringVATSPlayback	0	0
+Tweaks	bMoveDuringOpenPipboyAnim	0	0
+Tweaks	bClickingShowsTerminalText	0	1
+Tweaks	bInvertPipboyRepairMenuSorting	0	0
+Tweaks	bDisableRegionBordersKeepMessage	0	0
+Tweaks	bNoRecurringChallenges	0	-
+Tweaks	bRecurringChallengeIndicator	0	1
+Tweaks	bCustomSubtitleDistance	0	0
+Tweaks	bScopeVisibilityDelay	0	0
+Tweaks	bLocationDiscoveredCornerMessage	0	0
+Tweaks	bNoHealingInCombat	0	0
+Tweaks	bHideRanksInTraitMenu	0	0
+Tweaks	bShowModNameInPerkDescriptions	0	0
+Tweaks	bSortPerkMenu	0	0
+Tweaks	bLessRestrictiveVATSMenu	0	1
+Tweaks	bNoTurningAnim	0	0
+Tweaks	bCustomAddToInventoryMessageTimer	0	0
+Tweaks	bHideRedCrosshairOnDistantInvisibleTargets	0	1
+Tweaks	bRememberWeaponAmmos	0	0
+Tweaks	bLocationalMeleeDamage	0	0
+Tweaks	bQueueWeaponHolsteringWhileAnimsPlay	0	1
+Tweaks	bNoLockFailedTerminals	0	0
+Tweaks	bDelayPostCombatReputationPopup	0	1
+Tweaks	bNoPlayerNameLimit	0	1
+Tweaks	bSkipVigorTesterSpecialPages	0	0
+Tweaks	bGrabbingItemsIsCrime	0	0
+Tweaks	bEncumbranceIncludesGrabbedItems	0	0
+Tweaks	bFatalNonSneakCritsAlwaysGib	0	0
+Tweaks	bNoFreeBarterItems	0	0
+Tweaks	bCustomSpecialPoints	0	0
+Tweaks	bHipFireAnimsWhileScoped	0	0
+Tweaks	bRestore2Hotkey	0	1
+Tweaks	bCustomHackingAnswerLength	0	0
+Tweaks	bNoCompassPipsIfNotInDanger	0	0
+Tweaks	bForceHiResWeaponModels	0	0
+Tweaks	bShowDoorsOnCompass	0	0
+Tweaks	bCriticalHitMessagesIncludeLimbName	0	0
+Tweaks	bMenuFadesIgnoreTimescale	0	0
+Tweaks	bActivatingDoesntStandUp	0	0
+Tweaks	bNoSkillMessageIfIncreaseIsZero	0	1
+Tweaks	bCompassFadeLeftSide	0	0
+Tweaks	bConsoleTextShadow	0	1
+Tweaks	bAlternateLevelupSounds	0	0
+Tweaks	bMinigamesPlayXPSoundAtMaxLevel	0	0
+Tweaks	bVATSHipFire	0	0
+Tweaks	bReloadJamsAffectedByAgility	0	0
+Tweaks	bRunSlowerInWater	0	0
+Tweaks	bPipboyLightAndHolsteringIgnoreTimescale	0	1
+Tweaks	bHostilesUseNeutralColorOnCompass	0	0
+Tweaks	bAnimDebugging	0	0
+Tweaks	bAgilityScalesJumpHeight	0	0
+Tweaks	bPartialReloads	0	1
+Tweaks	bNPCsEarnAmmoCasings	0	0
+Tweaks	bDrowningDrainsAP	0	0
+Tweaks	bFasterEnterLockpickMenu	0	1
+Tweaks	bPreventInactiveWindowScrolling	0	1
+Tweaks	bUsingKeysRewardsXP	0	0
+Tweaks	bUsingNotesRewardsXP	0	0
+Tweaks	bAddItemUsesItemIcon	0	0
+Tweaks	bShowNearestUndiscoveredLocation	0	0
+Tweaks	bWeaponCycleUpDownHotkeys	0	0
+Tweaks	bRepairRequiresWeaponSkill	0	0
+Tweaks	bMaxVATSDistanceUsesWeaponRange	0	0
+Tweaks	bLessFrequentPlayerPainSounds	0	0
+Tweaks	bMoreFrequentNPCLightUpdates	0	1
+Tweaks	bBetterMapZoom	0	0
+Tweaks	bLockPickMenuKeyboardMovement	0	0
+Tweaks	bSavingDoesntClosePauseMenu	0	0
+Tweaks	bContainerMenuStoreAllHotkey	0	0
+Tweaks	bContainerTakeAllDoesntCloseMenu	0	0
+Tweaks	bBloodyMessGibTargetedLimbOnly	0	0
+Tweaks	bDeselectHotkeys	0	1
+Tweaks	bSortRecipeMenu	0	0
+Tweaks	bReloadSoundsAffectedByTimescale	0	0
+Tweaks	bNoPoisonConfirm	0	0
+Tweaks	bNoAmmoFromTakingNPCWeapon	0	0
+Tweaks	bNoExitConfirm	0	0
+Tweaks	bLivingAnatomyShowDR	0	1
+Tweaks	bPreviewPerksOnLevelUp	0	0
+Tweaks	bPlaceMarkersAtLocations	0	1
+Tweaks	bAllowPickpocketIfAlreadyCaught	0	0
+Tweaks	bHideCrosshairWhileReloading	0	0
+Tweaks	bHideCrosshairInKillcams	0	1
+Tweaks	bHideHealthbarInKillcams	0	1
+Tweaks	bHUDRotatesWithVanityCam	0	0
+Tweaks	bHUDWeaponNameLabel	0	0
+Tweaks	bCompressDuplicateConsoleMessages	0	1
+Tweaks	bNoPipboyIdleAnims	0	0
+Tweaks	bSaveCharacterSelector	0	1
+Tweaks	bHotkeyHolstersWeaponIfEquipped	0	0
+Tweaks	bPreventRepairIfNotAtWorkbench	0	0
+Tweaks	bImprovedRaceMenu	0	1
+Tweaks	bMapMarkersShowFactionName	0	0
+Tweaks	bHideReputationTabIfEmpty	0	0
+Tweaks	bShowActiveQuestNotesShowsAllStartedQuests	0	0
+Tweaks	bRightClickChangesToPreviousContainerCategory	0	0
+Tweaks	bAutoContinueGame	0	0
+Tweaks	bSortMiscStats	0	0
+Tweaks	bTakeAllInCompanionContainers	0	1
+Tweaks	bPreventBushPassthroughSounds	0	0
+Tweaks	bSynchronizeContainerCategories	0	1
+Tweaks	bRandomizeKillcamMode	0	0
+Tweaks	bNoDamageMeleeWeaponIfTargetDead	0	0
+Tweaks	bLockpickHackingMessageShowsCurrentSkill	0	0
+Tweaks	bNoDropWeaponSoundOnPlayerDeath	0	0
+Tweaks	bToggleControllerIfAttackPressed	0	0
+Tweaks	bBillyGoatMode	0	0
+Tweaks	bRepairItemsPreview	0	0
+Tweaks	bExplosionKnockdownAvoidanceUsesStrength	0	0
+Tweaks	bMousewheelScrollsWeaponHotkeys	0	0
+Tweaks	bCapSkillsBySPECIAL	0	0
+Tweaks	bRunAndGunAPInCombatOnly	0	0
+Tweaks	bDisarmingMinesPicksThemUp	0	0
+Tweaks	bCritChanceIgnoresFireRate	0	0
+Tweaks	bHideHotkeyedItemsInRepairLists	0	0
+Tweaks	bAmmoLabelUseLongName	0	0
+Tweaks	bPerBulletLoopingReloads	0	0
+Tweaks	bNoPlayerStaggerAnims	0	0
+Tweaks	bConsolePrintsIncludeTimestamp	0	1
+Tweaks	bScalePlayerMeleeReach	0	0
+Tweaks	bPlacedMarkerHeightIndicator	0	0
+Tweaks	bNoLockEncounterZoneLevels	0	0
+Tweaks	bChangingContainerCategoryScrollsToTop	0	0
+Tweaks	bMorePreciseRadMeter	0	1
+Tweaks	bAimingUnholstersWeapons	0	0
+Tweaks	bPreventReloadWeaponUnholstering	0	-
+Tweaks	bScaleExplosionShake	0	0
+Tweaks	bReloadWhileFiring	0	0
+Tweaks	bRepairScalesCraftingCondition	0	0
+Tweaks	bMarkNearbyLocationsOnMap	0	0
+Tweaks	bPreventStealingCapsAfterRepair	0	0
+Tweaks	bPreventNPCComments	0	0
+Tweaks	bCompanionsUseLocationFontOnMap	0	0
+Tweaks	bRemoveDeadNPCCrippleCriticalMessages	0	0
+Tweaks	bShowUsePasswordOnTerminalsWithNote	0	0
+Tweaks	bHideReadNotes	0	0
+Tweaks	bExplosionKnockbackDirectionFix	0	1
+Tweaks	bShowBarterTotalWhenOverSellLimit	0	0
+Tweaks	bBarterShowCapsChange	0	1
+Tweaks	bAllowAidAtMaxHealth	0	0
+Tweaks	bBarterQuantityMenuShowsPrice	0	0
+Tweaks	bContainerQuantityMenuShowsWeight	0	0
+Tweaks	bFixKillChallengeSourceWeapon	0	1
+Tweaks	bPreventNoFastTravelMessage	0	0
+Tweaks	bExplosionsDontPushTakeableItems	0	0
+Tweaks	bNoDespawnVisibleStuckProjectiles	0	1
+Tweaks	bSeparateHorizontalSensitivity	0	1
+Tweaks	bWeaponVisibleDuringDialogue	0	0
+Tweaks	bNPCsDropLiveGrenades	0	0
+Tweaks	bSneakingDoesntForcePowerAttacks	0	0
+Tweaks	bSilentSneakPowerAttacks	0	0
+Tweaks	bTogglePOVWhenHolsteringWeapon	0	0
+Tweaks	bPowerAttackIfBlocking	0	0
+Tweaks	bDisarmRequiresSkill	0	0
+Tweaks	bSelectUnavailableRadios	0	1
+Tweaks	bRadioStaticDecreasesSongVolume	0	1
+Tweaks	bRadiationCausesRadioStatic	0	-
+Tweaks	bRadioKeepPositionWhenLoading	0	0
+Tweaks	bWeaponImpactEffects	0	1
+Tweaks	bDoubleJump	0	0
+Tweaks	bExplosionRadiusBuff	0	0
+Tweaks	bDetachedBeams	0	0
+Tweaks	bMoreResponsiveControllerAiming	0	1
+Tweaks	bAllowDuplicateControlBinds	0	0
+Tweaks	bDisableWeaponHotkeys	0	0
+Tweaks	bCrippledLegsScaleJumpHeight	0	0
+Tweaks	bPipBoyTabHotkeysDontCloseMenu	0	0
+Tweaks	bMoreDetailedStatsMenu	0	0
+Tweaks	bTerminalFadeTime	0	0
+Tweaks	bLethalHitsIncreaseLimbChallenges	0	0
+Tweaks	bReloadingWithNoAmmoSwapsAmmoTypes	0	1
+Tweaks	bEnteringVATSDoesntUnholsterWeapon	0	0
+Tweaks	bPowerArmorPreventsScreenBlood	0	1
+Tweaks	bPowerArmorScalesLimbDamage	0	0
+Tweaks	bMainMenuContinueIcon	0	1
+Tweaks	bPreventHittingHolsteredWeapons	0	0
+Tweaks	bHideQuestItemWeightAndValue	0	0
+Tweaks	bNPCsDetectMineExplosions	0	0
+Tweaks	bCrippledLimbsPlayPainSoundWhenFalling	0	0
+Tweaks	bTerminalGreyReadNotes	0	0
+Tweaks	bSortEquipableAmmo	0	1
+Tweaks	bHideCapsAddedMessages	0	0
+Tweaks	bSplashDamageTorsoGibbing	0	0
+Tweaks	bFreeWildWasteland	0	0
+Tweaks	bInvertCameraX	0	0
+Tweaks	bClearNearbyPlayerMarker	0	0
+Tweaks	bLightStepAffectsCompanions	0	0
+Tweaks	bVATSAPDisplayIncludesReloadCost	0	0
+Tweaks	bSkipVeryEasyLocksAtMaxSkill	0	0
+Tweaks	bMultithreadedHackingMenu	0	1
+Tweaks	bMarkNotesUnread	0	0
+Tweaks	bCustomPopupIcons	0	0
+Tweaks	bNoGibSoundWhenEnteringCells	0	1
+Tweaks	bInteriorExteriorMapDoorIcon	0	0
+Tweaks	bChallengeMenuIcons	0	1
+Tweaks	bPauseHolotapes	0	0
+Tweaks	bImprovedWeather	0	1
+Tweaks	bHUDMarkerNameIndicator	0	0
+Tweaks	bScaleAshpileSize	0	0
+Tweaks	bTargetProjectilesInVATS	0	0
+Tweaks	bStartMenuQuickLoad	0	0
+Tweaks	bShowQuestObjectivesOnCellChange	0	0
+Tweaks	bContactMines	0	0
+Tweaks	bAutoWeaponJamWhileFiring	0	0
+Tweaks	bClickToExitLoadScreens	0	0
+Tweaks	bHideCursorInMessageMenu	0	0
+Tweaks	bChanceBasedKillcams	0	0
+Tweaks	bSkipLoadSaveConfirmationPrompt	0	0
+Tweaks	bColorWeaponCndLabel	0	0
+Tweaks	bArmorConditionLabel	0	0
+Tweaks	bMoveAmmoTypeLabel	0	0
+Tweaks	bArmorPreventsBloodDecals	0	1
+Tweaks	bEnemyHealthbarShowBuffedHP	0	1
+Tweaks	bSleepOnChairs	0	0
+Tweaks	bSleepWaitSliderShowsWakeTime	0	0
+Tweaks	bCripplingDoesntDisarm	0	0
+Tweaks	bKeepFallHeightOnLoad	0	0
+Tweaks	bReviveUnconsciousCompanions	0	0
+Tweaks	bHeatbeatSoundsFade	0	1
+Tweaks	bArmorSoundsPlayIn3D	0	1
+Tweaks	bSortPipboyRepairMenu	0	0
+Tweaks	bDisableStealthEffectInPipboy	0	0
+Tweaks	bEmboldenTagSkills	0	0
+Tweaks	bCompanionsDontUseAmmo	0	0
+Tweaks	bAmmoBurstCaseCountFix	0	1
+Tweaks	bReallocateSkillPointsOnLevelup	0	0
+Tweaks	bUseWeaponRepairKitsInRepairMenu	0	0
+Tweaks	bUseArmorRepairKitsInRepairMenu	0	-
+Tweaks	bStrengthAffectsAllThrowables	0	0
+Tweaks	bMapRemembersPosition	0	1
+Tweaks	bMapRecenterHotkey	0	0
+Tweaks	bMapLocationDisplayDistance	0	0
+Tweaks	bBarterAffectsRepairCosts	0	0
+Tweaks	bContainersShowEquippedAmmo	0	0
+Tweaks	bQuantityMenuRespectsCompanionCarryCap	0	0
+Tweaks	bDialogueKeepVoiceActingNotes	0	0
+Tweaks	bMeleeImpactEffectsFollowTarget	0	1
+Tweaks	bRaceMenuAllowFemaleFacialHair	0	0
+Tweaks	bPrintNewModsOnLoad	0	0
+Tweaks	bAddGrenadeHotkey	0	-
+Tweaks	bBetterCaravanMenu	0	-
+Tweaks	bCustomLocationDiscoveredSound	0	0
+Tweaks	bVATSTargetPlayerProjectiles	0	0
+Tweaks	bBlackJackTotalDisplay	0	0
+Tweaks	bCapitalizeRecipeCategories	0	1
+Tweaks	bPerksAffectFistWeaponSpeed	0	0
+Tweaks	bKeyRepeatAcceleration	0	0
+Tweaks	bSelectMultipleHeadParts	0	-
+Tweaks	bVATSDequeueWeaponShotsOnDisarm	0	0
+Tweaks	bSemiAutoQueue	0	0
+Tweaks	bShowCaravanCardsInMiscTabs	0	0
+Tweaks	bSubtitlesShowActorNames	0	0
+Tweaks	bLockpickRememberBobbyPinAngle	0	0
+Tweaks	bNPCsTakeLimbFallDamage	0	0
+Tweaks	bFallDeathsCauseDismemberment	0	0
+Tweaks	bControllerTriggerDeadzones	0	0
+Tweaks	bExtendLockpickSpotRange	0	0
+Tweaks	bContainerEncumbranceIndicator	0	0
+Tweaks	bPreventTeammateFootstepSounds	0	0
+Tweaks	bWeaponModdingSkillRequirement	0	0
+Tweaks	bNoEnvironmentRadiationInFullPowerArmor	0	0
+Tweaks	bHapticPipboy	0	0
+Tweaks	bHiddenFragsFix	0	1
+Tweaks	bPlantingLiveGrenadesRequiresWeaponSkill	0	0
+Tweaks	bDisplayItemEffectTotals	0	1
+Tweaks	bDisableInventoryRightClickDrop	0	0
+Tweaks	bNoHotkeyEquipSounds	0	0
+Tweaks	bNoCompanionItemDamage	0	0
+Tweaks	bAutoUnlockTerminals	0	0
+Tweaks	bReloadingPreventsWeaponHotkeys	0	0
+Tweaks	bTimescaleAffectsMinigames	0	0
+Tweaks	bWaterSourcesShowH2O	0	0
+Tweaks	bTabClosesPipboyFromKeyAndLimbMenus	0	0
+Tweaks	bMapSelectableCompanions	0	0
+Tweaks	bEnduranceScalesMinFallHeight	0	0
+Tweaks	bJumpSwimsUpwards	0	0
+Tweaks	bArmorCausesSinking	0	0
+Tweaks	bReputationShowsFameInfamy	0	0
+Tweaks	bRepairAllConfirmation	0	0
+Tweaks	bPreventNPCAddiction	0	0
+Tweaks	bNoExitToMainMenuButton	0	-
+Tweaks	bNoDialogueZoom	0	0
+Tweaks	bSeparateAlcoholEffects	0	0
+Tweaks	bGodModePreventsJamAnims	0	0
+Tweaks	bScaleWeaponVolume	0	0
+Tweaks	bExplodingDestructibleIndicator	0	0
+Tweaks	bVATSIgnoreNonExplosiveProjectiles	0	0
+Tweaks	bWaterDepthRadiation	0	-
+Tweaks	bSleepHealingMinDuration	0	0
+Tweaks	bUseHitLocationInCinematicKillcams	0	0
+Tweaks	bScaleRadioVolume	0	0
+Tweaks	bVATSThrowablesUseVisibility	0	0
+Tweaks	bVATSStopFollowingDeadTargets	0	1
+Tweaks	bPlayUnequipWhenSwitchingWeapons	0	-
+Tweaks	bReplaceHelpWithConsole	0	0
+Tweaks	bAutoReadNotes	0	0
+Tweaks	bHostilesPrioritizePlayer	0	0
+Tweaks	bRestoreLockedDoorSound	0	-
+Tweaks	bNoSlowMotionDeathcam	0	-
+Tweaks	bInventoryHotkeyIcon	0	-
+Tweaks	bDialogMenuDebugging	0	-
+Tweaks	bCharacterRadiation	0	-
+Tweaks	bActorsStickToSlopes	0	-
+Tweaks	bGodModeAllowsCraftingWithoutRequirements	0	-
+Tweaks	bKarmaTitleShowsValue	0	-
+Tweaks	bAddSetHomeCommand	0	-
+Tweaks	bHoldToHolsterMeleeWeapons	0	-
+Tweaks	bAmmoSwapWindowMatchesReloadTime	0	-
+Tweaks	bPickpocketFleeingActors	0	-
+Tweaks	bVanityCamReturnsToFirstPerson	0	-
+Tweaks	bPickpocketCaughtCausesDetection	0	-
+Tweaks	bSellStolenItems	0	-
+Tweaks	bLockpickForceBonusNearSweetSpot	0	-
+Tweaks	bFrenzyGrantsPlayerXP	0	-
+Tweaks	bPreventFiringDuringLoopingReloadEnd	0	-
+Tweaks	bNoPlayerAnimMovement	0	-
+Tweaks	bFixEmptyActorLeveledListCrash	0	-
+Tweaks	bMultipleMapMarkers	0	-
+Tweaks	bNearbyDetectionIndicator	0	-
+Tweaks	bRealtimeWait	0	-
+Tweaks	bAmmoSwapAlwaysReloads	0	-
+Tweaks	bBulletTrails	0	-
+Tweaks	bReplaceCasingSounds	0	-
+Tweaks	bStewiesControls	0	-
+Tweaks	bNoHardcoreNeedsInGodmode	0	-
+Tweaks	bCollisionSoundExtender	0	-
+Tweaks	bWeaponSoundExtender	0	-
+Tweaks	bPlayerPositionTracker	0	-
+Tweaks	bLookAroundWhileDrinking	0	-
+Tweaks	bConditionAffectsCasingVelocity	0	-
+Tweaks	bHoldingAltShowsInventoryTabWeight	0	-
+Tweaks	bDynamicPlayerRadio	0	-
+Tweaks	bVATSQueueShowsAP	0	-
+Tweaks	bHighResPipboy	0	-
+Tweaks	bCustomWeaponModEffects	0	-
+Tweaks	bPickpocketGrenadeSplashDamage	0	-
+Tweaks	bForceUpdateCellLODs	0	-
+Tweaks	bAllowNavmeshInESPs	0	-
+Tweaks	bWall_SoGB	0	-
+Tweaks	bLazyInventoryMenu	0	-
+Tweaks	bAddHoldKeyToAllAnims	0	-
+Tweaks	bTraitMenuSelectOwned	0	-
+Tweaks	bBlockingCancelsMeleeAttacks	0	-
+Tweaks	bVATSTargetDestructibles	0	-
+Tweaks	bCombatIgnoresPreferredPathing	0	-
+Tweaks	bAddLeveledListEntryPointChecksPlayerDamage	0	-
+Tweaks	bEnhancedCameraIdleHandsFix	0	-
+Tweaks	bInteriorMapMarkerDebug	0	-
+Tweaks	bHealthBarRestoreIndicator	0	-
+Tweaks	bCapHealthByRADS	0	-
+Tweaks	bPreventReloadCancelling	0	-
+Tweaks	bExplosionsHitAnyNodes	0	-
+Tweaks	bAllowCaravanWithNoWager	0	-
+Tweaks	bRaceMenuPresets	0	-
+Tweaks	fCraftedItemHealthPct	80	80.000000
+Tweaks	iPerksPerLevel	0	0
+Tweaks	bUndiscoveredLocationIcons	0	-
+Tweaks	b24HourSleepWaitClock	0	0
+Tweaks	b12HourPipboyClock	0	0
+Tweaks	bLocalMapRespawnedCellIndicator	0	0
+Tweaks	bNoPlaceMarkerPopup	0	0
+Tweaks	bBetterPickupPrompt	0	1
+Tweaks	bHideEquippedItemsInBarter	0	0
+Tweaks	bHideEquippedItemsInContainers	0	0
+Tweaks	bHideHotkeyedItemsInBarter	0	0
+Tweaks	bHideHotkeyedItemsInContainers	0	0
+Tweaks	bNoFoodWornOffMessage	0	0
+Tweaks	iDateFormat	0	0
+Tweaks	bContainerRespawnsMessage	0	0
+Tweaks	bTakeAllConfirmation	0	0
+Container Respawn Warning	sWarningText	Storing items here seems unsafe.	Storing items here seems unsafe.
+Container Respawn Warning	bHideOnNPCs	0	0
+Take All Confirmation	sMessageText	Are you sure you want to take all items?	Are you sure you want to take all items?
+Take All Confirmation	iMinItemCount	10	10
+Tweaks	iMaxCharacterLevel	0	0
+Tweaks	bUseAnimVariants	?isUseReloadVariants	1
+INI	bTweaksMenuButton	1	1
+Tweaks	bMoveHUDPrompt	0	-
+Tweaks	bShowTweaksButton	0	-
+Tweaks	bLogMeshErrors	0	-
+Tweaks	bConditionBasedWeaponSpread	0	-
+Tweaks	bDontMirrorTexturesInRAM	0	-
+Tweaks	bLevelUpOnlyWhenSeated	0	-
+Tweaks	bDimWeaponRequirementsIfNotMet	0	-
+Tweaks	bHitmanCustomControls	0	-
+Tweaks	bEnemiesIgnoreCompanions	0	-
+Tweaks	bCompanionsIgnoreEnemies	0	-
+Tweaks	bDecreasePlayerMovementAnimBlends	0	-
+Tweaks	bVATSTargettingStuckWorkaround	0	-
+Tweaks	bQuestModSelector	0	-
+Tweaks	bNPCsMoveSlowerWhileAiming	0	-
+Tweaks	bCompassUseDifferentColorForAggroNPCs	0	-
+Tweaks	bAddPipboySwapAmmoHotkey	0	-
+Hotkeys	iScreenshotKey	0	0
+Hotkeys	iPipboyStatsKey	0	0
+Hotkeys	iPipboyItemsKey	0	0
+Hotkeys	iPipboyDataKey	0	0
+Hotkeys	iVATSAcceptKey	0	0
+Hotkeys	iConsoleKey	0	0
+Hotkeys	iExitToMainMenuKey	0	0
+Hotkeys	iExitGameKey	0	0
+Hotkeys	iTogglePipboyLightKey	0	0
+Hotkeys	iEquipLastWeaponKey	0	0
+Hotkeys	iHolsterWeaponKey	0	0
+Hotkeys	iOpenMapKey	0	0
+Hotkeys	iOpenLocalMapKey	0	0
+Hotkeys	iOpenQuestsKey	0	0
+Hotkeys	iOpenRadioKey	0	0
+Hotkeys	iRadioVolumeDownKey	0	0
+Hotkeys	iRadioVolumeUpKey	0	0
+Hotkeys	iHideHUDKey	0	0
+Hotkeys	iToggleMenusKey	0	0
+Hotkeys	iToggleTrueIronSightsKey	0	0
+Hotkeys	iToggleCrosshairKey	0	0
+Hotkeys	iToggleSightingNodeHotkey	0	0
+Hotkeys	iToggleSneakIndicatorKey	0	0
+Hotkeys	iDropEquippedWeaponKey	0	0
+Hotkeys	iToggleSmoothCameraKey	0	0
+Hotkeys	iNextRadioStationKey	0	0
+Hotkeys	iPrevRadioStationKey	0	0
+Hotkeys	iSkipRadioSongKey	0	0
+Hotkeys	iPlaceMapMarkerAtPlayerPosKey	0	0
+Hotkeys	iZoomPOVOutKey	0	-
+Hotkeys	iZoomPOVInKey	0	-
+Hide HUD Key	bHideByDefault	0	-
+Hotkeys	iDisableCollisionKey	0	0
+Hotkeys	iRepeatActivateKey	0	0
+Repeated Activate Key	bOnlyTakeItems	0	0
+Tweaks	bNoScreenshotPopup	0	0
+Screenshot Popup	bPrintToConsole	1	1
+Screenshot Popup	sSoundName		
+Screenshot Popup	fSoundVolume	1.0	1.000000
+Tweaks	bDistanceBasedQuestMarkerVisibilty	0	0
+Quest Marker	fMaxExteriorQuestMarkerDistance	5000.0	5000.000000
+Quest Marker	fMaxInteriorQuestMarkerDistance	1400.0	1400.000000
+Tweaks	bNoKarmaMessages	0	0
+Karma Messages	bRemoveEvilMessage	1	1
+Karma Messages	bRemoveEvilSound	1	1
+Karma Messages	bRemoveGoodMessage	1	1
+Karma Messages	bRemoveGoodSound	1	1
+Karma Messages	iKarmaIncreaseThreshold	0	0
+Karma Messages	iKarmaDecreaseThreshold	0	0
+Karma Messages	iRepeatKarmaSoundIgnoreTime	0	0
+Tweaks	bNoCrippleCriticalMessages	0	0
+Cripple-Critical Messages	bPatchCritical	1	1
+Cripple-Critical Messages	bPatchCripple	1	1
+Cripple-Critical Messages	bShowFrenzy	0	-
+Tweaks	bAimingSpeed	0	0
+Aiming Speed	bPatchMelee	1	1
+Aiming Speed	bPatchNonMelee	1	1
+Tweaks	bNoAudioDistortion	0	0
+Audio Distortion	bDeepFried	0	0
+Tweaks	bNoScrollwheelPOVChange	0	0
+Scrollwheel POV	bDisableFirstToThird	1	1
+Scrollwheel POV	bDisableThirdToFirst	1	1
+Tweaks	bFasterSleepWait	0	0
+Sleep Wait	iWaitTimeMS	300	300.000000
+Sleep Wait	bSitWaitShowMessage	1	1
+Sleep Wait	bSitWaitShowTime	0	0
+Sleep Wait	sSitToWaitMessage	You cannot wait while standing!	You cannot wait while standing!
+Sleep Wait	bDontScaleWithTimescale	1	1
+Tweaks	bNoPipBoyInCombat	0	0
+No Pipboy In Combat	bShowMessage	1	1
+No Pipboy In Combat	sNotEnoughAPMessage	Not enough AP to use Pip-Boy in combat!	Not enough AP to use Pip-Boy in combat!
+No Pipboy In Combat	sNotAllowedMessage	You cannot use your Pip-Boy in combat!	You cannot use your Pip-Boy in combat!
+No Pipboy In Combat	bAllowPipboyUsingActionPoints	0	0
+No Pipboy In Combat	iPipboyAPCost	?bPipboyAPCost	50
+Tweaks	bJumpingCostsAP	0	0
+Jumping Costs AP	iJumpAPCost	20	20
+Jumping Costs AP	bJumpWithoutEnoughAP	1	1
+Jumping Costs AP	bCombatOnly	0	0
+Tweaks	bNoXPBarInCombat	0	0
+Combat XP	iCombatXPDelayMS	3000	3000
+NPC Names	bShowNameOnDeadNPCs	1	1
+Tweaks	bNoSkillTags	0	0
+No Skill Tags	bRemoveRedOutline	1	1
+No Skill Tags	iRemoveTags	1	1
+No Skill Tags	bAddPercentSymbol	0	0
+No Skill Tags	bRemoveFailedSuccessText	1	1
+No Skill Tags	bNoXPPopupInDialogue	0	0
+No Skill Tags	bHideMiscStats	0	0
+Tweaks	bMovementPenalties	0	0
+Slower Backpedaling	iLeftStrafeSpeedPercentage	100	100.000000
+Slower Backpedaling	iRightStrafeSpeedPercentage	?iRightStraGeSpeedPercentage	100.000000
+Slower Backpedaling	iFrontLeftSpeedPercentage	100	100.000000
+Slower Backpedaling	iFrontRightSpeedPercentage	100	100.000000
+Slower Backpedaling	iBackSpeedPercentage	60	60.000000
+Slower Backpedaling	iBackLeftSpeedPercentage	75	75.000000
+Slower Backpedaling	iBackRightSpeedPercentage	75	75.000000
+Slower Backpedaling	iMeleeAimSpeedPercentage	70	70.000000
+Slower Backpedaling	iAimSpeedPercentage	70	70.000000
+Slower Backpedaling	iReloadOrJamSpeedMultiplier	100	100.000000
+Slower Backpedaling	iFiringWeaponSpeedMultiplier	100	100.000000
+Tweaks	bHardcoreTweaks	0	0
+Hardcore Tweaks	bAmmoWeight	1	1
+Hardcore Tweaks	bEssentialCompanions	0	0
+Hardcore Tweaks	bSleepingHeals	0	0
+Tweaks	bOverencumberedTweak	0	0
+Over Encumbered	iAPDrainCost	1	1
+Over Encumbered	iAPDrainIntervalMS	100	100.000000
+Over Encumbered	iJumpAPCost	5	5
+Over Encumbered	bJumpWithoutEnoughAP	1	1
+Over Encumbered	bRemoveEncumbranceMessage	0	0
+Over Encumbered	bWeightBasedAPPenalty	0	0
+Over Encumbered	bAllowRunWithoutEnoughAP	0	0
+Over Encumbered	fRunSpeedMult	1.0	1.000000
+Tweaks	bNoQuestFailedPopup	0	0
+No Quest Failed	bQuestFailedOnlyIfStarted	0	0
+Menu WASD	bAlwaysAllowWASD	0	0
+Menu WASD	bWASDKeysRepeat	1	1
+Menu WASD	bNoSpaceClosesContainer	1	1
+Menu WASD	bInventorySelectionAlwaysVisible	1	1
+Menu WASD	bContainerDefaultToRightSide	0	0
+Menu WASD	bShiftScalesMapZoomSpeed	1	1
+Menu WASD	bShiftScalesContainerArrowKeys	1	1
+Menu WASD	bShiftScalesMousewheel	0	0
+Menu WASD	bMapMenuWASD	1	1
+Menu WASD	bMapMenuWASDCentersSelectionReticle	1	1
+Menu WASD	bSelectWithEKey	0	0
+Menu WASD	bTabReturnsToInventory	0	0
+Menu WASD	bListWraparound	0	0
+Menu WASD	bHighlightContinueAtMainMenu	0	0
+Tweaks	bCompassNPCHeightIndicator	0	0
+Tweaks	bCompassQuestHeightIndicator	0	0
+Compass Height Indicator	iHeightThreshold	200	200
+Player Placed Marker	bUseDoorIcon	1	1
+Tweaks	bCompassNPCDistanceBasedAlpha	0	0
+Tweaks	bCompassLocationDistanceBasedAlpha	0	0
+Tweaks	bDisableCompassEdgeAlpha	0	0
+Tweaks	bPatchUnseenCellName	0	0
+Unvisited Cell Indicator	bUnnameUnvisitedCells	0	0
+Unvisited Cell Indicator	bPatchRespawnedCellName	0	0
+Unvisited Cell Indicator	bShowVisitedCellsPrompt	0	0
+Tweaks	bEnteringVATSCostsAP	0	0
+Entering VATS Costs AP	iEnterVATSAPCost	10	10
+Entering VATS Costs AP	bNoVATSIfNotEnoughAP	1	1
+Entering VATS Costs AP	bFailOnly	0	0
+Entering VATS Costs AP	bChargeOnVATSNoTargetsExit	0	0
+Tweaks	bImprovedAutoSave	0	0
+Save Manager	iAutoSaveTimer	0	0
+Save Manager	iMaxAutoSaveCount	3	3
+Save Manager	bPeriodicFullsave	0	0
+Save Manager	iReloadCurrentSaveKey	0	0
+Save Manager	iCreateSaveKey	0	0
+Save Manager	iIncrementalSaveKey	0	0
+Save Manager	iMaxIncrementalSaveCount	5	5
+Save Manager	_iAutoSaveIndex	0	0
+Save Manager	_iIncrementalSaveIndex	0	0
+Save Manager	bHideAutosaveMessage	0	0
+Save Manager	bSaveOnLocationDiscovered	0	0
+Save Manager	bSaveOnQuestCompleted	0	0
+Save Manager	bSaveOnExitGame	0	0
+Save Manager	bSavePreLevelUp	0	0
+Save Manager	iMinAutosaveInterval	0	0
+Save Manager	iIncrementalSaveSlotChangeInterval	0	0
+Save Manager	bPreventAutosaveInCombat	0	0
+Save Manager	bPreventAutosaveInTGM	0	0
+Save Manager	bPreventScriptedSaves	0	0
+Save Manager	bReplaceContinueWithQuicksave	0	0
+Save Manager	bSaveOnPickpocket	0	0
+Save Manager	bSaveOnCraft	0	0
+Save Manager	bAllSavesResetAutosaveTimer	1	1
+Save Manager	bHighlightActiveSave	1	1
+Tweaks	bChargedAttacksCostAP	0	0
+Charged Attacks	iChargedAttackAPCost	5	5
+Charged Attacks	iChargedAttackAPCostMax	30	30
+Charged Attacks	fChargedAttackWeaponWeightAPMult	2.0	2.000000
+Charged Attacks	bPreventIfNotEnoughAP	0	0
+Tweaks	bUseCustomSniperZoomRate	0	0
+Scope Zoom	fScopeFOVTimeChange	0.25	0.250000
+Scope Zoom	bZoomOutAtSameRate	0	0
+Tweaks	bQuickUse	0	0
+Quick Use	bRealtimeQuickUse	1	1
+Quick Use	bShowItemStats	1	1
+Quick Use	bContainerRightClick	0	0
+Quick Use	bContainerHotkey	0	0
+Quick Use	iContainerButton	?kXboxCtrl_NONE	-
+Quick Use	bBookSupport	0	0
+Quick Use	bNoteSupport	0	0
+Quick Use	bShowReReadOnSeenNotes	0	0
+Quick Use	bWhileAimingController	1	1
+Tweaks	bRemoveQuestObjectiveAddedText	0	0
+Quest Added	bHideCompletedObjectivePopup	0	0
+Tweaks	bRememberConsoleHistory	0	1
+Console	iSentHistoryMaxSize	200	200
+VATS Exit Key	bInstantEnd	1	1
+Terminal Exit	bFailOnEarlyExit	0	0
+Better Autowalk	bAllowBackwardsAutowalk	0	0
+Tweaks	bUseCustomBarterPriceMultipliers	0	0
+Barter Prices	bConstantPurifiedWaterPrice	0	0
+Barter Prices	fSellMultArmor	1.0	1.000000
+Barter Prices	fSellMultWeapon	1.0	1.000000
+Barter Prices	fSellMultAid	1.0	1.000000
+Barter Prices	fSellMultAmmo	1.0	1.000000
+Barter Prices	fSellMultMisc	1.0	1.000000
+Barter Prices	fSellMultWeaponMod	1.0	1.000000
+Barter Prices	fBuyMultArmor	1.0	1.000000
+Barter Prices	fBuyMultWeapon	1.0	1.000000
+Barter Prices	fBuyMultAid	1.0	1.000000
+Barter Prices	fBuyMultAmmo	1.0	1.000000
+Barter Prices	fBuyMultMisc	1.0	1.000000
+Barter Prices	fBuyMultWeaponMod	1.0	1.000000
+Hit Shader	bOnlyDisableInGodmode	0	0
+Flycam	fAimSpeedMult	0.5	0.500000
+Flycam	fRunSpeedMult	2.0	2.000000
+Flycam	fScrollSpeedScale	1.0	1.000000
+Flycam	fRotateSpeedMult	1.0	1.000000
+Flycam	bSmoothCamera	1	1
+Lockpick	bLockpickForceResetPinHealth	0	0
+Lockpick	bPreventUseLockWithNoBobbyPins	1	1
+Lockpick	sBobbyPinBreakMessage	The Bobby Pin has been broken.	The Bobby Pin has been broken.
+Dialog Hotkeys	bPrependDialogNumberHotkeys	0	0
+Dialog Hotkeys	bTabClicksLastTopic	0	0
+Controller Deadzone	iControllerDeadzone	0	0
+Controller Deadzone	iControllerDeadzoneRS	?g_iControllerDeadzoneLS	-
+Skill Points	iSkillPointBase	10	10
+Skill Points	fPointsPerInt	0.5	0.500000
+Dialog Hide Mouse	bOnlyWhenNPCSpeaks	0	1
+Adjustable Zoom	bZoomableNonScopedWeapons	0	0
+Adjustable Zoom	bSmoothScrollZoom	1	1
+Adjustable Zoom	fZoomRate	0.025	0.025000
+Adjustable Zoom	fShiftZoomModifier	2.0	2.000000
+Adjustable Zoom	bResetZoomOnWeaponChange	1	1
+Adjustable Zoom	iScopeResetTimeMS	0	0
+Adjustable Zoom	bBinocularsOnly	0	0
+Adjustable Zoom	fMinFOV	7.5	7.500000
+Adjustable Zoom	fMaxFOV	75.0	75.000000
+Adjustable Zoom	iZoomInKey	0	0
+Adjustable Zoom	iZoomOutKey	0	0
+Adjustable Zoom	fMinFOVMult	0.0	0.000000
+Adjustable Zoom	fMaxFOVMult	10.0	10.000000
+Adjustable Zoom	bDpadSupport	1	1
+Hold Breath	iScopeHoldBreathAPDrain	2	2
+Hold Breath	iScopeHoldBreathAPDrainIntervalMS	80	80.000000
+Hold Breath	fScopeHoldBreathWobbleMult	0.1	0.100000
+Hold Breath	bRequireWeaponStrength	0	0
+Hold Breath	bRequireWeaponSkill	0	0
+Hold Breath	bActivateHoldsBreath	1	-
+Hold Breath	iHoldBreathKey	?Scancodes::LeftShift	42
+Night Vision	bDisableVisionByDefault	0	0
+Night Vision	bAllowNightVisionDuringDay	0	0
+Night Vision	sToggleOnSound	UIPipBoyLightOn	UIPipBoyLightOn
+Night Vision	sToggleOffSound	UIPipBoyLightOff	UIPipBoyLightOff
+Power Armor	fFallDamageMult	0.0	0.000000
+Power Armor	bPlayerOnly	0	0
+Double Reload Swaps Ammo Type	bAllowMultipleQuickChanges	1	1
+Double Reload Swaps Ammo Type	iAmmoSwapTimeMS	200	200
+Agility Scales Movement Speed	fAgilityMovementSpeedMult	0.02	0.020000
+Agility Scales Movement Speed	bNPCs	1	1
+Agility Scales Movement Speed	bPlayer	1	1
+Weapon Requirements Matter	bIgnoreStrengthRequirement	0	0
+Weapon Requirements Matter	bIgnoreNonHeavyStrengthRequirement	0	0
+Weapon Requirements Matter	bIgnoreSkillRequirement	0	0
+Weapon Requirements Matter	bIgnoreThrowables	0	0
+Weapon Requirements Matter	sSkillAndStrengthRequiredMessage	You are too weak and inexperienced to use this weapon.	You are too weak and inexperienced to use this weapon.
+Weapon Requirements Matter	sStrengthRequiredMessage	You are too weak to use this weapon.	You are too weak to use this weapon.
+Weapon Requirements Matter	sSkillRequiredMessage	You are too inexperienced to use this weapon.	You are too inexperienced to use this weapon.
+Hacking	bNoSingleCharacterAttempts	1	1
+Hacking	bRemoveDudIfAllowanceFull	1	1
+Hacking	bNoAllowRepeatWords	1	1
+Hacking	bNoSpecialInputPrinting	0	0
+Hacking	bNoRemoveGuessedWords	0	0
+Hacking	bCompactGuesses	0	0
+Hacking	bOverscroll	0	0
+Hacking	bMarkGuessesAsDuds	0	0
+Hacking	bMarkGuessesAsDudsKeepMatchingCharacters	0	0
+Hacking	iAllowanceReplenishedBonus	0	0
+Logging	bGeneralErrors	1	1
+Logging	bHavokErrors	0	0
+Logging	bHavokOldRigidBodyErrors	0	0
+Logging	bSaveLoadErrors	0	0
+Logging	bGeneralMessages	0	0
+Hide Misc Items	bDontHideStarCaps	0	0
+Pickpocket Overhaul	bRewardXP	0	0
+Pickpocket Overhaul	bShowPickpocketSuccessRate	0	0
+Pickpocket Overhaul	sSuccessMessage	Success Rate: %d%%	Success Rate: %d%%
+Pickpocket Overhaul	fBaseChance	40.0	40.000000
+Pickpocket Overhaul	fPlayerSneakMult	0.9	0.900000
+Pickpocket Overhaul	fItemValueMult	0.015	0.015000
+Pickpocket Overhaul	fItemWeightMult	1.5	1.500000
+Pickpocket Overhaul	fTargetPerceptionMult	8.0	8.000000
+Pickpocket Overhaul	fDetectionValueMult	0.1	0.100000
+Pickpocket Overhaul	fPlayerLuckMult	0.0	0.000000
+Pickpocket Overhaul	fPlayerAgilityMult	0.0	0.000000
+Pickpocket Overhaul	fWornItemChanceMult	1.0	1.000000
+Pickpocket Overhaul	bReversePickpocketPenaltyLiveGrenadesOnly	0	0
+Pickpocket Overhaul	bPickpocketKarmaFriendlyNPCsOnly	0	0
+Pickpocket Overhaul	bIgnoreFreeItems	1	1
+Repair	iRepairRewardXP	1	1
+Kill AP Reward	iKillRewardAmount	0	0
+Region Names	bRegionNamesUpdateNearMapMarkers	0	0
+Companion Kill XP	bCompanionHitsCountAfterPlayerDamage	1	1
+Reputation	bHidePopups	1	1
+Reputation	bHideGainMessages	1	1
+Reputation	bHideLossMessages	1	1
+Reputation	bHideNonScriptedLossesIfAtMin	0	0
+Reputation	bHideNonScriptedGainsIfAtMax	0	0
+VATS	bHideFriendliesByDefault	0	0
+Compass	bShowFiringEnemies	0	0
+Clip Rounds	bShowTotalRemaining	0	0
+Inventory Button	iMode	0	0
+Inventory Button	iHideModeFlags	0	0x0
+Inventory Button	iControllerHotkey	?kXboxCtrl_R3	18
+Inventory Button	iControllerCycleModeKey	?kXboxCtrl_L3	17
+Inventory Button	bPipBoy	1	1
+Inventory Button	bContainer	1	1
+Inventory Button	bBarter	1	1
+Inventory Button	fHideWeightThreshold	0.0	0.000000
+Inventory Button	bUseAlphaForEnabledIndicator	0	0
+Inventory Button	fAlphaForDisabledIndicator	127.0	-
+Inventory Button	bWeightIncludesStackSize	0	-
+Overencumbered AP	fOverencumberedAPRegenScale	0.0	0.000000
+Overencumbered AP	bWhileMovingOnly	0	0
+Detected By Whom	iMaxNameCount	5	5
+Detected By Whom	sDetected	[Detected by: 	[Detected by:
+Detected By Whom	sActors	[Detected by %d actors]	[Detected by %d actors]
+Detected By Whom	sOthers	%sand %d other%s]	%sand %d other%s]
+Detected By Whom	sPlural	s	s
+Reduced XP	fXPMultiplier	0.5	0.500000
+Reduced XP	bPreventRounding	0	0
+Running Costs AP	fAPDrainCostBase	2.0	2.000000
+Running Costs AP	fSneakAPDrainCostBase	?g_fRunAPCostBase	2.000000
+Running Costs AP	fRunAPEnduranceMult	0.15	0.150000
+Running Costs AP	fSneakRunAPEnduranceMult	?g_fRunAPEnduranceMult	0.150000
+Running Costs AP	iAPDrainIntervalMS	100	100.000000
+Running Costs AP	bAllowRunWithoutEnoughAP	0	0
+Running Costs AP	bInCombatOnly	0	0
+Running Costs AP	fAPRegenMult	1.0	1.000000
+Wait Key	iKeyHoldTimeMS	1000	1000
+Place Marker Popup	bPlaceMarkerShiftToReset	0	0
+Place Marker Popup	bResetIfHovered	?!g_bNoPlaceMarkerPopup	1
+Activate Key	iActivateKeyHoldTimeMS	200	200
+Activate Key	bFurniture	1	1
+Activate Key	bWater	1	1
+Activate Key	bContainers	0	0
+Activate Key	bCrafting	0	0
+Activate Key	bTerminals	0	0
+Activate Key	bTakeItemsWhileKeyHeld	0	0
+Activate Key	iActivateKeyTakeItemsHoldTimeMS	300	300
+Activate Key	bAutoPickupEncumbranceThreshold	0	0
+Activate Key	bStealing	0	0
+Activate Key	iStealTimerMS	10000	10000
+Sleep Wait Anywhere	bTrespassing	1	1
+Sleep Wait Anywhere	bCombat	1	1
+Sleep Wait Anywhere	bTakingDamage	1	1
+Sleep Wait Anywhere	bMidair	1	1
+Sleep Wait Anywhere	bInRadiation	1	1
+Sleep Wait Anywhere	bUnderwater	1	1
+Interior Transition	bFadeIn	1	1
+Armor Condition Penalty	fScale	1.0	1.000000
+Computer Hotkeys	bPrependOptionNumber	0	0
+Ultrawide Support	fMenuFOVScale	0.9972	0.997200
+Manual Reload	bNoReloadOnAmmoPickup	1	1
+Manual Reload	bPreventFiringAnimWhenEmpty	1	1
+Manual Reload	iAutoReloadClipSizeThreshold	0	0
+Manual Reload	bAutoWeaponsPlayEmptyClipSound	1	1
+Manual Reload	bAutoWeaponsOnly	0	0
+Manual Reload	bReloadWhenFiringWithEmptyClip	0	0
+Map Hotkey	bShowLocalMapInInteriors	0	0
+Water Breath	fBreathRegainRate	0.20	0.200000
+Water Breath	bShowBreathMeterOutOfWater	1	1
+Note Menu	bRequireShiftHeld	0	0
+Turn Speed	fAimingScaleX	0.6	0.600000
+Turn Speed	fAimingScaleY	0.6	0.600000
+Weightless Worn Power Armor	bRequireTorsoArmorForWeightlessHelmet	0	0
+Weightless Worn Power Armor	bRequirePowerArmorTraining	0	0
+Weightless Worn Power Armor	fWeightMult	0.0	0.000000
+Weightless Worn Armor	fWeightMult	0.0	0.000000
+Robot Companion Healing	fBase	30.0	30.000000
+Robot Companion Healing	fRepairMult	0.25	0.250000
+Robot Companion Healing	fRoboticsExpertBonus	20.0	20.000000
+Robot Companion Healing	sHealingItemName		
+Screenshot Format	bCopyToClipboard	1	1
+Screenshot Format	sExtension	Jpg	png
+Screenshot Format	iJpgQuality	100	100
+Screenshot Format	sTiffCompression	None	None
+Screenshot Format	iTiffColorDepth	32	32
+Mod Console Prints	bIncludeScriptID	0	1
+Radio Volume	fDialogueSongVolumeMult	0.2	0.200000
+Music Volume	fDialogueMusicVolumeMult	0.2	0.500000
+Weapon FOV	bExcludeNonSightedWeapons	0	0
+Critical Hits	fCriticalDamageMult	1.0	1.000000
+Equip Last Weapon Hotkey	bIgnoreThrowables	0	0
+Equip Last Weapon Hotkey	bIgnoreNonDamageWeapons	0	0
+Equip Last Weapon Hotkey	bMousewheelSupport	0	0
+Cookable Grenades	bDisableGrenadeDistanceIncrease	1	1
+Cookable Grenades	bOvercookedGrenadesExplode	1	1
+Cookable Grenades	fMinGrenadeTimer	0.0	0.000000
+Cookable Grenades	bPlaySound	1	1
+Cookable Grenades	bTimerCountdown	1	1
+Cookable Grenades	sSoundName	WPNThisMachineReloadPt3	WPNThisMachineReloadPt3
+Cookable Grenades	sSoundNameAlt	WPNThisMachineReloadPt1	WPNThisMachineReloadPt1
+Menu Search	bMapMenu	1	1
+Menu Search	bInventoryMenu	1	1
+Menu Search	bStatsMenu	1	1
+Menu Search	bContainerMenu	1	1
+Menu Search	bBarterMenu	1	1
+Menu Search	bLevelUpMenuSearch	1	1
+Menu Search	bRecipeMenuSearch	1	1
+Menu Search	bSaveMenuSearch	1	1
+Menu Search	bRemoveFilterWhenClosingSearch	1	1
+Menu Search	bClearInputWhenReopeningSearch	1	1
+Menu Search	bQuestIncludeObjectives	1	1
+Menu Search	bQuestIncludeCompletedObjectives	1	1
+Console Output	sFilename	ConsoleOut.txt	ConsoleOut.txt
+Book Effects	sPrefix	Permanent	Permanent
+Smooth Iron Sights Camera	iAimTransitionTimeMS	225	225.000000
+Smooth Iron Sights Camera	iEasingFunction	?EasingFunctions::kOutSine	1
+Disable Needs Messages	bRadiation	1	1
+Disable Needs Messages	bDehydration	1	1
+Disable Needs Messages	bHunger	1	1
+Disable Needs Messages	bSleep	1	1
+Recently Dead NPC Indicator	iDeadActorMaxTimerMS	0	0
+Recently Dead NPC Indicator	bPlayerOrTeammateKillsOnly	0	0
+Recently Dead NPC Indicator	bPlayerDamagedOnly	0	0
+Recently Dead NPC Indicator	uRGB	0x7F7F73	0x7f7f73
+Companion HUD Color	uRGB	0xFFFFFF	0xffffff
+No Firing Delay	bIncludeHeavyWeapons	1	1
+Blood Splatters	fMinHealthDamage	2.0	2.000000
+Weightless Items	bArmor	1	1
+Weightless Items	bAid	1	1
+Weightless Items	bAmmo	1	1
+Weightless Items	bWeapons	1	1
+Weightless Items	bMisc	1	1
+XP Formula	iXPRewardBase	10	10
+XP Formula	fXPLevelDifferenceScale	2.0	2.000000
+Colored HUD Bars	fRedHealthThreshold	0.33	0.330000
+Colored HUD Bars	fRedActionPointsThreshold	0.33	0.330000
+Note Sorting	iNoteSortingMode	0	0
+Quest Sorting	iQuestSortingMode	0	0
+Quest Sorting	bActiveFirst	0	0
+Perk Sorting	iPerkSortingMode	0	0
+Recipe Sorting	iRecipeSortingMode	3	3
+Extra Console Details	bUseFullHelp	0	1
+Extra Console Details	bCellName	0	1
+Extra Console Details	bCellEditorId	0	1
+Extra Console Details	bMeshPath	0	1
+NPC Damage	fNPCToNPCDamageMult	1.0	1.000000
+NPC Damage	fDamageByTeammateMult	?g_fNPCToNPCDamageMult	1.000000
+NPC Damage	fDamageToTeammateMult	?g_fNPCToNPCDamageMult	1.000000
+Weapon Modding	bHideModButtonForNonModdableWeapons	0	0
+Weapon Modding	bItemModMenuShowUnownedMods	0	0
+Weapon Modding	sRemoveItemModSound	UIItemGunsSmallUp	UIItemGunsSmallUp
+Weapon Modding	bRequireWorkbench	0	0
+Weapon Modding	bDebug	0	0
+Weapon Modding	bDebugInGodMode	0	0
+Weapon Modding	sViewMods	View Mods	View Mods
+Subtitles	fSubtitleDistance	1000.0	1000.000000
+Scoped Weapons	iScopeVisibilityDelayMS	150	150.000000
+Scoped Weapons	bStopAimingWhileReloading	0	0
+Scoped Weapons	bAlwaysShowWeaponAnimation	0	0
+Scoped Weapons	bDelayInThirdPerson	0	0
+Message Times	fAddItem	1.0	1.000000
+RGB Sliders	bTerminalsUseHUDColor	0	0
+Respawned Cell Indicator	bColorRespawnedCells	1	1
+Respawned Cell Indicator	bColorUnvisitedCells	1	1
+Respawned Cell Indicator	bInvertColoring	0	-
+Critical Hits Gib	bOnlyCritsGib	0	0
+Barter Items	fFreeItemCost	1.0	1.000000
+Remember Weapon Ammos	bInventoryOnly	1	1
+Remember Weapon Ammos	bIncludeCount	1	1
+SPECIAL Points	iNumPointsToAllocate	35	35
+Unsafe Fast Travel	bShowWarning	1	1
+Weapon Hotkeys	iSecondSlotKey	?Scancodes::Two	3
+Weapon Hotkeys	bUseKeybindsOnLabels	0	1
+Hacking Formula	fBaseWordLength	4.0	4.000000
+Hacking Formula	fDifficultyWordLengthMult	2.0	2.000000
+Hacking Formula	fComputerWhizLengthBonus	0.0	0.000000
+Hacking Formula	fOddTerminalIDBonus	1.0	1.000000
+Hacking Formula	iMaxWordLength	12	12
+Hacking Formula	iMinWordLength	4	4
+Hacking Formula	iMinAttempts	4	4
+Hacking Formula	iMaxAttempts	4	4
+Compass Doors	iExteriorMaxDistance	2750	2750
+Compass Doors	iInteriorMaxDistance	1750	1750
+Compass Doors	bVisitedIndicator	1	1
+Compass Doors	uVistedRGB	0x7F7F73	0x7f7f73
+Compass Doors	bFadeIconByDistance	?g_bCompassLocationDistanceBasedAlpha	0
+Melee Locational Hits	bPlayerAttacks	1	1
+Melee Locational Hits	bNonPlayerAttacks	1	1
+Melee Locational Hits	bNpcToNpcAttacks	?g_bLocationalMeleeDamageAffectsNonPlayerAttacks	1
+Scope HUD Visibility	iFlags	?HUDMainMenu::kEnemyHealth | HUDMainMenu::kActionPoints | HUDMainMenu::kHitPoints	0xb
+Alt Levelup Sound	iLevelA	5	5
+Alt Levelup Sound	iLevelB	10	10
+Alt Levelup Sound	sSoundA	MUSMysteriousStrangerA01	MUSMysteriousStrangerA01
+Alt Levelup Sound	sSoundB	MUSMysteriousStrangerA02	MUSMysteriousStrangerA02
+Holdable Throwables	bMineSupport	1	1
+Anim Variants	bReloads	1	1
+Anim Variants	bEquips	0	1
+Anim Variants	bAims	0	1
+Water Scales Movement Speed	fWadingMovementMult	?lastVal	0.000000
+Agility Affects Jump Height	fAgilityMult	0.05	0.050000
+Disable XP Messages	bKills	1	1
+Disable XP Messages	bDiscoverLocation	1	1
+Disable XP Messages	bRewardXPCommand	1	1
+Disable XP Messages	bSpeechChallenges	1	1
+Disable XP Messages	bHacking	1	1
+Disable XP Messages	bLockPick	1	1
+Disable XP Messages	bDisarmMines	1	1
+Interior Fog Remover	fFogFarDistanceThreshold	?g_bDisableInteriorFog ? 0 : 2700.0	2700.000000
+Key XP Reward	iUseKeyRewardXP	0	0
+Key XP Reward	fLockRewardXPScale	?g_bUsingKeysRewardsXP ? 0.0F : 1.0F	1.000000
+Key XP Reward	bRequireSkill	0	0
+Note XP Reward	iUseNoteRewardXP	0	0
+Note XP Reward	fLockRewardXPScale	1.0	1.000000
+Note XP Reward	bRequireSkill	0	0
+VATS Uses Weapon Distance	fMaxDistance	5000	5000.000000
+VATS Uses Weapon Distance	fMinDistance	1500	1500.000000
+VATS Uses Weapon Distance	fRangeMult	1.2	1.200000
+Combat Sounds	iMinPlayerPainSoundIntervalMS	10000	10000
+Detection Light Timer	fIntervalTimer	0.25	0.250000
+Show Closest Location	bMapMenu	1	1
+Show Closest Location	bCompass	1	1
+Item Cycle Keys	bWeaponsOnly	1	1
+Item Cycle Keys	bSkipEmptyWeapons	?!g_bWeaponCycleUpDownHotkeys	1
+Lockpick Menu Movement	fBaseSpeed	8	8.000000
+Lockpick Menu Movement	fShiftScale	2.5	2.500000
+Lockpick Menu Movement	fCtrlScale	0.4	0.400000
+Unequip Broken Armor	sArmorBreakMessage	Your %s has broken	Your %s has broken
+Character Selector	sAllText	Characters	Characters
+Current Weapon Hotkey	bDontHolsterWeapon	0	0
+Improved Race Menu	bNoAnims	0	0
+Improved Race Menu	fPanXScale	1.0	1.000000
+Improved Race Menu	fPanYScale	1.0	1.000000
+Map Marker Factions	bRequireReputation	0	0
+Living Anatomy	bAlwaysShowHealth	0	1
+Synchronized Container Categories	bPreventSwitchWhenEmptyingCategory	0	0
+Lockpick/Hacking Messages	sLockpickMessage	You have %d/%d lockpick skill required to pick this lock.	You have %d/%d lockpick skill required to pick this lock.
+Lockpick/Hacking Messages	sHackingMessage	You have %d/%d science skill required to hack this terminal.	You have %d/%d science skill required to hack this terminal.
+Slope Climbing	fWalkAngle	60	60.000000
+Slope Climbing	fJumpAngle	75	75.000000
+Slope Climbing	fAutoWalkAngle	85	85.000000
+Place Marker At Location	bLocalMapDoors	0	1
+SPECIAL Caps Skills	iSkillCap	100	100
+SPECIAL Caps Skills	fSkillBase	50.0	50.000000
+SPECIAL Caps Skills	fSPECIALMult	5.0	5.000000
+SPECIAL Caps Skills	fLuckMult	0.5	0.500000
+SPECIAL Caps Skills	bIgnoreTagSkills	0	-
+Skill Books	sReadBookSkillTooHighMessage	Your %s skill is maxed out.	Your %s skill is maxed out.
+Fast Travel Costs Items	sItemRequiredMessage	You need limited edition Nuka-Cola bottles to fast travel!	You need limited edition Nuka-Cola bottles to fast travel!
+Fast Travel Costs Items	sItemRemovedMessage	%s removed	%s removed
+Fast Travel Costs Items	sItemEditorID		
+Fast Travel Crippled Limbs	sLimbsCrippledMessage	You cannot fast travel with crippled legs!	You cannot fast travel with crippled legs!
+No Healing In Combat	sNoHealingItemsInCombatMessage	You cannot use healing items in combat!	You cannot use healing items in combat!
+Container Store All	sStoreAll	Store All	Store All
+Ammo Label	bUsePipboyName	1	1
+Looping Reloads	iMaxQueueLength	0	0
+Looping Reloads	iRoundsPerReloadPress	1	1
+Mod Console Prints	sTimeFormat	g_sConsolePrintTimeFormatDefault	[%02d:%02d:%02d.%04d] %s
+Hacking HUD Prompt	sUsePassword	Use Password	Use Password
+Melee Range	fMinReach	0.0	0.000000
+Melee Range	fMaxReach	0.0	0.000000
+Melee Range	fReachMult	1.0	1.000000
+RAD Meter	sFormat	+%.2f	+%.2f
+Disable Reloading Non-Empty Clip	bEnergyWeaponsOnly	0	0
+Disable Reloading Non-Empty Clip	bExcludeLoopingReloadWeapons	0	0
+Explosion Shake	fCameraMult	0.0	0.000000
+Explosion Shake	fHUDMult	0.0	0.000000
+Talk While Sneaking	bInvert	0	0
+Add Nearby Markers To Map	fDistance	20000.0	20000.000000
+Pipboy Light Cell Change	bCheckNight	0	0
+Ignore Companions in VATS	bCombatOnly	0	0
+No Stealing After Repair	bRemoveIfNoVendorContainer	0	0
+Prevent NPC Topics	iFlags	?defaultIgnoredTopics	0x880
+Allow Aid At Max Health	bStimpaks	1	1
+Allow Aid At Max Health	bSuperStimpaks	0	0
+Allow Aid At Max Health	bDoctorsBags	0	0
+Prevent No Fast Travel Message	bPlaySound	1	1
+Separate Sensitivity Sliders	fVerticalSensitivity	0.0	0.000000
+Faster Main Menu	bSkipLoadScreenWait	0	0
+Default Pipboy Tab	iTab	?CustomDefaultPipboyTab::kITEMS_LastSelected	21
+Disarm Requires Skill	fExplodeMult	1.0	1.000000
+Disarm Requires Skill	fDisarmMult	1.0	1.000000
+Double Jumping	iMaxJumpCount	1	1
+Double Jumping	fJumpHeightScale	1.0	1.000000
+Double Jumping	fMidairTimer	0.25	0.250000
+Double Jumping	sJumpSound	FXSwingMedium	FXSwingMedium
+Double Jumping	fJumpVolume	1.0	1.000000
+Double Jumping	iAPCost	?g_iJumpAPCost	20
+Double Jumping	bKeepHeight	0	0
+Double Jumping	bRequirePowerArmor	0	0
+Double Jumping	sPerkEditorID		
+Explosion Formula	fInnerRadius	0.3	0.300000
+Explosion Formula	fOuterRadiusDamage	0.2	0.200000
+Explosion Formula	bAffectPlayer	1	1
+No Alt-Tab Pause	bMuteSounds	1	1
+Crippled Jump Height	fOneLegJumpHeightMult	0.7	0.700000
+Crippled Jump Height	fTwoLegsJumpHeightMult	0.4	0.400000
+Improved Stats Menu	bShowValuesAboveLimits	1	1
+Terminal Close Fade	fFadeLength	0.2	0.200000
+Crippled Limb Fall Pain Sound	fHeightThreshold	64	64.000000
+Mousewheel Scrolls Weapon Hotkeys	bInvert	0	0
+Power Armor Scales Limb Damage	fHeadScale	0.0	0.000000
+Power Armor Scales Limb Damage	fLimbScale	0.0	0.000000
+Smooth Camera	bDisableWhileAiming	0	0
+Clear Nearby Player Marker	fDistance	500	500.000000
+Shoot Through Weapons	bIgnoreUnholstered	0	0
+Shoot Through Weapons	bAllowHitsInVATS	0	0
+UI Message Icons	sRadiationIncrease	Interface\\\\Icons\\\\Message Icons\\\\sRadiationIncrease.dds	Interface\\Icons\\Message Icons\\sRadiationIncrease.dds
+UI Message Icons	sRadiationDecrease	Interface\\\\Icons\\\\Message Icons\\\\sRadiationDecrease.dds	Interface\\Icons\\Message Icons\\sRadiationDecrease.dds
+UI Message Icons	sRadiationSick	Interface\\\\Icons\\\\Message Icons\\\\sRadiationSick.dds	Interface\\Icons\\Message Icons\\sRadiationSick.dds
+UI Message Icons	sRadiationNotSick	Interface\\\\Icons\\\\Message Icons\\\\sRadiationNotSick.dds	Interface\\Icons\\Message Icons\\sRadiationNotSick.dds
+UI Message Icons	sDehydrationIncrease	Interface\\\\Icons\\\\Message Icons\\\\sDehydrationIncrease.dds	Interface\\Icons\\Message Icons\\sDehydrationIncrease.dds
+UI Message Icons	sDehydrationDecrease	Interface\\\\Icons\\\\Message Icons\\\\sDehydrationDecrease.dds	Interface\\Icons\\Message Icons\\sDehydrationDecrease.dds
+UI Message Icons	sDehydrationSick	Interface\\\\Icons\\\\Message Icons\\\\sDehydrationSick.dds	Interface\\Icons\\Message Icons\\sDehydrationSick.dds
+UI Message Icons	sDehydrationNotSick	Interface\\\\Icons\\\\Message Icons\\\\sDehydrationNotSick.dds	Interface\\Icons\\Message Icons\\sDehydrationNotSick.dds
+UI Message Icons	sHungerIncrease	Interface\\\\Icons\\\\Message Icons\\\\sHungerIncrease.dds	Interface\\Icons\\Message Icons\\sHungerIncrease.dds
+UI Message Icons	sHungerDecrease	Interface\\\\Icons\\\\Message Icons\\\\sHungerDecrease.dds	Interface\\Icons\\Message Icons\\sHungerDecrease.dds
+UI Message Icons	sHungerSick	Interface\\\\Icons\\\\Message Icons\\\\sHungerSick.dds	Interface\\Icons\\Message Icons\\sHungerSick.dds
+UI Message Icons	sHungerNotSick	Interface\\\\Icons\\\\Message Icons\\\\sHungerNotSick.dds	Interface\\Icons\\Message Icons\\sHungerNotSick.dds
+UI Message Icons	sSleepDeprivationIncrease	Interface\\\\Icons\\\\Message Icons\\\\sSleepDeprivationIncrease.dds	Interface\\Icons\\Message Icons\\sSleepDeprivationIncrease.dds
+UI Message Icons	sSleepDeprivationDecrease	Interface\\\\Icons\\\\Message Icons\\\\sSleepDeprivationDecrease.dds	Interface\\Icons\\Message Icons\\sSleepDeprivationDecrease.dds
+UI Message Icons	sSleepDeprivationSick	Interface\\\\Icons\\\\Message Icons\\\\sSleepDeprivationSick.dds	Interface\\Icons\\Message Icons\\sSleepDeprivationSick.dds
+UI Message Icons	sSleepDeprivationNotSick	Interface\\\\Icons\\\\Message Icons\\\\sSleepDeprivationNotSick.dds	Interface\\Icons\\Message Icons\\sSleepDeprivationNotSick.dds
+UI Message Icons	sChemsAddicted	Interface\\\\Icons\\\\Message Icons\\\\sChemsAddicted.dds	Interface\\Icons\\Message Icons\\sChemsAddicted.dds
+Improved Weather	fFastTravelWeatherChangeDistanceThreshold	30000.0	30000.000000
+HUD Marker Name	iShowDistance	1	1
+HUD Marker Name	bHideUndiscoveredNames	?!g_bHUDMarkerNameIndicator	1
+HUD Marker Name	fMaxAngle	6.0	6.000000
+HUD Marker Name	fAngleOffset	2.28	2.280000
+HUD Marker Name	fDelay	0.25	0.250000
+HUD Marker Name	bShowPlayerMarkers	0	0
+HUD Marker Name	sPlayerMarkerName	Marker	Marker
+Toggle Controller If Attack Pressed	bPreventControllerConnectedPopup	0	0
+Quest Reminders On Cell Change	fMinInterval	300	300.000000
+Ashpile Scale	fMinScale	0.0	0.000000
+Ashpile Scale	fMaxScale	0.0	0.000000
+Contact Mines	bPlayer	1	1
+Contact Mines	bNPCS	0	0
+Pick Locks With Key	bInvert	0	0
+Click To Load	bHideWheel	1	1
+Click To Load	bLoadGameOnly	1	1
+Misc Stat Sorting	iSortMode	?SortMiscStats::kMiscStatSorting_Alphabetical	1
+Killcam	fChance	50	50.000000
+Skip Load Confirmation	bMainMenuOnly	0	0
+Weapon Condition Label	fFlashThreshold	25	25.000000
+Weapon Condition Label	fColorThreshold	25	25.000000
+HUD Armor Condition	sArmorLabel	ARMOR	ARMOR
+HUD Armor Condition	sWeaponLabel		
+HUD Armor Condition	fFlashThreshold	25	25.000000
+HUD Armor Condition	fColorThreshold	0	0.000000
+HUD Armor Condition	fVisibilityThreshold	0	0.000000
+HUD Armor Condition	iLabelOffsetX	0	0
+HUD Armor Condition	iLabelOffsetY	0	0
+HUD Armor Condition	bUseWeaponPos	1	1
+HUD Armor Condition	bAlignWithWeaponX	0	0
+Place Marker Hotkey	sMessage	Placed marker.	Placed marker.
+Place Marker Hotkey	sSound	UIMenuOK	UIMenuOK
+Revive Unconscious Companions	fUnconsciousTime	0	0.000000
+Revive Unconscious Companions	sPrompt	Revive	Revive
+Revive Unconscious Companions	bReviveWhenChangingCells	0	0
+Heartbeat Sounds Fade	fDuration	30.0	30.000000
+Heartbeat Sounds Fade	iEasingFunction	?EasingFunctions::kOutQuart	5
+Embolden Tag Skills	fTagSkillBrightness	400.0	400.000000
+Remove Lock Skill Requirement	bModifyDifficulty	?!g_bPickLocksWithoutSkill	1
+Barter Show Transaction Caps	iMode	?BarterShowTransactionCaps::kMode_Text	0
+Use Repair Kits In Repair Menu	sRepairText	Repair Kit	Repair Kit
+Use Repair Kits In Repair Menu	sPerkEditorID		-
+Barter Use Buy Sell Flags	bAmmoRequiresWeapons	?!g_bBarterCheckActorBuySellFlags	1
+Barter Use Buy Sell Flags	sPerkEditorID		
+Remember Map Position	bSavePersistent	1	1
+Map Recenter Hotkey	iEasingTimeMS	1000	1000
+Map Recenter Hotkey	iEasingFunction	?EasingFunctions::kOutQuart	5
+Map Extra Marker Info	iDisplayMode	?MapLocationDisplayDistance::kDisplayMode_Meters	0
+Map Extra Marker Info	fTimeMult	1.0	1.000000
+Map Extra Marker Info	fDistMult	1.0	1.000000
+Barter Affects Repair Costs	fCostBase	1.6	1.600000
+Barter Affects Repair Costs	fCostMult	0.005	0.005000
+Barter Affects Repair Costs	fCostMin	1.1	1.100000
+Pause Holotapes	bPauseInDialogMenu	0	0
+Grenade Hotkey	iKeyboardHotkey	?Scancodes::G	-
+Grenade Hotkey	iControllerHotkey	?kXboxCtrl_DPAD_LEFT	-
+Grenade Hotkey	bHotkeyedGrenadesOnly	0	-
+Location Discovered Sound	sEditorID	UIPopUpQuestNew	UIPopUpQuestNew
+Better Caravan	iModCardMode	?BetterCaravanMenu::kModCardMode_Add	-
+Better Caravan	iModCardCount	0	-
+Better Caravan	bDebug	0	-
+Better Caravan	sDescriptionJack	Jack - Removes number card and all face cards attached to it.	-
+Better Caravan	sDescriptionQueen	Queen - Reverses direction and changes suit.	-
+Better Caravan	sDescriptionKing	King - Doubles card value, stackable for multiplicative effects e.g. 4 + two kings = 16.	-
+Better Caravan	sDescriptionJoker	Joker - Removes all other cards of this value, or suit if on Ace.	-
+Better Caravan	bAiFixes	1	-
+Better Caravan	bAiEnhancements	1	-
+Better Caravan	bShowNpcCards	0	-
+Better Caravan	bPreviewMoveResult	1	-
+Better Caravan	sKeyUp		-
+Better Caravan	sKeyDown		-
+Better Caravan	sKeyLeft		-
+Better Caravan	sKeyRight		-
+No Worn Off Messages	bFoodOnly	1	1
+HUD Weapon Name Label	bShowOnReadyWeapon	0	0
+HUD Weapon Name Label	iFadeInTimeMS	417	417
+HUD Weapon Name Label	iDisplayTimeMS	1666	1666
+HUD Weapon Name Label	iFadeOutTimeMS	417	417
+HUD Weapon Name Label	bInstantChange	1	1
+Inlines	bMisc	1	1
+Inlines	bPathing	1	1
+Inlines	bSaveLoad	1	1
+Inlines	bMenus	1	1
+Inlines	bDynamicCasts	1	1
+Inlines	bProcess	1	1
+Inlines	bAudio	1	1
+Inlines	bScripts	1	1
+Inlines	bRendering	1	1
+Inlines	bExperimental	0	-
+Key Repeat Acceleration	iDelay	1000	1000
+Key Repeat Acceleration	fRateMult	1.5	1.500000
+Key Repeat Acceleration	iDelayAlt	4000	4000
+Key Repeat Acceleration	fRateMultAlt	8	8.000000
+Alt Sighting Node	bHotkeyWhileAimingOnly	0	0
+Recurring Challenge Indicator	sRecurringText	(Recurring)	(Recurring)
+Power Armor Scales Limb Damage	iMode	?PowerArmorScalesLimbDamage::kAll	3
+Pipboy Repair Menu Sorting	bMatchedItemFirst	1	1
+Pipboy Repair Menu Sorting	iSortMode	?SortRepairMenu::kAlphabetical	0
+Firing Queue	fQueuePreAnimEnd	0.5	0.500000
+Firing Queue	fQueuePreAttackTextKey	0.5	0.500000
+Fixes	iInvalidRewardXPSafeGuardThreshold	20000	20000
+Perks Show Source Mod	sPrefix	Source:	Source:
+Perks Show Source Mod	sModsToHide		-
+Perks Show Source Mod	bPipBoy	0	-
+Controller Trigger Deadzones	iDeadzoneLT	12	12
+Controller Trigger Deadzones	iDeadzoneRT	12	12
+Repair Items Preview	sButtonLabel	Inspect	Inspect
+Stats Menu Effect Durations	bDisplayInSeconds	?g_bStatsMenuShowEffectTimeRemaining	0
+Auto Unlock Locks	iThreshold	100	100
+Auto Unlock Locks	fRewardXPScale	1.0	1.000000
+Auto Unlock Terminals	iThreshold	50	50
+Auto Unlock Terminals	bTemporary	0	-
+Auto Unlock Terminals	fRewardXPScale	1.0	1.000000
+Water Sources Show H2O	bRequireShiftHeld	0	0
+Healthbar Restore Indicator	iHealColor	0x1AFF807F	-
+Healthbar Restore Indicator	bQuickUseSupport	1	-
+Healthbar Restore Indicator	bDebug	0	-
+Explosions Hit Any Limb	bAffectPlayer	0	-
+Endurance Scales Min Fall Height	fBaseBonus	0.0	0.000000
+Endurance Scales Min Fall Height	fEnduranceMult	0.05	0.050000
+Jump Swims Upwards	fSpeedScale	1.0	1.000000
+Jump Swims Upwards	bSwimUpWhileAutowalking	0	0
+Armor Causes Sinking	fRateNone	0	0.000000
+Armor Causes Sinking	fRateLight	0	0.000000
+Armor Causes Sinking	fRateMedium	1	1.000000
+Armor Causes Sinking	fRateHeavy	2	2.000000
+Reputation Shows Fame	bPercentage	1	1
+Reputation Shows Fame	sFame	Fame	Fame
+Reputation Shows Fame	sInfamy	Infamy	Infamy
+Repair All Confirmation	iPriceThreshold	0	0
+Repair All Confirmation	sMessage	Are you sure you want to repair all?	Are you sure you want to repair all?
+No Self Meltdown Damage	bPreventDamageByTeammates	1	1
+No Self Meltdown Damage	bPreventDamageToTeammates	0	0
+No Self Meltdown Damage	bPreventDamageToNonHostiles	0	0
+Weapon Volume Scaling	fPlayerScale	1.0	1.000000
+Weapon Volume Scaling	fNonPlayerScale	1.0	1.000000
+Radio Volume Scaling	fMusicScale	1.0	1.000000
+Radio Volume Scaling	fDialogueScale	1.0	1.000000
+Map Selectable Companions	sSummonAll	Summon All	Summon All
+Map Selectable Companions	bAllowSummonUnconsious	1	1
+Water Depth Radiation	fMin	0.5	-
+Water Depth Radiation	fMax	2.0	-
+VATS Target Projectiles	bMines	0	0
+Pickpocket Worn Items	bHolsteredWeaponsOnly	0	0
+Sleep Healing	iMinDuration	6	6
+Sleep Healing	bMiscStatRequiresSleepDuration	1	1
+Grabbing Items Is Crime	fMinValue	0.0	0.000000
+Play Unequip When Switching Weapons	fUnequipAnimSpeedMult	1.0	-
+Help Button Replacer	sButtonLabel	Console	Console
+Gambling Luck Override	iBaseLuck	5	5
+Power Attack If Blocking	bOnlyIfBlocking	0	0
+Auto Read Notes	bHolotapeSupport	1	1
+Auto Read Notes	sHolotapeMessageTitle	Holotape Acquired	Holotape Acquired
+Auto Read Notes	sHolotapeMessageText	Play holotape: %s?	Play holotape: %s?
+Hostiles Prioritize Player	fSwapToPlayerChanceStartCombat	0.9	0.900000
+Hostiles Prioritize Player	fSwapToPlayerChanceMidCombat	0.7	0.700000
+Hostiles Prioritize Player	iPlayerDetectionThreshold	1	1
+Radiation Affects Radio	fStaticMult	10	-
+Character Radiation	bAllowRadiationStages	0	-
+Ground Clamp	fRayCastLength	5.0	-
+Ground Clamp	fGravityMult	4.0	-
+Skip Deathcam	fAttackDebounceTime	1.0	-
+Skip Deathcam	iHotkey	?Scancodes::LeftAlt	-
+Lockpick Force Chance	fBase	-3	-
+Lockpick Force Chance	fMult	0.7	-
+Toggle PipBoy Light Key	bPreventNormalKey	0	-
+INI	bDescriptiveNVACLog	1	-
+INI	bShowRecompiledAllScriptsWarning	1	-
+INI	bShowMissingMasterNames	1	-
+INI	bFixUnorderedNifBlocksCrash	0	-
+INI	bForceLoadMeshes2BSA	0	-
+Tweaks	bInvalidBSFadeNodePrints	1	-
+Reload Loop Cancelling	fEndThreshold	0.85	-
+INI	bCapSPECIALPoints	1	-
+INI	bFixLoopingReloadAmmoSwapInstantRefill	1	-
+INI	bShownTweaksMenuReloadWarning	0	-
+Tweaks	bGodmodeAllowsFastTravelEnemiesNearby	1	-
+INI	bCombatDialogueCooldownFix	1	-
+Terminal Notes	bHighlightAddNoteEntries	0	-
+Hotkeys	iClearConsoleKey	0	-
+INI	iDebugBreakRefID	0	-
+INI	bFixCreatureDoubledDR	1	-
+INI	bSkinnedDecalSubtextureFix	1	-
+INI	bWeaponDamageStagesFix	1	-
+INI	iOverrideSaveIndex	0	-
+GameSettings	iMaxCharacterLevel	0	-
+Tweaks	bUseReloadVariants	0	-
+Tweaks	bAutomaticallyContinueGame	?g_bAutomaticallyContinueGame_DEVS	-
+No Pipboy In Combat	bPipboyAPCost	50	-
+Slower Backpedaling	iRightStrageSpeedPercentage	100	-
+Better Autowalk	bJumpInWater	?g_bAutowalkUnderwaterJumps	-
+Power Armor	bIgnorePowerArmorRequirement	?g_bPowerArmorScalesFallDamageIgnorePowerArmor	-
+Turn Speed	fAutoaimScaleX	1.0	-
+Turn Speed	fAutoaimScaleY	1.0	-
+Turn Speed	fAutoaimMinRadius	0.05	-
+Aggro HUD Color	uRGB	0xFF7D36	-
+Water Scales Movement Speed	bWadingMovementMult	0.4	-
+Bullet Trails	bPlayerOnly	?g_bBulletTrailsPlayerOnly	-
+Bullet Trails	bIgnoreSilenced	?g_bBulletTrailsIgnoreSilenced	-
+Bullet Trails	bIgnoreVATS	?g_bBulletTrailsIgnoreVATS	-
