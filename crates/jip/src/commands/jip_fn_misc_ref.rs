@@ -22,8 +22,8 @@
 //!   `GetBlockTextureSet`, `GetNifBlockParentNodes`, `GetMaterialPropertyValue`,
 //!   `SetMaterialPropertyValue`, `SetTextureTransformKey`, `Get/SetAnimSequenceFrequency`,
 //!   `PlayAnimSequence`, `AttachLight`, `RemoveLight`, `AttachLine`, `AttachExtraCamera`,
-//!   `ProjectExtraCamera`, `ModelHasBlock`, `InsertNode`, `AttachModel` (JIP's insert/attach maps
-//!   and model hooks), `MoveToNode`.
+//!   `ProjectExtraCamera`, `MoveToNode`. (`InsertNode`, `AttachModel` and `ModelHasBlock` are built
+//!   in `jip_fn_misc_ref_insert.rs`.)
 //! - Havok (rigid bodies, phantoms, contacts, character controllers, ray casts):
 //!   `IsMobile`, `IsGrabbable` (JIP's `NiNode::IsMovable` walks collision objects),
 //!   `GetRigidBodyMass`, `PushObject`, `GetObjectVelocity`, `Get/SetAngularVelocity`,

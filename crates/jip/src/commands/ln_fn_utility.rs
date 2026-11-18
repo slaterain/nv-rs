@@ -308,7 +308,7 @@ fn file_archived(e: &mut Engine, path: &[u8]) -> bool {
 /// `GetFileAttributesA` of `path` (`/` made `\`) through the seam: 1 when it is there as asked (a
 /// folder or a file), 0 when it is there as the other; when it is not there, a file found in an
 /// opened archive ([`file_archived`]) answers 2.
-fn file_exists_ex(e: &mut Engine, path: &mut [u8], folder: bool) -> u32 {
+pub(crate) fn file_exists_ex(e: &mut Engine, path: &mut [u8], folder: bool) -> u32 {
     backslashes(path);
     if engine_core::mod_files::directory_exists(e, path) {
         return u32::from(folder);
