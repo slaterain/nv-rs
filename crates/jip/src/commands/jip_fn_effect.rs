@@ -2,9 +2,9 @@
 //! numbers, adding and removing), object and unarmed effects, an actor base's spells, an
 //! ingestible's addiction and poison, the flags of magic items and base effects, a script
 //! effect's script, an actor's active and timed effects, and the two conditions
-//! `IsSpellTargetAlt` and `IsSpellTargetList`, and `CastImmediate`: all 29 of its commands.
-//! `CastImmediate` sets JIP's own actor flag ([`CAST_IMMEDIATE`]) around the game's cast; only
-//! JIP's cast hook (row H23) reads it, so until that patch is in the cast is the game's own.
+//! `IsSpellTargetAlt` and `IsSpellTargetList`: 28 of its 29 commands. `CastImmediate` is built
+//! ([`AWAITING_H23`]): it sets JIP's own actor flag ([`CAST_IMMEDIATE`]) around the game's cast,
+//! which JIP's cast hook (row H23) turns into an immediate cast; it is registered with that row.
 //!
 //! A magic item argument (`kParamType_MagicItem`) is the `MagicItem` inside the form, as xNVSE's
 //! reader casts it (`DYNAMIC_CAST` to `MagicItem`): +0x18 in a spell or an enchantment, +0x30 in
@@ -83,8 +83,12 @@ pub static COMMANDS: Handlers = &[
     (0x2779, set_base_effect_flag),
     (0x27c1, get_base_effect_script),
     (0x27c2, set_base_effect_script),
-    (0x2829, cast_immediate),
 ];
+
+/// `CastImmediate`, built but not registered until JIP's cast hook (row H23) is in: without it the
+/// cast is the game's ordinary one, not an immediate one. The row's pull request adds this list to
+/// `commands::ALL`.
+pub static AWAITING_H23: Handlers = &[(0x2829, cast_immediate)];
 
 /// The conditions: each opcode with its execute and its eval.
 #[rustfmt::skip]

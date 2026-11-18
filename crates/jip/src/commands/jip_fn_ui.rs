@@ -9,14 +9,13 @@
 //! menu's highlighted item, a terminal's own model), a reference's place on the world map, and
 //! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
-//! a text's size in a font, the open menu's item list refreshed (`RefreshItemsList`) and the HUD
-//! cursor (`ToggleHUDCursor`). 43 of the file's 64 commands; its four menu event commands are
+//! a text's size in a font and the open menu's item list refreshed (`RefreshItemsList`). 42 of the
+//! file's 64 commands (`ToggleHUDCursor` built, [`AWAITING_H02`]); its four menu event commands are
 //! the core track's (`ui_hooks`).
 //!
 //! `ToggleHUDCursor` keeps JIP's HUD cursor mode, which `GetMenuMode` here reads and the HUD
-//! cursor patch (H02) uses to show and run the cursor over the HUD: until that patch is in, the
-//! mode is kept and answered, menu-mode tests see it, and the left mouse button is disabled for
-//! the player while it is on, as JIP's command does. The item list refresh is also what JIP's
+//! cursor patch (H02) uses to show and run the cursor over the HUD; it is registered with that
+//! patch (on its own it would disable the left button with no cursor to click). The item list refresh is also what JIP's
 //! `RemoveMe` patch (G60) asks for at the next main loop pass ([`request_item_list_refresh`]).
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
@@ -122,8 +121,12 @@ pub static COMMANDS: Handlers = &[
     (0x2927, get_string_ui_dimensions),
     (0x2935, get_menu_item_list_refs),
     (0x27e8, refresh_items_list),
-    (0x28b5, toggle_hud_cursor),
 ];
+
+/// `ToggleHUDCursor`, built but not registered until JIP's HUD cursor patch (row H02) is in:
+/// without it the left mouse button would be disabled and menu mode answered with no cursor to
+/// see or click. The row's pull request adds this list to `commands::ALL`.
+pub static AWAITING_H02: Handlers = &[(0x28b5, toggle_hud_cursor)];
 
 /// `IsInCharGen`, a condition (`DEFINE_CMD_COND_PLUGIN`).
 pub static CONDITIONS: Conditions = &[(0x282a, is_in_char_gen, is_in_char_gen_eval)];
@@ -2335,6 +2338,9 @@ const RECIPE_FILL: u32 = 0x0072_7680;
 const LIST_SAVE_STATE: u32 = 0x0073_12e0;
 const RECIPE_LIST_FILTER: u32 = 0x0072_9fe0;
 const RECIPE_FILTER: u32 = 0x0072_8d60;
+/// Where JIP reads the filter: the `push` operand of the exe's own refresh (`00727636`), so a
+/// filter another change put there is the one used.
+const RECIPE_FILTER_WORD: u32 = 0x0072_7637;
 const LIST_RESTORE_STATE: u32 = 0x0072_a660;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: RefreshRecipeMenu
@@ -2349,7 +2355,17 @@ fn refresh_recipe_menu(e: &mut Engine, menu: u32) {
     e.vcall(list, 0, &[made]);
     e.vcall(list, 0x10, &[]);
     e.call(LIST_SAVE_STATE, &args![list]);
-    e.call(RECIPE_LIST_FILTER, &args![list, RECIPE_FILTER]);
+    // The word the exe holds now (`mov eax, 0x727637; push [eax]`); the exe's own filter when the
+    // code is not in the guest's memory or holds none.
+    let filter = if e.mem.is_mapped(RECIPE_FILTER_WORD) {
+        match e.mem.u32(RECIPE_FILTER_WORD) {
+            0 => RECIPE_FILTER,
+            word => word,
+        }
+    } else {
+        RECIPE_FILTER
+    };
+    e.call(RECIPE_LIST_FILTER, &args![list, filter]);
     e.call(LIST_RESTORE_STATE, &args![list, 1u32]);
 }
 

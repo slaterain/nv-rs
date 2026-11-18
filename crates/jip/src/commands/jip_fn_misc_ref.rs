@@ -38,10 +38,8 @@
 //! - Hooks or code patches (steps 3.5/3.9): `ToggleObjectCollision` (the 3D load hook that
 //!   keeps the flag's collision off), `ToggleNoZPosReset` (patches the game's code at `00629006`
 //!   and `006295E9`).
-//! - (Built: `SynchronizePosition`, which keeps JIP's `s_syncPosition*` ([`sync_position`]) for
-//!   the position patch (H13, `SetRefrPositionHook`), their only reader: until that patch is in,
-//!   the command moves the player to the reference's cell when far and back when ended, and
-//!   keeps the state, as JIP's body does.)
+//! - (Built, registered with the position patch H13: `SynchronizePosition` ([`AWAITING_H13`]),
+//!   which keeps JIP's `s_syncPosition*` ([`sync_position`]) for that patch's `SetRefrPositionHook`.)
 //! - The co-save's application (step 3.3) and JIP's own extra data class: `SetLinkedReference`
 //!   (its defaults map and the load's `RestoreLinkedRefs`/`SetLinkedRefID` are not built, so a
 //!   load would keep the links unapplied).
@@ -83,8 +81,12 @@ pub static COMMANDS: Handlers = &[
     (0x28f9, get_angle_ex),
     (0x2909, get_translated_pos),
     (0x292a, get_editor_position),
-    (0x28d5, synchronize_position),
 ];
+
+/// `SynchronizePosition`, built but not registered until JIP's position hook (row H13) is in:
+/// without it the player would not follow the reference and ending would move him back to where
+/// it started. The row's pull request adds this list to `commands::ALL`.
+pub static AWAITING_H13: Handlers = &[(0x28d5, synchronize_position)];
 
 /// `kHookFormFlag6_NoPCActivation` (`internal/hooks.h` (JIP LN NVSE), the bit `world_hooks.rs`
 /// sets).

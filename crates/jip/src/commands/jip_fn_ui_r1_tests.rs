@@ -88,6 +88,7 @@ fn setup() -> Engine {
     }
     e.mem.set_u32(MENU + 0x6c, LIST_VT);
     e.mem.set_u32(MENU + 0x64, 0x0c47_0001);
+    register_awaiting(&mut e, AWAITING_H02);
     clear();
     e
 }
@@ -295,4 +296,19 @@ fn the_main_loop_ends_the_mode_in_a_menu() {
     assert!(menu_mode(&mut e), "menu mode itself");
     e.mem.set_u32(IM_AT + IM_CURRENT_MODE, 1);
     assert!(!menu_mode(&mut e));
+}
+
+/// The recipe filter is the word the exe's code holds at `00727637` when the guest has it.
+#[test]
+fn the_recipe_refresh_takes_the_filter_word_in_the_code() {
+    let mut e = setup();
+    if !e.mem.is_mapped(0x0072_7000) {
+        e.map(0x0072_7000, 0x1000);
+    }
+    e.mem.set_u32(0x0072_7637, 0x00ab_cdef);
+    e.mem.set_u32(RECIPE_MENU, MENU);
+    show(&mut e, RECIPE, true);
+    call_on(&mut e, 0x27e8, 0, &[]);
+    let list = MENU + 0x6c;
+    assert!(recorded().contains(&(0x0072_9fe0, vec![list, 0x00ab_cdef])));
 }

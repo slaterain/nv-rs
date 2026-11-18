@@ -76,6 +76,7 @@ fn setup() -> Engine {
     set_ref(&mut e, R_LOST, LOST);
     extra_stand_ins(&mut e);
     e.ext::<crate::Jip>().pos_marker.marker = MARKER;
+    register_awaiting(&mut e, AWAITING_H13);
     e.register(MOVE_TO_MARKER, |e, w| {
         let pos = floats3(e, MARKER + 0x30);
         let cell = e.mem.u32(MARKER + 0x40);

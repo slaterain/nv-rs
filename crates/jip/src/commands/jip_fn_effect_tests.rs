@@ -1500,6 +1500,7 @@ const R_ACT2: u16 = 16;
 
 fn cast_setup() -> Engine {
     let mut e = setup();
+    register_awaiting(&mut e, AWAITING_H23);
     e.mem.set_u32(CASTER_VT + 0xc, CAST_SPELL_FN);
     e.register(CAST_SPELL_FN, |e, w| {
         record(CAST_SPELL_FN, w);
