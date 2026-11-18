@@ -713,37 +713,56 @@ fn switching_on_writes_the_players_slots() {
     assert_eq!(refreshes(), 1);
 }
 
-/// The rank and list reads take the map's lock only for the first read after a change (on this
-/// thread); a look through the map that changes nothing makes no new version; each change is
-/// seen by the next read; another engine's map is never taken for this one's.
+/// The map's counters: reads that took the lock, copies made.
+fn read_counts(e: &mut Engine) -> (u32, u32) {
+    let m = e.ext_free::<crate::cosave::NpcPerksMap>();
+    (
+        m.locked_reads.load(Ordering::Relaxed),
+        m.copies_made.load(Ordering::Relaxed),
+    )
+}
+
+/// The rank and list reads: after a change the first read is answered under the lock (no copy),
+/// the next one, the version unchanged, makes the copy; then no lock while nothing changes; a
+/// look through the map that changes nothing makes no new version; each change is seen by the
+/// next read; another engine's map is never taken for this one's.
 #[test]
 fn the_reads_take_no_lock_while_nothing_changes() {
     let mut e = world();
-    let locked = |e: &mut Engine| {
-        e.ext_free::<crate::cosave::NpcPerksMap>()
-            .locked_reads
-            .load(Ordering::Relaxed)
-    };
     let p = AREA + 0x3000;
     crate::cosave::npc_perks(&mut e)
         .emplace(ACTOR_ID)
         .ranks
         .insert(p, 2);
-    let before = locked(&mut e);
+    let (locked, made) = read_counts(&mut e);
     assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 2);
-    assert_eq!(locked(&mut e), before + 1, "the first read copies");
+    assert_eq!(
+        read_counts(&mut e),
+        (locked + 1, made),
+        "the first read: under the lock, no copy"
+    );
+    assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 2);
+    assert_eq!(
+        read_counts(&mut e),
+        (locked + 2, made + 1),
+        "the version stayed: copied"
+    );
     for _ in 0..3 {
         assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 2);
         assert_eq!(get_perk_entry_point_list_npc(&mut e, &[ACTOR, 0, 0]).eax, 0);
     }
     assert!(crate::cosave::npc_perks(&mut e).get(&ACTOR_ID).is_some());
-    assert_eq!(locked(&mut e), before + 1, "no change: no lock");
+    assert_eq!(
+        read_counts(&mut e),
+        (locked + 2, made + 1),
+        "no change: no lock"
+    );
     crate::cosave::npc_perks(&mut e)
         .emplace(ACTOR_ID)
         .ranks
         .insert(p, 3);
     assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 3, "seen");
-    assert_eq!(locked(&mut e), before + 2);
+    assert_eq!(read_counts(&mut e), (locked + 3, made + 1));
     crate::cosave::npc_perks(&mut e)
         .emplace(ACTOR_ID)
         .entry_points = AREA + 0x7000;
@@ -759,6 +778,51 @@ fn the_reads_take_no_lock_while_nothing_changes() {
         .insert(p, 7);
     assert_eq!(get_perk_rank_npc(&mut other, &[ACTOR, p, 0]).eax, 7);
     assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 3);
+}
+
+/// A set at an equal or lower rank and a remove of a perk the actor lacks change nothing: the
+/// reads' copy stays current (no lock taken afterwards).
+#[test]
+fn writes_that_change_nothing_keep_the_reads_copy() {
+    let mut e = world();
+    let point = entry(&mut e, 0, 2, 0, 0);
+    let p = perk(&mut e, 0, [0, 0, 3, 1, 0], &[point]);
+    let q = perk(&mut e, 1, [0, 0, 1, 1, 0], &[]);
+    set_perk_rank_npc(&mut e, &[ACTOR, p, 2, 0]);
+    for _ in 0..2 {
+        assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 2);
+    }
+    let counts = read_counts(&mut e);
+    set_perk_rank_npc(&mut e, &[ACTOR, p, 2, 0]);
+    set_perk_rank_npc(&mut e, &[ACTOR, p, 1, 0]);
+    remove_perk_npc(&mut e, &[ACTOR, q, 0]);
+    assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 2);
+    assert_eq!(read_counts(&mut e), counts, "the copy stayed current");
+    // A real change is seen.
+    set_perk_rank_npc(&mut e, &[ACTOR, p, 3, 0]);
+    assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 3);
+}
+
+/// A burst of changes with reads between them: each read answered under the lock, right, and no
+/// copy made until the version holds still for two reads.
+#[test]
+fn a_burst_of_changes_makes_no_copies() {
+    let mut e = world();
+    let p = AREA + 0x3000;
+    let (_, made) = read_counts(&mut e);
+    for rank in 1..=5u8 {
+        crate::cosave::npc_perks(&mut e)
+            .emplace(ACTOR_ID)
+            .ranks
+            .insert(p, rank);
+        assert_eq!(
+            get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax,
+            u32::from(rank)
+        );
+    }
+    assert_eq!(read_counts(&mut e).1, made, "no copies during the burst");
+    assert_eq!(get_perk_rank_npc(&mut e, &[ACTOR, p, 0]).eax, 5);
+    assert_eq!(read_counts(&mut e).1, made + 1, "copied once it held still");
 }
 
 /// The switch goes on at xNVSE's `DEFERRED_INIT` (through the co-save listener, as JIP's
