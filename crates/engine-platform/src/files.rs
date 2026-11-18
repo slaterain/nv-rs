@@ -1299,7 +1299,7 @@ fn host_units(name: &std::ffi::OsStr) -> Vec<u16> {
 /// `units` in Unicode's composed form (NFC), by Core Foundation's `CFStringNormalize`; ASCII
 /// as it is.
 #[cfg(target_vendor = "apple")]
-fn composed(units: &[u16]) -> Vec<u16> {
+pub(crate) fn composed(units: &[u16]) -> Vec<u16> {
     use std::ffi::c_void;
     #[repr(C)]
     struct CfRange {

@@ -521,7 +521,7 @@ pub fn real_device(e: &Engine, this: u32) -> Option<RealDevice> {
         .devices
         .iter()
         .find(|(d, _)| *d == this)
-        .and_then(|(_, real)| real.clone())
+        .and_then(|(_, real)| real.as_ref().cloned())
 }
 
 /// Whether any of the game's modelled devices has a real one behind it (for a D3DX call that
