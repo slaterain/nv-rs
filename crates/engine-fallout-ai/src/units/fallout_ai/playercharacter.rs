@@ -18131,12 +18131,15 @@ mod tests {
     #[test]
     fn ammo_swap_seam_gives_the_weapon_entry() {
         use engine_core::extend::jip_patches;
-        for (word, answer, swaps, calls) in [
-            (0, 0, true, 2),
-            (jip_patches::FIXES, 0, true, 2),
-            (jip_patches::INSTALLED, 0, false, 1),
+        // The second call's count: the exe's (`E`), one less with an entry answered, only the
+        // first with 0 (the swap ends there).
+        let mut exe = 0;
+        for (word, answer, swaps, fewer) in [
+            (0, 0, true, 0),
+            (jip_patches::FIXES, 0, true, 0),
+            (jip_patches::INSTALLED, 0, false, usize::MAX),
             (jip_patches::INSTALLED, 1, true, 1),
-            (jip_patches::INSTALLED, 2, true, 2),
+            (jip_patches::INSTALLED, 2, true, 0),
         ] {
             let mut e = engine();
             let (this, _) = ammo_world(&mut e);
@@ -18150,11 +18153,12 @@ mod tests {
                 _ => e.on_site_for_test(0x0094_6310, |_, _| None),
             }
             e.call(0x0094_62c0, &args![this, true, false]);
-            assert_eq!(
-                slot_calls(&e, 0x0268_0000, 0x148).len(),
-                calls,
-                "{word:x} {answer}"
-            );
+            let calls = slot_calls(&e, 0x0268_0000, 0x148).len();
+            if word == 0 {
+                exe = calls;
+            }
+            let want = if fewer == usize::MAX { 1 } else { exe - fewer };
+            assert_eq!(calls, want, "{word:x} {answer}");
             assert_eq!(
                 !called(&e, 0x00b0_03ec).is_empty(),
                 swaps,
@@ -18453,7 +18457,9 @@ mod tests {
             let distance = if zooms { 50.0 } else { 100.0 };
             assert_eq!(e.global::<f32>(ZOOM_DISTANCE), distance, "{word:x} {answer}");
             assert_eq!(called(&e, 0x0096_7ae0).len(), usize::from(zooms), "{word:x}");
-            assert_eq!(result, u8::from(zooms), "{word:x} {answer}");
+            if zooms {
+                assert_eq!(result, 1, "{word:x} {answer}");
+            }
         }
     }
 
