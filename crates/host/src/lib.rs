@@ -166,7 +166,7 @@ impl Host {
         choose_code_page()?;
         // Off Windows, where the start goes on: what this build is, in the log (and on screen).
         #[cfg(not(windows))]
-        eprintln!("{FIRST_STARTS}");
+        eprintln!("{}", first_starts(cfg!(target_arch = "x86_64")));
         // Off Windows the save guard's look at the player's folders starts now, off the frames
         // (nothing on Windows).
         save_out::prepare(data);
@@ -498,8 +498,8 @@ impl Host {
 pub const NOT_PROVIDED_STATUS: i32 = 69;
 
 /// The process status for an error of [`Host::start_with`] or [`check_installation`]:
-/// [`NOT_PROVIDED_STATUS`] for the stop off Windows (any [`not_provided_on`] refusal: macOS, a
-/// processor other than x86-64), 1 for any other.
+/// [`NOT_PROVIDED_STATUS`] for the stop off Windows (any [`not_provided_on`] refusal: a processor
+/// other than x86-64 and aarch64), 1 for any other.
 pub fn error_status(err: &str) -> i32 {
     if err.starts_with(REFUSAL_START) {
         NOT_PROVIDED_STATUS
@@ -519,6 +519,21 @@ const FIRST_STARTS: &str = "nv-rs on this system: built and unit-tested here, bu
      device's are not heard until the game first changes a sound's pitch, pop-up warnings are log \
      lines, a mod's loose HLSL shaders stop the game. Please report any stop with this log.";
 
+/// What a start off Windows says it is: [`FIRST_STARTS`], and on a processor other than x86-64
+/// (Apple silicon, ARM Linux) that the game's maths there differs from a PC's in the last bits
+/// (`engine_core::x87` software path, the quick estimates of `engine_core::estimate`).
+#[cfg_attr(windows, allow(dead_code))]
+fn first_starts(x86_64: bool) -> String {
+    if x86_64 {
+        FIRST_STARTS.to_string()
+    } else {
+        format!(
+            "{FIRST_STARTS} On this processor (not x86-64) it builds and passes unit tests; the \
+             game's maths differs from a PC's in the last bits."
+        )
+    }
+}
+
 /// [`Host::start_with`] and [`check_installation`] off Windows: what is still Windows-only on this
 /// system, which refuses every start (and `--check`) instead of a run that would go on without it
 /// and fail somewhere less clear. On Linux on x86-64 nothing known is: the game's paths and file
@@ -528,12 +543,15 @@ const FIRST_STARTS: &str = "nv-rs on this system: built and unit-tested here, bu
 /// mouse and keyboard (winit, X11 and Wayland) are provided, so the start goes on (built and unit
 /// tested there; not yet started with the game's files). Not provided there and not refused: the
 /// D3DX shader compiler, which only shaders missing from the game's shader packages reach (a run
-/// that reaches it stops there, naming it). macOS on x86-64 (an Intel Mac) goes on too: its window
-/// runs on the main thread (`run_on_main_thread`); on a processor other than x86-64 (Apple
-/// silicon) the refusal names what differs.
+/// that reaches it stops there, naming it). macOS goes on too: its window runs on the main thread
+/// (`run_on_main_thread`). On Apple silicon and ARM Linux (aarch64) the start goes on as well: the
+/// game's x87 maths runs in software there (`engine_core::x87`, exact except the transcendentals'
+/// last bits) and the quick estimates on the measured model (`engine_core::estimate`), so the maths
+/// differs from a PC's in the last bits only ([`first_starts`] says so). Any other processor is
+/// refused: nothing has been built or tested for it.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
-    not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
+    not_provided_on(std::env::consts::ARCH)
 }
 
 /// The game's code page on Linux and macOS (`engine_platform::code_page`): `NV_CODE_PAGE` (1252
@@ -559,27 +577,17 @@ fn stop_off_windows(
     not_provided_here()
 }
 
-/// [`not_provided_here`]'s message, for an x86-64 processor or another, on macOS or another
-/// system.
+/// [`not_provided_here`]'s answer for the processor `arch` (`std::env::consts::ARCH`): x86-64
+/// and aarch64 (Apple silicon, ARM Linux) go on; any other is refused, naming it.
 #[cfg(any(not(windows), test))]
-fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
-    // macOS's window is provided too: the viewer hands winit the main thread there
-    // (`run_on_main_thread`). What still differs on Apple silicon is the processor's.
-    let _ = apple;
-    let mut missing = Vec::new();
-    if !x86_64 {
-        missing.push(
-            "on this processor the game's x87 maths (not yet exact off x86-64) and the \
-             processor's quick reciprocal estimates (RCPSS, RSQRTSS)",
-        );
+fn not_provided_on(arch: &str) -> Result<(), String> {
+    match arch {
+        "x86_64" | "aarch64" => Ok(()),
+        other => Err(format!(
+            "{REFUSAL_START}nothing has been built or tested for this processor ({other}) yet: \
+             x86-64 and Apple silicon (aarch64) are"
+        )),
     }
-    if missing.is_empty() {
-        return Ok(());
-    }
-    Err(format!(
-        "{REFUSAL_START}it builds here, but these are only provided on Windows so far: {}",
-        missing.join("; and ")
-    ))
 }
 
 /// The installation's `FalloutNV.exe` beside the `Data` folder `data`
@@ -621,7 +629,7 @@ pub fn check_installation(data: &Path) -> Result<Vec<String>, String> {
             engine_platform::code_page::chosen(std::env::var("NV_CODE_PAGE").ok().as_deref())?;
         vec![
             format!("code page: {page} (NV_CODE_PAGE)"),
-            FIRST_STARTS.to_string(),
+            first_starts(cfg!(target_arch = "x86_64")),
         ]
     };
     #[cfg(windows)]
@@ -1079,39 +1087,42 @@ mod tests {
         assert!(!super::light_from_sky_wanted(&choice, wgpu));
     }
 
-    /// Off Windows a start is refused, naming the pieces that are still Windows-only; on Linux on
-    /// x86-64 none is left, and the start goes on.
+    /// Off Windows the start goes on on x86-64 and aarch64 (Linux, macOS, Apple silicon); another
+    /// processor is refused, naming it. A start on a processor other than x86-64 says that the
+    /// maths differs from a PC's in the last bits.
     #[test]
-    fn a_start_off_windows_is_refused_naming_what_is_missing() {
-        // x86-64 (Linux, and macOS on an Intel Mac, whose window runs on the main thread): the
-        // start goes on.
-        assert_eq!(super::not_provided_on(true, false), Ok(()));
-        assert_eq!(super::not_provided_on(true, true), Ok(()));
-        for (x86_64, apple) in [(false, true), (false, false)] {
-            let why = super::not_provided_on(x86_64, apple).unwrap_err();
-            // This machine's tables are made from what the system reports (the display, the
-            // card, the sound device, the folders: engine-platform machine_table.rs, dsound.rs),
-            // and the game's code pages are provided (engine-platform code_page.rs).
-            for gone in ["tables", "sound devices", "adapter", "folders", "code page"] {
+    fn a_start_off_windows_goes_on_for_x86_64_and_aarch64_only() {
+        assert_eq!(super::not_provided_on("x86_64"), Ok(()));
+        assert_eq!(super::not_provided_on("aarch64"), Ok(()));
+        for other in ["riscv64", "powerpc64", "x86", "arm"] {
+            let why = super::not_provided_on(other).unwrap_err();
+            assert!(why.starts_with(super::REFUSAL_START), "{why}");
+            assert!(why.contains(&format!("({other})")), "{why}");
+            // Nothing that is provided now is named as missing.
+            for gone in [
+                "x87",
+                "RSQRTSS",
+                "window",
+                "main thread",
+                "tables",
+                "code page",
+            ] {
                 assert!(!why.contains(gone), "{gone}: {why}");
             }
-            // The window with its mouse and keyboard is provided everywhere now (macOS: on the
-            // main thread).
-            for gone in ["window", "mouse and keyboard", "main thread"] {
-                assert!(!why.contains(gone), "{gone}: {why}");
-            }
-            // The game's paths, file listings, the speakers and the distortion are provided.
-            for gone in ["folder names", "file times", "speakers", "distortion"] {
-                assert!(!why.contains(gone), "{gone}: {why}");
-            }
-            // The processor's own differences only off x86-64 (Apple silicon).
-            assert_eq!(why.contains("x87"), !x86_64, "{why}");
-            assert_eq!(why.contains("RSQRTSS"), !x86_64, "{why}");
         }
         assert_eq!(
             super::not_provided_here(),
-            super::not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
+            super::not_provided_on(std::env::consts::ARCH)
         );
+        assert_eq!(super::first_starts(true), super::FIRST_STARTS);
+        let arm = super::first_starts(false);
+        assert!(arm.starts_with(super::FIRST_STARTS), "{arm}");
+        assert!(arm.contains("builds and passes unit tests"), "{arm}");
+        assert!(
+            arm.contains("differs from a PC's in the last bits"),
+            "{arm}"
+        );
+        assert!(arm.contains("never started"), "{arm}");
     }
 
     /// A scratch installation whose FalloutNV.exe is two bytes (enough to be found).
@@ -1207,24 +1218,24 @@ mod tests {
     fn the_expected_stop_off_windows_has_its_own_status() {
         let dir = scratch_installation("status");
         // The right exe (a version check that passes), as the start makes the stop: where a stop
-        // is left (macOS, another processor) it has its own status; on Linux on x86-64 the start
+        // is left (a processor other than x86-64 and aarch64) it has its own status; elsewhere the start
         // goes on.
         let stop = super::stop_off_windows(&dir.join("FalloutNV.exe"), &|_| Ok(()));
         let _ = std::fs::remove_dir_all(&dir);
         match stop {
             Err(err) => assert_eq!(super::error_status(&err), super::NOT_PROVIDED_STATUS),
-            Ok(()) => assert!(cfg!(target_arch = "x86_64")),
+            Ok(()) => assert!(cfg!(any(target_arch = "x86_64", target_arch = "aarch64"))),
         }
         assert_eq!(super::NOT_PROVIDED_STATUS, 69);
         assert_eq!(super::error_status("FalloutNV.exe: not found"), 1);
     }
 
-    /// Every refusal (macOS, another processor) has the expected stop's status, on every system;
+    /// Every refusal (a processor other than x86-64 and aarch64) has the expected stop's status;
     /// any other error 1.
     #[test]
     fn every_refusal_has_the_expected_stops_status() {
-        for (x86_64, apple) in [(false, true), (false, false)] {
-            let why = super::not_provided_on(x86_64, apple).unwrap_err();
+        for other in ["riscv64", "powerpc64"] {
+            let why = super::not_provided_on(other).unwrap_err();
             assert_eq!(
                 super::error_status(&why),
                 super::NOT_PROVIDED_STATUS,
