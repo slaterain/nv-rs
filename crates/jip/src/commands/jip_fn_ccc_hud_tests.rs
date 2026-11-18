@@ -238,14 +238,13 @@ fn hud_scene(e: &mut Engine, duif3: bool) -> Vec<u32> {
     let fk = kids(e, f, 1)[0];
     values(e, fk, &[(b"string", Some(113))], &mut want);
     // The HUD's own parts, as the two layouts name them.
-    let part =
-        |e: &mut Engine, path: &[&str], trait_: &[u8], index: usize, want: &mut [u32]| {
-            let mut at = root;
-            for name in path {
-                at = new_tile(e, at, Some(name.as_bytes()));
-            }
-            values(e, at, &[(trait_, Some(index))], want);
-        };
+    let part = |e: &mut Engine, path: &[&str], trait_: &[u8], index: usize, want: &mut [u32]| {
+        let mut at = root;
+        for name in path {
+            at = new_tile(e, at, Some(name.as_bytes()));
+        }
+        values(e, at, &[(trait_, Some(index))], want);
+    };
     part(e, &["SneakMeter"], b"y", 114, &mut want);
     if duif3 {
         part(e, &["QuestWrap", "QuestReminder"], b"x", 115, &mut want);

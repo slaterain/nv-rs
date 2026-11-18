@@ -467,7 +467,7 @@ fn ccc_set_float(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let read = Read::of(e, &a);
     if read.ok {
-        if let Some(value) = element(e, i64::from(read.int(0, 0) as u32)) {
+        if let Some(value) = element(e, i64::from(read.int(0, 0))) {
             value_set_float(e, value, read.float(1, 0.0));
         }
     }
@@ -684,7 +684,7 @@ fn ccc_saved_form(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
     if read.ok {
-        let index = read.int(0, 0) as u32 as usize;
+        let index = read.int(0, 0) as usize;
         if let Some(&id) = hud(e).saved_forms.get(index) {
             a.set_form_result(e, id);
         }
