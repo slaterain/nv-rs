@@ -181,14 +181,27 @@ fn a_players_file_overlays_vnvs_values_key_by_key() {
     assert_eq!(none.long("Tweaks", "bNoSuchKey", -3), -3);
 }
 
-const PROOF: &rows::Row = &rows::ROWS[0];
+/// The S0079 row (`bDialogSpeechNullCheck`), which the key tests use.
+const PROOF: &rows::Row = &rows::ROWS[4];
 
 #[test]
 fn every_row_has_its_own_bit_and_key() {
     let mut bits_seen = std::collections::HashSet::new();
     let mut keys_seen = std::collections::HashSet::new();
     let settings = table();
+    assert_eq!(PROOF.plan, "S0079");
+    assert!(
+        rows::ROWS.windows(2).all(|w| w[0].plan < w[1].plan),
+        "in PLAN.md's order"
+    );
     for r in rows::ROWS {
+        // The key is `b` and the function's name without its `patch` prefix.
+        let name = r.function.strip_prefix("patch").unwrap_or(r.function);
+        assert!(
+            r.key[1..].eq_ignore_ascii_case(name) && r.key.starts_with('b'),
+            "{}",
+            r.key
+        );
         assert!(bits_seen.insert(r.bit), "{} shares a bit", r.function);
         assert!(
             keys_seen.insert(r.key.to_ascii_lowercase()),
@@ -362,7 +375,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 1 of its 1 rows built are on",
+            "lStewieAl's Tweaks: 11 of its 11 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
