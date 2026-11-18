@@ -9,8 +9,14 @@
 //! menu's highlighted item, a terminal's own model), a reference's place on the world map, and
 //! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
-//! a text's size in a font. 41 of the file's 64 commands; its four menu event commands are the
-//! core track's (`ui_hooks`).
+//! a text's size in a font and the open menu's item list refreshed (`RefreshItemsList`). 42 of the
+//! file's 64 commands (`ToggleHUDCursor` built, [`AWAITING_H02`]); its four menu event commands are
+//! the core track's (`ui_hooks`).
+//!
+//! `ToggleHUDCursor` keeps JIP's HUD cursor mode, which `GetMenuMode` here reads and the HUD
+//! cursor patch (H02) uses to show and run the cursor over the HUD; it is registered with that
+//! patch (on its own it would disable the left button with no cursor to click). The item list refresh is also what JIP's
+//! `RemoveMe` patch (G60) asks for at the next main loop pass ([`request_item_list_refresh`]).
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
 //! LN NVSE)): a path's first part names a menu (looked up as JIP's `s_menuNameToID` looks it up,
@@ -25,15 +31,12 @@
 //! - a hook or a code patch of JIP's: `UnlockRecipeMenuQuantity`, `ToggleCraftingMessages`,
 //!   `EnableImprovedRecipeMenu`, `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
 //!   the exe), `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (the text
-//!   input hooks, `TextInputClose`), `ToggleHUDCursor` (the HUD cursor and its input hooks);
+//!   input hooks, `TextInputClose`);
 //! - a routine of JIP's the game calls back: `ShowQuantityMenu`, `MessageBoxExAlt` (their
 //!   callbacks), and `CloseActiveMenu`, which clears what those two keep;
 //! - files and fonts: `SetFontFile` (a font file read from the folder, JIP's font map);
 //! - 3D and drawing: `AttachUIXML`, `AttachUIComponent` (a tile's node under a reference's node),
 //!   `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene node);
-//! - `RefreshItemsList`: in the map menu JIP sets `s_mapMenuSkipSetXY`, read only by its map
-//!   menu patch (G87, `0x79DF73`: `game_patches::gb::skip_map_centring_once` sets it), and in
-//!   the recipe menu it runs JIP's own `RefreshRecipeMenu`.
 //!
 //! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
 //! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the
@@ -73,6 +76,7 @@ use nvse::commands::array::{fix_on, SIZE_CAPS};
 use nvse::commands::Read;
 use nvse::vars::Key;
 use nvse::{handled, CommandArgs, EvalArgs};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
@@ -116,7 +120,13 @@ pub static COMMANDS: Handlers = &[
     (0x28e1, show_level_up_menu_ex),
     (0x2927, get_string_ui_dimensions),
     (0x2935, get_menu_item_list_refs),
+    (0x27e8, refresh_items_list),
 ];
+
+/// `ToggleHUDCursor`, built but not registered until JIP's HUD cursor patch (row H02) is in:
+/// without it the left mouse button would be disabled and menu mode answered with no cursor to
+/// see or click. The row's pull request adds this list to `commands::ALL`.
+pub static AWAITING_H02: Handlers = &[(0x28b5, toggle_hud_cursor)];
 
 /// `IsInCharGen`, a condition (`DEFINE_CMD_COND_PLUGIN`).
 pub static CONDITIONS: Conditions = &[(0x282a, is_in_char_gen, is_in_char_gen_eval)];
@@ -631,11 +641,12 @@ fn top_visible_menu_id(e: &Engine) -> u32 {
     0
 }
 
-/// `GetMenuMode` (JIP LN NVSE): menu mode (`currentMode > 1`) or JIP's HUD cursor mode, which only
-/// `ToggleHUDCursor` (not built) turns on: off here.
-fn menu_mode(e: &Engine) -> bool {
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: GetMenuMode.
+/// Menu mode (`currentMode > 1`) or JIP's HUD cursor mode ([`hud_cursor_mode`],
+/// `ToggleHUDCursor`).
+fn menu_mode(e: &mut Engine) -> bool {
     let im = interface_manager(e);
-    im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1
+    (im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1) || hud_cursor_mode(e)
 }
 
 /// The path argument as JIP's `tilePath[0x100]` holds it.
@@ -2303,6 +2314,246 @@ fn get_world_map_pos_mults(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the item lists refreshed ----
+
+/// The open menus' refreshes `RefreshItemListBox` calls (each confirmed in the exe):
+/// `InventoryMenu`'s list refresh (`00782A90`, `cdecl`), `StatsMenu`'s (`007DF230`, `thiscall`:
+/// the menu, 4; the menu `*011DACE0`), `ContainerMenu::Refresh` (`0075C280`: the menu, the item,
+/// here null), `MapMenu::AddMapIcons` (`0079DBB0`: the menu `*011DA368`, whose tab is at +0x80,
+/// the world map's 0x21), the barter refresh ([`BARTER_REFRESH`] with 1).
+const INVENTORY_REFRESH: u32 = 0x0078_2a90;
+const STATS_REFRESH: u32 = 0x007d_f230;
+const CONTAINER_REFRESH: u32 = 0x0075_c280;
+const MAP_ADD_ICONS: u32 = 0x0079_dbb0;
+const MAP_CURRENT_TAB: u32 = 0x80;
+const WORLD_MAP_TAB: u8 = 0x21;
+/// `RefreshRecipeMenu`'s calls: the recipe list box (+0x6C of the menu) and its virtual
+/// functions +0x1C, +0x14, +0, +0x10; the menu's list fill (`00727680`: the menu, 0, the
+/// category +0x64); `ListBox::SaveListState` (`007312E0`), the filter (`00729FE0`: the list, the
+/// filter function) with the exe's own filter (`00728D60`: the word JIP reads from the exe's
+/// code at `00727637`, the `push` in the exe's own refresh at `00727636`), and the state restored
+/// (`0072A660`: the list, 1).
+const RECIPE_LIST: u32 = 0x6c;
+const RECIPE_FILL: u32 = 0x0072_7680;
+const LIST_SAVE_STATE: u32 = 0x0073_12e0;
+const RECIPE_LIST_FILTER: u32 = 0x0072_9fe0;
+const RECIPE_FILTER: u32 = 0x0072_8d60;
+/// Where JIP reads the filter: the `push` operand of the exe's own refresh (`00727636`), so a
+/// filter another change put there is the one used.
+const RECIPE_FILTER_WORD: u32 = 0x0072_7637;
+const LIST_RESTORE_STATE: u32 = 0x0072_a660;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: RefreshRecipeMenu
+// (asm).
+/// The recipe menu's list made again for its category, as the exe's own category change does.
+fn refresh_recipe_menu(e: &mut Engine, menu: u32) {
+    let list = menu + RECIPE_LIST;
+    e.vcall(list, 0x1c, &[]);
+    let category = e.mem.u32(menu + RECIPE_CATEGORY);
+    e.call(RECIPE_FILL, &args![menu, 0u32, category]);
+    let made = e.vcall(list, 0x14, &[0, 0]).eax;
+    e.vcall(list, 0, &[made]);
+    e.vcall(list, 0x10, &[]);
+    e.call(LIST_SAVE_STATE, &args![list]);
+    // The word the exe holds now (`mov eax, 0x727637; push [eax]`); the exe's own filter when the
+    // code is not in the guest's memory or holds none.
+    let filter = if e.mem.is_mapped(RECIPE_FILTER_WORD) {
+        match e.mem.u32(RECIPE_FILTER_WORD) {
+            0 => RECIPE_FILTER,
+            word => word,
+        }
+    } else {
+        RECIPE_FILTER
+    };
+    e.call(RECIPE_LIST_FILTER, &args![list, filter]);
+    e.call(LIST_RESTORE_STATE, &args![list, 1u32]);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: RefreshItemListBox.
+/// The first shown of the inventory, stats, container, map, barter and recipe menus has its item
+/// list made again: the map only on its world map tab (JIP's map patch G87 then leaves the map
+/// where it is once). A menu shown with no object (JIP calls through null): nothing. For
+/// `RefreshItemsList` and JIP's `RemoveMe` patch (G60, through [`request_item_list_refresh`]).
+pub fn refresh_item_list_box(e: &mut Engine) {
+    let shown = |e: &Engine, id: u32| e.mem.u8(MENU_SHOWN + id) != 0;
+    if shown(e, INVENTORY) {
+        e.call(INVENTORY_REFRESH, &[]);
+    } else if shown(e, STATS) {
+        let menu = e.mem.u32(STATS_MENU);
+        if menu != 0 {
+            e.call(STATS_REFRESH, &args![menu, 4u32]);
+        }
+    } else if shown(e, CONTAINER) {
+        let menu = e.mem.u32(CONTAINER_MENU);
+        if menu != 0 {
+            e.call(CONTAINER_REFRESH, &args![menu, 0u32]);
+        }
+    } else if shown(e, MAP) {
+        let menu = e.mem.u32(MAP_MENU);
+        if menu != 0 && e.mem.u8(menu + MAP_CURRENT_TAB) == WORLD_MAP_TAB {
+            crate::game_patches::gb::skip_map_centring_once(e);
+            e.call(MAP_ADD_ICONS, &args![menu]);
+        }
+    } else if shown(e, BARTER) {
+        e.call(BARTER_REFRESH, &args![1u32]);
+    } else if shown(e, RECIPE) {
+        let menu = e.mem.u32(RECIPE_MENU);
+        if menu != 0 {
+            refresh_recipe_menu(e, menu);
+        }
+    }
+}
+
+/// JIP's `s_doRefreshItemListBox` (`internal/patches_game.h`): set by its `RemoveMe` patch
+/// (G60), taken by the main loop, which then refreshes the item list. Lock-free.
+#[derive(Default)]
+pub struct ItemListRefresh(AtomicBool);
+
+/// `s_doRefreshItemListBox = 1`, for G60: the list is refreshed at the next main loop pass.
+pub fn request_item_list_refresh(e: &mut Engine) {
+    e.ext_free::<ItemListRefresh>()
+        .0
+        .store(true, Ordering::Relaxed);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler
+// (kMessage_MainGameLoop: the HUD cursor's and the item list's parts).
+/// JIP's main loop after its callbacks and events: the HUD cursor mode ends once a menu is open
+/// (the left mouse button given back), and a refresh G60 asked for is made.
+pub fn main_loop(e: &mut Engine) {
+    if hud_cursor_mode(e) {
+        let im = interface_manager(e);
+        if im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1 {
+            e.ext_free::<HudCursor>()
+                .mode
+                .store(false, Ordering::Relaxed);
+            crate::input::set_lmb_disabled(e, false);
+        }
+    }
+    if e.ext_free::<ItemListRefresh>()
+        .0
+        .swap(false, Ordering::Relaxed)
+    {
+        refresh_item_list_box(e);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_RefreshItemsList_Execute.
+/// [`refresh_item_list_box`]. No result.
+fn refresh_items_list(e: &mut Engine, _: &[u32]) -> Ret {
+    refresh_item_list_box(e);
+    handled(true)
+}
+
+// ---- the HUD cursor ----
+
+/// JIP's `s_HUDCursorMode` (`internal/jip_core.cpp`) and `s_lastLMBState` (`internal/hooks.h`):
+/// the cursor shown and usable over the HUD in game mode, read by `GetMenuMode` and the HUD
+/// cursor patch (H02, `GetVanityDisabledHook` and `ProcessHUDMainUI`, which also keeps the
+/// left button's last state). Lock-free.
+#[derive(Default)]
+pub struct HudCursor {
+    mode: AtomicBool,
+    last_lmb: AtomicBool,
+}
+
+/// `s_HUDCursorMode`.
+pub fn hud_cursor_mode(e: &mut Engine) -> bool {
+    e.ext_free::<HudCursor>().mode.load(Ordering::Relaxed)
+}
+
+/// `s_lastLMBState`, for the HUD cursor patch (H02).
+pub fn last_lmb_state(e: &mut Engine) -> bool {
+    e.ext_free::<HudCursor>().last_lmb.load(Ordering::Relaxed)
+}
+
+/// `s_lastLMBState = state`, for the HUD cursor patch (H02).
+pub fn set_last_lmb_state(e: &mut Engine, state: bool) {
+    e.ext_free::<HudCursor>()
+        .last_lmb
+        .store(state, Ordering::Relaxed);
+}
+
+/// The interface manager's fields `ToggleHUDCursor` writes: the cursor tile (+0x28), the bytes
+/// +0x170 and +0x4B4 (JIP's `byte170` and `isRenderedMenuOrPipboyManager`). A tile's node
+/// (+0x2C) and a node's flags (+0x30, bit 0 hidden: JIP's `NiAVObject::Hide`); the traits
+/// `kTileValue_visible` and `kTileValue_mouseover`.
+const IM_CURSOR: u32 = 0x28;
+const IM_BYTE_170: u32 = 0x170;
+const IM_RENDERED_MENU_OR_PIPBOY: u32 = 0x4b4;
+const TILE_NODE: u32 = 0x2c;
+const NODE_FLAGS: u32 = 0x30;
+const TRAIT_VISIBLE: u32 = 0xfa3;
+const TRAIT_MOUSEOVER: u32 = 0xfc3;
+
+/// `Tile::SetBool` (JIP LN NVSE): the tile's value of `id`, when it has one, set.
+fn tile_set_bool(e: &mut Engine, tile: u32, id: u32, on: bool) {
+    let value = value_of(e, tile, id);
+    if value != 0 {
+        value_set_bool(e, value, on);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_ToggleHUDCursor_Execute.
+/// `ToggleHUDCursor [on]`: answers the mode before. With an argument (the line's count not 0)
+/// that reads, in game mode (`currentMode` 1), with no controller in use and the asked state
+/// (any value but 0: on) not the mode's: the mode flips; turning on clears the two bytes; turning
+/// off hides the cursor (its `visible` value 0, its node hidden) and takes the mouse-over off the
+/// active tile; both clear the active tile and menu, disable the left mouse button for the
+/// player while on (xNVSE's key record, as JIP's `SetLMBDisabled`) and clear `s_lastLMBState`.
+fn toggle_hud_cursor(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let mode = hud_cursor_mode(e);
+    a.set_result(e, f64::from(u8::from(mode)));
+    if num_args(e, &a) == 0 {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let im = interface_manager(e);
+    if im == 0 || e.mem.u32(im + IM_CURRENT_MODE) != 1 || crate::input::controller_ready(e) {
+        return handled(true);
+    }
+    let on = read.int(0, 0) != 0;
+    if mode == on {
+        return handled(true);
+    }
+    e.ext_free::<HudCursor>().mode.store(on, Ordering::Relaxed);
+    if on {
+        e.mem.set_u8(im + IM_BYTE_170, 0);
+        e.mem.set_u8(im + IM_RENDERED_MENU_OR_PIPBOY, 0);
+    } else {
+        // The game always has its cursor tile and node; JIP reads them unchecked (the port:
+        // nothing for a missing one).
+        let cursor = e.mem.u32(im + IM_CURSOR);
+        if cursor != 0 {
+            tile_set_bool(e, cursor, TRAIT_VISIBLE, false);
+            let node = e.mem.u32(cursor + TILE_NODE);
+            if node != 0 {
+                let flags = e.mem.u8(node + NODE_FLAGS);
+                e.mem.set_u8(node + NODE_FLAGS, flags | 1);
+            }
+        }
+        let active = e.mem.u32(im + IM_ACTIVE_TILE);
+        if active != 0 {
+            tile_set_bool(e, active, TRAIT_MOUSEOVER, false);
+        }
+    }
+    e.mem.set_u32(im + IM_ACTIVE_TILE, 0);
+    e.mem.set_u32(im + IM_ACTIVE_MENU, 0);
+    crate::input::set_lmb_disabled(e, on);
+    set_last_lmb_state(e, false);
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_ui_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_ui_r1_tests.rs"]
+mod r1_tests;

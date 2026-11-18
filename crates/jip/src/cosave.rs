@@ -1780,10 +1780,10 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // off, the forced targets and detection values gone; and the world hooks' part: the informed
 // forms, the waits, the swapped LOD blocks and the model paths gone, the reference names' flags set
 // again; and the player's killer cleared, G33's part; and the excluded combat actions gone, H16's
-// part; and the references' own map markers gone).
+// part; and the references' own map markers gone, and the synchronized position's reference).
 /// Not installed, every step leaves the game as it is: the ones that write the game's memory (G33's
 /// killer, H16's excluded actions) check that JIP answers "installed"; the others only clear JIP's
-/// own maps and switch off hooks, which are empty and off while JIP is not installed.
+/// own state and switch off hooks, which are empty and off while JIP is not installed.
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
@@ -1809,7 +1809,7 @@ pub(crate) fn print_version(e: &mut Engine) {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
-// load, exit and new game cases' saved data; their scripts come with JIP's script runner).
+// load, exit and new game cases: their saved data, then the script runner's files).
 /// JIP's listener for xNVSE's messages.
 pub fn listen(e: &mut Engine, m: &Message) {
     match m.kind {
@@ -1894,7 +1894,8 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
             // when there is nothing to do. Sent only once JIP answers "installed" (it asks for it,
             // `nvse::plugins::listen_per_frame`); the check keeps it so if another built-in asks.
-            // (JIP's HUD cursor and item list box parts come with their UI commands.)
+            // Then the HUD cursor's end and the item list refresh G60 asked for (two lock-free
+            // reads when neither is on).
             let jip = e.ext::<Jip>();
             if !jip.answers_installed {
                 return;
@@ -1908,9 +1909,13 @@ pub fn listen(e: &mut Engine, m: &Message) {
             } else if events {
                 crate::ln_events::process(e);
             }
+            crate::commands::jip_fn_ui::main_loop(e);
         }
         _ => {}
     }
+    // The script runner's files, after each case's own steps as in JIP: compiled at the deferred
+    // start (its last step), run at the load, new game, save and exits.
+    crate::script_runner::on_message(e, m.kind, m.data);
 }
 
 #[cfg(test)]

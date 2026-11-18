@@ -295,8 +295,11 @@ impl Host {
         // run, Fallout.ini's `[nv-rs Display] bSunShadows`; off by default). Off: nothing is
         // installed, read or recorded.
         if choice.sun_shadows {
+            // Characters cast too (`bSunShadowsCharacters` / `NV_SUN_SHADOWS_CHARACTERS`, on by
+            // default), in place of the game's own actor shadows: set before the device is made.
+            d3d9_wgpu::sun_shadow::enable_characters(choice.sun_shadow_characters);
             engine_platform::d3d9real::want_sun_shadows(reader);
-            eprintln!("nv-rs: sun shadows on (Vulkan only; in the game's lighting, or the engineers' overlay with NV_SUN_SHADOWS=debug)");
+            eprintln!("nv-rs: sun shadows on (Vulkan only; in the game's lighting, or the engineers' overlay with NV_SUN_SHADOWS=debug); characters cast: {} (bSunShadowsCharacters)", choice.sun_shadow_characters);
         }
         // Who draws (`fixes::Choice::renderer`: in a launcher's play run, Fallout.ini's
         // `[nv-rs Display] sRenderer`, Vulkan by default); `NV_D3D9`, when it names a backend,
