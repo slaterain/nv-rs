@@ -109,6 +109,9 @@ pub(crate) struct Shader {
     /// A vertex shader's `ModelViewProj` (its first register), when its draws can cast sun
     /// shadows ([`sun_shadow::model_view_proj`]).
     mvp: Option<u32>,
+    /// A skinned vertex shader's registers ([`sun_shadow::skin_model_view_proj`]): with the
+    /// characters cast, its draws cast through it.
+    skin: Option<sun_shadow::Skin>,
     /// A lit pixel shader's sun light colour register ([`wgsl::sun_register`]): its draws on the
     /// scene take the sun shadows' variant when they are on.
     sun: Option<u32>,
@@ -1027,7 +1030,21 @@ struct SunState {
     /// `NV_SUN_SHADOWS_TRACE=N`: the sun's direction and which maps take it, in the log for the next N
     /// updates (how the game moves its sun, frame by frame).
     trace: u32,
+    /// Characters cast ([`sun_shadow::characters`] when made): skinned draws are casters and the
+    /// lit variants read the game's own actor shadows as lit.
+    characters: bool,
+    /// Each skinned geometry's bones' bind-pose spheres ([`sun_shadow::skin_spheres`]) by
+    /// [`sun_shadow::GeoKey::geometry`], with the key they were read for (none: unreadable).
+    skins: Map<sun_shadow::GeoKey, SkinOf>,
+    /// This frame's characters, posed ([`sun_shadow::Skinned`]): drawn into the near maps each frame.
+    skinned: Vec<sun_shadow::Skinned>,
+    /// Characters cast since the last line in the log.
+    skinned_seen: u64,
 }
+
+/// A skinned geometry's bones' spheres as last read ([`SunState::skins`]): the key they were read
+/// for, and the spheres (none: unreadable).
+type SkinOf = (sun_shadow::GeoKey, Option<Arc<Vec<sun_shadow::BoneSphere>>>);
 
 /// A geometry's body as last made ([`SunState::bounds`]).
 struct SunBody {
@@ -1080,6 +1097,8 @@ impl SunState {
         self.prev = None;
         self.moving = 0;
         self.rewritten.clear();
+        self.skins.clear();
+        self.skinned.clear();
         self.bounds.clear();
         self.gpu.drawn = [None; sun_shadow::CASCADES];
         self.light = None;
@@ -1139,7 +1158,20 @@ impl SunState {
                 .ok()
                 .and_then(|v| v.trim().parse().ok())
                 .unwrap_or(0),
+            characters: sun_shadow::characters(),
+            skins: Map::default(),
+            skinned: Vec::new(),
+            skinned_seen: 0,
         }
+    }
+}
+
+impl Shader {
+    /// The register a caster's sun matrix goes into: its `ModelViewProj`, or with the characters
+    /// cast a skinned shader's `SkinModelViewProj`; none: its draws cast nothing.
+    fn caster_matrix(&self, characters: bool) -> Option<u32> {
+        self.mvp
+            .or_else(|| self.skin.filter(|_| characters).map(|s| s.mvp))
     }
 }
 
@@ -1974,6 +2006,9 @@ impl Device {
                 let mvp = (program.stage == Stage::Vertex && sig.samplers.is_empty())
                     .then(|| sun_shadow::model_view_proj(&program))
                     .flatten();
+                let skin = (program.stage == Stage::Vertex && sig.samplers.is_empty())
+                    .then(|| sun_shadow::skin_model_view_proj(&program))
+                    .flatten();
                 let s = Arc::new(Shader {
                     program,
                     sig,
@@ -1984,6 +2019,7 @@ impl Device {
                     tokens: tokens.to_vec(),
                     stable,
                     mvp,
+                    skin,
                     sun,
                     face,
                 });
@@ -4437,24 +4473,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             None => pass.draw(start..start + n, 0..1),
         }
         // The sun shadows' light list ([`sun_shadow`]): off (or no sun last frame), only this test.
-        if self
+        let caster = self
             .sun
             .as_ref()
-            .is_some_and(|s| s.recording(self.presents))
-        {
+            .filter(|s| s.recording(self.presents))
+            .map(|s| vs.caster_matrix(s.characters));
+        if let Some(matrix) = caster {
             if up.is_some() {
                 self.sun_reject(5, &vs, &ps, n);
-            } else if vs.mvp.is_none() {
+            } else if matrix.is_none() {
                 self.sun_reject(4, &vs, &ps, n);
             }
         }
-        if self
-            .sun
-            .as_ref()
-            .is_some_and(|s| s.recording(self.presents))
-            && up.is_none()
-            && vs.mvp.is_some()
-        {
+        if up.is_none() && caster.flatten().is_some() {
             self.sun_record(
                 &vs,
                 &ps,
@@ -6126,8 +6157,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // Alpha-tested: a cut-out, drawn through its own pixel shader.
         let cutout = rs[rs::ALPHATESTENABLE] != 0;
         let cull = rs[rs::CULLMODE];
+        let characters = self.sun.as_ref().is_some_and(|s| s.characters);
+        // A character's skinned draw: posed by its bones this frame ([`sun_shadow::Skin`]).
+        let skin = if vs.mvp.is_none() { vs.skin } else { None };
         let (Some(mvp), Some(depth), Some(topology)) = (
-            vs.mvp,
+            vs.caster_matrix(characters),
             self.st.ds.as_ref().map(|d| d.id),
             Self::topology(kind),
         ) else {
@@ -6143,9 +6177,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.sun_reject(0, vs, ps, count);
             return;
         }
-        // A character's face (its pixel shader blends the FaceGen maps): not a caster until the
-        // characters' skinned bodies are (a head's shadow alone would float).
-        if ps.face {
+        // A character's face (its pixel shader blends the FaceGen maps): a caster only with the
+        // characters' skinned bodies (a head's shadow alone would float).
+        if ps.face && !characters {
             self.sun_reject(4, vs, ps, count);
             return;
         }
@@ -6227,14 +6261,53 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         };
         // One body a geometry: the last made, replaced when its bytes were written since.
         let geometry = key.geometry();
-        let (known, made) = match self.sun.as_ref().and_then(|s| s.bounds.get(&geometry)) {
-            Some(e) if e.key == key => (Some(e.body.clone()), e.made),
-            Some(e) => (None, e.made),
-            None => (None, 0),
+        // A character: its bones' bind-pose spheres (once a geometry), posed by this draw's bones.
+        let skinned = if let Some(skin) = skin {
+            let known = self
+                .sun
+                .as_ref()
+                .and_then(|s| s.skins.get(&geometry))
+                .filter(|(k, _)| *k == key)
+                .map(|(_, s)| s.clone());
+            let spheres = match known {
+                Some(s) => s,
+                None => {
+                    let s = self
+                        .sun_skin_spheres(decl, index32.is_some(), base_vertex, start, count)
+                        .map(Arc::new);
+                    let sun = self.sun.as_mut().expect("on");
+                    if sun.skins.len() >= sun_shadow::body_limit() {
+                        sun.skins.clear();
+                    }
+                    sun.skins.insert(geometry.clone(), (key.clone(), s.clone()));
+                    s
+                }
+            };
+            let posed = spheres.and_then(|s| {
+                sun_shadow::skin_bounds(&s, &self.st.vsf[..], skin.bones, skin.count)
+            });
+            match posed {
+                Some(b) => Some(Arc::new(sun_shadow::Body::bare(b))),
+                None => {
+                    self.sun_reject(3, vs, ps, count);
+                    return;
+                }
+            }
+        } else {
+            None
         };
-        let body = match known {
-            Some(b) => b,
-            None => {
+        let (known, made) = match skinned.as_ref() {
+            Some(_) => (None, 0),
+            None => match self.sun.as_ref().and_then(|s| s.bounds.get(&geometry)) {
+                Some(e) if e.key == key => (Some(e.body.clone()), e.made),
+                Some(e) => (None, e.made),
+                None => (None, 0),
+            },
+        };
+        let body = match (known, skinned.clone()) {
+            (Some(b), _) => b,
+            (None, Some(s)) => Some(s),
+            (None, None) => {
                 let sun = self.sun.as_mut().expect("on");
                 if made == 0 && sun.bounds.len() >= sun.prune_at.min(sun_shadow::body_limit()) {
                     // Those of buffers the game let go first; all only past the limit.
@@ -6496,6 +6569,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let sun = self.sun.as_mut().expect("on");
         sun.lists.casters.push(sun_shadow::Caster {
             key,
+            skinned: skinned.is_some(),
             bounds: body.bounds,
             body,
             draw: sun_shadow::Draw {
@@ -6656,6 +6730,119 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .as_ref()
             .map(|t| list(t, "sun shadow caster without its round cables"));
         Some(body)
+    }
+
+    /// A skinned draw's bones' bind-pose spheres ([`sun_shadow::skin_spheres`]) from the device's
+    /// copy of its buffers: each vertex's `POSITION` (floats or half floats), its `BLENDINDICES`
+    /// (four bytes, `D3DCOLOR` or `UBYTE4N`) and `BLENDWEIGHT` (floats or half floats; the fourth
+    /// one minus the others, as the game's shaders take it). The bytes are in weight order for
+    /// `D3DCOLOR` (the shaders read it `.zyxw`, the colour's bytes being B, G, R, A); for any other
+    /// layout every byte of a vertex counts. None when they cannot be read.
+    fn sun_skin_spheres(
+        &self,
+        decl: &Decl,
+        indexed: bool,
+        base_vertex: i32,
+        start: u32,
+        count: u32,
+    ) -> Option<Vec<sun_shadow::BoneSphere>> {
+        if count > 1 << 22 {
+            return None;
+        }
+        let held = |h: Handle, b: &Arc<Buf>| match self.objects.get(&h) {
+            Some(Obj::Buffer(x, bytes)) if Arc::ptr_eq(x, b) => Some(bytes),
+            _ => None,
+        };
+        // An element's bytes for vertex `v` (`size` of them).
+        let element = |usage: u8| -> Option<(Element, &Vec<u8>, usize, usize)> {
+            let e = *decl
+                .elements
+                .iter()
+                .find(|e| e.usage == usage && e.index == 0)?;
+            let k = usize::from(e.stream);
+            let stream = self.st.streams.get(k)?;
+            let bytes = held(self.st.bound.streams[k].0, stream.buffer.as_ref()?)?;
+            Some((e, bytes, stream.offset as usize, stream.stride as usize))
+        };
+        let read = |(e, bytes, offset, stride): &(Element, &Vec<u8>, usize, usize),
+                    v: i64,
+                    size: usize|
+         -> Option<Vec<u8>> {
+            let at = offset + usize::try_from(v).ok()? * stride + usize::from(e.offset);
+            bytes.get(at..at + size).map(<[u8]>::to_vec)
+        };
+        let floats = |e: &Element, b: &[u8]| -> Option<Vec<f32>> {
+            let (n, w) = match e.ty {
+                0..=3 => (usize::from(e.ty) + 1, 4),
+                15 => (2, 2),
+                16 => (4, 2),
+                _ => return None,
+            };
+            Some(
+                (0..n)
+                    .map(|c| {
+                        let s = &b[c * w..(c + 1) * w];
+                        if w == 4 {
+                            f32::from_le_bytes([s[0], s[1], s[2], s[3]])
+                        } else {
+                            sun_shadow::half_to_f32(u16::from_le_bytes([s[0], s[1]]))
+                        }
+                    })
+                    .collect(),
+            )
+        };
+        let size_of = |ty: u8| match ty {
+            0..=3 => 4 * (usize::from(ty) + 1),
+            4 | 5 | 8 => 4,
+            15 => 4,
+            16 => 8,
+            _ => 0,
+        };
+        let position = element(0)?;
+        let indices = element(2)?;
+        let weights = element(1);
+        if !matches!(position.0.ty, 2 | 3 | 16) || !matches!(indices.0.ty, 4 | 8) {
+            return None;
+        }
+        let in_order = indices.0.ty == 4;
+        let vertex = |v: i64| -> Option<([f32; 3], [u8; 4], [f32; 4])> {
+            let p = floats(&position.0, &read(&position, v, size_of(position.0.ty))?)?;
+            let i = read(&indices, v, 4)?;
+            let w = match (&weights, in_order) {
+                (Some(we), true) => {
+                    let f = floats(&we.0, &read(we, v, size_of(we.0.ty))?)?;
+                    let mut w = [0.0f32; 4];
+                    let n = f.len().min(3);
+                    w[..n].copy_from_slice(&f[..n]);
+                    w[3] = 1.0 - w[..n].iter().sum::<f32>();
+                    w
+                }
+                // Not known which byte goes with which weight: each one counts.
+                _ => [1.0; 4],
+            };
+            Some(([p[0], p[1], p[2]], [i[0], i[1], i[2], i[3]], w))
+        };
+        let numbers: Vec<i64> = if indexed {
+            let ib = self.st.indices.as_ref()?;
+            let bytes = held(self.st.bound.indices, ib)?;
+            let size = if ib.index32 { 4 } else { 2 };
+            let mut seen = std::collections::BTreeSet::new();
+            for i in start..start + count {
+                let at = i as usize * size;
+                let s = bytes.get(at..at + size)?;
+                let n = if size == 4 {
+                    u32::from_le_bytes([s[0], s[1], s[2], s[3]])
+                } else {
+                    u32::from(u16::from_le_bytes([s[0], s[1]]))
+                };
+                seen.insert(i64::from(base_vertex) + i64::from(n));
+            }
+            seen.into_iter().collect()
+        } else {
+            (i64::from(start)..i64::from(start) + i64::from(count)).collect()
+        };
+        let vertices: Option<Vec<_>> = numbers.into_iter().map(vertex).collect();
+        sun_shadow::skin_spheres(vertices?.into_iter())
     }
 
     /// A caster's depth-only pipeline: the draw's own converted vertex shader (its module as the
@@ -6946,12 +7133,23 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let far_step = far_here.step;
         let mut added = 0usize;
         let mut on_scene = 0u64;
+        sun.skinned.clear();
         for c in std::mem::take(&mut sun.lists.casters) {
             if c.depth != scene {
                 continue;
             }
             on_scene += 1;
             let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
+            // A character, as posed in that frame: cast this frame, never kept (its next pose comes
+            // with its next draw), never in the far map.
+            if c.skinned {
+                if sun_shadow::casts(&world, c.bounds, position) {
+                    let centre = sun_shadow::place_point(&world, c.bounds.0);
+                    let r = c.bounds.1 * sun_shadow::stretch(&world);
+                    sun.skinned.push((c.draw, world, centre, r));
+                }
+                continue;
+            }
             let rewritten = sun.rewritten.contains(&c.key.geometry());
             // The land and the large objects also cast into the far map (not one the game keeps
             // writing: the far map is drawn again only now and then): those that reach across its
@@ -7143,11 +7341,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.end_pass();
         // The casters' buffers are this batch's from here: an upload into one later in the batch
         // is copied in among its commands.
-        for i in sun.cache.iter().chain(sun.far.iter()) {
-            for (b, _, _) in i.payload.streams.iter().flatten() {
+        for d in sun
+            .cache
+            .iter()
+            .chain(sun.far.iter())
+            .map(|i| &i.payload)
+            .chain(sun.skinned.iter().map(|s| &s.0))
+        {
+            for (b, _, _) in d.streams.iter().flatten() {
                 b.batch.store(self.batch, Ordering::Relaxed);
             }
-            if let Some((b, _)) = &i.payload.index {
+            if let Some((b, _)) = &d.index {
                 b.batch.store(self.batch, Ordering::Relaxed);
             }
         }
@@ -7162,12 +7366,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &cascades,
             redraw,
             (&sun.far, far_redraw.then_some(&far_map)),
+            &sun.skinned,
         );
         for (buffer, bytes) in writes {
             self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
         }
         sun.frames += 1;
         sun.casters += on_scene;
+        sun.skinned_seen += sun.skinned.len() as u64;
         sun.kept += sun.cache.len() as u64;
         sun.cables += sun
             .cache
@@ -7180,7 +7386,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if self.presents >= sun.said + 300 || sun.said == 0 {
             let n = sun.frames.max(1) as f64;
             eprintln!(
-                "NV_D3D9 wgpu: sun shadows at present {}: {:.0} casters on the scene, {:.0} kept ({} moving), {:.2} still maps drawn a frame ({:.0} caster draws), {:.3} ms a frame on this thread; a frame {:.1} added, let go {:.1} written or released, {:.1} far, {:.1} moved or not drawn in view; still maps drawn for moving {:?}, for a changed caster {:?} times (of them for a settled place {:?}); {:.0} cables kept; draws a frame (not opaque, cut-outs kept, no pipeline, no bounds, no ModelViewProj or skinned, UP) {:?}; sun toward ({:.2}, {:.2}, {:.2}), cascades to {:?} units (texels {:?}); lookups (given, ended by another target's clear, no maps yet) {:?}; lit variants waiting, failed {:?}; casters forgotten for a new world {} times; far map: {} casters kept, drawn {:.3} times a frame",
+                "NV_D3D9 wgpu: sun shadows at present {}: {:.0} casters on the scene, {:.0} kept ({} moving), {:.2} still maps drawn a frame ({:.0} caster draws), {:.3} ms a frame on this thread; a frame {:.1} added, let go {:.1} written or released, {:.1} far, {:.1} moved or not drawn in view; still maps drawn for moving {:?}, for a changed caster {:?} times (of them for a settled place {:?}); {:.0} cables kept; draws a frame (not opaque, cut-outs kept, no pipeline, no bounds, no ModelViewProj or skinned, UP) {:?}; sun toward ({:.2}, {:.2}, {:.2}), cascades to {:?} units (texels {:?}); lookups (given, ended by another target's clear, no maps yet) {:?}; lit variants waiting, failed {:?}; casters forgotten for a new world {} times; far map: {} casters kept, drawn {:.3} times a frame; characters (skinned draws) cast {:.1} a frame (on: {})",
                 self.presents,
                 sun.casters as f64 / n,
                 sun.kept as f64 / n,
@@ -7207,6 +7413,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 sun.forgotten,
                 sun.far.len(),
                 sun.far_maps as f64 / n,
+                sun.skinned_seen as f64 / n,
+                sun.characters,
             );
             sun.said = self.presents;
             sun.frames = 0;
@@ -7224,6 +7432,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.rejected = [0; 6];
             sun.lookups = [0; 3];
             sun.far_maps = 0;
+            sun.skinned_seen = 0;
         }
     }
 
@@ -7256,6 +7465,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
+        }
+    }
+
+    /// Tests: whether characters cast ([`sun_shadow::enable_characters`] for this device alone, so
+    /// tests running side by side do not change each other's), before its first draw.
+    #[doc(hidden)]
+    pub fn set_sun_characters(&mut self, on: bool) {
+        if let Some(s) = &mut self.sun {
+            s.characters = on;
         }
     }
 
@@ -7337,6 +7555,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // One stage only: a pair whose shaders both read a sun register is shadowed in its pixel
         // shader (shadowing both would take the sun away twice).
         let (vs_sun, ps_sun) = sun_stages(vs.sun.is_some(), ps.sun.is_some());
+        // With the characters cast, the game's own actor shadows read as lit (one shadow each).
+        let characters = self.sun.as_ref().is_some_and(|s| s.characters);
         let vs_source = vs_sun.then(|| {
             wgsl::convert_with_sun(
                 &vs.program,
@@ -7348,6 +7568,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     count: false,
                     fixed: vkey.4,
                 },
+                characters,
             )
         });
         let ps_source = ps_sun.then(|| {
@@ -7361,6 +7582,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     count: key.count,
                     fixed: ps.fixed,
                 },
+                characters,
             )
         });
         let device = self.device.clone();

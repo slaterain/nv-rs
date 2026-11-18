@@ -1114,6 +1114,26 @@ impl std::fmt::Debug for List {
 }
 
 impl Body {
+    /// A body of bounds alone (a skinned caster: its sphere is worked out each frame from its
+    /// bones, [`skin_bounds`]; no pieces, no cables).
+    pub fn bare(bounds: ([f64; 3], f64)) -> Body {
+        Body {
+            bounds,
+            thin: None,
+            solid: None,
+            solid_list: None,
+            ribbon_tris: None,
+            ribbon_list: None,
+            rounds: None,
+            strips: None,
+            strips_list: None,
+            pieces: 0,
+            look: Vec::new(),
+            kinds: [(0, 0.0); 3],
+            triangles: None,
+        }
+    }
+
     /// A geometry's body from its triangles (object-space corners); none without any. Not split
     /// into pieces unless `split` (a geometry the game keeps writing is drawn whole: its pieces
     /// would be worked out again every frame).
@@ -1522,6 +1542,8 @@ impl Draw {
 /// An opaque world draw of this frame on the scene, for the sun's maps.
 pub(crate) struct Caster {
     pub key: GeoKey,
+    /// A character's skinned draw ([`Skin`]): cast this frame as posed, never kept.
+    pub skinned: bool,
     /// Its object-space bounding sphere.
     pub bounds: ([f64; 3], f64),
     /// Its pieces ([`Body`]; shared with the device's cache of bodies, not copied a draw).
@@ -1795,6 +1817,10 @@ impl<K: std::hash::Hash + Eq + Clone, T> Cache<K, T> {
             .flat_map(|(k, places)| places.iter().map(move |i| (k, i)))
     }
 }
+
+/// A character of this frame, posed (a skinned caster): its draw, the place of the space its bones
+/// put it in, and its world sphere.
+pub(crate) type Skinned = (Draw, World, [f64; 3], f64);
 
 /// The light list of a frame.
 #[derive(Default)]
@@ -2934,6 +2960,7 @@ impl Gpu {
         cascades: &[Cascade; CASCADES],
         redraw: [bool; CASCADES],
         far: (&Cache<GeoKey, Draw>, Option<&Cascade>),
+        skinned: &[Skinned],
     ) -> (Vec<(wgpu::Buffer, Vec<u8>)>, u32) {
         // Each cascade's still and moving casters touching it, and its ribbon cables.
         let mut lists: Vec<[MapList<'_>; 3]> = (0..CASCADES)
@@ -2988,6 +3015,19 @@ impl Gpu {
                     continue;
                 }
                 lists[k][m].push((d, i.world, [0, 0]));
+            }
+        }
+        // The characters (skinned casters, this frame's poses): drawn each frame with the moving
+        // casters, into the near maps only ([`CUTOUT_CASCADES`]), where they are larger than a
+        // blot ([`SKIN_MIN_TEXELS`]).
+        for (k, c) in cascades.iter().enumerate().take(CUTOUT_CASCADES) {
+            for (d, world, centre, radius) in skinned {
+                if *radius >= SKIN_MIN_TEXELS * c.texel
+                    && c.touches(*centre, *radius)
+                    && self.pipelines[d.pipe as usize].is_some()
+                {
+                    lists[k][1].push((d, *world, [0, 0]));
+                }
             }
         }
         let live: [bool; CASCADES] = std::array::from_fn(|k| {
@@ -3583,6 +3623,142 @@ pub fn model_view_proj(p: &crate::sm::Program) -> Option<u32> {
         .iter()
         .find(|c| c.name == "ModelViewProj" && c.set == 2 && c.count == 4)
         .map(|c| u32::from(c.index))
+}
+
+/// A skinned vertex shader's registers (the game's SKIN and skinned SLS families: their constant
+/// tables name `SkinModelViewProj`, 4 registers, and `Bones`): the clip matrix's first register,
+/// and the bone palette's first register and length. Its position is, read from the game's own
+/// shaders (SKIN2001, SLS2003, SKIN2009, SLS2088 of package 010): `p = sum_k w_k (Bones[3 i_k]
+/// rows . v)` over four influences, `i = BLENDINDICES.zyxw x 765.01` (a byte times 3: a bone's
+/// three rows), `w = (BLENDWEIGHT.x, .y, .z, 1 - their sum)`, then `SkinModelViewProj . p`. The
+/// shadow pass runs that very shader with the bones as the draw set them and the sun's matrix at
+/// `SkinModelViewProj`, so the skinning is the game's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Skin {
+    pub mvp: u32,
+    pub bones: u32,
+    pub count: u32,
+}
+
+/// The skinned registers of a vertex shader ([`Skin`]); none for a rigid one.
+pub fn skin_model_view_proj(p: &crate::sm::Program) -> Option<Skin> {
+    let find = |name: &str| {
+        p.constants
+            .iter()
+            .find(|c| c.name == name && c.set == 2)
+            .map(|c| (u32::from(c.index), u32::from(c.count)))
+    };
+    let (mvp, n) = find("SkinModelViewProj")?;
+    let (bones, count) = find("Bones")?;
+    (n == 4 && count >= 3).then_some(Skin { mvp, bones, count })
+}
+
+/// Characters (skinned casters, [`skin_model_view_proj`]) cast into the maps and the game's own
+/// projected actor shadows are left out of the lit variants ([`enable_characters`]); on by
+/// default with the sun shadows.
+static CHARACTERS: AtomicU8 = AtomicU8::new(1);
+
+/// Turns the characters' shadows on or off for devices made from now on (the host, from
+/// `bSunShadowsCharacters`).
+pub fn enable_characters(on: bool) {
+    CHARACTERS.store(u8::from(on), Ordering::Relaxed);
+}
+
+/// Whether devices made now cast characters ([`enable_characters`]).
+pub fn characters() -> bool {
+    CHARACTERS.load(Ordering::Relaxed) != 0
+}
+
+/// A skinned caster this small in a map (radius in texels) is left out of it: its shadow is a
+/// blot of a texel or two.
+pub const SKIN_MIN_TEXELS: f64 = 2.0;
+
+/// One bone's share of a skinned geometry: the bone's register offset from `Bones` (a byte of
+/// `BLENDINDICES` times 3) and the bind-pose sphere of the vertices it moves.
+pub type BoneSphere = (u32, [f64; 3], f64);
+
+/// The bind-pose spheres of a skinned geometry's bones ([`BoneSphere`]) from its vertices: each
+/// one's position, its four bone bytes and their weights in the same order (a vertex counts for
+/// a bone only where its weight is above 0: a palette entry the geometry never uses holds what
+/// another draw left there). None without a vertex.
+pub fn skin_spheres(
+    vertices: impl Iterator<Item = ([f32; 3], [u8; 4], [f32; 4])>,
+) -> Option<Vec<BoneSphere>> {
+    let mut by: std::collections::BTreeMap<u8, Vec<[f32; 3]>> = Default::default();
+    let mut any = false;
+    for (p, idx, w) in vertices {
+        any = true;
+        for k in 0..4 {
+            if w[k] > 0.0 || !w[k].is_finite() {
+                by.entry(idx[k]).or_default().push(p);
+            }
+        }
+    }
+    if !any {
+        return None;
+    }
+    Some(
+        by.into_iter()
+            .filter_map(|(b, ps)| bounds(ps.into_iter()).map(|(c, r)| (3 * u32::from(b), c, r)))
+            .collect(),
+    )
+}
+
+/// The sphere (in the space the bones put the vertices in, which `SkinModelViewProj` takes to
+/// clip space) of a skinned geometry posed by the bone rows in `consts` (the draw's float
+/// registers) from register `bones` on, `count` of them: each bone's sphere moved by its rows and
+/// grown by its largest scale, and one sphere round them all (a vertex is a weighted mean of its
+/// bones' places, so it lies within). None when a bone is outside the palette or not finite.
+pub fn skin_bounds(
+    spheres: &[BoneSphere],
+    consts: &[u8],
+    bones: u32,
+    count: u32,
+) -> Option<([f64; 3], f64)> {
+    let reg = |r: u32, j: usize| -> Option<f64> {
+        let o = 16 * r as usize + 4 * j;
+        let b = consts.get(o..o + 4)?;
+        Some(f64::from(f32::from_le_bytes([b[0], b[1], b[2], b[3]])))
+    };
+    let mut placed = Vec::with_capacity(spheres.len());
+    for &(offset, c, r) in spheres {
+        if offset + 3 > count {
+            return None;
+        }
+        let mut m = [[0.0f64; 4]; 3];
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                *v = reg(bones + offset + i as u32, j)?;
+            }
+        }
+        let w: World = m;
+        let centre = place_point(&w, c);
+        let radius = r * stretch(&w);
+        if !(centre.iter().all(|v| v.is_finite()) && radius.is_finite()) {
+            return None;
+        }
+        placed.push((centre, radius));
+    }
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for &(c, r) in &placed {
+        for k in 0..3 {
+            lo[k] = lo[k].min(c[k] - r);
+            hi[k] = hi[k].max(c[k] + r);
+        }
+    }
+    if placed.is_empty() {
+        return None;
+    }
+    let mid: [f64; 3] = std::array::from_fn(|k| (lo[k] + hi[k]) / 2.0);
+    let radius = placed
+        .iter()
+        .map(|&(c, r)| {
+            let d = [c[0] - mid[0], c[1] - mid[1], c[2] - mid[2]];
+            dot3(d, d).sqrt() + r
+        })
+        .fold(0.0, f64::max);
+    Some((mid, radius))
 }
 
 #[cfg(test)]
@@ -4790,7 +4966,12 @@ mod tests {
         let mut text = Vec::new();
         for &(name, index, count) in names {
             b.extend_from_slice(&((strings + text.len()) as u32).to_le_bytes());
-            for v in [2u16, index, count, 0] {
+            for v in [
+                if name.ends_with("Map") { 3u16 } else { 2 },
+                index,
+                count,
+                0,
+            ] {
                 b.extend_from_slice(&v.to_le_bytes());
             }
             b.extend_from_slice(&[0; 8]);
@@ -4847,7 +5028,7 @@ mod tests {
             fixed: true,
         };
         let plain = wgsl::convert(&lit, &link).unwrap();
-        let src = wgsl::convert_with_sun(&lit, &link).unwrap();
+        let src = wgsl::convert_with_sun(&lit, &link, true).unwrap();
         assert!(!plain.contains("sun_lit"));
         assert!(
             src.contains("(C.c[3] * vec4<f32>(vec3<f32>(sun_lit), 1.0))"),
@@ -4871,7 +5052,111 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(wgsl::sun_register(&point), None);
-        assert!(wgsl::convert_with_sun(&point, &link).is_err());
+        assert!(wgsl::convert_with_sun(&point, &link, true).is_err());
+    }
+
+    /// One shadow a character: with the characters cast, a lit pixel shader's variant reads the
+    /// game's own projected actor shadows (`ShadowMap`) as lit; with them off it samples them as
+    /// the game does. Valid WGSL both ways.
+    #[test]
+    fn with_the_characters_cast_the_games_actor_shadow_reads_as_lit() {
+        use crate::sm::{self, wgsl};
+        // dcl_2d s6; texld r1, c0, s6; mul r0, c3, r1; add r0, r0, c1; mov oC0, r0.
+        let body = [
+            31 | (2 << 24),
+            0x9000_0000,
+            0xA00F_0806,
+            66 | (3 << 24),
+            0x800F_0001,
+            0xA0E4_0000,
+            0xA0E4_0806,
+            5 | (3 << 24),
+            0x800F_0000,
+            0xA0E4_0003,
+            0x80E4_0001,
+            2 | (3 << 24),
+            0x800F_0000,
+            0x80E4_0000,
+            0xA0E4_0001,
+            1 | (2 << 24),
+            0x800F_0800,
+            0x80E4_0000,
+        ];
+        let lit = sm::parse(&pixel_shader(
+            &[
+                ("AmbientColor", 1, 1),
+                ("PSLightColor", 3, 1),
+                ("ShadowMap", 6, 1),
+            ],
+            &body,
+        ))
+        .unwrap();
+        assert_eq!(wgsl::game_shadow_sampler(&lit), Some(6));
+        let link = wgsl::Link {
+            inputs: Vec::new(),
+            varyings: Vec::new(),
+            centroid: Vec::new(),
+            clip: wgsl::Clip::Off,
+            count: false,
+            fixed: true,
+        };
+        let one = wgsl::convert_with_sun(&lit, &link, true).unwrap();
+        let both = wgsl::convert_with_sun(&lit, &link, false).unwrap();
+        assert!(!one.contains("(t6, s6"), "{one}");
+        assert!(one.contains("vec4<f32>(1.0)"), "{one}");
+        assert!(both.contains("(t6, s6"), "{both}");
+        for src in [&one, &both] {
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        }
+    }
+
+    /// A skinned geometry's bones' spheres: a vertex counts for a bone only where its weight is
+    /// above 0; posed, each sphere moves with its bone's rows and one sphere holds them all; a
+    /// bone past the palette, none.
+    #[test]
+    fn a_skinned_geometrys_sphere_follows_its_bones() {
+        let v = |p: [f32; 3], idx: [u8; 4], w: [f32; 4]| (p, idx, w);
+        let spheres = skin_spheres(
+            [
+                v([0.0, 0.0, 0.0], [0, 1, 7, 7], [1.0, 0.0, 0.0, 0.0]),
+                v([0.0, 0.0, 10.0], [0, 1, 7, 7], [1.0, 0.0, 0.0, 0.0]),
+                v([0.0, 0.0, 20.0], [0, 1, 7, 7], [0.0, 1.0, 0.0, 0.0]),
+                v([0.0, 0.0, 30.0], [0, 1, 7, 7], [0.0, 1.0, 0.0, 0.0]),
+            ]
+            .into_iter(),
+        )
+        .unwrap();
+        // Byte 7 (weight 0 everywhere) is no bone of it.
+        assert_eq!(spheres.len(), 2);
+        assert_eq!(spheres[0], (0, [0.0, 0.0, 5.0], 5.0));
+        assert_eq!(spheres[1], (3, [0.0, 0.0, 25.0], 5.0));
+        let rows = |t: [f32; 3]| {
+            [
+                1.0, 0.0, 0.0, t[0], 0.0, 1.0, 0.0, t[1], 0.0, 0.0, 1.0, t[2],
+            ]
+        };
+        let mut regs = vec![0.0f32; 4 * 4];
+        regs.extend(rows([0.0, 0.0, 0.0]));
+        regs.extend(rows([0.0, 100.0, 0.0]));
+        let bytes: Vec<u8> = regs.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let (c, r) = skin_bounds(&spheres, &bytes, 4, 6).unwrap();
+        // The lower bone's sphere at (0, 0, 5), the upper one's moved to (0, 100, 25): both inside.
+        for (p, pr) in [([0.0, 0.0, 5.0], 5.0), ([0.0, 100.0, 25.0], 5.0)] {
+            let d: f64 = (0..3)
+                .map(|k| (p[k] - c[k]) * (p[k] - c[k]))
+                .sum::<f64>()
+                .sqrt();
+            assert!(d + pr <= r + 1e-9, "{p:?} in {c:?} {r}");
+        }
+        assert!(r < 60.0, "{r}");
+        assert_eq!(skin_bounds(&spheres, &bytes, 4, 3), None);
     }
 
     /// A vertex-lit shader's variant (grass): its vertex shader's `DiffuseColor` times the visibility at
@@ -4905,7 +5190,7 @@ mod tests {
             count: false,
             fixed: true,
         };
-        let src = wgsl::convert_with_sun(&grass, &link).unwrap();
+        let src = wgsl::convert_with_sun(&grass, &link, true).unwrap();
         assert!(
             src.contains("(C.c[1] * vec4<f32>(vec3<f32>(sun_lit), 1.0))"),
             "{src}"
