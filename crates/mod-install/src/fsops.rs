@@ -32,7 +32,8 @@ pub enum Op<'a> {
     /// Make one folder (its parent must exist).
     MakeDir(&'a Path),
     /// Make a folder and the folders missing on its way, outside every forbidden folder (a
-    /// forbidden folder itself may be made when missing: it is then empty).
+    /// forbidden folder itself may be made when missing, as it is then empty, unless it lies
+    /// inside another forbidden folder).
     MakeDirAll(&'a Path),
     /// A hard link `to` naming the file `from`.
     HardLink { from: &'a Path, to: &'a Path },
@@ -269,6 +270,16 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
         }
         Op::MakeDirAll(path) => {
             let place = real_or(path).map_err(refused)?;
+            // A forbidden folder itself (a layer not there yet) may be made, but never one inside
+            // another forbidden folder (a layer inside the game's folder).
+            for no in &guard.forbidden {
+                if place.starts_with(no) && place != *no {
+                    return Err(refused(format!(
+                        "{} is inside the game's or a mod's own folder",
+                        place.display()
+                    )));
+                }
+            }
             if !guard.forbidden.contains(&place) {
                 guard.outside_forbidden(&place).map_err(refused)?;
             }
