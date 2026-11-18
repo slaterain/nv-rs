@@ -1,8 +1,8 @@
 //! "Play with mods": the game reads a whole game folder made in `userdata\modgame`, never the
 //! player's own folder: the game's files linked there, the installed mods
 //! (`userdata\mod installs\<NN Name>`, in their order) and then the package's loose `mods` folder
-//! copied over them. The work is `crates/mod-install` (`overlay::build`), which play.sh's
-//! `--mods` uses on Linux and macOS too; this only names Play.exe's folders.
+//! linked over them, only what changed since the last start redone. The work is
+//! `crates/mod-install` (`overlay::build`); this only names Play.exe's folders.
 use std::path::Path;
 
 pub use mod_install::overlay::{Built, ModError};

@@ -105,7 +105,7 @@ fn the_game_folder_is_never_written() {
     let built = build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap();
     assert_eq!(
         (built.linked, built.mod_files, built.extender_plugins),
-        (3, 2, false)
+        (2, 2, false)
     );
     assert_eq!(
         std::fs::read(target.join("Data").join("Textures").join("a.dds")).unwrap(),
@@ -172,7 +172,8 @@ fn layers_go_over_the_game_in_order() {
     let target = dir.0.join("modgame");
     let plugins = dir.0.join("plugins.txt");
     let built = build(&game, &layers, &target, &plugins).unwrap();
-    assert_eq!(built.mod_files, 6);
+    // In the folder: Base.esm, Patch.esp, b.dds (the patch's) and c.dds (the loose one).
+    assert_eq!(built.mod_files, 4);
     let data = target.join("Data");
     // The game's folder is "Textures": every layer's files went there.
     let tex = data.join("Textures");
@@ -244,6 +245,8 @@ fn a_locked_file_is_reported_as_locked() {
         .share_mode(0)
         .open(target.join("FalloutNV.exe"))
         .unwrap();
+    // Without its record the folder is made again from nothing: removing it meets the held file.
+    std::fs::remove_file(state_path(&target)).unwrap();
     let error = build(&game, &[mods], &target, &plugins).unwrap_err();
     drop(held);
     assert_eq!(error.kind, Failure::Locked, "{}", error.step);
@@ -414,4 +417,297 @@ fn installed_mods_are_capped() {
     }
     let error = installed(&installs).unwrap_err();
     assert!(error.to_string().contains("more than"), "{error}");
+}
+
+// ------------------------------------------------------------------------------------------------
+// Review of #725
+
+/// A folder link to `to` at `link`: a symbolic link on Linux and macOS, a junction on Windows
+/// (made without rights a player lacks).
+fn folder_link(to: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(to, link).unwrap();
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(to)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+    }
+}
+
+/// A second build with nothing changed makes and removes nothing; a changed file is redone
+/// alone; a mod's file gone brings the game's back. Mods' files are hard links, not copies.
+#[test]
+fn only_what_changed_is_redone() {
+    let dir = Scratch::new("incremental");
+    let game = game(&dir.0);
+    let installs = dir.0.join("mod installs");
+    let loose = dir.0.join("mods");
+    let one = installs.join("01 One");
+    write(&one.join("Textures").join("a.dds"), b"one's");
+    write(&one.join("Textures").join("b.dds"), b"one's b");
+    write(&loose.join("Meshes").join("m.nif"), b"loose");
+    let layers = layers(&installs, &loose).unwrap();
+    let target = dir.0.join("modgame");
+    let plugins = dir.0.join("plugins.txt");
+    let first = build(&game, &layers, &target, &plugins).unwrap();
+    assert_eq!(first.made, 5, "{first:?}");
+    assert_eq!(first.copied, 0);
+    let again = build(&game, &layers, &target, &plugins).unwrap();
+    assert_eq!(
+        (again.made, again.removed, again.linked),
+        (0, 0, 0),
+        "{again:?}"
+    );
+    // A hard link: a change made in place to the installed file is the folder's too.
+    {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(one.join("Textures").join("b.dds"))
+            .unwrap();
+        f.write_all(b"+").unwrap();
+    }
+    assert_eq!(
+        std::fs::read(target.join("Data").join("Textures").join("b.dds")).unwrap(),
+        b"one's b+"
+    );
+    // b.dds's size changed: only it is redone.
+    let changed = build(&game, &layers, &target, &plugins).unwrap();
+    assert_eq!((changed.made, changed.removed), (1, 1), "{changed:?}");
+    // The installed a.dds gone: the game's a.dds is back, alone.
+    std::fs::remove_file(one.join("Textures").join("a.dds")).unwrap();
+    let gone = build(&game, &layers, &target, &plugins).unwrap();
+    assert_eq!((gone.made, gone.removed), (1, 1), "{gone:?}");
+    assert_eq!(
+        std::fs::read(target.join("Data").join("Textures").join("a.dds")).unwrap(),
+        b"game's"
+    );
+    assert_eq!(
+        std::fs::read(game.join("Data").join("Textures").join("a.dds")).unwrap(),
+        b"game's"
+    );
+}
+
+/// A folder link in the game's Data: left out on Windows (as before, so a junction to another
+/// drive never stops a build); followed once on Linux and macOS.
+#[test]
+fn a_folder_link_in_the_games_data() {
+    let dir = Scratch::new("data-link");
+    let game = game(&dir.0);
+    let elsewhere = dir.0.join("elsewhere");
+    write(&elsewhere.join("far.dds"), b"far");
+    folder_link(&elsewhere, &game.join("Data").join("Linked"));
+    let target = dir.0.join("modgame");
+    let built = build(&game, &[dir.0.join("mods")], &target, &dir.0.join("p.txt")).unwrap();
+    let far = target.join("Data").join("Linked").join("far.dds");
+    if cfg!(windows) {
+        assert!(!far.exists(), "{built:?}");
+    } else {
+        assert_eq!(std::fs::read(&far).unwrap(), b"far");
+    }
+    assert_eq!(std::fs::read(elsewhere.join("far.dds")).unwrap(), b"far");
+    #[cfg(windows)]
+    std::fs::remove_dir(game.join("Data").join("Linked")).unwrap();
+}
+
+/// A link inside the folder pointing at the game: made again from nothing it is removed, not
+/// followed; with its record, a name is never made through it. Every game file stays as it was.
+#[test]
+fn a_link_in_the_old_folder_never_reaches_the_game() {
+    let dir = Scratch::new("old-link");
+    let game = game(&dir.0);
+    let mods = dir.0.join("mods");
+    write(&mods.join("Textures").join("a.dds"), b"mod's");
+    let target = dir.0.join("modgame");
+    let plugins = dir.0.join("p.txt");
+    build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap();
+    // The folder's Textures made a link to the game's own Textures; then the mod's file changes.
+    let textures = target.join("Data").join("Textures");
+    std::fs::remove_dir_all(&textures).unwrap();
+    folder_link(&game.join("Data").join("Textures"), &textures);
+    write(&mods.join("Textures").join("a.dds"), b"mod's, changed");
+    let error = build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap_err();
+    assert!(error.step.contains("not a plain folder"), "{}", error.step);
+    assert_eq!(
+        std::fs::read(game.join("Data").join("Textures").join("a.dds")).unwrap(),
+        b"game's"
+    );
+    // The stopped build left no record: made again from nothing, the link removed, not followed.
+    assert!(!state_path(&target).exists());
+    build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap();
+    assert_eq!(
+        std::fs::read(game.join("Data").join("Textures").join("a.dds")).unwrap(),
+        b"game's"
+    );
+    assert_eq!(
+        std::fs::read(game.join("Data").join("FalloutNV.esm")).unwrap(),
+        b"esm"
+    );
+    assert_eq!(
+        std::fs::read(textures.join("a.dds")).unwrap(),
+        b"mod's, changed"
+    );
+}
+
+/// The loose folder's own plugins.txt: the installed mods' plugins it does not name are added
+/// after it, masters first, and said.
+#[test]
+fn installed_plugins_follow_a_loose_plugin_list() {
+    let dir = Scratch::new("plugins-list");
+    let game = game(&dir.0);
+    let installs = dir.0.join("mod installs");
+    let loose = dir.0.join("mods");
+    write(
+        &installs.join("01 Mod").join("Mod.esp"),
+        &plugin(&["FalloutNV.esm", "DeadMoney.esm"]),
+    );
+    write(
+        &installs.join("01 Mod").join("Base.esm"),
+        &plugin(&["FalloutNV.esm"]),
+    );
+    write(&loose.join("plugins.txt"), b"Mine.esp\r\nBase.esm");
+    let layers = layers(&installs, &loose).unwrap();
+    let plugins = dir.0.join("plugins.txt");
+    let built = build(&game, &layers, &dir.0.join("modgame"), &plugins).unwrap();
+    assert_eq!(built.added_plugins, ["DeadMoney.esm", "Mod.esp"]);
+    assert_eq!(
+        std::fs::read_to_string(&plugins).unwrap(),
+        "Mine.esp\r\nBase.esm\r\nDeadMoney.esm\r\nMod.esp\r\n"
+    );
+}
+
+/// The caps, lowered: too many files and too deep stop the build in words; the plugin header is
+/// read only so far (a header cut before its masters names none).
+#[test]
+fn the_caps_hold() {
+    let dir = Scratch::new("caps");
+    let game = game(&dir.0);
+    let mods = dir.0.join("mods");
+    for i in 0..5 {
+        write(&mods.join(format!("f{i}.dds")), b"x");
+    }
+    write(&mods.join("a").join("b").join("c").join("d.dds"), b"x");
+    write(
+        &mods.join("Mine.esp"),
+        &plugin(&["FalloutNV.esm", "DeadMoney.esm"]),
+    );
+    let target = dir.0.join("modgame");
+    let plugins = dir.0.join("p.txt");
+    let caps = |depth, files, header_bytes| Caps {
+        depth,
+        files,
+        header_bytes,
+    };
+    let few = build_with(
+        &game,
+        std::slice::from_ref(&mods),
+        &target,
+        &plugins,
+        caps(64, 4, 1 << 20),
+        &System,
+    );
+    assert!(few.unwrap_err().step.contains("more than 4 files"));
+    let shallow = build_with(
+        &game,
+        std::slice::from_ref(&mods),
+        &target,
+        &plugins,
+        caps(2, 100, 1 << 20),
+        &System,
+    );
+    assert!(shallow.unwrap_err().step.contains("folders deep"));
+    build_with(
+        &game,
+        std::slice::from_ref(&mods),
+        &target,
+        &plugins,
+        caps(64, 100, 20),
+        &System,
+    )
+    .unwrap();
+    assert_eq!(std::fs::read_to_string(&plugins).unwrap(), "Mine.esp\r\n");
+    build_with(
+        &game,
+        std::slice::from_ref(&mods),
+        &target,
+        &plugins,
+        caps(64, 100, 1 << 20),
+        &System,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&plugins).unwrap(),
+        "DeadMoney.esm\r\nMine.esp\r\n"
+    );
+}
+
+/// Linux and macOS: hard links refused as a drive without them refuses them: the game's files are
+/// symbolic links instead, a mod's file a copy, and the game's file is never written.
+#[cfg(unix)]
+#[test]
+fn without_hard_links_symbolic_links_and_copies() {
+    struct NoHardLinks(i32);
+    impl Linker for NoHardLinks {
+        fn hard_link(&self, _: &Path, _: &Path) -> std::io::Result<()> {
+            Err(std::io::Error::from_raw_os_error(self.0))
+        }
+    }
+    for code in [18, 1, 95, 31] {
+        let dir = Scratch::new(&format!("nolinks-{code}"));
+        let game = game(&dir.0);
+        let mods = dir.0.join("mods");
+        write(&mods.join("Textures").join("a.dds"), b"mod's");
+        let target = dir.0.join("modgame");
+        let built = build_with(
+            &game,
+            std::slice::from_ref(&mods),
+            &target,
+            &dir.0.join("p.txt"),
+            Caps::default(),
+            &NoHardLinks(code),
+        )
+        .unwrap();
+        assert_eq!(built.copied, 1, "{code}");
+        let esm = target.join("Data").join("FalloutNV.esm");
+        assert!(std::fs::symlink_metadata(&esm)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(
+            std::fs::read(game.join("Data").join("Textures").join("a.dds")).unwrap(),
+            b"game's"
+        );
+    }
+    assert_eq!(classify(Some(95), true), Failure::NoLinks);
+}
+
+/// Linux: of `Data` and `data`, the one holding FalloutNV.esm; `Data` exactly first; a relative
+/// file link in the game's Data is linked as the file it leads to; two links back to the same
+/// folder are walked once.
+#[cfg(unix)]
+#[test]
+fn the_games_data_folder_and_links_on_unix() {
+    let dir = Scratch::new("unix-data");
+    let game = dir.0.join("game");
+    write(&game.join("FalloutNV.exe"), b"exe");
+    write(&game.join("data").join("stray.txt"), b"stray");
+    write(&game.join("DATA").join("FalloutNV.esm"), b"esm");
+    assert_eq!(game_data(&game).unwrap(), game.join("DATA"));
+    write(&game.join("Data").join("FalloutNV.esm"), b"exact");
+    assert_eq!(game_data(&game).unwrap(), game.join("Data"));
+    std::os::unix::fs::symlink("FalloutNV.esm", game.join("Data").join("Alias.esm")).unwrap();
+    std::fs::create_dir_all(game.join("Data").join("Loop")).unwrap();
+    std::os::unix::fs::symlink("..", game.join("Data").join("Loop").join("up1")).unwrap();
+    std::os::unix::fs::symlink("..", game.join("Data").join("Loop").join("up2")).unwrap();
+    let target = dir.0.join("modgame");
+    build(&game, &[dir.0.join("mods")], &target, &dir.0.join("p.txt")).unwrap();
+    assert_eq!(
+        std::fs::read(target.join("Data").join("Alias.esm")).unwrap(),
+        b"exact"
+    );
 }
