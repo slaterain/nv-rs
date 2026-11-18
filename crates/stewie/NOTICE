@@ -1,0 +1,36 @@
+This crate builds lStewieAl's Tweaks (nvse_stewie_tweaks, "lStewieAl's Tweaks and Engine Fixes"),
+the NVSE plugin by lStewieAl, into nv-rs, with its author's permission (the maintainer, 2026-11-03:
+every mod author gave it). Source read: Tweaks 10.05 (the archive "Stewie Tweaks Source 10.1",
+Internal/Version.h 10.05). Its fixes are rebuilt from that source and the game's own code; no C++ is
+included.
+
+Credits: lStewieAl's Tweaks is written by lStewieAl.
+
+Its INI is read by the rules of SimpleIni (Brodie Thiesfield, MIT licence), which Tweaks uses; the
+rules are written here anew from that library's source, none of its code is included.
+
+data/settings.tsv holds the values of Viva New Vegas' "VNV INI" for Tweaks
+(ModdingLinked, https://github.com/ModdingLinked/Stewie-Tweaks-INIs), under the MIT License, whose
+text follows:
+
+MIT License
+
+Copyright (c) 2025 ModdingLinked
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
