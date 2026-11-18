@@ -723,42 +723,87 @@ fn console_line(e: &mut Engine, w: &[u32]) -> Ret {
 /// `GetFilesInFolder`'s and `GetFoldersInFolder`'s filter buffer (`char filter[0x40]`).
 const FILTER_ARG: usize = 0x40;
 
-/// Whether `name` matches `pattern` as `FindFirstFileA` matches a long name: `*` any run of
-/// characters, `?` any one, everything else itself without ASCII case; `*.*` (and so `*.*.*`...)
-/// matches every name, with or without a dot. Windows also matches a name's short 8.3 form and
-/// lets a `?` before the end or a dot stand for nothing; neither is taken here (a mod lists its
-/// own files by their real names).
+/// A file search pattern's parts after Windows' rewrite (kernel32 before `NtQueryDirectoryFile`):
+/// a unit of the name, `*`, and the DOS forms `DOS_STAR`, `DOS_QM` and `DOS_DOT`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wild {
+    Unit(u16),
+    Star,
+    DosStar,
+    DosQm,
+    DosDot,
+}
+
+const DOT: u16 = b'.' as u16;
+
+/// Windows' rewrite of a search pattern: `?` is `DOS_QM`; a `.` before `*`, `?` or the end is
+/// `DOS_DOT`; a `*` before a `.` is `DOS_STAR`; the rest as it is.
+fn dos_pattern(pattern: &[u16]) -> Vec<Wild> {
+    let q = u16::from(b'?');
+    let star = u16::from(b'*');
+    (0..pattern.len())
+        .map(|i| {
+            let next = pattern.get(i + 1).copied();
+            match pattern[i] {
+                c if c == q => Wild::DosQm,
+                DOT if next.is_none() || next == Some(star) || next == Some(q) => Wild::DosDot,
+                c if c == star && next == Some(DOT) => Wild::DosStar,
+                c if c == star => Wild::Star,
+                c => Wild::Unit(c),
+            }
+        })
+        .collect()
+}
+
+// `FsRtlIsNameInExpression`'s rules for the DOS forms (ntifs.h): `DOS_STAR` matches any run
+// that does not take the name's last `.`; X// the end (and so do the `DOS_QM`s right after it); `DOS_DOT` matches a `.`, or nothing at the end.
+fn dos_match(p: &[Wild], n: &[u16]) -> bool {
+    let Some(&first) = p.first() else {
+        return n.is_empty();
+    };
+    match first {
+        Wild::Unit(c) => n.first() == Some(&c) && dos_match(&p[1..], &n[1..]),
+        Wild::Star => (0..=n.len()).any(|k| dos_match(&p[1..], &n[k..])),
+        Wild::DosStar => {
+            let most = n.iter().rposition(|&u| u == DOT).unwrap_or(n.len());
+            (0..=most).any(|k| dos_match(&p[1..], &n[k..]))
+        }
+        Wild::DosQm => {
+            if n.is_empty() || n[0] == DOT {
+                dos_match(&p[1..], n)
+            } else {
+                dos_match(&p[1..], &n[1..])
+            }
+        }
+        Wild::DosDot => match n.first() {
+            None => dos_match(&p[1..], n),
+            Some(&DOT) => dos_match(&p[1..], &n[1..]),
+            Some(_) => false,
+        },
+    }
+}
+
+/// Whether `name` matches the search pattern `pattern` as a Windows file search matches a long
+/// name, on every system: `*` and `*.*` match every name; any other pattern is rewritten
+/// ([`dos_pattern`]) and matched by [`dos_match`]'s rules, both without case as Windows compares
+/// file names (the seam's [`engine_core::mod_files::name_key`]: the code page's UTF-16 in NTFS's
+/// upper case). A name's short 8.3 form, which Windows also matches, is not: a mod lists its own
+/// files by their real names.
 fn wildcard_match(pattern: &[u8], name: &[u8]) -> bool {
-    if pattern.iter().all(|&b| b == b'*' || b == b'.') && pattern.contains(&b'*') {
+    if pattern == b"*" || pattern == b"*.*" {
         return true;
     }
-    let (mut p, mut n) = (0, 0);
-    let (mut star, mut mark) = (None, 0);
-    while n < name.len() {
-        if p < pattern.len() && (pattern[p] == b'?' || pattern[p].eq_ignore_ascii_case(&name[n])) {
-            p += 1;
-            n += 1;
-        } else if p < pattern.len() && pattern[p] == b'*' {
-            star = Some(p);
-            mark = n;
-            p += 1;
-        } else if let Some(s) = star {
-            p = s + 1;
-            mark += 1;
-            n = mark;
-        } else {
-            return false;
-        }
-    }
-    pattern[p..].iter().all(|&b| b == b'*')
+    let p = dos_pattern(&engine_core::mod_files::name_key(pattern));
+    dos_match(&p, &engine_core::mod_files::name_key(name))
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h:
 // Cmd_GetFilesInFolder_Execute and Cmd_GetFoldersInFolder_Execute.
-/// `data\<path>` (`/` made `\`, a `\` added when it does not end in one) listed through the seam
-/// ([`engine_core::mod_files::list`]: the port's folder's files, then the game's, as a mod reads
-/// them) with `filter` (default `*`): an array of the names of the files (`folders` false) or of
-/// the folders, in the listing's order; empty when nothing matches or the folder is not there.
+/// `data\<path>` (`/` made `\`, ending in one `\`; a filter's folder part, up to its last
+/// separator, added to it) listed through the seam ([`engine_core::mod_files::list`]: the port's
+/// folder's files, then the game's, as a mod reads them) with the rest of `filter` (default `*`,
+/// [`wildcard_match`]): an array of the names of the files (`folders` false) or of the folders,
+/// in the listing's order; empty when nothing matches or the folder is not there or refused.
 fn folder_listing(e: &mut Engine, w: &[u32], folders: bool, command: &str) -> Ret {
     let a = CommandArgs::new(w);
     let read = Read::of(e, &a);
@@ -767,15 +812,26 @@ fn folder_listing(e: &mut Engine, w: &[u32], folders: bool, command: &str) -> Re
     }
     let mut folder = DATA_FOLDER.to_vec();
     folder.extend(super::buffer_arg(e, &read, 0, DATA_PATH_ARG, command));
-    backslashes(&mut folder);
-    if folder.last() != Some(&b'\\') {
-        folder.push(b'\\');
-    }
-    let filter = if read.args.len() > 1 {
+    let mut filter = if read.args.len() > 1 {
         super::buffer_arg(e, &read, 1, FILTER_ARG, command)
     } else {
         b"*".to_vec()
     };
+    // A filter with a folder part: that part goes to the folder (the seam refuses a folder
+    // outside the game's, as Windows' search does not find one), the rest is the pattern.
+    if let Some(at) = filter.iter().rposition(|&b| b == b'\\' || b == b'/') {
+        while folder.last().is_some_and(|&b| b == b'\\' || b == b'/') {
+            folder.pop();
+        }
+        folder.push(b'\\');
+        folder.extend_from_slice(&filter[..at]);
+        filter.drain(..=at);
+    }
+    backslashes(&mut folder);
+    while folder.last() == Some(&b'\\') {
+        folder.pop();
+    }
+    folder.push(b'\\');
     let names: Vec<Element> = engine_core::mod_files::list(e, &folder)
         .into_iter()
         .filter(|l| l.is_folder == folders && wildcard_match(&filter, &l.name))

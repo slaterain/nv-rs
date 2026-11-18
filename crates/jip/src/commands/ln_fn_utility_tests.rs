@@ -633,42 +633,79 @@ fn folder_scene() -> Engine {
     files::put(r"data\textures\B.txt", b"2");
     files::put(r"data\textures\c.dds", b"3");
     files::put(r"data\textures\sub\d.dds", b"4");
+    files::put(r"data\textures\sub\e.txt", b"5");
     files::folder(r"data\textures\sub");
     files::folder(r"data\textures\menus");
     e
 }
 
-/// `data\` and the path (`/` made `\`, a `\` added), all files with no filter, in the listing's
-/// order; the folders apart; an empty array (not 0) for a folder that is not there.
+/// `data\` and the path (`/` made `\`, trailing separators made one), all files with no filter,
+/// each name as it is spelled, in the listing's order; the folders apart; an empty array (not 0)
+/// for a folder that is not there.
 #[test]
 fn the_files_and_folders_of_a_data_folder() {
     let mut e = folder_scene();
     let id = res_of(&mut e, 0x228a, &[s(b"textures")]);
-    assert_eq!(names(&e, id), [&b"a.dds"[..], b"b.txt", b"c.dds"]);
+    assert_eq!(names(&e, id), [&b"a.dds"[..], b"B.txt", b"c.dds"]);
     let id = res_of(&mut e, 0x228a, &[s(b"Textures/")]);
     assert_eq!(names(&e, id).len(), 3, "a slash, the case");
+    let id = res_of(&mut e, 0x228a, &[s(b"textures//")]);
+    assert_eq!(names(&e, id).len(), 3, "two trailing separators: one");
     let id = res_of(&mut e, 0x22a3, &[s(b"textures")]);
     assert_eq!(names(&e, id), [&b"menus"[..], b"sub"]);
     let id = res_of(&mut e, 0x228a, &[s(br"textures\sub")]);
-    assert_eq!(names(&e, id), [&b"d.dds"[..]]);
+    assert_eq!(names(&e, id), [&b"d.dds"[..], b"e.txt"]);
     let id = res_of(&mut e, 0x228a, &[s(b"nowhere")]);
     assert!(id != 0.0 && names(&e, id).is_empty());
 }
 
-/// The filter as `FindFirstFileA` takes it: `*` and `?`, without case; `*.*` every name.
+/// A folder outside the game's (`..` past Data's parent, a full path): the seam refuses it, so
+/// an empty array.
+#[test]
+fn a_folder_outside_the_game_lists_nothing() {
+    let mut e = folder_scene();
+    files::put(r"x\f.txt", b"6");
+    let id = res_of(&mut e, 0x228a, &[s(br"..\..\x")]);
+    assert!(id != 0.0 && names(&e, id).is_empty());
+    let id = res_of(&mut e, 0x228a, &[s(br"C:\Windows")]);
+    assert!(id != 0.0 && names(&e, id).is_empty());
+}
+
+/// A name both in the port's folder for mods' files and in the game's Data: listed once, as the
+/// port's folder spells it.
+#[test]
+fn a_name_in_both_places_is_listed_once() {
+    let mut e = folder_scene();
+    files::put_port(r"data\textures\A.DDS");
+    let id = res_of(&mut e, 0x228a, &[s(b"textures"), s(b"*.dds")]);
+    assert_eq!(names(&e, id), [&b"A.DDS"[..], b"c.dds"]);
+}
+
+/// The filter as Windows' file search takes it: `*` and `?`, without case; `*.*` every name; a
+/// folder part before its last separator goes to the folder.
 #[test]
 fn the_filter_is_a_wildcard() {
     let mut e = folder_scene();
     let id = res_of(&mut e, 0x228a, &[s(b"textures"), s(b"*.DDS")]);
     assert_eq!(names(&e, id), [&b"a.dds"[..], b"c.dds"]);
     let id = res_of(&mut e, 0x228a, &[s(b"textures"), s(b"?.txt")]);
-    assert_eq!(names(&e, id), [&b"b.txt"[..]]);
+    assert_eq!(names(&e, id), [&b"B.txt"[..]]);
     let id = res_of(&mut e, 0x22a3, &[s(b"textures"), s(b"s*")]);
     assert_eq!(names(&e, id), [&b"sub"[..]]);
     let id = res_of(&mut e, 0x22a3, &[s(b"textures"), s(b"*.*")]);
     assert_eq!(names(&e, id).len(), 2, "*.* takes names without a dot");
     let id = res_of(&mut e, 0x228a, &[s(b"textures"), s(b"")]);
     assert!(names(&e, id).is_empty(), "an empty filter matches nothing");
+    for filter in [&br"sub\*.dds"[..], b"sub/*.dds"] {
+        let id = res_of(&mut e, 0x228a, &[s(b"textures"), s(filter)]);
+        assert_eq!(names(&e, id), [&b"d.dds"[..]], "{filter:?}");
+    }
+    let id = res_of(
+        &mut e,
+        0x228a,
+        &[s(b"textures/"), s(br"..\textures\sub\e.*")],
+    );
+    assert_eq!(names(&e, id), [&b"e.txt"[..]]);
 }
 
 #[test]
@@ -684,6 +721,16 @@ fn wildcards_as_windows_long_names() {
         (b"*.*", b"noext", true),
         (b"**", b"", true),
         (b"abc", b"abcd", false),
+        // The review's rows: `*.` and `.*` are not "everything".
+        (b"*.", b"noext", true),
+        (b"*.", b"a.dds", false),
+        (b".*", b".x", true),
+        (b".*", b"a.dds", false),
+        // A `?` stands for nothing at a dot or the end.
+        (b"a??.txt", b"a.txt", true),
+        (b"ab?", b"ab", true),
+        (b"ab?", b"abcd", false),
+        (b"*.?", b"a.", true),
     ] {
         assert_eq!(wildcard_match(p, n), want, "{p:?} {n:?}");
     }
