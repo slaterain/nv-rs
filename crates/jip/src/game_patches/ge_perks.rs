@@ -443,7 +443,7 @@ fn set_perk_rank_npc(e: &mut Engine, w: &[u32]) -> Ret {
 /// The actor's `RemovePerk` (`thiscall`: the perk, for teammates): a perk it has is taken off (the
 /// data marked changed): its entry point entries out of their lists (a reload speed one updates the
 /// reload speed), its ability entries removed. With no perk left the actor's entry goes.
-fn remove_perk_npc(e: &mut Engine, w: &[u32]) -> Ret {
+pub(crate) fn remove_perk_npc(e: &mut Engine, w: &[u32]) -> Ret {
     let (actor, perk) = (w[0], w[1]);
     let id = e.mem.u32(actor + REF_ID);
     let block = {

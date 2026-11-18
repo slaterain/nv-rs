@@ -57,8 +57,8 @@
 //! +0x188, kept where JIP keeps it; the constructor sets it from JIP's map of references
 //! ([`ExcludedCombatActions`]) for its attacker (`InitCombatControllerHook`, `0x97D71F`), and the
 //! combat planner treats an action whose bit is set as not applicable
-//! (`CombatActionApplicableHook`, `0x9951B3`). Only `SetExcludedCombatActions` (not built yet:
-//! [`set_excluded_combat_actions`] is its change) sets bits; until then every word is 0 and the
+//! (`CombatActionApplicableHook`, `0x9951B3`). Only `SetExcludedCombatActions` (through
+//! [`set_excluded_combat_actions`]) sets bits; until a script calls it every word is 0 and the
 //! planner's choices are the original's. Threads: the constructor and the planner run on the AI
 //! threads; they read the map under its read lock for one lookup and the controller's own word.
 
@@ -542,6 +542,20 @@ impl Default for MoveAwayDistance {
     }
 }
 
+/// `s_moveAwayDistance = distance` (`MoveAwayFrom` before its backup package; the package's making
+/// sets it back to 300).
+pub fn set_move_away_distance(e: &mut Engine, distance: f32) {
+    e.ext_free::<MoveAwayDistance>()
+        .0
+        .store(distance.to_bits(), Ordering::Relaxed);
+}
+
+/// G42's distance now (for tests).
+#[cfg(test)]
+pub(crate) fn move_away_distance_now(e: &mut Engine) -> f32 {
+    f32::from_bits(e.ext_free::<MoveAwayDistance>().0.load(Ordering::Relaxed))
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
 // (SafeWrite32(0x9ED3F8, &s_moveAwayDistance), the same at 0x9ED528).
 /// G42: the backup package's distance is JIP's variable instead of the exe's 300.0.
@@ -581,8 +595,8 @@ const ACTION_KIND: u32 = 0x24;
 const GET_COMBAT_CONTROLLER: u32 = 0x428;
 
 /// H16's `s_excludedCombatActionsMap` (JIP's `UnorderedMap<TESObjectREFR*, UInt32>`): each
-/// reference's excluded combat actions, set by `SetExcludedCombatActions` (not built yet: the
-/// command lane calls [`set_excluded_combat_actions`]) and read when a controller is made for it.
+/// reference's excluded combat actions, set by `SetExcludedCombatActions` (through
+/// [`set_excluded_combat_actions`]) and read when a controller is made for it.
 /// One for the run: a lock-free slot ([`Engine::ext_free`]) made at install; a reader holds the
 /// read lock for one lookup, the command the write lock for one change (never across a game
 /// call). Cleared before a load ([`pre_load`]), as JIP's housekeeping does; never otherwise.

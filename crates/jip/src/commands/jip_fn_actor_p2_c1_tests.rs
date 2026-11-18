@@ -1273,3 +1273,118 @@ fn play_sound_3d_node_needs_a_sound_form() {
     assert!(called(INIT_SOUND_FN).is_empty());
     assert!(called(PLAY_FN).is_empty());
 }
+
+// ---- MoveAwayFrom and TravelToRef (group 2) ----
+
+const TARGET: u32 = AREA + 0x7000;
+const DISTANCE_SEEN: u32 = 0xd157_0000;
+
+/// The backup scene, the target reference (reference 1 of the script's list) at
+/// (10, 20, 30), and the actor's `+0x2F4` recording G42's distance as the package is set.
+fn move_scene(e: &mut Engine) {
+    backup_scene(e);
+    crate::commands::test_support::set_ref(e, 1, TARGET);
+    e.mem.set_u32(TARGET, PLAIN_VT);
+    e.mem.set_u8(TARGET + 4, 0x3a);
+    set4(e, TARGET + 0x30, [10.0, 20.0, 30.0, 0.0]);
+    e.register(SET_PACKAGE, |e, w| {
+        record(SET_PACKAGE, w);
+        let d = crate::game_patches::gd::move_away_distance_now(e);
+        record(DISTANCE_SEEN, &[d.to_bits()]);
+        eax(0)
+    });
+}
+
+#[test]
+fn move_away_from_uses_its_distance_and_flags() {
+    use crate::commands::test_support::{n, r, z};
+    let mut e = setup();
+    move_scene(&mut e);
+    let cell = AREA + 0x6800;
+    e.mem.set_u32(ACTOR + 0x40, cell);
+    assert_eq!(run(&mut e, 0x288e, ACTOR, &[r(1), z(512.0), n(3)]), 0.0);
+    let package = called(BACKUP_CTOR_FN)[0][0];
+    assert_eq!(
+        called(BACKUP_INIT_FN),
+        vec![vec![package, ACTOR, cell, TARGET]]
+    );
+    assert_eq!(
+        e.mem.u32(package + 0x1c),
+        0x10 | (1 << 26) | (1 << 13) | (1 << 17),
+        "continue during combat, run, sneak"
+    );
+    assert_eq!(
+        called(DISTANCE_SEEN),
+        vec![vec![512.0f32.to_bits()]],
+        "G42's distance then"
+    );
+    assert_eq!(
+        crate::game_patches::gd::move_away_distance_now(&mut e),
+        300.0,
+        "back to 300"
+    );
+    // No flags: only "continue during combat".
+    run(&mut e, 0x288e, ACTOR, &[r(1), z(64.0)]);
+    let package = called(BACKUP_CTOR_FN)[1][0];
+    assert_eq!(e.mem.u32(package + 0x1c), 0x10 | (1 << 26));
+    // A refused package (life state 3) still sets the distance back.
+    e.mem.set_u32(ACTOR + 0x108, 3);
+    run(&mut e, 0x288e, ACTOR, &[r(1), z(99.0)]);
+    assert_eq!(called(BACKUP_CTOR_FN).len(), 2);
+    assert_eq!(
+        crate::game_patches::gd::move_away_distance_now(&mut e),
+        300.0
+    );
+    // Not an actor: the distance is left.
+    run(&mut e, 0x288e, PLAIN, &[r(1), z(77.0)]);
+    assert_eq!(
+        crate::game_patches::gd::move_away_distance_now(&mut e),
+        300.0
+    );
+}
+
+#[test]
+fn travel_to_ref_needs_the_same_cell_or_world() {
+    use crate::commands::test_support::{n, r};
+    let mut e = setup();
+    move_scene(&mut e);
+    let (inside, inside2, out1, out2) =
+        (AREA + 0x6800, AREA + 0x6900, AREA + 0x6a00, AREA + 0x6b00);
+    e.mem.set_u8(inside + 0x24, 1);
+    e.mem.set_u8(inside2 + 0x24, 1);
+    e.mem.set_u32(out1 + 0xc0, AREA + 0x6f00);
+    e.mem.set_u32(out2 + 0xc0, AREA + 0x6f00);
+    // The same interior: a package with no cell, its point the target's position.
+    e.mem.set_u32(ACTOR + 0x40, inside);
+    e.mem.set_u32(TARGET + 0x40, inside);
+    run(&mut e, 0x2891, ACTOR, &[r(1), n(1)]);
+    let package = called(BACKUP_CTOR_FN)[0][0];
+    assert_eq!(
+        called(BACKUP_INIT_FN),
+        vec![vec![package, ACTOR, 0, TARGET]]
+    );
+    assert_eq!(
+        e.mem.u32(package + 0x1c),
+        0x10 | (1 << 18) | (1 << 19) | (1 << 26) | (1 << 13),
+        "swim, fall, continue during combat, run"
+    );
+    let point: Vec<f32> = (0..3).map(|i| e.mem.f32(package + 0x80 + 4 * i)).collect();
+    assert_eq!(point, [10.0, 20.0, 30.0]);
+    // Another interior, other worldspaces, no cell: nothing.
+    e.mem.set_u32(TARGET + 0x40, inside2);
+    run(&mut e, 0x2891, ACTOR, &[r(1)]);
+    e.mem.set_u32(ACTOR + 0x40, out1);
+    e.mem.set_u32(TARGET + 0x40, AREA + 0x6c00);
+    run(&mut e, 0x2891, ACTOR, &[r(1)]);
+    e.mem.set_u32(TARGET + 0x40, 0);
+    run(&mut e, 0x2891, ACTOR, &[r(1)]);
+    assert_eq!(called(BACKUP_CTOR_FN).len(), 1);
+    // The same worldspace, another exterior cell: yes.
+    e.mem.set_u32(TARGET + 0x40, out2);
+    run(&mut e, 0x2891, ACTOR, &[r(1), n(2)]);
+    let package = called(BACKUP_CTOR_FN)[1][0];
+    assert_eq!(
+        e.mem.u32(package + 0x1c),
+        0x10 | (1 << 18) | (1 << 19) | (1 << 26) | (1 << 17)
+    );
+}
