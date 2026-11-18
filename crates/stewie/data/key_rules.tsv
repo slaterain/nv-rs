@@ -1,0 +1,102 @@
+# How lStewieAl's Tweaks 10.05 reads a key from more than one file (settings.h HandleIniFile, run for
+# the main INI, then for each Tweaks\INIs\*.ini). Columns: rule, section, key. `main`: read only inside
+# `if (isDefaultINI)`, so an overlay file's value is ignored (28 keys). `or`: read with GET_TWEAKH
+# (SettingUtils.h: `g_Name |= ini.GetLongValue("Tweaks", Name, 0)`), so each file's value is ORed in:
+# an overlay can turn the key on, never off (69 keys). Every other key: the last file that has it wins.
+main	Aggro HUD Color	uRGB
+main	Hotkeys	iClearConsoleKey
+main	INI	bCapSPECIALPoints
+main	INI	bCombatDialogueCooldownFix
+main	INI	bDescriptiveNVACLog
+main	INI	bFixCreatureDoubledDR
+main	INI	bFixLoopingReloadAmmoSwapInstantRefill
+main	INI	bFixUnorderedNifBlocksCrash
+main	INI	bForceLoadMeshes2BSA
+main	INI	bMultiINISupport
+main	INI	bShowMissingMasterNames
+main	INI	bShowRecompiledAllScriptsWarning
+main	INI	bShowSubsettingPaths
+main	INI	bShownTweaksMenuReloadWarning
+main	INI	bSkinnedDecalSubtextureFix
+main	INI	bTweaksMenuAllowXMLHotReload
+main	INI	bWeaponDamageStagesFix
+main	INI	iDebugBreakRefID
+main	INI	iOverrideSaveIndex
+main	Reload Loop Cancelling	fEndThreshold
+main	Save Manager	_iAutoSaveIndex
+main	Save Manager	_iIncrementalSaveIndex
+main	Terminal Notes	bHighlightAddNoteEntries
+main	Turn Speed	fAutoaimMinRadius
+main	Turn Speed	fAutoaimScaleX
+main	Turn Speed	fAutoaimScaleY
+main	Tweaks	bGodmodeAllowsFastTravelEnemiesNearby
+main	Tweaks	bInvalidBSFadeNodePrints
+or	Tweaks	bAddGrenadeHotkey
+or	Tweaks	bAddHoldKeyToAllAnims
+or	Tweaks	bAddLeveledListEntryPointChecksPlayerDamage
+or	Tweaks	bAddPipboySwapAmmoHotkey
+or	Tweaks	bAllowCaravanWithNoWager
+or	Tweaks	bAllowControllerMovementWithKeyboardConnected
+or	Tweaks	bAllowNavmeshInESPs
+or	Tweaks	bAmmoSwapAlwaysReloads
+or	Tweaks	bBetterCaravanMenu
+or	Tweaks	bBlockingCancelsMeleeAttacks
+or	Tweaks	bBulletTrails
+or	Tweaks	bCapHealthByRADS
+or	Tweaks	bCollisionSoundExtender
+or	Tweaks	bCombatIgnoresPreferredPathing
+or	Tweaks	bCompanionsIgnoreEnemies
+or	Tweaks	bCompassUseDifferentColorForAggroNPCs
+or	Tweaks	bConditionAffectsCasingVelocity
+or	Tweaks	bConditionBasedWeaponSpread
+or	Tweaks	bCreatureMovementSoundFix
+or	Tweaks	bCustomWeaponModEffects
+or	Tweaks	bDecreasePlayerMovementAnimBlends
+or	Tweaks	bDimWeaponRequirementsIfNotMet
+or	Tweaks	bDontMirrorTexturesInRAM
+or	Tweaks	bDynamicPlayerRadio
+or	Tweaks	bEnemiesIgnoreCompanions
+or	Tweaks	bEnhancedCameraIdleHandsFix
+or	Tweaks	bExplosionsHitAnyNodes
+or	Tweaks	bFixEmptyActorLeveledListCrash
+or	Tweaks	bForceUpdateCellLODs
+or	Tweaks	bHealthBarRestoreIndicator
+or	Tweaks	bHighResPipboy
+or	Tweaks	bHitmanCustomControls
+or	Tweaks	bHoldingAltShowsInventoryTabWeight
+or	Tweaks	bInlineVanillaFunctions
+or	Tweaks	bInteriorMapMarkerDebug
+or	Tweaks	bInventoryHotkeyIcon
+or	Tweaks	bLazyInventoryMenu
+or	Tweaks	bLevelUpOnlyWhenSeated
+or	Tweaks	bLogMeshErrors
+or	Tweaks	bLookAroundWhileDrinking
+or	Tweaks	bMoveHUDPrompt
+or	Tweaks	bMultipleMapMarkers
+or	Tweaks	bNPCsMoveSlowerWhileAiming
+or	Tweaks	bNearbyDetectionIndicator
+or	Tweaks	bNoExitToMainMenuButton
+or	Tweaks	bNoHardcoreNeedsInGodmode
+or	Tweaks	bNoPlayerAnimMovement
+or	Tweaks	bNoRecurringChallenges
+or	Tweaks	bNoSlowMotionDeathcam
+or	Tweaks	bPickpocketGrenadeSplashDamage
+or	Tweaks	bPlayUnequipWhenSwitchingWeapons
+or	Tweaks	bPlayerPositionTracker
+or	Tweaks	bPreventFiringDuringLoopingReloadEnd
+or	Tweaks	bPreventReloadCancelling
+or	Tweaks	bQuestModSelector
+or	Tweaks	bRaceMenuPresets
+or	Tweaks	bRealtimeWait
+or	Tweaks	bReplaceCasingSounds
+or	Tweaks	bSelectMultipleHeadParts
+or	Tweaks	bShowTweaksButton
+or	Tweaks	bStewiesControls
+or	Tweaks	bTraitMenuSelectOwned
+or	Tweaks	bUndiscoveredLocationIcons
+or	Tweaks	bVATSQueueShowsAP
+or	Tweaks	bVATSTargetDestructibles
+or	Tweaks	bVATSTargettingStuckWorkaround
+or	Tweaks	bWall_SoGB
+or	Tweaks	bWaterDepthRadiation
+or	Tweaks	bWeaponSoundExtender
