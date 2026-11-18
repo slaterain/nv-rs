@@ -1,0 +1,22 @@
+[package]
+name = "nv-launcher"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-or-later"
+description = "nv-rs's one launcher, themed like the game's own terminal: Play, Mods, Settings, Renderer, Import saves, Help. Prototype of the start screen (launcher track, phase 1)."
+
+[[bin]]
+name = "nv-launcher"
+path = "src/main.rs"
+
+# Phase 1 prototype: a workspace of its own, so the root Cargo.toml and Cargo.lock stay as they are
+# while PR #750 is open (it edits both). Every dependency is already in the root Cargo.lock, at the
+# versions and features the workspace uses (d3d9-wgpu's wgpu, engine-platform's winit); the
+# project's own bsa crate reads the installed game's archives. It joins the workspace in PR 1.
+[dependencies]
+bsa = { path = "../bsa" }
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "vulkan", "metal"] }
+winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
+
+[workspace]

@@ -1,0 +1,378 @@
+//! The launcher's drawing: the terminal's picture ([`crate::canvas::Canvas`]) as one texture,
+//! scaled to the window (or to a capture) with its 4:3 shape kept and black around it; a whole
+//! multiple of its size is scaled by repeating pixels, any other size smoothly.
+//!
+//! The launcher has to start where the game's own renderer does not: it is where the player
+//! changes the renderer. So it asks for the plainest device there is (no features, the lowest
+//! limits, the low-power card), on Direct3D 12 or Vulkan on Windows (the platform's own API
+//! elsewhere), and failing a card, the system's software adapter. Its whole picture is drawn on
+//! the processor, so even the software adapter draws it at once.
+
+use std::sync::Arc;
+
+const SHADER: &str = "
+@group(0) @binding(0) var t: texture_2d<f32>;
+@group(0) @binding(1) var s: sampler;
+struct V { @builtin(position) pos: vec4<f32>, @location(0) uv: vec2<f32> };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> V {
+    let x = f32((i << 1u) & 2u);
+    let y = f32(i & 2u);
+    var v: V;
+    v.pos = vec4<f32>(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+    v.uv = vec2<f32>(x, y);
+    return v;
+}
+@fragment fn fs(v: V) -> @location(0) vec4<f32> {
+    return vec4<f32>(textureSample(t, s, v.uv).rgb, 1.0);
+}
+";
+
+pub struct Gpu {
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    layout: wgpu::BindGroupLayout,
+    module: wgpu::ShaderModule,
+    pipeline: Option<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    picture: wgpu::Texture,
+    nearest: wgpu::BindGroup,
+    smooth: wgpu::BindGroup,
+}
+
+/// wgpu's futures are ready once polled after their work: no executor needed.
+fn block_on<F: std::future::Future>(f: F) -> F::Output {
+    struct Noop;
+    impl std::task::Wake for Noop {
+        fn wake(self: Arc<Self>) {}
+    }
+    let waker = std::task::Waker::from(Arc::new(Noop));
+    let mut cx = std::task::Context::from_waker(&waker);
+    let mut f = std::pin::pin!(f);
+    loop {
+        if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
+            return v;
+        }
+        std::thread::yield_now();
+    }
+}
+
+/// The APIs the launcher draws with on this system.
+pub fn backends() -> wgpu::Backends {
+    if cfg!(windows) {
+        wgpu::Backends::DX12 | wgpu::Backends::VULKAN
+    } else {
+        wgpu::Backends::PRIMARY
+    }
+}
+
+pub fn instance() -> wgpu::Instance {
+    wgpu::Instance::new(wgpu::InstanceDescriptor {
+        backends: backends(),
+        ..wgpu::InstanceDescriptor::new_without_display_handle()
+    })
+}
+
+impl Gpu {
+    /// A device for the picture `size` (width, height), able to draw into `surface` if given.
+    pub fn new(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        size: (u32, u32),
+    ) -> Result<Gpu, String> {
+        let ask = |fallback: bool| {
+            block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::LowPower,
+                force_fallback_adapter: fallback,
+                compatible_surface: surface,
+                apply_limit_buckets: false,
+            }))
+        };
+        let adapter = ask(false)
+            .or_else(|_| ask(true))
+            .map_err(|e| format!("no graphics adapter, not even the software one: {e}"))?;
+        let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("nv-launcher"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            memory_hints: wgpu::MemoryHints::MemoryUsage,
+            experimental_features: Default::default(),
+            trace: Default::default(),
+        }))
+        .map_err(|e| format!("the graphics device could not be made: {e}"))?;
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("terminal"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("terminal"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+        let picture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("terminal picture"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = picture.create_view(&Default::default());
+        let group = |filter: wgpu::FilterMode| {
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("terminal"),
+                mag_filter: filter,
+                min_filter: filter,
+                ..Default::default()
+            });
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("terminal"),
+                layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            })
+        };
+        let nearest = group(wgpu::FilterMode::Nearest);
+        let smooth = group(wgpu::FilterMode::Linear);
+        Ok(Gpu {
+            adapter,
+            device,
+            queue,
+            layout,
+            module,
+            pipeline: None,
+            picture,
+            nearest,
+            smooth,
+        })
+    }
+
+    /// The adapter's name and API, for the log.
+    pub fn describe(&self) -> String {
+        let info = self.adapter.get_info();
+        format!("{} ({:?})", info.name, info.backend)
+    }
+
+    /// The picture's pixels (RGBA rows, the texture's size).
+    pub fn upload(&self, rgba: &[u8], size: (u32, u32)) {
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.picture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size.0 * 4),
+                rows_per_image: Some(size.1),
+            },
+            wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    fn pipeline(&mut self, format: wgpu::TextureFormat) -> &wgpu::RenderPipeline {
+        if self.pipeline.as_ref().map(|(f, _)| *f) != Some(format) {
+            let pl = self
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&self.layout)],
+                    immediate_size: 0,
+                });
+            let pipeline = self
+                .device
+                .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("terminal"),
+                    layout: Some(&pl),
+                    vertex: wgpu::VertexState {
+                        module: &self.module,
+                        entry_point: Some("vs"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    primitive: Default::default(),
+                    depth_stencil: None,
+                    multisample: Default::default(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &self.module,
+                        entry_point: Some("fs"),
+                        compilation_options: Default::default(),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                });
+            self.pipeline = Some((format, pipeline));
+        }
+        &self.pipeline.as_ref().expect("just made").1
+    }
+
+    /// The picture (`picture` its size) drawn into `target` (`target_size`, `format`): black
+    /// around it, its shape kept.
+    pub fn draw(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        format: wgpu::TextureFormat,
+        target_size: (u32, u32),
+        picture: (u32, u32),
+    ) {
+        let (x, y, w, h) = fit(picture, target_size);
+        let whole = w % picture.0 == 0 && h % picture.1 == 0;
+        let group = if whole {
+            self.nearest.clone()
+        } else {
+            self.smooth.clone()
+        };
+        let pipeline = self.pipeline(format).clone();
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("terminal"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        if w == 0 || h == 0 {
+            return;
+        }
+        pass.set_viewport(x as f32, y as f32, w as f32, h as f32, 0.0, 1.0);
+        pass.set_pipeline(&pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// The picture drawn at `size` off screen and read back: RGBA rows.
+    pub fn capture(&mut self, picture: (u32, u32), size: (u32, u32)) -> Result<Vec<u8>, String> {
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let target = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("capture"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&Default::default());
+        let row = (size.0 * 4).div_ceil(256) * 256;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("capture"),
+            size: (row * size.1) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.draw(&mut encoder, &view, format, size, picture);
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(size.1),
+                },
+            },
+            wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        let done = Arc::new(std::sync::Mutex::new(None));
+        {
+            let done = done.clone();
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                *done.lock().expect("not poisoned") = Some(r);
+            });
+        }
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        match done.lock().expect("not poisoned").take() {
+            Some(Ok(())) => {}
+            other => return Err(format!("the capture could not be read back: {other:?}")),
+        }
+        let mapped = slice
+            .get_mapped_range()
+            .map_err(|e| format!("the capture could not be read back: {e:?}"))?;
+        let mut out = Vec::with_capacity((size.0 * size.1 * 4) as usize);
+        for y in 0..size.1 {
+            let at = (y * row) as usize;
+            out.extend_from_slice(&mapped[at..at + (size.0 * 4) as usize]);
+        }
+        Ok(out)
+    }
+}
+
+/// Where a picture of `picture`'s size goes in `target`, centred: the largest size of its shape
+/// that fits, or the largest whole multiple of it when that is at least nine tenths as large (its
+/// pixels stay sharp).
+pub fn fit(picture: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
+    let s = (target.0 as f32 / picture.0 as f32).min(target.1 as f32 / picture.1 as f32);
+    let whole = s.floor();
+    let s = if whole >= 1.0 && whole >= s * 0.9 { whole } else { s };
+    let (w, h) = (
+        ((picture.0 as f32 * s) as u32).min(target.0),
+        ((picture.1 as f32 * s) as u32).min(target.1),
+    );
+    ((target.0 - w) / 2, (target.1 - h) / 2, w, h)
+}
