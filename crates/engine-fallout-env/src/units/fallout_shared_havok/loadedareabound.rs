@@ -743,6 +743,8 @@ mod tests {
     #[test]
     fn warp_actor_jip_no_z_pos_reset_seam() {
         use engine_core::extend::jip_patches;
+        // The point constructor's calls: the exe's count, one fewer when JIP's code runs.
+        let mut exe = 0;
         for (word, answer, warped, constructed) in [
             (0, 1, true, true),
             (jip_patches::INSTALLED, 1, false, false),
@@ -784,9 +786,15 @@ mod tests {
             e.call_log = Some(vec![]);
             e.call(0x0062_95e0, &args![bound, actor]);
             let log = e.call_log.unwrap();
-            let called = |addr: u32| log.iter().any(|(a, _)| *a == addr);
-            assert_eq!(called(0x0020_1004), warped, "{word:x} {answer}");
-            assert_eq!(called(0x0068_15c0), constructed, "{word:x} {answer}");
+            let called = |addr: u32| log.iter().filter(|(a, _)| *a == addr).count();
+            assert_eq!(called(0x0020_1004) != 0, warped, "{word:x} {answer}");
+            let points = called(0x0068_15c0);
+            if word == 0 {
+                exe = points;
+            } else if warped {
+                let want = if constructed { exe } else { exe - 1 };
+                assert_eq!(points, want, "{word:x} {answer}");
+            }
         }
     }
 
