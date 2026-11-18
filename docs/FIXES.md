@@ -1236,6 +1236,7 @@ JIP does.
 | "Ignore disabled MusicMarkers" | `00969930` (`0x9699C5`) | A disabled music marker no longer chooses the music played near it; a marker's position is read from the reference itself (`+0x30`) instead of through its position call | 3.9 GP |
 | (G72, `BuildMusicMarkerListHook`) | `00947d80` (`0x947DD2`) | The player's music markers in a world space come from one list built when he enters that world space (JIP's cache, rebuilt only for another world space), sorted by their media location controller, instead of the world space's markers walked every time | 3.9 GP |
 | (G105, `DamagePCFatigueMinFixHook`) | `0093b7a0` (`0x93B87F`) | Fatigue damage to the player stops at `fMinFatigue` (the change is cut so the value lands on it) | 3.9 GP |
+| (H02, `GetVanityDisabledHook` and `ProcessHUDMainUI`; JIP's own) | `009445b0` (the player's look handling, `0x9459ED`: the vanity camera test) | While a script's `ToggleHUDCursor` has the cursor on over the HUD in game mode, the vanity camera stays off and JIP handles the mouse over the HUD each frame: the tile under the cursor gets the mouse-over (its sound), a press and release of the left button over it is a click (its sound and the HUD's click handler), a draggable tile can be dragged and a wheelable one gets the wheel. Without the command nothing changes | 3.9 GP |
 
 Built as part of JIP (every preset, while JIP answers "installed"; not fix rows): G114 with O6
 and the `ToggleHardcoreTracking` command (`00969c30` at `0x969C41`): with `bHardcoreNeedsFix` (on
@@ -1337,6 +1338,11 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
   person a slot's part loads when its bit is set in JIP's mask, slots 2 to 6 at the start (the game's
   own test, so nothing changes until a script calls `ToggleBipedSlotVisibility`, which shows or hides
   a slot's part in first person).
+- `SetRefrPositionHook` (H13, JIP's own, `0x575A7F` in `SetLocationOnReference`): while a script's
+  `SynchronizePosition` keeps a reference, every position the game gives the player is that reference's
+  named node (plus the command's height offset), in the same cell or world space, with the node's heading
+  when asked; ending the synchronization puts the player at the node's last place. Without the command
+  nothing changes.
 
 #### GF: Forms and records
 

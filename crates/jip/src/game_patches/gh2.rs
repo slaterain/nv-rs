@@ -150,6 +150,7 @@ pub const AREA: Area = Area {
         ASH_PILE_TESTS[7].addr(),
         ATTACH_ASH_PILE.addr(),
         BIPED_SLOT_VISIBLE.addr(),
+        SYNC_POSITION.addr(),
     ],
     jip_wraps: &[],
     install_jip,
@@ -183,9 +184,134 @@ fn biped_slot_visible(e: &mut Engine, w: &[u32]) -> Option<u32> {
     Some((mask >> (w[0] & 31)) & 1)
 }
 
+/// H13's seam: `SetLocationOnReference`'s store of the position (`0x575A7F`; words: the
+/// reference, the location; the answer: the position is written).
+pub const SYNC_POSITION: SiteSlot = SiteSlot::new(Owner::Jip, 0x0057_5a7f);
+/// A reference's rotation z (`+0x2C`), position (`+0x30`), cell (`+0x40`), loaded data (`+0x64`,
+/// its root node `+0x14`); a cell's world space (`+0xC0`); a block's name (`+8`), world rotation
+/// (`+0x68`, `+0x6C`: the first row's second and third entries) and world translation and scale
+/// (`+0x8C`); the player's id.
+const REF_ROTATION_Z: u32 = 0x2c;
+const REF_POSITION: u32 = 0x30;
+const REF_CELL: u32 = 0x40;
+const REF_LOADED: u32 = 0x64;
+const LOADED_ROOT: u32 = 0x14;
+const CELL_WORLD: u32 = 0xc0;
+const BLOCK_NAME: u32 = 8;
+const BLOCK_ROTATE_01: u32 = 0x68;
+const BLOCK_ROTATE_02: u32 = 0x6c;
+const BLOCK_TRANSLATE: u32 = 0x8c;
+
+/// A node's children (`+0xA0`, their count `+0xA6`), and the virtual slot `+0xC` a node answers
+/// with `ADDR_ReturnThis` (`006815c0`): JIP's node test.
+const NODE_CHILDREN: u32 = 0xa0;
+const NODE_CHILD_COUNT: u32 = 0xa6;
+const RETURN_THIS: u32 = 0x0068_15c0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiNode::GetBlockByName
+// (asm).
+/// The first block below `node` whose name is the fixed string `name` (compared as pointers, as
+/// JIP compares them), depth first; 0 for none. Walks no deeper than the port's node walks do.
+fn block_by_name_ptr(e: &Engine, node: u32, name: u32, depth: u32) -> u32 {
+    if crate::commands::nif_nodes::too_deep(depth) {
+        return 0;
+    }
+    let children = e.mem.u32(node + NODE_CHILDREN);
+    let count = u32::from(e.mem.u16(node + NODE_CHILD_COUNT));
+    for i in 0..count {
+        let child = e.mem.u32(children + 4 * i);
+        if child == 0 {
+            continue;
+        }
+        if e.mem.u32(child + BLOCK_NAME) == name {
+            return child;
+        }
+        let vtable = e.mem.u32(child);
+        if e.mem.u32(vtable + 0xc) == RETURN_THIS {
+            let found = block_by_name_ptr(e, child, name, depth + 1);
+            if found != 0 {
+                return found;
+            }
+        }
+    }
+    0
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: SetRefrPositionHook.
+/// H13 (JIP's own): while `SynchronizePosition` keeps a reference, the player's position as the
+/// game sets it is the reference's node instead (its world translation, plus the command's
+/// offset), when the player and the reference are in the same cell or the same world space and
+/// the reference has its 3D; that position is also kept as where the player goes back to when
+/// synchronizing ends. With the rotate flag the player's z rotation follows the node (JIP's
+/// `ATan2` of its rotation's `+0x6C` and `+0x68`). The node is the reference's root when the
+/// command named none or the root has that name, else the first block below with it (the fixed
+/// strings compared, as JIP does: with no name given the command keeps the empty text's string,
+/// which only a block named "" matches; no such block: the location as given). Any other reference, or none kept: the location as given.
+fn sync_position(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (me, location) = (w[0], w[1]);
+    let mut source = location;
+    let mut state = crate::commands::jip_fn_misc_ref::sync_position(e);
+    'sync: {
+        let refr = state.refr;
+        if refr == 0 || e.mem.u32(me + REF_ID) != PLAYER_ID {
+            break 'sync;
+        }
+        let (mine, theirs) = (e.mem.u32(me + REF_CELL), e.mem.u32(refr + REF_CELL));
+        if mine == 0 || theirs == 0 {
+            break 'sync;
+        }
+        if mine != theirs {
+            let world = e.mem.u32(mine + CELL_WORLD);
+            if world == 0 || e.mem.u32(theirs + CELL_WORLD) != world {
+                break 'sync;
+            }
+        }
+        let loaded = e.mem.u32(refr + REF_LOADED);
+        if loaded == 0 {
+            break 'sync;
+        }
+        let mut node = e.mem.u32(loaded + LOADED_ROOT);
+        if node == 0 {
+            break 'sync;
+        }
+        if state.node != 0 && e.mem.u32(node + BLOCK_NAME) != state.node {
+            node = block_by_name_ptr(e, node, state.node, 0);
+            if node == 0 {
+                break 'sync;
+            }
+        }
+        for i in 0..4u32 {
+            let v = e.mem.f32(node + BLOCK_TRANSLATE + 4 * i);
+            state.pos[i as usize] = v + state.mods[i as usize];
+        }
+        // Only the kept position, and only while this reference is still the one kept.
+        crate::commands::jip_fn_misc_ref::set_sync_pos_if(e, refr, state.pos);
+        source = 0;
+        if state.flags != 0 {
+            let y = e.mem.f32(node + BLOCK_ROTATE_02);
+            let x = e.mem.f32(node + BLOCK_ROTATE_01);
+            let angle = crate::commands::ln_fn_math::atan2(y, x);
+            e.mem.set_f32(me + REF_ROTATION_Z, angle);
+        }
+    }
+    if source == 0 {
+        for i in 0..3u32 {
+            e.mem
+                .set_f32(me + REF_POSITION + 4 * i, state.pos[i as usize]);
+        }
+    } else {
+        for i in 0..3u32 {
+            let v = e.mem.u32(source + 4 * i);
+            e.mem.set_u32(me + REF_POSITION + 4 * i, v);
+        }
+    }
+    Some(1)
+}
+
 fn install_jip(e: &mut Engine) {
     e.on_site(DESTROY_REFR, destroy_refr);
     e.on_site(BIPED_SLOT_VISIBLE, biped_slot_visible);
+    e.on_site(SYNC_POSITION, sync_position);
     e.ext_free::<AltAshPile>();
     for site in ASH_PILE_TESTS {
         e.on_site(site, is_ash_pile);
