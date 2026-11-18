@@ -2336,9 +2336,15 @@ fn get_all_perks_cmd(e: &mut Engine, w: &[u32]) -> Ret {
 // Cmd_RemoveAllPerks_Execute.
 /// `actor.RemoveAllPerks [forTeammates]`: the player's perks of that list each removed by its
 /// `RemovePerk`; another actor's (while the NPC perks patch is on) each by JIP's NPC perk removal.
-/// The perks are listed before the first removal: JIP walks the list (and the NPC map, which each
-/// removal shortens, so it reads past what it has removed) while it removes from it; here every
-/// perk is removed once. No result.
+/// No result.
+///
+/// A fix, not JIP's result: JIP 57.30 walks the list while it removes from it. Removing the
+/// first perk copies the second node into the head, so the walk goes on at the third and the
+/// second is never removed; removing the third unlinks its node and clears its next, so the walk
+/// ends there. The player keeps every perk but the first and third. On an NPC, each removal
+/// shifts JIP's sorted perk map under its iterator, so every other perk is skipped, and the map
+/// is then dropped with those perks' abilities and entry points still applied. Here the perks
+/// are listed before the first removal and each one is removed: what the command plainly means.
 fn remove_all_perks(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let actor = a.this_obj;

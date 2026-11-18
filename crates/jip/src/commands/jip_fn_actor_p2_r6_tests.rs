@@ -61,8 +61,35 @@ fn setup() -> Engine {
     e.mem.set_u32(PLAIN_VT + 0x100, 0x0047_c850);
     e.mem.set_u32(ACTOR_VT + 0x49c, REMOVE_PERK_FN);
     e.mem.set_u32(ACTOR_VT + 0x428, GET_CONTROLLER_FN);
-    e.register(REMOVE_PERK_FN, |_, w| {
+    e.register(REMOVE_PERK_FN, |e, w| {
         CALLS.with(|c| c.borrow_mut().push((REMOVE_PERK_FN, w.to_vec())));
+        // The game's removal from the rank list: a match in the head copies the second node into
+        // the head (an emptied head when there is none); a later match is unlinked and its next
+        // cleared.
+        let head = w[0] + if w[2] != 0 { 0xad4 } else { 0x87c };
+        let mut prev = 0;
+        let mut node = head;
+        while node != 0 {
+            let rank = e.mem.u32(node);
+            if rank != 0 && e.mem.u32(rank) == w[1] {
+                let next = e.mem.u32(node + 4);
+                if prev == 0 {
+                    let (data, after) = if next == 0 {
+                        (0, 0)
+                    } else {
+                        (e.mem.u32(next), e.mem.u32(next + 4))
+                    };
+                    e.mem.set_u32(head, data);
+                    e.mem.set_u32(head + 4, after);
+                } else {
+                    e.mem.set_u32(prev + 4, next);
+                    e.mem.set_u32(node + 4, 0);
+                }
+                break;
+            }
+            prev = node;
+            node = e.mem.u32(node + 4);
+        }
         Ret::default()
     });
     e.register(GET_CONTROLLER_FN, |e, w| Ret {
@@ -171,7 +198,12 @@ fn remove_all_perks_for_the_player_calls_remove_perk_for_each() {
             vec![PC, PERKS + 0x100, 0],
             vec![PC, PERKS + 0x200, 0]
         ],
-        "hidden ones too, the own list"
+        "A, B and C each, hidden ones too, the own list"
+    );
+    assert_eq!(
+        (e.mem.u32(PC + 0x87c), e.mem.u32(PC + 0x880)),
+        (0, 0),
+        "the list ends empty"
     );
     call_on(&mut e, 0x2905, PC, &[n(5)]);
     assert_eq!(
@@ -179,6 +211,7 @@ fn remove_all_perks_for_the_player_calls_remove_perk_for_each() {
         vec![PC, PERKS + 0x300, 1],
         "the teammates' list, true"
     );
+    assert_eq!(e.mem.u32(PC + 0xad4), 0, "emptied too");
     let before = calls_to(REMOVE_PERK_FN).len();
     call_on(&mut e, 0x2905, PLAIN, &[]);
     call_on(&mut e, 0x2905, NPC, &[]);
