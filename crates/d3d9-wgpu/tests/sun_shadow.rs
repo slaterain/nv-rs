@@ -3162,7 +3162,7 @@ fn a_far_caster_round_the_camera_no_longer_drawn_goes() {
 
 /// The far map through its first draw and a later redraw (review of #715, round 2): before the far
 /// map is in (its first draw is spread over a few frames) the tower's shadow is lit, as off; from
-/// then on, through every redraw as the sun turns (30 degrees up from -y, 7.4e-5 radians a
+/// then on, through every redraw as the sun turns (30 degrees up from +x, 7.4e-5 radians a
 /// frame), its shadow is whole and the land beside it lit in EVERY frame (no half-drawn map, no
 /// map read through another's matrix).
 #[test]
@@ -3170,10 +3170,7 @@ fn the_far_shadow_holds_in_every_frame_through_redraws() {
     let _far = FarScene::on();
     let frames: Vec<Extra> = (0..64)
         .map(|f| Extra {
-            sun: Some(low_sun(
-                -std::f64::consts::FRAC_PI_2,
-                30f64.to_radians() + 7.4e-5 * f64::from(f),
-            )),
+            sun: Some(low_sun(0.0, 30f64.to_radians() + 7.4e-5 * f64::from(f))),
             ..far_land(true, false)
         })
         .collect();
@@ -3182,7 +3179,7 @@ fn the_far_shadow_holds_in_every_frame_through_redraws() {
     };
     let (on, drawn) = far_sequence(1, true, &frames).expect("the adapter");
     assert!(drawn >= 2, "a redraw after the first: {drawn}");
-    let (inside, beside) = ((2000.0, 24_000.0), (-1500.0, 24_000.0));
+    let (inside, beside) = ((-2000.0, 20_000.0), (-2000.0, 17_000.0));
     let shade: Vec<f32> = (0..frames.len())
         .map(|f| taken_at(&off[f], &on[f], inside.0, inside.1))
         .collect();
