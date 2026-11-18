@@ -152,6 +152,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_combat_style::COMMANDS,
     jip_fn_destruction_data::COMMANDS,
     jip_fn_effect::COMMANDS,
+    // With its patch H23 (`game_patches::gl`).
+    jip_fn_effect::AWAITING_H23,
     jip_fn_explosion::COMMANDS,
     jip_fn_faction::COMMANDS,
     jip_fn_global_var::COMMANDS,
@@ -761,6 +763,8 @@ mod tests {
             "jip_fn_climate",
             "jip_fn_combat_style",
             "jip_fn_destruction_data",
+            "jip_fn_effect",
+            // jip_fn_effect::AWAITING_H23 (`CastImmediate`, with H23).
             "jip_fn_effect",
             "jip_fn_explosion",
             "jip_fn_faction",

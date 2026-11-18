@@ -1611,3 +1611,22 @@ fn o18_a_loaded_npc_gets_its_perks_on() {
     assert_eq!(made(&mut e), block);
     assert_eq!(e.mem.u8(ACTOR + 0x143) & 0x10, 0, "O17 off: not dealt");
 }
+
+/// H15 with its command: the first-person slot test answers JIP's mask, 0x7C at the start (slots
+/// 2 to 6, the game's own test); `ToggleBipedSlotVisibility 10 1` shows slot 10,
+/// `ToggleBipedSlotVisibility 3 0` hides slot 3.
+#[test]
+fn h15_toggle_biped_slot_visibility_changes_the_slots_loaded() {
+    use crate::commands::test_support::{call, engine, n};
+    let mut e = engine();
+    let shown = |e: &mut Engine| -> Vec<u32> {
+        (0..20)
+            .filter(|&slot| e.site(BIPED_SLOT_VISIBLE.addr(), &[slot]) == Some(1))
+            .collect()
+    };
+    assert_eq!(shown(&mut e), [2, 3, 4, 5, 6], "the game's slots");
+    call(&mut e, 0x28c4, &[n(10), n(1)]);
+    assert_eq!(shown(&mut e), [2, 3, 4, 5, 6, 10]);
+    call(&mut e, 0x28c4, &[n(3), n(0)]);
+    assert_eq!(shown(&mut e), [2, 4, 5, 6, 10]);
+}
