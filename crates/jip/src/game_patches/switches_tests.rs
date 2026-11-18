@@ -135,3 +135,21 @@ fn without_the_row_nothing_is_in_and_nothing_changes() {
         INSTALLED | optional(1) | optional(2) | optional(4)
     );
 }
+
+/// JIP's file with `bLocalizedDTDR=1` but O1 off: O12 refused at start (JIP's `SetOptionalPatch(12)`
+/// needs O1's hook in), and O1 turned on later does not bring it.
+#[test]
+fn o12_asked_without_o1_stays_off_when_o1_comes_later() {
+    let read = settings::switches(&[b"bIgnoreDTDRFix=0".to_vec(), b"bLocalizedDTDR=1".to_vec()]);
+    assert_eq!(read.on & optional(12), 0);
+    // Listed before O1: still refused (JIP's file order).
+    let read = settings::switches(&[b"bLocalizedDTDR=1".to_vec(), b"bIgnoreDTDRFix=1".to_vec()]);
+    assert_eq!(read.on, optional(1));
+    let read = settings::switches(&[b"bIgnoreDTDRFix=1".to_vec(), b"bLocalizedDTDR=1".to_vec()]);
+    assert_eq!(read.on, optional(1) | optional(12));
+    let mut e = world(&[]);
+    e.jip_patches_or(settings::switches(&[b"bLocalizedDTDR=1".to_vec()]).on);
+    assert!(set(&mut e, 1, true));
+    assert!(!bit(&e, 12));
+    assert!(!is_in(&mut e, 12));
+}
