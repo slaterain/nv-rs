@@ -104,13 +104,14 @@ pub const TRAIT_DESCRIPTION: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_6f04);
 /// G17's seam: the tile menu destructor's clear of the menu's open byte (words: the tile, its
 /// menu; any answer skips the clear).
 pub const MENU_OPEN_BYTE: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_f035);
-/// G21's seam: the head of the activation choice walk (words: the list node; an answer of 1
-/// passes the node over).
-/// G55's seams: the message menu's two `max_menu_width` reads.
+/// G55's seams: the message menu's two `max_menu_width` reads (an answer is the width's float
+/// bits, read in place of the menu file's value).
 pub const MAX_MESSAGE_WIDTH: [SiteSlot; 2] = [
     SiteSlot::new(Owner::Jip, 0x007a_9aee),
     SiteSlot::new(Owner::Jip, 0x007a_9c45),
 ];
+/// G21's seam: the head of the activation choice walk (words: the list node; an answer of 1
+/// passes the node over).
 pub const ACTIVATION_TEXT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_a80f);
 /// G35's seam: `MenuConsole::Print`'s loading menu test (words: the console; any answer prints).
 pub const CONSOLE_WHILE_LOADING: SiteSlot = SiteSlot::new(Owner::Jip, 0x0071_d0d2);

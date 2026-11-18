@@ -495,8 +495,9 @@ fn g09_seam_answers_only_with_the_fixes() {
 #[test]
 fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
     let mut e = engine();
+    // install_as runs every area's install_jip once (GA's: the time slot and G55's seams; a
+    // second run would register G55's seams twice, which on_site refuses).
     crate::install_as(&mut e, true);
-    install_jip(&mut e);
     e.set_jip_patches(
         engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
     );
