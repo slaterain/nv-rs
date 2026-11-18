@@ -107,11 +107,13 @@ pub const TRAIT_DESCRIPTION: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_6f04);
 /// G17's seam: the tile menu destructor's clear of the menu's open byte (words: the tile, its
 /// menu; any answer skips the clear).
 pub const MENU_OPEN_BYTE: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_f035);
+/// G129's seam: the font manager's start (no words; answered: JIP's start ran in place of the
+/// game's).
+pub const FONT_MANAGER_START: SiteSlot = SiteSlot::new(Owner::Jip, 0x0070_b285);
+/// G129's seam: `CalculateStringDimensions`' last font (no words; the answer is the last font).
+pub const LAST_FONT: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_b032);
 /// G21's seam: the head of the activation choice walk (words: the list node; an answer of 1
 /// passes the node over).
-/// G129's seams: the font manager's start and the last font measured.
-pub const FONT_MANAGER_START: SiteSlot = SiteSlot::new(Owner::Jip, 0x0070_b285);
-pub const LAST_FONT: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_b032);
 pub const ACTIVATION_TEXT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_a80f);
 /// G35's seam: `MenuConsole::Print`'s loading menu test (words: the console; any answer prints).
 pub const CONSOLE_WHILE_LOADING: SiteSlot = SiteSlot::new(Owner::Jip, 0x0071_d0d2);

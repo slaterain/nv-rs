@@ -1,4 +1,4 @@
-//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G58, H21. Each handler's branches over
+//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G58, G129, H21. Each handler's branches over
 //! stand-ins of what JIP's bytes read, values from JIP's assembly (`internal/patches_game.h`,
 //! `internal/hooks.h`) and the exe's (Ghidra).
 
@@ -53,7 +53,14 @@ fn ga_seams_are_jips_addresses() {
     );
     assert_eq!(PICK_LOAD_SCREEN.addr(), 0x0078_a79b);
     assert_eq!(AREA.fix_wraps, [0x0078_ac60]);
-    assert!(AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
+    assert_eq!(FONT_MANAGER_START.addr(), 0x0070_b285);
+    assert_eq!(LAST_FONT.addr(), 0x00a1_b032);
+    assert_eq!(
+        AREA.jip_sites,
+        [FONT_MANAGER_START.addr(), LAST_FONT.addr()],
+        "G129 (JIP's own)"
+    );
+    assert!(AREA.jip_wraps.is_empty());
 }
 
 /// Not installed: nothing answers at any seam.
@@ -65,6 +72,20 @@ fn ga_not_installed_nothing_answers() {
     for slot in FIX_SITES {
         assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d, 1]), None);
     }
+    for slot in [FONT_MANAGER_START, LAST_FONT] {
+        assert_eq!(e.site(slot.addr(), &[]), None);
+    }
+}
+
+/// G129 is in with JIP installed, the row off: both seams JIP's, the last font 89 (the start's
+/// work is driven by the command's tests, `SetFontFile`).
+#[test]
+fn g129_in_with_jip_installed() {
+    let mut e = installed();
+    for slot in [FONT_MANAGER_START, LAST_FONT] {
+        assert_eq!(e.site_owners(slot.addr()).to_vec(), vec![Owner::Jip]);
+    }
+    assert_eq!(e.site(LAST_FONT.addr(), &[]), Some(89));
 }
 
 /// Installed with the row off: nothing answers; with the fixes in, each seam answers with its
@@ -476,8 +497,9 @@ fn g09_seam_answers_only_with_the_fixes() {
 #[test]
 fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
     let mut e = engine();
+    // install_as runs every area's install_jip once (GA's: the time slot and G129's seams; a
+    // second run would register G129's seams twice, which on_site refuses).
     crate::install_as(&mut e, true);
-    install_jip(&mut e);
     e.set_jip_patches(
         engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
     );
