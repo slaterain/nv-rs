@@ -7676,7 +7676,8 @@ mod tests {
     }
 
     /// lStewieAl's Tweaks' row S0064 with a parent cell (ordinary input): the row changes nothing,
-    /// the same calls as with it off (the owner and the cell's object told, the map emptied).
+    /// the same calls as with it off (the owner and the cell's object told, the map emptied; the
+    /// reference's parent cell at `+0x40`, the word Tweaks tests).
     #[test]
     fn s0064_row_on_with_a_cell_changes_nothing() {
         let run = |on: bool| {
@@ -7687,6 +7688,8 @@ mod tests {
             let owner_object = object_with(&mut e, 0x40, &[(0xe8, slot_e8)]);
             let target = object_with(&mut e, 0x40, &[(0xdc, slot_dc)]);
             let reference = refr(&mut e, 0x30, &[(0x1d0, SPARE_SLOT)]);
+            let cell = e.mem.alloc(0x100);
+            e.mem.set_u32(reference + 0x40, cell);
             returns(&mut e, SPARE_SLOT, 0x9000);
             returns(&mut e, 0x004b_9ba0, 1);
             e.register_double(0x006b_7f20, move |e, a| {

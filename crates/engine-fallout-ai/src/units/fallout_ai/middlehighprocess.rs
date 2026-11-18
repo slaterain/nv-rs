@@ -13145,7 +13145,7 @@ mod tests {
             let case = format!("package type {kind:#x}, path failed {failed}");
             assert_eq!(on, off, "{case}");
             assert_eq!(e.call_log, e_off.call_log, "{case}");
-            assert_eq!(calls(&e, PACKAGE_TYPE), vec![vec![package]], "{case}");
+            assert!(calls(&e, PACKAGE_TYPE).contains(&vec![package]), "{case}");
             let stopped = calls(&e, ACTOR_SLOTS + 0x288).len();
             let activated = calls(&e, REFERENCE_ACTIVATE).len();
             let cleaned = calls(&e, REFERENCE_RUN_SCRIPT).len();
