@@ -272,7 +272,13 @@ fn each_failure_gets_its_own_words() {
         .player_text()
     };
     assert!(text(Failure::OtherDrive).contains("another drive"));
-    assert!(text(Failure::NoLinks).contains("NTFS"));
+    // Windows names the drive kind; Linux and macOS say neither kind of link could be made.
+    let drive_words = if cfg!(windows) {
+        "NTFS"
+    } else {
+        "symbolic link"
+    };
+    assert!(text(Failure::NoLinks).contains(drive_words));
     assert!(text(Failure::Locked).contains("open"));
     assert!(text(Failure::Denied).contains("read-only"));
     assert!(!text(Failure::Locked).contains("same drive"));
@@ -1144,7 +1150,8 @@ fn a_folder_deleted_by_hand_is_skipped() {
     let built = build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap();
     assert_eq!(built.removed, 0, "{built:?}");
     assert_eq!(
-        std::fs::read(target.join("Data").join("textures").join("b.dds")).unwrap(),
+        // The game's own spelling of the folder wins (Linux's file systems tell case apart).
+        std::fs::read(target.join("Data").join("Textures").join("b.dds")).unwrap(),
         b"b"
     );
 }
