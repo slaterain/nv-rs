@@ -119,6 +119,24 @@ pub fn prepare(inputs: &Inputs) -> Outcome {
         lines.push(("bFull Screen".into(), "0".into()));
     }
     if let Some(device) = inputs.device {
+        // The game compares this name with the card's at every start (`004da570`, without case)
+        // and, when they differ, shuts its renderer and asks for its launcher; it is written
+        // again at every start, so a renamed card (a driver update can rename it) is said here.
+        // Only a saved file's name is compared: a first start's text is the High preset's.
+        let saved = if first_time {
+            None
+        } else {
+            settings::ini_value(&text_of(&old_prefs), "Display", "sD3DDevice").map(str::to_string)
+        };
+        if let Some(before) = saved {
+            let before = before.trim().trim_matches('"');
+            if !before.eq_ignore_ascii_case(device) {
+                out.log.push(format!(
+                    "FalloutPrefs.ini: the graphics card's name changed from \"{before}\" to \
+                     \"{device}\": the new name written"
+                ));
+            }
+        }
         lines.push(("sD3DDevice".into(), format!("\"{device}\"")));
     }
     // The game's window starts at the desktop's size: borderless, the monitor's real pixels (the
@@ -428,6 +446,64 @@ mod tests {
             assert!(prefs.contains(line), "{line}: {prefs}");
         }
         assert!(!prefs.contains("iSize W=1280"), "{prefs}");
+    }
+
+    /// A card whose name changed since the last start (a driver update can rename it) is said in
+    /// the log and the new name written; the same name in another case (the game compares without
+    /// case) is not.
+    #[test]
+    fn a_renamed_card_is_said_and_written() {
+        let renamed = |before: &str| {
+            let prefs = format!(
+                "[Display]\r\nsD3DDevice=\"{before}\"\r\n[nv-rs]\r\nbWindowSizeChecked=1\r\n"
+            );
+            first(None, Some(prefs.as_bytes()))
+        };
+        let out = renamed("AMD Radeon RX 7800 XT (RADV GFX1101)");
+        assert!(
+            out.log.iter().any(|l| l.contains(
+                "changed from \"AMD Radeon RX 7800 XT (RADV GFX1101)\" to \"AMD Radeon RX 7800 XT (RADV NAVI32)\""
+            )),
+            "{:?}",
+            out.log
+        );
+        let prefs = text_of(out.prefs.as_deref().unwrap());
+        assert!(
+            prefs.contains("sD3DDevice=\"AMD Radeon RX 7800 XT (RADV NAVI32)\""),
+            "{prefs}"
+        );
+        let out = renamed("amd radeon rx 7800 xt (radv navi32)");
+        assert!(
+            !out.log.iter().any(|l| l.contains("changed from")),
+            "{:?}",
+            out.log
+        );
+    }
+
+    /// A first start (no FalloutPrefs.ini yet) compares no name, even when the High preset it
+    /// starts from names another card.
+    #[test]
+    fn a_first_start_says_no_renamed_card() {
+        let out = prepare(&Inputs {
+            ini: None,
+            prefs: None,
+            default_ini: Some(DEFAULT_INI.to_vec()),
+            high_ini: Some(b"[Display]\r\nsD3DDevice=\"Some Older Card\"\r\n".to_vec()),
+            pending: None,
+            desktop: Some((2560, 1440)),
+            screen: Some((2560, 1440)),
+            device: Some("AMD Radeon RX 7800 XT (RADV NAVI32)"),
+        });
+        assert!(
+            !out.log.iter().any(|l| l.contains("changed from")),
+            "{:?}",
+            out.log
+        );
+        let prefs = text_of(out.prefs.as_deref().unwrap());
+        assert!(
+            prefs.contains("sD3DDevice=\"AMD Radeon RX 7800 XT (RADV NAVI32)\""),
+            "{prefs}"
+        );
     }
 
     /// A file the player edited is not replaced: Fallout.ini already with the sections is left
