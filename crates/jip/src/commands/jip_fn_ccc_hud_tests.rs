@@ -274,6 +274,9 @@ fn setup() -> Engine {
     e.map(0x011d_9000, 0x1000);
     e.map(0x011d_e000, 0x1000);
     e.map(0x011e_0000, 0x1000);
+    if !e.mem.is_mapped(0x011f_3000) {
+        e.map(0x011f_3000, 0x1000);
+    }
     e.mem.set_u32(0x011f_32f4, MAP_VT);
     e.mem.set_u32(0x011f_32f4 + 4, 1);
     e.mem.set_u32(0x011f_32f4 + 8, BUCKET);
@@ -527,6 +530,9 @@ fn avatars_by_name_folder_and_kind() {
 #[test]
 fn trait_0_health_distance_and_action() {
     let (mut e, want) = loaded(false);
+    // The player: a reference in no cell.
+    e.mem.set_u32(0x011d_ea3c, FORMS + 0x6000);
+    extra_stand_ins(&mut e);
     named_npc(&mut e, b"Boone", false, false);
     e.mem.set_u32(NPC + 0xa4, AV_VT);
     e.mem.set_u32(AV_VT + 0xc, GET_AV_FN);
