@@ -612,3 +612,231 @@ fn refresh_anim_data_refreshes_and_blends() {
     call_on(&mut e, 0x290c, PC, &[]);
     assert!(anim_calls().is_empty());
 }
+
+// ---- ReloadEquippedModels: the player, the re-equipped weapon, every slot ----
+
+const PCHAR: u32 = FORMS + 0x1_0000;
+const PBIPED: u32 = FORMS + 0x1_0400;
+const PBIPED_1ST: u32 = FORMS + 0x1_0800;
+const PNODE_1ST: u32 = FORMS + 0x1_0c00;
+const PPROCESS: u32 = FORMS + 0x1_1000;
+const PPROCESS_VT: u32 = FORMS + 0x1_1400;
+const PWEAPON: u32 = FORMS + 0x1_1800;
+const PENTRY: u32 = FORMS + 0x1_1c00;
+const PXLIST: u32 = FORMS + 0x1_1d00;
+const PXDATA: u32 = FORMS + 0x1_1e00;
+const BIP01: u32 = FORMS + 0x1_2000;
+const BACKPACK: u32 = FORMS + 0x1_2100;
+const SLOT_NODES: u32 = FORMS + 0x1_3000;
+const QUEUE_EQUIP_FN: u32 = 0x0dea_2050;
+
+/// The player (`0x14`) with 3D, a third- and a first-person biped (the second's node
+/// `PNODE_1ST`), in high process, its weapon in slot 5 (flags `0x10 | 4`: re-equipped, scoped),
+/// the process's weapon entry that weapon with one extra data list `PXDATA`; Bip01 with a
+/// "Backpack" node. Every game call recorded under its address.
+fn player_scene() -> Engine {
+    let mut e = setup();
+    form(&mut e, PCHAR, 0x3b, 0x14);
+    e.mem.set_u32(PCHAR, CHAR_VT);
+    e.mem.set_u32(CHAR_VT + 0x218, BOUND_TRUE);
+    e.mem.set_u32(PCHAR + 0x20, STATIC);
+    e.mem.set_u32(PCHAR + 0x64, LOADED);
+    e.mem.set_u32(PCHAR + 0x1b4, PBIPED);
+    e.mem.set_u32(PCHAR + 0x68C, PBIPED_1ST);
+    e.mem.set_u32(PCHAR + 0x694, PNODE_1ST);
+    e.mem.set_u32(PCHAR + 0x68, PPROCESS);
+    e.mem.set_u32(PPROCESS, PPROCESS_VT);
+    e.mem.set_u32(PPROCESS_VT + 0x178, QUEUE_EQUIP_FN);
+    for b in [PBIPED, PBIPED_1ST] {
+        e.mem.set_u32(b + 0x2b0, PCHAR);
+    }
+    node(&mut e, PNODE_1ST, b"1st", &[]);
+    form(&mut e, PWEAPON, 0x28, 0x0000_6001);
+    e.mem.set_u8(PWEAPON + 0x100, 0x14);
+    e.mem.set_u32(PBIPED + 0x2c + 5 * 0x10, PWEAPON);
+    e.mem.set_u32(PPROCESS + 0x114, PENTRY);
+    e.mem.set_u32(PENTRY, PXLIST);
+    e.mem.set_u32(PXLIST, PXDATA);
+    e.mem.set_u32(PENTRY + 8, PWEAPON);
+    e.mem.set_u32(PBIPED, BIP01);
+    node(&mut e, BACKPACK, b"Backpack", &[]);
+    node(&mut e, BIP01, b"Bip01", &[BACKPACK]);
+    // Slots 0, 3 and 6 hold nodes under SPINE.
+    for slot in [0u32, 3, 6] {
+        let n = SLOT_NODES + 0x40 * slot;
+        e.mem.set_u32(PBIPED + 0x2c + slot * 0x10 + 8, n);
+        e.mem.set_u32(n + 0x18, SPINE);
+    }
+    macro_rules! stand_ins {
+        ($($f:expr),*) => {$(
+            e.register($f, |_, w| {
+                CALLS.with(|c| c.borrow_mut().push(($f, w.to_vec())));
+                Ret::default()
+            });
+        )*};
+    }
+    stand_ins!(
+        0x0060_6540u32,
+        0x004a_c1e0,
+        0x0049_9240,
+        0x0077_f270,
+        0x0077_f2f0,
+        QUEUE_EQUIP_FN,
+        UPDATE_FN
+    );
+    e.mem.set_u32(NODE_VT + 0xa4, UPDATE_FN);
+    e
+}
+
+fn of(addr: u32) -> Vec<Vec<u32>> {
+    calls()
+        .into_iter()
+        .filter(|c| c.0 == addr)
+        .map(|c| c.1)
+        .collect()
+}
+
+#[test]
+fn the_players_weapon_slot_reloads_both_views_and_reequips() {
+    let mut e = player_scene();
+    assert_eq!(call_on(&mut e, 0x280d, PCHAR, &[n(5)]), (1, 0.0));
+    assert_eq!(
+        node_calls(),
+        vec![(REMOVE_FN, BIP01, vec![BACKPACK])],
+        "the backpack node taken first (slot 5 has no node)"
+    );
+    assert_eq!(
+        of(0x0060_6540),
+        vec![
+            vec![STATIC, PCHAR, PBIPED, 0],
+            vec![STATIC, PCHAR, PBIPED_1ST, 0]
+        ],
+        "both bipeds' models loaded again"
+    );
+    assert_eq!(of(0x004a_c1e0), vec![vec![PBIPED, 0], vec![PBIPED_1ST, 0]]);
+    let updates = of(UPDATE_FN);
+    assert_eq!(updates.len(), 2);
+    assert_eq!(
+        (updates[0][0], updates[0][2]),
+        (ROOT, 0),
+        "the root's downward update"
+    );
+    assert_eq!(
+        (updates[1][0], updates[1][2]),
+        (PNODE_1ST, 0),
+        "then the first-person node's"
+    );
+    assert_eq!(
+        of(0x0077_f270),
+        vec![Vec::<u32>::new()],
+        "the HUD's weapon refresh"
+    );
+    assert_eq!(
+        of(0x0077_f2f0),
+        vec![vec![PWEAPON + 0x1e8]],
+        "the scope with the weapon's model"
+    );
+    assert_eq!(
+        of(QUEUE_EQUIP_FN),
+        vec![vec![PPROCESS, PCHAR, 1, PWEAPON, 1, PXDATA, 1, 0, 1, 0, 0]],
+        "equipped again: the actor, true, the weapon, 1, its first list, true, false, true, 0, false"
+    );
+    for slot in [0u32, 3, 6] {
+        let n = SLOT_NODES + 0x40 * slot;
+        assert_eq!(
+            e.mem.u32(PBIPED + 0x2c + slot * 0x10 + 8),
+            n,
+            "slot {slot} left"
+        );
+    }
+}
+
+#[test]
+fn no_argument_reloads_every_slot_but_the_pipboys() {
+    let mut e = player_scene();
+    // The weapon entry is of another weapon: no equip again.
+    e.mem.set_u32(PENTRY + 8, PWEAPON + 0x40);
+    call_on(&mut e, 0x280d, PCHAR, &[]);
+    for slot in [0u32, 3] {
+        assert_eq!(
+            e.mem.u32(PBIPED + 0x2c + slot * 0x10 + 8),
+            0,
+            "slot {slot} taken"
+        );
+    }
+    assert_eq!(
+        e.mem.u32(PBIPED + 0x2c + 6 * 0x10 + 8),
+        SLOT_NODES + 0x40 * 6,
+        "the Pip-Boy's slot (mask 0xFFFBF) left"
+    );
+    let removed: Vec<_> = node_calls().into_iter().map(|c| c.2[0]).collect();
+    assert_eq!(removed, vec![BACKPACK, SLOT_NODES, SLOT_NODES + 0xc0]);
+    assert!(
+        of(QUEUE_EQUIP_FN).is_empty(),
+        "another weapon's entry: not equipped again"
+    );
+    assert_eq!(
+        of(0x0077_f270).len(),
+        1,
+        "the weapon slot is among them: HUD refreshed"
+    );
+}
+
+#[test]
+fn another_slot_of_the_player_leaves_the_hud() {
+    let mut e = player_scene();
+    call_on(&mut e, 0x280d, PCHAR, &[n(3)]);
+    assert!(of(0x0077_f270).is_empty());
+    assert!(of(QUEUE_EQUIP_FN).is_empty());
+    assert_eq!(
+        node_calls(),
+        vec![(REMOVE_FN, SPINE, vec![SLOT_NODES + 0xc0])],
+        "no backpack"
+    );
+}
+
+// ---- ModelHasBlock: a base form's model file ----
+
+#[test]
+fn model_has_block_loads_a_base_forms_model() {
+    let mut e = setup();
+    const MODEL_FORM: u32 = FORMS + 0x1_4000;
+    const MODEL_TEXT: u32 = FORMS + 0x1_4100;
+    const LOADED_ROOT: u32 = FORMS + 0x1_4200;
+    const LOADED_KID: u32 = FORMS + 0x1_4300;
+    // A static (type 0x20, its model component at word 0x10 by `kBaseComponentOffsets`).
+    let model = super::super::model_component(&e, STATIC);
+    assert_ne!(model, 0, "statics have a model");
+    let _ = MODEL_FORM;
+    e.mem.write(MODEL_TEXT, b"box.nif\0");
+    e.mem.set_u32(model + 4, MODEL_TEXT);
+    node(&mut e, LOADED_KID, b"Lid", &[]);
+    node(&mut e, LOADED_ROOT, b"BoxRoot", &[LOADED_KID]);
+    e.mem.set_u32(0x011c_3b3c, FORMS + 0x1_4400);
+    e.register(0x0044_7080, |e, w| {
+        let mut words = w.to_vec();
+        words[1] = 0;
+        CALLS.with(|c| c.borrow_mut().push((0x0044_7080, words)));
+        assert_eq!(nvse::table::guest_text(e, w[1]), b"box.nif");
+        Ret {
+            eax: LOADED_ROOT,
+            ..Ret::default()
+        }
+    });
+    let has = |e: &mut Engine, rf: u16, name: &[u8]| call_on(e, 0x28df, 0, &[r(rf), s(name)]).1;
+    assert_eq!(has(&mut e, R_STATIC, b"Lid"), 1.0);
+    assert_eq!(
+        of(0x0044_7080),
+        vec![vec![FORMS + 0x1_4400, 0, 0, 1, 0, 0, 1]],
+        "the loader, the path (checked), 0, 1, 0, 0, 1"
+    );
+    assert_eq!(
+        has(&mut e, R_STATIC, b"Hinge"),
+        0.0,
+        "a name the file has not"
+    );
+    // A reference with 3D: its 3D only, the file never loaded.
+    CALLS.with(|c| c.borrow_mut().clear());
+    assert_eq!(has(&mut e, R_REFR, b"Hinge"), 0.0);
+    assert!(of(0x0044_7080).is_empty());
+}
