@@ -54,7 +54,9 @@ pub const fn routine(group: Group, index: u32) -> u32 {
 
 /// Registers `f` at `routine` and writes that address into the guest vtable slot at `slot` (as
 /// JIP's `SafeWrite32`); answers the word the slot held (the function JIP's routine may call on).
-/// Before the threads start, while JIP installs or the host's row is set.
+/// While JIP installs or the host's row is set, or at `DeferredInit` for a switch JIP turns on
+/// there (O18): the routine is registered before the slot names it, and a real thread's engine
+/// takes a routine registered later at its first call of it (`Engine::register`).
 pub fn write_slot(e: &mut Engine, slot: u32, routine: u32, f: AbiFn) -> u32 {
     debug_assert!(
         in_block(routine) && routine % 4 == 0,

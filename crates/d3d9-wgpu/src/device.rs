@@ -8409,6 +8409,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.frames_shown
     }
 
+    /// Why the window's frames are not shown now (why the current stretch of them began); None when
+    /// its last frame was shown, or when no frame was asked of a window (tests).
+    pub fn frame_not_shown(&self) -> Option<crate::NoFrame> {
+        self.surface
+            .as_ref()
+            .and_then(crate::window::Window::not_shown)
+    }
+
     /// Whether the frame-rate counter's drawing was made, and how many frames it was drawn into
     /// (tests: off, nothing is made).
     pub fn frame_rate_drawn(&self) -> (bool, u64) {
@@ -9198,7 +9206,11 @@ pub(crate) fn surface_for(
     let w = crate::window::registered(window).ok_or("no window made known by the window layer")?;
     // macOS: the surface on the window's Metal layer, made on the main thread with the window
     // (this runs on the game's or the render thread, where winit gives no handle and AppKit's
-    // view may not be touched). Metal only: another API's device cannot show it.
+    // view may not be touched). Metal only: another API's device cannot show it. wgpu itself
+    // still reads the window's occlusion state (`occlusionState`, through the layer's view) on
+    // the thread that takes each frame (wgpu-hal metal surface.rs, acquire_texture): a Main
+    // Thread Checker report from there is expected. tests/metal_surface.rs runs this sequence
+    // off the main thread on CI's Mac.
     #[cfg(target_vendor = "apple")]
     if let Some(layer) = w.metal_layer() {
         // SAFETY: the layer is a CAMetalLayer the window keeps retained (`w` holds the window

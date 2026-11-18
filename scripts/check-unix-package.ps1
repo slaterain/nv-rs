@@ -12,7 +12,8 @@ What it checks, each one a refusal (status 1, nothing written) when it fails:
 2. The archive's own list (read before extracting): only plain files and folders (no links), every
    name under "<base>/", no "..", no two names equal when case is ignored.
 3. It holds one package folder, <base>, with play.sh, app/nv-viewer and BUILD.txt; app/nv-viewer's
-   SHA256 is the one BUILD.txt names.
+   SHA256 is the one BUILD.txt names; and READ ME.txt, whose first paragraph under "What this build
+   can do today" (each system's own words) ends CHECKED.txt.
 4. BUILD.txt names a run of slaterain/nv-rs from refs/heads/main, and GitHub itself (gh, signed in)
    says that run is the package workflow, started by hand, on main, at BUILD.txt's commit, and that
    it succeeded; this checkout's origin is slaterain/nv-rs and the commit is on its main (git fetch,
@@ -123,6 +124,20 @@ try {
     if ($commit -eq '') { Refuse "BUILD.txt names no source commit" }
     $programActual = (Get-FileHash -LiteralPath (Join-Path $package 'app\nv-viewer') -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($programSum -ne $programActual) { Refuse "app/nv-viewer's SHA256 is $programActual, BUILD.txt says '$programSum'" }
+    # What this build does, for CHECKED.txt's last paragraph: the first paragraph of the package's own
+    # READ ME under "What this build can do today" (each system's READ ME says it for that system,
+    # so the published text cannot say something else).
+    $readMe = Join-Path $package 'READ ME.txt'
+    if (-not (Test-Path -LiteralPath $readMe -PathType Leaf)) { Refuse "the package has no READ ME.txt" }
+    $readLines = @([System.IO.File]::ReadAllLines($readMe))
+    $at = [Array]::IndexOf($readLines, 'What this build can do today')
+    $canDo = @()
+    if ($at -ge 0) {
+        $i = $at + 1
+        if ($i -lt $readLines.Count -and $readLines[$i] -match '^-+$') { $i++ }
+        while ($i -lt $readLines.Count -and $readLines[$i].Trim() -ne '') { $canDo += $readLines[$i]; $i++ }
+    }
+    if ($canDo.Count -eq 0) { Refuse "the package's READ ME.txt has no paragraph under 'What this build can do today'" }
 
     # 4. Built by the package workflow from main, as GitHub itself says (not only BUILD.txt), at a
     #    commit that is on origin's main.
@@ -200,9 +215,8 @@ $text = @(
     "  $filesLine",
     "  $programLine",
     "",
-    "The game does NOT run on Linux or macOS yet: this preview finds your game, keeps nv-rs's saves",
-    "apart from yours, and says plainly that it cannot start the game yet."
-)
+    "What this build can do today (from the package's READ ME):"
+) + $canDo
 [System.IO.File]::WriteAllText($checked, (($text -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
 Write-Host "check-unix-package: PASSED. Wrote $checked"
 exit 0

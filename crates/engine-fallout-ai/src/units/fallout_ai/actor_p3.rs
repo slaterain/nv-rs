@@ -13109,15 +13109,23 @@ fn hit_me_critical_effect(e: &mut Engine, s: &mut HitMe) {
 }
 
 /// `0089b43f`..`0089b6d0`: a kill of the player's bound weapon 0x22 can
-/// fire a projectile-like reference back at the target.
+/// fire a projectile-like reference back at the target (the attacker's
+/// weapon with JIP LN's `uNPCPerks`, seam `0x89B455`).
 fn hit_me_kill_effect(e: &mut Engine, s: &mut HitMe) {
     let this = s.this;
     let aggressor = s.aggressor(e);
     if aggressor == 0 {
         return;
     }
-    let mut entry_form = 0u32;
-    if s.player != 0 {
+    // JIP LN's O18 (`uNPCPerks`: `SAFE_WRITE_BUF(0x89B455, ...)`, 32 bytes): the answer is the
+    // attacker's current weapon in place of the player's. Words: the attacker.
+    let jip_weapon = if e.jip_patches() & engine_core::extend::jip_patches::NPC_PERKS != 0 {
+        e.site(0x0089_b455, &[aggressor])
+    } else {
+        None
+    };
+    let mut entry_form = jip_weapon.unwrap_or(0);
+    if jip_weapon.is_none() && s.player != 0 {
         let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, s.player));
         if acquire != 0 {
             let acquire = typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, s.player));
@@ -23465,6 +23473,90 @@ mod tests {
         actor_set_life_state(&mut e, actor, 6);
         assert_eq!(e.get(actor, Actor::eLifeState), 6);
         assert_eq!(e.mem.u32(GC_MARK_COUNT), 1, "same state: not asked");
+    }
+
+    thread_local! {
+        static O18_KILL_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+        static O18_KILL_ANSWER: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    }
+
+    fn at_kill_effect_weapon(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        O18_KILL_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        O18_KILL_ANSWER.with(std::cell::Cell::get)
+    }
+
+    /// JIP's O18 seam at `0x89B455`: the kill effect's weapon is the player's (none here, so the
+    /// effect is not looked at) unless the switch's bit is set and the handler answers; then the
+    /// answer is the weapon (of kind 0x22 here: the entry point 0x2E is asked for the attacker).
+    /// Asked with the attacker.
+    #[test]
+    fn hit_me_kill_effect_jip_o18_takes_the_attackers_weapon() {
+        use engine_core::extend::jip_patches;
+        let run = |word: u32, answer: Option<u32>| {
+            let mut e = engine();
+            let world = hit_world(&mut e, true);
+            stub(&mut e, WEAPON_GETTER_8D85E0, 0x22);
+            stub(&mut e, HANDLE_ENTRY_POINT, 0);
+            e.on_site_for_test(0x0089_b455, at_kill_effect_weapon);
+            O18_KILL_ASKED.with(|s| s.borrow_mut().clear());
+            O18_KILL_ANSWER.with(|c| c.set(answer));
+            e.set_jip_patches(word);
+            e.call_log = Some(vec![]);
+            let mut s = HitMe {
+                this: world.victim,
+                hit: world.hit,
+                kind: 0,
+                player: world.player.addr(),
+                ebp: 0,
+                moved: false,
+                flag_1a: false,
+                arrows: 0,
+                weapon_type: 1,
+                crippled: false,
+                kind_one: false,
+                flag_63: false,
+                flag_64: false,
+                health: 0.0,
+                fatigue: 0.0,
+                total: 0.0,
+                blocked: 0.0,
+                not_fleeing: false,
+                dead: true,
+                limb: -1,
+                cripple_roll: false,
+                torso_hit: false,
+            };
+            hit_me_kill_effect(&mut e, &mut s);
+            let asked = O18_KILL_ASKED.with(|s| s.take());
+            let forms = calls_to(&e, WEAPON_GETTER_8D85E0);
+            let entry: Vec<Vec<u32>> = calls_to(&e, HANDLE_ENTRY_POINT)
+                .iter()
+                .map(|w| w[..2].to_vec())
+                .collect();
+            (asked, forms, entry, world.player.addr())
+        };
+        let off = jip_patches::INSTALLED | jip_patches::FIXES | jip_patches::NPC_WEAPON_MODS;
+        let (asked, forms, entry, _) = run(off, Some(0x6400));
+        assert!(
+            asked.is_empty() && forms.is_empty() && entry.is_empty(),
+            "the bit off"
+        );
+        let (asked, forms, _, player) = run(jip_patches::NPC_PERKS, None);
+        assert_eq!(asked, vec![vec![player]]);
+        assert!(forms.is_empty(), "no answer: the player's weapon (none)");
+        let (_, forms, entry, player) = run(jip_patches::NPC_PERKS, Some(0x6400));
+        assert_eq!(forms, vec![vec![0x6400]]);
+        assert_eq!(
+            entry,
+            vec![vec![0x2e, player]],
+            "entry point 0x2E for the attacker"
+        );
+        let (_, forms, entry, _) = run(jip_patches::NPC_PERKS, Some(0));
+        assert!(
+            forms.is_empty() && entry.is_empty(),
+            "an answer of no weapon"
+        );
     }
 }
 

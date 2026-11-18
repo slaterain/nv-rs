@@ -50,6 +50,7 @@ function Defaults {
     $script:ghAuth = 0
     $script:answer = @{ headBranch = 'main'; event = 'workflow_dispatch'; workflowName = 'Preview packages (Linux, macOS)'; conclusion = 'success' }
     $script:extra = @()
+    $script:readme = "nv-rs`n=====`n`nWhat this build can do today`n----------------------------`nThe program goes on to start the game.`nA second line of it.`n`nNot this paragraph.`n"
 }
 Defaults
 
@@ -61,6 +62,7 @@ function Package([string]$case, [byte[]]$program, [string]$commit, [string]$buil
     $package = Join-Path $dir $name
     New-Item -ItemType Directory -Force -Path (Join-Path $package 'app') | Out-Null
     [System.IO.File]::WriteAllText((Join-Path $package 'play.sh'), "#!/bin/sh`n")
+    if ($null -ne $script:readme) { [System.IO.File]::WriteAllText((Join-Path $package 'READ ME.txt'), $script:readme) }
     $exe = Join-Path $package 'app\nv-viewer'
     [System.IO.File]::WriteAllBytes($exe, $program)
     if ($programSum -eq '') { $programSum = Sha $exe }
@@ -108,8 +110,8 @@ Check "P CHECKED.txt names the run" ($text.Contains('Built by GitHub Actions, ru
 Check "P CHECKED.txt says GitHub confirmed it" ($text.Contains('GitHub confirms: run 4242'))
 Check "P CHECKED.txt names the commit" ($text.Contains("Source commit: $onMain"))
 Check "P CHECKED.txt has the program's line" ($text -match 'nv-viewer: 30004 bytes, shares 0 runs .* longest 0')
-Check "P CHECKED.txt has the 0 hits line" ($text -match '3 files, 0 needles: 0 hits')
-Check "P CHECKED.txt says the game does not run" ($text.Contains('The game does NOT run on Linux or macOS yet'))
+Check "P CHECKED.txt has the 0 hits line" ($text -match '4 files, 0 needles: 0 hits')
+Check "P CHECKED.txt ends with the READ ME's paragraph" ($text.Contains("What this build can do today (from the package's READ ME):`nThe program goes on to start the game.`nA second line of it.") -and -not $text.Contains('Not this paragraph'))
 Check "P archive unchanged" ((Sha $archive) -eq $before)
 Check "P extraction removed" (@(Get-ChildItem -LiteralPath $work -Force).Count -eq 0)
 if ($st -ne 0) { Write-Host $text }
@@ -124,6 +126,10 @@ function Refused([string]$what, [int]$st, [string]$why) {
 Refused 'S a wrong .sha256' (Package 'sum' $elf $onMain $github '' $true) "SHA256 is"
 Refused 'H a program BUILD.txt does not name' (Package 'prog' $elf $onMain $github ('1' * 64) $false) "app/nv-viewer's SHA256"
 Refused 'M a commit not on main' (Package 'main' $elf $offMain $github '' $false) "is not on origin's main"
+$script:readme = "nv-rs`n`nSomething else`n"
+Refused 'W a READ ME without what the build can do' (Package 'readme' $elf $onMain $github '' $false) "no paragraph under 'What this build can do today'"
+$script:readme = $null
+Refused 'W2 no READ ME' (Package 'no-readme' $elf $onMain $github '' $false) "has no READ ME.txt"
 $branch = $github.Replace('refs/heads/main', 'refs/heads/main-not')
 Refused 'B a run from another branch (BUILD.txt)' (Package 'branch' $elf $onMain $branch '' $false) "not refs/heads/main"
 $local = "Built by scripts/package-playtest.sh on the packager's own machine (Linux x86_64); the maintainers have never started it on this system."
