@@ -10,10 +10,11 @@ description = "The preview package's Play.exe: finds the player's game, makes th
 name = "Play"
 path = "src/main.rs"
 
-# Standalone tool, not part of the root workspace. Its one dependency is the project's own
+# Standalone tool, not part of the root workspace. Its dependencies are the project's own:
 # game-profile (the profile files' sections and settings lines, shared with the host's first start
-# on Linux and macOS).
+# on Linux and macOS) and mod-install (the mods folders, shared with play.sh's --mods).
 [dependencies]
 game-profile = { path = "../../crates/game-profile" }
+mod-install = { path = "../../crates/mod-install" }
 
 [workspace]
