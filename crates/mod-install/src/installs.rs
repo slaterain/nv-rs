@@ -14,7 +14,7 @@
 //! file: Meshes/Weapons/gun.nif
 //! ```
 
-use crate::fsops::{act, Guard, Op};
+use crate::fsops::{act, sync_folder, Guard, Held, Op};
 use std::path::{Path, PathBuf};
 
 /// One installed mod.
@@ -254,32 +254,57 @@ pub fn remove(installs: &Path, mod_folder: &Path, game: &Path) -> std::io::Resul
     crate::fsops::remove_mod_folder(installs, mod_folder, game)
 }
 
+/// The lock file in `installs` that one mod installer holds for its whole run ([`hold_installer`]).
+/// It never starts with a number or [`STAGING`]: never listed, played or cleared.
+pub const LOCK: &str = ".installer.lock";
+
+/// Takes the installer's lock in `installs` (the folder made when missing), through the guarded
+/// changes, never inside the game's folder `game`: `Some` while this run holds it, `None` when
+/// another installer window holds it now. A lock left by a program that has ended is free again.
+pub fn hold_installer(installs: &Path, game: &Path) -> std::io::Result<Option<Held>> {
+    let mut guard = guard_in(installs, game, &[])?;
+    act(&guard, Op::MakeDir(installs))?;
+    guard.settle().map_err(std::io::Error::other)?;
+    crate::fsops::hold(&guard, &installs.join(LOCK))
+}
+
+/// What [`clear_staging`] did: how many leftovers it cleared, and each one it could not, with why.
+#[derive(Debug, Default)]
+pub struct Cleared {
+    pub cleared: usize,
+    pub left: Vec<(PathBuf, std::io::Error)>,
+}
+
 /// Clears every staging folder (named [`STAGING`]...) left in `installs` by an install that was
 /// stopped (the window closed, the power cut): each removed whole, a link at its place removed
-/// itself (never followed), never inside the game's folder `game`. How many were cleared.
-pub fn clear_staging(installs: &Path, game: &Path) -> std::io::Result<usize> {
+/// itself (never followed), never inside the game's folder `game`. One that can't be cleared is
+/// noted and the rest are still cleared. Only while [`hold_installer`]'s lock is held: another
+/// window's staging folder is its install in progress.
+pub fn clear_staging(installs: &Path, game: &Path) -> std::io::Result<Cleared> {
     let entries = match std::fs::read_dir(installs) {
         Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Cleared::default()),
         Err(e) => return Err(e),
     };
-    let mut cleared = 0usize;
+    let mut done = Cleared::default();
     for entry in entries {
         let entry = entry?;
         if !entry.file_name().to_string_lossy().starts_with(STAGING) {
             continue;
         }
-        if cleared >= MAX_INSTALLS {
+        if done.cleared + done.left.len() >= MAX_INSTALLS {
             return Err(std::io::Error::other(format!(
                 "{} holds more than {MAX_INSTALLS} unfinished installs",
                 installs.display()
             )));
         }
         let path = entry.path();
-        act(&guard_in(&path, game, &[])?, Op::RemoveTree(&path))?;
-        cleared += 1;
+        match guard_in(&path, game, &[]).and_then(|g| act(&g, Op::RemoveTree(&path))) {
+            Ok(()) => done.cleared += 1,
+            Err(e) => done.left.push((path, e)),
+        }
     }
-    Ok(cleared)
+    Ok(done)
 }
 
 /// Removes one staging folder of `installs` after a failed install (another window's install
@@ -352,13 +377,17 @@ pub fn finish(
             bytes: record.text().as_bytes(),
         },
     )?;
+    // Linux and macOS: the record's name on the disk before the folder takes its place, and the
+    // folder's new name after (the unpacked files were synced as they were written).
+    sync_folder(staging)?;
     act(
         &guard,
         Op::Rename {
             from: staging,
             to: folder,
         },
-    )
+    )?;
+    sync_folder(installs)
 }
 
 /// The folder in the loose mods folder where installed archives are kept (not offered again, not

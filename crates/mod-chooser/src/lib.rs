@@ -34,6 +34,11 @@
 //! | `MAX_RECORD` | 16 MB of an install record read | a record lists a mod's files: tens of thousands of lines at most |
 //! | `ROOM_SPARE` + `ROOM_PER_FILE` | 256 MB and 4 KB a file kept free beyond the unpacked size | the folders, the record, each file's last part-filled block, and room for the system |
 //! | the unpacked total | the room on the drive less the spare room (at most `mod_archive::Limits::default`) | a full drive is said as one, before anything is unpacked |
+//! | what a 7z decodes | `mod_archive::Limits::default`'s, never lowered for room | decoding writes nothing |
+//!
+//! One installer runs at a time: a second window says the installer is already open and stops
+//! before it changes anything (a lock file in `mod installs`, held open for the whole run, which
+//! the system lets go when the program ends however it ends).
 
 use fomod::config::{parse_config, parse_info, FileState};
 use fomod::install::{Facts, PlanError, Session};
@@ -90,12 +95,31 @@ const PROGRESS_EVERY: Duration = Duration::from_secs(1);
 
 type Out<'a> = &'a mut dyn Write;
 
+/// Whether a line is a path on its own (`C:\...`, `\\server\...`, `/...`, `~/...`): never wrapped,
+/// so it can be copied whole, spaces and all.
+fn path_line(line: &str) -> bool {
+    let t = line.trim_start().as_bytes();
+    t.starts_with(b"/")
+        || t.starts_with(b"\\\\")
+        || t.starts_with(b"~/")
+        || (t.len() >= 3
+            && t[0].is_ascii_alphabetic()
+            && t[1] == b':'
+            && matches!(t[2], b'\\' | b'/'))
+}
+
 /// `text` wrapped at [`WIDTH`] columns on spaces: each line keeps its own indent and its
-/// continuation lines are indented four more (a hanging indent). A word longer than the width (a
-/// path) stays whole.
+/// continuation lines are indented four more (a hanging indent). A word longer than the width
+/// stays whole, and a line that is a path ([`path_line`]) is never wrapped: every message puts a
+/// path on a line of its own.
 fn wrap(text: &str) -> String {
     let mut out = String::new();
     for line in text.split('\n') {
+        if path_line(line) {
+            out.push_str(line.trim_end());
+            out.push('\n');
+            continue;
+        }
         let indent = line.len() - line.trim_start_matches(' ').len();
         let hang = indent + 4;
         let mut current = " ".repeat(indent);
@@ -269,12 +293,16 @@ fn full_path(path: &Path) -> PathBuf {
     std::env::current_dir().map_or_else(|_| path.to_path_buf(), |here| here.join(path))
 }
 
-/// "Not enough room on the drive: X needed, Y free."
-fn no_room(needed: u64, free: u64) -> String {
+/// "Not enough room on the drive": the mod's unpacked size, the room nv-rs keeps free beyond it,
+/// what is free, and how much more is needed.
+fn no_room(bytes: u64, spare: u64, free: u64) -> String {
+    let needed = bytes.saturating_add(spare);
     format!(
-        "Not enough room on the drive: {} needed, {} free.",
-        size_text(needed),
-        size_text(free)
+        "Not enough room on the drive: the mod unpacks to {}, and nv-rs keeps {} more free for the system and the folders. {} is free: {} more is needed.",
+        size_text(bytes),
+        size_text(spare),
+        size_text(free),
+        size_text(needed.saturating_sub(free))
     )
 }
 
@@ -283,17 +311,17 @@ fn spare_for(files: usize) -> u64 {
     ROOM_SPARE.saturating_add(ROOM_PER_FILE.saturating_mul(files as u64))
 }
 
-/// The limits to unpack `bytes` in `files` files with `free` bytes on the drive: the total lowered
-/// to the room on the drive less the spare room; `Err` ([`no_room`]) when it does not fit.
+/// The limits to unpack `bytes` in `files` files with `free` bytes on the drive: the written
+/// total lowered to the room on the drive less the spare room (what a 7z may decode is never
+/// lowered: decoding writes nothing); `Err` ([`no_room`]) when it does not fit.
 fn room_limits(bytes: u64, files: usize, free: Option<u64>) -> Result<Limits, String> {
     let default = Limits::default();
     let Some(free) = free else {
         return Ok(default);
     };
     let spare = spare_for(files);
-    let needed = bytes.saturating_add(spare);
-    if needed > free {
-        return Err(no_room(needed, free));
+    if bytes.saturating_add(spare) > free {
+        return Err(no_room(bytes, spare, free));
     }
     Ok(Limits {
         total: default.total.min(free - spare),
@@ -350,6 +378,14 @@ fn read_record(folder: &Path) -> Record {
     Record::parse(&text)
 }
 
+/// "a folder could not be read (why):" and its full path on a line of its own.
+fn unreadable(folder: &Path, e: &std::io::Error) -> String {
+    format!(
+        "a folder could not be read ({e}):\n{}",
+        full_path(folder).display()
+    )
+}
+
 /// What the player has, for the installers' questions: every file of the game's Data, of the
 /// installed mods and of the loose mods folder (as "Play with mods" lays it over the game) counts
 /// as there and switched on (the port switches on every plugin it plays with).
@@ -371,16 +407,15 @@ fn facts_with(places: &Places, max_files: usize, max_depth: usize) -> Result<Fac
             let entries = match std::fs::read_dir(&dir) {
                 Ok(e) => e,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound && depth == 0 => continue,
-                Err(e) => return Err(format!("{} could not be read ({e})", dir.display())),
+                Err(e) => return Err(unreadable(&dir, &e)),
             };
             for entry in entries {
-                let entry =
-                    entry.map_err(|e| format!("{} could not be read ({e})", dir.display()))?;
+                let entry = entry.map_err(|e| unreadable(&dir, &e))?;
                 files += 1;
                 if files > max_files {
                     return Err(format!(
-                        "{} holds more than {max_files} files, more than the installer reads",
-                        root.display()
+                        "a folder holds more than {max_files} files, more than the installer reads:\n{}",
+                        full_path(root).display()
                     ));
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
@@ -391,7 +426,7 @@ fn facts_with(places: &Places, max_files: usize, max_depth: usize) -> Result<Fac
                 };
                 let kind = entry
                     .file_type()
-                    .map_err(|e| format!("{} could not be read ({e})", entry.path().display()))?;
+                    .map_err(|e| unreadable(&entry.path(), &e))?;
                 let top = relative.is_empty();
                 if layer
                     && top
@@ -403,8 +438,8 @@ fn facts_with(places: &Places, max_files: usize, max_depth: usize) -> Result<Fac
                 if kind.is_dir() {
                     if depth >= max_depth {
                         return Err(format!(
-                            "a folder is more than {max_depth} folders deep, deeper than the installer reads ({})",
-                            entry.path().display()
+                            "a folder is more than {max_depth} folders deep, deeper than the installer reads:\n{}",
+                            full_path(&entry.path()).display()
                         ));
                     }
                     stack.push((entry.path(), path, depth + 1));
@@ -440,7 +475,7 @@ fn inside_game(places: &Places) -> Option<String> {
         Err(e) => {
             return Some(format!(
                 "The game's folder could not be read ({e}):\n{}",
-                places.game.display()
+                full_path(&places.game).display()
             ))
         }
     };
@@ -453,14 +488,14 @@ fn inside_game(places: &Places) -> Option<String> {
             Err(e) => {
                 return Some(format!(
                     "{what} could not be read ({e}):\n{}",
-                    folder.display()
+                    full_path(folder).display()
                 ))
             }
         };
         if place.starts_with(&game) || game.starts_with(&place) {
             return Some(format!(
                 "{what} is inside the game's folder, or leads there through a link:\n{}\nnv-rs never changes the game's folder, so it can't install mods there. Keep the nv-rs folder (and its mods folder) outside the game's folder, then start this again.",
-                folder.display()
+                full_path(folder).display()
             ));
         }
     }
@@ -470,7 +505,7 @@ fn inside_game(places: &Places) -> Option<String> {
 /// The whole chooser in a window of its own (nv-rs's program with `--install-mods`): [`run`], or
 /// `places`' error, then on every way it ends, "Press Enter to close." and one line read (the
 /// input ending closes at once). The exit code: 0 when it ran, 1 when it stopped on an error, 2
-/// when it could not start.
+/// when it could not start (no folders, folders inside the game's, another installer open).
 pub fn run_in_window(input: &mut dyn BufRead, out: Out, places: Result<Places, String>) -> i32 {
     let code = match places {
         Err(why) => {
@@ -478,7 +513,7 @@ pub fn run_in_window(input: &mut dyn BufRead, out: Out, places: Result<Places, S
             2
         }
         Ok(places) => match run(input, out, &places) {
-            Ok(()) => 0,
+            Ok(code) => code,
             Err(e) => {
                 let _ = say(
                     out,
@@ -537,28 +572,79 @@ fn list_answer(answer: &str, total: usize) -> ListAnswer {
     }
 }
 
-/// The front end: the list, then what the player picks, until they press Enter on the list.
-pub fn run(input: &mut dyn BufRead, out: Out, places: &Places) -> std::io::Result<()> {
+/// The front end: the list, then what the player picks, until they press Enter on the list. One
+/// installer at a time ([`installs::hold_installer`], held for the whole run, the same on every
+/// system). The exit code as [`run_in_window`]'s: 0 when it ran, 2 when it could not start.
+pub fn run(input: &mut dyn BufRead, out: Out, places: &Places) -> std::io::Result<i32> {
     writeln!(out, "nv-rs mods")?;
     writeln!(out, "==========")?;
     if let Some(why) = inside_game(places) {
-        return say(out, &format!("\n{why}\nNothing was changed."));
+        say(out, &format!("\n{why}\nNothing was changed."))?;
+        return Ok(2);
     }
-    match installs::clear_staging(&places.installs, &places.game) {
-        Ok(0) => {}
-        Ok(_) => say(
-            out,
-            "\nAn install that was stopped before it finished (the window closed, or the power went) had left its unpacked files behind. They were cleared: that mod was not installed, and you can install it again.",
-        )?,
+    let _held = match installs::hold_installer(&places.installs, &places.game) {
+        Ok(Some(held)) => held,
+        Ok(None) => {
+            say(
+                out,
+                "\nThe mod installer is already open in another window. Finish there (or close that window), then start this again.\nNothing was changed.",
+            )?;
+            return Ok(2);
+        }
         Err(e) => {
-            return say(
+            say(
                 out,
                 &format!(
-                    "\nAn install that was stopped before it finished left files behind, and they could not be cleared: {e}\nNothing was changed."
+                    "\nThe mod installer could not start: its folder could not be used ({e}):\n{}\nNothing was changed.",
+                    full_path(&places.installs).display()
                 ),
-            )
+            )?;
+            return Ok(2);
         }
+    };
+    clear_leftovers(out, places)?;
+    choose(input, out, places)?;
+    Ok(0)
+}
+
+/// Clears what stopped installs left (said, with any that could not be cleared); the installer
+/// carries on either way, since a leftover is never listed or played.
+fn clear_leftovers(out: Out, places: &Places) -> std::io::Result<()> {
+    match installs::clear_staging(&places.installs, &places.game) {
+        Ok(done) if done.cleared == 0 && done.left.is_empty() => Ok(()),
+        Ok(done) => {
+            let stopped = "\nAn install that was stopped before it finished (the window closed, or the power went) had left its unpacked files behind.";
+            if done.left.is_empty() {
+                return say(
+                    out,
+                    &format!("{stopped} They were cleared: that mod was not installed, and you can install it again."),
+                );
+            }
+            say(
+                out,
+                &format!(
+                    "{stopped} {} of {} were cleared; these could not be (they are never used as mods, and the next start tries again):",
+                    done.cleared,
+                    done.cleared + done.left.len()
+                ),
+            )?;
+            for (path, e) in &done.left {
+                writeln!(out, "{}", full_path(path).display())?;
+                say(out, &format!("    ({e})"))?;
+            }
+            Ok(())
+        }
+        Err(e) => say(
+            out,
+            &format!(
+                "\nThe mod installs folder could not be checked for what stopped installs leave behind ({e}). Such leftovers are never used as mods; the installer carries on."
+            ),
+        ),
     }
+}
+
+/// The list and what the player picks, until they press Enter on the list.
+fn choose(input: &mut dyn BufRead, out: Out, places: &Places) -> std::io::Result<()> {
     loop {
         let installed = match installs::installed(&places.installs) {
             Ok(i) => i,
@@ -768,7 +854,8 @@ fn install_flow(
             let name = first_of(&[&info.name, &config.name, &stem]);
             let facts = match facts(places) {
                 Ok(f) => f,
-                Err(why) => return say(out, &format!("This mod can't be installed: {why}.")),
+                // No full stop: the reason ends with a path on a line of its own.
+                Err(why) => return say(out, &format!("This mod can't be installed: {why}")),
             };
             let mut session = match Session::new(&config, &facts) {
                 Ok(s) => s,
@@ -1234,12 +1321,20 @@ fn install(
     out.flush()?;
     let mut last: Option<Instant> = None;
     let mut report = |p: mod_archive::Progress| {
+        #[cfg(test)]
+        tests::on_progress(&staging, p);
         let due = last.map_or(true, |t| t.elapsed() >= PROGRESS_EVERY);
         if due || p.files == p.files_total {
             last = Some(Instant::now());
+            // A solid 7z decodes the options not chosen on its way to the chosen ones.
+            let past = if p.read > 0 {
+                format!(" (and {} of other files read through)", size_text(p.read))
+            } else {
+                String::new()
+            };
             let _ = writeln!(
                 out,
-                "  {} of {} files, {} of {}",
+                "  {} of {} files, {} of {}{past}",
                 p.files,
                 p.files_total,
                 size_text(p.bytes),
@@ -1253,25 +1348,41 @@ fn install(
         Ok(done) => done,
         Err(e) => {
             discard(out)?;
-            let full = e.problem == Problem::NoRoom
-                || (e.problem == Problem::TooBig && limits.total < Limits::default().total);
-            if full {
-                let (files, bytes) = (wanted.len(), {
+            // "No room" only for the drive really filling up while writing: the written total
+            // was checked against the room before the yes, and decoding writes nothing.
+            if e.problem == Problem::NoRoom {
+                let (files, bytes) = {
                     let listed = mod_archive::list(archive).unwrap_or_default();
-                    mod_archive::wanted_size(&listed, &wanted).1
-                });
+                    mod_archive::wanted_size(&listed, &wanted)
+                };
                 let free = (places.room)(&places.installs).unwrap_or(0);
                 return say(
                     out,
                     &format!(
                         "Nothing was installed.\n{}\nFree some space on the drive, then try again.",
-                        no_room(bytes.saturating_add(spare_for(files)), free)
+                        no_room(bytes, spare_for(files), free)
                     ),
                 );
             }
             return say(out, &format!("Nothing was installed.\n{}", e.player_text()));
         }
     };
+    // Every file it wrote still there (another program could have removed one): the record lists
+    // only what the folder really holds.
+    if let Some(gone) = done
+        .written
+        .iter()
+        .find(|p| !std::fs::symlink_metadata(p).is_ok_and(|m| m.is_file()))
+    {
+        discard(out)?;
+        return say(
+            out,
+            &format!(
+                "Nothing was installed: a file it had unpacked is gone (did another program remove it?):\n{}",
+                full_path(gone).display()
+            ),
+        );
+    }
     record.archive = file_name;
     record.archive_size = std::fs::metadata(archive).map_or(0, |m| m.len());
     record.files = wanted.iter().map(|(_, d)| d.replace('\\', "/")).collect();

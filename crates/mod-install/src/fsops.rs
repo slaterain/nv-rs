@@ -358,6 +358,87 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
     }
 }
 
+/// A lock held for as long as this lives: the lock file kept open with an exclusive lock that the
+/// system drops when the program ends however it ends (a closed window, a crash, a power cut), so
+/// a lock left by a program that is gone never blocks the next start.
+#[derive(Debug)]
+pub struct Held {
+    _file: std::fs::File,
+}
+
+/// Takes the lock `path` (made new when missing, through the guard's checks; a plain file only,
+/// never opened for writing): `Some` while held, `None` when another program holds it now.
+/// Windows: the file opened with no sharing at all. Linux and macOS: `flock`, exclusive.
+pub fn hold(guard: &Guard, path: &Path) -> std::io::Result<Option<Held>> {
+    guard.allows(path).map_err(refused)?;
+    match create_new(path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(e),
+    }
+    let meta = std::fs::symlink_metadata(path)?;
+    if meta.file_type().is_symlink() || !meta.is_file() {
+        return Err(refused(format!("{} is not a plain file", path.display())));
+    }
+    hold_open(path)
+}
+
+#[cfg(windows)]
+fn hold_open(path: &Path) -> std::io::Result<Option<Held>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // No sharing: while it is open, nobody else can open it (ERROR_SHARING_VIOLATION, 32).
+    match std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+    {
+        Ok(file) => Ok(Some(Held { _file: file })),
+        Err(e) if matches!(e.raw_os_error(), Some(32 | 33)) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(unix)]
+fn hold_open(path: &Path) -> std::io::Result<Option<Held>> {
+    use std::os::raw::c_int;
+    use std::os::unix::io::AsRawFd;
+    extern "C" {
+        fn flock(fd: c_int, operation: c_int) -> c_int;
+    }
+    // The same numbers on Linux and macOS.
+    const LOCK_EX: c_int = 2;
+    const LOCK_NB: c_int = 4;
+    let file = std::fs::File::open(path)?;
+    // SAFETY: `file` is open and owns the descriptor for the whole call.
+    if unsafe { flock(file.as_raw_fd(), LOCK_EX | LOCK_NB) } == 0 {
+        return Ok(Some(Held { _file: file }));
+    }
+    let e = std::io::Error::last_os_error();
+    if e.kind() == std::io::ErrorKind::WouldBlock {
+        Ok(None)
+    } else {
+        Err(e)
+    }
+}
+
+#[cfg(not(any(windows, unix)))]
+fn hold_open(path: &Path) -> std::io::Result<Option<Held>> {
+    Ok(Some(Held {
+        _file: std::fs::File::open(path)?,
+    }))
+}
+
+/// Syncs a folder's list of names to the disk, so a name just given in it survives a power cut
+/// (Linux and macOS; Windows' file system keeps names in its journal: nothing is done there).
+pub fn sync_folder(folder: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(folder)?.sync_all()?;
+    }
+    let _ = folder;
+    Ok(())
+}
+
 /// Removes an installed mod's whole folder: `folder` must be directly inside `installs` and a
 /// plain folder, and `installs` a plain folder too (a link at either is refused); then through
 /// [`act`], with a guard on the folder that forbids the game's folder `game`.

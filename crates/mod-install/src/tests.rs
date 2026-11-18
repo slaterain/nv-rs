@@ -1429,11 +1429,12 @@ fn a_leftover_staging_folder_is_not_a_mod_and_is_cleared() {
     let outside = dir.0.join("outside");
     write(&outside.join("keep.txt"), b"keep");
     folder_link(&outside, &installs.join(".staging-09 Link"));
-    assert_eq!(clear_staging(&installs, &game).unwrap(), 2);
+    assert_eq!(clear_staging(&installs, &game).unwrap().cleared, 2);
     assert!(!staging.exists());
     assert!(std::fs::symlink_metadata(installs.join(".staging-09 Link")).is_err());
     assert_eq!(std::fs::read(outside.join("keep.txt")).unwrap(), b"keep");
-    assert_eq!(clear_staging(&installs, &game).unwrap(), 0);
+    let again = clear_staging(&installs, &game).unwrap();
+    assert_eq!((again.cleared, again.left.len()), (0, 0));
     // The next install never takes the leftover's number.
     assert_eq!(
         next_folder(&installs, "New").unwrap(),
@@ -1506,7 +1507,8 @@ fn nothing_is_changed_inside_the_game() {
         &game.join("Data").join(".staging-01 Mod").join("a"),
         b"game's own",
     );
-    assert!(clear_staging(&installs, &game).is_err());
+    let refused = clear_staging(&installs, &game).unwrap();
+    assert_eq!((refused.cleared, refused.left.len()), (0, 1), "{refused:?}");
     assert!(game.join("Data").join(".staging-01 Mod").join("a").exists());
     write(
         &game.join("Data").join("01 Mod").join(RECORD),
@@ -1565,4 +1567,34 @@ fn a_rename_needs_a_free_name_inside() {
     )
     .unwrap();
     assert_eq!(std::fs::read(root.join("c.txt")).unwrap(), b"a");
+}
+
+/// One installer at a time: while one holds the lock a second is refused, and once it lets go (as
+/// when its program ends, however it ends) the next takes it. The lock file is never a mod, never
+/// a layer, never cleared as a leftover; it can't be taken in the game's folder.
+#[test]
+fn one_installer_holds_the_lock() {
+    let dir = Scratch::new("installer-lock");
+    let game = game(&dir.0);
+    let installs = dir.0.join("mod installs");
+    let loose = dir.0.join("mods");
+    let first = hold_installer(&installs, &game).unwrap();
+    assert!(first.is_some());
+    assert!(hold_installer(&installs, &game).unwrap().is_none());
+    drop(first);
+    let again = hold_installer(&installs, &game).unwrap();
+    assert!(again.is_some());
+    assert!(installs.join(LOCK).is_file());
+    assert!(installed(&installs).unwrap().is_empty());
+    assert_eq!(
+        layers(&installs, &loose).unwrap(),
+        std::slice::from_ref(&loose)
+    );
+    assert_eq!(clear_staging(&installs, &game).unwrap().cleared, 0);
+    assert!(installs.join(LOCK).is_file());
+    assert_eq!(next_folder(&installs, "A").unwrap(), installs.join("01 A"));
+    drop(again);
+    // Inside the game's folder: refused, nothing made there.
+    assert!(hold_installer(&game.join("Data").join("x"), &game).is_err());
+    assert!(!game.join("Data").join("x").exists());
 }

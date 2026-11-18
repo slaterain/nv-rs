@@ -18,3 +18,4 @@ libc = "0.2"
 [dev-dependencies]
 # The tests make their own archives.
 zip = { version = "9.7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["ppmd", "compress"] }

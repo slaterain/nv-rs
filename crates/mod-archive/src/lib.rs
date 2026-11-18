@@ -28,7 +28,9 @@
 //! - Nothing is written through a link: every folder used is checked to be a plain folder just
 //!   before a file goes in it, each file is written under a new temporary name (made only if no
 //!   such name exists, so never through a link) and renamed over its final name only when it is
-//!   complete and of its declared size.
+//!   complete and of its declared size, and synced to the disk before that (its folders too, on
+//!   Linux and macOS), so a power cut never leaves a file empty under its name. A destination
+//!   folder that goes away while unpacking is never made again: the unpacking stops.
 //! - Sizes are checked against [`Limits`] before anything is decoded or written: the wanted
 //!   files', and for a 7z the bytes to decode to reach them. A 7z is opened with a memory limit
 //!   ([`MAX_DECODER_MEMORY`]) for its header and its decoders.
@@ -51,7 +53,8 @@
 //! | [`MAX_READ`] | 16 MB | installers and their details are a few hundred KB |
 //! | [`MAX_DECODER_MEMORY`] | 2 GB | above the largest dictionaries 7-Zip makes for mods |
 //! | [`Limits::file`] | 16 GB by default | the game's largest archives are about 2 GB |
-//! | [`Limits::total`] | 64 GB by default, for writing and for decoding; the front end lowers it to the room on the drive | the largest mods are tens of GB |
+//! | [`Limits::total`] | 64 GB written by default; the front end lowers it to the room on the drive | the largest mods are tens of GB |
+//! | [`Limits::decode`] | 64 GB a 7z may decode by default (decoding writes nothing: never lowered for room) | a solid texture pack's skipped options decode too |
 //! | a file's declared size | as the archive says | a file that unpacks to more stops the unpacking |
 
 use std::collections::BTreeMap;
@@ -151,7 +154,9 @@ impl ArchiveError {
             Problem::NotAMod => "This archive's list of files is not a mod's: far too many files, or names far too long or too deeply nested. Download it again; if it still happens, it is not a mod nv-rs can install.",
             Problem::NoRoom => "There is not enough room on the drive for this mod. Free some space on the drive and try again.",
         };
-        format!("{advice}\n\n({})", self.detail)
+        // The detail on lines of its own: it often starts with a path, which a front end then
+        // shows whole.
+        format!("{advice}\n\nDetails:\n{}", self.detail)
     }
 }
 
@@ -226,16 +231,19 @@ fn check_entries(entries: &[(String, u64, bool)]) -> Result<(), ArchiveError> {
     Ok(())
 }
 
-/// What [`extract`] may write, and how much a 7z may decode to reach it. The front end sets
-/// `total` from the room on the drive; a file is also never more than its archive says it is.
+/// What [`extract`] may write, and how much a 7z may decode to reach it. The front end lowers
+/// `total` (what is written) to the room on the drive; decoding writes nothing, so `decode` is
+/// never lowered for room. A file is also never more than its archive says it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// The most one file may unpack to (the game's own largest archives are under 2 GB; TTW's LOD
     /// archives a little over).
     pub file: u64,
-    /// The most all the wanted files together may unpack to, and the most a 7z may decode to
-    /// reach them.
+    /// The most all the wanted files together may unpack to: the bytes written.
     pub total: u64,
+    /// The most a 7z may decode to reach the wanted files (in a solid block the files before the
+    /// last wanted one are decoded too, and not written).
+    pub decode: u64,
 }
 
 impl Default for Limits {
@@ -243,6 +251,7 @@ impl Default for Limits {
         Self {
             file: 16 << 30,
             total: 64 << 30,
+            decode: 64 << 30,
         }
     }
 }
@@ -513,7 +522,7 @@ pub fn read(path: &Path, name: &str) -> Result<Option<Vec<u8>>, ArchiveError> {
                 return Err(ArchiveError::new(Problem::Encrypted, name.to_owned()));
             }
             let plan = sevenz_plan(reader.archive(), &[target].into_iter().collect());
-            let budget = Limits::default().total;
+            let budget = Limits::default().decode;
             if plan.decode > budget {
                 return Err(ArchiveError::new(
                     Problem::TooBig,
@@ -712,7 +721,13 @@ impl<'f> Placer<'f> {
                 }
             };
             if !last {
-                std::fs::create_dir_all(&next).map_err(|e| io(&next, e))?;
+                // One folder at a time, in a folder that must be there: when the destination
+                // folder has gone (removed by another program), it is never made again, and the
+                // unpacking stops.
+                match std::fs::create_dir(&next) {
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                    other => other.map_err(|e| io(&next, e))?,
+                }
             }
             at = next;
         }
@@ -799,6 +814,11 @@ fn write_whole(
                 format!("{what} unpacks to {written} of the {size} bytes its archive says"),
             ));
         }
+        // On the disk before the file takes its name: after a power cut a mod's files are there
+        // whole, never empty under their names (the record that makes the mod real comes later).
+        if sync_files() {
+            file.sync_all().map_err(|e| io(&temporary, e))?;
+        }
         Ok(())
     })();
     drop(file);
@@ -813,24 +833,61 @@ fn write_whole(
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Whether unpacked files are synced to the disk: always, except in this crate's measurement
+    /// of what syncing costs.
+    static SYNC_FILES: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+fn sync_files() -> bool {
+    #[cfg(test)]
+    {
+        SYNC_FILES.with(|s| s.get())
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
+/// Syncs a folder's own list of names to the disk (Linux and macOS: a file's new name is only
+/// safe after a power cut once its folder is synced; Windows' file system keeps names in its
+/// journal, so nothing is done there).
+fn sync_folder(folder: &Path) -> Result<(), ArchiveError> {
+    #[cfg(unix)]
+    {
+        if sync_files() {
+            File::open(folder)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| io(folder, e))?;
+        }
+    }
+    let _ = folder;
+    Ok(())
+}
+
 /// How far an [`extract_with`] has got: files written of all the files it writes, and bytes
-/// written of all their bytes (one archive file going to two places counts twice).
+/// written of all their bytes (one archive file going to two places counts twice); and the bytes
+/// of files not chosen that a solid 7z decodes on the way to the chosen ones (`read`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Progress {
     pub files: usize,
     pub files_total: usize,
     pub bytes: u64,
     pub bytes_total: u64,
+    pub read: u64,
 }
 
 /// Bytes between two progress reports inside one file, so a large file reports as it goes.
 const PROGRESS_STEP: u64 = 1 << 20;
 
-/// Counts what is written and hands [`Progress`] to the caller's closure: after every file, and
-/// every [`PROGRESS_STEP`] bytes inside one.
+/// Counts what is written and hands [`Progress`] to the caller's closure: once at the start,
+/// after every file, and every [`PROGRESS_STEP`] bytes inside one or read past.
 struct Tracker<'p> {
     now: Progress,
     reported: u64,
+    reported_read: u64,
     report: &'p mut dyn FnMut(Progress),
 }
 
@@ -843,10 +900,32 @@ impl Tracker<'_> {
         }
     }
 
+    fn read_past(&mut self, n: u64) {
+        self.now.read = self.now.read.saturating_add(n);
+        if self.now.read - self.reported_read >= PROGRESS_STEP {
+            self.reported_read = self.now.read;
+            (self.report)(self.now);
+        }
+    }
+
     fn file_done(&mut self) {
         self.now.files += 1;
         self.reported = self.now.bytes;
         (self.report)(self.now);
+    }
+}
+
+/// Reads `data` (a file not chosen, decoded on the way to a chosen one) to its end, counted as
+/// read past.
+fn read_through(data: &mut dyn Read, tracker: &mut Tracker) -> std::io::Result<()> {
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        match data.read(&mut buffer) {
+            Ok(0) => return Ok(()),
+            Ok(n) => tracker.read_past(n as u64),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
     }
 }
 
@@ -966,10 +1045,10 @@ pub fn extract_with(
             return Err(ArchiveError::new(Problem::Encrypted, entries[i].0.clone()));
         }
         let made = sevenz_plan(reader.archive(), &by_index.keys().copied().collect());
-        if made.decode > limits.total {
+        if made.decode > limits.decode {
             return Err(ArchiveError::new(
                 Problem::TooBig,
-                format!("{} bytes to decode, {} allowed", made.decode, limits.total),
+                format!("{} bytes to decode, {} allowed", made.decode, limits.decode),
             ));
         }
         plan = Some(made);
@@ -984,8 +1063,12 @@ pub fn extract_with(
             ..Progress::default()
         },
         reported: 0,
+        reported_read: 0,
         report: progress,
     };
+    // A first report as the unpacking starts (a solid 7z may decode a while before the first
+    // chosen file).
+    (tracker.report)(tracker.now);
     // Writes one archive file to its destinations; the first written, the rest copied from it.
     let mut write = |index: usize,
                      data: &mut dyn Read,
@@ -1037,11 +1120,19 @@ pub fn extract_with(
             let index = plan.order[next];
             next += 1;
             if !by_index.contains_key(&index) {
-                return Ok(if plan_block_done(plan, reader_block(plan, index), index) {
-                    sevenz_rust2::EntryDecision::SkipBlock
-                } else {
-                    sevenz_rust2::EntryDecision::Continue
-                });
+                if plan_block_done(plan, reader_block(plan, index), index) {
+                    return Ok(sevenz_rust2::EntryDecision::SkipBlock);
+                }
+                // Decoded anyway on the way to a chosen file (the reader would drain it): read
+                // through here, so the progress moves.
+                if let Err(e) = read_through(data, &mut tracker) {
+                    failure = Some(ArchiveError::new(
+                        Problem::Damaged,
+                        format!("{}: {e}", entries[index].0),
+                    ));
+                    return Ok(sevenz_rust2::EntryDecision::Stop);
+                }
+                return Ok(sevenz_rust2::EntryDecision::Continue);
             }
             if let Err(e) = write(index, data, &mut done, &mut tracker) {
                 failure = Some(e);
@@ -1063,6 +1154,16 @@ pub fn extract_with(
     } else {
         Ok(())
     };
+    // Every folder files went in synced too (Linux and macOS), deepest first, the folder itself
+    // last.
+    let outcome = outcome.and_then(|()| {
+        for dir in placer.folders.keys().rev() {
+            if dir.as_path() != folder {
+                sync_folder(dir)?;
+            }
+        }
+        sync_folder(folder)
+    });
     if let Err(mut e) = outcome {
         e.written = std::mem::take(&mut done.written);
         return Err(e);

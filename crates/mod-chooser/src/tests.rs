@@ -165,8 +165,20 @@ fn only_installed(places: &Places) -> PathBuf {
     installed[0].folder.clone()
 }
 
+/// The names in the installs folder, the installer's lock file left out.
+fn names_in_installs(places: &Places) -> Vec<String> {
+    std::fs::read_dir(&places.installs).map_or_else(
+        |_| vec![],
+        |d| {
+            d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|n| n != installs::LOCK)
+                .collect()
+        },
+    )
+}
+
 fn nothing_installed(places: &Places) -> bool {
-    std::fs::read_dir(&places.installs).map_or(true, |mut d| d.next().is_none())
+    names_in_installs(places).is_empty()
 }
 
 /// The whole way: pick the archive, a typo and a wrong number (asked again, nothing lost), read an
@@ -229,7 +241,7 @@ fn a_fomod_installs_from_typed_answers() {
         b"esm"
     );
     // Nothing but the mod's folder in the installs folder (no staging folder left).
-    assert_eq!(std::fs::read_dir(&places.installs).unwrap().count(), 1);
+    assert_eq!(names_in_installs(&places).len(), 1);
 }
 
 /// q stops: nothing installed, no leftover folder, the archive still waiting.
@@ -350,10 +362,17 @@ fn too_little_room_is_said_before_unpacking() {
     places.room = |_| Some(100 << 20);
     let archive = places.loose.join("Retex.zip");
     make_zip(&archive, &[("Data/Textures/a.dds", b"tex")]);
-    let said = run_with(&places, "1\nyes\n\n");
+    // Joined back where it was wrapped.
+    let said = run_with(&places, "1\nyes\n\n").replace("\n    ", " ");
     assert!(said.contains("Free on the drive: 100.0 MB."), "{said}");
     assert!(
-        said.contains("Not enough room on the drive: 256.0 MB needed, 100.0 MB free."),
+        said.contains(
+            "Not enough room on the drive: the mod unpacks to 3 bytes, and nv-rs keeps 256.0 MB more free"
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains("100.0 MB is free: 156.0 MB more is needed."),
         "{said}"
     );
     assert!(!said.contains("damaged"), "{said}");
@@ -367,6 +386,11 @@ fn too_little_room_is_said_before_unpacking() {
     // The limits passed down: the room less the spare room.
     let limits = room_limits(10, 1, Some(1 << 30)).unwrap();
     assert_eq!(limits.total, (1 << 30) - spare_for(1));
+    assert_eq!(
+        limits.decode,
+        Limits::default().decode,
+        "decoding is never lowered for room"
+    );
     assert!(room_limits(10, 1, Some(spare_for(1))).is_err());
     assert_eq!(room_limits(10, 1, None).unwrap(), Limits::default());
 }
@@ -425,7 +449,7 @@ fn every_end_waits_for_enter() {
         said.contains("inside the game's folder") && ends(&said),
         "{said}"
     );
-    assert_eq!(code, 0);
+    assert_eq!(code, 2);
     // The input failing (not ending): said in words, then the same last line.
     struct Broken;
     impl Read for Broken {
@@ -827,4 +851,227 @@ fn a_long_line_is_capped() {
     assert_eq!(read_answer(&mut input).unwrap().unwrap().len(), MAX_LINE);
     assert_eq!(read_answer(&mut input).unwrap().unwrap(), "next");
     assert_eq!(read_answer(&mut input).unwrap(), None);
+}
+
+thread_local! {
+    /// What a test does at each progress report of an install (with its staging folder).
+    static PROGRESS_HOOK: std::cell::RefCell<Option<ProgressHook>> = std::cell::RefCell::new(None);
+}
+
+type ProgressHook = Box<dyn FnMut(&Path, mod_archive::Progress)>;
+
+/// Called by [`install`] at each progress report.
+pub(super) fn on_progress(staging: &Path, p: mod_archive::Progress) {
+    PROGRESS_HOOK.with(|h| {
+        if let Some(hook) = h.borrow_mut().as_mut() {
+            hook(staging, p)
+        }
+    });
+}
+
+/// Runs the chooser with `hook` called at each progress report.
+fn run_hooked(
+    places: &Places,
+    typed: &str,
+    hook: impl FnMut(&Path, mod_archive::Progress) + 'static,
+) -> String {
+    PROGRESS_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(hook)));
+    let said = run_with(places, typed);
+    PROGRESS_HOOK.with(|h| *h.borrow_mut() = None);
+    said
+}
+
+fn three_files(places: &Places) -> PathBuf {
+    let archive = places.loose.join("Retex.zip");
+    make_zip(
+        &archive,
+        &[
+            ("Data/Textures/a.dds", b"a"),
+            ("Data/Textures/b.dds", b"b"),
+            ("Data/Meshes/c.nif", b"c"),
+        ],
+    );
+    archive
+}
+
+/// A second installer window while one is open: refused in words (exit 2) before anything is
+/// changed, a staging folder (the first window's install in progress) untouched; once the first
+/// lets go (its window closed, however), the next start runs.
+#[test]
+fn a_second_installer_window_is_refused() {
+    let dir = Scratch::new("second-window");
+    let places = dir.places();
+    three_files(&places);
+    let held = installs::hold_installer(&places.installs, &places.game)
+        .unwrap()
+        .unwrap();
+    let busy = places
+        .installs
+        .join(format!("{}01 Retex", installs::STAGING));
+    std::fs::create_dir_all(busy.join("Textures")).unwrap();
+    std::fs::write(busy.join("Textures").join("a.dds"), b"a").unwrap();
+    let (said, code, _) = run_window(Ok(places.clone()), "1\nyes\n\n");
+    assert!(
+        said.contains("The mod installer is already open in another window."),
+        "{said}"
+    );
+    assert_eq!(code, 2);
+    assert!(busy.join("Textures").join("a.dds").exists(), "{said}");
+    assert!(!said.contains("Installed"), "{said}");
+    drop(held);
+    let said = run_with(&places, "1\nyes\n\n");
+    assert!(said.contains("They were cleared"), "{said}");
+    assert!(said.contains("Installed Retex"), "{said}");
+}
+
+/// The staging folder removed while unpacking (as another window clearing it would): never made
+/// again, "Nothing was installed", no mod listed, the archive still waiting.
+#[test]
+fn the_staging_folder_removed_while_unpacking_installs_nothing() {
+    let dir = Scratch::new("staging-gone");
+    let places = dir.places();
+    let archive = three_files(&places);
+    let said = run_hooked(&places, "1\nyes\n\n", |staging, p| {
+        if p.files == 1 {
+            let _ = std::fs::remove_dir_all(staging);
+        }
+    });
+    assert!(said.contains("Nothing was installed"), "{said}");
+    assert!(!said.contains("Installed Retex"), "{said}");
+    assert!(installs::installed(&places.installs).unwrap().is_empty());
+    assert!(
+        nothing_installed(&places),
+        "{:?}",
+        names_in_installs(&places)
+    );
+    assert!(archive.exists());
+}
+
+/// A file removed after it was unpacked and before the record: the record would list a file the
+/// folder lacks, so nothing is installed and the path is said on a line of its own.
+#[test]
+fn a_file_gone_before_the_record_installs_nothing() {
+    let dir = Scratch::new("file-gone");
+    let places = dir.places();
+    three_files(&places);
+    let said = run_hooked(&places, "1\nyes\n\n", |staging, p| {
+        if p.files_total > 0 && p.files == p.files_total {
+            let _ = std::fs::remove_file(staging.join("Textures").join("a.dds"));
+        }
+    });
+    assert!(said.contains("a file it had unpacked is gone"), "{said}");
+    assert!(
+        said.lines().any(|l| path_line(l) && l.ends_with("a.dds")),
+        "{said}"
+    );
+    assert!(
+        nothing_installed(&places),
+        "{:?}",
+        names_in_installs(&places)
+    );
+}
+
+/// A solid 7z whose chosen file comes after a large one not chosen: the room on the drive is
+/// between what is written and what is decoded, and it installs (decoding writes nothing); the
+/// large file read through is shown in the progress.
+#[test]
+fn a_solid_7z_decoding_more_than_the_room_installs() {
+    let dir = Scratch::new("solid-room");
+    let mut places = dir.places();
+    // Room for the chosen file and the spare room, and 1 MB more: far less than the 4 MB decoded.
+    places.room = |_| Some((256 << 20) + 4096 + 3 + (1 << 20));
+    let archive = places.loose.join("Retex.7z");
+    std::fs::create_dir_all(&places.loose).unwrap();
+    let pad = vec![0u8; 4 << 20];
+    let mut writer = sevenz_rust2::ArchiveWriter::create(&archive).unwrap();
+    writer
+        .push_archive_entries(
+            vec![
+                sevenz_rust2::ArchiveEntry::new_file("Extras/pad.bin"),
+                sevenz_rust2::ArchiveEntry::new_file("Data/Textures/a.dds"),
+            ],
+            vec![
+                sevenz_rust2::SourceReader::new(Cursor::new(pad)),
+                sevenz_rust2::SourceReader::new(Cursor::new(b"tex".to_vec())),
+            ],
+        )
+        .unwrap();
+    writer.finish().unwrap();
+    let said = run_with(&places, "1\nyes\n\n");
+    assert!(said.contains("Installed Retex"), "{said}");
+    assert!(!said.contains("Not enough room"), "{said}");
+    assert!(said.contains("of other files read through"), "{said}");
+    assert_eq!(
+        std::fs::read(only_installed(&places).join("Textures").join("a.dds")).unwrap(),
+        b"tex"
+    );
+}
+
+/// A leftover that can't be cleared: how many were cleared and which could not be (its path on a
+/// line of its own) are said, and the installer carries on. The check is skipped where the system
+/// lets it be removed anyway (the superuser on Linux and macOS).
+#[test]
+fn a_partial_clear_is_said_and_the_installer_carries_on() {
+    let dir = Scratch::new("partial-clear");
+    let places = dir.places();
+    three_files(&places);
+    let gone = places
+        .installs
+        .join(format!("{}01 Gone", installs::STAGING));
+    let stuck = places
+        .installs
+        .join(format!("{}02 Stuck", installs::STAGING));
+    for leftover in [&gone, &stuck] {
+        std::fs::create_dir_all(leftover).unwrap();
+        std::fs::write(leftover.join("half.dds"), b"half").unwrap();
+    }
+    #[cfg(windows)]
+    let open = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(stuck.join("half.dds"))
+            .unwrap()
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    let said = run_with(&places, "1\nyes\n\n");
+    #[cfg(windows)]
+    drop(open);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&stuck, std::fs::Permissions::from_mode(0o755));
+    }
+    assert!(!gone.exists(), "{said}");
+    if stuck.join("half.dds").exists() {
+        assert!(
+            said.replace("\n    ", " ")
+                .contains("1 of 2 were cleared; these could not be"),
+            "{said}"
+        );
+        let full = full_path(&stuck);
+        assert!(
+            said.lines().any(|l| l == full.display().to_string()),
+            "{said}"
+        );
+    }
+    assert!(said.contains("Installed Retex"), "{said}");
+}
+
+/// A line that is a path is never wrapped, spaces and all.
+#[test]
+fn a_path_line_is_never_wrapped() {
+    let path = format!(
+        "C:\\Program Files\\{}\\a folder with spaces",
+        "Some Long Name ".repeat(6)
+    );
+    assert_eq!(wrap(&format!("Gone:\n{path}")), format!("Gone:\n{path}\n"));
+    let unix = format!("/home/someone/{}/mods", "a b ".repeat(30));
+    assert_eq!(wrap(&unix), format!("{unix}\n"));
+    assert!(path_line("\\\\server\\share\\x") && path_line("~/nv-rs") && !path_line("at C:\\x"));
 }
