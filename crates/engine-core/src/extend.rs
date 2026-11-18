@@ -610,11 +610,39 @@ pub const SITES: &[Entry] = &[
         owners: NVSE,
         step: "I-8",
     },
+    // RecipeMenu::DoClick 007274b0, its switch (the bound at 0x7274E1, the byte map and the
+    // table): JIP LN NVSE's EnableImprovedRecipeMenu (ids 7 and 15 to RecipeMenuAcceptHook).
+    Entry {
+        addr: 0x0072_74e1,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // The count the recipe menu offers 00727920, the 100 stored first (0x727975): JIP LN NVSE's
+    // UnlockRecipeMenuQuantity and EnableImprovedRecipeMenu.
+    Entry {
+        addr: 0x0072_7975,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // RecipeMenu's craft 007284f0, the item's message (0x728933): JIP LN NVSE's
+    // ToggleCraftingMessages.
+    Entry {
+        addr: 0x0072_8933,
+        owners: JIP,
+        step: "3.5f",
+    },
     // RecipeMenu's craft 007284f0: JIP LN NVSE's ItemCrafted (OnCrafting).
     Entry {
         addr: 0x0072_89ff,
         owners: JIP,
         step: "3.5a",
+    },
+    // RecipeMenu's craft 007284f0, the menu's close (0x728A0C): JIP LN NVSE's
+    // EnableImprovedRecipeMenu (RecipeMenuCloseHook: the menu stays open, its list refreshed).
+    Entry {
+        addr: 0x0072_8a0c,
+        owners: JIP,
+        step: "3.5f",
     },
     // BarterMenu::CompleteTransaction 0072fd10: OnSell, an item bought and one sold.
     Entry {
@@ -2992,7 +3020,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 126);
+        assert_eq!(SITES.len(), 130);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3050,6 +3078,10 @@ mod tests {
             0x0087_ce34,
             0x0094_5a28,
             0x0094_a34e,
+            0x0072_74e1,
+            0x0072_7975,
+            0x0072_8933,
+            0x0072_8a0c,
             0x0088_c74e,
             0x0088_c87a,
             0x0089_1c86,

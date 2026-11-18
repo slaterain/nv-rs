@@ -1842,6 +1842,15 @@ pub fn recipe_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
     } else {
         tile
     };
+    // Seam (JIP LN NVSE's EnableImprovedRecipeMenu: the switch's bound at `0x7274E1` raised to
+    // 15, the byte map's ids 9 to 15 and the jump table's entry for id 7 rewritten, so ids 7 and
+    // 15 go to JIP's RecipeMenuAcceptHook): words: the menu, the id; an answer means JIP's code
+    // ran in place of the switch. Asked only while JIP is installed.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x0072_74e1, &[this.addr(), id as u32]).is_some()
+    {
+        return;
+    }
     match id {
         0..=2 => {
             if e.global::<u8>(INGREDIENTS_FOCUSED_011D8EA5) != 0 {
@@ -2009,7 +2018,15 @@ pub fn fn_007278c0(e: &mut Engine, first: u32, second: u32) -> i32 {
 /// count (unsigned), the smallest kept (signed); 0 when any count is short.
 pub fn fn_00727920(e: &mut Engine, recipe: u32) -> u32 {
     let crafter = accepted_crafter(e);
-    e.set_global(CAN_MAKE_011D8EA8, 100u32);
+    // Seam (JIP LN NVSE's UnlockRecipeMenuQuantity and EnableImprovedRecipeMenu:
+    // `SafeWrite32(0x727975, ..)`, the 100 stored first): no words; an answer is the number
+    // stored instead. Asked only while JIP is installed.
+    let most = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0072_7975, &[]).unwrap_or(100)
+    } else {
+        100
+    };
+    e.set_global(CAN_MAKE_011D8EA8, most);
     if e.call(RECIPE_CATEGORY_006A1B60, &args![recipe]).u32() == 0
         || e.call(RECIPE_CATEGORY_KEY_006286D0, &args![recipe]).u32() == 0
     {
@@ -2578,6 +2595,37 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
                 let crafter = me_tile(e, CRAFTER_REF);
                 e.call(ADD_ITEM_00574FA0, &args![crafter, chosen, 0u32, total]);
             }
+            // Seam (JIP LN NVSE's ToggleCraftingMessages: five bytes at `0x728933` made a jump
+            // past the message, to `0x7289FC`, while crafting messages are off): no words; an
+            // answer of 1 skips the message. Asked only while JIP is installed.
+            let quiet = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+                && e.site(0x0072_8933, &[]).is_some_and(|answer| answer != 0);
+            if !quiet {
+                crafted_message(e, chosen, total);
+            }
+        }
+        // The seam at the next output (`0x7289FF`, every pass, also with nothing chosen):
+        // JIP LN NVSE's ItemCrafted hook runs the crafting events with the chosen form and
+        // the count made times `count`. While the hook has no user: one load.
+        if e.hook_users(engine_core::extend::Hook::ItemCrafted) != 0 {
+            e.site(0x0072_89ff, &[chosen, made.wrapping_mul(count) as u32]);
+        }
+        node = node_next(e, node);
+    }
+    // Seam (JIP LN NVSE's EnableImprovedRecipeMenu: `WriteRelJump(0x728A0C, RecipeMenuCloseHook)`,
+    // in place of the menu's close): words: the last form chosen; an answer means JIP's hook ran
+    // (the menu stays open). Asked only while JIP is installed.
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x0072_8a0c, &[chosen]).is_some()
+    {
+        return;
+    }
+    recipe_menu_close(e);
+}
+
+/// The message `fn_007284f0` shows for an output given (`0x728933` to `0x7289FC`): "`name`
+/// added" (or "`total` `name` added"), with the gift box icon and the item's pick-up sound.
+fn crafted_message(e: &mut Engine, chosen: u32, total: i32) {
             e.with_stack(8, |e, text| {
                 e.call(STRING_OBJECT_CONSTRUCT, &args![text]);
                 if total > 1 {
@@ -2608,16 +2656,6 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
                 );
                 e.call(STRING_OBJECT_DESTRUCT, &args![text]);
             });
-        }
-        // The seam at the next output (`0x7289FF`, every pass, also with nothing chosen):
-        // JIP LN NVSE's ItemCrafted hook runs the crafting events with the chosen form and
-        // the count made times `count`. While the hook has no user: one load.
-        if e.hook_users(engine_core::extend::Hook::ItemCrafted) != 0 {
-            e.site(0x0072_89ff, &[chosen, made.wrapping_mul(count) as u32]);
-        }
-        node = node_next(e, node);
-    }
-    recipe_menu_close(e);
 }
 
 // Translated from 00728a30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4509,6 +4547,140 @@ mod n057_tests {
         assert!(calls_to(&e, FORM_004C0BF0).is_empty());
         assert_eq!(calls_to(&e, CONTAINER_CONSTRUCT).len(), 1);
         assert!(calls_to(&e, ADD_ITEM_00574FA0).is_empty());
+    }
+
+    thread_local! {
+        static JIP_ASKED: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn jip_yes(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_ASKED.with(|s| s.borrow_mut().push((1, a.to_vec())));
+        Some(1)
+    }
+    fn jip_zero(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_ASKED.with(|s| s.borrow_mut().push((0, a.to_vec())));
+        Some(0)
+    }
+    fn jip_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        JIP_ASKED.with(|s| s.borrow_mut().push((2, a.to_vec())));
+        None
+    }
+    fn jip_seven(_: &mut Engine, _: &[u32]) -> Option<u32> {
+        Some(7)
+    }
+
+    /// `make_run`'s recipe (not a weapon) made 3 times, with handlers at JIP's seams for the
+    /// crafted message (`0x728933`) and the close (`0x728A0C`), and `word` as the JIP word.
+    fn make_with(
+        word: u32,
+        message: engine_core::extend::SiteFn,
+        close: engine_core::extend::SiteFn,
+    ) -> (Engine, u32) {
+        JIP_ASKED.with(|s| s.take());
+        let mut e = engine();
+        let menu = recipe_menu(&mut e);
+        e.set_global(RECIPE_MENU, menu);
+        let crafter = e.mem.alloc(0x200);
+        e.put_vtable(0x0c00_0000, &[0x0000_a000; 0x120]);
+        answer(&mut e, 0x0000_a000, 1);
+        e.mem.set_u32(crafter, 0x0c00_0000);
+        e.mem.set_u32(menu + CRAFTER_REF, crafter);
+        answer(&mut e, GET_PROCESS, crafter);
+        let form = e.mem.alloc(4);
+        e.mem.set_u32(form, 0x0c00_0000);
+        let input = e.mem.alloc(8);
+        e.mem.set_u32(input, 2);
+        e.mem.set_u32(input + 4, form);
+        let output = e.mem.alloc(8);
+        e.mem.set_u32(output, 1);
+        e.mem.set_u32(output + 4, form);
+        let inputs = chain(&mut e, &[input]);
+        let outputs = chain(&mut e, &[output]);
+        answer(&mut e, RECIPE_INPUTS_005A8080, inputs);
+        answer(&mut e, RECIPE_OUTPUTS_005D43C0, outputs);
+        answer(&mut e, FORM_TYPE, 0x1f);
+        e.set_jip_patches(word);
+        e.on_site_for_test(0x0072_8933, message);
+        e.on_site_for_test(0x0072_8a0c, close);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_84f0, &args![3i32]);
+        (e, form)
+    }
+
+    /// JIP's ToggleCraftingMessages seam (`0x728933`): asked once an output is given, only while
+    /// JIP is installed; an answer of 1 skips the message (the item is still given), 0 or none
+    /// shows it. JIP's close seam (`0x728A0C`): asked with the last form chosen; an answer keeps
+    /// the menu open (no close), none closes it as the exe.
+    #[test]
+    fn jip_crafting_message_and_close_seams() {
+        use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+        for word in [0, FIXES] {
+            let (e, _) = make_with(word, jip_yes, jip_zero);
+            assert!(JIP_ASKED.with(|s| s.take()).is_empty(), "{word:x}: not asked");
+            assert_eq!(calls_to(&e, SHOW_MESSAGE_007052F0).len(), 1);
+            assert_eq!(calls_to(&e, SERVICE_END), vec![vec![0]]);
+        }
+        let (e, form) = make_with(INSTALLED, jip_yes, jip_zero);
+        assert_eq!(
+            JIP_ASKED.with(|s| s.take()),
+            vec![(1, vec![]), (0, vec![form])]
+        );
+        assert!(calls_to(&e, SHOW_MESSAGE_007052F0).is_empty(), "no message");
+        assert!(calls_to(&e, STRING_OBJECT_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&e, ADD_ITEM_00574FA0).len(), 1, "still given");
+        assert!(calls_to(&e, SERVICE_END).is_empty(), "the menu stays open");
+        let (e, form) = make_with(INSTALLED, jip_zero, jip_none);
+        assert_eq!(
+            JIP_ASKED.with(|s| s.take()),
+            vec![(0, vec![]), (2, vec![form])]
+        );
+        assert_eq!(calls_to(&e, SHOW_MESSAGE_007052F0).len(), 1);
+        assert_eq!(calls_to(&e, SERVICE_END), vec![vec![0]], "closed");
+    }
+
+    /// JIP's click seam (`0x7274E1`): asked with the menu and the id while JIP is installed; an
+    /// answer means JIP's code ran (no quantity menu here), none leaves the exe's switch.
+    #[test]
+    fn jip_click_seam() {
+        use engine_core::extend::jip_patches::INSTALLED;
+        let mut e = engine();
+        let menu = recipe_menu(&mut e);
+        e.set_global(CAN_MAKE_011D8EA8, 9u32);
+        JIP_ASKED.with(|s| s.take());
+        e.on_site_for_test(0x0072_74e1, jip_zero);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
+        assert!(JIP_ASKED.with(|s| s.take()).is_empty(), "not installed: not asked");
+        assert_eq!(calls_to(&e, QUANTITY_MENU_CREATE).len(), 1);
+        e.set_jip_patches(INSTALLED);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
+        assert_eq!(JIP_ASKED.with(|s| s.take()), vec![(0, vec![menu, 7])]);
+        assert!(calls_to(&e, QUANTITY_MENU_CREATE).is_empty(), "JIP's code instead");
+        e.on_site_for_test(0x0072_74e1, jip_none);
+        e.call_log = Some(vec![]);
+        e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
+        assert_eq!(JIP_ASKED.with(|s| s.take()), vec![(2, vec![menu, 7])]);
+        assert_eq!(
+            calls_to(&e, QUANTITY_MENU_CREATE),
+            vec![vec![9, MAKE_CALLBACK_007284F0, 0x7fff_ffff]]
+        );
+    }
+
+    /// JIP's quantity seam (`0x727975`): while JIP is installed its answer is stored in place of
+    /// the 100 (here with no crafter, the answer itself).
+    #[test]
+    fn jip_most_seam() {
+        use engine_core::extend::jip_patches::INSTALLED;
+        let mut e = engine();
+        let menu = recipe_menu(&mut e);
+        e.set_global(RECIPE_MENU, menu);
+        answer(&mut e, RECIPE_CATEGORY_006A1B60, 0x90);
+        answer(&mut e, RECIPE_CATEGORY_KEY_006286D0, 1);
+        e.on_site_for_test(0x0072_7975, jip_seven);
+        assert_eq!(e.call(0x0072_7920, &args![0x7100u32]).u32(), 100);
+        e.set_jip_patches(INSTALLED);
+        assert_eq!(e.call(0x0072_7920, &args![0x7100u32]).u32(), 7);
+        assert_eq!(e.global::<u32>(CAN_MAKE_011D8EA8), 7);
     }
 
     #[test]
