@@ -1424,6 +1424,7 @@ dependencies = [
 name = "nv-viewer"
 version = "0.1.0"
 dependencies = [
+ "engine-platform",
  "game-folders",
  "host",
  "mod-chooser",

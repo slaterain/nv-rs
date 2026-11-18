@@ -38,9 +38,12 @@ pub struct Places {
 /// The game's version, for the installers' game version conditions.
 const GAME_VERSION: &str = "1.4.0.525";
 
-/// The most files of the game's Data folder read for the installers' questions (as
-/// `mod_install::overlay::MAX_FILES`).
+/// The most files of the game's Data folder and the installed mods read for the installers'
+/// questions (as `mod_install::overlay::MAX_FILES`): past it the install stops in words, never
+/// answering from part of the list.
 const MAX_FACT_FILES: usize = 500_000;
+/// The deepest folder read for them (as `mod_install::overlay::MAX_DEPTH`): past it, the same.
+const MAX_FACT_DEPTH: usize = 64;
 
 type Out<'a> = &'a mut dyn Write;
 
@@ -102,17 +105,25 @@ fn waiting(loose: &Path) -> Vec<PathBuf> {
 /// What the player has, for the installers' questions: every file of the game's Data and of the
 /// installed mods counts as there and switched on (the port switches on every plugin it plays
 /// with).
-fn facts(places: &Places) -> Facts {
+fn facts(places: &Places) -> Result<Facts, String> {
+    facts_with(places, MAX_FACT_FILES, MAX_FACT_DEPTH)
+}
+
+/// [`facts`] with these caps (tests lower them); `Err` in words past one.
+fn facts_with(places: &Places, max_files: usize, max_depth: usize) -> Result<Facts, String> {
     let mut plugins = Vec::new();
-    let mut walk = |root: &Path| {
+    let mut walk = |root: &Path| -> Result<(), String> {
         let mut stack = vec![(root.to_path_buf(), String::new(), 0usize)];
         while let Some((dir, relative, depth)) = stack.pop() {
             let Ok(entries) = std::fs::read_dir(&dir) else {
                 continue;
             };
             for entry in entries.filter_map(Result::ok) {
-                if plugins.len() >= MAX_FACT_FILES {
-                    return;
+                if plugins.len() >= max_files {
+                    return Err(format!(
+                        "the game's Data folder and the installed mods hold more than {max_files} files, more than the installer reads ({})",
+                        root.display()
+                    ));
                 }
                 let name = entry.file_name().to_string_lossy().into_owned();
                 let path = if relative.is_empty() {
@@ -121,7 +132,13 @@ fn facts(places: &Places) -> Facts {
                     format!("{relative}/{name}")
                 };
                 match entry.file_type() {
-                    Ok(t) if t.is_dir() && depth < 16 => {
+                    Ok(t) if t.is_dir() => {
+                        if depth >= max_depth {
+                            return Err(format!(
+                                "a folder is more than {max_depth} folders deep, deeper than the installer reads ({})",
+                                entry.path().display()
+                            ));
+                        }
                         stack.push((entry.path(), path, depth + 1))
                     }
                     Ok(t) if t.is_file() => plugins.push((path, FileState::Active)),
@@ -129,18 +146,21 @@ fn facts(places: &Places) -> Facts {
                 }
             }
         }
+        Ok(())
     };
     if let Some(data) = mod_install::overlay::game_data(&places.game) {
-        walk(&data);
+        walk(&data)?;
     }
-    for mod_folder in installs::installed(&places.installs).unwrap_or_default() {
-        walk(&mod_folder.folder);
+    let installed = installs::installed(&places.installs)
+        .map_err(|e| format!("the installed mods could not be read: {e}"))?;
+    for mod_folder in installed {
+        walk(&mod_folder.folder)?;
     }
-    Facts {
+    Ok(Facts {
         plugins,
         game_version: Some(GAME_VERSION.to_owned()),
         extenders: places.extenders.clone(),
-    }
+    })
 }
 
 /// The front end: the list, then what the player picks, until they press Enter on the list.
@@ -148,7 +168,16 @@ pub fn run(input: &mut dyn BufRead, out: Out, places: &Places) -> std::io::Resul
     writeln!(out, "nv-rs mods")?;
     writeln!(out, "==========")?;
     loop {
-        let installed = installs::installed(&places.installs).unwrap_or_default();
+        let installed = match installs::installed(&places.installs) {
+            Ok(i) => i,
+            Err(e) => {
+                return writeln!(
+                    out,
+                    "The installed mods could not be read: {e}
+Nothing was changed."
+                )
+            }
+        };
         let archives = waiting(&places.loose);
         writeln!(out)?;
         if installed.is_empty() && archives.is_empty() {
@@ -323,7 +352,10 @@ fn install_flow(
                 Err(e) => return writeln!(out, "This mod's installer can't be read: {e}."),
             };
             let name = first_of(&[&info.name, &config.name, &stem]);
-            let facts = facts(places);
+            let facts = match facts(places) {
+                Ok(f) => f,
+                Err(why) => return writeln!(out, "This mod can't be installed: {why}."),
+            };
             let mut session = match Session::new(&config, &facts) {
                 Ok(s) => s,
                 Err(why) => return writeln!(out, "This mod can't be installed: {why}."),

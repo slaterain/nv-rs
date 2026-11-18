@@ -20,3 +20,5 @@ nvse = { path = "../crates/nvse" }
 game-folders = { path = "../crates/game-folders" }
 # play.sh --mods: the game folder for mods, made as Play.exe makes it on Windows.
 mod-install = { path = "../crates/mod-install" }
+# The mods profile's plugin list where the game reads it (machine_table::plugins_txt).
+engine-platform = { path = "../crates/engine-platform" }

@@ -791,6 +791,8 @@ static STAND_IN: ModFileCalls = ModFileCalls {
             .map(|b| b[..b.len().min(max)].to_vec())
             .ok_or(mod_files::ERROR_FILE_NOT_FOUND)
     },
+    // MCM lists no folders.
+    list: |_, _| Vec::new(),
 };
 
 fn ini_engine() -> Engine {

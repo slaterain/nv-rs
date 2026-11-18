@@ -330,34 +330,77 @@ check "25 a 32-bit libasound alone is missing" '[ $st = 1 ] && printf "%s" "$out
 out=$(PATH="$T/fakebin:$PATH" FAKE_LDCONFIG="$T/ld64.txt" $SH "$pkg/play.sh" --game "$game" </dev/null 2>&1); st=$?
 check "25 the 64-bit libasound is found" '[ $st = 0 ] && printf "%s" "$out" | grep -qF "program args: $game"'
 
-# 26. --mods: play.sh (a copy in a package folder of its own, so the mods folder beside it is the
-# test's) makes the mods folder, has the program build nv-rs's modgame from the game and that
-# folder, plays from modgame in the mods profile; the player's side untouched. A failed build
-# stops before the game starts.
+# 26. --mods, in a fresh nv-rs folder of its own (and a package folder of its own): the mods folder
+# is "my mods" in nv-rs's own folder, never beside play.sh, made with its READ ME and said with
+# where it is and that it is empty; the program builds nv-rs's modgame from the game and that
+# folder; play is from modgame in the mods profile. The saves offer is per profile: a first --mods
+# start does not use up plain play's. The plain profile's saves are untouched by a --mods start. A
+# mods folder beside play.sh from an earlier version is said, not used. A failed build stops
+# before the game starts. The player's side untouched.
 pkg="$T/pkg"
-mkdir -p "$pkg"
+own26="$T/own26"
+mkdir -p "$pkg/app"
 cp "$PLAY" "$pkg/play.sh"
-out=$(env NV_RS_GAME="$game" $SH "$pkg/play.sh" --mods </dev/null 2>&1); st=$?
+printf 'read me\n' >"$pkg/app/mods READ ME.txt"
+printf 'own%s%s\ngame%sSteam%s%s\nsaves%sSteam (Proton)%s%s\n' "$tab" "$own26" "$tab" "$tab" "$game" "$tab" "$tab" "$pfx" >"$T/find26.txt"
+out=$(printf '\n' | env FAKE_FIND="$T/find26.txt" NV_RS_GAME="$game" NV_RS_ANSWERS_FROM_INPUT=1 $SH "$pkg/play.sh" --mods 2>&1); st=$?
 check "26 status 0" '[ $st = 0 ]'
-check "26 mods folder made beside play.sh" '[ -d "$pkg/mods" ]'
-check "26 built from the game and the mods folder" 'printf "%s" "$out" | grep -qxF "built: $game | $own | $pkg/mods"'
-check "26 plays from modgame" 'printf "%s" "$out" | grep -qF "program args: $own/modgame"'
+check "26 no mods folder beside play.sh" '[ ! -e "$pkg/mods" ]'
+check "26 mods folder in nv-rs's own folder" '[ -d "$own26/my mods" ]'
+check "26 its READ ME" '[ "$(cat "$own26/my mods/READ ME.txt")" = "read me" ]'
+check "26 where it is, said" 'printf "%s" "$out" | grep -qxF "The mods folder: $own26/my mods"'
+check "26 empty and just made, said" 'printf "%s" "$out" | grep -qF "It is empty (just made)"'
+check "26 built from the game and the mods folder" 'printf "%s" "$out" | grep -qxF "built: $game | $own26 | $own26/my mods"'
+check "26 plays from modgame" 'printf "%s" "$out" | grep -qF "program args: $own26/modgame"'
 check "26 mods profile" 'printf "%s" "$out" | grep -qx "NV_PROFILE=mods"'
-check "26 mods profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$own/mods/Documents/My Games/FalloutNV/Saves"'
-out=$(env NV_RS_GAME="$game" $SH "$pkg/play.sh" </dev/null 2>&1)
+check "26 mods profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$own26/mods/Documents/My Games/FalloutNV/Saves"'
+check "26 saves offered into the mods profile" 'printf "%s" "$out" | grep -qF "Your saves from" && [ -f "$own26/mods/saves-offered.txt" ]'
+check "26 saves kept apart, said" 'printf "%s" "$out" | grep -qF "./play.sh --mods --import-saves"'
+check "26 plain play's offer not used up" '[ ! -e "$own26/saves-offered.txt" ]'
+out=$(printf '\n' | env FAKE_FIND="$T/find26.txt" NV_RS_GAME="$game" NV_RS_ANSWERS_FROM_INPUT=1 $SH "$pkg/play.sh" 2>&1)
 check "26 without --mods: the game profile" 'printf "%s" "$out" | grep -qx "NV_PROFILE=game" && printf "%s" "$out" | grep -qF "program args: $game"'
-out=$(env NV_RS_GAME="$game" FAKE_MODS_STATUS=1 $SH "$pkg/play.sh" --mods </dev/null 2>&1); st=$?
+check "26 plain play still offers the saves" 'printf "%s" "$out" | grep -qF "Your saves from" && [ -f "$own26/saves-offered.txt" ]'
+plain="$own26/game/Documents/My Games/FalloutNV/Saves"
+mkdir -p "$plain"
+echo mine >"$plain/Plain.fos"
+plain_before=$(cd "$plain" && ls -1A && cksum Plain.fos)
+mkdir -p "$pkg/mods"
+echo old >"$pkg/mods/Old.esp"
+echo mod >"$own26/my mods/Mine.esp"
+out=$(env FAKE_FIND="$T/find26.txt" NV_RS_GAME="$game" $SH "$pkg/play.sh" --mods </dev/null 2>&1); st=$?
+check "26 again: status 0" '[ $st = 0 ]'
+check "26 not empty now: nothing said" '! printf "%s" "$out" | grep -qF "It is empty"'
+check "26 the old mods folder beside play.sh, said" 'printf "%s" "$out" | grep -qF "is not used any more"'
+check "26 the old mods folder untouched" '[ "$(cat "$pkg/mods/Old.esp")" = old ]'
+check "26 the plain profile's saves untouched" '[ "$(cd "$plain" && ls -1A && cksum Plain.fos)" = "$plain_before" ]'
+out=$(env FAKE_FIND="$T/find26.txt" NV_RS_GAME="$game" FAKE_MODS_STATUS=1 $SH "$pkg/play.sh" --mods </dev/null 2>&1); st=$?
 check "26 a failed build stops" '[ $st != 0 ] && ! printf "%s" "$out" | grep -q "program args:"'
 check "26 steam folder unchanged" '[ "$(snapshot)" = "$before" ]'
 
 # 27. --install-mods: the program's chooser is given the game, nv-rs's mod installs and the mods
-# folder beside play.sh, reads the player's typing, and nothing is started after it.
+# folder in nv-rs's own folder ("my mods", said), reads the player's typing, and nothing is started
+# after it.
 out=$(printf 'q\n' | env NV_RS_GAME="$game" $SH "$pkg/play.sh" --install-mods 2>&1); st=$?
 check "27 status 0" '[ $st = 0 ]'
-check "27 the chooser's folders" 'printf "%s" "$out" | grep -qxF "installer: $game | $own/mod installs | $pkg/mods"'
+check "27 the chooser's folders" 'printf "%s" "$out" | grep -qxF "installer: $game | $own/mod installs | $own/my mods"'
+check "27 where the mods folder is, said" 'printf "%s" "$out" | grep -qF "The mods folder: $own/my mods"'
 check "27 the typing reaches it" 'printf "%s" "$out" | grep -qxF "typed: q"'
 check "27 no game started" '! printf "%s" "$out" | grep -q "program args:"'
 check "27 steam folder unchanged" '[ "$(snapshot)" = "$before" ]'
+
+# 28. A package unpacked inside the game's folder: said plainly, and nothing is written in the game's
+# folder by a --mods start (the mods folder is in nv-rs's own folder).
+game28="$T/game28"
+mkdir -p "$game28/Data" "$game28/nv-rs"
+echo x >"$game28/Data/FalloutNV.esm"
+echo x >"$game28/FalloutNV.exe"
+cp "$PLAY" "$game28/nv-rs/play.sh"
+printf 'own%s%s\ngame%sSteam%s%s\n' "$tab" "$T/own28" "$tab" "$tab" "$game28" >"$T/find28.txt"
+before28=$(cd "$game28" && find . | sort)
+out=$(env FAKE_FIND="$T/find28.txt" NV_RS_GAME="$game28" $SH "$game28/nv-rs/play.sh" --mods </dev/null 2>&1); st=$?
+check "28 status 0" '[ $st = 0 ]'
+check "28 said plainly" 'printf "%s" "$out" | grep -qF "nv-rs is in the game'"'"'s folder"'
+check "28 nothing written in the game's folder" '[ "$(cd "$game28" && find . | sort)" = "$before28" ]'
 
 # 24. CI's Linux job (NV_RS_REAL_PROGRAM: the built nv-viewer): the real program takes and refuses
 # the same game folders as the stand-in. Taken, it checks the game's FalloutNV.exe before its

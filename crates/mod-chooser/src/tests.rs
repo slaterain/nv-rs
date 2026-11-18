@@ -275,3 +275,22 @@ fn a_kept_archive_is_never_replaced() {
     );
     assert!(places.loose.join("Retex.zip").exists());
 }
+
+/// The files read for the installers' questions: past either cap the install stops in words,
+/// never answering from part of the list.
+#[test]
+fn the_facts_caps_refuse() {
+    let dir = Scratch::new("facts-caps");
+    let places = dir.places();
+    std::fs::create_dir_all(places.game.join("Data").join("Textures")).unwrap();
+    std::fs::write(
+        places.game.join("Data").join("Textures").join("a.dds"),
+        b"t",
+    )
+    .unwrap();
+    assert!(facts_with(&places, 100, 8).is_ok());
+    let many = facts_with(&places, 1, 8).unwrap_err();
+    assert!(many.contains("more than 1 files"), "{many}");
+    let deep = facts_with(&places, 100, 0).unwrap_err();
+    assert!(deep.contains("more than 0 folders deep"), "{deep}");
+}

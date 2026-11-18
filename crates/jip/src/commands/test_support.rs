@@ -600,6 +600,37 @@ pub mod files {
         bytes.truncate(max);
         Ok(bytes)
     }
+    /// The platform's folder listing: the files and folders of this thread directly in the folder
+    /// (names in lower case, as kept), each name once, in NTFS's order (ASCII upper case, byte by
+    /// byte); a refused name lists nothing. Nothing is written.
+    fn list(_: &Engine, name: &[u8]) -> Vec<mf::Listed> {
+        let Some(folder) = key(name) else {
+            return Vec::new();
+        };
+        let direct = |k: &Vec<u8>| {
+            k.len() > folder.len() + 1
+                && k.starts_with(&folder)
+                && k[folder.len()] == b'\\'
+                && !k[folder.len() + 1..].contains(&b'\\')
+        };
+        let mut found: BTreeMap<Vec<u8>, bool> = BTreeMap::new();
+        FILES.with(|f| {
+            for k in f.borrow().keys().filter(|k| direct(k)) {
+                found.entry(k[folder.len() + 1..].to_vec()).or_insert(false);
+            }
+        });
+        FOLDERS.with(|f| {
+            for k in f.borrow().iter().filter(|k| direct(k)) {
+                found.entry(k[folder.len() + 1..].to_vec()).or_insert(true);
+            }
+        });
+        let mut out: Vec<mf::Listed> = found
+            .into_iter()
+            .map(|(name, is_folder)| mf::Listed { name, is_folder })
+            .collect();
+        out.sort_by_key(|entry| entry.name.to_ascii_uppercase());
+        out
+    }
     static CALLS: ModFileCalls = ModFileCalls {
         read,
         exists,
@@ -608,6 +639,7 @@ pub mod files {
         write,
         append,
         read_head,
+        list,
     };
 
     /// Installs the calls (once a run) and empties this thread's files.
