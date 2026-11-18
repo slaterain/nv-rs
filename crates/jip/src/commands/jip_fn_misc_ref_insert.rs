@@ -851,7 +851,7 @@ const VT_IS_ACTOR_BASE: u32 = 0xf8;
 // TESObjectREFR::GetBaseForm2 (asm).
 /// The reference's base form; for a base made in game (`0xFF` file), an actor base's leveled
 /// creature extra's base (0 without one), else 0.
-fn base_form2(e: &mut Engine, refr: u32) -> u32 {
+pub(crate) fn base_form2(e: &mut Engine, refr: u32) -> u32 {
     let base = e.mem.u32(refr + REFR_BASE);
     if base == 0 || e.mem.u8(base + 0xf) != 0xff {
         return base;

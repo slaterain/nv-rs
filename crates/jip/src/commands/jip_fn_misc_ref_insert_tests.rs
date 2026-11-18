@@ -171,7 +171,8 @@ fn setup() -> Engine {
     set_ref(&mut e, R_REFR, REFR);
     set_ref(&mut e, R_MADE, MADE);
     set_ref(&mut e, R_PLAIN, PLAIN);
-    register_awaiting(&mut e, AWAITING_H08_H10);
+    // Registered with their patches (H08, H10).
+    assert_ne!(crate::test_support::execute_of(&e, 0x28d3), 0);
     e
 }
 
@@ -839,4 +840,65 @@ fn model_has_block_loads_a_base_forms_model() {
     CALLS.with(|c| c.borrow_mut().clear());
     assert_eq!(has(&mut e, R_REFR, b"Hinge"), 0.0);
     assert!(of(0x0044_7080).is_empty());
+}
+
+// ---- With the model hooks: H10 (biped parts, add-ons) and H08 (the clone test) ----
+
+/// H10's biped part seam with `InsertNode`: a part whose form has entries gets them in its clone
+/// (here the scene's root, which takes the model root's name first), and the clone is named
+/// `"<slot name> <form id>"`; a form with none is only named.
+#[test]
+fn h10_a_biped_part_gets_its_forms_entries_and_jips_name() {
+    let mut e = setup();
+    e.map(0x0118_8000, 0x1000);
+    let slot_name = FORMS + 0xf000;
+    e.mem.write(slot_name, b"UpperBody\0");
+    e.mem.set_u32(0x0118_8b98 + 4 * 2, slot_name);
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    node_calls();
+    let seam = crate::game_patches::gh2::BIPED_PART_NAME.addr();
+    // The form STATIC, the clone ROOT, the model's root ROOT, slot 2, third person.
+    assert_eq!(e.site(seam, &[STATIC, ROOT, ROOT, 2, 0]), Some(1));
+    let made = NEW_NODES + 0x100;
+    assert_eq!(node_calls(), vec![(ATTACH_FN, SPINE, vec![made, 1])]);
+    assert_eq!(e.mem.u32(ROOT + 8), s_of(b"UpperBody 00001001"));
+    // A plain form: only the name.
+    assert_eq!(e.site(seam, &[PLAIN, ARM, ARM, 2, 0]), Some(1));
+    assert!(node_calls().is_empty());
+}
+
+/// H10's add-on seam with `InsertNode`: the clone's rotation is the identity and its translation
+/// 0, and a form with entries gets them in the clone.
+#[test]
+fn h10_an_add_on_gets_its_forms_entries_and_a_reset_transform() {
+    let mut e = setup();
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    node_calls();
+    for at in (0x34..0x64).step_by(4) {
+        e.mem.set_f32(ROOT + at, 7.0);
+    }
+    let seam = crate::game_patches::gh2::ADD_ON_TRANSFORM.addr();
+    assert_eq!(e.site(seam, &[ROOT, STATIC, 0]), Some(1));
+    let floats: Vec<f32> = (0..12).map(|i| e.mem.f32(ROOT + 0x34 + 4 * i)).collect();
+    assert_eq!(
+        floats,
+        [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+    );
+    assert_eq!(
+        node_calls(),
+        vec![(ATTACH_FN, SPINE, vec![NEW_NODES + 0x100, 1])]
+    );
+}
+
+/// H08: a form or a reference with entries is cloned for each placed object (the clone seam
+/// answers 1); without entries the game's checks go on (0).
+#[test]
+fn h08_a_form_with_entries_is_cloned() {
+    let mut e = setup();
+    let seam = crate::game_patches::gl::lights::CLONE_3D.addr();
+    assert_eq!(e.site(seam, &[0, STATIC, 0]), Some(0));
+    insert(&mut e, R_STATIC, 1, b"Bip01 Spine|NewA");
+    assert_eq!(e.site(seam, &[0, STATIC, 0]), Some(1), "the form");
+    assert_eq!(e.site(seam, &[0, PLAIN, STATIC]), Some(1), "the reference");
+    assert_eq!(e.site(seam, &[0, PLAIN, 0]), Some(0));
 }
