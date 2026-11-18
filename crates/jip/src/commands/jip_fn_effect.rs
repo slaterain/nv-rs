@@ -85,9 +85,8 @@ pub static COMMANDS: Handlers = &[
     (0x27c2, set_base_effect_script),
 ];
 
-/// `CastImmediate`, built but not registered until JIP's cast hook (row H23) is in: without it the
-/// cast is the game's ordinary one, not an immediate one. The row's pull request adds this list to
-/// `commands::ALL`.
+/// `CastImmediate`, registered with JIP's cast hook (row H23, `game_patches::gl`), which turns its
+/// cast into an immediate one: in `commands::ALL` beside it.
 pub static AWAITING_H23: Handlers = &[(0x2829, cast_immediate)];
 
 /// The conditions: each opcode with its execute and its eval.

@@ -11,6 +11,8 @@
 //!   the cursors' correction;
 //! - [`levels`]: the three level passes (`0096b050`, `0096b470`, `0096b810`) with the hour test,
 //!   the actor update and the removal of the actors that left a level.
+//! - [`forget`]: the clean-up when a reference goes away (`0096f600`, `00976680`), which walks every
+//!   actor of the process lists for each reference a cell unload or a fast travel frees.
 //!
 //! What stays by address: the actor's own update (its vtable slot `0x25c`), its script
 //! (`TESObjectREFR::RunScript`), `LowProcess::ComputeLastTimeProcessed`, the process type,
@@ -32,6 +34,7 @@ use engine_core::typed::{Family, FamilyId, Threads};
 use engine_core::{entry, AbiFn};
 
 pub mod array;
+pub mod forget;
 pub mod levels;
 
 /// This family's bit: what each `typed_call!` of it names.
@@ -64,5 +67,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0096_b050, levels::update_low(Ptr, f32, u32)),
         entry!(0x0096_b470, levels::update_middle_low(Ptr, f32, u32)),
         entry!(0x0096_b810, levels::update_middle_high(Ptr, f32, u32)),
+        entry!(0x0096_f600, forget::null_out_target_ref(Ptr, u32, u8)),
+        entry!(0x0097_6680, forget::reference_destructed(Ptr, u32)),
     ]
 }

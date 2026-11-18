@@ -392,7 +392,7 @@ fn clone_3d(e: &mut Engine, w: &[u32]) -> Option<u32> {
 /// parent up to `root` (stopping at one already marked); the extra is removed either way. A
 /// node (slot +0xC is `return this`) is searched the same way. A parent missing before `root`
 /// stops the marking (JIP would read through null).
-fn init_point_lights(e: &mut Engine, node: u32, root: u32) {
+pub(crate) fn init_point_lights(e: &mut Engine, node: u32, root: u32) {
     let count = e.mem.u16(node.wrapping_add(CHILD_COUNT));
     let children = e.mem.u32(node.wrapping_add(CHILDREN));
     for i in 0..u32::from(count) {

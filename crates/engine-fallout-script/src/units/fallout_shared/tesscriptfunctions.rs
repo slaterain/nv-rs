@@ -1611,7 +1611,11 @@ pub fn fn_005b53d0(e: &mut Engine, a: ScriptArgs) -> bool {
     let player = player(e);
     e.call(CHECK_QUEST_TARGET_UPDATE, &args![player, a.this_obj]);
     if a.containing_obj.addr() == player {
-        e.call(FN_00704AF0, &args![]);
+        // Seam (JIP's G60, `RemoveMeHook` at `0x5B54E7`): an answer stands for the menu refresh
+        // (`00704af0`; JIP asks for its own refresh at the next main loop pass instead).
+        if e.site(0x005b_54e7, &[]).is_none() {
+            e.call(FN_00704AF0, &args![]);
+        }
     }
     false
 }
@@ -7111,6 +7115,11 @@ mod tests {
         );
         // The target is the player: the interface is refreshed.
         assert_eq!(calls(&e, FN_00704AF0).len(), 1);
+        // The seam at 0x5B54E7 (JIP's G60): an answer stands for the refresh.
+        e.on_site_for_test(0x005b_54e7, |_, _| Some(0));
+        start_log(&mut e);
+        assert!(!e.call(0x005b_53d0, &args![a]).bool());
+        assert!(calls(&e, FN_00704AF0).is_empty());
 
         // Not an actor, not the player: no worn entry, no refresh.
         e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());

@@ -17,6 +17,9 @@ engine-fallout-cell = { path = "../engine-fallout-cell" }
 engine-fallout-facegen = { path = "../engine-fallout-facegen" }
 
 [dev-dependencies]
+# JIP LN NVSE put into a test engine (`jip::test_support`), for the end-to-end test of JIP's H23 seam
+# in `MagicCaster::FindTargets` reached through the translated cast.
+jip = { path = "../jip", features = ["test-support"] }
 # The form-constructor checker of units::crt (ctor_test) for this crate's tests.
 engine-core = { path = "../engine-core", features = ["test-support"] }
 # Phase A of the split by area (docs/ENGINE_CRATE.md, "The fallout crates"): every other
