@@ -10,8 +10,8 @@
 //! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
 //! a text's size in a font, the open menu's item list refreshed (`RefreshItemsList`), message
-//! boxes with a callback script (`MessageBoxExAlt`) and font files (`SetFontFile`). 44 of the
-//! file's 64 commands (`ToggleHUDCursor` built, [`AWAITING_H02`]); its four menu event commands are
+//! boxes with a callback script (`MessageBoxExAlt`). 43 of the file's 64 commands (`ToggleHUDCursor`
+//! and `SetFontFile` built: [`AWAITING_H02`], [`AWAITING_G129`]); its four menu event commands are
 //! the core track's (`ui_hooks`).
 //!
 //! `ToggleHUDCursor` keeps JIP's HUD cursor mode, which `GetMenuMode` here reads and the HUD
@@ -19,10 +19,10 @@
 //! patch (on its own it would disable the left button with no cursor to click). The item list refresh is also what JIP's
 //! `RemoveMe` patch (G60) asks for at the next main loop pass ([`request_item_list_refresh`]).
 //!
-//! `MessageBoxExAlt` keeps its boxes' scripts for the box width patch (G55), which widens a box while
-//! any waits; until it is in, the boxes have the game's width. `SetFontFile` shares JIP's font map
-//! with its font manager patch (G129), which also gives the manager the slots of fonts 10 to 89:
-//! until it is in, only fonts 1 to 8 can be set.
+//! `MessageBoxExAlt` keeps its boxes' scripts for the box width patch (G55), which lets a box be
+//! 1,200 wide while any waits: until G55 the box is narrower than JIP's (the game's own maximum),
+//! so a long text wraps more; nothing is cut off. `SetFontFile` shares JIP's font map with its
+//! font manager patch (G129), which registers it.
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
 //! LN NVSE)): a path's first part names a menu (looked up as JIP's `s_menuNameToID` looks it up,
@@ -127,13 +127,18 @@ pub static COMMANDS: Handlers = &[
     (0x2935, get_menu_item_list_refs),
     (0x27e8, refresh_items_list),
     (0x2826, message_box_ex_alt),
-    (0x274c, set_font_file),
 ];
 
 /// `ToggleHUDCursor`, built but not registered until JIP's HUD cursor patch (row H02) is in:
 /// without it the left mouse button would be disabled and menu mode answered with no cursor to
 /// see or click. The row's pull request adds this list to `commands::ALL`.
 pub static AWAITING_H02: Handlers = &[(0x28b5, toggle_hud_cursor)];
+
+/// `SetFontFile`, built but not registered until JIP's font manager patch (row G129) is in: without
+/// it fonts 10 to 89 could not be set (the game's manager ends after font 8) and a game font could
+/// not be put back (G129 keeps the game's eight in the map at start; their files are in the
+/// archives, not loose). The row's pull request adds this list to `commands::ALL`.
+pub static AWAITING_G129: Handlers = &[(0x274c, set_font_file)];
 
 /// `IsInCharGen`, a condition (`DEFINE_CMD_COND_PLUGIN`).
 pub static CONDITIONS: Conditions = &[(0x282a, is_in_char_gen, is_in_char_gen_eval)];

@@ -57,6 +57,7 @@ fn setup() -> Engine {
     set_ref(&mut e, 1, SCPT);
     set_ref(&mut e, 2, SCPT2);
     set_ref(&mut e, 3, MISC);
+    register_awaiting(&mut e, AWAITING_G129);
     // `ShowMessageBox`: the stack's words as the exe reads them (eight, then the buttons up to
     // the 0).
     e.register(SHOW_FN, |e, w| {
@@ -293,4 +294,29 @@ fn fonts_above_8_need_jips_manager() {
     assert!(insert_font_info(&mut e, b"g.fnt", 7));
     assert_eq!(call_on(&mut e, 0x274c, 0, &[n(10), s(b"G.fnt")]), (1, 1.0));
     assert_eq!(e.mem.u32(MANAGER + 0x24), 7);
+}
+
+/// The callback's lambda variables: kept once more for each box with that script (none for a
+/// form that is not a script), given up by each answer and by `clear_message_box_scripts`.
+#[test]
+fn the_callbacks_lambda_variables_are_kept_while_its_box_waits() {
+    let mut e = setup();
+    let list = FORMS + 0x5_0000;
+    nvse::lambda::insert_for_tests(&mut e, SCPT, list);
+    let kept = |e: &Engine| nvse::lambda::saved_count(e, SCPT);
+    assert_eq!(kept(&e), 0);
+    call_on(&mut e, 0x2826, 0, &[r(1), s(b"One|A")]);
+    assert_eq!(kept(&e), 1);
+    call_on(&mut e, 0x2826, 0, &[r(3), s(b"Two|A")]);
+    assert_eq!(kept(&e), 1, "a form not a script: nothing kept");
+    call_on(&mut e, 0x2826, 0, &[r(1), s(b"Three|A")]);
+    assert_eq!(kept(&e), 2);
+    e.call(MESSAGE_BOX_CALLBACK, &[]);
+    assert_eq!(kept(&e), 1, "the answer gives one up");
+    e.call(MESSAGE_BOX_CALLBACK, &[]);
+    assert_eq!(kept(&e), 1, "the non-script box's answer: nothing");
+    call_on(&mut e, 0x2826, 0, &[r(1), s(b"Four|A")]);
+    assert_eq!(kept(&e), 2);
+    clear_message_box_scripts(&mut e);
+    assert_eq!(kept(&e), 0, "cleared: every kept one given up");
 }
