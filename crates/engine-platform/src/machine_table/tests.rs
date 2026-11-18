@@ -561,7 +561,18 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
     });
     assert_eq!(problems.len(), 2);
     assert!(problems[0].contains("no HOME") && problems[1].contains("no zone file"));
-    assert!(!table.contains("GetTimeZoneInformation") && !table.contains("SHGetFolderPathA\t5 "));
+    assert!(problems[1].contains("UTC"), "{}", problems[1]);
+    assert!(!table.contains("SHGetFolderPathA\t5 "));
+    // The zone that could not be read is answered as UTC (no stop at the game's first local
+    // time), for the current rules and every year's.
+    let mut e = crate::Engine::new();
+    crate::d3d9::load_adapter_table(&mut e, &table);
+    let zone = ZoneInfo::from_bytes(&crate::d3d9::time_zone(&mut e));
+    assert_eq!(zone.bias, 0);
+    assert_eq!(
+        crate::d3d9::time_zone_for_year(&mut e, 2026),
+        crate::d3d9::time_zone(&mut e)
+    );
     assert!(table.contains("CpuIdFlagTest\t\t200000\nCpuid\t0\t1 0 0 0\nCpuid\t1\t0 0 0 6808000\n"));
     assert!(table.ends_with("NvApiLoad\t\t0\t7e\nNvApiEnd\n"));
     let (display, problems, refusal) = display_part(&DisplayInputs {

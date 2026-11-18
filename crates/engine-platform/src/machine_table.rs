@@ -730,7 +730,8 @@ pub struct Inputs {
 }
 
 /// The table's text and what could not be answered (each a line for the log; such a question
-/// then stops the run where the game asks it, saying it was not captured).
+/// then stops the run where the game asks it, saying it was not captured; the time zone is
+/// answered as UTC instead).
 pub fn write_table(inputs: &Inputs) -> (String, Vec<String>) {
     let mut table = String::from(WINDOWS_FIXED);
     // The game's code page and its OEM page, after the fixed answers' 1252 and 437 (a later line
@@ -755,7 +756,20 @@ pub fn write_table(inputs: &Inputs) -> (String, Vec<String>) {
         .and_then(|zone| zone_lines(zone, inputs.now))
     {
         Ok(lines) => table.push_str(&lines),
-        Err(why) => problems.push(format!("machine table: no time zone: {why}")),
+        // A zone that cannot be read or answered is UTC, as the C library takes a zone it cannot
+        // use (and as a missing zone file already answers, `read_zone`): without a zone the run
+        // would stop at the C runtime's first local time (`__tzset_nolock` 00ee2622: the save
+        // menu's file dates, a save's date).
+        Err(why) => {
+            problems.push(format!(
+                "machine table: the time zone cannot be read ({why}): the game is given UTC"
+            ));
+            let utc = parse_posix_tz("UTC0")
+                .map(Zone::from_rule)
+                .and_then(|zone| zone_lines(&zone, inputs.now))
+                .expect("UTC answers every year");
+            table.push_str(&utc);
+        }
     }
     let (id, leaf_0, leaf_1) = inputs.processor;
     table.push_str(&processor_lines(id, leaf_0, leaf_1));
