@@ -2626,36 +2626,36 @@ pub fn fn_007284f0(e: &mut Engine, count: i32) {
 /// The message `fn_007284f0` shows for an output given (`0x728933` to `0x7289FC`): "`name`
 /// added" (or "`total` `name` added"), with the gift box icon and the item's pick-up sound.
 fn crafted_message(e: &mut Engine, chosen: u32, total: i32) {
-            e.with_stack(8, |e, text| {
-                e.call(STRING_OBJECT_CONSTRUCT, &args![text]);
-                if total > 1 {
-                    let first = e.call(SETTING_STRING, &args![SETTING_011D4E7C]).u32();
-                    let second = e.call(SETTING_STRING, &args![SETTING_011D3114]).u32();
-                    let name = e.call(GET_FULL_NAME, &args![chosen]).u32();
-                    e.call(
-                        FORMAT_STRING_OBJECT,
-                        &args![text, MANY_ADDED_FORMAT, total, name, second, first],
-                    );
-                } else {
-                    let first = e.call(SETTING_STRING, &args![SETTING_011D4E7C]).u32();
-                    let name = e.call(GET_FULL_NAME, &args![chosen]).u32();
-                    e.call(
-                        FORMAT_STRING_OBJECT,
-                        &args![text, TWO_STRINGS_FORMAT, name, first],
-                    );
-                }
-                let time = x87_quiet_bits(e.global::<u32>(MESSAGE_TIME_010162C0));
-                let player = e.global::<u32>(PLAYER);
-                let sound = e
-                    .call(GET_PICK_UP_SOUND_NAME, &args![player, chosen, 1u32, 0u32])
-                    .u32();
-                let message = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
-                e.call(
-                    SHOW_MESSAGE_007052F0,
-                    &args![message, 0u32, GIFT_ICON_TEXT, sound, time, 0u32],
-                );
-                e.call(STRING_OBJECT_DESTRUCT, &args![text]);
-            });
+    e.with_stack(8, |e, text| {
+        e.call(STRING_OBJECT_CONSTRUCT, &args![text]);
+        if total > 1 {
+            let first = e.call(SETTING_STRING, &args![SETTING_011D4E7C]).u32();
+            let second = e.call(SETTING_STRING, &args![SETTING_011D3114]).u32();
+            let name = e.call(GET_FULL_NAME, &args![chosen]).u32();
+            e.call(
+                FORMAT_STRING_OBJECT,
+                &args![text, MANY_ADDED_FORMAT, total, name, second, first],
+            );
+        } else {
+            let first = e.call(SETTING_STRING, &args![SETTING_011D4E7C]).u32();
+            let name = e.call(GET_FULL_NAME, &args![chosen]).u32();
+            e.call(
+                FORMAT_STRING_OBJECT,
+                &args![text, TWO_STRINGS_FORMAT, name, first],
+            );
+        }
+        let time = x87_quiet_bits(e.global::<u32>(MESSAGE_TIME_010162C0));
+        let player = e.global::<u32>(PLAYER);
+        let sound = e
+            .call(GET_PICK_UP_SOUND_NAME, &args![player, chosen, 1u32, 0u32])
+            .u32();
+        let message = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, text));
+        e.call(
+            SHOW_MESSAGE_007052F0,
+            &args![message, 0u32, GIFT_ICON_TEXT, sound, time, 0u32],
+        );
+        e.call(STRING_OBJECT_DESTRUCT, &args![text]);
+    });
 }
 
 // Translated from 00728a30 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -4626,7 +4626,10 @@ mod n057_tests {
         use engine_core::extend::jip_patches::{FIXES, INSTALLED};
         for word in [0, FIXES] {
             let (e, _) = make_with(word, jip_yes, jip_zero);
-            assert!(JIP_ASKED.with(|s| s.take()).is_empty(), "{word:x}: not asked");
+            assert!(
+                JIP_ASKED.with(|s| s.take()).is_empty(),
+                "{word:x}: not asked"
+            );
             assert_eq!(calls_to(&e, SHOW_MESSAGE_007052F0).len(), 1);
             assert_eq!(calls_to(&e, SERVICE_END), vec![vec![0]]);
         }
@@ -4661,13 +4664,19 @@ mod n057_tests {
         e.on_site_for_test(0x0072_74e1, jip_click);
         e.call_log = Some(vec![]);
         e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
-        assert!(JIP_ASKED.with(|s| s.take()).is_empty(), "not installed: not asked");
+        assert!(
+            JIP_ASKED.with(|s| s.take()).is_empty(),
+            "not installed: not asked"
+        );
         assert_eq!(calls_to(&e, QUANTITY_MENU_CREATE).len(), 1);
         e.set_jip_patches(INSTALLED);
         e.call_log = Some(vec![]);
         e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
         assert_eq!(JIP_ASKED.with(|s| s.take()), vec![(0, vec![menu, 7])]);
-        assert!(calls_to(&e, QUANTITY_MENU_CREATE).is_empty(), "JIP's code instead");
+        assert!(
+            calls_to(&e, QUANTITY_MENU_CREATE).is_empty(),
+            "JIP's code instead"
+        );
         JIP_CLICK_NONE.with(|c| c.set(true));
         e.call_log = Some(vec![]);
         e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
