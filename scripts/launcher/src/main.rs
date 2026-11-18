@@ -1114,12 +1114,17 @@ fn play(
         status.set("Getting the mods ready...");
         let install = package.userdata.join("modgame");
         let plugins = profile.local.join("FalloutNV\\plugins.txt");
-        let built =
-            mods::build_install(&game.folder, &package.root.join("mods"), &install, &plugins)
-                .map_err(|e| Stop {
-                    code: STOP_MODS,
-                    message: e.player_text(),
-                })?;
+        let built = mods::build_install(
+            &game.folder,
+            &package.userdata.join("mod installs"),
+            &package.root.join("mods"),
+            &install,
+            &plugins,
+        )
+        .map_err(|e| Stop {
+            code: STOP_MODS,
+            message: e.player_text(),
+        })?;
         package.log(&format!(
             "mods: {} files linked, {} mod files",
             built.linked, built.mod_files
