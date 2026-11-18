@@ -14,7 +14,8 @@
 //! - its shader property (+0xA8), of a type (+0x1C) whose bit is set in `0x200100` (`bt`, so the
 //!   type taken modulo 32: 8, `BSShaderPPLightingProperty`, or 21, `BSShaderNoLightingProperty`,
 //!   whose constructor `00B6FC90` writes 0x15 there);
-//! - the texture: `TES::CreateTextureImage` (`004568C0`, `stdcall` (path, &texture, 0, 0),
+//! - the texture: `TES::CreateTextureImage` (`004568C0`, `thiscall` with `this` unused (JIP's
+//!   `ecx` holds `0x200100` there, the type mask) and four stack words (path, &texture, 0, 0),
 //!   `RET 0x10`); none made, nothing more;
 //! - the slot: for type 8 the word at +0xAC + 4 * index (the lighting property's six texture
 //!   arrays, one per kind, engine-bs `bsshaderpplightingproperty.rs`: that kind's first entry is
@@ -81,7 +82,8 @@ const LIGHTING: u32 = 8;
 const LIGHTING_TEXTURES: u32 = 0xac;
 const NO_LIGHTING_38: u32 = 0x38;
 const NO_LIGHTING_TEXTURE: u32 = 0x60;
-/// `TES::CreateTextureImage` (`004568C0`).
+/// `TES::CreateTextureImage` (`004568C0`): `this` (not used; JIP's `ecx` is the type mask then),
+/// the path, the texture's `NiPointer`, quiet, alternate.
 const CREATE_TEXTURE_IMAGE: u32 = 0x0045_68c0;
 /// An `NiRefObject`'s vtable delete (+4, no argument: `00CFCC20` in `NiNode`'s, `RET`).
 const DELETE_SLOT: u32 = 0x04;
@@ -145,7 +147,10 @@ fn swap_texture(e: &mut Engine, refr: u32, name: &[u8], path: &[u8], index: u32)
         e.with_stack(4, |e, out| {
             let out = out.addr();
             e.mem.set_u32(out, 0);
-            e.call(CREATE_TEXTURE_IMAGE, &args![at, out, 0u32, 0u32]);
+            e.call(
+                CREATE_TEXTURE_IMAGE,
+                &args![SWAP_TYPES, at, out, 0u32, 0u32],
+            );
             e.mem.u32(out)
         })
     });

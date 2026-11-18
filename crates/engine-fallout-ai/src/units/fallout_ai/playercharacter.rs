@@ -8546,7 +8546,13 @@ fn apply_look_input(
     if e.mem.u8(invert) != 0 {
         pitch = pitch.wrapping_neg();
     }
-    if e.call(0x005a_03f0, &args![this, 2u32]).u8() != 0 {
+    // Seam (JIP's H02, `GetVanityDisabledHook` at `0x9459ED`): words: the player; an answer is the
+    // vanity camera test's (JIP's HUD cursor: the HUD's mouse handling run, then true).
+    let vanity_disabled = match e.site(0x0094_59ed, &[this.addr()]) {
+        Some(answer) => answer & 0xff != 0,
+        None => e.call(0x005a_03f0, &args![this, 2u32]).u8() != 0,
+    };
+    if vanity_disabled {
         yaw = 0;
         pitch = 0;
         zoom = 0;
@@ -18214,6 +18220,32 @@ mod tests {
         // The turn speed estimate is clamped to the constant 1.5.
         assert_eq!(e.global::<f32>(TURN_SPEED), 1.5);
         assert_eq!(e.global::<f32>(LAST_HEADING), 0.0);
+    }
+
+    /// The seam at 0x9459ED (JIP's H02): its answer stands for the vanity camera test, so an
+    /// answer of 1 (JIP's HUD cursor on) drops the look input: the player does not turn, and the
+    /// game's test (`005a03f0`) is not asked.
+    #[test]
+    fn the_free_look_ignores_the_input_when_the_seam_disables_it() {
+        let (mut e, this) = look_world(0);
+        e.register(0x00a2_39e0, |_, a| int(if a[1] == 1 { 100 } else { 0 }));
+        e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+        e.register(0x0040_8860, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+        e.register(0x0099_e040, |_, _| float(1.0));
+        e.register(0x004e_3d00, |_, _| float(1.0));
+        e.register(0x0045_c670, |_, _| int(0x6000));
+        e.set_global(0x011e_0a6c, 2.0f32);
+        e.set_global(0x0120_315c, 2.0f32);
+        e.on_site_for_test(0x0094_59ed, |_, _| Some(1));
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        e.mem.set_u16(flags.addr(), 0x0001);
+        e.call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32]);
+        assert!(called(&e, 0x0093_1d30).is_empty(), "no turn");
+        assert!(
+            called(&e, 0x005a_03f0).is_empty(),
+            "the game's test not asked"
+        );
+        assert_eq!(e.mem.u16(flags.addr()), 0x0001, "no turn flag");
     }
 
     #[test]

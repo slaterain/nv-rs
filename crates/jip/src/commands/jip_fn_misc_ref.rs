@@ -1223,6 +1223,18 @@ pub fn set_sync_position(e: &mut Engine, state: SyncState) {
     *sync_state(e) = state;
 }
 
+/// The position patch's write of the kept position (H13): under the state's lock, and only while
+/// `refr` is still the reference kept (a `SynchronizePosition` start or end on another thread
+/// since the patch read the state wins). Whether it was written.
+pub fn set_sync_pos_if(e: &mut Engine, refr: u32, pos: [f32; 4]) -> bool {
+    let mut s = sync_state(e);
+    if s.refr != refr {
+        return false;
+    }
+    s.pos = pos;
+    true
+}
+
 /// JIP's `nodeName[0x40]`.
 const SYNC_NODE_BUFFER: usize = 0x40;
 /// `TESObjectREFR::position` (+0x30).

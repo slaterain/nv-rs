@@ -49,6 +49,7 @@ pub mod jip_fn_misc_ref_lines;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_misc_ref_nodes_w;
 pub mod jip_fn_miscellaneous;
+pub mod jip_fn_miscellaneous_marker;
 pub mod jip_fn_miscellaneous_scene;
 pub mod jip_fn_move_cmds;
 pub mod jip_fn_package;
@@ -64,6 +65,7 @@ pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
 pub mod jip_fn_ui_nodes;
 pub mod jip_fn_utility;
+pub mod jip_fn_utility_patches;
 pub mod jip_fn_water;
 pub mod jip_fn_weapon;
 pub mod jip_fn_weather;
@@ -219,10 +221,16 @@ pub const ALL: &[Handlers] = &[
     jip_fn_miscellaneous_scene::COMMANDS,
     jip_fn_actor_anim::COMMANDS,
     jip_fn_misc_ref_lines::COMMANDS,
+    jip_fn_miscellaneous_marker::COMMANDS,
+    jip_fn_utility_patches::COMMANDS,
     crate::game_patches::gp::COMMANDS,
     crate::game_patches::gc::formulas::COMMANDS,
     crate::game_patches::gx::COMMANDS,
     jip_fn_misc_ref_insert::COMMANDS,
+    // `SynchronizePosition`, with its patch H13 (`game_patches::gh2`).
+    jip_fn_misc_ref::AWAITING_H13,
+    // `ToggleHUDCursor`, with its patch H02 (`game_patches::gp`).
+    jip_fn_ui::AWAITING_H02,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -839,6 +847,8 @@ mod tests {
             "jip_fn_miscellaneous",
             "jip_fn_actor",
             "jip_fn_misc_ref",
+            "jip_fn_miscellaneous",
+            "jip_fn_utility",
             // game_patches::gp::COMMANDS (its commands are in this file).
             "jip_fn_miscellaneous",
             // game_patches::gc::formulas::COMMANDS (likewise).
@@ -847,6 +857,10 @@ mod tests {
             "jip_fn_input",
             // jip_fn_misc_ref_insert (InsertNode, AttachModel, ModelHasBlock).
             "jip_fn_misc_ref",
+            // jip_fn_misc_ref::AWAITING_H13 (`SynchronizePosition`, with H13).
+            "jip_fn_misc_ref",
+            // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
+            "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();

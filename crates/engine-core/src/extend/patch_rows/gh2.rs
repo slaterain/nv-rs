@@ -56,6 +56,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0057_3194),
     row(0x0057_3fe8),
     row(0x0057_445b),
+    // H13 (JIP's own, `SetRefrPositionHook`): SetLocationOnReference 00575830, the position's store
+    // (0x575A7F): the player kept at the node SynchronizePosition names.
+    row(0x0057_5a7f),
     row(0x0057_6af0),
     // G31 (fix row): 00579690, the end of its door branch: the door's answer stands.
     row(0x0057_9942),
