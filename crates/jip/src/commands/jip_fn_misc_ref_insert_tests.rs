@@ -588,6 +588,8 @@ fn refresh_anim_data_refreshes_and_blends() {
             v
         })
     };
+    // The data's word alone does not blend: the process's byte is 0.
+    e.mem.set_u32(ANIM + 0xf0, 1);
     assert_eq!(call_on(&mut e, 0x290c, PC, &[]), (1, 0.0));
     assert_eq!(
         anim_calls(),
