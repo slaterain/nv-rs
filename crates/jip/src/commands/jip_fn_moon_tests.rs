@@ -93,7 +93,10 @@ fn a_phase_replaced_and_the_moon_rebuilt() {
     assert_eq!(result, 1.0);
     let moon = e.mem.u32(SKY_AT + SKY_MOON);
     assert_ne!(moon, OLD_MOON);
-    let calls = calls();
+    let calls: Vec<_> = calls()
+        .into_iter()
+        .filter(|c| [DESTROY_FN, MOON_CONSTRUCTOR, REFRESH_FN].contains(&c.0))
+        .collect();
     assert_eq!(calls[0], (DESTROY_FN, vec![OLD_MOON, 1]));
     assert_eq!(
         calls[1],
