@@ -567,6 +567,9 @@ struct Gen<'a> {
     /// game's own projected actor shadows (`ShadowMap`), read as lit (white) so a character casts
     /// one shadow, the sun's.
     blank: Option<u32>,
+    /// The variant is a character's own lit draw (its vertex shader skinned): the characters'
+    /// layers allow it more ([`crate::sun_shadow::SKIN_RECEIVER_BIAS`]).
+    skinned: bool,
 }
 
 /// The register of the sun's light colour in a lit pixel shader of the game: `PSLightColor`'s first
@@ -591,7 +594,12 @@ pub fn sun_register(p: &Program) -> Option<u32> {
 /// [`convert`] of a lit pixel shader as the sun shadows' variant: its sun light colour
 /// ([`sun_register`]) times the sun's visibility, looked up in the maps of bind group 3
 /// (`crate::sun_shadow::LOOKUP`). An error for a shader without a sun register.
-pub fn convert_with_sun(p: &Program, link: &Link, characters: bool) -> Result<String, Error> {
+pub fn convert_with_sun(
+    p: &Program,
+    link: &Link,
+    characters: bool,
+    skinned: bool,
+) -> Result<String, Error> {
     let sun = sun_register(p)
         .ok_or_else(|| Error::Unsupported("no sun light colour to shadow".into()))?;
     let blank = if characters {
@@ -599,7 +607,7 @@ pub fn convert_with_sun(p: &Program, link: &Link, characters: bool) -> Result<St
     } else {
         None
     };
-    convert_inner(p, link, Some(sun), blank)
+    convert_inner(p, link, Some(sun), blank, skinned)
 }
 
 /// The sampler of the game's own projected actor shadows in a lit pixel shader (`ShadowMap`, s6 in
@@ -617,7 +625,7 @@ pub fn game_shadow_sampler(p: &Program) -> Option<u32> {
 
 /// Converts a shader to WGSL, linked as `link` says.
 pub fn convert(p: &Program, link: &Link) -> Result<String, Error> {
-    convert_inner(p, link, None, None)
+    convert_inner(p, link, None, None, false)
 }
 
 fn convert_inner(
@@ -625,6 +633,7 @@ fn convert_inner(
     link: &Link,
     sun: Option<u32>,
     blank: Option<u32>,
+    skinned: bool,
 ) -> Result<String, Error> {
     if p.stage == Stage::Pixel && p.major < 2 {
         return Err(Error::Unsupported(format!("{} pixel shaders", p.profile())));
@@ -651,6 +660,7 @@ fn convert_inner(
         labels: BTreeSet::new(),
         sun,
         blank,
+        skinned,
     };
     for ins in &p.ins {
         match ins.op {
@@ -742,7 +752,7 @@ impl Gen<'_> {
             self.out.push_str(&if self.vertex() {
                 crate::sun_shadow::lookup_wgsl_vertex()
             } else {
-                crate::sun_shadow::lookup_wgsl()
+                crate::sun_shadow::lookup_wgsl(self.skinned)
             });
         }
         if !self.sig.samplers.is_empty() {
@@ -1271,10 +1281,6 @@ impl Gen<'_> {
         let coords = self.src(&ins.src[0])?;
         let sampler = ins.src[1];
         let n = sampler.reg.n;
-        // The game's actor shadows in the sun shadows' variant with the characters cast: lit.
-        if self.blank == Some(n) {
-            return Ok("vec4<f32>(1.0)".to_string());
-        }
         let dim = self
             .sig
             .samplers
@@ -1304,7 +1310,12 @@ impl Gen<'_> {
                 _ => format!("textureSampleBias(t{n}, s{n}, ({coords}).{c}, {bias})"),
             },
         };
-        let fixed = format!("fixup({call}, R.fix[{}][{}])", n / 4, n % 4);
+        let mut fixed = format!("fixup({call}, R.fix[{}][{}])", n / 4, n % 4);
+        // The game's actor shadows in the sun shadows' variant with the characters cast: lit where
+        // the characters cast this frame (`sun_chars`, [`crate::sun_shadow::LOOKUP`]).
+        if self.blank == Some(n) {
+            fixed = format!("select({fixed}, vec4<f32>(1.0), sun_chars > 0.5)");
+        }
         // ps_2_x and ps_3_0 allow a swizzle on the sampler: it applies to the result.
         Ok(if sampler.swizzle == 0xE4 {
             fixed

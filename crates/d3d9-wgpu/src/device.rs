@@ -1054,6 +1054,8 @@ struct SunState {
     skinned: Vec<sun_shadow::Skinned>,
     /// Characters cast since the last line in the log.
     skinned_seen: u64,
+    /// Characters' caster pipelines on their way (made on threads of their own).
+    caster_pending: Map<PipeOf, std::sync::mpsc::Receiver<Option<wgpu::RenderPipeline>>>,
 }
 
 /// A skinned geometry's bones' spheres as last read ([`SunState::skins`]): the key they were read
@@ -1176,6 +1178,7 @@ impl SunState {
             skins: Map::default(),
             skinned: Vec::new(),
             skinned_seen: 0,
+            caster_pending: Map::default(),
         }
     }
 }
@@ -6339,6 +6342,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.sun_reject(4, vs, ps, count);
             return;
         }
+        // A character's part cast this frame only, as drawn, never kept (its body skinned, or its
+        // face): into the characters' layers, with its culling turned round so the layer holds
+        // the side away from the sun (the layer is a frame old when the lit draws read it: a
+        // character moving away from the sun must not shade its own sunlit side, review of #726).
+        let per_frame = skin.is_some() || (ps.face && characters);
+        let cull = if per_frame {
+            match cull {
+                2 => 3,
+                3 => 2,
+                c => c,
+            }
+        } else {
+            cull
+        };
         let samplers = self.sampler_bindings(vs, ps);
         let sampler_keys: Vec<(u32, u8, bool)> =
             samplers.as_slice().iter().map(|(k, _)| *k).collect();
@@ -6358,6 +6375,65 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         );
         let pipe = match self.sun.as_ref().and_then(|s| s.pipes.get(&pkey)) {
             Some(p) => *p,
+            // A character's: made on a thread of its own the first time (no hitch when one is
+            // first seen); it casts from the frame its pipeline is there.
+            None if per_frame => {
+                let sun = self.sun.as_mut().expect("on");
+                match sun.caster_pending.get(&pkey).map(|rx| rx.try_recv()) {
+                    Some(Ok(made)) => {
+                        sun.caster_pending.remove(&pkey);
+                        let at = made.map(|p| {
+                            sun.gpu.pipelines.push(Some(p));
+                            (sun.gpu.pipelines.len() - 1) as u32
+                        });
+                        sun.pipes.insert(pkey, at);
+                        at
+                    }
+                    Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                        sun.caster_pending.remove(&pkey);
+                        sun.pipes.insert(pkey, None);
+                        None
+                    }
+                    Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                        self.sun_reject(2, vs, ps, count);
+                        return;
+                    }
+                    None => {
+                        let job = self.sun_pipeline_job(
+                            vs,
+                            ps,
+                            link,
+                            strides,
+                            topology,
+                            pkey.4,
+                            state::cull(cull),
+                            cutout.then_some(&sampler_keys[..]),
+                            false,
+                        );
+                        let sun = self.sun.as_mut().expect("on");
+                        match job {
+                            Some(job) => {
+                                let (tx, rx) = std::sync::mpsc::channel();
+                                let spawned = std::thread::Builder::new()
+                                    .name("nv-wgpu-sun-caster".into())
+                                    .spawn(move || {
+                                        let _ = tx.send(job().ok());
+                                    });
+                                if spawned.is_ok() {
+                                    sun.caster_pending.insert(pkey, rx);
+                                } else {
+                                    sun.pipes.insert(pkey, None);
+                                }
+                            }
+                            None => {
+                                sun.pipes.insert(pkey, None);
+                            }
+                        }
+                        self.sun_reject(2, vs, ps, count);
+                        return;
+                    }
+                }
+            }
             None => {
                 let made = self.sun_pipeline(
                     vs,
@@ -6423,7 +6499,6 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 .sun
                 .as_ref()
                 .and_then(|s| s.skins.get(&geometry))
-                .filter(|(k, _)| *k == key)
                 .map(|(_, s)| s.clone());
             let spheres = match known {
                 Some(s) => s,
@@ -6725,7 +6800,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let sun = self.sun.as_mut().expect("on");
         sun.lists.casters.push(sun_shadow::Caster {
             key,
-            skinned: skinned.is_some(),
+            skinned: per_frame,
             bounds: body.bounds,
             body,
             draw: sun_shadow::Draw {
@@ -6909,7 +6984,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             Some(Obj::Buffer(x, bytes)) if Arc::ptr_eq(x, b) => Some(bytes),
             _ => None,
         };
-        // An element's bytes for vertex `v` (`size` of them).
+        // An element of the declaration and the bytes, offset and stride of its stream.
         let element = |usage: u8| -> Option<(Element, &Vec<u8>, usize, usize)> {
             let e = *decl
                 .elements
@@ -6920,39 +6995,41 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let bytes = held(self.st.bound.streams[k].0, stream.buffer.as_ref()?)?;
             Some((e, bytes, stream.offset as usize, stream.stride as usize))
         };
+        // Its bytes for vertex `v` (`size` of them, at most 16), copied into a fixed array.
         let read = |(e, bytes, offset, stride): &(Element, &Vec<u8>, usize, usize),
                     v: i64,
                     size: usize|
-         -> Option<Vec<u8>> {
+         -> Option<[u8; 16]> {
             let at = offset + usize::try_from(v).ok()? * stride + usize::from(e.offset);
-            bytes.get(at..at + size).map(<[u8]>::to_vec)
+            let b = bytes.get(at..at + size.min(16))?;
+            let mut out = [0u8; 16];
+            out[..b.len()].copy_from_slice(b);
+            Some(out)
         };
-        let floats = |e: &Element, b: &[u8]| -> Option<Vec<f32>> {
-            let (n, w) = match e.ty {
-                0..=3 => (usize::from(e.ty) + 1, 4),
+        // Floats (or half floats) of a type, up to four, and how many.
+        let size_of = |ty: u8| match ty {
+            0..=3 => 4 * (usize::from(ty) + 1),
+            4 | 5 | 8 | 15 => 4,
+            16 => 8,
+            _ => 0,
+        };
+        let floats = |ty: u8, b: &[u8]| -> Option<([f32; 4], usize)> {
+            let (n, w) = match ty {
+                0..=3 => (usize::from(ty) + 1, 4),
                 15 => (2, 2),
                 16 => (4, 2),
                 _ => return None,
             };
-            Some(
-                (0..n)
-                    .map(|c| {
-                        let s = &b[c * w..(c + 1) * w];
-                        if w == 4 {
-                            f32::from_le_bytes([s[0], s[1], s[2], s[3]])
-                        } else {
-                            sun_shadow::half_to_f32(u16::from_le_bytes([s[0], s[1]]))
-                        }
-                    })
-                    .collect(),
-            )
-        };
-        let size_of = |ty: u8| match ty {
-            0..=3 => 4 * (usize::from(ty) + 1),
-            4 | 5 | 8 => 4,
-            15 => 4,
-            16 => 8,
-            _ => 0,
+            let mut f = [0.0f32; 4];
+            for (c, v) in f.iter_mut().enumerate().take(n) {
+                let s = &b[c * w..(c + 1) * w];
+                *v = if w == 4 {
+                    f32::from_le_bytes([s[0], s[1], s[2], s[3]])
+                } else {
+                    sun_shadow::half_to_f32(u16::from_le_bytes([s[0], s[1]]))
+                };
+            }
+            Some((f, n))
         };
         let position = element(0)?;
         let indices = element(2)?;
@@ -6962,13 +7039,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         let in_order = indices.0.ty == 4;
         let vertex = |v: i64| -> Option<([f32; 3], [u8; 4], [f32; 4])> {
-            let p = floats(&position.0, &read(&position, v, size_of(position.0.ty))?)?;
+            let (p, _) = floats(position.0.ty, &read(&position, v, size_of(position.0.ty))?)?;
             let i = read(&indices, v, 4)?;
             let w = match (&weights, in_order) {
                 (Some(we), true) => {
-                    let f = floats(&we.0, &read(we, v, size_of(we.0.ty))?)?;
+                    let (f, n) = floats(we.0.ty, &read(we, v, size_of(we.0.ty))?)?;
+                    let n = n.min(3);
                     let mut w = [0.0f32; 4];
-                    let n = f.len().min(3);
                     w[..n].copy_from_slice(&f[..n]);
                     w[3] = 1.0 - w[..n].iter().sum::<f32>();
                     w
@@ -6978,27 +7055,33 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             };
             Some(([p[0], p[1], p[2]], [i[0], i[1], i[2], i[3]], w))
         };
-        let numbers: Vec<i64> = if indexed {
+        // The vertices the draw uses, each once (one list, sorted; no allocation a vertex).
+        let mut numbers: Vec<i64> = if indexed {
             let ib = self.st.indices.as_ref()?;
             let bytes = held(self.st.bound.indices, ib)?;
             let size = if ib.index32 { 4 } else { 2 };
-            let mut seen = std::collections::BTreeSet::new();
+            let mut n = Vec::with_capacity(count as usize);
             for i in start..start + count {
                 let at = i as usize * size;
                 let s = bytes.get(at..at + size)?;
-                let n = if size == 4 {
+                let v = if size == 4 {
                     u32::from_le_bytes([s[0], s[1], s[2], s[3]])
                 } else {
                     u32::from(u16::from_le_bytes([s[0], s[1]]))
                 };
-                seen.insert(i64::from(base_vertex) + i64::from(n));
+                n.push(i64::from(base_vertex) + i64::from(v));
             }
-            seen.into_iter().collect()
+            n
         } else {
             (i64::from(start)..i64::from(start) + i64::from(count)).collect()
         };
-        let vertices: Option<Vec<_>> = numbers.into_iter().map(vertex).collect();
-        sun_shadow::skin_spheres(vertices?.into_iter())
+        numbers.sort_unstable();
+        numbers.dedup();
+        let mut vertices = Vec::with_capacity(numbers.len());
+        for v in numbers {
+            vertices.push(vertex(v)?);
+        }
+        sun_shadow::skin_spheres(&vertices)
     }
 
     /// A caster's depth-only pipeline: the draw's own converted vertex shader (its module as the
@@ -7016,6 +7099,33 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         cutout: Option<&[(u32, u8, bool)]>,
         coverage: bool,
     ) -> Option<wgpu::RenderPipeline> {
+        let job = self.sun_pipeline_job(
+            vs, ps, link, strides, topology, index32, cull, cutout, coverage,
+        )?;
+        match job() {
+            Ok(p) => Some(p),
+            Err(e) => {
+                self.warn(format!("sun shadows: a caster pipeline wgpu refuses: {e}"));
+                None
+            }
+        }
+    }
+
+    /// [`Device::sun_pipeline`]'s making, to run here or on a thread of its own (a character's
+    /// caster: no hitch the first time one is seen); none when its modules are not there.
+    #[allow(clippy::too_many_arguments)]
+    fn sun_pipeline_job(
+        &mut self,
+        vs: &Shader,
+        ps: &Shader,
+        link: &VertexLink,
+        strides: [u32; 8],
+        topology: wgpu::PrimitiveTopology,
+        index32: bool,
+        cull: Option<wgpu::Face>,
+        cutout: Option<&[(u32, u8, bool)]>,
+        coverage: bool,
+    ) -> Option<impl FnOnce() -> Result<wgpu::RenderPipeline, String> + Send + 'static> {
         let key = self.last_pipeline.as_ref().map(|(k, _, _)| k.clone())?;
         // The modules as the draw's pipeline has them (made ahead, or here if they were not
         // kept: the draw's pipeline can come from a library or the list).
@@ -7057,24 +7167,22 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .enumerate()
             .map(|(k, a)| (!a.is_empty()).then(|| (u64::from(strides[k]), a.clone())))
             .collect();
-        match sun_shadow::Gpu::make_pipeline(
-            &self.device,
-            &layout,
-            self.pipeline_cache.as_ref().map(|c| &c.cache),
-            &module,
-            fragment.as_ref(),
-            &buffers,
-            topology,
-            index32,
-            cull,
-            coverage,
-        ) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                self.warn(format!("sun shadows: a caster pipeline wgpu refuses: {e}"));
-                None
-            }
-        }
+        let device = self.device.clone();
+        let cache = self.pipeline_cache.as_ref().map(|c| c.cache.clone());
+        Some(move || {
+            sun_shadow::Gpu::make_pipeline(
+                &device,
+                &layout,
+                cache.as_ref(),
+                &module,
+                fragment.as_ref(),
+                &buffers,
+                topology,
+                index32,
+                cull,
+                coverage,
+            )
+        })
     }
 
     /// The sun shadows' debug step ([`sun_shadow::debug_step`], `NV_SUN_SHADOWS=debug`) at the
@@ -7142,6 +7250,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.gpu.thin_in,
             sun.gpu.far_lookup().0,
             sun.gpu.far_lookup().1,
+            sun.gpu.chars_in,
             axes,
             position,
             rt.samples,
@@ -7299,7 +7408,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             // A character, as posed in that frame: cast this frame, never kept (its next pose comes
             // with its next draw), never in the far map.
             if c.skinned {
-                if sun_shadow::casts(&world, c.bounds, position) {
+                if (!sun_shadow::characters_alternate() || now % 2 == 0)
+                    && sun_shadow::casts(&world, c.bounds, position)
+                {
                     let centre = sun_shadow::place_point(&world, c.bounds.0);
                     let r = c.bounds.1 * sun_shadow::stretch(&world);
                     sun.skinned.push((c.draw, world, centre, r));
@@ -7652,6 +7763,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }
             }
         }
+        // And the characters' caster pipelines on their way.
+        if let Some(sun) = &mut self.sun {
+            for (key, rx) in std::mem::take(&mut sun.caster_pending) {
+                let at = rx.recv().ok().flatten().map(|p| {
+                    sun.gpu.pipelines.push(Some(p));
+                    (sun.gpu.pipelines.len() - 1) as u32
+                });
+                sun.pipes.insert(key, at);
+            }
+        }
     }
 
     /// Whether the sun shadows' variant pipeline of `key` is ready (then it is in the pipelines'
@@ -7725,6 +7846,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     fixed: vkey.4,
                 },
                 characters,
+                vs.skin.is_some() || ps.face,
             )
         });
         let ps_source = ps_sun.then(|| {
@@ -7739,6 +7861,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     fixed: ps.fixed,
                 },
                 characters,
+                vs.skin.is_some() || ps.face,
             )
         });
         let device = self.device.clone();
@@ -7890,6 +8013,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.gpu.thin_in,
             sun.gpu.far_lookup().0,
             sun.gpu.far_lookup().1,
+            sun.gpu.chars_in,
             axes,
             position,
             rt.samples,

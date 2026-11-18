@@ -27,6 +27,12 @@ const DECL: u32 = 0x1400;
 const SKIN_DECL: u32 = 0x1401;
 const GROUND: u32 = 0x1500;
 const BAR: u32 = 0x1510;
+/// A rigid box where a head would be (60 to 120 high at (0, 150)), its face pixel shader, the
+/// pixel shader with the game's actor shadow (s6), and the black texture bound there.
+const HEAD: u32 = 0x1520;
+const FACE_PS: u32 = 0x1321;
+const GAME_PS: u32 = 0x1322;
+const BLACK: u32 = 0x1600;
 const A8R8G8B8: u32 = 21;
 const D24S8: u32 = 75;
 const SIZE: u32 = 256;
@@ -120,7 +126,13 @@ fn constant_table(version: u32, names: &[(&str, u16, u16)]) -> Vec<u32> {
     let mut text = Vec::new();
     for &(name, index, count) in names {
         b.extend_from_slice(&((strings + text.len()) as u32).to_le_bytes());
-        for v in [2u16, index, count, 0] {
+        // A sampler (`...Map`) is in register set 3, a float constant in set 2.
+        let set = if name.ends_with("Map") || name.ends_with("Map0") {
+            3u16
+        } else {
+            2
+        };
+        for v in [set, index, count, 0] {
             b.extend_from_slice(&v.to_le_bytes());
         }
         b.extend_from_slice(&[0; 8]);
@@ -195,6 +207,45 @@ fn skinned_vs() -> Vec<u32> {
     vs
 }
 
+/// [`lit_ps`] whose constant table also names `FaceGenMap0` (a character's face).
+fn face_ps() -> Vec<u32> {
+    let mut t = vec![0xFFFF_0300];
+    t.extend(constant_table(
+        0xFFFF_0300,
+        &[
+            ("AmbientColor", 1, 1),
+            ("PSLightColor", 3, 1),
+            ("FaceGenMap0", 2, 1),
+        ],
+    ));
+    t.extend(ins(1, &[0x800F_0000, 0xA0E4_0003]));
+    t.extend(ins(2, &[0x800F_0000, 0x80E4_0000, 0xA0E4_0001]));
+    t.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
+    t.push(END);
+    t
+}
+
+/// `ps_3_0` lit as the game's SLS shaders take their actor shadow: `dcl_2d s6; texld r1, c0, s6;
+/// mul r0, c3, r1; add r0, r0, c1; mov oC0, r0` (the sun's colour times the actor shadow map).
+fn game_ps() -> Vec<u32> {
+    let mut t = vec![0xFFFF_0300];
+    t.extend(constant_table(
+        0xFFFF_0300,
+        &[
+            ("AmbientColor", 1, 1),
+            ("PSLightColor", 3, 1),
+            ("ShadowMap", 6, 1),
+        ],
+    ));
+    t.extend(ins(31, &[0x9000_0000, 0xA00F_0806]));
+    t.extend(ins(66, &[0x800F_0001, 0xA0E4_0000, 0xA0E4_0806]));
+    t.extend(ins(5, &[0x800F_0000, 0xA0E4_0003, 0x80E4_0001]));
+    t.extend(ins(2, &[0x800F_0000, 0x80E4_0000, 0xA0E4_0001]));
+    t.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
+    t.push(END);
+    t
+}
+
 /// `ps_3_0` naming `AmbientColor` (c1) and `PSLightColor` (c3): `oC0 = c3 + c1`.
 fn lit_ps() -> Vec<u32> {
     let mut t = vec![0xFFFF_0300];
@@ -235,7 +286,8 @@ fn bytes_buffer(b: &mut WgpuBackend, handle: u32, bytes: &[u8]) {
 
 /// The bar's triangles (a box from `z0` to `z1`) as skinned vertices: position, the two weights
 /// (all on `bone`), the bone bytes (0, 1) in `D3DCOLOR` order; 28 bytes a vertex.
-fn bar_part(z0: f32, z1: f32, bone: usize, out: &mut Vec<u8>) {
+/// The bar's box from `z0` to `z1` high: its top and four sides as triangles.
+fn box_part(z0: f32, z1: f32) -> Vec<[f32; 3]> {
     let (x0, x1, y0, y1) = (-BAR_HALF, BAR_HALF, BAR_Y - BAR_HALF, BAR_Y + BAR_HALF);
     let quad = |a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]| vec![a, b, c, a, c, d];
     let mut v = Vec::new();
@@ -244,6 +296,11 @@ fn bar_part(z0: f32, z1: f32, bone: usize, out: &mut Vec<u8>) {
     v.extend(quad([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]));
     v.extend(quad([x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]));
     v.extend(quad([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]));
+    v
+}
+
+fn bar_part(z0: f32, z1: f32, bone: usize, out: &mut Vec<u8>) {
+    let v = box_part(z0, z1);
     let w = if bone == 0 { [1.0, 0.0] } else { [0.0, 1.0] };
     for p in v {
         out.extend(floats(&[p[0], p[1], p[2], 1.0, w[0], w[1]]));
@@ -288,6 +345,8 @@ fn backend() -> Option<WgpuBackend> {
         (VS, false, rigid_vs()),
         (SKIN_VS, false, skinned_vs()),
         (LIT_PS, true, lit_ps()),
+        (FACE_PS, true, face_ps()),
+        (GAME_PS, true, game_ps()),
     ] {
         let t = words(&tokens);
         run(
@@ -351,6 +410,37 @@ fn backend() -> Option<WgpuBackend> {
     bar_part(0.0, JOINT, 0, &mut bar);
     bar_part(JOINT, TOP, 1, &mut bar);
     bytes_buffer(&mut b, BAR, &bar);
+    // The head: a box from 60 to 120 high at (0, 150), positions only.
+    let head: Vec<f32> = box_part(JOINT, TOP)
+        .iter()
+        .flat_map(|p| [p[0], p[1], p[2], 1.0])
+        .collect();
+    bytes_buffer(&mut b, HEAD, &floats(&head));
+    // Black, opaque: the game's actor shadow everywhere it is read.
+    let levels = words(&[BLACK + 1]);
+    run(
+        &mut b,
+        Cmd::CreateTexture {
+            device: DEVICE,
+            texture: BLACK,
+            levels: Data::Bytes(&levels),
+            width: 8,
+            height: 1,
+            usage: 0,
+            format: A8R8G8B8,
+            pool: 1,
+        },
+    );
+    let texels: Vec<u8> = (0..8).flat_map(|_| [0u8, 0, 0, 255]).collect();
+    run(
+        &mut b,
+        Cmd::UploadSurface {
+            surface: BLACK + 1,
+            row: 32,
+            rows: 1,
+            data: Data::Bytes(&texels),
+        },
+    );
     Some(b)
 }
 
@@ -390,6 +480,18 @@ fn set(b: &mut WgpuBackend, vs: u32, decl: u32) {
         Cmd::SetVertexDeclaration {
             device: DEVICE,
             declaration: decl,
+        },
+    );
+}
+
+/// The pixel shader `ps`.
+fn set_ps(b: &mut WgpuBackend, ps: u32) {
+    run(
+        b,
+        Cmd::SetShader {
+            device: DEVICE,
+            pixel: true,
+            shader: ps,
         },
     );
 }
@@ -466,34 +568,79 @@ fn clear(b: &mut WgpuBackend, flags: u32) {
     );
 }
 
-/// Bone 1 moving the bar's upper half by `shift` (a plain move: rows of a 3x4 matrix).
-fn bones(shift: [f32; 3]) -> Vec<f32> {
-    let mut r = vec![1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0];
-    r.extend([
-        1.0, 0.0, 0.0, shift[0], 0.0, 1.0, 0.0, shift[1], 0.0, 0.0, 1.0, shift[2],
-    ]);
+/// The two bones' rows (3x4 each): bone 0 moved by `s0`, bone 1 (the bar's upper half) by `s1`.
+fn bones_two(s0: [f32; 3], s1: [f32; 3]) -> Vec<f32> {
+    let row = |s: [f32; 3]| {
+        [
+            1.0, 0.0, 0.0, s[0], 0.0, 1.0, 0.0, s[1], 0.0, 0.0, 1.0, s[2],
+        ]
+    };
+    let mut r = row(s0).to_vec();
+    r.extend(row(s1));
     r
 }
 
 /// Frames of the ground and the skinned bar, bone 1 moved by each of `shifts` in turn, with the
 /// words the platform records when `words`; each frame's pixels (B, G, R, A).
 fn frames(b: &mut WgpuBackend, shifts: &[[f32; 3]], words: bool) -> Vec<Vec<[u8; 4]>> {
+    let shots: Vec<Shot> = shifts
+        .iter()
+        .map(|s| Shot {
+            bar: Some(([0.0; 3], *s)),
+            ..Shot::default()
+        })
+        .collect();
+    frames_of(b, &shots, words)
+}
+
+/// What a frame of [`frames_of`] draws besides the ground.
+#[derive(Clone, Copy, Default)]
+struct Shot {
+    /// The skinned bar, its two bones moved by these.
+    bar: Option<([f32; 3], [f32; 3])>,
+    /// The rigid head ([`HEAD`]) drawn through a face's pixel shader.
+    head: bool,
+    /// The ground drawn through the pixel shader with the game's actor shadow (s6 black).
+    game_shadow: bool,
+}
+
+/// Frames as `shots` say, with the words when `words`; each frame's pixels.
+fn frames_of(b: &mut WgpuBackend, shots: &[Shot], words: bool) -> Vec<Vec<[u8; 4]>> {
     let mut out = Vec::new();
-    for (f, shift) in shifts.iter().enumerate() {
+    for (f, shot) in shots.iter().enumerate() {
         if words {
             hook(b, [sun_shadow::VIEW_STATE, sun_shadow::BEGIN_STATE]);
         }
         clear(b, 7);
         let mvp: Vec<f32> = model_view_proj().iter().flatten().copied().collect();
         set(b, VS, DECL);
+        if shot.game_shadow {
+            set_ps(b, GAME_PS);
+            run(
+                b,
+                Cmd::SetTexture {
+                    device: DEVICE,
+                    sampler: 6,
+                    texture: BLACK,
+                },
+            );
+        }
         constants(b, 0, 0, &mvp);
         constants(b, 3, 1, &[0.2, 0.2, 0.2, 1.0]);
         constants(b, 3, 3, &[0.6, 0.6, 0.6, 0.0]);
         draw(b, GROUND, 16, 2);
-        set(b, SKIN_VS, SKIN_DECL);
-        constants(b, 0, 0, &mvp);
-        constants(b, 0, 4, &bones(*shift));
-        draw(b, BAR, 28, 20);
+        if let Some((s0, s1)) = shot.bar {
+            set(b, SKIN_VS, SKIN_DECL);
+            constants(b, 0, 0, &mvp);
+            constants(b, 0, 4, &bones_two(s0, s1));
+            draw(b, BAR, 28, 20);
+        }
+        if shot.head {
+            set(b, VS, DECL);
+            set_ps(b, FACE_PS);
+            constants(b, 0, 0, &mvp);
+            draw(b, HEAD, 16, 10);
+        }
         if words {
             hook(b, [scene_light::STATE, sun_shadow::STATE]);
         }
@@ -527,6 +674,18 @@ fn frames(b: &mut WgpuBackend, shifts: &[[f32; 3]], words: bool) -> Vec<Vec<[u8;
 
 /// The frames on a new backend: the sun shadows `on`, with the characters `characters`.
 fn picture(on: bool, characters: bool, shifts: &[[f32; 3]]) -> Option<Vec<Vec<[u8; 4]>>> {
+    let shots: Vec<Shot> = shifts
+        .iter()
+        .map(|s| Shot {
+            bar: Some(([0.0; 3], *s)),
+            ..Shot::default()
+        })
+        .collect();
+    picture_of(on, characters, &shots)
+}
+
+/// [`picture`] of the frames `shots` say.
+fn picture_of(on: bool, characters: bool, shots: &[Shot]) -> Option<Vec<Vec<[u8; 4]>>> {
     let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
     sun_shadow::enable(on);
     let b = backend();
@@ -535,7 +694,7 @@ fn picture(on: bool, characters: bool, shifts: &[[f32; 3]]) -> Option<Vec<Vec<[u
     if let Some(d) = b.device() {
         d.set_sun_characters(characters);
     }
-    Some(frames(&mut b, shifts, on))
+    Some(frames_of(&mut b, shots, on))
 }
 
 fn at(px: &[[u8; 4]], p: [f64; 3]) -> u8 {
@@ -635,4 +794,93 @@ fn off_a_frame_with_characters_is_unchanged() {
     let plain = frames(&mut a, &shifts, false);
     let with_words = frames(&mut b, &shifts, true);
     assert!(plain == with_words);
+}
+
+/// A character running away from the sun (6 units a frame toward -x, the sun toward +x): its
+/// sunlit side keeps the sun's full light, frame after frame. The characters' layer holds the pose
+/// of the frame before, nearer the sun by a run's step: the layer's allowance for a character's
+/// own lit draw (`SKIN_RECEIVER_BIAS`) keeps that from shading it (review of #726).
+#[test]
+fn a_character_running_away_from_the_sun_keeps_its_sunlit_side() {
+    let x = |f: usize| -80.0 - 6.0 * f as f32;
+    let shots: Vec<Shot> = (0..7)
+        .map(|f| Shot {
+            bar: Some(([x(f), 0.0, 0.0], [x(f), 0.0, 0.0])),
+            ..Shot::default()
+        })
+        .collect();
+    let Some(off) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let on = picture_of(true, true, &shots).expect("the adapter");
+    for f in 3..7 {
+        // The bar's side toward the sun (x + 10), half way up each half.
+        for z in [30.0, 90.0] {
+            let p = [f64::from(x(f)) + 10.0, f64::from(BAR_Y), z];
+            assert_eq!(at(&on[f], p), at(&off[f], p), "frame {f}, {z} high");
+        }
+        // It still casts on the ground (the frame before's place).
+        assert!(dark(
+            &on[f],
+            &off[f],
+            [f64::from(x(f - 1)) - 75.0, f64::from(BAR_Y), 0.0]
+        ));
+    }
+}
+
+/// A face (a rigid draw whose pixel shader names `FaceGenMap0`) casts as a character's part: this
+/// frame only, gone the frame after it is no longer drawn (a head's shadow never stays behind
+/// without its body, review of #726).
+#[test]
+fn a_faces_shadow_goes_the_frame_after_it_is_not_drawn() {
+    let shots: Vec<Shot> = (0..7)
+        .map(|f| Shot {
+            head: f < 4,
+            ..Shot::default()
+        })
+        .collect();
+    let Some(off) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let on = picture_of(true, true, &shots).expect("the adapter");
+    assert!(dark(&on[3], &off[3], upper_shadow(0.0)), "the head casts");
+    for f in 5..7 {
+        assert_eq!(
+            at(&on[f], upper_shadow(0.0)),
+            at(&off[f], upper_shadow(0.0)),
+            "frame {f}: the head's shadow stayed"
+        );
+    }
+}
+
+/// One shadow a character: where the characters cast, the game's own actor shadow (`ShadowMap`,
+/// here black everywhere) is read as lit; with the characters off it darkens the sun's light as
+/// it always did (as with the sun shadows off).
+#[test]
+fn the_games_actor_shadow_gives_way_to_the_characters_only_while_they_cast() {
+    let shots: Vec<Shot> = (0..4)
+        .map(|_| Shot {
+            bar: Some(([0.0; 3], [0.0; 3])),
+            game_shadow: true,
+            ..Shot::default()
+        })
+        .collect();
+    let Some(off) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let ours = picture_of(true, true, &shots).expect("the adapter");
+    let theirs = picture_of(true, false, &shots).expect("the adapter");
+    // Lit ground, away from the bar's shadow.
+    let p = [60.0, 300.0, 0.0];
+    assert_eq!(
+        at(&theirs[3], p),
+        at(&off[3], p),
+        "the game's shadow as before"
+    );
+    assert!(
+        at(&ours[3], p) > at(&theirs[3], p) + 40,
+        "the game's shadow left out: {} vs {}",
+        at(&ours[3], p),
+        at(&theirs[3], p)
+    );
 }
