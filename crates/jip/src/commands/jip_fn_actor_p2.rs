@@ -115,10 +115,8 @@ pub static COMMANDS: Handlers = &[
     (0x291c, set_excluded_combat_actions),
 ];
 
-/// `FireWeaponEx`, built but not registered until JIP's muzzle flash patch (row H01: its code
-/// writes at `009BAD76` and `01087F1C`, which the command makes on its first use) is in: without
-/// it the shot's muzzle flash would be left as the game's. The row's pull request adds this list
-/// to `commands::ALL`.
+/// `FireWeaponEx`, registered with JIP's muzzle flash patch (row H01: its code writes at
+/// `009BAD76` and `01087F1C`, which the command makes on its first use; `game_patches::gw`).
 pub static AWAITING_H01: Handlers = &[(0x28e4, fire_weapon_ex)];
 
 #[rustfmt::skip]
@@ -2194,8 +2192,8 @@ fn do_fire_weapon_ex(e: &mut Engine, w: &[u32]) -> Ret {
 /// `actor.FireWeaponEx weapon [node]`: for an actor in high process and a weapon with a
 /// projectile, the shot's node set to the actor's node of that name when one is named and found,
 /// and the shot queued to the task queue as JIP's queued call ([`DO_FIRE_WEAPON_EX`] with the
-/// weapon). The muzzle flash patch's two code writes JIP makes here on first use are H01's. No
-/// result.
+/// weapon). The muzzle flash patch's two code writes JIP makes here on first use (H01) are
+/// [`crate::game_patches::gw::turn_on_muzzle_flash_hook`]. No result.
 fn fire_weapon_ex(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let actor = a.this_obj;
@@ -2215,6 +2213,7 @@ fn fire_weapon_ex(e: &mut Engine, w: &[u32]) -> Ret {
     if process == 0 || e.mem.u32(process + PROCESS_LEVEL) != 0 {
         return handled(true);
     }
+    crate::game_patches::gw::turn_on_muzzle_flash_hook(e);
     let name = super::buffer_arg(e, &read, 1, FIRE_NODE_BUFFER, "FireWeaponEx");
     if !name.is_empty() {
         let root = super::nif_nodes::ni_node(e, actor);

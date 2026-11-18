@@ -133,6 +133,13 @@ fn prepare(e: &mut Engine) {
             });
         }
     }
+    // H01's wrap (`008d9300`, `HighProcess::GetCurrentMuzzleFlash`) when the test engine has no
+    // translation of it: the game's, the word at `+0x3D4`.
+    if !e.is_registered(0x008d_9300) {
+        e.register(0x008d_9300, |e, a| {
+            e.mem.u32(a[0].wrapping_add(0x3d4)).into_ret()
+        });
+    }
     // O1's wrap (`009b5a30`, `HitData::ReduceDamage`): a stand-in that leaves the hit as it is.
     if !e.is_registered(0x009b_5a30) {
         e.register(0x009b_5a30, |_, _| Ret::default());
