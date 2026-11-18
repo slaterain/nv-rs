@@ -642,6 +642,13 @@ pub const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.5f",
     },
+    // Moon::Moon 00634a70, its texture names (0x634B30): JIP LN NVSE's SetMoonTexture (InitMoonHook
+    // while its moon refresh runs).
+    Entry {
+        addr: 0x0063_4b30,
+        owners: JIP,
+        step: "3.5f",
+    },
     // Sky's weather update 0063d1d0, the transition's share: JIP LN NVSE's UpdateWeather.
     Entry {
         addr: 0x0063_d4f5,
@@ -3104,7 +3111,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 134);
+        assert_eq!(SITES.len(), 135);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3162,6 +3169,7 @@ mod tests {
             0x0087_ce34,
             0x0062_9006,
             0x0062_95e9,
+            0x0063_4b30,
             0x0094_0998,
             0x0094_5a28,
             0x0094_6310,
