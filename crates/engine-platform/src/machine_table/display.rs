@@ -366,12 +366,44 @@ fn device_identifier(card: &Card) -> [u8; 16] {
     out
 }
 
+/// The `Driver` name every card is given, whatever its maker: NVIDIA's 32-bit Direct3D 9 driver
+/// DLL, as Windows names it on an NVIDIA card.
+///
+/// The game reads this field: its shader setup (`00b4f710`, called by `Renderer::Init` with it)
+/// picks the shader level, and so the shader package, from the name's first letters: "ati" level
+/// 6 (the ATI package), "nv" or "ig" level 5, all three with "3.0 lighting"; any other name gets
+/// the generic level 2 with 3.0 lighting off. At that level the shader manager never makes shader
+/// 0x1d (`GetShader`, `00b55560`), yet hair and bloom-lit objects still get a
+/// `Lighting30ShaderProperty` (shader 0x1d, `00bb4540`), and preparing one (`PrepareGeometry`,
+/// `00b579e0`) calls through the missing shader: the first Linux run (AMD, wgpu's driver name
+/// "radv") stopped there when the new game's first head was built.
+///
+/// NVIDIA's name for every card, not the maker's own: behind wgpu every card draws the same
+/// translated shaders, so a maker's own package buys nothing, and NVIDIA's package is the only one
+/// a run has drawn through `d3d9_wgpu` (on Windows, with an NVIDIA card). The capabilities this
+/// table answers ([`CARD`]) are an NVIDIA card's too. The vendor and device numbers stay the
+/// card's own: the game's level choice reads only this name (its vendor word `011f94b8`, which
+/// picks the multi-GPU probe and the alpha to coverage switch, is set from it too), and the
+/// start's log names the real card beside this name ([`driver_note`]).
+pub const DRIVER_NAME_FOR_GAME: &str = "nvldumd.dll";
+
+/// The start's log line naming the real card and the driver name the game is given.
+pub fn driver_note(card: &Card) -> String {
+    format!(
+        "graphics card: {} (vendor {:04x}, device {:04x}, driver {:?}); the game is told its \
+         driver is {DRIVER_NAME_FOR_GAME} (NVIDIA's) for the shader level and package Windows \
+         runs drew with",
+        card.name, card.vendor, card.device, card.driver
+    )
+}
+
 /// `D3DADAPTER_IDENTIFIER9` (1100 bytes) for `flags` (0, or `D3DENUM_WHQL_LEVEL` 2): the driver's
-/// name (wgpu's), the card's name, the device name of the primary display, no driver version, the
-/// vendor and device numbers, no subsystem or revision, [`device_identifier`], and the WHQL level
-/// (asked with flag 2: 1, a signed driver, as measured; else 0).
+/// name [`DRIVER_NAME_FOR_GAME`] (wgpu's own name only goes into the device identifier), the
+/// card's name, the device name of the primary display, no driver version, the card's vendor and
+/// device numbers, no subsystem or revision, [`device_identifier`], and the WHQL level (asked with
+/// flag 2: 1, a signed driver, as measured; else 0).
 pub fn identifier(card: &Card, flags: u32) -> Vec<u8> {
-    let mut b = field(&card.driver, 512);
+    let mut b = field(DRIVER_NAME_FOR_GAME, 512);
     b.extend(field(&card.name, 512));
     b.extend(field("\\\\.\\DISPLAY1", 32));
     b.extend_from_slice(&0u64.to_le_bytes());
@@ -705,7 +737,7 @@ mod tests {
         let c = card();
         let id = identifier(&c, 0);
         assert_eq!(id.len(), 1100);
-        assert_eq!(&id[..5], b"radv\0");
+        assert_eq!(&id[..12], b"nvldumd.dll\0");
         assert_eq!(&id[512..512 + 36], b"AMD Radeon RX 7800 XT (RADV NAVI32)\0");
         assert_eq!(&id[1024..1037], b"\\\\.\\DISPLAY1\0");
         let word = |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
@@ -719,6 +751,99 @@ mod tests {
         let lines = card_lines(&c);
         assert_eq!(lines.lines().count(), 2);
         assert!(lines.starts_with("GetAdapterIdentifier\t0 0\t0\t"));
+    }
+
+    /// The driver name the game's shader setup (`00b4f710`) reads, as the game reads it: the
+    /// identifier's first field up to its terminating zero.
+    fn driver_field(id: &[u8]) -> String {
+        let end = id.iter().position(|&b| b == 0).expect("terminated");
+        String::from_utf8(id[..end].to_vec()).unwrap()
+    }
+
+    /// The shader level `00b4f710` gives a driver name with shader model 3 and at least 0x100 pixel
+    /// shader instructions, and whether "3.0 lighting" (shader 0x1d) is on: "ati"
+    /// level 6, "nv" or "ig" level 5, both with it; any other name level 2 without it (its own
+    /// prefix test, `_strnicmp` over 3 or 2 letters, in this order).
+    fn game_shader_level(driver: &str) -> (u32, bool) {
+        let starts = |p: &str| {
+            driver
+                .as_bytes()
+                .get(..p.len())
+                .is_some_and(|b| b.eq_ignore_ascii_case(p.as_bytes()))
+        };
+        if starts("ati") {
+            (6, true)
+        } else if starts("nv") || starts("ig") {
+            (5, true)
+        } else {
+            (2, false)
+        }
+    }
+
+    /// The first Linux run's stop: an AMD card under Mesa (wgpu's driver name "radv") answered
+    /// "radv" as its driver, the game fell to shader level 2 without 3.0 lighting, and the first
+    /// head's hair asked for the shader that level never makes. Every card wgpu reports, under
+    /// the names its Vulkan and Metal drivers give, AMD, Intel, Apple and unknown makers too, must
+    /// answer NVIDIA's Windows driver name (the level and package Windows runs drew with), which
+    /// keeps 3.0 lighting on, and keep its own vendor and device numbers.
+    #[test]
+    fn every_card_answers_nvidias_driver_name_with_3_0_lighting() {
+        let cases: [(u32, u32, &str); 9] = [
+            (0x1002, 0x7480, "radv"),
+            (0x1002, 0x7480, "AMD open-source driver"),
+            (0x1002, 0x7480, "AMD proprietary driver"),
+            (0x10de, 0x2f58, "NVIDIA"),
+            (0x10de, 0x2f58, "nouveau"),
+            (0x8086, 0x56a0, "Intel open-source Mesa driver"),
+            (0x106b, 0, ""),
+            (0, 0, "Apple"),
+            (0x10005, 0, "llvmpipe"),
+        ];
+        let word = |b: &[u8], at: usize| u32::from_le_bytes(b[at..at + 4].try_into().unwrap());
+        for (vendor, device, wgpu_driver) in cases {
+            let mut c = card();
+            c.vendor = vendor;
+            c.device = device;
+            c.driver = wgpu_driver.into();
+            for flags in [0, 2] {
+                let id = identifier(&c, flags);
+                let driver = driver_field(&id);
+                assert_eq!(
+                    driver, "nvldumd.dll",
+                    "vendor {vendor:x}, wgpu's {wgpu_driver:?}"
+                );
+                assert_eq!(
+                    game_shader_level(&driver),
+                    (5, true),
+                    "{driver:?} (vendor {vendor:x}): not the level Windows runs drew with"
+                );
+                assert_eq!((word(&id, 1064), word(&id, 1068)), (vendor, device));
+            }
+            // The start's log names the real card and the name the game is given.
+            let note = driver_note(&c);
+            assert!(note.contains(&c.name) && note.contains(&format!("{vendor:04x}")));
+            assert!(note.contains(&format!("{wgpu_driver:?}")) && note.contains("nvldumd.dll"));
+        }
+        // The level check itself: wgpu's name for the volunteer's card is the one that stopped.
+        assert_eq!(game_shader_level("radv"), (2, false));
+    }
+
+    /// The same through the table the game reads: the card's lines, loaded as a run loads them,
+    /// and the game's `IDirect3D9::GetAdapterIdentifier` (vtable slot 5) into its own memory.
+    #[test]
+    fn get_adapter_identifier_gives_the_game_nvidias_driver_name() {
+        let mut c = card();
+        c.driver = "radv".into();
+        let monitors = [monitor((2560, 1440), 1.0, 60_000, true)];
+        let lines = card_lines(&c) + &display_lines(&monitors, &c.name).unwrap();
+        let mut e = engine_with(&lines);
+        let d3d = crate::d3d9::direct3d_create9(&mut e, 32);
+        assert_ne!(d3d, 0);
+        let out = e.mem.alloc(1100);
+        for flags in [0u32, 2] {
+            assert_eq!(e.vcall(d3d, 4 * 5, &[0, flags, out]).u32(), 0);
+            assert_eq!(driver_field(&e.mem.bytes(out, 1100)), "nvldumd.dll");
+        }
     }
 
     /// The captured card's answers are what the game needs: a hardware device of shader model 3,
