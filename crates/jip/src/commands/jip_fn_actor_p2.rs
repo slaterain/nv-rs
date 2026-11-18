@@ -115,6 +115,12 @@ pub static COMMANDS: Handlers = &[
     (0x290c, refresh_anim_data_cmd),
 ];
 
+/// `FireWeaponEx`, built but not registered until JIP's muzzle flash patch (row H01: its code
+/// writes at `009BAD76` and `01087F1C`, which the command makes on its first use) is in: without
+/// it the shot's muzzle flash would be left as the game's. The row's pull request adds this list
+/// to `commands::ALL`.
+pub static AWAITING_H01: Handlers = &[(0x28e4, fire_weapon_ex)];
+
 #[rustfmt::skip]
 pub static CONDITIONS: super::Conditions = &[
     (0x2817, is_idle_playing_ex, is_idle_playing_ex_eval),
@@ -2113,9 +2119,136 @@ fn reload_equipped_models(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- FireWeaponEx and JIP's queued command calls ----
+
+/// JIP's queued call's function for `FireWeaponEx` (`DoFireWeaponEx`), a routine of JIP's own (after
+/// `MessageBoxExAlt`'s answer routine). Its words: the reference, 0, the weapon (JIP's `__fastcall`
+/// with one argument on the stack).
+pub const DO_FIRE_WEAPON_EX: u32 = crate::identity::ROUTINES + 0x704;
+/// The task queue interface (`*011DF1A8`), its task queue (+8) and `Push` (`009054A0`, `thiscall`:
+/// the queue, the task copied in); a queued call's kind (`0x2B`) and size (`QueuedCmdCall`: the kind,
+/// the function, the reference's id, the argument count, four arguments).
+const TASK_QUEUE_INTERFACE: u32 = 0x011d_f1a8;
+const TASK_QUEUE: u32 = 0x08;
+const QUEUE_PUSH: u32 = 0x0090_54a0;
+const QUEUED_CMD_CALL: u32 = 0x2b;
+const QUEUED_CMD_CALL_SIZE: u32 = 0x20;
+/// A weapon's projectile (+0x118); a high process's weapon entry (+0x114), ammo entry (+0x118),
+/// projectile node (+0x130), muzzle flash (+0x3D4, its byte +3 JIP's "fired by JIP" mark); the
+/// weapon's fire (`TESObjectWEAP::Fire`, `00523150`, `thiscall`: the weapon, the actor).
+const WEAPON_PROJECTILE: u32 = 0x118;
+const PROCESS_PROJECTILE_NODE: u32 = 0x130;
+const PROCESS_MUZZLE_FLASH: u32 = 0x3d4;
+const WEAPON_FIRE: u32 = 0x0052_3150;
+/// `kFormType_TESObjectWEAP`; JIP's `nodeName[0x40]`.
+const WEAPON_TYPE: u8 = 0x28;
+const FIRE_NODE_BUFFER: usize = 0x40;
+
+/// Registers the queued call's seam and `DoFireWeaponEx` (install, before the threads start).
+pub fn install(e: &mut Engine) {
+    use engine_core::extend::{Owner, SiteSlot};
+    e.on_site(SiteSlot::new(Owner::Jip, 0x0087_ce34), queued_cmd_call);
+    e.register(DO_FIRE_WEAPON_EX, do_fire_weapon_ex);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: DoQueuedCmdCallHook (asm).
+/// The task queue's tag 0x2B (`a`: the task): the reference of the task's id (+8) looked up, and
+/// when it is there the task's function (+4) called with it, 0 and the task's arguments (+0x10,
+/// their count +0xC) in order. Answers 0 (not read).
+fn queued_cmd_call(e: &mut Engine, a: &[u32]) -> Option<u32> {
+    let task = a[0];
+    let refr = crate::cosave::lookup_form(e, e.mem.u32(task + 8));
+    if refr != 0 {
+        let function = e.mem.u32(task + 4);
+        let count = e.mem.u32(task + 0xc);
+        let mut words = vec![refr, 0];
+        words.extend((0..count).map(|i| e.mem.u32(task + 0x10 + 4 * i)));
+        e.call(function, &words);
+    }
+    Some(0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: DoFireWeaponEx (asm).
+/// The actor fires `weapon` (the weapon's `Fire`) with its process's weapon and ammo entries
+/// cleared for the shot and put back after; the muzzle flash, when there is one, gets JIP's mark
+/// (byte +3), which H01's muzzle flash patch reads.
+fn do_fire_weapon_ex(e: &mut Engine, w: &[u32]) -> Ret {
+    let (actor, weapon) = (w[0], w[2]);
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    let ammo = e.mem.u32(process + PROCESS_AMMO_INFO);
+    e.mem.set_u32(process + PROCESS_AMMO_INFO, 0);
+    let entry = e.mem.u32(process + PROCESS_WEAPON_INFO);
+    e.mem.set_u32(process + PROCESS_WEAPON_INFO, 0);
+    e.call(WEAPON_FIRE, &args![weapon, actor]);
+    e.mem.set_u32(process + PROCESS_WEAPON_INFO, entry);
+    e.mem.set_u32(process + PROCESS_AMMO_INFO, ammo);
+    let flash = e.mem.u32(process + PROCESS_MUZZLE_FLASH);
+    if flash != 0 {
+        e.mem.set_u8(flash + 3, 1);
+    }
+    Ret::default()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_FireWeaponEx_Execute.
+/// `actor.FireWeaponEx weapon [node]`: for an actor in high process and a weapon with a
+/// projectile, the shot's node set to the actor's node of that name when one is named and found,
+/// and the shot queued to the task queue as JIP's queued call ([`DO_FIRE_WEAPON_EX`] with the
+/// weapon). The muzzle flash patch's two code writes JIP makes here on first use are H01's. No
+/// result.
+fn fire_weapon_ex(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let actor = a.this_obj;
+    if !is_actor(e, actor) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    let weapon = read.form(0);
+    if !read.ok
+        || weapon == 0
+        || type_of(e, weapon) != WEAPON_TYPE
+        || e.mem.u32(weapon + WEAPON_PROJECTILE) == 0
+    {
+        return handled(true);
+    }
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    if process == 0 || e.mem.u32(process + PROCESS_LEVEL) != 0 {
+        return handled(true);
+    }
+    let name = super::buffer_arg(e, &read, 1, FIRE_NODE_BUFFER, "FireWeaponEx");
+    if !name.is_empty() {
+        let root = super::nif_nodes::ni_node(e, actor);
+        let node = if root == 0 {
+            0
+        } else {
+            super::nif_nodes::get_node(e, root, &name)
+        };
+        if node != 0 {
+            e.mem.set_u32(process + PROCESS_PROJECTILE_NODE, node);
+        }
+    }
+    let id = e.mem.u32(actor + 0xc);
+    let queue = e.mem.u32(e.mem.u32(TASK_QUEUE_INTERFACE) + TASK_QUEUE);
+    e.with_stack(QUEUED_CMD_CALL_SIZE, |e, call| {
+        let at = call.addr();
+        for (i, word) in [QUEUED_CMD_CALL, DO_FIRE_WEAPON_EX, id, 1, weapon, 0, 0, 0]
+            .into_iter()
+            .enumerate()
+        {
+            e.mem.set_u32(at + 4 * i as u32, word);
+        }
+        e.call(QUEUE_PUSH, &args![queue, at]);
+    });
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_p2_r4_tests.rs"]
+mod r4_tests;
 
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_c1_tests.rs"]

@@ -258,6 +258,7 @@ pub fn install(e: &mut Engine) {
     jip_fn_ui::install(e);
     jip_fn_misc_ref_insert::install(e);
     jip_fn_misc_ref_lines::install(e);
+    jip_fn_actor_p2::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
