@@ -663,6 +663,88 @@ fn make_gpu(device: &wgpu::Device) -> Gpu {
 mod tests {
     use super::*;
 
+    /// A device on this machine's first API with an adapter (none: the GPU test is skipped).
+    fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::PRIMARY,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter =
+            crate::device::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::HighPerformance,
+                force_fallback_adapter: false,
+                compatible_surface: None,
+                apply_limit_buckets: false,
+            }))
+            .ok()?;
+        crate::device::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()
+    }
+
+    /// The watch's read itself, on every system: an Rgba16Float 16 by 16 texture written by raw
+    /// bits (half 0.1 everywhere, +infinity at one pixel; no shader, store or resolve touches
+    /// them) has one pixel not finite, no dot, and a brightest finite value of about 0.1.
+    #[test]
+    fn the_read_counts_an_infinity_written_by_bits() {
+        let Some((device, queue)) = device() else {
+            return;
+        };
+        const POINT_ONE: u16 = 0x2E66;
+        const INFINITY: u16 = 0x7C00;
+        let mut halves = [POINT_ONE; 16 * 16 * 4];
+        // Red of the pixel at (10, 10).
+        halves[(10 * 16 + 10) * 4] = INFINITY;
+        let bytes: Vec<u8> = halves.iter().flat_map(|h| h.to_le_bytes()).collect();
+        let size = wgpu::Extent3d {
+            width: 16,
+            height: 16,
+            depth_or_array_layers: 1,
+        };
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("HDR watch test"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(16 * 8),
+                rows_per_image: Some(16),
+            },
+            size,
+        );
+        let view = texture.create_view(&Default::default());
+        let target = Target {
+            id: 1,
+            width: 16,
+            height: 16,
+            format: wgpu::TextureFormat::Rgba16Float,
+        };
+        let mut watch = Watch::with(true);
+        assert!(watch.wants(&target, texture.usage()));
+        let mut encoder = device.create_command_encoder(&Default::default());
+        watch.read(&device, &mut encoder, &view, target, 1, "test", None);
+        queue.submit([encoder.finish()]);
+        watch.map_to_ask().expect("a read-back buffer")();
+        let _ = device.poll(wgpu::PollType::wait_indefinitely());
+        let judged = watch.collect();
+        assert_eq!(judged.len(), 1, "{judged:?}");
+        let (_, seen) = judged[0].1[0];
+        assert_eq!((seen.not_finite, seen.dots), (1, 0), "{seen:?}");
+        assert!(seen.brightest > 0.09 && seen.brightest < 0.11, "{seen:?}");
+    }
+
     fn seen(not_finite: u32, dots: u32, brightest: f32) -> Seen {
         Seen {
             not_finite,

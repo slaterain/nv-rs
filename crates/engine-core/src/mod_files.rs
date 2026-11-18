@@ -71,7 +71,26 @@ pub struct ModFileCalls {
     /// The first `max` bytes of the file, from [`ModFileCalls::read`]'s places with its
     /// answers: only those bytes are read (`FileToBuffer`'s `fread` of at most `maxLen`).
     pub read_head: ReadHeadCall,
+    /// The entries of a folder (one trailing separator allowed) as [`ModFileCalls::read`] finds
+    /// files: made or written in this run, then the port's folder's copy of the folder, then the
+    /// game's own (less the files the run deleted), one entry per name compared without ASCII
+    /// case, the first place's spelling kept. Only names that can be read back through `read`
+    /// are listed (no `.` or `..`, no device names, no character the code page could not hold),
+    /// in the order NTFS lists a folder on every system. A folder that exists nowhere, or a name
+    /// `read` refuses, lists nothing. Nothing is ever written or made.
+    pub list: ListCall,
 }
+
+/// One entry of a folder listing ([`ModFileCalls::list`]): its name alone, in the game's code
+/// page bytes, and whether it is a folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub name: Vec<u8>,
+    pub is_folder: bool,
+}
+
+/// [`ModFileCalls::list`]'s type: the engine, the folder's name.
+pub type ListCall = fn(&Engine, &[u8]) -> Vec<Listed>;
 
 /// [`ModFileCalls::write`]'s type: the engine, the name, the bytes; Windows' error code.
 pub type WriteCall = fn(&mut Engine, &[u8], &[u8]) -> Result<(), u32>;
@@ -157,6 +176,17 @@ pub fn read_head_or_error(e: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>
 /// [`read_head_or_error`]'s bytes; `None` for any error.
 pub fn read_head(e: &Engine, name: &[u8], max: usize) -> Option<Vec<u8>> {
     read_head_or_error(e, name, max).ok()
+}
+
+/// [`ModFileCalls::list`] under the kernel lock; `ERROR_NOT_SUPPORTED` without the platform.
+pub fn list_or_error(e: &Engine, folder: &[u8]) -> Result<Vec<Listed>, u32> {
+    let _kernel = crate::real_threads::kernel_guard(e);
+    calls().map_or(Err(ERROR_NOT_SUPPORTED), |c| Ok((c.list)(e, folder)))
+}
+
+/// [`list_or_error`]'s entries; empty without the platform.
+pub fn list(e: &Engine, folder: &[u8]) -> Vec<Listed> {
+    list_or_error(e, folder).unwrap_or_default()
 }
 
 /// `GetPrivateProfileStringA(section, key, ..., name)` over [`read`]: the value as Windows reads

@@ -1219,3 +1219,271 @@ fn a_kept_copy_is_found_whatever_case_the_game_names_it_in() {
         b"200"
     );
 }
+
+/// Every name under `root`, with whether it is a folder (to show that a listing makes nothing).
+fn names_under(root: &Path) -> Vec<(PathBuf, bool)> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let folder = path.is_dir();
+            if folder {
+                stack.push(path.clone());
+            }
+            out.push((path, folder));
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `(name, is a folder)` of a listing, for comparing.
+fn shown(listed: &[seam::Listed]) -> Vec<(String, bool)> {
+    listed
+        .iter()
+        .map(|entry| {
+            (
+                String::from_utf8_lossy(&entry.name).into_owned(),
+                entry.is_folder,
+            )
+        })
+        .collect()
+}
+
+/// A folder is listed from `read`'s places: this run's writes and made folders, the port's
+/// folder, the game's (less what the run deleted); a name in more than one once, as the first
+/// place spells it (a name this run wrote as the port's folder keeps it); names `read` could not
+/// take back left out; NTFS's order on every system; nothing written or made.
+#[test]
+fn a_folder_is_listed_from_reads_places() {
+    let game = scratch("list-game");
+    let kept = scratch("list-kept");
+    let game_list = game.join("Data").join("List");
+    let kept_list = kept.join("Data").join("List");
+    std::fs::create_dir_all(game_list.join("GameSub")).unwrap();
+    std::fs::create_dir_all(kept_list.join("KeptSub")).unwrap();
+    for name in ["Game.txt", "Both.TXT", "gone.txt", "_under.txt"] {
+        std::fs::write(game_list.join(name), b"game").unwrap();
+    }
+    for name in ["Both.txt", "Kept.ini"] {
+        std::fs::write(kept_list.join(name), b"kept").unwrap();
+    }
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    // Written and made in this run (and so kept in the port's folder, with this spelling).
+    seam::write_or_error(&mut e, br"Data\List\Written.txt", b"w").unwrap();
+    seam::create_directory_or_error(&mut e, br"Data\List\Made").unwrap();
+    // In this run's memory alone (its key, lower case), and names `read` could not take back.
+    let mods = &mut state!(e).mod_files;
+    for k in [
+        &br"data\list\memonly.txt"[..],
+        br"data\list\what?.txt",
+        br"data\list\con.txt",
+        br"data\list\trail.",
+        br"data\list\deeper\x.txt",
+    ] {
+        mods.written.insert(k.to_vec(), b"m".to_vec());
+    }
+    // A game file the run deleted.
+    let gone = files::full_path(&e, br"Data\List\gone.txt").to_ascii_lowercase();
+    state!(e).disk.deleted.insert(gone);
+    // A file the game itself made in this run (in the run's memory, not on the disk).
+    let made = files::full_path(&e, br"Data\List\runfile.txt").to_ascii_lowercase();
+    state!(e).disk.files.insert(made, b"run".to_vec());
+    let before = (names_under(&game), names_under(&kept));
+    let want: Vec<(String, bool)> = [
+        ("Both.txt", false),
+        ("Game.txt", false),
+        ("GameSub", true),
+        ("Kept.ini", false),
+        ("KeptSub", true),
+        ("Made", true),
+        ("memonly.txt", false),
+        ("runfile.txt", false),
+        ("Written.txt", false),
+        ("_under.txt", false),
+    ]
+    .iter()
+    .map(|&(n, f)| (n.to_string(), f))
+    .collect();
+    assert_eq!(shown(&seam::list(&e, br"Data\List")), want);
+    assert_eq!(shown(&seam::list(&e, br"data/LIST/")), want);
+    assert_eq!(
+        seam::list_or_error(&e, br"Data\List").map(|l| l.len()),
+        Ok(want.len())
+    );
+    // Every listed name reads back.
+    for entry in seam::list(&e, br"Data\List")
+        .iter()
+        .filter(|l| !l.is_folder)
+    {
+        let name = [&br"Data\List\"[..], &entry.name].concat();
+        assert!(seam::read(&e, &name).is_some(), "{:?}", entry.name);
+    }
+    // A folder only the game has, and one made in this run only.
+    assert_eq!(shown(&seam::list(&e, br"Data\List\GameSub")), vec![]);
+    assert_eq!(
+        shown(&seam::list(&e, br"Data")),
+        vec![("List".to_string(), true)]
+    );
+    assert_eq!(
+        (names_under(&game), names_under(&kept)),
+        before,
+        "nothing made"
+    );
+}
+
+/// A folder that exists nowhere, a file's name, and a name `read` refuses (leaving the game's
+/// folder, a device) list nothing, and listing makes nothing.
+#[test]
+fn a_missing_or_refused_folder_lists_nothing() {
+    let root = scratch("list-refused");
+    let game = root.join("game");
+    let kept = root.join("kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    std::fs::create_dir_all(&kept).unwrap();
+    std::fs::write(game.join("Data").join("file.txt"), b"x").unwrap();
+    std::fs::create_dir_all(root.join("x")).unwrap();
+    std::fs::write(root.join("x").join("outside.txt"), b"x").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.clone()));
+    let before = names_under(&root);
+    let above = root
+        .join("x")
+        .to_string_lossy()
+        .replace('/', "\\")
+        .into_bytes();
+    for name in [
+        &br"Data\Nope"[..],
+        br"Nope\Deeper",
+        br"Data\file.txt",
+        br"..\x",
+        br"Data\..\..\x",
+        br"Data\CON",
+        br"NUL",
+        br"Data\COM1\x",
+        br"Data\x.",
+        b"",
+        br"\",
+        &above,
+    ] {
+        let shown_name = String::from_utf8_lossy(name).into_owned();
+        assert_eq!(seam::list(&e, name), vec![], "{shown_name}");
+    }
+    assert_eq!(names_under(&root), before, "nothing made");
+}
+
+/// Off Windows a link counts as what it leads to, and one whose target is gone is left out.
+#[cfg(unix)]
+#[test]
+fn links_are_followed_and_broken_ones_left_out() {
+    let game = scratch("list-links");
+    let list = game.join("Data").join("List");
+    std::fs::create_dir_all(list.join("Real")).unwrap();
+    std::fs::write(list.join("real.txt"), b"x").unwrap();
+    std::os::unix::fs::symlink(list.join("Real"), list.join("ToFolder")).unwrap();
+    std::os::unix::fs::symlink(list.join("real.txt"), list.join("ToFile.txt")).unwrap();
+    std::os::unix::fs::symlink(list.join("none.txt"), list.join("Broken.txt")).unwrap();
+    let e = engine(&game);
+    assert_eq!(
+        shown(&seam::list(&e, br"Data\List")),
+        vec![
+            ("Real".to_string(), true),
+            ("real.txt".to_string(), false),
+            ("ToFile.txt".to_string(), false),
+            ("ToFolder".to_string(), true),
+        ]
+    );
+}
+
+/// Double-byte names whose second byte is `\` (`0x5C`) are listed and read back (code page 932
+/// stand-in): the forbidden characters are looked at as UTF-16, not byte by byte.
+#[test]
+fn double_byte_names_with_a_backslash_byte_are_listed() {
+    let _page = files::StandInPage::new(&files::CP932);
+    let game = scratch("list-932");
+    let list = game.join("Data").join("List");
+    std::fs::create_dir_all(&list).unwrap();
+    for name in ["a.txt", "\u{30bd}.txt", "\u{8868}.txt"] {
+        std::fs::write(list.join(name), name.as_bytes()).unwrap();
+    }
+    let e = engine(&game);
+    let listed = seam::list(&e, br"Data\List");
+    let names: Vec<&[u8]> = listed.iter().map(|l| l.name.as_slice()).collect();
+    assert_eq!(
+        names,
+        vec![&b"a.txt"[..], b"\x83\x5c.txt", b"\x95\x5c.txt"],
+        "{listed:?}"
+    );
+    for entry in &listed {
+        let name = [&br"Data\List\"[..], &entry.name].concat();
+        assert!(seam::read(&e, &name).is_some(), "{:?}", entry.name);
+    }
+}
+
+/// Names that differ only in a letter's case beyond ASCII are one name to Windows: listed once,
+/// as the first place spells it (code page 1252 stand-in).
+#[test]
+fn names_differing_in_accented_case_are_listed_once() {
+    let _page = files::StandInPage::new(&files::CP1252);
+    let game = scratch("list-1252-game");
+    let kept = scratch("list-1252-kept");
+    std::fs::create_dir_all(game.join("Data").join("List")).unwrap();
+    std::fs::create_dir_all(kept.join("Data").join("List")).unwrap();
+    std::fs::write(game.join("Data").join("List").join("\u{e9}.txt"), b"g").unwrap();
+    std::fs::write(kept.join("Data").join("List").join("\u{c9}.txt"), b"k").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    assert_eq!(
+        seam::list(&e, br"Data\List"),
+        vec![seam::Listed {
+            name: b"\xc9.txt".to_vec(),
+            is_folder: false
+        }]
+    );
+}
+
+/// Off Windows, folders of the port's folder whose names differ only in case are one folder to
+/// Windows: a read finds a file in any of them, so the listing lists all of them.
+#[cfg(unix)]
+#[test]
+fn case_twin_folders_in_the_port_folder_are_listed_together() {
+    let game = scratch("list-twins-game");
+    let kept = scratch("list-twins-kept");
+    std::fs::create_dir_all(game.join("Data")).unwrap();
+    let upper = kept
+        .join("Data")
+        .join("NVSE")
+        .join("Plugins")
+        .join("Scripts");
+    let lower = kept
+        .join("data")
+        .join("nvse")
+        .join("plugins")
+        .join("scripts");
+    std::fs::create_dir_all(&upper).unwrap();
+    std::fs::create_dir_all(&lower).unwrap();
+    std::fs::write(upper.join("a.txt"), b"a").unwrap();
+    std::fs::write(lower.join("b.txt"), b"b").unwrap();
+    let mut e = engine(&game);
+    set_folder(&mut e, Some(kept.to_path_buf()));
+    let folder = br"Data\NVSE\Plugins\Scripts";
+    assert_eq!(
+        shown(&seam::list(&e, folder)),
+        vec![("a.txt".to_string(), false), ("b.txt".to_string(), false)]
+    );
+    for name in [
+        &br"Data\NVSE\Plugins\Scripts\a.txt"[..],
+        br"Data\NVSE\Plugins\Scripts\b.txt",
+    ] {
+        assert!(
+            seam::read(&e, name).is_some(),
+            "{}",
+            String::from_utf8_lossy(name)
+        );
+    }
+}

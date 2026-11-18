@@ -713,6 +713,33 @@ pub fn host_path_under(folder: &Path, rel: &Path) -> PathBuf {
     }
 }
 
+/// Every folder of this system under `folder` that the relative path `rel` names without case
+/// ([`folders`]: the ones whose names differ only in case, which are one folder to Windows), the
+/// one [`host_path_under`] takes first; only folders inside `folder` (its own name is not looked
+/// at without case). When none is there, [`host_path_under`]'s path alone (a listing of it finds
+/// nothing).
+pub fn host_folders_under(folder: &Path, rel: &Path) -> Vec<PathBuf> {
+    let joined = folder.join(rel);
+    let Some(text) = joined.to_str() else {
+        return vec![joined];
+    };
+    if !text.starts_with('/') {
+        return vec![joined];
+    }
+    let mut exists = |p: &str| std::fs::symlink_metadata(p).is_ok();
+    let mut matches = folder_matches;
+    let all: Vec<PathBuf> = folders(text, &mut Look::new(&mut exists, &mut matches))
+        .unwrap_or_default()
+        .into_iter()
+        .map(PathBuf::from)
+        .filter(|found| found.starts_with(folder))
+        .collect();
+    if all.is_empty() {
+        return vec![host_path_under(folder, rel)];
+    }
+    all
+}
+
 /// The name of the file or folder `path` (this system's, as [`host_path`] made it) as its folder
 /// holds it: the name itself when the folder holds it so (Linux, where [`host_path`] took it
 /// from the folder), else the first in byte order that matches it without case (macOS's file

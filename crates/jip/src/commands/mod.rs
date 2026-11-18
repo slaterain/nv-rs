@@ -225,6 +225,10 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_insert::COMMANDS,
     // `InsertNode` and `AttachModel`, with their patches H08 and H10.
     jip_fn_misc_ref_insert::AWAITING_H08_H10,
+    // `SynchronizePosition`, with its patch H13 (`game_patches::gh2`).
+    jip_fn_misc_ref::AWAITING_H13,
+    // `ToggleHUDCursor`, with its patch H02 (`game_patches::gp`).
+    jip_fn_ui::AWAITING_H02,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -851,6 +855,10 @@ mod tests {
             "jip_fn_misc_ref",
             // jip_fn_misc_ref_insert::AWAITING_H08_H10 (with H08 and H10).
             "jip_fn_misc_ref",
+            // jip_fn_misc_ref::AWAITING_H13 (`SynchronizePosition`, with H13).
+            "jip_fn_misc_ref",
+            // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
+            "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
