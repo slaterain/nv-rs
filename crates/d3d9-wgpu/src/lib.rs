@@ -49,6 +49,7 @@ pub use answers::{Answer, QueryAnswers};
 use d3d9_stream::{Backend, Cmd, Data, Handle, Reply};
 pub use device::{hardware_adapter, Output};
 pub use window::window_changed;
+pub use window::NoFrame;
 #[cfg(not(windows))]
 pub use window::{register_window, GameWindow};
 
