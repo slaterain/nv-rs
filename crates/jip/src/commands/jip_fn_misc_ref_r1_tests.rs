@@ -259,3 +259,96 @@ fn h13_the_player_follows_the_node_and_ends_at_its_last_place() {
     set_at(&mut e, [1.0, 2.0, 3.0]);
     assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0]);
 }
+
+/// NEAR with its 3D: a root (named "Root") with a child node A, under it a block B named
+/// `name`; B at (40, 50, 60). The command starts the sync on B's name.
+fn h13_named_scene(e: &mut Engine, name: &[u8]) -> (u32, u32) {
+    const LOADED: u32 = FORMS + 0xb000;
+    const ROOT: u32 = FORMS + 0xb100;
+    const A: u32 = FORMS + 0xb300;
+    const B: u32 = FORMS + 0xb500;
+    const VT: u32 = FORMS + 0xb700;
+    const KIDS: u32 = FORMS + 0xb800;
+    e.mem.set_u32(NEAR + 0x64, LOADED);
+    e.mem.set_u32(LOADED + 0x14, ROOT);
+    e.mem.set_u32(VT + 0xc, 0x0068_15c0);
+    for (node, kid, at) in [(ROOT, A, KIDS), (A, B, KIDS + 0x10)] {
+        e.mem.set_u32(node, VT);
+        e.mem.set_u32(node + 0xa0, at);
+        e.mem.set_u16(node + 0xa6, 1);
+        e.mem.set_u32(at, kid);
+    }
+    // B is a leaf: a vtable whose `+0xC` is not `return this`.
+    e.mem.set_u32(B, VT + 0x80);
+    for (i, v) in [40.0f32, 50.0, 60.0].into_iter().enumerate() {
+        e.mem.set_f32(B + 0x8c + 4 * i as u32, v);
+    }
+    call_on(e, OP, 0, &[r(R_NEAR), n(0), z(0.0), s(name)]);
+    e.mem.set_u32(B + 8, string_of(name));
+    (ROOT, B)
+}
+
+fn h13_set(e: &mut Engine, refr: u32, at: [f32; 3]) {
+    let location = FORMS + 0xc000;
+    for (i, v) in at.into_iter().enumerate() {
+        e.mem.set_f32(location + 4 * i as u32, v);
+    }
+    let seam = crate::game_patches::gh2::SYNC_POSITION.addr();
+    assert_eq!(e.site(seam, &[refr, location]), Some(1));
+}
+
+/// H13's block search: the name on a block two levels below the root is found (the root has
+/// another name), and the player follows it.
+#[test]
+fn h13_the_named_block_is_found_below_the_root() {
+    let mut e = setup();
+    h13_named_scene(&mut e, b"Bip01 Head");
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [40.0, 50.0, 60.0]);
+    // No block of that name: the location as given, the kept position unchanged.
+    let mut e = setup();
+    let (_, b) = h13_named_scene(&mut e, b"Bip01 Head");
+    e.mem.set_u32(b + 8, 0);
+    let kept = sync_position(&mut e).pos;
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0]);
+    assert_eq!(sync_position(&mut e).pos, kept);
+}
+
+/// H13's place checks: another cell of the same world space follows the node; another world space,
+/// or a reference without 3D, keeps the location as given and the kept position unchanged.
+#[test]
+fn h13_the_place_checks() {
+    const WORLD: u32 = FORMS + 0xd000;
+    const OTHER_WORLD: u32 = FORMS + 0xd100;
+    let mut e = setup();
+    h13_named_scene(&mut e, b"Bip01 Head");
+    e.mem.set_u32(NEAR + 0x40, CELL2);
+    e.mem.set_u32(CELL1 + 0xc0, WORLD);
+    e.mem.set_u32(CELL2 + 0xc0, WORLD);
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(
+        floats3(&e, PC + 0x30),
+        [40.0, 50.0, 60.0],
+        "same world space"
+    );
+    let kept = sync_position(&mut e).pos;
+    e.mem.set_u32(CELL2 + 0xc0, OTHER_WORLD);
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(
+        floats3(&e, PC + 0x30),
+        [1.0, 2.0, 3.0],
+        "another world space"
+    );
+    assert_eq!(sync_position(&mut e).pos, kept);
+    e.mem.set_u32(CELL1 + 0xc0, 0);
+    e.mem.set_u32(CELL2 + 0xc0, 0);
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0], "two interiors");
+    // The same cell but no 3D.
+    e.mem.set_u32(NEAR + 0x40, CELL1);
+    e.mem.set_u32(NEAR + 0x64, 0);
+    h13_set(&mut e, PC, [1.0, 2.0, 3.0]);
+    assert_eq!(floats3(&e, PC + 0x30), [1.0, 2.0, 3.0], "no 3D");
+    assert_eq!(sync_position(&mut e).pos, kept);
+}

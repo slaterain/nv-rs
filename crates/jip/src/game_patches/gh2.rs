@@ -284,7 +284,8 @@ fn sync_position(e: &mut Engine, w: &[u32]) -> Option<u32> {
             let v = e.mem.f32(node + BLOCK_TRANSLATE + 4 * i);
             state.pos[i as usize] = v + state.mods[i as usize];
         }
-        crate::commands::jip_fn_misc_ref::set_sync_position(e, state);
+        // Only the kept position, and only while this reference is still the one kept.
+        crate::commands::jip_fn_misc_ref::set_sync_pos_if(e, refr, state.pos);
         source = 0;
         if state.flags != 0 {
             let y = e.mem.f32(node + BLOCK_ROTATE_02);

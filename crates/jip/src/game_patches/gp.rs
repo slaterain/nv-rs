@@ -330,17 +330,19 @@ fn trunc_i32(v: f32) -> u32 {
     }
 }
 
-/// The cursor's position over the scale: `[im+0x38] / k`, `[im+0x40] / k`, each a float.
+/// The cursor's position over the scale: `[im+0x38] / k`, `[im+0x40] / k`, in `f32` (as [`drag`]).
 fn cursor(e: &mut Engine, im: u32) -> (f32, f32) {
-    let k = f64::from(e.call(CURSOR_SCALE, &[]).f32());
-    let x = (f64::from(e.mem.f32(im + IM_CURSOR_X)) / k) as f32;
-    let y = (f64::from(e.mem.f32(im + IM_CURSOR_Y)) / k) as f32;
+    let k = e.call(CURSOR_SCALE, &[]).f32();
+    let x = e.mem.f32(im + IM_CURSOR_X) / k;
+    let y = e.mem.f32(im + IM_CURSOR_Y) / k;
     (x, y)
 }
 
-/// The drag position of a trait pair: `cursor - (absolute - trait)`, in one extended sum.
+/// The drag position of a trait pair: `cursor - (absolute - trait)`, in plain `f32` maths (the
+/// project's rule for the main thread's maths; JIP's x87 keeps the sum in 80 bits, so the last bit
+/// can differ).
 fn drag(cursor: f32, absolute: f32, at: f32) -> f32 {
-    (f64::from(cursor) - (f64::from(absolute) - f64::from(at))) as f32
+    cursor - (absolute - at)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: ProcessHUDMainUI (asm).
@@ -363,10 +365,10 @@ pub fn process_hud_main_ui(e: &mut Engine) {
         if lmb {
             let (x, y) = cursor(e, im);
             let start_x = get_float(e, dragged, T_DRAG_START_X);
-            let delta_x = (f64::from(x) - f64::from(start_x)) as f32;
+            let delta_x = x - start_x;
             e.mem.set_u32(im + IM_DRAG_DELTA_X, trunc_i32(delta_x));
             let start_y = get_float(e, dragged, T_DRAG_START_Y);
-            let delta_y = (f64::from(y) - f64::from(start_y)) as f32;
+            let delta_y = y - start_y;
             e.mem.set_u32(im + IM_DRAG_DELTA_Y, trunc_i32(delta_y));
             let abs_x = e.call(TILE_ABS_X, &args![dragged]).f32();
             let at_x = get_float(e, dragged, T_X);
@@ -442,18 +444,8 @@ pub fn process_hud_main_ui(e: &mut Engine) {
         set_float(e, tile, T_DRAG_Y, drag(y, abs_y, at_y));
         set_float(e, tile, T_DRAG_START_X, start_x as i32 as f32);
         set_float(e, tile, T_DRAG_START_Y, start_y as i32 as f32);
-        set_float(
-            e,
-            tile,
-            T_DRAG_OFFSET_X,
-            (f64::from(x) - f64::from(abs_x)) as f32,
-        );
-        set_float(
-            e,
-            tile,
-            T_DRAG_OFFSET_Y,
-            (f64::from(y) - f64::from(abs_y)) as f32,
-        );
+        set_float(e, tile, T_DRAG_OFFSET_X, x - abs_x);
+        set_float(e, tile, T_DRAG_OFFSET_Y, y - abs_y);
         for field in [IM_DRAG_54, IM_DRAG_58, IM_DRAG_DELTA_X, IM_DRAG_DELTA_Y] {
             e.mem.set_u32(im + field, 0);
         }

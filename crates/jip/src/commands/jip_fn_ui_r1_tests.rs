@@ -414,3 +414,152 @@ fn h02_the_hud_cursor_handles_the_mouse_over_the_hud() {
         ]
     );
 }
+
+thread_local! {
+    /// The trait numbers the HUD stand-ins keep: (tile, trait) and its number.
+    static TRAITS: std::cell::RefCell<Vec<((u32, u32), f32)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn trait_of(tile: u32, id: u32) -> Option<f32> {
+    TRAITS.with(|t| {
+        t.borrow()
+            .iter()
+            .rev()
+            .find(|(k, _)| *k == (tile, id))
+            .map(|(_, v)| *v)
+    })
+}
+
+/// The HUD stand-ins with a cursor: the scale 2, the tile's absolute place (10, 20), its traits
+/// kept (`x` 3, `y` 4 at the start; what is set is read back), `draggable` and `wheelable` by the
+/// traits kept (1.0 true).
+fn drag_stand_ins(e: &mut Engine) {
+    TRAITS.with(|t| t.borrow_mut().clear());
+    hud_stand_ins(e);
+    for (id, v) in [(0xfa1, 3.0), (0xfa2, 4.0)] {
+        TRAITS.with(|t| t.borrow_mut().push(((HUD_TILE, id), v)));
+    }
+    e.register(0x0070_ecb0, |_, _| Ret {
+        st0: 2.0,
+        ..Ret::default()
+    });
+    e.register(0x00a0_13d0, |_, _| Ret {
+        st0: 10.0,
+        ..Ret::default()
+    });
+    e.register(0x00a0_1440, |_, _| Ret {
+        st0: 20.0,
+        ..Ret::default()
+    });
+    e.register(0x00a0_11b0, |_, w| Ret {
+        st0: f64::from(trait_of(w[0], w[1]).unwrap_or(0.0)),
+        ..Ret::default()
+    });
+    e.register(0x00a0_12d0, |_, w| {
+        record(0x00a0_12d0, w);
+        TRAITS.with(|t| t.borrow_mut().push(((w[0], w[1]), f32::from_bits(w[2]))));
+        Ret::default()
+    });
+    e.register(0x00a0_1230, |_, w| Ret {
+        eax: u32::from(trait_of(w[0], w[1]) == Some(1.0)),
+        ..Ret::default()
+    });
+}
+
+fn cursor_at(e: &mut Engine, x: f32, y: f32) {
+    e.mem.set_f32(IM_AT + 0x38, x);
+    e.mem.set_f32(IM_AT + 0x40, y);
+}
+
+fn set_floats() -> Vec<(u32, f32)> {
+    recorded()
+        .into_iter()
+        .filter(|(f, _)| *f == 0x00a0_12d0)
+        .map(|(_, w)| (w[1], f32::from_bits(w[2])))
+        .collect()
+}
+
+/// H02's drag: a press over a draggable tile is remembered; held the next frame it starts the drag
+/// (the interface's drag words and the tile's drag values); held with the cursor moved the tile
+/// follows; released, the drag ends (its starts -1, the words cleared, the button state false).
+#[test]
+fn h02_a_draggable_tile_is_dragged_and_let_go() {
+    let mut e = setup();
+    cursor_scene(&mut e);
+    drag_stand_ins(&mut e);
+    TRAITS.with(|t| t.borrow_mut().push(((HUD_TILE, 0xfe9), 1.0)));
+    let seam = crate::game_patches::gp::VANITY_DISABLED.addr();
+    call_on(&mut e, 0x28b5, 0, &[n(1)]);
+    cursor_at(&mut e, 100.0, 50.0);
+    e.site(seam, &[PLAYER_AT]); // the mouse-over
+    crate::test_support::key(&mut e, 0x100).raw_state = true;
+    e.site(seam, &[PLAYER_AT]); // the press, remembered
+    for at in [0x54, 0x58, 0x60, 0x64] {
+        e.mem.set_u32(IM_AT + at, 0x77);
+    }
+    clear();
+    e.site(seam, &[PLAYER_AT]); // held: the drag starts
+    assert_eq!(e.mem.u32(IM_AT + 0x4c), HUD_TILE);
+    assert_eq!(e.mem.u32(IM_AT + 0xd4), HUD_TILE);
+    assert_eq!(e.mem.u32(IM_AT + 0xd8), HUD_MENU);
+    assert_eq!((e.mem.u32(IM_AT + 0x50), e.mem.u32(IM_AT + 0x5c)), (50, 25));
+    for at in [0x54, 0x58, 0x60, 0x64] {
+        assert_eq!(e.mem.u32(IM_AT + at), 0, "{at:x}");
+    }
+    assert_eq!(
+        set_floats(),
+        vec![
+            (0xff0, 43.0),
+            (0xff1, 9.0),
+            (0xfea, 50.0),
+            (0xfeb, 25.0),
+            (0xfec, 40.0),
+            (0xfed, 5.0)
+        ]
+    );
+    // Held and moved: the tile follows.
+    cursor_at(&mut e, 120.0, 60.0);
+    clear();
+    e.site(seam, &[PLAYER_AT]);
+    assert_eq!((e.mem.u32(IM_AT + 0x60), e.mem.u32(IM_AT + 0x64)), (10, 5));
+    assert_eq!(set_floats(), vec![(0xff0, 53.0), (0xff1, 14.0)]);
+    // Released: let go.
+    crate::test_support::key(&mut e, 0x100).raw_state = false;
+    clear();
+    e.site(seam, &[PLAYER_AT]);
+    assert_eq!(e.mem.u32(IM_AT + 0x4c), 0);
+    assert_eq!(e.mem.u32(IM_AT + 0xd4), 0);
+    assert_eq!(e.mem.u32(IM_AT + 0xd8), 0);
+    assert_eq!(set_floats()[..2], [(0xfea, -1.0), (0xfeb, -1.0)]);
+    assert!(!last_lmb_state(&mut e));
+}
+
+/// H02's wheel: over a tile that is not wheelable, its wheelable parent gets `wheelmoved` set to the
+/// wheel's steps (the delta over -120) and back to 0: 240 is -2, -120 is 1.
+#[test]
+fn h02_the_wheel_moves_the_nearest_wheelable_parent() {
+    let mut e = setup();
+    cursor_scene(&mut e);
+    drag_stand_ins(&mut e);
+    const PARENT: u32 = FORMS + 0x3_9000;
+    e.mem.set_u32(HUD_TILE + 0x28, PARENT);
+    TRAITS.with(|t| t.borrow_mut().push(((PARENT, 0xff2), 1.0)));
+    let seam = crate::game_patches::gp::VANITY_DISABLED.addr();
+    call_on(&mut e, 0x28b5, 0, &[n(1)]);
+    e.site(seam, &[PLAYER_AT]); // the mouse-over: the tile is active
+    for (wheel, steps) in [(240i32, -2.0f32), (-120, 1.0)] {
+        e.mem.set_u32(INPUT_AT + 0x1b2c, wheel as u32);
+        clear();
+        e.site(seam, &[PLAYER_AT]);
+        let moved: Vec<(u32, u32, f32)> = recorded()
+            .into_iter()
+            .filter(|(f, _)| *f == 0x00a0_12d0)
+            .map(|(_, w)| (w[0], w[1], f32::from_bits(w[2])))
+            .collect();
+        assert_eq!(
+            moved,
+            vec![(PARENT, 0xff3, steps), (PARENT, 0xff3, 0.0)],
+            "{wheel}"
+        );
+    }
+}
