@@ -431,8 +431,12 @@ const KILLER: u32 = 0xc0;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h:
 // DoPreLoadGameHousekeeping (`g_thePlayer->killer = nullptr`).
-/// G33's part of the housekeeping before a load: the player's killer cleared.
+/// G33's part of the housekeeping before a load: the player's killer cleared. Only while JIP
+/// answers "installed": without the DLL nothing clears it (the game's own behaviour).
 pub(crate) fn pre_load(e: &mut Engine) {
+    if !e.ext::<crate::Jip>().answers_installed {
+        return;
+    }
     let player = e.mem.u32(THE_PLAYER);
     if player != 0 {
         e.mem.set_u32(player + KILLER, 0);

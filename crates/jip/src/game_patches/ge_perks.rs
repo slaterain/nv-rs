@@ -860,6 +860,34 @@ fn destroy_actor(e: &mut Engine, a: &[u32]) -> Option<u32> {
     None
 }
 
+/// The game's function that puts a perk's entries on or takes them off between two ranks
+/// (`thiscall`: the perk, the actor, the old rank, the new rank, a flag), which JIP calls with
+/// (the player, 0, the rank, 1).
+const PERK_APPLY_RANKS: u32 = 0x005e_b6a0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: DoLoadGameHousekeeping
+// (the teammate perks part, after `RestoreJIPFormFlags`).
+/// After a load that succeeded, while the player has teammates: each of the player's teammate perks
+/// (`perkRanksTM`) put on again at its rank. JIP does this in every installation, behind no switch.
+pub fn teammate_perks_after_load(e: &mut Engine) {
+    let player = e.mem.u32(THE_PLAYER);
+    if player == 0 || e.mem.u32(player + PLAYER_TEAMMATE_COUNT) == 0 {
+        return;
+    }
+    for item in list_items(e, Ptr::new(player + PLAYER_PERK_RANKS_TM)) {
+        if item == 0 {
+            continue;
+        }
+        let (perk, rank) = (e.mem.u32(item), e.mem.u8(item + 4));
+        if perk != 0 {
+            e.call(
+                PERK_APPLY_RANKS,
+                &args![perk, player, 0u32, u32::from(rank), 1u32],
+            );
+        }
+    }
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: DoLoadGameHousekeeping
 // (the NPC perks part, after the weapon mods' pass).
 /// After a load, with the patch on and the NPC perks marked changed: each high actor's perks put on

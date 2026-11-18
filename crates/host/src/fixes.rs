@@ -252,7 +252,7 @@ pub const JIP_INSTALLED: Fix = Fix {
     name: "JIP LN NVSE built in (for testing)",
     env: "NV_JIP_INSTALLED",
     addresses: &[],
-    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with 995 of its 1,118 commands (a script line calling one of the others fails and stops that script for the run), its hooks and 64 of its 162 game patches",
+    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with the commands built so far (a script line calling one not built yet fails and stops that script for the run), its hooks and the game patches built so far (the README and docs/FIXES.md give the counts)",
     install: install_jip_installed,
 };
 

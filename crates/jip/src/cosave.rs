@@ -1781,6 +1781,9 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // forms, the waits, the swapped LOD blocks and the model paths gone, the reference names' flags set
 // again; and the player's killer cleared, G33's part; and the excluded combat actions gone, H16's
 // part; and the references' own map markers gone, and the synchronized position's reference).
+/// Not installed, every step leaves the game as it is: the ones that write the game's memory (G33's
+/// killer, H16's excluded actions) check that JIP answers "installed"; the others only clear JIP's
+/// own state and switch off hooks, which are empty and off while JIP is not installed.
 fn pre_load_housekeeping(e: &mut Engine) {
     let npc = player_base(e);
     saved(e).appearance_undo.erase(&npc);
@@ -1792,6 +1795,17 @@ fn pre_load_housekeeping(e: &mut Engine) {
     crate::game_patches::gc::pre_load(e);
     crate::game_patches::gd::pre_load(e);
     crate::commands::jip_fn_misc_ref::pre_load(e);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit (its console
+// line).
+/// `Console_Print("JIP LN version: %.2f", JIP_LN_VERSION)`: "JIP LN version: 57.30" on the console
+/// at the deferred start, while JIP answers "installed".
+pub(crate) fn print_version(e: &mut Engine) {
+    if e.ext::<Jip>().answers_installed {
+        let words = nvse::commands::double_words(crate::identity::version());
+        nvse::commands::console_print(e, "JIP LN version: %.2f", &words);
+    }
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the save,
@@ -1831,6 +1845,10 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // `DoLoadGameHousekeeping` after a load that succeeded: its saved data's part.
             if m.data & 0xff != 0 {
                 crate::world_hooks::restore_form_flags(e);
+                // The player's teammate perks put on again (JIP's own, no switch).
+                if e.ext::<Jip>().answers_installed {
+                    crate::game_patches::ge::perks::teammate_perks_after_load(e);
+                }
                 // O17's pass over the high actors (bNPCWeaponMods), JIP's next step.
                 crate::game_patches::gh2::post_load_game(e);
                 // O18's (uNPCPerks): the high actors' perks put on.
@@ -1868,6 +1886,7 @@ pub fn listen(e: &mut Engine, m: &Message) {
             crate::game_patches::gf::deferred_init(e);
             crate::commands::jip_fn_utility::deferred_init(e);
             crate::game_patches::gs::deferred_init(e);
+            print_version(e);
             // Group GB's part: Big Guns' switch (O3), name and derivation (D06).
             crate::game_patches::gb::deferred_init(e);
         }
