@@ -604,6 +604,21 @@ fn choices(session: &Session) -> Vec<String> {
     out
 }
 
+/// Removes a staging folder left by an unpacking: a link at its place is removed itself (never
+/// followed); a folder only through `mod-install`'s checks (a plain folder directly inside
+/// `installs`).
+fn clear_staging(installs: &Path, staging: &Path) {
+    match std::fs::symlink_metadata(staging) {
+        Err(_) => {}
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+            let _ = std::fs::remove_file(staging).or_else(|_| std::fs::remove_dir(staging));
+        }
+        Ok(_) => {
+            let _ = installs::remove(installs, staging);
+        }
+    }
+}
+
 /// Unpacks into a fresh folder beside the installed ones (deleted on a failure), writes the
 /// record, gives the folder its place, and moves the archive to `installed archives`.
 fn install(
@@ -621,9 +636,7 @@ fn install(
     let mut staging_name = folder.file_name().unwrap_or_default().to_os_string();
     staging_name.push(".part");
     let staging = places.installs.join(staging_name);
-    if staging.symlink_metadata().is_ok() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
+    clear_staging(&places.installs, &staging);
     let file_name = archive
         .file_name()
         .unwrap_or_default()
@@ -634,7 +647,7 @@ fn install(
         match mod_archive::extract(archive, &wanted, &staging, mod_archive::Limits::default()) {
             Ok(done) => done,
             Err(e) => {
-                let _ = std::fs::remove_dir_all(&staging);
+                clear_staging(&places.installs, &staging);
                 return writeln!(out, "Nothing was installed.\n{}", e.player_text());
             }
         };
@@ -644,7 +657,7 @@ fn install(
     let finish = std::fs::write(staging.join(mod_install::RECORD), record.text())
         .and_then(|()| std::fs::rename(&staging, &folder));
     if let Err(e) = finish {
-        let _ = std::fs::remove_dir_all(&staging);
+        clear_staging(&places.installs, &staging);
         return writeln!(out, "Nothing was installed: {e}");
     }
     writeln!(
@@ -653,8 +666,17 @@ fn install(
         done.written.len()
     )?;
     let kept = places.loose.join("installed archives");
-    let moved = std::fs::create_dir_all(&kept)
-        .and_then(|()| std::fs::rename(archive, kept.join(&file_name)));
+    // Never over an archive already kept there under the same name.
+    let moved = std::fs::create_dir_all(&kept).and_then(|()| {
+        let to = kept.join(&file_name);
+        if to.symlink_metadata().is_ok() {
+            Err(std::io::Error::other(
+                "an archive of that name is already there",
+            ))
+        } else {
+            std::fs::rename(archive, to)
+        }
+    });
     if moved.is_err() {
         writeln!(
             out,

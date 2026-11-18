@@ -217,3 +217,61 @@ fn nothing_to_do_says_where_mods_go() {
     let said = run_with(&places, "");
     assert!(said.contains("Put a mod's archive"), "{said}");
 }
+
+/// A folder link to `to` at `link`: a symbolic link on Linux and macOS, a junction on Windows.
+fn folder_link(to: &Path, link: &Path) {
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(to, link).unwrap();
+    #[cfg(windows)]
+    {
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(to)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+    }
+}
+
+/// A link left at the staging folder's place, leading to another folder: removed itself, the
+/// folder it leads to untouched; the mod installs.
+#[test]
+fn a_link_at_the_staging_place_is_never_followed() {
+    let dir = Scratch::new("staging-link");
+    let places = dir.places();
+    make_zip(
+        &places.loose.join("Retex.zip"),
+        &[("Data/Textures/a.dds", b"tex")],
+    );
+    let outside = dir.0.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep.txt"), b"keep").unwrap();
+    std::fs::create_dir_all(&places.installs).unwrap();
+    folder_link(&outside, &places.installs.join("01 Retex.part"));
+    let said = run_with(&places, "1\nyes\n\n");
+    assert!(said.contains("Installed Retex"), "{said}");
+    assert_eq!(std::fs::read(outside.join("keep.txt")).unwrap(), b"keep");
+    assert!(!outside.join("Textures").exists());
+}
+
+/// An archive of the same name already kept: it stays, the new one is left where it was.
+#[test]
+fn a_kept_archive_is_never_replaced() {
+    let dir = Scratch::new("kept-archive");
+    let places = dir.places();
+    make_zip(
+        &places.loose.join("Retex.zip"),
+        &[("Data/Textures/a.dds", b"new")],
+    );
+    let kept = places.loose.join("installed archives");
+    std::fs::create_dir_all(&kept).unwrap();
+    std::fs::write(kept.join("Retex.zip"), b"older archive").unwrap();
+    let said = run_with(&places, "1\nyes\n\n");
+    assert!(said.contains("could not be moved"), "{said}");
+    assert_eq!(
+        std::fs::read(kept.join("Retex.zip")).unwrap(),
+        b"older archive"
+    );
+    assert!(places.loose.join("Retex.zip").exists());
+}

@@ -31,6 +31,13 @@ if [ "${1:-}" = "--build-mods" ]; then
     rm -rf -- "$3/modgame" && mkdir -p -- "$3/modgame" && cp -R -- "$2/." "$3/modgame/"
     exit $?
 fi
+# --install-mods GAME INSTALLS MODS: says what it was given and what it read.
+if [ "${1:-}" = "--install-mods" ]; then
+    echo "installer: $2 | $3 | $4"
+    IFS= read -r typed || typed=''
+    echo "typed: $typed"
+    exit 0
+fi
 # FOLDER NAME KIND: the entries of FOLDER named NAME without case that are of KIND (-f or -d).
 named() {
     ls -1a -- "$1" 2>/dev/null | while IFS= read -r entry; do
@@ -342,6 +349,15 @@ check "26 without --mods: the game profile" 'printf "%s" "$out" | grep -qx "NV_P
 out=$(env NV_RS_GAME="$game" FAKE_MODS_STATUS=1 $SH "$pkg/play.sh" --mods </dev/null 2>&1); st=$?
 check "26 a failed build stops" '[ $st != 0 ] && ! printf "%s" "$out" | grep -q "program args:"'
 check "26 steam folder unchanged" '[ "$(snapshot)" = "$before" ]'
+
+# 27. --install-mods: the program's chooser is given the game, nv-rs's mod installs and the mods
+# folder beside play.sh, reads the player's typing, and nothing is started after it.
+out=$(printf 'q\n' | env NV_RS_GAME="$game" $SH "$pkg/play.sh" --install-mods 2>&1); st=$?
+check "27 status 0" '[ $st = 0 ]'
+check "27 the chooser's folders" 'printf "%s" "$out" | grep -qxF "installer: $game | $own/mod installs | $pkg/mods"'
+check "27 the typing reaches it" 'printf "%s" "$out" | grep -qxF "typed: q"'
+check "27 no game started" '! printf "%s" "$out" | grep -q "program args:"'
+check "27 steam folder unchanged" '[ "$(snapshot)" = "$before" ]'
 
 # 24. CI's Linux job (NV_RS_REAL_PROGRAM: the built nv-viewer): the real program takes and refuses
 # the same game folders as the stand-in. Taken, it checks the game's FalloutNV.exe before its
