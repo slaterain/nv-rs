@@ -16,6 +16,11 @@
 //!   silencer mod plays the silenced attack sound (the exe: only the player in first person).
 //! - **G104** (a fix; `SetAcousticSpaceFixHook` at `0x82D8CA`): a pending acoustic space change is
 //!   applied once and cleared (the exe applied it every frame and never cleared it).
+//! - **H01** (JIP's own, made by `FireWeaponEx`'s first use: `SafeWrite32(0x1087F1C,
+//!   GetMuzzleFlashHook)` and `SafeWrite32(0x9BAD76, ..)`): a high process's muzzle flash that JIP's
+//!   shot marked (byte `+3`) and that is off (its first two flag bytes clear) is handed over once
+//!   with the mark and the process's projectile node cleared; the flash's constructor clears the
+//!   mark with its flags. With `FireWeaponEx` registered here (`commands::jip_fn_actor_p2`).
 //! - **H17** (JIP's own, `InitJIPHooks`; `SkyRefreshClimateHook` at `0x63C918`): the climate
 //!   `ForceClimate` forced replaces the one the sky is given; with the command built here.
 //! - **O5** (`bGameDaysPassedFix`, on by default; `UpdateTimeGlobalsHook` at `0x867A40`, a wrap):
@@ -38,7 +43,7 @@ use engine_core::prelude::*;
 use nvse::commands::Read;
 use nvse::{handled, CommandArgs};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// G15's seam: the climate entry of the sun's glare.
@@ -57,6 +62,10 @@ pub const SILENCED_ATTACK: SiteSlot = SiteSlot::new(Owner::Jip, 0x0083_ad97);
 pub const PENDING_SPACE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0082_d8ca);
 /// H17's seam: `Sky::SetCurrentClimate`'s climate.
 pub const FORCED_CLIMATE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0063_c918);
+/// H01's seam (the `MuzzleFlash` constructor's third flag store) and wrap
+/// (`HighProcess::GetCurrentMuzzleFlash`, `008d9300`, the vtable word `0x1087F1C` holds).
+pub const MUZZLE_FLAGS: SiteSlot = SiteSlot::new(Owner::Jip, 0x009b_ad76);
+pub const GET_MUZZLE_FLASH: WrapSlot = WrapSlot::new(Owner::Jip, 0x008d_9300);
 /// O5's wrap: `GameTimeGlobals::Update` (`bGameDaysPassedFix`).
 pub const UPDATE_TIME_GLOBALS: WrapSlot = WrapSlot::new(Owner::Jip, 0x0086_7a40);
 /// G113's seams: the region's incidental (`RDSI`) and battle (`RDSB`) media set ids read.
@@ -116,8 +125,8 @@ pub const AREA: Area = Area {
         GET_FREQUENCY.addr(),
     ],
     install_fixes,
-    jip_sites: &[FORCED_CLIMATE.addr()],
-    jip_wraps: &[],
+    jip_sites: &[FORCED_CLIMATE.addr(), MUZZLE_FLAGS.addr()],
+    jip_wraps: &[GET_MUZZLE_FLASH.addr()],
     install_jip,
 };
 
@@ -131,6 +140,9 @@ pub struct GwState {
     /// `s_pickMediaSetMap` (G113): each list's media sets still to play, by the list's first
     /// node.
     media_set_bags: Mutex<HashMap<u32, Vec<u32>>>,
+    /// H01's code writes made (`FireWeaponEx`'s first use; JIP tests the store's bytes at
+    /// `0x9BAD76`): never undone.
+    muzzle_flash_hook: AtomicBool,
 }
 
 impl Default for GwState {
@@ -140,6 +152,7 @@ impl Default for GwState {
             forced_climate: AtomicU32::new(0),
             hour_and_days: [AtomicU64::new(0), AtomicU64::new(0)],
             media_set_bags: Mutex::new(HashMap::new()),
+            muzzle_flash_hook: AtomicBool::new(false),
         }
     }
 }
@@ -175,6 +188,8 @@ fn install_fixes(e: &mut Engine) {
 fn install_jip(e: &mut Engine) {
     e.ext_free::<GwState>();
     e.on_site(FORCED_CLIMATE, forced_climate);
+    e.on_site(MUZZLE_FLAGS, muzzle_flags);
+    e.wrap(GET_MUZZLE_FLASH, get_muzzle_flash);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
@@ -941,6 +956,54 @@ fn get_frequency(e: &mut Engine, w: &[u32]) -> Ret {
     let rate = f32::from(e.mem.u16(this.wrapping_add(SAMPLES_PER_SECOND)));
     let base = rate * e.mem.f32(this.wrapping_add(FREQUENCY_FACTOR));
     (frequency as f32 / base).into_ret()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: Cmd_FireWeaponEx_Execute
+// (the two code writes made once).
+/// H01 turned on (`FireWeaponEx`, each call; the first one counts): from now on the muzzle flash
+/// seam and wrap answer.
+pub fn turn_on_muzzle_flash_hook(e: &mut Engine) {
+    state(e).muzzle_flash_hook.store(true, Ordering::Relaxed);
+}
+
+fn muzzle_flash_hook_on(e: &mut Engine) -> bool {
+    state(e).muzzle_flash_hook.load(Ordering::Relaxed)
+}
+
+/// The muzzle flash's flag bytes and JIP's mark (`+3`); the high process's muzzle flash (`+0x3D4`)
+/// and projectile node (`+0x130`).
+const MUZZLE_FLASH_MARK: u32 = 3;
+const PROCESS_MUZZLE_FLASH: u32 = 0x3d4;
+const PROCESS_PROJECTILE_NODE: u32 = 0x130;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: Cmd_FireWeaponEx_Execute
+// (SafeWrite32(0x9BAD76, 0x90002083): `mov byte ptr [edx+2], 0` becomes `and dword ptr [eax], 0`).
+/// H01, the `MuzzleFlash` constructor: the mark cleared with the three flags, once JIP's write is
+/// made.
+fn muzzle_flags(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    muzzle_flash_hook_on(e).then_some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: GetMuzzleFlashHook
+// (asm).
+/// H01, `HighProcess::GetCurrentMuzzleFlash` (`this`): once JIP's write is made, a flash with JIP's
+/// mark whose first two flag bytes are clear has the mark and the process's projectile node
+/// cleared; the flash is answered as the game's.
+fn get_muzzle_flash(e: &mut Engine, w: &[u32]) -> Ret {
+    if !muzzle_flash_hook_on(e) {
+        return e.call_next(GET_MUZZLE_FLASH.addr(), w);
+    }
+    let process = w[0];
+    let flash = e.mem.u32(process.wrapping_add(PROCESS_MUZZLE_FLASH));
+    if flash != 0 && e.mem.u8(flash + MUZZLE_FLASH_MARK) != 0 && e.mem.u16(flash) == 0 {
+        e.mem.set_u8(flash + MUZZLE_FLASH_MARK, 0);
+        e.mem
+            .set_u32(process.wrapping_add(PROCESS_PROJECTILE_NODE), 0);
+    }
+    Ret {
+        eax: flash,
+        ..Ret::default()
+    }
 }
 
 #[cfg(test)]

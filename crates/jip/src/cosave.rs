@@ -587,8 +587,9 @@ pub fn set_changed(e: &mut Engine, flags: u8) {
 /// A lock-free copy of [`Saved::npc_perks_patch`] ([`Engine::ext_free`], made at install before the
 /// threads start): JIP's `HasPerk` eval (`DoGetPerkRank`) reads it on whatever thread evaluates
 /// a perk or package condition, without JIP's shared slot. Written
-/// by [`set_npc_perks_patch`], the flag's only writer (nothing in the port sets it yet: the NPC
-/// perks patch is stage 3.9's).
+/// by [`set_npc_perks_patch`], the flag's only writer, which O18's switch-on calls
+/// (`game_patches::ge::perks::switch_on`: at `DeferredInit` when `uNPCPerks` is set in
+/// `[GamePatches]`, or by `SetOptionalPatch 18 1`).
 #[derive(Default)]
 pub(crate) struct NpcPerksPatch(std::sync::atomic::AtomicBool);
 
