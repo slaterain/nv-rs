@@ -16035,6 +16035,53 @@ mod tests {
         }
     }
 
+    /// lStewieAl's Tweaks' row S0057 below level 100 (ordinary input): the two tiles get the same
+    /// texts with the row on as off (only the buffer's size, 3 or 16 bytes, differs).
+    #[test]
+    fn s0057_row_on_below_level_100_gives_the_same_texts() {
+        let run = |on: bool| {
+            let mut e = Engine::new();
+            e.map(0x011d_9000, 0x1000);
+            e.mem.set_u32(0x011d_9e7c, 5);
+            e.mem.set_u32(0x011d_9e78, 6);
+            let menu = e.new_object::<HUDMainMenu>();
+            let mut tiles = vec![];
+            for offset in [0xe8, 0xec] {
+                let tile = e.mem.alloc(4);
+                e.mem.set_u32(menu.addr() + offset, tile);
+                tiles.push(tile);
+            }
+            e.register_double(0x0040_6d00, |e, words| {
+                let text = words[3].to_string();
+                assert!(text.len() < words[1] as usize);
+                e.mem.write(words[0], text.as_bytes());
+                e.mem.set_u8(words[0] + text.len() as u32, 0);
+                Ret::default()
+            });
+            let set = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+            let seen = set.clone();
+            e.register_double(0x00a0_1350, move |e, words| {
+                let text = e.mem.cstr(words[2]).to_vec();
+                seen.borrow_mut().push((words[0], words[1], text, words[3]));
+                Ret::default()
+            });
+            e.set_stewie(stewie::LEVEL_GREATER_THAN_99, on);
+            xp_print_levels(&mut e, menu);
+            let texts = set.borrow().clone();
+            (texts, tiles)
+        };
+        let (off, on) = (run(false), run(true));
+        assert_eq!(on, off);
+        let (texts, tiles) = on;
+        assert_eq!(
+            texts,
+            vec![
+                (tiles[0], 0xfc4, b"5".to_vec(), 1),
+                (tiles[1], 0xfc4, b"6".to_vec(), 1)
+            ]
+        );
+    }
+
     #[test]
     fn xp_animation_fades_all_six_tiles_after_position_and_meter_finish() {
         let mut e = Engine::new();

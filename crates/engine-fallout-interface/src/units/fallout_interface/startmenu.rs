@@ -5795,9 +5795,18 @@ mod tests {
         assert_eq!(r.e.call(0x007a_6fa0, &args![list, 3u32, 1u32]).u32(), 0);
     }
 
+    /// lStewieAl's Tweaks' row S0022.36 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn get_at_by_list_index_compares_the_tiles_trait() {
+        for on in [false, true] {
+            get_at_by_list_index_compares_the_tiles_trait_row(on);
+        }
+    }
+
+    fn get_at_by_list_index_compares_the_tiles_trait_row(on: bool) {
         let mut r = rig();
+        r.e.set_stewie(stewie::LIST_BOX_GET_AT_NULL_ITEM, on);
         let a = r.item(0xc1, 0);
         let b = r.item(0xc2, 0);
         let list = r.list_box(&[a, b]);

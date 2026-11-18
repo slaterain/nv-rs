@@ -4203,9 +4203,18 @@ mod tests {
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![buffer]]);
     }
 
+    /// lStewieAl's Tweaks' row S0022.17 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn do_idle_clears_the_subtitle_and_fills_the_card() {
+        for on in [false, true] {
+            do_idle_clears_the_subtitle_and_fills_the_card_row(on);
+        }
+    }
+
+    fn do_idle_clears_the_subtitle_and_fills_the_card_row(on: bool) {
         let mut e = Engine::new();
+        e.set_stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM, on);
         let this = container(&mut e);
         e.set(this, ContainerMenu::m_nTimeToClearSubtitle, 100);
         e.set_global(ITEM_ENTERED, 1u8);

@@ -12905,6 +12905,36 @@ mod tests {
         }
     }
 
+    /// lStewieAl's Tweaks' row S0022.30 with a tile under the pointer (ordinary input): the old
+    /// tile is left and the new one entered, row on or off, with the same calls.
+    #[test]
+    fn s0022_30_row_on_with_a_tile_under_the_pointer_changes_nothing() {
+        let run = |on: bool| {
+            let (mut e, m) = focus_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+            returns(&mut e, MENU_STATE, 1);
+            e.set(m, InterfaceManager::pOverTileMenu, 0x600);
+            e.set(m, InterfaceManager::pOverTileTarget, 0x500);
+            let mut state = IdleState {
+                picked_tile: 0x400,
+                picked_menu: 0x700,
+                ..IdleState::default()
+            };
+            e.set_stewie(stewie::CONSOLE_WHILE_MENUS_LOAD, on);
+            e.call_log = Some(vec![]);
+            idle_enter_leave(&mut e, m, &mut state);
+            let targets = (
+                e.get(m, InterfaceManager::pOverTileTarget),
+                e.get(m, InterfaceManager::pOverTileMenu),
+            );
+            (targets, e)
+        };
+        let ((off_targets, off), (on_targets, on)) = (run(false), run(true));
+        assert_eq!(on.call_log, off.call_log);
+        assert_eq!((on_targets, off_targets), ((0x400, 0x700), (0x400, 0x700)));
+        assert_eq!(calls(&on, DO_ENTER).len(), 1);
+    }
+
     /// The seam before the motion test (`0x70D642`, JIP LN NVSE's MenuHandleMouseover hook):
     /// with a handler there and no user of the hook, the handler is not asked and the pointer's
     /// tile change runs as the exe's (the motion test clears the target); with a user, it is

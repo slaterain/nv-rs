@@ -4070,9 +4070,18 @@ mod tests {
         }
     }
 
+    /// lStewieAl's Tweaks' row S0022.56 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn fn_00719580_refreshes_children_before_the_matching_tile() {
+        for on in [false, true] {
+            fn_00719580_refreshes_children_before_the_matching_tile_row(on);
+        }
+    }
+
+    fn fn_00719580_refreshes_children_before_the_matching_tile_row(on: bool) {
         let mut e = base_engine();
+        e.set_stewie(stewie::TILE_LABEL_NULL_NAME, on);
         e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
         e.register(0x0057_cbe0, |e, a| {
             let node = e.mem.u32(a[1]);

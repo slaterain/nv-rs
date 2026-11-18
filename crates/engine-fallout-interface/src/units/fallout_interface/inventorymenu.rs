@@ -3321,9 +3321,18 @@ mod n054_tests {
         assert!(calls_to(&e, SET_TAB_KNOB_POSITION).is_empty());
     }
 
+    /// lStewieAl's Tweaks' row S0022.15 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn drop_uses_the_extra_list_only_when_it_holds_enough() {
+        for on in [false, true] {
+            drop_uses_the_extra_list_only_when_it_holds_enough_row(on);
+        }
+    }
+
+    fn drop_uses_the_extra_list_only_when_it_holds_enough_row(on: bool) {
         let mut e = Engine::new();
+        e.set_stewie(stewie::QUANTITY_MENU_CLOSE_NO_ITEM, on);
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
         answer(&mut e, ITEM_OBJECT, 0x7100);
@@ -3360,9 +3369,18 @@ mod n054_tests {
         assert!(calls_to(&e, 0x00c3_03cc).is_empty());
     }
 
+    /// lStewieAl's Tweaks' row S0022.16 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn select_equips_or_unequips() {
+        for on in [false, true] {
+            select_equips_or_unequips_row(on);
+        }
+    }
+
+    fn select_equips_or_unequips_row(on: bool) {
         let mut e = Engine::new();
+        e.set_stewie(stewie::INVENTORY_SELECT_NO_ITEM, on);
         let this = menu(&mut e);
         e.set_global(CURRENT_ITEM, 0x7000u32);
         answer(&mut e, ITEM_OBJECT, 0x7100);
@@ -3716,6 +3734,29 @@ mod n054_tests {
         e.call_log = Some(vec![]);
         e.call(0x0078_0140, &args![this, 7i32, 0u32]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' row S0022.14 with an item (ordinary input): Use clicked on ammunition
+    /// goes past the row's test to the ammunition case (its form read, the keyring trait asked a
+    /// second time, here false: the click ends), row on or off, with the same calls.
+    #[test]
+    fn s0022_14_row_on_with_an_item_changes_nothing() {
+        let run = |on: bool| {
+            let mut e = Engine::new();
+            let this = menu(&mut e);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            answer(&mut e, ITEM_OBJECT, 0x7100);
+            answer(&mut e, FORM_TYPE, 0x29);
+            answer(&mut e, WORD_AT_FOUR, 0x4000);
+            answer(&mut e, TILE_IS_TRUE, 0);
+            e.set_stewie(stewie::INVENTORY_USE_NO_ITEM_JUMP, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
+            e
+        };
+        let (off, on) = (run(false), run(true));
+        assert_eq!(on.call_log, off.call_log);
+        assert_eq!(calls_to(&on, TILE_IS_TRUE).len(), 2);
     }
 
     /// lStewieAl's Tweaks' rows S0022.14, S0022.15 and S0022.16: Use clicked, a drop after the

@@ -13298,6 +13298,38 @@ mod n056_tests {
         }
     }
 
+    /// lStewieAl's Tweaks' row S0182 with two subtitles (ordinary input): the sound starts and its
+    /// first subtitle is shown and removed, row on or off, with the same calls.
+    #[test]
+    fn s0182_row_on_with_subtitles_changes_nothing() {
+        let run = |on: bool| {
+            let mut e = engine();
+            let menu = open_menu(&mut e, 0x100);
+            e.set(menu, MapMenu::bSoundsLoading, 1);
+            returns(&mut e, SOUND_IS_VALID, 1);
+            returns(&mut e, SOUND_GET_DURATION, 2000);
+            returns(&mut e, WORD_AT_14, 77);
+            let player = with_vtable(&mut e, 0x10, &[(0x1f4, 0x0010_01f4)]);
+            e.mem.set_u32(PLAYER_011DEA3C, player);
+            let position = e.mem.alloc(0xc);
+            returns(&mut e, 0x0010_01f4, position);
+            let subtitles = Ptr::<BSSimpleArray>::new(menu.addr() + 0xa8);
+            let buffer = e.mem.alloc(0x10);
+            e.set(subtitles, BSSimpleArray::pBuffer, buffer);
+            e.set(subtitles, BSSimpleArray::iSize, 2);
+            e.set(subtitles, BSSimpleArray::iReservedSize, 2);
+            e.register_double(ARRAY_MOVE_00692480, |_, _| Ret::default());
+            e.set_stewie(stewie::HOLOTAPE_EMPTY_SUBTITLE, on);
+            e.call_log = Some(vec![]);
+            e.call(0x0079_a660, &args![menu]);
+            (e.get(subtitles, BSSimpleArray::iSize), e)
+        };
+        let ((off_size, off), (on_size, on)) = (run(false), run(true));
+        assert_eq!(on.call_log, off.call_log);
+        assert_eq!((on_size, off_size), (1, 1));
+        assert_eq!(calls_to(&on, SOUND_PLAY).len(), 1);
+    }
+
     #[test]
     fn update_playing_sounds_shows_the_time_and_ends() {
         let mut e = engine();
