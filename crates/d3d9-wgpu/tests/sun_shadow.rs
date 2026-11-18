@@ -802,6 +802,10 @@ struct Extra {
     far_ground: bool,
     tower: bool,
     wall: bool,
+    /// The far scene's tower moved by this along x (in its matrix) instead of drawn in place.
+    tower_shift: Option<f32>,
+    /// The tall caster far off toward a low sun ([`SUNWARD`]).
+    sunward: bool,
     /// The world word (`sun_shadow::WORLD_STATE`) before the scene's words.
     world: Option<u32>,
     /// The sun toward this (a unit vector in the world) instead of [`to_sun`].
@@ -1038,6 +1042,10 @@ const WALL: u32 = 0x16A0;
 const FAR_TOWER_LOW: u32 = 0x16B0;
 const HILL: u32 = 0x16C0;
 const BEYOND: u32 = 0x16D0;
+/// A caster 4,000 wide and 6,000 high at y 104000 to 106000 (past 98,304 units from the camera less
+/// its radius): with the sun 10 degrees up toward +y its shadow runs back to about y 70000, inside
+/// the far map.
+const SUNWARD: u32 = 0x16E0;
 
 /// A box from (x0, y0, 0) to (x1, y1, h): its top and four sides.
 fn cuboid(x0: f32, x1: f32, y0: f32, y1: f32, h: f32) -> Vec<[f32; 3]> {
@@ -1148,6 +1156,11 @@ fn extras(b: &mut WgpuBackend) {
         b,
         HILL,
         &cuboid(2000.0, 2400.0, -20_000.0, 40_000.0, 3000.0),
+    );
+    buffer(
+        b,
+        SUNWARD,
+        &cuboid(-2000.0, 2000.0, 104_000.0, 106_000.0, 6000.0),
     );
     buffer(
         b,
@@ -1541,6 +1554,14 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
         }
         if e.tower {
             draw(b, TOWER, 10);
+        }
+        if let Some(dx) = e.tower_shift {
+            set_mvp(b, model_view_proj_at(dx, 0.0));
+            draw(b, TOWER, 10);
+            set_mvp(b, model_view_proj());
+        }
+        if e.sunward {
+            draw(b, SUNWARD, 10);
         }
         if e.wall {
             draw(b, WALL, 10);
@@ -2975,6 +2996,14 @@ fn a_shadow_across_the_end_of_the_cascades_has_no_step() {
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0f32, f32::max);
         assert!(step < 0.15, "a step of {step} along {along:?} ({samples})");
+        // Next to the wall's foot (50 units from it, past the cascades: review of #715, round 2,
+        // the far map's slope allowance lifting shadows off feet), the shadow is there too.
+        let foot: Vec<f32> = [11_000.0, 12_000.0, 13_000.0]
+            .iter()
+            .map(|&y| taken_at(&off[7], &on[7], 1350.0, y))
+            .collect();
+        eprintln!("by the wall's foot: {foot:.2?} ({samples})");
+        assert!(foot.iter().all(|&t| t > 0.8), "{foot:?} ({samples})");
     }
 }
 
@@ -3129,4 +3158,128 @@ fn a_far_caster_round_the_camera_no_longer_drawn_goes() {
     eprintln!("the hill's far shadow while drawn {drawn}, long after {gone}");
     assert!(drawn > 0.8, "while drawn: {drawn}");
     assert!(gone < 0.1, "after its grace: {gone}");
+}
+
+/// The far map through its first draw and a later redraw (review of #715, round 2): before the far
+/// map is in (its first draw is spread over a few frames) the tower's shadow is lit, as off; from then on, through every redraw as the
+/// sun turns (30 degrees up from -y, 7.4e-5 radians a frame), its shadow is whole and the land
+/// beside it lit in EVERY frame (no half-drawn map, no map read through another's matrix).
+#[test]
+fn the_far_shadow_holds_in_every_frame_through_redraws() {
+    let _far = FarScene::on();
+    let frames: Vec<Extra> = (0..64)
+        .map(|f| Extra {
+            sun: Some(low_sun(
+                -std::f64::consts::FRAC_PI_2,
+                30f64.to_radians() + 7.4e-5 * f64::from(f),
+            )),
+            ..far_land(true, false)
+        })
+        .collect();
+    let Some((off, _)) = far_sequence(1, false, &frames) else {
+        return;
+    };
+    let (on, drawn) = far_sequence(1, true, &frames).expect("the adapter");
+    assert!(drawn >= 2, "a redraw after the first: {drawn}");
+    let (inside, beside) = ((2000.0, 24_000.0), (-1500.0, 24_000.0));
+    let shade: Vec<f32> = (0..frames.len())
+        .map(|f| taken_at(&off[f], &on[f], inside.0, inside.1))
+        .collect();
+    let first = shade
+        .iter()
+        .position(|&t| t > 0.8)
+        .expect("the far shadow comes");
+    eprintln!("the far shadow from frame {first}");
+    assert!(first <= 8, "{first}");
+    let p = pixel([inside.0, inside.1, 0.0]);
+    for f in 0..frames.len() {
+        let lit = taken_at(&off[f], &on[f], beside.0, beside.1);
+        assert!(lit < 0.1, "frame {f}: beside the shadow {lit}");
+        if f < first {
+            assert_eq!(at(&on[f], p), at(&off[f], p), "frame {f}: no far map yet");
+        } else {
+            assert!(shade[f] > 0.8, "frame {f}: in the shadow {}", shade[f]);
+        }
+    }
+}
+
+/// At the lowest sun (10 degrees up from -y) turning as at dusk, the tip of the tower's long far
+/// shadow (about y 43000) creeps, it does not jump: each redraw is blended in from the map before
+/// over a few frames (review of #715, round 2), so from frame to frame the share of the sun taken
+/// anywhere along the tip changes little.
+#[test]
+fn a_far_shadows_tip_creeps_without_steps_as_the_sun_turns() {
+    let _far = FarScene::on();
+    let frames: Vec<Extra> = (0..64)
+        .map(|f| Extra {
+            sun: Some(low_sun(
+                -std::f64::consts::FRAC_PI_2,
+                10f64.to_radians() + 7.4e-5 * f64::from(f),
+            )),
+            ..far_land(true, false)
+        })
+        .collect();
+    let Some((off, _)) = far_sequence(1, false, &frames) else {
+        return;
+    };
+    let (on, drawn) = far_sequence(1, true, &frames).expect("the adapter");
+    let along = |f: usize| -> Vec<f32> {
+        (0..=30)
+            .map(|i| taken_at(&off[f], &on[f], 2000.0, 41_500.0 + 100.0 * f64::from(i)))
+            .collect()
+    };
+    let mut most = 0.0f32;
+    for f in 9..frames.len() {
+        let (a, b) = (along(f - 1), along(f));
+        for (x, y) in a.iter().zip(&b) {
+            most = most.max((x - y).abs());
+        }
+    }
+    eprintln!("the tip's largest change from a frame to the next {most} ({drawn} redraws)");
+    assert!(drawn >= 3, "{drawn}");
+    assert!(most < FAR_TIP_STEP, "{most}");
+}
+
+/// The most the far shadow's tip may change from one frame to the next (see the test above).
+const FAR_TIP_STEP: f32 = 0.2;
+
+/// At a low sun (10 degrees up toward +y, the camera looking toward it) a tall caster more than
+/// 98,304 units out casts its long shadow back into the far map: it is taken (review of #715,
+/// round 2: it was refused by a sphere round the camera), and the land at y 80000 is shaded.
+#[test]
+fn a_tall_caster_far_toward_a_low_sun_shades_the_far_map() {
+    let _far = FarScene::on();
+    let frames = [Extra {
+        sunward: true,
+        sun: Some(low_sun(std::f64::consts::FRAC_PI_2, 10f64.to_radians())),
+        ..far_land(false, false)
+    }; 8];
+    let Some((off, _)) = far_sequence(1, false, &frames) else {
+        return;
+    };
+    let (on, _) = far_sequence(1, true, &frames).expect("the adapter");
+    let shade = taken_at(&off[7], &on[7], 0.0, 80_000.0);
+    eprintln!("the far caster toward the low sun takes {shade} at y 80000");
+    assert!(shade > 0.8, "{shade}");
+}
+
+/// A far caster whose place changes by 0.1 units for one frame (the game's matrices rounding, a
+/// large object nudged) still casts long after (review of #715, round 2: paired as a move, it was
+/// left out of the far map for good).
+#[test]
+fn a_far_caster_nudged_once_still_casts_later() {
+    let _far = FarScene::on();
+    let frames: Vec<Extra> = (0..50)
+        .map(|f| Extra {
+            tower_shift: (f == 10).then_some(0.1),
+            ..far_land(f != 10, false)
+        })
+        .collect();
+    let Some((off, _)) = far_sequence(1, false, &frames) else {
+        return;
+    };
+    let (on, _) = far_sequence(1, true, &frames).expect("the adapter");
+    let later = taken_at(&off[49], &on[49], -500.0, 20_000.0);
+    eprintln!("the tower nudged once, 39 frames later: {later}");
+    assert!(later > 0.8, "{later}");
 }

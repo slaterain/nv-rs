@@ -6797,7 +6797,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &cascades,
             &drawn,
             sun.gpu.thin_in,
-            sun.gpu.far_drawn.as_ref(),
+            sun.gpu.far_lookup().0,
+            sun.gpu.far_lookup().1,
             axes,
             position,
             rt.samples,
@@ -6936,7 +6937,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         // The casters on the scene into the cache.
         let mut came = crate::fxhash::Set::<sun_shadow::GeoKey>::default();
-        let mut far_came = crate::fxhash::Set::<sun_shadow::GeoKey>::default();
+        // The far map where it stands now (with the sun it was last drawn for), for which far
+        // casters it takes.
+        let far_here = sun_shadow::far_place(
+            position,
+            sun_shadow::basis(sun.far_keep.direction(frame.to_sun)),
+        );
+        let far_step = far_here.step;
         let mut added = 0usize;
         let mut on_scene = 0u64;
         for c in std::mem::take(&mut sun.lists.casters) {
@@ -6947,26 +6954,27 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
             let rewritten = sun.rewritten.contains(&c.key.geometry());
             // The land and the large objects also cast into the far map (not one the game keeps
-            // writing: the far map is drawn again only now and then), those within its reach only
-            // (the rule its sweep lets go by: one further out came and went with the view, and
-            // each time the far map was drawn again, review of #715).
+            // writing: the far map is drawn again only now and then): those that reach across its
+            // square in the sun's space, or the square a step on (a low sun's tall casters far off
+            // shade the land in it: review of #715); let go only two steps out (no coming and going
+            // at the edge). A place is the same within a millionth of its distance from the camera
+            // (the game's matrices round so far out); one that changed is a new still place.
             if !rewritten && sun_shadow::far_casts(&world, c.bounds, position) {
                 let centre = sun_shadow::place_point(&world, c.bounds.0);
-                let d = [
-                    centre[0] - position[0],
-                    centre[1] - position[1],
-                    centre[2] - position[2],
-                ];
                 let r = c.bounds.1 * sun_shadow::stretch(&world);
-                let distance = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
                 let draw = &c.draw;
-                if distance - r <= sun_shadow::FAR_REACH_AROUND
-                    && sun
-                        .far
-                        .see(c.key.clone(), world, c.bounds, now, false, || draw.clone())
-                        .is_some()
-                {
-                    far_came.insert(c.key.clone());
+                if far_here.touches(centre, r + far_step) {
+                    let o = [
+                        world[0][3] - position[0],
+                        world[1][3] - position[1],
+                        world[2][3] - position[2],
+                    ];
+                    let slack =
+                        sun_shadow::far_slack((o[0] * o[0] + o[1] * o[1] + o[2] * o[2]).sqrt());
+                    sun.far
+                        .see_within(c.key.clone(), world, c.bounds, now, false, slack, || {
+                            draw.clone()
+                        });
                 }
             }
             // Not a caster: the sky's dome and clouds, and the far land's blocks (whole spheres round
@@ -7070,32 +7078,26 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.settled[k] += u64::from(!moved && settled.iter().any(|&(p, r)| c.touches(p, r)));
             redraw[k] = moved || touched;
         }
-        // The far map's casters: a place that came near a place of its geometry not drawn this
-        // frame moves (as the cascades' do): it is left out of the far map and its old place goes.
-        // Let go: written or released, too far for it, moved on, or not drawn for a while where the
-        // game would have drawn it (its sphere reaches into the view: a land block under cells
-        // loaded since, a block swapped for another level of detail).
+        // The far map's casters let go: written or released, two steps past its square, or not
+        // drawn for a while where the game would have drawn them (wholly in view; or partly, when
+        // the camera stands inside their sphere: a land block under cells loaded since). No moves
+        // are paired here (a far place that changed is a new still place, its old one goes).
         let view_far = f64::from(view.far);
-        sun.far.mark_moves(
-            now,
-            &far_came,
-            usize::MAX,
-            sun_shadow::mover(frustum, position, axes, near, view_far),
-        );
-        let mut far_changed = sun.far.iter().any(|i| i.born == now && !i.moving);
-        for (_, _, moving) in sun.far.sweep(|_, i| {
+        let mut far_changed = sun.far.iter().any(|i| i.born == now);
+        for _ in sun.far.sweep(|_, i| {
             if i.seen == now {
                 return false;
             }
             let v = in_view(i.centre);
-            let distance = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            let inside = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() < i.radius;
             i.payload.stale()
-                || distance - i.radius > sun_shadow::FAR_REACH_AROUND
-                || i.moved_on(now)
+                || !far_here.touches(i.centre, i.radius + 2.0 * far_step)
                 || (now - i.seen > sun_shadow::GRACE
-                    && sun_shadow::partly_in_view(frustum, v, i.radius, near, view_far))
+                    && (sun_shadow::wholly_in_view(frustum, v, i.radius, near, view_far)
+                        || (inside
+                            && sun_shadow::partly_in_view(frustum, v, i.radius, near, view_far))))
         }) {
-            far_changed |= !moving;
+            far_changed = true;
         }
         // Its map is drawn again when a caster in it came or went, the camera crossed a step, or
         // the sun turned half a texel's worth for casters as tall as hills ([`sun_shadow::FAR_REACH`]);
@@ -7103,9 +7105,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // [`sun_shadow::FAR_SLICES`] frames. With no caster, no far map.
         sun.far_dirty |= far_changed;
         let far_texel = 2.0 * sun_shadow::FAR_HALF / f64::from(sun_shadow::FAR_SIZE);
-        let far_turned = sun.far_keep.turn(frame.to_sun).map_or(true, |t| {
-            t >= sun_shadow::turn_limit_at(far_texel, sine, sun_shadow::FAR_REACH)
-        });
+        let far_limit = sun_shadow::turn_limit_at(far_texel, sine, sun_shadow::FAR_REACH);
+        let far_turn = sun.far_keep.turn(frame.to_sun);
+        let far_turned = far_turn.map_or(true, |t| t >= far_limit);
+        // Far past its limit (a wait, a sleep): drawn as soon as no redraw is on its way, whatever
+        // the frames since the last.
+        let far_overdue = far_turn.is_some_and(|t| t >= sun_shadow::FAR_OVERDUE * far_limit);
         let far_now = sun_shadow::far_place(
             position,
             sun_shadow::basis(sun.far_keep.direction(frame.to_sun)),
@@ -7117,7 +7122,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.gpu.far_drawn.is_none() || now >= sun.far_last + sun_shadow::FAR_MIN_FRAMES;
         let far_redraw = !sun.far.is_empty()
             && sun.gpu.far_back.is_none()
-            && far_due
+            && (far_due || far_overdue)
             && (sun.far_dirty
                 || far_turned
                 || !sun_shadow::still_good(sun.gpu.far_drawn.as_ref(), &far_now, false));
@@ -7505,7 +7510,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &cascades,
             &drawn,
             sun.gpu.thin_in,
-            sun.gpu.far_drawn.as_ref(),
+            sun.gpu.far_lookup().0,
+            sun.gpu.far_lookup().1,
             axes,
             position,
             rt.samples,
