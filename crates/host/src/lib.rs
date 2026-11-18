@@ -1118,7 +1118,10 @@ mod tests {
         assert_eq!(super::first_starts(true), super::FIRST_STARTS);
         let arm = super::first_starts(false);
         assert!(arm.starts_with(super::FIRST_STARTS), "{arm}");
-        assert!(arm.contains("builds and passes unit tests on Apple silicon"), "{arm}");
+        assert!(
+            arm.contains("builds and passes unit tests on Apple silicon"),
+            "{arm}"
+        );
         assert!(
             arm.contains("maths differs from a PC's in the last bits in a few functions"),
             "{arm}"
