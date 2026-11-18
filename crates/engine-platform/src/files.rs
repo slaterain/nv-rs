@@ -747,6 +747,71 @@ pub fn host_path(path: &[u8]) -> std::path::PathBuf {
     real_path(path)
 }
 
+/// The game's own entries of the folder at the full path `path`, as the run sees them, for the
+/// mods' files listing ([`super::mod_files::list`]): the player's entries (off Windows the
+/// folders whose names differ only in case together, as one folder to Windows, the first one's
+/// entry for a name in more than one), less the files the run deleted or renamed away, then the
+/// run's own files and folders there that the player's folder does not hold. Each is its name in
+/// the code page's bytes, as the ANSI calls answer it ([`host_name_text`]), and whether it is a
+/// folder. A link counts as what it leads to; one whose target is gone is left out. `.` and `..`
+/// are not given, and the names are neither checked nor ordered (the caller does both). Nothing is
+/// written.
+pub(crate) fn folder_entries(e: &Engine, path: &[u8]) -> Vec<(Vec<u8>, bool)> {
+    let folder = key(path);
+    let disk = &state_ref!(e).disk;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    // A folder the game made in this run is not on the disk: only the run's own entries.
+    if !disk.directories.contains(&folder) {
+        #[cfg(windows)]
+        let hosts = vec![real_path(path)];
+        #[cfg(not(windows))]
+        let hosts = real_folders(path);
+        for host in &hosts {
+            let Ok(entries) = std::fs::read_dir(host) else {
+                continue;
+            };
+            for entry in entries.filter_map(Result::ok) {
+                // `metadata` follows a link; a link whose target is gone fails and is left out.
+                let Ok(meta) = std::fs::metadata(entry.path()) else {
+                    continue;
+                };
+                let name = host_name_bytes(&entry.file_name());
+                let k = key(&[folder.as_slice(), b"\\", &name].concat());
+                if disk.deleted.contains(&k) || !seen.insert(k) {
+                    continue;
+                }
+                out.push((name, meta.is_dir()));
+            }
+        }
+    }
+    let run = disk.files.keys().chain(disk.directories.iter());
+    for k in run.filter(|k| in_folder(k, &folder)) {
+        if !seen.insert(k.clone()) {
+            continue;
+        }
+        let name = disk.entries.get(k).map_or_else(
+            || ansi_bytes(&last_part(k)),
+            |entry| ansi_bytes(&entry.name),
+        );
+        out.push((name, disk.directories.contains(k)));
+    }
+    out
+}
+
+/// The key a folder listing of the mods' files is ordered by ([`super::mod_files::list`]): the
+/// name in the code page's bytes turned to UTF-16 as Windows turns it, in NTFS's order
+/// ([`ntfs_key`]), so every system lists a folder in the order Windows does.
+pub(crate) fn name_order(name: &[u8]) -> Vec<u16> {
+    ntfs_key(&code_page::to_wide(name))
+}
+
+/// A host name in the code page's bytes, as the ANSI calls answer it ([`host_name_text`]: a
+/// character the code page cannot hold is `?`).
+pub(crate) fn host_name_bytes(name: &std::ffi::OsStr) -> Vec<u8> {
+    ansi_bytes(&host_name_text(name))
+}
+
 /// Whether the full path `path` is a directory, as `GetFileAttributesA` answers: one the game
 /// made in this run, else the player's ([`attributes`]).
 pub fn is_directory(e: &Engine, path: &[u8]) -> bool {
