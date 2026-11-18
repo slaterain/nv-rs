@@ -13,6 +13,9 @@ const ADD_OBJECT: u32 = 0x00a5_ed10;
 const READ_FILE: u32 = 0x00a0_1b00;
 /// `Menu::CompressAndStoreXML` (what UIO's inject calls first).
 const COMPRESS: u32 = 0x00a1_ce70;
+/// `Menu::XMLHash`'s `SetAt` and `RemoveAt`.
+const XML_SET_AT: u32 = 0x00a0_c900;
+const XML_REMOVE_AT: u32 = 0x00a1_e240;
 /// `g_HUDMainMenu`.
 const HUD_MAIN_MENU: u32 = 0x011d_96c0;
 const ATTACH_UI_XML: u32 = 0x28fe;
@@ -191,7 +194,7 @@ fn attach_ui_xml_uses_the_seen_root_and_needs_the_hud() {
 }
 
 #[test]
-fn attach_ui_component_goes_through_the_built_in_uio_only() {
+fn attach_ui_component_attaches_with_the_uio_row_on_or_off() {
     let (mut e, sc) = setup();
     e.register(COMPRESS, |e, w| {
         record(COMPRESS, w);
@@ -207,10 +210,25 @@ fn attach_ui_component_goes_through_the_built_in_uio_only() {
     let run = |e: &mut Engine, name: &[u8], xml: &[u8]| {
         call_on(e, ATTACH_UI_COMPONENT, refr, &[s(name), s(xml)]).1
     };
-    // UIO off: nothing (JIP would write `jip_temp.xml` into the game's folder).
-    assert_eq!(run(&mut e, b"Bip01 Head", b"<rect/>"), 0.0);
-    assert!(calls_to(READ_FILE).is_empty());
-    assert!(calls_to(COMPRESS).is_empty());
+    // UIO off: JIP's own path (its `jip_temp.xml` read with `Tile::ReadFile` under the HUD's
+    // tile), the text handed over through `Menu::XMLHash`, no file: the same tile attached.
+    e.register(XML_SET_AT, |_, w| {
+        record(XML_SET_AT, w);
+        eax(0)
+    });
+    e.register(XML_REMOVE_AT, |_, w| {
+        record(XML_REMOVE_AT, w);
+        eax(1)
+    });
+    assert_eq!(run(&mut e, b"Bip01 Head", b"<rect/>"), 1.0);
+    let reads = calls_to(READ_FILE);
+    assert_eq!(reads.len(), 1);
+    assert_eq!(reads[0][0], sc.hud_tile);
+    assert_eq!(calls_to(COMPRESS).len(), 1);
+    assert_eq!(calls_to(XML_SET_AT).len(), 1);
+    assert_eq!(calls_to(XML_REMOVE_AT).len(), 1);
+    assert_eq!(added(), vec![vec![sc.bip, sc.made_node, 1]]);
+    clear();
     uio::set_on(&mut e, true);
     uio::install(&mut e);
     assert_eq!(run(&mut e, b"Bip01 Head", br#"<rect name="x"/>"#), 1.0);

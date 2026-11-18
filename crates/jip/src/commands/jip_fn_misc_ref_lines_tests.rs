@@ -245,7 +245,7 @@ fn attach_line_only_under_a_node_of_the_loaded_root() {
     let geom = shape(&mut e, b"Shape");
     let root = node(&mut e, b"Root", &[geom]);
     let refr = reference(&mut e, 0x1234, false, root);
-    // A geometry block (JIP would call its +0xDC), a missing block: nothing made.
+    // A geometry block (GetNode2 keeps only a node), a missing block: nothing made.
     assert_eq!(attach(&mut e, refr, b"Shape", b"L", 1.0, [0.0; 4]), 0.0);
     assert!(calls().is_empty());
     assert_eq!(attach(&mut e, refr, b"Missing", b"L", 1.0, [0.0; 4]), 0.0);

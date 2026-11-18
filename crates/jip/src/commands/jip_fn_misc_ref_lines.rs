@@ -6,7 +6,8 @@
 //! What it does, as JIP's command body and `NiLines::Create` (internal/netimmerse.cpp), every
 //! call checked in the exe (Ghidra, FalloutNV.exe 1.4.0.525):
 //! - the node: JIP's `TESObjectREFR::GetNode2` (nvse/GameObjects.cpp): the loaded root (+0x64,
-//!   +0x14; never the first-person node), for a non-empty name the block of that name below it;
+//!   +0x14; never the first-person node), for a non-empty name the block of that name below it
+//!   when it is a node (none otherwise: the result 0);
 //! - the colour's four channels times `1 / 255.0F` (single precision);
 //! - the line (`NiLines::Create`): from the game's heap a connection array of two bytes (1, 0),
 //!   two colours (the colour twice, 0x20 bytes) and two vertices ((0, 0, 0) and (0, 1, 0), 0x18
@@ -31,11 +32,9 @@
 //! for the run. The port makes it the first time a line needs it (the same object and flags)
 //! and keeps it for the run.
 //!
-//! Deliberate differences: JIP adds the line under whatever block the name finds; a block that is
-//! not a node takes no child (its vtable +0xDC is another function: `NiTriShape`'s
-//! `RenderImmediate`), so the port adds a line only under a node (else nothing, result 0). Before
-//! the player's first-person model is first made (G38 keeps JIP's copy of it) JIP would read
-//! through its null node; the port then adds the line under the third-person node only.
+//! Deliberate difference: before the player's first-person model is first made (G38 keeps JIP's
+//! copy of it) JIP would read through its null node; the port then adds the line under the
+//! third-person node only.
 //!
 //! Threads: on the script's thread, as JIP's (no lock: JIP takes none); the alpha property's
 //! word is shared by every thread's engine (made once, compare-and-swap).
@@ -187,13 +186,14 @@ fn create_lines(e: &mut Engine, length: f32, colour: [f32; 4], name: &[u8]) -> u
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: TESObjectREFR::GetNode2
 // (asm).
-/// The loaded root (never the first-person node); for a non-empty name the block below it.
+/// The loaded root (never the first-person node); for a non-empty name the block below it, kept
+/// only when it is a node (its vtable +0xC answers `006815C0`).
 fn ref_get_node2(e: &Engine, refr: u32, name: &[u8]) -> u32 {
     let root = nif::ref_ni_node(e, refr);
     if root == 0 || name.is_empty() {
         return root;
     }
-    nif::get_block(e, root, name)
+    nif::get_node(e, root, name)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
@@ -211,7 +211,7 @@ fn attach_line(e: &mut Engine, w: &[u32]) -> Ret {
     let length = read.float(2, 0.0);
     let colour: [f32; 4] = std::array::from_fn(|i| read.float(3 + i, 0.0) * COLOUR_SCALE);
     let target = ref_get_node2(e, a.this_obj, &node_name);
-    if target == 0 || !nif::is_node(e, target) {
+    if target == 0 {
         return handled(true);
     }
     let lines = create_lines(e, length, colour, &line_name);

@@ -10,8 +10,10 @@
 //!   +0xC answers `006815C0`); an empty name keeps the root ([`nif::ni_block`]);
 //! - the tile: made under the HUD's own tile (`g_HUDMainMenu`, `*0x011D96C0`, its tile at +4):
 //!   `Tile::ReadFile` (`0x00A01B00`, `thiscall` (tile, path), `RET 4`; JIP's `Tile::ReadXML`) for
-//!   `AttachUIXML`, the built-in UI Organizer's `UIOInjectComponent` for `AttachUIComponent`
-//!   (`uio::inject_component`, which reads the text through the same `ReadFile`);
+//!   `AttachUIXML`, JIP's `InjectUIComponent` for `AttachUIComponent`
+//!   ([`super::jip_fn_ui::inject_component`]: the built-in UI Organizer's inject with its row
+//!   on, else the text read through the same `ReadFile` as JIP's `jip_temp.xml`, with no file
+//!   written);
 //! - the new tile's node (`Tile::spModel`, +0x2C, engine-bs `tile.rs`), when it has one, added
 //!   to the found node with the node's `AddObject` (vtable +0xDC, `thiscall` (node, child, 1):
 //!   `00A5ED10` in `NiNode`'s and `BSFadeNode`'s vtables, `RET 8`); the result 1.
@@ -20,11 +22,8 @@
 //! `AttachUIComponent`'s text JIP's string argument buffer (`GetStrArgBuffer`); the crate's
 //! buffer rule ([`super::buffer_arg`], [`super::formatted_in_buffer`]) for longer texts.
 //!
-//! Deliberate differences: without UIO (its row off) JIP writes the text to `jip_temp.xml` in
-//! the game's folder and reads that; nv-rs writes nothing into the game's folder, so
-//! `AttachUIComponent` then does nothing (as `InjectUIComponent`, with the same one log line).
-//! With no HUD menu yet (JIP would read through null) the commands do nothing; a node's vtable
-//! that cannot be read counts as "not a node".
+//! Deliberate differences: with no HUD menu yet (JIP would read through null) the commands do
+//! nothing; a node's vtable that cannot be read counts as "not a node".
 //!
 //! Threads: on the script's thread, as JIP's (no lock: JIP takes none).
 
@@ -120,7 +119,7 @@ fn attach_ui_xml(e: &mut Engine, w: &[u32]) -> Ret {
 // Cmd_AttachUIComponent_Execute and InjectUIComponent.
 /// The node's name and a formatted text of menu XML: the text made into a tile under the HUD's
 /// tile by the built-in UI Organizer and the tile's node added under the named node; 1 when
-/// added. Without UIO, nothing (see the module's doc).
+/// added (the UI Organizer row on or off).
 fn attach_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let f = nvse::commands::string::format_string_args_at(e, &a, 1, ATTACH_PARAMS);
@@ -137,11 +136,7 @@ fn attach_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     if hud == 0 {
         return handled(true);
     }
-    if !uio::on(e) {
-        super::jip_fn_ui::note_inject_without_uio();
-        return handled(true);
-    }
-    let tile = uio::inject_component(e, hud, &text);
+    let tile = super::jip_fn_ui::inject_component(e, hud, &text);
     if attach_tile_node(e, target, tile) {
         a.set_result(e, 1.0);
     }
