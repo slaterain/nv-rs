@@ -9,7 +9,15 @@
 //! `NV_JIP_GAME_PATCHES` is on (the fixes preset; off in vanilla), and the switches of the
 //! player's `jip_nvse.ini` ([`settings`]) decide the optional ones. A patch that only answers
 //! JIP's own commands and settings is part of JIP in every preset, in whenever JIP answers
-//! "installed". Both kinds are read from one native word, [`Engine::jip_patches`] (its bits in
+//! "installed". **JIP's own built-in handling is the second kind even where every player sees it**
+//! (the lead's decision, review of #700): what JIP puts in unconditionally in `InitJIPHooks`, with
+//! no `[GamePatches]` switch, is part of JIP, so the port puts it in whenever JIP answers
+//! "installed", with the row on or off, as other H rows already are. Group GL's light data
+//! ([`gl::lights`]) is one: with JIP installed, flickering and pulsing lights use JIP's animation
+//! and point lights carry JIP's extra fields in every preset, the original-behaviour one
+//! included; this is JIP's own behaviour, not an option.
+//!
+//! Both kinds are read from one native word, [`Engine::jip_patches`] (its bits in
 //! `engine_core::extend::jip_patches`): a seam inside a translation tests its bit first, with one
 //! load, and builds its words only after that; whole functions and vtable slots JIP replaces are
 //! wraps, put in only when their patch is on, so nothing tests a flag there. While JIP answers
@@ -18,7 +26,9 @@
 //! **Object growth is a port-side record.** Where JIP makes a game object bigger to keep a word of
 //! its own in it, the port keeps the object's size and a record keyed by the object's address,
 //! filled where JIP writes its word and dropped in the object's destructor (3.9a's
-//! [`dialogue`] parent topics are the first).
+//! [`dialogue`] parent topics are the first). The exception is an object whose own code carries
+//! JIP's words with it (copied by its clone, freed by its destructor): group GL's point lights
+//! (0x110 bytes) and light forms (0xCC) grow in place, as JIP makes them.
 //!
 //! **Thirteen groups at once** (`measure/jip/PLAN-3.9-groups.md`: GA GB GC GD GE GP GH1 GH2 GF GS GW
 //! GL GX; every translation file has one owning group). Each group has its own places, so their PRs

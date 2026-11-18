@@ -93,7 +93,8 @@ fn gl1_rows_are_jips_addresses() {
             0x0082_36fd
         ]
     );
-    assert!(AREA.jip_sites.is_empty());
+    // Part 2's patches are JIP's own (`lights`).
+    assert_eq!(AREA.jip_sites, &lights::SITES[..]);
 }
 
 /// Not installed, or installed with the row off: no handler, every seam answers nothing.

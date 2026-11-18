@@ -26,6 +26,10 @@
 //! None of these changes what the renderer receives for a light: G66 only skips the attach call
 //! when there is no node, where the original would crash.
 //!
+//! **GL-2, JIP's light data** (H03, H04, H05, H06, H07, H12; JIP's own, in whenever JIP answers
+//! "installed"): in [`lights`]. These do change light values with JIP installed (the animated
+//! lights); with JIP not installed nothing of them runs.
+//!
 //! Threads: the effect text (`BuildMenuString`, `Register`) runs on the main thread (menus, HUD);
 //! the list word is a lock-free `ext_free` word set and taken there. `FindTargets` and
 //! `CheckAddEffect` run wherever an actor casts or is hit (main and AI threads); their handlers keep
@@ -73,9 +77,9 @@ pub const AREA: Area = Area {
     ],
     fix_wraps: &[],
     install_fixes,
-    jip_sites: &[],
-    jip_wraps: &[],
-    install_jip: super::nothing,
+    jip_sites: &lights::SITES,
+    jip_wraps: &[lights::UPDATE_ANIMATED_LIGHT.addr()],
+    install_jip: lights::install,
 };
 
 fn install_fixes(e: &mut Engine) {
@@ -280,3 +284,6 @@ fn cast_skill_modifiers(e: &mut Engine, words: &[u32]) -> Option<u32> {
 #[cfg(test)]
 #[path = "gl_tests.rs"]
 mod tests;
+
+#[path = "gl_lights.rs"]
+pub mod lights;

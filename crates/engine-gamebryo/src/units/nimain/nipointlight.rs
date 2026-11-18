@@ -109,7 +109,15 @@ pub fn ni_point_light_is_equal(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
 /// on null too) and this one's three attenuations (`FLD`/`FSTP` copies, written even through
 /// a null clone, as the exe does). Answers the clone.
 pub fn ni_point_light_create_clone(e: &mut Engine, this: Ptr, cloning_process: Ptr) -> Ptr {
-    let block = e.call(ALLOCATE, &args![0xfcu32]).u32();
+    // The size (the `PUSH 0xFC` at `0xA7D7C2`): JIP's H03 (group GL's row and handler) writes
+    // 0x110 into the push (its light data after the game's object); the seam `0xA7D7C3`
+    // answers the size (no words). One load while JIP is not installed.
+    let size = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x00a7_d7c3, &[]).unwrap_or(0xfc)
+    } else {
+        0xfc
+    };
+    let block = e.call(ALLOCATE, &args![size]).u32();
     let clone = if block == 0 {
         0
     } else {
@@ -328,6 +336,61 @@ mod n018_tests {
         assert_eq!(e.mem.f32(clone + 0xf0), 0.5);
         assert_eq!(e.mem.f32(clone + 0xf4), 0.25);
         assert_eq!(e.mem.u32(clone + 0xf8), 0x7fc0_0001);
+    }
+
+    thread_local! {
+        /// H03's asks: the words of each.
+        static H03_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_h03(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H03_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x110)
+    }
+
+    /// JIP's H03 seam `0xA7D7C3` (group GL's row and handler, a test handler here): not asked
+    /// while JIP is not installed (the exe's 0xFC bytes and the same clone); asked with JIP
+    /// installed (whatever the fixes row) with no words, the answer is the size.
+    #[test]
+    fn h03_seam_sizes_the_clone() {
+        use engine_core::extend::jip_patches;
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            let mut e = Engine::new();
+            e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+            e.register(NI_LIGHT_CONSTRUCTOR, |_, _| Ret::default());
+            e.register(NI_LIGHT_COPY_MEMBERS, |_, _| Ret::default());
+            e.on_site_for_test(0x00a7_d7c3, at_h03);
+            e.set_jip_patches(word);
+            H03_ASKED.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            let this = light(&mut e, [0.5, 0.25, 0.125]);
+            let clone = e.call(0x00a7_d7c0, &args![this, 0x4444u32]).u32();
+            assert_eq!(
+                calls_to(&e, ALLOCATE),
+                vec![vec![if installed { 0x110 } else { 0xfc }]],
+                "{word:x}"
+            );
+            assert_eq!(calls_to(&e, NI_LIGHT_CONSTRUCTOR), vec![vec![clone]]);
+            assert_eq!(
+                calls_to(&e, NI_LIGHT_COPY_MEMBERS),
+                vec![vec![this, clone, 0x4444]]
+            );
+            assert_eq!(e.mem.u32(clone), NI_POINT_LIGHT_VTABLE);
+            assert_eq!(e.mem.f32(clone + 0xf8), 0.125);
+            let asked = H03_ASKED.with(|s| s.take());
+            assert_eq!(
+                asked,
+                if installed { vec![vec![]] } else { vec![] },
+                "{word:x}"
+            );
+        }
     }
 
     #[test]

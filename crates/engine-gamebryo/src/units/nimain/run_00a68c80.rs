@@ -52,8 +52,19 @@ pub fn fn_00a68d40(e: &mut Engine, this: Ptr, clone: u32, cloning: u32) {
     e.mem.set_u32(clone + 0xa4, first);
     let second = e.mem.u32(this + 0xa8);
     e.mem.set_u32(clone + 0xa8, second);
-    let flag = e.mem.u8(this + 0x9c);
-    e.mem.set_u8(clone + 0x9c, flag);
+    // JIP's H05 (group GL's row and handler; 12 bytes at `0xA68D6B`: `MOV EAX,[ESI+0x9C]; MOV
+    // [EDI+0x9C],EAX`) copies the whole word +0x9C: the byte, the type byte +0x9D (the clone's
+    // constructor set the same) and JIP's two light bytes +0x9E, +0x9F. The seam (no words)
+    // answered: the word; no answer, or JIP not installed (one load): the exe's byte.
+    let word = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x00a6_8d6b, &[]).is_some();
+    if word {
+        let value = e.mem.u32(this + 0x9c);
+        e.mem.set_u32(clone + 0x9c, value);
+    } else {
+        let flag = e.mem.u8(this + 0x9c);
+        e.mem.set_u8(clone + 0x9c, flag);
+    }
 }
 
 /// `NiStream::m_pkOstr` (Xbox PDB) +0x250; the output stream's position (+4) and write
@@ -135,6 +146,65 @@ mod tests {
         assert_eq!(e.mem.u8(clone + 0x9c), 9);
         let log = e.call_log.take().unwrap();
         assert!(log.contains(&(GEOMETRY_COPY_MEMBERS, vec![this, clone, 0x33])));
+    }
+
+    thread_local! {
+        /// H05's asks: the words of each.
+        static H05_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_h05(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H05_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(1)
+    }
+
+    fn at_h05_none(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H05_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        None
+    }
+
+    /// JIP's H05 seam `0xA68D6B` (group GL's row and handler, a test handler here): not asked
+    /// while JIP is not installed (the exe's byte +0x9C copied, the clone's +0x9D..+0x9F as they
+    /// were); asked with JIP installed (whatever the fixes row) with no words: answered, the
+    /// word +0x9C..+0x9F; no answer, the byte.
+    #[test]
+    fn h05_seam_copies_the_word() {
+        use engine_core::extend::jip_patches;
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            for answers in [true, false] {
+                let installed = word & jip_patches::INSTALLED != 0;
+                let mut e = Engine::new();
+                e.register(GEOMETRY_COPY_MEMBERS, |_, _| Ret::default());
+                e.on_site_for_test(0x00a6_8d6b, if answers { at_h05 } else { at_h05_none });
+                e.set_jip_patches(word);
+                H05_ASKED.with(|s| s.borrow_mut().clear());
+                let this = e.mem.alloc(0xb0);
+                let clone = e.mem.alloc(0xb0);
+                e.mem.set_u32(this + 0x9c, 0x8102_0201);
+                e.mem.set_u32(clone + 0x9c, 0x5555_0200);
+                e.mem.set_u32(this + 0xa4, 7);
+                e.call(0x00a6_8d40, &args![this, clone, 0x33u32]);
+                let expected = if installed && answers {
+                    0x8102_0201
+                } else {
+                    0x5555_0201
+                };
+                assert_eq!(e.mem.u32(clone + 0x9c), expected, "{word:x} {answers}");
+                assert_eq!(e.mem.u32(clone + 0xa4), 7);
+                let asked = H05_ASKED.with(|s| s.take());
+                assert_eq!(
+                    asked,
+                    if installed { vec![vec![]] } else { vec![] },
+                    "{word:x} {answers}"
+                );
+            }
+        }
     }
 }
 

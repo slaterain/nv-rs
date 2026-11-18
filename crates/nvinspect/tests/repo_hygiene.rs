@@ -143,12 +143,12 @@ fn shipped_data(rel: &str) -> bool {
         return false;
     }
     let parts: Vec<&str> = rel.split('/').collect();
-    match parts.as_slice() {
-        ["distribution" | "vendor", _, ..] => true,
-        ["crates", _, "src" | "data", _, ..] => true,
-        ["viewer", "src" | "data", _, ..] => true,
-        _ => false,
-    }
+    matches!(
+        parts.as_slice(),
+        ["distribution" | "vendor", _, ..]
+            | ["crates", _, "src" | "data", _, ..]
+            | ["viewer", "src" | "data", _, ..]
+    )
 }
 
 /// The words of [`SHIPPED_DATA_WORDS`] in `line`.

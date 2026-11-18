@@ -1703,7 +1703,15 @@ pub fn fn_00b5cbd0(e: &mut Engine, this: Ptr<ShadowSceneNode>, object: u32) -> u
 // Translation incomplete: 00b5cd00 - the C++ exception frame (FS:[0] chain, unwind states 0 and 1 for the new NiLight and the temporary) is not translated.
 pub fn fn_00b5cd00(e: &mut Engine, this: Ptr<ShadowSceneNode>, light: u32) -> u32 {
     e.mem.set_u8(light.wrapping_add(LIGHT_DYNAMIC), 1);
-    let memory = e.call(NEW_OBJECT, &args![0xfcu32]).u32();
+    // The size (the `PUSH 0xFC` at `0xB5CD29`): JIP's H03 (group GL's row and handler) writes
+    // 0x110 into the push (its light data after the game's object); the seam `0xB5CD2A`
+    // answers the size (no words). One load while JIP is not installed.
+    let size = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x00b5_cd2a, &[]).unwrap_or(0xfc)
+    } else {
+        0xfc
+    };
+    let memory = e.call(NEW_OBJECT, &args![size]).u32();
     let ni_light = if memory != 0 {
         e.call(NI_LIGHT_CONSTRUCT_00A7D670, &args![memory]).u32()
     } else {
@@ -6227,6 +6235,62 @@ mod b064_tests {
         assert_eq!(e.mem.u8(light + 0xed), 0);
         assert_eq!(elements(&e, this.addr() + SHADOW_LIGHT_LIST), vec![light]);
         assert_eq!(e.mem.u32(light + 4), 1);
+    }
+
+    thread_local! {
+        /// H03's asks: the words of each.
+        static H03_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn at_h03(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        H03_ASKED.with(|s| s.borrow_mut().push(a.to_vec()));
+        Some(0x110)
+    }
+
+    /// JIP's H03 seam `0xB5CD2A` (group GL's row and handler, a test handler here): not asked
+    /// while JIP is not installed (the exe's 0xFC bytes, the same light set and listed); asked
+    /// with JIP installed (whatever the fixes row) with no words, the answer is the size.
+    #[test]
+    fn h03_seam_sizes_the_dynamic_light() {
+        use engine_core::extend::jip_patches;
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            let mut e = rig();
+            let this = scene(&mut e);
+            let light = object(&mut e, 0x250);
+            e.register(NEW_OBJECT, |e, a| e.mem.alloc(a[0]).into_ret());
+            e.register(NI_LIGHT_CONSTRUCT_00A7D670, |e, a| {
+                e.mem.set_u32(a[0] + 0x30, 0xff);
+                a[0].into_ret()
+            });
+            e.register(SHADOW_SCENE_LIGHT_SET_LIGHT, |_, _| Ret::default());
+            e.register(LIGHT_00B9DCB0, |_, _| Ret::default());
+            e.on_site_for_test(0x00b5_cd2a, at_h03);
+            e.set_jip_patches(word);
+            H03_ASKED.with(|s| s.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x00b5_cd00, &args![this, light]).u32(), light);
+            assert_eq!(
+                calls(&e, NEW_OBJECT)[0],
+                vec![if installed { 0x110 } else { 0xfc }],
+                "{word:x}"
+            );
+            let ni_light = calls(&e, SHADOW_SCENE_LIGHT_SET_LIGHT)[0][1];
+            assert_eq!(e.mem.u32(ni_light + 0x30), 0xfe);
+            assert_eq!(elements(&e, this.addr() + SHADOW_LIGHT_LIST), vec![light]);
+            let asked = H03_ASKED.with(|s| s.take());
+            assert_eq!(
+                asked,
+                if installed { vec![vec![]] } else { vec![] },
+                "{word:x}"
+            );
+        }
     }
 
     #[test]
