@@ -128,6 +128,9 @@ struct World {
     /// The first `buffered` cells and references are stored buffers (an unloaded form's data), not
     /// live forms.
     buffered: u32,
+    /// The first `interior` of the expired cells are interior cells (no grid place: keyed by the
+    /// cell), the references in them placed by their parent cell.
+    interior: u32,
     /// One entry with neither a form nor a stored buffer (the exe's warning).
     missing: bool,
     /// The changes map's buckets.
@@ -152,11 +155,13 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
     });
     e.register(0x0040_1170, |e, a| ret(u32::from(e.mem.u8(a[0] + 4))));
     e.register(0x0054_6af0, |e, a| ret(e.mem.u32(a[0] + 0x20))); // detach time
-    e.register(0x0042_5fd0, |_, _| ret(0)); // an exterior cell
+                                                                 // An interior cell: the byte at +0x34 (the exe tests the cell's flags).
+    e.register(0x0042_5fd0, |e, a| ret(u32::from(e.mem.u8(a[0] + 0x34))));
     e.register(0x0054_ddd0, |e, a| ret(e.mem.u32(a[0] + 0x30)));
     e.register(0x0054_4c30, |e, a| ret(e.mem.u32(a[0] + 0x24)));
     e.register(0x0054_4c60, |e, a| ret(e.mem.u32(a[0] + 0x28)));
-    e.register(0x008d_6f30, |_, _| ret(0)); // no parent cell: placed by worldspace
+    // A reference's parent cell: the word at +0x38 (0: placed by its worldspace).
+    e.register(0x008d_6f30, |e, a| ret(e.mem.u32(a[0] + 0x38)));
     e.register(0x0057_5d70, |e, a| ret(e.mem.u32(a[0] + 0x30)));
     e.register(SLOT_FNS + 0xf0, |e, a| {
         ret(u32::from(e.mem.u8(a[0] + 4) == 0x3a))
@@ -259,6 +264,7 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
         e.mem.set_u32(change + 4, block);
     };
     let side = (w.cells as f64).sqrt().ceil() as u32;
+    let mut cells_made = vec![];
     let world_of = |c: u32| worlds[(c % w.worlds) as usize];
     for c in 0..w.cells {
         let id = 0x0010_0000 + c;
@@ -270,6 +276,10 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
             y: c / side,
         };
         let cell = form(e, vtable, id, f, world_of(c));
+        if c >= w.buffered && c < w.buffered + w.interior {
+            e.mem.set_u8(cell + 0x34, 1);
+        }
+        cells_made.push(cell);
         let change = add(e, id, 0x4000_0000);
         if c < w.buffered {
             let area = WORLD + c % w.worlds;
@@ -292,6 +302,9 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
             y: c / side,
         };
         let reference = form(e, vtable, id, f, world_of(c));
+        if c >= w.buffered && c < w.buffered + w.interior && r >= w.buffered {
+            e.mem.set_u32(reference + 0x38, cells_made[c as usize]);
+        }
         let change = add(e, id, flags);
         if r < w.buffered {
             let area = WORLD + c % w.worlds;
@@ -397,6 +410,7 @@ fn typed_cleanup_expired_data_matches_the_translation() {
         references: 3000,
         in_expired: 400,
         buffered: 40,
+        interior: 12,
         missing: true,
         buckets: 5039,
     };
@@ -457,6 +471,7 @@ fn cleanup_expired_data_speed() {
             references: 40_000,
             in_expired: 0,
             buffered: 0,
+            interior: 0,
             missing: false,
             buckets: 5039,
         };
