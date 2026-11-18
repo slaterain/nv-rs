@@ -743,6 +743,23 @@ pub fn fn_0050ee20(e: &mut Engine, this: Ptr<TESBoundObject>, reference: Ptr) ->
     e.vcall(this.addr(), 0x14c, &args![reference, 0u32]).ptr()
 }
 
+/// JIP's `CreateObjectNodeHook` (`WriteRelJump(0x50EF46, ..)` in `InitJIPHooks`; group GL's row
+/// and handler, H06's companion): at `0x50EF46`, where a model held only by the model cache could
+/// be shared, JIP sends a model with point lights of its own (byte +0x33 bit 0x20, set by H06) to
+/// the clone path (`0x50F0FE`), so every reference gets its own lights. The seam's words are the
+/// model, the form and the reference; an answer other than 0 is "clone". One load while JIP is not
+/// installed (the exe's path).
+fn jip_always_clones(
+    e: &mut Engine,
+    this: Ptr<TESBoundObject>,
+    reference: Ptr,
+    source: u32,
+) -> bool {
+    e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+        && e.site(0x0050_ef46, &[source, this.addr(), reference.addr()])
+            .is_some_and(|answer| answer != 0)
+}
+
 // Translated from 0050ee50 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 0050ee50 - the exception-unwinding frame (FS:[0]) and the security-cookie check (00ec408c) are not translated.
 /// `TESBoundObject::Clone3D` (Xbox PDB): returns a scene-graph copy of the
@@ -793,7 +810,10 @@ pub fn tes_bound_object_clone_3d(
     if e.call(0x0050_d4a0, &args![this]).bool() && !reference.is_null() {
         e.call(0x0069_3ef0, &args![reference, 1u32]);
     }
-    if flag == 0 && typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, source)) == 1 {
+    if flag == 0
+        && typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, source)) == 1
+        && !jip_always_clones(e, this, reference, source)
+    {
         let mut shareable = false;
         let form_type = e.call(FORM_TYPE, &args![this]).u32();
         match form_type {
@@ -2452,6 +2472,86 @@ mod tests {
         start_log(&mut e);
         assert_eq!(e.call(0x0050ee50, &[object, 0, 0]).u32(), clone);
         assert!(clone_addresses(&mut e).contains(&0x00a5_d2c0));
+    }
+
+    thread_local! {
+        /// The words JIP's `0x50EF46` seam handler of a test was asked with.
+        static CLONE_SEAM_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// JIP's `CreateObjectNodeHook` seam at `0x50EF46` (group GL's handler): asked only with JIP
+    /// installed (whatever the fixes row), only where the model could be shared (a count of 1),
+    /// before the form type, with (model, form, reference). An answer other than 0
+    /// sends a model that every check would share to the clone path; 0 (or JIP not installed: not
+    /// asked) shares it as the exe does.
+    #[test]
+    fn jip_clone_seam_clones_a_model_with_jips_lights() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn seam(e: &mut Engine, a: &[u32]) -> Option<u32> {
+            CLONE_SEAM_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(u32::from(e.mem.u8(a[0] + 0x33) & 0x20 != 0))
+        }
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            for tagged in [false, true] {
+                let installed = word & jip_patches::INSTALLED != 0;
+                CLONE_SEAM_ASKED.with(|v| v.borrow_mut().clear());
+                let mut e = clone_engine();
+                let model = e.mem.alloc(0x40);
+                if tagged {
+                    e.mem.set_u8(model + 0x33, 0x20);
+                }
+                let clone = e.mem.alloc(0x40);
+                e.register_double(0x7000_0174, move |_, _| ret(model));
+                e.register(0x0072_6070, |_, _| ret(1));
+                e.register(FORM_TYPE, |_, _| ret(0x10));
+                e.register(0x0062_c3c0, |_, _| ret(0));
+                e.register_double(0x00a5_d2c0, move |_, _| ret(clone));
+                let object = object_with_vtable(&mut e, 0x30, &[(0x174, 0x7000_0174)]);
+                e.set_jip_patches(word);
+                e.on_site(SiteSlot::new(Owner::Jip, 0x0050_ef46), seam);
+                start_log(&mut e);
+                let got = e.call(0x0050ee50, &[object, 0x4000, 0]).u32();
+                let cloned = installed && tagged;
+                assert_eq!(
+                    got,
+                    if cloned { clone } else { model },
+                    "{word:08x} {tagged}"
+                );
+                let sequence = clone_addresses(&mut e);
+                assert_eq!(
+                    sequence.contains(&0x00a5_d2c0),
+                    cloned,
+                    "{word:08x} {tagged}"
+                );
+                // The clone path skips the share checks (the form type first).
+                assert_eq!(
+                    sequence.contains(&FORM_TYPE),
+                    !cloned,
+                    "{word:08x} {tagged}"
+                );
+                let asked = CLONE_SEAM_ASKED.with(|v| v.borrow().clone());
+                assert_eq!(
+                    asked,
+                    if installed {
+                        vec![vec![model, object, 0x4000]]
+                    } else {
+                        vec![]
+                    },
+                    "{word:08x} {tagged}"
+                );
+                // A model held twice (cloned by the exe anyway): never asked.
+                CLONE_SEAM_ASKED.with(|v| v.borrow_mut().clear());
+                e.register(0x0072_6070, |_, _| ret(2));
+                e.call(0x0050ee50, &[object, 0x4000, 0]);
+                assert!(CLONE_SEAM_ASKED.with(|v| v.borrow().is_empty()));
+            }
+        }
     }
 
     #[test]

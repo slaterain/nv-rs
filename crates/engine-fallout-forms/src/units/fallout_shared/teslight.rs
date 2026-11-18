@@ -591,6 +591,18 @@ pub fn fn_0050d6d0(e: &mut Engine, node: u32) -> u32 {
     found
 }
 
+/// The size `GenDynamic` allocates a new point light at (the `PUSH 0xFC` at `0x50DA72`): 0xFC.
+/// JIP's H03 (group GL's row and handler) writes 0x110 into the push (its light data after the
+/// game's object); the seam `0x50DA73` answers the size (no words). One load while JIP is not
+/// installed.
+fn point_light_size(e: &mut Engine) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0050_da73, &[]).unwrap_or(0xfc)
+    } else {
+        0xfc
+    }
+}
+
 // Translated from 0050d810 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 0050d810 - the exception-unwinding frame (FS:[0]) and the /GS cookie check (00ec408c) are not translated.
 /// `TESObjectLIGH::GenDynamic` (Xbox PDB), `RET 0xC`: adds the light to
@@ -707,7 +719,8 @@ pub fn tes_object_ligh_gen_dynamic(
                 0x0040_6d00,
                 &args![text, 0x104u32, 0x0102_90a4u32, light_name],
             );
-            let block = e.call(NI_ALLOCATE, &args![0xfcu32]).u32();
+            let size = point_light_size(e);
+            let block = e.call(NI_ALLOCATE, &args![size]).u32();
             light = if block != 0 {
                 e.call(0x00a7_d670, &args![block]).u32()
             } else {
@@ -1646,6 +1659,69 @@ mod b023_tests {
         e.mem.set_u32(this + 0xa8, 0x20);
         e.register(0x7000_0070, |_, _| ret(0x100));
         assert_eq!(e.call(0x0050_d810, &[this, reference, node, 0]).u32(), 0);
+    }
+
+    thread_local! {
+        /// The words H03's seam handler of a test was asked with.
+        static H03_ASKED: std::cell::RefCell<Vec<Vec<u32>>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// H03's seam at `0x50DA73` (JIP's `SafeWrite32(0x50DA73, 0x110)`, group GL's handler): not
+    /// asked while JIP is not installed, every call (the light's 0xFC allocation included) the
+    /// same as with no handler; with JIP installed (whatever the fixes row) asked once with no
+    /// words, the light allocated at the answer, the same functions called in the same order.
+    #[test]
+    fn jip_h03_seam_sizes_the_new_light() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            H03_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0x110)
+        }
+        let run = |word: Option<u32>| {
+            let mut e = Engine::new();
+            let this = light(&mut e);
+            gen_doubles(&mut e);
+            let empty = object(&mut e, 1, &[]);
+            let node = node_holding(&mut e, empty);
+            quiet(&mut e, &[0x0040_6d00, NAME_DESTRUCT, SET_NAME]);
+            e.register(NAME_CONSTRUCT, |_, a| ret(a[0]));
+            e.register(NI_ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+            e.register(0x00a7_d670, |_, a| ret(a[0] + 1));
+            if let Some(word) = word {
+                e.set_jip_patches(word);
+                e.on_site(SiteSlot::new(Owner::Jip, 0x0050_da73), size);
+            }
+            e.call_log = Some(vec![]);
+            e.call(0x0050_d810, &[this, 0, node, 0]);
+            e.call_log.take().unwrap()
+        };
+        let plain = run(None);
+        assert_eq!(calls_to(&plain, NI_ALLOCATE), vec![vec![0xfc]]);
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            H03_ASKED.with(|v| v.borrow_mut().clear());
+            let log = run(Some(word));
+            if installed {
+                let addresses =
+                    |log: &[(u32, Vec<u32>)]| log.iter().map(|c| c.0).collect::<Vec<_>>();
+                assert_eq!(addresses(&log), addresses(&plain), "{word:08x}");
+                assert_eq!(calls_to(&log, NI_ALLOCATE), vec![vec![0x110]]);
+            } else {
+                assert_eq!(log, plain, "{word:08x}");
+            }
+            let asked = H03_ASKED.with(|v| v.borrow().clone());
+            assert_eq!(
+                asked,
+                if installed { vec![vec![]] } else { vec![] },
+                "{word:08x}"
+            );
+        }
     }
 
     #[test]

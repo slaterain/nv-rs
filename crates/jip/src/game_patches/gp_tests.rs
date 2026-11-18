@@ -1290,3 +1290,34 @@ fn toggle_immortal_mode_switches_the_hook_and_the_hit_effects() {
     assert_eq!(e.hook_users(Hook::PlayerMinHealth), 0);
     assert_eq!(call_on(&mut e, TOGGLE_IMMORTAL_MODE, 0, &[]).1, 1.0);
 }
+
+/// H09's `doLights` (group GL's `add_point_lights`): after the load, a 3D marked `0x20000000`
+/// (byte +0x33 bit 0x20) has its point lights of JIP's listed and marked listed (bit 0x40); an
+/// unmarked 3D is not searched.
+#[test]
+fn the_attach_lists_jips_point_lights() {
+    for marked in [true, false] {
+        let mut e = world();
+        let t = task(&mut e);
+        let light = e.mem.alloc(0x110);
+        let form = e.mem.alloc(0xcc);
+        e.mem.set_u32(light, 0x0109_dd0c);
+        e.mem.set_u8(light + 0x33, 0x20);
+        e.mem.set_u32(light + 0xe8, form);
+        let children = e.mem.alloc(4);
+        e.mem.set_u32(children, light);
+        e.mem.set_u32(t.node + 0xa0, children);
+        e.mem.set_u16(t.node + 0xa6, 1);
+        if marked {
+            e.mem.set_u8(t.node + 0x33, 0x20);
+        }
+        queued_reference(&mut e, t.task);
+        let listed = super::super::gl::lights::active_point_lights(&mut e);
+        assert_eq!(listed, if marked { vec![light] } else { vec![] });
+        assert_eq!(
+            e.mem.u8(light + 0x33),
+            if marked { 0x60 } else { 0x20 },
+            "{marked}"
+        );
+    }
+}
