@@ -1758,14 +1758,43 @@ fn short_extension(name: &str) -> Option<String> {
     )
 }
 
-/// Whether a search pattern finds `name`: its long name, or its 8.3 short name where the parts
-/// of it that are known decide (measured: `*.esm` finds `d.esmx` through `D6104~1.ESM`, not
-/// `c.esm.bak`; `?.esm` does not find `a b.esm`, `ABE286~1.ESM`). A short name is its
-/// extension ([`short_extension`]), then a base of at least three characters (`X~1`) whose
-/// first character is the long name's first one other than a space or a dot, upper case (the
-/// rest may be a hash Windows makes: `D6104~1`). A pattern the known parts cannot decide stops the
-/// run as not provided.
+/// Whether a search pattern finds `name`. On Windows the measured matcher of a volume that keeps
+/// 8.3 short names ([`search_finds_with_short_names`]: the default for a Windows system drive).
+/// Elsewhere its long name only ([`search_finds_long_names`]): a Linux or macOS file system
+/// keeps no short names, so a search answers as Windows answers one on a volume where 8.3 name
+/// creation is turned off (`fsutil 8dot3name set`, an ordinary Windows setting per volume), where
+/// only long names are matched. This
+/// never stops the run off Windows (the first Linux start stopped on `ClassicPack*.bsa` over
+/// `CaravanPack - Main.bsa`, 2026-11-17).
 fn search_finds(pattern: &[u8], name: &str, shown: &str) -> bool {
+    #[cfg(windows)]
+    {
+        search_finds_with_short_names(pattern, name, shown)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = shown;
+        search_finds_long_names(pattern, name)
+    }
+}
+
+/// Whether a search pattern finds `name` by its long name alone ([`wild_match`], the measured
+/// matcher), as on a volume without 8.3 short names ([`search_finds`]).
+#[cfg(any(not(windows), test))]
+fn search_finds_long_names(pattern: &[u8], name: &str) -> bool {
+    wild_match(pattern, &ansi_bytes(name))
+}
+
+/// Whether a search pattern finds `name` on a volume that keeps 8.3 short names: its long name,
+/// or its short name where the parts of it that are known decide (measured on Windows: `*.esm`
+/// finds `d.esmx` through `D6104~1.ESM`, not `c.esm.bak`; `?.esm` does not find `a b.esm`,
+/// `ABE286~1.ESM`). A short name is its extension ([`short_extension`]), then a base of at least
+/// three characters (`X~1`) whose first character is the long name's first one other than a
+/// space or a dot, upper case (the rest may be a hash Windows makes: `D6104~1`). A pattern the
+/// known parts cannot decide stops the run as not provided: on Windows only the game's own files
+/// of this run reach it (the player's files are listed by Windows' own search, [`listing`]).
+#[cfg(any(windows, test))]
+fn search_finds_with_short_names(pattern: &[u8], name: &str, shown: &str) -> bool {
     if wild_match(pattern, &ansi_bytes(name)) {
         return true;
     }
@@ -2177,8 +2206,8 @@ fn host_search(query: &std::path::Path, _shown: &str) -> Result<Vec<HostEntry>, 
 /// 8.3 short names and the order are the file system's (measured on scratch files,
 /// `build43-scratch/measure/findfile-2026-10-23.txt`: upper-case byte order, `.` and `..`, `?`
 /// matching nothing before a dot or at the end, `*.esm` finding `d.esmx` by `D6104~1.ESM`).
-/// Other systems run the measured matcher ([`search_finds`], the other `listing`), which stops
-/// on short names it cannot decide.
+/// Other systems run the measured matcher on long names only ([`search_finds`], the other
+/// `listing`): their file systems keep no short names.
 #[cfg(windows)]
 fn listing(directory: &std::path::Path, pattern: &[u8], shown: &str) -> Result<Vec<Found>, u32> {
     let query = directory.join(real_path(pattern));
@@ -4248,11 +4277,12 @@ mod tests_player_files {
             let mut v: Vec<&str> = names
                 .iter()
                 .copied()
-                .filter(|n| search_finds(pattern, n, "test"))
+                .filter(|n| search_finds_with_short_names(pattern, n, "test"))
                 .collect();
             v.sort_by_key(|n| n.to_ascii_uppercase());
             v
         };
+        let search_finds = search_finds_with_short_names;
         assert_eq!(
             found(b"*.esm"),
             [
@@ -4282,6 +4312,154 @@ mod tests_player_files {
         assert_eq!(short_extension("d.esmx").as_deref(), Some("ESM"));
         assert_eq!(short_extension("A.esm"), None);
         assert_eq!(short_extension("c.esm.bak").as_deref(), Some("BAK"));
+    }
+
+    /// The measured directory again, on a volume without short names (Linux and macOS, or a
+    /// Windows volume with 8.3 name creation off): only the long names match, so `*.esm` no
+    /// longer finds `d.esmx` (its `D6104~1.ESM` does not exist) and nothing stops the run.
+    #[test]
+    fn searches_without_short_names_match_long_names_only() {
+        let names = [
+            "A.esm",
+            "b.ESM",
+            "c.esm.bak",
+            "d.esmx",
+            "Z_long_name_file.esm",
+            "e.es",
+            "f.esp",
+            "a b.esm",
+            "g.esm",
+        ];
+        let found = |pattern: &[u8]| -> Vec<&str> {
+            names
+                .iter()
+                .copied()
+                .filter(|n| search_finds_long_names(pattern, n))
+                .collect()
+        };
+        assert_eq!(
+            found(b"*.esm"),
+            ["A.esm", "b.ESM", "Z_long_name_file.esm", "a b.esm", "g.esm"]
+        );
+        assert_eq!(
+            found(b"*.ES?"),
+            [
+                "A.esm",
+                "b.ESM",
+                "Z_long_name_file.esm",
+                "e.es",
+                "f.esp",
+                "a b.esm",
+                "g.esm"
+            ]
+        );
+        assert_eq!(found(b"?.esm"), ["A.esm", "b.ESM", "g.esm"]);
+        assert!(search_finds_long_names(b"*", "."));
+        assert!(!search_finds_long_names(b"*.esm", ".."));
+        // Off Windows the search is this one.
+        #[cfg(not(windows))]
+        for pattern in [&b"*.esm"[..], b"*.ES?", b"?.esm", b"x*.esm", b"*"] {
+            for name in names {
+                assert_eq!(
+                    search_finds(pattern, name, "test"),
+                    search_finds_long_names(pattern, name)
+                );
+            }
+        }
+    }
+
+    /// The game's Data folder of a default Steam install searched with the pre-order pack and
+    /// add-on archive patterns the game builds (`ClassicPack*.bsa` and the like, the first Linux
+    /// start's stop, 2026-11-17): exactly the long-name matches, never a stop. On a volume with
+    /// short names the same patterns stop the run (the measured matcher cannot tell
+    /// `CARAVA~1.BSA` from what `ClassicPack*` asks), so Windows lists the player's folder with
+    /// Windows' own search.
+    #[test]
+    fn the_data_folder_pack_searches_find_long_names_only() {
+        let data = [
+            "CaravanPack - Main.bsa",
+            "ClassicPack - Main.bsa",
+            "MercenaryPack - Main.bsa",
+            "TribalPack - Main.bsa",
+            "DeadMoney - Main.bsa",
+            "DeadMoney - Sounds.bsa",
+            "HonestHearts - Main.bsa",
+            "Fallout - Meshes.bsa",
+            "Fallout - Textures.bsa",
+            "Update.bsa",
+            "FalloutNV.esm",
+            "CaravanPack.esm",
+            "ClassicPack.esm",
+            "DeadMoney.esm",
+        ];
+        let found = |pattern: &[u8]| -> Vec<&str> {
+            data.iter()
+                .copied()
+                .filter(|n| search_finds_long_names(pattern, n))
+                .collect()
+        };
+        assert_eq!(found(b"ClassicPack*.bsa"), ["ClassicPack - Main.bsa"]);
+        assert_eq!(found(b"CaravanPack*.bsa"), ["CaravanPack - Main.bsa"]);
+        assert_eq!(found(b"MercenaryPack*.bsa"), ["MercenaryPack - Main.bsa"]);
+        assert_eq!(found(b"TribalPack*.bsa"), ["TribalPack - Main.bsa"]);
+        assert_eq!(
+            found(b"DeadMoney*.bsa"),
+            ["DeadMoney - Main.bsa", "DeadMoney - Sounds.bsa"]
+        );
+        assert_eq!(found(b"GunRunnersArsenal*.bsa"), Vec::<&str>::new());
+        assert_eq!(found(b"*.esm").len(), 4);
+        // The volume with short names: the case the first start stopped on.
+        let stopped = std::panic::catch_unwind(|| {
+            search_finds_with_short_names(b"ClassicPack*.bsa", "CaravanPack - Main.bsa", "test")
+        });
+        assert!(stopped.is_err());
+    }
+
+    /// Linux and macOS: the same Data folder on the disk, searched through `FindFirstFileA` as
+    /// the game searches it: each pattern lists exactly its long-name matches, in NTFS's order.
+    #[cfg(not(windows))]
+    #[test]
+    fn the_data_folder_pack_searches_list_on_this_system() {
+        let dir = std::env::temp_dir().join(format!("nv-rs-packs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let data = dir.join("Data");
+        std::fs::create_dir_all(&data).unwrap();
+        for name in [
+            "CaravanPack - Main.bsa",
+            "ClassicPack - Main.bsa",
+            "MercenaryPack - Main.bsa",
+            "TribalPack - Main.bsa",
+            "DeadMoney - Main.bsa",
+            "DeadMoney - Sounds.bsa",
+            "Fallout - Meshes.bsa",
+        ] {
+            std::fs::write(data.join(name), b"bsa").unwrap();
+        }
+        let game = engine_core::exe::game_view(&dir.to_string_lossy());
+        let mut e = Engine::new();
+        let mut list = |pattern: &str| listed(&mut e, &format!(r"{game}\Data\{pattern}"));
+        assert_eq!(
+            list("ClassicPack*.bsa"),
+            [b"ClassicPack - Main.bsa".to_vec()]
+        );
+        assert_eq!(
+            list("CaravanPack*.bsa"),
+            [b"CaravanPack - Main.bsa".to_vec()]
+        );
+        assert_eq!(
+            list("MercenaryPack*.bsa"),
+            [b"MercenaryPack - Main.bsa".to_vec()]
+        );
+        assert_eq!(list("TribalPack*.bsa"), [b"TribalPack - Main.bsa".to_vec()]);
+        assert_eq!(
+            list("DeadMoney*.bsa"),
+            [
+                b"DeadMoney - Main.bsa".to_vec(),
+                b"DeadMoney - Sounds.bsa".to_vec()
+            ]
+        );
+        assert!(list("OldWorldBlues*.bsa").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
