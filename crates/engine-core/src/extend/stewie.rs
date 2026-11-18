@@ -51,6 +51,36 @@ const _: () = assert!(CRASH < FIXES && FIXES < VNV_TWEAKS && VNV_TWEAKS < OTHER_
 /// for a speaker whose 3D is not loaded; Tweaks calls `NiObject_FindType_NullChecked` there, which
 /// answers null for no node.
 pub const DIALOG_SPEECH_NULL_CHECK: Row = Row::at(CRASH, 0);
+/// S0042 `fixExplosionWaterNullCall` (`004e9d40` at `0x4EA743`): the water's reflected explosion
+/// with a null `Get3D` slot.
+pub const EXPLOSION_WATER_NULL_CALL: Row = Row::at(CRASH, 1);
+/// S0064 `patchFixHandleMultiboundsCrashWithNullCell` (`0057ab70` at `0x57ABA4`): a multibound
+/// reference with no parent cell.
+pub const HANDLE_MULTIBOUNDS_NULL_CELL: Row = Row::at(CRASH, 2);
+/// S0068 `fixHandleStealingCrash` (`Actor::StealAlarm` `008bfa40` at `0x8BFBC1`): a theft with no
+/// owner.
+pub const HANDLE_STEALING_CRASH: Row = Row::at(CRASH, 3);
+/// S0078 `patchNullPlayerCellImposterCheck` (`004f2640` at `0x4F269F`): no cell at the player's
+/// location.
+pub const NULL_PLAYER_CELL_IMPOSTER_CHECK: Row = Row::at(CRASH, 4);
+/// S0106 `patchFixNullHitLocationNodeExplosionCrash` (`009b90b0` at `0x9B9387`): a limb cut off
+/// with no limb node.
+pub const NULL_HIT_LOCATION_NODE_EXPLOSION: Row = Row::at(CRASH, 5);
+/// S0124 `patchProcessActivateAddNullCheckForPackage` (`ProcessActivate` `00915f10` at
+/// `0x9164D9`): no current package.
+pub const PROCESS_ACTIVATE_NULL_PACKAGE: Row = Row::at(CRASH, 6);
+/// S0140 `patchFixPatrolMissingNullCheck` (`ProcessPatrolTravelingToNextRef` `0092b030` at
+/// `0x92B076`): no patrol reference.
+pub const PATROL_MISSING_NULL_CHECK: Row = Row::at(CRASH, 7);
+/// S0169 `patchFixRareNullTeleportDoorCrash` (`006f36d0` at `0x6F37AD`): a null door in the
+/// teleport door search.
+pub const RARE_NULL_TELEPORT_DOOR: Row = Row::at(CRASH, 8);
+/// S0174 `patchFixSetActorRefEssentialNullCheck` (`SetActorRefEssential` `005dfd30` at
+/// `0x5DFD6A`): the command called with no reference.
+pub const SET_ACTOR_REF_ESSENTIAL_NULL_CHECK: Row = Row::at(CRASH, 9);
+/// S0881 `patchFixSavingNullCellCrash` (`SaveInitialData` `0084eb80` at `0x84EE1B`): a created
+/// reference saved with neither worldspace nor cell.
+pub const SAVING_NULL_CELL: Row = Row::at(CRASH, 10);
 
 /// The table: one bit a row.
 #[derive(Debug)]
