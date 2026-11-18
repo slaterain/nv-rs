@@ -9,7 +9,9 @@ name: Other systems
 #
 # Its own workflow, so CI's Windows job (ci.yml, "check") is untouched. These jobs take runners
 # from the account's shared limit (20 jobs at a time, 5 of them macOS), and the Windows job's runs
-# are long, so they run only where they cannot crowd it out during a burst of pull requests:
+# are long. Linux on every pull request is taken on purpose (one slot for about 20 minutes a push:
+# a large burst of pull requests can delay Windows checks, never cancel them); macOS stays on the
+# label and nightly to keep its 5 slots free:
 # - Linux: on pushes to main, on every pull request, and by hand.
 # - macOS: on pull requests labelled "other-systems", by hand, and once a night (not on every push
 #   to main: it takes about half an hour with two compilers).

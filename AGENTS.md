@@ -82,7 +82,7 @@ layer on 2026-11-03 (ADR-0011; `docs/history/README.md`).
 
 ## Machine and checking
 
-Project: current checkout. Windows is the maintainer's tested platform; Linux is played by volunteers, macOS builds and passes its tests.
+Project: current checkout. Windows is the maintainer's tested platform; Linux is played by volunteers, macOS builds the play build and runs part of the crates' tests (nightly and on labelled pull requests; not yet a failing check).
 Game Data: the contributor's own installed Data folder; never commit it.
 Reference place: Doc Mitchell's house (Save 138). GPU: RTX 5070 Ti Laptop.
 Research/tools: `%USERPROFILE%\nv-re`, especially findings and decomp.
