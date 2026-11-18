@@ -438,7 +438,11 @@ fn set_float_and_set_string_write_a_value() {
     assert_eq!(calls_to(REFRESH_FN), vec![vec![want[68], 1]]);
     call(&mut e, 0x26ff, &[n(112), s(b"Boone")]);
     assert_eq!(text_of(&e, want[112]), b"Boone");
-    call(&mut e, 0x26fe, &[n(119), z(1.0)]);
+    assert_eq!(
+        call(&mut e, 0x26fe, &[n(119), z(1.0)]).0,
+        1,
+        "past the 119: handled, nothing written"
+    );
     call(&mut e, 0x26fe, &[n(-1), z(1.0)]);
     assert_eq!(calls_to(REFRESH_FN).len(), 2, "past the values: nothing");
     // Another trait: value trait + slot.
