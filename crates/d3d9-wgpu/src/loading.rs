@@ -951,7 +951,11 @@ impl Screen {
         }
         // The run's last lines, in a dark strip along the bottom, as many as fit under the rest.
         let log_px = (fh / 80.0).max(9.0).round() as u32;
+        // A line's height: Consolas' about 1.2 of its size; the bitmap font's cell.
+        #[cfg(windows)]
         let line_h = (log_px as f32 * 1.2).ceil();
+        #[cfg(not(windows))]
+        let line_h = (crate::bitmap_font::CELL.1 * crate::bitmap_font::scale(log_px)) as f32;
         let fit = ((fh - y - u(0.03)) / line_h).floor().max(0.0) as usize;
         let lines = recent_lines();
         let lines = &lines[lines.len().saturating_sub(fit.min(LOG_LINES))..];
