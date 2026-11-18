@@ -116,12 +116,17 @@ try {
     $bad = Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Name -match $forbidden }
     if ($bad) { throw "These must not be in the package: $($bad.FullName -join ', ')" }
     # (LEGAL.md names fnv_decomp, so that one only counts in the programs.)
-    $needles = @($env:USERNAME, $env:USERPROFILE, $root) | Where-Object { $_ }
+    $needles = @(@($env:USERNAME, $env:USERPROFILE, $root) | Where-Object { $_ })
+    # The research folders and any Windows user folder, in every file: scripts/package-needles.txt,
+    # which the Linux and macOS script reads too. (The research folder's name counts with a path
+    # separator before or after it: the bare word also matched the render thread's name, nv-render,
+    # which stopped the 2026-11-16 package.)
+    $shared = @(Get-Content -LiteralPath (Join-Path $root 'scripts/package-needles.txt') |
+        ForEach-Object { $_.TrimEnd("`r") } | Where-Object { $_ -and -not $_.StartsWith('#') })
+    if ($shared.Count -eq 0) { throw 'scripts/package-needles.txt lists no needle.' }
+    $needles += $shared
     # FUN_, DAT_ and LAB_ are the names a disassembler gives code and data nobody has named.
-    # The research folder's name counts with a path separator before or after it: the bare word
-    # also matched the render thread's name (nv-render, d3d9-stream), which stopped the
-    # 2026-11-16 package.
-    $programNeedles = @('nv-re\', 'nv-re/', '\nv-re', '/nv-re', 'build43', 'fnv_decomp', '\target\release', 'FUN_', 'DAT_', 'LAB_')
+    $programNeedles = @('fnv_decomp', '\target\release', 'FUN_', 'DAT_', 'LAB_')
     $checkArguments = @($stage) + ($needles | ForEach-Object { '--needle'; $_ }) + ($programNeedles | ForEach-Object { '--program-needle'; $_ })
     # Required: no run of the game's bytes longer than the C runtime's own tables (the longest seen
     # is about 2 KB) in any program.
