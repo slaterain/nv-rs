@@ -528,8 +528,9 @@ fn first_starts(x86_64: bool) -> String {
         FIRST_STARTS.to_string()
     } else {
         format!(
-            "{FIRST_STARTS} On this processor (not x86-64) it builds and passes unit tests; the \
-             game's maths differs from a PC's in the last bits."
+            "{FIRST_STARTS} On this processor: builds and passes unit tests on Apple silicon; \
+             maths differs from a PC's in the last bits in a few functions; never started with \
+             the game."
         )
     }
 }
@@ -1117,12 +1118,12 @@ mod tests {
         assert_eq!(super::first_starts(true), super::FIRST_STARTS);
         let arm = super::first_starts(false);
         assert!(arm.starts_with(super::FIRST_STARTS), "{arm}");
-        assert!(arm.contains("builds and passes unit tests"), "{arm}");
+        assert!(arm.contains("builds and passes unit tests on Apple silicon"), "{arm}");
         assert!(
-            arm.contains("differs from a PC's in the last bits"),
+            arm.contains("maths differs from a PC's in the last bits in a few functions"),
             "{arm}"
         );
-        assert!(arm.contains("never started"), "{arm}");
+        assert!(arm.contains("never started with the game"), "{arm}");
     }
 
     /// A scratch installation whose FalloutNV.exe is two bytes (enough to be found).

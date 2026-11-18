@@ -13,10 +13,10 @@ PLEASE READ FIRST
   macOS-specific code run every night (in a job that is still allowed to fail while Apple
   silicon's known differences are fixed).
 - What this preview does: it finds your game, checks its version (./play.sh --check), and goes
-  on to start it, drawing with Metal. It builds and passes its unit tests on Apple silicon, but
-  it has NOT yet been started with the game on a Mac: expect stops nobody has seen yet, and
-  report each one with its log. The game's maths on Apple silicon differs from a PC's in the
-  last bits (far below anything you could see or feel).
+  on to start it, drawing with Metal. It builds and passes unit tests on Apple silicon; maths
+  differs from a PC's in the last bits in a few functions (far below anything you could see or
+  feel); never started with the game: expect stops nobody has seen yet, and report each one
+  with its log.
 - Your nv-rs saves, settings and logs live in nv-rs's own folder:
   ~/Library/Application Support/nv-rs
 - nv-rs never writes to the game's folder, to your Documents or to your Library (but its own
@@ -51,10 +51,10 @@ What you need
 What this build can do today
 ----------------------------
 The program goes on to start the game, drawing with Metal, with the same play settings as the
-Windows preview. It builds and passes its unit tests on Apple silicon; the game's maths there
-differs from a PC's in the last bits (the game's x87 maths runs in software, the processor's quick
-estimates come from a model measured on a PC); it has not yet been started with the game on a
-Mac. The game's window (on the program's main thread, as macOS requires), sound, paths, the
+Windows preview. It builds and passes unit tests on Apple silicon; maths differs from a PC's in
+the last bits in a few functions (the game's x87 maths runs in software, the processor's quick
+estimates come from a model measured on a PC); never started with the game on a Mac. The
+game's window (on the program's main thread, as macOS requires), sound, paths, the
 machine's answers and the code pages are built and pass their checks, but none of them has been
 tried with the game on a Mac yet. Known to be missing, as on Linux: sounds at rates other than
 your sound device's are not heard until the game first changes a sound's pitch, pop-up warnings

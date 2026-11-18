@@ -54,6 +54,13 @@ fn operands(n: usize, seed: u64) -> Vec<X87Ext> {
         X87Ext::from_parts(0xbfff, u64::MAX),
         X87Ext::from_parts(0x7ffe, u64::MAX),
         X87Ext::from_parts(0x0001, INTEGER_BIT),
+        // The encodings the FPU does not support (an invalid operand) or reads its own way: an
+        // unnormal, a pseudo-NaN, a pseudo-infinity, and a pseudo-denormal (exponent 0 with the
+        // integer bit set, read as exponent 1).
+        X87Ext::from_parts(0x3fff, 0x4000_0000_0000_0000),
+        X87Ext::from_parts(0x7fff, 0x4000_0000_0000_0001),
+        X87Ext::from_parts(0xffff, 0),
+        X87Ext::from_parts(0x0000, INTEGER_BIT | 0x1234),
     ];
     (0..n)
         .map(|i| match i % 6 {
@@ -216,11 +223,12 @@ fn the_transcendentals_store_the_fpus_double_within_one_unit() {
         let b = values[(i * 13) % values.len()];
         check("FPATAN", &[a, b], fpatan(a, b), hw::fpatan(a, b));
         check("FYL2X", &[b, a], fyl2x(b, a), hw::fyl2x(b, a));
-        // F2XM1 and FYL2XP1 are defined on |x| <= 1 and |x| < 1 - sqrt(2)/2.
+        // F2XM1 on its whole range |x| <= 1, FYL2XP1 on |x| < 1 - sqrt(2)/2.
         let v = nearest64(a);
         if v.is_finite() {
+            let within = load64(v % 1.0);
+            check("F2XM1", &[within], f2xm1(within), hw::f2xm1(within));
             let small = load64((v % 1.0).clamp(-0.29, 0.29));
-            check("F2XM1", &[small], f2xm1(small), hw::f2xm1(small));
             check(
                 "FYL2XP1",
                 &[b, small],
@@ -229,8 +237,23 @@ fn the_transcendentals_store_the_fpus_double_within_one_unit() {
             );
         }
     }
+    // F2XM1's edges.
+    for v in [
+        -1.0,
+        1.0,
+        -0.0,
+        0.0,
+        0.5,
+        -0.5,
+        1e-300,
+        -1e-300,
+        0.999_999_999_999_999_9,
+    ] {
+        let x = load64(v);
+        check("F2XM1", &[x], f2xm1(x), hw::f2xm1(x));
+    }
     eprintln!(
-        "transcendentals: {} compared, {} one unit apart",
+        "transcendentals: {} compared, {} not the same bits (each within one unit or 2^-60 of the operand)",
         stats.0, stats.1
     );
 }
