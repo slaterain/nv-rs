@@ -649,6 +649,59 @@ fn other_plugins_sections_go_back_with_the_row() {
     }
 }
 
+/// A built-in that reads no section of its own yet (lStewieAl's Tweaks: listed, its records not
+/// built) leaves its section to the keep row: kept and written back, as a plugin not built in.
+#[test]
+fn a_built_in_without_a_reader_keeps_its_section_with_the_row() {
+    let tweaks = cosave::Kept {
+        opcode_base: 0x2132,
+        chunks: 1,
+        data: [
+            &u32::from_le_bytes(*b"HNIP").to_le_bytes()[..],
+            &1u32.to_le_bytes(),
+            &4u32.to_le_bytes(),
+            &[1, 2, 3, 4],
+        ]
+        .concat(),
+    };
+    for row in [true, false] {
+        let mut e = engine();
+        set_files(&mut e, &["FalloutNV.esm", "A.esp"]);
+        set_keep_other_plugins(&mut e, row);
+        plugins::register(
+            &mut e,
+            plugins::BuiltIn {
+                file: "nvse_stewie_tweaks.dll",
+                name: "lStewieAl's Tweaks",
+                version: 1005,
+                opcode_base: 0x2132,
+                listed: true,
+                listener: None,
+                save: None,
+                load: None,
+                pre_load: None,
+                new_game: None,
+            },
+        );
+        put_arrays(Vec::new(), std::slice::from_ref(&tweaks));
+        pre_load(&mut e, NAME);
+        save_game(&mut e, NAME);
+        let bytes = file(CO_SAVE).unwrap();
+        let mut r = Reader::open(&bytes).unwrap();
+        let mut bases = Vec::new();
+        while let Some(p) = r.next_plugin().unwrap() {
+            bases.push(p.opcode_base);
+            let section = r.take_plugin(p.length).unwrap();
+            if p.opcode_base == 0x2132 {
+                assert_eq!(section, tweaks.data);
+            }
+            r.end_plugin();
+        }
+        let want: &[u32] = if row { &[0x1400, 0x2132] } else { &[0x1400] };
+        assert_eq!(bases, want, "row {row}");
+    }
+}
+
 /// Every save writes its co-save, as xNVSE does: an empty one is xNVSE's plugin with the file
 /// list and the empty array and string sections, written over one left from an earlier save.
 #[test]
