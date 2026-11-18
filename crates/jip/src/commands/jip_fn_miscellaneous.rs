@@ -46,7 +46,8 @@
 //! - `ToggleDepthClear` (G128): the drawing track's patch that reads what it sets.
 //! - `SetInternalMarker`: JIP's hook reading `s_internalMarkerIDs` (hooks.h; core track).
 //! - `SetMoonTexture`, `ToggleCameraCollision`, `InitRockItLauncher`: they patch the game's code.
-//! - `SwapTextureEx`, `GetLightAmountAtPoint`: the scene graph's textures and lights.
+//!
+//! `SwapTextureEx` and `GetLightAmountAtPoint` are built in `jip_fn_miscellaneous_scene.rs`.
 
 use super::arrays::{self, Element};
 use super::havok_refs as h;

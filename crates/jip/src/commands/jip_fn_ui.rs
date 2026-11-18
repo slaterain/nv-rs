@@ -40,8 +40,9 @@
 //!   input hooks, `TextInputClose`);
 //! - a routine of JIP's the game calls back: `ShowQuantityMenu` (its callback), and
 //!   `CloseActiveMenu`, which clears what it and `MessageBoxExAlt` keep;
-//! - 3D and drawing: `AttachUIXML`, `AttachUIComponent` (a tile's node under a reference's node),
-//!   `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene node);
+//! - 3D and drawing: `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene
+//!   node); (`AttachUIXML` and `AttachUIComponent`, a tile's node under a reference's node, are
+//!   built in `jip_fn_ui_nodes.rs`);
 //!
 //! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
 //! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the
@@ -739,6 +740,14 @@ pub const INJECT_WITHOUT_UIO_LINE: &str = "JIP LN NVSE: InjectUIComponent was ca
 static INJECT_WITHOUT_UIO_NOTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+/// Writes [`INJECT_WITHOUT_UIO_LINE`] once a run (also `AttachUIComponent`'s, in
+/// `jip_fn_ui_nodes.rs`).
+pub(crate) fn note_inject_without_uio() {
+    if !INJECT_WITHOUT_UIO_NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!("{INJECT_WITHOUT_UIO_LINE}");
+    }
+}
+
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
 // Cmd_InjectUIComponent_Execute and InjectUIComponent.
 /// `Menu/tile...` and a formatted text of menu XML: the text made into tiles under the tile
@@ -755,8 +764,8 @@ fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let path = nvse::commands::args_in_buffer(e, &f.leading, 0, PATH_BUFFER, "InjectUIComponent");
     let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "InjectUIComponent");
-    if !uio::on(e) && !INJECT_WITHOUT_UIO_NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        eprintln!("{INJECT_WITHOUT_UIO_LINE}");
+    if !uio::on(e) {
+        note_inject_without_uio();
     }
     if let Some((tile, _)) = target_component(e, &path, false) {
         if uio::on(e) && uio::inject_component(e, tile, &text) != 0 {

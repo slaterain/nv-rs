@@ -14,6 +14,7 @@ pub mod extra;
 pub mod forms;
 pub(crate) mod havok_refs;
 pub mod jip_fn_actor;
+pub mod jip_fn_actor_anim;
 pub mod jip_fn_actor_p2;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
@@ -43,9 +44,11 @@ pub mod jip_fn_marker_cmds;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
+pub mod jip_fn_misc_ref_lines;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_misc_ref_nodes_w;
 pub mod jip_fn_miscellaneous;
+pub mod jip_fn_miscellaneous_scene;
 pub mod jip_fn_move_cmds;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
@@ -58,6 +61,7 @@ pub mod jip_fn_sound;
 pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
+pub mod jip_fn_ui_nodes;
 pub mod jip_fn_utility;
 pub mod jip_fn_water;
 pub mod jip_fn_weapon;
@@ -208,6 +212,10 @@ pub const ALL: &[Handlers] = &[
     jip_fn_linked_ref::COMMANDS,
     jip_fn_misc_ref_havok_w::COMMANDS,
     jip_fn_extra_data::COMMANDS,
+    jip_fn_ui_nodes::COMMANDS,
+    jip_fn_miscellaneous_scene::COMMANDS,
+    jip_fn_actor_anim::COMMANDS,
+    jip_fn_misc_ref_lines::COMMANDS,
     crate::game_patches::gp::COMMANDS,
     crate::game_patches::gc::formulas::COMMANDS,
     crate::game_patches::gx::COMMANDS,
@@ -244,6 +252,7 @@ pub fn install(e: &mut Engine) {
     e.ext_free::<jip_fn_ui::HudCursor>();
     e.ext_free::<jip_fn_ui::ItemListRefresh>();
     jip_fn_ui::install(e);
+    jip_fn_misc_ref_lines::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
@@ -812,6 +821,10 @@ mod tests {
             "jip_fn_ccc",
             "jip_fn_misc_ref",
             "jip_fn_misc_ref",
+            "jip_fn_misc_ref",
+            "jip_fn_ui",
+            "jip_fn_miscellaneous",
+            "jip_fn_actor",
             "jip_fn_misc_ref",
             // game_patches::gp::COMMANDS (its commands are in this file).
             "jip_fn_miscellaneous",
