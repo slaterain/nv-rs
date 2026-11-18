@@ -1,7 +1,7 @@
 //! Tests on archives the tests make themselves, in a scratch folder removed afterwards.
 
 use super::*;
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 
 /// A scratch folder, removed when the test ends however it ends.
 struct Scratch(PathBuf);
@@ -138,7 +138,7 @@ fn wanted_files_are_unpacked_to_their_places() {
             ),
             ("Gun Pack/missing.esp".to_owned(), "missing.esp".to_owned()),
         ];
-        let done = extract(archive, &wanted, &to).unwrap();
+        let done = extract(archive, &wanted, &to, Limits::default()).unwrap();
         assert_eq!(done.missing, ["Gun Pack/missing.esp"]);
         assert_eq!(done.written.len(), 4, "{:?}", done.written);
         assert_eq!(
@@ -189,7 +189,7 @@ fn a_destination_outside_the_folder_writes_nothing() {
             ),
             ("Gun Pack/Main/GunPack.esp".to_owned(), bad.to_owned()),
         ];
-        let error = extract(archive, &wanted, &to).unwrap_err();
+        let error = extract(archive, &wanted, &to, Limits::default()).unwrap_err();
         assert_eq!(error.problem, Problem::Outside, "{bad}");
         assert!(!to.join("fine.esp").exists(), "{bad}");
     }
@@ -218,6 +218,7 @@ fn what_cannot_be_read_says_what_to_do() {
                     &cut,
                     &[("Gun Pack/Textures/a.dds".into(), "a.dds".into())],
                     &dir.0.join("cut-out"),
+                    Limits::default(),
                 )
             })
             .unwrap_err();
@@ -231,4 +232,199 @@ fn what_cannot_be_read_says_what_to_do() {
     }
     let gone = dir.0.join("no such file.7z");
     assert_eq!(list(&gone).unwrap_err().problem, Problem::Io);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Hostile archives
+
+/// A link inside the archive is never unpacked: it is not listed, and asking for it finds nothing.
+#[test]
+fn links_in_an_archive_are_never_unpacked() {
+    let dir = Scratch::new("links");
+    let archive = dir.0.join("links.zip");
+    let mut writer = zip::ZipWriter::new(File::create(&archive).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    writer
+        .add_symlink("Mod/escape.dds", "../../../outside.dds", options)
+        .unwrap();
+    writer.start_file("Mod/real.dds", options).unwrap();
+    writer.write_all(b"real").unwrap();
+    writer.finish().unwrap();
+    let names: Vec<String> = list(&archive)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.path)
+        .collect();
+    assert_eq!(names, ["Mod/real.dds"]);
+    let to = dir.0.join("out");
+    let done = extract(
+        &archive,
+        &[
+            ("Mod/escape.dds".into(), "escape.dds".into()),
+            ("Mod/real.dds".into(), "real.dds".into()),
+        ],
+        &to,
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(done.missing, ["Mod/escape.dds"]);
+    assert!(!to.join("escape.dds").exists());
+    assert_eq!(std::fs::read(to.join("real.dds")).unwrap(), b"real");
+    assert_eq!(read(&archive, "Mod/escape.dds").unwrap(), None);
+}
+
+/// Two entries whose names differ only in case (or by a dot at the end): the first is taken.
+#[test]
+fn of_names_differing_in_case_the_first_is_taken() {
+    let dir = Scratch::new("case");
+    let zip_path = dir.0.join("case.zip");
+    let sevenz_path = dir.0.join("case.7z");
+    let files: &[(&str, &[u8])] = &[("Mod/A.dds", b"first"), ("mod/a.DDS.", b"second")];
+    make_zip(&zip_path, files, zip::CompressionMethod::Deflated);
+    make_7z(&sevenz_path, files);
+    for archive in [zip_path, sevenz_path] {
+        let to = dir.0.join(format!(
+            "out-{}",
+            archive.extension().unwrap().to_string_lossy()
+        ));
+        let done = extract(
+            &archive,
+            &[("MOD/a.dds".into(), "a.dds".into())],
+            &to,
+            Limits::default(),
+        )
+        .unwrap();
+        assert_eq!(done.written.len(), 1);
+        assert_eq!(std::fs::read(to.join("a.dds")).unwrap(), b"first");
+        assert_eq!(read(&archive, "mod/A.DDS").unwrap().unwrap(), b"first");
+    }
+}
+
+/// Destinations no system holds safely are refused on every system, before anything is written.
+#[test]
+fn odd_destinations_are_refused_everywhere() {
+    let dir = Scratch::new("odd");
+    let archive = &archives(&dir.0)[0];
+    let to = dir.0.join("out");
+    for bad in [
+        "CON",
+        "sub/nul.txt",
+        "Com1.dds",
+        "LPT9",
+        "a/.../b",
+        "x/ ..",
+        "a:b",
+    ] {
+        let error = extract(
+            archive,
+            &[("Gun Pack/Main/GunPack.esp".into(), bad.into())],
+            &to,
+            Limits::default(),
+        )
+        .unwrap_err();
+        assert_eq!(error.problem, Problem::Outside, "{bad}");
+    }
+    assert!(!to.exists());
+}
+
+/// Sizes beyond the limits are refused before anything is written.
+#[test]
+fn what_is_too_big_is_refused_first() {
+    let dir = Scratch::new("big");
+    for archive in archives(&dir.0) {
+        let to = dir.0.join("out");
+        let wanted = vec![
+            (
+                "Gun Pack/Main/Meshes/gun.nif".to_owned(),
+                "a.nif".to_owned(),
+            ),
+            (
+                "Gun Pack/Main/Meshes/gun.nif".to_owned(),
+                "b.nif".to_owned(),
+            ),
+        ];
+        // gun.nif is 30 bytes.
+        let file_limit = Limits {
+            file: 29,
+            total: 1000,
+        };
+        let total_limit = Limits {
+            file: 1000,
+            total: 59,
+        };
+        for limits in [file_limit, total_limit] {
+            let error = extract(&archive, &wanted, &to, limits).unwrap_err();
+            assert_eq!(error.problem, Problem::TooBig, "{limits:?}");
+            assert!(!to.exists());
+        }
+        let fits = Limits {
+            file: 30,
+            total: 60,
+        };
+        assert_eq!(
+            extract(&archive, &wanted, &to, fits).unwrap().written.len(),
+            2
+        );
+        std::fs::remove_dir_all(&to).unwrap();
+    }
+}
+
+/// A link already in the folder is never written through: the unpacking stops, and nothing
+/// lands where it points.
+#[test]
+fn a_link_in_the_folder_is_not_followed() {
+    let dir = Scratch::new("follow");
+    let archive = &archives(&dir.0)[2];
+    let to = dir.0.join("out");
+    let elsewhere = dir.0.join("elsewhere");
+    std::fs::create_dir_all(&to).unwrap();
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let link = to.join("textures");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+    #[cfg(windows)]
+    {
+        // A junction: made without rights a player lacks.
+        let made = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&elsewhere)
+            .output()
+            .unwrap();
+        assert!(made.status.success(), "{made:?}");
+    }
+    let error = extract(
+        archive,
+        &[("Gun Pack/Textures/a.dds".into(), "Textures/a.dds".into())],
+        &to,
+        Limits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.problem, Problem::Outside, "{error}");
+    assert!(error.detail.contains("is a link"), "{error}");
+    assert!(!elsewhere.join("a.dds").exists());
+    #[cfg(windows)]
+    std::fs::remove_dir(&link).unwrap();
+}
+
+/// A link where a file is to go (made by something else) is not written through either.
+#[cfg(unix)]
+#[test]
+fn a_link_at_the_file_is_not_followed() {
+    let dir = Scratch::new("follow-file");
+    let archive = &archives(&dir.0)[0];
+    let to = dir.0.join("out");
+    std::fs::create_dir_all(&to).unwrap();
+    let outside = dir.0.join("outside.esp");
+    std::fs::write(&outside, b"keep").unwrap();
+    std::os::unix::fs::symlink(&outside, to.join("GunPack.esp")).unwrap();
+    let error = extract(
+        archive,
+        &[("Gun Pack/Main/GunPack.esp".into(), "GunPack.esp".into())],
+        &to,
+        Limits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.problem, Problem::Outside, "{error}");
+    assert_eq!(std::fs::read(&outside).unwrap(), b"keep");
 }
