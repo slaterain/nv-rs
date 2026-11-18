@@ -11,6 +11,10 @@ fomod = { path = "../fomod" }
 mod-archive = { path = "../mod-archive" }
 mod-install = { path = "../mod-install" }
 
+# Linux and macOS: the room on the drive (statvfs). Already in the lock and its notices.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 # The tests make their own archives.
 zip = { version = "9.7", default-features = false, features = ["deflate-flate2-zlib-rs"] }

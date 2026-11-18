@@ -42,6 +42,9 @@ pub enum Op<'a> {
     /// A copy of `from` as the new name `to` (its time of change kept: the game orders plugins by
     /// it).
     Copy { from: &'a Path, to: &'a Path },
+    /// A file or folder moved to the new name `to` (the name moved, never followed): both names'
+    /// folders inside the root and outside every forbidden folder, and nothing at all at `to`.
+    Rename { from: &'a Path, to: &'a Path },
     /// A file written whole: under `temporary` (made new), synced, renamed over `to`.
     WriteWhole {
         to: &'a Path,
@@ -314,6 +317,21 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
             }
             Ok(())
         }
+        Op::Rename { from, to } => {
+            guard.allows(from).map_err(refused)?;
+            guard.allows(to).map_err(refused)?;
+            std::fs::symlink_metadata(from)?;
+            // A folder renamed onto an empty folder replaces it on Linux and macOS: nothing may be
+            // at the new name, not even a link leading nowhere.
+            match std::fs::symlink_metadata(to) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+                Ok(_) => {
+                    return Err(refused(format!("{} is there already", to.display())));
+                }
+            }
+            std::fs::rename(from, to)
+        }
         Op::WriteWhole {
             to,
             temporary,
@@ -341,8 +359,9 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
 }
 
 /// Removes an installed mod's whole folder: `folder` must be directly inside `installs` and a
-/// plain folder, and `installs` a plain folder too (a link at either is refused).
-pub fn remove_mod_folder(installs: &Path, folder: &Path) -> std::io::Result<()> {
+/// plain folder, and `installs` a plain folder too (a link at either is refused); then through
+/// [`act`], with a guard on the folder that forbids the game's folder `game`.
+pub fn remove_mod_folder(installs: &Path, folder: &Path, game: &Path) -> std::io::Result<()> {
     for place in [installs, folder] {
         let meta = std::fs::symlink_metadata(place)?;
         if meta.file_type().is_symlink() || !meta.is_dir() {
@@ -359,5 +378,6 @@ pub fn remove_mod_folder(installs: &Path, folder: &Path) -> std::io::Result<()> 
             installs.display()
         )));
     }
-    std::fs::remove_dir_all(folder)
+    let guard = Guard::new(folder, &[game.to_path_buf()], &[]).map_err(refused)?;
+    act(&guard, Op::RemoveTree(folder))
 }

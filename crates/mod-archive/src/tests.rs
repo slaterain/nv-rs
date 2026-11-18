@@ -821,3 +821,89 @@ fn a_7z_pairs_entries_by_index() {
     assert_eq!(std::fs::read(to.join("a.dds")).unwrap(), b"");
     assert_eq!(std::fs::read(to.join("b.dds")).unwrap(), b"bbb");
 }
+
+/// Progress: reported after every file (one archive file going to two places counts twice), with
+/// the totals known from the start and every megabyte inside a large file; the size shown before
+/// unpacking ([`wanted_size`]) is what is written.
+#[test]
+fn progress_is_reported_as_it_goes() {
+    let dir = Scratch::new("progress");
+    let big = vec![7u8; (3 << 20) + 5];
+    let files: &[(&str, &[u8])] = &[("Data/a.esp", b"plugin"), ("Data/big.bsa", &big)];
+    let zip = dir.0.join("p.zip");
+    let sevenz = dir.0.join("p.7z");
+    make_zip(&zip, files, zip::CompressionMethod::Deflated);
+    make_7z(&sevenz, files);
+    let wanted = vec![
+        ("data/A.esp".to_owned(), "a.esp".to_owned()),
+        ("Data/big.bsa".to_owned(), "big.bsa".to_owned()),
+        ("Data/a.esp".to_owned(), "copy/a.esp".to_owned()),
+        ("Data/none.esp".to_owned(), "none.esp".to_owned()),
+    ];
+    for (i, archive) in [zip, sevenz].iter().enumerate() {
+        let (files_wanted, bytes_wanted) = wanted_size(&list(archive).unwrap(), &wanted);
+        assert_eq!(files_wanted, 3);
+        assert_eq!(bytes_wanted, 6 + 6 + big.len() as u64);
+        let mut seen = Vec::new();
+        let to = dir.0.join(format!("out{i}"));
+        extract_with(archive, &wanted, &to, Limits::default(), &mut |p| {
+            seen.push(p)
+        })
+        .unwrap();
+        let last = *seen.last().unwrap();
+        assert_eq!(
+            last,
+            Progress {
+                files: 3,
+                files_total: 3,
+                bytes: bytes_wanted,
+                bytes_total: bytes_wanted
+            }
+        );
+        assert!(seen
+            .iter()
+            .all(|p| p.files_total == 3 && p.bytes_total == bytes_wanted));
+        // The plugin and its copy come first (the archive's order), then inside the large file
+        // at least one report per megabyte before it is done.
+        let inside = seen.iter().filter(|p| p.files == 2).count();
+        assert!(inside >= 3, "{seen:?}");
+        assert!(seen
+            .windows(2)
+            .all(|w| w[0].bytes <= w[1].bytes && w[0].files <= w[1].files));
+    }
+}
+
+/// A full drive is said as a full drive, never as a damaged archive, whichever side of the copy
+/// the system's "disk full" comes from.
+#[test]
+fn a_full_drive_is_not_a_damaged_archive() {
+    struct Full;
+    impl Read for Full {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::from(std::io::ErrorKind::StorageFull))
+        }
+    }
+    let dir = Scratch::new("full");
+    let placer = Placer::new(&dir.0);
+    let e = write_whole(&placer, &dir.0.join("a.bsa"), &mut Full, 10, "a.bsa").unwrap_err();
+    assert_eq!(e.problem, Problem::NoRoom);
+    assert!(e.player_text().contains("not enough room on the drive"));
+    assert!(drive_full(&std::io::Error::from(
+        std::io::ErrorKind::QuotaExceeded
+    )));
+    // The systems' own codes: ENOSPC (28) on Linux and macOS, ERROR_DISK_FULL (112) on Windows.
+    #[cfg(unix)]
+    assert!(drive_full(&std::io::Error::from_raw_os_error(28)));
+    #[cfg(windows)]
+    assert!(drive_full(&std::io::Error::from_raw_os_error(112)));
+    assert_eq!(
+        io(
+            &dir.0,
+            std::io::Error::from_raw_os_error(if cfg!(windows) { 112 } else { 28 })
+        )
+        .problem,
+        Problem::NoRoom
+    );
+    // Nothing left behind, not even the temporary name.
+    assert_eq!(std::fs::read_dir(&dir.0).unwrap().count(), 0);
+}

@@ -105,6 +105,17 @@ pub enum Problem {
     /// A file list beyond any mod's: more entries than [`MAX_ENTRIES`], or a name longer or deeper
     /// than [`MAX_PATH_BYTES`], [`MAX_NAME_BYTES`] or [`MAX_PATH_PARTS`].
     NotAMod,
+    /// The drive filled up while writing (the system's "disk full" or "quota exceeded"): never
+    /// taken for a damaged archive.
+    NoRoom,
+}
+
+/// Whether a write failed because the drive (or the player's share of it) is full.
+pub fn drive_full(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+    )
 }
 
 #[derive(Debug)]
@@ -138,6 +149,7 @@ impl ArchiveError {
             Problem::Outside => "This mod tries to put a file outside its own folder, so nothing was installed. Please tell the mod's author.",
             Problem::TooBig => "This archive unpacks to more than nv-rs allows or than there is room for on the drive. Free some space and try again; if it still happens, the archive is damaged: download it again.",
             Problem::NotAMod => "This archive's list of files is not a mod's: far too many files, or names far too long or too deeply nested. Download it again; if it still happens, it is not a mod nv-rs can install.",
+            Problem::NoRoom => "There is not enough room on the drive for this mod. Free some space on the drive and try again.",
         };
         format!("{advice}\n\n({})", self.detail)
     }
@@ -236,7 +248,12 @@ impl Default for Limits {
 }
 
 fn io(path: &Path, e: std::io::Error) -> ArchiveError {
-    ArchiveError::new(Problem::Io, format!("{}: {e}", path.display()))
+    let problem = if drive_full(&e) {
+        Problem::NoRoom
+    } else {
+        Problem::Io
+    };
+    ArchiveError::new(problem, format!("{}: {e}", path.display()))
 }
 
 fn zip_error(e: zip::result::ZipError) -> ArchiveError {
@@ -759,8 +776,16 @@ fn write_whole(
         ));
     };
     let result = (|| {
-        let written = std::io::copy(&mut data.take(size.saturating_add(1)), &mut file)
-            .map_err(|e| ArchiveError::new(Problem::Damaged, format!("{what}: {e}")))?;
+        // A full drive is the drive's, never the archive's: told apart by the error's kind.
+        let written =
+            std::io::copy(&mut data.take(size.saturating_add(1)), &mut file).map_err(|e| {
+                let problem = if drive_full(&e) {
+                    Problem::NoRoom
+                } else {
+                    Problem::Damaged
+                };
+                ArchiveError::new(problem, format!("{what}: {e}"))
+            })?;
         file.flush().map_err(|e| io(&temporary, e))?;
         if written > size {
             return Err(ArchiveError::new(
@@ -788,19 +813,102 @@ fn write_whole(
     })
 }
 
+/// How far an [`extract_with`] has got: files written of all the files it writes, and bytes
+/// written of all their bytes (one archive file going to two places counts twice).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub files: usize,
+    pub files_total: usize,
+    pub bytes: u64,
+    pub bytes_total: u64,
+}
+
+/// Bytes between two progress reports inside one file, so a large file reports as it goes.
+const PROGRESS_STEP: u64 = 1 << 20;
+
+/// Counts what is written and hands [`Progress`] to the caller's closure: after every file, and
+/// every [`PROGRESS_STEP`] bytes inside one.
+struct Tracker<'p> {
+    now: Progress,
+    reported: u64,
+    report: &'p mut dyn FnMut(Progress),
+}
+
+impl Tracker<'_> {
+    fn bytes(&mut self, n: u64) {
+        self.now.bytes = self.now.bytes.saturating_add(n);
+        if self.now.bytes - self.reported >= PROGRESS_STEP {
+            self.reported = self.now.bytes;
+            (self.report)(self.now);
+        }
+    }
+
+    fn file_done(&mut self) {
+        self.now.files += 1;
+        self.reported = self.now.bytes;
+        (self.report)(self.now);
+    }
+}
+
+/// A reader that counts what passes through it into a [`Tracker`].
+struct Counted<'a, 'p> {
+    inner: &'a mut dyn Read,
+    tracker: &'a mut Tracker<'p>,
+}
+
+impl Read for Counted<'_, '_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.tracker.bytes(n as u64);
+        Ok(n)
+    }
+}
+
+/// The files [`extract`] would write for `wanted` from an archive listed as `entries`, and their
+/// bytes as the archive gives them (one archive file going to two places counts twice; a wanted
+/// file the archive does not hold counts for nothing): what a front end shows before unpacking.
+pub fn wanted_size(entries: &[Entry], wanted: &[(String, String)]) -> (usize, u64) {
+    let mut sizes: BTreeMap<String, u64> = BTreeMap::new();
+    for entry in entries {
+        sizes.entry(key(&entry.path)).or_insert(entry.size);
+    }
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    for (source, _) in wanted {
+        if let Some(&size) = sizes.get(&key(source)) {
+            files += 1;
+            bytes = bytes.saturating_add(size);
+        }
+    }
+    (files, bytes)
+}
+
+/// [`extract_with`] without progress reports.
+pub fn extract(
+    path: &Path,
+    wanted: &[(String, String)],
+    folder: &Path,
+    limits: Limits,
+) -> Result<Extracted, ArchiveError> {
+    extract_with(path, wanted, folder, limits, &mut |_| {})
+}
+
 /// Unpacks from the archive at `path` each wanted file: (path in the archive, `\` or `/`, any
-/// case; path under `folder`, relative). One archive file may go to several places.
+/// case; path under `folder`, relative). One archive file may go to several places. `progress`
+/// is called after each file written and every megabyte inside a large one (the front end decides
+/// how often to show it; this crate shows nothing).
 ///
 /// Before anything is written: every destination is checked ([`stays_inside`]), the wanted files'
 /// sizes as the archive gives them against `limits`, and for a 7z the bytes to decode to reach
 /// them. While writing: see the module's text. Of two entries whose names differ only in case,
 /// the first is taken. On a failure, the error's [`ArchiveError::written`] lists the complete
 /// files already written. Unpack into a fresh folder and delete it on a failure.
-pub fn extract(
+pub fn extract_with(
     path: &Path,
     wanted: &[(String, String)],
     folder: &Path,
     limits: Limits,
+    progress: &mut dyn FnMut(Progress),
 ) -> Result<Extracted, ArchiveError> {
     if wanted.len() > MAX_ENTRIES {
         return Err(ArchiveError::new(
@@ -869,28 +977,50 @@ pub fn extract(
     std::fs::create_dir_all(folder).map_err(|e| io(folder, e))?;
     let mut done = Extracted::default();
     let mut placer = Placer::new(folder);
+    let mut tracker = Tracker {
+        now: Progress {
+            files_total: chosen.keys().map(|k| by_source[k].len()).sum(),
+            bytes_total: total,
+            ..Progress::default()
+        },
+        reported: 0,
+        report: progress,
+    };
     // Writes one archive file to its destinations; the first written, the rest copied from it.
-    let mut write =
-        |index: usize, data: &mut dyn Read, done: &mut Extracted| -> Result<(), ArchiveError> {
-            let source_key = &by_index[&index];
-            let (name, size, _) = &entries[index];
-            let destinations = &by_source[source_key];
-            let first = placer.place(destinations[0])?;
-            write_whole(&placer, &first, data, *size, name)?;
-            done.written.push(first.clone());
-            for destination in &destinations[1..] {
-                let other = placer.place(destination)?;
-                let mut copy = File::open(&first).map_err(|e| io(&first, e))?;
-                write_whole(&placer, &other, &mut copy, *size, name)?;
-                done.written.push(other);
-            }
-            Ok(())
+    let mut write = |index: usize,
+                     data: &mut dyn Read,
+                     done: &mut Extracted,
+                     tracker: &mut Tracker|
+     -> Result<(), ArchiveError> {
+        let source_key = &by_index[&index];
+        let (name, size, _) = &entries[index];
+        let destinations = &by_source[source_key];
+        let first = placer.place(destinations[0])?;
+        let mut counted = Counted {
+            inner: data,
+            tracker: &mut *tracker,
         };
+        write_whole(&placer, &first, &mut counted, *size, name)?;
+        tracker.file_done();
+        done.written.push(first.clone());
+        for destination in &destinations[1..] {
+            let other = placer.place(destination)?;
+            let mut copy = File::open(&first).map_err(|e| io(&first, e))?;
+            let mut counted = Counted {
+                inner: &mut copy,
+                tracker: &mut *tracker,
+            };
+            write_whole(&placer, &other, &mut counted, *size, name)?;
+            tracker.file_done();
+            done.written.push(other);
+        }
+        Ok(())
+    };
     let outcome: Result<(), ArchiveError> = if let Some(zip) = zip.as_mut() {
         (|| {
             for &index in by_index.keys() {
                 let mut file = zip.by_index(index).map_err(zip_error)?;
-                write(index, &mut file, &mut done)?;
+                write(index, &mut file, &mut done, &mut tracker)?;
             }
             Ok(())
         })()
@@ -913,7 +1043,7 @@ pub fn extract(
                     sevenz_rust2::EntryDecision::Continue
                 });
             }
-            if let Err(e) = write(index, data, &mut done) {
+            if let Err(e) = write(index, data, &mut done, &mut tracker) {
                 failure = Some(e);
                 return Ok(sevenz_rust2::EntryDecision::Stop);
             }

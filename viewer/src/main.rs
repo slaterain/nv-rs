@@ -101,26 +101,35 @@ fn build_mods(raw: &[OsString]) {
 
 /// `--install-mods GAME INSTALLS MODS`: the mod installer's text front end (`mod_chooser`): the
 /// mods waiting in MODS installed into INSTALLS, or removed from it; the game folder GAME only
-/// read. Started by Play.exe's `--install-mods` (Install mods.cmd) and play.sh's.
+/// read. Started by Play.exe's `--install-mods` (Install mods.cmd, in a console window of its own)
+/// and play.sh's. Every way it ends, on every system, says "Press Enter to close." and waits for
+/// it (`mod_chooser::run_in_window`), so that window never closes before it is read.
 fn install_mods(raw: &[OsString]) {
     let [game, installs, loose] = [1, 2, 3].map(|i| raw.get(i).map(PathBuf::from));
-    let (Some(game), Some(installs), Some(loose)) = (game, installs, loose) else {
-        eprintln!("error: --install-mods needs the game's folder, the mod installs folder and the mods folder");
-        host::end_process(2);
-    };
-    let (major, minor, beta) = nvse::VERSION;
-    let places = mod_chooser::Places {
-        game,
-        installs,
-        loose,
-        extenders: vec![("nvse".to_owned(), format!("{major}.{minor}.{beta}"))],
+    let places = match (game, installs, loose) {
+        (Some(game), Some(installs), Some(loose)) => {
+            let (major, minor, beta) = nvse::VERSION;
+            Ok(mod_chooser::Places {
+                game,
+                installs,
+                loose,
+                extenders: vec![("nvse".to_owned(), format!("{major}.{minor}.{beta}"))],
+                play_with_mods: if cfg!(windows) {
+                    "choose \"Play with mods\"".to_owned()
+                } else {
+                    "start nv-rs with ./play.sh --mods".to_owned()
+                },
+                room: mod_chooser::room_on_drive,
+            })
+        }
+        _ => Err("The mod installer was started without the folders it needs (the game's folder, the mod installs folder and the mods folder). Start it with \"Install mods\" (Windows) or ./play.sh --install-mods (Linux and macOS).".to_owned()),
     };
     let stdin = std::io::stdin();
     let mut input = stdin.lock();
     let mut out = std::io::stdout();
-    if let Err(e) = mod_chooser::run(&mut input, &mut out, &places) {
-        eprintln!("error: {e}");
-        host::end_process(1);
+    let code = mod_chooser::run_in_window(&mut input, &mut out, places);
+    if code != 0 {
+        host::end_process(code);
     }
 }
 
