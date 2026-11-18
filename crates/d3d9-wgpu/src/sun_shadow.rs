@@ -1390,13 +1390,15 @@ pub(crate) struct Cutout {
 }
 
 impl Draw {
-    /// Whether a buffer of the game's it draws from was written since, or let go by the game (only
-    /// this draw holds it). The device's own list of a geometry without its cables (`index` when
+    /// Whether a buffer of the game's it draws from was written since, or let go by the game (released,
+    /// [`crate::device::Buf::released`], however many places hold it; or only this draw holds it). The device's own list of a geometry without its cables (`index` when
     /// [`Draw::rest`]) is no buffer of the game's: this draw may well hold it alone (the device's
     /// bodies forgotten, review of #693); the game's index buffer is `watch` then.
     pub fn stale(&self) -> bool {
         let gone = |b: &std::sync::Arc<crate::device::Buf>, n: u64| {
-            std::sync::Arc::strong_count(b) == 1 || b.uploads.load(Ordering::Relaxed) != n
+            std::sync::Arc::strong_count(b) == 1
+                || b.released.load(Ordering::Relaxed)
+                || b.uploads.load(Ordering::Relaxed) != n
         };
         self.streams.iter().flatten().any(|(b, _, n)| gone(b, *n))
             || (!self.rest && self.index.as_ref().is_some_and(|(b, n)| gone(b, *n)))

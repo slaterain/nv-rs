@@ -753,6 +753,11 @@ struct Extra {
     rewrite_cable: bool,
     /// The pipe of [`CABLES`] drawn after `cable` (another buffer of the same layout and count).
     pipe_after: bool,
+    /// A buffer the game releases at the frame's start (`Cmd::Destroy`), before anything is drawn.
+    destroy: Option<u32>,
+    /// Other buffers (and their triangle counts) drawn far off (at x -3000, y 3000): new
+    /// geometries whose shadows fall nowhere the tests look.
+    also: [Option<(u32, u32)>; 2],
 }
 
 /// What the index buffer of [`TUBES`] names.
@@ -1380,6 +1385,9 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
     let mut tubes_written = Some(MixedIndexed::TwoWiresAPipe);
     for (f, e) in frames.iter().enumerate() {
         set_shaders(b, VS, LIT_PS, DECL);
+        if let Some(object) = e.destroy {
+            run(b, Cmd::Destroy { object });
+        }
         if words {
             for (state, m) in [
                 (sun_shadow::VIEW_STATE, view),
@@ -1402,6 +1410,11 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
         draw(b, GROUND, 2);
         if e.still_box {
             draw(b, BOX, 10);
+        }
+        for (buffer, triangles) in e.also.iter().flatten() {
+            set_mvp(b, model_view_proj_at(-3000.0, 3000.0));
+            draw(b, *buffer, *triangles);
+            set_mvp(b, model_view_proj());
         }
         if let Some((x, y)) = e.moving_box {
             set_mvp(b, model_view_proj_at(x, y));
@@ -2670,4 +2683,76 @@ fn two_buffers_alike_are_two_geometries() {
         return;
     };
     assert_eq!(at(&on, pixel([-100.0, 300.0, 0.0]))[2], AMBIENT_RED);
+}
+
+/// Bodies of geometries the game released are dropped to make room (review of #693, round 3): with
+/// room for 4 bodies, the ground and a cable the game writes every frame (live) and a box the game
+/// then releases, a fourth and a fifth geometry coming find room by the released box's body going,
+/// so nothing is forgotten wholesale and the cable, written three times and more, still casts
+/// whole (its count of bodies kept: forgotten, it would be split again and cast soft).
+#[test]
+fn a_released_geometrys_body_makes_room_and_nothing_is_forgotten() {
+    let cable = Extra {
+        cable: Some(1),
+        rewrite_cable: true,
+        ..Extra::default()
+    };
+    let with = |also: [Option<(u32, u32)>; 2], destroy: Option<u32>| Extra {
+        also,
+        destroy,
+        ..cable
+    };
+    let a = Some((MOVING_BOX, 10));
+    let frames = [
+        with([a, None], None),
+        with([a, None], None),
+        with([a, None], None),
+        // The box released; a new geometry: the fourth body.
+        with([Some((BOX, 10)), None], Some(MOVING_BOX)),
+        // Another new one: no room but the released box's.
+        with([Some((BOX, 10)), Some((AFTER, 2))], None),
+        with([Some((BOX, 10)), Some((AFTER, 2))], None),
+        with([Some((BOX, 10)), Some((AFTER, 2))], None),
+    ];
+    let Some(off) = lit_sequence_picture(1, false, &frames) else {
+        return;
+    };
+    let (on, forgotten) = limited_sequence(1, &frames, 4).expect("the adapter");
+    assert_eq!(forgotten, 0, "the released box's body made room");
+    for f in 4..frames.len() {
+        let hard = most_taken(&off[f], &on[f], -100.0, 300.0);
+        eprintln!("frame {f}: the cable written every frame takes {hard}");
+        assert!(hard > 0.9, "frame {f}: the cable casts whole ({hard})");
+    }
+}
+
+/// A geometry kept at two places that the game releases while it is not drawn is let go at both
+/// at once (review of #693, round 3: "only this draw holds it" never held for two): the frame
+/// after is the one without the shadows, not the boxes' shadows kept through their grace.
+#[test]
+fn a_released_geometry_at_two_places_goes_at_both() {
+    let two = Extra {
+        moving_box: Some((0.0, 150.0)),
+        other_box: Some((150.0, 400.0)),
+        ..Extra::default()
+    };
+    let released = Extra {
+        destroy: Some(MOVING_BOX),
+        ..Extra::default()
+    };
+    let frames = [two, two, two, released, Extra::default(), Extra::default()];
+    let Some(off) = lit_sequence_picture(1, false, &frames) else {
+        return;
+    };
+    let on = lit_sequence_picture(1, true, &frames).expect("the adapter");
+    let dark = |px: &[[u8; 4]], p: [f64; 3]| {
+        f32::from(at(px, pixel(p))[2]) < 0.7 * f32::from(at(px, pixel([50.0, 150.0, 0.0]))[2])
+    };
+    assert!(
+        dark(&on[2], [-55.0, 140.0, 0.0]) && dark(&on[2], [95.0, 390.0, 0.0]),
+        "both boxes cast while drawn"
+    );
+    for f in [4, 5] {
+        assert!(on[f] == off[f], "frame {f}: both places let go");
+    }
 }
