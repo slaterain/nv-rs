@@ -13131,7 +13131,7 @@ mod tests {
                     PACKAGE_TYPE,
                     |e, a| ret(e.mem.i8(a[0] + 0x20) as i32 as u32),
                 );
-                e.register(ACTOR_BYTE_70, move |_, _| ret(failed));
+                e.register_double(ACTOR_BYTE_70, move |_, _| ret(failed));
                 let target = thing(&mut e);
                 e.mem.set_u32(p.addr() + 0x40, target);
                 e.mem.set_u32(p.addr() + 0x64, 0);
