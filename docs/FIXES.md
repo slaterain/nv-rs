@@ -1249,7 +1249,7 @@ update's state test is JIP's (the same answer) and only the co-save flag acts. G
 unhittable as god mode does (mode 1 keeps him at 1 health through JIP's PlayerMinHealth hook); with
 JIP installed and no mode set, the god mode test reads the setting's byte itself (the exe answers 1
 for any non-zero byte). The hit effects JIP also turns off in mode 2 are the hit effect patches'
-(G123 to G125, not built yet).
+(G123 to G125, built).
 
 G38 and H09, JIP's "update 3D" on the player and on queued references. The player's first-person
 model is copied from the model loader's cached load (`0094e1d0` at `0x94E4A1`; the eye height is no
