@@ -4,7 +4,8 @@
 //! `hkWindowsSystemClock` counts ticks with the processor's time-stamp counter and finds its
 //! rate by comparing it with the performance counter of the operating system. The
 //! functions call `QueryPerformanceCounter` and `QueryPerformanceFrequency` through their import
-//! slots; the time-stamp counter is read with the host's own `RDTSC`.
+//! slots; the time-stamp counter is read with the host's own `RDTSC` on x86-64 and is the host's
+//! monotonic clock in nanoseconds elsewhere.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -32,11 +33,29 @@ fn read_time_stamp_counter() -> u64 {
     unsafe { core::arch::x86_64::_rdtsc() }
 }
 
-/// The processor's time-stamp counter (`RDTSC`): only an x86-64 host has it.
+/// The processor's time-stamp counter (`RDTSC`): only an x86-64 host has it. Elsewhere (Apple
+/// silicon, ARM Linux) the host's monotonic clock in nanoseconds stands in: a counter that only
+/// goes up at a fixed rate of 1,000,000,000 per second, the size of a PC's time-stamp rate (a few
+/// GHz). Havok finds the rate itself (`getTicksPerSecond` below measures the counter against
+/// `QueryPerformanceCounter`), so nothing else needs to know it.
 #[cfg(not(target_arch = "x86_64"))]
 fn read_time_stamp_counter() -> u64 {
-    panic!("hkWindowsSystemClock::getTickCounter (00dd8e06) reads RDTSC, which this host lacks")
+    monotonic_nanoseconds()
 }
+
+/// Nanoseconds since the first read in this process, from the host's monotonic clock, plus
+/// [`MONOTONIC_BASE`] so that no read answers 0 (an unread counter). Built on every host so its
+/// test runs on Windows too; only non-x86-64 hosts call it.
+#[cfg_attr(target_arch = "x86_64", allow(dead_code))]
+fn monotonic_nanoseconds() -> u64 {
+    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let elapsed = START.get_or_init(std::time::Instant::now).elapsed();
+    MONOTONIC_BASE.wrapping_add(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
+}
+
+/// Where the stand-in counter starts: one second's worth of ticks.
+#[cfg_attr(target_arch = "x86_64", allow(dead_code))]
+const MONOTONIC_BASE: u64 = 1_000_000_000;
 
 // Translated from 00dd8e00 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `hkWindowsSystemClock::getTickCounter` (Xbox PDB), virtual (slot `0xc`), no stack words
@@ -129,7 +148,8 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    #[cfg(target_arch = "x86_64")]
+    /// On x86-64 the processor's time-stamp counter; elsewhere the monotonic stand-in. Either way
+    /// a non-zero count that never goes back (no panic off x86-64 any more).
     #[test]
     fn the_tick_counter_is_the_time_stamp_counter() {
         let mut e = Engine::new();
@@ -137,6 +157,25 @@ mod tests {
         let second = e.call(0x00dd_8e00, &args![0u32]).u64();
         assert!(first > 0);
         assert!(second >= first);
+    }
+
+    /// The stand-in off x86-64: starts above zero, never goes back, and runs at 1 GHz (a 20 ms
+    /// sleep reads as at least 20,000,000 ticks and, allowing a slow machine, under 2 seconds'
+    /// worth).
+    #[test]
+    fn the_stand_in_counter_rises_at_a_nanosecond_a_tick() {
+        let first = monotonic_nanoseconds();
+        assert!(first >= MONOTONIC_BASE);
+        let mut last = first;
+        for _ in 0..1000 {
+            let now = monotonic_nanoseconds();
+            assert!(now >= last);
+            last = now;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let after = monotonic_nanoseconds();
+        assert!(after - first >= 20_000_000, "{}", after - first);
+        assert!(after - first < 2_000_000_000, "{}", after - first);
     }
 
     type Calls = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;

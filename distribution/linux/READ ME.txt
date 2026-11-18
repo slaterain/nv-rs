@@ -56,10 +56,8 @@ What this build can do today
 ----------------------------
 The program goes on to start the game, drawing with Vulkan, with the same play settings as the
 Windows preview. It is built and unit-tested on Linux, but it has never been started with the
-game's files there, so expect stops nobody has seen yet. Known to be missing on Linux today:
-- Sounds whose rate differs from your sound device's are not heard at first (most of the game's
-  sounds, until the game first changes a sound's pitch): the converter Windows uses for them is
-  being made for Linux.
+game's files there, so expect stops nobody has seen yet: you may be the first to start it. Known to
+be missing on Linux today:
 - Warnings that pop up in a window on Windows (a save that could not be copied) are only in the
   log.
 - A mod with its own loose shader files (HLSL) stops the game where it needs them compiled.

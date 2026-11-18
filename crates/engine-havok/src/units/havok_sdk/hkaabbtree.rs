@@ -422,7 +422,7 @@ pub(crate) fn rcp_estimate(x: f32) -> f32 {
 
 #[cfg(not(target_arch = "x86_64"))]
 pub(crate) fn rcp_estimate(x: f32) -> f32 {
-    1.0 / x
+    engine_core::estimate::rcp(x)
 }
 
 // Translated from 00d9c210 (decompiled, FalloutNV.exe 1.4.0.525)

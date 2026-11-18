@@ -528,8 +528,9 @@ const FIRST_STARTS: &str = "nv-rs on this system: built and unit-tested here, bu
 /// mouse and keyboard (winit, X11 and Wayland) are provided, so the start goes on (built and unit
 /// tested there; not yet started with the game's files). Not provided there and not refused: the
 /// D3DX shader compiler, which only shaders missing from the game's shader packages reach (a run
-/// that reaches it stops there, naming it). On macOS the window still needs the program's main
-/// thread; on a processor other than x86-64 (Apple silicon) the refusal also names what differs.
+/// that reaches it stops there, naming it). macOS on x86-64 (an Intel Mac) goes on too: its window
+/// runs on the main thread (`run_on_main_thread`); on a processor other than x86-64 (Apple
+/// silicon) the refusal names what differs.
 #[cfg(any(not(windows), test))]
 fn not_provided_here() -> Result<(), String> {
     not_provided_on(cfg!(target_arch = "x86_64"), cfg!(target_vendor = "apple"))
@@ -562,13 +563,10 @@ fn stop_off_windows(
 /// system.
 #[cfg(any(not(windows), test))]
 fn not_provided_on(x86_64: bool, apple: bool) -> Result<(), String> {
+    // macOS's window is provided too: the viewer hands winit the main thread there
+    // (`run_on_main_thread`). What still differs on Apple silicon is the processor's.
+    let _ = apple;
     let mut missing = Vec::new();
-    if apple {
-        missing.push(
-            "the game's window with its mouse and keyboard (and so anything drawn: on macOS the \
-             window needs the program's main thread)",
-        );
-    }
     if !x86_64 {
         missing.push(
             "on this processor the game's x87 maths (not yet exact off x86-64) and the \
@@ -758,6 +756,14 @@ pub fn run_exit_hooks() {
 /// process never ended, 2026-11-11).
 pub fn end_process(code: i32) -> ! {
     engine_platform::end_process(code)
+}
+
+/// macOS: runs `game` (the whole program after its arguments) on a thread of its own and the
+/// game's window layer on the calling thread, the program's main thread, where winit's loop must
+/// run there (`engine_platform::d3d9real::run_on_main_thread`). Never returns.
+#[cfg(not(windows))]
+pub fn run_on_main_thread(game: Box<dyn FnOnce() + Send>) -> ! {
+    engine_platform::d3d9real::run_on_main_thread(game)
 }
 
 /// Where the wgpu backend keeps the driver's compiled pipelines between runs (`d3d9-wgpu`'s
@@ -1077,8 +1083,11 @@ mod tests {
     /// x86-64 none is left, and the start goes on.
     #[test]
     fn a_start_off_windows_is_refused_naming_what_is_missing() {
+        // x86-64 (Linux, and macOS on an Intel Mac, whose window runs on the main thread): the
+        // start goes on.
         assert_eq!(super::not_provided_on(true, false), Ok(()));
-        for (x86_64, apple) in [(true, true), (false, true), (false, false)] {
+        assert_eq!(super::not_provided_on(true, true), Ok(()));
+        for (x86_64, apple) in [(false, true), (false, false)] {
             let why = super::not_provided_on(x86_64, apple).unwrap_err();
             // This machine's tables are made from what the system reports (the display, the
             // card, the sound device, the folders: engine-platform machine_table.rs, dsound.rs),
@@ -1086,10 +1095,11 @@ mod tests {
             for gone in ["tables", "sound devices", "adapter", "folders", "code page"] {
                 assert!(!why.contains(gone), "{gone}: {why}");
             }
-            // The window with its mouse and keyboard: provided on Linux, not yet on macOS.
-            assert_eq!(why.contains("window"), apple, "{why}");
-            assert_eq!(why.contains("mouse and keyboard"), apple, "{why}");
-            assert_eq!(why.contains("main thread"), apple, "{why}");
+            // The window with its mouse and keyboard is provided everywhere now (macOS: on the
+            // main thread).
+            for gone in ["window", "mouse and keyboard", "main thread"] {
+                assert!(!why.contains(gone), "{gone}: {why}");
+            }
             // The game's paths, file listings, the speakers and the distortion are provided.
             for gone in ["folder names", "file times", "speakers", "distortion"] {
                 assert!(!why.contains(gone), "{gone}: {why}");
@@ -1203,7 +1213,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         match stop {
             Err(err) => assert_eq!(super::error_status(&err), super::NOT_PROVIDED_STATUS),
-            Ok(()) => assert!(cfg!(target_arch = "x86_64") && !cfg!(target_vendor = "apple")),
+            Ok(()) => assert!(cfg!(target_arch = "x86_64")),
         }
         assert_eq!(super::NOT_PROVIDED_STATUS, 69);
         assert_eq!(super::error_status("FalloutNV.exe: not found"), 1);
@@ -1213,7 +1223,7 @@ mod tests {
     /// any other error 1.
     #[test]
     fn every_refusal_has_the_expected_stops_status() {
-        for (x86_64, apple) in [(true, true), (false, true), (false, false)] {
+        for (x86_64, apple) in [(false, true), (false, false)] {
             let why = super::not_provided_on(x86_64, apple).unwrap_err();
             assert_eq!(
                 super::error_status(&why),
