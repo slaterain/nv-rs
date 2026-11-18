@@ -357,7 +357,7 @@ fn the_install_sets_the_bits_and_lists_tweaks() {
 #[test]
 fn the_start_lines_name_what_was_read() {
     let keys = rows::Keys::default();
-    let (settings, on) = settings_and_rows(None, &keys);
+    let (settings, on) = settings_and_rows(None, &[], &keys);
     assert_eq!(
         start_lines(false, &settings, &keys, on.len()),
         [
@@ -365,7 +365,7 @@ fn the_start_lines_name_what_was_read() {
             "lStewieAl's Tweaks: 1 of its 1 rows built are on",
         ]
     );
-    let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &keys);
+    let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
     assert_eq!(
         start_lines(true, &settings, &keys, on.len())[0],
         "lStewieAl's Tweaks: read Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: 0 of its 1 keys changed a value"
@@ -390,4 +390,367 @@ fn the_install_reads_the_players_ini() {
         (state.settings.read[0].keys, state.settings.read[0].changed),
         (1, 1)
     );
+}
+
+fn listed(name: &str, is_folder: bool) -> engine_core::mod_files::Listed {
+    engine_core::mod_files::Listed {
+        name: name.as_bytes().to_vec(),
+        is_folder,
+    }
+}
+
+/// The overlay folder: its `.ini` files (any case, a file named just `.ini` too, as Windows' `*.ini`
+/// gives it) in the listing's order; folders and other files left out.
+#[test]
+fn the_overlay_files_are_the_folders_ini_files_in_order() {
+    let names = overlay_names(&[
+        listed("b.ini", false),
+        listed("A.INI", false),
+        listed("sub.ini", true),
+        listed("notes.txt", false),
+        listed(".ini", false),
+        listed("old.ini_bak", false),
+        listed("c.Ini", false),
+    ]);
+    assert_eq!(
+        names,
+        [
+            b"b.ini".to_vec(),
+            b"A.INI".to_vec(),
+            b".ini".to_vec(),
+            b"c.Ini".to_vec()
+        ]
+    );
+}
+
+/// `[INI] bMultiINISupport` of the main file decides whether the folder is read (default 1, VNV's 1).
+#[test]
+fn the_main_file_can_turn_the_overlays_off() {
+    assert!(multi_ini(None, false));
+    assert!(multi_ini(None, true));
+    assert!(multi_ini(Some(b"[INI]\nbMultiINISupport=1\n"), false));
+    assert!(!multi_ini(Some(b"[INI]\nbMultiINISupport=0\n"), false));
+    assert!(!multi_ini(Some(b"[ini]\nbmultiinisupport = 0\n"), true));
+}
+
+/// The overlays go over the main file in their order, key by key; a key they lack keeps the value
+/// under it; each is named in the log with the keys it changed.
+#[test]
+fn the_overlays_go_over_the_main_file_in_order() {
+    let overlays = vec![
+        (
+            r"Data\NVSE\Plugins\Tweaks\INIs\a.ini".to_string(),
+            b"[Tweaks]\nbBetterAutoWalk=0\nbConsoleNumpadSupport=0\n".to_vec(),
+        ),
+        (
+            r"Data\NVSE\Plugins\Tweaks\INIs\b.ini".to_string(),
+            b"[Tweaks]\nbConsoleNumpadSupport=1\n".to_vec(),
+        ),
+    ];
+    let keys = rows::Keys::default();
+    let main = b"[Tweaks]\nbBetterAutoWalk=1\nbDescriptiveMarkerAddedMessage=0\n";
+    let (settings, _) = settings_and_rows(Some(main), &overlays, &keys);
+    assert_eq!(
+        settings.long("Tweaks", "bBetterAutoWalk", -1),
+        0,
+        "a.ini over the main file"
+    );
+    assert_eq!(
+        settings.long("Tweaks", "bConsoleNumpadSupport", -1),
+        1,
+        "b.ini over a.ini"
+    );
+    assert_eq!(
+        settings.long("Tweaks", "bDescriptiveMarkerAddedMessage", -1),
+        0,
+        "the main file's"
+    );
+    assert_eq!(
+        settings.log_lines(),
+        [
+            r"lStewieAl's Tweaks: read Data\NVSE\Plugins\nvse_stewie_tweaks.ini: 1 of its 2 keys changed a value",
+            r"lStewieAl's Tweaks: read Data\NVSE\Plugins\Tweaks\INIs\a.ini: 2 of its 2 keys changed a value",
+            r"lStewieAl's Tweaks: read Data\NVSE\Plugins\Tweaks\INIs\b.ini: 1 of its 1 keys changed a value",
+        ]
+    );
+}
+
+fn overlay(text: &str) -> (String, Vec<u8>) {
+    (
+        r"Data\NVSE\Plugins\Tweaks\INIs\m.ini".to_string(),
+        text.as_bytes().to_vec(),
+    )
+}
+
+/// Keys Tweaks reads from the main INI only (inside `if (isDefaultINI)`) keep the main file's value
+/// whatever an overlay says, and a `GET_TWEAKH` key is ORed across the files: an overlay turns it on,
+/// never off. Other keys: the last file wins.
+#[test]
+fn overlays_follow_tweaks_rules_for_main_only_and_ored_keys() {
+    let keys = rows::Keys::default();
+    // Main-only: [INI] bFixCreatureDoubledDR, [Hotkeys] iClearConsoleKey, [Tweaks]
+    // bGodmodeAllowsFastTravelEnemiesNearby.
+    let main = b"[INI]\nbFixCreatureDoubledDR=1\n[Hotkeys]\niClearConsoleKey=29\n\
+        [Tweaks]\nbGodmodeAllowsFastTravelEnemiesNearby=1\n";
+    let o = overlay(
+        "[INI]\nbFixCreatureDoubledDR=0\n[Hotkeys]\niClearConsoleKey=0\n\
+         [Tweaks]\nbGodmodeAllowsFastTravelEnemiesNearby=0\n",
+    );
+    let (settings, _) = settings_and_rows(Some(main), std::slice::from_ref(&o), &keys);
+    assert_eq!(settings.long("INI", "bFixCreatureDoubledDR", -1), 1);
+    assert_eq!(settings.long("Hotkeys", "iClearConsoleKey", -1), 29);
+    assert_eq!(
+        settings.long("Tweaks", "bGodmodeAllowsFastTravelEnemiesNearby", -1),
+        1
+    );
+    assert_eq!(
+        settings.raw("INI", "bFixCreatureDoubledDR"),
+        Some(b"1".to_vec())
+    );
+    // The overlay's main-only keys count as not read.
+    assert_eq!((settings.read[1].keys, settings.read[1].changed), (0, 0));
+    // Without a main INI an overlay's main-only key is ignored too: the default stands.
+    let five = overlay("[Hotkeys]\niClearConsoleKey=5\n");
+    let (settings, _) = settings_and_rows(None, std::slice::from_ref(&five), &keys);
+    assert_eq!(settings.long("Hotkeys", "iClearConsoleKey", -1), 0);
+
+    // ORed (GET_TWEAKH): bInlineVanillaFunctions, bNoRecurringChallenges.
+    let main = b"[Tweaks]\nbInlineVanillaFunctions=1\nbNoRecurringChallenges=0\n";
+    let overlays = [
+        overlay("[Tweaks]\nbInlineVanillaFunctions=0\nbNoRecurringChallenges=1\n"),
+        overlay("[Tweaks]\nbNoRecurringChallenges=0\n"),
+    ];
+    let (settings, _) = settings_and_rows(Some(main), &overlays, &keys);
+    assert_eq!(
+        settings.long("Tweaks", "bInlineVanillaFunctions", -1),
+        1,
+        "main 1, overlay 0: stays 1"
+    );
+    assert_eq!(
+        settings.long("Tweaks", "bNoRecurringChallenges", -1),
+        1,
+        "an overlay turns it on, a later 0 does not turn it off"
+    );
+    // A main file without the key: the default under it, then the overlays ORed in.
+    let (settings, _) = settings_and_rows(Some(b"[Tweaks]\n"), &overlays[1..], &keys);
+    assert_eq!(settings.long("Tweaks", "bNoRecurringChallenges", -1), 0);
+    let (settings, _) = settings_and_rows(Some(b"[Tweaks]\n"), &overlays[..1], &keys);
+    assert_eq!(settings.long("Tweaks", "bNoRecurringChallenges", -1), 1);
+    // An ordinary key: the last file wins (an overlay turns it off).
+    let (settings, _) = settings_and_rows(
+        Some(b"[Tweaks]\nbBetterAutoWalk=1\n"),
+        &[overlay("[Tweaks]\nbBetterAutoWalk=0\n")],
+        &keys,
+    );
+    assert_eq!(settings.long("Tweaks", "bBetterAutoWalk", -1), 0);
+}
+
+/// Every key the rules name is in the table (28 main-only keys, 69 ORed).
+#[test]
+fn the_key_rules_name_keys_of_the_table() {
+    let table: std::collections::HashSet<(Vec<u8>, Vec<u8>)> = table()
+        .iter()
+        .map(|s| {
+            (
+                s.section.as_bytes().to_ascii_lowercase(),
+                s.key.as_bytes().to_ascii_lowercase(),
+            )
+        })
+        .collect();
+    let rules = crate::settings::rules();
+    assert_eq!(rules.len(), 28 + 69);
+    let main_only = rules
+        .values()
+        .filter(|r| **r == crate::settings::Rule::MainOnly)
+        .count();
+    assert_eq!(main_only, 28);
+    for k in rules.keys() {
+        assert!(table.contains(k), "{k:?}");
+    }
+}
+
+// ---- The install's overlay path, through a stand-in of the mods' files seam ----
+
+type ModFiles = (Vec<(Vec<u8>, Vec<u8>)>, Vec<engine_core::mod_files::Listed>);
+
+thread_local! {
+    /// This test thread's mod files (path, bytes) and the overlay folder's listing; `None`: the
+    /// seam answers as without a platform (the other tests run as before).
+    static MOD_FILES: std::cell::RefCell<Option<ModFiles>> = const { std::cell::RefCell::new(None) };
+    /// The folders the seam was asked to list.
+    static LISTED: std::cell::RefCell<Vec<Vec<u8>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn seam_read(_: &Engine, name: &[u8]) -> Result<Vec<u8>, u32> {
+    use engine_core::mod_files::{ERROR_FILE_NOT_FOUND, ERROR_NOT_SUPPORTED};
+    MOD_FILES.with(|m| match &*m.borrow() {
+        None => Err(ERROR_NOT_SUPPORTED),
+        Some((files, _)) => files
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, b)| b.clone())
+            .ok_or(ERROR_FILE_NOT_FOUND),
+    })
+}
+
+fn seam_exists(e: &Engine, name: &[u8]) -> bool {
+    seam_read(e, name).is_ok()
+}
+
+fn seam_no_folder(_: &Engine, _: &[u8]) -> bool {
+    false
+}
+
+fn seam_no_create(_: &mut Engine, _: &[u8]) -> Result<(), u32> {
+    Err(engine_core::mod_files::ERROR_NOT_SUPPORTED)
+}
+
+fn seam_no_write(_: &mut Engine, _: &[u8], _: &[u8]) -> Result<(), u32> {
+    Err(engine_core::mod_files::ERROR_NOT_SUPPORTED)
+}
+
+fn seam_read_head(e: &Engine, name: &[u8], max: usize) -> Result<Vec<u8>, u32> {
+    seam_read(e, name).map(|mut b| {
+        b.truncate(max);
+        b
+    })
+}
+
+fn seam_list(_: &Engine, folder: &[u8]) -> Vec<engine_core::mod_files::Listed> {
+    MOD_FILES.with(|m| match &*m.borrow() {
+        None => Vec::new(),
+        Some((_, listing)) => {
+            LISTED.with(|l| l.borrow_mut().push(folder.to_vec()));
+            if folder.eq_ignore_ascii_case(b"Data\\NVSE\\Plugins\\Tweaks\\INIs\\") {
+                listing.clone()
+            } else {
+                Vec::new()
+            }
+        }
+    })
+}
+
+fn seam_name_key(name: &[u8]) -> Vec<u16> {
+    name.iter()
+        .map(|b| u16::from(b.to_ascii_uppercase()))
+        .collect()
+}
+
+static SEAM: engine_core::mod_files::ModFileCalls = engine_core::mod_files::ModFileCalls {
+    read: seam_read,
+    exists: seam_exists,
+    directory_exists: seam_no_folder,
+    create_directory: seam_no_create,
+    write: seam_no_write,
+    append: seam_no_write,
+    read_head: seam_read_head,
+    list: seam_list,
+    name_key: seam_name_key,
+};
+
+/// Installs the stand-in seam (once for the test program) with these files for this thread.
+fn mod_files(files: &[(&str, &str)], listing: &[(&str, bool)]) {
+    engine_core::mod_files::install(&SEAM);
+    let files = files
+        .iter()
+        .map(|(n, b)| (n.as_bytes().to_vec(), b.as_bytes().to_vec()))
+        .collect();
+    let listing = listing.iter().map(|(n, f)| listed(n, *f)).collect();
+    MOD_FILES.with(|m| *m.borrow_mut() = Some((files, listing)));
+    LISTED.with(|l| l.borrow_mut().clear());
+}
+
+const MAIN_INI: &str = r"Data\NVSE\Plugins\nvse_stewie_tweaks.ini";
+
+/// `install` itself: the main INI and then the folder's overlay files, in the listing's order (a
+/// folder and a file that is not `.ini` left out), each named in the log by its path in the folder;
+/// `[INI] bMultiINISupport=0` in the main INI leaves the folder unread.
+#[test]
+fn the_install_reads_the_overlay_folder_in_order() {
+    let mut files = [
+        (
+            MAIN_INI,
+            "[Tweaks]\nbBetterAutoWalk=1\nbConsoleNumpadSupport=1\nbDescriptiveMarkerAddedMessage=1\n",
+        ),
+        (
+            r"Data\NVSE\Plugins\Tweaks\INIs\b.ini",
+            "[Tweaks]\nbBetterAutoWalk=0\nbConsoleNumpadSupport=0\n",
+        ),
+        (
+            r"Data\NVSE\Plugins\Tweaks\INIs\A.INI",
+            "[Tweaks]\nbConsoleNumpadSupport=1\n",
+        ),
+        (
+            r"Data\NVSE\Plugins\Tweaks\INIs\c.ini",
+            "[Tweaks]\nbDescriptiveMarkerAddedMessage=0\n",
+        ),
+        (
+            r"Data\NVSE\Plugins\Tweaks\INIs\notes.txt",
+            "[Tweaks]\nbBetterAutoWalk=1\n",
+        ),
+    ];
+    let listing = [
+        ("b.ini", false),
+        ("sub.ini", true),
+        ("A.INI", false),
+        ("notes.txt", false),
+        ("c.ini", false),
+    ];
+    mod_files(&files, &listing);
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    let state = e.ext::<Stewie>();
+    let read: Vec<&str> = state
+        .settings
+        .read
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(
+        read,
+        [
+            MAIN_INI,
+            r"Data\NVSE\Plugins\Tweaks\INIs\b.ini",
+            r"Data\NVSE\Plugins\Tweaks\INIs\A.INI",
+            r"Data\NVSE\Plugins\Tweaks\INIs\c.ini",
+        ]
+    );
+    // b.ini over the main file, A.INI over b.ini, c.ini last.
+    assert_eq!(state.settings.long("Tweaks", "bBetterAutoWalk", -1), 0);
+    assert_eq!(
+        state.settings.long("Tweaks", "bConsoleNumpadSupport", -1),
+        1
+    );
+    assert_eq!(
+        state
+            .settings
+            .long("Tweaks", "bDescriptiveMarkerAddedMessage", -1),
+        0
+    );
+    assert_eq!(
+        state.log[..4],
+        [
+            r"lStewieAl's Tweaks: read Data\NVSE\Plugins\nvse_stewie_tweaks.ini: 0 of its 3 keys changed a value",
+            r"lStewieAl's Tweaks: read Data\NVSE\Plugins\Tweaks\INIs\b.ini: 2 of its 2 keys changed a value",
+            r"lStewieAl's Tweaks: read Data\NVSE\Plugins\Tweaks\INIs\A.INI: 1 of its 1 keys changed a value",
+            r"lStewieAl's Tweaks: read Data\NVSE\Plugins\Tweaks\INIs\c.ini: 1 of its 1 keys changed a value",
+        ]
+    );
+    assert_eq!(
+        LISTED.with(|l| l.borrow().clone()),
+        [b"Data\\NVSE\\Plugins\\Tweaks\\INIs\\".to_vec()]
+    );
+
+    // The main file turns the folder off: only the main file is read and the folder is not listed.
+    files[0].1 = "[INI]\nbMultiINISupport=0\n[Tweaks]\nbBetterAutoWalk=1\n";
+    mod_files(&files, &listing);
+    let mut e = engine(None);
+    set_on(&mut e, true);
+    install(&mut e);
+    let state = e.ext::<Stewie>();
+    assert_eq!(state.settings.read.len(), 1);
+    assert_eq!(state.settings.long("Tweaks", "bBetterAutoWalk", -1), 1);
+    assert!(LISTED.with(|l| l.borrow().is_empty()));
+    MOD_FILES.with(|m| *m.borrow_mut() = None);
 }

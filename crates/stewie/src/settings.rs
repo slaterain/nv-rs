@@ -19,6 +19,38 @@ use std::collections::HashMap;
 /// The table: section, key, Tweaks' code default, VNV's value.
 pub const TABLE: &str = include_str!("../data/settings.tsv");
 
+/// How Tweaks reads a key from more than one file (`data/key_rules.tsv`): rule (`main` or `or`),
+/// section, key.
+pub const KEY_RULES: &str = include_str!("../data/key_rules.tsv");
+
+/// How a key is read across the main INI and the overlay files (`Tweaks\INIs\*.ini`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rule {
+    /// Read from the main INI only (inside `if (isDefaultINI)`): overlay files' values are ignored.
+    MainOnly,
+    /// `GET_TWEAKH`: each file's value is ORed in, so an overlay can turn it on, never off.
+    Or,
+}
+
+/// The rule of every key [`KEY_RULES`] names, by lowercase section and key; every other key: the
+/// last file that has it wins.
+pub fn rules() -> HashMap<(Vec<u8>, Vec<u8>), Rule> {
+    KEY_RULES
+        .lines()
+        .filter(|l| !l.starts_with('#') && !l.is_empty())
+        .map(|line| {
+            let f: Vec<&str> = line.split('\t').collect();
+            assert_eq!(f.len(), 3, "key_rules.tsv: {line}");
+            let rule = match f[0] {
+                "main" => Rule::MainOnly,
+                "or" => Rule::Or,
+                other => panic!("key_rules.tsv: rule {other}"),
+            };
+            (key(f[1], f[2]), rule)
+        })
+        .collect()
+}
+
 /// Tweaks' `MISSING_INI_VAL` (`SettingUtils.cpp`): the default `ModifyTweakIfPresent` passes to
 /// `GetLongValue`, so a value that reads as it counts as missing.
 pub const MISSING: i32 = -19997;
@@ -84,8 +116,11 @@ pub struct FileRead {
 pub struct Settings {
     /// The defaults: VNV's values, or with the switch the code's, by lowercase section and key.
     base: HashMap<Key, &'static str>,
-    /// The files' values, the first file first (a later one wins).
-    files: Vec<HashMap<Key, Vec<u8>>>,
+    /// The files' values, the first file first (a later one wins), each with whether it is the
+    /// main INI (an overlay's main-only keys are left out).
+    files: Vec<(bool, HashMap<Key, Vec<u8>>)>,
+    /// The keys whose [`Rule`] is not "the last file wins".
+    rules: HashMap<Key, Rule>,
     /// What each file did.
     pub read: Vec<FileRead>,
 }
@@ -94,6 +129,13 @@ impl Settings {
     /// The defaults with the `files` (name and bytes, in the order they overlay) over them;
     /// `as_tweaks`: a key the files lack takes the code's default, as with Tweaks.
     pub fn new(files: &[(&str, &[u8])], as_tweaks: bool) -> Settings {
+        Settings::with_main(files, true, as_tweaks)
+    }
+
+    /// As [`Settings::new`]; `main`: the first file is the main INI (`nvse_stewie_tweaks.ini`) and
+    /// the others are overlay files (`Tweaks\INIs\*.ini`), each key read by its [`Rule`]. Without a
+    /// main INI (`main` false) every file is an overlay over the defaults.
+    pub fn with_main(files: &[(&str, &[u8])], main: bool, as_tweaks: bool) -> Settings {
         let table = table();
         let base: HashMap<Key, &'static str> = table
             .iter()
@@ -105,10 +147,15 @@ impl Settings {
         let mut settings = Settings {
             base,
             files: Vec::new(),
+            rules: rules(),
             read: Vec::new(),
         };
-        for (name, bytes) in files {
-            let values = ini::values(bytes);
+        for (i, (name, bytes)) in files.iter().enumerate() {
+            let is_main = main && i == 0;
+            let mut values = ini::values(bytes);
+            if !is_main {
+                values.retain(|k, _| settings.rules.get(k) != Some(&Rule::MainOnly));
+            }
             let mut keys = 0;
             let mut changed = 0;
             for s in &table {
@@ -121,7 +168,7 @@ impl Settings {
                     changed += 1;
                 }
             }
-            settings.files.push(values);
+            settings.files.push((is_main, values));
             settings.read.push(FileRead {
                 name: name.to_string(),
                 keys,
@@ -138,7 +185,7 @@ impl Settings {
         self.files
             .iter()
             .rev()
-            .find_map(|f| f.get(&k).cloned())
+            .find_map(|(_, f)| f.get(&k).cloned())
             .or_else(|| self.base.get(&k).map(|v| v.as_bytes().to_vec()))
     }
 
@@ -146,13 +193,38 @@ impl Settings {
     /// number (and not as [`MISSING`]), else the default's, else `default`.
     pub fn long(&self, section: &str, name: &str, default: i32) -> i32 {
         let k = key(section, name);
-        for f in self.files.iter().rev() {
+        if self.rules.get(&k) == Some(&Rule::Or) {
+            return self.long_ored(&k, default);
+        }
+        for (_, f) in self.files.iter().rev() {
             match ini::long_value(f.get(&k).map(Vec::as_slice), MISSING) {
                 MISSING => continue,
                 n => return n,
             }
         }
-        match ini::long_value(self.base.get(&k).map(|v| v.as_bytes()), MISSING) {
+        self.base_long(&k, default)
+    }
+
+    /// A `GET_TWEAKH` key: the main INI's value (read as `GetLongValue(.., 0)`, so one that is no
+    /// number counts 0) when it has the key, else the default's; then each overlay file's value
+    /// ORed in.
+    fn long_ored(&self, k: &Key, default: i32) -> i32 {
+        let (main, overlays) = match self.files.split_first() {
+            Some(((true, f), rest)) => (f.get(k), rest),
+            _ => (None, self.files.as_slice()),
+        };
+        let first = match main {
+            Some(v) => ini::long_value(Some(v), 0),
+            None => self.base_long(k, default),
+        };
+        overlays.iter().fold(first, |value, (_, f)| {
+            value | ini::long_value(f.get(k).map(Vec::as_slice), 0)
+        })
+    }
+
+    /// The default under every file: the table's value, else `default`.
+    fn base_long(&self, k: &Key, default: i32) -> i32 {
+        match ini::long_value(self.base.get(k).map(|v| v.as_bytes()), MISSING) {
             MISSING => default,
             n => n,
         }
