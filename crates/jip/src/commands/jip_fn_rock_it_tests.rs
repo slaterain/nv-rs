@@ -67,7 +67,10 @@ fn the_launcher_has_no_ammo() {
         "no ammo: the weapon's own"
     );
     e.mem.set_u32(AMMO + AMMO_PROJECTILE, 0);
-    assert_eq!(e.call(WEAPON_PROJECTILE.addr(), &[RIFLE, 0]).eax, 0x0bad_0118);
+    assert_eq!(
+        e.call(WEAPON_PROJECTILE.addr(), &[RIFLE, 0]).eax,
+        0x0bad_0118
+    );
     e.mem.set_u32(AMMO + AMMO_PROJECTILE, 0x0bad_00b4);
     e.mem.set_u8(AMMO + 4, 0x55);
     assert_eq!(
