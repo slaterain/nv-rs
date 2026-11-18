@@ -2491,6 +2491,9 @@ fn the_hdr_watch_names_an_infinite_pixel_of_a_resolved_scene() {
         return;
     };
     assert_eq!((seen.not_finite, seen.dots), (1, 0), "{seen:?}");
+    // The infinite pixel never leaks into the brightest: the brightest finite value is the
+    // scene's 0.1.
+    assert!(seen.brightest > 0.05 && seen.brightest < 0.2, "{seen:?}");
 }
 
 /// The HDR watch reads a small float target the game draws into and leaves (the luminance and
