@@ -3265,9 +3265,10 @@ fn extra_world(e: &mut Engine, chain: u32, bitmap: u32, cache_state: u32, asked:
         _ => {}
     }
     let cache = e.tls();
-    // Every entry holds a decoy extra data the walk never finds.
+    // Every entry holds a decoy extra data the walk never finds, and so does the word after the last
+    // entry (type 0x93), which the lookup must not read.
     let decoy = block(e, 0x18, &[0x0101_0000, 0xee, 0, 0xdec1, 0, 0xdec2]);
-    for i in 0..0x93 {
+    for i in 0..0x94 {
         e.mem.set_u32(cache + 0x10 + 4 * i, decoy);
     }
     let entry = cache + 0x10 + 4 * u32::from(asked);
@@ -3329,14 +3330,10 @@ fn extra_get_extra_data() {
     .assert_same();
 }
 
-/// The four getters over the lookup, each with its type and the word it reads; `plain`: its
-/// translation calls the lookup as a Rust function, not by address (none of the four now).
-fn extra_getter(address: u32, function: AbiFn, asked: u8, plain: bool) {
-    let plainly: &[u32] = if plain { &[0x0041_0220] } else { &[] };
-    Diff::new((address, function))
-        .common(address)
-        // The lookup, which some getters' translations call as a Rust function.
-        .translation_calls_plainly(plainly)
+/// The four getters over the lookup: each the typed getter against its translation, which calls the
+/// lookup by address too, with the type it asks for.
+fn extra_getter(d: Diff, address: u32, asked: u8) {
+    d.common(address)
         // The cache's memset wrapper, a C runtime family member: translated on both sides here (this
         // file stands in for that family's square root).
         .goes_by_address(&[0x0040_3d30])
@@ -3356,30 +3353,36 @@ fn extra_getter(address: u32, function: AbiFn, asked: u8, plain: bool) {
 
 #[test]
 fn extra_followers() {
-    let (a, f) = entry!(0x0042_2700, dispatch::extra::followers(Ptr<_>) -> Ptr<_>);
-    extra_getter(a, f, 0x1d, false);
+    let d = Diff::new(entry!(
+        0x0042_2700,
+        dispatch::extra::followers(Ptr<_>) -> Ptr<_>
+    ));
+    extra_getter(d, 0x0042_2700, 0x1d);
 }
 
 #[test]
 fn extra_head_track_target() {
-    let (a, f) = entry!(
+    let d = Diff::new(entry!(
         0x0041_9ea0,
         dispatch::extra::head_track_target(Ptr<_>) -> u32
-    );
-    extra_getter(a, f, 0x46, false);
+    ));
+    extra_getter(d, 0x0041_9ea0, 0x46);
 }
 
 #[test]
 fn extra_actor_package_data() {
-    let (a, f) = entry!(
+    let d = Diff::new(entry!(
         0x0042_12b0,
         dispatch::extra::actor_package_data(Ptr<_>) -> u32
-    );
-    extra_getter(a, f, 0x70, false);
+    ));
+    extra_getter(d, 0x0042_12b0, 0x70);
 }
 
 #[test]
 fn extra_package_target() {
-    let (a, f) = entry!(0x0041_cb70, dispatch::extra::package_target(Ptr<_>) -> u32);
-    extra_getter(a, f, 0x19, false);
+    let d = Diff::new(entry!(
+        0x0041_cb70,
+        dispatch::extra::package_target(Ptr<_>) -> u32
+    ));
+    extra_getter(d, 0x0041_cb70, 0x19);
 }

@@ -7,7 +7,7 @@
 //! times over every actor: in the load window of 2026-11-10 they were 151 and 82 ms of one cell load
 //! (a profiled run; measure/stewie-eo/TARGETS.md, row 2).
 //!
-//! lStewieAl's Engine Optimizations (its Tweaks' `Inlines`, `Process.cpp`) makes the same walks
+//! lStewieAl's Engine Optimizations (its Tweaks' `Inlines`, the process part) makes the same walks
 //! with the getters read in place. Here likewise: an object's extra data list (`005d43c0`: the object
 //! plus 0x44) and the word at +0x70 (`004fd380`) are read in place, the process array's tail and
 //! elements and the extra data getters (followers, head-track target, package data, package target,

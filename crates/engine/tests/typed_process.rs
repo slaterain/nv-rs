@@ -851,13 +851,15 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
             (0x1d, first, 0),
             (0x46, if pattern & 8 != 0 { target } else { 0 }, 0),
             (0x70, package_data, 0),
-            (0x19, 0, if pattern & 16 != 0 { target } else { decoy }),
+            (0x19, 0, if answers & 2 != 0 { target } else { decoy }),
         ],
     );
     let plain = forget_actor(e, target, decoy, (decoy, decoy, 1, 0));
     let skipped = forget_actor(e, target, decoy, (target, target, 0, 0));
     e.mem.set_u32(skipped + 8, 0x0020_0000);
     let other = forget_object(e, if pattern & 4 != 0 { target } else { 0 });
+    // The words around the one the clean-up clears in a non-actor (`009707f0`: +0xfc).
+    words(e, other + 0xf8, &[0x1111, 0x2222, 0x3333]);
     // The array's levels; the temp list holds the follower, the non-actor and the skipped one.
     let one_plain = [plain];
     let lead_level = [lead];
