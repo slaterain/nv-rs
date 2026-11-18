@@ -666,7 +666,8 @@ pub fn queued_reference(e: &mut Engine, queued: u32) {
             }
             // JIP's `doneFade`: a reference ToggleObjectCollision marked has its collision
             // turned off again in the new 3D.
-            if ref_flags(e, refr) & crate::commands::jip_fn_misc_ref_code::REF_FLAG_DISABLE_COLLISION
+            if ref_flags(e, refr)
+                & crate::commands::jip_fn_misc_ref_code::REF_FLAG_DISABLE_COLLISION
                 != 0
             {
                 crate::commands::jip_fn_misc_ref_code::toggle_collision(e, refr, false);

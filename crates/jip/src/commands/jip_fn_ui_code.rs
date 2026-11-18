@@ -438,10 +438,7 @@ fn inventory_filter(e: &mut Engine, w: &[u32]) -> Ret {
 /// `InitItemFilter` (once): the inventory, container, barter and recipe menus' lists filtered by
 /// SetItemFilter's text from now on (none yet).
 fn init_item_filter(e: &mut Engine, _: &[u32]) -> Ret {
-    let mut filter = ui_code(e)
-        .filter
-        .write()
-        .unwrap_or_else(|p| p.into_inner());
+    let mut filter = ui_code(e).filter.write().unwrap_or_else(|p| p.into_inner());
     if filter.is_none() {
         *filter = Some(Vec::new());
     }
@@ -469,10 +466,7 @@ fn set_item_filter(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let read = Read::of(e, &a);
     let text = if read.ok { read.text(0) } else { Vec::new() };
-    *ui_code(e)
-        .filter
-        .write()
-        .unwrap_or_else(|p| p.into_inner()) = Some(text);
+    *ui_code(e).filter.write().unwrap_or_else(|p| p.into_inner()) = Some(text);
     handled(true)
 }
 

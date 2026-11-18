@@ -167,7 +167,10 @@ fn the_improved_click() {
         TARGET.with(|t| t.set(0));
         assert_eq!(ask(&mut e, CLICK, &[MENU, id]), Some(0), "{id}");
         assert_eq!(calls_to(TILE_IS_TRUE), vec![vec![ACCEPT, 0xfaf]], "{id}");
-        assert!(calls_to(QUANTITY_MENU_CREATE).is_empty(), "{id}: not the target");
+        assert!(
+            calls_to(QUANTITY_MENU_CREATE).is_empty(),
+            "{id}: not the target"
+        );
         TARGET.with(|t| t.set(1));
         assert_eq!(ask(&mut e, CLICK, &[MENU, id]), Some(0), "{id}");
         assert_eq!(
@@ -227,8 +230,14 @@ fn the_improved_close_plays_the_sound_when_messages_are_off() {
     call(&mut e, 0x2836, &[n(0)]);
     CALLS.with(|c| c.borrow_mut().clear());
     ask(&mut e, CLOSE, &[FORM]);
-    assert_eq!(calls_to(PICK_UP_SOUND_NAME), vec![vec![PLAYER_AT, FORM, 1, 0]]);
-    assert!(calls_to(PLAY_SOUND_BY_EDITOR_NAME).is_empty(), "no sound name");
+    assert_eq!(
+        calls_to(PICK_UP_SOUND_NAME),
+        vec![vec![PLAYER_AT, FORM, 1, 0]]
+    );
+    assert!(
+        calls_to(PLAY_SOUND_BY_EDITOR_NAME).is_empty(),
+        "no sound name"
+    );
     SOUND.with(|t| t.set(SOUND_NAME));
     e.mem.set_u32(RECIPE_MENU, 0);
     CALLS.with(|c| c.borrow_mut().clear());
@@ -236,7 +245,10 @@ fn the_improved_close_plays_the_sound_when_messages_are_off() {
     let played = calls_to(PLAY_SOUND_BY_EDITOR_NAME);
     assert_eq!(played.len(), 1);
     let w = &played[0];
-    assert_eq!((w[0], w[2], w[3], w[4], w[5]), (PLAYER_AT, SOUND_NAME, 0, 0x121, 0));
+    assert_eq!(
+        (w[0], w[2], w[3], w[4], w[5]),
+        (PLAYER_AT, SOUND_NAME, 0, 0x121, 0)
+    );
     assert!(calls_to(FILL_LIST).is_empty(), "no menu: no refresh");
 }
 
@@ -339,7 +351,12 @@ fn named(e: &mut Engine, at: u32, kind: u8, name: &[u8]) {
 #[test]
 fn the_item_filter() {
     let mut e = wrap_world();
-    let (rifle, note, recipe, entry) = (FORMS + 0x6000, FORMS + 0x6400, FORMS + 0x6800, FORMS + 0x6c00);
+    let (rifle, note, recipe, entry) = (
+        FORMS + 0x6000,
+        FORMS + 0x6400,
+        FORMS + 0x6800,
+        FORMS + 0x6c00,
+    );
     named(&mut e, rifle, 0x28, b"Hunting Rifle");
     named(&mut e, note, 0x31, b"Holotape");
     named(&mut e, recipe, 0x6a, b"Rifle Rounds");
@@ -348,29 +365,62 @@ fn the_item_filter() {
     call(&mut e, 0x272d, &[s(b"zzz")]);
     assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 0, "not started");
     call(&mut e, 0x272c, &[]);
-    for slot in [INVENTORY_FILTER_FUNC, CONTAINER_FILTER_FUNC, BARTER_FILTER_FUNC] {
+    for slot in [
+        INVENTORY_FILTER_FUNC,
+        CONTAINER_FILTER_FUNC,
+        BARTER_FILTER_FUNC,
+    ] {
         assert_eq!(out(&mut e, slot, entry), 0, "no text yet");
     }
     call(&mut e, 0x272d, &[s(b"RIFLE")]);
-    for slot in [INVENTORY_FILTER_FUNC, CONTAINER_FILTER_FUNC, BARTER_FILTER_FUNC] {
-        assert_eq!(out(&mut e, slot, entry), 0, "{:x}: has the text", slot.addr());
+    for slot in [
+        INVENTORY_FILTER_FUNC,
+        CONTAINER_FILTER_FUNC,
+        BARTER_FILTER_FUNC,
+    ] {
+        assert_eq!(
+            out(&mut e, slot, entry),
+            0,
+            "{:x}: has the text",
+            slot.addr()
+        );
         assert_eq!(out(&mut e, slot, 0), 0, "no entry: kept");
     }
     assert_eq!(out(&mut e, RECIPE_FILTER_FUNC, recipe), 0);
     call(&mut e, 0x272d, &[s(b"tape")]);
-    for slot in [INVENTORY_FILTER_FUNC, CONTAINER_FILTER_FUNC, BARTER_FILTER_FUNC] {
+    for slot in [
+        INVENTORY_FILTER_FUNC,
+        CONTAINER_FILTER_FUNC,
+        BARTER_FILTER_FUNC,
+    ] {
         assert_eq!(out(&mut e, slot, entry), 1, "{:x}: lacks it", slot.addr());
     }
     assert_eq!(out(&mut e, RECIPE_FILTER_FUNC, recipe), 1);
     e.mem.set_u32(entry + 8, note);
-    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 0, "a note's name");
+    assert_eq!(
+        out(&mut e, INVENTORY_FILTER_FUNC, entry),
+        0,
+        "a note's name"
+    );
     OUT.with(|o| o.set(1));
     e.mem.set_u32(entry + 8, rifle);
-    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 1, "the exe's out stays out");
+    assert_eq!(
+        out(&mut e, INVENTORY_FILTER_FUNC, entry),
+        1,
+        "the exe's out stays out"
+    );
     OUT.with(|o| o.set(0));
     call(&mut e, 0x272d, &[]);
-    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 0, "no text: all kept");
+    assert_eq!(
+        out(&mut e, INVENTORY_FILTER_FUNC, entry),
+        0,
+        "no text: all kept"
+    );
     call(&mut e, 0x272c, &[]);
     call(&mut e, 0x272d, &[s(b"tape")]);
-    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 1, "a second Init keeps going");
+    assert_eq!(
+        out(&mut e, INVENTORY_FILTER_FUNC, entry),
+        1,
+        "a second Init keeps going"
+    );
 }

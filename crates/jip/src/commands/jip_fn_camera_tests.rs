@@ -36,13 +36,21 @@ fn zero_turns_off_and_any_other_value_turns_on() {
         (0x28d6, CAMERA_COLLISION, VANITY_WHEEL),
     ] {
         let mut e = engine();
-        assert_eq!(toggle_cmd(&mut e, opcode, &[n(0)]), 1.0, "{opcode:x}: was on");
+        assert_eq!(
+            toggle_cmd(&mut e, opcode, &[n(0)]),
+            1.0,
+            "{opcode:x}: was on"
+        );
         assert_eq!(answer(&mut e, seam), Some(1), "{opcode:x}: off");
         assert_eq!(answer(&mut e, other), Some(0), "{opcode:x}: the other left");
         assert_eq!(toggle_cmd(&mut e, opcode, &[]), 0.0, "{opcode:x}");
         assert_eq!(toggle_cmd(&mut e, opcode, &[n(0)]), 0.0, "{opcode:x}");
         assert_eq!(answer(&mut e, seam), Some(1), "{opcode:x}: still off");
-        assert_eq!(toggle_cmd(&mut e, opcode, &[n(5)]), 0.0, "{opcode:x}: was off");
+        assert_eq!(
+            toggle_cmd(&mut e, opcode, &[n(5)]),
+            0.0,
+            "{opcode:x}: was off"
+        );
         assert_eq!(answer(&mut e, seam), Some(0), "{opcode:x}: on again");
         assert_eq!(toggle_cmd(&mut e, opcode, &[n(1)]), 1.0, "{opcode:x}");
         assert_eq!(answer(&mut e, seam), Some(0), "{opcode:x}: stays on");

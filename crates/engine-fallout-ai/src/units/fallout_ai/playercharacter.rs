@@ -4459,8 +4459,7 @@ fn update_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, delta: f32, frame
                     e.vcall(process, 0x148, &args![]).u32() != 0
                 }
             };
-            if has_weapon && e.call(0x008a_16d0, &args![this]).bool()
-            {
+            if has_weapon && e.call(0x008a_16d0, &args![this]).bool() {
                 let first = e.call(0x0071_7a40, &args![1u32, 0u32]).i32();
                 let second = e.call(0x0071_7a40, &args![4u32, 0u32]).i32();
                 let third = e.call(0x0071_7a40, &args![3u32, 0u32]).i32();
@@ -8588,7 +8587,8 @@ fn apply_look_input(
     // skips the zoom block as if no zoom were read. Asked only while JIP is installed.
     let wheel_off = zoom != 0
         && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-        && e.site(0x0094_5a28, &[]).is_some_and(|answer| answer & 0xff != 0);
+        && e.site(0x0094_5a28, &[])
+            .is_some_and(|answer| answer & 0xff != 0);
     if zoom != 0 && !wheel_off && e.call(0x0096_7ae0, &args![this]).u8() == 0 {
         if e.mem.u8(FREE_CAMERA_FLAG) == 0 {
             result = 1;
@@ -10635,7 +10635,8 @@ fn camera_distance_in_frame(
         // leaves the camera's distance as if nothing were hit. Asked only while JIP is installed.
         let collision_off = hit_something
             && e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
-            && e.site(0x0094_a34e, &[]).is_some_and(|answer| answer & 0xff != 0);
+            && e.site(0x0094_a34e, &[])
+                .is_some_and(|answer| answer & 0xff != 0);
         if hit_something && !collision_off {
             e.call(0x0045_78c0, &args![pick_origin, pick_direction]);
             let hit = e.call(0x0045_7990, &args![pick_origin]).f64();
@@ -16722,7 +16723,9 @@ mod tests {
         let drawn_tests = |word: u32, answer: u32| {
             let mut e = engine();
             let this = update_world(&mut e);
-            e.register(0x00a2_4660, |_, a| int(u32::from(a[1] == 0x12 && a[2] == 1)));
+            e.register(0x00a2_4660, |_, a| {
+                int(u32::from(a[1] == 0x12 && a[2] == 1))
+            });
             e.set_jip_patches(word);
             match answer {
                 0 => e.on_site_for_test(0x0094_0998, |_, _| Some(0)),
@@ -16733,10 +16736,22 @@ mod tests {
             called(&e, 0x008a_16d0).len()
         };
         let exe = drawn_tests(0, 0);
-        assert_eq!(drawn_tests(jip_patches::FIXES, 0), exe, "not installed: not asked");
+        assert_eq!(
+            drawn_tests(jip_patches::FIXES, 0),
+            exe,
+            "not installed: not asked"
+        );
         assert_eq!(drawn_tests(jip_patches::INSTALLED, 1), exe, "skipped");
-        assert_eq!(drawn_tests(jip_patches::INSTALLED, 2), exe, "no answer: the exe's test");
-        assert_eq!(drawn_tests(jip_patches::INSTALLED, 0), exe + 1, "on without the test");
+        assert_eq!(
+            drawn_tests(jip_patches::INSTALLED, 2),
+            exe,
+            "no answer: the exe's test"
+        );
+        assert_eq!(
+            drawn_tests(jip_patches::INSTALLED, 0),
+            exe + 1,
+            "on without the test"
+        );
     }
 
     #[test]
@@ -18451,8 +18466,16 @@ mod tests {
                 .call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32])
                 .u8();
             let distance = if zooms { 50.0 } else { 100.0 };
-            assert_eq!(e.global::<f32>(ZOOM_DISTANCE), distance, "{word:x} {answer}");
-            assert_eq!(called(&e, 0x0096_7ae0).len(), usize::from(zooms), "{word:x}");
+            assert_eq!(
+                e.global::<f32>(ZOOM_DISTANCE),
+                distance,
+                "{word:x} {answer}"
+            );
+            assert_eq!(
+                called(&e, 0x0096_7ae0).len(),
+                usize::from(zooms),
+                "{word:x}"
+            );
             assert_eq!(result, u8::from(zooms), "{word:x} {answer}");
         }
     }

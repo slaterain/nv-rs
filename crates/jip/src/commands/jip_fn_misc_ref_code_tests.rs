@@ -66,10 +66,18 @@ fn no_z_pos_reset_flags_and_the_seams() {
     assert_eq!(e.mem.u8(REF + 0x5f), 0x11, "the flag, the others kept");
     assert_eq!(e.site(AREA_RESET.addr(), &[REF]), Some(1));
     assert_eq!(e.site(WARP_ACTOR.addr(), &[REF]), Some(1));
-    assert_eq!(e.site(AREA_RESET.addr(), &[0]), Some(0), "no collidable reference");
+    assert_eq!(
+        e.site(AREA_RESET.addr(), &[0]),
+        Some(0),
+        "no collidable reference"
+    );
     call_on(&mut e, 0x26db, REF, &[n(0)]);
     assert_eq!(e.mem.u8(REF + 0x5f), 0x01);
-    assert_eq!(e.site(AREA_RESET.addr(), &[REF]), Some(0), "the code stays written");
+    assert_eq!(
+        e.site(AREA_RESET.addr(), &[REF]),
+        Some(0),
+        "the code stays written"
+    );
     assert_eq!(e.site(WARP_ACTOR.addr(), &[REF]), Some(0));
 }
 

@@ -33,11 +33,14 @@ const DEFAULTS: [Option<&[u8]>; 8] = [
     Some(b"textures\\sky\\masser_three_wax.dds"),
 ];
 
+/// Eight names, a phase's `None` for none.
+type Names = Vec<Option<Vec<u8>>>;
+
 /// JIP's `s_moonTexturesOverride` (the names the command gave) and `s_moonTexturesSet` (the
 /// names the moon being built takes; `Some` only while the command rebuilds it).
 #[derive(Default)]
 pub struct MoonTextures {
-    state: Mutex<(Vec<Option<Vec<u8>>>, Option<Vec<Option<Vec<u8>>>>)>,
+    state: Mutex<(Names, Option<Names>)>,
 }
 
 fn textures(e: &mut Engine) -> &MoonTextures {
@@ -151,10 +154,7 @@ fn set_moon_texture(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let path = super::buffer_arg(e, &read, 1, PATH_BUFFER, "SetMoonTexture");
     {
-        let mut state = textures(e)
-            .state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let mut state = textures(e).state.lock().unwrap_or_else(|p| p.into_inner());
         if state.0.is_empty() {
             state.0 = vec![None; 8];
         }
