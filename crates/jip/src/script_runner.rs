@@ -201,7 +201,7 @@ fn skipped(name: &[u8]) {
 /// A script file's bytes, as `FileToBuffer` reads them: at most `STR_BUFFER_SIZE - 1`, `None` for
 /// a file that cannot be read or is empty. Through the mods' files seam (the port's folder, then the
 /// game's Data); the game's own read when no platform answers the seam.
-fn read_file(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
+pub(crate) fn read_file(e: &mut Engine, path: &[u8]) -> Option<Vec<u8>> {
     let max = STR_BUFFER_SIZE - 1;
     let bytes = match engine_core::mod_files::read_head_or_error(e, path, max) {
         Ok(bytes) => bytes,
@@ -290,6 +290,53 @@ fn execute(e: &mut Engine, script: u32, arg3: bool) {
         SCRIPT_EXECUTE,
         &args![script, 0u32, 0u32, 0u32, u32::from(arg3)],
     );
+}
+
+/// `ExtraScript` (type 0x0D) and its event list (+0x10).
+const EXTRA_SCRIPT: u32 = 0x0d;
+const XSCRIPT_EVENTS: u32 = 0x10;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: JIPScriptRunner::RunScript.
+/// `script` run on `calling_ref` (`Script::Execute(callingRef)`: no list, no container, `true`),
+/// with the reference's own script's event list taken away while it runs and put back after.
+pub fn run_script(e: &mut Engine, script: u32, calling_ref: u32) {
+    let xscript = crate::commands::extra::refr_extra(e, calling_ref, EXTRA_SCRIPT);
+    let events = if xscript == 0 {
+        0
+    } else {
+        e.mem.u32(xscript + XSCRIPT_EVENTS)
+    };
+    if events != 0 {
+        e.mem.set_u32(xscript + XSCRIPT_EVENTS, 0);
+    }
+    e.call(
+        SCRIPT_EXECUTE,
+        &args![script, calling_ref, 0u32, 0u32, 1u32],
+    );
+    if events != 0 {
+        e.mem.set_u32(xscript + XSCRIPT_EVENTS, events);
+    }
+}
+
+/// The script kept under `name` (`s_cachedScripts`), 0 for none.
+pub fn cached_script(e: &mut Engine, name: &[u8]) -> u32 {
+    state(e)
+        .cached
+        .get(&Name(name.to_vec()))
+        .map_or(0, |c| c.script)
+}
+
+/// `s_cachedScripts->Emplace(name, script)` with no moment (`RunBatchScript`'s): the first of a
+/// name kept.
+pub fn keep_batch_script(e: &mut Engine, name: &[u8], script: u32) -> u32 {
+    state(e)
+        .cached
+        .emplace_with(Name(name.to_vec()), || Cached {
+            script,
+            run_on: None,
+        })
+        .0
+        .script
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: JIPScriptRunner::RunScriptSource.

@@ -57,11 +57,40 @@ pub enum Native {
     /// `EndWeatherTransition` (`internal/patches_game.h`, G90's `CloudsFixHook`): the sky's
     /// `transWeather` (`+0x14`) cleared.
     EndWeatherTransition,
+    /// `JIPScriptRunner::RunScript` (`RunScriptSnippet` with a delay): the callback's `this` is
+    /// the script, its first argument (kept in [`Callback::ref_id`]) the calling reference.
+    RunScript,
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallback
 // (MainLoopCallback::Create with a function: one call, after one frame, no arguments).
 /// One of JIP's own functions, called once at the next cycle, in game and menu mode alike.
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallbackArgsEx (one
+// argument).
+/// One of JIP's own functions with one argument (`arg`, kept in [`Callback::ref_id`]), called
+/// `calls` times every `delay` frames (0 is 1), in game and menu mode alike.
+pub fn add_native_with(
+    e: &mut Engine,
+    native: Native,
+    this_obj: u32,
+    calls: u32,
+    delay: u32,
+    arg: u32,
+) {
+    let delay = delay.max(1);
+    state(e).callbacks.push(Callback {
+        script: 0,
+        this_obj,
+        remove: false,
+        flags: 0,
+        call_delay: delay,
+        cycle_count: delay,
+        ref_id: arg,
+        native: Some(native),
+        call_count: calls,
+    });
+}
+
 pub fn add_native(e: &mut Engine, native: Native, this_obj: u32) {
     state(e).callbacks.push(Callback {
         script: 0,
@@ -78,7 +107,7 @@ pub fn add_native(e: &mut Engine, native: Native, this_obj: u32) {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopCallback::Execute, with
 // the functions it is given.
-fn execute_native(e: &mut Engine, native: Native, this_obj: u32) {
+fn execute_native(e: &mut Engine, native: Native, this_obj: u32, arg: u32) {
     match native {
         // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h:
         // EndWeatherTransition. A null sky (never in the game: TES makes it at start-up) is left.
@@ -87,6 +116,7 @@ fn execute_native(e: &mut Engine, native: Native, this_obj: u32) {
                 e.mem.set_u32(this_obj + 0x14, 0);
             }
         }
+        Native::RunScript => crate::script_runner::run_script(e, this_obj, arg),
     }
 }
 
@@ -216,7 +246,7 @@ pub fn cycle(e: &mut Engine) {
             } else {
                 callback.cycle_count = c.call_delay;
             }
-            execute_native(e, native, c.this_obj);
+            execute_native(e, native, c.this_obj, c.ref_id);
             continue;
         }
         let manager = e.mem.u32(INTERFACE_MANAGER);
