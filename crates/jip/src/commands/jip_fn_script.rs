@@ -8,8 +8,8 @@
 //! `RemoveAllAddedVariables` keep JIP's added variables in its co-save (`s_scriptVariablesBuffer`,
 //! the `JPSV` record, with `Script::AddVariable`'s new `VariableInfo` and `ScriptVar` lists): the
 //! co-save framework does not carry that record yet. `RunScriptSnippet`, `RunBatchScript` and
-//! `RegisterSRScript` compile script text (`Script::Create`, JIP's `JIPScriptRunner`: built in
-//! `crate::script_runner`, with `register` for `RegisterSRScript`); the commands are not built yet.
+//! `RegisterSRScript` compile script text on JIP's script runner (`crate::script_runner`: `create`,
+//! `run_script`, the kept scripts `RunBatchScript` shares, `register`).
 //!
 //! `Script` (the exe's layout, JIP's `nvse/GameScript.h`): its data length `info.dataLength`
 //! +0x20 and quest flag +0x28 (`Script::Run`, `005AC1E0`, reads +0x38 and +0x40 beside them;
@@ -41,6 +41,8 @@ pub static COMMANDS: Handlers = &[
     (0x282b, disable_scripted_activate),
     (0x283a, execute_script),
     (0x2938, register_sr_script),
+    (0x280f, run_script_snippet),
+    (0x2834, run_batch_script),
 ];
 
 /// `kFormType_Script`.
@@ -573,6 +575,128 @@ fn register_sr_script(e: &mut Engine, w: &[u32]) -> Ret {
     let path = buffer_arg(e, &read, 0, 0x80, "RegisterSRScript");
     if crate::script_runner::register(e, &path) {
         a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// ---- scripts run from text ----
+
+/// `g_thePlayer`; JIP's string buffer (`GetStrArgBuffer`, `STR_BUFFER_SIZE`); `RunBatchScript`'s
+/// `filePath[0x80]`; `kCommandInfo_RunScriptSnippet.numParams` (the delay and xNVSE's 21 format
+/// parameters); a script's `Destroy` (vtable +0x10, with 1); a form's files (`mods`, +0x10, a
+/// list whose first node is inline: the file +0, next +4); the data handler (`*011C3F2C`) and its
+/// files by index (+0x21C).
+const PLAYER: u32 = 0x011d_ea3c;
+const STR_ARG_BUFFER: usize = 0x4_0000;
+const BATCH_PATH_BUFFER: usize = 0x80;
+const SNIPPET_PARAMS: u32 = 22;
+const DESTROY: u32 = 0x10;
+const FORM_MODS: u32 = 0x10;
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+const MOD_INFOS: u32 = 0x21c;
+/// A line feed, a carriage return and a backslash.
+const LINE_FEED: u8 = 0x0a;
+const CARRIAGE_RETURN: u8 = 0x0d;
+const BACKSLASH: u8 = 0x5c;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_script.h:
+// Cmd_RunScriptSnippet_Execute.
+/// `RunScriptSnippet delay "text"`: the text (its line feeds made carriage returns) compiled into
+/// a new script ("RunScriptSnippet"); run on the calling reference (the player with none) now and
+/// destroyed, or, with a delay, run once after that many frames by JIP's main loop (the script is
+/// then kept: JIP never destroys it). Nothing when it does not compile. No result.
+fn run_script_snippet(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let f = nvse::commands::string::format_string_args_at(e, &a, 1, SNIPPET_PARAMS);
+    if !f.ok {
+        return handled(true);
+    }
+    let delay = f
+        .leading
+        .first()
+        .and_then(nvse::args::Arg::int)
+        .unwrap_or(0) as u32;
+    let mut text = super::formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "RunScriptSnippet");
+    // `ReplaceChr(buffer, LF, CR)`.
+    for b in &mut text {
+        if *b == LINE_FEED {
+            *b = CARRIAGE_RETURN;
+        }
+    }
+    let script = crate::script_runner::create(e, &text, b"RunScriptSnippet");
+    if script == 0 {
+        return handled(true);
+    }
+    let calling = if a.this_obj != 0 {
+        a.this_obj
+    } else {
+        e.mem.u32(PLAYER)
+    };
+    if delay != 0 {
+        crate::main_loop::add_native_with(
+            e,
+            crate::main_loop::Native::RunScript,
+            script,
+            1,
+            delay,
+            calling,
+        );
+    } else {
+        crate::script_runner::run_script_nested(e, script, calling, b"RunScriptSnippet");
+        e.vcall(script, DESTROY, &[1]);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_script.h:
+// Cmd_RunBatchScript_Execute.
+/// `RunBatchScript path`: the file's script kept under its name (the part after the last `\`,
+/// `/` made `\` first) by the script runner; on the first call the file is read (as the runner
+/// reads, at most the string buffer less one) and compiled under that name, and the new script
+/// belongs to the calling script's file (its `mods` list that file, when it has one). Run on the
+/// calling reference (the player with none): 1. A file that cannot be read or does not compile:
+/// nothing, and it is tried again next time.
+fn run_batch_script(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let mut path = buffer_arg(e, &read, 0, BATCH_PATH_BUFFER, "RunBatchScript");
+    for b in &mut path {
+        if *b == b'/' {
+            *b = BACKSLASH;
+        }
+    }
+    let name = match path.iter().rposition(|&b| b == BACKSLASH) {
+        Some(i) => path[i + 1..].to_vec(),
+        None => path.clone(),
+    };
+    let mut script = crate::script_runner::cached_script(e, &name);
+    if script == 0 {
+        if let Some(text) = crate::script_runner::read_file(e, &path) {
+            let made = crate::script_runner::create(e, &text, &name);
+            if made != 0 {
+                script = crate::script_runner::keep_batch_script(e, &name, made);
+                let index = super::jip_fn_aux_variable::overriding_mod(e, a.script);
+                if index < 0xff {
+                    let handler = e.mem.u32(DATA_HANDLER);
+                    let info = e.mem.u32(handler + MOD_INFOS + 4 * index);
+                    e.mem.set_u32(made + FORM_MODS, info);
+                    e.mem.set_u32(made + FORM_MODS + 4, 0);
+                }
+            }
+        }
+    }
+    if script != 0 {
+        let calling = if a.this_obj != 0 {
+            a.this_obj
+        } else {
+            e.mem.u32(PLAYER)
+        };
+        if crate::script_runner::run_script_nested(e, script, calling, &path) {
+            a.set_result(e, 1.0);
+        }
     }
     handled(true)
 }
