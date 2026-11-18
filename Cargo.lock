@@ -1414,6 +1414,7 @@ version = "0.1.0"
 dependencies = [
  "game-folders",
  "host",
+ "mod-install",
 ]
 
 [[package]]
