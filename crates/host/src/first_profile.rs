@@ -122,7 +122,13 @@ pub fn prepare(inputs: &Inputs) -> Outcome {
         // The game compares this name with the card's at every start (`004da570`, without case)
         // and, when they differ, shuts its renderer and asks for its launcher; it is written
         // again at every start, so a renamed card (a driver update can rename it) is said here.
-        if let Some(before) = settings::ini_value(&text_of(&old_prefs), "Display", "sD3DDevice") {
+        // Only a saved file's name is compared: a first start's text is the High preset's.
+        let saved = if first_time {
+            None
+        } else {
+            settings::ini_value(&text_of(&old_prefs), "Display", "sD3DDevice").map(str::to_string)
+        };
+        if let Some(before) = saved {
             let before = before.trim().trim_matches('"');
             if !before.eq_ignore_ascii_case(device) {
                 out.log.push(format!(
@@ -471,6 +477,32 @@ mod tests {
             !out.log.iter().any(|l| l.contains("changed from")),
             "{:?}",
             out.log
+        );
+    }
+
+    /// A first start (no FalloutPrefs.ini yet) compares no name, even when the High preset it
+    /// starts from names another card.
+    #[test]
+    fn a_first_start_says_no_renamed_card() {
+        let out = prepare(&Inputs {
+            ini: None,
+            prefs: None,
+            default_ini: Some(DEFAULT_INI.to_vec()),
+            high_ini: Some(b"[Display]\r\nsD3DDevice=\"Some Older Card\"\r\n".to_vec()),
+            pending: None,
+            desktop: Some((2560, 1440)),
+            screen: Some((2560, 1440)),
+            device: Some("AMD Radeon RX 7800 XT (RADV NAVI32)"),
+        });
+        assert!(
+            !out.log.iter().any(|l| l.contains("changed from")),
+            "{:?}",
+            out.log
+        );
+        let prefs = text_of(out.prefs.as_deref().unwrap());
+        assert!(
+            prefs.contains("sD3DDevice=\"AMD Radeon RX 7800 XT (RADV NAVI32)\""),
+            "{prefs}"
         );
     }
 
