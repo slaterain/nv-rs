@@ -1,6 +1,6 @@
 THIRD-PARTY NOTICES — nv-rs (nv-viewer: the Windows build, and the Linux and macOS builds)
 
-This file indexes the license texts of the 254 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
+This file indexes the license texts of the 268 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
 
 Files are bundled under licenses/<package>-<version>/ in release ZIPs (distribution/licenses/ in the source tree). No crate source or game assets are included.
 
@@ -211,6 +211,14 @@ concurrent-queue 2.5.0
     concurrent-queue-2.5.0/LICENSE-APACHE
     concurrent-queue-2.5.0/LICENSE-MIT
 
+constant_time_eq 0.6.1
+  License expression: CC0-1.0 OR MIT-0 OR Apache-2.0
+  Repository: https://codeberg.org/cesarb/constant_time_eq
+  Bundled license files:
+    constant_time_eq-0.6.1/LICENSE-APACHE
+    constant_time_eq-0.6.1/LICENSE-CC0
+    constant_time_eq-0.6.1/LICENSE-MIT0
+
 core-foundation 0.9.4
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/servo/core-foundation-rs
@@ -253,6 +261,13 @@ cpal 0.18.2
   Bundled license files:
     cpal-0.18.2/LICENSE
 
+crc32fast 1.5.5
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/srijs/rust-crc32fast
+  Bundled license files:
+    crc32fast-1.5.5/LICENSE-APACHE
+    crc32fast-1.5.5/LICENSE-MIT
+
 crossbeam-utils 0.8.23
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/crossbeam-rs/crossbeam
@@ -281,6 +296,12 @@ dasp_sample 0.11.0
   Bundled license files:
     dasp_sample-0.11.0/LICENSE-APACHE
     dasp_sample-0.11.0/LICENSE-MIT
+
+deflate64 0.1.12
+  License expression: MIT
+  Repository: https://github.com/anatawa12/deflate64-rs
+  Bundled license files:
+    deflate64-0.1.12/LICENSE
 
 dispatch 0.2.0
   License expression: MIT
@@ -344,6 +365,13 @@ find-msvc-tools 0.1.15
   Bundled license files:
     find-msvc-tools-0.1.15/LICENSE-APACHE
     find-msvc-tools-0.1.15/LICENSE-MIT
+
+flate2 1.1.11
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/rust-lang/flate2-rs
+  Bundled license files:
+    flate2-1.1.11/LICENSE-APACHE
+    flate2-1.1.11/LICENSE-MIT
 
 foldhash 0.2.0
   License expression: Zlib
@@ -571,6 +599,12 @@ log 0.4.35
     log-0.4.35/LICENSE-APACHE
     log-0.4.35/LICENSE-MIT
 
+lzma-rust2 0.25.0
+  License expression: Apache-2.0
+  Repository: https://github.com/hasenbanck/lzma-rust2/
+  Bundled license files:
+    lzma-rust2-0.25.0/LICENSE
+
 mach2 0.6.0
   License expression: BSD-2-Clause OR MIT OR Apache-2.0
   Repository: https://github.com/JohnTitor/mach2
@@ -631,6 +665,12 @@ ndk-sys 0.6.0+11769913
   Bundled license files:
     ndk-sys-0.6.0+11769913/LICENSE-APACHE
     ndk-sys-0.6.0+11769913/LICENSE-MIT
+
+nix 0.32.0
+  License expression: MIT
+  Repository: https://github.com/nix-rust/nix
+  Bundled license files:
+    nix-0.32.0/LICENSE
 
 num-derive 0.4.2
   License expression: MIT OR Apache-2.0
@@ -963,6 +1003,13 @@ portable-atomic-util 0.2.8
     portable-atomic-util-0.2.8/LICENSE-APACHE
     portable-atomic-util-0.2.8/LICENSE-MIT
 
+ppmd-rust 1.5.2
+  License expression: CC0-1.0 OR MIT-0
+  Repository: https://github.com/hasenbanck/ppmd-rust
+  Bundled license files:
+    ppmd-rust-1.5.2/LICENSE-CC0.md
+    ppmd-rust-1.5.2/LICENSE-MIT-0.md
+
 presser 0.3.1
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/EmbarkStudios/presser
@@ -1157,6 +1204,12 @@ serde_derive 1.0.229
     serde_derive-1.0.229/LICENSE-APACHE
     serde_derive-1.0.229/LICENSE-MIT
 
+sevenz-rust2 0.25.0
+  License expression: Apache-2.0
+  Repository: https://github.com/hasenbanck/sevenz-rust
+  Bundled license files:
+    sevenz-rust2-0.25.0/LICENSE
+
 shlex 2.0.1
   License expression: MIT OR Apache-2.0
   Repository: https://github.com/comex/rust-shlex
@@ -1260,6 +1313,14 @@ thiserror-impl 2.0.21
     thiserror-impl-2.0.21/LICENSE-APACHE
     thiserror-impl-2.0.21/LICENSE-MIT
 
+tinyvec 1.13.3
+  License expression: Zlib OR Apache-2.0 OR MIT
+  Repository: https://github.com/Lokathor/tinyvec
+  Bundled license files:
+    tinyvec-1.13.3/LICENSE-APACHE.md
+    tinyvec-1.13.3/LICENSE-MIT.md
+    tinyvec-1.13.3/LICENSE-ZLIB.md
+
 tokio 1.53.1
   License expression: MIT
   Repository: https://github.com/tokio-rs/tokio
@@ -1299,6 +1360,13 @@ tracing-core 0.1.36
   Bundled license files:
     tracing-core-0.1.36/LICENSE
 
+typed-path 0.13.0
+  License expression: MIT OR Apache-2.0
+  Repository: https://github.com/chipsenkbeil/typed-path
+  Bundled license files:
+    typed-path-0.13.0/LICENSE-APACHE
+    typed-path-0.13.0/LICENSE-MIT
+
 unicode-ident 1.0.26
   License expression: (MIT OR Apache-2.0) AND Unicode-3.0
   Repository: https://github.com/dtolnay/unicode-ident
@@ -1306,6 +1374,14 @@ unicode-ident 1.0.26
     unicode-ident-1.0.26/LICENSE-APACHE
     unicode-ident-1.0.26/LICENSE-MIT
     unicode-ident-1.0.26/LICENSE-UNICODE
+
+unicode-normalization 0.1.26
+  License expression: (MIT OR Apache-2.0) AND Unicode-3.0
+  Repository: https://github.com/unicode-rs/unicode-normalization
+  Bundled license files:
+    unicode-normalization-0.1.26/LICENSE-APACHE
+    unicode-normalization-0.1.26/LICENSE-MIT
+    unicode-normalization-0.1.26/LICENSE-UNICODE
 
 unicode-segmentation 1.13.3
   License expression: MIT OR Apache-2.0
@@ -1785,6 +1861,26 @@ zerocopy-derive 0.8.63
     zerocopy-derive-0.8.63/LICENSE-APACHE
     zerocopy-derive-0.8.63/LICENSE-BSD
     zerocopy-derive-0.8.63/LICENSE-MIT
+
+zeroize 1.9.2
+  License expression: Apache-2.0 OR MIT
+  Repository: https://github.com/RustCrypto/utils
+  Bundled license files:
+    zeroize-1.9.2/LICENSE-APACHE
+    zeroize-1.9.2/LICENSE-MIT
+
+zeroize_derive 1.5.0
+  License expression: Apache-2.0 OR MIT
+  Repository: https://github.com/RustCrypto/utils
+  Bundled license files:
+    zeroize_derive-1.5.0/LICENSE-APACHE
+    zeroize_derive-1.5.0/LICENSE-MIT
+
+zip 9.7.0
+  License expression: MIT
+  Repository: https://github.com/zip-rs/zip2
+  Bundled license files:
+    zip-9.7.0/LICENSE
 
 zlib-rs 0.6.8
   License expression: Zlib
