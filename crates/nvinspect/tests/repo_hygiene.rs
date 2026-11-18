@@ -2969,7 +2969,9 @@ fn repo_root() -> PathBuf {
 /// The folder words are refused in it, and only there.
 #[test]
 fn shipped_data_names_no_folder_of_this_pc() {
-    assert!(shipped_data("crates/engine-platform/src/cp1252_measured.tsv"));
+    assert!(shipped_data(
+        "crates/engine-platform/src/cp1252_measured.tsv"
+    ));
     assert!(shipped_data("crates/engine-core/data/overridable.tsv"));
     assert!(shipped_data("crates/d3d9-wgpu/src/shaders/clear.frag"));
     assert!(shipped_data("viewer/src/x.txt"));
@@ -2983,11 +2985,20 @@ fn shipped_data_names_no_folder_of_this_pc() {
     let folder = ["build", "43-scratch/measure"].concat();
     let line = format!("# measured 2026-11-16, by {folder}/platforms/cp1252.ps1.");
     assert_eq!(shipped_data_words(&line), vec!["build43"]);
-    assert_eq!(shipped_data_words(r"C:\x\nv-re\work"), vec!["nv-re\\", "\\nv-re"]);
-    assert_eq!(shipped_data_words("/srv/x/nv-re/work"), vec!["nv-re/", "/nv-re"]);
+    assert_eq!(
+        shipped_data_words(r"C:\x\nv-re\work"),
+        vec!["nv-re\\", "\\nv-re"]
+    );
+    assert_eq!(
+        shipped_data_words("/srv/x/nv-re/work"),
+        vec!["nv-re/", "/nv-re"]
+    );
     // The render thread's name is not the folder.
     assert!(shipped_data_words("nv-render; nv-rs").is_empty());
-    let found = check_text("crates/engine-platform/src/cp1252_measured.tsv", line.as_bytes());
+    let found = check_text(
+        "crates/engine-platform/src/cp1252_measured.tsv",
+        line.as_bytes(),
+    );
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(check_text("crates/engine-platform/src/files.rs", line.as_bytes()).is_empty());
 }
