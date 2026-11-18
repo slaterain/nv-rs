@@ -55,7 +55,9 @@ What the ZIP holds, and why each is allowed:
 
 Never in it: game files, saves, reports, machine tables (`.tsv`), `.ini`, DLLs, debug files (the
 script's type list refuses them), anything from fnv_decomp, or this PC's paths and user name
-(`package-check`'s needles). Windows' and the graphics driver's DLLs stay on the player's own PC.
+(`package-check`'s needles: the packaging machine's user name and folders, and for every file of
+every package the words in `scripts/package-needles.txt`, which the Windows and the Linux/macOS
+scripts share). Windows' and the graphics driver's DLLs stay on the player's own PC.
 
 An unsigned exe: SmartScreen warns on a downloaded one ("More info", "Run anyway"), Smart App
 Control blocks it with no way through, and an antivirus may hold or remove it, more so as it starts other

@@ -1,0 +1,19 @@
+# Text no file of a package may hold, the programs and every text file alike (READ MEs, LEGAL.md,
+# BUILD.txt, the licences): the maintainer's research folders and any Windows user folder. Read by
+# scripts/package-playtest.ps1 (Windows) and scripts/package-playtest.sh (Linux, macOS), which give
+# each line to package-check as --needle (searched as bytes and as UTF-16, any ASCII case). Each
+# script adds the user name and folders of the machine it runs on; no name is written here.
+#
+# One needle a line; lines starting with # and empty lines are left out. Folder words in path forms
+# only: the bare research folder's name also matches the render thread's name, and the program
+# holds OneDrive's name without separators (the save guard, the launcher's Documents list).
+build43
+nv-re/
+/nv-re
+nv-re\
+\nv-re
+C:\Users\
+C:/Users/
+\OneDrive\
+/OneDrive/
+\Desktop\

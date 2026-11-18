@@ -23,6 +23,7 @@ on:
       - 'scripts/test-package-licences.sh'
       - 'scripts/package-playtest.sh'
       - 'scripts/test-package-playtest.sh'
+      - 'scripts/package-needles.txt'
       - '.github/workflows/play-sh.yml'
   push:
     branches: [main]
@@ -32,6 +33,7 @@ on:
       - 'scripts/test-package-licences.sh'
       - 'scripts/package-playtest.sh'
       - 'scripts/test-package-playtest.sh'
+      - 'scripts/package-needles.txt'
       - '.github/workflows/play-sh.yml'
   workflow_dispatch:
   schedule:
