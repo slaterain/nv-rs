@@ -195,6 +195,30 @@ fn the_answer_calls_the_newest_script_with_the_button() {
     assert_eq!(e.mem.u8(IM_AT + 0xe4), 0xff);
 }
 
+/// G55 with the command: the message menu's two width seams answer 1200 while a box waits, and
+/// not before the first box nor after the last answer.
+#[test]
+fn g55_widens_the_message_menu_while_a_box_waits() {
+    use crate::game_patches::ga::MAX_MESSAGE_WIDTH;
+    let mut e = setup();
+    for site in MAX_MESSAGE_WIDTH {
+        assert_eq!(e.site(site.addr(), &[0, 0]), None, "no box: the game's");
+    }
+    call_on(&mut e, 0x2826, 0, &[r(1), s(b"Pick|A|B")]);
+    for site in MAX_MESSAGE_WIDTH {
+        assert_eq!(e.site(site.addr(), &[0, 0]), Some(1200.0f32.to_bits()));
+    }
+    e.mem.set_u8(IM_AT + 0xe4, 0);
+    e.call(MESSAGE_BOX_CALLBACK, &[]);
+    for site in MAX_MESSAGE_WIDTH {
+        assert_eq!(
+            e.site(site.addr(), &[0, 0]),
+            None,
+            "answered: the game's again"
+        );
+    }
+}
+
 #[test]
 fn fifteen_boxes_at_most() {
     let mut e = setup();

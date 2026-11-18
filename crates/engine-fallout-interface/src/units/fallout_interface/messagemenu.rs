@@ -418,6 +418,16 @@ fn get_float(e: &mut Engine, tile: u32, id: u32) -> f32 {
     e.call(GET_FLOAT_TRAIT, &args![tile, id]).f32()
 }
 
+/// The menu tile's `max_menu_width` trait (`id`), read at `site` (`0x7A9AEE`: the room for the text;
+/// `0x7A9C45`: the menu's widest). JIP's seam there (words: the tile, the trait): answered, its
+/// answer (an `f32`'s bits) in place of the trait's value, which is then not read.
+fn max_menu_width(e: &mut Engine, site: u32, tile: u32, id: u32) -> f32 {
+    match e.site(site, &[tile, id]) {
+        Some(bits) => f32::from_bits(bits),
+        None => get_float(e, tile, id),
+    }
+}
+
 fn set_float(e: &mut Engine, tile: u32, id: u32, value: f32, flag: bool) {
     e.call(SET_FLOAT_TRAIT, &args![tile, id, value, flag]);
 }
@@ -1141,7 +1151,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
         } else {
             let id = e.call(TEXT_TO_TRAIT, &args![MAX_MENU_WIDTH_NAME]).u32();
             let menu_tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-            get_float(e, menu_tile, id)
+            max_menu_width(e, 0x007a_9aee, menu_tile, id)
         };
         let mut room = (room as f64 - margin_twice) as f32;
         let icon_tile = tile_of(e, menu_object(e), 2);
@@ -1179,7 +1189,7 @@ pub fn message_menu_load_next_message(e: &mut Engine, this: Ptr<MessageMenu>) {
             let menu_width = e.call(FLOAT_MAX_OF, &args![wider, list_width]).f32();
             let id = e.call(TEXT_TO_TRAIT, &args![MAX_MENU_WIDTH_NAME]).u32();
             let menu_tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
-            let maximum = get_float(e, menu_tile, id);
+            let maximum = max_menu_width(e, 0x007a_9c45, menu_tile, id);
             let menu_width = e.call(FLOAT_MIN_OF, &args![menu_width, maximum]).f32();
             let id = e.call(TEXT_TO_TRAIT, &args![MIN_MENU_WIDTH_NAME]).u32();
             let menu_tile = typed_call!(leaf::FAMILY, 0x0072_6070, leaf::word_at_4(e, this));
@@ -3024,6 +3034,46 @@ mod tests {
         let ints = calls(&e, SET_TRAIT_FROM_INT);
         assert!(ints.contains(&vec![0x6200, 0xfb7, 1]));
         assert_eq!(e.global::<u8>(WARNING_STATE_FLAG_0119F348), 1);
+    }
+
+    /// JIP's seams at the two `max_menu_width` reads (`0x7A9AEE`, `0x7A9C45`; words: the menu
+    /// tile, the trait): answered, the answer stands for the trait, which is not read; not
+    /// answered, the trait is read at each.
+    #[test]
+    fn load_next_message_max_width_seams() {
+        let max_reads = |e: &Engine| {
+            calls(e, GET_FLOAT_TRAIT)
+                .iter()
+                .filter(|w| w[1] == MAX_MENU_WIDTH_NAME)
+                .count()
+        };
+        let (mut e, m, _) = load_world(false);
+        e.call(0x007a_92e0, &args![m]);
+        assert_eq!(max_reads(&e), 2);
+        let plain = calls(&e, SET_FLOAT_TRAIT);
+
+        thread_local!(static SEEN: std::cell::RefCell<Vec<(u32, Vec<u32>)>> = const { std::cell::RefCell::new(Vec::new()) });
+        fn at_room(_: &mut Engine, w: &[u32]) -> Option<u32> {
+            SEEN.with(|s| s.borrow_mut().push((0x007a_9aee, w.to_vec())));
+            Some(1200.0f32.to_bits())
+        }
+        fn at_widest(_: &mut Engine, w: &[u32]) -> Option<u32> {
+            SEEN.with(|s| s.borrow_mut().push((0x007a_9c45, w.to_vec())));
+            Some(1200.0f32.to_bits())
+        }
+        let (mut e, m, _) = load_world(false);
+        e.on_site_for_test(0x007a_9aee, at_room);
+        e.on_site_for_test(0x007a_9c45, at_widest);
+        e.call(0x007a_92e0, &args![m]);
+        assert_eq!(max_reads(&e), 0, "answered: not read");
+        assert_eq!(
+            SEEN.with(|s| s.borrow().clone()),
+            vec![
+                (0x007a_9aee, vec![0x6000, MAX_MENU_WIDTH_NAME]),
+                (0x007a_9c45, vec![0x6000, MAX_MENU_WIDTH_NAME]),
+            ]
+        );
+        assert_ne!(calls(&e, SET_FLOAT_TRAIT), plain, "the wider room laid out");
     }
 
     /// 007a9648..007a9654: the list box is emptied (slot 0x1c) on every message, before its

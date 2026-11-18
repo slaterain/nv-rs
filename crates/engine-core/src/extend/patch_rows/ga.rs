@@ -42,6 +42,11 @@ pub(in super::super) const SITES: &[Entry] = &[
     // the pass back while the menu's list has a screen.
     row(0x0078_a79b),
     // G21 (fix row): the activation choices 007aa720: a choice with no text is passed over.
+    // G55 (JIP's own, with MessageBoxExAlt): MessageMenu::LoadNextMessage 007a92e0, its two
+    // `max_menu_width` reads 0x7A9AEE and 0x7A9C45: JIP's MaxMessageWidthHook answers 1200 while a
+    // MessageBoxExAlt box waits.
+    row(0x007a_9aee),
+    row(0x007a_9c45),
     row(0x007a_a80f),
     // G37 (fix row): StartMenu::ConfirmNewGame 007d32b0: InvalidChargenQuestFixHook falls back
     // to the vanilla quest 0x102037.
