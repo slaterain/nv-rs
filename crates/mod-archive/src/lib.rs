@@ -6,22 +6,35 @@
 //!   zip `PK\3\4` (or an empty zip's `PK\5\6`), 7z `7z\xBC\xAF\x27\x1C`, RAR `Rar!\x1A\x07`.
 //! - zip: Stored, Deflate and Deflate64. 7z: LZMA, LZMA2, BCJ/BCJ2 and PPMd, solid or not. A
 //!   solid 7z block decodes from its start, so [`extract`] takes everything wanted in one pass
-//!   over the archive, never file by file.
+//!   over the archive, never file by file, and decodes no further than the last wanted file of
+//!   each block; a block with nothing wanted is not decoded.
 //! - RAR is not read (the lead's decision, 2026-11-17: its one complete reader, RARLab's UnRAR,
 //!   has a licence that is not open source); the player is told to repack it as 7z or zip.
-//!   Encrypted archives and other methods are refused, in words a player can act on.
-//! - Paths inside an archive may use `\` or `/`; they are compared without case, as the game
-//!   compares them. Files are written only under the folder given, by the relative paths given:
-//!   one with `..`, a drive or a leading separator is refused before anything is written. On a
-//!   system whose files are told apart by case (Linux; macOS when so formatted), a folder already
-//!   there under another case is used, so `Textures` and `textures` stay one folder.
-//! - A downloaded archive may be hostile. Names in it are only ever looked up, never used as paths
-//!   (no "zip slip"); links stored in it are never unpacked ([`list`] leaves them out); a link
-//!   already in the destination is never written through; a destination with `..`, a `:`, a
-//!   leading separator or a Windows device name (`CON`, `COM1`...) is refused on every system;
-//!   sizes are checked against [`Limits`] before anything is written, and a file that unpacks
-//!   to more than its archive said stops the unpacking (a "bomb"); of two names differing only in
-//!   case the first is taken; [`read`] returns at most [`MAX_READ`] bytes.
+//!   Password-locked archives and other methods are refused, in words a player can act on.
+//! - Names are compared as Windows and macOS compare them: case and dots or spaces at a name's
+//!   end do not count, and Unicode names are taken in one normal form (NFC), so a name typed one
+//!   way finds the file stored the other way.
+//! - Files are written only under the folder given, by the relative paths given (see below).
+//!
+//! # Hostile archives
+//!
+//! - Names in an archive are only ever looked up, never used as paths (no "zip slip"); links
+//!   stored in it are never listed or unpacked.
+//! - A destination is checked before anything is written, on every system: no `..`, no leading
+//!   separator, no `:` (drives, NTFS streams), no Windows device name (`CON`, `CONIN$`, `COM1`...),
+//!   no character Windows cannot hold (`< > " | ? *`, control characters), no 8.3 short-name
+//!   shape (`~` and a digit, which Windows may resolve to another name). Dots and spaces at a
+//!   name's end are dropped when a folder or file is made, as Windows drops them.
+//! - Nothing is written through a link: every folder used is checked to be a plain folder just
+//!   before a file goes in it, each file is written under a new temporary name (made only if no
+//!   such name exists, so never through a link) and renamed over its final name only when it is
+//!   complete and of its declared size.
+//! - Sizes are checked against [`Limits`] before anything is decoded or written: the wanted
+//!   files', and for a 7z the bytes to decode to reach them. A 7z is opened with a memory limit
+//!   ([`MAX_DECODER_MEMORY`]) for its header and its decoders.
+//! - On any failure the error carries the files already written ([`ArchiveError::written`]), and
+//!   no partial file is left. The installer unpacks each mod into a fresh folder of its own and
+//!   deletes it on a failure (`crates/mod-install`), so a failed install leaves nothing behind.
 //!
 //! # Limits
 //!
@@ -36,14 +49,16 @@
 //! | [`MAX_NAME_BYTES`] | 255 bytes a name | the file systems' own limit |
 //! | [`MAX_PATH_PARTS`] | 64 parts | the game's deepest Data paths have under 12 |
 //! | [`MAX_READ`] | 16 MB | installers and their details are a few hundred KB |
+//! | [`MAX_DECODER_MEMORY`] | 2 GB | above the largest dictionaries 7-Zip makes for mods |
 //! | [`Limits::file`] | 16 GB by default | the game's largest archives are about 2 GB |
-//! | [`Limits::total`] | 64 GB by default; the front end lowers it to the room on the drive | the largest mods are tens of GB |
+//! | [`Limits::total`] | 64 GB by default, for writing and for decoding; the front end lowers it to the room on the drive | the largest mods are tens of GB |
 //! | a file's declared size | as the archive says | a file that unpacks to more stops the unpacking |
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use unicode_normalization::UnicodeNormalization;
 
 /// An archive's format, from its first bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,7 +99,7 @@ pub enum Problem {
     Io,
     /// A destination that would leave the folder, or a link in the way.
     Outside,
-    /// More to unpack than the limits allow (room on the drive, or a file far larger than any
+    /// More to unpack or decode than the limits allow (room on the drive, or far more than any
     /// mod's): a broken or hostile archive.
     TooBig,
     /// A file list beyond any mod's: more entries than [`MAX_ENTRIES`], or a name longer or deeper
@@ -97,6 +112,9 @@ pub struct ArchiveError {
     pub problem: Problem,
     /// The reader's own words or the path, for the log.
     pub detail: String,
+    /// The files [`extract`] had already written when it stopped, complete ones only: the caller
+    /// removes them (or the whole fresh folder) to leave nothing behind.
+    pub written: Vec<PathBuf>,
 }
 
 impl ArchiveError {
@@ -104,6 +122,7 @@ impl ArchiveError {
         Self {
             problem,
             detail: detail.into(),
+            written: vec![],
         }
     }
 
@@ -138,9 +157,12 @@ pub struct Entry {
 }
 
 /// One part of a path as Windows (and macOS by default) tells names apart: dots and spaces at
-/// its end do not count, nor does case (Unicode lower case). The same rule as `crates/fomod`'s.
+/// its end do not count, nor does case (Unicode lower case), in one Unicode normal form (NFC).
 fn fold_part(part: &str) -> String {
-    part.trim_end_matches(['.', ' ']).to_lowercase()
+    part.trim_end_matches(['.', ' '])
+        .nfc()
+        .collect::<String>()
+        .to_lowercase()
 }
 
 /// A path's key: `/` between the parts, none at either end, each part [`fold_part`]ed.
@@ -166,6 +188,13 @@ pub const MAX_NAME_BYTES: usize = 255;
 /// The most parts a path may have: the game's deepest Data paths have under 12.
 pub const MAX_PATH_PARTS: usize = 64;
 
+/// The most memory a 7z's header and decoders may ask for: above the largest dictionaries 7-Zip
+/// makes for mods (its `-mx9` uses 64 MB to 1.5 GB).
+pub const MAX_DECODER_MEMORY: usize = 2 << 30;
+
+/// The most [`read`] returns: installers and their details are a few hundred KB at most.
+pub const MAX_READ: u64 = 16 * 1024 * 1024;
+
 /// Refuses a file list beyond the caps above.
 fn check_entries(entries: &[(String, u64, bool)]) -> Result<(), ArchiveError> {
     if entries.len() > MAX_ENTRIES {
@@ -185,17 +214,15 @@ fn check_entries(entries: &[(String, u64, bool)]) -> Result<(), ArchiveError> {
     Ok(())
 }
 
-/// The most [`read`] returns: installers and their details are a few hundred KB at most.
-pub const MAX_READ: u64 = 16 * 1024 * 1024;
-
-/// What [`extract`] may write. The front end sets `total` from the room on the drive; a file is
-/// also never more than its archive says it is.
+/// What [`extract`] may write, and how much a 7z may decode to reach it. The front end sets
+/// `total` from the room on the drive; a file is also never more than its archive says it is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
     /// The most one file may unpack to (the game's own largest archives are under 2 GB; TTW's LOD
     /// archives a little over).
     pub file: u64,
-    /// The most all the wanted files together may unpack to.
+    /// The most all the wanted files together may unpack to, and the most a 7z may decode to
+    /// reach them.
     pub total: u64,
 }
 
@@ -226,13 +253,18 @@ fn zip_error(e: zip::result::ZipError) -> ArchiveError {
     ArchiveError::new(problem, format!("zip: {e}"))
 }
 
+/// 7-Zip's password method, which this build has no decoder for: a locked archive.
+const SEVENZ_AES: &str = "AES256_SHA256";
+
 fn sevenz_error(e: sevenz_rust2::Error) -> ArchiveError {
     use sevenz_rust2::Error as E;
     let problem = match &e {
         E::PasswordRequired | E::MaybeBadPassword(_) => Problem::Encrypted,
+        E::UnsupportedCompressionMethod(m) if m.contains(SEVENZ_AES) => Problem::Encrypted,
         E::UnsupportedCompressionMethod(_) | E::Unsupported(_) | E::ExternalUnsupported => {
             Problem::Unsupported
         }
+        E::MaxMemLimited { .. } => Problem::TooBig,
         E::FileOpen(..) => Problem::Io,
         _ => Problem::Damaged,
     };
@@ -268,8 +300,22 @@ fn open_zip(path: &Path) -> Result<zip::ZipArchive<File>, ArchiveError> {
     zip::ZipArchive::new(File::open(path).map_err(|e| io(path, e))?).map_err(zip_error)
 }
 
+thread_local! {
+    /// The memory limit 7z readers are opened with, in KB: always [`MAX_DECODER_MEMORY`], except
+    /// in this crate's tests, which lower it to show the limit is applied.
+    static DECODER_MEMORY_KB: std::cell::Cell<usize> =
+        const { std::cell::Cell::new(MAX_DECODER_MEMORY / 1024) };
+}
+
+/// A 7z opened with the memory limit for its header and decoders.
 fn open_7z(path: &Path) -> Result<sevenz_rust2::ArchiveReader<File>, ArchiveError> {
-    sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty()).map_err(sevenz_error)
+    let file = File::open(path).map_err(|e| io(path, e))?;
+    sevenz_rust2::ArchiveReader::new_with_memory_limit(
+        file,
+        sevenz_rust2::Password::empty(),
+        DECODER_MEMORY_KB.with(|kb| kb.get()),
+    )
+    .map_err(sevenz_error)
 }
 
 /// A Unix mode that is a symbolic link.
@@ -364,9 +410,58 @@ fn read_capped(data: &mut dyn Read, limit: u64, what: &str) -> Result<Vec<u8>, A
     Ok(bytes)
 }
 
+/// A 7z's plan to decode some of its files: the order the reader hands entries over in (each
+/// block's files with data, block by block, then the files without data), the last wanted file
+/// of each block, and the bytes to decode to reach the wanted files.
+struct SevenzPlan {
+    order: Vec<usize>,
+    block_of: BTreeMap<usize, usize>,
+    last_wanted: BTreeMap<usize, usize>,
+    decode: u64,
+}
+
+fn sevenz_plan(
+    archive: &sevenz_rust2::Archive,
+    wanted: &std::collections::BTreeSet<usize>,
+) -> SevenzPlan {
+    let blocks = &archive.stream_map.file_block_index;
+    let mut order: Vec<usize> = (0..archive.files.len())
+        .filter(|&i| archive.files[i].has_stream && blocks[i].is_some())
+        .collect();
+    order.sort_by_key(|&i| (blocks[i], i));
+    order.extend(
+        (0..archive.files.len()).filter(|&i| blocks[i].is_none() || !archive.files[i].has_stream),
+    );
+    let mut last_wanted = BTreeMap::new();
+    for &i in wanted {
+        if let Some(Some(b)) = blocks.get(i) {
+            let last = last_wanted.entry(*b).or_insert(i);
+            *last = (*last).max(i);
+        }
+    }
+    let decode = order
+        .iter()
+        .filter(|&&i| {
+            archive.files[i].has_stream
+                && blocks[i].is_some_and(|b| last_wanted.get(&b).is_some_and(|&last| i <= last))
+        })
+        .map(|&i| archive.files[i].size)
+        .fold(0u64, u64::saturating_add);
+    let block_of = (0..archive.files.len())
+        .filter_map(|i| blocks[i].map(|b| (i, b)))
+        .collect();
+    SevenzPlan {
+        order,
+        block_of,
+        last_wanted,
+        decode,
+    }
+}
+
 /// The bytes of the one file `name` (any case, `\` or `/`) in the archive at `path`, or `None`
-/// when it holds no such file. For an installer's `ModuleConfig.xml` (at most [`MAX_READ`]); a
-/// big file goes through [`extract`].
+/// when it holds no such file (found from the listing, without decoding anything). For an
+/// installer's `ModuleConfig.xml` (at most [`MAX_READ`]); a big file goes through [`extract`]. A 7z
+/// decodes no more than [`Limits::default`]'s total to reach it.
 pub fn read(path: &Path, name: &str) -> Result<Option<Vec<u8>>, ArchiveError> {
     let wanted = key(name);
     match readable(path)? {
@@ -384,11 +479,44 @@ pub fn read(path: &Path, name: &str) -> Result<Option<Vec<u8>>, ArchiveError> {
         }
         _ => {
             let mut reader = open_7z(path)?;
+            let entries = sevenz_entries(&reader)?;
+            let Some(target) = entries
+                .iter()
+                .position(|(n, _, plain)| *plain && key(n) == wanted)
+            else {
+                return Ok(None);
+            };
+            if entries[target].1 > MAX_READ {
+                return Err(ArchiveError::new(
+                    Problem::TooBig,
+                    format!("{name}: {} bytes", entries[target].1),
+                ));
+            }
+            if reader.archive().is_file_encrypted(target) {
+                return Err(ArchiveError::new(Problem::Encrypted, name.to_owned()));
+            }
+            let plan = sevenz_plan(reader.archive(), &[target].into_iter().collect());
+            let budget = Limits::default().total;
+            if plan.decode > budget {
+                return Err(ArchiveError::new(
+                    Problem::TooBig,
+                    format!("{} bytes to decode to reach {name}", plan.decode),
+                ));
+            }
             let mut out = None;
             let mut failure = None;
-            let result = reader.for_each_entries_with_decision(|entry, data| {
-                if entry.is_directory() || sevenz_link(entry) || key(entry.name()) != wanted {
-                    return Ok(sevenz_rust2::EntryDecision::Continue);
+            let mut next = 0usize;
+            let result = reader.for_each_entries_with_decision(|_, data| {
+                let index = plan.order[next];
+                next += 1;
+                if index != target {
+                    return Ok(
+                        if plan_block_done(&plan, reader_block(&plan, index), index) {
+                            sevenz_rust2::EntryDecision::SkipBlock
+                        } else {
+                            sevenz_rust2::EntryDecision::Continue
+                        },
+                    );
                 }
                 match read_capped(data, MAX_READ, name) {
                     Ok(bytes) => out = Some(bytes),
@@ -405,6 +533,18 @@ pub fn read(path: &Path, name: &str) -> Result<Option<Vec<u8>>, ArchiveError> {
     }
 }
 
+/// The block of file `index` in a plan's order (`usize::MAX` for a file without data).
+fn reader_block(plan: &SevenzPlan, index: usize) -> usize {
+    plan.block_of.get(&index).copied().unwrap_or(usize::MAX)
+}
+
+/// Whether nothing more is wanted from `block` once file `index` of it is reached.
+fn plan_block_done(plan: &SevenzPlan, block: usize, index: usize) -> bool {
+    plan.last_wanted
+        .get(&block)
+        .map_or(true, |&last| index > last)
+}
+
 /// What [`extract`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Extracted {
@@ -415,23 +555,33 @@ pub struct Extracted {
     pub missing: Vec<String>,
 }
 
-/// Whether a path part is one of Windows' device names (`CON`, `NUL`, `COM1`...), with or without
-/// an extension: Windows opens the device for such a name in any folder.
+/// Whether a path part is one of Windows' device names (`CON`, `NUL`, `CONIN$`, `COM1`...), with
+/// or without an extension: Windows opens the device for such a name in any folder.
 fn device_name(part: &str) -> bool {
     let stem = fold_part(part);
     let stem = stem.split('.').next().unwrap_or_default().trim_end();
-    matches!(stem, "con" | "prn" | "aux" | "nul")
-        || ((stem.starts_with("com") || stem.starts_with("lpt"))
-            && stem.chars().count() == 4
-            && stem
-                .chars()
-                .nth(3)
-                .is_some_and(|c| c.is_ascii_digit() || "¹²³".contains(c)))
+    matches!(
+        stem,
+        "con" | "prn" | "aux" | "nul" | "conin$" | "conout$" | "clock$"
+    ) || ((stem.starts_with("com") || stem.starts_with("lpt"))
+        && stem.chars().count() == 4
+        && stem
+            .chars()
+            .nth(3)
+            .is_some_and(|c| c.is_ascii_digit() || "¹²³".contains(c)))
 }
 
-/// Whether `relative` (with `/` or `\`) stays inside the folder it is joined to, on every system:
-/// no empty, `.` or `..` part, no leading separator, no `:` (drives and NTFS streams), no Windows
-/// device name, and within [`MAX_PATH_BYTES`], [`MAX_PATH_PARTS`] and [`MAX_NAME_BYTES`].
+/// Whether a part has the shape of a Windows 8.3 short name (`~` then a digit), which Windows may
+/// resolve to another file than the one meant.
+fn short_name_shape(part: &str) -> bool {
+    part.as_bytes()
+        .windows(2)
+        .any(|w| w[0] == b'~' && w[1].is_ascii_digit())
+}
+
+/// Whether `relative` (with `/` or `\`) stays inside the folder it is joined to and names what
+/// every system can hold: see the module's text, and within [`MAX_PATH_BYTES`],
+/// [`MAX_PATH_PARTS`] and [`MAX_NAME_BYTES`].
 fn stays_inside(relative: &str) -> bool {
     let text = relative.replace('\\', "/");
     !text.is_empty()
@@ -445,7 +595,9 @@ fn stays_inside(relative: &str) -> bool {
                 && p.trim() != ".."
                 && !fold_part(p).is_empty()
                 && !p.contains(':')
+                && !p.chars().any(|c| c < ' ' || "<>\"|?*".contains(c))
                 && !device_name(p)
+                && !short_name_shape(p)
         })
 }
 
@@ -499,8 +651,9 @@ impl<'f> Placer<'f> {
     }
 
     /// `relative` under the folder, each part an entry already there under another case if there
-    /// is one; the folders on the way made. A link on the way, or at the end, is refused: a file
-    /// is never written through a link.
+    /// is one, a new part made without the dots and spaces at its end (as Windows makes it); the
+    /// folders on the way made. A link on the way, or at the end, is refused: a file is never
+    /// written through a link.
     fn place(&mut self, relative: &str) -> Result<PathBuf, ArchiveError> {
         let parts: Vec<&str> = relative.split(['/', '\\']).collect();
         let mut at = self.folder.to_path_buf();
@@ -529,15 +682,16 @@ impl<'f> Placer<'f> {
                     here.join(&seen.name)
                 }
                 None => {
+                    let own: String = part.trim_end_matches(['.', ' ']).nfc().collect();
                     names.insert(
                         wanted,
                         Seen {
-                            name: (*part).into(),
+                            name: own.clone().into(),
                             folder: !last,
                             link: false,
                         },
                     );
-                    here.join(part)
+                    here.join(own)
                 }
             };
             if !last {
@@ -547,16 +701,101 @@ impl<'f> Placer<'f> {
         }
         Ok(at)
     }
+
+    /// Checks, just before a file is written in `dir`, that `dir` and every folder from the
+    /// destination folder to it is a plain folder, not a link made since it was looked at.
+    fn plain_folders(&self, dir: &Path) -> Result<(), ArchiveError> {
+        let mut at = Some(dir);
+        while let Some(folder) = at {
+            let meta = std::fs::symlink_metadata(folder).map_err(|e| io(folder, e))?;
+            if meta.file_type().is_symlink() || !meta.is_dir() {
+                return Err(ArchiveError::new(
+                    Problem::Outside,
+                    format!("{} is a link", folder.display()),
+                ));
+            }
+            if folder == self.folder {
+                break;
+            }
+            at = folder.parent();
+        }
+        Ok(())
+    }
+}
+
+/// Writes `data` (at most `size` bytes, else [`Problem::TooBig`]) as `target`: under a new
+/// temporary name beside it, made only if no such name exists (so never through a link), then
+/// renamed over `target` once complete. On a failure the temporary file is removed.
+fn write_whole(
+    placer: &Placer,
+    target: &Path,
+    data: &mut dyn Read,
+    size: u64,
+    what: &str,
+) -> Result<(), ArchiveError> {
+    let dir = target.parent().unwrap_or(placer.folder);
+    placer.plain_folders(dir)?;
+    let name = target
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let temporary = (0..100u32)
+        .map(|n| dir.join(format!(".{name}.nv-rs-part{n}")))
+        .find_map(|path| {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&path)
+                .ok()
+                .map(|file| (path, file))
+        });
+    let Some((temporary, mut file)) = temporary else {
+        return Err(ArchiveError::new(
+            Problem::Io,
+            format!(
+                "{}: no temporary name could be made beside it",
+                target.display()
+            ),
+        ));
+    };
+    let result = (|| {
+        let written = std::io::copy(&mut data.take(size.saturating_add(1)), &mut file)
+            .map_err(|e| ArchiveError::new(Problem::Damaged, format!("{what}: {e}")))?;
+        file.flush().map_err(|e| io(&temporary, e))?;
+        if written > size {
+            return Err(ArchiveError::new(
+                Problem::TooBig,
+                format!("{what} unpacks to more than the {size} bytes its archive says"),
+            ));
+        }
+        if written < size {
+            return Err(ArchiveError::new(
+                Problem::Damaged,
+                format!("{what} unpacks to {written} of the {size} bytes its archive says"),
+            ));
+        }
+        Ok(())
+    })();
+    drop(file);
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(e);
+    }
+    placer.plain_folders(dir)?;
+    std::fs::rename(&temporary, target).map_err(|e| {
+        let _ = std::fs::remove_file(&temporary);
+        io(target, e)
+    })
 }
 
 /// Unpacks from the archive at `path` each wanted file: (path in the archive, `\` or `/`, any
 /// case; path under `folder`, relative). One archive file may go to several places.
 ///
-/// Before anything is written: every destination is checked ([`stays_inside`]), and the wanted
-/// files' sizes as the archive gives them against `limits`. While writing: no file is written
-/// through a link, and a file that unpacks to more than its archive said, or more than the
-/// limits, stops the unpacking ([`Problem::TooBig`]). Of two entries whose names differ only in
-/// case, the first is taken. A 7z is read only as far as the last wanted file.
+/// Before anything is written: every destination is checked ([`stays_inside`]), the wanted files'
+/// sizes as the archive gives them against `limits`, and for a 7z the bytes to decode to reach
+/// them. While writing: see the module's text. Of two entries whose names differ only in case,
+/// the first is taken. On a failure, the error's [`ArchiveError::written`] lists the complete
+/// files already written. Unpack into a fresh folder and delete it on a failure.
 pub fn extract(
     path: &Path,
     wanted: &[(String, String)],
@@ -610,6 +849,23 @@ pub fn extract(
         ));
     }
     let by_index: BTreeMap<usize, String> = chosen.iter().map(|(k, &i)| (i, k.clone())).collect();
+    let mut plan = None;
+    if let Some(reader) = sevenz.as_ref() {
+        if let Some(&i) = by_index
+            .keys()
+            .find(|&&i| reader.archive().is_file_encrypted(i))
+        {
+            return Err(ArchiveError::new(Problem::Encrypted, entries[i].0.clone()));
+        }
+        let made = sevenz_plan(reader.archive(), &by_index.keys().copied().collect());
+        if made.decode > limits.total {
+            return Err(ArchiveError::new(
+                Problem::TooBig,
+                format!("{} bytes to decode, {} allowed", made.decode, limits.total),
+            ));
+        }
+        plan = Some(made);
+    }
     std::fs::create_dir_all(folder).map_err(|e| io(folder, e))?;
     let mut done = Extracted::default();
     let mut placer = Placer::new(folder);
@@ -620,57 +876,66 @@ pub fn extract(
             let (name, size, _) = &entries[index];
             let destinations = &by_source[source_key];
             let first = placer.place(destinations[0])?;
-            let mut file = File::create(&first).map_err(|e| io(&first, e))?;
-            let written = std::io::copy(&mut data.take(size.saturating_add(1)), &mut file)
-                .map_err(|e| ArchiveError::new(Problem::Damaged, format!("{name}: {e}")))?;
-            drop(file);
-            if written > *size {
-                let _ = std::fs::remove_file(&first);
-                return Err(ArchiveError::new(
-                    Problem::TooBig,
-                    format!("{name} unpacks to more than the {size} bytes its archive says"),
-                ));
-            }
+            write_whole(&placer, &first, data, *size, name)?;
             done.written.push(first.clone());
             for destination in &destinations[1..] {
                 let other = placer.place(destination)?;
-                std::fs::copy(&first, &other).map_err(|e| io(&other, e))?;
+                let mut copy = File::open(&first).map_err(|e| io(&first, e))?;
+                write_whole(&placer, &other, &mut copy, *size, name)?;
                 done.written.push(other);
             }
             Ok(())
         };
-    if let Some(zip) = zip.as_mut() {
-        for &index in by_index.keys() {
-            let mut file = zip.by_index(index).map_err(zip_error)?;
-            write(index, &mut file, &mut done)?;
-        }
-    } else if let Some(reader) = sevenz.as_mut() {
-        // By name, in the order the archive decodes; done when nothing wanted is left.
-        let mut pending: BTreeMap<String, usize> = chosen.clone();
+    let outcome: Result<(), ArchiveError> = if let Some(zip) = zip.as_mut() {
+        (|| {
+            for &index in by_index.keys() {
+                let mut file = zip.by_index(index).map_err(zip_error)?;
+                write(index, &mut file, &mut done)?;
+            }
+            Ok(())
+        })()
+    } else if let (Some(reader), Some(plan)) = (sevenz.as_mut(), plan.as_ref()) {
+        // Each entry the reader hands over is the next one of the plan's order, so the file is
+        // known by its index, never by its name alone.
+        let mut next = 0usize;
+        let mut left = by_index.len();
         let mut failure = None;
-        let result = reader.for_each_entries_with_decision(|entry, data| {
-            if pending.is_empty() {
+        let result = reader.for_each_entries_with_decision(|_, data| {
+            if left == 0 {
                 return Ok(sevenz_rust2::EntryDecision::Stop);
             }
-            if entry.is_directory() || sevenz_link(entry) {
-                return Ok(sevenz_rust2::EntryDecision::Continue);
+            let index = plan.order[next];
+            next += 1;
+            if !by_index.contains_key(&index) {
+                return Ok(if plan_block_done(plan, reader_block(plan, index), index) {
+                    sevenz_rust2::EntryDecision::SkipBlock
+                } else {
+                    sevenz_rust2::EntryDecision::Continue
+                });
             }
-            if let Some(index) = pending.remove(&key(entry.name())) {
-                if let Err(e) = write(index, data, &mut done) {
-                    failure = Some(e);
-                    return Ok(sevenz_rust2::EntryDecision::Stop);
-                }
+            if let Err(e) = write(index, data, &mut done) {
+                failure = Some(e);
+                return Ok(sevenz_rust2::EntryDecision::Stop);
             }
-            Ok(if pending.is_empty() {
+            left -= 1;
+            Ok(if left == 0 {
                 sevenz_rust2::EntryDecision::Stop
+            } else if plan_block_done(plan, reader_block(plan, index), index) {
+                sevenz_rust2::EntryDecision::SkipBlock
             } else {
                 sevenz_rust2::EntryDecision::Continue
             })
         });
-        if let Some(e) = failure {
-            return Err(e);
+        match failure {
+            Some(e) => Err(e),
+            None => result.map_err(sevenz_error),
         }
-        result.map_err(sevenz_error)?;
+    } else {
+        Ok(())
+    };
+    if let Err(mut e) = outcome {
+        e.written = std::mem::take(&mut done.written);
+        return Err(e);
     }
     done.missing = wanted
         .iter()

@@ -1,6 +1,6 @@
 THIRD-PARTY NOTICES — nv-rs (nv-viewer: the Windows build, and the Linux and macOS builds)
 
-This file indexes the license texts of the 266 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
+This file indexes the license texts of the 268 external packages in the repository's root Cargo.lock, which nv-viewer is built from (the build-time macro crates, every platform variant of windows-targets, the sound library cpal and the window library winit with what they use on Linux, macOS and other systems included; each program links only its own system's). Package names, versions and license expressions come from each package's Cargo.toml in the local Cargo registry; the files were copied from that exact version there. A package that ships no license file gets the standard text of its license expression (MIT with its authors as the copyright line), marked in its entry. It ends with the notices of source code the translation followed that is not a package.
 
 Files are bundled under licenses/<package>-<version>/ in release ZIPs (distribution/licenses/ in the source tree). No crate source or game assets are included.
 
@@ -1313,6 +1313,14 @@ thiserror-impl 2.0.21
     thiserror-impl-2.0.21/LICENSE-APACHE
     thiserror-impl-2.0.21/LICENSE-MIT
 
+tinyvec 1.13.3
+  License expression: Zlib OR Apache-2.0 OR MIT
+  Repository: https://github.com/Lokathor/tinyvec
+  Bundled license files:
+    tinyvec-1.13.3/LICENSE-APACHE.md
+    tinyvec-1.13.3/LICENSE-MIT.md
+    tinyvec-1.13.3/LICENSE-ZLIB.md
+
 tokio 1.53.1
   License expression: MIT
   Repository: https://github.com/tokio-rs/tokio
@@ -1366,6 +1374,14 @@ unicode-ident 1.0.26
     unicode-ident-1.0.26/LICENSE-APACHE
     unicode-ident-1.0.26/LICENSE-MIT
     unicode-ident-1.0.26/LICENSE-UNICODE
+
+unicode-normalization 0.1.26
+  License expression: (MIT OR Apache-2.0) AND Unicode-3.0
+  Repository: https://github.com/unicode-rs/unicode-normalization
+  Bundled license files:
+    unicode-normalization-0.1.26/LICENSE-APACHE
+    unicode-normalization-0.1.26/LICENSE-MIT
+    unicode-normalization-0.1.26/LICENSE-UNICODE
 
 unicode-segmentation 1.13.3
   License expression: MIT OR Apache-2.0

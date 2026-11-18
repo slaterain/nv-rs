@@ -2362,6 +2362,206 @@ fn a_sliver_triangle_is_shaded_inside_itself_on_a_multisampled_target() {
     );
 }
 
+/// `D3DFMT_A16B16G16R16F`: the game's HDR targets.
+const A16B16G16R16F: u32 = 113;
+
+/// A `Present` with no rectangles.
+fn present(g: &mut Gpu, frame: u32) {
+    g.run(Cmd::Present {
+        device: DEVICE,
+        source: None,
+        dest: None,
+        window: 0,
+        dirty: false,
+        model: 0,
+        frame,
+    });
+}
+
+/// A render-target texture of one level (`level` its surface).
+fn target_texture(g: &mut Gpu, texture: u32, level: u32, size: u32, format: u32) {
+    let levels = words(&[level]);
+    g.run(Cmd::CreateTexture {
+        device: DEVICE,
+        texture,
+        levels: Data::Bytes(&levels),
+        width: size,
+        height: size,
+        usage: 1,
+        format,
+        pool: 0,
+    });
+}
+
+/// The HDR watch (a diagnostic, `bright`) reads a multisampled HDR scene where it is resolved and
+/// names a lone bright dot and a pixel that is not finite in it: a 16 by 16 A16B16G16R16F scene
+/// at 4 samples, 0.1 everywhere, 3000 at (5, 5) and infinity at (10, 10), resolved into a texture
+/// by `StretchRect`. The same scene without the two pixels shows neither.
+#[test]
+fn the_hdr_watch_names_a_lone_bright_dot_and_an_infinite_pixel_of_a_resolved_scene() {
+    let Some(mut g) = Gpu::new(16, 4) else { return };
+    const SCENE: u32 = 0x1A00;
+    const RESOLVED: u32 = 0x1A10;
+    g.run(Cmd::CreateSurface {
+        device: DEVICE,
+        surface: SCENE,
+        depth: false,
+        width: 16,
+        height: 16,
+        format: A16B16G16R16F,
+        multisample: 4,
+        quality: 0,
+        flag: 0,
+    });
+    target_texture(&mut g, RESOLVED, RESOLVED + 1, 16, A16B16G16R16F);
+    g.state(ZENABLE, 0);
+    // Frames 1 (with the two pixels) to 5 (without): frames 1 and 5 are watched.
+    for frame in 1..=5u32 {
+        g.run(Cmd::SetRenderTarget {
+            device: DEVICE,
+            index: 0,
+            surface: SCENE,
+        });
+        g.run(Cmd::SetDepthStencilSurface {
+            device: DEVICE,
+            surface: 0,
+        });
+        g.clear(1, 0, 1.0);
+        g.colour([0.1, 0.1, 0.1, 1.0]);
+        g.quad(0.5);
+        if frame == 1 {
+            g.viewport(5, 5, 1, 1, 0.0, 1.0);
+            g.colour([3000.0, 3000.0, 3000.0, 1.0]);
+            g.quad(0.5);
+            g.viewport(10, 10, 1, 1, 0.0, 1.0);
+            g.colour([f32::INFINITY, 0.0, 0.0, 1.0]);
+            g.quad(0.5);
+        }
+        g.run(Cmd::StretchRect {
+            device: DEVICE,
+            source: SCENE,
+            source_rect: None,
+            destination: RESOLVED + 1,
+            destination_rect: None,
+            filter: 0,
+        });
+        g.run(Cmd::SetRenderTarget {
+            device: DEVICE,
+            index: 0,
+            surface: RT,
+        });
+        present(&mut g, frame);
+    }
+    let d = g.b.device().expect("the device");
+    let judged = d.hdr_watch_settle();
+    let frames: Vec<u64> = judged.iter().map(|(p, _)| *p).collect();
+    assert_eq!(frames, vec![1, 5], "the watched presents: {judged:?}");
+    let first = &judged[0].1;
+    assert_eq!(first.len(), 1, "the resolved scene only: {judged:?}");
+    let (target, seen) = first[0];
+    assert_eq!((target.width, target.height), (16, 16));
+    assert_eq!(seen.not_finite, 1, "{seen:?}");
+    assert_eq!(seen.dots, 1, "{seen:?}");
+    // The dot covers at least one of its pixel's samples (3000 resolved with 0.1s).
+    assert!(
+        seen.brightest > 700.0 && seen.brightest.is_finite(),
+        "{seen:?}"
+    );
+    let (_, clean) = judged[1].1[0];
+    assert_eq!((clean.not_finite, clean.dots), (0, 0), "{clean:?}");
+    assert!(clean.brightest > 0.05 && clean.brightest < 0.2, "{clean:?}");
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// The HDR watch reads a small float target the game draws into and leaves (the luminance and
+/// adaptation targets) and follows its value: a 1 by 1 target drawn 1.0 in frame 1 and 0.01 in
+/// frame 5 (both watched) is a jump; the read leaves what the target holds as it was.
+#[test]
+fn the_hdr_watch_follows_a_small_targets_value_and_leaves_it_unchanged() {
+    let Some(mut g) = Gpu::new(16, 1) else { return };
+    const LUM: u32 = 0x1A20;
+    target_texture(&mut g, LUM, LUM + 1, 1, A16B16G16R16F);
+    g.state(ZENABLE, 0);
+    for frame in 1..=5u32 {
+        g.run(Cmd::SetRenderTarget {
+            device: DEVICE,
+            index: 0,
+            surface: LUM + 1,
+        });
+        g.run(Cmd::SetDepthStencilSurface {
+            device: DEVICE,
+            surface: 0,
+        });
+        let v = if frame == 5 { 0.01 } else { 1.0 };
+        g.colour([v, v, v, 1.0]);
+        g.quad(0.5);
+        g.run(Cmd::SetRenderTarget {
+            device: DEVICE,
+            index: 0,
+            surface: RT,
+        });
+        present(&mut g, frame);
+    }
+    let d = g.b.device().expect("the device");
+    let judged = d.hdr_watch_settle();
+    let values: Vec<f32> = judged.iter().map(|(_, r)| r[0].1.brightest).collect();
+    assert_eq!(values.len(), 2, "{judged:?}");
+    assert!(
+        (values[0] - 1.0).abs() < 0.01 && (values[1] - 0.01).abs() < 0.001,
+        "{values:?}"
+    );
+    assert_eq!(d.hdr_watch_totals().with_jumps, 1);
+    // A16B16G16R16F, 8 bytes a pixel: 0.01 as a half float is about 0x211F.
+    let (_, _, px) = d.read_surface_pixels(LUM + 1).expect("the target's pixel");
+    let half = u16::from_le_bytes([px[0], px[1]]);
+    assert!((0x211E..=0x2120).contains(&half), "{px:?}");
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// A render-target texture nothing has drawn into, sampled by three draws: counted three times,
+/// said once (a diagnostic with the HDR watch's switch).
+#[test]
+fn a_render_target_sampled_before_it_is_drawn_into_is_counted_and_said_once() {
+    let Some(mut g) = Gpu::new(16, 1) else { return };
+    const NEVER: u32 = 0x1A30;
+    const PS_TEX: u32 = 0x1A40;
+    target_texture(&mut g, NEVER, NEVER + 1, 4, A8R8G8B8);
+    // ps_2_0: dcl t0; dcl_2d s0; texld r0, t0, s0; mov oC0, r0.
+    let mut ps = vec![0xFFFF_0200];
+    ps.extend(ins(31, &[0x8000_0000, 0xB00F_0000]));
+    ps.extend(ins(31, &[0x9000_0000, 0xA00F_0800]));
+    ps.extend(ins(66, &[0x800F_0000, 0xB0E4_0000, 0xA0E4_0800]));
+    ps.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
+    ps.push(END);
+    let t = words(&ps);
+    g.run(Cmd::CreateShader {
+        device: DEVICE,
+        shader: PS_TEX,
+        pixel: true,
+        tokens: Data::Bytes(&t),
+    });
+    g.run(Cmd::SetShader {
+        device: DEVICE,
+        pixel: true,
+        shader: PS_TEX,
+    });
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: NEVER,
+    });
+    g.state(ZENABLE, 0);
+    let d = g.b.device().expect("the device");
+    let (samples0, said0) = d.stale_sample_counts();
+    for _ in 0..3 {
+        g.quad(0.5);
+    }
+    let d = g.b.device().expect("the device");
+    let (samples, said) = d.stale_sample_counts();
+    assert_eq!((samples - samples0, said - said0), (3, 1));
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
 /// The register blocks are written only when what they carry changed, and only up to the
 /// highest constant the bound shaders read: within one pass, (1) a change of only a vertex
 /// constant moves the next draw; (2) a vertex shader reading a constant beyond the ones the last
