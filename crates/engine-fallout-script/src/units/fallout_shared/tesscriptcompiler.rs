@@ -459,6 +459,9 @@ pub fn script_compile_data_get_variable(e: &mut Engine, this: Ptr, word: u32) ->
 /// with the script's name and last line number (`00406f60`), and prints it (through
 /// `00464f30`) on the console (`00703c00`) for compiler index 1, else to the log
 /// (`005b5e40`). The exception frame and the stack cookie check are not translated.
+///
+/// Seam (JIP's script runner): `005AEB66`, the release of the message string (words: the
+/// string), read before the string is released.
 pub fn script_compiler_script_error(e: &mut Engine, data: Ptr, format: u32, rest: &[u32]) {
     let base = data.addr();
     let words = rest.len() as u32 * 4;
@@ -490,6 +493,9 @@ pub fn script_compiler_script_error(e: &mut Engine, data: Ptr, format: u32, rest
             let message = e.call(PREPARE_MESSAGE, &args![text, 0u32]).u32();
             e.call(SCRIPT_LOG, &args![message]);
         }
+        // Seam: JIP's script runner reads the message here (`LogCompileError`, its call at
+        // `005AEB66`, which releases the string as the game's does): the string. No answer is read.
+        let _ = e.site(0x005a_eb66, &[string]);
         e.call(STRING_DESTRUCT, &args![string]);
     });
 }
@@ -3553,6 +3559,33 @@ mod n045_tests {
         let log = e.call_log.take().unwrap();
         assert_eq!(only(&log, CONSOLE_PRINT).len(), 1);
         assert!(only(&log, SCRIPT_LOG).is_empty());
+    }
+
+    /// The seam at `005AEB66` (JIP's script runner reads the message there): the formatted
+    /// string's address, before the string is released.
+    #[test]
+    fn script_error_offers_its_message_before_releasing_it() {
+        thread_local! {
+            static SEEN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let mut e = rig();
+        let d = data(&mut e);
+        e.on_site_for_test(0x005a_eb66, |e, w| {
+            // Not released yet: no destructor call logged so far.
+            let released = e
+                .call_log
+                .as_ref()
+                .is_some_and(|log| log.iter().any(|c| c.0 == STRING_DESTRUCT));
+            assert!(!released, "offered before the release");
+            SEEN.with(|s| s.set(w[0]));
+            None
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x005a_ea90, &[d, 0x0103_7600]);
+        let log = e.call_log.take().unwrap();
+        let released = only(&log, STRING_DESTRUCT);
+        assert_eq!(released.len(), 1);
+        assert_eq!(SEEN.with(|s| s.get()), released[0][0]);
     }
 
     fn script(e: &mut Engine) -> u32 {

@@ -236,6 +236,12 @@ fn slot(e: &mut Engine) -> &State {
     e.ext_free::<State>()
 }
 
+/// `s_controllerReady` set, for the tests of the commands that read it.
+#[cfg(test)]
+pub(crate) fn set_ready_for_test(e: &mut Engine, ready: bool) {
+    slot(e).ready.store(ready, Relaxed);
+}
+
 /// `s_controllerReady`.
 pub fn ready(e: &mut Engine) -> bool {
     slot(e).ready.load(Relaxed)
@@ -504,6 +510,13 @@ pub fn set_key_disable_state(e: &mut Engine, key: u32, disable: bool) {
         k.user_disable = disable;
         k.script_disable = disable;
     }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/dinput.cpp:
+// DIHookControl::SetLMBDisabled.
+/// The left mouse button (key 0x100) disabled or enabled for the player only.
+pub fn set_lmb_disabled(e: &mut Engine, disable: bool) {
+    keys(e)[MOUSE_BUTTON_OFFSET as usize].user_disable = disable;
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/dinput.cpp: DIHookControl::TapKey.

@@ -5021,7 +5021,13 @@ impl Activation {
     fn at_00607c8b(&self, e: &mut Engine) -> bool {
         let player = Self::player(e);
         let (a, t) = (self.activator, self.target);
-        if e.call(0x0056_6950, &args![t]).bool() && self.activator_ref == player {
+        // Seam: JIP's G54 answers in place of the teammate test at `0x607C8E` (words: the actor; an
+        // answer is the test's).
+        let teammate = match e.site(0x0060_7c8e, &[t]) {
+            Some(answer) => answer & 0xff != 0,
+            None => e.call(0x0056_6950, &args![t]).bool(),
+        };
+        if teammate && self.activator_ref == player {
             if e.call(0x0075_4d90, &args![t]).bool() {
                 self.queue_menu(e, 8, self.target_ref, 0, 0, 0);
             }
@@ -11839,6 +11845,22 @@ mod tests {
         w.e.call_log = Some(vec![]);
         assert!(!w.activate(0, 0));
         assert!(calls(&mut w.e, 0x0070_9470).is_empty());
+    }
+
+    /// The seam at `0x607C8E` (JIP's G54): an answer replaces the teammate test (`00566950` is
+    /// not called); 0 keeps the companion wheel shut.
+    #[test]
+    fn activate_the_wheel_test_seam() {
+        let mut w = activate_world();
+        w.e.set_global(PLAYER_SINGLETON, w.activator);
+        returns(&mut w.e, 0x0056_6950, 1);
+        returns(&mut w.e, 0x0075_4d90, 1);
+        started(&mut w.e);
+        w.e.on_site_for_test(0x0060_7c8e, |_, _| Some(0));
+        w.e.call_log = Some(vec![]);
+        w.activate(0, 0);
+        assert!(calls(&mut w.e, 0x0056_6950).is_empty());
+        assert!(calls(&mut w.e, 0x0070_9470).iter().all(|c| c[0] != 8));
     }
 
     #[test]

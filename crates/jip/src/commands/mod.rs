@@ -14,6 +14,7 @@ pub mod extra;
 pub mod forms;
 pub(crate) mod havok_refs;
 pub mod jip_fn_actor;
+pub mod jip_fn_actor_anim;
 pub mod jip_fn_actor_p2;
 pub mod jip_fn_ammo;
 pub mod jip_fn_ammo_effect;
@@ -43,9 +44,12 @@ pub mod jip_fn_marker_cmds;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
+pub mod jip_fn_misc_ref_insert;
+pub mod jip_fn_misc_ref_lines;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_misc_ref_nodes_w;
 pub mod jip_fn_miscellaneous;
+pub mod jip_fn_miscellaneous_scene;
 pub mod jip_fn_move_cmds;
 pub mod jip_fn_package;
 pub mod jip_fn_perk;
@@ -58,6 +62,7 @@ pub mod jip_fn_sound;
 pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
+pub mod jip_fn_ui_nodes;
 pub mod jip_fn_utility;
 pub mod jip_fn_water;
 pub mod jip_fn_weapon;
@@ -148,6 +153,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_combat_style::COMMANDS,
     jip_fn_destruction_data::COMMANDS,
     jip_fn_effect::COMMANDS,
+    // With its patch H23 (`game_patches::gl`).
+    jip_fn_effect::AWAITING_H23,
     jip_fn_explosion::COMMANDS,
     jip_fn_faction::COMMANDS,
     jip_fn_global_var::COMMANDS,
@@ -208,9 +215,14 @@ pub const ALL: &[Handlers] = &[
     jip_fn_linked_ref::COMMANDS,
     jip_fn_misc_ref_havok_w::COMMANDS,
     jip_fn_extra_data::COMMANDS,
+    jip_fn_ui_nodes::COMMANDS,
+    jip_fn_miscellaneous_scene::COMMANDS,
+    jip_fn_actor_anim::COMMANDS,
+    jip_fn_misc_ref_lines::COMMANDS,
     crate::game_patches::gp::COMMANDS,
     crate::game_patches::gc::formulas::COMMANDS,
     crate::game_patches::gx::COMMANDS,
+    jip_fn_misc_ref_insert::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -240,6 +252,13 @@ pub fn install(e: &mut Engine) {
     // Lock-free slots conditions read: made before the threads start.
     jip_fn_miscellaneous::install(e);
     jip_fn_aux_variable::install(e);
+    e.ext_free::<jip_fn_misc_ref::SyncPosition>();
+    e.ext_free::<jip_fn_ui::HudCursor>();
+    e.ext_free::<jip_fn_ui::ItemListRefresh>();
+    jip_fn_ui::install(e);
+    jip_fn_misc_ref_insert::install(e);
+    jip_fn_misc_ref_lines::install(e);
+    jip_fn_actor_p2::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
@@ -291,6 +310,11 @@ fn component(e: &Engine, form: u32, which: u32) -> u32 {
 /// The form's `BGSDestructibleObjectForm`, 0 for a form type without one.
 pub fn destructible_form(e: &Engine, form: u32) -> u32 {
     component(e, form, 2)
+}
+
+/// The form's `TESModel` (`kBaseComponentOffsets`' byte 3), 0 for a form type without one.
+pub(crate) fn model_component(e: &Engine, form: u32) -> u32 {
+    component(e, form, 3)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameForms.cpp: TESForm::GetFullName (asm).
@@ -749,6 +773,8 @@ mod tests {
             "jip_fn_combat_style",
             "jip_fn_destruction_data",
             "jip_fn_effect",
+            // jip_fn_effect::AWAITING_H23 (`CastImmediate`, with H23).
+            "jip_fn_effect",
             "jip_fn_explosion",
             "jip_fn_faction",
             "jip_fn_global_var",
@@ -809,12 +835,18 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_misc_ref",
             "jip_fn_misc_ref",
+            "jip_fn_ui",
+            "jip_fn_miscellaneous",
+            "jip_fn_actor",
+            "jip_fn_misc_ref",
             // game_patches::gp::COMMANDS (its commands are in this file).
             "jip_fn_miscellaneous",
             // game_patches::gc::formulas::COMMANDS (likewise).
             "jip_fn_miscellaneous",
             // game_patches::gx::COMMANDS (`ToggleMouseMovement`, built with H20).
             "jip_fn_input",
+            // jip_fn_misc_ref_insert (InsertNode, AttachModel, ModelHasBlock).
+            "jip_fn_misc_ref",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();

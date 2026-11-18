@@ -5332,7 +5332,16 @@ pub fn extra_data_list_get_head_track_target_extra(
     e: &mut Engine,
     this: Ptr<ExtraDataList>,
 ) -> u32 {
-    extra_word_or(e, this, EXTRA_TYPE_46, 0)
+    // The lookup by address (`00410220`), as the exe calls it, so this compares call for call with
+    // the dispatch family's typed getter.
+    let extra: Ptr<BSExtraData> = e
+        .call(0x0041_0220, &args![this, u32::from(EXTRA_TYPE_46)])
+        .ptr();
+    if extra.is_null() {
+        0
+    } else {
+        payload(e, extra, 0x0c)
+    }
 }
 
 // Translated from 00419ed0 (decompiled, FalloutNV.exe 1.4.0.525)

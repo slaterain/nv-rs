@@ -857,31 +857,40 @@ pub(crate) fn hit_coords(e: &Engine, cast: &Cast) -> ([f32; 4], bool) {
     if rd32(e, tes.wrapping_add(TES_INTERIOR)).is_some_and(|c| c != 0) {
         return (coords, true);
     }
+    (coords, grid_cell_at(e, tes, coords[0], coords[1]) != 0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameData.cpp: GridCellArray::GetCellAtCoord
+// (asm), with the coordinates as its callers make them (`cvttps2dq`, `psrad 12`, 16 bits each).
+/// The exterior grid cell (`TES::pGridCellA`, +8, of `tes`) holding the point `(x, y)`: each
+/// truncated and shifted right 12, then JIP's index into the grid: `y' + x' + (x' << half)` with
+/// `x' = x - centreX + half`, `y' = y - centreY + half`, each below the dimension; 0 for none (or
+/// a grid word that cannot be read). Also `GetLightAmountAtPoint`'s test.
+pub(crate) fn grid_cell_at(e: &Engine, tes: u32, x: f32, y: f32) -> u32 {
     let Some(grid) = ptr(e, tes.wrapping_add(TES_GRID)) else {
-        return (coords, false);
+        return 0;
     };
     let truncate = |v: f32| super::cvttss2si(v) >> 12;
-    let (x, y) = (truncate(coords[0]) as i16, truncate(coords[1]) as i16);
+    let (x, y) = (truncate(x) as i16, truncate(y) as i16);
     let (Some(cx), Some(cy), Some(dim), Some(cells)) = (
         rd32(e, grid.wrapping_add(4)),
         rd32(e, grid.wrapping_add(8)),
         rd32(e, grid.wrapping_add(0xc)),
         rd32(e, grid.wrapping_add(0x10)),
     ) else {
-        return (coords, false);
+        return 0;
     };
     let half = dim >> 1;
     let gx = (i32::from(x) as u32).wrapping_sub(cx).wrapping_add(half);
     if gx >= dim {
-        return (coords, false);
+        return 0;
     }
     let gy = (i32::from(y) as u32).wrapping_sub(cy).wrapping_add(half);
     if gy >= dim {
-        return (coords, false);
+        return 0;
     }
     let index = gy
         .wrapping_add(gx)
         .wrapping_add(gx.wrapping_shl(half & 0xff));
-    let cell = rd32(e, cells.wrapping_add(index.wrapping_mul(4))).unwrap_or(0);
-    (coords, cell != 0)
+    rd32(e, cells.wrapping_add(index.wrapping_mul(4))).unwrap_or(0)
 }

@@ -404,6 +404,13 @@ pub const SITES: &[Entry] = &[
         owners: NVSE_JIP,
         step: "I-4, 3.9a",
     },
+    // ScriptCompiler::ScriptError 005aea90: the release of the formatted message (JIP's script
+    // runner reads it there while its files compile, `LogCompileError`).
+    Entry {
+        addr: 0x005a_eb66,
+        owners: JIP,
+        step: "3.10 runner",
+    },
     // ScriptCompiler::Compile 005aeb90: the start of a compile (in place of the call clearing
     // the compiled flag), the check of the referenced objects (passed while a lambda compiles),
     // and the epilogue every exit passes (the end of a compile).
@@ -792,6 +799,14 @@ pub const SITES: &[Entry] = &[
         addr: 0x0087_055e,
         owners: NVSE,
         step: "I-8",
+    },
+    // TaskQueueInterface::TaskUnpackFunc 0087b990, tag 0x2B (its jump table's entry 0087CE34, the
+    // default in the exe): JIP LN NVSE's DoQueuedCmdCallHook (InitJIPHooks), its queued calls
+    // (`QueuedCmdCall`: FireWeaponEx).
+    Entry {
+        addr: 0x0087_ce34,
+        owners: JIP,
+        step: "3.5e",
     },
     // Actor::QueueEquipObject 0088c650, after an aid item's EquipObject: JIP LN NVSE's EquipAidItem
     // (the item's use events).
@@ -2951,7 +2966,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 122);
+        assert_eq!(SITES.len(), 124);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [
@@ -3006,6 +3021,7 @@ mod tests {
             0x0060_6540,
             0x0060_678f,
             0x0066_ee72,
+            0x0087_ce34,
             0x0088_c74e,
             0x0088_c87a,
             0x0089_1c86,
