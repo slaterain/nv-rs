@@ -14,8 +14,8 @@
 //! A file's text is compiled as a partial script (statements with no `scn` line and no block), in
 //! the editor's mode (`runtimeMode` 0), by the game's compiler (`ScriptCompiler::Compile`,
 //! `005aeb90`); one that does not compile, or compiles to nothing, is passed over. The files are
-//! listed as JIP lists them, through the game's `FindFirstFileA` on `...\scripts\*.txt` (in nv-rs
-//! the platform layer's, on every system), and read through the mods' files seam
+//! listed through the mods' files seam (`engine_core::mod_files::list`: the port's own folder and
+//! the game's Data merged, as JIP's search of `...\scripts\*.txt` lists the one folder), and read through the mods' files seam
 //! ([`engine_core::mod_files`]: the port's own folder beside the saves first, then the game's Data;
 //! the game's own file read when no platform is there), at most `STR_BUFFER_SIZE - 1` bytes, as JIP's
 //! `FileToBuffer` reads into its string buffer. Nothing is written.
@@ -43,7 +43,8 @@ use engine_core::prelude::*;
 
 /// `scriptsPath`: the folder, and the search JIP makes in it.
 pub const SCRIPTS_PATH: &[u8] = b"Data\\NVSE\\plugins\\scripts\\";
-const SEARCH: &[u8] = b"Data\\NVSE\\plugins\\scripts\\*.txt";
+/// The folder itself, as the mods' files seam lists it.
+const SCRIPTS_FOLDER: &[u8] = b"Data\\NVSE\\plugins\\scripts";
 
 /// `STR_BUFFER_SIZE` (JIP LN NVSE, `internal/utility.h`): `GetStrArgBuffer()`'s size; a file is
 /// read into it up to one byte less.
@@ -77,16 +78,6 @@ const BUFFER_RUNTIME_MODE: u32 = 8;
 const BUFFER_NAME: u32 = 0xc;
 const BUFFER_PARTIAL: u32 = 0x18;
 const BUFFER_CURRENT_SCRIPT: u32 = 0x4c;
-
-/// KERNEL32's import slots the game's file code calls (`DirectoryIterator`'s search), and
-/// `WIN32_FIND_DATAA`: its size, its attributes (first word) and `cFileName`.
-const FIND_FIRST_FILE_A: u32 = 0x00fd_f070;
-const FIND_NEXT_FILE_A: u32 = 0x00fd_f068;
-const FIND_CLOSE: u32 = 0x00fd_f064;
-const FIND_DATA_SIZE: u32 = 0x140;
-const FIND_DATA_NAME: u32 = 0x2c;
-const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
-const INVALID_HANDLE_VALUE: u32 = 0xffff_ffff;
 
 /// `JIPScriptRunner::ScriptRunOn`: a file's moment, the multi-character constant its first two
 /// letters make (`*(UInt16*)fileName | 0x2020`).
@@ -388,29 +379,23 @@ pub fn run_script_source(e: &mut Engine, text: &[u8], name: &[u8], capture: bool
     })
 }
 
-/// The files `SEARCH` lists, in its order: each entry's name, and whether it is a file.
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: JIPScriptRunner::Init (its
+// `DirectoryIterator` over `scriptsPath`, `*.txt`).
+/// The folder's entries whose names end in `.txt` (any case), in the seam's order (the port's folder
+/// beside the saves and the game's Data merged, as the seam reads them, in NTFS's order): each name
+/// and whether it is a file. Through the mods' files seam (`engine_core::mod_files::list`), so a
+/// script file placed only in the port's folder is found too; without the platform, nothing.
+/// Deliberate difference: Windows' own search of `*.txt` also matches a name whose 8.3 short name
+/// ends in `.TXT` (`a.txt1`, say); the seam lists long names only, so such a file is not run.
 fn list(e: &mut Engine) -> Vec<(Vec<u8>, bool)> {
-    let mut out = Vec::new();
-    e.with_stack(FIND_DATA_SIZE, |e, data| {
-        let data = data.addr();
-        let handle = nvse::events::with_guest_text(e, SEARCH, |e, p| {
-            e.call(FIND_FIRST_FILE_A, &args![p, data]).u32()
-        });
-        if handle == INVALID_HANDLE_VALUE {
-            return;
-        }
-        loop {
-            let name = nvse::table::guest_text(e, data + FIND_DATA_NAME);
-            let is_file = e.mem.u32(data) & FILE_ATTRIBUTE_DIRECTORY == 0;
-            out.push((name, is_file));
-            // `DirectoryIterator::operator++`: any failure ends the search.
-            if e.call(FIND_NEXT_FILE_A, &args![handle, data]).u32() == 0 {
-                break;
-            }
-        }
-        e.call(FIND_CLOSE, &args![handle]);
-    });
-    out
+    engine_core::mod_files::list(e, SCRIPTS_FOLDER)
+        .into_iter()
+        .filter(|entry| {
+            entry.name.len() >= 4
+                && entry.name[entry.name.len() - 4..].eq_ignore_ascii_case(b".txt")
+        })
+        .map(|entry| (entry.name, !entry.is_folder))
+        .collect()
 }
 
 fn state(e: &mut Engine) -> &mut State {

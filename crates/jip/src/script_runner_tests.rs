@@ -24,8 +24,6 @@ const CONSOLE_PRINT_FN: u32 = 0x0071_d0a0;
 struct Log {
     /// Every call of interest, in order.
     calls: Vec<String>,
-    /// The names the folder search answers, with whether each is a folder.
-    listing: Option<Vec<(String, bool)>>,
     /// The text of each script made, by its address.
     texts: Vec<(u32, String)>,
 }
@@ -167,66 +165,23 @@ fn runner_engine() -> Engine {
         note(format!("console {}", String::from_utf8_lossy(&line)));
         eax(0)
     });
-    e.register(FIND_FIRST_FILE_A, |e, a| {
-        let pattern = nvse::table::guest_text(e, a[0]);
-        assert_eq!(pattern, SEARCH);
-        let Some(mut entries) = with_log(|l| l.listing.clone()) else {
-            return eax(INVALID_HANDLE_VALUE);
-        };
-        let first = entries.remove(0);
-        found(e, a[1], &first);
-        with_log(|l| l.listing = Some(entries));
-        eax(0x900)
-    });
-    e.register(FIND_NEXT_FILE_A, |e, a| {
-        assert_eq!(a[0], 0x900);
-        let next = with_log(|l| {
-            let rest = l.listing.as_mut().unwrap();
-            (!rest.is_empty()).then(|| rest.remove(0))
-        });
-        match next {
-            Some(f) => {
-                found(e, a[1], &f);
-                eax(1)
-            }
-            None => eax(0),
-        }
-    });
-    e.register(FIND_CLOSE, |_, a| {
-        note(format!("find-close {:x}", a[0]));
-        eax(1)
-    });
     e
 }
 
-fn found(e: &mut Engine, data: u32, (name, folder): &(String, bool)) {
-    e.mem.set_u32(
-        data,
-        if *folder {
-            FILE_ATTRIBUTE_DIRECTORY
-        } else {
-            0x20
-        },
-    );
-    e.mem.write(data + FIND_DATA_NAME, name.as_bytes());
-    e.mem.set_u8(data + FIND_DATA_NAME + name.len() as u32, 0);
-}
-
-/// The folder search answers these names (a `/` at the end: a folder); the files go in the seam.
+/// The folder's entries in the seam: each name's text as a file (a `/` at the end: a folder; no text:
+/// not there).
 fn folder(entries: &[(&str, Option<&str>)]) {
-    let listing = entries
-        .iter()
-        .map(|(name, text)| {
-            if let Some(text) = text {
-                files::put(
-                    &format!("data\\nvse\\plugins\\scripts\\{name}"),
-                    text.as_bytes(),
-                );
-            }
-            (name.trim_end_matches('/').to_string(), name.ends_with('/'))
-        })
-        .collect();
-    with_log(|l| l.listing = Some(listing));
+    for (name, text) in entries {
+        let path = format!(
+            "data\\nvse\\plugins\\scripts\\{}",
+            name.trim_end_matches('/')
+        );
+        if name.ends_with('/') {
+            files::folder(&path);
+        } else if let Some(text) = text {
+            files::put(&path, text.as_bytes());
+        }
+    }
 }
 
 fn runs() -> Vec<String> {
@@ -296,7 +251,6 @@ fn deferred_start_runs_gr_files_and_keeps_the_others() {
     assert!(!c
         .iter()
         .any(|s| s.contains("readme") || s.contains("missing")));
-    assert!(c.contains(&"find-close 900".to_string()));
     let kept: Vec<Option<RunOn>> = e
         .ext::<Jip>()
         .script_runner
@@ -375,10 +329,9 @@ fn the_listener_runs_them_at_the_save_and_the_exits() {
 #[test]
 fn a_name_kept_already_keeps_its_first_script() {
     let mut e = runner_engine();
-    folder(&[
-        ("gl_same.txt", Some("print first")),
-        ("GL_SAME.TXT", Some("print second")),
-    ]);
+    folder(&[("gl_same.txt", Some("print first"))]);
+    init_files(&mut e);
+    // The same name again (here a second start: the seam lists one spelling of a name).
     init_files(&mut e);
     // Both compiled (the second stays made, as in JIP); the first kept.
     let made: Vec<u32> = with_log(|l| l.texts.iter().map(|t| t.0).collect());
@@ -430,7 +383,6 @@ fn no_folder_no_files() {
     let mut e = runner_engine();
     init_files(&mut e);
     assert!(e.ext::<Jip>().script_runner.cached.is_empty());
-    assert!(!calls().iter().any(|c| c.starts_with("find-close")));
 }
 
 #[test]
