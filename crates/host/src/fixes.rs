@@ -2723,6 +2723,62 @@ bSunShadowsCharacters=0
         assert!(!choices[0].is_on(&JIP_GAME_PATCHES));
     }
 
+    /// lStewieAl's Tweaks: on in the fixes preset, off in vanilla, its own line or variable over
+    /// both; `[nv-rs Stewie]`'s keys reach the choice (a play run only) and the install, and a value
+    /// other than 0 or 1 is named in the line for unusable keys.
+    #[test]
+    fn stewie_follows_the_preset_and_its_keys_reach_the_install() {
+        assert!(!Choice::vanilla().is_on(&STEWIE));
+        assert!(Choice::from_parts(None, no_env).unwrap().is_on(&STEWIE));
+        let off = with_ini(None, "[nv-rs Fixes]\nbStewieTweaks=0\n", &[]);
+        assert!(!off.is_on(&STEWIE));
+        let on = Choice::from_parts(
+            None,
+            env_of(&[("NV_STEWIE", "1"), ("NV_PRESET", "vanilla")]),
+        )
+        .unwrap();
+        assert!(on.is_on(&STEWIE));
+        let keyed = with_ini(
+            None,
+            "[nv-rs Stewie]\nbDialogSpeechNullCheck=0\nbMissingKeysAsTweaks=yes\n",
+            &[],
+        );
+        assert_eq!(keyed.stewie.rows, [("bDialogSpeechNullCheck", false)]);
+        assert!(!keyed.stewie.as_tweaks);
+        assert_eq!(
+            keyed.ini_note.as_deref(),
+            Some(
+                "Fallout.ini's nv-rs settings: not used, the default instead: bMissingKeysAsTweaks=yes"
+            )
+        );
+        // Not a play run: the keys are not read.
+        let script = Choice::from_texts(
+            None,
+            Some("[nv-rs Stewie]\nbDialogSpeechNullCheck=0\n"),
+            no_env,
+        )
+        .unwrap();
+        assert!(script.stewie.rows.is_empty());
+        // The install: the row on, its bit set unless its key is 0.
+        for (choice, bit) in [
+            (Choice::from_parts(None, no_env).unwrap(), true),
+            (keyed, false),
+            (Choice::vanilla(), false),
+        ] {
+            let mut e = Engine::new();
+            // No Tweaks INI: the game's CreateFileA (the read when no platform answers the mods'
+            // files seam) finds none.
+            e.register(0x00fd_f088, |_, _| 0xffff_ffffu32.into_ret());
+            install(&mut e, &choice);
+            stewie::install(&mut e);
+            assert_eq!(
+                e.stewie(engine_core::extend::stewie::DIALOG_SPEECH_NULL_CHECK),
+                bit
+            );
+            assert_eq!(stewie::on(&e), choice.is_on(&STEWIE));
+        }
+    }
+
     /// The switch from its variable: `1` on, `0` off, anything else a stop. Alone it makes the run
     /// a test (vanilla, so the other JIP rows are off); with `NV_PRESET=fixes` the fixes preset's
     /// JIP rows are on with it, and the threads stepped, as a test's are.
