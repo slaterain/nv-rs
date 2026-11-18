@@ -1772,7 +1772,8 @@ fn run_entry(e: &Engine, k: &[u8], shown: &str) -> Entry {
 
 /// The directory entry of the file at the full path `path` now: the run's ([`Disk::entries`]),
 /// else the player's as the disk keeps it ([`player_entry`]); `None` for a file of the run
-/// without one, or a player's file elsewhere than on Windows (times not provided there).
+/// without one (a copy), or a player's file that is not there (gone, or off Windows a link whose
+/// target is gone).
 fn entry_of(e: &Engine, path: &[u8]) -> Option<Entry> {
     let k = key(path);
     if state_ref!(e).disk.files.contains_key(&k) {
@@ -2519,7 +2520,8 @@ fn listing_of(
 /// The directory entry of the player's file at the full path `path` as the disk keeps it (its
 /// name as stored, short name, attributes, size and times: the host's own search of that name,
 /// [`host_search`]), for a file the game takes into the run, renames or deletes; `None` when
-/// there is none (elsewhere than on Windows also when the file system keeps none of its times).
+/// there is none (off Windows also a link whose target is gone; a time the file system does not
+/// keep is 0, [`known_or_zero`]).
 fn player_entry(path: &[u8]) -> Option<Entry> {
     #[cfg(windows)]
     {
@@ -5245,70 +5247,116 @@ mod tests_changed_directories {
         assert!(unknown.is_err(), "Windows keeps its stop");
     }
 
+    /// The `FILETIME` of the last write the disk keeps for the host file `path`.
+    #[cfg(not(windows))]
+    fn disk_written(path: &std::path::Path) -> u64 {
+        filetime(std::fs::metadata(path).unwrap().modified().unwrap())
+    }
+
+    /// Starts the run's file clock a minute after the disk's newest file in `dir`, so the run's
+    /// saves are newer than the player's (as in a real run) and the save menu sorts them so.
+    #[cfg(not(windows))]
+    fn clock_after_disk(e: &mut Engine, dir: &std::path::Path) {
+        let newest = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| disk_written(&entry.path()))
+            .max()
+            .unwrap_or(0);
+        state!(e).disk.clock = Some(newest + 60 * SECOND);
+    }
+
     /// Linux and macOS (the first Linux save menu's stop, 2026-11-17): a quick save, a named save
     /// and the same quick save again (its backup made: `CloseSaveFile`'s rename to `.bak`), all
     /// with names that need an 8.3 name on Windows, beside a save of the player's from before the
     /// run; then the save menu's `Saves\*.fos` listing (`00851330`) and the save list's look at
     /// one save by name (`00846a20`). Every save is found, the player's and the run's, with an
-    /// empty `cAlternateFileName` (no 8.3 names on this file system), its size, and nothing
-    /// stops; deleting a save from the menu takes it out of the next listing.
+    /// empty `cAlternateFileName` (no 8.3 names on this file system), `ARCHIVE`, its size and
+    /// the times the save menu sorts by (the run's saves later than the player's), and nothing
+    /// stops; the whole folder lists `.` with its times on the disk; deleting a save from the
+    /// menu takes it out of the next listing.
     #[cfg(not(windows))]
     #[test]
     fn saves_made_in_the_run_are_listed_without_short_names_here() {
-        let dir = scratch("saves-here", &[("Save 1   Courier  Goodsprings.fos", 300)]);
+        let player = "Save 1   Courier  Goodsprings.fos";
+        let named = "Save 2   Courier  Doc Mitchell s House";
+        let dir = scratch("saves-here", &[(player, 300)]);
+        let host = std::path::PathBuf::from(&dir);
         let saves = engine_core::exe::game_view(&dir);
         let mut e = Engine::new();
-        save(&mut e, &saves, "quicksave", &[100, 20]);
-        save(
-            &mut e,
-            &saves,
-            "Save 2   Courier  Doc Mitchell s House",
-            &[200],
-        );
-        save(&mut e, &saves, "quicksave", &[150]);
+        clock_after_disk(&mut e, &host);
+        let (quick_made, _) = save(&mut e, &saves, "quicksave", &[100, 20]);
+        let (named_made, named_last) = save(&mut e, &saves, named, &[200]);
+        let (_, quick_last) = save(&mut e, &saves, "quicksave", &[150]);
         let all = listed(&mut e, &format!(r"{saves}\*.fos"));
-        let names: Vec<(&str, &str, u64)> = all
-            .iter()
-            .map(|l| (l.0.as_str(), l.1.as_str(), l.3))
-            .collect();
-        assert_eq!(
-            names,
-            [
-                ("quicksave.fos", "", 150),
-                ("Save 1   Courier  Goodsprings.fos", "", 300),
-                ("Save 2   Courier  Doc Mitchell s House.fos", "", 200),
-            ]
-        );
-        // The backup is there too, under its own name, with no short name.
+        let player_written = disk_written(&host.join(player));
+        let expected: Vec<Listed> = vec![
+            // The second quick save takes the first one's creation time (tunnelling: the
+            // name was renamed away to `.bak` and made again within 15 s).
+            (
+                "quicksave.fos".into(),
+                String::new(),
+                FILE_ATTRIBUTE_ARCHIVE,
+                150,
+                quick_made,
+                quick_last,
+                quick_last,
+            ),
+            (
+                player.into(),
+                String::new(),
+                FILE_ATTRIBUTE_ARCHIVE,
+                300,
+                all[1].4,
+                all[1].5,
+                player_written,
+            ),
+            (
+                format!("{named}.fos"),
+                String::new(),
+                FILE_ATTRIBUTE_ARCHIVE,
+                200,
+                named_made,
+                named_last,
+                named_last,
+            ),
+        ];
+        assert_eq!(all, expected);
+        assert!(quick_last > player_written && named_last > player_written);
+        // The backup is there too, under its own name, with no short name: the first quick
+        // save's bytes and times.
         let backups = listed(&mut e, &format!(r"{saves}\*.bak"));
         assert_eq!(backups.len(), 1);
         assert_eq!(
-            (backups[0].0.as_str(), backups[0].1.as_str()),
-            ("quicksave.fos.bak", "")
+            (backups[0].0.as_str(), backups[0].1.as_str(), backups[0].3),
+            ("quicksave.fos.bak", "", 120)
         );
-        // The save list's look at one save by name: found, no short name.
-        let one = listed(&mut e, &format!(r"{saves}\quicksave.fos"));
-        assert_eq!(one.len(), 1);
+        // The save list's look at one save by name: the same entry.
         assert_eq!(
-            (one[0].0.as_str(), one[0].1.as_str(), one[0].3),
-            ("quicksave.fos", "", 150)
+            listed(&mut e, &format!(r"{saves}\quicksave.fos")),
+            [all[0].clone()]
         );
         // The whole folder (`*`): its `.` too, though the game changed the folder in this run
         // (on Windows a stop: NTFS moves the folder's times; here the disk's times, no stop).
-        let every: Vec<String> = listed(&mut e, &format!(r"{saves}\*"))
-            .into_iter()
-            .map(|l| l.0)
-            .collect();
+        let every = listed(&mut e, &format!(r"{saves}\*"));
+        let named_fos = format!("{named}.fos");
+        let names: Vec<&str> = every.iter().map(|l| l.0.as_str()).collect();
         assert_eq!(
-            every,
+            names,
             [
                 ".",
                 "..",
                 "quicksave.fos",
                 "quicksave.fos.bak",
-                "Save 1   Courier  Goodsprings.fos",
-                "Save 2   Courier  Doc Mitchell s House.fos"
+                player,
+                named_fos.as_str()
             ]
+        );
+        assert_eq!(every[0].2, FILE_ATTRIBUTE_DIRECTORY);
+        assert_eq!(
+            every[0].6,
+            disk_written(&host),
+            "`.` has the folder's own times"
         );
         // Deleting a save from the menu: gone from the next listing.
         assert_eq!(delete(&mut e, &format!(r"{saves}\quicksave.fos")), 1);
@@ -5316,13 +5364,47 @@ mod tests_changed_directories {
             .into_iter()
             .map(|l| l.0)
             .collect();
-        assert_eq!(
-            left,
-            [
-                "Save 1   Courier  Goodsprings.fos",
-                "Save 2   Courier  Doc Mitchell s House.fos"
-            ]
+        assert_eq!(left, [player.to_string(), format!("{named}.fos")]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Linux and macOS: a quick save over a quick save and its backup from an earlier session
+    /// (both on the disk): `CloseSaveFile` deletes the old backup, renames the old quick save to
+    /// the backup and the new one into place. `*.fos` and `*.bak` then list one entry each,
+    /// with no short names: the new save's size, and the backup with the old quick save's size
+    /// and its last-write time as the disk keeps it (never 0).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_quick_save_over_saves_from_the_disk_keeps_their_times() {
+        let dir = scratch(
+            "quick-over-disk",
+            &[("quicksave.fos", 500), ("quicksave.fos.bak", 400)],
         );
+        let host = std::path::PathBuf::from(&dir);
+        let old_written = disk_written(&host.join("quicksave.fos"));
+        let saves = engine_core::exe::game_view(&dir);
+        let mut e = Engine::new();
+        clock_after_disk(&mut e, &host);
+        let (_, last) = save(&mut e, &saves, "quicksave", &[150]);
+        let fos = listed(&mut e, &format!(r"{saves}\*.fos"));
+        assert_eq!(fos.len(), 1);
+        assert_eq!(
+            (
+                fos[0].0.as_str(),
+                fos[0].1.as_str(),
+                fos[0].2,
+                fos[0].3,
+                fos[0].6
+            ),
+            ("quicksave.fos", "", FILE_ATTRIBUTE_ARCHIVE, 150, last)
+        );
+        let bak = listed(&mut e, &format!(r"{saves}\*.bak"));
+        assert_eq!(bak.len(), 1);
+        assert_eq!(
+            (bak[0].0.as_str(), bak[0].1.as_str(), bak[0].3, bak[0].6),
+            ("quicksave.fos.bak", "", 500, old_written)
+        );
+        assert_ne!(bak[0].6, 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -5601,7 +5683,9 @@ mod tests_changed_directories {
     }
 
     /// `.` of a directory the game changed is not listed as Windows would (its times move with
-    /// the changes, not modelled): the run stops.
+    /// the changes, not modelled): the run stops. Windows only: elsewhere the folder's times
+    /// on the disk are answered (`saves_made_in_the_run_are_listed_without_short_names_here`).
+    #[cfg(windows)]
     #[test]
     #[should_panic(expected = "of a directory the game changed in this run")]
     fn a_search_that_finds_dot_in_a_changed_directory_stops() {
