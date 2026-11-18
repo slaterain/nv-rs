@@ -245,6 +245,47 @@ pub const WRAPS: &[Entry] = &[
         owners: NVSE,
         step: "I-4",
     },
+    // The recipe menu's filter 00728d60 (reached only by address, as the list box's filter): JIP
+    // LN NVSE's InitItemFilter (`RecipeFilterHook` at its end): a recipe the filter keeps is still
+    // left out when its name lacks SetItemFilter's text.
+    Entry {
+        addr: 0x0072_8d60,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // BarterMenu::FilterModeFunc 007304b0 (reached only by address): JIP LN NVSE's InitItemFilter
+    // (`ItemFilterHook`), as above for the item's form.
+    Entry {
+        addr: 0x0073_04b0,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // ContainerMenu::FilterModeFunc 0075e650 (reached only by address): as above.
+    Entry {
+        addr: 0x0075_e650,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // HUDMainMenu::ShowQuestName 0077a480 and ShowQuestObjective 0077a5b0 (reached only by
+    // address): JIP LN NVSE's SuppressQuestMessages (`QueueQuestMsgHook` in place of the first,
+    // a `ret` at the second, for one frame).
+    Entry {
+        addr: 0x0077_a480,
+        owners: JIP,
+        step: "3.5f",
+    },
+    Entry {
+        addr: 0x0077_a5b0,
+        owners: JIP,
+        step: "3.5f",
+    },
+    // InventoryMenu::FilterFunc 00782620 (reached only by address): JIP LN NVSE's InitItemFilter
+    // (`ItemFilterHook`).
+    Entry {
+        addr: 0x0078_2620,
+        owners: JIP,
+        step: "3.5f",
+    },
     // PlayerCharacter::Reload 0095d3f0, the function the player's vtable slot 0108ae28 holds
     // (xNVSE's `MaybePreventReload` writes the slot; the exe reaches the function only through
     // it): a reload refused while the mods disabled reloading (DisablePlayerControlsAlt).

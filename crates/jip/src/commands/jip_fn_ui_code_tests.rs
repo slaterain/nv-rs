@@ -239,3 +239,138 @@ fn the_improved_close_plays_the_sound_when_messages_are_off() {
     assert_eq!((w[0], w[2], w[3], w[4], w[5]), (PLAYER_AT, SOUND_NAME, 0, 0x121, 0));
     assert!(calls_to(FILL_LIST).is_empty(), "no menu: no refresh");
 }
+
+thread_local! {
+    static OUT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// JIP installed over stand-ins of the six wrapped functions (each records its words; the
+/// filters answer `OUT`), forms in memory, the player and the INI page mapped.
+fn wrap_world() -> Engine {
+    CALLS.with(|c| c.borrow_mut().clear());
+    OUT.with(|o| o.set(0));
+    let mut e = crate::test_support::engine();
+    macro_rules! base {
+        ($at:expr) => {
+            e.register($at.addr(), |_, w| {
+                record($at.addr(), w);
+                eax(OUT.with(|o| o.get()))
+            });
+        };
+    }
+    base!(SHOW_QUEST_NAME);
+    base!(SHOW_QUEST_OBJECTIVE);
+    base!(RECIPE_FILTER_FUNC);
+    base!(BARTER_FILTER_FUNC);
+    base!(CONTAINER_FILTER_FUNC);
+    base!(INVENTORY_FILTER_FUNC);
+    e.register(SET_ACTIVE_QUEST, |_, w| {
+        record(SET_ACTIVE_QUEST, w);
+        eax(0)
+    });
+    crate::install_as(&mut e, true);
+    e.map(FORMS, 0x10_0000);
+    for page in [0x011c_b000, 0x011d_e000] {
+        if !e.mem.is_mapped(page) {
+            e.map(page, 0x1000);
+        }
+    }
+    e.mem.set_u32(PLAYER, PLAYER_AT);
+    e.mem.set_i32(SHOW_CHALLENGE_UPDATES, 0);
+    e
+}
+
+/// SuppressQuestMessages: for one main-loop pass the HUD's two quest functions are JIP's (no
+/// message; the active quest kept as JIP's hook does), `bShowChallengeUpdates` 0, then 1; a
+/// second call while hidden adds nothing.
+#[test]
+fn quest_messages_hidden_for_one_frame() {
+    let mut e = wrap_world();
+    let quest = FORMS + 0x5000;
+    e.call(SHOW_QUEST_NAME.addr(), &[quest]);
+    e.call(SHOW_QUEST_OBJECTIVE.addr(), &[0x1234, 1, 0]);
+    assert_eq!(calls().len(), 2, "shown: the exe's");
+    CALLS.with(|c| c.borrow_mut().clear());
+    call(&mut e, 0x2890, &[]);
+    call(&mut e, 0x2890, &[]);
+    assert_eq!(e.mem.i32(SHOW_CHALLENGE_UPDATES), 0);
+    // No active quest: this one (not done) becomes it.
+    e.call(SHOW_QUEST_NAME.addr(), &[quest]);
+    assert_eq!(calls(), vec![(SET_ACTIVE_QUEST, vec![PLAYER_AT, quest])]);
+    // Active, completed: no longer active; failed and not active: nothing; not done with
+    // another active: nothing.
+    CALLS.with(|c| c.borrow_mut().clear());
+    e.mem.set_u32(PLAYER_AT + 0x6b8, quest);
+    e.mem.set_u8(quest + 0x3c, 2);
+    e.call(SHOW_QUEST_NAME.addr(), &[quest]);
+    e.mem.set_u8(quest + 0x3c, 0x40);
+    e.call(SHOW_QUEST_NAME.addr(), &[quest + 0x100]);
+    e.mem.set_u8(quest + 0x3c, 0);
+    e.call(SHOW_QUEST_NAME.addr(), &[quest + 0x200]);
+    e.call(SHOW_QUEST_OBJECTIVE.addr(), &[0x1234, 1, 0]);
+    assert_eq!(calls(), vec![(SET_ACTIVE_QUEST, vec![PLAYER_AT, 0])]);
+    crate::main_loop::cycle(&mut e);
+    assert_eq!(e.mem.i32(SHOW_CHALLENGE_UPDATES), 1, "shown again");
+    CALLS.with(|c| c.borrow_mut().clear());
+    e.call(SHOW_QUEST_OBJECTIVE.addr(), &[0x1234, 1, 0]);
+    assert_eq!(calls().len(), 1, "the exe's again");
+    crate::main_loop::cycle(&mut e);
+    assert_eq!(e.mem.i32(SHOW_CHALLENGE_UPDATES), 1, "one callback only");
+}
+
+/// A named form of `kind` at `at` whose name text is `name` (at the kind's name offset).
+fn named(e: &mut Engine, at: u32, kind: u8, name: &[u8]) {
+    e.mem.set_u8(at + 4, kind);
+    let offset = match kind {
+        0x6a => 0x1c,
+        0x31 => 0x4c,
+        _ => 0x34,
+    };
+    let text = at + 0x200;
+    e.mem.write(text, name);
+    e.mem.set_u8(text + name.len() as u32, 0);
+    e.mem.set_u32(at + offset, text);
+}
+
+/// Before InitItemFilter the filters are the exe's and SetItemFilter does nothing; after it,
+/// an item the exe keeps is left out when its name lacks the text (without case), the recipe
+/// filter taking the recipe, the others an entry's form (`+8`); an item the exe leaves out
+/// stays out; no text keeps all.
+#[test]
+fn the_item_filter() {
+    let mut e = wrap_world();
+    let (rifle, note, recipe, entry) = (FORMS + 0x6000, FORMS + 0x6400, FORMS + 0x6800, FORMS + 0x6c00);
+    named(&mut e, rifle, 0x28, b"Hunting Rifle");
+    named(&mut e, note, 0x31, b"Holotape");
+    named(&mut e, recipe, 0x6a, b"Rifle Rounds");
+    e.mem.set_u32(entry + 8, rifle);
+    let out = |e: &mut Engine, slot: WrapSlot, arg: u32| e.call(slot.addr(), &[arg]).eax & 0xff;
+    call(&mut e, 0x272d, &[s(b"zzz")]);
+    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 0, "not started");
+    call(&mut e, 0x272c, &[]);
+    for slot in [INVENTORY_FILTER_FUNC, CONTAINER_FILTER_FUNC, BARTER_FILTER_FUNC] {
+        assert_eq!(out(&mut e, slot, entry), 0, "no text yet");
+    }
+    call(&mut e, 0x272d, &[s(b"RIFLE")]);
+    for slot in [INVENTORY_FILTER_FUNC, CONTAINER_FILTER_FUNC, BARTER_FILTER_FUNC] {
+        assert_eq!(out(&mut e, slot, entry), 0, "{:x}: has the text", slot.addr());
+        assert_eq!(out(&mut e, slot, 0), 0, "no entry: kept");
+    }
+    assert_eq!(out(&mut e, RECIPE_FILTER_FUNC, recipe), 0);
+    call(&mut e, 0x272d, &[s(b"tape")]);
+    for slot in [INVENTORY_FILTER_FUNC, CONTAINER_FILTER_FUNC, BARTER_FILTER_FUNC] {
+        assert_eq!(out(&mut e, slot, entry), 1, "{:x}: lacks it", slot.addr());
+    }
+    assert_eq!(out(&mut e, RECIPE_FILTER_FUNC, recipe), 1);
+    e.mem.set_u32(entry + 8, note);
+    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 0, "a note's name");
+    OUT.with(|o| o.set(1));
+    e.mem.set_u32(entry + 8, rifle);
+    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 1, "the exe's out stays out");
+    OUT.with(|o| o.set(0));
+    call(&mut e, 0x272d, &[]);
+    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 0, "no text: all kept");
+    call(&mut e, 0x272c, &[]);
+    call(&mut e, 0x272d, &[s(b"tape")]);
+    assert_eq!(out(&mut e, INVENTORY_FILTER_FUNC, entry), 1, "a second Init keeps going");
+}
