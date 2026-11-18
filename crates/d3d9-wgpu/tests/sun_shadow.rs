@@ -3161,9 +3161,10 @@ fn a_far_caster_round_the_camera_no_longer_drawn_goes() {
 }
 
 /// The far map through its first draw and a later redraw (review of #715, round 2): before the far
-/// map is in (its first draw is spread over a few frames) the tower's shadow is lit, as off; from then on, through every redraw as the
-/// sun turns (30 degrees up from -y, 7.4e-5 radians a frame), its shadow is whole and the land
-/// beside it lit in EVERY frame (no half-drawn map, no map read through another's matrix).
+/// map is in (its first draw is spread over a few frames) the tower's shadow is lit, as off; from
+/// then on, through every redraw as the sun turns (30 degrees up from -y, 7.4e-5 radians a
+/// frame), its shadow is whole and the land beside it lit in EVERY frame (no half-drawn map, no
+/// map read through another's matrix).
 #[test]
 fn the_far_shadow_holds_in_every_frame_through_redraws() {
     let _far = FarScene::on();
@@ -3240,8 +3241,9 @@ fn a_far_shadows_tip_creeps_without_steps_as_the_sun_turns() {
     assert!(most < FAR_TIP_STEP, "{most}");
 }
 
-/// The most the far shadow's tip may change from one frame to the next (see the test above).
-const FAR_TIP_STEP: f32 = 0.2;
+/// The most the far shadow's tip may change from one frame to the next (see the test above):
+/// measured 0.016 with the blend, 0.063 without it (each redraw shown at once).
+const FAR_TIP_STEP: f32 = 0.035;
 
 /// At a low sun (10 degrees up toward +y, the camera looking toward it) a tall caster more than
 /// 98,304 units out casts its long shadow back into the far map: it is taken (review of #715,
