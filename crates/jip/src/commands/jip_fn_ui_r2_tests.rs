@@ -285,6 +285,9 @@ fn fonts_above_8_need_jips_manager() {
     set_font_manager_extended(&mut e);
     assert_eq!(call_on(&mut e, 0x274c, 0, &[n(89), s(b"f.fnt")]), (1, 1.0));
     assert_eq!(e.mem.u32(MANAGER + 0x160), info);
+    // Font 9 stays refused with JIP's manager too (the byte after the eight in the game's).
+    assert_eq!(call_on(&mut e, 0x274c, 0, &[n(9), s(b"f.fnt")]), (1, 0.0));
+    assert_eq!(e.mem.u32(MANAGER + 0x20), 0);
     // G129's own fonts go in the same map.
     assert!(!insert_font_info(&mut e, b"F.FNT", 7));
     assert!(insert_font_info(&mut e, b"g.fnt", 7));

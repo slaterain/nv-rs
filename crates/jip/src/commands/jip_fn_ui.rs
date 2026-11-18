@@ -2675,8 +2675,13 @@ pub fn box_text(text: &[u8]) -> BoxText {
         buttons.push(None);
     }
     let (title, message) = match bytes[0] {
-        b'^' => match bytes[1..].iter().position(|&b| b == b'^' || b == 0) {
-            Some(i) if bytes[1 + i] == b'^' => {
+        // `FindChr(buffer + 1, '^')`: stops at the first part's 0.
+        b'^' => match bytes[1..]
+            .iter()
+            .take_while(|&&b| b != 0)
+            .position(|&b| b == b'^')
+        {
+            Some(i) => {
                 bytes[1 + i] = 0;
                 (Some(1), 2 + i)
             }
