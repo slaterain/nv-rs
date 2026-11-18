@@ -382,6 +382,9 @@ pub struct Cascade {
     /// The sun's basis it was placed in ([`basis`]) and its half width in game units.
     pub basis: [[f64; 3]; 3],
     pub half: f64,
+    /// Its depth range: half its depth along the sun's rays, game units ([`DEPTH_RANGE`]; the far
+    /// map's [`FAR_DEPTH`]).
+    pub depth: f64,
 }
 
 /// An object's place in the world: its object space to the world, rows x, y, z (the point a
@@ -401,7 +404,7 @@ impl Cascade {
             let (scale, add) = if k < 2 {
                 (1.0 / self.half, 0.0)
             } else {
-                (0.5 / DEPTH_RANGE, 0.5)
+                (0.5 / self.depth, 0.5)
             };
             for (v, axis) in axes.iter().enumerate() {
                 m[k][v] = dot3(self.basis[k], *axis) * scale;
@@ -430,7 +433,7 @@ impl Cascade {
             let (scale, add) = if k < 2 {
                 (1.0 / self.half, 0.0)
             } else {
-                (0.5 / DEPTH_RANGE, 0.5)
+                (0.5 / self.depth, 0.5)
             };
             let b = self.basis[k];
             for j in 0..4 {
@@ -491,6 +494,7 @@ pub fn place(
         view_to_light: [[0.0; 4]; 4],
         basis: b,
         half,
+        depth: DEPTH_RANGE,
     };
     c.view_to_light = c.view_to_light_for(axes, position);
     c
@@ -542,10 +546,21 @@ pub fn stretch(w: &World) -> f64 {
 /// Two places of one object that are the same (the camera's rounding between frames aside: a
 /// hundredth of a unit, a ten-thousandth of the scale).
 pub fn same_place(a: &World, b: &World) -> bool {
+    same_place_within(a, b, 0.05)
+}
+
+/// [`same_place`] with its places within `slack` game units of each other.
+pub fn same_place_within(a: &World, b: &World, slack: f64) -> bool {
     let s = stretch(a).max(1.0);
     (0..3).all(|i| {
-        (0..3).all(|j| (a[i][j] - b[i][j]).abs() <= 1e-4 * s) && (a[i][3] - b[i][3]).abs() <= 0.05
+        (0..3).all(|j| (a[i][j] - b[i][j]).abs() <= 1e-4 * s) && (a[i][3] - b[i][3]).abs() <= slack
     })
+}
+
+/// How near two places of a far caster `distance` units from the camera are the same: a millionth
+/// of the distance (the game's f32 matrices round that far out), at least as near ones.
+pub fn far_slack(distance: f64) -> f64 {
+    (1e-6 * distance).max(0.05)
 }
 
 /// A caster larger than this (game units of radius) casts nothing: the sky's dome, the far land's
@@ -576,6 +591,86 @@ pub fn casts(w: &World, local: ([f64; 3], f64), camera: [f64; 3]) -> bool {
     ];
     let at_camera = dot3(o, o).sqrt() <= SKY_ORIGIN;
     r <= MAX_CASTER_RADIUS && !(around && at_camera && r > MAX_AROUND_CAMERA)
+}
+
+/// The far map ([`far_place`]): one map past the cascades, for the land and the large objects
+/// (LOD terrain and blocks, hills, towers, houses): its size in texels, its half width (game
+/// units, about 930 m each way: a 64-unit texel), its half depth along the sun's rays (at least
+/// the half width over the sine of the lowest sun the light takes, 10 degrees: ground the map
+/// reaches across is never past its depth, review of #715), the step its centre snaps to (in
+/// texels; the map is drawn again when the camera crosses one).
+pub const FAR_SIZE: u32 = 2048;
+pub const FAR_HALF: f64 = 65536.0;
+pub const FAR_DEPTH: f64 = 393_216.0;
+pub const FAR_STEP_TEXELS: f64 = 64.0;
+/// Where the far shadows fade out: from this part of the half width to [`FAR_EDGE_END`], measured
+/// from the camera (not the snapped centre: the fade does not move when the map does), across the
+/// map and along its depth.
+pub const FAR_EDGE: f32 = 0.8;
+pub const FAR_EDGE_END: f32 = 0.9375;
+/// How tall the far map's casters stand over the ground they shade, for its sun-turn rule (hills,
+/// mesas: [`SHADOW_REACH`] is a pole's), the frames at least between two of its redraws, and the
+/// frames one redraw is spread over (a part of its casters a frame into a second map, then the two
+/// swapped: no frame draws it whole).
+pub const FAR_REACH: f64 = 6000.0;
+pub const FAR_MIN_FRAMES: u64 = 8;
+pub const FAR_SLICES: u32 = 4;
+/// The frames a finished far redraw is blended in over, from the map before (no step where the
+/// two differ: the sun turned, the camera crossed a step); a far turn this many times past its
+/// limit (a wait, a sleep) is drawn at once, whatever the frames since the last.
+pub const FAR_FADE_FRAMES: u32 = 4;
+pub const FAR_OVERDUE: f64 = 4.0;
+/// The far map's most depth allowance for a face's slope to the sun, in texels (its casters are
+/// coarse land and large buildings drawn from the receivers' own geometry: the cascades' two
+/// texels of its 64 units lifted shadows off building feet).
+pub const FAR_SLOPE_MAX: f32 = 1.0;
+/// The far map's casters: radius at least this (a house, a rock, a land block; smaller things cast
+/// nothing a far map's texel could show) and at most this (beyond: the sky's, whatever its place).
+pub const FAR_MIN_RADIUS: f64 = 1000.0;
+pub const FAR_MAX_RADIUS: f64 = 100_000.0;
+
+/// The far map for a camera at `position` and the sun's basis `b`: [`FAR_HALF`] round the camera,
+/// its centre snapped to [`FAR_STEP_TEXELS`] steps in the sun's space.
+pub fn far_place(position: [f64; 3], b: [[f64; 3]; 3]) -> Cascade {
+    let texel = 2.0 * FAR_HALF / f64::from(FAR_SIZE);
+    let step = FAR_STEP_TEXELS * texel;
+    let origin: [i64; 3] = std::array::from_fn(|k| (dot3(b[k], position) / step).round() as i64);
+    Cascade {
+        near: FAR,
+        far: f32::INFINITY,
+        size: FAR_SIZE,
+        radius: FAR_HALF,
+        texel,
+        step,
+        origin,
+        view_to_light: [[0.0; 4]; 4],
+        basis: b,
+        half: FAR_HALF,
+        depth: FAR_DEPTH,
+    }
+}
+
+/// Which of the [`FAR_SLICES`] frames of a far redraw draws a geometry (by its buffers' numbers
+/// and its range: every place of it in the same frame, whatever order the cache keeps them in).
+pub(crate) fn far_slice(k: &GeoKey) -> u32 {
+    let mixed = k.streams[0].0 ^ k.index.0.rotate_left(17) ^ u64::from(k.start).rotate_left(31);
+    (mixed.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 61) as u32 % FAR_SLICES
+}
+
+/// Whether an object placed by `w` with object-space bounds `local` casts into the far map: large
+/// ([`FAR_MIN_RADIUS`] to [`FAR_MAX_RADIUS`]: the land past the cascades, which [`casts`] leaves
+/// out of them, among it) and not the sky (as [`casts`] tells it).
+pub fn far_casts(w: &World, local: ([f64; 3], f64), camera: [f64; 3]) -> bool {
+    let r = local.1 * stretch(w);
+    let c = place_point(w, local.0);
+    let d = [c[0] - camera[0], c[1] - camera[1], c[2] - camera[2]];
+    let o = [
+        w[0][3] - camera[0],
+        w[1][3] - camera[1],
+        w[2][3] - camera[2],
+    ];
+    let sky = dot3(d, d).sqrt() < r && dot3(o, o).sqrt() <= SKY_ORIGIN && r > MAX_AROUND_CAMERA;
+    (FAR_MIN_RADIUS..=FAR_MAX_RADIUS).contains(&r) && !sky
 }
 
 /// The sphere around object-space points (the middle of their box and the half diagonal); none
@@ -1278,8 +1373,13 @@ pub const OVERDUE: f64 = 4.0;
 /// `texel` (game units), for a caster [`SHADOW_REACH`] over the ground with the sun's height's sine
 /// `sine`: the edge's end moves by reach x turn / sine^2 (a low sun's long shadows move fastest).
 pub fn turn_limit(texel: f64, sine: f64) -> f64 {
+    turn_limit_at(texel, sine, SHADOW_REACH)
+}
+
+/// [`turn_limit`] for casters `reach` tall (the far map's: [`FAR_REACH`]).
+pub fn turn_limit_at(texel: f64, sine: f64, reach: f64) -> f64 {
     let s = sine.clamp(TURN_MIN_SUN_SINE, 1.0);
-    0.5 * texel * s * s / SHADOW_REACH
+    0.5 * texel * s * s / reach
 }
 
 /// Which maps take the sun as it is now, from each one's turn as a part of its limit (`over`:
@@ -1340,6 +1440,7 @@ impl GeoKey {
 }
 
 /// What drawing a caster again takes.
+#[derive(Clone)]
 pub(crate) struct Draw {
     /// Its depth-only pipeline ([`Gpu::pipelines`]).
     pub pipe: u32,
@@ -1373,6 +1474,7 @@ pub(crate) struct Draw {
 /// with a target), its pixel block's header (no alpha test, the textures read at their own level),
 /// and, for a geometry with other pieces than ribbons, a list of its ribbons' triangles alone
 /// ([`Body::ribbon_list`], a list pipeline) drawn with this base vertex.
+#[derive(Clone)]
 pub(crate) struct Ribbon {
     pub pipe: u32,
     pub header: u32,
@@ -1382,6 +1484,7 @@ pub(crate) struct Ribbon {
 /// What an alpha-tested caster draws its cut-out with: its pixel shader's textures (bind group 1),
 /// the vertex shader's (none: an empty group 2), its pixel block's header with the alpha test as
 /// the game set it (never alpha to coverage: the map has one sample) and its float constants.
+#[derive(Clone)]
 pub(crate) struct Cutout {
     pub textures: wgpu::BindGroup,
     pub empty: wgpu::BindGroup,
@@ -1536,8 +1639,26 @@ impl<K: std::hash::Hash + Eq + Clone, T> Cache<K, T> {
         moving: bool,
         payload: impl FnOnce() -> T,
     ) -> Option<([f64; 3], f64)> {
+        self.see_within(key, world, local, now, moving, 0.05, payload)
+    }
+
+    /// [`Cache::see`] with places the same within `slack` game units ([`same_place_within`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn see_within(
+        &mut self,
+        key: K,
+        world: World,
+        local: ([f64; 3], f64),
+        now: u64,
+        moving: bool,
+        slack: f64,
+        payload: impl FnOnce() -> T,
+    ) -> Option<([f64; 3], f64)> {
         let places = self.map.entry(key).or_default();
-        if let Some(i) = places.iter_mut().find(|i| same_place(&i.world, &world)) {
+        if let Some(i) = places
+            .iter_mut()
+            .find(|i| same_place_within(&i.world, &world, slack))
+        {
             i.seen = now;
             return None;
         }
@@ -1701,7 +1822,7 @@ pub fn sample0_offset(samples: u32) -> [f32; 2] {
 }
 
 /// The lookup's uniform block, in bytes ([`lookup_uniforms`]).
-pub const LOOKUP_SIZE: u64 = 8 * 16 + 4 * CASCADES as u64 * 16;
+pub const LOOKUP_SIZE: u64 = 8 * 16 + 4 * CASCADES as u64 * 16 + 8 * 16;
 
 /// The thin casters' coverage maps: texels a side (a layer a cascade, over the same square as the
 /// cascade's depth map, so a texel is `SIZE / THIN_SIZE` of its texels).
@@ -1805,7 +1926,10 @@ pub fn thin_quads(
 /// cascade's depth), misc (the debug step's darkness), thin (each cascade's coverage-map texel in
 /// game units, 0 when no thin caster is in it: `thin`), then each cascade's matrix from this
 /// frame's view space to the map it was drawn as (`drawn`: a map kept from an earlier frame keeps
-/// its own place), row by row.
+/// its own place), row by row; then the far map's rows x, y and depth from this frame's view space and
+/// its texel (0, the far map unused: `far` none, never drawn).
+/// Then the far map before (`far_old`: a redraw just finished) and how far it is blended into the new
+/// one (1: the new alone).
 #[allow(clippy::too_many_arguments)]
 pub fn lookup_uniforms(
     view: &scene_light::Params,
@@ -1813,6 +1937,8 @@ pub fn lookup_uniforms(
     cascades: &[Cascade; CASCADES],
     drawn: &[Cascade; CASCADES],
     thin: [bool; CASCADES],
+    far: Option<&Cascade>,
+    far_old: Option<(&Cascade, f32)>,
     axes: [[f64; 3]; 3],
     position: [f64; 3],
     samples: u32,
@@ -1857,6 +1983,27 @@ pub fn lookup_uniforms(
             f.extend(row.iter().map(|&v| v as f32));
         }
     }
+    match far {
+        Some(c) => {
+            for row in &c.view_to_light_for(axes, position)[..3] {
+                f.extend(row.iter().map(|&v| v as f32));
+            }
+            f.extend([c.texel as f32, 0.0, 0.0, 0.0]);
+        }
+        None => f.extend([0.0; 16]),
+    }
+    match far_old {
+        Some((c, t)) => {
+            for row in &c.view_to_light_for(axes, position)[..3] {
+                f.extend(row.iter().map(|&v| v as f32));
+            }
+            f.extend([c.texel as f32, t, 0.0, 0.0]);
+        }
+        None => {
+            f.extend([0.0; 12]);
+            f.extend([0.0, 1.0, 0.0, 0.0]);
+        }
+    }
     debug_assert_eq!(f.len() * 4, LOOKUP_SIZE as usize);
     f.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
@@ -1876,6 +2023,10 @@ struct SunLookup {
     misc: vec4<f32>,
     thin: vec4<f32>,
     m: array<vec4<f32>, 16>,
+    fm: array<vec4<f32>, 3>,
+    far: vec4<f32>,
+    fm_old: array<vec4<f32>, 3>,
+    far_old: vec4<f32>,
 };
 
 fn sl_linear(d: f32) -> f32 {
@@ -1962,10 +2113,66 @@ fn sl_in(k: i32, p: vec3<f32>, n: vec3<f32>) -> f32 {
     return sl_filter(k, q, bias) * (1.0 - sl_thin(k, sl_to_map(k, q)));
 }
 
+// The far map's (`fm`, texel `far.x`; 1 lit when there is none) at the view-space point `p` whose
+// face's normal is `n`: as a cascade's, with its own texel and depth range, faded to lit from
+// FAR_EDGE to FAR_EDGE_END of its half width measured from the camera (the camera's own place in
+// the map: the rows' last column), and of its half depth: no straight line where it ends, at any
+// sun.
+fn sl_far(p: vec3<f32>, n: vec3<f32>) -> f32 {
+    let now = sl_far_in(p, n, SL.fm[0], SL.fm[1], SL.fm[2], SL.far.x, 0);
+    // A few frames after a redraw: blended from the map before (no step where the two differ).
+    if (SL.far_old.y < 1.0 && SL.far_old.x > 0.0) {
+        let was = sl_far_in(p, n, SL.fm_old[0], SL.fm_old[1], SL.fm_old[2], SL.far_old.x, 1);
+        return mix(was, now, SL.far_old.y);
+    }
+    return now;
+}
+
+// One far map's (`which`: 0 the one drawn last, 1 the one before) through its rows `m0`, `m1`,
+// `m2` and texel.
+fn sl_far_in(p: vec3<f32>, n: vec3<f32>, m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, texel: f32, which: i32) -> f32 {
+    if (texel <= 0.0) {
+        return 1.0;
+    }
+    let c = clamp(dot(n, SL.sun.xyz), 0.0, 1.0);
+    let s = sqrt(1.0 - c * c);
+    let slope = min(s / max(c, 0.05), FAR_SLOPE_MAX);
+    let q = vec4<f32>(p + n * (NORMAL_OFFSET * texel * s), 1.0);
+    let l = vec3<f32>(dot(m0, q), dot(m1, q), dot(m2, q));
+    let rim = max(
+        max(abs(l.x - m0.w), abs(l.y - m1.w)),
+        abs(2.0 * l.z - 1.0)
+    );
+    let fade = saturate((rim - FAR_EDGE) / (FAR_EDGE_END - FAR_EDGE));
+    if (fade >= 1.0 || max(abs(l.x), abs(l.y)) >= 1.0 || l.z >= 1.0 || l.z <= 0.0) {
+        return 1.0;
+    }
+    let uv = vec2<f32>(l.x * 0.5 + 0.5, 0.5 - l.y * 0.5);
+    let r = l.z - (DEPTH_BIAS + slope) * texel / (2.0 * FAR_DEPTH);
+    let t = 1.0 / vec2<f32>(textureDimensions(sl_far_map));
+    var sum = 0.0;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            let w = f32((2 - abs(i)) * (2 - abs(j)));
+            let at = uv + vec2<f32>(f32(i), f32(j)) * t;
+            if (which == 0) {
+                sum += w * textureSampleCompareLevel(sl_far_map, sl_cmp, at, r);
+            } else {
+                sum += w * textureSampleCompareLevel(sl_far_old, sl_cmp, at, r);
+            }
+        }
+    }
+    return mix(sum / 16.0, 1.0, fade);
+}
+
 fn sl_visibility(p: vec3<f32>, n: vec3<f32>) -> f32 {
     let z = p.z;
-    if (SL.sun.w <= 0.0 || z >= SL.splits.w || z <= 0.0) {
+    if (SL.sun.w <= 0.0 || z <= 0.0) {
         return 1.0;
+    }
+    // Past the cascades: the far map alone.
+    if (z >= SL.splits.w) {
+        return sl_far(p, n);
     }
     var k = 3;
     if (z < SL.splits.x) {
@@ -1989,7 +2196,13 @@ fn sl_visibility(p: vec3<f32>, n: vec3<f32>) -> f32 {
             v = mix(v, sl_in(k + 1, p, n), t);
         }
     }
-    return mix(v, 1.0, saturate((z - SL.extra.z) / (SL.splits.w - SL.extra.z)));
+    // Toward the last cascade's far end, blended into the far map (lit where there is none).
+    let fade = saturate((z - SL.extra.z) / (SL.splits.w - SL.extra.z));
+    var beyond = 1.0;
+    if (fade > 0.0) {
+        beyond = sl_far(p, n);
+    }
+    return mix(v, beyond, fade);
 }
 ";
 
@@ -2003,6 +2216,8 @@ pub const LOOKUP: &str = "
 @group(3) @binding(2) var sl_cmp: sampler_comparison;
 @group(3) @binding(3) var sl_thin_maps: texture_2d_array<f32>;
 @group(3) @binding(4) var sl_lin: sampler;
+@group(3) @binding(5) var sl_far_map: texture_depth_2d;
+@group(3) @binding(6) var sl_far_old: texture_depth_2d;
 var<private> sun_lit: f32 = 1.0;
 
 fn sun_visibility(frag: vec4<f32>) -> f32 {
@@ -2031,6 +2246,8 @@ pub const LOOKUP_VERTEX: &str = "
 @group(3) @binding(2) var sl_cmp: sampler_comparison;
 @group(3) @binding(3) var sl_thin_maps: texture_2d_array<f32>;
 @group(3) @binding(4) var sl_lin: sampler;
+@group(3) @binding(5) var sl_far_map: texture_depth_2d;
+@group(3) @binding(6) var sl_far_old: texture_depth_2d;
 var<private> sun_lit: f32 = 1.0;
 
 fn sun_visibility_clip(o: vec4<f32>) -> f32 {
@@ -2059,8 +2276,10 @@ fn lookup_consts() -> String {
     format!(
         "const NORMAL_OFFSET: f32 = {NORMAL_OFFSET:?};\nconst DEPTH_BIAS: f32 = {DEPTH_BIAS:?};\n\
          const SLOPE_MAX: f32 = {SLOPE_MAX:?};\nconst DEPTH_RANGE: f32 = {:?};\n\
-         const SUN_WIDTH: f32 = {SUN_WIDTH:?};\nconst THIN_NEAR: f32 = {THIN_NEAR:?};\n",
-        DEPTH_RANGE as f32
+         const SUN_WIDTH: f32 = {SUN_WIDTH:?};\nconst THIN_NEAR: f32 = {THIN_NEAR:?};\n\
+         const FAR_DEPTH: f32 = {:?};\nconst FAR_EDGE: f32 = {FAR_EDGE:?};\n\
+         const FAR_EDGE_END: f32 = {FAR_EDGE_END:?};\nconst FAR_SLOPE_MAX: f32 = {FAR_SLOPE_MAX:?};\n",
+        DEPTH_RANGE as f32, FAR_DEPTH as f32
     )
 }
 
@@ -2071,6 +2290,8 @@ const STEP: &str = "
 @group(0) @binding(3) var sl_cmp: sampler_comparison;
 @group(0) @binding(4) var sl_thin_maps: texture_2d_array<f32>;
 @group(0) @binding(5) var sl_lin: sampler;
+@group(0) @binding(6) var sl_far_map: texture_depth_2d;
+@group(0) @binding(7) var sl_far_old: texture_depth_2d;
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
     let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
@@ -2271,7 +2492,22 @@ pub(crate) struct Gpu {
     /// (one slot a frame, [`LIGHT_SLOTS`] in turn, at a dynamic offset) and the group.
     pub light_layout: wgpu::BindGroupLayout,
     pub light_ring: wgpu::Buffer,
-    pub light_group: wgpu::BindGroup,
+    /// (One group for each far map: the lookups read the front one, [`Gpu::light_group`].)
+    light_groups: [wgpu::BindGroup; 2],
+    /// The far maps ([`far_place`], [`FAR_SIZE`]): two, the lookups reading the front one while a
+    /// redraw goes into the other over [`FAR_SLICES`] frames (`far_back`: what it is drawn for and
+    /// the next slice), then swapped; what the front one was drawn for (none: not drawn, or no
+    /// casters: the lookups leave it out), and how many redraws were finished.
+    far_views: [wgpu::TextureView; 2],
+    far_front: usize,
+    pub far_back: Option<(Cascade, u32)>,
+    pub far_drawn: Option<Cascade>,
+    /// The map before the front one and what it was drawn for, while the front one is blended in
+    /// over it ([`FAR_FADE_FRAMES`]; none once a new redraw is drawn over it), and the frames since
+    /// the swap.
+    pub far_old: Option<Cascade>,
+    pub far_fade: u32,
+    pub far_draws: u64,
 }
 
 /// A lookup block's slot in the lighting variants' ring, and the slots: a frame writes its own
@@ -2309,10 +2545,26 @@ pub(crate) fn light_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
         count: None,
     });
     entries.extend(thin_entries(3, wgpu::ShaderStages::VERTEX_FRAGMENT));
+    entries.push(far_entry(5, wgpu::ShaderStages::VERTEX_FRAGMENT));
+    entries.push(far_entry(6, wgpu::ShaderStages::VERTEX_FRAGMENT));
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("sun shadow lookup"),
         entries: &entries,
     })
+}
+
+/// The far map's layout entry at `binding`.
+fn far_entry(binding: u32, visibility: wgpu::ShaderStages) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type: wgpu::TextureSampleType::Depth,
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    }
 }
 
 /// The thin casters' coverage maps' layout entries at `first` and `first + 1`: the array and its
@@ -2444,6 +2696,26 @@ impl Gpu {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
+        let far_view = || {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("sun shadow far map"),
+                    size: wgpu::Extent3d {
+                        width: FAR_SIZE,
+                        height: FAR_SIZE,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: MAP_FORMAT,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let far_views = [far_view(), far_view()];
         let light_layout = light_layout(device);
         let light_ring = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("sun shadow lookup"),
@@ -2452,37 +2724,51 @@ impl Gpu {
             mapped_at_creation: false,
         });
         let maps: Vec<wgpu::TextureView> = maps;
-        let entries = [
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &light_ring,
-                    offset: 0,
-                    size: std::num::NonZeroU64::new(LOOKUP_SIZE),
-                }),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(&array),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::Sampler(&compare),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::TextureView(&thin_array),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::Sampler(&linear),
-            },
+        let light_group = |far_view: &wgpu::TextureView, far_old: &wgpu::TextureView| {
+            let entries = [
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &light_ring,
+                        offset: 0,
+                        size: std::num::NonZeroU64::new(LOOKUP_SIZE),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&array),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&compare),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&thin_array),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&linear),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(far_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(far_old),
+                },
+            ];
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("sun shadow lookup"),
+                layout: &light_layout,
+                entries: &entries,
+            })
+        };
+        let light_groups = [
+            light_group(&far_views[0], &far_views[1]),
+            light_group(&far_views[1], &far_views[0]),
         ];
-        let light_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("sun shadow lookup"),
-            layout: &light_layout,
-            entries: &entries,
-        });
         Gpu {
             maps,
             live,
@@ -2501,7 +2787,7 @@ impl Gpu {
             compare,
             light_layout,
             light_ring,
-            light_group,
+            light_groups,
             uniforms: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("sun shadow step"),
                 size: LOOKUP_SIZE,
@@ -2511,6 +2797,13 @@ impl Gpu {
             apply: Vec::new(),
             ring: None,
             pipelines: Vec::new(),
+            far_views,
+            far_front: 0,
+            far_back: None,
+            far_old: None,
+            far_fade: FAR_FADE_FRAMES,
+            far_drawn: None,
+            far_draws: 0,
         }
     }
 
@@ -2640,6 +2933,7 @@ impl Gpu {
         headers: &[Vec<u8>],
         cascades: &[Cascade; CASCADES],
         redraw: [bool; CASCADES],
+        far: (&Cache<GeoKey, Draw>, Option<&Cascade>),
     ) -> (Vec<(wgpu::Buffer, Vec<u8>)>, u32) {
         // Each cascade's still and moving casters touching it, and its ribbon cables.
         let mut lists: Vec<[MapList<'_>; 3]> = (0..CASCADES)
@@ -2721,8 +3015,33 @@ impl Gpu {
                 self.thin_in[k] = !thin_ranges[k].is_empty();
             }
         }
+        // The far map: a redraw started (`far.1`) or on its way goes on with this frame's slice of
+        // its casters ([`far_slice`]) into the back map: those that cast as solid, cut-outs too (the
+        // LOD blocks), cables left out (a cable is not a texel there), nothing moving.
+        let (far_cache, far_start) = far;
+        self.far_fade = (self.far_fade + 1).min(FAR_FADE_FRAMES);
+        if let Some(c) = far_start {
+            // (Drawn over the map before: its blend ends.)
+            self.far_back = Some((*c, 0));
+            self.far_old = None;
+        }
+        let mut far_list: MapList<'_> = Vec::new();
+        if let Some((c, slice)) = self.far_back {
+            for (k, i) in far_cache.iter_keyed() {
+                let d = &i.payload;
+                if far_slice(k) != slice
+                    || i.moving
+                    || (d.thin.is_some() && !d.rest)
+                    || !c.touches(i.centre, i.radius)
+                    || self.pipelines[d.pipe as usize].is_none()
+                {
+                    continue;
+                }
+                far_list.push((d, i.world, [0, 0]));
+            }
+        }
         let any_lists = lists.iter().flatten().any(|l| !l.is_empty());
-        if quads.is_empty() && !any_lists && !live.iter().any(|&l| l) {
+        if quads.is_empty() && !any_lists && !live.iter().any(|&l| l) && self.far_back.is_none() {
             return (writes, 0);
         }
         // The ring: every header once, then each caster's float constants for each map it is
@@ -2735,7 +3054,15 @@ impl Gpu {
             bytes.extend_from_slice(h);
             bytes.resize(bytes.len().div_ceil(ALIGN) * ALIGN, 0);
         }
-        for (c, all) in cascades.iter().zip(lists.iter_mut()) {
+        let far_cascade = self.far_back.map(|(c, _)| c);
+        let mut groups: Vec<(&Cascade, &mut [MapList<'_>])> = cascades
+            .iter()
+            .zip(lists.iter_mut().map(|a| &mut a[..]))
+            .collect();
+        if let Some(c) = &far_cascade {
+            groups.push((c, std::slice::from_mut(&mut far_list)));
+        }
+        for (c, all) in groups {
             for (n, list) in all.iter_mut().enumerate() {
                 for (d, world, at) in list.iter_mut() {
                     let vs = bytes.len();
@@ -2912,6 +3239,22 @@ impl Gpu {
                 }
             }
         }
+        if let Some((c, slice)) = self.far_back {
+            let back = &self.far_views[1 - self.far_front];
+            let mut pass = depth_pass(encoder, back, slice == 0);
+            encode(&mut pass, &far_list, false);
+            drop(pass);
+            if slice + 1 < FAR_SLICES {
+                self.far_back = Some((c, slice + 1));
+            } else {
+                self.far_front = 1 - self.far_front;
+                self.far_back = None;
+                self.far_old = self.far_drawn;
+                self.far_fade = 0;
+                self.far_drawn = Some(c);
+                self.far_draws += 1;
+            }
+        }
         // The coverage layers: the cables' quads, then the ribbons' alpha added over them.
         if !quads.is_empty() {
             let need = (quads.len() * 20) as u64;
@@ -3021,6 +3364,29 @@ impl Gpu {
         })
     }
 
+    /// The lighting variants' bind group 3, with the front far map.
+    pub(crate) fn light_group(&self) -> &wgpu::BindGroup {
+        &self.light_groups[self.far_front]
+    }
+
+    /// What the lookups read of the far maps: the front one's place (none: not drawn), and the one
+    /// before's with how far the front one is blended in over it, while it is.
+    pub(crate) fn far_lookup(&self) -> (Option<&Cascade>, Option<(&Cascade, f32)>) {
+        let old = self
+            .far_old
+            .as_ref()
+            .filter(|_| self.far_fade < FAR_FADE_FRAMES)
+            .map(|o| (o, self.far_fade as f32 / FAR_FADE_FRAMES as f32));
+        (self.far_drawn.as_ref(), old)
+    }
+
+    /// The far maps forgotten (a new world): none drawn, none on its way.
+    pub(crate) fn forget_far(&mut self) {
+        self.far_drawn = None;
+        self.far_back = None;
+        self.far_old = None;
+    }
+
     /// The step's uniform buffer.
     pub(crate) fn uniforms(&self) -> wgpu::Buffer {
         self.uniforms.clone()
@@ -3075,6 +3441,8 @@ impl Gpu {
                 count: None,
             });
             entries.extend(thin_entries(4, wgpu::ShaderStages::FRAGMENT));
+            entries.push(far_entry(6, wgpu::ShaderStages::FRAGMENT));
+            entries.push(far_entry(7, wgpu::ShaderStages::FRAGMENT));
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("sun shadow step"),
                 entries: &entries,
@@ -3159,6 +3527,16 @@ impl Gpu {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::Sampler(&self.linear),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(&self.far_views[self.far_front]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.far_views[1 - self.far_front],
+                    ),
                 },
             ],
         });
@@ -4563,6 +4941,8 @@ mod tests {
             &c,
             &c,
             [false, true, false, false],
+            None,
+            None,
             f.axes(),
             wide(f.position),
             8,
@@ -4582,6 +4962,30 @@ mod tests {
         assert_eq!(at(29), (c[1].half * 2.0 / f64::from(THIN_SIZE)) as f32);
         assert_eq!(at(32), c[0].view_to_light[0][0] as f32);
         assert_eq!(at(32 + 16 * 3 + 15), 1.0);
+        // No far map: its texel 0 (the lookups leave it out).
+        assert_eq!(at(32 + 64 + 12), 0.0);
+        // With one: its rows from this frame's view and its texel.
+        let far = far_place(wide(f.position), b);
+        let u = lookup_uniforms(
+            &view(),
+            f.strength,
+            &c,
+            &c,
+            [false; CASCADES],
+            Some(&far),
+            None,
+            f.axes(),
+            wide(f.position),
+            1,
+            2560,
+            1440,
+        );
+        let at = |i: usize| f32::from_le_bytes(u[4 * i..4 * i + 4].try_into().unwrap());
+        let rows = far.view_to_light_for(f.axes(), wide(f.position));
+        assert_eq!(at(32 + 64), rows[0][0] as f32);
+        assert_eq!(at(32 + 64 + 11), rows[2][3] as f32);
+        assert_eq!(at(32 + 64 + 12), far.texel as f32);
+        assert_eq!(far.texel, 64.0);
         // No sun: the lookup is off.
         let off = lookup_uniforms(
             &view(),
@@ -4589,6 +4993,8 @@ mod tests {
             &c,
             &c,
             [false; CASCADES],
+            None,
+            None,
             f.axes(),
             wide(f.position),
             1,
@@ -4596,6 +5002,86 @@ mod tests {
             1440,
         );
         assert_eq!(f32::from_le_bytes(off[44..48].try_into().unwrap()), 0.0);
+    }
+
+    #[test]
+    fn the_far_map_is_centred_on_the_camera_and_snapped() {
+        let b = basis([0.6, 0.0, 0.8]);
+        let a = far_place([1000.0, 2000.0, 300.0], b);
+        assert_eq!((a.half, a.depth, a.size), (FAR_HALF, FAR_DEPTH, FAR_SIZE));
+        assert_eq!(a.step, FAR_STEP_TEXELS * a.texel);
+        // A step's worth less a little: the same map; a step: another.
+        let moved = |d: f64| far_place([1000.0 + d * b[0][0], 2000.0, 300.0 + d * b[0][2]], b);
+        assert!(still_good(Some(&a), &moved(10.0), false));
+        assert!(!still_good(Some(&a), &moved(a.step), false));
+        assert!(!still_good(Some(&a), &a, true));
+        // The camera's own place is near the middle of the map (within half a step).
+        let p = place_point(
+            &[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+            [1000.0, 2000.0, 300.0],
+        );
+        let m = a.world_to_light(&[
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]);
+        let x = f64::from(m[0][0]) * p[0]
+            + f64::from(m[0][1]) * p[1]
+            + f64::from(m[0][2]) * p[2]
+            + f64::from(m[0][3]);
+        assert!(x.abs() <= 0.5 * a.step / a.half + 1e-6, "{x}");
+    }
+
+    #[test]
+    fn a_far_place_is_the_same_within_a_millionth_of_its_distance() {
+        assert_eq!(far_slack(10_000.0), 0.05);
+        assert!((far_slack(150_000.0) - 0.15).abs() < 1e-12);
+        let at = |x: f64| -> World {
+            [
+                [1.0, 0.0, 0.0, x],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ]
+        };
+        assert!(same_place_within(
+            &at(150_000.0),
+            &at(150_000.1),
+            far_slack(150_000.0)
+        ));
+        assert!(!same_place(&at(150_000.0), &at(150_000.1)));
+        assert!(!same_place_within(
+            &at(150_000.0),
+            &at(150_000.3),
+            far_slack(150_000.0)
+        ));
+    }
+
+    #[test]
+    fn the_far_map_takes_the_land_and_large_objects_not_the_sky_or_small_things() {
+        let camera = [1000.0, 2000.0, 300.0];
+        let at = |p: [f64; 3], scale: f64| -> World {
+            [
+                [scale, 0.0, 0.0, p[0]],
+                [0.0, scale, 0.0, p[1]],
+                [0.0, 0.0, scale, p[2]],
+            ]
+        };
+        let far = [30_000.0, 2000.0, 0.0];
+        // An LOD land block (radius 30,000): far only.
+        assert!(far_casts(&at(far, 1.0), ([0.0; 3], 30_000.0), camera));
+        assert!(!casts(&at(far, 1.0), ([0.0; 3], 30_000.0), camera));
+        // A house (radius 1,200): both.
+        assert!(far_casts(&at(far, 1.0), ([0.0; 3], 1200.0), camera));
+        // A rock (radius 300): the cascades only.
+        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 300.0), camera));
+        // The sky's dome round the camera, placed at it: neither.
+        assert!(!far_casts(&at(camera, 1.0), ([0.0; 3], 50_000.0), camera));
+        // Larger than any land: not.
+        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 200_000.0), camera));
     }
 
     #[test]

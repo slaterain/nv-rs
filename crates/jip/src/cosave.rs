@@ -237,18 +237,30 @@ pub struct NpcPerks {
 /// The two routines the game asks most (an actor's perk rank and entry point list: the movement
 /// update asks the run speed's entry point of every moving actor) read without the lock
 /// ([`npc_perks_read`]): JIP reads a pointer there. Every change through [`npc_perks`] gives the
-/// map a new version (a number no map ever had before); a read copies the map once per version
-/// ([`NpcPerksSnapshot`], under the lock) and each thread keeps the copy of the version it last
-/// read, so while nothing changes a read is one atomic load and a lookup in that copy.
+/// map a new version (a number no map ever had before); each thread keeps a copy of the map
+/// ([`NpcPerksSnapshot`]) and reads it without the lock while it is of the map's version, so
+/// while nothing changes a read is one atomic load and a lookup in that copy. A read that finds
+/// another version is answered from the map under the lock; a new copy is made (once, shared by
+/// the threads) only when the version is still the one the previous such read found, so a burst
+/// of changes costs reads under the lock, not a copy per change.
 pub struct NpcPerksMap {
     map: std::sync::Mutex<UnorderedMap<u32, NpcPerks>>,
     version: std::sync::atomic::AtomicU64,
-    /// The copy of the version it holds, shared by the threads (made by the first read after a
-    /// change).
-    snapshot: std::sync::Mutex<Option<std::sync::Arc<NpcPerksSnapshot>>>,
-    /// Reads that took the lock ([`npc_perks_read`] when its thread's copy was not current).
+    /// The newest copy and the version the last read under the lock found.
+    shared: std::sync::Mutex<SharedCopy>,
+    /// Reads that took the lock ([`npc_perks_read`] when its thread's copy was not current) and
+    /// copies made.
     #[cfg(test)]
     pub(crate) locked_reads: std::sync::atomic::AtomicU32,
+    #[cfg(test)]
+    pub(crate) copies_made: std::sync::atomic::AtomicU32,
+}
+
+/// [`NpcPerksMap`]'s shared copy and the version its last read under the lock found (0: none).
+#[derive(Default)]
+struct SharedCopy {
+    copy: Option<std::sync::Arc<NpcPerksSnapshot>>,
+    last_seen: u64,
 }
 
 /// The next version of any [`NpcPerksMap`] (from 1; each taken once in the process).
@@ -264,9 +276,11 @@ impl Default for NpcPerksMap {
             // `s_NPCPerksInfoMap(0x80)`.
             map: std::sync::Mutex::new(UnorderedMap::new(0x80)),
             version: std::sync::atomic::AtomicU64::new(next_npc_perks_version()),
-            snapshot: std::sync::Mutex::new(None),
+            shared: std::sync::Mutex::new(SharedCopy::default()),
             #[cfg(test)]
             locked_reads: std::sync::atomic::AtomicU32::new(0),
+            #[cfg(test)]
+            copies_made: std::sync::atomic::AtomicU32::new(0),
         }
     }
 }
@@ -301,9 +315,39 @@ impl NpcPerksSnapshot {
     }
 }
 
+/// What [`npc_perks_read`] reads: a thread's copy, or the map itself under its lock.
+pub enum NpcPerksView<'a> {
+    Copy(&'a NpcPerksSnapshot),
+    Map(&'a UnorderedMap<u32, NpcPerks>),
+}
+
+impl NpcPerksView<'_> {
+    /// The actor's entry point lists' block (0 while none), none without an entry.
+    pub fn entry_points(&self, id: u32) -> Option<u32> {
+        match self {
+            NpcPerksView::Copy(s) => s.entry_points(id),
+            NpcPerksView::Map(m) => m.get(&id).map(|p| p.entry_points),
+        }
+    }
+
+    /// The actor's rank of the perk, none without one.
+    pub fn rank(&self, id: u32, perk: u32) -> Option<u8> {
+        match self {
+            NpcPerksView::Copy(s) => s.rank(id, perk),
+            NpcPerksView::Map(m) => m.get(&id).and_then(|p| p.ranks.get(&perk).copied()),
+        }
+    }
+}
+
 impl NpcPerksMap {
-    /// The copy of the map's version now, made under the lock when the shared one is older.
-    fn snapshot(&self) -> std::sync::Arc<NpcPerksSnapshot> {
+    /// A read whose thread's copy is not current, under the lock: `f` on the shared copy when it
+    /// is of the map's version; else on a new copy when the version is the one the previous such
+    /// read found (it has stayed the same since); else on the map itself, the version noted.
+    /// Answers `f`'s answer and the copy it read, if any (for the thread to keep).
+    fn locked_read<R>(
+        &self,
+        f: impl FnOnce(&NpcPerksView<'_>) -> R,
+    ) -> (R, Option<std::sync::Arc<NpcPerksSnapshot>>) {
         let map = self
             .map
             .lock()
@@ -311,11 +355,16 @@ impl NpcPerksMap {
         // Under the lock: the version of what the map holds.
         let version = self.version.load(std::sync::atomic::Ordering::Relaxed);
         let mut shared = self
-            .snapshot
+            .shared
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(s) = shared.as_ref().filter(|s| s.version == version) {
-            return s.clone();
+        if let Some(s) = shared.copy.as_ref().filter(|s| s.version == version) {
+            let s = s.clone();
+            return (f(&NpcPerksView::Copy(&s)), Some(s));
+        }
+        if shared.last_seen != version {
+            shared.last_seen = version;
+            return (f(&NpcPerksView::Map(&map)), None);
         }
         let mut entries: Vec<SnapshotEntry> = map
             .iter()
@@ -325,9 +374,12 @@ impl NpcPerksMap {
             })
             .collect();
         entries.sort_unstable_by_key(|e| e.0);
+        #[cfg(test)]
+        self.copies_made
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let s = std::sync::Arc::new(NpcPerksSnapshot { version, entries });
-        *shared = Some(s.clone());
-        s
+        shared.copy = Some(s.clone());
+        (f(&NpcPerksView::Copy(&s)), Some(s))
     }
 }
 
@@ -384,25 +436,26 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// `f` on a copy of the NPC perks map as it is now, without the map's lock while this thread's
-/// copy is of the map's version (versions are never reused, so a copy of another engine's map
-/// never passes for this one's). `f` must not call the game.
-pub fn npc_perks_read<R>(e: &mut Engine, f: impl FnOnce(&NpcPerksSnapshot) -> R) -> R {
+/// `f` on the NPC perks map as it is now: this thread's copy, without the map's lock, while it is
+/// of the map's version (versions are never reused, so a copy of another engine's map never
+/// passes for this one's); else under the lock ([`NpcPerksMap::locked_read`]). `f` must not call
+/// the game.
+pub fn npc_perks_read<R>(e: &mut Engine, f: impl FnOnce(&NpcPerksView<'_>) -> R) -> R {
     let m = e.ext_free::<NpcPerksMap>();
     let version = m.version.load(std::sync::atomic::Ordering::Acquire);
     NPC_PERKS_READ.with(|cell| {
         let mut copy = cell.borrow_mut();
-        let current = copy.as_ref().is_some_and(|s| s.version == version);
-        if !current {
-            #[cfg(test)]
-            m.locked_reads
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            *copy = Some(m.snapshot());
+        if let Some(s) = copy.as_deref().filter(|s| s.version == version) {
+            return f(&NpcPerksView::Copy(s));
         }
-        match copy.as_deref() {
-            Some(s) => f(s),
-            None => f(&NpcPerksSnapshot::default()),
+        #[cfg(test)]
+        m.locked_reads
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (answer, made) = m.locked_read(f);
+        if made.is_some() {
+            *copy = made;
         }
+        answer
     })
 }
 

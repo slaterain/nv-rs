@@ -12,6 +12,24 @@ layer on 2026-11-03 (ADR-0011; `docs/history/README.md`).
 
 ## Working rules
 
+- Every system from the start (maintainer, 2026-11-17): no new code is written for one
+  operating system only. A pull request works on Windows, Linux and macOS when it lands:
+  - no new use of a Windows-only facility (GDI text, the registry, drive letters, 8.3 short
+    names, Win32 windows and dialogs, a Windows-only crate) without the Linux and macOS path
+    in the same pull request, and no new feature behind `cfg(windows)` alone;
+  - where the game itself asks a Windows-only question, the port answers off Windows as a
+    plain Windows machine would (the captured machine's answer, or "that feature is off"),
+    says the real value in the log, and never stops the game over it;
+  - new crates and new code compile for all three before the push
+    (`cargo check --target aarch64-apple-darwin --tests -p <crate>` locally); GitHub's Linux
+    job runs on every pull request and is read before the merge; a pull request touching
+    what differs by system (files, windows, input, sound, drawing, the launcher, packaging)
+    carries the `other-systems` label so the macOS job runs too;
+  - tests of system-specific code have a part that runs on every system where that is
+    possible, not only behind a `cfg`.
+  Every stop on Linux until this rule (short names twice, a drive-letter rule, the shader
+  level read from the graphics driver's Windows file name) was a Windows-only assumption found
+  one volunteer report at a time.
 - Derive behavior and values from game files, compiled shaders, Ghidra or
   recordings. No stand-ins or invented behavior; leave unsupported features
   out. Label unresolved guesses in code and topic findings.
@@ -64,7 +82,7 @@ layer on 2026-11-03 (ADR-0011; `docs/history/README.md`).
 
 ## Machine and checking
 
-Project: current checkout, Windows/PowerShell is the tested platform.
+Project: current checkout. Windows is the maintainer's tested platform; Linux is played by volunteers, macOS builds the play build and runs part of the crates' tests (nightly and on labelled pull requests; not yet a failing check).
 Game Data: the contributor's own installed Data folder; never commit it.
 Reference place: Doc Mitchell's house (Save 138). GPU: RTX 5070 Ti Laptop.
 Research/tools: `%USERPROFILE%\nv-re`, especially findings and decomp.

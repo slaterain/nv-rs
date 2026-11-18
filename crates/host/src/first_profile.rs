@@ -28,7 +28,8 @@ fn bytes_of(text: &str) -> Vec<u8> {
 
 /// What a first start reads: the profile's two files as they are (`None`: missing), the game's
 /// `Fallout_default.ini` and `high.ini`, the player's pending choices (`settings.ini`), the
-/// desktop's size and the card's name (the machine table's).
+/// desktop's size in the system's scaled pixels and the monitor's in its real pixels, and the
+/// card's name (the machine table's: [`table_facts`]).
 pub struct Inputs<'a> {
     pub ini: Option<Vec<u8>>,
     pub prefs: Option<Vec<u8>>,
@@ -36,6 +37,8 @@ pub struct Inputs<'a> {
     pub high_ini: Option<Vec<u8>>,
     pub pending: Option<&'a Settings>,
     pub desktop: Option<(u32, u32)>,
+    /// The monitor's size in real pixels (`GetAdapterDisplayMode`): the borderless window's.
+    pub screen: Option<(u32, u32)>,
     pub device: Option<&'a str>,
 }
 
@@ -90,12 +93,11 @@ pub fn prepare(inputs: &Inputs) -> Outcome {
         out.ini = Some(ini.clone());
     }
 
-    let mut first_time_size = None;
+    let mut first_time = false;
     let old_prefs = match &inputs.prefs {
         Some(bytes) => bytes.clone(),
         None => {
-            // The game's window starts at the desktop's size.
-            first_time_size = inputs.desktop;
+            first_time = true;
             out.log
                 .push("FalloutPrefs.ini: none yet: starting from the game's High preset".into());
             inputs.high_ini.clone().unwrap_or_default()
@@ -119,17 +121,48 @@ pub fn prepare(inputs: &Inputs) -> Outcome {
     if let Some(device) = inputs.device {
         lines.push(("sD3DDevice".into(), format!("\"{device}\"")));
     }
-    if let Some((w, h)) = first_time_size {
+    // The game's window starts at the desktop's size: borderless, the monitor's real pixels (the
+    // window covers them: a back buffer in the system's scaled pixels would be stretched and soft
+    // on a scaled desktop, the first Linux start's 2194x1234 on 2560x1440, 2026-11-17); framed, the
+    // scaled size the window is made in. A FalloutPrefs.ini an earlier start made with the scaled
+    // size of a borderless window (exactly that size, the scale not 1) is corrected once: the
+    // file then carries [`SIZE_CHECKED`] (written by every start of this build, a fresh file's
+    // at once), so a scaled size the player picks later is kept.
+    let size = if borderless {
+        inputs.screen.or(inputs.desktop)
+    } else {
+        inputs.desktop
+    };
+    let checked = size_checked(&text_of(&old_prefs));
+    let earlier_scaled = !first_time
+        && !checked
+        && borderless
+        && inputs.screen.is_some()
+        && inputs.desktop.is_some()
+        && inputs.desktop != inputs.screen
+        && prefs_size(&text_of(&old_prefs)) == inputs.desktop;
+    if let (Some((w, h)), true) = (size, first_time || earlier_scaled) {
         if !lines.iter().any(|(n, _)| n == "iSize W") {
+            if earlier_scaled {
+                let (sw, sh) = inputs.desktop.unwrap_or_default();
+                out.log.push(format!(
+                    "FalloutPrefs.ini: the window's size {sw}x{sh} (the desktop's scaled size an \
+                     earlier start set) set to the monitor's {w}x{h}"
+                ));
+            }
             lines.push(("iSize W".into(), w.to_string()));
             lines.push(("iSize H".into(), h.to_string()));
         }
     }
-    let new = if lines.is_empty() {
+    let mut new = if lines.is_empty() {
         old_prefs.clone()
     } else {
         bytes_of(&settings::apply_to_prefs(&text_of(&old_prefs), &lines))
     };
+    if !checked {
+        let (section, key) = SIZE_CHECKED;
+        new = bytes_of(&game_ini::set_key(&text_of(&new), section, key, "1"));
+    }
     if inputs.prefs.as_ref() != Some(&new) {
         out.prefs = Some(new);
     }
@@ -137,21 +170,68 @@ pub fn prepare(inputs: &Inputs) -> Outcome {
     out
 }
 
-/// The desktop's size (`GetSystemMetrics` 0 and 1, in the scaled pixels the game sees) and the
-/// card's name (`GetAdapterIdentifier`'s description) in a machine table's text.
-pub fn table_facts(table: &str) -> (Option<(u32, u32)>, Option<String>) {
+/// The marker in `FalloutPrefs.ini` (nv-rs's own profile folder, never the game's folders) that
+/// the window's first size has been looked at by a start that gives a borderless window the
+/// monitor's real pixels: section `[nv-rs]` (the game reads no such section), key
+/// `bWindowSizeChecked=1`. With it, the one-time correction of a scaled size never runs again.
+const SIZE_CHECKED: (&str, &str) = ("nv-rs", "bWindowSizeChecked");
+
+/// Whether a `FalloutPrefs.ini`'s text carries [`SIZE_CHECKED`].
+fn size_checked(text: &str) -> bool {
+    let (section, key) = SIZE_CHECKED;
+    settings::ini_value(text, section, key).is_some_and(|v| v.trim() == "1")
+}
+
+/// The `iSize W` and `iSize H` of a `FalloutPrefs.ini`'s text (keys without case), when both are
+/// there.
+fn prefs_size(text: &str) -> Option<(u32, u32)> {
+    let value = |key: &str| {
+        text.lines().find_map(|line| {
+            let (k, v) = line.split_once('=')?;
+            k.trim()
+                .eq_ignore_ascii_case(key)
+                .then(|| v.trim().parse::<u32>().ok())
+                .flatten()
+        })
+    };
+    value("iSize W").zip(value("iSize H"))
+}
+
+/// What a first start takes from the machine table ([`table_facts`]).
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Facts {
+    /// The desktop's size (`GetSystemMetrics` 0 and 1, in the scaled pixels the game sees).
+    pub desktop: Option<(u32, u32)>,
+    /// The monitor's size in real pixels (`GetAdapterDisplayMode`'s width and height).
+    pub screen: Option<(u32, u32)>,
+    /// The card's name (`GetAdapterIdentifier`'s description).
+    pub device: Option<String>,
+}
+
+/// The [`Facts`] in a machine table's text.
+pub fn table_facts(table: &str) -> Facts {
     let mut w = None;
     let mut h = None;
+    let mut screen = None;
     let mut device = None;
+    let bytes_of_hex = |bytes: &str| -> Vec<u8> {
+        (0..bytes.len() / 2)
+            .filter_map(|i| u8::from_str_radix(bytes.get(2 * i..2 * i + 2)?, 16).ok())
+            .collect()
+    };
     for line in table.lines() {
         let f: Vec<&str> = line.split('\t').collect();
         match f.as_slice() {
             ["GetSystemMetrics", "0", v] => w = u32::from_str_radix(v, 16).ok(),
             ["GetSystemMetrics", "1", v] => h = u32::from_str_radix(v, 16).ok(),
+            ["GetAdapterDisplayMode", "0", "0", bytes] => {
+                let b = bytes_of_hex(bytes);
+                let word =
+                    |at: usize| Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?));
+                screen = word(0).zip(word(4)).filter(|&(w, h)| w > 0 && h > 0);
+            }
             ["GetAdapterIdentifier", "0 0", "0", bytes] => {
-                let b: Vec<u8> = (0..bytes.len() / 2)
-                    .filter_map(|i| u8::from_str_radix(bytes.get(2 * i..2 * i + 2)?, 16).ok())
-                    .collect();
+                let b = bytes_of_hex(bytes);
                 let name = b.get(512..1024).unwrap_or_default();
                 let end = name.iter().position(|&c| c == 0).unwrap_or(name.len());
                 device = Some(String::from_utf8_lossy(&name[..end]).into_owned());
@@ -159,7 +239,11 @@ pub fn table_facts(table: &str) -> (Option<(u32, u32)>, Option<String>) {
             _ => {}
         }
     }
-    (w.zip(h), device.filter(|d| !d.is_empty()))
+    Facts {
+        desktop: w.zip(h),
+        screen,
+        device: device.filter(|d| !d.is_empty()),
+    }
 }
 
 /// A file as a first start reads it: its bytes, `None` when it is not there, or why it could not
@@ -200,7 +284,7 @@ pub fn first_start_with(
     let pending = settings_file
         .and_then(|p| std::fs::read(p).ok())
         .map(|b| Settings::parse(&settings::decode(&b)));
-    let (desktop, device) = table_facts(table);
+    let facts = table_facts(table);
     let read = |file: &Result<Option<Vec<u8>>, String>| file.as_ref().ok().cloned().flatten();
     let outcome = prepare(&Inputs {
         ini: read(&ini),
@@ -208,8 +292,9 @@ pub fn first_start_with(
         default_ini: std::fs::read(game_folder.join("Fallout_default.ini")).ok(),
         high_ini: std::fs::read(game_folder.join("high.ini")).ok(),
         pending: pending.as_ref(),
-        desktop,
-        device: device.as_deref(),
+        desktop: facts.desktop,
+        screen: facts.screen,
+        device: facts.device.as_deref(),
     });
     let mut log = outcome.log.clone();
     let mut all_written = true;
@@ -320,6 +405,7 @@ mod tests {
             high_ini: Some(HIGH_INI.to_vec()),
             pending: None,
             desktop: Some((2560, 1440)),
+            screen: Some((2560, 1440)),
             device: Some("AMD Radeon RX 7800 XT (RADV NAVI32)"),
         })
     }
@@ -352,7 +438,7 @@ mod tests {
         let ini = made.ini.unwrap();
         let mut edited = ini.clone();
         edited.extend_from_slice(b"[Player]\r\nmine=1\r\n");
-        let prefs = b"[Display]\r\niSize W=1920\r\niSize H=1080\r\nbFull Screen=0\r\nsD3DDevice=\"AMD Radeon RX 7800 XT (RADV NAVI32)\"\r\nfGamma=1.2\r\n";
+        let prefs = b"[Display]\r\niSize W=1920\r\niSize H=1080\r\nbFull Screen=0\r\nsD3DDevice=\"AMD Radeon RX 7800 XT (RADV NAVI32)\"\r\nfGamma=1.2\r\n[nv-rs]\r\nbWindowSizeChecked=1\r\n";
         let again = first(Some(&edited), Some(prefs));
         assert_eq!(again.ini, None, "the edited Fallout.ini stays as it is");
         assert_eq!(
@@ -381,6 +467,7 @@ mod tests {
             high_ini: None,
             pending: None,
             desktop: None,
+            screen: None,
             device: None,
         });
         assert_eq!(out.ini, None);
@@ -397,9 +484,13 @@ mod tests {
         );
         assert_eq!(
             table_facts(&table),
-            (Some((2048, 1152)), Some("Card".into()))
+            Facts {
+                desktop: Some((2048, 1152)),
+                screen: None,
+                device: Some("Card".into())
+            }
         );
-        assert_eq!(table_facts(""), (None, None));
+        assert_eq!(table_facts(""), Facts::default());
     }
 
     /// The facts from the lines the machine table really writes (a 2x monitor, a card).
@@ -427,8 +518,83 @@ mod tests {
         let table = card_lines(&card) + &display_lines(&[monitor], &card.name).unwrap();
         assert_eq!(
             table_facts(&table),
-            (Some((1920, 1080)), Some(card.name.clone()))
+            Facts {
+                desktop: Some((1920, 1080)),
+                screen: Some((3840, 2160)),
+                device: Some(card.name.clone())
+            }
         );
+    }
+
+    /// A desktop scaled by a non-whole factor (the first Linux start's: 2560x1440 at about 1.17,
+    /// read by the game as 2194x1234): borderless, the window's size is the monitor's real pixels;
+    /// framed, the scaled size the window is made in; a FalloutPrefs.ini an earlier start made at the
+    /// scaled size is corrected once, one the player set to another size is not.
+    #[test]
+    fn a_scaled_desktop_gives_the_borderless_window_its_real_pixels() {
+        use engine_platform::machine_table::display::display_lines;
+        use engine_platform::machine_table::Monitor;
+        let monitor = Monitor {
+            size: (2560, 1440),
+            scale: 2560.0 / 2194.0,
+            refresh_millihertz: Some(165_000),
+            modes: Vec::new(),
+            primary: true,
+        };
+        let facts = table_facts(&display_lines(&[monitor], "card").unwrap());
+        assert_eq!(facts.desktop, Some((2194, 1234)));
+        assert_eq!(facts.screen, Some((2560, 1440)));
+        let inputs = |prefs: Option<&[u8]>, pending: Option<&Settings>| -> Outcome {
+            prepare(&Inputs {
+                ini: None,
+                prefs: prefs.map(<[u8]>::to_vec),
+                default_ini: Some(DEFAULT_INI.to_vec()),
+                high_ini: Some(HIGH_INI.to_vec()),
+                pending,
+                desktop: facts.desktop,
+                screen: facts.screen,
+                device: Some("card"),
+            })
+        };
+        let prefs = text_of(inputs(None, None).prefs.as_deref().unwrap());
+        assert!(
+            prefs.contains("iSize W=2560") && prefs.contains("iSize H=1440"),
+            "{prefs}"
+        );
+        assert!(prefs.contains("bFull Screen=0"), "{prefs}");
+        // A fresh file is marked at once: nothing to correct later.
+        assert!(size_checked(&prefs), "{prefs}");
+        let framed = Settings::parse("Borderless=0\n");
+        let prefs = text_of(inputs(None, Some(&framed)).prefs.as_deref().unwrap());
+        assert!(
+            prefs.contains("iSize W=2194") && prefs.contains("iSize H=1234"),
+            "{prefs}"
+        );
+        // The volunteer's file from the first start: corrected, with a line.
+        let earlier = b"[Display]\r\niSize W=2194\r\niSize H=1234\r\nbFull Screen=0\r\n";
+        let out = inputs(Some(earlier), None);
+        let prefs = text_of(out.prefs.as_deref().unwrap());
+        assert!(
+            prefs.contains("iSize W=2560") && prefs.contains("iSize H=1440"),
+            "{prefs}"
+        );
+        assert!(out
+            .log
+            .iter()
+            .any(|l| l.contains("set to the monitor's 2560x1440")));
+        assert!(size_checked(&prefs), "{prefs}");
+        // Once marked, the scaled size is the player's choice (picked later in the game or by
+        // hand): kept on every later start, the file unchanged.
+        let chosen = b"[Display]\r\niSize W=2194\r\niSize H=1234\r\nbFull Screen=0\r\nsD3DDevice=\"card\"\r\n[nv-rs]\r\nbWindowSizeChecked=1\r\n";
+        let out = inputs(Some(chosen), None);
+        assert_eq!(out.prefs, None, "{:?}", out.prefs.as_deref().map(text_of));
+        assert!(!out.log.iter().any(|l| l.contains("set to the monitor's")));
+        // A size of the player's own: kept.
+        let own = b"[Display]\r\niSize W=1920\r\niSize H=1080\r\nbFull Screen=0\r\n";
+        let out = inputs(Some(own), None);
+        let prefs = out.prefs.as_deref().map_or_else(|| text_of(own), text_of);
+        assert!(prefs.contains("iSize W=1920"), "{prefs}");
+        assert!(!prefs.contains("2560"), "{prefs}");
     }
 
     /// The player's pending choices: their resolution beats the desktop's size, and with the
@@ -443,6 +609,7 @@ mod tests {
             high_ini: Some(HIGH_INI.to_vec()),
             pending: Some(&pending),
             desktop: Some((2560, 1440)),
+            screen: Some((2560, 1440)),
             device: Some("card"),
         });
         assert!(out.seeded);

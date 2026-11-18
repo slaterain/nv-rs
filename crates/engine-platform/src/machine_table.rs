@@ -773,13 +773,15 @@ pub struct DisplayInputs {
     pub card: Result<Card, String>,
 }
 
-/// The display half's lines, what could not be answered (lines for the log), and why the game
+/// The display half's lines, the lines for the start's log (the real card and the driver name
+/// the game is given, [`display::driver_note`]; what could not be answered), and why the game
 /// cannot draw on this card, if it cannot ([`Card::refusal`]: the start is then refused).
 pub fn display_part(inputs: &DisplayInputs) -> (String, Vec<String>, Option<String>) {
     let mut table = String::new();
     let mut problems = Vec::new();
     match &inputs.card {
         Ok(card) => {
+            problems.push(display::driver_note(card));
             table.push_str(&display::card_lines(card));
             let answers = display::honour_samples(display::CARD, &card.sample_counts);
             table.push_str(&display::honour_blending(&answers, card.float32_blendable));

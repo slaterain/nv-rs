@@ -1,15 +1,23 @@
 name: Other systems
 # Linux and macOS (Apple silicon): the play build compiles there and the unit tests run there. The game
-# does not run on either yet: the host refuses to start it there, naming what is still Windows-only.
-# Nothing here is a check of play.
+# starts on both (Linux x86-64 is played by volunteers; Apple silicon has not been started with the
+# game yet). Nothing here is a check of play.
+#
+# Since 2026-11-17 no new code is written for one system only (AGENTS.md, "Every system from the
+# start"): the Linux job therefore runs on EVERY pull request, so a change that does not build or
+# pass its tests on Linux is seen before it merges.
 #
 # Its own workflow, so CI's Windows job (ci.yml, "check") is untouched. These jobs take runners
 # from the account's shared limit (20 jobs at a time, 5 of them macOS), and the Windows job's runs
-# are long, so they run only where they cannot crowd it out during a burst of pull requests:
-# - Linux: on pushes to main, on pull requests labelled "other-systems", and by hand.
+# are long. Linux on every pull request is taken on purpose (one slot for about 20 minutes a push:
+# a large burst of pull requests can delay Windows checks, never cancel them); macOS stays on the
+# label and nightly to keep its 5 slots free:
+# - Linux: on pushes to main, on every pull request, and by hand.
 # - macOS: on pull requests labelled "other-systems", by hand, and once a night (not on every push
 #   to main: it takes about half an hour with two compilers).
-# A pull request without the label runs neither; the Windows job runs as before on every one.
+# A pull request without the label runs the Linux job only; the Windows job runs as before on every
+# one. A pull request that touches what differs by system (files, windows, input, sound, drawing,
+# the launcher, packaging) carries the label, so the macOS job runs too.
 # Adding another label to a labelled pull request starts nothing and cancels nothing: the run it
 # creates has both jobs skipped, and the concurrency groups are the jobs' own (below), which a job
 # joins when it is queued (GitHub's documentation: a job "is queued" into its group); a skipped job
@@ -39,9 +47,7 @@ jobs:
     if: >-
       (github.event_name == 'push') ||
       (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'pull_request' &&
-       contains(github.event.pull_request.labels.*.name, 'other-systems') &&
-       (github.event.action != 'labeled' || github.event.label.name == 'other-systems'))
+      (github.event_name == 'pull_request' && github.event.action != 'labeled')
     runs-on: ubuntu-latest
     concurrency:
       group: other-systems-linux-${{ github.ref == 'refs/heads/main' && format('{0}-{1}', github.event_name, github.sha) || github.ref }}

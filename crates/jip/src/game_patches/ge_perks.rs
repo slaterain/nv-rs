@@ -414,10 +414,13 @@ fn set_perk_rank_npc(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let block = {
         let mut map = npc_perks(e);
-        let entry = map.emplace(id);
-        if entry.ranks.get(&perk).is_some_and(|&r| r >= new_rank) {
+        // Looked at first without writing: a rank that stays changes nothing, not even the
+        // map's version (the lock-free reads' copies stay current).
+        let had = map.get(&id).and_then(|p| p.ranks.get(&perk).copied());
+        if had.is_some_and(|r| r >= new_rank) {
             return Ret::default();
         }
+        let entry = map.emplace(id);
         entry.ranks.insert(perk, new_rank);
         entry.entry_points
     };
@@ -445,12 +448,15 @@ fn remove_perk_npc(e: &mut Engine, w: &[u32]) -> Ret {
     let id = e.mem.u32(actor + REF_ID);
     let block = {
         let mut map = npc_perks(e);
+        // Looked at first without writing: a perk the actor lacks changes nothing, not even the
+        // map's version.
+        if !map.get(&id).is_some_and(|p| p.ranks.contains_key(&perk)) {
+            return Ret::default();
+        }
         let Some(entry) = map.get_mut(&id) else {
             return Ret::default();
         };
-        if entry.ranks.remove(&perk).is_none() {
-            return Ret::default();
-        }
+        entry.ranks.remove(&perk);
         entry.entry_points
     };
     mark_changed(e, crate::cosave::changed::NPC_PERKS);

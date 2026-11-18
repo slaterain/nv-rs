@@ -217,7 +217,9 @@ fn parent_of(rel: &[u8]) -> Option<&[u8]> {
 }
 
 /// The folder's copy of a relative name. Off Windows each part is found in its folder without
-/// case (`host_paths::host_path_under`), as Windows finds it whatever case the game names it in.
+/// case (`host_paths::host_path_under`), as Windows finds it whatever case the game names it in,
+/// with the code page's reading of a name looked for in the folder only (`files::host_path_in`):
+/// its spelling never depends on the process's current folder.
 fn kept_path(folder: &Path, rel: &[u8]) -> PathBuf {
     #[cfg(windows)]
     {
@@ -225,7 +227,7 @@ fn kept_path(folder: &Path, rel: &[u8]) -> PathBuf {
     }
     #[cfg(not(windows))]
     {
-        crate::host_paths::host_path_under(folder, &files::host_path(rel))
+        files::host_path_in(folder, rel)
     }
 }
 

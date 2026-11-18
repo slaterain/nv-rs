@@ -150,7 +150,12 @@ pub fn hidden_line(folder: &Path, name: &str) -> Option<String> {
 
 /// A name as Windows compares it: NTFS's upper-casing of its UTF-16 units.
 fn fold(name: &str) -> Vec<u16> {
-    super::files::ntfs_key(&name.encode_utf16().collect::<Vec<u16>>())
+    let units: Vec<u16> = name.encode_utf16().collect();
+    // macOS: composed first (NFC), as the listings give names (`files::host_units`), so a name
+    // stored decomposed matches its listed spelling in any case.
+    #[cfg(target_vendor = "apple")]
+    let units = super::files::composed(&units);
+    super::files::ntfs_key(&units)
 }
 
 /// Whether two names are the same name to Windows: equal after NTFS's upper-casing.
@@ -801,6 +806,33 @@ mod tests {
         let mut exists = tree_exists;
         let mut matches = tree_matches;
         folders(path, &mut Look::new(&mut exists, &mut matches)).unwrap()
+    }
+
+    /// macOS: a name stored decomposed (NFD) is found from its composed spelling in another case
+    /// (as the listings give it, `CAF\u{c9}.ESP` for `Cafe\u{301}.esp`) through the folder's
+    /// listing, with a look whose own test of the written spelling fails (review of #714).
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn a_decomposed_name_is_found_from_its_composed_spelling_in_any_case() {
+        let dir = std::env::temp_dir().join(format!("nv-rs-nfd-fold-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Cafe\u{301}.esp"), b"x").unwrap();
+        let folder = dir.to_string_lossy().into_owned();
+        assert_eq!(
+            folder_matches(&folder, "CAF\u{c9}.ESP"),
+            Some(vec!["Cafe\u{301}.esp".to_string()])
+        );
+        let stored = format!("{folder}/Cafe\u{301}.esp");
+        let mut exists = |p: &str| p == folder || p == stored || !p.starts_with(&folder);
+        let mut matches = folder_matches;
+        let (found, _) = resolve(
+            &format!("{folder}/CAF\u{c9}.ESP"),
+            &mut Look::new(&mut exists, &mut matches),
+        )
+        .unwrap();
+        assert_eq!(found, stored);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
