@@ -10,9 +10,6 @@
 #   ./play.sh --mods           play with mods: those installed with nv-rs and those put in the
 #                              mods folder beside play.sh, laid over a copy of the game's folder
 #                              made of links in nv-rs's own folder (saves made with mods stay apart)
-#   ./play.sh --mods           play with mods: those installed with nv-rs and those put in the
-#                              mods folder beside play.sh, laid over a copy of the game's folder made
-#                              of links in nv-rs's own folder (saves made with mods stay apart)
 #   ./play.sh --help           this text
 #
 # nv-rs never writes into the game's folder, Steam's folders or your Documents. Everything it
