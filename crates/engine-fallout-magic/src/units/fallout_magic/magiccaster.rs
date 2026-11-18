@@ -1558,8 +1558,9 @@ mod tests {
     }
 
     /// G67's seam at `0x816519` (JIP LN NVSE's `EffectSkillModifiers2Hook`): an alchemy item's
-    /// effect (kind 7) cast with effectiveness 2.0. With the fixes row the seam is asked once with
-    /// the alchemy item, the active effect, the caster actor and the effectiveness, and an answer
+    /// effect (kind 7) cast with effectiveness 2.0 by an actor's caster (the actor word `caster -
+    /// 0x88`). With the fixes row the seam is asked once with the alchemy item, the active
+    /// effect, the caster actor and the effectiveness, and an answer
     /// skips the Medicine and Survival blocks (only the radiation block's flag test is left); JIP
     /// not installed or installed without the row: not asked, the three flag tests of the exe.
     #[test]
@@ -1575,7 +1576,9 @@ mod tests {
             G67_ASKED.with(|v| v.borrow_mut().clear());
             let mut e = Engine::new();
             e.map(ALCHEMY_AT, 0x1000);
-            let caster = e.mem.alloc(0xc);
+            // An actor caster: the stats object answers true to +0x100, so the actor word is
+            // `caster - 0x88` (not 0).
+            let caster = e.mem.alloc(0x100) + 0x88;
             let stats = e.mem.alloc(8);
             let spell = e.mem.alloc(0x40);
             let effect = e.mem.alloc(0x20);
@@ -1607,7 +1610,7 @@ mod tests {
             returns(&mut e, 0x00a3_1048, 0);
             returns(&mut e, 0x00a3_104c, active);
             vtable(&mut e, stats, 0x00a1_0000, &[(0x100, 0x00a1_1000)]);
-            returns(&mut e, 0x00a1_1000, 0);
+            returns(&mut e, 0x00a1_1000, 1);
             vtable(&mut e, spell, 0x00a4_0000, &[(0x18, 0x00a4_1018)]);
             returns(&mut e, 0x00a4_1018, 7);
             vtable(&mut e, active, 0x00af_0000, &[(0x0, 0x00af_1000)]);
@@ -1666,6 +1669,8 @@ mod tests {
                 assert_eq!(asked.len(), 1);
                 assert_eq!(asked[0][0], ALCHEMY_AT);
                 assert_eq!(asked[0][1], active);
+                assert_eq!(asked[0][2], caster.wrapping_sub(0x88));
+                assert_ne!(asked[0][2], 0);
                 assert_eq!(asked[0][3], 2.0f32.to_bits());
                 assert_eq!(flags, vec![2]);
             } else {

@@ -296,6 +296,18 @@ fn jip_skips_attach(e: &mut Engine, node: u32) -> bool {
         && e.site(0x0080_eca8, &[node]).is_some()
 }
 
+/// The size `AttachLight` allocates the effect's point light at (the `PUSH 0xFC` at `0x80EA38`):
+/// 0xFC. JIP's H03 (group GL's row and handler) writes 0x110 into the push (its light data after
+/// the game's object); the seam `0x80EA39` answers the size (no words). One load while JIP is not
+/// installed.
+fn point_light_size(e: &mut Engine) -> u32 {
+    if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0080_ea39, &[]).unwrap_or(0xfc)
+    } else {
+        0xfc
+    }
+}
+
 // Translated from 0080e970 (decompiled, FalloutNV.exe 1.4.0.525)
 // Translation incomplete: 0080e970 - the FS:[0] exception frame (unwinding on a throw) is not translated
 /// `LightEffect::AttachLight` (Xbox PDB). Only when the effect has no light yet, its target
@@ -330,7 +342,8 @@ pub fn light_effect_attach_light(e: &mut Engine, this: Ptr) {
         e.call(EDITOR_WARNING, &args![TEXT_NO_LIGHT]);
         return;
     }
-    let block = e.call(ALLOCATE_OBJECT, &args![0xfcu32]).u32();
+    let size = point_light_size(e);
+    let block = e.call(ALLOCATE_OBJECT, &args![size]).u32();
     let new_light = if block != 0 {
         e.call(POINT_LIGHT_CONSTRUCTOR, &args![block]).u32()
     } else {
@@ -1120,5 +1133,62 @@ mod tests {
             assert_eq!(e.mem.u32(LIGHT_COUNT), 4, "{word:08x}");
             assert_eq!(calls(&e, LIGHT_SET_FLOAT).len(), 1, "{word:08x}");
         }
+    }
+
+    thread_local! {
+        /// The words H03's seam handler of a test was asked with.
+        static H03_ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// H03's seam at `0x80EA39` (JIP's `SafeWrite32(0x80EA39, 0x110)`, group GL's handler): not
+    /// asked while JIP is not installed, and every call (the allocation's 0xFC included) the
+    /// same as with no handler; with JIP installed (whatever the fixes row) asked once with no
+    /// words, and the only change is the allocation's size, the answer.
+    #[test]
+    fn jip_h03_seam_sizes_the_light() {
+        use engine_core::extend::{jip_patches, Owner, SiteSlot};
+        fn size(_: &mut Engine, a: &[u32]) -> Option<u32> {
+            H03_ASKED.with(|v| v.borrow_mut().push(a.to_vec()));
+            Some(0x110)
+        }
+        let (mut e, this, _) = attach_rig(false);
+        e.call(0x0080_e970, &args![this]);
+        let plain = e.call_log.take().unwrap();
+        assert_eq!(calls_in(&plain, ALLOCATE_OBJECT), vec![vec![0xfc]]);
+        for word in [
+            0,
+            jip_patches::FIXES,
+            jip_patches::INSTALLED,
+            jip_patches::INSTALLED | jip_patches::FIXES,
+        ] {
+            let installed = word & jip_patches::INSTALLED != 0;
+            H03_ASKED.with(|v| v.borrow_mut().clear());
+            let (mut e, this, _) = attach_rig(false);
+            e.set_jip_patches(word);
+            e.on_site(SiteSlot::new(Owner::Jip, 0x0080_ea39), size);
+            e.call(0x0080_e970, &args![this]);
+            let log = e.call_log.take().unwrap();
+            let expected: Vec<_> = plain
+                .iter()
+                .map(|(addr, words)| match (*addr, installed) {
+                    (ALLOCATE_OBJECT, true) => (*addr, vec![0x110]),
+                    _ => (*addr, words.clone()),
+                })
+                .collect();
+            assert_eq!(log, expected, "{word:08x}");
+            let asked = H03_ASKED.with(|v| v.borrow().clone());
+            assert_eq!(
+                asked,
+                if installed { vec![vec![]] } else { vec![] },
+                "{word:08x}"
+            );
+        }
+    }
+
+    fn calls_in(log: &[(u32, Vec<u32>)], addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, w)| w.clone())
+            .collect()
     }
 }

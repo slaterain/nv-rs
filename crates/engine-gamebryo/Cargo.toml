@@ -8,3 +8,7 @@ description = "FalloutNV.exe translated function by function: the Gamebryo units
 
 [dependencies]
 engine-core = { path = "../engine-core" }
+
+[dev-dependencies]
+# `Engine::on_site_for_test` for the JIP game patch seams' tests (step 3.9).
+engine-core = { path = "../engine-core", features = ["test-support"] }
