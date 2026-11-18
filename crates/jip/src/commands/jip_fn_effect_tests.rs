@@ -1486,3 +1486,94 @@ fn is_spell_target_list() {
     e.mem.set_u32(PC + 0x94 + 0x700, 0);
     assert_eq!(eval(&mut e, 0x291a, PC, FLST), 0.5, "no effect list");
 }
+
+// ---- CastImmediate ----
+
+/// The cast stand-in (`MagicCaster::CastSpell`, the caster's vtable +0xC): records its words
+/// and the caster's `jipActorFlags2` as the cast sees it.
+const CAST_SPELL_FN: u32 = 0x0050_1060;
+/// Not a game address: the tag of the flag byte the cast stand-in saw.
+const SEEN_FLAGS: u32 = 0xf1a9_0000;
+/// A loaded data block (the reference's +0x64) and its root node (+0x14).
+const LOADED: u32 = FORMS + 0x9_0000;
+const R_ACT2: u16 = 16;
+
+fn cast_setup() -> Engine {
+    let mut e = setup();
+    register_awaiting(&mut e, AWAITING_H23);
+    e.mem.set_u32(CASTER_VT + 0xc, CAST_SPELL_FN);
+    e.register(CAST_SPELL_FN, |e, w| {
+        record(CAST_SPELL_FN, w);
+        // `this` is the caster's `MagicCaster` (+0x88): its actor's flags at +0x106.
+        record(SEEN_FLAGS, &[u32::from(e.mem.u8(w[0] - 0x88 + 0x106))]);
+        eax(0)
+    });
+    e.mem.set_u32(LOADED + 0x14, 0x0a0a_0000);
+    e.mem.set_u32(ACT1 + 0x64, LOADED);
+    set_ref(&mut e, R_ACT2, ACT2);
+    clear_calls();
+    e
+}
+
+#[test]
+fn cast_immediate_casts_with_the_flag_set_around_the_cast() {
+    let mut e = cast_setup();
+    e.mem.set_u8(ACT1 + 0x106, 0x0b);
+    assert_eq!(
+        call_on(&mut e, 0x2829, ACT1, &[r(R_SPEL)]),
+        (1, 0.0),
+        "no result"
+    );
+    let one = 1.0f32.to_bits();
+    assert_eq!(
+        calls_to(CAST_SPELL_FN),
+        vec![vec![ACT1 + 0x88, SPEL + 0x18, 0, ACT1 + 0x94, one, 0]],
+        "the target casts on itself: the item, false, its MagicTarget, 1.0, false"
+    );
+    assert_eq!(
+        calls_to(SEEN_FLAGS),
+        vec![vec![0x1b]],
+        "bit 0x10 set during the cast"
+    );
+    assert_eq!(e.mem.u8(ACT1 + 0x106), 0x0b, "cleared after, the rest kept");
+    // A caster given: it casts and carries the flag.
+    clear_calls();
+    e.mem.set_u8(ACT2 + 0x106, 0x10);
+    call_on(&mut e, 0x2829, ACT1, &[r(R_SPEL), r(R_ACT2)]);
+    assert_eq!(
+        calls_to(CAST_SPELL_FN),
+        vec![vec![ACT2 + 0x88, SPEL + 0x18, 0, ACT1 + 0x94, one, 0]]
+    );
+    assert_eq!(calls_to(SEEN_FLAGS), vec![vec![0x10]]);
+    assert_eq!(
+        e.mem.u8(ACT2 + 0x106),
+        0,
+        "cleared even when it was set before"
+    );
+    assert_eq!(e.mem.u8(ACT1 + 0x106), 0x0b, "the target's flags untouched");
+}
+
+#[test]
+fn cast_immediate_needs_an_actor_with_3d_and_no_ability() {
+    let mut e = cast_setup();
+    // An ability (type 4) is not cast.
+    e.mem.set_u32(SPEL + 0x18 + 0x700, 4);
+    call_on(&mut e, 0x2829, ACT1, &[r(R_SPEL)]);
+    assert!(calls_to(CAST_SPELL_FN).is_empty(), "an ability");
+    e.mem.set_u32(SPEL + 0x18 + 0x700, 5);
+    call_on(&mut e, 0x2829, ACT1, &[r(R_SPEL)]);
+    assert_eq!(calls_to(CAST_SPELL_FN).len(), 1, "a poison is");
+    clear_calls();
+    // No 3D: ACT2 has no loaded data.
+    call_on(&mut e, 0x2829, ACT2, &[r(R_SPEL)]);
+    e.mem.set_u32(ACT1 + 0x64, LOADED + 0x100);
+    call_on(&mut e, 0x2829, ACT1, &[r(R_SPEL)]);
+    // Not an actor, no reference, no argument.
+    e.mem.set_u32(NONACT + 0x64, LOADED);
+    call_on(&mut e, 0x2829, NONACT, &[r(R_SPEL)]);
+    call_on(&mut e, 0x2829, 0, &[r(R_SPEL)]);
+    e.mem.set_u32(ACT1 + 0x64, LOADED);
+    call_on(&mut e, 0x2829, ACT1, &[]);
+    assert!(calls_to(CAST_SPELL_FN).is_empty());
+    assert_eq!(e.mem.u8(ACT1 + 0x106), 0, "no flag left");
+}

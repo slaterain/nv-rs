@@ -2,8 +2,9 @@
 //! numbers, adding and removing), object and unarmed effects, an actor base's spells, an
 //! ingestible's addiction and poison, the flags of magic items and base effects, a script
 //! effect's script, an actor's active and timed effects, and the two conditions
-//! `IsSpellTargetAlt` and `IsSpellTargetList`. 28 of its 29 commands: `CastImmediate` sets JIP's
-//! own actor flag around the cast for its cast hook (the core track's).
+//! `IsSpellTargetAlt` and `IsSpellTargetList`: 28 of its 29 commands. `CastImmediate` is built
+//! ([`AWAITING_H23`]): it sets JIP's own actor flag ([`CAST_IMMEDIATE`]) around the game's cast,
+//! which JIP's cast hook (row H23) turns into an immediate cast; it is registered with that row.
 //!
 //! A magic item argument (`kParamType_MagicItem`) is the `MagicItem` inside the form, as xNVSE's
 //! reader casts it (`DYNAMIC_CAST` to `MagicItem`): +0x18 in a spell or an enchantment, +0x30 in
@@ -83,6 +84,11 @@ pub static COMMANDS: Handlers = &[
     (0x27c1, get_base_effect_script),
     (0x27c2, set_base_effect_script),
 ];
+
+/// `CastImmediate`, built but not registered until JIP's cast hook (row H23) is in: without it the
+/// cast is the game's ordinary one, not an immediate one. The row's pull request adds this list to
+/// `commands::ALL`.
+pub static AWAITING_H23: Handlers = &[(0x2829, cast_immediate)];
 
 /// The conditions: each opcode with its execute and its eval.
 #[rustfmt::skip]
@@ -1184,6 +1190,60 @@ fn is_spell_target_list_eval(e: &mut Engine, w: &[u32]) -> Ret {
     if a.arg1 != 0 && spell_target_list(e, a.this_obj, a.arg1) {
         e.mem.set_f64(a.result, 1.0);
     }
+    handled(true)
+}
+
+// ---- CastImmediate ----
+
+/// `kHookActorFlag2_CastImmediate` (`internal/hooks.h`, `1 << 4`) in the caster's
+/// `jipActorFlags2` (+0x106): the bit JIP's cast hook (H23) tests, at `[ecx+0x7E]` of the
+/// caster's `MagicCaster` (+0x88).
+pub const CAST_IMMEDIATE: u8 = 1 << 4;
+/// An actor's `MagicCaster` (+0x88, `Actor` in JIP's `nvse/GameObjects.h`) and its virtual
+/// `CastSpell` (+0xC: the item, a bool, the target's `MagicTarget`, a float, a bool).
+const ACTOR_MAGIC_CASTER: u32 = 0x88;
+const CAST_SPELL: u32 = 0x0c;
+/// `MagicItem::GetType` (virtual, +0x18) and its answer for an ability (`kAbility`).
+const MAGIC_ITEM_GET_TYPE: u32 = 0x18;
+const ABILITY: u32 = 4;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_effect.h:
+// Cmd_CastImmediate_Execute.
+/// `target.CastImmediate item [caster]`: with both read, a target that is an actor with 3D and
+/// an item that is not an ability, the caster (the target when none is given) gets
+/// [`CAST_IMMEDIATE`], casts the item on the target (`CastSpell(item, false, target's
+/// MagicTarget, 1.0, false)`), and loses the flag again. No result.
+fn cast_immediate(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let item = read.form(0);
+    let target = a.this_obj;
+    // A line with no argument data (never compiled: the item is required) leaves JIP's item
+    // its uninitialised stack word; the port does nothing.
+    if item == 0 || !is_actor(e, target) || super::jip_fn_misc_ref::ref_ni_node(e, target) == 0 {
+        return handled(true);
+    }
+    if e.vcall(item, MAGIC_ITEM_GET_TYPE, &[]).eax == ABILITY {
+        return handled(true);
+    }
+    let caster = match read.form(1) {
+        0 => target,
+        c => c,
+    };
+    let flags = Ptr::<crate::game::JipActorFlags>::new(caster);
+    let field = crate::game::JipActorFlags::jipActorFlags2;
+    let before = e.get(flags, field);
+    e.set(flags, field, before | CAST_IMMEDIATE);
+    e.vcall(
+        caster + ACTOR_MAGIC_CASTER,
+        CAST_SPELL,
+        &[item, 0, target + ACTOR_MAGIC_TARGET, 1.0f32.to_bits(), 0],
+    );
+    let after = e.get(flags, field);
+    e.set(flags, field, after & !CAST_IMMEDIATE);
     handled(true)
 }
 

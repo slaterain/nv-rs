@@ -6,7 +6,7 @@
 //! rewards, actor values by name and JIP's keywords; forms' descriptions, the physics world's
 //! gravity, what the reticle and other ray casts hit, angles between points, the camera's
 //! movement, the game hour, ash pile activators and dead actors cleared, the player made to
-//! sneak. 57 of its 83 commands
+//! sneak, the hit effects switch and the biped slots kept visible. 59 of its 83 commands
 //! (85 in the file, two of them never registered: `SetWobblesRotation`, `PlaceModel`).
 //!
 //! The core track built ten of the file's commands in its hook files (not repeated here):
@@ -37,9 +37,13 @@
 //! The ray casts are lane G's (`havok_refs::ray_cast`); the camera casts go along the main
 //! camera's rotation column 0, as JIP hands `WorldRotate()` itself (no `+ 1`).
 //!
+//! `ToggleHitEffects` changes the hit effects word the merged patches G123 to G125 read (kept in
+//! `game_patches::gp` with immortal mode's bit). `ToggleBipedSlotVisibility` keeps JIP's
+//! `s_bipedSlotVisibility` ([`biped_slot_visibility`]), which only the biped slot patch (H15)
+//! reads: until that patch is in, the word is kept and answered and the game is unchanged.
+//!
 //! Deferred (each waits for what is named; no stand-ins):
-//! - `ToggleHitEffects` (G123-G125), `ToggleDepthClear` (G128), `ToggleBipedSlotVisibility`
-//!   (H15): the stage 3.9 game patches that read what they set.
+//! - `ToggleDepthClear` (G128): the drawing track's patch that reads what it sets.
 //! - `SetInternalMarker`: JIP's hook reading `s_internalMarkerIDs` (hooks.h; core track).
 //! - `SetMoonTexture`, `ToggleCameraCollision`, `InitRockItLauncher`: they patch the game's code.
 //! - `SwapTextureEx`, `GetLightAmountAtPoint`: the scene graph's textures and lights.
@@ -103,6 +107,8 @@ pub static COMMANDS: Handlers = &[
     (0x293b, has_keyword),
     (0x293c, get_keyword_forms),
     (0x2942, get_reticle_target_limb),
+    (0x28e9, toggle_hit_effects),
+    (0x28c4, toggle_biped_slot_visibility),
 ];
 
 #[rustfmt::skip]
@@ -172,6 +178,7 @@ impl Default for ArmorDamageCap {
 /// Makes the lock-free slot (at install, before the threads start).
 pub fn install(e: &mut Engine) {
     e.ext_free::<Unlocked>();
+    e.ext_free::<BipedSlotVisibility>();
 }
 
 /// Copies JIP's co-save flags word and armour damage cap into the lock-free slot (see
@@ -2167,6 +2174,80 @@ fn toggle_player_sneaking(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the hit effects switch and the biped slots kept visible ----
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_ToggleHitEffects_Execute.
+/// `ToggleHitEffects [on]`: 1 while the hit effects word is 0 (neither this switch nor immortal
+/// mode 2 has them off); with an argument (the line's count not 0) that is read, on keeps only
+/// immortal mode's bit and off sets this switch's (`gp::toggle_hit_effects`).
+fn toggle_hit_effects(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if crate::game_patches::gp::disable_hit_effects(e) == 0 {
+        a.set_result(e, 1.0);
+    }
+    if super::jip_fn_utility::num_args(e, &a) != 0 {
+        let read = Read::of(e, &a);
+        if read.ok {
+            crate::game_patches::gp::toggle_hit_effects(e, read.int(0, 0) != 0);
+        }
+    }
+    handled(true)
+}
+
+/// JIP's `s_bipedSlotVisibility` (`internal/hooks.h`): a bit per biped slot (0 to 19) whose
+/// model stays shown where the game hides it, read by the biped slot patch (H15,
+/// `BipedSlotVisibilityHook`: `bt` of the slot in the word). JIP starts it at `0x7C` (slots 2 to
+/// 6) and never saves or resets it. Lock-free: the patch reads it where models load.
+pub struct BipedSlotVisibility(AtomicU32);
+
+impl Default for BipedSlotVisibility {
+    fn default() -> BipedSlotVisibility {
+        BipedSlotVisibility(AtomicU32::new(BIPED_SLOT_VISIBILITY_START))
+    }
+}
+
+/// `s_bipedSlotVisibility`'s first value.
+pub const BIPED_SLOT_VISIBILITY_START: u32 = 0x7c;
+
+/// `s_bipedSlotVisibility`, for the biped slot patch (H15).
+pub fn biped_slot_visibility(e: &mut Engine) -> u32 {
+    e.ext_free::<BipedSlotVisibility>()
+        .0
+        .load(Ordering::Relaxed)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_miscellaneous.h:
+// Cmd_ToggleBipedSlotVisibility_Execute.
+/// `ToggleBipedSlotVisibility slot [on]`: for a read slot up to 19, with a second argument (the
+/// line's count above 1) its bit set (any value but 0) or cleared; then 1 when its bit is set.
+fn toggle_biped_slot_visibility(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let count = super::jip_fn_utility::num_args(e, &a);
+    let read = Read::of(e, &a);
+    let slot = read.int(0, 0);
+    if !read.ok || slot > 19 {
+        return handled(true);
+    }
+    let bit = 1u32 << slot;
+    let word = &e.ext_free::<BipedSlotVisibility>().0;
+    if count > 1 {
+        if read.int(1, 0) != 0 {
+            word.fetch_or(bit, Ordering::Relaxed);
+        } else {
+            word.fetch_and(!bit, Ordering::Relaxed);
+        }
+    }
+    if biped_slot_visibility(e) & bit != 0 {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_miscellaneous_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_miscellaneous_r1_tests.rs"]
+mod r1_tests;

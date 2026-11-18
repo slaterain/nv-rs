@@ -525,7 +525,7 @@ fn set_texture_transform_key(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// The fixed string at `s` counted down (`lock dec [s-8]`); nothing for 0 or an unreadable
 /// count.
-fn release_name(e: &Engine, s: u32) {
+pub(crate) fn release_name(e: &Engine, s: u32) {
     if s == 0 {
         return;
     }

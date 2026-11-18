@@ -240,6 +240,9 @@ pub fn install(e: &mut Engine) {
     // Lock-free slots conditions read: made before the threads start.
     jip_fn_miscellaneous::install(e);
     jip_fn_aux_variable::install(e);
+    e.ext_free::<jip_fn_misc_ref::SyncPosition>();
+    e.ext_free::<jip_fn_ui::HudCursor>();
+    e.ext_free::<jip_fn_ui::ItemListRefresh>();
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
