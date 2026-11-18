@@ -1280,6 +1280,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mod-install"
+version = "0.1.0"
+
+[[package]]
 name = "mp3"
 version = "0.1.0"
 

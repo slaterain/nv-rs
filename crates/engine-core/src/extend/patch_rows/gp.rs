@@ -14,6 +14,13 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GP",
     },
+    // H02 (JIP's own, `GetVanityDisabledHook`): the player's look handling 009445b0, the vanity
+    // camera test (005a03f0 with 2) while JIP's HUD cursor is on: the HUD's mouse handling instead.
+    Entry {
+        addr: 0x0094_59ed,
+        owners: JIP,
+        step: "3.9-GP",
+    },
     // The music marker list's rebuild 00947d80, the world space's loop: JIP's
     // BuildMusicMarkerListHook (G72) puts in its sorted cache of the world space's markers.
     Entry {
