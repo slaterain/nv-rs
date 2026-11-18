@@ -143,7 +143,14 @@ fn prepare(e: &mut Engine) {
         }
     }
     // The UI code wraps (`0072_8d60`, `007304b0`, `0075e650`, `0077a480`, `0077a5b0`, `00782620`), when the test engine has no translation of them: a marker answer (0x5a5a).
-    for at in [0x0072_8d60, 0x0073_04b0, 0x0075_e650, 0x0077_a480, 0x0077_a5b0, 0x0078_2620] {
+    for at in [
+        0x0072_8d60,
+        0x0073_04b0,
+        0x0075_e650,
+        0x0077_a480,
+        0x0077_a5b0,
+        0x0078_2620,
+    ] {
         if !e.is_registered(at) {
             e.register(at, |_, _| Ret {
                 eax: 0x5a5a,

@@ -4567,6 +4567,17 @@ mod n057_tests {
     fn jip_seven(_: &mut Engine, _: &[u32]) -> Option<u32> {
         Some(7)
     }
+    thread_local! {
+        static JIP_CLICK_NONE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    /// The click seam's handler: `jip_none` while `JIP_CLICK_NONE` is set, else `jip_zero`.
+    fn jip_click(e: &mut Engine, a: &[u32]) -> Option<u32> {
+        if JIP_CLICK_NONE.with(|c| c.get()) {
+            jip_none(e, a)
+        } else {
+            jip_zero(e, a)
+        }
+    }
 
     /// `make_run`'s recipe (not a weapon) made 3 times, with handlers at JIP's seams for the
     /// crafted message (`0x728933`) and the close (`0x728A0C`), and `word` as the JIP word.
@@ -4649,7 +4660,8 @@ mod n057_tests {
         let menu = recipe_menu(&mut e);
         e.set_global(CAN_MAKE_011D8EA8, 9u32);
         JIP_ASKED.with(|s| s.take());
-        e.on_site_for_test(0x0072_74e1, jip_zero);
+        JIP_CLICK_NONE.with(|c| c.set(false));
+        e.on_site_for_test(0x0072_74e1, jip_click);
         e.call_log = Some(vec![]);
         e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
         assert!(
@@ -4665,7 +4677,7 @@ mod n057_tests {
             calls_to(&e, QUANTITY_MENU_CREATE).is_empty(),
             "JIP's code instead"
         );
-        e.on_site_for_test(0x0072_74e1, jip_none);
+        JIP_CLICK_NONE.with(|c| c.set(true));
         e.call_log = Some(vec![]);
         e.call(0x0072_74b0, &args![menu, 7i32, 0u32]);
         assert_eq!(JIP_ASKED.with(|s| s.take()), vec![(2, vec![menu, 7])]);
