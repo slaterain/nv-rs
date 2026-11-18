@@ -54,8 +54,9 @@
 //! - **G55** (JIP's own, with `MessageBoxExAlt`; `WriteRelCall(0x7A9AEE, MaxMessageWidthHook)`,
 //!   `WriteRelCall(0x7A9C45, ..)`): while a `MessageBoxExAlt` box waits for its answer, the message
 //!   menu's `max_menu_width` (`MessageMenu::LoadNextMessage`, `007a92e0`: the room for the text and
-//!   the menu's widest) is 1200 instead of the menu file's value, so a box with many buttons or a
-//!   long text is laid out wider. With JIP installed, the row on or off.
+//!   the menu's widest) is 1200 instead of the menu file's value: a long message or long button
+//!   labels wrap at, and the box is capped at, 1200 instead of the menu file's maximum (the number
+//!   of buttons is unaffected). With JIP installed, the row on or off.
 //! - **G80** (no comment; `WriteRelJump(0x777123, RolloverWeaponHook)`): the HUD's crosshair
 //!   name of a weapon lying in the world (`HUDMainMenu::SetInfoForRef`, `00775a00`) gets a "+" at
 //!   its end when the weapon has a weapon mod on it (the reference's `ExtraWeaponModFlags`, kind
