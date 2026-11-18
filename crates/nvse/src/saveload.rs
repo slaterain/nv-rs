@@ -558,9 +558,12 @@ fn read_plugins(e: &mut Engine, r: &mut Reader, pass: Pass) -> Result<(), OutOfR
     let mut core_had_data = false;
     while let Some(plugin) = r.next_plugin()? {
         let start = r.offset();
-        let built_in = built_ins
-            .iter()
-            .position(|p| p.opcode_base == plugin.opcode_base);
+        // A built-in that reads no section of its own yet (lStewieAl's Tweaks, whose records are
+        // not built) leaves its section to the keep row, as a plugin not built in: xNVSE would
+        // skip it and the next save would lose what the real plugin wrote there.
+        let built_in = built_ins.iter().position(|p| {
+            p.opcode_base == plugin.opcode_base && (p.load.is_some() || p.pre_load.is_some())
+        });
         if plugin.opcode_base == cosave::CORE_OPCODE_BASE {
             core_had_data = true;
             core_callback(e, r, pass)?;

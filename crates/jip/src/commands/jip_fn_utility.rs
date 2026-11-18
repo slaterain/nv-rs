@@ -7,14 +7,8 @@
 //! `engine_core::mod_files`: what a mod writes is kept in the port's own folder beside the saves,
 //! never in the game folder. 17 of its 19 commands.
 //!
-//! Left for later, each for its reason: `SetOptionalPatch` switches JIP's patches (the switch
-//! rows of step 3.9); `GetOptionalPatch` answers whether each switch's hook or patch is in (`HOOK_INSTALLED`,
-//! `s_patchInstallState`): the port's switch word (`Engine::jip_patches`) says what the player's
-//! ini asks for, and of the switch rows only O6 and O7 are on main (survey of 2026-11-15), so it
-//! would answer 1 for patches the port does not have (`bIgnoreDTDRFix` is on by default);
-//! it waits for those rows, or for a per-switch "in" state that each row sets. `SetOptionalPatch`
-//! must also do what JIP does on a switch: turning O1 (`bIgnoreDTDRFix`) off sets the last hit's
-//! damage threshold G121 shows back to `-FLT_MAX` (`gc::damage`, `s_VATSHitDT`).
+//! `GetOptionalPatch` and `SetOptionalPatch` are built in `jip_fn_utility_patches.rs` (on
+//! `game_patches::switches`).
 
 use super::arrays::{append_element, create_array, Element};
 use super::jip_fn_aux_variable::{array_values, overriding_mod};
