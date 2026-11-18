@@ -140,6 +140,8 @@ pub struct Jip {
     pub script_vars: commands::jip_fn_script_vars::State,
     /// JIP's game patches (step 3.9): the host's row and the switches read.
     pub game_patches: game_patches::State,
+    /// JIP's font files by path (`s_fontInfosMap`) and whether G129's font manager is in.
+    pub font_infos: commands::jip_fn_ui::FontInfos,
     /// JIP's script runner: the script files kept to run at their moments.
     pub script_runner: script_runner::State,
 }

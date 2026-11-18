@@ -243,6 +243,7 @@ pub fn install(e: &mut Engine) {
     e.ext_free::<jip_fn_misc_ref::SyncPosition>();
     e.ext_free::<jip_fn_ui::HudCursor>();
     e.ext_free::<jip_fn_ui::ItemListRefresh>();
+    jip_fn_ui::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
