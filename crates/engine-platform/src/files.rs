@@ -354,26 +354,65 @@ fn real_path(path: &[u8]) -> std::path::PathBuf {
 }
 
 /// Off Windows: the path's text as Windows' `real_path` reads it (each part UTF-8 or code page
-/// bytes), then this system's path ([`super::host_paths::host_path`]). When nothing is there and
-/// a part outside ASCII was read as UTF-8, the path read wholly as code page bytes is tried: a
-/// name the game was given by a listing in the code page whose bytes also read as UTF-8 (the
-/// file `CafÃ©.esp` is listed as `43 61 66 C3 A9 2E ...`, which as UTF-8 is `Café.esp`) opens.
+/// bytes), then this system's path ([`super::host_paths::host_path`]). A part outside ASCII that
+/// reads as UTF-8 and is not in its folder under that reading is read as code page bytes when
+/// that reading is (part by part, so the install folder's own UTF-8 name stays as it is): a name
+/// the game was given by a listing in the code page whose bytes also read as UTF-8 (the file
+/// `CafÃ©.esp` is listed as `43 61 66 C3 A9 2E ...`, which as UTF-8 is `Café.esp`) opens.
 #[cfg(not(windows))]
 fn real_path(path: &[u8]) -> std::path::PathBuf {
-    let first = super::host_paths::host_path(&game_text(path));
-    if path.is_ascii() || std::fs::symlink_metadata(&first).is_ok() {
-        return first;
+    super::host_paths::host_path(&chosen_text(path, &|text| {
+        std::fs::symlink_metadata(super::host_paths::host_path(text)).is_ok()
+    }))
+}
+
+/// The text of the game's path `path` with each part read as [`real_path`] reads it: ASCII as it
+/// is; a part that is not UTF-8 as code page bytes; a part outside ASCII that is UTF-8 as UTF-8,
+/// unless the path up to it is not there (`exists`) under that reading and is under the code
+/// page's reading.
+#[cfg(not(windows))]
+fn chosen_text(path: &[u8], exists: &dyn Fn(&str) -> bool) -> String {
+    if path.is_ascii() {
+        return game_text(path);
     }
-    let as_code_page = String::from_utf16_lossy(&code_page::to_wide(path));
-    if as_code_page == game_text(path) {
-        return first;
+    let mut text = String::with_capacity(path.len());
+    let mut start = 0;
+    let cuts = separators(path);
+    for end in cuts.iter().map(|&at| at + 1).chain([path.len()]) {
+        let part = &path[start..end];
+        start = end;
+        let as_code_page = String::from_utf16_lossy(&code_page::to_wide(part));
+        match std::str::from_utf8(part) {
+            Ok(utf8) if !part.is_ascii() && utf8 != as_code_page => {
+                let so_far = |reading: &str| {
+                    let whole = format!("{text}{reading}");
+                    exists(whole.trim_end_matches(['\\', '/']))
+                };
+                if !so_far(utf8) && so_far(&as_code_page) {
+                    text.push_str(&as_code_page);
+                } else {
+                    text.push_str(utf8);
+                }
+            }
+            Ok(utf8) => text.push_str(utf8),
+            Err(_) => text.push_str(&as_code_page),
+        }
     }
-    let second = super::host_paths::host_path(&as_code_page);
-    if std::fs::symlink_metadata(&second).is_ok() {
-        second
-    } else {
-        first
-    }
+    text
+}
+
+/// Off Windows: the game's relative name `rel` under this system's folder `folder` (the mod files
+/// folder, `super::mod_files`), each part found there without case
+/// ([`super::host_paths::host_path_under`]) and read as [`real_path`] reads it, the readings
+/// looked for under `folder` only (never in the process's current folder).
+#[cfg(not(windows))]
+pub fn host_path_in(folder: &std::path::Path, rel: &[u8]) -> std::path::PathBuf {
+    let under = |text: &str| {
+        super::host_paths::host_path_under(folder, &super::host_paths::host_path(text))
+    };
+    under(&chosen_text(rel, &|text| {
+        std::fs::symlink_metadata(under(text)).is_ok()
+    }))
 }
 
 /// The text of the game's path `path` as [`real_path`] reads it: ASCII as it is; else each part
@@ -401,7 +440,9 @@ fn game_text(path: &[u8]) -> String {
 /// ([`super::host_paths::host_folders`]: folders whose names differ only in case).
 #[cfg(not(windows))]
 fn real_folders(path: &[u8]) -> Vec<std::path::PathBuf> {
-    super::host_paths::host_folders(&game_text(path))
+    super::host_paths::host_folders(&chosen_text(path, &|text| {
+        std::fs::symlink_metadata(super::host_paths::host_path(text)).is_ok()
+    }))
 }
 
 /// The ANSI code page the game's `...A` calls turn names with: on Windows the system's
@@ -1241,9 +1282,65 @@ fn host_units(name: &std::ffi::OsStr) -> Vec<u16> {
         use std::os::windows::ffi::OsStrExt;
         name.encode_wide().collect()
     }
-    #[cfg(not(windows))]
+    // macOS: composed (NFC), as Wine does there: names often come decomposed (NFD, a letter
+    // and a combining accent, as macOS's archives and older file systems store them), which no
+    // code page holds as one character. Linux: as stored, as Wine leaves them there (a
+    // decomposed accent is then a character the code page lacks, `?`).
+    #[cfg(target_vendor = "apple")]
+    {
+        composed(&name.to_string_lossy().encode_utf16().collect::<Vec<u16>>())
+    }
+    #[cfg(all(not(windows), not(target_vendor = "apple")))]
     {
         name.to_string_lossy().encode_utf16().collect()
+    }
+}
+
+/// `units` in Unicode's composed form (NFC), by Core Foundation's `CFStringNormalize`; ASCII
+/// as it is.
+#[cfg(target_vendor = "apple")]
+fn composed(units: &[u16]) -> Vec<u16> {
+    use std::ffi::c_void;
+    #[repr(C)]
+    struct CfRange {
+        location: isize,
+        length: isize,
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringCreateMutable(alloc: *const c_void, max_length: isize) -> *mut c_void;
+        fn CFStringAppendCharacters(s: *mut c_void, chars: *const u16, count: isize);
+        fn CFStringNormalize(s: *mut c_void, form: isize);
+        fn CFStringGetLength(s: *const c_void) -> isize;
+        fn CFStringGetCharacters(s: *const c_void, range: CfRange, buffer: *mut u16);
+        fn CFRelease(cf: *const c_void);
+    }
+    /// `kCFStringNormalizationFormC`.
+    const FORM_C: isize = 2;
+    if units.iter().all(|&u| u < 0x80) {
+        return units.to_vec();
+    }
+    // SAFETY: a mutable string of our own, filled from `units` (its length given), normalised,
+    // read back into a buffer of its length, then released; nothing else holds it.
+    unsafe {
+        let s = CFStringCreateMutable(std::ptr::null(), 0);
+        if s.is_null() {
+            return units.to_vec();
+        }
+        CFStringAppendCharacters(s, units.as_ptr(), units.len() as isize);
+        CFStringNormalize(s, FORM_C);
+        let length = CFStringGetLength(s);
+        let mut out = vec![0u16; length.max(0) as usize];
+        CFStringGetCharacters(
+            s,
+            CfRange {
+                location: 0,
+                length,
+            },
+            out.as_mut_ptr(),
+        );
+        CFRelease(s);
+        out
     }
 }
 
@@ -6098,6 +6195,109 @@ mod tests_code_pages {
         assert_eq!(listed, b"Caf\xc3\xa9.esp");
         assert_eq!(read_named(&mut e, &dir, &listed), Ok(b"plugin".to_vec()));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The listings' list of names in a folder whose own name the game was given in the code page
+    /// and whose bytes also read as UTF-8 (`CafÃ©`, listed as `43 61 66 C3 A9`): the folder is
+    /// found as the open finds a file (review of #697, point 1).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_folder_listed_by_bytes_that_also_read_as_utf8_is_listed() {
+        let _page = Page::new(&CP1252);
+        let dir = scratch("utf8-looking-folder");
+        std::fs::create_dir_all(dir.join("Caf\u{c3}\u{a9}")).unwrap();
+        std::fs::write(dir.join("Caf\u{c3}\u{a9}").join("x.esp"), b"x").unwrap();
+        let mut e = Engine::new();
+        let mut query = folder_bytes(&dir);
+        query.extend_from_slice(b"\\Caf\xc3\xa9\\*.esp");
+        let name = e.mem.alloc(0x400);
+        e.mem.set_cstr(name, &query);
+        let d = find_data(&mut e);
+        let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(d));
+        assert_ne!(h, INVALID_HANDLE_VALUE, "{}", e.kernel.last_error);
+        assert_eq!(e.mem.cstr(d + 0x2c), b"x.esp");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The code page's reading is tried part by part: in a folder whose own name is outside ASCII
+    /// (UTF-8 on the disk, as an install folder's), a listed name whose bytes also read as UTF-8
+    /// opens; the folder's part stays UTF-8 (review of #697, point 2).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_listed_name_opens_inside_a_folder_named_outside_ascii() {
+        let _page = Page::new(&CP1252);
+        let dir = scratch("dossier-\u{e9}t\u{e9}");
+        std::fs::write(dir.join("Caf\u{c3}\u{a9}.esp"), b"plugin").unwrap();
+        let mut e = Engine::new();
+        assert_eq!(
+            read_named(&mut e, &dir, b"Caf\xc3\xa9.esp"),
+            Ok(b"plugin".to_vec())
+        );
+        // And a name that is UTF-8 on the disk opens by its UTF-8 bytes there too.
+        std::fs::write(dir.join("\u{e9}t\u{e9}.esp"), b"summer").unwrap();
+        assert_eq!(
+            read_named(&mut e, &dir, "\u{e9}t\u{e9}.esp".as_bytes()),
+            Ok(b"summer".to_vec())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A relative name under a folder of the port's own (the mods' kept copies) is read under
+    /// that folder only: the UTF-8 reading where nothing is there, the code page's where that
+    /// one is there; the process's current folder plays no part (review of #697, point 3).
+    #[cfg(not(windows))]
+    #[test]
+    fn a_name_under_a_folder_is_read_under_that_folder() {
+        let _page = Page::new(&CP1252);
+        let dir = scratch("kept-reading");
+        assert_eq!(
+            super::host_path_in(&dir, b"Caf\xc3\xa9.esp"),
+            dir.join("Caf\u{e9}.esp")
+        );
+        std::fs::write(dir.join("Caf\u{c3}\u{a9}.esp"), b"kept").unwrap();
+        assert_eq!(
+            super::host_path_in(&dir, b"Caf\xc3\xa9.esp"),
+            dir.join("Caf\u{c3}\u{a9}.esp")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// macOS: a name stored decomposed (NFD: `e` and a combining accent, as files from macOS
+    /// archives often are) is listed composed, in the code page's one byte, and opens by it
+    /// (review of #697, point 4).
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn a_decomposed_name_is_listed_composed_and_opens() {
+        let _page = Page::new(&CP1252);
+        let dir = scratch("nfd-name");
+        std::fs::write(dir.join("Cafe\u{301}.esp"), b"nfd").unwrap();
+        let mut e = Engine::new();
+        let mut query = folder_bytes(&dir);
+        query.extend_from_slice(b"\\*.esp");
+        let name = e.mem.alloc(0x400);
+        e.mem.set_cstr(name, &query);
+        let d = find_data(&mut e);
+        let h = find_first_file_a(&mut e, Ptr::new(name), Ptr::new(d));
+        assert_ne!(h, INVALID_HANDLE_VALUE);
+        let listed = e.mem.cstr(d + 0x2c);
+        assert_eq!(listed, b"Caf\xe9.esp");
+        assert_eq!(read_named(&mut e, &dir, &listed), Ok(b"nfd".to_vec()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The composition itself (macOS): decomposed letters become the composed ones, anything
+    /// else is unchanged.
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn decomposed_letters_are_composed() {
+        let units = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(super::composed(&units("Cafe\u{301}")), units("Caf\u{e9}"));
+        assert_eq!(
+            super::composed(&units("A\u{30a}n\u{303}")),
+            units("\u{c5}\u{f1}")
+        );
+        assert_eq!(super::composed(&units("plain.esp")), units("plain.esp"));
+        assert_eq!(super::composed(&units("\u{e9}")), units("\u{e9}"));
     }
 
     /// A player's file another program holds without sharing, or that the player may not read,
