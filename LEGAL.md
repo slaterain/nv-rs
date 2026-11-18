@@ -123,6 +123,9 @@ terms, whose notice must be kept:
   in [crates/uio/NOTICE](crates/uio/NOTICE).
 - `crates/mcm` rebuilds the NVSE plugin of The Mod Configuration Menu 1.5 (Pelinor) with its
   author's permission; see [crates/mcm/NOTICE](crates/mcm/NOTICE).
+- `crates/stewie` builds lStewieAl's Tweaks 10.05 (lStewieAl) in with its author's permission,
+  with Viva New Vegas' INI values for it (ModdingLinked, MIT licence); see
+  [crates/stewie/NOTICE](crates/stewie/NOTICE).
 - These notices, and those above, are in every Linux and macOS package's licenses folder
   (distribution/notices.txt lists them, and the package is refused when one is missing).
 - `vendor/wgpu-hal` is wgpu-hal 30.0.1 (gfx-rs developers, MIT or Apache-2.0), kept in the

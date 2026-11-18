@@ -60,6 +60,7 @@ pub mod jip_fn_ref_map;
 pub mod jip_fn_script;
 pub mod jip_fn_script_vars;
 pub mod jip_fn_sound;
+pub mod jip_fn_sound_playing;
 pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
@@ -223,16 +224,21 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_lines::COMMANDS,
     jip_fn_miscellaneous_marker::COMMANDS,
     jip_fn_utility_patches::COMMANDS,
+    jip_fn_sound_playing::COMMANDS,
     crate::game_patches::gp::COMMANDS,
     crate::game_patches::gc::formulas::COMMANDS,
     crate::game_patches::gx::COMMANDS,
     jip_fn_misc_ref_insert::COMMANDS,
+    // `InsertNode` and `AttachModel`, with their patches H08 and H10.
+    jip_fn_misc_ref_insert::AWAITING_H08_H10,
     // `SynchronizePosition`, with its patch H13 (`game_patches::gh2`).
     jip_fn_misc_ref::AWAITING_H13,
     // `ToggleHUDCursor`, with its patch H02 (`game_patches::gp`).
     jip_fn_ui::AWAITING_H02,
     // `SetFontFile`, with its patch G129 (`game_patches::ga`).
     jip_fn_ui::AWAITING_G129,
+    // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
+    jip_fn_actor_p2::AWAITING_H01,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -851,6 +857,7 @@ mod tests {
             "jip_fn_misc_ref",
             "jip_fn_miscellaneous",
             "jip_fn_utility",
+            "jip_fn_sound",
             // game_patches::gp::COMMANDS (its commands are in this file).
             "jip_fn_miscellaneous",
             // game_patches::gc::formulas::COMMANDS (likewise).
@@ -859,12 +866,16 @@ mod tests {
             "jip_fn_input",
             // jip_fn_misc_ref_insert (InsertNode, AttachModel, ModelHasBlock).
             "jip_fn_misc_ref",
+            // jip_fn_misc_ref_insert::AWAITING_H08_H10 (with H08 and H10).
+            "jip_fn_misc_ref",
             // jip_fn_misc_ref::AWAITING_H13 (`SynchronizePosition`, with H13).
             "jip_fn_misc_ref",
             // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
             "jip_fn_ui",
             // jip_fn_ui::AWAITING_G129 (`SetFontFile`, with G129).
             "jip_fn_ui",
+            // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
+            "jip_fn_actor",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
