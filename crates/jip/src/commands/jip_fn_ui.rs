@@ -9,8 +9,20 @@
 //! menu's highlighted item, a terminal's own model), a reference's place on the world map, and
 //! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
-//! a text's size in a font. 41 of the file's 64 commands; its four menu event commands are the
-//! core track's (`ui_hooks`).
+//! a text's size in a font, the open menu's item list refreshed (`RefreshItemsList`), message
+//! boxes with a callback script (`MessageBoxExAlt`). 43 of the file's 64 commands (`ToggleHUDCursor`
+//! and `SetFontFile` built: [`AWAITING_H02`], [`AWAITING_G129`]); its four menu event commands are
+//! the core track's (`ui_hooks`).
+//!
+//! `ToggleHUDCursor` keeps JIP's HUD cursor mode, which `GetMenuMode` here reads and the HUD
+//! cursor patch (H02) uses to show and run the cursor over the HUD; it is registered with that
+//! patch (on its own it would disable the left button with no cursor to click). The item list refresh is also what JIP's
+//! `RemoveMe` patch (G60) asks for at the next main loop pass ([`request_item_list_refresh`]).
+//!
+//! `MessageBoxExAlt` keeps its boxes' scripts for the box width patch (G55), which lets a box be
+//! 1,200 wide while any waits: until G55 the box is narrower than JIP's (the game's own maximum),
+//! so a long text wraps more; nothing is cut off. `SetFontFile` shares JIP's font map with its
+//! font manager patch (G129), which registers it.
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
 //! LN NVSE)): a path's first part names a menu (looked up as JIP's `s_menuNameToID` looks it up,
@@ -25,15 +37,12 @@
 //! - a hook or a code patch of JIP's: `UnlockRecipeMenuQuantity`, `ToggleCraftingMessages`,
 //!   `EnableImprovedRecipeMenu`, `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
 //!   the exe), `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (the text
-//!   input hooks, `TextInputClose`), `ToggleHUDCursor` (the HUD cursor and its input hooks);
-//! - a routine of JIP's the game calls back: `ShowQuantityMenu`, `MessageBoxExAlt` (their
-//!   callbacks), and `CloseActiveMenu`, which clears what those two keep;
-//! - files and fonts: `SetFontFile` (a font file read from the folder, JIP's font map);
-//! - 3D and drawing: `AttachUIXML`, `AttachUIComponent` (a tile's node under a reference's node),
-//!   `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene node);
-//! - `RefreshItemsList`: in the map menu JIP sets `s_mapMenuSkipSetXY`, read only by its map
-//!   menu patch (G87, `0x79DF73`: `game_patches::gb::skip_map_centring_once` sets it), and in
-//!   the recipe menu it runs JIP's own `RefreshRecipeMenu`.
+//!   input hooks, `TextInputClose`);
+//! - a routine of JIP's the game calls back: `ShowQuantityMenu` (its callback), and
+//!   `CloseActiveMenu`, which clears what it and `MessageBoxExAlt` keep;
+//! - 3D and drawing: `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene
+//!   node); (`AttachUIXML` and `AttachUIComponent`, a tile's node under a reference's node, are
+//!   built in `jip_fn_ui_nodes.rs`);
 //!
 //! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
 //! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the
@@ -73,6 +82,7 @@ use nvse::commands::array::{fix_on, SIZE_CAPS};
 use nvse::commands::Read;
 use nvse::vars::Key;
 use nvse::{handled, CommandArgs, EvalArgs};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[rustfmt::skip]
 pub static COMMANDS: Handlers = &[
@@ -116,7 +126,20 @@ pub static COMMANDS: Handlers = &[
     (0x28e1, show_level_up_menu_ex),
     (0x2927, get_string_ui_dimensions),
     (0x2935, get_menu_item_list_refs),
+    (0x27e8, refresh_items_list),
+    (0x2826, message_box_ex_alt),
 ];
+
+/// `ToggleHUDCursor`, built but not registered until JIP's HUD cursor patch (row H02) is in:
+/// without it the left mouse button would be disabled and menu mode answered with no cursor to
+/// see or click. The row's pull request adds this list to `commands::ALL`.
+pub static AWAITING_H02: Handlers = &[(0x28b5, toggle_hud_cursor)];
+
+/// `SetFontFile`, built but not registered until JIP's font manager patch (row G129) is in: without
+/// it fonts 10 to 89 could not be set (the game's manager ends after font 8) and a game font could
+/// not be put back (G129 keeps the game's eight in the map at start; their files are in the
+/// archives, not loose). The row's pull request adds this list to `commands::ALL`.
+pub static AWAITING_G129: Handlers = &[(0x274c, set_font_file)];
 
 /// `IsInCharGen`, a condition (`DEFINE_CMD_COND_PLUGIN`).
 pub static CONDITIONS: Conditions = &[(0x282a, is_in_char_gen, is_in_char_gen_eval)];
@@ -631,11 +654,12 @@ fn top_visible_menu_id(e: &Engine) -> u32 {
     0
 }
 
-/// `GetMenuMode` (JIP LN NVSE): menu mode (`currentMode > 1`) or JIP's HUD cursor mode, which only
-/// `ToggleHUDCursor` (not built) turns on: off here.
-fn menu_mode(e: &Engine) -> bool {
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: GetMenuMode.
+/// Menu mode (`currentMode > 1`) or JIP's HUD cursor mode ([`hud_cursor_mode`],
+/// `ToggleHUDCursor`).
+fn menu_mode(e: &mut Engine) -> bool {
     let im = interface_manager(e);
-    im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1
+    (im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1) || hud_cursor_mode(e)
 }
 
 /// The path argument as JIP's `tilePath[0x100]` holds it.
@@ -707,23 +731,59 @@ fn inject_ui_xml(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
-/// The log's one line, once a run, when `InjectUIComponent` is called with the UI Organizer row
-/// off (nv-rs's own: JIP would write `jip_temp.xml` into the game's folder instead).
-pub const INJECT_WITHOUT_UIO_LINE: &str = "JIP LN NVSE: InjectUIComponent was called with the UI \
-     Organizer row off (bUIO, NV_UIO): nothing is injected; turn it on for UI mods that use it";
+/// `jip_temp.xml` (`kTempXMLFile`, JIP): the name the text is read under.
+const INJECTED_FILE: &[u8] = b"jip_temp.xml";
+/// `Menu::CompressAndStoreXML` (`00A1CE70`, `cdecl` (name, text): the text cleaned as a menu
+/// file's would be, in a new `XMLStorage`), `Menu::XMLHash` (`0x011F34E0`, the game's map of
+/// menu files by name, which `Menu::GetXML` `00A1C9B0` looks in before it reads a file) with its
+/// `SetAt` (`00A0C900`, `thiscall` (map, name, storage), `RET 8`) and `RemoveAt` (`00A1E240`,
+/// `thiscall` (map, name), `RET 4`: the entry unlinked, its value not freed).
+const COMPRESS_AND_STORE_XML: u32 = 0x00a1_ce70;
+const XML_HASH: u32 = 0x011f_34e0;
+const XML_HASH_SET_AT: u32 = 0x00a0_c900;
+const XML_HASH_REMOVE_AT: u32 = 0x00a1_e240;
 
-/// [`INJECT_WITHOUT_UIO_LINE`] was written in this run.
-static INJECT_WITHOUT_UIO_NOTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: InjectUIComponent
+// (asm).
+/// JIP's `InjectUIComponent(parent, text)`: menu XML text made into tiles under `parent`; the new
+/// tile, 0 for none. With the built-in UI Organizer row on, its `UIOInjectComponent`
+/// ([`uio::inject_component`]), as JIP calls UIO's export when UIO is loaded. Without it JIP
+/// writes the text to `jip_temp.xml` in the game's folder and reads that file with
+/// `Tile::ReadFile`; the port writes no file: the text is cleaned exactly as the game cleans a
+/// file it reads (`Menu::CompressAndStoreXML` given the text), entered in `Menu::XMLHash` under
+/// `jip_temp.xml` for the one `Tile::ReadFile` (whose `Menu::GetXML` finds it there, expands its
+/// includes, parses and frees it, as it does a file's), and taken out of the map after it. The
+/// same tiles as JIP's file, nothing written to a disk.
+pub(crate) fn inject_component(e: &mut Engine, parent: u32, text: &[u8]) -> u32 {
+    if uio::on(e) {
+        return uio::inject_component(e, parent, text);
+    }
+    let text = &text[..text.iter().position(|&c| c == 0).unwrap_or(text.len())];
+    let buffer = heap_alloc(e, text.len() as u32 + 1);
+    if buffer == 0 {
+        return 0;
+    }
+    e.mem.write(buffer, text);
+    e.mem.set_u8(buffer + text.len() as u32, 0);
+    let tile = with_guest_text(e, INJECTED_FILE, |e, name| {
+        let storage = e.call(COMPRESS_AND_STORE_XML, &args![name, buffer]).u32();
+        if storage == 0 {
+            return 0;
+        }
+        e.call(XML_HASH_SET_AT, &args![XML_HASH, name, storage]);
+        let tile = e.call(TILE_READ_FILE, &args![parent, name]).u32();
+        e.call(XML_HASH_REMOVE_AT, &args![XML_HASH, name]);
+        tile
+    });
+    heap_free(e, buffer);
+    tile
+}
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
-// Cmd_InjectUIComponent_Execute and InjectUIComponent.
+// Cmd_InjectUIComponent_Execute.
 /// `Menu/tile...` and a formatted text of menu XML: the text made into tiles under the tile
-/// (none when the path ends at a trait) by the built-in UI Organizer's `UIOInjectComponent`
-/// ([`uio::inject_component`]); result 1 when a tile is made. Without UIO, JIP writes the text to
-/// `jip_temp.xml` in the game's folder and reads that file into the tile; nv-rs writes nothing
-/// into the game's folder, so without UIO (the row off) the command does nothing (a deliberate
-/// difference, as nothing is written into the game's folder).
+/// (none when the path ends at a trait) by JIP's [`inject_component`]; result 1 when a tile is
+/// made, with the UI Organizer row on or off.
 fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     let a = CommandArgs::new(w);
     let f = nvse::commands::string::format_string_args_at(e, &a, 1, INJECT_PARAMS);
@@ -732,11 +792,8 @@ fn inject_ui_component(e: &mut Engine, w: &[u32]) -> Ret {
     }
     let path = nvse::commands::args_in_buffer(e, &f.leading, 0, PATH_BUFFER, "InjectUIComponent");
     let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "InjectUIComponent");
-    if !uio::on(e) && !INJECT_WITHOUT_UIO_NOTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        eprintln!("{INJECT_WITHOUT_UIO_LINE}");
-    }
     if let Some((tile, _)) = target_component(e, &path, false) {
-        if uio::on(e) && uio::inject_component(e, tile, &text) != 0 {
+        if inject_component(e, tile, &text) != 0 {
             a.set_result(e, 1.0);
         }
     }
@@ -2303,6 +2360,531 @@ fn get_world_map_pos_mults(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the item lists refreshed ----
+
+/// The open menus' refreshes `RefreshItemListBox` calls (each confirmed in the exe):
+/// `InventoryMenu`'s list refresh (`00782A90`, `cdecl`), `StatsMenu`'s (`007DF230`, `thiscall`:
+/// the menu, 4; the menu `*011DACE0`), `ContainerMenu::Refresh` (`0075C280`: the menu, the item,
+/// here null), `MapMenu::AddMapIcons` (`0079DBB0`: the menu `*011DA368`, whose tab is at +0x80,
+/// the world map's 0x21), the barter refresh ([`BARTER_REFRESH`] with 1).
+const INVENTORY_REFRESH: u32 = 0x0078_2a90;
+const STATS_REFRESH: u32 = 0x007d_f230;
+const CONTAINER_REFRESH: u32 = 0x0075_c280;
+const MAP_ADD_ICONS: u32 = 0x0079_dbb0;
+const MAP_CURRENT_TAB: u32 = 0x80;
+const WORLD_MAP_TAB: u8 = 0x21;
+/// `RefreshRecipeMenu`'s calls: the recipe list box (+0x6C of the menu) and its virtual
+/// functions +0x1C, +0x14, +0, +0x10; the menu's list fill (`00727680`: the menu, 0, the
+/// category +0x64); `ListBox::SaveListState` (`007312E0`), the filter (`00729FE0`: the list, the
+/// filter function) with the exe's own filter (`00728D60`: the word JIP reads from the exe's
+/// code at `00727637`, the `push` in the exe's own refresh at `00727636`), and the state restored
+/// (`0072A660`: the list, 1).
+const RECIPE_LIST: u32 = 0x6c;
+const RECIPE_FILL: u32 = 0x0072_7680;
+const LIST_SAVE_STATE: u32 = 0x0073_12e0;
+const RECIPE_LIST_FILTER: u32 = 0x0072_9fe0;
+const RECIPE_FILTER: u32 = 0x0072_8d60;
+/// Where JIP reads the filter: the `push` operand of the exe's own refresh (`00727636`), so a
+/// filter another change put there is the one used.
+const RECIPE_FILTER_WORD: u32 = 0x0072_7637;
+const LIST_RESTORE_STATE: u32 = 0x0072_a660;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: RefreshRecipeMenu
+// (asm).
+/// The recipe menu's list made again for its category, as the exe's own category change does.
+fn refresh_recipe_menu(e: &mut Engine, menu: u32) {
+    let list = menu + RECIPE_LIST;
+    e.vcall(list, 0x1c, &[]);
+    let category = e.mem.u32(menu + RECIPE_CATEGORY);
+    e.call(RECIPE_FILL, &args![menu, 0u32, category]);
+    let made = e.vcall(list, 0x14, &[0, 0]).eax;
+    e.vcall(list, 0, &[made]);
+    e.vcall(list, 0x10, &[]);
+    e.call(LIST_SAVE_STATE, &args![list]);
+    // The word the exe holds now (`mov eax, 0x727637; push [eax]`); the exe's own filter when the
+    // code is not in the guest's memory or holds none.
+    let filter = if e.mem.is_mapped(RECIPE_FILTER_WORD) {
+        match e.mem.u32(RECIPE_FILTER_WORD) {
+            0 => RECIPE_FILTER,
+            word => word,
+        }
+    } else {
+        RECIPE_FILTER
+    };
+    e.call(RECIPE_LIST_FILTER, &args![list, filter]);
+    e.call(LIST_RESTORE_STATE, &args![list, 1u32]);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: RefreshItemListBox.
+/// The first shown of the inventory, stats, container, map, barter and recipe menus has its item
+/// list made again: the map only on its world map tab (JIP's map patch G87 then leaves the map
+/// where it is once). A menu shown with no object (JIP calls through null): nothing. For
+/// `RefreshItemsList` and JIP's `RemoveMe` patch (G60, through [`request_item_list_refresh`]).
+pub fn refresh_item_list_box(e: &mut Engine) {
+    let shown = |e: &Engine, id: u32| e.mem.u8(MENU_SHOWN + id) != 0;
+    if shown(e, INVENTORY) {
+        e.call(INVENTORY_REFRESH, &[]);
+    } else if shown(e, STATS) {
+        let menu = e.mem.u32(STATS_MENU);
+        if menu != 0 {
+            e.call(STATS_REFRESH, &args![menu, 4u32]);
+        }
+    } else if shown(e, CONTAINER) {
+        let menu = e.mem.u32(CONTAINER_MENU);
+        if menu != 0 {
+            e.call(CONTAINER_REFRESH, &args![menu, 0u32]);
+        }
+    } else if shown(e, MAP) {
+        let menu = e.mem.u32(MAP_MENU);
+        if menu != 0 && e.mem.u8(menu + MAP_CURRENT_TAB) == WORLD_MAP_TAB {
+            crate::game_patches::gb::skip_map_centring_once(e);
+            e.call(MAP_ADD_ICONS, &args![menu]);
+        }
+    } else if shown(e, BARTER) {
+        e.call(BARTER_REFRESH, &args![1u32]);
+    } else if shown(e, RECIPE) {
+        let menu = e.mem.u32(RECIPE_MENU);
+        if menu != 0 {
+            refresh_recipe_menu(e, menu);
+        }
+    }
+}
+
+/// JIP's `s_doRefreshItemListBox` (`internal/patches_game.h`): set by its `RemoveMe` patch
+/// (G60), taken by the main loop, which then refreshes the item list. Lock-free.
+#[derive(Default)]
+pub struct ItemListRefresh(AtomicBool);
+
+/// `s_doRefreshItemListBox = 1`, for G60: the list is refreshed at the next main loop pass.
+pub fn request_item_list_refresh(e: &mut Engine) {
+    e.ext_free::<ItemListRefresh>()
+        .0
+        .store(true, Ordering::Relaxed);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler
+// (kMessage_MainGameLoop: the HUD cursor's and the item list's parts).
+/// JIP's main loop after its callbacks and events: the HUD cursor mode ends once a menu is open
+/// (the left mouse button given back), and a refresh G60 asked for is made.
+pub fn main_loop(e: &mut Engine) {
+    if hud_cursor_mode(e) {
+        let im = interface_manager(e);
+        if im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1 {
+            e.ext_free::<HudCursor>()
+                .mode
+                .store(false, Ordering::Relaxed);
+            crate::input::set_lmb_disabled(e, false);
+        }
+    }
+    if e.ext_free::<ItemListRefresh>()
+        .0
+        .swap(false, Ordering::Relaxed)
+    {
+        refresh_item_list_box(e);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_RefreshItemsList_Execute.
+/// [`refresh_item_list_box`]. No result.
+fn refresh_items_list(e: &mut Engine, _: &[u32]) -> Ret {
+    refresh_item_list_box(e);
+    handled(true)
+}
+
+// ---- the HUD cursor ----
+
+/// JIP's `s_HUDCursorMode` (`internal/jip_core.cpp`) and `s_lastLMBState` (`internal/hooks.h`):
+/// the cursor shown and usable over the HUD in game mode, read by `GetMenuMode` and the HUD
+/// cursor patch (H02, `GetVanityDisabledHook` and `ProcessHUDMainUI`, which also keeps the
+/// left button's last state). Lock-free.
+#[derive(Default)]
+pub struct HudCursor {
+    mode: AtomicBool,
+    last_lmb: AtomicBool,
+}
+
+/// `s_HUDCursorMode`.
+pub fn hud_cursor_mode(e: &mut Engine) -> bool {
+    e.ext_free::<HudCursor>().mode.load(Ordering::Relaxed)
+}
+
+/// `s_lastLMBState`, for the HUD cursor patch (H02).
+pub fn last_lmb_state(e: &mut Engine) -> bool {
+    e.ext_free::<HudCursor>().last_lmb.load(Ordering::Relaxed)
+}
+
+/// `s_lastLMBState = state`, for the HUD cursor patch (H02).
+pub fn set_last_lmb_state(e: &mut Engine, state: bool) {
+    e.ext_free::<HudCursor>()
+        .last_lmb
+        .store(state, Ordering::Relaxed);
+}
+
+/// The interface manager's fields `ToggleHUDCursor` writes: the cursor tile (+0x28), the bytes
+/// +0x170 and +0x4B4 (JIP's `byte170` and `isRenderedMenuOrPipboyManager`). A tile's node
+/// (+0x2C) and a node's flags (+0x30, bit 0 hidden: JIP's `NiAVObject::Hide`); the traits
+/// `kTileValue_visible` and `kTileValue_mouseover`.
+const IM_CURSOR: u32 = 0x28;
+const IM_BYTE_170: u32 = 0x170;
+const IM_RENDERED_MENU_OR_PIPBOY: u32 = 0x4b4;
+const TILE_NODE: u32 = 0x2c;
+const NODE_FLAGS: u32 = 0x30;
+const TRAIT_VISIBLE: u32 = 0xfa3;
+const TRAIT_MOUSEOVER: u32 = 0xfc3;
+
+/// `Tile::SetBool` (JIP LN NVSE): the tile's value of `id`, when it has one, set.
+fn tile_set_bool(e: &mut Engine, tile: u32, id: u32, on: bool) {
+    let value = value_of(e, tile, id);
+    if value != 0 {
+        value_set_bool(e, value, on);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_ToggleHUDCursor_Execute.
+/// `ToggleHUDCursor [on]`: answers the mode before. With an argument (the line's count not 0)
+/// that reads, in game mode (`currentMode` 1), with no controller in use and the asked state
+/// (any value but 0: on) not the mode's: the mode flips; turning on clears the two bytes; turning
+/// off hides the cursor (its `visible` value 0, its node hidden) and takes the mouse-over off the
+/// active tile; both clear the active tile and menu, disable the left mouse button for the
+/// player while on (xNVSE's key record, as JIP's `SetLMBDisabled`) and clear `s_lastLMBState`.
+fn toggle_hud_cursor(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let mode = hud_cursor_mode(e);
+    a.set_result(e, f64::from(u8::from(mode)));
+    if num_args(e, &a) == 0 {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let im = interface_manager(e);
+    if im == 0 || e.mem.u32(im + IM_CURRENT_MODE) != 1 || crate::input::controller_ready(e) {
+        return handled(true);
+    }
+    let on = read.int(0, 0) != 0;
+    if mode == on {
+        return handled(true);
+    }
+    e.ext_free::<HudCursor>().mode.store(on, Ordering::Relaxed);
+    if on {
+        e.mem.set_u8(im + IM_BYTE_170, 0);
+        e.mem.set_u8(im + IM_RENDERED_MENU_OR_PIPBOY, 0);
+    } else {
+        // The game always has its cursor tile and node; JIP reads them unchecked (the port:
+        // nothing for a missing one).
+        let cursor = e.mem.u32(im + IM_CURSOR);
+        if cursor != 0 {
+            tile_set_bool(e, cursor, TRAIT_VISIBLE, false);
+            let node = e.mem.u32(cursor + TILE_NODE);
+            if node != 0 {
+                let flags = e.mem.u8(node + NODE_FLAGS);
+                e.mem.set_u8(node + NODE_FLAGS, flags | 1);
+            }
+        }
+        let active = e.mem.u32(im + IM_ACTIVE_TILE);
+        if active != 0 {
+            tile_set_bool(e, active, TRAIT_MOUSEOVER, false);
+        }
+    }
+    e.mem.set_u32(im + IM_ACTIVE_TILE, 0);
+    e.mem.set_u32(im + IM_ACTIVE_MENU, 0);
+    crate::input::set_lmb_disabled(e, on);
+    set_last_lmb_state(e, false);
+    handled(true)
+}
+
+// ---- MessageBoxExAlt ----
+
+/// JIP's `s_messageBoxScripts` (`internal/patches_game.h`, a `FixedTypeArray<Script*, 0xF>`):
+/// one entry per box `MessageBoxExAlt` shows, its callback script or 0, the newest last. Read
+/// by the message width patch (G55, `MaxMessageWidthHook`: whether any is pending) and taken by
+/// the box's answer ([`MESSAGE_BOX_CALLBACK`]); `CloseActiveMenu` clears it.
+#[derive(Default)]
+pub struct MessageBoxScripts(std::sync::Mutex<Vec<u32>>);
+
+/// The most boxes kept at once (`FixedTypeArray`'s 0xF).
+pub const MESSAGE_BOX_SCRIPTS_MAX: usize = 0xf;
+
+fn message_box_scripts(e: &mut Engine) -> std::sync::MutexGuard<'_, Vec<u32>> {
+    e.ext_free::<MessageBoxScripts>()
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// How many `MessageBoxExAlt` boxes wait for their answer (G55 widens the box while any does).
+pub fn message_box_scripts_pending(e: &mut Engine) -> usize {
+    message_box_scripts(e).len()
+}
+
+/// The kept boxes' scripts taken out (each one's lambda variables given up), for
+/// `CloseActiveMenu` closing the message menu.
+pub fn clear_message_box_scripts(e: &mut Engine) {
+    let scripts = std::mem::take(&mut *message_box_scripts(e));
+    for script in scripts.into_iter().filter(|&s| s != 0) {
+        nvse::lambda::unsave_variables(e, script);
+    }
+}
+
+/// `MessageBoxCallback`, the routine the game's message menu calls with the answer: at this
+/// address of JIP's commands' own routines (above the identity's, the overrides' and the hooks'
+/// blocks).
+pub const MESSAGE_BOX_CALLBACK: u32 = crate::identity::ROUTINES + 0x700;
+/// The game's `ShowMessageBox` (`00703E80`, `cdecl`: the message, 0, the title, the callback,
+/// 0, 0x17, two floats, then the buttons' texts and a 0) and the interface manager's answer byte
+/// (`msgBoxButton`, +0xE4; 0xFF for none).
+const SHOW_MESSAGE_BOX: u32 = 0x0070_3e80;
+const IM_MESSAGE_BOX_BUTTON: u32 = 0xe4;
+/// `kFormType_Script`.
+const SCRIPT_TYPE: u8 = 0x11;
+/// `kCommandInfo_MessageBoxExAlt.numParams`: the form and xNVSE's 21 format parameters.
+const MESSAGE_BOX_PARAMS: u32 = 22;
+/// The most buttons JIP takes from the text.
+const MESSAGE_BOX_BUTTONS: usize = 0xff;
+
+/// Registers [`MESSAGE_BOX_CALLBACK`].
+pub fn install(e: &mut Engine) {
+    e.ext_free::<MessageBoxScripts>();
+    e.register(MESSAGE_BOX_CALLBACK, message_box_callback);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: MessageBoxCallback
+// (asm).
+/// The answer of the newest `MessageBoxExAlt` box: the pressed button taken (the interface
+/// manager's byte, set back to 0xFF), the newest kept script taken out, and when it is a script
+/// it is called with the button's index and its lambda variables given up. With none kept
+/// (JIP's count would go below 0): nothing past the button's reset.
+fn message_box_callback(e: &mut Engine, _: &[u32]) -> Ret {
+    let im = interface_manager(e);
+    let button = e.mem.u8(im + IM_MESSAGE_BOX_BUTTON);
+    e.mem.set_u8(im + IM_MESSAGE_BOX_BUTTON, 0xff);
+    let script = message_box_scripts(e).pop().unwrap_or(0);
+    if script != 0 {
+        crate::script_call::call(e, script, 0, vec![u32::from(button)]);
+        nvse::lambda::unsave_variables(e, script);
+    }
+    Ret::default()
+}
+
+/// A message box's text as JIP cuts it: the parts between runs of `|` (made 0s) after the first
+/// are the buttons, up to 255, ending at the text's end ("OK" when there is none); a first part starting with `^` and holding a second `^` is a title (between the two) and the
+/// message (after it). The answer: the text with its 0s, the title's and message's offsets in
+/// it, and the buttons' offsets (`None` for JIP's own "OK").
+#[derive(Debug, PartialEq, Eq)]
+pub struct BoxText {
+    pub bytes: Vec<u8>,
+    pub title: Option<usize>,
+    pub message: usize,
+    pub buttons: Vec<Option<usize>>,
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_MessageBoxExAlt_Execute (the text's cutting).
+pub fn box_text(text: &[u8]) -> BoxText {
+    let mut bytes = text.to_vec();
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    bytes.truncate(end);
+    bytes.push(0);
+    let mut buttons = Vec::new();
+    // `GetNextToken(delim, '|')`: the first `|` after `delim` and every `|` right after it made
+    // 0s, the text after them (the text's end when there is none).
+    let next = |bytes: &mut Vec<u8>, from: usize| -> usize {
+        let mut i = from;
+        while bytes[i] != 0 && bytes[i] != b'|' {
+            i += 1;
+        }
+        while bytes[i] == b'|' {
+            bytes[i] = 0;
+            i += 1;
+        }
+        i
+    };
+    let mut delim = 0;
+    for _ in 0..MESSAGE_BOX_BUTTONS {
+        delim = next(&mut bytes, delim);
+        if bytes[delim] == 0 {
+            break;
+        }
+        buttons.push(Some(delim));
+    }
+    if buttons.is_empty() {
+        buttons.push(None);
+    }
+    let (title, message) = match bytes[0] {
+        // `FindChr(buffer + 1, '^')`: stops at the first part's 0.
+        b'^' => match bytes[1..]
+            .iter()
+            .take_while(|&&b| b != 0)
+            .position(|&b| b == b'^')
+        {
+            Some(i) => {
+                bytes[1 + i] = 0;
+                (Some(1), 2 + i)
+            }
+            _ => (None, 0),
+        },
+        _ => (None, 0),
+    };
+    BoxText {
+        bytes,
+        title,
+        message,
+        buttons,
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_MessageBoxExAlt_Execute and MessageBoxExAlt (asm).
+/// `MessageBoxExAlt callback "text"`: while fewer than 15 boxes wait, and the arguments read,
+/// the callback (kept only when it is a script, its lambda variables kept with it; else 0) is
+/// pushed, and the game's message box shown with the cut text ([`box_text`]) and
+/// [`MESSAGE_BOX_CALLBACK`]. No result.
+fn message_box_ex_alt(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if message_box_scripts(e).len() >= MESSAGE_BOX_SCRIPTS_MAX {
+        return handled(true);
+    }
+    let f = nvse::commands::string::format_string_args_at(e, &a, 1, MESSAGE_BOX_PARAMS);
+    if !f.ok {
+        return handled(true);
+    }
+    let form = f.leading.first().and_then(Arg::form).unwrap_or(0);
+    let callback = if form != 0 && type_of(e, form) == SCRIPT_TYPE {
+        nvse::lambda::save_variables(e, form);
+        form
+    } else {
+        0
+    };
+    message_box_scripts(e).push(callback);
+    let text = formatted_in_buffer(e, &f.text, STR_ARG_BUFFER, "MessageBoxExAlt");
+    let cut = box_text(&text);
+    let ok = nvse::table::guest_str(e, b"OK");
+    with_guest_text(e, &cut.bytes[..cut.bytes.len() - 1], |e, at| {
+        let title = cut.title.map_or(0, |t| at + t as u32);
+        let mut words = vec![
+            at + cut.message as u32,
+            0,
+            title,
+            MESSAGE_BOX_CALLBACK,
+            0,
+            0x17,
+            0,
+            0,
+        ];
+        words.extend(cut.buttons.iter().map(|b| b.map_or(ok, |o| at + o as u32)));
+        words.push(0);
+        e.call(SHOW_MESSAGE_BOX, &words);
+    });
+    handled(true)
+}
+
+// ---- SetFontFile ----
+
+/// JIP's `s_fontInfosMap` (`internal/patches_game.h`): each font file's `FontInfo` by its path
+/// (JIP's `const char*` keys compare by `StrHashCI` alone), filled with the game's fonts by its
+/// font manager patch (G129, `InitFontManagerHook`, which also makes the manager hold 89 fonts)
+/// and by `SetFontFile`. `extended`: G129's manager is in (fonts 10 to 89 have slots).
+#[derive(Default)]
+pub struct FontInfos {
+    by_path: std::collections::HashMap<u32, u32>,
+    extended: bool,
+}
+
+fn font_infos(e: &mut Engine) -> &mut FontInfos {
+    &mut e.ext::<Jip>().font_infos
+}
+
+/// The `FontInfo` kept for `path`, 0 for none.
+pub fn font_info(e: &mut Engine, path: &[u8]) -> u32 {
+    let key = crate::containers::str_hash_ci(path);
+    font_infos(e).by_path.get(&key).copied().unwrap_or(0)
+}
+
+/// `s_fontInfosMap->InsertKey(path)` with `info`: false (nothing changed) when the path has one.
+pub fn insert_font_info(e: &mut Engine, path: &[u8], info: u32) -> bool {
+    let key = crate::containers::str_hash_ci(path);
+    match font_infos(e).by_path.entry(key) {
+        std::collections::hash_map::Entry::Occupied(_) => false,
+        std::collections::hash_map::Entry::Vacant(v) => {
+            v.insert(info);
+            true
+        }
+    }
+}
+
+/// For G129: the font manager now holds JIP's 89 fonts.
+pub fn set_font_manager_extended(e: &mut Engine) {
+    font_infos(e).extended = true;
+}
+
+/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool) and
+/// a `FontInfo`'s size and its loaded data (+0x38, null when the file did not load).
+const FONT_INFO_INIT: u32 = 0x00a1_2020;
+const FONT_INFO_SIZE: u32 = 0x54;
+const FONT_INFO_BUFFER_DATA: u32 = 0x38;
+/// JIP's `dataPathFull[0x100]` with `data\` in its first five bytes: the path's own room.
+const FONT_PATH_BUFFER: usize = 0x100 - 5;
+/// The game's own font manager has the fonts 1 to 8; JIP's (G129) 1 to 89.
+const GAME_FONTS: u32 = 8;
+const JIP_FONTS: u32 = 89;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h:
+// Cmd_SetFontFile_Execute.
+/// `SetFontFile id "path"`: for a read id from 1 to 89 but 9 and a path: the path's `FontInfo`
+/// (kept, or made from `data\<path>` when that file is there: a game block, the game's
+/// `FontInfo::Init` with the id; given back and nothing more when it did not load) becomes font
+/// `id` of the font manager; the result 1. The fonts above 8 have slots only in JIP's manager
+/// (G129): until it is in, an id above 8 does nothing (the game's manager ends after font 8).
+fn set_font_file(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let id = read.int(0, 0);
+    let path = buffer_arg(e, &read, 1, FONT_PATH_BUFFER, "SetFontFile");
+    if id == 0 || id > JIP_FONTS || id == 9 || path.is_empty() {
+        return handled(true);
+    }
+    if id > GAME_FONTS && !font_infos(e).extended {
+        return handled(true);
+    }
+    let mut info = font_info(e, &path);
+    if info == 0 {
+        let mut full = b"data\\".to_vec();
+        full.extend_from_slice(&path);
+        if !engine_core::mod_files::exists(e, &full) {
+            return handled(true);
+        }
+        info = heap_alloc(e, FONT_INFO_SIZE);
+        with_guest_text(e, &path, |e, text| {
+            e.call(FONT_INFO_INIT, &args![info, id, text, 1u32]);
+        });
+        if e.mem.u32(info + FONT_INFO_BUFFER_DATA) == 0 {
+            heap_free(e, info);
+            return handled(true);
+        }
+        insert_font_info(e, &path, info);
+    }
+    let manager = e.mem.u32(FONT_MANAGER);
+    if manager != 0 {
+        e.mem.set_u32(manager + 4 * (id - 1), info);
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_ui_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_ui_r1_tests.rs"]
+mod r1_tests;
+
+#[cfg(test)]
+#[path = "jip_fn_ui_r2_tests.rs"]
+mod r2_tests;

@@ -2393,13 +2393,14 @@ fn target_texture(g: &mut Gpu, texture: u32, level: u32, size: u32, format: u32)
     });
 }
 
-/// The HDR watch (a diagnostic, `bright`) reads a multisampled HDR scene where it is resolved and
-/// names a lone bright dot and a pixel that is not finite in it: a 16 by 16 A16B16G16R16F scene
-/// at 4 samples, 0.1 everywhere, 3000 at (5, 5) and infinity at (10, 10), resolved into a texture
-/// by `StretchRect`. The same scene without the two pixels shows neither.
-#[test]
-fn the_hdr_watch_names_a_lone_bright_dot_and_an_infinite_pixel_of_a_resolved_scene() {
-    let Some(mut g) = Gpu::new(16, 4) else { return };
+/// The HDR watch (a diagnostic, `bright`) reads a multisampled HDR scene where it is resolved: a
+/// 16 by 16 A16B16G16R16F scene at 4 samples, 0.1 everywhere, with `pixel` (a colour at a place)
+/// drawn in frame 1 only, resolved into a texture by `StretchRect`; frames 1 and 5 are watched.
+/// What the watch saw in frame 1, and in frame 5 (the same scene without the pixel).
+fn watched_resolved_scene(
+    pixel: ([f32; 4], u32),
+) -> Option<(d3d9_wgpu::bright::Seen, d3d9_wgpu::bright::Seen)> {
+    let mut g = Gpu::new(16, 4)?;
     const SCENE: u32 = 0x1A00;
     const RESOLVED: u32 = 0x1A10;
     g.run(Cmd::CreateSurface {
@@ -2430,11 +2431,9 @@ fn the_hdr_watch_names_a_lone_bright_dot_and_an_infinite_pixel_of_a_resolved_sce
         g.colour([0.1, 0.1, 0.1, 1.0]);
         g.quad(0.5);
         if frame == 1 {
-            g.viewport(5, 5, 1, 1, 0.0, 1.0);
-            g.colour([3000.0, 3000.0, 3000.0, 1.0]);
-            g.quad(0.5);
-            g.viewport(10, 10, 1, 1, 0.0, 1.0);
-            g.colour([f32::INFINITY, 0.0, 0.0, 1.0]);
+            let (colour, at) = pixel;
+            g.viewport(at, at, 1, 1, 0.0, 1.0);
+            g.colour(colour);
             g.quad(0.5);
         }
         g.run(Cmd::StretchRect {
@@ -2460,17 +2459,41 @@ fn the_hdr_watch_names_a_lone_bright_dot_and_an_infinite_pixel_of_a_resolved_sce
     assert_eq!(first.len(), 1, "the resolved scene only: {judged:?}");
     let (target, seen) = first[0];
     assert_eq!((target.width, target.height), (16, 16));
-    assert_eq!(seen.not_finite, 1, "{seen:?}");
-    assert_eq!(seen.dots, 1, "{seen:?}");
+    let (_, clean) = judged[1].1[0];
+    assert_eq!((clean.not_finite, clean.dots), (0, 0), "{clean:?}");
+    assert!(clean.brightest > 0.05 && clean.brightest < 0.2, "{clean:?}");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((seen, clean))
+}
+
+/// A lone bright dot (3000 at (5, 5)) in a resolved scene is named, and nothing is not finite.
+#[test]
+fn the_hdr_watch_names_a_lone_bright_dot_of_a_resolved_scene() {
+    let Some((seen, _)) = watched_resolved_scene(([3000.0, 3000.0, 3000.0, 1.0], 5)) else {
+        return;
+    };
+    assert_eq!((seen.not_finite, seen.dots), (0, 1), "{seen:?}");
     // The dot covers at least one of its pixel's samples (3000 resolved with 0.1s).
     assert!(
         seen.brightest > 700.0 && seen.brightest.is_finite(),
         "{seen:?}"
     );
-    let (_, clean) = judged[1].1[0];
-    assert_eq!((clean.not_finite, clean.dots), (0, 0), "{clean:?}");
-    assert!(clean.brightest > 0.05 && clean.brightest < 0.2, "{clean:?}");
-    assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// An infinite pixel (at (10, 10)) in a resolved scene is counted as not finite, not as a dot.
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "Metal: an infinity drawn into a half-float target and resolved arrives as a large finite value (CI run 44268804913: not finite 0, brightest 16384), so the watch, which tests finiteness by bits, has no infinity to see; likely Metal's default fast math, which wgpu-hal does not turn off (Linux and macOS track, the window and drawing step)"
+)]
+fn the_hdr_watch_names_an_infinite_pixel_of_a_resolved_scene() {
+    let Some((seen, _)) = watched_resolved_scene(([f32::INFINITY, 0.0, 0.0, 1.0], 10)) else {
+        return;
+    };
+    assert_eq!((seen.not_finite, seen.dots), (1, 0), "{seen:?}");
+    // The infinite pixel never leaks into the brightest: the brightest finite value is the
+    // scene's 0.1.
+    assert!(seen.brightest > 0.05 && seen.brightest < 0.2, "{seen:?}");
 }
 
 /// The HDR watch reads a small float target the game draws into and leaves (the luminance and

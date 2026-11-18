@@ -26,6 +26,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0059_e034),
     // G51: `AddItem` 005b4be0's tests before the container items' health call, JIP's two-byte jump.
     row(0x005b_4dbc),
+    // G60: `RemoveMe` 005b53d0's menu refresh for the player (00704af0), JIP's RemoveMeHook: the open
+    // item list refreshed at the next main loop pass instead.
+    row(0x005b_54e7),
     // G34: `PlaySound3D` 005c22f0's object to follow, JIP's 8 bytes read the reference's node.
     row(0x005c_240d),
     // G03: `AddAchievement` 005d3b20's console-used test, JIP's two-byte NOP.

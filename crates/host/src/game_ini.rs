@@ -87,6 +87,8 @@ pub struct Keys {
     pub sun_shadows: Option<bool>,
     /// `bSunLightFromSky`: with the sun shadows, the sun light from the sky's discs.
     pub sun_light_from_sky: Option<bool>,
+    /// `bSunShadowsCharacters`: with the sun shadows, characters cast (one shadow each).
+    pub sun_shadow_characters: Option<bool>,
     pub stepped_threads: Option<bool>,
     pub render_thread: Option<bool>,
     /// `bNotBackground`: Windows told the game is not background work (`qos`).
@@ -151,6 +153,10 @@ impl Keys {
                 "bSunLightFromSky" => {
                     keys.sun_light_from_sky = flag(raw);
                     keys.sun_light_from_sky.is_some()
+                }
+                "bSunShadowsCharacters" => {
+                    keys.sun_shadow_characters = flag(raw);
+                    keys.sun_shadow_characters.is_some()
                 }
                 "bSteppedThreads" => {
                     keys.stepped_threads = flag(raw);
@@ -337,6 +343,7 @@ mod tests {
                 "fAmbientOcclusionStrength",
                 "bSunShadows",
                 "bSunLightFromSky",
+                "bSunShadowsCharacters",
                 "bSteppedThreads",
                 "bRenderThread",
                 "bNotBackground"
@@ -379,6 +386,10 @@ mod tests {
         assert_eq!(
             keys.sun_light_from_sky,
             Some(crate::fixes::PLAY_SUN_LIGHT_FROM_SKY)
+        );
+        assert_eq!(
+            keys.sun_shadow_characters,
+            Some(crate::fixes::PLAY_SUN_SHADOW_CHARACTERS)
         );
         // The fix lines are commented out: the preset decides.
         assert!(keys.fixes.is_empty());

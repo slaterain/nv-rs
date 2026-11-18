@@ -50,9 +50,10 @@
 //! - `ModelHasBlock`: reads the nodes `InsertNode`/`AttachModel` record (`s_insertNodeMap`) and
 //!   loads a base form's model (`ModelLoader::LoadModel`): waits for those commands and JIP's
 //!   3D-load hooks (stage 3.9 H09/H10).
-//! - `InsertNode`, `AttachModel`, `AttachLight`, `RemoveLight`, `AttachLine`,
-//!   `AttachExtraCamera`, `ProjectExtraCamera`: JIP's per-reference lists re-applied when 3D
-//!   reloads (H09/H10), its light records and hooks (H03-H07, H12), its camera list.
+//! - `InsertNode`, `AttachModel`, `AttachLight`, `RemoveLight`, `AttachExtraCamera`,
+//!   `ProjectExtraCamera`: JIP's per-reference lists re-applied when 3D reloads (H09/H10), its
+//!   light records and hooks (H03-H07, H12), its camera list. (`AttachLine` keeps no list: built
+//!   in `jip_fn_misc_ref_lines.rs`.)
 //!
 //! Safety: as `nif_nodes.rs`: every guest word read checked, every walk bounded, every address
 //! sum wrapping; a write to memory that cannot be written is skipped, and the update after it
@@ -525,7 +526,7 @@ fn set_texture_transform_key(e: &mut Engine, w: &[u32]) -> Ret {
 
 /// The fixed string at `s` counted down (`lock dec [s-8]`); nothing for 0 or an unreadable
 /// count.
-fn release_name(e: &Engine, s: u32) {
+pub(crate) fn release_name(e: &Engine, s: u32) {
     if s == 0 {
         return;
     }
@@ -551,11 +552,23 @@ fn rename_nif_block(e: &mut Engine, w: &[u32]) -> Ret {
     if block == 0 {
         return handled(true);
     }
-    let name_at = block.wrapping_add(nif::NAME);
+    if set_name(e, block, &new_name) {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiObjectNET::SetName
+// (asm).
+/// `object` named `text`: the text's fixed string from the game's string table; when it is the
+/// object's name already, the count it was given back; else the old name's count down and the
+/// new one stored. False (nothing kept) when the name word cannot be read or written.
+pub(crate) fn set_name(e: &mut Engine, object: u32, text: &[u8]) -> bool {
+    let name_at = object.wrapping_add(nif::NAME);
     let Some(old) = nif::rd32(e, name_at) else {
-        return handled(true);
+        return false;
     };
-    let s = super::with_guest_text(e, &new_name, |e, text| e.call(ADD_STRING, &[text]).eax);
+    let s = super::with_guest_text(e, text, |e, text| e.call(ADD_STRING, &[text]).eax);
     if s == old {
         release_name(e, s);
     } else if wr32(e, name_at, s) {
@@ -563,10 +576,9 @@ fn rename_nif_block(e: &mut Engine, w: &[u32]) -> Ret {
     } else {
         // nv-rs's own: the name could not be stored; the new string's count goes back.
         release_name(e, s);
-        return handled(true);
+        return false;
     }
-    a.set_result(e, 1.0);
-    handled(true)
+    true
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:

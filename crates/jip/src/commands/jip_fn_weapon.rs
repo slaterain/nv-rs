@@ -413,7 +413,7 @@ const GET_ANIM_DATA: u32 = 0x1e4;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::GetWeaponInfo (asm).
 /// The actor's equipped weapon's changes entry: its process's when the process is high or
 /// middle-high (level 0 or 1); else none.
-fn weapon_info(e: &Engine, actor: u32) -> u32 {
+pub(crate) fn weapon_info(e: &Engine, actor: u32) -> u32 {
     let process = e.mem.u32(actor + PROCESS);
     if process == 0 || e.mem.u8(process + PROCESS_LEVEL) > 1 {
         return 0;
@@ -518,7 +518,7 @@ fn equipped_weapon_silenced(e: &mut Engine, actor: u32) -> u8 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::EquippedWeaponHasScope.
 /// For an equipped weapon with a scope (flags1 bit 4): 1 when it is not a mod's (flags2 bit
 /// 0x2000 clear), 2 when the scope mod (effect 14) is on; else 0.
-fn equipped_weapon_has_scope(e: &mut Engine, actor: u32) -> u8 {
+pub(crate) fn equipped_weapon_has_scope(e: &mut Engine, actor: u32) -> u8 {
     let info = weapon_info(e, actor);
     if info == 0 {
         return 0;

@@ -39,9 +39,11 @@ fn rows_are_jips_addresses() {
             0x005b_4dbc,
             0x005e_0fbe,
             0x005e_1a23,
-            0x005e_1f0b
+            0x005e_1f0b,
+            0x005b_54e7
         ]
     );
+    assert_eq!(REMOVE_ME_REFRESH.addr(), 0x005b_54e7);
     assert!(AREA.fix_wraps.is_empty() && AREA.jip_sites.is_empty());
     assert_eq!(AREA.jip_wraps, [0x005d_2860]);
 }
@@ -693,4 +695,31 @@ fn d07_runs_at_deferred_init() {
     assert_eq!(word(&e)[1], BEFORE, "only DeferredInit");
     dispatch(&mut e, msg::DEFERRED_INIT, 0, 0);
     assert_eq!(word(&e)[1], AFTER);
+}
+
+/// G60 with JIP's item list refresh: `RemoveMe`'s refresh seam answers (the game's immediate
+/// refresh left out) and asks for JIP's; the next main loop pass refreshes the open item list
+/// (the inventory, `00782a90`) once, the pass after does nothing more.
+#[test]
+fn g60_remove_me_refreshes_at_the_next_main_loop() {
+    thread_local! {
+        static REFRESHES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+    let mut e = installed();
+    install_fixes(&mut e);
+    e.map(0x011f_3000, 0x1000);
+    // The inventory menu shown (`MENU_SHOWN` 0x011F308F + its id 0x3EA).
+    e.mem.set_u8(0x011f_308f + 0x3ea, 1);
+    e.register(0x0078_2a90, |_, _| {
+        REFRESHES.with(|r| r.set(r.get() + 1));
+        Ret::default()
+    });
+    crate::commands::jip_fn_ui::main_loop(&mut e);
+    assert_eq!(REFRESHES.with(|r| r.get()), 0, "nothing asked yet");
+    assert_eq!(e.site(REMOVE_ME_REFRESH.addr(), &[]), Some(0));
+    assert_eq!(REFRESHES.with(|r| r.get()), 0, "not at once");
+    crate::commands::jip_fn_ui::main_loop(&mut e);
+    assert_eq!(REFRESHES.with(|r| r.get()), 1);
+    crate::commands::jip_fn_ui::main_loop(&mut e);
+    assert_eq!(REFRESHES.with(|r| r.get()), 1, "once");
 }

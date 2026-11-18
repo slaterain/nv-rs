@@ -1104,7 +1104,8 @@ fn unpack_script_task(e: &mut Engine, task: Ptr) {
 // Translation incomplete: 0087b990 - compiler exception unwinding for the temporary scrap array is not implemented.
 // Translated from 0087b990 (decompiled, FalloutNV.exe 1.4.0.525)
 /// TaskQueueInterface::TaskUnpackFunc (Xbox PDB). Dispatches tags 0..0x31;
-/// tag 0x2B and out-of-range tags do nothing. The PC jump table at 0087cd88
+/// tag 0x2B (but for JIP LN NVSE's seam, while it is installed) and out-of-range tags do
+/// nothing. The PC jump table at 0087cd88
 /// determines the cases, including tag 0x0C falling through to 0x0D.
 #[allow(clippy::too_many_lines)]
 pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
@@ -1492,6 +1493,15 @@ pub fn task_queue_interface_task_unpack_func(e: &mut Engine, task: Ptr) {
         }
         41 => {
             e.vcall(e.mem.u32(task.addr() + 4), 0x1fc, &args![0u32]);
+        }
+        // JIP LN NVSE's DoQueuedCmdCallHook (`InitJIPHooks`: `SafeWrite32(0x87CE34, ..)`, the jump
+        // table's entry for tag 0x2B, which the exe leaves to the default: nothing): JIP's queued
+        // command call (`QueuedCmdCall`). A seam while JIP is installed; nothing otherwise, as in
+        // the exe.
+        43 => {
+            if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+                e.site(0x0087_ce34, &[task.addr()]);
+            }
         }
         42 => {
             let object = e.call(0x004839c0, &args![e.mem.u32(task.addr() + 4)]).u32();
@@ -3245,6 +3255,37 @@ mod tests {
             let (mut e, task) = dispatch_setup(tag, &[0; 7]);
             e.call(0x0087b990, &[task]);
             assert!(recorded(&mut e).is_empty(), "tag {tag:x}");
+        }
+    }
+    thread_local! {
+        static QUEUED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    fn at_queued_call(_: &mut Engine, a: &[u32]) -> Option<u32> {
+        QUEUED.with(|q| q.borrow_mut().push(a.to_vec()));
+        Some(0)
+    }
+    /// Tag 0x2B: JIP's queued command call (`DoQueuedCmdCallHook`, the jump table's entry
+    /// `0087CE34`), a seam with the task while JIP is installed; nothing without (as the exe).
+    #[test]
+    fn dispatch_tag_0x2b_is_jips_queued_call() {
+        use engine_core::extend::jip_patches;
+        for (word, asked) in [
+            (0, false),
+            (jip_patches::FIXES, false),
+            (jip_patches::INSTALLED, true),
+        ] {
+            QUEUED.with(|q| q.borrow_mut().clear());
+            let (mut e, task) = dispatch_setup(43, &[0x1234, 0x14, 1, 0x5678]);
+            e.on_site_for_test(0x0087_ce34, at_queued_call);
+            e.set_jip_patches(word);
+            e.call(0x0087b990, &[task]);
+            let got = QUEUED.with(|q| q.borrow().clone());
+            assert_eq!(
+                got,
+                if asked { vec![vec![task]] } else { vec![] },
+                "{word:x}"
+            );
+            assert!(recorded(&mut e).is_empty(), "no game code called");
         }
     }
     #[test]
