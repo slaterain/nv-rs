@@ -23,14 +23,22 @@
 //! Only while JIP answers "installed" ([`crate::set_answers_installed`]): without the DLL no file
 //! runs.
 //!
-//! Not here: JIP's log of compile errors (`LogCompileError` over the call at `005aeb66`, writing to
-//! `jip_ln_nvse.log` and one console line): the port keeps no JIP log; a file that does not compile
-//! is passed over as in JIP. And `ValidateOpcodeSample`: a check JIP makes at the same point of one
-//! particular mod's file that switches one of its own commands off for that mod; it changes nothing
-//! for any other mod and is left out (noted for review).
+//! A file that does not compile is passed over as in JIP, and said: the compiler's own message
+//! (JIP's `LogCompileError` over the string's release at `005aeb66` in `ScriptCompiler::ScriptError`,
+//! [`COMPILE_ERROR`], while the files compile) and one line naming the file go to the port's log
+//! (JIP writes the message to `jip_ln_nvse.log`, which the port does not keep), and JIP's console
+//! line once per start ([`CONSOLE_LINE`], naming the port's log instead of JIP's file).
+//!
+//! `RegisterSRScript` ([`register`]) keeps a file below the folder only while the files compile
+//! ([`State::init_in_progress`]): a `gr_` file calls it then, as with JIP.
+//!
+//! Not here: `ValidateOpcodeSample`, a check JIP makes at the same point of one particular mod's
+//! file that switches one of its own commands off for that mod; it changes nothing for any other
+//! mod and is left out (noted for review).
 
 use crate::containers::{Name, UnorderedMap};
 use crate::Jip;
+use engine_core::extend::{Owner, SiteSlot};
 use engine_core::prelude::*;
 
 /// `scriptsPath`: the folder, and the search JIP makes in it.
@@ -121,18 +129,73 @@ impl RunOn {
     }
 }
 
-/// `CachedSRScript`: a compiled file's script and its moment.
+/// `CachedSRScript`: a compiled file's script and its moment (`kRunOn_Invalid`, none, for the
+/// scripts `RunBatchScript` keeps in the same map).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Cached {
     pub script: u32,
-    pub run_on: RunOn,
+    pub run_on: Option<RunOn>,
 }
 
 /// The runner's state: `s_cachedScripts`, by the file's name (JIP's map of `const char*` keys:
-/// hashed without case, the first of a name kept).
+/// hashed without case, the first of a name kept), and `initInProgress`.
 #[derive(Default)]
 pub struct State {
     pub cached: UnorderedMap<Name, Cached>,
+    /// `JIPScriptRunner::initInProgress`: 0 outside [`init_files`]; 1 while the files compile; 2
+    /// once a compile error was reported in this start.
+    pub init_in_progress: u8,
+}
+
+/// The string release in `ScriptCompiler::ScriptError` (`005aeb66`: the message, "SCRIPTS: ..."),
+/// where JIP's `LogCompileError` reads the message (words: the string).
+pub const COMPILE_ERROR: SiteSlot = SiteSlot::new(Owner::Jip, 0x005a_eb66);
+
+/// JIP's console line at the first compile error of a start, naming the port's log for the
+/// details (JIP names its own `jip_ln_nvse.log`).
+pub const CONSOLE_LINE: &str =
+    "[SCRIPT RUNNER] One or more script files could not be compiled. For more info please refer to the nv-rs log.";
+
+/// The handlers, while JIP answers "installed" ([`crate::install`]).
+pub fn install(e: &mut Engine, answers_installed: bool) {
+    if answers_installed {
+        e.on_site(COMPILE_ERROR, compile_error);
+    }
+}
+
+/// `"SCRIPTS: "`, the part of the message JIP leaves out (`m_data + 9`).
+const MESSAGE_PREFIX: usize = 9;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: JIPScriptRunner::LogCompileError
+// (the string's release itself stays the game's).
+/// While the files compile: the compiler's message (longer than its 9-byte prefix) to the port's
+/// log, after one heading and JIP's console line at the first of a start.
+fn compile_error(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let string = w[0];
+    let len = usize::from(e.mem.u16(string + 4));
+    if state(e).init_in_progress == 0 || len <= MESSAGE_PREFIX {
+        return None;
+    }
+    if state(e).init_in_progress == 1 {
+        state(e).init_in_progress = 2;
+        eprintln!("[SCRIPT RUNNER] Errors were found while compiling the following script files:");
+        let line = nvse::table::guest_str(e, CONSOLE_LINE.as_bytes());
+        nvse::commands::console_print(e, "%s", &[line]);
+    }
+    let data = e.mem.u32(string);
+    let text = e
+        .mem
+        .bytes(data + MESSAGE_PREFIX as u32, (len - MESSAGE_PREFIX) as u32);
+    eprintln!("{}", String::from_utf8_lossy(&text));
+    None
+}
+
+/// The port's line for a file that did not compile (or compiled to nothing): passed over.
+fn skipped(name: &[u8]) {
+    eprintln!(
+        "JIP script runner: {} did not compile; skipped",
+        String::from_utf8_lossy(name)
+    );
 }
 
 /// A script file's bytes, as `FileToBuffer` reads them: at most `STR_BUFFER_SIZE - 1`, `None` for
@@ -288,6 +351,7 @@ pub fn init_files(e: &mut Engine) {
     if !e.ext::<Jip>().answers_installed {
         return;
     }
+    state(e).init_in_progress = 1;
     for (name, is_file) in list(e) {
         if !is_file {
             continue;
@@ -301,25 +365,35 @@ pub fn init_files(e: &mut Engine) {
             continue;
         };
         if run_on == RunOn::RestartGame {
-            run_script_source(e, &text, &name, true);
+            if !run_script_source(e, &text, &name, true) {
+                skipped(&name);
+            }
         } else {
             let script = create(e, &text, &name);
-            if script != 0 {
+            if script == 0 {
+                skipped(&name);
+            } else {
                 // `Emplace`: a name kept already keeps its first script (the new one stays made,
                 // as in JIP).
-                state(e)
-                    .cached
-                    .emplace_with(Name(name), || Cached { script, run_on });
+                state(e).cached.emplace_with(Name(name), || Cached {
+                    script,
+                    run_on: Some(run_on),
+                });
             }
         }
     }
+    state(e).init_in_progress = 0;
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: JIPScriptRunner::RegisterScript.
 /// `RegisterSRScript`'s step: the file at `rel_path` below the folder (`/` read as `\`) compiled and
 /// kept when its name (the part after its last `\`) has a moment other than `gr_` and is not kept
-/// yet. Whether it was kept. A path with no `\` is never kept (JIP's test of the separator).
+/// yet. Whether it was kept. A path with no `\` is never kept (JIP's test of the separator), and
+/// nothing is kept outside [`init_files`] (`Cmd_RegisterSRScript_Execute` tests `initInProgress`).
 pub fn register(e: &mut Engine, rel_path: &[u8]) -> bool {
+    if state(e).init_in_progress == 0 {
+        return false;
+    }
     let rel: Vec<u8> = rel_path
         .iter()
         .map(|&b| if b == b'/' { b'\\' } else { b })
@@ -341,11 +415,13 @@ pub fn register(e: &mut Engine, rel_path: &[u8]) -> bool {
     };
     let script = create(e, &text, &name);
     if script == 0 {
+        skipped(&rel);
         return false;
     }
-    state(e)
-        .cached
-        .emplace_with(Name(name), || Cached { script, run_on });
+    state(e).cached.emplace_with(Name(name), || Cached {
+        script,
+        run_on: Some(run_on),
+    });
     true
 }
 
@@ -355,11 +431,32 @@ pub fn run(e: &mut Engine, first: RunOn, second: Option<RunOn>) {
     let scripts: Vec<u32> = state(e)
         .cached
         .iter()
-        .filter(|(_, c)| c.run_on == first || Some(c.run_on) == second)
+        .filter(|(_, c)| c.run_on == Some(first) || (second.is_some() && c.run_on == second))
         .map(|(_, c)| c.script)
         .collect();
     for script in scripts {
         execute(e, script, false);
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), jip_nvse.cpp: NVSEMessageHandler (the runner's
+// calls in each case) and internal/patches_game.h: DeferredInit (its last step).
+/// The runner's part of JIP's listener ([`crate::cosave::listen`], after each case's own steps):
+/// the files compiled at the deferred start; at a load that succeeded (`fosLoaded`, the data's low
+/// byte) the `gl_` and `ln_` ones run, at a new game the `gn_` and `ln_` ones, at a save the `gs_`
+/// ones, at the exit to the main menu the `xm_` ones, at either exit from the game the `gx_` ones.
+pub fn on_message(e: &mut Engine, kind: u32, data: u32) {
+    use nvse::plugins::msg;
+    match kind {
+        msg::DEFERRED_INIT => init_files(e),
+        msg::POST_LOAD_GAME if data & 0xff != 0 => {
+            run(e, RunOn::LoadGame, Some(RunOn::LoadOrNewGame));
+        }
+        msg::NEW_GAME => run(e, RunOn::NewGame, Some(RunOn::LoadOrNewGame)),
+        msg::SAVE_GAME => run(e, RunOn::SaveGame, None),
+        msg::EXIT_TO_MAIN_MENU => run(e, RunOn::ExitToMainMenu, None),
+        msg::EXIT_GAME | msg::EXIT_GAME_CONSOLE => run(e, RunOn::ExitGame, None),
+        _ => {}
     }
 }
 

@@ -404,6 +404,13 @@ pub const SITES: &[Entry] = &[
         owners: NVSE_JIP,
         step: "I-4, 3.9a",
     },
+    // ScriptCompiler::ScriptError 005aea90: the release of the formatted message (JIP's script
+    // runner reads it there while its files compile, `LogCompileError`).
+    Entry {
+        addr: 0x005a_eb66,
+        owners: JIP,
+        step: "3.10 runner",
+    },
     // ScriptCompiler::Compile 005aeb90: the start of a compile (in place of the call clearing
     // the compiled flag), the check of the referenced objects (passed while a lambda compiles),
     // and the epilogue every exit passes (the end of a compile).
@@ -2951,7 +2958,7 @@ mod tests {
         ] {
             assert!(find(SITES, Owner::Nvse, a).is_some(), "{a:08x}");
         }
-        assert_eq!(SITES.len(), 122);
+        assert_eq!(SITES.len(), 123);
         // UI Organizer's ten (UIOLoad's place, ResolveXMLFileHook's, the five hardcore zooms,
         // FinalPostParse, the operators' dispatch, the text scale), its alone.
         for a in [

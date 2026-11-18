@@ -48,7 +48,6 @@ use crate::game::{
     self, BGSPerk, BGSSaveLoadGame, ExtraLinkedRef, ExtraScript, NiTMapItem, NiTPointerMap,
     TESForm, TESObjectREFR, TESQuest,
 };
-use crate::script_runner::RunOn;
 use crate::Jip;
 use engine_core::prelude::*;
 use nvse::cosave::{Chunk, OutOfRange, Reader};
@@ -1806,7 +1805,6 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // `RestoreLinkedRefs()`: every changed reference's default link back.
             crate::commands::jip_fn_linked_ref::restore_linked_refs(e, false);
             saved(e).last_path.clear();
-            crate::script_runner::run(e, RunOn::ExitToMainMenu, None);
         }
         msg::SAVE_GAME => {
             // `COPY_BYTES(s_lastLoadedPath, fosPath, dataLen + 1)`.
@@ -1820,7 +1818,6 @@ pub fn listen(e: &mut Engine, m: &Message) {
             // snapshot fall between the two misses the new entry with the bit already cleared. As
             // in JIP (it marks before the copy and takes no lock there), not a fault against it.
             set_changed(e, 0);
-            crate::script_runner::run(e, RunOn::SaveGame, None);
         }
         msg::PRE_LOAD_GAME => {
             let path = message_text(e, m);
@@ -1841,7 +1838,6 @@ pub fn listen(e: &mut Engine, m: &Message) {
                 // `RestoreLinkedRefs(s_linkedRefsTemp)` with the linked references changed.
                 crate::commands::jip_fn_linked_ref::after_load(e);
                 set_changed(e, 0);
-                crate::script_runner::run(e, RunOn::LoadGame, Some(RunOn::LoadOrNewGame));
             }
         }
         msg::NEW_GAME => {
@@ -1854,7 +1850,6 @@ pub fn listen(e: &mut Engine, m: &Message) {
             s.carried.clear();
             s.serialized_tail.clear();
             s.had_section = false;
-            crate::script_runner::run(e, RunOn::NewGame, Some(RunOn::LoadOrNewGame));
         }
         // `DeferredInit` (once per run): its temporary position marker, the two vanilla ash
         // piles marked (step 3.9 G06) and group GF's part (D01's slot, G130's names dropped).
@@ -1875,11 +1870,6 @@ pub fn listen(e: &mut Engine, m: &Message) {
             crate::game_patches::gs::deferred_init(e);
             // Group GB's part: Big Guns' switch (O3), name and derivation (D06).
             crate::game_patches::gb::deferred_init(e);
-            // Last, as in JIP: the script runner's files (`JIPScriptRunner::Init`).
-            crate::script_runner::init_files(e);
-        }
-        msg::EXIT_GAME | msg::EXIT_GAME_CONSOLE => {
-            crate::script_runner::run(e, RunOn::ExitGame, None);
         }
         msg::MAIN_GAME_LOOP => {
             // The callbacks, then the LN events when any has a handler: one look at JIP's state
@@ -1902,6 +1892,9 @@ pub fn listen(e: &mut Engine, m: &Message) {
         }
         _ => {}
     }
+    // The script runner's files, after each case's own steps as in JIP: compiled at the deferred
+    // start (its last step), run at the load, new game, save and exits.
+    crate::script_runner::on_message(e, m.kind, m.data);
 }
 
 #[cfg(test)]

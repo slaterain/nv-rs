@@ -15,6 +15,10 @@ const COMPILER: u32 = AREA + 0x200;
 const VTABLE: u32 = AREA + 0x400;
 const SET_EDITOR_ID_FN: u32 = 0x7eff_c000;
 const DESTROY_FN: u32 = 0x7eff_c004;
+/// A message string the stand-in compiler reports (`String`: data, length) and its text.
+const STRING: u32 = AREA + 0x7f00;
+const MESSAGE: u32 = AREA + 0x8000;
+const CONSOLE_PRINT_FN: u32 = 0x0071_d0a0;
 
 #[derive(Default)]
 struct Log {
@@ -82,6 +86,15 @@ fn compile_stand_in(e: &mut Engine, a: &[u32]) -> Ret {
     ));
     with_log(|l| l.texts.push((script, text.clone())));
     if text.contains("bad") {
+        // The game's ScriptError: its message string released at 005aeb66, read by the seam.
+        let message = format!(
+            "SCRIPTS: Script '{name}', line 1:
+bad"
+        );
+        e.mem.write(MESSAGE, message.as_bytes());
+        e.mem.set_u32(STRING, MESSAGE);
+        e.mem.set_u16(STRING + 4, message.len() as u16);
+        let _ = e.site(0x005a_eb66, &[STRING]);
         return eax(0);
     }
     let length = if text.contains("empty") { 0 } else { 4 };
@@ -134,10 +147,21 @@ fn runner_engine() -> Engine {
         note(format!("destroy {}", a[1]));
         Ret::default()
     });
-    e.register(SCRIPT_EXECUTE, |_, a| {
+    e.register(SCRIPT_EXECUTE, |e, a| {
         assert_eq!(&a[1..4], &[0, 0, 0], "no reference, no list");
-        note(format!("run {} {}", text_of(a[0]), a[4]));
+        let text = text_of(a[0]);
+        note(format!("run {text} {}", a[4]));
+        // A script line `register <path>`: RegisterSRScript's step, as a gr_ file calls it.
+        if let Some(path) = text.strip_prefix("register ") {
+            let kept = register(e, path.as_bytes());
+            note(format!("register {path} {kept}"));
+        }
         eax(1)
+    });
+    e.register(CONSOLE_PRINT_FN, |e, a| {
+        let line = nvse::table::guest_text(e, e.mem.u32(a[2]));
+        note(format!("console {}", String::from_utf8_lossy(&line)));
+        eax(0)
     });
     e.register(FIND_FIRST_FILE_A, |e, a| {
         let pattern = nvse::table::guest_text(e, a[0]);
@@ -269,7 +293,7 @@ fn deferred_start_runs_gr_files_and_keeps_the_others() {
         .iter()
         .any(|s| s.contains("readme") || s.contains("missing")));
     assert!(c.contains(&"find-close 900".to_string()));
-    let kept: Vec<RunOn> = e
+    let kept: Vec<Option<RunOn>> = e
         .ext::<Jip>()
         .script_runner
         .cached
@@ -277,7 +301,7 @@ fn deferred_start_runs_gr_files_and_keeps_the_others() {
         .map(|(_, k)| k.run_on)
         .collect();
     assert_eq!(kept.len(), 2);
-    assert!(kept.contains(&RunOn::LoadOrNewGame) && kept.contains(&RunOn::SaveGame));
+    assert!(kept.contains(&Some(RunOn::LoadOrNewGame)) && kept.contains(&Some(RunOn::SaveGame)));
 }
 
 /// The runs `f` made, in name order.
@@ -410,6 +434,11 @@ fn register_keeps_a_file_below_the_folder_once() {
     let mut e = runner_engine();
     files::put("data\\nvse\\plugins\\scripts\\mymod\\gl_x.txt", b"print x");
     files::put("data\\nvse\\plugins\\scripts\\mymod\\gr_y.txt", b"print y");
+    assert!(
+        !register(&mut e, b"mymod/gl_x.txt"),
+        "outside the deferred start"
+    );
+    e.ext::<Jip>().script_runner.init_in_progress = 1;
     assert!(register(&mut e, b"mymod/gl_x.txt"));
     assert!(!register(&mut e, b"mymod\\gl_x.txt"), "kept already");
     assert!(!register(&mut e, b"mymod/gr_y.txt"), "gr_ is never kept");
@@ -417,4 +446,154 @@ fn register_keeps_a_file_below_the_folder_once() {
     assert!(!register(&mut e, b"mymod/gl_none.txt"), "no file");
     run(&mut e, RunOn::LoadGame, None);
     assert_eq!(runs(), ["run print x 0"]);
+}
+
+/// A gr_ file registers a file of a sub-folder while the files compile (RegisterSRScript); the
+/// same call after the deferred start keeps nothing. The command answers 0 after the start and 1
+/// during one.
+#[test]
+fn a_gr_file_registers_a_sub_folder_file_during_the_start_only() {
+    let mut e = runner_engine();
+    files::put(
+        "data\\nvse\\plugins\\scripts\\mymod\\ln_main.txt",
+        b"print main",
+    );
+    folder(&[("gr_mymod.txt", Some("register MyMod\\ln_Main.txt"))]);
+    init_files(&mut e);
+    assert!(calls().contains(&"register MyMod\\ln_Main.txt true".to_string()));
+    assert_eq!(e.ext::<Jip>().script_runner.init_in_progress, 0);
+    run(&mut e, RunOn::NewGame, Some(RunOn::LoadOrNewGame));
+    assert!(runs().contains(&"run print main 0".to_string()));
+    // After the start: refused, by the step and by the command.
+    files::put(
+        "data\\nvse\\plugins\\scripts\\mymod\\gl_late.txt",
+        b"print late",
+    );
+    assert!(!register(&mut e, b"MyMod\\gl_Late.txt"));
+    let path = crate::test_support::s(b"MyMod\\gl_Late.txt");
+    assert_eq!(
+        crate::test_support::call(&mut e, 0x2938, std::slice::from_ref(&path)).1,
+        0.0
+    );
+    // The command during a start (as a gr_ file would call it): 1.
+    e.ext::<Jip>().script_runner.init_in_progress = 1;
+    assert_eq!(crate::test_support::call(&mut e, 0x2938, &[path]).1, 1.0);
+}
+
+/// A file that does not compile: the compiler's message read at the seam while the files
+/// compile (JIP's console line once per start), and the file passed over; a compile error outside
+/// the start is not read.
+#[test]
+fn a_file_that_does_not_compile_is_said() {
+    let mut e = runner_engine();
+    folder(&[
+        ("gl_bad1.txt", Some("bad one")),
+        ("gl_bad2.txt", Some("bad two")),
+        ("gl_good.txt", Some("print good")),
+    ]);
+    init_files(&mut e);
+    let consoles: Vec<String> = calls()
+        .into_iter()
+        .filter(|c| c.starts_with("console "))
+        .collect();
+    assert_eq!(
+        consoles,
+        [format!("console {CONSOLE_LINE}")],
+        "once per start"
+    );
+    assert_eq!(e.ext::<Jip>().script_runner.init_in_progress, 0);
+    assert_eq!(e.ext::<Jip>().script_runner.cached.len(), 1);
+    let before = calls().len();
+    assert_eq!(create(&mut e, b"bad again", b"x.txt"), 0);
+    assert!(!calls()[before..].iter().any(|c| c.starts_with("console ")));
+}
+
+/// The runner's step for each message (what `cosave::listen` calls after each case's own steps):
+/// a load that succeeded runs gl_ and ln_ files, a failed one nothing; a new game gn_ and ln_; a
+/// save gs_; the main menu xm_; both exits gx_; the deferred start compiles the folder and runs
+/// gr_ files; other messages nothing.
+#[test]
+fn each_message_runs_exactly_its_files() {
+    let mut e = runner_engine();
+    folder(&[
+        ("gl_load.txt", Some("print load")),
+        ("gn_new.txt", Some("print new")),
+        ("ln_both.txt", Some("print both")),
+        ("gs_save.txt", Some("print save")),
+        ("xm_menu.txt", Some("print menu")),
+        ("gx_exit.txt", Some("print exit")),
+        ("gr_start.txt", Some("print start")),
+    ]);
+    let step = |e: &mut Engine, kind: u32, data: u32| runs_of(e, |e| on_message(e, kind, data));
+    assert_eq!(step(&mut e, msg::DEFERRED_INIT, 0), ["run print start 1"]);
+    assert_eq!(e.ext::<Jip>().script_runner.cached.len(), 6);
+    assert_eq!(
+        step(&mut e, msg::POST_LOAD_GAME, 1),
+        ["run print both 0", "run print load 0"]
+    );
+    assert!(
+        step(&mut e, msg::POST_LOAD_GAME, 0).is_empty(),
+        "a failed load"
+    );
+    assert!(
+        step(&mut e, msg::POST_LOAD_GAME, 0x100).is_empty(),
+        "the low byte"
+    );
+    assert_eq!(
+        step(&mut e, msg::NEW_GAME, 0),
+        ["run print both 0", "run print new 0"]
+    );
+    assert_eq!(step(&mut e, msg::SAVE_GAME, 0), ["run print save 0"]);
+    assert_eq!(
+        step(&mut e, msg::EXIT_TO_MAIN_MENU, 0),
+        ["run print menu 0"]
+    );
+    assert_eq!(step(&mut e, msg::EXIT_GAME, 0), ["run print exit 0"]);
+    assert_eq!(
+        step(&mut e, msg::EXIT_GAME_CONSOLE, 0),
+        ["run print exit 0"]
+    );
+    assert!(step(&mut e, msg::PRE_LOAD_GAME, 0).is_empty());
+    assert!(step(&mut e, msg::MAIN_GAME_LOOP, 0).is_empty());
+}
+
+/// The kept scripts run in JIP's map order (`UnorderedMap<const char*>`, 8 buckets: the bucket
+/// of `StrHashCI(name) & 7`, bucket by bucket, each chain newest first), not the folder's.
+#[test]
+fn the_run_order_is_jips_map_order() {
+    let mut e = runner_engine();
+    let names = [
+        "gl_a.txt", "gl_b.txt", "gl_c.txt", "gl_d.txt", "gl_e.txt", "gl_f.txt",
+    ];
+    let texts: Vec<String> = names.iter().map(|n| format!("print {n}")).collect();
+    let entries: Vec<(&str, Option<&str>)> = names
+        .iter()
+        .zip(&texts)
+        .map(|(n, t)| (*n, Some(t.as_str())))
+        .collect();
+    folder(&entries);
+    init_files(&mut e);
+    let before = runs().len();
+    run(&mut e, RunOn::LoadGame, None);
+    let order: Vec<String> = runs()[before..].to_vec();
+    let mut expected: Vec<(u32, usize, &str)> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| {
+            (
+                crate::containers::str_hash_ci(n.as_bytes()) & 7,
+                usize::MAX - i,
+                *n,
+            )
+        })
+        .collect();
+    expected.sort();
+    let expected: Vec<String> = expected
+        .iter()
+        .map(|(_, _, n)| format!("run print {n} 0"))
+        .collect();
+    assert_eq!(order, expected);
+    // Not merely the folder's order (the test means something only if they differ).
+    let folder_order: Vec<String> = names.iter().map(|n| format!("run print {n} 0")).collect();
+    assert_ne!(order, folder_order);
 }

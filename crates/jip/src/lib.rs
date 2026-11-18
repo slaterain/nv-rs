@@ -198,6 +198,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     equip_hooks::install(e, answers_installed);
     world_hooks::install(e, answers_installed);
     game_patches::install(e, answers_installed);
+    script_runner::install(e, answers_installed);
     nvse::plugins::register(e, plugin(answers_installed));
     // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.
     if answers_installed {
