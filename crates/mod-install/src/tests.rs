@@ -340,3 +340,78 @@ fn removing_takes_only_a_mods_own_folder() {
     assert!(!one.exists());
     assert!(dir.0.join("keep.txt").exists());
 }
+
+// ------------------------------------------------------------------------------------------------
+// Caps and indexes (review of #720, applied here)
+
+/// A folder deeper than the cap in a layer stops the build in words, as does a folder link that
+/// loops back (Linux and macOS); nothing runs away.
+#[test]
+fn deep_folders_and_loops_stop_the_build() {
+    let dir = Scratch::new("deep");
+    let game = game(&dir.0);
+    let mods = dir.0.join("mods");
+    let mut deep = mods.clone();
+    for _ in 0..=MAX_DEPTH {
+        deep.push("d");
+    }
+    write(&deep.join("x.dds"), b"x");
+    let target = dir.0.join("modgame");
+    let plugins = dir.0.join("plugins.txt");
+    let error = build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap_err();
+    assert!(error.step.contains("folders deep"), "{}", error.step);
+    #[cfg(unix)]
+    {
+        std::fs::remove_dir_all(&mods).unwrap();
+        std::fs::create_dir_all(mods.join("a")).unwrap();
+        std::os::unix::fs::symlink(&mods, mods.join("a").join("loop")).unwrap();
+        let error = build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap_err();
+        assert!(error.step.contains("folders deep"), "{}", error.step);
+    }
+}
+
+/// 5,000 files into one folder of the game's: each placed with one look in that folder's names,
+/// not a reading of the folder per file.
+#[test]
+fn many_files_in_one_folder_are_placed_by_index() {
+    let dir = Scratch::new("many");
+    let game = game(&dir.0);
+    let mods = dir.0.join("mods");
+    let tex = mods.join("TEXTURES");
+    std::fs::create_dir_all(&tex).unwrap();
+    for i in 0..5_000 {
+        std::fs::write(tex.join(format!("t{i}.dds")), b"x").unwrap();
+    }
+    let started = std::time::Instant::now();
+    let built = build(
+        &game,
+        std::slice::from_ref(&mods),
+        &dir.0.join("modgame"),
+        &dir.0.join("plugins.txt"),
+    )
+    .unwrap();
+    assert_eq!(built.mod_files, 5_000);
+    let folders: Vec<String> = std::fs::read_dir(dir.0.join("modgame").join("Data"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.eq_ignore_ascii_case("textures"))
+        .collect();
+    assert_eq!(folders, ["Textures"]);
+    assert!(
+        started.elapsed().as_secs() < 60,
+        "took {:?}",
+        started.elapsed()
+    );
+}
+
+/// More installed mods than the cap is refused in words.
+#[test]
+fn installed_mods_are_capped() {
+    let dir = Scratch::new("cap");
+    let installs = dir.0.join("mod installs");
+    for i in 0..=MAX_INSTALLS {
+        std::fs::create_dir_all(installs.join(format!("{i} m"))).unwrap();
+    }
+    let error = installed(&installs).unwrap_err();
+    assert!(error.to_string().contains("more than"), "{error}");
+}

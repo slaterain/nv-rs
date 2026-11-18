@@ -101,9 +101,13 @@ impl Record {
     }
 }
 
+/// The most installed mods: the largest mod lists players keep have a few thousand.
+pub const MAX_INSTALLS: usize = 10_000;
+
 /// The installed mods in `installs`, in their order: folders named `<number> <name>`; anything
 /// else there is not a mod and is left alone.
 pub fn installed(installs: &Path) -> std::io::Result<Vec<Installed>> {
+    let mut folders = 0usize;
     let mut out = Vec::new();
     let entries = match std::fs::read_dir(installs) {
         Ok(e) => e,
@@ -114,6 +118,13 @@ pub fn installed(installs: &Path) -> std::io::Result<Vec<Installed>> {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
+        }
+        folders += 1;
+        if folders > MAX_INSTALLS {
+            return Err(std::io::Error::other(format!(
+                "{} holds more than {MAX_INSTALLS} mods",
+                installs.display()
+            )));
         }
         let file_name = entry.file_name().to_string_lossy().into_owned();
         let Some((number, name)) = file_name.split_once(' ') else {

@@ -16,7 +16,7 @@
 //! The plugin list: the last layer's own `plugins.txt` as it is when there is one (the loose
 //! `mods` folder's, as before), else [`plugin_list`] of every layer's top-level plugins.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// The official masters a mod may name, in the game's load order.
@@ -173,22 +173,52 @@ fn link(from: &Path, to: &Path) -> std::io::Result<()> {
     }
 }
 
-fn link_tree(from: &Path, to: &Path) -> std::io::Result<u64> {
+/// The deepest a folder may be inside the game's Data or a mod's folder: the game's deepest Data
+/// paths have under 12 parts. Deeper (a link that loops back, a hostile folder) stops the build.
+pub const MAX_DEPTH: usize = 64;
+
+/// The most files one layer, or the game's Data, may hold: a big texture mod has tens of
+/// thousands, the game's own Data a few hundred loose files and its archives.
+pub const MAX_FILES: usize = 500_000;
+
+/// The most bytes of a plugin read for its masters: the header record comes first and is small.
+pub const MAX_HEADER_BYTES: u64 = 1 << 20;
+
+fn too_deep(path: &Path) -> std::io::Error {
+    std::io::Error::other(format!(
+        "{} is more than {MAX_DEPTH} folders deep (a link that loops back?)",
+        path.display()
+    ))
+}
+
+fn too_many(path: &Path) -> std::io::Error {
+    std::io::Error::other(format!(
+        "{} holds more than {MAX_FILES} files",
+        path.display()
+    ))
+}
+
+fn link_tree(from: &Path, to: &Path, depth: usize, count: &mut u64) -> std::io::Result<()> {
+    if depth > MAX_DEPTH {
+        return Err(too_deep(from));
+    }
     std::fs::create_dir_all(to)?;
-    let mut count = 0;
     for entry in std::fs::read_dir(from)? {
         let entry = entry?;
         let target = to.join(entry.file_name());
         // A link to a folder is followed, as the game would follow it.
         let path = entry.path();
         if path.is_dir() {
-            count += link_tree(&path, &target)?;
+            link_tree(&path, &target, depth + 1, count)?;
         } else if path.is_file() {
+            *count += 1;
+            if *count > MAX_FILES as u64 {
+                return Err(too_many(from));
+            }
             link(&path, &target)?;
-            count += 1;
         }
     }
-    Ok(count)
+    Ok(())
 }
 
 const ARCHIVES: [&str; 4] = [".7z", ".zip", ".rar", ".fomod"];
@@ -205,8 +235,12 @@ fn left_out(name: &str, is_dir: bool) -> bool {
         || ARCHIVES.iter().any(|a| lower.ends_with(a))
 }
 
-/// Files under `folder`, relative to it, by [`left_out`].
+/// Files under `folder`, relative to it, by [`left_out`]; at most [`MAX_DEPTH`] deep and
+/// [`MAX_FILES`] in all.
 fn layer_files(folder: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    if relative.components().count() > MAX_DEPTH {
+        return Err(too_deep(&folder.join(relative)));
+    }
     let top = relative.as_os_str().is_empty();
     for entry in std::fs::read_dir(folder.join(relative))? {
         let entry = entry?;
@@ -220,36 +254,84 @@ fn layer_files(folder: &Path, relative: &Path, out: &mut Vec<PathBuf>) -> std::i
             layer_files(folder, &path, out)?;
         } else {
             out.push(path);
+            if out.len() > MAX_FILES {
+                return Err(too_many(folder));
+            }
         }
     }
     Ok(())
 }
 
-/// `relative` under `base`, each part an entry already there under another case if there is
-/// one; the folders on the way made.
-fn place(base: &Path, relative: &Path) -> std::io::Result<PathBuf> {
-    let parts: Vec<_> = relative.components().collect();
-    let mut at = base.to_path_buf();
-    for (i, part) in parts.iter().enumerate() {
-        let part = part.as_os_str();
-        let last = i + 1 == parts.len();
-        let wanted = part.to_string_lossy();
-        let existing = std::fs::read_dir(&at).ok().and_then(|dir| {
-            dir.filter_map(Result::ok)
-                .find(|e| {
-                    e.file_name()
-                        .to_string_lossy()
-                        .eq_ignore_ascii_case(&wanted)
-                        && (last || e.path().is_dir())
-                })
-                .map(|e| e.file_name())
-        });
-        at.push(existing.as_deref().unwrap_or(part));
-        if !last {
-            std::fs::create_dir_all(&at)?;
+/// One folder's names without ASCII case: (own name, is a folder); the first of two alike.
+type Names = BTreeMap<String, (std::ffi::OsString, bool)>;
+
+/// Places relative paths under one folder, each part an entry already there under another case
+/// if there is one, the folders on the way made. Each folder's names are read once and kept, so
+/// placing many files in one folder costs one look each, not a reading of the folder each.
+struct Placer {
+    folders: BTreeMap<PathBuf, Names>,
+}
+
+impl Placer {
+    fn new() -> Self {
+        Self {
+            folders: BTreeMap::new(),
         }
     }
-    Ok(at)
+
+    fn names(&mut self, dir: &Path) -> std::io::Result<&mut Names> {
+        if !self.folders.contains_key(dir) {
+            let mut names = Names::new();
+            match std::fs::read_dir(dir) {
+                Ok(entries) => {
+                    for entry in entries {
+                        let entry = entry?;
+                        names
+                            .entry(entry.file_name().to_string_lossy().to_ascii_lowercase())
+                            .or_insert((entry.file_name(), entry.path().is_dir()));
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+            self.folders.insert(dir.to_path_buf(), names);
+        }
+        Ok(self.folders.get_mut(dir).expect("just read"))
+    }
+
+    fn place(&mut self, base: &Path, relative: &Path) -> std::io::Result<PathBuf> {
+        let parts: Vec<_> = relative.components().collect();
+        let mut at = base.to_path_buf();
+        for (i, part) in parts.iter().enumerate() {
+            let part = part.as_os_str();
+            let last = i + 1 == parts.len();
+            let wanted = part.to_string_lossy().to_ascii_lowercase();
+            let here = at.clone();
+            let names = self.names(&here)?;
+            let name = match names.get(&wanted) {
+                Some((name, folder)) if last || *folder => name.clone(),
+                _ => {
+                    names.insert(wanted, (part.to_owned(), !last));
+                    part.to_owned()
+                }
+            };
+            at = here.join(name);
+            if !last {
+                std::fs::create_dir_all(&at)?;
+            }
+        }
+        Ok(at)
+    }
+}
+
+/// The first [`MAX_HEADER_BYTES`] of a plugin: enough for its header record and masters.
+fn header(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut out = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_HEADER_BYTES)
+        .read_to_end(&mut out)?;
+    Ok(out)
 }
 
 /// Makes `target` (removed first) from the game's folder `game` and the `layers` over it (see the
@@ -279,18 +361,26 @@ pub fn build(
             built.linked += 1;
         }
     }
+    let mut placer = Placer::new();
     // The game's Data folder in whatever case it has (a Linux copy may say "data").
-    let game_data = place(game, Path::new("Data")).map_err(|e| describe("reading", game, e))?;
+    let game_data = placer
+        .place(game, Path::new("Data"))
+        .map_err(|e| describe("reading", game, e))?;
     let data = target.join("Data");
-    built.linked += link_tree(&game_data, &data).map_err(|e| describe("linking", &game_data, e))?;
-    let mut plugins: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut linked = 0;
+    link_tree(&game_data, &data, 0, &mut linked).map_err(|e| describe("linking", &game_data, e))?;
+    built.linked += linked;
+    // By name without case: a later layer's plugin of the same name replaces an earlier one's.
+    let mut plugins: BTreeMap<String, (String, Vec<u8>)> = BTreeMap::new();
     for layer in layers {
         std::fs::create_dir_all(layer).map_err(|e| describe("making", layer, e))?;
         let mut files = Vec::new();
         layer_files(layer, Path::new(""), &mut files).map_err(|e| describe("reading", layer, e))?;
         for relative in &files {
             let source = layer.join(relative);
-            let destination = place(&data, relative).map_err(|e| describe("making", &data, e))?;
+            let destination = placer
+                .place(&data, relative)
+                .map_err(|e| describe("making", &data, e))?;
             // The link goes first: a copy over it would write into the game's own file.
             if destination.symlink_metadata().is_ok() {
                 std::fs::remove_file(&destination)
@@ -307,9 +397,8 @@ pub fn build(
             let top = relative.components().count() == 1;
             if top && (text.ends_with(".esm") || text.ends_with(".esp")) {
                 let name = relative.to_string_lossy().into_owned();
-                let header = std::fs::read(&source).map_err(|e| describe("reading", &source, e))?;
-                plugins.retain(|(n, _)| !n.eq_ignore_ascii_case(&name));
-                plugins.push((name, header));
+                let header = header(&source).map_err(|e| describe("reading", &source, e))?;
+                plugins.insert(text.clone(), (name, header));
             }
             built.mod_files += 1;
         }
@@ -317,7 +406,7 @@ pub fn build(
     let own = layers.last().map(|l| l.join("plugins.txt"));
     let list = match own.and_then(|p| std::fs::read(p).ok()) {
         Some(own) => own,
-        None => plugin_list(&plugins).into_bytes(),
+        None => plugin_list(&plugins.into_values().collect::<Vec<_>>()).into_bytes(),
     };
     if let Some(parent) = plugins_txt.parent() {
         std::fs::create_dir_all(parent).map_err(|e| describe("making", parent, e))?;
