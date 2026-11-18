@@ -736,3 +736,25 @@ fn a_batch_script_is_compiled_once_and_kept() {
     assert_eq!(kept.map(|k| k.run_on), Some(None), "no moment");
     assert_eq!(cmd(&mut e, 0x2834, 0, &[s(b"Data/batch/none.txt")]), 0.0);
 }
+
+/// The batch script belongs to the calling script's file: its `mods` list (+0x10) that file.
+#[test]
+fn a_batch_script_belongs_to_the_callers_file() {
+    use crate::commands::test_support::{game_globals, loaded_mod, FORMS, SCRIPT};
+    let mut e = command_engine();
+    game_globals(&mut e);
+    let info = FORMS + 0x9_0000;
+    loaded_mod(&mut e, 3, info, b"Mod.esp");
+    e.mem.set_u32(SCRIPT + 0x10, info);
+    e.mem.set_u32(SCRIPT + 0x14, 0);
+    files::put("c.txt", b"go");
+    assert_eq!(cmd(&mut e, 0x2834, 0, &[s(b"c.txt")]), 1.0);
+    let made = e
+        .ext::<Jip>()
+        .script_runner
+        .cached
+        .get(&Name(b"c.txt".to_vec()))
+        .unwrap()
+        .script;
+    assert_eq!((e.mem.u32(made + 0x10), e.mem.u32(made + 0x14)), (info, 0));
+}
