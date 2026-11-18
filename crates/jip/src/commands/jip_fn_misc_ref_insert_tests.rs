@@ -554,3 +554,59 @@ fn an_attached_models_name_only_fills_an_empty_slot() {
     do_attach_model(&mut e, SPINE, b"gun.nif", &mut empty, ROOT);
     assert_eq!(empty, s_of(b"GunRoot"));
 }
+
+// ---- RefreshAnimData (Actor::RefreshAnimData) ----
+
+#[test]
+fn refresh_anim_data_refreshes_and_blends() {
+    let mut e = setup();
+    const PC: u32 = FORMS + 0xf000;
+    const PC_VT: u32 = FORMS + 0xf400;
+    const ANIM: u32 = FORMS + 0xf800;
+    const ANIM_1ST: u32 = FORMS + 0xfa00;
+    form(&mut e, PC, 0x3b, 0x14);
+    e.mem.set_u32(PC, PC_VT);
+    e.mem.set_u32(PC_VT + 0x100, 0x008d_0360);
+    e.mem.set_u32(PC + 0x68, PROCESS);
+    e.mem.set_u32(PROCESS + 0x1c0, ANIM);
+    e.mem.set_u32(PC + 0x690, ANIM_1ST);
+    for f in [0x0049_9240, 0x0049_94f0] {
+        e.register(f, |_, w| {
+            CALLS.with(|c| c.borrow_mut().push((0xa0a0, w.to_vec())));
+            Ret::default()
+        });
+    }
+    let anim_calls = || -> Vec<Vec<u32>> {
+        CALLS.with(|c| {
+            let v = c
+                .borrow()
+                .iter()
+                .filter(|x| x.0 == 0xa0a0)
+                .map(|x| x.1.clone())
+                .collect();
+            c.borrow_mut().retain(|x| x.0 != 0xa0a0);
+            v
+        })
+    };
+    assert_eq!(call_on(&mut e, 0x290c, PC, &[]), (1, 0.0));
+    assert_eq!(
+        anim_calls(),
+        vec![vec![ANIM, 0], vec![ANIM_1ST, 0]],
+        "the player's two"
+    );
+    // The process byte and the data's word: blended first (the first-person data's own word).
+    e.mem.set_u8(PROCESS + 0x135, 1);
+    e.mem.set_u32(ANIM + 0xf0, 1);
+    call_on(&mut e, 0x290c, PC, &[]);
+    assert_eq!(
+        anim_calls(),
+        vec![vec![ANIM, 4, 0], vec![ANIM, 0], vec![ANIM_1ST, 0]]
+    );
+    // Not the player: only its own; not high process or no data: nothing.
+    e.mem.set_u32(PC + 0xc, 0x15);
+    call_on(&mut e, 0x290c, PC, &[]);
+    assert_eq!(anim_calls().len(), 2);
+    e.mem.set_u32(PROCESS + 0x28, 1);
+    call_on(&mut e, 0x290c, PC, &[]);
+    assert!(anim_calls().is_empty());
+}

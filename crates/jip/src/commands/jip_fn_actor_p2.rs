@@ -22,9 +22,9 @@
 //!   the patch's state and JIP's perk maps);
 //! - a hook: `FireWeaponEx` (writes the exe's code at `009BAD76` and `01087F1C` and queues a
 //!   call);
-//! - the 3D scene and physics (not ported to this layer): `RefreshAnimData`,
-//!   `ReloadCharController`. (`ReloadEquippedModels` is built: its models reloaded through the
-//!   game, the animation data refreshed with JIP's `RefreshAnimData`, [`refresh_anim_data`].)
+//! - the 3D scene and physics (not ported to this layer): `ReloadCharController` (lane 2).
+//!   (`ReloadEquippedModels` and `RefreshAnimData` are built: the models reloaded through the
+//!   game, the animation data refreshed with JIP's `Actor::RefreshAnimData`, [`refresh_anim_data`].)
 //!
 //! Layouts (JIP's headers; the exe where the audit table says so): a reference's base form +0x20,
 //! position z +0x38, cell +0x40, extra data list +0x44; an actor's process +0x68, killer +0xC0,
@@ -112,6 +112,7 @@ pub static COMMANDS: Handlers = &[
     (0x2807, play_idle_ex),
     (0x28ec, toggle_no_gun_wobble),
     (0x280d, reload_equipped_models),
+    (0x290c, refresh_anim_data_cmd),
 ];
 
 #[rustfmt::skip]
@@ -1948,6 +1949,17 @@ pub(crate) fn refresh_anim_data(e: &mut Engine, actor: u32) {
     }
     let first = e.mem.u32(actor + PLAYER_ANIM_DATA_1ST);
     refresh_one_anim_data(e, first, blend);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_RefreshAnimData_Execute.
+/// `actor.RefreshAnimData`: for an actor, [`refresh_anim_data`]. No result.
+fn refresh_anim_data_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if is_actor(e, a.this_obj) {
+        refresh_anim_data(e, a.this_obj);
+    }
+    handled(true)
 }
 
 /// The biped slots (`BipedAnim::slotData`, from +0x2C, 0x10 bytes each: the item +0, the node
