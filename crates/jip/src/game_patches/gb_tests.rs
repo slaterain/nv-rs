@@ -1454,3 +1454,22 @@ fn big_guns_through_the_deferred_start() {
     assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x410);
     assert_eq!(e.mem.u32(AV_INFO + 0x4c), 0x0064_3bd0);
 }
+
+/// O3 switched while the game runs (`SetOptionalPatch(3, on)`, JIP's case 3): on gives the flags
+/// 0x410 and JIP's description, off the exe's 0x2000 and no alternative text (the hook's user
+/// dropped); a second "on" changes nothing.
+#[test]
+fn o3_switched_at_run_time() {
+    use engine_core::extend::jip_patches::{FIXES, INSTALLED};
+    let mut e = big_guns_world(INSTALLED | FIXES);
+    assert!(crate::game_patches::switches::set(&mut e, 3, true));
+    assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x410);
+    assert!(big_guns_description(&mut e).is_some());
+    assert_eq!(e.hook_users(engine_core::extend::Hook::GetDescription), 1);
+    assert!(!crate::game_patches::switches::set(&mut e, 3, true));
+    assert_eq!(e.hook_users(engine_core::extend::Hook::GetDescription), 1);
+    assert!(crate::game_patches::switches::set(&mut e, 3, false));
+    assert_eq!(e.mem.u32(AV_INFO + 0x44), 0x2000);
+    assert_eq!(big_guns_description(&mut e), None);
+    assert_eq!(e.hook_users(engine_core::extend::Hook::GetDescription), 0);
+}

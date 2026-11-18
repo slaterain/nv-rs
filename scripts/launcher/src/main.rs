@@ -1126,9 +1126,14 @@ fn play(
             message: e.player_text(),
         })?;
         package.log(&format!(
-            "mods: {} files linked, {} mod files",
-            built.linked, built.mod_files
+            "mods: {} mod files; {} names made and {} removed since the last start ({} copied)",
+            built.mod_files, built.made, built.removed, built.copied
         ));
+        for name in &built.added_plugins {
+            package.log(&format!(
+                "mods: {name} switched on after the mods folder's own plugins.txt"
+            ));
+        }
         if built.extender_plugins {
             ui::warning("Some of your mods include plugins for xNVSE or other script extenders. Those plugins are not used yet, and mods that need them may not work or may stop the game.");
         }

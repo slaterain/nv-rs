@@ -219,6 +219,8 @@ fn install_jip(e: &mut Engine) {
     e.wrap(NPC_MODEL, npc_model);
     e.on_site(MOD_NAME_HASH, mod_name_hash);
     e.on_site(MOD_LOG_BYTE, mod_log_byte);
+    // Made before the threads start, so every thread's engine shares the one set.
+    e.ext_free::<InternalMarkers>();
     e.wrap(IS_MARKER, is_marker);
     for site in WHEEL_TEAMMATE {
         e.on_site(site, wheel_teammate);
@@ -602,8 +604,9 @@ fn global_load_form(e: &mut Engine, a: &[u32]) -> Option<u32> {
     }
 }
 
-/// `s_internalMarkerIDs`: the ids JIP takes for markers (`InitContainers`, `jip_nvse.cpp`),
-/// `SetInternalMarker`'s set (that command is not built: the set stays JIP's start). The 14
+/// `s_internalMarkerIDs` at JIP's start: the ids JIP takes for markers (`InitContainers`,
+/// `jip_nvse.cpp`); `SetInternalMarker` adds and removes ids while the game runs
+/// ([`InternalMarkers`]). The 14
 /// statics and the door the exe compares by address are the first 15 (`GenerateDefaultObjects`
 /// gives them these ids: 1-6, 0x10, 0x12, 0x15, 0x23, 0x24, 0x32-0x34, 0x3B, Ghidra), then the
 /// exe's id range 0x64..0x77.
@@ -611,6 +614,39 @@ const INTERNAL_MARKER_IDS: [u32; 35] = [
     1, 2, 3, 4, 5, 6, 0x10, 0x12, 0x15, 0x23, 0x24, 0x32, 0x33, 0x34, 0x3b, 0x64, 0x65, 0x66, 0x67,
     0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
 ];
+
+/// JIP's `s_internalMarkerIDs` (`Set<UInt32>`): [`INTERNAL_MARKER_IDS`] at the start, then what
+/// `SetInternalMarker` puts in or takes out. One set for the run: `IsMarker` reads it from any
+/// thread (a read lock: JIP reads its set with no lock while the script's thread may change it),
+/// the command changes it from the script's thread.
+pub struct InternalMarkers(std::sync::RwLock<std::collections::HashSet<u32>>);
+
+impl Default for InternalMarkers {
+    fn default() -> Self {
+        InternalMarkers(std::sync::RwLock::new(
+            INTERNAL_MARKER_IDS.into_iter().collect(),
+        ))
+    }
+}
+
+impl InternalMarkers {
+    /// Whether `id` is in the set (`Set::HasKey`).
+    pub fn has(&self, id: u32) -> bool {
+        self.0
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains(&id)
+    }
+    /// `id` put in (`Set::Insert`) or taken out (`Set::Erase`).
+    pub fn set(&self, id: u32, on: bool) {
+        let mut set = self.0.write().unwrap_or_else(|p| p.into_inner());
+        if on {
+            set.insert(id);
+        } else {
+            set.remove(&id);
+        }
+    }
+}
 /// The form types JIP's test names: `TESObjectACTI` (0x15), `TESObjectLIGH` (0x1E),
 /// `BGSTextureSet` (4), `BGSIdleMarker` (0x30).
 const ACTIVATOR: u8 = 0x15;
@@ -625,7 +661,7 @@ const MODEL_PATH_LENGTH: u32 = 0x44;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetIsInternalMarkerHook.
 /// `TESObject::IsMarker` rewritten: a type above `BGSIdleMarker` no; an idle marker or a texture
-/// set yes; an id in [`INTERNAL_MARKER_IDS`] yes; an activator whose model path is
+/// set yes; an id in JIP's set ([`InternalMarkers`]) yes; an activator whose model path is
 /// `EditorMarker.NIF` (no case) yes; a light with an empty model path yes; else no. The same
 /// answers as the exe's for every form but one of a type above 0x30 with an id 0x64..0x77 (the
 /// exe: a marker, JIP: not). A null form answers no, as the exe's (JIP would read address 4).
@@ -645,7 +681,8 @@ fn is_marker(e: &mut Engine, w: &[u32]) -> Ret {
     if kind == IDLE_MARKER || kind == TEXTURE_SET {
         return answer(true);
     }
-    if INTERNAL_MARKER_IDS.contains(&e.mem.u32(form + 0xc)) {
+    let id = e.mem.u32(form + 0xc);
+    if e.ext_free::<InternalMarkers>().has(id) {
         return answer(true);
     }
     match kind {

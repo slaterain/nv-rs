@@ -7,8 +7,8 @@
 //! [EAX+8],0` (the jump at `0x5E0FBE` lands on the `JMP`'s target `0x5E103A`, the others right after
 //! the clear), so a script whose line fails keeps its data length and runs again next time,
 //! where the exe sets it to 0 and the script never runs again. JIP turns it on once and never off
-//! (`!bEnable` answers false); the port's seams test the switch's bit, so a later
-//! `SetOptionalPatch(7, 0)` would turn it off: not reachable while that command is not built.
+//! (`!bEnable` answers false); the port's seams test the switch's bit, which
+//! `SetOptionalPatch(7, 0)` leaves set as JIP does (`switches::set`).
 //!
 //! **O8, `bDoublePrecision`** (`SetOptionalPatch(8)`, on by JIP's default): `DoOperatorHook` in
 //! place of `CExpression::Eval`'s operator switch ([`do_operator`]).
