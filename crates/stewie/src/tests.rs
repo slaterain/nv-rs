@@ -54,7 +54,7 @@ fn the_reader_follows_simple_ini() {
     // A key under a broken heading is found by no name.
     assert!(v.keys().all(|(_, k)| k != b"blost"));
     // The text ends at its first NUL: a UTF-16 file gives nothing.
-    assert!(entries(b"\xff\xfe[\0T\0]\0\na\0=\01\0").is_empty());
+    assert!(entries(b"\xff\xfe[\x00T\x00]\x00\na\x00=\x001\x00").is_empty());
     assert_eq!(entries(b"a=1\0b=2"), [entry(Some(""), "a", "1")]);
 }
 
