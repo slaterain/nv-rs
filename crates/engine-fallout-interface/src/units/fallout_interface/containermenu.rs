@@ -15,6 +15,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// `ContainerMenu::pMe` (Xbox PDB static): the menu singleton.
 const CONTAINER_MENU: u32 = 0x011d_93f8;
@@ -2275,6 +2276,19 @@ pub fn container_menu_do_idle(e: &mut Engine, this: Ptr<ContainerMenu>) {
     {
         return;
     }
+    // 0075eb5c: lStewieAl's Tweaks' row S0022.17 (`MenuFixes`, "add a null check when mousing over
+    // keys in the Container menu"): an entry with no form ends the call (at `0075ec4e`), where the
+    // exe reads the null form's type.
+    if e.stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM)
+        && current_item(e) != 0
+        && typed_call!(
+            leaf::FAMILY,
+            0x0044_ddc0,
+            leaf::word_at_8(e, current_item(e))
+        ) == 0
+    {
+        return;
+    }
     if current_item(e) != 0 && item_type(e, current_item(e)) == 0x28 {
         let first = tile_at(e, me_addr, 0x60);
         let second = tile_at(e, me_addr, 0x64);
@@ -4223,6 +4237,34 @@ mod tests {
             calls_to(&e, SET_ITEM_CARD),
             vec![vec![0, tile(0x70), 0, 0x7000, 0]]
         );
+    }
+
+    /// lStewieAl's Tweaks' row S0022.17: the pointer on an entry whose item has no form (keys).
+    /// The exe reads the null form's type (`00401170` reads `+4`, as its stand-in here does) and
+    /// stops; with the row on the call ends and no card is filled.
+    #[test]
+    fn s0022_17_an_entry_with_no_form() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            let this = container(&mut e);
+            e.mem.unmap(0, 0x1000);
+            e.set_global(ITEM_ENTERED, 1u8);
+            e.set_global(CURRENT_ITEM, 0x7000u32);
+            answer(&mut e, LIST_COUNT, 2);
+            answer(&mut e, ITEM_OBJECT, 0);
+            e.register_double(FORM_TYPE, |e, a| u32::from(e.mem.u8(a[0] + 4)).into_ret());
+            stub(&mut e, &[SET_STRING_TRAIT, SET_ITEM_CARD]);
+            e.set_stewie(stewie::CONTAINER_MOUSEOVER_NO_FORM, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0075_eac0, &args![this]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(calls_to(&e, SET_ITEM_CARD).is_empty());
+            }
+        }
     }
 }
 

@@ -11,6 +11,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// `InventoryMenu::pMe` (Xbox PDB static): the menu singleton.
 const INVENTORY_MENU: u32 = 0x011d_9ea4;
@@ -895,6 +896,12 @@ pub fn inventory_menu_drop_current_item(e: &mut Engine, count: i32) {
             let word = e.mem.u32(DROP_POSITION + 4 * i);
             e.mem.set_u32(position.addr() + 4 * i, word);
         }
+        // 00780c76: lStewieAl's Tweaks' row S0022.15 (`QuantityMenuCloseNullInventorySelectionCheck`):
+        // with no item selected (the quantity menu closed after the item went) nothing is dropped,
+        // where the exe reads the null item's form.
+        if e.stewie(stewie::QUANTITY_MENU_CLOSE_NO_ITEM) && current_item(e) == 0 {
+            return;
+        }
         let object = typed_call!(
             leaf::FAMILY,
             0x0044_ddc0,
@@ -957,6 +964,12 @@ fn player_value(e: &mut Engine, slot: u32, id: u32) -> i32 {
 /// item. Updates the menu.
 pub fn inventory_menu_select_current_item(e: &mut Engine, this: Ptr<InventoryMenu>) {
     let base = this.addr();
+    // 00780d70: lStewieAl's Tweaks' row S0022.16 (`MenuFixes`, "add a null check for the selected
+    // inventory item in InventoryMenu::HandleEquipOrUnEquip"): with no item selected the call ends
+    // (at `00780f5d`, the menu not updated), where the exe reads the null item's form.
+    if e.stewie(stewie::INVENTORY_SELECT_NO_ITEM) && current_item(e) == 0 {
+        return;
+    }
     let object = typed_call!(
         leaf::FAMILY,
         0x0044_ddc0,
@@ -2408,6 +2421,13 @@ fn click_use(e: &mut Engine, this: Ptr<InventoryMenu>) {
         }
         return;
     }
+    // 00780472: lStewieAl's Tweaks' row S0022.14 (`MenuFixes`, "replace an incorrect jump target
+    // after a null check"): with no item selected the click ends (Tweaks points the jump at the
+    // function's end, `00780b8e`), where the exe goes on to the ammunition case and reads the null
+    // item's form.
+    if e.stewie(stewie::INVENTORY_USE_NO_ITEM_JUMP) && current_item(e) == 0 {
+        return;
+    }
     if current_item_type(e) != 0x29 {
         return;
     }
@@ -3696,6 +3716,43 @@ mod n054_tests {
         e.call_log = Some(vec![]);
         e.call(0x0078_0140, &args![this, 7i32, 0u32]);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' rows S0022.14, S0022.15 and S0022.16: Use clicked, a drop after the
+    /// quantity menu, and equipping, each with no item selected. The exe reads the null item's
+    /// form (`0044ddc0` reads `+8`, as its stand-in here does) and stops; with each row on the call
+    /// ends there.
+    #[test]
+    fn s0022_14_15_16_inventory_actions_with_no_item() {
+        type Action = fn(&mut Engine, Ptr<InventoryMenu>);
+        let cases: [(engine_core::extend::stewie::Row, Action); 3] = [
+            (stewie::INVENTORY_USE_NO_ITEM_JUMP, |e, this| {
+                e.call(0x0078_0140, &args![this, 0x1di32, 0u32]);
+            }),
+            (stewie::QUANTITY_MENU_CLOSE_NO_ITEM, |e, _| {
+                e.call(0x0078_0c50, &args![3i32]);
+            }),
+            (stewie::INVENTORY_SELECT_NO_ITEM, |e, this| {
+                e.call(0x0078_0d60, &args![this]);
+            }),
+        ];
+        for (row, action) in cases {
+            for on in [false, true] {
+                let mut e = Engine::new();
+                let this = menu(&mut e);
+                e.mem.unmap(0, 0x1000);
+                e.set_global(CURRENT_ITEM, 0u32);
+                e.register_double(ITEM_OBJECT, |e, a| e.mem.u32(a[0] + 8).into_ret());
+                answer(&mut e, WHEEL_GET_VISIBLE, 0);
+                e.set_stewie(row, on);
+                e.call_log = Some(vec![]);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    action(&mut e, this);
+                }));
+                e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "{row:?} {on}");
+            }
+        }
     }
 
     #[test]

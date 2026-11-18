@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@V?$BSStringT@D@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_01075530: u32 = 0x0107_5530;
@@ -5397,7 +5398,14 @@ fn show_note_subtitle(e: &mut Engine, this: Ptr<MapMenu>, flag: u32) {
             &args![text, h0, h1, h2, x, y, z, player, flag],
         );
     });
-    fn_007a1b10(e, Ptr::new(base + 0xa8), 0, 1);
+    // 0079a868, 0079aaeb: lStewieAl's Tweaks' row S0182 (`SubtitleArrayPopIfNonEmpty`): with no
+    // subtitle left (a holotape with sound but no subtitles) nothing is removed, where the exe
+    // removes an element from the empty array.
+    let subtitles = Ptr::<BSSimpleArray>::new(base + 0xa8);
+    if e.stewie(stewie::HOLOTAPE_EMPTY_SUBTITLE) && e.get(subtitles, BSSimpleArray::iSize) == 0 {
+        return;
+    }
+    fn_007a1b10(e, subtitles, 0, 1);
 }
 
 /// The play time text of an audio note into tile 13's `"_ItemStringInfo"`
@@ -13253,6 +13261,41 @@ mod n056_tests {
         let subtitle = calls_to(&e, SHOW_SUBTITLE);
         assert_eq!(subtitle.len(), 1);
         assert_eq!(subtitle[0][7..], [player, 0]);
+    }
+
+    /// lStewieAl's Tweaks' row S0182: a holotape whose sound starts with no subtitles. The exe
+    /// removes the first subtitle from the empty list, moving `0 - 0 - 1` elements (the stand-in
+    /// of the move, `00692480`, stops on that count as the game's copy would run off the buffer);
+    /// with the row on nothing is removed and the sound plays.
+    #[test]
+    fn s0182_a_holotape_with_no_subtitles() {
+        for on in [false, true] {
+            let mut e = engine();
+            let menu = open_menu(&mut e, 0x100);
+            e.set(menu, MapMenu::bSoundsLoading, 1);
+            returns(&mut e, SOUND_IS_VALID, 1);
+            returns(&mut e, SOUND_GET_DURATION, 2000);
+            returns(&mut e, WORD_AT_14, 77);
+            let player = with_vtable(&mut e, 0x10, &[(0x1f4, 0x0010_01f4)]);
+            e.mem.set_u32(PLAYER_011DEA3C, player);
+            let position = e.mem.alloc(0xc);
+            returns(&mut e, 0x0010_01f4, position);
+            e.register_double(ARRAY_MOVE_00692480, |_, a| {
+                assert!(a[3] < 0x1000_0000, "a move of {:#x} elements", a[3]);
+                Ret::default()
+            });
+            e.set_stewie(stewie::HOLOTAPE_EMPTY_SUBTITLE, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0079_a660, &args![menu]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(calls_to(&e, SOUND_PLAY).len(), 1);
+                assert!(calls_to(&e, ARRAY_MOVE_00692480).is_empty());
+            }
+        }
     }
 
     #[test]
