@@ -231,6 +231,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref::AWAITING_H13,
     // `ToggleHUDCursor`, with its patch H02 (`game_patches::gp`).
     jip_fn_ui::AWAITING_H02,
+    // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
+    jip_fn_actor_p2::AWAITING_H01,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -861,6 +863,8 @@ mod tests {
             "jip_fn_misc_ref",
             // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
             "jip_fn_ui",
+            // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
+            "jip_fn_actor",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();
