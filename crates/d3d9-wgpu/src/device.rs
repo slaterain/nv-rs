@@ -939,6 +939,12 @@ struct SunState {
     /// This frame's casters, and those of the frames before still around the camera.
     lists: sun_shadow::Lists,
     cache: sun_shadow::Cache<sun_shadow::GeoKey, sun_shadow::Draw>,
+    /// The far map's casters ([`sun_shadow::far_casts`]: the land and the large objects, kept as
+    /// `cache` keeps its own) and the sun it was drawn for; how many times it was drawn since the
+    /// last line in the log.
+    far: sun_shadow::Cache<sun_shadow::GeoKey, sun_shadow::Draw>,
+    far_keep: sun_shadow::SunKeep,
+    far_maps: u64,
     /// The vertex blocks' headers the casters use (a few: the integer and boolean registers).
     headers: Vec<Vec<u8>>,
     /// The integer and boolean registers of the last caster and their header's place.
@@ -1057,6 +1063,9 @@ impl SunState {
     /// be drawn again before the lit draws use it.
     fn forget_world(&mut self) {
         self.cache = sun_shadow::Cache::default();
+        self.far = sun_shadow::Cache::default();
+        self.far_keep = sun_shadow::SunKeep::default();
+        self.gpu.far_drawn = None;
         self.lists.clear();
         self.prev = None;
         self.moving = 0;
@@ -1072,6 +1081,9 @@ impl SunState {
             gpu: sun_shadow::Gpu::new(device),
             lists: sun_shadow::Lists::default(),
             cache: sun_shadow::Cache::default(),
+            far: sun_shadow::Cache::default(),
+            far_keep: sun_shadow::SunKeep::default(),
+            far_maps: 0,
             headers: Vec::new(),
             last_regs: None,
             moving: 0,
@@ -6766,6 +6778,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &cascades,
             &drawn,
             sun.gpu.thin_in,
+            sun.gpu.far_drawn.as_ref(),
             axes,
             position,
             rt.samples,
@@ -6904,6 +6917,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         // The casters on the scene into the cache.
         let mut came = crate::fxhash::Set::<sun_shadow::GeoKey>::default();
+        let mut far_changed = false;
         let mut added = 0usize;
         let mut on_scene = 0u64;
         for c in std::mem::take(&mut sun.lists.casters) {
@@ -6912,6 +6926,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             }
             on_scene += 1;
             let world = sun_shadow::world_of(&c.draw.mvp(), frustum, axes, position);
+            let rewritten = sun.rewritten.contains(&c.key.geometry());
+            // The land and the large objects also cast into the far map (not one the game keeps
+            // writing: the far map is drawn again only now and then).
+            if !rewritten && sun_shadow::far_casts(&world, c.bounds, position) {
+                let draw = &c.draw;
+                if sun
+                    .far
+                    .see(c.key.clone(), world, c.bounds, now, false, || draw.clone())
+                    .is_some()
+                {
+                    far_changed = true;
+                }
+            }
             // Not a caster: the sky's dome and clouds, and the far land's blocks (whole spheres round
             // the camera, or larger than the maps reach): they would shade everything under them.
             if !sun_shadow::casts(&world, c.bounds, position) {
@@ -6921,7 +6948,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             // A geometry whose buffers the game wrote since an earlier frame (a sign's animation, a
             // flag) comes back each frame as a new caster: it moves from the start, so it does not
             // redraw the still maps every frame.
-            let moves = sun.moving < MAX_SUN_MOVING && sun.rewritten.contains(&c.key.geometry());
+            let moves = sun.moving < MAX_SUN_MOVING && rewritten;
             sun.moving += usize::from(moves);
             let draw = c.draw;
             let key = c.key.clone();
@@ -7013,10 +7040,46 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.settled[k] += u64::from(!moved && settled.iter().any(|&(p, r)| c.touches(p, r)));
             redraw[k] = moved || touched;
         }
+        // The far map's casters let go as the cascades' are (written or released, too far for it,
+        // not drawn in view for a while); its map drawn again only when it moved a step, the sun
+        // turned half a texel's worth for it, or a caster in it came or went. With none, no far map.
+        let far_reach = 1.5 * sun_shadow::FAR_HALF;
+        for _ in sun.far.sweep(|_, i| {
+            if i.seen == now {
+                return false;
+            }
+            let v = in_view(i.centre);
+            let distance = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            i.payload.stale()
+                || distance - i.radius > far_reach
+                || (now - i.seen > sun_shadow::GRACE
+                    && sun_shadow::wholly_in_view(frustum, v, i.radius, near, f64::from(view.far)))
+        }) {
+            far_changed = true;
+        }
+        let far_texel = 2.0 * sun_shadow::FAR_HALF / f64::from(sun_shadow::FAR_SIZE);
+        let far_turned = sun
+            .far_keep
+            .turn(frame.to_sun)
+            .is_none_or(|t| t >= sun_shadow::turn_limit(far_texel, sine));
+        if far_turned {
+            sun.far_keep.take(frame.to_sun);
+        }
+        let far_map = sun_shadow::far_place(
+            position,
+            sun_shadow::basis(sun.far_keep.direction(frame.to_sun)),
+        );
+        if sun.far.is_empty() {
+            sun.gpu.far_drawn = None;
+        }
+        let far_redraw = !sun.far.is_empty()
+            && (far_changed
+                || !sun_shadow::still_good(sun.gpu.far_drawn.as_ref(), &far_map, far_turned));
+        sun.far_maps += u64::from(far_redraw);
         self.end_pass();
         // The casters' buffers are this batch's from here: an upload into one later in the batch
         // is copied in among its commands.
-        for i in sun.cache.iter() {
+        for i in sun.cache.iter().chain(sun.far.iter()) {
             for (b, _, _) in i.payload.streams.iter().flatten() {
                 b.batch.store(self.batch, Ordering::Relaxed);
             }
@@ -7034,6 +7097,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &sun.headers,
             &cascades,
             redraw,
+            far_redraw.then_some((&sun.far, &far_map)),
         );
         for (buffer, bytes) in writes {
             self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
@@ -7052,7 +7116,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         if self.presents >= sun.said + 300 || sun.said == 0 {
             let n = sun.frames.max(1) as f64;
             eprintln!(
-                "NV_D3D9 wgpu: sun shadows at present {}: {:.0} casters on the scene, {:.0} kept ({} moving), {:.2} still maps drawn a frame ({:.0} caster draws), {:.3} ms a frame on this thread; a frame {:.1} added, let go {:.1} written or released, {:.1} far, {:.1} moved or not drawn in view; still maps drawn for moving {:?}, for a changed caster {:?} times (of them for a settled place {:?}); {:.0} cables kept; draws a frame (not opaque, cut-outs kept, no pipeline, no bounds, no ModelViewProj or skinned, UP) {:?}; sun toward ({:.2}, {:.2}, {:.2}), cascades to {:?} units (texels {:?}); lookups (given, ended by another target's clear, no maps yet) {:?}; lit variants waiting, failed {:?}; casters forgotten for a new world {} times",
+                "NV_D3D9 wgpu: sun shadows at present {}: {:.0} casters on the scene, {:.0} kept ({} moving), {:.2} still maps drawn a frame ({:.0} caster draws), {:.3} ms a frame on this thread; a frame {:.1} added, let go {:.1} written or released, {:.1} far, {:.1} moved or not drawn in view; still maps drawn for moving {:?}, for a changed caster {:?} times (of them for a settled place {:?}); {:.0} cables kept; draws a frame (not opaque, cut-outs kept, no pipeline, no bounds, no ModelViewProj or skinned, UP) {:?}; sun toward ({:.2}, {:.2}, {:.2}), cascades to {:?} units (texels {:?}); lookups (given, ended by another target's clear, no maps yet) {:?}; lit variants waiting, failed {:?}; casters forgotten for a new world {} times; far map: {} casters kept, drawn {:.3} times a frame",
                 self.presents,
                 sun.casters as f64 / n,
                 sun.kept as f64 / n,
@@ -7077,6 +7141,8 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 sun.lookups,
                 (self.sun_pending.len(), self.sun_failed.len()),
                 sun.forgotten,
+                sun.far.len(),
+                sun.far_maps as f64 / n,
             );
             sun.said = self.presents;
             sun.frames = 0;
@@ -7093,6 +7159,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.cables = 0;
             sun.rejected = [0; 6];
             sun.lookups = [0; 3];
+            sun.far_maps = 0;
         }
     }
 
@@ -7126,6 +7193,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
+    }
+
+    /// Tests: how many times the sun shadows' far map was drawn (0 with them off).
+    #[doc(hidden)]
+    pub fn sun_far_maps_drawn(&self) -> u64 {
+        self.sun.as_ref().map_or(0, |s| s.gpu.far_draws)
     }
 
     /// Waits until every sun-shadow variant on its way is made and keeps it (tests: the draws after
@@ -7373,6 +7446,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             &cascades,
             &drawn,
             sun.gpu.thin_in,
+            sun.gpu.far_drawn.as_ref(),
             axes,
             position,
             rt.samples,
