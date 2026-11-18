@@ -4,6 +4,15 @@ Mods for nv-rs
 Put a mod's files here exactly as they would go in the game's Data folder: its .esp or .esm,
 its .bsa, and folders such as Meshes, Textures or Sound. Then start "Play with mods.cmd".
 
+A mod that comes as an archive (.7z, .zip or .fomod, with or without an installer): put the
+archive here and start "Install mods.cmd". It lists the archives here and the mods installed,
+asks each installer's questions in plain words (type what each line says; Enter keeps the
+recommended choice; a typo only asks again), and installs the mod into its own folder in
+userdata\mod installs, then moves the archive to "installed archives" here. Installed mods are
+laid over the game in the order installed, then the files you put here by hand. A RAR archive is
+not read: open it with 7-Zip and save it again as .7z or .zip. An installer's C# script is not
+run: the mod's plain layout is offered instead.
+
 Your game folder is never changed. Each start builds a whole game folder in userdata\modgame:
 your game's files linked, not copied, plus these on top. For that the nv-rs folder must be on
 the same drive as the game, on a normal Windows (NTFS) drive. A link is another name for the same

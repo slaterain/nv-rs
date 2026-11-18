@@ -26,6 +26,8 @@ Windows language or Windows version change, nv-rs notices and reads them again.
 
   Play.exe               the game
   Play with mods.cmd     the game with the mods in the mods folder (see mods\READ ME.txt)
+  Install mods.cmd       install a mod from its archive (.7z, .zip, .fomod) put in the mods
+                         folder, answering its installer's questions; also removes mods
   Settings.cmd           window or borderless, resolution, anti-aliasing, game fixes, frame limit
                          and more (next start). Close the game first: the game writes its own
                          settings file again when you change an option in its menu, and that can
