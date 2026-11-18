@@ -16,7 +16,7 @@
 //!   the last Required, else the first Recommended), every usable option of a SelectAll group;
 //!   an ExactlyOne or AtLeastOne group left with none gets its first Optional option, else its
 //!   first CouldBeUsable one (Mod Organizer 2; see `defaults`). [`Session::problems`] says what
-//!   in the current choices breaks a group's rule, so a front end can hold the player there.
+//!   in the current choices breaks a group's rule; [`Session::plan`] refuses while there is any.
 //! - Group fix-ups: one option in an ExactlyOne or AtLeastOne group is SelectAll, in an
 //!   AtMostOne group SelectAny (Mod Organizer 2); more than one Required option turns AtMostOne
 //!   into SelectAny and ExactlyOne into AtLeastOne (Vortex).
@@ -32,15 +32,22 @@
 //! - Destinations are compared as Windows and macOS compare names (`layout::fold`: case, and
 //!   dots and spaces at a name's end, do not count), and one that would leave Data or that no
 //!   system holds safely (`..`, a drive or full path, a `:`, a Windows device name such as
-//!   `CON` or `COM1`) is refused on every system.
-//! - Sizes are bounded: one map of flags while walking the steps (never a copy per step), the
-//!   listing indexed once.
+//!   `CON`, `CONIN$` or `COM1`) is refused on every system.
+//! - Work stays in proportion to the installer and the listing: one map of flags while walking
+//!   the steps (never a copy per step), each group's choices as one flag per option (no
+//!   searching a list per option), the player's files indexed once ([`Known`]), the listing
+//!   indexed once, repeated identical file items resolved once, and at most [`MAX_COPIES`]
+//!   copies (more is refused; the listing's own caps are in `layout`).
 
 use crate::config::{
     Condition, Config, FileItem, FileState, GroupType, Plugin, PluginType, TypeDescriptor,
 };
-use crate::layout::{fold, fold_part, join, normalise, Listing};
+use crate::layout::{fold, fold_part, join, normalise, Listing, ListingError};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// The most copies a plan may make: as many as the listing may hold files
+/// (`layout::MAX_ENTRIES`); more can only come from one file copied to many places.
+pub const MAX_COPIES: usize = crate::layout::MAX_ENTRIES;
 
 /// What the conditions are asked against: the player's load order and versions.
 #[derive(Debug, Clone, Default)]
@@ -56,13 +63,31 @@ pub struct Facts {
     pub extenders: Vec<(String, String)>,
 }
 
+/// [`Facts`] indexed once: each file condition then costs one lookup, however many files the
+/// player has.
+#[derive(Debug, Clone, Default)]
+pub struct Known {
+    files: BTreeMap<String, FileState>,
+    game_version: Option<String>,
+    extenders: BTreeMap<String, String>,
+}
+
 impl Facts {
-    fn state(&self, file: &str) -> FileState {
-        let file = fold(file);
-        self.plugins
-            .iter()
-            .find(|(n, _)| fold(n) == file)
-            .map_or(FileState::Missing, |(_, s)| *s)
+    /// The facts indexed; of two files that fold to one name, the first.
+    pub fn index(&self) -> Known {
+        let mut files = BTreeMap::new();
+        for (name, state) in &self.plugins {
+            files.entry(fold(name)).or_insert(*state);
+        }
+        Known {
+            files,
+            game_version: self.game_version.clone(),
+            extenders: self
+                .extenders
+                .iter()
+                .map(|(n, v)| (n.to_ascii_lowercase(), v.clone()))
+                .collect(),
+        }
     }
 }
 
@@ -93,32 +118,39 @@ pub fn version_at_least(a: &str, b: &str) -> bool {
 type Flags = BTreeMap<String, String>;
 
 /// Whether `condition` holds with these flags and facts.
-pub fn holds(condition: &Condition, flags: &BTreeMap<String, String>, facts: &Facts) -> bool {
+pub fn holds(condition: &Condition, flags: &BTreeMap<String, String>, known: &Known) -> bool {
     match condition {
-        Condition::All(parts) => parts.iter().all(|c| holds(c, flags, facts)),
-        Condition::Any(parts) => parts.iter().any(|c| holds(c, flags, facts)),
-        Condition::File { file, state } => facts.state(file) == *state,
+        Condition::All(parts) => parts.iter().all(|c| holds(c, flags, known)),
+        Condition::Any(parts) => parts.iter().any(|c| holds(c, flags, known)),
+        Condition::File { file, state } => {
+            known
+                .files
+                .get(&fold(file))
+                .copied()
+                .unwrap_or(FileState::Missing)
+                == *state
+        }
         Condition::Flag { flag, value } => flags.get(flag).map_or(value.is_empty(), |v| v == value),
-        Condition::Game { version } => facts
+        Condition::Game { version } => known
             .game_version
             .as_deref()
             .map_or(true, |g| version_at_least(g, version)),
         // This port is the manager now; FOMM's own version numbers mean nothing to it.
         Condition::Manager { .. } => true,
-        Condition::Extender { name, version } => facts
+        Condition::Extender { name, version } => known
             .extenders
-            .iter()
-            .any(|(n, v)| n.eq_ignore_ascii_case(name) && version_at_least(v, version)),
+            .get(&name.to_ascii_lowercase())
+            .is_some_and(|v| version_at_least(v, version)),
     }
 }
 
 /// An option's type with these flags.
-pub fn plugin_type(plugin: &Plugin, flags: &Flags, facts: &Facts) -> PluginType {
+pub fn plugin_type(plugin: &Plugin, flags: &Flags, known: &Known) -> PluginType {
     match &plugin.kind {
         TypeDescriptor::Fixed(t) => *t,
         TypeDescriptor::Depends { default, patterns } => patterns
             .iter()
-            .find(|(c, _)| holds(c, flags, facts))
+            .find(|(c, _)| holds(c, flags, known))
             .map_or(*default, |(_, t)| *t),
     }
 }
@@ -192,29 +224,70 @@ pub struct Plan {
     pub refused: Vec<String>,
 }
 
+/// Why there is no plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanError {
+    /// The current choices break a group's rule ([`Session::problems`]): the player must answer
+    /// those steps first.
+    Choices(Vec<(usize, Refused)>),
+    /// The archive's listing is not a mod's (`layout::Listing::new`).
+    Listing(ListingError),
+    /// More copies than [`MAX_COPIES`].
+    TooManyCopies,
+}
+
+impl std::fmt::Display for PlanError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PlanError::Choices(problems) => {
+                let words: Vec<String> = problems.iter().map(|(_, r)| r.0.clone()).collect();
+                write!(f, "{}", words.join("; "))
+            }
+            PlanError::Listing(e) => write!(f, "{e}"),
+            PlanError::TooManyCopies => write!(
+                f,
+                "the installer copies more files than any real mod ({MAX_COPIES} at most)"
+            ),
+        }
+    }
+}
+
 /// One install in progress: the choices made so far.
 #[derive(Debug, Clone)]
 pub struct Session<'a> {
     config: &'a Config,
-    facts: &'a Facts,
-    /// Per step answered: per group, the chosen options' indices.
-    chosen: BTreeMap<usize, Vec<Vec<usize>>>,
+    known: Known,
+    /// Per step answered: per group, one flag per option (chosen or not).
+    chosen: BTreeMap<usize, Vec<Vec<bool>>>,
 }
+
+/// Per group, one flag per option: chosen or not.
+type Selection = Vec<Vec<bool>>;
 
 /// What working through the steps up to one gives: per step whether it is visible and its
 /// effective choices, and the flags after them. One map of flags is kept, never a copy per step,
 /// so a long installer costs time and memory in proportion to its size.
 struct Walk {
     visible: Vec<bool>,
-    selection: Vec<Vec<Vec<usize>>>,
+    selection: Vec<Selection>,
     flags: Flags,
+}
+
+/// The chosen options' indices.
+fn chosen_indices(mask: &[bool]) -> Vec<usize> {
+    mask.iter()
+        .enumerate()
+        .filter(|(_, on)| **on)
+        .map(|(p, _)| p)
+        .collect()
 }
 
 impl<'a> Session<'a> {
     /// A new install, or why the mod cannot be installed (its `moduleDependencies` fail).
-    pub fn new(config: &'a Config, facts: &'a Facts) -> Result<Self, Refused> {
+    pub fn new(config: &'a Config, facts: &Facts) -> Result<Self, Refused> {
+        let known = facts.index();
         if let Some(dependencies) = &config.dependencies {
-            if !holds(dependencies, &Flags::new(), facts) {
+            if !holds(dependencies, &Flags::new(), &known) {
                 return Err(Refused(format!(
                     "\"{}\" needs something that is not there: {}",
                     config.name,
@@ -224,7 +297,7 @@ impl<'a> Session<'a> {
         }
         Ok(Self {
             config,
-            facts,
+            known,
             chosen: BTreeMap::new(),
         })
     }
@@ -240,16 +313,10 @@ impl<'a> Session<'a> {
             let visible = step
                 .visible
                 .as_ref()
-                .map_or(true, |c| holds(c, &walk.flags, self.facts));
+                .map_or(true, |c| holds(c, &walk.flags, &self.known));
             let selection = self.selection(i, &walk.flags);
             if visible {
-                for (g, group) in step.groups.iter().enumerate() {
-                    for &p in &selection[g] {
-                        for (name, value) in &group.plugins[p].flags {
-                            walk.flags.insert(name.clone(), value.clone());
-                        }
-                    }
-                }
+                apply_flags(&step.groups, &selection, &mut walk.flags);
             }
             walk.visible.push(visible);
             walk.selection.push(selection);
@@ -265,13 +332,13 @@ impl<'a> Session<'a> {
     fn types(&self, plugins: &[Plugin], flags: &Flags) -> Vec<PluginType> {
         plugins
             .iter()
-            .map(|p| plugin_type(p, flags, self.facts))
+            .map(|p| plugin_type(p, flags, &self.known))
             .collect()
     }
 
     /// The effective choices of step `i` with the flags before it: the player's (Required ones
     /// added, NotUsable ones dropped), else the defaults.
-    fn selection(&self, i: usize, flags: &Flags) -> Vec<Vec<usize>> {
+    fn selection(&self, i: usize, flags: &Flags) -> Selection {
         let step = &self.config.steps[i];
         step.groups
             .iter()
@@ -279,10 +346,12 @@ impl<'a> Session<'a> {
             .map(|(g, group)| {
                 let types = self.types(&group.plugins, flags);
                 match self.chosen.get(&i) {
-                    Some(chosen) => (0..types.len())
-                        .filter(|&p| {
-                            types[p] == PluginType::Required
-                                || (chosen[g].contains(&p) && types[p] != PluginType::NotUsable)
+                    Some(chosen) => types
+                        .iter()
+                        .enumerate()
+                        .map(|(p, t)| {
+                            *t == PluginType::Required
+                                || (chosen[g][p] && *t != PluginType::NotUsable)
                         })
                         .collect(),
                     None => defaults(group.kind, &types),
@@ -330,7 +399,7 @@ impl<'a> Session<'a> {
                                 description: plugin.description.clone(),
                                 image: plugin.image.clone(),
                                 kind: types[p],
-                                selected: selection[g].contains(&p),
+                                selected: selection[g][p],
                             })
                             .collect(),
                     }
@@ -354,32 +423,41 @@ impl<'a> Session<'a> {
         };
         let walk = self.walk_to(step);
         let types = self.types(&the_group.plugins, &walk.flags);
-        let mut set: Vec<usize> = options.to_vec();
-        set.sort_unstable();
-        set.dedup();
-        if let Some(&bad) = set.iter().find(|&&p| p >= types.len()) {
-            return Err(Refused(format!(
-                "\"{}\" has no option {bad}",
-                the_group.name
-            )));
+        let mut mask = vec![false; types.len()];
+        for &p in options {
+            match mask.get_mut(p) {
+                Some(on) => *on = true,
+                None => return Err(Refused(format!("\"{}\" has no option {p}", the_group.name))),
+            }
         }
         check(
             &the_group.name,
             &the_group.plugins,
             &types,
             effective_kind(the_group.kind, &types),
-            &set,
+            &mask,
         )?;
         let mut answer = self.selection(step, &walk.flags);
-        answer[group] = set;
+        answer[group] = mask;
         self.chosen.insert(step, answer);
         Ok(())
     }
 
+    /// The indices chosen now in group `group` of step `step` (empty when there is none).
+    pub fn chosen(&self, step: usize, group: usize) -> Vec<usize> {
+        if step >= self.config.steps.len() {
+            return vec![];
+        }
+        let walk = self.walk_to(step);
+        self.selection(step, &walk.flags)
+            .get(group)
+            .map_or(vec![], |mask| chosen_indices(mask))
+    }
+
     /// What in the visible steps' current choices breaks a group's rule (a group that needs an
     /// option left with none, an option that became Required or NotUsable through an earlier
-    /// answer): (step, why), in step order. A front end keeps the player on such a step, and
-    /// installs only when this is empty, as Mod Organizer 2 keeps Next disabled.
+    /// answer): (step, why), in step order. A front end keeps the player on such a step, as Mod
+    /// Organizer 2 keeps Next disabled; [`Session::plan`] refuses while there is any.
     pub fn problems(&self) -> Vec<(usize, Refused)> {
         let mut out = Vec::new();
         let mut flags = Flags::new();
@@ -400,21 +478,21 @@ impl<'a> Session<'a> {
                     out.push((i, why));
                 }
             }
-            for (g, group) in step.groups.iter().enumerate() {
-                for &p in &walk.selection[i][g] {
-                    for (name, value) in &group.plugins[p].flags {
-                        flags.insert(name.clone(), value.clone());
-                    }
-                }
-            }
+            apply_flags(&step.groups, &walk.selection[i], &mut flags);
         }
         out
     }
 
     /// The files this install copies, from the archive's `listing` (files with `/` or `\`, as
     /// the archive gives them; folder entries are left out), the installer's folder being
-    /// `prefix` (from [`crate::layout::layout`]).
-    pub fn plan(&self, listing: &[String], prefix: &str) -> Plan {
+    /// `prefix` (from [`crate::layout::layout`]). Refused while [`Session::problems`] is not
+    /// empty, for a listing that is not a mod's, and past [`MAX_COPIES`].
+    pub fn plan(&self, listing: &[String], prefix: &str) -> Result<Plan, PlanError> {
+        let problems = self.problems();
+        if !problems.is_empty() {
+            return Err(PlanError::Choices(problems));
+        }
+        let listing = Listing::new(listing).map_err(PlanError::Listing)?;
         let walk = self.walk();
         let mut items: Vec<&FileItem> = self.config.required.iter().collect();
         for (i, step) in self.config.steps.iter().enumerate() {
@@ -423,11 +501,11 @@ impl<'a> Session<'a> {
             }
             for (g, group) in step.groups.iter().enumerate() {
                 for (p, plugin) in group.plugins.iter().enumerate() {
-                    if walk.selection[i][g].contains(&p) {
+                    if walk.selection[i][g][p] {
                         items.extend(&plugin.files);
                     } else {
                         let usable =
-                            plugin_type(plugin, &walk.flags, self.facts) != PluginType::NotUsable;
+                            plugin_type(plugin, &walk.flags, &self.known) != PluginType::NotUsable;
                         items.extend(
                             plugin
                                 .files
@@ -439,18 +517,46 @@ impl<'a> Session<'a> {
             }
         }
         for (condition, files) in &self.config.conditional {
-            if holds(condition, &walk.flags, self.facts) {
+            if holds(condition, &walk.flags, &self.known) {
                 items.extend(files);
             }
         }
         items.sort_by_key(|f| (f.priority, f.sequence));
-        items.dedup_by_key(|f| f.sequence);
-        resolve(&items, &Listing::new(listing), prefix)
+        // Of identical items (same source, destination, kind and priority) only the last
+        // counts, as it would win anyway: each is resolved once.
+        let mut seen = BTreeSet::new();
+        let mut unique: Vec<&FileItem> = Vec::with_capacity(items.len());
+        for item in items.iter().rev() {
+            let key = (
+                fold(&item.source),
+                item.destination.as_deref().map(fold),
+                item.folder,
+                item.priority,
+            );
+            if seen.insert(key) {
+                unique.push(item);
+            }
+        }
+        unique.reverse();
+        resolve(&unique, &listing, prefix)
     }
 
     /// The flags after every visible step, for a front end that shows them.
     pub fn flags(&self) -> BTreeMap<String, String> {
         self.walk().flags
+    }
+}
+
+/// Sets the flags of a step's chosen options.
+fn apply_flags(groups: &[crate::config::Group], selection: &Selection, flags: &mut Flags) {
+    for (g, group) in groups.iter().enumerate() {
+        for (p, plugin) in group.plugins.iter().enumerate() {
+            if selection[g][p] {
+                for (name, value) in &plugin.flags {
+                    flags.insert(name.clone(), value.clone());
+                }
+            }
+        }
     }
 }
 
@@ -461,61 +567,57 @@ impl<'a> Session<'a> {
 /// ticks `first_optional`, else `first_couldbe`, when `mustSelectOne`). Vortex picks the first
 /// option only for ExactlyOne, even a NotUsable one, and leaves AtLeastOne empty; a NotUsable
 /// option is never picked here.
-fn defaults(kind: GroupType, types: &[PluginType]) -> Vec<usize> {
+fn defaults(kind: GroupType, types: &[PluginType]) -> Vec<bool> {
     let kind = effective_kind(kind, types);
-    let all: Vec<usize> = (0..types.len()).collect();
-    let first = |t: PluginType| all.iter().find(|&&p| types[p] == t).copied();
-    let last = |t: PluginType| all.iter().rev().find(|&&p| types[p] == t).copied();
-    let fallback = || {
-        first(PluginType::Optional)
-            .or_else(|| first(PluginType::CouldBeUsable))
-            .into_iter()
-            .collect::<Vec<_>>()
+    let first = |t: PluginType| types.iter().position(|x| *x == t);
+    let last = |t: PluginType| types.iter().rposition(|x| *x == t);
+    let mut mask = vec![false; types.len()];
+    let fallback = |mask: &mut Vec<bool>| {
+        if let Some(p) = first(PluginType::Optional).or_else(|| first(PluginType::CouldBeUsable)) {
+            mask[p] = true;
+        }
     };
     match kind {
-        GroupType::SelectAll => all
-            .iter()
-            .copied()
-            .filter(|&p| types[p] != PluginType::NotUsable)
-            .collect(),
+        GroupType::SelectAll => {
+            for (p, t) in types.iter().enumerate() {
+                mask[p] = *t != PluginType::NotUsable;
+            }
+        }
         GroupType::SelectExactlyOne | GroupType::SelectAtMostOne => {
             match last(PluginType::Required).or_else(|| first(PluginType::Recommended)) {
-                Some(p) => vec![p],
-                None if kind == GroupType::SelectExactlyOne => fallback(),
-                None => vec![],
+                Some(p) => mask[p] = true,
+                None if kind == GroupType::SelectExactlyOne => fallback(&mut mask),
+                None => {}
             }
         }
         GroupType::SelectAtLeastOne | GroupType::SelectAny => {
-            let on: Vec<usize> = all
-                .iter()
-                .copied()
-                .filter(|&p| matches!(types[p], PluginType::Required | PluginType::Recommended))
-                .collect();
-            if on.is_empty() && kind == GroupType::SelectAtLeastOne {
-                fallback()
-            } else {
-                on
+            for (p, t) in types.iter().enumerate() {
+                mask[p] = matches!(t, PluginType::Required | PluginType::Recommended);
+            }
+            if kind == GroupType::SelectAtLeastOne && !mask.contains(&true) {
+                fallback(&mut mask);
             }
         }
     }
+    mask
 }
 
-/// Whether `set` keeps the group's rule and its options' types.
+/// Whether the chosen options (`mask`) keep the group's rule and its options' types.
 fn check(
     name: &str,
     plugins: &[Plugin],
     types: &[PluginType],
     kind: GroupType,
-    set: &[usize],
+    mask: &[bool],
 ) -> Result<(), Refused> {
     for (p, t) in types.iter().enumerate() {
-        if *t == PluginType::Required && !set.contains(&p) {
+        if *t == PluginType::Required && !mask[p] {
             return Err(Refused(format!(
                 "\"{}\" in \"{name}\" is required",
                 plugins[p].name
             )));
         }
-        if *t == PluginType::NotUsable && set.contains(&p) {
+        if *t == PluginType::NotUsable && mask[p] {
             return Err(Refused(format!(
                 "\"{}\" in \"{name}\" can't be chosen",
                 plugins[p].name
@@ -526,7 +628,7 @@ fn check(
         .iter()
         .filter(|t| **t != PluginType::NotUsable)
         .count();
-    let n = set.len();
+    let n = mask.iter().filter(|on| **on).count();
     let ok = match kind {
         _ if usable == 0 => true,
         GroupType::SelectExactlyOne => n == 1,
@@ -565,12 +667,13 @@ fn describe(condition: &Condition) -> String {
     }
 }
 
-/// Whether a path part is one of Windows' device names (`CON`, `NUL`, `COM1`...), with or without
-/// an extension: Windows opens the device for such a name in any folder.
-fn device_name(part: &str) -> bool {
-    let stem = fold_part(part);
-    let stem = stem.split('.').next().unwrap_or_default().trim_end();
-    matches!(stem, "con" | "prn" | "aux" | "nul")
+/// Whether a path part is one of Windows' device names (`CON`, `NUL`, `CONIN$`, `COM1`...), with
+/// or without an extension, and with spaces before the dot (`CON .txt`): Windows opens the device
+/// for such a name in any folder. `COM10` and `aux_cable` are ordinary names.
+pub fn device_name(part: &str) -> bool {
+    let folded = fold_part(part);
+    let stem = folded.split('.').next().unwrap_or_default().trim_end();
+    matches!(stem, "con" | "prn" | "aux" | "nul" | "conin$" | "conout$")
         || ((stem.starts_with("com") || stem.starts_with("lpt"))
             && stem.chars().count() == 4
             && stem
@@ -589,15 +692,24 @@ fn inside_data(raw: &str) -> bool {
 }
 
 /// The copies for these items, in the order where a later one wins.
-fn resolve(items: &[&FileItem], listing: &Listing, prefix: &str) -> Plan {
+fn resolve(items: &[&FileItem], listing: &Listing, prefix: &str) -> Result<Plan, PlanError> {
     let prefix = normalise(prefix);
     let mut plan = Plan::default();
     let mut refused: BTreeSet<String> = BTreeSet::new();
     let mut chosen: BTreeMap<String, FileCopy> = BTreeMap::new();
-    let mut put = |refused: &mut BTreeSet<String>, destination: String, source: &str, priority| {
+    let mut considered = 0usize;
+    let mut put = |refused: &mut BTreeSet<String>,
+                   destination: String,
+                   source: &str,
+                   priority: i64|
+     -> Result<(), PlanError> {
+        considered += 1;
+        if considered > MAX_COPIES {
+            return Err(PlanError::TooManyCopies);
+        }
         if !inside_data(&destination) {
             refused.insert(destination);
-            return;
+            return Ok(());
         }
         let destination = normalise(&destination);
         chosen.insert(
@@ -608,6 +720,7 @@ fn resolve(items: &[&FileItem], listing: &Listing, prefix: &str) -> Plan {
                 priority,
             },
         );
+        Ok(())
     };
     for item in items {
         let source = join(&prefix, &normalise(&item.source));
@@ -631,7 +744,7 @@ fn resolve(items: &[&FileItem], listing: &Listing, prefix: &str) -> Plan {
                     join(&normalise(&raw_destination), &rest),
                     given,
                     item.priority,
-                );
+                )?;
             }
         } else {
             match listing.file(&source) {
@@ -646,7 +759,7 @@ fn resolve(items: &[&FileItem], listing: &Listing, prefix: &str) -> Plan {
                     } else {
                         trimmed.to_owned()
                     };
-                    put(&mut refused, destination, given, item.priority);
+                    put(&mut refused, destination, given, item.priority)?;
                 }
                 None => plan.missing.push(item.source.clone()),
             }
@@ -654,5 +767,5 @@ fn resolve(items: &[&FileItem], listing: &Listing, prefix: &str) -> Plan {
     }
     plan.copies = chosen.into_values().collect();
     plan.refused = refused.into_iter().collect();
-    plan
+    Ok(plan)
 }
