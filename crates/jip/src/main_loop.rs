@@ -57,6 +57,10 @@ pub enum Native {
     /// `EndWeatherTransition` (`internal/patches_game.h`, G90's `CloudsFixHook`): the sky's
     /// `transWeather` (`+0x14`) cleared.
     EndWeatherTransition,
+    /// `RegisterInsertObject` (`InsertNode`, `AttachModel` asked on another thread to change the
+    /// 3D now): the request kept under the callback's `this` (a key of
+    /// `commands::jip_fn_misc_ref_insert`).
+    RegisterInsertObject,
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallback
@@ -86,6 +90,9 @@ fn execute_native(e: &mut Engine, native: Native, this_obj: u32) {
             if this_obj != 0 {
                 e.mem.set_u32(this_obj + 0x14, 0);
             }
+        }
+        Native::RegisterInsertObject => {
+            crate::commands::jip_fn_misc_ref_insert::run_pending(e, this_obj);
         }
     }
 }
