@@ -42,7 +42,34 @@ const A8R8G8B8: u32 = 21;
 const D24S8: u32 = 75;
 const SIZE: u32 = 256;
 const NEAR: f64 = 10.0;
-const FAR: f64 = 10_000.0;
+/// The far plane: 10,000 units, or 100,000 in the far scene ([`FAR_SCENE`]).
+fn far_plane() -> f64 {
+    if FAR_SCENE.get() {
+        100_000.0
+    } else {
+        10_000.0
+    }
+}
+thread_local! {
+    /// The far scene (distant shadows): the camera high over a wide land, looking far ahead; on
+    /// for this test's thread while a [`FarScene`] lives (each test runs on a thread of its own).
+    static FAR_SCENE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The far scene on for the test's thread until dropped (then as it was).
+struct FarScene(bool);
+
+impl FarScene {
+    fn on() -> FarScene {
+        FarScene(FAR_SCENE.replace(true))
+    }
+}
+
+impl Drop for FarScene {
+    fn drop(&mut self) {
+        FAR_SCENE.set(self.0);
+    }
+}
 /// The frustum at unit distance: left, right, bottom, top (a 53-degree square view).
 const HALF: f64 = 0.5;
 const GREY: u32 = 0xFF80_8080;
@@ -71,6 +98,14 @@ fn run(b: &mut WgpuBackend, cmd: Cmd<Data<'_>>) {
 /// The camera: at (0, -400, 300), looking toward +y and 35 degrees down; its axes (right, up,
 /// ahead) in the world.
 fn camera() -> ([f64; 3], [[f64; 3]; 3]) {
+    if FAR_SCENE.get() {
+        // At (0, 0, 3000), looking toward +y and 10 degrees down.
+        let (s, c) = 10f64.to_radians().sin_cos();
+        return (
+            [0.0, 0.0, 3000.0],
+            [[1.0, 0.0, 0.0], [0.0, s, c], [0.0, c, -s]],
+        );
+    }
     let (s, c) = 35f64.to_radians().sin_cos();
     let ahead = [0.0, c, -s];
     let up = [0.0, s, c];
@@ -104,7 +139,8 @@ fn model_view_proj() -> [[f32; 4]; 4] {
         .map(|a| [a[0], a[1], a[2], -dot(*a, pos)])
         .collect();
     let (sx, sy) = (1.0 / HALF, 1.0 / HALF);
-    let (zs, zo) = (FAR / (FAR - NEAR), -NEAR * FAR / (FAR - NEAR));
+    let far = far_plane();
+    let (zs, zo) = (far / (far - NEAR), -NEAR * far / (far - NEAR));
     for k in 0..4 {
         rows[0][k] = sx * view[0][k];
         rows[1][k] = sy * view[1][k];
@@ -415,7 +451,7 @@ fn hook_words() -> ([u32; 16], [u32; 16]) {
     let sun = to_sun();
     let view = Params {
         near: NEAR as f32,
-        far: FAR as f32,
+        far: far_plane() as f32,
         left: -HALF as f32,
         right: HALF as f32,
         bottom: -HALF as f32,
@@ -758,6 +794,12 @@ struct Extra {
     /// Other buffers (and their triangle counts) drawn far off (at x -3000, y 3000): new
     /// geometries whose shadows fall nowhere the tests look.
     also: [Option<(u32, u32)>; 2],
+    /// The far scene's land ([`FAR_GROUND`]), tower ([`TOWER`]) and long wall ([`WALL`]).
+    far_ground: bool,
+    tower: bool,
+    wall: bool,
+    /// The world word (`sun_shadow::WORLD_STATE`) before the scene's words.
+    world: Option<u32>,
 }
 
 /// What the index buffer of [`TUBES`] names.
@@ -970,6 +1012,25 @@ const STRIP_IB: u32 = 0x1670;
 const TUBE_CORNERS: u32 = 16 * 6 * 2 * 3;
 const PADDING: u32 = 10;
 const STRIP_PADDING: u32 = 7;
+/// The far scene ([`FAR_SCENE`]): land 80,000 wide and 60,000 deep (radius about 50,000: no caster for
+/// the cascades, as the game's LOD land), a tower 1,000 a side and 4,000 high at (2000, 20000) (its
+/// shadow on the land at x -1500 to 1500, past the cascades), and a wall 200 thick, 1,000 high along y
+/// 5000 to 14000 at x 1500 (its shadow at x 650 to 1400, across the end of the cascades).
+const FAR_GROUND: u32 = 0x1680;
+const TOWER: u32 = 0x1690;
+const WALL: u32 = 0x16A0;
+
+/// A box from (x0, y0, 0) to (x1, y1, h): its top and four sides.
+fn cuboid(x0: f32, x1: f32, y0: f32, y1: f32, h: f32) -> Vec<[f32; 3]> {
+    let quad = |a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]| vec![a, b, c, a, c, d];
+    let mut v = Vec::new();
+    v.extend(quad([x0, y0, h], [x1, y0, h], [x1, y1, h], [x0, y1, h]));
+    v.extend(quad([x0, y0, 0.0], [x1, y0, 0.0], [x1, y0, h], [x0, y0, h]));
+    v.extend(quad([x0, y1, 0.0], [x1, y1, 0.0], [x1, y1, h], [x0, y1, h]));
+    v.extend(quad([x0, y0, 0.0], [x0, y1, 0.0], [x0, y1, h], [x0, y0, h]));
+    v.extend(quad([x1, y0, 0.0], [x1, y1, 0.0], [x1, y1, h], [x1, y0, h]));
+    v
+}
 
 /// [`CABLES`]' corners as triangles.
 fn cable_corners((x, h, r): (f32, f32, f32)) -> Vec<[f32; 3]> {
@@ -1040,6 +1101,25 @@ fn state(b: &mut WgpuBackend, state: u32, value: u32) {
 /// The moving box, the square after the clear and the cut-out with its shaders and checker
 /// texture, made once on a backend.
 fn extras(b: &mut WgpuBackend) {
+    let (g0, g1, h0, h1) = (-40_000.0, 40_000.0, 0.0, 60_000.0);
+    buffer(
+        b,
+        FAR_GROUND,
+        &[
+            [g0, h0, 0.0],
+            [g1, h0, 0.0],
+            [g1, h1, 0.0],
+            [g0, h0, 0.0],
+            [g1, h1, 0.0],
+            [g0, h1, 0.0],
+        ],
+    );
+    buffer(
+        b,
+        TOWER,
+        &cuboid(1500.0, 2500.0, 19_500.0, 20_500.0, 4000.0),
+    );
+    buffer(b, WALL, &cuboid(1400.0, 1600.0, 5000.0, 14_000.0, 1000.0));
     buffer(b, MOVING_BOX, &box_corners(0.0, 0.0, 30.0, 60.0));
     for (n, c) in CABLES.iter().enumerate() {
         buffer(b, CABLE + n as u32, &cable_corners(*c));
@@ -1389,6 +1469,16 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
             run(b, Cmd::Destroy { object });
         }
         if words {
+            if let Some(w) = e.world {
+                run(
+                    b,
+                    Cmd::SetTransform {
+                        device: DEVICE,
+                        state: sun_shadow::WORLD_STATE,
+                        matrix: Data::from_words(&sun_shadow::world_words(w)),
+                    },
+                );
+            }
             for (state, m) in [
                 (sun_shadow::VIEW_STATE, view),
                 (sun_shadow::BEGIN_STATE, frame),
@@ -1410,6 +1500,15 @@ fn lit_sequence(b: &mut WgpuBackend, frames: &[Extra], words: bool) -> Vec<Vec<[
         draw(b, GROUND, 2);
         if e.still_box {
             draw(b, BOX, 10);
+        }
+        if e.far_ground {
+            draw(b, FAR_GROUND, 2);
+        }
+        if e.tower {
+            draw(b, TOWER, 10);
+        }
+        if e.wall {
+            draw(b, WALL, 10);
         }
         for (buffer, triangles) in e.also.iter().flatten() {
             set_mvp(b, model_view_proj_at(-3000.0, 3000.0));
@@ -2754,5 +2853,157 @@ fn a_released_geometry_at_two_places_goes_at_both() {
     );
     for f in [4, 5] {
         assert!(on[f] == off[f], "frame {f}: both places let go");
+    }
+}
+
+/// [`lit_sequence`] in the far scene ([`FAR_SCENE`]) with the sun shadows `on` (the words with
+/// them), and the times the far map was drawn; none without an adapter.
+fn far_sequence(samples: u32, on: bool, frames: &[Extra]) -> Option<(Vec<Pixels>, u64)> {
+    let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let _far = FarScene::on();
+    sun_shadow::enable(on);
+    let b = backend(samples);
+    sun_shadow::enable(false);
+    let mut b = b?;
+    let px = lit_sequence(&mut b, frames, on);
+    let drawn = b.device().map_or(0, |d| d.sun_far_maps_drawn());
+    Some((px, drawn))
+}
+
+/// The far scene's land with the tower (`tower`) and the wall (`wall`).
+fn far_land(tower: bool, wall: bool) -> Extra {
+    Extra {
+        far_ground: true,
+        tower,
+        wall,
+        ..Extra::default()
+    }
+}
+
+/// A tall caster far past the cascades (a tower 20,000 units out, where the cascades end at
+/// 10,000) shadows the land there from the far map; beside its shadow the land stays lit.
+#[test]
+fn a_far_caster_past_the_cascades_shadows_the_land() {
+    let _far = FarScene::on();
+    let frames = [far_land(true, false); 3];
+    for samples in [1, 4] {
+        let Some((off, _)) = far_sequence(samples, false, &frames) else {
+            return;
+        };
+        let (on, drawn) = far_sequence(samples, true, &frames).expect("the adapter");
+        assert!(drawn > 0, "the far map was drawn");
+        let shade = taken_at(&off[2], &on[2], -500.0, 20_000.0);
+        let beside =
+            [(-3000.0, 20_000.0), (-500.0, 17_000.0)].map(|(x, y)| taken_at(&off[2], &on[2], x, y));
+        eprintln!("the tower's far shadow takes {shade}, beside it {beside:?} ({samples})");
+        assert!(shade > 0.8, "in the tower's shadow: {shade} ({samples})");
+        assert!(
+            beside.iter().all(|&t| t < 0.1),
+            "beside it: {beside:?} ({samples})"
+        );
+    }
+}
+
+/// A long wall across the end of the cascades (view depths about 5,000 to 14,000) casts one
+/// unbroken shadow: no step where the last cascade blends into the far map, and no end of the
+/// shadow where the cascades end.
+#[test]
+fn a_shadow_across_the_end_of_the_cascades_has_no_step() {
+    let _far = FarScene::on();
+    let frames = [far_land(false, true); 3];
+    for samples in [1, 4] {
+        let Some((off, _)) = far_sequence(samples, false, &frames) else {
+            return;
+        };
+        let (on, _) = far_sequence(samples, true, &frames).expect("the adapter");
+        // y 6000 to 13750 (the wall ends at 14000).
+        let along: Vec<f32> = (0..=31)
+            .map(|i| taken_at(&off[2], &on[2], 1100.0, 6000.0 + 250.0 * f64::from(i)))
+            .collect();
+        eprintln!("the wall's shadow along it: {along:.2?} ({samples})");
+        assert!(
+            along.iter().all(|&t| t > 0.8),
+            "the wall's shadow along it {along:?} ({samples})"
+        );
+        let step = along
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(step < 0.15, "a step of {step} along {along:?} ({samples})");
+    }
+}
+
+/// While nothing changes (the camera, the sun and the far casters still), the far map is drawn
+/// once and never again.
+#[test]
+fn the_far_map_is_not_drawn_again_while_nothing_changes() {
+    let Some((_, first)) = far_sequence(1, true, &[far_land(true, false); 3]) else {
+        return;
+    };
+    let (_, later) = far_sequence(1, true, &[far_land(true, false); 12]).expect("the adapter");
+    eprintln!("the far map drawn {first} times in 3 frames, {later} in 12");
+    assert_eq!(first, 1);
+    assert_eq!(later, first);
+}
+
+/// A new world forgets the far casters as the cascades' (the tower of the world left behind casts
+/// nothing in the new one), while in the same world a tower not drawn keeps its far shadow through
+/// its grace.
+#[test]
+fn a_new_world_forgets_the_far_casters() {
+    let _far = FarScene::on();
+    let in_world = |w, tower| Extra {
+        world: Some(w),
+        ..far_land(tower, false)
+    };
+    let same = [
+        in_world(1, true),
+        in_world(1, true),
+        in_world(1, true),
+        in_world(1, false),
+        in_world(1, false),
+        in_world(1, false),
+    ];
+    let new = [
+        in_world(1, true),
+        in_world(1, true),
+        in_world(1, true),
+        in_world(2, false),
+        in_world(2, false),
+        in_world(2, false),
+    ];
+    let Some((off, _)) = far_sequence(1, false, &same) else {
+        return;
+    };
+    let (kept, _) = far_sequence(1, true, &same).expect("the adapter");
+    let (forgot, _) = far_sequence(1, true, &new).expect("the adapter");
+    let kept = taken_at(&off[5], &kept[5], -500.0, 20_000.0);
+    let forgot = taken_at(&off[5], &forgot[5], -500.0, 20_000.0);
+    eprintln!("the tower not drawn: same world {kept}, a new world {forgot}");
+    assert!(
+        kept > 0.8,
+        "the same world keeps it through its grace: {kept}"
+    );
+    assert!(forgot < 0.1, "a new world forgets it: {forgot}");
+}
+
+/// Off, the far scene with every far caster and the words in the stream: every frame bit for bit
+/// the one without the words.
+#[test]
+fn off_the_far_scene_changes_nothing() {
+    let _far = FarScene::on();
+    let frames = [far_land(true, true); 4];
+    for samples in [1, 4] {
+        let Some((plain, drawn)) = far_sequence(samples, false, &frames) else {
+            return;
+        };
+        assert_eq!(drawn, 0);
+        let with_words = {
+            let _turn = TURN.lock().unwrap_or_else(|e| e.into_inner());
+            sun_shadow::enable(false);
+            let mut b = backend(samples).expect("the adapter");
+            lit_sequence(&mut b, &frames, true)
+        };
+        assert!(plain == with_words, "{samples} samples");
     }
 }

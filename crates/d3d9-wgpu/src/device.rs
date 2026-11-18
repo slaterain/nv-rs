@@ -7074,7 +7074,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let far_turned = sun
             .far_keep
             .turn(frame.to_sun)
-            .is_none_or(|t| t >= sun_shadow::turn_limit(far_texel, sine));
+            .map_or(true, |t| t >= sun_shadow::turn_limit(far_texel, sine));
         if far_turned {
             sun.far_keep.take(frame.to_sun);
         }

@@ -2175,8 +2175,7 @@ fn lookup_consts() -> String {
          const SLOPE_MAX: f32 = {SLOPE_MAX:?};\nconst DEPTH_RANGE: f32 = {:?};\n\
          const SUN_WIDTH: f32 = {SUN_WIDTH:?};\nconst THIN_NEAR: f32 = {THIN_NEAR:?};\n\
          const FAR_DEPTH: f32 = {:?};\nconst FAR_EDGE: f32 = {FAR_EDGE:?};\n",
-        DEPTH_RANGE as f32,
-        FAR_DEPTH as f32
+        DEPTH_RANGE as f32, FAR_DEPTH as f32
     )
 }
 
@@ -2594,7 +2593,8 @@ impl Gpu {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: MAP_FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             })
             .create_view(&Default::default());
@@ -4760,6 +4760,7 @@ mod tests {
             &c,
             &c,
             [false, true, false, false],
+            None,
             f.axes(),
             wide(f.position),
             8,
@@ -4779,6 +4780,29 @@ mod tests {
         assert_eq!(at(29), (c[1].half * 2.0 / f64::from(THIN_SIZE)) as f32);
         assert_eq!(at(32), c[0].view_to_light[0][0] as f32);
         assert_eq!(at(32 + 16 * 3 + 15), 1.0);
+        // No far map: its texel 0 (the lookups leave it out).
+        assert_eq!(at(32 + 64 + 12), 0.0);
+        // With one: its rows from this frame's view and its texel.
+        let far = far_place(wide(f.position), b);
+        let u = lookup_uniforms(
+            &view(),
+            f.strength,
+            &c,
+            &c,
+            [false; CASCADES],
+            Some(&far),
+            f.axes(),
+            wide(f.position),
+            1,
+            2560,
+            1440,
+        );
+        let at = |i: usize| f32::from_le_bytes(u[4 * i..4 * i + 4].try_into().unwrap());
+        let rows = far.view_to_light_for(f.axes(), wide(f.position));
+        assert_eq!(at(32 + 64), rows[0][0] as f32);
+        assert_eq!(at(32 + 64 + 11), rows[2][3] as f32);
+        assert_eq!(at(32 + 64 + 12), far.texel as f32);
+        assert_eq!(far.texel, 64.0);
         // No sun: the lookup is off.
         let off = lookup_uniforms(
             &view(),
@@ -4786,6 +4810,7 @@ mod tests {
             &c,
             &c,
             [false; CASCADES],
+            None,
             f.axes(),
             wide(f.position),
             1,
@@ -4793,6 +4818,62 @@ mod tests {
             1440,
         );
         assert_eq!(f32::from_le_bytes(off[44..48].try_into().unwrap()), 0.0);
+    }
+
+    #[test]
+    fn the_far_map_is_centred_on_the_camera_and_snapped() {
+        let b = basis([0.6, 0.0, 0.8]);
+        let a = far_place([1000.0, 2000.0, 300.0], b);
+        assert_eq!((a.half, a.depth, a.size), (FAR_HALF, FAR_DEPTH, FAR_SIZE));
+        assert_eq!(a.step, FAR_STEP_TEXELS * a.texel);
+        // A step's worth less a little: the same map; a step: another.
+        let moved = |d: f64| far_place([1000.0 + d * b[0][0], 2000.0, 300.0 + d * b[0][2]], b);
+        assert!(still_good(Some(&a), &moved(10.0), false));
+        assert!(!still_good(Some(&a), &moved(a.step), false));
+        assert!(!still_good(Some(&a), &a, true));
+        // The camera's own place is near the middle of the map (within half a step).
+        let p = place_point(
+            &[
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+            ],
+            [1000.0, 2000.0, 300.0],
+        );
+        let m = a.world_to_light(&[
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+        ]);
+        let x = f64::from(m[0][0]) * p[0]
+            + f64::from(m[0][1]) * p[1]
+            + f64::from(m[0][2]) * p[2]
+            + f64::from(m[0][3]);
+        assert!(x.abs() <= 0.5 * a.step / a.half + 1e-6, "{x}");
+    }
+
+    #[test]
+    fn the_far_map_takes_the_land_and_large_objects_not_the_sky_or_small_things() {
+        let camera = [1000.0, 2000.0, 300.0];
+        let at = |p: [f64; 3], scale: f64| -> World {
+            [
+                [scale, 0.0, 0.0, p[0]],
+                [0.0, scale, 0.0, p[1]],
+                [0.0, 0.0, scale, p[2]],
+            ]
+        };
+        let far = [30_000.0, 2000.0, 0.0];
+        // An LOD land block (radius 30,000): far only.
+        assert!(far_casts(&at(far, 1.0), ([0.0; 3], 30_000.0), camera));
+        assert!(!casts(&at(far, 1.0), ([0.0; 3], 30_000.0), camera));
+        // A house (radius 1,200): both.
+        assert!(far_casts(&at(far, 1.0), ([0.0; 3], 1200.0), camera));
+        // A rock (radius 300): the cascades only.
+        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 300.0), camera));
+        // The sky's dome round the camera, placed at it: neither.
+        assert!(!far_casts(&at(camera, 1.0), ([0.0; 3], 50_000.0), camera));
+        // Larger than any land: not.
+        assert!(!far_casts(&at(far, 1.0), ([0.0; 3], 200_000.0), camera));
     }
 
     #[test]
