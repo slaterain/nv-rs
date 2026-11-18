@@ -234,7 +234,7 @@ fi
 # which the Windows script reads too.
 [ -f scripts/package-needles.txt ] || fail "scripts/package-needles.txt is missing"
 shared=0
-while IFS= read -r needle; do
+while IFS= read -r needle || [ -n "$needle" ]; do
     needle=$(printf '%s' "$needle" | tr -d '\r')
     case $needle in
     '' | '#'*) continue ;;
