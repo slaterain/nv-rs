@@ -204,7 +204,7 @@ fn editor_map(e: &mut Engine, entries: &[(&str, u32)]) -> u32 {
 // ---- rows and install ----
 
 /// JIP's `InitJIPHooks` addresses, in address order: H06 `0x447155`, H04 `0x465488`, H03's
-/// twelve, H12's two calls and H05 `0xA68D6B`; H12's wrap `0x50DE20`.
+/// twelve, `Clone3D`'s `0x50EF46`, H12's two calls and H05 `0xA68D6B`; H12's wrap `0x50DE20`.
 #[test]
 fn gl2_rows_are_jips_addresses() {
     assert_eq!(
@@ -213,6 +213,7 @@ fn gl2_rows_are_jips_addresses() {
             0x0044_7155,
             0x0046_5488,
             0x0050_da73,
+            0x0050_ef46,
             0x0079_2dc0,
             0x007c_6f86,
             0x007f_c4da,
@@ -239,7 +240,8 @@ fn gl2_rows_are_jips_addresses() {
 
 /// JIP not installed: no seam answers, the wrap is not made (the exe's `0050de20` runs), the
 /// three slots keep what they held. Installed (the fixes row off): every seam answers, the slots
-/// hold the routines, the wrap is JIP's.
+/// hold the routines, the wrap is JIP's. (The lead's decision, review of #700: JIP's light data is
+/// JIP's own behaviour, in with JIP installed in every preset, the original-behaviour one too.)
 #[test]
 fn gl2_goes_in_with_jip_only() {
     for (installed, row) in [(false, true), (true, false)] {
@@ -468,6 +470,25 @@ fn h06_marks_parents_up_to_the_root_only() {
     assert_eq!(e.site(LOAD_NIF.addr(), &[root]), Some(0));
     assert_eq!(e.mem.u8(inner + FLAGS_HIGH), 0x20);
     assert_eq!(e.mem.u8(root + FLAGS_HIGH), 0x40, "the walk stopped below");
+}
+
+// ---- H06's companion: Clone3D ----
+
+/// `Clone3D`'s seam: a model marked `0x20000000` (byte +0x33 bit 0x20) answers 1 (cloned), other
+/// bits of the byte or none answer 0 (the exe's checks), no model 0.
+#[test]
+fn clone_3d_clones_a_model_with_jips_lights() {
+    let mut e = world();
+    for (byte, answer) in [(0x20u8, 1u32), (0x60, 1), (0x40, 0), (0xdf, 0), (0, 0)] {
+        let model = node(&mut e, &[]);
+        e.mem.set_u8(model + FLAGS_HIGH, byte);
+        assert_eq!(
+            e.site(CLONE_3D.addr(), &[model, 0x0400, 0x0500]),
+            Some(answer),
+            "{byte:02x}"
+        );
+    }
+    assert_eq!(e.site(CLONE_3D.addr(), &[0, 0x0400, 0]), Some(0));
 }
 
 // ---- the list ----
@@ -806,6 +827,12 @@ fn h12_updates_jips_lights() {
     lights_list(&mut e).extend([gone, detached, hidden, fresh, pulsing, still]);
     // Another thread adds a light while the step runs (here: at the scene add): kept after the list.
     let late = make(&mut e, true, 3, steady);
+    // The constructed `ShadowSceneLight` has bytes of its own after +0xFC: kept.
+    e.register(SCENE_LIGHT_CONSTRUCT, |e, a| {
+        log(SCENE_LIGHT_CONSTRUCT, a);
+        e.mem.set_u32(a[0] + SCENE_LIGHT_FC, 0x5c5d_5e00);
+        a[0].into_ret()
+    });
     e.register_double(SCENE_ADD_LIGHT, move |e, a| {
         log(SCENE_ADD_LIGHT, a);
         lights_list(e).push(late);
@@ -836,7 +863,12 @@ fn h12_updates_jips_lights() {
     assert_eq!(calls(SCENE_ADD_LIGHT), vec![vec![scene, scene_light]]);
     assert_eq!(e.mem.u16(scene_light + SCENE_LIGHT_POINT), 1);
     assert_eq!(e.mem.u32(scene_light + SCENE_LIGHT_LIGHT), fresh);
-    assert_eq!(e.mem.u32(scene_light + SCENE_LIGHT_FC), 1);
+    assert_eq!(e.mem.u8(scene_light + SCENE_LIGHT_FC), 1);
+    assert_eq!(
+        e.mem.u32(scene_light + SCENE_LIGHT_FC),
+        0x5c5d_5e01,
+        "one byte written, +0xFD..+0xFF kept"
+    );
     assert_eq!(e.mem.u32(scene_light + SCENE_LIGHT_240), 0x0abc);
     assert_eq!(e.mem.u32(fresh + REF_COUNT), 2);
     assert_eq!(e.mem.f32(fresh + DIMMER), 1.0, "set, not animated");

@@ -34,6 +34,10 @@ pub(in super::super) const SITES: &[Entry] = &[
     // H03 (`SafeWrite32(addr, 0x110)`, twelve places): every point light allocated at 0x110 bytes,
     // JIP's light data after the game's object. `TESObjectLIGH::GenDynamic` 0050d810.
     row(0x0050_da73),
+    // H06's companion (`WriteRelJump(0x50EF46, CreateObjectNodeHook)`): `TESBoundObject::Clone3D`
+    // 0050ee50 clones, never shares, a model whose root holds JIP's point lights (seam in
+    // `tesobject.rs`).
+    row(0x0050_ef46),
     // H03: `LoveTesterMenu::InitMachine` 007928e0.
     row(0x0079_2dc0),
     // H03: `SPECIALBookMenu::InitBook` 007c6ce0.

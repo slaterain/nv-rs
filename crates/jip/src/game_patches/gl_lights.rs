@@ -16,6 +16,11 @@
 //!   on the root), has each point light with a `LIGH_EDID` string extra naming a form's editor id
 //!   tied to that form (+0xE8, flag `0x20000000` on the light and every node up to the root), and
 //!   the extra removed ([`load_nif`]).
+//! - H06's companion (`WriteRelJump(0x50EF46, CreateObjectNodeHook)`, made with H06 in
+//!   `InitJIPHooks`): `TESBoundObject::Clone3D` 0050ee50 never shares a model whose root carries
+//!   such lights (`0x20000000`) with a reference, it clones it, so each reference's 3D has lights
+//!   of its own for H09's attach to list ([`clone_3d`]). JIP's same hook also clones the models
+//!   of forms marked by `InsertObject`/`AttachModel` (H08): not built until those commands are.
 //! - H07 (`SafeWrite32(0x109DD0C, DestroyNiPointLightHook)`, `NiPointLight`'s deleting
 //!   destructor slot): the destructor frees 0x110 bytes, and none for a light of JIP's (flag
 //!   `0x20000000`), which the list below frees ([`destroy_point_light`]).
@@ -26,6 +31,15 @@
 //!   [`add_point_lights`] fills: H09's attach, `gp::queued_reference`) are freed when let go, set
 //!   from their form again when marked, put into the scene's lights once (a `ShadowSceneLight`)
 //!   and animated ([`animated_lights`]).
+//!
+//! **In with JIP installed, in every preset (the lead's decision, review of #700).** These are
+//! JIP's own built-in light handling (`InitJIPHooks`, not a `[GamePatches]` switch), so they go
+//! in whenever JIP answers "installed", with the game-patches row on or off: with JIP installed,
+//! flickering and pulsing lights use JIP's animation and point lights carry JIP's extra fields in
+//! every preset, the original-behaviour one included. This is JIP's own behaviour, not an option.
+//! Point lights and light forms are made bigger in place (H03, H04), as JIP makes them, not kept
+//! in a port-side record: the light's own code (the clone's member copy, the destructor) carries
+//! JIP's fields with the object.
 //!
 //! **What the renderer receives changes only with JIP installed.** With JIP not installed every
 //! seam above is one load and the exe's path; the wrap and the three slot writes are not made.
@@ -73,15 +87,19 @@ pub const ANIMATED_LIGHTS: [SiteSlot; 2] = [
 ];
 /// H05: `NiDynamicEffect`'s member copy of the byte +0x9C (words: none; answered: the word).
 pub const CLONE_WORD: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a6_8d6b);
+/// H06's companion: `Clone3D`'s choice to share a model (words: the model, the form, the reference;
+/// answered: 1 to clone).
+pub const CLONE_3D: SiteSlot = SiteSlot::new(Owner::Jip, 0x0050_ef46);
 /// H12: a light form's animation of its point light (`thiscall` on the form: the light data
 /// (its first word the point light) and a word the callers pass as 0; `RET 8`).
 pub const UPDATE_ANIMATED_LIGHT: WrapSlot = WrapSlot::new(Owner::Jip, 0x0050_de20);
 
 /// The part's seams, in address order.
-pub const SITES: [u32; 17] = [
+pub const SITES: [u32; 18] = [
     LOAD_NIF.addr(),
     LIGHT_FORM_SIZE.addr(),
     POINT_LIGHT_SIZES[0].addr(),
+    CLONE_3D.addr(),
     POINT_LIGHT_SIZES[1].addr(),
     POINT_LIGHT_SIZES[2].addr(),
     POINT_LIGHT_SIZES[3].addr(),
@@ -185,8 +203,8 @@ const LOCK_LEAVE: u32 = 0x0040_fba0;
 const SCENE_LIGHT_SIZE: u32 = 0x250;
 const SCENE_LIGHT_CONSTRUCT: u32 = 0x00b9_fda0;
 const SCENE_ADD_LIGHT: u32 = 0x00b5_eca0;
-/// A `ShadowSceneLight`'s point light word (+0xF4, a 16-bit 1), light (+0xF8), the word +0xFC
-/// JIP sets to 1, and +0x240 (the scene's +0x1E0).
+/// A `ShadowSceneLight`'s point light word (+0xF4, a 16-bit 1), light (+0xF8), the byte +0xFC
+/// (`bDynamicLight`) JIP sets to 1, and +0x240 (the scene's +0x1E0).
 const SCENE_LIGHT_POINT: u32 = 0xf4;
 const SCENE_LIGHT_LIGHT: u32 = 0xf8;
 const SCENE_LIGHT_FC: u32 = 0xfc;
@@ -238,6 +256,7 @@ pub fn install(e: &mut Engine) {
     e.on_site(CLONE_WORD, clone_word);
     e.on_site(LIGHT_FORM_SIZE, light_form_size);
     e.on_site(LOAD_NIF, load_nif);
+    e.on_site(CLONE_3D, clone_3d);
     for slot in ANIMATED_LIGHTS {
         e.on_site(slot, animated_lights);
     }
@@ -349,6 +368,21 @@ fn load_nif(e: &mut Engine, w: &[u32]) -> Option<u32> {
         .set_u8(root.wrapping_add(FLAGS_HIGH), flags | DONE_INIT_LIGHTS);
     init_point_lights(e, root, root);
     Some(0)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: CreateObjectNodeHook (its
+// first test; the `InsertObject` tests wait for H08).
+/// H06's companion at `0x50EF46` (words: the model `Clone3D` would share, the form, the
+/// reference): a model whose byte +0x33 has 0x20 (H06 found lights of JIP's in it) is cloned
+/// (answers 1, JIP's jump to `0x50F0FE`); else the exe's checks go on (answers 0). Without it the
+/// first reference would hold the cached model itself (its lights then listed as that
+/// reference's), and every later copy would carry lights already marked listed, never lit.
+/// (`Clone3D` never gets here with no model; 0 answers 0.)
+fn clone_3d(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let model = w[0];
+    Some(u32::from(
+        model != 0 && e.mem.u8(model.wrapping_add(FLAGS_HIGH)) & IS_POINT_LIGHT != 0,
+    ))
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: InitPointLights.
@@ -663,7 +697,7 @@ fn update_animated_light(e: &mut Engine, w: &[u32]) -> Ret {
 ///   local translation and scale (16 bytes) back from +0x100 (the bit cleared);
 /// - a count of 1 (only its parent holds it): put into the scene's lights, a new
 ///   `ShadowSceneLight` (0x250 bytes) with the point light word 1, the light (counted up), the
-///   word +0xFC 1 and +0x240 the scene's +0x1E0 (`00b5eca0`); no animation this frame;
+///   byte +0xFC 1 and +0x240 the scene's +0x1E0 (`00b5eca0`); no animation this frame;
 /// - else animated when its form has an animated flag ([`animate`]).
 ///
 /// Answers 0 (the exe's call skipped). With no scene node or no `ShadowSceneLight` (JIP would
@@ -744,7 +778,8 @@ fn add_scene_light(e: &mut Engine, scene: u32, light: u32) {
     }
     e.mem
         .set_u32(scene_light.wrapping_add(SCENE_LIGHT_LIGHT), light);
-    e.mem.set_u32(scene_light.wrapping_add(SCENE_LIGHT_FC), 1);
+    // One byte (`bDynamicLight`), as JIP and the exe write it; +0xFD..+0xFF are kept.
+    e.mem.set_u8(scene_light.wrapping_add(SCENE_LIGHT_FC), 1);
     let word = e.mem.u32(scene.wrapping_add(SCENE_1E0));
     e.mem
         .set_u32(scene_light.wrapping_add(SCENE_LIGHT_240), word);

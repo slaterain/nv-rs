@@ -1471,11 +1471,21 @@ those places run the game's code.
 | (none; `SafeWrite32(addr, 0x110)` twelve times, 12 bytes at `0xA68D6B` in `InitJIPHooks`) | Every place a point light is made: `TESObjectLIGH::GenDynamic` `0050d810`, the Love Tester, S.P.E.C.I.A.L. book and race menus' lights, `FORenderedMenu::CreateMenuLight`, `LightEffect::AttachLight`, `MagicLight::Init`, `VATS::SetMode` (two), `NiPointLight`'s create function and `CreateClone`, `ShadowSceneNode`'s dynamic light `00b5cd00`; `NiDynamicEffect`'s member copy `00a68d40` | With JIP installed (every preset), every point light is 0x110 bytes instead of 0xFC, room for JIP's light data after the game's own, and a copied light keeps JIP's two light bytes. Nothing a player sees changes by itself (H03, H05) | 3.9 GL-2 |
 | (none; `SafeWrite8(0x465488, 0xCC)` and `TESObjectLIGH`'s editor id slots; skipped by JIP when JohnnyGuitar is loaded, never the case in the port) | `TESDataHandler::CreateFormOfType` `00465110` (`0x465488`), `TESObjectLIGH`'s vtable `GetEditorID`/`SetEditorID` | With JIP installed, light forms keep their editor ids (the original throws them away): they are in the game's editor id map, so scripts and the light tags below find a light by its id (H04) | 3.9 GL-2 |
 | (none; `LoadNifRetnNodeHook`) | `ModelLoader::LoadFile` `00447080` (`0x447155`) | With JIP installed, a model's point lights tagged with a `LIGH_EDID` string (a mod's mesh naming a light form's editor id; no mesh of the game has one) take that light form, once per model: when such a model's object is attached to the world its lights get the form's colour, radius and fade, are hidden when the form is "off by default", and are lit and animated as JIP's own lights (below) (H06, with H09's attach in GP) | 3.9 GL-2 |
+| (none; `CreateObjectNodeHook`, made with H06) | `TESBoundObject::Clone3D` `0050ee50` (`0x50EF46`) | With JIP installed, a model holding such tagged lights is always copied for each placed object, never shared with the model cache, so every copy of a mod's lamp has lights of its own and each one is lit (the same hook's copy of models marked by `InsertObject`/`AttachModel` waits for those commands, H08) (H06) | 3.9 GL-2 |
 | (none; `DestroyNiPointLightHook` in `NiPointLight`'s vtable) | `NiPointLight`'s deleting destructor (slot 0 of its vtable, `00a75c80`, shared with `NiDirectionalLight`, which keeps it) | With JIP installed, a point light gives back its 0x110 bytes; one of JIP's lights is given back by JIP's light list instead, once nothing holds it (H07) | 3.9 GL-2 |
 | (none; `UpdateAnimatedLightHook`, `UpdateAnimatedLightsHook`) | `0050de20` (a light form's animation of its light, replaced), the frame's two task sequences `008c7bd0` and `008c7da0` (`0x8C7C4E`, `0x8C7E18`) | With JIP installed, flickering and pulsing lights (placed lamps and fires, magic lights) animate the way JIP does it: a flickering light's brightness and position drift toward random targets up to 6.4 units from where it started, a pulsing light's brightness swings between its full fade and a quarter of it at a steady rate, and lights a mod sets to JIP's "colour shift" drift in colour; then each frame JIP's own lights (above) are put into the scene's lights once, set again from their form when a script asks, animated, and given back when nothing holds them any more (H12) | 3.9 GL-2 |
 
+GL part 2 (H03 to H07, H12 and the `Clone3D` hook) is JIP's own built-in light handling, so it goes in
+whenever JIP is installed, with the game-patches row on or off: with JIP installed, flickering and pulsing
+lights use JIP's animation and point lights carry JIP's extra fields in every preset, the original-behaviour
+one included; this is JIP's own behaviour, not an option (the lead's decision in the review of #700).
+
 Not built in GL: H23 (`CastSpellHook`, `0x815EE6`), JIP's casting without the animation, waits for its command
-`CastImmediate`.
+`CastImmediate`. Tagged lights in worn or held models (armour, weapons and other biped slot models whose
+meshes carry `LIGH_EDID` lights) give no light until group GH2's H10 is built: JIP lists those lights in
+its biped slot hooks (`LoadBip01SlotHook` at `0x4ACCF1`, `LoadWeaponSlotHook` at `0x4AF0DE`), which wait for
+`InsertObject`/`AttachModel`; until then such a light is never listed (so never lit) and, being one of
+JIP's lights, is not given back by its destructor either. No mesh of the game has such a light.
 
 #### GX: Havok, pad rumble, mouse
 
