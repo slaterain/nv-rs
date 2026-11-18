@@ -26,6 +26,7 @@
 use super::actor::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// `PlayerCharacter *`.
 const PLAYER_POINTER: u32 = 0x011d_ea3c;
@@ -916,7 +917,14 @@ pub fn actor_steal_alarm(
     if stolen_from_actor != 0 && e.vcall(stolen_from_actor, 0x218, &args![]).bool() {
         witness = stolen_from_actor;
     } else {
-        let owner_type = e.call(FORM_TYPE, &args![owner]).u32();
+        // 008bfbc1: lStewieAl's Tweaks' row S0068 (`fixHandleStealingCrash`): no owner is not a
+        // faction (the branch below then does nothing for it), where the exe reads the null form's
+        // type.
+        let owner_type = if e.stewie(stewie::HANDLE_STEALING_CRASH) && owner == 0 {
+            0
+        } else {
+            e.call(FORM_TYPE, &args![owner]).u32()
+        };
         if owner_type == 8 {
             if !e.call(BASE_FORM_FLAG_BIT_1, &args![owner]).bool() {
                 karma_penalty = true;
@@ -2965,6 +2973,32 @@ mod tests {
         log_calls(&mut e);
         actor_steal_alarm(&mut e, player, Ptr::new(victim), 0, 1, 0, owner);
         assert!(calls_to(&e, REWARD_KARMA).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0068: a theft from a container that is no actor, with no owner,
+    /// reads the null owner's form type (`00401170` reads `+4`, as its stand-in here does) and stops
+    /// with the row off; with it on the owner counts as no faction and nothing more happens.
+    #[test]
+    fn s0068_theft_without_an_owner() {
+        for on in [false, true] {
+            let mut e = engine();
+            let player = new_player(&mut e);
+            give_process(&mut e, player);
+            let victim = e.mem.alloc(0x800);
+            slot(&mut e, victim, 0x100, eax(0));
+            e.set_stewie(stewie::HANDLE_STEALING_CRASH, on);
+            log_calls(&mut e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                actor_steal_alarm(&mut e, player, Ptr::new(victim), 0, 1, 0, 0);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(calls_to(&e, REWARD_KARMA).is_empty());
+                assert!(calls_to(&e, PROCESS_LISTS_FIND_ACTOR_REF).is_empty());
+                assert!(calls_to(&e, PROCESS_LISTS_GET_ACTOR_REF_IN_HIGH).is_empty());
+            }
+        }
     }
 
     #[test]

@@ -15,6 +15,7 @@
 use super::tesscriptfunctions::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 // ---- Callees outside this part (by exe address) ----------------------------
 
@@ -2675,7 +2676,11 @@ pub fn script_set_actor_ref_essential(e: &mut Engine, a: ScriptArgs) -> bool {
     let Some([value]) = parse_params(e, a, [0]) else {
         return false;
     };
-    if e.vcall(a.this_obj.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
+    // 005dfd6a: lStewieAl's Tweaks' row S0174 (`patchFixSetActorRefEssentialNullCheck`): a call
+    // with no reference takes the "invalid actor" branch, where the exe calls the null
+    // reference's slot.
+    let no_reference = e.stewie(stewie::SET_ACTOR_REF_ESSENTIAL_NULL_CHECK) && a.this_obj.is_null();
+    if !no_reference && e.vcall(a.this_obj.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
         let actor = e
             .call(
                 DYNAMIC_CAST,
@@ -6444,6 +6449,35 @@ mod tests {
         start_log(&mut e);
         assert!(!e.call(command_address, &args![a]).bool());
         assert!(calls(&e, V_IS_ACTOR).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0174: `SetActorRefEssential` called with no reference. The exe
+    /// calls the null reference's "is it an actor" slot and stops; with the row on it takes the
+    /// "invalid actor" branch (its console line only with the echo flag) and succeeds.
+    #[test]
+    fn s0174_set_actor_ref_essential_without_a_reference() {
+        for on in [false, true] {
+            let mut e = engine();
+            let a = command(&mut e, 0);
+            nothing(&mut e, ACTOR_SET_ESSENTIAL);
+            parse_gives(&mut e, true, &[1]);
+            set_echo(&mut e, true);
+            e.set_stewie(stewie::SET_ACTOR_REF_ESSENTIAL_NULL_CHECK, on);
+            start_log(&mut e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x005d_fd30, &args![a]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(run.unwrap());
+                assert!(calls(&e, ACTOR_SET_ESSENTIAL).is_empty());
+                assert_eq!(
+                    calls(&e, CONSOLE_PRINT),
+                    vec![vec![MSG_SET_ESSENTIAL_INVALID]]
+                );
+            }
+        }
     }
 
     #[test]

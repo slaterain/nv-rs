@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 // Translated from 004f2770 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Unnamed in the engine map (`thiscall`, no stack words): the address of
@@ -144,6 +145,11 @@ pub fn fn_004f2640(e: &mut Engine, form: u32) -> bool {
             // `00547110` (RET 4).
             let location = e.call(GET_WORLD_LOCATION, &args![player, location]).u32();
             let cell = e.call(LOCATION_CELL, &args![location]).u32();
+            // 004f269f: lStewieAl's Tweaks' row S0078 (`patchNullPlayerCellImposterCheck`): no
+            // cell at the player's location gives no regions, where the exe reads the null cell's.
+            if e.stewie(stewie::NULL_PLAYER_CELL_IMPOSTER_CHECK) && cell == 0 {
+                return 0;
+            }
             e.call(CELL_REGION_LIST, &args![cell, 1u32]).u32()
         });
         node = if regions == 0 {
@@ -370,6 +376,38 @@ mod n072_tests {
         e.mem.set_u32(player + 0x76c, e.mem.u32(regions + 4));
         assert!(e.call(0x004f_2640, &args![0x77u32]).bool());
         assert!(!e.call(0x004f_2640, &args![0x66u32]).bool());
+    }
+
+    /// lStewieAl's Tweaks' row S0078: the player has no regions and no cell is at the player's
+    /// place. The exe asks the null cell for its regions (`00547110`, whose first test reads the
+    /// cell's flags, as its stand-in here does) and stops; with the row on there are no regions
+    /// and the form is not found.
+    #[test]
+    fn s0078_no_cell_at_the_players_place() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            e.map(0x011d_e000, 0x1000);
+            lists(&mut e);
+            data_doubles(&mut e);
+            let player = e.mem.alloc(0x800);
+            e.set_global::<u32>(PLAYER, player);
+            e.register(GET_WORLD_LOCATION, |_, a| a[1].into_ret());
+            e.register(LOCATION_CELL, |_, _| 0u32.into_ret());
+            e.register_double(CELL_REGION_LIST, |e, a| {
+                u32::from(e.mem.u8(a[0] + 0x24)).into_ret()
+            });
+            e.set_stewie(stewie::NULL_PLAYER_CELL_IMPOSTER_CHECK, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x004f_2640, &args![0x99u32]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(!run.unwrap());
+                assert!(calls_to(&e, CELL_REGION_LIST).is_empty());
+            }
+        }
     }
 
     #[test]

@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@PAV?$AStarNode@UParentSpaceNode@@UTeleportLink@@@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_0106D930: u32 = 0x0106_d930;
@@ -745,6 +746,13 @@ pub fn teleport_door_search_get_node_connections(
             );
             let door = word(e, slot);
             index = index.wrapping_add(1);
+            // 006f37ad: lStewieAl's Tweaks' row S0169 (`patchFixRareNullTeleportDoorCrash`): a null
+            // door in the list is passed over, where the exe reads its flags. (Tweaks writes its
+            // test over the exe's disabled test, which it judges never true here; the port keeps
+            // that test after the null check.)
+            if e.stewie(stewie::RARE_NULL_TELEPORT_DOOR) && door == 0 {
+                continue;
+            }
             if typed_call!(leaf::FAMILY, 0x0044_0da0, leaf::form_flag_800(e, door)) {
                 continue;
             }
@@ -1525,6 +1533,43 @@ mod tests {
             vec![vec![0x5000, search + 0x20a4]]
         );
         assert!(tds_calls(&e, 0x0044_ddc0).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0169: the node's door list holds a null entry. The exe reads the
+    /// null door's flags (`00440da0` reads `+8`, as its stand-in here does) and stops; with the row
+    /// on the entry is passed over and no neighbour is added.
+    #[test]
+    fn s0169_a_null_door_in_the_list() {
+        for on in [false, true] {
+            let mut e = tds_engine(&[
+                ARRAY_RELEASE_008454F0,
+                0x0054_db50,
+                DOOR_LOCK_CONSTRUCTOR,
+                DOOR_LOCK_DESTRUCTOR,
+                0x007c_b2e0,
+            ]);
+            let doors = e.mem.alloc(4);
+            e.register(0x0044_ddc0, |_, _| 1u32.into_ret());
+            e.register_double(0x0087_7a30, move |_, _| doors.into_ret());
+            e.register(0x0044_0da0, |e, a| {
+                u32::from(e.mem.u32(a[0] + 8) & 0x800 != 0).into_ret()
+            });
+            e.map(ZERO, 8);
+            let search = e.mem.alloc(0x20b8);
+            e.mem.set_u32(search + 0x20b4, 1);
+            let node = tds_node(&mut e, 5.0);
+            e.set_stewie(stewie::RARE_NULL_TELEPORT_DOOR, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x006f_36d0, &args![search, node, 0u32]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(run.unwrap());
+                assert!(tds_calls(&e, 0x007c_b2e0).is_empty());
+            }
+        }
     }
 
     #[test]

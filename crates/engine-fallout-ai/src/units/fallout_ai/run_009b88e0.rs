@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// Callees: a flag test `004fd420` (`thiscall`, `(mask)`, answers a byte), the list at
 /// `this + 0x88` (`008256d0` "empty", `006815c0` its first item; `thiscall`, no arguments),
@@ -911,6 +912,13 @@ fn fn_009b90b0_cut(e: &mut Engine, this: Ptr, in_vats: bool) -> CutEnd {
         };
         if name_constructed {
             e.call(FIXED_STRING_DESTRUCT, &args![at(0x50)]);
+        }
+        // 009b9387: lStewieAl's Tweaks' row S0106 (`patchFixNullHitLocationNodeExplosionCrash`):
+        // with no limb node the scale is not asked (the exe asks the null node's scale first, then
+        // takes this branch).
+        if e.stewie(stewie::NULL_HIT_LOCATION_NODE_EXPLOSION) && limb == 0 {
+            e.mem.set_u8(p + 0x90, 0);
+            return CutEnd::Done;
         }
         let scale = x87_store32(e.call(NODE_SCALE, &args![limb]).f64());
         if limb == 0 {
@@ -1931,6 +1939,35 @@ mod n029_tests {
         e.call(0x009b_90b0, &args![s.this]);
         assert_eq!(e.mem.u32(s.this + STATE), 4);
         assert_eq!(calls(&e, STATE_4_UPDATE_009BA660), vec![vec![s.this]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0106: a limb cut off a body whose model has no node for it. The
+    /// exe asks the null node's world scale first (`008d01e0` reads `+0x98`, as its stand-in here
+    /// does) and stops; with the row on the projectile's limb state is cleared and nothing is
+    /// cloned.
+    #[test]
+    fn s0106_cut_without_a_limb_node() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            cut_doubles(&mut e);
+            e.register(NODE_SCALE, |e, a| st0(f64::from(e.mem.f32(a[0] + 0x98))));
+            let s = scene(&mut e);
+            let actor_node = e.mem.u32(s.actor + 0x1f0);
+            e.mem.set_u32(actor_node + 0x1f8, 0);
+            e.mem.set_u8(s.this + 0x90, 1);
+            e.set_stewie(stewie::NULL_HIT_LOCATION_NODE_EXPLOSION, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x009b_90b0, &args![s.this]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(e.mem.u8(s.this + 0x90), 0);
+                assert!(calls(&e, CLONE).is_empty());
+                assert!(calls(&e, NODE_SCALE).is_empty());
+            }
+        }
     }
 
     #[test]

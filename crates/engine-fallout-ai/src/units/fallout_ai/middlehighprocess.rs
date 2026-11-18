@@ -11,6 +11,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 layout! {
     /// `MiddleHighProcess` (Xbox PDB), 0x25C bytes (base classes
@@ -2420,7 +2421,17 @@ pub fn middle_high_process_process_activate(
         e.vcall(p, 0x294, &args![actor]);
     }
     let current = e.vcall(p, 0x22c, &[]).u32();
-    if e.call(PACKAGE_TYPE, &args![current]).u32() == 0x1c && fn_00915ef0(e, this, actor) != 0 {
+    // 009164d9: lStewieAl's Tweaks' row S0124 (`patchProcessActivateAddNullCheckForPackage`): no
+    // current package is not a dialogue package (0x1C), where the exe reads the null package's
+    // type. (Tweaks' 10 bytes also cover the exe's `jnz` after the type test, so with Tweaks every
+    // package type takes the dialogue branch; the port keeps the exe's type test, the intent of the
+    // fix.)
+    let is_dialogue = if e.stewie(stewie::PROCESS_ACTIVATE_NULL_PACKAGE) && current == 0 {
+        false
+    } else {
+        e.call(PACKAGE_TYPE, &args![current]).u32() == 0x1c
+    };
+    if is_dialogue && fn_00915ef0(e, this, actor) != 0 {
         e.vcall(actor, 0x288, &[]);
         return false;
     }
@@ -13058,6 +13069,42 @@ mod tests {
         );
         assert_eq!(calls(&e, REFERENCE_RUN_SCRIPT), vec![vec![target]]);
         assert_eq!(calls(&e, PROCESS_SLOTS + 0x12c), vec![vec![p.addr(), 0]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0124: activating a close target while the process has no current
+    /// package (slot 0x22C) reads the null package's type (`0041ca90` reads the byte at `+0x20`,
+    /// as its stand-in here does) and stops with the row off; with it on the package is no
+    /// dialogue package and the step goes on.
+    #[test]
+    fn s0124_process_activate_without_a_current_package() {
+        for on in [false, true] {
+            let mut e = engine();
+            // This harness maps page 0 for its other tests; the game faults there.
+            e.mem.unmap(0, 0x1000);
+            let p = process(&mut e);
+            let a = actor(&mut e);
+            let package = thing(&mut e);
+            e.register_double(PROCESS_SLOTS + 0x27c, move |_, _| ret(package));
+            e.register_double(PROCESS_SLOTS + 0x22c, |_, _| ret(0));
+            e.register(
+                PACKAGE_TYPE,
+                |e, a| ret(e.mem.i8(a[0] + 0x20) as i32 as u32),
+            );
+            let target = thing(&mut e);
+            e.mem.set_u32(p.addr() + 0x40, target);
+            e.mem.set_u32(p.addr() + 0x64, 0);
+            e.register(OBJECT_SLOTS + 0x144, |_, _| ret(1));
+            e.set_stewie(stewie::PROCESS_ACTIVATE_NULL_PACKAGE, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                middle_high_process_process_activate(&mut e, p, a, 0)
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(run.unwrap());
+                assert_eq!(calls(&e, REFERENCE_ACTIVATE).len(), 1);
+            }
+        }
     }
 
     #[test]

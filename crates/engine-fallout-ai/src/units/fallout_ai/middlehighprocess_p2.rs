@@ -7,6 +7,7 @@
 use super::middlehighprocess::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------
 // Constants and helpers of this part.
@@ -3837,6 +3838,12 @@ pub fn middle_high_process_process_patrol_traveling_to_next_ref(
         return;
     }
     let reference = e.call(PATROL_GET_CURRENT_REFERENCE, &args![data]).u32();
+    // 0092b074: lStewieAl's Tweaks' row S0140 (`patchFixPatrolMissingNullCheck`): with no patrol
+    // reference the call ends (Tweaks moves the jump's target to the function's end, `0092b430`),
+    // where the exe goes on to measure the offset to the null reference.
+    if e.stewie(stewie::PATROL_MISSING_NULL_CHECK) && reference == 0 {
+        return;
+    }
     if reference != 0 {
         let mut mode = 0x101u32;
         let package = e.vcall(p, 0x27c, &[]).u32();
@@ -7558,6 +7565,30 @@ mod tests {
         e.register_double(VECTOR_LENGTH_2D_SQUARED, move |_, _| {
             ret_f(f64::from(length))
         });
+    }
+
+    /// lStewieAl's Tweaks' row S0140: with no current patrol reference and the path complete, the
+    /// exe measures the offset to the null reference (its position slot) and stops; with the row on
+    /// the step ends there and nothing is called.
+    #[test]
+    fn s0140_patrol_without_a_reference() {
+        for on in [false, true] {
+            let mut e = engine();
+            let (p, target, _, _, data) = patrol_scene(&mut e);
+            e.register_double(PATROL_GET_CURRENT_REFERENCE, |_, _| ret(0));
+            e.register(ACTOR_IS_PATHING_COMPLETE, |_, _| ret(1));
+            e.set_stewie(stewie::PATROL_MISSING_NULL_CHECK, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                middle_high_process_process_patrol_traveling_to_next_ref(&mut e, p, target, data);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(calls(&e, PROCESS_SLOTS + 0x858).is_empty());
+                assert!(calls(&e, PROCESS_SLOTS + 0x860).is_empty());
+                assert!(calls(&e, PROCESS_SLOTS + 0x350).is_empty());
+            }
+        }
     }
 
     #[test]
