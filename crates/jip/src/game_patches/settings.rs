@@ -138,7 +138,12 @@ pub fn switches(lines: &[Vec<u8>]) -> Switches {
                 if number == 18 && value.first() == Some(&b'2') {
                     out.npc_perks_auto_add = true;
                 }
-                out.on |= jip_patches::optional(number);
+                // JIP turns switches below 15 (but 3) on as it reads their line, and its
+                // `SetOptionalPatch(12)` refuses while O1's hook is not in yet: O12 only when
+                // O1's line came first (else it stays off for the run, even if O1 goes on later).
+                if number != 12 || out.on & jip_patches::optional(1) != 0 {
+                    out.on |= jip_patches::optional(number);
+                }
             }
         }
         // `size = StrLen(buffer) + 1`: the token and its NUL.
