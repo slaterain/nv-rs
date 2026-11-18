@@ -955,15 +955,21 @@ fn a_file_gone_before_the_record_installs_nothing() {
     let places = dir.places();
     three_files(&places);
     let said = run_hooked(&places, "1\nyes\n\n", |staging, p| {
-        if p.files_total > 0 && p.files == p.files_total {
+        // When the last file is written.
+        if p.files_total > 0 && p.files == p.files_total && p.saving == 0 {
             let _ = std::fs::remove_file(staging.join("Textures").join("a.dds"));
         }
     });
-    assert!(said.contains("a file it had unpacked is gone"), "{said}");
+    assert!(said.contains("Nothing was installed"), "{said}");
     assert!(
-        said.lines().any(|l| path_line(l) && l.ends_with("a.dds")),
+        said.lines().any(|l| path_line(l) && l.contains("a.dds")),
         "{said}"
     );
+    // Windows syncs no small texture, so the check before the record finds it gone; on Linux and
+    // macOS the pass that syncs every file meets it first.
+    if cfg!(windows) {
+        assert!(said.contains("a file it had unpacked is gone"), "{said}");
+    }
     assert!(
         nothing_installed(&places),
         "{:?}",

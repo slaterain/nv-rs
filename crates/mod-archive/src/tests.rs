@@ -863,6 +863,8 @@ fn progress_is_reported_as_it_goes() {
                 bytes: bytes_wanted,
                 bytes_total: bytes_wanted,
                 read: 0,
+                saved: 3,
+                saving: 3,
             }
         );
         assert_eq!(
@@ -987,8 +989,9 @@ fn a_destination_removed_while_unpacking_is_never_made_again() {
     }
 }
 
-/// What syncing every unpacked file costs, on scratch files only: about 2,000 small files and a
-/// few large ones, unpacked with and without the sync (ABBA, three rounds). Run by hand:
+/// What each way of syncing the unpacked files costs, on scratch files only: about 2,000 small
+/// files and a few large ones, unpacked with each [`SyncMode`] (ABCDDCBA, three rounds). Run by
+/// hand:
 /// `cargo test -p mod-archive syncing_cost -- --ignored --nocapture`.
 #[test]
 #[ignore]
@@ -1020,25 +1023,70 @@ fn syncing_cost() {
         .collect();
     let bytes: usize = files.iter().map(|(_, d)| d.len()).sum();
     println!("{} files, {} MB", files.len(), bytes >> 20);
-    let mut times = [Vec::new(), Vec::new()];
+    let modes = [
+        SyncMode::Off,
+        SyncMode::EachFile,
+        SyncMode::PassAll,
+        SyncMode::PassBigAndPlugins,
+    ];
+    let mut times = vec![Vec::new(); modes.len()];
     for round in 0..3 {
-        for sync in [true, false, false, true] {
-            SYNC_FILES.with(|s| s.set(sync));
-            let to = dir.0.join(format!("out-{round}-{sync}"));
+        // Each mode twice a round, the second half in the reverse order (ABCDDCBA).
+        let order: Vec<usize> = (0..modes.len()).chain((0..modes.len()).rev()).collect();
+        for (n, &m) in order.iter().enumerate() {
+            SYNC_MODE.with(|s| s.set(modes[m]));
+            let to = dir.0.join(format!("out-{round}-{n}"));
             let _ = std::fs::remove_dir_all(&to);
             let started = std::time::Instant::now();
             extract(&archive, &wanted, &to, Limits::default()).unwrap();
             let took = started.elapsed().as_secs_f64();
-            times[usize::from(sync)].push(took);
-            println!("round {round} sync {sync}: {took:.2} s");
+            times[m].push(took);
+            println!("round {round} {:?}: {took:.2} s", modes[m]);
             std::fs::remove_dir_all(&to).unwrap();
         }
     }
-    SYNC_FILES.with(|s| s.set(true));
+    SYNC_MODE.with(|s| s.set(SyncMode::USED));
     let mean = |v: &[f64]| v.iter().sum::<f64>() / v.len() as f64;
-    let (without, with) = (mean(&times[0]), mean(&times[1]));
-    println!(
-        "without sync {without:.2} s, with sync {with:.2} s: {:+.0}%",
-        (with / without - 1.0) * 100.0
-    );
+    let base = mean(&times[0]);
+    for (m, mode) in modes.iter().enumerate() {
+        let t = mean(&times[m]);
+        println!(
+            "{mode:?}: mean {t:.2} s, {:+.0}% against Off ({:?})",
+            (t / base - 1.0) * 100.0,
+            times[m]
+                .iter()
+                .map(|t| format!("{t:.2}"))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+/// Which files the end-of-unpacking pass syncs: every one on Linux and macOS; on Windows the
+/// plugins and archives whatever their size (any case) and every file of 1 MB and more.
+#[test]
+fn the_sync_pass_takes_plugins_and_big_files() {
+    let dir = Scratch::new("sync-pick");
+    let write = |name: &str, size: usize| {
+        let path = dir.0.join(name);
+        std::fs::write(&path, vec![1u8; size]).unwrap();
+        path
+    };
+    let plugin = write("Small.ESP", 10);
+    let master = write("m.esm", 10);
+    let archive = write("a.Bsa", 10);
+    let texture = write("t.dds", 10);
+    let big = write("big.dds", SYNC_BIG as usize);
+    let some = SyncMode::PassBigAndPlugins;
+    for p in [&plugin, &master, &archive, &big] {
+        assert!(pass_syncs(some, p), "{}", p.display());
+    }
+    assert!(!pass_syncs(some, &texture));
+    assert!(pass_syncs(SyncMode::PassAll, &texture));
+    assert!(!pass_syncs(SyncMode::Off, &plugin) && !pass_syncs(SyncMode::EachFile, &plugin));
+    let used_on_this_system = if cfg!(windows) {
+        SyncMode::PassBigAndPlugins
+    } else {
+        SyncMode::PassAll
+    };
+    assert_eq!(SyncMode::USED, used_on_this_system);
 }

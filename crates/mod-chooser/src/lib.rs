@@ -1320,11 +1320,30 @@ fn install(
     )?;
     out.flush()?;
     let mut last: Option<Instant> = None;
+    let mut all_written = false;
+    // When making sure of the files on the disk began, and whether that was said.
+    let mut saving: Option<(Instant, bool)> = None;
     let mut report = |p: mod_archive::Progress| {
         #[cfg(test)]
         tests::on_progress(&staging, p);
         let due = last.map_or(true, |t| t.elapsed() >= PROGRESS_EVERY);
-        if due || p.files == p.files_total {
+        if p.saving > 0 {
+            // Said only when it lasts over a second, then about once a second.
+            let (since, said) = saving.get_or_insert((Instant::now(), false));
+            if since.elapsed() >= PROGRESS_EVERY && (!*said || due) {
+                if !*said {
+                    let _ = writeln!(out, "Making sure the files are saved on the disk...");
+                    *said = true;
+                }
+                last = Some(Instant::now());
+                let _ = writeln!(out, "  {} of {} files saved", p.saved, p.saving);
+                let _ = out.flush();
+            }
+            return;
+        }
+        let last_file = p.files == p.files_total && !all_written;
+        if due || last_file {
+            all_written |= p.files == p.files_total;
             last = Some(Instant::now());
             // A solid 7z decodes the options not chosen on its way to the chosen ones.
             let past = if p.read > 0 {
