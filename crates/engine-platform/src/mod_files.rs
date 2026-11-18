@@ -60,6 +60,7 @@ pub static CALLS: ModFileCalls = ModFileCalls {
     append,
     read_head,
     list,
+    name_key: files::name_order,
 };
 
 /// The mod files of this run: the folder they are kept in and what mods wrote in this run.
