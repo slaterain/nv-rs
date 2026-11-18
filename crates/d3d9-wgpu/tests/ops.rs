@@ -369,6 +369,34 @@ fn each_instruction_means_what_direct3d_9_says() {
     );
     check!(
         r,
+        "rcp of -0",
+        ins(6, &[r0(full), cs(0, 1)]),
+        [[4.0, -0.0, 0.0, 0.0], Z, Z],
+        [INF; 4]
+    );
+    check!(
+        r,
+        "rcp of +infinity",
+        ins(6, &[r0(full), cs(0, 1)]),
+        [[4.0, INF, 0.0, 0.0], Z, Z],
+        [0.0; 4]
+    );
+    check!(
+        r,
+        "rsq of +infinity",
+        ins(7, &[r0(full), cs(0, 1)]),
+        [[4.0, INF, 0.0, 0.0], Z, Z],
+        [0.0; 4]
+    );
+    check!(
+        r,
+        "rsq of -1",
+        ins(7, &[r0(full), cs(0, 1)]),
+        [[4.0, -1.0, 0.0, 0.0], Z, Z],
+        [1.0; 4]
+    );
+    check!(
+        r,
         "rsq of a negative",
         ins(7, &[r0(full), cs(0, 0)]),
         [[-4.0, 0.0, 0.0, 0.0], Z, Z],

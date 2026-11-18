@@ -2518,6 +2518,50 @@ fn the_hdr_watch_follows_a_small_targets_value_and_leaves_it_unchanged() {
     assert_eq!(d.wgpu_errors(), 0);
 }
 
+/// A render-target texture nothing has drawn into, sampled by three draws: counted three times,
+/// said once (a diagnostic with the HDR watch's switch).
+#[test]
+fn a_render_target_sampled_before_it_is_drawn_into_is_counted_and_said_once() {
+    let Some(mut g) = Gpu::new(16, 1) else { return };
+    const NEVER: u32 = 0x1A30;
+    const PS_TEX: u32 = 0x1A40;
+    target_texture(&mut g, NEVER, NEVER + 1, 4, A8R8G8B8);
+    // ps_2_0: dcl t0; dcl_2d s0; texld r0, t0, s0; mov oC0, r0.
+    let mut ps = vec![0xFFFF_0200];
+    ps.extend(ins(31, &[0x8000_0000, 0xB00F_0000]));
+    ps.extend(ins(31, &[0x9000_0000, 0xA00F_0800]));
+    ps.extend(ins(66, &[0x800F_0000, 0xB0E4_0000, 0xA0E4_0800]));
+    ps.extend(ins(1, &[0x800F_0800, 0x80E4_0000]));
+    ps.push(END);
+    let t = words(&ps);
+    g.run(Cmd::CreateShader {
+        device: DEVICE,
+        shader: PS_TEX,
+        pixel: true,
+        tokens: Data::Bytes(&t),
+    });
+    g.run(Cmd::SetShader {
+        device: DEVICE,
+        pixel: true,
+        shader: PS_TEX,
+    });
+    g.run(Cmd::SetTexture {
+        device: DEVICE,
+        sampler: 0,
+        texture: NEVER,
+    });
+    g.state(ZENABLE, 0);
+    let d = g.b.device().expect("the device");
+    let (samples0, said0) = d.stale_sample_counts();
+    for _ in 0..3 {
+        g.quad(0.5);
+    }
+    let d = g.b.device().expect("the device");
+    let (samples, said) = d.stale_sample_counts();
+    assert_eq!((samples - samples0, said - said0), (3, 1));
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
 /// The register blocks are written only when what they carry changed, and only up to the
 /// highest constant the bound shaders read: within one pass, (1) a change of only a vertex
 /// constant moves the next draw; (2) a vertex shader reading a constant beyond the ones the last
