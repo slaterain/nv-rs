@@ -16,6 +16,8 @@ path = "src/main.rs"
 # project's own bsa crate reads the installed game's archives. It joins the workspace in PR 1.
 [dependencies]
 bsa = { path = "../bsa" }
+# The profile files' own reader and writer, shared with Play.exe and the host's first start.
+game-profile = { path = "../game-profile" }
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "parking_lot", "wgsl", "dx12", "vulkan", "metal"] }
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland", "wayland-dlopen"] }
 

@@ -69,7 +69,10 @@ impl Game {
             };
             let text: String = bytes.iter().map(|&b| b as char).collect();
             let get = |key: &str| -> Option<u8> {
-                ini_value(&text, "Interface", key)?.trim().parse::<u8>().ok()
+                ini_value(&text, "Interface", key)?
+                    .trim()
+                    .parse::<u8>()
+                    .ok()
             };
             if let (Some(r), Some(g), Some(b)) = (
                 get("iSystemColorTerminalRed"),
@@ -159,7 +162,12 @@ impl Pe {
         let sections = (0..count)
             .map(|i| {
                 let s = table + i * 40;
-                Some((u32_at(s + 12)?, u32_at(s + 8)?, u32_at(s + 20)?, u32_at(s + 16)?))
+                Some((
+                    u32_at(s + 12)?,
+                    u32_at(s + 8)?,
+                    u32_at(s + 20)?,
+                    u32_at(s + 16)?,
+                ))
             })
             .collect::<Option<Vec<_>>>()?;
         Some(Pe { base, sections })

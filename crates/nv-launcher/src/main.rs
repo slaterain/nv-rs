@@ -7,6 +7,8 @@
 //!   --size WIDTHxHEIGHT                            the capture's size (960x720)
 //!   --plain                                        the port's own look, as before the game is found
 //!   --settings                                     the Settings screen instead (today's 12 rows)
+//!   --profile FALLOUT.INI                          the play profile's file the screens read
+//!                                                  (none: every row shows the host's default)
 //!
 //! Silent: it plays no sound. Nothing is written but the capture.
 
@@ -16,6 +18,9 @@ mod game;
 mod gpu;
 mod png;
 mod screen;
+// The Settings screen's rows (UI-free; the window does not use them yet).
+#[allow(dead_code)]
+mod settings;
 
 use screen::{Look, Screen};
 use std::path::PathBuf;
@@ -24,6 +29,8 @@ use std::time::{Duration, Instant};
 
 struct Options {
     game: Option<PathBuf>,
+    /// The play profile's Fallout.ini (the renderer it chooses); none: the host table's default.
+    profile: Option<PathBuf>,
     capture: Option<PathBuf>,
     size: (u32, u32),
     plain: bool,
@@ -33,6 +40,7 @@ struct Options {
 fn options() -> Result<Options, String> {
     let mut o = Options {
         game: std::env::var_os("NV_RS_GAME").map(PathBuf::from),
+        profile: None,
         capture: None,
         size: (screen::WIDTH, screen::HEIGHT),
         plain: false,
@@ -42,6 +50,9 @@ fn options() -> Result<Options, String> {
     while let Some(a) = args.next() {
         match a.to_str() {
             Some("--game") => o.game = Some(args.next().ok_or("--game needs a folder")?.into()),
+            Some("--profile") => {
+                o.profile = Some(args.next().ok_or("--profile needs a Fallout.ini")?.into())
+            }
             Some("--capture") => {
                 o.capture = Some(args.next().ok_or("--capture needs a file")?.into())
             }
@@ -85,8 +96,32 @@ fn look(o: &Options) -> Look {
     }
 }
 
-/// The start screen.
-fn start_screen(o: &Options, adapter: &str) -> Screen {
+/// The play profile's files as the screens read them: `--profile`'s Fallout.ini (and the
+/// FalloutPrefs.ini beside it), else none (every row then shows the host table's default).
+fn profile_files(o: &Options) -> settings::Files {
+    let read = |p: &std::path::Path| {
+        std::fs::read(p)
+            .map(|b| b.iter().map(|&c| c as char).collect())
+            .unwrap_or_default()
+    };
+    match &o.profile {
+        Some(ini) => settings::Files {
+            ini: read(ini),
+            prefs: read(&ini.with_file_name("FalloutPrefs.ini")),
+        },
+        None => settings::Files::default(),
+    }
+}
+
+/// A choice's name without its note: "Vulkan (recommended)" is "Vulkan" in a list.
+fn short(choice: &str) -> &str {
+    choice.split(" (").next().unwrap_or(choice)
+}
+
+/// The start screen. The status names what the GAME will use: the renderer its profile chooses
+/// and, on Vulkan, the card and API the game's own rule picks ([`gpu::game_card`]), not the
+/// launcher's own drawing device.
+fn start_screen(o: &Options, card: Option<(String, wgpu::Backend)>) -> Screen {
     let game = match &o.game {
         Some(f) if !o.plain => f
             .file_name()
@@ -96,13 +131,30 @@ fn start_screen(o: &Options, adapter: &str) -> Screen {
     };
     let mut welcome = Vec::new();
     if game.is_empty() {
-        welcome.push("Your game was not found yet.".to_string());
-        welcome.push("Type its folder below, or drop".to_string());
-        welcome.push("the folder onto this window.".to_string());
+        welcome.push(
+            "Your game was not found yet. Type its folder below, or drop the folder onto this \
+             window."
+                .to_string(),
+        );
     } else {
         welcome.push(format!("Game: {game}"));
-        welcome.push("Renderer: Vulkan".to_string());
-        welcome.push(format!("Card: {}", shorten(adapter, 29)));
+        let renderer = settings::Row::Renderer.current(&profile_files(o));
+        if renderer.starts_with("Vulkan") {
+            // One line, wrapped at 600, so the list keeps its six rows.
+            match card {
+                Some((name, wgpu::Backend::Dx12)) => {
+                    welcome.push(format!("Renderer: Direct3D 12, {name}"))
+                }
+                Some((name, _)) => welcome.push(format!("Renderer: Vulkan, {name}")),
+                // No card for wgpu: on Windows the game takes the real Direct3D 9 by itself.
+                None if cfg!(windows) => welcome.push("Renderer: Direct3D 9 (no Vulkan)".into()),
+                None => welcome.push("Renderer: no graphics card found".into()),
+            }
+        } else {
+            // The real Direct3D 9's card is the one Windows' adapter table names (Play.exe's
+            // tables); the prototype does not read it.
+            welcome.push("Renderer: Direct3D 9".into());
+        }
     }
     let entries = if game.is_empty() {
         vec!["Look for the game again", "Help", "Exit"]
@@ -118,44 +170,25 @@ fn start_screen(o: &Options, adapter: &str) -> Screen {
     }
 }
 
-/// The screen the prototype opens on: the start screen, or (`--settings`) the Settings screen
-/// with today's 12 rows (Settings.ps1's names and its defaults) and Back.
-fn first_screen(o: &Options, adapter: &str) -> Screen {
+/// The screen the prototype opens on: the start screen, or (`--settings`) the Settings screen:
+/// today's 12 rows with the profile's values ([`settings::ROWS`]), the Testing list, Back.
+fn first_screen(o: &Options, card: Option<(String, wgpu::Backend)>) -> Screen {
     if !o.settings {
-        return start_screen(o, adapter);
+        return start_screen(o, card);
     }
-    let rows = [
-        "Renderer: Vulkan",
-        "Display mode: Borderless fullscreen",
-        "Resolution: Game's setting",
-        "Anti-aliasing: Game's setting",
-        "Anisotropic filtering: Game's setting",
-        "V-sync: Game's setting",
-        "Game fixes: Fixes",
-        "Frame rate limit: No limit",
-        "Frame rate limit in menus: 120",
-        "Frame rate counter: Hidden",
-        "Game threads: Side by side",
-        "Drawing thread: Own thread",
-        "Back",
-    ];
+    let files = profile_files(o);
+    let mut entries: Vec<String> = settings::ROWS
+        .iter()
+        .map(|r| format!("{}: {}", r.label(), short(&r.current(&files))))
+        .collect();
+    entries.push("Testing".into());
+    entries.push("Back".into());
     Screen {
         title: "-Settings-".into(),
-        welcome: vec![
-            "Saved at once, for both ways".into(),
-            "of playing. Enter: choices.".into(),
-        ],
-        entries: rows.into_iter().map(String::from).collect(),
+        welcome: vec!["Saved at once, for both ways of playing. Enter: choices.".into()],
+        entries,
         highlighted: 0,
         typed: String::new(),
-    }
-}
-
-fn shorten(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        s.to_string()
-    } else {
-        s.chars().take(n - 3).collect::<String>() + "..."
     }
 }
 
@@ -164,7 +197,7 @@ fn capture(o: &Options, file: &std::path::Path) -> Result<(), String> {
     let instance = gpu::instance();
     let picture = (screen::WIDTH, screen::HEIGHT);
     let mut g = gpu::Gpu::new(&instance, None, picture)?;
-    let s = first_screen(o, &g.adapter.get_info().name);
+    let s = first_screen(o, gpu::game_card());
     let (canvas, _) = screen::draw(&look, &s, usize::MAX, true);
     g.upload(&canvas.pixels, picture);
     let rgba = g.capture(picture, o.size)?;
@@ -209,7 +242,8 @@ impl App {
 
     fn redraw(&mut self) {
         let shown = self.shown();
-        let cursor = (self.started.elapsed().as_millis() as u64 / screen::BLINK_MS) % 2 == 0;
+        let cursor =
+            (self.started.elapsed().as_millis() as u64 / screen::BLINK_MS).is_multiple_of(2);
         let (Some(surface), Some(config), Some(gpu), Some(s)) =
             (&self.surface, &self.config, &mut self.gpu, &self.screen)
         else {
@@ -220,7 +254,8 @@ impl App {
         let picture = (screen::WIDTH, screen::HEIGHT);
         gpu.upload(&canvas.pixels, picture);
         let frame = match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 surface.configure(&gpu.device, config);
                 return;
@@ -229,7 +264,13 @@ impl App {
         };
         let view = frame.texture.create_view(&Default::default());
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        gpu.draw(&mut encoder, &view, config.format, (config.width, config.height), picture);
+        gpu.draw(
+            &mut encoder,
+            &view,
+            config.format,
+            (config.width, config.height),
+            picture,
+        );
         gpu.queue.submit([encoder.finish()]);
         gpu.queue.present(frame);
         if !self.finished && shown >= screen::total_chars(&self.look, s) {
@@ -240,7 +281,10 @@ impl App {
     /// The row under the window position, if any.
     fn row_at(&self, pos: (f64, f64)) -> Option<usize> {
         let (config, rows) = (self.config.as_ref()?, self.rows.as_ref()?);
-        let (x, y, w, h) = gpu::fit((screen::WIDTH, screen::HEIGHT), (config.width, config.height));
+        let (x, y, w, h) = gpu::fit(
+            (screen::WIDTH, screen::HEIGHT),
+            (config.width, config.height),
+        );
         let px = (pos.0 - x as f64) * screen::WIDTH as f64 / w as f64;
         let py = (pos.1 - y as f64) * screen::HEIGHT as f64 / h as f64;
         if px < rows.x as f64 || px > (rows.x + rows.width as i32) as f64 || py < rows.top as f64 {
@@ -268,7 +312,10 @@ impl winit::application::ApplicationHandler for App {
         let attributes = winit::window::Window::default_attributes()
             .with_title("nv-rs")
             .with_inner_size(winit::dpi::LogicalSize::new(screen::WIDTH, screen::HEIGHT))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(screen::WIDTH / 2, screen::HEIGHT / 2));
+            .with_min_inner_size(winit::dpi::LogicalSize::new(
+                screen::WIDTH / 2,
+                screen::HEIGHT / 2,
+            ));
         let window = match event_loop.create_window(attributes) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -286,7 +333,11 @@ impl winit::application::ApplicationHandler for App {
             }
         };
         let size = window.inner_size();
-        let g = match gpu::Gpu::new(&self.instance, Some(&surface), (screen::WIDTH, screen::HEIGHT)) {
+        let g = match gpu::Gpu::new(
+            &self.instance,
+            Some(&surface),
+            (screen::WIDTH, screen::HEIGHT),
+        ) {
             Ok(g) => g,
             Err(e) => {
                 eprintln!("{e}");
@@ -294,9 +345,13 @@ impl winit::application::ApplicationHandler for App {
                 return;
             }
         };
-        let Some(mut config) = surface.get_default_config(&g.adapter, size.width.max(1), size.height.max(1))
+        let Some(mut config) =
+            surface.get_default_config(&g.adapter, size.width.max(1), size.height.max(1))
         else {
-            eprintln!("the window's drawing surface does not work with {}", g.describe());
+            eprintln!(
+                "the window's drawing surface does not work with {}",
+                g.describe()
+            );
             event_loop.exit();
             return;
         };
@@ -307,7 +362,7 @@ impl winit::application::ApplicationHandler for App {
         }
         surface.configure(&g.device, &config);
         println!("drawing with {}; look: {}", g.describe(), self.look.from);
-        self.screen = Some(first_screen(&self.options, &g.adapter.get_info().name));
+        self.screen = Some(first_screen(&self.options, gpu::game_card()));
         self.started = Instant::now();
         self.config = Some(config);
         self.surface = Some(surface);
@@ -327,7 +382,9 @@ impl winit::application::ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
-                if let (Some(surface), Some(config), Some(g)) = (&self.surface, &mut self.config, &self.gpu) {
+                if let (Some(surface), Some(config), Some(g)) =
+                    (&self.surface, &mut self.config, &self.gpu)
+                {
                     config.width = size.width.max(1);
                     config.height = size.height.max(1);
                     surface.configure(&g.device, config);
@@ -341,7 +398,9 @@ impl winit::application::ApplicationHandler for App {
                 } else if let Some(s) = &mut self.screen {
                     let n = s.entries.len();
                     match event.logical_key {
-                        Key::Named(NamedKey::ArrowUp) => s.highlighted = (s.highlighted + n - 1) % n,
+                        Key::Named(NamedKey::ArrowUp) => {
+                            s.highlighted = (s.highlighted + n - 1) % n
+                        }
                         Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::Tab) => {
                             s.highlighted = (s.highlighted + 1) % n
                         }

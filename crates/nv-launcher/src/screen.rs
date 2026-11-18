@@ -50,7 +50,10 @@ impl Look {
     /// look is used then, and the log says which piece).
     pub fn from_game(game: &Game, inis: &[std::path::PathBuf]) -> Result<Look, String> {
         let fnt = game
-            .read(r"textures\fonts\fixedsys_comp_uniform_width.fnt", "Fallout - Textures2.bsa")
+            .read(
+                r"textures\fonts\fixedsys_comp_uniform_width.fnt",
+                "Fallout - Textures2.bsa",
+            )
             .ok_or("the terminal font (font 5) is not in the game's files")?;
         let texture_name: String = fnt
             .get(0x0c..0x0c + 0x24)
@@ -70,7 +73,10 @@ impl Look {
             .terminal_colour(inis)
             .ok_or("the terminal colour is in none of the game's INI files")?;
         let background = game
-            .read(r"textures\interface\shared\background\pipboy.dds", "Fallout - Textures2.bsa")
+            .read(
+                r"textures\interface\shared\background\pipboy.dds",
+                "Fallout - Textures2.bsa",
+            )
             .and_then(|d| crate::canvas::dds_rgba(&d));
         let header = [
             game.exe_setting_text("sComputersHeader1")
@@ -94,14 +100,22 @@ impl Look {
             font: Font::pixel(),
             colour: [0.2, 0.95, 0.45],
             background: None,
-            header: ["NV-RS LAUNCHER".into(), "FALLOUT: NEW VEGAS NOT FOUND YET".into()],
+            header: [
+                "NV-RS LAUNCHER".into(),
+                "FALLOUT: NEW VEGAS NOT FOUND YET".into(),
+            ],
             from: "the port's own look".into(),
         }
     }
 
     fn at(&self, brightness: f32, alpha: f32) -> [f32; 4] {
         let b = brightness / 255.0;
-        [self.colour[0] * b, self.colour[1] * b, self.colour[2] * b, alpha / 255.0]
+        [
+            self.colour[0] * b,
+            self.colour[1] * b,
+            self.colour[2] * b,
+            alpha / 255.0,
+        ]
     }
 }
 
@@ -138,10 +152,35 @@ struct Layout {
     prompt_y: i32,
 }
 
+/// The welcome text's lines wrapped at `computers_welcome`'s `wrapwidth` (600), at spaces; a word
+/// longer than the width stands on a line of its own.
+fn welcome_lines(look: &Look, screen: &Screen) -> Vec<String> {
+    const WRAP: u32 = 600;
+    let mut out = Vec::new();
+    for line in &screen.welcome {
+        let mut now = String::new();
+        for word in line.split(' ') {
+            let next = if now.is_empty() {
+                word.to_string()
+            } else {
+                format!("{now} {word}")
+            };
+            if !now.is_empty() && look.font.width(&next) > WRAP {
+                out.push(std::mem::take(&mut now));
+                now = word.to_string();
+            } else {
+                now = next;
+            }
+        }
+        out.push(now);
+    }
+    out
+}
+
 fn layout(look: &Look, screen: &Screen) -> Layout {
     let lh = look.font.line_height() as i32;
     let welcome_y = 60 + lh * 3 + 20;
-    let line_y = welcome_y + lh * screen.welcome.len() as i32 + 10;
+    let line_y = welcome_y + lh * welcome_lines(look, screen).len() as i32 + 10;
     let top = line_y + 2 + 10;
     let row = (lh + 20) as u32;
     let prompt_y = HEIGHT as i32 - lh - 30;
@@ -171,7 +210,10 @@ pub fn total_chars(look: &Look, screen: &Screen) -> usize {
     let rows = layout(look, screen).rows;
     look.header.iter().map(|l| l.chars().count()).sum::<usize>()
         + screen.title.chars().count()
-        + screen.welcome.iter().map(|l| l.chars().count()).sum::<usize>()
+        + welcome_lines(look, screen)
+            .iter()
+            .map(|l| l.chars().count())
+            .sum::<usize>()
         + screen.entries[rows.first..rows.first + rows.shown]
             .iter()
             .map(|e| e.chars().count() + 2)
@@ -200,24 +242,34 @@ pub fn draw(look: &Look, screen: &Screen, shown: usize, cursor: bool) -> (Canvas
     // The header, centred: `FinishIntro` measures 17 a character, the game font's advance (the
     // font's own width gives the same); the plain font's by its own cell.
     let centred = |s: &str| (WIDTH as i32 - look.font.width(s) as i32) / 2;
-    let lines = [look.header[0].as_str(), look.header[1].as_str(), screen.title.as_str()];
+    let lines = [
+        look.header[0].as_str(),
+        look.header[1].as_str(),
+        screen.title.as_str(),
+    ];
     for (i, line) in lines.iter().enumerate() {
         let part = typed(line);
-        look.font.draw(&mut c, centred(line), 60 + lh * i as i32, &part, text);
+        look.font
+            .draw(&mut c, centred(line), 60 + lh * i as i32, &part, text);
     }
     // The welcome text, then the line under it, as wide as the text.
     let mut widest = 0;
-    for (i, line) in screen.welcome.iter().enumerate() {
+    let welcome = welcome_lines(look, screen);
+    for (i, line) in welcome.iter().enumerate() {
         let part = typed(line);
-        look.font.draw(&mut c, 100, l.welcome_y + lh * i as i32, &part, text);
+        look.font
+            .draw(&mut c, 100, l.welcome_y + lh * i as i32, &part, text);
         widest = widest.max(look.font.width(line));
     }
-    if !screen.welcome.is_empty() {
+    if !welcome.is_empty() {
         c.fill(100, l.line_y, widest, 2, look.at(200.0, 255.0));
     }
     // The list.
     let r = &l.rows;
-    for (k, entry) in screen.entries[r.first..r.first + r.shown].iter().enumerate() {
+    for (k, entry) in screen.entries[r.first..r.first + r.shown]
+        .iter()
+        .enumerate()
+    {
         let i = r.first + k;
         let ry = r.top + r.row as i32 * k as i32;
         let part = typed(&format!("> {entry}"));
@@ -237,4 +289,53 @@ pub fn draw(look: &Look, screen: &Screen, shown: usize, cursor: bool) -> (Canvas
         c.fill(x, l.prompt_y + (lh - 17) / 2, 17, 17, text);
     }
     (c, l.rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn screen(welcome: &[&str]) -> Screen {
+        Screen {
+            title: "-nv-rs-".into(),
+            welcome: welcome.iter().map(|s| s.to_string()).collect(),
+            entries: (0..20).map(|i| format!("Entry {i}")).collect(),
+            highlighted: 0,
+            typed: String::new(),
+        }
+    }
+
+    /// The welcome text wraps at 600 at spaces and keeps every word; the list starts below it.
+    #[test]
+    fn the_welcome_text_wraps_at_600() {
+        let look = Look::plain();
+        let s = screen(&["Card: NVIDIA GeForce RTX 5070 Ti Laptop GPU", "Game: x"]);
+        let lines = welcome_lines(&look, &s);
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines.iter().all(|l| look.font.width(l) <= 600), "{lines:?}");
+        assert_eq!(
+            lines[..2].join(" "),
+            "Card: NVIDIA GeForce RTX 5070 Ti Laptop GPU"
+        );
+        let l = layout(&look, &s);
+        assert_eq!(
+            l.line_y,
+            l.welcome_y + 3 * look.font.line_height() as i32 + 10
+        );
+    }
+
+    /// The list shows the rows that fit above the prompt and scrolls to the highlighted one.
+    #[test]
+    fn the_list_fits_above_the_prompt_and_scrolls() {
+        let look = Look::plain();
+        let mut s = screen(&["Game: x"]);
+        let r = layout(&look, &s).rows;
+        let prompt = HEIGHT as i32 - look.font.line_height() as i32 - 30;
+        assert!(r.shown >= 1 && r.shown < 20);
+        assert!(r.top + (r.row * r.shown as u32) as i32 <= prompt - 10);
+        assert_eq!(r.first, 0);
+        s.highlighted = 15;
+        let r = layout(&look, &s).rows;
+        assert_eq!(r.first + r.shown - 1, 15);
+    }
 }

@@ -11,7 +11,7 @@ pub struct Canvas {
 impl Canvas {
     pub fn new(width: u32, height: u32) -> Canvas {
         let mut pixels = vec![0u8; (width * height * 4) as usize];
-        for p in pixels.chunks_exact_mut(4) {
+        for p in pixels.as_chunks_mut::<4>().0 {
             p[3] = 255;
         }
         Canvas {
@@ -28,10 +28,10 @@ impl Canvas {
         }
         let a = (colour[3] * coverage).clamp(0.0, 1.0);
         let at = ((y as u32 * self.width + x as u32) * 4) as usize;
-        for c in 0..3 {
-            let under = self.pixels[at + c] as f32 / 255.0;
-            let over = colour[c].clamp(0.0, 1.0);
-            self.pixels[at + c] = ((over * a + under * (1.0 - a)) * 255.0).round() as u8;
+        for (px, over) in self.pixels[at..at + 3].iter_mut().zip(colour) {
+            let under = *px as f32 / 255.0;
+            let over = over.clamp(0.0, 1.0);
+            *px = ((over * a + under * (1.0 - a)) * 255.0).round() as u8;
         }
     }
 
@@ -45,7 +45,12 @@ impl Canvas {
     }
 
     /// `image` (RGBA, `iw` by `ih`) stretched over the rectangle, each channel times `tint`.
-    pub fn stretch(&mut self, image: (&[u8], u32, u32), rect: (i32, i32, u32, u32), tint: [f32; 4]) {
+    pub fn stretch(
+        &mut self,
+        image: (&[u8], u32, u32),
+        rect: (i32, i32, u32, u32),
+        tint: [f32; 4],
+    ) {
         let (px, iw, ih) = image;
         let (x, y, w, h) = rect;
         for yy in 0..h {
@@ -81,7 +86,11 @@ pub fn decode_dxt1(data: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
                 let r = ((c >> 11) & 31) as u32;
                 let g = ((c >> 5) & 63) as u32;
                 let bl = (c & 31) as u32;
-                [(r * 255 + 15) / 31, (g * 255 + 31) / 63, (bl * 255 + 15) / 31]
+                [
+                    (r * 255 + 15) / 31,
+                    (g * 255 + 31) / 63,
+                    (bl * 255 + 15) / 31,
+                ]
             };
             let (p0, p1) = (rgb(c0), rgb(c1));
             let mix = |a: u32, b: u32, n: u32, d: u32| (a * (d - n) + b * n) / d;
@@ -89,14 +98,29 @@ pub fn decode_dxt1(data: &[u8], w: u32, h: u32) -> Option<Vec<u8>> {
                 [
                     [p0[0], p0[1], p0[2], 255],
                     [p1[0], p1[1], p1[2], 255],
-                    [mix(p0[0], p1[0], 1, 3), mix(p0[1], p1[1], 1, 3), mix(p0[2], p1[2], 1, 3), 255],
-                    [mix(p0[0], p1[0], 2, 3), mix(p0[1], p1[1], 2, 3), mix(p0[2], p1[2], 2, 3), 255],
+                    [
+                        mix(p0[0], p1[0], 1, 3),
+                        mix(p0[1], p1[1], 1, 3),
+                        mix(p0[2], p1[2], 1, 3),
+                        255,
+                    ],
+                    [
+                        mix(p0[0], p1[0], 2, 3),
+                        mix(p0[1], p1[1], 2, 3),
+                        mix(p0[2], p1[2], 2, 3),
+                        255,
+                    ],
                 ]
             } else {
                 [
                     [p0[0], p0[1], p0[2], 255],
                     [p1[0], p1[1], p1[2], 255],
-                    [mix(p0[0], p1[0], 1, 2), mix(p0[1], p1[1], 1, 2), mix(p0[2], p1[2], 1, 2), 255],
+                    [
+                        mix(p0[0], p1[0], 1, 2),
+                        mix(p0[1], p1[1], 1, 2),
+                        mix(p0[2], p1[2], 1, 2),
+                        255,
+                    ],
                     [0, 0, 0, 0],
                 ]
             };

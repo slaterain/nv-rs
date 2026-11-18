@@ -438,6 +438,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-profile"
+version = "0.1.0"
+
+[[package]]
 name = "gethostname"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -798,6 +802,7 @@ name = "nv-launcher"
 version = "0.1.0"
 dependencies = [
  "bsa",
+ "game-profile",
  "wgpu",
  "winit",
 ]

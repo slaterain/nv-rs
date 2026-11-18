@@ -41,12 +41,7 @@ pub struct Gpu {
 
 /// wgpu's futures are ready once polled after their work: no executor needed.
 fn block_on<F: std::future::Future>(f: F) -> F::Output {
-    struct Noop;
-    impl std::task::Wake for Noop {
-        fn wake(self: Arc<Self>) {}
-    }
-    let waker = std::task::Waker::from(Arc::new(Noop));
-    let mut cx = std::task::Context::from_waker(&waker);
+    let mut cx = std::task::Context::from_waker(std::task::Waker::noop());
     let mut f = std::pin::pin!(f);
     loop {
         if let std::task::Poll::Ready(v) = f.as_mut().poll(&mut cx) {
@@ -363,13 +358,50 @@ impl Gpu {
     }
 }
 
+/// The graphics card the GAME will draw with on Vulkan (`sRenderer=vulkan`) and the API it will
+/// land on, by the game's own rule (`d3d9_wgpu::device::card_facts`, which the start's
+/// `request_adapter` with high performance follows): the APIs in the game's order (Vulkan, then
+/// Direct3D 12 on Windows; the platform's own elsewhere), on the first that has a card a separate
+/// card before one built into the processor, then a virtual one, then any other; never the
+/// software adapter. The launcher's own drawing keeps its plainest device ([`Gpu::new`]).
+pub fn game_card() -> Option<(String, wgpu::Backend)> {
+    let tries = if cfg!(windows) {
+        vec![wgpu::Backends::VULKAN, wgpu::Backends::DX12]
+    } else {
+        vec![wgpu::Backends::PRIMARY]
+    };
+    let rank = |t: wgpu::DeviceType| match t {
+        wgpu::DeviceType::DiscreteGpu => 0,
+        wgpu::DeviceType::IntegratedGpu => 1,
+        wgpu::DeviceType::VirtualGpu => 2,
+        wgpu::DeviceType::Other => 3,
+        wgpu::DeviceType::Cpu => 4,
+    };
+    tries.into_iter().find_map(|backends| {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        block_on(instance.enumerate_adapters(backends))
+            .into_iter()
+            .map(|a| a.get_info())
+            .filter(|i| i.device_type != wgpu::DeviceType::Cpu)
+            .min_by_key(|i| rank(i.device_type))
+            .map(|i| (i.name, i.backend))
+    })
+}
+
 /// Where a picture of `picture`'s size goes in `target`, centred: the largest size of its shape
 /// that fits, or the largest whole multiple of it when that is at least nine tenths as large (its
 /// pixels stay sharp).
 pub fn fit(picture: (u32, u32), target: (u32, u32)) -> (u32, u32, u32, u32) {
     let s = (target.0 as f32 / picture.0 as f32).min(target.1 as f32 / picture.1 as f32);
     let whole = s.floor();
-    let s = if whole >= 1.0 && whole >= s * 0.9 { whole } else { s };
+    let s = if whole >= 1.0 && whole >= s * 0.9 {
+        whole
+    } else {
+        s
+    };
     let (w, h) = (
         ((picture.0 as f32 * s) as u32).min(target.0),
         ((picture.1 as f32 * s) as u32).min(target.1),
