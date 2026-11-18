@@ -5,7 +5,7 @@
 //! that is not listed keeps its record with no handler (a call fails, as without the DLL).
 //!
 //! Handlers and names exist only while JIP answers "installed" ([`crate::set_answers_installed`]:
-//! the host's row `NV_JIP_INSTALLED`, off in every preset): otherwise every JIP opcode, built or
+//! the host's row `NV_JIP_INSTALLED`, on in the fixes preset): otherwise every JIP opcode, built or
 //! not, is as without the DLL, and only a run with the row on, or a test on an engine installed
 //! with the flag on, reaches the commands built here.
 

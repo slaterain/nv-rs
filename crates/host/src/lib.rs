@@ -100,7 +100,7 @@ pub(crate) fn install_rows_and_extenders(engine: &mut Engine, choice: &fixes::Ch
     // vanilla commands is a row.
     nvse::install(engine);
     // JIP LN NVSE, xNVSE's plugin, right after it: its command slots, answering "not
-    // installed" unless the row `NV_JIP_INSTALLED` (off in every preset, set by
+    // installed" unless the row `NV_JIP_INSTALLED` (on in the fixes preset, set by
     // `fixes::install` above) switched it on (`crates/jip`).
     jip::install(engine);
     // The Mod Configuration Menu's plugin, when its row is on: xNVSE loads MCM.dll after
