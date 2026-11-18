@@ -308,10 +308,7 @@ pub(crate) fn get_block(e: &Engine, node: u32, name: &[u8]) -> u32 {
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiNode::GetNode (asm).
-/// [`get_block`], kept only when the block is a node. No built command calls it yet: JIP's
-/// `GetNode`/`GetNode2` callers (`MoveToNode`, `AttachLight`, the ray casts) wait for the write and
-/// Havok lanes; translated and tested here with the lookup it belongs to.
-#[cfg_attr(not(test), allow(dead_code))]
+/// [`get_block`], kept only when the block is a node (`AttachLine`'s first-person node).
 pub(crate) fn get_node(e: &Engine, node: u32, name: &[u8]) -> u32 {
     let block = get_block(e, node, name);
     if block != 0 && is_node(e, block) {

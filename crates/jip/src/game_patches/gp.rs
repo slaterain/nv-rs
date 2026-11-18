@@ -224,6 +224,14 @@ pub fn first_person_node(e: &mut Engine) -> u32 {
     e.ext_free::<FirstPersonNode>().0.load(Ordering::Relaxed)
 }
 
+/// Sets JIP's first-person node as G38 would (tests of the commands that read it).
+#[cfg(test)]
+pub fn set_first_person_node_for_test(e: &mut Engine, node: u32) {
+    e.ext_free::<FirstPersonNode>()
+        .0
+        .store(node, Ordering::Relaxed);
+}
+
 fn install_jip(e: &mut Engine) {
     // Made before the threads start, so every thread's engine shares it.
     e.ext_free::<FirstPersonNode>();

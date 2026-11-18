@@ -6,8 +6,8 @@
 //! character controller's tilt, gravity and velocity, the ground's material, the last hit's
 //! node, VATS targetability, `AttachAshPileEx`, the player's 3D, the push away from a point and
 //! a limb dismembered; and (lane C3) whether the last hit penetrated the armour, teammates made
-//! killable and an idle played by its conditions. 56 of its 71 commands; the first 70 lines are
-//! lane A1's module.
+//! killable and an idle played by its conditions, and the no gun wobble switch. 57 of its 71
+//! commands; the first 70 lines are lane A1's module.
 //!
 //! Built elsewhere already (the core track's hook files): `SetOnHitEventHandler`,
 //! `SetOnReloadWeaponEventHandler`, `SetOnRagdollEventHandler` (`actor_hooks.rs`) and
@@ -16,14 +16,15 @@
 //! Left for later, each with what it waits for:
 //! - a game patch of stage 3.9 (`measure/jip/PLAN-3.9.md`): `MoveAwayFrom` (G42: the backup package reads
 //!   `s_moveAwayDistance`; H16: JIP's 0x8C package), `TravelToRef` (H16: `AddBackUpPackage`
-//!   allocates JIP's enlarged 0x8C package), `ToggleNoGunWobble` (H19),
+//!   allocates JIP's enlarged 0x8C package),
 //!   `Get/SetExcludedCombatActions` (H16: the combat controller's added mask and JIP's
 //!   per-reference map), `RemoveAllPerks` and `GetAllPerks` (O18 NPC perks: their NPC half reads
 //!   the patch's state and JIP's perk maps);
 //! - a hook: `FireWeaponEx` (writes the exe's code at `009BAD76` and `01087F1C` and queues a
 //!   call);
-//! - the 3D scene and physics (not ported to this layer): `ReloadEquippedModels`,
-//!   `RefreshAnimData`, `ReloadCharController`.
+//! - (`ReloadEquippedModels` and `RefreshAnimData` are built: the models reloaded through the game,
+//!   the animation data refreshed with JIP's `Actor::RefreshAnimData`, [`refresh_anim_data`];
+//!   `ReloadCharController` is built in `jip_fn_actor_anim.rs`.)
 //!
 //! Layouts (JIP's headers; the exe where the audit table says so): a reference's base form +0x20,
 //! position z +0x38, cell +0x40, extra data list +0x44; an actor's process +0x68, killer +0xC0,
@@ -109,6 +110,9 @@ pub static COMMANDS: Handlers = &[
     (0x2883, get_armour_penetrated),
     (0x28eb, toggle_teammate_killable),
     (0x2807, play_idle_ex),
+    (0x28ec, toggle_no_gun_wobble),
+    (0x280d, reload_equipped_models),
+    (0x290c, refresh_anim_data_cmd),
 ];
 
 #[rustfmt::skip]
@@ -1387,6 +1391,39 @@ fn toggle_teammate_killable(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+/// `kHookActorFlag2_NoGunWobble` (`internal/hooks.h`, `1 << 3`) in the actor's `jipActorFlags2`
+/// (+0x106): the bit the gun wobble patch (H19: `hooks.h` tests `[ecx+0x106]`) reads.
+pub const NO_GUN_WOBBLE: u8 = 1 << 3;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_ToggleNoGunWobble_Execute.
+/// An actor's [`NO_GUN_WOBBLE`]: 1 when it is set; with an argument (the line's count not 0)
+/// that is read, the bit flipped when the asked state differs. The bit is read only by H19's
+/// patch: until it is in, the command keeps and answers the bit and the game is unchanged.
+fn toggle_no_gun_wobble(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let actor = Ptr::<crate::game::JipActorFlags>::new(a.this_obj);
+    let flags = e.get(actor, crate::game::JipActorFlags::jipActorFlags2);
+    let state = flags & NO_GUN_WOBBLE != 0;
+    if state {
+        a.set_result(e, 1.0);
+    }
+    if super::jip_fn_utility::num_args(e, &a) != 0 {
+        let read = Read::of(e, &a);
+        if read.ok && (read.int(0, 0) == 0) == state {
+            e.set(
+                actor,
+                crate::game::JipActorFlags::jipActorFlags2,
+                flags ^ NO_GUN_WOBBLE,
+            );
+        }
+    }
+    handled(true)
+}
+
 /// The game's `AttachAshPile` command (`005DB870`: one parameter parsed with the caller's
 /// parameter list into its mode word, then the ash pile placed under the actor; the port's
 /// `tesscriptfunctions.rs`), which JIP's `AttachAshPileEx` jumps to with its own arguments.
@@ -1870,6 +1907,212 @@ fn get_actor_velocity_alt(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the equipped models reloaded ----
+
+/// An animation data's blend set (`004994F0`: the data, 4, 0) and its refresh (`00499240`: the
+/// data, 0); a process's animation data (+0x1C0) and the byte JIP tests first (+0x135); an
+/// animation data's +0xF0 word; the player's first-person animation data (+0x690).
+const ANIM_BLEND: u32 = 0x0049_94f0;
+const ANIM_REFRESH: u32 = 0x0049_9240;
+const PROCESS_ANIM_DATA: u32 = 0x1c0;
+const PROCESS_BLEND_BYTE: u32 = 0x135;
+const ANIM_BLEND_WORD: u32 = 0xf0;
+const PLAYER_ANIM_DATA_1ST: u32 = 0x690;
+const PLAYER_REF_ID: u32 = 0x14;
+
+/// One animation data refreshed (blended first when the process's byte and the data's word are
+/// set).
+fn refresh_one_anim_data(e: &mut Engine, data: u32, blend: bool) {
+    if blend && e.mem.u32(data + ANIM_BLEND_WORD) != 0 {
+        e.call(ANIM_BLEND, &args![data, 4u32, 0u32]);
+    }
+    e.call(ANIM_REFRESH, &args![data, 0u32]);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameObjects.cpp: Actor::RefreshAnimData
+// (asm).
+/// For an actor in high process with animation data: the data refreshed, and for the player its
+/// first-person data too (as the asm, unchecked).
+pub(crate) fn refresh_anim_data(e: &mut Engine, actor: u32) {
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    if process == 0 || e.mem.u32(process + PROCESS_LEVEL) != 0 {
+        return;
+    }
+    let data = e.mem.u32(process + PROCESS_ANIM_DATA);
+    if data == 0 {
+        return;
+    }
+    let blend = e.mem.u8(process + PROCESS_BLEND_BYTE) != 0;
+    refresh_one_anim_data(e, data, blend);
+    if e.mem.u32(actor + 0xc) != PLAYER_REF_ID {
+        return;
+    }
+    let first = e.mem.u32(actor + PLAYER_ANIM_DATA_1ST);
+    refresh_one_anim_data(e, first, blend);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_RefreshAnimData_Execute.
+/// `actor.RefreshAnimData`: for an actor, [`refresh_anim_data`]. No result.
+fn refresh_anim_data_cmd(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if is_actor(e, a.this_obj) {
+        refresh_anim_data(e, a.this_obj);
+    }
+    handled(true)
+}
+
+/// The biped slots (`BipedAnim::slotData`, from +0x2C, 0x10 bytes each: the item +0, the node
+/// +8), the biped's character (+0x2B0) and Bip01 (+0); the game's model reload of a biped
+/// (`00606540`: the character's base form, the character, the biped, 0) and its update
+/// (`004AC1E0`: the biped, 0); a node's downward update (vtable +0xA4: the data, 0).
+const BIPED_CHARACTER: u32 = 0x2b0;
+const BIPED_LOAD_MODELS: u32 = 0x0060_6540;
+const BIPED_UPDATE: u32 = 0x004a_c1e0;
+const NODE_UPDATE_DOWNWARD: u32 = 0xa4;
+const NODE_REMOVE_OBJECT: u32 = 0xe8;
+const NODE_PARENT: u32 = 0x18;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h: ReloadBipedAnim
+// (asm).
+/// Each slot of `mask` (from slot 0, stopping after the mask's last set bit): its node taken off
+/// the slot and out of its parent; then the game loads the biped's models again, updates the
+/// biped and the root's transforms.
+fn reload_biped_anim(e: &mut Engine, biped: u32, root: u32, mask: u32) {
+    let mut bits = mask;
+    let mut slot = biped + BIPED_SLOTS;
+    while bits != 0 {
+        let take = bits & 1 != 0;
+        bits >>= 1;
+        if take {
+            let node = e.mem.u32(slot + 8);
+            if node != 0 {
+                e.mem.set_u32(slot + 8, 0);
+                let parent = e.mem.u32(node + NODE_PARENT);
+                if parent != 0 {
+                    e.vcall(parent, NODE_REMOVE_OBJECT, &[node]);
+                }
+            }
+        }
+        slot += 0x10;
+    }
+    let character = e.mem.u32(biped + BIPED_CHARACTER);
+    let base = e.mem.u32(character + 0x20);
+    e.call(BIPED_LOAD_MODELS, &args![base, character, biped, 0u32]);
+    e.call(BIPED_UPDATE, &args![biped, 0u32]);
+    e.with_stack(0xc, |e, data| {
+        for i in 0..3 {
+            e.mem.set_u32(data.addr() + 4 * i, 0);
+        }
+        e.vcall(root, NODE_UPDATE_DOWNWARD, &[data.addr(), 0]);
+    });
+}
+
+/// `g_OSGlobals` (`*011DEA0C`): the free camera state (+6) and time frozen (+7).
+const OS_GLOBALS: u32 = 0x011d_ea0c;
+/// `Character::IsCharacter` (vtable +0x218); a character's biped (+0x1B4); the player's
+/// first-person biped (+0x68C) and node (+0x694).
+const VT_IS_CHARACTER: u32 = 0x218;
+const CHARACTER_BIPED: u32 = 0x1b4;
+const PLAYER_BIPED_1ST: u32 = 0x68c;
+const PLAYER_NODE_1ST: u32 = 0x694;
+/// The weapon's flags (+0x100: bit 0x10 the weapon is re-equipped) and its scope model
+/// (`targetNIF`, +0x1E8); the HUD's scope refreshes (`0077F270`, `0077F2F0` with the model);
+/// a process's weapon entry (+0x114) and `QueueEquipItem` (vtable +0x178).
+const WEAPON_FLAGS1: u32 = 0x100;
+const WEAPON_TARGET_NIF: u32 = 0x1e8;
+const HUD_WEAPON_REFRESH: u32 = 0x0077_f270;
+const HUD_SCOPE_REFRESH: u32 = 0x0077_f2f0;
+const PROCESS_WEAPON_INFO: u32 = 0x114;
+const VT_QUEUE_EQUIP_ITEM: u32 = 0x178;
+/// Every slot but the Pip-Boy's (6).
+const ALL_BUT_PIPBOY: u32 = 0xf_ffbf;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_ReloadEquippedModels_Execute.
+/// `ReloadEquippedModels [slot]`: not while the free camera's time is frozen; for a character
+/// with 3D, a biped and a high process, and a slot that reads (up to 19, not 6) or none: the
+/// slot's (else every slot's but the Pip-Boy's) models taken off and loaded again, the player's
+/// first-person ones too (and the HUD's weapon and scope refreshed when the weapon slot is
+/// reloaded with a weapon); a weapon with flag 0x10 first loses its backpack node and is queued
+/// to equip again after; the animation data refreshed. No result.
+fn reload_equipped_models(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let os = e.mem.u32(OS_GLOBALS);
+    if os != 0 && e.mem.u8(os + 6) != 0 && e.mem.u8(os + 7) != 0 {
+        return handled(true);
+    }
+    let character = a.this_obj;
+    if character == 0 {
+        return handled(true);
+    }
+    let vtbl = e.mem.u32(character);
+    let is_character = e.call(e.mem.u32(vtbl + VT_IS_CHARACTER), &[character]).eax & 0xff != 0;
+    let root = super::jip_fn_misc_ref::ref_ni_node(e, character);
+    let biped = e.mem.u32(character + CHARACTER_BIPED);
+    let process = e.mem.u32(character + ACTOR_PROCESS);
+    if !is_character
+        || root == 0
+        || biped == 0
+        || process == 0
+        || e.mem.u32(process + PROCESS_LEVEL) != 0
+    {
+        return handled(true);
+    }
+    let mut slot: i32 = -1;
+    if super::jip_fn_utility::num_args_ex(e, &a) != 0 {
+        let read = Read::of(e, &a);
+        slot = read.int(0, u32::MAX) as i32;
+        if !read.ok || slot > 19 || slot == 6 {
+            return handled(true);
+        }
+    }
+    let weapon = if slot < 0 || slot == 5 {
+        e.mem.u32(biped + BIPED_SLOTS + 5 * 0x10)
+    } else {
+        0
+    };
+    let re_equip = weapon != 0 && e.mem.u8(weapon + WEAPON_FLAGS1) & 0x10 != 0;
+    if re_equip {
+        let bip01 = e.mem.u32(biped);
+        let backpack = super::nif_nodes::get_node(e, bip01, b"Backpack");
+        if backpack != 0 {
+            let parent = e.mem.u32(backpack + NODE_PARENT);
+            e.vcall(parent, NODE_REMOVE_OBJECT, &[backpack]);
+        }
+    }
+    let mut mask = ALL_BUT_PIPBOY;
+    if slot >= 0 {
+        mask &= 1 << slot;
+    }
+    reload_biped_anim(e, biped, root, mask);
+    if e.mem.u32(character + 0xc) == PLAYER_REF_ID {
+        let biped_1st = e.mem.u32(character + PLAYER_BIPED_1ST);
+        let node_1st = e.mem.u32(character + PLAYER_NODE_1ST);
+        reload_biped_anim(e, biped_1st, node_1st, mask);
+        if weapon != 0 {
+            e.call(HUD_WEAPON_REFRESH, &[]);
+            if super::jip_fn_weapon::equipped_weapon_has_scope(e, character) != 0 {
+                e.call(HUD_SCOPE_REFRESH, &args![weapon + WEAPON_TARGET_NIF]);
+            }
+        }
+    }
+    if re_equip {
+        let info = e.mem.u32(process + PROCESS_WEAPON_INFO);
+        if info != 0 && e.mem.u32(info + 8) == weapon {
+            let extend = e.mem.u32(info);
+            let first = if extend != 0 { e.mem.u32(extend) } else { 0 };
+            e.vcall(
+                process,
+                VT_QUEUE_EQUIP_ITEM,
+                &[character, 1, weapon, 1, first, 1, 0, 1, 0, 0],
+            );
+        }
+    }
+    refresh_anim_data(e, character);
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_tests.rs"]
 mod tests;
@@ -1881,3 +2124,7 @@ mod c1_tests;
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_c3_tests.rs"]
 mod c3_tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_p2_r1_tests.rs"]
+mod r1_tests;

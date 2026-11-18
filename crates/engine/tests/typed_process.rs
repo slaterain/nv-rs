@@ -11,7 +11,7 @@
 use engine as _;
 use engine_core::prelude::*;
 use engine_core::typed::diff::{Case, Diff, Input};
-use engine_typed::process::{self, array, levels};
+use engine_typed::process::{self, array, forget, levels};
 use engine_typed::{dispatch, multibound};
 
 const VT_FN: u32 = 0x00ff_2000;
@@ -672,5 +672,411 @@ fn process_hour_rounding() {
             })
             .run()
             .assert_same();
+    }
+}
+
+// ---- The clean-up when a reference goes away (`0096f600`, `00976680`) ----
+
+/// The exe functions the clean-up calls by address, each a stand-in that logs its words and answers
+/// from [`FORGET_ANSWERS`] by its index here.
+const FORGET_CALLEES: [u32; 38] = [
+    0x0055_b980,
+    0x0067_f390,
+    0x0067_f3c0,
+    0x0088_1650,
+    0x0068_0020,
+    0x0093_36c0,
+    0x0093_44a0,
+    0x0067_4d40,
+    0x0088_1680,
+    0x00c5_4550,
+    0x0056_8ab0,
+    0x0098_ddd0,
+    0x0041_ca90,
+    0x005e_3fc0,
+    0x0099_4ef0,
+    0x008a_6730,
+    0x0057_bd60,
+    0x008b_3200,
+    0x0041_9dc0,
+    0x008d_80e0,
+    0x008a_6650,
+    0x008a_6170,
+    0x009f_8420,
+    0x0041_cab0,
+    0x0097_f9c0,
+    0x0088_1620,
+    0x0087_4480,
+    0x005e_3fa0,
+    0x0042_2690,
+    0x0090_5330,
+    0x0067_2fc0,
+    0x0067_6140,
+    0x0067_1d30,
+    0x0088_1510,
+    0x008c_4f10,
+    0x0099_2920,
+    0x009c_4c80,
+    0x009b_28a0,
+];
+/// Where each callee's answer is.
+const FORGET_ANSWERS: u32 = LOG + 0x3c00;
+/// A slot that answers 0 (a non-actor's "is it an actor"), past the stand-in slots.
+const NOT_AN_ACTOR: u32 = 0x00ff_3000;
+/// The array slot `009c4c80`'s stand-in empties when it is called (0: none), then the array's
+/// first element and the address of the slot's level's tail (the next two words).
+const LEAVES_ITS_SLOT: u32 = LOG + 0x3e70;
+
+fn forget_callee<const I: u32>(e: &mut Engine, a: &[u32]) -> Ret {
+    log(e, 0x5000 | I, a.first().copied().unwrap_or(0));
+    for w in a.iter().skip(1) {
+        log(e, 0x5100 | I, *w);
+    }
+    ret(e.mem.u32(FORGET_ANSWERS + 4 * I))
+}
+
+fn forget_callees(e: &mut Engine) {
+    e.register(NOT_AN_ACTOR, |e, a| {
+        log(e, 0x3000, a.first().copied().unwrap_or(0));
+        ret(0)
+    });
+    macro_rules! each {
+        ($($i:literal)*) => { $( e.register(FORGET_CALLEES[$i], forget_callee::<$i>); )* };
+    }
+    each!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
+        33 34 35 36 37);
+    // `009c4c80` (index 36): also takes the object out of the array slot [`LEAVES_ITS_SLOT`] names,
+    // once, as the array's removal (`0096aa40`) does: the level's tail one lower, the element at the
+    // new tail moved into the slot (unless the slot is that last one) and the new tail's slot emptied.
+    e.register(0x009c_4c80, |e, a| {
+        let slot = e.mem.u32(LEAVES_ITS_SLOT);
+        if slot != 0 {
+            let elements = e.mem.u32(LEAVES_ITS_SLOT + 4);
+            let tail = e.mem.u32(LEAVES_ITS_SLOT + 8);
+            let last_index = e.mem.u32(tail) - 1;
+            e.mem.set_u32(tail, last_index);
+            let last = elements + 4 * last_index;
+            if slot != last {
+                let moved = e.mem.u32(last);
+                e.mem.set_u32(slot, moved);
+            }
+            e.mem.set_u32(last, 0);
+            e.mem.set_u32(LEAVES_ITS_SLOT, 0);
+        }
+        forget_callee::<36>(e, a)
+    });
+}
+
+/// An object of 0x200 bytes whose slots all answer `answer`, its extra data list (at +0x44) empty.
+/// Its vtable goes on to slot 0x7fc (the clean-up calls slots up to 0x7b0): the slots past the
+/// answer word at +0x400 are stand-ins too ([`forget_high_slots`]).
+fn forget_object(e: &mut Engine, answer: u32) -> u32 {
+    let vt = e.mem.alloc(0x800);
+    for slot in (0..0x800).step_by(4) {
+        e.mem.set_u32(vt + slot, VT_FN + slot);
+    }
+    e.mem.set_u32(vt + VT_SLOTS, answer);
+    let o = e.mem.alloc(0x200);
+    e.mem.set_u32(o, vt);
+    o
+}
+
+/// The stand-ins for the slots past the answer word.
+fn forget_high_slots(e: &mut Engine) {
+    for s in (VT_SLOTS + 4..0x800).step_by(4) {
+        e.register(VT_FN + s, any_slot::<0xfd>);
+    }
+}
+
+/// Gives `object`'s extra data list the extra data of `kinds` (a type and its words at +0xc and
+/// +0x14), with the type bitmap set.
+fn give_extra(e: &mut Engine, object: u32, kinds: &[(u32, u32, u32)]) {
+    let list = object + 0x44;
+    let mut next = 0;
+    for &(kind, c, x14) in kinds.iter().rev() {
+        let extra = block(e, 0x18, &[0x0101_0000, kind, next, c, 0, x14]);
+        next = extra;
+        let byte = list + 8 + (kind >> 3);
+        let flags = e.mem.u8(byte) | 1 << (kind & 7);
+        e.mem.set_u8(byte, flags);
+    }
+    e.mem.set_u32(list + 4, next);
+}
+
+/// An actor of the clean-up's world: its slots answer `slot_answer`, its word at +0x70 and +0xc0
+/// the target or not (`k` bits 0 and 1), its process (unless `k` bit 2) with slots answering
+/// `process_answer` and level `level`.
+fn forget_actor(
+    e: &mut Engine,
+    target: u32,
+    decoy: u32,
+    (slot_answer, process_answer, level, k): (u32, u32, u32, u32),
+) -> u32 {
+    let a = forget_object(e, slot_answer);
+    e.mem
+        .set_u32(a + 0x70, if k & 1 != 0 { target } else { decoy });
+    e.mem.set_u32(a + 0xc0, if k & 2 != 0 { target } else { 0 });
+    if k & 4 == 0 {
+        let p = forget_object(e, process_answer);
+        e.mem.set_u32(p + 0x28, level);
+        e.mem.set_u32(a + 0x68, p);
+    }
+    a
+}
+
+/// The clean-up's world from the case: `pattern` picks which objects stand in the array and what
+/// their slots answer; `answers` which callees answer 0, a decoy object or the target; `which` the
+/// target (an actor, a non-actor, or none). Returns the lists and the target.
+fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32, u32) {
+    stand_ins(e);
+    forget_callees(e);
+    forget_high_slots(e);
+    // The extra data's dirty count and lock.
+    e.map(0x011c_3000, 0x1000);
+    e.mem.set_u32(0x011c_38e4, 1);
+    // A decoy whose slots answer 0: the "something, not the target" answer, its low byte not 0 so
+    // that it is true as a byte too.
+    let base = forget_object(e, 0);
+    let decoy = base + 0x11;
+    let vt = e.mem.u32(base);
+    e.mem.set_u32(decoy, vt);
+    // The target: an actor (its slots answer itself) or a non-actor (they answer 0).
+    // Placed off its block's start, as the decoy is, so its address's low byte (what a slot's
+    // answer is as a byte) is not 0 whatever the heap gives: as an actor, its "is it an actor" is true.
+    let target_base = forget_object(e, 0);
+    let target = target_base + 0x21;
+    let vt = e.mem.u32(target_base);
+    e.mem.set_u32(target, vt);
+    assert_ne!(target & 0xff, 0, "the target's answer is true as a byte");
+    if which == 0 {
+        e.mem.set_u32(vt + VT_SLOTS, target);
+    }
+    for i in 0..FORGET_CALLEES.len() as u32 {
+        let pick = (answers >> ((i * 7) % 15)) & 3;
+        let answer = match pick {
+            1 => decoy,
+            2 | 3 => target,
+            _ => 0,
+        };
+        e.mem.set_u32(FORGET_ANSWERS + 4 * i, answer);
+    }
+    // The decoy's word a record's +0x18 is read from.
+    e.mem
+        .set_u32(decoy + 0x18, if answers & 1 != 0 { target } else { 0 });
+    let p_answer = if pattern & 1 != 0 { target } else { decoy };
+    let s_answer = if pattern & 2 != 0 { target } else { decoy };
+    let follower = forget_actor(e, target, decoy, (decoy, p_answer, 3, 1));
+    let lead = forget_actor(
+        e,
+        target,
+        decoy,
+        (s_answer, p_answer, pattern % 3, pattern >> 2),
+    );
+    // The lead's extra data: followers (a list of the follower and a non-actor), head track, package
+    // data (an object whose slots log), package target.
+    let non_actor = forget_object(e, 0);
+    let second = block(e, 8, &[non_actor, 0]);
+    let first = block(e, 8, &[follower, second]);
+    let package_data = forget_object(e, 0);
+    give_extra(
+        e,
+        lead,
+        &[
+            (0x1d, first, 0),
+            (0x46, if pattern & 8 != 0 { target } else { 0 }, 0),
+            (0x70, package_data, 0),
+            (0x19, 0, if answers & 2 != 0 { target } else { decoy }),
+        ],
+    );
+    let plain = forget_actor(e, target, decoy, (decoy, decoy, 1, 0));
+    let skipped = forget_actor(e, target, decoy, (target, target, 0, 0));
+    e.mem.set_u32(skipped + 8, 0x0020_0000);
+    let other = forget_object(e, if pattern & 4 != 0 { target } else { 0 });
+    // The words around the one the clean-up clears in a non-actor (`009707f0`: +0xfc).
+    words(e, other + 0xf8, &[0x1111, 0x2222, 0x3333]);
+    // A non-actor: its slot 0x100 (is it an actor) answers 0 whatever its other slots answer.
+    let vt = e.mem.u32(other);
+    e.mem.set_u32(vt + 0x100, NOT_AN_ACTOR);
+    // The array's levels; the temp list holds the follower, the non-actor and the skipped one.
+    let one_plain = [plain];
+    let lead_level = [lead];
+    let hole = [0];
+    let three = [other, skipped, follower];
+    let lead_plain = [lead, plain];
+    let others = [other];
+    let skipped_level = [skipped];
+    let other_lead = [other, lead];
+    let levels: [&[u32]; 4] = match pattern % 4 {
+        0 => [&one_plain, &lead_level, &hole, &three],
+        1 => [&lead_plain, &[], &[], &others],
+        2 => [&[], &[], &skipped_level, &other_lead],
+        // The array one actor long: the temp list's loop starts from index 1.
+        3 if pattern & 8 != 0 => [&lead_level, &[], &[], &[]],
+        _ => [&lead_level, &others, &[], &[]],
+    };
+    let a = process_array(e, levels, 2, [0; 4]);
+    let lists = e.mem.alloc(0x1_0400);
+    let bytes = e.mem.bytes(a, 0x40);
+    e.mem.write(lists + 4, &bytes);
+    // With pattern bit 16, the non-actor told about the target (`009c4c80`) is flagged 0x800 and
+    // leaves the array while it is told (its level's last element moves into its slot, as
+    // `0096aa40` moves it), so `00976680` looks at that slot again.
+    if pattern & 16 != 0 {
+        let flags = e.mem.u32(other + 8) | 0x800;
+        e.mem.set_u32(other + 8, flags);
+        let elements = e.mem.u32(a + 4);
+        let count = u32::from(e.mem.u16(a + 0xa));
+        if let Some(i) = (0..count).find(|i| e.mem.u32(elements + 4 * i) == other) {
+            // Level 3's tail in the lists' copy of the array (+4, then +0x20 + 4 * level).
+            let level_tail = lists + 4 + 0x20 + 4 * 3;
+            words(
+                e,
+                LEAVES_ITS_SLOT,
+                &[elements + 4 * i, elements, level_tail],
+            );
+        }
+    }
+    let tail = block(e, 8, &[skipped, 0]);
+    let middle = block(e, 8, &[non_actor, tail]);
+    words(e, lists + 0x78, &[follower, middle]);
+    // The alive actor list's head; the actors close to the player: the target among them.
+    words(e, lists + 0x80, &[target, 0]);
+    words(e, lists + 0x88, &[decoy, target]);
+    // The player, whose followers the target may leave; the object `00976680` first tells.
+    let player = forget_actor(e, target, decoy, (decoy, p_answer, 0, pattern & 1));
+    give_extra(e, player, &[(0x1d, first, 0)]);
+    e.mem.set_u32(0x011d_ea3c, player);
+    e.mem.set_u32(0x011f_1958, decoy);
+    (lists, target)
+}
+
+/// The world patterns, the callees' answers, the target (an actor or not; the exe calls the
+/// target's slots, so it is never null).
+fn forget_inputs() -> Vec<Input> {
+    vec![
+        Input::Of(&[0, 1, 2, 3, 5, 6, 7, 9, 12, 15, 17, 20, 26, 31]),
+        Input::Of(&[0, 0x5a5a, 0xffff, 0x1234, 0x8001]),
+        Input::Of(&[0, 1]),
+    ]
+}
+
+/// The calls the clean-up does in place: an object's extra data list (`005d43c0`, +0x44) and its
+/// word at +0x70 (`004fd380`).
+const FORGET_IN_PLACE: &[u32] = &[0x005d_43c0, 0x004f_d380];
+
+#[test]
+fn process_null_out_target_ref() {
+    let mut inputs = forget_inputs();
+    inputs.push(Input::Flag);
+    Diff::new(entry!(
+        0x0096_f600,
+        forget::null_out_target_ref(Ptr<_>, u32, u8)
+    ))
+    .common()
+    // The extra data cache's memset wrapper, a C runtime family member: translated on both sides.
+    .goes_by_address(&[0x0040_3d30])
+    .ignore_calls(FORGET_IN_PLACE)
+    .max_cases(280)
+    .inputs(&inputs)
+    .setup(|e, case| {
+        let (lists, target) = forget_world(e, case.word(0), case.word(1), case.word(2));
+        vec![lists, target, case.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn process_reference_destructed() {
+    Diff::new(entry!(
+        0x0097_6680,
+        forget::reference_destructed(Ptr<_>, u32)
+    ))
+    .common()
+    .goes_by_address(&[0x0040_3d30])
+    .ignore_calls(FORGET_IN_PLACE)
+    // The actors close to the player, which the translation calls as a Rust function.
+    .translation_calls_plainly(&[0x0096_e6f0])
+    .max_cases(140)
+    .inputs(&forget_inputs())
+    .setup(|e, case| {
+        let (lists, target) = forget_world(e, case.word(0), case.word(1), case.word(2));
+        vec![lists, target]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The clean-up's world at a size like a town's: `n` actors of the low process level, each with a
+/// process and an extra data list of a few entries (none of them the followers), none of them
+/// mentioning the target, as for nearly every reference a cell unload frees.
+fn forget_crowd(e: &mut Engine, n: u32) -> (u32, u32) {
+    stand_ins(e);
+    forget_callees(e);
+    forget_high_slots(e);
+    e.map(0x011c_3000, 0x1000);
+    e.mem.set_u32(0x011c_38e4, 1);
+    let base = forget_object(e, 0);
+    let decoy = base + 0x11;
+    let vt = e.mem.u32(base);
+    e.mem.set_u32(decoy, vt);
+    let target = forget_object(e, 0);
+    for i in 0..FORGET_CALLEES.len() as u32 {
+        e.mem.set_u32(FORGET_ANSWERS + 4 * i, 0);
+    }
+    let actors: Vec<u32> = (0..n)
+        .map(|i| {
+            let a = forget_actor(e, target, decoy, (decoy, decoy, 3, 0));
+            give_extra(e, a, &[(0x0b, i, 0), (0x46, 0, 0), (0x70 + i % 2, 0, 0)]);
+            a
+        })
+        .collect();
+    let a = process_array(e, [&[], &[], &[], &actors], 2, [0; 4]);
+    let lists = e.mem.alloc(0x1_0400);
+    let bytes = e.mem.bytes(a, 0x40);
+    e.mem.write(lists + 4, &bytes);
+    let player = forget_actor(e, target, decoy, (decoy, decoy, 0, 0));
+    e.mem.set_u32(0x011d_ea3c, player);
+    e.mem.set_u32(0x011f_1958, decoy);
+    (lists, target)
+}
+
+/// The time the clean-up takes for one reference over 200 low-process actors, the translations alone
+/// against the game's set-up (the families on): 5 rounds of 20 calls each, alternating, the best
+/// round of each printed. Run on demand (`--ignored --nocapture`, best in a release build): a timing,
+/// not a check. The actors' own slots and the package and combat functions are cheap stand-ins here;
+/// in the game they are the translations' work, which the typed clean-up still calls, so the share
+/// saved in the game is smaller than here.
+#[test]
+#[ignore]
+fn process_forget_speed() {
+    const ACTORS: u32 = 200;
+    const CALLS: u32 = 20;
+    let mut engines = [
+        ("translation", Engine::new_untyped_for_test()),
+        ("typed", Engine::new()),
+    ];
+    for address in [0x0096_f600u32, 0x0097_6680] {
+        let mut best = [u128::MAX; 2];
+        let worlds: Vec<(u32, u32)> = engines
+            .iter_mut()
+            .map(|(_, e)| forget_crowd(e, ACTORS))
+            .collect();
+        for _ in 0..5 {
+            for (i, (_, e)) in engines.iter_mut().enumerate() {
+                let (lists, target) = worlds[i];
+                let started = std::time::Instant::now();
+                for _ in 0..CALLS {
+                    e.call(address, &[lists, target, 0]);
+                }
+                best[i] = best[i].min(started.elapsed().as_micros());
+            }
+        }
+        for (i, (name, _)) in engines.iter().enumerate() {
+            println!(
+                "{address:08x} {name}: {} us for {CALLS} calls over {ACTORS} actors (best of 5)",
+                best[i]
+            );
+        }
     }
 }

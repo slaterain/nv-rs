@@ -1114,6 +1114,26 @@ impl std::fmt::Debug for List {
 }
 
 impl Body {
+    /// A body of bounds alone (a skinned caster: its sphere is worked out each frame from its
+    /// bones, [`skin_bounds`]; no pieces, no cables).
+    pub fn bare(bounds: ([f64; 3], f64)) -> Body {
+        Body {
+            bounds,
+            thin: None,
+            solid: None,
+            solid_list: None,
+            ribbon_tris: None,
+            ribbon_list: None,
+            rounds: None,
+            strips: None,
+            strips_list: None,
+            pieces: 0,
+            look: Vec::new(),
+            kinds: [(0, 0.0); 3],
+            triangles: None,
+        }
+    }
+
     /// A geometry's body from its triangles (object-space corners); none without any. Not split
     /// into pieces unless `split` (a geometry the game keeps writing is drawn whole: its pieces
     /// would be worked out again every frame).
@@ -1522,6 +1542,8 @@ impl Draw {
 /// An opaque world draw of this frame on the scene, for the sun's maps.
 pub(crate) struct Caster {
     pub key: GeoKey,
+    /// A character's skinned draw ([`Skin`]): cast this frame as posed, never kept.
+    pub skinned: bool,
     /// Its object-space bounding sphere.
     pub bounds: ([f64; 3], f64),
     /// Its pieces ([`Body`]; shared with the device's cache of bodies, not copied a draw).
@@ -1796,6 +1818,10 @@ impl<K: std::hash::Hash + Eq + Clone, T> Cache<K, T> {
     }
 }
 
+/// A character of this frame, posed (a skinned caster): its draw, the place of the space its bones
+/// put it in, and its world sphere.
+pub(crate) type Skinned = (Draw, World, [f64; 3], f64);
+
 /// The light list of a frame.
 #[derive(Default)]
 pub(crate) struct Lists {
@@ -1843,6 +1869,16 @@ pub const THIN_DRAWN: f64 = 2.0;
 /// A receiver nearer than this (game units, along the sun's rays) to the strand over it takes none
 /// of its shadow (the cable itself, the pole top it hangs from), and twice as far takes it whole.
 pub const THIN_NEAR: f32 = 12.0;
+
+/// `NV_SUN_SHADOWS_CHARACTERS_ALTERNATE=1` (diagnostic captures only, not a player setting): the
+/// characters cast on even frames only, so two frames in a row of one run show the same place with
+/// and without them (and their frame times can be told apart); read once.
+pub fn characters_alternate() -> bool {
+    static ALT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ALT.get_or_init(|| {
+        std::env::var("NV_SUN_SHADOWS_CHARACTERS_ALTERNATE").is_ok_and(|v| v.trim() == "1")
+    })
+}
 
 /// How the thin casters ([`Body::thin`]) are drawn: into their coverage maps (1, the default), or
 /// as `NV_SUN_SHADOWS_THIN=solid` asks (captures only, to compare): into the depth maps as any
@@ -1939,6 +1975,8 @@ pub fn lookup_uniforms(
     thin: [bool; CASCADES],
     far: Option<&Cascade>,
     far_old: Option<(&Cascade, f32)>,
+    chars: u32,
+    chars_allow: f32,
     axes: [[f64; 3]; 3],
     position: [f64; 3],
     samples: u32,
@@ -1968,8 +2006,8 @@ pub fn lookup_uniforms(
     f.extend([
         DARKNESS * (strength / scene_light::SHADOW_STRENGTH).clamp(0.0, 1.0),
         if grey_view() { 1.0 } else { 0.0 },
-        0.0,
-        0.0,
+        chars as f32,
+        chars_allow,
     ]);
     f.extend((0..CASCADES).map(|k| {
         if thin[k] {
@@ -2057,6 +2095,12 @@ fn sl_size(_k: i32) -> vec2<f32> {
 // Map `k`'s soft edge at `p`: nine of the hardware's filtered comparisons a texel apart, weighted
 // 1 2 1 by 1 2 1 (a fixed kernel about four texels wide; no noise, nothing that moves).
 fn sl_filter(k: i32, p: vec3<f32>, bias: f32) -> f32 {
+    return sl_filter_layer(k, k, p, bias);
+}
+
+// [`sl_filter`] reading layer `layer` of the maps through cascade `k`'s matrix (the characters'
+// layer of a near cascade, `CHAR_FIRST + k`).
+fn sl_filter_layer(k: i32, layer: i32, p: vec3<f32>, bias: f32) -> f32 {
     let l = sl_to_map(k, p);
     let uv = vec2<f32>(l.x * 0.5 + 0.5, 0.5 - l.y * 0.5);
     if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || l.z >= 1.0) {
@@ -2068,10 +2112,69 @@ fn sl_filter(k: i32, p: vec3<f32>, bias: f32) -> f32 {
     for (var j = -1; j <= 1; j++) {
         for (var i = -1; i <= 1; i++) {
             let w = f32((2 - abs(i)) * (2 - abs(j)));
-            sum += w * sl_tap(k, uv + vec2<f32>(f32(i), f32(j)) * t, r);
+            sum += w * sl_tap(layer, uv + vec2<f32>(f32(i), f32(j)) * t, r);
         }
     }
     return sum / 16.0;
+}
+
+// How much of a character's shadow (in its own layer, [`sl_chars_in`]) falls round view-space point
+// `p` of near cascade `k`: 1 where a character stands between it and the sun within a few texels
+// (nine taps four texels apart), 0 where none does.
+fn sl_chars_cover_in(k: i32, p: vec3<f32>) -> f32 {
+    if (!sl_chars_in(k)) {
+        return 0.0;
+    }
+    let l = sl_to_map(k, p);
+    let uv = vec2<f32>(l.x * 0.5 + 0.5, 0.5 - l.y * 0.5);
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0)) || l.z >= 1.0) {
+        return 0.0;
+    }
+    let t = 4.0 / sl_size(k);
+    var lit = 1.0;
+    for (var j = -1; j <= 1; j++) {
+        for (var i = -1; i <= 1; i++) {
+            lit = min(lit, sl_tap(CHAR_FIRST + k, uv + vec2<f32>(f32(i), f32(j)) * t, l.z));
+        }
+    }
+    return 1.0 - lit;
+}
+
+// Where the characters' own shadows replace the game's projected actor shadows at view-space point
+// `p`: their cover in its cascade, blended into the next one's over the band where the two meet
+// (none past the near cascades: the third's band blends to none).
+fn sl_chars_cover(p: vec3<f32>) -> f32 {
+    let z = p.z;
+    if (SL.sun.w <= 0.0 || z <= 0.0 || z >= SL.splits.z) {
+        return 0.0;
+    }
+    var k = 2;
+    if (z < SL.splits.x) {
+        k = 0;
+    } else if (z < SL.splits.y) {
+        k = 1;
+    }
+    var v = sl_chars_cover_in(k, p);
+    let far = SL.splits[k];
+    var near = SL.depth.x;
+    if (k > 0) {
+        near = SL.splits[k - 1];
+    }
+    let band = SL.extra.w * (far - near);
+    let t = saturate((z - (far - band)) / band);
+    if (t > 0.0) {
+        var next = 0.0;
+        if (k < 2) {
+            next = sl_chars_cover_in(k + 1, p);
+        }
+        v = mix(v, next, t);
+    }
+    return v;
+}
+
+// Whether near cascade `k` has its characters' layer this frame (`SL.misc.z`, a bit a cascade).
+fn sl_chars_in(k: i32) -> bool {
+    return k < 3 && ((u32(SL.misc.z) >> u32(k)) & 1u) != 0u;
 }
 
 // How much of the sun the thin casters (cables) over map `k`'s point `l` take away: their
@@ -2110,7 +2213,15 @@ fn sl_in(k: i32, p: vec3<f32>, n: vec3<f32>) -> f32 {
     let slope = min(s / max(c, 0.05), SLOPE_MAX);
     let bias = (DEPTH_BIAS + slope) * texel / (2.0 * DEPTH_RANGE);
     let q = p + n * offset;
-    return sl_filter(k, q, bias) * (1.0 - sl_thin(k, sl_to_map(k, q)));
+    var v = sl_filter(k, q, bias);
+    // The characters, drawn each frame into their own layer (the nearer of the two casts): a
+    // character's own lit draw (SL_SKIN 1) allows `SL.misc.w` units more: its pose in the layer
+    // is a frame old (the frame's largest character step along the sun's rays).
+    if (sl_chars_in(k)) {
+        let allow = SL_SKIN * SL.misc.w / (2.0 * DEPTH_RANGE);
+        v = min(v, sl_filter_layer(k, CHAR_FIRST + k, q, bias + allow));
+    }
+    return v * (1.0 - sl_thin(k, sl_to_map(k, q)));
 }
 
 // The far map's (`fm`, texel `far.x`; 1 lit when there is none) at the view-space point `p` whose
@@ -2218,11 +2329,16 @@ pub const LOOKUP: &str = "
 @group(3) @binding(4) var sl_lin: sampler;
 @group(3) @binding(5) var sl_far_map: texture_depth_2d;
 @group(3) @binding(6) var sl_far_old: texture_depth_2d;
+var<private> sun_chars: f32 = 0.0;
 var<private> sun_lit: f32 = 1.0;
 
 fn sun_visibility(frag: vec4<f32>) -> f32 {
     // Direct3D 9's pixel centres are on whole coordinates (the vertex shaders move half a pixel).
     let p = sl_point(frag.xy - vec2<f32>(0.5), frag.z);
+    // Where a character's own shadow falls this frame, the game's projected actor shadows are left
+    // out (read as lit): one shadow a character. Elsewhere (a character not cast this frame, past
+    // the near cascades) they stay (review of #726, round 2).
+    sun_chars = sl_chars_cover(p);
     var n = cross(dpdx(p), dpdy(p));
     let l = length(n);
     if (l < 1e-12) {
@@ -2262,24 +2378,30 @@ fn sun_visibility_clip(o: vec4<f32>) -> f32 {
 ";
 
 /// The vertex-lit variants' WGSL addition: the constants, [`LOOKUP_VERTEX`] and [`LOOKUP_FNS`].
-pub fn lookup_wgsl_vertex() -> String {
-    format!("{}{LOOKUP_VERTEX}{LOOKUP_FNS}", lookup_consts())
+pub fn lookup_wgsl_vertex(skinned: bool) -> String {
+    format!("{}{LOOKUP_VERTEX}{LOOKUP_FNS}", lookup_consts(skinned))
 }
 
-/// The lighting variants' WGSL addition: the constants, [`LOOKUP`] and [`LOOKUP_FNS`].
-pub fn lookup_wgsl() -> String {
-    format!("{}{LOOKUP}{LOOKUP_FNS}", lookup_consts())
+/// The lighting variants' WGSL addition: the constants, [`LOOKUP`] and [`LOOKUP_FNS`]; for a
+/// character's own lit draw (`skinned`) the characters' layers take [`SKIN_RECEIVER_BIAS`] more.
+pub fn lookup_wgsl(skinned: bool) -> String {
+    format!("{}{LOOKUP}{LOOKUP_FNS}", lookup_consts(skinned))
 }
 
 /// The constants [`LOOKUP_FNS`] reads.
-fn lookup_consts() -> String {
+fn lookup_consts(skinned: bool) -> String {
     format!(
-        "const NORMAL_OFFSET: f32 = {NORMAL_OFFSET:?};\nconst DEPTH_BIAS: f32 = {DEPTH_BIAS:?};\n\
+        "const SL_SKIN: f32 = {:?};\nconst NORMAL_OFFSET: f32 = {NORMAL_OFFSET:?};\n\
+         const DEPTH_BIAS: f32 = {DEPTH_BIAS:?};\n\
          const SLOPE_MAX: f32 = {SLOPE_MAX:?};\nconst DEPTH_RANGE: f32 = {:?};\n\
          const SUN_WIDTH: f32 = {SUN_WIDTH:?};\nconst THIN_NEAR: f32 = {THIN_NEAR:?};\n\
          const FAR_DEPTH: f32 = {:?};\nconst FAR_EDGE: f32 = {FAR_EDGE:?};\n\
-         const FAR_EDGE_END: f32 = {FAR_EDGE_END:?};\nconst FAR_SLOPE_MAX: f32 = {FAR_SLOPE_MAX:?};\n",
-        DEPTH_RANGE as f32, FAR_DEPTH as f32
+         const FAR_EDGE_END: f32 = {FAR_EDGE_END:?};\nconst FAR_SLOPE_MAX: f32 = {FAR_SLOPE_MAX:?};\n\
+         const CHAR_FIRST: i32 = {};\n",
+        if skinned { 1.0f32 } else { 0.0 },
+        DEPTH_RANGE as f32,
+        FAR_DEPTH as f32,
+        CASCADES
     )
 }
 
@@ -2381,7 +2503,7 @@ pub fn step_shader_with(multisampled_depth: bool, view: u32) -> String {
     };
     format!(
         "{}const VIEW: u32 = {view}u;\n{}{LOOKUP_FNS}",
-        lookup_consts(),
+        lookup_consts(false),
         STEP.replace("DEPTH_TYPE", depth_type)
     )
 }
@@ -2508,6 +2630,12 @@ pub(crate) struct Gpu {
     pub far_old: Option<Cascade>,
     pub far_fade: u32,
     pub far_draws: u64,
+    /// The near cascades whose characters' layer holds this frame's characters (a bit each).
+    pub chars_in: u32,
+    /// Whether the maps have the characters' layers (made with the characters on).
+    char_layers: bool,
+    /// The characters' allowance this frame ([`skin_allowance`], game units).
+    pub chars_allow: f32,
 }
 
 /// A lookup block's slot in the lighting variants' ring, and the slots: a frame writes its own
@@ -2618,16 +2746,16 @@ type MapList<'a> = Vec<(&'a Draw, World, [u32; 2])>;
 const ALIGN: usize = 256;
 
 impl Gpu {
-    pub(crate) fn new(device: &wgpu::Device) -> Gpu {
+    pub(crate) fn new(device: &wgpu::Device, characters: bool) -> Gpu {
         // One texture of a layer a cascade (one binding, one sample instruction a tap), for the
         // maps the lookups read and for the still casters' maps.
-        let texture = |label| {
+        let texture = |label, count: usize| {
             device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(label),
                 size: wgpu::Extent3d {
                     width: SIZE,
                     height: SIZE,
-                    depth_or_array_layers: CASCADES as u32,
+                    depth_or_array_layers: count as u32,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
@@ -2640,8 +2768,8 @@ impl Gpu {
                 view_formats: &[],
             })
         };
-        let layers = |t: &wgpu::Texture| -> Vec<wgpu::TextureView> {
-            (0..CASCADES as u32)
+        let layers = |t: &wgpu::Texture, count: usize| -> Vec<wgpu::TextureView> {
+            (0..count as u32)
                 .map(|k| {
                     t.create_view(&wgpu::TextureViewDescriptor {
                         dimension: Some(wgpu::TextureViewDimension::D2),
@@ -2652,10 +2780,13 @@ impl Gpu {
                 })
                 .collect()
         };
-        let live = texture("sun shadow maps");
-        let statics = texture("sun shadow maps (still casters)");
-        let maps = layers(&live);
-        let static_views = layers(&statics);
+        // The maps the lookups read: a layer a cascade, then the characters' layers ([`CHAR_LAYERS`]).
+        // (The characters' layers only with the characters on: 48 MB.)
+        let char_layers = if characters { CHAR_LAYERS } else { 0 };
+        let live = texture("sun shadow maps", CASCADES + char_layers);
+        let statics = texture("sun shadow maps (still casters)", CASCADES);
+        let maps = layers(&live, CASCADES + char_layers);
+        let static_views = layers(&statics, CASCADES);
         let array = live.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
@@ -2683,7 +2814,7 @@ impl Gpu {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        let thin_views = layers(&thin);
+        let thin_views = layers(&thin, CASCADES);
         let thin_array = thin.create_view(&wgpu::TextureViewDescriptor {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
@@ -2804,6 +2935,9 @@ impl Gpu {
             far_fade: FAR_FADE_FRAMES,
             far_drawn: None,
             far_draws: 0,
+            chars_in: 0,
+            char_layers: characters,
+            chars_allow: SKIN_RECEIVER_BIAS as f32,
         }
     }
 
@@ -2934,10 +3068,11 @@ impl Gpu {
         cascades: &[Cascade; CASCADES],
         redraw: [bool; CASCADES],
         far: (&Cache<GeoKey, Draw>, Option<&Cascade>),
+        skinned: &[Skinned],
     ) -> (Vec<(wgpu::Buffer, Vec<u8>)>, u32) {
         // Each cascade's still and moving casters touching it, and its ribbon cables.
-        let mut lists: Vec<[MapList<'_>; 3]> = (0..CASCADES)
-            .map(|_| [Vec::new(), Vec::new(), Vec::new()])
+        let mut lists: Vec<[MapList<'_>; 4]> = (0..CASCADES)
+            .map(|_| [Vec::new(), Vec::new(), Vec::new(), Vec::new()])
             .collect();
         let thin_maps = thin_maps();
         let kept: Vec<(&Instance<Draw>, usize)> =
@@ -2990,6 +3125,27 @@ impl Gpu {
                 lists[k][m].push((d, i.world, [0, 0]));
             }
         }
+        // The characters (skinned casters and faces, their poses of the frame): drawn each frame into
+        // the near cascades' characters' layers ([`CHAR_LAYERS`]), cleared first, where they are
+        // larger than a blot ([`SKIN_MIN_TEXELS`]); never into the still maps or their copies.
+        for (k, c) in cascades.iter().enumerate().take(CUTOUT_CASCADES) {
+            for (d, world, centre, radius) in skinned {
+                if *radius >= SKIN_MIN_TEXELS * c.texel
+                    && c.touches(*centre, *radius)
+                    && self.pipelines[d.pipe as usize].is_some()
+                {
+                    lists[k][3].push((d, *world, [0, 0]));
+                }
+            }
+        }
+        if !self.char_layers {
+            for l in lists.iter_mut() {
+                l[3].clear();
+            }
+        }
+        self.chars_in = (0..CHAR_LAYERS)
+            .filter(|&k| !lists[k][3].is_empty())
+            .fold(0, |m, k| m | (1 << k));
         let live: [bool; CASCADES] = std::array::from_fn(|k| {
             redraw[k] || !lists[k][1].is_empty() || self.live_moving[k] || self.drawn[k].is_none()
         });
@@ -3237,6 +3393,12 @@ impl Gpu {
                     let mut pass = depth_pass(encoder, &self.maps[k], false);
                     encode(&mut pass, &lists[k][1], false);
                 }
+            }
+            // The characters' layer: cleared and drawn with this frame's characters (a layer with
+            // none is not read: `chars_in`).
+            if k < CHAR_LAYERS && !lists[k][3].is_empty() {
+                let mut pass = depth_pass(encoder, &self.maps[CASCADES + k], true);
+                encode(&mut pass, &lists[k][3], false);
             }
         }
         if let Some((c, slice)) = self.far_back {
@@ -3583,6 +3745,183 @@ pub fn model_view_proj(p: &crate::sm::Program) -> Option<u32> {
         .iter()
         .find(|c| c.name == "ModelViewProj" && c.set == 2 && c.count == 4)
         .map(|c| u32::from(c.index))
+}
+
+/// A skinned vertex shader's registers (the game's SKIN and skinned SLS families: their constant
+/// tables name `SkinModelViewProj`, 4 registers, and `Bones`): the clip matrix's first register,
+/// and the bone palette's first register and length. Its position is, read from the game's own
+/// shaders (SKIN2001, SLS2003, SKIN2009, SLS2088 of package 010): `p = sum_k w_k (Bones[3 i_k]
+/// rows . v)` over four influences, `i = BLENDINDICES.zyxw x 765.01` (a byte times 3: a bone's
+/// three rows), `w = (BLENDWEIGHT.x, .y, .z, 1 - their sum)`, then `SkinModelViewProj . p`. The
+/// shadow pass runs that very shader with the bones as the draw set them and the sun's matrix at
+/// `SkinModelViewProj`, so the skinning is the game's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Skin {
+    pub mvp: u32,
+    pub bones: u32,
+    pub count: u32,
+}
+
+/// The skinned registers of a vertex shader ([`Skin`]); none for a rigid one.
+pub fn skin_model_view_proj(p: &crate::sm::Program) -> Option<Skin> {
+    let find = |name: &str| {
+        p.constants
+            .iter()
+            .find(|c| c.name == name && c.set == 2)
+            .map(|c| (u32::from(c.index), u32::from(c.count)))
+    };
+    let (mvp, n) = find("SkinModelViewProj")?;
+    let (bones, count) = find("Bones")?;
+    (n == 4 && count >= 3).then_some(Skin { mvp, bones, count })
+}
+
+/// Characters (skinned casters, [`skin_model_view_proj`]) cast into the maps and the game's own
+/// projected actor shadows are left out of the lit variants ([`enable_characters`]); on by
+/// default with the sun shadows.
+static CHARACTERS: AtomicU8 = AtomicU8::new(1);
+
+/// Turns the characters' shadows on or off for devices made from now on (the host, from
+/// `bSunShadowsCharacters`).
+pub fn enable_characters(on: bool) {
+    CHARACTERS.store(u8::from(on), Ordering::Relaxed);
+}
+
+/// Whether devices made now cast characters ([`enable_characters`]).
+pub fn characters() -> bool {
+    CHARACTERS.load(Ordering::Relaxed) != 0
+}
+
+/// A skinned caster this small in a map (radius in texels) is left out of it: its shadow is a
+/// blot of a texel or two.
+pub const SKIN_MIN_TEXELS: f64 = 2.0;
+
+/// The least a character's own lit draw may be further from the sun (game units) than the
+/// characters' layer says before it is in a character's shadow ([`skin_allowance`] sizes it a
+/// frame): the layer holds the pose of the frame before (the maps are drawn at a frame's scene
+/// clear from the frame before's draws), so a character moving away from the sun would otherwise
+/// shade its own sunlit side; limbs swing faster than the body moves. A closed body drawn with
+/// culling also leaves only its side away from the sun in the layer.
+pub const SKIN_RECEIVER_BIAS: f64 = 12.0;
+/// The most it allows (game units): a step past [`MOVE_REACH`] is no step, and a sun this flat
+/// ([`SKIN_FLAT_SUN`]) and lower counts as this flat.
+pub const SKIN_ALLOW_MAX: f64 = 96.0;
+pub const SKIN_FLAT_SUN: f64 = 0.2;
+
+/// The characters' allowance for a frame: the largest step a character took since the frame before
+/// (`step`, game units, along the ground) as it lies along the sun's rays (over the horizontal part
+/// `flat` of the unit vector toward the sun: a high sun stretches it), at least
+/// [`SKIN_RECEIVER_BIAS`] (limbs swing faster than the body moves), at most [`SKIN_ALLOW_MAX`].
+pub fn skin_allowance(step: f64, flat: f64) -> f64 {
+    (step / flat.max(SKIN_FLAT_SUN)).clamp(SKIN_RECEIVER_BIAS, SKIN_ALLOW_MAX)
+}
+
+/// The characters' layers: one for each of the first [`CUTOUT_CASCADES`] cascades, after the
+/// cascades' own in the maps the lookups read, cleared and drawn each frame there are characters.
+pub const CHAR_LAYERS: usize = CUTOUT_CASCADES;
+
+/// One bone's share of a skinned geometry: the bone's register offset from `Bones` (a byte of
+/// `BLENDINDICES` times 3) and the bind-pose sphere of the vertices it moves.
+pub type BoneSphere = (u32, [f64; 3], f64);
+
+/// The bind-pose spheres of a skinned geometry's bones ([`BoneSphere`]) from its vertices: each
+/// one's position, its four bone bytes and their weights in the same order (a vertex counts for
+/// a bone only where its weight is above 0: a palette entry the geometry never uses holds what
+/// another draw left there). None without a vertex.
+pub fn skin_spheres(vertices: &[([f32; 3], [u8; 4], [f32; 4])]) -> Option<Vec<BoneSphere>> {
+    if vertices.is_empty() {
+        return None;
+    }
+    let counts = |w: f32| w > 0.0 || !w.is_finite();
+    // Each bone's box, then the farthest of its vertices from the box's middle.
+    let mut lo = [[f64::INFINITY; 3]; 256];
+    let mut hi = [[f64::NEG_INFINITY; 3]; 256];
+    for (p, idx, w) in vertices {
+        for k in 0..4 {
+            if counts(w[k]) {
+                let b = usize::from(idx[k]);
+                for c in 0..3 {
+                    lo[b][c] = lo[b][c].min(f64::from(p[c]));
+                    hi[b][c] = hi[b][c].max(f64::from(p[c]));
+                }
+            }
+        }
+    }
+    let mid: Vec<[f64; 3]> = (0..256)
+        .map(|b| std::array::from_fn(|c| (lo[b][c] + hi[b][c]) / 2.0))
+        .collect();
+    let mut r2 = [f64::NEG_INFINITY; 256];
+    for (p, idx, w) in vertices {
+        for k in 0..4 {
+            if counts(w[k]) {
+                let b = usize::from(idx[k]);
+                let d: [f64; 3] = std::array::from_fn(|c| f64::from(p[c]) - mid[b][c]);
+                r2[b] = r2[b].max(dot3(d, d));
+            }
+        }
+    }
+    Some(
+        (0..256)
+            .filter(|&b| r2[b] >= 0.0 && mid[b].iter().all(|v| v.is_finite()))
+            .map(|b| (3 * b as u32, mid[b], r2[b].sqrt()))
+            .collect(),
+    )
+}
+
+/// The sphere (in the space the bones put the vertices in, which `SkinModelViewProj` takes to
+/// clip space) of a skinned geometry posed by the bone rows in `consts` (the draw's float
+/// registers) from register `bones` on, `count` of them: each bone's sphere moved by its rows and
+/// grown by its largest scale, and one sphere round them all (a vertex is a weighted mean of its
+/// bones' places, so it lies within). None when a bone is outside the palette or not finite.
+pub fn skin_bounds(
+    spheres: &[BoneSphere],
+    consts: &[u8],
+    bones: u32,
+    count: u32,
+) -> Option<([f64; 3], f64)> {
+    let reg = |r: u32, j: usize| -> Option<f64> {
+        let o = 16 * r as usize + 4 * j;
+        let b = consts.get(o..o + 4)?;
+        Some(f64::from(f32::from_le_bytes([b[0], b[1], b[2], b[3]])))
+    };
+    let mut placed = Vec::with_capacity(spheres.len());
+    for &(offset, c, r) in spheres {
+        if offset + 3 > count {
+            return None;
+        }
+        let mut m = [[0.0f64; 4]; 3];
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                *v = reg(bones + offset + i as u32, j)?;
+            }
+        }
+        let w: World = m;
+        let centre = place_point(&w, c);
+        let radius = r * stretch(&w);
+        if !(centre.iter().all(|v| v.is_finite()) && radius.is_finite()) {
+            return None;
+        }
+        placed.push((centre, radius));
+    }
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for &(c, r) in &placed {
+        for k in 0..3 {
+            lo[k] = lo[k].min(c[k] - r);
+            hi[k] = hi[k].max(c[k] + r);
+        }
+    }
+    if placed.is_empty() {
+        return None;
+    }
+    let mid: [f64; 3] = std::array::from_fn(|k| (lo[k] + hi[k]) / 2.0);
+    let radius = placed
+        .iter()
+        .map(|&(c, r)| {
+            let d = [c[0] - mid[0], c[1] - mid[1], c[2] - mid[2]];
+            dot3(d, d).sqrt() + r
+        })
+        .fold(0.0, f64::max);
+    Some((mid, radius))
 }
 
 #[cfg(test)]
@@ -4790,7 +5129,12 @@ mod tests {
         let mut text = Vec::new();
         for &(name, index, count) in names {
             b.extend_from_slice(&((strings + text.len()) as u32).to_le_bytes());
-            for v in [2u16, index, count, 0] {
+            for v in [
+                if name.ends_with("Map") { 3u16 } else { 2 },
+                index,
+                count,
+                0,
+            ] {
                 b.extend_from_slice(&v.to_le_bytes());
             }
             b.extend_from_slice(&[0; 8]);
@@ -4847,7 +5191,7 @@ mod tests {
             fixed: true,
         };
         let plain = wgsl::convert(&lit, &link).unwrap();
-        let src = wgsl::convert_with_sun(&lit, &link).unwrap();
+        let src = wgsl::convert_with_sun(&lit, &link, true, false).unwrap();
         assert!(!plain.contains("sun_lit"));
         assert!(
             src.contains("(C.c[3] * vec4<f32>(vec3<f32>(sun_lit), 1.0))"),
@@ -4871,7 +5215,137 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(wgsl::sun_register(&point), None);
-        assert!(wgsl::convert_with_sun(&point, &link).is_err());
+        assert!(wgsl::convert_with_sun(&point, &link, true, false).is_err());
+    }
+
+    /// One shadow a character: with the characters cast, a lit pixel shader's variant reads the
+    /// game's own projected actor shadows (`ShadowMap`) as lit; with them off it samples them as
+    /// the game does. Valid WGSL both ways.
+    #[test]
+    fn with_the_characters_cast_the_games_actor_shadow_reads_as_lit() {
+        use crate::sm::{self, wgsl};
+        // dcl_2d s6; texld r1, c0, s6; mul r0, c3, r1; add r0, r0, c1; mov oC0, r0.
+        let body = [
+            31 | (2 << 24),
+            0x9000_0000,
+            0xA00F_0806,
+            66 | (3 << 24),
+            0x800F_0001,
+            0xA0E4_0000,
+            0xA0E4_0806,
+            5 | (3 << 24),
+            0x800F_0000,
+            0xA0E4_0003,
+            0x80E4_0001,
+            2 | (3 << 24),
+            0x800F_0000,
+            0x80E4_0000,
+            0xA0E4_0001,
+            1 | (2 << 24),
+            0x800F_0800,
+            0x80E4_0000,
+        ];
+        let lit = sm::parse(&pixel_shader(
+            &[
+                ("AmbientColor", 1, 1),
+                ("PSLightColor", 3, 1),
+                ("ShadowMap", 6, 1),
+            ],
+            &body,
+        ))
+        .unwrap();
+        assert_eq!(wgsl::game_shadow_sampler(&lit), Some(6));
+        let link = wgsl::Link {
+            inputs: Vec::new(),
+            varyings: Vec::new(),
+            centroid: Vec::new(),
+            clip: wgsl::Clip::Off,
+            count: false,
+            fixed: true,
+        };
+        let one = wgsl::convert_with_sun(&lit, &link, true, false).unwrap();
+        let both = wgsl::convert_with_sun(&lit, &link, false, false).unwrap();
+        assert!(
+            one.contains("mix(fixup(textureSampleBias(t6, s6")
+                && one.contains("vec4<f32>(1.0), sun_chars)"),
+            "{one}"
+        );
+        assert!(
+            both.contains("(t6, s6") && !both.contains("sun_chars)"),
+            "{both}"
+        );
+        for src in [&one, &both] {
+            let module = naga::front::wgsl::parse_str(src)
+                .unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        }
+    }
+
+    /// A character's own lit draws take the characters' allowance, pixel- or vertex-lit alike; others
+    /// none. The allowance follows the step along the sun's rays, within its floor and ceiling.
+    #[test]
+    fn a_characters_own_draws_take_the_allowance_sized_by_the_step_and_the_sun() {
+        for (text, skinned) in [
+            (lookup_wgsl(true), true),
+            (lookup_wgsl_vertex(true), true),
+            (lookup_wgsl(false), false),
+            (lookup_wgsl_vertex(false), false),
+        ] {
+            let flag = if skinned { "1.0" } else { "0.0" };
+            assert!(
+                text.contains(&format!("const SL_SKIN: f32 = {flag};")),
+                "{skinned}"
+            );
+        }
+        // 6 units under a 70-degree sun: 17.5 along the rays.
+        let flat = 70f64.to_radians().cos();
+        assert!((skin_allowance(6.0, flat) - 6.0 / flat).abs() < 1e-9);
+        assert_eq!(skin_allowance(1.0, 0.6), SKIN_RECEIVER_BIAS);
+        assert_eq!(skin_allowance(200.0, 0.05), SKIN_ALLOW_MAX);
+    }
+
+    /// A skinned geometry's bones' spheres: a vertex counts for a bone only where its weight is
+    /// above 0; posed, each sphere moves with its bone's rows and one sphere holds them all; a
+    /// bone past the palette, none.
+    #[test]
+    fn a_skinned_geometrys_sphere_follows_its_bones() {
+        let v = |p: [f32; 3], idx: [u8; 4], w: [f32; 4]| (p, idx, w);
+        let spheres = skin_spheres(&[
+            v([0.0, 0.0, 0.0], [0, 1, 7, 7], [1.0, 0.0, 0.0, 0.0]),
+            v([0.0, 0.0, 10.0], [0, 1, 7, 7], [1.0, 0.0, 0.0, 0.0]),
+            v([0.0, 0.0, 20.0], [0, 1, 7, 7], [0.0, 1.0, 0.0, 0.0]),
+            v([0.0, 0.0, 30.0], [0, 1, 7, 7], [0.0, 1.0, 0.0, 0.0]),
+        ])
+        .unwrap();
+        // Byte 7 (weight 0 everywhere) is no bone of it.
+        assert_eq!(spheres.len(), 2);
+        assert_eq!(spheres[0], (0, [0.0, 0.0, 5.0], 5.0));
+        assert_eq!(spheres[1], (3, [0.0, 0.0, 25.0], 5.0));
+        let rows = |t: [f32; 3]| {
+            [
+                1.0, 0.0, 0.0, t[0], 0.0, 1.0, 0.0, t[1], 0.0, 0.0, 1.0, t[2],
+            ]
+        };
+        let mut regs = vec![0.0f32; 4 * 4];
+        regs.extend(rows([0.0, 0.0, 0.0]));
+        regs.extend(rows([0.0, 100.0, 0.0]));
+        let bytes: Vec<u8> = regs.iter().flat_map(|f| f.to_le_bytes()).collect();
+        let (c, r) = skin_bounds(&spheres, &bytes, 4, 6).unwrap();
+        // The lower bone's sphere at (0, 0, 5), the upper one's moved to (0, 100, 25): both inside.
+        for (p, pr) in [([0.0, 0.0, 5.0], 5.0), ([0.0, 100.0, 25.0], 5.0)] {
+            let d: f64 = (0..3)
+                .map(|k| (p[k] - c[k]) * (p[k] - c[k]))
+                .sum::<f64>()
+                .sqrt();
+            assert!(d + pr <= r + 1e-9, "{p:?} in {c:?} {r}");
+        }
+        assert!(r < 60.0, "{r}");
+        assert_eq!(skin_bounds(&spheres, &bytes, 4, 3), None);
     }
 
     /// A vertex-lit shader's variant (grass): its vertex shader's `DiffuseColor` times the visibility at
@@ -4905,7 +5379,7 @@ mod tests {
             count: false,
             fixed: true,
         };
-        let src = wgsl::convert_with_sun(&grass, &link).unwrap();
+        let src = wgsl::convert_with_sun(&grass, &link, true, false).unwrap();
         assert!(
             src.contains("(C.c[1] * vec4<f32>(vec3<f32>(sun_lit), 1.0))"),
             "{src}"
@@ -4943,6 +5417,8 @@ mod tests {
             [false, true, false, false],
             None,
             None,
+            0,
+            12.0,
             f.axes(),
             wide(f.position),
             8,
@@ -4974,6 +5450,8 @@ mod tests {
             [false; CASCADES],
             Some(&far),
             None,
+            0,
+            12.0,
             f.axes(),
             wide(f.position),
             1,
@@ -4995,6 +5473,8 @@ mod tests {
             [false; CASCADES],
             None,
             None,
+            0,
+            12.0,
             f.axes(),
             wide(f.position),
             1,

@@ -252,7 +252,7 @@ pub const JIP_INSTALLED: Fix = Fix {
     name: "JIP LN NVSE built in (for testing)",
     env: "NV_JIP_INSTALLED",
     addresses: &[],
-    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with 995 of its 1,118 commands (a script line calling one of the others fails and stops that script for the run), its hooks and 64 of its 162 game patches",
+    summary: "for testing, off in every preset: JIP LN NVSE answers \"installed\" to mods (MCM, oHUD and others that need it), with the commands built so far (a script line calling one not built yet fails and stops that script for the run), its hooks and the game patches built so far (the README and docs/FIXES.md give the counts)",
     install: install_jip_installed,
 };
 
@@ -575,6 +575,13 @@ pub const PLAY_SUN_SHADOWS: bool = false;
 /// the lit sides and the sky agree; it changes nothing while the sun shadows are off.
 /// `crates/host/data/game_ini.tsv`'s `bSunLightFromSky` row is held to it by a test.
 pub const PLAY_SUN_LIGHT_FROM_SKY: bool = true;
+/// Whether, with the sun shadows on, characters (the player, NPCs, creatures, bodies: skinned
+/// draws) cast into the sun shadows, the game's own projected actor shadows then left out so each
+/// casts one shadow (port-added: `d3d9_wgpu::sun_shadow::enable_characters`), when neither
+/// `NV_SUN_SHADOWS_CHARACTERS` nor `Fallout.ini`'s `bSunShadowsCharacters` says
+/// ([`Choice::sun_shadow_characters`]): on; it changes nothing while the sun shadows are off.
+/// `crates/host/data/game_ini.tsv`'s `bSunShadowsCharacters` row is held to it by a test.
+pub const PLAY_SUN_SHADOW_CHARACTERS: bool = true;
 /// How strong the new lighting's shade is when neither `NV_AO_STRENGTH` nor `Fallout.ini`'s
 /// `fAmbientOcclusionStrength` says ([`Choice::ambient_occlusion_strength`]): the step's own
 /// default (`d3d9_wgpu::scene_light::STRENGTH`). `crates/host/data/game_ini.tsv`'s
@@ -704,6 +711,12 @@ pub struct Choice {
     /// [`PLAY_SUN_LIGHT_FROM_SKY`], on. Used only with [`Choice::sun_shadows`] ([`Choice::light_from_sky`]).
     /// Not part of any preset.
     pub sun_light_from_sky: bool,
+    /// Whether characters cast into the sun shadows (the game's own actor shadows then left out):
+    /// `NV_SUN_SHADOWS_CHARACTERS` when set (`1` on, else off); else, in a launcher's play run,
+    /// `Fallout.ini`'s `[nv-rs Display] bSunShadowsCharacters`; else
+    /// [`PLAY_SUN_SHADOW_CHARACTERS`], on. Used only with [`Choice::sun_shadows`]. Not part of any
+    /// preset.
+    pub sun_shadow_characters: bool,
     /// How strong its shade is, from 0.1 (faint) to 1 (all of it): `NV_AO_STRENGTH` when it is a
     /// number; else, in a launcher's play run, `Fallout.ini`'s `[nv-rs Display]
     /// fAmbientOcclusionStrength`; else [`PLAY_AMBIENT_OCCLUSION_STRENGTH`]. Clamped to that range
@@ -752,6 +765,7 @@ impl Choice {
             ambient_occlusion: PLAY_AMBIENT_OCCLUSION,
             sun_shadows: PLAY_SUN_SHADOWS,
             sun_light_from_sky: PLAY_SUN_LIGHT_FROM_SKY,
+            sun_shadow_characters: PLAY_SUN_SHADOW_CHARACTERS,
             ambient_occlusion_strength: PLAY_AMBIENT_OCCLUSION_STRENGTH,
             not_background: PLAY_NOT_BACKGROUND,
             not_background_by: None,
@@ -914,6 +928,9 @@ impl Choice {
             ambient_occlusion: ini.ambient_occlusion.unwrap_or(PLAY_AMBIENT_OCCLUSION),
             sun_shadows: ini.sun_shadows.unwrap_or(PLAY_SUN_SHADOWS),
             sun_light_from_sky: ini.sun_light_from_sky.unwrap_or(PLAY_SUN_LIGHT_FROM_SKY),
+            sun_shadow_characters: ini
+                .sun_shadow_characters
+                .unwrap_or(PLAY_SUN_SHADOW_CHARACTERS),
             ambient_occlusion_strength: ini.ambient_occlusion_strength.map_or(
                 PLAY_AMBIENT_OCCLUSION_STRENGTH,
                 d3d9_wgpu::scene_light::clamp_strength,
@@ -995,6 +1012,9 @@ impl Choice {
         }
         if let Some(value) = env("NV_SUN_LIGHT_FROM_SKY").filter(|v| !v.trim().is_empty()) {
             choice.sun_light_from_sky = value.trim() == "1";
+        }
+        if let Some(value) = env("NV_SUN_SHADOWS_CHARACTERS").filter(|v| !v.trim().is_empty()) {
+            choice.sun_shadow_characters = value.trim() == "1";
         }
         // A number, clamped; anything else leaves the strength as it is.
         if let Some(value) = env("NV_AO_STRENGTH")
@@ -2202,6 +2222,26 @@ bSunLightFromSky=1
         assert!(!not.light_from_sky());
         let without = Choice::from_parts(None, env_of(&[("NV_SUN_LIGHT_FROM_SKY", "1")])).unwrap();
         assert!(!without.light_from_sky());
+    }
+
+    /// Characters cast into the sun shadows by default; `bSunShadowsCharacters=0` in a launcher's
+    /// play run or `NV_SUN_SHADOWS_CHARACTERS` (which wins) turns them off.
+    #[test]
+    fn characters_cast_unless_switched_off() {
+        assert!(Choice::vanilla().sun_shadow_characters);
+        assert!(
+            Choice::from_parts(None, no_env)
+                .unwrap()
+                .sun_shadow_characters
+        );
+        let off = "[nv-rs Display]
+bSunShadows=1
+bSunShadowsCharacters=0
+";
+        assert!(!with_ini(None, off, &[]).sun_shadow_characters);
+        assert!(with_ini(None, off, &[("NV_SUN_SHADOWS_CHARACTERS", "1")]).sun_shadow_characters);
+        let env = Choice::from_parts(None, env_of(&[("NV_SUN_SHADOWS_CHARACTERS", "0")])).unwrap();
+        assert!(!env.sun_shadow_characters);
     }
 
     /// The new lighting's strength: the step's default in every run unless asked for;

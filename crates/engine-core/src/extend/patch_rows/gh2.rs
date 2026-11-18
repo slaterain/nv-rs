@@ -21,6 +21,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G90 (fix row): leaving an interior, 00454450: CloudsFixHook in place of the interior
     // cell's clear (0x454576).
     row(0x0045_4576),
+    // H15 (JIP's own): BipedAnim::LoadBipedParts 004ac1e0, the first-person slot test (2 to 6) by JIP's
+    // mask (0x7C at the start: the same slots) that ToggleBipedSlotVisibility edits (0x4AC645).
+    row(0x004a_c645),
     // G106 (fix row): the water forms' update 004e3d60, the update map's find (0x4E400E; the
     // flag's push at 0x4E4000 nop'd with it).
     row(0x004e_400e),

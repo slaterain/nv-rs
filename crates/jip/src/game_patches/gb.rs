@@ -28,7 +28,7 @@
 //! the map tile is centred on the player icon (traits `0xFA1`/`0xFA2`), JIP's hook tests its flag
 //! `s_mapMenuSkipSetXY`: set, it clears it and jumps past both sets (`0x79E053`); clear, it does
 //! the exe's work. Only JIP's item-list refresh (`RefreshItemListBox`, for `RefreshItemsList` and
-//! `RemoveMe`'s G60, neither built yet) sets the flag, on the world map tab, just before it calls
+//! `RemoveMe`'s G60) sets the flag, on the world map tab, just before it calls
 //! `AddMapIcons`; [`skip_map_centring_once`] is that set.
 //!
 //! **G88, JIP's fade types 5 and 6** (`InitGamePatches`: `SafeWrite8(0xA081A8, 6)` and
@@ -475,11 +475,17 @@ pub struct MapSkipCentring(AtomicBool);
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: RefreshItemListBox (its
 // `s_mapMenuSkipSetXY = true` before `AddMapIcons` on the world map tab).
 /// The next `MapMenu::AddMapIcons` leaves the map tile where it is (once). For JIP's item-list
-/// refresh (`RefreshItemsList`, G60), not built yet.
+/// refresh (`commands::jip_fn_ui::refresh_item_list_box`: `RefreshItemsList`, G60).
 pub fn skip_map_centring_once(e: &mut Engine) {
     e.ext_free::<MapSkipCentring>()
         .0
         .store(true, Ordering::Relaxed);
+}
+
+/// Whether the next `AddMapIcons` skips the centring, for the tests of its setters.
+#[cfg(test)]
+pub(crate) fn map_skip_centring_pending(e: &mut Engine) -> bool {
+    e.ext_free::<MapSkipCentring>().0.load(Ordering::Relaxed)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RefreshMapMenuHook.

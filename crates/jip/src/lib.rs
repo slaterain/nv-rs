@@ -59,6 +59,7 @@ pub mod ln_events;
 pub mod main_loop;
 pub mod overrides;
 pub mod script_call;
+pub mod script_runner;
 #[rustfmt::skip]
 pub mod slots;
 #[cfg(test)]
@@ -139,6 +140,10 @@ pub struct Jip {
     pub script_vars: commands::jip_fn_script_vars::State,
     /// JIP's game patches (step 3.9): the host's row and the switches read.
     pub game_patches: game_patches::State,
+    /// JIP's font files by path (`s_fontInfosMap`) and whether G129's font manager is in.
+    pub font_infos: commands::jip_fn_ui::FontInfos,
+    /// JIP's script runner: the script files kept to run at their moments.
+    pub script_runner: script_runner::State,
 }
 
 /// JIP as xNVSE knows it once loaded (`NVSEPlugin_Query`, `NVSEPlugin_Load`): its DLL, name,
@@ -195,6 +200,7 @@ pub fn install_as(e: &mut Engine, answers_installed: bool) {
     equip_hooks::install(e, answers_installed);
     world_hooks::install(e, answers_installed);
     game_patches::install(e, answers_installed);
+    script_runner::install(e, answers_installed);
     nvse::plugins::register(e, plugin(answers_installed));
     // `MainGameLoop` only once JIP answers "installed": until then a frame does no JIP work.
     if answers_installed {

@@ -5,19 +5,19 @@
 //! allies, what it detects, its followers and dropped items, its active effects' modifiers and
 //! its perk modifiers, the turn calls, a name set on a base form or a cell, the character
 //! controller's fall time, velocity, air state and the body under its feet, and the backup
-//! package away from the player, and (lane C3) the radiation an actor takes. 56 built here
-//! (`ToggleDetectionFix` with its patch).
+//! package away from the player, (lane C3) the radiation an actor takes, and the companion
+//! wheel's switch (`GetWheelDisabled`, `SetWheelDisabled`). 58 built here (`ToggleDetectionFix`
+//! with its patch).
 //!
 //! Built by the core track inside its hook files (not again here): `GetCombatDisabled`,
 //! `SetCombatDisabled`, `ToggleNoHealthReset`, `GetTeammateUsingAmmo`, `SetTeammateUsingAmmo`,
 //! `ForceActorDetectionValue` (`ai_hooks`), `ToggleIgnoreLockedDoors` (`world_hooks`), and the
 //! five `SetOn...EventHandler` commands (`actor_hooks`).
 //!
-//! Left for later, with what each waits for:
-//! - `GetWheelDisabled`/`SetWheelDisabled` (flag 0x80, read only by the companion-wheel patch,
-//!   row G54): the flag alone changes nothing in the game until that patch exists.
-//!   (`ToggleDetectionFix` is listed here; its handler is with its patch, G53, in
-//!   `game_patches::gc`.)
+//! (`ToggleDetectionFix` is listed here; its handler is with its patch, G53, in
+//! `game_patches::gc`.) `GetWheelDisabled`/`SetWheelDisabled` keep JIP's flag [`DISABLE_WHEEL`],
+//! which only the companion-wheel patch (row G54) reads: until that patch is in, the flag is
+//! kept and answered but changes nothing in the game.
 //!
 //! An actor base (`TESActorBase`): its base data at +0x30 (`ACBS`, saved by
 //! `TESActorBaseData::Save` `0047CAC0` as 0x18 bytes from +4: flags +0x34, level +0x3C (signed
@@ -102,6 +102,8 @@ pub static COMMANDS: Handlers = &[
     (0x27b4, get_actor_velocity),
     (0x27ba, get_object_under_feet),
     (0x2781, move_away_from_player),
+    (0x2728, get_wheel_disabled),
+    (0x2729, set_wheel_disabled),
 ];
 
 #[rustfmt::skip]
@@ -1929,9 +1931,62 @@ fn get_object_under_feet(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+// ---- the companion wheel's switch ----
+
+/// `kHookActorFlag1_DisableWheel` (`internal/hooks.h`, `1 << 7`) in the actor's `jipActorFlags1`
+/// (+0x105): the bit the companion-wheel patch (G54: `patches_game.h` tests `[ecx+0x105]`) reads.
+pub const DISABLE_WHEEL: u8 = 0x80;
+
+/// An actor's `jipActorFlags1`.
+fn wheel_flags(e: &Engine, actor: u32) -> u8 {
+    e.get(
+        Ptr::<crate::game::JipActorFlags>::new(actor),
+        crate::game::JipActorFlags::jipActorFlags1,
+    )
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_GetWheelDisabled_Execute.
+/// 1 for an actor with [`DISABLE_WHEEL`] set; else no answer.
+fn get_wheel_disabled(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if is_actor(e, a.this_obj) && wheel_flags(e, a.this_obj) & DISABLE_WHEEL != 0 {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_SetWheelDisabled_Execute.
+/// For an actor whose argument reads: [`DISABLE_WHEEL`] flipped when the asked state (any value
+/// but 0 disables) differs from the flag's. No result.
+fn set_wheel_disabled(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let flags = wheel_flags(e, a.this_obj);
+    if (read.int(0, 0) == 0) != (flags & DISABLE_WHEEL == 0) {
+        e.set(
+            Ptr::<crate::game::JipActorFlags>::new(a.this_obj),
+            crate::game::JipActorFlags::jipActorFlags1,
+            flags ^ DISABLE_WHEEL,
+        );
+    }
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_actor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_r1_tests.rs"]
+mod r1_tests;
 
 #[cfg(test)]
 #[path = "jip_fn_actor_c3_tests.rs"]

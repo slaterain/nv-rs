@@ -475,7 +475,14 @@ pub fn magic_caster_find_targets(
             }
         }
         if !blocked && (actor != 0 || e.vcall(this.addr(), 0x44, &[]).u32() == 0) {
-            touch_target = e.vcall(this.addr(), 0x18, &[]).u32();
+            // Seam (JIP's H23, `CastSpellHook` at `0x815EE6`): words: the caster; an answer other
+            // than 0 asks the caster's `+0x44` slot instead of `+0x18` (the cast without the
+            // animation).
+            let slot = match e.site(0x0081_5ee6, &[this.addr()]) {
+                Some(answer) if answer != 0 => 0x44,
+                _ => 0x18,
+            };
+            touch_target = e.vcall(this.addr(), slot, &[]).u32();
         }
         if touch_target == 0 {
             touch_target = e.vcall(this.addr(), 0x44, &[]).u32();
@@ -1550,6 +1557,155 @@ mod tests {
         e.call_log = Some(vec![]);
         magic_caster_find_targets(&mut e, Ptr::new(caster), 0.0, 0, 0, 1.0, 0);
         assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    /// A non-actor caster with a touch effect and no touch target (the self-effect setup above,
+    /// its touch effect test true), for the seam at 0x815EE6 (JIP's H23).
+    fn touch_engine() -> (Engine, u32) {
+        let mut e = Engine::new();
+        // The caster part of an actor (`+0x88`), so its byte `+0x7E` is the actor's `+0x106`.
+        let caster = e.mem.alloc(0x200) + 0x88;
+        let stats = e.mem.alloc(8);
+        let spell = e.mem.alloc(0x40);
+        let effect = e.mem.alloc(0x20);
+        let active = e.mem.alloc(0x40);
+        vtable(
+            &mut e,
+            caster,
+            0x00a3_0000,
+            &[
+                (0x18, 0x00a3_1018),
+                (0x2c, 0x00a3_102c),
+                (0x30, 0x00a3_1030),
+                (0x34, 0x00a3_1034),
+                (0x38, 0x00a3_1038),
+                (0x3c, 0x00a3_103c),
+                (0x40, 0x00a3_1040),
+                (0x44, 0x00a3_1044),
+                (0x48, 0x00a3_1048),
+                (0x4c, 0x00a3_104c),
+            ],
+        );
+        returns(&mut e, 0x00a3_102c, stats);
+        returns(&mut e, 0x00a3_1030, 0);
+        returns(&mut e, 0x00a3_1034, spell);
+        returns(&mut e, 0x00a3_1038, 1);
+        e.register(0x00a3_103c, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        returns(&mut e, 0x00a3_1040, 0);
+        returns(&mut e, 0x00a3_1048, 0);
+        returns(&mut e, 0x00a3_104c, active);
+        vtable(&mut e, stats, 0x00a1_0000, &[(0x100, 0x00a1_1000)]);
+        returns(&mut e, 0x00a1_1000, 0);
+        vtable(&mut e, spell, 0x00a4_0000, &[(0x18, 0x00a4_1018)]);
+        returns(&mut e, 0x00a4_1018, 0);
+        vtable(&mut e, active, 0x00af_0000, &[(0x0, 0x00af_1000)]);
+        returns(&mut e, 0x00af_1000, 0);
+        // The spell's effect list: one node at +0x10 holding `effect`.
+        e.mem.set_u32(spell + 0x10, effect);
+        e.register(NODE_ITEM, |_, a| ret(a[0]));
+        e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(WORD_AT_C, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.mem.set_u32(active + 0xc, 0x00b0_0000);
+        returns(&mut e, EFFECT_ITEM_SETTING, 0x00b1_0000);
+        e.register(SETTING_DURATION, |_, _| Ret {
+            st0: 10.0,
+            ..Ret::default()
+        });
+        returns(&mut e, HAS_TOUCH_EFFECT, 1);
+        returns(&mut e, 0x00a3_1018, 0);
+        returns(&mut e, 0x00a3_1044, 0);
+        returns(&mut e, HAS_TARGET_EFFECT, 0);
+        returns(&mut e, RT_DYNAMIC_CAST, 0);
+        e.register(GET_COSTLIEST_EFFECT, |e, a| {
+            // The costliest self effect is the one effect.
+            if a[1] == 0 {
+                ret(e.mem.u32(a[0] + 4))
+            } else {
+                ret(0)
+            }
+        });
+        for callee in [
+            LOCAL_LIST_CONSTRUCT,
+            LOCAL_LIST_REMOVE_ALL,
+            LOCAL_LIST_DESTRUCT,
+            ACTIVE_EFFECT_ADJUST_EFFECTIVENESS,
+            GET_AV_EFFECT,
+        ] {
+            returns(&mut e, callee, 0);
+        }
+        (e, caster)
+    }
+
+    thread_local! {
+        static SEAM_THIS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    }
+
+    /// The seam at 0x815EE6 (JIP's H23): answering 1, the touch target is asked of the caster's
+    /// +0x44 slot and +0x18 is not; answering 0, of +0x18; the seam receives the caster.
+    #[test]
+    fn find_targets_touch_target_follows_the_seam() {
+        for (answer, slot_18_calls) in [(1u32, 0usize), (0, 1)] {
+            let (mut e, caster) = touch_engine();
+            SEAM_THIS.with(|s| s.set(0));
+            if answer == 1 {
+                e.on_site_for_test(0x0081_5ee6, |_, w| {
+                    SEAM_THIS.with(|s| s.set(w[0]));
+                    Some(1)
+                });
+            } else {
+                e.on_site_for_test(0x0081_5ee6, |_, w| {
+                    SEAM_THIS.with(|s| s.set(w[0]));
+                    Some(0)
+                });
+            }
+            e.call_log = Some(vec![]);
+            let words = args![caster, 0.0f32, 0u32, 0u32, 2.0f32, 0u32];
+            e.call(0x0081_5d00, &words);
+            assert_eq!(
+                SEAM_THIS.with(|s| s.get()),
+                caster,
+                "the seam gets the caster"
+            );
+            assert_eq!(
+                calls_to(&e, 0x00a3_1018).len(),
+                slot_18_calls,
+                "answer {answer}"
+            );
+            // +0x44: the entry test, the fallback when no target was found, and with 1 the seam's.
+            let slot_44_calls = if answer == 1 { 3 } else { 2 };
+            assert_eq!(
+                calls_to(&e, 0x00a3_1044).len(),
+                slot_44_calls,
+                "answer {answer}"
+            );
+        }
+    }
+
+    /// JIP's H23 end to end: with JIP installed, the caster's cast slot `+0xC` (the exe's
+    /// `CastSpellImmediate`, `00815740`, which the actors' caster vtables hold there: `010841F4` and
+    /// `01086A0C`) reaches `FindTargets` in the same call; with `CastImmediate`'s bit set on the
+    /// actor (`+0x106`, the caster's `+0x7E`) the touch target comes from `+0x44`, without it from
+    /// `+0x18`.
+    #[test]
+    fn cast_immediate_reaches_find_targets_through_the_cast() {
+        let (mut e, caster) = touch_engine();
+        jip::test_support::install_into(&mut e);
+        e.mem.set_u32(0x00a3_0000 + 0xc, 0x0081_5740);
+        let cast = |e: &mut Engine| {
+            e.call_log = Some(vec![]);
+            e.vcall(caster, 0xc, &args![0u32, 0u32, 0u32, 1.0f32, 0u32]);
+            (
+                calls_to(e, 0x00a3_1018).len(),
+                calls_to(e, 0x00a3_1044).len(),
+            )
+        };
+        e.mem.set_u8(caster + 0x7e, 0x10);
+        assert_eq!(cast(&mut e), (0, 3), "CastImmediate's bit: +0x44");
+        e.mem.set_u8(caster + 0x7e, 0);
+        assert_eq!(cast(&mut e), (1, 2), "an ordinary cast: +0x18");
     }
 
     thread_local! {
