@@ -59,7 +59,7 @@ struct Maps {
     insert: HashMap<u32, NodeNames>,
     attach: HashMap<u32, NodeNames>,
     /// Requests from another thread waiting for the main loop (`MainLoopAddCallback`), by key,
-    /// each with its form's id (looked up again when it runs).
+    /// each with its form's id (run only while that id still names the same form).
     pending: HashMap<u32, (Request, u32)>,
     next_key: u32,
 }
@@ -201,7 +201,7 @@ fn release(e: &Engine, s: u32) {
 }
 
 /// A fixed string's count up (`lock inc [s-8]`); nothing for 0.
-fn add_ref(e: &Engine, s: u32) {
+pub(crate) fn add_ref(e: &Engine, s: u32) {
     if s == 0 {
         return;
     }
@@ -784,16 +784,16 @@ fn set_entry_value(e: &mut Engine, insert: bool, form: u32, block: u32, object: 
 }
 
 /// The main loop's step for requests made on another thread (JIP's `MainLoopAddCallback(
-/// RegisterInsertObject, dataStr)`): the request kept under `key`, for the form that has the kept
-/// id now. Deliberate difference: JIP keeps the form's pointer, and its callback outlives a load
-/// (`MainLoopCallback`s without the "clear on load" flag), so a reference freed or reused by a
-/// load in between would be read; here the form is found again by its id, and with none the
-/// request is dropped.
+/// RegisterInsertObject, dataStr)`): the request kept under `key`, run only when the form the
+/// kept id names now is the very form that was asked (the pointers compared as numbers: nothing
+/// at the kept pointer is read before that). Deliberate difference: JIP keeps the form's pointer,
+/// and its callback outlives a load (`MainLoopCallback`s without the "clear on load" flag), so a
+/// reference freed or reused by a load in between would be read; here a form gone, or rebuilt
+/// elsewhere by a load (a reference made in game reuses `0xFF` ids), drops the request.
 pub fn run_pending(e: &mut Engine, key: u32) {
     let pending = maps(e).pending.remove(&key);
-    if let Some((mut req, id)) = pending {
-        req.form = crate::cosave::lookup_form(e, id);
-        if req.form != 0 {
+    if let Some((req, id)) = pending {
+        if req.form != 0 && crate::cosave::lookup_form(e, id) == req.form {
             register_insert_object(e, &req);
         }
     }

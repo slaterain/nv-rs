@@ -349,27 +349,11 @@ fn c_text(e: &Engine, at: u32) -> Vec<u8> {
     out
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/netimmerse.cpp: NiObjectNET::SetName
-// (asm).
-/// The block's name set to the fixed string of `text`: the table's string taken (one count); when
-/// it is the name the block has, that count given back; else the old name's count given back and
-/// the new one kept.
+/// The block's name set to the fixed string of `text` (JIP's `NiObjectNET::SetName`, as
+/// `RenameNifBlock` does it: the counts changed with `lock`-ed adds, as JIP's, since the loader
+/// threads name parts while the main thread names others).
 fn set_name(e: &mut Engine, block: u32, text: &[u8]) {
-    let new =
-        crate::commands::with_guest_text(e, text, |e, at| e.call(ADD_STRING, &args![at]).u32());
-    let old = e.mem.u32(block + NI_NAME);
-    if new == old {
-        if new != 0 {
-            let count = e.mem.u32(new - 8);
-            e.mem.set_u32(new - 8, count.wrapping_sub(1));
-        }
-        return;
-    }
-    if old != 0 {
-        let count = e.mem.u32(old - 8);
-        e.mem.set_u32(old - 8, count.wrapping_sub(1));
-    }
-    e.mem.set_u32(block + NI_NAME, new);
+    crate::commands::jip_fn_misc_ref_nodes_w::set_name(e, block, text);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: LoadBip01SlotHook.
@@ -388,11 +372,10 @@ fn biped_part_name(e: &mut Engine, w: &[u32]) -> Option<u32> {
     let vtable = e.mem.u32(clone);
     if e.mem.u32(vtable + IS_NODE_SLOT) == ADDR_RETURN_THIS {
         if e.mem.u8(form + FORM_FLAGS_6) & INSERT_OBJECT != 0 {
+            // JIP's `lock inc` on the root name's count; the clone's own name is overwritten
+            // without its count given back, as JIP does.
             let root_name = e.mem.u32(root + NI_NAME);
-            if root_name != 0 {
-                let count = e.mem.u32(root_name - 8);
-                e.mem.set_u32(root_name - 8, count.wrapping_add(1));
-            }
+            crate::commands::jip_fn_misc_ref_insert::add_ref(e, root_name);
             e.mem.set_u32(clone + NI_NAME, root_name);
             crate::commands::jip_fn_misc_ref_insert::do_insert_objects(e, form, 0, clone);
         }
