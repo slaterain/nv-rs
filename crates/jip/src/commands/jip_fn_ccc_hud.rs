@@ -125,19 +125,27 @@ const AVATARS_FOLDER: &[u8] = b"Data\\textures\\jazzisparis\\ccc\\";
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/utility.cpp: LineIterator::LineIterator
 // and operator++.
-/// The file's lines as JIP's `LineIterator` gives them: carriage returns and line feeds end a
-/// line, empty lines are skipped, and a line that starts with byte 3 (JIP's end mark) ends the
-/// walk.
-fn lines(text: &[u8]) -> Vec<&[u8]> {
+/// The file's lines as JIP's `LineIterator` gives them: up to the file's first 0 byte, carriage
+/// returns and line feeds end a line (JIP's `ReplaceChr` stops at that 0); after it only 0 bytes
+/// do, so a CR or LF there stays inside its piece. Empty pieces are skipped, and a piece that
+/// starts with byte 3 (JIP's end mark) ends the walk.
+fn lines(text: &[u8]) -> Vec<Vec<u8>> {
+    let first_zero = text.iter().position(|&b| b == 0).unwrap_or(text.len());
+    let mut bytes = text.to_vec();
+    for b in &mut bytes[..first_zero] {
+        if *b == b'\r' || *b == b'\n' {
+            *b = 0;
+        }
+    }
     let mut out = Vec::new();
-    for line in text.split(|&b| b == b'\r' || b == b'\n' || b == 0) {
+    for line in bytes.split(|&b| b == 0) {
         if line.is_empty() {
             continue;
         }
         if line[0] == 3 {
             break;
         }
-        out.push(line);
+        out.push(line.to_vec());
     }
     out
 }
@@ -157,7 +165,7 @@ fn insert_common(common: &mut Vec<(Vec<u8>, Vec<u8>)>, key: &[u8], path: Vec<u8>
 fn read_avatars(e: &mut Engine) {
     let text = engine_core::mod_files::read(e, AVATARS_INI).unwrap_or_default();
     for (index, line) in lines(&text).into_iter().enumerate() {
-        let (key, value) = super::jip_fn_ui::next_token(line, b'=');
+        let (key, value) = super::jip_fn_ui::next_token(&line, b'=');
         let mut path = b"jazzisparis\\ccc\\avatar_".to_vec();
         path.extend_from_slice(value);
         path.extend_from_slice(b".dds");
@@ -430,8 +438,13 @@ fn ccc_on_load(e: &mut Engine, w: &[u32]) -> Ret {
     } else {
         e.mem.u32(menu + MENU_TILE)
     };
+    // JIP reads the HUD's tile with no check (a crash without one); nv-rs's own: the load error.
+    if root == 0 {
+        crate::console::console_print_line(e, LOAD_ERROR);
+        return handled(true);
+    }
     let display = match component(e, root, b"JIPCCCHUDDisplay") {
-        Some((tile, None)) if root != 0 => tile,
+        Some((tile, None)) => tile,
         _ => {
             crate::console::console_print_line(e, LOAD_ERROR);
             return handled(true);

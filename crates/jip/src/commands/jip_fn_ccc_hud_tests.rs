@@ -38,6 +38,10 @@ thread_local! {
     static NEXT: Cell<u32> = const { Cell::new(0) };
     static TRAITS: RefCell<Vec<(Vec<u8>, u32)>> = const { RefCell::new(Vec::new()) };
     static PRINTED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    /// A HUD part `hud_scene` leaves out (as another HUD mod that renamed it), and whether the
+    /// HUD root has no `_DUIF3` value.
+    static SKIP_PART: Cell<Option<&'static str>> = const { Cell::new(None) };
+    static NO_DUIF3: Cell<bool> = const { Cell::new(false) };
 }
 
 fn eax(v: u32) -> Ret {
@@ -239,6 +243,9 @@ fn hud_scene(e: &mut Engine, duif3: bool) -> Vec<u32> {
     values(e, fk, &[(b"string", Some(113))], &mut want);
     // The HUD's own parts, as the two layouts name them.
     let part = |e: &mut Engine, path: &[&str], trait_: &[u8], index: usize, want: &mut [u32]| {
+        if SKIP_PART.with(|s| s.get()) == path.last().copied() {
+            return;
+        }
         let mut at = root;
         for name in path {
             at = new_tile(e, at, Some(name.as_bytes()));
@@ -257,9 +264,11 @@ fn hud_scene(e: &mut Engine, duif3: bool) -> Vec<u32> {
         part(e, &["Info"], b"y", 117, &mut want);
         part(e, &["EnemyHealth"], b"y", 118, &mut want);
     }
-    let mut dummy = vec![0u32; 1];
-    values(e, root, &[(b"_DUIF3", Some(0))], &mut dummy);
-    e.mem.set_f32(dummy[0] + 8, if duif3 { 1.0 } else { 0.0 });
+    if !NO_DUIF3.with(|d| d.get()) {
+        let mut dummy = vec![0u32; 1];
+        values(e, root, &[(b"_DUIF3", Some(0))], &mut dummy);
+        e.mem.set_f32(dummy[0] + 8, if duif3 { 1.0 } else { 0.0 });
+    }
     want
 }
 
@@ -267,6 +276,8 @@ fn setup() -> Engine {
     NEXT.with(|n| n.set(AREA + 0x100));
     TRAITS.with(|t| t.borrow_mut().clear());
     PRINTED.with(|p| p.borrow_mut().clear());
+    SKIP_PART.with(|s| s.set(None));
+    NO_DUIF3.with(|d| d.set(false));
     files::fresh();
     let mut e = engine();
     game_globals(&mut e);
@@ -301,7 +312,8 @@ fn setup() -> Engine {
         eax(0)
     });
     e.register(SHOW_MESSAGE_BOX, |e, w| {
-        let mut words = w[..10].to_vec();
+        assert_eq!(w.len(), 10, "ShowMessageBox's words");
+        let mut words = w.to_vec();
         words[0] = u32::from(nvse::table::guest_text(e, w[0]) == OLD_VERSION);
         words[8] = u32::from(nvse::table::guest_text(e, w[8]) == b"OK");
         CALLS.with(|c| c.borrow_mut().push((SHOW_MESSAGE_BOX, words)));
@@ -339,6 +351,12 @@ fn on_load_finds_the_hud_values_in_jips_order() {
         assert_eq!(h.elements, want, "duif3 {duif3}");
         assert_eq!(h.mod_index, CCC as u8);
         assert_eq!(h.task_faction, FACTION);
+        assert!(printed().is_empty());
+        // Once a session: a second call reads nothing and changes nothing.
+        let before = calls().len();
+        assert_eq!(on_load(&mut e), 1);
+        assert_eq!(calls().len(), before, "duif3 {duif3}: nothing called");
+        assert_eq!(e.ext::<Jip>().ccc.hud.elements, want);
         assert!(printed().is_empty());
     }
 }
@@ -388,6 +406,10 @@ fn an_old_version_says_so_and_fails() {
         calls_to(SHOW_MESSAGE_BOX),
         vec![vec![1, 0, 0, MESSAGE_BOX_CALLBACK, 0, 0x17, 0, 0, 1, 0]]
     );
+    assert_eq!(e.ext::<Jip>().ccc.hud.mod_index, CCC as u8);
+    // Once a session: the second call does nothing and succeeds.
+    assert_eq!(on_load(&mut e), 1);
+    assert_eq!(calls_to(SHOW_MESSAGE_BOX).len(), 1);
     assert!(!e.ext::<Jip>().ccc.hud.loaded);
 }
 
@@ -398,6 +420,7 @@ fn saved_forms_of_the_mods_loaded() {
     hud_scene(&mut e, false);
     loaded_mod(&mut e, 3, MOD_INFOS, b"Companion Core.esm");
     loaded_mod(&mut e, 9, MOD_INFOS + 0x800, b"EZ_CompanionNVSE.esm");
+    loaded_mod(&mut e, 5, MOD_INFOS + 0x1000, b"NosCo Companion System.esm");
     form(&mut e, PACKAGE, 0x49, 0x0300_080e);
     in_form_map(&mut e, PACKAGE, 0x0300_080e, 3);
     e.mem.set_u32(PACKAGE + 0x2c, LOCATION);
@@ -408,10 +431,22 @@ fn saved_forms_of_the_mods_loaded() {
     };
     assert_eq!(saved(&mut e, 0), 0, "before CCCOnLoad");
     on_load(&mut e);
-    assert_eq!(saved(&mut e, 0), 0x0300_0812);
-    assert_eq!(saved(&mut e, 3), 0x0305_b3b4);
-    assert_eq!(saved(&mut e, 4), 0, "NosCo not loaded");
-    assert_eq!(saved(&mut e, 9), 0x0900_0dc3);
+    let all: Vec<u32> = (0..10).map(|i| saved(&mut e, i)).collect();
+    assert_eq!(
+        all,
+        [
+            0x0300_0812,
+            0x0300_0810,
+            0x0300_950d,
+            0x0305_b3b4,
+            0x0500_0ae0,
+            0x0500_0ae2,
+            0x0500_86a7,
+            0x0500_0ae5,
+            0x0500_0add,
+            0x0900_0dc3
+        ]
+    );
     assert_eq!(e.mem.u32(LOCATION + 4), 0);
     e.mem.set_u32(RESULT, 5);
     call(&mut e, 0x2708, &[n(10)]);
@@ -545,7 +580,10 @@ fn trait_0_health_distance_and_action() {
         assert_eq!(w[1], 0x10);
         f32::into_ret(30.0)
     });
-    e.register(GET_BASE_AV_FN, |_, _| f32::into_ret(120.0));
+    e.register(GET_BASE_AV_FN, |_, w| {
+        assert_eq!(w[1], 0x10, "base health");
+        f32::into_ret(120.0)
+    });
     e.mem.set_u32(NPC + 0x68, PROC);
     e.mem.set_u32(PROC + 4, PACKAGE);
     e.mem.set_u32(PROC + 0xc, 0x0bad_0000);
@@ -595,8 +633,9 @@ fn sms_stops_cccs_shaders_on_the_reference() {
     let other_mod = effect(&mut e, 1, vt, NPC, SHADER + 0x40);
     let other_ref = effect(&mut e, 2, vt, FORMS + 0x9000, SHADER);
     let other_kind = effect(&mut e, 3, vt + 4, NPC, SHADER);
-    // tempEffects: the inline first node, then three more.
-    let list = [mine, other_mod, other_ref, other_kind];
+    let mine_too = effect(&mut e, 4, vt, NPC, SHADER);
+    // tempEffects: the inline first node, then four more; CC&C's effects second and last.
+    let list = [other_mod, mine, other_ref, other_kind, mine_too];
     e.mem.set_u32(0x011e_0e80 + 0x60, list[0]);
     let mut prev = 0x011e_0e80 + 0x60;
     for (i, &x) in list[1..].iter().enumerate() {
@@ -607,5 +646,233 @@ fn sms_stops_cccs_shaders_on_the_reference() {
     }
     call(&mut e, 0x2771, &[r(1)]);
     let flags: Vec<u8> = list.iter().map(|&x| e.mem.u8(x + 0x24)).collect();
-    assert_eq!(flags, [1, 0, 0, 0]);
+    assert_eq!(flags, [0, 1, 0, 0, 1]);
+}
+
+/// A HUD value missing while every tile is there (another HUD mod renamed `SneakMeter`): the
+/// load error, the values unused, `CCCSetFloat 114` writes nothing.
+#[test]
+fn a_hud_value_missing_is_the_load_error() {
+    let mut e = setup();
+    SKIP_PART.with(|s| s.set(Some("SneakMeter")));
+    hud_scene(&mut e, false);
+    assert_eq!(on_load(&mut e), 1);
+    assert!(!e.ext::<Jip>().ccc.hud.loaded);
+    assert_eq!(printed(), vec![LOAD_ERROR.to_vec()]);
+    call(&mut e, 0x26fe, &[n(114), z(1.0)]);
+    assert!(calls_to(REFRESH_FN).is_empty());
+}
+
+/// A HUD root without `_DUIF3`: the load error.
+#[test]
+fn no_duif3_is_the_load_error() {
+    for duif3 in [false, true] {
+        let mut e = setup();
+        NO_DUIF3.with(|d| d.set(true));
+        hud_scene(&mut e, duif3);
+        assert_eq!(on_load(&mut e), 1);
+        assert!(!e.ext::<Jip>().ccc.hud.loaded, "duif3 {duif3}");
+        assert_eq!(printed(), vec![LOAD_ERROR.to_vec()]);
+    }
+}
+
+/// No HUD tile (the HUD menu's tile 0, or no HUD menu): the load error, not a read through it.
+#[test]
+fn no_hud_root_is_the_load_error() {
+    let mut e = setup();
+    let menu = alloc(0x10);
+    e.mem.set_u32(0x011d_96c0, menu);
+    assert_eq!(on_load(&mut e), 1);
+    assert_eq!(printed(), vec![LOAD_ERROR.to_vec()]);
+    let mut e = setup();
+    e.mem.set_u32(0x011d_96c0, 0);
+    assert_eq!(on_load(&mut e), 1);
+    assert_eq!(printed(), vec![LOAD_ERROR.to_vec()]);
+}
+
+/// JIP's `LineIterator`: CR and LF end lines only before the file's first 0 byte; after it only
+/// 0 bytes do, so a CR LF stays inside its piece; a piece starting with byte 3 ends the walk.
+#[test]
+fn lines_as_jips_line_iterator() {
+    assert_eq!(
+        lines(b"a=b\r\n\r\nc=d"),
+        vec![b"a=b".to_vec(), b"c=d".to_vec()]
+    );
+    assert_eq!(
+        lines(b"a=b\0x=y\r\nc=d\0\0e=f"),
+        vec![b"a=b".to_vec(), b"x=y\r\nc=d".to_vec(), b"e=f".to_vec()]
+    );
+    assert_eq!(lines(b"a=b\n\x03rest\nc=d"), vec![b"a=b".to_vec()]);
+}
+
+/// The ini file's first 129 lines are found by name, the 130th and later only as common
+/// pictures (in a creature's name, in JIP's case-blind key order, a key given twice keeping the
+/// later path); the folder's `avatar_*.dds` files without case (the name as listed), one with
+/// no underscore skipped, and a folder file over the ini's line of the same name.
+#[test]
+fn avatar_ini_split_order_and_folder() {
+    let mut e = setup();
+    let want = hud_scene(&mut e, false);
+    let mut ini = Vec::new();
+    for i in 0..127 {
+        ini.extend_from_slice(format!("named{i}=n{i}\n").as_bytes());
+    }
+    // Lines 127 and 128 (the 128th and 129th): by name. Line 129: the first common one.
+    ini.extend_from_slice(b"Boone=ini_boone\nLastNamed=last\nFirstCommon=first\n");
+    ini.extend_from_slice(b"Golden Gecko=golden\nGecko=gecko\nDeathclaw=dc1\ndeathclaw=dc2\n");
+    files::put(r"data\config\ccc_avatars.ini", &ini);
+    files::put(r"data\textures\jazzisparis\ccc\AVATAR_Rex.DDS", b"");
+    files::put(r"data\textures\jazzisparis\ccc\avatarX.dds", b"");
+    files::put(r"data\textures\jazzisparis\ccc\avatar_Boone.dds", b"");
+    on_load(&mut e);
+    let avatar = |e: &mut Engine, name: &[u8], female: bool, creature: bool| {
+        named_npc(e, name, female, creature);
+        e.ext::<Jip>().ccc.hud.path_for_id.clear();
+        call_on(e, 0x2700, NPC, &[n(40), n(2)]);
+        text_of(e, want[42])
+    };
+    assert_eq!(
+        avatar(&mut e, b"named126", false, false),
+        br"jazzisparis\ccc\avatar_n126.dds"
+    );
+    assert_eq!(
+        avatar(&mut e, b"LastNamed", false, false),
+        br"jazzisparis\ccc\avatar_last.dds",
+        "line 128: by name"
+    );
+    assert_eq!(
+        avatar(&mut e, b"FirstCommon", false, false),
+        AVATAR_MALE,
+        "line 129: not by name"
+    );
+    assert_eq!(
+        avatar(&mut e, b"The FirstCommon", false, true),
+        br"jazzisparis\ccc\avatar_first.dds",
+        "line 129: common, in a creature's name"
+    );
+    // "Gecko" sorts before "Golden Gecko" (StrCompareCI): a Golden Gecko gets the gecko picture.
+    assert_eq!(
+        avatar(&mut e, b"Golden Gecko", false, true),
+        br"jazzisparis\ccc\avatar_gecko.dds"
+    );
+    assert_eq!(
+        avatar(&mut e, b"Deathclaw", true, true),
+        br"jazzisparis\ccc\avatar_dc2.dds",
+        "a key given twice keeps the later path; a creature's female bit is not read"
+    );
+    assert_eq!(
+        avatar(&mut e, b"Mole Rat", true, true),
+        AVATAR_MALE,
+        "a female creature without a picture"
+    );
+    assert_eq!(
+        avatar(&mut e, b"Rex", false, false),
+        br"jazzisparis\ccc\AVATAR_Rex.DDS",
+        "the folder without case, the name as listed"
+    );
+    assert_eq!(
+        avatar(&mut e, b"X", false, false),
+        AVATAR_MALE,
+        "no underscore: skipped"
+    );
+    assert_eq!(
+        avatar(&mut e, b"Boone", false, false),
+        br"jazzisparis\ccc\avatar_Boone.dds",
+        "the folder over the ini"
+    );
+}
+
+/// The actor and its avatar and health stand-ins for the trait 0 tests, the player at `player`.
+fn trait_0_actor(e: &mut Engine, player: u32) {
+    e.mem.set_u32(0x011d_ea3c, player);
+    extra_stand_ins(e);
+    named_npc(e, b"Boone", false, false);
+    e.mem.set_u32(NPC + 0xa4, AV_VT);
+    e.mem.set_u32(AV_VT + 0xc, GET_AV_FN);
+    e.mem.set_u32(AV_VT + 4, GET_BASE_AV_FN);
+    e.register(GET_AV_FN, |_, _| f32::into_ret(30.0));
+    e.register(GET_BASE_AV_FN, |_, _| f32::into_ret(120.0));
+}
+
+/// Trait 0's far mark in the same cell: 8000 units away not far (0), 8200 far (1).
+#[test]
+fn trait_0_far_at_8192_units() {
+    let (mut e, want) = loaded(false);
+    let player = FORMS + 0x6000;
+    let cell = FORMS + 0x6800;
+    trait_0_actor(&mut e, player);
+    e.mem.set_u32(player + 0x40, cell);
+    e.mem.set_u32(NPC + 0x40, cell);
+    for (x, far) in [(8000.0f32, 0.0f32), (8200.0, 1.0), (8000.0, 0.0)] {
+        e.mem.set_f32(NPC + 0x30, x);
+        call_on(&mut e, 0x2700, NPC, &[n(0), n(5)]);
+        assert_eq!(e.mem.f32(want[25] + 8), far, "{x}");
+    }
+}
+
+thread_local! {
+    static FLEE: Cell<u32> = const { Cell::new(0) };
+}
+
+/// Trait 0's action for every package kind JIP lists, a fleeing package by its flee flag, an
+/// interrupt package over the current one, and the task faction's rank from 7.
+#[test]
+fn trait_0_actions() {
+    let (mut e, want) = loaded(false);
+    let player = FORMS + 0x6000;
+    trait_0_actor(&mut e, player);
+    e.register(GET_FLEE_COMBAT, |_, w| {
+        assert_eq!(w, &[PACKAGE]);
+        eax(FLEE.with(|f| f.get()))
+    });
+    e.mem.set_u32(NPC + 0x68, PROC);
+    e.mem.set_u8(PROC + 0x28, 1);
+    e.mem.set_u32(PROC + 4, PACKAGE);
+    e.mem.set_u32(PROC + 0xc, player);
+    let action = |e: &mut Engine| {
+        e.mem.set_f32(want[35] + 8, -9.0);
+        call_on(e, 0x2700, NPC, &[n(0), n(5)]);
+        e.mem.f32(want[35] + 8)
+    };
+    for (kind, expected) in [
+        (1u8, 1.0f32),
+        (2, 1.0),
+        (6, 1.0),
+        (7, 1.0),
+        (5, 2.0),
+        (9, 2.0),
+        (13, 2.0),
+        (14, 2.0),
+        (10, 6.0),
+        (22, 6.0),
+        (12, 13.0),
+        (3, -9.0),
+        (0, -9.0),
+    ] {
+        e.mem.set_u8(PACKAGE + 0x20, kind);
+        assert_eq!(action(&mut e), expected, "kind {kind}");
+    }
+    e.mem.set_u8(PACKAGE + 0x20, 18);
+    FLEE.with(|f| f.set(0));
+    assert_eq!(action(&mut e), 5.0);
+    FLEE.with(|f| f.set(1));
+    assert_eq!(action(&mut e), 6.0);
+    // An interrupt package (a middle or high process's +0xE4) comes first.
+    let other = FORMS + 0x7400;
+    e.mem.set_u8(other + 0x20, 12);
+    e.mem.set_u32(PROC + 0xe4, other);
+    assert_eq!(action(&mut e), 13.0, "the interrupt package");
+    e.mem.set_u32(PROC + 0xe4, 0);
+    // The task faction's rank 7 and up stands for the action.
+    let data = FORMS + 0x7800;
+    e.mem.set_u32(data + 0x10, data + 0x20);
+    e.mem.set_u32(data + 0x14, 0);
+    e.mem.set_u32(data + 0x20, FACTION);
+    put_extra(&mut e, NPC + 0x44, data, 0x5e, data + 0x10);
+    for rank in [7u8, 8] {
+        e.mem.set_u8(data + 0x24, rank);
+        assert_eq!(action(&mut e), f32::from(rank), "rank {rank}");
+    }
+    e.mem.set_u8(data + 0x24, 6);
+    assert_eq!(action(&mut e), 6.0, "rank 6: the package (fleeing)");
 }
