@@ -14,9 +14,9 @@
 //!    the layer from its view as the window layer does (`raw_window_metal::Layer::from_ns_view`).
 //!    wgpu's Metal surface then also reads that window's occlusion state on the render thread
 //!    each frame, as it will in the game. CI's Mac has no screen session, so its window is
-//!    hidden from view and wgpu gives no frame (`Occluded`): the port's own outcome for that,
-//!    [`d3d9_wgpu::NoFrame::Occluded`] with no frame shown, passes as well as one frame shown;
-//!    anything else fails.
+//!    hidden from view and wgpu gives no frame: the port's own outcomes for that,
+//!    [`d3d9_wgpu::NoFrame::Occluded`] or `Resting` with no frame shown, pass as well as one frame
+//!    shown (the line says which); anything else fails.
 //!
 //! No test harness (`harness = false`): case 2 needs the process's real main thread. A machine
 //! with no Metal adapter (enumerated without any surface) skips, saying so in a line that starts
@@ -193,18 +193,21 @@ mod mac {
 
     /// The result of one case: one frame shown; or, with `hidden_ok` (a real window, which CI's
     /// Mac keeps hidden from view), no frame shown because the window is hidden from view (the
-    /// port's own `NoFrame::Occluded`). Anything else is a failure.
+    /// port's own outcomes for a hidden window: `NoFrame::Occluded`, or `NoFrame::Resting`, the
+    /// window left alone after a frame it did not give). Anything else is a failure.
     fn judge(case: &str, hidden_ok: bool, done: std::thread::Result<Result<Shown, String>>) {
         match done {
             Ok(Ok((1, None))) => eprintln!("metal_surface: {case}: device made, 1 frame shown: ok"),
-            Ok(Ok((0, Some(NoFrame::Occluded)))) if hidden_ok => eprintln!(
-                "metal_surface: {case}: device made, present ran, no frame shown because the \
-                 window is hidden from view (Occluded): ok"
-            ),
+            Ok(Ok((0, Some(why @ (NoFrame::Occluded | NoFrame::Resting))))) if hidden_ok => {
+                eprintln!(
+                    "metal_surface: {case}: device made, present ran, no frame shown because the \
+                     window is hidden from view ({why:?}): ok"
+                )
+            }
             Ok(Ok((n, why))) => fail(&format!(
                 "{case}: {n} frames shown (not shown because: {why:?}); 1 expected{}",
                 if hidden_ok {
-                    ", or none because the window is hidden from view (Occluded)"
+                    ", or none because the window is hidden from view (Occluded or Resting)"
                 } else {
                     ""
                 }
