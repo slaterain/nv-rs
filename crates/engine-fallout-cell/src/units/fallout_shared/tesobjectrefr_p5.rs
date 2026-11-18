@@ -2548,8 +2548,10 @@ pub fn fn_0057ab70(e: &mut Engine) {
         }
         // 0057aba4: lStewieAl's Tweaks' row S0064 (`patchFixHandleMultiboundsCrashWithNullCell`): a
         // reference with no parent cell (+0x40) is passed over, where the exe goes on to its cell.
-        // (Tweaks' bytes compare `[ebp+0xC]` where the exe compared the value at `[ebp-0xC]`; the
-        // exe's value check is kept above.)
+        // (Tweaks' bytes compare `[ebp+0xC]` where the exe compared the value at `[ebp-0xC]`: that
+        // is an uninitialised word of the caller's frame (this function takes no arguments), so in
+        // a frame where it happens to be 0 a game running Tweaks skips the whole queued multibound
+        // batch. The port does not copy that; the exe's value check is kept above.)
         if e.stewie(stewie::HANDLE_MULTIBOUNDS_NULL_CELL) && e.mem.u32(reference + 0x40) == 0 {
             continue;
         }
@@ -7671,6 +7673,40 @@ mod tests {
                 assert_eq!(calls_to(&log, 0x0043_8af0).len(), 1);
             }
         }
+    }
+
+    /// lStewieAl's Tweaks' row S0064 with a parent cell (ordinary input): the row changes nothing,
+    /// the same calls as with it off (the owner and the cell's object told, the map emptied).
+    #[test]
+    fn s0064_row_on_with_a_cell_changes_nothing() {
+        let run = |on: bool| {
+            let mut e = engine2();
+            let slot_e8 = 0x00ff_0160;
+            let slot_dc = 0x00ff_0161;
+            stub(&mut e, &[slot_e8, slot_dc]);
+            let owner_object = object_with(&mut e, 0x40, &[(0xe8, slot_e8)]);
+            let target = object_with(&mut e, 0x40, &[(0xdc, slot_dc)]);
+            let reference = refr(&mut e, 0x30, &[(0x1d0, SPARE_SLOT)]);
+            returns(&mut e, SPARE_SLOT, 0x9000);
+            returns(&mut e, 0x004b_9ba0, 1);
+            e.register_double(0x006b_7f20, move |e, a| {
+                e.mem.set_u32(a[1], 0);
+                e.mem.set_u32(a[2], reference);
+                e.mem.set_u32(a[3], 0x4444);
+                Ret::default()
+            });
+            returns(&mut e, 0x0054_97a0, 1);
+            returns(&mut e, 0x0096_11e0, owner_object);
+            returns(&mut e, 0x0054_5960, target);
+            stub(&mut e, &[0x0056_9ae0, 0x0043_8af0]);
+            e.set_stewie(stewie::HANDLE_MULTIBOUNDS_NULL_CELL, on);
+            start_log(&mut e);
+            e.call(0x0057_ab70, &args![]);
+            (take_log(&mut e), reference)
+        };
+        let ((off, _), (on, reference)) = (run(false), run(true));
+        assert_eq!(on, off);
+        assert_eq!(calls_to(&on, 0x0056_9ae0), vec![vec![reference, 0x4444]]);
     }
 
     #[test]

@@ -1983,6 +1983,44 @@ mod tests {
         assert_eq!(writes.borrow()[1][0x1b..], [1, 0, 0x0a, 0x0b]);
     }
 
+    /// lStewieAl's Tweaks' row S0881 with a worldspace (ordinary input): the row changes nothing,
+    /// the same record bytes (the worldspace's id first), answer and calls as with it off.
+    #[test]
+    fn s0881_row_on_with_a_worldspace_changes_nothing() {
+        let run = |on: bool| {
+            let mut e = engine();
+            e.set_global(DATA_HANDLER_POINTER, 0x0abc_0000u32);
+            let world = form(&mut e, 2, 0x41, 0x00_0102, &[]);
+            let base = form(&mut e, 4, 0x2a, 0x00_0a0b, &[]);
+            let location = point(&mut e, [7.0, 8.0, 9.0]);
+            let reference = form(
+                &mut e,
+                1,
+                0x3b,
+                0xff00_0001,
+                &[(0x1f4, location), (0x100, 1), (0xfc, 1), (0xf0, 0)],
+            );
+            stub(&mut e, REFERENCE_GET_WORLD_SPACE, world);
+            place(&mut e);
+            stub(&mut e, REFERENCE_BASE_OBJECT, base);
+            stub(&mut e, REFERENCE_EXTRA_LIST, 0x0bad_0000);
+            stub(&mut e, EXTRA_GET_LEV_CREA_ORIGINAL_BASE, 0);
+            stub(&mut e, REFERENCE_GET_PERSISTS, 0);
+            stub(&mut e, REFERENCE_FLAG_TEST, 0);
+            let writes = capture_writes(&mut e);
+            let buffer = e.mem.alloc(0x40);
+            e.set_stewie(stewie::SAVING_NULL_CELL, on);
+            e.call_log = Some(vec![]);
+            let kind = e.call(0x0084_eb80, &args![buffer, reference, 0u32]).u32();
+            let bytes = writes.borrow()[0].clone();
+            (kind, bytes, e.call_log.take())
+        };
+        let (off, on) = (run(false), run(true));
+        assert_eq!(on, off);
+        assert_eq!(on.0, 5);
+        assert_eq!(on.1[..3], [0, 1, 2]);
+    }
+
     /// lStewieAl's Tweaks' row S0881: a created reference with neither worldspace nor cell. The
     /// exe reads the null form's id (`0084e3a0` reads `+0xc`) and stops; with the row on the record
     /// is written with the id 0.

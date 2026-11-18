@@ -1970,6 +1970,27 @@ mod n029_tests {
         }
     }
 
+    /// lStewieAl's Tweaks' row S0106 with a limb node (ordinary input): the row changes nothing,
+    /// the same calls as with it off (the limb's scale asked, the limb cloned and thrown).
+    #[test]
+    fn s0106_row_on_with_a_limb_node_changes_nothing() {
+        let run = |on: bool| {
+            let mut e = Engine::new();
+            cut_doubles(&mut e);
+            let s = scene(&mut e);
+            e.mem.set_u32(0x7e00, s.this);
+            e.set_stewie(stewie::NULL_HIT_LOCATION_NODE_EXPLOSION, on);
+            e.call_log = Some(vec![]);
+            e.call(0x009b_90b0, &args![s.this]);
+            (e.mem.u8(s.impact + 0x28), e)
+        };
+        let ((off_byte, off), (on_byte, on)) = (run(false), run(true));
+        assert_eq!(on.call_log, off.call_log);
+        assert_eq!((on_byte, off_byte), (1, 1));
+        assert_eq!(calls(&on, NODE_SCALE).len(), 1);
+        assert_eq!(calls(&on, CLONE).len(), 1);
+    }
+
     #[test]
     fn fn_009b90b0_cuts_the_limb_and_throws_it() {
         let mut e = Engine::new();
