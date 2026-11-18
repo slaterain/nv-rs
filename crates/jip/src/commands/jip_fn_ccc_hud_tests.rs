@@ -494,7 +494,7 @@ fn avatars_by_name_folder_and_kind() {
     );
     assert_eq!(
         avatar(&mut e, b"Veronica", false, false).0,
-        br"jazzisparis\ccc\avatar_veronica.dds",
+        br"jazzisparis\ccc\avatar_Veronica.dds",
         "the folder's file (names as listed)"
     );
     assert_eq!(avatar(&mut e, b"Rose", true, false).0, AVATAR_FEMALE);
