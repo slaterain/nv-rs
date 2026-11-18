@@ -404,6 +404,63 @@ fn a_list_and_its_rule_agree_where_both_answer() {
     assert!(from_changes(&zone, now).unwrap().is_some());
 }
 
+/// The table answers UTC: its `GetTimeZoneInformation` line, read back with no bias, no change-over
+/// dates and no daylight bias, and every year's rules the same.
+fn assert_utc(table: &str) {
+    assert!(table.contains("GetTimeZoneInformation\t\t"), "{table}");
+    let mut e = crate::Engine::new();
+    crate::d3d9::load_adapter_table(&mut e, table);
+    let bytes = crate::d3d9::time_zone(&mut e);
+    let zone = ZoneInfo::from_bytes(&bytes);
+    assert_eq!(
+        (zone.bias, zone.standard_bias, zone.daylight_bias),
+        (0, 0, 0)
+    );
+    assert_eq!((zone.standard_date, zone.daylight_date), ([0; 8], [0; 8]));
+    // StandardDate +0x44, DaylightDate +0x98 (16 bytes each), DaylightBias +0xA8.
+    assert!(bytes[0x44..0x54].iter().all(|&b| b == 0));
+    assert!(bytes[0x98..0xac].iter().all(|&b| b == 0));
+    for year in [1601, 2026, 30827] {
+        assert_eq!(crate::d3d9::time_zone_for_year(&mut e, year), bytes);
+    }
+}
+
+/// End to end: a zone file that cannot be used (`TZ` naming a folder; a version 1 zone file,
+/// which has no rule for the times after its list) is answered as UTC, with the reason in the
+/// problem line, where it used to leave the table without a time zone (the run then stopped at the
+/// game's first local time).
+#[test]
+fn an_unusable_zone_file_is_utc_with_its_reason() {
+    let dir = std::env::temp_dir().join(format!("nv-rs-zone-utc-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("Europe")).unwrap();
+    // A version 1 file: the header ("TZif", version 0, 15 reserved bytes) and six zero counts.
+    let mut v1 = b"TZif\0".to_vec();
+    v1.resize(20 + 24, 0);
+    std::fs::write(dir.join("old"), &v1).unwrap();
+    let local = dir.join("localtime");
+    for (tz, why) in [("Europe", "not a regular file"), ("old", "old")] {
+        let zone = read_zone(Some(tz), &dir, &local);
+        assert!(zone.is_err(), "{tz}");
+        let (table, problems) = write_table(&Inputs {
+            zone,
+            now: at(2026, 7, 1, 12),
+            processor: fixed_processor(),
+            own_folder: Ok("/home/me/.local/share/nv-rs".into()),
+            code_page: 1252,
+        });
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("the time zone cannot be read")
+                && problems[0].contains("the game is given UTC")
+                && problems[0].contains(why),
+            "{}",
+            problems[0]
+        );
+        assert_utc(&table);
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Broken zone files are refused, not misread.
 #[test]
 fn broken_zone_files_are_refused() {
@@ -561,7 +618,11 @@ fn a_missing_part_is_named_and_the_rest_is_made() {
     });
     assert_eq!(problems.len(), 2);
     assert!(problems[0].contains("no HOME") && problems[1].contains("no zone file"));
-    assert!(!table.contains("GetTimeZoneInformation") && !table.contains("SHGetFolderPathA\t5 "));
+    assert!(problems[1].contains("UTC"), "{}", problems[1]);
+    assert!(!table.contains("SHGetFolderPathA\t5 "));
+    // The zone that could not be read is answered as UTC (no stop at the game's first local
+    // time), for the current rules and every year's.
+    assert_utc(&table);
     assert!(table.contains("CpuIdFlagTest\t\t200000\nCpuid\t0\t1 0 0 0\nCpuid\t1\t0 0 0 6808000\n"));
     assert!(table.ends_with("NvApiLoad\t\t0\t7e\nNvApiEnd\n"));
     let (display, problems, refusal) = display_part(&DisplayInputs {

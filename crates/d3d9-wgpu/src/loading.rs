@@ -307,18 +307,14 @@ pub(crate) fn text_image(
     }
 }
 
-/// Elsewhere: no text (the start screen's card and logo only, the frame-rate counter no numbers),
-/// said once in the log: the text is drawn by Windows' GDI in Windows' fonts, and no font or
-/// rasteriser of the port's own draws it yet.
+/// Elsewhere (no GDI, no Windows fonts): the port's own bitmap font ([`crate::bitmap_font`]), in
+/// whole-pixel steps of its 8-pixel cell nearest `height`; one face and weight for every font.
 #[cfg(not(windows))]
-pub(crate) fn text_image(_text: &str, _height: u32, _font: Font) -> Option<(u32, u32, Vec<u8>)> {
-    static SAID: std::sync::Once = std::sync::Once::new();
-    SAID.call_once(|| {
-        eprintln!(
-            "NV_D3D9 wgpu: no text is drawn on this system (it is drawn by Windows' GDI): the start screen shows its card and logo only, the F11 frame-rate counter no numbers"
-        );
-    });
-    None
+pub(crate) fn text_image(text: &str, height: u32, _font: Font) -> Option<(u32, u32, Vec<u8>)> {
+    Some(crate::bitmap_font::raster(
+        text,
+        crate::bitmap_font::scale(height),
+    ))
 }
 
 /// How many of the run's last lines the card shows.
@@ -955,12 +951,21 @@ impl Screen {
         }
         // The run's last lines, in a dark strip along the bottom, as many as fit under the rest.
         let log_px = (fh / 80.0).max(9.0).round() as u32;
+        // A line's height: Consolas' about 1.2 of its size; the bitmap font's cell.
+        #[cfg(windows)]
         let line_h = (log_px as f32 * 1.2).ceil();
+        #[cfg(not(windows))]
+        let line_h = (crate::bitmap_font::CELL.1 * crate::bitmap_font::scale(log_px)) as f32;
         let fit = ((fh - y - u(0.03)) / line_h).floor().max(0.0) as usize;
         let lines = recent_lines();
         let lines = &lines[lines.len().saturating_sub(fit.min(LOG_LINES))..];
         if !lines.is_empty() {
-            let chars = ((fw - 2.0 * u(0.04)) / (log_px as f32 * 0.55)).max(8.0) as usize;
+            // A character's width: Consolas' about 0.55 of its height; the bitmap font's cell.
+            #[cfg(windows)]
+            let char_w = log_px as f32 * 0.55;
+            #[cfg(not(windows))]
+            let char_w = (crate::bitmap_font::CELL.0 * crate::bitmap_font::scale(log_px)) as f32;
+            let chars = ((fw - 2.0 * u(0.04)) / char_w).max(8.0) as usize;
             let text: Vec<String> = lines
                 .iter()
                 .map(|l| l.chars().take(chars).collect())
@@ -1090,6 +1095,26 @@ mod tests {
             // Not all transparent: the picture is there.
             assert!(px.chunks_exact(4).filter(|p| p[3] > 0).count() > 1000);
         }
+    }
+
+    /// Off Windows the overlay text comes from the port's bitmap font (it used to be none: the
+    /// F11 counter showed no numbers there).
+    #[cfg(not(windows))]
+    #[test]
+    fn off_windows_the_bitmap_font_draws_the_overlay_text() {
+        let got = super::text_image("Preparing shaders 212 of 1,480", 24, super::STATUS_FONT);
+        assert_eq!(
+            got,
+            Some(crate::bitmap_font::raster(
+                "Preparing shaders 212 of 1,480",
+                3
+            ))
+        );
+        let (w, h, _) = got.expect("drawn");
+        assert_eq!((w, h), (30 * 18, 24));
+        let (_, two, _) = super::text_image("one\ntwo", 12, super::LOG_FONT).expect("drawn");
+        let (_, one, _) = super::text_image("one", 12, super::LOG_FONT).expect("drawn");
+        assert_eq!(two, 2 * one);
     }
 
     #[cfg(windows)]
