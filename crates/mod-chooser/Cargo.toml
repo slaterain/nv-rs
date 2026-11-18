@@ -1,0 +1,21 @@
+[package]
+name = "mod-chooser"
+version = "0.1.0"
+description = "The mod installer's text front end, the same on Windows, Linux and macOS: lists the mods to install and the installed ones, asks each FOMOD installer's questions in plain words, unpacks into the port's own mod installs folder and removes mods"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+fomod = { path = "../fomod" }
+mod-archive = { path = "../mod-archive" }
+mod-install = { path = "../mod-install" }
+
+# Linux and macOS: the room on the drive (statvfs). Already in the lock and its notices.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+# The tests make their own archives.
+zip = { version = "9.7", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["ppmd", "compress"] }

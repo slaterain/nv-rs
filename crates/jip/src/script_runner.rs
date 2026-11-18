@@ -390,12 +390,14 @@ pub fn run_script_source(e: &mut Engine, text: &[u8], name: &[u8], capture: bool
 fn list(e: &mut Engine) -> Vec<(Vec<u8>, bool)> {
     engine_core::mod_files::list(e, SCRIPTS_FOLDER)
         .into_iter()
-        .filter(|entry| {
-            entry.name.len() >= 4
-                && entry.name[entry.name.len() - 4..].eq_ignore_ascii_case(b".txt")
-        })
+        .filter(|entry| is_txt(&entry.name))
         .map(|entry| (entry.name, !entry.is_folder))
         .collect()
+}
+
+/// Whether `name` ends in `.txt` (any case): JIP's search pattern `*.txt`, on long names.
+fn is_txt(name: &[u8]) -> bool {
+    name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(b".txt")
 }
 
 fn state(e: &mut Engine) -> &mut State {

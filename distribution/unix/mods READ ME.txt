@@ -6,6 +6,15 @@ This is the "my mods" folder in nv-rs's own folder. ./play.sh --mods says where 
 Put a mod's files here exactly as they would go in the game's Data folder: its .esp or .esm,
 its .bsa, and folders such as Meshes, Textures or Sound. Then start ./play.sh --mods.
 
+A mod that comes as an archive (.7z, .zip or .fomod, with or without an installer): put the
+archive here and start ./play.sh --install-mods. It lists the archives here and the mods
+installed, asks each installer's questions in plain words (type what each line says; Enter keeps
+the recommended choice; a typo only asks again), installs the mod into its own folder in
+nv-rs's "mod installs" folder, then moves the archive to "installed archives" here. Installed
+mods are laid over the game in the order installed, then the files you put here by hand. A RAR
+archive is not read: save it again as .7z or .zip. An installer's C# script is not run: the
+mod's plain layout is offered instead.
+
 Your game folder is never changed. Each start with --mods builds a whole game folder in nv-rs's
 own folder (modgame): your game's files linked, not copied, plus these on top. A file a link
 cannot reach is linked by a symbolic link instead.

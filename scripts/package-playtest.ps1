@@ -90,7 +90,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $x86 'nvapi-capture.exe') -Destination (Join-Path $stage 'app/tools/nvapi-capture.exe')
     Copy-Item -LiteralPath (Join-Path $x86 'dsound-capture.exe') -Destination (Join-Path $stage 'app/tools/dsound-capture.exe')
     # The launchers, the settings tool and the READ MEs.
-    foreach ($file in @('Play with mods.cmd', 'Import my saves.cmd', 'Settings.cmd', 'Settings.ps1', 'READ ME.txt', 'THIRD-PARTY-NOTICES.txt')) {
+    foreach ($file in @('Play with mods.cmd', 'Install mods.cmd', 'Import my saves.cmd', 'Settings.cmd', 'Settings.ps1', 'READ ME.txt', 'THIRD-PARTY-NOTICES.txt')) {
         Copy-Item -LiteralPath (Join-Path $root "distribution/$file") -Destination $stage
     }
     New-Item -ItemType Directory -Path (Join-Path $stage 'mods') | Out-Null
