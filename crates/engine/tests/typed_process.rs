@@ -723,6 +723,9 @@ const FORGET_CALLEES: [u32; 38] = [
 const FORGET_ANSWERS: u32 = LOG + 0x3c00;
 /// A slot that answers 0 (a non-actor's "is it an actor"), past the stand-in slots.
 const NOT_AN_ACTOR: u32 = 0x00ff_3000;
+/// The array slot `009c4c80`'s stand-in empties when it is called (0: none), and the end of the
+/// array's elements (the next word).
+const LEAVES_ITS_SLOT: u32 = LOG + 0x3e70;
 
 fn forget_callee<const I: u32>(e: &mut Engine, a: &[u32]) -> Ret {
     log(e, 0x5000 | I, a.first().copied().unwrap_or(0));
@@ -742,6 +745,28 @@ fn forget_callees(e: &mut Engine) {
     }
     each!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 32
         33 34 35 36 37);
+    // `009c4c80` (index 36): also takes the object out of the array slot [`LEAVES_ITS_SLOT`] names,
+    // once, the later elements moved down one, the last emptied and the last level's tail one lower, as
+    // the array's removal does.
+    e.register(0x009c_4c80, |e, a| {
+        let slot = e.mem.u32(LEAVES_ITS_SLOT);
+        if slot != 0 {
+            let end = e.mem.u32(LEAVES_ITS_SLOT + 4);
+            let mut at = slot;
+            while at + 4 < end {
+                let next = e.mem.u32(at + 4);
+                e.mem.set_u32(at, next);
+                at += 4;
+            }
+            e.mem.set_u32(at, 0);
+            // The last level's tail moves down with it.
+            let tail = e.mem.u32(LEAVES_ITS_SLOT + 8);
+            let end_index = e.mem.u32(tail);
+            e.mem.set_u32(tail, end_index - 1);
+            e.mem.set_u32(LEAVES_ITS_SLOT, 0);
+        }
+        forget_callee::<36>(e, a)
+    });
 }
 
 /// An object of 0x200 bytes whose slots all answer `answer`, its extra data list (at +0x44) empty.
@@ -818,9 +843,14 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
     let vt = e.mem.u32(base);
     e.mem.set_u32(decoy, vt);
     // The target: an actor (its slots answer itself) or a non-actor (they answer 0).
-    let target = forget_object(e, 0);
+    // Placed off its block's start, as the decoy is, so its address's low byte (what a slot's
+    // answer is as a byte) is not 0 whatever the heap gives: as an actor, its "is it an actor" is true.
+    let target_base = forget_object(e, 0);
+    let target = target_base + 0x21;
+    let vt = e.mem.u32(target_base);
+    e.mem.set_u32(target, vt);
+    assert_ne!(target & 0xff, 0, "the target's answer is true as a byte");
     if which == 0 {
-        let vt = e.mem.u32(target);
         e.mem.set_u32(vt + VT_SLOTS, target);
     }
     for i in 0..FORGET_CALLEES.len() as u32 {
@@ -890,6 +920,24 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
     let lists = e.mem.alloc(0x1_0400);
     let bytes = e.mem.bytes(a, 0x40);
     e.mem.write(lists + 4, &bytes);
+    // With pattern bit 16, the non-actor told about the target (`009c4c80`) is flagged 0x800 and
+    // leaves the array while it is told (the next element moves into its slot), so `00976680` looks
+    // at that slot again.
+    if pattern & 16 != 0 {
+        let flags = e.mem.u32(other + 8) | 0x800;
+        e.mem.set_u32(other + 8, flags);
+        let elements = e.mem.u32(a + 4);
+        let count = u32::from(e.mem.u16(a + 0xa));
+        if let Some(i) = (0..count).find(|i| e.mem.u32(elements + 4 * i) == other) {
+            // Level 3's tail in the lists' copy of the array (+4, then +0x20 + 4 * level).
+            let level_tail = lists + 4 + 0x20 + 4 * 3;
+            words(
+                e,
+                LEAVES_ITS_SLOT,
+                &[elements + 4 * i, elements + 4 * count, level_tail],
+            );
+        }
+    }
     let tail = block(e, 8, &[skipped, 0]);
     let middle = block(e, 8, &[non_actor, tail]);
     words(e, lists + 0x78, &[follower, middle]);
@@ -908,7 +956,7 @@ fn forget_world(e: &mut Engine, pattern: u32, answers: u32, which: u32) -> (u32,
 /// target's slots, so it is never null).
 fn forget_inputs() -> Vec<Input> {
     vec![
-        Input::Of(&[0, 1, 2, 3, 5, 6, 7, 9, 12, 15, 17, 26, 31]),
+        Input::Of(&[0, 1, 2, 3, 5, 6, 7, 9, 12, 15, 17, 20, 26, 31]),
         Input::Of(&[0, 0x5a5a, 0xffff, 0x1234, 0x8001]),
         Input::Of(&[0, 1]),
     ]
