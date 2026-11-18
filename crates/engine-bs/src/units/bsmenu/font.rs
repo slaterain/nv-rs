@@ -3881,7 +3881,10 @@ pub fn font_manager_calculate_string_dimensions(
     start: i32,
 ) -> Ptr {
     let out = result.addr();
-    if !(1..=8).contains(&font) || text == 0 {
+    // JIP's seam at the last font's test (`0xA1B032`; no words): answered, its answer is the last
+    // font (JIP's manager holds more than 8).
+    let last = e.site(0x00a1_b032, &[]).map_or(8, |n| n as i32);
+    if !(1..=last).contains(&font) || text == 0 {
         for k in 0..3 {
             let v: u32 = e.global(DIMENSIONS_START + 4 * k);
             e.mem.set_u32(out + 4 * k, v);
@@ -7034,6 +7037,34 @@ mod tests {
         assert_eq!(floats(&e, result, 3), vec![4.0, 0.0, 0.0]);
         font_manager_calculate_string_dimensions(&mut e, m, Ptr::new(result), 0, 1, 25.0, 0);
         assert_eq!(e.mem.f32(result), 4.0);
+    }
+
+    /// JIP's seam at the last font's test (`0xA1B032`): its answer is the last font measured.
+    #[test]
+    fn string_dimensions_last_font_seam() {
+        let (mut e, _, m) = text_setup();
+        let result = e.mem.alloc(12);
+        let text = cstr(&mut e, b"aaa a");
+        // Font 9's slot holds font 1's.
+        let first = e.mem.u32(m.addr());
+        e.mem.set_u32(m.addr() + 0x20, first);
+        e.on_site_for_test(0x00a1_b032, |_, w| {
+            assert!(w.is_empty());
+            Some(89)
+        });
+        font_manager_calculate_string_dimensions(&mut e, m, Ptr::new(result), text, 9, 25.0, 0);
+        assert_eq!(
+            floats(&e, result, 3),
+            vec![20.0, 32.0, 3.0],
+            "font 9 measured"
+        );
+        e.mem.set_f32(DIMENSIONS_START, 4.0);
+        font_manager_calculate_string_dimensions(&mut e, m, Ptr::new(result), text, 90, 25.0, 0);
+        assert_eq!(
+            floats(&e, result, 3),
+            vec![4.0, 0.0, 0.0],
+            "past 89: refused"
+        );
     }
 
     #[test]

@@ -135,10 +135,9 @@ pub static COMMANDS: Handlers = &[
 /// see or click. The row's pull request adds this list to `commands::ALL`.
 pub static AWAITING_H02: Handlers = &[(0x28b5, toggle_hud_cursor)];
 
-/// `SetFontFile`, built but not registered until JIP's font manager patch (row G129) is in: without
-/// it fonts 10 to 89 could not be set (the game's manager ends after font 8) and a game font could
-/// not be put back (G129 keeps the game's eight in the map at start; their files are in the
-/// archives, not loose). The row's pull request adds this list to `commands::ALL`.
+/// `SetFontFile`, registered with JIP's font manager patch (row G129, `game_patches::ga`): with it
+/// fonts 10 to 89 can be set and a game font put back (G129 keeps the game's eight in the map at
+/// start; their files are in the archives, not loose).
 pub static AWAITING_G129: Handlers = &[(0x274c, set_font_file)];
 
 /// `IsInCharGen`, a condition (`DEFINE_CMD_COND_PLUGIN`).
