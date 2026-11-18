@@ -6,8 +6,8 @@
 //! character controller's tilt, gravity and velocity, the ground's material, the last hit's
 //! node, VATS targetability, `AttachAshPileEx`, the player's 3D, the push away from a point and
 //! a limb dismembered; and (lane C3) whether the last hit penetrated the armour, teammates made
-//! killable and an idle played by its conditions. 56 of its 71 commands; the first 70 lines are
-//! lane A1's module.
+//! killable and an idle played by its conditions, and the no gun wobble switch. 57 of its 71
+//! commands; the first 70 lines are lane A1's module.
 //!
 //! Built elsewhere already (the core track's hook files): `SetOnHitEventHandler`,
 //! `SetOnReloadWeaponEventHandler`, `SetOnRagdollEventHandler` (`actor_hooks.rs`) and
@@ -16,7 +16,7 @@
 //! Left for later, each with what it waits for:
 //! - a game patch of stage 3.9 (`measure/jip/PLAN-3.9.md`): `MoveAwayFrom` (G42: the backup package reads
 //!   `s_moveAwayDistance`; H16: JIP's 0x8C package), `TravelToRef` (H16: `AddBackUpPackage`
-//!   allocates JIP's enlarged 0x8C package), `ToggleNoGunWobble` (H19),
+//!   allocates JIP's enlarged 0x8C package),
 //!   `Get/SetExcludedCombatActions` (H16: the combat controller's added mask and JIP's
 //!   per-reference map), `RemoveAllPerks` and `GetAllPerks` (O18 NPC perks: their NPC half reads
 //!   the patch's state and JIP's perk maps);
@@ -109,6 +109,7 @@ pub static COMMANDS: Handlers = &[
     (0x2883, get_armour_penetrated),
     (0x28eb, toggle_teammate_killable),
     (0x2807, play_idle_ex),
+    (0x28ec, toggle_no_gun_wobble),
 ];
 
 #[rustfmt::skip]
@@ -1387,6 +1388,39 @@ fn toggle_teammate_killable(e: &mut Engine, w: &[u32]) -> Ret {
     handled(true)
 }
 
+/// `kHookActorFlag2_NoGunWobble` (`internal/hooks.h`, `1 << 3`) in the actor's `jipActorFlags2`
+/// (+0x106): the bit the gun wobble patch (H19: `hooks.h` tests `[ecx+0x106]`) reads.
+pub const NO_GUN_WOBBLE: u8 = 1 << 3;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_actor.h:
+// Cmd_ToggleNoGunWobble_Execute.
+/// An actor's [`NO_GUN_WOBBLE`]: 1 when it is set; with an argument (the line's count not 0)
+/// that is read, the bit flipped when the asked state differs. The bit is read only by H19's
+/// patch: until it is in, the command keeps and answers the bit and the game is unchanged.
+fn toggle_no_gun_wobble(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    if !is_actor(e, a.this_obj) {
+        return handled(true);
+    }
+    let actor = Ptr::<crate::game::JipActorFlags>::new(a.this_obj);
+    let flags = e.get(actor, crate::game::JipActorFlags::jipActorFlags2);
+    let state = flags & NO_GUN_WOBBLE != 0;
+    if state {
+        a.set_result(e, 1.0);
+    }
+    if super::jip_fn_utility::num_args(e, &a) != 0 {
+        let read = Read::of(e, &a);
+        if read.ok && (read.int(0, 0) == 0) == state {
+            e.set(
+                actor,
+                crate::game::JipActorFlags::jipActorFlags2,
+                flags ^ NO_GUN_WOBBLE,
+            );
+        }
+    }
+    handled(true)
+}
+
 /// The game's `AttachAshPile` command (`005DB870`: one parameter parsed with the caller's
 /// parameter list into its mode word, then the ash pile placed under the actor; the port's
 /// `tesscriptfunctions.rs`), which JIP's `AttachAshPileEx` jumps to with its own arguments.
@@ -1881,3 +1915,7 @@ mod c1_tests;
 #[cfg(test)]
 #[path = "jip_fn_actor_p2_c3_tests.rs"]
 mod c3_tests;
+
+#[cfg(test)]
+#[path = "jip_fn_actor_p2_r1_tests.rs"]
+mod r1_tests;
