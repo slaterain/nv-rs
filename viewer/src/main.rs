@@ -53,6 +53,10 @@ LINUX AND MACOS:
                        line, fields split by tabs: own FOLDER / warning TEXT / game STORE FOLDER /
                        saves FROM FOLDER; in each field every byte but ASCII letters, digits and
                        ` /._-+,:@=~()` is written %XX (only read; nothing is written)
+    nv-viewer --build-mods GAME OWN MODS
+                       make OWN/modgame, the game folder to play with mods: GAME's files linked,
+                       the mods in OWN/mod installs and then those in MODS copied over them
+                       (play.sh --mods; the game's own folder is never written)
 ";
 
 /// `--find` (Linux and macOS): [`FIND_USAGE`]'s lines (`game_folders::report`), from `HOME`.
@@ -62,6 +66,51 @@ fn find() {
         Some(home) => print!("{}", game_folders::report(&home)),
         None => {
             eprintln!("error: HOME is not set to a full path, so the player's folders are unknown");
+            host::end_process(1);
+        }
+    }
+}
+
+/// `--build-mods GAME OWN LOOSE` (Linux and macOS, play.sh's `--mods`): makes `OWN/modgame`, the
+/// whole game folder to play with mods, as Play.exe makes `userdata\modgame` on Windows
+/// (`mod_install::overlay::build`): GAME's files linked, the installed mods (`OWN/mod installs`)
+/// and then the loose folder LOOSE copied over them; the plugin list goes to the mods profile's
+/// `AppData/Local/FalloutNV/plugins.txt`. Says what it did in one line; on a failure, what to do,
+/// and ends with status 1.
+#[cfg(not(windows))]
+fn build_mods(raw: &[OsString]) {
+    let [game, own, loose] = [1, 2, 3].map(|i| raw.get(i).map(PathBuf::from));
+    let (Some(game), Some(own), Some(loose)) = (game, own, loose) else {
+        eprintln!("error: --build-mods needs the game's folder, nv-rs's own folder and the mods folder");
+        host::end_process(2);
+    };
+    let layers = match mod_install::installs::layers(&own.join("mod installs"), &loose) {
+        Ok(layers) => layers,
+        Err(e) => {
+            eprintln!("error: the installed mods could not be read: {e}");
+            host::end_process(1);
+        }
+    };
+    let plugins = own
+        .join("mods")
+        .join("AppData")
+        .join("Local")
+        .join("FalloutNV")
+        .join("plugins.txt");
+    match mod_install::overlay::build(&game, &layers, &own.join("modgame"), &plugins) {
+        Ok(built) => {
+            println!(
+                "mods: {} game files linked, {} mod files from {} folders",
+                built.linked,
+                built.mod_files,
+                layers.len()
+            );
+            if built.extender_plugins {
+                println!("mods: some mods include plugins for script extenders (.dll files): those are not used");
+            }
+        }
+        Err(e) => {
+            eprintln!("{}", e.player_text());
             host::end_process(1);
         }
     }
@@ -197,6 +246,11 @@ fn run() {
     #[cfg(not(windows))]
     if raw.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("--find")) {
         find();
+        return;
+    }
+    #[cfg(not(windows))]
+    if raw.first().map(OsString::as_os_str) == Some(std::ffi::OsStr::new("--build-mods")) {
+        build_mods(&raw);
         return;
     }
     let args = match parse(&raw) {

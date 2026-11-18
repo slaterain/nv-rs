@@ -673,11 +673,21 @@ fn documents_too_long(documents: &str) -> bool {
     documents.len() + "\\My Games\\FalloutNV\\Saves\\".len() + 60 >= 260
 }
 
+/// The profile a run plays in: `mods` when `NV_PROFILE` says so (play.sh's `--mods`: saves and
+/// settings made with mods stay apart, as the Windows launcher's `userdata\mods`), else `game`.
+pub fn profile() -> &'static str {
+    match std::env::var("NV_PROFILE").as_deref() {
+        Ok("mods") => "mods",
+        _ => "game",
+    }
+}
+
 /// The game's Documents, roaming and local AppData folders inside nv-rs's own folder `own` (a
 /// full path of this system), as the Windows launcher lays its profile out (`game\Documents`,
-/// `game\AppData\Roaming`, `game\AppData\Local`): this system's paths.
+/// `game\AppData\Roaming`, `game\AppData\Local`, or `mods\...` for [`profile`] `mods`): this
+/// system's paths.
 pub fn game_folders(own: &std::path::Path) -> [std::path::PathBuf; 3] {
-    let game = own.join("game");
+    let game = own.join(profile());
     [
         game.join("Documents"),
         game.join("AppData").join("Roaming"),

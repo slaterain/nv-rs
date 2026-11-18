@@ -24,6 +24,13 @@ tab=$(printf '\t')
 cat >"$T/program" <<'EOF'
 #!/bin/sh
 if [ "${1:-}" = "--find" ]; then cat "$FAKE_FIND"; exit 0; fi
+# --build-mods GAME OWN MODS: says what it was given and makes OWN/modgame a copy of GAME.
+if [ "${1:-}" = "--build-mods" ]; then
+    echo "built: $2 | $3 | $4"
+    [ "${FAKE_MODS_STATUS:-0}" = 0 ] || exit "$FAKE_MODS_STATUS"
+    rm -rf -- "$3/modgame" && mkdir -p -- "$3/modgame" && cp -R -- "$2/." "$3/modgame/"
+    exit $?
+fi
 # FOLDER NAME KIND: the entries of FOLDER named NAME without case that are of KIND (-f or -d).
 named() {
     ls -1a -- "$1" 2>/dev/null | while IFS= read -r entry; do
@@ -315,6 +322,26 @@ out=$(PATH="$T/fakebin:$PATH" FAKE_LDCONFIG="$T/ld32.txt" $SH "$pkg/play.sh" --g
 check "25 a 32-bit libasound alone is missing" '[ $st = 1 ] && printf "%s" "$out" | grep -qF "libasound.so.2 (install: libasound2)"'
 out=$(PATH="$T/fakebin:$PATH" FAKE_LDCONFIG="$T/ld64.txt" $SH "$pkg/play.sh" --game "$game" </dev/null 2>&1); st=$?
 check "25 the 64-bit libasound is found" '[ $st = 0 ] && printf "%s" "$out" | grep -qF "program args: $game"'
+
+# 26. --mods: play.sh (a copy in a package folder of its own, so the mods folder beside it is the
+# test's) makes the mods folder, has the program build nv-rs's modgame from the game and that
+# folder, plays from modgame in the mods profile; the player's side untouched. A failed build
+# stops before the game starts.
+pkg="$T/pkg"
+mkdir -p "$pkg"
+cp "$PLAY" "$pkg/play.sh"
+out=$(env NV_RS_GAME="$game" $SH "$pkg/play.sh" --mods </dev/null 2>&1); st=$?
+check "26 status 0" '[ $st = 0 ]'
+check "26 mods folder made beside play.sh" '[ -d "$pkg/mods" ]'
+check "26 built from the game and the mods folder" 'printf "%s" "$out" | grep -qxF "built: $game | $own | $pkg/mods"'
+check "26 plays from modgame" 'printf "%s" "$out" | grep -qF "program args: $own/modgame"'
+check "26 mods profile" 'printf "%s" "$out" | grep -qx "NV_PROFILE=mods"'
+check "26 mods profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$own/mods/Documents/My Games/FalloutNV/Saves"'
+out=$(env NV_RS_GAME="$game" $SH "$pkg/play.sh" </dev/null 2>&1)
+check "26 without --mods: the game profile" 'printf "%s" "$out" | grep -qx "NV_PROFILE=game" && printf "%s" "$out" | grep -qF "program args: $game"'
+out=$(env NV_RS_GAME="$game" FAKE_MODS_STATUS=1 $SH "$pkg/play.sh" --mods </dev/null 2>&1); st=$?
+check "26 a failed build stops" '[ $st != 0 ] && ! printf "%s" "$out" | grep -q "program args:"'
+check "26 steam folder unchanged" '[ "$(snapshot)" = "$before" ]'
 
 # 24. CI's Linux job (NV_RS_REAL_PROGRAM: the built nv-viewer): the real program takes and refuses
 # the same game folders as the stand-in. Taken, it checks the game's FalloutNV.exe before its

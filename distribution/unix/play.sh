@@ -7,6 +7,12 @@
 #   ./play.sh --forget-game    forget the remembered game folder, then start (it asks again)
 #   ./play.sh --import-saves   offer again to copy the saves found in Steam's Proton folder
 #   ./play.sh --check          only check the game and say whether it can start
+#   ./play.sh --mods           play with mods: those installed with nv-rs and those put in the
+#                              mods folder beside play.sh, laid over a copy of the game's folder
+#                              made of links in nv-rs's own folder (saves made with mods stay apart)
+#   ./play.sh --mods           play with mods: those installed with nv-rs and those put in the
+#                              mods folder beside play.sh, laid over a copy of the game's folder made
+#                              of links in nv-rs's own folder (saves made with mods stay apart)
 #   ./play.sh --help           this text
 #
 # nv-rs never writes into the game's folder, Steam's folders or your Documents. Everything it
@@ -169,6 +175,7 @@ opt_game=''
 opt_forget=0
 opt_import=0
 opt_check=0
+opt_mods=0
 while [ $# -gt 0 ]; do
     case $1 in
     (--game)
@@ -179,6 +186,7 @@ while [ $# -gt 0 ]; do
     (--forget-game) opt_forget=1 ;;
     (--import-saves) opt_import=1 ;;
     (--check) opt_check=1 ;;
+    (--mods) opt_mods=1 ;;
     (-h | --help)
         usage
         exit 0
@@ -253,11 +261,17 @@ printf '%s\n' "$found" | awk -F '\t' '$1 == "warning" { print $2 }' | while IFS=
 done
 remembered=$own/game-folder.txt
 offered=$own/saves-offered.txt
-documents=$own/game/Documents/My\ Games/FalloutNV
+# The profile: saves and settings made with mods stay apart (`mods`), as on Windows. The program
+# reads NV_PROFILE for the game's Documents and AppData folders (engine-platform machine_table).
+profile=game
+[ "$opt_mods" = 0 ] || profile=mods
+NV_PROFILE=$profile
+export NV_PROFILE
+documents=$own/$profile/Documents/My\ Games/FalloutNV
 saves=$documents/Saves
 # Nothing nv-rs writes is a link: mkdir -p and cp would follow it out of nv-rs's folder.
-for path in "$own" "$own/game" "$own/game/Documents" "$own/game/Documents/My Games" "$documents" \
-    "$saves" "$own/logs" "$own/reports" "$own/machine" "$remembered" "$remembered.part" "$offered"; do
+for path in "$own" "$own/$profile" "$own/$profile/Documents" "$own/$profile/Documents/My Games" \
+    "$documents" "$saves" "$own/modgame" "$own/mod installs" "$own/logs" "$own/reports" "$own/machine" "$remembered" "$remembered.part" "$offered"; do
     [ ! -L "$path" ] || fail "$path is a link: nv-rs writes only into plain folders and files of its own there. Make it a plain folder (or remove the link), then start again."
 done
 
@@ -496,6 +510,19 @@ fi
 ls -1t -- "$own/logs" 2>/dev/null | grep '^game-.*\.log$' | tail -n +10 | while IFS= read -r old; do
     rm -f -- "$own/logs/$old"
 done
+
+# Mods: the whole game folder in nv-rs's own folder (modgame): the game's files linked, never
+# copied or written, the installed mods (mod installs) and then the mods folder beside play.sh
+# copied over them. The program makes it as Play.exe does on Windows (mod-install's overlay).
+if [ "$opt_mods" = 1 ]; then
+    mods=$here/mods
+    [ ! -L "$mods" ] || fail "$mods is a link: make it a plain folder, then start again."
+    mkdir -p -- "$mods" || fail "could not make the mods folder $mods"
+    say "Getting the mods ready (the mods folder: $mods)..."
+    "$program" --build-mods "$game" "$own" "$mods" ||
+        fail "the mods could not be made ready (above); your game's folder was not changed"
+    game=$own/modgame
+fi
 
 say "Starting the game ($game). Log: $log"
 status_file=$own/logs/.status

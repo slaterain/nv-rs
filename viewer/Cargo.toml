@@ -14,3 +14,5 @@ host = { path = "../crates/host" }
 # Linux and macOS: `--find`, the game and saves folders `play.sh` offers.
 [target.'cfg(not(windows))'.dependencies]
 game-folders = { path = "../crates/game-folders" }
+# play.sh --mods: the game folder for mods, made as Play.exe makes it on Windows.
+mod-install = { path = "../crates/mod-install" }
