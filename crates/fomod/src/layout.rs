@@ -3,7 +3,9 @@
 //! The listing may come straight from an archive: folder entries (`Wrapper/`, or a bare
 //! `Wrapper` from a 7z) are dropped, so only files are left ([`Listing`]). Names are compared as
 //! Windows and macOS compare them ([`fold`]); `__MACOSX` folders (left by Macs' zip tool) are not
-//! looked at.
+//! looked at. A listing beyond any mod's ([`MAX_ENTRIES`] files, paths of more than
+//! [`MAX_PATH_PARTS`] parts or [`MAX_PATH_BYTES`] bytes) is refused as not a mod's, so the work on
+//! it stays bounded: it is indexed once, and every lookup after that is a search in that index.
 //!
 //! The `fomod` folder is found as Mod Organizer 2 finds it: at the top, else, when the top holds
 //! exactly one name and that is a folder, inside it, and so on down (archives often wrap
@@ -15,6 +17,25 @@
 //! a Data folder (holds a plugin or archive, or one of the game's Data folders), as managers do.
 
 use std::collections::BTreeMap;
+
+/// The most files a listing may hold: a big texture mod has tens of thousands.
+pub const MAX_ENTRIES: usize = 500_000;
+
+/// The most parts a path may have: the game's deepest Data paths have under 12.
+pub const MAX_PATH_PARTS: usize = 64;
+
+/// The most bytes a path may have: Windows' own limit for most programs is 260 characters.
+pub const MAX_PATH_BYTES: usize = 1_024;
+
+/// Why a listing is not taken as a mod's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListingError(pub String);
+
+impl std::fmt::Display for ListingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the archive's file list is not a mod's: {}", self.0)
+    }
+}
 
 /// What an archive holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +91,25 @@ pub fn join(a: &str, b: &str) -> String {
     }
 }
 
+/// The keys of `files` under the folder key `prefix` (`""` or ending in `/`): the first and the
+/// last, in key order.
+fn first_and_last<'m, V>(
+    files: &'m BTreeMap<String, V>,
+    prefix: &str,
+) -> Option<(&'m String, &'m String)> {
+    let first = files
+        .range(prefix.to_owned()..)
+        .next()
+        .filter(|(k, _)| k.starts_with(prefix))?
+        .0;
+    // Every key under `prefix` sorts before `prefix` with its last `/` raised to `0`.
+    let last = match prefix.strip_suffix('/') {
+        Some(stem) => files.range(..format!("{stem}0")).next_back()?.0,
+        None => files.keys().next_back()?,
+    };
+    Some((first, last))
+}
+
 /// An archive's files, indexed once: by [`fold`]ed path, each with the listing's own spelling.
 #[derive(Debug, Clone, Default)]
 pub struct Listing<'a> {
@@ -79,14 +119,32 @@ pub struct Listing<'a> {
 impl<'a> Listing<'a> {
     /// The files of `listing`: folder entries (ending in `/` or `\`, or a name another entry is
     /// inside of), `__MACOSX` and empty paths left out; of two entries that fold to one path, the
-    /// first.
-    pub fn new(listing: &'a [String]) -> Self {
+    /// first. Refused past [`MAX_ENTRIES`], [`MAX_PATH_PARTS`] or [`MAX_PATH_BYTES`].
+    pub fn new(listing: &'a [String]) -> Result<Self, ListingError> {
+        if listing.len() > MAX_ENTRIES {
+            return Err(ListingError(format!(
+                "{} entries (a mod has at most {MAX_ENTRIES})",
+                listing.len()
+            )));
+        }
         let mut files: BTreeMap<String, &'a str> = BTreeMap::new();
         for given in listing {
+            if given.len() > MAX_PATH_BYTES {
+                return Err(ListingError(format!(
+                    "a path of {} bytes (at most {MAX_PATH_BYTES})",
+                    given.len()
+                )));
+            }
             if given.ends_with(['/', '\\']) {
                 continue;
             }
             let key = fold(given);
+            if key.split('/').count() > MAX_PATH_PARTS {
+                return Err(ListingError(format!(
+                    "a path {} folders deep (at most {MAX_PATH_PARTS})",
+                    key.split('/').count()
+                )));
+            }
             if key.is_empty() || key.split('/').any(|p| p == "__macosx") {
                 continue;
             }
@@ -106,7 +164,7 @@ impl<'a> Listing<'a> {
         for folder in folders {
             files.remove(&folder);
         }
-        Self { files }
+        Ok(Self { files })
     }
 
     /// The listing's spelling of the file at `path` (any case, either separator).
@@ -143,41 +201,29 @@ impl<'a> Listing<'a> {
     pub fn files(&self) -> impl Iterator<Item = (&String, &&'a str)> {
         self.files.iter()
     }
-}
 
-/// The folder (normalised, the listing's case) holding `fomod`, by the rule above.
-fn fomod_prefix(listing: &Listing) -> Option<String> {
-    let paths: Vec<(Vec<String>, Vec<String>)> = listing
-        .files()
-        .map(|(key, given)| {
-            let own: Vec<String> = normalise(given).split('/').map(str::to_owned).collect();
-            (key.split('/').map(str::to_owned).collect(), own)
-        })
-        .collect();
-    let mut base: Vec<String> = Vec::new();
-    let mut spelled: Vec<String> = Vec::new();
-    loop {
-        // The names right below `base`: (folded) -> (own spelling, is a folder).
-        let mut tops: BTreeMap<&str, (&str, bool)> = BTreeMap::new();
-        for (key, own) in &paths {
-            if key.len() <= base.len() || key[..base.len()] != base[..] {
-                continue;
+    /// The folder (normalised, the listing's case) holding `fomod`, by the rule above: one lookup
+    /// in the index per folder level, never a pass over every file per level.
+    fn fomod_prefix(&self) -> Option<String> {
+        let mut prefix = String::new();
+        let mut spelled: Vec<String> = Vec::new();
+        loop {
+            let fomod = format!("{prefix}fomod/");
+            if first_and_last(&self.files, &fomod).is_some() {
+                return Some(spelled.join("/"));
             }
-            let at = base.len();
-            let folder = key.len() > at + 1;
-            let entry = tops.entry(&key[at]).or_insert((&own[at], folder));
-            entry.1 |= folder;
-        }
-        if tops.get("fomod").is_some_and(|(_, folder)| *folder) {
-            return Some(spelled.join("/"));
-        }
-        let mut only = tops.into_iter();
-        match (only.next(), only.next()) {
-            (Some((key, (own, true))), None) => {
-                base.push(key.to_owned());
-                spelled.push(own.to_owned());
+            // Exactly one name below `prefix`, and a folder: the first and the last key under it
+            // share that name and its `/` (the keys between them do too, being sorted).
+            let (first, last) = first_and_last(&self.files, &prefix)?;
+            let rest = &first[prefix.len()..];
+            let name = &rest[..rest.find('/')?];
+            let folder = format!("{prefix}{name}/");
+            if !last.starts_with(&folder) {
+                return None;
             }
-            _ => return None,
+            let own = normalise(self.files[first]);
+            spelled.push(own.split('/').nth(spelled.len())?.to_owned());
+            prefix = folder;
         }
     }
 }
@@ -200,13 +246,9 @@ const DATA_FOLDERS: &[&str] = &[
 /// Plugin and archive extensions that mark a Data folder.
 const DATA_FILES: &[&str] = &[".esm", ".esp", ".bsa"];
 
-/// The shallowest folder (normalised, the listing's case; `""` the top) that holds a plugin or
-/// archive, or one of the game's Data folders, or is itself named `Data`, leaving out `fomod`
-/// folders; `None` when there is none. On a tie the first in folded order.
-pub fn data_folder(listing: &[String]) -> Option<String> {
-    let index = Listing::new(listing);
+fn data_folder_in(index: &Listing) -> Option<String> {
     let mut best: Option<(usize, String)> = None;
-    let mut offer = |parts: &[String]| {
+    let mut offer = |parts: &[&str]| {
         let depth = parts.len();
         if best.as_ref().map_or(true, |(d, _)| depth < *d) {
             best = Some((depth, parts.join("/")));
@@ -217,7 +259,8 @@ pub fn data_folder(listing: &[String]) -> Option<String> {
         if keys.contains(&"fomod") {
             continue;
         }
-        let own: Vec<String> = normalise(given).split('/').map(str::to_owned).collect();
+        let own_path = normalise(given);
+        let own: Vec<&str> = own_path.split('/').collect();
         let last = keys.len() - 1;
         if DATA_FILES.iter().any(|ext| keys[last].ends_with(ext)) {
             offer(&own[..last]);
@@ -233,10 +276,17 @@ pub fn data_folder(listing: &[String]) -> Option<String> {
     best.map(|(_, path)| path)
 }
 
-/// What the archive with this listing holds.
-pub fn layout(listing: &[String]) -> Layout {
-    let index = Listing::new(listing);
-    let prefix = fomod_prefix(&index);
+/// The shallowest folder (normalised, the listing's case; `""` the top) that holds a plugin or
+/// archive, or one of the game's Data folders, or is itself named `Data`, leaving out `fomod`
+/// folders; `None` when there is none. On a tie the first in folded order.
+pub fn data_folder(listing: &[String]) -> Result<Option<String>, ListingError> {
+    Ok(data_folder_in(&Listing::new(listing)?))
+}
+
+/// What the archive with this listing holds, or why the listing is not a mod's.
+pub fn layout(listing: &[String]) -> Result<Layout, ListingError> {
+    let index = Listing::new(listing)?;
+    let prefix = index.fomod_prefix();
     let found = |name: &str| {
         prefix
             .as_deref()
@@ -246,22 +296,22 @@ pub fn layout(listing: &[String]) -> Layout {
     let info = found("fomod/info.xml");
     if let Some(prefix) = &prefix {
         if let Some(config) = found("fomod/ModuleConfig.xml") {
-            return Layout::Installer {
+            return Ok(Layout::Installer {
                 prefix: prefix.clone(),
                 config,
                 info,
-            };
+            });
         }
         if let Some(script) = found("fomod/script.cs") {
-            return Layout::Script {
+            return Ok(Layout::Script {
                 prefix: prefix.clone(),
                 script,
-                data: data_folder(listing),
-            };
+                data: data_folder_in(&index),
+            });
         }
     }
-    match data_folder(listing) {
+    Ok(match data_folder_in(&index) {
         Some(data) => Layout::Plain { data, info },
         None => Layout::Unknown,
-    }
+    })
 }
