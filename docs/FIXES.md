@@ -1339,6 +1339,10 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
   `AttachModel` gets them, and its lights tagged in the mesh are listed. A loaded biped part's node is
   named `"<slot name> <form id>"` as JIP names it (the game's name adds the form's name), for everyone
   with JIP installed; an add-on's rotation and translation are reset as the game resets them.
+  Difference from JIP: an `InsertNode` or `AttachModel` asked from a script thread to change the 3D
+  now runs at the next main loop for the form that has the asked form's id then, and is dropped when
+  none has; JIP keeps the form's pointer across a load in between, which could then point at a freed
+  or reused reference.
 - `BipedSlotVisibilityHook` (H15, JIP's own, `0x4AC645` in `BipedAnim::LoadBipedParts`): in first
   person a slot's part loads when its bit is set in JIP's mask, slots 2 to 6 at the start (the game's
   own test, so nothing changes until a script calls `ToggleBipedSlotVisibility`, which shows or hides

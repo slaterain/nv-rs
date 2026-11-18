@@ -902,3 +902,39 @@ fn h08_a_form_with_entries_is_cloned() {
     assert_eq!(e.site(seam, &[0, PLAIN, STATIC]), Some(1), "the reference");
     assert_eq!(e.site(seam, &[0, PLAIN, 0]), Some(0));
 }
+
+/// A request kept for the main loop (asked on another thread) runs for the form that has its id
+/// when the loop runs it: none (a load dropped it): nothing done and the request gone; another
+/// form with that id now (a load made it again elsewhere): that one, never the old pointer.
+#[test]
+fn a_kept_request_finds_its_form_again_by_id() {
+    let mut e = setup();
+    game_globals(&mut e);
+    let keep = |e: &mut Engine, key: u32, form: u32| {
+        let req = Request {
+            form,
+            mode: 1,
+            flag: INSERT_NODE,
+            text: b"Bip01 Spine|NewA".to_vec(),
+        };
+        maps(e).pending.insert(key, (req, 0x0000_1001));
+    };
+    // The id is in no form map: dropped.
+    keep(&mut e, 7, STATIC);
+    run_pending(&mut e, 7);
+    assert!(maps(&mut e).pending.is_empty(), "taken");
+    assert_eq!(e.mem.u8(STATIC + 6), 0, "nothing done to the old pointer");
+    assert!(node_names(&mut e, true, STATIC).is_none());
+    // The id now names another form (STATIC's place freed, the id loaded at OTHER).
+    let other = FORMS + 0xb000;
+    form(&mut e, other, 0x20, 0x0000_1001);
+    e.mem.set_u32(other, FORM_VT);
+    in_form_map(&mut e, other, 0x0000_1001, 0);
+    keep(&mut e, 8, STATIC);
+    run_pending(&mut e, 8);
+    assert_eq!(e.mem.u8(other + 6), INSERT_NODE, "the form with the id now");
+    assert!(node_names(&mut e, true, other).is_some());
+    assert!(node_names(&mut e, true, STATIC).is_none());
+    // An unknown key: nothing.
+    run_pending(&mut e, 99);
+}

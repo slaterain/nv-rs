@@ -58,8 +58,9 @@ pub type NodeNames = Vec<(u32, DataStrings)>;
 struct Maps {
     insert: HashMap<u32, NodeNames>,
     attach: HashMap<u32, NodeNames>,
-    /// Requests from another thread waiting for the main loop (`MainLoopAddCallback`), by key.
-    pending: HashMap<u32, Request>,
+    /// Requests from another thread waiting for the main loop (`MainLoopAddCallback`), by key,
+    /// each with its form's id (looked up again when it runs).
+    pending: HashMap<u32, (Request, u32)>,
     next_key: u32,
 }
 
@@ -783,11 +784,18 @@ fn set_entry_value(e: &mut Engine, insert: bool, form: u32, block: u32, object: 
 }
 
 /// The main loop's step for requests made on another thread (JIP's `MainLoopAddCallback(
-/// RegisterInsertObject, dataStr)`): the request kept under `key`.
+/// RegisterInsertObject, dataStr)`): the request kept under `key`, for the form that has the kept
+/// id now. Deliberate difference: JIP keeps the form's pointer, and its callback outlives a load
+/// (`MainLoopCallback`s without the "clear on load" flag), so a reference freed or reused by a
+/// load in between would be read; here the form is found again by its id, and with none the
+/// request is dropped.
 pub fn run_pending(e: &mut Engine, key: u32) {
-    let req = maps(e).pending.remove(&key);
-    if let Some(req) = req {
-        register_insert_object(e, &req);
+    let pending = maps(e).pending.remove(&key);
+    if let Some((mut req, id)) = pending {
+        req.form = crate::cosave::lookup_form(e, id);
+        if req.form != 0 {
+            register_insert_object(e, &req);
+        }
     }
 }
 
@@ -821,11 +829,16 @@ fn insert_or_attach(e: &mut Engine, w: &[u32], flag: u8, command: &str) -> Ret {
             a.set_result(e, 1.0);
         }
     } else {
+        let id = if form == 0 {
+            0
+        } else {
+            e.mem.u32(form + FORM_ID)
+        };
         let key = {
             let mut m = maps(e);
             m.next_key = m.next_key.wrapping_add(1);
             let key = m.next_key;
-            m.pending.insert(key, req);
+            m.pending.insert(key, (req, id));
             key
         };
         crate::main_loop::add_native(e, crate::main_loop::Native::RegisterInsertObject, key);
