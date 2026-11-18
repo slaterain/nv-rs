@@ -46,6 +46,7 @@ pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_insert;
+pub mod jip_fn_misc_ref_code;
 pub mod jip_fn_misc_ref_lines;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_misc_ref_nodes_w;
@@ -276,6 +277,7 @@ pub fn install(e: &mut Engine) {
     jip_fn_camera::install(e);
     jip_fn_rock_it::install(e);
     jip_fn_ui_code::install(e);
+    jip_fn_misc_ref_code::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
@@ -870,6 +872,8 @@ mod tests {
             "jip_fn_misc_ref",
             // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
             "jip_fn_ui",
+            // jip_fn_misc_ref_code (ToggleNoZPosReset, ToggleObjectCollision).
+            "jip_fn_misc_ref",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();

@@ -502,8 +502,23 @@ pub fn fn_00628f90(e: &mut Engine, this: Ptr, reference: u32, out: u32) {
         let at = |n: u32| frame.addr() + 0x250 - n;
         let model = e.call(REFERENCE_MODEL_WORD, &args![reference]).u32();
         let collidable = e.call(FIND_COLLIDABLE_REF, &args![model]).u32();
-        typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, at(0x28)));
-        e.call(LOCAL_48_CONSTRUCT, &args![at(0x70)]);
+        // Seam (JIP LN NVSE's ToggleNoZPosReset: 16 bytes at `0x629006` in place of the two
+        // locals' constructor calls, written the first time it is turned on): words: the
+        // collidable reference; an answer of 1 (its JIP flag `+0x5F` bit 0x10) ends the
+        // function, 0 goes on without the two constructors. Asked only while JIP is installed.
+        let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+            e.site(0x0062_9006, &[collidable])
+        } else {
+            None
+        };
+        match jip {
+            Some(0) => {}
+            Some(_) => return,
+            None => {
+                typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, at(0x28)));
+                e.call(LOCAL_48_CONSTRUCT, &args![at(0x70)]);
+            }
+        }
         e.vcall(reference, 0xf4, &args![at(0x70)]);
         e.call(LOCAL_34_CONSTRUCT, &args![at(0xa4)]);
         e.call(LOCAL_FROM_48, &args![at(0xa4), at(0x70)]);

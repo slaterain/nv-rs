@@ -24,10 +24,11 @@
 //! vtables JIP leaves alone and called directly by `0x441800`, which `0x441C30` calls (the
 //! only reference to `0x441C30` is its slot: `get_xrefs_to`, `measure/jip/GROUP-GP-NOTES.md`).
 //!
-//! Waiting (no reader or writer built): two of the attach's other steps, collision turned off
-//! for a reference marked by `ToggleObjectCollision` (`kHookRefFlag5F_DisableCollision`), JIP's
-//! inserted nodes and models (`InsertNode`, `AttachModel`: `s_insertObjects`): none of those
-//! commands is built, so nothing sets what they test. JIP's point lights (`AddPointLights`, for a
+//! After the fade, a reference marked by `ToggleObjectCollision`
+//! (`kHookRefFlag5F_DisableCollision`) has its collision turned off again
+//! (`commands::jip_fn_misc_ref_code::toggle_collision`).
+//! Waiting (no reader or writer built): JIP's inserted nodes and models (`InsertNode`,
+//! `AttachModel`: `s_insertObjects`): nothing sets what that step tests yet. JIP's point lights (`AddPointLights`, for a
 //! 3D JIP's light hooks flagged `0x20000000`) are group GL's (`gl::lights::add_point_lights`),
 //! after the fade as JIP's `doLights`. The first-person node JIP keeps
 //! (`s_pc1stPersonNode`) is kept here ([`first_person_node`]) for `AttachLine` and kin.
@@ -662,6 +663,13 @@ pub fn queued_reference(e: &mut Engine, queued: u32) {
                     e.mem.set_f32(node + off::FADE, 1.0);
                     e.mem.set_f32(node + off::FADE + 4, 1.0);
                 }
+            }
+            // JIP's `doneFade`: a reference ToggleObjectCollision marked has its collision
+            // turned off again in the new 3D.
+            if ref_flags(e, refr) & crate::commands::jip_fn_misc_ref_code::REF_FLAG_DISABLE_COLLISION
+                != 0
+            {
+                crate::commands::jip_fn_misc_ref_code::toggle_collision(e, refr, false);
             }
             // JIP's point lights (`doLights`, group GL's H06/H12): a 3D its light hooks marked
             // `0x20000000` (the byte +0x33's bit 0x20) has them listed and set from their forms.

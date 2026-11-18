@@ -58,8 +58,22 @@ pub fn fn_006270f0(e: &mut Engine, this: Ptr<LoadedAreaBound>) {
 // Translated from 006295e0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `LoadedAreaBound::WarpActor` (Xbox PDB): finds and applies a warp point.
 pub fn loaded_area_bound_warp_actor(e: &mut Engine, this: Ptr<LoadedAreaBound>, actor: Ptr) {
+    // Seam (JIP LN NVSE's ToggleNoZPosReset: 20 bytes at `0x6295E9` in place of the point's
+    // constructor call, written the first time it is turned on): words: the actor; an answer of
+    // 1 (the actor's JIP flag `+0x5F` bit 0x10) skips the warp, 0 goes on without the
+    // constructor. Asked only while JIP is installed.
+    let jip = if e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0 {
+        e.site(0x0062_95e9, &[actor.addr()])
+    } else {
+        None
+    };
+    if jip.is_some_and(|answer| answer != 0) {
+        return;
+    }
     e.with_stack(12, |e, point| {
-        typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, point));
+        if jip.is_none() {
+            typed_call!(leaf::FAMILY, 0x0068_15c0, leaf::same_word(e, point));
+        }
         // The pending `point` push belongs to FindWarpLocation: slot 0x1f4
         // has no stack arguments.
         let actor_point = e.vcall(actor.addr(), 0x1f4, &[]).u32();
