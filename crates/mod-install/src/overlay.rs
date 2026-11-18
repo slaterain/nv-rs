@@ -21,13 +21,23 @@
 //! - Nothing is ever written through a link. The port's game never writes into its Data (every
 //!   file the game makes stays in the run's memory, `engine_platform::files`; mods' own files go to
 //!   the port's folder beside the saves, refused inside the game folder, `host::mod_files`). Making
-//!   this folder only ever removes a name and makes a new one; folders are checked to be plain
-//!   folders, never links, before a name is made in them.
+//!   this folder only ever removes a name and makes a new one, and every change goes through
+//!   [`crate::fsops::act`] with its two guards: names made of plain parts only, and the real
+//!   location of the change inside this folder and outside the game's and every layer's folder.
+//!   A link at the folder's own place is removed itself (never followed) and the folder made
+//!   again from nothing; folders inside it are checked to be plain folders before a name is made
+//!   or removed in them.
 //! - Only what changed is redone. What the folder holds is kept beside it ([`state_path`]): each
-//!   name with its source, size and modified time. A start with the same game and layers finds
-//!   everything the same and touches nothing; a changed file is relinked alone; a name no longer
-//!   wanted is removed. Without that record (or with one that cannot be read) the folder is made
-//!   again from nothing.
+//!   name with its source, size and modified time, then an `end` line with the count, written
+//!   whole (a temporary name, synced, renamed over). A start with the same game and layers reads
+//!   the folders' entries (their own sizes and times; a link is resolved only where there is one),
+//!   finds everything the same and touches nothing, not even the record: 0.43 s for 100,000 mod
+//!   files on the maintainer's PC (a release build; the first build, 100,000 hard links, about a
+//!   minute). A changed file is relinked alone; a name no longer wanted is removed. A record that
+//!   is not whole, or names anything but plain names under `Data/` or one top-level file, is not
+//!   trusted: the folder is made again from nothing. A name removed by hand from the folder is
+//!   not noticed while its source is unchanged (delete the folder to make it again): looking at
+//!   every name each start would cost seconds with a big texture mod.
 //! - Folder links: on Windows, a folder link (junction) in the game's Data is left out, as before;
 //!   on Linux and macOS folder links in the game's Data are followed once each (a link back to a
 //!   folder already walked is not walked again), and a file link is taken as the file it leads to.
@@ -45,6 +55,7 @@
 //! walked, [`MAX_HEADER_BYTES`] of a plugin read for its masters: past one the build stops in
 //! words. The caps are parameters of [`build_with`] so tests can lower them.
 
+use crate::fsops::{self, act, Guard, Op};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -133,6 +144,9 @@ pub struct Built {
     /// Installed mods' plugins added after the loose folder's own `plugins.txt`, which did not
     /// name them.
     pub added_plugins: Vec<String>,
+    /// Names left out because no system can hold them safely (a control character, a `:` or
+    /// ``, `.` or `..`): hand-placed files the game could not have used either.
+    pub skipped: Vec<String>,
 }
 
 /// What stopped the folder being made.
@@ -216,27 +230,32 @@ pub fn falls_back_to_symlink(code: i32) -> bool {
     matches!(code, 18 | 1 | 95 | 31) || (cfg!(target_os = "macos") && matches!(code, 45 | 102))
 }
 
-/// How the folder's names are made: a seam so tests can make hard links fail as a drive would.
+/// How the folder's hard links are made: a seam so tests can make them fail as a drive would.
+/// Every change still goes through [`fsops::act`].
 pub trait Linker {
-    fn hard_link(&self, from: &Path, to: &Path) -> std::io::Result<()>;
+    fn hard_link(&self, guard: &Guard, from: &Path, to: &Path) -> std::io::Result<()>;
 }
 
 /// The system's own hard links.
 pub struct System;
 
 impl Linker for System {
-    fn hard_link(&self, from: &Path, to: &Path) -> std::io::Result<()> {
-        std::fs::hard_link(from, to)
+    fn hard_link(&self, guard: &Guard, from: &Path, to: &Path) -> std::io::Result<()> {
+        act(guard, Op::HardLink { from, to })
     }
 }
 
 /// Links the game's file `from` as `to`: a hard link; on Linux and macOS a symbolic link to it
 /// when a hard link cannot be made there ([`falls_back_to_symlink`]).
-fn link_game_file(linker: &dyn Linker, from: &Path, to: &Path) -> std::io::Result<()> {
-    match linker.hard_link(from, to) {
-        #[cfg(unix)]
-        Err(e) if e.raw_os_error().is_some_and(falls_back_to_symlink) => {
-            std::os::unix::fs::symlink(from, to)
+fn link_game_file(
+    guard: &Guard,
+    linker: &dyn Linker,
+    from: &Path,
+    to: &Path,
+) -> std::io::Result<()> {
+    match linker.hard_link(guard, from, to) {
+        Err(e) if cfg!(unix) && e.raw_os_error().is_some_and(falls_back_to_symlink) => {
+            act(guard, Op::Symlink { from, to })
         }
         other => other,
     }
@@ -299,27 +318,50 @@ struct Source {
     modified: u128,
 }
 
-fn source(path: PathBuf, game: bool) -> std::io::Result<Source> {
-    let meta = std::fs::metadata(&path)?;
-    let modified = meta
-        .modified()
+fn nanos(meta: &std::fs::Metadata) -> u128 {
+    meta.modified()
         .ok()
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_nanos());
-    Ok(Source {
+        .map_or(0, |d| d.as_nanos())
+}
+
+/// A source from a folder entry: its own size and time (no extra look at the file, except for a
+/// link, which is taken as the file it leads to).
+fn source(entry: &std::fs::DirEntry, game: bool) -> std::io::Result<Option<Source>> {
+    let kind = entry.file_type()?;
+    let (path, meta) = if kind.is_symlink() {
+        let Ok(real) = std::fs::canonicalize(entry.path()) else {
+            return Ok(None);
+        };
+        let meta = std::fs::metadata(&real)?;
+        (real, meta)
+    } else {
+        (entry.path(), entry.metadata()?)
+    };
+    if !meta.is_file() {
+        return Ok(None);
+    }
+    Ok(Some(Source {
         path,
         game,
         size: meta.len(),
-        modified,
-    })
+        modified: nanos(&meta),
+    }))
 }
 
-/// The folder's wanted names: by name without ASCII case, (own spelling, source); and its
-/// folders by name without case, (own spelling).
+/// A name's key: Unicode lower case (Windows compares names without case, beyond ASCII too).
+fn key_of(spelled: &str) -> String {
+    spelled.to_lowercase()
+}
+
+/// The folder's wanted names: by [`key_of`], (own spelling, source); and its folders by key,
+/// (own spelling).
 #[derive(Default)]
 struct Wanted {
     files: BTreeMap<String, (String, Source)>,
     folders: BTreeMap<String, String>,
+    /// Names left out because no system can hold them safely ([`fsops::valid_part`]).
+    skipped: Vec<String>,
 }
 
 impl Wanted {
@@ -333,7 +375,7 @@ impl Wanted {
                 key.push('/');
                 spelled.push('/');
             }
-            key.push_str(&part.to_ascii_lowercase());
+            key.push_str(&part.to_lowercase());
             let last = i + 1 == relative.len();
             let own = if last {
                 self.files
@@ -355,14 +397,17 @@ impl Wanted {
     }
 
     fn put(&mut self, relative: &[String], source: Source) {
+        if !relative.iter().all(|p| fsops::valid_part(p)) {
+            self.skipped.push(relative.join("/"));
+            return;
+        }
         let spelled = self.spell(relative);
-        self.files
-            .insert(spelled.to_ascii_lowercase(), (spelled, source));
+        self.files.insert(key_of(&spelled), (spelled, source));
     }
 }
 
 /// The entries of `dir`, sorted by name, so the first of two case-alike names is the same on
-/// every machine (the exact one is taken first by the caller where it matters).
+/// every machine.
 fn sorted_entries(dir: &Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<Result<_, _>>()?;
     entries.sort_by_key(|e| e.file_name());
@@ -372,16 +417,15 @@ fn sorted_entries(dir: &Path) -> std::io::Result<Vec<std::fs::DirEntry>> {
 /// The game's Data folder: `Data` exactly, else of the case-alike ones (sorted) the one holding
 /// `FalloutNV.esm` in any case, else the first; `None` when there is none.
 pub fn game_data(game: &Path) -> Option<PathBuf> {
-    let exact = game.join("Data");
-    if exact.is_dir()
-        && std::fs::read_dir(game)
-            .is_ok_and(|mut d| d.any(|e| e.is_ok_and(|e| e.file_name() == "Data")))
+    let entries = sorted_entries(game).ok()?;
+    if let Some(exact) = entries
+        .iter()
+        .find(|e| e.file_name() == "Data" && e.path().is_dir())
     {
-        return Some(exact);
+        return Some(exact.path());
     }
-    let alike: Vec<PathBuf> = sorted_entries(game)
-        .ok()?
-        .into_iter()
+    let alike: Vec<PathBuf> = entries
+        .iter()
         .filter(|e| {
             e.file_name().to_string_lossy().eq_ignore_ascii_case("data") && e.path().is_dir()
         })
@@ -432,30 +476,26 @@ fn walk_game(
             )));
         }
         let kind = entry.file_type()?;
-        let mut path = entry.path();
-        let mut is_dir = kind.is_dir();
-        let is_file;
-        if kind.is_symlink() {
-            if cfg!(windows) {
-                continue;
-            }
-            let Ok(real) = std::fs::canonicalize(&path) else {
-                continue;
-            };
-            is_dir = real.is_dir();
-            is_file = real.is_file();
-            path = real;
-        } else {
-            is_file = kind.is_file();
+        if kind.is_symlink() && cfg!(windows) {
+            continue;
         }
         relative.push(entry.file_name().to_string_lossy().into_owned());
+        let is_dir = if kind.is_symlink() {
+            entry.path().is_dir()
+        } else {
+            kind.is_dir()
+        };
         if is_dir {
-            let real = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-            if seen.insert(real) {
-                walk_game(&path, relative, wanted, caps, seen, count)?;
+            let real = if kind.is_symlink() {
+                std::fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path())
+            } else {
+                entry.path()
+            };
+            if !kind.is_symlink() || seen.insert(real.clone()) {
+                walk_game(&real, relative, wanted, caps, seen, count)?;
             }
-        } else if is_file {
-            wanted.put(relative, source(path, true)?);
+        } else if let Some(s) = source(&entry, true)? {
+            wanted.put(relative, s);
         }
         relative.pop();
     }
@@ -463,7 +503,7 @@ fn walk_game(
 }
 
 /// A layer's files into `wanted` under `Data/` (by [`left_out`]); folder links never followed.
-/// Returns the layer's top-level plugins' names.
+/// Collects the layer's top-level plugins.
 fn walk_layer(
     root: &Path,
     dir: &Path,
@@ -498,13 +538,12 @@ fn walk_layer(
         relative.push(name.clone());
         if kind.is_dir() {
             walk_layer(root, &entry.path(), relative, wanted, caps, count, plugins)?;
-        } else if kind.is_file() || (kind.is_symlink() && entry.path().is_file()) {
-            let path = std::fs::canonicalize(entry.path()).unwrap_or_else(|_| entry.path());
+        } else if let Some(s) = source(&entry, false)? {
             let lower = name.to_ascii_lowercase();
             if top && (lower.ends_with(".esm") || lower.ends_with(".esp")) {
-                plugins.push((name.clone(), path.clone()));
+                plugins.push((name.clone(), s.path.clone()));
             }
-            wanted.put(relative, source(path, false)?);
+            wanted.put(relative, s);
         }
         relative.pop();
     }
@@ -518,8 +557,19 @@ pub fn state_path(target: &Path) -> PathBuf {
     target.with_file_name(name)
 }
 
-const STATE_FIRST_LINE: &str = "nv-rs modgame 1";
+fn state_temporary(target: &Path) -> PathBuf {
+    let mut name = state_path(target)
+        .file_name()
+        .unwrap_or_default()
+        .to_os_string();
+    name.push(".part");
+    target.with_file_name(name)
+}
 
+const STATE_FIRST_LINE: &str = "nv-rs modgame 2";
+
+/// The record's text: a line a name, then `end` and the count. Every name in it is a valid one
+/// ([`Wanted::put`] takes no other), so no name can make another line.
 fn state_text(files: &BTreeMap<String, (String, Source)>) -> String {
     let mut out = String::from(STATE_FIRST_LINE);
     out.push('\n');
@@ -533,19 +583,38 @@ fn state_text(files: &BTreeMap<String, (String, Source)>) -> String {
             spelled
         ));
     }
+    out.push_str(&format!("end\t{}\n", files.len()));
     out
 }
 
-/// The record read back: (spelled name, source) by name without case; `None` when it is not one.
+/// Whether a record's name is one the build makes: valid parts only, and either `Data/...` or one
+/// top-level file name.
+fn trusted_name(spelled: &str) -> bool {
+    fsops::valid_relative(spelled)
+        && (!spelled.contains('/') || spelled.starts_with("Data/"))
+        && !spelled.eq_ignore_ascii_case("Data")
+}
+
+/// The record read back: (spelled name, source) by key; `None` when it is not a whole, valid
+/// record (its first line, a valid name on every line, an `end` line with the right count last).
 fn parse_state(text: &str) -> Option<BTreeMap<String, (String, Source)>> {
     let mut lines = text.lines();
     if lines.next()? != STATE_FIRST_LINE {
         return None;
     }
     let mut out = BTreeMap::new();
+    let mut ended = None;
     for line in lines {
+        if ended.is_some() {
+            return None;
+        }
         let mut f = line.split('\t');
-        let game = match f.next()? {
+        let first = f.next()?;
+        if first == "end" {
+            ended = Some(f.next()?.parse::<usize>().ok()?);
+            continue;
+        }
+        let game = match first {
             "g" => true,
             "m" => false,
             _ => return None,
@@ -554,8 +623,11 @@ fn parse_state(text: &str) -> Option<BTreeMap<String, (String, Source)>> {
         let modified = f.next()?.parse().ok()?;
         let path = PathBuf::from(f.next()?);
         let spelled = f.next()?.to_owned();
+        if f.next().is_some() || !trusted_name(&spelled) {
+            return None;
+        }
         out.insert(
-            spelled.to_ascii_lowercase(),
+            key_of(&spelled),
             (
                 spelled,
                 Source {
@@ -567,7 +639,7 @@ fn parse_state(text: &str) -> Option<BTreeMap<String, (String, Source)>> {
             ),
         );
     }
-    Some(out)
+    (ended? == out.len()).then_some(out)
 }
 
 /// The first [`Caps::header_bytes`] of a plugin: enough for its header record and masters.
@@ -580,9 +652,17 @@ fn header(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// The path of `relative` under `target`, each of its folders checked to be a plain folder (never
-/// a link) before a name is made or removed in it; with `make`, the folders missing are made.
-fn plain_folders(target: &Path, relative: &str, make: bool) -> std::io::Result<PathBuf> {
+/// The path of the valid name `relative` under `target`, each of its folders checked to be a
+/// plain folder (never a link); with `make`, the folders missing are made (through [`act`]).
+fn plain_folders(
+    guard: &Guard,
+    target: &Path,
+    relative: &str,
+    make: bool,
+) -> std::io::Result<PathBuf> {
+    if !fsops::valid_relative(relative) {
+        return Err(other(format!("{relative:?} is not a plain name")));
+    }
     let mut at = target.to_path_buf();
     let parts: Vec<&str> = relative.split('/').collect();
     for part in &parts[..parts.len() - 1] {
@@ -595,7 +675,9 @@ fn plain_folders(target: &Path, relative: &str, make: bool) -> std::io::Result<P
                     at.display()
                 )))
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound && make => std::fs::create_dir(&at)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && make => {
+                act(guard, Op::MakeDir(&at))?
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(at.join(parts[parts.len() - 1]))
             }
@@ -603,14 +685,6 @@ fn plain_folders(target: &Path, relative: &str, make: bool) -> std::io::Result<P
         }
     }
     Ok(at.join(parts[parts.len() - 1]))
-}
-
-/// Removes the name `path` (a file or a link; never what a link leads to); gone already is fine.
-fn remove_name(path: &Path) -> std::io::Result<()> {
-    match std::fs::remove_file(path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => other,
-    }
 }
 
 /// Makes `target` from the game's folder `game` and the `layers` over it (see the module's text),
@@ -637,19 +711,26 @@ pub fn build_with(
         kind: classify(e.raw_os_error(), what == "linking"),
         step: format!("{what} {}: {e}", path.display()),
     };
+    let state = state_path(target);
+    let state_part = state_temporary(target);
+    let mut forbidden = vec![game.to_path_buf()];
+    forbidden.extend(layers.iter().cloned());
+    let mut guard = Guard::new(
+        target,
+        &forbidden,
+        &[state.clone(), plugins_txt.to_path_buf()],
+    );
     // What the folder should hold.
     let mut wanted = Wanted::default();
-    let mut count = 0usize;
     for entry in sorted_entries(game).map_err(|e| describe("reading", game, e))? {
         let kind = entry
             .file_type()
             .map_err(|e| describe("reading", game, e))?;
         if kind.is_file() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            wanted.put(
-                &[name],
-                source(entry.path(), true).map_err(|e| describe("reading", &entry.path(), e))?,
-            );
+            if let Some(s) = source(&entry, true).map_err(|e| describe("reading", game, e))? {
+                wanted.put(&[name], s);
+            }
         }
     }
     let game_data = game_data(game).ok_or_else(|| ModError {
@@ -657,7 +738,7 @@ pub fn build_with(
         step: format!("finding the game's Data folder in {}", game.display()),
     })?;
     let mut seen = BTreeSet::new();
-    seen.insert(std::fs::canonicalize(&game_data).unwrap_or_else(|_| game_data.clone()));
+    let mut count = 0usize;
     walk_game(
         &game_data,
         &mut vec!["Data".to_owned()],
@@ -670,7 +751,9 @@ pub fn build_with(
     let mut built = Built::default();
     let mut layer_plugins: Vec<Vec<(String, PathBuf)>> = Vec::new();
     for layer in layers {
-        std::fs::create_dir_all(layer).map_err(|e| describe("making", layer, e))?;
+        if !layer.exists() {
+            std::fs::create_dir_all(layer).map_err(|e| describe("making", layer, e))?;
+        }
         let mut plugins = Vec::new();
         let mut layer_count = 0usize;
         walk_layer(
@@ -685,6 +768,7 @@ pub fn build_with(
         .map_err(|e| describe("reading", layer, e))?;
         layer_plugins.push(plugins);
     }
+    built.skipped = std::mem::take(&mut wanted.skipped);
     for (spelled, s) in wanted.files.values() {
         if !s.game {
             built.mod_files += 1;
@@ -694,65 +778,136 @@ pub fn build_with(
             }
         }
     }
-    // What it holds now: the record, when the folder is there and the record reads.
-    let state = state_path(target);
-    let previous = if target.is_dir() {
+    // What it holds now: the record, when the folder is a plain folder (never a link at its
+    // place) and the record is whole and valid.
+    let plain_target =
+        std::fs::symlink_metadata(target).is_ok_and(|m| m.is_dir() && !m.file_type().is_symlink());
+    let previous = if plain_target {
         std::fs::read_to_string(&state)
             .ok()
             .and_then(|t| parse_state(&t))
     } else {
         None
     };
-    let previous = match previous {
-        Some(p) => p,
-        None => {
-            // From nothing: a link left in an old folder is removed, never followed.
-            if target.symlink_metadata().is_ok() {
-                std::fs::remove_dir_all(target).map_err(|e| describe("removing", target, e))?;
-            }
-            BTreeMap::new()
-        }
-    };
-    std::fs::create_dir_all(target).map_err(|e| describe("making", target, e))?;
-    // The record goes first: a build stopped part-way is made again from nothing next time.
-    let _ = std::fs::remove_file(&state);
-    for (key, (spelled, _)) in &previous {
-        if !wanted.files.contains_key(key) {
-            remove_name(
-                &plain_folders(target, spelled, false)
-                    .map_err(|e| describe("removing", target, e))?,
-            )
-            .map_err(|e| describe("removing", target, e))?;
-            built.removed += 1;
+    let from_nothing = previous.is_none();
+    let previous = previous.unwrap_or_default();
+    if from_nothing {
+        // A link at the folder's place, or the folder, removed: the link itself, never followed.
+        act(&guard, Op::RemoveTree(target)).map_err(|e| describe("removing", target, e))?;
+    }
+    act(&guard, Op::MakeDir(target)).map_err(|e| describe("making", target, e))?;
+    guard.settle();
+    // What changes: names gone, and names new, changed or missing.
+    let gone: Vec<&String> = previous
+        .iter()
+        .filter(|(key, _)| !wanted.files.contains_key(*key))
+        .map(|(_, (spelled, _))| spelled)
+        .collect();
+    let mut redo: Vec<&String> = Vec::new();
+    for (key, (spelled, s)) in &wanted.files {
+        let same = previous
+            .get(key)
+            .is_some_and(|(old_spelled, old)| old == s && old_spelled == spelled);
+        if !same {
+            redo.push(key);
         }
     }
-    for (key, (spelled, s)) in &wanted.files {
-        if let Some((old_spelled, old)) = previous.get(key) {
-            if old == s && old_spelled == spelled {
-                continue;
-            }
-            remove_name(
-                &plain_folders(target, old_spelled, false)
-                    .map_err(|e| describe("replacing", target, e))?,
-            )
-            .map_err(|e| describe("replacing", target, e))?;
+    if gone.is_empty() && redo.is_empty() && !from_nothing {
+        // Unchanged: the folder and its record are left as they are.
+        write_plugins(
+            &guard,
+            plugins_txt,
+            &layer_plugins,
+            caps,
+            layers
+                .last()
+                .and_then(|l| std::fs::read(l.join("plugins.txt")).ok()),
+            &mut built,
+            &describe,
+        )?;
+        return Ok(built);
+    }
+    // The record goes first: a build stopped part-way is made again from nothing next time.
+    match std::fs::symlink_metadata(&state) {
+        Ok(_) => act(&guard_for_state(&state), Op::RemoveName(&state))
+            .map_err(|e| describe("removing", &state, e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(describe("removing", &state, e)),
+    }
+    for spelled in gone {
+        let path = plain_folders(&guard, target, spelled, false)
+            .map_err(|e| describe("removing", target, e))?;
+        act(&guard, Op::RemoveName(&path)).map_err(|e| describe("removing", &path, e))?;
+        built.removed += 1;
+    }
+    for key in redo {
+        let (spelled, s) = &wanted.files[key];
+        if let Some((old_spelled, _)) = previous.get(key) {
+            let old = plain_folders(&guard, target, old_spelled, false)
+                .map_err(|e| describe("replacing", target, e))?;
+            act(&guard, Op::RemoveName(&old)).map_err(|e| describe("replacing", &old, e))?;
             built.removed += 1;
         }
-        let to = plain_folders(target, spelled, true).map_err(|e| describe("making", target, e))?;
+        let to = plain_folders(&guard, target, spelled, true)
+            .map_err(|e| describe("making", target, e))?;
         // The name goes first: making it again never writes into what was there.
-        remove_name(&to).map_err(|e| describe("replacing", &to, e))?;
+        act(&guard, Op::RemoveName(&to)).map_err(|e| describe("replacing", &to, e))?;
         if s.game {
-            link_game_file(linker, &s.path, &to).map_err(|e| describe("linking", &s.path, e))?;
+            link_game_file(&guard, linker, &s.path, &to)
+                .map_err(|e| describe("linking", &s.path, e))?;
             built.linked += 1;
-        } else if linker.hard_link(&s.path, &to).is_err() {
-            std::fs::copy(&s.path, &to).map_err(|e| describe("copying", &s.path, e))?;
+        } else if linker.hard_link(&guard, &s.path, &to).is_err() {
+            act(
+                &guard,
+                Op::Copy {
+                    from: &s.path,
+                    to: &to,
+                },
+            )
+            .map_err(|e| describe("copying", &s.path, e))?;
             built.copied += 1;
         }
         built.made += 1;
     }
-    std::fs::write(&state, state_text(&wanted.files))
-        .map_err(|e| describe("writing", &state, e))?;
-    // The plugin list.
+    let text = state_text(&wanted.files);
+    act(
+        &guard,
+        Op::WriteWhole {
+            to: &state,
+            temporary: &state_part,
+            bytes: text.as_bytes(),
+        },
+    )
+    .map_err(|e| describe("writing", &state, e))?;
+    write_plugins(
+        &guard,
+        plugins_txt,
+        &layer_plugins,
+        caps,
+        layers
+            .last()
+            .and_then(|l| std::fs::read(l.join("plugins.txt")).ok()),
+        &mut built,
+        &describe,
+    )?;
+    Ok(built)
+}
+
+/// A guard that may remove only the record beside the folder.
+fn guard_for_state(state: &Path) -> Guard {
+    Guard::new(state.parent().unwrap_or(state), &[], &[])
+}
+
+/// The plugin list (see the module's text), written whole.
+fn write_plugins(
+    guard: &Guard,
+    plugins_txt: &Path,
+    layer_plugins: &[Vec<(String, PathBuf)>],
+    caps: Caps,
+    own_list: Option<Vec<u8>>,
+    built: &mut Built,
+    describe: &dyn Fn(&str, &Path, std::io::Error) -> ModError,
+) -> Result<(), ModError> {
     let headers = |plugins: &[(String, PathBuf)]| -> Result<Vec<(String, Vec<u8>)>, ModError> {
         plugins
             .iter()
@@ -764,32 +919,28 @@ pub fn build_with(
             .collect()
     };
     // By name without case: a later layer's plugin of the same name replaces an earlier one's.
-    let mut all: BTreeMap<String, (String, PathBuf)> = BTreeMap::new();
-    for plugins in &layer_plugins {
-        for (name, path) in plugins {
-            all.insert(name.to_ascii_lowercase(), (name.clone(), path.clone()));
+    let by_name = |lists: &[Vec<(String, PathBuf)>]| -> Vec<(String, PathBuf)> {
+        let mut all: BTreeMap<String, (String, PathBuf)> = BTreeMap::new();
+        for (name, path) in lists.iter().flatten() {
+            all.insert(name.to_lowercase(), (name.clone(), path.clone()));
         }
-    }
-    let own = layers.last().map(|l| l.join("plugins.txt"));
-    let list = match own.and_then(|p| std::fs::read(p).ok()) {
+        all.into_values().collect()
+    };
+    let list = match own_list {
         Some(mut own) => {
             let named: BTreeSet<String> = String::from_utf8_lossy(&own)
                 .lines()
-                .map(|l| l.trim().to_ascii_lowercase())
+                .map(|l| l.trim().to_lowercase())
                 .collect();
-            let installed: Vec<(String, PathBuf)> = layer_plugins
-                [..layer_plugins.len().saturating_sub(1)]
-                .iter()
-                .flatten()
-                .filter(|(n, _)| !named.contains(&n.to_ascii_lowercase()))
-                .map(|(n, p)| (n.to_ascii_lowercase(), (n.clone(), p.clone())))
-                .collect::<BTreeMap<String, (String, PathBuf)>>()
-                .into_values()
-                .collect();
+            let installed: Vec<(String, PathBuf)> =
+                by_name(&layer_plugins[..layer_plugins.len().saturating_sub(1)])
+                    .into_iter()
+                    .filter(|(n, _)| !named.contains(&n.to_lowercase()))
+                    .collect();
             if !installed.is_empty() {
                 let extra = plugin_list(&headers(&installed)?);
-                for name in String::from_utf8_lossy(extra.as_bytes()).lines() {
-                    if named.contains(&name.to_ascii_lowercase()) {
+                for name in extra.lines() {
+                    if named.contains(&name.to_lowercase()) {
                         continue;
                     }
                     if !own.is_empty() && !own.ends_with(b"\n") {
@@ -802,11 +953,20 @@ pub fn build_with(
             }
             own
         }
-        None => plugin_list(&headers(&all.into_values().collect::<Vec<_>>())?).into_bytes(),
+        None => plugin_list(&headers(&by_name(layer_plugins))?).into_bytes(),
     };
+    let mut temporary = plugins_txt.as_os_str().to_os_string();
+    temporary.push(".part");
     if let Some(parent) = plugins_txt.parent() {
         std::fs::create_dir_all(parent).map_err(|e| describe("making", parent, e))?;
     }
-    std::fs::write(plugins_txt, list).map_err(|e| describe("writing", plugins_txt, e))?;
-    Ok(built)
+    act(
+        guard,
+        Op::WriteWhole {
+            to: plugins_txt,
+            temporary: Path::new(&temporary),
+            bytes: &list,
+        },
+    )
+    .map_err(|e| describe("writing", plugins_txt, e))
 }

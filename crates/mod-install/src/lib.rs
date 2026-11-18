@@ -32,6 +32,7 @@
 //! | `overlay::MAX_HEADER_BYTES` | 1 MB read of a plugin | the header record with its masters comes first and is small |
 //! | `installs::MAX_INSTALLS` | 10,000 mods | the largest mod lists players keep have a few thousand |
 
+pub mod fsops;
 pub mod installs;
 pub mod overlay;
 

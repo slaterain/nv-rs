@@ -208,7 +208,7 @@ pub fn remove(installs: &Path, mod_folder: &Path) -> std::io::Result<()> {
             ),
         ));
     }
-    std::fs::remove_dir_all(mod_folder)
+    crate::fsops::remove_mod_folder(installs, mod_folder)
 }
 
 /// The folders "Play with mods" lays over the game, in order: each installed mod's, then the loose
