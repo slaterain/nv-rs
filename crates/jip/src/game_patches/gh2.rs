@@ -316,10 +316,8 @@ fn sync_position(e: &mut Engine, w: &[u32]) -> Option<u32> {
 /// the step is done.
 pub const BIPED_PART_NAME: SiteSlot = SiteSlot::new(Owner::Jip, 0x004a_ccf1);
 pub const ADD_ON_TRANSFORM: SiteSlot = SiteSlot::new(Owner::Jip, 0x004a_f0de);
-/// The biped slots' names (`0x1188B98`, a C string each) and the game's fixed string table's add
-/// (`00a5b690`, `cdecl`: the text; one count held on the answer, at `-8`).
+/// The biped slots' names (`0x1188B98`, a C string each).
 const SLOT_NAMES: u32 = 0x0118_8b98;
-const ADD_STRING: u32 = 0x00a5_b690;
 /// A block's name (`+8`), its flag byte `+0x33` (bit `0x20`: JIP's light hooks marked it), a
 /// node's local rotation rows and translation (`+0x34`, `+0x44`, `+0x54`: 16 bytes each as JIP
 /// writes them); `ADDR_ReturnThis` at a node's slot `+0xC`; a form's `jipFormFlags6` (`+6`).
