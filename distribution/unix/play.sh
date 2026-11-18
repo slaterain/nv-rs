@@ -24,14 +24,22 @@
 set -u
 
 say() { printf '%s\n' "$*"; }
+# Whether the program goes on to start the game on this processor and system (host
+# not_provided_on: x86-64, and Apple silicon: arm64 on macOS; ARM Linux is refused).
+starts_here() {
+    case "$(uname -s) $(uname -m)" in
+        *" x86_64" | "Darwin arm64") return 0 ;;
+        *) return 1 ;;
+    esac
+}
 # The line every stop ends with: where to report.
 REPORT="This preview has not been played by the team on Linux or macOS. Please report what happened at https://github.com/slaterain/nv-rs/issues with the newest log from nv-rs's logs folder."
-# The program's status for its expected stop in this preview on processors other than x86-64
-# (Apple silicon Macs, ARM Linux; on x86-64 the program goes on to start the game): it found the game, but the game does
-# not run on this system yet (sysexits' EX_UNAVAILABLE; host::NOT_PROVIDED_STATUS). Not a fault:
-# it needs no report.
+# The program's status for its expected stop on a processor nv-rs is not built for (anything but
+# x86-64 and Apple silicon on macOS, ARM Linux included: on those two the program goes on):
+# it found the game, but the game does not run on this system yet (sysexits' EX_UNAVAILABLE;
+# host::NOT_PROVIDED_STATUS). Not a fault: it needs no report.
 NOT_PROVIDED_STATUS=69
-EXPECTED="As expected for this preview: the game does not run on this system yet (a processor other than x86-64, such as an Apple silicon Mac; the READ ME says what works today). Nothing to report unless something above looks wrong."
+EXPECTED="As expected for this preview: the game does not run on this system yet (a processor other than x86-64 and Apple silicon, ARM Linux included; the READ ME says what works today). Nothing to report unless something above looks wrong."
 fail() {
     printf 'nv-rs: %s\n' "$*" >&2
     exit 1
@@ -465,9 +473,9 @@ NV_REPORT_LOG=$log
 NV_WGPU_CACHE=$own/machine/wgpu-cache
 NV_D3DX_CACHE=$own/machine/d3dx-cache
 export NV_SOUND NV_SAVE_OUT NV_PREFS_OUT NV_REPORT_DIR NV_REPORT_LOG NV_WGPU_CACHE NV_D3DX_CACHE
-# Only where the start goes on (x86-64: Linux and Intel Macs): elsewhere the program stops first with its
-# expected status, and the play settings are not read before that stop.
-if [ "$(uname -m)" = x86_64 ]; then
+# Only where the start goes on (x86-64, and Apple silicon: arm64 on macOS; starts_here): elsewhere
+# the program stops first with its expected status, and the play settings are not read before that stop.
+if starts_here; then
     NV_SETTINGS=$own/settings.ini
     export NV_SETTINGS
 fi
