@@ -1788,8 +1788,14 @@ pub fn fn_005fa330(
             return true;
         }
     }
-    let companion_wheel = |e: &mut Engine| {
-        if e.call(ACTOR_00566950, &args![me]).bool() && activator == e.global::<u32>(PLAYER) {
+    // `site`: the call's place (0x5FB122 on the first path, 0x5FA977 on the second), a seam: JIP's
+    // G54 answers in place of the teammate test there (words: the actor; an answer is the test's).
+    let companion_wheel = |e: &mut Engine, site: u32| {
+        let teammate = match e.site(site, &[me]) {
+            Some(answer) => answer & 0xff != 0,
+            None => e.call(ACTOR_00566950, &args![me]).bool(),
+        };
+        if teammate && activator == e.global::<u32>(PLAYER) {
             if e.call(0x0075_4d90, &args![me]).bool() {
                 e.call(
                     QUEUE_MENU_CREATE,
@@ -1801,9 +1807,9 @@ pub fn fn_005fa330(
         None
     };
     if !e.call(0x0089_8ff0, &args![me]).bool() && who == player(e) {
-        return companion_wheel(e).unwrap_or(true);
+        return companion_wheel(e, 0x005f_b122).unwrap_or(true);
     }
-    if let Some(result) = companion_wheel(e) {
+    if let Some(result) = companion_wheel(e, 0x005f_a977) {
         return result;
     }
     let topic = if who == player(e) {
@@ -4149,6 +4155,30 @@ mod b024_activate_tests {
         let (r, log) = activate(&mut e, this, 0, 0);
         assert!(r);
         assert!(only(&log, 0x0061_a2d0).is_empty());
+    }
+
+    /// The seams at `0x5FA977` and `0x5FB122` (JIP's G54): an answer replaces the teammate test
+    /// (`00566950` is not called); 0 keeps the wheel shut, so the talk goes on.
+    #[test]
+    fn at_005fa330_the_wheel_test_seams() {
+        for (seam, with_player_test) in [(0x005f_a977, true), (0x005f_b122, false)] {
+            let (mut e, this) = engine(true);
+            if with_player_test {
+                // 00898ff0 true: the first path is passed over, the second place asks.
+                e.register(0x0089_8ff0, yes);
+            }
+            e.register(0x0075_4d90, yes);
+            e.on_site_for_test(seam, |_, w| {
+                assert_eq!(w[0], ME);
+                Some(0)
+            });
+            let (_, log) = activate(&mut e, this, 0, 0);
+            assert!(only(&log, 0x0056_6950).is_empty(), "{seam:08x}");
+            assert!(
+                only(&log, 0x0070_9470).iter().all(|c| c[0] != 8),
+                "{seam:08x}"
+            );
+        }
     }
 
     /// The player singleton changes while the dialogue item is made (the

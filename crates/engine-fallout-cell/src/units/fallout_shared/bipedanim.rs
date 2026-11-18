@@ -1664,8 +1664,16 @@ fn load_part(
     if part.is_null() || part.addr() == 0xffff_ffff {
         return;
     }
-    if first_person && !(2..=6).contains(&slot) {
-        return;
+    // Seam (JIP's H15, its slot visibility mask at `0x4AC645`): words: the slot; an answer is whether
+    // the slot's part loads in first person (the game's: slots 2 to 6).
+    if first_person {
+        let shown = match e.site(0x004a_c645, &[slot]) {
+            Some(answer) => answer != 0,
+            None => (2..=6).contains(&slot),
+        };
+        if !shown {
+            return;
+        }
     }
     if flag == 0
         && is_face_gen_slot(e, this, slot)

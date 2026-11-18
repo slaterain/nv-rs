@@ -53,6 +53,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0080_ea39),
     // G66 (26 bytes at `0x80ECA8`): `LightEffect::AttachLight` 0080e970 attaches only to a node.
     row(0x0080_eca8),
+    // H23 (JIP's own, `CastSpellHook`): `MagicCaster::FindTargets` 00815d00, the touch target asked of
+    // the caster's `+0x44` slot instead of `+0x18` while CastImmediate casts (0x815EE6).
+    row(0x0081_5ee6),
     // G67 (`WriteRelJump(0x816519, EffectSkillModifiers2Hook)`): `MagicCaster::FindTargets`
     // 00815d00's alchemy Medicine and Survival scaling.
     row(0x0081_6519),

@@ -475,7 +475,14 @@ pub fn magic_caster_find_targets(
             }
         }
         if !blocked && (actor != 0 || e.vcall(this.addr(), 0x44, &[]).u32() == 0) {
-            touch_target = e.vcall(this.addr(), 0x18, &[]).u32();
+            // Seam (JIP's H23, `CastSpellHook` at `0x815EE6`): words: the caster; an answer other
+            // than 0 asks the caster's `+0x44` slot instead of `+0x18` (the cast without the
+            // animation).
+            let slot = match e.site(0x0081_5ee6, &[this.addr()]) {
+                Some(answer) if answer != 0 => 0x44,
+                _ => 0x18,
+            };
+            touch_target = e.vcall(this.addr(), slot, &[]).u32();
         }
         if touch_target == 0 {
             touch_target = e.vcall(this.addr(), 0x44, &[]).u32();

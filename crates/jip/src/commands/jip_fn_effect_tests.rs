@@ -1494,18 +1494,27 @@ fn is_spell_target_list() {
 const CAST_SPELL_FN: u32 = 0x0050_1060;
 /// Not a game address: the tag of the flag byte the cast stand-in saw.
 const SEEN_FLAGS: u32 = 0xf1a9_0000;
+/// Not a game address: the tag of H23's seam answer the cast stand-in saw.
+const SEEN_TARGET: u32 = 0xf1a9_0001;
 /// A loaded data block (the reference's +0x64) and its root node (+0x14).
 const LOADED: u32 = FORMS + 0x9_0000;
 const R_ACT2: u16 = 16;
 
 fn cast_setup() -> Engine {
+    // Registered with its patch (H23, `game_patches::gl`).
     let mut e = setup();
-    register_awaiting(&mut e, AWAITING_H23);
+    assert_ne!(crate::test_support::execute_of(&e, 0x2829), 0);
     e.mem.set_u32(CASTER_VT + 0xc, CAST_SPELL_FN);
     e.register(CAST_SPELL_FN, |e, w| {
         record(CAST_SPELL_FN, w);
         // `this` is the caster's `MagicCaster` (+0x88): its actor's flags at +0x106.
         record(SEEN_FLAGS, &[u32::from(e.mem.u8(w[0] - 0x88 + 0x106))]);
+        // H23's seam as the cast's `FindTargets` asks it, on this caster.
+        let answer = e.site(
+            crate::game_patches::gl::CAST_IMMEDIATE_TARGET.addr(),
+            &[w[0]],
+        );
+        record(SEEN_TARGET, &[answer.unwrap_or(0xdead)]);
         eax(0)
     });
     e.mem.set_u32(LOADED + 0x14, 0x0a0a_0000);
@@ -1576,4 +1585,15 @@ fn cast_immediate_needs_an_actor_with_3d_and_no_ability() {
     call_on(&mut e, 0x2829, ACT1, &[]);
     assert!(calls_to(CAST_SPELL_FN).is_empty());
     assert_eq!(e.mem.u8(ACT1 + 0x106), 0, "no flag left");
+}
+
+/// H23 with its command: during `CastImmediate`'s cast the touch target seam answers 1 (the
+/// caster's `+0x44` slot, the immediate cast); an ordinary cast (the flag clear) answers 0.
+#[test]
+fn h23_cast_immediate_makes_the_cast_take_the_immediate_target() {
+    let mut e = cast_setup();
+    call_on(&mut e, 0x2829, ACT1, &[r(R_SPEL)]);
+    assert_eq!(calls_to(SEEN_TARGET), vec![vec![1]], "during CastImmediate");
+    let seam = crate::game_patches::gl::CAST_IMMEDIATE_TARGET.addr();
+    assert_eq!(e.site(seam, &[ACT1 + 0x88]), Some(0), "an ordinary cast");
 }

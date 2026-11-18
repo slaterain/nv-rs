@@ -51,6 +51,13 @@ pub(in super::super) const SITES: &[Entry] = &[
         owners: JIP,
         step: "3.9-GF",
     },
+    // H19 (JIP's own), fn_00523150 (FireWeapon): the gun wobble step (0x524014 up to 0x524072),
+    // JIP's FireWeaponWobbleHook (the actor's ToggleNoGunWobble leaves out the spread part).
+    Entry {
+        addr: 0x0052_4014,
+        owners: JIP,
+        step: "3.9-GF",
+    },
     // G20 (a fix), fn_00523150 (FireWeapon): the jump over the hand-held block with no process.
     Entry {
         addr: 0x0052_48ef,
@@ -85,6 +92,24 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G12 (a fix), BGSPerk fn_005eb6a0: a teammate perk's player entry applied once.
     Entry {
         addr: 0x005e_b79b,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    // G54 (JIP's own), TESCreature's activation 005fa330 and TESNPC::Activate 00607990: the
+    // teammate test before the companion wheel (00566950), false for an actor whose wheel
+    // SetWheelDisabled turned off.
+    Entry {
+        addr: 0x005f_a977,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    Entry {
+        addr: 0x005f_b122,
+        owners: JIP,
+        step: "3.9-GF",
+    },
+    Entry {
+        addr: 0x0060_7c8e,
         owners: JIP,
         step: "3.9-GF",
     },

@@ -15,7 +15,8 @@
 //!
 //! **Always-on fixes** (`InitGamePatches`): G03 achievements after the console, G34
 //! `PlaySound3D`'s node, G70 `GetLocked` on a terminal, G71 `IsCurrentFurnitureObj`'s null
-//! process. **JIP's own** (in whenever JIP answers "installed"): G123, the "get hit" image space
+//! process. G60: `RemoveMe` giving the player an item refreshes the open item list at the
+//! next main loop pass (JIP's refresh) instead of at once. **JIP's own** (in whenever JIP answers "installed"): G123, the "get hit" image space
 //! answered by JIP's hit effects word ([`get_hit_imod`]). JIP installs it in `InitGamePatches`
 //! (`WriteRelJump(0x5D2860, GetHitIMODHook)`), but it is under `INSTALLED`, not the fixes row: it
 //! answers as the game does until JIP's own commands turn the hit effects off.
@@ -68,6 +69,7 @@ pub const AREA: Area = Area {
         FAILED_SCRIPT_LOCKS[0].addr(),
         FAILED_SCRIPT_LOCKS[1].addr(),
         FAILED_SCRIPT_LOCKS[2].addr(),
+        REMOVE_ME_REFRESH.addr(),
     ],
     fix_wraps: &[],
     install_fixes,
@@ -94,7 +96,23 @@ const GET_BY_TYPE: u32 = 0x0041_0220;
 const IMAGE_SPACE_ENABLED: u32 = 0x0118_abb1;
 const GET_HIT_IMOD_ID: u32 = 0x162;
 
+/// G60's seam: `RemoveMe`'s menu refresh when the player gets the item (`0x5B54E7`, no words; an
+/// answer stands for the call).
+pub const REMOVE_ME_REFRESH: SiteSlot = SiteSlot::new(Owner::Jip, 0x005b_54e7);
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RemoveMeHook.
+/// G60: when `RemoveMe` gives the player the item, the game's immediate menu refresh
+/// (`00704af0`) is left out and JIP's item list refresh is asked for instead
+/// (`s_doRefreshItemListBox`, [`crate::commands::jip_fn_ui::request_item_list_refresh`]): the
+/// open item list (inventory, container, barter, the recipe menu) is refreshed at the next main
+/// loop pass, on the main thread, whichever thread ran the script.
+fn remove_me_refresh(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    crate::commands::jip_fn_ui::request_item_list_refresh(e);
+    Some(0)
+}
+
 fn install_fixes(e: &mut Engine) {
+    e.on_site(REMOVE_ME_REFRESH, remove_me_refresh);
     for slot in FAILED_SCRIPT_LOCKS {
         e.on_site(slot, keep_failed_script);
     }
