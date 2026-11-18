@@ -117,9 +117,10 @@ fn expiry_key(e: &mut Engine, area: u32, x: u32, y: u32) -> (u32, u32) {
 
 fn grid_of(e: &mut Engine, value: u32) -> u32 {
     let rounded = e.call(ROUND_TO_INT, &args![f32::from_bits(value)]).i32();
-    (rounded >> 12) as u32
+    u32::from_ne_bytes((rounded >> 12).to_ne_bytes())
 }
 
+// Typed from 0084ab20
 /// `BGSSaveLoadGame::CleanupExpiredData` (`0084ab20`) with the expiry queue native.
 pub fn cleanup_expired_data(e: &mut Engine, this: Ptr) {
     let saved_flag = e.call(SET_THREAD_FLAG, &args![this, 0u32]).u8();
