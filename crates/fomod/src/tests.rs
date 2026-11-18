@@ -346,10 +346,10 @@ fn groups_are_fixed_up_as_the_managers_do() {
             GroupType::SelectAtMostOne
         ]
     );
-    // In a one-choice group the last Recommended is the default.
+    // In a one-choice group the first Recommended is the default (Mod Organizer 2).
     assert_eq!(
         selected(&view),
-        [vec!["o"], vec![], vec!["r1", "r2"], vec!["c2"]]
+        [vec!["o"], vec![], vec!["r1", "r2"], vec!["c1"]]
     );
 }
 
@@ -935,4 +935,194 @@ fn an_answer_follows_types_changed_by_an_earlier_step() {
     s.choose(0, 0, &[1]).unwrap();
     assert_eq!(selected(&s.view(1)), [vec!["Core"]]);
     assert_eq!(copies(&s.plan(&listing, "")), ["core.esp <- core.esp"]);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Hostile and odd downloads (review of #720)
+
+/// 100,000 nested elements, and 100,000 nested conditions: read without overflowing the stack,
+/// the tree no deeper than the cap.
+#[test]
+fn deep_nesting_is_capped() {
+    fn depth(e: &xml::Element) -> usize {
+        1 + e.elements().map(depth).max().unwrap_or(0)
+    }
+    let mut text = String::from("<config>");
+    text.push_str(&"<a>".repeat(100_000));
+    let root = xml::parse(&text).unwrap();
+    assert!(depth(&root) <= xml::MAX_DEPTH, "{}", depth(&root));
+    assert!(parse_config(text.as_bytes()).is_ok());
+    let mut deep = String::from("<config><moduleDependencies>");
+    deep.push_str(&"<dependencies operator=\"Or\">".repeat(100_000));
+    deep.push_str("<flagDependency flag=\"x\" value=\"\"/>");
+    let c = parse_config(deep.as_bytes()).unwrap();
+    assert!(
+        c.warnings.iter().any(|w| w.contains("nested")),
+        "{:?}",
+        c.warnings
+    );
+    // Too deep reads as never holding: the mod is refused, in words.
+    assert!(Session::new(&c, &Facts::default()).is_err());
+    let info = parse_info(text.replace("config", "fomod").as_bytes());
+    assert_eq!(info, Info::default());
+}
+
+/// A megabyte of `&` (no `;`) and attributes by the thousand stay quick and bounded.
+#[test]
+fn long_runs_stay_linear() {
+    let started = std::time::Instant::now();
+    let run = "&".repeat(1 << 20);
+    assert_eq!(xml::unescape(&run).len(), 1 << 20);
+    let mut tag = String::from("<config");
+    for i in 0..10_000 {
+        tag.push_str(&format!(" a{i}=\"x\""));
+    }
+    tag.push_str(">x < y < z</config>");
+    let root = xml::parse(&tag).unwrap();
+    assert_eq!(root.attributes.len(), xml::MAX_ATTRIBUTES);
+    // Stray `<`s join the text around them: one node.
+    assert_eq!(root.children.len(), 1);
+    assert_eq!(root.text(), "x < y < z");
+    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+}
+
+#[test]
+fn an_oversized_installer_is_refused_before_reading() {
+    let big = vec![b' '; MAX_FILE_BYTES + 1];
+    assert!(parse_config(&big).unwrap_err().0.contains("bytes"));
+    assert_eq!(parse_info(&big), Info::default());
+}
+
+/// 10,000 steps each setting its own flag: the walk keeps one map, not one per step.
+#[test]
+fn many_flag_setting_steps_stay_cheap() {
+    let mut text = String::from("<config><installSteps order=\"Explicit\">");
+    for i in 0..10_000 {
+        text.push_str(&format!(
+            "<installStep name=\"s{i}\"><optionalFileGroups><group name=\"g\" type=\"SelectAll\"><plugins><plugin name=\"p\"><description/><conditionFlags><flag name=\"f{i}\">1</flag></conditionFlags><typeDescriptor><type name=\"Optional\"/></typeDescriptor></plugin></plugins></group></optionalFileGroups></installStep>"
+        ));
+    }
+    text.push_str("</installSteps></config>");
+    let c = config(&text);
+    assert_eq!(c.steps.len(), MAX_STEPS);
+    assert!(c.warnings.iter().any(|w| w.contains("10000 steps")));
+    let f = Facts::default();
+    let s = Session::new(&c, &f).unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(s.flags().len(), MAX_STEPS);
+    assert_eq!(s.view(MAX_STEPS - 1).name, "s1023");
+    assert!(s.problems().is_empty());
+    assert!(started.elapsed().as_secs() < 20, "{:?}", started.elapsed());
+}
+
+/// Folder entries in a raw listing ("Wrapper/", a bare "Wrapper") neither hide the installer
+/// nor become copies.
+#[test]
+fn folder_entries_in_a_listing_are_not_files() {
+    let listing = list(&[
+        "Wrapper/",
+        "Wrapper",
+        "Wrapper/fomod/",
+        "Wrapper/fomod/ModuleConfig.xml",
+        "Wrapper/tex/",
+        "Wrapper/tex/One",
+        "Wrapper/tex/Empty/",
+        "Wrapper/tex/One/1.dds",
+        "Wrapper\\tex\\2.dds",
+    ]);
+    let Layout::Installer { prefix, .. } = layout(&listing) else {
+        panic!("{:?}", layout(&listing));
+    };
+    assert_eq!(prefix, "Wrapper");
+    let c = config(
+        r#"<config><requiredInstallFiles><folder source="tex" destination="textures"/></requiredInstallFiles></config>"#,
+    );
+    let f = Facts::default();
+    let plan = Session::new(&c, &f).unwrap().plan(&listing, &prefix);
+    assert_eq!(
+        copies(&plan),
+        [
+            "textures/2.dds <- Wrapper\\tex\\2.dds",
+            "textures/One/1.dds <- Wrapper/tex/One/1.dds"
+        ]
+    );
+}
+
+/// An AtLeastOne group of Optional options starts with its first (Mod Organizer 2), and a choice
+/// an earlier answer made impossible shows as a problem.
+#[test]
+fn an_at_least_one_group_is_never_left_empty() {
+    let text = r#"<config><installSteps order="Explicit">
+      <installStep name="Mode"><optionalFileGroups><group name="m" type="SelectExactlyOne"><plugins order="Explicit">
+        <plugin name="Light"><description/><conditionFlags><flag name="mode">light</flag></conditionFlags><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+        <plugin name="Full"><description/><conditionFlags><flag name="mode">full</flag></conditionFlags><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+      </plugins></group></optionalFileGroups></installStep>
+      <installStep name="Body"><optionalFileGroups><group name="Body" type="SelectAtLeastOne"><plugins order="Explicit">
+        <plugin name="Body A"><description/><files><file source="a.dds"/></files><typeDescriptor><dependencyType><defaultType name="Optional"/><patterns>
+          <pattern><dependencies><flagDependency flag="mode" value="full"/></dependencies><type name="NotUsable"/></pattern></patterns></dependencyType></typeDescriptor></plugin>
+        <plugin name="Body B"><description/><files><file source="b.dds"/></files><typeDescriptor><type name="CouldBeUsable"/></typeDescriptor></plugin>
+      </plugins></group></optionalFileGroups></installStep>
+    </installSteps></config>"#;
+    let c = config(text);
+    let f = Facts::default();
+    let listing = list(&["a.dds", "b.dds"]);
+    let mut s = Session::new(&c, &f).unwrap();
+    assert_eq!(selected(&s.view(1)), [vec!["Body A"]]);
+    assert!(s.problems().is_empty());
+    assert_eq!(copies(&s.plan(&listing, "")), ["a.dds <- a.dds"]);
+    // Unanswered, with Body A not usable: the first CouldBeUsable one.
+    s.choose(0, 0, &[1]).unwrap();
+    assert_eq!(selected(&s.view(1)), [vec!["Body B"]]);
+    // Answered with Body A, then Full: the answer is empty now, and that is a problem.
+    s.choose(0, 0, &[0]).unwrap();
+    s.choose(1, 0, &[0]).unwrap();
+    s.choose(0, 0, &[1]).unwrap();
+    let problems = s.problems();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert_eq!(problems[0].0, 1);
+    assert!(problems[0].1 .0.contains("at least one"));
+}
+
+/// Destinations fold as Windows and macOS fold names, and parts no system can hold safely are
+/// refused on every system.
+#[test]
+fn destinations_fold_and_odd_names_are_refused() {
+    let text = r#"<config><requiredInstallFiles>
+      <file source="x.dds" destination="Textures/Ä.dds"/>
+      <file source="y.dds" destination="textures/ä.dds. "/>
+      <file source="x.dds" destination="CON.esp"/>
+      <file source="x.dds" destination="sub/nul"/>
+      <file source="x.dds" destination="Com1.txt"/>
+      <file source="x.dds" destination="a:stream"/>
+      <file source="x.dds" destination="\\server\share\x"/>
+      <file source="x.dds" destination="\\?\C:\x"/>
+      <file source="x.dds" destination=" C:/x"/>
+      <file source="Ü/É.ESP" destination="console.esp"/>
+    </requiredInstallFiles></config>"#;
+    let c = config(text);
+    let f = Facts::default();
+    let plan = Session::new(&c, &f)
+        .unwrap()
+        .plan(&list(&["x.dds", "y.dds", "ü/é.esp"]), "");
+    // One file for the two spellings: the later (y) wins.
+    assert_eq!(
+        copies(&plan),
+        ["console.esp <- ü/é.esp", "textures/ä.dds. <- y.dds"]
+    );
+    assert_eq!(plan.refused.len(), 7, "{:?}", plan.refused);
+    assert!(plan.missing.is_empty());
+}
+
+#[test]
+fn a_file_dependency_on_a_dll_counts_files_the_player_has() {
+    let f = facts(&[("nvse\\plugins\\JIP NVSE.dll", FileState::Active)]);
+    let flags = std::collections::BTreeMap::new();
+    assert!(holds(
+        &Condition::File {
+            file: "NVSE/Plugins/jip nvse.dll".into(),
+            state: FileState::Active
+        },
+        &flags,
+        &f
+    ));
 }

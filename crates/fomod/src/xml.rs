@@ -7,6 +7,11 @@
 //! be in either kind of quote or none. Comments, processing instructions (the `<?xml ...?>`
 //! declaration among them) and `<!DOCTYPE ...>` are skipped; CDATA is text. Names keep their case;
 //! the helpers compare them without case and without a namespace prefix (`xsi:...`).
+//!
+//! A downloaded file may be hostile, so the work stays in proportion to its size and the tree
+//! stays shallow: nesting stops at [`MAX_DEPTH`] (a deeper tree would overflow the stack when it
+//! is walked or dropped), attributes at [`MAX_ATTRIBUTES`] an element, a reference is looked for in
+//! the 11 bytes after a `&` only, and text runs (stray `<`s among them) make one node.
 
 /// One element: its name as written, its attributes in order (the first of a repeated name
 /// kept), and its children.
@@ -91,7 +96,9 @@ pub fn unescape(text: &str) -> String {
     while let Some(at) = rest.find('&') {
         out.push_str(&rest[..at]);
         let after = &rest[at + 1..];
-        let found = after.find(';').filter(|&semi| semi <= 10).and_then(|semi| {
+        // Only the next 11 bytes are looked at: a long run of `&` stays linear.
+        let semi = after.as_bytes().iter().take(11).position(|&c| c == b';');
+        let found = semi.and_then(|semi| {
             let name = &after[..semi];
             let ch = match name {
                 "lt" => Some('<'),
@@ -134,6 +141,15 @@ fn is_name_end(b: u8) -> bool {
     b.is_ascii_whitespace() || matches!(b, b'/' | b'>' | b'=' | b'<')
 }
 
+/// The deepest elements nest. Past it an opening tag opens nothing (its contents stay at the level
+/// it is at), so a hostile file cannot make a tree deep enough to overflow the stack when it is
+/// walked or dropped. Real installers nest under 15 levels.
+pub const MAX_DEPTH: usize = 256;
+
+/// The most attributes kept on one element (real installer tags have at most 6); the rest are
+/// skipped.
+pub const MAX_ATTRIBUTES: usize = 64;
+
 /// Where `pattern` starts in `text` at or after `from`.
 fn find(text: &str, from: usize, pattern: &str) -> Option<usize> {
     text.get(from..)?.find(pattern).map(|i| from + i)
@@ -146,10 +162,15 @@ pub fn parse(text: &str) -> Option<Element> {
     // The document itself is the bottom of the stack; its first element is the answer.
     let mut stack = vec![Element::default()];
     let mut i = 0;
+    // Text joins the text just before it, so stray `<`s and comments make no node each.
     let push_text = |stack: &mut Vec<Element>, t: String| {
-        if !t.is_empty() {
-            if let Some(top) = stack.last_mut() {
-                top.children.push(Node::Text(t));
+        if t.is_empty() {
+            return;
+        }
+        if let Some(top) = stack.last_mut() {
+            match top.children.last_mut() {
+                Some(Node::Text(before)) => before.push_str(&t),
+                _ => top.children.push(Node::Text(t)),
             }
         }
     };
@@ -270,16 +291,19 @@ pub fn parse(text: &str) -> Option<Element> {
                     }
                     j = k;
                 }
-                if !element
-                    .attributes
-                    .iter()
-                    .any(|(n, _)| n.eq_ignore_ascii_case(&name))
+                if element.attributes.len() < MAX_ATTRIBUTES
+                    && !element
+                        .attributes
+                        .iter()
+                        .any(|(n, _)| n.eq_ignore_ascii_case(&name))
                 {
                     element.attributes.push((name, value));
                 }
             }
             i = j;
-            if empty {
+            // The document is the stack's first entry: with `MAX_DEPTH - 1` elements open, an element
+            // is added empty, so none is deeper than `MAX_DEPTH`.
+            if empty || stack.len() >= MAX_DEPTH {
                 if let Some(top) = stack.last_mut() {
                     top.children.push(Node::Element(element));
                 }
