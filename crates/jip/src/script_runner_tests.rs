@@ -758,3 +758,88 @@ fn a_batch_script_belongs_to_the_callers_file() {
         .script;
     assert_eq!((e.mem.u32(made + 0x10), e.mem.u32(made + 0x14)), (info, 0));
 }
+
+/// A delayed `RunScriptSnippet` at a load (JIP's `CleanMLCallbacks`): its script destroyed and its
+/// callback gone, so it never runs on a reference the load may have freed.
+#[test]
+fn a_load_cancels_a_delayed_snippet() {
+    let mut e = command_engine();
+    cmd(&mut e, 0x280f, CALLER, &[n(3), s(b"later")]);
+    crate::main_loop::clean(&mut e);
+    let destroys = || calls().iter().filter(|c| c.starts_with("destroy")).count();
+    assert_eq!(destroys(), 1, "destroyed at the load");
+    for _ in 0..4 {
+        crate::main_loop::cycle(&mut e);
+    }
+    assert!(runs().is_empty(), "never run");
+    assert_eq!(destroys(), 1, "once");
+    assert!(e.ext::<Jip>().main_loop.callbacks.is_empty());
+}
+
+thread_local! {
+    static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static ANSWERS: RefCell<Vec<f64>> = const { RefCell::new(Vec::new()) };
+    static REENTER: RefCell<(u32, Vec<Vec<u8>>)> = const { RefCell::new((0, Vec::new())) };
+}
+
+/// The script run re-enters `opcode` with `args` (a batch file or snippet that runs itself), up
+/// to 100 deep (the stand-in's own stop).
+fn reentering(e: &mut Engine, opcode: u32, args: Vec<Vec<u8>>) {
+    DEPTH.with(|d| d.set(0));
+    ANSWERS.with(|a| a.borrow_mut().clear());
+    REENTER.with(|r| *r.borrow_mut() = (opcode, args));
+    e.register(SCRIPT_EXECUTE, |e, _| {
+        note("run".into());
+        let depth = DEPTH.with(|d| {
+            d.set(d.get() + 1);
+            d.get()
+        });
+        if depth < 100 {
+            let (opcode, args) = REENTER.with(|r| r.borrow().clone());
+            let answer = cmd(e, opcode, 0, &args);
+            ANSWERS.with(|a| a.borrow_mut().push(answer));
+        }
+        DEPTH.with(|d| d.set(d.get() - 1));
+        Ret::default()
+    });
+}
+
+fn run_count() -> usize {
+    calls().iter().filter(|c| *c == "run").count()
+}
+
+/// A batch file that runs itself: with the fixes row on, 64 nested runs and the 65th call answers
+/// 0; with it off, JIP's way (no cap: here the stand-in's 100).
+#[test]
+fn a_batch_script_running_itself_stops_at_64_with_the_fixes_row() {
+    let mut e = command_engine();
+    files::put("loop.txt", b"again");
+    nvse::events::set_error_guard(&mut e, true);
+    reentering(&mut e, 0x2834, vec![s(b"loop.txt")]);
+    cmd(&mut e, 0x2834, 0, &[s(b"loop.txt")]);
+    assert_eq!(run_count(), 64);
+    let answers = ANSWERS.with(|a| a.borrow().clone());
+    assert_eq!(answers.first(), Some(&0.0), "the innermost call: 0");
+    assert_eq!(answers.iter().filter(|a| **a == 0.0).count(), 1);
+    assert_eq!(e.ext::<Jip>().script_runner.nesting, 0, "counted back down");
+    // Off: no cap.
+    let mut e = command_engine();
+    files::put("loop.txt", b"again");
+    reentering(&mut e, 0x2834, vec![s(b"loop.txt")]);
+    cmd(&mut e, 0x2834, 0, &[s(b"loop.txt")]);
+    assert_eq!(run_count(), 100);
+}
+
+/// A snippet that runs itself with no delay: 64 nested runs with the fixes row on; every script
+/// made is still destroyed (the skipped one too).
+#[test]
+fn a_snippet_running_itself_stops_at_64_with_the_fixes_row() {
+    let mut e = command_engine();
+    nvse::events::set_error_guard(&mut e, true);
+    reentering(&mut e, 0x280f, vec![n(0), s(b"again")]);
+    cmd(&mut e, 0x280f, 0, &[n(0), s(b"again")]);
+    assert_eq!(run_count(), 64);
+    let destroys = calls().iter().filter(|c| c.starts_with("destroy")).count();
+    assert_eq!(destroys, 65);
+    assert_eq!(e.ext::<Jip>().script_runner.nesting, 0);
+}

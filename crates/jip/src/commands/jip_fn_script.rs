@@ -642,7 +642,7 @@ fn run_script_snippet(e: &mut Engine, w: &[u32]) -> Ret {
             calling,
         );
     } else {
-        crate::script_runner::run_script(e, script, calling);
+        crate::script_runner::run_script_nested(e, script, calling, b"RunScriptSnippet");
         e.vcall(script, DESTROY, &[1]);
     }
     handled(true)
@@ -694,8 +694,9 @@ fn run_batch_script(e: &mut Engine, w: &[u32]) -> Ret {
         } else {
             e.mem.u32(PLAYER)
         };
-        crate::script_runner::run_script(e, script, calling);
-        a.set_result(e, 1.0);
+        if crate::script_runner::run_script_nested(e, script, calling, &path) {
+            a.set_result(e, 1.0);
+        }
     }
     handled(true)
 }

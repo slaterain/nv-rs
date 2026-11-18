@@ -291,14 +291,26 @@ pub fn cycle(e: &mut Engine) {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: CleanMLCallbacks (the
 // script callbacks' part; JIP's script runner's own come with it).
-/// At a load or the exit to the main menu: the callbacks set with mode bit 8 marked to go.
+/// At a load or the exit to the main menu: a delayed `RunScriptSnippet`'s script destroyed
+/// (`Destroy`, vtable +0x10, with 1) and its callback marked to go (its calling reference may not
+/// survive the load), and the callbacks set with mode bit 8 marked to go.
 pub fn clean(e: &mut Engine) {
+    let mut snippets = Vec::new();
     for c in &mut state(e).callbacks {
-        if c.flags & 8 != 0 {
+        if c.native == Some(Native::RunScript) {
+            snippets.push(c.this_obj);
+            c.remove = true;
+        } else if c.flags & 8 != 0 {
             c.remove = true;
         }
     }
+    for script in snippets {
+        e.vcall(script, SCRIPT_DESTROY, &[1]);
+    }
 }
+
+/// `Script::Destroy` (vtable +0x10).
+const SCRIPT_DESTROY: u32 = 0x10;
 
 #[cfg(test)]
 #[path = "main_loop_tests.rs"]

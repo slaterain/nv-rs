@@ -145,6 +145,9 @@ pub struct State {
     /// `JIPScriptRunner::initInProgress`: 0 outside [`init_files`]; 1 while the files compile; 2
     /// once a compile error was reported in this start.
     pub init_in_progress: u8,
+    /// The port's own: how many [`run_script_nested`] runs are under way (the fixes preset's
+    /// "script error loop guard" row caps it).
+    pub nesting: u32,
 }
 
 /// The string release in `ScriptCompiler::ScriptError` (`005aeb66`: the message, "SCRIPTS: ..."),
@@ -295,6 +298,30 @@ fn execute(e: &mut Engine, script: u32, arg3: bool) {
 /// `ExtraScript` (type 0x0D) and its event list (+0x10).
 const EXTRA_SCRIPT: u32 = 0x0d;
 const XSCRIPT_EVENTS: u32 = 0x10;
+
+/// The deepest [`run_script_nested`] goes while the fixes preset's "script error loop guard" row
+/// is on.
+pub const MAX_NESTING: u32 = 64;
+
+/// [`run_script`] for `RunBatchScript` and `RunScriptSnippet` (`what`: the file or "snippet"),
+/// counted: a script that runs itself again through either command (JIP has no cap: the host's
+/// stack runs out and the game stops) is, with the fixes preset's "script error loop guard" row
+/// on (`nvse::events::error_guard`), not run past [`MAX_NESTING`] deep: one log line and `false`.
+/// Off, JIP's way. One count for the run.
+pub fn run_script_nested(e: &mut Engine, script: u32, calling_ref: u32, what: &[u8]) -> bool {
+    if nvse::events::error_guard(e) && state(e).nesting >= MAX_NESTING {
+        eprintln!(
+            "[SCRIPT RUNNER] {} not run: nested {MAX_NESTING} deep (it runs itself again)",
+            String::from_utf8_lossy(what)
+        );
+        return false;
+    }
+    state(e).nesting += 1;
+    run_script(e, script, calling_ref);
+    let s = state(e);
+    s.nesting = s.nesting.saturating_sub(1);
+    true
+}
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: JIPScriptRunner::RunScript.
 /// `script` run on `calling_ref` (`Script::Execute(callingRef)`: no list, no container, `true`),

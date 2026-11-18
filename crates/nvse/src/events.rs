@@ -456,6 +456,11 @@ pub fn set_error_guard(e: &mut Engine, on: bool) {
     state(e).error_guard = on;
 }
 
+/// Whether [`set_error_guard`]'s row is on (JIP's script runner also caps its nesting under it).
+pub fn error_guard(e: &mut Engine) -> bool {
+    state(e).error_guard
+}
+
 fn state(e: &mut Engine) -> &mut State {
     &mut e.ext::<Nvse>().events
 }
