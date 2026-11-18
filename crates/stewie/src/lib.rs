@@ -63,6 +63,8 @@ pub struct Stewie {
     pub installed: bool,
     /// The settings read at [`install`].
     pub settings: settings::Settings,
+    /// The start-up lines [`install`] logged.
+    pub log: Vec<String>,
 }
 
 /// The host's row: Tweaks built in for this run (before [`install`]).
@@ -120,13 +122,14 @@ fn read_ini(e: &mut Engine) -> Option<Vec<u8>> {
 pub const INIS: &[u8] = b"Data\\NVSE\\Plugins\\Tweaks\\INIs\\";
 
 /// The overlay files of a listing of [`INIS`], in the listing's order (Tweaks' `DirectoryIterator`
-/// over `*.ini`, `IsFile` only): files whose name ends in `.ini`, without case. (Windows' `*.ini` also
+/// over `*.ini`, `IsFile` only): files whose name ends in `.ini`, without case (a file named just
+/// `.ini` too, as Windows gives it). (Windows' `*.ini` also
 /// matches a long name whose 8.3 short name ends in `.INI`, such as `a.ini_old`; nv-rs's listing has no
 /// short names, so such a file is not read here.)
 pub fn overlay_names(listed: &[engine_core::mod_files::Listed]) -> Vec<Vec<u8>> {
     listed
         .iter()
-        .filter(|l| !l.is_folder && l.name.len() > 4)
+        .filter(|l| !l.is_folder && l.name.len() >= 4)
         .filter(|l| l.name[l.name.len() - 4..].eq_ignore_ascii_case(b".ini"))
         .map(|l| l.name.clone())
         .collect()
@@ -163,7 +166,7 @@ pub fn settings_and_rows(
     let name = String::from_utf8_lossy(INI).into_owned();
     let mut files: Vec<(&str, &[u8])> = ini.map(|b| (name.as_str(), b)).into_iter().collect();
     files.extend(overlays.iter().map(|(n, b)| (n.as_str(), b.as_slice())));
-    let settings = settings::Settings::new(&files, keys.as_tweaks);
+    let settings = settings::Settings::with_main(&files, ini.is_some(), keys.as_tweaks);
     let on = rows::ROWS
         .iter()
         .filter(|r| rows::on(r, keys, &settings))
@@ -191,12 +194,14 @@ pub fn install(e: &mut Engine) {
     for row in &on {
         e.set_stewie(row.bit, true);
     }
-    for line in start_lines(ini.is_some(), &settings, &keys, on.len()) {
+    let log = start_lines(ini.is_some(), &settings, &keys, on.len());
+    for line in &log {
         eprintln!("{line}");
     }
     let state = e.ext::<Stewie>();
     state.installed = true;
     state.settings = settings;
+    state.log = log;
     nvse::plugins::register(e, plugin());
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Stewie>();

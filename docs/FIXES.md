@@ -1642,8 +1642,12 @@ and tweaks every VNV player runs, is being built in as `crates/stewie` (`measure
   of its keys changed a value, or says none was found.
 - **The overlay files.** As Tweaks does, every `.ini` file in `Data\NVSE\Plugins\Tweaks\INIs\` is then
   read over that, one after another in the folder's order (the order Windows lists an NTFS folder, on
-  every system), each key it has winning and each key it lacks keeping the value under it; mods ship
-  their Tweaks settings this way. `[INI] bMultiINISupport=0` in the main file turns them off. The
+  every system; a file named just `.ini` too), each key it has winning and each key it lacks keeping
+  the value under it, with Tweaks' two exceptions: the 28 keys Tweaks reads from the main file only
+  (inside `if (isDefaultINI)`: `bFixCreatureDoubledDR`, `bCapSPECIALPoints`, `iOverrideSaveIndex` and
+  the rest) are ignored in an overlay file, and the 69 `GET_TWEAKH` keys (`bInlineVanillaFunctions`,
+  `bNoRecurringChallenges`, ...) are ORed across the files, so an overlay can turn one on, never off
+  (`crates/stewie/data/key_rules.tsv`); mods ship their Tweaks settings this way. `[INI] bMultiINISupport=0` in the main file turns them off. The
   folder is looked for in nv-rs's own folder first, then the game's, its files listed once by name
   (`engine_core::mod_files::list`). One difference: Windows' `*.ini` search also finds a file whose
   long name only starts its extension with `ini` (`a.ini_old`, by its 8.3 short name `A~1.INI`, on a
