@@ -80,7 +80,17 @@ fn camera() -> ([f64; 3], [[f64; 3]; 3]) {
 
 /// Toward the sun: up and toward +x, so shadows fall toward -x (45 units across for 60 up).
 fn to_sun() -> [f64; 3] {
-    [0.6, 0.0, 0.8]
+    SUN.get()
+}
+
+thread_local! {
+    /// Toward the sun for this test's thread (each test runs on a thread of its own), and the
+    /// culling the characters are drawn with (`D3DRS_CULLMODE`: 1 none, 2 clockwise, 3
+    /// counterclockwise).
+    static SUN: std::cell::Cell<[f64; 3]> = const { std::cell::Cell::new([0.6, 0.0, 0.8]) };
+    static CULL: std::cell::Cell<u32> = const { std::cell::Cell::new(1) };
+    /// The characters' allowance a test sets (game units; none: measured).
+    static ALLOW: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
 }
 
 fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
@@ -286,15 +296,17 @@ fn bytes_buffer(b: &mut WgpuBackend, handle: u32, bytes: &[u8]) {
 
 /// The bar's triangles (a box from `z0` to `z1`) as skinned vertices: position, the two weights
 /// (all on `bone`), the bone bytes (0, 1) in `D3DCOLOR` order; 28 bytes a vertex.
-/// The bar's box from `z0` to `z1` high: its top and four sides as triangles.
+/// The bar's box from `z0` to `z1` high, closed: each face counterclockwise seen from outside (in
+/// the game's right-handed world), so one culling mode draws its outside alone.
 fn box_part(z0: f32, z1: f32) -> Vec<[f32; 3]> {
     let (x0, x1, y0, y1) = (-BAR_HALF, BAR_HALF, BAR_Y - BAR_HALF, BAR_Y + BAR_HALF);
     let quad = |a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]| vec![a, b, c, a, c, d];
     let mut v = Vec::new();
     v.extend(quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]));
+    v.extend(quad([x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]));
     v.extend(quad([x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]));
-    v.extend(quad([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]));
-    v.extend(quad([x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]));
+    v.extend(quad([x1, y1, z0], [x0, y1, z0], [x0, y1, z1], [x1, y1, z1]));
+    v.extend(quad([x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]));
     v.extend(quad([x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]));
     v
 }
@@ -484,6 +496,18 @@ fn set(b: &mut WgpuBackend, vs: u32, decl: u32) {
     );
 }
 
+/// Render state `state` set to `value`.
+fn state(b: &mut WgpuBackend, state: u32, value: u32) {
+    run(
+        b,
+        Cmd::SetRenderState {
+            device: DEVICE,
+            state,
+            value,
+        },
+    );
+}
+
 /// The pixel shader `ps`.
 fn set_ps(b: &mut WgpuBackend, ps: u32) {
     run(
@@ -602,6 +626,9 @@ struct Shot {
     head: bool,
     /// The ground drawn through the pixel shader with the game's actor shadow (s6 black).
     game_shadow: bool,
+    /// The bar drawn blended (fading in or out: the game blends such a character), so it casts
+    /// nothing of ours.
+    bar_blended: bool,
 }
 
 /// Frames as `shots` say, with the words when `words`; each frame's pixels.
@@ -633,13 +660,19 @@ fn frames_of(b: &mut WgpuBackend, shots: &[Shot], words: bool) -> Vec<Vec<[u8; 4
             set(b, SKIN_VS, SKIN_DECL);
             constants(b, 0, 0, &mvp);
             constants(b, 0, 4, &bones_two(s0, s1));
-            draw(b, BAR, 28, 20);
+            state(b, 22, CULL.get());
+            state(b, 27, u32::from(shot.bar_blended));
+            constants(b, 3, 3, &[0.5, 0.5, 0.5, 0.0]);
+            draw(b, BAR, 28, 24);
+            constants(b, 3, 3, &[0.6, 0.6, 0.6, 0.0]);
+            state(b, 22, 1);
+            state(b, 27, 0);
         }
         if shot.head {
             set(b, VS, DECL);
             set_ps(b, FACE_PS);
             constants(b, 0, 0, &mvp);
-            draw(b, HEAD, 16, 10);
+            draw(b, HEAD, 16, 12);
         }
         if words {
             hook(b, [scene_light::STATE, sun_shadow::STATE]);
@@ -693,6 +726,7 @@ fn picture_of(on: bool, characters: bool, shots: &[Shot]) -> Option<Vec<Vec<[u8;
     let mut b = b?;
     if let Some(d) = b.device() {
         d.set_sun_characters(characters);
+        d.set_sun_character_allowance(ALLOW.get());
     }
     Some(frames_of(&mut b, shots, on))
 }
@@ -870,18 +904,27 @@ fn the_games_actor_shadow_gives_way_to_the_characters_only_while_they_cast() {
     };
     let ours = picture_of(true, true, &shots).expect("the adapter");
     let theirs = picture_of(true, false, &shots).expect("the adapter");
-    // Lit ground, away from the bar's shadow.
-    let p = [60.0, 300.0, 0.0];
+    // Just past the tip of the bar's own shadow (in the sun: ours takes the sun away entirely
+    // inside it), within the few texels round it where the game's shadow gives way to ours: lit,
+    // where the game's black darkens it with the characters off.
+    let under = [-101.0, f64::from(BAR_Y), 0.0];
     assert_eq!(
-        at(&theirs[3], p),
-        at(&off[3], p),
+        at(&theirs[3], under),
+        at(&off[3], under),
         "the game's shadow as before"
     );
     assert!(
-        at(&ours[3], p) > at(&theirs[3], p) + 40,
-        "the game's shadow left out: {} vs {}",
+        at(&ours[3], under) > at(&theirs[3], under) + 20,
+        "the game's shadow left out under ours: {} vs {}",
+        at(&ours[3], under),
+        at(&theirs[3], under)
+    );
+    // Away from any character's shadow of ours: the game's stays (review of #726, round 2).
+    let p = [60.0, 300.0, 0.0];
+    assert_eq!(
         at(&ours[3], p),
-        at(&theirs[3], p)
+        at(&off[3], p),
+        "the game's shadow where ours is not"
     );
 }
 
@@ -901,4 +944,94 @@ fn with_no_character_cast_the_games_actor_shadow_stays() {
     let on = picture_of(true, true, &shots).expect("the adapter");
     let p = [60.0, 300.0, 0.0];
     assert_eq!(at(&on[3], p), at(&off[3], p));
+}
+
+/// A closed character drawn with culling, running away from the sun with no allowance at all:
+/// only the culling (the draw's own: seen from the sun it keeps the side away from the sun)
+/// keeps its sunlit side lit. Counterclockwise culling draws the box's outside.
+#[test]
+fn the_draws_own_culling_keeps_a_closed_characters_sunlit_side() {
+    CULL.set(3);
+    ALLOW.set(Some(0.0));
+    let x = |f: usize| -80.0 - 6.0 * f as f32;
+    let shots: Vec<Shot> = (0..7)
+        .map(|f| Shot {
+            bar: Some(([x(f), 0.0, 0.0], [x(f), 0.0, 0.0])),
+            ..Shot::default()
+        })
+        .collect();
+    let Some(off) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let on = picture_of(true, true, &shots).expect("the adapter");
+    for f in 3..7 {
+        for z in [30.0, 90.0] {
+            let p = [f64::from(x(f)) + 10.0, f64::from(BAR_Y), z];
+            // The bar is drawn there (its outside: not the ground's grey behind it).
+            assert_ne!(at(&off[f], p), 204, "frame {f}: the box's side is drawn");
+            assert_eq!(at(&on[f], p), at(&off[f], p), "frame {f}, {z} high");
+        }
+        assert!(dark(
+            &on[f],
+            &off[f],
+            [f64::from(x(f - 1)) - 75.0, f64::from(BAR_Y), 0.0]
+        ));
+    }
+}
+
+/// A two-sided character part (drawn with no culling: turning the culling round does nothing)
+/// under a high sun (70 degrees), stepping 6 units a frame away from it: 17.5 units along the
+/// sun's rays, past the fixed 12. The allowance measured from the frame's step keeps its sunlit
+/// side lit.
+#[test]
+fn the_frames_step_keeps_a_two_sided_parts_sunlit_side_under_a_high_sun() {
+    let e = 70f64.to_radians();
+    SUN.set([e.cos(), 0.0, e.sin()]);
+    let x = |f: usize| -80.0 - 6.0 * f as f32;
+    let shots: Vec<Shot> = (0..7)
+        .map(|f| Shot {
+            bar: Some(([x(f), 0.0, 0.0], [x(f), 0.0, 0.0])),
+            ..Shot::default()
+        })
+        .collect();
+    let Some(off) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let on = picture_of(true, true, &shots).expect("the adapter");
+    for f in 3..7 {
+        for z in [30.0, 90.0] {
+            let p = [f64::from(x(f)) + 10.0, f64::from(BAR_Y), z];
+            assert_eq!(at(&on[f], p), at(&off[f], p), "frame {f}, {z} high");
+        }
+    }
+}
+
+/// A character that casts nothing of ours this frame (drawn blended: fading in or out) keeps the
+/// game's own shadow, though another character (a face) casts: the game's shadow gives way only
+/// under our characters' shadows.
+#[test]
+fn a_character_not_cast_keeps_the_games_shadow_while_another_casts() {
+    let shots: Vec<Shot> = (0..4)
+        .map(|_| Shot {
+            head: true,
+            bar: Some(([150.0, 300.0, 0.0], [150.0, 300.0, 0.0])),
+            bar_blended: true,
+            game_shadow: true,
+        })
+        .collect();
+    let Some(off) = picture_of(false, true, &shots) else {
+        return;
+    };
+    let on = picture_of(true, true, &shots).expect("the adapter");
+    // Where the blended bar's shadow would fall (it stands at (150, 450)).
+    let p = [150.0 - 75.0, f64::from(BAR_Y) + 300.0, 0.0];
+    assert_eq!(at(&on[3], p), at(&off[3], p));
+    // Round the face's own shadow (just past its tip) the game's gives way.
+    let tip = [-101.0, f64::from(BAR_Y), 0.0];
+    assert!(
+        at(&on[3], tip) > at(&off[3], tip) + 40,
+        "{} vs {}",
+        at(&on[3], tip),
+        at(&off[3], tip)
+    );
 }

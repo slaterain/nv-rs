@@ -1055,7 +1055,12 @@ struct SunState {
     /// Characters cast since the last line in the log.
     skinned_seen: u64,
     /// Characters' caster pipelines on their way (made on threads of their own).
-    caster_pending: Map<PipeOf, std::sync::mpsc::Receiver<Option<wgpu::RenderPipeline>>>,
+    caster_pending: Map<PipeOf, std::sync::mpsc::Receiver<Result<wgpu::RenderPipeline, String>>>,
+    /// The characters' places (geometry, centre) of the frame before and of this one (kept for its
+    /// list), for the frame's step; and a test's allowance in place of the measured one.
+    skin_before: Vec<(sun_shadow::GeoKey, [f64; 3])>,
+    skin_now: Vec<(sun_shadow::GeoKey, [f64; 3])>,
+    allow_override: Option<f32>,
 }
 
 /// A skinned geometry's bones' spheres as last read ([`SunState::skins`]): the key they were read
@@ -1115,6 +1120,7 @@ impl SunState {
         self.rewritten.clear();
         self.skins.clear();
         self.skinned.clear();
+        self.skin_before.clear();
         self.bounds.clear();
         self.gpu.drawn = [None; sun_shadow::CASCADES];
         self.light = None;
@@ -1123,7 +1129,7 @@ impl SunState {
 
     fn new(device: &wgpu::Device) -> SunState {
         SunState {
-            gpu: sun_shadow::Gpu::new(device),
+            gpu: sun_shadow::Gpu::new(device, sun_shadow::characters()),
             lists: sun_shadow::Lists::default(),
             cache: sun_shadow::Cache::default(),
             far: sun_shadow::Cache::default(),
@@ -1179,6 +1185,9 @@ impl SunState {
             skinned: Vec::new(),
             skinned_seen: 0,
             caster_pending: Map::default(),
+            skin_before: Vec::new(),
+            skin_now: Vec::new(),
+            allow_override: None,
         }
     }
 }
@@ -6343,19 +6352,12 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             return;
         }
         // A character's part cast this frame only, as drawn, never kept (its body skinned, or its
-        // face): into the characters' layers, with its culling turned round so the layer holds
-        // the side away from the sun (the layer is a frame old when the lit draws read it: a
-        // character moving away from the sun must not shade its own sunlit side, review of #726).
+        // face): into the characters' layers. With the draw's own culling, as every caster: seen
+        // from the sun that keeps the side turned away from it (the GPU test
+        // `the_draws_own_culling_keeps_a_closed_characters_sunlit_side`; turning it round kept the
+        // sun's side, review of #726 round 2). The layer is a frame old when the lit draws read
+        // it: a character moving away from the sun then does not shade its own sunlit side.
         let per_frame = skin.is_some() || (ps.face && characters);
-        let cull = if per_frame {
-            match cull {
-                2 => 3,
-                3 => 2,
-                c => c,
-            }
-        } else {
-            cull
-        };
         let samplers = self.sampler_bindings(vs, ps);
         let sampler_keys: Vec<(u32, u8, bool)> =
             samplers.as_slice().iter().map(|(k, _)| *k).collect();
@@ -6382,6 +6384,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 match sun.caster_pending.get(&pkey).map(|rx| rx.try_recv()) {
                     Some(Ok(made)) => {
                         sun.caster_pending.remove(&pkey);
+                        let made = match made {
+                            Ok(p) => Some(p),
+                            Err(e) => {
+                                self.warn(format!(
+                                    "sun shadows: a character's caster pipeline wgpu refuses: {e}"
+                                ));
+                                None
+                            }
+                        };
+                        let sun = self.sun.as_mut().expect("on");
                         let at = made.map(|p| {
                             sun.gpu.pipelines.push(Some(p));
                             (sun.gpu.pipelines.len() - 1) as u32
@@ -6395,6 +6407,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         None
                     }
                     Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                        self.sun_reject(2, vs, ps, count);
+                        return;
+                    }
+                    // At most a few on their way at once (one thread each): the rest wait a frame.
+                    None if sun.caster_pending.len() >= SUN_VARIANTS_AT_ONCE => {
                         self.sun_reject(2, vs, ps, count);
                         return;
                     }
@@ -6417,7 +6434,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                                 let spawned = std::thread::Builder::new()
                                     .name("nv-wgpu-sun-caster".into())
                                     .spawn(move || {
-                                        let _ = tx.send(job().ok());
+                                        let _ = tx.send(job());
                                     });
                                 if spawned.is_ok() {
                                     sun.caster_pending.insert(pkey, rx);
@@ -6499,6 +6516,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 .sun
                 .as_ref()
                 .and_then(|s| s.skins.get(&geometry))
+                .filter(|(k, _)| *k == key)
                 .map(|(_, s)| s.clone());
             let spheres = match known {
                 Some(s) => s,
@@ -7251,6 +7269,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.gpu.far_lookup().0,
             sun.gpu.far_lookup().1,
             sun.gpu.chars_in,
+            sun.gpu.chars_allow,
             axes,
             position,
             rt.samples,
@@ -7399,6 +7418,11 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let mut added = 0usize;
         let mut on_scene = 0u64;
         sun.skinned.clear();
+        // The largest step a character took since the frame before (its place now against the nearest
+        // place of the same geometry then), for the characters' allowance.
+        let mut step = 0.0f64;
+        let mut skin_places = std::mem::take(&mut sun.skin_now);
+        skin_places.clear();
         for c in std::mem::take(&mut sun.lists.casters) {
             if c.depth != scene {
                 continue;
@@ -7413,6 +7437,20 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 {
                     let centre = sun_shadow::place_point(&world, c.bounds.0);
                     let r = c.bounds.1 * sun_shadow::stretch(&world);
+                    let g = c.key.geometry();
+                    let moved = sun
+                        .skin_before
+                        .iter()
+                        .filter(|(k, _)| *k == g)
+                        .map(|(_, p)| {
+                            let d: [f64; 3] = std::array::from_fn(|i| centre[i] - p[i]);
+                            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+                        })
+                        .fold(f64::INFINITY, f64::min);
+                    if moved <= sun_shadow::MOVE_REACH {
+                        step = step.max(moved);
+                    }
+                    skin_places.push((g, centre));
                     sun.skinned.push((c.draw, world, centre, r));
                 }
                 continue;
@@ -7470,6 +7508,17 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // and not in this one moves (decided place by place, [`sun_shadow::Cache::mark_moves`]):
         // kept out of the still maps (drawn each frame over a copy of them), so it does not redraw
         // them.
+        // The characters' allowance this frame ([`sun_shadow::skin_allowance`]): their largest step
+        // along the sun's rays (a test may set it).
+        sun.skin_now = std::mem::replace(&mut sun.skin_before, skin_places);
+        let flat = {
+            let t = frame.to_sun.map(f64::from);
+            (t[0] * t[0] + t[1] * t[1]).sqrt()
+                / (t[0] * t[0] + t[1] * t[1] + t[2] * t[2]).sqrt().max(1e-9)
+        };
+        sun.gpu.chars_allow = sun
+            .allow_override
+            .unwrap_or_else(|| sun_shadow::skin_allowance(step, flat) as f32);
         let reach = f64::from(sun_shadow::FAR) + cascades[sun_shadow::CASCADES - 1].half;
         let in_view = |c: [f64; 3]| -> [f64; 3] {
             let d = [c[0] - position[0], c[1] - position[1], c[2] - position[2]];
@@ -7744,6 +7793,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
     }
 
+    /// Tests: the characters' allowance (game units) in place of the one measured each frame
+    /// ([`sun_shadow::skin_allowance`]; none: measured).
+    #[doc(hidden)]
+    pub fn set_sun_character_allowance(&mut self, units: Option<f32>) {
+        if let Some(s) = &mut self.sun {
+            s.allow_override = units;
+        }
+    }
+
     /// Tests: how many times the sun shadows' far map was drawn (0 with them off).
     #[doc(hidden)]
     pub fn sun_far_maps_drawn(&self) -> u64 {
@@ -7766,7 +7824,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // And the characters' caster pipelines on their way.
         if let Some(sun) = &mut self.sun {
             for (key, rx) in std::mem::take(&mut sun.caster_pending) {
-                let at = rx.recv().ok().flatten().map(|p| {
+                let at = rx.recv().ok().and_then(Result::ok).map(|p| {
                     sun.gpu.pipelines.push(Some(p));
                     (sun.gpu.pipelines.len() - 1) as u32
                 });
@@ -8014,6 +8072,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             sun.gpu.far_lookup().0,
             sun.gpu.far_lookup().1,
             sun.gpu.chars_in,
+            sun.gpu.chars_allow,
             axes,
             position,
             rt.samples,

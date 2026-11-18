@@ -750,7 +750,7 @@ impl Gen<'_> {
         );
         if self.sun.is_some() {
             self.out.push_str(&if self.vertex() {
-                crate::sun_shadow::lookup_wgsl_vertex()
+                crate::sun_shadow::lookup_wgsl_vertex(self.skinned)
             } else {
                 crate::sun_shadow::lookup_wgsl(self.skinned)
             });
@@ -1314,7 +1314,7 @@ impl Gen<'_> {
         // The game's actor shadows in the sun shadows' variant with the characters cast: lit where
         // the characters cast this frame (`sun_chars`, [`crate::sun_shadow::LOOKUP`]).
         if self.blank == Some(n) {
-            fixed = format!("select({fixed}, vec4<f32>(1.0), sun_chars > 0.5)");
+            fixed = format!("mix({fixed}, vec4<f32>(1.0), sun_chars)");
         }
         // ps_2_x and ps_3_0 allow a swizzle on the sampler: it applies to the result.
         Ok(if sampler.swizzle == 0xE4 {
