@@ -70,17 +70,64 @@ fn a_plugins_masters_are_read() {
 
 #[test]
 fn the_list_has_named_masters_then_esm_then_esp() {
-    let list = plugin_list(&[
-        (
-            "b.esp".into(),
-            plugin(&["FalloutNV.esm", "lonesomeroad.esm"]),
-        ),
-        ("A.ESP".into(), plugin(&["FalloutNV.esm"])),
-        ("Own.esm".into(), plugin(&["DeadMoney.esm"])),
-    ]);
+    let list = plugin_list(
+        &Default::default(),
+        &[
+            (
+                "b.esp".into(),
+                plugin(&["FalloutNV.esm", "lonesomeroad.esm"]),
+            ),
+            ("A.ESP".into(), plugin(&["FalloutNV.esm"])),
+            ("Own.esm".into(), plugin(&["DeadMoney.esm"])),
+        ],
+    );
     assert_eq!(
         list,
         "DeadMoney.esm\r\nLonesomeRoad.esm\r\nOwn.esm\r\nA.ESP\r\nb.esp\r\n"
+    );
+}
+
+/// Every official master in the game's Data stays on, named by a mod or not, in the official
+/// order; a mod's copy of one is not listed twice.
+#[test]
+fn official_masters_present_stay_on() {
+    let present = ["gunrunnersarsenal.esm", "deadmoney.esm"]
+        .map(String::from)
+        .into_iter()
+        .collect();
+    let list = plugin_list(
+        &present,
+        &[
+            ("Gun.esp".into(), plugin(&["FalloutNV.esm"])),
+            ("DEADMONEY.ESM".into(), plugin(&["FalloutNV.esm"])),
+        ],
+    );
+    assert_eq!(
+        list,
+        "DeadMoney.esm\r\nGunRunnersArsenal.esm\r\nGun.esp\r\n"
+    );
+}
+
+/// The whole way: DeadMoney.esm in the game's Data, a mod that does not name it, no loose
+/// plugin list: Dead Money is on.
+#[test]
+fn play_with_mods_keeps_the_dlc_on() {
+    let dir = Scratch::new("dlc-on");
+    let game = game(&dir.0);
+    write(&game.join("Data").join("DeadMoney.esm"), b"dm");
+    let mods = dir.0.join("mods");
+    write(&mods.join("Gun.esp"), &plugin(&["FalloutNV.esm"]));
+    let plugins = dir.0.join("p").join("plugins.txt");
+    build(
+        &game,
+        std::slice::from_ref(&mods),
+        &dir.0.join("modgame"),
+        &plugins,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&plugins).unwrap(),
+        "DeadMoney.esm\r\nGun.esp\r\n"
     );
 }
 
@@ -210,7 +257,9 @@ fn each_failure_gets_its_own_words() {
     #[cfg(not(windows))]
     {
         assert_eq!(classify(Some(13), false), Failure::Denied);
-        assert_eq!(classify(Some(1), true), Failure::Denied);
+        // EPERM linking falls back to a symbolic link: failing both is NoLinks.
+        assert_eq!(classify(Some(1), true), Failure::NoLinks);
+        assert_eq!(classify(Some(1), false), Failure::Denied);
         assert_eq!(classify(Some(16), false), Failure::Locked);
         assert_eq!(classify(Some(28), false), Failure::Full);
         assert_eq!(classify(Some(2), false), Failure::Other);
@@ -701,10 +750,17 @@ fn the_games_data_folder_and_links_on_unix() {
     let game = dir.0.join("game");
     write(&game.join("FalloutNV.exe"), b"exe");
     write(&game.join("data").join("stray.txt"), b"stray");
-    write(&game.join("DATA").join("FalloutNV.esm"), b"esm");
-    assert_eq!(game_data(&game).unwrap(), game.join("DATA"));
+    // macOS's usual file system ignores case: one folder under three spellings, so the choice
+    // between them is checked only where they can differ.
+    let case_sensitive = !game.join("DATA").join("stray.txt").exists();
+    if case_sensitive {
+        write(&game.join("DATA").join("FalloutNV.esm"), b"esm");
+        assert_eq!(game_data(&game).unwrap(), game.join("DATA"));
+    }
     write(&game.join("Data").join("FalloutNV.esm"), b"exact");
-    assert_eq!(game_data(&game).unwrap(), game.join("Data"));
+    if case_sensitive {
+        assert_eq!(game_data(&game).unwrap(), game.join("Data"));
+    }
     std::os::unix::fs::symlink("FalloutNV.esm", game.join("Data").join("Alias.esm")).unwrap();
     std::fs::create_dir_all(game.join("Data").join("Loop")).unwrap();
     std::os::unix::fs::symlink("..", game.join("Data").join("Loop").join("up1")).unwrap();
@@ -847,15 +903,51 @@ fn the_guard_refuses_changes_outside() {
     use crate::fsops::{act, Guard, Op};
     let dir = Scratch::new("guard");
     let root = dir.0.join("root");
-    let game = root.join("game inside");
+    let game = dir.0.join("game");
     write(&game.join("g.txt"), b"game");
     write(&dir.0.join("outside.txt"), b"out");
     write(&root.join("mine.txt"), b"mine");
+    // Inside one another, either way round: no guard.
+    assert!(Guard::new(&root, &[root.join("game inside")], &[]).is_err());
+    assert!(Guard::new(&root, std::slice::from_ref(&dir.0), &[]).is_err());
+    // A file named to be written whole, but inside the game's folder: refused.
+    let in_game = game.join("named.txt");
+    let guard = Guard::new(
+        &root,
+        std::slice::from_ref(&game),
+        std::slice::from_ref(&in_game),
+    )
+    .unwrap();
+    assert!(act(
+        &guard,
+        Op::WriteWhole {
+            to: &in_game,
+            temporary: &game.join("named.part"),
+            bytes: b"x"
+        }
+    )
+    .is_err());
+    assert!(!in_game.exists() && !game.join("named.part").exists());
+    // A copy onto an existing name (here a hard link to the game's file) is refused, never
+    // written through.
+    let source = dir.0.join("source.txt");
+    write(&source, b"new");
+    std::fs::hard_link(game.join("g.txt"), root.join("linked.txt")).unwrap();
+    assert!(act(
+        &guard,
+        Op::Copy {
+            from: &source,
+            to: &root.join("linked.txt")
+        }
+    )
+    .is_err());
+    assert_eq!(std::fs::read(game.join("g.txt")).unwrap(), b"game");
     let guard = Guard::new(
         &root,
         std::slice::from_ref(&game),
         &[dir.0.join("allowed.txt")],
-    );
+    )
+    .unwrap();
     assert!(act(&guard, Op::RemoveName(&dir.0.join("outside.txt"))).is_err());
     assert!(act(&guard, Op::RemoveName(&game.join("g.txt"))).is_err());
     assert!(act(&guard, Op::RemoveName(&root.join("..").join("outside.txt"))).is_err());
@@ -891,19 +983,50 @@ fn the_guard_refuses_changes_outside() {
 /// call that removes, renames, copies or links a file is looked for outside it.
 #[test]
 fn only_fsops_changes_the_disk() {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let banned = [
         "remove_file(",
         "remove_dir(",
         "remove_dir_all(",
         "rename(",
         "fs::copy(",
+        "io::copy(",
         "fs::hard_link(",
         "fs::symlink(",
+        "symlink_file(",
+        "symlink_dir(",
         "fs::write(",
+        "File::create",
+        "OpenOptions",
+        "create_dir",
+        "set_permissions(",
+        "set_len(",
+        "set_times(",
+        "set_modified(",
+        "set_readonly(",
+        // An import could rename any of these: no `std::fs` or `std::os::*::fs` imports at all.
+        "use std::fs::",
+        "fs::{",
+        "::fs::*",
+        "unix::fs",
+        "windows::fs",
     ];
-    for entry in std::fs::read_dir(&src).unwrap() {
-        let path = entry.unwrap().path();
+    fn walk(folder: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(folder).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut files,
+    );
+    assert!(files.len() >= 4, "{files:?}");
+    for path in files {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         if name == "fsops.rs" || name == "tests.rs" {
             continue;
@@ -916,6 +1039,125 @@ fn only_fsops_changes_the_disk() {
             }
         }
     }
+}
+
+/// A leftover temporary name that is a hard link to a game file (on Linux and macOS also a
+/// symbolic link): never opened for writing, so the game's file is unchanged; the build removes
+/// the name and writes its own.
+#[test]
+fn a_link_at_a_temporary_name_never_leads_a_write() {
+    let dir = Scratch::new("part-link");
+    let game = game(&dir.0);
+    let esm = game.join("Data").join("FalloutNV.esm");
+    let mods = dir.0.join("mods");
+    write(&mods.join("Mine.esp"), &plugin(&["FalloutNV.esm"]));
+    let target = dir.0.join("modgame");
+    let plugins = dir.0.join("p").join("plugins.txt");
+    std::fs::create_dir_all(plugins.parent().unwrap()).unwrap();
+    let mut parts = vec![
+        (dir.0.join("modgame.nv-rs-state.part"), false),
+        (dir.0.join("p").join("plugins.txt.part"), false),
+    ];
+    if cfg!(unix) {
+        parts.push((dir.0.join("p").join("plugins.txt.part"), true));
+        parts.push((dir.0.join("modgame.nv-rs-state.part"), true));
+    }
+    for (part, symbolic) in parts {
+        let _ = std::fs::remove_file(&part);
+        if symbolic {
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&esm, &part).unwrap();
+        } else {
+            std::fs::hard_link(&esm, &part).unwrap();
+        }
+        // From nothing each time, so the record is written too.
+        let _ = std::fs::remove_file(state_path(&target));
+        build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap();
+        assert_eq!(std::fs::read(&esm).unwrap(), b"esm", "{}", part.display());
+        assert!(!part.exists(), "{}", part.display());
+        assert_eq!(std::fs::read_to_string(&plugins).unwrap(), "Mine.esp\r\n");
+    }
+}
+
+/// A folder deleted by hand inside the built folder, then its mod's file removed: nothing there
+/// to remove, the build goes on.
+#[test]
+fn a_folder_deleted_by_hand_is_skipped() {
+    let dir = Scratch::new("hand-deleted");
+    let game = game(&dir.0);
+    let mods = dir.0.join("mods");
+    let mesh = mods.join("meshes").join("m").join("x.nif");
+    write(&mesh, b"mesh");
+    write(&mods.join("textures").join("b.dds"), b"b");
+    let target = dir.0.join("modgame");
+    let plugins = dir.0.join("p").join("plugins.txt");
+    build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap();
+    std::fs::remove_dir_all(target.join("Data").join("meshes")).unwrap();
+    std::fs::remove_file(&mesh).unwrap();
+    let built = build(&game, std::slice::from_ref(&mods), &target, &plugins).unwrap();
+    assert_eq!(built.removed, 0, "{built:?}");
+    assert_eq!(
+        std::fs::read(target.join("Data").join("textures").join("b.dds")).unwrap(),
+        b"b"
+    );
+}
+
+/// Folders made with their way (the plugin list's, a missing layer) are never made inside the
+/// game's folder; a forbidden folder itself may be made when missing.
+#[test]
+fn makes_no_folder_in_the_game() {
+    use crate::fsops::{act, Guard, Op};
+    let dir = Scratch::new("make-all");
+    let game = game(&dir.0);
+    let layer = dir.0.join("mods");
+    let guard = Guard::new(&dir.0.join("modgame"), &[game.clone(), layer.clone()], &[]).unwrap();
+    assert!(act(&guard, Op::MakeDirAll(&game.join("Data").join("new"))).is_err());
+    assert!(!game.join("Data").join("new").exists());
+    act(&guard, Op::MakeDirAll(&layer)).unwrap();
+    act(&guard, Op::MakeDirAll(&dir.0.join("p").join("q"))).unwrap();
+    assert!(layer.is_dir() && dir.0.join("p").join("q").is_dir());
+}
+
+/// The real location of a path not there yet: its nearest existing folder's, with the rest after.
+#[test]
+fn a_missing_paths_real_location_starts_at_its_nearest_folder() {
+    let dir = Scratch::new("real");
+    let real = crate::fsops::real(&dir.0.join("missing").join("x"));
+    assert_eq!(
+        real,
+        std::fs::canonicalize(&dir.0)
+            .unwrap()
+            .join("missing")
+            .join("x")
+    );
+}
+
+/// The built folder inside the game's folder, the game's folder inside it, or a layer inside it:
+/// refused before anything is changed.
+#[test]
+fn folders_inside_one_another_are_refused() {
+    let dir = Scratch::new("nested");
+    let game = game(&dir.0);
+    let mods = dir.0.join("mods");
+    let plugins = dir.0.join("p").join("plugins.txt");
+    for (target, layer) in [
+        (game.join("modgame"), mods.clone()),
+        (dir.0.clone(), mods.clone()),
+        (dir.0.join("modgame"), dir.0.join("modgame").join("mods")),
+    ] {
+        let error = build(&game, std::slice::from_ref(&layer), &target, &plugins).unwrap_err();
+        assert!(
+            error.step.contains("inside one another"),
+            "{}: {error:?}",
+            target.display()
+        );
+    }
+    assert!(!game.join("modgame").exists());
+    assert!(!plugins.exists());
+    assert_eq!(
+        std::fs::read(game.join("Data").join("FalloutNV.esm")).unwrap(),
+        b"esm"
+    );
 }
 
 /// Linux and macOS: a hand-placed name with a tab and a line break cannot forge a record line:

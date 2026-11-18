@@ -1,6 +1,7 @@
 //! Every change this crate makes on disk goes through [`act`], and only there: a test reads the
-//! crate's source and fails if any other code removes, renames, copies or links a file
-//! (`only_fsops_changes_the_disk`). Two guards, both always on, for every change:
+//! crate's source and fails if any other code removes, renames, copies, links, makes a folder or
+//! opens a file for writing (`only_fsops_changes_the_disk`). Three rules, always on, for every
+//! change:
 //!
 //! - **Names** ([`valid_relative`]): a path the build acts on inside its folder is made of plain
 //!   parts only: no empty part, no `.` or `..`, no `\`, `:` or control character, nothing that is
@@ -9,7 +10,12 @@
 //!   the folder it happens in must be inside the guard's own folder's real location, and outside
 //!   the game's folder and every folder the guard forbids. Otherwise nothing is changed and the
 //!   build stops in words. The few files outside the folder this may write (the record beside it,
-//!   the plugin list) are named in the guard exactly.
+//!   the plugin list) are named in the guard exactly, and their folder too must be outside every
+//!   forbidden folder. A guard whose folder and a forbidden folder are inside one another, either
+//!   way round, is refused when it is made.
+//! - **Fresh names only**: no existing name is ever opened for writing. A file is written or copied
+//!   under a name just removed (as a name, never followed) and made new (`create_new`, which also
+//!   refuses a link left at that name), so a link at that name never leads a write anywhere.
 //!
 //! What remains is a race with another program changing folders between the check and the change
 //! (a hostile local process); that is accepted and not guarded against.
@@ -25,13 +31,17 @@ pub enum Op<'a> {
     RemoveTree(&'a Path),
     /// Make one folder (its parent must exist).
     MakeDir(&'a Path),
+    /// Make a folder and the folders missing on its way, outside every forbidden folder (a
+    /// forbidden folder itself may be made when missing: it is then empty).
+    MakeDirAll(&'a Path),
     /// A hard link `to` naming the file `from`.
     HardLink { from: &'a Path, to: &'a Path },
     /// A symbolic link `to` leading to `from` (Linux and macOS).
     Symlink { from: &'a Path, to: &'a Path },
-    /// A copy of `from` as `to`.
+    /// A copy of `from` as the new name `to` (its time of change kept: the game orders plugins by
+    /// it).
     Copy { from: &'a Path, to: &'a Path },
-    /// A file written whole: under `temporary`, synced, renamed over `to`.
+    /// A file written whole: under `temporary` (made new), synced, renamed over `to`.
     WriteWhole {
         to: &'a Path,
         temporary: &'a Path,
@@ -48,29 +58,83 @@ pub struct Guard {
     root_given: PathBuf,
     /// Real locations no change may happen inside (the game's folder, the layers).
     forbidden: Vec<PathBuf>,
+    /// The same, as given (learnt again by [`Guard::settle`]).
+    forbidden_given: Vec<PathBuf>,
     /// Files outside the root that may be written whole (exact paths).
     extra: Vec<PathBuf>,
 }
 
-fn real(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+/// The real location of `path`: its nearest existing folder's, links resolved, with the rest of
+/// the path (not there yet) after it.
+pub fn real(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(found) = std::fs::canonicalize(at) {
+            let mut out = found;
+            for part in rest.iter().rev() {
+                out.push(part);
+            }
+            return out;
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name.to_os_string());
+                at = if parent.as_os_str().is_empty() {
+                    Path::new(".")
+                } else {
+                    parent
+                };
+            }
+            _ => return path.to_path_buf(),
+        }
+    }
 }
 
 impl Guard {
     /// A guard for changes inside `root` (which must be a plain folder by the first change made
-    /// in it), never inside any of `forbidden`; `extra` files may also be written whole.
-    pub fn new(root: &Path, forbidden: &[PathBuf], extra: &[PathBuf]) -> Self {
-        Self {
-            root: real(root),
+    /// in it), never inside any of `forbidden`; `extra` files may also be written whole. Refused
+    /// when `root` and a forbidden folder are inside one another, either way round.
+    pub fn new(root: &Path, forbidden: &[PathBuf], extra: &[PathBuf]) -> Result<Self, String> {
+        let mut guard = Self {
+            root: PathBuf::new(),
             root_given: root.to_path_buf(),
-            forbidden: forbidden.iter().map(|p| real(p)).collect(),
+            forbidden: Vec::new(),
+            forbidden_given: forbidden.to_vec(),
             extra: extra.to_vec(),
-        }
+        };
+        guard.settle()?;
+        Ok(guard)
     }
 
-    /// Learns the root's real location again (after it was made).
-    pub fn settle(&mut self) {
+    /// Learns the real locations again (after the root or a forbidden folder was made), with the
+    /// same refusal as [`Guard::new`].
+    pub fn settle(&mut self) -> Result<(), String> {
         self.root = real(&self.root_given);
+        self.forbidden = self.forbidden_given.iter().map(|p| real(p)).collect();
+        for no in &self.forbidden {
+            if self.root.starts_with(no) || no.starts_with(&self.root) {
+                return Err(format!(
+                    "{} and {} are inside one another",
+                    self.root.display(),
+                    no.display()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the real location `place` is outside every forbidden folder.
+    fn outside_forbidden(&self, place: &Path) -> Result<(), String> {
+        for no in &self.forbidden {
+            if place.starts_with(no) {
+                return Err(format!(
+                    "{} is inside the game's or a mod's own folder",
+                    place.display()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Whether `path`'s folder is, really, inside the root and outside every forbidden folder.
@@ -86,15 +150,7 @@ impl Guard {
                 self.root.display()
             ));
         }
-        for no in &self.forbidden {
-            if place.starts_with(no) {
-                return Err(format!(
-                    "{} is inside the game's or a mod's own folder",
-                    place.display()
-                ));
-            }
-        }
-        Ok(())
+        self.outside_forbidden(&place)
     }
 }
 
@@ -120,6 +176,22 @@ pub fn valid_part(part: &str) -> bool {
 
 fn refused(why: String) -> std::io::Error {
     std::io::Error::other(format!("refused: {why}"))
+}
+
+/// Removes the name `path` (a file or a link, never followed); gone already is fine.
+fn remove_name(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+/// Opens `path` as a new file: an existing name (a link too) is refused, never opened.
+fn create_new(path: &Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
 }
 
 /// Makes the change `op` after the guards (see the module's text).
@@ -148,17 +220,22 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
         }
         Op::RemoveName(path) => {
             guard.allows(path).map_err(refused)?;
-            match std::fs::remove_file(path) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                other => other,
-            }
+            remove_name(path)
         }
         Op::MakeDir(path) => {
             if path == guard.root_given {
+                // Checked against every forbidden folder, either way round, by the guard.
                 return std::fs::create_dir_all(path);
             }
             guard.allows(path).map_err(refused)?;
             std::fs::create_dir(path)
+        }
+        Op::MakeDirAll(path) => {
+            let place = real(path);
+            if !guard.forbidden.contains(&place) {
+                guard.outside_forbidden(&place).map_err(refused)?;
+            }
+            std::fs::create_dir_all(path)
         }
         Op::HardLink { from, to } => {
             guard.allows(to).map_err(refused)?;
@@ -180,18 +257,31 @@ pub fn act(guard: &Guard, op: Op) -> std::io::Result<()> {
         }
         Op::Copy { from, to } => {
             guard.allows(to).map_err(refused)?;
-            std::fs::copy(from, to).map(|_| ())
+            let mut source = std::fs::File::open(from)?;
+            let changed = source.metadata()?.modified();
+            let mut file = create_new(to)?;
+            std::io::copy(&mut source, &mut file)?;
+            if let Ok(changed) = changed {
+                file.set_modified(changed)?;
+            }
+            Ok(())
         }
         Op::WriteWhole {
             to,
             temporary,
             bytes,
         } => {
-            if !guard.extra.iter().any(|e| e == to) || temporary.parent() != to.parent() {
+            let folder = to.parent();
+            if !guard.extra.iter().any(|e| e == to) || temporary.parent() != folder {
                 return Err(refused(format!("{} may not be written", to.display())));
             }
+            let Some(folder) = folder else {
+                return Err(refused(format!("{} has no folder", to.display())));
+            };
+            guard.outside_forbidden(&real(folder)).map_err(refused)?;
             use std::io::Write;
-            let mut file = std::fs::File::create(temporary)?;
+            remove_name(temporary)?;
+            let mut file = create_new(temporary)?;
             file.write_all(bytes)?;
             file.sync_all()?;
             drop(file);

@@ -32,8 +32,9 @@
 //!   whole (a temporary name, synced, renamed over). A start with the same game and layers reads
 //!   the folders' entries (their own sizes and times; a link is resolved only where there is one),
 //!   finds everything the same and touches nothing, not even the record: 0.43 s for 100,000 mod
-//!   files on the maintainer's PC (a release build; the first build, 100,000 hard links, about a
-//!   minute). A changed file is relinked alone; a name no longer wanted is removed. A record that
+//!   files on the maintainer's Windows PC (a release build; the first build, 100,000 hard links,
+//!   about a minute; on Linux and macOS each file's own times are read too, not yet measured).
+//!   A name removed by hand (or a folder) is skipped when its source goes. A changed file is relinked alone; a name no longer wanted is removed. A record that
 //!   is not whole, or names anything but plain names under `Data/` or one top-level file, is not
 //!   trusted: the folder is made again from nothing. A name removed by hand from the folder is
 //!   not noticed while its source is unchanged (delete the folder to make it again): looking at
@@ -47,7 +48,8 @@
 //!
 //! The plugin list: the loose `mods` folder's own `plugins.txt` when there is one, with the
 //! installed mods' plugins it does not name added after it (and said: [`Built::added_plugins`]),
-//! else [`plugin_list`] of every layer's top-level plugins.
+//! else [`plugin_list`] of every layer's top-level plugins, starting with every official master
+//! (the DLC, Gun Runners' Arsenal, the pre-order packs) in the folder, so none is switched off.
 //!
 //! # Limits
 //!
@@ -94,9 +96,11 @@ pub fn masters(file: &[u8]) -> Vec<String> {
     out
 }
 
-/// The plugin list for these mod plugins: the official masters they name, their `.esm`, their
-/// `.esp` (the game orders the load by file date; this only says which are on).
-pub fn plugin_list(plugins: &[(String, Vec<u8>)]) -> String {
+/// The plugin list for these mod plugins: every official master `present` in the game's Data
+/// (names in lower case) or named by a mod, in the official order (so the DLC stay on whatever
+/// the mods name); then the mods' `.esm`, then their `.esp` (the game orders the load by file
+/// date; this only says which are on).
+pub fn plugin_list(present: &BTreeSet<String>, plugins: &[(String, Vec<u8>)]) -> String {
     let needed: BTreeSet<String> = plugins
         .iter()
         .flat_map(|(_, header)| masters(header))
@@ -105,13 +109,20 @@ pub fn plugin_list(plugins: &[(String, Vec<u8>)]) -> String {
     let mut names: Vec<&str> = OFFICIAL
         .iter()
         .copied()
-        .filter(|m| needed.contains(&m.to_ascii_lowercase()))
+        .filter(|m| {
+            let m = m.to_ascii_lowercase();
+            present.contains(&m) || needed.contains(&m)
+        })
         .collect();
+    let official: BTreeSet<String> = names.iter().map(|n| n.to_ascii_lowercase()).collect();
     let by_ext = |ext: &str| -> Vec<&str> {
         let mut v: Vec<&str> = plugins
             .iter()
             .map(|(n, _)| n.as_str())
-            .filter(|n| n.to_ascii_lowercase().ends_with(ext))
+            .filter(|n| {
+                let n = n.to_ascii_lowercase();
+                n.ends_with(ext) && !official.contains(&n)
+            })
             .collect();
         v.sort_by_key(|n| n.to_ascii_lowercase());
         v
@@ -653,13 +664,14 @@ fn header(path: &Path, limit: u64) -> std::io::Result<Vec<u8>> {
 }
 
 /// The path of the valid name `relative` under `target`, each of its folders checked to be a
-/// plain folder (never a link); with `make`, the folders missing are made (through [`act`]).
+/// plain folder (never a link); with `make`, the folders missing are made (through [`act`]);
+/// without, `None` when one is missing (nothing is there).
 fn plain_folders(
     guard: &Guard,
     target: &Path,
     relative: &str,
     make: bool,
-) -> std::io::Result<PathBuf> {
+) -> std::io::Result<Option<PathBuf>> {
     if !fsops::valid_relative(relative) {
         return Err(other(format!("{relative:?} is not a plain name")));
     }
@@ -678,13 +690,20 @@ fn plain_folders(
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && make => {
                 act(guard, Op::MakeDir(&at))?
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(at.join(parts[parts.len() - 1]))
-            }
+            // A folder on the way gone (removed by hand): nothing there to remove.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(e) => return Err(e),
         }
     }
-    Ok(at.join(parts[parts.len() - 1]))
+    Ok(Some(at.join(parts[parts.len() - 1])))
+}
+
+/// The failure of the step `what` on `path`, in words.
+fn describe(what: &str, path: &Path, e: std::io::Error) -> ModError {
+    ModError {
+        kind: classify(e.raw_os_error(), what == "linking"),
+        step: format!("{what} {}: {e}", path.display()),
+    }
 }
 
 /// Makes `target` from the game's folder `game` and the `layers` over it (see the module's text),
@@ -707,19 +726,20 @@ pub fn build_with(
     caps: Caps,
     linker: &dyn Linker,
 ) -> Result<Built, ModError> {
-    let describe = |what: &str, path: &Path, e: std::io::Error| ModError {
-        kind: classify(e.raw_os_error(), what == "linking"),
-        step: format!("{what} {}: {e}", path.display()),
-    };
     let state = state_path(target);
     let state_part = state_temporary(target);
     let mut forbidden = vec![game.to_path_buf()];
     forbidden.extend(layers.iter().cloned());
+    let refusal = |why: String| ModError {
+        kind: Failure::Other,
+        step: format!("refused: {why}"),
+    };
     let mut guard = Guard::new(
         target,
         &forbidden,
         &[state.clone(), plugins_txt.to_path_buf()],
-    );
+    )
+    .map_err(refusal)?;
     // What the folder should hold.
     let mut wanted = Wanted::default();
     for entry in sorted_entries(game).map_err(|e| describe("reading", game, e))? {
@@ -752,7 +772,9 @@ pub fn build_with(
     let mut layer_plugins: Vec<Vec<(String, PathBuf)>> = Vec::new();
     for layer in layers {
         if !layer.exists() {
-            std::fs::create_dir_all(layer).map_err(|e| describe("making", layer, e))?;
+            act(&guard, Op::MakeDirAll(layer)).map_err(|e| describe("making", layer, e))?;
+            // Its real location learnt now it is there: the guard is never weaker.
+            guard.settle().map_err(refusal)?;
         }
         let mut plugins = Vec::new();
         let mut layer_count = 0usize;
@@ -769,6 +791,12 @@ pub fn build_with(
         layer_plugins.push(plugins);
     }
     built.skipped = std::mem::take(&mut wanted.skipped);
+    // The official masters in the folder (the game's own, or a mod's copy): kept on.
+    let present: BTreeSet<String> = OFFICIAL
+        .iter()
+        .map(|m| m.to_ascii_lowercase())
+        .filter(|m| wanted.files.contains_key(&key_of(&format!("Data/{m}"))))
+        .collect();
     for (spelled, s) in wanted.files.values() {
         if !s.game {
             built.mod_files += 1;
@@ -796,7 +824,7 @@ pub fn build_with(
         act(&guard, Op::RemoveTree(target)).map_err(|e| describe("removing", target, e))?;
     }
     act(&guard, Op::MakeDir(target)).map_err(|e| describe("making", target, e))?;
-    guard.settle();
+    guard.settle().map_err(refusal)?;
     // What changes: names gone, and names new, changed or missing.
     let gone: Vec<&String> = previous
         .iter()
@@ -816,6 +844,7 @@ pub fn build_with(
         // Unchanged: the folder and its record are left as they are.
         write_plugins(
             &guard,
+            &present,
             plugins_txt,
             &layer_plugins,
             caps,
@@ -823,33 +852,41 @@ pub fn build_with(
                 .last()
                 .and_then(|l| std::fs::read(l.join("plugins.txt")).ok()),
             &mut built,
-            &describe,
         )?;
         return Ok(built);
     }
     // The record goes first: a build stopped part-way is made again from nothing next time.
     match std::fs::symlink_metadata(&state) {
-        Ok(_) => act(&guard_for_state(&state), Op::RemoveName(&state))
-            .map_err(|e| describe("removing", &state, e))?,
+        Ok(_) => act(
+            &guard_for_state(&state).map_err(refusal)?,
+            Op::RemoveName(&state),
+        )
+        .map_err(|e| describe("removing", &state, e))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(describe("removing", &state, e)),
     }
     for spelled in gone {
-        let path = plain_folders(&guard, target, spelled, false)
-            .map_err(|e| describe("removing", target, e))?;
+        let Some(path) = plain_folders(&guard, target, spelled, false)
+            .map_err(|e| describe("removing", target, e))?
+        else {
+            continue;
+        };
         act(&guard, Op::RemoveName(&path)).map_err(|e| describe("removing", &path, e))?;
         built.removed += 1;
     }
     for key in redo {
         let (spelled, s) = &wanted.files[key];
         if let Some((old_spelled, _)) = previous.get(key) {
-            let old = plain_folders(&guard, target, old_spelled, false)
-                .map_err(|e| describe("replacing", target, e))?;
-            act(&guard, Op::RemoveName(&old)).map_err(|e| describe("replacing", &old, e))?;
-            built.removed += 1;
+            if let Some(old) = plain_folders(&guard, target, old_spelled, false)
+                .map_err(|e| describe("replacing", target, e))?
+            {
+                act(&guard, Op::RemoveName(&old)).map_err(|e| describe("replacing", &old, e))?;
+                built.removed += 1;
+            }
         }
         let to = plain_folders(&guard, target, spelled, true)
-            .map_err(|e| describe("making", target, e))?;
+            .map_err(|e| describe("making", target, e))?
+            .ok_or_else(|| describe("making", target, other("a folder vanished".into())))?;
         // The name goes first: making it again never writes into what was there.
         act(&guard, Op::RemoveName(&to)).map_err(|e| describe("replacing", &to, e))?;
         if s.game {
@@ -881,6 +918,7 @@ pub fn build_with(
     .map_err(|e| describe("writing", &state, e))?;
     write_plugins(
         &guard,
+        &present,
         plugins_txt,
         &layer_plugins,
         caps,
@@ -888,25 +926,24 @@ pub fn build_with(
             .last()
             .and_then(|l| std::fs::read(l.join("plugins.txt")).ok()),
         &mut built,
-        &describe,
     )?;
     Ok(built)
 }
 
 /// A guard that may remove only the record beside the folder.
-fn guard_for_state(state: &Path) -> Guard {
+fn guard_for_state(state: &Path) -> Result<Guard, String> {
     Guard::new(state.parent().unwrap_or(state), &[], &[])
 }
 
 /// The plugin list (see the module's text), written whole.
 fn write_plugins(
     guard: &Guard,
+    present: &BTreeSet<String>,
     plugins_txt: &Path,
     layer_plugins: &[Vec<(String, PathBuf)>],
     caps: Caps,
     own_list: Option<Vec<u8>>,
     built: &mut Built,
-    describe: &dyn Fn(&str, &Path, std::io::Error) -> ModError,
 ) -> Result<(), ModError> {
     let headers = |plugins: &[(String, PathBuf)]| -> Result<Vec<(String, Vec<u8>)>, ModError> {
         plugins
@@ -938,7 +975,7 @@ fn write_plugins(
                     .filter(|(n, _)| !named.contains(&n.to_lowercase()))
                     .collect();
             if !installed.is_empty() {
-                let extra = plugin_list(&headers(&installed)?);
+                let extra = plugin_list(&BTreeSet::new(), &headers(&installed)?);
                 for name in extra.lines() {
                     if named.contains(&name.to_lowercase()) {
                         continue;
@@ -953,12 +990,12 @@ fn write_plugins(
             }
             own
         }
-        None => plugin_list(&headers(&by_name(layer_plugins))?).into_bytes(),
+        None => plugin_list(present, &headers(&by_name(layer_plugins))?).into_bytes(),
     };
     let mut temporary = plugins_txt.as_os_str().to_os_string();
     temporary.push(".part");
     if let Some(parent) = plugins_txt.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| describe("making", parent, e))?;
+        act(guard, Op::MakeDirAll(parent)).map_err(|e| describe("making", parent, e))?;
     }
     act(
         guard,
