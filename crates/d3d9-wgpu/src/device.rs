@@ -14,6 +14,7 @@ use crate::ffp;
 use crate::format::{self, d3dfmt, Format};
 use crate::frame_rate;
 use crate::fxhash::Map;
+use crate::gpu_times::{self, GpuTimes, Kind};
 use crate::loading;
 use crate::prepare;
 use crate::scene_light;
@@ -238,6 +239,8 @@ struct State {
     fvf: Option<u32>,
     /// The handles the bindings were last set from ([`Bound`]).
     bound: Bound,
+    /// ATI's alpha to coverage switch ([`A2M1`]): on after `A2M1`, off after `A2M0`.
+    a2m1: bool,
 }
 
 /// A handle no binding holds: the object at a handle may have changed since it was bound
@@ -316,7 +319,7 @@ struct PipeKey {
     /// Whether each of the shaders' samplers ([`Device::sampler_bindings`], in order) filters:
     /// with the two shaders, what the bind group's layout is made from.
     filterable: u32,
-    /// NVIDIA's alpha to coverage in place of the alpha test ([`ATOC`]).
+    /// Alpha to coverage in place of the alpha test (NVIDIA's [`ATOC`] or ATI's [`A2M1`]).
     atoc: bool,
     /// The pass has the occlusion count's target.
     count: bool,
@@ -666,7 +669,21 @@ const PIPELINE_STATES: [usize; 30] = [
 /// GREATEREQUAL and ALWAYS cover from the alpha, and NEVER, LESS, EQUAL and LESSEQUAL draw
 /// nothing. Which samples another vendor's hardware covers for an alpha is its own.
 const ATOC: u32 = u32::from_le_bytes(*b"ATOC");
-/// `D3DRS_CLIPPING` and `D3DRS_ADAPTIVETESS_Y`.
+/// `D3DRS_POINTSIZE` set to `MAKEFOURCC('A','2','M','1')` / `('A','2','M','0')`: ATI's Direct3D 9
+/// driver's switch for the same alpha to coverage, on and off. The game sends it instead of
+/// [`ATOC`] when its renderer took the ATI path (the driver's name starts "ati": vendor word 2 in
+/// its shader setup, `00b4f710`; the switch itself in `00b98540`, which sends `A2M0` + 0x1000000
+/// for on, else `A2M0`). The game turns it on only together with the alpha test (`00b9a120`,
+/// `RenderBatches` 00b99f6c, and per pass in `RenderPassImmediately` 00b99541, from the alpha
+/// property's alpha test bit), so it is taken here exactly as [`ATOC`]: coverage from the alpha
+/// while the alpha test is on and the target is multisampled, the alpha test itself off. The two
+/// values are a switch the driver keeps, not a point size: the point size keeps its value, and any
+/// other `D3DRS_POINTSIZE` value leaves the switch as it is. What ATI's own driver does with the
+/// switch on and the alpha test off is not measured here (the game never asks it).
+const A2M1: u32 = u32::from_le_bytes(*b"A2M1");
+const A2M0: u32 = u32::from_le_bytes(*b"A2M0");
+/// `D3DRS_POINTSIZE`, `D3DRS_CLIPPING` and `D3DRS_ADAPTIVETESS_Y`.
+const RS_POINTSIZE: usize = 154;
 const RS_CLIPPING: usize = 136;
 const RS_ADAPTIVETESS_Y: usize = 181;
 /// `D3DRS_SPECULARENABLE` and `D3DRS_TEXTUREFACTOR`, read by the fixed-function pixel shader
@@ -719,6 +736,29 @@ const BLOCK: u64 = wgsl::REGS_SIZE.div_ceil(256) * 256;
 /// The ring of uniform blocks and `DrawPrimitiveUP` vertices sent with each batch.
 const RING: u64 = 32 << 20;
 const UP_RING: u64 = 8 << 20;
+
+/// The register ring's room: [`RING`], or less for a test ([`ring_room_for_tests`]).
+fn ring_room() -> u64 {
+    match RING_ROOM_FOR_TESTS.load(Ordering::Relaxed) {
+        0 => RING,
+        n => n.min(RING),
+    }
+}
+
+/// Tests only: the register ring's room in bytes (0: [`RING`]).
+static RING_ROOM_FOR_TESTS: AtomicU64 = AtomicU64::new(0);
+
+/// Tests only: [`RING_ROOM_FOR_TESTS`] (0: the whole ring).
+#[doc(hidden)]
+pub fn ring_room_for_tests(bytes: u64) {
+    RING_ROOM_FOR_TESTS.store(bytes, Ordering::Relaxed);
+}
+
+/// The room one stage's register block takes in the ring, at most (tests).
+#[doc(hidden)]
+pub fn register_block_for_tests() -> u64 {
+    BLOCK
+}
 /// The upload stage: buffer uploads into buffers the open batch draws from, copied in among the
 /// batch's commands ([`Device::upload_buffer`]).
 const STAGE: u64 = 8 << 20;
@@ -743,14 +783,29 @@ pub struct Device {
     st: State,
     encoder: Option<wgpu::CommandEncoder>,
     /// The batch's earlier encoders, in order: finished on the finishing threads (or here), their
-    /// command buffers sent with the batch before the open encoder's ([`Device::send_encoder`]).
-    finishing: Vec<Finishing>,
+    /// command buffers sent with the batch before the open encoder's ([`Device::send_encoder`]),
+    /// each with its [`Device::encoder`] uses.
+    finishing: Vec<(Finishing, u32)>,
     finisher: Option<Finisher>,
     /// The queue thread: every submit, present and queue write in order ([`Device::flush`],
     /// [`Device::on_queue`]); none where there are no finishing threads.
     submitter: Option<Submitter>,
     /// Draws recorded into the open encoder.
     encoder_draws: u32,
+    /// The card's own times by kind (`NV_WGPU_GPU_TIMES`, [`crate::gpu_times`]); none when off.
+    gpu_times: Option<GpuTimes>,
+    /// The open pass's timed pair and whether a clear began it; its draws (a pass that only
+    /// cleared counts as clears).
+    timed_pass: Option<(u32, bool)>,
+    pass_draws: u32,
+    /// Batches sent because the register ring was full ([`Device::make_ring_room`]).
+    ring_sends: u64,
+    /// Passes begun and commands recorded straight into the open encoder ([`Device::encoder`]).
+    encoder_uses: u32,
+    /// The open batch's uses, its earlier encoders' too ([`Device::bound_batch`]).
+    batch_uses: u32,
+    /// What the batches' submits carried ([`submit_in_parts`]).
+    submits: Arc<Submits>,
     pass: Option<wgpu::RenderPass<'static>>,
     pass_targets: Option<Targets>,
     batch: u64,
@@ -1457,7 +1512,11 @@ impl Device {
         let finisher = if NO_QUEUE_THREADS_FOR_TESTS.load(Ordering::Relaxed) {
             None
         } else {
-            Finisher::for_this_machine()
+            Finisher::for_this_machine().or_else(|| {
+                FORCE_QUEUE_THREADS_FOR_TESTS
+                    .load(Ordering::Relaxed)
+                    .then(|| Finisher::new(1))
+            })
         };
         let submitter = finisher.as_ref().map(|_| Submitter::new(queue.clone()));
         let mut d = Device {
@@ -1494,12 +1553,20 @@ impl Device {
                 tss: Box::new(ffp::default_stage_states()),
                 fvf: None,
                 bound: Bound::default(),
+                a2m1: false,
             },
             encoder: None,
             finishing: Vec::new(),
             finisher,
             submitter,
             encoder_draws: 0,
+            gpu_times: None,
+            timed_pass: None,
+            pass_draws: 0,
+            ring_sends: 0,
+            encoder_uses: 0,
+            batch_uses: 0,
+            submits: Arc::default(),
             pass: None,
             pass_targets: None,
             batch: 1,
@@ -1603,6 +1670,20 @@ impl Device {
             sun_failed: HashSet::new(),
             sun_caster_layout: None,
         };
+        // The card's times when asked for (`NV_WGPU_GPU_TIMES`): none where the driver has no
+        // timestamps (said once).
+        if gpu_times::enabled() {
+            match GpuTimes::new(&d.device, &d.queue) {
+                Ok(t) => {
+                    eprintln!(
+                        "NV_D3D9 wgpu: GPU times on (NV_WGPU_GPU_TIMES): a line every 5 s{}",
+                        if t.inside() { "" } else { ", passes only" }
+                    );
+                    d.gpu_times = Some(t);
+                }
+                Err(why) => eprintln!("NV_D3D9 wgpu: {why}"),
+            }
+        }
         // The sun shadows: their maps and light list only when on for this device.
         if sun_shadow::enabled() {
             d.sun = Some(Box::new(SunState::new(&d.device)));
@@ -2178,6 +2259,35 @@ impl Device {
         }
     }
 
+    /// Whether the adapter can time passes (tests: the times are then on when asked for).
+    pub fn adapter_has_timestamps(&self) -> bool {
+        self.adapter
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY)
+    }
+
+    /// Whether the device itself has the timestamp features ([`crate::gpu_times`] asks for them only
+    /// when on): `TIMESTAMP_QUERY` and `TIMESTAMP_QUERY_INSIDE_ENCODERS` (tests).
+    pub fn timestamp_features(&self) -> (bool, bool) {
+        let f = self.device.features();
+        (
+            f.contains(wgpu::Features::TIMESTAMP_QUERY),
+            f.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+        )
+    }
+
+    /// Whether the card's times are on for this device (`NV_WGPU_GPU_TIMES`, tests).
+    pub fn gpu_times_on(&self) -> bool {
+        self.gpu_times.is_some()
+    }
+
+    /// The card's times so far, after the queue thread has run what it was handed (tests); none
+    /// when off.
+    pub fn gpu_time_totals(&mut self) -> Option<gpu_times::Totals> {
+        self.sync();
+        self.gpu_times.as_mut().map(GpuTimes::totals)
+    }
+
     /// How many bind groups are cached (tests).
     pub fn cached_bind_groups(&self) -> usize {
         self.groups.len()
@@ -2187,11 +2297,63 @@ impl Device {
     /// the queue thread ([`Submitter`]) the batch is handed to it whole, and this thread goes on
     /// recording the next one into a fresh register ring, UP vertices and upload stage while it is
     /// finished and submitted (in order with every other queue operation).
+    /// With the card's times on, the batch's timestamps are resolved at the end of its last
+    /// encoder and read once it is submitted ([`crate::gpu_times`]). A batch whose last encoder
+    /// already went to a finishing thread keeps its timestamps in the open set, resolved with a
+    /// later batch's: the times add no command buffer of their own.
     fn flush(&mut self) {
+        self.end_pass();
+        let read = match self.gpu_times.take() {
+            Some(mut t) => {
+                let read = if !t.pending() {
+                    t.end_empty_batch();
+                    None
+                } else if self.encoder.is_some() {
+                    t.end_batch(self.timing_encoder())
+                } else {
+                    None
+                };
+                self.gpu_times = Some(t);
+                read
+            }
+            None => None,
+        };
+        self.send_batch();
+        if let Some((buffer, state)) = read {
+            self.on_queue(move |_| gpu_times::map(buffer, state));
+        }
+    }
+
+    /// [`Device::flush`]'s batch handed over (or submitted here).
+    fn send_batch(&mut self) {
         self.end_pass();
         let finishing = std::mem::take(&mut self.finishing);
         let encoder = self.encoder.take();
+        let uses: Vec<u32> = finishing
+            .iter()
+            .map(|f| f.1)
+            .chain(encoder.as_ref().map(|_| self.encoder_uses))
+            .collect();
+        let finishing: Vec<Finishing> = finishing.into_iter().map(|f| f.0).collect();
+        let parts = submit_parts(&uses);
+        self.submits
+            .encoders
+            .fetch_add(uses.len() as u64, Ordering::Relaxed);
+        self.submits
+            .most_batch
+            .fetch_max(self.batch_uses, Ordering::Relaxed);
+        let handed = self
+            .submits
+            .batch_uses
+            .fetch_add(u64::from(self.batch_uses), Ordering::Relaxed)
+            + u64::from(self.batch_uses);
+        let pending = handed.saturating_sub(self.submits.uses.load(Ordering::Relaxed));
+        self.submits
+            .most_pending
+            .fetch_max(pending, Ordering::Relaxed);
         self.encoder_draws = 0;
+        self.encoder_uses = 0;
+        self.batch_uses = 0;
         self.batch += 1;
         self.st.dirty = [true; 2];
         let Some(s) = &self.submitter else {
@@ -2206,9 +2368,7 @@ impl Device {
                 }
             }
             let buffers = finish_batch(finishing, encoder);
-            if !buffers.is_empty() {
-                self.queue.submit(buffers);
-            }
+            submit_in_parts(&self.queue, buffers, &parts, &self.submits);
             return;
         };
         s.raise_failure();
@@ -2228,6 +2388,7 @@ impl Device {
             self.stage_buffer.clone(),
         ];
         let pool = Arc::clone(&s.pool);
+        let submits = Arc::clone(&self.submits);
         s.send(Box::new(move |queue: &wgpu::Queue| {
             let delay = SUBMIT_DELAY_FOR_TESTS.load(Ordering::Relaxed);
             if delay > 0 {
@@ -2243,10 +2404,7 @@ impl Device {
                     b.clear();
                 }
             }
-            let buffers = finish_batch(finishing, encoder);
-            if !buffers.is_empty() {
-                queue.submit(buffers);
-            }
+            submit_in_parts(queue, finish_batch(finishing, encoder), &parts, &submits);
             pool.lock().unwrap_or_else(|e| e.into_inner()).push(bytes);
         }));
     }
@@ -2387,6 +2545,7 @@ impl Device {
             let at = self.stage.len() as u64;
             self.stage.extend_from_slice(&shadow[start..end]);
             let stage = self.stage_buffer.clone();
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_buffer_to_buffer(
                 &stage,
                 at,
@@ -2394,6 +2553,7 @@ impl Device {
                 start as u64,
                 (end - start) as u64,
             );
+            self.span_end(copy_span);
             return;
         }
         if in_batch {
@@ -2491,7 +2651,9 @@ impl Device {
         let present = self.presents + 1;
         let mut watch = std::mem::take(&mut self.hdr_watch);
         let key = kept.then_some((tex.id, s.id));
+        let span = self.span_begin(Kind::Hdr);
         watch.read(&device, self.encoder(), &view, target, present, what, key);
+        self.span_end(span);
         self.hdr_watch = watch;
     }
 
@@ -2564,6 +2726,15 @@ impl Device {
     }
 
     pub(crate) fn set_render_state(&mut self, state: u32, value: u32) {
+        // ATI's alpha to coverage switch: kept apart, the point size as it was ([`A2M1`]).
+        if state as usize == RS_POINTSIZE && (value == A2M1 || value == A2M0) {
+            let on = value == A2M1;
+            if self.st.a2m1 != on {
+                self.st.a2m1 = on;
+                self.st.touch(1);
+            }
+            return;
+        }
         // A state set to the value it has changes nothing (the game sets many again each draw).
         let Some(s) = self.st.rs.get_mut(state as usize) else {
             return;
@@ -2786,7 +2957,28 @@ impl Device {
 
     // Passes.
 
+    /// The open encoder, for a pass or a command recorded straight into it (one use). An encoder
+    /// that has taken [`SPLIT_USES`] goes with the batch's earlier ones first (between passes)
+    /// and a new one takes the rest, so that no submit carries more than [`SUBMIT_USES`]
+    /// ([`submit_parts`]).
     fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
+        if self.encoder_uses >= SPLIT_USES && self.pass.is_none() {
+            self.cut_encoder();
+        }
+        self.encoder_uses += 1;
+        self.batch_uses += 1;
+        self.encoder.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
+        })
+    }
+
+    /// The open encoder for the card's timestamps and their resolve ([`crate::gpu_times`]): not a
+    /// use, and never cut here, so the times on send no batch early ([`Device::bound_batch`]) and
+    /// cut no encoder where the times off would not. A timestamp goes in the run of commands next
+    /// to it (the copy it times) or at worst makes one more small command buffer: at most two a
+    /// timed stretch, well inside the room [`SUBMIT_USES`] leaves.
+    fn timing_encoder(&mut self) -> &mut wgpu::CommandEncoder {
         self.encoder.get_or_insert_with(|| {
             self.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
@@ -2797,18 +2989,95 @@ impl Device {
     /// batch after the encoders before it ([`Device::flush`]).
     fn send_encoder(&mut self) {
         self.end_pass();
+        self.cut_encoder();
+    }
+
+    /// [`Device::send_encoder`] when no pass is open.
+    fn cut_encoder(&mut self) {
         if let Some(e) = self.encoder.take() {
-            self.finishing.push(match &self.finisher {
+            let f = match &self.finisher {
                 Some(f) => f.send(e),
                 None => Finishing::Ready(e.finish()),
-            });
+            };
+            self.finishing.push((f, self.encoder_uses));
         }
         self.encoder_draws = 0;
+        self.encoder_uses = 0;
+    }
+
+    /// Before each command ([`crate::WgpuBackend`]): a batch that has taken [`SUBMIT_USES`] is
+    /// sent now, between two of the game's commands (where nothing of one is half recorded: an
+    /// upload has not taken its place in the stage yet), after the queue thread has submitted every
+    /// batch before it. So no more than about two batches' command buffers are ever made and not yet
+    /// submitted, on any backend (Metal loses the device past 4,096 of those), and the submit
+    /// split ([`submit_parts`]) only takes the last command's few uses past the limit.
+    pub(crate) fn bound_batch(&mut self) {
+        if self.batch_uses >= SUBMIT_USES {
+            self.submits.bound_sends.fetch_add(1, Ordering::Relaxed);
+            self.sync();
+            self.flush();
+            // Once a run: whether the game's frames ever come near the limit.
+            self.warn("a batch had more passes than one submit takes and was sent early");
+        }
+    }
+
+    /// What the batches' submits carried so far ([`SubmitStats`], tests): the queue thread's
+    /// counts once it has done its work.
+    pub fn submits(&self) -> SubmitStats {
+        self.sync();
+        let s = &self.submits;
+        let load32 = |a: &AtomicU32| a.load(Ordering::Relaxed);
+        let load64 = |a: &AtomicU64| a.load(Ordering::Relaxed);
+        SubmitStats {
+            submits: load64(&s.made),
+            most_uses: load32(&s.most_uses),
+            most_buffers: load32(&s.most_buffers),
+            most_planned: load32(&s.most_planned),
+            buffers: load64(&s.buffers),
+            encoders: load64(&s.encoders),
+            most_batch: load32(&s.most_batch),
+            uses: load64(&s.uses),
+            batch_uses: load64(&s.batch_uses),
+            most_pending: load64(&s.most_pending),
+            bound_sends: load64(&s.bound_sends),
+        }
+    }
+
+    /// A pass of `kind` timed by its own timestamps (`NV_WGPU_GPU_TIMES`, [`crate::gpu_times`]):
+    /// the query set and the pair's first index; none when the times are off.
+    fn pass_span(&mut self, kind: Kind) -> Option<(wgpu::QuerySet, u32)> {
+        self.gpu_times.as_mut()?.span(kind)
+    }
+
+    /// The start of a stretch of `kind` recorded straight into the encoder (copies, the HDR watch,
+    /// the new lighting), timed by timestamps written between passes where the driver can; none
+    /// when the times are off, a pass is open, or the driver times passes only.
+    fn span_begin(&mut self, kind: Kind) -> Option<(wgpu::QuerySet, u32)> {
+        if self.pass.is_some() {
+            return None;
+        }
+        let t = self.gpu_times.as_mut().filter(|t| t.inside())?;
+        let span = t.span(kind)?;
+        self.timing_encoder().write_timestamp(&span.0, span.1);
+        Some(span)
+    }
+
+    /// The end of [`Device::span_begin`]'s stretch (recorded without opening a pass).
+    fn span_end(&mut self, span: Option<(wgpu::QuerySet, u32)>) {
+        if let Some((q, i)) = span {
+            debug_assert!(self.pass.is_none(), "a timed stretch left a pass open");
+            self.timing_encoder().write_timestamp(&q, i + 1);
+        }
     }
 
     fn end_pass(&mut self) {
         self.pass = None;
         self.pass_targets = None;
+        if let (Some((i, true)), 0, Some(t)) =
+            (self.timed_pass.take(), self.pass_draws, &mut self.gpu_times)
+        {
+            t.set_kind(i, Kind::Clears);
+        }
         if let Some(c) = self.pass_count.take() {
             self.reduce_count(&c);
         }
@@ -2851,6 +3120,7 @@ impl Device {
                 height: (t.height >> level).max(1),
                 depth_or_array_layers: layers,
             };
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &t.texture,
@@ -2866,6 +3136,7 @@ impl Device {
                 },
                 size,
             );
+            self.span_end(copy_span);
         }
         for x in [t, &copy] {
             x.batch.store(self.batch, Ordering::Relaxed);
@@ -2915,9 +3186,10 @@ impl Device {
             && self.st.rs[rs::CLIPPLANEENABLE] & ((1 << wgsl::CLIP_PLANES) - 1) != 0
     }
 
-    /// Whether NVIDIA's alpha to coverage stands in for the alpha test ([`ATOC`]).
+    /// Whether alpha to coverage stands in for the alpha test: NVIDIA's switch ([`ATOC`]) or ATI's
+    /// ([`A2M1`]), the same rule for both.
     fn atoc(&mut self) -> bool {
-        self.st.rs[RS_ADAPTIVETESS_Y] == ATOC
+        (self.st.rs[RS_ADAPTIVETESS_Y] == ATOC || self.st.a2m1)
             && self.st.rs[rs::ALPHATESTENABLE] != 0
             && self.target_shape().2 > 1
     }
@@ -3118,11 +3390,18 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             ],
         });
+        let span = self.pass_span(Kind::Count);
         let mut pass = self
             .encoder()
             .begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("occlusion count"),
-                timestamp_writes: None,
+                timestamp_writes: span
+                    .as_ref()
+                    .map(|(q, i)| wgpu::ComputePassTimestampWrites {
+                        query_set: q,
+                        beginning_of_pass_write_index: Some(*i),
+                        end_of_pass_write_index: Some(*i + 1),
+                    }),
             });
         pass.set_pipeline(&pipeline);
         pass.set_bind_group(0, &group, &[]);
@@ -3291,13 +3570,16 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 }),
             }
         });
+        let span = self.pass_span(Kind::World);
+        self.timed_pass = span.as_ref().map(|s| (s.1, clear.is_some()));
+        self.pass_draws = 0;
         let pass = self
             .encoder()
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: colours,
                 depth_stencil_attachment: depth_attachment,
-                timestamp_writes: None,
+                timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
                 occlusion_query_set: None,
                 multiview_mask: None,
             })
@@ -3860,6 +4142,19 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
     }
 
+    /// Room in the register ring for a draw's two blocks: the batch is sent when there is not.
+    fn make_ring_room(&mut self) {
+        if self.ring.len() as u64 + 2 * BLOCK > ring_room() {
+            self.ring_sends += 1;
+            self.flush();
+        }
+    }
+
+    /// How many batches a full register ring has sent (tests).
+    pub fn ring_sends(&self) -> u64 {
+        self.ring_sends
+    }
+
     /// The uniform blocks of the next draw; `centre`: the vertex shaders' half-pixel move in clip
     /// space per unit of `w` (`1 / width`, `-1 / height` of the draw's viewport); `fregs`: the
     /// float constants the vertex and pixel shader read ([`Shader::fregs`]). Each stage's block is
@@ -3867,9 +4162,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
     /// ones it carries), and carries only the constants up to the highest its shader reads: the
     /// bytes a shader reads are the same as with whole blocks.
     fn write_blocks(&mut self, centre: [f32; 2], fregs: [u32; 2]) {
-        if self.ring.len() as u64 + 2 * BLOCK > RING {
-            self.flush();
-        }
+        self.make_ring_room();
         let fresh = self.ring.is_empty();
         let vs_due = fresh
             || self.st.dirty[0]
@@ -4401,7 +4694,13 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             .count();
         self.stage_group(0, &group_key[vertex..], &samplers[vertex..], &copies);
         self.stage_group(1, &group_key[..vertex], &samplers[..vertex], &copies);
-        // Vertices from DrawPrimitiveUP go into the batch's ring.
+        // Vertices from DrawPrimitiveUP go into the batch's ring. The register ring's room is made
+        // first: a send for it after the bytes are placed (in [`Device::write_blocks`]) would hand
+        // them to the batch before the draw's own, and the draw would read another draw's vertices
+        // at their place.
+        if up.is_some() {
+            self.make_ring_room();
+        }
         let up_offset = if let Some((bytes, _)) = up {
             if self.up.len() + bytes.len() > UP_RING as usize {
                 self.flush();
@@ -4666,6 +4965,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         // encoders run side by side. The next draw opens a new pass (it loads what this one
         // stored) in a new encoder.
         self.encoder_draws += 1;
+        self.pass_draws += 1;
         if self.encoder_draws >= SPLIT_DRAWS && self.finisher.is_some() {
             self.send_encoder();
         }
@@ -5897,6 +6197,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             ],
         });
+        let span = self.pass_span(Kind::Copies);
         let encoder = self.encoder();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("blit"),
@@ -5910,7 +6211,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -5956,6 +6257,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     src.tex.clone().expect("a texture"),
                     dst.tex.clone().expect("a texture"),
                 );
+                let copy_span = self.span_begin(Kind::Copies);
                 self.encoder().copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &st.texture,
@@ -5975,6 +6277,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         depth_or_array_layers: 1,
                     },
                 );
+                self.span_end(copy_span);
             } else {
                 self.warn("StretchRect of depth surfaces of different sizes is not provided");
             }
@@ -6047,6 +6350,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             self.gamma_resolve(source, target, surface);
             return;
         }
+        let span = self.pass_span(Kind::Resolves);
         let encoder = self.encoder();
         let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("resolve"),
@@ -6060,7 +6364,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -6141,6 +6445,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 resource: wgpu::BindingResource::TextureView(source),
             }],
         });
+        let span = self.pass_span(Kind::Resolves);
         let encoder = self.encoder();
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("gamma resolve"),
@@ -6154,7 +6459,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 },
             })],
             depth_stencil_attachment: None,
-            timestamp_writes: None,
+            timestamp_writes: span.as_ref().map(|(q, i)| render_times(q, *i)),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -6272,7 +6577,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         let (buffer, bytes) = gpu.uniforms(&params, &targets);
         self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
         let device = self.device.clone();
+        let span = self.span_begin(Kind::Other);
         gpu.encode(&device, self.encoder(), &targets);
+        self.span_end(span);
         self.scene_light = Some(gpu);
         for t in [&colour_tex, &depth_tex] {
             t.batch.store(self.batch, Ordering::Relaxed);
@@ -7284,7 +7591,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             samples: rt.samples,
         };
         let device = self.device.clone();
+        let span = self.span_begin(Kind::Other);
         sun.gpu.encode_step(&device, self.encoder(), &targets);
+        self.span_end(span);
         for t in [&colour_tex, &depth_tex] {
             t.batch.store(self.batch, Ordering::Relaxed);
         }
@@ -7673,6 +7982,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         let device = self.device.clone();
         let registers = self.uniform_layout.clone();
+        let span = self.span_begin(Kind::SunShadows);
         let (writes, drawn) = sun.gpu.draw_maps(
             &device,
             &registers,
@@ -7684,6 +7994,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (&sun.far, far_redraw.then_some(&far_map)),
             &sun.skinned,
         );
+        self.span_end(span);
         for (buffer, bytes) in writes {
             self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
         }
@@ -8117,6 +8428,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             } else {
                 (w, h)
             };
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &s.texture,
@@ -8136,6 +8448,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     depth_or_array_layers: layers,
                 },
             );
+            self.span_end(copy_span);
         }
     }
 
@@ -8357,6 +8670,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        let copy_span = self.span_begin(Kind::Copies);
         self.encoder().copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -8382,6 +8696,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 depth_or_array_layers: 1,
             },
         );
+        self.span_end(copy_span);
         self.flush();
         self.sync();
         buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
@@ -8449,6 +8764,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     && (src.width, src.height, src.format.wgpu)
                         == (dst.width, dst.height, dst.format.wgpu)
                 {
+                    let copy_span = self.span_begin(Kind::Copies);
                     self.encoder().copy_texture_to_texture(
                         wgpu::TexelCopyTextureInfo {
                             texture: &st.texture,
@@ -8476,6 +8792,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                             depth_or_array_layers: 1,
                         },
                     );
+                    self.span_end(copy_span);
                     dt.batch.store(self.batch, Ordering::Relaxed);
                 }
             }
@@ -8623,6 +8940,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             _ => frame_rate::Overlay::new(&self.device, format),
         };
         let (device, queue) = (self.device.clone(), self.queue.clone());
+        let span = self.span_begin(Kind::Other);
         overlay.draw(
             &device,
             &queue,
@@ -8631,6 +8949,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (width, height),
             readout,
         );
+        self.span_end(span);
         self.fps_overlay = Some(overlay);
     }
 
@@ -8678,6 +8997,9 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.collect_sun_variants();
         self.end_pass();
         self.presents += 1;
+        if let Some(line) = self.gpu_times.as_mut().and_then(GpuTimes::frame) {
+            eprintln!("{line}");
+        }
         // The sun shadows: a frame's light list waits for the next frame's scene clear (where the
         // maps are drawn); a frame without the sun keeps nothing and leaves no camera to place by.
         if let Some(s) = &mut self.sun {
@@ -8736,6 +9058,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
+            let copy_span = self.span_begin(Kind::Copies);
             self.encoder().copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
                     texture: &tex.texture,
@@ -8757,6 +9080,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     depth_or_array_layers: 1,
                 },
             );
+            self.span_end(copy_span);
             readback = Some((buffer, row, b.width, b.height, b.format));
         }
         let mut frame_texture = None;
@@ -8816,6 +9140,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                     mapped_at_creation: false,
                 });
+                let copy_span = self.span_begin(Kind::Copies);
                 self.encoder().copy_texture_to_buffer(
                     t.texture.as_image_copy(),
                     wgpu::TexelCopyBufferInfo {
@@ -8832,6 +9157,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
                         depth_or_array_layers: 1,
                     },
                 );
+                self.span_end(copy_span);
                 window_shot = Some((buffer, row, cw, ch));
             }
             // The frame-rate counter last, over the game's frame and the loading screen: after
@@ -9336,6 +9662,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         st.dirty = [true; 2];
         st.header_dirty = [true; 2];
         st.bound = Bound::default();
+        st.a2m1 = false;
         self.ffp_f = [None, None];
         self.counting = None;
         self.groups.clear();
@@ -9605,6 +9932,7 @@ fn open(
     } else {
         wanted
     };
+    let wanted = wanted | gpu_times::wanted_features();
     let features = adapter.features() & wanted;
     let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("d3d9-wgpu"),
@@ -10592,6 +10920,19 @@ pub fn queue_threads_for_tests(on: bool) {
     NO_QUEUE_THREADS_FOR_TESTS.store(!on, Ordering::Relaxed);
 }
 
+/// Tests only: devices made while this is set have one finishing thread and the queue thread even
+/// on a machine with fewer than four logical processors (CI's runners: three on macOS), so the
+/// threaded path is tested there too.
+static FORCE_QUEUE_THREADS_FOR_TESTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Tests only: whether devices made from now on have their finishing and queue threads whatever
+/// the machine ([`FORCE_QUEUE_THREADS_FOR_TESTS`]).
+#[doc(hidden)]
+pub fn force_queue_threads_for_tests(on: bool) {
+    FORCE_QUEUE_THREADS_FOR_TESTS.store(on, Ordering::Relaxed);
+}
+
 /// Tests only: a failure planted for once ([`plant_queue_failure_for_tests`]): the next batch job
 /// panics on the queue thread; the next encoder a finishing thread takes fails; the queue thread
 /// ends after its next job.
@@ -10623,6 +10964,126 @@ fn worker_threads() -> usize {
 
 /// Draws an encoder takes before it goes to a finishing thread ([`Device::send_encoder`]).
 const SPLIT_DRAWS: u32 = 256;
+
+/// The most passes and commands one submit carries ([`Device::encoder`]'s uses). wgpu turns each
+/// pass into two of the driver's command buffers (its barriers, then the pass) and each run of
+/// commands between passes into one, and hands a submit's all to one `vkQueueSubmit`. AMD's
+/// Windows driver refuses one of about 4,000 command buffers with "out of host memory" (Radeon
+/// 890M, driver 24.30: 3,506 went, 4,007 did not; NVIDIA's took 4,507), and wgpu then takes the
+/// device for lost: nothing more is drawn and no query answers (900 draws that each upload their
+/// vertices, inside one occlusion query: a copy, a pass and the count's pass each, 4,507 command
+/// buffers in one submit). Why 512: that measured edge. 512 uses are at most about 1,100 command
+/// buffers (855 in that test), under a third of the 3,506 that went, with room for the few passes
+/// some uses make (the sun's shadow maps) and wgpu's own. A batch is sent once it has taken 512
+/// uses, between two of the game's commands ([`Device::bound_batch`]), so that only about two
+/// batches' command buffers ever wait made and not submitted (Metal loses the device past 4,096 of
+/// those); the few uses its last command takes past the limit go in a submit of their own
+/// ([`submit_parts`]), in order.
+pub const SUBMIT_USES: u32 = 512;
+
+/// The uses an encoder takes before it goes with the batch's earlier ones ([`Device::encoder`]):
+/// so that one encoder alone fits in a submit.
+const SPLIT_USES: u32 = SUBMIT_USES;
+
+/// How many of a batch's command buffers (taking `uses` each, in order) go in each submit, and the
+/// uses they take together: as many as take [`SUBMIT_USES`], at least one.
+fn submit_parts(uses: &[u32]) -> Vec<(usize, u32)> {
+    let mut parts = Vec::new();
+    let (mut n, mut sum) = (0, 0u32);
+    for &u in uses {
+        if n > 0 && sum.saturating_add(u) > SUBMIT_USES {
+            parts.push((n, sum));
+            (n, sum) = (0, 0);
+        }
+        n += 1;
+        sum = sum.saturating_add(u);
+    }
+    if n > 0 {
+        parts.push((n, sum));
+    }
+    parts
+}
+
+/// What the batches' submits carried ([`Device::submits`]): counted where each submit is made,
+/// from the command buffers it really got.
+#[derive(Default)]
+struct Submits {
+    /// Submits made.
+    made: AtomicU64,
+    /// The most uses one submit took.
+    most_uses: AtomicU32,
+    /// The most command buffers one submit got, and the most its part planned.
+    most_buffers: AtomicU32,
+    most_planned: AtomicU32,
+    /// Command buffers submitted, and the encoders the batches handed over.
+    buffers: AtomicU64,
+    encoders: AtomicU64,
+    /// The most uses one batch took before it was sent ([`Device::bound_batch`]).
+    most_batch: AtomicU32,
+    /// The uses the submits took, and the uses the batches took (the same when every use was
+    /// counted into a part).
+    uses: AtomicU64,
+    batch_uses: AtomicU64,
+    /// The most uses handed over and not yet submitted at a hand-over: about two batches' at most
+    /// ([`Device::bound_batch`] waits for the queue thread before an early send).
+    most_pending: AtomicU64,
+    /// Batches sent early because they reached the limit ([`Device::bound_batch`]).
+    bound_sends: AtomicU64,
+}
+
+/// What the batches' submits carried so far ([`Device::submits`], tests).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SubmitStats {
+    /// Submits made.
+    pub submits: u64,
+    /// The most uses one submit took ([`SUBMIT_USES`] at most).
+    pub most_uses: u32,
+    /// The most command buffers one submit got, and the most its part planned.
+    pub most_buffers: u32,
+    pub most_planned: u32,
+    /// Command buffers submitted, and the encoders the batches handed over (the same when none
+    /// was lost).
+    pub buffers: u64,
+    pub encoders: u64,
+    /// The most uses one batch took before it was sent.
+    pub most_batch: u32,
+    /// The uses the submits took, and the uses the batches took (the same when every use was
+    /// counted into a part).
+    pub uses: u64,
+    pub batch_uses: u64,
+    /// The most uses handed over and not yet submitted at a hand-over.
+    pub most_pending: u64,
+    /// Batches sent early because they reached the limit (none in an ordinary frame).
+    pub bound_sends: u64,
+}
+
+/// `buffers` submitted in order, each part's number of them at a time ([`submit_parts`]), counted
+/// in `submits` from what each submit really got.
+fn submit_in_parts(
+    queue: &wgpu::Queue,
+    buffers: Vec<wgpu::CommandBuffer>,
+    parts: &[(usize, u32)],
+    submits: &Submits,
+) {
+    let mut buffers = buffers.into_iter();
+    for &(n, uses) in parts {
+        let part: Vec<wgpu::CommandBuffer> = buffers.by_ref().take(n).collect();
+        let got = part.len();
+        queue.submit(part);
+        submits.made.fetch_add(1, Ordering::Relaxed);
+        submits.most_uses.fetch_max(uses, Ordering::Relaxed);
+        submits
+            .most_buffers
+            .fetch_max(got as u32, Ordering::Relaxed);
+        submits.most_planned.fetch_max(n as u32, Ordering::Relaxed);
+        submits.buffers.fetch_add(got as u64, Ordering::Relaxed);
+        submits.uses.fetch_add(u64::from(uses), Ordering::Relaxed);
+    }
+    debug_assert!(
+        buffers.next().is_none(),
+        "a command buffer left out of the submits"
+    );
+}
 
 /// An earlier encoder of the batch: finished, or on its way from a finishing thread.
 enum Finishing {
@@ -10901,10 +11362,40 @@ impl Drop for Device {
     }
 }
 
+/// A render pass's timestamp writes: the pair from `index` of `query` ([`crate::gpu_times`]).
+fn render_times(query: &wgpu::QuerySet, index: u32) -> wgpu::RenderPassTimestampWrites<'_> {
+    wgpu::RenderPassTimestampWrites {
+        query_set: query,
+        beginning_of_pass_write_index: Some(index),
+        end_of_pass_write_index: Some(index + 1),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use wgpu::TextureFormat as F;
+
+    /// A batch's command buffers go in as few submits as take at most [`SUBMIT_USES`] each, in
+    /// order; one buffer alone always goes (the encoder cut keeps it within the limit).
+    #[test]
+    fn a_batch_goes_in_submits_of_at_most_the_uses_the_driver_takes() {
+        let max = SUBMIT_USES;
+        assert_eq!(submit_parts(&[]), vec![]);
+        assert_eq!(submit_parts(&[3]), vec![(1, 3)]);
+        assert_eq!(submit_parts(&[max]), vec![(1, max)]);
+        assert_eq!(submit_parts(&[max, 1]), vec![(1, max), (1, 1)]);
+        assert_eq!(submit_parts(&[max - 1, 1, 1]), vec![(2, max), (1, 1)]);
+        assert_eq!(submit_parts(&[max / 2, max / 2]), vec![(2, max)]);
+        assert_eq!(
+            submit_parts(&[max / 2 + 1, max / 2]),
+            vec![(1, max / 2 + 1), (1, max / 2)]
+        );
+        assert_eq!(submit_parts(&[100; 12]), vec![(5, 500), (5, 500), (2, 200)]);
+        assert_eq!(submit_parts(&[max + 9, 2]), vec![(1, max + 9), (1, 2)]);
+        assert_eq!(submit_parts(&[0, 0, max, 0]), vec![(4, max)]);
+        assert_eq!(SPLIT_USES, SUBMIT_USES, "an encoder alone fits in a submit");
+    }
 
     /// A lit draw is shadowed at one stage: its pixel shader when that reads the sun's colour,
     /// else its vertex shader (grass); a pair whose shaders both read it never twice.

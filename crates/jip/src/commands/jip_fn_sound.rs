@@ -2,10 +2,9 @@
 //! music's state, the game's volumes, and (lane C1) a sound played at a node's place. 10 of its 14
 //! commands.
 //!
-//! Left for later: `SetSoundTraitNumeric`, `IsSoundPlaying`, `GetSoundPlayers` and `StopSound`
-//! find the playing sounds of a form by the form each `BSGameSound` holds at +0x134, a field JIP's
-//! `SetSourceSoundRequestHook` writes there (in the game it is the end of the file path): that
-//! hook is the core track's, and these come with it.
+//! `SetSoundTraitNumeric`, `IsSoundPlaying`, `GetSoundPlayers` and `StopSound`, which find the
+//! playing sounds of a form by the form JIP's G108 keeps in each `BSGameSound` (+0x134), are built
+//! in `jip_fn_sound_playing.rs`.
 //!
 //! `TESSound` (form type 0x0D; the exe's layout in engine-fallout-misc `falloutaudio.rs`): its
 //! file (`TESSoundFile`, path at +0x34, set through the component's virtual `Set`, +0x10), and the

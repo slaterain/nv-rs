@@ -204,6 +204,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 | `NV_PREFS_OUT=FILE` | The `FalloutPrefs.ini` the game writes, copied out to FILE | stays in memory |
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) | no F12 report |
 | `NV_SETTINGS=FILE` | The settings file | `settings.ini` beside the program or in the folder above it |
+| `NV_RS_PROFILE=game` or `mods` | Linux and macOS: the profile play.sh plays in (`./play.sh --mods`: `mods`), whose Documents and AppData folders inside nv-rs's own folder the game is given (`<own>/game/...` or `<own>/mods/...`, so saves and settings made with mods stay apart; `engine-platform` machine_table::profile). Windows' Play.exe lays out `userdata\game` and `userdata\mods` itself. Not the profiler: that is `NV_PROFILE`, a test's variable, which makes a play run a test (#763) | `game` |
 | `NV_RS_GAME`, `NV_RS_REAL_DOCUMENTS`, `NV_RS_SYSTEM_FOLDER`, `NV_RS_NO_STORES`, `NV_RS_NO_SHORT_PATHS`, `NV_RS_NO_WINDOWS`, `NV_RS_SETTINGS_CHOOSE` | The launcher's own test hooks: the game folder, where the player's Documents are read from, the system folder, no look in game stores, no short paths, no windows shown (`scripts/launcher`; `NV_RS_NO_WINDOWS` is also read in `host/save_out.rs`, and makes Settings.ps1 save without its window, with `NV_RS_SETTINGS_CHOOSE`'s `Name=Value;...` as the choices) | the player's own folders, windows shown |
 
 ### 4. Tests and diagnostics
@@ -233,6 +234,7 @@ None of these is for players.
 | `NV_WGPU_BACKEND=vulkan`, `dx12`, `gl` or `software`; `NV_WGPU_DEBUG` | wgpu backend: which graphics interface (`software`: the platform's software adapter, WARP on Windows, the one CI's runners have: for running the GPU tests there); wgpu's own debug checks. On Vulkan, NVIDIA's driver filters distant textures a shade differently from its Direct3D (its own anisotropic filtering: on the Goodsprings street 10-26% of pixels differ from Direct3D 9's by a mean under 1 of 255 levels, against under 1% of pixels on Direct3D 12; accepted) | Vulkan, then Direct3D 12 on a card without a Vulkan driver; off |
 | `NV_WGPU_DYNAMIC_RENDERING=off` | On a Vulkan 1.3 device, passes begun with render pass and framebuffer objects, as published wgpu does and as devices without Vulkan 1.3 do, instead of dynamic rendering (`vendor/wgpu-hal`, `dynamic_rendering.rs`): for checking that path, or getting round a driver's bug | dynamic rendering where the device has Vulkan 1.3 |
 | `NV_WGPU_LIBRARIES=off` | On Vulkan, every render pipeline made whole, as published wgpu makes them, instead of linked from pipeline libraries (`vendor/wgpu-hal`, `pipeline_library.rs`: the shaders compiled once each, a new combination of state only a link): for comparing the two, or getting round a driver's bug | libraries where the driver has them |
+| `NV_WGPU_GPU_TIMES=1` | A measuring aid: the graphics card's own time for each kind of work the backend gives it, from timestamps the card writes at the start and end of each pass (and between passes where the driver can), one line every 5 s in plain words: `GPU time a frame (N frames): world, occlusion count, resolves, clears, copies, HDR, sun shadow maps, other; total` (ms a frame). World is the game's own draws; occlusion count, the passes that add up a query's samples; resolves, multisampled targets resolved; clears, passes that only clear; copies, blits, copies, uploads among the draws and read-backs; HDR, the bright-pixel watch; sun shadow maps, the new lighting's sun shadow maps; other, the rest of the new lighting and the frame-rate meter. Needs the adapter's timestamp queries: without them one line says so and nothing is timed; without timestamps between passes (some Metal drivers) the copy commands, the HDR watch, the sun shadow maps and other are not timed, and the line says so. A driver whose timestamps read zero (AMD's Windows driver) gets one line saying it does not report GPU times, and no numbers. Off, nothing is asked of the driver and nothing is recorded | off |
 | **Scripted input and movement runs** | | |
 | `NV_MOVE_KEYS`*, `NV_MOVE_MOUSE`* | Scripted keys and mouse by main's frame (`crates/host/src/player_move.rs`) | none |
 | `NV_MOVE_REAL_INPUT=1`* | Real input reaches the game even with a script set | off |
@@ -333,10 +335,18 @@ elsewhere only as far as Windows and drivers behave the same:
   Text conversion itself asks the real Windows.
 - `d3d9-capture` covers adapter 0, and only the display modes of that moment. nvapi answers come from
   the DLL, but only an NVIDIA driver has run them.
-- An AMD card: the game asks for the player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit
-  process can't load them, so they answer as missing: one GPU, no Eyefinity. The game picks its vendor path
-  from the driver's name. AMD and Intel have only been run as an edited table (the driver's name changed, no
-  nvapi) on this PC's NVIDIA card, so the game's vendor paths ran, but no AMD or Intel driver answered.
+- The game picks its vendor path from the driver's name. While wgpu draws (Vulkan, the default) every card,
+  AMD and Intel too, is given NVIDIA's driver name (`nvldumd.dll`) on every system, so the game takes the
+  NVIDIA shader package and alpha to coverage switch the shipped pipeline list was made with (on a PC without
+  NVIDIA's driver its NvAPI probe finds no `nvapi.dll` and ends); the log's start says so in one line. With the
+  real Direct3D 9 asked for (or as the fallback where wgpu finds no card) the driver's own name decides. Where wgpu
+  finds a card but cannot make the game's device, the real Direct3D 9 takes over after the game was told NVIDIA's
+  name: the game keeps NVIDIA's path on the card's own driver, which may not honour NVIDIA's alpha to coverage
+  switch, and the log says so in one line. With the driver's own name, on an AMD card the game asks for the
+  player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit process can't load them, so they answer
+  as missing: one GPU, no Eyefinity. AMD and Intel on the real Direct3D 9 have only been run as an edited table (the
+  driver's name changed, no nvapi) on this PC's NVIDIA card, so the game's vendor paths ran, but no AMD or
+  Intel driver answered.
 - The first settings on a PC where the game's launcher never ran: its detection isn't translated (it is a separate
   program), so the High preset stands in for what it would pick.
 

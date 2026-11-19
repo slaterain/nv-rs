@@ -10,18 +10,19 @@
 //! menu XML made into tiles through the built-in UI Organizer (`InjectUIComponent`); HUD messages
 //! queued with an icon and sound and the queue cleared, the system colours, the Pip-Boy light,
 //! a text's size in a font, the open menu's item list refreshed (`RefreshItemsList`), message
-//! boxes with a callback script (`MessageBoxExAlt`). 43 of the file's 64 commands (`ToggleHUDCursor`
-//! and `SetFontFile` built: [`AWAITING_H02`], [`AWAITING_G129`]); its four menu event commands are
-//! the core track's (`ui_hooks`).
+//! boxes with a callback script (`MessageBoxExAlt`). 43 of the file's 64 commands here
+//! (`ToggleHUDCursor` and `SetFontFile` built: [`AWAITING_H02`], [`AWAITING_G129`]), two more
+//! (`ShowQuantityMenu`, `CloseActiveMenu`) in `jip_fn_ui_menus.rs`; its four menu event commands
+//! are the core track's (`ui_hooks`).
 //!
 //! `ToggleHUDCursor` keeps JIP's HUD cursor mode, which `GetMenuMode` here reads and the HUD
 //! cursor patch (H02) uses to show and run the cursor over the HUD; it is registered with that
 //! patch (on its own it would disable the left button with no cursor to click). The item list refresh is also what JIP's
 //! `RemoveMe` patch (G60) asks for at the next main loop pass ([`request_item_list_refresh`]).
 //!
-//! `MessageBoxExAlt` keeps its boxes' scripts for the box width patch (G55), which lets a box be
-//! 1,200 wide while any waits: until G55 the box is narrower than JIP's (the game's own maximum),
-//! so a long text wraps more; nothing is cut off. `SetFontFile` shares JIP's font map with its
+//! `MessageBoxExAlt` keeps its boxes' scripts, counted before the box is shown, for the box width
+//! patch G55 (`game_patches::ga`): while any waits, a box's text wraps at and its width is capped
+//! at 1,200 instead of the menu file's maximum. `SetFontFile` shares JIP's font map with its
 //! font manager patch (G129), which registers it.
 //!
 //! What JIP's tile helpers do is translated here (`nvse/GameTiles.cpp`, `nvse/GameUI.cpp` (JIP
@@ -38,11 +39,9 @@
 //!   `EnableImprovedRecipeMenu`, `SuppressQuestMessages`, `InitItemFilter`, `SetItemFilter` (code bytes and jumps patched into
 //!   the exe), `ShowTextInputMenu`, `SetTextInputExtendedProps`, `SetTextInputString` (the text
 //!   input hooks, `TextInputClose`);
-//! - a routine of JIP's the game calls back: `ShowQuantityMenu` (its callback), and
-//!   `CloseActiveMenu`, which clears what it and `MessageBoxExAlt` keep;
-//! - 3D and drawing: `ProjectUITile` (a rendered texture), `SetCursorPos` (the cursor's scene
-//!   node); (`AttachUIXML` and `AttachUIComponent`, a tile's node under a reference's node, are
-//!   built in `jip_fn_ui_nodes.rs`);
+//! - 3D and drawing: `ProjectUITile` (a rendered texture); (`AttachUIXML` and
+//!   `AttachUIComponent`, a tile's node under a reference's node, are built in `jip_fn_ui_nodes.rs`,
+//!   `SetCursorPos` in `jip_fn_ui_cursor.rs`);
 //!
 //! `GetMenuTargetRef` and `GetSelectedItemRef`: where JIP reads through a null pointer (the top
 //! menu's object, a highlighted perk rank with no item, a barter menu without a merchant), the
@@ -135,10 +134,9 @@ pub static COMMANDS: Handlers = &[
 /// see or click. The row's pull request adds this list to `commands::ALL`.
 pub static AWAITING_H02: Handlers = &[(0x28b5, toggle_hud_cursor)];
 
-/// `SetFontFile`, built but not registered until JIP's font manager patch (row G129) is in: without
-/// it fonts 10 to 89 could not be set (the game's manager ends after font 8) and a game font could
-/// not be put back (G129 keeps the game's eight in the map at start; their files are in the
-/// archives, not loose). The row's pull request adds this list to `commands::ALL`.
+/// `SetFontFile`, registered with JIP's font manager patch (row G129, `game_patches::ga`): with it
+/// fonts 10 to 89 can be set and a game font put back (G129 keeps the game's eight in the map at
+/// start; their files are in the archives, not loose).
 pub static AWAITING_G129: Handlers = &[(0x274c, set_font_file)];
 
 /// `IsInCharGen`, a condition (`DEFINE_CMD_COND_PLUGIN`).
@@ -321,7 +319,7 @@ const STR_ARG_BUFFER: usize = 0x4_0000;
 /// `Tile::Parents[24]` in `GetComponentFullName`: deeper tiles run past JIP's array.
 const FULL_NAME_DEPTH: u32 = 24;
 
-fn interface_manager(e: &Engine) -> u32 {
+pub(crate) fn interface_manager(e: &Engine) -> u32 {
     e.mem.u32(INTERFACE_MANAGER)
 }
 
@@ -390,7 +388,7 @@ fn tile_name(e: &Engine, tile: u32) -> Option<Vec<u8>> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::GetChild.
 /// The child named `child` (`*` for any, `name:n` for the `n`-th such), the children in their
 /// order; 0 for none (and for a name that starts with the colon).
-fn child(e: &Engine, tile: u32, child: &[u8]) -> u32 {
+pub(crate) fn child(e: &Engine, tile: u32, child: &[u8]) -> u32 {
     let (name, mut index) = match child.iter().position(|&b| b == b':') {
         Some(0) => return 0,
         Some(at) => (&child[..at], crate::utility::str_to_int(&child[at + 1..])),
@@ -421,7 +419,11 @@ fn child(e: &Engine, tile: u32, child: &[u8]) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::GetComponent.
 /// The tile at `path` below `tile` and, when its last part names no child, that part as a
 /// trait name; `None` when a tile on the way is not there.
-fn component<'a>(e: &Engine, tile: u32, path: &'a [u8]) -> Option<(u32, Option<&'a [u8]>)> {
+pub(crate) fn component<'a>(
+    e: &Engine,
+    tile: u32,
+    path: &'a [u8],
+) -> Option<(u32, Option<&'a [u8]>)> {
     let mut parent = tile;
     let mut rest = path;
     while let Some(slash) = slash_pos(rest) {
@@ -446,7 +448,7 @@ fn component<'a>(e: &Engine, tile: u32, path: &'a [u8]) -> Option<(u32, Option<&
 /// The trait id named `name`: the map's hash picks the bucket, its compare finds the key; 0 when
 /// it is not there. The name is a part of JIP's `tilePath[0x100]`: at most its 255 bytes go to
 /// the game ([`in_buffer`]).
-fn trait_id(e: &mut Engine, name: &[u8]) -> u32 {
+pub(crate) fn trait_id(e: &mut Engine, name: &[u8]) -> u32 {
     let vtable = e.mem.u32(TRAIT_MAP);
     if vtable == 0 {
         return 0;
@@ -564,7 +566,7 @@ pub(crate) fn value_set_float(e: &mut Engine, value: u32, num: f32) {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::Value::SetBool.
 /// The value's number set to 1.0 or 0 (by its bits) and the value refreshed, unless it has it.
-fn value_set_bool(e: &mut Engine, value: u32, on: bool) {
+pub(crate) fn value_set_bool(e: &mut Engine, value: u32, on: bool) {
     let bits = if on { 0x3f80_0000 } else { 0 };
     if e.mem.u32(value + VALUE_NUM) == bits {
         return;
@@ -657,7 +659,7 @@ fn top_visible_menu_id(e: &Engine) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: GetMenuMode.
 /// Menu mode (`currentMode > 1`) or JIP's HUD cursor mode ([`hud_cursor_mode`],
 /// `ToggleHUDCursor`).
-fn menu_mode(e: &mut Engine) -> bool {
+pub(crate) fn menu_mode(e: &mut Engine) -> bool {
     let im = interface_manager(e);
     (im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1) || hud_cursor_mode(e)
 }
@@ -2392,7 +2394,7 @@ const LIST_RESTORE_STATE: u32 = 0x0072_a660;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: RefreshRecipeMenu
 // (asm).
 /// The recipe menu's list made again for its category, as the exe's own category change does.
-fn refresh_recipe_menu(e: &mut Engine, menu: u32) {
+pub(crate) fn refresh_recipe_menu(e: &mut Engine, menu: u32) {
     let list = menu + RECIPE_LIST;
     e.vcall(list, 0x1c, &[]);
     let category = e.mem.u32(menu + RECIPE_CATEGORY);
@@ -2820,11 +2822,13 @@ pub fn set_font_manager_extended(e: &mut Engine) {
     font_infos(e).extended = true;
 }
 
-/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool) and
-/// a `FontInfo`'s size and its loaded data (+0x38, null when the file did not load).
-const FONT_INFO_INIT: u32 = 0x00a1_2020;
-const FONT_INFO_SIZE: u32 = 0x54;
-const FONT_INFO_BUFFER_DATA: u32 = 0x38;
+/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool: 1
+/// loads the file) and a `FontInfo`'s size (JIP's `static_assert(sizeof(FontInfo) == 0x54)`, the
+/// `push 0x54` of G129's start) and its loaded data (+0x38, null when the file did not load). One
+/// set for `SetFontFile` and G129 (`game_patches::ga`).
+pub(crate) const FONT_INFO_INIT: u32 = 0x00a1_2020;
+pub(crate) const FONT_INFO_SIZE: u32 = 0x54;
+pub(crate) const FONT_INFO_BUFFER_DATA: u32 = 0x38;
 /// JIP's `dataPathFull[0x100]` with `data\` in its first five bytes: the path's own room.
 const FONT_PATH_BUFFER: usize = 0x100 - 5;
 /// The game's own font manager has the fonts 1 to 8; JIP's (G129) 1 to 89.

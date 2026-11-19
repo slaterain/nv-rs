@@ -31,6 +31,8 @@
 //!   [`add_point_lights`] fills: H09's attach, `gp::queued_reference`) are freed when let go, set
 //!   from their form again when marked, put into the scene's lights once (a `ShadowSceneLight`)
 //!   and animated ([`animated_lights`]).
+//! - For JIP's light commands (`SetLightTraitNumeric`, `SetLightFlag`, `AttachLight`): JIP's
+//!   `MarkLightModified` ([`mark_modified`]) and `CreatePointLight` ([`create_point_light`]).
 //!
 //! **In with JIP installed, in every preset (the lead's decision, review of #700).** These are
 //! JIP's own built-in light handling (`InitJIPHooks`, not a `[GamePatches]` switch), so they go
@@ -370,18 +372,28 @@ fn load_nif(e: &mut Engine, w: &[u32]) -> Option<u32> {
     Some(0)
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: CreateObjectNodeHook (its
-// first test; the `InsertObject` tests wait for H08).
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: CreateObjectNodeHook.
 /// H06's companion at `0x50EF46` (words: the model `Clone3D` would share, the form, the
 /// reference): a model whose byte +0x33 has 0x20 (H06 found lights of JIP's in it) is cloned
 /// (answers 1, JIP's jump to `0x50F0FE`); else the exe's checks go on (answers 0). Without it the
 /// first reference would hold the cached model itself (its lights then listed as that
 /// reference's), and every later copy would carry lights already marked listed, never lit.
 /// (`Clone3D` never gets here with no model; 0 answers 0.)
+/// H08: a form or a reference that JIP's `InsertNode`/`AttachModel` marked (`jipFormFlags6` `+6`,
+/// 0xC0) is cloned too, so its own copy gets the entries.
 fn clone_3d(e: &mut Engine, w: &[u32]) -> Option<u32> {
-    let model = w[0];
+    let (model, form, reference) = (w[0], w[1], w[2]);
+    let marked = |e: &Engine, f: u32| {
+        f != 0
+            && e.mem.u8(f + 6)
+                & (crate::commands::jip_fn_misc_ref_insert::INSERT_NODE
+                    | crate::commands::jip_fn_misc_ref_insert::ATTACH_MODEL)
+                != 0
+    };
     Some(u32::from(
-        model != 0 && e.mem.u8(model.wrapping_add(FLAGS_HIGH)) & IS_POINT_LIGHT != 0,
+        (model != 0 && e.mem.u8(model.wrapping_add(FLAGS_HIGH)) & IS_POINT_LIGHT != 0)
+            || marked(e, form)
+            || marked(e, reference),
     ))
 }
 
@@ -784,6 +796,95 @@ fn add_scene_light(e: &mut Engine, scene: u32, light: u32) {
     e.mem
         .set_u32(scene_light.wrapping_add(SCENE_LIGHT_240), word);
     e.call(SCENE_ADD_LIGHT, &args![scene, scene_light]);
+}
+
+/// `NiPointLight::Create` (`00A7D6E0`, no arguments: a new point light, 0x110 bytes with H03) and
+/// `NiNode::AddObject` (vtable +0xDC: the child, 1).
+const POINT_LIGHT_CREATE: u32 = 0x00a7_d6e0;
+const ADD_OBJECT_SLOT: u32 = 0xdc;
+/// A light form's flags byte (+0xA8) bit "off by default".
+const OFF_BY_DEFAULT: u8 = 0x20;
+/// `NiNode::RemoveObject` (vtable +0xE8: the child) and JIP's mark of a script's light
+/// (`extraFlags` +0x9F bit 0x80, `AttachLight`'s).
+const REMOVE_OBJECT_SLOT: u32 = 0xe8;
+const SCRIPT_LIGHT: u8 = 0x80;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h:
+// DoPreLoadGameHousekeeping (the lights' step, between the waits and the swapped LOD blocks).
+/// Before a game loads and at the exit to the main menu: every listed light with the script mark
+/// that has a parent (+0x18) is taken out of it (`RemoveObject`), so no light a script attached
+/// stays on a model the loaded game does not know it on. The list stays as it is: the
+/// animated-lights step frees each light once nothing holds it ([`animated_lights`]). A copy of
+/// the list is walked, the lock not held across the game's calls.
+pub fn pre_load(e: &mut Engine) {
+    let lights = lights_list(e).clone();
+    for light in lights {
+        if e.mem.u8(light.wrapping_add(EXTRA_FLAGS)) & SCRIPT_LIGHT == 0 {
+            continue;
+        }
+        let parent = e.mem.u32(light.wrapping_add(PARENT));
+        if parent != 0 {
+            e.vcall(parent, REMOVE_OBJECT_SLOT, &args![light]);
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_light.h: MarkLightModified
+// (asm).
+/// Every listed light made from `form` (+0xE8) marked to be set from its form again (+0x9E 1),
+/// which the animated-lights step does at its next pass ([`animated_lights`]). JIP runs both on
+/// one thread; should a script on another thread call this while that step has the list out, its
+/// lights are not marked that time (the next change marks them).
+pub fn mark_modified(e: &mut Engine, form: u32) {
+    let lights = lights_list(e).clone();
+    for light in lights {
+        if e.mem.u32(light.wrapping_add(BASE_LIGHT)) == form {
+            e.mem.set_u8(light.wrapping_add(RESET_TRAITS), 1);
+        }
+    }
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: CreatePointLight (asm).
+/// A point light of JIP's from `form` under `parent`: the parent's first child that is a point
+/// light (its vtable), else a new one (`NiPointLight::Create`) named `"PtLight "` and the form's
+/// id in hexadecimal (JIP's `UIntToHex`) and added under the parent. Then: its form (+0xE8), hidden
+/// (+0x30 bit 0, set, never cleared) when the form is off by default (+0xA8 bit 0x20), to be set
+/// from the form at the next step (+0x9E 1), and the first time (+0x33 bit 0x40 clear) marked
+/// 0x60 and listed. Answers the light (0 when the game made none; JIP would write through null).
+pub fn create_point_light(e: &mut Engine, form: u32, parent: u32) -> u32 {
+    let count = e.mem.u16(parent.wrapping_add(CHILD_COUNT));
+    let children = e.mem.u32(parent.wrapping_add(CHILDREN));
+    let mut light = (0..u32::from(count))
+        .map(|i| e.mem.u32(children.wrapping_add(4 * i)))
+        .find(|&child| child != 0 && e.mem.u32(child) == POINT_LIGHT_VTABLE)
+        .unwrap_or(0);
+    if light == 0 {
+        light = e.call(POINT_LIGHT_CREATE, &args![]).u32();
+        if light == 0 {
+            return 0;
+        }
+        let mut name = b"PtLight ".to_vec();
+        name.extend(crate::console::uint_to_hex(crate::commands::ref_id(
+            e, form,
+        )));
+        crate::commands::jip_fn_misc_ref_nodes_w::set_name(e, light, &name);
+        e.vcall(parent, ADD_OBJECT_SLOT, &args![light, 1u32]);
+    }
+    e.mem.set_u32(light.wrapping_add(BASE_LIGHT), form);
+    if e.mem.u8(form.wrapping_add(FORM_FLAGS)) & OFF_BY_DEFAULT != 0 {
+        let flags = e.mem.u8(light.wrapping_add(FLAGS));
+        e.mem.set_u8(light.wrapping_add(FLAGS), flags | 1);
+    }
+    e.mem.set_u8(light.wrapping_add(RESET_TRAITS), 1);
+    let high = e.mem.u8(light.wrapping_add(FLAGS_HIGH));
+    if high & DONE_INIT_LIGHTS == 0 {
+        e.mem.set_u8(
+            light.wrapping_add(FLAGS_HIGH),
+            high | DONE_INIT_LIGHTS | IS_POINT_LIGHT,
+        );
+        lights_list(e).push(light);
+    }
+    light
 }
 
 #[cfg(test)]

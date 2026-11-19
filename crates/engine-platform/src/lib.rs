@@ -116,6 +116,7 @@ pub mod speakers;
 pub mod time;
 pub mod vorbisfile;
 pub mod window;
+pub mod xinput;
 pub mod zone;
 
 /// This layer's state in each engine (`Kernel::platform`; made by [`LAYER`]'s `new_state`).
@@ -136,6 +137,8 @@ pub struct State {
     pub process: process::Process,
     /// Mods' own files and the port's folder that keeps them ([`mod_files`]).
     pub mod_files: mod_files::ModFiles,
+    /// The pads behind the game's XInput ([`xinput`]): none until the host puts the system's in.
+    pub pads: xinput::Pads,
 }
 
 /// What runs before the platform layer ends the process itself, which it does in one place: the
@@ -376,6 +379,17 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "GetAsyncKeyState",
             entry!(0, dinput::get_async_key_state(u32) -> u32).1,
         ),
+        // The game imports XInput by ordinal: 2 `XInputGetState`, 3 `XInputSetState`.
+        (
+            "XINPUT1_3.dll",
+            "#2",
+            entry!(0, xinput::xinput_get_state(u32, Ptr) -> u32).1,
+        ),
+        (
+            "XINPUT1_3.dll",
+            "#3",
+            entry!(0, xinput::xinput_set_state(u32, Ptr) -> u32).1,
+        ),
         (
             "USER32.dll",
             "GetSystemMetrics",
@@ -568,6 +582,11 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             "USER32.dll",
             "DispatchMessageA",
             entry!(0, window::dispatch_message_a(Ptr) -> u32).1,
+        ),
+        (
+            "USER32.dll",
+            "DefWindowProcA",
+            entry!(0, window::def_window_proc_a(u32, u32, u32, u32) -> u32).1,
         ),
         (
             k,
@@ -1039,9 +1058,10 @@ mod tests {
             );
         }
         // The 195 of the table before the layer moved out of `engine-core` (6 are Windows only),
-        // `GlobalMemoryStatus(Ex)`, and `MultiByteToWideChar` and `LCMapStringW`.
+        // `GlobalMemoryStatus(Ex)`, `MultiByteToWideChar` and `LCMapStringW`, and `DefWindowProcA`
+        // (the game's `WM_MOUSEMOVE`, `window::post_mouse_move`).
         // Off Windows also the two shader profile getters (`d3dx::profiles`).
-        assert_eq!(table.len(), if cfg!(windows) { 199 } else { 195 });
+        assert_eq!(table.len(), if cfg!(windows) { 200 } else { 196 });
     }
 
     /// Not a check: the rows of `engine-core`'s `allocations_per_operation_of_the_kernel` whose

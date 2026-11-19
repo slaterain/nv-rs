@@ -9,8 +9,9 @@
 //!   Tweaks gives it one, Tweaks' own `[Tweaks]` key. The translation Tweaks patches tests the bit at
 //!   the patched place.
 //! - [`settings`]: every key Tweaks' code reads, with VNV's values as the port's defaults and the
-//!   player's `Data\NVSE\Plugins\nvse_stewie_tweaks.ini` over them, key by key (the port never
-//!   writes it).
+//!   player's `Data\NVSE\Plugins\nvse_stewie_tweaks.ini` over them, key by key, then each
+//!   `Data\NVSE\Plugins\Tweaks\INIs\*.ini` over that in the folder's order (unless the main file sets
+//!   `[INI] bMultiINISupport=0`), as Tweaks reads them (the port never writes them).
 //! - [`ini`]: the file read by SimpleIni's rules, as Tweaks reads it.
 //!
 //! It is a fixes row ("lStewieAl's Tweaks built in", `NV_STEWIE`, on in the fixes preset): the row
@@ -22,8 +23,8 @@
 //! bit is set and no translation changes.
 //!
 //! Not yet: Tweaks' eight script commands (opcodes `0x2132` up), its co-save records (kept for the
-//! next save by the co-save row while its section is not read here), the `Tweaks\INIs\*.ini` overlay
-//! files, and every row not in [`rows::ROWS`].
+//! next save by the co-save row while its section is not read here) and every row not in
+//! [`rows::ROWS`].
 
 pub mod ini;
 pub mod rows;
@@ -62,6 +63,8 @@ pub struct Stewie {
     pub installed: bool,
     /// The settings read at [`install`].
     pub settings: settings::Settings,
+    /// The start-up lines [`install`] logged.
+    pub log: Vec<String>,
 }
 
 /// The host's row: Tweaks built in for this run (before [`install`]).
@@ -114,14 +117,56 @@ fn read_ini(e: &mut Engine) -> Option<Vec<u8>> {
     }
 }
 
-/// The settings with the player's INI (if any) over the defaults, and the rows that are on.
+/// The folder of the INIs that overlay the main one (`ProcessINIsForPath("Tweaks\INIs\\")`, beside
+/// Tweaks' DLL).
+pub const INIS: &[u8] = b"Data\\NVSE\\Plugins\\Tweaks\\INIs\\";
+
+/// The overlay files of a listing of [`INIS`], in the listing's order (Tweaks' `DirectoryIterator`
+/// over `*.ini`, `IsFile` only): files whose name ends in `.ini`, without case (a file named just
+/// `.ini` too, as Windows gives it). (Windows' `*.ini` also
+/// matches a long name whose 8.3 short name ends in `.INI`, such as `a.ini_old`; nv-rs's listing has no
+/// short names, so such a file is not read here.)
+pub fn overlay_names(listed: &[engine_core::mod_files::Listed]) -> Vec<Vec<u8>> {
+    listed
+        .iter()
+        .filter(|l| !l.is_folder && l.name.len() >= 4)
+        .filter(|l| l.name[l.name.len() - 4..].eq_ignore_ascii_case(b".ini"))
+        .map(|l| l.name.clone())
+        .collect()
+}
+
+/// Whether the overlay files are read: `[INI] bMultiINISupport` of the main INI (Tweaks reads it
+/// from the main file only, default 1), over the defaults.
+pub fn multi_ini(main: Option<&[u8]>, as_tweaks: bool) -> bool {
+    let files: Vec<(&str, &[u8])> = main.map(|b| ("", b)).into_iter().collect();
+    settings::Settings::new(&files, as_tweaks).long("INI", "bMultiINISupport", 1) != 0
+}
+
+/// The overlay files, read through the mods' files seam (the port's folder first, then the game's),
+/// each named by its path. Without a platform (a unit test) nothing is listed.
+fn read_overlays(e: &mut Engine) -> Vec<(String, Vec<u8>)> {
+    let listed = engine_core::mod_files::list(e, INIS);
+    overlay_names(&listed)
+        .into_iter()
+        .filter_map(|name| {
+            let path = [INIS, &name].concat();
+            let bytes = engine_core::mod_files::read(e, &path)?;
+            Some((String::from_utf8_lossy(&path).into_owned(), bytes))
+        })
+        .collect()
+}
+
+/// The settings with the player's INI (if any) and then the overlay files over the defaults, and
+/// the rows that are on.
 pub fn settings_and_rows(
     ini: Option<&[u8]>,
+    overlays: &[(String, Vec<u8>)],
     keys: &rows::Keys,
 ) -> (settings::Settings, Vec<&'static rows::Row>) {
     let name = String::from_utf8_lossy(INI).into_owned();
-    let files: Vec<(&str, &[u8])> = ini.map(|b| (name.as_str(), b)).into_iter().collect();
-    let settings = settings::Settings::new(&files, keys.as_tweaks);
+    let mut files: Vec<(&str, &[u8])> = ini.map(|b| (name.as_str(), b)).into_iter().collect();
+    files.extend(overlays.iter().map(|(n, b)| (n.as_str(), b.as_slice())));
+    let settings = settings::Settings::with_main(&files, ini.is_some(), keys.as_tweaks);
     let on = rows::ROWS
         .iter()
         .filter(|r| rows::on(r, keys, &settings))
@@ -139,17 +184,24 @@ pub fn install(e: &mut Engine) {
     }
     let keys = state.keys.clone();
     let ini = read_ini(e);
-    let (settings, on) = settings_and_rows(ini.as_deref(), &keys);
+    let overlays = if multi_ini(ini.as_deref(), keys.as_tweaks) {
+        read_overlays(e)
+    } else {
+        Vec::new()
+    };
+    let (settings, on) = settings_and_rows(ini.as_deref(), &overlays, &keys);
     e.clear_stewie();
     for row in &on {
         e.set_stewie(row.bit, true);
     }
-    for line in start_lines(ini.is_some(), &settings, &keys, on.len()) {
+    let log = start_lines(ini.is_some(), &settings, &keys, on.len());
+    for line in &log {
         eprintln!("{line}");
     }
     let state = e.ext::<Stewie>();
     state.installed = true;
     state.settings = settings;
+    state.log = log;
     nvse::plugins::register(e, plugin());
     // The game's state, not one engine's: real threads' engines share it.
     e.share_ext::<Stewie>();

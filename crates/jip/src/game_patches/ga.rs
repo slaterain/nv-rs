@@ -51,6 +51,23 @@
 //!   game a text too long for the buffer fails the copy (`strcpy_s`) and the game ends: above
 //!   259 characters without JIP, above 515 with it. [`corner_message_text_size`] answers the
 //!   same buffer size for `MessageExAlt`.
+//! - **G55** (JIP's own, with `MessageBoxExAlt`; `WriteRelCall(0x7A9AEE, MaxMessageWidthHook)`,
+//!   `WriteRelCall(0x7A9C45, ..)`): while a `MessageBoxExAlt` box waits for its answer, the message
+//!   menu's `max_menu_width` (`MessageMenu::LoadNextMessage`, `007a92e0`: the room for the text and
+//!   the menu's widest) is 1200 instead of the menu file's value: a long message or long button
+//!   labels wrap at, and the box is capped at, 1200 instead of the menu file's maximum (the number
+//!   of buttons is unaffected). With JIP installed, the row on or off.
+//! - **G129** (JIP's own, with `SetFontFile`; `WriteRelCall(0x70B285, InitFontManagerHook)`,
+//!   `SafeWrite8(0xA1B032, 0x59)`, and the `xfonts` lists read in `InitGamePatches`): the font
+//!   manager is made with 89 font slots instead of 8: fonts 1 to 8 as the game's (their files from
+//!   the `sFont_<n>_Filename` settings), font 9 none, fonts 10 to 89 from the lines `<n>=<path>` of
+//!   the files `Data\NVSE\plugins\xfonts\*.txt` (the first line for a number wins; a path whose
+//!   file is not under `data\` is passed over), each font not given (or not loaded) being font 3;
+//!   a font file loads once, whatever number uses it (`s_fontInfosMap`). Text is measured in any
+//!   font from 1 to 89. With JIP installed, the row on or off. Two guards of nv-rs's own, in with the
+//!   row (each where the game with JIP crashes or writes past a block): a font whose slot is empty
+//!   (font 9) is measured as a font out of range, and `Font::Load` reads no more of a font file
+//!   than its 0x3928-byte data block (`0xA154DD`).
 //! - **G80** (no comment; `WriteRelJump(0x777123, RolloverWeaponHook)`): the HUD's crosshair
 //!   name of a weapon lying in the world (`HUDMainMenu::SetInfoForRef`, `00775a00`) gets a "+" at
 //!   its end when the weapon has a weapon mod on it (the reference's `ExtraWeaponModFlags`, kind
@@ -99,6 +116,21 @@ pub const TRAIT_DESCRIPTION: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_6f04);
 /// G17's seam: the tile menu destructor's clear of the menu's open byte (words: the tile, its
 /// menu; any answer skips the clear).
 pub const MENU_OPEN_BYTE: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_f035);
+/// G55's seams: the message menu's two `max_menu_width` reads (an answer is the width's float
+/// bits, read in place of the menu file's value).
+pub const MAX_MESSAGE_WIDTH: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x007a_9aee),
+    SiteSlot::new(Owner::Jip, 0x007a_9c45),
+];
+/// G129's seam: the font manager's start (no words; answered: JIP's start ran in place of the
+/// game's).
+pub const FONT_MANAGER_START: SiteSlot = SiteSlot::new(Owner::Jip, 0x0070_b285);
+/// G129's seam: `CalculateStringDimensions`' last font (words: the font asked for, the font
+/// manager; the answer is the last font, 0 refusing every font).
+pub const LAST_FONT: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_b032);
+/// G129's guard (nv-rs's own, a fix seam: in with the row): `Font::Load`'s read of the font file
+/// (words: the file's size; the answer is the size read).
+pub const FONT_FILE_READ: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_54dd);
 /// G21's seam: the head of the activation choice walk (words: the list node; an answer of 1
 /// passes the node over).
 pub const ACTIVATION_TEXT: SiteSlot = SiteSlot::new(Owner::Jip, 0x007a_a80f);
@@ -198,17 +230,189 @@ pub const AREA: Area = Area {
         VATS_TARGET_DT.addr(),
         MESSAGE_TIME.addr(),
         PICK_LOAD_SCREEN.addr(),
+        FONT_FILE_READ.addr(),
     ],
     fix_wraps: &[LOAD_SCREEN_CANDIDATES.addr()],
     install_fixes,
-    jip_sites: &[],
+    jip_sites: &[
+        FONT_MANAGER_START.addr(),
+        MAX_MESSAGE_WIDTH[0].addr(),
+        MAX_MESSAGE_WIDTH[1].addr(),
+        LAST_FONT.addr(),
+    ],
     jip_wraps: &[],
     install_jip,
 };
 
-/// JIP installed: the default message time's slot, before the threads start.
+/// JIP installed: the default message time's slot, before the threads start; G55 and G129.
 fn install_jip(e: &mut Engine) {
     e.ext_free::<DefaultMessageTime>();
+    for site in MAX_MESSAGE_WIDTH {
+        e.on_site(site, max_message_width);
+    }
+    e.on_site(FONT_MANAGER_START, font_manager_start);
+    e.on_site(LAST_FONT, last_font);
+}
+
+/// G55's width (`kMaxWidth`, 1200.0).
+const MESSAGE_BOX_MAX_WIDTH: f32 = 1200.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: MaxMessageWidthHook (asm).
+/// G55: while any `MessageBoxExAlt` box waits (`s_messageBoxScripts` not empty), 1200 in place of
+/// the trait (the trait not read); else not answered (the game reads it).
+fn max_message_width(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    (crate::commands::jip_fn_ui::message_box_scripts_pending(e) != 0)
+        .then_some(MESSAGE_BOX_MAX_WIDTH.to_bits())
+}
+
+/// The font manager (`0x11F33F8`); the game's eight font file settings (`sFont_<n>_Filename`,
+/// 0xC apart, the text pointer at `+4`: `0x11F3418` for font 1); JIP's manager size (89 slots).
+const FONT_MANAGER: u32 = 0x011f_33f8;
+const FONT_FILE_SETTINGS: u32 = 0x011f_3418;
+const FONT_FILE_SETTING_SIZE: u32 = 0xc;
+const JIP_FONT_MANAGER_SIZE: u32 = 0x164;
+/// A font file's data block (`FontData`, JIP's `BufferData`: `Font::Load` reads the file into
+/// one of this size).
+const FONT_DATA_SIZE: u32 = 0x3928;
+/// The game's fonts (1 to 8), JIP's extra ones (10 to 89) and the one standing in for a missing
+/// extra font (font 3).
+const GAME_FONTS: u32 = 8;
+const FIRST_EXTRA_FONT: u32 = 10;
+const LAST_JIP_FONT: u32 = 89;
+const DEFAULT_EXTRA_FONT: u32 = 3;
+/// JIP's lists of extra fonts.
+const XFONTS_FOLDER: &[u8] = b"Data\\NVSE\\plugins\\xfonts";
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches (the
+// `xfonts` loop over `Data\NVSE\plugins\xfonts\*.txt`).
+/// `s_extraFontsPaths`: for fonts 10 to 89, the path the lists give (the first line for a font
+/// wins), when `data\<path>` is there. The lists are read through the mods' files seam (the
+/// port's own folder first), each with JIP's `LineIterator`; each line is `<n>=<path>`. JIP reads
+/// them while it loads, before the game starts; the port as the font manager is made, the first
+/// thing that uses them (the same files then).
+fn extra_font_paths(e: &mut Engine) -> Vec<Option<Vec<u8>>> {
+    let count = (LAST_JIP_FONT + 1 - FIRST_EXTRA_FONT) as usize;
+    let mut paths: Vec<Option<Vec<u8>>> = vec![None; count];
+    for entry in engine_core::mod_files::list(e, XFONTS_FOLDER) {
+        let name = &entry.name;
+        if entry.is_folder
+            || name.len() < 4
+            || !name[name.len() - 4..].eq_ignore_ascii_case(b".txt")
+        {
+            continue;
+        }
+        let mut file = XFONTS_FOLDER.to_vec();
+        file.push(b'\\');
+        file.extend_from_slice(name);
+        let Some(lines) = crate::commands::jip_fn_utility::file_lines(e, &file, "xfonts") else {
+            continue;
+        };
+        for line in lines {
+            let (number, path) = crate::commands::jip_fn_ui::next_token(&line, b'=');
+            if path.is_empty() {
+                continue;
+            }
+            let index =
+                (crate::utility::str_to_int(number) as u32).wrapping_sub(FIRST_EXTRA_FONT) as usize;
+            if index >= count || paths[index].is_some() {
+                continue;
+            }
+            let mut full = b"data\\".to_vec();
+            full.extend_from_slice(path);
+            if engine_core::mod_files::exists(e, &full) {
+                paths[index] = Some(path.to_vec());
+            }
+        }
+    }
+    paths
+}
+
+/// A new `FontInfo` for font `number` from the guest text at `text` (a game block, the game's
+/// `FontInfo::Init`, which copies the path).
+fn new_font_info(e: &mut Engine, number: u32, text: u32) -> u32 {
+    use crate::commands::jip_fn_ui::{FONT_INFO_INIT, FONT_INFO_SIZE};
+    let block = crate::commands::heap_alloc(e, FONT_INFO_SIZE);
+    e.call(FONT_INFO_INIT, &args![block, number, text, 1u32])
+        .u32()
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitFontManagerHook
+// (asm).
+/// G129, the font manager's start (in place of the game's `FontManager::Init`): when there is
+/// none, JIP's manager of 89 slots is made: fonts 1 to 8 loaded from the game's settings (each
+/// kept in `s_fontInfosMap` by its path; a path already there keeps its first), slot 9 none, fonts
+/// 10 to 89 from the `xfonts` lists (a path kept in the map takes its kept `FontInfo`; a new one
+/// that did not load is given back) or font 3; then the manager is set. Answers: done.
+fn font_manager_start(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    use crate::commands::jip_fn_ui::{font_info, insert_font_info, set_font_manager_extended};
+    if e.mem.u32(FONT_MANAGER) != 0 {
+        return Some(1);
+    }
+    let manager = crate::commands::heap_alloc(e, JIP_FONT_MANAGER_SIZE);
+    e.mem.set_u32(manager + 4 * GAME_FONTS, 0);
+    for number in 1..=GAME_FONTS {
+        let setting = FONT_FILE_SETTINGS + FONT_FILE_SETTING_SIZE * (number - 1);
+        let text = e.mem.u32(setting);
+        let info = new_font_info(e, number, text);
+        let path = nvse::table::guest_text(e, text);
+        insert_font_info(e, &path, info);
+        e.mem.set_u32(manager + 4 * (number - 1), info);
+    }
+    let default = e.mem.u32(manager + 4 * (DEFAULT_EXTRA_FONT - 1));
+    let paths = extra_font_paths(e);
+    for (number, path) in (FIRST_EXTRA_FONT..=LAST_JIP_FONT).zip(paths) {
+        let info = match path {
+            None => default,
+            Some(path) => match font_info(e, &path) {
+                0 => {
+                    let info = crate::commands::with_guest_text(e, &path, |e, text| {
+                        new_font_info(e, number, text)
+                    });
+                    if e.mem
+                        .u32(info + crate::commands::jip_fn_ui::FONT_INFO_BUFFER_DATA)
+                        == 0
+                    {
+                        crate::commands::heap_free(e, info);
+                        default
+                    } else {
+                        insert_font_info(e, &path, info);
+                        info
+                    }
+                }
+                kept => kept,
+            },
+        };
+        e.mem.set_u32(manager + 4 * (number - 1), info);
+    }
+    e.mem.set_u32(FONT_MANAGER, manager);
+    set_font_manager_extended(e);
+    Some(1)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
+// (SafeWrite8(0xA1B032, 0x59)).
+/// G129, `CalculateStringDimensions`' last font: 89. nv-rs's own, with the row (the fixes): a
+/// font from 1 to 89 whose slot in the manager (`w[1]`) is empty answers 0, so that font is
+/// refused as out of range (the result is the start point). Only font 9's slot is empty (JIP
+/// leaves it so; `SetFontFile` refuses 9), and with JIP's 89 the game reads through it and
+/// crashes; with the row off the port stops there.
+fn last_font(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (font, manager) = (w[0], w[1]);
+    if e.jip_patches() & engine_core::extend::jip_patches::FIXES != 0
+        && (1..=LAST_JIP_FONT).contains(&font)
+        && e.mem.u32(manager + 4 * (font - 1)) == 0
+    {
+        return Some(0);
+    }
+    Some(LAST_JIP_FONT)
+}
+
+/// G129's guard (nv-rs's own, with the row): `Font::Load` reads at most its data block
+/// ([`FONT_DATA_SIZE`]) of a font file. The game reads the whole file into that block, so a
+/// longer file (a mod's font from the `xfonts` lists or `SetFontFile`, which reach `Font::Load` at
+/// start or from a script) writes past it into the game's heap; here the rest is not read.
+fn font_file_read(_: &mut Engine, w: &[u32]) -> Option<u32> {
+    Some(w[0].min(FONT_DATA_SIZE))
 }
 
 fn install_fixes(e: &mut Engine) {
@@ -230,6 +434,7 @@ fn install_fixes(e: &mut Engine) {
     e.ext_free::<LoadScreenLists>();
     e.wrap(LOAD_SCREEN_CANDIDATES, load_screen_candidates);
     e.on_site(PICK_LOAD_SCREEN, pick_load_screen);
+    e.on_site(FONT_FILE_READ, font_file_read);
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches

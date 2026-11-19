@@ -561,6 +561,12 @@ pub fn extra_kind(e: &mut Engine, this: Ptr) -> u8 {
 /// maps of the save's references (vtables `010800a8` and `010800c8`) hold in slots 4 and 8.
 const WORD_MAP_HASH: u32 = 0x006c_6a60;
 const WORD_MAP_EQUAL: u32 = 0x006b_81d0;
+/// The menus' maps' own ([`super::tile`]): the menu string map's hash and compare (vtable
+/// `01094d9c`) and the integer maps' (the reaction map's, vtables `01094dfc` and `01094e3c`).
+const MENU_STRING_HASH: u32 = 0x00a0_d1b0;
+const MENU_STRING_EQUAL: u32 = 0x00a0_d180;
+const INT_MAP_HASH: u32 = 0x00a0_d260;
+const INT_MAP_EQUAL: u32 = 0x00ae_8dc0;
 
 // Typed from 00853130
 // Typed from 00a1e380
@@ -579,28 +585,46 @@ const WORD_MAP_EQUAL: u32 = 0x006b_81d0;
 /// function of the start-up load in a profile of 2026-11-11). Both addresses hold this function.
 pub fn map_lookup(e: &mut Engine, this: Ptr, key: u32, out: Ptr<u32>) -> u8 {
     let t = this.addr();
-    let hash = if crate::slot_target(e, t, 4) == WORD_MAP_HASH {
-        typed_call!(
+    let hash = match crate::slot_target(e, t, 4) {
+        WORD_MAP_HASH => typed_call!(
             pathing::FAMILY,
             0x006c_6a60,
             pathing::search::hash(e, this.cast(), key)
-        )
-    } else {
-        e.vcall(t, 4, &args![key]).u32()
+        ),
+        MENU_STRING_HASH => typed_call!(
+            super::FAMILY,
+            0x00a0_d1b0,
+            super::tile::string_hash(e, this, Ptr::new(key))
+        ),
+        INT_MAP_HASH => typed_call!(
+            super::FAMILY,
+            0x00a0_d260,
+            super::tile::int_hash(e, this, key)
+        ),
+        _ => e.vcall(t, 4, &args![key]).u32(),
     };
-    let direct_equal = crate::slot_target(e, t, 8) == WORD_MAP_EQUAL;
+    let equal_slot = crate::slot_target(e, t, 8);
     let table = e.mem.u32(t.wrapping_add(8));
     let mut node = e.mem.u32(table.wrapping_add(hash.wrapping_mul(4)));
     while node != 0 {
         let existing = e.mem.u32(node.wrapping_add(4));
-        let equal = if direct_equal {
-            typed_call!(
+        let equal = match equal_slot {
+            WORD_MAP_EQUAL => typed_call!(
                 pathing::FAMILY,
                 0x006b_81d0,
                 pathing::search::keys_equal(e, this, key, existing)
-            )
-        } else {
-            e.vcall(t, 8, &args![key, existing]).u8()
+            ),
+            MENU_STRING_EQUAL => u8::from(typed_call!(
+                super::FAMILY,
+                0x00a0_d180,
+                super::tile::string_keys_equal(e, this, Ptr::new(key), Ptr::new(existing))
+            )),
+            INT_MAP_EQUAL => u8::from(typed_call!(
+                super::FAMILY,
+                0x00ae_8dc0,
+                super::tile::int_keys_equal(e, t, key, existing)
+            )),
+            _ => e.vcall(t, 8, &args![key, existing]).u8(),
         };
         if equal != 0 {
             let value = e.mem.u32(node.wrapping_add(8));

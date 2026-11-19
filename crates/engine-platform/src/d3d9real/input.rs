@@ -217,12 +217,149 @@ pub(super) fn moved(dx: i32, dy: i32, wheel: i32) {
     }
 }
 
+/// The cursor moved over the game's window to `at` (client pixels) of a client area `size` (width,
+/// height), while the game's mouse is not exclusive (`super::mouse_exclusive`): its place is kept,
+/// as fractions of the area ([`pointer_fraction`]), for the host's next frame, which hands it to
+/// the game's window procedure as a `WM_MOUSEMOVE` (Windows sends one for each move over the
+/// client area, `win32.rs`'s and `winit_window.rs`'s window both call this). Nothing for an empty
+/// area.
+pub(super) fn pointed(at: (f64, f64), size: (f64, f64)) {
+    let Some(fraction) = pointer_fraction(at, size) else {
+        return;
+    };
+    if let Ok(mut i) = input().lock() {
+        point_into(&mut i, fraction);
+    }
+}
+
+fn point_into(i: &mut Input, fraction: [f64; 2]) {
+    i.pointer = Some(fraction);
+    i.pointer_moved = true;
+}
+
+/// The cursor's place `at` (client pixels, the area's top left 0, 0) over a client area `size`
+/// (width, height) as fractions across and down, each kept within 0 to 1 (a place on or past the
+/// edge, as a held button's moves report, is the edge); `None` for an area of no width or height,
+/// or a place that is not a number.
+pub(super) fn pointer_fraction(at: (f64, f64), size: (f64, f64)) -> Option<[f64; 2]> {
+    let (x, y) = at;
+    let (w, h) = size;
+    if !(w > 0.0 && h > 0.0) || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    Some([(x / w).clamp(0.0, 1.0), (y / h).clamp(0.0, 1.0)])
+}
+
+/// A `WM_MOUSEMOVE`'s place from its `lParam`: x in the low word, y in the high word, each signed
+/// (client pixels; left of or above the client area, negative, while a held button drags on).
+// Used by the Win32 window (`win32.rs`); tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn client_place(lparam: u32) -> (f64, f64) {
+    (
+        f64::from(lparam as u16 as i16),
+        f64::from((lparam >> 16) as u16 as i16),
+    )
+}
+
+/// The window became active again after it was not (Alt+Tab back, a click on it), `wparam` the
+/// `WM_ACTIVATE` word Windows gives it (low word `WA_ACTIVE` 1 from the keyboard or
+/// `WA_CLICKACTIVE` 2 from a click, high word set while minimised): kept for the host's next
+/// frame, which hands it to the game's window procedure (`crate::window::post_activate`; the game
+/// makes its mouse exclusive again there, `00a23c00`). The window's first activation, when it is
+/// made, is not passed on: the game's procedure ignores that one (before `Main`), and the window
+/// layers pass only activations that follow a deactivation.
+pub(super) fn reactivated(wparam: u32) {
+    if let Ok(mut i) = input().lock() {
+        i.reactivated = Some(wparam);
+    }
+}
+
 /// The focus left the window: every key and button it held is let go (`win32.rs`'s
-/// `release_input` calls this too), the motion kept for the host's next frame.
+/// `release_input` calls this too), the motion kept for the host's next frame, and a cursor place
+/// not yet taken dropped (the game takes no move while another program is active: `00871d10`
+/// asks for the active window).
 pub(super) fn focus_lost() {
     if let Ok(mut i) = input().lock() {
-        release(&mut i);
+        lose_focus(&mut i);
     }
+}
+
+fn lose_focus(i: &mut Input) {
+    release(i);
+    i.pointer_moved = false;
+}
+
+/// What happened at the game's window that the cursor follows ([`cursor_action`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CursorEvent {
+    /// The window became active from the keyboard (Windows' `WA_ACTIVE`; winit's focus).
+    Activated,
+    /// A button that holds the cursor was pressed over the client area ([`holds_cursor`]).
+    Pressed,
+    /// The window was moved or sized (the hold is made again for its new place).
+    Placed,
+    /// The cursor is over the client area (Windows asks with `WM_SETCURSOR`, `HTCLIENT`).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    OverClient,
+    /// The cursor moved over the client area (`WM_MOUSEMOVE`; winit's `CursorMoved`).
+    Moved,
+}
+
+/// The cursor's state at the game's window, for [`cursor_action`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct CursorNow {
+    /// The game's DirectInput mouse is exclusive (`super::mouse_exclusive`).
+    pub exclusive: bool,
+    /// The window holds the cursor (kept in it, hidden).
+    pub held: bool,
+    /// The game's window is the active one.
+    pub active: bool,
+    /// The game made its mouse exclusive again after it was not (`super::hold_wanted`): Windows
+    /// holds the cursor for it at once; the window layer holds it at the cursor's next move.
+    pub hold_wanted: bool,
+}
+
+/// What a window layer does with the cursor ([`cursor_action`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CursorAction {
+    /// Hold the cursor in the window and hide it.
+    pub hold: bool,
+    /// Let go of the hold.
+    pub let_go: bool,
+    /// Hide the cursor over the client area.
+    pub hide: bool,
+    /// Keep the cursor's place for the game's `WM_MOUSEMOVE` ([`pointed`]).
+    pub record: bool,
+}
+
+/// The one rule both window layers follow for the cursor (`win32.rs`, `winit_window.rs`).
+/// The game's mouse exclusive (its default): Windows holds and hides the cursor for it, so the
+/// window holds it on a keyboard activation and on a click in the client area (a click that
+/// activates the window elsewhere, on its title bar, leaves it free: holding it there pulled the
+/// window down the screen, playtest 2026-10-30), makes the hold again when the window moves, hides
+/// it over the client area only while held, and keeps no place. Once the game makes its mouse
+/// exclusive again after it was not (`00a23c00` at an activation), the hold is made at the next move.
+/// The game's mouse not exclusive (`bBackground Mouse=1`): the cursor is never held (a hold is let
+/// go), it is hidden over the client area as the game's own procedure hides it (`0086a0a0`,
+/// `WM_NCHITTEST`), and each move is kept for the game while its window is the active one (the
+/// game's `00871d10` takes moves only for the active window).
+pub(super) fn cursor_action(now: CursorNow, event: CursorEvent) -> CursorAction {
+    let mut a = CursorAction::default();
+    if now.exclusive {
+        match event {
+            CursorEvent::Activated | CursorEvent::Pressed => a.hold = true,
+            CursorEvent::Placed => a.hold = now.held,
+            CursorEvent::OverClient | CursorEvent::Moved => {
+                a.hold = !now.held && now.active && now.hold_wanted;
+                a.hide = now.held || a.hold;
+            }
+        }
+    } else {
+        a.let_go = now.held;
+        a.hide = event != CursorEvent::Placed;
+        a.record = event == CursorEvent::Moved && now.active;
+    }
+    a
 }
 
 fn add_motion(i: &mut Input, dx: i32, dy: i32, wheel: i32) {
@@ -372,6 +509,137 @@ pub(super) fn frame_of_style(style: u32) -> Frame {
         minimise: menu && style & WS_MINIMIZEBOX != 0,
         maximise: menu && style & WS_MAXIMIZEBOX != 0,
     }
+}
+
+/// A monitor of `size` real pixels in the scaled pixels of a window at `scale` (2.0: two real
+/// pixels to a scaled one), the ones its framed size and place are asked in. The window's own
+/// scale, not the monitor's: Wayland gives an output a whole-number scale (2 at 125%) while the
+/// window is sized with the fractional one (1.25), the one its sizes are turned into real pixels
+/// with.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
+pub(super) fn scaled_screen(size: (u32, u32), scale: f64) -> (f64, f64) {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    (f64::from(size.0) / scale, f64::from(size.1) / scale)
+}
+
+/// Where the game's top-level window goes when it asks for a size ([`placement`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
+pub(super) enum Placement {
+    /// Framed, with this client area in the window's scaled pixels.
+    Framed { client: (u32, u32) },
+    /// Borderless over its monitor: framed, it would reach past the screen's edges.
+    Borderless,
+}
+
+/// Where the game's top-level window goes for the rectangle `rect` it asks for (`SetWindowPos`,
+/// its client area and the frame `border` the game added for it, Windows' for its style), on a
+/// monitor of `monitor` real pixels for a window at `scale` ([`scaled_screen`]). The whole
+/// rectangle has to fit, not only its client area: a window as wide or as tall as the screen
+/// would reach past the screen's edges with its frame (a Steam Deck's 1280 by 800 game, the
+/// rectangle 1296 by 839, on its 1280 by 800 screen: report 004), so it goes borderless over the
+/// screen instead. The screen's whole size: a desktop's panels and macOS's menu bar are not
+/// taken off (Windows' taskbar is not either).
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
+pub(super) fn placement(
+    rect: [i32; 4],
+    border: [i32; 4],
+    monitor: (u32, u32),
+    scale: f64,
+) -> Placement {
+    let screen = scaled_screen(monitor, scale);
+    let outer = (
+        f64::from(rect[2]) - f64::from(rect[0]),
+        f64::from(rect[3]) - f64::from(rect[1]),
+    );
+    if outer.0 <= screen.0 && outer.1 <= screen.1 {
+        Placement::Framed {
+            client: inner_for_game_rect(rect, border),
+        }
+    } else {
+        Placement::Borderless
+    }
+}
+
+/// The log line when the game's framed window of rectangle `outer` does not fit `screen` (scaled
+/// pixels) and goes borderless over the monitor of `monitor` real pixels. A client area of
+/// another shape than the screen's is stretched to it, so the line names the game's settings for
+/// the screen's own shape; not where the client area is the screen's size turned (Wayland may
+/// have read a turned screen upright: [`read_turned`] says so once the window is over it).
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
+pub(super) fn too_large_line(
+    outer: (i32, i32),
+    screen: (f64, f64),
+    client: (u32, u32),
+    monitor: (u32, u32),
+) -> String {
+    let mut line = format!(
+        "the game's window: {}x{} with its frame does not fit the screen ({}x{} in the system's \
+         scaled pixels): shown borderless over the screen instead, the game's picture scaled to it",
+        outer.0,
+        outer.1,
+        screen.0.round(),
+        screen.1.round()
+    );
+    let shape = |(w, h): (u32, u32)| (u64::from(w), u64::from(h));
+    let ((cw, ch), (mw, mh)) = (shape(client), shape(monitor));
+    if cw * mh != ch * mw && client != (monitor.1, monitor.0) && mw > 0 && mh > 0 {
+        line.push_str(&format!(
+            ". Its {}x{} picture is another shape than the screen's {}x{} and is stretched: for \
+             the screen's own shape set FalloutPrefs.ini [Display] iSize W and iSize H to {} and {}",
+            client.0, client.1, monitor.0, monitor.1, monitor.0, monitor.1
+        ));
+    }
+    line
+}
+
+/// The log line for the game's framed window that fits its screen: its client area and the screen.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
+pub(super) fn framed_line(client: (u32, u32), screen: (f64, f64)) -> String {
+    format!(
+        "the game's window: framed, its client area {}x{} on a screen of {}x{} in the system's \
+         scaled pixels",
+        client.0,
+        client.1,
+        screen.0.round(),
+        screen.1.round()
+    )
+}
+
+/// Whether the full-screen borderless window, given `window` real pixels over a monitor that
+/// reads `monitor` real pixels, shows the monitor was read turned: the two sizes swapped. Wayland
+/// reports an output's mode before its turn and winit 0.30 gives no turn, so a screen made
+/// upright and turned to lie wide (a handheld's built-in one: the Steam Deck's 800 by 1280 panel
+/// shown at 1280 by 800) reads upright, and the game was told an upright screen. Asked on
+/// Wayland only (X11 and macOS give a monitor's size after its turn), once the window is full
+/// screen, against the monitor it is on.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
+pub(super) fn read_turned(window: (u32, u32), monitor: (u32, u32)) -> bool {
+    window != monitor && window == (monitor.1, monitor.0)
+}
+
+/// The log line when the monitor was read turned ([`read_turned`]): what the game's own settings
+/// need for a picture of the screen's shape.
+// Used by the Linux and macOS window layer (`winit_window.rs`); tested everywhere.
+#[cfg_attr(windows, allow(dead_code))]
+pub(super) fn turned_line(window: (u32, u32), monitor: (u32, u32)) -> String {
+    format!(
+        "the screen reads {}x{}, but the borderless window over it is {}x{}: this system reports \
+         the screen turned (Wayland gives a turned screen's size before its turn). The game draws at \
+         its FalloutPrefs.ini [Display] iSize W and iSize H: set them to {} and {} for a picture of \
+         the screen's shape",
+        monitor.0, monitor.1, window.0, window.1, window.0, window.1
+    )
 }
 
 /// Runs `f` (a window layer's loop), answering the message of a panic in it instead of passing
@@ -620,6 +888,242 @@ mod tests {
         release(&mut i);
         assert!(i.keys.iter().all(|k| !k) && i.buttons.iter().all(|b| !b));
         assert_eq!(i.motion, [7, 3, -120]);
+    }
+
+    /// The cursor's place over the client area as fractions of it: the middle of a 1920 by 1080
+    /// area is a half each way, the edges 0 and 1, a place past an edge (a held button's moves go
+    /// on outside the window) the edge; an empty area or a place that is not a number gives none.
+    /// A place kept marks a move for the host, and a later one replaces it.
+    #[test]
+    fn the_cursor_place_is_kept_as_fractions_of_the_client_area() {
+        let area = (1920.0, 1080.0);
+        assert_eq!(pointer_fraction((960.0, 540.0), area), Some([0.5, 0.5]));
+        assert_eq!(pointer_fraction((0.0, 0.0), area), Some([0.0, 0.0]));
+        assert_eq!(pointer_fraction((1920.0, 1080.0), area), Some([1.0, 1.0]));
+        assert_eq!(pointer_fraction((-40.0, 2000.0), area), Some([0.0, 1.0]));
+        assert_eq!(pointer_fraction((480.0, 270.0), area), Some([0.25, 0.25]));
+        assert_eq!(pointer_fraction((5.0, 5.0), (0.0, 1080.0)), None);
+        assert_eq!(pointer_fraction((5.0, 5.0), (1920.0, -1.0)), None);
+        assert_eq!(pointer_fraction((f64::NAN, 5.0), area), None);
+        let mut i = Input::default();
+        assert_eq!((i.pointer, i.pointer_moved), (None, false));
+        point_into(&mut i, [0.25, 0.75]);
+        point_into(&mut i, [0.5, 0.5]);
+        assert_eq!((i.pointer, i.pointer_moved), (Some([0.5, 0.5]), true));
+    }
+
+    /// Report 004 (a Steam Deck): the game's framed window at the screen's own size cannot fit with
+    /// its frame. The game asks for its client area plus the frame it added for its style
+    /// (Windows' left 8, top 31, right 8, bottom 8: the Deck's 1280 by 800 game asked for the
+    /// rectangle 0, 0, 1296, 839): that rectangle has to fit the screen in the window's scaled
+    /// pixels, not only the client area. 1280 by 720 on 1920 by 1080 stays framed with its
+    /// 1280 by 720 client area; 1280 by 800 on the Deck's 1280 by 800 goes borderless (its client
+    /// area alone would fit), as on a screen read turned (800 by 1280), and a window too wide only
+    /// or too tall only. The window's own scale decides: on Wayland at 125% or 150% the window is
+    /// sized at 1.25 or 1.5 while the output says 2, and 1280 by 720 fits 1920 by 1080 at 1.25
+    /// (1536 by 864) and 2560 by 1440 at 1.5 (1707 by 960), not either at 2. A scale that is not a
+    /// number is 1.
+    #[test]
+    fn a_framed_window_fits_its_screen_only_with_its_frame() {
+        const BORDER: [i32; 4] = [-8, -31, 8, 8];
+        let rect = |w: i32, h: i32| [0, 0, w + 16, h + 39];
+        let at = |w: i32, h: i32, monitor: (u32, u32), scale: f64| {
+            placement(rect(w, h), BORDER, monitor, scale)
+        };
+        assert_eq!(scaled_screen((2560, 1440), 1.5), (2560.0 / 1.5, 960.0));
+        assert_eq!(scaled_screen((1920, 1080), 1.25), (1536.0, 864.0));
+        assert_eq!(scaled_screen((1280, 800), 1.0), (1280.0, 800.0));
+        assert_eq!(scaled_screen((1280, 800), 0.0), (1280.0, 800.0));
+        assert_eq!(scaled_screen((1280, 800), f64::NAN), (1280.0, 800.0));
+        let framed = |w, h| Placement::Framed { client: (w, h) };
+        assert_eq!(
+            placement([0, 0, 1296, 839], BORDER, (1280, 800), 1.0),
+            Placement::Borderless,
+            "the Deck's own rectangle"
+        );
+        assert_eq!(
+            placement([0, 0, 1296, 759], BORDER, (1920, 1080), 1.0),
+            framed(1280, 720)
+        );
+        assert_eq!(
+            at(1904, 1041, (1920, 1080), 1.0),
+            framed(1904, 1041),
+            "exactly"
+        );
+        assert_eq!(
+            at(1280, 800, (800, 1280), 1.0),
+            Placement::Borderless,
+            "read turned"
+        );
+        assert_eq!(
+            at(1280, 720, (1280, 1080), 1.0),
+            Placement::Borderless,
+            "too wide only"
+        );
+        assert_eq!(
+            at(1200, 780, (1280, 800), 1.0),
+            Placement::Borderless,
+            "too tall only"
+        );
+        assert_eq!(at(1280, 720, (1920, 1080), 1.25), framed(1280, 720));
+        assert_eq!(at(1280, 720, (2560, 1440), 1.5), framed(1280, 720));
+        assert_eq!(at(1280, 720, (1920, 1080), 2.0), Placement::Borderless);
+        assert_eq!(at(1280, 720, (2560, 1440), 2.0), Placement::Borderless);
+        assert_eq!(at(1920, 1080, (2560, 1440), 1.5), Placement::Borderless);
+        assert_eq!(
+            too_large_line((1296, 839), (1280.0, 800.0), (1280, 800), (1280, 800)),
+            "the game's window: 1296x839 with its frame does not fit the screen (1280x800 in the \
+             system's scaled pixels): shown borderless over the screen instead, the game's picture \
+             scaled to it"
+        );
+        // Another shape is stretched: the line names the screen's own size for iSize. Not for
+        // the screen's size turned, which may be a screen read turned (said once full screen).
+        assert_eq!(
+            too_large_line((1296, 759), (1280.0, 800.0), (1280, 720), (1280, 800)),
+            "the game's window: 1296x759 with its frame does not fit the screen (1280x800 in the \
+             system's scaled pixels): shown borderless over the screen instead, the game's picture \
+             scaled to it. Its 1280x720 picture is another shape than the screen's 1280x800 and \
+             is stretched: for the screen's own shape set FalloutPrefs.ini [Display] iSize W and \
+             iSize H to 1280 and 800"
+        );
+        assert!(
+            !too_large_line((1296, 839), (800.0, 1280.0), (1280, 800), (800, 1280))
+                .contains("iSize")
+        );
+        assert_eq!(
+            framed_line((1280, 720), (1706.67, 960.0)),
+            "the game's window: framed, its client area 1280x720 on a screen of 1707x960 in the \
+             system's scaled pixels"
+        );
+    }
+
+    /// A screen read turned (Wayland gives a turned output's mode before its turn: the Deck's
+    /// panel reads 800 by 1280) shows when the borderless window over it is given the two sizes
+    /// swapped; the same size, another size, or a square screen is no turn. The line names the
+    /// game's settings for a picture of the screen's shape.
+    #[test]
+    fn a_screen_read_turned_shows_in_the_borderless_windows_size() {
+        assert!(read_turned((1280, 800), (800, 1280)));
+        assert!(!read_turned((1280, 800), (1280, 800)));
+        assert!(!read_turned((1920, 1080), (800, 1280)));
+        assert!(!read_turned((1000, 1000), (1000, 1000)), "square");
+        let line = turned_line((1280, 800), (800, 1280));
+        assert!(line.starts_with(
+            "the screen reads 800x1280, but the borderless window over it is 1280x800"
+        ));
+        assert!(line.ends_with(
+            "iSize W and iSize H: set them to 1280 and 800 for a picture of the screen's shape"
+        ));
+    }
+
+    /// A `WM_MOUSEMOVE`'s `lParam`: x low, y high, each a signed word (a place left of and above
+    /// the area while a button drags on is negative).
+    #[test]
+    fn a_mouse_moves_place_is_x_low_and_y_high() {
+        assert_eq!(client_place((700 << 16) | 100), (100.0, 700.0));
+        assert_eq!(client_place(0xfffb_fff6), (-10.0, -5.0));
+        assert_eq!(client_place(0), (0.0, 0.0));
+    }
+
+    fn now(exclusive: bool, held: bool, active: bool, hold_wanted: bool) -> CursorNow {
+        CursorNow {
+            exclusive,
+            held,
+            active,
+            hold_wanted,
+        }
+    }
+
+    fn action(hold: bool, let_go: bool, hide: bool, record: bool) -> CursorAction {
+        CursorAction {
+            hold,
+            let_go,
+            hide,
+            record,
+        }
+    }
+
+    /// The game's mouse exclusive (its default): a keyboard activation and a click hold the
+    /// cursor; a moved or sized window holds it again only if it was held; over the client area it
+    /// is hidden only while held, and a move keeps no place for the game. After the game made its
+    /// mouse exclusive again (an activation, `00a23c00`), the next move over the active window
+    /// holds it; not while another program is active, and not once it is held.
+    #[test]
+    fn an_exclusive_mouse_holds_the_cursor_and_keeps_no_place() {
+        use CursorEvent::*;
+        let free = now(true, false, true, false);
+        let held = now(true, true, true, false);
+        assert_eq!(
+            cursor_action(free, Activated),
+            action(true, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(free, Pressed),
+            action(true, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(free, Placed),
+            action(false, false, false, false)
+        );
+        assert_eq!(
+            cursor_action(held, Placed),
+            action(true, false, false, false)
+        );
+        for event in [OverClient, Moved] {
+            assert_eq!(
+                cursor_action(free, event),
+                CursorAction::default(),
+                "{event:?}"
+            );
+            assert_eq!(
+                cursor_action(held, event),
+                action(false, false, true, false)
+            );
+            let wanted = now(true, false, true, true);
+            assert_eq!(
+                cursor_action(wanted, event),
+                action(true, false, true, false)
+            );
+            let elsewhere = now(true, false, false, true);
+            assert_eq!(cursor_action(elsewhere, event), CursorAction::default());
+            let held_wanted = now(true, true, true, true);
+            assert_eq!(
+                cursor_action(held_wanted, event),
+                action(false, false, true, false)
+            );
+        }
+    }
+
+    /// The game's mouse not exclusive (`bBackground Mouse=1`): the cursor is never held (a hold
+    /// is let go), it is hidden over the client area, and a move is kept for the game only while
+    /// its window is the active one.
+    #[test]
+    fn a_free_mouse_is_never_held_and_its_moves_are_kept_while_active() {
+        use CursorEvent::*;
+        for held in [false, true] {
+            for event in [Activated, Pressed, OverClient] {
+                let a = cursor_action(now(false, held, true, true), event);
+                assert_eq!(a, action(false, held, true, false), "{event:?} held {held}");
+            }
+            let placed = cursor_action(now(false, held, true, false), Placed);
+            assert_eq!(placed, action(false, held, false, false));
+            let moved = cursor_action(now(false, held, true, false), Moved);
+            assert_eq!(moved, action(false, held, true, true));
+            let elsewhere = cursor_action(now(false, held, false, false), Moved);
+            assert_eq!(elsewhere, action(false, held, true, false));
+        }
+    }
+
+    /// The focus leaving the window drops a cursor place the host has not taken yet, so a move
+    /// made while the game was active is not handed to it after another program became active.
+    #[test]
+    fn losing_the_focus_drops_a_place_not_taken() {
+        let mut i = Input::default();
+        point_into(&mut i, [0.5, 0.5]);
+        i.buttons[0] = true;
+        lose_focus(&mut i);
+        assert_eq!((i.pointer, i.pointer_moved), (Some([0.5, 0.5]), false));
+        assert!(!i.buttons[0], "the held button let go");
     }
 
     /// The client area is the game's rectangle less the frame the game added for it (Windows'

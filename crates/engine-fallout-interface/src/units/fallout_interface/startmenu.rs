@@ -18,6 +18,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// `Tile::GetValue(id)` (unnamed in the engine map, Ghidra labels it with the
 /// `Tile` methods around it): the value of trait `id`, `float` in ST0.
@@ -371,6 +372,13 @@ pub fn list_box_get_at(e: &mut Engine, this: Ptr<ListBox>, index: u32, by_positi
         while node != 0 {
             let slot = node_item(e, node);
             let item = e.mem.u32(slot.addr());
+            // 007a7025: lStewieAl's Tweaks' row S0022.36 (`MenuFixes`, "null check tile in
+            // ListBox::GetTileByIndex"): a node with no item is passed over, where the exe reads
+            // the null item's tile.
+            if e.stewie(stewie::LIST_BOX_GET_AT_NULL_ITEM) && item == 0 {
+                node = node_next(e, node);
+                continue;
+            }
             let tile = e.mem.u32(item);
             let value = tile_value(e, Ptr::new(tile), TRAIT_LIST_INDEX);
             if f64::from(index) == f64::from(value) {
@@ -5787,9 +5795,18 @@ mod tests {
         assert_eq!(r.e.call(0x007a_6fa0, &args![list, 3u32, 1u32]).u32(), 0);
     }
 
+    /// lStewieAl's Tweaks' row S0022.36 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn get_at_by_list_index_compares_the_tiles_trait() {
+        for on in [false, true] {
+            get_at_by_list_index_compares_the_tiles_trait_row(on);
+        }
+    }
+
+    fn get_at_by_list_index_compares_the_tiles_trait_row(on: bool) {
         let mut r = rig();
+        r.e.set_stewie(stewie::LIST_BOX_GET_AT_NULL_ITEM, on);
         let a = r.item(0xc1, 0);
         let b = r.item(0xc2, 0);
         let list = r.list_box(&[a, b]);
@@ -5803,6 +5820,30 @@ mod tests {
         r.stub(LIST_IS_EMPTY, 1);
         assert_eq!(r.e.call(0x007a_6fa0, &args![list, 5u32, 0u32]).u32(), 0);
         assert_eq!(r.calls_to(LIST_IS_EMPTY)[0], vec![list.addr() + 4]);
+    }
+
+    /// lStewieAl's Tweaks' row S0022.36: a list whose first node has no item, looked up by list
+    /// index. The exe reads the null item's tile and stops; with the row on the node is passed
+    /// over and the second item is found.
+    #[test]
+    fn s0022_36_get_at_with_an_empty_node() {
+        for on in [false, true] {
+            let mut r = rig();
+            r.e.mem.unmap(0, 0x1000);
+            let b = r.item(0xc2, 0);
+            let list = r.list_box(&[0, b]);
+            r.stub(LIST_IS_EMPTY, 0);
+            r.set_tile(0xc2, TRAIT_LIST_INDEX, 9.0);
+            r.e.set_stewie(stewie::LIST_BOX_GET_AT_NULL_ITEM, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                r.e.call(0x007a_6fa0, &args![list, 9u32, 0u32]).u32()
+            }));
+            r.e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(run.unwrap(), b);
+            }
+        }
     }
 
     #[test]

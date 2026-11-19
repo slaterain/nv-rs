@@ -64,6 +64,9 @@ pub enum Native {
     /// `JIPScriptRunner::RunScript` (`RunScriptSnippet` with a delay): the callback's `this` is
     /// the script, its first argument (kept in [`Callback::ref_id`]) the calling reference.
     RunScript,
+    /// `ToggleQuestMessages` (`SuppressQuestMessages`): quest messages shown again a frame later
+    /// (`commands::jip_fn_ui_code`).
+    ToggleQuestMessages,
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallbackArgsEx (one
@@ -124,6 +127,7 @@ fn execute_native(e: &mut Engine, native: Native, this_obj: u32, arg: u32) {
             crate::commands::jip_fn_misc_ref_insert::run_pending(e, this_obj);
         }
         Native::RunScript => crate::script_runner::run_script(e, this_obj, arg),
+        Native::ToggleQuestMessages => crate::commands::jip_fn_ui_code::toggle_quest_messages(e),
     }
 }
 

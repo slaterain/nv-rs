@@ -138,7 +138,7 @@ pub fn lookup_mod_by_name(e: &Engine, name: &[u8]) -> u32 {
 }
 
 /// `DataHandler::GetModIndex`: the file's index (`ModInfo::modIndex`, +0x40C), 0xFF for none.
-fn mod_index(e: &Engine, name: &[u8]) -> u32 {
+pub(crate) fn mod_index(e: &Engine, name: &[u8]) -> u32 {
     match lookup_mod_by_name(e, name) {
         0 => 0xff,
         info => u32::from(e.mem.u8(info + 0x40c)),
@@ -594,7 +594,7 @@ fn backslashes(path: &mut [u8]) {
 /// `None` when the file is not there. JIP reads the whole file into its string buffer: a file
 /// that does not fit ([`super::formatted_in_buffer`]'s rule) stops the port without the list
 /// guard row.
-fn file_lines(e: &Engine, path: &[u8], command: &str) -> Option<Vec<Vec<u8>>> {
+pub(crate) fn file_lines(e: &Engine, path: &[u8], command: &str) -> Option<Vec<Vec<u8>>> {
     let bytes = engine_core::mod_files::read(e, path)?;
     if bytes.len() + 2 > STR_ARG_BUFFER && !super::fix_on(e, super::LIST_GUARD) {
         panic!(

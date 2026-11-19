@@ -31,6 +31,13 @@ if [ "${1:-}" = "--build-mods" ]; then
     rm -rf -- "$3/modgame" && mkdir -p -- "$3/modgame" && cp -R -- "$2/." "$3/modgame/"
     exit $?
 fi
+# --install-mods GAME INSTALLS MODS: says what it was given and what it read.
+if [ "${1:-}" = "--install-mods" ]; then
+    echo "installer: $2 | $3 | $4"
+    IFS= read -r typed || typed=''
+    echo "typed: $typed"
+    exit 0
+fi
 # FOLDER NAME KIND: the entries of FOLDER named NAME without case that are of KIND (-f or -d).
 named() {
     ls -1a -- "$1" 2>/dev/null | while IFS= read -r entry; do
@@ -62,7 +69,9 @@ exit "${FAKE_STATUS:-0}"
 EOF
 chmod +x "$T/program"
 export NV_RS_PROGRAM="$T/program" FAKE_FIND="$T/find.txt"
-unset NV_RS_GAME NV_RS_ANSWERS_FROM_INPUT
+# Also the profile variables, so a caller's own (the profiler's NV_PROFILE among them) cannot pass
+# or fail the profile checks.
+unset NV_RS_GAME NV_RS_ANSWERS_FROM_INPUT NV_RS_PROFILE NV_PROFILE
 run() { $SH "$PLAY" "$@"; }
 answer() { # TEXT ARGS...: play.sh with TEXT as the typed answers
     text=$1
@@ -345,13 +354,15 @@ check "26 where it is, said" 'printf "%s" "$out" | grep -qxF "The mods folder: $
 check "26 empty and just made, said" 'printf "%s" "$out" | grep -qF "It is empty (just made)"'
 check "26 built from the game and the mods folder" 'printf "%s" "$out" | grep -qxF "built: $game | $own26 | $own26/my mods"'
 check "26 plays from modgame" 'printf "%s" "$out" | grep -qF "program args: $own26/modgame"'
-check "26 mods profile" 'printf "%s" "$out" | grep -qx "NV_PROFILE=mods"'
+check "26 mods profile" 'printf "%s" "$out" | grep -qx "NV_RS_PROFILE=mods"'
+check "26 profile selector does not enable the engine profiler" '! printf "%s" "$out" | grep -q "^NV_PROFILE="'
 check "26 mods profile saves" 'printf "%s" "$out" | grep -qF "NV_SAVE_OUT=$own26/mods/Documents/My Games/FalloutNV/Saves"'
 check "26 saves offered into the mods profile" 'printf "%s" "$out" | grep -qF "Your saves from" && [ -f "$own26/mods/saves-offered.txt" ]'
 check "26 saves kept apart, said" 'printf "%s" "$out" | grep -qF "./play.sh --mods --import-saves"'
 check "26 plain play's offer not used up" '[ ! -e "$own26/saves-offered.txt" ]'
 out=$(printf '\n' | env FAKE_FIND="$T/find26.txt" NV_RS_GAME="$game" NV_RS_ANSWERS_FROM_INPUT=1 $SH "$pkg/play.sh" 2>&1)
-check "26 without --mods: the game profile" 'printf "%s" "$out" | grep -qx "NV_PROFILE=game" && printf "%s" "$out" | grep -qF "program args: $game"'
+check "26 without --mods: the game profile" 'printf "%s" "$out" | grep -qx "NV_RS_PROFILE=game" && printf "%s" "$out" | grep -qF "program args: $game"'
+check "26 without --mods: the engine profiler not enabled" '! printf "%s" "$out" | grep -q "^NV_PROFILE="'
 check "26 plain play still offers the saves" 'printf "%s" "$out" | grep -qF "Your saves from" && [ -f "$own26/saves-offered.txt" ]'
 plain="$own26/game/Documents/My Games/FalloutNV/Saves"
 mkdir -p "$plain"
@@ -369,6 +380,17 @@ check "26 the plain profile's saves untouched" '[ "$(cd "$plain" && ls -1A && ck
 out=$(env FAKE_FIND="$T/find26.txt" NV_RS_GAME="$game" FAKE_MODS_STATUS=1 $SH "$pkg/play.sh" --mods </dev/null 2>&1); st=$?
 check "26 a failed build stops" '[ $st != 0 ] && ! printf "%s" "$out" | grep -q "program args:"'
 check "26 steam folder unchanged" '[ "$(snapshot)" = "$before" ]'
+
+# 27. --install-mods: the program's chooser is given the game, nv-rs's mod installs and the mods
+# folder in nv-rs's own folder ("my mods", said), reads the player's typing, and nothing is started
+# after it.
+out=$(printf 'q\n' | env NV_RS_GAME="$game" $SH "$pkg/play.sh" --install-mods 2>&1); st=$?
+check "27 status 0" '[ $st = 0 ]'
+check "27 the chooser's folders" 'printf "%s" "$out" | grep -qxF "installer: $game | $own/mod installs | $own/my mods"'
+check "27 where the mods folder is, said" 'printf "%s" "$out" | grep -qF "The mods folder: $own/my mods"'
+check "27 the typing reaches it" 'printf "%s" "$out" | grep -qxF "typed: q"'
+check "27 no game started" '! printf "%s" "$out" | grep -q "program args:"'
+check "27 steam folder unchanged" '[ "$(snapshot)" = "$before" ]'
 
 # 28. A package unpacked inside the game's folder: said plainly, and nothing is written in the game's
 # folder by a --mods start (the mods folder is in nv-rs's own folder).
