@@ -44,7 +44,9 @@ pub mod jip_fn_light;
 pub mod jip_fn_linked_ref;
 pub mod jip_fn_marker_cmds;
 pub mod jip_fn_minimap;
+pub mod jip_fn_minimap_fog;
 pub mod jip_fn_minimap_seams;
+pub mod jip_fn_minimap_update;
 pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_cameras;
 pub mod jip_fn_misc_ref_code;
@@ -278,6 +280,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_miscellaneous_depth::COMMANDS,
     // `InitMiniMap` (JIP MiniMap's start; its patches in `jip_fn_minimap_seams`).
     jip_fn_minimap::COMMANDS,
+    // `UpdateMiniMap` (its fog of war in `jip_fn_minimap_fog`).
+    jip_fn_minimap_update::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -951,6 +955,8 @@ mod tests {
             "jip_fn_ui",
             "jip_fn_miscellaneous",
             // jip_fn_minimap (InitMiniMap).
+            "jip_fn_minimap",
+            // jip_fn_minimap_update (UpdateMiniMap).
             "jip_fn_minimap",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
