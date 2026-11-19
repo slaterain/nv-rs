@@ -3933,7 +3933,19 @@ pub fn fn_00609220(e: &mut Engine, this: Ptr<TESNPC>, buffer: Ptr) {
         follows_race = true;
     }
     if change_flag_set(e, 0x0042_8110, buffer, 0x200_0000) {
-        let race = load_form_cast(e, buffer, TYPE_TES_RACE);
+        // lStewieAl's Tweaks' row S0049 (`patchFixUnresolvedRaceCrash`, the lookup at `0x60936F`): a
+        // race the save names that is not found is CaucasianVanilla (`0x19`), then cast as before.
+        let id = e.call(0x0086_48a0, &args![buffer]).u32();
+        let mut form = e.call(LOOKUP_FORM, &args![id]).u32();
+        if form == 0 && e.stewie(engine_core::extend::stewie::UNRESOLVED_RACE) {
+            form = e.call(LOOKUP_FORM, &args![0x19u32]).u32();
+        }
+        let race = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, TYPE_TES_FORM, TYPE_TES_RACE, 0u32],
+            )
+            .u32();
         if race
             != typed_call!(
                 leaf::FAMILY,
@@ -4875,8 +4887,19 @@ pub fn tesnpc_activate(
         if e.vcall(target_process, 0x610, &args![]).u32() != 0 {
             return false;
         }
-        let activator_process = process_of(e, activator);
-        let activator_state = e.vcall(activator_process, 0x27c, &args![]).u32();
+        // lStewieAl's Tweaks' row S0199.05 (`MiscCrashFixes`, the call at `0x607A7D`): no activating
+        // actor, or one with no process, has state 0.
+        let guarded = e.stewie(engine_core::extend::stewie::NPC_ACTIVATE_NULL_PROCESS);
+        let activator_process = if guarded && activator == 0 {
+            0
+        } else {
+            process_of(e, activator)
+        };
+        let activator_state = if guarded && activator_process == 0 {
+            0
+        } else {
+            e.vcall(activator_process, 0x27c, &args![]).u32()
+        };
         let target_state = e.vcall(target_process, 0x27c, &args![]).u32();
         let activation = Activation {
             this,
@@ -11011,6 +11034,61 @@ mod tests {
         assert!(calls(&mut w.e, 0x006e_cd40).is_empty());
     }
 
+    /// lStewieAl's Tweaks' row S0049 (`patchFixUnresolvedRaceCrash`, the lookup at `0x60936F`): a save
+    /// whose race id is not found: the exe sets no race (the NPC crashes later); with the row the race
+    /// is CaucasianVanilla (`0x19`). The original race's lookup is not changed.
+    #[test]
+    fn s0049_a_saved_race_that_is_not_found() {
+        for on in [false, true] {
+            let mut w = save_load_world(0x200_0000, 0);
+            let old_race = w.e.mem.alloc(0x600);
+            let caucasian = w.e.mem.alloc(0x600);
+            w.e.mem.set_f32(old_race + 0x60, 1.0);
+            w.e.mem.set_u32(w.npc.addr() + COMPONENT_RACE + 4, old_race);
+            // A height of its own: the new race's height is not read.
+            w.e.set(w.npc, TESNPC::fHeight, 1.5);
+            w.e.register_double(LOOKUP_FORM, move |_, a| {
+                ret(match a[0] {
+                    0x0dea_d000 | 0x0dea_d001 => 0,
+                    0x19 => caucasian,
+                    id => id,
+                })
+            });
+            w.e.set_stewie(engine_core::extend::stewie::UNRESOLVED_RACE, on);
+            w.ids.borrow_mut().extend([0x0dea_d000, 0x0dea_d001]);
+            started(&mut w.e);
+            w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+            let race = w.e.mem.u32(w.npc.addr() + COMPONENT_RACE + 4);
+            assert_eq!(race, if on { caucasian } else { 0 }, "row {on}");
+            assert_eq!(w.e.get(w.npc, TESNPC::pOriginalRace), Ptr::NULL);
+        }
+    }
+
+    /// Row S0049 with the saved race found (ordinary input): the same race with the row off and on.
+    #[test]
+    fn s0049_row_on_with_the_saved_race_found_changes_nothing() {
+        let mut races = vec![];
+        for on in [false, true] {
+            let mut w = save_load_world(0x200_0000, 0);
+            let old_race = w.e.mem.alloc(0x600);
+            let new_race = w.e.mem.alloc(0x600);
+            w.e.mem.set_f32(old_race + 0x60, 1.0);
+            w.e.mem.set_f32(new_race + 0x60, 2.0);
+            w.e.mem.set_u32(w.npc.addr() + COMPONENT_RACE + 4, old_race);
+            w.e.set(w.npc, TESNPC::fHeight, 1.0);
+            w.e.set_stewie(engine_core::extend::stewie::UNRESOLVED_RACE, on);
+            w.ids.borrow_mut().extend([new_race, 0x3003]);
+            started(&mut w.e);
+            w.e.call(0x0060_9220, &args![w.npc, w.buffer]);
+            races.push((
+                w.e.mem.u32(w.npc.addr() + COMPONENT_RACE + 4),
+                w.e.get(w.npc, TESNPC::fHeight),
+            ));
+            assert_eq!(races[races.len() - 1].0, new_race);
+        }
+        assert_eq!(races[0].1, races[1].1);
+    }
+
     #[test]
     fn load_applies_the_face_and_reports_what_changed() {
         // A new alternate coordinate with one changed element.
@@ -11720,6 +11798,50 @@ mod tests {
         fn answer(&mut self, table: u32, offset: u32, value: u32) {
             returns(&mut self.e, slot(table, offset), value);
         }
+    }
+
+    /// lStewieAl's Tweaks' row S0199.05 (`MiscCrashFixes`, the call at `0x607A7D`): an NPC activated by
+    /// a reference that is not an actor, and by an actor with no process: the exe asks the missing
+    /// process for its state and stops; with the row the state is 0 and the activation goes on.
+    #[test]
+    fn s0199_05_an_activator_with_no_process() {
+        for not_an_actor in [true, false] {
+            for on in [false, true] {
+                let mut w = activate_world();
+                if not_an_actor {
+                    let activator = w.activator;
+                    w.e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+                        ret(if a[0] == activator { 0 } else { a[0] })
+                    });
+                } else {
+                    w.e.mem.set_u32(w.activator + 0x68, 0);
+                }
+                w.e.set_stewie(engine_core::extend::stewie::NPC_ACTIVATE_NULL_PROCESS, on);
+                started(&mut w.e);
+                let run =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.activate(0, 0)));
+                w.e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "not an actor {not_an_actor}, row {on}");
+                if on {
+                    assert!(calls(&mut w.e, slot(ACT_ACTIVATOR_PROCESS, 0x27c)).is_empty());
+                }
+            }
+        }
+    }
+
+    /// Row S0199.05 with an activating actor that has its process (ordinary input): the same calls and
+    /// answer with the row off and on.
+    #[test]
+    fn s0199_05_row_on_with_an_activator_process_changes_nothing() {
+        let mut runs = vec![];
+        for on in [false, true] {
+            let mut w = activate_world();
+            w.e.set_stewie(engine_core::extend::stewie::NPC_ACTIVATE_NULL_PROCESS, on);
+            started(&mut w.e);
+            let answer = w.activate(0, 0);
+            runs.push((answer, w.e.call_log.take()));
+        }
+        assert_eq!(runs[0], runs[1]);
     }
 
     #[test]

@@ -177,7 +177,8 @@ fn sorted_find_diff() {
 
 /// The C runtime's `bsearch`, typed in the family for the sorted find, against its translation: the
 /// trait compare over [`shaped_tile`]'s arrays (both middles, negative and repeated ids), and a
-/// stand-in compare over 8-byte records holding the same ids.
+/// stand-in compare over 8-byte records holding the same ids. And the invalid arguments: a null base with
+/// elements, a width of 0, no compare (`errno` set to `EINVAL` and the report made).
 #[test]
 fn bsearch_diff() {
     Diff::new(engine_core::entry!(
@@ -185,22 +186,35 @@ fn bsearch_diff() {
         dispatch::tile::bsearch(u32, u32, u32, u32, u32) -> u32
     ))
     .family(&dispatch::DISPATCH)
+    .family(&crt::CRT)
+    .max_cases(700)
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4, 5, 8, 100, 101]),
         Input::Of(ASKED),
-        Input::Of(&[4, 8]),
+        Input::Of(&[4, 8, 0, 1, 2]),
     ])
     .setup(|e, case| {
         world(e);
+        // The invalid arguments' report (`00ec7c30`) returns; `errno` is the static slot (no thread
+        // data: `__getptd_noexit` answers 0), compared with the rest of memory.
+        e.map(0x011c_1000, 0x1000);
+        e.register(0x00ec_7c30, |_, _| Ret::default());
+        e.register(0x00ed_1165, |_, _| ret(0));
         let code = case.word(0);
         let tile = shaped_tile(e, code, code.max(1));
         let (buffer, size) = (e.mem.u32(tile + 0x14), e.mem.u32(tile + 0x18));
         let key = e.mem.alloc(0x14);
         e.mem.set_u32(key, case.word(1));
-        if case.word(2) == 4 {
+        if case.word(2) != 8 {
             let slot = e.mem.alloc(4);
             e.mem.set_u32(slot, key);
-            return vec![slot, buffer, size, 4, 0x00a0_1160];
+            return match case.word(2) {
+                // A null base with elements, a width of 0, no compare.
+                1 => vec![slot, 0, size.max(3), 4, 0x00a0_1160],
+                0 => vec![slot, buffer, size, 0, 0x00a0_1160],
+                2 => vec![slot, buffer, size, 4, 0],
+                _ => vec![slot, buffer, size, 4, 0x00a0_1160],
+            };
         }
         // 8-byte records: the id, then a word; the compare reads the two ids as signed words.
         e.register(0x00fd_0210, |e, a| {
@@ -214,6 +228,45 @@ fn bsearch_diff() {
             e.mem.set_u32(records + 8 * i + 4, 0x50 + i);
         }
         vec![key, records, size, 8, 0x00fd_0210]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The sorted find with a compare that moves the array's buffer to a new block on its first call (the
+/// old one kept as it was, so the search goes on over it): the index is worked out from the buffer read
+/// after the search, as the exe does (`00a0cbcd`), on both sides.
+#[test]
+fn sorted_find_moving_compare_diff() {
+    Diff::new(engine_core::entry!(
+        0x00a0_cb90,
+        dispatch::tile::sorted_find(Ptr<_>, u32, u32) -> i32
+    ))
+    .family(&dispatch::DISPATCH)
+    .inputs(&[Input::Of(&[1, 2, 5, 100, 101]), Input::Of(ASKED)])
+    .setup(|e, case| {
+        world(e);
+        let code = case.word(0);
+        let tile = shaped_tile(e, code, code.max(1));
+        let array = tile + 0x10;
+        let moved = std::rc::Rc::new(std::cell::Cell::new(false));
+        e.register_double(0x00fd_0230, move |e, a| {
+            if !moved.get() {
+                moved.set(true);
+                let (old, size) = (e.mem.u32(array + 4), e.mem.u32(array + 8));
+                let new = e.mem.alloc(size.max(1) * 4);
+                let words = e.mem.bytes(old, size * 4);
+                e.mem.write(new, &words);
+                e.mem.set_u32(array + 4, new);
+            }
+            let id = |e: &Engine, slot: u32| e.mem.i32(e.mem.u32(slot));
+            ret(id(e, a[0]).cmp(&id(e, a[1])) as i32 as u32)
+        });
+        let key = e.mem.alloc(0x14);
+        e.mem.set_u32(key, case.word(1));
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, key);
+        vec![array, slot, 0x00fd_0230]
     })
     .run()
     .assert_same();
@@ -258,7 +311,7 @@ fn sorted_insert_diff() {
     .family(&dispatch::DISPATCH)
     .translation_calls_plainly(&[0x00a0_cd50])
     .inputs(&[
-        Input::Of(&[0, 1, 2, 3, 4, 7, 8, 9]),
+        Input::Of(&[0, 1, 2, 3, 4, 7, 8, 9, 100, 101]),
         Input::Of(&[0, 1]),
         Input::Of(ASKED),
     ])

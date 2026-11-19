@@ -15,7 +15,9 @@
 //! connected", as a Windows machine with no pad does. The host puts the system's pads in
 //! ([`use_system_pads`]): on Windows the system's own XInput DLL, its answers passed through, and
 //! after its pads the PlayStation pads read as HID devices ([`hid`], [`sony`]), each turned into
-//! XInput's state by position ([`layout`]); the game's four users run over both ([`Chain`]).
+//! XInput's state by position ([`layout`]); the game's four users run over both ([`Chain`]). On
+//! Linux (the Steam Deck among them) the pads are read from the kernel's event devices, Steam's
+//! virtual pad first (`linux.rs`, [`evdev`]).
 //!
 //! Measured on Windows 11 (`xinput1_3.dll`, `xinput1_4.dll`, `xinput9_1_0.dll`, 64-bit, no pad,
 //! 2026-11-18): a user with no pad answers `ERROR_DEVICE_NOT_CONNECTED` to both calls and the
@@ -31,13 +33,16 @@ use std::time::{Duration, Instant};
 mod win32;
 
 pub mod chain;
+pub mod evdev;
 pub mod hid;
 #[cfg(windows)]
 mod hid_win;
 pub mod layout;
+#[cfg(target_os = "linux")]
+mod linux;
 pub mod sony;
 
-pub use chain::{Chain, PadList};
+pub use chain::{Chain, NoXInput, PadList};
 
 /// Result codes (winerror.h): `ERROR_SUCCESS`, `ERROR_BAD_ARGUMENTS`, `ERROR_DEVICE_NOT_CONNECTED`.
 pub const ERROR_SUCCESS: u32 = 0;
@@ -144,18 +149,33 @@ pub fn set_source(e: &mut Engine, source: Option<Box<dyn PadSource>>) {
 
 /// Puts the system's own pads behind the game's XInput in `e` and answers the line for the log
 /// saying which. On Windows: the system's XInput DLL ([`win32::open`]) and the PlayStation pads read
-/// as HID devices ([`hid_win::start`]), through [`install_system`]. Linux and macOS: none yet
-/// (every user "not connected").
+/// as HID devices ([`hid_win::start`]), through [`install_system`]. On Linux: the pads read from
+/// the kernel's event devices (`linux::start`), through [`install_lists`]. macOS: none yet (every
+/// user "not connected").
 pub fn use_system_pads(e: &mut Engine) -> String {
     #[cfg(windows)]
     {
         install_system(e, win32::open(), vec![Box::new(hid_win::start())])
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "linux")]
+    {
+        install_lists(e, vec![Box::new(linux::start())]);
+        "nv-rs: game pads through the kernel's event devices: Steam's virtual pad first, then \
+         Xbox-style, PlayStation and Nintendo pads (the game's own Controls settings turn the pad \
+         and its vibration off)"
+            .to_string()
+    }
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         set_source(e, None);
         "nv-rs: game pads: not read on this system yet (keyboard and mouse)".to_string()
     }
+}
+
+/// Puts the `lists` of pads behind the game's XInput in `e`, with no XInput of the system's (a
+/// system without one), the game's users over all of them ([`Chain`]).
+pub fn install_lists(e: &mut Engine, lists: Vec<Box<dyn PadList>>) {
+    set_source(e, Some(Box::new(Chain::<NoXInput>::new(None, lists))));
 }
 
 /// Puts the system's XInput `opened` (its source and its DLL's name), behind the empty-slot

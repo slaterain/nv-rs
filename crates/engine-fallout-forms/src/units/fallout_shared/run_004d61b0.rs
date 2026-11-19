@@ -589,7 +589,16 @@ pub fn fn_004d66d0(e: &mut Engine, this: Ptr, parent: u32, object: Ptr) {
                 let properties = e.call(0x0043_0830, &args![object]).u32();
                 let node = e.call(LIST_NEXT, &args![properties, position]).u32();
                 let property = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, node));
-                if e.call(0x0043_b230, &args![property]).u32() != 0 {
+                // lStewieAl's Tweaks' row S0199.09 (`MiscCrashFixes`, `0x4D6AA5`): an empty entry of
+                // the property list has no controllers.
+                let controllers = if property == 0
+                    && e.stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL)
+                {
+                    0
+                } else {
+                    e.call(0x0043_b230, &args![property]).u32()
+                };
+                if controllers != 0 {
                     entry_has_controllers = true;
                     break;
                 }
@@ -2065,6 +2074,112 @@ mod n039_tests {
         );
         assert_eq!(calls_to(&e, SPRINTF_S)[0][2], 0x0102_0e7c);
         assert!(calls_to(&e, STRCAT_S).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0199.09 (`MiscCrashFixes`, `0x4D6AA5`): ShowSceneGraph lists an object
+    /// whose property list holds an empty entry: the exe asks the missing property for its controllers
+    /// (`0043b230` with 0, which reads the word at +0xC: a crash in the game); with the row it does not
+    /// ask, and the object is listed as before.
+    #[test]
+    fn s0199_09_an_empty_entry_in_the_property_list() {
+        let mut listed = vec![];
+        for on in [false, true] {
+            let mut e = Engine::new();
+            text_and_new(&mut e);
+            let inserted = tree_double(&mut e, 0);
+            let object = leaf_object(&mut e);
+            // One entry, holding no property.
+            let node = e.mem.alloc(8);
+            let list = e.mem.alloc(8);
+            e.mem.set_u32(list, node);
+            // The first word of the list (its head) and of the entry (its property), as the exe reads
+            // them; `leaf_object` answers 0 for every other (its empty string lists).
+            e.register_double(FIRST_WORD, move |e, a| {
+                if a[0] == list || a[0] == node {
+                    e.mem.u32(a[0]).into_ret()
+                } else {
+                    0u32.into_ret()
+                }
+            });
+            e.register_double(0x0043_0830, move |_, _| list.into_ret());
+            // The list is not empty for the controllers' walk, and empty for the "Properties" part
+            // after it (its own lister is another test's).
+            let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
+            let count = asked.clone();
+            e.register_double(0x0076_b610, move |_, _| {
+                count.set(count.get() + 1);
+                (count.get() > 1).into_ret()
+            });
+            e.register(LIST_NEXT, |e, a| {
+                let node = e.mem.u32(a[1]);
+                e.mem.set_u32(a[1], 0);
+                node.into_ret()
+            });
+            e.set_stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL, on);
+            let this = e.mem.alloc(0x30);
+            e.call_log = Some(vec![]);
+            e.call(0x004d_66d0, &args![this, 0x10u32, object]);
+            let log = e.call_log.take().unwrap();
+            let asked = log.iter().any(|(a, w)| *a == 0x0043_b230 && w[0] == 0);
+            assert_eq!(asked, !on, "row {on}");
+            listed.push(inserted.borrow().clone());
+        }
+        assert_eq!(listed[0], listed[1]);
+    }
+
+    /// Row S0199.09 with a property that has controllers (ordinary input): the same calls with the row
+    /// off and on.
+    #[test]
+    fn s0199_09_row_on_with_a_property_changes_nothing() {
+        let mut logs = vec![];
+        let mut properties = vec![];
+        for on in [false, true] {
+            let mut e = Engine::new();
+            text_and_new(&mut e);
+            let _inserted = tree_double(&mut e, 0);
+            let object = leaf_object(&mut e);
+            // A property with no controllers.
+            let property = e.mem.alloc(0x20);
+            properties.push(property);
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, property);
+            let list = e.mem.alloc(8);
+            e.mem.set_u32(list, node);
+            // The first word of the list (its head) and of the entry (its property), as the exe reads
+            // them; `leaf_object` answers 0 for every other (its empty string lists).
+            e.register_double(FIRST_WORD, move |e, a| {
+                if a[0] == list || a[0] == node {
+                    e.mem.u32(a[0]).into_ret()
+                } else {
+                    0u32.into_ret()
+                }
+            });
+            e.register_double(0x0043_0830, move |_, _| list.into_ret());
+            // The list is not empty for the controllers' walk, and empty for the "Properties" part
+            // after it (its own lister is another test's).
+            let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
+            let count = asked.clone();
+            e.register_double(0x0076_b610, move |_, _| {
+                count.set(count.get() + 1);
+                (count.get() > 1).into_ret()
+            });
+            e.register(LIST_NEXT, |e, a| {
+                let node = e.mem.u32(a[1]);
+                e.mem.set_u32(a[1], 0);
+                node.into_ret()
+            });
+            e.set_stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL, on);
+            let this = e.mem.alloc(0x30);
+            e.call_log = Some(vec![]);
+            e.call(0x004d_66d0, &args![this, 0x10u32, object]);
+            logs.push(e.call_log.take().unwrap());
+        }
+        assert_eq!(logs[0], logs[1]);
+        // The property was asked for its controllers both times.
+        assert!(logs[0]
+            .iter()
+            .any(|(a, w)| *a == 0x0043_b230 && w[0] == properties[0]));
+        assert_eq!(properties[0], properties[1]);
     }
 
     #[test]
