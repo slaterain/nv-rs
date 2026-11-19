@@ -28,6 +28,34 @@ pub const SECTIONS: [(&str, u32, u32, u64); 4] = [
 
 include!("exe_hashes.rs");
 
+// The local GOG 55068 experiment uses the same mapped layout. Its code section
+// identifies the measured build, although nv-rs executes translated Rust code.
+const GOG_SECTIONS: [(&str, u32, u32, u64); 5] = [
+    (".rdata", 0x00FD_F000, RDATA_VSIZE, GOG_RDATA_HASH),
+    (".data", 0x0118_3000, DATA_VSIZE, DATA_HASH),
+    (".tls", 0x0127_2000, TLS_VSIZE, TLS_HASH),
+    ("CONST", 0x0127_3000, CONST_VSIZE, CONST_HASH),
+    (".text", 0x0040_1000, 0x00bd_d58b, GOG_TEXT_HASH),
+];
+
+fn check_profile(secs: &[Section], expected: &[(&str, u32, u32, u64)]) -> Result<(), String> {
+    for &(name, va, vsize, hash) in expected {
+        let s = secs
+            .iter()
+            .find(|s| s.name == name)
+            .ok_or_else(|| format!("no {name} section"))?;
+        if s.va != va || s.vsize != vsize || fnv1a64(&s.raw) != hash {
+            return Err(format!(
+                "section {name} does not match (address {:08x}, virtual size {:08x}, hash {:016x})",
+                s.va,
+                s.vsize,
+                fnv1a64(&s.raw)
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub fn fnv1a64(data: &[u8]) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for &b in data {
@@ -199,18 +227,12 @@ pub fn checked_sections(exe: &Path, file: &[u8]) -> Result<Vec<Section>, String>
         )
     };
     let secs = sections(file).map_err(refuse)?;
-    for (name, va, _, hash) in SECTIONS {
-        let s = secs
-            .iter()
-            .find(|s| s.name == name)
-            .ok_or_else(|| refuse(format!("no {name} section")))?;
-        if s.va != va || fnv1a64(&s.raw) != hash {
-            return Err(refuse(format!(
-                "section {name} is not 1.4.0.525's (address {:08x}, hash {:016x})",
-                s.va,
-                fnv1a64(&s.raw)
-            )));
-        }
+    if let Err(steam_error) = check_profile(&secs, &SECTIONS) {
+        check_profile(&secs, &GOG_SECTIONS).map_err(|gog_error| {
+            refuse(format!(
+                "Steam profile: {steam_error}; local GOG 55068 profile: {gog_error}"
+            ))
+        })?;
     }
     Ok(secs)
 }
@@ -239,6 +261,75 @@ pub fn map_data_sections(mem: &mut Mem, exe: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// No game bytes in the fixture. All required sections, addresses, sizes
+    /// and contents must agree; neither a partial nor a mixed profile passes.
+    #[test]
+    fn a_profile_rejects_missing_relocated_resized_or_changed_sections() {
+        let sections: Vec<_> = [".rdata", ".data", ".tls", "CONST", ".text"]
+            .iter()
+            .enumerate()
+            .map(|(i, name)| Section {
+                name: name.to_string(),
+                va: 0x400000 + i as u32 * 4096,
+                vsize: 100,
+                raw: vec![i as u8; 16],
+            })
+            .collect();
+        let expected: Vec<_> = sections
+            .iter()
+            .map(|s| (s.name.as_str(), s.va, s.vsize, fnv1a64(&s.raw)))
+            .collect();
+        assert!(check_profile(&sections, &expected).is_ok());
+        for i in 0..sections.len() {
+            let mut changed = sections.clone();
+            changed.remove(i);
+            assert!(check_profile(&changed, &expected).is_err());
+            let mut changed = sections.clone();
+            changed[i].va += 4;
+            assert!(check_profile(&changed, &expected).is_err());
+            let mut changed = sections.clone();
+            changed[i].vsize += 1;
+            assert!(check_profile(&changed, &expected).is_err());
+            let mut changed = sections.clone();
+            changed[i].raw[0] ^= 1;
+            assert!(check_profile(&changed, &expected).is_err());
+        }
+    }
+
+    /// Optional local integration: validates a real owned executable and then
+    /// confirms that changing any required GOG section is rejected.
+    #[test]
+    fn measured_gog_profile_when_given() {
+        let Ok(path) = std::env::var("NV_GOG_EXE") else {
+            return;
+        };
+        let file = std::fs::read(&path).unwrap();
+        let secs = checked_sections(Path::new(&path), &file).unwrap();
+        check_profile(&secs, &GOG_SECTIONS).unwrap();
+        // The DLL name explains the whole .rdata difference by the Steam
+        // reference hash. Normalize only a private in-memory test copy.
+        let mut rdata = secs
+            .iter()
+            .find(|s| s.name == ".rdata")
+            .unwrap()
+            .raw
+            .clone();
+        let offsets: Vec<_> = rdata
+            .windows(13)
+            .enumerate()
+            .filter_map(|(i, w)| (w == b"GalaxyWrp.dll").then_some(i))
+            .collect();
+        assert_eq!(offsets.len(), 1);
+        rdata[offsets[0]..offsets[0] + 13].copy_from_slice(b"steam_api.dll");
+        assert_eq!(fnv1a64(&rdata), RDATA_HASH);
+        for (name, _, _, _) in GOG_SECTIONS {
+            let mut changed = secs.clone();
+            changed.iter_mut().find(|s| s.name == name).unwrap().raw[0] ^= 1;
+            assert!(check_profile(&changed, &GOG_SECTIONS).is_err());
+            assert!(check_profile(&changed, &SECTIONS).is_err());
+        }
+    }
 
     #[test]
     fn other_files_are_refused_with_the_supported_build_named() {
