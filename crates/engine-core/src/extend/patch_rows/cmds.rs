@@ -20,6 +20,10 @@ pub(in super::super) const SITES: &[Entry] = &[
     // result callback). JIP's `QuantityMenuCallback` reads DoClick's button id from the caller's
     // frame (`[ebp+8]`): the seam hands it over with the callback and the count.
     row(0x007a_becc),
+    // `ShowTextInputMenu`: JIP's `TextInputClose`, a jump at the start of the text edit
+    // menu's click function 007e66a0 while JIP's text input menu is open (its
+    // `TextInputCloseHook` replaces the function). Asked only while the hook is on.
+    row(0x007e_66a0),
 ];
 
 /// The commands' wraps.
