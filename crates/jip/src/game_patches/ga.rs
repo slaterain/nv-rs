@@ -51,6 +51,12 @@
 //!   game a text too long for the buffer fails the copy (`strcpy_s`) and the game ends: above
 //!   259 characters without JIP, above 515 with it. [`corner_message_text_size`] answers the
 //!   same buffer size for `MessageExAlt`.
+//! - **G55** (JIP's own, with `MessageBoxExAlt`; `WriteRelCall(0x7A9AEE, MaxMessageWidthHook)`,
+//!   `WriteRelCall(0x7A9C45, ..)`): while a `MessageBoxExAlt` box waits for its answer, the message
+//!   menu's `max_menu_width` (`MessageMenu::LoadNextMessage`, `007a92e0`: the room for the text and
+//!   the menu's widest) is 1200 instead of the menu file's value: a long message or long button
+//!   labels wrap at, and the box is capped at, 1200 instead of the menu file's maximum (the number
+//!   of buttons is unaffected). With JIP installed, the row on or off.
 //! - **G129** (JIP's own, with `SetFontFile`; `WriteRelCall(0x70B285, InitFontManagerHook)`,
 //!   `SafeWrite8(0xA1B032, 0x59)`, and the `xfonts` lists read in `InitGamePatches`): the font
 //!   manager is made with 89 font slots instead of 8: fonts 1 to 8 as the game's (their files from
@@ -107,6 +113,12 @@ pub const TRAIT_DESCRIPTION: SiteSlot = SiteSlot::new(Owner::Jip, 0x007e_6f04);
 /// G17's seam: the tile menu destructor's clear of the menu's open byte (words: the tile, its
 /// menu; any answer skips the clear).
 pub const MENU_OPEN_BYTE: SiteSlot = SiteSlot::new(Owner::Jip, 0x00a1_f035);
+/// G55's seams: the message menu's two `max_menu_width` reads (an answer is the width's float
+/// bits, read in place of the menu file's value).
+pub const MAX_MESSAGE_WIDTH: [SiteSlot; 2] = [
+    SiteSlot::new(Owner::Jip, 0x007a_9aee),
+    SiteSlot::new(Owner::Jip, 0x007a_9c45),
+];
 /// G129's seam: the font manager's start (no words; answered: JIP's start ran in place of the
 /// game's).
 pub const FONT_MANAGER_START: SiteSlot = SiteSlot::new(Owner::Jip, 0x0070_b285);
@@ -214,16 +226,35 @@ pub const AREA: Area = Area {
     ],
     fix_wraps: &[LOAD_SCREEN_CANDIDATES.addr()],
     install_fixes,
-    jip_sites: &[FONT_MANAGER_START.addr(), LAST_FONT.addr()],
+    jip_sites: &[
+        FONT_MANAGER_START.addr(),
+        MAX_MESSAGE_WIDTH[0].addr(),
+        MAX_MESSAGE_WIDTH[1].addr(),
+        LAST_FONT.addr(),
+    ],
     jip_wraps: &[],
     install_jip,
 };
 
-/// JIP installed: the default message time's slot, before the threads start; G129.
+/// JIP installed: the default message time's slot, before the threads start; G55 and G129.
 fn install_jip(e: &mut Engine) {
     e.ext_free::<DefaultMessageTime>();
+    for site in MAX_MESSAGE_WIDTH {
+        e.on_site(site, max_message_width);
+    }
     e.on_site(FONT_MANAGER_START, font_manager_start);
     e.on_site(LAST_FONT, last_font);
+}
+
+/// G55's width (`kMaxWidth`, 1200.0).
+const MESSAGE_BOX_MAX_WIDTH: f32 = 1200.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: MaxMessageWidthHook (asm).
+/// G55: while any `MessageBoxExAlt` box waits (`s_messageBoxScripts` not empty), 1200 in place of
+/// the trait (the trait not read); else not answered (the game reads it).
+fn max_message_width(e: &mut Engine, _: &[u32]) -> Option<u32> {
+    (crate::commands::jip_fn_ui::message_box_scripts_pending(e) != 0)
+        .then_some(MESSAGE_BOX_MAX_WIDTH.to_bits())
 }
 
 /// The font manager (`0x11F33F8`); the game's eight font file settings (`sFont_<n>_Filename`,

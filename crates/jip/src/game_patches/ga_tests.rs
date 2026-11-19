@@ -1,6 +1,6 @@
-//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G58, G129, H21. Each handler's branches over
-//! stand-ins of what JIP's bytes read, values from JIP's assembly (`internal/patches_game.h`,
-//! `internal/hooks.h`) and the exe's (Ghidra).
+//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G55, G58, G129, H21. Each handler's
+//! branches over stand-ins of what JIP's bytes read, values from JIP's assembly
+//! (`internal/patches_game.h`, `internal/hooks.h`) and the exe's (Ghidra).
 
 use super::*;
 use crate::test_support::engine;
@@ -57,8 +57,8 @@ fn ga_seams_are_jips_addresses() {
     assert_eq!(LAST_FONT.addr(), 0x00a1_b032);
     assert_eq!(
         AREA.jip_sites,
-        [FONT_MANAGER_START.addr(), LAST_FONT.addr()],
-        "G129 (JIP's own)"
+        [0x0070_b285, 0x007a_9aee, 0x007a_9c45, 0x00a1_b032],
+        "G129 and G55 (JIP's own)"
     );
     assert!(AREA.jip_wraps.is_empty());
 }
@@ -72,8 +72,22 @@ fn ga_not_installed_nothing_answers() {
     for slot in FIX_SITES {
         assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d, 1]), None);
     }
+    for slot in MAX_MESSAGE_WIDTH {
+        assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d]), None);
+    }
     for slot in [FONT_MANAGER_START, LAST_FONT] {
         assert_eq!(e.site(slot.addr(), &[]), None);
+    }
+}
+
+/// G55 is in with JIP installed, the row off: no box waiting, it does not answer (the game's
+/// width; the command's tests drive a box).
+#[test]
+fn g55_in_with_jip_installed() {
+    let mut e = installed();
+    for slot in MAX_MESSAGE_WIDTH {
+        assert_eq!(e.site_owners(slot.addr()).to_vec(), vec![Owner::Jip]);
+        assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d]), None);
     }
 }
 
@@ -497,8 +511,8 @@ fn g09_seam_answers_only_with_the_fixes() {
 #[test]
 fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
     let mut e = engine();
-    // install_as runs every area's install_jip once (GA's: the time slot and G129's seams; a
-    // second run would register G129's seams twice, which on_site refuses).
+    // install_as runs every area's install_jip once (GA's: the time slot and G55's and G129's
+    // seams; a second run would register those seams twice, which on_site refuses).
     crate::install_as(&mut e, true);
     e.set_jip_patches(
         engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,

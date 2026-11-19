@@ -22,6 +22,7 @@ use super::interfacemanager::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleArray;
+use engine_core::extend::stewie;
 
 /// `004b7210`: the interface manager object (the word at `011d8a80`).
 const GET_MANAGER: u32 = 0x004b_7210;
@@ -1683,14 +1684,25 @@ pub fn fn_00719580(e: &mut Engine, tile: Ptr) {
         }
     });
 
+    // 007195d1, 007195eb: lStewieAl's Tweaks' row S0022.56 (`BeginsWithNonNull`, "fix missing
+    // null checks for some tile text labels"): a tile with no name matches neither (the compare
+    // answers -1), where the exe compares through the null name.
+    let null_checked = e.stewie(stewie::TILE_LABEL_NULL_NAME);
     let name = e.call(TILE_NAME, &args![tile]).u32();
-    let mut matches = e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0;
+    let mut matches = if null_checked && name == 0 {
+        false
+    } else {
+        e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0
+    };
     if !matches {
         let name = e.call(TILE_NAME, &args![tile]).u32();
-        matches = e
-            .call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
-            .u32()
-            == 0;
+        matches = if null_checked && name == 0 {
+            false
+        } else {
+            e.call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
+                .u32()
+                == 0
+        };
     }
     if matches {
         e.call(GET_MANAGER, &args![]);
@@ -4026,9 +4038,50 @@ mod tests {
         assert_eq!(words, vec![0x11, 0x22, 0x33, 0x44]);
     }
 
+    /// lStewieAl's Tweaks' row S0022.56: a tile with no name. The exe compares through the null
+    /// name (`_stricmp` reads it, as the stand-in here does) and stops; with the row on it matches
+    /// neither name and is left alone.
+    #[test]
+    fn s0022_56_a_tile_without_a_name() {
+        for on in [false, true] {
+            let mut e = base_engine();
+            e.mem.unmap(0, 0x1000);
+            e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
+            e.register(TILE_NAME, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+            e.register(COMPARE_STRINGS, |e, a| {
+                ret(u32::from(e.mem.u8(a[0]) != e.mem.u8(a[1])))
+            });
+            nothing(
+                &mut e,
+                &[TILE_SET_VALUE, TILE_SET_NEEDS_UPDATE, GET_MANAGER],
+            );
+            let tile = e.mem.alloc(0x30);
+            e.set_stewie(stewie::TILE_LABEL_NULL_NAME, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0071_9580, &args![tile]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(logged(&e, TILE_SET_VALUE).is_empty());
+                assert!(logged(&e, COMPARE_STRINGS).is_empty());
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0022.56 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn fn_00719580_refreshes_children_before_the_matching_tile() {
+        for on in [false, true] {
+            fn_00719580_refreshes_children_before_the_matching_tile_row(on);
+        }
+    }
+
+    fn fn_00719580_refreshes_children_before_the_matching_tile_row(on: bool) {
         let mut e = base_engine();
+        e.set_stewie(stewie::TILE_LABEL_NULL_NAME, on);
         e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
         e.register(0x0057_cbe0, |e, a| {
             let node = e.mem.u32(a[1]);
