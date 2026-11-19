@@ -2088,6 +2088,9 @@ mod n039_tests {
             text_and_new(&mut e);
             let inserted = tree_double(&mut e, 0);
             let object = leaf_object(&mut e);
+            // The first word of what it is given, as the exe's (the list's head, an entry's property):
+            // `leaf_object` answers 0 for it, which leaves the property walk out.
+            e.register(FIRST_WORD, |e, a| e.mem.u32(a[0]).into_ret());
             // One entry, holding no property.
             let node = e.mem.alloc(8);
             let list = e.mem.alloc(8);
@@ -2116,14 +2119,18 @@ mod n039_tests {
     #[test]
     fn s0199_09_row_on_with_a_property_changes_nothing() {
         let mut logs = vec![];
+        let mut properties = vec![];
         for on in [false, true] {
             let mut e = Engine::new();
             text_and_new(&mut e);
             let _inserted = tree_double(&mut e, 0);
             let object = leaf_object(&mut e);
-            e.register(0x0043_b230, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+            // The first word of what it is given, as the exe's (the list's head, an entry's property):
+            // `leaf_object` answers 0 for it, which leaves the property walk out.
+            e.register(FIRST_WORD, |e, a| e.mem.u32(a[0]).into_ret());
+            // A property with no controllers.
             let property = e.mem.alloc(0x20);
-            e.mem.set_u32(property + 0xc, 0x0600_0300);
+            properties.push(property);
             let node = e.mem.alloc(8);
             e.mem.set_u32(node, property);
             let list = e.mem.alloc(8);
@@ -2142,7 +2149,11 @@ mod n039_tests {
             logs.push(e.call_log.take().unwrap());
         }
         assert_eq!(logs[0], logs[1]);
-        assert!(logs[0].iter().any(|(a, w)| *a == 0x0043_b230 && w[0] != 0));
+        // The property was asked for its controllers both times.
+        assert!(logs[0]
+            .iter()
+            .any(|(a, w)| *a == 0x0043_b230 && w[0] == properties[0]));
+        assert_eq!(properties[0], properties[1]);
     }
 
     #[test]
