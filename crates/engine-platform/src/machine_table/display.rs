@@ -390,7 +390,7 @@ fn device_identifier(card: &Card) -> [u8; 16] {
 ///
 /// On Windows the same name is given whenever wgpu draws (`super::super::d3d9`'s
 /// `identifier_for_game`): there the table is Windows' own Direct3D 9 capture, whose name on an AMD
-/// card ("aticfx32.dll") sent the game down the ATI path: the ATI shader package and ATI's alpha to
+/// card ("aticfx64.dll") sent the game down the ATI path: the ATI shader package and ATI's alpha to
 /// coverage switch, with which its grass under multisampling was drawn as solid tufts (player report
 /// 005) before `d3d9_wgpu` honoured that switch too.
 pub const DRIVER_NAME_FOR_GAME: &str = "nvldumd.dll";
@@ -877,7 +877,7 @@ mod tests {
     }
 
     /// Player report 005: on Windows the identifier is Windows' own Direct3D 9 capture, and an AMD
-    /// card's driver name ("aticfx32.dll") sent the game down the ATI path (shader level 6, the ATI
+    /// card's driver name ("aticfx64.dll") sent the game down the ATI path (shader level 6, the ATI
     /// package, ATI's switch). While wgpu draws, every card's captured identifier reaches the game
     /// with NVIDIA's driver name and every other byte as captured (the card's own name, vendor and
     /// device numbers, device identifier, WHQL level), so the game takes the NVIDIA path: level 5
@@ -888,7 +888,7 @@ mod tests {
         // The 32-bit Direct3D 9 drivers' names Windows reports (Intel's, NVIDIA's, AMD's), a
         // virtual machine's and an empty one.
         let cases: [(&str, u32, u32, (u32, bool)); 6] = [
-            ("aticfx32.dll", 0x1002, 0x150e, (6, true)),
+            ("aticfx64.dll", 0x1002, 0x150e, (6, true)),
             ("atiumdag.dll", 0x1002, 0x7480, (6, true)),
             ("nvldumd.dll", 0x10de, 0x2f58, (5, true)),
             ("igdumdim32.dll", 0x8086, 0x56a0, (5, true)),

@@ -705,7 +705,7 @@ fn get_adapter_identifier(e: &mut Engine, _this: Ptr, index: u32, flags: u32, ou
 /// ([`wgpu_format_answer`]) and `00b98540` picks the alpha to coverage switch it sends (NVIDIA's
 /// `D3DRS_ADAPTIVETESS_Y` 'ATOC', ATI's `D3DRS_POINTSIZE` 'A2M1'/'A2M0'). Off Windows the table is
 /// already made so (`machine_table::display::identifier`); on Windows it is Windows' own capture,
-/// whose AMD name ("aticfx32.dll") gave the ATI path, never drawn on wgpu before (player report
+/// whose AMD name ("aticfx64.dll") gave the ATI path, never drawn on wgpu before (player report
 /// 005: grass as solid tufts under multisampling).
 pub(crate) fn identifier_for_game(captured: &[u8], wgpu: bool) -> Vec<u8> {
     if wgpu {
