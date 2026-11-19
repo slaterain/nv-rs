@@ -3688,6 +3688,71 @@ fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
     }
 }
 
+/// A `DrawPrimitiveUP` draw that lands where the register ring is full draws its own vertices: the
+/// batch is sent for the ring's room before the draw's bytes are placed, not after (which handed
+/// them to the batch before and left the draw reading another draw's bytes at their place in the
+/// next: stray triangles). The ring is given room for one draw's blocks, so every UP draw after a
+/// batch's first lands at a full ring: red over the whole target, then green on the left, then blue
+/// on the right in more bytes than the green draw's place had after the red's.
+#[test]
+fn an_up_draw_at_a_full_register_ring_draws_its_own_vertices() {
+    struct Room;
+    impl Drop for Room {
+        fn drop(&mut self) {
+            d3d9_wgpu::device::ring_room_for_tests(0);
+        }
+    }
+    let Some(mut g) = Gpu::new(4, 1) else {
+        return;
+    };
+    let _room = Room;
+    d3d9_wgpu::device::ring_room_for_tests(2 * d3d9_wgpu::device::register_block_for_tests() + 1);
+    let up = |g: &mut Gpu, corners: &[[f32; 2]]| {
+        let v: Vec<f32> = corners
+            .iter()
+            .flat_map(|&[x, y]| [x, y, 0.5, 1.0])
+            .collect();
+        g.run(Cmd::DrawPrimitiveUp {
+            device: DEVICE,
+            kind: 4,
+            count: corners.len() as u32 / 3,
+            stride: 16,
+            vertices: Data::Bytes(&floats(&v)),
+        });
+    };
+    // One triangle over the whole height left of x = 0.1 (its point far left), and its mirror right
+    // of it.
+    let left = [[0.1, -9.0], [0.1, 9.0], [-20.0, 0.0]];
+    let right = [[0.1, -9.0], [0.1, 9.0], [20.0, 0.0]];
+    g.clear(3, 0, 1.0);
+    let sends = g.b.device().expect("the device").ring_sends();
+    g.colour([1.0, 0.0, 0.0, 1.0]);
+    up(&mut g, &[[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]]);
+    // The green draw's bytes go where the red's end (48 bytes in); placed before the send they went
+    // with the red's batch, and the draw read the next batch's bytes there.
+    g.colour([0.0, 1.0, 0.0, 1.0]);
+    up(&mut g, &left);
+    // The blue draw's two triangles (the right one twice) fill the next batch's first 96 bytes: at
+    // the green draw's 48 a misplaced green draw finds the right triangle, and the left stays red.
+    g.colour([0.0, 0.0, 1.0, 1.0]);
+    up(&mut g, &[right, right].concat());
+    let px = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert!(
+        d.ring_sends() >= sends + 2,
+        "the green and the blue draw landed at a full ring"
+    );
+    for row in 0..4 {
+        assert_eq!(px[row * 4], [0, 255, 0, 255], "row {row}: the left green");
+        assert_eq!(
+            px[row * 4 + 3],
+            [255, 0, 0, 255],
+            "row {row}: the right blue"
+        );
+    }
+    assert_eq!(d.wgpu_errors(), 0);
+}
+
 /// A batch of more passes than one submit can carry goes in several, in order: AMD's Windows
 /// driver refuses a submit of about 4,000 of its command buffers ("out of host memory"; Radeon
 /// 890M), and wgpu then takes the device for lost: nothing more is drawn and no query answers.
