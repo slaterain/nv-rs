@@ -30,6 +30,14 @@ pub struct Row {
 /// a word for the block after it.
 pub const ROWS: &[Row] = &[
     Row {
+        bit: stewie::UGRIDS_LOAD_NULL_CELL,
+        function: "fixUGridsCrashAndAllow3AsMinimum",
+        plan: "S0018",
+        key: "bFixUGridsCrashAndAllow3AsMinimum",
+        tweaks: None,
+        summary: "loading a save made with more grids than the game now loads no longer crashes; uGridsToLoad 3 is kept",
+    },
+    Row {
         bit: stewie::INVENTORY_USE_NO_ITEM_JUMP,
         function: "MenuFixes",
         plan: "S0022.14",
@@ -110,6 +118,22 @@ pub const ROWS: &[Row] = &[
         summary: "an actor in a reload loop, or with a reload queued, that has lost its weapon no longer crashes",
     },
     Row {
+        bit: stewie::ITEM_VALUE_NULL_WEAPON_MOD,
+        function: "patchFixGetItemValueCrashForModdedWeapons",
+        plan: "S0045",
+        key: "bFixGetItemValueCrashForModdedWeapons",
+        tweaks: None,
+        summary: "a weapon whose mod flags name a mod the weapon no longer has no longer crashes when its value is asked",
+    },
+    Row {
+        bit: stewie::UNRESOLVED_RACE,
+        function: "patchFixUnresolvedRaceCrash",
+        plan: "S0049",
+        key: "bFixUnresolvedRaceCrash",
+        tweaks: None,
+        summary: "an NPC whose race is missing (a removed plugin's) gets CaucasianVanilla instead of crashing",
+    },
+    Row {
         bit: stewie::LEVEL_GREATER_THAN_99,
         function: "patchFixLevelGreaterThan99Crash",
         plan: "S0057",
@@ -126,12 +150,28 @@ pub const ROWS: &[Row] = &[
         summary: "a reference in a multibound with no cell (being moved or removed) is passed over instead of crashing",
     },
     Row {
+        bit: stewie::THROWING_WEAPON_AMMO_EFFECTS,
+        function: "fixGetWeaponDamageCrashOnThrowingWeapons",
+        plan: "S0067",
+        key: "bFixGetWeaponDamageCrashOnThrowingWeapons",
+        tweaks: None,
+        summary: "a throwing weapon's damage shown in a menu no longer crashes",
+    },
+    Row {
         bit: stewie::HANDLE_STEALING_CRASH,
         function: "fixHandleStealingCrash",
         plan: "S0068",
         key: "bFixHandleStealingCrash",
         tweaks: None,
         summary: "taking an item marked stolen that has no owner no longer crashes",
+    },
+    Row {
+        bit: stewie::BODY_PART_NULL_PARENT,
+        function: "patchBodyPartDataNullChecks",
+        plan: "S0077",
+        key: "bBodyPartDataNullChecks",
+        tweaks: None,
+        summary: "hiding or showing limbs whose node chain runs out before the root no longer crashes",
     },
     Row {
         bit: stewie::NULL_PLAYER_CELL_IMPOSTER_CHECK,
@@ -164,6 +204,14 @@ pub const ROWS: &[Row] = &[
         key: "bRememberAmmoCountOnLoadDropNoAmmoEntry",
         tweaks: None,
         summary: "dropping the weapon's ammunition with no ammunition entry equipped no longer crashes",
+    },
+    Row {
+        bit: stewie::PERK_DESCRIPTION_TOO_LONG,
+        function: "PerkMenuDescriptionTypoFix",
+        plan: "S0093.07",
+        key: "bPerkMenuDescriptionTypoFixTooLong",
+        tweaks: None,
+        summary: "a perk description too long for the menu's buffer is cut to fit instead of crashing",
     },
     Row {
         bit: stewie::NULL_HIT_LOCATION_NODE_EXPLOSION,
@@ -276,6 +324,30 @@ pub const ROWS: &[Row] = &[
         key: "bBipedAnimNullItemError",
         tweaks: None,
         summary: "a helmet whose item is gone is not attached instead of crashing; the console names the slot and the actor",
+    },
+    Row {
+        bit: stewie::NPC_ACTIVATE_NULL_PROCESS,
+        function: "MiscCrashFixes",
+        plan: "S0199.05",
+        key: "bMiscCrashFixesNpcActivate",
+        tweaks: None,
+        summary: "an NPC activated by something that is not an actor, or by an actor with no AI process, no longer crashes",
+    },
+    Row {
+        bit: stewie::REMOVE_WORN_NULL_ACTOR,
+        function: "MiscCrashFixes",
+        plan: "S0199.06",
+        key: "bMiscCrashFixesRemoveWorn",
+        tweaks: None,
+        summary: "taking off a worn item that may not be removed, with no actor given, no longer crashes",
+    },
+    Row {
+        bit: stewie::SHOW_SCENE_GRAPH_NULL,
+        function: "MiscCrashFixes",
+        plan: "S0199.09",
+        key: "bMiscCrashFixesShowSceneGraph",
+        tweaks: None,
+        summary: "the console's ShowSceneGraph no longer crashes on an empty property entry",
     },
     Row {
         bit: stewie::EQUIP_AMMO_NULL_PROCESS,

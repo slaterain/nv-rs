@@ -1416,13 +1416,22 @@ pub fn item_change_get_item_value(e: &mut Engine, this: Ptr<ItemChange>) -> f32 
                 if slots & bit != 0 {
                     let mod_object = fn_004bd570(e, Ptr::new(weapon), bit);
                     // TESObjectIMOD value word.
-                    let word = typed_call!(
-                        leaf::FAMILY,
-                        0x0072_6070,
-                        leaf::word_at_4(e, mod_object + MOD_OBJECT_VALUE)
-                    )
-                    .into_ret()
-                    .i32();
+                    // lStewieAl's Tweaks' row S0045 (`patchFixGetItemValueCrashForModdedWeapons`, at
+                    // `0x4BD48D`, `0x4BD4B5`, `0x4BD4DD`): a mod flag whose mod the weapon no longer has
+                    // adds 0.
+                    let word = if mod_object == 0
+                        && e.stewie(engine_core::extend::stewie::ITEM_VALUE_NULL_WEAPON_MOD)
+                    {
+                        0
+                    } else {
+                        typed_call!(
+                            leaf::FAMILY,
+                            0x0072_6070,
+                            leaf::word_at_4(e, mod_object + MOD_OBJECT_VALUE)
+                        )
+                        .into_ret()
+                        .i32()
+                    };
                     price = (word as f64 + price as f64) as f32;
                 }
             }
@@ -3415,7 +3424,10 @@ pub fn fn_004c0cf0(
             continue;
         }
         e.call(GET_FORM_AS_BIPED_MODEL, &args![form]);
+        // lStewieAl's Tweaks' row S0199.06 (`MiscCrashFixes`, `0x4C0DD4`): with no actor the
+        // actor's answer is not asked and the removal goes on.
         if e.call(EXTRA_GET_CAN_NOT_WEAR, &args![worn_extra]).bool()
+            && !(actor == 0 && e.stewie(engine_core::extend::stewie::REMOVE_WORN_NULL_ACTOR))
             && !e.vcall(actor, 0x22c, &args![0u32]).bool()
         {
             e.mem.set_u8(removed, 0);
@@ -12861,6 +12873,58 @@ mod tests {
         assert_eq!(e.call(0x004bd400, &args![this]).f32(), 130.0);
     }
 
+    /// A weapon whose extra data says mods 1 and 4 while its form has only mod 4 (`value` 20), at full
+    /// health (200): the item change and the weapon.
+    fn weapon_missing_its_first_mod(e: &mut Engine) -> (Ptr<ItemChange>, u32) {
+        let weapon = form(e, 0x28, 200, 100);
+        set(e, weapon, 0x98, 100);
+        casts(e, weapon, 0, 0);
+        let second = e.mem.alloc(0x100);
+        set(e, second, MOD_OBJECT_VALUE + 4, 20);
+        set(e, weapon, WEAPON_MOD_OBJECT, 0);
+        set(e, weapon, WEAPON_MOD_OBJECT + 8, second);
+        let x = extra(e);
+        e.mem.set_f32(x + X_HEALTH, 100.0);
+        set(e, x, X_HAS_MODS, 1);
+        set(e, x, X_MOD_FLAGS, 5);
+        let head = list(e, &[x]);
+        (change(e, head, weapon), weapon)
+    }
+
+    /// lStewieAl's Tweaks' row S0045 (`patchFixGetItemValueCrashForModdedWeapons`, `0x4BD48D`): the exe
+    /// reads the missing first mod's value and stops; with the row it adds 0 for it and 20 for the
+    /// other.
+    #[test]
+    fn s0045_a_mod_flag_whose_mod_is_gone() {
+        for on in [false, true] {
+            let mut e = engine();
+            let (this, _) = weapon_missing_its_first_mod(&mut e);
+            e.set_stewie(engine_core::extend::stewie::ITEM_VALUE_NULL_WEAPON_MOD, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x004bd400, &args![this]).f32()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(run.unwrap(), 220.0);
+            }
+        }
+    }
+
+    /// Row S0045 with both mods there (ordinary input): the same value with the row off and on.
+    #[test]
+    fn s0045_row_on_with_the_mods_there_changes_nothing() {
+        for on in [false, true] {
+            let mut e = engine();
+            let (this, weapon) = weapon_missing_its_first_mod(&mut e);
+            let first = e.mem.alloc(0x100);
+            set(&mut e, first, MOD_OBJECT_VALUE + 4, 10);
+            set(&mut e, weapon, WEAPON_MOD_OBJECT, first);
+            e.set_stewie(engine_core::extend::stewie::ITEM_VALUE_NULL_WEAPON_MOD, on);
+            assert_eq!(e.call(0x004bd400, &args![this]).f32(), 230.0, "row {on}");
+        }
+    }
+
     #[test]
     fn rounding_to_a_multiple() {
         let mut e = engine();
@@ -14948,6 +15012,68 @@ mod tests {
         assert_eq!(e.mem.u32(player + 0x1f0), 7);
         e.call(0x004c0cd0, &args![player, 0u32]);
         assert_eq!(e.mem.u32(player + 0x1f0), 0);
+    }
+
+    /// A worn armour that may not be taken off (`GetCanNotWear` answers 1) in the changes of
+    /// `equip_setup`: the changes, the armour and the actor.
+    fn can_not_wear_world(e: &mut Engine) -> (Ptr<InventoryChanges>, u32, u32) {
+        e.register(GET_DISMEMBERMENT_EXTRA, |_, _| returns(0));
+        e.register(COMPARE_LIST_FOR_CONTAINER, |_, _| returns(0));
+        e.register(EXTRA_GET_CAN_NOT_WEAR, |_, _| returns(1));
+        let (this, armor, actor, _) = equip_setup(e, 0x18);
+        let worn = worn_plain_extra(e);
+        let change = entry(e, armor, &[worn], 1);
+        put_entry(e, this, change);
+        (this, armor, actor)
+    }
+
+    /// lStewieAl's Tweaks' row S0199.06 (`MiscCrashFixes`, `0x4C0DD4`): a worn item that may not be
+    /// taken off, with no actor given: the exe asks the missing actor whether it may and stops; with
+    /// the row the removal goes on (the flag stays set).
+    #[test]
+    fn s0199_06_a_can_not_wear_item_with_no_actor() {
+        for on in [false, true] {
+            let mut e = equip_engine();
+            let (this, armor, _) = can_not_wear_world(&mut e);
+            e.set_stewie(engine_core::extend::stewie::REMOVE_WORN_NULL_ACTOR, on);
+            let removed = e.mem.alloc(4);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(
+                    0x004c0cf0,
+                    &args![this, removed, armor, 1i32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+                )
+                .bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(e.mem.u8(removed), 1);
+            }
+        }
+    }
+
+    /// Row S0199.06 with an actor that refuses (ordinary input): the flag is cleared and the same calls
+    /// made with the row off and on.
+    #[test]
+    fn s0199_06_row_on_with_an_actor_changes_nothing() {
+        let mut runs = vec![];
+        for on in [false, true] {
+            let mut e = equip_engine();
+            let (this, armor, actor) = can_not_wear_world(&mut e);
+            e.register(vcall_address(0x22c), |_, _| returns(0));
+            e.set_stewie(engine_core::extend::stewie::REMOVE_WORN_NULL_ACTOR, on);
+            let removed = e.mem.alloc(4);
+            e.call_log = Some(vec![]);
+            let done = e
+                .call(
+                    0x004c0cf0,
+                    &args![this, removed, armor, 1i32, actor, 0u32, 0u32, 0u32, 0u32, 0u32],
+                )
+                .bool();
+            runs.push((done, e.mem.u8(removed), e.call_log.take().unwrap()));
+        }
+        assert_eq!(runs[0], runs[1]);
+        assert_eq!(runs[0].1, 0);
     }
 
     #[test]

@@ -1460,7 +1460,15 @@ pub fn tes_load_game(e: &mut Engine, this: Ptr<TES>, buffer: Ptr) {
         while y < grids {
             let grid_cells = e.get(this, TES::pGridCellA);
             let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
-            let cell = e.mem.u32(slot);
+            // lStewieAl's Tweaks' row S0018 (`fixUGridsCrashAndAllow3AsMinimum`, the read at
+            // `0x4596D3`): a save made with more grids than the game has now gives cells past the
+            // grid: their slot is null, read as no cell (the id is still read, to stay in step).
+            let cell = if slot == 0 && e.stewie(engine_core::extend::stewie::UGRIDS_LOAD_NULL_CELL)
+            {
+                0
+            } else {
+                e.mem.u32(slot)
+            };
             let id = e.with_stack(4, |e, id_cell| {
                 e.mem.set_u32(id_cell.addr(), 0);
                 e.call(LOAD_BUFFER_FORM_ID_OUT, &args![buffer, id_cell]);
@@ -5547,6 +5555,96 @@ mod tests {
         e.call(0x0045_95e0, &args![tes, buffer]);
         assert!(cleared.borrow().is_empty());
         assert!(loaded.borrow().is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0018 (`fixUGridsCrashAndAllow3AsMinimum`, the read at `0x4596D3`): a
+    /// save made with 3 grids loaded into a game of 1. `GridCellArray::Get` answers no slot past the
+    /// grid; the exe reads through it and stops. With the row those cells are no cell, every one of the
+    /// 9 ids is still read (the buffer stays in step) and the one cell there is loaded.
+    #[test]
+    fn s0018_a_save_with_more_grids_than_the_game() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            map_more_globals(&mut e);
+            put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 1);
+            e.set_global(DATA_HANDLER, 0x7200_0000u32);
+            e.set_global(SCRIPT_CONTEXT, 0x7400_0000u32);
+            e.set_stewie(engine_core::extend::stewie::UGRIDS_LOAD_NULL_CELL, on);
+            let tes = e.new_object::<TES>();
+            let table = vtable(&mut e, &[(0x128, 0x7000_0128)]);
+            let cell = object_with(&mut e, table).addr();
+            let slots = e.mem.alloc(4);
+            e.mem.set_u32(slots, cell);
+            let array = e.mem.alloc(0x28);
+            e.set(tes, TES::pGridCellA, Ptr::new(array));
+            e.register_double(GRID_CELL_ARRAY_GET, move |_, a| {
+                ret(if a[1] < 1 && a[2] < 1 { slots } else { 0 })
+            });
+            returns(&mut e, LOAD_BUFFER_VARIABLE_SIZE, 0);
+            e.register(LOAD_BUFFER_READ_BYTES, |e, a| {
+                e.mem.set_u32(a[1], 3);
+                Ret::default()
+            });
+            let reads = Rc::new(RefCell::new(0u32));
+            let count = reads.clone();
+            e.register_double(LOAD_BUFFER_FORM_ID_OUT, move |e, a| {
+                *count.borrow_mut() += 1;
+                e.mem.set_u32(a[1], 0x42);
+                Ret::default()
+            });
+            e.register(FORM_ID_GETTER, |_, a| ret(a[0] + 1));
+            returns(&mut e, DATA_HANDLER_HAS_FORM, 1);
+            // `BGSSaveLoadGame::ClearFormID`, which the found cells ask for.
+            let _cleared = recording(&mut e, SAVE_LOAD_CLEAR_FORM_ID, 0);
+            let loaded = recording(&mut e, 0x7000_0128, 0);
+            let buffer = Ptr::<()>::new(0x7300_0000);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0045_95e0, &args![tes, buffer]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(*reads.borrow(), 9);
+                assert_eq!(*loaded.borrow(), vec![vec![cell, 0x42, 1]]);
+            }
+        }
+    }
+
+    /// Row S0018 with a save of the game's own grids (ordinary input): the same reads and loads with the
+    /// row off and on.
+    #[test]
+    fn s0018_row_on_with_the_games_grids_changes_nothing() {
+        let mut runs = vec![];
+        for on in [false, true] {
+            let mut e = Engine::new();
+            map_more_globals(&mut e);
+            put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 1);
+            e.set_global(DATA_HANDLER, 0x7200_0000u32);
+            e.set_global(SCRIPT_CONTEXT, 0x7400_0000u32);
+            e.set_stewie(engine_core::extend::stewie::UGRIDS_LOAD_NULL_CELL, on);
+            let tes = e.new_object::<TES>();
+            let table = vtable(&mut e, &[(0x128, 0x7000_0128)]);
+            let cell = object_with(&mut e, table).addr();
+            grid_with_cells(&mut e, tes, 1, &[cell]);
+            returns(&mut e, LOAD_BUFFER_VARIABLE_SIZE, 0);
+            e.register(LOAD_BUFFER_READ_BYTES, |e, a| {
+                e.mem.set_u32(a[1], 1);
+                Ret::default()
+            });
+            e.register(LOAD_BUFFER_FORM_ID_OUT, |e, a| {
+                e.mem.set_u32(a[1], 0x42);
+                Ret::default()
+            });
+            e.register(FORM_ID_GETTER, |_, a| ret(a[0] + 1));
+            returns(&mut e, DATA_HANDLER_HAS_FORM, 1);
+            // `BGSSaveLoadGame::ClearFormID`, which the found cells ask for.
+            let _cleared = recording(&mut e, SAVE_LOAD_CLEAR_FORM_ID, 0);
+            let loaded = recording(&mut e, 0x7000_0128, 0);
+            e.call(0x0045_95e0, &args![tes, Ptr::<()>::new(0x7300_0000)]);
+            runs.push(loaded.borrow().clone());
+        }
+        assert_eq!(runs[0], runs[1]);
+        assert_eq!(runs[0].len(), 1);
     }
 
     // ----- 00459750 -----
