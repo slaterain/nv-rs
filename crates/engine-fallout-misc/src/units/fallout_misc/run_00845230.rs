@@ -183,9 +183,11 @@ pub fn fn_008453a0(e: &mut Engine, this: Ptr, capacity: u32, count: u32) {
 /// row `NV_JIP_GAME_PATCHES`; `SafeWrite16(0x845558, 0x7D63)`; its row and handler are group GF's)
 /// makes it `0x7D63`: the seam answers the count. With the word's `FIXES` bit clear: one load, then
 /// the exe's `0x13AF`.
-/// lStewieAl's Engine Optimizations writes `0x2735` there (`Inlines::SaveLoad`, the row S1016.845558,
-/// `bInlinesChangesMapBuckets`); Tweaks writes it after JIP has written its own (it loads later), so
-/// with both the row's 10,037 wins.
+/// lStewieAl's Engine Optimizations writes `0x2735` there (`Inlines::SaveLoad`, the row
+/// S1016.845558, `bInlinesChangesMapBuckets`; Tweaks' own switch `[Inlines] bSaveLoad`). Tweaks
+/// writes it in its handler of xNVSE's PostPostLoad message, after JIP's write at PostLoad,
+/// whatever order the DLLs load in: its 32-bit `0x2735` replaces JIP's 16-bit `0x7D63`, so with
+/// both the row's 10,037 wins.
 #[inline]
 fn bucket_count(e: &mut Engine) -> u32 {
     if e.stewie(engine_core::extend::stewie::CHANGES_MAP_BUCKETS) {
