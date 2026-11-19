@@ -579,6 +579,12 @@ mod tests {
             (-32768, 32767, 32767, -32768)
         );
         assert_eq!(up_positive(0), 0);
+        // Each side onto the other's length, rounded: the small values and the middle of each
+        // side, where the two sides' scales differ.
+        assert_eq!((up_positive(-1), up_positive(1)), (1, -1));
+        assert_eq!((up_positive(-3), up_positive(3)), (3, -3));
+        assert_eq!(up_positive(-16385), 16384);
+        assert_eq!(up_positive(16383), -16383);
     }
 
     /// Triggers on a full axis run from its bottom end (0) to its top end (255), as SDL scales
