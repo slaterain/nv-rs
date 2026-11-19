@@ -221,6 +221,16 @@ impl Host {
         } else {
             engine.start_real_clock();
         }
+        // Windows' pointer speed, which the game's menu cursor follows (it reads it at its input
+        // start): the player's own on Windows, only read; off Windows, and in a repeatable run (a
+        // test, the same on every machine), Windows' default 10. One line.
+        if let Some(line) = take_pointer_speed(
+            &mut engine.kernel.pointer_speed,
+            repeatable.is_some(),
+            engine_platform::window::pointer_speed,
+        ) {
+            eprintln!("{line}");
+        }
         // How the game's threads run (`engine::thread_host::Scheme`), in `NV_THREADS`'s words
         // (`fixes::Choice::threads`: a test without `NV_THREADS` always runs them stepped). In
         // play by default real, side by side (started before the C runtime, below).
@@ -1076,8 +1086,48 @@ fn light_from_sky_wanted(
     choice.light_from_sky() && backends == Some(engine_platform::d3d9real::Backends::Wgpu)
 }
 
+/// Windows' pointer speed for the game's registry read, into `slot` (the kernel's
+/// `pointer_speed`): what `read` (the platform's read, `engine_platform::window::pointer_speed`)
+/// answers, with its log line, in a run that is not repeatable; in a repeatable one (a test, the
+/// same on every machine) nothing is read and the game gets Windows' default 10.
+fn take_pointer_speed(
+    slot: &mut Option<engine_platform::PointerSpeed>,
+    repeatable: bool,
+    read: impl FnOnce() -> (Option<engine_platform::PointerSpeed>, String),
+) -> Option<String> {
+    if repeatable {
+        return None;
+    }
+    let (speed, line) = read();
+    *slot = speed;
+    Some(line)
+}
+
 #[cfg(test)]
 mod tests {
+    /// A play run (not repeatable) takes the platform's read of the pointer speed into the
+    /// kernel, with its line; a repeatable run reads nothing and keeps Windows' default.
+    #[test]
+    fn a_play_run_takes_the_players_pointer_speed() {
+        use engine_platform::PointerSpeed;
+        let four = || PointerSpeed::Value {
+            kind: 1,
+            data: b"4\0".to_vec(),
+        };
+        let mut slot = None;
+        let line = super::take_pointer_speed(&mut slot, false, || (Some(four()), "line".into()));
+        assert_eq!(slot, Some(four()));
+        assert_eq!(line.as_deref(), Some("line"));
+        let mut slot = None;
+        let line =
+            super::take_pointer_speed(&mut slot, true, || panic!("read in a repeatable run"));
+        assert_eq!((slot, line), (None, None));
+        let mut slot = None;
+        let missing = || (Some(PointerSpeed::Missing(2)), "not set".into());
+        super::take_pointer_speed(&mut slot, false, missing);
+        assert_eq!(slot, Some(PointerSpeed::Missing(2)));
+    }
+
     /// The light from the sky is installed only with the sun shadows on, the key on and wgpu alone
     /// drawing: with the default choice, the sun shadows off (key on), the key off, the real
     /// Direct3D 9, both, or no backend, nothing is installed and the game's light is the exe's.

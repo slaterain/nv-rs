@@ -833,7 +833,23 @@ const REG_SZ: u32 = 1;
 /// The double-click time Windows starts with (milliseconds).
 pub const DEFAULT_DOUBLE_CLICK_TIME: u32 = 500;
 /// `HKCU\Control Panel\Mouse` values Windows starts with, the ones a key here answers.
+/// `MouseSensitivity` (Windows' pointer speed, 1 to 20) is the player's own where the platform
+/// read it ([`Kernel::pointer_speed`]): the game's menu cursor moves at its twentieth times
+/// `fForegroundMouseMult` plus `fForegroundMouseBase` (the input start `00a22660` keeps it at
+/// `Controls +0x1B50`, its own 6 when the read fails; the cursor's move `007118d0`).
 const MOUSE_VALUES: [(&[u8], &[u8]); 1] = [(b"MouseSensitivity", b"10")];
+
+/// Windows' pointer speed as the platform read it from the player's Windows ([`Kernel::pointer_speed`]),
+/// answered to the game's `RegQueryValueExA` of `MouseSensitivity` as Windows would answer it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PointerSpeed {
+    /// The value as Windows holds it: its registry type and its bytes (a string's with its
+    /// terminating zero), which the game hands to `atol` whatever the type (`00a22660`).
+    Value { kind: u32, data: Vec<u8> },
+    /// Windows refused the read with this error (2: the value is not set): the game keeps its own
+    /// 6 for the menus' cursor, as the original does.
+    Missing(u32),
+}
 
 /// `ERROR_DEVICE_NOT_CONNECTED`.
 const ERROR_DEVICE_NOT_CONNECTED: u32 = 0x48f;
@@ -894,8 +910,10 @@ fn reg_open_key_ex_a(
 }
 
 // Platform: replaces ADVAPI32.DLL RegQueryValueExA (import)
-/// A string value of the mouse key ([`MOUSE_VALUES`], `REG_SZ`, with its terminating zero):
-/// the type through `kind`, the bytes into `data` when `*size` holds them (else
+/// A value of the mouse key ([`MOUSE_VALUES`]: `REG_SZ`, with its terminating zero), or for
+/// `MouseSensitivity` the pointer speed the platform read ([`Kernel::pointer_speed`]: its type and
+/// bytes as Windows holds them, or Windows' refusal, which this answers, so the game keeps its
+/// own 6): the type through `kind`, the bytes into `data` when `*size` holds them (else
 /// `ERROR_MORE_DATA`), the size needed in `*size` either way; no data buffer asks the size only.
 fn reg_query_value_ex_a(
     e: &mut Engine,
@@ -910,15 +928,24 @@ fn reg_query_value_ex_a(
         return ERROR_INVALID_HANDLE;
     }
     let name = e.mem.cstr(name.addr());
-    let Some((_, value)) = MOUSE_VALUES
+    let Some((value_name, value)) = MOUSE_VALUES
         .iter()
         .find(|(n, _)| n.eq_ignore_ascii_case(&name))
     else {
         return ERROR_FILE_NOT_FOUND;
     };
-    let needed = value.len() as u32 + 1;
+    let read = match &e.kernel.pointer_speed {
+        Some(speed) if *value_name == b"MouseSensitivity" => Some(speed.clone()),
+        _ => None,
+    };
+    let (value_kind, bytes) = match read {
+        Some(PointerSpeed::Missing(code)) => return code,
+        Some(PointerSpeed::Value { kind, data }) => (kind, data),
+        None => (REG_SZ, [*value, b"\0"].concat()),
+    };
+    let needed = bytes.len() as u32;
     if !kind.is_null() {
-        e.mem.set_u32(kind.addr(), REG_SZ);
+        e.mem.set_u32(kind.addr(), value_kind);
     }
     if data.is_null() {
         if !size.is_null() {
@@ -931,7 +958,7 @@ fn reg_query_value_ex_a(
     if room < needed {
         return ERROR_MORE_DATA;
     }
-    e.mem.set_cstr(data.addr(), value);
+    e.mem.write(data.addr(), &bytes);
     ERROR_SUCCESS
 }
 
@@ -1173,6 +1200,11 @@ pub struct Kernel {
     pub main_window: u32,
     /// Whether `SwapMouseButton` swapped the buttons.
     mouse_buttons_swapped: bool,
+    /// Windows' pointer speed as the player's Windows answered the read the game makes
+    /// (`HKCU\Control Panel\Mouse` `MouseSensitivity`: [`PointerSpeed`]), which the game's menu
+    /// cursor follows ([`MOUSE_VALUES`]); `None`: the value Windows starts with, 10 (off Windows,
+    /// or a repeatable run). Set by the host before the game starts.
+    pub pointer_speed: Option<PointerSpeed>,
     /// The platform layer's state ([`Layer::new_state`]): in `engine-platform`, the DirectInput 8
     /// objects and the keyboard and mouse state behind them, the DirectSound 8 objects, D3DX's and
     /// NvAPI's state and the machine table, the window classes, windows, message queue and command
@@ -4831,6 +4863,82 @@ mod os_defaults_tests {
         );
         assert_eq!(reg_close_key(&mut e, key), ERROR_SUCCESS);
         assert_eq!(reg_close_key(&mut e, key), ERROR_INVALID_HANDLE);
+    }
+
+    /// A player's menu cursor was much faster than in their original game (report 006): the
+    /// game's menu cursor speed follows Windows' pointer speed (`MouseSensitivity`, read at its
+    /// input start), and the port always answered Windows' default, 10. The player's own value,
+    /// read by the platform, is answered in its place as Windows holds it (here "4": the slider
+    /// four steps from the left), with Windows' size rules; a value stored as another type keeps
+    /// its type and bytes (the game `atol`s whatever it gets); a read Windows refused is refused
+    /// to the game too (it keeps its own 6); without a read, 10 as before.
+    #[test]
+    fn the_mouse_key_answers_the_players_pointer_speed() {
+        let text = |s: &[u8]| PointerSpeed::Value {
+            kind: REG_SZ,
+            data: [s, b"\0"].concat(),
+        };
+        let mut e = engine();
+        e.kernel.pointer_speed = Some(text(b"4"));
+        e.mem.set_cstr(0x1000, br"Control Panel\Mouse");
+        e.mem.set_cstr(0x1040, b"MouseSensitivity");
+        assert_eq!(
+            reg_open_key_ex_a(
+                &mut e,
+                HKEY_CURRENT_USER,
+                Ptr::new(0x1000),
+                0,
+                0xf003f,
+                Ptr::new(0x1100)
+            ),
+            ERROR_SUCCESS
+        );
+        let key = e.mem.u32(0x1100);
+        let (kind, data, size) = (Ptr::new(0x1104), Ptr::new(0x1200), Ptr::new(0x1108));
+        // The game's own buffer: 10 bytes (`00a22660`).
+        e.mem.set_u32(size.addr(), 10);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_SUCCESS
+        );
+        assert_eq!(e.mem.cstr(data.addr()), b"4");
+        assert_eq!(e.mem.u32(size.addr()), 2);
+        assert_eq!(e.mem.u32(kind.addr()), REG_SZ);
+        // Longer than the game's buffer: refused as Windows would (the game keeps its 6).
+        e.kernel.pointer_speed = Some(text(b"1234567890"));
+        e.mem.set_u32(size.addr(), 10);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_MORE_DATA
+        );
+        assert_eq!(e.mem.u32(size.addr()), 11);
+        // Stored as a number (`REG_DWORD`): its type and four bytes, as Windows answers them.
+        e.kernel.pointer_speed = Some(PointerSpeed::Value {
+            kind: 4,
+            data: vec![10, 0, 0, 0],
+        });
+        e.mem.set_u32(size.addr(), 10);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_SUCCESS
+        );
+        assert_eq!(e.mem.u32(kind.addr()), 4);
+        assert_eq!(e.mem.u32(size.addr()), 4);
+        assert_eq!(e.mem.u32(data.addr()), 10);
+        // Not set on the player's Windows: refused with Windows' error, the game keeps its 6.
+        e.kernel.pointer_speed = Some(PointerSpeed::Missing(ERROR_FILE_NOT_FOUND));
+        e.mem.set_u32(size.addr(), 10);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_FILE_NOT_FOUND
+        );
+        e.kernel.pointer_speed = None;
+        e.mem.set_u32(size.addr(), 10);
+        assert_eq!(
+            reg_query_value_ex_a(&mut e, key, Ptr::new(0x1040), 0, kind, data, size),
+            ERROR_SUCCESS
+        );
+        assert_eq!(e.mem.cstr(data.addr()), b"10");
     }
 }
 
