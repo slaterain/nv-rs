@@ -1779,7 +1779,8 @@ fn message_text(e: &Engine, m: &Message) -> Vec<u8> {
 // frame after the load reports no change, and the actor hooks' part: the fire-weapon hook's
 // count, the ragdoll events gone; and the AI hooks' part: the combat, teleport and equipment hooks
 // off, the forced targets and detection values gone; and the world hooks' part: the informed
-// forms, the waits, the swapped LOD blocks and the model paths gone, the reference names' flags set
+// forms, the waits, the script lights off their nodes, the swapped LOD blocks and the model paths
+// gone, the reference names' flags set
 // again; and the player's killer cleared, G33's part; and the excluded combat actions gone, H16's
 // part; and the references' own map markers gone, and the synchronized position's reference).
 /// Not installed, every step leaves the game as it is: the ones that write the game's memory (G33's

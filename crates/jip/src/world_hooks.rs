@@ -458,6 +458,7 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
 // DoPreLoadGameHousekeeping (this step's part).
 /// Before a game loads: the informed forms lose their flags and the fast-travel and cell-change
 /// sets go (with a user of each hook); the waits go, with their owners' flags and the hook; the
+/// lights scripts attached come off their nodes (`gl::lights::pre_load`); the
 /// swapped LOD blocks go, with the hook; the references keep their names (their flag set
 /// again); the model paths go, with the hook.
 pub fn pre_load(e: &mut Engine) {
@@ -497,6 +498,8 @@ pub fn pre_load(e: &mut Engine) {
         }
         clear_current_wait();
     }
+    // JIP's next step: every light a script attached (`AttachLight`) taken off its node.
+    crate::game_patches::gl::lights::pre_load(e);
     if !state(e).swap_obj_lod.is_empty() {
         state(e).swap_obj_lod.clear();
         e.set_hook(Hook::MakeObjLODPath, false);

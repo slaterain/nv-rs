@@ -1,6 +1,6 @@
-//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G55, G58, H21. Each handler's branches over
-//! stand-ins of what JIP's bytes read, values from JIP's assembly (`internal/patches_game.h`,
-//! `internal/hooks.h`) and the exe's (Ghidra).
+//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G55, G58, G129, H21. Each handler's
+//! branches over stand-ins of what JIP's bytes read, values from JIP's assembly
+//! (`internal/patches_game.h`, `internal/hooks.h`) and the exe's (Ghidra).
 
 use super::*;
 use crate::test_support::engine;
@@ -47,16 +47,21 @@ fn ga_seams_are_jips_addresses() {
                 VATS_TARGET_DT.addr(),
                 MESSAGE_TIME.addr(),
                 PICK_LOAD_SCREEN.addr(),
+                FONT_FILE_READ.addr(),
             ]
         ]
         .concat()
     );
     assert_eq!(PICK_LOAD_SCREEN.addr(), 0x0078_a79b);
+    // G129's guard: `Font::Load`'s `MOV [EBP-0x1B0],EAX` after the file's size (vtable +0x28).
+    assert_eq!(FONT_FILE_READ.addr(), 0x00a1_54dd);
     assert_eq!(AREA.fix_wraps, [0x0078_ac60]);
+    assert_eq!(FONT_MANAGER_START.addr(), 0x0070_b285);
+    assert_eq!(LAST_FONT.addr(), 0x00a1_b032);
     assert_eq!(
         AREA.jip_sites,
-        [0x007a_9aee, 0x007a_9c45],
-        "G55 (JIP's own)"
+        [0x0070_b285, 0x007a_9aee, 0x007a_9c45, 0x00a1_b032],
+        "G129 and G55 (JIP's own)"
     );
     assert!(AREA.jip_wraps.is_empty());
 }
@@ -73,6 +78,9 @@ fn ga_not_installed_nothing_answers() {
     for slot in MAX_MESSAGE_WIDTH {
         assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d]), None);
     }
+    assert_eq!(e.site(FONT_MANAGER_START.addr(), &[]), None);
+    assert_eq!(e.site(LAST_FONT.addr(), &[9, AREA_AT]), None);
+    assert_eq!(e.site(FONT_FILE_READ.addr(), &[0x4000]), None);
 }
 
 /// G55 is in with JIP installed, the row off: no box waiting, it does not answer (the game's
@@ -83,6 +91,83 @@ fn g55_in_with_jip_installed() {
     for slot in MAX_MESSAGE_WIDTH {
         assert_eq!(e.site_owners(slot.addr()).to_vec(), vec![Owner::Jip]);
         assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d]), None);
+    }
+}
+
+/// JIP's manager at `AREA_AT + 0x1000`: fonts 1 to 89 filled but 9 (`+0x20`), as G129 makes it.
+fn jips_font_manager(e: &mut Engine) -> u32 {
+    let manager = AREA_AT + 0x1000;
+    for n in 1..=89u32 {
+        let font = if n == 9 { 0 } else { 0x0b00_0000 + n };
+        e.mem.set_u32(manager + 4 * (n - 1), font);
+    }
+    manager
+}
+
+/// G129 is in with JIP installed, the row off: both seams JIP's, the last font 89 for every font,
+/// font 9's empty slot included (as JIP: the game then reads through it); the read guard is not
+/// in (the start's work is driven by the command's tests, `SetFontFile`).
+#[test]
+fn g129_in_with_jip_installed() {
+    let mut e = installed();
+    for slot in [FONT_MANAGER_START, LAST_FONT] {
+        assert_eq!(e.site_owners(slot.addr()).to_vec(), vec![Owner::Jip]);
+    }
+    let manager = jips_font_manager(&mut e);
+    for font in [1, 8, 9, 10, 89, 90] {
+        assert_eq!(
+            e.site(LAST_FONT.addr(), &[font, manager]),
+            Some(89),
+            "{font}"
+        );
+    }
+    assert_eq!(e.site(FONT_FILE_READ.addr(), &[0x4000]), None, "read whole");
+}
+
+/// G129's guards with the row (the fixes; nv-rs's own): a font from 1 to 89 whose slot is empty
+/// answers 0 (refused), any other 89 (one outside 1 to 89 is refused by the game's own test);
+/// `Font::Load` reads at most the 0x3928-byte data block.
+#[test]
+fn g129_guards_with_the_row() {
+    let mut e = installed();
+    let manager = jips_font_manager(&mut e);
+    e.set_jip_patches(
+        engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
+    );
+    install_fixes(&mut e);
+    assert_eq!(
+        e.site_owners(FONT_FILE_READ.addr()).to_vec(),
+        vec![Owner::Jip]
+    );
+    assert_eq!(e.site(LAST_FONT.addr(), &[9, manager]), Some(0), "9: empty");
+    for font in [0, 1, 8, 10, 88, 89, 90, u32::MAX] {
+        assert_eq!(
+            e.site(LAST_FONT.addr(), &[font, manager]),
+            Some(89),
+            "{font}"
+        );
+    }
+    e.mem.set_u32(manager + 0x160, 0);
+    assert_eq!(
+        e.site(LAST_FONT.addr(), &[89, manager]),
+        Some(0),
+        "89 empty"
+    );
+    e.mem.set_u32(manager, 0);
+    assert_eq!(e.site(LAST_FONT.addr(), &[1, manager]), Some(0), "1 empty");
+    for (size, read) in [
+        (0, 0),
+        (0x3927, 0x3927),
+        (0x3928, 0x3928),
+        (0x3929, 0x3928),
+        (0x4000, 0x3928),
+        (u32::MAX, 0x3928),
+    ] {
+        assert_eq!(
+            e.site(FONT_FILE_READ.addr(), &[size]),
+            Some(read),
+            "{size:#x}"
+        );
     }
 }
 
@@ -495,8 +580,8 @@ fn g09_seam_answers_only_with_the_fixes() {
 #[test]
 fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
     let mut e = engine();
-    // install_as runs every area's install_jip once (GA's: the time slot and G55's seams; a
-    // second run would register G55's seams twice, which on_site refuses).
+    // install_as runs every area's install_jip once (GA's: the time slot and G55's and G129's
+    // seams; a second run would register those seams twice, which on_site refuses).
     crate::install_as(&mut e, true);
     e.set_jip_patches(
         engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
