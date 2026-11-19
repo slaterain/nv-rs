@@ -20,7 +20,7 @@
 //!   ask for every actor when a reference goes away (Stewie's Engine Optimizations, measure/stewie-eo).
 //! - [`saveload`]: the clean-up of expired cells' data that every save runs first (`0084ab20`), its
 //!   expiry queue a native hash map (Stewie's Engine Optimizations, item 2).
-//! - [`tile`]: the menus' tile values (the sorted trait array's find and insert, `GetValue`,
+//! - [`tile`]: the menus' tile values (the sorted trait array's find, with the C runtime's `bsearch`, and insert, `GetValue`,
 //!   `GetOrCreateValue`), the reaction map's `AddReaction` and `ClearActions`, the pointer maps' `SetAt`
 //!   and the menu string map's and integer maps' hash and compare, which the map lookup calls
 //!   directly (Stewie's Engine Optimizations, item 7: menus open faster).
@@ -195,6 +195,7 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         // The menus' tile values and their reaction map (Engine Optimizations, item 7).
         entry!(0x00a0_1160, tile::compare_values(Ptr, Ptr) -> i32),
         entry!(0x00a0_cb90, tile::sorted_find(Ptr, u32, u32) -> i32),
+        entry!(0x00ec_716d, tile::bsearch(u32, u32, u32, u32, u32) -> u32),
         entry!(0x00a0_caf0, tile::sorted_insert(Ptr, u32, u32)),
         entry!(0x00a0_0e90, tile::get_value_q(Ptr, i32) -> Ptr),
         entry!(0x00a0_0f30, tile::get_value(Ptr, i32) -> Ptr),
