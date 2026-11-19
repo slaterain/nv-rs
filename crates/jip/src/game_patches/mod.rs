@@ -115,6 +115,8 @@ pub const AREAS: &[Area] = &[
     gw::AREA,
     gx::AREA,
     crate::commands::jip_fn_ui_menus::AREA,
+    crate::commands::jip_fn_camera::AREA,
+    crate::commands::jip_fn_rock_it::AREA,
 ];
 
 /// What the game patches keep on JIP's state.

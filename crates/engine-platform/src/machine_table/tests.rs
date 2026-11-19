@@ -531,6 +531,94 @@ fn the_folders_are_nv_rs_own_on_drive_z() {
     assert!(folder_lines(std::path::Path::new(&long)).is_err());
 }
 
+/// The profile play.sh names (`NV_RS_PROFILE`, not the profiler's `NV_PROFILE`): `mods` only for
+/// `mods`; unset, `game` or anything else is `game`. Each profile's Documents, AppData folders and
+/// plugin list sit in nv-rs's own folder under its name, as `--build-mods` and the saves expect
+/// (review of #763: `--mods` must not read the `game` folders).
+#[test]
+fn the_profile_is_mods_only_when_play_sh_says_mods() {
+    assert_eq!(PROFILE_VARIABLE, "NV_RS_PROFILE");
+    assert_eq!(profile_from(Some("mods")), "mods");
+    assert_eq!(profile_from(Some("game")), "game");
+    assert_eq!(profile_from(None), "game");
+    assert_eq!(profile_from(Some("")), "game");
+    assert_eq!(profile_from(Some("Mods")), "game");
+    let own = std::path::Path::new("/home/me/.local/share/nv-rs");
+    let mods = own.join("mods");
+    assert_eq!(
+        profile_folders(own, "mods"),
+        [
+            mods.join("Documents"),
+            mods.join("AppData").join("Roaming"),
+            mods.join("AppData").join("Local"),
+        ]
+    );
+    assert_eq!(
+        plugins_txt(own, "mods"),
+        mods.join("AppData")
+            .join("Local")
+            .join("FalloutNV")
+            .join("plugins.txt")
+    );
+    assert_eq!(
+        profile_folders(own, "game")[0],
+        own.join("game").join("Documents")
+    );
+}
+
+/// The folders the game is told follow play.sh's `NV_RS_PROFILE` and nothing else (review of
+/// #777): `mods` gives the mods profile's Documents; the profiler's `NV_PROFILE=mods` alone, or
+/// nothing set, gives the game profile's.
+#[test]
+fn the_games_folders_follow_play_shs_profile_variable_only() {
+    let own = std::path::Path::new("/home/me/.local/share/nv-rs");
+    let with = |pairs: &'static [(&'static str, &'static str)]| {
+        move |name: &str| {
+            pairs
+                .iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| v.to_string())
+        }
+    };
+    // The Documents folder the first `SHGetFolderPathA` line answers, as the game reads it.
+    let documents = |env: &dyn Fn(&str) -> Option<String>| {
+        let lines = folder_lines_with(own, env).unwrap();
+        let first = lines.lines().next().unwrap();
+        let hex = first.split('\t').nth(3).unwrap();
+        let bytes: Vec<u8> = (0..hex.len() / 2)
+            .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+            .collect();
+        String::from_utf8(bytes).unwrap()
+    };
+    let mods = with(&[("NV_RS_PROFILE", "mods")]);
+    let profiler = with(&[("NV_PROFILE", "mods")]);
+    let none = with(&[]);
+    assert_eq!(
+        documents(&mods),
+        r"Z:\home\me\.local\share\nv-rs\mods\Documents"
+    );
+    assert_eq!(
+        documents(&profiler),
+        r"Z:\home\me\.local\share\nv-rs\game\Documents"
+    );
+    assert_eq!(
+        documents(&none),
+        r"Z:\home\me\.local\share\nv-rs\game\Documents"
+    );
+    assert_eq!(
+        (
+            profile_with(&mods),
+            profile_with(&profiler),
+            profile_with(&none)
+        ),
+        ("mods", "game", "game")
+    );
+    assert_eq!(
+        game_folders_with(own, &mods)[2],
+        own.join("mods").join("AppData").join("Local")
+    );
+}
+
 /// The whole table reads back through the Windows table's own reader with every answer in place:
 /// the machine's part, then the display part added after it (as the host loads them).
 #[test]
