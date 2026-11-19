@@ -53,17 +53,100 @@ fn steams_lists() {
 
     let lists = SteamLists {
         ignore: vec![(0x28de, 0x1205)],
-        except: vec![],
+        ..SteamLists::default()
     };
     assert!(lists.leave_out((0x28de, 0x1205)));
     assert!(!lists.leave_out((0x28de, 0x11ff)));
     let lists = SteamLists {
-        ignore: vec![(0x28de, 0x11ff)],
         except: vec![(0x28de, 0x11ff)],
+        ..SteamLists::default()
     };
     assert!(lists.leave_out((0x045e, 0x028e)));
     assert!(!lists.leave_out((0x28de, 0x11ff)));
+    // Neither list ever leaves out Steam's virtual pad, as in SDL.
+    let lists = SteamLists {
+        ignore: vec![(0x28de, 0x11ff)],
+        ..SteamLists::default()
+    };
+    assert!(!lists.leave_out((0x28de, 0x11ff)));
+    let lists = SteamLists {
+        except: vec![(0x045e, 0x028e)],
+        ..SteamLists::default()
+    };
+    assert!(!lists.leave_out((0x28de, 0x11ff)));
     assert!(!SteamLists::default().leave_out((0x28de, 0x11ff)));
+}
+
+/// SDL's yes or no for a variable, and where each pad comes by it.
+#[test]
+fn steams_variable_and_the_order() {
+    for (value, expected) in [
+        (None, false),
+        (Some(""), false),
+        (Some("1"), true),
+        (Some("true"), true),
+        (Some("yes"), true),
+        (Some("0"), false),
+        (Some("00"), false),
+        (Some("0x1"), false),
+        (Some("false"), false),
+        (Some("FALSE"), false),
+        (Some("False "), true),
+    ] {
+        assert_eq!(yes(value, false), expected, "{value:?}");
+    }
+    assert!(yes(None, true) && yes(Some(""), true));
+    let started_by_steam = SteamLists {
+        allow_virtual: true,
+        ..SteamLists::default()
+    };
+    assert_eq!(started_by_steam.rank((0x28de, 0x11ff)), Rank::SteamFirst);
+    assert_eq!(started_by_steam.rank((0x045e, 0x028e)), Rank::Pad);
+    assert_eq!(
+        SteamLists::default().rank((0x28de, 0x11ff)),
+        Rank::SteamLast
+    );
+    assert!(Rank::SteamFirst < Rank::Pad && Rank::Pad < Rank::SteamLast);
+}
+
+/// Pads added in [`Rank`] order whatever order they come in; the pads a new one goes before, and
+/// those after one gone, have their motors stopped.
+#[test]
+fn the_list_order_and_stopped_motors() {
+    let mut list = List::default();
+    let pad = |rank: Rank, wanted: (u16, u16)| {
+        let mut p = stand_in(Path::new("/dev/null"));
+        p.rank = rank;
+        p.wanted = wanted;
+        p
+    };
+    list.add(pad(Rank::SteamLast, (1, 1)));
+    list.add(pad(Rank::Pad, (2, 2)));
+    list.add(pad(Rank::Pad, (3, 3)));
+    list.add(pad(Rank::SteamFirst, (4, 4)));
+    let ranks: Vec<Rank> = list.pads.iter().map(|p| p.rank).collect();
+    assert_eq!(
+        ranks,
+        [Rank::SteamFirst, Rank::Pad, Rank::Pad, Rank::SteamLast]
+    );
+    let keys: Vec<u64> = list.pads.iter().map(|p| p.key).collect();
+    assert_eq!(keys, [3, 1, 2, 0]);
+    // The first Steam pad went before all three: their rumble stopped; its own kept.
+    let wanted: Vec<(u16, u16)> = list.pads.iter().map(|p| p.wanted).collect();
+    assert_eq!(wanted, [(4, 4), (0, 0), (0, 0), (0, 0)]);
+    for p in &mut list.pads {
+        p.wanted = (9, 9);
+    }
+    list.gone(1);
+    let wanted: Vec<(u16, u16)> = list.pads.iter().map(|p| p.wanted).collect();
+    assert_eq!(wanted, [(9, 9), (9, 9), (0, 0), (0, 0)]);
+    assert!(list.pads[1].gone);
+    // The last pad gone: nobody moves.
+    for p in &mut list.pads {
+        p.wanted = (9, 9);
+    }
+    list.gone(0);
+    assert!(list.pads.iter().all(|p| p.wanted == (9, 9)));
 }
 
 /// A device's driver is the one its parent device names; a virtual device has none.
@@ -192,7 +275,8 @@ impl Virtual {
         for (to, from) in setup.name.iter_mut().zip(b"nv-rs test pad") {
             *to = libc::c_char::from_ne_bytes([*from]);
         }
-        setup.ff_effects_max = u32::from(rumble);
+        // Room for two effects: a failed upload tried again as a new effect has a place.
+        setup.ff_effects_max = 2 * u32::from(rumble);
         // SAFETY: the structure the request names, then the request without an argument.
         assert!(unsafe { libc::ioctl(fd, UI_DEV_SETUP as _, &setup) } >= 0);
         assert!(unsafe { libc::ioctl(fd, UI_DEV_CREATE as _) } >= 0);
@@ -257,6 +341,11 @@ impl Virtual {
 
     /// Answers the next rumble upload: the effect the reader uploaded.
     fn take_upload(&self) -> libc::ff_effect {
+        self.answer_upload(0)
+    }
+
+    /// Answers the next rumble upload with `retval` (0 taken, a negative error refused).
+    fn answer_upload(&self, retval: i32) -> libc::ff_effect {
         let request = self.next().expect("an upload request");
         assert_eq!((request.type_, request.code), (EV_UINPUT, UI_FF_UPLOAD));
         // SAFETY: a plain C structure.
@@ -265,7 +354,7 @@ impl Virtual {
         let fd = self.uinput.as_raw_fd();
         // SAFETY: the structure the requests name.
         assert!(unsafe { libc::ioctl(fd, UI_BEGIN_FF_UPLOAD as _, &mut upload) } >= 0);
-        upload.retval = 0;
+        upload.retval = retval;
         assert!(unsafe { libc::ioctl(fd, UI_END_FF_UPLOAD as _, &upload) } >= 0);
         upload.effect
     }
@@ -318,8 +407,22 @@ fn state(pads: &mut LinuxPads, n: usize) -> Option<crate::xinput::PadState> {
     (pads.get_state(n, &mut s) == ERROR_SUCCESS).then(|| crate::xinput::PadState::from_bytes(&s))
 }
 
+/// No uinput here: the test says so and passes, unless `NV_REQUIRE_UINPUT=1` asks for it to fail
+/// (the runs that have uinput set it, so a test that cannot make its pad never passes unseen).
 fn no_uinput() {
+    assert!(
+        std::env::var("NV_REQUIRE_UINPUT").as_deref() != Ok("1"),
+        "NV_REQUIRE_UINPUT=1 and no /dev/uinput to make a virtual pad with"
+    );
     eprintln!("skipped: no /dev/uinput to make a virtual pad with (run as root where it is)");
+}
+
+/// The pads Steam starts a game with: its virtual pad first.
+fn started_by_steam() -> SteamLists {
+    SteamLists {
+        allow_virtual: true,
+        ..SteamLists::default()
+    }
 }
 
 /// Steam's virtual pad, read end to end: found, its face buttons by letter, its sticks and
@@ -409,15 +512,16 @@ fn steams_pad_first_and_its_lists() {
     assert!(xbox.next().is_none(), "no rumble for a pad without it");
     drop(pads);
 
-    // The Xbox pad found first (its Y still held, read as the device has it at the start), a
-    // PlayStation pad Steam's list names, then Steam's virtual pad at a later look.
+    // Started by Steam: the Xbox pad found first (its Y still held, read as the device has it at
+    // the start), a PlayStation pad Steam's list names, then Steam's virtual pad at a later look,
+    // which comes first; the ignore list naming the virtual pad too leaves it in.
     let sony = Virtual::make(0x054c, 0x0ce6, false).unwrap();
     let nodes = Arc::new(Mutex::new(vec![xbox.node.clone(), sony.node.clone()]));
     let mut pads = reader_over(
         nodes.clone(),
         SteamLists {
-            ignore: vec![(0x054c, 0x0ce6)],
-            except: vec![],
+            ignore: vec![(0x054c, 0x0ce6), (0x28de, 0x11ff)],
+            ..started_by_steam()
         },
     );
     assert!(wait_for(|| (pads.count() == 1).then_some(())).is_some());
@@ -432,18 +536,50 @@ fn steams_pad_first_and_its_lists() {
     assert!(wait_for(|| state(&mut pads, 0).filter(|s| s.buttons == buttons::START)).is_some());
     assert_eq!(state(&mut pads, 1).unwrap().buttons, buttons::Y);
 
-    // Only the except list's pads.
+    // Started by Steam with an except list without the virtual pad: it is still read, first.
     let mut pads = reader(
         vec![xbox.node.clone(), steam.node.clone()],
         SteamLists {
-            ignore: vec![],
             except: vec![(0x045e, 0x028e)],
+            ..started_by_steam()
         },
     );
-    assert!(wait_for(|| (pads.count() == 1).then_some(())).is_some());
-    std::thread::sleep(Duration::from_millis(1200));
-    assert_eq!(pads.count(), 1);
+    assert!(wait_for(|| (pads.count() == 2).then_some(())).is_some());
+    assert_eq!(state(&mut pads, 0).unwrap().buttons, buttons::START);
+    assert_eq!(state(&mut pads, 1).unwrap().buttons, buttons::Y);
+
+    // Not started by Steam (no variable): the virtual pad after the Xbox pad, which is user 0
+    // even though the virtual pad was found first.
+    let mut pads = reader(
+        vec![steam.node.clone(), xbox.node.clone()],
+        SteamLists::default(),
+    );
+    assert!(wait_for(|| (pads.count() == 2).then_some(())).is_some());
     assert_eq!(state(&mut pads, 0).unwrap().buttons, buttons::Y);
+    assert_eq!(state(&mut pads, 1).unwrap().buttons, buttons::START);
+}
+
+/// A pad pushed off user 0 by Steam's virtual pad (Steam started after the game) has its motors
+/// stopped: the game's rumble now goes to the virtual pad.
+#[test]
+fn a_pad_pushed_off_user_0_stops_rumbling() {
+    let Some(xbox) = Virtual::make(0x045e, 0x028e, true) else {
+        return no_uinput();
+    };
+    let nodes = Arc::new(Mutex::new(vec![xbox.node.clone()]));
+    let mut pads = reader_over(nodes.clone(), started_by_steam());
+    assert!(wait_for(|| (pads.count() == 1).then_some(())).is_some());
+    assert_eq!(pads.set_state(0, 0x8000, 0x8000), ERROR_SUCCESS);
+    let effect = xbox.take_upload();
+    assert_eq!(xbox.next().map(|e| (e.type_, e.value)), Some((EV_FF, 1)));
+    let steam = Virtual::make(0x28de, 0x11ff, false).unwrap();
+    nodes.lock().unwrap().push(steam.node.clone());
+    let stopped = xbox.next().expect("the pushed pad's motors stopped");
+    assert_eq!(
+        (stopped.type_, stopped.code, stopped.value),
+        (EV_FF, effect.id as u16, 0)
+    );
+    assert_eq!(pads.count(), 2);
 }
 
 /// A device that is not a pad, and another maker's pad that no driver of the known ones reads,
@@ -490,10 +626,21 @@ fn a_resync_reads_the_device_as_it_is() {
     pad.emit(EV_KEY, BTN_SOUTH, 1);
     pad.emit(EV_ABS, ABS_RY, -32768);
     pad.emit(EV_SYN, SYN_REPORT, 0);
-    resync(&mut opened);
+    Snapshot::read(&opened.file, &opened.axes).apply(&mut opened.events);
     let c = opened.events.controls();
     assert!(c.south);
     assert_eq!(c.right_y, 32767);
+}
+
+/// What the reading thread does for one pad: its events read, then, after dropped events, its
+/// state read again (outside the list's lock there).
+fn read_as_the_reader(pad: &mut super::Pad) {
+    assert!(read_events(pad));
+    if pad.resync {
+        Snapshot::read(&pad.file, &pad.axes).apply(&mut pad.events);
+        pad.resync = false;
+        pad.report();
+    }
 }
 
 /// A pad in the list with no device behind it (its file `/dev/null`), at `path`.
@@ -507,7 +654,8 @@ fn stand_in(path: &Path) -> super::Pad {
         controls: events.controls(),
         events,
         packet: 0,
-        steam_virtual: false,
+        rank: Rank::Pad,
+        resync: false,
         can_rumble: true,
         wanted: (0, 0),
         sent: (0, 0),
@@ -620,7 +768,87 @@ fn dropped_events_are_read_again_from_the_device() {
         (EV_SYN, SYN_DROPPED),
         "the kernel dropped events"
     );
-    read_events(&mut opened);
+    read_as_the_reader(&mut opened);
     assert!(opened.controls.south, "the press in the lost events");
     assert_eq!(opened.controls.left_x, 1000);
+}
+
+/// After dropped events, a press among the first events read and its release later in the queue
+/// read as released: the rest of the queue is thrown away before the device's state is read
+/// again, so the older press is not put over the newer state (review of #791).
+#[test]
+fn a_press_and_release_after_a_drop_read_released() {
+    let Some(pad) = Virtual::make(0x045e, 0x028e, false) else {
+        return no_uinput();
+    };
+    let sys = Path::new("/sys/class/input");
+    let Found::Pad(mut opened) = open(&pad.node, sys, &SteamLists::default()) else {
+        panic!("the virtual pad is read");
+    };
+    let raw = File::open(&pad.node).unwrap();
+    // The kernel's queue for this pad holds 127 events (2 to the 7th, less one): the 128th
+    // overflows it, leaving the drop and that event; 64 reports are exactly 128 events.
+    for v in 1..=64 {
+        pad.emit(EV_ABS, ABS_X, v);
+        pad.emit(EV_SYN, SYN_REPORT, 0);
+    }
+    // Then 92 events, which fit: the press within the first 64 read, the release after them.
+    for v in 1..=3 {
+        pad.emit(EV_ABS, ABS_Y, v);
+        pad.emit(EV_SYN, SYN_REPORT, 0);
+    }
+    pad.emit(EV_KEY, BTN_SOUTH, 1);
+    pad.emit(EV_SYN, SYN_REPORT, 0);
+    for v in 1..=40 {
+        pad.emit(EV_ABS, ABS_RX, v);
+        pad.emit(EV_SYN, SYN_REPORT, 0);
+    }
+    pad.emit(EV_KEY, BTN_SOUTH, 0);
+    pad.emit(EV_SYN, SYN_REPORT, 0);
+    // SAFETY: a plain C structure, read whole.
+    let mut first: libc::input_event = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::input_event>();
+    // SAFETY: the structure's own bytes.
+    let n = unsafe { libc::read(raw.as_raw_fd(), std::ptr::addr_of_mut!(first).cast(), size) };
+    assert_eq!(n, size as isize);
+    assert_eq!((first.type_, first.code), (EV_SYN, SYN_DROPPED));
+    read_as_the_reader(&mut opened);
+    assert!(!opened.controls.south, "the button reads released");
+    assert_eq!(opened.controls.right_x, 40);
+}
+
+/// An upload of the pad's effect that fails is tried once more as a new effect (as SDL does), and
+/// the pad keeps its rumble (review of #791).
+#[test]
+fn a_failed_rumble_upload_is_tried_again_as_a_new_effect() {
+    let Some(pad) = Virtual::make(0x045e, 0x028e, true) else {
+        return no_uinput();
+    };
+    let mut pads = reader(vec![pad.node.clone()], SteamLists::default());
+    assert!(wait_for(|| (pads.count() == 1).then_some(())).is_some());
+    assert_eq!(pads.set_state(0, 0x1000, 0), ERROR_SUCCESS);
+    let first = pad.take_upload();
+    assert_eq!(
+        pad.next().map(|e| (e.code, e.value)),
+        Some((first.id as u16, 1))
+    );
+    assert_eq!(pads.set_state(0, 0x2000, 0), ERROR_SUCCESS);
+    let refused = pad.answer_upload(-libc::EINVAL);
+    assert_eq!(refused.id, first.id);
+    let new = pad.take_upload();
+    assert_ne!(new.id, first.id);
+    assert_eq!(
+        pad.next().map(|e| (e.code, e.value)),
+        Some((new.id as u16, 1))
+    );
+    // Still rumbling: the next change updates the new effect.
+    assert_eq!(pads.set_state(0, 0x3000, 0), ERROR_SUCCESS);
+    assert_eq!(pad.take_upload().id, new.id);
+    assert_eq!(pad.next().map(|e| e.value), Some(1));
+    // Refused again, and its new effect has no room (both places taken): this change is lost, but
+    // the pad keeps its rumble, and the next change is sent.
+    assert_eq!(pads.set_state(0, 0x4000, 0), ERROR_SUCCESS);
+    assert_eq!(pad.answer_upload(-libc::EINVAL).id, new.id);
+    assert_eq!(pads.set_state(0, 0x5000, 0), ERROR_SUCCESS);
+    assert_eq!(pad.take_upload().id, new.id);
 }

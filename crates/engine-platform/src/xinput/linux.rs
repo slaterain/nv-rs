@@ -5,13 +5,19 @@
 //! kernel's `FF_RUMBLE` effect, uploaded, then played or stopped), so a device call never runs on
 //! the game's thread, which only reads and writes the shared list.
 //!
-//! Which pad comes first: Steam Input's virtual pad ([`evdev::STEAM_VIRTUAL`], the pad a game
-//! started from Steam is meant to read), always, then the others in the order they were found,
-//! each look's new ones by their device numbers. The pads Steam reads itself and stands in for are
-//! left out: for the games it starts, Steam lists them in `SDL_GAMECONTROLLER_IGNORE_DEVICES`, and
-//! a list in `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT` leaves out every pad not in it, as SDL
-//! reads the two ([`SteamLists`]). So on the Steam Deck the Deck's own controls do not take the
-//! first place from Steam's virtual pad, and a pad is not read twice.
+//! Which pad comes first ([`Rank`]): when Steam started the game (it sets
+//! `SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD`, read by SDL's rules for a yes or no), Steam
+//! Input's virtual pad ([`evdev::STEAM_VIRTUAL`]), the pad such a game is meant to read; then the
+//! other pads in the order they were found, each look's new ones by their device numbers. Without
+//! that variable (the game started outside Steam while Steam runs) a virtual pad comes after every
+//! other pad: SDL leaves it out there, and it is kept, last, only so that a Steam Deck in desktop
+//! mode still has its built-in controls. The pads Steam reads itself and stands in for are left
+//! out: for the games it starts, Steam lists them in `SDL_GAMECONTROLLER_IGNORE_DEVICES`, and a
+//! list in `SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT` leaves out every pad not in it, as SDL reads
+//! the two ([`SteamLists`]); as in SDL, neither list ever leaves out a virtual pad. So on the Steam
+//! Deck the Deck's own controls do not take the first place from Steam's virtual pad, and a pad is
+//! not read twice. A pad whose place among the users changes (another put before it, or one before
+//! it gone) has its motors stopped, as the game's rumble for its old place is not its own.
 //!
 //! The devices a user may read: systemd gives the person at the machine the joysticks' event
 //! devices (Steam's virtual pad among them); a pad that cannot be opened is tried again at each
@@ -86,10 +92,13 @@ fn absinfo(fd: i32, code: u16) -> Option<libc::input_absinfo> {
 /// The pads Steam leaves out of the games it starts, as SDL reads the two lists
 /// (`SDL_GAMECONTROLLER_IGNORE_DEVICES` and `..._EXCEPT`): each a list of `0xVVVV/0xPPPP` vendor
 /// and product ids, or `@` and a file's path, the list being the file's text.
+/// `allow_virtual`: `SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD`, which Steam sets for the
+/// games it starts.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SteamLists {
     pub ignore: Vec<(u16, u16)>,
     pub except: Vec<(u16, u16)>,
+    pub allow_virtual: bool,
 }
 
 impl SteamLists {
@@ -97,17 +106,53 @@ impl SteamLists {
         SteamLists {
             ignore: hint(std::env::var("SDL_GAMECONTROLLER_IGNORE_DEVICES").ok()),
             except: hint(std::env::var("SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT").ok()),
+            allow_virtual: yes(
+                std::env::var("SDL_GAMECONTROLLER_ALLOW_STEAM_VIRTUAL_GAMEPAD")
+                    .ok()
+                    .as_deref(),
+                false,
+            ),
         }
     }
 
-    /// Whether the pad `id` is left out: with an except list (one with an id in it), every pad
-    /// not in it; otherwise the pads in the ignore list.
+    /// Whether the pad `id` is left out: never Steam's virtual pad; with an except list (one with
+    /// an id in it), every pad not in it; otherwise the pads in the ignore list.
     pub fn leave_out(&self, id: (u16, u16)) -> bool {
+        if id == evdev::STEAM_VIRTUAL {
+            return false;
+        }
         if !self.except.is_empty() {
             return !self.except.contains(&id);
         }
         self.ignore.contains(&id)
     }
+
+    /// Where a pad `id` comes among the users.
+    fn rank(&self, id: (u16, u16)) -> Rank {
+        match (id == evdev::STEAM_VIRTUAL, self.allow_virtual) {
+            (true, true) => Rank::SteamFirst,
+            (true, false) => Rank::SteamLast,
+            (false, _) => Rank::Pad,
+        }
+    }
+}
+
+/// A variable's yes or no by SDL's rules (`SDL_GetStringBoolean`): unset or empty is `default`; a
+/// value starting with `0`, or `false` in any case, is no; anything else yes.
+pub fn yes(value: Option<&str>, default: bool) -> bool {
+    match value {
+        None | Some("") => default,
+        Some(v) => !(v.starts_with('0') || v.eq_ignore_ascii_case("false")),
+    }
+}
+
+/// Where a pad comes among the users: Steam's virtual pad first when Steam started the game, the
+/// other pads, then Steam's virtual pad when it did not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Rank {
+    SteamFirst,
+    Pad,
+    SteamLast,
 }
 
 /// A list's text, or the file `@path` names.
@@ -200,8 +245,11 @@ struct Pad {
     /// The reading at the last report, and its packet number (one more at each change).
     controls: Controls,
     packet: u32,
-    steam_virtual: bool,
-    /// Opened for writing and has the rumble effect; false too once an upload failed.
+    rank: Rank,
+    /// The kernel dropped events: the reader reads the device's state again, outside the list's
+    /// lock.
+    resync: bool,
+    /// Opened for writing and has the rumble effect; false too once the device is gone.
     can_rumble: bool,
     /// The motor speeds the game set, and the ones last sent (and when).
     wanted: (u16, u16),
@@ -264,19 +312,33 @@ impl List {
         self.pads.iter_mut().filter(|p| !p.gone)
     }
 
-    /// Adds a new pad: Steam's virtual pads first (after those already open), the others last.
+    /// Adds a new pad after those of its [`Rank`] and before those of a later one; the pads after
+    /// it, whose users change, have their motors stopped.
     fn add(&mut self, mut pad: Pad) {
         pad.key = self.next_key;
         self.next_key += 1;
-        let at = if pad.steam_virtual {
-            self.pads
-                .iter()
-                .position(|p| !p.steam_virtual)
-                .unwrap_or(self.pads.len())
-        } else {
-            self.pads.len()
-        };
+        let at = self
+            .pads
+            .iter()
+            .position(|p| p.rank > pad.rank)
+            .unwrap_or(self.pads.len());
         self.pads.insert(at, pad);
+        self.moved_from(at + 1);
+    }
+
+    /// The pad `key` has gone: the pads after it, whose users change, have their motors stopped.
+    fn gone(&mut self, key: u64) {
+        if let Some(at) = self.pads.iter().position(|p| p.key == key) {
+            self.pads[at].gone = true;
+            self.moved_from(at + 1);
+        }
+    }
+
+    /// The pads from `at` on are other users now: the game's rumble for their old places stops.
+    fn moved_from(&mut self, at: usize) {
+        for pad in self.pads.iter_mut().skip(at) {
+            pad.wanted = (0, 0);
+        }
     }
 }
 
@@ -428,7 +490,8 @@ fn open(path: &Path, sys: &Path, lists: &SteamLists) -> Found {
         events,
         controls,
         packet: 0,
-        steam_virtual: (vendor, product) == evdev::STEAM_VIRTUAL,
+        rank: lists.rank((vendor, product)),
+        resync: false,
         can_rumble,
         wanted: (0, 0),
         sent: (0, 0),
@@ -447,13 +510,52 @@ fn read_keys(fd: i32, events: &mut evdev::Pad) {
     }
 }
 
-/// After the kernel dropped events: the keys and axes read again as they are now.
-fn resync(pad: &mut Pad) {
-    let fd = pad.file.as_raw_fd();
-    read_keys(fd, &mut pad.events);
-    for &code in &pad.axes {
-        if let Some(info) = absinfo(fd, code) {
-            pad.events.set_abs(code, info.value);
+/// A pad's keys and axes as the device has them now, read after the kernel dropped events.
+struct Snapshot {
+    keys: Option<Vec<u8>>,
+    axes: Vec<(u16, i32)>,
+}
+
+impl Snapshot {
+    fn read(file: &File, axes: &[u16]) -> Snapshot {
+        let fd = file.as_raw_fd();
+        Snapshot {
+            keys: bits(fd, eviocgkey, evdev::KEY_MAX),
+            axes: axes
+                .iter()
+                .filter_map(|&code| absinfo(fd, code).map(|info| (code, info.value)))
+                .collect(),
+        }
+    }
+
+    fn apply(self, events: &mut evdev::Pad) {
+        if let Some(down) = self.keys {
+            for code in 0..=evdev::KEY_MAX {
+                events.set_key(code, has(&down, code));
+            }
+        }
+        for (code, value) in self.axes {
+            events.set_abs(code, value);
+        }
+    }
+}
+
+/// The pads waiting for a [`Snapshot`] read again, outside the list's lock (an `EVIOCG*` request
+/// can wait behind a rumble upload to Steam's virtual pad), then applied and read out.
+fn resync_pads(shared: &Shared) {
+    let waiting: Vec<(u64, Arc<File>, Vec<u16>)> = shared
+        .list()
+        .live()
+        .filter(|p| p.resync)
+        .map(|p| (p.key, p.file.clone(), p.axes.clone()))
+        .collect();
+    for (key, file, axes) in waiting {
+        let snapshot = Snapshot::read(&file, &axes);
+        let mut list = shared.list();
+        if let Some(pad) = list.pads.iter_mut().find(|p| p.key == key) {
+            snapshot.apply(&mut pad.events);
+            pad.resync = false;
+            pad.report();
         }
     }
 }
@@ -493,6 +595,8 @@ fn look(shared: &Shared, config: &Config, passed: &mut HashMap<PathBuf, u64>) {
         for pad in new {
             list.add(*pad);
         }
+        // Motors to stop for the pads whose users changed.
+        shared.changed.notify_all();
     }
 }
 
@@ -528,24 +632,36 @@ fn read_pads(shared: &Shared, config: &Config) {
         if n <= 0 {
             continue;
         }
-        let mut list = shared.list();
-        for (polled, &(key, _)) in fds.iter().zip(&keys_and_fds) {
-            if polled.revents == 0 {
-                continue;
-            }
-            if let Some(pad) = list.pads.iter_mut().find(|p| p.key == key) {
-                if polled.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0 {
-                    pad.gone = true;
-                } else {
-                    read_events(pad);
+        {
+            let mut list = shared.list();
+            let mut gone = Vec::new();
+            for (polled, &(key, _)) in fds.iter().zip(&keys_and_fds) {
+                if polled.revents == 0 {
+                    continue;
+                }
+                if let Some(pad) = list.pads.iter_mut().find(|p| p.key == key) {
+                    let error = libc::POLLERR | libc::POLLHUP | libc::POLLNVAL;
+                    if polled.revents & error != 0 || !read_events(pad) {
+                        gone.push(key);
+                    }
                 }
             }
+            for key in &gone {
+                list.gone(*key);
+            }
+            if !gone.is_empty() {
+                shared.changed.notify_all();
+            }
         }
+        resync_pads(shared);
     }
 }
 
-/// Reads all the pad has sent; a device gone (pulled out) marks the pad gone.
-fn read_events(pad: &mut Pad) {
+/// Reads all the pad has sent; `false` when the device has gone (pulled out). After the kernel
+/// dropped events, the report that ends them leaves the rest unread: the events after it in this
+/// read, and those still queued, are thrown away (as libevdev does) and the pad waits for its
+/// device's state to be read again ([`resync_pads`]), as that state already holds them.
+fn read_events(pad: &mut Pad) -> bool {
     let size = std::mem::size_of::<libc::input_event>();
     let mut buffer = vec![0u8; size * 64];
     loop {
@@ -559,17 +675,17 @@ fn read_events(pad: &mut Pad) {
         };
         if n < 0 {
             match std::io::Error::last_os_error().kind() {
-                std::io::ErrorKind::WouldBlock => return,
+                std::io::ErrorKind::WouldBlock => return true,
                 std::io::ErrorKind::Interrupted => continue,
-                _ => {
-                    pad.gone = true;
-                    return;
-                }
+                _ => return false,
             }
         }
         if n == 0 {
-            pad.gone = true;
-            return;
+            return false;
+        }
+        if pad.resync {
+            // Throwing away what was queued before the state is read again.
+            continue;
         }
         for chunk in buffer[..n as usize].chunks_exact(size) {
             // SAFETY: `chunk` holds one whole event the kernel wrote.
@@ -579,8 +695,8 @@ fn read_events(pad: &mut Pad) {
                 Step::Nothing => {}
                 Step::Report => pad.report(),
                 Step::Resync => {
-                    resync(pad);
-                    pad.report();
+                    pad.resync = true;
+                    break;
                 }
             }
         }
@@ -615,27 +731,47 @@ fn rumble_pads(shared: &Shared) {
             }
         };
         for rumble in due {
-            let (effect, ok) = send(&rumble.file, rumble.effect, rumble.speeds);
+            let (effect, sent) = send(&rumble.file, rumble.effect, rumble.speeds);
             let mut list = shared.list();
             if let Some(pad) = list.pads.iter_mut().find(|p| p.key == rumble.key) {
+                // A failed send is tried again at the next change or resend, not at once.
                 pad.sent = rumble.speeds;
                 pad.sent_at = Some(Instant::now());
                 pad.effect = effect;
-                pad.can_rumble &= ok;
+                pad.can_rumble &= sent != Sent::Gone;
             }
         }
     }
 }
 
+/// How a send went.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sent {
+    Done,
+    Failed,
+    /// The device has gone (`ENODEV`): its rumble ends.
+    Gone,
+}
+
+/// The last call's failure as a [`Sent`].
+fn failure() -> Sent {
+    if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENODEV) {
+        Sent::Gone
+    } else {
+        Sent::Failed
+    }
+}
+
 /// Sends the motor speeds `left` (the strong motor) and `right` (the weak one) to the pad: the
 /// effect uploaded (`EVIOCSFF`; `effect` is its id once it has one) and played, or stopped for 0
-/// and 0. Answers the effect's id and whether the pad took it.
-fn send(file: &File, effect: Option<i16>, (left, right): (u16, u16)) -> (Option<i16>, bool) {
+/// and 0. An upload of the effect the pad had that fails is tried once more as a new effect, as
+/// SDL does (the effect may have been taken away). Answers the effect's id and how it went.
+fn send(file: &File, effect: Option<i16>, (left, right): (u16, u16)) -> (Option<i16>, Sent) {
     let fd = file.as_raw_fd();
     if (left, right) == (0, 0) {
         return match effect {
             Some(id) => (effect, play(fd, id, false)),
-            None => (effect, true),
+            None => (effect, Sent::Done),
         };
     }
     // SAFETY: a plain C structure, all zeros a valid value (no direction, trigger or delay).
@@ -652,13 +788,21 @@ fn send(file: &File, effect: Option<i16>, (left, right): (u16, u16)) -> (Option<
     }
     // SAFETY: the structure the request names; the kernel writes the effect's id into it.
     if unsafe { libc::ioctl(fd, EVIOCSFF as _, &mut e) } < 0 {
-        return (effect, false);
+        let first = failure();
+        if effect.is_none() || first == Sent::Gone {
+            return (effect, first);
+        }
+        e.id = -1;
+        // SAFETY: as above, as a new effect.
+        if unsafe { libc::ioctl(fd, EVIOCSFF as _, &mut e) } < 0 {
+            return (effect, failure());
+        }
     }
     (Some(e.id), play(fd, e.id, true))
 }
 
 /// Plays (`on`) or stops the effect `id`: one `EV_FF` event written to the device.
-fn play(fd: i32, id: i16, on: bool) -> bool {
+fn play(fd: i32, id: i16, on: bool) -> Sent {
     // SAFETY: a plain C structure, all zeros a valid value.
     let mut event: libc::input_event = unsafe { std::mem::zeroed() };
     event.type_ = evdev::EV_FF;
@@ -667,7 +811,11 @@ fn play(fd: i32, id: i16, on: bool) -> bool {
     let size = std::mem::size_of::<libc::input_event>();
     // SAFETY: one whole event from a live structure.
     let n = unsafe { libc::write(fd, std::ptr::addr_of!(event).cast(), size) };
-    n == size as isize
+    if n == size as isize {
+        Sent::Done
+    } else {
+        failure()
+    }
 }
 
 #[cfg(test)]
