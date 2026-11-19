@@ -1044,9 +1044,10 @@ mod tests {
             );
         }
         // The 195 of the table before the layer moved out of `engine-core` (6 are Windows only),
-        // `GlobalMemoryStatus(Ex)`, and `MultiByteToWideChar` and `LCMapStringW`.
+        // `GlobalMemoryStatus(Ex)`, `MultiByteToWideChar` and `LCMapStringW`, and `DefWindowProcA`
+        // (the game's `WM_MOUSEMOVE`, `window::post_mouse_move`).
         // Off Windows also the two shader profile getters (`d3dx::profiles`).
-        assert_eq!(table.len(), if cfg!(windows) { 199 } else { 195 });
+        assert_eq!(table.len(), if cfg!(windows) { 200 } else { 196 });
     }
 
     /// Not a check: the rows of `engine-core`'s `allocations_per_operation_of_the_kernel` whose
