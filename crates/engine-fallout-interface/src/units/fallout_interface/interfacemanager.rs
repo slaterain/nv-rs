@@ -19,6 +19,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// The interface manager singleton (a pointer to the object).
 pub(crate) const MANAGER_SINGLETON: u32 = 0x011d_8a80;
@@ -2713,6 +2714,20 @@ fn idle_release(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleSta
     }
 }
 
+/// Whether the menu under the pointer (`pOverTileMenu`) is active, at `0x70D44A` and `0x70D58D`:
+/// with lStewieAl's Tweaks' row S0022.30 (`GetMenuVisiblityStateIfActiveTile`, "fix crash when
+/// opening the console while the menus load") a menu counts as not active while there is no tile
+/// under the pointer (`pOverTileTarget`), where the exe reads the state of a menu that may already
+/// be gone.
+fn over_menu_active(e: &mut Engine, this: Ptr<InterfaceManager>, menu: u32) -> bool {
+    if e.stewie(stewie::CONSOLE_WHILE_MENUS_LOAD)
+        && e.get(this, InterfaceManager::pOverTileTarget) == 0
+    {
+        return false;
+    }
+    menu_is_active(e, menu)
+}
+
 /// The pointer moved to another tile with no button down: leaves the old
 /// tile and enters the new one (`DoLeave`, `DoEnter`, the menu virtuals).
 fn idle_enter_leave(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut IdleState) {
@@ -2721,7 +2736,7 @@ fn idle_enter_leave(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idl
         return;
     }
     let menu = e.get(this, InterfaceManager::pOverTileMenu);
-    if menu != 0 && menu_is_active(e, menu) {
+    if menu != 0 && over_menu_active(e, this, menu) {
         let tile = e.get(this, InterfaceManager::pOverTileTarget);
         tile_set_int(e, tile, 0xfc3, 0);
         // Is the picked tile a child of the tile being left?
@@ -2747,7 +2762,7 @@ fn idle_enter_leave(e: &mut Engine, this: Ptr<InterfaceManager>, state: &mut Idl
         e.set(this, InterfaceManager::pOverTileMenu, 0);
     }
     let menu = e.get(this, InterfaceManager::pOverTileMenu);
-    if menu != 0 && menu_is_active(e, menu) {
+    if menu != 0 && over_menu_active(e, this, menu) {
         if pointer_shown(e, this) {
             let tile = e.get(this, InterfaceManager::pOverTileTarget);
             e.set(this, InterfaceManager::pMouseOverTarget, tile);
@@ -12859,6 +12874,65 @@ mod tests {
     fn seam_handler(_: &mut Engine, a: &[u32]) -> Option<u32> {
         SEEN.with(|s| s.borrow_mut().push(a.to_vec()));
         None
+    }
+
+    /// lStewieAl's Tweaks' row S0022.30: the menu under the pointer is gone (its memory freed while
+    /// the menus load) and no tile is under the pointer. The exe reads the gone menu's state
+    /// (`0059bb30` reads `+0x24`, as its stand-in here does) and stops; with the row on the menu
+    /// counts as inactive and the pointer's targets are cleared.
+    #[test]
+    fn s0022_30_a_gone_menu_under_the_pointer() {
+        for on in [false, true] {
+            let (mut e, m) = focus_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+            e.register_double(MENU_STATE, |e, a| e.mem.u32(a[0] + 0x24).into_ret());
+            e.set(m, InterfaceManager::pOverTileMenu, 0x0dea_d000);
+            e.set(m, InterfaceManager::pOverTileTarget, 0);
+            let mut state = IdleState {
+                picked_tile: 0x400,
+                ..IdleState::default()
+            };
+            e.set_stewie(stewie::CONSOLE_WHILE_MENUS_LOAD, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                idle_enter_leave(&mut e, m, &mut state);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(e.get(m, InterfaceManager::pOverTileMenu), 0);
+                assert_eq!(e.get(m, InterfaceManager::pOverTileTarget), 0);
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0022.30 with a tile under the pointer (ordinary input): the old
+    /// tile is left and the new one entered, row on or off, with the same calls.
+    #[test]
+    fn s0022_30_row_on_with_a_tile_under_the_pointer_changes_nothing() {
+        let run = |on: bool| {
+            let (mut e, m) = focus_world();
+            returns(&mut e, HAS_360_CONTROLLER_GETTER, 0);
+            returns(&mut e, MENU_STATE, 1);
+            e.set(m, InterfaceManager::pOverTileMenu, 0x600);
+            e.set(m, InterfaceManager::pOverTileTarget, 0x500);
+            let mut state = IdleState {
+                picked_tile: 0x400,
+                picked_menu: 0x700,
+                ..IdleState::default()
+            };
+            e.set_stewie(stewie::CONSOLE_WHILE_MENUS_LOAD, on);
+            e.call_log = Some(vec![]);
+            idle_enter_leave(&mut e, m, &mut state);
+            let targets = (
+                e.get(m, InterfaceManager::pOverTileTarget),
+                e.get(m, InterfaceManager::pOverTileMenu),
+            );
+            (targets, e)
+        };
+        let ((off_targets, off), (on_targets, on)) = (run(false), run(true));
+        assert_eq!(on.call_log, off.call_log);
+        assert_eq!((on_targets, off_targets), ((0x400, 0x700), (0x400, 0x700)));
+        assert_eq!(calls(&on, DO_ENTER).len(), 1);
     }
 
     /// The seam before the motion test (`0x70D642`, JIP LN NVSE's MenuHandleMouseover hook):
