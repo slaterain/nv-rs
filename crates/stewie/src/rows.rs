@@ -199,7 +199,7 @@ pub const ROWS: &[Row] = &[
     },
     Row {
         bit: stewie::CHANGES_MAP_BUCKETS,
-        function: "InlinesChangesMapBuckets",
+        function: "Inlines",
         plan: "S1016.845558",
         key: "bInlinesChangesMapBuckets",
         tweaks: None,
