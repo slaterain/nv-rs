@@ -13,7 +13,9 @@
 //!
 //! Without a source (the engine crates' tests, a repeatable run) every user answers "not
 //! connected", as a Windows machine with no pad does. The host puts the system's pads in
-//! ([`use_system_pads`]): on Windows the system's own XInput DLL, its answers passed through.
+//! ([`use_system_pads`]): on Windows the system's own XInput DLL, its answers passed through, and
+//! after its pads the PlayStation pads read as HID devices ([`hid`], [`sony`]), each turned into
+//! XInput's state by position ([`layout`]); the game's four users run over both ([`Chain`]).
 //!
 //! Measured on Windows 11 (`xinput1_3.dll`, `xinput1_4.dll`, `xinput9_1_0.dll`, 64-bit, no pad,
 //! 2026-11-18): a user with no pad answers `ERROR_DEVICE_NOT_CONNECTED` to both calls and the
@@ -27,6 +29,15 @@ use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 mod win32;
+
+pub mod chain;
+pub mod hid;
+#[cfg(windows)]
+mod hid_win;
+pub mod layout;
+pub mod sony;
+
+pub use chain::{Chain, PadList};
 
 /// Result codes (winerror.h): `ERROR_SUCCESS`, `ERROR_BAD_ARGUMENTS`, `ERROR_DEVICE_NOT_CONNECTED`.
 pub const ERROR_SUCCESS: u32 = 0;
@@ -131,24 +142,27 @@ pub fn set_source(e: &mut Engine, source: Option<Box<dyn PadSource>>) {
     state!(e).pads.source = source;
 }
 
-/// Puts the system's own pads behind the game's XInput in `e` ([`Throttled`] around the
-/// system's source) and answers the line for the log saying which. On Windows: the system's
-/// XInput DLL ([`win32::open`]). Linux and macOS: none yet (every user "not connected").
+/// Puts the system's own pads behind the game's XInput in `e` and answers the line for the log
+/// saying which. On Windows: the system's XInput DLL ([`win32::open`], [`Throttled`]), then the
+/// PlayStation pads read as HID devices ([`hid_win::start`]), the game's users over both
+/// ([`Chain`]). Linux and macOS: none yet (every user "not connected").
 pub fn use_system_pads(e: &mut Engine) -> String {
     #[cfg(windows)]
     {
-        match win32::open() {
-            Some((source, dll)) => {
-                set_source(e, Some(Box::new(Throttled::new(source))));
-                format!("nv-rs: game pads through {dll} (the game's own Controls settings turn the pad and its vibration off)")
-            }
-            None => {
-                set_source(e, None);
-                "nv-rs: game pads: no XInput DLL in the system folder (xinput1_3, xinput1_4, \
-                 xinput9_1_0), so no pad"
-                    .to_string()
-            }
-        }
+        let xinput = win32::open();
+        let line = match &xinput {
+            Some((_, dll)) => format!(
+                "nv-rs: game pads through {dll} and PlayStation pads through HID (the game's own \
+                 Controls settings turn the pad and its vibration off)"
+            ),
+            None => "nv-rs: game pads: no XInput DLL in the system folder (xinput1_3, xinput1_4, \
+                     xinput9_1_0); PlayStation pads through HID"
+                .to_string(),
+        };
+        let lists: Vec<Box<dyn PadList>> = vec![Box::new(hid_win::start())];
+        let chain = Chain::new(xinput.map(|(source, _)| Throttled::new(source)), lists);
+        set_source(e, Some(Box::new(chain)));
+        line
     }
     #[cfg(not(windows))]
     {
