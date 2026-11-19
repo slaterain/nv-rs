@@ -4,6 +4,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleArray;
+use engine_core::extend::stewie;
 
 /// The handle of the empty `NiFixedString`.
 const EMPTY_FIXED_STRING: u32 = 0x0109_b220;
@@ -647,7 +648,15 @@ pub fn credits_menu_close(e: &mut Engine) {
     {
         let saves = e.global::<u32>(SAVE_LOAD_MANAGER);
         let name = first_word(e, saves.wrapping_add(0x30));
-        if e.call(TEXT_LENGTH, &args![name]).u32() != 0 {
+        // 0075f78e: lStewieAl's Tweaks' row S0139 (`patchFixCreditsCrashIfNoLoadedSave`): with
+        // no player name (no save loaded) the name counts as empty, where the exe measures the
+        // null text.
+        let has_name = if e.stewie(stewie::CREDITS_NO_LOADED_SAVE) && name == 0 {
+            false
+        } else {
+            e.call(TEXT_LENGTH, &args![name]).u32() != 0
+        };
+        if has_name {
             let saves = e.global::<u32>(SAVE_LOAD_MANAGER);
             e.call(SAVES_REFRESH, &args![saves]);
             if e.global::<u32>(SAVE_LOAD_MANAGER) != 0 {
@@ -2109,9 +2118,48 @@ mod n053_tests {
         assert_eq!(calls(&e, RENDER_UNLOCK), vec![vec![0x4500]]);
     }
 
+    /// lStewieAl's Tweaks' row S0139: the credits closed from the main menu (the start menu's flag
+    /// set) before any save was loaded, so the player name is null. The exe measures the null
+    /// text (`0044a670` reads it, as its stand-in here does) and stops; with the row on the name
+    /// counts as empty and the menu closes.
+    #[test]
+    fn s0139_close_without_a_loaded_save() {
+        for on in [false, true] {
+            let mut e = engine();
+            e.mem.unmap(0, 0x1000);
+            let start = start_menu(&mut e);
+            e.mem.set_u32(start + 0x1a8, 0x4000_0000);
+            e.register(START_MENU_FLAG, |_, _| 1u32.into_ret());
+            let saves = e.mem.alloc(0x40);
+            e.set_global(SAVE_LOAD_MANAGER, saves);
+            e.register_double(TEXT_LENGTH, |e, a| {
+                u32::from(e.mem.u8(a[0]) != 0).into_ret()
+            });
+            e.set_stewie(stewie::CREDITS_NO_LOADED_SAVE, on);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x0075_f750, &args![]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(e.mem.u32(start + 0x1a8), 0);
+                assert_eq!(calls(&e, TILE_GET_MENU_BY_CLASS).len(), 1);
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0139 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn close_offers_a_matching_save_or_closes() {
+        for on in [false, true] {
+            close_offers_a_matching_save_or_closes_row(on);
+        }
+    }
+
+    fn close_offers_a_matching_save_or_closes_row(on: bool) {
         let mut e = engine();
+        e.set_stewie(stewie::CREDITS_NO_LOADED_SAVE, on);
         let start = start_menu(&mut e);
         e.mem.set_u32(start + 0x1a8, 0x4000_0000);
         e.call(0x0075_f750, &args![]);

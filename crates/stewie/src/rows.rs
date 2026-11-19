@@ -26,8 +26,65 @@ pub struct Row {
 }
 
 /// Every row built, in PLAN.md's order. A row's key is `b` and Tweaks' function's name without
-/// its `patch` prefix.
+/// its `patch` prefix; a row that is one block of a function holding several (`MenuFixes`) adds
+/// a word for the block after it.
 pub const ROWS: &[Row] = &[
+    Row {
+        bit: stewie::INVENTORY_USE_NO_ITEM_JUMP,
+        function: "MenuFixes",
+        plan: "S0022.14",
+        key: "bMenuFixesInventoryUseNoItem",
+        tweaks: None,
+        summary: "clicking Use in the inventory with nothing selected no longer crashes",
+    },
+    Row {
+        bit: stewie::QUANTITY_MENU_CLOSE_NO_ITEM,
+        function: "MenuFixes",
+        plan: "S0022.15",
+        key: "bMenuFixesQuantityMenuCloseNoItem",
+        tweaks: None,
+        summary: "closing the quantity menu after the item to drop is gone no longer crashes",
+    },
+    Row {
+        bit: stewie::INVENTORY_SELECT_NO_ITEM,
+        function: "MenuFixes",
+        plan: "S0022.16",
+        key: "bMenuFixesInventorySelectNoItem",
+        tweaks: None,
+        summary: "equipping from the inventory with nothing selected no longer crashes",
+    },
+    Row {
+        bit: stewie::CONTAINER_MOUSEOVER_NO_FORM,
+        function: "MenuFixes",
+        plan: "S0022.17",
+        key: "bMenuFixesContainerMouseoverNoForm",
+        tweaks: None,
+        summary: "pointing at an entry with no item in the container menu (keys) no longer crashes",
+    },
+    Row {
+        bit: stewie::CONSOLE_WHILE_MENUS_LOAD,
+        function: "MenuFixes",
+        plan: "S0022.30",
+        key: "bMenuFixesConsoleWhileMenusLoad",
+        tweaks: None,
+        summary: "opening the console while the menus load no longer crashes",
+    },
+    Row {
+        bit: stewie::LIST_BOX_GET_AT_NULL_ITEM,
+        function: "MenuFixes",
+        plan: "S0022.36",
+        key: "bMenuFixesListBoxNullItem",
+        tweaks: None,
+        summary: "a list in a menu with an empty entry no longer crashes when an entry is looked up",
+    },
+    Row {
+        bit: stewie::TILE_LABEL_NULL_NAME,
+        function: "MenuFixes",
+        plan: "S0022.56",
+        key: "bMenuFixesTileLabelNullName",
+        tweaks: None,
+        summary: "a menu tile with no name no longer crashes the labels' refresh",
+    },
     Row {
         bit: stewie::EXPLOSION_WATER_NULL_CALL,
         function: "fixExplosionWaterNullCall",
@@ -35,6 +92,14 @@ pub const ROWS: &[Row] = &[
         key: "bFixExplosionWaterNullCall",
         tweaks: None,
         summary: "water reflecting an explosion no longer crashes on an explosion that is being taken apart",
+    },
+    Row {
+        bit: stewie::LEVEL_GREATER_THAN_99,
+        function: "patchFixLevelGreaterThan99Crash",
+        plan: "S0057",
+        key: "bFixLevelGreaterThan99Crash",
+        tweaks: None,
+        summary: "levelling up past level 99 no longer crashes the HUD's level display",
     },
     Row {
         bit: stewie::HANDLE_MULTIBOUNDS_NULL_CELL,
@@ -85,6 +150,14 @@ pub const ROWS: &[Row] = &[
         summary: "an NPC using something while it has no package no longer crashes",
     },
     Row {
+        bit: stewie::CREDITS_NO_LOADED_SAVE,
+        function: "patchFixCreditsCrashIfNoLoadedSave",
+        plan: "S0139",
+        key: "bFixCreditsCrashIfNoLoadedSave",
+        tweaks: None,
+        summary: "closing the credits from the main menu before any save was loaded no longer crashes",
+    },
+    Row {
         bit: stewie::PATROL_MISSING_NULL_CHECK,
         function: "patchFixPatrolMissingNullCheck",
         plan: "S0140",
@@ -107,6 +180,14 @@ pub const ROWS: &[Row] = &[
         key: "bFixSetActorRefEssentialNullCheck",
         tweaks: None,
         summary: "a script calling SetActorRefEssential without a reference no longer crashes",
+    },
+    Row {
+        bit: stewie::HOLOTAPE_EMPTY_SUBTITLE,
+        function: "HolotapeEmptySubtitleCrashFix",
+        plan: "S0182",
+        key: "bHolotapeEmptySubtitleCrashFix",
+        tweaks: None,
+        summary: "playing a holotape that has sound but no subtitles no longer crashes",
     },
     Row {
         bit: stewie::SAVING_NULL_CELL,
