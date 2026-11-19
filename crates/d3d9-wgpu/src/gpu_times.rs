@@ -3,8 +3,8 @@
 //! where the driver can write them between passes, around copies and the backend's other work), summed
 //! into one line every 5 s in plain words, for players to send:
 //!
-//! `NV_D3D9 wgpu: GPU time a frame (300 frames): world 6.10 ms, occlusion count 0.20, resolves 0.40,
-//! clears 0.10, copies 0.30, HDR 0.05, other 0.00; total 7.15 ms`
+//! `NV_D3D9 wgpu: GPU time a frame (300 frames): world 6.10, occlusion count 0.20, resolves 0.40,
+//! clears 0.10, copies 0.30, HDR 0.05, sun shadow maps 0.00, other 0.00; total 7.15 ms`
 //!
 //! - world: the game's own draws (each pass the draws go in; a partial clear drawn in the pass too).
 //! - occlusion count: the passes that add up an occlusion query's samples.
@@ -13,15 +13,19 @@
 //! - copies: `StretchRect`'s blits, texture and buffer copies, uploads staged among the draws,
 //!   read-backs.
 //! - HDR: the bright-pixel watch's reads.
-//! - other: the new lighting's passes, the frame-rate meter.
+//! - sun shadow maps: the new lighting's sun shadow maps (all their depth passes).
+//! - other: the rest of the new lighting (the scene light, the sun shadows' step), the frame-rate
+//!   meter.
 //!
 //! Needs the adapter's timestamp queries (`TIMESTAMP_QUERY`; between passes also
-//! `TIMESTAMP_QUERY_INSIDE_ENCODERS`, without which copies, HDR and other are not timed). Where the
-//! driver has none (some Metal and older drivers), one line says so and nothing is timed. Off, the
-//! device asks for neither feature, makes no query set and records nothing: no pass, query or
-//! command is added ([`GpuTimes`] is never made).
+//! `TIMESTAMP_QUERY_INSIDE_ENCODERS`, without which the copy commands, the HDR watch, the sun shadow
+//! maps and other are not timed, and the line says so). Where the driver has none (some Metal and
+//! older drivers), one line says so and nothing is timed. Off, the device asks for neither feature,
+//! makes no query set and records nothing: no pass, query or command is added ([`GpuTimes`] is
+//! never made). On, the timestamps and their resolve are no uses of the encoders (the submit
+//! bound's count), so the times change neither when a batch is sent nor how it is cut into encoders.
 //!
-//! A pair that reads zero at both ends means a driver that gives no times: the line then says so
+//! A pair that reads zero at either end means a driver that gives no times: the line then says so
 //! once and shows no numbers. AMD's Windows driver does that (Radeon 890M, driver 24.30: some
 //! timestamps read zero, raw wgpu too, a new query set's first ones always), so there the times
 //! are not shown.
@@ -53,17 +57,19 @@ pub enum Kind {
     Clears,
     Copies,
     Hdr,
+    SunShadows,
     Other,
 }
 
 /// The kinds in the line's order, with their words.
-pub const KINDS: [(Kind, &str); 7] = [
+pub const KINDS: [(Kind, &str); 8] = [
     (Kind::World, "world"),
     (Kind::Count, "occlusion count"),
     (Kind::Resolves, "resolves"),
     (Kind::Clears, "clears"),
     (Kind::Copies, "copies"),
     (Kind::Hdr, "HDR"),
+    (Kind::SunShadows, "sun shadow maps"),
     (Kind::Other, "other"),
 ];
 
@@ -94,13 +100,13 @@ struct Set {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Totals {
     /// Nanoseconds of each kind ([`KINDS`]' order).
-    pub ns: [u64; 7],
+    pub ns: [u64; KINDS.len()],
     /// Pairs read back of each kind.
-    pub spans: [u64; 7],
+    pub spans: [u64; KINDS.len()],
     /// Pairs read back, and pairs whose end came before their start (left out).
     pub pairs: u64,
     pub left_out: u64,
-    /// Pairs that read zero at both ends (a driver that gives no times).
+    /// Pairs that read zero at either end (a driver that gives no times).
     pub zeros: u64,
     /// Batches not timed (no free query set, or more spans than a set holds).
     pub untimed: u64,
@@ -155,7 +161,7 @@ impl GpuTimes {
         })
     }
 
-    /// Whether timestamps can be written between passes (copies, HDR, other).
+    /// Whether timestamps can be written between passes (copies, HDR, sun shadow maps, other).
     pub(crate) fn inside(&self) -> bool {
         self.inside
     }
@@ -240,8 +246,9 @@ impl GpuTimes {
         }
     }
 
-    /// The open batch's timestamps resolved and copied out at the end of its last encoder (no pass
-    /// open); the buffer to map and its state, once the batch is submitted ([`map`]).
+    /// The open set's timestamps (this batch's, and those of batches before it that ended with no
+    /// encoder open) resolved and copied out at the end of the batch's last encoder (no pass open);
+    /// the buffer to map and its state, once the batch is submitted ([`map`]).
     pub(crate) fn end_batch(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -318,12 +325,13 @@ impl GpuTimes {
 }
 
 /// One batch's timestamps (`values`, a start and an end for each of `kinds`) added to `totals`:
-/// a pair that reads zero at both ends counts as a driver that gives no times, one whose end comes
-/// before its start is left out.
+/// a pair that reads zero at either end counts as a driver that gives no times (a zero start would
+/// add the clock's whole count, a zero end nothing), one whose end comes before its start is left
+/// out.
 fn tally(totals: &mut Totals, period: f64, values: &[u64], kinds: &[Kind]) {
     for (pair, kind) in values.chunks_exact(2).zip(kinds) {
         let (start, end) = (pair[0], pair[1]);
-        if start == 0 && end == 0 {
+        if start == 0 || end == 0 {
             totals.zeros += 1;
             continue;
         }
@@ -337,8 +345,8 @@ fn tally(totals: &mut Totals, period: f64, values: &[u64], kinds: &[Kind]) {
     }
 }
 
-/// The line for the times from `s` to `t` over `frames` frames; once a pair has read zero at both
-/// ends, the plain words that this driver gives no times, said once (`told`), and no numbers.
+/// The line for the times from `s` to `t` over `frames` frames; once a pair has read zero at either
+/// end, the plain words that this driver gives no times, said once (`told`), and no numbers.
 fn report(told: &mut bool, t: Totals, s: Totals, frames: f64, inside: bool) -> Option<String> {
     if t.zeros > 0 {
         if std::mem::replace(told, true) {
@@ -361,7 +369,9 @@ fn report(told: &mut bool, t: Totals, s: Totals, frames: f64, inside: bool) -> O
         parts.join(", ")
     );
     if !inside {
-        line.push_str(" (copies, HDR and other not timed: this driver times passes only)");
+        line.push_str(
+            " (copy commands, the HDR watch, the sun shadow maps and other not timed: this driver times passes only)",
+        );
     }
     if t.untimed > s.untimed {
         line.push_str(&format!("; {} batches not timed", t.untimed - s.untimed));
@@ -408,6 +418,35 @@ mod tests {
         assert!(line.contains("does not report GPU times"), "{line}");
         assert!(!line.contains("world"), "no numbers: {line}");
         assert_eq!(report(&mut told, t, t, 2.0, true), None, "said once");
+        // A zero at either end alone is a driver zero too, and adds no time.
+        for pair in [[0, 5_000_000], [5_000_000, 0]] {
+            let mut t = Totals::default();
+            tally(&mut t, 1.0, &pair, &[Kind::World]);
+            assert_eq!((t.zeros, t.pairs, t.left_out), (1, 0, 0), "{pair:?}");
+            assert_eq!(t.ns, [0; KINDS.len()], "{pair:?}");
+            let mut told = false;
+            let line = report(&mut told, t, Totals::default(), 1.0, true).expect("said");
+            assert!(
+                line.contains("does not report GPU times"),
+                "{pair:?}: {line}"
+            );
+        }
+    }
+
+    /// A driver that times passes only says which kinds it leaves out, in plain words.
+    #[test]
+    fn a_driver_that_times_passes_only_says_what_is_not_timed() {
+        let mut t = Totals::default();
+        tally(&mut t, 1.0, &[1_000_000, 2_000_000], &[Kind::World]);
+        let mut told = false;
+        let line = report(&mut told, t, Totals::default(), 1.0, false).expect("a line");
+        assert!(line.contains("world 1.00"), "{line}");
+        assert!(
+            line.contains("copy commands, the HDR watch, the sun shadow maps and other not timed"),
+            "{line}"
+        );
+        let line = report(&mut told, t, Totals::default(), 1.0, true).expect("a line");
+        assert!(!line.contains("not timed"), "{line}");
     }
 
     #[test]
@@ -422,9 +461,11 @@ mod tests {
                 "clears",
                 "copies",
                 "HDR",
+                "sun shadow maps",
                 "other"
             ]
         );
         assert_eq!(slot(Kind::Hdr), 5);
+        assert_eq!(slot(Kind::SunShadows), 6);
     }
 }

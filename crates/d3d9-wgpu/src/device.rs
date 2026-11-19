@@ -2266,6 +2266,16 @@ impl Device {
             .contains(wgpu::Features::TIMESTAMP_QUERY)
     }
 
+    /// Whether the device itself has the timestamp features ([`crate::gpu_times`] asks for them only
+    /// when on): `TIMESTAMP_QUERY` and `TIMESTAMP_QUERY_INSIDE_ENCODERS` (tests).
+    pub fn timestamp_features(&self) -> (bool, bool) {
+        let f = self.device.features();
+        (
+            f.contains(wgpu::Features::TIMESTAMP_QUERY),
+            f.contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS),
+        )
+    }
+
     /// Whether the card's times are on for this device (`NV_WGPU_GPU_TIMES`, tests).
     pub fn gpu_times_on(&self) -> bool {
         self.gpu_times.is_some()
@@ -2288,15 +2298,19 @@ impl Device {
     /// recording the next one into a fresh register ring, UP vertices and upload stage while it is
     /// finished and submitted (in order with every other queue operation).
     /// With the card's times on, the batch's timestamps are resolved at the end of its last
-    /// encoder and read once it is submitted ([`crate::gpu_times`]).
+    /// encoder and read once it is submitted ([`crate::gpu_times`]). A batch whose last encoder
+    /// already went to a finishing thread keeps its timestamps in the open set, resolved with a
+    /// later batch's: the times add no command buffer of their own.
     fn flush(&mut self) {
         self.end_pass();
         let read = match self.gpu_times.take() {
             Some(mut t) => {
-                let read = if t.pending() {
-                    t.end_batch(self.encoder())
-                } else {
+                let read = if !t.pending() {
                     t.end_empty_batch();
+                    None
+                } else if self.encoder.is_some() {
+                    t.end_batch(self.timing_encoder())
+                } else {
                     None
                 };
                 self.gpu_times = Some(t);
@@ -2959,6 +2973,18 @@ impl Device {
         })
     }
 
+    /// The open encoder for the card's timestamps and their resolve ([`crate::gpu_times`]): not a
+    /// use, and never cut here, so the times on send no batch early ([`Device::bound_batch`]) and
+    /// cut no encoder where the times off would not. A timestamp goes in the run of commands next
+    /// to it (the copy it times) or at worst makes one more small command buffer: at most two a
+    /// timed stretch, well inside the room [`SUBMIT_USES`] leaves.
+    fn timing_encoder(&mut self) -> &mut wgpu::CommandEncoder {
+        self.encoder.get_or_insert_with(|| {
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
+        })
+    }
+
     /// The open encoder (its pass ended) to a finishing thread, its command buffer sent with the
     /// batch after the encoders before it ([`Device::flush`]).
     fn send_encoder(&mut self) {
@@ -3032,7 +3058,7 @@ impl Device {
         }
         let t = self.gpu_times.as_mut().filter(|t| t.inside())?;
         let span = t.span(kind)?;
-        self.encoder().write_timestamp(&span.0, span.1);
+        self.timing_encoder().write_timestamp(&span.0, span.1);
         Some(span)
     }
 
@@ -3040,7 +3066,7 @@ impl Device {
     fn span_end(&mut self, span: Option<(wgpu::QuerySet, u32)>) {
         if let Some((q, i)) = span {
             debug_assert!(self.pass.is_none(), "a timed stretch left a pass open");
-            self.encoder().write_timestamp(&q, i + 1);
+            self.timing_encoder().write_timestamp(&q, i + 1);
         }
     }
 
@@ -7956,6 +7982,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         }
         let device = self.device.clone();
         let registers = self.uniform_layout.clone();
+        let span = self.span_begin(Kind::SunShadows);
         let (writes, drawn) = sun.gpu.draw_maps(
             &device,
             &registers,
@@ -7967,6 +7994,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (&sun.far, far_redraw.then_some(&far_map)),
             &sun.skinned,
         );
+        self.span_end(span);
         for (buffer, bytes) in writes {
             self.on_queue(move |q| q.write_buffer(&buffer, 0, &bytes));
         }
@@ -8912,6 +8940,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             _ => frame_rate::Overlay::new(&self.device, format),
         };
         let (device, queue) = (self.device.clone(), self.queue.clone());
+        let span = self.span_begin(Kind::Other);
         overlay.draw(
             &device,
             &queue,
@@ -8920,6 +8949,7 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
             (width, height),
             readout,
         );
+        self.span_end(span);
         self.fps_overlay = Some(overlay);
     }
 
