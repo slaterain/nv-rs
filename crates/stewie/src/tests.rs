@@ -378,7 +378,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 21 of its 21 rows built are on",
+            "lStewieAl's Tweaks: 22 of its 22 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -771,12 +771,12 @@ fn the_install_reads_the_overlay_folder_in_order() {
     MOD_FILES.with(|m| *m.borrow_mut() = None);
 }
 
-/// Each row's plan number, off key and bit, pinned (crash groups A and B): a key swapped with
+/// Each row's plan number, off key and bit, pinned (crash groups A and B, Engine Optimizations' rows): a key swapped with
 /// another row's, or two bits swapped, fails here. After the install, each key at 0 clears exactly
 /// its own bit.
 #[test]
 fn each_rows_plan_number_key_and_bit_are_pinned() {
-    use engine_core::extend::stewie::{Row, CRASH};
+    use engine_core::extend::stewie::{Row, CRASH, FIXES};
     let pinned: &[(&'static str, &'static str, Row)] = &[
         (
             "S0022.14",
@@ -847,6 +847,11 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(CRASH, 20),
         ),
         ("S0881", "bFixSavingNullCellCrash", Row::at(CRASH, 10)),
+        (
+            "S1016.845558",
+            "bInlinesChangesMapBuckets",
+            Row::at(FIXES, 0),
+        ),
     ];
     let table: Vec<(&str, &str, Row)> = rows::ROWS.iter().map(|r| (r.plan, r.key, r.bit)).collect();
     assert_eq!(table, pinned);
