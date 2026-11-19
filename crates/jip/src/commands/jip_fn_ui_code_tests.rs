@@ -325,7 +325,11 @@ fn quest_messages_hidden_for_one_frame() {
     CALLS.with(|c| c.borrow_mut().clear());
     e.mem.set_u32(PLAYER_AT + 0x6b8, quest + 0x100);
     e.call(SHOW_QUEST_NAME.addr(), &[quest + 0x100]);
-    assert_eq!(calls(), vec![(SET_ACTIVE_QUEST, vec![PLAYER_AT, 0])], "failed");
+    assert_eq!(
+        calls(),
+        vec![(SET_ACTIVE_QUEST, vec![PLAYER_AT, 0])],
+        "failed"
+    );
     crate::main_loop::cycle(&mut e);
     assert_eq!(e.mem.i32(SHOW_CHALLENGE_UPDATES), 1, "shown again");
     CALLS.with(|c| c.borrow_mut().clear());
