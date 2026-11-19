@@ -564,7 +564,11 @@ pub fn virtual_actor_path_handler_use_door_at_node(
                 .u32();
             let distance = x87_store32(e.call(POINT_LENGTH_2, &args![delta]).f64());
             if x87_load32(distance) > e.global::<f64>(DOOR_ARRIVAL_TOLERANCE) {
-                if e.call(POINTS_DIFFER, &args![point, position]).bool() {
+                // lStewieAl's Tweaks' row S0199.10 (`MiscCrashFixes`, `0x9EAF04`): with no door at the node
+                // the warning naming the door's cell is not made.
+                if e.call(POINTS_DIFFER, &args![point, position]).bool()
+                    && !(door == 0 && e.stewie(engine_core::extend::stewie::USE_DOOR_NULL_DOOR))
+                {
                     let cell = e.call(PARENT_CELL, &args![door]).u32();
                     let cell_name = if cell != 0 {
                         let cell = e.call(PARENT_CELL, &args![door]).u32();
@@ -1366,6 +1370,68 @@ mod tests {
             vec![DOOR_WARNING, 0x5555, actor + 0x1000, NO_CELL_TEXT]
         );
         assert_eq!(calls_to(&e, SET_LOCATION), vec![vec![actor, point]]);
+    }
+
+    /// The actor 20 units from the next node (as in `use_door_warns_when_the_actor_is_far_from_the_next_node`)
+    /// with no door at the node, row S0199.10 `on`, the door's cell read as the exe reads it (+0x40):
+    /// whether the call ran to its end, its answer and the prints.
+    fn far_from_a_node_with_no_door(on: bool) -> (bool, i32, usize) {
+        let (mut e, this, _) = engine(3);
+        e.register(DOORS_TELEPORT, |_, _| word(0));
+        e.register(SET_LOCATION, nothing);
+        e.register(NODE_DOOR, |_, _| word(0));
+        e.register(ACTIVATE, |_, _| word(1));
+        e.register(PARENT_CELL, |e, a| word(e.mem.u32(a[0] + 0x40)));
+        e.register(POINTS_DIFFER, |_, _| word(1));
+        e.register(NAME_TEST, |_, _| word(0));
+        e.register(REFERENCE_NAME, |_, _| word(0x5555));
+        e.register(DEBUG_PRINT, nothing);
+        e.set_global(DOOR_ARRIVAL_TOLERANCE, 5.0f64);
+        e.set_stewie(engine_core::extend::stewie::USE_DOOR_NULL_DOOR, on);
+        let point = e.mem.alloc(0xc);
+        e.call_log = Some(vec![]);
+        let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            e.call(0x009e_ad90, &args![this, point]).i32()
+        }));
+        e.call_stack.clear();
+        let printed = calls_to(&e, DEBUG_PRINT).len();
+        (run.is_ok(), run.unwrap_or(0), printed)
+    }
+
+    /// lStewieAl's Tweaks' row S0199.10 (`MiscCrashFixes`, `0x9EAF04`): the actor far from a node that
+    /// has no door: off, the exe asks the missing door for its cell (for the warning) and stops; on, no
+    /// warning and the walk goes on as for any far node (-2).
+    #[test]
+    fn s0199_10_far_from_a_node_with_no_door() {
+        assert!(!far_from_a_node_with_no_door(false).0);
+        assert_eq!(far_from_a_node_with_no_door(true), (true, -2, 0));
+    }
+
+    /// Row S0199.10 with a door at the node (ordinary input): the same warning and calls with the row
+    /// off and on.
+    #[test]
+    fn s0199_10_row_on_with_a_door_changes_nothing() {
+        let mut logs = vec![];
+        for on in [false, true] {
+            let (mut e, this, actor) = engine(3);
+            e.register(DOORS_TELEPORT, |_, _| word(0));
+            e.register(SET_LOCATION, nothing);
+            e.register_double(NODE_DOOR, move |_, _| word(actor));
+            e.register(ACTIVATE, |_, _| word(1));
+            e.register(PARENT_CELL, |_, _| word(0));
+            e.register(POINTS_DIFFER, |_, _| word(1));
+            e.register(NAME_TEST, |_, _| word(0));
+            e.register(REFERENCE_NAME, |_, _| word(0x5555));
+            e.register(DEBUG_PRINT, nothing);
+            e.set_global(DOOR_ARRIVAL_TOLERANCE, 5.0f64);
+            e.set_stewie(engine_core::extend::stewie::USE_DOOR_NULL_DOOR, on);
+            let point = e.mem.alloc(0xc);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x009e_ad90, &args![this, point]).i32(), -2);
+            assert_eq!(calls_to(&e, DEBUG_PRINT).len(), 1);
+            logs.push(e.call_log.take().unwrap());
+        }
+        assert_eq!(logs[0], logs[1]);
     }
 
     #[test]

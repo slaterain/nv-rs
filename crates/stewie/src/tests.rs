@@ -406,7 +406,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 43 of its 43 rows built are on",
+            "lStewieAl's Tweaks: 50 of its 50 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -891,6 +891,11 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(CRASH, 5),
         ),
         (
+            "S0107.03",
+            "bMemoryLeakFixesPackageTarget",
+            Row::at(CRASH, 42),
+        ),
+        (
             "S0124",
             "bProcessActivateAddNullCheckForPackage",
             Row::at(CRASH, 6),
@@ -904,6 +909,16 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "S0127",
             "bFixRecipeMenuMissingAmmoInfoNullCheck",
             Row::at(CRASH, 30),
+        ),
+        (
+            "S0130.01",
+            "bContinuousBeamProjectileCrashFixShooter",
+            Row::at(CRASH, 43),
+        ),
+        (
+            "S0130.03",
+            "bContinuousBeamProjectileCrashFixLoad",
+            Row::at(CRASH, 44),
         ),
         (
             "S0139",
@@ -930,7 +945,9 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bHolotapeEmptySubtitleCrashFix",
             Row::at(CRASH, 20),
         ),
+        ("S0183", "bFollowerTopicUseAfterFreeFix", Row::at(CRASH, 45)),
         ("S0186", "bBipedAnimNullItemError", Row::at(CRASH, 26)),
+        ("S0199.03", "bMiscCrashFixesAmmoEntry", Row::at(CRASH, 46)),
         ("S0199.05", "bMiscCrashFixesNpcActivate", Row::at(CRASH, 39)),
         ("S0199.06", "bMiscCrashFixesRemoveWorn", Row::at(CRASH, 40)),
         (
@@ -938,6 +955,8 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bMiscCrashFixesShowSceneGraph",
             Row::at(CRASH, 41),
         ),
+        ("S0199.10", "bMiscCrashFixesUseDoor", Row::at(CRASH, 47)),
+        ("S0199.11", "bMiscCrashFixesRegenAmmo", Row::at(CRASH, 48)),
         (
             "S0202",
             "bEquipAmmoOnNullBaseProcessCrashFix",
