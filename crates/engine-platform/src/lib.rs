@@ -570,6 +570,11 @@ fn layer_imports() -> Vec<(&'static str, &'static str, AbiFn)> {
             entry!(0, window::dispatch_message_a(Ptr) -> u32).1,
         ),
         (
+            "USER32.dll",
+            "DefWindowProcA",
+            entry!(0, window::def_window_proc_a(u32, u32, u32, u32) -> u32).1,
+        ),
+        (
             k,
             "GetPrivateProfileIntA",
             entry!(0, ini::get_private_profile_int_a(Ptr, Ptr, u32, Ptr) -> u32).1,

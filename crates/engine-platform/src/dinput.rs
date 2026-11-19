@@ -170,6 +170,8 @@ pub struct Input {
     /// When the game last read the keyboard (`GetDeviceState`): the frame's poll of the controls, for
     /// the delay log ([`controls_polled_at`]).
     polled_at: Option<std::time::Instant>,
+    /// The mouse's cooperative level, exclusive or not (`SetCooperativeLevel`; `None` until set).
+    mouse_exclusive: Option<bool>,
 }
 
 impl Input {
@@ -482,12 +484,21 @@ fn set_data_format(e: &mut Engine, this: Ptr, format: Ptr) -> u32 {
 }
 
 /// `SetCooperativeLevel(window, flags)`: exactly one of exclusive / non-exclusive and one of
-/// foreground / background (else `DIERR_INVALIDPARAM`); `DI_OK`.
+/// foreground / background (else `DIERR_INVALIDPARAM`); `DI_OK`. The mouse's level goes to the
+/// real window (`crate::d3d9real::set_mouse_exclusive`): the game asks for an exclusive mouse
+/// (`DISCL_EXCLUSIVE | DISCL_FOREGROUND`) unless `Fallout.ini`'s `[Controls] bBackground Mouse=1`
+/// (`DISCL_NONEXCLUSIVE | DISCL_FOREGROUND`, the input start `00a22660`), and Windows holds and
+/// hides the cursor only for an exclusive one.
 fn set_cooperative_level(e: &mut Engine, this: Ptr, _window: u32, flags: u32) -> u32 {
-    let _ = device(e, this);
+    let keyboard = device(e, this).keyboard;
     let one_of = |a: u32, b: u32| (flags & a != 0) != (flags & b != 0);
     if !one_of(DISCL_EXCLUSIVE, DISCL_NONEXCLUSIVE) || !one_of(DISCL_FOREGROUND, DISCL_BACKGROUND) {
         return DIERR_INVALIDPARAM;
+    }
+    if !keyboard {
+        let exclusive = flags & DISCL_EXCLUSIVE != 0;
+        state!(e).input.mouse_exclusive = Some(exclusive);
+        crate::d3d9real::set_mouse_exclusive(exclusive);
     }
     DI_OK
 }
@@ -830,6 +841,27 @@ mod tests {
             e.vcall(keyboard, 0x38, &[0, 0, 0]);
         }));
         assert!(missed.is_err(), "GetObjectInfo is not provided");
+    }
+
+    /// The mouse's cooperative level reaches the real window as the game sets it (`00a22660`):
+    /// exclusive and foreground (5) without `bBackground Mouse`, not exclusive and foreground (6)
+    /// with it; the keyboard's level (0x15, 0x16) changes nothing of the mouse's, and a level that
+    /// is refused is not taken.
+    #[test]
+    fn the_mouses_level_says_whether_the_cursor_is_held() {
+        let (mut e, di) = engine();
+        let k = make(&mut e, di, 0x1010);
+        let m = make(&mut e, di, 0x1020);
+        assert_eq!(state!(e).input.mouse_exclusive, None);
+        assert_eq!(e.vcall(m, 0x34, &[1, 6]).u32(), DI_OK);
+        assert_eq!(state!(e).input.mouse_exclusive, Some(false));
+        assert!(!crate::d3d9real::mouse_exclusive());
+        assert_eq!(e.vcall(k, 0x34, &[1, 0x15]).u32(), DI_OK);
+        assert_eq!(e.vcall(m, 0x34, &[1, 3]).u32(), DIERR_INVALIDPARAM);
+        assert_eq!(state!(e).input.mouse_exclusive, Some(false));
+        assert_eq!(e.vcall(m, 0x34, &[1, 5]).u32(), DI_OK);
+        assert_eq!(state!(e).input.mouse_exclusive, Some(true));
+        assert!(crate::d3d9real::mouse_exclusive());
     }
 
     #[test]

@@ -30,6 +30,8 @@
 //! - The cursor is held (locked, else confined to the window, and hidden) when the window gets the
 //!   focus and on a click in it, and let go when it loses the focus: winit does not say whether the
 //!   focus came from the keyboard or from a click on the frame, which Windows' window tells apart.
+//!   A mouse the game makes non-exclusive (`bBackground Mouse=1`) is never held, only hidden over
+//!   the window, and the cursor's place there goes to the game as on Windows (`super::Input::pointer`).
 //! - The mouse's motion is winit's device motion (X11's raw motion, Wayland's relative pointer,
 //!   macOS's mouse deltas), counted only while the window has the focus, as raw input reaches only
 //!   the window in front on Windows. Fractions of a count (Wayland) carry over to the next motion.
@@ -648,12 +650,18 @@ impl Layer {
 
     /// Holds the cursor in the window `id` and hides it there, as Windows does for a program whose
     /// DirectInput mouse is exclusive and in the foreground: locked where the system can, else kept
-    /// inside the window.
+    /// inside the window. For a mouse that is not exclusive (`super::mouse_exclusive`) the cursor
+    /// stays free and is only hidden over the window, as on Windows.
     fn hold(&mut self, id: RealWindow) {
         let Some(shown) = windows().get(&id).map(|e| Arc::clone(&e.shown)) else {
             return;
         };
         let w = &shown.window;
+        if !mouse_exclusive() {
+            self.let_go();
+            w.set_cursor_visible(false);
+            return;
+        }
         if w.set_cursor_grab(CursorGrabMode::Locked).is_err() {
             let _ = w.set_cursor_grab(CursorGrabMode::Confined);
         }
@@ -788,6 +796,24 @@ impl ApplicationHandler for Layer {
                 let wheel = input::wheel(&mut self.rest[2], scroll_of(delta));
                 if wheel != 0 {
                     input::moved(0, 0, wheel);
+                }
+            }
+            // The game's mouse not exclusive (`bBackground Mouse=1`): the cursor's place over the
+            // window is the game's `WM_MOUSEMOVE`, as on Windows (`super::mouse_exclusive`); a
+            // hold made before the game's mouse became non-exclusive is let go.
+            WindowEvent::CursorMoved { position, .. } if !mouse_exclusive() => {
+                if self.held.is_some() {
+                    self.let_go();
+                    if let Some(e) = windows().get(&id) {
+                        e.shown.window.set_cursor_visible(false);
+                    }
+                }
+                let size = windows().get(&id).map(|e| e.shown.window.inner_size());
+                if let Some(size) = size {
+                    input::pointed(
+                        (position.x, position.y),
+                        (f64::from(size.width), f64::from(size.height)),
+                    );
                 }
             }
             _ => {}

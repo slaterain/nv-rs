@@ -11,7 +11,9 @@
 //! Windows sends a window's procedure while it is created or moved (`WM_CREATE`,
 //! `WM_WINDOWPOSCHANGED`, `WM_ACTIVATE`, ...): the game's procedure (`0086a0a0`) only acts on them
 //! once `Main` exists, and `main` makes its window before `Main`, but a window made or moved
-//! later gets none of them (recorded in the module's functions); message boxes (the game shows
+//! later gets none of them (recorded in the module's functions). The one message posted to the
+//! game's queue is `WM_MOUSEMOVE`, while the game's mouse is not exclusive ([`post_mouse_move`]:
+//! its menus follow the cursor then), with `DefWindowProcA` for it; message boxes (the game shows
 //! one only to stop: the run stops with its text); `ExitProcess`; `ShellExecuteA`.
 
 use super::KernelObject;
@@ -749,6 +751,85 @@ pub fn peek_message_a(
     0
 }
 
+/// `WM_MOUSEMOVE`.
+pub const WM_MOUSEMOVE: u32 = 0x200;
+/// The `MK_*` bits of a mouse message's `wParam`, by DirectInput's button order (left, right,
+/// middle, X1, X2).
+const MK_BUTTONS: [u32; 5] = [0x1, 0x2, 0x10, 0x20, 0x40];
+
+/// The window the game draws in, which gets the mouse's messages over its client area: the
+/// renderer's child of the game's main window (a window that is not full screen), else the main
+/// window itself (full screen); with its size.
+fn mouse_window(e: &mut Engine) -> Option<(u32, i32, i32)> {
+    let main = e.kernel.main_window;
+    if main == 0 {
+        return None;
+    }
+    let windows = &state_ref!(e).windows.windows;
+    let (handle, w) = windows
+        .iter()
+        .find(|(_, w)| w.parent == main && w.style & WS_CHILD != 0)
+        .or_else(|| windows.get_key_value(&main))?;
+    let [left, top, right, bottom] = w.rect;
+    Some((*handle, right.wrapping_sub(left), bottom.wrapping_sub(top)))
+}
+
+/// The cursor moved over the game's window, to `at` (its client area's fractions across and down,
+/// `crate::d3d9real::Input::pointer`), with the mouse's `buttons` held (DirectInput's order):
+/// the `WM_MOUSEMOVE` Windows would post there goes into the game's queue, its place in the
+/// window's client pixels at the game's own size for it, whatever size the real window has (the
+/// port draws any size into the real window, scaled). Windows keeps one `WM_MOUSEMOVE` waiting,
+/// made from the cursor's latest place: a newer move replaces one not taken yet. The game's
+/// procedure (`0086a0a0`) hands it to `00871d10`, which places the menus' cursor there when the
+/// game's mouse is not exclusive (`bBackground Mouse=1`) and otherwise leaves it to
+/// `DefWindowProcA`. The window layers keep a place only for such a mouse. The message's time and
+/// point words are not read by the game: 0 and the client place. Nothing before the game has its
+/// window.
+pub fn post_mouse_move(e: &mut Engine, at: [f64; 2], buttons: &[bool; 8]) {
+    let Some((window, width, height)) = mouse_window(e) else {
+        return;
+    };
+    let place = |fraction: f64, size: i32| -> u32 {
+        let most = size.saturating_sub(1).max(0);
+        ((fraction * f64::from(size)).floor() as i32).clamp(0, most) as u32
+    };
+    let (x, y) = (place(at[0], width), place(at[1], height));
+    let wparam = MK_BUTTONS
+        .iter()
+        .zip(buttons)
+        .filter(|(_, held)| **held)
+        .fold(0, |bits, (bit, _)| bits | bit);
+    let message = [
+        window,
+        WM_MOUSEMOVE,
+        wparam,
+        (y << 16) | (x & 0xffff),
+        0,
+        x,
+        y,
+    ];
+    let queue = &mut state!(e).windows.queue;
+    match queue
+        .iter_mut()
+        .find(|m| m[0] == window && m[1] == WM_MOUSEMOVE)
+    {
+        Some(waiting) => *waiting = message,
+        None => queue.push_back(message),
+    }
+}
+
+// Platform: replaces USER32.DLL DefWindowProcA (import)
+/// `DefWindowProcA(window, message, wParam, lParam)`: the default answer to a message the game's
+/// procedure passes on (`0086a0a0`). Only the message this layer posts is provided:
+/// `WM_MOUSEMOVE` ([`post_mouse_move`]), for which Windows' default does nothing and answers 0.
+/// Another stops the run (none other reaches the game's procedure: the module documentation).
+pub fn def_window_proc_a(_e: &mut Engine, _window: u32, message: u32, _w: u32, _l: u32) -> u32 {
+    match message {
+        WM_MOUSEMOVE => 0,
+        _ => panic!("DefWindowProcA of message {message:#x} is not provided"),
+    }
+}
+
 // Platform: replaces USER32.DLL TranslateMessage (import)
 /// `TranslateMessage(msg)`: key messages becoming character messages is not provided (the
 /// queue holds no key messages: the game reads the keyboard through DirectInput).
@@ -933,6 +1014,111 @@ mod tests {
         state!(e).windows.queue.push_back([7, 0x12, 0, 0, 0, 0, 0]);
         assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 1), 1);
         assert_eq!(e.mem.u32(msg + 4), 0x12);
+    }
+
+    /// A window record of the game's (`class` 1).
+    fn record(style: u32, parent: u32, rect: [i32; 4]) -> Window {
+        Window {
+            class: 1,
+            title: Vec::new(),
+            style,
+            ex_style: 0,
+            parent,
+            rect,
+        }
+    }
+
+    /// The cursor's moves over the game's window (a mouse the game made non-exclusive, report 002)
+    /// become the `WM_MOUSEMOVE` Windows posts to the window the game draws in: the renderer's
+    /// child of the main window, in its client pixels at the game's size (here 1920 by 1080, the
+    /// player's), with the buttons held as `MK_*` bits. One waits at a time, the latest place;
+    /// the game takes it with `PeekMessageA`, its procedure gets the four words through
+    /// `DispatchMessageA`, and `DefWindowProcA` answers it with 0. Full screen (no child) the main
+    /// window gets it; before the game has a window nothing is posted.
+    #[test]
+    fn a_cursor_move_is_the_games_wm_mousemove() {
+        let mut e = Engine::new();
+        let unmoved = [false; 8];
+        post_mouse_move(&mut e, [0.5, 0.5], &unmoved);
+        assert!(state!(e).windows.queue.is_empty(), "no window yet");
+        let (main, child) = (0x94, 0xc0);
+        e.kernel.main_window = main;
+        state!(e)
+            .windows
+            .windows
+            .insert(main, record(0x14c0_0000, 0, [5, 5, 1941, 1105]));
+        state!(e)
+            .windows
+            .windows
+            .insert(child, record(0x5000_0000, main, [0, 0, 1920, 1080]));
+        let mut held = [false; 8];
+        held[0] = true;
+        held[4] = true;
+        post_mouse_move(&mut e, [0.25, 0.75], &unmoved);
+        post_mouse_move(&mut e, [0.5, 0.5], &held);
+        let queue: Vec<[u32; 7]> = state!(e).windows.queue.iter().copied().collect();
+        assert_eq!(
+            queue,
+            [[child, WM_MOUSEMOVE, 0x41, (540 << 16) | 960, 0, 960, 540]],
+            "one move waits, the latest"
+        );
+        // The far edge is the last pixel.
+        post_mouse_move(&mut e, [1.0, 1.0], &unmoved);
+        assert_eq!(
+            state!(e).windows.queue[0][3],
+            (1079 << 16) | 1919,
+            "the far edge"
+        );
+        // The game's loop: the message reaches its window's class procedure, here a stand-in.
+        state!(e).windows.classes.push(Class {
+            atom: 1,
+            name: b"Fallout: New Vegas".to_vec(),
+            style: 3,
+            procedure: 0x7eff_f000,
+            instance: 0,
+            menu_name: 0,
+        });
+        thread_local! {
+            static SEEN: std::cell::Cell<[u32; 4]> = const { std::cell::Cell::new([0; 4]) };
+        }
+        e.register(0x7eff_f000, |e, a| {
+            SEEN.with(|s| s.set([a[0], a[1], a[2], a[3]]));
+            crate::Ret {
+                eax: def_window_proc_a(e, a[0], a[1], a[2], a[3]),
+                ..crate::Ret::default()
+            }
+        });
+        let msg = e.mem.alloc(28);
+        assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 1), 1);
+        assert_eq!(dispatch_message_a(&mut e, Ptr::new(msg)), 0);
+        assert_eq!(
+            SEEN.with(std::cell::Cell::get),
+            [child, WM_MOUSEMOVE, 0, (1079 << 16) | 1919]
+        );
+        assert!(state!(e).windows.queue.is_empty());
+        // Full screen: no child, the main window covers the screen and gets the moves.
+        state!(e).windows.windows.remove(&child);
+        state!(e)
+            .windows
+            .windows
+            .insert(main, record(0x9000_0000, 0, [0, 0, 2560, 1440]));
+        post_mouse_move(&mut e, [0.5, 0.25], &unmoved);
+        assert_eq!(
+            state!(e).windows.queue[0][..4],
+            [main, WM_MOUSEMOVE, 0, (360 << 16) | 1280]
+        );
+    }
+
+    /// `DefWindowProcA` answers the one message this layer posts as Windows' default does (0) and
+    /// stops on any other, which never reaches the game's procedure.
+    #[test]
+    fn the_default_procedure_answers_a_mouse_move() {
+        let mut e = Engine::new();
+        assert_eq!(def_window_proc_a(&mut e, 0x94, WM_MOUSEMOVE, 0, 0), 0);
+        let other = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            def_window_proc_a(&mut e, 0x94, 0x84, 0, 0)
+        }));
+        assert!(other.is_err(), "WM_NCHITTEST is not provided");
     }
 
     /// The frame the game's renderer adds before it places its window (exe 0x004da951): the

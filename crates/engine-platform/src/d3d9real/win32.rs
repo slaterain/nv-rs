@@ -65,6 +65,10 @@ extern "system" fn window_procedure(
             window_input(window, message, wparam, lparam)
         }
         WM_INPUT => raw_mouse(lparam),
+        // The game's mouse not exclusive (`bBackground Mouse=1`): the cursor is free, and each
+        // move over the client area is the game's `WM_MOUSEMOVE`, from which its menus place
+        // their cursor (`super::mouse_exclusive`).
+        WM_MOUSEMOVE if !super::mouse_exclusive() => pointer_moved(window, lparam),
         // While the window is active the cursor stays in it, hidden (the game's DirectInput
         // mouse is exclusive and foreground: Windows hides and holds the cursor for it). It is
         // taken on a keyboard activation (Alt+Tab, WA_ACTIVE) or a click in the client area
@@ -75,7 +79,16 @@ extern "system" fn window_procedure(
         WM_ACTIVATE if wparam.0 & 0xffff == WA_ACTIVE as usize => hold_cursor(window),
         WM_ENTERSIZEMOVE => let_go_of_cursor(),
         WM_SIZE | WM_MOVE if cursor_held() => hold_cursor(window),
-        WM_SETCURSOR if cursor_held() && lparam.0 as u32 & 0xffff == HTCLIENT => {
+        // Over the client area the cursor is hidden: held for an exclusive mouse, and for one that
+        // is not, as the game's own procedure hides it there (`0086a0a0`, `WM_NCHITTEST`); a hold
+        // made before the game's mouse became non-exclusive is let go.
+        WM_SETCURSOR
+            if (cursor_held() || !super::mouse_exclusive())
+                && lparam.0 as u32 & 0xffff == HTCLIENT =>
+        {
+            if !super::mouse_exclusive() {
+                let_go_of_cursor();
+            }
             unsafe { SetCursor(None) };
             return LRESULT(1);
         }
@@ -124,8 +137,14 @@ fn cursor_held() -> bool {
 
 /// Holds the cursor in the window's client area and hides it there, as Windows does for a
 /// program whose DirectInput mouse is exclusive and in the foreground (the game's:
-/// `SetCooperativeLevel` with `DISCL_EXCLUSIVE | DISCL_FOREGROUND`).
+/// `SetCooperativeLevel` with `DISCL_EXCLUSIVE | DISCL_FOREGROUND`). Not for a mouse that is not
+/// exclusive (`super::mouse_exclusive`): Windows leaves the cursor free then. A refused
+/// `ClipCursor` or `SetCursorPos` is said in the log ([`refused`]).
 fn hold_cursor(window: HWND) {
+    if !super::mouse_exclusive() {
+        let_go_of_cursor();
+        return;
+    }
     unsafe {
         let mut rect = RECT::default();
         if GetClientRect(window, &mut rect).is_err() {
@@ -150,25 +169,79 @@ fn hold_cursor(window: HWND) {
             right: corners[1].x,
             bottom: corners[1].y,
         };
-        if ClipCursor(Some(&screen)).is_ok() {
-            let centre = [
-                (screen.left + screen.right) / 2,
-                (screen.top + screen.bottom) / 2,
-            ];
-            for (slot, value) in CURSOR_CENTRE.iter().zip(centre) {
-                slot.store(value, std::sync::atomic::Ordering::Relaxed);
+        match ClipCursor(Some(&screen)) {
+            Ok(()) => {
+                let centre = [
+                    (screen.left + screen.right) / 2,
+                    (screen.top + screen.bottom) / 2,
+                ];
+                for (slot, value) in CURSOR_CENTRE.iter().zip(centre) {
+                    slot.store(value, std::sync::atomic::Ordering::Relaxed);
+                }
+                if !CURSOR_HELD.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    ShowCursor(false);
+                }
+                SetCursor(None);
+                if let Err(why) = SetCursorPos(centre[0], centre[1]) {
+                    refused(Refused::SetCursorPos, &why.to_string());
+                }
             }
-            if !CURSOR_HELD.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                ShowCursor(false);
-            }
-            SetCursor(None);
-            let _ = SetCursorPos(centre[0], centre[1]);
+            Err(why) => refused(Refused::ClipCursor, &why.to_string()),
         }
     }
 }
 
+/// A Win32 call the game's mouse relies on, which Windows can refuse (another program holding the
+/// cursor, one running with more rights in front of the game).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Refused {
+    ClipCursor,
+    SetCursorPos,
+    RegisterRawInputDevices,
+}
+
+impl Refused {
+    /// The log line on the refusal: the call, Windows' reason and what the player sees.
+    fn line(self, why: &str) -> String {
+        let (call, effect) = match self {
+            Refused::ClipCursor => (
+                "ClipCursor",
+                "the cursor is not held in the game's window, so it can leave it",
+            ),
+            Refused::SetCursorPos => (
+                "SetCursorPos",
+                "the cursor is not put back in the middle of the game's window",
+            ),
+            Refused::RegisterRawInputDevices => (
+                "RegisterRawInputDevices",
+                "the mouse's movement does not reach the game (no turning, no menu cursor)",
+            ),
+        };
+        format!(
+            "input: Windows refused {call} ({why}): {effect}. A program running as administrator \
+             in front of the game, or one that holds the cursor, can cause this (said once)"
+        )
+    }
+}
+
+/// Says a refused call in the log, once per call ([`Refused::line`]).
+fn refused(call: Refused, why: &str) {
+    static SAID: std::sync::Mutex<Vec<Refused>> = std::sync::Mutex::new(Vec::new());
+    let first = SAID.lock().is_ok_and(|mut said| {
+        let first = !said.contains(&call);
+        if first {
+            said.push(call);
+        }
+        first
+    });
+    if first {
+        eprintln!("{}", call.line(why));
+    }
+}
+
 /// Registers the window for the mouse's raw input: its relative counts are what DirectInput
-/// hands an exclusive mouse (no pointer acceleration, not stopped at the screen's edge).
+/// hands an exclusive mouse (no pointer acceleration, not stopped at the screen's edge). A
+/// refusal is said in the log ([`refused`]).
 fn register_raw_mouse(window: HWND) {
     let device = RAWINPUTDEVICE {
         usUsagePage: 1,
@@ -176,8 +249,28 @@ fn register_raw_mouse(window: HWND) {
         dwFlags: RAWINPUTDEVICE_FLAGS(0),
         hwndTarget: window,
     };
-    let _ =
-        unsafe { RegisterRawInputDevices(&[device], std::mem::size_of::<RAWINPUTDEVICE>() as u32) };
+    if let Err(why) =
+        unsafe { RegisterRawInputDevices(&[device], std::mem::size_of::<RAWINPUTDEVICE>() as u32) }
+    {
+        refused(Refused::RegisterRawInputDevices, &why.to_string());
+    }
+}
+
+/// `WM_MOUSEMOVE` while the game's mouse is not exclusive: the cursor's place over the client area
+/// (`lParam`: x in the low word, y in the high word, each signed, client pixels) is kept for the
+/// game ([`input::pointed`]).
+fn pointer_moved(window: HWND, lparam: LPARAM) {
+    let mut rect = RECT::default();
+    if unsafe { GetClientRect(window, &mut rect) }.is_err() {
+        return;
+    }
+    let x = f64::from(lparam.0 as u32 as u16 as i16);
+    let y = f64::from((lparam.0 as u32 >> 16) as u16 as i16);
+    let size = (
+        f64::from(rect.right - rect.left),
+        f64::from(rect.bottom - rect.top),
+    );
+    input::pointed((x, y), size);
 }
 
 /// A raw input message: a mouse's relative motion is added to the frame's.
@@ -1047,6 +1140,26 @@ mod tests {
             !visible(top) && !visible(child),
             "the device shows no window"
         );
+    }
+
+    /// A refused cursor or raw-input call is said in plain words: the call, Windows' reason, what
+    /// the player sees, and the usual cause (a player's menu cursor came back when the game ran as
+    /// administrator; report 002).
+    #[test]
+    fn a_refused_mouse_call_is_said_plainly() {
+        let line = Refused::ClipCursor.line("Access is denied. (0x80070005)");
+        assert_eq!(
+            line,
+            "input: Windows refused ClipCursor (Access is denied. (0x80070005)): the cursor is not \
+             held in the game's window, so it can leave it. A program running as administrator in \
+             front of the game, or one that holds the cursor, can cause this (said once)"
+        );
+        assert!(Refused::SetCursorPos
+            .line("x")
+            .contains("refused SetCursorPos (x): the cursor is not put back"));
+        assert!(Refused::RegisterRawInputDevices
+            .line("x")
+            .contains("the mouse's movement does not reach the game"));
     }
 
     /// A key message's `lParam` with this scan code (extended or not).

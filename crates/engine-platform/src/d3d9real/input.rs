@@ -217,6 +217,39 @@ pub(super) fn moved(dx: i32, dy: i32, wheel: i32) {
     }
 }
 
+/// The cursor moved over the game's window to `at` (client pixels) of a client area `size` (width,
+/// height), while the game's mouse is not exclusive (`super::mouse_exclusive`): its place is kept,
+/// as fractions of the area ([`pointer_fraction`]), for the host's next frame, which hands it to
+/// the game's window procedure as a `WM_MOUSEMOVE` (Windows sends one for each move over the
+/// client area, `win32.rs`'s and `winit_window.rs`'s window both call this). Nothing for an empty
+/// area.
+pub(super) fn pointed(at: (f64, f64), size: (f64, f64)) {
+    let Some(fraction) = pointer_fraction(at, size) else {
+        return;
+    };
+    if let Ok(mut i) = input().lock() {
+        point_into(&mut i, fraction);
+    }
+}
+
+fn point_into(i: &mut Input, fraction: [f64; 2]) {
+    i.pointer = Some(fraction);
+    i.pointer_moved = true;
+}
+
+/// The cursor's place `at` (client pixels, the area's top left 0, 0) over a client area `size`
+/// (width, height) as fractions across and down, each kept within 0 to 1 (a place on or past the
+/// edge, as a held button's moves report, is the edge); `None` for an area of no width or height,
+/// or a place that is not a number.
+pub(super) fn pointer_fraction(at: (f64, f64), size: (f64, f64)) -> Option<[f64; 2]> {
+    let (x, y) = at;
+    let (w, h) = size;
+    if !(w > 0.0 && h > 0.0) || !x.is_finite() || !y.is_finite() {
+        return None;
+    }
+    Some([(x / w).clamp(0.0, 1.0), (y / h).clamp(0.0, 1.0)])
+}
+
 /// The focus left the window: every key and button it held is let go (`win32.rs`'s
 /// `release_input` calls this too), the motion kept for the host's next frame.
 pub(super) fn focus_lost() {
@@ -620,6 +653,28 @@ mod tests {
         release(&mut i);
         assert!(i.keys.iter().all(|k| !k) && i.buttons.iter().all(|b| !b));
         assert_eq!(i.motion, [7, 3, -120]);
+    }
+
+    /// The cursor's place over the client area as fractions of it: the middle of a 1920 by 1080
+    /// area is a half each way, the edges 0 and 1, a place past an edge (a held button's moves go
+    /// on outside the window) the edge; an empty area or a place that is not a number gives none.
+    /// A place kept marks a move for the host, and a later one replaces it.
+    #[test]
+    fn the_cursor_place_is_kept_as_fractions_of_the_client_area() {
+        let area = (1920.0, 1080.0);
+        assert_eq!(pointer_fraction((960.0, 540.0), area), Some([0.5, 0.5]));
+        assert_eq!(pointer_fraction((0.0, 0.0), area), Some([0.0, 0.0]));
+        assert_eq!(pointer_fraction((1920.0, 1080.0), area), Some([1.0, 1.0]));
+        assert_eq!(pointer_fraction((-40.0, 2000.0), area), Some([0.0, 1.0]));
+        assert_eq!(pointer_fraction((480.0, 270.0), area), Some([0.25, 0.25]));
+        assert_eq!(pointer_fraction((5.0, 5.0), (0.0, 1080.0)), None);
+        assert_eq!(pointer_fraction((5.0, 5.0), (1920.0, -1.0)), None);
+        assert_eq!(pointer_fraction((f64::NAN, 5.0), area), None);
+        let mut i = Input::default();
+        assert_eq!((i.pointer, i.pointer_moved), (None, false));
+        point_into(&mut i, [0.25, 0.75]);
+        point_into(&mut i, [0.5, 0.5]);
+        assert_eq!((i.pointer, i.pointer_moved), (Some([0.5, 0.5]), true));
     }
 
     /// The client area is the game's rectangle less the frame the game added for it (Windows'

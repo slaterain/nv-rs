@@ -575,6 +575,14 @@ pub struct Input {
     pub motion: [i32; 3],
     /// The buttons held, in DirectInput's order (left, right, middle, X1, X2).
     pub buttons: [bool; 8],
+    /// Where the cursor last was over the game's window while the game's mouse is not exclusive
+    /// ([`mouse_exclusive`]): its client area's fractions across and down (0 to 1), as the window
+    /// layer read them; `None` until the cursor first moves there.
+    pub pointer: Option<[f64; 2]>,
+    /// Whether the cursor moved over the window since the last frame (each move a `WM_MOUSEMOVE`
+    /// on Windows): the host then posts one to the game's window procedure
+    /// (`crate::window::post_mouse_move`).
+    pub pointer_moved: bool,
 }
 
 impl Default for Input {
@@ -583,8 +591,38 @@ impl Default for Input {
             keys: [false; 256],
             motion: [0; 3],
             buttons: [false; 8],
+            pointer: None,
+            pointer_moved: false,
         }
     }
+}
+
+/// Whether the game's DirectInput mouse is exclusive (`SetCooperativeLevel` with `DISCL_EXCLUSIVE`:
+/// the game's own choice unless `Fallout.ini`'s `[Controls] bBackground Mouse=1`, which makes it
+/// non-exclusive; the input start `00a22660`). Exclusive, Windows hides the cursor and holds it in
+/// the game's window, and the window layers do the same; not exclusive, the cursor stays free (the
+/// game's window procedure hides it over the client area), and the game moves its menu cursor to
+/// where the Windows cursor is from each `WM_MOUSEMOVE` (`00871d10`: in menu mode, with that key)
+/// rather than from the mouse's motion (`007118d0` returns early then). Exclusive until the game
+/// says otherwise.
+static MOUSE_EXCLUSIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// The game's DirectInput mouse became exclusive or not ([`MOUSE_EXCLUSIVE`]; `dinput`'s
+/// `SetCooperativeLevel` of the mouse). A change to non-exclusive is said in the log once.
+pub fn set_mouse_exclusive(exclusive: bool) {
+    let was = MOUSE_EXCLUSIVE.swap(exclusive, std::sync::atomic::Ordering::Relaxed);
+    static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if was && !exclusive && !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        eprintln!(
+            "input: the game's mouse is not exclusive (Fallout.ini's [Controls] bBackground Mouse=1): \
+             the Windows cursor stays free and the menus follow it, as in the original game"
+        );
+    }
+}
+
+/// Whether the game's DirectInput mouse is exclusive ([`MOUSE_EXCLUSIVE`]).
+pub fn mouse_exclusive() -> bool {
+    MOUSE_EXCLUSIVE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 fn input() -> &'static std::sync::Mutex<Input> {
@@ -598,12 +636,14 @@ pub fn held_keys() -> [bool; 256] {
 }
 
 /// The real window's input for this frame: the keys and buttons held, the motion since the last
-/// call (taken: it starts again from 0).
+/// call (taken: it starts again from 0), and the cursor's place with whether it moved since
+/// (the move taken too).
 pub fn take_input() -> Input {
     match input().lock() {
         Ok(mut i) => {
             let now = *i;
             i.motion = [0; 3];
+            i.pointer_moved = false;
             now
         }
         Err(_) => Input::default(),
