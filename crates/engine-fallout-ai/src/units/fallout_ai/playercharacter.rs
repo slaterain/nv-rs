@@ -16889,6 +16889,52 @@ mod tests {
         set[0][1]
     }
 
+    /// `Update`'s three stick tests read the engine's dead zones (the exe's `0x1ea9` at
+    /// `0x941157` and `0x941177`, `0x21f1` at `0x941197`, until JIP's `SetDeadZoneLS` and
+    /// `SetDeadZoneRS` move them): the move stick's x at 8000 sets the move flag 0x8 at a left
+    /// dead zone of 8000 or below and not at 8001; the third axis (9) fully pushed gives the look
+    /// speed at a right dead zone of 0x7fff or below and none above.
+    #[test]
+    fn update_reads_the_moved_dead_zones() {
+        let run = |left: i32, right: i32, axis_7: u32, axis_9: u32| {
+            let mut e = engine();
+            let this = update_world(&mut e);
+            let slots: Vec<(u32, u32)> = (0..0x200).map(|i| (i * 4, 0x00b0_0000)).collect();
+            let mover = object(&mut e, 0x0204_0000, &slots);
+            e.mem.set_u32(0x0204_000c, MOVER_SET_FLAGS);
+            e.register(MOVER_SET_FLAGS, |_, _| Ret::default());
+            e.mem.set_u32(this.addr() + 0x190, mover.addr());
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register(0x0045_7990, |_, _| float(1.0));
+            e.register_double(0x00a2_3390, move |_, a| {
+                int(match a[2] {
+                    7 => axis_7,
+                    9 => axis_9,
+                    _ => 0,
+                })
+            });
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0040_8840, |_, a| {
+                float(f64::from(f32::from_bits(a[0]).abs()))
+            });
+            e.set_global(AXIS_DIVISOR, 1.0f64);
+            e.set_global(LOOK_SCALE, 1.0f64);
+            e.set_pad_dead_zone_left(left);
+            e.set_pad_dead_zone_right(right);
+            player_character_update(&mut e, this, 0.5);
+            (
+                move_flags(&e) & 0x8 != 0,
+                e.global::<f32>(LOOK_SPEED_011A3B40),
+            )
+        };
+        assert!(run(0x1ea9, 0x21f1, 8000, 0).0);
+        assert!(run(8000, 0x21f1, 8000, 0).0);
+        assert!(!run(8001, 0x21f1, 8000, 0).0);
+        assert_eq!(run(0x1ea9, 0x21f1, 0, 0x7fff).1, 1.0);
+        assert_eq!(run(0x1ea9, 0x7fff, 0, 0x7fff).1, 1.0);
+        assert_eq!(run(0x1ea9, 0x8000, 0, 0x7fff).1, 0.0);
+    }
+
     /// The disabled controls other than `flag`: none of them changes what pressing that button
     /// does.
     fn all_but(flag: u32) -> u32 {
@@ -18490,6 +18536,53 @@ mod tests {
             if zooms {
                 assert_eq!(result, 1, "{word:x} {answer}");
             }
+        }
+    }
+
+    /// The look's four stick tests read the engine's right dead zone (the exe's `0x21f1` at
+    /// `0x9455F5`, `0x945644`, `0x9456F0`, `0x945710` until JIP's `SetDeadZoneRS` moves it): an
+    /// axis at 9000 counts at the exe's dead zone and at one moved to 9000, not at 9001. A
+    /// counted yaw or pitch has its vector measured (`00457990`); the second stick's counted zoom
+    /// reaches the zoom block (`00967ae0`).
+    #[test]
+    fn the_look_reads_the_moved_right_dead_zone() {
+        let run = |dead_zone: i32, second_stick: bool, axis_9: u32, axis_10: u32| {
+            let (mut e, this) = look_world(0);
+            e.register(0x004b_71d0, |_, _| int(1));
+            e.register_double(0x00a2_3390, move |_, a| {
+                int(match a[2] {
+                    9 => axis_9,
+                    0xa => axis_10,
+                    _ => 0,
+                })
+            });
+            e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+            e.register(0x0045_7990, |_, _| float(1.0));
+            e.register(0x0099_e040, |_, _| float(1.0));
+            e.register(0x004e_3d00, |_, _| float(1.0));
+            e.mem.set_u8(SECOND_STICK_FLAG, u8::from(second_stick));
+            e.set_pad_dead_zone_right(dead_zone);
+            let flags = Ptr::<()>::new(e.mem.alloc(4));
+            e.call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32]);
+            (called(&e, 0x0045_7990).len(), called(&e, 0x0096_7ae0).len())
+        };
+        let minus = (-9000i32) as u32;
+        // The first stick: the yaw (axis 9) and the pitch (axis 10), either way.
+        for (axis_9, axis_10) in [(9000, 0), (minus, 0), (0, 9000), (0, minus)] {
+            let outside = run(9001, false, axis_9, axis_10);
+            for dead_zone in [0x21f1, 9000] {
+                let past = run(dead_zone, false, axis_9, axis_10);
+                assert_eq!(past.0, outside.0 + 1, "{dead_zone} {axis_9:x} {axis_10:x}");
+            }
+        }
+        // The second stick: the zoom (axis 10), then the yaw (axis 9).
+        let outside = run(9001, true, 0, 9000);
+        for dead_zone in [0x21f1, 9000] {
+            assert_eq!(run(dead_zone, true, 0, 9000).1, outside.1 + 1, "{dead_zone}");
+        }
+        let outside = run(9001, true, 9000, 0);
+        for dead_zone in [0x21f1, 9000] {
+            assert_eq!(run(dead_zone, true, 9000, 0).0, outside.0 + 1, "{dead_zone}");
         }
     }
 

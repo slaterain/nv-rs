@@ -1383,6 +1383,31 @@ mod tests {
         assert_eq!(e.mem.u16(GAMEPAD_BUTTONS), 0x111);
     }
 
+    /// The four "pushed" tests read the engine's left dead zone (the exe's `0x1ea9` at
+    /// `0xA23E5E`, `0xA23E87`, its negation at `0xA23E73`, `0xA23E9C`, until JIP's
+    /// `SetDeadZoneLS` moves it): moved to 0x3000, 0x3000 is not pushed either way and 0x3001 is.
+    #[test]
+    fn gamepad_queries_read_the_moved_dead_zone() {
+        let mut e = engine();
+        let this = controls(&mut e);
+        gamepad(&mut e);
+        e.set_pad_dead_zone_left(0x3000);
+        for (control, at, sign) in [
+            (0x13, GAMEPAD_THUMB_LY, 1i32),
+            (0x14, GAMEPAD_THUMB_LY, -1),
+            (0x16, GAMEPAD_THUMB_LX, 1),
+            (0x17, GAMEPAD_THUMB_LX, -1),
+        ] {
+            e.mem.set_u16(at, (sign * 0x2000) as u16);
+            assert!(!fn_00a23e10(&mut e, this, control, 0), "{control:x}");
+            e.mem.set_u16(at, (sign * 0x3000) as u16);
+            assert!(!fn_00a23e10(&mut e, this, control, 0), "{control:x}");
+            e.mem.set_u16(at, (sign * 0x3001) as u16);
+            assert!(fn_00a23e10(&mut e, this, control, 0), "{control:x}");
+            e.mem.set_u16(at, 0);
+        }
+    }
+
     #[test]
     fn gamepad_queries() {
         let mut e = engine();

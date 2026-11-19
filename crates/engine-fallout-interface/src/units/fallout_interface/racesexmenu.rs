@@ -7925,6 +7925,57 @@ mod tests {
         assert!(differs);
     }
 
+    /// The stick's seven dead-zone immediates (`0x7AE57A` ... `0x7AE6C0`) read the engine's right
+    /// dead zone (JIP's `SetDeadZoneRS` moves it): moved to 9000, a zoom or turn of 9000 does
+    /// nothing; moved to 8000, the zoom is past it by 311 of 24767 and the turn by 1000 of -24768
+    /// (the limits less, or plus, the moved dead zone).
+    #[test]
+    fn idle_stick_reads_the_moved_right_dead_zone() {
+        let zoomed = |dead_zone: i32, stick: i32| {
+            let (mut e, menu) = idle_world(1000, 900);
+            let (zoom, _) = real_rates(&mut e);
+            e.register(GAMEPAD_IN_USE, |_, _| word(1));
+            e.register_double(AXIS_VALUE, move |_, a| {
+                word(if a[2] == 10 { stick as u32 } else { 0 })
+            });
+            e.register(ABSOLUTE_VALUE, |_, a| word((a[0] as i32).unsigned_abs()));
+            e.register(AXIS_REDUCE, |_, a| word(a[0]));
+            e.set_pad_dead_zone_right(dead_zone);
+            e.call(0x007a_e420, &args![menu]);
+            (e.mem.f32(menu.addr() + 0xcc), zoom)
+        };
+        assert_eq!(zoomed(9000, -9000).0, 0.0, "inside the moved dead zone");
+        let (velocity, zoom) = zoomed(8000, -8311);
+        assert_eq!(velocity, (311.0 * zoom / 24767.0 * 100.0) as f32);
+        let (velocity, zoom) = zoomed(0x21f1, -9000);
+        assert_eq!(velocity, (311.0 * zoom / 24078.0 * 100.0) as f32);
+        let turned = |dead_zone: i32, stick: i32| {
+            let (mut e, menu) = idle_world(1000, 900);
+            let (_, rotate) = real_rates(&mut e);
+            e.register(GAMEPAD_IN_USE, |_, _| word(1));
+            e.register_double(AXIS_VALUE, move |_, a| {
+                word(if a[2] == 9 { stick as u32 } else { 0 })
+            });
+            e.register(ABSOLUTE_VALUE, |_, a| word((a[0] as i32).unsigned_abs()));
+            let node = e.mem.alloc(0x20);
+            e.mem.set_u32(menu.addr() + 0xd4, node);
+            e.set_pad_dead_zone_right(dead_zone);
+            e.call(0x007a_e420, &args![menu]);
+            (calls(&e, MATRIX_SET_ROTATION), rotate)
+        };
+        assert!(turned(9000, -9000).0.is_empty(), "inside the moved dead zone");
+        let (rotations, rotate) = turned(8000, -9000);
+        let ratio = (1000.0f64 / -24768.0) as f32;
+        let by = (f64::from(ratio) * rotate * 100.0 / 1000.0) as f32;
+        assert_eq!(rotations[0][1], (-by).to_bits());
+        // The other way: past it by 1000 of 24767, the angle wrapped by a full turn.
+        let (rotations, rotate) = turned(8000, 9000);
+        let ratio = (1000.0f64 / 24767.0) as f32;
+        let by = (f64::from(ratio) * rotate * 100.0 / 1000.0) as f32;
+        let wrapped = (f64::from(-by) + std::f64::consts::TAU) as f32;
+        assert_eq!(rotations[0][1], wrapped.to_bits());
+    }
+
     /// 7ae9a1..7ae9b9: FMUL double, then FADD float, under each control word.
     #[test]
     fn idle_ease_up_rounds_the_velocity_at_the_precision_of_the_running_thread() {
@@ -8062,6 +8113,14 @@ mod tests {
         assert!(!e.call(0x007a_dc30, &args![menu, 4u32]).bool());
         // A big stick value clears it.
         e.register(ABSOLUTE_VALUE, |_, _| word(0x1ea9));
+        e.call(0x007a_ecb0, &args![menu, 1i32, 0u32]);
+        assert!(!e.call(0x007a_dc30, &args![menu, 4u32]).bool());
+        // The same value is inside a left dead zone moved past it (JIP's SetDeadZoneLS, the
+        // immediate at 0x7AED31), and outside it again at exactly the value.
+        e.set_pad_dead_zone_left(0x1eaa);
+        e.call(0x007a_ecb0, &args![menu, 1i32, 0u32]);
+        assert!(e.call(0x007a_dc30, &args![menu, 4u32]).bool());
+        e.set_pad_dead_zone_left(0x1ea9);
         e.call(0x007a_ecb0, &args![menu, 1i32, 0u32]);
         assert!(!e.call(0x007a_dc30, &args![menu, 4u32]).bool());
         // A negative button skips the stick altogether.
