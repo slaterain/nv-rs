@@ -2394,7 +2394,7 @@ const LIST_RESTORE_STATE: u32 = 0x0072_a660;
 // Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_ui.h: RefreshRecipeMenu
 // (asm).
 /// The recipe menu's list made again for its category, as the exe's own category change does.
-fn refresh_recipe_menu(e: &mut Engine, menu: u32) {
+pub(crate) fn refresh_recipe_menu(e: &mut Engine, menu: u32) {
     let list = menu + RECIPE_LIST;
     e.vcall(list, 0x1c, &[]);
     let category = e.mem.u32(menu + RECIPE_CATEGORY);

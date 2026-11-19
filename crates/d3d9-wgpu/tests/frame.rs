@@ -3688,6 +3688,113 @@ fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
     }
 }
 
+/// The card's own times (`NV_WGPU_GPU_TIMES`) off, the default: the device asks the driver for
+/// neither timestamp feature, and no timing is made, so no query set, no timestamp and no command
+/// of its own.
+#[test]
+fn the_gpu_times_off_make_nothing() {
+    let Some(mut g) = Gpu::new(4, 4) else {
+        return;
+    };
+    g.run(Cmd::CreateQuery {
+        device: DEVICE,
+        query: 0x2000,
+        kind: 9,
+    });
+    g.clear(3, 0, 1.0);
+    let _ = g.count(0x2000, |g| {
+        g.cover(0.5);
+        g.cover(0.5);
+    });
+    let _ = g.pixels();
+    let d = g.b.device().expect("the device");
+    assert_eq!(
+        d.timestamp_features(),
+        (false, false),
+        "neither timestamp feature asked for"
+    );
+    assert!(!d.gpu_times_on());
+    assert_eq!(d.gpu_time_totals(), None, "no timing, no query set");
+}
+
+/// The card's own times on: each kind of work the backend gives the card is timed in its own
+/// pairs: the game's draws (world), the occlusion count's pass, a multisampled target's resolve,
+/// and (where the driver writes timestamps between passes) the copies: an upload among the draws
+/// and the read-back. Off where the adapter has no timestamps (said, skipped); where it has them
+/// the times must be on, every pair read back in order, and the count, the submits and the
+/// batches' encoders are the same as with the times off (no pass, batch or submit added).
+#[test]
+fn the_gpu_times_on_time_each_kind_of_work() {
+    use d3d9_wgpu::gpu_times::{Kind, KINDS};
+    let run = |g: &mut Gpu| {
+        g.run(Cmd::CreateQuery {
+            device: DEVICE,
+            query: 0x2000,
+            kind: 9,
+        });
+        g.clear(3, 0, 1.0);
+        let count = g.count(0x2000, |g| {
+            g.cover(0.5);
+            g.cover(0.5);
+        });
+        let _ = g.pixels();
+        let s = g.b.device().expect("the device").submits();
+        (count, s.submits, s.encoders)
+    };
+    let off = {
+        let Some(mut g) = Gpu::new(4, 4) else {
+            return;
+        };
+        run(&mut g)
+    };
+    let Some(mut g) = Gpu::with_env(4, 4, &[("NV_WGPU_GPU_TIMES", "1")]) else {
+        return;
+    };
+    let d = g.b.device().expect("the device");
+    if !d.adapter_has_timestamps() {
+        assert!(!d.gpu_times_on());
+        eprintln!("this adapter cannot time passes: skipped");
+        return;
+    }
+    assert!(d.gpu_times_on(), "asked for, and the adapter can");
+    let on = run(&mut g);
+    assert_eq!(
+        on, off,
+        "the same count, submits and batches as with the times off"
+    );
+    let slot = |k: Kind| KINDS.iter().position(|(x, _)| *x == k).expect("a kind");
+    let start = std::time::Instant::now();
+    let t = loop {
+        let t = g.b.device().and_then(|d| d.gpu_time_totals()).expect("on");
+        if t.spans[slot(Kind::Resolves)] > 0 || t.zeros > 0 || start.elapsed().as_secs() >= 5 {
+            break t;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    assert!(t.sets_made >= 1, "{t:?}");
+    if t.zeros > 0 {
+        // A driver that reads timestamps as zero: the times are said to be missing, not shown (the
+        // line's own unit test checks that). Known only of AMD's driver (raw wgpu too); on any
+        // other it is a fault of ours.
+        let d = g.b.device().expect("the device");
+        let name = d.adapter_name().to_string();
+        assert!(
+            name.contains("AMD") || name.contains("Radeon"),
+            "zero timestamps on {name}, not known to give them: {t:?}"
+        );
+        eprintln!("{name} reads timestamps as zero: the times are not shown: {t:?}");
+        assert_eq!(d.wgpu_errors(), 0);
+        return;
+    }
+    for kind in [Kind::World, Kind::Count, Kind::Resolves] {
+        assert!(t.spans[slot(kind)] >= 1, "{kind:?} timed: {t:?}");
+    }
+    assert!(t.ns[slot(Kind::World)] > 0, "the draws took time: {t:?}");
+    assert_eq!(t.left_out, 0, "every pair in order: {t:?}");
+    assert_eq!(t.untimed, 0, "{t:?}");
+    assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
 /// A `DrawPrimitiveUP` draw that lands where the register ring is full draws its own vertices: the
 /// batch is sent for the ring's room before the draw's bytes are placed, not after (which handed
 /// them to the batch before and left the draw reading another draw's bytes at their place in the
@@ -4043,6 +4150,170 @@ fn a_batch_just_under_the_limit_is_sent_whole_and_one_just_over_once_early() {
         check_submits(&after, &format!("{draws} draws"));
     }
     assert_eq!(g.b.device().map(|d| d.wgpu_errors()), Some(0));
+}
+
+/// The card's times on (`NV_WGPU_GPU_TIMES`) send and cut the batches exactly as off: their
+/// timestamps and resolve are no uses of the encoders, so no batch goes early
+/// ([`d3d9_wgpu::device::SUBMIT_USES`]) and no encoder is cut or added. With the finishing and
+/// queue threads, four batches: 300 draws from one buffer (one pass, its encoder cut at 256
+/// draws: two passes in two encoders); 256 draws and then an upload into the target, which sends
+/// the batch with its last encoder already at a finishing thread (no encoder open: its timestamps
+/// are resolved with the next batch's, none added); then draws that each upload their vertices (a copy and a
+/// pass each, the copy timed between passes where the driver can) just under the limit (no early
+/// send) and just over it (one). Each batch's submits, early sends, encoders and uses are the same
+/// with the times on as off. On, where the driver gives times: every pair read back in order, no
+/// batch untimed, each draw's pass timed as world (a pass that began with the clear too, not as
+/// clears), and the copies where the driver writes timestamps between passes.
+#[test]
+fn the_gpu_times_on_send_and_cut_the_batches_as_off() {
+    use d3d9_wgpu::gpu_times::{Kind, KINDS};
+    const DRAWS: u32 = 300;
+    const LADDER: u32 = 0x3200;
+    let limit = d3d9_wgpu::device::SUBMIT_USES;
+    let uploads = [limit / 2 - 16, limit / 2 + 4];
+    // Each batch's submits, early sends, encoders and uses.
+    let run = |g: &mut Gpu| -> Vec<[u64; 4]> {
+        let tris: Vec<f32> = (0..DRAWS)
+            .flat_map(|_| {
+                [
+                    -3.0, -3.0, 0.5, 1.0, -3.0, 9.0, 0.5, 1.0, 9.0, -3.0, 0.5, 1.0,
+                ]
+            })
+            .collect();
+        let bytes = floats(&tris);
+        g.run(Cmd::CreateBuffer {
+            device: DEVICE,
+            buffer: LADDER,
+            index: false,
+            length: bytes.len() as u32,
+            usage: 0,
+            format: 0,
+            pool: 1,
+        });
+        g.run(Cmd::UploadBuffer {
+            buffer: LADDER,
+            offset: 0,
+            flags: 0,
+            data: Data::Bytes(&bytes),
+        });
+        g.run(Cmd::SetStreamSource {
+            device: DEVICE,
+            stream: 0,
+            buffer: LADDER,
+            offset: 0,
+            stride: 16,
+        });
+        let mut out = Vec::new();
+        let mut batch = |g: &mut Gpu, draw_all: &dyn Fn(&mut Gpu)| {
+            // What was recorded before sent first, so the batch is the draws' alone.
+            let _ = g.pixels();
+            let before = g.b.device().expect("the device").submits();
+            g.clear(3, 0, 1.0);
+            draw_all(g);
+            let _ = g.pixels();
+            let after = g.b.device().expect("the device").submits();
+            check_submits(&after, "a batch");
+            out.push([
+                after.submits - before.submits,
+                after.bound_sends - before.bound_sends,
+                after.encoders - before.encoders,
+                after.batch_uses - before.batch_uses,
+            ]);
+        };
+        batch(g, &|g: &mut Gpu| {
+            for i in 0..DRAWS {
+                draw(g, 3 * i, 1);
+            }
+        });
+        batch(g, &|g: &mut Gpu| {
+            for i in 0..256 {
+                draw(g, 3 * i, 1);
+            }
+            g.run(Cmd::UploadSurface {
+                surface: RT,
+                row: 16,
+                rows: 4,
+                data: Data::Bytes(&[0x40u8; 64][..]),
+            });
+        });
+        for n in uploads {
+            batch(g, &|g: &mut Gpu| {
+                for _ in 0..n {
+                    g.cover(0.5);
+                }
+            });
+        }
+        out
+    };
+    let times = [("NV_WGPU_GPU_TIMES", "1")];
+    let off = {
+        let Some(mut g) = Gpu::make_with(4, 1, None, &[], true, true) else {
+            return;
+        };
+        run(&mut g)
+    };
+    assert!(off[0][2] >= 2, "the 300 draws' encoder was cut: {off:?}");
+    assert_eq!(
+        (off[2][1], off[3][1]),
+        (0, 1),
+        "no early send just under the limit, one just over: {off:?}"
+    );
+    let Some(mut g) = Gpu::make_with(4, 1, None, &times, true, true) else {
+        return;
+    };
+    let d = g.b.device().expect("the device");
+    if !d.adapter_has_timestamps() {
+        assert!(!d.gpu_times_on());
+        eprintln!("this adapter cannot time passes: skipped");
+        return;
+    }
+    assert!(d.gpu_times_on(), "asked for, and the adapter can");
+    let inside = d.timestamp_features().1;
+    let on = run(&mut g);
+    assert_eq!(
+        on, off,
+        "each batch's submits, early sends, encoders and uses as with the times off"
+    );
+    let slot = |k: Kind| KINDS.iter().position(|(x, _)| *x == k).expect("a kind");
+    // Each draw of the upload batches in a pass of its own, the 300 draws' two passes and the 256
+    // draws' one.
+    let passes = u64::from(uploads[0] + uploads[1]) + 3;
+    let start = std::time::Instant::now();
+    let t = loop {
+        let t = g.b.device().and_then(|d| d.gpu_time_totals()).expect("on");
+        if t.spans[slot(Kind::World)] >= passes || t.zeros > 0 || start.elapsed().as_secs() >= 5 {
+            break t;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    let d = g.b.device().expect("the device");
+    assert_eq!(d.wgpu_errors(), 0);
+    if t.zeros > 0 {
+        // Known only of AMD's driver (raw wgpu too), as in the test above.
+        let name = d.adapter_name().to_string();
+        assert!(
+            name.contains("AMD") || name.contains("Radeon"),
+            "zero timestamps on {name}, not known to give them: {t:?}"
+        );
+        eprintln!("{name} reads timestamps as zero: the times are not shown: {t:?}");
+        return;
+    }
+    assert_eq!(t.left_out, 0, "every pair in order: {t:?}");
+    assert_eq!(t.untimed, 0, "{t:?}");
+    assert_eq!(
+        t.spans[slot(Kind::World)],
+        passes,
+        "each draw's pass as world: {t:?}"
+    );
+    // Each batch's clear is the load of the pass its first draw goes in (counted as world above),
+    // so no pass here only clears.
+    assert_eq!(t.spans[slot(Kind::Clears)], 0, "{t:?}");
+    if inside {
+        assert!(
+            t.spans[slot(Kind::Copies)] >= u64::from(uploads[0] + uploads[1]),
+            "each upload among the draws timed: {t:?}"
+        );
+    }
 }
 
 /// The vertex buffer of [`dynamic_state_scene`]: every shape in it once, uploaded before the

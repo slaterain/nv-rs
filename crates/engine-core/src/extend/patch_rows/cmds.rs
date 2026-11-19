@@ -17,6 +17,17 @@ const fn row(addr: u32) -> Entry {
 
 /// The commands' seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // `EnableImprovedRecipeMenu`: `RecipeMenu::DoClick` 007274b0, its switch (the bound at
+    // 0x7274E1, the byte map and the table; JIP's ids 7 and 15 to `RecipeMenuAcceptHook`).
+    row(0x0072_74e1),
+    // `UnlockRecipeMenuQuantity`, `EnableImprovedRecipeMenu`: the count the recipe menu offers
+    // 00727920, the 100 stored first (0x727975).
+    row(0x0072_7975),
+    // `ToggleCraftingMessages`: the recipe menu's craft 007284f0, the item's message (0x728933).
+    row(0x0072_8933),
+    // `EnableImprovedRecipeMenu`: the recipe menu's craft 007284f0, the menu's close (0x728A0C;
+    // JIP's `RecipeMenuCloseHook`: the menu stays open, its list refreshed).
+    row(0x0072_8a0c),
     // `ShowQuantityMenu`: `QuantityMenu::DoClick` 007abe40's `CALL dword ptr [0x011DA614]` (the
     // result callback). JIP's `QuantityMenuCallback` reads DoClick's button id from the caller's
     // frame (`[ebp+8]`): the seam hands it over with the callback and the count.
@@ -43,4 +54,22 @@ pub(in super::super) const WRAPS: &[Entry] = &[
     // `InitRockItLauncher`: the weapon's projectile for an actor 00525a90 (reached only by
     // address; JIP's `GetWeaponProjectileHook`).
     row(0x0052_5a90),
+    // `InitItemFilter`: the recipe menu's filter 00728d60 (reached only by address, as the list
+    // box's filter; JIP's `RecipeFilterHook` at its end): a recipe the filter keeps is still left
+    // out when its name lacks SetItemFilter's text.
+    row(0x0072_8d60),
+    // `InitItemFilter`: `BarterMenu::FilterModeFunc` 007304b0 (reached only by address; JIP's
+    // `ItemFilterHook`), as above for the item's form.
+    row(0x0073_04b0),
+    // `InitItemFilter`: `ContainerMenu::FilterModeFunc` 0075e650 (reached only by address): as
+    // above.
+    row(0x0075_e650),
+    // `SuppressQuestMessages`: `HUDMainMenu::ShowQuestName` 0077a480 and `ShowQuestObjective`
+    // 0077a5b0 (reached only by address; JIP's `QueueQuestMsgHook` in place of the first, a `ret`
+    // at the second, for one frame).
+    row(0x0077_a480),
+    row(0x0077_a5b0),
+    // `InitItemFilter`: `InventoryMenu::FilterFunc` 00782620 (reached only by address; JIP's
+    // `ItemFilterHook`).
+    row(0x0078_2620),
 ];
