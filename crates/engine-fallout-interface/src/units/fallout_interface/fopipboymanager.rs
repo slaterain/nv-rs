@@ -1432,6 +1432,11 @@ mod la1_tests {
 /// `007fa8d0` (`thiscall`, one word) runs first on menu open (with 0) and
 /// close (with the player's `Actor::IsRefractive`, `008c51c0`).
 const MENU_STATE_007FA8D0: u32 = 0x007f_a8d0;
+/// The Pip-Boy manager's reset (`007fa990`, `thiscall`; it clears the byte below itself) and its
+/// "reset me" byte, which the script command (`005db4c0`) sets and the main loop's AI tasks
+/// (`0086f840`) read.
+const PIPBOY_RESET: u32 = 0x007f_a990;
+const PIPBOY_RESET_PENDING: u32 = 0x16c;
 const ACTOR_IS_REFRACTIVE: u32 = 0x008c_51c0;
 /// The bytes menu open sets (`011d890a`, `011db378`; the second is
 /// cleared on close and tested by `SetTabKnobPosition`).
@@ -1642,6 +1647,15 @@ pub fn fo_pipboy_manager_on_menu_open(e: &mut Engine, this: Ptr<FOPipboyManager>
         return;
     }
     e.call(MENU_STATE_007FA8D0, &args![this, 0u32]);
+    if e.stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH) {
+        // lStewieAl's Tweaks' row S0027 (`PipboyManagerOnMenuOpenCheckReset` at `0x7F8059`): a
+        // reset an equip asked for (the byte at +0x16C) is done now, before the colours.
+        let pending = this.addr() + PIPBOY_RESET_PENDING;
+        if e.mem.u8(pending) != 0 {
+            e.call(PIPBOY_RESET, &args![this]);
+            e.mem.set_u8(pending, 0);
+        }
+    }
     fo_pipboy_manager_reset_colors(e, this);
     e.set_global(MENU_OPEN_BYTE_011D890A, 1u8);
     e.set_global(PIPBOY_OPEN_011DB378, 1u8);
@@ -2356,9 +2370,18 @@ mod n086_tests {
         });
     }
 
+    /// lStewieAl's Tweaks' row S0027 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn on_menu_open_starts_the_hum_and_the_burst() {
+        for on in [false, true] {
+            on_menu_open_starts_the_hum_and_the_burst_row(on);
+        }
+    }
+
+    fn on_menu_open_starts_the_hum_and_the_burst_row(on: bool) {
         let mut e = Engine::new();
+        e.set_stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH, on);
         world(&mut e);
         sounds(&mut e);
         quiet(
@@ -2415,6 +2438,62 @@ mod n086_tests {
         assert_eq!(calls(&e, MODIFIER_STOP), vec![vec![0x3131]]);
         assert_eq!(e.global::<u8>(OPEN_STATE_0118ABB1), 0);
         assert_eq!(calls(&e, AFTER_OPEN_004DE8C0), vec![vec![0]]);
+    }
+
+    /// lStewieAl's Tweaks' row S0027 (`0x7F8059`): a reset an equip asked for (the manager's byte
+    /// at +0x16C) is done when the Pip-Boy opens, before its colours, and the byte cleared; with no
+    /// reset asked for, or the row off, the opening does not reset.
+    #[test]
+    fn s0027_the_pipboy_opening_does_the_reset_an_equip_asked_for() {
+        for (on, pending) in [(false, 1u8), (true, 0), (true, 1)] {
+            let mut e = Engine::new();
+            world(&mut e);
+            sounds(&mut e);
+            quiet(
+                &mut e,
+                &[
+                    MENU_STATE_007FA8D0,
+                    COLOR_CONSTRUCT,
+                    ISOLATE_MENU_ELEMENTS,
+                    TRIGGER_BURST,
+                    RENDERED_MENU_ON_MENU_OPEN,
+                    MODIFIER_STOP,
+                    AFTER_OPEN_004DE8C0,
+                    PIPBOY_RESET,
+                ],
+            );
+            e.register(SYSTEM_COLORS, |_, _| 0u32.into_ret());
+            e.register(SYSTEM_COLOR, |_, _| 0u32.into_ret());
+            e.register(GET_HIT_MODIFIER, |_, _| 0x3131u32.into_ret());
+            e.register(PIPBOY_STATE, |_, _| 1u32.into_ret());
+            let this = manager(&mut e);
+            e.mem.set_u8(this + PIPBOY_RESET_PENDING, pending);
+            e.set_stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH, on);
+            e.call_log = Some(vec![]);
+            e.call(0x007f_8010, &args![this]);
+            let resets = on && pending == 1;
+            assert_eq!(
+                calls(&e, PIPBOY_RESET).len(),
+                usize::from(resets),
+                "row {on}"
+            );
+            assert_eq!(
+                e.mem.u8(this + PIPBOY_RESET_PENDING),
+                if resets { 0 } else { pending }
+            );
+            if resets {
+                let order: Vec<u32> = e
+                    .call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|(a, _)| *a)
+                    .filter(|a| [MENU_STATE_007FA8D0, PIPBOY_RESET, COLOR_CONSTRUCT].contains(a))
+                    .collect();
+                assert_eq!(order[..2], [MENU_STATE_007FA8D0, PIPBOY_RESET]);
+                assert_eq!(calls(&e, PIPBOY_RESET), vec![vec![this]]);
+            }
+        }
     }
 
     #[test]
