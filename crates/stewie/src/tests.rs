@@ -182,7 +182,7 @@ fn a_players_file_overlays_vnvs_values_key_by_key() {
 }
 
 /// The S0079 row (`bDialogSpeechNullCheck`), which the key tests use.
-const PROOF: &rows::Row = &rows::ROWS[12];
+const PROOF: &rows::Row = &rows::ROWS[14];
 
 #[test]
 fn every_row_has_its_own_bit_and_key() {
