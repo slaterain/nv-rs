@@ -10,12 +10,15 @@
 //! are left out): each `.call(NAME, &args![..])` or `.call(NAME, &[..])` whose callee is a
 //! `const NAME: u32` of the crate, an address written in place (`0x005a_b930`) or one of two such
 //! in an `if`, and each call of a helper that hands its `u32` parameter on as the callee
-//! (`fn call_with_text(e, f: u32, ..)` calling `e.call(f, ..)`) with such a callee. The words are
-//! counted by each item's type as its text gives it: a literal's suffix (a float literal without
-//! one is an `f64`), a cast, a method or path named for its type (`.u32()`, `e.mem.f64(at)`,
-//! `f64::from(x)`), `.st0`, a constant, a field of the crates' structs, a `let` or parameter of
-//! the calling function. An item whose type the text does not give counts as one word (their
-//! number is printed). Each callee's word count is probed on a fresh engine: the translation is
+//! (`fn call_with_text(e, f: u32, ..)` calling `e.call(f, ..)`, the parameter not bound anew
+//! before) with such a callee. Every item of a `&[..]`, `[x; N]` or `vec![..]` list is a `u32`,
+//! one word; an `args![..]` item takes the words of its type as its text gives it: a lone
+//! literal's suffix (a float literal without one is an `f64`), a cast, a method or path named for
+//! its type (`.u32()`, `e.mem.f64(at)`, `f64::from(x)`), `.st0`, a constant, a field of the
+//! crates' structs, a `let` or parameter of the calling function; in an expression a literal
+//! without a suffix never decides (`f * 0.5` is the type of `f`). An item whose type the text does
+//! not give counts as one word (their number is printed, and a wrong count names them, so a right
+//! call is not "fixed" to a guess). Each callee's word count is probed on a fresh engine: the translation is
 //! called with 0, 1, 2, ... zero words until its argument reads stop asking for more (`entry!`
 //! reads every argument before the body runs, an entry that asserts its count says so, and a
 //! nested call stops the probe before it reads its own). A callee nobody has translated is listed,
@@ -26,10 +29,14 @@
 //! address read at run time (a hook's original, a menu's handler, a command's routine), and word
 //! lists built elsewhere (`w`, `&words`). A call of that kind that is not listed fails, so each
 //! new one is looked at once; a listed list written in place must still pass the listed words,
-//! and a listed constant callee is probed for them. For calls through a vtable, the ignored test
-//! below probes listed translations (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_UIO_SRC`,
-//! ...) points a crate's test at another copy of its source (an open pull request's branch,
-//! exported).
+//! and a listed constant callee is probed for them. An `if` callee with an `else if` is such a
+//! call too.
+//!
+//! Not checked at all: `.vcall(this, SLOT, ..)` and `.call_next(ADDR, ..)` sites. A vtable slot's
+//! target depends on the object's class and a wrapped address's next function on what else wraps
+//! it, neither known from the text. For those, the ignored test below probes listed translations
+//! (`NV_PROBE`), and `NV_JIP_SRC` (`NV_NVSE_SRC`, `NV_UIO_SRC`, ...) points a crate's test at
+//! another copy of its source (an open pull request's branch, exported).
 
 use engine as _;
 use engine_core::prelude::*;
@@ -50,6 +57,8 @@ struct Site {
     words: usize,
     /// The list's last item is a literal 0 (`ShowMessageBox`'s closing word).
     zero_last: bool,
+    /// Its `args!` items counted as one word without their type read.
+    guessed: Vec<String>,
 }
 
 /// A call the reader could not check by itself.
@@ -63,6 +72,20 @@ struct Unread {
     words: Option<usize>,
     /// The callee's address, when it is a constant.
     addr: Option<u32>,
+    /// Its `args!` items counted as one word without their type read.
+    guessed: Vec<String>,
+}
+
+/// ", counted as one word without their type read: `a`, `b`" for the items `guessed`, or nothing.
+fn guesses(guessed: &[String]) -> String {
+    if guessed.is_empty() {
+        return String::new();
+    }
+    let names: Vec<String> = guessed.iter().map(|g| format!("`{g}`")).collect();
+    format!(
+        " (counted as one word each without their type read: {})",
+        names.join(", ")
+    )
 }
 
 /// The words a call listed in [`UNREAD`] passes, counted by hand.
@@ -764,6 +787,60 @@ fn operands(text: &str) -> Result<Vec<&str>, ()> {
     Ok(out)
 }
 
+/// A literal number on its own (`7`, `-1.5`, `0x10u8`, `2.0f32`): its words, and whether a suffix
+/// names its type. Without one an integer is an `i32` (one word) and a float an `f64` (two), as
+/// Rust takes them when nothing else says.
+fn lone_literal(item: &str) -> Option<(usize, bool)> {
+    const SUFFIXES: [&str; 11] = [
+        "f64", "u64", "i64", "f32", "u32", "i32", "u16", "i16", "u8", "i8", "usize",
+    ];
+    let digits = item.strip_prefix('-').unwrap_or(item).trim();
+    if !digits.starts_with(|c: char| c.is_ascii_digit()) {
+        return None;
+    }
+    let hex = digits.starts_with("0x");
+    for t in SUFFIXES {
+        if let Some(head) = digits.strip_suffix(t) {
+            let head = head.strip_suffix('_').unwrap_or(head);
+            let ok = if hex {
+                t.starts_with(['u', 'i'])
+                    && head[2..]
+                        .bytes()
+                        .all(|c| c.is_ascii_hexdigit() || c == b'_')
+            } else {
+                !head.is_empty()
+                    && head
+                        .bytes()
+                        .all(|c| c.is_ascii_digit() || b"._eE".contains(&c))
+            };
+            if ok {
+                return type_words(t).map(|w| (w, true));
+            }
+        }
+    }
+    if hex {
+        return (digits.len() > 2
+            && digits[2..]
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() || c == b'_'))
+        .then_some((1, false));
+    }
+    if !digits
+        .bytes()
+        .all(|c| c.is_ascii_digit() || b"._eE-+".contains(&c))
+    {
+        return None;
+    }
+    Some((
+        if digits.contains(['.', 'e', 'E']) {
+            2
+        } else {
+            1
+        },
+        false,
+    ))
+}
+
 /// The words argument `item` takes, by the type its text gives, or none when the text does not
 /// say. `scope` is the calling function's text before the call (for its `let`s), `params` its
 /// parameters.
@@ -784,33 +861,10 @@ fn item_words(item: &str, scope: &str, params: &str, types: &Types, depth: u32) 
             return type_words(t);
         }
     }
-    // A literal: an integer is one word unless its suffix says otherwise, a float two (`f64`
-    // unless it says `f32`).
-    let digits = item.strip_prefix('-').unwrap_or(item);
-    if digits.starts_with(|c: char| c.is_ascii_digit()) {
-        let suffix = NAMED.iter().find(|t| {
-            digits.strip_suffix(**t).is_some_and(|h| {
-                !h.is_empty() && (!digits.starts_with("0x") || t.starts_with(['u', 'i']))
-            })
-        });
-        return match suffix {
-            Some(t) => type_words(t),
-            None if !digits.starts_with("0x")
-                && digits.contains(['.', 'e', 'E'])
-                && digits
-                    .bytes()
-                    .all(|c| c.is_ascii_digit() || b"._eE-+".contains(&c)) =>
-            {
-                Some(2)
-            }
-            None if digits
-                .bytes()
-                .all(|c| c.is_ascii_hexdigit() || b"_x".contains(&c)) =>
-            {
-                Some(1)
-            }
-            None => None,
-        };
+    // A literal on its own: an integer is one word unless its suffix says otherwise, a float two
+    // (`f64` unless it says `f32`). An item that only starts with one is an expression (below).
+    if let Some((words, _)) = lone_literal(item) {
+        return Some(words);
     }
     if item == "true" || item == "false" {
         return Some(1);
@@ -831,9 +885,25 @@ fn item_words(item: &str, scope: &str, params: &str, types: &Types, depth: u32) 
     match operands(item) {
         Err(()) => return Some(1),
         Ok(parts) if parts.len() > 1 => {
-            return parts
-                .iter()
-                .find_map(|p| item_words(p, scope, params, types, depth + 1));
+            // The operands share one type, which a literal without a suffix never decides (Rust
+            // takes it from the other operands: `f * 0.5` is an f32 when `f` is): a typed operand
+            // that is not one, else the literals when every operand is one, else untyped.
+            let mut literal = None;
+            let mut unknown = false;
+            for p in &parts {
+                if let Some((words, suffixed)) = lone_literal(p.trim()) {
+                    if suffixed {
+                        return Some(words);
+                    }
+                    literal.get_or_insert(words);
+                    continue;
+                }
+                match item_words(p, scope, params, types, depth + 1) {
+                    Some(words) => return Some(words),
+                    None => unknown = true,
+                }
+            }
+            return if unknown { None } else { literal };
         }
         Ok(_) => {}
     }
@@ -899,12 +969,17 @@ fn item_words(item: &str, scope: &str, params: &str, types: &Types, depth: u32) 
     if !is_name(item) {
         return None;
     }
-    // The last `let` of the name before the call, else a parameter of the function.
+    // The last `let` of the name before the call, else a parameter of the function. A `let` of a
+    // literal without a suffix (`let total = 0.0;`) takes its type from how it is used: untyped.
     if let Some(l) = last_let(scope, item) {
         if let Some(ty) = l.ty {
             return type_words(ty);
         }
-        return item_words(l.value?, &scope[..l.at], params, types, depth + 1);
+        let value = l.value?;
+        if lone_literal(value).is_some_and(|(_, suffixed)| !suffixed) {
+            return None;
+        }
+        return item_words(value, &scope[..l.at], params, types, depth + 1);
     }
     for p in items(params) {
         if let Some((name, ty)) = p.split_once(':') {
@@ -988,9 +1063,16 @@ fn resolve(
 ) -> Result<Vec<(String, u32)>, String> {
     let text = text.trim();
     if let Some(cond) = text.strip_prefix("if ") {
+        // `if C { A } else { B }` only: with an `else if` the part before the last `else` holds
+        // more branches than the two read here, so the call is one to list by hand.
         let pair = cond
             .strip_suffix('}')
             .and_then(|c| c.rsplit_once("} else {"))
+            .filter(|(head, _)| {
+                !head
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                    .any(|w| w == "else")
+            })
             .and_then(|(l, b)| Some((l.rsplit_once('{')?.1, b)));
         if let Some((a, b)) = pair {
             let mut out = resolve(a, file, consts)?;
@@ -1020,15 +1102,17 @@ fn resolve(
 
 /// The items of a word list written in place (`&args![..]`, `&[..]`, `&[x; N]`), or held by a
 /// `let` of the calling function (`scope`) that fixes its length (an array, or an `args!` or
-/// `vec!` that is not `mut`); none when it is built elsewhere (`w`, a `vec!` pushed to).
-fn list_items(list: &str, scope: &str) -> Option<Vec<String>> {
+/// `vec!` that is not `mut`); none when it is built elsewhere (`w`, a `vec!` pushed to). With
+/// them, whether they are `args!`'s, whose items take words by their type: every item of the
+/// other lists is a `u32`, one word.
+fn list_items(list: &str, scope: &str) -> Option<(Vec<String>, bool)> {
     let list = list.trim();
     let bare = list.strip_prefix('&').unwrap_or(list).trim();
-    let inner = ["args!", "vec!", ""]
-        .iter()
-        .find_map(|m| bare.strip_prefix(m)?.trim().strip_prefix('['))
-        .and_then(|l| l.strip_suffix(']'));
-    let Some(inner) = inner else {
+    let inner = ["args!", "vec!", ""].iter().find_map(|m| {
+        let inner = bare.strip_prefix(m)?.trim().strip_prefix('[')?;
+        Some((inner.strip_suffix(']')?, *m == "args!"))
+    });
+    let Some((inner, typed)) = inner else {
         let held = last_let(scope, bare).filter(|_| is_name(bare))?;
         let value = held.value?;
         if value.starts_with('[') || !held.mutable {
@@ -1039,10 +1123,44 @@ fn list_items(list: &str, scope: &str) -> Option<Vec<String>> {
     let parts = items(inner);
     if let [one] = parts.as_slice() {
         if let Some((x, n)) = one.split_once(';') {
-            return Some(vec![x.trim().to_string(); n.trim().parse().ok()?]);
+            return Some((vec![x.trim().to_string(); n.trim().parse().ok()?], typed));
         }
     }
-    Some(parts)
+    Some((parts, typed))
+}
+
+/// A word list read: its words, whether it ends with a literal 0, and the `args!` items counted
+/// as one word without their type read.
+struct Listed {
+    words: usize,
+    zero_last: bool,
+    guessed: Vec<String>,
+}
+
+/// Whether `scope` binds `name` anew by an assignment (`name = ..`, `name += ..`), not a
+/// comparison or a match arm.
+fn assigned(scope: &str, name: &str) -> bool {
+    let b = scope.as_bytes();
+    let mut from = 0;
+    while let Some(k) = scope[from..].find(name) {
+        let at = from + k;
+        from = at + name.len();
+        if (at > 0 && (is_ident(b[at - 1]) || b[at - 1] == b'.'))
+            || b.get(from).is_some_and(|&c| is_ident(c))
+        {
+            continue;
+        }
+        let rest = scope[from..].trim_start();
+        let op = ["<<", ">>", "+", "-", "*", "/", "%", "|", "&", "^", ""]
+            .iter()
+            .find(|op| rest.starts_with(**op) && rest[op.len()..].starts_with('='))
+            .map_or(0, |op| op.len());
+        let after = &rest[op..];
+        if after.starts_with('=') && !after.starts_with("==") && !after.starts_with("=>") {
+            return true;
+        }
+    }
+    false
 }
 
 /// A function that hands its `u32` parameter on as the callee of a call with a word list
@@ -1052,8 +1170,7 @@ struct Helper {
     name: String,
     public: bool,
     index: usize,
-    words: usize,
-    zero_last: bool,
+    list: Listed,
     inner: Unread,
 }
 
@@ -1062,9 +1179,13 @@ struct Helper {
 struct Reading {
     sites: Vec<Site>,
     unread: Vec<Unread>,
-    /// Items counted as one word without their type read.
+    /// `args!` items counted as one word without their type read, of all `args!` items.
     untyped: usize,
     items: usize,
+    /// The `.call(` and `.call_as(` occurrences, and those read as calls into the game (two
+    /// arguments: each a site, an unread call or a helper's): the reader's health.
+    occurrences: usize,
+    accounted: usize,
 }
 
 /// Every direct call by a constant address in the crate whose source is at `root`, and the calls
@@ -1075,6 +1196,7 @@ fn sites(root: &Path, types: &Types) -> Reading {
     let mut r = Reading::default();
     let mut helpers: Vec<Helper> = Vec::new();
     for (name, code) in &files {
+        r.occurrences += code.matches(".call(").count() + code.matches(".call_as").count();
         for (at, _) in code.match_indices(".call") {
             let tail = &code[at + 5..];
             // `.call(` and `.call_as(` / `.call_as::<T>(`; not `.call_next`, `.call1`, `.vcall`.
@@ -1099,6 +1221,7 @@ fn sites(root: &Path, types: &Types) -> Reading {
                 why,
                 words,
                 addr,
+                guessed: Vec::new(),
             };
             let Some(args) = call_args(code, open) else {
                 r.unread
@@ -1111,24 +1234,37 @@ fn sites(root: &Path, types: &Types) -> Reading {
             if parts.len() != 2 {
                 continue;
             }
+            r.accounted += 1;
             let fun = fn_around(code, at);
             let (scope, params) = fun
                 .as_ref()
                 .map_or(("", ""), |f| (&code[f.start..at], f.params));
-            let list = list_items(&parts[1], scope).map(|list| {
+            // Only `args!`'s items take words by type; every other list's item is one `u32`.
+            let list = list_items(&parts[1], scope).map(|(list, typed)| {
                 let mut words = 0;
+                let mut guessed = Vec::new();
                 for item in &list {
-                    let w = item_words(item, scope, params, types, 0);
-                    r.items += 1;
-                    if w.is_none() {
-                        r.untyped += 1;
-                    }
+                    let w = if typed {
+                        let w = item_words(item, scope, params, types, 0);
+                        r.items += 1;
+                        if w.is_none() {
+                            r.untyped += 1;
+                            guessed.push(item.clone());
+                        }
+                        w
+                    } else {
+                        Some(1)
+                    };
                     words += w.unwrap_or(1);
                 }
                 let zero_last = list
                     .last()
                     .is_some_and(|l| ["0", "0u32", "0_u32"].contains(&l.as_str()));
-                (words, zero_last)
+                Listed {
+                    words,
+                    zero_last,
+                    guessed,
+                }
             });
             let callee = parts[0].as_str();
             // A callee held by a `let` that is not `mut`: its value's callees.
@@ -1138,14 +1274,15 @@ fn sites(root: &Path, types: &Types) -> Reading {
                     .ok_or(why)
             });
             match (resolved, list) {
-                (Ok(callees), Some((words, zero_last))) => {
+                (Ok(callees), Some(l)) => {
                     for (callee, addr) in callees {
                         r.sites.push(Site {
                             at: where_.clone(),
                             callee,
                             addr,
-                            words,
-                            zero_last,
+                            words: l.words,
+                            zero_last: l.zero_last,
+                            guessed: l.guessed.clone(),
                         });
                     }
                 }
@@ -1156,8 +1293,14 @@ fn sites(root: &Path, types: &Types) -> Reading {
                     Some(callees[0].1),
                 )),
                 (Err(why), list) => {
-                    let inner = unread(callee, why, list.map(|l| l.0), None);
+                    let mut inner = unread(callee, why, list.as_ref().map(|l| l.words), None);
+                    inner.guessed = list.as_ref().map_or(Vec::new(), |l| l.guessed.clone());
+                    // A parameter the function passes on as it came: not one it binds anew
+                    // (`let f = ..`, `f = ..`) before the call, which is a callee read at run time.
                     let param = fun.as_ref().and_then(|f| {
+                        if last_let(scope, callee).is_some() || assigned(scope, callee) {
+                            return None;
+                        }
                         let index = items(f.params).iter().position(|p| {
                             p.split_once(':').is_some_and(|(n, t)| {
                                 n.trim().strip_prefix("mut ").unwrap_or(n.trim()) == callee
@@ -1167,16 +1310,14 @@ fn sites(root: &Path, types: &Types) -> Reading {
                         Some((f, index))
                     });
                     match (param, list) {
-                        (Some((f, index)), Some((words, zero_last))) if is_name(callee) => helpers
-                            .push(Helper {
-                                file: name.clone(),
-                                name: f.name.to_string(),
-                                public: f.public,
-                                index,
-                                words,
-                                zero_last,
-                                inner,
-                            }),
+                        (Some((f, index)), Some(l)) if is_name(callee) => helpers.push(Helper {
+                            file: name.clone(),
+                            name: f.name.to_string(),
+                            public: f.public,
+                            index,
+                            list: l,
+                            inner,
+                        }),
                         _ => r.unread.push(inner),
                     }
                 }
@@ -1211,8 +1352,9 @@ fn sites(root: &Path, types: &Types) -> Reading {
                                 at: where_.clone(),
                                 callee,
                                 addr,
-                                words: h.words,
-                                zero_last: h.zero_last,
+                                words: h.list.words,
+                                zero_last: h.list.zero_last,
+                                guessed: h.list.guessed.clone(),
                             });
                         }
                     }
@@ -1221,8 +1363,9 @@ fn sites(root: &Path, types: &Types) -> Reading {
                         file: name.clone(),
                         callee,
                         why: format!("{why}, passed to `{}`", h.name),
-                        words: Some(h.words),
+                        words: Some(h.list.words),
                         addr: None,
+                        guessed: h.list.guessed.clone(),
                     }),
                 }
             }
@@ -1338,20 +1481,27 @@ fn match_unread<'a>(name: &str, unread: &'a [Unread]) -> (Vec<String>, Vec<(&'a 
                 let words = rows[k].0 .3;
                 if let Some(n) = u.words.filter(|&n| !words.takes(n)) {
                     problems.push(format!(
-                        "{}: `{}` passes {n} words, UNREAD lists {words:?}",
-                        u.at, u.callee
+                        "{}: `{}` passes {n} words{}, UNREAD lists {words:?}",
+                        u.at,
+                        u.callee,
+                        guesses(&u.guessed)
                     ));
                 }
                 pairs.push((u, words));
             }
+            // The ready row has the reader's count only where every item's type was read: a
+            // guessed count has to be counted by hand.
             None => problems.push(format!(
-                "{}: {} (not in UNREAD: check its words by hand, then list it as \
+                "{}: {}{} (not in UNREAD: check its words by hand, then list it as \
                  (\"{name}\", \"{}\", \"{}\", {}, \"...\"))",
                 u.at,
                 u.why,
+                guesses(&u.guessed),
                 u.file,
                 u.callee,
-                u.words.map_or("N(?)".to_string(), |n| format!("N({n})"))
+                u.words
+                    .filter(|_| u.guessed.is_empty())
+                    .map_or("N(?)".to_string(), |n| format!("N({n})"))
             )),
         }
     }
@@ -1366,9 +1516,12 @@ fn match_unread<'a>(name: &str, unread: &'a [Unread]) -> (Vec<String>, Vec<(&'a 
     (problems, pairs)
 }
 
-/// Extender crate `name`'s direct calls (at least `at_least` of them, so a source reader that
-/// stopped finding calls fails) each pass the words their callee's translation and typed form take.
-fn check(name: &str, at_least: usize) {
+/// Extender crate `name`'s direct calls each pass the words their callee's translation and typed
+/// form take. The reader's health first: at least nine in ten of the crate's `.call(` and
+/// `.call_as(` occurrences are read as calls into the game (the others are other types' methods),
+/// and some are sites when the crate has any, so a reader that stopped finding calls fails
+/// whatever the code's size.
+fn check(name: &str) {
     let all: Vec<(String, String)> = CRATES
         .iter()
         .flat_map(|c| files_of(&crate_src(c)))
@@ -1377,8 +1530,11 @@ fn check(name: &str, at_least: usize) {
     let reading = sites(&crate_src(name), &types);
     let sites = &reading.sites;
     assert!(
-        sites.len() >= at_least,
-        "{name}: the source reader found only {} calls",
+        reading.accounted * 10 >= reading.occurrences * 9
+            && (reading.occurrences == 0 || !sites.is_empty()),
+        "{name}: the source reader read {} of {} `.call(` occurrences, {} as sites",
+        reading.accounted,
+        reading.occurrences,
         sites.len()
     );
     let (mut wrong, pairs) = match_unread(name, &reading.unread);
@@ -1428,8 +1584,12 @@ fn check(name: &str, at_least: usize) {
                 for (form, n) in [("translation", translated), ("typed form", typed)] {
                     if n != Some(s.words) {
                         wrong.push(format!(
-                            "{}: {} ({:08x}) passes {} words, its {form} takes {n:?}",
-                            s.at, s.callee, s.addr, s.words
+                            "{}: {} ({:08x}) passes {} words{}, its {form} takes {n:?}",
+                            s.at,
+                            s.callee,
+                            s.addr,
+                            s.words,
+                            guesses(&s.guessed)
                         ));
                     }
                 }
@@ -1475,8 +1635,11 @@ fn check(name: &str, at_least: usize) {
         }
     }
     println!(
-        "{name}: {} direct calls, {} callees probed, {} calls listed as checked by hand; {} of {} \
-         items counted as one word without their type read; {} not translated: {open:#?}",
+        "{name}: {} of {} `.call(` read; {} direct calls, {} callees probed, {} calls listed as \
+         checked by hand; {} of {} `args!` items counted as one word without their type read; {} \
+         not translated: {open:#?}",
+        reading.accounted,
+        reading.occurrences,
         sites.len(),
         probed.len(),
         pairs.len(),
@@ -1489,31 +1652,31 @@ fn check(name: &str, at_least: usize) {
 
 #[test]
 fn jip_passes_each_game_function_the_words_it_takes() {
-    check("jip", 300);
+    check("jip");
 }
 
 /// xNVSE's lambdas called the game's two list copies with two words of three: a player's modded
 /// game stopped at the first inline function a script gave `ar_ForEach`.
 #[test]
 fn nvse_passes_each_game_function_the_words_it_takes() {
-    check("nvse", 200);
+    check("nvse");
 }
 
 #[test]
 fn uio_passes_each_game_function_the_words_it_takes() {
-    check("uio", 30);
+    check("uio");
 }
 
 #[test]
 fn mcm_passes_each_game_function_the_words_it_takes() {
-    check("mcm", 4);
+    check("mcm");
 }
 
 /// lStewieAl's Tweaks calls no game function by address yet (its rows run inside the
 /// translations): the check runs, so a call added later is read.
 #[test]
 fn stewie_passes_each_game_function_the_words_it_takes() {
-    check("stewie", 0);
+    check("stewie");
 }
 
 /// The reader's own rules, on made-up source.
@@ -1542,13 +1705,34 @@ fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
     assert_eq!(w("d", "let d = r.f64();\n", ""), Some(2), "a let's value");
     assert_eq!(w("d", "let d: f64 = 0.0;\nlet x = 1;", ""), Some(2));
     assert_eq!(w("d", "", "e: &mut Engine, d: f64"), Some(2), "a parameter");
-    assert_eq!(w("d * 2.0", "", ""), Some(2));
+    // A literal without a suffix never decides an expression's type (review of #776: `f * 0.5`
+    // with `f` an f32 was read as an f64).
+    assert_eq!(
+        w("d * 2.0", "", ""),
+        None,
+        "an untyped operand and a literal"
+    );
+    assert_eq!(w("d * 2.0", "", "d: f64"), Some(2));
+    assert_eq!(w("1.0 - d", "", "d: f64"), Some(2), "a literal first");
+    assert_eq!(w("1.0 - d", "", ""), None);
+    assert_eq!(w("f * 0.5", "let f = read.float(1, 0.0);", ""), None);
+    assert_eq!(
+        w("(f * 0.01).to_bits()", "let f = read.float(2, 0.0);", ""),
+        None
+    );
+    assert_eq!(w("1.0 * 2.0", "", ""), Some(2), "literals only");
+    assert_eq!(w("0.5f32 * d", "", ""), Some(1), "a suffix decides");
+    assert_eq!(w("d", "let d = 0.0;", ""), None, "a let of a bare literal");
+    assert_eq!(w("d", "let d = 0.0f64;", ""), Some(2));
     assert_eq!(
         w("d", "let d = 1.0;\nlet d = d as u32;", ""),
         Some(1),
         "the last let"
     );
     assert_eq!(w("refr", "let refr = somewhere();", ""), None);
+    assert!(assigned("x; f = 2;", "f") && assigned("f += 4;", "f") && assigned("f <<= 1", "f"));
+    assert!(!assigned("f == 2 && f <= 3 && f != 1", "f") && !assigned("Some(f) => 1", "f"));
+    assert!(!assigned("self.f = 2; ff = 1", "f"));
 
     let code = String::from(
         "const F: u32 = 0x0040_0000;\nconst G: u32 = 0x0040_1000;\n\
@@ -1567,7 +1751,14 @@ fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
          let mut grown = vec![1u32];\n\
          grown.push(0);\n\
          e.call(G, &grown);\n\
+         e.call(G, &[a, (b * 0.5).to_bits()]);\n\
+         e.call(G, &args![unknown, 1u32]);\n\
+         e.call(if up { F } else if w.is_empty() { G } else { F }, &args![1u32]);\n\
+         rebinds(e, F);\n\
+         reassigns(e, F);\n\
          }\n\
+         fn rebinds(e: &mut Engine, f: u32) { let f = e.mem.u32(f); e.call(f, &args![1u32]); }\n\
+         fn reassigns(e: &mut Engine, mut f: u32) { f = e.mem.u32(f); e.call(f, &args![1u32]); }\n\
          #[cfg(test)]\nfn only_in_tests(e: &mut Engine) { e.call(F, &[]); }\n",
     );
     let dir = std::env::temp_dir().join(format!("arity-reader-{}", std::process::id()));
@@ -1580,12 +1771,26 @@ fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
         .iter()
         .map(|s| (s.callee.as_str(), s.words))
         .collect();
+    // A slice's items are a word each (review of #776: `(b * 0.5).to_bits()` was read as two);
+    // an untyped `args!` item is one word and named.
     assert_eq!(
         found,
-        [("F", 2), ("G", 2), ("F", 1), ("G", 1), ("G", 3), ("F", 2)],
+        [
+            ("F", 2),
+            ("G", 2),
+            ("F", 1),
+            ("G", 1),
+            ("G", 3),
+            ("G", 2),
+            ("G", 2),
+            ("F", 2)
+        ],
         "{r:?}",
         r = r.sites
     );
+    assert!(r.sites[5].guessed.is_empty());
+    assert_eq!(r.sites[6].guessed, ["unknown"]);
+    // An `else if` callee, and a helper's parameter bound anew before the call, are unread.
     let unread: Vec<(&str, Option<usize>, Option<u32>)> = r
         .unread
         .iter()
@@ -1596,10 +1801,22 @@ fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
         [
             ("F", None, Some(0x0040_0000)),
             ("f", Some(3), None),
-            ("G", None, Some(0x0040_1000))
+            ("G", None, Some(0x0040_1000)),
+            (
+                "if up { F } else if w.is_empty() { G } else { F }",
+                Some(1),
+                None
+            ),
+            ("f", Some(1), None),
+            ("f", Some(1), None)
         ],
         "{:?}",
         r.unread
+    );
+    assert_eq!(
+        (r.occurrences, r.accounted),
+        (13, 12),
+        "the three-argument one is no call into the game"
     );
     assert!(short_of_words("00703e80 needs 9 argument words, got 3", 3));
     assert!(!short_of_words("00703e80 needs 9 argument words, got 9", 9));
