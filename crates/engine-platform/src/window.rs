@@ -11,7 +11,11 @@
 //! Windows sends a window's procedure while it is created or moved (`WM_CREATE`,
 //! `WM_WINDOWPOSCHANGED`, `WM_ACTIVATE`, ...): the game's procedure (`0086a0a0`) only acts on them
 //! once `Main` exists, and `main` makes its window before `Main`, but a window made or moved
-//! later gets none of them (recorded in the module's functions); message boxes (the game shows
+//! later gets none of them (recorded in the module's functions). Two messages are posted to the
+//! game's queue: `WM_MOUSEMOVE` while the game's mouse is not exclusive and its window active
+//! ([`post_mouse_move`]: its menus follow the cursor then), with `DefWindowProcA` for it, and
+//! `WM_ACTIVATE` when the real window becomes active again after it was not ([`post_activate`]:
+//! the game makes its mouse exclusive again); message boxes (the game shows
 //! one only to stop: the run stops with its text); `ExitProcess`; `ShellExecuteA`.
 
 use super::KernelObject;
@@ -68,6 +72,10 @@ pub struct Windows {
     command_line_at: u32,
     /// Frames the main loop ended on an empty queue ([`peek_message_a`]).
     pub frames: u64,
+    /// The host posted messages while the main loop handed it its turn, and the first went to the
+    /// game at once: the loop drains them before its next frame, so the next empty queue starts
+    /// that frame instead of ending another ([`peek_message_a`]).
+    frame_begun: bool,
 }
 
 fn last_error(e: &mut Engine, code: u32) {
@@ -166,6 +174,133 @@ fn user_name(var: impl Fn(&str) -> Option<String>) -> String {
         .into_iter()
         .find_map(|key| var(key).filter(|v| !v.is_empty()))
         .unwrap_or_default()
+}
+
+/// Windows' pointer speed for the game's menu cursor (`engine_core`'s `Kernel::pointer_speed`,
+/// which the game reads as `HKCU\Control Panel\Mouse` `MouseSensitivity` at its input start), with
+/// the log line saying it: on Windows the player's own, read once as the game reads it
+/// (`RegQueryValueExA`: the value's type and bytes, or the error Windows gives; only read, nothing
+/// is written); elsewhere `None`, the 10 a plain Windows machine starts with.
+pub fn pointer_speed() -> (Option<crate::PointerSpeed>, String) {
+    #[cfg(windows)]
+    let read = read_pointer_speed().map_err(Some);
+    #[cfg(not(windows))]
+    let read = Err(None);
+    pointer_speed_of(read)
+}
+
+/// `REG_SZ`: a string value.
+const REG_SZ: u32 = 1;
+
+/// [`pointer_speed`]'s answer and line for what the read gave: the value's type and bytes, or why
+/// there is none (Windows' error code, which the game is answered too, so it keeps its own 6 as
+/// in the original; `None`: not Windows). A string that is not a whole number from 1 to 20 is
+/// still the game's (it reads it with `atol`), and so is a value of another type; the line says so.
+fn pointer_speed_of(
+    read: Result<(u32, Vec<u8>), Option<u32>>,
+) -> (Option<crate::PointerSpeed>, String) {
+    const FOLLOWS: &str = "the game's menu cursor speed follows it, as in the original";
+    match read {
+        Ok((kind, data)) if kind == REG_SZ => {
+            let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+            let shown = String::from_utf8_lossy(&data[..end]).into_owned();
+            let usual = shown
+                .trim()
+                .parse::<u32>()
+                .is_ok_and(|v| (1..=20).contains(&v));
+            let note = if usual {
+                ""
+            } else {
+                " (not a speed from 1 to 20: the game reads it as Windows holds it)"
+            };
+            (
+                Some(crate::PointerSpeed::Value { kind, data }),
+                format!(
+                    "input: Windows' pointer speed (Mouse settings) is {shown}{note}: {FOLLOWS}"
+                ),
+            )
+        }
+        Ok((kind, data)) => (
+            Some(crate::PointerSpeed::Value { kind, data }),
+            format!(
+                "input: Windows' pointer speed (Mouse settings) is stored as registry type {kind}, \
+                 not as text: the game reads its bytes as Windows hands them, as the original does"
+            ),
+        ),
+        Err(Some(code)) => (
+            Some(crate::PointerSpeed::Missing(code)),
+            format!(
+                "input: Windows' pointer speed could not be read (error {code}{}): the game keeps \
+                 its own menu cursor speed (6), as the original does",
+                if code == 2 { ": it is not set" } else { "" }
+            ),
+        ),
+        Err(None) => (
+            None,
+            "input: the menus' cursor takes Windows' default pointer speed, 10, as a Windows \
+             machine has it"
+                .to_string(),
+        ),
+    }
+}
+
+/// `HKCU\Control Panel\Mouse` `MouseSensitivity` read as the game reads it (`RegOpenKeyExA`, then
+/// `RegQueryValueExA` into a buffer larger than any pointer speed): the value's type and bytes,
+/// or Windows' error code.
+#[cfg(windows)]
+fn read_pointer_speed() -> Result<(u32, Vec<u8>), u32> {
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn RegOpenKeyExA(
+            key: isize,
+            sub_key: *const u8,
+            options: u32,
+            access: u32,
+            opened: *mut isize,
+        ) -> i32;
+        fn RegQueryValueExA(
+            key: isize,
+            value: *const u8,
+            reserved: *mut u32,
+            kind: *mut u32,
+            data: *mut u8,
+            size: *mut u32,
+        ) -> i32;
+        fn RegCloseKey(key: isize) -> i32;
+    }
+    const HKEY_CURRENT_USER: isize = 0x8000_0001_u32 as i32 as isize;
+    const KEY_READ: u32 = 0x2_0019;
+    let mut key = 0isize;
+    // SAFETY: the key and value names are zero-terminated, the out words and the buffer are this
+    // function's own with their sizes, and the calls only read the registry.
+    unsafe {
+        let opened = RegOpenKeyExA(
+            HKEY_CURRENT_USER,
+            b"Control Panel\\Mouse\0".as_ptr(),
+            0,
+            KEY_READ,
+            &mut key,
+        );
+        if opened != 0 {
+            return Err(opened as u32);
+        }
+        let mut data = [0u8; 256];
+        let mut size = data.len() as u32;
+        let mut kind = 0u32;
+        let status = RegQueryValueExA(
+            key,
+            b"MouseSensitivity\0".as_ptr(),
+            std::ptr::null_mut(),
+            &mut kind,
+            data.as_mut_ptr(),
+            &mut size,
+        );
+        RegCloseKey(key);
+        if status != 0 {
+            return Err(status as u32);
+        }
+        Ok((kind, data[..(size as usize).min(data.len())].to_vec()))
+    }
 }
 
 // Platform: replaces STEAM_API.DLL SteamAPI_Init (import)
@@ -719,8 +854,11 @@ pub fn set_window_pos(
 // Platform: replaces USER32.DLL PeekMessageA (import)
 /// `PeekMessageA(msg, window, first, last, remove)`: the next posted message into `msg`
 /// (removed with `PM_REMOVE`), true; with none, the frame ends: the game's main thread hands
-/// the engine back to the host until its next frame (`thread_host::end_main_frame`), then
-/// false. Filtering by window or message range is not provided.
+/// the engine back to the host until its next frame (`thread_host::end_main_frame`). The game's
+/// loop empties the queue and then runs its frame, so a message the host posted in its turn (the
+/// cursor's move, an activation) is handed over then, true, and the next empty queue starts that
+/// frame, false, without ending another: the menus' cursor is placed before the frame that shows
+/// it, as in the original. Filtering by window or message range is not provided.
 pub fn peek_message_a(
     e: &mut Engine,
     msg: Ptr,
@@ -733,20 +871,166 @@ pub fn peek_message_a(
         window == 0 && first == 0 && last == 0,
         "PeekMessageA with a filter is not provided"
     );
+    peek_with(e, msg, remove, crate::thread_host::end_main_frame)
+}
+
+/// [`peek_message_a`] with the host's turn `hand_back` (true when the host had one).
+fn peek_with(e: &mut Engine, msg: Ptr, remove: u32, hand_back: fn(&mut Engine) -> bool) -> u32 {
+    if take_message(e, msg, remove) {
+        return 1;
+    }
+    if std::mem::take(&mut state!(e).windows.frame_begun) {
+        return 0;
+    }
+    state!(e).windows.frames += 1;
+    if hand_back(e) && take_message(e, msg, remove) {
+        state!(e).windows.frame_begun = true;
+        return 1;
+    }
+    0
+}
+
+/// The next posted message into `msg` (removed with `PM_REMOVE`); false with none.
+fn take_message(e: &mut Engine, msg: Ptr, remove: u32) -> bool {
     let next = if remove & PM_REMOVE != 0 {
         state!(e).windows.queue.pop_front()
     } else {
         state!(e).windows.queue.front().copied()
     };
-    if let Some(words) = next {
-        for (i, w) in words.iter().enumerate() {
-            e.mem.set_u32(msg.addr() + 4 * i as u32, *w);
-        }
-        return 1;
+    let Some(words) = next else {
+        return false;
+    };
+    for (i, w) in words.iter().enumerate() {
+        e.mem.set_u32(msg.addr() + 4 * i as u32, *w);
     }
-    state!(e).windows.frames += 1;
-    crate::thread_host::end_main_frame(e);
-    0
+    true
+}
+
+/// `WM_MOUSEMOVE`.
+pub const WM_MOUSEMOVE: u32 = 0x200;
+/// The `MK_*` bits of a mouse message's `wParam`, by DirectInput's button order (left, right,
+/// middle, X1, X2).
+const MK_BUTTONS: [u32; 5] = [0x1, 0x2, 0x10, 0x20, 0x40];
+
+/// The window the game draws in, which gets the mouse's messages over its client area: the
+/// renderer's child of the game's main window (a window that is not full screen), else the main
+/// window itself (full screen); with its size.
+fn mouse_window(e: &mut Engine) -> Option<(u32, i32, i32)> {
+    let main = e.kernel.main_window;
+    if main == 0 {
+        return None;
+    }
+    let windows = &state_ref!(e).windows.windows;
+    let (handle, w) = windows
+        .iter()
+        .find(|(_, w)| w.parent == main && w.style & WS_CHILD != 0)
+        .or_else(|| windows.get_key_value(&main))?;
+    let [left, top, right, bottom] = w.rect;
+    Some((*handle, right.wrapping_sub(left), bottom.wrapping_sub(top)))
+}
+
+/// The renderer's width and height (`004dc1f0` and `004dc200` read them), which the game's
+/// `00871d10` divides a `WM_MOUSEMOVE`'s place by.
+const RENDER_WIDTH: u32 = 0x0118_947c;
+const RENDER_HEIGHT: u32 = 0x0118_9480;
+
+/// The size a `WM_MOUSEMOVE`'s place is given in: the renderer's (what the game divides it by),
+/// once it is known; before, the window's record (`window`'s width and height).
+fn move_area(e: &Engine, window: (i32, i32)) -> (i32, i32) {
+    let read = |at: u32| {
+        e.mem
+            .is_mapped(at)
+            .then(|| e.mem.u32(at) as i32)
+            .filter(|&v| v > 0)
+    };
+    match (read(RENDER_WIDTH), read(RENDER_HEIGHT)) {
+        (Some(w), Some(h)) => (w, h),
+        _ => window,
+    }
+}
+
+/// The cursor moved over the game's window, to `at` (its client area's fractions across and down,
+/// `crate::d3d9real::Input::pointer`), with the mouse's `buttons` held (DirectInput's order):
+/// the `WM_MOUSEMOVE` Windows would post there goes into the game's queue, its place in pixels of
+/// the renderer's size, which the game divides it by ([`move_area`]), whatever size the real
+/// window has (the port draws any size into the real window, scaled). Windows keeps one
+/// `WM_MOUSEMOVE` waiting, made from the cursor's latest place: a newer move replaces one not
+/// taken yet. The game's procedure (`0086a0a0`) hands it to `00871d10`, which places the menus'
+/// cursor there when the game's mouse is not exclusive (`bBackground Mouse=1`) and otherwise
+/// leaves it to `DefWindowProcA`. The window layers keep a place only for such a mouse, while the
+/// game's window is the active one. The message's time and point words are not read by the game:
+/// 0 and the client place. Nothing before the game has its window.
+pub fn post_mouse_move(e: &mut Engine, at: [f64; 2], buttons: &[bool; 8]) {
+    let Some((window, width, height)) = mouse_window(e) else {
+        return;
+    };
+    let (width, height) = move_area(e, (width, height));
+    let place = |fraction: f64, size: i32| -> u32 {
+        let most = size.saturating_sub(1).max(0);
+        ((fraction * f64::from(size)).floor() as i32).clamp(0, most) as u32
+    };
+    let (x, y) = (place(at[0], width), place(at[1], height));
+    let wparam = MK_BUTTONS
+        .iter()
+        .zip(buttons)
+        .filter(|(_, held)| **held)
+        .fold(0, |bits, (bit, _)| bits | bit);
+    let message = [
+        window,
+        WM_MOUSEMOVE,
+        wparam,
+        (y << 16) | (x & 0xffff),
+        0,
+        x,
+        y,
+    ];
+    let queue = &mut state!(e).windows.queue;
+    match queue
+        .iter_mut()
+        .find(|m| m[0] == window && m[1] == WM_MOUSEMOVE)
+    {
+        Some(waiting) => *waiting = message,
+        None => queue.push_back(message),
+    }
+}
+
+/// `WM_ACTIVATE`.
+pub const WM_ACTIVATE: u32 = 6;
+
+/// The real window became active again after it was not (`crate::d3d9real::Input::reactivated`,
+/// `wparam` the `WM_ACTIVATE` word: `WA_ACTIVE` 1 or `WA_CLICKACTIVE` 2, the high word set while
+/// minimised): the `WM_ACTIVATE` Windows sends the game's main window goes into the game's queue,
+/// ahead of a waiting mouse move (Windows sends it before the moves that follow). The game's
+/// procedure (`0086a0a0`), for an activation not minimised once `Main` exists, sets `Main` active
+/// and has the controls make the mouse exclusive again (`00a23c00(0)`: level 5, `bBackground
+/// Mouse`'s flag cleared), so after Alt+Tab back the menus follow the mouse's motion again, as in
+/// the original. Its first activation, when the window is made, the game ignores (before `Main`),
+/// and the window layers do not pass it. The deactivation is not passed either, as before (in the
+/// original it sets `Main` inactive and, in the game, opens the pause menu): unchanged here. One
+/// waits at a time. Nothing before the game has its window.
+pub fn post_activate(e: &mut Engine, wparam: u32) {
+    let main = e.kernel.main_window;
+    if main == 0 {
+        return;
+    }
+    let message = [main, WM_ACTIVATE, wparam, 0, 0, 0, 0];
+    let queue = &mut state!(e).windows.queue;
+    match queue.iter_mut().find(|m| m[1] == WM_ACTIVATE) {
+        Some(waiting) => *waiting = message,
+        None => queue.push_front(message),
+    }
+}
+
+// Platform: replaces USER32.DLL DefWindowProcA (import)
+/// `DefWindowProcA(window, message, wParam, lParam)`: the default answer to a message the game's
+/// procedure passes on (`0086a0a0`). Only the message this layer posts is provided:
+/// `WM_MOUSEMOVE` ([`post_mouse_move`]), for which Windows' default does nothing and answers 0.
+/// Another stops the run (none other reaches the game's procedure: the module documentation).
+pub fn def_window_proc_a(_e: &mut Engine, _window: u32, message: u32, _w: u32, _l: u32) -> u32 {
+    match message {
+        WM_MOUSEMOVE => 0,
+        _ => panic!("DefWindowProcA of message {message:#x} is not provided"),
+    }
 }
 
 // Platform: replaces USER32.DLL TranslateMessage (import)
@@ -831,6 +1115,97 @@ mod tests {
             "unix"
         );
         assert_eq!(user_name(vars(&[])), "");
+    }
+
+    /// The pointer speed's answer and line: the player's own value as Windows holds it (report
+    /// 006: the menus' cursor was faster than in the original, which follows it), an odd string
+    /// kept and said, a value of another type kept with its type, a refused read passed on (the
+    /// game keeps its own 6: not set, or too long for any pointer speed), and another system the
+    /// default 10 (no value).
+    #[test]
+    fn the_pointer_speed_is_the_players_own_or_windows_default() {
+        use crate::PointerSpeed::{Missing, Value};
+        let six = b"6\0".to_vec();
+        let (speed, line) = pointer_speed_of(Ok((REG_SZ, six.clone())));
+        assert_eq!(
+            speed,
+            Some(Value {
+                kind: REG_SZ,
+                data: six
+            })
+        );
+        assert_eq!(
+            line,
+            "input: Windows' pointer speed (Mouse settings) is 6: the game's menu cursor speed \
+             follows it, as in the original"
+        );
+        let (speed, line) = pointer_speed_of(Ok((REG_SZ, b"fast\0".to_vec())));
+        assert!(matches!(speed, Some(Value { kind: REG_SZ, .. })));
+        assert!(line.contains("is fast (not a speed from 1 to 20"), "{line}");
+        let (speed, line) = pointer_speed_of(Ok((4, vec![10, 0, 0, 0])));
+        assert_eq!(
+            speed,
+            Some(Value {
+                kind: 4,
+                data: vec![10, 0, 0, 0]
+            })
+        );
+        assert!(
+            line.contains("stored as registry type 4, not as text"),
+            "{line}"
+        );
+        let (speed, line) = pointer_speed_of(Err(Some(2)));
+        assert_eq!(speed, Some(Missing(2)));
+        assert!(
+            line.contains("could not be read (error 2: it is not set): the game keeps its own"),
+            "{line}"
+        );
+        let (speed, line) = pointer_speed_of(Err(Some(234)));
+        assert_eq!(speed, Some(Missing(234)));
+        assert!(line.contains("(error 234): the game keeps its own menu cursor speed (6)"));
+        let (speed, line) = pointer_speed_of(Err(None));
+        assert_eq!(speed, None);
+        assert!(
+            line.ends_with("pointer speed, 10, as a Windows machine has it"),
+            "{line}"
+        );
+    }
+
+    /// The read is the setting Windows' own mouse settings use: `MouseSensitivity` as text, the
+    /// same number `SystemParametersInfoW(SPI_GETMOUSESPEED)` answers (a wrong value name, such as
+    /// its neighbour `MouseSpeed`, a wrong type or a lost value fails here).
+    #[cfg(windows)]
+    #[test]
+    fn the_pointer_speed_read_is_windows_mouse_speed() {
+        #[link(name = "user32")]
+        extern "system" {
+            fn SystemParametersInfoW(
+                action: u32,
+                param: u32,
+                value: *mut core::ffi::c_void,
+                update: u32,
+            ) -> i32;
+        }
+        const SPI_GETMOUSESPEED: u32 = 0x70;
+        let (kind, data) = read_pointer_speed().expect("MouseSensitivity read");
+        assert_eq!(kind, REG_SZ, "a string value");
+        let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+        let read: u32 = std::str::from_utf8(&data[..end])
+            .expect("text")
+            .trim()
+            .parse()
+            .expect("a number");
+        let mut speed = 0u32;
+        // SAFETY: SPI_GETMOUSESPEED writes one int into `speed`.
+        let ok = unsafe {
+            SystemParametersInfoW(SPI_GETMOUSESPEED, 0, (&mut speed as *mut u32).cast(), 0)
+        };
+        assert_ne!(ok, 0, "SPI_GETMOUSESPEED");
+        assert_eq!(read, speed);
+        assert!(matches!(
+            pointer_speed().0,
+            Some(crate::PointerSpeed::Value { .. })
+        ));
     }
 
     fn wide_of(text: &str) -> Vec<u16> {
@@ -933,6 +1308,202 @@ mod tests {
         state!(e).windows.queue.push_back([7, 0x12, 0, 0, 0, 0, 0]);
         assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 1), 1);
         assert_eq!(e.mem.u32(msg + 4), 0x12);
+    }
+
+    /// A window record of the game's (`class` 1).
+    fn record(style: u32, parent: u32, rect: [i32; 4]) -> Window {
+        Window {
+            class: 1,
+            title: Vec::new(),
+            style,
+            ex_style: 0,
+            parent,
+            rect,
+        }
+    }
+
+    /// The cursor's moves over the game's window (a mouse the game made non-exclusive, report 002)
+    /// become the `WM_MOUSEMOVE` Windows posts to the window the game draws in: the renderer's
+    /// child of the main window, in its client pixels at the game's size (here 1920 by 1080, the
+    /// player's), with the buttons held as `MK_*` bits. One waits at a time, the latest place;
+    /// the game takes it with `PeekMessageA`, its procedure gets the four words through
+    /// `DispatchMessageA`, and `DefWindowProcA` answers it with 0. Full screen (no child) the main
+    /// window gets it; before the game has a window nothing is posted.
+    #[test]
+    fn a_cursor_move_is_the_games_wm_mousemove() {
+        let mut e = Engine::new();
+        let unmoved = [false; 8];
+        post_mouse_move(&mut e, [0.5, 0.5], &unmoved);
+        assert!(state!(e).windows.queue.is_empty(), "no window yet");
+        let (main, child) = (0x94, 0xc0);
+        e.kernel.main_window = main;
+        state!(e)
+            .windows
+            .windows
+            .insert(main, record(0x14c0_0000, 0, [5, 5, 1941, 1105]));
+        state!(e)
+            .windows
+            .windows
+            .insert(child, record(0x5000_0000, main, [0, 0, 1920, 1080]));
+        let mut held = [false; 8];
+        held[0] = true;
+        held[4] = true;
+        post_mouse_move(&mut e, [0.25, 0.75], &unmoved);
+        post_mouse_move(&mut e, [0.5, 0.5], &held);
+        let queue: Vec<[u32; 7]> = state!(e).windows.queue.iter().copied().collect();
+        assert_eq!(
+            queue,
+            [[child, WM_MOUSEMOVE, 0x41, (540 << 16) | 960, 0, 960, 540]],
+            "one move waits, the latest"
+        );
+        // The far edge is the last pixel.
+        post_mouse_move(&mut e, [1.0, 1.0], &unmoved);
+        assert_eq!(
+            state!(e).windows.queue[0][3],
+            (1079 << 16) | 1919,
+            "the far edge"
+        );
+        // The game's loop: the message reaches its window's class procedure, here a stand-in.
+        state!(e).windows.classes.push(Class {
+            atom: 1,
+            name: b"Fallout: New Vegas".to_vec(),
+            style: 3,
+            procedure: 0x7eff_f000,
+            instance: 0,
+            menu_name: 0,
+        });
+        thread_local! {
+            static SEEN: std::cell::Cell<[u32; 4]> = const { std::cell::Cell::new([0; 4]) };
+        }
+        e.register(0x7eff_f000, |e, a| {
+            SEEN.with(|s| s.set([a[0], a[1], a[2], a[3]]));
+            crate::Ret {
+                eax: def_window_proc_a(e, a[0], a[1], a[2], a[3]),
+                ..crate::Ret::default()
+            }
+        });
+        let msg = e.mem.alloc(28);
+        assert_eq!(peek_message_a(&mut e, Ptr::new(msg), 0, 0, 0, 1), 1);
+        assert_eq!(dispatch_message_a(&mut e, Ptr::new(msg)), 0);
+        assert_eq!(
+            SEEN.with(std::cell::Cell::get),
+            [child, WM_MOUSEMOVE, 0, (1079 << 16) | 1919]
+        );
+        assert!(state!(e).windows.queue.is_empty());
+        // Full screen: no child, the main window covers the screen and gets the moves.
+        state!(e).windows.windows.remove(&child);
+        state!(e)
+            .windows
+            .windows
+            .insert(main, record(0x9000_0000, 0, [0, 0, 2560, 1440]));
+        post_mouse_move(&mut e, [0.5, 0.25], &unmoved);
+        assert_eq!(
+            state!(e).windows.queue[0][..4],
+            [main, WM_MOUSEMOVE, 0, (360 << 16) | 1280]
+        );
+        // Once the renderer has its size, the place is in its pixels, what the game divides it by
+        // (`00871d10`), whatever the window's record says: here 1920 by 1080 in a 2560 by 1440
+        // window, the fractions given back exactly.
+        if !e.mem.is_mapped(RENDER_WIDTH) {
+            e.map(RENDER_WIDTH & !0xfff, 0x1000);
+        }
+        e.mem.set_u32(RENDER_WIDTH, 1920);
+        e.mem.set_u32(RENDER_HEIGHT, 1080);
+        post_mouse_move(&mut e, [0.5, 0.25], &unmoved);
+        let words = state!(e).windows.queue[0];
+        assert_eq!(words[..4], [main, WM_MOUSEMOVE, 0, (270 << 16) | 960]);
+        assert_eq!(
+            (
+                f64::from(words[3] & 0xffff) / 1920.0,
+                f64::from(words[3] >> 16) / 1080.0
+            ),
+            (0.5, 0.25)
+        );
+    }
+
+    /// The host's moves reach the game before the frame they were taken for, as the exe's loop
+    /// empties its queue before its frame: a move posted while the main loop's empty
+    /// `PeekMessageA` hands the host its turn is answered by that same call, and the next empty
+    /// call starts the frame without a second turn; the call after that ends the next frame.
+    #[test]
+    fn a_move_posted_in_the_hosts_turn_comes_before_the_frame() {
+        thread_local! {
+            static TURNS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        fn turn(e: &mut Engine) -> bool {
+            TURNS.with(|t| t.set(t.get() + 1));
+            e.kernel.main_window = 0x94;
+            state!(e)
+                .windows
+                .windows
+                .insert(0x94, record(0x9000_0000, 0, [0, 0, 1280, 720]));
+            post_mouse_move(e, [0.5, 0.5], &[false; 8]);
+            true
+        }
+        fn idle(_: &mut Engine) -> bool {
+            TURNS.with(|t| t.set(t.get() + 1));
+            true
+        }
+        let mut e = Engine::new();
+        let msg = Ptr::new(e.mem.alloc(28));
+        assert_eq!(
+            peek_with(&mut e, msg, PM_REMOVE, turn),
+            1,
+            "the move, at once"
+        );
+        assert_eq!(e.mem.u32(msg.addr() + 4), WM_MOUSEMOVE);
+        assert_eq!(e.mem.u32(msg.addr() + 12), (360 << 16) | 640);
+        assert_eq!(
+            peek_with(&mut e, msg, PM_REMOVE, idle),
+            0,
+            "the frame starts"
+        );
+        assert_eq!(TURNS.with(std::cell::Cell::get), 1, "no second turn");
+        assert_eq!(state!(e).windows.frames, 1);
+        assert_eq!(
+            peek_with(&mut e, msg, PM_REMOVE, idle),
+            0,
+            "the next frame ends"
+        );
+        assert_eq!(TURNS.with(std::cell::Cell::get), 2);
+        assert_eq!(state!(e).windows.frames, 2);
+        // A turn that posts nothing: the frame starts at once.
+        assert_eq!(peek_with(&mut e, msg, PM_REMOVE, idle), 0);
+        assert_eq!(TURNS.with(std::cell::Cell::get), 3);
+    }
+
+    /// An activation after the window was not active becomes the `WM_ACTIVATE` Windows sends the
+    /// game's main window, ahead of a waiting move, one at a time (the latest); nothing before the
+    /// game has its window.
+    #[test]
+    fn a_reactivation_is_the_games_wm_activate_before_a_move() {
+        let mut e = Engine::new();
+        post_activate(&mut e, 1);
+        assert!(state!(e).windows.queue.is_empty(), "no window yet");
+        e.kernel.main_window = 0x94;
+        state!(e)
+            .windows
+            .windows
+            .insert(0x94, record(0x9000_0000, 0, [0, 0, 1280, 720]));
+        post_mouse_move(&mut e, [0.5, 0.5], &[false; 8]);
+        post_activate(&mut e, 2);
+        post_activate(&mut e, 1);
+        let queue: Vec<[u32; 7]> = state!(e).windows.queue.iter().copied().collect();
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0], [0x94, WM_ACTIVATE, 1, 0, 0, 0, 0]);
+        assert_eq!(queue[1][1], WM_MOUSEMOVE);
+    }
+
+    /// `DefWindowProcA` answers the one message this layer posts as Windows' default does (0) and
+    /// stops on any other, which never reaches the game's procedure.
+    #[test]
+    fn the_default_procedure_answers_a_mouse_move() {
+        let mut e = Engine::new();
+        assert_eq!(def_window_proc_a(&mut e, 0x94, WM_MOUSEMOVE, 0, 0), 0);
+        let other = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            def_window_proc_a(&mut e, 0x94, 0x84, 0, 0)
+        }));
+        assert!(other.is_err(), "WM_NCHITTEST is not provided");
     }
 
     /// The frame the game's renderer adds before it places its window (exe 0x004da951): the
