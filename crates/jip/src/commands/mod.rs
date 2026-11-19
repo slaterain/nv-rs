@@ -69,6 +69,7 @@ pub mod jip_fn_string;
 pub mod jip_fn_string_regex;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
+pub mod jip_fn_ui_code;
 pub mod jip_fn_ui_cursor;
 pub mod jip_fn_ui_menus;
 pub mod jip_fn_ui_nodes;
@@ -259,6 +260,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_lights::COMMANDS,
     // `SetCursorPos`.
     jip_fn_ui_cursor::COMMANDS,
+    // The recipe menu, quest messages and item filter (code bytes as seams and wraps).
+    jip_fn_ui_code::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -298,6 +301,7 @@ pub fn install(e: &mut Engine) {
     jip_fn_actor_p2::install(e);
     jip_fn_camera::install(e);
     jip_fn_rock_it::install(e);
+    jip_fn_ui_code::install(e);
     for list in ALL {
         for &(opcode, execute) in list.iter() {
             crate::table::set_handlers(e, opcode, Some(execute), None);
@@ -912,6 +916,8 @@ mod tests {
             // jip_fn_misc_ref_lights (AttachLight, RemoveLight).
             "jip_fn_misc_ref",
             // jip_fn_ui_cursor (SetCursorPos).
+            "jip_fn_ui",
+            // jip_fn_ui_code (the recipe menu, quest messages, item filter).
             "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
