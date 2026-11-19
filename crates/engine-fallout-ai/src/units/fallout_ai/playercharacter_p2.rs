@@ -5124,7 +5124,11 @@ pub fn fn_00954610(
         if e.call(0x0052_5980, &args![weapon, player_pointer]).u32() == item {
             let process = process_of(e, this);
             let entry = e.vcall(process, 0x14c, &args![]).u32();
-            e.call(0x006e_cd40, &args![entry, 0u32]);
+            // lStewieAl's Tweaks' row S0089.05 (`RememberAmmoCountOnLoad` at `0x9546EE`): no
+            // ammunition entry, no count to empty.
+            if !(entry == 0 && e.stewie(engine_core::extend::stewie::DROP_AMMO_NULL_ENTRY)) {
+                e.call(0x006e_cd40, &args![entry, 0u32]);
+            }
             for _ in 0..2 {
                 let biped = e.call(0x0095_0bb0, &args![this, 0u32]).u32();
                 let node = e.call(0x004a_ae30, &args![biped, ROUND_NODE_NAME]).u32();
@@ -12921,9 +12925,64 @@ mod tests {
         assert_eq!(calls_to(&e, 0x009c_8950), vec![vec![OBJECT_011F2250, 0, 0]]);
     }
 
+    /// lStewieAl's Tweaks' row S0089.05 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn dropping_the_current_ammunition_empties_it_and_places_the_reference() {
+        for on in [false, true] {
+            dropping_the_current_ammunition_empties_it_and_places_the_reference_row(on);
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0089.05 (`0x9546EE`): dropping the weapon's current ammunition
+    /// while the process has no ammunition entry (slot 0x14c answers 0): the exe empties the count
+    /// of nothing (`006ecd40` writes +4, as its stand-in here does) and stops; with the row on
+    /// nothing is emptied and the drop goes on (the round nodes hidden, the reference placed).
+    #[test]
+    fn s0089_05_dropping_ammunition_with_no_ammunition_entry() {
+        for on in [false, true] {
+            let mut e = engine();
+            list_helpers(&mut e);
+            let player = new_player(&mut e);
+            let p = player.addr();
+            e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+            process_with_items(&mut e, player, 0);
+            let item = e.mem.alloc(8);
+            slot(&mut e, item, 0xe4, eax(1));
+            double(&mut e, FORM_TYPE_OF, eax(0x29));
+            double(&mut e, 0x008a_1710, eax(0x31));
+            double(&mut e, 0x0052_5980, eax(item));
+            double(&mut e, 0x0095_0bb0, eax(0x4242));
+            double(&mut e, 0x004a_ae30, eax(0x4343));
+            e.register_double(0x006e_cd40, |e, a| {
+                e.mem.set_u32(a[0] + 4, a[1]);
+                Ret::default()
+            });
+            let reference = e.mem.alloc(0x20);
+            slot(&mut e, reference, 0x1d0, eax(0));
+            recording_slot(&mut e, p, 0x17c, eax(reference));
+            record_appends(&mut e);
+            e.set_stewie(engine_core::extend::stewie::DROP_AMMO_NULL_ENTRY, on);
+            start_log(&mut e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                fn_00954610(&mut e, player, item, 0x22, 0x33, 0x44, 0x55)
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(run.unwrap(), reference);
+                assert!(calls_to(&e, 0x006e_cd40).is_empty());
+                assert_eq!(
+                    calls_to(&e, 0x0045_0f90),
+                    vec![vec![0x4343, 1], vec![0x4343, 1]]
+                );
+            }
+        }
+    }
+
+    fn dropping_the_current_ammunition_empties_it_and_places_the_reference_row(on: bool) {
         let mut e = engine();
+        e.set_stewie(engine_core::extend::stewie::DROP_AMMO_NULL_ENTRY, on);
         list_helpers(&mut e);
         let player = new_player(&mut e);
         let p = player.addr();
