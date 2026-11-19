@@ -703,3 +703,114 @@ fn cleanup_expired_data_diff() {
     .run()
     .assert_same();
 }
+
+/// A queue as the clean-up builds it (the exe's base constructor's layout: vtable, bucket count,
+/// bucket array, item count) of `size` buckets, holding six items keyed (0x1000 + i % 3, i), value
+/// 50 + i; with `own_slots` its vtable's hash and key compare are other functions (stand-ins that
+/// answer as the exe's do), so the insert asks them as the exe asks.
+fn queue_world(e: &mut Engine, size: u32, own_slots: bool) -> u32 {
+    heap(e);
+    let vtable = e.mem.alloc(0x20);
+    let slots = [
+        0x0084_b540u32,
+        if own_slots { 0x00fd_0004 } else { 0x0084_b930 },
+        if own_slots { 0x00fd_0008 } else { 0x0084_b950 },
+        0x0084_b990,
+        0x0045_34f0,
+        0x0084_ba50,
+        0x0084_ba70,
+    ];
+    for (i, s) in slots.iter().enumerate() {
+        e.mem.set_u32(vtable + 4 * i as u32, *s);
+    }
+    e.register(0x00fd_0004, |e, a| ret(a[1] % e.mem.u32(a[0] + 4)));
+    e.register(0x00fd_0008, |_, a| {
+        ret(u32::from(a[1] == a[3] && a[2] == a[4]))
+    });
+    let queue = e.mem.alloc(0x10);
+    let table = e.mem.alloc(size * 4);
+    e.mem.set_u32(queue, vtable);
+    e.mem.set_u32(queue + 4, size);
+    e.mem.set_u32(queue + 8, table);
+    for i in 0..6u32 {
+        let (low, high) = (0x1000 + i % 3, i);
+        let item = e.mem.alloc(0x18);
+        let bucket = table + (low % size) * 4;
+        let head = e.mem.u32(bucket);
+        e.mem.set_u32(item, head);
+        e.mem.set_u32(item + 8, low);
+        e.mem.set_u32(item + 0xc, high);
+        e.mem.set_u32(item + 0x10, 50 + i);
+        e.mem.set_u32(bucket, item);
+    }
+    e.mem.set_u32(queue + 0xc, 6);
+    queue
+}
+
+/// The queue's typed insert, hash and key compare against their translations: keys already there
+/// (their value replaced) and new ones (an item made, filled, put at its bucket's head, counted), one
+/// bucket for all and several, the exe's slots and other ones.
+#[test]
+fn expiry_queue_functions_diff() {
+    use engine_core::typed::diff::{Diff, Input};
+    use engine_core::typed::leaf;
+    use engine_typed::dispatch;
+    Diff::new(engine_core::entry!(
+        0x0084_b7c0,
+        dispatch::saveload::queue_insert(Ptr<_>, u32, u32, u32)
+    ))
+    .family(&dispatch::DISPATCH)
+    .family(&leaf::LEAVES)
+    .inputs(&[
+        Input::Of(&[1, 3, 37]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0x1000, 0x1001, 0x2000]),
+        Input::Of(&[0, 1, 4, 99]),
+    ])
+    .setup(|e, case| {
+        let queue = queue_world(e, case.word(0), case.word(1) == 1);
+        vec![queue, case.word(2), case.word(3), 0x77]
+    })
+    .run()
+    .assert_same();
+    Diff::new(engine_core::entry!(
+        0x0084_b930,
+        dispatch::saveload::queue_hash(Ptr<_>, u32, u32) -> u32
+    ))
+    .family(&dispatch::DISPATCH)
+    .inputs(&[
+        Input::Of(&[1, 37, 4999]),
+        Input::Of(&[0, 36, 37, 0xda726, u32::MAX]),
+        Input::Of(&[0, 7]),
+    ])
+    .setup(|e, case| {
+        let queue = e.mem.alloc(0x10);
+        e.mem.set_u32(queue + 4, case.word(0));
+        vec![queue, case.word(1), case.word(2)]
+    })
+    .run()
+    .assert_same();
+    Diff::new(engine_core::entry!(
+        0x0084_b950,
+        dispatch::saveload::queue_keys_equal(Ptr<_>, u32, u32, u32, u32) -> bool
+    ))
+    .family(&dispatch::DISPATCH)
+    .inputs(&[
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+        Input::Of(&[0, 1]),
+    ])
+    .setup(|e, case| {
+        let queue = e.mem.alloc(0x10);
+        vec![
+            queue,
+            case.word(0),
+            case.word(1),
+            case.word(2),
+            case.word(3),
+        ]
+    })
+    .run()
+    .assert_same();
+}
