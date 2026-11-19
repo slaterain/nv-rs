@@ -589,7 +589,16 @@ pub fn fn_004d66d0(e: &mut Engine, this: Ptr, parent: u32, object: Ptr) {
                 let properties = e.call(0x0043_0830, &args![object]).u32();
                 let node = e.call(LIST_NEXT, &args![properties, position]).u32();
                 let property = typed_call!(leaf::FAMILY, 0x0055_9450, leaf::word_at_0(e, node));
-                if e.call(0x0043_b230, &args![property]).u32() != 0 {
+                // lStewieAl's Tweaks' row S0199.09 (`MiscCrashFixes`, `0x4D6AA5`): an empty entry of
+                // the property list has no controllers.
+                let controllers = if property == 0
+                    && e.stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL)
+                {
+                    0
+                } else {
+                    e.call(0x0043_b230, &args![property]).u32()
+                };
+                if controllers != 0 {
                     entry_has_controllers = true;
                     break;
                 }
@@ -2065,6 +2074,43 @@ mod n039_tests {
         );
         assert_eq!(calls_to(&e, SPRINTF_S)[0][2], 0x0102_0e7c);
         assert!(calls_to(&e, STRCAT_S).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0199.09 (`MiscCrashFixes`, `0x4D6AA5`): ShowSceneGraph lists an object
+    /// whose property list holds an empty entry: the exe asks the missing property for its controllers
+    /// (`0043b230`, its word at +0xC) and stops; with the row the entry has none and the object is
+    /// listed as a leaf.
+    #[test]
+    fn s0199_09_an_empty_entry_in_the_property_list() {
+        for on in [false, true] {
+            let mut e = Engine::new();
+            text_and_new(&mut e);
+            let inserted = tree_double(&mut e, 0);
+            let object = leaf_object(&mut e);
+            // The controllers of an object: its word at +0xC, as the exe reads it.
+            e.register(0x0043_b230, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+            // One entry, holding no property.
+            let node = e.mem.alloc(8);
+            let list = e.mem.alloc(8);
+            e.mem.set_u32(list, node);
+            e.register_double(0x0043_0830, move |_, _| list.into_ret());
+            e.register(0x0076_b610, |_, _| false.into_ret());
+            e.register(LIST_NEXT, |e, a| {
+                let node = e.mem.u32(a[1]);
+                e.mem.set_u32(a[1], 0);
+                node.into_ret()
+            });
+            e.set_stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL, on);
+            let this = e.mem.alloc(0x30);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x004d_66d0, &args![this, 0x10u32, object]);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert_eq!(inserted.borrow()[0].3, object);
+            }
+        }
     }
 
     #[test]
