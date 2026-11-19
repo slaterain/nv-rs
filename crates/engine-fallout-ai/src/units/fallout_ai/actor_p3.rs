@@ -16807,6 +16807,8 @@ mod tests {
         stub_with(e, WEAPON_GET_ATTACK_ANIM, |e, a| {
             ret(u32::from(e.mem.u8(a[0] + 0x103)) + 0xb1)
         });
+        // The entry's form (`0044ddc0`: its word at +8).
+        stub_with(e, 0x0044_ddc0, |e, a| ret(e.mem.u32(a[0] + 8)));
         actor
     }
 
