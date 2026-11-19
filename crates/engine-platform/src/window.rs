@@ -170,24 +170,32 @@ fn user_name(var: impl Fn(&str) -> Option<String>) -> String {
 
 /// Windows' pointer speed for the game's menu cursor (`engine_core`'s `Kernel::pointer_speed`,
 /// which the game reads as `HKCU\Control Panel\Mouse` `MouseSensitivity` at its input start), with
-/// the log line saying it: on Windows the player's own, read once (only read: nothing is written);
-/// elsewhere `None`, the 10 a plain Windows machine starts with.
-pub fn pointer_speed() -> (Option<Vec<u8>>, String) {
+/// the log line saying it: on Windows the player's own, read once as the game reads it
+/// (`RegQueryValueExA`: the value's type and bytes, or the error Windows gives; only read, nothing
+/// is written); elsewhere `None`, the 10 a plain Windows machine starts with.
+pub fn pointer_speed() -> (Option<crate::PointerSpeed>, String) {
     #[cfg(windows)]
-    let read = read_pointer_speed();
+    let read = read_pointer_speed().map_err(Some);
     #[cfg(not(windows))]
     let read = Err(None);
     pointer_speed_of(read)
 }
 
-/// [`pointer_speed`]'s answer and line for what the read gave: the value's text (without its
-/// zero), or why there is none (Windows' error code; `None`: not Windows). A value that is not a
-/// whole number from 1 to 20 is still the game's (it reads it with `atol`), and the line says so.
-fn pointer_speed_of(read: Result<Vec<u8>, Option<u32>>) -> (Option<Vec<u8>>, String) {
+/// `REG_SZ`: a string value.
+const REG_SZ: u32 = 1;
+
+/// [`pointer_speed`]'s answer and line for what the read gave: the value's type and bytes, or why
+/// there is none (Windows' error code, which the game is answered too, so it keeps its own 6 as
+/// in the original; `None`: not Windows). A string that is not a whole number from 1 to 20 is
+/// still the game's (it reads it with `atol`), and so is a value of another type; the line says so.
+fn pointer_speed_of(
+    read: Result<(u32, Vec<u8>), Option<u32>>,
+) -> (Option<crate::PointerSpeed>, String) {
     const FOLLOWS: &str = "the game's menu cursor speed follows it, as in the original";
     match read {
-        Ok(text) => {
-            let shown = String::from_utf8_lossy(&text).into_owned();
+        Ok((kind, data)) if kind == REG_SZ => {
+            let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+            let shown = String::from_utf8_lossy(&data[..end]).into_owned();
             let usual = shown
                 .trim()
                 .parse::<u32>()
@@ -198,17 +206,25 @@ fn pointer_speed_of(read: Result<Vec<u8>, Option<u32>>) -> (Option<Vec<u8>>, Str
                 " (not a speed from 1 to 20: the game reads it as Windows holds it)"
             };
             (
-                Some(text),
+                Some(crate::PointerSpeed::Value { kind, data }),
                 format!(
                     "input: Windows' pointer speed (Mouse settings) is {shown}{note}: {FOLLOWS}"
                 ),
             )
         }
-        Err(Some(code)) => (
-            None,
+        Ok((kind, data)) => (
+            Some(crate::PointerSpeed::Value { kind, data }),
             format!(
-                "input: Windows' pointer speed could not be read (error {code}): the menus' cursor \
-                 takes Windows' default, 10"
+                "input: Windows' pointer speed (Mouse settings) is stored as registry type {kind}, \
+                 not as text: the game reads its bytes as Windows hands them, as the original does"
+            ),
+        ),
+        Err(Some(code)) => (
+            Some(crate::PointerSpeed::Missing(code)),
+            format!(
+                "input: Windows' pointer speed could not be read (error {code}{}): the game keeps \
+                 its own menu cursor speed (6), as the original does",
+                if code == 2 { ": it is not set" } else { "" }
             ),
         ),
         Err(None) => (
@@ -220,45 +236,63 @@ fn pointer_speed_of(read: Result<Vec<u8>, Option<u32>>) -> (Option<Vec<u8>>, Str
     }
 }
 
-/// `HKCU\Control Panel\Mouse` `MouseSensitivity` as text (`RegGetValueA`, a string value only):
-/// its bytes without the zero, or Windows' error code.
+/// `HKCU\Control Panel\Mouse` `MouseSensitivity` read as the game reads it (`RegOpenKeyExA`, then
+/// `RegQueryValueExA` into a buffer larger than any pointer speed): the value's type and bytes,
+/// or Windows' error code.
 #[cfg(windows)]
-fn read_pointer_speed() -> Result<Vec<u8>, Option<u32>> {
+fn read_pointer_speed() -> Result<(u32, Vec<u8>), u32> {
     #[link(name = "advapi32")]
     extern "system" {
-        fn RegGetValueA(
+        fn RegOpenKeyExA(
             key: isize,
             sub_key: *const u8,
+            options: u32,
+            access: u32,
+            opened: *mut isize,
+        ) -> i32;
+        fn RegQueryValueExA(
+            key: isize,
             value: *const u8,
-            flags: u32,
+            reserved: *mut u32,
             kind: *mut u32,
             data: *mut u8,
             size: *mut u32,
         ) -> i32;
+        fn RegCloseKey(key: isize) -> i32;
     }
     const HKEY_CURRENT_USER: isize = 0x8000_0001_u32 as i32 as isize;
-    const RRF_RT_REG_SZ: u32 = 2;
-    let mut data = [0u8; 64];
-    let mut size = data.len() as u32;
-    // SAFETY: the key and value names are zero-terminated, the buffer and its size are this
-    // function's own, and the call only reads the registry.
-    let status = unsafe {
-        RegGetValueA(
+    const KEY_READ: u32 = 0x2_0019;
+    let mut key = 0isize;
+    // SAFETY: the key and value names are zero-terminated, the out words and the buffer are this
+    // function's own with their sizes, and the calls only read the registry.
+    unsafe {
+        let opened = RegOpenKeyExA(
             HKEY_CURRENT_USER,
-            b"Control Panel\\Mouse\0".as_ptr(),
+            b"Control Panel\Mouse\0".as_ptr(),
+            0,
+            KEY_READ,
+            &mut key,
+        );
+        if opened != 0 {
+            return Err(opened as u32);
+        }
+        let mut data = [0u8; 256];
+        let mut size = data.len() as u32;
+        let mut kind = 0u32;
+        let status = RegQueryValueExA(
+            key,
             b"MouseSensitivity\0".as_ptr(),
-            RRF_RT_REG_SZ,
             std::ptr::null_mut(),
+            &mut kind,
             data.as_mut_ptr(),
             &mut size,
-        )
-    };
-    if status != 0 {
-        return Err(Some(status as u32));
+        );
+        RegCloseKey(key);
+        if status != 0 {
+            return Err(status as u32);
+        }
+        Ok((kind, data[..(size as usize).min(data.len())].to_vec()))
     }
-    let text = &data[..(size as usize).min(data.len())];
-    let end = text.iter().position(|&b| b == 0).unwrap_or(text.len());
-    Ok(text[..end].to_vec())
 }
 
 // Platform: replaces STEAM_API.DLL SteamAPI_Init (import)
@@ -927,31 +961,87 @@ mod tests {
     }
 
     /// The pointer speed's answer and line: the player's own value as Windows holds it (report
-    /// 006: the menus' cursor was faster than in the original, which follows it), an odd value
-    /// kept and said, a failed read or another system the default 10 (no value).
+    /// 006: the menus' cursor was faster than in the original, which follows it), an odd string
+    /// kept and said, a value of another type kept with its type, a refused read passed on (the
+    /// game keeps its own 6: not set, or too long for any pointer speed), and another system the
+    /// default 10 (no value).
     #[test]
     fn the_pointer_speed_is_the_players_own_or_windows_default() {
-        let (speed, line) = pointer_speed_of(Ok(b"6".to_vec()));
-        assert_eq!(speed.as_deref(), Some(&b"6"[..]));
+        use crate::PointerSpeed::{Missing, Value};
+        let six = b"6\0".to_vec();
+        let (speed, line) = pointer_speed_of(Ok((REG_SZ, six.clone())));
+        assert_eq!(speed, Some(Value { kind: REG_SZ, data: six }));
         assert_eq!(
             line,
             "input: Windows' pointer speed (Mouse settings) is 6: the game's menu cursor speed \
              follows it, as in the original"
         );
-        let (speed, line) = pointer_speed_of(Ok(b"fast".to_vec()));
-        assert_eq!(speed.as_deref(), Some(&b"fast"[..]));
+        let (speed, line) = pointer_speed_of(Ok((REG_SZ, b"fast\0".to_vec())));
+        assert!(matches!(speed, Some(Value { kind: REG_SZ, .. })));
         assert!(line.contains("is fast (not a speed from 1 to 20"), "{line}");
+        let (speed, line) = pointer_speed_of(Ok((4, vec![10, 0, 0, 0])));
+        assert_eq!(
+            speed,
+            Some(Value {
+                kind: 4,
+                data: vec![10, 0, 0, 0]
+            })
+        );
+        assert!(line.contains("stored as registry type 4, not as text"), "{line}");
         let (speed, line) = pointer_speed_of(Err(Some(2)));
-        assert_eq!(speed, None);
-        assert!(line.contains("could not be read (error 2)"), "{line}");
+        assert_eq!(speed, Some(Missing(2)));
+        assert!(
+            line.contains("could not be read (error 2: it is not set): the game keeps its own"),
+            "{line}"
+        );
+        let (speed, line) = pointer_speed_of(Err(Some(234)));
+        assert_eq!(speed, Some(Missing(234)));
+        assert!(line.contains("(error 234): the game keeps its own menu cursor speed (6)"));
         let (speed, line) = pointer_speed_of(Err(None));
         assert_eq!(speed, None);
         assert!(
             line.ends_with("pointer speed, 10, as a Windows machine has it"),
             "{line}"
         );
-        // On this system the read itself answers a value or a reason, never stopping.
-        let _ = pointer_speed();
+    }
+
+    /// The read is the setting Windows' own mouse settings use: `MouseSensitivity` as text, the
+    /// same number `SystemParametersInfoW(SPI_GETMOUSESPEED)` answers (a wrong value name, such as
+    /// its neighbour `MouseSpeed`, a wrong type or a lost value fails here).
+    #[cfg(windows)]
+    #[test]
+    fn the_pointer_speed_read_is_windows_mouse_speed() {
+        #[link(name = "user32")]
+        extern "system" {
+            fn SystemParametersInfoW(
+                action: u32,
+                param: u32,
+                value: *mut core::ffi::c_void,
+                update: u32,
+            ) -> i32;
+        }
+        const SPI_GETMOUSESPEED: u32 = 0x70;
+        let (kind, data) = read_pointer_speed().expect("MouseSensitivity read");
+        assert_eq!(kind, REG_SZ, "a string value");
+        let end = data.iter().position(|&b| b == 0).unwrap_or(data.len());
+        let read: u32 = std::str::from_utf8(&data[..end])
+            .expect("text")
+            .trim()
+            .parse()
+            .expect("a number");
+        let mut speed = 0u32;
+        // SAFETY: SPI_GETMOUSESPEED writes one int into `speed`.
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_GETMOUSESPEED,
+                0,
+                (&mut speed as *mut u32).cast(),
+                0,
+            )
+        };
+        assert_ne!(ok, 0, "SPI_GETMOUSESPEED");
+        assert_eq!(read, speed);
+        assert!(matches!(pointer_speed().0, Some(crate::PointerSpeed::Value { .. })));
     }
 
     fn wide_of(text: &str) -> Vec<u16> {
