@@ -1,7 +1,21 @@
 //! The game's four users over several kinds of pad: the system's XInput pads first, then the
-//! other lists (the PlayStation pads read through HID on Windows).
+//! other lists (the PlayStation pads read through HID on Windows, the pads of Linux's event
+//! devices).
 
 use super::{PadSource, ERROR_DEVICE_NOT_CONNECTED, ERROR_SUCCESS, USERS};
+
+/// No XInput: the system has none (Linux), so a [`Chain`] of it is only its lists.
+pub enum NoXInput {}
+
+impl PadSource for NoXInput {
+    fn get_state(&mut self, _: u32, _: &mut [u8; 16]) -> u32 {
+        match *self {}
+    }
+
+    fn set_state(&mut self, _: u32, _: &[u8; 4]) -> u32 {
+        match *self {}
+    }
+}
 
 /// A list of pads of one kind: the `n`-th connected one, `n` from 0.
 pub trait PadList: Send {
