@@ -196,6 +196,54 @@ fn public_table_of(run: &[u8], tables: &[(&'static str, Vec<u8>)]) -> Option<&'s
         .map(|(name, _)| *name)
 }
 
+/// One program's shared runs judged: the runs counted (longest first; filler not counted), those
+/// left out as inside a public table (with the table's name), and whether the longest counted is
+/// over the `--max-run` limit.
+struct Verdict {
+    counted: Vec<(usize, usize, usize)>,
+    left_out: Vec<((usize, usize, usize), &'static str)>,
+    over: bool,
+}
+
+impl Verdict {
+    fn total(&self) -> usize {
+        self.counted.iter().map(|r| r.1).sum()
+    }
+
+    fn longest(&self) -> usize {
+        self.counted.first().map_or(0, |r| r.1)
+    }
+}
+
+/// The verdict on `runs` of `data` (from [`shared_runs`]): filler dropped, runs inside a public
+/// table left out, the rest counted against `max_run`.
+fn verdict(
+    data: &[u8],
+    runs: Vec<(usize, usize, usize)>,
+    tables: &[(&'static str, Vec<u8>)],
+    max_run: Option<usize>,
+) -> Verdict {
+    let mut counted = Vec::new();
+    let mut left_out = Vec::new();
+    for run in runs {
+        let bytes = &data[run.0..run.0 + run.1];
+        if is_filler(bytes) {
+            continue;
+        }
+        match public_table_of(bytes, tables) {
+            Some(table) => left_out.push((run, table)),
+            None => counted.push(run),
+        }
+    }
+    counted.sort_by_key(|r| std::cmp::Reverse(r.1));
+    let over = max_run.is_some_and(|limit| counted.first().is_some_and(|r| r.1 > limit));
+    Verdict {
+        counted,
+        left_out,
+        over,
+    }
+}
+
 /// The maximal runs of `data` of at least `MIN_RUN` bytes shared with the files indexed in `index`.
 /// (offset in `data`, length, the indexed file's number).
 fn shared_runs(
@@ -434,38 +482,38 @@ fn main() {
             if !is_program(file, &data) {
                 continue;
             }
-            let (public, mut runs): (Vec<_>, Vec<_>) = shared_runs(&data, &reference, &index)
-                .into_iter()
-                .filter(|&(at, length, _)| !is_filler(&data[at..at + length]))
-                .partition(|&(at, length, _)| {
-                    public_table_of(&data[at..at + length], &tables).is_some()
-                });
-            for &(at, length, _) in &public {
-                let table = public_table_of(&data[at..at + length], &tables).unwrap_or_default();
-                println!(
-                    "{}: left out: {length} bytes at {at:#x}, inside {table}",
-                    file.display()
-                );
-            }
-            runs.sort_by_key(|r| std::cmp::Reverse(r.1));
-            let total: usize = runs.iter().map(|r| r.1).sum();
+            let v = verdict(
+                &data,
+                shared_runs(&data, &reference, &index),
+                &tables,
+                max_run,
+            );
+            // The summary line ends with "longest N": check-unix-package.ps1 reads it so.
             println!(
-                "{}: {} bytes, shares {} runs of {MIN_RUN}+ bytes, {} bytes in all, longest {} \
-                 ({} more inside public tables, left out)",
+                "{}: {} bytes, shares {} runs of {MIN_RUN}+ bytes, {} bytes in all, longest {}",
                 file.display(),
                 data.len(),
-                runs.len(),
-                total,
-                runs.first().map_or(0, |r| r.1),
-                public.len()
+                v.counted.len(),
+                v.total(),
+                v.longest()
             );
-            if let Some(limit) = max_run.filter(|&l| runs.first().is_some_and(|r| r.1 > l)) {
+            println!(
+                "{}: {} runs inside public tables, left out",
+                file.display(),
+                v.left_out.len()
+            );
+            for &((at, length, _), table) in &v.left_out {
+                println!("  left out: {length} bytes at {at:#x}, inside {table}");
+            }
+            if v.over {
                 println!(
-                    "FOUND a run shared with the game longer than {limit} bytes in {}",
+                    "FOUND a run shared with the game longer than {} bytes in {}",
+                    max_run.unwrap_or_default(),
                     file.display()
                 );
                 bad += 1;
             }
+            let runs = v.counted;
             for &(at, length, n) in runs.iter().take(25) {
                 println!(
                     "  {length} bytes at {at:#x}, with {}: {}",
@@ -764,5 +812,67 @@ mod tests {
             "too little of a table"
         );
         assert_eq!(public_table_of(&[0u8; 200], &tables), None);
+    }
+
+    /// The runs `data` shares with `reference` (each indexed as `main` indexes the game).
+    fn shared(data: &[u8], reference: &[u8]) -> Vec<(usize, usize, usize)> {
+        let reference = vec![reference.to_vec()];
+        let mut index: HashMap<u64, Vec<(u32, u32)>> = HashMap::new();
+        let mut at = 0;
+        while at + WINDOW <= reference[0].len() {
+            let w = &reference[0][at..at + WINDOW];
+            if !is_filler(w) {
+                index.entry(fnv(w)).or_default().push((0, at as u32));
+            }
+            at += STEP;
+        }
+        shared_runs(data, &reference, &index)
+    }
+
+    /// A program and a game sharing `content` (with different bytes around it on each side).
+    fn sharing(content: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut game = vec![7u8; 37];
+        game.extend_from_slice(content);
+        game.extend_from_slice(&[9u8; 100]);
+        let mut program = vec![2u8; 101];
+        program.extend_from_slice(content);
+        program.extend_from_slice(&[3u8; 50]);
+        (program, game)
+    }
+
+    /// The verdict, end to end: the CRC tables alone shared (the preview's 4,101 bytes) pass with
+    /// one run left out; the tables with 5,000 more bytes after them, and 5,000 bytes alone, fail
+    /// the 4,096 limit; under the limit they pass, counted.
+    #[test]
+    fn the_verdict_leaves_out_a_table_and_counts_the_rest() {
+        let tables = public_tables();
+        let mut table = vec![0u8];
+        table.extend_from_slice(&tables[0].1[..4100]);
+        // Bytes with no repeats inside them (a repeating pattern would be found as several runs).
+        let mut x = 1u32;
+        let bytes: Vec<u8> = (0..5000)
+            .map(|_| {
+                x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                (x >> 16) as u8 | 1
+            })
+            .collect();
+        let (program, game) = sharing(&table);
+        let v = verdict(&program, shared(&program, &game), &tables, Some(4096));
+        assert_eq!(v.left_out.len(), 1);
+        assert_eq!(v.left_out[0].0 .1, 4101);
+        assert!(v.counted.is_empty() && !v.over && v.longest() == 0);
+        let mut both = table.clone();
+        both.extend_from_slice(&bytes);
+        let (program, game) = sharing(&both);
+        let v = verdict(&program, shared(&program, &game), &tables, Some(4096));
+        assert!(v.left_out.is_empty());
+        assert_eq!((v.longest(), v.over), (9101, true));
+        let (program, game) = sharing(&bytes);
+        let v = verdict(&program, shared(&program, &game), &tables, Some(4096));
+        assert_eq!((v.longest(), v.total(), v.over), (5000, 5000, true));
+        let v = verdict(&program, shared(&program, &game), &tables, Some(5000));
+        assert!(!v.over, "at the limit: passes");
+        let v = verdict(&program, shared(&program, &game), &tables, None);
+        assert!(!v.over, "no limit");
     }
 }
