@@ -7963,7 +7963,10 @@ mod tests {
             e.call(0x007a_e420, &args![menu]);
             (calls(&e, MATRIX_SET_ROTATION), rotate)
         };
-        assert!(turned(9000, -9000).0.is_empty(), "inside the moved dead zone");
+        assert!(
+            turned(9000, -9000).0.is_empty(),
+            "inside the moved dead zone"
+        );
         let (rotations, rotate) = turned(8000, -9000);
         let ratio = (1000.0f64 / -24768.0) as f32;
         let by = (f64::from(ratio) * rotate * 100.0 / 1000.0) as f32;

@@ -9283,9 +9283,17 @@ mod tests {
         assert_eq!(run(0x21f1, -0x2200, 0), (0, 1, 0));
         assert_eq!(run(0x2200, 0x2200, 0), (0, 0, 0), "at the moved dead zone");
         assert_eq!(run(0x2200, -0x2200, 0), (0, 0, 0));
-        assert_eq!(run(0x2201, 0x2200, 0x2200), (0, 0, 1), "inside on both axes");
+        assert_eq!(
+            run(0x2201, 0x2200, 0x2200),
+            (0, 0, 1),
+            "inside on both axes"
+        );
         assert_eq!(run(0x2201, 0x2200, -0x2200), (0, 0, 1));
-        assert_eq!(run(0x21f1, 0x2000, 0x2200), (0, 0, 0), "the other axis outside");
+        assert_eq!(
+            run(0x21f1, 0x2000, 0x2200),
+            (0, 0, 0),
+            "the other axis outside"
+        );
     }
 
     #[test]

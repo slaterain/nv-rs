@@ -18578,11 +18578,19 @@ mod tests {
         // The second stick: the zoom (axis 10), then the yaw (axis 9).
         let outside = run(9001, true, 0, 9000);
         for dead_zone in [0x21f1, 9000] {
-            assert_eq!(run(dead_zone, true, 0, 9000).1, outside.1 + 1, "{dead_zone}");
+            assert_eq!(
+                run(dead_zone, true, 0, 9000).1,
+                outside.1 + 1,
+                "{dead_zone}"
+            );
         }
         let outside = run(9001, true, 9000, 0);
         for dead_zone in [0x21f1, 9000] {
-            assert_eq!(run(dead_zone, true, 9000, 0).0, outside.0 + 1, "{dead_zone}");
+            assert_eq!(
+                run(dead_zone, true, 9000, 0).0,
+                outside.0 + 1,
+                "{dead_zone}"
+            );
         }
     }
 
