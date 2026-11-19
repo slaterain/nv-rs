@@ -407,6 +407,7 @@ fn the_item_filter() {
         0,
         "a note's name"
     );
+    call(&mut e, 0x272d, &[s(b"RIFLE")]);
     OUT.with(|o| o.set(1));
     e.mem.set_u32(entry + 8, rifle);
     assert_eq!(
