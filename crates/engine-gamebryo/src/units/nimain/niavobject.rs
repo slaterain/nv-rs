@@ -2746,6 +2746,9 @@ mod tests {
             set_properties(&mut e, this, &[0, p]);
             e.set_stewie(engine_core::extend::stewie::SHOW_SCENE_GRAPH_NULL, on);
             let strings: Ptr<NiTArray> = e.new_object();
+            let base = e.mem.alloc(0x100);
+            e.set(strings, NiTArray::m_pBase, base);
+            e.set(strings, NiTArray::m_usMaxSize, 32);
             e.set(strings, NiTArray::m_usGrowBy, 8);
             e.call_log = Some(vec![]);
             let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
