@@ -257,6 +257,7 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref_lights::COMMANDS,
     // `SetCursorPos`.
     jip_fn_ui_cursor::COMMANDS,
+    // The recipe menu, quest messages and item filter (code bytes as seams and wraps).
     jip_fn_ui_code::COMMANDS,
 ];
 
