@@ -22,6 +22,9 @@ type Init = (u32, u32, Vec<u8>, u32);
 thread_local! {
     /// Each box shown: its message, title (None for 0), callback and buttons' texts.
     static SHOWN: RefCell<Vec<Shown>> = const { RefCell::new(Vec::new()) };
+    /// What G55's two width seams answered at each `ShowMessageBox` call (as `LoadNextMessage`,
+    /// run inside it when no message menu is open, reads them).
+    static WIDTHS_AT_SHOW: RefCell<Vec<[Option<u32>; 2]>> = const { RefCell::new(Vec::new()) };
     /// The `FontInfo::Init` calls: the block, the id, the path's text, the bool.
     static INITS: RefCell<Vec<Init>> = const { RefCell::new(Vec::new()) };
 }
@@ -42,6 +45,7 @@ fn shown() -> Vec<Shown> {
 fn setup() -> Engine {
     SHOWN.with(|s| s.borrow_mut().clear());
     INITS.with(|s| s.borrow_mut().clear());
+    WIDTHS_AT_SHOW.with(|s| s.borrow_mut().clear());
     let _ = crate::script_call::calls();
     files::fresh();
     let mut e = engine();
@@ -75,6 +79,9 @@ fn setup() -> Engine {
             buttons,
         };
         SHOWN.with(|v| v.borrow_mut().push(s));
+        let widths =
+            crate::game_patches::ga::MAX_MESSAGE_WIDTH.map(|site| e.site(site.addr(), &[0, 0]));
+        WIDTHS_AT_SHOW.with(|v| v.borrow_mut().push(widths));
         Ret {
             eax: 1,
             ..Ret::default()
@@ -193,6 +200,39 @@ fn the_answer_calls_the_newest_script_with_the_button() {
     e.call(MESSAGE_BOX_CALLBACK, &[]);
     assert!(crate::script_call::calls().is_empty());
     assert_eq!(e.mem.u8(IM_AT + 0xe4), 0xff);
+}
+
+/// G55 with the command: the message menu's two width seams answer 1200 while any box waits
+/// (with a script or not), already inside `ShowMessageBox` (which lays out the first box at once:
+/// JIP counts the box before it shows it), and not before the first box nor after the last answer.
+#[test]
+fn g55_widens_the_message_menu_while_a_box_waits() {
+    use crate::game_patches::ga::MAX_MESSAGE_WIDTH;
+    let wide = Some(1200.0f32.to_bits());
+    let widths = |e: &mut Engine| MAX_MESSAGE_WIDTH.map(|site| e.site(site.addr(), &[0, 0]));
+    let at_show = || WIDTHS_AT_SHOW.with(|v| std::mem::take(&mut *v.borrow_mut()));
+    let mut e = setup();
+    assert_eq!(widths(&mut e), [None, None], "no box: the game's");
+    call_on(&mut e, 0x2826, 0, &[r(1), s(b"Pick|A|B")]);
+    assert_eq!(
+        at_show(),
+        vec![[wide, wide]],
+        "laid out wide inside the show"
+    );
+    assert_eq!(widths(&mut e), [wide, wide]);
+    call_on(&mut e, 0x2826, 0, &[r(3), s(b"Plain")]);
+    assert_eq!(at_show(), vec![[wide, wide]], "a box with no script");
+    assert_eq!(message_box_scripts_pending(&mut e), 2);
+    e.mem.set_u8(IM_AT + 0xe4, 0);
+    e.call(MESSAGE_BOX_CALLBACK, &[]);
+    assert_eq!(widths(&mut e), [wide, wide], "one of two answered");
+    e.mem.set_u8(IM_AT + 0xe4, 0);
+    e.call(MESSAGE_BOX_CALLBACK, &[]);
+    assert_eq!(widths(&mut e), [None, None], "answered: the game's again");
+    // One box with no script alone.
+    call_on(&mut e, 0x2826, 0, &[r(3), s(b"Plain")]);
+    assert_eq!(at_show(), vec![[wide, wide]]);
+    assert_eq!(widths(&mut e), [wide, wide]);
 }
 
 #[test]
