@@ -97,8 +97,9 @@ fn ni_node(e: &mut Engine) -> u32 {
 }
 
 /// The HUD as JIP MiniMap's XML makes it, as `InitMiniMap` walks it: `JIPMiniMap`'s children end
-/// with the frame, then the player marker; the frame's with the world map rect, then the local
-/// map; the local map's with the nine local tiles (the last first), then the door and local
+/// with the frame, the player marker, then one more; the frame's with the world map rect, the
+/// local map, then one more; the local map's with the nine local tiles (the last first), then the
+/// door and local
 /// quest marker rects; the world map rect's with the world quest markers, the map markers, then
 /// the world map image.
 struct Hud {
@@ -128,12 +129,14 @@ fn hud(e: &mut Engine) -> Hud {
     let scale = values(e, mm, &[(0x1005, 2.0)])[0];
     let frame = new_tile(e, mm, None);
     let marker = new_tile(e, mm, None);
+    new_tile(e, mm, None);
     let v = values(e, marker, &[(0xffa, 0.0), (0xfad, 10.0)]);
     let (rotate, depth) = (v[0], v[1]);
     let v = values(e, frame, &[(0x1004, 1.0), (0x1005, 3.0), (0x1006, 4.0)]);
     let (mode, pos_x, pos_y) = (v[0], v[1], v[2]);
     let world_rect = new_tile(e, frame, None);
     let local = new_tile(e, frame, None);
+    new_tile(e, frame, None);
     let local_zoom = values(e, local, &[(0xfb8, 0.5)])[0];
     let world_zoom = values(e, world_rect, &[(0xfb8, 1.0)])[0];
     let l_quests = new_tile(e, local, None);
@@ -421,6 +424,7 @@ fn the_start() {
         ),
         (h.map_markers, h.w_quests, h.doors, h.l_quests)
     );
+    let props = s.shader_props;
     let shapes = s.shapes;
     let datas = s.shape_datas;
     let camera = s.camera;
@@ -429,6 +433,13 @@ fn the_start() {
     assert_eq!(s.zoom_current, 0.5);
     assert!(s.in_exterior);
     drop(s);
+    for (i, &image) in h.locals.iter().enumerate() {
+        assert_eq!(
+            props[i],
+            e.mem.u32(image + 0x40),
+            "the local tiles, the last first"
+        );
+    }
     let colours0 = e.mem.u32(datas[0] + 0x28);
     for i in 0..9 {
         let data = datas[i];
@@ -456,7 +467,9 @@ fn the_start() {
     assert_eq!(e.mem.u8(camera + 0xf4), 1);
     assert_eq!(e.mem.f32(camera + 0x110), 0.001);
     assert_eq!(e.mem.f32(light + 0xc8), 175.0 / 255.0);
-    assert_eq!(e.mem.f32(light + 0xf4), -0.523_598_8);
+    #[allow(clippy::approx_constant)]
+    let y = -0.523_598_8;
+    assert_eq!(e.mem.f32(light + 0xf4), y);
     assert_eq!(e.mem.u32(fog + 4), 0x101, "a copy of the game's");
     assert_eq!(e.mem.f32(fog + 0x20), 23.0 / 255.0);
     assert_eq!(e.mem.f32(fog + 0x30), f32::MAX);

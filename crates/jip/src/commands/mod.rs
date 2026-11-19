@@ -991,8 +991,8 @@ mod tests {
             nvse::table::guest_text(&e, e.mem.u32(record)),
             b"GetClimateSunTexture"
         );
-        // InitMiniMap is not built (it waits for the drawing track): no handler.
-        assert_eq!(execute(&e, 0x2873), 0);
+        // UpdateMiniMap is not built (it comes with the minimap's second part): no handler.
+        assert_eq!(execute(&e, 0x2874), 0);
     }
 
     /// Answering "not installed" (players' state until step 3.10), every opcode built here is as

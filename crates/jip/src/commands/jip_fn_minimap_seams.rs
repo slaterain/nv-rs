@@ -29,8 +29,7 @@
 //! state's lock is not held across a game call.
 
 use super::jip_fn_minimap::{
-    free_cell_map_markers, mini_map, patched, state, world_map_pos_mults, GET_BY_TYPE, TES,
-    TES_GRID,
+    free_cell_map_markers, mini_map, patched, state, world_map_pos_mults, TES, TES_GRID,
 };
 use crate::game_patches::Area;
 use engine_core::extend::{Owner, SiteSlot};
@@ -231,8 +230,7 @@ pub(crate) fn north_rotation(e: &mut Engine, cell: u32) {
     let extra = if e.mem.u8(cell + CELL_FLAGS) & 1 == 0 {
         0
     } else {
-        e.call(GET_BY_TYPE, &args![cell + CELL_EXTRA, EXTRA_NORTH_ROTATION])
-            .u32()
+        super::extra::get_by_type(e, cell + CELL_EXTRA, EXTRA_NORTH_ROTATION)
     };
     if extra == 0 {
         mini_map(e).north_rotation.store(0, Ordering::Release);
@@ -317,9 +315,7 @@ fn cell_at_coord(e: &Engine, grid: u32, coord: u32) -> u32 {
 /// interior's `IntSeenData` (0x2C bytes, section `section`), added to the cell's extra data and the
 /// cell marked changed (0x80000000).
 fn add_extra_seen_data(e: &mut Engine, cell: u32, section: u16) -> u32 {
-    let mut extra = e
-        .call(GET_BY_TYPE, &args![cell + CELL_EXTRA, EXTRA_SEEN_DATA])
-        .u32();
+    let mut extra = super::extra::get_by_type(e, cell + CELL_EXTRA, EXTRA_SEEN_DATA);
     if extra != 0 {
         let data = e.mem.u32(extra + EXTRA_DATA);
         if data != 0 {

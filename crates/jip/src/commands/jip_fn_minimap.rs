@@ -161,7 +161,7 @@ pub(crate) const NI_ALLOC: u32 = 0x00aa_13e0;
 const SHAPE_DATA_CONSTRUCT: u32 = 0x00a7_b630;
 const SHAPE_CONSTRUCT: u32 = 0x00a7_4480;
 const NO_LIGHTING_CONSTRUCT: u32 = 0x00b6_fc90;
-pub(crate) const GET_BY_TYPE: u32 = 0x0041_0220;
+const GET_BY_TYPE: u32 = 0x0041_0220;
 const ADD_STRING: u32 = 0x00a5_b690;
 /// The node's "hidden" flag (bit 0 of +0x30).
 const HIDDEN: u8 = 1;
@@ -859,11 +859,10 @@ fn make_light(e: &mut Engine) -> u32 {
     set_colour(e, light + LIGHT_AMBIENT, nrgb(175, 175, 175));
     set_colour(e, light + LIGHT_DIFFUSE, nrgb(169, 167, 140));
     set_colour(e, light + LIGHT_FOG, [0.0; 3]);
-    set_colour(
-        e,
-        light + LIGHT_DIRECTION,
-        [0.615_479_7, -0.523_598_8, 0.615_479_7],
-    );
+    // JIP's literals (`0.6154797F, -0.5235988F`), not a constant of its own.
+    #[allow(clippy::approx_constant)]
+    let direction = [0.615_479_7, -0.523_598_8, 0.615_479_7];
+    set_colour(e, light + LIGHT_DIRECTION, direction);
     light
 }
 
