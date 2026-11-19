@@ -1578,6 +1578,13 @@ pub fn tes_object_weap_get_current_ammo(
         .u32()
 }
 
+/// [`tes_object_weap_get_current_ammo`] through its address, as the exe's `CALL 0x525980`, so a
+/// wrap of the function sees this file's calls too (JIP LN NVSE's InitRockItLauncher jumps from
+/// its entry).
+fn current_ammo(e: &mut Engine, this: Ptr<TesObjectWeap>, actor: Ptr) -> u32 {
+    e.call(0x0052_5980, &args![this, actor]).u32()
+}
+
 // Translated from 00525b20 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `TESObjectWEAP::GetNumProjectiles` (Xbox PDB): `data.cNumProjectiles`;
 /// unless `skip_ammo`, when the actor's current ammo has a non-zero
@@ -1592,10 +1599,10 @@ pub fn tes_object_weap_get_num_projectiles(
     actor: Ptr,
 ) -> u8 {
     let mut count = e.get(weapon_data(this), ObjWeap::cNumProjectiles);
-    if !skip_ammo && tes_object_weap_get_current_ammo(e, this, actor) != 0 {
-        let ammo = tes_object_weap_get_current_ammo(e, this, actor);
+    if !skip_ammo && current_ammo(e, this, actor) != 0 {
+        let ammo = current_ammo(e, this, actor);
         if fn_00525be0(e, Ptr::new(ammo)) > 0 {
-            let ammo = tes_object_weap_get_current_ammo(e, this, actor);
+            let ammo = current_ammo(e, this, actor);
             let per_ammo = fn_00525be0(e, Ptr::new(ammo));
             let per_shot = fn_00524b60(e, this);
             count = (per_ammo as u32 * per_shot as u32) as u8;
@@ -2832,7 +2839,7 @@ fn fire(e: &mut Engine, this: Ptr<TesObjectWeap>, reference: Ptr, frame: u32) {
         .bool();
     let actor = if is_actor { reference } else { Ptr::NULL };
     if actor.addr() == player {
-        let ammo = tes_object_weap_get_current_ammo(e, this, Ptr::new(player));
+        let ammo = current_ammo(e, this, Ptr::new(player));
         if ammo != 0 {
             apply_ammo_effect(e, this, ammo, player, frame);
         }
@@ -3146,9 +3153,9 @@ fn fire_base_spread(e: &mut Engine, shot: &Fire) -> f32 {
     if !shot.actor.is_null()
         && typed_call!(leaf::FAMILY, 0x008d_8520, leaf::word_at_68(e, shot.actor)) != 0
     {
-        let ammo = tes_object_weap_get_current_ammo(e, shot.this, shot.actor);
+        let ammo = current_ammo(e, shot.this, shot.actor);
         let word = if ammo != 0 {
-            let ammo = tes_object_weap_get_current_ammo(e, shot.this, shot.actor);
+            let ammo = current_ammo(e, shot.this, shot.actor);
             e.call(AMMO_GET_SPREAD_WORD, &args![ammo]).u32()
         } else {
             0
