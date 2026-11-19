@@ -759,14 +759,19 @@ pub struct Device {
     st: State,
     encoder: Option<wgpu::CommandEncoder>,
     /// The batch's earlier encoders, in order: finished on the finishing threads (or here), their
-    /// command buffers sent with the batch before the open encoder's ([`Device::send_encoder`]).
-    finishing: Vec<Finishing>,
+    /// command buffers sent with the batch before the open encoder's ([`Device::send_encoder`]),
+    /// each with its [`Device::encoder`] uses.
+    finishing: Vec<(Finishing, u32)>,
     finisher: Option<Finisher>,
     /// The queue thread: every submit, present and queue write in order ([`Device::flush`],
     /// [`Device::on_queue`]); none where there are no finishing threads.
     submitter: Option<Submitter>,
     /// Draws recorded into the open encoder.
     encoder_draws: u32,
+    /// Passes begun and commands recorded straight into the open encoder ([`Device::encoder`]).
+    encoder_uses: u32,
+    /// The submits the batches went in and the most uses one of them took ([`submit_in_parts`]).
+    submits: Arc<Submits>,
     pass: Option<wgpu::RenderPass<'static>>,
     pass_targets: Option<Targets>,
     batch: u64,
@@ -1517,6 +1522,8 @@ impl Device {
             finisher,
             submitter,
             encoder_draws: 0,
+            encoder_uses: 0,
+            submits: Arc::default(),
             pass: None,
             pass_targets: None,
             batch: 1,
@@ -2208,7 +2215,19 @@ impl Device {
         self.end_pass();
         let finishing = std::mem::take(&mut self.finishing);
         let encoder = self.encoder.take();
+        let uses: Vec<u32> = finishing
+            .iter()
+            .map(|f| f.1)
+            .chain(encoder.as_ref().map(|_| self.encoder_uses))
+            .collect();
+        let finishing: Vec<Finishing> = finishing.into_iter().map(|f| f.0).collect();
+        let parts = submit_parts(&uses);
+        if parts.len() > 1 {
+            // Once a run: whether the game's frames come near the limit.
+            self.warn("a batch had more passes than one submit takes and went in several");
+        }
         self.encoder_draws = 0;
+        self.encoder_uses = 0;
         self.batch += 1;
         self.st.dirty = [true; 2];
         let Some(s) = &self.submitter else {
@@ -2223,9 +2242,7 @@ impl Device {
                 }
             }
             let buffers = finish_batch(finishing, encoder);
-            if !buffers.is_empty() {
-                self.queue.submit(buffers);
-            }
+            submit_in_parts(&self.queue, buffers, &parts, &self.submits);
             return;
         };
         s.raise_failure();
@@ -2245,6 +2262,7 @@ impl Device {
             self.stage_buffer.clone(),
         ];
         let pool = Arc::clone(&s.pool);
+        let submits = Arc::clone(&self.submits);
         s.send(Box::new(move |queue: &wgpu::Queue| {
             let delay = SUBMIT_DELAY_FOR_TESTS.load(Ordering::Relaxed);
             if delay > 0 {
@@ -2260,10 +2278,7 @@ impl Device {
                     b.clear();
                 }
             }
-            let buffers = finish_batch(finishing, encoder);
-            if !buffers.is_empty() {
-                queue.submit(buffers);
-            }
+            submit_in_parts(queue, finish_batch(finishing, encoder), &parts, &submits);
             pool.lock().unwrap_or_else(|e| e.into_inner()).push(bytes);
         }));
     }
@@ -2812,7 +2827,15 @@ impl Device {
 
     // Passes.
 
+    /// The open encoder, for a pass or a command recorded straight into it (one use). An encoder
+    /// that has taken [`SPLIT_USES`] goes with the batch's earlier ones first (between passes)
+    /// and a new one takes the rest, so that no submit carries more than [`SUBMIT_USES`]
+    /// ([`submit_parts`]).
     fn encoder(&mut self) -> &mut wgpu::CommandEncoder {
+        if self.encoder_uses >= SPLIT_USES && self.pass.is_none() {
+            self.cut_encoder();
+        }
+        self.encoder_uses += 1;
         self.encoder.get_or_insert_with(|| {
             self.device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
@@ -2823,13 +2846,31 @@ impl Device {
     /// batch after the encoders before it ([`Device::flush`]).
     fn send_encoder(&mut self) {
         self.end_pass();
+        self.cut_encoder();
+    }
+
+    /// [`Device::send_encoder`] when no pass is open.
+    fn cut_encoder(&mut self) {
         if let Some(e) = self.encoder.take() {
-            self.finishing.push(match &self.finisher {
+            let f = match &self.finisher {
                 Some(f) => f.send(e),
                 None => Finishing::Ready(e.finish()),
-            });
+            };
+            self.finishing.push((f, self.encoder_uses));
         }
         self.encoder_draws = 0;
+        self.encoder_uses = 0;
+    }
+
+    /// The submits the batches have gone in, and the most [`Device::encoder`] uses one took
+    /// (tests: [`SUBMIT_USES`] at most). The queue thread's count once it has done its work.
+    pub fn submits(&self) -> (u64, u32) {
+        self.sync();
+        let s = &self.submits;
+        (
+            s.made.load(Ordering::Relaxed),
+            s.most.load(Ordering::Relaxed),
+        )
     }
 
     fn end_pass(&mut self) {
@@ -10652,6 +10693,65 @@ fn worker_threads() -> usize {
 /// Draws an encoder takes before it goes to a finishing thread ([`Device::send_encoder`]).
 const SPLIT_DRAWS: u32 = 256;
 
+/// The most passes and commands one submit carries ([`Device::encoder`]'s uses). wgpu turns each
+/// pass into two of the driver's command buffers (its barriers, then the pass) and each run of
+/// commands between passes into one, and hands a submit's all to one `vkQueueSubmit`. AMD's
+/// Windows driver refuses one of about 4,000 command buffers with "out of host memory" (Radeon
+/// 890M, driver 24.30: 3,506 went, 4,007 did not; NVIDIA's took 4,507), and wgpu then takes the
+/// device for lost: nothing more is drawn and no query answers (900 draws that each upload their
+/// vertices, inside one occlusion query: a copy, a pass and the count's pass each, 4,507 command
+/// buffers in one submit). Why 512: that measured edge. 512 uses are at most about 1,100 command
+/// buffers (855 in that test), under a third of the 3,506 that went, with room for the few passes
+/// some uses make (the sun's shadow maps) and wgpu's own; a batch that takes more is sent in more
+/// submits, in order.
+pub const SUBMIT_USES: u32 = 512;
+
+/// The uses an encoder takes before it goes with the batch's earlier ones ([`Device::encoder`]):
+/// so that one encoder alone fits in a submit.
+const SPLIT_USES: u32 = SUBMIT_USES;
+
+/// How many of a batch's command buffers (taking `uses` each, in order) go in each submit, and the
+/// uses they take together: as many as take [`SUBMIT_USES`], at least one.
+fn submit_parts(uses: &[u32]) -> Vec<(usize, u32)> {
+    let mut parts = Vec::new();
+    let (mut n, mut sum) = (0, 0u32);
+    for &u in uses {
+        if n > 0 && sum.saturating_add(u) > SUBMIT_USES {
+            parts.push((n, sum));
+            (n, sum) = (0, 0);
+        }
+        n += 1;
+        sum = sum.saturating_add(u);
+    }
+    if n > 0 {
+        parts.push((n, sum));
+    }
+    parts
+}
+
+/// The submits the batches have gone in, and the most uses one took ([`Device::submits`]).
+#[derive(Default)]
+struct Submits {
+    made: AtomicU64,
+    most: std::sync::atomic::AtomicU32,
+}
+
+/// `buffers` submitted in order, each part's number of them at a time ([`submit_parts`]), counted
+/// in `submits`.
+fn submit_in_parts(
+    queue: &wgpu::Queue,
+    buffers: Vec<wgpu::CommandBuffer>,
+    parts: &[(usize, u32)],
+    submits: &Submits,
+) {
+    let mut buffers = buffers.into_iter();
+    for &(n, uses) in parts {
+        queue.submit(buffers.by_ref().take(n));
+        submits.made.fetch_add(1, Ordering::Relaxed);
+        submits.most.fetch_max(uses, Ordering::Relaxed);
+    }
+}
+
 /// An earlier encoder of the batch: finished, or on its way from a finishing thread.
 enum Finishing {
     Ready(wgpu::CommandBuffer),
@@ -10933,6 +11033,27 @@ impl Drop for Device {
 mod tests {
     use super::*;
     use wgpu::TextureFormat as F;
+
+    /// A batch's command buffers go in as few submits as take at most [`SUBMIT_USES`] each, in
+    /// order; one buffer alone always goes (the encoder cut keeps it within the limit).
+    #[test]
+    fn a_batch_goes_in_submits_of_at_most_the_uses_the_driver_takes() {
+        let max = SUBMIT_USES;
+        assert_eq!(submit_parts(&[]), vec![]);
+        assert_eq!(submit_parts(&[3]), vec![(1, 3)]);
+        assert_eq!(submit_parts(&[max]), vec![(1, max)]);
+        assert_eq!(submit_parts(&[max, 1]), vec![(1, max), (1, 1)]);
+        assert_eq!(submit_parts(&[max - 1, 1, 1]), vec![(2, max), (1, 1)]);
+        assert_eq!(submit_parts(&[max / 2, max / 2]), vec![(2, max)]);
+        assert_eq!(
+            submit_parts(&[max / 2 + 1, max / 2]),
+            vec![(1, max / 2 + 1), (1, max / 2)]
+        );
+        assert_eq!(submit_parts(&[100; 12]), vec![(5, 500), (5, 500), (2, 200)]);
+        assert_eq!(submit_parts(&[max + 9, 2]), vec![(1, max + 9), (1, 2)]);
+        assert_eq!(submit_parts(&[0, 0, max, 0]), vec![(4, max)]);
+        assert_eq!(SPLIT_USES, SUBMIT_USES, "an encoder alone fits in a submit");
+    }
 
     /// A lit draw is shadowed at one stage: its pixel shader when that reads the sun's colour,
     /// else its vertex shader (grass); a pair whose shaders both read it never twice.

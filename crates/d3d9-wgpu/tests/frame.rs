@@ -3684,6 +3684,86 @@ fn cuts_between_finished_encoders_keep_multisampled_colour_and_depth() {
     }
 }
 
+/// A batch of more passes than one submit can carry goes in several, in order: AMD's Windows
+/// driver refuses a submit of about 4,000 of its command buffers ("out of host memory"; Radeon
+/// 890M), and wgpu then takes the device for lost: nothing more is drawn and no query answers.
+/// 900 draws in one batch, nine occlusion queries of 100 each, each draw uploading its vertices
+/// into a ring of 64 places (a copy, a pass and the count's pass each: 4,507 command buffers in
+/// one submit before), with and without the finishing and queue threads. Each draw is nearer than
+/// every one before it under a LESS depth test, so it passes only if every draw before it ran
+/// before it, and with its own vertices (a place written again after 64 draws): every query
+/// answers with all of its draws' samples only if no work moved across a submit. The last
+/// draw's colour is left, nothing fails, and no submit takes more than
+/// [`d3d9_wgpu::device::SUBMIT_USES`].
+#[test]
+fn a_batch_of_more_passes_than_a_submit_takes_goes_in_several() {
+    const QUERIES: u32 = 9;
+    const EACH: u32 = 100;
+    for threads in [true, false] {
+        let Some(mut g) = Gpu::with_threads(4, 1, threads) else {
+            return;
+        };
+        for q in 0..QUERIES {
+            g.run(Cmd::CreateQuery {
+                device: DEVICE,
+                query: 0x2000 + q,
+                kind: 9,
+            });
+        }
+        // LESS.
+        g.state(ZFUNC, 2);
+        g.clear(3, 0, 1.0);
+        for q in 0..QUERIES {
+            g.run(Cmd::QueryIssue {
+                query: 0x2000 + q,
+                flags: 2,
+            });
+            for j in 0..EACH {
+                let i = q * EACH + j;
+                let last = i == QUERIES * EACH - 1;
+                g.colour(if last {
+                    [0.0, 1.0, 0.0, 1.0]
+                } else {
+                    [1.0, 0.0, 0.0, 1.0]
+                });
+                // Exact in the 24-bit depth: 1 - (i + 1) / 1024.
+                g.cover(1.0 - (i + 1) as f32 / 1024.0);
+            }
+            g.run(Cmd::QueryIssue {
+                query: 0x2000 + q,
+                flags: 1,
+            });
+        }
+        for q in 0..QUERIES {
+            assert_eq!(
+                g.wait(0x2000 + q, 1),
+                EACH * 16,
+                "threads {threads}: query {q}: each draw nearer than the ones before passed"
+            );
+        }
+        for p in g.pixels() {
+            assert_eq!(
+                p,
+                [0, 255, 0, 255],
+                "threads {threads}: the last draw's green"
+            );
+        }
+        let d = g.b.device().expect("the device");
+        assert_eq!(d.wgpu_errors(), 0, "threads {threads}");
+        let (submits, most) = d.submits();
+        let limit = d3d9_wgpu::device::SUBMIT_USES;
+        assert!(
+            most <= limit,
+            "threads {threads}: a submit took {most} uses, more than {limit}"
+        );
+        // Three uses a draw (the copy, the pass, the count's pass).
+        assert!(
+            submits > u64::from(3 * 900 / limit),
+            "threads {threads}: {submits} submits"
+        );
+    }
+}
+
 /// The vertex buffer of [`dynamic_state_scene`]: every shape in it once, uploaded before the
 /// first draw, so that no upload falls between the draws (an upload can end the render pass, and
 /// with it what the command buffer is known to have set). Each shape's first vertex.
