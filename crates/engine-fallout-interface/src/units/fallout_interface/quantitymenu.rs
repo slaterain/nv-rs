@@ -89,6 +89,8 @@ const STACKING_TYPE_ONE: u32 = 0x0107_04f0;
 const STACKING_TYPE_TWO: u32 = 0x0107_04e8;
 const TWO_FIFTY_FIVE_DOUBLE: u32 = 0x0101_e568;
 const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+/// JIP's `ShowQuantityMenu` seam in [`quantity_menu_do_click`]: the result callback's call.
+const JIP_QUANTITY_CALLBACK: u32 = 0x007a_becc;
 /// The game settings: the question text (`011d3ac8`), two button texts (`011d38b8`,
 /// `011d29f4`), the background alpha (`011d3bc8`).
 const SETTING_011D3AC8: u32 = 0x011d_3ac8;
@@ -312,7 +314,16 @@ pub fn quantity_menu_do_click(e: &mut Engine, this: Ptr, id: i32, tile: u32) {
                     0
                 };
                 let callback = e.global::<u32>(RESULT_CALLBACK);
-                e.call(callback, &args![chosen]);
+                // `0x7ABECC` (JIP LN NVSE's `ShowQuantityMenu`, with JIP installed): JIP's
+                // `QuantityMenuCallback` reads this function's id from the caller's frame
+                // (`[ebp+8]`), which the call cannot carry; the seam is handed the callback, the
+                // count and the id, and an answer means JIP's routine was run (this call skipped).
+                let taken = e.jip_patches() & engine_core::extend::jip_patches::INSTALLED != 0
+                    && e.site(JIP_QUANTITY_CALLBACK, &[callback, chosen, id as u32])
+                        .is_some();
+                if !taken {
+                    e.call(callback, &args![chosen]);
+                }
             }
             quantity_menu_close(e);
         }
@@ -725,5 +736,95 @@ mod n057_tests {
         assert_eq!(log[0].0, 0x007a_c170);
         assert_eq!(log[1], (0x0000_8000, vec![menu, 9, 0]), "the click first");
         assert_eq!(log[2], (TILE_GET_FLOAT, vec![0x200c, 0xfc4]));
+    }
+
+    // ---- JIP LN NVSE's `ShowQuantityMenu` seam ----
+
+    thread_local! {
+        static ASKED: std::cell::RefCell<Vec<Vec<u32>>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+    /// How many closes (trait `0x1772` set) the call log holds.
+    fn closes(e: &Engine) -> u32 {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, words)| *a == TILE_SET_INT && words.get(1) == Some(&0x1772))
+            .count() as u32
+    }
+    /// JIP's handler's stand-in: notes the words and how many closes came before it was asked,
+    /// takes the call for callback 0x7000 only.
+    fn takes_7000(e: &mut Engine, w: &[u32]) -> Option<u32> {
+        let mut noted = w.to_vec();
+        noted.push(closes(e));
+        ASKED.with(|a| a.borrow_mut().push(noted));
+        (w[0] == 0x0000_7000).then_some(0)
+    }
+
+    /// `0x7ABECC` (words: the callback, the count, the id): with JIP's `INSTALLED` the seam is asked
+    /// before the callback's call and before the menu closes, an answer skips the call, no answer
+    /// makes it; without the bit it is not asked and the call is the exe's. The menu closes either
+    /// way, after the callback. Clicks: OK with a count of 7, OK with 0, Cancel (DoClick's 0), so
+    /// the count and the id cannot be told from each other.
+    #[test]
+    fn jip_quantity_callback_seam_hands_over_the_id() {
+        use engine_core::extend::jip_patches::INSTALLED;
+        let run = |word: u32, callback: u32| {
+            let mut e = engine();
+            values(&mut e);
+            let menu = menu(&mut e);
+            e.mem.set_u32(menu + 4, 0x2300);
+            e.set_global(QUANTITY_MENU, menu);
+            e.register(0x0000_7000, |_, _| Ret::default());
+            e.register(0x0000_7100, |_, _| Ret::default());
+            e.set_global(RESULT_CALLBACK, callback);
+            e.set_jip_patches(word);
+            e.on_site_for_test(JIP_QUANTITY_CALLBACK, takes_7000);
+            ASKED.with(|a| a.borrow_mut().clear());
+            e.call_log = Some(vec![]);
+            answer(&mut e, FLOAT_TO_INT_00406D90, 7);
+            e.call(0x007a_be40, &args![menu, 4i32, 0u32]);
+            answer(&mut e, FLOAT_TO_INT_00406D90, 0);
+            e.call(0x007a_be40, &args![menu, 4i32, 0u32]);
+            e.call(0x007a_be40, &args![menu, 5i32, 0u32]);
+            let asked = ASKED.with(|a| a.borrow().clone());
+            let called = calls_to(&e, callback);
+            // The order of the callback's calls (1) and the closes (2).
+            let order: Vec<u32> = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .filter_map(|(a, words)| {
+                    if *a == callback {
+                        Some(1)
+                    } else if *a == TILE_SET_INT && words.get(1) == Some(&0x1772) {
+                        Some(2)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            (asked, called, closes(&e), order)
+        };
+        let made = vec![1, 2, 1, 2, 1, 2];
+        let asked = vec![
+            vec![0x7000, 7, 4, 0],
+            vec![0x7000, 0, 4, 1],
+            vec![0x7000, 0, 5, 2],
+        ];
+        assert_eq!(run(INSTALLED, 0x7000), (asked, vec![], 3, vec![2, 2, 2]));
+        let asked = vec![
+            vec![0x7100, 7, 4, 0],
+            vec![0x7100, 0, 4, 1],
+            vec![0x7100, 0, 5, 2],
+        ];
+        let calls = vec![vec![7], vec![0], vec![0]];
+        assert_eq!(
+            run(INSTALLED, 0x7100),
+            (asked, calls.clone(), 3, made.clone())
+        );
+        assert_eq!(run(0, 0x7000), (vec![], calls, 3, made));
+        assert_eq!(JIP_QUANTITY_CALLBACK, 0x007a_becc);
     }
 }
