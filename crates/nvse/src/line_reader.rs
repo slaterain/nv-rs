@@ -17,13 +17,23 @@
 //! - A parenthesised argument of a command of the game's format (`InlineExpressionHook` at
 //!   `005B1C65`, `StandardCompile`'s word read of each parameter): an xNVSE expression
 //!   ([`crate::compiler::handle_parameter_parenthesis`]), for an extender's command (opcode
-//!   `0x1400` up: JIP's and the other plugins' commands of the game's format). One gap: for the
-//!   game's own commands the port does not answer (the game's word read runs, as without the
-//!   patch), because their arguments are read at run time by the exe's reader (`005ACCB0`), which
-//!   cannot read the expression's `0xFFFF`. xNVSE's entry jump sends every opcode to its own
-//!   reader; in the port that waits for the fix row `xnvse.extract_args` (`crate::args`), and
-//!   until then such a line is refused at compile time as before, rather than compiled into bytes
-//!   the exe's reader would misread (a string's length read as -1).
+//!   `0x1400` up: JIP's and the other plugins' commands of the game's format). For the game's own
+//!   commands the port does not answer (the game's word read runs, as without the patch), because
+//!   their arguments are read at run time by the exe's reader (`005ACCB0`), which cannot read the
+//!   expression's `0xFFFF`. xNVSE's entry jump sends every opcode to its own reader; in the port
+//!   that waits for the fix row `xnvse.extract_args` (`crate::args`). Until then, three gaps:
+//!   - A call of a game command with arguments in the new script language does not run yet, and a
+//!     string argument can crash the game. This was so before this seam: the new language's code
+//!     generation writes every argument as `0xFFFF` and an expression, which the exe's reader
+//!     misreads (a string's length read as -1). Plugins compiled with xNVSE's editor that use
+//!     parenthesised arguments on game commands carry the same bytes.
+//!   - At an optional parameter of a game command, an argument in parentheses is silently dropped
+//!     (the game's word read finds no word, so the line compiles without it and the rest of the
+//!     line); at a required one the line is refused ("missing parameter").
+//!   - A plugin command's argument in parentheses works on a statement line, not yet inside `set`,
+//!     `if` or `elseif`: there the game compiles the command on a line it builds on the stack
+//!     (`005b1570`), which leaves the opcode word (`+0x410`) unset, so the seam sees no plugin
+//!     command and the argument is refused.
 //!
 //! Each is a seam in the translated compiler (`engine-fallout-script`'s `tesscriptcompiler.rs`),
 //! answered here, so the port's xNVSE reads a run-time script as xNVSE 6.4.9 does on every system.
