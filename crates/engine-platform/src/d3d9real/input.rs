@@ -252,6 +252,8 @@ pub(super) fn pointer_fraction(at: (f64, f64), size: (f64, f64)) -> Option<[f64;
 
 /// A `WM_MOUSEMOVE`'s place from its `lParam`: x in the low word, y in the high word, each signed
 /// (client pixels; left of or above the client area, negative, while a held button drags on).
+// Used by the Win32 window (`win32.rs`); tested everywhere.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(super) fn client_place(lparam: u32) -> (f64, f64) {
     (
         f64::from(lparam as u16 as i16),
@@ -297,6 +299,7 @@ pub(super) enum CursorEvent {
     /// The window was moved or sized (the hold is made again for its new place).
     Placed,
     /// The cursor is over the client area (Windows asks with `WM_SETCURSOR`, `HTCLIENT`).
+    #[cfg_attr(not(windows), allow(dead_code))]
     OverClient,
     /// The cursor moved over the client area (`WM_MOUSEMOVE`; winit's `CursorMoved`).
     Moved,
