@@ -353,9 +353,9 @@ fn an_unbuilt_command_fails() {
     assert_eq!(guest_text(&e, unbuilt.long_name), b"SetDeadZoneLS");
     assert_eq!((unbuilt.execute, unbuilt.eval), (0, 0));
     // Every JIP condition is built since GetRadiationLevelAlt (package C3): an unbuilt command
-    // that waits for a seam in the game's code (SetMoonTexture) stands for the rest.
-    let refresh = Record::read(&e, record_of(&e, 0x27a4));
-    assert_eq!(guest_text(&e, refresh.long_name), b"SetMoonTexture");
+    // that waits for seams in the game's code (SetDeadZoneLS) stands for the rest.
+    let refresh = Record::read(&e, record_of(&e, 0x220d));
+    assert_eq!(guest_text(&e, refresh.long_name), b"SetDeadZoneLS");
     assert_eq!((refresh.execute, refresh.eval, refresh.flags), (0, 0, 0));
     let words = line(&mut e, 0x220d, &[]);
     let a = nvse::CommandArgs::new(&words);
