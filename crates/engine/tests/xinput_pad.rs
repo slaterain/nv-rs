@@ -5,6 +5,7 @@
 
 use engine::{args, Engine};
 use engine_platform::xinput::{self, buttons, PadSource, PadState};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// The import slots of `XInputGetState` and `XInputSetState`.
@@ -132,11 +133,17 @@ fn the_games_rumble_and_its_stop_reach_the_pad() {
     e.mem.set_u32(controls + RUMBLE_QUEUE, queue);
     e.map(STRENGTH_SCALE & !0xfff, 0x1000);
     e.mem.set_u64(STRENGTH_SCALE, 65535.0f64.to_bits());
-    let effect = e.mem.alloc(0x40);
-    e.register(ALLOCATE, move |_, _| engine::Ret {
-        eax: effect,
-        ..engine::Ret::default()
-    });
+    // The allocation answers this block (`register` takes a plain function: the block's address
+    // goes through a static).
+    static EFFECT: AtomicU32 = AtomicU32::new(0);
+    fn allocate(_: &mut Engine, _: &[u32]) -> engine::Ret {
+        engine::Ret {
+            eax: EFFECT.load(Ordering::Relaxed),
+            ..engine::Ret::default()
+        }
+    }
+    EFFECT.store(e.mem.alloc(0x40), Ordering::Relaxed);
+    e.register(ALLOCATE, allocate);
     e.call(
         CONTROLS_RUMBLE,
         &args![
