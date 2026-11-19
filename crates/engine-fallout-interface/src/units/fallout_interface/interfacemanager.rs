@@ -10737,6 +10737,24 @@ mod tests {
         assert_eq!(e.get(m, InterfaceManager::bMouseInMotion), 0);
     }
 
+    /// With `Fallout.ini`'s `[Controls] bBackground Mouse=1` (the controls' flag `00711e00` reads)
+    /// the menus' cursor is placed only from the window's `WM_MOUSEMOVE` (`00871d10`): the mouse's
+    /// DirectInput counts (10 right, 5 up) move nothing here, so the cursor never moves twice.
+    #[test]
+    fn with_background_mouse_the_mouse_counts_move_no_cursor() {
+        let (mut e, m) = cursor_world();
+        returns(&mut e, CONTROLS_FLAG_00711E00, 1);
+        let vectors = vector_recorder(&mut e);
+        e.mem.set_f32(m.addr() + 0x2c, 3.0);
+        e.mem.set_f32(m.addr() + 0x34, 4.0);
+        fn_007118d0(&mut e, m);
+        assert!(vectors.borrow().is_empty(), "no translation written");
+        assert_eq!(e.mem.f32(m.addr() + 0x2c), 3.0);
+        assert_eq!(e.mem.f32(m.addr() + 0x34), 4.0);
+        assert_eq!(e.get(m, InterfaceManager::bMouseInMotion), 0);
+        assert!(calls(&e, NODE_UPDATE).is_empty());
+    }
+
     #[test]
     fn the_cursor_stays_inside_the_screen() {
         let (mut e, m) = cursor_world();
