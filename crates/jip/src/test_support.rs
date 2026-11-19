@@ -133,6 +133,15 @@ fn prepare(e: &mut Engine) {
             });
         }
     }
+    // InitRockItLauncher's wraps (`00525980`, `00525a90`), when the test engine has no translation of them: a marker answer (0x5a5a).
+    for at in [0x0052_5980, 0x0052_5a90] {
+        if !e.is_registered(at) {
+            e.register(at, |_, _| Ret {
+                eax: 0x5a5a,
+                ..Ret::default()
+            });
+        }
+    }
     // H01's wrap (`008d9300`, `HighProcess::GetCurrentMuzzleFlash`) when the test engine has no
     // translation of it: the game's, the word at `+0x3D4`.
     if !e.is_registered(0x008d_9300) {

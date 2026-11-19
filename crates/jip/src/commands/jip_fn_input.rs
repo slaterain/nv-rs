@@ -2,8 +2,8 @@
 //! 3 of its 9 commands; the core track built the four `SetOn...EventHandler` commands
 //! (`ui_hooks.rs`).
 //!
-//! Left for later: `ToggleVanityWheel` writes a byte of the game's code (`SafeWrite8(0x945A29,
-//! 0x8B or 0x89)`, inside `009445B0`), which the translated code has no seam for;
+//! Elsewhere: `ToggleVanityWheel` writes a byte of the game's code (`SafeWrite8(0x945A29,
+//! 0x8B or 0x89)`, inside `009445B0`), a seam in the translation, in [`super::jip_fn_camera`];
 //! `ToggleMouseMovement` is built with JIP's `GetMouseMovementHook` (H20), the only reader of what
 //! it sets, in `crate::game_patches::gx`.
 

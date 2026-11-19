@@ -134,10 +134,9 @@ pub static COMMANDS: Handlers = &[
 /// see or click. The row's pull request adds this list to `commands::ALL`.
 pub static AWAITING_H02: Handlers = &[(0x28b5, toggle_hud_cursor)];
 
-/// `SetFontFile`, built but not registered until JIP's font manager patch (row G129) is in: without
-/// it fonts 10 to 89 could not be set (the game's manager ends after font 8) and a game font could
-/// not be put back (G129 keeps the game's eight in the map at start; their files are in the
-/// archives, not loose). The row's pull request adds this list to `commands::ALL`.
+/// `SetFontFile`, registered with JIP's font manager patch (row G129, `game_patches::ga`): with it
+/// fonts 10 to 89 can be set and a game font put back (G129 keeps the game's eight in the map at
+/// start; their files are in the archives, not loose).
 pub static AWAITING_G129: Handlers = &[(0x274c, set_font_file)];
 
 /// `IsInCharGen`, a condition (`DEFINE_CMD_COND_PLUGIN`).
@@ -2823,11 +2822,13 @@ pub fn set_font_manager_extended(e: &mut Engine) {
     font_infos(e).extended = true;
 }
 
-/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool) and
-/// a `FontInfo`'s size and its loaded data (+0x38, null when the file did not load).
-const FONT_INFO_INIT: u32 = 0x00a1_2020;
-const FONT_INFO_SIZE: u32 = 0x54;
-const FONT_INFO_BUFFER_DATA: u32 = 0x38;
+/// `FontInfo::Init` (`00A12020`, `thiscall`: the block, the font's number, its path, a bool: 1
+/// loads the file) and a `FontInfo`'s size (JIP's `static_assert(sizeof(FontInfo) == 0x54)`, the
+/// `push 0x54` of G129's start) and its loaded data (+0x38, null when the file did not load). One
+/// set for `SetFontFile` and G129 (`game_patches::ga`).
+pub(crate) const FONT_INFO_INIT: u32 = 0x00a1_2020;
+pub(crate) const FONT_INFO_SIZE: u32 = 0x54;
+pub(crate) const FONT_INFO_BUFFER_DATA: u32 = 0x38;
 /// JIP's `dataPathFull[0x100]` with `data\` in its first five bytes: the path's own room.
 const FONT_PATH_BUFFER: usize = 0x100 - 5;
 /// The game's own font manager has the fonts 1 to 8; JIP's (G129) 1 to 89.
