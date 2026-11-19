@@ -131,24 +131,13 @@ pub fn set_source(e: &mut Engine, source: Option<Box<dyn PadSource>>) {
     state!(e).pads.source = source;
 }
 
-/// Puts the system's own pads behind the game's XInput in `e` ([`Throttled`] around the
-/// system's source) and answers the line for the log saying which. On Windows: the system's
-/// XInput DLL ([`win32::open`]). Linux and macOS: none yet (every user "not connected").
+/// Puts the system's own pads behind the game's XInput in `e` and answers the line for the log
+/// saying which. On Windows: the system's XInput DLL ([`win32::open`]), through
+/// [`install_system`]. Linux and macOS: none yet (every user "not connected").
 pub fn use_system_pads(e: &mut Engine) -> String {
     #[cfg(windows)]
     {
-        match win32::open() {
-            Some((source, dll)) => {
-                set_source(e, Some(Box::new(Throttled::new(source))));
-                format!("nv-rs: game pads through {dll} (the game's own Controls settings turn the pad and its vibration off)")
-            }
-            None => {
-                set_source(e, None);
-                "nv-rs: game pads: no XInput DLL in the system folder (xinput1_3, xinput1_4, \
-                 xinput9_1_0), so no pad"
-                    .to_string()
-            }
-        }
+        install_system(e, win32::open())
     }
     #[cfg(not(windows))]
     {
@@ -157,42 +146,62 @@ pub fn use_system_pads(e: &mut Engine) -> String {
     }
 }
 
+/// Puts the system's XInput `opened` (its source and its DLL's name) behind the game's XInput in
+/// `e`, behind the empty-slot throttle ([`Throttled`]), and answers the log line; `None`: no pad.
+pub fn install_system<S: PadSource + 'static>(e: &mut Engine, opened: Option<(S, &str)>) -> String {
+    match opened {
+        Some((source, dll)) => {
+            set_source(e, Some(Box::new(Throttled::new(source))));
+            format!(
+                "nv-rs: game pads through {dll} (the game's own Controls settings turn the pad and \
+                 its vibration off)"
+            )
+        }
+        None => {
+            set_source(e, None);
+            "nv-rs: game pads: no XInput DLL in the system folder (xinput1_3, xinput1_4, \
+             xinput9_1_0), so no pad"
+                .to_string()
+        }
+    }
+}
+
 /// How long an empty slot answers "not connected" without asking the system again.
 pub const EMPTY_RECHECK: Duration = Duration::from_secs(1);
 
 /// A source whose empty slots are asked again at most once every [`EMPTY_RECHECK`]: in between,
 /// both calls for that user answer `ERROR_DEVICE_NOT_CONNECTED` and leave the state as it is (what
-/// the system answers for an empty slot, measured). A connected pad is asked every time.
+/// the system answers for an empty slot, measured). Only `XInputGetState`'s answers decide, and a
+/// slot is held back only from a "not connected" that follows another (or comes first): a pad that
+/// misses one answer is asked again at the next call, as a second without it is felt (review of
+/// #781), and a pad pulled out costs one more ask. A connected pad is asked every time.
 pub struct Throttled<S> {
     inner: S,
-    /// When each user's slot last answered "not connected", while it stays so.
-    empty_since: [Option<Instant>; USERS as usize],
+    slots: [Slot; USERS as usize],
+}
+
+/// What [`Throttled`] keeps of one user's slot.
+#[derive(Clone, Copy, Default)]
+struct Slot {
+    /// Its last `XInputGetState` answered a pad.
+    connected: bool,
+    /// Since when it is held back as empty.
+    empty_since: Option<Instant>,
 }
 
 impl<S: PadSource> Throttled<S> {
     pub fn new(inner: S) -> Throttled<S> {
         Throttled {
             inner,
-            empty_since: [None; USERS as usize],
+            slots: [Slot::default(); USERS as usize],
         }
     }
 
-    /// Whether `user`'s slot is still taken as empty at `now`.
+    /// Whether `user`'s slot is still held back as empty at `now`.
     fn known_empty(&self, user: u32, now: Instant) -> bool {
-        self.empty_since[user as usize]
+        self.slots[user as usize]
+            .empty_since
             .is_some_and(|since| now.saturating_duration_since(since) < EMPTY_RECHECK)
-    }
-
-    /// Notes the system's answer for `user` at `now`.
-    fn note(&mut self, user: u32, result: u32, now: Instant) {
-        let slot = &mut self.empty_since[user as usize];
-        if result == ERROR_DEVICE_NOT_CONNECTED {
-            if !slot.is_some_and(|since| now.saturating_duration_since(since) < EMPTY_RECHECK) {
-                *slot = Some(now);
-            }
-        } else {
-            *slot = None;
-        }
     }
 
     /// [`PadSource::get_state`] at the time `now`.
@@ -201,18 +210,19 @@ impl<S: PadSource> Throttled<S> {
             return ERROR_DEVICE_NOT_CONNECTED;
         }
         let result = self.inner.get_state(user, state);
-        self.note(user, result, now);
+        let slot = &mut self.slots[user as usize];
+        let connected = result != ERROR_DEVICE_NOT_CONNECTED;
+        slot.empty_since = (!connected && !slot.connected).then_some(now);
+        slot.connected = connected;
         result
     }
 
-    /// [`PadSource::set_state`] at the time `now`.
+    /// [`PadSource::set_state`] at the time `now`: held back with the slot, its answer passed on.
     pub fn set_state_at(&mut self, user: u32, vibration: &[u8; 4], now: Instant) -> u32 {
         if self.known_empty(user, now) {
             return ERROR_DEVICE_NOT_CONNECTED;
         }
-        let result = self.inner.set_state(user, vibration);
-        self.note(user, result, now);
-        result
+        self.inner.set_state(user, vibration)
     }
 }
 
