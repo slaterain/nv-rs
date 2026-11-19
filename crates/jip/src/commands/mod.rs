@@ -45,6 +45,7 @@ pub mod jip_fn_misc_ref;
 pub mod jip_fn_misc_ref_havok;
 pub mod jip_fn_misc_ref_havok_w;
 pub mod jip_fn_misc_ref_insert;
+pub mod jip_fn_misc_ref_lights;
 pub mod jip_fn_misc_ref_lines;
 pub mod jip_fn_misc_ref_nodes;
 pub mod jip_fn_misc_ref_nodes_w;
@@ -64,6 +65,7 @@ pub mod jip_fn_sound_playing;
 pub mod jip_fn_string;
 pub mod jip_fn_texture_set;
 pub mod jip_fn_ui;
+pub mod jip_fn_ui_cursor;
 pub mod jip_fn_ui_nodes;
 pub mod jip_fn_utility;
 pub mod jip_fn_utility_patches;
@@ -237,6 +239,10 @@ pub const ALL: &[Handlers] = &[
     jip_fn_ui::AWAITING_H02,
     // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
     jip_fn_actor_p2::AWAITING_H01,
+    // `AttachLight`, `RemoveLight`.
+    jip_fn_misc_ref_lights::COMMANDS,
+    // `SetCursorPos`.
+    jip_fn_ui_cursor::COMMANDS,
 ];
 
 /// How many of JIP's commands have a handler.
@@ -872,6 +878,10 @@ mod tests {
             "jip_fn_ui",
             // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
             "jip_fn_actor",
+            // jip_fn_misc_ref_lights (AttachLight, RemoveLight).
+            "jip_fn_misc_ref",
+            // jip_fn_ui_cursor (SetCursorPos).
+            "jip_fn_ui",
         ];
         assert_eq!(files.len(), ALL.len(), "one file per command list");
         let mut seen = std::collections::HashSet::new();

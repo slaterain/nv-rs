@@ -321,7 +321,7 @@ const STR_ARG_BUFFER: usize = 0x4_0000;
 /// `Tile::Parents[24]` in `GetComponentFullName`: deeper tiles run past JIP's array.
 const FULL_NAME_DEPTH: u32 = 24;
 
-fn interface_manager(e: &Engine) -> u32 {
+pub(crate) fn interface_manager(e: &Engine) -> u32 {
     e.mem.u32(INTERFACE_MANAGER)
 }
 
@@ -657,7 +657,7 @@ fn top_visible_menu_id(e: &Engine) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: GetMenuMode.
 /// Menu mode (`currentMode > 1`) or JIP's HUD cursor mode ([`hud_cursor_mode`],
 /// `ToggleHUDCursor`).
-fn menu_mode(e: &mut Engine) -> bool {
+pub(crate) fn menu_mode(e: &mut Engine) -> bool {
     let im = interface_manager(e);
     (im != 0 && e.mem.u32(im + IM_CURRENT_MODE) > 1) || hud_cursor_mode(e)
 }
