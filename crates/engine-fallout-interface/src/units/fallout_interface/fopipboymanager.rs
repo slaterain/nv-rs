@@ -1432,11 +1432,10 @@ mod la1_tests {
 /// `007fa8d0` (`thiscall`, one word) runs first on menu open (with 0) and
 /// close (with the player's `Actor::IsRefractive`, `008c51c0`).
 const MENU_STATE_007FA8D0: u32 = 0x007f_a8d0;
-/// The Pip-Boy manager's reset (`007fa990`, `thiscall`; it clears the byte below itself) and its
-/// "reset me" byte, which the script command (`005db4c0`) sets and the main loop's AI tasks
-/// (`0086f840`) read.
+/// The Pip-Boy manager's reset (`007fa990`, `thiscall`; it clears the "reset me" byte itself), and
+/// that byte (one definition, beside row S0027).
 const PIPBOY_RESET: u32 = 0x007f_a990;
-const PIPBOY_RESET_PENDING: u32 = 0x16c;
+use engine_core::extend::stewie::PIPBOY_RESET_PENDING;
 const ACTOR_IS_REFRACTIVE: u32 = 0x008c_51c0;
 /// The bytes menu open sets (`011d890a`, `011db378`; the second is
 /// cleared on close and tested by `SetTabKnobPosition`).
@@ -2445,6 +2444,9 @@ mod n086_tests {
     /// reset asked for, or the row off, the opening does not reset.
     #[test]
     fn s0027_the_pipboy_opening_does_the_reset_an_equip_asked_for() {
+        // FOPipboyManager +0x16C (the script command `005db4c0` sets it, the main loop's AI tasks
+        // `0086f840` read it): the AI's equip sets the same byte.
+        assert_eq!(PIPBOY_RESET_PENDING, 0x16c);
         for (on, pending) in [(false, 1u8), (true, 0), (true, 1)] {
             let mut e = Engine::new();
             world(&mut e);
@@ -2467,7 +2469,7 @@ mod n086_tests {
             e.register(GET_HIT_MODIFIER, |_, _| 0x3131u32.into_ret());
             e.register(PIPBOY_STATE, |_, _| 1u32.into_ret());
             let this = manager(&mut e);
-            e.mem.set_u8(this + PIPBOY_RESET_PENDING, pending);
+            e.mem.set_u8(this + 0x16c, pending);
             e.set_stewie(engine_core::extend::stewie::PIPBOY_EQUIP_CRASH, on);
             e.call_log = Some(vec![]);
             e.call(0x007f_8010, &args![this]);
@@ -2477,10 +2479,7 @@ mod n086_tests {
                 usize::from(resets),
                 "row {on}"
             );
-            assert_eq!(
-                e.mem.u8(this + PIPBOY_RESET_PENDING),
-                if resets { 0 } else { pending }
-            );
+            assert_eq!(e.mem.u8(this + 0x16c), if resets { 0 } else { pending });
             if resets {
                 let order: Vec<u32> = e
                     .call_log
