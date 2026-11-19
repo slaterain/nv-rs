@@ -57,6 +57,39 @@ pub enum Native {
     /// `EndWeatherTransition` (`internal/patches_game.h`, G90's `CloudsFixHook`): the sky's
     /// `transWeather` (`+0x14`) cleared.
     EndWeatherTransition,
+    /// `RegisterInsertObject` (`InsertNode`, `AttachModel` asked on another thread to change the
+    /// 3D now): the request kept under the callback's `this` (a key of
+    /// `commands::jip_fn_misc_ref_insert`).
+    RegisterInsertObject,
+    /// `JIPScriptRunner::RunScript` (`RunScriptSnippet` with a delay): the callback's `this` is
+    /// the script, its first argument (kept in [`Callback::ref_id`]) the calling reference.
+    RunScript,
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallbackArgsEx (one
+// argument).
+/// One of JIP's own functions with one argument (`arg`, kept in [`Callback::ref_id`]), called
+/// `calls` times every `delay` frames (0 is 1), in game and menu mode alike.
+pub fn add_native_with(
+    e: &mut Engine,
+    native: Native,
+    this_obj: u32,
+    calls: u32,
+    delay: u32,
+    arg: u32,
+) {
+    let delay = delay.max(1);
+    state(e).callbacks.push(Callback {
+        script: 0,
+        this_obj,
+        remove: false,
+        flags: 0,
+        call_delay: delay,
+        cycle_count: delay,
+        ref_id: arg,
+        native: Some(native),
+        call_count: calls,
+    });
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopAddCallback
@@ -78,7 +111,7 @@ pub fn add_native(e: &mut Engine, native: Native, this_obj: u32) {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: MainLoopCallback::Execute, with
 // the functions it is given.
-fn execute_native(e: &mut Engine, native: Native, this_obj: u32) {
+fn execute_native(e: &mut Engine, native: Native, this_obj: u32, arg: u32) {
     match native {
         // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h:
         // EndWeatherTransition. A null sky (never in the game: TES makes it at start-up) is left.
@@ -87,6 +120,10 @@ fn execute_native(e: &mut Engine, native: Native, this_obj: u32) {
                 e.mem.set_u32(this_obj + 0x14, 0);
             }
         }
+        Native::RegisterInsertObject => {
+            crate::commands::jip_fn_misc_ref_insert::run_pending(e, this_obj);
+        }
+        Native::RunScript => crate::script_runner::run_script(e, this_obj, arg),
     }
 }
 
@@ -216,7 +253,7 @@ pub fn cycle(e: &mut Engine) {
             } else {
                 callback.cycle_count = c.call_delay;
             }
-            execute_native(e, native, c.this_obj);
+            execute_native(e, native, c.this_obj, c.ref_id);
             continue;
         }
         let manager = e.mem.u32(INTERFACE_MANAGER);
@@ -254,14 +291,26 @@ pub fn cycle(e: &mut Engine) {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/serialization.h: CleanMLCallbacks (the
 // script callbacks' part; JIP's script runner's own come with it).
-/// At a load or the exit to the main menu: the callbacks set with mode bit 8 marked to go.
+/// At a load or the exit to the main menu: a delayed `RunScriptSnippet`'s script destroyed
+/// (`Destroy`, vtable +0x10, with 1) and its callback marked to go (its calling reference may not
+/// survive the load), and the callbacks set with mode bit 8 marked to go.
 pub fn clean(e: &mut Engine) {
+    let mut snippets = Vec::new();
     for c in &mut state(e).callbacks {
-        if c.flags & 8 != 0 {
+        if c.native == Some(Native::RunScript) {
+            snippets.push(c.this_obj);
+            c.remove = true;
+        } else if c.flags & 8 != 0 {
             c.remove = true;
         }
     }
+    for script in snippets {
+        e.vcall(script, SCRIPT_DESTROY, &[1]);
+    }
 }
+
+/// `Script::Destroy` (vtable +0x10).
+const SCRIPT_DESTROY: u32 = 0x10;
 
 #[cfg(test)]
 #[path = "main_loop_tests.rs"]

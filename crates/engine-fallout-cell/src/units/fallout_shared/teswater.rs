@@ -76,6 +76,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 // ---------------------------------------------------------------------------
 // Callees in other units, by address.
@@ -6335,7 +6336,13 @@ fn setup_group_reflections(
                 .call(LIST_ITEM_SLOT, &args![EXPLOSIONS_LIST, position])
                 .u32();
             let explosion = e.mem.u32(slot);
-            if reference_node(e, explosion) != 0 {
+            // 004ea743: lStewieAl's Tweaks' row S0042 (`fixExplosionWaterNullCall`): an explosion
+            // whose `Get3D` slot (vtable +0x1d0) is null is passed over, where the exe calls it.
+            let null_call = e.stewie(stewie::EXPLOSION_WATER_NULL_CALL) && {
+                let vtable = e.mem.u32(explosion);
+                e.mem.u32(vtable + REFERENCE_GET_3D) == 0
+            };
+            if !null_call && reference_node(e, explosion) != 0 {
                 let found = e.with_stack(4, |e, out| {
                     e.mem.set_u32(out.addr(), explosion);
                     e.call(WADING_MAP_GET, &args![reflected_refs_map, explosion, out])
@@ -15013,6 +15020,53 @@ mod tests {
             // A known explosion is not listed again.
             r.run(false);
             assert!(r.dynamic_objects().is_empty());
+        }
+
+        /// lStewieAl's Tweaks' row S0042 with an explosion that has 3D (ordinary input): the row
+        /// changes nothing, the same calls and the same reflected explosion as with it off.
+        #[test]
+        fn s0042_row_on_with_an_explosion_that_has_3d_changes_nothing() {
+            let run = |on: bool| {
+                let mut r = reflection();
+                r.set_flags(0);
+                let explosion = reflected_reference(&mut r.w.e);
+                fill_list(&mut r.w.e, EXPLOSIONS_LIST, &[explosion]);
+                set_setting(&mut r.w.e, SETTING_REFLECT_EXPLOSIONS, true);
+                r.w.e.set_stewie(stewie::EXPLOSION_WATER_NULL_CALL, on);
+                r.run(false);
+                let node = r.w.e.mem.u32(explosion + REF_NODE);
+                let listed = r.w.map.borrow().contains_key(&explosion);
+                (r.dynamic_objects(), node, listed, r.w.e.call_log.clone())
+            };
+            let (off, on) = (run(false), run(true));
+            assert_eq!(on, off);
+            assert_eq!(on.0, vec![on.1]);
+            assert!(on.2);
+        }
+
+        /// lStewieAl's Tweaks' row S0042: the first explosion's `Get3D` slot (vtable `+0x1d0`) is
+        /// null (an explosion being taken apart). The exe calls it and stops; with the row on the
+        /// explosion is passed over and the reflection set-up finishes.
+        #[test]
+        fn s0042_an_explosion_with_a_null_get_3d_slot() {
+            for on in [false, true] {
+                let mut r = reflection();
+                r.set_flags(0);
+                let vtable = r.w.e.mem.alloc(0x400);
+                let explosion = r.w.e.mem.alloc(0x100);
+                r.w.e.mem.set_u32(explosion, vtable);
+                fill_list(&mut r.w.e, EXPLOSIONS_LIST, &[explosion]);
+                set_setting(&mut r.w.e, SETTING_REFLECT_EXPLOSIONS, true);
+                r.w.e.set_stewie(stewie::EXPLOSION_WATER_NULL_CALL, on);
+                let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.run(false)));
+                r.w.e.call_stack.clear();
+                assert_eq!(run.is_ok(), on, "row {on}");
+                if on {
+                    assert!(r.dynamic_objects().is_empty());
+                    assert!(!r.w.map.borrow().contains_key(&explosion));
+                    assert_eq!(calls(&r.w.e, MT_ADD_ACCUM_TASK).len(), 1);
+                }
+            }
         }
 
         #[test]

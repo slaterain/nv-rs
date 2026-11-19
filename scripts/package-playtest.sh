@@ -153,6 +153,8 @@ mkdir -p -- "$stage/app" "$stage/licenses"
 # Our own program and the start script.
 cp -- "$programs/nv-viewer" "$stage/app/nv-viewer"
 cp -- distribution/unix/play.sh "$stage/play.sh"
+# The READ ME play.sh --mods puts in the mods folder it makes in nv-rs's own folder.
+cp -- "distribution/unix/mods READ ME.txt" "$stage/app/mods READ ME.txt"
 # The READ ME of this system, the licences and notices LEGAL.md asks for.
 case $system in
 linux-*) cp -- "distribution/linux/READ ME.txt" "$stage/READ ME.txt" ;;
@@ -177,7 +179,7 @@ case $system in
 linux-*) cp -- distribution/unix/libraries.txt "$stage/app/libraries.txt" ;;
 esac
 # Text with LF line ends whatever this checkout has.
-for file in "$stage/READ ME.txt" "$stage/play.sh" "$stage/app/libraries.txt"; do
+for file in "$stage/READ ME.txt" "$stage/play.sh" "$stage/app/libraries.txt" "$stage/app/mods READ ME.txt"; do
     [ -f "$file" ] || continue
     tr -d '\r' <"$file" >"$file.lf" && mv -f -- "$file.lf" "$file"
 done

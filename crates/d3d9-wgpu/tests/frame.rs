@@ -1,7 +1,7 @@
 //! The frame-level calls Doc's house and the exterior need beyond the instructions: user clip
 //! planes, occlusion counts, `GetRenderTargetData` and `ReadSurface`, clears of part of a target,
-//! and NVIDIA's alpha to coverage switch, each run through the whole backend on the GPU and
-//! checked against what Direct3D 9 defines.
+//! and NVIDIA's and ATI's alpha to coverage switches, each run through the whole backend on the
+//! GPU and checked against what Direct3D 9 defines.
 //!
 //! The shaders and calls are built here (no game file). A machine without a GPU adapter skips
 //! with a message.
@@ -2078,13 +2078,47 @@ fn a_clear_of_part_of_the_target_clears_that_part_at_the_depth_asked() {
 
 const COLORWRITEENABLE: u32 = 168;
 
+/// `D3DRS_POINTSIZE`, which carries ATI's alpha to coverage switch.
+const POINTSIZE: u32 = 154;
+
 #[test]
 #[cfg_attr(
     target_os = "macos",
     ignore = "Metal: multisampled occlusion counts and queries differ on the CI runner's device (Linux and macOS track, the window and drawing step)"
 )]
 fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets() {
-    let atoc = u32::from_le_bytes(*b"ATOC");
+    coverage_switch_stands_in_for_the_alpha_test(ADAPTIVETESS_Y, *b"ATOC", 0, &[]);
+}
+
+/// ATI's switch (`D3DRS_POINTSIZE` 'A2M1' on, 'A2M0' off), which the game sends on the ATI path
+/// (player report 005: without it, grass under multisampling kept the alpha test at its reference
+/// of 10 and was drawn as solid tufts): exactly as NVIDIA's, both switches, the alpha test's part
+/// and the samples' condition. A plain point size between leaves it on.
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "Metal: multisampled occlusion counts and queries differ on the CI runner's device (Linux and macOS track, the window and drawing step)"
+)]
+fn atis_alpha_to_coverage_switch_does_as_nvidias() {
+    let a2m0 = u32::from_le_bytes(*b"A2M0");
+    coverage_switch_stands_in_for_the_alpha_test(
+        POINTSIZE,
+        *b"A2M1",
+        a2m0,
+        &[0x3f80_0000, 0x4000_0000],
+    );
+}
+
+/// The checks of an alpha to coverage switch: `state` set to `on` (a FourCC), later to `off`; each
+/// of `between` set on the same state while it is on leaves it on.
+fn coverage_switch_stands_in_for_the_alpha_test(
+    state: u32,
+    on: [u8; 4],
+    off: u32,
+    between: &[u32],
+) {
+    let on = u32::from_le_bytes(on);
+    let name = String::from_utf8_lossy(&on.to_le_bytes()).into_owned();
     for samples in [1u32, 4, 8] {
         let Some(mut g) = Gpu::new(4, samples) else {
             return;
@@ -2092,7 +2126,7 @@ fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets
         g.state(ZENABLE, 0);
         g.state(ZWRITEENABLE, 0);
         g.state(ALPHATESTENABLE, 1);
-        g.state(ADAPTIVETESS_Y, atoc);
+        g.state(state, on);
         g.run(Cmd::CreateQuery {
             device: DEVICE,
             query: 0x2000,
@@ -2107,11 +2141,39 @@ fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets
             g.clear(1, 0, 1.0);
             g.count(0x2000, |g| g.cover(0.5))
         };
+        // The alpha test off: neither the test nor the coverage, every sample drawn.
+        g.state(ALPHATESTENABLE, 0);
+        assert_eq!(
+            covered(&mut g, 0.25, 5, 0x80),
+            16 * samples,
+            "{name} {samples}x: no alpha test"
+        );
+        g.state(ALPHATESTENABLE, 1);
+        // The game's grass (`00bac160`): GREATER, reference 10, alpha 0.25. One sample: the alpha
+        // test passes it whole; multisampled the coverage gives part of the samples.
+        let grass = covered(&mut g, 0.25, 5, 10);
+        if samples == 1 {
+            assert_eq!(grass, 16, "{name}: the grass's alpha test at one sample");
+        } else {
+            assert!(
+                grass < 16 * samples,
+                "{name} {samples}x: the grass's alpha 0.25 covers {grass} of {} samples",
+                16 * samples
+            );
+        }
+        for &value in between {
+            g.state(state, value);
+            assert_eq!(
+                covered(&mut g, 0.25, 5, 10),
+                grass,
+                "{name} {samples}x: after {value:#x} the switch is as it was"
+            );
+        }
         if samples == 1 {
             // One sample: the alpha test, with its reference.
-            assert_eq!(covered(&mut g, 0.25, 5, 0x80), 0, "0.25 > 0.5");
-            assert_eq!(covered(&mut g, 0.75, 5, 0x80), 16, "0.75 > 0.5");
-            assert_eq!(covered(&mut g, 0.25, 2, 0x80), 16, "0.25 < 0.5");
+            assert_eq!(covered(&mut g, 0.25, 5, 0x80), 0, "{name}: 0.25 > 0.5");
+            assert_eq!(covered(&mut g, 0.75, 5, 0x80), 16, "{name}: 0.75 > 0.5");
+            assert_eq!(covered(&mut g, 0.25, 2, 0x80), 16, "{name}: 0.25 < 0.5");
         } else {
             // Multisampled (measured so on the real Direct3D 9 here, DESIGN.md section 10): the
             // coverage comes from the alpha alone, the reference plays no part; GREATER,
@@ -2125,7 +2187,7 @@ fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets
                 let n = covered(&mut g, a, 8, 0x80);
                 assert!(
                     n >= last && n <= 16 * samples,
-                    "{samples}x: alpha {a}: {n} after {last}"
+                    "{name} {samples}x: alpha {a}: {n} after {last}"
                 );
                 last = n;
                 for func in [5, 6, 7] {
@@ -2133,7 +2195,7 @@ fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets
                         assert_eq!(
                             covered(&mut g, a, func, aref),
                             n,
-                            "{samples}x: alpha {a}, comparison {func}, reference {aref:#x}"
+                            "{name} {samples}x: alpha {a}, comparison {func}, reference {aref:#x}"
                         );
                     }
                 }
@@ -2141,7 +2203,7 @@ fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets
                     assert_eq!(
                         covered(&mut g, a, func, 0x80),
                         0,
-                        "{samples}x: comparison {func}"
+                        "{name} {samples}x: comparison {func}"
                     );
                 }
                 let ends = match k {
@@ -2150,23 +2212,130 @@ fn nvidia_alpha_to_coverage_stands_in_for_the_alpha_test_on_multisampled_targets
                     _ => None,
                 };
                 if let Some(e) = ends {
-                    assert_eq!(n, e, "{samples}x: alpha {a}");
+                    assert_eq!(n, e, "{name} {samples}x: alpha {a}");
                 }
             }
             assert!(
                 covered(&mut g, 0.5, 8, 0x80) > 0 && covered(&mut g, 0.5, 8, 0x80) < 16 * samples,
-                "{samples}x: alpha 0.5 covers part of the samples"
+                "{name} {samples}x: alpha 0.5 covers part of the samples"
             );
         }
         g.state(ALPHAFUNC, 5);
         g.state(ALPHAREF, 0x80);
         g.colour([1.0, 1.0, 1.0, 0.25]);
         // The switch off: the alpha test again.
-        g.state(ADAPTIVETESS_Y, 0);
+        g.state(state, off);
         g.clear(1, 0, 1.0);
         g.cover(0.5);
-        assert_eq!(g.reds(), vec![0; 16], "{samples}: switch off");
+        assert_eq!(g.reds(), vec![0; 16], "{name} {samples}: switch off");
+        assert_eq!(
+            covered(&mut g, 0.25, 5, 10),
+            16 * samples,
+            "{name} {samples}x: switch off, the grass's alpha test passes it whole"
+        );
+        if samples == 1 {
+            continue;
+        }
+        // The switch alone, with no other state changed between the draws (nothing else to make
+        // the draw's pipeline again): on, off and on again with the alpha test on throughout.
+        g.state(ALPHAFUNC, 5);
+        g.state(ALPHAREF, 0x80);
+        g.colour([1.0, 1.0, 1.0, 0.25]);
+        let alone = |g: &mut Gpu| {
+            g.clear(1, 0, 1.0);
+            g.count(0x2000, |g| g.cover(0.5))
+        };
+        assert_eq!(alone(&mut g), 0, "{name} {samples}x: off, 0.25 > 0.5");
+        g.state(state, on);
+        let part = alone(&mut g);
+        assert!(
+            part > 0 && part < 16 * samples,
+            "{name} {samples}x: the switch alone turned on: {part} samples"
+        );
+        g.state(state, off);
+        assert_eq!(
+            alone(&mut g),
+            0,
+            "{name} {samples}x: the switch alone turned off: the alpha test again"
+        );
+        g.state(state, on);
+        assert_eq!(alone(&mut g), part, "{name} {samples}x: on again");
+        // The switch between two draws of one pass, the same triangle drawn again with nothing
+        // uploaded between (a new pass or batch would make every block again anyway): the second
+        // draw follows the switch, off then on.
+        let switched = |g: &mut Gpu, to: u32| {
+            g.clear(1, 0, 1.0);
+            g.count(0x2000, |g| {
+                g.cover(0.5);
+                g.state(state, to);
+                g.run(Cmd::DrawPrimitive {
+                    device: DEVICE,
+                    kind: 4,
+                    start: 0,
+                    count: 1,
+                });
+            })
+        };
+        assert_eq!(
+            switched(&mut g, off),
+            part,
+            "{name} {samples}x: coverage, then the switch off within the pass: the alpha test"
+        );
+        assert_eq!(
+            switched(&mut g, on),
+            part,
+            "{name} {samples}x: the alpha test, then the switch on within the pass: coverage"
+        );
+        // `Reset` turns it off: every state the draw needs set again, the switch not.
+        reset_for_the_alpha_test(&mut g);
+        assert_eq!(
+            alone(&mut g),
+            0,
+            "{name} {samples}x: after Reset the switch is off"
+        );
     }
+}
+
+/// `Reset` of the 4x4 test device, then what [`coverage_switch_stands_in_for_the_alpha_test`]'s
+/// draws need again (Reset returns every state and binding to its default): the multisampled
+/// target and its depth, the shaders, the declaration, no culling or depth, the alpha test
+/// (GREATER, reference 0x80) and the alpha 0.25.
+fn reset_for_the_alpha_test(g: &mut Gpu) {
+    let present = words(&[4, 4, A8R8G8B8, 1, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0]);
+    g.run(Cmd::Reset {
+        device: DEVICE,
+        window: 0,
+        present: Data::Bytes(&present),
+        back_buffers: Data::Bytes(&words(&[BACK])),
+        depth_stencil: 0,
+    });
+    g.run(Cmd::SetRenderTarget {
+        device: DEVICE,
+        index: 0,
+        surface: RT,
+    });
+    g.run(Cmd::SetDepthStencilSurface {
+        device: DEVICE,
+        surface: DS,
+    });
+    for (pixel, shader) in [(false, VS), (true, PS)] {
+        g.run(Cmd::SetShader {
+            device: DEVICE,
+            pixel,
+            shader,
+        });
+    }
+    g.run(Cmd::SetVertexDeclaration {
+        device: DEVICE,
+        declaration: DECL,
+    });
+    g.state(CULLMODE, 1);
+    g.state(ZENABLE, 0);
+    g.state(ZWRITEENABLE, 0);
+    g.state(ALPHATESTENABLE, 1);
+    g.state(ALPHAFUNC, 5);
+    g.state(ALPHAREF, 0x80);
+    g.colour([1.0, 1.0, 1.0, 0.25]);
 }
 
 /// The alpha test compares as the reference machine's (measured on the real Direct3D 9 here,
@@ -2393,13 +2562,14 @@ fn target_texture(g: &mut Gpu, texture: u32, level: u32, size: u32, format: u32)
     });
 }
 
-/// The HDR watch (a diagnostic, `bright`) reads a multisampled HDR scene where it is resolved and
-/// names a lone bright dot and a pixel that is not finite in it: a 16 by 16 A16B16G16R16F scene
-/// at 4 samples, 0.1 everywhere, 3000 at (5, 5) and infinity at (10, 10), resolved into a texture
-/// by `StretchRect`. The same scene without the two pixels shows neither.
-#[test]
-fn the_hdr_watch_names_a_lone_bright_dot_and_an_infinite_pixel_of_a_resolved_scene() {
-    let Some(mut g) = Gpu::new(16, 4) else { return };
+/// The HDR watch (a diagnostic, `bright`) reads a multisampled HDR scene where it is resolved: a
+/// 16 by 16 A16B16G16R16F scene at 4 samples, 0.1 everywhere, with `pixel` (a colour at a place)
+/// drawn in frame 1 only, resolved into a texture by `StretchRect`; frames 1 and 5 are watched.
+/// What the watch saw in frame 1, and in frame 5 (the same scene without the pixel).
+fn watched_resolved_scene(
+    pixel: ([f32; 4], u32),
+) -> Option<(d3d9_wgpu::bright::Seen, d3d9_wgpu::bright::Seen)> {
+    let mut g = Gpu::new(16, 4)?;
     const SCENE: u32 = 0x1A00;
     const RESOLVED: u32 = 0x1A10;
     g.run(Cmd::CreateSurface {
@@ -2430,11 +2600,9 @@ fn the_hdr_watch_names_a_lone_bright_dot_and_an_infinite_pixel_of_a_resolved_sce
         g.colour([0.1, 0.1, 0.1, 1.0]);
         g.quad(0.5);
         if frame == 1 {
-            g.viewport(5, 5, 1, 1, 0.0, 1.0);
-            g.colour([3000.0, 3000.0, 3000.0, 1.0]);
-            g.quad(0.5);
-            g.viewport(10, 10, 1, 1, 0.0, 1.0);
-            g.colour([f32::INFINITY, 0.0, 0.0, 1.0]);
+            let (colour, at) = pixel;
+            g.viewport(at, at, 1, 1, 0.0, 1.0);
+            g.colour(colour);
             g.quad(0.5);
         }
         g.run(Cmd::StretchRect {
@@ -2460,17 +2628,41 @@ fn the_hdr_watch_names_a_lone_bright_dot_and_an_infinite_pixel_of_a_resolved_sce
     assert_eq!(first.len(), 1, "the resolved scene only: {judged:?}");
     let (target, seen) = first[0];
     assert_eq!((target.width, target.height), (16, 16));
-    assert_eq!(seen.not_finite, 1, "{seen:?}");
-    assert_eq!(seen.dots, 1, "{seen:?}");
+    let (_, clean) = judged[1].1[0];
+    assert_eq!((clean.not_finite, clean.dots), (0, 0), "{clean:?}");
+    assert!(clean.brightest > 0.05 && clean.brightest < 0.2, "{clean:?}");
+    assert_eq!(d.wgpu_errors(), 0);
+    Some((seen, clean))
+}
+
+/// A lone bright dot (3000 at (5, 5)) in a resolved scene is named, and nothing is not finite.
+#[test]
+fn the_hdr_watch_names_a_lone_bright_dot_of_a_resolved_scene() {
+    let Some((seen, _)) = watched_resolved_scene(([3000.0, 3000.0, 3000.0, 1.0], 5)) else {
+        return;
+    };
+    assert_eq!((seen.not_finite, seen.dots), (0, 1), "{seen:?}");
     // The dot covers at least one of its pixel's samples (3000 resolved with 0.1s).
     assert!(
         seen.brightest > 700.0 && seen.brightest.is_finite(),
         "{seen:?}"
     );
-    let (_, clean) = judged[1].1[0];
-    assert_eq!((clean.not_finite, clean.dots), (0, 0), "{clean:?}");
-    assert!(clean.brightest > 0.05 && clean.brightest < 0.2, "{clean:?}");
-    assert_eq!(d.wgpu_errors(), 0);
+}
+
+/// An infinite pixel (at (10, 10)) in a resolved scene is counted as not finite, not as a dot.
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "Metal: an infinity drawn into a half-float target and resolved arrives as a large finite value (CI run 44268804913: not finite 0, brightest 16384), so the watch, which tests finiteness by bits, has no infinity to see; likely Metal's default fast math, which wgpu-hal does not turn off (Linux and macOS track, the window and drawing step)"
+)]
+fn the_hdr_watch_names_an_infinite_pixel_of_a_resolved_scene() {
+    let Some((seen, _)) = watched_resolved_scene(([f32::INFINITY, 0.0, 0.0, 1.0], 10)) else {
+        return;
+    };
+    assert_eq!((seen.not_finite, seen.dots), (1, 0), "{seen:?}");
+    // The infinite pixel never leaks into the brightest: the brightest finite value is the
+    // scene's 0.1.
+    assert!(seen.brightest > 0.05 && seen.brightest < 0.2, "{seen:?}");
 }
 
 /// The HDR watch reads a small float target the game draws into and leaves (the luminance and

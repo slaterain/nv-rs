@@ -26,6 +26,7 @@
 use super::actor::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// `PlayerCharacter *`.
 const PLAYER_POINTER: u32 = 0x011d_ea3c;
@@ -916,7 +917,14 @@ pub fn actor_steal_alarm(
     if stolen_from_actor != 0 && e.vcall(stolen_from_actor, 0x218, &args![]).bool() {
         witness = stolen_from_actor;
     } else {
-        let owner_type = e.call(FORM_TYPE, &args![owner]).u32();
+        // 008bfbc1: lStewieAl's Tweaks' row S0068 (`fixHandleStealingCrash`): no owner is not a
+        // faction (the branch below then does nothing for it), where the exe reads the null form's
+        // type.
+        let owner_type = if e.stewie(stewie::HANDLE_STEALING_CRASH) && owner == 0 {
+            0
+        } else {
+            e.call(FORM_TYPE, &args![owner]).u32()
+        };
         if owner_type == 8 {
             if !e.call(BASE_FORM_FLAG_BIT_1, &args![owner]).bool() {
                 karma_penalty = true;
@@ -2965,6 +2973,72 @@ mod tests {
         log_calls(&mut e);
         actor_steal_alarm(&mut e, player, Ptr::new(victim), 0, 1, 0, owner);
         assert!(calls_to(&e, REWARD_KARMA).is_empty());
+    }
+
+    /// lStewieAl's Tweaks' row S0068: a theft from a container that is no actor, with no owner,
+    /// reads the null owner's form type (`00401170` reads `+4`, as its stand-in here does) and stops
+    /// with the row off; with it on the owner counts as no faction and nothing more happens.
+    #[test]
+    fn s0068_theft_without_an_owner() {
+        for on in [false, true] {
+            let mut e = engine();
+            let player = new_player(&mut e);
+            give_process(&mut e, player);
+            let victim = e.mem.alloc(0x800);
+            slot(&mut e, victim, 0x100, eax(0));
+            e.set_stewie(stewie::HANDLE_STEALING_CRASH, on);
+            log_calls(&mut e);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                actor_steal_alarm(&mut e, player, Ptr::new(victim), 0, 1, 0, 0);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(calls_to(&e, REWARD_KARMA).is_empty());
+                assert!(calls_to(&e, PROCESS_LISTS_FIND_ACTOR_REF).is_empty());
+                assert!(calls_to(&e, PROCESS_LISTS_GET_ACTOR_REF_IN_HIGH).is_empty());
+            }
+        }
+    }
+
+    /// lStewieAl's Tweaks' row S0068 with an owner (ordinary input): the row changes nothing, the
+    /// same calls as with it off, for a faction owner (karma penalty, its member looked up) and for
+    /// an actor base owner (its alignment asked).
+    #[test]
+    fn s0068_row_on_with_an_owner_changes_nothing() {
+        for owner_type in [8u8, 0x2a] {
+            let run = |on: bool| {
+                let mut e = engine();
+                let player = new_player(&mut e);
+                give_process(&mut e, player);
+                let victim = e.mem.alloc(0x800);
+                slot(&mut e, victim, 0x100, eax(0));
+                let owner = e.mem.alloc(0x400);
+                e.mem.set_u8(owner + 4, owner_type);
+                slot(&mut e, owner + 0x100, 0xc, st0(10.0));
+                put_setting_float(&mut e, SETTING_STEAL_KARMA_PENALTY, 5.0);
+                double(&mut e, FLOAT_TO_INT, eax(5));
+                double(&mut e, GET_ALIGNMENT_FOR_KARMA, eax(3));
+                e.set_stewie(stewie::HANDLE_STEALING_CRASH, on);
+                log_calls(&mut e);
+                actor_steal_alarm(&mut e, player, Ptr::new(victim), 0, 1, 0, owner);
+                e
+            };
+            let (off, on) = (run(false), run(true));
+            // The calls into the exe (the stand-in slots' own addresses differ between engines).
+            let exe = |e: &Engine| -> Vec<(u32, Vec<u32>)> {
+                let log = e.call_log.clone().unwrap_or_default();
+                log.into_iter().filter(|(a, _)| *a < 0x0200_0000).collect()
+            };
+            assert_eq!(exe(&on), exe(&off), "owner type {owner_type:#x}");
+            assert_eq!(calls_to(&on, REWARD_KARMA).len(), 1);
+            let looked_up = if owner_type == 8 {
+                PROCESS_LISTS_FIND_ACTOR_REF
+            } else {
+                PROCESS_LISTS_GET_ACTOR_REF_IN_HIGH
+            };
+            assert_eq!(calls_to(&on, looked_up).len(), 1);
+        }
     }
 
     #[test]

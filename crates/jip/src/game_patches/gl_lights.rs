@@ -370,18 +370,28 @@ fn load_nif(e: &mut Engine, w: &[u32]) -> Option<u32> {
     Some(0)
 }
 
-// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: CreateObjectNodeHook (its
-// first test; the `InsertObject` tests wait for H08).
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: CreateObjectNodeHook.
 /// H06's companion at `0x50EF46` (words: the model `Clone3D` would share, the form, the
 /// reference): a model whose byte +0x33 has 0x20 (H06 found lights of JIP's in it) is cloned
 /// (answers 1, JIP's jump to `0x50F0FE`); else the exe's checks go on (answers 0). Without it the
 /// first reference would hold the cached model itself (its lights then listed as that
 /// reference's), and every later copy would carry lights already marked listed, never lit.
 /// (`Clone3D` never gets here with no model; 0 answers 0.)
+/// H08: a form or a reference that JIP's `InsertNode`/`AttachModel` marked (`jipFormFlags6` `+6`,
+/// 0xC0) is cloned too, so its own copy gets the entries.
 fn clone_3d(e: &mut Engine, w: &[u32]) -> Option<u32> {
-    let model = w[0];
+    let (model, form, reference) = (w[0], w[1], w[2]);
+    let marked = |e: &Engine, f: u32| {
+        f != 0
+            && e.mem.u8(f + 6)
+                & (crate::commands::jip_fn_misc_ref_insert::INSERT_NODE
+                    | crate::commands::jip_fn_misc_ref_insert::ATTACH_MODEL)
+                != 0
+    };
     Some(u32::from(
-        model != 0 && e.mem.u8(model.wrapping_add(FLAGS_HIGH)) & IS_POINT_LIGHT != 0,
+        (model != 0 && e.mem.u8(model.wrapping_add(FLAGS_HIGH)) & IS_POINT_LIGHT != 0)
+            || marked(e, form)
+            || marked(e, reference),
     ))
 }
 
@@ -392,7 +402,7 @@ fn clone_3d(e: &mut Engine, w: &[u32]) -> Option<u32> {
 /// parent up to `root` (stopping at one already marked); the extra is removed either way. A
 /// node (slot +0xC is `return this`) is searched the same way. A parent missing before `root`
 /// stops the marking (JIP would read through null).
-fn init_point_lights(e: &mut Engine, node: u32, root: u32) {
+pub(crate) fn init_point_lights(e: &mut Engine, node: u32, root: u32) {
     let count = e.mem.u16(node.wrapping_add(CHILD_COUNT));
     let children = e.mem.u32(node.wrapping_add(CHILDREN));
     for i in 0..u32::from(count) {

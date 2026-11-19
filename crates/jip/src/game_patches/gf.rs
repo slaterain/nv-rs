@@ -33,7 +33,10 @@
 //! get 0x7D63 buckets: three of its places are group GW's seams) and G52 (a global variable with
 //! form flag 0x40 is not read again from a record). JIP's own: G47 (a plugin file's name hash at
 //! `+0x120`, and JIP's `hasModLog` byte cleared when the file is made, which the built
-//! `ModLogPrint` reads) and H22 (`TESObject::IsMarker` by JIP's set of ids).
+//! `ModLogPrint` reads), H22 (`TESObject::IsMarker` by JIP's set of ids), G54 (the companion
+//! wheel's teammate test false for an actor whose wheel `SetWheelDisabled` turned off; the game's
+//! answer otherwise) and H19 (JIP's gun wobble: the stat part left out for an actor
+//! `ToggleNoGunWobble` marks).
 //!
 //! Threads: every handler here reads only the game's own memory and keeps no state, so any
 //! thread may run it: G39 on the main thread and the loader threads (an NPC's model is asked as
@@ -129,17 +132,100 @@ pub const AREA: Area = Area {
     ],
     fix_wraps: &[],
     install_fixes,
-    jip_sites: &[MOD_NAME_HASH.addr(), MOD_LOG_BYTE.addr()],
+    jip_sites: &[
+        MOD_NAME_HASH.addr(),
+        MOD_LOG_BYTE.addr(),
+        WHEEL_TEAMMATE[0].addr(),
+        WHEEL_TEAMMATE[1].addr(),
+        WHEEL_TEAMMATE[2].addr(),
+        GUN_WOBBLE.addr(),
+    ],
     jip_wraps: &[SET_FORM_TYPE.addr(), NPC_MODEL.addr(), IS_MARKER.addr()],
     install_jip,
 };
+
+/// G54's seams: the teammate test before the companion wheel, in the creature's activation
+/// (`005fa330`, both paths) and the NPC's (`00607990`).
+pub const WHEEL_TEAMMATE: [SiteSlot; 3] = [
+    SiteSlot::new(Owner::Jip, 0x005f_a977),
+    SiteSlot::new(Owner::Jip, 0x005f_b122),
+    SiteSlot::new(Owner::Jip, 0x0060_7c8e),
+];
+/// An actor's teammate byte (`Actor::isTeammate`, `+0x18D`, what `00566950` answers).
+const ACTOR_IS_TEAMMATE: u32 = 0x18d;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: WheelTeammateHook.
+/// G54: the teammate test before the companion wheel answers false for an actor whose wheel
+/// `SetWheelDisabled` turned off (`jipActorFlags1` bit 0x80, [`crate::commands::jip_fn_actor::DISABLE_WHEEL`]);
+/// else the teammate byte as the game reads it. Without the command the answer is the game's.
+fn wheel_teammate(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let actor = w[0];
+    if e.mem.u8(actor + ACTOR_IS_TEAMMATE) == 0 {
+        return Some(0);
+    }
+    let flags = e.get(
+        Ptr::<crate::game::JipActorFlags>::new(actor),
+        crate::game::JipActorFlags::jipActorFlags1,
+    );
+    Some(u32::from(
+        flags & crate::commands::jip_fn_actor::DISABLE_WHEEL == 0,
+    ))
+}
+
+/// H19's seam: FireWeapon's gun wobble step (`0x524014` up to `0x524072`; words: the actor, the
+/// spread so far as `f32` bits; the answer is the new spread).
+pub const GUN_WOBBLE: SiteSlot = SiteSlot::new(Owner::Jip, 0x0052_4014);
+/// `Actor::baseProcess` (`+0x68`), a process's level (`+0x28`, 0 for a high process) and its aim
+/// value (`+0x1D0`, `fAimLooking`, what the high process's `+0x42C` slot answers).
+const ACTOR_PROCESS: u32 = 0x68;
+const PROCESS_LEVEL: u32 = 0x28;
+const PROCESS_AIM: u32 = 0x1d0;
+/// The actor's stat the original widens the spread by (`008b0dd0` with 2) and the value of
+/// `fNPCMaxGunWobbleAngle` (`0x11CE038`, the setting's float).
+const ACTOR_GET_STAT: u32 = 0x008b_0dd0;
+const MAX_GUN_WOBBLE_ANGLE: u32 = 0x011c_e038;
+/// JIP's `FltPId180` (`PS_V3_PId180`, `internal/utility.h`): pi / 180 as a float.
+const PI_D180: f32 = 0.017_453_292;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: FireWeaponWobbleHook.
+/// H19, JIP's gun wobble (with JIP installed, always): for an actor with a high process, the
+/// process's aim value is added to the spread, then, unless the actor's `ToggleNoGunWobble` bit is
+/// set ([`crate::commands::jip_fn_actor_p2::NO_GUN_WOBBLE`]), its stat 2 times
+/// `fNPCMaxGunWobbleAngle` in radians; an actor with no process or a lower one keeps the spread as
+/// it is. The original adds the stat part first and asks every process for its value (a lower
+/// process answers through its own slot); NPCs fire with a high process (our reading:
+/// a lower process does not run combat), so in play only the rounding of the sum differs (the
+/// original rounds to a float after each step, JIP once).
+fn gun_wobble(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    let (actor, spread) = (w[0], f32::from_bits(w[1]));
+    let process = e.mem.u32(actor + ACTOR_PROCESS);
+    if process == 0 || e.mem.u32(process + PROCESS_LEVEL) != 0 {
+        return Some(spread.to_bits());
+    }
+    let mut sum = f64::from(spread) + f64::from(e.mem.f32(process + PROCESS_AIM));
+    let flags = e.get(
+        Ptr::<crate::game::JipActorFlags>::new(actor),
+        crate::game::JipActorFlags::jipActorFlags2,
+    );
+    if flags & crate::commands::jip_fn_actor_p2::NO_GUN_WOBBLE == 0 {
+        let stat = e.call(ACTOR_GET_STAT, &args![actor, 2u32]).f32();
+        sum += f64::from(stat) * f64::from(e.mem.f32(MAX_GUN_WOBBLE_ANGLE)) * f64::from(PI_D180);
+    }
+    Some((sum as f32).to_bits())
+}
 
 fn install_jip(e: &mut Engine) {
     e.wrap(SET_FORM_TYPE, set_form_type);
     e.wrap(NPC_MODEL, npc_model);
     e.on_site(MOD_NAME_HASH, mod_name_hash);
     e.on_site(MOD_LOG_BYTE, mod_log_byte);
+    // Made before the threads start, so every thread's engine shares the one set.
+    e.ext_free::<InternalMarkers>();
     e.wrap(IS_MARKER, is_marker);
+    for site in WHEEL_TEAMMATE {
+        e.on_site(site, wheel_teammate);
+    }
+    e.on_site(GUN_WOBBLE, gun_wobble);
     // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: InitGamePatches
     // (SafeWrite32(0x104A1BC, 0x401290)). The exe's own stub, as JIP writes it (not a routine
     // of ours, so not `slots::write_slot`).
@@ -518,8 +604,9 @@ fn global_load_form(e: &mut Engine, a: &[u32]) -> Option<u32> {
     }
 }
 
-/// `s_internalMarkerIDs`: the ids JIP takes for markers (`InitContainers`, `jip_nvse.cpp`),
-/// `SetInternalMarker`'s set (that command is not built: the set stays JIP's start). The 14
+/// `s_internalMarkerIDs` at JIP's start: the ids JIP takes for markers (`InitContainers`,
+/// `jip_nvse.cpp`); `SetInternalMarker` adds and removes ids while the game runs
+/// ([`InternalMarkers`]). The 14
 /// statics and the door the exe compares by address are the first 15 (`GenerateDefaultObjects`
 /// gives them these ids: 1-6, 0x10, 0x12, 0x15, 0x23, 0x24, 0x32-0x34, 0x3B, Ghidra), then the
 /// exe's id range 0x64..0x77.
@@ -527,6 +614,39 @@ const INTERNAL_MARKER_IDS: [u32; 35] = [
     1, 2, 3, 4, 5, 6, 0x10, 0x12, 0x15, 0x23, 0x24, 0x32, 0x33, 0x34, 0x3b, 0x64, 0x65, 0x66, 0x67,
     0x68, 0x69, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76, 0x77,
 ];
+
+/// JIP's `s_internalMarkerIDs` (`Set<UInt32>`): [`INTERNAL_MARKER_IDS`] at the start, then what
+/// `SetInternalMarker` puts in or takes out. One set for the run: `IsMarker` reads it from any
+/// thread (a read lock: JIP reads its set with no lock while the script's thread may change it),
+/// the command changes it from the script's thread.
+pub struct InternalMarkers(std::sync::RwLock<std::collections::HashSet<u32>>);
+
+impl Default for InternalMarkers {
+    fn default() -> Self {
+        InternalMarkers(std::sync::RwLock::new(
+            INTERNAL_MARKER_IDS.into_iter().collect(),
+        ))
+    }
+}
+
+impl InternalMarkers {
+    /// Whether `id` is in the set (`Set::HasKey`).
+    pub fn has(&self, id: u32) -> bool {
+        self.0
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .contains(&id)
+    }
+    /// `id` put in (`Set::Insert`) or taken out (`Set::Erase`).
+    pub fn set(&self, id: u32, on: bool) {
+        let mut set = self.0.write().unwrap_or_else(|p| p.into_inner());
+        if on {
+            set.insert(id);
+        } else {
+            set.remove(&id);
+        }
+    }
+}
 /// The form types JIP's test names: `TESObjectACTI` (0x15), `TESObjectLIGH` (0x1E),
 /// `BGSTextureSet` (4), `BGSIdleMarker` (0x30).
 const ACTIVATOR: u8 = 0x15;
@@ -541,7 +661,7 @@ const MODEL_PATH_LENGTH: u32 = 0x44;
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetIsInternalMarkerHook.
 /// `TESObject::IsMarker` rewritten: a type above `BGSIdleMarker` no; an idle marker or a texture
-/// set yes; an id in [`INTERNAL_MARKER_IDS`] yes; an activator whose model path is
+/// set yes; an id in JIP's set ([`InternalMarkers`]) yes; an activator whose model path is
 /// `EditorMarker.NIF` (no case) yes; a light with an empty model path yes; else no. The same
 /// answers as the exe's for every form but one of a type above 0x30 with an id 0x64..0x77 (the
 /// exe: a marker, JIP: not). A null form answers no, as the exe's (JIP would read address 4).
@@ -561,7 +681,8 @@ fn is_marker(e: &mut Engine, w: &[u32]) -> Ret {
     if kind == IDLE_MARKER || kind == TEXTURE_SET {
         return answer(true);
     }
-    if INTERNAL_MARKER_IDS.contains(&e.mem.u32(form + 0xc)) {
+    let id = e.mem.u32(form + 0xc);
+    if e.ext_free::<InternalMarkers>().has(id) {
         return answer(true);
     }
     match kind {

@@ -6,6 +6,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 layout! {
     /// `MobileObject` (Xbox PDB), 0x88 bytes on PC after the TESForm size
@@ -3982,7 +3983,14 @@ pub fn fn_00935d90(e: &mut Engine, value: u32, suppress_setting: u8) {
                 // 00935e31: the reference's +0x1d0 takes no stack word; the pushed
                 // 011f36ac is the word of `00a5c570` (RET 4).
                 let object = e.vcall(reference.addr(), 0x1d0, &args![]).u32();
-                let controller = e.call(0x00a5_c570, &args![object, 0x011f_36acu32]).u32();
+                // 00935e35: lStewieAl's Tweaks' row S0079 (`patchDialogSpeechNullCheck`,
+                // `NiObject_FindType_NullChecked`): no controller for a speaker with no 3D, where
+                // the exe's `GetController` reads through the null node.
+                let controller = if e.stewie(stewie::DIALOG_SPEECH_NULL_CHECK) && object == 0 {
+                    0
+                } else {
+                    e.call(0x00a5_c570, &args![object, 0x011f_36acu32]).u32()
+                };
                 if controller != 0 {
                     let current = fn_00935ef0(e);
                     let acquired = e.call(0x0047_a520, &args![controller, current]).u32();

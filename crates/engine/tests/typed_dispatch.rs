@@ -3205,3 +3205,196 @@ fn scene_set_waiting() {
     .run()
     .assert_same();
 }
+
+// ---- The extra data lookup and its getters ----
+
+/// The extra data chains the lookup walks: none, followers alone, four types, a type twice, and two
+/// types past the cache's 0x93 entries (0xa0 still has a bit in the bitmap, so it is walked and cached
+/// past the entries; 0xa8 has none).
+const EXTRA_CHAINS: &[&[u32]] = &[
+    &[],
+    &[0x1d],
+    &[0x46, 0x19, 0x70, 0x1d],
+    &[0x19, 0x19, 0x1d],
+    &[0x93, 0xa0, 0x46],
+];
+
+/// An extra data list for the lookup: its chain from [`EXTRA_CHAINS`] (`chain`), its type bitmap as
+/// the chain says, empty, or full (bits for types the chain lacks), and the thread's cache holding
+/// another list, this list with the asked type's entry (the extra data the walk would find, or a
+/// decoy when there is none), this list from before the dirty count moved, or this list with no
+/// entries. The extra lock is free; the dirty count is 5.
+fn extra_world(e: &mut Engine, chain: u32, bitmap: u32, cache_state: u32, asked: u8) -> u32 {
+    stand_ins(e);
+    e.map(0x011c_3000, 0x1000);
+    e.mem.set_u32(0x011c_38e4, 5);
+    let list = e.mem.alloc(0x20);
+    let mut next = 0;
+    let mut found = 0;
+    for (i, kind) in EXTRA_CHAINS[chain as usize].iter().enumerate().rev() {
+        let i = i as u32;
+        let extra = block(
+            e,
+            0x18,
+            &[0x0101_0000, *kind, next, 0x1000 + i, 0, 0x2000 + i],
+        );
+        if *kind == u32::from(asked) {
+            found = extra;
+        }
+        next = extra;
+    }
+    e.mem.set_u32(list + 4, next);
+    for kind in EXTRA_CHAINS[chain as usize] {
+        let byte = list + 8 + (kind >> 3);
+        if kind >> 3 < 0x15 {
+            let flags = e.mem.u8(byte) | 1 << (kind & 7);
+            e.mem.set_u8(byte, flags);
+        }
+    }
+    match bitmap {
+        1 => {
+            for i in 0..0x15 {
+                e.mem.set_u8(list + 8 + i, 0);
+            }
+        }
+        2 => {
+            for i in 0..0x15 {
+                e.mem.set_u8(list + 8 + i, 0xff);
+            }
+        }
+        _ => {}
+    }
+    let cache = e.tls();
+    // Every entry holds a decoy extra data the walk never finds, and so does the word after the last
+    // entry (type 0x93), which the lookup must not read.
+    let decoy = block(e, 0x18, &[0x0101_0000, 0xee, 0, 0xdec1, 0, 0xdec2]);
+    for i in 0..0x94 {
+        e.mem.set_u32(cache + 0x10 + 4 * i, decoy);
+    }
+    let entry = cache + 0x10 + 4 * u32::from(asked);
+    match cache_state {
+        0 => {
+            let other = block(e, 0x20, &[]);
+            words(e, cache + 8, &[other, 5]);
+        }
+        1 => {
+            words(e, cache + 8, &[list, 5]);
+            if asked < 0x93 && found != 0 {
+                e.mem.set_u32(entry, found);
+            }
+        }
+        2 => words(e, cache + 8, &[list, 4]),
+        _ => {
+            words(e, cache + 8, &[list, 5]);
+            for i in 0..0x93 {
+                e.mem.set_u32(cache + 0x10 + 4 * i, 0);
+            }
+        }
+    }
+    list
+}
+
+fn extra_inputs() -> Vec<Input> {
+    vec![
+        Input::Of(&[0, 1, 2, 3, 4]),
+        Input::Of(&[0, 1, 2]),
+        Input::Of(&[0, 1, 2, 3]),
+    ]
+}
+
+/// `BaseExtraList::GetExtraData` (`00410220`): every chain, bitmap and cache state, for types in the
+/// chain, twice in it, absent, at the cache's end and past it, and past the bitmap.
+#[test]
+fn extra_get_extra_data() {
+    let mut inputs = extra_inputs();
+    inputs.push(Input::Of(&[
+        0x1d, 0x46, 0x19, 0x70, 0x92, 0x93, 0xa0, 0xa8, 0xff, 0,
+    ]));
+    Diff::new(entry!(
+        0x0041_0220,
+        dispatch::extra::get_extra_data(Ptr<_>, u8) -> Ptr<_>
+    ))
+    .common(0x0041_0220)
+    // Every combination: 5 chains x 3 bitmaps x 4 cache states x 10 types.
+    .max_cases(600)
+    // The cache's memset wrapper, a C runtime family member: translated on both sides here (this
+    // file stands in for that family's square root).
+    .goes_by_address(&[0x0040_3d30])
+    .inputs(&inputs)
+    .setup(|e, case| {
+        let asked = case.word(3) as u8;
+        let list = extra_world(e, case.word(0), case.word(1), case.word(2), asked);
+        vec![list, case.word(3)]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The four getters over the lookup: each the typed getter against its translation, which calls the
+/// lookup by address too, with the type it asks for.
+trait ExtraGetter {
+    fn extra_getter(self, address: u32, asked: u8) -> Diff;
+}
+
+impl ExtraGetter for Diff {
+    fn extra_getter(self, address: u32, asked: u8) -> Diff {
+        self.common(address)
+            // The cache's memset wrapper, a C runtime family member: translated on both sides
+            // here (this file stands in for that family's square root).
+            .goes_by_address(&[0x0040_3d30])
+            .inputs(&extra_inputs())
+            .setup(move |e, case| {
+                vec![extra_world(
+                    e,
+                    case.word(0),
+                    case.word(1),
+                    case.word(2),
+                    asked,
+                )]
+            })
+    }
+}
+
+#[test]
+fn extra_followers() {
+    Diff::new(entry!(
+        0x0042_2700,
+        dispatch::extra::followers(Ptr<_>) -> Ptr<_>
+    ))
+    .extra_getter(0x0042_2700, 0x1d)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_head_track_target() {
+    Diff::new(entry!(
+        0x0041_9ea0,
+        dispatch::extra::head_track_target(Ptr<_>) -> u32
+    ))
+    .extra_getter(0x0041_9ea0, 0x46)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_actor_package_data() {
+    Diff::new(entry!(
+        0x0042_12b0,
+        dispatch::extra::actor_package_data(Ptr<_>) -> u32
+    ))
+    .extra_getter(0x0042_12b0, 0x70)
+    .run()
+    .assert_same();
+}
+
+#[test]
+fn extra_package_target() {
+    Diff::new(entry!(
+        0x0041_cb70,
+        dispatch::extra::package_target(Ptr<_>) -> u32
+    ))
+    .extra_getter(0x0041_cb70, 0x19)
+    .run()
+    .assert_same();
+}

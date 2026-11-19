@@ -1664,8 +1664,16 @@ fn load_part(
     if part.is_null() || part.addr() == 0xffff_ffff {
         return;
     }
-    if first_person && !(2..=6).contains(&slot) {
-        return;
+    // Seam (JIP's H15, its slot visibility mask at `0x4AC645`): words: the slot; an answer is whether
+    // the slot's part loads in first person (the game's: slots 2 to 6).
+    if first_person {
+        let shown = match e.site(0x004a_c645, &[slot]) {
+            Some(answer) => answer != 0,
+            None => (2..=6).contains(&slot),
+        };
+        if !shown {
+            return;
+        }
     }
     if flag == 0
         && is_face_gen_slot(e, this, slot)
@@ -1790,7 +1798,7 @@ fn load_part(
         }
     }
     if !result.is_null() {
-        finish_part(e, this, slot, node, file, result, bone_index);
+        finish_part(e, this, slot, node, file, result, bone_index, first_person);
     }
     ni_pointer_release(e, handle);
     stack_free(e, handle);
@@ -1857,6 +1865,8 @@ fn apply_face_gen(e: &mut Engine, requester: Ptr, face: Ptr, geometry: Ptr) {
 /// model `file`, attaches an unskinned node to its bone (or the root, or
 /// logs when the slot has no bone), hides dismembered limbs, flags the
 /// weapon and stores `result` as the slot's clone.
+// One argument per word the seam passes (first person, as the exe keeps it in its frame).
+#[allow(clippy::too_many_arguments)]
 fn finish_part(
     e: &mut Engine,
     this: Ptr<BipedAnim>,
@@ -1865,12 +1875,25 @@ fn finish_part(
     file: Ptr,
     result: Ptr,
     bone_index: u32,
+    first_person: bool,
 ) {
     let current = object(this, slot);
     let requester = e.get(this, BipedAnim::m_pRequester);
     let mut result = result;
     let form = e.get(current, BipedObject::pParent);
-    name_part_node(e, result, form, slot);
+    // Seam (JIP's H10, `LoadBip01SlotHook` at `0x4ACCF1` up to `0x4ACD8C`): words: the form, the
+    // clone, the model's root, the slot, first person; an answer means the clone is named (and
+    // JIP's inserted objects and lights put in) by the handler.
+    let words = [
+        form.addr(),
+        result.addr(),
+        node.addr(),
+        slot,
+        u32::from(first_person),
+    ];
+    if e.site(0x004a_ccf1, &words).is_none() {
+        name_part_node(e, result, form, slot);
+    }
     e.call(FN_004AF240, &args![file, node, slot, requester]);
     if !e.get(current, BipedObject::bSkinned) && e.vcall(result.addr(), 0x0c, &[]).u32() != 0 {
         let world = e.call(NODE_PARENT, &args![result]).u32();
@@ -3007,8 +3030,18 @@ pub fn biped_anim_load_and_attach_add_on(
         if e.call(IS_KIND_OF, &args![SKINNED_CLASS, copy]).bool() {
             e.call(SET_LOD_MULT_TYPE, &args![copy, 7u32]);
         }
-        e.call(SET_TRANSLATION, &args![copy, ZERO_TRANSLATION]);
-        e.call(SET_ROTATION, &args![copy, IDENTITY_ROTATION]);
+        // Seam (JIP's H10, `LoadWeaponSlotHook` at `0x4AF0DE` up to `0x4AF0F8`): words: the clone, the
+        // form, the root override; an answer means the clone's rotation and translation were reset
+        // (and JIP's inserted objects and lights put in) by the handler.
+        if e.site(
+            0x004a_f0de,
+            &[copy.addr(), form.addr(), root_override.addr()],
+        )
+        .is_none()
+        {
+            e.call(SET_TRANSLATION, &args![copy, ZERO_TRANSLATION]);
+            e.call(SET_ROTATION, &args![copy, IDENTITY_ROTATION]);
+        }
         if e.call(FIND_SKINNED_NODE, &args![copy]).u8() != 0 {
             skinned = true;
         }
@@ -5432,6 +5465,66 @@ mod tests {
         assert_eq!(calls_to(&calls, RELEASE_MODEL), vec![vec![0x5555, 0xabc0]]);
     }
 
+    /// A first-person biped with parts in slots 3 and 10: the models whose files were loaded.
+    fn first_person_loads(seam: bool) -> Vec<u32> {
+        let mut e = engine();
+        let s = scene(&mut e, 10, 4);
+        e.mem.set_u32(SLOT_BONES + 4 * 3, 4);
+        let model3 = object_with_slots(&mut e, &[(0x14, 0xdef0), (0x1c, 0)]);
+        set_slot(&mut e, s.this, 3, s.form, model3, 0);
+        let bone_node = object_with_slots(&mut e, &[(0xdc, 0)]);
+        e.set(bone(s.this, 4), BipedBone::pParent, Ptr::new(bone_node));
+        returns(&mut e, FIXED_STRING_INIT, 0x1f1f);
+        e.set_global(PLAYER, 0x0abc_0000u32);
+        returns(&mut e, IS_FIRST_PERSON_BIPED, 1);
+        if seam {
+            // JIP's H15 mask with slot 10 only.
+            e.on_site_for_test(0x004a_c645, |_, w| Some(u32::from(w[0] == 10)));
+        }
+        log(&mut e);
+        biped_anim_load_biped_parts(&mut e, s.this, 0);
+        calls_to(&log(&mut e), LOAD_FILE)
+            .iter()
+            .map(|c| c[1])
+            .collect()
+    }
+
+    /// The seam at 0x4AC645 (JIP's H15): in first person the game loads slots 2 to 6 only (slot
+    /// 3's model, not slot 10's); the seam answering "slot 10 only" loads slot 10's and not 3's.
+    #[test]
+    fn first_person_slots_follow_the_seam() {
+        assert_eq!(first_person_loads(false), vec![0xdef0], "the game's slots");
+        assert_eq!(first_person_loads(true), vec![0xabc0], "the seam's");
+    }
+
+    thread_local! {
+        static H10_WORDS: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// The seam at 0x4ACCF1 (JIP's H10): it gets the form, the clone, the model's root, the slot
+    /// and first person; an answer stands for the game's naming (no `sprintf`, no `SetName`).
+    #[test]
+    fn a_new_parts_naming_is_left_to_an_answering_seam() {
+        let mut e = engine();
+        let s = scene(&mut e, 8, 4);
+        let bone_node = object_with_slots(&mut e, &[(0xdc, 0)]);
+        e.set(bone(s.this, 4), BipedBone::pParent, Ptr::new(bone_node));
+        returns(&mut e, FIXED_STRING_INIT, 0x1f1f);
+        e.on_site_for_test(0x004a_ccf1, |_, w| {
+            H10_WORDS.with(|h| *h.borrow_mut() = w.to_vec());
+            Some(1)
+        });
+        log(&mut e);
+        biped_anim_load_biped_parts(&mut e, s.this, 0);
+        let calls = log(&mut e);
+        assert!(calls_to(&calls, SPRINTF).is_empty());
+        assert!(calls_to(&calls, SET_NAME).is_empty());
+        let words = H10_WORDS.with(|h| h.borrow().clone());
+        assert_eq!(words[0], s.form);
+        assert_eq!(words[1], s.node);
+        assert_eq!(words[3..], [8, 0]);
+    }
+
     #[test]
     fn a_new_part_is_loaded_cloned_named_and_attached_to_its_bone() {
         let mut e = engine();
@@ -7521,6 +7614,34 @@ mod tests {
         let hang = slot_target(&e, a.root, 0xdc);
         assert_eq!(calls_to(&calls, hang), vec![vec![a.root, a.copy, 1]]);
         assert_eq!(calls_to(&calls, UPDATE_PROPERTIES), vec![vec![a.copy]]);
+    }
+
+    /// The seam at 0x4AF0DE (JIP's H10): it gets the clone, the form and the root override; an
+    /// answer stands for the game's translation and rotation reset.
+    #[test]
+    fn an_add_ons_transform_reset_is_left_to_an_answering_seam() {
+        let mut e = engine();
+        let a = add_on(&mut e);
+        e.on_site_for_test(0x004a_f0de, |_, w| {
+            H10_WORDS.with(|h| *h.borrow_mut() = w.to_vec());
+            Some(1)
+        });
+        log(&mut e);
+        biped_anim_load_and_attach_add_on(
+            &mut e,
+            Ptr::new(a.form),
+            Ptr::new(a.model),
+            0xffff_ffff,
+            Ptr::new(a.requester),
+            Ptr::new(a.root),
+        );
+        let calls = log(&mut e);
+        assert!(calls_to(&calls, SET_TRANSLATION).is_empty());
+        assert!(calls_to(&calls, SET_ROTATION).is_empty());
+        assert_eq!(
+            H10_WORDS.with(|h| h.borrow().clone()),
+            [a.copy, a.form, a.root]
+        );
     }
 
     #[test]

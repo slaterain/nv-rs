@@ -21,6 +21,15 @@ pub(in super::super) const SITES: &[Entry] = &[
     // G90 (fix row): leaving an interior, 00454450: CloudsFixHook in place of the interior
     // cell's clear (0x454576).
     row(0x0045_4576),
+    // H15 (JIP's own): BipedAnim::LoadBipedParts 004ac1e0, the first-person slot test (2 to 6) by JIP's
+    // mask (0x7C at the start: the same slots) that ToggleBipedSlotVisibility edits (0x4AC645).
+    row(0x004a_c645),
+    // H10 (JIP's own, `LoadBip01SlotHook`): LoadBipedParts 004ac1e0, a loaded part's naming (0x4ACCF1 up
+    // to 0x4ACD8C): named "<slot> <form id>", JIP's inserted objects and the point lights put in.
+    row(0x004a_ccf1),
+    // H10 (`LoadWeaponSlotHook`): LoadAndAttachAddOn 004aeed0, the clone's transform reset
+    // (0x4AF0DE up to 0x4AF0F8): JIP's inserted objects and the point lights put in.
+    row(0x004a_f0de),
     // G106 (fix row): the water forms' update 004e3d60, the update map's find (0x4E400E; the
     // flag's push at 0x4E4000 nop'd with it).
     row(0x004e_400e),
@@ -53,6 +62,9 @@ pub(in super::super) const SITES: &[Entry] = &[
     row(0x0057_3194),
     row(0x0057_3fe8),
     row(0x0057_445b),
+    // H13 (JIP's own, `SetRefrPositionHook`): SetLocationOnReference 00575830, the position's store
+    // (0x575A7F): the player kept at the node SynchronizePosition names.
+    row(0x0057_5a7f),
     row(0x0057_6af0),
     // G31 (fix row): 00579690, the end of its door branch: the door's answer stands.
     row(0x0057_9942),

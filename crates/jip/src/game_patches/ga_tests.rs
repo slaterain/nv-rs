@@ -1,4 +1,4 @@
-//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G58, H21. Each handler's branches over
+//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G55, G58, H21. Each handler's branches over
 //! stand-ins of what JIP's bytes read, values from JIP's assembly (`internal/patches_game.h`,
 //! `internal/hooks.h`) and the exe's (Ghidra).
 
@@ -53,7 +53,12 @@ fn ga_seams_are_jips_addresses() {
     );
     assert_eq!(PICK_LOAD_SCREEN.addr(), 0x0078_a79b);
     assert_eq!(AREA.fix_wraps, [0x0078_ac60]);
-    assert!(AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
+    assert_eq!(
+        AREA.jip_sites,
+        [0x007a_9aee, 0x007a_9c45],
+        "G55 (JIP's own)"
+    );
+    assert!(AREA.jip_wraps.is_empty());
 }
 
 /// Not installed: nothing answers at any seam.
@@ -64,6 +69,20 @@ fn ga_not_installed_nothing_answers() {
     crate::install_as(&mut e, false);
     for slot in FIX_SITES {
         assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d, 1]), None);
+    }
+    for slot in MAX_MESSAGE_WIDTH {
+        assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d]), None);
+    }
+}
+
+/// G55 is in with JIP installed, the row off: no box waiting, it does not answer (the game's
+/// width; the command's tests drive a box).
+#[test]
+fn g55_in_with_jip_installed() {
+    let mut e = installed();
+    for slot in MAX_MESSAGE_WIDTH {
+        assert_eq!(e.site_owners(slot.addr()).to_vec(), vec![Owner::Jip]);
+        assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d]), None);
     }
 }
 
@@ -476,8 +495,9 @@ fn g09_seam_answers_only_with_the_fixes() {
 #[test]
 fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
     let mut e = engine();
+    // install_as runs every area's install_jip once (GA's: the time slot and G55's seams; a
+    // second run would register G55's seams twice, which on_site refuses).
     crate::install_as(&mut e, true);
-    install_jip(&mut e);
     e.set_jip_patches(
         engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
     );
@@ -765,4 +785,22 @@ fn o16_the_deferred_init_message_makes_the_lists() {
         e.ext_free::<LoadScreenLists>().0.get(),
         Some(&(vec![screen(1), screen(3)], vec![screen(2), screen(4)]))
     );
+}
+
+/// O16 switched on while the game runs (`SetOptionalPatch(16, true)`): the lists made then, as
+/// JIP makes them when its location list is empty; off and on again keeps them.
+#[test]
+fn o16_switched_on_at_run_time_makes_the_lists() {
+    use engine_core::extend::jip_patches::{FIXES, LOAD_SCREEN_FIX};
+    let mut e = o16_world_unmade(&[], false);
+    e.jip_patches_and_not(LOAD_SCREEN_FIX);
+    e.jip_patches_or(FIXES);
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), None);
+    assert!(crate::game_patches::switches::set(&mut e, 16, true));
+    let made = Some((vec![screen(1), screen(3)], vec![screen(2), screen(4)]));
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), made.as_ref());
+    assert!(crate::game_patches::switches::set(&mut e, 16, false));
+    assert!(!crate::game_patches::switches::is_in(&mut e, 16));
+    assert!(crate::game_patches::switches::set(&mut e, 16, true));
+    assert_eq!(e.ext_free::<LoadScreenLists>().0.get(), made.as_ref());
 }

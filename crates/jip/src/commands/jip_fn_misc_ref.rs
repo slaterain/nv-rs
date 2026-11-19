@@ -22,8 +22,8 @@
 //!   `GetBlockTextureSet`, `GetNifBlockParentNodes`, `GetMaterialPropertyValue`,
 //!   `SetMaterialPropertyValue`, `SetTextureTransformKey`, `Get/SetAnimSequenceFrequency`,
 //!   `PlayAnimSequence`, `AttachLight`, `RemoveLight`, `AttachLine`, `AttachExtraCamera`,
-//!   `ProjectExtraCamera`, `ModelHasBlock`, `InsertNode`, `AttachModel` (JIP's insert/attach maps
-//!   and model hooks), `MoveToNode`.
+//!   `ProjectExtraCamera`, `MoveToNode`. (`InsertNode`, `AttachModel` and `ModelHasBlock` are built
+//!   in `jip_fn_misc_ref_insert.rs`.)
 //! - Havok (rigid bodies, phantoms, contacts, character controllers, ray casts):
 //!   `IsMobile`, `IsGrabbable` (JIP's `NiNode::IsMovable` walks collision objects),
 //!   `GetRigidBodyMass`, `PushObject`, `GetObjectVelocity`, `Get/SetAngularVelocity`,
@@ -37,12 +37,13 @@
 //!   `MoveToCell`, `MoveToEditorPosition` (both through JIP's `MoveToCell`), `PlaceAtCell`.
 //! - Hooks or code patches (steps 3.5/3.9): `ToggleObjectCollision` (the 3D load hook that
 //!   keeps the flag's collision off), `ToggleNoZPosReset` (patches the game's code at `00629006`
-//!   and `006295E9`), `SynchronizePosition` (the main loop hook reading `s_syncPosition*`).
+//!   and `006295E9`).
+//! - (Built, registered with the position patch H13: `SynchronizePosition` ([`AWAITING_H13`]),
+//!   which keeps JIP's `s_syncPosition*` ([`sync_position`]) for that patch's `SetRefrPositionHook`.)
 //! - The co-save's application (step 3.3) and JIP's own extra data class: `SetLinkedReference`
 //!   (its defaults map and the load's `RestoreLinkedRefs`/`SetLinkedRefID` are not built, so a
 //!   load would keep the links unapplied).
 //! - (Built in `jip_fn_extra_data.rs`: `RefHasExtraData`, `GetRefExtraData`, `SetRefExtraData`.)
-//! - `GetPlayerPerks` calls `jip_fn_actor`'s `GetAllPerks` (lane A's module, not built yet).
 
 use super::Handlers;
 use crate::game::JipFormFlags;
@@ -79,7 +80,13 @@ pub static COMMANDS: Handlers = &[
     (0x28f9, get_angle_ex),
     (0x2909, get_translated_pos),
     (0x292a, get_editor_position),
+    (0x286b, get_player_perks),
 ];
+
+/// `SynchronizePosition`, built but not registered until JIP's position hook (row H13) is in:
+/// without it the player would not follow the reference and ending would move him back to where
+/// it started. The row's pull request adds this list to `commands::ALL`.
+pub static AWAITING_H13: Handlers = &[(0x28d5, synchronize_position)];
 
 /// `kHookFormFlag6_NoPCActivation` (`internal/hooks.h` (JIP LN NVSE), the bit `world_hooks.rs`
 /// sets).
@@ -1152,6 +1159,9 @@ fn ref_has_map_marker(e: &mut Engine, w: &[u32]) -> Ret {
 /// Before a load (and at the exit to the main menu): JIP's own markers' nodes freed but the first,
 /// the list emptied and the `CreateMapMarkers` hook off (`HOOK_SET`).
 pub(crate) fn pre_load(e: &mut Engine) {
+    // `s_syncPositionRef = nullptr` (the same housekeeping, after the map markers; nothing
+    // between reads it).
+    sync_state(e).refr = 0;
     let count = marker_count(e);
     if count == 0 {
         return;
@@ -1173,6 +1183,138 @@ pub(crate) fn pre_load(e: &mut Engine) {
     e.set_hook(engine_core::extend::Hook::CreateMapMarkers, false);
 }
 
+// ---- SynchronizePosition ----
+
+/// JIP's `s_syncPositionRef`, `s_syncPositionNode`, `s_syncPositionMods`,
+/// `s_syncPositionPos` and `s_syncPositionFlags` (`internal/hooks.h`), read by the position
+/// patch (H13, `SetRefrPositionHook`), which also writes `pos`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SyncState {
+    /// The reference the player is kept at (0: none).
+    pub refr: u32,
+    /// The node's name, a fixed string of the game's string table (one count held; 0: none).
+    pub node: u32,
+    /// Added to the node's position: x and y stay 0, z is the command's offset.
+    pub mods: [f32; 4],
+    /// The reference's position when synchronizing started (where the player goes back to).
+    pub pos: [f32; 4],
+    /// 1: the player's rotation follows the node too.
+    pub flags: u8,
+}
+
+/// [`SyncState`] behind a lock of its own (the command and the patch read and write it).
+#[derive(Default)]
+pub struct SyncPosition(std::sync::Mutex<SyncState>);
+
+fn sync_state(e: &mut Engine) -> std::sync::MutexGuard<'_, SyncState> {
+    e.ext_free::<SyncPosition>()
+        .0
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// JIP's synchronized position state, for the position patch (H13).
+pub fn sync_position(e: &mut Engine) -> SyncState {
+    *sync_state(e)
+}
+
+/// Sets JIP's synchronized position state (the position patch writes `pos`).
+pub fn set_sync_position(e: &mut Engine, state: SyncState) {
+    *sync_state(e) = state;
+}
+
+/// The position patch's write of the kept position (H13): under the state's lock, and only while
+/// `refr` is still the reference kept (a `SynchronizePosition` start or end on another thread
+/// since the patch read the state wins). Whether it was written.
+pub fn set_sync_pos_if(e: &mut Engine, refr: u32, pos: [f32; 4]) -> bool {
+    let mut s = sync_state(e);
+    if s.refr != refr {
+        return false;
+    }
+    s.pos = pos;
+    true
+}
+
+/// JIP's `nodeName[0x40]`.
+const SYNC_NODE_BUFFER: usize = 0x40;
+/// `TESObjectREFR::position` (+0x30).
+const REFR_POSITION: u32 = 0x30;
+/// The distance past which the player is first moved to the reference's cell.
+const SYNC_MOVE_DISTANCE: f32 = 1024.0;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_SynchronizePosition_Execute.
+/// `SynchronizePosition [ref] [rotate] [z offset] [node]`: the offset's z set to 0 first (kept at
+/// 0 when it is not read). When the arguments read: with a reference, the player is moved to the
+/// reference's cell at its position when farther than 1024 (`GetDistance`: another cell or world
+/// counts as far) and has a cell; then the rotate flag (any value but 0), the reference's
+/// position, the node's name (its fixed string; the old one's count given back) and the
+/// reference are kept. With none, synchronizing ends: when a reference was kept, it is
+/// forgotten and the player moved back to the kept position in its cell. No result.
+fn synchronize_position(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    // JIP sets the z to 0, then the read writes it when it is there.
+    sync_state(e).mods[2] = read.float(2, 0.0);
+    if !read.ok {
+        return handled(true);
+    }
+    let target = read.form(0);
+    let player = e.mem.u32(PLAYER);
+    if target != 0 {
+        if super::ln_fn_math::distance_3d(e, player, target) > SYNC_MOVE_DISTANCE {
+            if let Some(cell) = super::ln_fn_math::cell_or_persistent(e, target) {
+                super::ref_move::move_to_cell(e, player, cell, target + REFR_POSITION);
+            }
+        }
+        let name = super::buffer_arg(e, &read, 3, SYNC_NODE_BUFFER, "SynchronizePosition");
+        let node = super::with_guest_text(e, &name, |e, text| {
+            e.call(super::jip_fn_misc_ref_nodes_w::ADD_STRING, &[text])
+                .eax
+        });
+        let pos = floats3(e, target + REFR_POSITION);
+        let old = {
+            let mut s = sync_state(e);
+            s.flags = u8::from(read.int(1, 0) != 0);
+            s.pos = [pos[0], pos[1], pos[2], 0.0];
+            let old = s.node;
+            s.node = node;
+            s.refr = target;
+            old
+        };
+        super::jip_fn_misc_ref_nodes_w::release_name(e, old);
+    } else {
+        let (kept, pos) = {
+            let mut s = sync_state(e);
+            let kept = s.refr;
+            s.refr = 0;
+            (kept, s.pos)
+        };
+        if kept != 0 {
+            if let Some(cell) = super::ln_fn_math::cell_or_persistent(e, kept) {
+                super::ref_move::move_to_cell_at(e, player, cell, [pos[0], pos[1], pos[2]]);
+            }
+        }
+    }
+    handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_jip/jip_fn_misc_ref.h:
+// Cmd_GetPlayerPerks_Execute.
+/// `GetPlayerPerks`: the player's own perks, hidden ones left out, as an array (0 for none):
+/// `GetAllPerks(player, 0, script, 0)`.
+fn get_player_perks(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let player = e.mem.u32(PLAYER);
+    let id = super::jip_fn_actor_p2::get_all_perks(e, player, false, a.script, false);
+    a.set_result(e, f64::from(id));
+    handled(true)
+}
+
 #[cfg(test)]
 #[path = "jip_fn_misc_ref_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "jip_fn_misc_ref_r1_tests.rs"]
+mod r1_tests;

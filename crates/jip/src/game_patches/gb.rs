@@ -28,7 +28,7 @@
 //! the map tile is centred on the player icon (traits `0xFA1`/`0xFA2`), JIP's hook tests its flag
 //! `s_mapMenuSkipSetXY`: set, it clears it and jumps past both sets (`0x79E053`); clear, it does
 //! the exe's work. Only JIP's item-list refresh (`RefreshItemListBox`, for `RefreshItemsList` and
-//! `RemoveMe`'s G60, neither built yet) sets the flag, on the world map tab, just before it calls
+//! `RemoveMe`'s G60) sets the flag, on the world map tab, just before it calls
 //! `AddMapIcons`; [`skip_map_centring_once`] is that set.
 //!
 //! **G88, JIP's fade types 5 and 6** (`InitGamePatches`: `SafeWrite8(0xA081A8, 6)` and
@@ -475,11 +475,17 @@ pub struct MapSkipCentring(AtomicBool);
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/jip_core.cpp: RefreshItemListBox (its
 // `s_mapMenuSkipSetXY = true` before `AddMapIcons` on the world map tab).
 /// The next `MapMenu::AddMapIcons` leaves the map tile where it is (once). For JIP's item-list
-/// refresh (`RefreshItemsList`, G60), not built yet.
+/// refresh (`commands::jip_fn_ui::refresh_item_list_box`: `RefreshItemsList`, G60).
 pub fn skip_map_centring_once(e: &mut Engine) {
     e.ext_free::<MapSkipCentring>()
         .0
         .store(true, Ordering::Relaxed);
+}
+
+/// Whether the next `AddMapIcons` skips the centring, for the tests of its setters.
+#[cfg(test)]
+pub(crate) fn map_skip_centring_pending(e: &mut Engine) -> bool {
+    e.ext_free::<MapSkipCentring>().0.load(Ordering::Relaxed)
 }
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: RefreshMapMenuHook.
@@ -569,6 +575,13 @@ fn tile_set_string(e: &mut Engine, tile: u32, id: u32, text: &[u8]) {
     if value == 0 {
         return;
     }
+    value_set_string(e, value, text);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::Value::SetString.
+/// The value gets `text`: nothing when it holds the same text (case counts); else its old text
+/// is freed, a copy on the game's heap is kept and the value refreshed.
+pub(crate) fn value_set_string(e: &mut Engine, value: u32, text: &[u8]) {
     let old = e.mem.u32(value + VALUE_STRING);
     if old != 0 {
         if e.mem.cstr(old) == text {
@@ -903,6 +916,30 @@ pub fn deferred_init(e: &mut Engine) {
         e.mem.set_u32(info + AV_FULL_NAME + at, word);
     }
     e.mem.set_u32(info + AV_DERIVATION, DERIVE_SKILL);
+}
+
+/// The exe's Big Guns flags (`kAVFlag_Unknown2000`, as `0066efe0` registers it): O3 off.
+pub const BIG_GUNS_PLAIN_FLAGS: u32 = 0x2000;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: SetOptionalPatch case 3.
+/// O3 switched at run time (`SetOptionalPatch(3, on)`): Big Guns' flags [`BIG_GUNS_SKILL_FLAGS`]
+/// and JIP's description text on, [`BIG_GUNS_PLAIN_FLAGS`] and no alternative text off.
+pub fn set_big_guns_skill(e: &mut Engine, on: bool) {
+    let slot = ACTOR_VALUE_INFOS + 4 * AV_BIG_GUNS;
+    if !e.mem.is_mapped(slot) {
+        return;
+    }
+    let info = e.mem.u32(slot);
+    if info == 0 {
+        return;
+    }
+    let (flags, text): (u32, &[u8]) = if on {
+        (BIG_GUNS_SKILL_FLAGS, BIG_GUNS_DESCRIPTION)
+    } else {
+        (BIG_GUNS_PLAIN_FLAGS, b"")
+    };
+    e.mem.set_u32(info + AV_FLAGS, flags);
+    crate::world_hooks::set_description_alt_text(e, info + AV_DESCRIPTION, text);
 }
 #[cfg(test)]
 #[path = "gb_tests.rs"]

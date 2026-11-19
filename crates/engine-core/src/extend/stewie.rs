@@ -1,0 +1,195 @@
+//! lStewieAl's Tweaks built in (`crates/stewie`): which of its rows are on. Each change Tweaks makes
+//! to the game's code is a row of its own (docs/FIXES.md, "lStewieAl's Tweaks"), one bit of a table
+//! every engine of a game shares ([`Engine::stewie`]). A translation Tweaks patches tests its row's
+//! bit at the patched place before anything else, with one load; with the bit clear it runs as the
+//! exe's code. `crates/stewie` sets the bits at its install, before the game's threads start: all
+//! clear unless the host's row `NV_STEWIE` is on, then each row on unless its own key (or Tweaks'
+//! own `[Tweaks]` key for it) turns it off.
+//!
+//! The rows' numbers are fixed ranges per group ([`CRASH`], ...), so groups built side by side add
+//! rows in ranges of their own; `crates/stewie`'s table names each row once and checks that no two
+//! rows share a bit.
+
+use crate::Engine;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+/// The table's words: 2,048 rows (Tweaks has 1,082 rows in `measure/stewie/PLAN.md`).
+pub const WORDS: usize = 32;
+
+/// One row's bit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Row(u16);
+
+impl Row {
+    /// Row `n` of the group starting at `group`.
+    pub const fn at(group: u16, n: u16) -> Row {
+        let index = group + n;
+        assert!((index as usize) < WORDS * 64, "past the table's rows");
+        Row(index)
+    }
+
+    /// Its bit's number in the table.
+    pub const fn index(self) -> usize {
+        self.0 as usize
+    }
+}
+
+/// The groups' first rows. M1a: the crash, null-check, use-after-free and leak fixes VNV's INI has
+/// on (`measure/stewie/STATUS-1118.md`, 80 rows).
+pub const CRASH: u16 = 0;
+/// The rest of the engine fixes (M1) and the hook points they need.
+pub const FIXES: u16 = 128;
+/// VNV's tweaks (M2).
+pub const VNV_TWEAKS: u16 = 640;
+/// The other switches (M3).
+pub const OTHER_TWEAKS: u16 = 1024;
+
+const _: () = assert!(CRASH < FIXES && FIXES < VNV_TWEAKS && VNV_TWEAKS < OTHER_TWEAKS);
+
+/// S0079, Tweaks' `patchDialogSpeechNullCheck`: `0x935E35`, in the shared actor's clear
+/// (`00935d90`), asks `NiObjectNET::GetController` (`00a5c570`) of the speaker's 3D, which is null
+/// for a speaker whose 3D is not loaded; Tweaks calls `NiObject_FindType_NullChecked` there, which
+/// answers null for no node.
+pub const DIALOG_SPEECH_NULL_CHECK: Row = Row::at(CRASH, 0);
+/// S0042 `fixExplosionWaterNullCall` (`004e9d40` at `0x4EA743`): the water's reflected explosion
+/// with a null `Get3D` slot.
+pub const EXPLOSION_WATER_NULL_CALL: Row = Row::at(CRASH, 1);
+/// S0064 `patchFixHandleMultiboundsCrashWithNullCell` (`0057ab70` at `0x57ABA4`): a multibound
+/// reference with no parent cell.
+pub const HANDLE_MULTIBOUNDS_NULL_CELL: Row = Row::at(CRASH, 2);
+/// S0068 `fixHandleStealingCrash` (`Actor::StealAlarm` `008bfa40` at `0x8BFBC1`): a theft with no
+/// owner.
+pub const HANDLE_STEALING_CRASH: Row = Row::at(CRASH, 3);
+/// S0078 `patchNullPlayerCellImposterCheck` (`004f2640` at `0x4F269F`): no cell at the player's
+/// location.
+pub const NULL_PLAYER_CELL_IMPOSTER_CHECK: Row = Row::at(CRASH, 4);
+/// S0106 `patchFixNullHitLocationNodeExplosionCrash` (`009b90b0` at `0x9B9387`): a limb cut off
+/// with no limb node.
+pub const NULL_HIT_LOCATION_NODE_EXPLOSION: Row = Row::at(CRASH, 5);
+/// S0124 `patchProcessActivateAddNullCheckForPackage` (`ProcessActivate` `00915f10` at
+/// `0x9164D9`): no current package.
+pub const PROCESS_ACTIVATE_NULL_PACKAGE: Row = Row::at(CRASH, 6);
+/// S0140 `patchFixPatrolMissingNullCheck` (`ProcessPatrolTravelingToNextRef` `0092b030` at
+/// `0x92B076`): no patrol reference.
+pub const PATROL_MISSING_NULL_CHECK: Row = Row::at(CRASH, 7);
+/// S0169 `patchFixRareNullTeleportDoorCrash` (`006f36d0` at `0x6F37AD`): a null door in the
+/// teleport door search.
+pub const RARE_NULL_TELEPORT_DOOR: Row = Row::at(CRASH, 8);
+/// S0174 `patchFixSetActorRefEssentialNullCheck` (`SetActorRefEssential` `005dfd30` at
+/// `0x5DFD6A`): the command called with no reference.
+pub const SET_ACTOR_REF_ESSENTIAL_NULL_CHECK: Row = Row::at(CRASH, 9);
+/// S0881 `patchFixSavingNullCellCrash` (`SaveInitialData` `0084eb80` at `0x84EE1B`): a created
+/// reference saved with neither worldspace nor cell.
+pub const SAVING_NULL_CELL: Row = Row::at(CRASH, 10);
+/// S0022.14 `MenuFixes` (`InventoryMenu::DoClick` `00780140` at `0x780474`): the use click with no
+/// item selected.
+pub const INVENTORY_USE_NO_ITEM_JUMP: Row = Row::at(CRASH, 11);
+/// S0022.15 `MenuFixes`, `QuantityMenuCloseNullInventorySelectionCheck`
+/// (`InventoryMenu::DropCurrentItem` `00780c50` at `0x780C76`): a drop with no item selected.
+pub const QUANTITY_MENU_CLOSE_NO_ITEM: Row = Row::at(CRASH, 12);
+/// S0022.16 `MenuFixes` (`InventoryMenu::SelectCurrentItem` `00780d60` at `0x780D70`): equipping
+/// with no item selected.
+pub const INVENTORY_SELECT_NO_ITEM: Row = Row::at(CRASH, 13);
+/// S0022.17 `MenuFixes` (`ContainerMenu::DoIdle` `0075eac0` at `0x75EB5C`): an entry with no form.
+pub const CONTAINER_MOUSEOVER_NO_FORM: Row = Row::at(CRASH, 14);
+/// S0022.30 `MenuFixes`, `GetMenuVisiblityStateIfActiveTile` (`InterfaceManager::Idle` `0070c4a0`
+/// at `0x70D44A` and `0x70D58D`): the menu under the pointer while no tile is.
+pub const CONSOLE_WHILE_MENUS_LOAD: Row = Row::at(CRASH, 15);
+/// S0022.36 `MenuFixes` (`ListBox::GetAt` `007a6fa0` at `0x7A7025`): a list node with no item.
+pub const LIST_BOX_GET_AT_NULL_ITEM: Row = Row::at(CRASH, 16);
+/// S0022.56 `MenuFixes`, `BeginsWithNonNull` (`00719580` at `0x7195D1` and `0x7195EB`): a tile with
+/// no name.
+pub const TILE_LABEL_NULL_NAME: Row = Row::at(CRASH, 17);
+/// S0057 `patchFixLevelGreaterThan99Crash` (`HUDMainMenu::UpdateXPMeter` `0077c4e0` at `0x77D258`
+/// and `0x77D28D`): a level of 100 or more printed into 3 bytes.
+pub const LEVEL_GREATER_THAN_99: Row = Row::at(CRASH, 18);
+/// S0139 `patchFixCreditsCrashIfNoLoadedSave` (`CreditsMenu::Close` `0075f750` at `0x75F78E`): no
+/// player name.
+pub const CREDITS_NO_LOADED_SAVE: Row = Row::at(CRASH, 19);
+/// S0182 `HolotapeEmptySubtitleCrashFix` (`MapMenu` `0079a660` at `0x79A868` and `0x79AAEB`): a
+/// holotape's subtitle removed from an empty list.
+pub const HOLOTAPE_EMPTY_SUBTITLE: Row = Row::at(CRASH, 20);
+/// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
+/// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
+/// changed forms, so it is a fixes row.
+pub const CHANGES_MAP_BUCKETS: Row = Row::at(FIXES, 0);
+
+/// The table: one bit a row.
+#[derive(Debug)]
+pub(crate) struct Bits([AtomicU64; WORDS]);
+
+impl Default for Bits {
+    fn default() -> Self {
+        Bits(std::array::from_fn(|_| AtomicU64::new(0)))
+    }
+}
+
+impl Engine {
+    /// Whether Tweaks' row `row` is on. One load; a translation reads it at the patched place
+    /// before anything else.
+    #[inline]
+    pub fn stewie(&self, row: Row) -> bool {
+        let word = self.extend.stewie.0[row.index() / 64].load(Relaxed);
+        word & (1 << (row.index() % 64)) != 0
+    }
+
+    /// Turns `row` on or off, in one atomic step (`crates/stewie`'s install, before the threads
+    /// start).
+    pub fn set_stewie(&self, row: Row, on: bool) {
+        let word = &self.extend.stewie.0[row.index() / 64];
+        let bit = 1u64 << (row.index() % 64);
+        if on {
+            word.fetch_or(bit, Relaxed);
+        } else {
+            word.fetch_and(!bit, Relaxed);
+        }
+    }
+
+    /// Every row off.
+    pub fn clear_stewie(&self) {
+        for word in &self.extend.stewie.0 {
+            word.store(0, Relaxed);
+        }
+    }
+
+    /// How many rows are on.
+    pub fn stewie_rows_on(&self) -> u32 {
+        self.extend
+            .stewie
+            .0
+            .iter()
+            .map(|w| w.load(Relaxed).count_ones())
+            .sum()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_row_is_one_bit_shared_by_the_threads_engines() {
+        let e = Engine::new();
+        let other = Row::at(OTHER_TWEAKS, 70);
+        assert!(!e.stewie(DIALOG_SPEECH_NULL_CHECK));
+        e.set_stewie(DIALOG_SPEECH_NULL_CHECK, true);
+        assert!(e.stewie(DIALOG_SPEECH_NULL_CHECK));
+        assert!(!e.stewie(other), "only its own bit");
+        e.set_stewie(other, true);
+        assert_eq!(e.stewie_rows_on(), 2);
+        // A real thread's engine sees the same table.
+        let thread = e.extend.for_thread();
+        assert!(thread.stewie.0[0].load(Relaxed) & 1 != 0);
+        e.set_stewie(DIALOG_SPEECH_NULL_CHECK, false);
+        assert!(!e.stewie(DIALOG_SPEECH_NULL_CHECK));
+        assert!(e.stewie(other));
+        assert_eq!(thread.stewie.0[0].load(Relaxed) & 1, 0);
+        e.clear_stewie();
+        assert_eq!(e.stewie_rows_on(), 0);
+    }
+
+    #[test]
+    fn the_groups_fit_the_table_in_order() {
+        assert_eq!(Row::at(OTHER_TWEAKS, 1023).index(), WORDS * 64 - 1);
+    }
+}

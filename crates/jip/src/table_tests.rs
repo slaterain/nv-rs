@@ -349,24 +349,24 @@ fn other_plugins_conditions_read_no_eval() {
 fn an_unbuilt_command_fails() {
     let mut e = engine();
     crate::install_as(&mut e, true);
-    let unbuilt = Record::read(&e, record_of(&e, 0x228a));
-    assert_eq!(guest_text(&e, unbuilt.long_name), b"GetFilesInFolder");
+    let unbuilt = Record::read(&e, record_of(&e, 0x220d));
+    assert_eq!(guest_text(&e, unbuilt.long_name), b"SetDeadZoneLS");
     assert_eq!((unbuilt.execute, unbuilt.eval), (0, 0));
     // Every JIP condition is built since GetRadiationLevelAlt (package C3): an unbuilt command
-    // that waits for a game patch (RefreshItemsList, G87) stands for the rest.
-    let refresh = Record::read(&e, record_of(&e, 0x27e8));
-    assert_eq!(guest_text(&e, refresh.long_name), b"RefreshItemsList");
+    // that waits for a seam in the game's code (SetMoonTexture) stands for the rest.
+    let refresh = Record::read(&e, record_of(&e, 0x27a4));
+    assert_eq!(guest_text(&e, refresh.long_name), b"SetMoonTexture");
     assert_eq!((refresh.execute, refresh.eval, refresh.flags), (0, 0, 0));
-    let words = line(&mut e, 0x228a, &[]);
+    let words = line(&mut e, 0x220d, &[]);
     let a = nvse::CommandArgs::new(&words);
     // An `X` token: no calling reference, the opcode, its arguments' length.
     let at = DATA + 4;
-    for (i, b) in [b'X', 0, 0, 0x8a, 0x22, 2, 0].iter().enumerate() {
+    for (i, b) in [b'X', 0, 0, 0x0d, 0x22, 2, 0].iter().enumerate() {
         e.mem.set_u8(at + i as u32, *b);
     }
     let mut ev = nvse::expr::Eval::new(&e, &a);
     assert!(ev.read_one_token(&mut e).is_none());
-    assert_eq!(ev.errors, ["Failed to resolve command with opcode 228A"]);
+    assert_eq!(ev.errors, ["Failed to resolve command with opcode 220D"]);
 }
 
 /// Answering "installed", an empty slot is `NONE` and runs `kEmptyCommand`'s execute, the exe's

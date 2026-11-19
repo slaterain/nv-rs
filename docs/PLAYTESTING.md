@@ -204,6 +204,7 @@ Play.exe sets these for every run; set them by hand only to run `nv-viewer` with
 | `NV_PREFS_OUT=FILE` | The `FalloutPrefs.ini` the game writes, copied out to FILE | stays in memory |
 | `NV_REPORT_DIR=DIR`, `NV_REPORT_LOG=FILE` | F12 in the game's window makes `DIR\NNN\` with the frame, the end of FILE and a `note.txt` for the player (`crates/engine-platform/src/d3d9real.rs`) | no F12 report |
 | `NV_SETTINGS=FILE` | The settings file | `settings.ini` beside the program or in the folder above it |
+| `NV_RS_PROFILE=game` or `mods` | Linux and macOS: the profile play.sh plays in (`./play.sh --mods`: `mods`), whose Documents and AppData folders inside nv-rs's own folder the game is given (`<own>/game/...` or `<own>/mods/...`, so saves and settings made with mods stay apart; `engine-platform` machine_table::profile). Windows' Play.exe lays out `userdata\game` and `userdata\mods` itself. Not the profiler: that is `NV_PROFILE`, a test's variable, which makes a play run a test (#763) | `game` |
 | `NV_RS_GAME`, `NV_RS_REAL_DOCUMENTS`, `NV_RS_SYSTEM_FOLDER`, `NV_RS_NO_STORES`, `NV_RS_NO_SHORT_PATHS`, `NV_RS_NO_WINDOWS`, `NV_RS_SETTINGS_CHOOSE` | The launcher's own test hooks: the game folder, where the player's Documents are read from, the system folder, no look in game stores, no short paths, no windows shown (`scripts/launcher`; `NV_RS_NO_WINDOWS` is also read in `host/save_out.rs`, and makes Settings.ps1 save without its window, with `NV_RS_SETTINGS_CHOOSE`'s `Name=Value;...` as the choices) | the player's own folders, windows shown |
 
 ### 4. Tests and diagnostics
@@ -333,10 +334,18 @@ elsewhere only as far as Windows and drivers behave the same:
   Text conversion itself asks the real Windows.
 - `d3d9-capture` covers adapter 0, and only the display modes of that moment. nvapi answers come from
   the DLL, but only an NVIDIA driver has run them.
-- An AMD card: the game asks for the player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit
-  process can't load them, so they answer as missing: one GPU, no Eyefinity. The game picks its vendor path
-  from the driver's name. AMD and Intel have only been run as an edited table (the driver's name changed, no
-  nvapi) on this PC's NVIDIA card, so the game's vendor paths ran, but no AMD or Intel driver answered.
+- The game picks its vendor path from the driver's name. While wgpu draws (Vulkan, the default) every card,
+  AMD and Intel too, is given NVIDIA's driver name (`nvldumd.dll`) on every system, so the game takes the
+  NVIDIA shader package and alpha to coverage switch the shipped pipeline list was made with (on a PC without
+  NVIDIA's driver its NvAPI probe finds no `nvapi.dll` and ends); the log's start says so in one line. With the
+  real Direct3D 9 asked for (or as the fallback where wgpu finds no card) the driver's own name decides. Where wgpu
+  finds a card but cannot make the game's device, the real Direct3D 9 takes over after the game was told NVIDIA's
+  name: the game keeps NVIDIA's path on the card's own driver, which may not honour NVIDIA's alpha to coverage
+  switch, and the log says so in one line. With the driver's own name, on an AMD card the game asks for the
+  player's 32-bit `ATIMGPUD.dll` and, with Eyefinity on, ADL; this 64-bit process can't load them, so they answer
+  as missing: one GPU, no Eyefinity. AMD and Intel on the real Direct3D 9 have only been run as an edited table (the
+  driver's name changed, no nvapi) on this PC's NVIDIA card, so the game's vendor paths ran, but no AMD or
+  Intel driver answered.
 - The first settings on a PC where the game's launcher never ran: its detection isn't translated (it is a separate
   program), so the High preset stands in for what it would pick.
 

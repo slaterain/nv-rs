@@ -123,7 +123,8 @@ The game's own `iFPSClamp` ignores `FrameLimit`: a clamp is a fixed step with no
 | JIP game patches | none (a flag JIP reads) | `NV_JIP_GAME_PATCHES` | JIP LN NVSE's changes to the game's own code (`InitGamePatches` and the `[GamePatches]` switches of the player's `Data\NVSE\plugins\jip_nvse.ini`, else JIP's defaults: switches 1, 4-9, 13 and 14 on), as they are built (step 3.9): so far each dialogue info remembers the topic its load linked it into last and `GetOwnerTopic` answers that topic, and a script handler's result starts at 0 for every command. They take effect only once JIP is built in and answers "installed" (the plan's step 3.10); until then, and off (vanilla), the game's own. With the dialogue topic index also on, JIP's answer wins (JIP's wrap goes over the index). With this row off nothing marks a hit as having got through the armour (G77 and JIP's hit damage go in with the row; JIP itself writes them with no switch), so `GetArmourPenetrated` answers 0 for every hit. Below |
 | The Mod Configuration Menu's plugin built in | none (a flag the built-in reads) | `NV_MCM` | On in `fixes` (with JIP, which the mods MCM lists need), off in vanilla. The Mod Configuration Menu 1.5's NVSE plugin (`MCM.dll`, "MCM Extensions" 1, Pelinor) built in from its machine code (`crates/mcm`): its nine commands at `0x21C0` up. `GetMCMFloat`, `SetMCMFloat`, `SetMCMString`, `SetMCMFloatMass`, `SetMCMStringMass`, `SetMCMModList` and `GetMCMListWidth` read and set MCM's menu traits under `StartMenu/MCM/` through the DLL's own path lookup (NVSE 2's, not xNVSE's); `GetModINISetting`/`SetModINISetting` read and write `DataConfig<mod>.ini` as the DLL does (Windows' INI rules and the VC++ 2010 runtime's `atof` and `%.4f`, measured), its writes kept in the mod files folder beside the saves, never the game's folder. Without it MCM's pause-menu button never appears (its script stops at its first `GetMCMFloat`). Off, nothing is registered. |
 | UI Organizer built in | none (a flag the built-in reads; seams at `0070a049`, `00a01b87`, `00a0968c`, `00a03923`, `00a221f8`, `0076f688` and four more) | `NV_UIO` | On in `fixes` (with JIP: UI mods need both), off in vanilla. UI Organizer 2.30 (jazzisparis) built in, parts 1 to 3: its lists (`Data\uio\supported.txt`, or UIO's own copy built in when the game folder has none, then each `Data\uio\public\*.txt`, with their conditions) put UI mods' `<include>` lines into the menu files they name, in memory, where and in the order UIO puts them, and every menu file `Tile::ReadFile` reads goes through UIO's reader (its patched texts and its own expansion of `<include>` tags), then UIO's own XML parser and parse cache; JIP's `InjectUIComponent` goes through it; its tile operators (three aliases, 17 new) and text tiles' `<zoom>`. Off (vanilla), nothing is installed and no menu file changes. Below |
-| Script error loop guard | none (a flag the extender reads) | `NV_NVSE_ERROR_GUARD` | An error raised while a script's `RuntimeScriptError` handler runs (in the handler itself, or at the call depth limit when handlers call functions that fail) is not sent to the handlers again. xNVSE sends it again, which recurses until the stack runs out and the game stops; off (vanilla), the port does the same. Below |
+| lStewieAl's Tweaks built in | per row (below) | `NV_STEWIE` | lStewieAl's Tweaks 10.05 built in, row by row: each of its engine fixes is a row with its own off key in Fallout.ini's `[nv-rs Stewie]`, its settings are VNV's values with the player's `nvse_stewie_tweaks.ini` read over them (a difference from Tweaks, which uses its code's defaults for keys its file lacks); mods are not told it is installed until its script commands are built. Its first rows: 21 of the crash fixes. Off (vanilla), no row is on and nothing is listed. Below |
+| Script error loop guard | none (a flag the extender reads) | `NV_NVSE_ERROR_GUARD` | An error raised while a script's `RuntimeScriptError` handler runs (in the handler itself, or at the call depth limit when handlers call functions that fail) is not sent to the handlers again. xNVSE sends it again, which recurses until the stack runs out and the game stops; off (vanilla), the port does the same. With it on, JIP's `RunBatchScript` and `RunScriptSnippet` also stop a script that runs itself again 64 runs deep (one log line; JIP has no cap and the stack runs out). Below |
 | Image-space event form check | none (a flag the extender reads) | `NV_NVSE_IMOD_CHECK` | When an image-space modifier instance runs out, OnRemoveIMOD is raised only for an instance of a modifier form (the game's own `AsForm` test, as its `Stop` makes it), with that form. xNVSE reads a form at the same place in every instance, and a depth-of-field or radial blur instance (iron sights, V.A.T.S., `SetGlobalRadialBlur`) has a number there: a handler then reads garbage as a form. Off (vanilla), the word is read as xNVSE reads it, and a word that is not a readable form drops the event instead of stopping the game. Below |
 | Script reference checks | none (a flag the extender reads) | `NV_NVSE_INVREF_CHECK` | (Once "Inventory reference checks": the variable and the Fallout.ini key `bNVSEInvRefCheck` keep that name, so a setting already made still works.) A reference handed to a script with parts missing, where xNVSE reads or writes through the missing part and the game stops; with the row the command gives its "nothing" answer instead (0, or nothing set). Off (vanilla), the port stops there too. **Inventory references:** an inventory reference's temporary reference is in no cell, and has no base form once released (after `RemoveMeIR`, or a loop's reference kept past its loop): `GetDoorTeleportX`, `GetDoorTeleportY`, `GetDoorTeleportZ`, `GetDoorTeleportRot`, `SetDoorTeleport`, `GetParentCellOwner` and `GetParentCellOwningFactionRequiredRank` read through the missing base form or cell. A container whose base list has an entry without a form stops the game in `ForEach` and `GetInventoryItems` (xNVSE reads the missing form's type), where the row passes over it; the commands that look an item up by its id (`PickOneOf`, `GetTokenValue` and the rest) read its id through it, where the row takes it as another item (`GetNumItems` and `GetInventoryObject` count it as xNVSE does, in both presets). **Doors:** a door whose teleport has no data or no linked door, or whose lock has no data (a mod's broken door data; the game itself makes a lock without data only when an allocation fails, and never a teleport without data): `GetLinkedDoor` reads through it, `SetDoorTeleport` and `SetOpenKey` write through it. **Owners and cell scans:** `HasOwnership` and `IsOwned` read the item's parent cell (for the cell's owner) and the asker's base form through nothing for a reference without them, where the row answers 0; the cell scans read a cell reference's base form for its type, where the row passes over a reference without one. **Scan records:** `GetNextRef` with no scan reports "GetFirstRef MUST be called before GetNextRef" and leaves a record it never builds, and a second one reads that record's uninitialised memory; a console scan that has ended stays under the console's key (xNVSE drops the script's own id instead), and the next console `GetNextRef` reads it through its missing cell. With the row both answer as the first call did: the error line again and 0. A scan whose walk finds no cell of its area in the worldspace's map reads the missing cell's list too; with the row it answers 0. **Form lists and doors** (`Commands_Misc.cpp`): `GetDoorSound` reads the id of the door's open or close sound through nothing for a door record without that sound (the game allows one), and in the console prints the id of a missing form through nothing; `GetLevCreatureRefs` and `GetLevCharacterRefs` read the id of a leveled entry's missing form; `GenericCheckForm` reads the id of an empty node's missing form in the middle of the list. With the row the door answers 0 and nothing is printed, and the entry or node is passed over. `IsRefInList` (`Commands_List.cpp`) reads the id of a reference's missing base form (an inventory reference's, once released) when the list holds a form; with the row nothing is found there. **And two of xNVSE's own slips with inventory references:** `RemoveMeIR` on an unworn stack with data of its own (a weapon with its condition) frees that data through the entry the reference holds, which for a reference from `GetInvRefsForItem`, `ForEach`, OnSell or OnRepair is the reference's own copy: the container's entry keeps the freed data and its count, so the item stays with freed memory as its data; with the row the data leaves the container's own entry too (its count with it) before it is freed, and nothing is freed when no entry of the container holds it. OnSell's item stays kept after the event when no handler ran (every handler filtered out), so a later `GetSoldItemInvRef` reads a sale that is over; with the row it goes when the event ends. Off (vanilla), all of these are xNVSE's, the stops included. Below |
 | Script array and string size caps | none (a flag the extender reads) | `NV_NVSE_SIZE_CAPS` | An array `ar_Range`, `ar_Init`, `ar_Resize` or `ar_Generate` makes or grows stops at 8,388,608 elements (about 335 MB), and `sv_Replace` of an empty text a given number of times stops at 64 MiB. The keys `MenuTapKey`, `MenuHoldKey` and `MenuReleaseKey` queue for the game's buffered key reads (drained only when the game reads them, in menus) stop at 4,096; the rest are dropped. A format string the C runtime cannot make is made safely: a precision past 965,624,998 (more working memory than the runtime gets in a 32-bit process) gives a number with a point the runtime's own fallback of 163 digits and an integer the zeros asked, and a format the runtime refuses (`%Ld`, `%5n`, a second size such as `%hld`) gives an empty text. In xNVSE such an integer precision crashes the runtime, a refused format ends the game (the runtime's default invalid-parameter handler: nothing in xNVSE's process installs another, measured in the real game), and whether a number's precision gets its memory depends on the game's; off (vanilla), the port stops the game at all three. xNVSE goes on until it runs out of memory and the game stops; off (vanilla), the port stops too: an array past 33,554,432 elements or a string past 1 GiB or more than 67,108,864 queued menu keys stops the game as out of memory, about where xNVSE's 32-bit process runs out, so the computer is never asked for more. A range that never ends (a step of 0, or one that wraps past its end), `ar_Cat` of an array with itself and an empty text replaced without a count never end in xNVSE and are capped the same in both presets. Below |
@@ -1046,8 +1047,6 @@ Not yet, with the switch on:
   in the port's own folder beside the saves, never in the game's folder), so oHUD's INI option (shown
   in MCM once oHUD finds JIP) has its commands; JIP's commands that read or write other files
   (`ReadArrayFromFile` and the like) are still among those not built.
-- `InjectUIComponent` needs the UI Organizer row on too (`NV_UIO`); without it the command does nothing
-  and answers 0 (JIP would write `jip_temp.xml` into the game's folder), and the log says so once.
 - 12 of JIP's 162 game patches are not built (by group in `measure/jip/PLAN-3.9-groups.md`; every
   group's built ones are under its heading below): what they change stays the game's own; each waits
   for a JIP command or attach step not built yet (`MessageBoxExAlt`, `FireWeaponEx`, `InsertNode` and the like).
@@ -1088,8 +1087,8 @@ like 3.9a's above (JIP's comment, exe places, what a player with JIP gets, built
 
 #### GA: UI: HUD, messages, text, start-up INI
 
-All fix rows (in with the row `NV_JIP_GAME_PATCHES`, off in vanilla) but `bLoadScreenFix`, a switch of `jip_nvse.ini` read when that row is on; with JIP installed and the row
-off, each place runs the exe's code unchanged.
+All fix rows (in with the row `NV_JIP_GAME_PATCHES`, off in vanilla) but `bLoadScreenFix`, a switch of `jip_nvse.ini` read when that row is on, and G55, JIP's own; with JIP
+installed and the row off, each fix row's place runs the exe's code unchanged.
 
 | JIP's comment | Exe places | What a player with JIP gets | Built |
 |---|---|---|---|
@@ -1105,6 +1104,7 @@ off, each place runs the exe's code unchanged.
 | (none; `RolloverWeaponHook` at `0x777123`) | `HUDMainMenu::SetInfoForRef` `00775a00`, `0x777123` | A weapon lying in the world that has a weapon mod on it shows "+" after its name when you look at it, as it does in the inventory lists; the game shows the plain name. Difference from JIP: on a name of 259 characters (the buffer's limit) the "+" is left off; JIP writes it past the buffer. With JIP installed and the row off, the game's test runs unchanged | 3.9 GA-4 |
 | (none; `GetVATSTargetDTHook` at `0x7ECE32`) | `VATSMenu::DoIdle` `007ec810`, `0x7ECE32` | In V.A.T.S., the damage threshold shown beside the target's name (with the perk that shows it) is the damage threshold of the last hit JIP's hit damage (its `bIgnoreDTDRFix` option) worked out (any attacker, any target; as in JIP), a negative one as 0; until JIP's hit damage has reckoned a hit, the game's own figure. With JIP installed and the row off, the game's figure is shown unchanged | 3.9 GA-5 |
 | (none; `QueueUIMessageHook` at `0x70535C`) | `QueueUIMessage` `007052f0`, `0x70535C` | Every corner message the game itself shows (item added, quest updated, and the like) stays up for the default message time, 2 seconds unless a mod sets another with `SetDefaultMessageTime`; a mod's own messages (xNVSE's `MessageEx`, JIP's `MessageExAlt` and its equip messages) keep their own time, as with JIP. With JIP installed and the row off, every message keeps the time its caller gives | 3.9 GA-6 |
+| (none; `MaxMessageWidthHook` at `0x7A9AEE` and `0x7A9C45`; JIP's own, with `MessageBoxExAlt`) | `MessageMenu::LoadNextMessage` `007a92e0`, `0x7A9AEE` (the room for the text), `0x7A9C45` (the box's widest) | JIP's own: in whenever JIP is installed, the row on or off. While a box shown by `MessageBoxExAlt` waits for its answer, a message box's long message or long button labels wrap at, and the box is capped at, 1200 wide instead of the menu file's maximum (the number of buttons is unaffected); once every such box is answered (or the message menu is closed with JIP's `CloseActiveMenu`, a command not built yet), the menu file's width again. As with JIP, a box dropped by the game itself (a save loaded while it waits) keeps the width at 1200 for the rest of the session (G55) | 3.9 GA-8 |
 | `bLoadScreenFix` (off by default; `GetSuitableLoadScreensHook` at `0x78AC60`, `PickLoadScreenHook` at `0x78A79B`; JIP sorts the data's load screens into those made for places and the generic ones when the switch goes on, at `DeferredInit`) | `LoadingMenu::BuildCandidateList` `0078ac60` (rewritten), `LoadingMenu::MakeLoadScreenList` `0078a5a0` (`0x78A79B`) | Loading screens made for a place are shown there on their own: the game mixes in generic screens whenever it found fewer place screens than its limit, JIP only when no place screen can show there. In the overlay mode the game's flagged screens are taken from the generic ones only; while only type 3 screens are wanted (`0x11D8907` or the OS globals' byte +2), a place screen of another type is left out as the game does. Difference from JIP: with no place screens in the whole load order JIP's walk runs on past its empty list; here it takes the generic ones. With the switch off (or JIP not installed), or before the lists are made, the game's choice is unchanged | 3.9 GA-7 |
 
 Seams for other groups' rows: G06's `0x77765A` (the HUD's action
@@ -1237,6 +1237,7 @@ JIP does.
 | "Ignore disabled MusicMarkers" | `00969930` (`0x9699C5`) | A disabled music marker no longer chooses the music played near it; a marker's position is read from the reference itself (`+0x30`) instead of through its position call | 3.9 GP |
 | (G72, `BuildMusicMarkerListHook`) | `00947d80` (`0x947DD2`) | The player's music markers in a world space come from one list built when he enters that world space (JIP's cache, rebuilt only for another world space), sorted by their media location controller, instead of the world space's markers walked every time | 3.9 GP |
 | (G105, `DamagePCFatigueMinFixHook`) | `0093b7a0` (`0x93B87F`) | Fatigue damage to the player stops at `fMinFatigue` (the change is cut so the value lands on it) | 3.9 GP |
+| (H02, `GetVanityDisabledHook` and `ProcessHUDMainUI`; JIP's own) | `009445b0` (the player's look handling, `0x9459ED`: the vanity camera test) | While a script's `ToggleHUDCursor` has the cursor on over the HUD in game mode, the vanity camera stays off and JIP handles the mouse over the HUD each frame: the tile under the cursor gets the mouse-over (its sound), a press and release of the left button over it is a click (its sound and the HUD's click handler), a draggable tile can be dragged and a wheelable one gets the wheel. Without the command nothing changes | 3.9 GP |
 
 Built as part of JIP (every preset, while JIP answers "installed"; not fix rows): G114 with O6
 and the `ToggleHardcoreTracking` command (`00969c30` at `0x969C41`): with `bHardcoreNeedsFix` (on
@@ -1270,11 +1271,11 @@ that took it, the cell it took (JIP also lets go a lock it never took for a refe
 `0x800`/`0x20`, and lets go the lock of the cell read again after the load).
 
 JIP's point lights are added to the 3D after the fade (group GL's light hooks flag the nodes: see
-GL below). Two steps of JIP's attach are not built yet, because nothing can set what they test:
-- collision turned off for a reference marked by `ToggleObjectCollision`: waits for that command
-  (with JIP's `TESObjectREFR::ToggleCollision` and `NiNode::ToggleCollision`);
-- nodes and models JIP inserts into a reloaded 3D: waits for the `InsertNode` and `AttachModel`
-  commands (their maps).
+GL below). With H08 the attach also puts JIP's inserted nodes and models into a reloaded 3D: when a
+reference or its base form has entries from `InsertNode` or `AttachModel`, they go into its 3D (and the
+player's first-person node too). One step of JIP's attach is not built yet, because nothing can set what
+it tests: collision turned off for a reference marked by `ToggleObjectCollision` (waits for that command,
+with JIP's `TESObjectREFR::ToggleCollision` and `NiNode::ToggleCollision`).
 
 #### GH1: Extra data and inventory stacks
 
@@ -1334,6 +1335,25 @@ Part of JIP in every preset (not the row above), while JIP answers "installed":
   pile a death leaves is `AttachAshPileEx`'s form once when a script set one, else the exe's
   choice. It changes nothing yet: the command `AttachAshPileEx` is not built, so no script can set
   a form.
+- `LoadBip01SlotHook` and `LoadWeaponSlotHook` (H10, JIP's own, `0x4ACCF1` in `LoadBipedParts` and
+  `0x4AF0DE` in `LoadAndAttachAddOn`): a worn or held model whose form has entries from `InsertNode` or
+  `AttachModel` gets them, and its lights tagged in the mesh are listed. A loaded biped part's node is
+  named `"<slot name> <form id>"` as JIP names it (the game's name adds the form's name), for everyone
+  with JIP installed; an add-on's rotation and translation are reset as the game resets them.
+  Difference from JIP: an `InsertNode` or `AttachModel` asked from a script thread to change the 3D
+  now runs at the next main loop only while the asked form is still the one its id names, and is
+  dropped otherwise (the form gone, or a reference rebuilt elsewhere by a load in between, such as a
+  reference made in game whose id a new one reuses); JIP keeps the form's pointer across a load in
+  between, which could then point at a freed or reused reference.
+- `BipedSlotVisibilityHook` (H15, JIP's own, `0x4AC645` in `BipedAnim::LoadBipedParts`): in first
+  person a slot's part loads when its bit is set in JIP's mask, slots 2 to 6 at the start (the game's
+  own test, so nothing changes until a script calls `ToggleBipedSlotVisibility`, which shows or hides
+  a slot's part in first person).
+- `SetRefrPositionHook` (H13, JIP's own, `0x575A7F` in `SetLocationOnReference`): while a script's
+  `SynchronizePosition` keeps a reference, every position the game gives the player is that reference's
+  named node (plus the command's height offset), in the same cell or world space, with the node's heading
+  when asked; ending the synchronization puts the player at the node's last place. Without the command
+  nothing changes.
 
 #### GF: Forms and records
 
@@ -1372,8 +1392,11 @@ as with JIP.
 
 Also fixes (the row on): a reference made in the game that carries form flag `0x400000` (and a projectile
 that says so itself) is not written to the save as an unloaded form, and a reference keeps that flag from the
-save when it loads (`0x484E03`, `0x8497CD`); the save's two form id maps get 0x7D63 buckets instead of 0x13AF
-(`0x845558`, `0x846FFB`): fewer collisions with many forms, no change in what is saved. A global variable
+save when it loads (`0x484E03`, `0x8497CD`); the save's form id map (`0x846FFB`) and its map of changed forms
+(`0x845558`) get 0x7D63 buckets instead of 0x13AF: fewer collisions with many forms. The form id map's count
+changes nothing in the save; the changes map's changes only the order the changed forms are written in (the
+records are the same and a save loads either way: `crates/engine/tests/save_changes_map.rs`). With lStewieAl's
+Tweaks' row S1016.845558 on, its 10,037 buckets win at `0x845558`. A global variable
 whose form flags have bit 0x40 (the record's "Constant" flag, as xEdit names it) is not read again from a
 record once it has that flag (`0x5A64D7`).
 
@@ -1384,6 +1407,14 @@ session instead of sometimes appending to the last one. `TESObject::IsMarker` (`
 set of ids (the 15 default marker objects by their ids, and 0x64..0x77): the same answers as the original for
 every form except one of a type above idle marker (0x30) with an id 0x64..0x77, which is no longer a marker
 (JIP's `SetInternalMarker`, which edits the set, is not built).
+
+Also built as part of JIP: the companion wheel (G54: the teammate test before it at `0x5FA977`,
+`0x5FB122` and `0x607C8E`) does not open for an actor whose wheel `SetWheelDisabled` turned off; and
+JIP's gun wobble (H19, `0x524014` in the firing code): a shooter's spread gets its high process's aim
+value and, unless `ToggleNoGunWobble` marked the actor, its stat 2 times `fNPCMaxGunWobbleAngle` in
+radians, as the original adds them (the sum rounded once where the original rounds after each step;
+an actor with no high process keeps the spread as it is, where the original asks the lower process
+too).
 
 #### GS: Script engine
 
@@ -1398,6 +1429,7 @@ every form except one of a type above idle marker (0x30) with an id 0x64..0x77, 
 | (`InitGamePatches`: 24 bytes at `0x59E034`) | `0059dfe0` (`IsCurrentFurnitureObj`, `0x59E034`) | `IsCurrentFurnitureObj` on an actor with no AI process answers 0 instead of crashing the game | 3.9 GS-3 |
 | (`InitGamePatches`: `WriteRelJump(0x5D2860, GetHitIMODHook)`; JIP's own: the same as the game until JIP's hit effects are off) | `005d2860` (`TESImageSpaceModifier::GetGetHit`, replaced) | The "get hit" screen effect is turned off while JIP's hit effects are off (`ToggleImmortalMode 2` today; `ToggleHitEffects` when it is built). With JIP installed and nothing turned off, the same effect as the game's (looked up by its form id each time, the game's cache not used) | 3.9 GS-3 |
 | (`InitGamePatches`: `SafeWrite16(0x5B4DBC, 0x19EB)`) | `005b4be0` (`AddItem`, `0x5B4DBC`) | Items a script adds with `AddItem` all go through the game's item-condition step that the game gives only to weapons: with JIP's own version of that step (G50, GH1) armour and weapons, also those from leveled lists and form lists, arrive at the same 99.9% condition a plainly added weapon gets, and any other item is left at full condition | 3.9 GS-4 |
+| (`InitGamePatches`: `WriteRelJump(0x5B54E7, RemoveMeHook)`) | `005b53d0` (`RemoveMe`, `0x5B54E7`: the menu refresh when the player gets the item, `00704af0`) | When a script's `RemoveMe` gives the player the item, the open item list (inventory, container, barter, recipe menu) is refreshed at the next main loop pass, through JIP's own refresh, instead of at once (G60) | 3.9 GS |
 | (`DeferredInit`: "JIP Companions Command & Control.esp") | that plugin's main script (form `0xADE` in the plugin), its compiled data at `+0x29C` | With the plugin "JIP Companions Command & Control.esp" loaded, a known bug in its main script is patched once at start-up (a number in its compiled script, 139, becomes 255), as JIP does. Deliberate difference: a form there that is not a script, has no compiled data, or has data too short to hold that number is left alone, where JIP would crash or read past the data | 3.9 GS-4 |
 
 #### GW: World, sky, sound, saves, start-up
@@ -1419,7 +1451,11 @@ again before reading it.
 
 Built as part of JIP (in every preset once JIP answers "installed"): `ForceClimate` forces a climate (none:
 the force is lifted), which the sky takes in place of the one it is given at its next climate change
-(`0x63C918`); `SetCurrentClimate` to another climate lifts it.
+(`0x63C918`); `SetCurrentClimate` to another climate lifts it. `FireWeaponEx` makes an actor fire a weapon,
+from a node of the actor named in the call when there is one; from its first use on, the shot's muzzle flash is
+marked, and the next time the game asks for that actor's muzzle flash while it is off the mark is cleared and the
+actor fires from its own node again (`008d9300`, the high process's muzzle flash getter, replaced; `0x9BAD76`, a
+new muzzle flash starts with the mark cleared).
 
 With JIP's `bGameDaysPassedFix` (on by default; `00867a40`, `GameTimeGlobals::Update` replaced): the game's
 clock keeps the hour and the days passed in double precision between frames, so `GameDaysPassed` no longer
@@ -1470,7 +1506,7 @@ those places run the game's code.
 | (none; `SafeWrite32(addr, 0x110)` twelve times, 12 bytes at `0xA68D6B` in `InitJIPHooks`) | Every place a point light is made: `TESObjectLIGH::GenDynamic` `0050d810`, the Love Tester, S.P.E.C.I.A.L. book and race menus' lights, `FORenderedMenu::CreateMenuLight`, `LightEffect::AttachLight`, `MagicLight::Init`, `VATS::SetMode` (two), `NiPointLight`'s create function and `CreateClone`, `ShadowSceneNode`'s dynamic light `00b5cd00`; `NiDynamicEffect`'s member copy `00a68d40` | With JIP installed (every preset), every point light is 0x110 bytes instead of 0xFC, room for JIP's light data after the game's own, and a copied light keeps JIP's two light bytes. Nothing a player sees changes by itself (H03, H05) | 3.9 GL-2 |
 | (none; `SafeWrite8(0x465488, 0xCC)` and `TESObjectLIGH`'s editor id slots; skipped by JIP when JohnnyGuitar is loaded, never the case in the port) | `TESDataHandler::CreateFormOfType` `00465110` (`0x465488`), `TESObjectLIGH`'s vtable `GetEditorID`/`SetEditorID` | With JIP installed, light forms keep their editor ids (the original throws them away): they are in the game's editor id map, so scripts and the light tags below find a light by its id (H04) | 3.9 GL-2 |
 | (none; `LoadNifRetnNodeHook`) | `ModelLoader::LoadFile` `00447080` (`0x447155`) | With JIP installed, a model's point lights tagged with a `LIGH_EDID` string (a mod's mesh naming a light form's editor id; no mesh of the game has one) take that light form, once per model: when such a model's object is attached to the world its lights get the form's colour, radius and fade, are hidden when the form is "off by default", and are lit and animated as JIP's own lights (below) (H06, with H09's attach in GP) | 3.9 GL-2 |
-| (none; `CreateObjectNodeHook`, made with H06) | `TESBoundObject::Clone3D` `0050ee50` (`0x50EF46`) | With JIP installed, a model holding such tagged lights is always copied for each placed object, never shared with the model cache, so every copy of a mod's lamp has lights of its own and each one is lit (the same hook's copy of models marked by `InsertObject`/`AttachModel` waits for those commands, H08) (H06) | 3.9 GL-2 |
+| (none; `CreateObjectNodeHook`, made with H06) | `TESBoundObject::Clone3D` `0050ee50` (`0x50EF46`) | With JIP installed, a model holding such tagged lights is always copied for each placed object, never shared with the model cache, so every copy of a mod's lamp has lights of its own and each one is lit; with H08 also a model whose form or reference has entries from `InsertNode` or `AttachModel`, so each copy gets them (H06, H08) | 3.9 GL-2 |
 | (none; `DestroyNiPointLightHook` in `NiPointLight`'s vtable) | `NiPointLight`'s deleting destructor (slot 0 of its vtable, `00a75c80`, shared with `NiDirectionalLight`, which keeps it) | With JIP installed, a point light gives back its 0x110 bytes; one of JIP's lights is given back by JIP's light list instead, once nothing holds it (H07) | 3.9 GL-2 |
 | (none; `UpdateAnimatedLightHook`, `UpdateAnimatedLightsHook`) | `0050de20` (a light form's animation of its light, replaced), the frame's two task sequences `008c7bd0` and `008c7da0` (`0x8C7C4E`, `0x8C7E18`) | With JIP installed, flickering and pulsing lights (placed lamps and fires, magic lights) animate the way JIP does it: a flickering light's brightness and position drift toward random targets up to 6.4 units from where it started, a pulsing light's brightness swings between its full fade and a quarter of it at a steady rate, and lights a mod sets to JIP's "colour shift" drift in colour; then each frame JIP's own lights (above) are put into the scene's lights once, set again from their form when a script asks, animated, and given back when nothing holds them any more (H12) | 3.9 GL-2 |
 
@@ -1481,10 +1517,8 @@ one included; this is JIP's own behaviour, not an option (the lead's decision in
 
 Not built in GL: H23 (`CastSpellHook`, `0x815EE6`), JIP's casting without the animation, waits for its command
 `CastImmediate`. Tagged lights in worn or held models (armour, weapons and other biped slot models whose
-meshes carry `LIGH_EDID` lights) give no light until group GH2's H10 is built: JIP lists those lights in
-its biped slot hooks (`LoadBip01SlotHook` at `0x4ACCF1`, `LoadWeaponSlotHook` at `0x4AF0DE`), which wait for
-`InsertObject`/`AttachModel`; until then such a light is never listed (so never lit) and, being one of
-JIP's lights, is not given back by its destructor either. No mesh of the game has such a light.
+meshes carry `LIGH_EDID` lights) are listed by group GH2's H10 (`LoadBip01SlotHook` at `0x4ACCF1`, in third
+person; `LoadWeaponSlotHook` at `0x4AF0DE`, unless the weapon goes under the player's first-person node).
 
 #### GX: Havok, pad rumble, mouse
 
@@ -1545,7 +1579,9 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
 - **JIP's `InjectUIComponent`.** UIO's export `UIOInjectComponent`: menu XML given as text is cleaned
   by the game, its includes expanded, and read into the tile under the name `jip_temp.xml`, from
   memory. Without UIO, JIP writes `jip_temp.xml` into the game's folder and reads it; nv-rs never
-  writes there, so with the row off `InjectUIComponent` does nothing.
+  writes there: with the row off the text is cleaned by the game as that file would be and handed
+  to the same `Tile::ReadFile` through the game's own menu file map (`Menu::XMLHash`), so
+  `InjectUIComponent` and `AttachUIComponent` make the same tiles with the row on or off.
 - **Where it differs from UIO on purpose.** Include loops end at 64 levels, an expansion at 64 MiB
   (after which that read fetches no further include) and at 10,000 files read for one read's
   includes (UIO runs out of stack or memory, or reads on without end); a path longer than UIO's
@@ -1588,6 +1624,80 @@ DLL), MIT licence. It is a row: it changes how every menu file is read. Parts 1,
   file with additions put in is read (its count is of the additions actually put in). Off, no line.
   The lines change nothing UIO does.
 
+### lStewieAl's Tweaks
+
+lStewieAl's Tweaks ("lStewieAl's Tweaks and Engine Fixes", 10.05), the NVSE plugin of engine fixes
+and tweaks every VNV player runs, is being built in as `crates/stewie` (`measure/stewie/PLAN.md`: its
+1,082 changes to the game, from its source), with its author's permission. The row `NV_STEWIE`
+(Fallout.ini `bStewieTweaks`) is on in the fixes preset and off in vanilla. With it on:
+
+- **Each change is a row of its own**, named after Tweaks' function that makes it, with its number in
+  PLAN.md and its own key in a section of Fallout.ini that only nv-rs reads, `[nv-rs Stewie]`: `0`
+  turns that one row off (`bDialogSpeechNullCheck=0`), anything else but `1` is named in the start-up
+  log and the default stands. A row Tweaks itself gives a switch (`[Tweaks] bSomething`) obeys that
+  switch too. In the game each row is one bit (`engine_core::extend::stewie`), which the translation
+  Tweaks patches tests at the patched place; with the bit clear it runs as the exe's code.
+- **Settings: VNV's values, then the player's file.** Tweaks reads about 1,500 settings from
+  `Data\NVSE\Plugins\nvse_stewie_tweaks.ini` (`crates/stewie/data/settings.tsv` has each with Tweaks'
+  code default and VNV's value, from VNV's "VNV INI" (ModdingLinked, MIT)). **This differs from Tweaks
+  on purpose:** real Tweaks writes every key its file lacks into the file with its code's default and
+  uses that, so without VNV's INI it runs with nearly all of VNV's choices off. nv-rs's defaults are
+  VNV's values; the player's file is read over them key by key (a key it has wins, a key it lacks keeps
+  VNV's value), and nv-rs never writes the file. For a complete file brought from a real install,
+  `bMissingKeysAsTweaks=1` in `[nv-rs Stewie]` makes a key the file lacks take Tweaks' code default, as
+  Tweaks does. The file is looked for in nv-rs's own folder beside the saves first, then the game's
+  (as every mod file the built-ins read). It is read by SimpleIni's rules, as Tweaks reads it: section
+  and key names without case, `;` and `#` note lines, quotes kept, no notes after a value (`1 ; on`
+  is not a number, so the default stands), `0x` hexadecimal, the last of a key wins; a value Tweaks
+  cannot read as a number counts as missing. One log line at start names each file read and how many
+  of its keys changed a value, or says none was found.
+- **The overlay files.** As Tweaks does, every `.ini` file in `Data\NVSE\Plugins\Tweaks\INIs\` is then
+  read over that, one after another in the folder's order (the order Windows lists an NTFS folder, on
+  every system; a file named just `.ini` too), each key it has winning and each key it lacks keeping
+  the value under it, with Tweaks' two exceptions: the 28 keys Tweaks reads from the main file only
+  (inside `if (isDefaultINI)`: `bFixCreatureDoubledDR`, `bCapSPECIALPoints`, `iOverrideSaveIndex` and
+  the rest) are ignored in an overlay file, and the 69 `GET_TWEAKH` keys (`bInlineVanillaFunctions`,
+  `bNoRecurringChallenges`, ...) are ORed across the files, so an overlay can turn one on, never off
+  (`crates/stewie/data/key_rules.tsv`); mods ship their Tweaks settings this way. `[INI] bMultiINISupport=0` in the main file turns them off. The
+  folder is looked for in nv-rs's own folder first, then the game's, its files listed once by name
+  (`engine_core::mod_files::list`). One difference: Windows' `*.ini` search also finds a file whose
+  long name only starts its extension with `ini` (`a.ini_old`, by its 8.3 short name `A~1.INI`, on a
+  drive that keeps short names); nv-rs
+  has no short names and reads only names ending in `.ini`.
+- **Not reported as installed yet.** Its eight script commands (`StewieGetValue` and the rest) are
+  not built, so mods are not told it is there: `IsPluginInstalled "lStewieAl's Tweaks"` answers 0 and
+  `GetPluginVersion` -1, as for a plugin not loaded (nothing half-working is offered to a script). Its
+  fixes work all the same. The commands come next, and with them it answers "installed", version
+  1005. Its co-save section (bobby-pin health, inventory
+  scroll positions and the other records of its own features) is not read yet; with the co-save row
+  (`NV_COSAVE_KEEP`) it is kept and written back unchanged, as for a plugin not built in.
+- **Not yet:** every row below not listed.
+
+| Row (Tweaks' function) | PLAN | Key in `[nv-rs Stewie]` | Exe places | What a player gets |
+|---|---|---|---|---|
+| `MenuFixes` (inventory use) | S0022.14 | `bMenuFixesInventoryUseNoItem` | `InventoryMenu::DoClick` `00780140` (`0x780474`) | Clicking Use in the inventory with nothing selected does nothing, where the exe goes on to the ammunition case and crashes (Tweaks points the jump at the function's end). Only removes a crash |
+| `MenuFixes` (`QuantityMenuCloseNullInventorySelectionCheck`) | S0022.15 | `bMenuFixesQuantityMenuCloseNoItem` | `InventoryMenu::DropCurrentItem` `00780c50` (`0x780C76`) | Closing the quantity menu after the item to drop has gone drops nothing instead of crashing. Only removes a crash |
+| `MenuFixes` (inventory equip) | S0022.16 | `bMenuFixesInventorySelectNoItem` | `InventoryMenu::SelectCurrentItem` `00780d60` (`0x780D70`) | Equipping from the inventory with nothing selected does nothing instead of crashing. Only removes a crash |
+| `MenuFixes` (container keys) | S0022.17 | `bMenuFixesContainerMouseoverNoForm` | `ContainerMenu::DoIdle` `0075eac0` (`0x75EB5C`) | Pointing at a container entry whose item has no form (keys) no longer crashes: no item card is filled. Only removes a crash |
+| `MenuFixes` (`GetMenuVisiblityStateIfActiveTile`) | S0022.30 | `bMenuFixesConsoleWhileMenusLoad` | `InterfaceManager::Idle` `0070c4a0` (`0x70D44A`, `0x70D58D`) | Opening the console while the menus load no longer crashes: the menu under the pointer counts as inactive while no tile is under the pointer, where the exe reads the state of a menu that may already be gone. Only removes a crash |
+| `MenuFixes` (list box) | S0022.36 | `bMenuFixesListBoxNullItem` | `ListBox::GetAt` `007a6fa0` (`0x7A7025`) | Looking up an entry of a menu list by its index passes over an empty node instead of crashing. Only removes a crash |
+| `MenuFixes` (`BeginsWithNonNull`) | S0022.56 | `bMenuFixesTileLabelNullName` | `00719580` (`0x7195D1`, `0x7195EB`) | A menu tile with no name no longer crashes the refresh of the "ready" labels: it matches neither label. Only removes a crash |
+| `fixExplosionWaterNullCall` | S0042 | `bFixExplosionWaterNullCall` | `004e9d40` (`0x4EA743`) | Water that reflects explosions no longer crashes on an explosion being taken apart: the first explosion whose `Get3D` slot is empty is passed over, where the exe calls it. Only removes a crash |
+| `patchFixLevelGreaterThan99Crash` | S0057 | `bFixLevelGreaterThan99Crash` | `HUDMainMenu::UpdateXPMeter` `0077c4e0` (`0x77D258`, `0x77D28D`) | Levelling up to level 100 or more no longer crashes: the HUD prints the levels into the function's 16-byte buffer, where the exe's 3 bytes hold two digits. Only removes a crash (the level shows in full) |
+| `patchFixHandleMultiboundsCrashWithNullCell` | S0064 | `bFixHandleMultiboundsCrashWithNullCell` | `0057ab70` (`0x57ABA4`) | A reference in the multibound map with no parent cell (being moved or removed) is passed over, where the exe asks the missing cell for its 3D. Tweaks' bytes also compare a word of the caller's frame (above this function's own, which has no arguments: never set for it) where the exe compared the entry's value, so in a frame where that word happens to be 0 a game running Tweaks skips the whole queued multibound batch that frame. The port does not copy that: it keeps the exe's value check. Only removes a crash |
+| `fixHandleStealingCrash` | S0068 | `bFixHandleStealingCrash` | `Actor::StealAlarm` `008bfa40` (`0x8BFBC1`) | Taking something marked as owned with no owner (and no actor to witness) no longer crashes: no owner counts as no faction, so no karma loss and no witness. Only removes a crash |
+| `patchNullPlayerCellImposterCheck` | S0078 | `bNullPlayerCellImposterCheck` | `004f2640` (`0x4F269F`) | The test for a form in the player's regions no longer crashes when no cell is loaded at the player's place yet: no regions, so not found. Only removes a crash |
+| `patchDialogSpeechNullCheck` | S0079 | `bDialogSpeechNullCheck` | `00935d90` (`0x935E35`) | Clearing the speaker at the end of dialogue no longer crashes when the speaker's 3D is not loaded: the exe asks the speaker's 3D for its controller manager without checking it is there; with the row there is no controller to stop and the clear goes on (Tweaks' `NiObject_FindType_NullChecked`). Only removes a crash |
+| `patchFixNullHitLocationNodeExplosionCrash` | S0106 | `bFixNullHitLocationNodeExplosionCrash` | `009b90b0` (`0x9B9387`) | A limb blown off a body whose model has no node for that limb no longer crashes: the null check the exe makes after asking the node's scale is made before. Only removes a crash |
+| `patchProcessActivateAddNullCheckForPackage` | S0124 | `bProcessActivateAddNullCheckForPackage` | `MiddleHighProcess::ProcessActivate` `00915f10` (`0x9164D9`) | An NPC using an object while it has no current package no longer crashes: no package is not a dialogue package. Tweaks' 10 bytes also overwrite the exe's jump after the package type test, so with Tweaks every package takes the dialogue branch: a game running Tweaks also stops the dialogue of ANY NPC whose path to the object failed (the actor mover's path-failed flag), whatever its package, and ends that step at once, skipping its clean-up (the object's script call, the acquired object freed); without Tweaks such an NPC does not use the object either, but the clean-up runs and its dialogue goes on. The port keeps the exe's type test (the fix's intent; whether to copy the side effect is with the maintainer): with the row on, a step with a package does exactly what it does with the row off (a test locks it). Only removes a crash |
+| `patchFixCreditsCrashIfNoLoadedSave` | S0139 | `bFixCreditsCrashIfNoLoadedSave` | `CreditsMenu::Close` `0075f750` (`0x75F78E`) | Closing the credits started from the main menu before any save was loaded no longer crashes: with no player name the name counts as empty and the credits close. Only removes a crash |
+| `patchFixPatrolMissingNullCheck` | S0140 | `bFixPatrolMissingNullCheck` | `MiddleHighProcess::ProcessPatrolTravelingToNextRef` `0092b030` (`0x92B076`) | An NPC on patrol whose next patrol point is missing does nothing that step (Tweaks moves the jump to the function's end), where the exe measures the distance to the missing point. Only removes a crash |
+| `patchFixRareNullTeleportDoorCrash` | S0169 | `bFixRareNullTeleportDoorCrash` | `TeleportDoorSearch::GetNodeConnections` `006f36d0` (`0x6F37AD`) | An NPC's path search through doors passes over an empty door entry instead of crashing. Tweaks writes its null test over the exe's disabled-door test, which it judges never true there; the port keeps that test after the null check (the list builder already removes disabled doors, so it matters only if another thread disables a door in between). Only removes a crash |
+| `patchFixSetActorRefEssentialNullCheck` | S0174 | `bFixSetActorRefEssentialNullCheck` | `SetActorRefEssential` `005dfd30` (`0x5DFD6A`) | The script command called without a reference reports an invalid actor (in the console with its echo) instead of crashing. Only removes a crash |
+| `HolotapeEmptySubtitleCrashFix` | S0182 | `bHolotapeEmptySubtitleCrashFix` | `MapMenu` `0079a660` (`0x79A868`, `0x79AAEB`) | Playing a holotape that has sound but no subtitles (a note of type Sound) no longer crashes: nothing is removed from the empty subtitle list. Only removes a crash |
+| `patchFixSavingNullCellCrash` | S0881 | `bFixSavingNullCellCrash` | `SaveInitialData` `0084eb80` (`0x84EE1B`) | Saving with a placed (created) reference that has neither worldspace nor cell no longer crashes: its location's id is saved as 0 (Tweaks' `GetRefIDNullChecked`). Only removes a crash |
+| `Inlines::SaveLoad` (Engine Optimizations) | S1016.845558 | `bInlinesChangesMapBuckets` | `00845550` (`0x845558`) | A save's map of changed forms gets 10,037 buckets, not 5,039: a late playthrough has tens of thousands of changed forms, and every save and load looks each up. The map is walked bucket by bucket when a save writes the changed forms, so they are written in another order; a load finds each by its id, so a save made either way loads either way. With JIP's G45 too (32,099 buckets), this row's count wins, as in a game with both: Tweaks writes its value in its handler of xNVSE's PostPostLoad message, after JIP's write at PostLoad, whatever order the DLLs load in. Tweaks' own switch for the block, `[Inlines] bSaveLoad` in its INI, turns the row off too. Changes the order of the records in a save, nothing a player sees |
+
 ## Credits
 
 Written with the fix plugins' knowledge, by their authors' permission (2026-11-03); no code is
@@ -1608,7 +1718,9 @@ translated from them in these fixes.
   checks (`CellOffsetGenerator.cpp`), the idea of the cell offsets row; its tables are built another way here
   and none of its code is used.
 - **lStewieAl's Tweaks, VATS Lag Fix and ActorCause Save Bloat Fix**: the thread races' first three
-  places, the V.A.T.S. wait that ends with the camera, and the causes' witness lists.
+  places, the V.A.T.S. wait that ends with the camera, and the causes' witness lists; and every row of
+  "lStewieAl's Tweaks" above, built from its source (10.05) and the exe. **Viva New Vegas' "VNV INI"**
+  for Tweaks (ModdingLinked, MIT): the settings' default values.
 - **Psycho** (acidpointer): the editor-marker pass's lock and the radio's two music fixes.
 - **Aqua Performa**'s author, **YUP** (Yukichigai Unofficial Patch), **UPNVSE Plus** and **Tale of Two
   Wastelands**: "No LOD Water" on the Strip, as patch data.

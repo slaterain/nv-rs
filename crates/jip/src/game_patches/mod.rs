@@ -71,6 +71,7 @@ pub mod gx;
 pub mod script;
 pub mod settings;
 pub mod slots;
+pub mod switches;
 
 use crate::Jip;
 use engine_core::extend::jip_patches;
@@ -113,6 +114,7 @@ pub const AREAS: &[Area] = &[
     gs::AREA,
     gw::AREA,
     gx::AREA,
+    crate::commands::jip_fn_ui_menus::AREA,
 ];
 
 /// What the game patches keep on JIP's state.

@@ -864,3 +864,71 @@ fn the_deferred_init_message_switches_it_on() {
         .auto_add
         .load(Ordering::Relaxed));
 }
+
+/// `DoLoadGameHousekeeping`'s teammate step: with teammates, each teammate perk of the player put
+/// on again at its rank (the game's `005eb6a0` with the player, 0, the rank, 1); an empty item and
+/// a rank with no perk passed over; with no teammates, nothing.
+#[test]
+fn a_load_puts_the_teammate_perks_on_again() {
+    thread_local! {
+        static APPLIED: RefCell<Vec<Vec<u32>>> = const { RefCell::new(Vec::new()) };
+    }
+    let mut e = world();
+    e.register(PERK_APPLY_RANKS, |_, a| {
+        APPLIED.with(|c| c.borrow_mut().push(a[..5].to_vec()));
+        ret(0)
+    });
+    let (p1, p2) = (AREA + 0x3000, AREA + 0x3100);
+    let (r1, r2, r3) = (AREA + 0x7300, AREA + 0x7308, AREA + 0x7310);
+    e.mem.set_u32(r1, p1);
+    e.mem.set_u8(r1 + 4, 2);
+    e.mem.set_u32(r2, 0);
+    e.mem.set_u32(r3, p2);
+    e.mem.set_u8(r3 + 4, 1);
+    list(&mut e, PLAYER + 0xad4, AREA + 0x7400, &[r1, 0, r2, r3]);
+    e.mem.set_u32(PLAYER + 0xd68, 0);
+    teammate_perks_after_load(&mut e);
+    assert!(APPLIED.with(|c| c.borrow().is_empty()), "no teammates");
+    e.mem.set_u32(PLAYER + 0xd68, 1);
+    teammate_perks_after_load(&mut e);
+    assert_eq!(
+        APPLIED.with(|c| c.borrow().clone()),
+        [vec![p1, PLAYER, 0, 2, 1], vec![p2, PLAYER, 0, 1, 1]]
+    );
+}
+
+/// O18 turned on through `SetOptionalPatch(18, true)` (JIP's case 18): the set-up runs (the
+/// routines in both vtables, the patch marked in, the lists' auto-add flag from the player's
+/// `uNPCPerks=2`), the answer true; a second call changes nothing and answers false.
+#[test]
+fn set_optional_patch_18_runs_the_set_up() {
+    use crate::game_patches::switches;
+    use engine_core::extend::jip_patches::FIXES;
+    for auto_add in [true, false] {
+        let mut e = world();
+        e.map(0x0108_6000, 0x5000);
+        e.jip_patches_or(FIXES);
+        e.ext::<crate::Jip>()
+            .game_patches
+            .settings
+            .npc_perks_auto_add = auto_add;
+        assert!(!switches::is_in(&mut e, 18));
+        assert!(switches::set(&mut e, 18, true));
+        for slots in [CHARACTER_SLOTS, CREATURE_SLOTS] {
+            for (slot, at) in slots.into_iter().zip(ROUTINES) {
+                assert_eq!(e.mem.u32(slot), at);
+            }
+        }
+        assert!(crate::cosave::npc_perks_patch(&mut e));
+        assert!(switches::is_in(&mut e, 18));
+        assert_eq!(
+            e.ext_free::<NpcPerkLists>()
+                .auto_add
+                .load(Ordering::Relaxed),
+            auto_add
+        );
+        assert!(!switches::set(&mut e, 18, true), "once");
+        assert!(!switches::set(&mut e, 18, false), "never off");
+        assert!(switches::is_in(&mut e, 18));
+    }
+}

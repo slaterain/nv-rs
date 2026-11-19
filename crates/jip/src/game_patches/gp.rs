@@ -24,10 +24,9 @@
 //! vtables JIP leaves alone and called directly by `0x441800`, which `0x441C30` calls (the
 //! only reference to `0x441C30` is its slot: `get_xrefs_to`, `measure/jip/GROUP-GP-NOTES.md`).
 //!
-//! Waiting (no reader or writer built): two of the attach's other steps, collision turned off
-//! for a reference marked by `ToggleObjectCollision` (`kHookRefFlag5F_DisableCollision`), JIP's
-//! inserted nodes and models (`InsertNode`, `AttachModel`: `s_insertObjects`): none of those
-//! commands is built, so nothing sets what they test. JIP's point lights (`AddPointLights`, for a
+//! Waiting (no writer built): the attach's collision step for a reference marked by
+//! `ToggleObjectCollision` (`kHookRefFlag5F_DisableCollision`). Built with H08: JIP's inserted
+//! nodes and models (`InsertNode`, `AttachModel`: `s_insertObjects`) put into a loaded 3D. JIP's point lights (`AddPointLights`, for a
 //! 3D JIP's light hooks flagged `0x20000000`) are group GL's (`gl::lights::add_point_lights`),
 //! after the fade as JIP's `doLights`. The first-person node JIP keeps
 //! (`s_pc1stPersonNode`) is kept here ([`first_person_node`]) for `AttachLine` and kin.
@@ -114,6 +113,7 @@ pub const AREA: Area = Area {
         FIRST_PERSON_MODEL.addr(),
         EYE_HEIGHT.addr(),
         HARDCORE_NEEDS.addr(),
+        VANITY_DISABLED.addr(),
     ],
     jip_wraps: &[],
     install_jip,
@@ -224,7 +224,254 @@ pub fn first_person_node(e: &mut Engine) -> u32 {
     e.ext_free::<FirstPersonNode>().0.load(Ordering::Relaxed)
 }
 
+/// Sets JIP's first-person node as G38 would (tests of the commands that read it).
+#[cfg(test)]
+pub fn set_first_person_node_for_test(e: &mut Engine, node: u32) {
+    e.ext_free::<FirstPersonNode>()
+        .0
+        .store(node, Ordering::Relaxed);
+}
+
+/// H02's seam: the player's vanity camera test in the look handling (`0x9459ED`; words: the
+/// player; the answer is the test's).
+pub const VANITY_DISABLED: SiteSlot = SiteSlot::new(Owner::Jip, 0x0094_59ed);
+/// `PlayerCharacter`'s control flags (`+0x680`; bit 2 the vanity camera off).
+const PLAYER_CONTROL_FLAGS: u32 = 0x680;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: GetVanityDisabledHook.
+/// H02: while JIP's HUD cursor is on (`ToggleHUDCursor`), the look handling's vanity camera test
+/// runs JIP's HUD mouse handling ([`process_hud_main_ui`]) and answers true (no vanity camera);
+/// otherwise the player's control flag, as the game reads it.
+fn vanity_disabled(e: &mut Engine, w: &[u32]) -> Option<u32> {
+    if crate::commands::jip_fn_ui::hud_cursor_mode(e) {
+        process_hud_main_ui(e);
+        return Some(1);
+    }
+    Some(u32::from(e.mem.u8(w[0] + PLAYER_CONTROL_FLAGS) & 2 != 0))
+}
+
+/// The game's calls the HUD mouse handling makes: the interface manager's mouse update
+/// (`007118d0`), the cursor scale (`0070ecb0`, `ST0`), the tile under the cursor (`007126c0` with
+/// 0); a tile's absolute x and y (`00a013d0`, `00a01440`, `ST0`), a trait's number (`00a011b0`),
+/// a trait's number set (`00a012d0`: the trait, the number, 0), a trait true (`00a01230`), a
+/// trait's sound played (`00a0b110`).
+const IM_UPDATE_MOUSE: u32 = 0x0071_18d0;
+const CURSOR_SCALE: u32 = 0x0070_ecb0;
+const IM_TILE_UNDER_CURSOR: u32 = 0x0071_26c0;
+const TILE_ABS_X: u32 = 0x00a0_13d0;
+const TILE_ABS_Y: u32 = 0x00a0_1440;
+const TILE_GET_FLOAT: u32 = 0x00a0_11b0;
+const TILE_SET_FLOAT: u32 = 0x00a0_12d0;
+const TILE_IS_TRUE: u32 = 0x00a0_1230;
+const TILE_PLAY_SOUND: u32 = 0x00a0_b110;
+/// `g_interfaceManager`, `g_inputGlobals` (its flag byte `+4`, bit 3 cleared; the wheel's delta
+/// `+0x1B2C`), `g_HUDMainMenu`.
+const INTERFACE_MANAGER: u32 = 0x011d_8a80;
+const INPUT_GLOBALS: u32 = 0x011f_35cc;
+const INPUT_FLAGS: u32 = 4;
+const INPUT_WHEEL: u32 = 0x1b2c;
+const HUD_MAIN_MENU: u32 = 0x011d_96c0;
+/// The interface manager's cursor x and y (`+0x38`, `+0x40`), its dragged tile (`+0x4C`), the drag
+/// words (`+0x50`..`+0x64`), the active tile and menu (`+0xCC`, `+0xD0`), and the two words JIP
+/// clears with the dragged tile (`+0xD4`, `+0xD8`).
+const IM_CURSOR_X: u32 = 0x38;
+const IM_CURSOR_Y: u32 = 0x40;
+const IM_DRAGGED: u32 = 0x4c;
+const IM_DRAG_START_X: u32 = 0x50;
+const IM_DRAG_54: u32 = 0x54;
+const IM_DRAG_58: u32 = 0x58;
+const IM_DRAG_START_Y: u32 = 0x5c;
+const IM_DRAG_DELTA_X: u32 = 0x60;
+const IM_DRAG_DELTA_Y: u32 = 0x64;
+const IM_ACTIVE_TILE: u32 = 0xcc;
+const IM_ACTIVE_MENU: u32 = 0xd0;
+const IM_D4: u32 = 0xd4;
+const IM_D8: u32 = 0xd8;
+/// A tile's parent (`+0x28`); a menu's click handler (its virtual `+0xC`: the tile's id, the tile).
+const TILE_PARENT: u32 = 0x28;
+const MENU_HANDLE_CLICK: u32 = 0xc;
+/// The traits (`kTileValue_*`, `nvse/GameTiles.h` (JIP LN NVSE)).
+const T_X: u32 = 0xfa1;
+const T_Y: u32 = 0xfa2;
+const T_ID: u32 = 0xfaa;
+const T_MOUSEOVER: u32 = 0xfc3;
+const T_CLICKED: u32 = 0xfc7;
+const T_CLICK_SOUND: u32 = 0xfcb;
+const T_MOUSEOVER_SOUND: u32 = 0xfe8;
+const T_DRAGGABLE: u32 = 0xfe9;
+const T_DRAG_START_X: u32 = 0xfea;
+const T_DRAG_START_Y: u32 = 0xfeb;
+const T_DRAG_OFFSET_X: u32 = 0xfec;
+const T_DRAG_OFFSET_Y: u32 = 0xfed;
+const T_DRAG_X: u32 = 0xff0;
+const T_DRAG_Y: u32 = 0xff1;
+const T_WHEELABLE: u32 = 0xff2;
+const T_WHEEL_MOVED: u32 = 0xff3;
+/// A `Tile::Value`'s number (`+8`).
+const VALUE_NUM: u32 = 8;
+/// The left mouse button's key (xNVSE's 256): its raw state is `g_DIHookCtrl`'s `+0x704`.
+const LEFT_MOUSE: u32 = 256;
+
+fn get_float(e: &mut Engine, tile: u32, id: u32) -> f32 {
+    e.call(TILE_GET_FLOAT, &args![tile, id]).f32()
+}
+
+fn set_float(e: &mut Engine, tile: u32, id: u32, v: f32) {
+    e.call(TILE_SET_FLOAT, &args![tile, id, v.to_bits(), 0u32]);
+}
+
+/// `cvttss2si` of a float: truncated, 0x80000000 when it does not fit.
+fn trunc_i32(v: f32) -> u32 {
+    if v.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&v) {
+        0x8000_0000
+    } else {
+        v as i32 as u32
+    }
+}
+
+/// The cursor's position over the scale: `[im+0x38] / k`, `[im+0x40] / k`, in `f32` (as [`drag`]).
+fn cursor(e: &mut Engine, im: u32) -> (f32, f32) {
+    let k = e.call(CURSOR_SCALE, &[]).f32();
+    let x = e.mem.f32(im + IM_CURSOR_X) / k;
+    let y = e.mem.f32(im + IM_CURSOR_Y) / k;
+    (x, y)
+}
+
+/// The drag position of a trait pair: `cursor - (absolute - trait)`, in plain `f32` maths (the
+/// project's rule for the main thread's maths; JIP's x87 keeps the sum in 80 bits, so the last bit
+/// can differ).
+fn drag(cursor: f32, absolute: f32, at: f32) -> f32 {
+    cursor - (absolute - at)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/hooks.h: ProcessHUDMainUI (asm).
+/// JIP's mouse handling of the HUD while its cursor is on, in game mode: the mouse update, then:
+/// a tile being dragged follows the cursor while the left button is held (its drag values), and
+/// is let go when it is released (its drag start set to -1); otherwise the tile under the cursor
+/// gets the mouse-over (its sound, the HUD as the active menu), a release of the button over it is
+/// a click (its sound, `clicked` set and cleared, the menu's click handler with its id), holding
+/// the button over a draggable tile starts a drag, and the wheel over a wheelable tile (or a
+/// parent of it) sets its `wheelmoved` to the wheel's steps and back to 0.
+pub fn process_hud_main_ui(e: &mut Engine) {
+    let im = e.mem.u32(INTERFACE_MANAGER);
+    let input = e.mem.u32(INPUT_GLOBALS);
+    let flags = e.mem.u8(input + INPUT_FLAGS);
+    e.mem.set_u8(input + INPUT_FLAGS, flags & 0xf7);
+    e.call(IM_UPDATE_MOUSE, &args![im]);
+    let lmb = crate::input::is_key_pressed_raw(e, LEFT_MOUSE);
+    let dragged = e.mem.u32(im + IM_DRAGGED);
+    if dragged != 0 {
+        if lmb {
+            let (x, y) = cursor(e, im);
+            let start_x = get_float(e, dragged, T_DRAG_START_X);
+            let delta_x = x - start_x;
+            e.mem.set_u32(im + IM_DRAG_DELTA_X, trunc_i32(delta_x));
+            let start_y = get_float(e, dragged, T_DRAG_START_Y);
+            let delta_y = y - start_y;
+            e.mem.set_u32(im + IM_DRAG_DELTA_Y, trunc_i32(delta_y));
+            let abs_x = e.call(TILE_ABS_X, &args![dragged]).f32();
+            let at_x = get_float(e, dragged, T_X);
+            set_float(e, dragged, T_DRAG_X, drag(x, abs_x, at_x));
+            let abs_y = e.call(TILE_ABS_Y, &args![dragged]).f32();
+            let at_y = get_float(e, dragged, T_Y);
+            set_float(e, dragged, T_DRAG_Y, drag(y, abs_y, at_y));
+            return;
+        }
+        e.mem.set_u32(im + IM_DRAGGED, 0);
+        e.mem.set_u32(im + IM_D4, 0);
+        e.mem.set_u32(im + IM_D8, 0);
+        set_float(e, dragged, T_DRAG_START_X, -1.0);
+        set_float(e, dragged, T_DRAG_START_Y, -1.0);
+        crate::commands::jip_fn_ui::set_last_lmb_state(e, false);
+    }
+    let tile = e.call(IM_TILE_UNDER_CURSOR, &args![im, 0u32]).u32();
+    let active = e.mem.u32(im + IM_ACTIVE_TILE);
+    if tile != active {
+        if active != 0 {
+            set_float(e, active, T_MOUSEOVER, 0.0);
+        }
+        e.mem.set_u32(im + IM_ACTIVE_TILE, tile);
+        let mut menu = tile;
+        if tile != 0 {
+            e.call(TILE_PLAY_SOUND, &args![tile, T_MOUSEOVER_SOUND]);
+            set_float(e, tile, T_MOUSEOVER, 1.0);
+            menu = e.mem.u32(HUD_MAIN_MENU);
+        }
+        e.mem.set_u32(im + IM_ACTIVE_MENU, menu);
+        return;
+    }
+    if tile == 0 {
+        return;
+    }
+    let menu = e.mem.u32(im + IM_ACTIVE_MENU);
+    if menu == 0 {
+        return;
+    }
+    if crate::commands::jip_fn_ui::last_lmb_state(e) != lmb {
+        crate::commands::jip_fn_ui::set_last_lmb_state(e, lmb);
+        if lmb {
+            return;
+        }
+        e.call(TILE_PLAY_SOUND, &args![tile, T_CLICK_SOUND]);
+        set_float(e, tile, T_CLICKED, 1.0);
+        set_float(e, tile, T_CLICKED, 0.0);
+        let value = crate::commands::jip_fn_ui::value_of(e, tile, T_ID);
+        let id = if value == 0 {
+            0xffff_ffff
+        } else {
+            trunc_i32(e.mem.f32(value + VALUE_NUM))
+        };
+        e.vcall(menu, MENU_HANDLE_CLICK, &args![id, tile]);
+        return;
+    }
+    if lmb {
+        if !e.call(TILE_IS_TRUE, &args![tile, T_DRAGGABLE]).bool() {
+            return;
+        }
+        e.mem.set_u32(im + IM_D4, tile);
+        e.mem.set_u32(im + IM_D8, menu);
+        e.mem.set_u32(im + IM_DRAGGED, tile);
+        let (x, y) = cursor(e, im);
+        let (start_x, start_y) = (trunc_i32(x), trunc_i32(y));
+        e.mem.set_u32(im + IM_DRAG_START_X, start_x);
+        e.mem.set_u32(im + IM_DRAG_START_Y, start_y);
+        let abs_x = e.call(TILE_ABS_X, &args![tile]).f32();
+        let abs_y = e.call(TILE_ABS_Y, &args![tile]).f32();
+        let at_x = get_float(e, tile, T_X);
+        set_float(e, tile, T_DRAG_X, drag(x, abs_x, at_x));
+        let at_y = get_float(e, tile, T_Y);
+        set_float(e, tile, T_DRAG_Y, drag(y, abs_y, at_y));
+        set_float(e, tile, T_DRAG_START_X, start_x as i32 as f32);
+        set_float(e, tile, T_DRAG_START_Y, start_y as i32 as f32);
+        set_float(e, tile, T_DRAG_OFFSET_X, x - abs_x);
+        set_float(e, tile, T_DRAG_OFFSET_Y, y - abs_y);
+        for field in [IM_DRAG_54, IM_DRAG_58, IM_DRAG_DELTA_X, IM_DRAG_DELTA_Y] {
+            e.mem.set_u32(im + field, 0);
+        }
+        return;
+    }
+    let wheel = e.mem.u32(input + INPUT_WHEEL) as i32;
+    if wheel == 0 {
+        return;
+    }
+    // `idiv` by -120 (0xFFFFFF88): a quotient truncated toward zero.
+    let steps = wheel.wrapping_div(-120);
+    if steps == 0 {
+        return;
+    }
+    let mut at = tile;
+    while at != 0 {
+        if e.call(TILE_IS_TRUE, &args![at, T_WHEELABLE]).bool() {
+            set_float(e, at, T_WHEEL_MOVED, steps as f32);
+            set_float(e, at, T_WHEEL_MOVED, 0.0);
+            return;
+        }
+        at = e.mem.u32(at + TILE_PARENT);
+    }
+}
+
 fn install_jip(e: &mut Engine) {
+    e.on_site(VANITY_DISABLED, vanity_disabled);
     // Made before the threads start, so every thread's engine shares it.
     e.ext_free::<FirstPersonNode>();
     e.on_site(FIRST_PERSON_MODEL, first_person_model);
@@ -413,6 +660,27 @@ pub fn queued_reference(e: &mut Engine, queued: u32) {
                 if e.mem.u32(node_vtable + off::VT_IS_FADE_NODE) == RETURN_THIS {
                     e.mem.set_f32(node + off::FADE, 1.0);
                     e.mem.set_f32(node + off::FADE + 4, 1.0);
+                }
+            }
+            // JIP's inserted nodes and models (H08's attach step, `InsertNode`/`AttachModel`):
+            // when any are kept, a reference or its base form that has entries gets them in its
+            // 3D, and the player in his first-person node (`+0x694`) too.
+            if crate::commands::jip_fn_misc_ref_insert::any_insert_objects(e) {
+                let base = crate::commands::jip_fn_misc_ref_insert::base_form2(e, refr);
+                let mask = crate::commands::jip_fn_misc_ref_insert::INSERT_NODE
+                    | crate::commands::jip_fn_misc_ref_insert::ATTACH_MODEL;
+                let marked = |e: &Engine, f: u32| e.mem.u8(f + 6) & mask != 0;
+                if base != 0 && (marked(e, refr) || marked(e, base)) {
+                    crate::commands::jip_fn_misc_ref_insert::do_insert_objects(e, refr, base, node);
+                    // `[edi+0xC] == 0x14`: the player.
+                    if e.mem.u32(refr + 0xc) == 0x14 {
+                        let first = e.mem.u32(refr + off::NODE_1ST);
+                        if first != 0 {
+                            crate::commands::jip_fn_misc_ref_insert::do_insert_objects(
+                                e, refr, 0, first,
+                            );
+                        }
+                    }
                 }
             }
             // JIP's point lights (`doLights`, group GL's H06/H12): a 3D its light hooks marked

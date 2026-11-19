@@ -6,12 +6,10 @@
 //! writes are kept in the port's own folder beside the saves, never in the game folder; and
 //! `GetDefaultMessageTime`/`SetDefaultMessageTime`, the time JIP's `QueueUIMessageHook` (G09,
 //! `crate::game_patches::ga`) gives the game's own messages (with JIP's fixes off it is kept but no
-//! message uses it, as with JIP). 16 of its 20 commands (`GetLNVersion` is the core track's,
-//! `identity.rs`).
-//!
-//! Left for later, each for its reason: `GetFilesInFolder`, `GetFoldersInFolder` list a folder
-//! (`FindFirstFileA`; the seam has no folder listing yet); `Console` compiles and runs a script
-//! line (`JIPScriptRunner`, not built yet).
+//! message uses it, as with JIP), `GetFilesInFolder`/`GetFoldersInFolder` (a Data folder listed
+//! through the seam) and `Console` (a script line run on JIP's script runner,
+//! `crate::script_runner::run_script_source`). 19 of its 20 commands (`GetLNVersion` is the core
+//! track's, `identity.rs`).
 
 use super::arrays::{create_array, create_string_map, set_element, Element};
 use super::forms::ListNode;
@@ -42,6 +40,9 @@ pub static COMMANDS: Handlers = &[
     (0x2300, get_form_count_type),
     (0x2327, get_default_message_time),
     (0x2328, set_default_message_time),
+    (0x2326, console_line),
+    (0x228a, get_files_in_folder),
+    (0x22a3, get_folders_in_folder),
 ];
 
 /// A form list's forms (`BGSListForm::list`, a `tList` at +0x18).
@@ -308,7 +309,7 @@ fn file_archived(e: &mut Engine, path: &[u8]) -> bool {
 /// `GetFileAttributesA` of `path` (`/` made `\`) through the seam: 1 when it is there as asked (a
 /// folder or a file), 0 when it is there as the other; when it is not there, a file found in an
 /// opened archive ([`file_archived`]) answers 2.
-fn file_exists_ex(e: &mut Engine, path: &mut [u8], folder: bool) -> u32 {
+pub(crate) fn file_exists_ex(e: &mut Engine, path: &mut [u8], folder: bool) -> u32 {
     backslashes(path);
     if engine_core::mod_files::directory_exists(e, path) {
         return u32::from(folder);
@@ -694,6 +695,161 @@ fn remove_ini_section(e: &mut Engine, w: &[u32]) -> Ret {
         a.set_result(e, 1.0);
     }
     handled(true)
+}
+
+/// JIP's string buffer (`GetStrArgBuffer`) and `kCommandInfo_Console.numParams` (xNVSE's 21
+/// format parameters).
+const CONSOLE_BUFFER: usize = 0x4_0000;
+const CONSOLE_PARAMS: u32 = 21;
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h: Cmd_Console_Execute.
+/// `Console "text"`: the text compiled under the name "Console" into a temporary script and run
+/// once (`JIPScriptRunner::RunScriptSource`, no lambda capture): 1 when it compiled.
+fn console_line(e: &mut Engine, w: &[u32]) -> Ret {
+    let a = CommandArgs::new(w);
+    let f = nvse::commands::string::format_string_args_at(e, &a, 0, CONSOLE_PARAMS);
+    if !f.ok {
+        return handled(true);
+    }
+    let text = super::formatted_in_buffer(e, &f.text, CONSOLE_BUFFER, "Console");
+    if crate::script_runner::run_script_source(e, &text, b"Console", false) {
+        a.set_result(e, 1.0);
+    }
+    handled(true)
+}
+
+// ---- folder listings ----
+
+/// `GetFilesInFolder`'s and `GetFoldersInFolder`'s filter buffer (`char filter[0x40]`).
+const FILTER_ARG: usize = 0x40;
+
+/// A file search pattern's parts after Windows' rewrite (kernel32 before `NtQueryDirectoryFile`):
+/// a unit of the name, `*`, and the DOS forms `DOS_STAR`, `DOS_QM` and `DOS_DOT`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Wild {
+    Unit(u16),
+    Star,
+    DosStar,
+    DosQm,
+    DosDot,
+}
+
+const DOT: u16 = b'.' as u16;
+
+/// Windows' rewrite of a search pattern: `?` is `DOS_QM`; a `.` before `*`, `?` or the end is
+/// `DOS_DOT`; a `*` before a `.` is `DOS_STAR`; the rest as it is.
+fn dos_pattern(pattern: &[u16]) -> Vec<Wild> {
+    let q = u16::from(b'?');
+    let star = u16::from(b'*');
+    (0..pattern.len())
+        .map(|i| {
+            let next = pattern.get(i + 1).copied();
+            match pattern[i] {
+                c if c == q => Wild::DosQm,
+                DOT if next.is_none() || next == Some(star) || next == Some(q) => Wild::DosDot,
+                c if c == star && next == Some(DOT) => Wild::DosStar,
+                c if c == star => Wild::Star,
+                c => Wild::Unit(c),
+            }
+        })
+        .collect()
+}
+
+// `FsRtlIsNameInExpression`'s rules for the DOS forms (ntifs.h): `DOS_STAR` matches any run
+// that does not take the name's last `.`; X// the end (and so do the `DOS_QM`s right after it); `DOS_DOT` matches a `.`, or nothing at the end.
+fn dos_match(p: &[Wild], n: &[u16]) -> bool {
+    let Some(&first) = p.first() else {
+        return n.is_empty();
+    };
+    match first {
+        Wild::Unit(c) => n.first() == Some(&c) && dos_match(&p[1..], &n[1..]),
+        Wild::Star => (0..=n.len()).any(|k| dos_match(&p[1..], &n[k..])),
+        Wild::DosStar => {
+            let most = n.iter().rposition(|&u| u == DOT).unwrap_or(n.len());
+            (0..=most).any(|k| dos_match(&p[1..], &n[k..]))
+        }
+        Wild::DosQm => {
+            if n.is_empty() || n[0] == DOT {
+                dos_match(&p[1..], n)
+            } else {
+                dos_match(&p[1..], &n[1..])
+            }
+        }
+        Wild::DosDot => match n.first() {
+            None => dos_match(&p[1..], n),
+            Some(&DOT) => dos_match(&p[1..], &n[1..]),
+            Some(_) => false,
+        },
+    }
+}
+
+/// Whether `name` matches the search pattern `pattern` as a Windows file search matches a long
+/// name, on every system: `*` and `*.*` match every name; any other pattern is rewritten
+/// ([`dos_pattern`]) and matched by [`dos_match`]'s rules, both without case as Windows compares
+/// file names (the seam's [`engine_core::mod_files::name_key`]: the code page's UTF-16 in NTFS's
+/// upper case). A name's short 8.3 form, which Windows also matches, is not: a mod lists its own
+/// files by their real names.
+fn wildcard_match(pattern: &[u8], name: &[u8]) -> bool {
+    if pattern == b"*" || pattern == b"*.*" {
+        return true;
+    }
+    let p = dos_pattern(&engine_core::mod_files::name_key(pattern));
+    dos_match(&p, &engine_core::mod_files::name_key(name))
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), functions_ln/ln_fn_utility.h:
+// Cmd_GetFilesInFolder_Execute and Cmd_GetFoldersInFolder_Execute.
+/// `data\<path>` (`/` made `\`, ending in one `\`; a filter's folder part, up to its last
+/// separator, added to it) listed through the seam ([`engine_core::mod_files::list`]: the port's
+/// folder's files, then the game's, as a mod reads them) with the rest of `filter` (default `*`,
+/// [`wildcard_match`]): an array of the names of the files (`folders` false) or of the folders,
+/// in the listing's order; empty when nothing matches or the folder is not there or refused.
+fn folder_listing(e: &mut Engine, w: &[u32], folders: bool, command: &str) -> Ret {
+    let a = CommandArgs::new(w);
+    let read = Read::of(e, &a);
+    if !read.ok {
+        return handled(true);
+    }
+    let mut folder = DATA_FOLDER.to_vec();
+    folder.extend(super::buffer_arg(e, &read, 0, DATA_PATH_ARG, command));
+    let mut filter = if read.args.len() > 1 {
+        super::buffer_arg(e, &read, 1, FILTER_ARG, command)
+    } else {
+        b"*".to_vec()
+    };
+    // A filter with a folder part: that part goes to the folder (the seam refuses a folder
+    // outside the game's, as Windows' search does not find one), the rest is the pattern.
+    if let Some(at) = filter.iter().rposition(|&b| b == b'\\' || b == b'/') {
+        while folder.last().is_some_and(|&b| b == b'\\' || b == b'/') {
+            folder.pop();
+        }
+        folder.push(b'\\');
+        folder.extend_from_slice(&filter[..at]);
+        filter.drain(..=at);
+    }
+    backslashes(&mut folder);
+    while folder.last() == Some(&b'\\') {
+        folder.pop();
+    }
+    folder.push(b'\\');
+    let names: Vec<Element> = engine_core::mod_files::list(e, &folder)
+        .into_iter()
+        .filter(|l| l.is_folder == folders && wildcard_match(&filter, &l.name))
+        .map(|l| Element::Str(l.name))
+        .collect();
+    let id = create_array(e, a.script, &names);
+    a.set_result(e, f64::from(id));
+    handled(true)
+}
+
+/// `GetFilesInFolder path [filter]`: the files' names ([`folder_listing`]).
+fn get_files_in_folder(e: &mut Engine, w: &[u32]) -> Ret {
+    folder_listing(e, w, false, "GetFilesInFolder")
+}
+
+/// `GetFoldersInFolder path [filter]`: the folders' names ([`folder_listing`]; no `.` or `..`).
+fn get_folders_in_folder(e: &mut Engine, w: &[u32]) -> Ret {
+    folder_listing(e, w, true, "GetFoldersInFolder")
 }
 
 #[cfg(test)]

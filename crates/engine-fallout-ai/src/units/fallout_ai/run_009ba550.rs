@@ -496,6 +496,12 @@ pub fn fn_009bacb0(
     e.set(this, MuzzleFlash::bEnabled, false);
     e.set(this, MuzzleFlash::bMPSEnabled, false);
     e.set(this, MuzzleFlash::bUpdateLight, false);
+    // JIP's seam at the third flag byte's clear (`0x9BAD76`; words: `this`): answered, the byte
+    // after the three flags (JIP's "fired by `FireWeaponEx`" mark) is cleared too, as JIP's
+    // rewrite of that store clears the whole first word.
+    if e.site(0x009b_ad76, &[this.addr()]).is_some() {
+        e.mem.set_u8(this.addr() + 3, 0);
+    }
     e.set(this, MuzzleFlash::fEnableTimer, 0.0);
     let projectile = e.get(this, MuzzleFlash::pProjectile);
     let duration = e.call(0x0050_7e10, &args![projectile]).f32();
@@ -1439,5 +1445,31 @@ mod tests {
         assert_eq!(e.get(flash, MuzzleFlash::pWeaponSource).addr(), 0);
         // The duration getter still runs, on the null projectile.
         assert_eq!(calls_to(&e, 0x0050_7e10), vec![vec![0]]);
+    }
+
+    #[test]
+    fn the_byte_after_the_flags_is_cleared_only_when_the_seam_answers() {
+        let mut e = engine();
+        let flash = e.new_object::<MuzzleFlash>();
+        e.mem.set_u32(flash.addr(), 0xdead_beef);
+        e.call(0x009b_acb0, &args![flash, 0u32, 0u32]);
+        assert_eq!(
+            e.mem.u32(flash.addr()),
+            0xde00_0000,
+            "the game's: three bytes"
+        );
+
+        thread_local!(static SEEN: std::cell::RefCell<Vec<u32>> = const { std::cell::RefCell::new(Vec::new()) });
+        fn at_flags(_: &mut Engine, w: &[u32]) -> Option<u32> {
+            SEEN.with(|s| s.borrow_mut().push(w[0]));
+            Some(1)
+        }
+        let mut e = engine();
+        e.on_site_for_test(0x009b_ad76, at_flags);
+        let flash = e.new_object::<MuzzleFlash>();
+        e.mem.set_u32(flash.addr(), 0xdead_beef);
+        e.call(0x009b_acb0, &args![flash, 0u32, 0u32]);
+        assert_eq!(e.mem.u32(flash.addr()), 0, "answered: the whole word");
+        assert_eq!(SEEN.with(|s| s.borrow().clone()), vec![flash.addr()]);
     }
 }
