@@ -389,7 +389,7 @@ fn tile_name(e: &Engine, tile: u32) -> Option<Vec<u8>> {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::GetChild.
 /// The child named `child` (`*` for any, `name:n` for the `n`-th such), the children in their
 /// order; 0 for none (and for a name that starts with the colon).
-fn child(e: &Engine, tile: u32, child: &[u8]) -> u32 {
+pub(crate) fn child(e: &Engine, tile: u32, child: &[u8]) -> u32 {
     let (name, mut index) = match child.iter().position(|&b| b == b':') {
         Some(0) => return 0,
         Some(at) => (&child[..at], crate::utility::str_to_int(&child[at + 1..])),
@@ -420,7 +420,11 @@ fn child(e: &Engine, tile: u32, child: &[u8]) -> u32 {
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::GetComponent.
 /// The tile at `path` below `tile` and, when its last part names no child, that part as a
 /// trait name; `None` when a tile on the way is not there.
-fn component<'a>(e: &Engine, tile: u32, path: &'a [u8]) -> Option<(u32, Option<&'a [u8]>)> {
+pub(crate) fn component<'a>(
+    e: &Engine,
+    tile: u32,
+    path: &'a [u8],
+) -> Option<(u32, Option<&'a [u8]>)> {
     let mut parent = tile;
     let mut rest = path;
     while let Some(slash) = slash_pos(rest) {
@@ -445,7 +449,7 @@ fn component<'a>(e: &Engine, tile: u32, path: &'a [u8]) -> Option<(u32, Option<&
 /// The trait id named `name`: the map's hash picks the bucket, its compare finds the key; 0 when
 /// it is not there. The name is a part of JIP's `tilePath[0x100]`: at most its 255 bytes go to
 /// the game ([`in_buffer`]).
-fn trait_id(e: &mut Engine, name: &[u8]) -> u32 {
+pub(crate) fn trait_id(e: &mut Engine, name: &[u8]) -> u32 {
     let vtable = e.mem.u32(TRAIT_MAP);
     if vtable == 0 {
         return 0;
@@ -563,7 +567,7 @@ pub(crate) fn value_set_float(e: &mut Engine, value: u32, num: f32) {
 
 // Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::Value::SetBool.
 /// The value's number set to 1.0 or 0 (by its bits) and the value refreshed, unless it has it.
-fn value_set_bool(e: &mut Engine, value: u32, on: bool) {
+pub(crate) fn value_set_bool(e: &mut Engine, value: u32, on: bool) {
     let bits = if on { 0x3f80_0000 } else { 0 };
     if e.mem.u32(value + VALUE_NUM) == bits {
         return;

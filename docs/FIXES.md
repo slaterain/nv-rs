@@ -1393,8 +1393,11 @@ as with JIP.
 
 Also fixes (the row on): a reference made in the game that carries form flag `0x400000` (and a projectile
 that says so itself) is not written to the save as an unloaded form, and a reference keeps that flag from the
-save when it loads (`0x484E03`, `0x8497CD`); the save's two form id maps get 0x7D63 buckets instead of 0x13AF
-(`0x845558`, `0x846FFB`): fewer collisions with many forms, no change in what is saved. A global variable
+save when it loads (`0x484E03`, `0x8497CD`); the save's form id map (`0x846FFB`) and its map of changed forms
+(`0x845558`) get 0x7D63 buckets instead of 0x13AF: fewer collisions with many forms. The form id map's count
+changes nothing in the save; the changes map's changes only the order the changed forms are written in (the
+records are the same and a save loads either way: `crates/engine/tests/save_changes_map.rs`). With lStewieAl's
+Tweaks' row S1016.845558 on, its 10,037 buckets win at `0x845558`. A global variable
 whose form flags have bit 0x40 (the record's "Constant" flag, as xEdit names it) is not read again from a
 record once it has that flag (`0x5A64D7`).
 
@@ -1694,7 +1697,7 @@ and tweaks every VNV player runs, is being built in as `crates/stewie` (`measure
 | `patchFixSetActorRefEssentialNullCheck` | S0174 | `bFixSetActorRefEssentialNullCheck` | `SetActorRefEssential` `005dfd30` (`0x5DFD6A`) | The script command called without a reference reports an invalid actor (in the console with its echo) instead of crashing. Only removes a crash |
 | `HolotapeEmptySubtitleCrashFix` | S0182 | `bHolotapeEmptySubtitleCrashFix` | `MapMenu` `0079a660` (`0x79A868`, `0x79AAEB`) | Playing a holotape that has sound but no subtitles (a note of type Sound) no longer crashes: nothing is removed from the empty subtitle list. Only removes a crash |
 | `patchFixSavingNullCellCrash` | S0881 | `bFixSavingNullCellCrash` | `SaveInitialData` `0084eb80` (`0x84EE1B`) | Saving with a placed (created) reference that has neither worldspace nor cell no longer crashes: its location's id is saved as 0 (Tweaks' `GetRefIDNullChecked`). Only removes a crash |
-| `Inlines::SaveLoad` (Engine Optimizations) | S1016.845558 | `bInlinesChangesMapBuckets` | `00845550` (`0x845558`) | A save's map of changed forms gets 10,037 buckets, not 5,039: a late playthrough has tens of thousands of changed forms, and every save and load looks each up. The map is walked bucket by bucket when a save writes the changed forms, so they are written in another order; a load finds each by its id, so a save made either way loads either way. With JIP's G45 too (32,099 buckets), this row's count wins, as in a game with both (Tweaks writes its value after JIP). Changes the order of the records in a save, nothing a player sees |
+| `Inlines::SaveLoad` (Engine Optimizations) | S1016.845558 | `bInlinesChangesMapBuckets` | `00845550` (`0x845558`) | A save's map of changed forms gets 10,037 buckets, not 5,039: a late playthrough has tens of thousands of changed forms, and every save and load looks each up. The map is walked bucket by bucket when a save writes the changed forms, so they are written in another order; a load finds each by its id, so a save made either way loads either way. With JIP's G45 too (32,099 buckets), this row's count wins, as in a game with both: Tweaks writes its value in its handler of xNVSE's PostPostLoad message, after JIP's write at PostLoad, whatever order the DLLs load in. Tweaks' own switch for the block, `[Inlines] bSaveLoad` in its INI, turns the row off too. Changes the order of the records in a save, nothing a player sees |
 
 ## Credits
 
