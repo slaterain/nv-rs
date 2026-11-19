@@ -79,6 +79,7 @@ pub mod functions;
 pub mod input;
 pub mod invref;
 pub mod lambda;
+pub mod line_reader;
 pub mod log;
 pub mod mt19937;
 pub mod names;
