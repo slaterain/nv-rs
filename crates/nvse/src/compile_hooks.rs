@@ -26,6 +26,9 @@
 //!   the integer and float case (xNVSE's `SafeWrite8(0x5B3C30, 1)`), and at install the type
 //!   table lets a double parameter be a variable.
 //! - `005B3A8D` (`StandardCompile`'s end-of-line check): off while a nested command parses.
+//! - `005AF3F0` (`GetNextLine`, whole) and `005B1C65` (`StandardCompile`'s word read of each
+//!   parameter): `PatchGameCommandParser`'s line reader and inline parameter expressions, with its
+//!   two type keyword aliases ([`crate::line_reader`]).
 //!
 //! Also from `Hook_Script_Init`: xNVSE's two fixes of the game's own `set`/`if` expression code,
 //! a 0x500-byte token buffer for the infix-to-postfix conversion (`ExpressionParserBufferOverflow
@@ -86,6 +89,8 @@ pub fn install(e: &mut Engine) {
     if e.mem.is_mapped(DOUBLE_PARAMETER_TYPE) {
         e.mem.set_u16(DOUBLE_PARAMETER_TYPE, 1);
     }
+    // `PatchGameCommandParser`: the line reader, the parameters in parentheses, the type keywords.
+    crate::line_reader::install(e);
     // `s_ExpressionParserAltBuffer` (`char[0x500]`, zeroed) and the hooks that use it.
     if e.expression_alt_buffer() == 0 {
         let buffer = crate::table::alloc(e, EXPRESSION_ALT_BUFFER_SIZE);
