@@ -182,6 +182,8 @@ impl Backend for WgpuBackend {
                 _ => Reply::None,
             };
         };
+        // A batch that has taken the most one submit carries is sent before the next command.
+        d.bound_batch();
         match cmd {
             Cmd::CreateDevice { .. } => unreachable!("handled above"),
             Cmd::Reset {
