@@ -307,11 +307,12 @@ fn other(text: String) -> std::io::Error {
 
 const ARCHIVES: [&str; 4] = [".7z", ".zip", ".rar", ".fomod"];
 
-/// Whether the top-level entry `name` of a layer stays out of the game's folder.
-fn left_out(name: &str, is_dir: bool) -> bool {
+/// Whether the top-level entry `name` of a layer stays out of the game's folder (the mod chooser
+/// leaves the same out of what it counts as the player's files).
+pub fn left_out(name: &str, is_dir: bool) -> bool {
     let lower = name.to_ascii_lowercase();
     if is_dir {
-        return lower == "installed archives";
+        return lower == crate::installs::KEPT;
     }
     lower == "plugins.txt"
         || lower.starts_with("read me")

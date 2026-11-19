@@ -27,6 +27,8 @@ fn world() -> Engine {
     form(&mut e, AMMO, TES_AMMO, 0x0000_1800);
     // The rifle's ammo (`+0xA8`) and projectile (`+0x118`); the ammo's projectile (`+0xB4`).
     e.mem.set_u32(RIFLE + 0xa8, AMMO);
+    // The launcher has ammo of its own too: JIP's GetEquippedAmmo still answers none for it.
+    e.mem.set_u32(LAUNCHER + 0xa8, AMMO);
     e.mem.set_u32(RIFLE + 0x118, 0x0bad_0118);
     e.mem.set_u32(LAUNCHER + 0x118, 0x0bad_1118);
     e.mem.set_u32(AMMO + AMMO_PROJECTILE, 0x0bad_00b4);

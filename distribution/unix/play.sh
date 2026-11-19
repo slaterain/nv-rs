@@ -11,6 +11,8 @@
 #                              "my mods" folder in nv-rs's own folder (it says where), laid over a
 #                              copy of the game's folder made of links in nv-rs's own folder (saves
 #                              made with mods stay apart; --mods --import-saves copies saves in)
+#   ./play.sh --install-mods   install mods put in the "my mods" folder (.7z, .zip, .fomod),
+#                              answering each installer's questions; or remove one
 #   ./play.sh --help           this text
 #
 # nv-rs never writes into the game's folder, Steam's folders or your Documents. Everything it
@@ -174,6 +176,7 @@ opt_forget=0
 opt_import=0
 opt_check=0
 opt_mods=0
+opt_install=0
 while [ $# -gt 0 ]; do
     case $1 in
     (--game)
@@ -185,6 +188,7 @@ while [ $# -gt 0 ]; do
     (--import-saves) opt_import=1 ;;
     (--check) opt_check=1 ;;
     (--mods) opt_mods=1 ;;
+    (--install-mods) opt_install=1 ;;
     (-h | --help)
         usage
         exit 0
@@ -383,6 +387,15 @@ fi
 case "$here/" in
 ("$game"/*) say "Note: nv-rs is in the game's folder ($here). It never writes there, but it is better kept apart: move the nv-rs folder out of $game." ;;
 esac
+
+# Installing mods: the text chooser, as "Install mods.cmd" on Windows (nv-viewer --install-mods):
+# into nv-rs's own folder (mod installs), never the game's; then nothing is started.
+if [ "$opt_install" = 1 ]; then
+    mkdir -p -- "$mods" || fail "could not make the mods folder $mods"
+    say "The mods folder: $mods (put a mod's .7z, .zip or .fomod there)"
+    "$program" --install-mods "$game" "$own/mod installs" "$mods"
+    exit $?
+fi
 
 # The saves in Steam's Proton folder (or another Wine prefix): COPIED into nv-rs's own folder on
 # the player's typed yes, never moved, never changed there. A save (.fos) and its script

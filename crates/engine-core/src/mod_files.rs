@@ -79,6 +79,10 @@ pub struct ModFileCalls {
     /// in the order NTFS lists a folder on every system. A folder that exists nowhere, or a name
     /// `read` refuses, lists nothing. Nothing is ever written or made.
     pub list: ListCall,
+    /// The key a name is compared by, as Windows compares file names (the name in the code page
+    /// turned to UTF-16, in NTFS's upper case): the order [`ModFileCalls::list`] lists in and
+    /// what a folder search's pattern matches without case.
+    pub name_key: fn(&[u8]) -> Vec<u16>,
 }
 
 /// One entry of a folder listing ([`ModFileCalls::list`]): its name alone, in the game's code
@@ -187,6 +191,18 @@ pub fn list_or_error(e: &Engine, folder: &[u8]) -> Result<Vec<Listed>, u32> {
 /// [`list_or_error`]'s entries; empty without the platform.
 pub fn list(e: &Engine, folder: &[u8]) -> Vec<Listed> {
     list_or_error(e, folder).unwrap_or_default()
+}
+
+/// [`ModFileCalls::name_key`] of `name`; without the platform, each byte in ASCII upper case.
+pub fn name_key(name: &[u8]) -> Vec<u16> {
+    calls().map_or_else(
+        || {
+            name.iter()
+                .map(|b| u16::from(b.to_ascii_uppercase()))
+                .collect()
+        },
+        |c| (c.name_key)(name),
+    )
 }
 
 /// `GetPrivateProfileStringA(section, key, ..., name)` over [`read`]: the value as Windows reads

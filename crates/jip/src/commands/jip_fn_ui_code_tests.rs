@@ -315,12 +315,17 @@ fn quest_messages_hidden_for_one_frame() {
     e.mem.set_u32(PLAYER_AT + 0x6b8, quest);
     e.mem.set_u8(quest + 0x3c, 2);
     e.call(SHOW_QUEST_NAME.addr(), &[quest]);
-    e.mem.set_u8(quest + 0x3c, 0x40);
+    // Failed (0x40) and not the active one: nothing; not done with another active: nothing.
+    e.mem.set_u8(quest + 0x100 + 0x3c, 0x40);
     e.call(SHOW_QUEST_NAME.addr(), &[quest + 0x100]);
-    e.mem.set_u8(quest + 0x3c, 0);
     e.call(SHOW_QUEST_NAME.addr(), &[quest + 0x200]);
     e.call(SHOW_QUEST_OBJECTIVE.addr(), &[0x1234, 1, 0]);
     assert_eq!(calls(), vec![(SET_ACTIVE_QUEST, vec![PLAYER_AT, 0])]);
+    // Failed and the active one: no longer active.
+    CALLS.with(|c| c.borrow_mut().clear());
+    e.mem.set_u32(PLAYER_AT + 0x6b8, quest + 0x100);
+    e.call(SHOW_QUEST_NAME.addr(), &[quest + 0x100]);
+    assert_eq!(calls(), vec![(SET_ACTIVE_QUEST, vec![PLAYER_AT, 0])], "failed");
     crate::main_loop::cycle(&mut e);
     assert_eq!(e.mem.i32(SHOW_CHALLENGE_UPDATES), 1, "shown again");
     CALLS.with(|c| c.borrow_mut().clear());
@@ -402,6 +407,7 @@ fn the_item_filter() {
         0,
         "a note's name"
     );
+    call(&mut e, 0x272d, &[s(b"RIFLE")]);
     OUT.with(|o| o.set(1));
     e.mem.set_u32(entry + 8, rifle);
     assert_eq!(

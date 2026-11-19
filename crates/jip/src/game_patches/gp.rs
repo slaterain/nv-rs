@@ -26,9 +26,8 @@
 //!
 //! After the fade, a reference marked by `ToggleObjectCollision`
 //! (`kHookRefFlag5F_DisableCollision`) has its collision turned off again
-//! (`commands::jip_fn_misc_ref_code::toggle_collision`).
-//! Waiting (no reader or writer built): JIP's inserted nodes and models (`InsertNode`,
-//! `AttachModel`: `s_insertObjects`): nothing sets what that step tests yet. JIP's point lights (`AddPointLights`, for a
+//! (`commands::jip_fn_misc_ref_code::toggle_collision`). Then, built with H08: JIP's inserted
+//! nodes and models (`InsertNode`, `AttachModel`: `s_insertObjects`) put into a loaded 3D. JIP's point lights (`AddPointLights`, for a
 //! 3D JIP's light hooks flagged `0x20000000`) are group GL's (`gl::lights::add_point_lights`),
 //! after the fade as JIP's `doLights`. The first-person node JIP keeps
 //! (`s_pc1stPersonNode`) is kept here ([`first_person_node`]) for `AttachLine` and kin.
@@ -671,6 +670,27 @@ pub fn queued_reference(e: &mut Engine, queued: u32) {
                 != 0
             {
                 crate::commands::jip_fn_misc_ref_code::toggle_collision(e, refr, false);
+            }
+            // JIP's inserted nodes and models (H08's attach step, `InsertNode`/`AttachModel`):
+            // when any are kept, a reference or its base form that has entries gets them in its
+            // 3D, and the player in his first-person node (`+0x694`) too.
+            if crate::commands::jip_fn_misc_ref_insert::any_insert_objects(e) {
+                let base = crate::commands::jip_fn_misc_ref_insert::base_form2(e, refr);
+                let mask = crate::commands::jip_fn_misc_ref_insert::INSERT_NODE
+                    | crate::commands::jip_fn_misc_ref_insert::ATTACH_MODEL;
+                let marked = |e: &Engine, f: u32| e.mem.u8(f + 6) & mask != 0;
+                if base != 0 && (marked(e, refr) || marked(e, base)) {
+                    crate::commands::jip_fn_misc_ref_insert::do_insert_objects(e, refr, base, node);
+                    // `[edi+0xC] == 0x14`: the player.
+                    if e.mem.u32(refr + 0xc) == 0x14 {
+                        let first = e.mem.u32(refr + off::NODE_1ST);
+                        if first != 0 {
+                            crate::commands::jip_fn_misc_ref_insert::do_insert_objects(
+                                e, refr, 0, first,
+                            );
+                        }
+                    }
+                }
             }
             // JIP's point lights (`doLights`, group GL's H06/H12): a 3D its light hooks marked
             // `0x20000000` (the byte +0x33's bit 0x20) has them listed and set from their forms.

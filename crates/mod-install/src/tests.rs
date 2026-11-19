@@ -347,9 +347,23 @@ fn installed_mods_come_in_their_order() {
         next_folder(&installs, "Gun Pack").unwrap(),
         installs.join("01 Gun Pack")
     );
-    for name in ["10 Ten", "2 Two", "02 Also two", "junk", "x Not numbered"] {
-        std::fs::create_dir_all(installs.join(name)).unwrap();
+    for name in [
+        "10 Ten",
+        "2 Two",
+        "02 Also two",
+        "junk",
+        "x Not numbered",
+        "+3 Plus",
+    ] {
+        write(&installs.join(name).join(RECORD), b"name: x\n");
     }
+    // No record (a half-finished install), or a staging folder: not a mod, but no number of a
+    // numbered folder is given again.
+    std::fs::create_dir_all(installs.join("12 Unfinished")).unwrap();
+    write(
+        &installs.join(format!("{STAGING}13 Big")).join("a.dds"),
+        b"x",
+    );
     write(&installs.join("3 a file"), b"not a folder");
     let names: Vec<(u32, String)> = installed(&installs)
         .unwrap()
@@ -366,7 +380,7 @@ fn installed_mods_come_in_their_order() {
     );
     assert_eq!(
         next_folder(&installs, "Weapon: Mod?").unwrap(),
-        installs.join("11 Weapon Mod")
+        installs.join("13 Weapon Mod")
     );
 }
 
@@ -389,12 +403,13 @@ fn removing_takes_only_a_mods_own_folder() {
     let one = installs.join("01 One");
     write(&one.join("Textures").join("a.dds"), b"x");
     write(&dir.0.join("keep.txt"), b"keep");
-    assert!(remove(&installs, &installs).is_err());
-    assert!(remove(&installs, &dir.0).is_err());
-    assert!(remove(&installs, &installs.join("01 One").join("Textures")).is_err());
-    assert!(remove(&installs, &installs.join("..")).is_err());
+    let game = game(&dir.0);
+    assert!(remove(&installs, &installs, &game).is_err());
+    assert!(remove(&installs, &dir.0, &game).is_err());
+    assert!(remove(&installs, &installs.join("01 One").join("Textures"), &game).is_err());
+    assert!(remove(&installs, &installs.join(".."), &game).is_err());
     assert!(one.exists());
-    remove(&installs, &one).unwrap();
+    remove(&installs, &one, &game).unwrap();
     assert!(!one.exists());
     assert!(dir.0.join("keep.txt").exists());
 }
@@ -510,6 +525,7 @@ fn only_what_changed_is_redone() {
     let one = installs.join("01 One");
     write(&one.join("Textures").join("a.dds"), b"one's");
     write(&one.join("Textures").join("b.dds"), b"one's b");
+    write(&one.join(RECORD), b"name: One\n");
     write(&loose.join("Meshes").join("m.nif"), b"loose");
     let layers = layers(&installs, &loose).unwrap();
     let target = dir.0.join("modgame");
@@ -630,6 +646,7 @@ fn installed_plugins_follow_a_loose_plugin_list() {
         &installs.join("01 Mod").join("Base.esm"),
         &plugin(&["FalloutNV.esm"]),
     );
+    write(&installs.join("01 Mod").join(RECORD), b"name: Mod\n");
     write(&loose.join("plugins.txt"), b"Mine.esp\r\nBase.esm");
     let layers = layers(&installs, &loose).unwrap();
     let plugins = dir.0.join("plugins.txt");
@@ -1051,21 +1068,54 @@ fn only_fsops_changes_the_disk() {
             }
         }
     }
+    // This crate's code, and the mod chooser's (crates/mod-chooser: every change it makes goes
+    // through this crate's guarded functions); its tests make their own scratch folders.
+    let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    walk(
-        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
-        &mut files,
-    );
+    walk(&crate_dir.join("src"), &mut files);
     assert!(files.len() >= 4, "{files:?}");
-    for path in files {
+    let mut chooser = Vec::new();
+    walk(
+        &crate_dir.join("..").join("mod-chooser").join("src"),
+        &mut chooser,
+    );
+    assert!(!chooser.is_empty());
+    let mut sources: Vec<(String, String, &[&str])> = Vec::new();
+    for path in files.into_iter().chain(chooser) {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
         if name == "fsops.rs" || name == "tests.rs" {
             continue;
         }
-        let text = std::fs::read_to_string(&path).unwrap();
+        sources.push((name, std::fs::read_to_string(&path).unwrap(), &[]));
+    }
+    // The `--install-mods` code of nv-rs's program and of Play.exe (Windows): only the function
+    // that starts the chooser. Play.exe's starts nv-rs's program, so it may name `Command::new`.
+    let root = crate_dir.join("..").join("..");
+    for (file, allowed) in [
+        (root.join("viewer").join("src").join("main.rs"), &[][..]),
+        (
+            root.join("scripts")
+                .join("launcher")
+                .join("src")
+                .join("main.rs"),
+            &["Command::new"][..],
+        ),
+    ] {
+        let text = std::fs::read_to_string(&file).unwrap();
+        let at = text
+            .find("\nfn install_mods(")
+            .unwrap_or_else(|| panic!("{}: no fn install_mods", file.display()));
+        let end = at + text[at..].find("\n}\n").expect("the function's end");
+        sources.push((
+            format!("{} install_mods", file.display()),
+            text[at..end].to_owned(),
+            allowed,
+        ));
+    }
+    for (name, text, allowed) in &sources {
         let code: Vec<&str> = text.lines().map(code_of).collect();
         for (n, line) in code.iter().enumerate() {
-            for b in banned {
+            for b in banned.iter().filter(|b| !allowed.contains(b)) {
                 assert!(!line.contains(b), "{name}:{}: {b} outside fsops", n + 1);
             }
             for c in calls {
@@ -1231,7 +1281,8 @@ fn removing_needs_a_plain_installs_folder() {
     write(&real_installs.join("01 Mod").join("a.txt"), b"keep");
     let installs = dir.0.join("mod installs");
     folder_link(&real_installs, &installs);
-    assert!(crate::fsops::remove_mod_folder(&installs, &installs.join("01 Mod")).is_err());
+    let game = game(&dir.0);
+    assert!(crate::fsops::remove_mod_folder(&installs, &installs.join("01 Mod"), &game).is_err());
     assert_eq!(
         std::fs::read(real_installs.join("01 Mod").join("a.txt")).unwrap(),
         b"keep"
@@ -1350,4 +1401,200 @@ fn an_unchanged_start_of_100000_files() {
     );
     assert_eq!(again.made, 0);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ------------------------------------------------------------------------------------------------
+// Review of #750: the chooser's changes, guarded here
+
+/// A killed install's staging folder (part of its files, no record) is neither listed nor laid
+/// over the game, and the next start clears it; a link at a staging name is removed itself, never
+/// followed.
+#[test]
+fn a_leftover_staging_folder_is_not_a_mod_and_is_cleared() {
+    let dir = Scratch::new("staging-left");
+    let game = game(&dir.0);
+    let installs = dir.0.join("mod installs");
+    let loose = dir.0.join("mods");
+    let folder = next_folder(&installs, "Big Mod").unwrap();
+    let staging = make_staging(&installs, &folder, &game).unwrap();
+    assert_eq!(staging, installs.join(".staging-01 Big Mod"));
+    write(&staging.join("Textures").join("half.dds"), b"half");
+    // An older leftover named like a mod but without its record: not a mod either.
+    write(&installs.join("02 Old.part").join("x.esp"), b"x");
+    assert!(installed(&installs).unwrap().is_empty());
+    assert_eq!(
+        layers(&installs, &loose).unwrap(),
+        std::slice::from_ref(&loose)
+    );
+    let outside = dir.0.join("outside");
+    write(&outside.join("keep.txt"), b"keep");
+    folder_link(&outside, &installs.join(".staging-09 Link"));
+    assert_eq!(clear_staging(&installs, &game).unwrap().cleared, 2);
+    assert!(!staging.exists());
+    assert!(std::fs::symlink_metadata(installs.join(".staging-09 Link")).is_err());
+    assert_eq!(std::fs::read(outside.join("keep.txt")).unwrap(), b"keep");
+    let again = clear_staging(&installs, &game).unwrap();
+    assert_eq!((again.cleared, again.left.len()), (0, 0));
+    // The next install never takes the leftover's number.
+    assert_eq!(
+        next_folder(&installs, "New").unwrap(),
+        installs.join("03 New")
+    );
+}
+
+/// The whole guarded install: staging made, the record written whole, the folder renamed into
+/// place (never over a folder there), then listed; the archive kept under a free name.
+#[test]
+fn an_install_finishes_through_the_guard() {
+    let dir = Scratch::new("finish");
+    let game = game(&dir.0);
+    let installs = dir.0.join("mod installs");
+    let loose = dir.0.join("mods");
+    let folder = next_folder(&installs, "Gun Pack").unwrap();
+    let staging = make_staging(&installs, &folder, &game).unwrap();
+    write(&staging.join("GunPack.esp"), b"TES4");
+    let record = Record {
+        name: "Gun Pack".into(),
+        files: vec!["GunPack.esp".into()],
+        ..Record::default()
+    };
+    // A folder already at the final name: refused, nothing replaced.
+    std::fs::create_dir_all(&folder).unwrap();
+    assert!(finish(&installs, &staging, &folder, &record, &game).is_err());
+    std::fs::remove_dir(&folder).unwrap();
+    finish(&installs, &staging, &folder, &record, &game).unwrap();
+    assert!(!staging.exists());
+    let listed = installed(&installs).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        Record::parse(&std::fs::read_to_string(folder.join(RECORD)).unwrap()),
+        record
+    );
+    // No temporary name left.
+    let names: Vec<String> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    write(&loose.join("Gun Pack.7z"), b"first");
+    write(&loose.join(KEPT).join("Gun Pack.7z"), b"older");
+    let kept = keep_archive(&loose, &loose.join("Gun Pack.7z"), &game).unwrap();
+    assert_eq!(kept, loose.join(KEPT).join("Gun Pack (2).7z"));
+    assert_eq!(std::fs::read(&kept).unwrap(), b"first");
+    assert_eq!(
+        std::fs::read(loose.join(KEPT).join("Gun Pack.7z")).unwrap(),
+        b"older"
+    );
+    assert!(!loose.join("Gun Pack.7z").exists());
+    // Only an archive directly in the mods folder.
+    write(&dir.0.join("elsewhere.7z"), b"x");
+    assert!(keep_archive(&loose, &dir.0.join("elsewhere.7z"), &game).is_err());
+}
+
+/// The installs folder or the mods folder inside the game's folder (a junction or symbolic link
+/// to it): every change is refused and nothing is written in the game's folder.
+#[test]
+fn nothing_is_changed_inside_the_game() {
+    let dir = Scratch::new("in-game");
+    let game = game(&dir.0);
+    let installs = dir.0.join("mod installs");
+    let loose = dir.0.join("mods");
+    folder_link(&game.join("Data"), &installs);
+    folder_link(&game.join("Data"), &loose);
+    let folder = installs.join("01 Mod");
+    assert!(make_staging(&installs, &folder, &game).is_err());
+    write(
+        &game.join("Data").join(".staging-01 Mod").join("a"),
+        b"game's own",
+    );
+    let refused = clear_staging(&installs, &game).unwrap();
+    assert_eq!((refused.cleared, refused.left.len()), (0, 1), "{refused:?}");
+    assert!(game.join("Data").join(".staging-01 Mod").join("a").exists());
+    write(
+        &game.join("Data").join("01 Mod").join(RECORD),
+        b"name: Mod\n",
+    );
+    assert!(remove(&installs, &folder, &game).is_err());
+    assert!(game.join("Data").join("01 Mod").join(RECORD).exists());
+    assert!(finish(
+        &installs,
+        &installs.join(".staging-01 Mod"),
+        &installs.join("02 Mod"),
+        &Record::default(),
+        &game
+    )
+    .is_err());
+    assert!(!game.join("Data").join("02 Mod").exists());
+    write(&game.join("Data").join("a.7z"), b"x");
+    assert!(keep_archive(&loose, &loose.join("a.7z"), &game).is_err());
+    assert!(game.join("Data").join("a.7z").exists());
+    assert!(!game.join("Data").join(KEPT).exists());
+}
+
+/// A rename never lands on a name that is there, not even a link leading nowhere, and never
+/// leaves the guard's folder.
+#[test]
+fn a_rename_needs_a_free_name_inside() {
+    use crate::fsops::{act, Guard, Op};
+    let dir = Scratch::new("rename");
+    let root = dir.0.join("root");
+    write(&root.join("a.txt"), b"a");
+    write(&root.join("b.txt"), b"b");
+    let guard = Guard::new(&root, &[dir.0.join("game")], &[]).unwrap();
+    assert!(act(
+        &guard,
+        Op::Rename {
+            from: &root.join("a.txt"),
+            to: &root.join("b.txt")
+        }
+    )
+    .is_err());
+    assert!(act(
+        &guard,
+        Op::Rename {
+            from: &root.join("a.txt"),
+            to: &dir.0.join("out.txt")
+        }
+    )
+    .is_err());
+    assert_eq!(std::fs::read(root.join("b.txt")).unwrap(), b"b");
+    act(
+        &guard,
+        Op::Rename {
+            from: &root.join("a.txt"),
+            to: &root.join("c.txt"),
+        },
+    )
+    .unwrap();
+    assert_eq!(std::fs::read(root.join("c.txt")).unwrap(), b"a");
+}
+
+/// One installer at a time: while one holds the lock a second is refused, and once it lets go (as
+/// when its program ends, however it ends) the next takes it. The lock file is never a mod, never
+/// a layer, never cleared as a leftover; it can't be taken in the game's folder.
+#[test]
+fn one_installer_holds_the_lock() {
+    let dir = Scratch::new("installer-lock");
+    let game = game(&dir.0);
+    let installs = dir.0.join("mod installs");
+    let loose = dir.0.join("mods");
+    let first = hold_installer(&installs, &game).unwrap();
+    assert!(first.is_some());
+    assert!(hold_installer(&installs, &game).unwrap().is_none());
+    drop(first);
+    let again = hold_installer(&installs, &game).unwrap();
+    assert!(again.is_some());
+    assert!(installs.join(LOCK).is_file());
+    assert!(installed(&installs).unwrap().is_empty());
+    assert_eq!(
+        layers(&installs, &loose).unwrap(),
+        std::slice::from_ref(&loose)
+    );
+    assert_eq!(clear_staging(&installs, &game).unwrap().cleared, 0);
+    assert!(installs.join(LOCK).is_file());
+    assert_eq!(next_folder(&installs, "A").unwrap(), installs.join("01 A"));
+    drop(again);
+    // Inside the game's folder: refused, nothing made there.
+    assert!(hold_installer(&game.join("Data").join("x"), &game).is_err());
+    assert!(!game.join("Data").join("x").exists());
 }

@@ -3,6 +3,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use engine_core::extend::stewie;
 
 /// The vtable of the `BSSimpleArray` instance with RTTI name `.?AV?$BSSimpleArray@PAV?$AStarNode@UParentSpaceNode@@UTeleportLink@@@@$0EAA@@` (read at the word before the vtable: its complete object locator, then the type descriptor).
 const ARRAY_VTABLE_0106D930: u32 = 0x0106_d930;
@@ -745,6 +746,14 @@ pub fn teleport_door_search_get_node_connections(
             );
             let door = word(e, slot);
             index = index.wrapping_add(1);
+            // 006f37ad: lStewieAl's Tweaks' row S0169 (`patchFixRareNullTeleportDoorCrash`): a null
+            // door in the list is passed over, where the exe reads its flags. (Tweaks writes its
+            // test over the exe's disabled test, which it judges never true here; the port keeps
+            // that test after the null check. The list builder already removes disabled doors, so
+            // the kept test matters only if another thread disables a door in between.)
+            if e.stewie(stewie::RARE_NULL_TELEPORT_DOOR) && door == 0 {
+                continue;
+            }
             if typed_call!(leaf::FAMILY, 0x0044_0da0, leaf::form_flag_800(e, door)) {
                 continue;
             }
@@ -1527,6 +1536,43 @@ mod tests {
         assert!(tds_calls(&e, 0x0044_ddc0).is_empty());
     }
 
+    /// lStewieAl's Tweaks' row S0169: the node's door list holds a null entry. The exe reads the
+    /// null door's flags (`00440da0` reads `+8`, as its stand-in here does) and stops; with the row
+    /// on the entry is passed over and no neighbour is added.
+    #[test]
+    fn s0169_a_null_door_in_the_list() {
+        for on in [false, true] {
+            let mut e = tds_engine(&[
+                ARRAY_RELEASE_008454F0,
+                0x0054_db50,
+                DOOR_LOCK_CONSTRUCTOR,
+                DOOR_LOCK_DESTRUCTOR,
+                0x007c_b2e0,
+            ]);
+            let doors = e.mem.alloc(4);
+            e.register(0x0044_ddc0, |_, _| 1u32.into_ret());
+            e.register_double(0x0087_7a30, move |_, _| doors.into_ret());
+            e.register(0x0044_0da0, |e, a| {
+                u32::from(e.mem.u32(a[0] + 8) & 0x800 != 0).into_ret()
+            });
+            e.map(ZERO, 8);
+            let search = e.mem.alloc(0x20b8);
+            e.mem.set_u32(search + 0x20b4, 1);
+            let node = tds_node(&mut e, 5.0);
+            e.set_stewie(stewie::RARE_NULL_TELEPORT_DOOR, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                e.call(0x006f_36d0, &args![search, node, 0u32]).bool()
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(run.unwrap());
+                assert!(tds_calls(&e, 0x007c_b2e0).is_empty());
+            }
+        }
+    }
+
     #[test]
     fn get_node_connections_adds_a_reachable_door() {
         const POSITION: u32 = 0x0300_0000;
@@ -1587,6 +1633,64 @@ mod tests {
         e.call(0x006f_36d0, &args![search, node, 0x8000u32]);
         assert!(tds_calls(&e, 0x007c_b2e0).is_empty());
         assert_eq!(tds_calls(&e, DOOR_LOCK_DESTRUCTOR).len(), 1);
+    }
+
+    /// lStewieAl's Tweaks' row S0169 with a door in the list (ordinary input): the row changes
+    /// nothing, the same calls and the same neighbour added as with it off.
+    #[test]
+    fn s0169_row_on_with_a_door_changes_nothing() {
+        const POSITION: u32 = 0x0300_0000;
+        let run = |on: bool| {
+            let mut e = tds_engine(&[
+                ARRAY_RELEASE_008454F0,
+                0x0054_db50,
+                DOOR_LOCK_CONSTRUCTOR,
+                DOOR_LOCK_DESTRUCTOR,
+                0x007c_b2e0,
+                0x006d_5320,
+                0x0099_6840,
+            ]);
+            e.map(ZERO, 8);
+            e.map(DOOR_PENALTY, 4);
+            e.set_global(DOOR_PENALTY, 100.0f32);
+            let door = e.mem.alloc(0x10);
+            let vtable = e.mem.alloc(0x200);
+            e.mem.set_u32(door, vtable);
+            e.mem.set_u32(vtable + 0x1f4, POSITION);
+            let door_position = e.mem.alloc(0xc);
+            e.register_double(POSITION, move |_, _| door_position.into_ret());
+            let doors = e.mem.alloc(4);
+            e.mem.set_u32(doors, door);
+            e.register(0x0044_ddc0, |_, _| 1u32.into_ret());
+            e.register_double(0x0087_7a30, move |_, _| doors.into_ret());
+            e.register(0x0044_0da0, |_, _| Ret::default());
+            e.register(TELEPORT_DATA, |_, _| 0x6000u32.into_ret());
+            e.register(TELEPORT_WORLDSPACE, |_, _| Ret::default());
+            e.register(TELEPORT_CELL, |_, _| 0x7000u32.into_ret());
+            e.register(DOOR_LOCK_CAN_UNLOCK, |_, _| Ret::default());
+            e.register(0x007a_f430, |_, _| Ret::default());
+            e.register(0x0051_8000, |_, _| Ret::default());
+            e.register(0x0059_bb30, |_, _| 1u32.into_ret());
+            e.register(0x0043_9ef0, |_, a| a[1].into_ret());
+            e.register(0x0045_7990, |_, _| 10.0f64.into_ret());
+            let package = e.mem.alloc(0xc);
+            e.mem.set_u32(package, 0x99);
+            e.register_double(0x0071_7e50, move |_, _| package.into_ret());
+            e.register(0x006a_1f90, |e, a| e.mem.alloc(a[0]).into_ret());
+            let search = e.mem.alloc(0x20b8);
+            e.mem.set_u32(search + 0x20b4, 2);
+            e.mem.set_u32(search + 0x20a0, 0x1234);
+            let node = tds_node(&mut e, 5.0);
+            e.set_stewie(stewie::RARE_NULL_TELEPORT_DOOR, on);
+            e.call_log = Some(vec![]);
+            let found = e.call(0x006f_36d0, &args![search, node, 0x8000u32]).bool();
+            let added = tds_calls(&e, 0x007c_b2e0);
+            let created = added.first().map(|c| e.mem.f32(e.mem.u32(c[1])));
+            (found, created, e.call_log.take())
+        };
+        let (off, on) = (run(false), run(true));
+        assert_eq!(on, off);
+        assert_eq!((on.0, on.1), (true, Some(115.0)));
     }
 
     #[test]
