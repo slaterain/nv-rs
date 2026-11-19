@@ -189,6 +189,13 @@ fn attach_light_hides_an_off_by_default_light_and_never_shows_it() {
     attach(&mut e, refr, b"Lamp", 1, &[]);
     assert!(calls().is_empty(), "the same light");
     assert_eq!(e.mem.u8(light + FLAGS_LOW), 1, "still hidden");
+    // The hidden bit joins the light's other flag bits (JIP's OR).
+    let mesh = object(&mut e, POINT_LIGHT_VTABLE, Some(b"Mesh light"));
+    e.mem.set_u8(mesh + FLAGS_LOW, 0x04);
+    set_children(&mut e, lamp, &[mesh]);
+    e.mem.set_u32(LIGHT + 0xa8, 0x20);
+    attach(&mut e, refr, b"Lamp", 1, &[]);
+    assert_eq!(e.mem.u8(mesh + FLAGS_LOW), 0x05);
 }
 
 /// No node of that name, no 3D, a form that is not a light, or a game that makes no light:
