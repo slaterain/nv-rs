@@ -242,14 +242,10 @@ pub fn generate_rendered_ui_texture(
     release(e, texture);
 }
 
-/// `cvtps2dq` with the default rounding: to the nearest, halves to even; 0x80000000 when out of
-/// range.
+/// `cvtps2dq` with the default rounding, a lane as `cvtss2si` takes it: to the nearest, halves to
+/// even; 0x80000000 for NaN or out of range.
 fn cvtps2dq(v: f32) -> u32 {
-    if v.is_nan() || !(-2_147_483_648.0..2_147_483_648.0).contains(&v) {
-        0x8000_0000
-    } else {
-        v.round_ties_even() as i32 as u32
-    }
+    crate::game_patches::gd::cvtss2si(v) as u32
 }
 
 /// A tri-based geometry block's class answers `ADDR_ReturnThis2` at vtable +0x1C (`GetTexturePtr`'s
