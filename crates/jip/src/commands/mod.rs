@@ -240,6 +240,8 @@ pub const ALL: &[Handlers] = &[
     jip_fn_misc_ref::AWAITING_H13,
     // `ToggleHUDCursor`, with its patch H02 (`game_patches::gp`).
     jip_fn_ui::AWAITING_H02,
+    // `SetFontFile`, with its patch G129 (`game_patches::ga`).
+    jip_fn_ui::AWAITING_G129,
     // `FireWeaponEx`, with its patch H01 (`game_patches::gw`).
     jip_fn_actor_p2::AWAITING_H01,
     // `ShowQuantityMenu`, `CloseActiveMenu` (with their DoClick seam).
@@ -885,6 +887,8 @@ mod tests {
             // jip_fn_misc_ref::AWAITING_H13 (`SynchronizePosition`, with H13).
             "jip_fn_misc_ref",
             // jip_fn_ui::AWAITING_H02 (`ToggleHUDCursor`, with H02).
+            "jip_fn_ui",
+            // jip_fn_ui::AWAITING_G129 (`SetFontFile`, with G129).
             "jip_fn_ui",
             // jip_fn_actor_p2::AWAITING_H01 (`FireWeaponEx`, with H01).
             "jip_fn_actor",
