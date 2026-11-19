@@ -1,4 +1,4 @@
-//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G58, H21. Each handler's branches over
+//! Group GA's game patches: G08, G11, G17, G21, G35, G37, G55, G58, H21. Each handler's branches over
 //! stand-ins of what JIP's bytes read, values from JIP's assembly (`internal/patches_game.h`,
 //! `internal/hooks.h`) and the exe's (Ghidra).
 
@@ -53,7 +53,12 @@ fn ga_seams_are_jips_addresses() {
     );
     assert_eq!(PICK_LOAD_SCREEN.addr(), 0x0078_a79b);
     assert_eq!(AREA.fix_wraps, [0x0078_ac60]);
-    assert!(AREA.jip_sites.is_empty() && AREA.jip_wraps.is_empty());
+    assert_eq!(
+        AREA.jip_sites,
+        [0x007a_9aee, 0x007a_9c45],
+        "G55 (JIP's own)"
+    );
+    assert!(AREA.jip_wraps.is_empty());
 }
 
 /// Not installed: nothing answers at any seam.
@@ -64,6 +69,20 @@ fn ga_not_installed_nothing_answers() {
     crate::install_as(&mut e, false);
     for slot in FIX_SITES {
         assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d, 1]), None);
+    }
+    for slot in MAX_MESSAGE_WIDTH {
+        assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d]), None);
+    }
+}
+
+/// G55 is in with JIP installed, the row off: no box waiting, it does not answer (the game's
+/// width; the command's tests drive a box).
+#[test]
+fn g55_in_with_jip_installed() {
+    let mut e = installed();
+    for slot in MAX_MESSAGE_WIDTH {
+        assert_eq!(e.site_owners(slot.addr()).to_vec(), vec![Owner::Jip]);
+        assert_eq!(e.site(slot.addr(), &[AREA_AT, 0x1d]), None);
     }
 }
 
@@ -476,8 +495,9 @@ fn g09_seam_answers_only_with_the_fixes() {
 #[test]
 fn g09_game_calls_get_the_default_time_plugin_calls_keep_theirs() {
     let mut e = engine();
+    // install_as runs every area's install_jip once (GA's: the time slot and G55's seams; a
+    // second run would register G55's seams twice, which on_site refuses).
     crate::install_as(&mut e, true);
-    install_jip(&mut e);
     e.set_jip_patches(
         engine_core::extend::jip_patches::INSTALLED | engine_core::extend::jip_patches::FIXES,
     );
