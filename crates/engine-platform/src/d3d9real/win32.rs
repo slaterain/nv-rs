@@ -60,40 +60,51 @@ extern "system" fn window_procedure(
         | WM_RBUTTONDOWN | WM_RBUTTONUP | WM_MBUTTONDOWN | WM_MBUTTONUP | WM_XBUTTONDOWN
         | WM_XBUTTONUP | WM_MOUSEWHEEL => {
             if matches!(message, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
-                hold_cursor(window);
+                follow(window, input::CursorEvent::Pressed);
             }
             window_input(window, message, wparam, lparam)
         }
         WM_INPUT => raw_mouse(lparam),
-        // The game's mouse not exclusive (`bBackground Mouse=1`): the cursor is free, and each
-        // move over the client area is the game's `WM_MOUSEMOVE`, from which its menus place
-        // their cursor (`super::mouse_exclusive`).
-        WM_MOUSEMOVE if !super::mouse_exclusive() => pointer_moved(window, lparam),
+        // Each move over the client area: kept as the game's `WM_MOUSEMOVE` while its mouse is
+        // not exclusive and its window active (`bBackground Mouse=1`: its menus place their cursor
+        // from it); the hold made again once the game made its mouse exclusive again.
+        WM_MOUSEMOVE => {
+            if follow(window, input::CursorEvent::Moved).record {
+                pointer_moved(window, lparam);
+            }
+        }
         // While the window is active the cursor stays in it, hidden (the game's DirectInput
         // mouse is exclusive and foreground: Windows hides and holds the cursor for it). It is
         // taken on a keyboard activation (Alt+Tab, WA_ACTIVE) or a click in the client area
         // (above); a click that activates the window elsewhere (WA_CLICKACTIVE, e.g. on the
         // title bar) leaves it free, and so does moving or sizing the window: holding it in the
         // client area there pulled the cursor below the title bar, the move loop followed it,
-        // and the window slid down the screen (playtest, 2026-10-30).
-        WM_ACTIVATE if wparam.0 & 0xffff == WA_ACTIVE as usize => hold_cursor(window),
-        WM_ENTERSIZEMOVE => let_go_of_cursor(),
-        WM_SIZE | WM_MOVE if cursor_held() => hold_cursor(window),
-        // Over the client area the cursor is hidden: held for an exclusive mouse, and for one that
-        // is not, as the game's own procedure hides it there (`0086a0a0`, `WM_NCHITTEST`); a hold
-        // made before the game's mouse became non-exclusive is let go.
-        WM_SETCURSOR
-            if (cursor_held() || !super::mouse_exclusive())
-                && lparam.0 as u32 & 0xffff == HTCLIENT =>
-        {
-            if !super::mouse_exclusive() {
-                let_go_of_cursor();
+        // and the window slid down the screen (playtest, 2026-10-30). The rule for both mice is
+        // `input::cursor_action`. An activation after a deactivation also goes to the game's
+        // window procedure (`activated`).
+        WM_ACTIVATE if wparam.0 & 0xffff != 0 => {
+            activated(wparam.0 as u32);
+            if wparam.0 & 0xffff == WA_ACTIVE as usize {
+                follow(window, input::CursorEvent::Activated);
             }
-            unsafe { SetCursor(None) };
-            return LRESULT(1);
+        }
+        WM_ENTERSIZEMOVE => let_go_of_cursor(),
+        WM_SIZE | WM_MOVE => {
+            follow(window, input::CursorEvent::Placed);
+        }
+        // Over the client area the cursor is hidden while held, and always for a mouse that is
+        // not exclusive, as the game's own procedure hides it there (`0086a0a0`, `WM_NCHITTEST`).
+        WM_SETCURSOR if lparam.0 as u32 & 0xffff == HTCLIENT => {
+            if follow(window, input::CursorEvent::OverClient).hide {
+                unsafe { SetCursor(None) };
+                return LRESULT(1);
+            }
         }
         // Losing the focus lets go of everything this window held.
-        WM_ACTIVATE if wparam.0 & 0xffff == 0 => release_input(),
+        WM_ACTIVATE => {
+            deactivated();
+            release_input();
+        }
         WM_KILLFOCUS => release_input(),
         _ => {}
     }
@@ -108,6 +119,58 @@ extern "system" fn window_procedure(
 fn release_input() {
     input::focus_lost();
     let_go_of_cursor();
+}
+
+/// Whether the game's window is the active one (`WM_ACTIVATE`): a move over it is kept for the
+/// game only then (`input::cursor_action`), as the game takes moves only for the active window.
+static WINDOW_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the game's window was deactivated since it was made: from then on each activation goes
+/// to the game's window procedure too ([`activated`]).
+static DEACTIVATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `WM_ACTIVATE` with an active state (`wparam` as Windows gives it): the window is active, and an
+/// activation that follows a deactivation is kept for the game's procedure
+/// (`input::reactivated`), which makes the game's mouse exclusive again (`00a23c00`). The first,
+/// when the window is made, is not.
+fn activated(wparam: u32) {
+    use std::sync::atomic::Ordering::Relaxed;
+    WINDOW_ACTIVE.store(true, Relaxed);
+    if DEACTIVATED.load(Relaxed) {
+        input::reactivated(wparam);
+    }
+}
+
+/// `WM_ACTIVATE` with `WA_INACTIVE`: another window became the active one.
+fn deactivated() {
+    use std::sync::atomic::Ordering::Relaxed;
+    if WINDOW_ACTIVE.swap(false, Relaxed) {
+        DEACTIVATED.store(true, Relaxed);
+    }
+}
+
+/// The cursor's state at the game's window now, for `input::cursor_action`.
+fn cursor_now() -> input::CursorNow {
+    input::CursorNow {
+        exclusive: super::mouse_exclusive(),
+        held: cursor_held(),
+        active: WINDOW_ACTIVE.load(std::sync::atomic::Ordering::Relaxed),
+        hold_wanted: super::hold_wanted(),
+    }
+}
+
+/// Does what `input::cursor_action` says for `event` at `window` (holds or lets go of the
+/// cursor) and answers it, for the caller to hide the cursor or keep its place.
+fn follow(window: HWND, event: input::CursorEvent) -> input::CursorAction {
+    let action = input::cursor_action(cursor_now(), event);
+    if action.let_go {
+        let_go_of_cursor();
+    }
+    if action.hold {
+        super::take_hold_wanted();
+        hold_cursor(window);
+    }
+    action
 }
 
 /// Frees the cursor [`hold_cursor`] held (no clip; Windows shows it again).
@@ -137,14 +200,10 @@ fn cursor_held() -> bool {
 
 /// Holds the cursor in the window's client area and hides it there, as Windows does for a
 /// program whose DirectInput mouse is exclusive and in the foreground (the game's:
-/// `SetCooperativeLevel` with `DISCL_EXCLUSIVE | DISCL_FOREGROUND`). Not for a mouse that is not
-/// exclusive (`super::mouse_exclusive`): Windows leaves the cursor free then. A refused
-/// `ClipCursor` or `SetCursorPos` is said in the log ([`refused`]).
+/// `SetCooperativeLevel` with `DISCL_EXCLUSIVE | DISCL_FOREGROUND`); only where
+/// `input::cursor_action` says (never for a mouse that is not exclusive: Windows leaves the cursor
+/// free then). A refused `ClipCursor` or `SetCursorPos` is said in the log ([`refused`]).
 fn hold_cursor(window: HWND) {
-    if !super::mouse_exclusive() {
-        let_go_of_cursor();
-        return;
-    }
     unsafe {
         let mut rect = RECT::default();
         if GetClientRect(window, &mut rect).is_err() {
@@ -257,20 +316,18 @@ fn register_raw_mouse(window: HWND) {
 }
 
 /// `WM_MOUSEMOVE` while the game's mouse is not exclusive: the cursor's place over the client area
-/// (`lParam`: x in the low word, y in the high word, each signed, client pixels) is kept for the
-/// game ([`input::pointed`]).
+/// (`lParam`, `input::client_place`: client pixels) is kept for the game ([`input::pointed`]).
 fn pointer_moved(window: HWND, lparam: LPARAM) {
     let mut rect = RECT::default();
     if unsafe { GetClientRect(window, &mut rect) }.is_err() {
         return;
     }
-    let x = f64::from(lparam.0 as u32 as u16 as i16);
-    let y = f64::from((lparam.0 as u32 >> 16) as u16 as i16);
+    let place = input::client_place(lparam.0 as u32);
     let size = (
         f64::from(rect.right - rect.left),
         f64::from(rect.bottom - rect.top),
     );
-    input::pointed((x, y), size);
+    input::pointed(place, size);
 }
 
 /// A raw input message: a mouse's relative motion is added to the frame's.

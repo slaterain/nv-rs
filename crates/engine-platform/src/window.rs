@@ -11,9 +11,11 @@
 //! Windows sends a window's procedure while it is created or moved (`WM_CREATE`,
 //! `WM_WINDOWPOSCHANGED`, `WM_ACTIVATE`, ...): the game's procedure (`0086a0a0`) only acts on them
 //! once `Main` exists, and `main` makes its window before `Main`, but a window made or moved
-//! later gets none of them (recorded in the module's functions). The one message posted to the
-//! game's queue is `WM_MOUSEMOVE`, while the game's mouse is not exclusive ([`post_mouse_move`]:
-//! its menus follow the cursor then), with `DefWindowProcA` for it; message boxes (the game shows
+//! later gets none of them (recorded in the module's functions). Two messages are posted to the
+//! game's queue: `WM_MOUSEMOVE` while the game's mouse is not exclusive and its window active
+//! ([`post_mouse_move`]: its menus follow the cursor then), with `DefWindowProcA` for it, and
+//! `WM_ACTIVATE` when the real window becomes active again after it was not ([`post_activate`]:
+//! the game makes its mouse exclusive again); message boxes (the game shows
 //! one only to stop: the run stops with its text); `ExitProcess`; `ShellExecuteA`.
 
 use super::KernelObject;
@@ -70,6 +72,10 @@ pub struct Windows {
     command_line_at: u32,
     /// Frames the main loop ended on an empty queue ([`peek_message_a`]).
     pub frames: u64,
+    /// The host posted messages while the main loop handed it its turn, and the first went to the
+    /// game at once: the loop drains them before its next frame, so the next empty queue starts
+    /// that frame instead of ending another ([`peek_message_a`]).
+    frame_begun: bool,
 }
 
 fn last_error(e: &mut Engine, code: u32) {
@@ -721,8 +727,11 @@ pub fn set_window_pos(
 // Platform: replaces USER32.DLL PeekMessageA (import)
 /// `PeekMessageA(msg, window, first, last, remove)`: the next posted message into `msg`
 /// (removed with `PM_REMOVE`), true; with none, the frame ends: the game's main thread hands
-/// the engine back to the host until its next frame (`thread_host::end_main_frame`), then
-/// false. Filtering by window or message range is not provided.
+/// the engine back to the host until its next frame (`thread_host::end_main_frame`). The game's
+/// loop empties the queue and then runs its frame, so a message the host posted in its turn (the
+/// cursor's move, an activation) is handed over then, true, and the next empty queue starts that
+/// frame, false, without ending another: the menus' cursor is placed before the frame that shows
+/// it, as in the original. Filtering by window or message range is not provided.
 pub fn peek_message_a(
     e: &mut Engine,
     msg: Ptr,
@@ -735,20 +744,39 @@ pub fn peek_message_a(
         window == 0 && first == 0 && last == 0,
         "PeekMessageA with a filter is not provided"
     );
+    peek_with(e, msg, remove, crate::thread_host::end_main_frame)
+}
+
+/// [`peek_message_a`] with the host's turn `hand_back` (true when the host had one).
+fn peek_with(e: &mut Engine, msg: Ptr, remove: u32, hand_back: fn(&mut Engine) -> bool) -> u32 {
+    if take_message(e, msg, remove) {
+        return 1;
+    }
+    if std::mem::take(&mut state!(e).windows.frame_begun) {
+        return 0;
+    }
+    state!(e).windows.frames += 1;
+    if hand_back(e) && take_message(e, msg, remove) {
+        state!(e).windows.frame_begun = true;
+        return 1;
+    }
+    0
+}
+
+/// The next posted message into `msg` (removed with `PM_REMOVE`); false with none.
+fn take_message(e: &mut Engine, msg: Ptr, remove: u32) -> bool {
     let next = if remove & PM_REMOVE != 0 {
         state!(e).windows.queue.pop_front()
     } else {
         state!(e).windows.queue.front().copied()
     };
-    if let Some(words) = next {
-        for (i, w) in words.iter().enumerate() {
-            e.mem.set_u32(msg.addr() + 4 * i as u32, *w);
-        }
-        return 1;
+    let Some(words) = next else {
+        return false;
+    };
+    for (i, w) in words.iter().enumerate() {
+        e.mem.set_u32(msg.addr() + 4 * i as u32, *w);
     }
-    state!(e).windows.frames += 1;
-    crate::thread_host::end_main_frame(e);
-    0
+    true
 }
 
 /// `WM_MOUSEMOVE`.
@@ -774,21 +802,42 @@ fn mouse_window(e: &mut Engine) -> Option<(u32, i32, i32)> {
     Some((*handle, right.wrapping_sub(left), bottom.wrapping_sub(top)))
 }
 
+/// The renderer's width and height (`004dc1f0` and `004dc200` read them), which the game's
+/// `00871d10` divides a `WM_MOUSEMOVE`'s place by.
+const RENDER_WIDTH: u32 = 0x0118_947c;
+const RENDER_HEIGHT: u32 = 0x0118_9480;
+
+/// The size a `WM_MOUSEMOVE`'s place is given in: the renderer's (what the game divides it by),
+/// once it is known; before, the window's record (`window`'s width and height).
+fn move_area(e: &Engine, window: (i32, i32)) -> (i32, i32) {
+    let read = |at: u32| {
+        e.mem
+            .is_mapped(at)
+            .then(|| e.mem.u32(at) as i32)
+            .filter(|&v| v > 0)
+    };
+    match (read(RENDER_WIDTH), read(RENDER_HEIGHT)) {
+        (Some(w), Some(h)) => (w, h),
+        _ => window,
+    }
+}
+
 /// The cursor moved over the game's window, to `at` (its client area's fractions across and down,
 /// `crate::d3d9real::Input::pointer`), with the mouse's `buttons` held (DirectInput's order):
-/// the `WM_MOUSEMOVE` Windows would post there goes into the game's queue, its place in the
-/// window's client pixels at the game's own size for it, whatever size the real window has (the
-/// port draws any size into the real window, scaled). Windows keeps one `WM_MOUSEMOVE` waiting,
-/// made from the cursor's latest place: a newer move replaces one not taken yet. The game's
-/// procedure (`0086a0a0`) hands it to `00871d10`, which places the menus' cursor there when the
-/// game's mouse is not exclusive (`bBackground Mouse=1`) and otherwise leaves it to
-/// `DefWindowProcA`. The window layers keep a place only for such a mouse. The message's time and
-/// point words are not read by the game: 0 and the client place. Nothing before the game has its
-/// window.
+/// the `WM_MOUSEMOVE` Windows would post there goes into the game's queue, its place in pixels of
+/// the renderer's size, which the game divides it by ([`move_area`]), whatever size the real
+/// window has (the port draws any size into the real window, scaled). Windows keeps one
+/// `WM_MOUSEMOVE` waiting, made from the cursor's latest place: a newer move replaces one not
+/// taken yet. The game's procedure (`0086a0a0`) hands it to `00871d10`, which places the menus'
+/// cursor there when the game's mouse is not exclusive (`bBackground Mouse=1`) and otherwise
+/// leaves it to `DefWindowProcA`. The window layers keep a place only for such a mouse, while the
+/// game's window is the active one. The message's time and point words are not read by the game:
+/// 0 and the client place. Nothing before the game has its window.
 pub fn post_mouse_move(e: &mut Engine, at: [f64; 2], buttons: &[bool; 8]) {
     let Some((window, width, height)) = mouse_window(e) else {
         return;
     };
+    let (width, height) = move_area(e, (width, height));
     let place = |fraction: f64, size: i32| -> u32 {
         let most = size.saturating_sub(1).max(0);
         ((fraction * f64::from(size)).floor() as i32).clamp(0, most) as u32
@@ -815,6 +864,33 @@ pub fn post_mouse_move(e: &mut Engine, at: [f64; 2], buttons: &[bool; 8]) {
     {
         Some(waiting) => *waiting = message,
         None => queue.push_back(message),
+    }
+}
+
+/// `WM_ACTIVATE`.
+pub const WM_ACTIVATE: u32 = 6;
+
+/// The real window became active again after it was not (`crate::d3d9real::Input::reactivated`,
+/// `wparam` the `WM_ACTIVATE` word: `WA_ACTIVE` 1 or `WA_CLICKACTIVE` 2, the high word set while
+/// minimised): the `WM_ACTIVATE` Windows sends the game's main window goes into the game's queue,
+/// ahead of a waiting mouse move (Windows sends it before the moves that follow). The game's
+/// procedure (`0086a0a0`), for an activation not minimised once `Main` exists, sets `Main` active
+/// and has the controls make the mouse exclusive again (`00a23c00(0)`: level 5, `bBackground
+/// Mouse`'s flag cleared), so after Alt+Tab back the menus follow the mouse's motion again, as in
+/// the original. Its first activation, when the window is made, the game ignores (before `Main`),
+/// and the window layers do not pass it. The deactivation is not passed either, as before (in the
+/// original it sets `Main` inactive and, in the game, opens the pause menu): unchanged here. One
+/// waits at a time. Nothing before the game has its window.
+pub fn post_activate(e: &mut Engine, wparam: u32) {
+    let main = e.kernel.main_window;
+    if main == 0 {
+        return;
+    }
+    let message = [main, WM_ACTIVATE, wparam, 0, 0, 0, 0];
+    let queue = &mut state!(e).windows.queue;
+    match queue.iter_mut().find(|m| m[1] == WM_ACTIVATE) {
+        Some(waiting) => *waiting = message,
+        None => queue.push_front(message),
     }
 }
 
@@ -1107,6 +1183,82 @@ mod tests {
             state!(e).windows.queue[0][..4],
             [main, WM_MOUSEMOVE, 0, (360 << 16) | 1280]
         );
+        // Once the renderer has its size, the place is in its pixels, what the game divides it by
+        // (`00871d10`), whatever the window's record says: here 1920 by 1080 in a 2560 by 1440
+        // window, the fractions given back exactly.
+        if !e.mem.is_mapped(RENDER_WIDTH) {
+            e.map(RENDER_WIDTH & !0xfff, 0x1000);
+        }
+        e.mem.set_u32(RENDER_WIDTH, 1920);
+        e.mem.set_u32(RENDER_HEIGHT, 1080);
+        post_mouse_move(&mut e, [0.5, 0.25], &unmoved);
+        let words = state!(e).windows.queue[0];
+        assert_eq!(words[..4], [main, WM_MOUSEMOVE, 0, (270 << 16) | 960]);
+        assert_eq!(
+            (f64::from(words[3] & 0xffff) / 1920.0, f64::from(words[3] >> 16) / 1080.0),
+            (0.5, 0.25)
+        );
+    }
+
+    /// The host's moves reach the game before the frame they were taken for, as the exe's loop
+    /// empties its queue before its frame: a move posted while the main loop's empty
+    /// `PeekMessageA` hands the host its turn is answered by that same call, and the next empty
+    /// call starts the frame without a second turn; the call after that ends the next frame.
+    #[test]
+    fn a_move_posted_in_the_hosts_turn_comes_before_the_frame() {
+        thread_local! {
+            static TURNS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        fn turn(e: &mut Engine) -> bool {
+            TURNS.with(|t| t.set(t.get() + 1));
+            e.kernel.main_window = 0x94;
+            state!(e)
+                .windows
+                .windows
+                .insert(0x94, record(0x9000_0000, 0, [0, 0, 1280, 720]));
+            post_mouse_move(e, [0.5, 0.5], &[false; 8]);
+            true
+        }
+        fn idle(_: &mut Engine) -> bool {
+            TURNS.with(|t| t.set(t.get() + 1));
+            true
+        }
+        let mut e = Engine::new();
+        let msg = Ptr::new(e.mem.alloc(28));
+        assert_eq!(peek_with(&mut e, msg, PM_REMOVE, turn), 1, "the move, at once");
+        assert_eq!(e.mem.u32(msg.addr() + 4), WM_MOUSEMOVE);
+        assert_eq!(e.mem.u32(msg.addr() + 12), (360 << 16) | 640);
+        assert_eq!(peek_with(&mut e, msg, PM_REMOVE, idle), 0, "the frame starts");
+        assert_eq!(TURNS.with(std::cell::Cell::get), 1, "no second turn");
+        assert_eq!(state!(e).windows.frames, 1);
+        assert_eq!(peek_with(&mut e, msg, PM_REMOVE, idle), 0, "the next frame ends");
+        assert_eq!(TURNS.with(std::cell::Cell::get), 2);
+        assert_eq!(state!(e).windows.frames, 2);
+        // A turn that posts nothing: the frame starts at once.
+        assert_eq!(peek_with(&mut e, msg, PM_REMOVE, idle), 0);
+        assert_eq!(TURNS.with(std::cell::Cell::get), 3);
+    }
+
+    /// An activation after the window was not active becomes the `WM_ACTIVATE` Windows sends the
+    /// game's main window, ahead of a waiting move, one at a time (the latest); nothing before the
+    /// game has its window.
+    #[test]
+    fn a_reactivation_is_the_games_wm_activate_before_a_move() {
+        let mut e = Engine::new();
+        post_activate(&mut e, 1);
+        assert!(state!(e).windows.queue.is_empty(), "no window yet");
+        e.kernel.main_window = 0x94;
+        state!(e)
+            .windows
+            .windows
+            .insert(0x94, record(0x9000_0000, 0, [0, 0, 1280, 720]));
+        post_mouse_move(&mut e, [0.5, 0.5], &[false; 8]);
+        post_activate(&mut e, 2);
+        post_activate(&mut e, 1);
+        let queue: Vec<[u32; 7]> = state!(e).windows.queue.iter().copied().collect();
+        assert_eq!(queue.len(), 2);
+        assert_eq!(queue[0], [0x94, WM_ACTIVATE, 1, 0, 0, 0, 0]);
+        assert_eq!(queue[1][1], WM_MOUSEMOVE);
     }
 
     /// `DefWindowProcA` answers the one message this layer posts as Windows' default does (0) and

@@ -40,12 +40,23 @@ const WINDOW: u32 = 0x94;
 const CHILD: u32 = 0xc0;
 /// `bBackground Mouse`'s bit in the controls' flags (`+4`).
 const BACKGROUND_MOUSE: u32 = 8;
+/// `Main::SetActive`, `00877720` (`Main`'s controls) and `00a23c00` (the controls make the mouse
+/// again, exclusive for 0): stood in, to see an activation's calls.
+const MAIN_SET_ACTIVE: u32 = 0x0087_1c90;
+const MAIN_CONTROLS: u32 = 0x0087_7720;
+const REMAKE_MOUSE: u32 = 0x00a2_3c00;
+/// `WM_ACTIVATE` and its `WA_ACTIVE`, `WA_CLICKACTIVE`.
+const WM_ACTIVATE: u32 = 6;
 
 thread_local! {
     /// The menu cursor's placing call (fractions across and down, as `f32` bits), if made.
     static PLACED: Cell<Option<[u32; 2]>> = const { Cell::new(None) };
     /// Whether `DefWindowProcA` got the message.
     static DEFAULTED: Cell<bool> = const { Cell::new(false) };
+    /// `Main::SetActive`'s word, if called.
+    static SET_ACTIVE: Cell<Option<u32>> = const { Cell::new(None) };
+    /// `00a23c00`'s two words (the controls, the word), if called.
+    static REMADE: Cell<Option<[u32; 2]>> = const { Cell::new(None) };
 }
 
 fn ret(eax: u32) -> Ret {
@@ -86,9 +97,26 @@ fn engine(flags: u32) -> Engine {
         PLACED.with(|p| p.set(Some([a[0], a[1]])));
         ret(0)
     });
+    e.register(MAIN_SET_ACTIVE, |_, a| {
+        SET_ACTIVE.with(|s| s.set(Some(a[1])));
+        ret(0)
+    });
+    e.register(MAIN_CONTROLS, |_, _| ret(CONTROLS));
+    e.register(REMAKE_MOUSE, |_, a| {
+        REMADE.with(|r| r.set(Some([a[0], a[1]])));
+        ret(0)
+    });
     PLACED.with(|p| p.set(None));
     DEFAULTED.with(|d| d.set(false));
+    SET_ACTIVE.with(|s| s.set(None));
+    REMADE.with(|r| r.set(None));
     e
+}
+
+/// The `WM_ACTIVATE` the platform posts when the real window becomes active again.
+fn activation(e: &mut Engine, wparam: u32) -> u32 {
+    e.call(WINDOW_PROCEDURE, &args![WINDOW, WM_ACTIVATE, wparam, 0u32])
+        .u32()
 }
 
 /// The `WM_MOUSEMOVE` the platform posts for the cursor at (x, y) of the child's client area.
@@ -129,4 +157,38 @@ fn without_background_mouse_a_window_move_is_left_to_the_default_procedure() {
         "the menu cursor is not placed"
     );
     assert!(DEFAULTED.with(Cell::get), "DefWindowProcA answered it");
+}
+
+/// The game takes a window move only for its active window (`00871d10` asks `GetActiveWindow`):
+/// with another window active the menu cursor is not placed and the move is left to
+/// `DefWindowProcA`. (The window layers also keep no place while another program is active.)
+#[test]
+fn a_move_while_another_window_is_active_places_nothing() {
+    let mut e = engine(BACKGROUND_MOUSE);
+    e.register(GET_ACTIVE_WINDOW, |_, _| ret(0x1234));
+    assert_eq!(mouse_move(&mut e, 960, 540), 0);
+    assert_eq!(PLACED.with(Cell::get), None, "not the active window");
+    assert!(DEFAULTED.with(Cell::get));
+}
+
+/// The real window becoming active again (Alt+Tab back, a click on it) reaches the game's
+/// procedure as `WM_ACTIVATE`, which, once `Main` exists and the window is not minimised, sets
+/// `Main` active and has the controls make the mouse again with 0 (`00a23c00`: exclusive, level
+/// 5, `bBackground Mouse`'s flag cleared), so the menus follow the mouse's motion again, as in the
+/// original. A minimised activation, or one before `Main`, changes nothing.
+#[test]
+fn an_activation_makes_the_games_mouse_exclusive_again() {
+    for state in [1u32, 2] {
+        let mut e = engine(BACKGROUND_MOUSE);
+        assert_eq!(activation(&mut e, state), 0);
+        assert_eq!(SET_ACTIVE.with(Cell::get), Some(1), "WA {state}");
+        assert_eq!(REMADE.with(Cell::get), Some([CONTROLS, 0]), "WA {state}");
+    }
+    let mut e = engine(BACKGROUND_MOUSE);
+    assert_eq!(activation(&mut e, 0x0001_0001), 0);
+    assert_eq!(REMADE.with(Cell::get), None, "minimised");
+    let mut e = engine(BACKGROUND_MOUSE);
+    e.mem.set_u32(MAIN, 0);
+    assert_eq!(activation(&mut e, 1), 0);
+    assert_eq!(REMADE.with(Cell::get), None, "before Main");
 }

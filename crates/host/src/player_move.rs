@@ -1639,7 +1639,7 @@ impl crate::Host {
     pub fn mouse(&mut self, motion: [i32; 3], buttons: [bool; 8]) {
         self.join();
         // The real game window's mouse (a backend drawing it, every system) moves and clicks too.
-        let (motion, buttons, pointer) = {
+        let (motion, buttons, pointer, reactivated) = {
             let w = engine_platform::d3d9real::take_input();
             let mut b = buttons;
             for (held, window) in b.iter_mut().zip(w.buttons) {
@@ -1653,6 +1653,7 @@ impl crate::Host {
                 ],
                 b,
                 w.pointer.filter(|_| w.pointer_moved),
+                w.reactivated,
             )
         };
         // A scripted run (`NV_MOVE_KEYS`) drives the menus with keys; the real mouse moving over
@@ -1664,11 +1665,11 @@ impl crate::Host {
             .map(|&(at, _, hold)| at + hold)
             .max()
             .unwrap_or(0);
-        let (mut motion, mut buttons, pointer) =
+        let (mut motion, mut buttons, pointer, reactivated) =
             if !real_input_reaches_game() || self.movement.main_frames < scripted_until {
-                ([0; 3], [false; 8], None)
+                ([0; 3], [false; 8], None, None)
             } else {
-                (motion, buttons, pointer)
+                (motion, buttons, pointer, reactivated)
             };
         let frame = self.movement.main_frames;
         for &(at, dx, dy, hold, mask) in mouse_script() {
@@ -1684,6 +1685,11 @@ impl crate::Host {
         engine_platform::dinput::mouse_move(e, motion[0], motion[1], motion[2]);
         for (button, down) in buttons.into_iter().enumerate() {
             engine_platform::dinput::mouse_button(e, button, down);
+        }
+        // An activation of the real window after it was not active goes to the game's procedure
+        // first (it makes the game's mouse exclusive again), as Windows sends it.
+        if let Some(wparam) = reactivated {
+            engine_platform::window::post_activate(e, wparam);
         }
         if let Some(at) = pointer {
             engine_platform::window::post_mouse_move(e, at, &buttons);

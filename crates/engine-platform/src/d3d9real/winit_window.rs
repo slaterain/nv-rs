@@ -542,6 +542,7 @@ fn run_loop(requests: Receiver<Request>) {
         requests,
         tops: HashMap::new(),
         focused: false,
+        deactivated: false,
         alt: false,
         held: None,
         rest: [0.0; 3],
@@ -558,6 +559,9 @@ struct Layer {
     tops: HashMap<WindowId, RealWindow>,
     /// Whether a window of the game's has the focus.
     focused: bool,
+    /// Whether the game's window lost the focus since it was made: from then on each time it gets
+    /// it, the game's window procedure gets the activation too (`input::reactivated`).
+    deactivated: bool,
     /// Whether Alt is held.
     alt: bool,
     /// The window holding the cursor, if one does.
@@ -650,23 +654,42 @@ impl Layer {
 
     /// Holds the cursor in the window `id` and hides it there, as Windows does for a program whose
     /// DirectInput mouse is exclusive and in the foreground: locked where the system can, else kept
-    /// inside the window. For a mouse that is not exclusive (`super::mouse_exclusive`) the cursor
-    /// stays free and is only hidden over the window, as on Windows.
+    /// inside the window; only where `input::cursor_action` says (never for a mouse that is not
+    /// exclusive, as on Windows).
     fn hold(&mut self, id: RealWindow) {
         let Some(shown) = windows().get(&id).map(|e| Arc::clone(&e.shown)) else {
             return;
         };
         let w = &shown.window;
-        if !mouse_exclusive() {
-            self.let_go();
-            w.set_cursor_visible(false);
-            return;
-        }
         if w.set_cursor_grab(CursorGrabMode::Locked).is_err() {
             let _ = w.set_cursor_grab(CursorGrabMode::Confined);
         }
         w.set_cursor_visible(false);
         self.held = Some(id);
+    }
+
+    /// Does what `input::cursor_action` says for `event` at the window `id` (the rule the Win32
+    /// window follows too) and answers it, for the caller to keep the cursor's place.
+    fn follow(&mut self, id: RealWindow, event: input::CursorEvent) -> input::CursorAction {
+        let now = input::CursorNow {
+            exclusive: mouse_exclusive(),
+            held: self.held.is_some(),
+            active: self.focused,
+            hold_wanted: super::hold_wanted(),
+        };
+        let action = input::cursor_action(now, event);
+        if action.let_go {
+            self.let_go();
+        }
+        if action.hold {
+            super::take_hold_wanted();
+            self.hold(id);
+        } else if action.hide {
+            if let Some(e) = windows().get(&id) {
+                e.shown.window.set_cursor_visible(false);
+            }
+        }
+        action
     }
 
     /// Lets the cursor go (free, shown).
@@ -735,14 +758,20 @@ impl ApplicationHandler for Layer {
             WindowEvent::CloseRequested => window_closed(),
             // Activated, its display's scale changed, shown again: wgpu asks the window for a
             // frame at once rather than at the end of a rest (`d3d9_wgpu::window_changed`).
+            // A focus that follows a loss of it is also the game's activation (`WA_ACTIVE`: winit
+            // does not say whether a click gave it), which makes its mouse exclusive again.
             WindowEvent::Focused(true) => {
                 self.focused = true;
                 d3d9_wgpu::window_changed();
-                self.hold(id);
+                if self.deactivated {
+                    input::reactivated(1);
+                }
+                self.follow(id, input::CursorEvent::Activated);
             }
             // Losing the focus lets go of everything this window held.
             WindowEvent::Focused(false) => {
                 self.focused = false;
+                self.deactivated = true;
                 input::focus_lost();
                 self.let_go();
             }
@@ -788,7 +817,7 @@ impl ApplicationHandler for Layer {
                     return;
                 };
                 if down && input::holds_cursor(button) {
-                    self.hold(id);
+                    self.follow(id, input::CursorEvent::Pressed);
                 }
                 input::button(index, down);
             }
@@ -799,14 +828,11 @@ impl ApplicationHandler for Layer {
                 }
             }
             // The game's mouse not exclusive (`bBackground Mouse=1`): the cursor's place over the
-            // window is the game's `WM_MOUSEMOVE`, as on Windows (`super::mouse_exclusive`); a
-            // hold made before the game's mouse became non-exclusive is let go.
-            WindowEvent::CursorMoved { position, .. } if !mouse_exclusive() => {
-                if self.held.is_some() {
-                    self.let_go();
-                    if let Some(e) = windows().get(&id) {
-                        e.shown.window.set_cursor_visible(false);
-                    }
+            // focused window is the game's `WM_MOUSEMOVE`, as on Windows; for an exclusive one the
+            // hold is made again once the game made it exclusive again (`input::cursor_action`).
+            WindowEvent::CursorMoved { position, .. } => {
+                if !self.follow(id, input::CursorEvent::Moved).record {
+                    return;
                 }
                 let size = windows().get(&id).map(|e| e.shown.window.inner_size());
                 if let Some(size) = size {
