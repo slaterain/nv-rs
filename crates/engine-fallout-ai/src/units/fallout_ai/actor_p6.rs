@@ -1512,7 +1512,11 @@ fn equip_or_reload(e: &mut Engine, this: Ptr<Actor>, animation: u32, equipped_fo
         PLAY_GROUP,
         &args![current_animation, picked as u32, 1u32, 1u32, 4u32],
     );
-    if actor != player {
+    // lStewieAl's Tweaks' row S0043 (`OnQueuedIdleFlagsCheckWeapNull` at `0x8BAC12`): an actor with
+    // no weapon form skips the weapon's group, as at the block's end, instead of reading it.
+    let no_weapon =
+        e.stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON) && equipped_form == 0;
+    if actor != player && !no_weapon {
         let weapon_type = e.call(WEAPON_ANIM_TYPE, &args![equipped_form, 0u32]).u32();
         let group = e
             .call(GET_ANIM_GROUP, &args![actor, weapon_type, 0u32, 0u32, 0u32])
@@ -5950,11 +5954,20 @@ mod tests {
         assert!(calls_to(&e, PACK_ANIM_GROUP).is_empty());
     }
 
+    /// lStewieAl's Tweaks' row S0043 with ordinary input: run with the row off, then on; the row
+    /// changes nothing (the same calls and answers).
     #[test]
     fn picks_the_best_animation_when_there_is_nothing_to_reload() {
+        for on in [false, true] {
+            picks_the_best_animation_when_there_is_nothing_to_reload_row(on);
+        }
+    }
+
+    fn picks_the_best_animation_when_there_is_nothing_to_reload_row(on: bool) {
         // Ammunition entry count 3 + 1 = 4 and 4 in the inventory: nothing to
         // reload, and the clip rounds are 4 as well.
         let (mut e, actor, _) = reload_setup(0x800 | 0x200 | 0x2, 4, 4, 3);
+        e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
         e.call_log = Some(vec![]);
         fn_008ba600(&mut e, actor);
         // Slot kind 2, group index 8 (flag 0x2 with 0x200).
@@ -5976,6 +5989,37 @@ mod tests {
             calls_to(&e, slot_target(ACTOR_TABLE, 0x4b0)),
             [vec![actor.addr(), 0x77, 1]]
         );
+    }
+
+    /// lStewieAl's Tweaks' row S0043 (`0x8BAC12`): an NPC's queued equip or reload with nothing to
+    /// reload while its weapon entry has no form: the exe asks the missing weapon for its
+    /// animation type (`0051e2a0` reads +0x103, as its stand-in here does) and stops; with the row
+    /// on the weapon's group is skipped, as at the block's end.
+    #[test]
+    fn s0043_an_npcs_queued_reload_with_no_weapon_form() {
+        for on in [false, true] {
+            let (mut e, actor, _) = reload_setup(0x800 | 0x200 | 0x2, 4, 4, 3);
+            let entry = e.mem.alloc(0x20);
+            slot(&mut e, PROCESS_TABLE, 0x148, eax(entry));
+            e.register_double(WEAPON_ANIM_TYPE, |e, a| {
+                eax(u32::from(e.mem.u8(a[0] + 0x103)) + 0xb1)
+            });
+            e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
+            e.call_log = Some(vec![]);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                fn_008ba600(&mut e, actor);
+            }));
+            e.call_stack.clear();
+            assert_eq!(run.is_ok(), on, "row {on}");
+            if on {
+                assert!(calls_to(&e, WEAPON_ANIM_TYPE).is_empty());
+                assert_eq!(
+                    calls_to(&e, PLAY_GROUP),
+                    [[ANIMATION_OBJECT, 0x44, 1, 1, 4]]
+                );
+                assert!(calls_to(&e, SET_ANIM_ACTION).is_empty());
+            }
+        }
     }
 
     #[test]

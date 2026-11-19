@@ -182,7 +182,7 @@ fn a_players_file_overlays_vnvs_values_key_by_key() {
 }
 
 /// The S0079 row (`bDialogSpeechNullCheck`), which the key tests use.
-const PROOF: &rows::Row = &rows::ROWS[12];
+const PROOF: &rows::Row = &rows::ROWS[14];
 
 #[test]
 fn every_row_has_its_own_bit_and_key() {
@@ -406,7 +406,7 @@ fn the_start_lines_name_what_was_read() {
         start_lines(false, &settings, &keys, on.len()),
         [
             "lStewieAl's Tweaks: no Data\\NVSE\\Plugins\\nvse_stewie_tweaks.ini: VNV's values",
-            "lStewieAl's Tweaks: 22 of its 22 rows built are on",
+            "lStewieAl's Tweaks: 34 of its 34 rows built are on",
         ]
     );
     let (settings, on) = settings_and_rows(Some(b"[Tweaks]\nbBetterAutoWalk=1\n"), &[], &keys);
@@ -799,9 +799,9 @@ fn the_install_reads_the_overlay_folder_in_order() {
     MOD_FILES.with(|m| *m.borrow_mut() = None);
 }
 
-/// Each row's plan number, off key and bit, pinned (crash groups A and B, Engine Optimizations' rows): a key swapped with
-/// another row's, or two bits swapped, fails here. After the install, each key at 0 clears exactly
-/// its own bit.
+/// Each row's plan number, off key and bit, pinned (crash groups A, B and C, Engine Optimizations'
+/// rows): a key swapped with another row's, or two bits swapped, fails here. After the install,
+/// each key at 0 clears exactly its own bit.
 #[test]
 fn each_rows_plan_number_key_and_bit_are_pinned() {
     use engine_core::extend::stewie::{Row, CRASH, FIXES};
@@ -837,7 +837,13 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             "bMenuFixesTileLabelNullName",
             Row::at(CRASH, 17),
         ),
+        ("S0027", "bFixPipboyEquipCrash", Row::at(CRASH, 28)),
         ("S0042", "bFixExplosionWaterNullCall", Row::at(CRASH, 1)),
+        (
+            "S0043",
+            "bFixNullWeaponOrWeaponInfoReloadLoopCrash",
+            Row::at(CRASH, 21),
+        ),
         ("S0057", "bFixLevelGreaterThan99Crash", Row::at(CRASH, 18)),
         (
             "S0064",
@@ -847,6 +853,16 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
         ("S0068", "bFixHandleStealingCrash", Row::at(CRASH, 3)),
         ("S0078", "bNullPlayerCellImposterCheck", Row::at(CRASH, 4)),
         ("S0079", "bDialogSpeechNullCheck", Row::at(CRASH, 0)),
+        (
+            "S0089.04",
+            "bRememberAmmoCountOnLoadReloadNoAmmoEntry",
+            Row::at(CRASH, 31),
+        ),
+        (
+            "S0089.05",
+            "bRememberAmmoCountOnLoadDropNoAmmoEntry",
+            Row::at(CRASH, 32),
+        ),
         (
             "S0106",
             "bFixNullHitLocationNodeExplosionCrash",
@@ -858,21 +874,45 @@ fn each_rows_plan_number_key_and_bit_are_pinned() {
             Row::at(CRASH, 6),
         ),
         (
+            "S0126",
+            "bFixNullProjectileInCombatStateUpdateInventory",
+            Row::at(CRASH, 29),
+        ),
+        (
+            "S0127",
+            "bFixRecipeMenuMissingAmmoInfoNullCheck",
+            Row::at(CRASH, 30),
+        ),
+        (
             "S0139",
             "bFixCreditsCrashIfNoLoadedSave",
             Row::at(CRASH, 19),
         ),
         ("S0140", "bFixPatrolMissingNullCheck", Row::at(CRASH, 7)),
+        ("S0150", "bFixMissingAnimNullCheck", Row::at(CRASH, 22)),
         ("S0169", "bFixRareNullTeleportDoorCrash", Row::at(CRASH, 8)),
+        (
+            "S0172",
+            "bFixAnimDataUpdateReloadLoopNullCheck",
+            Row::at(CRASH, 23),
+        ),
+        ("S0173", "bAnimDataUpdateCrashCheck", Row::at(CRASH, 24)),
         (
             "S0174",
             "bFixSetActorRefEssentialNullCheck",
             Row::at(CRASH, 9),
         ),
+        ("S0181", "bNullAnimRemoveRecurseFix", Row::at(CRASH, 25)),
         (
             "S0182",
             "bHolotapeEmptySubtitleCrashFix",
             Row::at(CRASH, 20),
+        ),
+        ("S0186", "bBipedAnimNullItemError", Row::at(CRASH, 26)),
+        (
+            "S0202",
+            "bEquipAmmoOnNullBaseProcessCrashFix",
+            Row::at(CRASH, 27),
         ),
         ("S0881", "bFixSavingNullCellCrash", Row::at(CRASH, 10)),
         (
