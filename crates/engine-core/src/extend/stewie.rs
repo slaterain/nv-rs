@@ -146,6 +146,10 @@ pub const RELOAD_NULL_AMMO_ENTRY: Row = Row::at(CRASH, 31);
 /// S0089.05 `RememberAmmoCountOnLoad` (`00954610` at `0x9546EE`): the player dropping the weapon's
 /// ammunition with no equipped ammunition entry.
 pub const DROP_AMMO_NULL_ENTRY: Row = Row::at(CRASH, 32);
+/// S1016 (Engine Optimizations, `Inlines::SaveLoad`: `Write32(0x845558, 0x2735)`): the changes map's
+/// buckets 10,037, not the exe's 5,039 (`00845550`). It changes the order a save walks and writes the
+/// changed forms, so it is a fixes row.
+pub const CHANGES_MAP_BUCKETS: Row = Row::at(FIXES, 0);
 
 /// Tweaks' messages it prints once a run ([`Engine::stewie_once`]).
 pub mod once {
