@@ -5965,9 +5965,9 @@ mod tests {
 
     fn picks_the_best_animation_when_there_is_nothing_to_reload_row(on: bool) {
         // Ammunition entry count 3 + 1 = 4 and 4 in the inventory: nothing to
-        e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
         // reload, and the clip rounds are 4 as well.
         let (mut e, actor, _) = reload_setup(0x800 | 0x200 | 0x2, 4, 4, 3);
+        e.set_stewie(engine_core::extend::stewie::RELOAD_LOOP_NULL_WEAPON, on);
         e.call_log = Some(vec![]);
         fn_008ba600(&mut e, actor);
         // Slot kind 2, group index 8 (flag 0x2 with 0x200).
