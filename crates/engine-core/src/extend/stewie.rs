@@ -81,6 +81,34 @@ pub const SET_ACTOR_REF_ESSENTIAL_NULL_CHECK: Row = Row::at(CRASH, 9);
 /// S0881 `patchFixSavingNullCellCrash` (`SaveInitialData` `0084eb80` at `0x84EE1B`): a created
 /// reference saved with neither worldspace nor cell.
 pub const SAVING_NULL_CELL: Row = Row::at(CRASH, 10);
+/// S0022.14 `MenuFixes` (`InventoryMenu::DoClick` `00780140` at `0x780474`): the use click with no
+/// item selected.
+pub const INVENTORY_USE_NO_ITEM_JUMP: Row = Row::at(CRASH, 11);
+/// S0022.15 `MenuFixes`, `QuantityMenuCloseNullInventorySelectionCheck`
+/// (`InventoryMenu::DropCurrentItem` `00780c50` at `0x780C76`): a drop with no item selected.
+pub const QUANTITY_MENU_CLOSE_NO_ITEM: Row = Row::at(CRASH, 12);
+/// S0022.16 `MenuFixes` (`InventoryMenu::SelectCurrentItem` `00780d60` at `0x780D70`): equipping
+/// with no item selected.
+pub const INVENTORY_SELECT_NO_ITEM: Row = Row::at(CRASH, 13);
+/// S0022.17 `MenuFixes` (`ContainerMenu::DoIdle` `0075eac0` at `0x75EB5C`): an entry with no form.
+pub const CONTAINER_MOUSEOVER_NO_FORM: Row = Row::at(CRASH, 14);
+/// S0022.30 `MenuFixes`, `GetMenuVisiblityStateIfActiveTile` (`InterfaceManager::Idle` `0070c4a0`
+/// at `0x70D44A` and `0x70D58D`): the menu under the pointer while no tile is.
+pub const CONSOLE_WHILE_MENUS_LOAD: Row = Row::at(CRASH, 15);
+/// S0022.36 `MenuFixes` (`ListBox::GetAt` `007a6fa0` at `0x7A7025`): a list node with no item.
+pub const LIST_BOX_GET_AT_NULL_ITEM: Row = Row::at(CRASH, 16);
+/// S0022.56 `MenuFixes`, `BeginsWithNonNull` (`00719580` at `0x7195D1` and `0x7195EB`): a tile with
+/// no name.
+pub const TILE_LABEL_NULL_NAME: Row = Row::at(CRASH, 17);
+/// S0057 `patchFixLevelGreaterThan99Crash` (`HUDMainMenu::UpdateXPMeter` `0077c4e0` at `0x77D258`
+/// and `0x77D28D`): a level of 100 or more printed into 3 bytes.
+pub const LEVEL_GREATER_THAN_99: Row = Row::at(CRASH, 18);
+/// S0139 `patchFixCreditsCrashIfNoLoadedSave` (`CreditsMenu::Close` `0075f750` at `0x75F78E`): no
+/// player name.
+pub const CREDITS_NO_LOADED_SAVE: Row = Row::at(CRASH, 19);
+/// S0182 `HolotapeEmptySubtitleCrashFix` (`MapMenu` `0079a660` at `0x79A868` and `0x79AAEB`): a
+/// holotape's subtitle removed from an empty list.
+pub const HOLOTAPE_EMPTY_SUBTITLE: Row = Row::at(CRASH, 20);
 
 /// The table: one bit a row.
 #[derive(Debug)]
