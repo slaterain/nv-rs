@@ -67,12 +67,21 @@ fn set_cursor_pos(e: &mut Engine, w: &[u32]) -> Ret {
         return handled(true);
     }
     let ratio = e.mem.f32(SCREEN_RATIO);
-    let half = ratio * 0.5;
-    let width = e.mem.u32(SIZE_W) as i32 as f32 * half;
-    let height = e.mem.u32(SIZE_H) as i32 as f32 * half;
+    let (width, height) = half_screen(e);
     e.mem.set_f32(node + LOCAL_X, x * ratio - width);
     e.mem.set_f32(node + LOCAL_Z, height - y * ratio);
     handled(true)
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), internal/patches_game.h: DeferredInit
+// (`g_screenWidth`, `g_screenHeight`).
+/// JIP's half screen width and height: `iSize W` / `iSize H` of `[Display]` times half the cached
+/// screen ratio (read at the call; see the module doc).
+pub(crate) fn half_screen(e: &Engine) -> (f32, f32) {
+    let half = e.mem.f32(SCREEN_RATIO) * 0.5;
+    let width = e.mem.u32(SIZE_W) as i32 as f32 * half;
+    let height = e.mem.u32(SIZE_H) as i32 as f32 * half;
+    (width, height)
 }
 
 #[cfg(test)]

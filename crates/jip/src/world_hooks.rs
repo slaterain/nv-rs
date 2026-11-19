@@ -459,7 +459,8 @@ pub fn install(e: &mut Engine, answers_installed: bool) {
 /// Before a game loads: the informed forms lose their flags and the fast-travel and cell-change
 /// sets go (with a user of each hook); the waits go, with their owners' flags and the hook; the
 /// lights scripts attached come off their nodes (`gl::lights::pre_load`); the
-/// swapped LOD blocks go, with the hook; the references keep their names (their flag set
+/// swapped LOD blocks go, with the hook; the extra cameras are destroyed
+/// (`jip_fn_misc_ref_cameras::pre_load`); the references keep their names (their flag set
 /// again); the model paths go, with the hook.
 pub fn pre_load(e: &mut Engine) {
     if !state(e).event_informed.is_empty() {
@@ -504,6 +505,8 @@ pub fn pre_load(e: &mut Engine) {
         state(e).swap_obj_lod.clear();
         e.set_hook(Hook::MakeObjLODPath, false);
     }
+    // JIP's next step: every extra camera (`AttachExtraCamera`) off its node and destroyed.
+    crate::commands::jip_fn_misc_ref_cameras::pre_load(e);
     let names: Vec<u32> = state(e).ref_names.keys().copied().collect();
     for reference in names {
         let flags = ref_flags(e, reference);
