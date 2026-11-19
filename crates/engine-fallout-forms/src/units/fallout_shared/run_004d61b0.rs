@@ -2088,13 +2088,19 @@ mod n039_tests {
             text_and_new(&mut e);
             let inserted = tree_double(&mut e, 0);
             let object = leaf_object(&mut e);
-            // The first word of what it is given, as the exe's (the list's head, an entry's property):
-            // `leaf_object` answers 0 for it, which leaves the property walk out.
-            e.register(FIRST_WORD, |e, a| e.mem.u32(a[0]).into_ret());
             // One entry, holding no property.
             let node = e.mem.alloc(8);
             let list = e.mem.alloc(8);
             e.mem.set_u32(list, node);
+            // The first word of the list (its head) and of the entry (its property), as the exe reads
+            // them; `leaf_object` answers 0 for every other (its empty string lists).
+            e.register_double(FIRST_WORD, move |e, a| {
+                if a[0] == list || a[0] == node {
+                    e.mem.u32(a[0]).into_ret()
+                } else {
+                    0u32.into_ret()
+                }
+            });
             e.register_double(0x0043_0830, move |_, _| list.into_ret());
             e.register(0x0076_b610, |_, _| false.into_ret());
             e.register(LIST_NEXT, |e, a| {
@@ -2125,9 +2131,6 @@ mod n039_tests {
             text_and_new(&mut e);
             let _inserted = tree_double(&mut e, 0);
             let object = leaf_object(&mut e);
-            // The first word of what it is given, as the exe's (the list's head, an entry's property):
-            // `leaf_object` answers 0 for it, which leaves the property walk out.
-            e.register(FIRST_WORD, |e, a| e.mem.u32(a[0]).into_ret());
             // A property with no controllers.
             let property = e.mem.alloc(0x20);
             properties.push(property);
@@ -2135,6 +2138,15 @@ mod n039_tests {
             e.mem.set_u32(node, property);
             let list = e.mem.alloc(8);
             e.mem.set_u32(list, node);
+            // The first word of the list (its head) and of the entry (its property), as the exe reads
+            // them; `leaf_object` answers 0 for every other (its empty string lists).
+            e.register_double(FIRST_WORD, move |e, a| {
+                if a[0] == list || a[0] == node {
+                    e.mem.u32(a[0]).into_ret()
+                } else {
+                    0u32.into_ret()
+                }
+            });
             e.register_double(0x0043_0830, move |_, _| list.into_ret());
             e.register(0x0076_b610, |_, _| false.into_ret());
             e.register(LIST_NEXT, |e, a| {
