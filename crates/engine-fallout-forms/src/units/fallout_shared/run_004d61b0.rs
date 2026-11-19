@@ -2102,7 +2102,14 @@ mod n039_tests {
                 }
             });
             e.register_double(0x0043_0830, move |_, _| list.into_ret());
-            e.register(0x0076_b610, |_, _| false.into_ret());
+            // The list is not empty for the controllers' walk, and empty for the "Properties" part
+            // after it (its own lister is another test's).
+            let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
+            let count = asked.clone();
+            e.register_double(0x0076_b610, move |_, _| {
+                count.set(count.get() + 1);
+                (count.get() > 1).into_ret()
+            });
             e.register(LIST_NEXT, |e, a| {
                 let node = e.mem.u32(a[1]);
                 e.mem.set_u32(a[1], 0);
@@ -2148,7 +2155,14 @@ mod n039_tests {
                 }
             });
             e.register_double(0x0043_0830, move |_, _| list.into_ret());
-            e.register(0x0076_b610, |_, _| false.into_ret());
+            // The list is not empty for the controllers' walk, and empty for the "Properties" part
+            // after it (its own lister is another test's).
+            let asked = std::rc::Rc::new(std::cell::Cell::new(0u32));
+            let count = asked.clone();
+            e.register_double(0x0076_b610, move |_, _| {
+                count.set(count.get() + 1);
+                (count.get() > 1).into_ret()
+            });
             e.register(LIST_NEXT, |e, a| {
                 let node = e.mem.u32(a[1]);
                 e.mem.set_u32(a[1], 0);
