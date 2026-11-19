@@ -2880,6 +2880,7 @@ impl Device {
     /// split ([`submit_parts`]) only takes the last command's few uses past the limit.
     pub(crate) fn bound_batch(&mut self) {
         if self.batch_uses >= SUBMIT_USES {
+            self.submits.bound_sends.fetch_add(1, Ordering::Relaxed);
             self.sync();
             self.flush();
             // Once a run: whether the game's frames ever come near the limit.
@@ -2904,6 +2905,7 @@ impl Device {
             most_batch: load32(&s.most_batch),
             uses: load64(&s.uses),
             batch_uses: load64(&s.batch_uses),
+            bound_sends: load64(&s.bound_sends),
         }
     }
 
@@ -10786,6 +10788,8 @@ struct Submits {
     /// counted into a part).
     uses: AtomicU64,
     batch_uses: AtomicU64,
+    /// Batches sent early because they reached the limit ([`Device::bound_batch`]).
+    bound_sends: AtomicU64,
 }
 
 /// What the batches' submits carried so far ([`Device::submits`], tests).
@@ -10808,6 +10812,8 @@ pub struct SubmitStats {
     /// counted into a part).
     pub uses: u64,
     pub batch_uses: u64,
+    /// Batches sent early because they reached the limit (none in an ordinary frame).
+    pub bound_sends: u64,
 }
 
 /// `buffers` submitted in order, each part's number of them at a time ([`submit_parts`]), counted

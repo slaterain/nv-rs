@@ -3770,6 +3770,10 @@ fn a_batch_of_more_passes_than_a_submit_takes_goes_in_several() {
             "threads {threads}: a batch took {} uses before it was sent",
             s.most_batch
         );
+        assert!(
+            s.bound_sends >= u64::from(3 * 900 / limit),
+            "threads {threads}: the batch sent early as it reached the limit: {s:?}"
+        );
     }
 }
 
@@ -3876,6 +3880,11 @@ fn a_crowded_batch_s_encoders_go_in_one_submit_in_order() {
         after.submits,
         before.submits + 1,
         "the batch went in one submit: {before:?} -> {after:?}"
+    );
+    // An ordinary batch never reaches the limit, so it never pays the early send's wait.
+    assert_eq!(
+        after.bound_sends, before.bound_sends,
+        "no early send for a batch of this size: {after:?}"
     );
     assert!(
         after.most_buffers >= 2,
