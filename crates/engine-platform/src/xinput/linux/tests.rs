@@ -589,3 +589,38 @@ fn when_a_rumble_is_sent() {
     pad.gone = true;
     assert!(pad.rumble_due(now).is_none());
 }
+
+/// Events the kernel drops (a reader that fell behind: the device's queue overflowed) are read
+/// again from the device: a button pressed in the lost part still counts.
+#[test]
+fn dropped_events_are_read_again_from_the_device() {
+    let Some(pad) = Virtual::make(0x045e, 0x028e, false) else {
+        return no_uinput();
+    };
+    let sys = Path::new("/sys/class/input");
+    let Found::Pad(mut opened) = open(&pad.node, sys, &SteamLists::default()) else {
+        panic!("the virtual pad is read");
+    };
+    // A second reader of the same device, to see that the kernel did drop events.
+    let raw = File::open(&pad.node).unwrap();
+    pad.emit(EV_KEY, BTN_SOUTH, 1);
+    pad.emit(EV_SYN, SYN_REPORT, 0);
+    for v in 1..=1000 {
+        pad.emit(EV_ABS, ABS_X, v);
+        pad.emit(EV_SYN, SYN_REPORT, 0);
+    }
+    // SAFETY: a plain C structure, read whole.
+    let mut first: libc::input_event = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::input_event>();
+    // SAFETY: the structure's own bytes.
+    let n = unsafe { libc::read(raw.as_raw_fd(), std::ptr::addr_of_mut!(first).cast(), size) };
+    assert_eq!(n, size as isize);
+    assert_eq!(
+        (first.type_, first.code),
+        (EV_SYN, SYN_DROPPED),
+        "the kernel dropped events"
+    );
+    read_events(&mut opened);
+    assert!(opened.controls.south, "the press in the lost events");
+    assert_eq!(opened.controls.left_x, 1000);
+}
