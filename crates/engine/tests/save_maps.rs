@@ -133,6 +133,11 @@ struct World {
     interior: u32,
     /// One entry with neither a form nor a stored buffer (the exe's warning).
     missing: bool,
+    /// The cases beside the main ones: cells of another worldspace on the expired cells' grid squares
+    /// (unexpired, with references), an unexpired interior cell with references placed by it and
+    /// stored, created (0xff) references in an expired cell, a flagged cell detached at time 0, a
+    /// flagged entry with no form, a stored reference of initial data kind 0.
+    extras: bool,
     /// The changes map's buckets.
     buckets: u32,
 }
@@ -149,7 +154,12 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
     e.register(0x0052_6100, |_, _| ret(72)); // the expiry limit
     e.register(0x0058_7410, |_, a| ret((a[0] << 16) | a[1]));
     e.register(0x0040_6d90, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
-    e.register(0x0046_9860, |_, _| ret(0)); // not a dynamic form id
+    // A created form (an id from 0xff000000): the data handler's test (`00469860`, (handler, id)).
+    e.register(0x0046_9860, |_, a| ret(u32::from(a[1] >= 0xff00_0000)));
+    // The reference form types (`00564900`).
+    e.register(0x0056_4900, |_, a| {
+        ret(u32::from((0x3a..=0x3c).contains(&a[0])))
+    });
     e.register(0x0048_39c0, |_, a| {
         ret(FORMS.with(|f| *f.borrow().get(&a[0]).unwrap_or(&0)))
     });
@@ -177,10 +187,9 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
     e.register(0x0056_1ef0, |_, _| Ret::default());
     e.register(0x0084_5cc0, |_, _| Ret::default());
     e.register(0x0084_dff0, |_, _| Ret::default());
-    // The stored buffers: their type, initial data kind (2 for a cell, 6 for a reference), the
-    // data (copied out), the header and value sizes, the buffer rebuilt, the references map.
+    // The stored buffers: their type, the data (copied out), the header and value sizes, the buffer
+    // rebuilt, the references map. The initial data's kind is the exe's (`0084e730`, translated).
     e.register(0x0085_3640, |e, a| ret(u32::from(e.mem.u8(a[0]))));
-    e.register(0x0084_e730, |_, a| ret(if a[1] == 0x39 { 2 } else { 6 }));
     e.register(0x0086_6390, |e, a| ret(e.mem.u32(a[0]) + 0x10));
     e.register(0x0084_e930, |e, a| {
         let bytes = e.mem.bytes(a[0], 0x30);
@@ -280,7 +289,13 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
             e.mem.set_u8(cell + 0x34, 1);
         }
         cells_made.push(cell);
-        let change = add(e, id, 0x4000_0000);
+        // Stored cells: initial data kind 2 (0x10000000), 1 (0x20000000) or 3 (neither) in turn.
+        let kind_flag = if c < w.buffered {
+            [0x1000_0000, 0x2000_0000, 0][(c % 3) as usize]
+        } else {
+            0
+        };
+        let change = add(e, id, 0x4000_0000 | kind_flag);
         if c < w.buffered {
             let area = WORLD + c % w.worlds;
             stored(e, change, 0x39, &[area, f.x, f.y, detached]);
@@ -302,7 +317,10 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
             y: c / side,
         };
         let reference = form(e, vtable, id, f, world_of(c));
-        if c >= w.buffered && c < w.buffered + w.interior && r >= w.buffered {
+        // Placed by its parent cell: always in an interior cell, every other one in an exterior cell
+        // (the exe then tests the parent for being an interior).
+        let interior = c >= w.buffered && c < w.buffered + w.interior;
+        if r >= w.buffered && (interior || r % 2 == 1) {
             e.mem.set_u32(reference + 0x38, cells_made[c as usize]);
         }
         let change = add(e, id, flags);
@@ -314,6 +332,119 @@ fn cleanup_world(e: &mut Engine, w: World) -> u32 {
         } else {
             forms.insert(id, reference);
         }
+    }
+    if w.extras {
+        let reference_at = |e: &mut Engine, id: u32, x: u32, y: u32, world: u32, parent: u32| {
+            let f = Form {
+                kind: 0x3a,
+                detached: 0,
+                x,
+                y,
+            };
+            let reference = form(e, vtable, id, f, world);
+            e.mem.set_u32(reference + 0x38, parent);
+            reference
+        };
+        // Cells of the next worldspace on the expired exterior cells' grid squares, not expired,
+        // each holding two references (flags 4 and 0xc, one placed by the cell): the find needs
+        // both key words.
+        let first_exterior = w.buffered + w.interior;
+        for c in first_exterior..w.expired.min(first_exterior + 6) {
+            let (x, y) = (c % side, c / side);
+            let id = 0x0011_0000 + c;
+            let world = worlds[((c + 1) % w.worlds) as usize];
+            let f = Form {
+                kind: 0x39,
+                detached: 99_990,
+                x,
+                y,
+            };
+            let twin = form(e, vtable, id, f, world);
+            add(e, id, 0x4000_0000);
+            forms.insert(id, twin);
+            for (k, flags) in [4u32, 0xc].into_iter().enumerate() {
+                let rid = 0x0021_0000 + 2 * c + k as u32;
+                let r = reference_at(e, rid, x, y, world, twin * (k as u32));
+                add(e, rid, flags);
+                forms.insert(rid, r);
+            }
+        }
+        // An unexpired exterior cell at grid (0, 0) of the next worldspace (cell 0 is in the first).
+        let origin = form(
+            e,
+            vtable,
+            0x0011_ffff,
+            Form {
+                kind: 0x39,
+                detached: 99_990,
+                x: 0,
+                y: 0,
+            },
+            worlds[1 % w.worlds as usize],
+        );
+        add(e, 0x0011_ffff, 0x4000_0000);
+        forms.insert(0x0011_ffff, origin);
+        let r = reference_at(e, 0x0021_ffff, 0, 0, worlds[1 % w.worlds as usize], 0);
+        add(e, 0x0021_ffff, 4);
+        forms.insert(0x0021_ffff, r);
+        // An interior cell that has not expired, with references placed by it (flags 4 and 0xc)
+        // and stored ones (their data naming it).
+        let inside = form(
+            e,
+            vtable,
+            0x0012_0000,
+            Form {
+                kind: 0x39,
+                detached: 99_990,
+                x: 0,
+                y: 0,
+            },
+            worlds[0],
+        );
+        e.mem.set_u8(inside + 0x34, 1);
+        add(e, 0x0012_0000, 0x4000_0000);
+        forms.insert(0x0012_0000, inside);
+        for (k, flags) in [4u32, 0xc].into_iter().enumerate() {
+            let rid = 0x0022_0000 + k as u32;
+            let r = reference_at(e, rid, 0, 0, worlds[0], inside);
+            add(e, rid, flags);
+            forms.insert(rid, r);
+            let change = add(e, rid + 2, flags);
+            stored(e, change, 0x3a, &[0x0012_0000, 0, 0, 0, 0, 0, 0]);
+        }
+        // Created references (0xff ids) in an expired exterior cell, live and stored, flags 4 and
+        // 0xc: the exe passes over them.
+        let c = first_exterior;
+        let (x, y) = (c % side, c / side);
+        let fx = ((x as f32) * 4096.0 + 100.0).to_bits();
+        let fy = ((y as f32) * 4096.0 + 100.0).to_bits();
+        for (k, flags) in [4u32, 0xc].into_iter().enumerate() {
+            let rid = 0xff00_1000 + k as u32;
+            let r = reference_at(e, rid, x, y, world_of(c), 0);
+            add(e, rid, flags);
+            forms.insert(rid, r);
+            let change = add(e, rid + 2, flags);
+            stored(e, change, 0x3a, &[WORLD + c % w.worlds, 0, 0, 0, 0, fx, fy]);
+        }
+        // A flagged cell detached at time 0, and a flagged entry whose form is not found.
+        let zero = form(
+            e,
+            vtable,
+            0x0013_0000,
+            Form {
+                kind: 0x39,
+                detached: 0,
+                x: 1,
+                y: 1,
+            },
+            worlds[0],
+        );
+        add(e, 0x0013_0000, 0x4000_0000);
+        forms.insert(0x0013_0000, zero);
+        add(e, 0x0013_0001, 0x4000_0000);
+        // A stored reference of initial data kind 0 (flags without 2, 4 or 8) in an expired cell.
+        let change = add(e, 0x0023_0000, 0x10);
+        stored(e, change, 0x3a, &[WORLD + c % w.worlds, 0, 0, 0, 0, fx, fy]);
     }
     for (i, world) in worlds.iter().enumerate() {
         forms.insert(WORLD + i as u32, *world);
@@ -389,6 +520,7 @@ fn typed_cleanup_expired_data_matches_the_translation() {
         buffered: 40,
         interior: 12,
         missing: true,
+        extras: true,
         buckets: 5039,
     };
     let (exe_log, exe_map, exe_queue, exe_frees) = cleanup_run(Engine::new_untyped_for_test(), w);
@@ -417,24 +549,70 @@ fn typed_cleanup_expired_data_matches_the_translation() {
         exe_frees.len() > 20,
         "the queue's items and the 20 old buffers"
     );
-    // Each branch ran: whole entries removed (flags 4), bits 0xc cleared, kept (6), the note.
+    // Each branch ran, counted on the translation's run (the typed run made the same calls).
     let count = |log: &[(u32, Vec<u32>)], a: u32| log.iter().filter(|(x, _)| *x == a).count();
+    let note: Vec<Vec<u32>> = exe_log
+        .iter()
+        .filter(|(a, _)| *a == 0x0084_dff0)
+        .map(|(_, w)| w[2..].to_vec())
+        .collect();
+    assert_eq!(
+        note,
+        [vec![272, 90, 14]],
+        "the note: stripped, removed whole, rebuilt"
+    );
     assert_eq!(
         count(&exe_log, 0x0084_5a20),
-        100,
+        90,
         "flags exactly 4: the whole entry"
     );
     assert_eq!(
         count(&exe_log, 0x0056_2210),
-        200,
-        "flags 0xc and 0x14: bits 0xc cleared"
+        182,
+        "the other stripped entries: bits 0xc cleared"
     );
-    assert_eq!(count(&exe_log, 0x0084_dff0), 1);
+    assert_eq!(count(&exe_log, 0x0086_65d0), 14, "stored buffers rebuilt");
+    assert_eq!(
+        count(&exe_log, 0x0040_5430),
+        7,
+        "kind 6: the references map's entry"
+    );
+    assert_eq!(
+        count(&exe_log, 0x0085_2cd0),
+        7,
+        "kind 6 in an exterior cell"
+    );
+    assert_eq!(count(&exe_log, 0x0056_1ef0), 251, "live references moved");
+    assert_eq!(
+        count(&exe_log, 0x0084_b7c0),
+        150,
+        "one insert per expired cell"
+    );
+    // 0x0013_0000 (detached at 0) and 0x0013_0001 (no form) ask no expiry limit.
+    assert_eq!(
+        count(&exe_log, 0x0052_6100),
+        408,
+        "the cells with a detach time"
+    );
     assert_eq!(
         count(&exe_log, 0x0084_5cc0),
-        1,
-        "the missing form's warning"
+        2,
+        "the entries with no form: warnings"
     );
+    // The created references keep their changes and are not moved.
+    let objects: Vec<u32> =
+        FORMS.with(|f| (0..2).map(|k| f.borrow()[&(0xff00_1000 + k)]).collect());
+    for (id, flags) in [
+        (0xff00_1000u32, 4u32),
+        (0xff00_1001, 0xc),
+        (0xff00_1002, 4),
+        (0xff00_1003, 0xc),
+    ] {
+        assert!(exe_map.contains(&(id, flags)), "{id:08x} kept");
+    }
+    assert!(!exe_log
+        .iter()
+        .any(|(a, w)| *a == 0x0056_1ef0 && objects.contains(&w[0])));
 }
 
 #[test]
@@ -452,6 +630,7 @@ fn cleanup_expired_data_speed() {
             buffered: 0,
             interior: 0,
             missing: false,
+            extras: false,
             buckets: 5039,
         };
         for (name, typed) in [("translation", false), ("typed", true)] {
@@ -490,6 +669,7 @@ fn cleanup_expired_data_diff() {
         buffered: 4,
         interior: 2,
         missing: true,
+        extras: true,
         buckets: 37,
     };
     let larger = World {
@@ -501,6 +681,7 @@ fn cleanup_expired_data_diff() {
         buffered: 8,
         interior: 3,
         missing: false,
+        extras: true,
         buckets: 53,
     };
     Diff::new(engine_core::entry!(
