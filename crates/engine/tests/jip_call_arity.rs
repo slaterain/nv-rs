@@ -134,20 +134,6 @@ const UNREAD: &[(&str, &str, &str, Words, &str)] = &[
     ),
     (
         "jip",
-        "commands/jip_fn_inventory.rs",
-        "function",
-        N(2),
-        "an inventory entry's routine read from the armor's table: the entry and 0",
-    ),
-    (
-        "jip",
-        "commands/jip_fn_inventory.rs",
-        "function",
-        N(2),
-        "the same routine through a temporary entry",
-    ),
-    (
-        "jip",
         "commands/jip_fn_misc_ref.rs",
         "f",
         N(1),
@@ -232,13 +218,6 @@ const UNREAD: &[(&str, &str, &str, Words, &str)] = &[
     ),
     (
         "jip",
-        "equip_hooks.rs",
-        "function",
-        N(3),
-        "the equip routine the game's menu would call: the actor, the item and its data",
-    ),
-    (
-        "jip",
         "game_patches/gx.rs",
         "delete",
         N(1),
@@ -275,20 +254,6 @@ const UNREAD: &[(&str, &str, &str, Words, &str)] = &[
     ),
     (
         "nvse",
-        "commands/mod.rs",
-        "execute",
-        N(8),
-        "a command's routine from its record: a command's words",
-    ),
-    (
-        "nvse",
-        "commands/mod.rs",
-        "eval",
-        N(4),
-        "a condition's routine from its record: the reference, two parameters, the result",
-    ),
-    (
-        "nvse",
         "compiler.rs",
         "parse",
         N(4),
@@ -307,13 +272,6 @@ const UNREAD: &[(&str, &str, &str, Words, &str)] = &[
         "execute",
         N(8),
         "a command's routine from its record: a command's words",
-    ),
-    (
-        "nvse",
-        "table.rs",
-        "EXE_DEFAULT_PARSE",
-        N(4),
-        "the parse routine's four words, copied",
     ),
     // UI Organizer.
     (
@@ -420,13 +378,17 @@ fn code_of(text: &str) -> String {
         let c = b[i];
         let after_ident = i > 0 && is_ident(b[i - 1]);
         if c == b'/' && b.get(i + 1) == Some(&b'/') {
-            let end = b[i..].iter().position(|&c| c == b'\n').map_or(b.len(), |k| i + k);
+            let end = b[i..]
+                .iter()
+                .position(|&c| c == b'\n')
+                .map_or(b.len(), |k| i + k);
             blank(&mut out, i, end);
             i = end;
             continue;
         }
         // A raw string: `r"..."`, `r#"..."#`, `br"..."`.
-        let raw = c == b'r' && (!after_ident || (b[i - 1] == b'b' && (i < 2 || !is_ident(b[i - 2]))));
+        let raw =
+            c == b'r' && (!after_ident || (b[i - 1] == b'b' && (i < 2 || !is_ident(b[i - 2]))));
         if raw {
             let hashes = b[i + 1..].iter().take_while(|&&c| c == b'#').count();
             if b.get(i + 1 + hashes) == Some(&b'"') {
@@ -455,7 +417,10 @@ fn code_of(text: &str) -> String {
         // A char literal (`'"'`, `'\''`, `'\u{7f}'`), not a lifetime.
         if c == b'\'' && i + 2 < b.len() {
             let close = if b[i + 1] == b'\\' {
-                b[i + 3..].iter().position(|&c| c == b'\'').map(|k| i + 3 + k)
+                b[i + 3..]
+                    .iter()
+                    .position(|&c| c == b'\'')
+                    .map(|k| i + 3 + k)
             } else if b[i + 2] == b'\'' {
                 Some(i + 2)
             } else {
@@ -508,9 +473,15 @@ fn item_end(b: &[u8], mut at: usize) -> usize {
         break;
     }
     let head = String::from_utf8_lossy(&b[at..(at + 24).min(b.len())]).into_owned();
-    let is_fn = ["fn ", "pub fn ", "pub(crate) fn ", "const fn ", "unsafe fn "]
-        .iter()
-        .any(|p| head.starts_with(p));
+    let is_fn = [
+        "fn ",
+        "pub fn ",
+        "pub(crate) fn ",
+        "const fn ",
+        "unsafe fn ",
+    ]
+    .iter()
+    .any(|p| head.starts_with(p));
     let mut depth = 0i32;
     for (i, &c) in b.iter().enumerate().skip(at) {
         match c {
@@ -809,19 +780,26 @@ fn item_words(item: &str, scope: &str, params: &str, types: &Types, depth: u32) 
     let digits = item.strip_prefix('-').unwrap_or(item);
     if digits.starts_with(|c: char| c.is_ascii_digit()) {
         let suffix = NAMED.iter().find(|t| {
-            digits
-                .strip_suffix(**t)
-                .is_some_and(|h| !h.is_empty() && (!digits.starts_with("0x") || t.starts_with(['u', 'i'])))
+            digits.strip_suffix(**t).is_some_and(|h| {
+                !h.is_empty() && (!digits.starts_with("0x") || t.starts_with(['u', 'i']))
+            })
         });
         return match suffix {
             Some(t) => type_words(t),
             None if !digits.starts_with("0x")
                 && digits.contains(['.', 'e', 'E'])
-                && digits.bytes().all(|c| c.is_ascii_digit() || b"._eE-+".contains(&c)) =>
+                && digits
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || b"._eE-+".contains(&c)) =>
             {
                 Some(2)
             }
-            None if digits.bytes().all(|c| c.is_ascii_hexdigit() || b"_x".contains(&c)) => Some(1),
+            None if digits
+                .bytes()
+                .all(|c| c.is_ascii_hexdigit() || b"_x".contains(&c)) =>
+            {
+                Some(1)
+            }
             None => None,
         };
     }
@@ -873,14 +851,20 @@ fn item_words(item: &str, scope: &str, params: &str, types: &Types, depth: u32) 
         if let Some(t) = head.strip_suffix('>').and_then(|h| h.rsplit_once("::<")) {
             return type_words(t.1);
         }
-        let name_at = head.bytes().rposition(|c| !is_ident(c)).map_or(0, |k| k + 1);
+        let name_at = head
+            .bytes()
+            .rposition(|c| !is_ident(c))
+            .map_or(0, |k| k + 1);
         let name = &head[name_at..];
         if NAMED.contains(&name) {
             return type_words(name);
         }
         let before = &head[..name_at];
         if let Some(path) = before.strip_suffix("::") {
-            let ty = &path[path.bytes().rposition(|c| !is_ident(c)).map_or(0, |k| k + 1)..];
+            let ty = &path[path
+                .bytes()
+                .rposition(|c| !is_ident(c))
+                .map_or(0, |k| k + 1)..];
             if ty == "Ptr" {
                 return Some(1);
             }
@@ -907,26 +891,11 @@ fn item_words(item: &str, scope: &str, params: &str, types: &Types, depth: u32) 
         return None;
     }
     // The last `let` of the name before the call, else a parameter of the function.
-    let b = scope.as_bytes();
-    let mut k = scope.len();
-    while let Some(at) = scope[..k].rfind(item) {
-        k = at;
-        let end = at + item.len();
-        if (at > 0 && is_ident(b[at - 1])) || b.get(end).is_some_and(|&c| is_ident(c)) {
-            continue;
+    if let Some(l) = last_let(scope, item) {
+        if let Some(ty) = l.ty {
+            return type_words(ty);
         }
-        let head = scope[..at].trim_end();
-        let head = head.strip_suffix("mut").map_or(head, str::trim_end);
-        if !head.ends_with("let") || (head.len() > 3 && is_ident(head.as_bytes()[head.len() - 4])) {
-            continue;
-        }
-        let rest = scope[end..].trim_start();
-        if let Some(ty) = rest.strip_prefix(':') {
-            return type_words(ty.split(['=', ';']).next().unwrap_or(""));
-        }
-        let value = rest.strip_prefix('=')?;
-        let stop = value.find(';').unwrap_or(value.len());
-        return item_words(&value[..stop], &scope[..at], params, types, depth + 1);
+        return item_words(l.value?, &scope[..l.at], params, types, depth + 1);
     }
     for p in items(params) {
         if let Some((name, ty)) = p.split_once(':') {
@@ -935,6 +904,68 @@ fn item_words(item: &str, scope: &str, params: &str, types: &Types, depth: u32) 
                 return type_words(ty);
             }
         }
+    }
+    None
+}
+
+/// Where the first of `stops` outside brackets is in `text` (its end when none is).
+fn top_level_stop(text: &str, stops: &[u8]) -> usize {
+    let mut depth = 0i32;
+    for (i, c) in text.bytes().enumerate() {
+        match c {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            _ if depth == 0 && stops.contains(&c) => return i,
+            _ => {}
+        }
+    }
+    text.len()
+}
+
+/// A `let` of a name ([`last_let`]): its type and its value as written, whether it is `mut`, and
+/// where it is.
+struct Let<'a> {
+    ty: Option<&'a str>,
+    value: Option<&'a str>,
+    mutable: bool,
+    at: usize,
+}
+
+/// The last `let` of `name` in `scope` (the calling function's text before the call).
+fn last_let<'a>(scope: &'a str, name: &str) -> Option<Let<'a>> {
+    let b = scope.as_bytes();
+    let mut k = scope.len();
+    while let Some(at) = scope[..k].rfind(name) {
+        k = at;
+        let end = at + name.len();
+        if (at > 0 && is_ident(b[at - 1])) || b.get(end).is_some_and(|&c| is_ident(c)) {
+            continue;
+        }
+        let head = scope[..at].trim_end();
+        let (head, mutable) = match head.strip_suffix("mut") {
+            Some(h) if h.ends_with(char::is_whitespace) => (h.trim_end(), true),
+            _ => (head, false),
+        };
+        if !head.ends_with("let") || (head.len() > 3 && is_ident(head.as_bytes()[head.len() - 4])) {
+            continue;
+        }
+        let rest = scope[end..].trim_start();
+        let (ty, rest) = match rest.strip_prefix(':') {
+            Some(t) => {
+                let stop = top_level_stop(t, b"=;");
+                (Some(t[..stop].trim()), &t[stop..])
+            }
+            None => (None, rest),
+        };
+        let value = rest
+            .strip_prefix('=')
+            .map(|v| v[..top_level_stop(v, b";")].trim());
+        return Some(Let {
+            ty,
+            value,
+            mutable,
+            at,
+        });
     }
     None
 }
@@ -978,16 +1009,24 @@ fn resolve(
     }
 }
 
-/// The items of a word list written in place (`&args![..]`, `&[..]`, `&[x; N]`), or none when
-/// it is built elsewhere (`w`, `&words`).
-fn list_items(list: &str) -> Option<Vec<String>> {
-    let inner = list
-        .trim()
-        .strip_prefix("&args!")
-        .or_else(|| list.trim().strip_prefix('&'))
-        .map(str::trim)
-        .and_then(|l| l.strip_prefix('['))
-        .and_then(|l| l.strip_suffix(']'))?;
+/// The items of a word list written in place (`&args![..]`, `&[..]`, `&[x; N]`), or held by a
+/// `let` of the calling function (`scope`) that fixes its length (an array, or an `args!` or
+/// `vec!` that is not `mut`); none when it is built elsewhere (`w`, a `vec!` pushed to).
+fn list_items(list: &str, scope: &str) -> Option<Vec<String>> {
+    let list = list.trim();
+    let bare = list.strip_prefix('&').unwrap_or(list).trim();
+    let inner = ["args!", "vec!", ""]
+        .iter()
+        .find_map(|m| bare.strip_prefix(m)?.trim().strip_prefix('['))
+        .and_then(|l| l.strip_suffix(']'));
+    let Some(inner) = inner else {
+        let held = last_let(scope, bare).filter(|_| is_name(bare))?;
+        let value = held.value?;
+        if value.starts_with('[') || !held.mutable {
+            return list_items(value, &scope[..held.at]);
+        }
+        return None;
+    };
     let parts = items(inner);
     if let [one] = parts.as_slice() {
         if let Some((x, n)) = one.split_once(';') {
@@ -1067,7 +1106,7 @@ fn sites(root: &Path, types: &Types) -> Reading {
             let (scope, params) = fun
                 .as_ref()
                 .map_or(("", ""), |f| (&code[f.start..at], f.params));
-            let list = list_items(&parts[1]).map(|list| {
+            let list = list_items(&parts[1], scope).map(|list| {
                 let mut words = 0;
                 for item in &list {
                     let w = item_words(item, scope, params, types, 0);
@@ -1077,11 +1116,19 @@ fn sites(root: &Path, types: &Types) -> Reading {
                     }
                     words += w.unwrap_or(1);
                 }
-                let zero_last = list.last().is_some_and(|l| ["0", "0u32", "0_u32"].contains(&l.as_str()));
+                let zero_last = list
+                    .last()
+                    .is_some_and(|l| ["0", "0u32", "0_u32"].contains(&l.as_str()));
                 (words, zero_last)
             });
             let callee = parts[0].as_str();
-            match (resolve(callee, name, &consts), list) {
+            // A callee held by a `let` that is not `mut`: its value's callees.
+            let resolved = resolve(callee, name, &consts).or_else(|why| {
+                let held = last_let(scope, callee).filter(|l| is_name(callee) && !l.mutable);
+                held.and_then(|l| resolve(l.value?, name, &consts).ok())
+                    .ok_or(why)
+            });
+            match (resolved, list) {
                 (Ok(callees), Some((words, zero_last))) => {
                     for (callee, addr) in callees {
                         r.sites.push(Site {
@@ -1111,8 +1158,8 @@ fn sites(root: &Path, types: &Types) -> Reading {
                         Some((f, index))
                     });
                     match (param, list) {
-                        (Some((f, index)), Some((words, zero_last))) if is_name(callee) => {
-                            helpers.push(Helper {
+                        (Some((f, index)), Some((words, zero_last))) if is_name(callee) => helpers
+                            .push(Helper {
                                 file: name.clone(),
                                 name: f.name.to_string(),
                                 public: f.public,
@@ -1120,8 +1167,7 @@ fn sites(root: &Path, types: &Types) -> Reading {
                                 words,
                                 zero_last,
                                 inner,
-                            })
-                        }
+                            }),
                         _ => r.unread.push(inner),
                     }
                 }
@@ -1263,10 +1309,7 @@ static PROBING: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Pairs crate `name`'s unread calls with [`UNREAD`]'s rows: the problems (an unlisted call, a
 /// listed one that is gone or passes other words) and the pairs.
-fn match_unread<'a>(
-    name: &str,
-    unread: &'a [Unread],
-) -> (Vec<String>, Vec<(&'a Unread, Words)>) {
+fn match_unread<'a>(name: &str, unread: &'a [Unread]) -> (Vec<String>, Vec<(&'a Unread, Words)>) {
     let mut rows: Vec<(&(&str, &str, &str, Words, &str), bool)> = UNREAD
         .iter()
         .filter(|r| r.0 == name)
@@ -1387,7 +1430,10 @@ fn check(name: &str, at_least: usize) {
     // A callee nobody has translated: its calls agree with each other.
     for (addr, calls) in &untranslated {
         if calls.iter().any(|s| s.words != calls[0].words) {
-            let counts: Vec<String> = calls.iter().map(|s| format!("{} {}", s.at, s.words)).collect();
+            let counts: Vec<String> = calls
+                .iter()
+                .map(|s| format!("{} {}", s.at, s.words))
+                .collect();
             wrong.push(format!(
                 "{addr:08x} (not translated) is called with different word counts: {counts:?}"
             ));
@@ -1466,7 +1512,9 @@ fn stewie_passes_each_game_function_the_words_it_takes() {
 fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
     let types = Types::of(&[(
         "a.rs".to_string(),
-        code_of("pub struct A { pub this_obj: u32, pub(crate) scale: f64 }\nconst HALF: f64 = 0.5;"),
+        code_of(
+            "pub struct A { pub this_obj: u32, pub(crate) scale: f64 }\nconst HALF: f64 = 0.5;",
+        ),
     )]);
     let w = |item: &str, scope: &str, params: &str| item_words(item, scope, params, &types, 0);
     assert_eq!(w("1.5", "", ""), Some(2), "a float literal is an f64");
@@ -1486,7 +1534,11 @@ fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
     assert_eq!(w("d", "let d: f64 = 0.0;\nlet x = 1;", ""), Some(2));
     assert_eq!(w("d", "", "e: &mut Engine, d: f64"), Some(2), "a parameter");
     assert_eq!(w("d * 2.0", "", ""), Some(2));
-    assert_eq!(w("d", "let d = 1.0;\nlet d = d as u32;", ""), Some(1), "the last let");
+    assert_eq!(
+        w("d", "let d = 1.0;\nlet d = d as u32;", ""),
+        Some(1),
+        "the last let"
+    );
     assert_eq!(w("refr", "let refr = somewhere();", ""), None);
 
     let code = String::from(
@@ -1499,6 +1551,13 @@ fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
          let f = e.mem.u32(8);\n\
          e.call(f, &[0; 3]);\n\
          e.call(G, \"a, b\", 3);\n\
+         let g = if up { F } else { G };\n\
+         e.call(g, &args![1u32]);\n\
+         let ws = [1u32, 2, 3];\n\
+         e.call(G, &ws);\n\
+         let mut grown = vec![1u32];\n\
+         grown.push(0);\n\
+         e.call(G, &grown);\n\
          }\n\
          #[cfg(test)]\nfn only_in_tests(e: &mut Engine) { e.call(F, &[]); }\n",
     );
@@ -1507,8 +1566,17 @@ fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
     std::fs::write(dir.join("lib.rs"), &code).unwrap();
     let r = sites(&dir, &types);
     std::fs::remove_dir_all(&dir).unwrap();
-    let found: Vec<(&str, usize)> = r.sites.iter().map(|s| (s.callee.as_str(), s.words)).collect();
-    assert_eq!(found, [("F", 2), ("G", 2), ("F", 2)], "{r:?}", r = r.sites);
+    let found: Vec<(&str, usize)> = r
+        .sites
+        .iter()
+        .map(|s| (s.callee.as_str(), s.words))
+        .collect();
+    assert_eq!(
+        found,
+        [("F", 2), ("G", 2), ("F", 1), ("G", 1), ("G", 3), ("F", 2)],
+        "{r:?}",
+        r = r.sites
+    );
     let unread: Vec<(&str, Option<usize>, Option<u32>)> = r
         .unread
         .iter()
@@ -1516,7 +1584,11 @@ fn the_reader_counts_words_by_type_and_lists_what_it_cannot_read() {
         .collect();
     assert_eq!(
         unread,
-        [("F", None, Some(0x0040_0000)), ("f", Some(3), None)],
+        [
+            ("F", None, Some(0x0040_0000)),
+            ("f", Some(3), None),
+            ("G", None, Some(0x0040_1000))
+        ],
         "{:?}",
         r.unread
     );
