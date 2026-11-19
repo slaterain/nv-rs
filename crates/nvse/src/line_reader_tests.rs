@@ -284,6 +284,7 @@ fn the_assignment_shorthand_at_its_edges() {
         ("a[1][2] = 3", Some("let a[1][2] :=  3")),
         ("a[x] = b[y] = c", Some("let a[x] = b[y] :=  c")),
         ("a[x\n] = 1", None),
+        ("a[x\r] = 1", None),
         ("player.x = 5", Some("let player.x :=  5")),
         ("_x1 = 2", Some("let _x1 :=  2")),
         (".x = 5", None),
