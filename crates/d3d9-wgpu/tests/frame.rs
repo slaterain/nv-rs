@@ -3716,25 +3716,22 @@ fn an_up_draw_at_a_full_register_ring_draws_its_own_vertices() {
             vertices: Data::Bytes(&floats(&v)),
         });
     };
-    // A rectangle from x0 to x1 over the whole height, as two triangles.
-    let band = |x0: f32, x1: f32| {
-        [
-            [x0, -3.0],
-            [x0, 3.0],
-            [x1, -3.0],
-            [x1, -3.0],
-            [x0, 3.0],
-            [x1, 3.0],
-        ]
-    };
+    // One triangle over the whole height left of x = 0.1 (its point far left), and its mirror right
+    // of it.
+    let left = [[0.1, -9.0], [0.1, 9.0], [-20.0, 0.0]];
+    let right = [[0.1, -9.0], [0.1, 9.0], [20.0, 0.0]];
     g.clear(3, 0, 1.0);
     let sends = g.b.device().expect("the device").ring_sends();
     g.colour([1.0, 0.0, 0.0, 1.0]);
     up(&mut g, &[[-3.0, -3.0], [-3.0, 9.0], [9.0, -3.0]]);
+    // The green draw's bytes go where the red's end (48 bytes in); placed before the send they went
+    // with the red's batch, and the draw read the next batch's bytes there.
     g.colour([0.0, 1.0, 0.0, 1.0]);
-    up(&mut g, &band(-3.0, 0.1));
+    up(&mut g, &left);
+    // The blue draw's two triangles (the right one twice) fill the next batch's first 96 bytes: at
+    // the green draw's 48 a misplaced green draw finds the right triangle, and the left stays red.
     g.colour([0.0, 0.0, 1.0, 1.0]);
-    up(&mut g, &band(0.1, 3.0));
+    up(&mut g, &[right, right].concat());
     let px = g.pixels();
     let d = g.b.device().expect("the device");
     assert!(
