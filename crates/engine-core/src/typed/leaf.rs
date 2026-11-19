@@ -485,22 +485,19 @@ mod null_check_tests {
         e.mem.set_u32(0, 0x5555_aaaa);
         let object = e.mem.alloc(8);
         e.mem.set_u32(object, 0x1234);
-        assert_eq!(
-            word_at_0(&mut e, Ptr::new(0)),
-            0x5555_aaaa,
-            "the game's read"
-        );
-        assert_eq!(word_at_0(&mut e, Ptr::new(object)), 0x1234);
+        let (null, object): (Ptr, Ptr) = (Ptr::new(0), Ptr::new(object));
+        assert_eq!(word_at_0(&mut e, null), 0x5555_aaaa, "the game's read");
+        assert_eq!(word_at_0(&mut e, object), 0x1234);
         e.set_jip_patches(crate::extend::jip_patches::INSTALLED);
         assert_eq!(
-            word_at_0(&mut e, Ptr::new(0)),
+            word_at_0(&mut e, null),
             0x5555_aaaa,
             "JIP's own patches only"
         );
         e.set_jip_patches(
             crate::extend::jip_patches::INSTALLED | crate::extend::jip_patches::FIXES,
         );
-        assert_eq!(word_at_0(&mut e, Ptr::new(0)), 0, "JIP's check");
-        assert_eq!(word_at_0(&mut e, Ptr::new(object)), 0x1234);
+        assert_eq!(word_at_0(&mut e, null), 0, "JIP's check");
+        assert_eq!(word_at_0(&mut e, object), 0x1234);
     }
 }
