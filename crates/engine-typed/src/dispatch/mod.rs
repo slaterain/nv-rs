@@ -184,6 +184,9 @@ fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0042_12b0, extra::actor_package_data(Ptr) -> u32),
         entry!(0x0041_cb70, extra::package_target(Ptr) -> u32),
         entry!(0x0084_ab20, saveload::cleanup_expired_data(Ptr)),
+        entry!(0x0084_b930, saveload::queue_hash(Ptr, u32, u32) -> u32),
+        entry!(0x0084_b950, saveload::queue_keys_equal(Ptr, u32, u32, u32, u32) -> bool),
+        entry!(0x0084_b7c0, saveload::queue_insert(Ptr, u32, u32, u32)),
         entry!(0x0085_3130, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
         // The same function at a second address: instruction for instruction the same body.
         entry!(0x00a1_e380, refs::map_lookup(Ptr, u32, Ptr<u32>) -> u8),
