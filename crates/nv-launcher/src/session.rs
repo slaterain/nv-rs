@@ -14,6 +14,9 @@ use std::sync::mpsc::{channel, Sender};
 use std::sync::OnceLock;
 
 /// What the work tells or asks the window.
+// Status, StatusDone, Message and Folder come from Play.exe's steps (Windows); on Linux and macOS
+// play.sh says and asks everything in its own lines (Output).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub enum Event {
     /// The step the start is at, for the waiting screen ("Reading your graphics card...").
     Status(String),
@@ -56,6 +59,7 @@ pub fn send(event: Event) -> bool {
 
 /// Shows `text` with `entries` and waits for the player's choice: the entry's index. Without a
 /// window, or when it goes before the player chose, 0.
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn message(text: &str, entries: &[&str]) -> usize {
     let (reply, answer) = channel();
     let event = Event::Message {
@@ -71,6 +75,7 @@ pub fn message(text: &str, entries: &[&str]) -> usize {
 
 /// Asks for a folder and waits: the folder typed or dropped, `None` for Back (and without a
 /// window).
+#[cfg_attr(not(windows), allow(dead_code))]
 pub fn folder(text: &str) -> Option<PathBuf> {
     let (reply, answer) = channel();
     if !send(Event::Folder {
