@@ -560,7 +560,10 @@ fn the_profile_is_mods_only_when_play_sh_says_mods() {
             .join("FalloutNV")
             .join("plugins.txt")
     );
-    assert_eq!(profile_folders(own, "game")[0], own.join("game").join("Documents"));
+    assert_eq!(
+        profile_folders(own, "game")[0],
+        own.join("game").join("Documents")
+    );
 }
 
 /// The whole table reads back through the Windows table's own reader with every answer in place:
