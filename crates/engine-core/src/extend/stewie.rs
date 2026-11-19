@@ -134,6 +134,11 @@ pub const EQUIP_AMMO_NULL_PROCESS: Row = Row::at(CRASH, 27);
 /// S0027 `patchFixPipboyEquipCrash` (`Actor::EquipObject` at `0x88CDA3`, `FOPipboyManager::OnMenuOpen`
 /// `007f8010` at `0x7F8059`): the Pip-Boy reset when a Pip-Boy item is equipped.
 pub const PIPBOY_EQUIP_CRASH: Row = Row::at(CRASH, 28);
+/// The Pip-Boy manager's "reset me" byte (`FOPipboyManager` +0x16C), which row S0027 sets in place of
+/// the reset: the script command (`005db4c0`) sets it too, the main loop's AI tasks (`0086f840`) read
+/// it and the reset itself (`007fa990`) clears it. One definition for the AI's equip and the
+/// interface's menu open.
+pub const PIPBOY_RESET_PENDING: u32 = 0x16c;
 /// S0126 `patchFixNullProjectileInCombatStateUpdateInventory` (`009993c0` at `0x99A1C8` and
 /// `0x99A1DC`): a combat weapon whose projectile is null.
 pub const COMBAT_STATE_NULL_PROJECTILE: Row = Row::at(CRASH, 29);
