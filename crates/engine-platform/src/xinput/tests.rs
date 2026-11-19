@@ -109,6 +109,40 @@ fn the_button_bits_are_xinputs() {
         mask |= bit;
     }
     assert_eq!(mask, 0xf3ff);
+    // Each against XInput.h's own value (a swap of two keeps the mask).
+    let xinput_h = [
+        (DPAD_UP, 0x0001),
+        (DPAD_DOWN, 0x0002),
+        (DPAD_LEFT, 0x0004),
+        (DPAD_RIGHT, 0x0008),
+        (START, 0x0010),
+        (BACK, 0x0020),
+        (LEFT_THUMB, 0x0040),
+        (RIGHT_THUMB, 0x0080),
+        (LEFT_SHOULDER, 0x0100),
+        (RIGHT_SHOULDER, 0x0200),
+        (A, 0x1000),
+        (B, 0x2000),
+        (X, 0x4000),
+        (Y, 0x8000),
+    ];
+    for (i, (bit, value)) in xinput_h.iter().enumerate() {
+        assert_eq!(bit, value, "button {i}");
+    }
+}
+
+/// The answers are Windows' own codes (winerror.h, as measured on this PC) and its four users.
+#[test]
+fn the_answers_are_windows_codes() {
+    assert_eq!(
+        (
+            ERROR_SUCCESS,
+            ERROR_BAD_ARGUMENTS,
+            ERROR_DEVICE_NOT_CONNECTED,
+            USERS
+        ),
+        (0, 0xa0, 0x48f, 4)
+    );
 }
 
 /// No source: every user 0 to 3 is "not connected" to both calls and the game's memory is left
@@ -216,11 +250,17 @@ fn rumble_reaches_the_pad() {
         xinput_set_state(&mut e, 0, Ptr::new(vibration)),
         ERROR_DEVICE_NOT_CONNECTED
     );
+    assert_eq!(e.mem.bytes(vibration, 4), vec![0xff, 0x7f, 0x01, 0x80]);
+    // The stop, both motors 0, reaches the pad as any other speeds do.
+    e.mem.write(vibration, &[0; 4]);
+    assert_eq!(
+        xinput_set_state(&mut e, 1, Ptr::new(vibration)),
+        ERROR_SUCCESS
+    );
     assert_eq!(
         fake.0.lock().unwrap().vibrations,
-        vec![(1, [0xff, 0x7f, 0x01, 0x80])]
+        vec![(1, [0xff, 0x7f, 0x01, 0x80]), (1, [0; 4])]
     );
-    assert_eq!(e.mem.bytes(vibration, 4), vec![0xff, 0x7f, 0x01, 0x80]);
     // Taking the source away is "no pad" again.
     set_source(&mut e, None);
     assert_eq!(
@@ -229,9 +269,10 @@ fn rumble_reaches_the_pad() {
     );
 }
 
-/// The throttle: once a slot answers "not connected" the system is not asked for it again for
-/// [`EMPTY_RECHECK`] (both calls answer "not connected", the state kept), then is; a pad that
-/// answers is asked every time; other users are not held back by one empty slot.
+/// The throttle: once a slot that was not connected answers "not connected" the system is not
+/// asked for it again for [`EMPTY_RECHECK`] (both calls answer "not connected", the state kept),
+/// then is; a pad that answers is asked every time, and pulled out it is asked once more before
+/// it is held back; other users are not held back by one empty slot.
 #[test]
 fn an_empty_slot_is_asked_again_once_a_second() {
     let fake = Fake::default();
@@ -273,22 +314,94 @@ fn an_empty_slot_is_asked_again_once_a_second() {
         assert_eq!(source.set_state_at(0, &[1, 2, 3, 4], at(ms)), ERROR_SUCCESS);
     }
     assert_eq!(asked(&fake), 9);
-    // Pulled out: seen at once, then held back again from that moment.
+    // Pulled out: a rumble's "not connected" holds nothing back; the first read's is asked again,
+    // the second's holds the slot back from then on.
     fake.0.lock().unwrap().pads[0] = None;
     assert_eq!(
         source.set_state_at(0, &[0; 4], at(2000)),
         ERROR_DEVICE_NOT_CONNECTED
     );
+    for ms in [2001, 2002] {
+        assert_eq!(
+            source.get_state_at(0, &mut state, at(ms)),
+            ERROR_DEVICE_NOT_CONNECTED
+        );
+    }
+    assert_eq!(asked(&fake), 12);
     assert_eq!(
-        source.get_state_at(0, &mut state, at(2999)),
+        source.get_state_at(0, &mut state, at(3001)),
         ERROR_DEVICE_NOT_CONNECTED
     );
-    assert_eq!(asked(&fake), 10);
+    assert_eq!(asked(&fake), 12);
     assert_eq!(
-        source.get_state_at(0, &mut state, at(3000)),
+        source.get_state_at(0, &mut state, at(3002)),
         ERROR_DEVICE_NOT_CONNECTED
     );
-    assert_eq!(asked(&fake), 11);
+    assert_eq!(asked(&fake), 13);
+}
+
+/// A connected pad that misses one answer is read at the very next call (review of #781: a
+/// second without the pad is felt), and a failed rumble holds no slot back.
+#[test]
+fn a_pad_that_misses_one_answer_is_read_at_the_next_call() {
+    let fake = Fake::default();
+    fake.0.lock().unwrap().pads[0] = Some(pad());
+    let mut source = Throttled::new(fake.clone());
+    let start = Instant::now();
+    let at = |ms: u64| start + Duration::from_millis(ms);
+    let mut state = [0xaa; 16];
+    let plug = |on: bool| fake.0.lock().unwrap().pads[0] = on.then(pad);
+    assert_eq!(source.get_state_at(0, &mut state, at(0)), ERROR_SUCCESS);
+    plug(false);
+    assert_eq!(
+        source.get_state_at(0, &mut state, at(1)),
+        ERROR_DEVICE_NOT_CONNECTED
+    );
+    plug(true);
+    state = [0xaa; 16];
+    assert_eq!(source.get_state_at(0, &mut state, at(2)), ERROR_SUCCESS);
+    assert_eq!(state, pad().to_bytes());
+    plug(false);
+    assert_eq!(
+        source.set_state_at(0, &[1, 2, 3, 4], at(3)),
+        ERROR_DEVICE_NOT_CONNECTED
+    );
+    plug(true);
+    assert_eq!(source.get_state_at(0, &mut state, at(4)), ERROR_SUCCESS);
+    assert_eq!(source.set_state_at(0, &[1, 2, 3, 4], at(5)), ERROR_SUCCESS);
+    assert_eq!(fake.0.lock().unwrap().calls.len(), 6);
+}
+
+/// The system's XInput goes in behind the throttle (`install_system`, which the Windows start
+/// uses): the game's users run over all four of its users, each asked once while they are
+/// empty, however many reads and rumbles come in quick succession.
+#[test]
+fn the_system_goes_in_behind_the_throttle() {
+    let (mut e, state, vibration) = engine();
+    let fake = Fake::default();
+    let line = install_system(&mut e, Some((fake.clone(), "xinput1_4.dll")), Vec::new());
+    assert!(line.contains("xinput1_4.dll"), "{line}");
+    for _ in 0..3 {
+        assert_eq!(
+            xinput_get_state(&mut e, 0, Ptr::new(state)),
+            ERROR_DEVICE_NOT_CONNECTED
+        );
+        assert_eq!(
+            xinput_set_state(&mut e, 0, Ptr::new(vibration)),
+            ERROR_DEVICE_NOT_CONNECTED
+        );
+    }
+    assert_eq!(
+        fake.0.lock().unwrap().calls,
+        vec![('g', 0), ('g', 1), ('g', 2), ('g', 3)]
+    );
+    let none = install_system::<Fake>(&mut e, None, Vec::new());
+    assert!(none.contains("no XInput DLL"), "{none}");
+    assert_eq!(
+        xinput_get_state(&mut e, 0, Ptr::new(state)),
+        ERROR_DEVICE_NOT_CONNECTED
+    );
+    assert_eq!(fake.0.lock().unwrap().calls.len(), 4);
 }
 
 /// The throttle through the import functions: the system's clock, so only "not asked again at
