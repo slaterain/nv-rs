@@ -3892,6 +3892,8 @@ mod tests {
                 world: 0x0013_b308,
             })
         }
+        // The switch held for the whole test: its off case too reads the run's switch.
+        let _switch = SUN_SWITCH.lock().unwrap_or_else(|p| p.into_inner());
         let seen: Seen = std::sync::Arc::default();
         let mut e = Engine::new();
         real(&mut e).stream = Some(Stream::direct(Box::new(Words(std::sync::Arc::clone(
@@ -3904,16 +3906,12 @@ mod tests {
         real(&mut e).devices.push((DEVICE, None));
         let light = d3d9_wgpu::scene_light::STATE;
         let sun = d3d9_wgpu::sun_shadow::STATE;
-        let (cleared, skipped) = {
-            let _switch = SUN_SWITCH.lock().unwrap_or_else(|p| p.into_inner());
-            d3d9_wgpu::sun_shadow::enable(true);
-            clear_lit(&mut e, DEVICE, 0, 0, 2, 0, 0, 0, 0, Some(sunny));
-            let cleared = take();
-            depth_clear_skipped_lit(&mut e, sunny);
-            let skipped = take();
-            d3d9_wgpu::sun_shadow::enable(false);
-            (cleared, skipped)
-        };
+        d3d9_wgpu::sun_shadow::enable(true);
+        clear_lit(&mut e, DEVICE, 0, 0, 2, 0, 0, 0, 0, Some(sunny));
+        let cleared = take();
+        depth_clear_skipped_lit(&mut e, sunny);
+        let skipped = take();
+        d3d9_wgpu::sun_shadow::enable(false);
         let states = |got: &[(u32, Vec<u32>)]| got.iter().map(|(s, _)| *s).collect::<Vec<_>>();
         assert_eq!(states(&cleared), [light, sun, 2]);
         assert_eq!(states(&skipped), [light, sun]);

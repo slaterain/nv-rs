@@ -5444,3 +5444,73 @@ fn a_declaration_set_again_after_an_fvf_is_the_layout_again() {
     let d = g.b.device().expect("the device");
     assert_eq!(d.wgpu_errors(), 0);
 }
+
+/// A depth stand-in (a colour target smaller than the bound depth surface) is kept while a draw
+/// uses it and let go once idle for more than 300 presents: on a 256 x 256 depth surface, a 64 x 64
+/// target cleared once and a 128 x 128 one cleared every frame give two stand-ins, and after 302
+/// presents only the 128 x 128 one is left, for the same depth surface.
+#[test]
+fn idle_depth_stand_ins_go_and_used_ones_stay() {
+    let Some(mut g) = Gpu::new(256, 1) else {
+        return;
+    };
+    const SMALL: u32 = 0x3100;
+    const MEDIUM: u32 = 0x3110;
+    for (surface, size) in [(SMALL, 64), (MEDIUM, 128)] {
+        g.run(Cmd::CreateSurface {
+            device: DEVICE,
+            surface,
+            depth: false,
+            width: size,
+            height: size,
+            format: A8R8G8B8,
+            multisample: 0,
+            quality: 0,
+            flag: 0,
+        });
+    }
+    let target = |g: &mut Gpu, surface: u32| {
+        g.run(Cmd::SetRenderTarget {
+            device: DEVICE,
+            index: 0,
+            surface,
+        });
+    };
+    let present = |g: &mut Gpu| {
+        g.run(Cmd::Present {
+            device: DEVICE,
+            source: None,
+            dest: None,
+            window: 0,
+            dirty: false,
+            model: 0,
+            frame: 1,
+        });
+    };
+    target(&mut g, SMALL);
+    g.clear(3, 0, 1.0);
+    let mut first = Vec::new();
+    for frame in 0..302 {
+        target(&mut g, MEDIUM);
+        g.clear(3, 0, 1.0);
+        if frame == 0 {
+            first =
+                g.b.device()
+                    .expect("the device")
+                    .depth_stand_ins_for_tests();
+        }
+        present(&mut g);
+    }
+    assert_eq!(
+        first.iter().map(|k| (k.1, k.2)).collect::<Vec<_>>(),
+        [(64, 64), (128, 128)]
+    );
+    let left =
+        g.b.device()
+            .expect("the device")
+            .depth_stand_ins_for_tests();
+    assert_eq!(left.len(), 1, "{left:?}");
+    assert_eq!((left[0].1, left[0].2), (128, 128));
+    assert_eq!(left[0].0, first[1].0, "the same depth surface");
+    assert_eq!(g.b.device().expect("the device").wgpu_errors(), 0);
+}

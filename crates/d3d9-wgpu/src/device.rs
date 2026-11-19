@@ -9521,6 +9521,14 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_i
         self.device.destroy();
     }
 
+    /// The depth stand-ins kept ([`Device::usable_depth`]): each one's depth surface id and size
+    /// (tests).
+    pub fn depth_stand_ins_for_tests(&self) -> Vec<(u64, u32, u32)> {
+        let mut keys: Vec<(u64, u32, u32)> = self.depth_parts.keys().copied().collect();
+        keys.sort_unstable();
+        keys
+    }
+
     /// The window's swap chain asked in `format` from the next frame on, on a surface made anew
     /// and never configured with `new_surface` (as after a lost one); a format the surface does not
     /// offer is refused by wgpu, as a configuration a driver refuses (tests).

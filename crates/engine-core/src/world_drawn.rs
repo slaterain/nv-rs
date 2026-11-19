@@ -51,3 +51,14 @@ pub fn depth_clear_skipped(e: &mut Engine) {
         f(e);
     }
 }
+
+/// Whether a function is installed at [`world_drawn`] (the platform's tests of what installs it).
+pub fn world_drawn_installed() -> bool {
+    HOOK.get().is_some()
+}
+
+/// Whether a function is installed at [`depth_clear_skipped`] (the platform's tests of what
+/// installs it).
+pub fn depth_clear_skipped_installed() -> bool {
+    DEPTH_CLEAR_SKIPPED.get().is_some()
+}
