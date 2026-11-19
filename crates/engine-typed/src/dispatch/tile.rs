@@ -30,8 +30,6 @@ const MEMORY_ALLOCATE: u32 = 0x00aa_3e40;
 const MEMORY_DEALLOCATE: u32 = 0x00aa_4060;
 /// `atexit`, for the search keys' destructors.
 const ATEXIT: u32 = 0x00ec_658f;
-/// The C runtime's `bsearch` (the sorted find's search with any other compare).
-const BSEARCH: u32 = 0x00ec_716d;
 /// `BSSimpleArray<T *>::Insert(index, &item)`.
 const ARRAY_INSERT: u32 = 0x00a0_cd50;
 
@@ -113,11 +111,15 @@ pub fn compare_values(e: &mut Engine, first: Ptr, second: Ptr) -> i32 {
     order_of_ids(e, first.addr(), second.addr())
 }
 
-/// The compare at `compare` called on (`key`, `element`): the trait compare's work in place (no
-/// call), any other by address.
+/// The compare at `compare` called on (`key`, `element`): the trait compare a Rust call while the
+/// family is direct (by address otherwise, so an override or wrap there runs), any other by address.
 fn compare_at(e: &mut Engine, compare: u32, key: u32, element: u32) -> i32 {
     if compare == COMPARE_VALUES {
-        order_of_ids(e, key, element)
+        typed_call!(
+            super::FAMILY,
+            0x00a0_1160,
+            compare_values(e, Ptr::new(key), Ptr::new(element))
+        )
     } else {
         e.call(compare, &args![key, element]).i32()
     }
@@ -125,21 +127,17 @@ fn compare_at(e: &mut Engine, compare: u32, key: u32, element: u32) -> i32 {
 
 // Typed from 00a0cb90
 /// `BSSimpleArray<Tile::Value *, 8>::SortedFind(&key, compare)` (Xbox PDB): the C runtime's
-/// `bsearch` of the key in the buffer (4-byte elements); the element's index or -1. With the trait
-/// compare the search is `bsearch`'s own walk (`00ec716d`: the same middles, the same element for
-/// the same answers) with the compare's work done in place; with any other compare it is `bsearch`
-/// itself.
+/// `bsearch` of the key in the buffer (4-byte elements, the typed `bsearch` below while the family
+/// is direct); the element's index or -1.
 pub fn sorted_find(e: &mut Engine, this: Ptr, key: u32, compare: u32) -> i32 {
     let array = this.addr();
     let buffer = e.mem.u32(array.wrapping_add(ARRAY_BUFFER));
     let size = e.mem.u32(array.wrapping_add(ARRAY_SIZE));
-    // `bsearch` reports a null buffer with elements as an invalid parameter: that case goes to it.
-    let found = if compare == COMPARE_VALUES && (buffer != 0 || size == 0) {
-        search(e, key, buffer, size, compare)
-    } else {
-        e.call(BSEARCH, &args![key, buffer, size, 4u32, compare])
-            .u32()
-    };
+    let found = typed_call!(
+        super::FAMILY,
+        0x00ec_716d,
+        bsearch(e, key, buffer, size, 4, compare)
+    );
     if found == 0 {
         -1
     } else {
@@ -147,14 +145,30 @@ pub fn sorted_find(e: &mut Engine, this: Ptr, key: u32, compare: u32) -> i32 {
     }
 }
 
-/// `bsearch` (`00ec716d`) over 4-byte elements from a non-null `base`: while the low element is at
-/// or below the high one: with no half left a count of 0 answers 0, a count of 1 compares the low
-/// element; otherwise the middle is `half` elements up for an odd count and `half - 1` for an even
-/// one, 0 answers it, a negative answer keeps the part below it and a positive one the part above.
-fn search(e: &mut Engine, key: u32, base: u32, num: u32, compare: u32) -> u32 {
+/// The C runtime's report of an invalid parameter (`00ec7c30`, five zero words) and `EINVAL`.
+const INVALID_PARAMETER: u32 = 0x00ec_7c30;
+const EINVAL: u32 = 0x16;
+
+// Typed from 00ec716d
+/// `_bsearch` (the C runtime's, cdecl: key, base, element count, element size, compare): the
+/// matching element's address or 0. A null base with elements, a size of 0 or no compare sets
+/// `errno` to `EINVAL`, reports an invalid parameter and answers 0. Otherwise, while the low element
+/// is at or below the high one (the last element's address taken first, wrapping): with no half
+/// left a count of 0 answers 0 and a count of 1 compares the low element; else the middle is `half`
+/// elements up for an odd count and `half - 1` for an even one, 0 answers it, a negative answer
+/// keeps the part below it (`half` or `half - 1` elements) and a positive one the part above
+/// (`half`). The compares are `compare_at`'s: the trait compare a Rust call while the family is
+/// direct.
+pub fn bsearch(e: &mut Engine, key: u32, base: u32, num: u32, width: u32, compare: u32) -> u32 {
     let mut lo = base;
     let mut num = num;
-    let mut hi = num.wrapping_sub(1).wrapping_mul(4).wrapping_add(lo);
+    let mut hi = num.wrapping_sub(1).wrapping_mul(width).wrapping_add(lo);
+    if (lo == 0 && num != 0) || width == 0 || compare == 0 {
+        let slot = typed_call!(crt::FAMILY, 0x00ec_85e3, crt::math::errno(e));
+        e.mem.set_u32(slot.addr(), EINVAL);
+        e.call(INVALID_PARAMETER, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+        return 0;
+    }
     while lo <= hi {
         let half = num >> 1;
         if half == 0 {
@@ -169,16 +183,16 @@ fn search(e: &mut Engine, key: u32, base: u32, num: u32, compare: u32) -> u32 {
         }
         let odd = num & 1 != 0;
         let step = if odd { half } else { half - 1 };
-        let mid = step.wrapping_mul(4).wrapping_add(lo);
+        let mid = step.wrapping_mul(width).wrapping_add(lo);
         let result = compare_at(e, compare, key, mid);
         if result == 0 {
             return mid;
         }
         if result < 0 {
-            hi = mid.wrapping_sub(4);
+            hi = mid.wrapping_sub(width);
             num = step;
         } else {
-            lo = mid.wrapping_add(4);
+            lo = mid.wrapping_add(width);
             num = half;
         }
     }

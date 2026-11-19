@@ -2,9 +2,8 @@
 //! against their translations (`engine-bs` `bsmenu/tile.rs`), and a timing harness run by hand
 //! (`--ignored --nocapture`).
 //!
-//! The typed sorted find and insert do the trait compare's work in place, so the translation's
-//! `bsearch` (`00ec716d`) and its compares (`00a01160`) are left out of the comparison
-//! (`ignore_calls`); what the search found shows in the answer and in memory. The translation's
+//! The typed sorted find calls the typed `bsearch` (`00ec716d`) and the typed trait compare
+//! (`00a01160`) as `typed_call!`s, so their calls compare call for call. The translation's
 //! sorted insert reaches the array insert (`00a0cd50`) by a plain Rust call
 //! (`translation_calls_plainly`).
 
@@ -67,6 +66,15 @@ fn compare_values_diff() {
 /// are stand-ins. Each value is owned by the tile (+4), its
 /// float `i` (+8).
 fn tile_with(e: &mut Engine, count: u32, capacity: u32, first: i32) -> u32 {
+    let ids: Vec<u32> = (0..count)
+        .map(|i| first.wrapping_add(3 * i as i32) as u32)
+        .collect();
+    tile_with_ids(e, &ids, capacity)
+}
+
+/// A tile as [`tile_with`]'s whose values have the ids `ids`, in order.
+fn tile_with_ids(e: &mut Engine, ids: &[u32], capacity: u32) -> u32 {
+    let count = ids.len() as u32;
     let vtable = e.mem.alloc(0x10);
     e.mem.set_u32(vtable + 4, 0x00fd_0104);
     e.mem.set_u32(vtable + 8, 0x00fd_0108);
@@ -91,7 +99,7 @@ fn tile_with(e: &mut Engine, count: u32, capacity: u32, first: i32) -> u32 {
     e.mem.set_u32(tile + 0x1c, capacity);
     for i in 0..count {
         let value = e.mem.alloc(0x14);
-        e.mem.set_i32(value, first.wrapping_add(3 * i as i32));
+        e.mem.set_u32(value, ids[i as usize]);
         e.mem.set_u32(value + 4, tile);
         e.mem.set_f32(value + 8, i as f32);
         e.mem.set_u32(buffer + 4 * i, value);
@@ -113,8 +121,26 @@ const ASKED: &[u32] = &[
     0xfc4,
     0x2710,
     0x8000_0000,
+    0x8000_0001,
+    0xffff_fff0,
+    0xffff_ffff,
     0x7fff_ffff,
 ];
+
+/// Trait arrays beside [`tile_with`]'s: negative ids first, then positive ones, and an id three times
+/// over, so which of the equal elements `bsearch` answers (its choice of middle) shows.
+const NEGATIVE_IDS: &[u32] = &[0x8000_0000, 0xffff_fff0, 0xfa0, 0xfa3, 0xfa6];
+const REPEATED_IDS: &[u32] = &[0xfa0, 0xfa3, 0xfa3, 0xfa3, 0xfa6];
+
+/// The tile of shape `code`: [`NEGATIVE_IDS`] (100), [`REPEATED_IDS`] (101), else [`tile_with`]'s
+/// `code` values from 0xfa0 in `capacity` slots.
+fn shaped_tile(e: &mut Engine, code: u32, capacity: u32) -> u32 {
+    match code {
+        100 => tile_with_ids(e, NEGATIVE_IDS, 5),
+        101 => tile_with_ids(e, REPEATED_IDS, 5),
+        _ => tile_with(e, code, capacity, 0xfa0),
+    }
+}
 
 /// The sorted find with the trait compare: arrays of 0 to 9 values (odd and even counts, so both of
 /// `bsearch`'s middles), every id found and missed; an empty array with no buffer.
@@ -125,9 +151,8 @@ fn sorted_find_diff() {
         dispatch::tile::sorted_find(Ptr<_>, u32, u32) -> i32
     ))
     .family(&dispatch::DISPATCH)
-    .ignore_calls(&[0x00ec_716d, 0x00a0_1160])
     .inputs(&[
-        Input::Of(&[0, 1, 2, 3, 4, 5, 8, 9]),
+        Input::Of(&[0, 1, 2, 3, 4, 5, 8, 9, 100, 101]),
         Input::Of(ASKED),
         Input::Of(&[0, 1]),
     ])
@@ -139,12 +164,56 @@ fn sorted_find_diff() {
         } else {
             count.max(1)
         };
-        let tile = tile_with(e, count, capacity, 0xfa0);
+        let tile = shaped_tile(e, count, capacity);
         let key = e.mem.alloc(0x14);
         e.mem.set_u32(key, case.word(1));
         let slot = e.mem.alloc(4);
         e.mem.set_u32(slot, key);
         vec![tile + 0x10, slot, 0x00a0_1160]
+    })
+    .run()
+    .assert_same();
+}
+
+/// The C runtime's `bsearch`, typed in the family for the sorted find, against its translation: the
+/// trait compare over [`shaped_tile`]'s arrays (both middles, negative and repeated ids), and a
+/// stand-in compare over 8-byte records holding the same ids.
+#[test]
+fn bsearch_diff() {
+    Diff::new(engine_core::entry!(
+        0x00ec_716d,
+        dispatch::tile::bsearch(u32, u32, u32, u32, u32) -> u32
+    ))
+    .family(&dispatch::DISPATCH)
+    .inputs(&[
+        Input::Of(&[0, 1, 2, 3, 4, 5, 8, 100, 101]),
+        Input::Of(ASKED),
+        Input::Of(&[4, 8]),
+    ])
+    .setup(|e, case| {
+        world(e);
+        let code = case.word(0);
+        let tile = shaped_tile(e, code, code.max(1));
+        let (buffer, size) = (e.mem.u32(tile + 0x14), e.mem.u32(tile + 0x18));
+        let key = e.mem.alloc(0x14);
+        e.mem.set_u32(key, case.word(1));
+        if case.word(2) == 4 {
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, key);
+            return vec![slot, buffer, size, 4, 0x00a0_1160];
+        }
+        // 8-byte records: the id, then a word; the compare reads the two ids as signed words.
+        e.register(0x00fd_0210, |e, a| {
+            let (a, b) = (e.mem.i32(a[0]), e.mem.i32(a[1]));
+            ret(a.cmp(&b) as i32 as u32)
+        });
+        let records = e.mem.alloc(size.max(1) * 8);
+        for i in 0..size {
+            let id = e.mem.u32(e.mem.u32(buffer + 4 * i));
+            e.mem.set_u32(records + 8 * i, id);
+            e.mem.set_u32(records + 8 * i + 4, 0x50 + i);
+        }
+        vec![key, records, size, 8, 0x00fd_0210]
     })
     .run()
     .assert_same();
@@ -187,7 +256,6 @@ fn sorted_insert_diff() {
         dispatch::tile::sorted_insert(Ptr<_>, u32, u32)
     ))
     .family(&dispatch::DISPATCH)
-    .ignore_calls(&[0x00a0_1160])
     .translation_calls_plainly(&[0x00a0_cd50])
     .inputs(&[
         Input::Of(&[0, 1, 2, 3, 4, 7, 8, 9]),
@@ -202,7 +270,7 @@ fn sorted_insert_diff() {
         } else {
             count + 4
         };
-        let tile = tile_with(e, count, capacity, 0xfa0);
+        let tile = shaped_tile(e, count, capacity);
         let value = e.mem.alloc(0x14);
         e.mem.set_u32(value, case.word(2));
         let slot = e.mem.alloc(4);
@@ -213,19 +281,20 @@ fn sorted_insert_diff() {
     .assert_same();
 }
 
-/// `GetValueQ`, `GetValue` and `GetOrCreateValue` on tiles of 0 to 9 traits, each id found and
-/// missed, the search keys' first use (guard clear) and a later one.
+/// `GetValueQ`, `GetValue` and `GetOrCreateValue` on tiles of 0 to 9 traits and the arrays with
+/// negative and repeated ids, each id found and missed, the search keys' first use (guard clear) and
+/// a later one.
 #[test]
 fn tile_get_value_diff() {
     let inputs = [
-        Input::Of(&[0, 1, 2, 5, 8, 9]),
+        Input::Of(&[0, 1, 2, 5, 8, 9, 100, 101]),
         Input::Of(ASKED),
         Input::Of(&[0, 1]),
     ];
     let setup = |e: &mut Engine, case: &engine_core::typed::diff::Case| {
         world(e);
         let count = case.word(0);
-        let tile = tile_with(e, count, count + (count & 1), 0xfa0);
+        let tile = shaped_tile(e, count, count + (count & 1));
         if case.word(2) == 1 {
             // The keys' guards already set (a later call): the keys hold an old id.
             e.mem.set_u32(0x011f_3388, 1);
@@ -249,7 +318,6 @@ fn tile_get_value_diff() {
         dispatch::tile::get_value(Ptr<_>, i32) -> Ptr
     ))
     .family(&dispatch::DISPATCH)
-    .ignore_calls(&[0x00ec_716d, 0x00a0_1160])
     .inputs(&inputs)
     .setup(setup)
     .run()
@@ -259,7 +327,6 @@ fn tile_get_value_diff() {
         dispatch::tile::get_or_create_value(Ptr<_>, i32) -> Ptr
     ))
     .family(&dispatch::DISPATCH)
-    .ignore_calls(&[0x00ec_716d, 0x00a0_1160])
     .translation_calls_plainly(&[0x00a0_cd50])
     .inputs(&inputs)
     .setup(setup)
