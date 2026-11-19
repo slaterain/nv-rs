@@ -575,6 +575,13 @@ fn tile_set_string(e: &mut Engine, tile: u32, id: u32, text: &[u8]) {
     if value == 0 {
         return;
     }
+    value_set_string(e, value, text);
+}
+
+// Translated from JIP LN NVSE 57.30 (5a30ac4), nvse/GameTiles.cpp: Tile::Value::SetString.
+/// The value gets `text`: nothing when it holds the same text (case counts); else its old text
+/// is freed, a copy on the game's heap is kept and the value refreshed.
+pub(crate) fn value_set_string(e: &mut Engine, value: u32, text: &[u8]) {
     let old = e.mem.u32(value + VALUE_STRING);
     if old != 0 {
         if e.mem.cstr(old) == text {
