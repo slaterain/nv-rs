@@ -1114,15 +1114,13 @@ fn calculate_loop_simplicity(
                     outer = Some(n);
                 }
             }
-            Kind::EndRep => {
-                if outer == Some(nodes[n].link) {
-                    if let Some(o) = outer {
-                        if nodes[o].simple == -1 {
-                            nodes[o].simple = 1;
-                        }
+            Kind::EndRep if outer == Some(nodes[n].link) => {
+                if let Some(o) = outer {
+                    if nodes[o].simple == -1 {
+                        nodes[o].simple = 1;
                     }
-                    outer = None;
                 }
+                outer = None;
             }
             _ => {}
         }

@@ -445,7 +445,7 @@ fn collating_elements_follow_msvcs_lookup() {
     assert_eq!(find("[[.a.]]", b"ax"), Some((1, 2)));
     assert_eq!(find("[[.a.]]", b"ab"), Some((1, 2)));
     assert!(!matches("[[.a.]]b", b"ab"));
-    assert!(matches("[^[.a.]]", b"b") == false);
+    assert!(!matches("[^[.a.]]", b"b"));
 }
 
 #[test]
