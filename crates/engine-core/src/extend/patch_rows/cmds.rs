@@ -17,6 +17,15 @@ const fn row(addr: u32) -> Entry {
 
 /// The commands' seams.
 pub(in super::super) const SITES: &[Entry] = &[
+    // `ToggleNoZPosReset`: a reference's reset onto the ground 00628f90, after its collidable
+    // reference (0x629006): a flagged reference keeps its height.
+    row(0x0062_9006),
+    // `ToggleNoZPosReset`: `LoadedAreaBound::WarpActor` 006295e0, at its start (0x6295E9): a
+    // flagged actor is not warped.
+    row(0x0062_95e9),
+    // `SetMoonTexture`: `Moon::Moon` 00634a70, its texture names (0x634B30; JIP's `InitMoonHook`
+    // while its moon refresh runs).
+    row(0x0063_4b30),
     // `EnableImprovedRecipeMenu`: `RecipeMenu::DoClick` 007274b0, its switch (the bound at
     // 0x7274E1, the byte map and the table; JIP's ids 7 and 15 to `RecipeMenuAcceptHook`).
     row(0x0072_74e1),

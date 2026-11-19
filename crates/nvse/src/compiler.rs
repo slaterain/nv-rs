@@ -17,16 +17,21 @@
 //! (`ScriptLineBuffer::paramText`, which it rewrites while it works, as xNVSE does) and its
 //! output (`dataBuf`). Every length read from the line is held to the line's 0x200-byte buffers:
 //! where xNVSE would read or write past them (a corrupt length, an unterminated text), the port
-//! stops at the buffer's end instead. Errors are printed to the console as xNVSE prints them at
-//! run time (`ShowError`, `ShowCompilerError`); their text is printed as it is, where xNVSE hands
-//! it to `Console_Print` as a format (a `%` in a script's name or text is printed, not expanded).
+//! stops at the buffer's end instead. Errors are printed to the console and written to `nvse.log`
+//! as xNVSE does at run time (`ShowError`, `ShowCompilerError`: `Console_Print` and `_MESSAGE`),
+//! and one line of each goes to the port's own log (where players' reports come from); their text
+//! is printed as it is, where xNVSE hands it to `Console_Print` as a format (a `%` in a script's
+//! name or text is printed, not expanded).
 //! One deliberate difference: an open loop's jump word is kept by its offset in the script's
 //! data, not its address, so a loop over the data's growth gets the bytes xNVSE meant to write
 //! ([`begin_loop_parse`]).
 //!
+//! Also `ExpressionParser::ParseParentheses`, the inline expression of a parameter of a command
+//! of the game's format, which xNVSE's run-time build calls from its `InlineExpressionHook`
+//! ([`handle_parameter_parenthesis`], through [`crate::line_reader`]).
+//!
 //! Not here: the new script language (`Compiler/`, scripts starting with `name`:
-//! [`crate::newlang`]), and `ExpressionParser::ParseParentheses` (the GECK's inline
-//! expressions; editor only).
+//! [`crate::newlang`]).
 
 use crate::expr::{can_convert, op, op_symbol, operand_count, Ty};
 use crate::table::{guest_text, opcode_by_name, record_of, return_type, Returns};
@@ -146,6 +151,7 @@ pub(crate) mod tt {
     pub const ARRAY_ELEMENT: Code = 7;
     pub const SLICE: Code = 8;
     pub const COMMAND: Code = 9;
+    pub const VARIABLE: Code = 10;
     pub const NUMERIC_VAR: Code = 11;
     pub const REF_VAR: Code = 12;
     pub const STRING_VAR: Code = 13;
@@ -475,6 +481,9 @@ pub struct State {
     pub(crate) skip_ref_check: bool,
     /// `g_currentScriptRestorePoundChar`: the `#version` tags made comments, per open compile.
     pub(crate) pound_restores: Vec<Vec<u32>>,
+    /// `g_nextLineNumberIncrement` (`ParseNextLine`): the lines the last line's parentheses held,
+    /// added to the next line's number.
+    pub(crate) next_line_increment: u32,
 }
 
 pub(crate) fn state(e: &mut Engine) -> &mut State {
@@ -719,13 +728,38 @@ pub(crate) fn format(f: &str, args: &[A], cap: usize) -> Vec<u8> {
     out
 }
 
-/// `g_ErrOut.Show` at run time (`ShowError`): the text to the console.
+/// `g_ErrOut.Show` at run time (`ShowError`): the text to the console (`Console_Print`) and to
+/// `nvse.log` (`_MESSAGE`), and one line of it to the port's own log ([`log_line`]).
 pub(crate) fn show_error(e: &mut Engine, text: &[u8]) {
     crate::errors::print_long(e, text);
+    if crate::log::can_write(e) {
+        crate::log::message(e, text);
+    }
+    eprintln!("{}", String::from_utf8_lossy(&log_line(text)));
 }
 
-/// `ShowCompilerError(lineBuf, ...)`: "Error on line N" and the message to the console.
-fn compiler_error(e: &mut Engine, line: u32, message: &[u8]) {
+/// The port's log line of an xNVSE message: `xNVSE: ` and its lines (blanks cut at both ends,
+/// empty ones left out) joined with `: ` ("xNVSE: Error on line 3: Mismatched parenthesis").
+pub(crate) fn log_line(text: &[u8]) -> Vec<u8> {
+    let mut out = b"xNVSE: ".to_vec();
+    let mut first = true;
+    for part in text.split(|&c| c == b'\n') {
+        let start = part.iter().position(|&c| !is_space(c));
+        let Some(start) = start else {
+            continue;
+        };
+        let end = part.iter().rposition(|&c| !is_space(c)).unwrap_or(start) + 1;
+        if !first {
+            out.extend_from_slice(b": ");
+        }
+        out.extend_from_slice(&part[start..end]);
+        first = false;
+    }
+    out
+}
+
+/// `ShowCompilerError(lineBuf, ...)`: "Error on line N" and the message, as [`show_error`].
+pub(crate) fn compiler_error(e: &mut Engine, line: u32, message: &[u8]) {
     let mut text = format(
         "Error on line %d\n\n",
         &[A::D(i64::from(e.mem.u32(line + ln::NUMBER) as i32))],
@@ -2689,6 +2723,138 @@ fn parse_words(w: &[u32]) -> (Params, u32, u32) {
         get(2),
         get(3),
     )
+}
+
+/// `ParamParenthResult`: no `(` at the parameter, its expression compiled, or an error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Paren {
+    NoParam,
+    Success,
+    SyntaxError,
+}
+
+/// The game's parameter types `ValidateArgType` tells apart (`kParamType_*`).
+mod pt {
+    pub const STRING: u32 = 0x00;
+    pub const INTEGER: u32 = 0x01;
+    pub const FLOAT: u32 = 0x02;
+    pub const ACTOR_VALUE: u32 = 0x05;
+    pub const AXIS: u32 = 0x08;
+    pub const ANIMATION_GROUP: u32 = 0x0a;
+    pub const SEX: u32 = 0x12;
+    pub const VARIABLE_NAME: u32 = 0x16;
+    pub const QUEST_STAGE: u32 = 0x17;
+    pub const CRIME_TYPE: u32 = 0x1c;
+    pub const MAGIC_EFFECT: u32 = 0x1f;
+    pub const FORM_TYPE: u32 = 0x20;
+    pub const DOUBLE: u32 = 0x2c;
+    pub const SCRIPT_VARIABLE: u32 = 0x2d;
+    pub const ARRAY: u32 = 0x100;
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
+// ExpressionParser::ValidateArgType (its part for the game's parameter types, `bIsNVSEParam`
+// false).
+/// `ValidateArgType` for a parameter of the game's type `kind`: an ambiguous argument always (it
+/// is known only when run); a string, axis or sex parameter takes what converts to a string; a
+/// number parameter (float, double, integer, quest stage, crime type) a number, a string variable
+/// or a variable, and a string too for a command `record` named `sv_...` or with 20 parameters
+/// or more (the old string commands; xNVSE also names its `kParams_FormatString`, whose
+/// commands all have 21); an animation group or actor value a string or a number; a variable
+/// name or form type nothing; a magic effect a string, a number or a form; an array an array; a
+/// script variable a variable; every other type a form.
+pub(crate) fn validate_vanilla_arg_type(e: &Engine, kind: u32, arg: Code, record: u32) -> bool {
+    if arg == tt::AMBIGUOUS {
+        return true;
+    }
+    match kind {
+        pt::STRING | pt::AXIS | pt::SEX => convert(arg, tt::STRING),
+        pt::FLOAT | pt::DOUBLE | pt::INTEGER | pt::QUEST_STAGE | pt::CRIME_TYPE => {
+            if arg != tt::STRING_VAR && convert(arg, tt::STRING) && record != 0 {
+                let name = opt_text(e, e.mem.u32(record)).unwrap_or_default();
+                let count = e.mem.u16(record + 0x12);
+                if name.starts_with(b"sv_") || count >= 20 {
+                    return true;
+                }
+            }
+            convert(arg, tt::NUMBER) || convert(arg, tt::STRING_VAR) || convert(arg, tt::VARIABLE)
+        }
+        pt::ANIMATION_GROUP | pt::ACTOR_VALUE => {
+            convert(arg, tt::STRING) || convert(arg, tt::NUMBER)
+        }
+        pt::VARIABLE_NAME | pt::FORM_TYPE => false,
+        pt::MAGIC_EFFECT => {
+            convert(arg, tt::STRING) || convert(arg, tt::NUMBER) || convert(arg, tt::FORM)
+        }
+        pt::ARRAY => convert(arg, tt::ARRAY),
+        pt::SCRIPT_VARIABLE => convert(arg, tt::VARIABLE),
+        _ => convert(arg, tt::FORM),
+    }
+}
+
+// Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), Hooks_Editor.cpp:
+// HandleParameterParenthesis.
+/// `HandleParameterParenthesis(lineBuf, scriptBuf, paramInfo, index)`: a parser on the line for
+/// [`Parser::parse_parentheses`].
+pub(crate) fn handle_parameter_parenthesis(
+    e: &mut Engine,
+    line: u32,
+    buf: u32,
+    params: u32,
+    index: u32,
+) -> Paren {
+    with_parser(e, buf, line, |e, p| p.parse_parentheses(e, params, index))
+}
+
+impl Parser {
+    // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp:
+    // ExpressionParser::ParseParentheses.
+    /// `ParseParentheses(paramInfo, index)`: after the blanks at the cursor, a `(` makes the
+    /// parameter an expression: its closing `)` found (else "Mismatched brackets." or
+    /// "Mismatched quotes."), `0xFFFF` written, the expression up to the `)` compiled as an
+    /// argument (the text cut there meanwhile, then put back), the cursor past the `)`, and its
+    /// type checked against the parameter's ([`validate_vanilla_arg_type`]: "Invalid expression
+    /// for parameter N. Expected <type> (got <type>)."). Without a `(` nothing changes.
+    fn parse_parentheses(&mut self, e: &mut Engine, params: u32, index: u32) -> Paren {
+        let mut i = self.offset(e);
+        let mut c = self.text_byte(e, i);
+        while c != 0 && is_space(c) {
+            i += 1;
+            c = self.text_byte(e, i);
+        }
+        if c != b'(' {
+            return Paren::NoParam;
+        }
+        self.set_offset(e, i + 1);
+        let Some(end) = self.bracket_end(e, LEFT_PAREN) else {
+            return Paren::SyntaxError;
+        };
+        write(e, self.line, &0xffffu16.to_le_bytes());
+        let real = self.text_from(e, 0);
+        self.set_text_byte(e, end, 0);
+        let result = self.parse_argument(e, end);
+        let mut restored = real;
+        restored.push(0);
+        restored.truncate(ln::SIZE as usize);
+        e.mem.write(self.line + ln::TEXT, &restored);
+        self.set_offset(e, end + 1);
+        if result == IV {
+            return Paren::SyntaxError;
+        }
+        let param = params.wrapping_add(index.wrapping_mul(0xc));
+        let kind = e.mem.u32(param + 4);
+        let record = record_of(e, e.mem.u32(self.line + ln::OPCODE));
+        if !validate_vanilla_arg_type(e, kind, result, record) {
+            let type_str = opt_text(e, e.mem.u32(param)).unwrap_or_default();
+            let mut m =
+                format!("Invalid expression for parameter {}. Expected ", index + 1).into_bytes();
+            m.extend_from_slice(&type_str);
+            m.extend_from_slice(format!(" (got {}).", type_name(result)).as_bytes());
+            compiler_error(e, self.line, &m);
+            return Paren::SyntaxError;
+        }
+        Paren::Success
+    }
 }
 
 // Translated from xNVSE 6.4.9 (xNVSE/NVSE at 0ccd23a), ScriptUtils.cpp: Cmd_Expression_Parse.

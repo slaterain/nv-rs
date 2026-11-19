@@ -24,8 +24,9 @@
 //! vtables JIP leaves alone and called directly by `0x441800`, which `0x441C30` calls (the
 //! only reference to `0x441C30` is its slot: `get_xrefs_to`, `measure/jip/GROUP-GP-NOTES.md`).
 //!
-//! Waiting (no writer built): the attach's collision step for a reference marked by
-//! `ToggleObjectCollision` (`kHookRefFlag5F_DisableCollision`). Built with H08: JIP's inserted
+//! After the fade, a reference marked by `ToggleObjectCollision`
+//! (`kHookRefFlag5F_DisableCollision`) has its collision turned off again
+//! (`commands::jip_fn_misc_ref_code::toggle_collision`). Then, built with H08: JIP's inserted
 //! nodes and models (`InsertNode`, `AttachModel`: `s_insertObjects`) put into a loaded 3D. JIP's point lights (`AddPointLights`, for a
 //! 3D JIP's light hooks flagged `0x20000000`) are group GL's (`gl::lights::add_point_lights`),
 //! after the fade as JIP's `doLights`. The first-person node JIP keeps
@@ -661,6 +662,14 @@ pub fn queued_reference(e: &mut Engine, queued: u32) {
                     e.mem.set_f32(node + off::FADE, 1.0);
                     e.mem.set_f32(node + off::FADE + 4, 1.0);
                 }
+            }
+            // JIP's `doneFade`: a reference ToggleObjectCollision marked has its collision
+            // turned off again in the new 3D.
+            if ref_flags(e, refr)
+                & crate::commands::jip_fn_misc_ref_code::REF_FLAG_DISABLE_COLLISION
+                != 0
+            {
+                crate::commands::jip_fn_misc_ref_code::toggle_collision(e, refr, false);
             }
             // JIP's inserted nodes and models (H08's attach step, `InsertNode`/`AttachModel`):
             // when any are kept, a reference or its base form that has entries gets them in its

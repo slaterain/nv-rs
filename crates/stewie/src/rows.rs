@@ -467,7 +467,7 @@ pub const ROWS: &[Row] = &[
         plan: "S0199.09",
         key: "bMiscCrashFixesShowSceneGraph",
         tweaks: None,
-        summary: "the console's ShowSceneGraph no longer crashes on an empty property entry",
+        summary: "an empty property entry is skipped in an object's viewer strings and in ShowSceneGraph's controller test (its tree still stops at the Properties list, as with Tweaks)",
     },
     Row {
         bit: stewie::USE_DOOR_NULL_DOOR,
